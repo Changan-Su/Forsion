@@ -3,7 +3,7 @@
  * 只依赖 jszip + fs/path(不 import electron),便于单测路径穿越 / 剥顶层;不碰 I/O 的校验规则在 shared/marketPackage.ts。
  */
 import JSZip from 'jszip'
-import { mkdir, writeFile, readFile, readdir } from 'fs/promises'
+import { mkdir, writeFile, readFile, readdir, chmod } from 'fs/promises'
 import { join, dirname } from 'path'
 import {
   MARKET_SUBDIR, MARKET_MANIFEST, isSafeSlug, isJunkPath, computeStripPrefix, safeEntryPath, planZipFiles,
@@ -12,7 +12,7 @@ import {
 
 // 纯校验逻辑(白名单 / slug / 重定根 / 防穿越 / 双类型纠偏 / 镜像候选)住在 shared/marketPackage.ts,
 // Android App 的市场安装(mobile/src/plugins/mobileMarket.ts)共用同一份;这里再导出,既有调用方与单测不变。
-export { MARKET_SUBDIR, MARKET_MANIFEST, isSafeSlug, isJunkPath, computeStripPrefix, safeEntryPath, toArchiveUrl, downloadCandidates, GZIP_MAGIC }
+export { MARKET_SUBDIR, MARKET_MANIFEST, isSafeSlug, isJunkPath, computeStripPrefix, safeEntryPath, toArchiveUrl, downloadCandidates, ZIP_MAGIC, GZIP_MAGIC }
 
 /** 规整版本字符串(去前导 v、去空白);空 → null。 */
 function normVer(raw: unknown): string | null {
@@ -102,7 +102,12 @@ export async function extractZipToDir(zipBuffer: Buffer, destRoot: string, manif
   for (const { name, rel } of plan) {
     const out = join(destRoot, rel)
     await mkdir(dirname(out), { recursive: true })
-    await writeFile(out, Buffer.from(await zip.files[name].async('arraybuffer')))
+    const f = zip.files[name]
+    await writeFile(out, Buffer.from(await f.async('arraybuffer')))
+    // Fresh update directories must retain helper executable bits from ZIP/npm archives.
+    // Only ordinary permission bits are copied; archive setuid/setgid bits never survive.
+    const mode = typeof f.unixPermissions === 'string' ? parseInt(f.unixPermissions, 8) : f.unixPermissions
+    if (typeof mode === 'number' && Number.isFinite(mode)) await chmod(out, mode & 0o777)
   }
   return plan.length
 }

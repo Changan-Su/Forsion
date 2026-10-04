@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { isRetryableLlmError, withLlmRetry, llmRetryBudgetExceeded, sleepOrAbort, MODEL_MAX_RETRIES, MODEL_RETRY_BASE_MS, SLOW_FAIL_NO_RETRY_MS } from './retry.js';
+import { isRetryableLlmError, isAuthExpiredLlmError, withLlmRetry, llmRetryBudgetExceeded, sleepOrAbort, MODEL_MAX_RETRIES, MODEL_RETRY_BASE_MS, SLOW_FAIL_NO_RETRY_MS } from './retry.js';
 import { LlmError } from '../core/types.js';
 
 describe('isRetryableLlmError', () => {
@@ -19,6 +19,13 @@ describe('isRetryableLlmError', () => {
     }
   });
 
+  it('quota / subscription usage exhaustion is not retried even as 429; rate limits still are (R5)', () => {
+    for (const m of ['The usage limit has been reached', 'usage_limit_reached', 'You exceeded your current quota, please check your plan and billing details.', 'insufficient_quota']) {
+      expect(isRetryableLlmError(new LlmError(429, m))).toBe(false);
+    }
+    expect(isRetryableLlmError(new LlmError(429, 'Rate limit reached for requests'))).toBe(true);
+  });
+
   it('does not retry user abort', () => {
     const e = new Error('aborted');
     e.name = 'AbortError';
@@ -32,6 +39,12 @@ describe('isRetryableLlmError', () => {
  * 跑:cd Forsion-Genesis/tangu-agent && npx vitest run src/llm/retry.test.ts
  */
 describe('withLlmRetry', () => {
+  it('canRetry 返回 false(本次已吐过帧)→ 可重试错误也不重发', async () => {
+    const fn = vi.fn().mockRejectedValue(new LlmError(502, 'x'));
+    await expect(withLlmRetry(fn, undefined, undefined, () => false)).rejects.toMatchObject({ status: 502 });
+    expect(fn).toHaveBeenCalledTimes(1);
+  });
+
   it('已经取消时不启动第一次请求', async () => {
     const ac = new AbortController(); ac.abort();
     const fn = vi.fn();
@@ -163,5 +176,18 @@ describe('stream retry primitives', () => {
       await rejected;
       expect(vi.getTimerCount()).toBe(0);
     } finally { vi.useRealTimers(); }
+  });
+});
+
+describe('isAuthExpiredLlmError', () => {
+  it('401,以及 xAI CLI proxy 用 502 包装的认证失败(看正文)', () => {
+    expect(isAuthExpiredLlmError(new LlmError(401, 'Unauthorized'))).toBe(true);
+    expect(isAuthExpiredLlmError(new LlmError(502, '{"error":"Invalid or expired credentials (auth_kind=bearer, x_xai_token_auth=xai-grok-cli, upstream=PermissionDenied, reason=no auth context)"}'))).toBe(true);
+    expect(isAuthExpiredLlmError(new LlmError(403, 'The access token has expired'))).toBe(true);
+  });
+  it('负对照:普通网关错 / 限流 / 传输错不算', () => {
+    expect(isAuthExpiredLlmError(new LlmError(502, 'Bad Gateway'))).toBe(false);
+    expect(isAuthExpiredLlmError(new LlmError(429, 'Rate limit reached'))).toBe(false);
+    expect(isAuthExpiredLlmError(new TypeError('fetch failed'))).toBe(false);
   });
 });

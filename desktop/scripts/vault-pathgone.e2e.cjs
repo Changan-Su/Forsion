@@ -17,7 +17,7 @@
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
-const { _electron: electron } = require('playwright-core')
+const electron = require('./lib/launch-electron.cjs')
 
 const ROOT = path.join(__dirname, '..')
 const N = 200 // 图标笔记数:少了 build 快到撞不上窗口,量是负对照实测给的

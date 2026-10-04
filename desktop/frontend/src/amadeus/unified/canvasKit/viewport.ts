@@ -23,6 +23,8 @@ const TRACKPAD_PINCH_ZOOM_GAIN = 2
 const viewports = new Map<string, Viewport>()
 export const rememberViewport = (key: string, vp: Viewport): void => { if (key) viewports.set(key, vp) }
 export const recallViewport = (key: string): Viewport | undefined => viewports.get(key)
+/** 改名 / 移动搬走后清掉旧键:旧路径日后新建的笔记不该继承这一篇的视口。 */
+export const forgetViewport = (key: string): void => { viewports.delete(key) }
 
 export const clampZ = (z: number): number => Math.max(MIN_Z, Math.min(MAX_Z, z))
 

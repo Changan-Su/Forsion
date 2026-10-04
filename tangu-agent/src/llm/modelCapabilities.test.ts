@@ -23,6 +23,10 @@ const apply = (q: Parameters<typeof resolveModelCapability>[0], level: ThinkingL
 
 describe('resolveModelCapability — 路由矩阵', () => {
   const cases: Array<[string, Parameters<typeof resolveModelCapability>[0], string]> = [
+    ['OpenAI GPT-6.1 Sol', { baseUrl: 'https://api.openai.com/v1', modelId: 'gpt-6.1-sol' }, 'openai-gpt61-sol'],
+    ['Codex GPT-6.1 Sol 请求', { protocol: 'openai-responses', modelId: 'gpt-6.1-sol' }, 'codex-gpt61-sol'],
+    ['Codex GPT-6.1 Sol 目录', { provider: 'codex', baseUrl: 'https://chatgpt.com/backend-api/codex', modelId: 'gpt-6.1-sol' }, 'codex-gpt61-sol'],
+    ['未知 GPT-6.1 变体不预支档位', { baseUrl: 'https://api.openai.com/v1', modelId: 'gpt-6.1-luna' }, 'openai-nonreasoning'],
     ['OpenAI GPT-6 Astra', { baseUrl: 'https://api.openai.com/v1', modelId: 'gpt-6-astra' }, 'openai-astra'],
     ['OpenAI GPT-6 Sol', { baseUrl: 'https://api.openai.com/v1', modelId: 'gpt-6-sol' }, 'openai-gpt6'],
     ['OpenAI GPT-6 Luna', { baseUrl: 'https://api.openai.com/v1', modelId: 'gpt-6-luna' }, 'openai-gpt6'],
@@ -162,11 +166,11 @@ describe('applyThinking — 各家线上形态', () => {
     expect(viaResponses).toBe(true);
   });
 
-  it('GPT-6 Astra 的目录与请求都只允许 low 起步,保留 max 真档', () => {
+  it.each(['gpt-6-astra', 'gpt-6.1-sol'])('%s 的目录与请求都只允许 low 起步,保留 max 真档', (modelId) => {
     for (const q of [
-      { baseUrl: 'https://api.openai.com/v1', modelId: 'gpt-6-astra' },
-      { protocol: 'openai-responses', modelId: 'gpt-6-astra' },
-      { provider: 'codex', baseUrl: 'https://chatgpt.com/backend-api/codex', modelId: 'gpt-6-astra' },
+      { baseUrl: 'https://api.openai.com/v1', modelId },
+      { protocol: 'openai-responses', modelId },
+      { provider: 'codex', baseUrl: 'https://chatgpt.com/backend-api/codex', modelId },
     ]) {
       expect(supportedThinkingLevels(cap(q))).toEqual(['low', 'medium', 'high', 'xhigh', 'max']);
       for (const level of ['off', 'minimal', 'low'] as const) {

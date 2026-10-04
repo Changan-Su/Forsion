@@ -29,6 +29,12 @@ describe('takeFreshNominations', () => {
     const third = takeFreshNominations([ev('b'), ev('c', 'title')], second.seen)
     expect(third.fresh).toEqual([]) // 同一条不报第二次
   })
+  it('后台直接采纳(harness_adopted)同样只报一次', () => {
+    const first = takeFreshNominations([ev('a')], null)
+    const second = takeFreshNominations([ev('a'), ev('d', 'harness_adopted')], first.seen)
+    expect(second.fresh).toEqual([ev('d', 'harness_adopted')])
+    expect(takeFreshNominations([ev('d', 'harness_adopted')], second.seen).fresh).toEqual([])
+  })
 })
 
 describe('pendingReminders', () => {

@@ -61,6 +61,7 @@ registerMessages({
   'studio.sandbox.blockedMinApp': { zh: '宿主拒绝加载：manifest.json 的 minAppVersion 高于当前 Forsion 的版本。', en: 'The host refused to load it: the minAppVersion in manifest.json is newer than this version of Forsion.' },
   'studio.sandbox.blockedOther': { zh: '宿主拒绝加载：{reason}', en: 'The host refused to load it: {reason}' },
   'studio.sandbox.trust': { zh: '这不是隔离沙箱：开发副本就跑在这个真应用、你的真智库上，与已安装插件同权。试验期间别写、挪、删你的数据；定时器与监听必须在 disposer 里清掉——每次保存都会重跑一遍 setup，漏清一次就叠一层。', en: 'This is not an isolated sandbox: the dev copy runs in this real app, on your real notes, with the same privileges as an installed plugin. Do not write, move or delete your data while experimenting, and release every timer and listener in the disposer, because each save runs setup again and anything left behind stacks up.' },
+  'studio.sandbox.staleGrant': { zh: '之前的加载授权已失效（项目文件夹被重建或移动过，或是旧版本 Forsion 记下的授权）。确认这是你的项目后，再点一次「加载」。', en: 'The earlier permission to load this project no longer applies (the folder was recreated or moved, or the permission was saved by an older Forsion version). If this is your project, choose Load again.' },
   'studio.sandbox.shadow': { zh: '这个插件已安装的副本在开发副本加载期间被顶替；期间它的「卸载」不可用。', en: 'The installed copy of this plugin is replaced while the dev copy is loaded, and Uninstall is unavailable meanwhile.' },
   'studio.sandbox.load': { zh: '在 Forsion 中加载', en: 'Load into Forsion' },
   'studio.sandbox.loading': { zh: '正在加载…', en: 'Loading…' },

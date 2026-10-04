@@ -90,7 +90,7 @@ describe('上架 / 下架', () => {
     const decided = requestApproval('R-ab', call('run_bash'), '$ x', ac.signal);
     await waitAdded(1);
     ac.abort();
-    await expect(decided).resolves.toEqual({ action: 'reject' });
+    await expect(decided).resolves.toEqual({ action: 'reject', rejectReason: expect.stringContaining('was NOT run') });
     expect(removed()).toEqual([expect.objectContaining({ id: added()[0].item.id, outcome: 'expired' })]);
     expect(listPrompts()).toEqual([]);
   });

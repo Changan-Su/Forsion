@@ -1,0 +1,151 @@
+/** Real Electron: settings-window persistence, Space inheritance and pixel sampling.
+ * npm run build && npm run check:spaceappearance */
+const fs = require('node:fs')
+const os = require('node:os')
+const path = require('node:path')
+const assert = require('node:assert/strict')
+const electron = require('./lib/launch-electron.cjs')
+const { startStubEngine } = require('./lib/stub-engine.cjs')
+const { skipOnboarding } = require('./lib/skip-onboarding.cjs')
+const ROOT = path.resolve(__dirname, '..')
+const home = fs.mkdtempSync(path.join(os.tmpdir(), 'forsion-space-appearance-'))
+const shots = path.join(ROOT, 'outputs/space-appearance')
+fs.mkdirSync(shots, { recursive: true })
+const check = (name, condition, detail) => { assert.ok(condition, `${name}: ${JSON.stringify(detail)}`); console.log('PASS', name) }
+const axes = (page) => page.evaluate(() => ({ ...document.documentElement.dataset }))
+const waitAxes = (page, want) => page.waitForFunction((want) => Object.entries(want).every(([k, v]) => document.documentElement.dataset[k] === v), want)
+async function main() {
+  const stub = await startStubEngine({ sessions: [], messages: [], agents: [], engines: [] })
+  const userdata = path.join(home, 'userdata')
+  for (const dir of [userdata, `${userdata}-dev`]) {
+    fs.mkdirSync(dir, { recursive: true })
+    fs.writeFileSync(path.join(dir, 'tangu-desktop-config.json'), JSON.stringify({ mode: 'external', backendUrl: stub.url, token: 'e2e' }))
+  }
+  let app
+  try {
+    app = await electron.launch({ args: [`--user-data-dir=${userdata}`, '--lang=zh-CN', ROOT], cwd: ROOT, env: { ...process.env, TANGU_HOME: home, TANGU_BACKEND_URL: stub.url } })
+    const page = await app.firstWindow()
+    const errors = []
+    page.on('pageerror', (e) => errors.push(e.message))
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1280, 850))
+    check('onboarding exited', await skipOnboarding(page))
+    await page.evaluate(() => {
+      for (const [key, value] of Object.entries({ forsion_default_space: 'tangu', forsion_theme_lang: 'lovable', forsion_theme_skin: 'teal', forsion_theme_bg: 'cream', forsion_theme_pref: 'light', forsion_glass: 'on' })) localStorage.setItem(key, value)
+      localStorage.removeItem('forsion_theme_forced_scheme')
+    })
+    await page.reload({ waitUntil: 'domcontentloaded' })
+    await page.locator('.rb-space').first().waitFor()
+    await waitAxes(page, { theme: 'lovable', skin: 'teal', bg: 'cream', mode: 'light' })
+    check('unconfigured Space inherits global', true)
+    const settingsOpened = app.waitForEvent('window')
+    await page.keyboard.press('Meta+Comma')
+    const settings = await settingsOpened
+    await settings.locator('.settings-nav').waitFor()
+    await settings.locator('.settings-nav-list button').filter({ hasText: /^Spaces?$/ }).click()
+    await settings.getByLabel('选择 Space', { exact: true }).selectOption('tangu')
+    await settings.getByLabel('主题色', { exact: true }).selectOption('coral')
+    await settings.getByLabel('背景色', { exact: true }).selectOption('lavender')
+    await settings.getByLabel('明暗模式', { exact: true }).selectOption('dark')
+    await waitAxes(page, { skin: 'coral', bg: 'lavender', mode: 'dark' })
+    check('settings window updates only selected Space', (await axes(settings)).mode === 'light')
+    await settings.getByLabel('设计语言', { exact: true }).selectOption('soft')
+    await waitAxes(page, { theme: 'soft' })
+    await settings.getByLabel('设计语言', { exact: true }).selectOption('lovable')
+    await waitAxes(page, { theme: 'lovable' })
+    check('per-Space design language switches', true)
+    await settings.screenshot({ path: path.join(shots, 'settings-zh.png') })
+    const saved = await page.evaluate(() => ({ skin: localStorage.getItem('forsion_theme_skin'), bg: localStorage.getItem('forsion_theme_bg'), mode: localStorage.getItem('forsion_theme_pref') }))
+    check('global preferences untouched', saved.skin === 'teal' && saved.bg === 'cream' && saved.mode === 'light', saved)
+    await page.locator('[data-id="space:agents"] .rb-space').click()
+    await waitAxes(page, { skin: 'teal', bg: 'cream', mode: 'light' })
+    await page.locator('[data-id="space:tangu"] .rb-space').click()
+    await waitAxes(page, { skin: 'coral', bg: 'lavender', mode: 'dark' })
+    await page.reload({ waitUntil: 'domcontentloaded' })
+    await page.locator('.rb-space').first().waitFor()
+    await waitAxes(page, { skin: 'coral', bg: 'lavender', mode: 'dark' })
+    check('Space switch and reload preserve local appearance', true)
+    await page.locator('[data-id="rb-mode"] button').click()
+    await waitAxes(page, { mode: 'light' })
+    await page.locator('[data-id="rb-mode"] button').click()
+    await waitAxes(page, { mode: 'dark' })
+    check('Ribbon mode toggle affects the local override', await page.evaluate(() => localStorage.getItem('forsion_theme_pref') === 'light'))
+    await page.screenshot({ path: path.join(shots, 'genesis-dark.png') })
+    // Local fixture in the real composited page; no changes to user files or stores.
+    await page.evaluate(() => {
+      const paper = [...document.querySelectorAll('.dv-groupview:not(:has(.wb-tab--icon)) .dv-content-container > .dv-react-part')].sort((a,b) => b.clientWidth*b.clientHeight-a.clientWidth*a.clientHeight)[0]
+      const fixture = document.createElement('div')
+      fixture.id = 'ambient-fixture'
+      fixture.style.cssText = 'position:absolute;inset:0;z-index:3;overflow:auto;border-radius:var(--radius-lg)'
+      fixture.innerHTML = '<div style="height:100%;background:#1464d2;color:white;padding:56px;box-sizing:border-box;font:32px var(--font-ui)">Ocean<br><small>Visible content · scroll to change palette</small></div><div style="height:100%;background:#dd4828;color:white;padding:56px;box-sizing:border-box;font:32px var(--font-ui)">Sunset</div>'
+      paper.style.position = 'relative'; paper.appendChild(fixture)
+    })
+    const rgb = () => page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--space-ambient-top'))
+    await page.waitForFunction(() => { const c = getComputedStyle(document.documentElement).getPropertyValue('--space-ambient-top').match(/[\d.]+/g)?.map(Number); return c && c[2] > c[0] + 60 }, null, { timeout: 12000 })
+    check('composited blue content reaches ambient palette', true, await rgb())
+    await page.screenshot({ path: path.join(shots, 'ambient-blue-dark.png') })
+    await page.evaluate(() => { const f = document.querySelector('#ambient-fixture'); f.scrollTop = f.clientHeight })
+    await page.waitForFunction(() => { const c = getComputedStyle(document.documentElement).getPropertyValue('--space-ambient-top').match(/[\d.]+/g)?.map(Number); return c && c[0] > c[2] + 60 }, null, { timeout: 12000 })
+    check('scroll changes the real palette from blue to warm red', true, await rgb())
+    await page.screenshot({ path: path.join(shots, 'ambient-red-dark.png') })
+    const geometry = await page.evaluate(() => {
+      const group = document.querySelector('.dv-groupview:not(:has(.wb-tab--icon))')
+      const probe = document.createElement('div'); probe.style.cssText = 'position:fixed;top:123px;left:137px;width:10px;height:10px'; group.append(probe)
+      const box = probe.getBoundingClientRect(); probe.remove()
+      return { x: box.x, y: box.y, filter: getComputedStyle(group).backdropFilter, paper: getComputedStyle(group.querySelector('.dv-content-container > .dv-react-part')).backgroundColor }
+    })
+    check('fixed menus retain viewport coordinates; paper stays opaque', geometry.x === 137 && geometry.y === 123 && geometry.filter === 'none' && !geometry.paper.startsWith('rgba'), geometry)
+    await settings.getByRole('button', { name: '恢复全局外观', exact: true }).click()
+    await waitAxes(page, { skin: 'teal', bg: 'cream', mode: 'light' })
+    check('reset immediately restores global appearance', true)
+    await page.waitForFunction(() => document.documentElement.style.getPropertyValue('--space-ambient-top').startsWith('#'))
+    await page.waitForTimeout(800)
+    await page.screenshot({ path: path.join(shots, 'ambient-red-light.png') })
+    await page.evaluate(() => document.querySelector('#ambient-fixture')?.remove())
+    await page.screenshot({ path: path.join(shots, 'genesis-light.png') })
+    await settings.evaluate(() => localStorage.setItem('tangu_locale', 'en'))
+    await settings.reload({ waitUntil: 'domcontentloaded' })
+    await settings.locator('.settings-nav-list button').filter({ hasText: /^Spaces?$/ }).click()
+    await settings.getByLabel('Choose Space', { exact: true }).waitFor()
+    check('English Space appearance controls', await settings.getByLabel('Design language', { exact: true }).count() === 1)
+    await app.evaluate(({ BrowserWindow }) => { const settings = BrowserWindow.getAllWindows().find((w) => w.webContents.getURL().includes('window=floating')); settings?.setSize(620, 760) })
+    await settings.screenshot({ path: path.join(shots, 'settings-en-narrow.png') })
+    check('narrow settings has no horizontal overflow', await settings.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1))
+    await page.emulateMedia({ reducedMotion: 'reduce' })
+    await page.waitForFunction(() => getComputedStyle(document.documentElement).transitionProperty === 'none' && getComputedStyle(document.documentElement).transitionDuration.split(',').every((v) => parseFloat(v) <= 0.00001))
+    check('reduced motion disables color interpolation', true)
+    // Dark step (2026-10-04, user-reported "panel edges are hard to see"): the tinted chrome must stay darker than the
+    // paper. The approved dark surfaces are sidebar #262528 / paper #2a292b; a brighter tint erases every panel edge.
+    await page.evaluate(() => { for (const [key, value] of Object.entries({ forsion_theme_skin: 'cream', forsion_theme_bg: 'cream', forsion_theme_pref: 'dark' })) localStorage.setItem(key, value) })
+    await page.reload({ waitUntil: 'domcontentloaded' })
+    await page.locator('.rb-space').first().waitFor()
+    await waitAxes(page, { skin: 'cream', bg: 'cream', mode: 'dark' })
+    await page.waitForFunction(() => document.documentElement.style.getPropertyValue('--space-ambient-top'))
+    await page.waitForTimeout(900)
+    const spot = await page.evaluate(() => {
+      const top = document.querySelector('.rb-top').getBoundingClientRect(), bottom = document.querySelector('.rb-bottom').getBoundingClientRect()
+      const paper = [...document.querySelectorAll('.dv-groupview:not(:has(.wb-tab--icon)) .dv-content-container > .dv-react-part')].sort((a, b) => b.clientWidth * b.clientHeight - a.clientWidth * a.clientHeight)[0]
+      // Empty Ribbon spacer between the two zones: pure chrome, no icon under it.
+      return { x: Math.round(top.left + top.width / 2), y: Math.round((top.bottom + bottom.top) / 2), paper: getComputedStyle(paper).backgroundColor.match(/\d+/g).map(Number) }
+    })
+    const chrome = await app.evaluate(async ({ BrowserWindow }, at) => {
+      const main = BrowserWindow.getAllWindows().find((w) => !w.webContents.getURL().includes('window=floating'))
+      const bgra = (await main.capturePage({ x: at.x, y: at.y, width: 1, height: 1 })).toBitmap()
+      return [bgra[2], bgra[1], bgra[0]]
+    }, spot)
+    check('dark chrome stays a step below the paper', spot.paper[0] - chrome[0] >= 3, { chrome, paper: spot.paper, at: [spot.x, spot.y] })
+    await page.evaluate(() => { localStorage.setItem('forsion_glass', 'off') })
+    await page.reload({ waitUntil: 'domcontentloaded' })
+    await page.locator('.shell').waitFor()
+    const off = await page.evaluate(() => ({ glass: document.documentElement.dataset.glass, pseudo: getComputedStyle(document.querySelector('.shell'), '::before').content, palette: document.documentElement.style.getPropertyValue('--space-ambient-top') }))
+    check('glass off removes material and sampling', off.glass === 'off' && off.pseudo === 'none' && !off.palette, off)
+    check('no runtime errors', errors.length === 0, errors)
+    console.log('SHOTS', shots)
+  } catch (error) {
+    if (app) for (const [i, win] of app.windows().entries()) {
+      await win.screenshot({ path: path.join(shots, `failure-${i}.png`) }).catch(() => {})
+      console.log('FAILED WINDOW', i, await win.locator('body').innerText().catch(() => ''))
+    }
+    throw error
+  } finally { if (app) await app.close(); await stub.close() }
+}
+main().catch((error) => { console.error(error); process.exitCode = 1 })

@@ -16,7 +16,7 @@ import {
 } from '../components/WorkspaceFilePreview'
 import { previewKindFor, iconForFile, extOf, parseDelimited, fmtSize, mimeForExt, splitFrontmatter, type PreviewKind } from '../services/fileKinds'
 import { useI18n } from '../i18n'
-import { useTheme } from '../stores/themeStore'
+import { useVisualTheme as useTheme } from '../stores/themeStore'
 import { PlainMarkdownEditor } from '../amadeus/blocks/markdown/MarkdownBlock'
 import { getTransientTarget, hostTargetFor, pendingWrites } from './wsFileNav'
 import { useApp } from '../stores/appStore'

@@ -4,7 +4,7 @@
  */
 import type {
   AgentConfig, AgentScheduleEntry, AgentScheduleEntryUpsert, AgentScheduleInfo, AgentsMeta, AutomationActionCatalogItem, AutomationExecutionInfo, AutomationRunInfo, AutomationSessionInfo, ChannelKind, HistorianActivityItem, MessageRecord, ModelsResponse, MuseLibraryEntry, MuseStatusInfo, MuseTodo, MuseTriggerInfo, MuseTriggerUpsert, PendingApprovalInfo,
-  GitSettings, NormalAgentDef, ProjectContext, ProjectSettings, ProjectSkillInfo, SessionRecord, SkillInfo, SkillCatalogEntry, SpecialAgentsConfig,
+  GitSettings, NormalAgentDef, ProjectContext, ProjectMemoryView, ProjectSettings, ProjectSkillInfo, SessionRecord, SkillInfo, SkillCatalogEntry, SpecialAgentsConfig,
   ToolsResponse, WorkspaceFileMeta, TeamDef } from '../types'
 import { authFetch } from './http'
 import { fetchOpts, type EngineTarget } from './engine/targets'
@@ -101,13 +101,14 @@ export const getSyncStatus = (t: EngineTarget) =>
   request<SyncStatusResult>(t, '/agent/sync/status')
 
 // ── 百炼音色管理(声音复刻/声音设计;后端代理免 CORS,key 只在请求中过境)──
-export type TtsVoiceKind = 'clone' | 'design' | 'cosy' // clone=qwen复刻 design=qwen设计 cosy=CosyVoice复刻
+export type TtsVoiceKind = 'clone' | 'design' | 'cosy' // clone=qwen复刻 design=qwen设计 cosy=voice-enrollment 复刻(CosyVoice / Qwen-Audio-TTS)
 export interface TtsVoiceInfo { voice: string; kind: TtsVoiceKind; targetModel?: string }
 export const listTtsVoices = (t: EngineTarget, body: { baseUrl: string; apiKey: string }) =>
   request<{ voices: TtsVoiceInfo[] }>(t, '/agent/tts/voices/list', { method: 'POST', body: JSON.stringify(body) }).then((r) => r.voices)
-// engine 缺省 qwen(audioData=base64);engine='cosy' 走 CosyVoice 复刻(audioUrl=公网 URL,百炼不收 base64)。
-export const cloneTtsVoice = (t: EngineTarget, body: { baseUrl: string; apiKey: string; name: string; engine?: 'qwen' | 'cosy'; audioData?: string; audioUrl?: string; targetModel?: string }) =>
-  request<{ voice: string; targetModel: string }>(t, '/agent/tts/voices/clone', { method: 'POST', body: JSON.stringify(body) })
+// 复刻:targetModel 决定走哪个复刻服务(引擎 routes/tts.ts cloneService);audioData=data URI,本地录音各家都收。engine 是旧写法,新代码不用传。
+// text / language:样本是照着文案念的时候带上(只对 qwen-voice-enrollment 那一类有用);对不上时百炼退回不用文案的方式,回 fallbackReason。
+export const cloneTtsVoice = (t: EngineTarget, body: { baseUrl: string; apiKey: string; name: string; engine?: 'qwen' | 'cosy'; audioData?: string; audioUrl?: string; targetModel?: string; text?: string; language?: string }) =>
+  request<{ voice: string; targetModel: string; fallbackReason?: string }>(t, '/agent/tts/voices/clone', { method: 'POST', body: JSON.stringify(body) })
 export const designTtsVoice = (t: EngineTarget, body: { baseUrl: string; apiKey: string; name: string; voicePrompt: string; previewText?: string; targetModel?: string }) =>
   request<{ voice: string; targetModel: string; previewAudio?: { data: string; sampleRate: number; format: string } }>(t, '/agent/tts/voices/design', { method: 'POST', body: JSON.stringify(body) })
 export const deleteTtsVoice = (t: EngineTarget, body: { baseUrl: string; apiKey: string; voice: string; kind: TtsVoiceKind }) =>
@@ -619,6 +620,17 @@ export interface ChannelConfigPatch {
   appSecret?: string
 }
 
+/** Tangu for Chrome 扩展:桥的状态 + 连接码(连接码即配对凭据,只走带鉴权的本机引擎接口)。 */
+export interface BrowserExtensionStatus {
+  enabled: boolean; port: number; listening: boolean; error: string; connected: boolean
+  clients: Array<{ version: string; connectedAt: number }>; extensionId: string; extensionDir: string; code: string
+}
+// 都带超时:引擎挂住不回时,轮询不叠请求、换码按钮不会永远置灰
+export const getBrowserExtension = (t: EngineTarget) =>
+  request<BrowserExtensionStatus>(t, '/agent/browser-extension', undefined, { timeoutMs: 5000 })
+export const resetBrowserExtensionCode = (t: EngineTarget) =>
+  request<BrowserExtensionStatus>(t, '/agent/browser-extension/reset-code', { method: 'POST', body: '{}' }, { timeoutMs: 10000 })
+
 export const listChannels = (t: EngineTarget) =>
   request<{ available: boolean; channels: ChannelStatus[] }>(t, '/agent/channels')
 
@@ -742,13 +754,15 @@ export const deleteAgentLibraryFile = (t: EngineTarget, slug: string, name: stri
   request<{ ok: boolean }>(t, `/agent/agents/${encodeURIComponent(slug)}/library/file?name=${encodeURIComponent(name)}`, { method: 'DELETE' })
 
 // 某 agent 的工作笔记进化史(HARNESS.md 条目 + 本机编辑史;journal 不跨设备同步)。
-export type HarnessEntry = { id: string; kind: string; title: string; body: string; evidence?: string; createdAt: string; updatedAt: string; version: number }
-export type HarnessJournalLine = { ts: string; action: 'upsert' | 'delete' | 'rollback'; entryId: string; before: HarnessEntry | null; after: HarnessEntry | null }
+export type HarnessEntry = { id: string; kind: string; title: string; body: string; evidence?: string; createdAt: string; updatedAt: string; version: number; /** kind 'equip':收起的工具 / 技能 */ tools?: string[]; skills?: string[] }
+/** by = 不是 agent 自己在对话里写的改动:'historian' 后台复盘的提名直接采纳,'muse' 用量巡检后代为收起;缺省 = agent 自己(或面板 / 撤销卡)。 */
+export type HarnessJournalLine = { ts: string; rev?: string; action: 'upsert' | 'delete' | 'rollback'; entryId: string; before: HarnessEntry | null; after: HarnessEntry | null; by?: string }
 /** candidates = Historian 自动档提名的待复盘候选(收件箱原始行 `- [YYYY-MM-DD s:xxxx] 正文`,只读;/refine 才取走);旧引擎没有这一键。 */
 export const getAgentHarness = (t: EngineTarget, slug: string) =>
   request<{ entries: HarnessEntry[]; journal: HarnessJournalLine[]; candidates?: string[] }>(t, `/agent/agents/${encodeURIComponent(slug)}/harness`)
-export const rollbackHarnessEntry = (t: EngineTarget, slug: string, id: string) =>
-  request<{ ok: boolean; entry: HarnessEntry | null }>(t, `/agent/agents/${encodeURIComponent(slug)}/harness/rollback`, { method: 'POST', body: JSON.stringify({ id }) })
+/** expectRev = 对话里更新卡带回的那一行编辑史:条目之后又改过 → 引擎回 409,不会撤掉后来的修改。面板里的「撤销最近一次改动」不带。 */
+export const rollbackHarnessEntry = (t: EngineTarget, slug: string, id: string, expectRev?: string) =>
+  request<{ ok: boolean; entry: HarnessEntry | null }>(t, `/agent/agents/${encodeURIComponent(slug)}/harness/rollback`, { method: 'POST', body: JSON.stringify({ id, ...(expectRev ? { expectRev } : {}) }) })
 
 // 全局用户画像 USER.md。
 export const getUserProfile = (t: EngineTarget) =>
@@ -772,21 +786,36 @@ export type PluginInfo = {
   id: string; name: string; nameEn?: string; description: string; descriptionEn?: string;
   iconUrl?: string;
   scopes: Array<'global' | 'agent'>; settings: { fields: PluginField[] } | null; source: 'builtin' | 'folder'; enabled: boolean
-  /** 运行期激活但贡献了路由,需重启才完整生效。 */
+  /** 磁盘上换了代码却没法热换(包里有 CommonJS / 自带 node_modules,或运行时没有模块钩子而入口有相对引入):
+   *  老实例还在跑,重启后端才换上新版。 */
   needsRestart?: boolean
+  /** 此刻在不在跑(2026-10-02 起的引擎才给;缺省按 enabled)。开着但前置没齐 → false。 */
+  active?: boolean
+  version?: string
+  requiresPlugins?: Array<{ id: string; minVersion?: string }>
+  /** 开着却因前置没齐而休眠时才给:缺哪些、为什么(missing / version / off / waiting / cycle,同桌面 pluginDeps)。 */
+  waitingFor?: Array<{ id: string; reason: 'missing' | 'version' | 'off' | 'waiting' | 'cycle'; minVersion?: string; have?: string }>
+  /** 上次 activate 抛错的消息(显式拨一次开关即清)。 */
+  lastError?: string
+  /** 上一次启动 / 停用超时、还在后台收尾:结束后引擎按开关自动收敛,这期间不会再启动它。 */
+  settling?: boolean
 }
+/** 重扫 / 安装的结果。reloadedIds 有 = 引擎会热插拔(10-02 起):原地升级即生效,needsRestart 只剩「没法热换」那几种(见 needsRestart);
+ *  旧引擎不给 reloadedIds,只激活全新 id,原地更新一律得重启。 */
+export type PluginRescanResult = { addedIds: string[]; reloadedIds?: string[]; removedIds?: string[]; needsRestart: boolean; plugins: PluginInfo[] }
 export const listPlugins = (t: EngineTarget) =>
-  request<{ plugins: PluginInfo[] }>(t, '/agent/plugins').then((r) => r.plugins).catch(() => [] as PluginInfo[])
+  request<{ plugins?: PluginInfo[] }>(t, '/agent/plugins').then((r) => r.plugins ?? []).catch(() => [] as PluginInfo[])
 /** 运行期重扫:市场装新插件后即生效(无需重启)。addedIds=新激活的;needsRestart=贡献路由的插件需重启。 */
 export const rescanPlugins = (t: EngineTarget) =>
-  request<{ ok: boolean; addedIds: string[]; needsRestart: boolean; plugins: PluginInfo[] }>(t, '/agent/plugins/rescan', { method: 'POST' })
+  request<{ ok: boolean } & PluginRescanResult>(t, '/agent/plugins/rescan', { method: 'POST' })
 // npm 一条命令装引擎插件(仅 npm: 源)。confirm:true 由本函数代表 UI 已弹确认框;装后后端内联 rescan,返回最新列表。
 export const installPluginFromNpm = (t: EngineTarget, spec: string, preferMirror?: boolean) =>
-  request<{ ok: boolean; id: string; version: string; addedIds: string[]; needsRestart: boolean; plugins: PluginInfo[] }>(
+  request<{ ok: boolean; id: string; version: string } & PluginRescanResult>(
     t, '/agent/plugins/install', { method: 'POST', body: JSON.stringify({ spec, preferMirror, confirm: true }) })
 export const setPluginEnabled = (t: EngineTarget, id: string, enabled: boolean) =>
-  request<{ ok: boolean; enabled: boolean }>(t, `/agent/plugins/${encodeURIComponent(id)}/enabled`, { method: 'PUT', body: JSON.stringify({ enabled }) })
-/** 卸载数据清理(注销 meta + 清设置/blob);文件夹删除与重启由桌面侧 IPC 负责。 */
+  request<{ ok: boolean; enabled: boolean; active?: boolean; plugins?: PluginInfo[] }>(t, `/agent/plugins/${encodeURIComponent(id)}/enabled`, { method: 'PUT', body: JSON.stringify({ enabled }) })
+/** 卸载:引擎先停掉在跑的实例(依赖者先休眠)、注销 meta、清设置/blob;文件夹由桌面侧 IPC 删。
+ *  restartRequired:false(10-02 起)= 已运行期撤干净,不用重启;旧引擎给 true / 不给。 */
 export const uninstallPlugin = (t: EngineTarget, id: string) =>
   request<{ ok: boolean; restartRequired: boolean }>(t, `/agent/plugins/${encodeURIComponent(id)}`, { method: 'DELETE' })
 export const getPluginSettings = (t: EngineTarget, id: string, scope: string) =>
@@ -1206,6 +1235,9 @@ export const getGitSettings = (t: EngineTarget) =>
 /** 逐键改;某键给 null = 恢复缺省。 */
 export const setGitSettings = (t: EngineTarget, patch: { [K in keyof GitSettings]?: GitSettings[K] | null }) =>
   request<{ settings: GitSettings }>(t, '/agent/git-settings', { method: 'PUT', body: JSON.stringify(patch) }).then((r) => r.settings)
+/** 删一条项目记忆。409 = 记忆在读出之后被别处改过(没有删除);调用方重载后再删。 */
+export const forgetProjectMemory = (t: EngineTarget, sessionId: string, id: string, expectedVersion: string) =>
+  request<{ memory: ProjectMemoryView }>(t, '/agent/project-context/memory', { method: 'DELETE', body: JSON.stringify({ sessionId, id, expectedVersion }) }).then((r) => r.memory)
 export const initProjectContext = (t: EngineTarget, sessionId: string) =>
   request<{ createdDir: boolean; createdDoc: boolean; context: ProjectContext }>(t, '/agent/project-context/init', { method: 'POST', body: JSON.stringify({ sessionId }) }).then((r) => ({ ...r, context: projectContextShape(r.context) }))
 /** 409 = 文件在读出之后被别处改过(没有写入);调用方提示用户重载。 */

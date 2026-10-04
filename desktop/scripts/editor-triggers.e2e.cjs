@@ -1321,6 +1321,9 @@ async function main() {
     await c.locator('.md-block .ProseMirror pre').first().click()
     await c.waitForTimeout(200)
     await c.keyboard.press('Home')
+    // Home 是原生光标移动:PM 等异步 selectionchange 才知道光标到了行首 —— 紧跟着按 Tab 会按旧光标(行尾)插。
+    // 等光标就位再按(与其余「点完 / 移完再按键」的检查同一纪律;波次 2 后代码块插件变多,这个窗口变宽、T42 常红)。
+    await c.waitForTimeout(120)
     await c.keyboard.press('Tab')
     await c.waitForTimeout(500)
     const cmd = await mdOf(c)

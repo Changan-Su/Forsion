@@ -55,7 +55,7 @@ export class TelegramChannel implements ChannelDriver {
 
   /** 校验 token 并返回 bot 身份(连接前调用)。 */
   async verify(): Promise<{ id: number; username: string }> {
-    if (!this.token()) throw new Error('Telegram bot token 未配置');
+    if (!this.token()) throw new Error('Telegram bot token is not configured');
     const me = await this.api<any>('getMe');
     this.botId = me.id;
     this.botLabel = me.username ? `@${me.username}` : String(me.id);
@@ -105,8 +105,9 @@ export class TelegramChannel implements ChannelDriver {
         if (!this.running || gen !== this.gen) break;
         failures = 0;
         for (const u of updates || []) {
-          // 先处理再推进/持久化 offset:处理中途崩溃 → 重启后该条重投一次。
-          // handler 错误已捕获(不会重投),不存在毒消息死循环。
+          // 先交给管线再推进/持久化 offset。onMessage(hub → ChannelService.receive)只排进该 peer 的串行分派链就返回,
+          // 不等 run 回复 —— 这里 await 的只是媒体下载,轮询不会被一个在跑的任务卡住(「停止」/status 即刻可读)。
+          // 代价:分派前崩溃这条不重投(重投多半只会把已落库的任务再跑一遍)。handler 错误已捕获,不存在毒消息死循环。
           if (u.message) {
             await this.handleMessage(u.message).catch((e: any) => console.warn('[telegram-channel] handle message failed:', e?.message || e));
           }
@@ -149,17 +150,17 @@ export class TelegramChannel implements ChannelDriver {
       const best = msg.photo[msg.photo.length - 1];
       const dl = await this.download(best.file_id).catch(() => null);
       if (dl) attachments.push({ name: 'photo.jpg', mimeType: 'image/jpeg', data: dl.buffer.toString('base64') });
-      else text = [text, '(用户发来图片,但下载失败,请告知用户)'].filter(Boolean).join('\n');
+      else text = [text, '(The user sent an image, but downloading it failed; tell the user.)'].filter(Boolean).join('\n');
     }
     if (msg.document?.file_id) {
       const dl = await this.download(msg.document.file_id).catch(() => null);
       if (dl) files.push({ name: String(msg.document.file_name || path.basename(dl.filePath)), mimeType: String(msg.document.mime_type || 'application/octet-stream'), buffer: dl.buffer });
-      else text = [text, `(用户发来文件 ${msg.document.file_name || ''},但下载失败——可能超过 20MB,请告知用户)`].filter(Boolean).join('\n');
+      else text = [text, `(The user sent the file ${msg.document.file_name || ''}, but downloading it failed, possibly because it is over 20 MB; tell the user.)`].filter(Boolean).join('\n');
     }
     if (msg.voice?.file_id) {
       const dl = await this.download(msg.voice.file_id).catch(() => null);
       if (dl) files.push({ name: 'voice-message.oga', mimeType: 'audio/ogg', buffer: dl.buffer });
-      else text = [text, '(用户发来语音,但下载失败,请告知用户)'].filter(Boolean).join('\n');
+      else text = [text, '(The user sent a voice message, but downloading it failed; tell the user.)'].filter(Boolean).join('\n');
     }
     if (!text && !attachments.length && !files.length) return;
     const reply = await this.onMessage?.({ accountId: this.accountId(), peerId, text, messageId: String(msg.message_id ?? ''), attachments: attachments.length ? attachments : undefined, files: files.length ? files : undefined });

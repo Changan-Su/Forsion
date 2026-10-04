@@ -1,5 +1,5 @@
 /**
- * Agent 的自我进化层:HARNESS.md 工作笔记(Agent 经审批自己沉淀的做法)+ 本机编辑史。
+ * Agent 的自我进化层:HARNESS.md 工作笔记(Agent 自己沉淀的做法,写入立即生效、对话里出可撤销的更新卡)+ 本机编辑史。
  * Agents 详情的「进化」标签与设置里的 Agent 大脑弹窗共用这一份。
  * 回滚 = 条目级「恢复上一版」(在最近两版间往返);journal 是本机编辑史,不跨设备同步。
  */
@@ -11,6 +11,7 @@ import { useI18n } from '../i18n'
 import { formatDate, formatDateTime, formatRelative } from '../format/time'
 import '../views/agentProfile.css'
 import { homeTarget, connectionKey } from '../services/engine/targets'
+import { HARNESS_CHANGED_EVENT } from '../services/harnessUpdates'
 
 const MAX_ENTRIES = 30 // 与引擎 harnessStore.MAX_ENTRIES 同值(写入时封顶)
 const HISTORY_PREVIEW = 8
@@ -18,7 +19,7 @@ const HISTORY_PREVIEW = 8
 type Props = {
   cfg: TanguDesktopConfig
   slug: string
-  /** 运行开始 / 结束时重读 —— /refine 经审批写入后不用手动刷新。 */
+  /** 运行开始 / 结束时重读 —— Agent 写完笔记后不用手动刷新。 */
   running?: boolean
   /** 有会话可复盘时才给:在该会话里发 /refine(引擎按消息前缀识别)。 */
   onRefine?: () => Promise<boolean>
@@ -54,11 +55,13 @@ const AgentHarnessBody: React.FC<Props> = ({ cfg, slug, running, onRefine, onCan
     }
   }
   useEffect(() => { void load() }, [running]) // eslint-disable-line react-hooks/exhaustive-deps
+  // 对话里的更新卡撤销了一笔(或 Agent 运行中又写了一条)→ 面板跟着重读
+  useEffect(() => { const again = () => { void load() }; window.addEventListener(HARNESS_CHANGED_EVENT, again); return () => window.removeEventListener(HARNESS_CHANGED_EVENT, again) }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   const rollback = async (id: string, title: string): Promise<void> => {
     if (busy || !window.confirm(t('settings.agents.harnessRollbackConfirm', { title }))) return
     setBusy(true); setError(''); setNotice('')
-    try { await rollbackHarnessEntry(homeTarget(), slug, id); await load() }
+    try { await rollbackHarnessEntry(homeTarget(), slug, id); await load(); window.dispatchEvent(new CustomEvent(HARNESS_CHANGED_EVENT)) }
     catch (e: any) { if (alive.current) setError(String(e?.message || e)) }
     finally { if (alive.current) setBusy(false) }
   }
@@ -78,7 +81,10 @@ const AgentHarnessBody: React.FC<Props> = ({ cfg, slug, running, onRefine, onCan
     l.action === 'delete' ? t('settings.agents.harnessActDelete')
       : l.action === 'rollback' ? t('settings.agents.harnessActRollback')
         : l.before === null ? t('settings.agents.harnessActCreate') : t('settings.agents.harnessActUpdate')
-  const kindLabel = (kind: string): string => kind === 'note' ? t('settings.agents.harnessKindNote') : kind === 'recipe' ? t('settings.agents.harnessKindRecipe') : kind
+  // 这次改动不是 agent 自己在对话里写的:后台复盘直接采纳 / Muse 巡检后代为收起(10-04)。别的来源不标。
+  const byLabel = (by?: string): string => by === 'historian' ? t('settings.agents.harnessByHistorian') : by === 'muse' ? t('settings.agents.harnessByMuse') : ''
+  const kindLabel = (kind: string): string => kind === 'note' ? t('settings.agents.harnessKindNote') : kind === 'recipe' ? t('settings.agents.harnessKindRecipe') : kind === 'equip' ? t('settings.agents.harnessKindEquip') : kind
+  const listSep = locale === 'zh' ? '、' : ', '
   // 条目日期是引擎写的 YYYY-MM-DD(纯日期,单源按本地那一天解读,不串到前后一天);journal ts 是完整 ISO,按本地时区显示。
   // HARNESS.md 允许手改,解析不了的原样显示,绝不渲出「Invalid Date」。
   const day = (d: string): string => formatDate(d, { locale }) || d
@@ -108,12 +114,15 @@ const AgentHarnessBody: React.FC<Props> = ({ cfg, slug, running, onRefine, onCan
           <ul className="harness-entries">{entries.map((e) => <li key={e.id} className="harness-entry" data-harness-entry={e.id}>
             <div className="harness-entry-head">
               {/* 芯片放进标题行内:窄栏里标题折行从左缘续排,不在芯片右侧挤成一条竖栏 */}
-              <strong><span className={`harness-kind${e.kind === 'recipe' ? ' recipe' : ''}`}>{kindLabel(e.kind)}</span>{e.title}</strong>
+              <strong><span className={`harness-kind${e.kind === 'recipe' || e.kind === 'equip' ? ' recipe' : ''}`}>{kindLabel(e.kind)}</span>{e.title}</strong>
               {latestIdx.has(e.id) && <button type="button" className="harness-undo" disabled={busy} title={t('settings.agents.harnessRollback')} aria-label={t('settings.agents.harnessRollback')} onClick={() => void rollback(e.id, e.title)}><Undo2 size={13} /></button>}
             </div>
             <p>{e.body}</p>
+            {/* 装备(equip):这一条收起了哪些工具 / 技能 —— 撤销或删掉这一条它们就回来 */}
+            {!!e.tools?.length && <small className="harness-evidence" data-harness-shelved="tools">{t('settings.agents.harnessShelvedTools', { names: e.tools.join(listSep) })}</small>}
+            {!!e.skills?.length && <small className="harness-evidence" data-harness-shelved="skills">{t('settings.agents.harnessShelvedSkills', { names: e.skills.join(listSep) })}</small>}
             {e.evidence && <small className="harness-evidence">{t('settings.agents.harnessEvidence', { text: e.evidence })}</small>}
-            <small className="harness-meta">v{e.version}{e.updatedAt && <> · {day(e.updatedAt)}</>}</small>
+            <small className="harness-meta">v{e.version}{e.updatedAt && <> · {day(e.updatedAt)}</>}{byLabel(rev[latestIdx.get(e.id) ?? -1]?.by) && <span data-harness-by={rev[latestIdx.get(e.id) ?? -1]?.by}> · {byLabel(rev[latestIdx.get(e.id) ?? -1]?.by)}</span>}</small>
           </li>)}</ul>
         </>}
     {/* 空态也要显示候选:第一次用的人正是「还没有笔记、但收件箱里已经有提名」这个状态 */}
@@ -128,14 +137,14 @@ const AgentHarnessBody: React.FC<Props> = ({ cfg, slug, running, onRefine, onCan
         const title = l.after?.title || l.before?.title || l.entryId
         const restorable = latestIdx.get(l.entryId) === i && !currentIds.has(l.entryId) && !!l.before
         return <li key={`${l.ts}-${i}`} className={`harness-event ${l.action}`}>
-          <span><b>{actLabel(l)}</b>{title}</span>
+          <span><b>{actLabel(l)}{byLabel(l.by) && ` · ${byLabel(l.by)}`}</b>{title}</span>
           {restorable && <button type="button" className="profile-text-action" disabled={busy} onClick={() => void rollback(l.entryId, title)}>{t('settings.agents.harnessRestore')}</button>}
           <time dateTime={l.ts}>{stamp(l.ts)}</time>
         </li>
       })}</ol>
       {!showAll && rev.length > HISTORY_PREVIEW && <button type="button" className="profile-text-action" onClick={() => setShowAll(true)}>{t('settings.agents.harnessShowAll', { count: rev.length })}</button>}
     </section>}
-    {/* 从详情页底栏挪进来(09-19):底栏常驻两行说明,窄栏里白占高度;放在面板末尾,读完笔记正好看到「写入要经审批」 */}
+    {/* 从详情页底栏挪进来(09-19):底栏常驻两行说明,窄栏里白占高度;放在面板末尾,读完笔记正好看到「谁写的、怎么撤」 */}
     {entries !== null && <p className="memory-footnote">{t('settings.agents.harnessHint')}</p>}
   </div>
 }

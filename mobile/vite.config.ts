@@ -1,3 +1,4 @@
+import { startupAppearanceHtml } from '../desktop/frontend/startupAppearancePlugin'
 /**
  * Tangu Mobile — Android(Capacitor)独立 app。经别名复用 desktop/frontend/src(不复制源码);
  * 与 web/ 唯一差异:web 连 Dockview 外壳一起借,mobile **换掉外壳**——用 resolveId 插件按解析后的
@@ -61,7 +62,7 @@ export default defineConfig(({ mode }) => {
   const DEV_PORT = Number(env.PORT) || 5274
   const DEV_PROXY = env.BACKEND_URL || env.TANGU_DEV_PROXY || 'http://localhost:3001'
   return {
-  plugins: [engineSwap(), react(), nativeConfig(env.VITE_API_ORIGIN)],
+  plugins: [startupAppearanceHtml(), engineSwap(), react(), nativeConfig(env.VITE_API_ORIGIN)],
   // Vite 默认递归扫描 root 下的所有 HTML；Capacitor sync 生成的 android/.../public/index.html
   // 也会因此被当成 dev 入口，继而扫描旧 bundle/可选 peer dependency。dev 只认正典入口。
   optimizeDeps: {

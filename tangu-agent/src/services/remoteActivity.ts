@@ -139,9 +139,11 @@ export function noteRunTainted(runId: string): void {
   if (runs.has(runId)) notifyActivity();
 }
 
-/** 当前在飞的已登记 run id(estop 用)。 */
-export function registeredRunIds(): string[] {
-  return [...runs.keys()];
+/** 在飞 run 是不是无人值守(Muse / 自动化):requestApproval / requestInquiry 入口据此短路 —— 没人会答,等就是把整条 run
+ *  (连同 anyMuseRunActive 卡住的后续 Muse 周期)挂到用户哪天翻托盘为止(PI-DSH 评审 R1)。没登记 = false,照旧等。 */
+export function isUnattendedRun(runId: string): boolean {
+  const e = runs.get(runId);
+  return !!e && runCategory(e.input, runId) === 'unattended';
 }
 
 function activityRun(e: Entry, prompts: Map<string, { approvals: number; inquiries: number }>): ActivityRun {

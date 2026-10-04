@@ -1,0 +1,61 @@
+<section id="wave-demo">
+  <h2 class="fs-title">波形实验室</h2>
+  <div class="fs-controls" style="margin-top:16px">
+    <label class="fs-field" for="wave-amplitude">
+      <span>振幅 <output id="wave-amplitude-value" for="wave-amplitude">40%</output></span>
+      <input class="fs-range" id="wave-amplitude" type="range" min="10" max="90" value="40">
+    </label>
+    <label class="fs-field" for="wave-frequency">
+      <span>周期数 <output id="wave-frequency-value" for="wave-frequency">2</output></span>
+      <input class="fs-range" id="wave-frequency" type="range" min="1" max="5" value="2" step="0.5">
+    </label>
+  </div>
+  <div class="fs-tabs" role="tablist" aria-label="波形">
+    <button type="button" id="wave-sine" role="tab" aria-controls="wave-sine-panel" aria-selected="true">正弦波</button>
+    <button type="button" id="wave-triangle" role="tab" aria-controls="wave-triangle-panel" aria-selected="false">三角波</button>
+  </div>
+  <div id="wave-sine-panel" role="tabpanel" aria-labelledby="wave-sine">
+    <svg role="img" aria-label="正弦波形" class="wave-field"><path class="wave-axis"/><path class="wave-line"/></svg>
+  </div>
+  <div id="wave-triangle-panel" role="tabpanel" aria-labelledby="wave-triangle" hidden>
+    <svg role="img" aria-label="三角波形" class="wave-field"><path class="wave-axis"/><path class="wave-line"/></svg>
+  </div>
+  <p class="fs-caption" id="wave-summary" aria-live="polite"></p>
+</section>
+<style>
+  #wave-demo .wave-axis { stroke: var(--fs-rule); stroke-width: 1; fill: none; }
+  #wave-demo .wave-line { stroke: var(--fs-accent); stroke-width: 2.5; fill: none; }
+</style>
+<script>
+(() => {
+  const root = document.getElementById('wave-demo');
+  const amp = root.querySelector('#wave-amplitude');
+  const freq = root.querySelector('#wave-frequency');
+  const restored = window.forsionSketch.state;
+  if (restored && Number.isFinite(restored.amplitude)) amp.value = restored.amplitude;
+  if (restored && Number.isFinite(restored.frequency)) freq.value = restored.frequency;
+  function draw() {
+    const width = Math.max(1, root.clientWidth);
+    root.querySelector('#wave-amplitude-value').textContent = amp.value + '%';
+    root.querySelector('#wave-frequency-value').textContent = freq.value;
+    root.querySelector('#wave-summary').textContent = '振幅 ' + amp.value + '% · ' + freq.value + ' 个周期';
+    root.querySelectorAll('.wave-field').forEach((svg, index) => {
+      svg.setAttribute('viewBox', '0 0 ' + width + ' 180');
+      svg.querySelector('.wave-axis').setAttribute('d', 'M0 90H' + width);
+      const points = [];
+      for (let x = 0; x <= width; x += 1) {
+        const angle = x / width * Number(freq.value) * 2 * Math.PI;
+        const wave = index ? 2 / Math.PI * Math.asin(Math.sin(angle)) : Math.sin(angle);
+        points.push((x ? 'L' : 'M') + x + ' ' + (90 - wave * Number(amp.value) * 0.8).toFixed(2));
+      }
+      svg.querySelector('.wave-line').setAttribute('d', points.join(''));
+    });
+  }
+  for (const control of [amp, freq]) control.addEventListener('input', () => {
+    draw();
+    window.forsionSketch.setState({ amplitude: Number(amp.value), frequency: Number(freq.value) });
+  });
+  new ResizeObserver(draw).observe(root);
+  draw();
+})();
+</script>

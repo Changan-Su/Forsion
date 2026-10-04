@@ -78,6 +78,7 @@ Forsion（扶桑）是一个**本地优先的 AI 第二大脑**：把材料、�
 
 - [Mini Panel 开发](customization/mini-panel-development.md) — 插件适配、实体参数交接与自动前台面板契约
 - [Floating Panel 开发](customization/floating-panel-development.md) — 原生悬浮窗口、Web 浮层与插件开放接口
+- [可复用界面组件](customization/ui-components.md) — Chat Box 与 Markdown 编辑器在 View / 插件中的挂载契约
 
 - [外观与主题](customization/themes.md) — 设计语言、配色、玻璃、字体三档
 - [插件](customization/plugins.md) — 桌面插件与引擎插件、捆绑包、扩展点、安全模型

@@ -55,7 +55,7 @@ export class QQChannel implements ChannelDriver {
   // ── token / REST ──
   private async refreshToken(): Promise<string> {
     const { appId, appSecret } = this.creds();
-    if (!appId || !appSecret) throw new Error('QQ AppID/AppSecret 未配置');
+    if (!appId || !appSecret) throw new Error('QQ AppID/AppSecret is not configured');
     const res = await fetch(TOKEN_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -261,7 +261,7 @@ export class QQChannel implements ChannelDriver {
       return;
     }
     const { attachments, files, lost } = await this.downloadAttachments(data);
-    if (lost > 0) text = [text, `(用户随消息发来 ${lost} 个附件,但读取失败,请告知用户)`].filter(Boolean).join('\n');
+    if (lost > 0) text = [text, `(The user sent ${lost} attachment(s) with this message, but reading them failed; tell the user.)`].filter(Boolean).join('\n');
     if (!text && !attachments.length && !files.length) return;
     // 登记被动回复上下文(新入站消息重置 seq)。
     if (data?.id) this.replyCtx.set(peerId, { msgId: String(data.id), seq: 0, at: Date.now() });
@@ -304,12 +304,12 @@ export class QQChannel implements ChannelDriver {
 
   async sendMedia(_accountId: string, peerId: string, buffer: Buffer, opts: { kind: 'image' | 'file'; fileName: string }): Promise<SendResult> {
     try {
-      if (buffer.length > MEDIA_MAX_BYTES) return { ok: false, error: `QQ 媒体过大(${buffer.length}B > ${MEDIA_MAX_BYTES}B)` };
+      if (buffer.length > MEDIA_MAX_BYTES) return { ok: false, error: `QQ media is too large (${buffer.length}B > ${MEDIA_MAX_BYTES}B)` };
       const isGroup = peerId.startsWith('group:');
       const fileType = opts.kind === 'image' ? 1 : 4;
-      if (isGroup && fileType === 4) return { ok: false, error: 'QQ 群聊暂不开放文件类型发送(仅图片/视频/语音)。' };
+      if (isGroup && fileType === 4) return { ok: false, error: 'QQ group chats do not accept files yet (only images, video and voice).' };
       const up = await this.paced(() => this.api<any>('POST', this.endpoints(peerId, 'files'), { file_type: fileType, srv_send_msg: false, file_data: buffer.toString('base64') }));
-      if (!up?.file_info) return { ok: false, error: 'QQ 媒体上传未返回 file_info' };
+      if (!up?.file_info) return { ok: false, error: 'QQ media upload returned no file_info' };
       await this.paced(() => this.api('POST', this.endpoints(peerId, 'messages'), { msg_type: 7, media: { file_info: up.file_info }, content: ' ', ...this.passiveFields(peerId) }));
       return { ok: true };
     } catch (e: any) {

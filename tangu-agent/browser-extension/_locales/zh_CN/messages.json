@@ -1,0 +1,17 @@
+{
+  "extName": { "message": "Tangu for Chrome" },
+  "extDescription": { "message": "让 Tangu 看到你打开的标签页，并在自己的标签组里后台操作，不占用你正在看的页面。" },
+  "popupTitle": { "message": "Tangu for Chrome" },
+  "statusConnected": { "message": "已连接 Tangu" },
+  "statusConnecting": { "message": "正在连接 Tangu…" },
+  "statusOffline": { "message": "Tangu 没有运行，或连接码已过期" },
+  "statusBadCode": { "message": "连接码被拒绝，请从 Tangu 重新复制。" },
+  "statusNotPaired": { "message": "还没有和 Tangu 配对" },
+  "codeLabel": { "message": "连接码" },
+  "codePlaceholder": { "message": "粘贴 Tangu → 设置 → 浏览器 里的连接码" },
+  "codeHelp": { "message": "在 Tangu 打开「设置 → 浏览器 → Chrome 扩展」，复制连接码粘贴到这里。只需要配对一次。" },
+  "codeInvalid": { "message": "这不像是 Tangu 的连接码。" },
+  "save": { "message": "连接" },
+  "forget": { "message": "解除配对" },
+  "groupHint": { "message": "Tangu 打开的标签页都放在橙色的「Tangu」标签组里。" }
+}

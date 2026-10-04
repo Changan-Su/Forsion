@@ -69,8 +69,19 @@ export const CLASSIFICATION = {
   // P1-K2 ── remote.ts:远程活动 / 急停 / 解锁,只给执行设备本机的主进程(路由自身对 x-forsion-remote 另回 403)
   'GET /agent/remote/activity': [D, 'in-flight run registry for the host main process (tray / keep-awake)'],
   'GET /agent/remote/activity/events': [D, 'in-flight run registry feed for the host main process'],
+  'GET /agent/remote/restart-status': [D, 'host-only exit checklist (running tasks / background processes) before restarting to update'],
   'POST /agent/remote/estop': [D, 'emergency stop is a host-only action (design §6.5)'],
   'POST /agent/remote/unlock': [D, 'unlocking remote access needs local system auth on the host (design §6.1, D13)'],
+
+  // Pairing credentials and persistent collaboration policy are host-only.
+  'GET /agent/browser-extension': [D, 'browser extension pairing credentials'],
+  'POST /agent/browser-extension/reset-code': [D, 'rotates browser extension pairing credentials'],
+  'GET /agent/agents/:slug/human': [D, 'host collaboration configuration'],
+  'PUT /agent/agents/:slug/human': [D, 'host collaboration configuration write'],
+  'POST /agent/agents/:slug/human/undo': [D, 'host collaboration configuration undo'],
+  'GET /agent/project-context/human': [D, 'host collaboration configuration'],
+  'PUT /agent/project-context/human': [D, 'host collaboration configuration write'],
+  'POST /agent/project-context/human/undo': [D, 'host collaboration configuration undo'],
 
   // ── workspace.ts ──
   'GET /agent/workspace/list': [A, 'session workspace listing'],
@@ -209,6 +220,7 @@ export const CLASSIFICATION = {
   'POST /agent/project-context/icon': [D, 'project icon write'],
   'GET /agent/project-context/icon': [A, 'project icon'],
   'DELETE /agent/project-context/icon': [D, 'project icon write'],
+  'DELETE /agent/project-context/memory': [D, 'project memory delete (host-only store; the route itself also refuses remote origin)'],
   // PROJECT 详情「Git」页:写仓库、跑提交钩子、信任仓库自带的可执行配置、带凭据推送 —— 只许本机
   'POST /agent/project-context/git/init': [D, 'git repository write'],
   'POST /agent/project-context/git/trust': [D, 'trusts repo-provided executable git config'],

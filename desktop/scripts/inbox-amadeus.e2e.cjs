@@ -26,7 +26,7 @@
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
-const { _electron: electron } = require('playwright-core')
+const electron = require('./lib/launch-electron.cjs')
 const { startStubEngine } = require('./lib/stub-engine.cjs')
 
 const ROOT = path.resolve(__dirname, '..')
@@ -223,7 +223,7 @@ async function main() {
       const plug = document.querySelector('.t2sw-plug')
       const root = plug?.closest('.t2sw')
       return {
-        trigger: root?.querySelector('.t2sw-mode-label')?.textContent || '',
+        switcher: !!root?.querySelector('.t2sw-mode-picker'), // 档位锁在条目上:不该再有切档菜单
         rows: plug ? plug.querySelectorAll('.t2sw-plug-list .t2s-srow').length : 0,
         dots: plug ? plug.querySelectorAll('.t2sw-plug-list .t2s-srow .t2s-dot.unread').length : 0,
         groups: [...document.querySelectorAll('[role=menuitemradio]')].map((e) => e.getAttribute('aria-label')),
@@ -238,7 +238,7 @@ async function main() {
         })(),
       }
     })
-    check('收件箱 Space 左栏 = 统一工作区(自动 · 收件箱):5 行、未读点 4 个且贴在图标右下角,旧 Gmail 式列表 0 个', spaced && ws.trigger.includes('收件箱') && ws.rows === 5 && ws.dots === 4 && ws.dotInCorner && ws.oldRows === 0, JSON.stringify({ spaced, ...ws }))
+    check('收件箱 Space 左栏 = 统一工作区(锁在收件箱档,无切档菜单):5 行、未读点 4 个且贴在图标右下角,旧 Gmail 式列表 0 个', spaced && !ws.switcher && ws.rows === 5 && ws.dots === 4 && ws.dotInCorner && ws.oldRows === 0, JSON.stringify({ spaced, ...ws }))
     check('工作区分组:全部 / 未读 / Forsion / 自动化 / Agent / 已归档,不显示任何 automation 规则 id',
       ['全部', '未读', 'Forsion', '自动化', 'Agent', '已归档'].every((g) => ws.groups.includes(g)) && !ws.groups.some((g) => /automation:|w-[a-z0-9]/i.test(g || '')), JSON.stringify(ws.groups))
     await win.locator('.capability-menu').evaluate((el) => Promise.all(el.getAnimations({ subtree: true }).map((animation) => animation.finished)))

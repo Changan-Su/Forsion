@@ -14,7 +14,7 @@
 import { useMemo } from 'react'
 import { usePluginStore } from './pluginStore'
 import { clearDevLogs, getDevRecord, useDevRecords, EMPTY_DEV_RECORD, type DevPluginRecord } from './devRecords'
-import type { AmadeusPlugin } from './types'
+import type { AmadeusPlugin, PluginViewLocation } from './types'
 
 /** 开发副本自己说的一行话(console 转发时按插件记的账)。 */
 export interface DevPluginLog {
@@ -99,10 +99,10 @@ export function clearDevPluginLogs(pluginId: string): void {
 /** 工作台接缝(桌面壳注入,见文件头纪律②)。缺位(mobile / unit / 台架)时热重载照跑,只是不恢复标签页。 */
 export interface DevViewBridge {
   /** 现在开着的、类型以 `prefix` 打头的视图(含收起侧栏里暂存的那些)。 */
-  snapshot(prefix: string): Array<{ type: string; params: Record<string, unknown>; loc: 'main' | 'left' | 'right' }>
+  snapshot(prefix: string): Array<{ type: string; params: Record<string, unknown>; loc: PluginViewLocation }>
   /** 这个视图类型此刻还注册着吗(插件重载后可能已经不提供它了)。 */
   isRegistered(type: string): boolean
-  open(type: string, params: Record<string, unknown>, loc: 'main' | 'left' | 'right'): void
+  open(type: string, params: Record<string, unknown>, loc: PluginViewLocation): void
   /** 记住现在的焦点,返回一个「放回去」的闭包(没有可记的返回 null)。重开的标签页会自动前置,
    *  不还回去的话每次热重载都把开发者从 Studio 抢到预览上。 */
   captureFocus?(): (() => void) | null

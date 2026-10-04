@@ -261,7 +261,7 @@ Open a note and the top bar sits above the text; two more buttons sit below the 
 | Share | "Share / publish" | Share or publish this note (only when collaboration is available) |
 | Source | "Switch to Markdown source" / "Switch to visual editing (WYSIWYG)" | Visual editing ↔ raw Markdown |
 | Upload | "Upload files to this note" | Put files into this note |
-| ⋮ | "More actions" | "Export as PDF", "Star", "Show in file manager", "Delete note" |
+| ⋮ | "More actions" | "Export as PDF", "Copy as Markdown", "Version history", "Star", "Show in file manager", "Delete note"; in canvas mode also "Export as JSON Canvas" |
 
 - The two buttons above the title: "☺ Add icon" gives the page an emoji icon, "🖼 Add cover" adds a banner image.
 - Hover a cover for "Change cover", "Reposition" and "Remove"; to move the image, click "Reposition" first, drag up or down, then click "Done".
@@ -413,6 +413,15 @@ The trash sits at the very bottom of the sidebar, button "Trash", with a count w
 
 > [!warning]
 > Anything in the trash disappears **immediately** from the file tree, search results, backlinks and cloud sync — the scanner skips that folder. So when a note "has vanished" or "cannot be found any more", check the trash first. The trash is never purged automatically and has no size limit; you have to press "Empty" yourself.
+
+### Version history
+
+The trash only covers deleted files. When content gets mangled, use "More actions" → "Version history" to get it back (desktop, notes only).
+
+- Each save keeps a copy of the content it overwrites. A note keeps at most one copy per 5 minutes, and none if it matches the previous copy; each note keeps up to 50, and once all notes together pass 200 MB the oldest go first.
+- The panel lists versions on the left (relative time, exact time, size); on the right you can switch between "Content" and "Compare with current".
+- "Restore this version" asks first, and saves the current content to version history before restoring, so a restore can itself be undone. A locked page shows its history but must be unlocked to restore.
+- Versions live in the app's data folder, not in the vault, and are not synced; they follow the note when you rename or move it. The web and mobile apps do not have this entry yet.
 
 ### What the files on disk are
 
@@ -592,7 +601,10 @@ Inline syntax that converts as you type:
 | `[[` | The note picker; picking one writes `[[Note name]]` |
 | `@` | The same note picker |
 | `【【` | Becomes `[[`, so you need not switch keyboards |
+| `[^note]` | A footnote reference; if the note has no such definition yet, `[^note]: ` is added at the end and the caret moves there |
+| `:smile` | Emoji suggestions (at least two letters after the colon); Enter inserts the emoji itself |
 
+- Footnotes: click a superscript in the text to jump to its definition, hover it to preview the definition; click the number left of a definition to jump back. Numbers follow the order references first appear and are display only — the file keeps the labels you wrote. Press `Backspace` right after a definition was added for you and the whole thing is undone, with the caret back after `[^note]`.
 - Links accept only `http:`, `https:` and site-relative paths; a bare domain gets `https://` added; things like `javascript:` are rejected and left as plain text. `mailto:` and `tel:` are not supported.
 - `@` stops being a mention at any space, bracket, newline, or past 30 characters; an `@` preceded by a non-space character (inside an email address, say) never triggers it.
 - Put the caret at the very start of a rendered heading, list, to-do or quote line and press `←` or `Backspace`: the line's Markdown marker appears and can be edited character by character. Keep the marker intact (including its trailing space) and the line keeps its type; break it and the line falls back to a plain paragraph.
@@ -994,11 +1006,14 @@ Cards never stack:
 - However a new card is created, it is nudged clear of the cards already there instead of landing on top of them.
 - Release a card overlapping another one and it slides to the nearest free spot with a short spring animation. It looks like the card "bounced back", but it is just the anti-overlap rule, and the whole gesture is still one undo step.
 
-Right-click gives three menus, in this order:
+Right-click gives four menus, in this order:
 
-- A card or the main card: "Connect to…", "Auto-arrange" (only when it actually has children), "Group into a frame", "Unwrap into document" (absent on the main card), "Delete" (absent on the main card).
-- A shape, connector or frame: "Edit text", "Connect to…", "Group into a frame", "Delete".
+- A card or the main card: a row of color swatches at the top (absent on the main card), then "Connect to…", "Auto-arrange" (only when it actually has children), "Group into a frame", "Unwrap into document" (absent on the main card), "Delete" (absent on the main card).
+- A shape or frame: a row of color swatches at the top, then "Edit text", "Connect to…", "Group into a frame", "Delete".
+- A connector: a row of color swatches at the top, then "Edit text", "Delete". Connectors are thin, so a right-click within 8px of the line counts as a hit.
 - Empty canvas: "New card", "Rectangle", "Ellipse", "Text", `Frame`, "Fit to content". That `Frame` entry reads the same in both languages.
+
+On top of that, card, shape and frame menus have "Copy" and "Duplicate"; the connector menu has an "Arrows" group (arrow at end / at start, both ends, no arrows); the empty-canvas menu adds "Add note…" (pick a note and it lands as an embed card) and "Export as JSON Canvas".
 
 Right-clicking a card you are editing yields to the system text menu (copy, paste, spell-check) instead. On touch, a 500ms long press is the right-click. One `Esc` backs out four levels in order: close the context menu, cancel a connector in progress, return from the current tool to the select tool, clear the selection.
 
@@ -1011,14 +1026,15 @@ Besides the slash menu and the block menu, the canvas turns anything you drop on
 | What you drop | What you get |
 |---|---|
 | Files from your computer (dragged in from Finder or File Explorer) | **One card per file**, holding a reference to that attachment. A placeholder card reading "Uploading {name}" lands first and is swapped for the real reference once the file is stored; if storing fails the placeholder is removed rather than left behind as an empty shell. Several files at once are staggered by 24px |
-| A note, a session or a workspace file dragged from the sidebar | One card holding a `[[wikilink]]` to it |
+| A note dragged from the sidebar | An embed card `![[note]]` that shows the note's content; hold `Alt` as you drop for a `[[wikilink]]` card instead. Dragging the note into its own canvas always gives a wikilink |
+| A session or workspace file dragged from the sidebar | A session becomes a `[[wikilink]]` card; a workspace file is not in the vault, so its path lands as text |
 | Text or a link from another app | One card whose content is parsed as Markdown into real blocks — headings, lists and `[[wikilinks]]` come through as real nodes |
 
 Files and sidebar references **always belong to the stage**: even if you release them on top of a card you are editing, they mean "put something down here", not "insert into that card". Plain text is different — released inside a card you are editing, it belongs to the editor and lands at the caret. The size limits, the failure messages and where the attachment ends up are exactly as when you drag a file into the document; see chapter 12.
 
 - [ ] Clicking a checkbox inside a card does nothing? Double-click into edit mode first.
 - [ ] Deleted more than you meant to? Check whether `Shift` was held.
-- [ ] Copied a rectangle and nothing pastes? The clipboard carries cards only.
+- [ ] Want to move shapes and connectors along with cards? Select them and press `⌘/Ctrl + C` / `⌘/Ctrl + V` (pasting into another note keeps the layout), or `⌘/Ctrl + D` to duplicate in place. While you are typing inside a card, `⌘/Ctrl + D` belongs to the editor and duplicates the current block.
 
 ### Child cards and the mind map
 
@@ -1056,6 +1072,8 @@ Back in doc mode, the hierarchy shows as indent plus a rounded frame:
 ### Panning, zooming and the view switches
 
 Panning has four equivalent entrances: the hand tool in the toolbar, holding `Alt` and dragging, dragging with the middle mouse button, and the scroll wheel (vertical) or `Shift` + wheel (horizontal). Two-finger trackpad scrolling does the same. The hand tool, `Alt` and the middle button **do not interrupt a card you are editing** — moving the viewport should not break your typing.
+
+When you drag a card or shape, draw a marquee, resize, or pull a connector's rubber band to the edge of the canvas, the viewport pans toward that side on its own — faster the closer you get to the edge — and whatever you are dragging stays under the pointer. It stops as soon as you let go or move the pointer away from the edge. Pressing without dragging does not trigger it, and neither does a read-only canvas.
 
 Zoom runs from 25% to 250%:
 
@@ -1113,7 +1131,13 @@ The tools have no letter shortcuts; the only tool key is `Esc`, which returns to
 - Shapes can be dragged, reshaped from their corners (24px minimum) and given text. The reshape handles appear only on a **single selected element**.
 - To edit text: double-click the shape or connector; or select it and press `Enter` or `F2`; or right-click → "Edit text". The dialog's heading follows the type: "Connector label", "Frame title", "Element text". Clearing the text removes it rather than storing an empty string.
 - "Group into a frame" wraps the current selection in a frame with 32px of padding around it. With nothing selected it frames just the object you right-clicked.
+- Color: right-click a card, shape, frame or connector and the top row of the menu is the palette — "No color", six presets (red, orange, yellow, green, cyan, purple), and a last swatch that opens the system color picker for any color. With several objects selected they are all colored at once, and one `⌘/Ctrl + Z` undoes the whole batch. Colors show only in canvas mode; cards look the same as before in document mode. The note stores the same encoding as Obsidian's JSON Canvas (`"1"`–`"6"` or `#rrggbb`). The main card and hierarchy lines cannot be colored.
 - Land the arrow tool's second click on a shape or frame, or hold `Shift` for that second click, and you draw a plain connector instead of a parent/child link. `Alt` cannot stand in for `Shift` — `Alt` is already taken by panning. After the first click a rubber-band preview follows the pointer, and clicking empty space abandons it.
+- You can connect without switching tools: select a card, the main card or a shape and dots appear at the midpoints of its four edges. Drag from a dot; the rules match the arrow tool (onto a card = parent/child, hold `Shift` = plain connector).
+- Reconnect: select a connector and handles appear at both ends; drag one onto another object to re-attach it. Dropping on empty space changes nothing. Change arrowheads under "Arrows" in the connector's right-click menu.
+- Alignment guides: while moving or resizing a card, edges and center lines near other objects snap and a guide line is drawn. Turn them off in the bottom-right controls; the setting is kept on this machine.
+- Copy and duplicate: `⌘/Ctrl + C` / `⌘/Ctrl + V` carry shapes, frames and connectors too; `⌘/Ctrl + D` duplicates in place, offset by one grid step. Connectors and parent/child links are rewired onto the copies, and one undo reverts the whole batch.
+- Export as JSON Canvas: from the empty-canvas menu or "More actions". It writes a `.canvas` file with the note's name next to the note, which Obsidian can open. Export only, no import; a clashing name gets a number and existing files are never overwritten. Cards export as text nodes, a card holding only one `![[note]]` exports as a file node, and frames export as groups.
 
 > [!warning]
 > A frame's body ignores the pointer entirely — **only its title bar can be clicked or dragged**. Clicking inside a frame does not select it. That is a deliberate trade-off (otherwise a full-screen frame would be an invisible sheet blocking the whole canvas), not a bug.
@@ -1225,6 +1249,8 @@ The `@` mention is the same thing without brackets: type `@` at the start of a l
 
 > [!note]
 > Moving the caret back into a `[[link]]` you already finished does not reopen the popup — only actual typing does. That is deliberate; otherwise `↑` and `↓` could not move past the line the link sits on.
+
+Typing `:` followed by at least two letters opens emoji suggestions (`:smile`, say). The keys are the same as in the table above, and Enter replaces the whole `:smile` with the emoji itself. It does not open when the colon directly follows a letter, a digit or another colon, so `10:30`, `http:` and `std::vector` stay quiet; after Chinese text it opens as usual.
 
 ### Heading anchors, block anchors and hover preview
 
@@ -2585,7 +2611,7 @@ Both of these are properties, they just have dedicated buttons. Hover the title 
 
 - **Add an icon**: click "☺ Add icon" and the app assigns a random emoji straight away — the first click does not ask, it just gives you one to change.
 - **Change or remove**: click the large emoji above the title to open the picker (tooltip "Change or remove the page icon"). Inside is a grouped grid plus a search box that matches Chinese and English keywords, placeholder "Search emoji (Chinese or English), or paste any character and press Enter…". Enter takes the first hit; with no hits, Enter uses whatever you typed — so any symbol from the OS emoji panel can be pasted in as the icon. Once an icon is set the picker also offers "Remove icon". Esc or a click outside closes it.
-- The bundled emoji table is a curated subset, not all of Unicode, and the group headings (「常用」, 「表情」, 「手势人物」, …) stay Chinese in the English interface. If a character is missing, paste it.
+- The bundled emoji table is a curated subset, not all of Unicode; group headings follow the interface language. If a character is missing, paste it.
 - Once an icon is set it replaces the generic file glyph in the file tree row, on the tab, and in the `[[` link suggestion list.
 - **Add a cover**: click "🖼 Add cover" to open the picker, which has three tabs — "Gallery" (12 featured covers, plus an online image search box on hosts that support it), "Link" (paste an `https://…` image address, then Enter or "Set as cover"), and "Upload" (pick a local image; it is saved into the vault at the attachment location set in Settings → Notes). Clicking a thumbnail applies it at once and **deliberately leaves the popover open** so you can try several in a row.
 - **Change a cover**: hover the cover banner and "Change cover", "Reposition" and "Remove" appear. "Reposition" unlocks the banner so you can drag the image up or down to set the vertical focal point; click "Done" when it looks right.

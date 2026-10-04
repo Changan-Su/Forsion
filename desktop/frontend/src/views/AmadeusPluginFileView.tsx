@@ -4,7 +4,7 @@
  *  也没关系(挂载/重渲即查表;fileTypes 变化会触发重挂)。与 AmadeusDrawingView 同一套契约域包裹。 */
 import { useEffect, useRef } from 'react'
 import type { ViewProps } from '@lcl/engine'
-import { useTheme } from '../stores/themeStore'
+import { useVisualTheme as useTheme } from '../stores/themeStore'
 import { usePageStore, pageStoreFor } from '../amadeus/store/pageStore'
 import { usePluginStore, findFileType, fileTypeBaseName, addPluginViewTeardown } from '../amadeus/plugins/pluginStore'
 import { createPluginViewSurface } from '../amadeus/plugins/viewSurface'

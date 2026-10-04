@@ -94,6 +94,10 @@ type Editor =
   | { kind: 'import'; sourcePath: string; slug: string }
   | { kind: 'copy'; key: string; target: 'user' | 'agent'; agentSlug: string; slug: string }
 
+// 云端技能库暂时停用(2026-10-04 用户定;与引擎 tangu-agent/src/adapters/standalone/localAssetsBrain.ts 的同名开关成对):
+// 关着时不出「云端副本」筛选项与分组,也不出「发布正文副本」按钮。恢复时两处一起改回 true。
+const CLOUD_SKILLS_ENABLED: boolean = false
+
 type Selected = { kind: 'catalog'; key: string } | { kind: 'cloud'; id: string }
 type Filter = 'all' | 'user' | 'builtin' | 'bundle' | 'cloud'
 
@@ -144,7 +148,7 @@ export function GlobalSkillsLibrary({ cfg, localHost, initialSkillKey, onImportC
       const error = localResult.reason as Error & { status?: number }
       setCatalogError(error.status === 404 ? '' : t('globalSkills.loadFailed', { error: error.message }))
     }
-    setCloud(cloudResult.status === 'fulfilled' ? cloudResult.value.filter((skill) => skill.source === 'user') : [])
+    setCloud(CLOUD_SKILLS_ENABLED && cloudResult.status === 'fulfilled' ? cloudResult.value.filter((skill) => skill.source === 'user') : [])
     setLoading(false)
   }, [cfg, t])
 
@@ -276,7 +280,7 @@ export function GlobalSkillsLibrary({ cfg, localHost, initialSkillKey, onImportC
       <div className="gsk-search"><Search size={15} /><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t('globalSkills.search')} aria-label={t('globalSkills.search')} /></div>
       <CapabilityMenu label={t('globalSkills.source')} selection items={([
         ['all', 'globalSkills.allSources'], ['user', 'globalSkills.mine'], ['builtin', 'globalSkills.fromBuiltin'], ['bundle', 'globalSkills.fromBundle'], ['cloud', 'globalSkills.cloud'],
-      ] as const).map(([id, key]) => ({ id, label: t(key), selected: filter === id, onSelect: () => setFilter(id) }))}>
+      ] as const).filter(([id]) => CLOUD_SKILLS_ENABLED || id !== 'cloud').map(([id, key]) => ({ id, label: t(key), selected: filter === id, onSelect: () => setFilter(id) }))}>
         <span>{t(({ all: 'globalSkills.allSources', user: 'globalSkills.mine', builtin: 'globalSkills.fromBuiltin', bundle: 'globalSkills.fromBundle', cloud: 'globalSkills.cloud' } as const)[filter])}</span><ChevronDown size={13} />
       </CapabilityMenu>
       {catalog !== null && <CapabilityMenu label={t('globalSkills.add')} className="btn primary sm" items={[
@@ -318,7 +322,7 @@ export function GlobalSkillsLibrary({ cfg, localHost, initialSkillKey, onImportC
             {!selectedCatalog.readOnly && <button type="button" className="btn ghost sm" onClick={() => { const s = currentDetail; if (s) setEditor({ kind: 'edit', key: s.key, name: s.name, description: s.description, slug: s.slug, content: s.content || '', baseline: { name: s.name, description: s.description, content: s.content || '' } }) }} disabled={detailLoading || !currentDetail}><BookOpen size={13} />{t('globalSkills.edit')}</button>}
             <button type="button" className="btn ghost sm" onClick={() => void startCopy(selectedCatalog, 'agent')}><Copy size={13} />{t('globalSkills.copyToAgent')}</button>
             {selectedCatalog.readOnly && <button type="button" className="btn ghost sm" onClick={() => void startCopy(selectedCatalog, 'user')}><Copy size={13} />{t('globalSkills.copyToMine')}</button>}
-            {selectedCatalog.provenance === 'user' && selectedCatalog.availability === 'available' && <button type="button" className="btn ghost sm" onClick={() => void publish(selectedCatalog)} disabled={busy}><UploadCloud size={13} />{t('globalSkills.publish')}</button>}
+            {CLOUD_SKILLS_ENABLED && selectedCatalog.provenance === 'user' && selectedCatalog.availability === 'available' && <button type="button" className="btn ghost sm" onClick={() => void publish(selectedCatalog)} disabled={busy}><UploadCloud size={13} />{t('globalSkills.publish')}</button>}
             {!selectedCatalog.compatibility && <div className="gsk-more"><CapabilityMenu label={t('globalSkills.more')} className="icon-btn" items={[
               ...(selectedCatalog.availability !== 'shadowed' ? [{ id: 'pause', label: t(selectedCatalog.disabled ? 'globalSkills.resume' : 'globalSkills.pause'), onSelect: () => void run(() => setSkillCatalogEntryDisabled(homeTarget(), selectedCatalog.key, !selectedCatalog.disabled), t('globalSkills.saved')) }] : []),
               ...(!selectedCatalog.readOnly ? [{ id: 'delete', label: t('globalSkills.delete'), icon: <Trash2 size={14} />, danger: true, onSelect: () => { if (window.confirm(t('globalSkills.deleteConfirm', { name: selectedCatalog.name }))) void run(() => deleteSkillCatalogEntry(homeTarget(), selectedCatalog.key), (result) => t('globalSkills.deleted', { path: result.backupPath || '' }), null) } }] : []),

@@ -4,12 +4,13 @@ import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { promisify } from 'node:util'
 import { app, BrowserWindow, clipboard, dialog, ipcMain, nativeImage, shell } from 'electron'
-import { IPC, gatePluginManifest, sanitizeOnboarding, sanitizeEvents, PLUGIN_CAPABILITIES, type ExternalPluginSource, type PluginBundleInfo } from '@amadeus-shared/ipc'
+import { IPC, gatePluginManifest, sanitizeOnboarding, sanitizeEvents, sanitizeRequiresPlugins, PLUGIN_CAPABILITIES, type ExternalPluginSource, type PluginBundleInfo } from '@amadeus-shared/ipc'
 import { installedPluginFields, type InstalledPluginManifest } from '@amadeus-shared/pluginSource'
 import { serializeDb, seedCalendarDb } from '@amadeus-shared/db/schema'
 import { isSafePluginExt } from '@amadeus-shared/pluginFiles'
 import { VaultManager } from './fs/vaultManager'
 import { casRejected, registerVaultHandlers, VAULT_WRITE_EVENTS, type VaultFace } from './fs/vaultHandlers'
+import { createPageHistory } from './fs/pageHistory'
 export type { VaultFace } from './fs/vaultHandlers'
 import { VaultWatcher } from './fs/watcher'
 import { VaultIndex } from './fs/vaultIndex'
@@ -335,7 +336,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
     if (!sender) return
     for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed() && w.webContents !== sender) w.webContents.send(channel, payload)
   }
-  registerVaultHandlers({ vault, index, handle, rememberPage, notifyAll, notifyPeers, logActivity, logNoteEdit })
+  registerVaultHandlers({ vault, index, handle, rememberPage, notifyAll, notifyPeers, logActivity, logNoteEdit, pageHistory: createPageHistory({ root: () => path.join(tanguDataDir(), 'amadeus-history') }) }) // 版本历史存库外(C-20)
 
   handle(IPC.openAttachment, async (_e, pagePath: string, ref: string) => {
     const abs = await vault.resolveAttachment(pagePath, ref)
@@ -601,7 +602,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
     products.sort((a, b) => b.updatedAt - a.updatedAt) // 两个项目声明同一个插件 id 时先到先得,顺序得确定
     type DevManifest = {
       id?: unknown; name?: unknown; nameEn?: unknown; version?: unknown; description?: unknown; descriptionEn?: unknown
-      main?: unknown; apiVersion?: unknown; minAppVersion?: unknown; requiresApp?: unknown
+      main?: unknown; apiVersion?: unknown; minAppVersion?: unknown; requiresApp?: unknown; requiresPlugins?: unknown
       capabilities?: unknown; onboarding?: unknown; events?: unknown; fileExtensions?: unknown
     }
     for (const product of products) {
@@ -664,6 +665,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
         apiVersion: typeof m?.apiVersion === 'number' ? m.apiVersion : 1,
         minAppVersion: str(m?.minAppVersion, 40),
         requiresApp: str(m?.requiresApp, 120),
+        requiresPlugins: sanitizeRequiresPlugins(m?.requiresPlugins, id),
         capabilities: Array.isArray(m?.capabilities)
           ? PLUGIN_CAPABILITIES.filter((c) => (m.capabilities as unknown[]).includes(c))
           : undefined,
@@ -744,7 +746,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
           // manifest 推导的展示 / 门禁字段(名称回落目录名、英文镜像、能力白名单、onboarding / events 消毒、
           // fileExtensions、isDesktopOnly)与 Android App 的插件宿主同一份映射(shared/amadeus/pluginSource.ts)。
           // isDesktopOnly 在桌面只是信息位,照常装载。
-          ...installedPluginFields(m, e.name),
+          ...installedPluginFields(m, e.name, id),
           iconUrl,
           code,
           readme,

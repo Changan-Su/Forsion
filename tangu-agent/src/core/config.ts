@@ -76,8 +76,9 @@ function stealIfStale(lock: string): void {
   } catch { /* 锁刚被释放 / 被别人先偷走:回去重抢 */ }
 }
 
-/** fn 拿到 stillMine():提交(rename)前调用,锁已不是自己的就别落盘。 */
-function withConfigLock<T>(file: string, fn: (stillMine: () => boolean) => T): T {
+/** fn 拿到 stillMine():提交(rename)前调用,锁已不是自己的就别落盘。
+ *  按文件各自一把锁(`<file>.lock`);provider-auth.json 的读改写(standalone/providerCreds)也用它。 */
+export function withConfigLock<T>(file: string, fn: (stillMine: () => boolean) => T): T {
   const lock = `${file}.lock`;
   const token = `${process.pid}-${randomUUID()}`;
   const deadline = performance.now() + LOCK_WAIT_MS; // 单调时钟:墙钟回拨不拉长等待
@@ -89,7 +90,7 @@ function withConfigLock<T>(file: string, fn: (stillMine: () => boolean) => T): T
     } catch (e) {
       if (!LOCK_BUSY.has((e as NodeJS.ErrnoException).code ?? '')) throw e;
       stealIfStale(lock);
-      if (performance.now() > deadline) throw new Error(`config.json 的写锁被占超过 ${LOCK_WAIT_MS / 1000}s,放弃本次写入:${lock}`);
+      if (performance.now() > deadline) throw new Error(`写锁被占超过 ${LOCK_WAIT_MS / 1000}s,放弃本次写入:${lock}`);
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5); // 同步睡 5ms 再抢(对方持锁只有微秒级)
       continue;
     }

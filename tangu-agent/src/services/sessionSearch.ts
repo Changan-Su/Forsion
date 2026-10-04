@@ -127,6 +127,10 @@ export interface SessionHit {
   hit?: SessionHitMessage;
   /** Scoped runtime results use bounded candidates; this is a lexical score, not embedding similarity. */
   score?: number;
+  /** 这个会话所属项目的目录名(本机引擎的项目会话才有;只给名字,不给路径)。 */
+  project?: string;
+  /** 它属于一个项目、当前会话(excludeSessionId)属于另一个项目:里面说的「这个项目……」不是在说当前项目。 */
+  otherProject?: boolean;
 }
 
 export interface SessionSearchInput {

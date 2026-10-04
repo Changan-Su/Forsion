@@ -11,6 +11,8 @@ import { registerView, addCommand, addRibbonIcon, useRibbonStore, moveTo, openCo
 import type { ViewProps } from '@lcl/engine'
 import { useEffect } from 'react'
 import { windowKind } from './windowKind'
+import { agentSettingsTargets, resolveAgentSettingsTarget, suggestSettingsTargets } from './components/settingsTarget'
+import { SETTINGS_SEARCH_INDEX } from './components/settingsSearchIndex'
 import { askString } from '@amadeus/components/askString'
 import { useQuickFind } from './quickFind'
 import { findSupported, openFindBar } from './findInPage'
@@ -22,11 +24,12 @@ import { installAmadeusPlugins } from './amadeusPlugins'
 import { installTanguProbe } from './tanguProbe'
 import { installBuiltins } from './builtins'
 import { AccountCard } from './components/AccountCard'
+import { RestartUpdateButton } from './components/RestartUpdateButton'
 import { UnitSwitcher } from './components/UnitSwitcher'
 import { useApp, activeChatModelId } from './stores/appStore'
 import { openBtw } from './views/chat2/btwStore'
 import { PRODUCT } from './product'
-import { useTheme } from './stores/themeStore'
+import { useTheme, useVisualTheme, toggleVisibleMode } from './stores/themeStore'
 import { notifyApp, useNotifications } from './stores/notificationStore'
 import { cycleLocale, registerMessages, subscribeLocale, translate, useI18n } from './i18n'
 import { WorkspaceView, OutlineView } from './views/WorkspaceView'
@@ -42,12 +45,14 @@ import { ChangelogView } from './views/ChangelogView'
 import { initUiZoom } from './uiZoom'
 import { syncDevCommands } from './devCommands'
 import { isSmoothCaretOn, setSmoothCaret } from './smoothCaret'
-import { matchFileType, fileTypeBaseName } from './amadeus/plugins/pluginStore'
+import { matchFileType, fileTypeBaseName, setResetCardCeremonyHandler } from './amadeus/plugins/pluginStore'
 import { ActivityLogView } from './views/ActivityLogView'
 import { ActiveWindowView } from './views/ActiveWindowView'
 import { ActivityDashboardCard, InboxDashboardCard } from './views/DashboardCompactViews'
 import { installDeepLinks } from './deepLinkInstall'
 import { FILE_VIEW_PARAM } from './viewFileMatch'
+import { presentResetCardCeremony } from './components/ResetCardCeremony'
+import type { AccountQuotaView } from './services/accountQuota'
 
 // 本文件自有的词条(命名空间 `bootengine.*`,勿与别处撞键)。视图 displayName / 命令 title 都是
 // **惰性**求值的函数,所以一律在函数体里调 translate(),语言切换后重取即新文案(勿提到模块常量里)。
@@ -93,7 +98,7 @@ const splitChat = (): void => {
 /** Ribbon 明暗钮的图标跟随当前明暗:暗色显示 Sun(点了变亮),亮色显示 Moon(点了变暗)。
  *  做成读 store 的组件而不是换注册:RibbonItem.icon 是静态字段,主页坞 / 移动单列壳也直接拿它渲染。 */
 const ThemeModeIcon = ((props: LucideProps) => {
-  const dark = useTheme((s) => s.mode === 'dark')
+  const dark = useVisualTheme((s) => s.mode === 'dark')
   return dark ? <Sun {...props} /> : <Moon {...props} />
 }) as unknown as LucideIcon
 
@@ -193,7 +198,9 @@ export function installEngine(): void {
   const activeSpace = getActiveSpace()
   if (activeSpace) {
     ws().setSidebarDefaults(activeSpace.sidebarDefaults)
-    ws().setSideProfile(activeSpace.id, activeSpace.resizableSides ?? {}, activeSpace.sideDefaultScale) // 首启 Space 的可拖宽侧栏画像(须先于 onReady 的 pinSides)
+    ws().setSideProfile(activeSpace.id, activeSpace.resizableSides ?? {}, activeSpace.sideDefaultScale, activeSpace.bottomSpan) // 首启 Space 的可拖宽侧栏画像(须先于 onReady 的 pinSides)
+    // 固定 View 只在主窗生效:卫星窗(detached / mini)里只有被撕出去的那几个视图,不该被别人的固定清单管着。
+    if (windowKind() === 'main') ws().setPinned(activeSpace.pinned)
   }
   // Forsion 插件在启动期就装(此前只在 Amadeus/Calendar/聊天输入框挂载时懒引导 → 从 Inbox 之类的 Space
   // 冷启动时插件根本没装):插件视图要尽早进注册表,内嵌 Space 才通得过「视图已注册」闸、旧布局引用
@@ -208,6 +215,16 @@ export function installEngine(): void {
   window.addEventListener('forsion:open-settings', (e) => {
     const target = (e as CustomEvent<unknown>).detail
     if (typeof target === 'string' && target) useApp.getState().openSettings(target as Parameters<ReturnType<typeof useApp.getState>['openSettings']>[0])
+  })
+  // 插件的 ctx.app.showResetCardCeremony(pluginStore 已只放行首方内置包):弹与账号菜单同一张用卡动画。
+  // 缺的上限按 -1(不限)补 → 那一行不画,不会凭空编出百分比
+  setResetCardCeremonyHandler((r) => {
+    const view = (q?: { dailyLimit?: unknown; dailyRemaining?: unknown; weeklyLimit?: unknown; weeklyRemaining?: unknown }): AccountQuotaView => ({
+      dailyLimit: Number(q?.dailyLimit ?? -1), dailyRemaining: q?.dailyRemaining as number | undefined,
+      weeklyLimit: Number(q?.weeklyLimit ?? -1), weeklyRemaining: q?.weeklyRemaining as number | undefined,
+    })
+    const left = Number(r?.remainingCards)
+    presentResetCardCeremony({ scope: 'both', before: view(r?.before), after: view(r?.after), remainingCards: Number.isFinite(left) ? left : undefined })
   })
   // 用户自定义 Space(L0 数据 Space):~/.tangu/spaces 异步装载(注册完成后 ribbon 自动出现);仅桌面。
   // 上面的同步策略跑在装载之前,若目标是某个用户 Space,那时它还没注册 → 装载完成后补定位。两种补法:
@@ -318,18 +335,12 @@ export function installEngine(): void {
     }
   })
 
-  // ribbon = 左侧功能条:顶部 = Space 图标组(可拖动改序);反馈/商店/成就/明暗/命令/设置/账号常驻底部。
+  // ribbon = 左侧功能条:顶部 = 主位 + Space 图标组(可拖动改序,常驻 5 个,其余进「…」);命令区 反馈/商店/成就/明暗/设备互联/命令/设置,
+  // 常驻后 4 项(10-02 用户拍板「Ribbon 减负」:反馈/商店/成就缺省收进命令区的「…」,见 Ribbon.tsx BOTTOM_VISIBLE);账号钉最底。
   // 左右栏折叠钮在各自面板右缘(见 WorkspaceHost);ribbon 展开/折叠钮由 Ribbon 引擎自渲染在顶部。
   // 商店(装到 ~/.tangu)与反馈(submitFeedback)是 host 能力:Tangu Web 下 window.tangu 无对应方法 → 不注册
   // (两者都是 ribbon 图标 + 命令面板两条路)。
   // 反馈、商店置于底部最上方:无持久顺序时注册序即上下序,故在 rb-mode 之前、反馈又在商店之前注册。
-  // Unit 切换器(head 常驻,折叠钮旁):吸收原「本地|云端」胶囊,列表式切换 本地/云端/其他设备。
-  // 桌面 = preload 的 unitsList IPC;mobile 垫片也有 unitsList(UnitsSheet 数据面)→ rb-unit 在移动端照样注册,
-  // 但 SingleColumnHost 只渲染 side=bottom 的项,head 上的它不可见(无害;移动端入口是 rb-units-mobile)。
-  // webShim / unitShim 无此方法 → 不注册;vault 切换仍走 VaultSideSwitch 的 mobile 分支/云端固定形态。
-  // 名册(unitsList)自 Forsion Extend 0.6 起随包出现;没有 Extend 的桌面仍有 unitHostStatus(宿主)→ 切换器照样上架,
-  // 只是不列账号名下的设备:本地 / 按地址直连 / 「允许其他设备连接本机」与已配对设备都不经云端。
-  if (window.tangu?.unitsList || window.tangu?.unitHostStatus) addRibbonIcon({ id: 'rb-unit', side: 'head', component: UnitSwitcher })
   if (window.tangu?.submitFeedback) {
     addRibbonIcon({ id: 'rb-feedback', side: 'bottom', icon: MessageSquare, tooltip: () => app().tr('feedback.title'), onClick: () => { app().openFeedback() } })
     // 老存档(用户动过底部区)的 bottomOrder 里,rb-feedback 要么还停在 08-31 前的旧位(明暗与命令之间),要么缺席
@@ -346,7 +357,26 @@ export function installEngine(): void {
   if (window.tangu?.marketList) addRibbonIcon({ id: 'rb-market', side: 'bottom', icon: Store, tooltip: () => app().tr('market.title'), onClick: () => app().openMarket() })
   addRibbonIcon({ id: 'rb-achievements', side: 'bottom', icon: Trophy, tooltip: () => app().tr('achievements.title'), onClick: () => app().openAchievements() })
   // 主题锁定明暗时 toggleMode 静默无效 → tooltip 改说明「由主题决定」,悬停即知为何点不动(codex Low-2)。
-  addRibbonIcon({ id: 'rb-mode', side: 'bottom', icon: ThemeModeIcon, tooltip: () => useTheme.getState().modeLocked ? app().tr('settings.theme.modeLocked') : app().tr('theme.changeMode'), onClick: () => useTheme.getState().toggleMode() })
+  addRibbonIcon({ id: 'rb-mode', side: 'bottom', icon: ThemeModeIcon, tooltip: () => useVisualTheme.getState().modeLocked ? app().tr('settings.theme.modeLocked') : app().tr('theme.changeMode'), onClick: () => toggleVisibleMode() })
+  // Unit 切换器(设备互联):吸收原「本地|云端」胶囊,列表式切换 本地/云端/其他设备。
+  // 10-02 用户拍板:从 head 挪进命令区,默认在明暗与命令面板之间 → 注册在 rb-mode 之后、rb-cmd 之前(无持久顺序时注册序即上下序)。
+  // 桌面 = preload 的 unitsList IPC;mobile 垫片也有 unitsList(UnitsSheet 数据面)→ 移动端照旧挂 head:
+  // SingleColumnHost 的「⋯」sheet 只渲染 side=bottom 的项,挂 bottom 会和移动端自己的入口(rb-units-mobile)重复。
+  // webShim / unitShim 无此方法 → 不注册;vault 切换仍走 VaultSideSwitch 的 mobile 分支/云端固定形态。
+  // 名册(unitsList)自 Forsion Extend 0.6 起随包出现;没有 Extend 的桌面仍有 unitHostStatus(宿主)→ 切换器照样上架,
+  // 只是不列账号名下的设备:本地 / 按地址直连 / 「允许其他设备连接本机」与已配对设备都不经云端。
+  if (window.tangu?.unitsList || window.tangu?.unitHostStatus) {
+    addRibbonIcon({ id: 'rb-unit', side: UI_MODE === 'mobile' ? 'head' : 'bottom', component: UnitSwitcher })
+    // 老存档(用户拖过命令区)的 bottomOrder 里没有 rb-unit → rankIds 会把它排到区末尾(设置下面)。
+    // 只挪一次到 rb-mode 之后,打标记后用户再拖到哪算哪(同上面反馈那条的一次性迁移)。
+    const UNIT_MOVED_KEY = 'forsion_ribbon_unit_in_bottom'
+    if (UI_MODE !== 'mobile' && !localStorage.getItem(UNIT_MOVED_KEY)) {
+      const rb = useRibbonStore.getState()
+      const at = rb.bottomOrder.filter((id) => id !== 'rb-unit').indexOf('rb-mode')
+      if (at >= 0 && !rb.folders.some((f) => f.items.includes('rb-unit'))) rb.setZoneOrder('bottom', moveTo(rb.bottomOrder, 'rb-unit', at + 1))
+      try { localStorage.setItem(UNIT_MOVED_KEY, '1') } catch { /* ignore */ }
+    }
+  }
   addRibbonIcon({ id: 'rb-cmd', side: 'bottom', icon: CommandIcon, tooltip: () => app().tr('command.palette'), onClick: openCommandPalette })
   // 底部常驻(side:'bottom'),无持久顺序时注册序即上下序:明暗/命令 → 设置 → 账号(账号最底)。
   // 用户拖过底部区后 bottomOrder 非空,新注册项按 rankIds 排到区末尾(反馈那条由注册处的一次性迁移兜住)。
@@ -355,6 +385,7 @@ export function installEngine(): void {
   //   反馈当时一并撤下,2026-09-17 按用户要求放回,排在商店之上。
   // 账号卡复用 AccountCard,随 ribbon 展开切换「完整卡 / 紧凑头像」;原聊天列表底部那份已移除,避免重复。
   addRibbonIcon({ id: 'rb-settings', side: 'bottom', icon: Settings, tooltip: () => app().tr('settings.title'), onClick: () => app().openSettings() })
+  if (window.tangu?.restartForUpdate) addRibbonIcon({ id: 'rb-restart-update', side: 'bottom', pinned: true, component: RestartUpdateButton })
   // 账号卡随 Forsion Extend 出现:登录 / 登出 / 切号 / 状态那五个通道都住在 Extend(authStatus 是它们的桥键);
   // 没装 Extend(验签失败 / 缺包)连卡都不画,引擎重启入口仍在设置 → 连接。Unit 网页投射装了账号提供方时照旧(tangu.account)。
   if (window.tangu?.authStatus || window.tangu?.account) addRibbonIcon({
@@ -426,7 +457,7 @@ export function installEngine(): void {
   // `side === 'left' ? 左 : 右` 的二元三目 —— 传 'bottom' 会**去开右抽屉**(命令面板在移动端也在,
   // 不 gate 就真能点到)。同理它的 bucketOf/sidebarDefaults 也没有 bottom 桶。
   if (UI_MODE !== 'mobile') addCommand({ id: 'toggle-bottom', icon: PanelBottom, checked: () => ws().bottomVisible, title: () => app().tr('command.toggleBottom'), keywords: 'panel bottom terminal 底部 面板 终端', hotkey: 'mod+j', run: () => ws().toggleSidebar('bottom') })
-  addCommand({ id: 'theme-mode', icon: ThemeModeIcon, title: () => app().tr('theme.changeMode'), keywords: 'theme dark 明暗', run: () => useTheme.getState().toggleMode() })
+  addCommand({ id: 'theme-mode', icon: ThemeModeIcon, title: () => app().tr('theme.changeMode'), keywords: 'theme dark 明暗', run: () => toggleVisibleMode() })
   addCommand({ id: 'theme-skin', title: () => app().tr('theme.changeSkin'), keywords: 'theme skin 配色', run: () => useTheme.getState().cycleSkin() })
   addCommand({ id: 'theme-lang', title: () => app().tr('theme.changeLanguage'), keywords: 'theme language genesis lovable soft', run: () => useTheme.getState().cycleLang() })
   // ⚠️别与上一条混:theme-lang = 主题的「语言层」(genesis/lovable/soft),这条才是界面中英文。
@@ -470,7 +501,8 @@ export function installEngine(): void {
     const names = ws().namedLayouts().filter((n) => !n.startsWith('space:')) // 隐藏 Space 内部保留布局
     if (!names.length) { app().toast(app().tr('layout.none')); return }
     const name = window.prompt(app().tr('layout.applyPrompt', { names: names.join(', ') }), names[0])?.trim()
-    if (name && names.includes(name)) ws().applyNamed(name)
+    // 用户起名存的布局可能是在别的 Space / 固定 View 之前存的:应用后把本 Space 缺的固定项补回
+    if (name && names.includes(name) && ws().applyNamed(name)) ws().ensurePinned()
   } })
   if (hasNativeFeature('tangu')) addCommand({ id: 'stop-run', title: () => app().tr('command.stop'), keywords: 'stop 停止', run: async () => { await app().stop() } })
   if (hasNativeFeature('tangu')) addCommand({ id: 'compact', title: () => app().tr('command.compact'), keywords: 'compact 压缩', run: () => void app().compact() })
@@ -480,12 +512,28 @@ export function installEngine(): void {
   addCommand({ id: 'open-achievements', icon: Trophy, title: () => app().tr('achievements.title'), keywords: 'achievement trophy badge medal 成就 勋章 徽章', run: () => app().openAchievements() })
   if (window.tangu?.submitFeedback) addCommand({ id: 'open-feedback', icon: MessageSquare, title: () => app().tr('feedback.title'), keywords: 'feedback bug report 反馈 问题 建议 报错', run: () => { app().openFeedback() } })
   addCommand({ id: 'open-settings', icon: Settings, title: () => app().tr('settings.title'), keywords: 'settings 设置 preferences', hotkey: 'mod+,', run: () => app().openSettings() , invoke: {
-    description: "Open the Forsion settings window, optionally straight to one page. Use it to show the user where a control lives when you cannot change it yourself.",
+    // ⚠️ ≤300 字符(引擎 normalizeUiCommands 的截断上限)。「not documented on the web」那半句是真模型台架量出来的:
+    //    没有它,grok 打开对的页之后还会连搜五六次网页去找「这页有什么」(live:harness --only settingsnav)。
+    description: "Open Forsion's settings window, optionally at one page or at the page holding one specific setting. To answer 'where/how do I set X', open that page and say which page you opened; these settings are not documented on the web, so do not search for them. Unknown targets are rejected.",
     params: {
       type: 'object',
-      properties: { tab: { type: 'string', description: 'Settings page to open, e.g. theme, model, shortcuts, notifications, about. Omit for the default page.' } },
+      properties: { tab: { type: 'string', description: `A page id or a setting id. Omit for the default page. ${agentSettingsTargets()}` } },
     },
-    run: (a) => app().openSettings(typeof a.tab === 'string' && a.tab ? (a.tab as never) : undefined),
+    // ⚠️ 必须自校验:SettingsModal 对未知页静默落到第一页,不验就是「打开了常规页,回报已打开语音设置」(反馈 6a239e58)。
+    run: (a) => {
+      const want = typeof a.tab === 'string' ? a.tab.trim() : ''
+      const target = want ? resolveAgentSettingsTarget(want) : undefined
+      if (target === null) {
+        const near = suggestSettingsTargets(want)
+        throw new Error(`no settings page or setting "${want}".${near.length ? ` Did you mean: ${near.join(', ')}?` : ''} Valid targets are listed in this command's \`tab\` parameter.`)
+      }
+      const path = target ? (target.sub ? `${target.tab}/${target.sub}` : target.tab) : undefined
+      app().openSettings(path as never)
+      // 回执 = 实际打开的页(不进目录的 state:窗口随时会被用户关掉)。设置项的搜索别名顺带回给模型:
+      // 它不知道这页有什么,别名(朗读 / 音色 / 通话…)是现成的一句话提示。
+      const hint = SETTINGS_SEARCH_INDEX.find((entry) => entry.id === want)?.keywords
+      return `opened ${path || 'the default page'}${hint ? ` (covers: ${hint})` : ''}`
+    },
   } })
   // ── agent 面专属命令(不进命令面板的人类语汇,而是补上模型独缺的两个原语)──────────────
   // 为什么这两条是新增而不是给现有命令加 invoke:命令表里 22 条「开面板」对模型价值极低,

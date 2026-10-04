@@ -9,7 +9,8 @@
  * 闸:runLocationsAvailable()(手机 App;桌面主窗口 / 网页版 / 设备页恒不渲染)。名册里没有电脑 → 什么都不画。
  */
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { Archive, ChevronRight, Laptop, MessageSquare, Monitor, MoreHorizontal, Pencil } from 'lucide-react'
+import { Archive, ChevronRight, Laptop, MessageSquare, Monitor, MoreHorizontal, Pencil, Smile } from 'lucide-react'
+import { SessionIcon, SessionIconPicker } from '../../components/SessionIcon'
 import { OverlayAt, nativeSheetPresenter, presentNativePrompt, useNativeSheetMenu, type SheetMenuItem } from '@lcl/engine'
 import { CtxMenuButtons } from '../../components/CtxMenuButtons'
 import { SidebarRow } from '../../components/SidebarRow'
@@ -19,7 +20,7 @@ import { displaySessionTitle } from '../../sessionTitle'
 import { folderPadLeft } from '@amadeus/lib/treeIndent'
 import type { SessionRecord, UnitInfo } from '../../types'
 import { useApp } from '../../stores/appStore'
-import { adoptRemoteSession, archiveRemote, renameRemote, statusOfUnit, useDeviceSessions } from '../../stores/deviceSessionsStore'
+import { adoptRemoteSession, archiveRemote, renameRemote, setRemoteSessionEmoji, statusOfUnit, useDeviceSessions } from '../../stores/deviceSessionsStore'
 import { useDeviceMarks } from '../../services/deviceMarks'
 import type { DeviceStatus } from '../../services/deviceStatus'
 import { runLocationsAvailable } from '../../features/runtime'
@@ -132,6 +133,7 @@ export function DeviceSessionSections(p: Props): React.ReactElement | null {
   const selfRegistered = useDeviceSessions((s) => s.selfRegistered)
   const [collapsed, setCollapsed] = useState<Set<string>>(loadCollapsed)
   const [menu, setMenu] = useState<MenuState | null>(null)
+  const [iconPicker, setIconPicker] = useState<(MenuState & { current: string | null }) | null>(null)
   const [renaming, setRenaming] = useState<{ unitId: string; id: string } | null>(null)
   const [draft, setDraft] = useState('')
   const renameRef = useRef<HTMLInputElement>(null)
@@ -166,6 +168,7 @@ export function DeviceSessionSections(p: Props): React.ReactElement | null {
   const menuItems = (m: MenuState): SheetMenuItem[] => {
     const row = rowsByUnit[m.unitId]?.find((x) => x.id === m.id)
     return [
+      { id: 'set-icon', label: t('session.icon.set'), icon: <Smile size={13} />, run: () => { setIconPicker({ ...m, current: row?.emoji ?? null }); setMenu(null) } },
       {
         id: 'rename', label: t('sidebar.rename'), icon: <Pencil size={13} />,
         run: () => {
@@ -233,7 +236,7 @@ export function DeviceSessionSections(p: Props): React.ReactElement | null {
                     depth={1}
                     title={s.summary || s.title || undefined}
                     lead={<>
-                      <MessageSquare className="t2s-lead-icon t2s-dim" />
+                      <SessionIcon emoji={s.emoji} fallback={<MessageSquare className="t2s-lead-icon t2s-dim" />} />
                       {p.rowBadge?.(s) ?? (p.runningIds.has(s.id)
                         ? <span className="t2s-dot running" />
                         : p.unreadIds.has(s.id) ? <span className="t2s-dot unread" /> : null)}
@@ -272,6 +275,7 @@ export function DeviceSessionSections(p: Props): React.ReactElement | null {
           <CtxMenuButtons items={menuItems(menu)} />
         </OverlayAt>
       )}
+      {iconPicker && <SessionIconPicker sessionId={iconPicker.id} current={iconPicker.current} x={iconPicker.x} y={iconPicker.y} onSave={(emoji) => setRemoteSessionEmoji(iconPicker.unitId, iconPicker.id, emoji)} onClose={() => setIconPicker(null)} />}
     </div>
   )
 }

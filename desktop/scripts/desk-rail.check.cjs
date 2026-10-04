@@ -12,8 +12,8 @@
  * (t2-chat-view row → t2-chat-col → t2-chat-body → t2-stream + t2-rail)。
  *
  * 2026-09-19 追加两组:
- *  ⑤ 新对话草稿态卡片在场(不再 gone):欢迎区 / Agent 选择条 / 输入卡 / 正文四条中线必须重合,
- *     且谁都不压卡片 —— 07-27 那条「空会话不上场」的理由就是 pickers 拿不到让位,这里实测它已被覆盖
+ *  ⑤ 新会话草稿不挂载 Desk:欢迎区 / Agent 选择条 / 输入卡 / 正文四条中线必须重合并居中整列,
+ *     会话开始后的卡片让位仍由负对照检查
  *     (草稿页另注入 compactChatPicker.css + composer2.css,pickers 按真实结构放进 .composer-anchor);
  *  ⑥ 伴随面撑满:卡片正文挂 .companion 后 zoom 归 1(文件末尾的覆盖块压过 0.75 缩镜),
  *     伴随面挂载槽(DeskCompanionHost 的行内布局)铺满正文;另跑一次不带 .companion 的负对照。
@@ -150,7 +150,6 @@ const DRAFT_HTML = `<!doctype html><html><head><meta charset="utf-8"><style>
       </div>
       <div class="t2-rail" id="rail">
         <aside class="t2-tsum" id="tsum"><div class="t2-tsum-in"></div></aside>
-        <div class="agent-desk-card" id="card"><div class="agent-desk-card-head">Agent Desk</div><div class="agent-desk-card-body"><div class="agent-desk-card-empty">空态</div></div></div>
       </div>
     </div>
   </div>
@@ -162,15 +161,15 @@ async function draftAt(p, width) {
   return p.evaluate(() => {
     const r = (id) => document.getElementById(id).getBoundingClientRect()
     const cx = (x) => +(x.left + x.width / 2).toFixed(1)
-    const shown = (id) => getComputedStyle(document.getElementById(id)).display !== 'none'
-    const card = r('card')
+    const shown = (id) => !!document.getElementById(id) && getComputedStyle(document.getElementById(id)).display !== 'none'
+    const card = document.getElementById('card') ? r('card') : null
     const hit = (x) => !(x.right <= card.left || x.left >= card.right || x.bottom <= card.top || x.top >= card.bottom)
     const overlaps = []
     for (const [name, id] of [['bar', 'bar'], ['empty', 'empty'], ['projectbar', 'proj'], ['composer', 't2cinner']]) {
       if (shown('card') && hit(r(id))) overlaps.push(name)
     }
     return {
-      cardShown: shown('card'), tsumShown: shown('tsum'),
+      cardShown: shown('card'), tsumShown: shown('tsum'), colCx: cx(r('col')),
       barCx: cx(r('bar')), emptyCx: cx(r('empty')), composerCx: cx(r('t2cinner')), streamCx: cx(r('inner')),
       overlaps,
     }
@@ -233,18 +232,21 @@ async function at(p, width, tsumCls, cardCls = 'agent-desk-card') {
   const ctl = await companionFill(p, false)
   check('负对照:不挂 .companion 时正文仍是 0.75 缩镜(本组断言有分辨力)', ctl.zoom === 0.75, `currentCSSZoom=${ctl.zoom}`)
 
-  // ⑤ 新对话草稿:卡片在场、概览不在场,四条中线重合且不压卡片
+  // ⑤ 新会话草稿:不挂载卡片、概览不在场,四条中线回到整列中心。
   await p.setContent(DRAFT_HTML)
   for (const width of [1400, 900, 780]) {
     const d = await draftAt(p, width)
-    check(`⚠️草稿态卡片在场 @${width}`, d.cardShown && !d.tsumShown, `card=${d.cardShown} tsum=${d.tsumShown}`)
+    check(`⚠️草稿态不显示卡片 @${width}`, !d.cardShown && !d.tsumShown, `card=${d.cardShown} tsum=${d.tsumShown}`)
     const xs = [d.barCx, d.emptyCx, d.composerCx, d.streamCx]
     check(`⚠️草稿态四条中线重合(选择条/欢迎区/输入卡/正文) @${width}`, Math.max(...xs) - Math.min(...xs) <= 1,
       `bar=${d.barCx} empty=${d.emptyCx} composer=${d.composerCx} stream=${d.streamCx}`)
     check(`⚠️草稿态选择条/欢迎区/项目条/输入卡不压卡片 @${width}`, d.overlaps.length === 0, d.overlaps.join(',') || 'none')
+    check(`⚠️草稿态不为 Desk 让位 @${width}`, Math.abs(d.composerCx - d.colCx) <= 1,
+      `composer=${d.composerCx} col=${d.colCx}`)
   }
   // 负对照:把 pickers 挪回 anchor 外(07-27 当时的结构)—— 拿不到让位,中线必须分叉,否则上面那组没有分辨力
   await p.evaluate(() => {
+    document.getElementById('rail').insertAdjacentHTML('beforeend', '<div class="agent-desk-card" id="card"><div class="agent-desk-card-head">Agent Desk</div><div class="agent-desk-card-body"></div></div>')
     const pk = document.getElementById('pickers')
     document.getElementById('col').insertBefore(pk, document.getElementById('anchor'))
   })

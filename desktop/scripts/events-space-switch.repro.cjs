@@ -2,7 +2,7 @@
 const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
-const { _electron: electron } = require('playwright-core')
+const electron = require('./lib/launch-electron.cjs')
 
 const root = path.join(__dirname, '..')
 const home = fs.mkdtempSync(path.join(os.tmpdir(), 'forsion-events-switch-'))

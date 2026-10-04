@@ -20,11 +20,13 @@ import { loginFlow } from '../cli/login.js';
 import { OAUTH_PROVIDERS, providerOAuthLogin, loadOAuthDirectProviders } from '../llm/providerOAuth.js';
 import { createMcpManager } from '../mcp/manager.js';
 import { loadTanguEnv } from '../core/tanguHome.js';
-import { parseTuiConfig, TUI_HELP } from './config.js';
+import { parseTuiConfig, tuiHelp } from './config.js';
+import { L } from './i18n.js';
 import { printBanner } from './components/Banner.js';
 import { App } from './app.js';
 import { dispatchPluginCommand, listPlugins, activateAllPlugins } from '../plugins/bootstrap.js';
 import { applySpecialAgentEnableMigration } from '../services/specialAgentsConfig.js';
+import { drainRunsForExit } from '../services/agentLoop.js';
 
 /** CLI 版本 = 包 package.json(dist/tui/main.js 的 ../../;打包态即 resources/tangu-server/package.json)。 */
 function pkgVersion(): string {
@@ -71,7 +73,7 @@ async function main(): Promise<void> {
 
   const cfg = parseTuiConfig(process.argv.slice(2));
   if (cfg.showHelp) {
-    process.stdout.write(TUI_HELP);
+    process.stdout.write(tuiHelp());
     return;
   }
 
@@ -116,10 +118,14 @@ async function main(): Promise<void> {
   const errs = validate(cfg);
   if (errs.length) {
     process.stderr.write(
-      '配置错误:\n  - ' +
+      L('配置错误:', 'Configuration error:') +
+        '\n  - ' +
         errs.join('\n  - ') +
-        '\n\n  提示: 先 `tangu login --cloud-url <forsion 地址>` 登录，之后直接 `tangu` 即可（免 token，进去 /model 选模型）。\n\n' +
-        TUI_HELP,
+        L(
+          '\n\n  提示: 先 `tangu login --cloud-url <forsion 地址>` 登录，之后直接 `tangu` 即可（免 token，进去 /model 选模型）。\n\n',
+          '\n\n  Tip: sign in first with `tangu login --cloud-url <forsion url>`, then just run `tangu` (no token needed; pick a model with /model).\n\n',
+        ) +
+        tuiHelp(),
     );
     process.exit(1);
   }
@@ -166,8 +172,9 @@ async function main(): Promise<void> {
 
   const app = render(<App boot={cfg} storage={storage} />, { exitOnCtrlC: false });
   await app.waitUntilExit();
+  const drained = drainRunsForExit(1500); // 在飞 run 落完终态(部分回答 + aborted)再退,不然行停在 running(见 agentLoop)
   mod.dispose();
-  await mcp.dispose().catch(() => {});
+  await Promise.all([drained, mcp.dispose().catch(() => {})]);
   process.exit(0);
 }
 

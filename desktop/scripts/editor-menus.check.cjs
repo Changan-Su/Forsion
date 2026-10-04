@@ -149,8 +149,8 @@ async function dragSelect(page, a, b) {
   await page.waitForTimeout(200)
 }
 /** 悬停 prefix 那一块 → 点它的 ⠿,等块菜单出来。 */
-async function openHandleMenu(page, prefix) {
-  const r = await rectOf(page, prefix)
+async function openHandleMenu(page, prefix, sel) {
+  const r = await rectOf(page, prefix, sel)
   if (!r) return false
   await page.mouse.move(r.x + 10, r.y + Math.min(10, r.h / 2), { steps: 4 })
   await page.waitForTimeout(260)
@@ -167,8 +167,14 @@ async function openHandleMenu(page, prefix) {
 }
 /** 块菜单里文字以 label 结尾的那一项。 */
 const menuItem = (page, label) => page.locator('.unified-block-menu button').filter({ hasText: label }).first()
+/** 「转换为 ›」子菜单里的项(10-02 c2 起不再平铺在块菜单里,要先悬停那一行把子菜单拉出来)。 */
+const TURN_LABELS = ['正文', '标题 1', '标题 2', '标题 3', '无序列表', '有序列表', '待办', '引用', '标注', '折叠', '代码块', '卡片']
 /** 点块菜单项;没有这一项 → false(不抛,一格红不中断后面的组)。 */
-const clickItem = (page, label, opts = {}) => menuItem(page, label).click({ timeout: 2000, ...opts }).then(() => true, () => false)
+const clickItem = async (page, label, opts = {}) => {
+  if (!TURN_LABELS.includes(label)) return menuItem(page, label).click({ timeout: 2000, ...opts }).then(() => true, () => false)
+  await page.locator('.unified-block-menu [data-sub="turnInto"]').hover({ timeout: 2000 }).catch(() => {})
+  return page.locator('.unified-block-submenu button').filter({ hasText: label }).first().click({ timeout: 2000, ...opts }).then(() => true, () => false)
+}
 const shape = (page) => page.evaluate(() => {
   const o = []
   window.__upage.probe.view().state.doc.forEach((n) => {
@@ -485,6 +491,99 @@ async function main() {
         await page.waitForTimeout(150)
         const st = await page.evaluate(() => ({ inMenu: !!document.activeElement?.closest('.unified-block-menu'), sel: window.__upage.probe.view().state.selection.toJSON().type }))
         check('B10d 键盘打开:块已选上、焦点进菜单首项', open && st.inMenu && st.sel === 'node', JSON.stringify(st))
+        await page.keyboard.press('Escape')
+      }
+      // B10e「转换为 ›」(c2):12 项不再平铺;悬停那一行 → 右侧拉出子菜单,行尾灰字 = 当前类型,子菜单里同一项打勾。
+      {
+        await load(page, SEED)
+        const open = await openHandleMenu(page, '段乙')
+        const flat = await page.evaluate(() => [...document.querySelectorAll('.unified-block-menu button')].some((b) => /^标题 1$/.test(b.textContent.trim())))
+        await page.locator('.unified-block-menu [data-sub="turnInto"]').hover({ timeout: 2000 }).catch(() => {})
+        const sub = await waitSel(page, '.unified-block-submenu')
+        const g = await page.evaluate(() => {
+          const m = document.querySelector('.unified-block-menu').getBoundingClientRect()
+          const s = document.querySelector('.unified-block-submenu')
+          const r = s?.getBoundingClientRect()
+          return { tail: document.querySelector('.unified-block-menu [data-sub] .ubm-sub-tail')?.textContent.trim(), checked: s?.querySelector('[aria-checked="true"]')?.textContent.trim(),
+            items: s ? s.querySelectorAll('button').length : 0, side: r ? r.left >= m.right - 1 || r.right <= m.left + 1 : false, menuH: Math.round(m.height) }
+        })
+        check('B10e 转换为收进子菜单:块菜单里不再平铺,悬停拉出 12 项(含卡片),当前类型「正文」打勾、并排不压住本菜单', open && !flat && sub && g.tail === '正文' && g.checked === '正文' && g.items === 12 && g.side, JSON.stringify({ flat, sub, ...g }))
+        await page.keyboard.press('Escape')
+      }
+      // B10h 行尾当前类型认得出标题 / 待办 / 引用(blockKindOf 在真 schema 上的判定;标注 / 代码块的 rectOf 定位不到首行,未覆盖)。
+      {
+        await load(page, '## 小节\n\n- [ ] 待办甲\n\n> 引一句\n\n- 无序甲\n- 无序乙\n\n1. 有序甲\n2. 有序乙\n\n后段。\n')
+        const got = {}
+        // 无序乙 / 有序乙 = 列表第二项:把手选中的是 list_item 本身(Codex 评审 #5,类型要从父列表读)
+        for (const [prefix, want, sel] of [['小节', '标题 2'], ['待办甲', '待办'], ['引一句', '引用'], ['无序乙', '无序列表', 'li'], ['有序乙', '有序列表', 'li']]) {
+          const open = await openHandleMenu(page, prefix, sel)
+          got[prefix] = open ? await page.evaluate(() => document.querySelector('.unified-block-menu [data-sub] .ubm-sub-tail')?.textContent.trim() ?? null) : 'no-menu'
+          if (sel) got[prefix + ':node'] = await page.evaluate(() => window.__upage?.probe?.view()?.state.selection.node?.type.name ?? null)
+          got[prefix] = got[prefix] === want ? true : got[prefix]
+          if (sel && got[prefix + ':node'] === 'list_item') delete got[prefix + ':node'] // 确认走的就是 list_item 选区那条路
+          await page.keyboard.press('Escape')
+        }
+        check('B10h 行尾当前类型:标题 2 / 待办 / 引用 / 列表第二项(无序 / 有序)', Object.values(got).every((v) => v === true), JSON.stringify(got))
+      }
+      // B10f 键盘:焦点在「转换为」行按 → 进子菜单首项,↓ 到「标题 1」,Enter 执行。
+      {
+        await load(page, SEED)
+        const open = await openHandleMenu(page, '段乙')
+        for (let i = 0; i < 6; i++) {
+          if (await page.evaluate(() => document.activeElement?.dataset?.sub === 'turnInto')) break
+          await page.keyboard.press('ArrowDown')
+        }
+        const onRow = await page.evaluate(() => document.activeElement?.dataset?.sub === 'turnInto')
+        await page.keyboard.press('ArrowRight')
+        await page.waitForTimeout(150)
+        const first = await page.evaluate(() => document.activeElement?.closest('.unified-block-submenu') ? document.activeElement.textContent.trim() : null)
+        await page.keyboard.press('ArrowDown')
+        await page.keyboard.press('Enter')
+        await page.waitForTimeout(250)
+        const sh = await shape(page)
+        check('B10f 键盘:→ 进子菜单首项、↓ Enter 转成标题 1', open && onRow && first === '正文' && sh.join(' / ') === '段甲。 / heading1:段乙。 / hr: / 段丙。', JSON.stringify({ onRow, first, sh }))
+      }
+      // B10f2 → ↓ 连按(中间不等):焦点必须同一次提交就进子菜单,否则 ↓ 落到主菜单、随后又被抢回首项(Codex 评审 #1)。
+      {
+        await load(page, SEED)
+        const open = await openHandleMenu(page, '段乙')
+        await page.locator('.unified-block-menu [data-sub="turnInto"]').focus().catch(() => {})
+        await page.keyboard.press('ArrowRight')
+        await page.keyboard.press('ArrowDown')
+        await page.waitForTimeout(120)
+        const at = await page.evaluate(() => document.activeElement?.closest('.unified-block-submenu') ? document.activeElement.textContent.trim() : `out:${document.activeElement?.textContent?.trim().slice(0, 8)}`)
+        check('B10f2 → ↓ 连按:落在子菜单第二项「标题 1」', open && at === '标题 1', JSON.stringify({ at }))
+        await page.keyboard.press('Escape')
+        await page.keyboard.press('Escape')
+      }
+      // B10g2 焦点在子菜单里时指针移到主菜单别的行:180ms 后子菜单收起,焦点交回「转换为」行而不是掉到 body(Codex 评审 #2)。
+      {
+        await load(page, SEED)
+        const open = await openHandleMenu(page, '段乙')
+        await page.locator('.unified-block-menu [data-sub="turnInto"]').focus().catch(() => {})
+        await page.keyboard.press('ArrowRight')
+        await page.waitForTimeout(120)
+        const inSub = await page.evaluate(() => !!document.activeElement?.closest('.unified-block-submenu'))
+        await page.locator('.unified-block-menu button', { hasText: '复制块' }).hover({ timeout: 2000 }).catch(() => {})
+        await page.waitForTimeout(350)
+        const r = await page.evaluate(() => ({ sub: !!document.querySelector('.unified-block-submenu'), row: document.activeElement?.dataset?.sub === 'turnInto', tag: document.activeElement?.tagName }))
+        check('B10g2 子菜单持焦时指针移走:子菜单收起、焦点回「转换为」行', open && inSub && !r.sub && r.row, JSON.stringify({ inSub, ...r }))
+        await page.keyboard.press('Escape')
+      }
+      // B10g 子菜单里 Esc / ← 只退一级:子菜单收起、焦点回到「转换为」行,块菜单还开着。
+      {
+        await load(page, SEED)
+        const open = await openHandleMenu(page, '段乙')
+        const back = []
+        for (const key of ['Escape', 'ArrowLeft']) {
+          await page.locator('.unified-block-menu [data-sub="turnInto"]').focus().catch(() => {})
+          await page.keyboard.press('ArrowRight')
+          await page.waitForTimeout(150)
+          await page.keyboard.press(key)
+          await page.waitForTimeout(120)
+          back.push(await page.evaluate(() => ({ sub: !!document.querySelector('.unified-block-submenu'), menu: !!document.querySelector('.unified-block-menu'), row: document.activeElement?.dataset?.sub === 'turnInto' })))
+        }
+        check('B10g 子菜单里 Esc / ← 退回「转换为」行,块菜单不关', open && back.every((b) => !b.sub && b.menu && b.row), JSON.stringify(back))
         await page.keyboard.press('Escape')
       }
     }
@@ -850,7 +949,7 @@ async function main() {
         const root = document.querySelector(PM)
         const id = root.getAttribute('aria-activedescendant')
         const el = id ? document.getElementById(id) : null
-        return { id, controls: root.getAttribute('aria-controls'), menuId: document.querySelector('.slash-menu')?.id ?? null, points: el ? el.hasAttribute('data-active') && el.getAttribute('role') === 'menuitem' : false, label: el?.querySelector('.slash-label')?.textContent ?? null }
+        return { id, controls: root.getAttribute('aria-controls'), menuId: (document.querySelector('.slash-menu [role="menu"]') ?? document.querySelector('.slash-menu'))?.id ?? null, /* 分类胶囊之后,被控的是菜单里那张命令列表(role=menu) */ points: el ? el.hasAttribute('data-active') && el.getAttribute('role') === 'menuitem' : false, label: el?.querySelector('.slash-label')?.textContent ?? null }
       }, PM)
       const s0 = await ad()
       await page.keyboard.press('ArrowDown')

@@ -36,7 +36,7 @@ function check(name, ok, detail) {
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? '  | ' + detail : ''}`)
 }
 
-const HTML = fs.readFileSync(path.join(__dirname, '../frontend/index.html'), 'utf8')
+const HTML = fs.readFileSync(path.join(__dirname, '../frontend/index.html'), 'utf8').replace('<!-- forsion-startup-runtime -->', '<script>' + fs.readFileSync(path.join(__dirname, '../frontend/startupAppearance.js'), 'utf8') + '</script>')
 const CYCLE = 1600
 
 const state = () => {
@@ -66,7 +66,7 @@ async function main() {
   const looping = await page.evaluate(state)
   check('首帧未出:闪屏还在(没被定时器撤走)', !looping.gone && !looping.out)
   check('四条动画都是 infinite(含接缝遮罩 p2m-seam)',
-    !!looping.infinite && looping.names.includes('p2m-seam') && looping.names.length === 4, (looping.names || []).join(','))
+    !!looping.infinite && looping.names.includes('forsion-seam') && looping.names.length === 4, (looping.names || []).join(','))
   check('两轮之后仍在跑(真循环,不是播完僵住)', !!looping.running && looping.pastFirstCycle > CYCLE, `t=${Math.round(looping.pastFirstCycle)}ms`)
 
   // 接缝不"眨眼":循环回卷那一帧 logo 必须已经淡到近乎透明(否则「落定 → 突然隐形」看着像故障)。
@@ -106,6 +106,31 @@ async function main() {
   for (const kind of ['floating', 'detached', 'mini']) {
     await page.goto(`https://splash.test/?window=${kind}`, { waitUntil: 'domcontentloaded' })
     check(`${kind} 卫星窗口从未挂载启动闪屏`, await page.locator('#tangu-splash').count() === 0)
+  }
+
+  // The three real HTML entrypoints use exactly the same early runtime.
+  await page.goto('https://splash.test/', { waitUntil: 'domcontentloaded' })
+  const runtime = fs.readFileSync(path.join(__dirname, '../frontend/startupAppearance.js'), 'utf8')
+  const png = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aD1sAAAAASUVORK5CYII='
+  const svg = 'data:image/svg+xml;base64,' + Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40"><circle cx="20" cy="20" r="18" fill="teal"/></svg>').toString('base64')
+  for (const entry of ['../frontend/index.html', '../../web/index.html', '../../mobile/index.html']) {
+    const source = fs.readFileSync(path.join(__dirname, entry), 'utf8')
+    const content = (value) => source.replace('<!-- forsion-startup-runtime -->', `<script>window.tangu={startupAppearance:{initial:${JSON.stringify({ version: 1, ...value })}}};</script><script>${runtime}</script>`)
+    await page.setContent(content({ animation: 'none' }))
+    check(`${entry}: 静止关闭默认图标的所有内部动画`, await page.locator('#tangu-splash').evaluate((s) => s.getAnimations({ subtree: true }).length === 0))
+    await page.setContent(content({ animation: 'spin', icon: { image: png } }))
+    check(`${entry}: 自定义图标使用所选动画`, await page.locator('#tangu-splash').evaluate((s) => s.dataset.customMotion === 'spin' && s.querySelector('img')?.getAnimations()[0]?.animationName === 'forsion-spin'))
+    await page.setContent(content({ animation: 'none', splash: { image: svg, poster: png } }))
+    check(`${entry}: 静止素材使用首帧`, await page.locator('.forsion-startup-image').getAttribute('src') === png)
+    await page.emulateMedia({ reducedMotion: 'reduce' })
+    await page.setContent(content({ animation: 'spin', icon: { image: png }, splash: { image: svg } }))
+    check(`${entry}: 减少动态效果只显示静态图标`, await page.locator('#tangu-splash').evaluate((s) => s.querySelector('img')?.src.startsWith('data:image/png') && s.getAnimations({ subtree: true }).length === 0))
+    await page.emulateMedia({ reducedMotion: 'no-preference' })
+    await page.setContent(content({ showSplash: false }))
+    check(`${entry}: 用户可关闭开屏`, await page.locator('#tangu-splash').count() === 0)
+    await page.setContent(content({ icon: { image: 'data:image/png;base64,aGVsbG8=' } }))
+    await page.locator('#tangu-splash .tangu-splash-logo').waitFor()
+    check(`${entry}: 损坏素材恢复默认图标`, await page.locator('#tangu-splash img').count() === 0)
   }
 
   await browser.close()

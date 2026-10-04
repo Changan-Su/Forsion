@@ -5,6 +5,7 @@ export const CANVAS_DOUBLE_CLICK_FOCUS_KEY = 'amadeus.canvas.doubleClickFocus'
 export const CANVAS_MINIMAP_KEY = 'amadeus.canvas.minimap'
 export const CANVAS_GRID_SNAP_KEY = 'amadeus.canvas.gridSnap'
 export const CANVAS_OVERVIEW_KEY = 'amadeus.canvas.overview'
+export const CANVAS_ALIGN_GUIDES_KEY = 'amadeus.canvas.alignGuides'
 export const CANVAS_OVERVIEW_Z_KEY = 'amadeus.canvas.overviewZ'
 const CANVAS_OVERVIEW_Z_EVENT = 'amadeus:canvas-overview-z'
 
@@ -33,6 +34,15 @@ export function canvasGridSnapEnabled(): boolean {
 
 export function setCanvasGridSnapEnabled(on: boolean): void {
   try { localStorage.setItem(CANVAS_GRID_SNAP_KEY, on ? '1' : '0') } catch { /* ignore */ }
+}
+
+/** 对齐参考线(V-14)默认开启:拖卡 / 调尺寸贴近别的对象的边或中线就吸过去并画线。本机手势偏好,不写进笔记。 */
+export function canvasAlignGuidesEnabled(): boolean {
+  try { return localStorage.getItem(CANVAS_ALIGN_GUIDES_KEY) !== '0' } catch { return true }
+}
+
+export function setCanvasAlignGuidesEnabled(on: boolean): void {
+  try { localStorage.setItem(CANVAS_ALIGN_GUIDES_KEY, on ? '1' : '0') } catch { /* ignore */ }
 }
 
 /** 低倍率简略显示默认开启；关闭后即使缩到阈值以下也继续渲染完整正文。 */

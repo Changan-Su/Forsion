@@ -24,12 +24,32 @@ import { splitSuggestions } from '../chat2/suggest'
 import { TaskCards } from '../chat2/TaskCards'
 import { runTaskCard } from '../chat2/taskLanding'
 import { homeTarget } from '../../services/engine/targets'
+import { previewNeedsScrollHint } from '../../components/approvalText'
 
 const UnifiedPageLazy = lazyRetry(() => import('@amadeus/unified/UnifiedPage').then((m) => ({ default: m.UnifiedPage })))
 
 /** 卡片只信本地引擎发来的 agent 消息(与聊天任务卡的 museOk 同一道闸:Web / 移动端没有 /agent/special 端点)。 */
 export function inboxCardsAllowed(msg: Pick<InboxMessage, 'sender_kind'>): boolean {
   return msg.sender_kind === 'agent' && !!window.tangu?.backendStatus
+}
+
+const REASON_KEY: Record<string, string> = {
+  escalate: 'inbox.approval.reason.escalate',
+  mode: 'inbox.approval.reason.mode',
+  control: 'inbox.approval.reason.control',
+}
+
+/** 审批理由(pending_approvals.reason,引擎写的 JSON)→ 本地化短标签。从前直接把 kind 原样拼上去,
+ *  用户看到的是 `escalate` / `mode` / `control` 这种引擎口径的裸词。不认识的 kind、坏 JSON 一律不显示(不漏引擎词)。 */
+export function approvalReasonLabel(raw: string | null | undefined, t: (key: string, vars?: Record<string, unknown>) => string): string {
+  if (!raw) return ''
+  let o: any
+  try { o = JSON.parse(raw) } catch { return '' }
+  const kind = typeof o?.kind === 'string' ? o.kind : ''
+  if (kind === 'custom-ask') {
+    return typeof o.rule === 'string' && o.rule ? t('inbox.approval.reason.rule', { rule: o.rule.slice(0, 200) }) : t('inbox.approval.reason.customAsk')
+  }
+  return REASON_KEY[kind] ? t(REASON_KEY[kind]) : ''
 }
 
 export function InboxBody({ msg }: { msg: InboxMessage }) {
@@ -137,11 +157,7 @@ function ApprovalCard({ id }: { id: string }) {
     }
   }
 
-  // 理由(escalate / mode / custom-ask 的规则串)是引擎写的 JSON;坏了不影响卡。
-  let reason = ''
-  if (row && row !== 'loading' && row !== 'error' && row.reason) {
-    try { const o = JSON.parse(row.reason); reason = o?.kind === 'custom-ask' && o.rule ? String(o.rule) : String(o?.kind || '') } catch { /* ignore */ }
-  }
+  const reason = row && row !== 'loading' && row !== 'error' ? approvalReasonLabel(row.reason, t) : ''
   const status = row === 'loading' ? 'loading' : row === 'error' ? 'error' : row ? row.status : 'missing'
   const doneKey = status === 'rejected' ? 'inbox.approval.rejected' : status === 'executing' ? 'inbox.approval.executing' : status === 'failed' ? 'inbox.approval.failed' : 'inbox.approval.approved'
   const settled = row && row !== 'loading' && row !== 'error' && row.status !== 'pending'
@@ -160,8 +176,10 @@ function ApprovalCard({ id }: { id: string }) {
       ) : (
         <>
           <div className="ibx-approval-preview">{row.preview}</div>
+          {previewNeedsScrollHint(row.preview) && <div className="ibx-approval-meta">{t('approval.previewScrollHint')}</div>}
           <div className="ibx-approval-meta">{row.tool}{row.cwd ? ` · ${row.cwd}` : ''}{reason ? ` · ${reason}` : ''}</div>
-          {row.note && <div className="ibx-approval-meta">{t('special.muse.approvalNote', { note: row.note })}</div>}
+          {/* decided_by='system' = 引擎撤回(如升级前的截断预览不可批),不是默认 Agent 的代批意见 */}
+          {row.note && <div className="ibx-approval-meta">{row.decided_by === 'system' ? t('inbox.approval.withdrawnSystem') : t('special.muse.approvalNote', { note: row.note })}</div>}
           {row.status === 'pending' ? (
             <div className="t2-taskcard-actions">
               <button className="primary" disabled={busy} onClick={() => void decide('approve')}><ShieldCheck size={12} /> {t('special.muse.approve')}</button>

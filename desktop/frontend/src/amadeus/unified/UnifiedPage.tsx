@@ -17,8 +17,8 @@ import type { MilkdownPlugin } from '@milkdown/kit/ctx'
 import { Fragment } from '@milkdown/kit/prose/model'
 import type { Node as ProseNode } from '@milkdown/kit/prose/model'
 import type { EditorView } from '@milkdown/kit/prose/view'
-import { undo as pmUndo, redo as pmRedo } from '@milkdown/kit/prose/history'
-import { Pilcrow, Heading1, Heading2, Heading3, List, ListOrdered, ListTodo, TextQuote, ChevronsDown, Copy, Columns2, Rows2, Trash2, Undo2, StickyNote, MessageSquarePlus, Code2, Info, Link2, FileInput } from 'lucide-react'
+import { undo as pmUndo, redo as pmRedo, closeHistory } from '@milkdown/kit/prose/history'
+import { Pilcrow, Heading1, Heading2, Heading3, List, ListOrdered, ListTodo, TextQuote, ChevronsDown, Copy, Columns2, Rows2, Trash2, Undo2, StickyNote, MessageSquarePlus, Code2, Info, Link2, FileInput, Check, ChevronRight } from 'lucide-react'
 import { isCoarsePointer } from '../../touch'
 import { joinRel, toAssetUrl, toDisplayMarkdown, toStoredMarkdown } from '@amadeus-shared/assets'
 import { amadeus } from '../api'
@@ -45,6 +45,7 @@ import { announceUnifiedWrite, registerUnifiedPipe, retireUnifiedPath, unifiedSc
 import { AlertCircle, History } from 'lucide-react'
 import { Lock as LockIcon } from 'lucide-react'
 import { useNotesSpellcheck } from '../blocks/markdown/spellcheck'
+import { unfoldCalloutsForInsert } from '../blocks/markdown/callout'
 import type { TextWriteResult } from '@amadeus-shared/ipc'
 import { textFingerprint } from '@amadeus-shared/writeConflict'
 import { formatDateTime } from '../../format/time'
@@ -64,7 +65,7 @@ import { NoteCover, CoverPicker, IconPicker, randomEmoji, UNTITLED_RE } from '..
 import { OverlayPortal } from '../lib/overlayPortal'
 import { OverlayAt } from '../lib/clampMenu'
 import { applyTrigger, codeBlockTurnInto, liftOutOfWrappers, type Trigger } from '../blocks/markdown/blockTriggers'
-import { turnBlocksInto, turnCalloutInto, turnIntoCallout, turnRangeIntoCode } from './blockTurn'
+import { blockKindOf, turnBlocksInto, turnCalloutInto, turnIntoCallout, turnRangeIntoCode, type BlockKind } from './blockTurn'
 import { columnRowOf, columnSplitApplies } from '../blocks/markdown/menuContext'
 import { NotePicker, blockLinkOf, canMove, copyLink, moveBlocksTo } from './blockLinks'
 import { withFoldedSections } from './foldCarry'
@@ -77,6 +78,8 @@ import { canvasPlugins, createCanvasFold, createSelectionClamp, createHistoryTim
 import { CanvasStage, unwrapCard, blockToCard } from './canvasStage'
 import { rawTree, setParent, childrenOf } from './canvasEdit'
 import { createEmbedLayer } from './embedLayer'
+import { documentAgentFence, newDocAgentSpec, serializeDocAgentSpec } from '../blocks/documentAgent/format'
+import { instructionsOf, pageInstructionContext } from './pageInstructions'
 import { reconcileTr, type ReconcileChange } from './reconcileDiff'
 import { createAgentChanges, keepAgentChanges, markAgentChanges, nextAgentChange, revertAgentChanges, type AgentChangesState } from './agentChanges'
 import { AgentChangeCapsule, AgentLiveCapsule } from './AgentChangeCapsule'
@@ -89,6 +92,8 @@ import type { TanguInlineAction } from '../plugins/tanguSeam'
 import type { ToolbarAiItem } from '../blocks/markdown/InlineToolbar'
 import { agentEditing, claimAgentWrite, subscribeAgentWrites } from '../../stores/agentWriteLedger'
 import { askTanguQuote } from './askTangu'
+import { replyAnchorPos } from './replyInsert'
+import type { ReplyAnchor } from './lifecycle'
 import { readTangu } from '../plugins/tanguSeam'
 import { usePluginStore } from '../plugins/pluginStore'
 import { headingFoldPlugins } from './headingFold'
@@ -321,6 +326,17 @@ interface Pipe {
   peerPatch: Record<string, unknown> | null
 }
 
+/** insertMd 的附加项。quiet = 助手回答插回(评审 G3-08,经 lifecycle.unifiedInsertReply):**不抢焦点**(用户此刻在聊天框里)、
+ *  单独一步撤销(closeHistory:连点两次是两步)、落点亮到阅读位置并闪一下(PM 的 scrollIntoView 要求 DOM 选区已在编辑器里,
+ *  见 revealScroll 顶注)。after = 「问 Tangu」带回来的出处(replyInsert.ts 找被引用块);caretless = 正文从没被聚焦过 ——
+ *  那时的选区只是文首缺省值,'cursor' 退成文末。 */
+interface InsertMdOpts {
+  caretBack?: number
+  quiet?: boolean
+  after?: ReplyAnchor | null
+  caretless?: boolean
+}
+
 interface HostApi {
   /** 外部回灌正文(stored md)→ 同实例最小差异事务;编辑器未挂载返回 false。
    *  agent = 改动出自 Tangu(G3-03):只有回灌路径会传,恢复草稿那条绝不传(那不是「Tangu 修改」)。 */
@@ -335,13 +351,16 @@ interface HostApi {
   /** OS 拖入/上传按钮的文件:存附件 + 光标处插 `![[base]]`(经 lifecycle.insertFilesForPath 递入)。 */
   insertFiles: (files: File[]) => void
   /** 插一段 markdown(插件块表面的 v4 写口;经 lifecycle.unifiedInsertMarkdown 递入)。编辑器未挂载 = false。 */
-  insertMarkdown: (md: string, where: 'cursor' | 'start' | 'end') => boolean
+  insertMarkdown: (md: string, where: 'cursor' | 'start' | 'end', opts?: InsertMdOpts) => boolean
   /** markdown → 块内容(画布粘贴/拖入用)。解析不出东西 = null。 */
   parseMd: (md: string) => Fragment | null
   /** 块内容 → markdown(parseMd 的反向;画布跨实例复制卡用)。编辑器未挂载 = null。
    *  给的是**显示形**(asset 协议 URL 原样),对面 parseMd 的 toDisplayMarkdown 会原样放行 ——
    *  换成 stored 形的话页相对路径会按目标笔记重解析,跨文件夹粘贴的图片当场断链。 */
   serializeMd: (content: Fragment) => string | null
+  /** 块内容 → **落盘形** markdown(与 serializeNow 同一条落盘链:serializeUnified + toStoredMarkdown,附件引用是页相对路径
+   *  而不是 asset 协议 URL)。给要离开本编辑器、按文件读的产物用(画布导出 JSON Canvas,V-19)。序列化抛 = null。 */
+  serializeStored: (content: Fragment) => string | null
   focusStart: () => void
   focusEnd: () => void
   /** 尾部空白区点击(AFFiNE 语义):末行有内容 → 追加一个普通空段并落光标;已是空段 → 直接落。
@@ -437,7 +456,7 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
       insertFiles: (files) => {
         void saveFiles(files)
       },
-      insertMarkdown: (md, where) => insertMd(md, where),
+      insertMarkdown: (md, where, opts) => insertMd(md, where, opts),
       parseMd: (md) => {
         let out: Fragment | null = null
         getInstance()?.action((ctx) => {
@@ -457,6 +476,18 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
             const view = ctx.get(editorViewCtx)
             const doc = view.state.schema.topNodeType.createAndFill(undefined, content)
             if (doc) out = normalizeSerializedMd(ctx.get(serializerCtx)(doc))
+          })
+        } catch {
+          return null
+        }
+        return out
+      },
+      serializeStored: (content) => {
+        let out: string | null = null
+        try { // 吞异常的理由同 serializeMd(分栏行等节点进序列化树会抛)
+          getInstance()?.action((ctx) => {
+            const doc = ctx.get(editorViewCtx).state.schema.topNodeType.createAndFill(undefined, content)
+            if (doc) out = toStoredMarkdown(serializeUnified(ctx, doc), pageDir)
           })
         } catch {
           return null
@@ -601,30 +632,34 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
   }
 
   /** 把一段 markdown 插进当前文档。返回是否真落地(编辑器没挂载 / 解析成空 = false)。
-   *  - `'cursor'`(缺省,用户动作走这档):光标所在**顶层块**为空 → 原地替换;否则插到它之后。
-   *    「顶层块」= doc 或分栏 cell 的直接子节点 —— 列内插入绝不许穿出到 doc 级(否则 /代码块
-   *    在列里会插到整行下面)。列表项里插 = 插在整份列表之后(与 Tab 层同一套祖先判定)。落光标+聚焦。
+   *  - `'cursor'`(缺省,用户动作走这档):光标所在容器中的块为空 → 原地替换;否则插到它之后。
+   *    容器 = doc、分栏 cell 或引用/callout；插入留在最近的容器里。列表项里插 = 插在整份列表之后。
    *  - `'start'`/`'end'`(插件写口走这两档):doc 的最前/最后。**不动选区、不抢焦点** —— 调用方是
    *    插件按钮/浮层,用户此刻的光标可能正在别处,PM 会把选区随事务映射过去。
    *  卡片文档也安全:插的是普通顶层节点,`canvasIntegrityGuard` 那道 filterTransaction 只拒
    *  「卡不在 doc 顶层」,不拒卡前后的正文(闭合锚 2026-08-19 之后卡外顶层正文完全合法)。
    *  v3 走的是 store 的 onChange/onInsertAfter(块世界);统一实例没有块 id,一切都是本 doc 的事务。 */
-  const insertMd = (md: string, where: 'cursor' | 'start' | 'end' = 'cursor', opts?: { caretBack?: number }): boolean => {
+  const insertMd = (md: string, where: 'cursor' | 'start' | 'end' = 'cursor', opts?: InsertMdOpts): boolean => {
     let done = false
     getInstance()?.action((ctx) => {
       const view = ctx.get(editorViewCtx)
       const parsed = ctx.get(parserCtx)(toDisplayMarkdown(md, pageDir)) as ProseNode | undefined
       if (!parsed?.childCount) return
       const content = parsed.content
-      if (where !== 'cursor') {
-        const at = where === 'start' ? 0 : view.state.doc.content.size
-        view.dispatch(view.state.tr.insert(at, content))
+      const quiet = !!opts?.quiet
+      const anchorAt = quiet ? replyAnchorPos(view.state.doc, opts?.after) : null
+      if (quiet && anchorAt == null && opts?.caretless) where = 'end'
+      if (where !== 'cursor' || anchorAt != null) {
+        const at = anchorAt ?? (where === 'start' ? 0 : view.state.doc.content.size)
+        const tr = view.state.tr.insert(at, content)
+        if (quiet) dispatchQuiet(view, tr, at)
+        else view.dispatch(tr)
         done = true
         return
       }
       const { $from } = view.state.selection
       let d = $from.depth
-      while (d >= 1 && !['doc', 'amadeusColumnCell'].includes($from.node(d - 1).type.name)) d--
+      while (d >= 1 && !['doc', 'amadeusColumnCell', 'blockquote'].includes($from.node(d - 1).type.name)) d--
       if (d < 1) return
       /** 落点 = 插入内容的末尾(v3 的 requestSelfFocus('end') 同位),**向前**找文字位(R-17:向后找会在
        *  「后面还有块」时落进下一块 —— /code 插完光标跑到下面那段里)。caretBack = 再往回退几格(/math 落在 `$$ | $$`)。 */
@@ -636,7 +671,7 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
       // 列表项 / 引用(callout)里的**空行**(B-07):就在这一行原地换成要插的块。此前一律按「整个顶层块空不空」判,
       // 容器永远非空 → 插到整只列表 / 引用之后,原处留下 `-`、`- [ ] <br />`、`>` 空项残渣,callout 里的代码块跑到外面。
       // 引用 / callout 收任何块:原地替换,留在容器里;列表项的首子只能是段落 → 容不下时只脱出**列表**(不脱引用),再替换。
-      // 非空行照旧插到顶层块之后(列表中间插代码块不劈列表)。
+      // 非空行插到所在容器内的块之后(列表中间插代码块不劈列表)。
       if ($from.depth > d && $from.parent.isTextblock && $from.parent.content.size === 0) {
         const tr = view.state.tr
         const fits = (at: number): boolean => {
@@ -656,9 +691,13 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
           const $p = tr.doc.resolve(at)
           const from = $p.before()
           tr.replaceWith(from, $p.after(), content)
+          unfoldCalloutsForInsert(tr, from, from + content.size)
           land(tr, from + content.size)
-          view.dispatch(tr.scrollIntoView())
-          view.focus()
+          if (quiet) dispatchQuiet(view, tr, from)
+          else {
+            view.dispatch(tr.scrollIntoView())
+            view.focus()
+          }
           done = true
           return
         }
@@ -667,12 +706,27 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
       const to = $from.after(d)
       const blank = $from.node(d).textContent.trim() === ''
       const tr = blank ? view.state.tr.replaceWith(from, to, content) : view.state.tr.insert(to, content)
+      unfoldCalloutsForInsert(tr, blank ? from : to, (blank ? from : to) + content.size)
+      // quiet 也挪选区(不聚焦):连着插几条回答时一条接一条往下排,而不是每条都插回同一块之后、倒着排。
       land(tr, (blank ? from : to) + content.size)
-      view.dispatch(tr.scrollIntoView())
-      view.focus()
+      if (quiet) dispatchQuiet(view, tr, blank ? from : to)
+      else {
+        view.dispatch(tr.scrollIntoView())
+        view.focus()
+      }
       done = true
     })
     return done
+  }
+  /** quiet 插入(G3-08)的落定:独立一步撤销、不聚焦;落点藏在会话折叠里先展开,不在视野里才滚,闪一下。 */
+  const dispatchQuiet = (view: EditorView, tr: Transaction, at: number): void => {
+    view.dispatch(closeHistory(tr))
+    unfoldToReveal(view, Math.min(at + 1, view.state.doc.content.size))
+    const el = view.nodeDOM(at)
+    if (!(el instanceof HTMLElement)) return
+    const r = el.getBoundingClientRect()
+    if (r.top < 0 || r.top > window.innerHeight - 40) revealBlockAtTop(el)
+    flashCiteTip(el.getBoundingClientRect())
   }
 
   /** 异步 slash 项的锚(评审 G3-06,见 pendingInsert.ts):'/query' 消费掉之后**当场**在光标处钉住,结果回来插到那里 ——
@@ -753,6 +807,11 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
     }
     if (item.scaffold === S.card) {
       getInstance()?.action((ctx) => onCardRef.current(ctx.get(editorViewCtx)))
+      return
+    }
+    if (item.scaffold === S.instructions || item.scaffold === S.agentTask || item.scaffold === S.prompt) {
+      const kind = item.scaffold === S.instructions ? 'instructions' : item.scaffold === S.agentTask ? 'task' : 'prompt'
+      insertMd(documentAgentFence(kind, kind === 'instructions' ? '' : serializeDocAgentSpec(newDocAgentSpec())))
       return
     }
     if (item.scaffold === S.ai) {
@@ -1171,7 +1230,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
   /** 画布模式的状态出口。桌面走 CanvasSegPortal 投进顶栏插槽,移动端整条顶栏不渲染 → 没插槽,
    *  改由宿主(NoteView)把它放进底栏胶囊的「⋯」。交给**父组件**而不是全局槽:结构上就是同一篇
    *  笔记,旧写法「uiOverlay 单槽 + 路径比对」栽过的那三条歧路(见 CanvasModeSeg 顶注)一条都不沾。 */
-  onCanvasMode?: (s: { on: boolean; toggle: () => void } | null) => void
+  onCanvasMode?: (s: { on: boolean; toggle: () => void; exportCanvas?: () => void } | null) => void
   /** 撤销 / 重做的出口(G2-05)。v4 不进 pageStore,宿主按 activePage 门控的 `myPs().undo()` 在这里是死键;
    *  宿主(NoteView)给本 leaf 自己的 ref,不按路径全局查找。卸载时清空。 */
   historyRef?: { current: UnifiedHistory | null }
@@ -1226,6 +1285,8 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
   const canvasToggleImpl = useRef<(() => void) | null>(null)
   const canvasToggleCmd = useRef((): void => { canvasToggleImpl.current?.() }).current
   const touchActive = (): void => { lastActive.current = performance.now(); claimCanvasToggle(canvasToggleCmd) }
+  /** 正文拿过焦点没有(G3-08):没拿过时编辑器的选区只是文首缺省值 —— 回答插回按文末算,不插到第一段后面。 */
+  const bodyUsed = useRef(false)
   useEffect(() => {
     // 切标签只激活 leaf、未必把焦点给编辑器(命令面板插模板就是这个形态):活动面板本身也算「正在用」。
     if (scope != null && scope === activeScope) touchActive()
@@ -1336,11 +1397,16 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
   }, [stableApply])
   // 交出去时 toggle 恒经 ref 取最新那份(宿主把它存进 state,不然会捏着某一帧的闭包)。
   useEffect(() => {
-    onCanvasMode?.({ on: canvasOn, toggle: () => toggleCanvasRef.current() })
+    // exportCanvas(V-19):只在舞台真在画布态时交出去(导出要量画布 DOM;源码模式 / 只读下舞台不登记导出,
+    // 交出去就是一个点了没反应的菜单项)。经 ref 现取舞台那份。
+    const canExport = canvasOn && mode !== 'source' && !readOnly
+    onCanvasMode?.({ on: canvasOn, toggle: () => toggleCanvasRef.current(), ...(canExport ? { exportCanvas: () => stageExport.current?.() } : {}) })
     return () => onCanvasMode?.(null)
-  }, [canvasOn, onCanvasMode])
+  }, [canvasOn, onCanvasMode, mode, readOnly])
   /** 画布舞台的统一撤销仲裁(CanvasStage 经 histStepRef 交上来,与它的 Cmd+Z 捕获同一个 histStep)。 */
   const stageHist = useRef<((dir: 'undo' | 'redo') => boolean) | null>(null)
+  /** 画布舞台的「导出 JSON Canvas」(V-19,经 exportRef 交上来;笔记 ⋯ 菜单经 onCanvasMode 调它)。 */
+  const stageExport = useRef<(() => void) | null>(null)
   // 撤销 / 重做交给宿主:与键盘**同路** —— 画布态走舞台仲裁(canvasStage 的 onKeyDownCapture),
   // 文档态走 PM history(milkdown history keymap 的同一对命令)。只读实例没有可退的东西。
   useEffect(() => {
@@ -1496,6 +1562,45 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
   // ── 块交互层(⠿/＋/拖拽/块选中):插件稳定引用,菜单由这里渲染。────────────────────
   // cell:右键单元格打开时指针下的那一格(K-10 表格区的锚格;打开那一刻记下,浮层一出来就盖住那个点)。
   const [blockMenu, setBlockMenu] = useState<{ x: number; y: number; cell?: number | null; keyboard?: boolean; focus?: 'turnInto' } | null>(null)
+  /** 「转换为 ›」子菜单:x / y / anchorTop 是视口 px(交给 OverlayAt 夹取);focus = 键盘打开,焦点进子菜单首项。 */
+  const [turnSub, setTurnSub] = useState<{ x: number; y: number; anchorTop: number; focus: boolean } | null>(null)
+  const subCloseTimer = useRef(0)
+  useEffect(() => { if (!blockMenu) { setTurnSub(null); clearTimeout(subCloseTimer.current) } }, [blockMenu])
+  const openTurnSub = (row: HTMLElement, focus: boolean): void => {
+    clearTimeout(subCloseTimer.current)
+    if (turnSub && !focus) return // 悬停回到同一行不重算位置,免得子菜单抖
+    const menu = row.closest<HTMLElement>('.unified-block-menu')
+    if (!menu) return
+    const m = menu.getBoundingClientRect()
+    const r = row.getBoundingClientRect()
+    // 右侧放不下就翻到左侧;子菜单与本菜单同一套 ctx-menu 宽度,按本菜单宽估。-5 / +5 = 外壳内边距 + 描边,让首项与该行齐平。
+    const flip = m.right + 4 + m.width > window.innerWidth - 8
+    setTurnSub({ x: flip ? m.left - 4 - m.width : m.right + 4, y: r.top - 5, anchorTop: r.bottom + 5, focus })
+  }
+  /** 指针移到别的行:稍等再收,斜着划向子菜单时路过下一行不至于把它关掉。 */
+  const closeTurnSubSoon = (): void => {
+    clearTimeout(subCloseTimer.current)
+    subCloseTimer.current = window.setTimeout(() => {
+      // 键盘焦点还在子菜单里就先交回「转换为」行,别让它随子菜单一起落到 body
+      if (document.querySelector('.unified-block-submenu')?.contains(document.activeElement)) {
+        document.querySelector<HTMLElement>('.unified-block-menu [data-sub="turnInto"]')?.focus()
+      }
+      setTurnSub(null)
+    }, 180)
+  }
+  // 同一次提交里同步聚焦(layout effect):rAF 晚一帧,快速 →↓ 时 ↓ 会先落到主菜单、随后焦点又被抢回子菜单首项
+  useLayoutEffect(() => {
+    if (!turnSub?.focus) return
+    let tries = 0
+    let raf = 0
+    const focusIn = (): void => {
+      const first = document.querySelector<HTMLElement>('.unified-block-submenu button')
+      first?.focus()
+      if (document.activeElement !== first && ++tries < 10) raf = requestAnimationFrame(focusIn)
+    }
+    focusIn()
+    return () => cancelAnimationFrame(raf)
+  }, [turnSub])
   /** 菜单打开那一刻的目标(B-10):动作一律作用在它上面,不在点下去那一刻现读选区 ——
    *  此前菜单开着时按 ↓ 选区就挪到下一块,「删除」删掉的是别人。文档期间变了 → 不动手(fail closed)。 */
   const menuTarget = useRef<{ doc: ProseNode; sel: Selection } | null>(null)
@@ -1583,7 +1688,17 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
         // 折叠失败时这个回调根本不会被调,清零动作放在它里面就永远等不到。
         (refs) => { for (const r of refs) pipe.ownedCards.add(r) },
       ),
-      ...createEmbedLayer({ path, readOnly }),
+      ...createEmbedLayer({ path, readOnly,
+        alive: () => !pipe.dead && !pipe.retired && !pipe.readOnly && !srcRef.current,
+        flush: async () => {
+          if (pipe.dead || pipe.retired || pipe.readOnly || srcRef.current) throw new Error(translate('documentTask.sourceGone'))
+          syncFromEditor()
+          flushPropDrafts()
+          if (pipe.timer) { clearTimeout(pipe.timer); pipe.timer = null }
+          await writeNow(true)
+          if (pipe.dead || pipe.retired || pipe.failed) throw new Error(translate('documentTask.sourceGone'))
+        },
+      }),
       touchScrollMarginPlugin(), // 触屏:光标行不滚到悬浮胶囊底下(G2-11)
       ...createPendingInsert(), // 异步 slash 项的锚与「进行中」占位(G3-06)
       // 画布模式的两个编辑器侧插件(2026-08-18):跨卡选区夹断 + 统一撤销时间线的 PM 记账。
@@ -1631,19 +1746,37 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
     // 挪到下一块,「删除」删掉的是别人;菜单开着打字替换了当前块)。
     const onKey = (e: KeyboardEvent): void => {
       const menu = document.querySelector<HTMLElement>('.unified-block-menu')
-      const inside = !!menu && menu.contains(document.activeElement)
+      const sub = document.querySelector<HTMLElement>('.unified-block-submenu')
+      const inSub = !!sub && sub.contains(document.activeElement)
+      const inside = (!!menu && menu.contains(document.activeElement)) || inSub
+      const subRow = menu?.querySelector<HTMLElement>('[data-sub="turnInto"]')
       if (e.key === 'Escape') {
         e.stopPropagation()
+        // 子菜单里按 Esc 只退一级,焦点回到「转换为」那一行。
+        if (inSub) { setTurnSub(null); subRow?.focus(); return }
         setBlockMenu(null)
         layer.getView()?.focus()
         return
       }
       if (!menu || e.isComposing) return
       const bare = !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey
+      if (bare && inSub && e.key === 'ArrowLeft') {
+        e.preventDefault()
+        e.stopPropagation()
+        setTurnSub(null)
+        subRow?.focus()
+        return
+      }
+      if (bare && !inSub && e.key === 'ArrowRight' && subRow && document.activeElement === subRow) {
+        e.preventDefault()
+        e.stopPropagation()
+        openTurnSub(subRow, true)
+        return
+      }
       if (bare && ['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(e.key)) {
         e.preventDefault()
         e.stopPropagation()
-        const items = [...menu.querySelectorAll<HTMLElement>('button:not([aria-disabled="true"])')]
+        const items = [...(inSub ? sub! : menu).querySelectorAll<HTMLElement>('button:not([aria-disabled="true"])')]
         const i = items.indexOf(document.activeElement as HTMLElement)
         const n = items.length
         const next = e.key === 'Home' ? 0 : e.key === 'End' ? n - 1 : i < 0 ? (e.key === 'ArrowUp' ? n - 1 : 0) : (i + (e.key === 'ArrowDown' ? 1 : -1) + n) % n
@@ -1668,9 +1801,9 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
       const focusIn = (): void => {
         const menu = document.querySelector<HTMLElement>('.unified-block-menu')
         if (!menu) { if (++tries < 10) focusRaf = requestAnimationFrame(focusIn); return }
-        let el = blockMenu.focus === 'turnInto' ? menu.querySelector('[data-sec="turnInto"]')?.nextElementSibling ?? null : null
-        while (el && el.tagName !== 'BUTTON') el = el.nextElementSibling
-        ;((el as HTMLElement | null) ?? menu.querySelector<HTMLElement>('button'))?.focus()
+        const row = blockMenu.focus === 'turnInto' ? menu.querySelector<HTMLElement>('[data-sub="turnInto"]') : null
+        if (row) { openTurnSub(row, true); return } // 直奔「转换为」= 打开子菜单,焦点落在首项
+        menu.querySelector<HTMLElement>('button')?.focus()
       }
       focusRaf = requestAnimationFrame(focusIn)
     }
@@ -1731,7 +1864,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
   const canAskTangu = !readOnly && !!readTangu()?.askInChat
   const askTangu = (view: EditorView, from: number, to: number): void => {
     const quote = askTanguQuote(view.state.doc, from, to, path)
-    if (quote) readTangu()?.askInChat?.(quote)
+    if (quote) readTangu()?.askInChat?.([pageInstructionContext(instructionsOf(view.state.doc), path), quote].filter(Boolean).join('\n\n').slice(0, 20_000))
   }
   // ── 正文 AI(评审 G3-07,拍板 #13)───────────────────────────────────────────────
   // 入口:选区工具栏「AI ▾」(内置动作 + 插件 registerSelectionAction)、`/ai`、空行按空格(缺省关)。不进右键菜单。
@@ -1794,6 +1927,8 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
       ...(before ? { before } : {}),
       ...(after ? { after } : {}),
       title: path.split('/').pop()!.replace(/\.md$/i, ''),
+      pagePath: path,
+      pageInstructions: instructionsOf(view.state.doc),
       ...(action === 'translate' ? { language: translateTargetOf(target.text) } : {}),
     }, { signal, onDelta })
   }
@@ -1875,6 +2010,46 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
    *  在这里归一，再共用 blockToCard 的单事务搬迁与同一套几何/保存链。
    *  **卡里建卡 = 子卡**(2026-08-31 用户拍板:此前 slash 一律 unavailable、块菜单则默默建成顶层卡,
    *  两条入口自相矛盾)。层级写进 fm 的 tree,文档模式立刻呈现为缩进+框,画布模式是父卡右侧一支。 */
+  type TurnItem = { k: BlockKind; icon: typeof Pilcrow; label: string; run: () => void }
+  /** 「转换为 ›」子菜单的项。文字类转换对整张表静默无效(K-10):表格上不列出;「卡片」对不支持的节点不露入口。 */
+  const turnIntoItems = (): TurnItem[] => {
+    const view = layer.getView()
+    if (!view) return []
+    const out: TurnItem[] = []
+    if (!isTableSelected(view)) {
+      const item = (k: BlockKind, icon: typeof Pilcrow, key: string, run: (label: string) => void): void => { const label = t(key); out.push({ k, icon, label, run: () => run(label) }) }
+      item('text', Pilcrow, 'unipage.menu.text', (l) => turnInto({ kind: 'text' }, l))
+      item('h1', Heading1, 'unipage.menu.h1', (l) => turnInto({ kind: 'heading', level: 1 }, l))
+      item('h2', Heading2, 'unipage.menu.h2', (l) => turnInto({ kind: 'heading', level: 2 }, l))
+      item('h3', Heading3, 'unipage.menu.h3', (l) => turnInto({ kind: 'heading', level: 3 }, l))
+      item('bullet', List, 'unipage.menu.bullet', (l) => turnInto({ kind: 'bullet' }, l))
+      item('ordered', ListOrdered, 'unipage.menu.ordered', (l) => turnInto({ kind: 'ordered' }, l))
+      item('task', ListTodo, 'unipage.menu.task', (l) => turnInto({ kind: 'task' }, l))
+      item('quote', TextQuote, 'unipage.menu.quote', (l) => turnInto({ kind: 'quote' }, l))
+      item('callout', Info, 'unipage.menu.callout', (l) => turnIntoSpecial('callout', l))
+      item('fold', ChevronsDown, 'unipage.menu.fold', (l) => turnInto({ kind: 'fold' }, l))
+      item('code', Code2, 'unipage.menu.code', (l) => turnIntoSpecial('code', l))
+    }
+    // 卡片也是块类型,放在「转换为」内与 /card 保持同一信息架构。
+    const selection = view.state.selection
+    if (selection instanceof NodeSelection && !['amadeusCanvasCard', 'amadeusColumnRow', 'amadeusColumnCell', 'list_item'].includes(selection.node.type.name)) {
+      const $at = view.state.doc.resolve(selection.from)
+      let inCell = false
+      for (let depth = $at.depth; depth >= 1; depth--) if ($at.node(depth).type.name === 'amadeusColumnCell') inCell = true
+      if (!inCell) out.push({ k: 'card', icon: StickyNote, label: t('unipage.menu.card'), run: () => withSelectedNode((current) => { makeCard(current) }) })
+    }
+    return out
+  }
+  /** 当前块的类型(行尾灰字 + 子菜单打勾);跨块选区不止一种类型 → null。 */
+  const turnIntoCurrent = (): BlockKind | null => {
+    const view = layer.getView()
+    if (!view || layer.topRangeOf(view)) return null
+    const sel = view.state.selection
+    if (!(sel instanceof NodeSelection)) return null
+    // 把手选中的是列表项(list_item)本身:待办看它自己的 checked,有序 / 无序看父列表
+    if (sel.node.type.name === 'list_item') return sel.node.attrs.checked != null ? 'task' : sel.$from.parent.type.name === 'ordered_list' ? 'ordered' : 'bullet'
+    return blockKindOf(sel.node)
+  }
   const makeCard = (view: EditorView): boolean => {
     const unavailable = (): false => {
       window.dispatchEvent(new CustomEvent('amadeus:toast', {
@@ -2550,6 +2725,25 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
       // ── 插件块表面的接缝(读 fm / 插 markdown):v4 没有块模型,插件对「当前这篇」的读写走这里。 ──
       fmNow: () => foreignFmText(pipe.fm),
       insertMarkdown: (md, where) => (pipe.retired || pipe.readOnly ? false : (hostApi.current?.insertMarkdown(md, where) ?? false)),
+      // 助手回答插回(评审 G3-08):只读 / 锁定实例不登记(聊天那边据此判「没有可插的笔记」);源码模式下 hostApi 为 null → 不接。
+      // 撤销只在「插入这一笔仍是撤销栈顶」时做:文档仍是插入后那一版,**且**统一撤销时间线(画布舞台的形状 / 连线 / Frame
+      // 颜色这类只在 frontmatter 的操作也记在这里)自插入起没动过 —— 否则撤的会是别人的改动(Codex 复核 P1:插入后改了形状
+      // 颜色,舞台仲裁先退 fm 那一格,颜色没了、回答还在)。任一条不满足就拒撤,交给用户在笔记里撤。仲裁与键盘 Cmd+Z 同路。
+      insertReply: readOnly ? undefined : (md, anchor) => {
+        if (pipe.retired || pipe.dead || pipe.readOnly) return null
+        if (!hostApi.current?.insertMarkdown(md, 'cursor', { quiet: true, after: anchor, caretless: !bodyUsed.current })) return null
+        const after = liveView()?.state.doc
+        const tl = undoTimeline
+        const mark = { n: tl.log.length, top: tl.log[tl.log.length - 1], future: tl.future.length }
+        return {
+          undo: () => {
+            const v = liveView()
+            if (!v || !after || v.state.doc !== after || pipe.retired || pipe.dead) return false
+            if (mark.top !== 'pm' || tl.log.length !== mark.n || tl.log[tl.log.length - 1] !== 'pm' || tl.future.length !== mark.future) return false
+            return canvasModeRef.current && stageHist.current ? stageHist.current('undo') : pmUndo(v.state, v.dispatch)
+          },
+        }
+      },
       // ── 只读面板的接缝(大纲 / 字数):v4 正文不进 pageStore,它们读 blocks 只会得空。 ──
       bodyNow: () => pipe.body,
       statsNow: () => statsReader(),
@@ -3130,7 +3324,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
           style={mode === 'source' ? { display: 'none' } : undefined}
           aria-hidden={mode === 'source' || undefined}
           data-bare
-          onFocusCapture={() => { touchActive(); setFocusedBlockApply(stableApply) }}
+          onFocusCapture={() => { touchActive(); bodyUsed.current = true; setFocusedBlockApply(stableApply) }}
           onPointerDownCapture={touchActive}
         >
           {/* 模式钮(AFFiNE 同位:页面右上)。整篇零画布数据时也照常显示 —— 画布是任意笔记随时
@@ -3151,11 +3345,14 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
             onMain={setCanvasMain}
             timeline={undoTimeline}
             histStepRef={stageHist}
+            exportRef={stageExport}
             saveFile={(f) => saveOneFile(path, f)}
             // 粘贴/拖入画布的文字走宿主的同一条解析链(与 insertMd 逐字同源:显示形 → parserCtx)。
             parseMd={(md) => hostApi.current?.parseMd(md) ?? null}
             serializeMd={(frag) => hostApi.current?.serializeMd(frag) ?? null}
+            storedMd={(frag) => hostApi.current?.serializeStored(frag) ?? null}
             onBlocksDeleted={onBlocksDeleted}
+            notePages={() => scoped.getState().pages}
             onCommit={(newRef) => {
               if (newRef) pipe.ownedCards.add(newRef) // 本实例建的卡也算「负责得起」,见 deriveCanvasJson
               syncFromEditor() // 版本推送在 deriveFmFromDoc 里(canvas 行真变了才推)
@@ -3261,7 +3458,8 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
       {/* 只读兜底(B-02):交互层已不在只读下开菜单,这里再挡一层 —— 菜单项全是改文档的动作。 */}
       {blockMenu && !readOnly && (
         <OverlayPortal>
-          <OverlayAt className="ctx-menu unified-block-menu" role="menu" aria-label={t('unipage.menu.aria')} x={blockMenu.x} y={blockMenu.y} onClick={(e) => e.stopPropagation()}>
+          <OverlayAt className="ctx-menu unified-block-menu" role="menu" aria-label={t('unipage.menu.aria')} x={blockMenu.x} y={blockMenu.y} onClick={(e) => e.stopPropagation()}
+            onMouseOver={(e) => { if (turnSub && !(e.target as HTMLElement).closest('[data-sub]')) closeTurnSubSoon() }}>
             {canAskTangu && (
               <>
                 {/* 块级 AI 入口排首位(Notion ⋮⋮ 的 Ask AI 同位)。不走 withBlocks:那条收尾会把焦点拽回编辑器,
@@ -3280,36 +3478,23 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
                 <div className="ubm-sep" role="separator" />
               </>
             )}
-            <div className="ubm-label" role="presentation" data-sec="turnInto">{t('unipage.menu.turnInto')}</div>
-            {/* 文字类转换对整张表静默无效(K-10):表格上不列出,换成下面的表格区;「卡片」对表格照常可用。 */}
-            {!isTableSelected(layer.getView()) && (
-              <>
-                <button role="menuitem" tabIndex={-1} onClick={() => turnInto({ kind: 'text' }, t('unipage.menu.text'))}><Pilcrow size={13} /> {t('unipage.menu.text')}</button>
-                <button role="menuitem" tabIndex={-1} onClick={() => turnInto({ kind: 'heading', level: 1 }, t('unipage.menu.h1'))}><Heading1 size={13} /> {t('unipage.menu.h1')}</button>
-                <button role="menuitem" tabIndex={-1} onClick={() => turnInto({ kind: 'heading', level: 2 }, t('unipage.menu.h2'))}><Heading2 size={13} /> {t('unipage.menu.h2')}</button>
-                <button role="menuitem" tabIndex={-1} onClick={() => turnInto({ kind: 'heading', level: 3 }, t('unipage.menu.h3'))}><Heading3 size={13} /> {t('unipage.menu.h3')}</button>
-                <button role="menuitem" tabIndex={-1} onClick={() => turnInto({ kind: 'bullet' }, t('unipage.menu.bullet'))}><List size={13} /> {t('unipage.menu.bullet')}</button>
-                <button role="menuitem" tabIndex={-1} onClick={() => turnInto({ kind: 'ordered' }, t('unipage.menu.ordered'))}><ListOrdered size={13} /> {t('unipage.menu.ordered')}</button>
-                <button role="menuitem" tabIndex={-1} onClick={() => turnInto({ kind: 'task' }, t('unipage.menu.task'))}><ListTodo size={13} /> {t('unipage.menu.task')}</button>
-                <button role="menuitem" tabIndex={-1} onClick={() => turnInto({ kind: 'quote' }, t('unipage.menu.quote'))}><TextQuote size={13} /> {t('unipage.menu.quote')}</button>
-                <button role="menuitem" tabIndex={-1} onClick={() => turnIntoSpecial('callout', t('unipage.menu.callout'))}><Info size={13} /> {t('unipage.menu.callout')}</button>
-                <button role="menuitem" tabIndex={-1} onClick={() => turnInto({ kind: 'fold' }, t('unipage.menu.fold'))}><ChevronsDown size={13} /> {t('unipage.menu.fold')}</button>
-                <button role="menuitem" tabIndex={-1} onClick={() => turnIntoSpecial('code', t('unipage.menu.code'))}><Code2 size={13} /> {t('unipage.menu.code')}</button>
-              </>
-            )}
-            {/* 卡片也是块类型，放在“转换为”内与 /card 保持同一信息架构；不支持的节点不露入口。 */}
+            {/* 「转换为 ›」(10-02 用户拍板 c2):12 个转换项不再平铺,收成一行 + 侧拉子菜单(与 Chat「添加会话 ›」同一种二级菜单);
+                行尾灰字 = 当前类型,子菜单里同一项打勾。子菜单是 portal 里的兄弟浮层(不嵌在本菜单里:毛玻璃会让本菜单成为
+                fixed 后代的包含块,见 genesis-glass theme.css 的长警告)。 */}
             {(() => {
-              const view = layer.getView()
-              const selection = view?.state.selection
-              if (!view || !(selection instanceof NodeSelection)) return null
-              if (['amadeusCanvasCard', 'amadeusColumnRow', 'amadeusColumnCell', 'list_item'].includes(selection.node.type.name)) return null
-              const $at = view.state.doc.resolve(selection.from)
-              for (let depth = $at.depth; depth >= 1; depth--) {
-                if ($at.node(depth).type.name === 'amadeusColumnCell') return null
-              }
+              const items = turnIntoItems()
+              if (!items.length) return null
+              const kind = turnIntoCurrent()
+              // 整张卡片选中时「卡片」不在可转换项里(卡不能再转卡),行尾灰字单独补
+              const cur = items.find((it) => it.k === kind) ?? (kind === 'card' ? { icon: StickyNote, label: t('unipage.menu.card') } : undefined)
+              const Icon = cur?.icon ?? Pilcrow
               return (
-                <button role="menuitem" tabIndex={-1} onClick={() => withSelectedNode((current) => { makeCard(current) })}>
-                  <StickyNote size={13} /> {t('unipage.menu.card')}
+                <button role="menuitem" tabIndex={-1} data-sub="turnInto" aria-haspopup="menu" aria-expanded={!!turnSub}
+                  className={turnSub ? 'is-open' : undefined}
+                  onMouseEnter={(e) => openTurnSub(e.currentTarget, false)}
+                  onClick={(e) => openTurnSub(e.currentTarget, true)}>
+                  <Icon size={13} /> {t('unipage.menu.turnInto')}
+                  <span className="ubm-sub-tail">{cur?.label}<ChevronRight size={13} /></span>
                 </button>
               )
             })()}
@@ -3422,6 +3607,20 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
               <Trash2 size={13} /> {t('unipage.menu.delete')}
             </button>
           </OverlayAt>
+          {turnSub && (() => {
+            const current = turnIntoCurrent()
+            return (
+              <OverlayAt className="ctx-menu unified-block-submenu" role="menu" aria-label={t('unipage.menu.turnInto')}
+                x={turnSub.x} y={turnSub.y} anchorTop={turnSub.anchorTop}
+                onClick={(e) => e.stopPropagation()} onMouseEnter={() => clearTimeout(subCloseTimer.current)}>
+                {turnIntoItems().map(({ k, icon: Icon, label, run }) => (
+                  <button key={k} role="menuitemradio" aria-checked={k === current} tabIndex={-1} data-kind={k} onClick={run}>
+                    <Icon size={13} /> {label}{k === current && <Check size={13} className="ubm-check" />}
+                  </button>
+                ))}
+              </OverlayAt>
+            )
+          })()}
         </OverlayPortal>
       )}
     </>

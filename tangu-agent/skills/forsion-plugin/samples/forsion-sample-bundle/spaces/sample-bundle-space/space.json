@@ -2,6 +2,7 @@
   "id": "sample-bundle-space",
   "name": { "zh": "示例捆绑 Space", "en": "Sample Bundle Space" },
   "icon": "boxes",
+  "iconFile": "icon.svg",
   "version": "1.0.0",
   "layout": {
     "main": [

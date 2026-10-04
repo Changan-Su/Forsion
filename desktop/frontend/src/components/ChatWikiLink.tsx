@@ -217,7 +217,7 @@ async function openPdfCitation(path: string, page?: number, quote?: string): Pro
 /** 行号/文件引用点击:同 PDF —— Desk 开着就在演出区开 WsFileView,否则退主区 tab。
  *  ⚠️直播格碰撞(agent 正在流式编辑同一份文件):deskShowFile 会保住直播格不打断,此时
  *  goto 事件没有 WsFileView 接 —— 刻意如此(流式演出优先),编辑一结束格子落盘,再点就正常。 */
-async function openFileCitation(path: string, name: string, line: LineLoc | null): Promise<void> {
+export async function openFileCitation(path: string, name: string, line: LineLoc | null): Promise<void> {
   const { useApp } = await import('../stores/appStore')
   const { activeId, desktopConfig } = useApp.getState()
   if (UI_MODE !== 'mobile' && deskAcceptsFiles(!!desktopConfig?.agentDeskEnabled) && activeId) {

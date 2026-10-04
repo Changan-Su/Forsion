@@ -3,7 +3,7 @@ const fs = require('fs')
 const os = require('os')
 const path = require('path')
 const assert = require('node:assert/strict')
-const { _electron: electron } = require('playwright-core')
+const electron = require('./lib/launch-electron.cjs')
 const { startStubEngine } = require('./lib/stub-engine.cjs')
 const ROOT = path.resolve(__dirname, '..')
 const OUT = process.env.AUTOMATION_ARTIFACT_DIR || path.join(os.tmpdir(), 'forsion-automation-space')
@@ -57,7 +57,11 @@ async function main() {
     const openSpace = async () => { await win.locator('button.rb-space').filter({ hasText: /^自动化$|^Automation$/ }).first().click() }
     // Ribbon labels may be visually collapsed, so use the accessible title when needed.
     const autoButton = win.locator('button.rb-space[aria-label="自动化"], button.rb-space[aria-label="Automation"]').first()
-    if (await autoButton.count()) await autoButton.click(); else await openSpace()
+    // 10-02 起上区只常驻 5 个 Space,自动化缺省收在「…」里:先点「…」展开再点,点完 collapse() 收起。
+    const revealAuto = async () => { if (!(await autoButton.isVisible().catch(() => false))) { await win.locator('.rb-top .rb-more').first().click().catch(() => {}); await win.waitForTimeout(300) } }
+    const collapse = () => win.evaluate(() => document.querySelector('.rb-open-top .rb-more')?.click())
+    await revealAuto()
+    if (await autoButton.count()) { await autoButton.click(); await collapse() } else await openSpace()
     await win.waitForSelector('.auto-home')
     const showGuide = async () => {
       await win.getByRole('button', { name: '自动化操作', exact: true }).click()
@@ -182,7 +186,10 @@ async function main() {
     await win.evaluate(() => { localStorage.setItem('tangu_locale', 'en'); localStorage.setItem('forsion_theme', 'dark') })
     await win.reload({ waitUntil: 'domcontentloaded' })
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1600, 1000))
-    await win.locator('button.rb-space[aria-label="Automation"]').click()
+    await win.waitForSelector('.dv-groupview', { timeout: 40000 })
+    await revealAuto()
+    await autoButton.click()
+    await collapse()
     await win.locator('.auto-home').waitFor({ timeout: 30000 })
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1600, 1000))
     await win.locator('.auto-starter').first().click()

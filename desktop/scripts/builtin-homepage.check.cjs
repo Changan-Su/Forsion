@@ -43,7 +43,7 @@
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
-const { _electron: electron } = require('playwright-core')
+const electron = require('./lib/launch-electron.cjs')
 
 const ROOT = path.join(__dirname, '..')
 const APP_ROOT = process.env.FORSION_APP_ROOT || ROOT
@@ -77,12 +77,12 @@ async function ribbonSpaces(win) {
   const home = await win.evaluate(read('.rb-home'))
   const more = win.locator('.rb-top .rb-more').first()
   if (!(await more.count().catch(() => 0))) return [...bar, ...home]
-  await more.hover()
-  await win.waitForTimeout(500)
-  const hidden = await win.evaluate(read('.rb-fly'))
-  await win.mouse.move(700, 700) // 移开,否则浮层挡住后续点击
-  await win.waitForTimeout(400)
-  return [...bar, ...home, ...hidden]
+  await more.click() // 10-02 起「…」= 展开:上区铺满整条,藏着的就在条上;读完再点一下收起
+  await win.waitForTimeout(300)
+  const all = await win.evaluate(read('.rb-top'))
+  await more.click()
+  await win.waitForTimeout(300)
+  return [...all, ...home]
 }
 
 /** ribbon 上的 Space 名 + 主页视图可见性 + 坞格子 + 活动 Space + 启动器卡片。 */
@@ -151,12 +151,13 @@ async function enterSpace(win, names, id) {
     return false
   })()` : null
   let hit = (byId && await win.evaluate(byId)) || await win.evaluate(click('.rb-top')) || await win.evaluate(click('.rb-home'))
-  if (!hit) { // 条上没有 → 可能被收进「…」溢出浮层(见 ribbonSpaces 的注释)
+  if (!hit) { // 条上没有 → 可能被收进「…」(见 ribbonSpaces 的注释):点开展开,点中后收起
     const more = win.locator('.rb-top .rb-more').first()
     if (await more.count().catch(() => 0)) {
-      await more.hover()
-      await win.waitForTimeout(500)
-      hit = await win.evaluate(click('.rb-fly'))
+      await more.click()
+      await win.waitForTimeout(300)
+      hit = (byId && await win.evaluate(byId)) || await win.evaluate(click('.rb-top'))
+      await win.evaluate(() => document.querySelector('.rb-open-top .rb-more')?.click())
     }
   }
   await win.waitForTimeout(1800)

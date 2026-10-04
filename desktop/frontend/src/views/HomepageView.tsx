@@ -890,17 +890,7 @@ export function HomepageView(_props: ViewProps) {
 
         {/* 收纳架只保留一排摘要;“全部”与空白右键都进入独立二级收纳层。 */}
         <section className="hp-spaces" data-total={tiles.length}>
-          <header className="hp-spaces-head">
-            <div className="hp-spaces-title">
-              <span>{t('home.spaces')}</span>
-              <span className="hp-spaces-count">{t('home.spaceCount', { n: spaceCount })}</span>
-            </div>
-            <div className="hp-spaces-actions">
-              <button type="button" onClick={(event) => { event.stopPropagation(); newFolder() }} title={t('home.newFolder')}>
-                <FolderPlus size={13} /> <span>{t('home.newFolder')}</span>
-              </button>
-            </div>
-          </header>
+          {/* 不再有标题行(「Spaces · N 个 Space」「新建收纳夹」):新建收纳夹在「全部 Spaces」里(10-02 用户拍板 v8)。 */}
 
           <DndContext
             sensors={sensors}

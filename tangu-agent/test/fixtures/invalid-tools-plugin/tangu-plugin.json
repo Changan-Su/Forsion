@@ -1,0 +1,7 @@
+{
+  "id": "invalid-tools-fixture",
+  "name": "Invalid tools regression fixture",
+  "version": "1.0.0",
+  "apiVersion": 1,
+  "entry": "index.mjs"
+}

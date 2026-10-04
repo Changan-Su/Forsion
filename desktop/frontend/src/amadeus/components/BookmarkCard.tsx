@@ -21,53 +21,9 @@ registerMessages({
 
 const metaCache = new Map<string, LinkMeta | null>()
 
-/** youtube.com/watch?v= | youtu.be/ | /shorts/ | /embed/ → 视频 id。 */
-export function youtubeId(url: string): string | null {
-  try {
-    const u = new URL(url)
-    const host = u.hostname.replace(/^www\./, '')
-    if (host === 'youtu.be') return u.pathname.slice(1).split('/')[0] || null
-    if (host.endsWith('youtube.com')) {
-      if (u.pathname === '/watch') return u.searchParams.get('v')
-      const m = /^\/(?:shorts|embed)\/([\w-]{6,})/.exec(u.pathname)
-      if (m) return m[1]
-    }
-  } catch {
-    /* 非法 URL */
-  }
-  return null
-}
-
-/** B 站视频链接 → `{bvid, page, t}`。`t` 兼容 `?t=90` / `?t=1m30s` / `#t=90`。
- *  实测(2026-08-28,player.bilibili.com):`?t=90` 起播准确落在 01:30。**运行期没有 seek 通道**
- *  ——跨源 iframe 且 B 站无官方 postMessage 契约,换时刻只能重挂播放器。 */
-export function bilibiliRef(url: string): { bvid: string; page: number; t: number | null } | null {
-  const m = /bilibili\.com\/video\/(BV[\w]+)/i.exec(url) || /^\s*(BV[\w]{10})\s*$/.exec(url)
-  if (!m) return null
-  let page = 1
-  let t: number | null = null
-  try {
-    const u = new URL(url)
-    page = parseInt(u.searchParams.get('p') || '1', 10) || 1
-    t = timeParam(u)
-  } catch { /* 裸 BV 号 */ }
-  return { bvid: m[1], page, t }
-}
-
-/** URL 里的起播秒:`?t=` / `&start=` / `#t=`。三形:`90` / `1m30s` / `01:30`。
- *  YouTube 官方文档的 `t` 用 `1m30s`,`start` 用纯秒;两者都收。 */
-export function timeParam(u: URL): number | null {
-  const raw = u.searchParams.get('t') ?? u.searchParams.get('start') ?? (/^#t=(.+)$/.exec(u.hash)?.[1] ?? null)
-  if (raw == null) return null
-  const s = raw.trim().replace(/s$/i, '')
-  let m: RegExpExecArray | null
-  if ((m = /^(?:(\d+)h)?(?:(\d+)m)?(\d+)?$/i.exec(s)) && (m[1] || m[2])) {
-    return (+(m[1] || 0)) * 3600 + (+(m[2] || 0)) * 60 + (+(m[3] || 0))
-  }
-  if ((m = /^(?:(\d+):)?([0-5]?\d):([0-5]\d)$/.exec(s))) return (+(m[1] || 0)) * 3600 + +m[2] * 60 + +m[3]
-  if (/^\d+$/.test(s)) return +s
-  return null
-}
+// Native editor and public publishing use one provider URL codec.
+import { youtubeId, bilibiliRef, timeParam } from '@amadeus-shared/publishing/platformVideo'
+export { youtubeId, bilibiliRef, timeParam } from '@amadeus-shared/publishing/platformVideo'
 
 /** 站点不发预览图时的**生成封面**:主机名哈希 → 固定色相 + 首字母。
  *  纯 DOM/CSS,不联网、不会再失败 —— 「每张书签卡都有封面」这句话是靠它成立的,不是靠抓图

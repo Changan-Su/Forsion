@@ -16,5 +16,5 @@ export const useWorkspace = (UI_MODE === 'mobile' || IS_MINI_PANEL ? singleUseWo
 
 // activeMainPanel(api) 恒由调用方以 `api ? …` 守卫,单列态 api=null 不调用 → 始终导出桌面版。
 // scheduleWorkspaceSave 内部 saveCurrent 以 api 守卫,单列态无 api → no-op,安全。
-export { activeMainPanel, scheduleWorkspaceSave } from './dockviewStore'
+export { activeMainPanel, scheduleWorkspaceSave, bootLayoutFellThrough, namedLayoutRestorable, liveLayoutOwner } from './dockviewStore'
 export type { MainTab, SideTab } from './dockviewStore'

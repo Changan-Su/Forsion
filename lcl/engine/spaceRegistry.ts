@@ -6,8 +6,9 @@ import { create } from 'zustand'
 import { IS_MINI_PANEL, IS_TRANSIENT_MINI_PANEL } from './uiMode'
 import { supportsMiniPanel } from './miniPanel'
 import type { SpaceDefinition } from './types'
-import { useWorkspace } from './workspaceStore'
-import { loadLayout, saveLayout, clearLayout, loadNamedLayout, saveNamedLayout } from './layoutPersist'
+import { useWorkspace, liveLayoutOwner } from './workspaceStore'
+import { loadLayout, saveLayout, clearLayout, loadNamedLayout, saveNamedLayout, listNamedLayouts, deleteNamedLayout } from './layoutPersist'
+import { clearSingleColumnLayouts } from './singleColumnStore'
 
 const ACTIVE_KEY = IS_MINI_PANEL ? 'forsion_mini_active_space' : 'forsion_tangu_active_space'
 /** 每个 Space 的布局存进既有命名布局表,用此前缀的保留名。 */
@@ -23,7 +24,9 @@ function loadActive(): string {
  *  会把「此刻尚未注册」的 id 就地归一成产品默认(用户 L0 Space 走异步装载、或该 Space 已被删),
  *  它跑在 installEngine 的启动策略**之前**。读归一后的值 = 把上一程的布局归档到别人名下:
  *  上次退出在用户 Space U → 归一成 tangu → U 的现场被写进 `space:tangu`,U 自己的槽还停在上上次
- *  (Codex 评审 2026-08-13 抓的 High)。 */
+ *  (Codex 评审 2026-08-13 抓的 High)。
+ *  这份快照可信的前提:归一后的值**从不落盘**(registerSpaces 只改内存)。落了盘,下一程的快照就是回落 Space,
+ *  等于把上面那个坑挪到下次启动再踩。 */
 export const BOOT_ACTIVE_SPACE_ID: string = loadActive()
 
 interface SpaceState {
@@ -54,7 +57,9 @@ export const useSpaceStore = create<SpaceState>((set, get) => ({
     if (IS_MINI_PANEL && !supportsMiniPanel(toSpace)) return
     const ws = useWorkspace.getState()
 
-    if (!IS_MINI_PANEL) ws.saveNamed(spaceLayoutName(fromId)) // 1. 存出当前 Space 布局
+    // 1. 存出当前布局,存进**它的主人**的槽。平时主人就是 fromId;启动还原出异步 Space 的现场、而它还没就位时
+    //    (内存里的活动 id 是回落 Space),屏上是那个 Space 的,按 fromId 存就写进了回落 Space 的槽。
+    if (!IS_MINI_PANEL) ws.saveNamed(spaceLayoutName(liveLayoutOwner() ?? fromId))
     set({ activeSpaceId: toId })           // 2. 先切 id(defaultBuilder 经 getActiveSpace 取新 Space)
     try { if (!IS_TRANSIENT_MINI_PANEL) localStorage.setItem(ACTIVE_KEY, toId) } catch { /* ignore */ }
     if (IS_MINI_PANEL) {
@@ -63,13 +68,15 @@ export const useSpaceStore = create<SpaceState>((set, get) => ({
       return
     }
     ws.setSidebarDefaults(toSpace.sidebarDefaults) // 3. 两路都需(applyNamed 不跑 build)
-    ws.setSideProfile(toId, toSpace.resizableSides ?? {}, toSpace.sideDefaultScale) // 载入该 Space 记住的可拖宽侧栏宽度(须先于 applyNamed/build 的 pinSides)
+    ws.setSideProfile(toId, toSpace.resizableSides ?? {}, toSpace.sideDefaultScale, toSpace.bottomSpan) // 载入该 Space 记住的可拖宽侧栏宽度(须先于 applyNamed/build 的 pinSides)
+    ws.setPinned(toSpace.pinned)
 
     // 4. 还原目标 Space:有命名布局则应用(applyNamed 不持久化,补 saveCurrent);否则 resetLayout 重建+持久化
     const saved = ws.namedLayouts().includes(spaceLayoutName(toId))
     // per-tab 历史由 applyNamed / resetLayout 各自在换布局时清(两种 store 都是)。⚠️ 这里别再补一次 reset:
     // 它跑在重建之后,会把还原出来的前台文件视图刚记下的栈底一起清掉 → 后退恒灰(09-16 active-tab.e2e)。
-    if (saved && ws.applyNamed(spaceLayoutName(toId))) ws.saveCurrent()
+    // 已存布局里缺了固定 View(插件停用时被清场、Space 后来新增了固定项…)→ 补回来;resetLayout 那一路由 build() 负责。
+    if (saved && ws.applyNamed(spaceLayoutName(toId))) { ws.ensurePinned(); ws.saveCurrent() }
     else ws.resetLayout()
   },
 }))
@@ -96,17 +103,49 @@ export function setActiveSpaceCold(id: string): void {
  *     直接退出的那个 Space 槽里还是上上次的样子,不补这一手就等于每次退出都丢一次。
  *  ② 再把目标 Space 的命名布局搬进布局键,交给 onReady 的 tryRestoreLayout 自然吃到;没有则清空,
  *     落空 → buildDefault 建该 Space 的干净默认。
- *  from === to(最常见:固定启动 Space 恰好就是上次退出那个)只归档,布局键原样留着。 */
+ *  from === to(最常见:固定启动 Space 恰好就是上次退出那个)只归档,布局键原样留着。
+ *
+ *  布局键是给谁摆的,认**信封自己记的归属**(layout.space,与布局同一次写盘),老存档没记才信 fromId。
+ *  两者对不上,多半是上一程目标 Space 始终没就位(插件没装上 / 配方没过闸 / 没等到它就退出了),屏上一直是回落 Space、
+ *  从它的默认布局起步:fromId 仍是目标 Space,布局键却是回落 Space 的。只信 fromId 就会把它归档进目标 Space 的槽。
+ *  少数是真现场:上一程换 Space 时归档没落盘,布局键被下面那道闸保住了,活动 id 却已写成目标。 */
 export function adoptSpaceLayoutCold(fromId: string, toId: string): void {
   const cur = loadLayout()
-  if (cur) saveNamedLayout(spaceLayoutName(fromId), cur)
-  if (fromId === toId) return
+  const owner = cur?.space || fromId
+  const slot = spaceLayoutName(owner)
+  // 归属对不上的那份,只在主人的槽还空着时才归档(没东西可盖,它又是仅存的一份)。槽里已有存档就不动:
+  // 进 space:<fromId> 是记到别人名下;盖进 space:<owner> 是拿一份「默认布局起步」的东西顶掉回落 Space 自己攒下的存档
+  // (正常启动里插件就位前那一两秒退出,布局键里就是一份原样的默认)。
+  // ponytail: 于是回落 Space 已有存档时,那一程在它里面开的标签只活在布局键里,目标 Space 回来 / 改成固定启动别的 Space
+  // 时随之丢掉(期间切过一次 Space 就已由 setActiveSpace 存进槽)。要保住得先能分清「原样的默认」和「用户动过的」。
+  const mismatch = owner !== fromId
+  const archive = !!cur && (!mismatch || !loadNamedLayout(slot))
+  if (archive) saveNamedLayout(slot, cur)
+  if (owner === toId) return
+  // 布局键正是此刻内存里的活动 Space 自己的(目标还没注册 → 活动的是回落 Space,onReady 给它摆)→ 留着原样还原,
+  // 目标就位后由 settleAsyncStartupSpace 换过去。目标永远不来(插件已删 / 单品变体存着别家的 id)就一直这样用、照常存。
+  if (mismatch && owner === useSpaceStore.getState().activeSpaceId) return
   // ⚠️ 归档没真落盘(配额满 / 私密模式 —— saveNamedLayout 是吞掉异常的 void)就别再动布局键:
   // 那是这份布局**仅存的一份**,搬走或清掉即等于直接丢。读回来确认过再往下(Codex 评审抓的 Medium)。
-  if (cur && !loadNamedLayout(spaceLayoutName(fromId))) return
+  if (archive && !loadNamedLayout(slot)) return
   const next = loadNamedLayout(spaceLayoutName(toId))
-  if (next) saveLayout(next)
+  if (next) saveLayout({ ...next, space: toId }) // 槽里的就是 toId 的:归属以槽名为准(老存档没记 / 记的是别人)
   else clearLayout()
+}
+
+/** 丢掉**全部** Space 的已存布局 + 本窗当前布局,下次进入各自按默认重建。布局规则换代时的一次性迁移用
+ *  (2026-10-03 固定 View:此前的布局里固定项可能早被关掉 / 顶掉 / 拖走)。按前缀清而不是按已注册的 Space 清:
+ *  插件 / 用户 Space 异步注册,启动这一刻还不在表里。桌面与单列两套存档一起清(同源可能两种壳都跑过)。 */
+let layoutsResetThisBoot = false
+/** 本次启动做过 resetSpaceLayouts():当前布局键是空的,onReady 摆出来的是回落 Space 的默认布局而不是「上次退出」那个
+ *  Space 的现场 —— 异步就位的 Space 据此重建自己的默认布局,而不是把回落 Space 的内容认成自己的。 */
+export const spaceLayoutsWereReset = (): boolean => layoutsResetThisBoot
+
+export function resetSpaceLayouts(): void {
+  layoutsResetThisBoot = true
+  for (const name of Object.keys(listNamedLayouts())) if (name.startsWith('space:')) deleteNamedLayout(name)
+  clearLayout()
+  clearSingleColumnLayouts()
 }
 
 /** 「把这个 Space 固定到系统桌面」的宿主接缝(2026-08-20)。引擎不认识 Capacitor / 安卓,

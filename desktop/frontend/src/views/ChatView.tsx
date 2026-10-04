@@ -16,7 +16,9 @@ import { TeamEditor } from '../components/TeamEditor'
 import { postMuseFeedback, saveAgentScheduleEntry } from '../services/backendService'
 import { runTaskCard } from './chat2/taskLanding'
 import { quoteInChatPanel } from './chat2/chatPanelQuote'
-import { DESK_DRAFT_KEY, resolveDeskPath } from '../stores/deskPlan'
+import { askOriginOf, insertReplyToNote } from './chat2/insertToNote'
+import { amadeusAvailable } from '../features/runtime'
+import { resolveDeskPath } from '../stores/deskPlan'
 import { useDeskAcceptsFiles } from '../amadeus/plugins/deskCompanion'
 import { ErrorBoundary } from '../components/ErrorBoundary'
 import { EditorialMessage } from './chat2/EditorialMessage'
@@ -442,8 +444,9 @@ export function ChatView({ leaf, params }: ViewProps) {
   const saveEdit = (): void => { if (editingId && editText.trim()) { s.editUserMessage(editingId, editText.trim(), activeId) } setEditingId(null) }
 
   const hasMessages = activeMessages.length > 0
-  // Agent Desk:桌面端默认开(移动端没有);用户可在设置→高级关掉,窄容器由 CSS 容器查询兜底隐藏。
-  const deskEnabled = !params.childSurface && !studioChat && UI_MODE !== 'mobile' && !!s.desktopConfig?.agentDeskEnabled
+  // Agent Desk 只在会话开始后显示:草稿与已建 ID 但未发消息的新会话都不挂载,也不占右侧车道。
+  // 桌面端默认开(移动端没有);用户可在设置→高级关掉,窄容器由 CSS 容器查询兜底隐藏。
+  const deskEnabled = !!activeId && hasMessages && !params.childSurface && !studioChat && UI_MODE !== 'mobile' && !!s.desktopConfig?.agentDeskEnabled
   // Desk 收不收文件(与 store 写入口、引用条同一判据):always 伴随面生效时 Desk 只演伴随面,点开文件一律走新标签页。
   const deskTakesFiles = useDeskAcceptsFiles(deskEnabled)
   // 团队成员列表嵌入 Pin Summary 的运行状态,Agent Desk 保持独立。
@@ -547,6 +550,8 @@ export function ChatView({ leaf, params }: ViewProps) {
                       // 建议芯片 = 用户自己把这句话打进去按了回车(运行中则落进 steer 等待区)。
                       onSuggest: params.readOnly ? undefined : (text) => void s.send(text, [], undefined, undefined, undefined, activeId),
                       onTask: (card, landing) => runTaskCard(card, landing, activeId),
+                      // 回答插回笔记(G3-08):由「问 Tangu」发起的对话优先插回出处那篇;宿主没有 Amadeus 编辑能力就不出按钮。
+                      onInsertNote: amadeusAvailable() ? (text) => void insertReplyToNote(text, askOriginOf(activeMessages, m.id)) : undefined,
 
                       ...(ttsEnabled ? { onSpeak: (text) => speak(m.id, text) } : {}),
                     }}
@@ -840,8 +845,7 @@ export function ChatView({ leaf, params }: ViewProps) {
             openWsFile(targetFor(f, s.cfg, activeId || '', mvCfg.execMode))
           }}
         />
-        {/* 草稿态(activeId=null)也在场:伴随面开聊前就要有;不挂 key → 首条消息发出不重挂 */}
-        {deskEnabled ? <DeskCard sessionId={activeId ?? DESK_DRAFT_KEY} /> : null}
+        {deskEnabled && activeId ? <DeskCard sessionId={activeId} /> : null}
       </div>}
       </div>
       {deskEnabled && activeId && !childSelections[activeId] ? <AgentDesk sessionId={activeId} /> : null}

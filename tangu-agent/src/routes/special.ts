@@ -78,7 +78,7 @@ async function appendMuseFeedback(userId: string, line: string): Promise<void> {
   } catch { /* 反馈写失败不阻断主流程 */ }
 }
 
-/** 云端(web/安卓)只有按轮 Historian,每用户一份。回完整形状(Muse 等取缺省)让前端 dirty 判定稳定;cloud:true 让前端只露 Historian 的四项。 */
+/** 云端(web/安卓)只有按轮 Historian,每用户一份。回完整形状(Muse 等取缺省)让前端 dirty 判定稳定;cloud:true 让前端只露 Historian 的五项。 */
 const cloudConfigView = (h: UserHistorianConfig) => ({
   config: { ...SPECIAL_AGENTS_DEFAULTS, historian: { ...SPECIAL_AGENTS_DEFAULTS.historian, ...h } },
   defaults: { historianPrompt: '' },
@@ -126,7 +126,7 @@ router.get('/agent/special/config', authMiddleware, async (req: AuthRequest, res
 
 router.post('/agent/special/config', authMiddleware, async (req: AuthRequest, res) => {
   if (!deps().profile.capabilities.hostExec) {
-    // 只收 historian 的四个键;旧版前端整包 POST 的 muse / mode / prompt 等一律忽略。
+    // 只收 historian 的五个键;旧版前端整包 POST 的 muse / mode / prompt 等一律忽略。
     try { res.json(cloudConfigView(await saveUserHistorianConfig(req.user!.userId, (req.body || {}).historian || {}))); } catch (e: any) { res.status(400).json({ detail: e?.message || 'save config failed' }); }
     return;
   }

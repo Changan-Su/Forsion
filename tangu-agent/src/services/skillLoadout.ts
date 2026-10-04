@@ -5,6 +5,10 @@
  *      正是云端 token 暴涨的根因。
  *   ② 全文物化到 <appId>/.agent/skills/<id>/SKILL.md（云空间规范 + run_python 可读）。
  *   ③ 模型按需用 use_skill 工具加载某技能完整说明，只在相关时付费、且只付一次。
+ *
+ * 「全部」(未配置)与「指定清单」(enabled_skill_ids)两种模式只差**列哪些**,列法完全一样。
+ * 此前指定清单会把 ≤8000 字符的正文整篇内联:一个 agent 被固化成清单后 system 从 ≈43KB 涨到 149–164KB
+ * (23 篇正文 ≈127KB,反馈 6a239e58)。「想让某条指令每轮生效」该写进人设 / HARNESS.md,不是靠技能体量碰巧够小。
  */
 import { presetOf } from '../core/presetTable.js';
 import { deps } from '../seams/runtime.js';
@@ -14,13 +18,9 @@ import { currentDisplayAgentSlug } from '../seams/runContext.js';
 
 const getSkill = (id: string) => deps().brain.assets.getSkill(id);
 
-// 小体量技能(行为指令)直接内联进 prompt（始终生效）；大体量技能(参考文档，如 pptx/docx
-// 各 10 万+字)只放目录、经 use_skill 按需加载——避免每轮全量注入导致 token 暴涨。
-const INLINE_SKILL_MAX_CHARS = 8000;
-
 export interface SkillLoadout {
   enabledSkillIds: string[];
-  /** 进 system prompt 的技能段（0-2 段：Skill Instructions / Available Skills，构建文本与原内联逐字节一致）。 */
+  /** 进 system prompt 的技能段（0-2 段：Available Skills / Skills shared by other agents）。 */
   sections: string[];
   /**
    * 本轮 /skill 点名的技能（指针，**不内联正文进 system**）：调用方据此在「尾部 user 消息」拼
@@ -28,20 +28,25 @@ export interface SkillLoadout {
    * 每条 /skill 都不改 system 前缀字节,前缀缓存照常命中(对比旧做法:正文进 system,/skill 轮整段前缀 miss)。
    */
   requested: Array<{ id: string; name: string; description: string }>;
+  /** 目录里**本该**列出的全部技能(收起之前;含别的 agent 共享来的),每条附它那一行的字节数。
+   *  用量巡检(services/loadoutUsage.ts)拿它对「哪些技能一直列着却没人装载」。 */
+  catalog: Array<{ id: string; name: string; bytes: number }>;
 }
 
+/** shelved = 本 agent 自己收起的技能 id(HARNESS.md 的 equip 条目):**只从目录里摘掉那一行**,
+ *  enabledSkillIds 不动 —— use_skill 按 id 照常放行(笔记段里列着它收起了哪些)。/skill 点名的不受影响。 */
 export async function loadSkillLoadout(
   userId: string,
   appId: string,
   agentConfig: any,
+  shelved?: ReadonlySet<string>,
 ): Promise<SkillLoadout> {
   // chat 预设:用户可扩展技能体系整体不在(方案 D23)——目录段不注、use_skill 不暴露(工具面由 core/presetTable 硬闸拒)。
-  if (!presetOf(agentConfig?.preset).skills) return { enabledSkillIds: [], sections: [], requested: [] };
+  if (!presetOf(agentConfig?.preset).skills) return { enabledSkillIds: [], sections: [], requested: [], catalog: [] };
   // 旧客户端的空数组([])按「未配置」处理;skillsConfigured=true 则允许显式卸下全部技能。避免旧客户端传空
   // 列表时把整段技能从 system prompt 抹掉(表现为「装完技能后本轮 agent 不知道有哪些 skills,刷新才好」)。
   const explicit = Array.isArray(agentConfig.enabledSkillIds) && (agentConfig.enabledSkillIds.length > 0 || agentConfig.skillsConfigured === true);
   let enabledSkillIds: string[] = explicit ? agentConfig.enabledSkillIds : [];
-  let inlineSkills: Array<{ name: string; body: string }> = [];
   let deferredSkills: Array<{ id: string; name: string; description: string }> = [];
   // 未显式配置 + 非云端沙箱 → 默认列出全部本地技能(按需 use_skill 目录)。
   // 用 `!== 'sandbox'`(而非 `=== 'host'`):execMode 偶发缺失/未回填时仍兜底列出,
@@ -66,18 +71,8 @@ export async function loadSkillLoadout(
       await Promise.all(enabledSkillIds.map((id: string) => getSkill(id).catch(() => null)))
     ).filter(Boolean) as any[];
     for (const s of skills) {
-      const body = String(s.content || '').trim();
-      // 共享技能即使被显式选中也保持按需加载；切换装备策略不应让别的 Agent 的指令每轮内联。
-      if (String(s.id || '').startsWith('local:@') && (body || String(s.description || '').trim())) {
-        deferredSkills.push({ id: s.id, name: s.name, description: String(s.description || '').trim() });
-      } else if (body && body.length <= INLINE_SKILL_MAX_CHARS) {
-        inlineSkills.push({ name: s.name, body });
-      } else if (body) {
-        deferredSkills.push({ id: s.id, name: s.name, description: String(s.description || '').trim() });
-      } else if (String(s.description || '').trim()) {
-        // 无正文、仅描述：当作小指令内联
-        inlineSkills.push({ name: s.name, body: String(s.description).trim() });
-      }
+      const description = String(s.description || '').trim();
+      if (String(s.content || '').trim() || description) deferredSkills.push({ id: s.id, name: s.name, description });
       if (s.content) void materializeSkill(userId, appId, s.id, s.content).catch(() => {});
     }
   }
@@ -94,25 +89,19 @@ export async function loadSkillLoadout(
     ).filter(Boolean) as any[];
     for (const s of skills) {
       if (!enabledSkillIds.includes(s.id)) enabledSkillIds = [...enabledSkillIds, s.id]; // 准许 use_skill 访问
-      // 已由尾部「指定技能」强指令点名,从普通目录/内联摘掉避免重复列出。
+      // 已由尾部「指定技能」强指令点名,从普通目录摘掉避免重复列出。
       deferredSkills = deferredSkills.filter((d) => d.id !== s.id);
-      inlineSkills = inlineSkills.filter((i) => i.name !== s.name);
       requested.push({ id: s.id, name: s.name, description: String(s.description || '').trim() });
       if (s.content) void materializeSkill(userId, appId, s.id, s.content).catch(() => {});
     }
   }
 
+  const ownLine = (s: { id: string; name: string; description: string }): string => `- ${s.name} (id: \`${s.id}\`)${s.description ? ` — ${s.description}` : ''}`;
+  const catalog = deferredSkills.map((s) => ({ id: s.id, name: s.name, bytes: Buffer.byteLength(ownLine(s)) }));
+  if (shelved?.size) deferredSkills = deferredSkills.filter((d) => !shelved.has(d.id));
   const sections: string[] = [];
-  if (inlineSkills.length) {
-    sections.push(
-      '## Skill Instructions\n\n' +
-        inlineSkills.map((s) => `### ${s.name}\n${s.body}`).join('\n\n---\n\n'),
-    );
-  }
   if (deferredSkills.length) {
-    const lines = deferredSkills
-      .map((s) => `- ${s.name} (id: \`${s.id}\`)${s.description ? ` — ${s.description}` : ''}`)
-      .join('\n');
+    const lines = deferredSkills.map(ownLine).join('\n');
     // coding 预设加一行降位提示:WB-Bench 实测 80/80 题反射式装载技能(每题 ≈1 个纯管理往返),
     // Codex 对谈定性为「错误路由策略」。非 coding 文本逐字节零变化(回归防线同本文件其余段)。
     const codingHint = agentConfig?.preset === 'coding'
@@ -131,17 +120,20 @@ export async function loadSkillLoadout(
   // 用户为该 agent **显式**配过装备(含显式卸空)= 「就这些」,借用池也不塞——委派路径的「卸空全部技能」同样要成立。
   if (!explicit && agentConfig.execMode !== 'sandbox' && hostExecEnabled()) {
     const shared = await listSharedAgentSkills(currentDisplayAgentSlug() || null).catch(() => []);
-    if (shared.length) {
-      const lines = shared.map((s) => `- ${s.name} (id: \`${s.id}\`, from ${s.ownerName})${s.description ? ` — ${s.description}` : ''}`).join('\n');
+    const sharedLine = (s: (typeof shared)[number]): string => `- ${s.name} (id: \`${s.id}\`, from ${s.ownerName})${s.description ? ` — ${s.description}` : ''}`;
+    for (const s of shared) catalog.push({ id: s.id, name: s.name, bytes: Buffer.byteLength(sharedLine(s)) });
+    const listed = shelved?.size ? shared.filter((s) => !shelved.has(s.id)) : shared;
+    enabledSkillIds = [...enabledSkillIds, ...shared.map((s) => s.id)];
+    if (listed.length) {
+      const lines = listed.map(sharedLine).join('\n');
       sections.push(
         '## Skills shared by other agents (load on demand)\n' +
           'These belong to other agents and were written for their environment. When a task matches one, borrow it: **call `use_skill` with its id** to get the full instructions, then follow its stated scope. Leave them alone for unrelated tasks.\n\n' +
           lines,
       );
-      enabledSkillIds = [...enabledSkillIds, ...shared.map((s) => s.id)];
     }
   }
-  return { enabledSkillIds, sections, requested };
+  return { enabledSkillIds, sections, requested, catalog };
 }
 
 function hostExecEnabled(): boolean {

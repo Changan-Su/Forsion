@@ -3,9 +3,10 @@ const fs = require('fs')
 const os = require('os')
 const path = require('path')
 const assert = require('node:assert/strict')
-const { _electron: electron } = require('playwright-core')
+const electron = require('./lib/launch-electron.cjs')
 const { startStubEngine } = require('./lib/stub-engine.cjs')
 const ROOT = path.join(__dirname, '..')
+const APP_ROOT = process.env.FORSION_APP_ROOT || ROOT
 const OUT = process.env.ONBOARDING_SHOTS || '/tmp/forsion-onboarding-review'
 const results = []
 async function main() {
@@ -18,10 +19,27 @@ async function main() {
     { id: 'local/hidden', name: 'Hidden model', provider: 'Ollama', source: 'direct', modelType: 'llm' },
     { id: 'image', name: 'Image-only model', provider: 'Image', source: 'forsion', modelType: 'image_gen' },
   ]
-  const stub = await startStubEngine({ models })
+  const specialConfig = {
+    historian: { enabled: true, modelId: 'history-model', everyRounds: 7, firstRoundTrigger: true, autoEmoji: false, mode: 'independent', prompt: 'Keep this prompt', harnessCandidates: true },
+    muse: { enabled: true, modelId: 'muse-model', restartWindowHours: 1, maxRestartsPerWindow: 3, maxIterationsPerCycle: 20, maxTodosPerWindow: 5,
+      supervisorPollMinutes: 5, activeHours: { start: 9, end: 17 }, allowedFolders: ['/my/project'], mode: 'ask', heartbeatMinutes: 120, notify: 'digest', escalateTo: '' },
+  }
+  const originalConfig = structuredClone(specialConfig)
+  const specialWrites = []
+  let failSpecialSave = false
+  const stub = await startStubEngine({ models, override: async ({ path: p, method, body }) => {
+    if (p !== '/agent/special/config') return undefined
+    if (method === 'POST') {
+      const patch = await body(); specialWrites.push(patch)
+      if (failSpecialSave) return { __code: 503, body: { error: 'simulated save failure' } }
+      if (patch.historian) Object.assign(specialConfig.historian, patch.historian)
+      if (patch.muse) Object.assign(specialConfig.muse, patch.muse)
+    }
+    return { config: specialConfig }
+  } })
   let app
   try {
-    app = await electron.launch({ args: [`--user-data-dir=${path.join(home, 'userdata')}`, '--lang=zh-CN', ROOT], cwd: ROOT,
+    app = await electron.launch({ args: [`--user-data-dir=${path.join(home, 'userdata')}`, '--lang=zh-CN', APP_ROOT], cwd: ROOT,
       env: { ...process.env, TANGU_HOME: home, TANGU_BACKEND_URL: stub.url, TANGU_CLOUD_URL: stub.url }, timeout: 45000 })
     const win = await app.firstWindow()
     win.setDefaultTimeout(15000)
@@ -35,6 +53,8 @@ async function main() {
       await app.evaluate(({ BrowserWindow }, dimensions) => { const w = BrowserWindow.getAllWindows().find((w) => w.isVisible()); w.setMinimumSize(360, 400); w.setContentSize(...dimensions) }, [width, height])
     }
     async function geometry(name, screenshot = true) {
+      // Let the compositor present the entered step before reviewing its colors/text.
+      await win.waitForTimeout(350)
       await win.locator('.ob-content').evaluate((el) => el.getAnimations().forEach((a) => a.finish()))
       const state = await win.evaluate(() => {
         const shell = document.querySelector('.ob-flow'), content = document.querySelector('.ob-content'), footer = document.querySelector('.ob-footer')
@@ -77,6 +97,29 @@ async function main() {
         await win.locator('.ob-model-search input').fill('')
         await next()
         assert.equal(await win.evaluate(() => window.tangu.getConfig().then((c) => c.modelId)), 'local/qwen')
+        await win.waitForSelector('.ob-background-layout[aria-busy="false"]')
+        await geometry(`${prefix}-background`)
+        const historian = win.getByRole('switch', { name: 'Historian', exact: true })
+        const muse = win.getByRole('switch', { name: 'Muse', exact: true })
+        if (locale === 'zh' && dimensions[0] === 1280) {
+          assert.equal(await historian.getAttribute('aria-checked'), 'true')
+          assert.equal(await muse.getAttribute('aria-checked'), 'true')
+          failSpecialSave = true
+          await historian.click(); await win.waitForSelector('.ob-background-error')
+          assert.equal(await historian.getAttribute('aria-checked'), 'true', 'failed save retains the current choice')
+          await geometry(`${prefix}-background-save-failure`)
+          failSpecialSave = false
+          await historian.click(); await win.waitForFunction(() => document.querySelector('[aria-label="Historian"][role="switch"]')?.getAttribute('aria-checked') === 'false')
+          await muse.click(); await win.waitForFunction(() => document.querySelector('[aria-label="Muse"][role="switch"]')?.getAttribute('aria-checked') === 'false')
+          assert.deepEqual(specialWrites, [{ historian: { enabled: false } }, { historian: { enabled: false } }, { muse: { enabled: false } }])
+          assert.deepEqual(specialConfig.historian, { ...originalConfig.historian, enabled: false })
+          assert.deepEqual(specialConfig.muse, { ...originalConfig.muse, enabled: false })
+          await geometry(`${prefix}-background-disabled`)
+        } else {
+          assert.equal(await historian.getAttribute('aria-checked'), 'false', 're-entering preserves Historian opt-out')
+          assert.equal(await muse.getAttribute('aria-checked'), 'false', 're-entering preserves Muse opt-out')
+        }
+        await next()
         await geometry(`${prefix}-appearance`)
         await win.locator('.ob-sections button').nth(1).click(); await geometry(`${prefix}-colors`)
         await win.locator('.ob-sections button').nth(2).click(); await geometry(`${prefix}-font`)
@@ -110,18 +153,20 @@ async function main() {
     }
     // Dark mode and narrow responsive surface, through the real preference path.
     await size(1024, 720)
-    await win.reload(); await win.waitForSelector('.ob-flow'); await next(); await next(); await win.waitForSelector('.ob-model-choice'); await next()
+    await win.reload(); await win.waitForSelector('.ob-flow'); await next(); await next(); await win.waitForSelector('.ob-model-choice'); await next(); await next()
     await win.locator('.ob-sections button').first().click()
     await win.locator('.ob-appearance-options .seg button').nth(1).click()
     await geometry('en-dark-appearance')
+    await win.locator('.ob-footer .btn.ghost').first().click(); await win.waitForSelector('.ob-background-layout[aria-busy="false"]'); await geometry('en-dark-background')
     await win.locator('.ob-footer .btn.ghost').first().click(); await win.waitForSelector('.ob-model-choice'); await geometry('en-dark-models')
-    await win.locator('.ob-model-default').click(); await next()
+    await win.locator('.ob-model-default').click(); await next(); await next()
     assert.equal(await win.evaluate(() => window.tangu.getConfig().then((c) => c.modelId)), '')
     await size(390, 844)
     await geometry('en-narrow-appearance')
+    await win.locator('.ob-footer .btn.ghost').first().click(); await win.waitForSelector('.ob-background-layout[aria-busy="false"]'); await geometry('en-narrow-background')
     await win.locator('.ob-footer .btn.ghost').first().click(); await win.waitForSelector('.ob-model-choice'); await geometry('en-narrow-models')
     await size(1024, 720)
-    await next(); await next(); await next()
+    await next(); await next(); await next(); await next()
     await win.waitForSelector('.ob-env-tools .env-probe-row')
     await size(390, 844)
     await geometry('en-narrow-env')
@@ -131,6 +176,9 @@ async function main() {
     await next()
     await win.waitForSelector('.ob-flow', { state: 'detached' })
     assert.equal(await win.evaluate(() => localStorage.getItem('forsion_tangu_onboarding_done')), '1')
+    assert.equal(specialConfig.historian.enabled, false)
+    assert.equal(specialConfig.muse.enabled, false)
+    assert.equal(specialWrites.length, 3, 'reopening never writes enable defaults over opt-outs')
     assert.equal(errors.length, 0, errors.join('\n'))
     // 完成页指向「设置 → 常规设置 → 本机运行环境」:这个子页必须真的存在,且工具清单排在最前(2.11.4 埋在「连接」页底部没人找得到)。
     await win.locator('.ntf-close').evaluateAll((bs) => bs.forEach((b) => b.click())).catch(() => {})

@@ -23,7 +23,7 @@ import '../blocks' // 属性类型/块注册 side-effect,独立挂载时不能�
 import './tableSurface.css'
 import { DatabaseEmbed } from '../blocks/database/DatabaseEmbed'
 import type { DbRow } from '@amadeus-shared/db/schema'
-import { useTheme } from '../../stores/themeStore'
+import { useVisualTheme as useTheme } from '../../stores/themeStore'
 import { mountHostReact } from './blockSurface'
 import { foldSummaryMeta, safeAttrs, specToDb, tableCellMeta, validateTableSpec } from './tableSpec'
 import type { TableRow, TableSpec } from './types'

@@ -122,6 +122,7 @@ const SKIP = {
 
 /** bootstrapEngine 里已知的 host 门控。新增门控 = 又一条「web/移动端会静默少一块」的通道,必须登记。 */
 const KNOWN_GATES = {
+  'window.tangu?.restartForUpdate': '桌面宿主的待重启更新入口与本机任务退出保护；web / mobile 不替换 Electron 或本机核心插件，不提供该 IPC。',
   'window.tangu?.account': '共享账号能力：Unit 网页投射安装账号提供方时也显示原生 AccountCard；desktop/mobile 常规产品由 window.tangu?.authStatus 显示相同组件。',
   'window.tangu?.authStatus': '账号卡 rb-account 随 Forsion Extend 出现(auth:* 五通道住在 Extend,authStatus 是桥键;缺包 / 验签失败就没有账号卡)。web / mobile 的 shim 都自带 authStatus,三端照常显示。',
   'window.amadeus': 'Amadeus Space 整体;desktop=IPC 桥 / web=云桥 / mobile=Capacitor 桥,三端都有',
@@ -134,13 +135,14 @@ const KNOWN_GATES = {
   'window.tangu?.submitFeedback': '反馈入口(ribbon 图标 rb-feedback + 命令面板 open-feedback)— 仅桌面',
   'window.tangu?.openMini': 'Mini 卡片命令 — 仅桌面',
   // P1-K8
-  'window.tangu?.unitsList': 'Unit 切换器(Ribbon head rb-unit)— 桌面 = Electron IPC 名册;mobile 也有 unitsList(mobileShim cloudJson,是移动端 UnitsSheet「在哪运行 / 打开设备界面」的数据面,入口 rb-units-mobile 由 mobileEntry 的 installUnitsEntry 装),rb-unit 在移动端照样注册但 SingleColumnHost 只渲染 side=bottom 的项 → 不可见,无害;webShim / unitShim 无此方法 → 两端都不注册。vault 切换仍走 VaultSideSwitch mobile 分支。P1-K7a:features/runtime.ts 的 rosterAvailable() 也读它 —— 手机的跨设备会话分组 / 「在哪运行」选择器的名册(Electron IPC + mobileShim cloudJson;webShim / unitShim 无 → 网页版与设备页不显示,K7 U2 与 §4.7 b6)',
+  'window.tangu?.unitsList': 'Unit 切换器(Ribbon 命令区 rb-unit;移动端注册在 head)— 桌面 = Electron IPC 名册;mobile 也有 unitsList(mobileShim cloudJson,是移动端 UnitsSheet「在哪运行 / 打开设备界面」的数据面,入口 rb-units-mobile 由 mobileEntry 的 installUnitsEntry 装),rb-unit 在移动端注册为 side=head,而 SingleColumnHost 只渲染 side=bottom 的项 → 不可见,无害(桌面 10-02 起改 side=bottom;移动端刻意留 head,免得它冒进 MoreSheet);webShim / unitShim 无此方法 → 两端都不注册。vault 切换仍走 VaultSideSwitch mobile 分支。P1-K7a:features/runtime.ts 的 rosterAvailable() 也读它 —— 手机的跨设备会话分组 / 「在哪运行」选择器的名册(Electron IPC + mobileShim cloudJson;webShim / unitShim 无 → 网页版与设备页不显示,K7 U2 与 §4.7 b6)',
   'window.tangu?.unitHostStatus': 'Unit 切换器(rb-unit)的第二个上架条件,与 unitsList 取或:名册(unitsList)自 Forsion Extend 0.6 起随包出现,unitHostStatus 留在宿主 → 没有 Extend 的桌面切换器照样上架,只是不列账号名下的设备(本地 / 按地址直连 / 允许其他设备连接本机 / 已配对设备都不经云端)。两者同在产品档案的 AGENT_KEYS 里,amadeus / basic 单品照旧都没有;mobileShim / webShim / unitShim 都没有 unitHostStatus → 三端行为不变(mobile 仍凭 unitsList 注册、不可见)。',
   'window.tangu?.unitPage': 'unit 设备页标志(unitShim 注入)— 设备页无 vault 桥仍须装插件宿主;desktop/web/mobile 天然无此标志,行为不变。P1-K7a:它还**无条件**关掉「在哪运行」选择器、设备会话分组与逐台拉会话(features/runtime.ts rosterAvailable,不得经 A 的隧道再驱动 B;设备页在手机视口加载 @mobile/mobileEntry 也同样关)',
   'window.tangu?.checkForUpdates': '启动静默检查更新 — 桌面 electron-updater / 移动端 shim 自己查(网关 /website/config + GitHub releases,见 mobileShim);web 恒最新,天然无',
   'window.tangu?.onUpdaterStatus': '更新状态订阅(启动自动弹「更新」页 + 设置-关于的按钮)— 同上,桌面与移动端都有,web 无',
   'window.tangu?.onInboxOpen': '系统通知点开收件箱 — 仅 Electron(webContents.send);移动端通知未接,点角标进 Space',
   'window.amadeus?.hostCaps': 'Amadeus 桥声明「做不了」的 OS 动作(评审 G2-13):导出 PDF / 在文件管理器中显示 / 系统程序打开附件,对应键**不渲染**。desktop 主进程桥不声明 = 全能做;移动本地库三件 false;云桥与 Unit 网页桥 revealInFileManager=false;移动端(window.tangu?.mobile)导出 PDF 除非桥显式声明 true 否则不给(云桥导出 = window.print,Android WebView 里是空操作,真机未验)。PDF 卡的「打开」走应用内阅读器不受限。判据单源 amadeus/lib/hostCaps.ts',
+  'window.amadeus?.listPageHistory': '页面版本历史(评审 C-20)的「⋯ → 版本历史」:快照存在桌面主进程的库外目录(tanguDataDir()/amadeus-history),只有 desktop 的 preload 桥实现这组可选成员;web 云桥、移动本地库、Unit 网页桥都没有 → 入口**不渲染**(没有本地快照可列,出个空列表比没有更糟)。云端版本接口在 Forsion Extend 里,另议。判据单源 amadeus/lib/hostCaps.ts 的 canPageHistory()',
   // P1-K3
   'window.tangu?.onApprovalOpen': '远程会话待批的系统通知被点击 → 打开会话 — 仅 Electron:通知由桌面主进程 approvalDelivery 订阅本机引擎待批流后发出(webContents.send approval:open)。移动端没有本机引擎、P1 没有原生通知(方案 P2),手机侧走收件箱审批提醒信的「打开会话」按钮(InboxReaderView,共享)与会话列表「等你处理」点(attentionStore,经 useBootstrap 三端共用);web 无此 IPC',
   // P1-K6

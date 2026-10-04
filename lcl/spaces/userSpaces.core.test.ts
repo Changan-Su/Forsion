@@ -27,6 +27,13 @@ describe('parseSpaceJson', () => {
       expect(r.spec.layout.right).toHaveLength(1)
     }
   })
+  it('iconFile 原样带出;写坏了也不拒载整个 Space(图标读不到自有 icon 兜底)', () => {
+    const ok = parseSpaceJson(JSON.stringify({ ...VALID, iconFile: 'icon.svg' }), opts())
+    expect(ok.ok && ok.spec.iconFile).toBe('icon.svg')
+    expect(ok.ok && ok.spec.icon).toBe('target')
+    const bad = parseSpaceJson(JSON.stringify({ ...VALID, iconFile: 7 }), opts())
+    expect(bad.ok && bad.spec.iconFile).toBeUndefined()
+  })
   it('非法 JSON / 非 kebab id / 保留 id 均拒绝', () => {
     expect(parseSpaceJson('not json', opts()).ok).toBe(false)
     expect(parseSpaceJson(JSON.stringify({ ...VALID, id: 'Bad_ID' }), opts()).ok).toBe(false)
@@ -70,6 +77,43 @@ describe('parseSpaceJson', () => {
       expect(parseSpaceJson(JSON.stringify({ ...VALID, layout: { main: [main[0], main[1], { ...main[2], splitFrom }] } }), opts()).ok).toBe(false)
     }
     expect(parseSpaceJson(JSON.stringify({ ...VALID, layout: { main: [main[0], { type: 'outline', splitFrom: 0 }] } }), opts()).ok).toBe(false)
+  })
+  it('pinned:true 标出固定 View(main / left / right);缺省不出现该键;非布尔与底部面板报错', () => {
+    const layout = { main: [{ type: 'chat', pinned: true }, { type: 'outline', pinned: false }], left: [{ type: 'workspace', pinned: true }] }
+    const r = parseSpaceJson(JSON.stringify({ ...VALID, layout }), opts())
+    expect(r.ok).toBe(true)
+    if (r.ok) {
+      expect(r.spec.layout.main).toEqual([{ type: 'chat', pinned: true }, { type: 'outline' }])
+      expect(r.spec.layout.left).toEqual([{ type: 'workspace', pinned: true }])
+    }
+    expect(parseSpaceJson(JSON.stringify({ ...VALID, layout: { main: [{ type: 'chat', pinned: 'yes' }] } }), opts()).ok).toBe(false)
+    expect(parseSpaceJson(JSON.stringify({ ...VALID, layout: { ...VALID.layout, bottom: [{ type: 'outline', pinned: true }] } }), opts()).ok).toBe(false)
+  })
+  it('layout.bottom 可选:声明的视图进底部面板;缺省不出现该键;同样查注册、不许 split', () => {
+    const bottom = [{ type: 'outline', params: { follow: true } }]
+    const r = parseSpaceJson(JSON.stringify({ ...VALID, layout: { ...VALID.layout, bottom } }), opts())
+    expect(r.ok).toBe(true)
+    if (r.ok) expect(r.spec.layout.bottom).toEqual(bottom)
+    const old = parseSpaceJson(JSON.stringify(VALID), opts())
+    expect(old.ok && 'bottom' in old.spec.layout).toBe(false) // 旧配方原样,宿主照旧不碰底部
+    const unknown = parseSpaceJson(JSON.stringify({ ...VALID, layout: { ...VALID.layout, bottom: [{ type: 'timeline' }] } }), opts())
+    expect(unknown.ok).toBe(false)
+    if (!unknown.ok) expect(unknown.error).toContain('timeline')
+    for (const bad of [[{ type: 'outline', split: 'down' }], { type: 'outline' }, [{ params: {} }]]) {
+      expect(parseSpaceJson(JSON.stringify({ ...VALID, layout: { ...VALID.layout, bottom: bad } }), opts()).ok).toBe(false)
+    }
+  })
+
+  it('layout.bottomSpan 可选:四个合法值原样透传,缺省不出现该键,其它值拒收', () => {
+    for (const span of ['right', 'left', 'full', 'main']) {
+      const r = parseSpaceJson(JSON.stringify({ ...VALID, layout: { ...VALID.layout, bottomSpan: span } }), opts())
+      expect(r.ok && r.spec.layout.bottomSpan).toBe(span)
+    }
+    const old = parseSpaceJson(JSON.stringify(VALID), opts())
+    expect(old.ok && 'bottomSpan' in old.spec.layout).toBe(false)
+    for (const bad of ['center', 'justify', 1, null]) {
+      expect(parseSpaceJson(JSON.stringify({ ...VALID, layout: { ...VALID.layout, bottomSpan: bad } }), opts()).ok).toBe(false)
+    }
   })
 })
 

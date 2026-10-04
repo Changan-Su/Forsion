@@ -11,7 +11,7 @@
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
-const { _electron: electron } = require('playwright-core')
+const electron = require('./lib/launch-electron.cjs')
 
 const ROOT = path.resolve(__dirname, '..')
 const arg = (k, d) => (process.argv.find((a) => a.startsWith(`--${k}=`)) || `=${d}`).split('=').slice(1).join('=')
@@ -82,12 +82,6 @@ async function main() {
     await win.locator('#tangu-splash').waitFor({ state: 'detached', timeout: 60_000 }).catch(() => {})
 
     // 会话侧栏 → 新会话(同 plan-live 的入口纪律:按 data-act,不按文案)
-    const picker = win.locator('.t2sw-mode-picker').first()
-    if (await picker.count().catch(() => 0)) {
-      await picker.locator('.t2sw-mode-trigger').click().catch(() => {})
-      await picker.locator('[data-workspace-mode="orbits"]').click().catch(() => {})
-      await sleep(800)
-    }
     const newBtn = win.locator('[data-act="new-chat"]').first()
     await newBtn.waitFor({ state: 'visible', timeout: 90_000 })
     await newBtn.click()

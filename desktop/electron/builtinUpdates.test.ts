@@ -217,3 +217,16 @@ describe('minitar 两份一致', () => {
     expect(body(path.join(__dirname, 'minitar.ts'), 5)).toBe(body(path.join(__dirname, '../../tangu-agent/src/plugins/minitar.ts'), 1))
   })
 })
+
+it('reports checking, download, staged, cached pending and per-package failure to the UI', async () => {
+  const buf = tgz(pkgFiles('0.5.6'))
+  const states: import('../shared/corePlugins').CorePluginUpdate[] = []
+  const reg = registry(serve(R1, '0.5.6', buf))
+  await check(reg.fetch, { onStatus: (s) => states.push(s) })
+  expect(states.map((s) => s.phase)).toContain('downloading')
+  expect(states.at(-1)).toMatchObject({ phase: 'staged', installedVersion: '0.5.5', pendingVersion: '0.5.6' })
+  await check(reg.fetch, { onStatus: (s) => states.push(s) })
+  expect(states.at(-1)?.phase).toBe('staged')
+  await check(registry({}).fetch, { onStatus: (s) => states.push(s) })
+  expect(states.at(-1)).toMatchObject({ phase: 'error', pendingVersion: '0.5.6' })
+})

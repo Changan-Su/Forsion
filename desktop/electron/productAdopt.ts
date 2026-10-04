@@ -12,7 +12,7 @@
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { dirIdentity, type DirIdentity } from './dirIdentity'
+import { dirIdentity, sameDirIdentity, type DirIdentity } from './dirIdentity'
 
 const NAME_MAX = 100
 
@@ -54,7 +54,7 @@ export async function createCreationDir(projectsRoot: string, name: string): Pro
   throw new Error('could not reserve a folder name')
 }
 
-const same = (a: DirIdentity | null, b: DirIdentity | null): boolean => !!a && !!b && a.dev === b.dev && a.ino === b.ino
+const same = (a: DirIdentity | null, b: DirIdentity | null): boolean => sameDirIdentity(a, b)
 
 /** child 是 parent 本身或在它里面:沿 child(真实路径)逐级往上比**目录身份**,不比字符串 ——
  *  大小写敏感 / 不敏感的卷都对(按平台猜大小写规则,在大小写敏感的 APFS 上会把 `App` 当成 `app`)。 */

@@ -173,18 +173,18 @@
  * 没有这块时,暗色下会泄漏亮色 :root 中性色到深底上(= 之前「暗色完全异常」的根因)。 */
 :root.dark {
   --bg: #2a292b;
-  --bg-card: #353538;
+  --bg-card: #323134;
   --bg-glass: rgba(28, 26, 22, 0.9);
-  --sidebar-bg: #323235;
+  --sidebar-bg: #262528;
   --text: #f2efe8;
   --text-light: rgba(242, 239, 232, 0.82);
   --text-muted: #aca59b;
   --text-faint: #a39e98;
   --text-ghost: rgba(242, 239, 232, 0.3);
-  /* ⚠️ 曾是 #34302a(奶油暖调残留):比本块的中性 --bg-card #353538 还**暗**,卡片/胶囊在暗色下
+  /* ⚠️ 曾是 #34302a(奶油暖调残留):比当时本块的中性 --bg-card #353538 还**暗**,卡片/胶囊在暗色下
    * 全被描了一圈黑边(用户实报)。暗色里的边线必须比所在表面亮,浅色里必须比表面暗——
    * 这条不变量由 scripts/settings-ui.check.cjs 逐主题×明暗钉住。 */
-  --border: #3f3f43;
+  --border: #3e3d41;
   --shadow: rgba(0, 0, 0, 0.4);
   --accent: #f8f7f6;
   --accent-hover: #f9f8f8;
@@ -249,8 +249,9 @@ html:root[data-mode='light'] {
   --btn-shadow: none;
   --icon-shadow: none;
 }
+/* 暗色同一档「淡」:层次主要靠底色小台阶,阴影只在浮层边缘留一点(10-03 用户定 d3;.35/.6 + 顶边微光被否「太重」,别往重里调)。 */
 html:root[data-mode='dark'] {
-  --card-shadow: 0 1px 3px rgba(0, 0, 0, 0.07), 0 8px 24px -6px rgba(0, 0, 0, 0.14);
+  --card-shadow: 0 1px 3px rgba(0, 0, 0, 0.10), 0 8px 24px -6px rgba(0, 0, 0, 0.18);
   --btn-shadow: none;
   --icon-shadow: none;
 }
@@ -559,7 +560,7 @@ a:hover { color: var(--accent-ink); }
 .project-menu-search input { flex: 1; min-width: 0; background: none; border: none; outline: none; color: var(--text); font-size: var(--t2c-font-control, 12px); }
 .project-menu-search input::placeholder { color: var(--text-faint); }
 .project-menu-list { max-height: 240px; overflow-y: auto; overscroll-behavior: contain; }
-.project-menu .project-menu-item { gap: 8px; font-size: var(--t2c-font-control, 12px); }
+.project-menu .project-menu-item { gap: 8px; font-size: var(--menu-text-size); }
 .project-menu .project-menu-item:hover,
 .project-menu .project-menu-item:focus-visible { outline: none; background: var(--menu-hover); color: var(--text); }
 .project-menu .project-menu-item.active { background: var(--accent-light); color: var(--accent-ink); }
@@ -869,7 +870,8 @@ a:hover { color: var(--accent-ink); }
 .ctx-menu .ctx-separator { height: 1px; background: var(--border); margin: 4px; }
 .ctx-menu .ctx-shortcut { margin-left: auto; padding-left: 12px; color: var(--text-faint); font: inherit; font-size: var(--ui-font-caption, 11px); }
 /* 菜单小节标题(说明这一串选项是干什么的);`.ctx-menu` 是右键菜单外壳的唯一正典,变体写在它旁边。 */
-.ctx-menu .ctx-head { padding: 4px 8px 5px; font-size: var(--ui-font-caption, 11px); color: var(--text-faint); }
+/* 分组小标题全 app 一种写法(10-02 c1):与斜杠菜单分组、块菜单「转换为」、多维表菜单小节同为 12px / 中等 / 次要色。 */
+.ctx-menu .ctx-head { padding: 4px 8px 5px; font-size: var(--ui-font-meta, 12px); font-weight: 500; color: var(--text-muted); }
 
 /* ─── 主区 ─── */
 .main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
@@ -1460,6 +1462,10 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
   padding: 3px 24px 7px;
   border: 0;
 }
+/* 卡头 = 标题 + 右侧附加操作(对话里的「插入笔记」);只有操作没标题时只占一枚按钮的高度。 */
+.sketch-card-head { display: flex; align-items: center; gap: 4px; padding-right: 6px; }
+.sketch-card-head > .sketch-card-title { flex: 1; min-width: 0; }
+.sketch-card-head > .t2-iconbtn { margin-left: auto; }
 .sketch-frame { display: block; width: 100%; border: 0; background: transparent; }
 .sketch-card-note { padding: 12px; font-size: var(--ui-font-body, 13px); color: var(--text-muted); }
 /* 折叠夹:默认高度上限 = 右侧车道那两张卡(任务概览 / Agent Desk)的高度,用户口径「一样高」。
@@ -1684,8 +1690,9 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
   width: 100%;
   min-height: var(--menu-item-min-height);
   padding: var(--menu-item-pad-block) var(--menu-item-pad-inline);
-  border-radius: var(--radius-md);
-  font-size: var(--ui-font-meta, 12px);
+  /* 与笔记「…」菜单同字号、同行内圆角(10-02 用户拍板 c1b;此前 12px / 圆角 md) */
+  border-radius: var(--radius-sm);
+  font-size: var(--menu-text-size);
   line-height: 1.4;
   color: var(--text-light);
   text-align: left;
@@ -1815,7 +1822,7 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
    overflow-y:auto 会把它整块裁掉(表现为「点了行没反应」)。 */
 .composer-menu--model { right: 0; width: var(--menu-select-width); min-width: 0; max-width: none; max-height: none; overflow: visible; }
 .composer-menu--portal { position: fixed; right: auto; bottom: auto; margin: 0; pointer-events: auto; }
-.cm-row { display: flex; align-items: center; gap: 8px; width: 100%; min-height: var(--menu-item-min-height); padding: var(--menu-item-pad-block) var(--menu-item-pad-inline); border-radius: var(--radius-md); font-size: var(--t2c-font-control, 12px); line-height: 1.4; color: var(--text-light); text-align: left; }
+.cm-row { display: flex; align-items: center; gap: 8px; width: 100%; min-height: var(--menu-item-min-height); padding: var(--menu-item-pad-block) var(--menu-item-pad-inline); border-radius: var(--radius-sm); font-size: var(--menu-text-size); line-height: 1.4; color: var(--text-light); text-align: left; }
 .cm-row:hover, .cm-row.is-open { background: var(--menu-hover); color: var(--text); }
 .cm-row-k { flex: none; }
 .cm-row-v { flex: 1; min-width: 0; text-align: right; color: var(--text-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -3004,6 +3011,9 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
 .settings-row-control > input { width: min(100%, 220px); }
 .settings-row-wide-control { flex: 0 1 410px; min-width: 260px; }
 .settings-number-input { max-width: 110px; text-align: right; font-variant-numeric: tabular-nums; }
+/* 设置 → 浏览器 → Chrome 扩展:连接码(整段可选中)+ 行内按钮 */
+.settings-inline-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 6px; min-width: 0; }
+.settings-code-chip { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 2px 7px; border: var(--border-width) solid var(--border); border-radius: var(--radius-sm); color: var(--text-muted); font-family: var(--font-mono); font-size: var(--ui-font-caption, 11px); user-select: all; }
 .settings-switch {
   position: relative;
   flex: 0 0 auto;
@@ -4222,7 +4232,7 @@ html.dark .brand-logo--dark { display: inline-block; }
   position: fixed;
   z-index: 100;
   min-width: 232px;
-  padding: 5px;
+  padding: var(--menu-shell-padding);
   background: var(--bg-card);
   border: var(--border-width) solid var(--border);
   border-radius: var(--radius-md);
@@ -4257,8 +4267,9 @@ html.dark .brand-logo--dark { display: inline-block; }
   align-items: center;
   gap: 8px;
   width: 100%;
-  padding: 7px 10px;
-  font-size: var(--ui-font-meta, 12px);
+  min-height: var(--menu-item-min-height);
+  padding: var(--menu-item-pad-block) var(--menu-item-pad-inline);
+  font-size: var(--menu-text-size);
   color: var(--text);
   border-radius: var(--radius-sm);
   text-align: left;
@@ -5005,17 +5016,18 @@ body[data-file-drag] .shell-work::after {
   from { opacity: 0; scale: 0.985; }
   to { opacity: 1; scale: 1; }
 }
+/* 名单 = 所有「弹出来的菜单」;10-02 去掉匹配不到任何元素的 .add-menu,补上 Chat 的 / @ 菜单、账户菜单、仪表盘添加菜单。 */
 html:root :is(.ctx-menu, .ui-popover, .amx-db-pop, .slash-menu, .wiki-suggest, .paste-as-menu,
-  .project-menu, .composer-menu, .cm-sub, .engine-picker, .add-menu, .add-menu-sub, .unitsw-menu,
-  .rb-menu, .rb-iconpick) {
+  .project-menu, .composer-menu, .cm-sub, .engine-picker, .add-menu-sub, .unitsw-menu,
+  .rb-menu, .rb-iconpick, .t2c-menu, .account-pop, .dash-add-menu) {
   animation: ui-menu-enter var(--menu-enter-duration) var(--menu-enter-ease);
   transform-origin: top left;
 }
-html:root :is(.project-menu, .composer-menu, .engine-picker, .add-menu) { transform-origin: bottom left; }
+html:root :is(.project-menu, .composer-menu, .engine-picker, .t2c-menu) { transform-origin: bottom left; }
 @media (prefers-reduced-motion: reduce) {
   html:root :is(.ctx-menu, .ui-popover, .amx-db-pop, .slash-menu, .wiki-suggest, .paste-as-menu,
-    .project-menu, .composer-menu, .cm-sub, .engine-picker, .add-menu, .add-menu-sub, .unitsw-menu,
-    .rb-menu, .rb-iconpick) { animation: none; }
+    .project-menu, .composer-menu, .cm-sub, .engine-picker, .add-menu-sub, .unitsw-menu,
+    .rb-menu, .rb-iconpick, .t2c-menu, .account-pop, .dash-add-menu) { animation: none; }
 }
 
 /* uiux-c: 全局键盘焦点环(U-43)。

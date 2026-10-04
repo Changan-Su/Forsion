@@ -2,7 +2,7 @@
 // 先 npm run build，再 node scripts/toggle-block.electron.cjs。
 const fs = require('fs'), os = require('os'), path = require('path')
 const assert = require('node:assert/strict')
-const { _electron: electron } = require('playwright-core')
+const electron = require('./lib/launch-electron.cjs')
 const { startStubEngine } = require('./lib/stub-engine.cjs')
 const { skipOnboarding } = require('./lib/skip-onboarding.cjs')
 const ROOT = path.resolve(__dirname, '..')

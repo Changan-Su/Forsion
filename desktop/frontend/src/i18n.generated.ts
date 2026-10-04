@@ -412,12 +412,12 @@ registerMessages({
     "en": "How should Tangu actions be approved?"
   },
   "input.approval.readonlyDesc": {
-    "zh": "改文件、跑命令、联网，每次都先问我",
-    "en": "Always ask before editing files, running commands or using the internet"
+    "zh": "改文件、跑命令前都先问我",
+    "en": "Asks before editing files or running commands"
   },
   "input.approval.autoEditDesc": {
-    "zh": "工作区内可直接改文件，跑命令才问我",
-    "en": "Edits files in the workspace freely, asks before running commands"
+    "zh": "工作区内可直接改文件，跑命令、写工作区外才问我",
+    "en": "Edits files in the workspace freely; asks before running commands or writing outside it"
   },
   "input.approval.fullAutoDesc": {
     "zh": "不受限地访问网络和你电脑上的任何文件",
@@ -1005,8 +1005,8 @@ registerMessages({
     "en": "Which model powers voice input"
   },
   "settings.asr.chooseHint": {
-    "zh": "选中即用。本地=离线、不计额度；云端=Forsion 按时长计费，或你自带 provider 走自己的 key。",
-    "en": "Click to use. Local = offline, no quota; Cloud = Forsion billed by duration, or your own provider with your key."
+    "zh": "输入框的麦克风键用它把你说的话转成文字。选中即用。本地=离线、不计额度；云端=Forsion 按时长计费，或你自带 provider 走自己的 key。",
+    "en": "The composer's microphone button uses it to turn your speech into text. Click to use. Local = offline, no quota; Cloud = Forsion billed by duration, or your own provider with your key."
   },
   "settings.asr.localName": {
     "zh": "本地 SenseVoice",
@@ -1863,11 +1863,6 @@ registerMessages({
   "spaces.saved": { "zh": "已另存为 Space「{name}」（见左侧功能条顶部）", "en": "Saved as Space \"{name}\" (see the ribbon top)" },
   "spaces.deleteConfirm": { "zh": "删除 Space「{name}」？其布局配方将从磁盘移除。", "en": "Delete Space \"{name}\"? Its recipe will be removed from disk." },
   "view.outline": { "zh": "大纲", "en": "Outline" },
-  "workspace.mode.auto": { "zh": "自动", "en": "Auto" },
-  "workspace.mode.autoTip": { "zh": "跟随主视图自动切换（对话→会话/文件，笔记→笔记/文件）", "en": "Follows the focused main view (chat → sessions/files, note → notes/files)" },
-  "workspace.mode.sessions": { "zh": "会话", "en": "Sessions" },
-  "workspace.mode.files": { "zh": "文件", "en": "Files" },
-  "workspace.mode.notes": { "zh": "笔记", "en": "Notes" },
   "workspace.notesUnavailable": { "zh": "笔记功能在当前环境不可用。", "en": "Notes are unavailable in this environment." },
   "outline.empty": { "zh": "当前视图没有大纲。", "en": "No outline for the current view." },
 })
@@ -1877,10 +1872,10 @@ registerMessages({
   "chat.action.speak": { "zh": "朗读", "en": "Read aloud" },
   "chat.action.stopSpeak": { "zh": "停止朗读", "en": "Stop reading" },
   "settings.tts.sectionTitle": { "zh": "语音朗读（TTS）", "en": "Read aloud (TTS)" },
-  "settings.tts.intro": { "zh": "OpenAI 兼容 /audio/speech 端点。填 <providerId>/<模型> 或在上方 provider 里声明「语音模型」后直接填模型 id；留空关闭朗读。", "en": "OpenAI-compatible /audio/speech endpoint. Use <providerId>/<model>, or declare TTS models on a provider above and use the model id directly; leave empty to disable." },
-  "settings.tts.model": { "zh": "TTS 模型", "en": "TTS model" },
+  "settings.tts.intro": { "zh": "把回复念出来：消息下方的朗读键和自动朗读用它，通话不用它。走 OpenAI 兼容 /audio/speech：填 <providerId>/<模型>，或在提供方里声明「语音模型」后直接填模型 id；留空关闭朗读。", "en": "Reads replies aloud: used by the read-aloud button under messages and by auto-read, not by voice calls. Uses an OpenAI-compatible /audio/speech endpoint: enter <providerId>/<model>, or declare TTS models on a provider and use the model id directly; leave empty to turn read-aloud off." },
+  "settings.tts.model": { "zh": "朗读模型", "en": "Read-aloud model" },
   "settings.tts.modelPlaceholder": { "zh": "如 siliconflow/FunAudioLLM/CosyVoice2-0.5B 或 openai/tts-1", "en": "e.g. siliconflow/FunAudioLLM/CosyVoice2-0.5B or openai/tts-1" },
-  "settings.tts.voice": { "zh": "音色", "en": "Voice" },
+  "settings.tts.voice": { "zh": "朗读音色", "en": "Read-aloud voice" },
   "settings.tts.voicePlaceholder": { "zh": "provider 特定音色 id，如 alloy;OpenAI 等部分服务必填，留空则不传该参数", "en": "Provider-specific voice id, e.g. alloy; required by some providers (OpenAI), omitted when empty" },
   "settings.tts.speed": { "zh": "语速（0.5–2）", "en": "Speed (0.5–2)" },
   "settings.tts.autoSpeak": { "zh": "新回复完成后自动朗读", "en": "Auto-read new replies" },
@@ -1893,11 +1888,11 @@ registerMessages({
 
 // ── 百炼音色工作室:声音复刻 + 声音设计(2026-07-03)──
 registerMessages({
-  "settings.tts.studio.title": { "zh": "百炼音色工作室", "en": "Bailian voice studio" },
-  "settings.tts.studio.hint": { "zh": "用阿里云百炼复刻你的声音或用文字描述设计音色。音色与合成模型绑定，「使用」时会自动切换到对应模型。复刻 ¥0.01/个，设计 ¥0.2/个。", "en": "Clone your voice or design one from a text description via Alibaba Bailian. Voices are bound to their synthesis model — applying a voice switches the model automatically. Cloning ¥0.01/voice, design ¥0.2/voice." },
+  "settings.tts.studio.title": { "zh": "百炼朗读音色工作室", "en": "Bailian read-aloud voice studio" },
+  "settings.tts.studio.hint": { "zh": "用阿里云百炼复刻你的声音，或用文字描述设计音色。音色只能配创建时选的模型朗读，「使用」时会自动切到那个模型。Qwen3-TTS 复刻 ¥0.01/个，其余模型复刻免费；设计 ¥0.2/个。", "en": "Clone your voice or design one from a text description via Alibaba Cloud Bailian. A voice only works with the model it was created for, so applying a voice switches the read-aloud model to match. Cloning costs ¥0.01 per voice on Qwen3-TTS and is free on the other models; design costs ¥0.2 per voice." },
   "settings.tts.studio.needProvider": { "zh": "配置一个 baseUrl 指向阿里云百炼（dashscope.aliyuncs.com/compatible-mode/v1）的 provider 后，可在此复刻/设计音色。", "en": "Add a provider whose baseUrl points to Alibaba Bailian (dashscope.aliyuncs.com/compatible-mode/v1) to clone/design voices here." },
   "settings.tts.studio.cloneTitle": { "zh": "声音复刻", "en": "Voice cloning" },
-  "settings.tts.studio.cloneHint": { "zh": "上传 10–20 秒清晰人声（WAV/MP3/M4A,≤10MB，单声道 ≥24kHz，无背景音乐/他人声，不能是歌声）；创建成功自动采用。需对该声音拥有合法使用权。", "en": "Upload 10–20s of clean speech (WAV/MP3/M4A, ≤10MB, mono ≥24kHz, no background music/other voices, no singing); applied automatically on success. You must hold rights to the voice." },
+  "settings.tts.studio.cloneHint": { "zh": "选一个复刻模型，再照着文案录一段，或选一个 10–20 秒的清晰人声录音（无背景音乐或他人声，不能是歌声）；创建成功自动采用。录音质量直接决定像不像。需对该声音拥有合法使用权。", "en": "Pick a clone model, then record the passage or choose a clean 10–20 second voice recording (no background music or other voices, no singing). The voice is applied automatically once created. Recording quality decides how close the clone sounds. You must hold the rights to the voice." },
   "settings.tts.studio.designTitle": { "zh": "声音设计", "en": "Voice design" },
   "settings.tts.studio.designPromptPlaceholder": { "zh": "描述想要的声音，如：年轻活泼的女性声音，语速较快，语调上扬，温柔亲切（请原创，勿模仿特定真人）", "en": "Describe the voice, e.g.: a young, lively female voice, fast-paced with rising intonation, warm and friendly (original, not imitating a real person)" },
   "settings.tts.studio.previewTextPlaceholder": { "zh": "试听文本（可选）", "en": "Preview text (optional)" },
@@ -1914,12 +1909,7 @@ registerMessages({
   "settings.tts.studio.kindClone": { "zh": "复刻", "en": "cloned" },
   "settings.tts.studio.kindDesign": { "zh": "设计", "en": "designed" },
   "settings.tts.studio.kindCosy": { "zh": "CosyVoice", "en": "CosyVoice" },
-  "settings.tts.studio.cosyTitle": { "zh": "CosyVoice 声音复刻", "en": "CosyVoice cloning" },
-  "settings.tts.studio.cosyHint": { "zh": "CosyVoice 复刻音质更细腻，但百炼规定音频样本必须是公网可访问的 URL（不收文件上传）：把 10–20 秒清晰人声（WAV/MP3/M4A,≤10MB,≥16kHz）传到 OSS/图床后粘贴链接。创建成功自动采用（合成走 cosyvoice-v2）。", "en": "CosyVoice cloning sounds finer-grained, but Bailian requires the sample as a public URL (no file upload): upload 10–20s of clean speech (WAV/MP3/M4A, ≤10MB, ≥16kHz) to OSS/an image host and paste the link. Applied automatically on success (synthesis via cosyvoice-v2)." },
-  "settings.tts.studio.cosyUrlPlaceholder": { "zh": "公网音频 URL(https://…)", "en": "Public audio URL (https://…)" },
-  "settings.tts.studio.cosyBtn": { "zh": "CosyVoice 复刻", "en": "Clone (CosyVoice)" },
   "settings.tts.studio.applied": { "zh": "已采用音色 {voice}（模型已联动切换）", "en": "Voice {voice} applied (model switched accordingly)" },
-  "settings.tts.studio.fileTooLarge": { "zh": "音频超过 {mb}MB 上限", "en": "Audio exceeds the {mb}MB limit" },
   "settings.tts.testBtn": { "zh": "试听", "en": "Test voice" },
   "settings.tts.testOk": { "zh": "合成成功，正在播放", "en": "Synthesized, playing" },
   "settings.tts.testText": { "zh": "你好呀，我是 Tangu。今天过得怎么样？", "en": "Hi, I'm Tangu. How is your day going?" },

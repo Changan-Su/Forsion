@@ -3,7 +3,7 @@
  * npm run build && npm run check:miniauto
  * --native-helper [executable]: real helper/HID path against our own fixture window. */
 const fs = require('fs'), os = require('os'), path = require('path'), http = require('http')
-const { _electron: electron } = require('playwright-core')
+const electron = require('./lib/launch-electron.cjs')
 const { startStubEngine } = require('./lib/stub-engine.cjs')
 const { skipOnboarding } = require('./lib/skip-onboarding.cjs')
 const nativeArg = process.argv.indexOf('--native-helper')

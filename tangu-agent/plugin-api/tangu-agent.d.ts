@@ -35,6 +35,44 @@ export interface ToolContext {
    *  缺省(未装配此闸)时工具应优雅降级,不要假定一定可用。 */
   collectImage?: (img: { url: string; name?: string }) => void;
   displayFile?: (item: { name: string; mime?: string; path?: string; dataUrl?: string }) => void;
+  /** 发起端(手机)自报的客户端能力,如 'phone.intents'(run 内冻结)。契约 tangu-agent/docs/phone-control.md §2。 */
+  clientCapabilities?: readonly string[];
+  /** 让发起端原生层执行一个动作:发 `client_cmd` → 原生 claim → 执行 → 回执。闭包已绑定本 run,只在
+   *  clientCapabilities 非空时存在(缺省时工具应优雅降级),且**只给声明了 `clientCapability` 的工具**:
+   *  没声明的工具(以及任何工具的 isEnabledFor)拿到 undefined;声明了的只能发自己能力的 ns
+   *  ('phone.intents' → 'phone'),别的 ns 立即 {ok:false, code:'undeclared'}、什么都不发。
+   *  `opts.signal` 传 ctx.signal;run 级中止总会一并监听。
+   *  ⚠️ 若工具声明了 capabilities.defaultTimeoutMs,它必须 ≥ claimMs + execMs —— 否则工具先被判超时,
+   *  手机那边却可能在稍后照样执行。 */
+  requestClientAction?: (req: ClientActionRequest, opts?: ClientActionOptions) => Promise<ClientActionResult>;
+}
+
+/** 客户端动作。ns 必须命中本 run 已声明的 `<ns>.*` 能力(否则立即 {ok:false, code:'undeclared'});op 由原生 verb 表解释。 */
+export interface ClientActionRequest {
+  ns: string;
+  op: string;
+  args?: Record<string, unknown>;
+}
+
+/** claimMs:等原生 claim(缺省 15s,钳 3–30s);execMs:claim 之后等结果(缺省 20s,钳 5–120s)。 */
+export interface ClientActionOptions {
+  claimMs?: number;
+  execMs?: number;
+  signal?: AbortSignal;
+}
+
+/** 原生回执(已消毒)或引擎自产的失败。code 恒匹配 /^[a-z_]{1,32}$/:原生码见契约 §3.4,
+ *  引擎自产 undeclared / not_picked_up(没接,什么都没发生)/ no_report(接了没回,可能发生了)/
+ *  aborted(没接就被中止,什么都没发生)/ aborted_claimed(接了之后被中止,可能发生了)。 */
+export interface ClientActionResult {
+  ok: boolean;
+  code?: string;
+  error?: string;
+  text?: string;
+  image?: string;
+  app?: string;
+  handoff?: boolean;
+  verified?: boolean;
 }
 
 export interface ToolCapabilities {
@@ -58,6 +96,16 @@ export interface ToolDef {
   mode?: 'sandbox' | 'host' | 'both';
   capabilities?: ToolCapabilities;
   isEnabledFor?(profile: AppProfile, ctx: ToolContext): boolean;
+  /** 按需装载:true = 定义默认不进工具面,系统提示「Additional Tools」目录里只留一行,模型经 load_tools 解锁。 */
+  deferred?: boolean;
+  /** 同组连坐解锁:解锁组内任一即整组解锁。 */
+  deferGroup?: string;
+  /** 目录行文案(英文一句话,带典型触发意图;缺省取 description 首行截断)。 */
+  deferHint?: string;
+  /** 客户端能力(如 'phone.intents'):本工具经 ctx.requestClientAction 让发起端原生层执行。声明后由核心中央闸
+   *  default-deny(手机端发起 + 本 run 声明了该能力 + 非子代理 / 计划 / 通道 / 讨论),且工具名必须以 `<ns>_` 开头
+   *  ('phone.intents' → phone_*),否则永不可见。chat 预设按能力放行,内置与插件等价。 */
+  clientCapability?: string;
 }
 
 export interface ToolProvider {
@@ -135,8 +183,19 @@ export interface TanguPluginContext {
   activity: { append(event: string, detail?: Record<string, unknown>): void };
 }
 
+/**
+ * 生命周期:启动时每个插件都 activate 一次,未启用 / 前置没齐的随即 deactivate 休眠(仍列在设置页)。
+ * 停用、卸载、原地升级、前置消失时宿主调 `deactivate()`(限时 5s),再撤掉本次激活注册的一切(工具、命令、路由;meta 留着休眠)。
+ * 再启用会在**同一个模块对象**上再调一次 `activate(ctx)`:别依赖模块级「只做一次」的状态,activate 里起的定时器 /
+ * 子进程 / 监听都要在 deactivate 里收掉。activate 抛错则本次激活作废(回滚 + 调一次 deactivate 收尾),插件休眠不自动重试。
+ */
 export interface TanguPlugin {
-  manifest?: { id: string; name: string; version: string; apiVersion: number; entry: string; commands?: string[]; description?: string };
+  manifest?: {
+    id: string; name: string; version: string; apiVersion: number; entry: string; commands?: string[]; description?: string;
+    /** 前置插件:`"id"` 或 `{ id, minVersion? }`。前置已启用且在跑(版本 ≥ minVersion)时本插件才激活;否则休眠,就位后自动激活。 */
+    requiresPlugins?: Array<string | { id: string; minVersion?: string }>;
+  };
   activate(ctx: TanguPluginContext): void | Promise<void>;
+  /** 停用 / 卸载 / 原地升级时调用(限时 5s):停掉 activate 里起的后台工作。启动期那次早于引擎装配完成,只做自身收尾。 */
   deactivate?(): void | Promise<void>;
 }

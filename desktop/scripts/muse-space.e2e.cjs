@@ -14,7 +14,7 @@
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
-const { _electron: electron } = require('playwright-core')
+const electron = require('./lib/launch-electron.cjs')
 const { startStubEngine } = require('./lib/stub-engine.cjs')
 
 const ROOT = path.join(__dirname, '..')
@@ -70,12 +70,6 @@ async function openChatSession(win) {
   if (!(await win.locator('.t2s-search input').first().count().catch(() => 0))) {
     await win.click('.dv-edge-left').catch(() => {})
     await win.waitForTimeout(700)
-  }
-  const picker = win.locator('.t2sw-mode-picker').first()
-  if (await picker.count().catch(() => 0)) {
-    await picker.locator('.t2sw-mode-trigger').click().catch(() => {})
-    await picker.locator('[data-workspace-mode="sessions"]').click().catch(() => {})
-    await win.waitForTimeout(1000)
   }
   const row = win.locator('.t2s-srow', { hasText: 'Muse 验收' }).first()
   if (!(await row.count().catch(() => 0))) throw new Error('没找到会话行')
@@ -195,11 +189,14 @@ async function main() {
     check('落点回执进 Muse LOG([feedback] 行)', seen.feedback.some((x) => x.includes('handed to Muse')) && seen.feedback.some((x) => x.includes('new session')), JSON.stringify(seen.feedback))
 
     // ④ Muse Space
-    const clicked = await win.evaluate(() => {
+    const clickMuse = () => win.evaluate(() => {
       const button = [...document.querySelectorAll('button.rb-space')].find((item) => (item.getAttribute('aria-label') || item.getAttribute('title') || item.textContent || '').trim() === 'Muse')
       if (button) { button.click(); return true }
       return false
     })
+    let clicked = await clickMuse()
+    // 10-02 起上区只常驻 5 个 Space,Muse 缺省收在「…」里:点「…」展开再找一次,点完收起。
+    if (!clicked) { await win.locator('.rb-top .rb-more').first().click().catch(() => {}); await win.waitForTimeout(300); clicked = await clickMuse(); await win.evaluate(() => document.querySelector('.rb-open-top .rb-more')?.click()) }
     check('ribbon 上有 Muse Space 图标', clicked)
     await win.waitForTimeout(2500)
     await dismissNotifications(win)

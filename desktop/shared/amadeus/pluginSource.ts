@@ -4,7 +4,7 @@
  * 应用私有目录 plugins/(mobile/src/plugins/pluginHost.ts)共用这一份 —— 两端列出来的插件长同一个样,
  * 新加 manifest 字段只改这里。I/O(读 main / README / 图标、bundle 清点、门禁所需的宿主版本)各端自理。
  */
-import { PLUGIN_CAPABILITIES, sanitizeEvents, sanitizeOnboarding, type ExternalPluginSource } from './ipc'
+import { PLUGIN_CAPABILITIES, sanitizeEvents, sanitizeOnboarding, sanitizeRequiresPlugins, type ExternalPluginSource } from './ipc'
 
 /** manifest.json 里宿主会读的字段(全按 unknown 收:第三方写什么都可能)。 */
 export interface InstalledPluginManifest {
@@ -18,6 +18,7 @@ export interface InstalledPluginManifest {
   apiVersion?: unknown
   minAppVersion?: unknown
   requiresApp?: unknown
+  requiresPlugins?: unknown
   capabilities?: unknown
   onboarding?: unknown
   fileExtensions?: unknown
@@ -30,9 +31,9 @@ export interface InstalledPluginManifest {
  *  ⚠️ name / version / description 沿用桌面原有的宽松取值(`m.name || 目录名`),别在这里顺手收紧 —— 两端同时变。 */
 export type InstalledPluginFields = Pick<ExternalPluginSource,
   'name' | 'version' | 'description' | 'nameEn' | 'descriptionEn' | 'apiVersion' | 'minAppVersion' | 'requiresApp'
-  | 'capabilities' | 'onboarding' | 'events' | 'fileExtensions' | 'isDesktopOnly'>
+  | 'requiresPlugins' | 'capabilities' | 'onboarding' | 'events' | 'fileExtensions' | 'isDesktopOnly'>
 
-export function installedPluginFields(m: InstalledPluginManifest, dirName: string): InstalledPluginFields {
+export function installedPluginFields(m: InstalledPluginManifest, dirName: string, id?: string): InstalledPluginFields {
   return {
     name: (m.name as string) || dirName,
     version: (m.version as string) || '0.0.0',
@@ -43,6 +44,7 @@ export function installedPluginFields(m: InstalledPluginManifest, dirName: strin
     apiVersion: typeof m.apiVersion === 'number' ? m.apiVersion : 1,
     minAppVersion: typeof m.minAppVersion === 'string' ? m.minAppVersion : undefined,
     requiresApp: typeof m.requiresApp === 'string' ? m.requiresApp : undefined,
+    requiresPlugins: sanitizeRequiresPlugins(m.requiresPlugins, id), // id = 自己(依赖自己的条目丢掉)
     // 敏感能力:只认白名单里的字符串,别的静默丢(插件写什么都不能凭空造出接缝)。
     capabilities: Array.isArray(m.capabilities)
       ? PLUGIN_CAPABILITIES.filter((c) => (m.capabilities as unknown[]).includes(c))

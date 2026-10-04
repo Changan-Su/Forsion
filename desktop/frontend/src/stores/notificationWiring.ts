@@ -50,7 +50,8 @@ export function pendingReminders(marks: MdMark[], now: number, fired: Record<str
  *  判定与记账放同一个函数:调用方只拿返回值,不可能先记后判(那会让首轮全部漏成「新」)。
  *  接线在 chat2/HistorianStatus(它本来就每 2.5s 轮询会话活动),这里只放纯逻辑好单测。 */
 export function takeFreshNominations<T extends { id: string; action: string }>(activity: T[], seen: ReadonlySet<string> | null): { fresh: T[]; seen: Set<string> } {
-  const fresh = seen ? activity.filter((a) => a.action === 'harness_candidates' && !seen.has(a.id)) : []
+  // harness_adopted(10-04):后台提名被直接写进了工作笔记 —— 同样要告诉用户,只是按钮不同(去看 / 撤销,而不是去复盘)
+  const fresh = seen ? activity.filter((a) => (a.action === 'harness_candidates' || a.action === 'harness_adopted') && !seen.has(a.id)) : []
   const next = new Set(seen ?? [])
   for (const a of activity) next.add(a.id)
   return { fresh, seen: next }

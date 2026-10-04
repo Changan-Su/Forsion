@@ -2,7 +2,7 @@
 name: forsion-extension-development
 description: 当用户要给 Forsion / Tangu 做插件、主题、Space、智能体(agent)或捆绑包(bundle)——或要把某个能力做成可分发/可上架市场的扩展——时使用。内置五类官方模板(samples/),讲清各自的格式基线与硬约束(尤其两种"插件"是完全不同的系统),照抄模板改比从零写靠谱。
 metadata:
-  version: 1.18.0
+  version: 1.19.0
   author: Forsion
   category: Forsion
 ---
@@ -39,9 +39,13 @@ Forsion / Tangu 的扩展**默认按捆绑包(bundle)形态发行**(2026-07-25 �
 - **绝不运行时 import 核心包**。对 `@forsion/tangu-agent` 只允许 `import type`(模板 tsconfig 开了 `verbatimModuleSyntax`,值导入直接编译错误)。运行时能力全走 `activate(ctx)` 的 **`ctx.sdk`** —— 否则核心的模块级单例被复制成第二份,行为诡异。
 - **`dist/` 必须提交**。市场安装 = 解压源码到 `~/.forsion/plugins/<id>/`,全程不构建;改 `src/` 后必须 `npm run build`(tsc→dist/)再提交。
 - **工具门禁**:`isEnabledFor` 返回 `store.isPluginEnabledSync(id)`,插件启用才对模型可见。
+- **生命周期**:关掉插件时宿主调 `deactivate()`(限时 5s)并撤掉它注册的工具 / 命令 / 路由(meta 留着,设置页照样列出);再打开会在**同一个模块对象**上再调一次 `activate(ctx)`。所以 activate 可能跑多次 —— 别依赖模块级「只做一次」的状态,activate 里起的定时器 / 子进程 / 监听(含 `process.once`)一律在 deactivate 里收掉。
+- **限时**:import + `activate` 合计限时 30s,超时按激活失败处理(设置页显示错因);超时的 `activate` / `deactivate` 宿主不会再等,但在它真正结束前**不会**再激活同一个插件(防止迟到的收尾清掉新实例),结束后自动补上。activate 里别等永远不回的连接 —— 连不上就先返回、后台重试。
+- **工具 provider id 用自己的命名空间**(`plugin:<你的 id>`):两个插件撞了同一个 id,后注册的覆盖前者。
+- **前置插件**:manifest `"requiresPlugins": ["other-id", { "id": "x", "minVersion": "1.2.0" }]`。前置没装 / 版本低 / 关着 / 没在跑时本插件休眠(列出但不运行),前置就位后自动激活;互相依赖成环的永不激活。
 - 类型契约 `types/tangu-agent.d.ts` 是 apiVersion 1 的 API 拷贝,随模板分发;宿主升 apiVersion 时替换它并同步 manifest 的 `apiVersion`。
 
-装本机:整夹拷到 `~/.forsion/plugins/<id>/` → 重启后端(同 id 原位升级受 ESM 缓存影响,必须重启)。
+装本机:整夹拷到 `~/.forsion/plugins/<id>/` → 设置页重扫即生效,不用重启。同 id 覆盖升级也是重扫即热换代:单文件入口(esbuild 打成一个 bundle,推荐)直接换;多文件的**纯 ESM** 包(`"type": "module"`,入口相对 import 同包文件)在 Node ≥ 22.15 上也能整包换代。宿主证明不了整张模块图都会换代的,如实标「需重启」:包里有 CommonJS(`.cjs`、`require('./x')`、`createRequire` 造的函数)、原生 `.node`、任一层自带 `node_modules`、软链、`import(变量)`、引到插件目录外的文件,或运行时太旧。同一进程里热换代满 20 次后也一律「需重启」(旧模块卸不掉,省内存)。
 
 ## 主题(samples/forsion-sample-theme)
 
@@ -54,6 +58,62 @@ Forsion / Tangu 的扩展**默认按捆绑包(bundle)形态发行**(2026-07-25 �
 ## Space(samples/forsion-sample-space)
 
 `space.json` 声明视图布局配方(引用视图类型 id;插件视图用 `plugin:<插件id>:<视图id>` 并在 `requires.views` 声明)。纯数据,无代码。
+
+### 图标:`icon` + `iconFile`(2026-10-04 起)
+
+图标库只有 28 枚,几个 Space 一多就撞图标。给 Space 配一枚自己的图:
+
+```json
+{ "icon": "video", "iconFile": "icon.png" }
+```
+
+- `icon`:宿主图标库里的名字(全表见 `samples/forsion-sample-space/README.md`),不认识的回落方块。
+- `iconFile`:一枚图片的**裸文件名**(`.png` / `.svg`,不能带路径)。宿主先在 Space 自己的目录里找;插件内嵌的 Space 找不到,再到**插件包根**找。
+  所以 `"iconFile": "icon.png"` 而 Space 目录里不放图 = **直接用插件图标**;想单独画一枚,就把图放进 `spaces/<slug>/`。
+  - **PNG**:原色显示。和插件图标同一道门禁:正方形、边长 64~512 像素、≤256KB。
+  - **SVG**:只取轮廓,颜色跟随主题和选中态(≤64KB)。照 Ribbon 线形图标的规格画最协调:`viewBox="0 0 24 24"`、2px 描边、不填充。SVG 里写的颜色不生效,要彩色用 PNG。
+- **两个都写**。老宿主不认 `iconFile`;文件缺失或不合规时也退到 `icon`。
+- 只换图标**不要**升 `space.json` 的 `version` —— 那个版本号一变,宿主会丢掉用户保存的布局。升插件 `manifest.json` 的版本即可,图标随插件更新自动换。
+- 宿主只把图当图片显示(`<img>` / CSS mask),SVG 里的脚本、外链都不会执行,也别指望它们。
+
+### 布局:原生 Panel 优先(2026-10-02 起规)
+
+插件视图**先摆进宿主的原生 Panel**,别在一个 view 里自造侧栏、底栏、分栏 —— 原生 Panel 自带标签、拖宽、折叠、
+mod+J、布局记忆和移动端抽屉,自造的一样都没有,还和别的 Space 长得不一样。按内容找位置:
+
+| 内容 | 放哪 | 怎么写 |
+|---|---|---|
+| 可打开项的列表(工程、收藏、会话) | 左栏统一工作区 | `registerListSource` + `layout.left: [{ "type": "workspace", "params": { "mode": "plugin:<id>:<列表源>" } }]` |
+| 主体(编辑器、播放器、详情) | 主区 | `layout.main`;要并排的另一份原生视图(笔记、聊天)用 `split: "right" / "down"` 分栏 |
+| 随选中对象变的属性 / 检查器 | 右栏 | 长驻内容写 `layout.right`;跟着主视图走的面板用 Extend View(`view.extendView.open({ side: 'right' })`) |
+| 横跨全片的时间线、日志、控制台、终端 | 底部面板 | `layout.bottom`(2026-10-02 起)或 `ctx.openView(id, { location: 'bottom' })` |
+
+- 范例:**青鸟收藏夹**(左 = 收藏夹列表源;主区 = 详情 + 原生笔记 `split: "right"` + 原生聊天 `split: "down"`)、
+  **视频工作室**(左 = 工程列表;主区 = 舞台与走带;右 = 属性 Extend View;底部 = 时间线)。
+- **一份状态,多个 view**:主区和底部是两个 `registerView`,同一窗口里共用插件模块里的那份状态,别各存一份。
+  拆不开的 DOM 可以整块搬进另一个 view 的 `el`(事件监听跟着走),样式随之注入。
+- ⚠️ **iframe 一搬就重新加载**,而宿主开合底部面板会把主区整列摘下重挂 —— 主区里的 iframe 同样重载。
+  靠 postMessage 驱动的预览要在帧**每次**报告就绪时把时间、播放状态补发回去,不能只听第一次(否则画面一直是黑的)。
+- **先 feature-detect 再依赖**:旧宿主静默忽略 `layout.bottom`;旧桌面宿主把 `openView(id, { location: 'bottom' })`
+  当主区打开,会把当前主视图导航走。查 `ctx.viewLocations?.includes('bottom')`(移动端没有底部面板,不含它)。
+  主视图让出内容的判据 = 配方传给它的参数(如 `{ "timeline": "bottom" }`)**且** `viewLocations` 含 bottom;任一不满足就在 view 内自绘。
+- 配方里写了 `layout.bottom` 就**默认展开**;用户收起后 mod+J 照配方开回来(关掉最后一个标签也一样)。
+- 底部横跨哪几列用 `layout.bottomSpan`:缺省 `right`(主区+右栏,左栏满高)/ `left`(左栏+主区,右栏满高)/ `full`(通栏)/ `main`(只在主区下方,左右栏都满高)。时间线要通栏就写 `full`;旧宿主忽略该字段、按缺省摆。
+  改了 `layout` 要**抬 `version`**,否则用过这个 Space 的人永远停在旧布局。
+- **启动布局 → 项目布局(照 Coding Studio,2026-10-02 起插件可做)**:没打开项目时左栏是项目导航、主区是启动台,
+  底部收起;打开项目后左栏换成项目自己的内容(素材、对话),底部开出时间线 / 终端。换法:
+  `ctx.replaceView?.('nav', 'media')` —— 只换自己的视图,**原地**换(同一块面板、尺寸不变、不重建布局,所以主区
+  里的 iframe 不会重载);面板收着就只换暂存、保持收着;Space 的面板默认值跟着换。回到启动台反过来换,再
+  `ctx.closeView?.('timeline')` 收起底部(关掉底部最后一个视图 = 面板收起,与用户点 × 一样)。返回 0 = 那个视图
+  哪儿都没开着(用户关了它,或布局已经是项目态):**别**拿 `openView` 兜底 —— 它会把用户收起的面板弹出来。
+  旧宿主没有这两个方法:左栏就一直是导航(视频工作室这么做:旧宿主上没有素材区,时间线仍画在编辑器里);
+  非要内容就 `openView(id, { location: 'left' })` 多开一个标签,底部不动。
+  ⚠️ 进出项目的布局跳转会让宿主重挂主区那一列(主区视图卸载再挂上;10-02 真 Electron 实测进、出各一次,⌘J 开合
+  不会)。两条后果:① 跨这一下要留的临时状态(新建页里填的想法、刚选的模板)放模块作用域,**等用户真正用掉
+  (发送 / 清空)才清** —— 别在第一次交给界面时就清,即将被卸掉的那一份可能先拿到;② 关项目时,新挂上的那份
+  会按「参数里的文件 → 模块里的当前项 → 存盘的上次打开」找项目:先把这三样清干净(存盘那步要 await)再拆界面、
+  换布局,否则它会把刚关的项目又打开。
+  范例:视频工作室(导航 ↔ 素材,底部时间线随项目开合;仪器 `npm run verify:docked`)。
 
 ### Mini Panel 适配
 
@@ -101,7 +161,7 @@ ctx.openMiniPanel?.('mini-counter', {
      tangu-plugins/<pid>/tangu-plugin.json   ← 内嵌引擎插件:引擎原地加载(优先级最低,顶不掉手装同 id)
      skills/<slug>/SKILL.md            ← 内嵌全局技能:引擎原地扫描(内置 < bundle < 用户)
      agents/<slug>/config.toml         ← 内嵌 Agent:人格面播种一次,其 skills/ 指纹自愈
-     spaces/<slug>/space.json          ← 内嵌 Space:随插件启停显隐
+     spaces/<slug>/space.json          ← 内嵌 Space:随插件启停显隐(图标见上文 `iconFile`)
 ```
 
 **三种生命周期,发包前必须分清**:
@@ -158,7 +218,8 @@ Space 应该**从数据渲染**,别把状态、时间、待办写死在 main.js 
 | `library.list()` / `library.read(path)` | 你的 Library:目录树 / 读一个文本文件(相对路径如 `'Journal/2026-09-27.md'`,≤1MB;越界、隐藏文件、不存在 → reject) |
 | `subscribe(cb)` | 周期结束、睡醒、待批数或待办数变化、`updateTodo` 之后回调(宿主约 20 秒查一次);返回退订,禁用/重载宿主统一收 |
 
-全部是 Promise,后端没就绪会 reject —— 自己画空态,别让 mount 抛错(mount 抛错也会以 `[feedback]` 回到你)。
+数据调用(status / todos / schedule / library / updateTodo)是 Promise,后端没就绪会 reject —— 自己画空态,别让 mount 抛错(mount 抛错也会以 `[feedback]` 回到你);`subscribe` 同步返回退订。
+**挂载之后没接住的错也回到你**(2026-09-27 起):宿主给你当前这一版的代码打了 `sourceURL`,异步回调 / 事件处理 / 定时器 / 订阅回调里没接住的错,栈里有你的帧就以 `[feedback]` 回写、带 `main.js` 的行号(同一条只报一次,每版最多 3 条)—— 包括你 `await` 的宿主接口 reject 了你没接(异步栈里有你那一帧,行号落在 `await` 那行)。旧版漏清的定时器在重载后抛的不算。
 手势闸防的是「顺手写个定时器 / 挂载时就标掉」这类失误,**不是安全边界**(插件与宿主同一个渲染进程);审批队列不开放。
 
 ```js
@@ -197,6 +258,7 @@ ctx.registerView({ id: 'home', title: 'Muse', mount(el) {
 | `registerFileCreator` | 文件树右键 + 新建标签页启动器 | 与文件类型配套;**四条新建路径都要注册**,少一条用户就会问「为什么这儿没有」 |
 | `registerEmbedRenderer` | `![[x]]` 嵌入的自绘渲染 | |
 | `registerSetting` | 详情页声明式表单(number/boolean/text) | 每键一个字符串,**没有原子性**;同 key 重注册即覆盖 |
+| `ctx.ui.mountMarkdownEditor` | 视图内原生 Amadeus Markdown 编辑器 | 正文归调用方(API 草稿等),**不碰笔记库**;保存前 `getValue()`;老宿主没有 → 可选链 |
 | `ctx.ui.mountFloatingToc` | 视图内原生悬浮目录 | 插件保有正文 DOM,宿主负责扫描 / 滚动高亮 / 跳转 / 主题;老宿主没有 → 可选链 |
 | `ctx.table.mount` | 面板里的原生多维表(只读) | 一份规格 → 真 DbTable(筛选/搜索/隐藏列/排序/统计全套),**不依赖笔记库**;老宿主没有 → 可选链 + 自己的表格降级(见下) |
 
@@ -267,6 +329,10 @@ ctx.registerCommand({
 })
 ```
 
+`invoke.run` 可以返回一个字符串,作为**这一次调用**的回执回给模型(如 `'opened week 40'`),优先于 `state()`。
+回执按调用给,并发的两次调用各拿各的;`state()` 每次起 run 都会被读进目录,别在里面放一次性的结果。
+回执与 `state` 一样会被截到 200 字符。
+
 三条硬纪律:
 
 1. **危险类不许 opt-in** —— 删除或覆盖用户数据、凭据与安全设置、对外发送/发布/购买、
@@ -301,6 +367,7 @@ ctx.registerCommand({
 | `registerEditorExtension` | 笔记编辑器的按键 / 装饰 | `'high'` 档不处理**必须 `return false`** |
 | `registerStatusItem` | 全局状态栏 | 返回 handle,可原位 `update({text,title})` |
 | `registerTheme` | 强调色主题 | 与磁盘主题包(`~/.forsion/themes/`)是两件事 |
+| `registerAppearance` | 设置 → 外观 → 开屏与图标 | 图像方案，由用户选择；可选链兼容旧宿主，返回 disposer；见下文 Startup appearance |
 | `registerFont` | 设置 → 外观 → 字体 | 2026-08-28 起;**返回 disposer**(宿主在禁用/重载时也会自己撤销,返回值可以不接);旧宿主没有 → `ctx.registerFont?.(…)` |
 | `registerPanel` | 右侧栏面板 | ⚠️收 **React 组件** —— 外置插件得自带一份 React(mindmap 有先例),多数场景改用 `registerView` |
 | `registerPropertyType` | 多维表自定义列类型 | ⚠️同上,`Cell` 是 React 组件;`baseType` 决定落盘形状 |
@@ -337,6 +404,8 @@ createPage / listPages / listFiles / searchVault / reveal`)都要求一个**已�
 
 - ⚠️**库是惰性恢复的**:`vaultRoot()` 为 null 只说明「当前没有**打开着的**库」,不代表用户没有库 ——
   用户这一程还没进过 Amadeus 之前它就是 null。插件在宿主**启动期**装载,setup 里那一发读写多半正撞在这上面。
+  插件视图挂载时宿主会唤醒库(2026-10-02 起),但恢复是异步的:视图刚挂上那一下 `vaultRoot()` 仍可能是 null ——
+  一进视图就要读库(列工程、恢复上次打开的文件)的,先等 `vaultRoot()` 有值再读,别把那一刻的空当成「用户没有内容」。
 - **结论(2026-09-02 起规,起因:服务器总览面板误依赖笔记库,用户实报「太奇怪了」)**:
   **与笔记无关的功能(仪表盘 / 远程系统面板 / 工具面)不得建立在这些方法上** ——
   用 `ctx.dashboard.mount`(见下节)、`ctx.loadData` / `ctx.saveData`、以及自己视图里的 DOM。
@@ -357,6 +426,15 @@ Space 管布局，View 管独立功能面，**UI component** 是 View 内可组�
 插件主动在 View 卸载时 dispose；宿主仍会在插件禁用/重载/setup 失败时统一回收，卸载后晚到的异步结果无效。
 完整双语示例与契约：`docs/customization/ui-components.md`；类型真源：`desktop/shared/chatBox.ts`。
 新增公共组件时一起维护类型、本文、原生消费者和生命周期测试，`contractDocs.test.ts` 覆盖 `ctx.ui` 嵌套方法。
+
+### 原生 Markdown 编辑器 ctx.ui.mountMarkdownEditor(2026-09-30 起)
+
+`ctx.ui?.mountMarkdownEditor?.(el, opts)` 挂载与笔记同源的 Amadeus 编辑器(可视 / Markdown 源码 / 发布预览三档),
+返回 `{ getValue(), update(patch), insertMarkdown(md), focus(), dispose() }`。
+`opts` 支持 `value`(必填字符串)、`label`、`readOnly`、`previewBaseUrl`(预览里相对路径图片/视频的源)、`onChange(markdown)`。
+**正文与持久化归调用方**:不读写活动库、不改当前笔记、不自动保存、不调模型。保存前必须同步调 `getValue()`(含最新一笔编辑事务)。
+`update({ value })` 换文档,`insertMarkdown` 追加附件/嵌入(只读时无效),`dispose()` 幂等;宿主在插件禁用/重载/setup 失败时统一回收,旧句柄不再改内容。
+老宿主没有此方法时明确提示升级,不要拿 textarea 冒充原生编辑器。完整契约:`docs/customization/ui-components.md`;类型真源:`desktop/shared/markdownEditor.ts`。
 
 ### 原生悬浮目录 ctx.ui.mountFloatingToc(2026-09-07 起)
 
@@ -551,6 +629,20 @@ refresh = (rows) => h.update({ ...spec, rows })   // 数据刷新走 update:排�
    在 Forsion 仓里时,改完 manifest 用宿主真消毒器验一遍(命令见正典文档「前置条件与使用说明」节)。
 
 范例:`samples/forsion-sample-bundle/`(setting 类 + `check.mjs` 断言 requires 的 key 都注册过)。
+
+### 前置插件 requiresPlugins 与生命周期(2026-10-02 起)
+
+- manifest `"requiresPlugins": ["other-id", { "id": "x", "minVersion": "1.2.0", "market": "x-slug", "name": "X" }]`(≤8 条;
+  `market` = 市场 installSlug,设置页「在市场中查找」拿它预填搜索;`name` = 前置没装时显示的名字)。
+  前置算齐 ⇔ 已安装、没被门禁挡、版本 ≥ `minVersion`、**正在运行**。没齐时:用户关着 → 开关灰掉开不了;用户开着 → 「等待前置插件」,
+  前置就位自动激活;前置停用 / 卸载 → 自动暂停(依赖方先停),回来自动恢复。互相依赖成环的永不激活。
+- 前置的意思是「我要它注册的东西在」(视图 / 命令 / 文件类型),**不是**「我能 import 它」—— 插件之间仍然不直接互调。
+- **宿主替你记账**:经 ctx 登记的一切(订阅、挂载、字体、主题样式、编辑器扩展、属性类型、伴随面、在飞的 `complete`……)在停用 / 重载 /
+  setup 失败时由宿主按相反顺序撤掉,详情页「运行占用」列着此刻挂了什么。你自己起的 `setInterval` / `addEventListener` 宿主看不见 ——
+  仍然要在返回的 disposer 里清。
+- **async setup**:可以 `return` 一个 promise。同步那段返回即算启用;resolve 出的函数就是 disposer(那时已被停用 / 重载 → 宿主当场调用它);
+  reject 与同步抛错同一处理 —— 回滚已登记的一切、详情页显示「加载失败」、依赖它的插件跟着暂停,直到用户重开或重载。
+  停用之后 await 醒来再 `register*` 一律作废(拿到空操作)。
 
 ### 双语与图标
 
@@ -1003,7 +1095,7 @@ const off = ctx.app.watchFile?.('Snippets/latex.js', () => reload())
 - ⚠️**这不是隔离沙箱**:dev 插件跑在真应用、用户的真笔记库上,与已安装插件同权。试验期间不要写、挪、删用户数据;定时器与监听必须在 disposer 里清(热重载会反复 `setup`,漏清一次就叠一层)。
 - ⚠️**同 id 影子**:dev 副本会顶掉同 id 的已安装副本(卡片带 DEV 徽标,期间该插件的「卸载」被禁用)。要对比已安装版,先在 Sandbox 里卸载 dev 副本。
 - ⚠️**声明了 `fileExtensions` 的插件不能从 Sandbox 加载**(宿主的毁档防线只覆盖已安装目录)——这类插件必须装上再测,面板会直说。
-- 引擎插件(`tangu-plugin.json`)**不在 Sandbox 范围**:同 id 升级受 ESM 缓存影响必须重启后端,热重载做不到。
+- 引擎插件(`tangu-plugin.json`)**不在 Sandbox 范围**:装进插件目录后重扫生效;同 id 覆盖升级可热换代(单文件 bundle,或纯 ESM 多文件包),带 CommonJS / node_modules / 软链 / 引到包外文件的仍须重启后端。
 
 `check.mjs` 仍然要留(通用纪律 4):Sandbox 证「在真宿主里能起来」,`check.mjs` 证「逻辑回归得了」,两个证的不是一件事。
 
@@ -1030,3 +1122,25 @@ Forsion Android App 也跑 Forsion 插件(同一份 `pluginStore`、同一个 `c
 - `ctx.app.hostPath?.(vaultRelativePath)` 只在当前引擎和真实笔记库共享文件系统时返回绝对输出路径；无活动库、云库、浏览器虚拟库、远程引擎或未声明能力时返回 `null`。返回 null 时不要拼接 `vaultRoot()` 强行写本机路径。
 - `window.tangu.executionCapabilities?.host` 是 Unit 对主机执行能力的声明；不存在不证明可用。网络视频分析还需网络、媒体工具和模型。
 - 本地 Unit 通过安装包 `runtime: { apiVersion: 1, main: "runtime.mjs" }` 加载本地能力，公开多用户投射不加载该入口。业务包无需依赖 Server 才能显示 UI 或使用本地能力。
+
+### API-backed Markdown editor
+
+`ctx.ui?.mountMarkdownEditor(el, { value, label, readOnly, onChange })` mounts native Amadeus without using the active vault. The caller owns save/publish. It offers visual/source/publishing preview modes. `getValue()` reads the latest synchronous editor transaction; `update`, `insertMarkdown`, `focus`, and idempotent `dispose` are available. The host revokes it on plugin unload. Feature-detect; absent hosts should ask for an upgrade.
+
+
+### Plugin Chat Box selection and Director hand-off (2026-09-30)
+
+When `ctx.tangu.chatSelection === true`, `startChat` accepts optional `modelId` and `thinkingLevel` from the native `ctx.ui.mountChatBox` submission. The host validates the live model catalog and supported thinking levels before changing the UI, then applies the explicit selection after Agent defaults, before prefill/send. Unrecognised selections return `ok:false`; keep the draft for retry. Older hosts omit the capability: retain a plain prompt adapter instead of showing a model picker whose selection cannot be honoured. Bundle ownership, vault-relative `folder`, plugin liveness and send gating remain unchanged.
+
+For API-backed public documents, `ctx.ui.mountMarkdownEditor` accepts `previewBaseUrl` for resolving relative images and videos in a cross-origin host.
+
+
+### Startup appearance / 开屏与图标
+
+`ctx.registerAppearance?.({ id, label, labelEn, icon?, splash? })` registers a choice in Settings → Appearance → Startup and icons. `id` is a stable ASCII slug; the host namespaces it by plugin ID. Provide both localized labels. `icon` and `splash` are embedded base64 data images (`image/png`, `jpeg`, `webp`, `gif`, `svg+xml`), each at most 2,000,000 characters and 4096 × 4096 pixels. URLs, HTML, executable scripts and arbitrary CSS are not accepted by this contract. Render SVG as an image, never inject it into the host DOM.
+
+Registration never selects or replaces the user's appearance. On selection, the host validates the image and snapshots it for offline startup before plugin code loads. Icons become static 256 × 256 PNGs for the application, macOS Dock and running Windows taskbar windows; installers and pinned shortcut artwork are unchanged. Animated GIF/WebP/SVG may be used as splash artwork. Reduced motion uses the static icon. The host owns the readiness exit and 10-second safety ceiling, so a plugin cannot extend loading time.
+
+The returned disposer removes only its own current registration. Disable, unload and failed setup revoke registrations; disabling or removing the plugin clears selected cached assets. A normal reload retains the selected snapshot: select the preset again to refresh artwork after editing it. Stale contexts cannot register again. Always feature-detect with optional chaining. A complete installable example is in `samples/forsion-sample-appearance/`.
+
+中文：插件只贡献选项，不自动改用户选择。选择后缓存图像供离线启动使用，图标同步到应用内部及运行中的 Dock／任务栏；普通重载保留快照，重新选择可更新素材。禁用或移除插件时恢复默认，旧上下文不能重新注册。安装包与系统固定的快捷方式图标不随此设置修改。

@@ -365,10 +365,10 @@ export function applyTrigger(
     if (trig.kind === 'code' && !codeType) return false
     // ⚠️ list_item 的 content 是 `paragraph block*` —— code_block 当不了首子。直接 replaceWith
     //    会被 PM Fitter 自动补一个空 paragraph 再放代码块,于是「余文段落插到了代码块之前」+
-    //    光标落进那个凭空多出来的空段(评审实测)。与 heading/text 分支同一套解法:先脱出容器。
+    //    光标落进那个凭空多出来的空段(评审实测)。只脱出列表；引用/callout 的 block+ 收代码块，必须留在里面。
     let $b = tr.doc.resolve(pos)
-    if (trig.kind === 'code' && inAny($b, ['list_item', 'blockquote'])) {
-      pos = liftOutOfWrappers(tr, pos, ['list_item', 'blockquote'])
+    if (trig.kind === 'code' && inAny($b, ['list_item'])) {
+      pos = liftOutOfWrappers(tr, pos, ['list_item'])
       $b = tr.doc.resolve(pos)
     }
     if (!$b.parent.isTextblock) return false

@@ -62,4 +62,16 @@ describe('SpecialAgentsTab · 远程来源的摘要', () => {
     expect(host.querySelector('.special-agent-status')).toBeNull()
     expect(host.querySelectorAll('.special-agent-nav > button')).toHaveLength(2)
   })
+  it('旧配置缺省开启自动图标，关闭后只保存改过的字段', async () => {
+    vi.mocked(api.getSpecialConfig).mockResolvedValue({ config: FULL, defaults: { historianPrompt: 'default prompt' } })
+    vi.mocked(api.saveSpecialConfig).mockResolvedValue({ ...FULL, historian: { ...FULL.historian, autoEmoji: false } })
+    await render()
+    const toggle = host.querySelector<HTMLButtonElement>('[role="switch"][aria-label="specialUi.autoEmoji"]')!
+    expect(toggle.getAttribute('aria-checked')).toBe('true')
+    await act(async () => toggle.click())
+    expect(toggle.getAttribute('aria-checked')).toBe('false')
+    const save = [...host.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.includes('specialUi.save'))!
+    await act(async () => save.click())
+    expect(vi.mocked(api.saveSpecialConfig).mock.calls.at(-1)?.[1]).toEqual({ historian: { autoEmoji: false }, muse: {} })
+  })
 })

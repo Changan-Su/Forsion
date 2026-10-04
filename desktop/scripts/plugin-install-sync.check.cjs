@@ -27,7 +27,7 @@
  */
 const fs = require('fs'), os = require('os'), path = require('path'), http = require('http')
 const JSZip = require('jszip')
-const { _electron: electron } = require('playwright-core')
+const electron = require('./lib/launch-electron.cjs')
 const { startStubEngine } = require('./lib/stub-engine.cjs')
 const { skipOnboarding } = require('./lib/skip-onboarding.cjs')
 
@@ -222,10 +222,15 @@ async function syncRound() {
     const hasSpace = async () => {
       if (await main.evaluate((n) => !!document.querySelector(`[title="${n}"]`)
         || [...document.querySelectorAll('button, [role="button"]')].some((b) => b.textContent.trim() === n), 'Sync Space')) return true
-      for (const more of await main.locator('.rb-more').all()) {
-        await more.hover().catch(() => {})
-        const hit = await main.locator('.rb-fly').filter({ hasText: 'Sync Space' }).count().catch(() => 0)
-        await main.mouse.move(1, 1)
+      // 10-02 起「…」= 展开:点开后该区铺满整条,藏着的就在条上(收起态只有 aria-label);看完再点一下收起
+      for (const zone of ['top', 'bottom']) {
+        const more = main.locator(`.rb-${zone} .rb-more`).first()
+        if (!(await more.count().catch(() => 0))) continue
+        await more.click().catch(() => {})
+        await main.waitForTimeout(300)
+        const hit = await main.locator(`.rb-${zone} [aria-label="Sync Space"]`).count().catch(() => 0)
+        await main.locator(`.rb-${zone} .rb-more`).first().click().catch(() => {})
+        await main.waitForTimeout(200)
         if (hit) return true
       }
       return false
@@ -243,6 +248,8 @@ async function syncRound() {
 
     writeDir(path.join(home, 'plugins', 'drop-fixture'), forsionPlugin('drop-fixture', '1.0.0', counterPlugin('__dropSetups', '__dropDisposed')))
     const st = await openPanel(app, main, { id: 'settings', title: 'Settings', builtin: 'settings', params: { tab: 'amadeus-plugins' } })
+    await st.getByRole('button', { name: '已安装插件', exact: true }).click()
+    await st.locator('summary').filter({ hasText: '开发工具' }).click()
     await st.getByRole('button', { name: '重新加载', exact: true }).click({ timeout: 30000 })
     check('E 手动拷进插件目录 + 设置里「重新加载」→ 主窗也装上', await waitFor(async () => (await g('__dropSetups')) === 1), `setup=${await g('__dropSetups')}`)
     check('E 「重新加载」点名了全部插件,没变的照样不拆装', (await g('__keepSetups')) === 1 && (await g('__keepDisposed')) === 0)

@@ -21,6 +21,8 @@ import { cloudGetAgent } from '../agents/cloudAgentStore.js';
 import { resolveMemorySlug } from '../agents/agentRegistry.js';
 import { redactSecrets } from '../core/redact.js';
 import { REMEMBER_FACT_MAX_CHARS } from '../tools/builtin/memoryLog.js';
+import { HISTORIAN_EMOJI_FIELD } from '../core/sessionEmoji.js';
+import { applyHistorianEmoji } from './sessionEmoji.js';
 
 // ── 注入依赖的 lazy 别名(保持下方调用点不变)──
 const resolveModelAndKey = (modelId: string) => deps().brain.llm.resolveModelAndKey(modelId);
@@ -210,7 +212,7 @@ export async function onCloudRunDone(runId: string): Promise<void> {
     const user = await loadUserHistorianConfig(userId);
     if (!user.enabled) return;
     const s = (await query<any[]>(
-      `SELECT id, title, agent_config, kind, app_id, archived FROM chat_sessions WHERE id = ? AND user_id = ? LIMIT 1`,
+      `SELECT id, title, emoji, agent_config, kind, app_id, archived FROM chat_sessions WHERE id = ? AND user_id = ? LIMIT 1`,
       [sessionId, userId],
     ))[0];
     if (!s || s.app_id !== 'tangu' || (s.kind && s.kind !== 'user') || s.archived === true || s.archived === 1) return;
@@ -222,7 +224,7 @@ export async function onCloudRunDone(runId: string): Promise<void> {
     busySessions.add(sessionId);
     try {
       const modelId = await resolveModel(user.modelId, admin.modelId);
-      if (modelId) await summarizeTanguSession({ ...s, user_id: userId }, modelId);
+      if (modelId) await summarizeTanguSession({ ...s, user_id: userId }, modelId, user.autoEmoji);
       // 跑完才记轮次:超时 / 上游报错的这一轮,done 重报时还能再来(在飞期间的重报由 busySessions 挡)
       if (lastRound.size > 50_000) lastRound.clear();
       lastRound.set(sessionId, round);
@@ -251,7 +253,7 @@ const TANGU_HISTORIAN_PROMPT =
   'Output nothing other than the JSON object.';
 
 /** 容错解析模型 JSON 输出(剥 ``` 围栏;失败 → null)。 */
-function parseJudgement(raw: string): { title: string; log: string; memory: string[] } | null {
+function parseJudgement(raw: string): { title: string; log: string; memory: string[]; emoji?: string } | null {
   let s = String(raw || '').trim();
   if (s.startsWith('```')) s = s.replace(/^```[a-z]*\s*/i, '').replace(/```\s*$/, '').trim();
   try {
@@ -260,15 +262,16 @@ function parseJudgement(raw: string): { title: string; log: string; memory: stri
       .map((c: unknown) => redactSecrets(String(c ?? '').replace(/\s*[\r\n]+\s*/g, '; ').trim()))
       .filter((c: string) => c.length >= 4 && c.length <= REMEMBER_FACT_MAX_CHARS && c.toUpperCase() !== 'NOTHING' && !CREDENTIAL_RE.test(c))
       .slice(0, MEMORY_MAX_PER_PASS);
-    return { title: String(j?.title ?? '').trim(), log: String(j?.log ?? '').trim(), memory };
+    return { title: String(j?.title ?? '').trim(), log: String(j?.log ?? '').trim(), memory, emoji: j?.emoji };
   } catch {
     return null;
   }
 }
 
 async function summarizeTanguSession(
-  row: { id: string; user_id: string; title: any; agent_config: any },
+  row: { id: string; user_id: string; title: any; emoji?: string | null; agent_config: any },
   modelId: string,
+  autoEmoji: boolean,
 ): Promise<void> {
   const sessionId = String(row.id);
   const userId = String(row.user_id);
@@ -290,7 +293,7 @@ async function summarizeTanguSession(
     }
   } catch { scopeKnown = false; }
   // 记忆域用 als.run 包住整段(不用 enterWith):回调跑在上报 done 的请求链上,不能改它的上下文,也不能串给别的会话。
-  await runWithUserAgentScope(userId, memSlug || '', () => judgeAndWrite(row, modelId, transcript, scopeKnown, memSlug));
+  await runWithUserAgentScope(userId, memSlug || '', () => judgeAndWrite(row, modelId, transcript, scopeKnown, memSlug, autoEmoji && !row.emoji));
 }
 
 async function judgeAndWrite(
@@ -299,6 +302,7 @@ async function judgeAndWrite(
   transcript: string,
   scopeKnown: boolean,
   memSlug: string | undefined,
+  wantEmoji = false,
 ): Promise<void> {
   const sessionId = String(row.id);
   const userId = String(row.user_id);
@@ -312,7 +316,7 @@ async function judgeAndWrite(
   try { existingMemory = String((await deps().brain.memory.getMemory(userId)).content || '').slice(-MEMORY_CONTEXT_CHARS); } catch { /* 读不到就不给 */ }
 
   const signal = AbortSignal.timeout(JUDGE_TIMEOUT_MS);
-  const sys = `${TANGU_HISTORIAN_PROMPT}\nCurrent session title: ${JSON.stringify(String(row.title || ''))}`;
+  const sys = `${TANGU_HISTORIAN_PROMPT}${wantEmoji ? `\nAlso include ${HISTORIAN_EMOJI_FIELD}` : ''}\nCurrent session title: ${JSON.stringify(String(row.title || ''))}`;
   const messages = [
     { role: 'system', content: sys },
     { role: 'user', content: `[Existing memory]\n${existingMemory || '(empty)'}\n\n[Conversation]\n${transcript}` },
@@ -343,6 +347,10 @@ async function judgeAndWrite(
   const j = parseJudgement(String(res.content || ''));
   if (!j) console.warn(`[historian] tangu session ${sessionId} 判断输出不是 JSON(${String(res.content || '').length} 字,原文不进日志)`);
   if (j) {
+    if (wantEmoji && (await loadUserHistorianConfig(userId)).autoEmoji) {
+      await applyHistorianEmoji(sessionId, userId, j.emoji)
+        .catch((e: any) => console.warn('[historian] tangu icon update failed:', e?.message || e));
+    }
     // 标题 / LOG 也可能把对话里的令牌复述出来 → 同样脱敏(记忆候选另有整条丢的凭据闸)
     const title = redactSecrets(j.title.replace(/^["'《「]+|["'》」]+$/g, '')).slice(0, 60);
     if (title && title.length >= 2) {

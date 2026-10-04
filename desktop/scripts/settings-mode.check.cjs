@@ -17,7 +17,7 @@
 const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
-const { _electron: electron } = require('playwright-core')
+const electron = require('./lib/launch-electron.cjs')
 const { startStubEngine } = require('./lib/stub-engine.cjs')
 const { skipOnboarding } = require('./lib/skip-onboarding.cjs')
 

@@ -92,7 +92,7 @@ function rethrowIfAborted(e: unknown, signal?: AbortSignal): void {
 
 async function probeDuration(ffprobe: string, abs: string, signal?: AbortSignal): Promise<number | null> {
   try {
-    const { stdout } = await run(ffprobe, ['-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', abs], { signal });
+    const { stdout } = await run(ffprobe, ['-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', abs], { signal, windowsHide: true });
     const d = parseFloat(stdout.trim());
     return Number.isFinite(d) && d > 0 ? d : null; // 某些容器回 "N/A" → 诚实报错,别 NaN 进取样计划
   } catch (e) {
@@ -105,7 +105,7 @@ async function probeDuration(ffprobe: string, abs: string, signal?: AbortSignal)
 async function extractFrame(ffmpeg: string, abs: string, t: number, width: number, out: string, signal?: AbortSignal): Promise<boolean> {
   try {
     await run(ffmpeg, ['-y', '-v', 'error', '-ss', String(t), '-i', abs, '-frames:v', '1',
-      '-vf', `scale='min(${width},iw)':-2`, '-q:v', '5', out], { signal });
+      '-vf', `scale='min(${width},iw)':-2`, '-q:v', '5', out], { signal, windowsHide: true });
     return existsSync(out);
   } catch (e) {
     rethrowIfAborted(e, signal);
@@ -200,7 +200,7 @@ export const viewVideoProvider: ToolProvider = {
             sheet = path.join(tmp, 'sheet.jpg');
             await run(ffmpeg, ['-y', '-v', 'error', '-framerate', '1', '-start_number', '0',
               '-i', path.join(tmp, 'f_%02d.jpg'), '-frames:v', '1',
-              '-vf', `tile=${cols}x${rows}:margin=4:padding=4:color=black`, '-q:v', '4', sheet], { signal: ctx.signal });
+              '-vf', `tile=${cols}x${rows}:margin=4:padding=4:color=black`, '-q:v', '4', sheet], { signal: ctx.signal, windowsHide: true });
             if (!existsSync(sheet)) return 'Error: ffmpeg failed to compose the contact sheet';
           }
           const buf = await fs.readFile(sheet);

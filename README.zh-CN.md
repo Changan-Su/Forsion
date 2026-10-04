@@ -161,6 +161,10 @@ Forsion（扶桑）是一个**本地优先的 AI 第二大脑**。用 Notion 风
 | Windows | `Forsion-*.exe` | NSIS 安装程序。 |
 | Linux | `Forsion-*.AppImage` | 添加执行权限后运行。 |
 
+每次桌面发布提供两种安装包：`Forsion-<版本>-<架构>` 默认内置 Forsion Extend，提供账号与云端功能；`Forsion-NoExtend-<版本>-<架构>` 保留本地应用与 Agent 后端，不捆绑 Extend，云端账号、同步、发布和远程设备功能需要 Extend。两种包使用相同的应用身份与数据目录。Windows/Linux 应用内更新保持所选发行版；macOS 手动更新时下载相同文件名变体。
+
+本地打包时，在 `desktop/` 依次运行 `FORSION_BUNDLE_EXTEND=0 npm run build` 和 `FORSION_BUNDLE_EXTEND=0 npm run dist`；不设置该变量则产出默认版。
+
 1. **安装并连上模型。** 首次引导帮助你配置连接、模型和工作区，桌面安装版自带 Agent 后端与 Node.js 运行时。
 2. **带入真实背景。** 建一篇项目笔记，把目标、参考资料和下一步放进去；让 Agent 读取它，并明确告诉它值得长期记住的偏好。
 3. **完成一件小事。** 让 Agent 根据材料生成一份有用的成果，打开文件检查，再到记忆面板确认一条明确保存的偏好。TEAM、Muse 与插件可以之后按需加入。
@@ -227,6 +231,8 @@ npm run dev
 | `tangu-agent/` | `npm run build` | 编译 Agent 运行时。 |
 | `tangu-agent/` | `npm run typecheck` | 检查类型与插件 API 同步状态。 |
 | `tangu-agent/` | `npm test` | 运行运行时测试。 |
+| `tangu-agent/` | `npm run build && npm run smoke:tooldefs` | 复现工具定义缺失，验证异常工具隔离与请求前校验。 |
+| `tangu-agent/` | `TANGU_PLUGINS_DIR="$PWD/test/fixtures" npm run live:harness -- --only chat,tool` | 用开发模型凭证验证：注入异常插件后，聊天与文件工具仍可完成。 |
 | `desktop/` | `npm run dev` | 启动桌面开发环境。 |
 | `desktop/` | `npm run typecheck` | 检查桌面端类型。 |
 | `desktop/` | `npm test` | 运行桌面端单元测试。 |
@@ -323,8 +329,12 @@ Forsion/
 ├── desktop/       # Electron 主进程、共享 React 渲染层与产品档案
 ├── web/           # Vite + nginx 的浏览器客户端
 ├── mobile/        # Capacitor Android 客户端
+├── unit/          # 独立 Forsion Unit 框架与本地插件
+├── docs/          # 使用文档
+├── scripts/       # 开源边界检查
+├── .github/       # CI 工作流
 ├── archived/      # 只读历史实现
-└── Dockerfile.standalone
+└── Dockerfile.standalone  # Tangu Manager 用的 worker 镜像
 ```
 
 ### 各端状态

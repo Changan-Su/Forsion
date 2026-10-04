@@ -107,6 +107,29 @@ describe('loadSkillLoadout — 技能段不因单轮配置不完整而消失(hos
   });
 });
 
+describe('loadSkillLoadout — 指定清单与「全部」只差列哪些,列法一样(反馈 6a239e58:清单模式整篇内联 → system 164KB)', () => {
+  const own = (sections: string[]) => sections.filter((s) => s.startsWith('## Available Skills'));
+
+  it('同一批技能:指定清单产出的目录段与「全部」逐字节相同,正文一篇都不进 system', async () => {
+    const auto = await loadSkillLoadout('u', 'tangu', { execMode: 'host' });
+    const picked = await loadSkillLoadout('u', 'tangu', { execMode: 'host', enabledSkillIds: CATALOG.map((s) => s.id) });
+    expect(own(picked.sections)).toEqual(own(auto.sections));
+    expect(own(picked.sections)).toHaveLength(1);
+    const text = picked.sections.join('\n');
+    for (const body of ['FOO BODY', 'BAR BODY', 'BAZ BODY']) expect(text).not.toContain(body);
+    expect(text).not.toContain('## Skill Instructions');
+  });
+
+  it('清单只收窄目录:没点名的不列、不放行', async () => {
+    const { enabledSkillIds, sections } = await loadSkillLoadout('u', 'tangu', { execMode: 'host', enabledSkillIds: ['local:foo', 'local:gone'] });
+    expect(enabledSkillIds).toEqual(['local:foo', 'local:gone']);
+    expect(sections).toHaveLength(1);
+    expect(sections[0]).toContain('- Foo (id: `local:foo`) — foo skill');
+    expect(sections[0]).not.toContain('local:bar');
+    expect(sections[0]).not.toContain('local:gone'); // 盘上已不存在的 id 不进目录
+  });
+});
+
 describe('loadSkillLoadout — coding 预设技能目录降位(07-30:WB-Bench 80/80 反射式装载=错误路由)', () => {
   it('coding:目录带「last resort」降位行;非 coding 文本逐字节零变化', async () => {
     const coding = await loadSkillLoadout('u', 'tangu', { execMode: 'host', preset: 'coding' });

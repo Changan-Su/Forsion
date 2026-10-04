@@ -30,9 +30,10 @@ import { undoDepth, isHistoryTransaction } from '@milkdown/kit/prose/history'
 import { Fragment, Slice } from '@milkdown/kit/prose/model'
 import type { Node as ProseNode, ResolvedPos } from '@milkdown/kit/prose/model'
 import { freshAnchorId, type LayoutV4 } from './columns'
-import { rawTree, pruneTree, depthOf, runEndOf } from './canvasEdit'
+import { rawTree, pruneTree, depthOf, runEndOf, canvasColorCss } from './canvasEdit'
 
-/** 卡片几何。坐标一律取整(方案 §3.1 量化,控制 fm 体积);h 省略 = 随内容自适应。 */
+/** 卡片几何。坐标一律取整(方案 §3.1 量化,控制 fm 体积);h 省略 = 随内容自适应。
+ *  ⚠️ 卡片颜色**不在这里**,在顶层 `cardColors`(见 CanvasV1 与 deriveCardColors 的告警)。 */
 export interface CanvasCard { ref: string; x: number; y: number; w: number; h?: number }
 /** 主卡几何(未入卡的自然流全部)。h 省略 = 随内容自适应，与普通卡片同口径。 */
 export interface CanvasMain { x: number; y: number; w: number; h?: number }
@@ -49,6 +50,15 @@ export interface CanvasV1 {
    *  ⚠️ 这里**不做形状校验**(与 elements 同待遇):校验放在渲染侧的 safeTree,一条手改坏的父子关系
    *  不许让整行 fail-closed 把用户的画布几何一起带走。 */
   tree?: Record<string, unknown>
+  /** 卡片颜色(V-08,拍板 #9):`{ 卡锚: 颜色 }`,编码沿用 JSON Canvas(`"1"`–`"6"` / `#rrggbb`)。
+   *  ⚠️ **必须是顶层独立的表,不许搬进 cards 条目**(Codex 复核 P1):旧客户端的派生从 PM 节点**整份重建**
+   *     cards,条目里任何它不认识的字段都会在下一次保存时被抹掉 —— 而多端(web / mobile / 旧桌面)发版不同步,
+   *     旧端打开新端着过色的笔记、只改一个字,颜色就静默没了(CAS 挡不住,那是一次合法的写)。
+   *     顶层未知键则被自第一版(45fc56d1)起的全部写点(derive / withElements / withTree / withMain 的
+   *     `{ ...stored }`)原样保管 —— 这是格式选择的唯一理由,unit test「旧端派生」钉着。
+   *  ⚠️ 值**原样保管**(含非字符串、认不出的串):真源是卡片节点 attrs,渲染时才过 canvasColorCss 收窄。
+   *     与 tree / elements 同待遇,这里不做形状校验(一个怪值不许让整行 fail-closed)。 */
+  cardColors?: unknown
   [k: string]: unknown
 }
 
@@ -126,33 +136,41 @@ export const canvasCardSchema = $nodeSchema('amadeusCanvasCard', () => ({
   // 而卡片就是一个视觉单元,选中即删正是用户预期,且可撤销。更要紧的是:不可选 = 拿不到
   // NodeSelection = ⠿ 拖不动它、块菜单也对它无效,文档模式下就再没有任何办法把卡收回正文了。
   selectable: true,
-  attrs: { anchor: { default: '' }, x: { default: 0 }, y: { default: 0 }, w: { default: CARD_W }, h: { default: 0 } },
+  // color:'' = 无色。⚠️ 住在 attrs 而不是 fm 旁路:撤销删卡 / Alt 拖复制 / 粘贴整卡都靠 attrs 整体搬运,
+  //    颜色若另存一处,这三条路径都会把它丢在原地(V-08)。
+  attrs: { anchor: { default: '' }, x: { default: 0 }, y: { default: 0 }, w: { default: CARD_W }, h: { default: 0 }, color: { default: '' } },
   parseDOM: [{
     tag: 'div[data-amx-card]',
     getAttrs: (dom) => {
       const d = (dom as HTMLElement).dataset
-      return { anchor: d.anchor ?? '', x: int(Number(d.x), 0), y: int(Number(d.y), 0), w: int(Number(d.w), CARD_W) || CARD_W, h: int(Number(d.h), 0) }
+      return { anchor: d.anchor ?? '', x: int(Number(d.x), 0), y: int(Number(d.y), 0), w: int(Number(d.w), CARD_W) || CARD_W, h: int(Number(d.h), 0), color: d.color ?? '' }
     },
   }],
-  toDOM: (node) => ['div', {
+  toDOM: (node) => {
+    const css = canvasColorCss(node.attrs.color)
+    return ['div', {
     'data-amx-card': '',
     'data-anchor': String(node.attrs.anchor),
     'data-x': String(node.attrs.x),
     'data-y': String(node.attrs.y),
     'data-w': String(node.attrs.w),
     'data-h': String(node.attrs.h),
+    // 字符串原值照抄(parseDOM 回读要逐字还原,认不出的串也不许在这一步丢);**能不能渲染**只看下面 style 里
+    // 有没有 --amx-color —— 那一步过 canvasColorCss 的正则,手改的怪值进不了样式。非字符串原值只活在 attrs 里。
+    'data-color': typeof node.attrs.color === 'string' && node.attrs.color ? node.attrs.color : null,
     class: 'amx-ucard',
     // 几何走自定义属性而不是直接写 left/top/width:CSS 的 attr() 取不了长度值,而内联 left
     // 会在**文档模式**下也生效(卡片当场变绝对定位飞出正文)。自定义属性只被 .amx-canvas
     // 作用域下的规则消费,文档模式一个像素都不动。
     // h=0 保持随内容长高；用户从画布边缘调过高度后才落成显式 px。
-    style: `--amx-x:${node.attrs.x}px;--amx-y:${node.attrs.y}px;--amx-w:${node.attrs.w}px;--amx-h:${Number(node.attrs.h) > 0 ? `${node.attrs.h}px` : 'auto'}`,
-  }, 0],
+    style: `--amx-x:${node.attrs.x}px;--amx-y:${node.attrs.y}px;--amx-w:${node.attrs.w}px;--amx-h:${Number(node.attrs.h) > 0 ? `${node.attrs.h}px` : 'auto'}${css ? `;--amx-color:${css}` : ''}`,
+    }, 0]
+  },
   parseMarkdown: {
     match: ({ type }) => type === 'amadeusCanvasCard',
     runner: (state, node, type) => {
-      const n = node as { anchor?: string; x?: number; y?: number; w?: number; h?: number }
-      state.openNode(type, { anchor: n.anchor ?? '', x: n.x ?? 0, y: n.y ?? 0, w: n.w ?? CARD_W, h: n.h ?? 0 })
+      const n = node as { anchor?: string; x?: number; y?: number; w?: number; h?: number; color?: unknown }
+      state.openNode(type, { anchor: n.anchor ?? '', x: n.x ?? 0, y: n.y ?? 0, w: n.w ?? CARD_W, h: n.h ?? 0, color: n.color ?? '' })
       state.next(node.children)
       state.closeNode()
     },
@@ -213,6 +231,7 @@ function foldCanvas(tree: MdNode, canvas: CanvasV1 | null, taken: Set<string>, o
   // (锚永不回收,`![[note#id]]` 引用照常解析)。按锚跳过取代整篇 fail-closed:
   // 重复锚两处都作废、分栏占用让位、不在册不折 —— 都只影响那一枚,其余卡照折。
   const geo = new Map(cards.map((c) => [c.ref, c]))
+  const colors = plainObject(canvas?.cardColors)
   const opens: Array<{ id: string; idx: number }> = []
   kids.forEach((n, i) => {
     const id = markerIdOf(n)
@@ -241,6 +260,12 @@ function foldCanvas(tree: MdNode, canvas: CanvasV1 | null, taken: Set<string>, o
       type: 'amadeusCanvasCard',
       anchor: r.id,
       x: int(g.x, 0), y: int(g.y, 0), w: int(g.w, CARD_W) || CARD_W, h: int(g.h, 0),
+      // 颜色原值带进 attrs,派生时由 deriveCardColors 原样吐回顶层 cardColors(V-08)。真源是 cardColors;
+      // 手写在 cards 条目里的 JSON Canvas 式 `color` 只作兜底读入 —— 下一次保存就迁到 cardColors(条目里的那份
+      // 本来就活不过旧端的派生,见 CanvasV1.cardColors 的告警)。
+      color: colors && Object.prototype.hasOwnProperty.call(colors, r.id) && isColorSet(colors[r.id])
+        ? colors[r.id]
+        : typeof (g as { color?: unknown }).color === 'string' ? (g as { color?: string }).color : '',
       children: children.length ? children : [{ type: 'paragraph', children: [] }],
     })
     folded.unshift(r.id)
@@ -269,6 +294,26 @@ export function deriveCards(doc: ProseNode): CanvasCard[] {
     cards.push({ ref: anchor, x: int(node.attrs.x, 0), y: int(node.attrs.y, 0), w: int(node.attrs.w, CARD_W) || CARD_W, ...(h > 0 ? { h } : {}) })
   })
   return cards
+}
+
+/** 普通对象(非数组)→ 可读视图;其余 → null。 */
+function plainObject(v: unknown): Record<string, unknown> | null {
+  return v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : null
+}
+/** attrs.color 的「设过色」判据:'' / null / undefined = 无色,其余一切(含非字符串原值)= 有值、原样保管。 */
+const isColorSet = (v: unknown): boolean => v !== '' && v != null
+
+/** 顶层 `cardColors` 的派生(V-08):在场卡片里设过色的那些,值取 attrs 原值。
+ *  ⚠️ 与 cards 同一个真源(doc)、同一个时机派生 —— 删卡时条目随之消失,撤销删卡时 attrs 回来、条目随之回来;
+ *     不在场的锚一律不写(旧端删卡留下的孤儿条目在这里自然剪掉)。 */
+export function deriveCardColors(doc: ProseNode): Record<string, unknown> {
+  const out: Record<string, unknown> = Object.create(null) as Record<string, unknown>
+  doc.forEach((node) => {
+    if (node.type.name !== 'amadeusCanvasCard') return
+    const anchor = String(node.attrs.anchor)
+    if (ID_RE.test(anchor) && isColorSet(node.attrs.color)) out[anchor] = node.attrs.color
+  })
+  return out
 }
 
 /** 派生 amadeus_canvas 的**单行 JSON**;返回 null = 该键不该存在(懒物化 / 解散)。
@@ -301,7 +346,8 @@ export function deriveCanvasJson(doc: ProseNode, storedLine: string | null, mode
     // 磁盘上没有(或读不懂)画布键。有卡片说明是本次刚拖出来的 → 物化;否则一个字节都不写。
     if (storedLine != null) return storedLine // 非法:逐字保留
     if (!cards.length) return null
-    return JSON.stringify({ v: CANVAS_V, mode: modeOverride ?? 'canvas', main: { x: 0, y: 0, w: MAIN_W }, cards })
+    const colors = deriveCardColors(doc)
+    return JSON.stringify({ v: CANVAS_V, mode: modeOverride ?? 'canvas', main: { x: 0, y: 0, w: MAIN_W }, cards, ...(Object.keys(colors).length ? { cardColors: { ...colors } } : {}) })
   }
   // 磁盘上有卡没落在归属集合里 → 本实例的 doc 代表不了全貌,整行逐字保留(理由见上面四条)。
   if (!(stored.cards ?? []).every((c) => owned.has(c.ref))) return storedLine
@@ -313,6 +359,11 @@ export function deriveCanvasJson(doc: ProseNode, storedLine: string | null, mode
     if (!m || (m.x === 0 && m.y === 0 && m.w === MAIN_W)) return null
   }
   const next: CanvasV1 = { ...stored, v: CANVAS_V, cards }
+  // 卡片颜色(V-08):doc 代表得了全貌(上面的归属判据)→ cardColors 与 cards 同样按 doc 重建;键在原位改写,
+  // 键序不动。盘上那份不是对象(手改坏)且此刻没有任何颜色要写 → 原样留着,不替别人「修」看不懂的值。
+  const colors = deriveCardColors(doc)
+  if (Object.keys(colors).length) next.cardColors = { ...colors }
+  else if (next.cardColors === undefined || plainObject(next.cardColors)) delete next.cardColors
   if (modeOverride) next.mode = modeOverride
   if (!next.main) next.main = { x: 0, y: 0, w: MAIN_W }
   if (!next.elements?.length) delete next.elements

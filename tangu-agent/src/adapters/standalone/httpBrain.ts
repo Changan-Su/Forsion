@@ -24,6 +24,7 @@ import { parseAgentConfig } from '../../agents/agentRegistry.js';
 import { currentAgentSlug } from '../../seams/runContext.js';
 import { DEFAULT_AGENT_SLUG } from '../../core/tanguHome.js';
 import { registerAgentSyncIdentity } from '../../services/cloudSyncAccount.js';
+import { assertToolDefinitions } from '../../tools/toolDefinitionValidation.js';
 
 export interface HttpBrainConfig {
   cloudUrl: string; // 形如 https://host(无尾斜杠)
@@ -182,6 +183,7 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
   // ── LLM 流式:读 SSE,逐条转回 onToken/onReasoning/onToolCallDelta,done 时返回累积结果 ──
   async function streamProviderCompletion(opts: StreamOpts): Promise<StreamResult> {
     const lazy = (opts.payload as any)?.[LAZY_MARK] ? (opts.payload as LazyBuild) : null;
+    if (lazy) assertToolDefinitions(lazy.tools, 'managed request');
     if (lazy && !combinedUnsupported.has(base)) {
       const { [LAZY_MARK]: _mark, ...body } = lazy;
       const r = await brainStream('/api/brain/llm/build-and-stream', body, opts, true);
@@ -307,6 +309,7 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
       // ⚠️ `...rest` 整体展开是契约(见 httpBrain.client.test.ts):改成逐字段挑选,client/cacheKey 等
       // 会静默消失且没有任何东西变红。signal 摘掉:AbortSignal 进 JSON.stringify 会变成 {} 白送上云。
       buildProviderPayload: async (opts: BuildPayloadOpts) => {
+        assertToolDefinitions(opts.tools, 'managed payload');
         const { signal: _signal, ...rest } = opts as BuildPayloadOpts & { signal?: AbortSignal };
         return { [LAZY_MARK]: true, modelId: String((opts.model as any)?.id ?? ''), ...rest };
       },

@@ -132,7 +132,7 @@ export function prepareHostCommand(ctx: HostExecContext, argv: string[]): Prepar
   const cwd = path.resolve(ctx.cwd || process.cwd());
   if (config.mode === 'off' && shellWriteProtectApplies(ctx)) return remoteSeatbeltCommand(cwd, argv, !effectiveRemote(ctx));
   // 沙箱关:照旧继承环境,但剥掉引擎凭据(C2 —— verifyCommand / runGit / 沙箱辅助进程都走这里);沙箱开:safeEnvironment 本就只留白名单。
-  if (config.mode === 'off') return { file: argv[0], args: argv.slice(1), options: { cwd, env: toolSubprocessEnv(), detached: process.platform !== 'win32' }, cleanup() {} };
+  if (config.mode === 'off') return { file: argv[0], args: argv.slice(1), options: { cwd, env: toolSubprocessEnv(), detached: process.platform !== 'win32', windowsHide: true }, cleanup() {} };
   const backend = hostSandboxBackend();
   if (!backend.available || !backend.executable) throw new Error(`Host sandbox unavailable: ${backend.reason}`);
   const resolvedCwd = canonical(cwd);
@@ -177,8 +177,10 @@ export function spawnHostCommand(ctx: HostExecContext, argv: string[], options: 
 }
 
 /** Preserve Node's platform-specific shell quoting in compatibility mode.
- *  远程写保护那条路(macOS)同样是 `/bin/sh -c command` —— 与 Node 在 darwin 上 shell:true 的展开一致,只是外面多一层 sandbox-exec。 */
+ *  远程写保护那条路(macOS)同样是 `/bin/sh -c command` —— 与 Node 在 darwin 上 shell:true 的展开一致,只是外面多一层 sandbox-exec。
+ *  Windows 不 detached + windowsHide,两个必须成对:detached 是 DETACHED_PROCESS,cmd.exe 没有控制台,它起的 python.exe
+ *  等控制台程序就各自弹一个可见窗口,而单加 windowsHide(CREATE_NO_WINDOW)与它同用时被系统忽略。win32 的终止本来就不靠进程组。 */
 export function spawnHostShell(ctx: HostExecContext, command: string): ChildProcess {
-  if (!hostSandboxEnabled(ctx) && !shellWriteProtectApplies(ctx)) return spawn(command, { cwd: ctx.cwd || process.cwd(), shell: true, detached: true, env: toolSubprocessEnv() });
+  if (!hostSandboxEnabled(ctx) && !shellWriteProtectApplies(ctx)) return spawn(command, { cwd: ctx.cwd || process.cwd(), shell: true, detached: process.platform !== 'win32', windowsHide: true, env: toolSubprocessEnv() });
   return spawnHostCommand(ctx, ['/bin/sh', '-c', command]);
 }

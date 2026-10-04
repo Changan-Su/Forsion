@@ -6,7 +6,7 @@
  */
 const fs = require('fs'), os = require('os'), path = require('path')
 const ROOT = path.resolve(__dirname, '..')
-const { _electron: electron } = require('playwright-core')
+const electron = require('./lib/launch-electron.cjs')
 const { startStubEngine } = require('./lib/stub-engine.cjs')
 const OUT = process.env.SHOT_DIR || fs.mkdtempSync(path.join(os.tmpdir(), 'forsion-special-ux-'))
 const SHOT1 = path.join(OUT, 'forsion-muse-settings.png'), SHOT2 = path.join(OUT, 'forsion-muse-settings-auto.png')

@@ -69,12 +69,24 @@
 /* 两区弹性分配:head+Spaces 靠上,命令+账号靠下(margin-top:auto 把命令区连同其后一起推到底)。 */
 .rb-head { display: flex; flex-direction: column; align-items: center; flex-shrink: 0; }
 .rb-top { flex-shrink: 0; }
-/* 主位槽:两个 auto 外边距由它一个人吃掉全部空当 → 自己垂直居中;于是 .rb-bottom 不再需要
-   `margin-top:auto`(留着会变成三个 auto 抢空当 = 1:1:1,主位落在 1/3 处而不是正中)。
-   宿主没注册 home 件时它高度为 0,两个 auto 照样把底部两组顶到底 —— 观感与加它之前一致。 */
-.rb-home { margin-block: auto; flex-shrink: 0; }
-.rb-bottom { flex-shrink: 0; }
+/* 主位槽:Space 区第一格(10-02 用户改判,原先是两区之间的正中)。与下面的 Space 隔一个槽间距;
+   宿主没注册 home 件时它是空组,不留间距。命令区重新拿 `margin-top:auto` 贴底。 */
+.rb-home { flex-shrink: 0; }
+.rb-home:not(:empty) { margin-bottom: 4px; }
+.rb-bottom { flex-shrink: 0; margin-top: auto; }
+/* 滚轮翻看的滑动框(10-02):框只露 n 格高,里面整区一列按窗口起点 translateY。overflow:clip 不建滚动容器
+   (不会被 scrollIntoView / 键盘滚走);留 4px 裁切余量给焦点环、插入线、未读角标。窗外占位 .rb-cell 与槽等高。 */
+.rb-strip { flex-shrink: 0; overflow: clip; overflow-clip-margin: 4px; }
+.rb-strip-in { display: flex; flex-direction: column; gap: 4px; align-items: center; transition: transform 0.2s var(--ease-out, ease-out); }
+.rb-cell { display: flex; justify-content: center; pointer-events: none; }
+.rb-expanded .rb-strip-in { align-items: stretch; }
+.rb-expanded .rb-cell { width: 100%; justify-content: stretch; }
+@media (prefers-reduced-motion: reduce) { .rb-strip-in { transition: none; } }
 .rb-pinned { flex-shrink: 0; margin-top: 4px; }
+/* 「…」展开(10-02):展开区铺满整条,另一区不渲染。上区展开时命令区没了,margin-top:auto 改由账号卡接着贴底;
+   命令区展开时主位槽(属于 Space 那一侧)一起让出来 —— 用 CSS 藏不卸载,home 件的状态留着。 */
+.rb-open-top .rb-pinned { margin-top: auto; }
+.rb-open-bottom .rb-home { display: none; }
 /* ＋ 号:比图标钮更淡,悬停才显形(不喧宾夺主)。 */
 .rb-plus { opacity: 0.4; }
 .rb-plus:hover { opacity: 1; }
@@ -149,6 +161,7 @@
 .rb-expanded { width: 180px; align-items: stretch; }
 .rb-expanded .rb-group { align-items: stretch; }
 .rb-expanded .rb-head,
+.rb-expanded .rb-home,
 .rb-expanded .rb-top,
 .rb-expanded .rb-bottom,
 .rb-expanded .rb-pinned { padding: 0 8px; }
@@ -794,3 +807,36 @@ html[data-dv-dragging] .t2s-side { -webkit-app-region: no-drag; }
   outline-offset: 1px;
 }
 /* ===== uiux-c 追加块 end ===== */
+
+/* ===== 框架收声(10-02 用户拍板 v3)=====
+ * 单标签:只有一个 tab 时它不是「在多个里选中」,不画胶囊底;× 只在指针 / 焦点到它身上时出。
+ * 框架图标(左前缀、＋、右上角浮钮)平时 0.38,指针进标签栏或浮钮组、或键盘焦点进来才亮;
+ * 开着的开关(.is-on)保持全亮 —— 它在表达状态。笔记顶栏同一个值,见 amadeus-host.css 末尾。
+ * 全部关在 (hover: hover) 里:触屏没有悬停,淡掉就等于找不到。放在文件末尾:要压过上面同特异性的规则(DESIGN §7)。 */
+/* dockview 把 dv-single-tab 打在外层 .dv-tabs-and-actions-container 上(不是 .dv-tabs-container)。 */
+.dockview-theme-lcl .dv-tabs-and-actions-container.dv-single-tab .dv-tab.dv-active-tab:not(:has(.wb-tab--icon)) .wb-tab {
+  background: transparent;
+  box-shadow: none;
+}
+@media (hover: hover) {
+  .dockview-theme-lcl .dv-single-tab .dv-tab.dv-active-tab:not(:hover):not(:focus-within) .wb-tab-close { opacity: 0; pointer-events: none; }
+  .dockview-theme-lcl .dv-pre-actions-container,
+  .dockview-theme-lcl .dv-right-actions-container,
+  .dv-edge-actions > .dv-edge-toggle:not(.is-on) {
+    opacity: 0.38;
+    transition: opacity var(--duration-fast, 0.15s);
+  }
+  .dockview-theme-lcl .dv-tabs-and-actions-container:hover > .dv-pre-actions-container,
+  .dockview-theme-lcl .dv-tabs-and-actions-container:hover > .dv-right-actions-container,
+  .dockview-theme-lcl .dv-pre-actions-container:focus-within,
+  .dockview-theme-lcl .dv-right-actions-container:focus-within,
+  .dv-edge-actions:hover > .dv-edge-toggle,
+  .dv-edge-actions > .dv-edge-toggle:focus-visible { opacity: 1; }
+  /* Ribbon 两区的「+」(加 Space / 钉命令):v1 实拍里不在,平时整个收起,指针进 Ribbon 才以原来的 0.4 露出。 */
+  .rb:not(:hover) .rb-plus:not(:focus-visible) { opacity: 0; }
+  /* 侧栏只有一个 tab(第二轮 v5):那枚图标不是「在多个里选」,平时不画;指针进这条、或键盘焦点进来才出。
+     它仍是拖动面板的抓手,所以只淡不删。 */
+  .dockview-theme-lcl .dv-single-tab .wb-tab--icon { opacity: 0; transition: opacity var(--duration-fast, 0.15s); }
+  .dockview-theme-lcl .dv-single-tab:hover .wb-tab--icon,
+  .dockview-theme-lcl .dv-single-tab:focus-within .wb-tab--icon { opacity: 1; }
+}

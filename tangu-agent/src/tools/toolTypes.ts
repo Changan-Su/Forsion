@@ -81,6 +81,8 @@ export interface ToolContext {
   planMode?: boolean;
   /** Muse run 标记:仅此时 add_muse_todo(Muse 唯一写权限)可见。 */
   muse?: boolean;
+  /** 本会话属于一个本机项目(agentLoop 按会话存档的 project_path 定;可信,模型给不了)。remember 据此露出「项目级」。 */
+  projectScoped?: boolean;
   /** 无人值守 run 的异步审批档(仅引擎内部按 run 来源设定;delegate 子代理从父 ctx 继承,否则子代理越界会挂在同步审批上)。 */
   approvalDeferral?: 'queue' | 'agent';
 
@@ -104,6 +106,9 @@ export interface ToolContext {
   /** 已解锁的 deferred 工具名(P0-2):**严格 run-local**,每 run 从空集起步、本 run 内经 load_tools 增量;
    *  不从历史恢复(hydrate 不带 tool_calls)。 */
   unlockedTools?: ReadonlySet<string>;
+  /** 本 agent 自己收起的工具(HARNESS.md 的 equip 条目;agentLoop 只在笔记段注入的 run 里传):按 deferred 处理 ——
+   *  定义不进 defs、目录里留一行、load_tools 取得回。只是上下文体量,不是能力闸(按名直调照常执行)。 */
+  shelvedTools?: ReadonlySet<string>;
   /** load_tools 的解锁回调(loop 提供):记入 run 级集合并触发下一迭代 defs 重算。
    *  缺省(群聊等)= 不支持解锁 → load_tools 不暴露,deferred 保持隐藏。
    *  返回值可选:给回**实际解锁的**名字 —— 实现方可以拒掉一部分(子代理的管理面 deny 名单),
@@ -159,6 +164,22 @@ export interface ToolContext {
    *    是静默 no-op —— 必须经这条闭包写进 run 级那份(同 unlockTools 的形状)。
    */
   updateUiSettings?: (values: Record<string, string>) => void;
+  /**
+   * 发起端(手机)自报的客户端能力(input.clientCapabilities,经 routes/runs normalizeClientCapabilities 消毒;
+   * run 内冻结)。带 `clientCapability` 的工具据此在 toolRegistry 的中央闸 default-deny。
+   * 契约:tangu-agent/docs/phone-control.md §2。
+   */
+  clientCapabilities?: readonly string[];
+  /**
+   * 让发起端的原生层执行一个动作(services/clientAck.ts):发 `client_cmd` → 原生 claim → 执行 → 回执。
+   * 闭包已绑定本 run 的 runId/sessionId —— 调用方指定不了别的 run。只在 clientCapabilities 非空时装配;
+   * 工具执行时再由 registry 按工具收窄(toolRegistry.bindClientActionToTool):没声明 `clientCapability` 的工具
+   * 拿到 undefined,声明了的只能发自己能力的 ns(别的 ns 立即 `undeclared`);isEnabledFor 里一律 undefined。
+   * `opts.signal` 传工具拿到的 `ctx.signal`(registry 的超时信号);run 级中止信号总会一并监听。
+   * ⚠️ 带 capabilities.defaultTimeoutMs 的工具,超时必须 ≥ claimMs + execMs,否则 registry 先把工具判超时,
+   *    手机那边却可能在稍后照样执行(模型以为失败、实际做了)。
+   */
+  requestClientAction?: (req: ClientActionRequest, opts?: ClientActionOptions) => Promise<ClientActionResult>;
   /**
    * 当前 run 的在存工作消息数组冻结快照(self_brainstorm 用):返回主 loop workingMessages 的浅拷贝。
    * 分身补全的共享前缀**必须**取自这里而非 DB 重建——脚手架消息不落库、运行内折叠、pin 锚定都会让
@@ -226,6 +247,10 @@ export interface ToolCapabilities {
 
 export interface ToolImpl {
   definition: Tool;
+  /** 定义随运行上下文变的工具才给(缺省 = 恒用 definition)。返回的必须是同名工具的**预先建好**的定义对象之一
+   *  (别每次新建:同一个 run 里逐轮取到的定义要逐字节一致,前缀缓存靠它)。执行侧不看这个,参数多一个少一个都要兜得住。
+   *  现有用户:remember —— 「级别(scope)」那段说明只在会话属于一个项目时才有意义,云端聊天面的体量预算放不下它。 */
+  definitionFor?(ctx: ToolContext): Tool;
   execute: (args: Record<string, any>, ctx: ToolContext) => Promise<string> | string;
   /** 工具可见性域：'sandbox'=仅云沙箱模式，'host'=仅本地直连模式，缺省='both'=两者皆可。 */
   mode?: 'sandbox' | 'host' | 'both';
@@ -247,4 +272,33 @@ export interface UiCommandEntry {
 export interface UiSettingEntry {
   value: string;
   allowed?: string[];
+}
+
+/** 发给客户端原生层的一个动作(契约 tangu-agent/docs/phone-control.md §3.1 / §4)。
+ *  ns 必须命中本 run 已声明的某个 `<ns>.*` 能力;op 由原生 verb 表解释。 */
+export interface ClientActionRequest {
+  ns: string;
+  op: string;
+  args?: Record<string, unknown>;
+}
+
+/** claimMs:等原生 claim 的时长(缺省 15s,钳 3–30s);execMs:claim 之后等结果的时长(缺省 20s,钳 5–120s)。 */
+export interface ClientActionOptions {
+  claimMs?: number;
+  execMs?: number;
+  signal?: AbortSignal;
+}
+
+/** 原生回执(经 routes/runs normalizeClientResult 消毒)或引擎自产的失败(两种中止 aborted / aborted_claimed、
+ *  undeclared、两种超时 not_picked_up / no_report)。
+ *  code 恒匹配 /^[a-z_]{1,32}$/,取值见契约 §3.4。 */
+export interface ClientActionResult {
+  ok: boolean;
+  code?: string;
+  error?: string;
+  text?: string;
+  image?: string;
+  app?: string;
+  handoff?: boolean;
+  verified?: boolean;
 }

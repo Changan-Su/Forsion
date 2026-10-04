@@ -332,7 +332,7 @@ describe('DesktopPermissions', () => {
     expect(request).not.toHaveBeenCalled()
   })
 
-  it.each(['cream', 'coral', 'teal', 'lavender', 'zhi'].flatMap((skin) => ['light', 'dark'].map((mode) => ({ skin, mode }))))(
+  it.each(['cream', 'coral', 'teal', 'lavender', 'zhi', 'ink'].flatMap((skin) => ['light', 'dark'].map((mode) => ({ skin, mode }))))(
     'keeps every action and retry button readable in $skin / $mode using the actual styles', async ({ skin, mode }) => {
       const style = document.createElement('style')
       style.textContent = [

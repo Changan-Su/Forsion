@@ -112,8 +112,18 @@ export function isPluginEnabledSync(id: string): boolean {
   const g = readRaw(id, 'global');
   return ENABLED_KEY in g ? !!g[ENABLED_KEY] : !!getPluginMeta(id)?.defaultEnabled;
 }
+/** 开关落盘之后通知谁(插件生命周期 bootstrap 据此收敛):直接调本函数的路径(通道里开语音等)不经 setPluginEnabledLive,
+ *  没有这一下插件会停在旧状态 —— 休眠的工具 / 路由直到下次重扫或重启才回来。 */
+const enabledListeners = new Set<(id: string) => void>();
+export function onPluginEnabledChange(cb: (id: string) => void): () => void {
+  enabledListeners.add(cb);
+  return () => { enabledListeners.delete(cb); };
+}
 export async function setPluginEnabled(id: string, enabled: boolean): Promise<void> {
   await writeRaw(id, 'global', { [ENABLED_KEY]: !!enabled });
+  for (const cb of enabledListeners) {
+    try { cb(id); } catch { /* 通知方的错不连累落盘方 */ }
+  }
 }
 
 // ── 单作用域设置(供面板读写;含 default 兜底)──

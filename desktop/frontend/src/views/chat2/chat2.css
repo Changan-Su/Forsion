@@ -108,20 +108,43 @@
 .t2-content > :first-child { margin-top: 0; }
 .t2-content > :last-child { margin-bottom: 0; }
 .t2-content p { margin: 0 0 .7em; }
+/* 标题节奏(10-02 用户拍板 a5,与笔记同一口径):半粗、上远下近。原来没有这组规则,走浏览器默认的 700。
+   首块的上边距由上面 > :first-child 清零(特异性更高)。 */
+.t2-content :is(h1, h2, h3, h4, h5, h6) { font-weight: 600; line-height: 1.35; margin: 1.3em 0 0.4em; }
+.t2-content h1 { font-size: 1.4em; }
+.t2-content h2 { font-size: 1.25em; }
+.t2-content h3 { font-size: 1.1em; }
+.t2-content :is(h4, h5, h6) { font-size: 1em; }
+/* 独占一段的 `![[…]]` 内联嵌入(ChatEmbed):图片可并排、音视频占满一行,`|宽度` 走内联 style;点图片 = 进 Agent Desk。 */
+.t2-content .t2-embeds { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 8px; margin: 0 0 .7em; }
+.t2-embed { display: block; max-width: 100%; border-radius: var(--radius-md, 10px); }
+.t2-embed-image {
+  max-height: 360px; object-fit: contain; cursor: zoom-in;
+  border: var(--border-width) solid var(--border); background: var(--overlay-light);
+}
+.t2-embed-video { width: 100%; max-height: 420px; background: var(--overlay-light); }
+.t2-embed-audio { width: 100%; }
+/* 读盘中先占位撑住位置(新加载分支禁写空白),读完原地换成图 / 播放器。 */
+.t2-embed-pending { width: 240px; height: 160px; background: var(--overlay-light); }
+.t2-embed-audio.t2-embed-pending { width: 100%; height: 40px; }
+.t2-embeds-tail { flex-basis: 100%; }
+/* 锚点写坏:播放器照渲从头放,下面一行说清楚(非法锚点不许静默变 0 秒)。 */
+.t2-embed-warn { flex-basis: 100%; margin-top: -4px; font-size: var(--ui-font-caption, 11px); color: var(--warning); }
 /* 代码块在**自己的框里**横滚。这两个属性是「agent 输出超出 chat view、要左右滑」的全部病因
    (08-14 实测:去掉 overflow-x 后 .t2-stream 横向溢出 2530px):base.css 那条
    `.msg-content pre{overflow-x:auto}` 管不到这里 —— Markdown 组件直接渲染进 .t2-content,
    中间没有 .msg-content 外壳,于是长代码行整条溢出滚动流。
    (流本身不会被顶宽:它 overflow-y:auto ⇒ 是滚动容器 ⇒ flex 自动最小尺寸恒为 0,不必写 min-width:0。)
    仪器:npm run check:chatside 的 16/17。 */
-.t2-content pre { border-radius: var(--radius-md, 12px); max-width: 100%; overflow-x: auto; }
+/* 底色与内边距和笔记代码块同一份(10-02 a5:原来透明底,代码像没包起来)。 */
+.t2-content pre { border-radius: var(--radius-md, 12px); max-width: 100%; overflow-x: auto; background: var(--bg-card); padding: 12px 14px; }
 /* 分割线 ---:比正文边框更淡的发丝线 + 上下留白 */
 .t2-content hr {
   border: none;
   border-top: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
   margin: 1.15em 0;
 }
-/* Markdown 表格:窄表不撑满、宽表横向滚动;表头/斑马纹用主题 token */
+/* Markdown 表格:窄表不撑满、宽表横向滚动 */
 .t2-content table {
   border-collapse: collapse;
   font-size: 0.92em;
@@ -131,14 +154,14 @@
   max-width: 100%;
   overflow-x: auto;
 }
+/* 表格减线(10-02 a5,与笔记同口径):格线淡一半,表头不垫底、灰字中等字重,去斑马纹。 */
 .t2-content th, .t2-content td {
-  border: var(--border-width) solid var(--border);
-  padding: 5px 10px;
+  border: var(--border-width) solid color-mix(in srgb, var(--border) 55%, transparent);
+  padding: 6px 10px;
   text-align: left;
   vertical-align: top;
 }
-.t2-content th { background: var(--overlay-subtle); font-weight: 600; }
-.t2-content tbody tr:nth-child(2n) td { background: var(--overlay-subtle); }
+.t2-content th { font-weight: 500; color: var(--text-muted); }
 
 /* run 统计行(最后一条助手气泡末尾:耗时 · tokens · 思考);等宽数字免得逐秒跳宽 */
 .t2-runstats { font-size: var(--ui-font-meta, 12px); line-height: 18px; font-variant-numeric: tabular-nums; }
@@ -157,6 +180,9 @@
   cursor: pointer; transition: background var(--duration-fast, .15s), color var(--duration-fast, .15s);
 }
 .t2-iconbtn:hover { background: var(--overlay-light, rgba(127,127,127,.1)); color: var(--text); }
+.t2-msgtime { align-self: center; padding: 0 6px; font-size: var(--ui-font-meta, 12px); color: var(--text-faint, var(--text-muted)); font-variant-numeric: tabular-nums; white-space: nowrap; }
+/* 暂不可用(「插入笔记」没有可插的笔记,G3-08):仍可点 —— 点了给说明;与 :hover 同特异性,必须排在它后面 */
+.t2-iconbtn[aria-disabled="true"], .t2-iconbtn[aria-disabled="true"]:hover { background: transparent; color: var(--text-faint, var(--text-muted)); opacity: .45; cursor: default; }
 
 /* ====== 用户消息(暖色带尾气泡,右对齐 + 昵称/头像) ====== */
 .t2-userwrap { display: flex; justify-content: flex-end; align-items: flex-start; gap: 8px; }
@@ -1016,3 +1042,9 @@
 .t2-target-health[data-target-health='gone'] .t2-quota-advisory-copy > svg { color: var(--danger); }
 .t2-target-health[data-target-health='connecting'] .t2-quota-advisory-copy > svg { color: var(--text-muted); }
 .t2-target-health .t2-quota-advisory-copy > span { min-width: 0; overflow-wrap: anywhere; }
+
+/* 设置 → 外观「聊天头像」关(chatAvatars.ts):助手头像留位不画 —— 34px 那一列还在,正文左缘与代码块
+   拖柄都不跳;用户侧头像与名字条一起收(气泡右对齐,身份自明)。 */
+html[data-chat-avatars='off'] .t2-asst > .t2-avatar { visibility: hidden; }
+html[data-chat-avatars='off'] .t2-user-avatar,
+html[data-chat-avatars='off'] .t2-username { display: none; }

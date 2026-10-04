@@ -5,7 +5,7 @@ import { activePageScope, pageStoreFor, setActivePageScope, usePageStore } from 
 import { useWorkspace, activeMainPanel } from '@lcl/engine'
 import { amadeus } from '@amadeus/api'
 import { hasUnifiedInstance, unifiedFocusBody, unifiedHeadings, unifiedRevealBlock, unifiedRevealHeading, unifiedRevealText, unifiedScopeFor } from '@amadeus/unified/lifecycle'
-import { findHeadingIndex } from '@amadeus-shared/pdfLink'
+import { findHeadingIndex, isMediaPath } from '@amadeus-shared/pdfLink'
 import { askString } from '@amadeus/components/askString'
 import { askNewDrawing } from '@amadeus/components/askNewDrawing'
 import { BLANK_SCENE_JSON, blankDrawing, isDrawingPath } from '@amadeus-shared/excalidraw/format'
@@ -384,6 +384,7 @@ export function openFile(path: string, opts?: { newTab?: boolean }): void {
   if (extHit(path, 'amadeus-db')) { openDb(path, opts); return }
   if (extHit(path, 'amadeus-pdf')) { openPdf(path, undefined, opts); return }
   if (extHit(path, 'amadeus-image')) { openImage(path, opts); return }
+  if (isMediaPath(path)) { openMedia(path, undefined, opts); return }
   // 本地库里的 .html → 内置浏览器(云端库没有本机路径 / 内置浏览器关着 → 照旧交系统默认程序)。
   if (/\.html?$/i.test(path)) {
     const ps0 = usePageStore.getState()

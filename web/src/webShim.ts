@@ -104,7 +104,7 @@ export async function installWebShim(): Promise<boolean> {
   const status = await account.authStatus()
   if (status.tokenValid === false) { await account.clearSession(token); gotoLogin(undefined, true); return false }
 
-  // 2) API 基址(同 AI Studio 约定):VITE_API_URL 覆盖,否则同源 location.origin+/api
+  // 2) API 基址:VITE_API_URL 覆盖,否则同源 location.origin+/api
   //    —— dev 经 vite proxy、prod 经本 app 自己的 nginx 把 /api 代理到 Forsion server(→ tangu worker)。
   // P1-K6 S1:两个基址分家。cloudApiBase = Forsion 云端 API(账号 / 额度 / 云桥);backendUrl = 本端引擎
   // (web 的 home 引擎就是云网关,今天同值)。云端读者一律用 cloudApiBase。

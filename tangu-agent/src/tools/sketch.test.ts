@@ -71,7 +71,9 @@ describe('sketch prompt section (trigger)', () => {
     expect(SKETCH_SECTION.toLowerCase()).toContain('compare');
     expect(SKETCH_SECTION.toLowerCase()).toContain('timeline');
     expect(SKETCH_SECTION).toContain('Do not wait for the user');
-    expect(SKETCH_SECTION).toContain('Every finished card needs four parts');
+    expect(SKETCH_SECTION).toContain('Do not force every card');
+    expect(SKETCH_SECTION).toContain('window.forsionSketch.setState');
+    expect(SKETCH_SECTION).toContain('320px');
     expect(SKETCH_SECTION).toContain('comparison/ranking');
     expect(SKETCH_SECTION).toContain('hierarchy/architecture');
   });

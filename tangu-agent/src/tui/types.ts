@@ -36,6 +36,8 @@ export interface NoticeItem {
   kind: 'notice';
   text: string;
   tone: 'info' | 'error' | 'success' | 'warn';
+  /** 'diff' = 按行上色(+ 绿 / - 红 / @@ 青),/diff 用。 */
+  variant?: 'diff';
 }
 export type TranscriptItem = UserItem | AssistantItem | NoticeItem;
 
@@ -52,6 +54,8 @@ export interface PendingApproval {
   name: string;
   args: string;
   preview: string;
+  /** 引擎的「为什么问你」(approval_request.reason.kind,白名单清洗过)。escalate / custom-ask / control 不吃「总允许」。 */
+  reasonKind?: 'custom-ask' | 'escalate' | 'mode' | 'control';
 }
 
 /** ask_user / exit_plan_mode 的待答询问(机制同审批,answer 为自由文本)。 */
@@ -82,7 +86,7 @@ export interface UiState {
 
 export type UiAction =
   | { type: 'ADD_USER'; text: string }
-  | { type: 'ADD_NOTICE'; text: string; tone?: NoticeItem['tone'] }
+  | { type: 'ADD_NOTICE'; text: string; tone?: NoticeItem['tone']; variant?: NoticeItem['variant'] }
   | { type: 'START_LIVE' }
   | { type: 'APPEND_TEXT'; delta: string }
   | { type: 'APPEND_REASONING'; delta: string }
@@ -96,6 +100,8 @@ export type UiAction =
   | { type: 'INQUIRY_CLEAR' }
   | { type: 'TODO'; todos: TodoItem[] }
   | { type: 'GROUP_NOTE'; text: string; tone?: NoticeItem['tone'] }
+  /** 运行中插话被引擎注入(turn_boundary):封存已产出的助手气泡,再把插话作为用户气泡落在它后面。 */
+  | { type: 'TURN_BOUNDARY'; userTexts: string[] }
   | { type: 'DONE' }
   | { type: 'ERROR'; msg: string; aborted?: boolean }
   | { type: 'CLEAR_ITEMS' }

@@ -22,6 +22,8 @@ import { checkReadPath, checkWritePath } from './fsPolicy.js';
 import { citeHitFor, citeHowFor, citeRefFor, docxText, grepPages, pageFilter, pagesOf, renderPages, type DocPage } from './documentPages.js';
 import { amadeusVaultPath } from './builtin/amadeus.js';
 import { contentFingerprint, noteAgentWrite, noteRead, readFingerprint } from './readState.js';
+import { pageInstructionsForFile } from '../services/pageInstructions.js';
+import { killProcessTree } from '../utils/boundedProcess.js';
 
 const READ_MAX_CHARS = 100_000;
 const READ_MAX_LINES = 2000;
@@ -203,17 +205,14 @@ function runBash(
       signal?.removeEventListener('abort', onAbort);
       resolve({ stdout, stderr, code, timedOut, aborted });
     };
-    // 杀整个进程组(负 pid);非 POSIX / 拿不到 pid 时退回杀 child 本身。杀后给 'close' 1.5s 正常收尾;
+    // POSIX 杀进程组;Windows 用 taskkill /T /F 连同孙进程一起停止。
+    // Windows 的 taskkill 在负载下启动/枚举可超过 1s,给它 5s,避免先杀 shell 后丢掉整棵树。
     // 仍不来(残留 fd 撑着管道)就强制 resolve —— 绝不无限等 'close'。
     const killGroup = (): void => {
-      const pid = child.pid;
-      try {
-        if (pid && process.platform !== 'win32') process.kill(-pid, 'SIGKILL');
-        else child.kill('SIGKILL');
-      } catch {
-        try { child.kill('SIGKILL'); } catch { /* already gone */ }
-      }
-      if (!graceTimer) graceTimer = setTimeout(() => finish(-1), 1500);
+      if (graceTimer) return;
+      const cleanupMs = process.platform === 'win32' ? 5000 : 1000;
+      void killProcessTree(child, cleanupMs);
+      graceTimer = setTimeout(() => finish(-1), cleanupMs + 500);
     };
     const onAbort = (): void => { aborted = true; killGroup(); };
 
@@ -349,7 +348,7 @@ export const HOST_TOOLS: Record<string, ToolImpl> = {
             + (blockIds ? ` or [[${ref}#^<block id>]] (one of the \`^id\` markers at the end of a line above)` : '')
             + ` or [[${ref}]] — copy BOTH bracket pairs; renders as a clickable chip.`
           : `\nCite for the user: [[${ref}#L<n>]] or a range [[${ref}#L<a>-L<b>]] (line numbers as shown) — copy BOTH bracket pairs; renders as a clickable chip opening the file at that line.`;
-      return paginate(text, offset, limit, relDisplay(ctx, abs)) + hint;
+      return pageInstructionsForFile(text, abs) + paginate(text, offset, limit, relDisplay(ctx, abs)) + hint;
     },
   },
 

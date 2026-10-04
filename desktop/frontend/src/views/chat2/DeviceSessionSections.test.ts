@@ -91,12 +91,14 @@ describe('DeviceSessionSections', () => {
     expect(row.querySelector('.t2s-dot.running')).toBeNull()
   })
 
-  it('S4: row menu has Rename and Archive only (no Delete)', async () => {
+  // 设置图标走与改名同一条 PATCH /agent/sessions/:id(远端放行),只动 emoji 字段。
+  it('S4: row menu has Set icon, Rename and Archive only (no Delete)', async () => {
     await render()
     const trigger = host.querySelector(`[data-device-section="${A}"] .t2s-srow-menu`) as HTMLElement
     await act(async () => { trigger.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
     const items = [...host.querySelectorAll('[data-overlay] button')].map((b) => b.textContent?.trim())
-    expect(items).toHaveLength(2)
+    expect(items).toHaveLength(3)
+    expect(items[0]).toMatch(/设置图标|Set icon/)
     expect(items.join('|')).not.toMatch(/删除|Delete/)
   })
 })

@@ -6,7 +6,8 @@
  * 样式全在 sidebar2.css(t2s- 前缀,token 驱动);右键菜单复用 base.css 的 .ctx-menu。
  */
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { Plus, MoreHorizontal, Pencil, Archive, ArchiveRestore, Trash2, ChevronRight, Folder, FolderOpen, Cloud, FolderPlus, SquarePen, Smartphone, Send, MessagesSquare, MessageSquare, Pin, PinOff, Info } from 'lucide-react'
+import { Plus, MoreHorizontal, Pencil, Archive, ArchiveRestore, Trash2, ChevronRight, Folder, FolderOpen, Cloud, FolderPlus, SquarePen, Smartphone, Send, MessagesSquare, MessageSquare, Pin, PinOff, Info, NotebookPen, Smile } from 'lucide-react'
+import { SessionIcon, SessionIconPicker } from '../../components/SessionIcon'
 import { folderPadLeft } from '@amadeus/lib/treeIndent'
 import { SidebarRow } from '../../components/SidebarRow'
 import { moveTo } from '@lcl/engine'
@@ -28,6 +29,7 @@ import { OverlayAt, nativeSheetPresenter, presentNativePrompt, useNativeSheetMen
 import { CtxMenuButtons } from '../../components/CtxMenuButtons'
 import { AttentionDot } from './AttentionDot'
 import { homeTarget } from '../../services/engine/targets'
+import { canTurnChatIntoNote, turnChatIntoNote } from './chatToNote'
 
 const CHANNEL_ICONS: Record<ChannelKind, typeof Smartphone> = { wechat: Smartphone, telegram: Send, qq: MessagesSquare }
 
@@ -162,6 +164,7 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
   // 作用域:归档区在 sticky footer 里,不在 .t2s-scroll 内。
   const sel = useItemSelect(rootRef)
   const [menu, setMenu] = useState<MenuState | null>(null)
+  const [iconPicker, setIconPicker] = useState<{ id: string; current: string | null; x: number; y: number } | null>(null)
   const [renaming, setRenaming] = useState<string | null>(null)
   const [draft, setDraft] = useState('')
   const [sessionLimit, setSessionLimit] = useState(() => {
@@ -324,7 +327,9 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
     const s = one ? [...allSessions, ...allArchived].find((x) => x.id === m.id) : undefined
     // 与笔记树右键菜单同一项(amadeusViews 的「在新标签页打开」);⌘/Ctrl 单击是它的快捷路径。
     if (one) items.push({ id: 'open-new-tab', label: t('sidebar.openInNewTab'), icon: <Plus size={13} />, run: () => { p.onSelect(m.id, { newTab: true }); setMenu(null) } })
+    if (one) items.push({ id: 'set-icon', label: t('session.icon.set'), icon: <Smile size={13} />, run: () => { setIconPicker({ id: m.id, current: s?.emoji ?? null, x: m.x, y: m.y }); setMenu(null) } })
     if (one) items.push({ id: 'rename', label: t('sidebar.rename'), icon: <Pencil size={13} />, run: () => { setMenu(null); startRename(m.id) } })
+    if (one && canTurnChatIntoNote()) items.push({ id: 'to-note', label: t('chat.toNote.action'), icon: <NotebookPen size={13} />, run: () => { void turnChatIntoNote(m.id); setMenu(null) } })
     items.push({
       id: m.archived ? 'unarchive' : 'archive',
       label: m.ids.length > 1
@@ -427,7 +432,7 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
       // 前导槽:与笔记/插件源 view 同构 → 三模式切换时图标不跳。状态点绝对定位贴在图标角上,
       // **不能内联排在标题前** —— 那样有状态的行会被推右 6px,会话行自己就先不齐了。
       lead={<>
-        {p.rowIcon?.(s) ?? <MessageSquare className="t2s-lead-icon t2s-dim" />}
+        <SessionIcon emoji={s.emoji} fallback={p.rowIcon?.(s) ?? <MessageSquare className="t2s-lead-icon t2s-dim" />} />
         {p.attentionIds?.get(s.id)
           ? <AttentionDot n={p.attentionIds.get(s.id)!.n} localOnly={p.attentionIds.get(s.id)!.localOnly} />
           : p.runningIds.has(s.id)
@@ -635,6 +640,7 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
         </OverlayAt>
       )}
 
+      {iconPicker && <SessionIconPicker sessionId={iconPicker.id} current={iconPicker.current} x={iconPicker.x} y={iconPicker.y} onClose={() => setIconPicker(null)} />}
       {wsMenu && webWsMenu && (
         <OverlayAt className="ctx-menu" x={wsMenu.x} y={wsMenu.y} onClick={(e) => e.stopPropagation()}>
           <CtxMenuButtons items={wsMenuItems(wsMenu)} />

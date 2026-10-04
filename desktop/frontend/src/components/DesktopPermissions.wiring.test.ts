@@ -8,13 +8,13 @@ import type { DesktopPermissionsSnapshot } from '../types'
 
 // Exercise the real wizard, settings navigation and permissions component; unrelated pages stay out of this fixture.
 vi.mock('../product', () => ({ PRODUCT: { agentBackend: true }, PRODUCT_DISPLAY_NAME: 'Forsion' }))
-vi.mock('../services/backendService', () => ({ listModels: vi.fn().mockResolvedValue({ models: [], directProviders: [] }) }))
+vi.mock('../services/backendService', () => ({ listModels: vi.fn().mockResolvedValue({ models: [], directProviders: [] }), getSpecialConfig: vi.fn(), saveSpecialConfig: vi.fn() }))
 vi.mock('../services/agentRunService', () => ({}))
 vi.mock('../services/sessionLog', () => ({}))
 vi.mock('../services/ttsService', () => ({}))
 vi.mock('../achievements/store', () => ({ track: vi.fn() }))
 vi.mock('../stores/themeStore', () => ({ useTheme: (pick: any) => pick({ bg: 'cream', bgSeed: '', setBg: vi.fn(), setBgSeedValue: vi.fn() }) }))
-vi.mock('../stores/appStore', () => ({ useApp: Object.assign(vi.fn(), { getState: () => ({ cfg: {} }) }) }))
+vi.mock('../stores/appStore', () => ({ useApp: Object.assign(vi.fn(), { getState: () => ({ cfg: {}, refreshSpecialEnabled: vi.fn() }) }) }))
 vi.mock('../theme/registry', () => ({ listLanguages: () => [], listSkins: () => [], forcedSchemeForLanguage: () => null }))
 vi.mock('../fontPresets', () => ({ listFonts: () => [] }))
 vi.mock('../uiFont', () => ({ readFont: () => '', applyUiFonts: vi.fn(), writeFont: vi.fn() }))
@@ -60,7 +60,7 @@ vi.mock('./AgentClisTab', () => ({ AgentClisTab: () => null }))
 vi.mock('./QrImage', () => ({ QrImage: () => null }))
 
 const { OnboardingWizard } = await import('./OnboardingWizard')
-const { listModels } = await import('../services/backendService')
+const { listModels, getSpecialConfig, saveSpecialConfig } = await import('../services/backendService')
 const { SettingsModal } = await import('./SettingsModal')
 const { PRODUCT } = await import('../product')
 let host: HTMLDivElement
@@ -81,6 +81,7 @@ const closeGuide = vi.fn().mockResolvedValue(undefined)
 beforeEach(() => {
   ;(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true
   vi.clearAllMocks()
+  vi.mocked(getSpecialConfig).mockResolvedValue({ config: { historian: { enabled: true }, muse: { enabled: true } } } as any)
   setLocaleGlobal('zh')
   PRODUCT.agentBackend = true
   window.tangu = { getConfig: vi.fn().mockResolvedValue(cfg), setConfig: vi.fn(), desktopPermissionsStatus: status,
@@ -115,6 +116,8 @@ it('offers optional permissions after the essential desktop choices and allows s
   await click('onboarding.welcome.continue')
   await click('onboarding.connect.skipForNow')
   await click('onboarding.nav.next')
+  expect(host.querySelector('.ob-flow')?.getAttribute('data-step')).toBe('background')
+  await click('onboarding.nav.next')
   await click('onboarding.nav.next')
   await click('onboarding.nav.next')
   expect(host.querySelector('.ob-step-head h1')?.textContent).toBe(translate('onboarding.step.env.title'))
@@ -144,11 +147,17 @@ it('offers permissions to non-Agent desktop products and continues with no permi
   expect(request).not.toHaveBeenCalled()
 })
 
-it.each(['missing', 'cloudWeb', 'mobile'] as const)('keeps the original web/mobile onboarding sequence for %s', async (kind) => {
+it.each(['missing', 'cloudWeb', 'mobile'] as const)('offers background agents but omits device permissions for %s', async (kind) => {
   if (kind === 'missing') delete window.tangu!.desktopPermissionsStatus
-  else window.tangu![kind] = true
+  else {
+    window.tangu![kind] = true
+    vi.mocked(getSpecialConfig).mockResolvedValue({ config: { historian: { enabled: true }, muse: { enabled: false } }, cloud: true } as any)
+  }
   await render(wizard())
   await click('onboarding.welcome.continue')
+  expect(host.querySelector('.ob-flow')?.getAttribute('data-step')).toBe('background')
+  if (kind !== 'missing') expect(host.querySelector<HTMLButtonElement>('[role="switch"][aria-label="Muse"]')?.disabled).toBe(true)
+  await click('onboarding.nav.next')
   expect(host.querySelector('.ob-step-head h1')?.textContent).toBe(translate('onboarding.step.theme.title'))
   await click('onboarding.nav.next')
   expect(host.querySelector('.ob-step-head h1')?.textContent).toBe(translate('onboarding.guide.doneTitle'))
@@ -204,7 +213,7 @@ it('preserves an existing model override, waits for saving, and allows clearing 
   expect(host.querySelector('.ob-flow')?.getAttribute('data-step')).toBe('model')
   expect(host.querySelector<HTMLButtonElement>('.ob-footer .primary')?.disabled).toBe(true)
   await act(async () => resolve())
-  expect(host.querySelector('.ob-flow')?.getAttribute('data-step')).toBe('theme')
+  expect(host.querySelector('.ob-flow')?.getAttribute('data-step')).toBe('background')
   expect(props.onReconnect).toHaveBeenCalledTimes(1)
 })
 
@@ -219,7 +228,7 @@ it('keeps the model draft and current step after a save failure, then retries', 
   expect(host.querySelector('[role="alert"]')?.textContent).toContain('disk unavailable')
   expect(host.querySelector('.ob-model-option[aria-pressed="true"]')?.textContent).toContain('My model')
   await click('onboarding.nav.next')
-  expect(host.querySelector('.ob-flow')?.getAttribute('data-step')).toBe('theme')
+  expect(host.querySelector('.ob-flow')?.getAttribute('data-step')).toBe('background')
 })
 
 it('saves the download source before re-checking local tools, and keeps the step on failure', async () => {
@@ -231,7 +240,7 @@ it('saves the download source before re-checking local tools, and keeps the step
   await render(wizard())
   await click('onboarding.welcome.continue'); await click('onboarding.connect.skipForNow')
   await act(async () => resolve?.())
-  for (let i = 0; i < 3; i++) { await click('onboarding.nav.next'); await act(async () => resolve?.()) }
+  for (let i = 0; i < 4; i++) { await click('onboarding.nav.next'); await act(async () => resolve?.()) }
   expect(host.querySelector('.ob-flow')?.getAttribute('data-step')).toBe('env')
   const china = () => [...host.querySelectorAll<HTMLButtonElement>('.ob-env-option')].find((b) => b.textContent?.includes(translate('onboarding.guide.sourceChina')))!
   expect(china().getAttribute('aria-checked')).toBe('false')
@@ -248,4 +257,17 @@ it('saves the download source before re-checking local tools, and keeps the step
   await act(async () => official.click())
   expect(host.querySelector('[role="alert"]')?.textContent).toContain('disk unavailable')
   expect(china().getAttribute('aria-checked')).toBe('true')
+})
+
+it('waits for the background opt-out to save before allowing navigation or skipping onboarding', async () => {
+  let resolve!: (config: any) => void
+  vi.mocked(saveSpecialConfig).mockImplementationOnce(() => new Promise((r) => { resolve = r }))
+  await render(wizard()); await click('onboarding.welcome.continue')
+  await act(async () => host.querySelector<HTMLButtonElement>('[role="switch"][aria-label="Muse"]')!.click())
+  expect(saveSpecialConfig).toHaveBeenLastCalledWith(expect.anything(), { muse: { enabled: false } })
+  expect([...host.querySelectorAll<HTMLButtonElement>('.ob-footer button')].every((b) => b.disabled)).toBe(true)
+  await act(async () => resolve({ historian: { enabled: true }, muse: { enabled: false } }))
+  expect(host.querySelector('[role="switch"][aria-label="Muse"]')?.getAttribute('aria-checked')).toBe('false')
+  await click('onboarding.nav.skip')
+  expect(props.onFinish).toHaveBeenCalledOnce()
 })

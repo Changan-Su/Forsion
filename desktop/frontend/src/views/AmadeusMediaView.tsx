@@ -14,7 +14,7 @@ import { useEffect } from 'react'
 import type { ViewProps } from '@lcl/engine'
 import { VIDEO_EXT_RE, type MediaLoc } from '@amadeus-shared/pdfLink'
 import { toAssetUrl } from '@amadeus-shared/assets'
-import { useTheme } from '../stores/themeStore'
+import { useVisualTheme as useTheme } from '../stores/themeStore'
 import { usePageStore } from '@amadeus/store/pageStore'
 import { MediaPlayer } from '@amadeus/components/MediaPlayer'
 

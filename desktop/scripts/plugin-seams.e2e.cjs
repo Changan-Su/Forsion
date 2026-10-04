@@ -23,7 +23,7 @@
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
-const { _electron: electron } = require('playwright-core')
+const electron = require('./lib/launch-electron.cjs')
 const { startStubEngine } = require('./lib/stub-engine.cjs')
 
 const ROOT = path.join(__dirname, '..')
@@ -119,6 +119,8 @@ async function openPluginsTab(app, win) {
     }
   }
   await sp.locator('.settings-sub--amadeus-plugins').first().waitFor({ timeout: 5000 }).catch(() => {})
+  // 插件页默认落在「核心插件」子页;外置插件卡片在「已安装插件」子页(09 月设置重排后)
+  await sp.locator('.settings-nav-subitem', { hasText: /^(已安装插件|Installed plugins)$/ }).first().click().catch(() => {})
   await sp.waitForTimeout(900)
   return sp
 }

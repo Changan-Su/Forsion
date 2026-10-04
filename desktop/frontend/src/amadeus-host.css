@@ -82,12 +82,12 @@
 .amx-mediaview-name { font-size: var(--ui-font-body, 13px); color: var(--text-muted); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* 标题与正文同处 PageView 的居中 920 框(两边各 48px 留白)。Obsidian 式:标题与正文文字都贴到内容最左边
  * (正文左侧的拖拽槽/边缘缩进被下方 .am-app 覆盖归零,拖拽手柄移进左留白)。故标题左内距仅 2px 与正文对齐。 */
-.amx-doc { max-width: 920px; margin: 0 auto; padding: 0 48px; }
-/* 可编辑标题:与编辑器一级标题同字号(1.7em × 15px = 25.5px / 700)。无 hover/focus 高亮框
- * (会与顶栏冲突,已去除);上移与顶栏之间留出间距(margin-top);提交即 renamePage。 */
+.amx-doc { max-width: var(--amx-page-max, 920px); margin: 0 auto; padding: 0 48px; }
+/* 可编辑标题:比正文一级标题(1.7em × 15px = 25.5px)高一档 —— 32px / 700(10-02 用户拍板 a5;原来与 H1 同字号,
+ * 页面标题和第一个标题分不出层级)。无 hover/focus 高亮框(会与顶栏冲突,已去除);上移与顶栏之间留出间距(margin-top);提交即 renamePage。 */
 .amx-title-input {
   width: 100%; border: none; outline: none; background: transparent; color: var(--text);
-  font-family: inherit; font-size: 25.5px; font-weight: 700; line-height: 1.3;
+  font-family: inherit; font-size: 32px; font-weight: 700; line-height: 1.25;
   margin: 10px 0 2px; padding: 4px 6px 4px 2px;
 }
 /* 未命名笔记标题占位(Notion 式虚化 New Page):比正文更淡。 */
@@ -165,7 +165,7 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
 }
 .amx-mode-btn:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.08)); color: var(--text); }
 .amx-source {
-  display: block; box-sizing: border-box; width: 100%; max-width: 920px; margin: 0 auto;
+  display: block; box-sizing: border-box; width: 100%; max-width: var(--amx-page-max, 920px); margin: 0 auto;
   min-height: 60vh; border: none; outline: none; resize: none; overflow: hidden;
   background: transparent; color: var(--text); white-space: pre-wrap; word-break: break-word;
   font-family: var(--font-mono, ui-monospace, 'SF Mono', Menlo, monospace);
@@ -262,15 +262,16 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
 .am-app .embed-image-body { padding: 2px 4px; }
 .am-app .embed-image { display: block; max-width: 100%; height: auto; border-radius: var(--radius-sm, 6px); }
 
-/* 非图片文件卡片 `![[report.pdf]]`:图标 + 文件名 + 打开(点击 openAttachment)。 */
+/* 非图片文件卡片 `![[report.pdf]]`:图标 + 文件名 + 打开(点击 openAttachment)。
+   与 Chat 浮卡同一配方(c3):细描边 + 统一淡阴影 + 浮层圆角;左侧那道 2px 深色竖条去掉。 */
 .am-app .embed-file {
   display: inline-flex; align-items: center; gap: 8px; max-width: 100%;
-  border: 1px solid var(--border); border-left: 2px solid var(--primary); border-radius: var(--radius-sm, 6px);
-  background: var(--surface-2); color: var(--text); font: inherit; font-size: var(--ui-font-body, 13px);
+  border: var(--border-width, 1px) solid var(--border); border-radius: var(--radius-md, 10px); box-shadow: var(--card-shadow);
+  background: var(--bg-card); color: var(--text); font: inherit; font-size: var(--ui-font-body, 13px);
   padding: 8px 12px; cursor: pointer; text-align: left;
   transition: background var(--dur-fast, 0.15s), border-color var(--dur-fast, 0.15s);
 }
-.am-app .embed-file:hover { background: var(--surface); border-color: var(--primary); }
+.am-app .embed-file:hover { background: var(--menu-hover); }
 .am-app .embed-file-ic { flex: 0 0 auto; font-size: var(--ui-font-heading, 14px); }
 .am-app .embed-file-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .am-app .embed-file-open { flex: 0 0 auto; font-size: var(--ui-font-caption, 11px); color: var(--text-muted); }
@@ -676,6 +677,13 @@ html:not(.sc-on) .am-app .milkdown .ProseMirror.ProseMirror-focused .callout-tog
 }
 .amx-props-chip:hover, .amx-props-add:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.08)); color: var(--text); }
 .amx-props-rows { display: flex; flex-direction: column; gap: 2px; margin-top: 4px; }
+/* 零属性:平时不露「属性 0 +」,指针进标题区或本条、键盘焦点进来才出(触屏没有悬停,照常显示)。只淡不收,露出时正文不跳。 */
+@media (hover: hover) {
+  .amx-props.is-empty .amx-props-bar { opacity: 0; transition: opacity var(--duration-fast, 0.15s); }
+  .amx-title-wrap:hover + .amx-props.is-empty .amx-props-bar,
+  .amx-props.is-empty:hover .amx-props-bar,
+  .amx-props.is-empty:focus-within .amx-props-bar { opacity: 1; }
+}
 .amx-props-empty { color: var(--text-faint, var(--text-muted)); padding: 2px 6px; }
 .amx-prop-row { display: flex; align-items: flex-start; gap: 8px; padding: 1px 0; }
 .amx-prop-key {
@@ -744,7 +752,7 @@ html:not(.sc-on) .am-app .milkdown .ProseMirror.ProseMirror-focused .callout-tog
 .am-app .stack[data-dnd] .edge-zone[data-side='right'] { right: -46px; }
 
 /* ── PDF / 音视频内联预览(![[…]];文件卡片/图片样式在上方既有块) ── */
-.am-app .embed-media { border: 1px solid var(--border); border-radius: var(--radius-md, 10px); overflow: hidden; }
+.am-app .embed-media { border: var(--border-width, 1px) solid var(--border); border-radius: var(--radius-md, 10px); box-shadow: var(--card-shadow); overflow: hidden; }
 .am-app .embed-media-head {
   display: flex; align-items: center; gap: 8px; padding: 6px 10px;
   background: var(--overlay-light, rgba(127, 127, 127, 0.05)); font-size: var(--ui-font-meta, 12px);
@@ -1093,7 +1101,7 @@ html:not(.sc-on) .am-app .milkdown .ProseMirror.ProseMirror-focused .callout-tog
 .amx-hoverprev-body { flex: 1; min-height: 0; overflow-y: auto; padding: 4px 12px 10px; font-size: 0.92em; }
 .amx-hoverprev-body .md-plain .milkdown { pointer-events: none; }
 /* Notion 式封面 + 标题上方大图标/动作排 */
-.amx-cover { position: relative; width: calc(100% - 64px); max-width: 864px; height: 210px; margin: 0 auto; border-radius: var(--radius-lg, 12px); overflow: hidden; flex: 0 0 auto; }
+.amx-cover { position: relative; width: calc(100% - 64px); max-width: calc(var(--amx-page-max, 920px) - 56px); height: 210px; margin: 0 auto; border-radius: var(--radius-lg, 12px); overflow: hidden; flex: 0 0 auto; }
 /* 「调整位置」模式:图片解锁可上下拖(否则默认锁定不可拖);激活时工具常显 + 内描边提示激活态。 */
 .amx-cover-repo { cursor: ns-resize; box-shadow: inset 0 0 0 2px var(--accent); }
 .amx-cover-repo .amx-cover-tools { opacity: 1; }
@@ -1278,15 +1286,15 @@ html:not(.sc-on) .am-app .milkdown .ProseMirror.ProseMirror-focused .callout-tog
 .amx-db-relpath { flex: 1; min-width: 0; margin-left: auto; text-align: right; color: var(--text-faint, var(--text-muted)); font-size: var(--ui-font-caption, 11px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* 看板 */
 .amx-db-kanban { display: flex; align-items: flex-start; gap: 10px; overflow-x: auto; padding: 4px 2px 8px; }
-.amx-db-lane { flex: 0 0 230px; display: flex; flex-direction: column; gap: 6px; background: var(--overlay-light, rgba(127, 127, 127, 0.05)); border-radius: var(--radius-md, 12px); padding: 8px; min-height: 60px; }
+.amx-db-lane { flex: 0 0 230px; display: flex; flex-direction: column; gap: 6px; background: var(--overlay-light, rgba(127, 127, 127, 0.05)); border-radius: calc(var(--radius-md, 12px) + 4px); padding: 8px; min-height: 60px; }
 .amx-db-lane-head { display: flex; align-items: center; gap: 6px; padding: 0 2px; }
 .amx-db-lane-none { color: var(--text-faint, var(--text-muted)); font-size: var(--ui-font-meta, 12px); }
 .amx-db-lane-count { margin-left: auto; color: var(--text-faint, var(--text-muted)); font-size: var(--ui-font-caption, 11px); }
 .amx-db-lane-cards { display: flex; flex-direction: column; gap: 6px; min-height: 8px; }
 .amx-db-lane-add { display: inline-flex; align-items: center; gap: 4px; border: none; background: transparent; color: var(--text-muted); font: inherit; font-size: var(--ui-font-meta, 12px); padding: 4px 6px; border-radius: var(--radius-sm, 6px); cursor: pointer; text-align: left; }
 .amx-db-lane-add:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.08)); color: var(--text); }
-/* 卡片(看板/画廊共用) */
-.amx-db-card { display: flex; flex-direction: column; gap: 5px; background: var(--bg-card, var(--bg)); border-radius: var(--radius-sm, 6px); box-shadow: var(--card-shadow); padding: 8px 10px; cursor: pointer; user-select: none; }
+/* 卡片(看板/画廊共用)。与 Chat 浮卡同一配方(10-02 用户拍板 c3):细描边 + 统一淡阴影 + 浮层圆角;Genesis 主题里去描边。 */
+.amx-db-card { display: flex; flex-direction: column; gap: 5px; background: var(--bg-card, var(--bg)); border: var(--border-width, 1px) solid var(--border); border-radius: var(--radius-md, 10px); box-shadow: var(--card-shadow); padding: 8px 10px; cursor: pointer; user-select: none; }
 .amx-db-card-title { font-size: var(--ui-font-body, 13px); font-weight: 600; color: var(--text); word-break: break-word; }
 .amx-db-card-prop { display: flex; flex-wrap: wrap; gap: 4px; min-width: 0; }
 .amx-db-card-text { color: var(--text-muted); font-size: var(--ui-font-meta, 12px); overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; word-break: break-word; }
@@ -1315,7 +1323,7 @@ html:not(.sc-on) .am-app .milkdown .ProseMirror.ProseMirror-focused .callout-tog
 .amx-db-ev:hover { background: color-mix(in srgb, var(--accent, #6c5ce7) 22%, transparent); }
 /* 画廊 */
 .amx-db-gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 10px; padding: 4px 2px 8px; }
-.amx-db-card-cover { width: calc(100% + 20px); margin: -8px -10px 0; height: 110px; object-fit: cover; border-radius: 8px 8px 0 0; }
+.amx-db-card-cover { width: calc(100% + 20px); margin: -8px -10px 0; height: 110px; object-fit: cover; border-radius: calc(var(--radius-md, 10px) - var(--border-width, 1px)) calc(var(--radius-md, 10px) - var(--border-width, 1px)) 0 0; }
 /* 计算列(公式/引用):只读文本;#错误/#循环 哨兵标红 */
 .amx-db-computed { font-size: var(--ui-font-body, 13px); color: var(--text); padding: 0 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .amx-db-computed[data-err] { color: var(--warn, #c0392b); font-size: var(--ui-font-meta, 12px); }
@@ -1897,6 +1905,7 @@ html:not(.sc-on) .am-app .milkdown .ProseMirror.ProseMirror-focused .callout-tog
   border: var(--border-width, 1px) solid var(--overlay-medium, rgba(127, 127, 127, 0.18));
   border-radius: var(--radius-md, 10px);
   background: var(--bg-card, var(--bg));
+  box-shadow: var(--card-shadow); /* 与 Chat 浮卡同一配方(c3) */
   overflow: hidden;
 }
 /* 拖动中的那张:浮起并半透明,让人看清底下压没压到别人;压到了 → 危险色描边(落手即回弹)。 */
@@ -1945,8 +1954,8 @@ html:not(.sc-on) .am-app .milkdown .ProseMirror.ProseMirror-focused .callout-tog
 
 .dash-add-menu {
   position: absolute; right: 0; top: calc(100% + 4px); z-index: 41;
-  min-width: 148px; padding: 4px;
-  border: var(--border-width, 1px) solid var(--overlay-medium, rgba(127, 127, 127, 0.18));
+  min-width: 148px; padding: var(--menu-shell-padding, 4px);
+  border: var(--border-width, 1px) solid var(--border);
   border-radius: var(--radius-md, 10px);
   background: var(--bg-card, var(--bg));
   box-shadow: var(--card-shadow);
@@ -1954,8 +1963,8 @@ html:not(.sc-on) .am-app .milkdown .ProseMirror.ProseMirror-focused .callout-tog
 .dash-add-menu button {
   display: flex; align-items: center; gap: 7px; width: 100%;
   border: none; background: transparent; color: var(--text);
-  font: inherit; font-size: var(--ui-font-meta, 12px); text-align: left;
-  padding: 5px 8px; border-radius: var(--radius-sm, 6px); cursor: pointer;
+  font: inherit; font-size: var(--menu-text-size, 14px); text-align: left;
+  min-height: var(--menu-item-min-height, 32px); padding: var(--menu-item-pad-block, 6px) var(--menu-item-pad-inline, 8px); border-radius: var(--radius-sm, 6px); cursor: pointer;
 }
 .dash-add-menu button:hover { background: var(--menu-hover, rgba(127, 127, 127, 0.12)); }
 .dash-add-menu button.dash-danger:hover { color: var(--danger, #e5484d); }
@@ -2036,3 +2045,61 @@ html:not(.sc-on) .am-app .milkdown .ProseMirror.ProseMirror-focused .callout-tog
 .unified-page .unified-savebar { width: auto; max-width: none; margin: 8px 0 4px; align-items: center; }
 .unified-page .unified-savebar > svg { margin-top: 0; }
 .unified-page .unified-savebar > .btn { flex: 0 0 auto; white-space: nowrap; }
+
+/* ── 页面排版选项(评审 C-21,拍板 #14):全宽 / 小字号 / 页面字体 ──
+ * 属性由笔记宿主(amadeusViews 的 EditorScope)挂在 `.amx-pane` 上,状态存本机 viewMemory、不写 md;
+ * 分享页 / Muse 库 / 收件箱不挂 = 恒缺省。PDF 导出克隆的就是这个壳,字体与字号随之带进 PDF(纸面窄于 920,全宽无从体现)。
+ * 只作用于这一篇的正文排版:字体 / 字号限定 `.unified-body:not(.amx-canvas)`(画布卡片按缺省字号排版,不受影响)
+ * 与标题;界面字号六档不动。全宽写 100% 而不是 none —— 封面的 calc(… - 56px) 遇 none 会整条失效。
+ * 小字号 13.5px:Notion 是 16→14(0.875);这里取 0.9,仍比界面正文 13px 大一档,读起来不像控件字。
+ * 衬线用系统字体栈(与设置页主题预览同一串),不打包新字体文件;等宽 = --font-mono;缺省 = 不声明。 */
+.amx-pane[data-page-wide] { --amx-page-max: 100%; }
+.amx-pane[data-page-small] .unified-body:not(.amx-canvas) .milkdown .ProseMirror { font-size: 13.5px; }
+.amx-pane[data-page-font='serif'] :is(.unified-body:not(.amx-canvas) .milkdown .ProseMirror, .amx-doc .amx-title-input) {
+  font-family: ui-serif, 'Songti SC', 'Noto Serif SC', Georgia, serif;
+}
+.amx-pane[data-page-font='mono'] :is(.unified-body:not(.amx-canvas) .milkdown .ProseMirror, .amx-doc .amx-title-input) {
+  font-family: var(--font-mono);
+}
+/* ⋯ 菜单里的排版段(PageStyleMenuItems):字体一排三格,每格用该字体写 Aa;开关项末列打勾(DESIGN §3 菜单几何)。 */
+.ctx-menu .amx-pagefont { padding-bottom: 2px; }
+.ctx-menu .amx-pagefont-row { display: flex; gap: 4px; padding: 0 4px 2px; }
+.ctx-menu .amx-pagefont-row .amx-pagefont-opt {
+  flex: 1 1 0; min-width: 0; width: auto; min-height: 0;
+  flex-direction: column; justify-content: center; gap: 1px;
+  padding: 5px 2px 4px; text-align: center;
+  border: var(--border-width, 1px) solid transparent;
+  color: var(--text-muted);
+}
+.ctx-menu .amx-pagefont-row .amx-pagefont-opt.on { border-color: var(--sel-line); background: var(--sel-fill); color: var(--text); }
+.amx-pagefont-aa { font-size: var(--ui-font-title, 16px); line-height: 1.2; color: var(--text); }
+.amx-pagefont-opt[data-font='serif'] .amx-pagefont-aa { font-family: ui-serif, 'Songti SC', 'Noto Serif SC', Georgia, serif; }
+.amx-pagefont-opt[data-font='mono'] .amx-pagefont-aa { font-family: var(--font-mono); }
+.amx-pagefont-name { font-size: var(--ui-font-caption, 11px); line-height: 1.3; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ctx-menu .amx-pagestyle-label { flex: 1 1 auto; min-width: 0; }
+.ctx-menu .amx-pagestyle-check { margin-left: auto; color: var(--accent-ink, var(--accent)); }
+/* 移动端 ⋯ sheet 里的同一组:字体一行三段,开关项末列打勾。 */
+.mb-sheet-row.amx-sheet-choice { cursor: default; }
+.mb-sheet-row.amx-sheet-choice > span:not(.amx-sheet-seg) { flex: 1 1 auto; min-width: 0; }
+.amx-sheet-seg { display: inline-flex; gap: 4px; flex: none; }
+.amx-sheet-seg > button {
+  border: var(--border-width, 1px) solid var(--border); border-radius: var(--radius-pill, 999px);
+  background: transparent; color: var(--text-muted); font: inherit; font-size: var(--ui-font-meta, 12px);
+  padding: 4px 10px; cursor: pointer;
+}
+.amx-sheet-seg > button.on { border-color: var(--sel-line); background: var(--sel-fill); color: var(--text); }
+.amx-sheet-seg > button[data-font='serif'] { font-family: ui-serif, 'Songti SC', 'Noto Serif SC', Georgia, serif; }
+.amx-sheet-seg > button[data-font='mono'] { font-family: var(--font-mono); }
+.mb-sheet-row .amx-sheet-check { margin-left: auto; color: var(--accent-ink, var(--accent)); }
+
+/* 框架收声(10-02 用户拍板 v3):笔记 / 仪表盘顶栏的动作钮平时 0.38,指针进顶栏或键盘焦点进来才亮,
+ * 与 lcl engine.css 末尾的标签栏同一个值。已点亮的图钉 / 同步(.amx-pin-on)保持全亮。
+ * 画板工具盘(.excalidraw 里那条)是干活的工具,不收;嵌卡(.dash-viewcard)整条顶栏已经悬停才出,不再叠一层。 */
+@media (hover: hover) {
+  .amx-toolbar:not(.excalidraw *):not(.dash-viewcard *) .amx-mode-btn:not(.amx-pin-on) {
+    opacity: 0.38;
+    transition: opacity var(--duration-fast, 0.15s);
+  }
+  .amx-toolbar:not(.excalidraw *):not(.dash-viewcard *):hover .amx-mode-btn,
+  .amx-toolbar:not(.excalidraw *):not(.dash-viewcard *) .amx-mode-btn:focus-visible { opacity: 1; }
+}

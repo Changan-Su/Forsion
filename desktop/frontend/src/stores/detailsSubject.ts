@@ -2,7 +2,8 @@ import { create } from 'zustand'
 import { activeMainPanel, useWorkspace } from '@lcl/engine'
 import { useApp } from './appStore'
 
-export type DetailsSubject = ({ kind: 'project'; path: string } | { kind: 'agent'; slug: string }) & { human?: import('../services/humanCollaboration').HumanJump }
+/** evolution = 一次性跳到 Agent 详情「成长 › 进化」的令牌(对话里的工作笔记更新卡点「查看」)。 */
+export type DetailsSubject = ({ kind: 'project'; path: string } | { kind: 'agent'; slug: string }) & { human?: import('../services/humanCollaboration').HumanJump; evolution?: number }
 
 /** 侧栏「查看详情」:右栏 Tangu 详情临时显示这个项目 / Agent,不切当前会话。
  *  `from` = 设下时右栏跟随的主会话;主会话一变(切会话 / 新对话 / 换到钉住别的会话的主标签)就清掉,右栏回到跟随。

@@ -23,6 +23,7 @@ import type { EditorView } from '@milkdown/kit/prose/view'
 import { Fragment } from '@milkdown/kit/prose/model'
 import type { Node as ProseNode, ResolvedPos } from '@milkdown/kit/prose/model'
 import { createDropIndicatorPlugin } from 'prosemirror-drop-indicator'
+import { unfoldCalloutsForInsert } from '../blocks/markdown/callout'
 import { zoomOf } from '@lcl/engine'
 import { runEndOf } from './canvasEdit'
 import { tabIndent, tabOutdent, type TabFoldHooks } from '../blocks/markdown/tabIndent'
@@ -692,6 +693,7 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
   let belowRef: { rowEl: HTMLElement } | null = null
   /** 分栏行内的落点(见 planCellDrop)。存 DOM 元素而非裸 pos:drop 时现场解析,理由同 belowRef。 */
   let cellDropRef: { cellEl: HTMLElement; lineEl: HTMLElement; pos: number; edge: 'top' | 'bottom'; tail: boolean; self: boolean } | null = null
+  let quoteDrop = false
   /** 末块之下 = 顶层文末落点(2026-08-19 闭合锚:末块是卡时这里成了合法且常用的落点,
    *  此前无人认领 → 拖到末卡之下静默没反应)。 */
   let tailRef = false
@@ -731,6 +733,72 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
   /** 元素在画面上真有盒子(折叠小节里的块是 display:none,rect 全 0 —— 拿它当落点 = 零宽的
    *  不可见线 + 块掉进隐藏区,「线画在明处、块掉进暗处」那条老账的同款)。 */
   const boxed = (el: unknown): el is HTMLElement => el instanceof HTMLElement && el.getClientRects().length > 0
+
+  /** 引用/callout 内按可见正文块的上下边沿定落点。库按线段端点距离只取八个候选，
+   *  宽表格的单元格边沿会挤掉目标折叠标题；这里只看指针所在容器，特殊块与多块同规。 */
+  const planQuoteDrop = (view: EditorView, event: DragEvent): { at: number; lineEl: HTMLElement; edge: 'top' | 'bottom'; self: boolean } | null => {
+    if (inCanvas(view)) return null
+    const sel = view.state.selection
+    const range = sel instanceof NodeSelection ? { from: sel.from, to: sel.to } : topRangeOf(view)
+    if (!range) return null
+    const el = event.target instanceof Element ? event.target.closest('blockquote') : null
+    if (!(el instanceof HTMLElement) || !view.dom.contains(el)) return null
+    let pos: number
+    try { pos = view.posAtDOM(el, 0) - 1 } catch { return null }
+    const node = view.state.doc.nodeAt(pos)
+    if (node?.type.name !== 'blockquote' || view.nodeDOM(pos) !== el) return null
+    // 卡片与分栏骨架有自己的完整性契约，不能嵌入引用。
+    const content = view.state.doc.slice(range.from, range.to).content
+    let forbidden = false
+    content.descendants((n) => { if (['amadeusCanvasCard', 'amadeusColumnRow', 'amadeusColumnCell'].includes(n.type.name)) forbidden = true })
+    if (forbidden) return null
+    const head = !!node.firstChild?.isTextblock && /^\[![\w-]+\]/.test(node.firstChild.textContent)
+    const titleEl = view.nodeDOM(pos + 1)
+    if (head && boxed(titleEl)) {
+      const r = titleEl.getBoundingClientRect()
+      if (event.clientY < r.top + r.height / 2) return null
+    }
+    let best: { at: number; lineEl: HTMLElement; edge: 'top' | 'bottom'; distance: number } | null = null
+    node.forEach((child, offset) => {
+      const at = pos + 1 + offset
+      const lineEl = view.nodeDOM(at)
+      if (!boxed(lineEl)) return
+      const r = lineEl.getBoundingClientRect()
+      const edge = event.clientY < r.top + r.height / 2 ? 'top' : 'bottom'
+      const distance = Math.abs(event.clientY - (edge === 'top' ? r.top : r.bottom))
+      if (!best || distance < best.distance) best = { at: edge === 'top' ? at : at + child.nodeSize, lineEl, edge, distance }
+    })
+    if (!best) return null
+    const target = best as { at: number; lineEl: HTMLElement; edge: 'top' | 'bottom'; distance: number }
+    return { ...target, self: target.at >= range.from && target.at <= range.to }
+  }
+
+  const executeQuoteDrop = (view: EditorView, event: DragEvent, copy: boolean): boolean => {
+    const plan = planQuoteDrop(view, event)
+    if (!plan) return false
+    if (plan.self) return true
+    const { state } = view
+    const sel = state.selection
+    const range = sel instanceof NodeSelection ? { from: sel.from, to: sel.to } : topRangeOf(view)
+    if (!range) return false
+    const content = sel instanceof NodeSelection && sel.node.type.name === 'list_item'
+      ? Fragment.from(sel.$from.parent.type.create(sel.$from.parent.attrs, sel.node))
+      : state.doc.slice(range.from, range.to).content
+    const tr = copy ? state.tr : state.tr.delete(range.from, range.to)
+    const at = tr.mapping.map(plan.at)
+    const $at = tr.doc.resolve(at)
+    if ($at.parent.type.name !== 'blockquote' || !$at.parent.canReplace($at.index(), $at.index(), content)) return false
+    tr.insert(at, content)
+    settleFoldedDrag(state, tr, range, at, copy)
+    unfoldCalloutsForInsert(tr, at, at + content.size)
+    tr.setSelection(content.childCount === 1 && NodeSelection.isSelectable(content.firstChild!)
+      ? NodeSelection.create(tr.doc, at)
+      : TextSelection.between(tr.doc.resolve(at), tr.doc.resolve(at + content.size)))
+    tr.setMeta('amxColumns', true).setMeta('uiEvent', 'drop')
+    view.dispatch(tr.scrollIntoView())
+    view.focus()
+    return true
+  }
 
   /** 纵坐标 y 落在哪个**顶层块**上(看不见的折叠块不算)。块位从 doc 正着数,DOM 只拿来量矩形 ——
    *  别从 DOM 反推(`posAtDOM(el, 0) - 1`):有 contentDOM 的块 posAtDOM 给内容起点,减 1 恰是块前位;
@@ -1140,6 +1208,7 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
           cellDropRef = null
           childRef = null
           tailRef = false
+          quoteDrop = false
           hideVline()
           hideHline()
           hidePmLine()
@@ -1671,6 +1740,8 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
             return
           }
           if (!view || view.dom.dataset.dragging !== 'true') return
+          if (quoteDrop) hideHline()
+          quoteDrop = false
           // 文档模式的卡片拖拽:整支自管(见 executeCardDropInDoc 顶注)。精确落点/尾巴/分栏配对
           // 全让路;指示线画在将要执行的顶层缝上(与 drop 同一个 plan 函数 = 线说真话)。
           // 落回自己族段 = 不画线不 preventDefault(真机上浏览器给「不可放」光标,drop 不会发)。
@@ -1690,6 +1761,21 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
               } else hideHline()
               return
             }
+          }
+          const quotePlan = planQuoteDrop(view, e)
+          if (quotePlan) {
+            quoteDrop = true
+            pairRef = null
+            childRef = null
+            belowRef = null
+            cellDropRef = null
+            tailRef = false
+            hideVline()
+            hidePmLine()
+            if (quotePlan.self) hideHline()
+            else showHline(view, quotePlan.lineEl, 0, quotePlan.edge)
+            e.preventDefault()
+            return
           }
           // 末块之下(NodeSelection 与跨块选区都收;画布模式不适用,卡是绝对定位):
           tailRef = false
@@ -1777,6 +1863,7 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
           fileDropRef = null
           childRef = null
           pairRef = null
+          quoteDrop = false
           hideVline()
           hideHline()
           hidePmLine()
@@ -1794,12 +1881,14 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
           const cr = childRef
           const fd = fileDropRef
           const tl = tailRef
+          const qd = quoteDrop
           pairRef = null
           belowRef = null
           cellDropRef = null
           childRef = null
           fileDropRef = null
           tailRef = false
+          quoteDrop = false
           hideVline()
           hideHline()
           hidePmLine()
@@ -1835,6 +1924,8 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
           if (!done) {
             if (tl) {
               done = executeMoveToTail(view, copy)
+            } else if (qd) {
+              done = executeQuoteDrop(view, e, copy)
             } else if (topRangeOf(view)) {
               done = executeMoveBlocks(view, e, copy)
             } else if (cr) {
@@ -1986,6 +2077,7 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
             pairRef = null
             belowRef = null
             cellDropRef = null
+            quoteDrop = false
             activeRef = null
             if (viewRef === editorView) viewRef = null
           },
@@ -2034,7 +2126,7 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
         // 行下方 / 末块之下的落点归 root 级捕获期 dragover 检测(handlePlugin 的 onRootDragOver:指针
         // 多半在 view.dom **之外**的 pane 空白区,本插件只挂 view.dom 收不到)——命中期本层全让路。
         // tailRef / cellDropRef 同理:指针在 view.dom 之内时两边都会出线,drop 却被捕获期路由吞掉。
-        if (belowRef || tailRef || cellDropRef) {
+        if (belowRef || tailRef || cellDropRef || quoteDrop) {
           pairRef = null
           childRef = null // ⚠️ 漏清它 = 画的是「落到行后」、执行的却是「塞进列表项当子项」(drop 路由 cr 在 br 之前)
           hideVline()

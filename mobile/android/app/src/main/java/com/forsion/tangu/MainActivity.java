@@ -23,6 +23,7 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(NativeFilePickerPlugin.class);
         // 市场安装包的封顶下载:流式落盘、超过上限当场中止(Filesystem.downloadFile 是整个下完才看大小,能把存储写满)。
         registerPlugin(MarketDownloadPlugin.class);
+        registerPlugin(PhoneControlPlugin.class);
         // 重建(配置变更 / 进程被杀后从最近任务回来)会重放当初的启动 intent:点岛跳会话只在全新启动时认一次。
         LiveIslandPlugin.freshLaunch = savedInstanceState == null;
         super.onCreate(savedInstanceState);

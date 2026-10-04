@@ -3,7 +3,7 @@ import { deskCardGone, deskCardPlan } from './AgentDesk'
 import { DESK_DRAFT_KEY, packDeskMap } from '../../stores/deskPlan'
 
 describe('deskCardGone', () => {
-  it('开聊前空态照常在场(用户要求:新对话草稿也要有 Desk 卡;07-27 那条隐身理由已随 pickers 收进 anchor 失效)', () => {
+  it('已挂载的卡片零条目时不退场(开聊前的挂载由 ChatView 控制)', () => {
     expect(deskCardGone(undefined, false)).toBe(false)
   })
   it('历史还在加载的空会话不隐身(切会话瞬间不闪)', () => {

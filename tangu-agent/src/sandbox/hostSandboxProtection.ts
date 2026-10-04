@@ -15,7 +15,7 @@ export function canonicalFuturePath(input: string, hops = 0): string {
   let cursor = path.resolve(input);
   const tail: string[] = [];
   for (;;) {
-    try { return path.join(realpathSync(cursor), ...tail.reverse()); }
+    try { return path.join(realpathSync.native(cursor), ...tail.reverse()); }
     catch {
       if (hops < 40) {
         let link: string | null = null;

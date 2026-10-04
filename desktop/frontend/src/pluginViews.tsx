@@ -1,18 +1,21 @@
 import { windowKind } from './windowKind'
+import { amadeusAvailable } from './features/runtime'
 /**
  * 插件视图桥:pluginStore.views(平台中立的 DOM-mount 契约)→ LCL 视图注册表。
  * 桌面差异全部收在这里(与 amadeusPlugins.ts 同款纪律,vendored pluginStore 不 import @lcl):
  *  - 注册名统一命名空间 `plugin:<pluginId>:<viewId>`(Space 的 requires.views 用同名声明);
  *  - 插件禁用 → 先关掉该类型的所有开着的 leaf(主区按 mainTabs,侧栏两侧 closeSideView),再反注册
  *    ——Dockview 的 components map 收缩时不能留活面板;
- *  - ctx.openView 经 pluginStore.viewOpener 钩子指到 workspace.openView(主区)。
+ *  - ctx.openView 经 pluginStore.viewOpener 钩子指到 workspace.openView(主区 / 侧栏 / 底部面板;移动端无底部)。
  */
 import React, { useEffect, useLayoutEffect, useRef } from 'react'
+import { Puzzle, type LucideIcon } from 'lucide-react'
 import { registerView, unregisterView, useWorkspace, getActiveSpace, getView, showInMainPanel, type ViewProps } from '@lcl/engine'
 import { notePluginGesture, usePluginStore } from '@amadeus/plugins/pluginStore'
 import { recordDevMountError } from '@amadeus/plugins/devRecords'
 import { setDevViewBridge } from '@amadeus/plugins/devSandbox'
 import type { ViewContribution } from '@amadeus/plugins/types'
+import { PLUGIN_ICONS } from '@amadeus/components/icons'
 import { registerMessages, translate } from './i18n'
 
 registerMessages({
@@ -33,6 +36,11 @@ export const PluginViewHost: React.FC<ViewProps & { def: ViewContribution; plugi
   current.current = { leaf, params }
   const listeners = useRef(new Set<(params: Readonly<Record<string, unknown>>) => void>())
   useLayoutEffect(() => { for (const notify of listeners.current) notify(params) }, [params])
+  // 插件视图读写库内路径(ctx.app.readFile / listFiles…),而库是惰性恢复的:只有左栏工作区、聊天、Agent Desk 这些
+  // 宿主会唤醒它。用户直接停在插件 Space(启动即在、刷新、从主页点进来)时谁都不唤醒 → 插件读到空、写被拒
+  // 「No vault is open」(2026-10-02 视频工作室 0.8 × 主页启动缺省,真 Electron 抓到)。与 WorkspaceView 同一处方;
+  // 动态 import:amadeusPlugins 静态引了本文件(syncPluginViews)。
+  useEffect(() => { if (amadeusAvailable()) void import('./amadeusPlugins').then((m) => m.ensureAmadeusReady()) }, [])
   // Plugin views may own Electron webviews/canvases. Passive effect cleanup can run
   // after the first paint of the next Space, leaving the old surface visible briefly.
   // Keep mounting passive, but dispose the live surface during React's unmount commit.
@@ -57,7 +65,8 @@ export const PluginViewHost: React.FC<ViewProps & { def: ViewContribution; plugi
       el.textContent = translate('pluginview.mountFailed')
     }
     const runCleanup = (fn: () => void): void => {
-      try { fn() } catch (e) { console.error(`[plugin-view] cleanup "${def.id}" failed`, e) }
+      // 也派给窗口 error:agent 自建 Space 的清理抛错由 builtins/agentSpaceSync 按栈帧认领、回写给 agent(别的插件只多一行日志)
+      try { fn() } catch (e) { console.error(`[plugin-view] cleanup "${def.id}" failed`, e); globalThis.reportError?.(e) }
     }
     try {
       const mounted = def.mount(el, {
@@ -109,8 +118,21 @@ export const PluginViewHost: React.FC<ViewProps & { def: ViewContribution; plugi
  *  ⚠️改用引擎的 closeViewsOfType(以 api.panels 为准):原来手写 `mainTabs + left + right` 三处枚举,
  *  加了底部面板之后会漏掉停在 bottom 的实例 —— 插件被禁用后它的 cleanup 不跑、UI 继续活着,而且这个
  *  已反注册的类型留在持久化布局里,下次启动 layoutViewsAllRegistered 判定失败 → **整份布局丢回默认**。 */
+/** 当前 workspace store 有底部面板(Dockview 壳)。单列 store 没有 bottomVisible 这一位 —— 移动构建把整个选择器
+ *  换成单列 store,所以只能运行时实判,不能 import 一个常量(换掉的模块里没有它)。 */
+export const hasBottomPanel = (): boolean => 'bottomVisible' in useWorkspace.getState()
+
+/** 插件视图的标签图标:图标词表里的名字(ViewContribution.icon)按 Lucide 的调用形(size / className)包一层;
+ *  没写、或词表里没有 → 通用拼图。⚠️侧栏的标签只有图标没有名字,不给图标就是一个看不见、点不到的空标签 ——
+ *  固定 View 让插件视图在侧栏分标签(导航 + 素材区)之后才暴露出来,2026-10-03 Video Studio 真机截图抓到。 */
+function viewIcon(name: string | undefined): LucideIcon {
+  const Glyph = name ? PLUGIN_ICONS[name] : undefined
+  if (!Glyph) return Puzzle
+  return (({ size, className }: { size?: number; className?: string }) => <Glyph width={size} height={size} className={className} />) as unknown as LucideIcon
+}
+
 function closeLeafsOfType(type: string): void {
-  useWorkspace.getState().closeViewsOfType(type)
+  useWorkspace.getState().closeViewsOfType(type, true) // 反注册清场:固定 View 也得关(类型都没了)
 }
 
 let installed = false
@@ -120,9 +142,20 @@ export function syncPluginViews(): void {
   if (installed) return
   installed = true
 
+  // 底部面板只有主窗的 Dockview 壳有:按 store 实判,别看 UI_MODE —— 安卓原生构建经 vite engineSwap 换上单列 store,
+  // UI_MODE 却可能仍是 desktop;Mini / 浮窗 / 拖出的独立窗也没有。没有时 bottom 回落右抽屉(同 Extend View 的约定),
+  // 也不对插件宣称有 bottom;卫星窗只宣称主区。
+  const main = windowKind() === 'main'
+  const hasBottom = main && hasBottomPanel()
   usePluginStore.getState().setViewOpener((type, loc) => {
-    // P2:放开停靠位(此前写死 'main',插件 view 进侧栏只能靠 space.json 声明)。
-    useWorkspace.getState().openView(type, {}, loc === 'left' || loc === 'right' ? loc : 'main')
+    // P2:放开停靠位(此前写死 'main',插件 view 进侧栏只能靠 space.json 声明)。2026-10-02 起含底部面板。
+    const at = loc === 'left' || loc === 'right' ? loc : loc === 'bottom' ? (hasBottom ? 'bottom' : 'right') : 'main'
+    useWorkspace.getState().openView(type, {}, at)
+  }, !main ? ['main'] : hasBottom ? ['main', 'left', 'right', 'bottom'] : ['main', 'left', 'right'])
+  // 关 / 换自己的视图(ctx.closeView / ctx.replaceView):两种 store 都有这两个方法,卫星窗只有一个主区,同样照办。
+  usePluginStore.getState().setViewControls({
+    close: (type) => useWorkspace.getState().closeViewsOfType(type),
+    replace: (from, to, params) => useWorkspace.getState().replaceViewsOfType(from, to, params),
   })
 
   // Forsion Sandbox 的热重载接缝:插件宿主(平台中立)不 import @lcl,工作台的读写由桌面壳在这里注入。
@@ -131,10 +164,16 @@ export function syncPluginViews(): void {
   setDevViewBridge({
     snapshot: (prefix) => {
       const ws = useWorkspace.getState()
-      const side = new Map<string, 'left' | 'right'>()
+      const side = new Map<string, 'left' | 'right' | 'bottom'>()
       for (const t of ws.leftTabs) side.set(t.type, 'left')
       for (const t of ws.rightTabs) side.set(t.type, 'right')
-      const out: Array<{ type: string; params: Record<string, unknown>; loc: 'main' | 'left' | 'right' }> = []
+      // 底部面板没有 tab 投影:展开着的按 __loc 认,收起的在 stash 里(漏掉 = 热重载把底部视图开进主区)
+      for (const p of ws.api?.panels ?? []) {
+        const q = (p.params ?? {}) as Record<string, unknown>
+        if (q.__loc === 'bottom' && typeof q.__type === 'string') side.set(q.__type, 'bottom')
+      }
+      for (const t of ws.stash.bottom) side.set(t.type, 'bottom')
+      const out: Array<{ type: string; params: Record<string, unknown>; loc: 'main' | 'left' | 'right' | 'bottom' }> = []
       ws.remapLeaves((type, params) => {
         if (type.startsWith(prefix)) out.push({ type, params: { ...params }, loc: side.get(type) ?? 'main' })
         return undefined
@@ -181,6 +220,7 @@ export function syncPluginViews(): void {
         type,
         kind: 'page', // 插件 view 无宿主可信的身份/文件声明,一律 page;embeddable 恒缺省 false(宿主白名单语义)
         displayName: () => def.title,
+        icon: viewIcon(def.icon),
         factory: (props) => <PluginViewHost def={def} pluginId={type.split(':')[1]} {...props} />,
         singleton: def.singleton !== false,
         closable: true,

@@ -33,7 +33,7 @@ vi.mock('../core/db.js', () => ({
 }));
 vi.mock('../seams/runtime.js', () => ({ deps: () => ({ profile: { appId: 'tangu', defaultModelId: 'model-1' } }) }));
 vi.mock('../services/runStore.js', () => ({ createRun: vi.fn(async (run: any) => { state.created = run; }) }));
-vi.mock('../services/agentLoop.js', () => ({ abortRun: vi.fn((...a: any[]) => { state.aborted.push(a); }), enqueueRun: vi.fn() }));
+vi.mock('../services/agentLoop.js', () => ({ abortRun: vi.fn((...a: any[]) => { state.aborted.push(a); }), enqueueRun: vi.fn((_sid: string, runId: string) => { const ev = state.script.shift(); if (ev) queueMicrotask(() => emit(runId, ev)); }) }));
 vi.mock('../services/remoteLock.js', () => ({
   remoteLocked: () => { if (state.lockThrows) throw new Error('boom'); return state.locked; },
 }));
@@ -42,13 +42,12 @@ vi.mock('../services/eventBus.js', () => ({
     let set = state.listeners.get(runId);
     if (!set) state.listeners.set(runId, (set = new Set()));
     set.add(listener);
-    const ev = state.script.shift();
-    if (ev) queueMicrotask(() => { for (const l of [...(state.listeners.get(runId) ?? [])]) l(ev); });
     return () => { set!.delete(listener); };
   }),
 }));
-vi.mock('../services/approvals.js', () => ({
-  resolveApproval: vi.fn((...a: any[]) => { state.resolved.push(a); return true; }),
+vi.mock('../services/approvals.js', async (original) => ({
+  ...(await original<typeof import('../services/approvals.js')>()),
+  resolveApproval: vi.fn((...a: any[]) => { state.resolved.push(a); const ev = state.script.shift(); if (ev) queueMicrotask(() => emit(state.created.id, ev)); return true; }),
   approvalLocalOnly: vi.fn((id: string, runId: string) => (state.localOnly.has(id) ? ['*', runId].includes(state.localOnly.get(id)!) : null)),
 }));
 vi.mock('../agents/agentRegistry.js', () => ({ readAgentsMeta: () => ({ defaultSlug: 'xyra' }), listAgents: vi.fn(async () => []), getAgent: vi.fn(async () => null) }));
@@ -93,7 +92,9 @@ describe('通道入口 × 远程锁定', () => {
   it('锁定时「批准」不兑现挂着的审批、「拒绝」也不兑现;解锁后照常', async () => {
     const s = service();
     state.script = [{ type: 'approval_request', payload: { approvalId: 'apv1', preview: 'run_bash rm -rf build' } }];
-    expect(await inbound(s, '清理构建目录')).toContain('需要你批准');
+    expect(await inbound(s, '清理构建目录')).toBe('');
+    await new Promise(r => setTimeout(r, 0));
+    expect(state.sent.join('\n')).toContain('需要你批准');
     state.locked = true;
     expect(await inbound(s, '批准')).toBe(REMOTE_LOCKED_CHANNEL_REPLY);
     expect(await inbound(s, '拒绝')).toBe(REMOTE_LOCKED_CHANNEL_REPLY);

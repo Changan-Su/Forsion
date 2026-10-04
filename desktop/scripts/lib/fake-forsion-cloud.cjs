@@ -19,7 +19,9 @@ async function startFakeForsionCloud(opts = {}) {
     bg: { daily: 120, weekly: 200, autoMain: false },
     nickname: '演示用户',
     avatar: null,
-    autoDeduct: false,
+    // 公告(opts.announcement 给了才有;形状 = server GET /api/announcements/pending 的 announcement)
+    announcement: opts.announcement || null,
+    seenAnnouncements: new Set(),
     tickets: [
       { id: 't1', user_id: 'u1', title: null, description: '笔记同步后图片丢了，重新打开才出现。', status: 'in_progress', user_unread: true, admin_unread: false, created_at: '2026-09-26T08:00:00Z', updated_at: '2026-09-27T10:00:00Z' },
       { id: 't2', user_id: 'u1', title: null, description: '希望 Muse 能按项目分开记忆。', status: 'resolved', user_unread: false, admin_unread: false, created_at: '2026-09-20T08:00:00Z', updated_at: '2026-09-21T09:00:00Z' },
@@ -27,6 +29,13 @@ async function startFakeForsionCloud(opts = {}) {
     replies: { t1: [{ id: 'r1', ticket_id: 't1', author_id: 'admin', author_role: 'admin', content: '收到，已复现，下个版本修复。', created_at: '2026-09-27T10:00:00Z' }], t2: [] },
   }
   const requests = []
+  const giftDefinition = {
+    version: 1, name: { zh: '云端礼包', en: 'Cloud gift' }, description: { zh: '打开获得 100 积分和 1 张重置卡。', en: 'Open to receive 100 points and one reset card.' },
+    icon: '🎁', rarity: 'rare', stackable: true,
+    use: { label: { zh: '打开礼包', en: 'Open gift' }, effects: [{ type: 'points', amount: 100 }, { type: 'reset_card', count: 1 }], animation: 'sparkle' },
+  }
+  const gifts = new Set(['gift-1', 'gift-2'])
+  const usedGifts = new Set()
   const bgLimit = (limit) => Math.round(limit * 0.15)
   const quota = () => {
     const d = bgLimit(LIMIT.daily), w = bgLimit(LIMIT.weekly)
@@ -34,7 +43,7 @@ async function startFakeForsionCloud(opts = {}) {
       dailyLimit: LIMIT.daily, dailyUsed: state.used.daily, dailyRemaining: Math.max(LIMIT.daily - state.used.daily, 0), dailyPercent: Math.round(state.used.daily / LIMIT.daily * 100),
       weeklyLimit: LIMIT.weekly, weeklyUsed: state.used.weekly, weeklyRemaining: Math.max(LIMIT.weekly - state.used.weekly, 0), weeklyPercent: Math.round(state.used.weekly / LIMIT.weekly * 100),
       weeklyResetAt: '2026-10-05', monthlyLimit: -1, monthlyUsed: 0, monthlyRemaining: -1, monthlyPercent: 0,
-      extraTokenPoints: 0, tier: 'plus', hasOverride: false, pointsAutoDeduct: state.autoDeduct,
+      extraTokenPoints: 0, tier: 'plus', hasOverride: false, pointsAutoDeduct: false,
       background: {
         sharePercent: 15, modelId: 'glm-bg', autoMain: state.bg.autoMain,
         dailyLimit: d, dailyUsed: state.bg.daily, dailyRemaining: Math.max(d - state.bg.daily, 0), dailyPercent: Math.round(state.bg.daily / d * 100),
@@ -78,6 +87,27 @@ async function startFakeForsionCloud(opts = {}) {
       if (p === '/api/settings') return send(res, 200, { nickname: state.nickname, avatar: state.avatar })
       if (p === '/api/membership/my') return send(res, 200, { membership: { status: 'active', tier: 'plus', plan: { name: 'Plus 月付', tier: 'plus' }, startedAt: '2026-09-01T00:00:00Z', expiresAt: '2026-12-31T00:00:00Z' } })
 
+      // 背包列表不含卡密，逐件揭示才返回；重置卡与已有额度台架共享数量。
+      const vouchers = [
+        { id: 'voucher-1', itemType: 'api_key', displayName: 'Model credit voucher', source: 'points', acquiredAt: '2026-09-29T12:00:00Z', status: 'active' },
+        { id: 'voucher-2', itemType: 'api_key', displayName: 'Cloud storage voucher', source: 'admin', acquiredAt: '2026-09-28T12:00:00Z', status: 'active' },
+      ]
+      if (p === '/api/shop/inventory' && req.method === 'GET') return send(res, 200, [
+        ...Array.from({ length: state.cards }, (_, i) => ({ id: `reset-${i}`, itemType: 'reset_card', displayName: '额度重置卡', source: 'points', acquiredAt: '2026-09-30T12:00:00Z', status: 'active' })),
+        ...vouchers,
+        ...[...gifts].map((id) => ({ id, productId: 'gift-product', itemType: 'custom_item', itemDefinition: giftDefinition, displayName: '云端礼包', source: 'admin', acquiredAt: '2026-09-30T12:00:00Z', status: 'active' })),
+      ])
+      if (/^\/api\/shop\/inventory\/gift-[12]\/use$/.test(p) && req.method === 'POST') {
+        const id = p.split('/').at(-2)
+        const reused = usedGifts.has(id)
+        if (!reused) { gifts.delete(id); usedGifts.add(id); state.cards += 1 }
+        return send(res, 200, { itemId: id, message: { zh: '已获得 100 积分与 1 张重置卡', en: 'Received 100 points and one reset card' }, effects: giftDefinition.use.effects, animation: 'sparkle', reused })
+      }
+      if (p.startsWith('/api/shop/inventory/') && req.method === 'GET') {
+        const item = vouchers.find((v) => v.id === p.split('/').pop())
+        return send(res, item ? 200 : 404, item ? { ...item, codeName: 'Demo voucher', key: 'DEMO-VOUCHER-KEY' } : { detail: 'Not found' })
+      }
+
       // 额度与积分
       if (p === '/api/token-quota/my') return send(res, 200, quota())
       if (p === '/api/token-quota/reset-card/use') {
@@ -91,7 +121,11 @@ async function startFakeForsionCloud(opts = {}) {
         state.cards += n
         return send(res, 200, { success: true, cardsGranted: n, pointsSpent: n * 100, pricePerCard: 100, newPointsBalance: 1234 - n * 100, resetCards: state.cards })
       }
-      if (p === '/api/token-quota/auto-deduct') { state.autoDeduct = !!body.enabled; return send(res, 200, { success: true, pointsAutoDeduct: state.autoDeduct }) }
+      // 积分自动抵扣 09-29 下线:服务端回 410
+      if (p === '/api/token-quota/auto-deduct') return send(res, 410, { error: 'auto_deduct_removed', detail: '积分自动抵扣已下线' })
+      // 公告:只回最新一条且没看过的
+      if (p === '/api/announcements/pending') return send(res, 200, { announcement: state.announcement && !state.seenAnnouncements.has(state.announcement.id) ? state.announcement : null })
+      { const m = /^\/api\/announcements\/([^/]+)\/seen$/.exec(p); if (m && req.method === 'POST') { state.seenAnnouncements.add(decodeURIComponent(m[1])); return send(res, 200, { success: true }) } }
       if (p === '/api/token-quota/background/auto-main') { state.bg.autoMain = !!body.enabled; return send(res, 200, { success: true, autoMain: state.bg.autoMain }) }
       if (p === '/api/token-quota/background/convert') return send(res, 200, { success: true, converted: { daily: 10, weekly: 50 }, quota: quota() })
       if (p === '/api/token-quota/my/logs') return send(res, 200, {

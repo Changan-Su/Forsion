@@ -44,7 +44,7 @@ describe('downloadWorkspaceFile × 原生存「下载」(P1-DL)', () => {
     expect(mime).toBe('text/plain;charset=utf-8')
     expect(await blob.text()).toBe('hello')
     expect(createElement).not.toHaveBeenCalled()
-    expect(texts()).toEqual(['已保存到「下载」: b (1).txt'])
+    expect(texts()).toEqual(['已保存到「下载」：b (1).txt'])
   })
 
   it('无桥(desktop / web / 移动端 dev):照旧 <a download>,不弹「已保存」', async () => {

@@ -2,7 +2,7 @@
  *  ref = 完整 vault 相对路径 —— 与 dbAggregateStore 的 load(p,p) 同一约定,与嵌入/聚合共享同一 dbStore entry。 */
 import { useEffect } from 'react'
 import type { ViewProps } from '@lcl/engine'
-import { useTheme } from '../stores/themeStore'
+import { useVisualTheme as useTheme } from '../stores/themeStore'
 import { useDbStore } from '@amadeus/store/dbStore'
 import { DatabaseEmbed } from '@amadeus/blocks/database/DatabaseEmbed'
 import '@amadeus/blocks' // 属性类型/块注册 side-effect,独立挂载时不能指望编辑器先加载

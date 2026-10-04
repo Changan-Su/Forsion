@@ -3,9 +3,9 @@ import { ChevronRight, History } from 'lucide-react'
 import { useApp } from '../../stores/appStore'
 import { notifyApp } from '../../stores/notificationStore'
 import { takeFreshNominations } from '../../stores/notificationWiring'
-import { getBackgroundSessions, getSessionHistorian, type SessionHistorianStatus } from '../../services/backendService'
+import { getBackgroundSessions, getSessionDetail, getSessionHistorian, type SessionHistorianStatus } from '../../services/backendService'
 import { useChildChat } from '../../stores/childChatStore'
-import { registerMessages, useI18n } from '../../i18n'
+import { currentLocale, registerMessages, useI18n } from '../../i18n'
 import { Markdown } from '../../components/Markdown'
 import { openAgentProfile } from '../agentProfileNav'
 import { targetForSession } from '../../services/engine/targets'
@@ -53,6 +53,18 @@ function nudgeRefine(sessionId: string, activityId: string): void {
   })
 }
 
+/** 后台复盘把一条做法直接写进了这个 Agent 的工作笔记(10-04:不再等 /refine)→ 告诉用户写了什么,点一下去「进化」里看或撤销。 */
+function notifyAdopted(sessionId: string, activityId: string, titles: string): void {
+  const st = useApp.getState()
+  const slug = st.configBySession[sessionId]?.agentSlug || st.defaultAgentSlug
+  const name = st.agentDefs.find((a) => a.slug === slug)?.name || slug
+  notifyApp({
+    event: 'harness.candidates', level: 'info', sticky: true, dedupeKey: `harness.adopted:${activityId}`,
+    text: st.tr('ntf.harnessAdopted', { name, titles: titles.split(' | ').join(currentLocale() === 'zh' ? '、' : ', ') }),
+    action: { label: st.tr('ntf.actionView'), run: () => openAgentProfile(slug, 'evolution') },
+  })
+}
+
 export function HistorianStatus({ sessionId }: { sessionId: string }) {
   const { t } = useI18n()
   const cfg = useApp((s) => s.cfg)
@@ -61,10 +73,11 @@ export function HistorianStatus({ sessionId }: { sessionId: string }) {
   const [data, setData] = useState<SessionHistorianStatus | null>(null)
   const [failed, setFailed] = useState(false)
   const seen = useRef<Set<string> | null>(null) // 本会话已见过的活动 id;null = 还没成功轮询过(首轮不提醒)
+  const iconActivity = useRef<string | null>(null)
   // Historian 的子会话(引擎每个父会话最多一条,kind='historian')。SubChatStatus 不再单列它(U-04 去重),
   // 完整记录的入口改在这里:展开时现取,取不到(老引擎 / 还没跑过)就不露按钮。
   const [transcriptId, setTranscriptId] = useState<string | null>(null)
-  useEffect(() => { setOpen(false); setData(null); setFailed(false); setTranscriptId(null); seen.current = null }, [sessionId])
+  useEffect(() => { setOpen(false); setData(null); setFailed(false); setTranscriptId(null); seen.current = null; iconActivity.current = null }, [sessionId])
   // 展开期间首次生成子会话也要冒出入口:没找到(或一次查询失败)就定时再取,找到即停;收起 / 卸载时清掉定时器。
   // 不再只挂在「记录数 / 运行态变化」上重试 —— 那几个值不变时一次瞬时失败就让入口一直缺席(Codex 第一轮 B1-3)。
   useEffect(() => {
@@ -94,7 +107,18 @@ export function HistorianStatus({ sessionId }: { sessionId: string }) {
           setData(result); setFailed(false)
           const { fresh, seen: next } = takeFreshNominations(result.activity || [], seen.current)
           seen.current = next
-          for (const item of fresh) nudgeRefine(sessionId, item.id)
+          for (const item of fresh) { if (item.action === 'harness_adopted') notifyAdopted(sessionId, item.id, item.detail || ''); else nudgeRefine(sessionId, item.id) }
+          const icon = result.activity?.find((item) => item.action === 'icon_updated')
+          if (icon && icon.id !== iconActivity.current) {
+            iconActivity.current = icon.id
+            void getSessionDetail(targetForSession(sessionId), sessionId).then((record) => {
+              if (disposed || record.id !== sessionId) return
+              useApp.setState((st) => ({
+                sessions: st.sessions.map((x) => x.id === sessionId ? { ...x, emoji: record.emoji } : x),
+                archivedSessions: st.archivedSessions.map((x) => x.id === sessionId ? { ...x, emoji: record.emoji } : x),
+              }))
+            }).catch(() => { if (!disposed) iconActivity.current = null })
+          }
         }
       } catch { if (!disposed) setFailed(true) }
       if (!disposed) timer = setTimeout(load, 2500)

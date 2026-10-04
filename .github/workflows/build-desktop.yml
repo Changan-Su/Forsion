@@ -1,10 +1,10 @@
 name: build-desktop
 
-# 三平台桌面安装包(macOS .dmg / Windows .exe / Linux .AppImage)。
+# 三平台 × 两种桌面安装包(默认带 Extend / NoExtend 不捆 Extend)。
 # 原生模块 better-sqlite3 必须在各自系统上编译,所以用 GitHub 的三种 runner 各编各的。
 #
 # 触发(刻意收紧——日常 push / PR 一律不触发,只在发布时跑):
-#   - 推送 v* 版本 tag:跑测试 → 构建 → 自动创建/更新该 tag 的 GitHub Release 并附三平台安装包。
+#   - 推送 v* 版本 tag:跑测试 → 构建 → 自动创建/更新该 tag 的 GitHub Release 并附六个桌面安装包。
 #   - 手动(Actions 页 Run workflow):跑测试 → 构建,产物在 Artifacts 里,不发 Release。
 # 测试是构建的前置门禁:测试不过则不构建、不发布。
 
@@ -65,12 +65,20 @@ jobs:
 
   build:
     needs: test
-    name: ${{ matrix.os }}
+    name: ${{ matrix.os }} (${{ matrix.distribution }})
     runs-on: ${{ matrix.os }}
+    env:
+      FORSION_BUNDLE_EXTEND: ${{ matrix.bundleExtend }}
     strategy:
       fail-fast: false
       matrix:
+        os: [ubuntu-latest, windows-2022, macos-latest]
+        distribution: [default, no-extend]
         include:
+          - distribution: default
+            bundleExtend: '1'
+          - distribution: no-extend
+            bundleExtend: '0'
           - os: ubuntu-latest
             ebargs: --linux
           - os: windows-2022
@@ -112,7 +120,10 @@ jobs:
       # codeStudioProjects.test.ts 同日补进:它在 Windows 上的红是真 bug(chokidar 交给 ignored 的根是 / 分隔,
       # 整棵项目树不监听),修复后两轮独立 probe 全绿。
       # 不在名单:agentLoopRuntimeSafety.test.ts(Windows 上清理临时目录偶发 ENOTEMPTY:异步写入的句柄还开着,与持久化写入无关)。
-      - name: Windows durable-write tests
+      # hostSandbox.winconsole.test.ts 不是写入类,借这道闸跑:agent 起子进程不许弹控制台窗口(只有 Windows 真机测得出)。
+      # 不在名单:electron/backendRunner.test.ts(用例全过,但 windows-2022 上 afterAll 删临时目录报 ENOTEMPTY,同上一类;
+      # 2026-10-04 probe 实测。它测的是 unit/backendRunner,与控制台 / 进程清理无关)。
+      - name: Windows persistence and process tests
         if: runner.os == 'Windows'
         shell: bash
         run: |
@@ -122,14 +133,16 @@ jobs:
             src/services/agentFileSync.test.ts src/services/agentFileSync.safety.test.ts \
             src/services/memorySyncService.test.ts src/services/memorySync.test.ts \
             src/services/projectDoc.test.ts src/services/contextWindowStore.test.ts \
-            src/plugins/npmInstall.test.ts \
+            src/plugins/npmInstall.test.ts src/sandbox/hostSandbox.winconsole.test.ts \
+            test/windowsProcess.test.ts test/acpEngineSpawn.test.ts \
             test/agentFileSync.test.ts test/localMemoryBrain.test.ts test/memoryManagementRoutes.test.ts \
             test/memoryDream.test.ts test/memorySync.test.ts test/agentFolder.test.ts
           cd ../desktop
           npx vitest run \
             electron/hostTextWrite.test.ts electron/forsionHome.test.ts electron/accountCore.test.ts \
             electron/amadeus/settings.account.test.ts electron/amadeus/ipc.account.test.ts \
-            electron/codeStudioProjects.test.ts
+            electron/codeStudioProjects.test.ts electron/lclLink.test.ts \
+            electron/backendManager.test.ts electron/cliInstall.test.ts
 
       # Verify the distributed tool/prompt contract on every native runner, without operating its GUI.
       - name: Check bundled Computer Use platform contract
@@ -183,23 +196,26 @@ jobs:
       # 缺失则应用内更新形同虚设 → 这里硬失败,避免发出一个装不了更新的版本。
       # macOS 走 GitHub API 检测(未签名不自装),不依赖该 feed,故跳过校验。
       #
-      # 也认 beta*.yml:**现在的配置下不会产生它**(github provider 恒写 latest*.yml,连 beta 版也是,
-      # 三段机制见 electron-builder.config.cjs 的实证注释),但一旦换 generic 更新服务器、或显式设了
-      # publish.channel,产物就会改名 —— 那时这道闸不该报一句「缺少 latest*.yml」把人带偏。
+      # default=latest*.yml;NoExtend=latest-no-extend*.yml。即使发 beta tag 也按发行版写这两套
+      # 清单(客户端 beta 清单 404 时回退各自的 latest);精确核对,防止两份构建共用错误的 feed。
       - name: Verify update manifests
         if: runner.os != 'macOS'
         working-directory: desktop
         shell: bash
         run: |
           # 不用管道(runner 的 bash 带 -o pipefail,grep -q 命中即关管道会把上游打成 SIGPIPE 判负)
-          found=$(ls -1 dist/latest*.yml dist/beta*.yml 2>/dev/null || true)
-          test -n "$found" || { echo "::error::缺少 latest*.yml / beta*.yml — 应用内更新 feed 未生成,请改用 --publish always(见 build.publish 配置)"; exit 1; }
-          echo "$found"
+          channel=latest
+          if [ "$FORSION_BUNDLE_EXTEND" = "0" ]; then channel=latest-no-extend; fi
+          suffix=''
+          if [ "$RUNNER_OS" = "Linux" ]; then suffix=-linux; fi
+          manifest="dist/${channel}${suffix}.yml"
+          test -f "$manifest" || { echo "::error::缺少 $manifest — 该发行版的更新 feed 未生成"; exit 1; }
+          echo "$manifest"
 
       - name: Upload installers
         uses: actions/upload-artifact@v4
         with:
-          name: forsion-${{ matrix.os }}
+          name: forsion-${{ matrix.os }}-${{ matrix.distribution }}
           path: |
             desktop/dist/*.AppImage
             desktop/dist/*.dmg
@@ -326,7 +342,7 @@ jobs:
           name: forsion-android
           path: mobile/android/Forsion-Tangu-*.apk
 
-  # 仅在打 v* tag 时:收集三平台产物(+APK)→ 创建/更新对应 Release 并附件。
+  # 仅在打 v* tag 时:收集三平台 × 两种桌面发行版(+APK)→ 创建/更新对应 Release 并附件。
   # APK 是「顺便」:build-android 失败不挡桌面发版(always + 只硬依赖 build 成功)。
   release:
     needs: [build, build-android]
@@ -337,7 +353,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: artifacts
-          merge-multiple: true   # 三个 artifact 的文件平铺到 artifacts/
+          merge-multiple: true   # 六个桌面 artifact + APK;安装包和 feed 名均区分发行版,不互相覆盖
 
       - name: Create / update GitHub Release
         env:

@@ -97,6 +97,27 @@ afterEach(() => {
 /** 不经 refocus 直接把焦点摆到 unit(负对照要在改造前的 store 上也能摆出这个局面)。 */
 const focusUnitRaw = (): void => { T.useEngineFocus.setState({ ref: { kind: 'unit', unitId: U }, name: 'Mac mini' }) }
 
+describe('session icons use the owning engine', () => {
+  it('bound session saves to its unit after focus changes; full emoji survives', async () => {
+    T.bindSession('s-icon', { kind: 'unit', unitId: U })
+    useApp.setState({ sessions: [sessionRec('s-icon', { emoji: null })] as any })
+    router = () => ({ status: 200, body: { session: sessionRec('s-icon', { emoji: '👩🏽‍💻' }) } })
+    expect(await useApp.getState().setSessionEmoji('s-icon', '👩🏽‍💻')).toBe(true)
+    expect(calls.at(-1)?.url).toBe(`${UNIT}/agent/sessions/s-icon`)
+    expect(JSON.parse(calls.at(-1)!.body!)).toEqual({ emoji: '👩🏽‍💻' })
+    expect(useApp.getState().sessions[0].emoji).toBe('👩🏽‍💻')
+  })
+  it('failed or invalid saves preserve the existing icon', async () => {
+    useApp.setState({ sessions: [sessionRec('s-icon', { emoji: '🎨' })] as any })
+    router = () => ({ status: 500, body: { detail: 'failed' } })
+    expect(await useApp.getState().setSessionEmoji('s-icon', '🌱')).toBe(false)
+    expect(useApp.getState().sessions[0].emoji).toBe('🎨')
+    calls.length = 0
+    expect(await useApp.getState().setSessionEmoji('s-icon', 'hello')).toBe(false)
+    expect(calls).toHaveLength(0)
+  })
+})
+
 describe('§3.5 unit 目标的 401(负对照:改造前照样重启本机引擎)', () => {
   it('账号仍有效 → 只记那台「引擎鉴权」,绝不 backendRestart、不进过期态', async () => {
     focusUnitRaw()

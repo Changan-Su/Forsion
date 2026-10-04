@@ -19,18 +19,24 @@ import { runMigration } from '../src/db/migrate.js';
 import { query } from '../src/core/db.js';
 import { createRun, getRun } from '../src/services/runStore.js';
 import { enqueueRun, abortRun } from '../src/services/agentLoop.js';
+import { subscribe } from '../src/services/eventBus.js';
+import { resolveInquiry } from '../src/services/inquiries.js';
+import { LlmError } from '../src/core/types.js';
 
 const USER = 'u1';
 let home: string;
 let llmPayloads: any[];
 /** 每轮一个出招函数;耗尽即抛(脚本写短了会立刻暴露)。 */
 let script: Array<(o: any) => any>;
+/** 订阅登录续期接缝(brain.llm.refreshModelKey)的替身;缺省 = 续不了。 */
+let refreshKey: ((modelId: string) => Promise<string | null>) | undefined;
 
 beforeEach(async () => {
   home = mkdtempSync(join(tmpdir(), 'tangu-gates-'));
   process.env.TANGU_HOME = home;
   llmPayloads = [];
   script = [];
+  refreshKey = undefined;
 
   const { host, db } = createSqliteHost({ dataDir: 'memory', localToken: 'x', userId: USER });
   db.exec(toSqliteDDL(STANDALONE_SCHEMA));
@@ -44,6 +50,7 @@ beforeEach(async () => {
       if (!step) throw new Error(`脚本耗尽:第 ${llmPayloads.length} 次 LLM 调用没有出招`);
       return step(o);
     },
+    refreshModelKey: async (id: string) => (refreshKey ? refreshKey(id) : null),
   };
   const fakeBrain: any = {
     llm: fakeLlm,
@@ -309,10 +316,98 @@ describe('计划提交兜底(2026-08-18 真机:模型把计划当普通文本回
     expect(rows.some((r) => String(r.content).includes('plan_submit_check'))).toBe(false); // 脚手架不落库
   }, 20_000);
 
+  it('本 run 已调 exit_plan_mode 并获批 → 收尾不再催(否则重交计划、弹第二张卡)', async () => {
+    script = [
+      () => ({
+        content: '', reasoning: '',
+        toolCalls: [{ id: 'ep1', type: 'function', function: { name: 'exit_plan_mode', arguments: JSON.stringify({ plan: '1. 读 a.txt\n2. 追加一行' }) } }],
+        usage: { prompt_tokens: 10, completion_tokens: 10 }, finishReason: 'stop',
+      }),
+      finalStep('计划已批准,开始执行前先收尾。'),
+    ];
+    // 计划卡 = inquiry:台架替用户点「批准,退出计划模式(手动开始)」
+    const off = subscribe('R1', (ev) => {
+      if (ev.type === 'inquiry_request') setTimeout(() => resolveInquiry(ev.payload.inquiryId, '批准,退出计划模式(手动开始)'), 0);
+    });
+    try {
+      const run = await runToSettled({ execMode: 'host', cwd: home, planMode: true });
+      expect(run.status).toBe('done');
+      expect(llmPayloads.length).toBe(2); // 修前是 3:批准后的收尾又被 <plan_submit_check> 拦下
+      expect(userTexts(llmPayloads[1])).not.toContain('<plan_submit_check>');
+    } finally { off(); }
+  }, 20_000);
+
   it('负对照:非 planMode 收尾不催(否则普通会话每轮都被拦)', async () => {
     script = [finalStep('做完了。')];
     const run = await runToSettled({ execMode: 'host', cwd: home });
     expect(run.status).toBe('done');
     expect(llmPayloads.length).toBe(1);
+  }, 20_000);
+});
+
+describe('动作兑现兜底(10-02 live:luna 说「我这就写」就收尾,零工具调用)', () => {
+  it('要了动作 + 零工具 + 回复只承诺 → 回灌 <action_delivery_check> 续跑;只催一次;不落库', async () => {
+    script = [finalStep('好，我这就写进去。'), finalStep('写不了,这里没有文件工具。')];
+    const run = await runToSettled({ execMode: 'host', cwd: home }, '在我的工作文件夹里建一个 a.md,写上:你好');
+    expect(run.status).toBe('done');
+    expect(llmPayloads.length).toBe(2);
+    expect(userTexts(llmPayloads[1])).toContain('<action_delivery_check>');
+    const rows = await query<any[]>(`SELECT content FROM chat_messages WHERE session_id = 'S'`);
+    expect(rows.some((r) => String(r.content).includes('action_delivery_check'))).toBe(false);
+  }, 20_000);
+
+  it('负对照:纯聊天没要动作 → 不催', async () => {
+    script = [finalStep('我记住你了。累了就靠着我。')];
+    const run = await runToSettled({ execMode: 'host', cwd: home }, '今天好累，陪我说说话');
+    expect(run.status).toBe('done');
+    expect(llmPayloads.length).toBe(1);
+  }, 20_000);
+
+  it('下一轮是收尾轮(不给工具)→ 不催,催了也做不了(Codex 10-02)', async () => {
+    script = [finalStep('好，我这就写进去。')];
+    const run = await runToSettled({ execMode: 'host', cwd: home, maxIterations: 2 }, '在我的工作文件夹里建一个 a.md');
+    expect(run.status).toBe('done');
+    expect(llmPayloads.length).toBe(1);
+  }, 20_000);
+});
+
+describe('凭证失效续期(反馈 6a239e58:xAI 订阅 token 过期,502 被当网络抖动用旧 token 重试)', () => {
+  const expired = () => { throw new LlmError(502, '{"error":"Invalid or expired credentials (auth_kind=bearer, upstream=PermissionDenied)"}'); };
+
+  it('上游报凭证失效 → 强制续期一次 → 用新 token 立刻重试,run 照常 done', async () => {
+    const keys: string[] = [];
+    let refreshed = 0;
+    refreshKey = async () => { refreshed++; return 'k2'; };
+    script = [(o) => { keys.push(o.apiKey); return expired(); }, (o) => { keys.push(o.apiKey); return finalStep('好了')(); }];
+    const run = await runToSettled();
+    expect(run.status).toBe('done');
+    expect(keys).toEqual(['k', 'k2']);
+    expect(refreshed).toBe(1);
+  }, 20_000);
+
+  it('续不了(不是订阅登录 / refresh_token 也失效)→ 直接失败,不用旧 token 白重试三轮', async () => {
+    script = [expired];
+    const run = await runToSettled();
+    expect(run.status).toBe('failed');
+    expect(llmPayloads.length).toBe(1);
+  }, 20_000);
+
+  it('续完仍被拒 → 不再续第二次', async () => {
+    let refreshed = 0;
+    refreshKey = async () => { refreshed++; return `k${refreshed + 1}`; };
+    script = [expired, expired];
+    const run = await runToSettled();
+    expect(run.status).toBe('failed');
+    expect(refreshed).toBe(1);
+    expect(llmPayloads.length).toBe(2);
+  }, 20_000);
+
+  it('负对照:普通 502 照旧按瞬时抖动重试,不触发续期', async () => {
+    let refreshed = 0;
+    refreshKey = async () => { refreshed++; return 'k2'; };
+    script = [() => { throw new LlmError(502, 'Bad Gateway'); }, finalStep('好了')];
+    const run = await runToSettled();
+    expect(run.status).toBe('done');
+    expect(refreshed).toBe(0);
   }, 20_000);
 });

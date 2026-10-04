@@ -142,11 +142,18 @@ async function gripRightClick(page, text, sel) {
   await page.waitForSelector('.unified-block-menu', { timeout: 3000 })
   return true
 }
-const menu = (page) => page.evaluate(() => {
+/** 块菜单 + 「转换为 ›」子菜单(10-02 c2 起转换项在子菜单里:先悬停那一行把它拉出来)的项。 */
+const menu = async (page) => {
+  await page.hover('.unified-block-menu [data-sub="turnInto"]', { timeout: 1500 }).catch(() => {})
+  await page.waitForTimeout(120)
+  return menuNow(page)
+}
+const menuNow = (page) => page.evaluate(() => {
   const m = document.querySelector('.unified-block-menu')
   if (!m) return null
+  const sub = document.querySelector('.unified-block-submenu')
   return {
-    labels: [...m.querySelectorAll('button')].map((b) => b.textContent.trim()),
+    labels: [...m.querySelectorAll('button'), ...(sub ? sub.querySelectorAll('button') : [])].map((b) => b.textContent.trim()),
     ops: [...m.querySelectorAll('[data-table-op]')].map((b) => b.dataset.tableOp),
     aligns: [...m.querySelectorAll('[data-table-align]')].map((b) => b.dataset.tableAlign + (b.getAttribute('aria-checked') === 'true' ? '*' : '')),
   }

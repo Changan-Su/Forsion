@@ -2,7 +2,8 @@
  * Workspace store(≈ Obsidian workspace)。在已集成的 Dockview 之上建薄 API:
  * openView / getActiveLeaf / splitActive / toggleSidebar / saveLayout↔restore / 命名布局。
  * 单个 Dockview 实例托管四区:左侧栏 / 主区 / 右侧栏 / 底部面板,由 panel.params.__loc 标记区分。
- * 左右按**宽**折叠(黄金分割钉宽 pinSides);底部横跨 Main 与右栏,按**高**折叠且恒 free。
+ * 左右按**宽**折叠(黄金分割钉宽 pinSides);底部横跨 Main 与右栏,按**高**折叠且恒 free,
+ * 收起时组留在网格里藏起来(parkBottom),不删组 —— 删组会重挂主区整列,里面的 iframe 全部重载。
  * 视图「参数驱动可重建」:panel 存 {component:type, params} → 刷新/恢复时 Dockview 据此重建。
  */
 import { create } from 'zustand'
@@ -10,7 +11,7 @@ import type { ExtendViewPresenter } from './extendView'
 import { nativeExtendTargets } from './nativeExtendView'
 import { withoutTransientPanels } from './transientLayout'
 import { layoutMetrics, sameLayoutMetrics, type LayoutMetrics } from './layoutMetrics'
-import { alignWorkspaceRegions, captureRegionTree, restoreRegionProportions, type RegionTree } from './regionLayout'
+import { alignWorkspaceRegions, captureRegionTree, restoreRegionProportions, type BottomSpan, type RegionTree } from './regionLayout'
 import type { DockviewApi, IDockviewPanel } from 'dockview-react'
 import type { DockSide, Leaf, SidebarDefaults, ViewLocation } from './types'
 import { getView } from './viewRegistry'
@@ -18,6 +19,7 @@ import { identitySig, label } from './types'
 import { computeSideWidth, computeBottomHeight, computeTransientSideWidth } from './sideWidth'
 import { shouldRecordSideWidth } from './sideCapture'
 import { locOf, type DropTarget } from './dropModel'
+import { isLastPinned, isPinned, missingPinned, type PanelRef, type PinnedViews } from './pinnedViews'
 import { useNav } from './navStore'
 import { ribbonActions } from './ribbonRegistry'
 import { engineTr } from './i18nSeam'
@@ -68,7 +70,9 @@ const dismissExtensions = (): void => {
  *  被滚回区间开头就显示成那个日期。聊天记录等一切滚动视图同受其害。
  *
  *  故结构变化必须**成对**包起来:变化前快照,变化后还原 + 掐掉误重播的动画。
- *  返回的收尾函数在结构变化之后调用。 */
+ *  返回的收尾函数在结构变化之后调用。
+ *  ⚠️ 救不了 iframe:节点一离开文档帧就被卸掉,重挂 = 重载(帧内状态全丢、先黑一下)。所以能不重挂就别重挂 ——
+ *  底部面板开合已改成藏组不删组(parkBottom);左右栏开合仍走删组,仍会重挂。 */
 function preserveAcrossRestructure(): () => void {
   const root = typeof document !== 'undefined' ? document.querySelector('.wb-dockview') : null
   if (!root) return () => { /* 无 DOM(测试) */ }
@@ -288,12 +292,70 @@ function makeLeaf(panel: IDockviewPanel): Leaf {
       useWorkspace.getState().refreshTabs()
       scheduleWorkspaceSave()
     },
-    close: () => panel.api.close(),
+    // 走 closeLeaf 而不是裸 panel.api.close():各区的收尾(主区最后一个 → home、侧栏补占位…)与固定 View 的守卫
+    // 都在那里;单列 store 的 leaf.close 一直如此。
+    close: () => useWorkspace.getState().closeLeaf(panel.id),
   }
 }
 
 function panelsAt(api: DockviewApi, loc: ViewLocation): IDockviewPanel[] {
   return api.panels.filter((p) => ((p.params ?? {}) as PanelMeta).__loc === loc)
+}
+
+const locOfPanel = (p: IDockviewPanel): ViewLocation => ((p.params ?? {}) as PanelMeta).__loc ?? 'main'
+const panelRefs = (api: DockviewApi): PanelRef[] => api.panels.map((p) => ({ loc: locOfPanel(p), type: panelType(p) }))
+
+/** 固定 View 里「区内最后一个」:关不掉、拖不出本区、不被别的类型顶掉(判定见 pinnedViews.ts)。 */
+function guarded(api: DockviewApi, panel: IDockviewPanel): boolean {
+  return isLastPinned(useWorkspace.getState().pinned, panelRefs(api), locOfPanel(panel), panelType(panel))
+}
+
+/** 落点可不可以落:固定 View 不许跨区(区内排序、分屏照常)。提示层与提交层共用,拖动中就不给假落点。 */
+export function dropAllowed(api: DockviewApi, panelId: string, target: DropTarget): boolean {
+  const panel = api.getPanel(panelId)
+  return !panel || locOf(target.group) === locOfPanel(panel) || !guarded(api, panel)
+}
+
+/** 主区新标签,开在 beside 那一组(openView 的 newTab 落在第一个主区组,分屏时会跑到另一半屏)。 */
+function openTabBeside(api: DockviewApi, beside: IDockviewPanel, type: string, params: Record<string, unknown>): Leaf {
+  const def = getView(type)
+  const panel = api.addPanel({
+    id: def?.singleton && !api.getPanel(type) ? type : nextId(api, type),
+    component: '__frame',
+    title: def ? label(def.displayName) : type,
+    params: { ...params, __loc: 'main', __type: type },
+    position: { referencePanel: beside.id, direction: 'within' } as never,
+  })
+  if (type === 'chat') useWorkspace.setState({ focusedChatLeafId: panel.id })
+  scheduleWorkspaceSave()
+  return makeLeaf(panel)
+}
+
+/** 就地把 panel 换成另一种视图(navigateLeaf 的本体,不带固定守卫)。旧视图参数全清,不残留。 */
+function swapLeaf(api: DockviewApi, panel: IDockviewPanel, type: string, params: Record<string, unknown>): Leaf | null {
+  const def = getView(type)
+  if (!def) return null
+  const { focusedChatLeafId, refreshTabs } = useWorkspace.getState()
+  const old = (panel.params ?? {}) as PanelMeta & Record<string, unknown>
+  const sameType = panelType(panel) === type
+  // dockview updateParameters 是 merge 语义,但值为 undefined 的键会被显式删除(dockviewPanel.update)
+  // → 旧视图参数全部映射为 undefined,防 followActive/reuseKey 之类残留污染新视图。
+  const cleared: Record<string, unknown> = {}
+  for (const k of Object.keys(old)) cleared[k] = undefined
+  panel.api.updateParameters({ ...cleared, ...params, __loc: old.__loc ?? 'main', __type: type })
+  selfTitled.delete(panel.id) // 换成的新视图还没自己改过名(Codex r3a-2)
+  panel.api.setTitle(label(def.displayName))
+  panel.api.setActive()
+  // 就地切换不触发 onDidActivePanelChange(panel 未变)→ 自补簿记。
+  if (type === 'chat') useWorkspace.setState({ focusedChatLeafId: panel.id })
+  else if (!sameType && focusedChatLeafId === panel.id) {
+    // 本 leaf 从 chat 切走 → 焦点会话 leaf 移交给其他 chat panel(无则清空,右栏目录等显示空态)。
+    const otherChat = panelsAt(api, 'main').find((p) => p.id !== panel.id && panelType(p) === 'chat')
+    useWorkspace.setState({ focusedChatLeafId: otherChat?.id ?? null })
+  }
+  refreshTabs()
+  scheduleWorkspaceSave()
+  return makeLeaf(panel)
 }
 
 /** 最后一次作为全局 activePanel 出现的主区 panel 所在的**组**(refreshTabs 维护,换布局清空)。
@@ -318,7 +380,50 @@ function positionFor(api: DockviewApi, loc: ViewLocation): Record<string, unknow
   const sameLoc = panelsAt(api, loc)
   if (sameLoc.length) return { referencePanel: sameLoc[0].id, direction: 'within' }
   if (loc === 'main') return undefined // 首个主区 panel
+  const parked = loc === 'bottom' ? parkedBottom(api) : undefined
+  if (parked) {
+    // 开回收起时藏着的那个组:不新建组 = 网格不收支 = 主区不重挂。先亮出来再开 panel,视图挂载时量得到尺寸。
+    try {
+      parked.api.setVisible(true)
+      if (!sidebarAnimating.bottom) parked.api.setConstraints({ minimumHeight: DV_GROUP_MIN }) // 补间期由补间自己管 min
+    } catch { /* 跨版本兜底 */ }
+    return { referenceGroup: parked.id, direction: 'within' }
+  }
   return { direction: loc === 'bottom' ? 'below' : loc }
+}
+
+type Group = IDockviewPanel['group']
+
+/** 收起后藏在网格里的空底部组(见 parkBottom)。桩 api 没有 groups → 恒无。 */
+function parkedBottom(api: DockviewApi): Group | undefined {
+  return api.groups?.find((g) => g.panels.length === 0 && g.api.isVisible === false)
+}
+
+/** 关 panel 但留下空组。panel.api.close() 关掉组里最后一个 = Dockview 连组一起删。
+ *  ponytail: 走 DockviewComponent 私有的 removePanel 选项,钉在 dockview 7.x;没了它就退回 close()
+ *  (行为退回「开合重挂主区」,不坏)。正路是迁到 dockview 的 edge group / shell。 */
+function closeKeepingGroup(api: DockviewApi, panel: IDockviewPanel): void {
+  const component = (api as unknown as { component?: { removePanel?: (p: IDockviewPanel, o: { removeEmptyGroup: boolean }) => void } }).component
+  if (component?.removePanel) component.removePanel(panel, { removeEmptyGroup: false })
+  else panel.api.close()
+}
+
+/** 收起底部面板:关掉内容,但把组**留在网格里藏起来**(setVisible(false) 只把这一格缩成 0,不动树)。
+ *  删组会让 Dockview 归一化网格(主区那一列的 branch 少一个孩子)→ 主区整列 DOM 摘下重挂 → 里面每个 iframe
+ *  重载:PDF / 预览 / 插件舞台黑一下、帧内状态全丢(2026-10-02 Video Studio 实测每次 ⌘J 黑 0.15–0.6s)。
+ *  内容照旧进 stash、panel 照旧销毁 —— 空组没有 panel,panelsAt / syncPanelState / 信封的「可见」口径一概不变。
+ *  下次展开由 positionFor 开回这个组。同在底部的其它组(用户左右分过屏)照常删:它们的兄弟只是底部那一支。 */
+function parkBottom(api: DockviewApi, group: Group, panels: IDockviewPanel[]): void {
+  for (const p of panels) {
+    try { if (p.group === group) closeKeepingGroup(api, p); else p.api.close() } catch { /* 已经不在了 */ }
+  }
+  if (!api.groups?.includes(group) || group.panels.length) return // 组已被删(补间途中 × 掉了最后一个)/ 没关干净
+  try {
+    // 焦点别停在看不见的空组上。⚠️激活**组**不激活 panel:panel.api.setActive() 会让 Dockview 把它的内容
+    // 摘下再挂回(renderPanel),帧照样重载 —— 实测这一句就是修完还剩的那一次重挂。
+    if (api.activeGroup === group) activeMainPanel(api)?.group.api.setActive()
+    group.api.setVisible(false)
+  } catch { /* 跨版本兜底 */ }
 }
 
 /** Repair region boundaries without reloading any View. The snapshot before insertion keeps
@@ -328,7 +433,7 @@ function alignRegions(api: DockviewApi, before?: RegionTree | null): void {
   const restore = preserveAcrossRestructure()
   pinSides(api)
   try {
-    alignWorkspaceRegions(api, snapshot)
+    alignWorkspaceRegions(api, snapshot, useWorkspace.getState().bottomSpan)
     if (panelsAt(api, 'bottom').length) settleBottomHeight(api)
     setTimeout(() => {
       if (useWorkspace.getState().api === api && !Object.values(sidebarAnimating).some(Boolean)) restoreRegionProportions(api, snapshot)
@@ -338,9 +443,21 @@ function alignRegions(api: DockviewApi, before?: RegionTree | null): void {
 
 type Stashed = PersistedPanel
 
-function envelope(api: DockviewApi, state: Pick<WorkspaceState, 'leftVisible' | 'rightVisible' | 'stash'>): LayoutEnvelopeV4 {
+/** onReady 还原出来的那份布局自带的归属(信封里的 space)。只在一种情形下与画像键不同:「上次退出」档 × 纯内置视图的
+ *  用户 Space —— 布局还原成了,活动 id 却还是内存里的回落 Space(它的配方异步装载)。此时屏上是**它**的现场,存盘得
+ *  继续记在它名下;画像一重设(补定位 / 切 Space)或布局被重建成默认,就回到「画像键说了算」。
+ *  三态:undefined = 屏上不是启动还原出来的那份 → 归画像键;string = 还原出来的那份自带的归属;
+ *  null = 还原的是老存档(没记归属)→ **不知道**:存盘也不写,一切照升级前(信「上次退出」的活动 id)。不在这里替它
+ *  推定一个 —— 推定值得靠一次写盘传过来,写盘失败(配额满)时就成了「归画像键」,补定位会拿旧归档盖掉屏上更新的现场。 */
+let restoredOwner: string | null | undefined
+/** 屏上这份布局是给哪个 Space 摆的(= 存盘时写进信封的归属)。null = 不知道(老存档,或还没有任何 Space 画像)。 */
+export const liveLayoutOwner = (): string | null => restoredOwner === undefined ? useWorkspace.getState().sideProfileKey : restoredOwner
+
+function envelope(api: DockviewApi, state: Pick<WorkspaceState, 'leftVisible' | 'rightVisible' | 'stash' | 'sideProfileKey'>): LayoutEnvelopeV4 {
+  const space = restoredOwner === undefined ? state.sideProfileKey : restoredOwner
   return {
     version: 4,
+    ...(space ? { space } : {}),
     dockview: withoutTransientPanels(api.toJSON(), Object.fromEntries(Object.values(extensions).filter((lease) => lease.previousId).map((lease) => [lease.id, lease.previousId!]))),
     sidebars: {
       // 真实 panel 是唯一真源；状态事件可能落后于 Dockview 的异步布局沉降。
@@ -355,7 +472,7 @@ function envelope(api: DockviewApi, state: Pick<WorkspaceState, 'leftVisible' | 
  *  shape = 重置刚完成时的布局结构指纹(layoutShape),metrics = 尺寸 / 排列指纹(layoutMetrics,不含侧栏宽度),
  *  settleUntil = 重置自身的布局沉降窗口(这段里的回调只刷新 metrics 基线,不判作废),dismiss = 收回那条「撤销」提示。 */
 let layoutUndo: {
-  env: LayoutEnvelopeV4; api: DockviewApi; profile: string | null; stashActive: WorkspaceState['stashActive']
+  env: LayoutEnvelopeV4; api: DockviewApi; profile: string | null; owner: typeof restoredOwner; stashActive: WorkspaceState['stashActive']
   shape: string; metrics: LayoutMetrics; settleUntil: number; dismiss?: () => void
 } | null = null
 /** 重置后多久内的布局回调算「重置自己在沉降」(默认布局建完后 Dockview 异步派发的那批 + 双 raf 钉侧栏宽)。 */
@@ -453,12 +570,21 @@ interface WorkspaceState {
   sideScale: Record<'left' | 'right', number>
   /** 当前宽度持久化归属键(= 活动 Space id);切 Space 时重载对应记忆。 */
   sideProfileKey: string | null
+  /** 底部面板横跨哪几列(= 当前 Space 的 bottomSpan;缺省 'right')。alignRegions 按它摆壳拓扑。 */
+  bottomSpan: BottomSpan
+  /** 当前 Space 的固定 View(= SpaceDefinition.pinned;判定见 pinnedViews.ts)。随 Space 画像一起载入,卫星窗恒空。 */
+  pinned: PinnedViews
+  setPinned(pins: PinnedViews | undefined): void
+  /** 该 leaf 是不是固定 View 里「区内最后一个」(关不掉 / 拖不出本区 / 不被别的类型顶掉)。 */
+  isPinnedLeaf(id: string): boolean
+  /** 当前 Space 的固定 View 缺了就补(切 Space 还原出已存布局之后调)。收起的侧栏只补进暂存,不替用户展开。 */
+  ensurePinned(): void
   setApi(api: DockviewApi | null): void
   setDefaultBuilder(fn: () => void): void
   setSidebarDefaults(defaults: SidebarDefaults): void
   /** 设置「可自由拖宽」侧栏画像(切 Space 时调):载入该 Space 记住的宽度。
    *  free 缺省 = true(两侧都记宽);只有显式传 false 的那侧才回到「钉黄金分割」。 */
-  setSideProfile(key: string, free: { left?: boolean; right?: boolean }, scale?: { left?: number; right?: number }): void
+  setSideProfile(key: string, free: { left?: boolean; right?: boolean }, scale?: { left?: number; right?: number }, bottomSpan?: BottomSpan): void
   initializeSidebar(side: DockSide, visible: boolean): void
   setFocusedLeaf(panel: IDockviewPanel | null | undefined): void
   registerChatSurface(leafId: string, el: HTMLDivElement | null): void
@@ -467,10 +593,13 @@ interface WorkspaceState {
   refreshTabs(): void
   /** 没被视图改过名的面板按当前语言重取标题(W-10);宿主在语言变更时调。单列 store 没有它,调用方用 `?.()`。 */
   retitleDefaults(): void
+  /** 按当前 bottomSpan 重摆壳拓扑。切 Space 的 applyNamed / resetLayout 自带;只有冷启动「活动 Space 晚于
+   *  布局还原才定下」(异步注册的插件 / 用户 Space)要补调。单列 store 没有它,调用方用 `?.()`。 */
+  realignRegions(): void
   /** 顶栏标签点击 → 激活该 leaf。 */
   activateLeaf(id: string): void
-  /** 顶栏标签关闭。 */
-  closeLeaf(id: string): void
+  /** 顶栏标签关闭。固定 View(区内最后一个)关不掉;force = 清场路径(视图注销 / 指向的文件已删)放行。 */
+  closeLeaf(id: string, force?: boolean): void
   /** 受控拖放落子:把 panelId 视图按 computeDropTarget 的结果并入/分屏到目标组,并继承目标面板身份(__loc)。 */
   dropView(panelId: string, target: DropTarget): void
   /** 顶栏侧栏图标点击 → 展开该侧(若收起)并显示该视图。 */
@@ -481,8 +610,18 @@ interface WorkspaceState {
    *  调用方从前是各自 `mainTabs + closeSideView('left') + closeSideView('right')` 手写一遍 —— 加了
    *  bottom 之后那种写法会漏掉停在底部的实例:视图被 unregisterView 之后 panel 还活着(cleanup 不跑、
    *  插件 UI 继续存活),且这个已不存在的类型会留在持久化布局里 → 下次启动 layoutViewsAllRegistered
-   *  判定失败,**整份布局被丢弃回默认**。清场必须以 api.panels 为准,不能按位置手写枚举。 */
-  closeViewsOfType(type: string): void
+   *  判定失败,**整份布局被丢弃回默认**。清场必须以 api.panels 为准,不能按位置手写枚举。
+   *  force = 视图要注销了,固定 View 也一并关掉;不传(插件自己的 ctx.closeView)则留下区内最后一个固定的。 */
+  closeViewsOfType(type: string, force?: boolean): void
+  /** 把该类型的全部实例**原地**换成另一个视图(2026-10-02,插件 `ctx.replaceView` 的引擎半身;Coding 进出项目
+   *  换左栏的同一件事):主区活 panel 走 navigateLeaf(__frame 宿主按 __type 重挂内层);侧栏 / 底部的活 panel
+   *  是按类型的组件,改 __type 换不掉 → 在原位旁开一个新的再摘掉旧的(同组同位,组不空、零结构变化,所以
+   *  不会重挂主区那一列,列里的 iframe 不重载);收起侧栏 stash 里的条目一并换,该侧**保持收起**(不替用户把面板弹出来);当前 Space 的
+   *  sidebarDefaults 同步换(否则关空再展开回到旧视图)。活动 panel 还给原主人 —— 换一个侧栏视图不该把
+   *  焦点从主区抢走。返回换掉的实例数(活的 + stash 里的);`to` 没注册则什么都不动、返回 0。
+   *  `from` 是固定 View(区内最后一个)时不顶掉它:`to` 作为新标签开在它旁边(收起的侧栏则排进 stash,照旧
+   *  保持收起),`from` 原先在前台就让 `to` 顶到前台;计数只算新开出来的 —— `to` 已经在那儿就是 0。 */
+  replaceViewsOfType(from: string, to: string, params?: Record<string, unknown>): number
   /** 按参数改写 / 关掉 leaf,**含没挂载的**:折叠侧栏序列化进 stash 的条目(无 id → 就地改写或摘掉)。
    *  fn 返回 undefined = 不动;null = 关掉(走 closeLeaf 的收尾,不是裸 panel.api.close());对象 = 合并进参数。
    *  引擎不懂参数语义,改哪个键由调用方定(文件改名 / 删除跟随见 frontend views/followPathGone.ts)。 */
@@ -539,6 +678,8 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
   sideWidths: { left: null, right: null, bottom: null },
   sideScale: { left: 1, right: 1 },
   sideProfileKey: null,
+  bottomSpan: 'right',
+  pinned: {},
 
   setApi: (api) => {
     // 面板关掉后 id 会被 nextId 复用:别让新面板继承旧面板「自己改过名」的标记(Codex r3a-2)
@@ -549,7 +690,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
   // bottom 显式兜底成 []:不能写 `{ bottom: [], ...defaults }` —— 若调用方带了 `bottom: undefined`
   // 这个**存在但为 undefined** 的键,展开时 `sidebarDefaults[side].filter` 会当场炸。
   setSidebarDefaults: (defaults) => set({ sidebarDefaults: { left: defaults.left, right: defaults.right, bottom: defaults.bottom ?? [] } }),
-  setSideProfile: (key, free, scale) => {
+  setSideProfile: (key, free, scale, bottomSpan) => {
     let widths: Record<DockSide, number | null> = { left: null, right: null, bottom: null }
     try {
       // v1 key(lcl.sideWidth.)被「布局变更即记宽」污染过:×1.2 时代把系统钉的 336 当用户记忆存了。
@@ -563,11 +704,13 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     // ⚠️ 一并清 stashActive:它是全局单份、只在「折叠某侧」时写。不清的话,在 A 空间折叠右栏(记下
     // outline)→ 切到 B 空间首次展开右栏,会拿 A 的 outline 顶掉 B 配方的默认首项(B 里也有 outline
     // 就更隐蔽)。stash 本身在 applyNamed/resetLayout 已重置,这条是它漏下的那半。
+    restoredOwner = undefined // 画像重设 = 屏上的布局从此归这个 Space(调用方紧接着还原 / 重建 / 认领它)
     set({
       sideProfileKey: key,
       sideFree: { left: free.left !== false, right: free.right !== false },
       sideWidths: widths,
       sideScale: { left: scale?.left ?? 1, right: scale?.right ?? 1 },
+      bottomSpan: bottomSpan ?? 'right',
       stashActive: { left: null, right: null, bottom: null },
     })
   },
@@ -597,6 +740,48 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
   },
 
   retitleDefaults: () => retitleDefaultPanels(get().api),
+  realignRegions: () => { const api = get().api; if (api) alignRegions(api) },
+  setPinned: (pins) => { set({ pinned: pins ?? {} }); get().refreshTabs() }, // 标签的可关态跟着换
+  isPinnedLeaf: (id) => {
+    const api = get().api
+    const panel = api?.getPanel(id)
+    return !!api && !!panel && guarded(api, panel)
+  },
+  ensurePinned: () => {
+    const api = get().api
+    if (!api) return
+    // 收起着的侧栏:暂存里有就算在(暂存空 → 展开时回落 sidebarDefaults,同 toggleSidebar)。
+    const refs = panelRefs(api)
+    const stashOf = (side: 'left' | 'right'): Stashed[] => (get().stash[side].length ? get().stash[side] : get().sidebarDefaults[side])
+    for (const side of ['left', 'right'] as const) {
+      if (!panelsAt(api, side).length) for (const v of stashOf(side)) refs.push({ loc: side, type: v.type })
+    }
+    const missing = missingPinned(get().pinned, refs, (t) => !!getView(t))
+    if (!missing.length) return
+    for (const pin of missing) {
+      const here = panelsAt(api, pin.loc)
+      if (pin.loc !== 'main' && !here.length) { // 收起着:只补进暂存,不替用户把面板弹出来
+        const side = pin.loc
+        set((s) => ({ stash: { ...s.stash, [side]: [{ type: pin.type, params: pin.params }, ...stashOf(side)] } }))
+        continue
+      }
+      // 主区只剩空态占位 → 就地换成它,不在占位旁边再开一个
+      if (here.length === 1 && panelType(here[0]) === 'home') { swapLeaf(api, here[0], pin.type, pin.params); continue }
+      const def = getView(pin.type)!
+      // 排到组首、不抢焦点(inactive):用户此刻在看的标签不动。
+      api.addPanel({
+        id: def.singleton && !api.getPanel(pin.type) ? pin.type : nextId(api, pin.type),
+        component: pin.loc === 'main' ? '__frame' : pin.type,
+        title: label(def.displayName),
+        params: { ...pin.params, __loc: pin.loc, __type: pin.type },
+        position: (here.length ? { referencePanel: here[0], index: 0 } : positionFor(api, pin.loc)) as never,
+        inactive: here.length > 0,
+      })
+      here.filter((p) => panelType(p) === 'sidebar-empty').forEach((p) => p.api.close()) // 占位退位
+    }
+    get().refreshTabs()
+    scheduleWorkspaceSave()
+  },
   refreshTabs: () => {
     const api = get().api
     if (!api) { if (get().mainTabs.length) set({ mainTabs: [] }); return }
@@ -604,6 +789,8 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     if (api.activePanel && ((api.activePanel.params ?? {}) as PanelMeta).__loc === 'main') {
       lastMainGroupId = (api.activePanel as { group?: { id?: string } }).group?.id ?? null
     }
+    const pins = get().pinned
+    const refs = panelRefs(api)
     const tabs: MainTab[] = panelsAt(api, 'main').map((p) => {
       const type = panelType(p)
       const params = (p.params ?? {}) as Record<string, unknown>
@@ -613,7 +800,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
         type,
         title: p.title || (def ? label(def.displayName) : type),
         active: p.id === activeId,
-        closable: def?.closable !== false,
+        closable: def?.closable !== false && !isLastPinned(pins, refs, 'main', type),
         sessionId: typeof params.sessionId === 'string' ? params.sessionId : undefined,
         followActive: params.followActive !== false,
         // notePath = Amadeus 编辑器;path = 工作区文件预览(wsfile)。两者都是「这个 tab 是哪个文件」。
@@ -625,7 +812,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     const prev = get().mainTabs
     const same = prev.length === tabs.length && prev.every((t, i) =>
       t.id === tabs[i].id && t.active === tabs[i].active && t.title === tabs[i].title
-      && t.filePath === tabs[i].filePath && t.front === tabs[i].front && t.sig === tabs[i].sig)
+      && t.filePath === tabs[i].filePath && t.front === tabs[i].front && t.sig === tabs[i].sig && t.closable === tabs[i].closable)
     if (!same) set({ mainTabs: tabs })
 
     // 两侧侧栏图标:可见时从 live panel(active=组内当前显示),收起时从 stash(无 active)。
@@ -633,7 +820,9 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       const visible = side === 'left' ? get().leftVisible : get().rightVisible
       const mk = (type: string, active: boolean): SideTab => {
         const def = getView(type)
-        return { type, title: def ? label(def.displayName) : type, active, closable: def?.closable !== false }
+        // 侧栏按类型一个 tab,收起着的(暂存里)同样:固定了就不可关
+        const pinnedHere = visible ? isLastPinned(pins, refs, side, type) : isPinned(pins, side, type)
+        return { type, title: def ? label(def.displayName) : type, active, closable: def?.closable !== false && !pinnedHere }
       }
       if (visible) {
         return panelsAt(api, side).map((p) => {
@@ -645,7 +834,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       return stashed.map((v) => mk(v.type, false))
     }
     const sideEq = (a: SideTab[], b: SideTab[]): boolean =>
-      a.length === b.length && a.every((t, i) => t.type === b[i].type && t.active === b[i].active)
+      a.length === b.length && a.every((t, i) => t.type === b[i].type && t.active === b[i].active && t.closable === b[i].closable)
     const left = sideTabsFor('left')
     const right = sideTabsFor('right')
     if (!sideEq(get().leftTabs, left)) set({ leftTabs: left })
@@ -655,7 +844,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     get().api?.getPanel(id)?.api.setActive()
     get().refreshTabs()
   },
-  closeLeaf: (id) => {
+  closeLeaf: (id, force) => {
     const api = get().api
     const panel = api?.getPanel(id)
     if (!api || !panel) return
@@ -665,6 +854,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       return
     }
     if (panelType(panel) === 'home') return // home 是主区空态占位,不可关(无 close 入口,防御性)
+    if (!force && guarded(api, panel)) return // 固定 View:区内最后一个关不掉
     const loc = ((panel.params ?? {}) as PanelMeta).__loc ?? 'main'
     // 主区关掉「最后一个」view → 就地把它变成 home 空态占位(Forsion 品牌图 + 新建),而非
     // close→addPanel。后者会销毁主区组,让侧栏瞬间回流吞掉主区宽再弹回 = 侧栏「被关」+卡顿(本次修复的 bug)。
@@ -672,7 +862,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     // 分屏 / 多 tab(主区还有别的 panel)走默认 close:Dockview 自动移除空组 = 关掉那个分屏 panel。
     if (loc === 'main' && panelsAt(api, 'main').length <= 1) {
       useNav.getState().drop(id)      // 旧 tab 导航史销毁(panel 复用,仅清栈)
-      get().navigateLeaf(id, 'home')  // 内部已 refreshTabs
+      swapLeaf(api, panel, 'home', {}) // 内部已 refreshTabs;不走 navigateLeaf:force 关固定 View 时不能再被守卫拦成「旁边开个 home」
       return
     }
     // 侧栏关空 → 补「空侧栏」占位(保住 group 作拖放靶;toggleSidebar 折叠不走 closeLeaf,不受影响)。
@@ -686,7 +876,9 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     // 侧栏被强行拉宽、剩下的主区纹丝不动(用户实报)。180ms 后释放,恢复手动拖宽。
     const release = loc === 'main' ? lockSides(api, ['left', 'right'], true) : () => {}
     // 先关再填:占位可能与被关视图同 type,open-first 会复用到正被关的那个。
-    panel.api.close()
+    // 底部最后一个 = 收起面板:同 ⌘J 藏组不删组,免主区重挂。
+    if (wasLastBottom) parkBottom(api, panel.group, [panel])
+    else panel.api.close()
     if (wasLastSide) get().openView('sidebar-empty', {}, loc)
     if (wasLastBottom) set((st) => ({ stash: { ...st.stash, bottom: [] }, stashActive: { ...st.stashActive, bottom: null }, bottomVisible: false }))
     useNav.getState().drop(id) // 该 tab 的导航历史随之销毁
@@ -698,6 +890,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     const panel = api?.getPanel(panelId)
     if (!api || !panel) return
     const loc = locOf(target.group) // 目标面板身份 → 落子后视图继承(侧栏=图标 / 主区=tab+标题)
+    if (!dropAllowed(api, panelId, target)) return // 固定 View 拖不出本区(提示层已不给落点,这里兜底)
     // 拖出主区要记住源组:moveTo 会同步激活落点组里的它,那一刻 __loc 还是 main → refreshTabs 把落点组
     // 记成「最后的主区组」,下面改完 __loc 再刷也改不回来(Codex 复审)。
     const srcMainGroup = ((panel.params ?? {}) as PanelMeta).__loc === 'main' ? (panel as { group?: { id?: string } }).group?.id ?? null : null
@@ -754,24 +947,98 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
   closeSideView: (side, type) => {
     const api = get().api
     if (!api) return
-    panelsAt(api, side).find((p) => panelType(p) === type)?.api.close()
+    const hit = panelsAt(api, side).find((p) => panelType(p) === type)
+    if (hit && !guarded(api, hit)) hit.api.close()
     get().refreshTabs()
   },
 
-  closeViewsOfType(type) {
+  closeViewsOfType(type, force) {
     const api = get().api
     if (!api) return
-    // 逐个关:close 会就地改 api.panels,不能边遍历边删。上限防「关不掉」时死循环。
-    // 一律走 closeLeaf 而不是 panel.api.close(),这样各区的收尾语义都对:主区最后一个 → 就地换 home;
-    // 侧栏最后一个 → 回填占位;底部最后一个 → 连 stash 一起清、面板收起。
-    for (let i = 0; i < 64; i++) {
-      const hit = api.panels.find((p) => panelType(p) === type)
-      if (!hit) break
-      get().closeLeaf(hit.id)
-      // 还在且仍是该类型 = 这一轮没关掉(主区最后一个会变成 home,类型已变,不算没关掉)→ 别再转了。
-      if (api.panels.some((p) => p.id === hit.id && panelType(p) === type)) break
-    }
+    // 先拍下名单再逐个关(close 会就地改 api.panels)。一律走 closeLeaf 而不是 panel.api.close(),
+    // 这样各区的收尾语义都对:主区最后一个 → 就地换 home;侧栏最后一个 → 回填占位;底部最后一个 → 连 stash 一起清、面板收起。
+    for (const p of api.panels.filter((x) => panelType(x) === type)) get().closeLeaf(p.id, force)
     get().refreshTabs()
+  },
+
+  replaceViewsOfType(from, to, params = {}) {
+    const api = get().api
+    if (!api || from === to || !getView(to)) return 0
+    const keep = api.activePanel?.id
+    const def = getView(to)!
+    let n = 0, side = 0, stole = false, giveBack = true
+    const pins = get().pinned
+    for (const p of [...api.panels]) {
+      if (panelType(p) !== from) continue
+      const loc = ((p.params ?? {}) as PanelMeta).__loc ?? 'main'
+      const keepFrom = guarded(api, p) // 固定 View 不许被换掉:`to` 开在它旁边,它留着(见 pinnedViews.ts)
+      // 固定的那个本身就是活动 panel:`to` 顶上来之后不许再把它激活回去(否则等于没换,Codex 评审复现)
+      if (keepFrom && keep === p.id) giveBack = false
+      // 「一区一个」:侧栏 / 底部恒如此(openView 同侧同类型复用)。主区多开同类标签是常态、平时一律就地换;只有牵涉
+      // 固定 View 才这么算 —— 否则对固定的 A 连换两次得到 [A,B,B],往回换又把 B 变成第二个 A,而不是摘掉它。
+      const unique = loc !== 'main' || keepFrom || isPinned(pins, 'main', to)
+      if (loc === 'main' && !(unique && panelsAt(api, 'main').some((x) => x !== p && panelType(x) === to))) {
+        if (get().navigateLeaf(p.id, to, params)) n++ // 固定的由 navigateLeaf 自己认(同组新标签,不顶掉它)
+        continue
+      }
+      // 侧栏 / 底部挂的是按类型的组件(component = 类型名,见 openView),改 __type 换不掉已经画出来的那个
+      // (2026-10-02 真 Electron:返回 1,左栏照旧是旧视图)→ 在原位旁开新的再摘掉旧的:组一直不空,不触发重排。
+      const group = p.group as { panels?: IDockviewPanel[]; activePanel?: IDockviewPanel } | undefined
+      // 侧栏按类型一个 tab(openView 同侧同类型复用):`to` 已开在这一侧就让它顶上,只摘掉旧的,不开第二个
+      const there = panelsAt(api, loc).find((x) => x !== p && panelType(x) === to)
+      if (there) {
+        if (Object.keys(params).length) there.api.updateParameters({ ...(there.params ?? {}), ...params }) // 调用方给的参数不丢
+        if (group?.activePanel === p) { there.api.setActive(); stole = true }
+        if (keepFrom) continue
+        if (loc === 'main') get().closeLeaf(p.id) // 主区走 closeLeaf:导航史、分屏收尾都在那里
+        else api.removePanel(p)
+        n++; side++; continue
+      }
+      const index = group?.panels?.indexOf(p) ?? -1
+      api.addPanel({
+        id: def.singleton && !api.getPanel(to) ? to : nextId(api, to), component: to, title: label(def.displayName),
+        params: { ...params, __loc: loc, __type: to },
+        position: { referencePanel: p, ...(index >= 0 ? { index: keepFrom ? index + 1 : index } : {}) },
+        inactive: group?.activePanel !== p,
+      })
+      if (!keepFrom) api.removePanel(p)
+      n++; side++
+    }
+    if (side) { get().refreshTabs(); scheduleWorkspaceSave() }
+    // 活动 panel 还给原主人(navigateLeaf / 新开的 panel 抢走了它;被换掉的侧栏 panel 已不在则作罢)。
+    // ⚠️已在组里最前的 panel 再 setActive,dockview 7 会重绘它(openPanel → renderPanel 摘下再挂回,iframe 重载;
+    // 底部面板修复会话 10-02 用 removeChild 栈抓到)→ 那种只切活动组。
+    const back = keep ? api.getPanel(keep) : undefined
+    if ((n || stole) && back && giveBack) {
+      if ((back.group as { activePanel?: IDockviewPanel } | undefined)?.activePanel === back) back.group.api.setActive()
+      else back.api.setActive()
+    }
+    // 同活 panel 那条:一侧按类型一个 tab —— `to` 已暂存在这一侧就只摘掉被换的、参数并进它,否则侧栏图标会出两个
+    const swap = (side: DockSide, list: Stashed[]): Stashed[] => {
+      if (isPinned(pins, side, from) || !list.some((v) => v.type === from)) return list // 固定在这一侧的不换(见 beside)
+      const kept = list.find((v) => v.type === to)
+      if (kept) return list.filter((v) => v.type !== from).map((v) => (v === kept ? { ...v, params: { ...(v.params ?? {}), ...params } } : v))
+      const at = list.findIndex((v) => v.type === from)
+      return list.filter((v, i) => v.type !== from || i === at).map((v) => (v.type === from ? { type: to, params: { ...params } } : v))
+    }
+    const { stash, stashActive, sidebarDefaults } = get()
+    let stashed = (['left', 'right', 'bottom'] as const).reduce((sum, side) => sum + (isPinned(pins, side, from) ? 0 : stash[side].filter((v) => v.type === from).length), 0)
+    // 固定在这一侧(收起着):`to` 排到它后面,它留着。默认项不动 —— 固定的那个关不掉,轮不到按默认项重建。
+    const beside = (side: DockSide): Stashed[] => {
+      const list = stash[side], at = list.findIndex((v) => v.type === from)
+      if (at < 0 || !isPinned(pins, side, from)) return list
+      // `to` 已经暂存在这一侧:不再加,但调用方给的参数要并进去(展开着的那条路径也并)
+      if (list.some((v) => v.type === to)) return Object.keys(params).length ? list.map((v) => (v.type === to ? { ...v, params: { ...(v.params ?? {}), ...params } } : v)) : list
+      stashed++
+      return [...list.slice(0, at + 1), { type: to, params: { ...params } }, ...list.slice(at + 1)]
+    }
+    set({
+      stash: { left: swap('left', beside('left')), right: swap('right', beside('right')), bottom: swap('bottom', stash.bottom) },
+      stashActive: Object.fromEntries((['left', 'right', 'bottom'] as const).map((side) => [side, stashActive[side] === from ? to : stashActive[side]])) as WorkspaceState['stashActive'],
+      sidebarDefaults: { left: swap('left', sidebarDefaults.left), right: swap('right', sidebarDefaults.right), bottom: swap('bottom', sidebarDefaults.bottom) },
+    })
+    if (stashed) { get().refreshTabs(); scheduleWorkspaceSave() } // 活的那些 navigateLeaf 已各自刷过、存过
+    return n + stashed
   },
 
   remapLeaves(fn) {
@@ -780,7 +1047,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       void __loc
       void __type
       const next = fn(panelType(p), params)
-      if (next === null) get().closeLeaf(p.id)
+      if (next === null) get().closeLeaf(p.id, true) // 指向的东西没了:固定 View 也关,下面补一个空白的回来
       else if (next) makeLeaf(p).setParams(next)
     }
     let changed = false
@@ -795,6 +1062,8 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       get().refreshTabs() // 收起态的侧栏图标从 stash 取
       scheduleWorkspaceSave()
     }
+    // 最后才补:暂存里的固定项也可能刚被摘掉(先补的话它那时还在,补完才被删,展开后就没了 —— Codex 评审复现)
+    get().ensurePinned()
   },
 
   resetLayout(opts) {
@@ -804,12 +1073,13 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     // 只有用户亲手重置才拍;拍不下来就不给撤销,重置照做。自动重置同时作废旧快照。
     let snap: Omit<NonNullable<typeof layoutUndo>, 'shape' | 'metrics' | 'settleUntil' | 'dismiss'> | null = null
     if (opts?.undoable) {
-      try { snap = { env: envelope(api, get()), api, profile: get().sideProfileKey, stashActive: { ...get().stashActive } } } catch { snap = null }
+      try { snap = { env: envelope(api, get()), api, profile: get().sideProfileKey, owner: restoredOwner, stashActive: { ...get().stashActive } } } catch { snap = null }
     }
     dropLayoutUndo() // 旧快照(连同它的提示)先作废:自动重置不给撤销,手动重置换一份新的
     dismissExtensions()
     try { api.clear() } catch { /* ignore */ }
     clearLayout()
+    restoredOwner = undefined // 默认布局是按当前画像的 Space 建的,不再是启动时还原出来的那份
     useNav.getState().reset() // 布局重建,旧 leaf id 全失效
     lastMainGroupId = null // 组 id 同样会被新布局复用
     set({ stash: { left: [], right: [], bottom: [] }, stashActive: { left: null, right: null, bottom: null }, leftVisible: true, rightVisible: true, bottomVisible: false, focusedChatLeafId: null })
@@ -843,6 +1113,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     if (!u || !api || u.profile !== get().sideProfileKey || !undoStillMatches(u, api)) return false
     const ok = get().applyLayout(u.env)
     if (ok) {
+      restoredOwner = u.owner // 撤回来的是重置前那份:归属也回到拍快照那一刻的(画像没变过,上面刚核过)
       set({ stashActive: u.stashActive }) // 信封不带它:不还原的话,展开收起的侧栏会落到第一个视图而不是原来选中的那个
       scheduleWorkspaceSave()
     }
@@ -916,28 +1187,11 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
   navigateLeaf(leafId, type, params = {}) {
     const api = get().api
     const panel = api?.getPanel(leafId)
-    const def = getView(type)
-    if (!api || !panel || !def) return null
-    const old = (panel.params ?? {}) as PanelMeta & Record<string, unknown>
-    const sameType = panelType(panel) === type
-    // dockview updateParameters 是 merge 语义,但值为 undefined 的键会被显式删除(dockviewPanel.update)
-    // → 旧视图参数全部映射为 undefined,防 followActive/reuseKey 之类残留污染新视图。
-    const cleared: Record<string, unknown> = {}
-    for (const k of Object.keys(old)) cleared[k] = undefined
-    panel.api.updateParameters({ ...cleared, ...params, __loc: old.__loc ?? 'main', __type: type })
-    selfTitled.delete(panel.id) // 换成的新视图还没自己改过名(Codex r3a-2)
-    panel.api.setTitle(label(def.displayName))
-    panel.api.setActive()
-    // 就地切换不触发 onDidActivePanelChange(panel 未变)→ 自补簿记。
-    if (type === 'chat') set({ focusedChatLeafId: panel.id })
-    else if (!sameType && get().focusedChatLeafId === panel.id) {
-      // 本 leaf 从 chat 切走 → 焦点会话 leaf 移交给其他 chat panel(无则清空,右栏目录等显示空态)。
-      const otherChat = panelsAt(api, 'main').find((p) => p.id !== panel.id && panelType(p) === 'chat')
-      set({ focusedChatLeafId: otherChat?.id ?? null })
-    }
-    get().refreshTabs()
-    scheduleWorkspaceSave()
-    return makeLeaf(panel)
+    if (!api || !panel || !getView(type)) return null
+    // 固定 View 不被别的类型顶掉:改在它那一组开新标签(同类照旧就地换,如聊天 → 另一个会话)。
+    // 侧栏 panel 本来就不能就地换类型(按类型挂的组件),固定的直接拒绝。
+    if (panelType(panel) !== type && guarded(api, panel)) return locOfPanel(panel) === 'main' ? openTabBeside(api, panel, type, params) : null
+    return swapLeaf(api, panel, type, params)
   },
 
   getActiveLeaf() {
@@ -1029,9 +1283,11 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       const finish = (): void => {
         if (stale()) return // 已被后一次点击接管:那一轮会自己收尾,这里再动手就是去关别人的 panel
         // 逐个 try:这批 panel 可能已被新一轮 / closeLeaf 关掉,dockview 对重复 close 抛 'invalid operation'。
-        // 组被移除 → 网格收支 → 幸存的那一支被摘下重挂:滚动位置会归零、入场动画会重播。成对包住。
+        // 左右:组被移除 → 网格收支 → 幸存的那一支被摘下重挂:滚动位置会归零、入场动画会重播。成对包住。
+        // 底部:组藏起来不删(parkBottom),主区不重挂 —— iframe 不重载,这对包装只剩兜底。
         const restore = preserveAcrossRestructure()
-        panels.forEach((p) => { try { p.api.close() } catch { /* 已经不在了 */ } })
+        if (vert) parkBottom(api, panels[0].group, panels)
+        else panels.forEach((p) => { try { p.api.close() } catch { /* 已经不在了 */ } })
         restore()
         settleSizes() // 收起后另一侧会吃掉空白漂移 → 重新钉回 0.191
         setTimeout(release, 180) // 布局沉降后释放,恢复可手动拖宽
@@ -1067,7 +1323,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       const unlock = lockNeighbour()
       const release = (): void => { unlock(); if (toggleReleases[side] === release) delete toggleReleases[side] }
       toggleReleases[side] = release
-      const restoreOpen = preserveAcrossRestructure() // 同收起:新增组一样会让主区被摘下重挂
+      const restoreOpen = preserveAcrossRestructure() // 同收起:新增组一样会让主区被摘下重挂(底部有藏着的组时不新增)
       stashed.forEach((v) => get().openView(v.type, v.params, side))
       restoreOpen()
       // 还原折叠前的活动 tab(openView 会把最后打开的设为活动,故此处显式拉回用户上次所在的视图)。
@@ -1220,7 +1476,27 @@ export function migrateLayoutBlob(layout: Pick<LayoutEnvelopeV4, 'dockview' | 's
   }
 }
 
+/** onReady 那次还原的结局:null = 还没跑;false = 落空(没有存档 / 存档引用了当时尚未注册的视图),屏上摆的是默认布局。 */
+let bootRestored: boolean | null = null
+/** 启动还原落空了:此刻屏上是「当时的活动 Space」的默认布局,不是布局键里原来那份现场。
+ *  异步就位的 Space(插件比 Dockview 就绪得晚)据此补还原自己的现场,而不是只换个活动 id。 */
+export const bootLayoutFellThrough = (): boolean => bootRestored === false
+
 export function tryRestoreLayout(api: DockviewApi): boolean {
+  bootRestored = restoreLayout(api)
+  return bootRestored
+}
+
+/** 命名布局此刻还原得了吗:存在,且引用的视图都已注册(口径同 tryRestoreLayout;applyNamed 自己不查)。 */
+export function namedLayoutRestorable(name: string): boolean {
+  const blob = loadNamedLayout(name)
+  if (!blob) return false
+  migrateLayoutBlob(blob)
+  return layoutViewsAllRegistered(blob.dockview)
+}
+
+function restoreLayout(api: DockviewApi): boolean {
+  restoredOwner = undefined
   const layout = loadLayout()
   if (!layout) return false
   migrateLayoutBlob(layout) // 必须先迁移再校验:退役视图(sessions 等)已无注册,迁移前校验会误丢整份布局
@@ -1246,7 +1522,9 @@ export function tryRestoreLayout(api: DockviewApi): boolean {
       : api.panels.find((p) => panelType(p) === 'chat')
     useWorkspace.getState().setFocusedLeaf(focused)
     pinSides(api)
-    return api.panels.length > 0
+    if (!api.panels.length) return false
+    restoredOwner = layout.space || null
+    return true
   } catch {
     return false
   }
@@ -1309,7 +1587,7 @@ export const presentDockedExtension: ExtendViewPresenter = (options, dismiss) =>
       const finish = (): void => {
         pinSides(api)
         const restore = preserveAcrossRestructure()
-        if (panel && api.getPanel(id) === panel) panel.api.close()
+        if (panel && api.getPanel(id) === panel) { if (vert) parkBottom(api, panel.group, [panel]); else panel.api.close() }
         if (wasActive && previous && api.getPanel(previous.id) === previous) previous.api.setActive()
         restore()
         element.remove()

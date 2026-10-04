@@ -32,7 +32,7 @@
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
-const { _electron: electron } = require('playwright-core')
+const electron = require('./lib/launch-electron.cjs')
 
 const ROOT = path.join(__dirname, '..')
 // macOS:一个 Electron 实例被强杀后,系统会在下一次启动时先弹「是否恢复窗口」的模态框(崩溃历史,所有未打包的 Electron 共用 com.github.Electron),
@@ -92,12 +92,12 @@ async function ribbonSpaces(win) {
   const slot = await win.evaluate(read('.rb-home'))
   const more = win.locator('.rb-top .rb-more').first()
   if (!(await more.count().catch(() => 0))) return [...bar, ...slot]
-  await more.hover()
-  await win.waitForTimeout(500)
-  const hidden = await win.evaluate(read('.rb-fly'))
-  await win.mouse.move(700, 700) // 移开,否则浮层挡住后续点击
-  await win.waitForTimeout(400)
-  return [...bar, ...slot, ...hidden]
+  await more.click() // 10-02 起「…」= 展开:上区铺满整条,藏着的就在条上;读完再点一下收起
+  await win.waitForTimeout(300)
+  const all = await win.evaluate(read('.rb-top'))
+  await more.click()
+  await win.waitForTimeout(300)
+  return [...all, ...slot]
 }
 
 /** 点 ribbon 上某个 Space(条上 / 主位槽 / 「…」三处都找)。 */
@@ -112,9 +112,10 @@ async function enterSpace(win, names) {
   if (!hit) {
     const more = win.locator('.rb-top .rb-more').first()
     if (await more.count().catch(() => 0)) {
-      await more.hover()
-      await win.waitForTimeout(500)
-      hit = await win.evaluate(click('.rb-fly'))
+      await more.click() // 「…」= 展开
+      await win.waitForTimeout(300)
+      hit = await win.evaluate(click('.rb-top'))
+      await win.evaluate(() => document.querySelector('.rb-open-top .rb-more')?.click())
     }
   }
   await win.waitForTimeout(1800) // lazy 分块 + productsList 一个来回

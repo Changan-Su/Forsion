@@ -1,3 +1,4 @@
+import type { CorePluginUpdates } from '../../shared/corePlugins'
 import type { HostSandboxConfig } from '../../shared/hostSandboxConfig'
 import type { GitPanelStatus, GitRestoreSummary, GitVersion, ProductKind, ProductSummary, ShortcutResult } from '../../shared/products'
 /** standalone /agent 契约的前端类型(与包内 routes/eventBus 一致)。 */
@@ -133,6 +134,8 @@ export function isHomeSession(s: Pick<SessionRecord, 'location'>): boolean {
 
 // ── Special Agents（Historian / Muse;本地）──────────────────────────────────
 export interface HistorianConfig {
+  /** 总结时为尚未设置图标的会话选择 Emoji；旧引擎缺省视为开启。 */
+  autoEmoji?: boolean
   enabled: boolean
   modelId: string
   /** 每 x 轮触发一次维护(标题 + 日志/记忆同一节奏)。 */
@@ -179,7 +182,7 @@ export interface PendingApprovalInfo {
   reason: string | null
   cwd: string | null
   status: 'pending' | 'executing' | 'approved' | 'rejected' | 'failed'
-  decided_by: 'user' | 'agent' | null
+  decided_by: 'user' | 'agent' | 'system' | null
 
   note: string | null
   result: string | null
@@ -745,6 +748,14 @@ export interface ProjectContext {
   plans: ProjectPlanInfo[]
   settings: ProjectSettings | null
   git: GitSummary
+  /** 项目记忆(只在这个项目里成立的事实,本项目的 agent 共用;存本机用户目录,不在项目文件夹里)。老引擎 / 远端来源不带。 */
+  memory?: ProjectMemoryView
+}
+export interface ProjectMemoryView {
+  version: string | null
+  entries: Array<{ id: string; content: string; updatedAt: number }>
+  chars: number
+  limit: number
 }
 
 export interface SkillInfo {
@@ -982,7 +993,7 @@ export interface ApprovalRemote {
 export interface ApprovalReason {
   /** custom-ask=你写的规则要求问 · escalate=工作区外写入升级 · mode=该档位本就需要审批 ·
    *  protected=写凭据 / Forsion 本机配置(契约 C4 / C6:每次都问,完全通行与「总允许」都不跳过) */
-  kind: 'custom-ask' | 'escalate' | 'mode' | 'protected'
+  kind: 'custom-ask' | 'escalate' | 'mode' | 'protected' | 'control'
   /** 命中的规则串(仅 custom-ask) */
   rule?: string
   /** 引擎侧**生效**的档位(custom 未命中时是降解后的 base) */
@@ -1283,6 +1294,7 @@ declare global {
       initialConfig?: StoredDesktopConfig
       account?: import('./amadeus/plugins/types').PluginAccount
       getConfig(): Promise<StoredDesktopConfig>
+      documentTasks?: import('../../shared/documentTasks').DocumentTaskClaimsApi
       setConfig(patch: Partial<StoredDesktopConfig>): Promise<StoredDesktopConfig>
       backendStatus?(): Promise<BackendStatusInfo>
       backendLogs?(): Promise<string[]>
@@ -1361,7 +1373,11 @@ declare global {
       submitFeedback?(input: { description: string; sessionLogJson?: string; sessionLogName?: string }): Promise<{ ok: boolean; id?: string | null; error?: string; attachmentSkipped?: boolean }>
       appVersion?(): Promise<string>
       /** 应用内自动更新:检查 / 下载 / 重启安装(mac 仅检测,download/install 为 no-op)。 */
+      getCorePluginUpdates?(): Promise<CorePluginUpdates>
+      onCorePluginUpdates?(cb: (status: CorePluginUpdates) => void): () => void
       checkForUpdates?(): Promise<UpdaterStatusInfo>
+      getUpdaterStatus?(): Promise<UpdaterStatusInfo>
+      restartForUpdate?(): Promise<{ ok: boolean }>
       downloadUpdate?(): Promise<void>
       installUpdate?(): Promise<{ ok: boolean }>
       /** 测试版通道开关(缺省关)。开了才收 x.y.z-beta.N;关着两层都隔离:
@@ -1376,12 +1392,18 @@ declare global {
       /** 带主进程半身的内置包(Forsion Extend)启停:只改下次开机装不装,回是否待重启。设备页没有这座桥。 */
       setBundleEnabled?(id: string, on: boolean): Promise<{ restartPending: boolean }>
       /** 主题请求窗口级材质;system-glass 在 macOS 映射为可取样窗口后方的高透原生 vibrancy。 */
+      startupAppearance?: {
+        initial: import('../../shared/startupAppearance').StartupAppearance
+        update(patch: import('../../shared/startupAppearance').AppearancePatch, clearPlugin?: string): Promise<import('../../shared/startupAppearance').StartupAppearance>
+        subscribe(cb: (value: import('../../shared/startupAppearance').StartupAppearance) => void): () => void
+      }
       setWindowMaterial?(input: { material: 'opaque' | 'system-glass'; mode: 'light' | 'dark'; backgroundColor?: string }): Promise<{ ok: boolean }>
       onAuthDevice?(cb: (info: { url: string; userCode: string }) => void): () => void
       /** 登录态变化(桌面登录/登出、CLI `tangu login` 等外部来源)→ 刷新账号卡/authInfo。 */
       onAuthChanged?(cb: (info: { loggedIn: boolean }) => void): () => void
       onAuthWillChange?(cb: () => Promise<void>): () => void
       /** 截当前窗口的一块视口矩形(Agent Desk 截屏 → 引擎 desk_screenshot);失败返回 null。 */
+      sampleAmbientPalette?(rect: import('../../shared/ambientPalette').AmbientRect): Promise<import('../../shared/ambientPalette').AmbientPalette | null>
       captureRect?(rect: { x: number; y: number; width: number; height: number }): Promise<string | null>
       /** purpose:'project' = 添加 / 导入项目:主进程把选中的目录登记为本机确认过的项目根(设备页 /unit/host* 只认这些会话目录);
        *  其余用途(技能导入、同步目录、额外可写根…)不传,不登记。 */
@@ -1449,6 +1471,7 @@ declare global {
       productsIsCreation?(dir: string): Promise<boolean>
       /** 这件产物能否**从应用外**(桌面快捷方式 / forsion:// 深链)拉起:存在、是网页、且用户为它建过快捷方式。 */
       productsExternalLaunchAllowed?(id: string): Promise<boolean>
+      productsExternalLaunchNeedsReauth?(id: string): Promise<boolean>
       onDevPluginsChanged?(cb: (change: { pluginIds: string[] }) => void): () => void
       /** Forsion Connect:Coding Space 项目发布到云端托管(主进程持 token 转发)。 */
       connectMeta?(dir: string): Promise<{ slug?: string }>
@@ -1539,6 +1562,10 @@ declare global {
       /** Forsion Market:浏览(公开)/ 详情含 README / 安装(下载+按类型解压到 ~/.tangu)/ 已装列表。 */
       marketList?(type?: string): Promise<{ items: MarketCard[] }>
       marketDetail?(id: string): Promise<MarketDetail>
+      marketUpdateStatus?(): Promise<import('../../shared/marketPluginUpdates').MarketPluginUpdates>
+      marketSetAutoUpdate?(id: string, on: boolean): Promise<import('../../shared/marketPluginUpdates').MarketPluginUpdates>
+      marketCheckUpdates?(): Promise<void>
+      onMarketUpdateStatus?(cb: (state: import('../../shared/marketPluginUpdates').MarketPluginUpdates) => void): () => void
       marketInstall?(id: string): Promise<{ ok: boolean; path: string; files: number; type: string; slug: string; id?: string }>
       /** 安装进度订阅(主进程只推给发起窗口);返回退订函数。 */
       onMarketInstallProgress?(cb: (ev: MarketInstallProgress) => void): () => void
@@ -1551,7 +1578,7 @@ declare global {
       pluginsUserInstalled?(): Promise<Array<{ id: string; slug: string }>>
       pluginsUninstall?(id: string): Promise<{ ok: boolean }>
       /** 用户自定义 Space:~/.tangu/spaces/<slug>/space.json(数据化布局配方;market type='space' 同目录)。 */
-      spacesList?(): Promise<Array<{ slug: string; json: string; plugin?: string }>>
+      spacesList?(): Promise<Array<{ slug: string; json: string; plugin?: string; iconUrl?: string }>>
       spacesSave?(slug: string, json: string): Promise<{ ok: boolean }>
       spacesDelete?(slug: string): Promise<{ ok: boolean }>
       /** 收件箱:系统通知(点击回跳 Inbox Space)/ dock 角标(仅 mac 生效)/ 通知点击订阅。 */
@@ -1802,7 +1829,7 @@ export interface AmadeusSyncStatus {
 export interface MarketCard {
   id: string
   type: 'skill' | 'agent' | 'plugin' | 'space' | 'theme' | 'amadeus-plugin'
-  source: 'github' | 'zip'
+  source: 'github' | 'zip' | 'npm'
   name: string
   summary: string
   author: string
@@ -1836,4 +1863,5 @@ export interface MarketInstallProgress {
 export interface MarketDetail extends MarketCard {
   readme: string
   githubRepoUrl?: string | null
+  npmPackage?: string | null
 }

@@ -21,6 +21,7 @@ export const imageStudioSpace: SpaceDefinition = {
   id: 'image-studio', name: () => translate('imageStudio.title'), icon: Images,
   sidebarDefaults: sides, resizableSides: { left: true, right: true }, sideDefaultScale: { left: 1.2 },
   listFirst: false, // 手机上先看画布:左栏是对话,不是「点开一项进主区」的列表
+  pinned: { main: [{ type: 'image-studio', params: {} }], left: sides.left },
   build() {
     const ws = useWorkspace.getState()
     ws.setSidebarDefaults(sides)

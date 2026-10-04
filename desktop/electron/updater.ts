@@ -14,6 +14,8 @@ import { join } from 'node:path'
 import electronUpdater from 'electron-updater'
 import { forsionHomeDir } from './forsionHome'
 import { changelogSection, isNewer, notesToString } from './updaterUtil'
+import { BUNDLE_EXTEND } from './distribution'
+import { NoExtendUpdateProvider } from './noExtendUpdateProvider'
 
 // electron-updater 是 CJS 默认导出对象;ESM 下解构取 autoUpdater 最稳。
 const { autoUpdater } = electronUpdater
@@ -122,6 +124,14 @@ function applyChannel(beta: boolean): void {
 function ensureWired(): void {
   if (wired) return
   wired = true
+  if (!BUNDLE_EXTEND) {
+    autoUpdater.setFeedURL({
+      provider: 'custom',
+      updateProvider: NoExtendUpdateProvider,
+      owner: GH_OWNER,
+      repo: GH_REPO,
+    })
+  }
   autoUpdater.autoDownload = false // 手动下载
   autoUpdater.autoInstallOnAppQuit = false // 全程手动:下完不主动在退出时装
   autoUpdater.on('checking-for-update', () => broadcast({ phase: 'checking' }))
@@ -186,6 +196,8 @@ export function getUpdaterStatus(): UpdaterStatus {
 }
 
 export async function checkForUpdates(): Promise<UpdaterStatus> {
+  // A verified installer is waiting for the user's restart; a timer/manual recheck must not hide it.
+  if (lastStatus.phase === 'downloaded') return lastStatus
   if (unsupported()) {
     const s: UpdaterStatus = { phase: 'unsupported' }
     broadcast(s)

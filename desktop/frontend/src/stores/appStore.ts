@@ -12,7 +12,7 @@ import { contentStorageKey } from '@lcl/engine/contentStorageScope'
 import type { ProjectSettings,
   AgentConfig, AgentRunEvent, Attachment, AuthStatusInfo, CtxInfo, ModelsResponse, NormalAgentDef,
   MsgSeg, SessionRecord, SkillInfo, SketchItem, SubChat, TanguDesktopConfig, ToolEvent, UiMessage, WorkspaceDescriptor, StoredDesktopConfig,
-  DefaultModelSlot, TeamDef } from '../types'
+  DefaultModelSlot, TeamDef, ThinkingLevel } from '../types'
 import { clearDeviceSticky, noteDeviceRefusal } from '../services/deviceMarks' // P1-K7a
 import { DEFAULT_CLOUD_PROJECT, DEFAULT_LOCAL_WORKSPACE_KEY, ROOTLESS_WORKSPACE_KEY, cloudProjectKey, isHomeSession, isIndependentOrbitConfig, isTeamImageAvatar, sessionWorkspaceKey, SHOW_SYSTEM_PROMPT_KEY, THINKING_LEVELS } from '../types'
 import * as api from '../services/backendService'
@@ -27,6 +27,7 @@ import { effectiveSessionMode, type SessionMode } from '../views/sessionMode'
 import { abortRunAndWait, cancelSteer, currentPlatform, expediteSteer, listActiveRuns, resolveApproval, resolveInquiry, startRun, steerRun, subscribeRunEvents, testConnection } from '../services/agentRunService'
 import { speakMessage, stopSpeaking, ttsState } from '../services/ttsService'
 import { recordUiAction } from '../diag'
+import { getClientSurface, notifyClientSurfaces } from '../services/clientSurfaces'
 import { windowKind } from '../windowKind'
 import { splitSuggestions } from '../views/chat2/suggest'
 import type { ChatRef } from '../views/chat2/chatDragRef'
@@ -45,6 +46,7 @@ import { usePageStore } from '../amadeus/store/pageStore'
 import { registerMessages, translate, translationValues } from '../i18n'
 import { publishAccountQuota } from '../services/accountQuota'
 import { sanitizeAnswerBy, sanitizeApprovalReason, sanitizeApprovalRemote } from '../approvalReason'
+import { normalizeSessionEmoji } from '../../../../tangu-agent/src/core/sessionEmoji'
 
 // 本文件自带的词条片段(命名空间 `appstore.*`,与其它文件不重叠)。
 // store 活在 React 之外,取词一律走模块级 `translate`,不能用 hook。
@@ -65,6 +67,12 @@ registerMessages({
   // 审批档 PUT 失败:引擎按存值审批,没存上就不能停在新档上
   'appstore.approvalSaveFailed': { zh: '审批档没能保存，已恢复为原来的档（{e}）', en: 'Couldn’t save the approval mode; restored the previous one ({e})' },
   'appstore.approvalSaveRaced': { zh: '审批档被更早的一次保存覆盖，已改为实际生效的档', en: 'An earlier save overwrote the approval mode; now showing the one in effect' },
+  // agent 经 update_session_settings 改了会话设置(session_config_changed)。*In = 改的不是眼前这个会话(后台会话的 run)。
+  // 换模型不进当前 run:回复进行中插的话会并进这一轮(steer),仍用原模型 → 只能说「这轮回复结束后」。
+  'appstore.agentSwitchedModel': { zh: 'Agent 已把本会话的模型切到 {model}，本轮回复结束后的下一条消息起生效', en: 'The agent switched this conversation to {model}; it takes effect after this reply finishes' },
+  'appstore.agentSwitchedModelIn': { zh: 'Agent 已把「{title}」的模型切到 {model}，本轮回复结束后的下一条消息起生效', en: 'The agent switched “{title}” to {model}; it takes effect after that reply finishes' },
+  'appstore.agentSetThinking': { zh: 'Agent 已把本会话的思考深度调为「{level}」', en: 'The agent set this conversation’s thinking depth to {level}' },
+  'appstore.agentSetThinkingIn': { zh: 'Agent 已把「{title}」的思考深度调为「{level}」', en: 'The agent set the thinking depth of “{title}” to {level}' },
 })
 
 export type { SettingsTab }
@@ -300,7 +308,7 @@ const stopTerminals = new Map<string, { assistantId: string; event: AgentRunEven
 // 该会话下一个无关 run 的 done 会莫名自动「开始执行」。所有终结路径统一在 endRun 清理。
 const planAutoStart = new Set<string>()
 /**
- * G2 · 界面动作的**发起窗口**登记表:只有起这条 run 的这个渲染实例才执行 `ui_cmd`。
+ * G2 · 界面动作的**发起窗口**登记表:只有起这条 run 的这个渲染实例才执行 `ui_cmd`(及转交 `client_cmd`)。
  *
  * ⚠️ 少了这道闸会出两种错,而且都不报错、只是行为诡异:
  *  ① **重放** —— run 事件是「回放 + 实时」,客户端永远从 seq 0 订阅(agentRunService 的
@@ -353,9 +361,7 @@ function checkQuotaExhausted(toast: (m: string, err?: boolean) => void, tr: (k: 
     const daily = j.dailyLimit >= 0 && Number(j.dailyRemaining) <= 0
     const state = weekly ? 'weekly' : daily ? 'daily' : ''
     if (state && state !== lastQuotaExhaustState) {
-      // 积分自动抵扣开着:额度虽尽但会自动扣积分续用,提示口径不同(且不算错误)
-      if (j.pointsAutoDeduct) toast(tr('quota.exhausted.autoDeduct'))
-      else toast(tr(state === 'weekly' ? 'quota.exhausted.weekly' : 'quota.exhausted.daily'), true)
+      toast(tr(state === 'weekly' ? 'quota.exhausted.weekly' : 'quota.exhausted.daily'), true)
     }
     lastQuotaExhaustState = state
   }).catch(() => {}).finally(() => { if (generation === authGeneration) quotaCheckBusy = false })
@@ -689,6 +695,116 @@ const markSending = (sid: string, delta: 1 | -1): void => {
 function saveSessionConfig(sid: string, patch: Partial<AgentConfig>): Promise<unknown> {
   return api.patchSessionConfig(targetForSession(sid), sid, patch, () => useApp.getState().configBySession[sid] || {})
 }
+/** 会话自己存的模型(列表 / 归档 / 子聊天缓存;不含全局默认 —— 那是 sendMessage 回退链的后半段,不是会话的值)。 */
+function sessionModelOf(s: Pick<AppState, 'sessions' | 'archivedSessions'>, sid: string): string {
+  return s.sessions.find((x) => x.id === sid)?.model_id || s.archivedSessions.find((x) => x.id === sid)?.model_id
+    || useChildChat.getState().sessions[sid]?.model_id || ''
+}
+/** 会话模型的**本地**改写:列表 / 归档 / 子聊天缓存 + 作废 ctx 环。不落库、不动全局默认 ——
+ *  setSessionModel(用户在药丸上换)与 session_config_changed(agent 在引擎侧已写库)共用,两处别各写各的。 */
+function patchSessionModelLocal(sid: string, modelId: string): void {
+  const child = useChildChat.getState().sessions[sid]
+  if (child) useChildChat.getState().remember({ ...child, model_id: modelId })
+  useApp.setState((s) => {
+    // 换模型即作废旧 context_info:窗口值/来源标注是按旧模型算的,留着会让 ctx 环分母错到下一次 run
+    const { [sid]: _stale, ...ctxRest } = s.ctxInfoBySession
+    return {
+      sessions: s.sessions.map((x) => (x.id === sid ? { ...x, model_id: modelId } : x)),
+      archivedSessions: s.archivedSessions.map((x) => (x.id === sid ? { ...x, model_id: modelId } : x)),
+      ctxInfoBySession: ctxRest,
+    }
+  })
+}
+/** 会话配置的本地底:已加载的 configBySession,缺了退到列表行自带的 agent_config;两者都没有 = undefined。 */
+function sessionConfigBaseOf(s: Pick<AppState, 'configBySession' | 'sessions' | 'archivedSessions'>, sid: string): AgentConfig | undefined {
+  return s.configBySession[sid] || [...s.sessions, ...s.archivedSessions].find((x) => x.id === sid)?.agent_config
+}
+/** 读引擎失败后隔多久再读一次(只重试这一次)。 */
+export const AGENT_CONFIG_READ_RETRY_MS = 300
+/** send 起跑前等本会话在途对账的上限:超时照本地值起跑 —— 引擎卡住不能连发送一起卡死。 */
+export const AGENT_CONFIG_SYNC_WAIT_MS = 3000
+const READ_FAILED = Symbol('read-failed')
+/** 读一次,失败(断连 / 引擎重启窗口)隔 AGENT_CONFIG_READ_RETRY_MS 再读一次;两次都失败 = READ_FAILED。 */
+async function readWithRetry<T>(read: () => Promise<T>): Promise<T | typeof READ_FAILED> {
+  try { return await read() } catch { /* 再给一次 */ }
+  await new Promise((r) => setTimeout(r, AGENT_CONFIG_READ_RETRY_MS))
+  try { return await read() } catch { return READ_FAILED }
+}
+/** session_config_changed 的对账:事件只当「引擎那边改过,去读一次」的信号,落到本地的是**引擎现值**而不是载荷。
+ *  事件存库、订阅从 seq 0 回放(重启 / 第二个窗口 / pollSession 重新订阅在飞 run)—— 直接套载荷会把 agent 早先的值
+ *  盖过用户之后在药丸上的改动,下一次 send 再按它起跑。只在载荷与本地不同的字段上读;读的过程中本地被用户改了 → 用户赢;
+ *  只有引擎现值 == 载荷(agent 这一笔仍是最新)才提示。
+ *  读失败(重试一次仍失败)→ 该字段**保留本地、不套载荷**:载荷可能正是回放出来的旧值,断连那一刻套上去就把用户后来的改动盖掉
+ *  (Codex 评审 09-25)。只经 queueAgentConfigSync 调用 —— 同一会话的对账必须串行。 */
+async function syncAgentSessionConfig(sid: string, want: { modelId?: string; thinkingLevel?: ThinkingLevel }): Promise<void> {
+  const generation = authGeneration
+  const s0 = useApp.getState()
+  const modelBefore = sessionModelOf(s0, sid)
+  const base = sessionConfigBaseOf(s0, sid)
+  const levelBefore = base?.thinkingLevel
+  const checkModel = !!want.modelId && want.modelId !== modelBefore
+  // 本地连会话配置都没有就不凭空造一条 {thinkingLevel}:残缺条目会挡住 refreshSessions 的整份预填(那里只填「本地还没有」的会话)
+  const checkLevel = !!want.thinkingLevel && !!base && levelBefore !== want.thinkingLevel
+  if (!checkModel && !checkLevel) return // 值未变(常见于回放、引擎现值就是 agent 这笔):不读、不提示
+  const c = targetForSession(sid)
+  const [engineModel, engineLevel] = await Promise.all([
+    checkModel ? readWithRetry(() => api.getSessionDetail(c, sid)).then((r) => (r === READ_FAILED ? '' : r?.model_id || '')) : Promise.resolve(''),
+    checkLevel
+      ? readWithRetry(() => api.getSessionConfig(c, sid)).then((r) => (r === READ_FAILED ? undefined : THINKING_LEVELS.find((lv) => lv === r?.thinkingLevel)))
+      : Promise.resolve(undefined),
+  ])
+  if (generation !== authGeneration || !sameRef(c.ref, targetForSession(sid).ref)) return
+  const s = useApp.getState()
+  const tr = s.tr
+  const here = sid === s.activeId
+  const title = () => [...s.sessions, ...s.archivedSessions].find((x) => x.id === sid)?.title
+    || useChildChat.getState().sessions[sid]?.title || tr('sidebar.newChat')
+  if (checkModel && engineModel && engineModel !== modelBefore && sessionModelOf(s, sid) === modelBefore) {
+    patchSessionModelLocal(sid, engineModel)
+    if (engineModel === want.modelId) {
+      const model = s.modelsResp?.models.find((m) => m.id === engineModel)?.name || engineModel
+      s.toast(here ? tr('appstore.agentSwitchedModel', { model }) : tr('appstore.agentSwitchedModelIn', { model, title: title() }))
+    }
+  }
+  const baseNow = sessionConfigBaseOf(useApp.getState(), sid)
+  if (checkLevel && engineLevel && engineLevel !== levelBefore && baseNow && baseNow.thinkingLevel === levelBefore) {
+    // 只合并这一个键:其余键可能正有本窗口的在途写(loadSessionHistory 取 local-wins 也是这个理由)
+    useApp.setState((st) => ({ configBySession: { ...st.configBySession, [sid]: { ...(st.configBySession[sid] || baseNow), thinkingLevel: engineLevel } } }))
+    if (engineLevel === want.thinkingLevel) {
+      const level = tr(`input.thinkingShort.${engineLevel}`)
+      s.toast(here ? tr('appstore.agentSetThinking', { level }) : tr('appstore.agentSetThinkingIn', { level, title: title() }))
+    }
+  }
+}
+/** 按会话串行的对账链。并行各读各的会互踩:同一轮 agent 连改两次(A→B→C),两笔都记下「之前 = A」,
+ *  先落地的 B 让后一笔「本地仍是 A」的守卫失效,读到的最新值 C 被丢掉,药丸停在 B、下一轮按 B 起跑。
+ *  串起来后一笔的「之前」取在前一笔落地之后。链排空即删(按身份比),别让之后的 send 白等一个早已落定的 promise。 */
+const agentConfigSyncs = new Map<string, Promise<void>>()
+function queueAgentConfigSync(sid: string, want: { modelId?: string; thinkingLevel?: ThinkingLevel }): void {
+  const next = (agentConfigSyncs.get(sid) || Promise.resolve()).then(() => syncAgentSessionConfig(sid, want)).catch(() => {})
+  agentConfigSyncs.set(sid, next)
+  void next.finally(() => { if (agentConfigSyncs.get(sid) === next) agentConfigSyncs.delete(sid) })
+}
+/** send 起跑前等本会话在途的对账(上限 AGENT_CONFIG_SYNC_WAIT_MS,超时照本地值走):不等 = 下一轮按对账前的旧模型 /
+ *  思考档起跑,把 agent 刚在引擎里写的值盖回去。
+ *  超时就把这条链摘掉:会话读取的 fetch 没有超时,引擎重启窗口里的死连接能挂好几分钟 —— 不摘,这期间每次 send 都白等满上限。
+ *  挂着的那笔日后落地也无害:syncAgentSessionConfig 只在「本地仍是读之前的值」时才套。 */
+async function waitAgentConfigSync(sid: string): Promise<void> {
+  const pending = agentConfigSyncs.get(sid)
+  if (!pending) return
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timedOut = await Promise.race([
+    pending.then(() => false),
+    new Promise<boolean>((r) => { timer = setTimeout(() => r(true), AGENT_CONFIG_SYNC_WAIT_MS) }),
+  ])
+  clearTimeout(timer)
+  if (timedOut && agentConfigSyncs.get(sid) === pending) agentConfigSyncs.delete(sid)
+}
+/** 正停在 waitAgentConfigSync 里的 send(按会话)。这段等待最长 AGENT_CONFIG_SYNC_WAIT_MS、输入框毫无反馈、草稿要等 send 落定才清 ——
+ *  用户以为没发出去再按一次回车,两次一起出等待、双双走到 startRun,引擎把第二条排成新 run = 同一句发两遍(Codex 评审 09-25)。
+ *  等待期间同会话再来的 send 直接不受理(返回 false:输入框留着草稿,第一次落定时照常清掉)。
+ *  只守这段有上限的等待,不守到 startRun 落定:startRun 没有超时,守过去的话一次挂死的请求会把会话锁住、此后每次发送都静默吞掉。 */
+const sendsAwaitingSync = new Set<string>()
 let lastAuthExpiredAt = 0 // handleAuthExpired 去抖:轮询/SSE/models 可能同时多次 401
 /** boot 期 managed 重连:引擎已 ready 但 connState 没到 ok(testConnection 撞上引擎刚 listen / 偶发超时)→ 15s 一次
  *  **只 connect 不 restart**,上限 8 次;每次 ready 广播重新计数。 */
@@ -907,6 +1023,7 @@ export interface AppState {
   newSession(): Promise<void>
   addLocalWorkspace(): Promise<void>
   renameSession(id: string, title: string): Promise<void>
+  setSessionEmoji(id: string, emoji: string | null): Promise<boolean>
   archiveSession(id: string, archived: boolean): Promise<void>
   deleteSession(id: string): Promise<void>
   renameWorkspace(ws: WorkspaceDescriptor, name: string): Promise<void>
@@ -1019,7 +1136,8 @@ export interface AppState {
   /** 检测到 Forsion 登录过期(401/凭证失效):清登录态 + 提示 + 引导重登录。幂等;standalone/未登录不触发。
    *  target(P1-K6 S2):哪台引擎回的 401;unit = 先复检账号,账号有效只记那台「引擎鉴权」,绝不重启本机引擎。 */
   handleAuthExpired(target?: TargetKey): void
-  openMarket(): void
+  /** query = 打开时预填的搜索词(插件详情页「在市场中查找」前置插件)。 */
+  openMarket(query?: string): void
   closeMarket(): void
   openAchievements(): void
   closeAchievements(): void
@@ -1363,6 +1481,30 @@ export const useApp = create<AppState>((set, get) => ({
         })().catch((e) => { recordUiAction({ runId, ackId, ...req, drop: 'exception', error: String((e as Error)?.message || e) }) /* 动态 import 失败也不该炸掉事件流,引擎会超时兜住 */ })
         break
       }
+      case 'client_cmd': {
+        // 客户端动作(phone_* 工具,契约 tangu-agent/docs/phone-control.md §3.1)。与 ui_cmd 共用 G2 / G3,
+        // 但**只转交给能力面、JS 永不回执**:claim / result 由原生自己发,引擎的 pending 表才是唯一权威。
+        // 这几道闸只是早筛(省一次注定 410 的 claim);漏过去的重放 / 伪造由原生 claim 兜底。
+        //  - 被闸拦掉也不回执:回了等于替别的窗口/设备作答(同 ui_cmd G2 的理由)。
+        //  - 全程同步、没有 await,所以 stopped 在这里查一次就够;⚠️ 将来在转交前加 await 必须补重查。
+        // diag 只记 ns 与闸名,**绝不记 body**(可能含短信正文;引擎侧 [client-cmd] 日志同样不写载荷)。
+        const ackId = typeof pl.ackId === 'string' ? pl.ackId : ''
+        const ns = typeof pl.ns === 'string' ? pl.ns : ''
+        const body = typeof pl.body === 'string' ? pl.body : ''
+        const surface = ns ? getClientSurface(ns) : undefined
+        const drop = !ackId ? 'no-ackId' : !ns || !body ? 'invalid'
+          : !uiActionOwnedRuns.has(runId) ? 'not-owner' : uiActionDoneAcks.has(ackId) ? 'duplicate'
+          : stoppedRuns.has(runId) ? 'stopped' : !surface ? 'no-surface' : ''
+        const rec = { runId, ackId, kind: 'client', id: ns }
+        if (drop || !surface) { recordUiAction({ ...rec, drop }); break }
+        if (uiActionDoneAcks.size >= MAX_DONE_ACKS) uiActionDoneAcks.clear()
+        uiActionDoneAcks.add(ackId)
+        recordUiAction(rec)
+        const fail = (e: unknown) => recordUiAction({ ...rec, drop: 'exception', error: String((e as Error)?.message || e) })
+        // 能力面抛错(同步或异步)不许炸掉事件流;引擎那侧 claim 超时自会兜住。
+        try { void Promise.resolve(surface.exec({ runId, ackId, body })).catch(fail) } catch (e) { fail(e) }
+        break
+      }
       case 'desk_capture_request':
         if (pl.shotId) {
           void import('../views/chat2/deskCapture').then((m) => m.answerDeskCapture(String(pl.runId || runId), sessionId, String(pl.shotId)))
@@ -1448,6 +1590,17 @@ export const useApp = create<AppState>((set, get) => ({
         if (pl.auto) planAutoStart.add(runId)
         if (pl.file) get().toast(t('app.planArchived', { file: pl.file }))
         break
+      case 'session_config_changed': {
+        // agent 经 update_session_settings 改了会话模型 / 思考档:引擎已落库,这里只同步本地缓存。
+        // 不同步 = 下一次 run 仍按 store 里的旧值起跑(sendMessage 读 sessions[].model_id / configBySession),把引擎刚写的值盖回去。
+        // 只读不写(引擎已写,再写一次会和用户并发改互踩);不动全局默认 cfg.modelId —— agent 改一个会话不该顺手改掉用户新会话的默认模型。
+        // 载荷可能是回放的旧值 → 不直接套,读引擎现值再对账;按会话串行(连改两次不互踩),send 起跑前会等它落地。
+        const sid = typeof pl.sessionId === 'string' && pl.sessionId ? pl.sessionId : sessionId
+        const modelId = typeof pl.modelId === 'string' ? pl.modelId.trim() : ''
+        const level = THINKING_LEVELS.find((lv) => lv === pl.thinkingLevel)
+        queueAgentConfigSync(sid, { modelId: modelId || undefined, thinkingLevel: level })
+        break
+      }
       case 'team_output': {
         const row = pl.message
         if (!row?.id || row.role !== 'model') break
@@ -2242,6 +2395,8 @@ export const useApp = create<AppState>((set, get) => ({
         subscribedRuns.clear()
         runWatchdogs.forEach((wd) => clearInterval(wd))
         runWatchdogs.clear()
+        // 上面 abort 的 run 都不走 endRun → 能力面收不到 onRunEnd,由这里统一通知重置(移动端登出即走此路)。
+        notifyClientSurfaces('reset')
       }
       void window.tangu?.authStatus?.().then((a) => { if (generation === authGeneration) set({ authInfo: a }) }).catch(() => {})
       // Some transitions await the engine restart before emitting auth:changed, so
@@ -2604,6 +2759,17 @@ export const useApp = create<AppState>((set, get) => ({
     try { await api.updateSession(targetForSession(id), id, { title }) } catch (e: any) { get().toast(get().tr('app.renameFail', { e: e?.message || e }), true) }
   },
 
+  setSessionEmoji: async (id, value) => {
+    const emoji = normalizeSessionEmoji(value)
+    if (value !== null && !emoji) { get().toast(get().tr('session.icon.invalid'), true); return false }
+    try {
+      const result = await api.updateSession(targetForSession(id), id, { emoji })
+      const apply = (x: SessionRecord): SessionRecord => x.id === id ? { ...x, emoji: result.emoji } : x
+      set((s) => ({ sessions: s.sessions.map(apply), archivedSessions: s.archivedSessions.map(apply) }))
+      return true
+    } catch (e: any) { get().toast(get().tr('session.icon.saveFail', { e: e?.message || e }), true); return false }
+  },
+
   archiveSession: async (id, archived) => {
     try {
       await api.updateSession(targetForSession(id), id, { archived })
@@ -2944,6 +3110,16 @@ export const useApp = create<AppState>((set, get) => ({
       if (!s.agent_config) void backfillSessionConfig(s.id, init)
     }
     const sessionId = sid
+    // agent 刚改了本会话模型 / 思考档、对账还在飞 → 先等它落地再读 store(下面的配置与 sessionModelId 都在这之后读)
+    // 等待期间同会话的第二次 send 不受理(见 sendsAwaitingSync);检查与登记同步完成,中间不许有 await。
+    // 没有在途对账就不登记、不 await:与引入等待之前逐字同路,连发的程序化调用照旧各自起跑。
+    if (!wasNewChat) {
+      if (sendsAwaitingSync.has(sessionId)) return false
+      if (agentConfigSyncs.has(sessionId)) {
+        sendsAwaitingSync.add(sessionId)
+        try { await waitAgentConfigSync(sessionId) } finally { sendsAwaitingSync.delete(sessionId) }
+      }
+    }
     act(wasNewChat ? 'chat.new' : 'chat.send', { s: sessionId.slice(0, 6), text })
     // Agent Desk:新一条用户消息解除「用户关过面板」的静音。
     const storedAgentConfig = implicitInit || get().configBySession[sessionId] || {}
@@ -3373,17 +3549,7 @@ export const useApp = create<AppState>((set, get) => ({
       else set((s) => { void window.tangu?.setConfig?.({ modelId }); return { cfg: { ...s.cfg, modelId } } })
     }
     if (!sid) { set({ newChatModel: modelId }); return }
-    const child = useChildChat.getState().sessions[sid]
-    if (child) useChildChat.getState().remember({ ...child, model_id: modelId })
-    set((s) => {
-      // 换模型即作废旧 context_info:窗口值/来源标注是按旧模型算的,留着会让 ctx 环分母错到下一次 run
-      const { [sid]: _stale, ...ctxRest } = s.ctxInfoBySession
-      return {
-        sessions: s.sessions.map((x) => (x.id === sid ? { ...x, model_id: modelId } : x)),
-        archivedSessions: s.archivedSessions.map((x) => (x.id === sid ? { ...x, model_id: modelId } : x)),
-        ctxInfoBySession: ctxRest,
-      }
-    })
+    patchSessionModelLocal(sid, modelId)
     void api.updateSession(targetForSession(sid), sid, { model_id: modelId }).catch((e) => get().toast(get().tr('app.modelSwitchSaveFail', { e: e?.message || e }), true))
   },
 
@@ -3640,9 +3806,9 @@ export const useApp = create<AppState>((set, get) => ({
     set({ settingsTab: tab ?? null, settingsSkillKey: skillKey ?? null, settingsOpen: true })
   },
 
-  openMarket: () => {
+  openMarket: (query) => {
     if (window.tangu?.openFloatingPanel) {
-      void window.tangu.openFloatingPanel({ id: 'market', title: get().tr('market.title'), builtin: 'market' })
+      void window.tangu.openFloatingPanel({ id: 'market', title: get().tr('market.title'), builtin: 'market', ...(query ? { params: { q: query } } : {}) })
       return
     }
     set({ marketOpen: true })
@@ -3672,10 +3838,17 @@ export const useApp = create<AppState>((set, get) => ({
       // 重扫让后端立刻发现新插件(免重启);装即启用;提示可能需重启。
       // 不再自动关市场 / 跳设置:装完只 toast「已安装」,用户在插件详情里自行「打开设置」。
       const r = await api.rescanPlugins(homeTarget())
-      for (const id of r.addedIds) await api.setPluginEnabled(homeTarget(), id, true).catch(() => {})
-      // 引擎重扫只激活「全新 id」(activateNewPlugins):原地更新时老代码还在跑,不重启就报「已生效」是谎报。
-      const needsRestart = r.needsRestart || !!updated
-      say(needsRestart ? t('market.pluginInstalledRestartHint') : t('market.pluginInstalledOk'))
+      let list = r.plugins
+      for (const id of r.addedIds) list = (await api.setPluginEnabled(homeTarget(), id, true).catch(() => null))?.plugins ?? list
+      // 新引擎(给 reloadedIds,10-02 起)原地更新即热换,破不了模块缓存的(CommonJS / 自带 node_modules 等)才要重启 —— needsRestart 已经说了;
+      // 旧引擎只激活全新 id:原地更新时老代码还在跑,不重启就报「已生效」是谎报。
+      const needsRestart = r.needsRestart || (!!updated && !r.reloadedIds)
+      // 装上了但前置没齐(引擎让它休眠):别报「已启用」,说清还缺什么
+      const missing = [...new Set((list ?? []).filter((p) => [...r.addedIds, ...(r.reloadedIds ?? [])].includes(p.id)).flatMap((p) => (p.waitingFor ?? []).map((w) => w.id)))]
+      const label = (id: string): string => { const q = list?.find((p) => p.id === id); return q ? q.name : id }
+      say(needsRestart ? t('market.pluginInstalledRestartHint')
+        : missing.length ? t('market.pluginInstalledWaiting', { list: missing.map(label).join(t('common.listSep')) })
+        : t('market.pluginInstalledOk'))
       return needsRestart
     } catch (e: any) {
       say(t('market.installFail', { e: e?.message || String(e) }), true)
@@ -3957,6 +4130,7 @@ function endRun(set: (fn: (s: AppState) => Partial<AppState>) => void, get: () =
   // 在此作废,防止标记泄漏到该会话后续无关 run(Codex 评审 #4)。
   planAutoStart.delete(runId)
   uiActionOwnedRuns.delete(runId) // G2 归属标记随 run 终结释放(同 planAutoStart,统一在此清理)
+  notifyClientSurfaces('runEnd', runId) // 能力面(手机操控)随 run 终结收尾;尽力而为,原生对未知 runId 应无操作
   const wd = runWatchdogs.get(runId)
   if (wd) { clearInterval(wd); runWatchdogs.delete(runId) }
   let ended = false

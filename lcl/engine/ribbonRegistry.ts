@@ -7,6 +7,12 @@ import type { RibbonItem } from './types'
 const EXPANDED_KEY = 'forsion_tangu_ribbon_expanded'
 const ORDER_KEY = 'forsion_tangu_ribbon_order' // 上区(Spaces)顺序,沿用旧键(老用户排序不丢)
 const V2_KEY = 'forsion_tangu_ribbon_v2' // 下区顺序 + 收纳夹 + 钉进命令区的命令
+const AUTO_HOME_KEY = 'forsion_ribbon_auto_home'
+
+/** 滚轮翻看后自动归位(10-04 用户要求,缺省开;只有显式存 '0' 才关 = 停在翻到的位置)。
+ *  用时才读 localStorage:设置窗口改完,主窗口下一次触发就生效,不用跨窗口同步。 */
+export const isRibbonAutoHome = (): boolean => { try { return localStorage.getItem(AUTO_HOME_KEY) !== '0' } catch { return true } }
+export const setRibbonAutoHome = (on: boolean): void => { try { localStorage.setItem(AUTO_HOME_KEY, on ? '1' : '0') } catch { /* private mode */ } }
 
 export type RibbonZone = 'top' | 'bottom'
 

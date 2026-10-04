@@ -10,6 +10,7 @@
  *    这条测试在旧代码上照样绿(负对照已实跑:去掉桩即假绿)。所以桩是本测试的前置态,不是装饰。
  */
 import { describe, it, expect, beforeAll } from 'vitest'
+await import('@/agentCommands') // 收集阶段先转译整张模块图(~350 个):放进用例体里,首次转译的耗时算进 5s 用例超时,机器一忙(本机多会话负载 40+)就假红;CI 上一直是绿的
 
 beforeAll(() => {
   ;(document as unknown as Record<string, unknown>).startViewTransition = (cb: () => void) => {
@@ -35,5 +36,24 @@ describe('set_ui_setting(color_mode) 的回执报应用之后的明暗', () => {
     const { applyUiSetting } = await import('@/agentCommands')
     const r = await applyUiSetting('color_mode', 'dark')
     expect(r).toEqual({ ok: true, state: 'dark' })
+  })
+})
+
+// Codex 评审(10-04):open-settings 的回执原先放在「读一次即清」的 state() 里 —— 目录每次起 run 都会读 state,
+// 并发的两次命令也会互相盖掉(给 theme 的回执是 model 的,model 的那次空着)。回执改由 run 的返回值按次给。
+describe('run_ui_command 的回执按调用返回', () => {
+  it('并发的两次调用各拿各的回执;没有返回值的命令照旧读 state()', async () => {
+    const { runAgentCommand, buildCommandCatalog } = await import('@/agentCommands')
+    const { addCommand } = await import('@lcl/engine')
+    addCommand({ id: 't-open', title: 'open', run: () => {}, invoke: {
+      description: 'test', params: { type: 'object', properties: { tab: { type: 'string' } } },
+      run: (a) => `opened ${String(a.tab)}`,
+    } })
+    addCommand({ id: 't-probe', title: 'probe', run: () => {}, invoke: { description: 'test', run: () => {}, state: () => 'on' } })
+    const [a, b] = await Promise.all([runAgentCommand('t-open', { tab: 'theme' }), runAgentCommand('t-open', { tab: 'model' })])
+    expect([a, b]).toEqual([{ ok: true, state: 'opened theme' }, { ok: true, state: 'opened model' }])
+    expect(await runAgentCommand('t-probe')).toEqual({ ok: true, state: 'on' })
+    // 目录里的 state 是探针,不带上一次调用的回执
+    expect(buildCommandCatalog().find((c) => c.id === 't-open')?.state).toBeUndefined()
   })
 })

@@ -43,7 +43,7 @@ import {
 } from '@amadeus-shared/dashboard3'
 import { DashFiltersCtx } from '@amadeus/dashboard/dashFiltersCtx'
 import { registerMessages, useI18n, translate } from '../i18n'
-import { useTheme } from '../stores/themeStore'
+import { useVisualTheme as useTheme } from '../stores/themeStore'
 import { useApp } from '../stores/appStore'
 import { useAmadeusPrefs } from '../amadeusPrefs'
 import { Breadcrumb } from '../amadeusViews'

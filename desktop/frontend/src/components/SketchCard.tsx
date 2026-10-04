@@ -10,6 +10,7 @@ import {
   SKETCH_SANDBOX, SKETCH_MIN_H, SKETCH_MAX_H, SKETCH_INITIAL_H,
 } from './sketchWrapper'
 import { useI18n } from '../i18n'
+import { readSketchState, saveSketchState, serializeSketchState, sketchStateKey } from './sketchState'
 import type { SketchItem } from '../types'
 
 /** ⚠️Capacitor 原生 App(Android WebView):addJavascriptInterface 原生桥对子 iframe 可见,sandbox/CSP
@@ -22,8 +23,13 @@ function isCapacitorNative(): boolean {
   } catch { return false }
 }
 
-const SketchFrame: React.FC<{ item: SketchItem }> = ({ item }) => {
+/** 卡头右侧的附加操作(对话里给「插入笔记」;笔记里的交互块不给,免得插回自己)。 */
+type SketchActions = (item: SketchItem) => React.ReactNode
+
+const SketchFrame: React.FC<{ item: SketchItem; actions?: SketchActions; stateScope?: string }> = ({ item, actions, stateScope }) => {
   const { t } = useI18n()
+  const stateKey = useMemo(() => stateScope ? sketchStateKey(stateScope, item.callId, item.html) : null, [stateScope, item.callId, item.html])
+  const initialState = useMemo(() => stateKey ? readSketchState(stateKey) : null, [stateKey])
   const rootRef = useRef<HTMLDivElement>(null)
   const clipRef = useRef<HTMLDivElement>(null)
   const frameRef = useRef<HTMLIFrameElement>(null)
@@ -43,16 +49,36 @@ const SketchFrame: React.FC<{ item: SketchItem }> = ({ item }) => {
   }), [])
 
   useEffect(() => {
+    let pending: string | undefined
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const flush = (): void => {
+      if (stateKey && pending !== undefined) saveSketchState(stateKey, JSON.parse(pending))
+      pending = undefined
+      timer = undefined
+    }
     const onMsg = (e: MessageEvent): void => {
       if (!frameRef.current || e.source !== frameRef.current.contentWindow) return
       const d: any = e.data
+      if (d?.type === 'sketch-state' && stateKey) {
+        const next = serializeSketchState(d.state)
+        if (next !== undefined) {
+          pending = next
+          if (!timer) timer = setTimeout(flush, 200)
+        }
+      }
       if (d && d.type === 'sketch-height' && Number.isFinite(Number(d.height))) {
         setH(Math.min(SKETCH_MAX_H, Math.max(SKETCH_MIN_H, Math.ceil(Number(d.height)))))
       }
     }
     window.addEventListener('message', onMsg)
-    return () => window.removeEventListener('message', onMsg)
-  }, [])
+    window.addEventListener('pagehide', flush)
+    return () => {
+      window.removeEventListener('message', onMsg)
+      window.removeEventListener('pagehide', flush)
+      clearTimeout(timer)
+      flush()
+    }
+  }, [stateKey])
 
   // 溢出判定(决定露不露展开钮)。⚠️只在**收起态**量:展开时 max-height:none → scrollHeight
   // 恒等 clientHeight,量出来永远是「不溢出」,钮会消失、收不回去。展开期间沿用上一次判定。
@@ -66,10 +92,15 @@ const SketchFrame: React.FC<{ item: SketchItem }> = ({ item }) => {
     return () => ro.disconnect()
   }, [h, open])
 
-  const doc = useMemo(() => (vars ? buildSketchDoc(item.html, vars) : ''), [item.html, vars])
+  const doc = useMemo(() => (vars ? buildSketchDoc(item.html, vars, initialState) : ''), [item.html, vars, initialState])
   return (
     <div className="sketch-card" ref={rootRef} data-sketch-call-id={item.callId}>
-      {item.title && <div className="sketch-card-title">{item.title}</div>}
+      {(item.title || actions) && (
+        <div className="sketch-card-head">
+          {item.title && <div className="sketch-card-title">{item.title}</div>}
+          {actions?.(item)}
+        </div>
+      )}
       <div ref={clipRef} className={`sketch-clip${open ? ' open' : ''}${over && !open ? ' faded' : ''}`}>
         {/* webhost-ok: sketch 卡的能力包络就是规格本身(JS 可跑、无网络无宿主 API,内层 CSP default-src 'none' 收口,
             见 sketchWrapper.ts 实证注);webview 反而错配:Electron-only(web/mobile 没有)且每卡一个 OS 进程。 */}
@@ -84,7 +115,7 @@ const SketchFrame: React.FC<{ item: SketchItem }> = ({ item }) => {
   )
 }
 
-const SketchUnavailable: React.FC<{ item: SketchItem }> = ({ item }) => {
+const SketchUnavailable: React.FC<{ item: SketchItem; actions?: SketchActions }> = ({ item }) => {
   const { t } = useI18n()
   return (
     <div className="sketch-card" data-sketch-call-id={item.callId}>
@@ -94,9 +125,9 @@ const SketchUnavailable: React.FC<{ item: SketchItem }> = ({ item }) => {
   )
 }
 
-export const SketchCards: React.FC<{ items: SketchItem[] }> = ({ items }) => {
+export const SketchCards: React.FC<{ items: SketchItem[]; actions?: SketchActions; stateScope?: string }> = ({ items, actions, stateScope }) => {
   // 原生壳内一律拒渲染 iframe(桥暴露);普通浏览器/Electron 正常画。整批同判,不逐卡重算。
   const native = isCapacitorNative()
   const Card = native ? SketchUnavailable : SketchFrame
-  return <>{items.map((s) => <Card key={s.callId} item={s} />)}</>
+  return <>{items.map((s) => <Card key={`${stateScope || ''}:${s.callId}`} item={s} actions={native ? undefined : actions} stateScope={stateScope} />)}</>
 }

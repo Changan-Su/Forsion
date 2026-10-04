@@ -113,7 +113,7 @@ function ensureWindowsUserPath(binDir: string, log: (m: string) => void): Promis
     `$parts=$p -split ';' | Where-Object {$_ -ne ''};` +
     `if($parts -notcontains $d){[Environment]::SetEnvironmentVariable('Path', (($d + ';' + $p).Trim(';')), 'User')}`
   return new Promise((resolve) => {
-    execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', cmd], { timeout: 15000 }, (err) => {
+    execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', cmd], { timeout: 15000, windowsHide: true }, (err) => {
       if (err) log(`[cli] 写用户 PATH 失败:${err.message}`)
       resolve()
     })

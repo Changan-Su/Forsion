@@ -27,3 +27,9 @@ export function canOpenAttachment(): boolean {
 export function canOpenPluginsFolder(): boolean {
   return window.amadeus?.hostCaps?.pluginsFolder !== false
 }
+
+/** 页面版本历史(评审 C-20):快照存在主进程的库外目录,只有桌面主进程桥实现;web 云桥 / 移动本地库 / Unit 网页桥都没有
+ *  这组可选成员 → 「版本历史」不渲染。按桥实不实现判,不另起声明位。 */
+export function canPageHistory(): boolean {
+  return typeof window.amadeus?.listPageHistory === 'function'
+}

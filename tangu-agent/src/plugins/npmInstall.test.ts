@@ -14,6 +14,16 @@ import {
 } from './npmInstall.js';
 import { pluginsDir } from '../core/tanguHome.js';
 
+// 卸载会先经 bootstrap 现场停用(removePluginLive)再删目录。单测不拉起整张宿主模块图(冷转译数秒),桩住并记下
+// 被调时目录是否还在 —— 钉「先停再删」的顺序。
+const live = vi.hoisted(() => ({ calls: [] as Array<{ id: string; dirExisted: boolean }>, during: null as null | (() => Promise<unknown>) }));
+vi.mock('./bootstrap.js', async () => {
+  const { existsSync: exists } = await import('node:fs');
+  const { pluginsDir: dirOf } = await import('../core/tanguHome.js');
+  const p = await import('node:path');
+  return { removePluginLive: async (id: string) => { live.calls.push({ id, dirExisted: exists(p.join(dirOf(), id)) }); await live.during?.(); } };
+});
+
 // ── 内联 tar writer(untar 的逆,仅普通文件)──
 const BLOCK = 512;
 function header(name: string, size: number): Buffer {
@@ -195,10 +205,23 @@ describe('uninstallPlugin', () => {
   it('删用户目录插件 + 清来源', async () => {
     await installFromTarball(pluginTgz('demo-plugin'), { source: 'npm', spec: 's', name: 'demo-plugin', version: '1.0.0' }, {});
     expect(existsSync(path.join(pluginsDir(), 'demo-plugin'))).toBe(true);
+    live.calls.length = 0;
     await uninstallPlugin('demo-plugin');
     expect(existsSync(path.join(pluginsDir(), 'demo-plugin'))).toBe(false);
+    expect(live.calls).toEqual([{ id: 'demo-plugin', dirExisted: true }]); // 先停(目录还在)再删
   });
   it('未安装 → 报错', async () => {
     await expect(uninstallPlugin('nope-plugin')).rejects.toThrow(/未找到/);
+  });
+  it('等停用期间同一路径被重装 → 不删新版本(Codex 10-02)', async () => {
+    const meta = { source: 'npm', spec: 's', name: 'demo-plugin' } as const;
+    await installFromTarball(pluginTgz('demo-plugin'), { ...meta, version: '1.0.0' }, {});
+    live.during = () => installFromTarball(pluginTgz('demo-plugin', '2.0.0'), { ...meta, version: '2.0.0' }, {});
+    try {
+      await expect(uninstallPlugin('demo-plugin')).rejects.toThrow(/重新安装/);
+    } finally {
+      live.during = null;
+    }
+    expect(readInstalledSource('demo-plugin')?.version).toBe('2.0.0');
   });
 });

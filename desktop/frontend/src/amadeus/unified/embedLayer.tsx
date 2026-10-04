@@ -32,6 +32,12 @@ import { BookmarkCard } from '../components/BookmarkCard'
 import { MediaPlayer } from '../components/MediaPlayer'
 import { WebEmbed } from '../components/WebEmbed'
 import { ButtonBlock } from '../blocks/button/ButtonBlock'
+import { DocumentAgentBlock } from '../blocks/documentAgent/DocumentAgentBlock'
+import { parseDocAgentSpec, serializeDocAgentSpec, type DocAgentSpec, type DocumentAgentKind } from '../blocks/documentAgent/format'
+import { readTangu } from '../plugins/tanguSeam'
+import { instructionsOf, pageInstructionContext } from './pageInstructions'
+import { SKETCH_LANG } from '../blocks/sketch/format'
+import { SketchCards } from '../../components/SketchCard'
 import { parseButtonBlock, serializeButtonBlock, type ButtonSpec } from '../blocks/button/format'
 import { usePageStore } from '../store/pageStore'
 import { usePluginStore, findEmbedRenderer } from '../plugins/pluginStore'
@@ -104,10 +110,17 @@ export type EmbedKind =
   /** `![[https://…]]` 独占一段 = 网页嵌入(冻结封面 → 唤醒 webview);裸 URL 仍是 bookmark。 */
   | { k: 'web'; url: string; w?: number }
   | { k: 'button'; src: string }
+  | { k: 'document-agent'; type: DocumentAgentKind; src: string; activeInstructions?: boolean }
+  /** ```forsion-sketch 交互块:HTML 交给对话 sketch 卡同一沙箱(blocks/sketch/format.ts)。 */
+  | { k: 'sketch'; src: string }
 
 /** 段落/代码块 → 嵌入类别(不是嵌入 → null)。图片形态刻意返回 null(wikilink 行内层负责)。 */
 export function classifyEmbed(node: ProseNode): EmbedKind | null {
   if (node.type.name === 'code_block') {
+    const type = ({ 'forsion-instructions': 'instructions', 'forsion-task': 'task', 'forsion-prompt': 'prompt' } as Record<string, DocumentAgentKind>)[node.attrs.language]
+    if (type && (type === 'instructions' || parseDocAgentSpec(node.textContent))) return { k: 'document-agent', type, src: node.textContent }
+    // 空的交互块不认领:源码还露着,才写得进去(和按钮块坏 JSON 回落同理)。
+    if (node.attrs.language === SKETCH_LANG) return node.textContent.trim() ? { k: 'sketch', src: node.textContent } : null
     if (node.attrs.language !== 'forsion-button') return null
     // JSON 写坏了 = 不归按钮(R-13):回落成普通代码块,源码原样露出、照常可改(button/format.ts 的契约)。
     // 此前照样认领,渲染期解析失败只给一个空 <span/> —— 整块高 0、源码被藏、`</>` 浮不出来,只剩撤销能救。
@@ -324,9 +337,10 @@ function CrossNoteEmbed({ target, pagePath, readOnly }: { target: string; pagePa
   )
 }
 
-function EmbedBody({ kind, pagePath, replaceText, insertAfter, readOnly = false }: {
+function EmbedBody({ kind, pagePath, replaceText, insertAfter, startTask, readOnly = false }: {
   kind: EmbedKind
   pagePath: string
+  startTask: (spec: DocAgentSpec, mode: 'task' | 'prompt') => Promise<{ sessionId?: string }>
   /** 组件要求改写源文本(书签改 URL / db 换视图 / 按钮改配置)→ 单事务替换节点内文。 */
   replaceText: (next: string) => void
   /** 在本块之后插入若干段(截帧的「图片 + 回源锚点」)。 */
@@ -337,6 +351,10 @@ function EmbedBody({ kind, pagePath, replaceText, insertAfter, readOnly = false 
   // 只读时源文本一律不改:回调本体是 PM 事务,PM 在 editable=false 下照样接受 dispatch,不在这里挡就会改内存 doc。
   const rewrite = readOnly ? () => {} : replaceText
   switch (kind.k) {
+    case 'document-agent':
+      return <DocumentAgentBlock kind={kind.type} src={kind.src} pagePath={pagePath} readOnly={readOnly}
+        activeInstructions={kind.activeInstructions} onChange={rewrite} onStart={startTask}
+        onOpen={(id) => readTangu()?.openDocumentTask?.(id)} />
     case 'db':
       return (
         <DatabaseEmbed
@@ -373,6 +391,8 @@ function EmbedBody({ kind, pagePath, replaceText, insertAfter, readOnly = false 
       if (!spec) return <span /> // 不可达:classifyEmbed 已把坏 JSON 交回普通代码块
       return <ButtonBlock spec={spec} readOnly={readOnly} onChange={(next: ButtonSpec) => rewrite(codeBody(serializeButtonBlock(next)))} />
     }
+    case 'sketch':
+      return <SketchCards items={[{ callId: 'note-sketch', html: kind.src }]} />
   }
 }
 
@@ -403,7 +423,8 @@ interface WidgetEntry {
 // 数据库视图名是配置,不是组件身份。把 |视图名 放进 key 会让每次切视图卸载整张表,
 // 连搜索、焦点、滚动和弹层一起丢掉。同路径的多个嵌入仍用出现序号区分各自的局部状态。
 const widgetIdentity = (kind: EmbedKind, text: string): string =>
-  kind.k === 'db' ? `db:${kind.name}` : `${kind.k}:${text}`
+  kind.k === 'db' ? `db:${kind.name}` : kind.k === 'document-agent'
+    ? `document-agent:${kind.type}:${kind.type === 'instructions' ? '' : parseDocAgentSpec(kind.src)?.id}` : `${kind.k}:${text}`
 
 interface EmbedLayerState {
   decos: DecorationSet
@@ -424,10 +445,12 @@ function changedOnlyWithin(tr: Transaction, from: number, to: number): boolean {
   return ok
 }
 
-export function createEmbedLayer(opts: { path: string; readOnly?: boolean }): MilkdownPlugin[] {
+export function createEmbedLayer(opts: { path: string; readOnly?: boolean; flush?: () => Promise<void>; alive?: () => boolean }): MilkdownPlugin[] {
   const plugin = $prose(() => {
     const key = new PluginKey('UNIFIED_EMBED_LAYER')
     const roots = new Map<string, WidgetEntry>() // key → 活 widget(同 key 复用,PM 不重建 DOM)
+    // Async tasks follow the original node, never a later copy with the same persisted ID.
+    const taskSources = new Set<{ from: number; to: number; deleted: boolean }>()
 
     const buildDecos = (doc: ProseNode, selFrom: number, selTo: number, sourcePos: number | null, pendingPos: number | null = null): DecorationSet => {
       const decos: Decoration[] = []
@@ -435,6 +458,7 @@ export function createEmbedLayer(opts: { path: string; readOnly?: boolean }): Mi
       const visit = (node: ProseNode, pos: number): void => {
         const kind = classifyEmbed(node)
         if (!kind) return
+        if (kind.k === 'document-agent') kind.activeInstructions = doc.resolve(pos).depth === 0
         const baseKey = widgetIdentity(kind, node.textContent)
         const nth = seen.get(baseKey) ?? 0
         seen.set(baseKey, nth + 1)
@@ -445,8 +469,9 @@ export function createEmbedLayer(opts: { path: string; readOnly?: boolean }): Mi
         if (pendingPos === pos) return
         const dkey = `${baseKey}#${nth}`
         const entry = roots.get(dkey)
-        if (entry && entry.text !== node.textContent) {
-          entry.text = node.textContent
+        const renderedText = kind.k === 'document-agent' ? `${kind.activeInstructions}:${node.textContent}` : node.textContent
+        if (entry && entry.text !== renderedText) {
+          entry.text = renderedText
           entry.render(kind) // 包括撤销/外部回灌:更新 initialView,保留 React 组件身份。
         }
         decos.push(Decoration.inline(pos + 1, pos + node.nodeSize - 1, { class: 'wikilink-src-hidden' }))
@@ -552,6 +577,54 @@ export function createEmbedLayer(opts: { path: string; readOnly?: boolean }): Mi
                     const blocks = md.split(/\n{2,}/).map((line) => para.create(null, line ? v.state.schema.text(line) : null))
                     v.dispatch(v.state.tr.insert(hit.at + hit.size, blocks))
                   }}
+                  startTask={async (spec, mode) => {
+                    const probe = readTangu()
+                    const originalRoot = usePageStore.getState().vaultRoot
+                    const originalView = viewRef
+                    const hit = originalView && findNth(originalView)
+                    if (!hit) throw new Error(translate('documentTask.sourceGone'))
+                    const source = { from: hit.at, to: hit.at + hit.size, deleted: false }
+                    taskSources.add(source)
+                    try {
+                    const current = (): DocAgentSpec | null => {
+                      if (source.deleted || opts.readOnly || !viewRef || viewRef !== originalView || opts.alive?.() === false || usePageStore.getState().vaultRoot !== originalRoot) return null
+                      const n = viewRef.state.doc.nodeAt(source.from)
+                      if (!n || source.from + n.nodeSize !== source.to) return null
+                      const kind = classifyEmbed(n)
+                      if (kind?.k !== 'document-agent' || kind.type !== mode) return null
+                      const value = n ? parseDocAgentSpec(n.textContent) : null
+                      return value?.id === spec.id && value.prompt === spec.prompt && value.agent === spec.agent ? value : null
+                    }
+                    if (!current() || !opts.flush) throw new Error(translate('documentTask.sourceGone'))
+                    await opts.flush()
+                    if (!current() || !viewRef) throw new Error(translate('documentTask.sourceGone'))
+                    const instructions = pageInstructionContext(instructionsOf(viewRef.state.doc), opts.path)
+                    const prompt = `${spec.prompt.trim()}\n\nSource note: ${JSON.stringify(opts.path)}. Read the source note before editing it.\n${instructions}`
+                    if (mode === 'prompt') {
+                      const result = await probe?.startChat?.({ agent: spec.agent, prompt, send: false,
+                        ...(probe?.hostExecution?.() && originalRoot ? { cwd: originalRoot } : {}), alive: () => !!current() })
+                      if (!result?.ok) throw new Error(result?.error || translate('docagent.unavailable'))
+                      return {}
+                    }
+                    const linked = current()?.sessionId
+                    if (linked) return { sessionId: linked }
+                    if (!originalRoot || !probe?.submitDocumentTask) throw new Error(translate('docagent.unavailable'))
+                    const result = await probe.submitDocumentTask({
+                      key: `${originalRoot}\n${opts.path}\n${spec.id}`, agent: spec.agent, prompt, vaultRoot: originalRoot,
+                      alive: () => !!current(),
+                      onCreated: async (sessionId) => {
+                        const value = current()
+                        if (!value || (value.sessionId && value.sessionId !== sessionId)) throw new Error(translate('documentTask.sourceGone'))
+                        const v = viewRef!
+                        v.dispatch(v.state.tr.insertText(serializeDocAgentSpec({ ...value, sessionId }), source.from + 1, source.to - 1))
+                        await opts.flush!()
+                        if (current()?.sessionId !== sessionId) throw new Error(translate('documentTask.sourceGone'))
+                      },
+                    })
+                    if (!result.ok) throw new Error(result.error || translate('docagent.startFailed'))
+                    return { sessionId: result.sessionId }
+                    } finally { taskSources.delete(source) }
+                  }}
                   replaceText={replaceText}
                 />
                 </HostLocaleProvider>,
@@ -568,7 +641,7 @@ export function createEmbedLayer(opts: { path: string; readOnly?: boolean }): Mi
                 v.focus()
               })
               dom.querySelector('.amx-src-btn')?.classList.add('amx-src-btn--block')
-              roots.set(dkey, { root, dom, text: node.textContent, render, refs: 1 })
+              roots.set(dkey, { root, dom, text: renderedText, render, refs: 1 })
               return dom
             },
             {
@@ -621,6 +694,7 @@ export function createEmbedLayer(opts: { path: string; readOnly?: boolean }): Mi
         viewRef = v
         return {
           destroy: () => {
+            for (const source of taskSources) source.deleted = true
             viewRef = null
             // 插件表原地重配(评审 G1-06:插件扩展启停)时 PM 会拆掉**全部**插件视图再同步建回来,而嵌入 widget 的 DOM
             // 原样留在文档里(装饰没变,PM 复用它们)—— 此刻无条件卸 React 根,每个嵌入都成了空壳。推到微任务再看:
@@ -636,6 +710,16 @@ export function createEmbedLayer(opts: { path: string; readOnly?: boolean }): Mi
       state: {
         init: (_, state) => ({ decos: buildDecos(state.doc, state.selection.from, state.selection.to, null), sourcePos: null, pendingPos: null }),
         apply: (tr, old, _oldState, newState) => {
+          for (const source of taskSources) {
+            for (const map of tr.mapping.maps) {
+              if (source.deleted) break
+              const from = map.mapResult(source.from, 1)
+              const to = map.mapResult(source.to, -1)
+              if (from.deleted || to.deleted || from.pos >= to.pos) source.deleted = true
+              source.from = from.pos
+              source.to = to.pos
+            }
+          }
           const meta = tr.getMeta(key) as { sourcePos?: number; commit?: boolean } | undefined
           let sourcePos = old.sourcePos
           if (sourcePos != null && tr.docChanged) sourcePos = tr.mapping.map(sourcePos)

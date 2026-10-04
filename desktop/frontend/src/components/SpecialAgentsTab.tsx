@@ -13,6 +13,8 @@ import { homeTarget, connectionKey } from '../services/engine/targets'
 registerMessages({
   'specialUi.intro': { zh: '管理在后台整理记忆与推进工作的 Agent。选择一个 Agent 调整它的工作方式。', en: 'Manage the agents that organize memory and work in the background. Choose one to adjust how it works.' },
   'specialUi.historianSummary': { zh: '整理会话与记忆', en: 'Organizes conversations and memory' },
+  'specialUi.autoEmoji': { zh: '自动选择会话图标', en: 'Choose session icons automatically' },
+  'specialUi.autoEmojiHint': { zh: '总结时为未设置图标的会话选择 Emoji，保留你手动设置的图标。', en: 'Chooses an emoji when summarizing a session with no icon. Keeps icons you set yourself.' },
   'specialUi.museSummary': { zh: '按节奏主动工作', en: 'Works proactively on a schedule' },
   'specialUi.saved': { zh: '更改已保存', en: 'Changes saved' },
   'specialUi.draft': { zh: '有未保存的更改', en: 'Unsaved changes' },
@@ -182,6 +184,7 @@ export function SpecialAgentsTab({ cfg, localHost = false }: { cfg: TanguDesktop
           </Field>}
           <NumberField label={t('settings.special.h.rounds')} value={h.everyRounds} onChange={(everyRounds) => changeHistorian({ everyRounds })} min={1} max={100} />
           {toggleRow(t('settings.special.h.firstRound'), h.firstRoundTrigger, (firstRoundTrigger) => changeHistorian({ firstRoundTrigger }))}
+          {toggleRow(t('specialUi.autoEmoji'), h.autoEmoji !== false, (autoEmoji) => changeHistorian({ autoEmoji }), t('specialUi.autoEmojiHint'))}
           {cloud && <p className="special-footnote">{t('specialUi.cloudQuota')}</p>}
           {!cloud && <><details className="special-disclosure"><summary>{t('specialUi.memory')}</summary>{toggleRow(t('settings.special.h.harnessCandidates'), h.harnessCandidates, (harnessCandidates) => changeHistorian({ harnessCandidates }), t('settings.special.h.harnessCandidatesHint'))}</details>
           <details className="special-disclosure"><summary>{t('specialUi.advanced')}</summary><Field label={t('settings.special.h.prompt')}><textarea aria-label={t('settings.special.h.prompt')} rows={7} value={prompt} onChange={(e) => { setPrompt(e.target.value); setNotice('') }} /><button type="button" className="special-text-action" onClick={() => setPrompt(promptDefault)}>{t('specialUi.resetPrompt')}</button></Field></details></>}

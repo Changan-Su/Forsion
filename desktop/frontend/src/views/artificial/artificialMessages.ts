@@ -17,6 +17,10 @@ registerMessages({
   },
   'artificial.subtitle': { zh: '你在编码工作室里做出来的东西都在这里', en: 'Everything you built in the Coding Studio lives here' },
   'artificial.refresh': { zh: '刷新', en: 'Refresh' },
+  'artificial.launchReauth': {
+    zh: '这个桌面快捷方式需要重新确认：请在 Forsion 的「造物」里打开这个作品，再点一次「添加到桌面」。',
+    en: 'This desktop shortcut needs to be confirmed again. Open the creation in Forsion Creations and choose Add to desktop again.',
+  },
   'artificial.loading': { zh: '正在读取本机作品…', en: 'Looking for your creations…' },
   'artificial.loadFailed': { zh: '读取作品列表失败', en: 'Could not read your creations' },
   'artificial.empty.title': { zh: '还没有作品', en: 'Nothing here yet' },

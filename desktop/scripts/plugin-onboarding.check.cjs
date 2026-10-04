@@ -23,7 +23,7 @@
  * 渲染层改动不 build 就跑 = 测的是旧代码(调试铁律 2)。
  */
 const fs = require('fs'), os = require('os'), path = require('path')
-const { _electron: electron } = require('playwright-core')
+const electron = require('./lib/launch-electron.cjs')
 const { startStubEngine } = require('./lib/stub-engine.cjs')
 const { skipOnboarding } = require('./lib/skip-onboarding.cjs')
 
@@ -115,6 +115,8 @@ async function main() {
     let fl
     await waitFor(async () => { fl = app.windows().find((p) => p.url().includes('window=floating')); return !!fl }, 10000)
     if (!fl) throw new Error('settings floating window missing')
+    // 插件页默认落在「核心能力」子页;外置插件卡片在「已安装插件」子页(09 月设置重排后)
+    await fl.locator('.settings-nav-subitem', { hasText: '已安装插件' }).click()
     await fl.waitForSelector(`[data-plugin-id="${GATE}"]`, { timeout: 30000 })
     await fl.waitForSelector(`[data-plugin-id="${GUIDE}"]`, { timeout: 30000 })
 

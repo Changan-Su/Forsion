@@ -46,7 +46,6 @@ registerMessages({
   'home.greet.afternoon.named': { zh: '下午好，{name}', en: 'Good afternoon, {name}' },
   'home.greet.evening.named': { zh: '晚上好，{name}', en: 'Good evening, {name}' },
   'home.greet.night.named': { zh: '夜深了，{name}', en: 'Working late, {name}' },
-  'home.spaces': { zh: 'Spaces', en: 'Spaces' },
   'home.pinnedSpaces': { zh: '前置 Space', en: 'Pinned Spaces' },
   'home.spaceCount': { zh: '{n} 个 Space', en: '{n} Spaces' },
   'home.newFolder': { zh: '新建收纳夹', en: 'New folder' },
@@ -96,6 +95,7 @@ export const homepageSpace: SpaceDefinition = {
   name: () => app().tr('space.home'),
   icon: House,
   sidebarDefaults: HOME_SIDE_VIEWS,
+  pinned: { main: [{ type: 'homepage', params: {} }] },
   build() {
     ws().setSidebarDefaults(HOME_SIDE_VIEWS)
     ws().openView('homepage', {}, 'main')

@@ -8,7 +8,7 @@
  *   ④ 布局信封:bottom 是可选字段,老布局(无 bottom)照样合法且读成「收起」
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { useWorkspace, captureSideWidths, tryRestoreLayout } from './dockviewStore'
+import { useWorkspace, captureSideWidths, tryRestoreLayout, bootLayoutFellThrough, namedLayoutRestorable, liveLayoutOwner } from './dockviewStore'
 import { computeBottomHeight, BOTTOM_MIN_HEIGHT } from './sideWidth'
 import { isLayoutEnvelopeV4, LAYOUT_KEY } from './layoutPersist'
 import { registerView, unregisterView } from './viewRegistry'
@@ -22,7 +22,9 @@ function mkApi(width: number, height: number) {
   const moves: Array<{ from: unknown; group: unknown; position?: string }> = []
   const mkGroup = () => {
     const g = {
+      activePanel: undefined as unknown,
       api: {
+        setActive: vi.fn(),
         width: 0,
         height: 0,
         setSize(s: { width?: number; height?: number }) {
@@ -39,13 +41,13 @@ function mkApi(width: number, height: number) {
     }
     return g
   }
-  const panels: Array<{ id: string; title: string; params: Record<string, unknown>; group: ReturnType<typeof mkGroup>; api: Record<string, unknown> }> = []
-  const mkP = (id: string, params: Record<string, unknown>) => {
+  const panels: Array<{ id: string; title: string; component?: string; params: Record<string, unknown>; group: ReturnType<typeof mkGroup>; api: Record<string, unknown> }> = []
+  const mkP = (id: string, params: Record<string, unknown>, component?: string) => {
     const p = {
-      id, title: id, params, group: mkGroup(),
+      id, title: id, component, params, group: mkGroup(),
       api: {
         close: () => { const i = panels.findIndex((x) => x.id === id); if (i >= 0) panels.splice(i, 1) },
-        setActive: () => { }, setTitle: () => { },
+        setActive: vi.fn(), setTitle: () => { },
         updateParameters: (np: Record<string, unknown>) => { p.params = { ...p.params, ...np } },
       },
     }
@@ -60,7 +62,13 @@ function mkApi(width: number, height: number) {
       panels.length = 0 // 真 Dockview:整份换掉,按 blob 重建 panel
       for (const [id, p] of Object.entries(blob?.panels ?? {})) panels.push(mkP(id, p.params ?? {}))
     },
-    addPanel: (o: { id: string; params: Record<string, unknown>; position?: unknown }) => { positions.push(o.position); const p = mkP(o.id, o.params); panels.push(p); return p },
+    addPanel: (o: { id: string; component?: string; params: Record<string, unknown>; position?: { referencePanel?: { group: ReturnType<typeof mkGroup> } } }) => {
+      positions.push(o.position)
+      const p = mkP(o.id, o.params, o.component)
+      if (o.position?.referencePanel) p.group = o.position.referencePanel.group // 'within':进参照 panel 的组
+      panels.push(p); return p
+    },
+    removePanel: (p: unknown) => { const i = panels.indexOf(p as never); if (i >= 0) panels.splice(i, 1) },
   } as unknown as DockviewApi
   return { api, panels, moves, positions }
 }
@@ -362,4 +370,183 @@ describe('底部面板:布局信封向后兼容', () => {
     expect(useWorkspace.getState().stash.bottom).toEqual([])
     vi.runAllTimers()
   })
+
+  // 冷启动补定位(desktop userSpaces.settleAsyncStartupSpace)靠这面旗子判断「屏上是不是布局键里那份现场」:
+  // 插件比 Dockview 就绪得晚,它的 Space 上次退出的现场在 onReady 那一刻还原不了。
+  it('布局引用了尚未注册的视图 ⇒ 还原落空,bootLayoutFellThrough 报 true;还原成了报 false', () => {
+    const { api } = mkApi(1600, 1000)
+    useWorkspace.getState().setApi(api)
+    const blob = (type: string): string => JSON.stringify({
+      version: 4, dockview: { panels: { p1: { contentComponent: type, params: { __loc: 'main', __type: type } } } },
+      sidebars: { left: { visible: true, stash: [] }, right: { visible: true, stash: [] } },
+    })
+    localStorage.setItem(LAYOUT_KEY, blob('plugin:late:view'))
+    expect(tryRestoreLayout(api)).toBe(false)
+    expect(bootLayoutFellThrough()).toBe(true)
+    localStorage.setItem(LAYOUT_KEY, blob('termv'))
+    expect(tryRestoreLayout(api)).toBe(true)
+    expect(bootLayoutFellThrough()).toBe(false)
+    vi.runAllTimers()
+  })
+
+  // 布局信封里的归属(space):冷启动归档按它认主(spaceRegistry.adoptSpaceLayoutCold),补定位按它判断屏上是谁的现场。
+  // 平时 = 画像键;例外是 onReady 原样还原出「别的 Space」的现场 —— 异步就位的用户 Space,那一刻画像键还是回落 Space。
+  it('存盘在信封里记归属:平时是画像键;启动还原出来的布局沿用它自带的,画像重设 / 重建默认后回到画像键', () => {
+    const { api } = mkApi(1600, 1000)
+    useWorkspace.getState().setApi(api)
+    const blob = (type: string, space: string): string => JSON.stringify({
+      version: 4, space, dockview: { panels: { p1: { contentComponent: type, params: { __loc: 'main', __type: type } } } },
+      sidebars: { left: { visible: true, stash: [] }, right: { visible: true, stash: [] } },
+    })
+    const onDisk = (): unknown => JSON.parse(localStorage.getItem(LAYOUT_KEY) || '{}').space
+    useWorkspace.getState().setSideProfile('tangu', {}, {})
+    useWorkspace.getState().saveCurrent()
+    expect(onDisk()).toBe('tangu')
+
+    // 还原成了:屏上是 user-space 的现场,存盘继续记在它名下(记成画像键 tangu 的话,下一程会被当成回落 Space 的布局)
+    localStorage.setItem(LAYOUT_KEY, blob('termv', 'user-space'))
+    expect(tryRestoreLayout(api)).toBe(true)
+    expect(liveLayoutOwner()).toBe('user-space')
+    useWorkspace.getState().saveCurrent()
+    expect(onDisk()).toBe('user-space')
+    // 「恢复默认布局」建的是画像那个 Space 的默认;撤销 = 重置前那份现场回来了,归属跟着回来
+    useWorkspace.getState().resetLayout({ undoable: true })
+    expect(liveLayoutOwner()).toBe('tangu')
+    expect(useWorkspace.getState().undoResetLayout()).toBe(true)
+    expect(liveLayoutOwner()).toBe('user-space')
+    useWorkspace.getState().resetLayout()
+    expect(liveLayoutOwner()).toBe('tangu')
+    // 补定位 / 切 Space 重设画像:归属跟着走
+    expect(tryRestoreLayout(api)).toBe(false) // resetLayout 清了布局键
+    localStorage.setItem(LAYOUT_KEY, blob('termv', 'user-space'))
+    expect(tryRestoreLayout(api)).toBe(true)
+    useWorkspace.getState().setSideProfile('amadeus', {}, {})
+    expect(liveLayoutOwner()).toBe('amadeus')
+
+    // 还原的是老存档(没记归属):不知道是谁的 → 不替它编一个,存盘也不写(下一程照旧信「上次退出」的活动 id)。
+    // 编成画像键的话:异步用户 Space 的现场在回落 Space 的画像下还原出来,会被记成回落 Space 的。
+    localStorage.setItem(LAYOUT_KEY, JSON.stringify({
+      version: 4, dockview: { panels: { p1: { contentComponent: 'termv', params: { __loc: 'main', __type: 'termv' } } } },
+      sidebars: { left: { visible: true, stash: [] }, right: { visible: true, stash: [] } },
+    }))
+    expect(tryRestoreLayout(api)).toBe(true)
+    expect(liveLayoutOwner()).toBeNull()
+    useWorkspace.getState().saveCurrent()
+    expect(onDisk()).toBeUndefined()
+
+    // 还原落空(引用了没注册的插件视图):屏上是按画像键建的默认布局,不认那份没还原出来的归属
+    localStorage.setItem(LAYOUT_KEY, blob('plugin:late:view', 'probe-space'))
+    expect(tryRestoreLayout(api)).toBe(false)
+    expect(liveLayoutOwner()).toBe('amadeus')
+    useWorkspace.getState().saveCurrent()
+    expect(onDisk()).toBe('amadeus')
+    useWorkspace.setState({ sideProfileKey: null })
+    vi.runAllTimers()
+  })
+
+  // 补还原归档前先问这一句:归档里还有没注册上的视图(另一个插件这次没装上)就不硬套(applyNamed 自己不查)。
+  it('namedLayoutRestorable:槽不存在 / 引用了未注册视图 ⇒ false;视图都在 ⇒ true', () => {
+    const named = (type: string) => ({
+      version: 4, dockview: { panels: { p1: { contentComponent: type, params: { __loc: 'main', __type: type } } } },
+      sidebars: { left: { visible: true, stash: [] }, right: { visible: true, stash: [] } },
+    })
+    localStorage.setItem('tangu2_named_layouts', JSON.stringify({ 'space:ok': named('termv'), 'space:late': named('plugin:late:view') }))
+    expect(namedLayoutRestorable('space:none')).toBe(false)
+    expect(namedLayoutRestorable('space:late')).toBe(false)
+    expect(namedLayoutRestorable('space:ok')).toBe(true)
+  })
 })
+
+// 插件 ctx.replaceView 的引擎半身(2026-10-02):Coding 进出项目换左栏的同一件事,交给插件用。
+describe('原地换视图(replaceViewsOfType)', () => {
+  it('活的侧栏 / 底部 panel:原组原位换成新类型的组件(不是只改 __type),参数换成新的;返回换掉的个数', () => {
+    const { api, panels } = mkApi(1600, 1000)
+    useWorkspace.getState().setApi(api)
+    useWorkspace.getState().setSideProfile('sp', {}, {})
+    useWorkspace.getState().openView('termv', { old: 1 }, 'bottom')
+    const old = panels.find((p) => p.params.__loc === 'bottom')!
+    expect(useWorkspace.getState().replaceViewsOfType('termv', 'logv', { fresh: true })).toBe(1)
+    expect(bottoms(panels)).toHaveLength(1) // 一换一,没有新开组
+    const p = bottoms(panels)[0] as typeof old
+    // 侧栏 panel 按类型挂组件:只改 __type 的话画出来的仍是旧视图(真 Electron 实测),组件名必须是新类型
+    expect([p.component, p.params.__type, p.params.__loc, p.params.fresh, p.params.old]).toEqual(['logv', 'logv', 'bottom', true, undefined])
+    expect(p.group).toBe(old.group)
+    expect(panels.includes(old)).toBe(false)
+    vi.runAllTimers()
+  })
+
+  it('`to` 已开在同一侧:不开第二个,只摘掉旧的(侧栏按类型一个 tab)', () => {
+    const { api, panels } = mkApi(1600, 1000)
+    useWorkspace.getState().setApi(api)
+    useWorkspace.getState().setSideProfile('sp', {}, {})
+    useWorkspace.getState().openView('termv', {}, 'bottom')
+    useWorkspace.getState().openView('logv', {}, 'bottom')
+    expect(useWorkspace.getState().replaceViewsOfType('termv', 'logv')).toBe(1)
+    expect(typesOf(panels)).toEqual(['logv'])
+    vi.runAllTimers()
+  })
+
+  it('`to` 已开在同一侧:调用方给的参数并进那个 panel,不丢(Codex 评审 10-02)', () => {
+    const { api, panels } = mkApi(1600, 1000)
+    useWorkspace.getState().setApi(api)
+    useWorkspace.getState().setSideProfile('sp', {}, {})
+    useWorkspace.getState().openView('termv', {}, 'bottom')
+    useWorkspace.getState().openView('logv', { project: 'A', keep: 1 }, 'bottom')
+    expect(useWorkspace.getState().replaceViewsOfType('termv', 'logv', { project: 'B' })).toBe(1)
+    const p = bottoms(panels)[0]
+    expect([typesOf(panels), p.params.project, p.params.keep]).toEqual([['logv'], 'B', 1])
+    vi.runAllTimers()
+  })
+
+  it('收起的一侧同时暂存着新旧两种:换完只留一个(侧栏图标不重复),参数并进留下的(Codex 评审 10-02)', () => {
+    const { api } = mkApi(1600, 1000)
+    useWorkspace.getState().setApi(api)
+    useWorkspace.setState((st) => ({ stash: { ...st.stash, left: [{ type: 'termv', params: {} }, { type: 'logv', params: { project: 'A', keep: 1 } }] } }))
+    expect(useWorkspace.getState().replaceViewsOfType('termv', 'logv', { project: 'B' })).toBe(1)
+    expect(useWorkspace.getState().stash.left).toEqual([{ type: 'logv', params: { project: 'B', keep: 1 } }])
+    vi.runAllTimers()
+  })
+
+  it('活动 panel 还给原主人:已在组里最前的只切活动组,不再 setActive(dockview 7 会重绘它,iframe 重载)', () => {
+    const { api, panels } = mkApi(1600, 1000)
+    useWorkspace.getState().setApi(api)
+    useWorkspace.getState().setSideProfile('sp', {}, {})
+    useWorkspace.getState().openView('termv', {}, 'bottom')
+    const main = (api as unknown as { addPanel: (o: unknown) => (typeof panels)[number] }).addPanel({ id: 'm', component: '__frame', params: { __loc: 'main', __type: 'logv' } })
+    main.group.activePanel = main
+    ;(api as unknown as { activePanel: unknown }).activePanel = main
+    expect(useWorkspace.getState().replaceViewsOfType('termv', 'logv')).toBe(1)
+    expect(main.api.setActive).not.toHaveBeenCalled()
+    expect(main.group.api.setActive).toHaveBeenCalledTimes(1)
+    vi.runAllTimers()
+  })
+
+  it('收起的面板:stash 里换、面板保持收起(不替用户弹出来);激活记忆跟着换', () => {
+    const { api, panels } = mkApi(1600, 1000)
+    useWorkspace.getState().setApi(api)
+    useWorkspace.getState().setSideProfile('sp', {}, {})
+    useWorkspace.getState().openView('termv', {}, 'bottom')
+    vi.runAllTimers()
+    useWorkspace.getState().toggleSidebar('bottom')
+    vi.runAllTimers()
+    expect(useWorkspace.getState().stash.bottom.map((v) => v.type)).toEqual(['termv'])
+    // 桩的 group 不报活动 tab,折叠记不下激活项 —— 真 Dockview 会记;这里直接种上
+    useWorkspace.setState((st) => ({ stashActive: { ...st.stashActive, bottom: 'termv' } }))
+    expect(useWorkspace.getState().replaceViewsOfType('termv', 'logv')).toBe(1)
+    const s = useWorkspace.getState()
+    expect(s.stash.bottom).toEqual([{ type: 'logv', params: {} }])
+    expect(s.stashActive.bottom).toBe('logv')
+    expect([s.bottomVisible, bottoms(panels).length]).toEqual([false, 0])
+  })
+
+  it('Space 的面板默认值跟着换(关空再展开不回到旧视图);什么都没开时返回 0;目标没注册则不动', () => {
+    const { api } = mkApi(1600, 1000)
+    useWorkspace.getState().setApi(api)
+    useWorkspace.getState().setSidebarDefaults({ left: [{ type: 'termv', params: {} }], right: [], bottom: [{ type: 'termv', params: {} }] })
+    expect(useWorkspace.getState().replaceViewsOfType('termv', 'nope')).toBe(0)
+    expect(useWorkspace.getState().sidebarDefaults.left[0].type).toBe('termv')
+    expect(useWorkspace.getState().replaceViewsOfType('termv', 'logv')).toBe(0)
+    expect(useWorkspace.getState().sidebarDefaults).toEqual({ left: [{ type: 'logv', params: {} }], right: [], bottom: [{ type: 'logv', params: {} }] })
+  })
+})
+

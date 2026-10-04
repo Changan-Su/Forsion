@@ -35,7 +35,7 @@ import {
   type Box, type ResizeEdge, type Viewport,
 } from '@amadeus/unified/canvasKit'
 import { canvasGridSnapEnabled, canvasMiniMapEnabled, setCanvasGridSnapEnabled, setCanvasMiniMapEnabled } from '@amadeus/unified/canvasPrefs'
-import { useTheme } from '../stores/themeStore'
+import { useVisualTheme as useTheme } from '../stores/themeStore'
 import { useApp } from '../stores/appStore'
 import { registerMessages, useI18n } from '../i18n'
 import { useAmadeusPrefs } from '../amadeusPrefs'

@@ -84,38 +84,13 @@ export function CodeStudioView({ extendView, leaf }: ViewProps) {
   }, [projectsRoot, retry])
   useEffect(() => { if (!root) useCodeStudio.getState().idleChat() }, [root])
   useEffect(() => { if (root) useLaunchNavigation.getState().showProjects() }, [root])
+  // 左栏:项目导航是固定 View,一直在;进项目时对话作为第二个标签开在它旁边(收起的左栏只进暂存、保持收起),
+  // 回到项目索引再把它关掉。从前是把导航整个换成对话,进了项目就找不回导航。
   useEffect(() => {
     if (!inCodingSpace) return
     const ws = useWorkspace.getState()
-    ws.setSidebarDefaults({ ...ws.sidebarDefaults, left: root
-      ? [{ type: 'chat', params: { followActive: true, reuseKey: 'primary', studio: true } }]
-      : [{ type: 'coding-navigation', params: {} }] })
-    const desired = root ? 'chat' : 'coding-navigation'
-    const previous = root ? 'coding-navigation' : 'chat'
-    const leftTypes = ws.api?.panels.filter(panel => (panel.params as { __loc?: string } | undefined)?.__loc === 'left')
-      .map(panel => (panel.params as { __type?: string } | undefined)?.__type) ?? []
-    if (leftTypes.includes(desired) && !leftTypes.includes(previous)) return
-    if (!ws.leftVisible && ws.stash.left.some(view => view.type === desired) && !ws.stash.left.some(view => view.type === previous)) return
-    // 左栏是用户收起的:只把暂存里的旧视图换成新的,保持收起,等用户自己展开(Codex 评审:原先切项目会把左栏强行弹出来)
-    if (!ws.leftVisible && !leftTypes.length) {
-      const next = root
-        ? { type: 'chat', params: { followActive: true, reuseKey: 'primary', studio: true } }
-        : { type: 'coding-navigation', params: {} }
-      const kept = ws.stash.left.filter(view => view.type !== previous && view.type !== desired)
-      // 暂存里原先激活的若正是被换掉的那个,激活项跟着换成新视图;否则展开时找不到它,会落到别的标签(Codex r3c)
-      const active = ws.stashActive.left === previous ? next.type : ws.stashActive.left
-      useWorkspace.setState({ stash: { ...ws.stash, left: [next, ...kept] }, stashActive: { ...ws.stashActive, left: active } })
-      return
-    }
-    // Older saved Coding layouts still have Chat in the left slot. Replace that View
-    // with navigation on the launchpad, and restore the real Chat View for a project.
-    if (root) {
-      showCodingChat()
-      ws.closeSideView('left', 'coding-navigation')
-    } else {
-      ws.openView('coding-navigation', {}, 'left')
-      ws.closeSideView('left', 'chat')
-    }
+    if (root) ws.replaceViewsOfType('coding-navigation', 'chat', CODING_CHAT)
+    else ws.remapLeaves((type, params) => (type === 'chat' && params.studio ? null : undefined))
   }, [root, inCodingSpace])
   const saveCreatedBrief = async (path: string, brief: StudioBrief): Promise<void> => {
     path = normPath(path)
@@ -147,6 +122,8 @@ export function CodeStudioView({ extendView, leaf }: ViewProps) {
   }} />
   return <div className="csu-launch-root">{error && <div className="csu-error" role="alert">{t('studio.loadError', { error })}<button onClick={() => setRetry(n => n + 1)}>{t('studio.retry')}</button></div>}<ProjectLaunchpad root={projectsRoot} recentProjects={recentProjects} onOpen={(path, name) => useCodeStudio.getState().openProject(path, name)} onCreate={create} /></div>
 }
+/** Coding 左栏的对话视图参数(studio = 只有它带,退出项目时按这个认它)。 */
+const CODING_CHAT = { followActive: true, reuseKey: 'primary', studio: true }
 function showCodingChat(): void {
   const ws = useWorkspace.getState()
   // A Coding layout may also contain a Chat tab in main. Explicitly create in
@@ -154,7 +131,7 @@ function showCodingChat(): void {
   const leftChat = ws.api?.panels.find(panel => (panel.params as { __loc?: string; __type?: string } | undefined)?.__loc === 'left'
     && (panel.params as { __type?: string } | undefined)?.__type === 'chat')
   if (leftChat) ws.activateLeaf(leftChat.id)
-  else ws.openView('chat', { followActive: true, reuseKey: 'primary', studio: true }, 'left', { newTab: true })
+  else ws.openView('chat', CODING_CHAT, 'left', { newTab: true })
 }
 function ProjectStudio({ root, extendView, onActivate, briefSaveError, retryBrief }: { root: string; extendView?: ExtendViewController; onActivate(): void; briefSaveError: string; retryBrief(): void }) {
   const { t } = useI18n()

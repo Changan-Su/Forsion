@@ -96,6 +96,8 @@ describe('isContextOverflowError — 只认 400/413 + 溢出措辞(压缩后重�
     expect(isContextOverflowError(new LlmError(413, 'request_too_large'))).toBe(true);
     expect(isContextOverflowError(new LlmError(400, 'Your input exceeds the context window of this model.'))).toBe(true);
     expect(isContextOverflowError(new LlmError(400, 'context_length_exceeded'))).toBe(true);
+    expect(isContextOverflowError(new LlmError(400, '{"code":"1261","message":"Prompt too long"}'))).toBe(true); // z.ai
+    expect(isContextOverflowError(new LlmError(400, '{"code":"1261","message":"Prompt exceeds max length"}'))).toBe(true); // z.ai CN
   });
   it('别的状态码 / 别的 400 / 非 LlmError → false', async () => {
     const { isContextOverflowError } = await import('./contextWindowStore.js');

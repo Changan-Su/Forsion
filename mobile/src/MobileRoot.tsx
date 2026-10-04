@@ -1,3 +1,4 @@
+import { useSpaceAmbient } from '@/theme/spaceAmbient'
 import { amadeusAvailable } from '@/features/runtime'
 /**
  * 移动端 App 根:启动副作用(连接/轮询,复用 desktop useBootstrap)+ 主题桥接给 MobileShell +
@@ -12,7 +13,7 @@ import { amadeusAvailable } from '@/features/runtime'
 import { useEffect } from 'react'
 import { App as CapApp } from '@capacitor/app'
 import { useApp } from '@/stores/appStore'
-import { useTheme } from '@/stores/themeStore'
+import { useTheme, useVisualTheme } from '@/stores/themeStore'
 import { useBootstrap } from '@/stores/bootstrap'
 import { useInbox } from '@/stores/inboxStore'
 import { pullInbox } from '@/services/backendService'
@@ -129,6 +130,8 @@ export function MobileRoot() {
     return () => window.clearTimeout(t)
   }, [])
   const theme = useTheme()
+  const visualTheme = useVisualTheme()
+  useSpaceAmbient()
   const a = useApp(useShallow((s) => ({
     sessions: s.sessions,
     archivedSessions: s.archivedSessions,
@@ -152,7 +155,7 @@ export function MobileRoot() {
   return (
     <>
       <div className="shell-host">
-        <SingleColumnHost dark={theme.mode === 'dark'} buildDefault={buildDefaultLayout} />
+        <SingleColumnHost dark={visualTheme.mode === 'dark'} buildDefault={buildDefaultLayout} />
       </div>
 
       {/* Amadeus 全局浮层。⚠️ 名字像「快速切换器」,实为**对话框宿主**:AskStringHost / DeleteAssetsHost /
@@ -245,9 +248,9 @@ export function MobileRoot() {
         )}
       </AnimatePresence>
 
-      {/* 首启引导:移动端只走通用步(欢迎/外观/完成)—— 连接、模型、工作区、环境检测的落盘全靠
-          window.tangu 的 host 方法,mobileShim 没有,步骤序在 OnboardingWizard.stepOrder 里已收缩。
-          onFinish 不重连:移动端没有 connect 步,配置在引导里不会变。 */}
+      {/* 首启引导:移动端走通用步(欢迎/后台 Agent/外观/完成),后台开关即时写入引擎 API。
+          连接、模型、默认目录和环境检测依赖本机 host,步骤序按 OnboardingWizard.stepOrder 收缩。
+          onFinish 不重连:后台开关已保存,引导不改变移动端的连接配置。 */}
       <AnimatePresence>
         {a.onboarding && (
           <motion.div

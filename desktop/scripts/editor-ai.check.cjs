@@ -12,6 +12,15 @@
 //       D6(Codex 复核 inst P1-3)结果回来时在源码模式 → 不写进隐藏的编辑器、盘上 / textarea 都没有,提示;切回可视也没有。
 //   E = G3-05 Tangu 正在改这篇:写类工具参数流式生成 / 已发出未回结果时挂「正在修改」胶囊(不拦打字),结果回来即撤;
 //       打字中撞上 Tangu 的写入 → 本地胜 + Tangu 那版进冲突副本 + 提示点名 Tangu;别人的外部改动仍是「被别处改过」。
+//   F = G3-08 助手回答插回笔记:台架里挂一条生产 EditorialMessage(侧栏对话的形态),点操作行「插入笔记」→
+//       正文没被聚焦过 → 文末;有过光标 → 光标所在块之后,连插两条按序排、各自一步 Cmd+Z;「问 Tangu」发起的对话 →
+//       插回被引用块之后(胜过光标);不抢焦点;代码块 / 公式原样落盘;回执点名笔记 + 撤销(之后又改过就不撤、说明);
+//       锁定 / 只读 → 按钮 aria-disabled、点了给说明、零写入;源码模式 → 不接、提示;
+//       一篇 v4 笔记都没开 → 按钮不出现(用户 09-29 拍板),实例挂上 / 卸下随之出现 / 消失;
+//       F8(Codex 复核 P1)插入后在画布里改了形状颜色(只在 frontmatter、文档不变)→ 回执撤销拒撤,颜色与回答都在。
+//   G = 对标 ChatGPT Space(2026-10-01):笔记里的 ```forsion-sketch 交互块按对话 sketch 卡同一沙箱渲染(只 allow-scripts、
+//       代码块工具条收掉、打开不写盘);对话 sketch 卡「插入笔记」→ 围栏落盘 + 笔记里出卡;整段对话「整理成笔记」→
+//       complete 收到对话记录 + 指令,新建以模型一级标题命名的笔记(标题剥出正文)、重名加 -2、没有 complete 时入口不出现。
 // 宿主接缝用台架假探针顶替(tanguSeam.setTanguProbe;与生产同一模块实例)。探针的 complete 是假的(流式吐 __aiReply),
 // 真模型那半在 tangu-agent 的 live 台架 `--only inline`。
 // 用法:npm run check:editorai(由 e2e-editor 自起/复用 Vite;worktree 里设 HARNESS_URL)。
@@ -769,6 +778,334 @@ async function groupE(browser) {
   }
 }
 
+// ─────────────────────────────── G3-08 ───────────────────────────────
+/** 台架里挂一条生产 EditorialMessage(右侧 380px,侧栏对话的形态),onInsertNote 与 ChatView 同一条接线。
+ *  React / react-dom 必须取页面已加载的那份(带 ?v=),另起一份 hooks 会炸。回执经 notificationStore 记到 window.__ntf。 */
+async function mountChat(page, { quote, question = '帮我改改', reply }) {
+  await page.evaluate(async ({ MOD, quote, question, reply }) => {
+    const imp = eval(MOD)
+    const dep = (re) => performance.getEntriesByType('resource').map((e) => e.name).find((n) => re.test(n))
+    const R = await import(dep(/\/deps\/react\.js\?/)) // 缓存目录可被 FORSION_VITE_CACHE_DIR 挪走,只认 /deps/ 末段
+    const RD = await import(dep(/\/deps\/react-dom_client\.js\?/))
+    const React = R.default ?? R
+    const createRoot = RD.createRoot ?? RD.default.createRoot
+    const { EditorialMessage } = await imp('/src/views/chat2/EditorialMessage\\.tsx(\\?|$)', '/src/views/chat2/EditorialMessage.tsx')
+    const ins = await imp('/src/views/chat2/insertToNote\\.ts(\\?|$)', '/src/views/chat2/insertToNote.ts')
+    const { useNotifications } = await imp('/src/stores/notificationStore\\.ts(\\?|$)', '/src/stores/notificationStore.ts')
+    window.__ntf = []
+    if (!window.__ntfPatched) { // 同页多次挂载只包一层,否则一条回执记两遍
+      window.__ntfPatched = true
+      const orig = useNotifications.getState().notify
+      useNotifications.setState({ notify: (i) => { window.__ntf.push(i); return orig(i) } })
+    }
+    // 与 Composer2.composeOutgoing 同形:引用条逐行 `> `,空一行接正文(insertToNote.test 钉着两边同形)。
+    const user = quote ? `${quote.split('\n').map((l) => `> ${l}`).join('\n')}\n\n${question}` : question
+    const msgs = [
+      { id: 'u1', role: 'user', content: user, status: 'done', timestamp: 1 },
+      { id: 'a1', role: 'assistant', content: reply, status: 'done', timestamp: 2 },
+    ]
+    let host = document.querySelector('.harness-chat')
+    if (!host) {
+      host = document.createElement('div')
+      host.className = 'harness-chat t2-chat-view'
+      host.style.cssText = 'position:fixed;right:0;top:0;bottom:0;width:380px;overflow:auto;padding:16px;border-left:1px solid var(--border,#ddd);background:var(--bg,#fff);z-index:40'
+      document.body.appendChild(host)
+      window.__chatRoot = createRoot(host)
+    }
+    window.__chatRoot.render(React.createElement(EditorialMessage, {
+      msg: msgs[1],
+      handlers: { onCopy: () => {}, onInsertNote: (text) => { ins.insertReplyToNote(text, ins.askOriginOf(msgs, 'a1')) } },
+    }))
+  }, { MOD, quote, question, reply })
+  await page.waitForTimeout(300)
+}
+const insBtn = '.harness-chat [data-act="insert-note"]'
+// force:aria-disabled 在 Playwright 眼里算「不可用」会一直等;真人照样点得到(不可用时点了要给说明),回退时也要报 FAIL 而不是超时
+const clickIns = (page) => page.click(insBtn, { force: true })
+const pmFocused = (page) => page.evaluate((PM) => !!document.querySelector(PM)?.contains(document.activeElement), PM)
+async function openF(browser, md, flags = '') {
+  const page = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1560, height: 900 } })
+  page.on('pageerror', (e) => console.log('  [pageerror]', e.message))
+  await page.addInitScript(() => performance.setResourceTimingBufferSize(100000))
+  await page.goto(`${URL}?upage${flags}&useed=${encodeURIComponent(md)}`, { waitUntil: 'domcontentloaded', timeout: 120000 })
+  await page.waitForSelector(PM, { timeout: 120000 })
+  await page.waitForTimeout(400)
+  return page
+}
+async function groupF(browser) {
+  const md = '# 标题\n\n第一段。\n\n## 第二节\n\n被问的那段话，写得不太好。\n\n第二节的尾段。\n'
+  const REPLY = '回答第一行 **粗体**\n\n```js\nconst a = 1\n```\n\n面积是 \\(x^2\\)'
+  const REPLY_MD = '回答第一行 **粗体**\n\n```js\nconst a = 1\n```\n\n面积是 $x^2$'
+  // F1 正文从没被聚焦过 → 文末;不抢焦点;代码块 / 公式原样落盘;回执点名 + 撤销
+  {
+    const page = await openF(browser, md)
+    const focused0 = await pmFocused(page)
+    await mountChat(page, { reply: REPLY })
+    const aria = await page.evaluate((s) => document.querySelector(s)?.getAttribute('aria-disabled'), insBtn)
+    await clickIns(page)
+    await page.waitForTimeout(1500)
+    const d = await vault(page)
+    const st = await page.evaluate(() => ({ ntf: window.__ntf.map((x) => ({ text: x.text, act: x.action?.label })) }))
+    check('F1a 正文没被聚焦过 → 插在文末;代码块与公式(\\( \\) → $)原样落盘',
+      // 末尾换行不比:新块以行内公式收尾时序列化丢文末 \n,插件 'end' 写口同样如此(既有序列化怪癖,与本条无关)
+      !focused0 && aria == null && d.replace(/\n$/, '') === md + '\n' + REPLY_MD, JSON.stringify({ focused0, aria, d }))
+    check('F1b 不抢焦点(焦点留在聊天按钮上);回执点名笔记并带「撤销」',
+      !(await pmFocused(page)) && st.ntf.length === 1 && st.ntf[0].text === '已插入「Unified」' && st.ntf[0].act === '撤销', JSON.stringify(st))
+    await page.evaluate(() => window.__ntf[0]?.action?.run())
+    await page.waitForTimeout(1500)
+    check('F1c 回执「撤销」→ 撤回这一笔(盘上回到原文)', (await vault(page)) === md, JSON.stringify(await vault(page)))
+    await page.close()
+  }
+  // F2 有过光标 → 光标所在块之后;连插两条按序排;各自一步 Cmd+Z
+  {
+    const page = await openF(browser, md)
+    await caretAfterText(page, '第一段。')
+    await mountChat(page, { reply: '回答甲' })
+    await clickIns(page)
+    await page.waitForTimeout(200)
+    await mountChat(page, { reply: '回答乙' })
+    await clickIns(page)
+    await page.waitForTimeout(1500)
+    const d = await vault(page)
+    const focused = await pmFocused(page)
+    if (process.env.F_SHOT) { // 观感自查:操作行(悬停才显形)+ 插进去的笔记,同框截一张
+      await page.hover('.harness-chat .t2-asst')
+      await page.waitForTimeout(250)
+      await page.screenshot({ path: process.env.F_SHOT })
+    }
+    await page.evaluate((PM) => document.querySelector(PM).focus(), PM)
+    await page.keyboard.press('Meta+z')
+    await page.waitForTimeout(1500)
+    const u1 = await vault(page)
+    await page.keyboard.press('Meta+z')
+    await page.waitForTimeout(1500)
+    const u2 = await vault(page)
+    check('F2a 光标所在块之后;连插两条按序排;不抢焦点',
+      d.includes('第一段。\n\n回答甲\n\n回答乙\n\n## 第二节') && !focused, JSON.stringify({ d, focused }))
+    check('F2b 每条单独一步 Cmd+Z(乙先退、再退甲)', !u1.includes('回答乙') && u1.includes('回答甲') && u2 === md, JSON.stringify({ u1, u2 }))
+    await page.close()
+  }
+  // F3 「问 Tangu」发起的对话 → 插回被引用块之后(胜过别处的光标)
+  {
+    const page = await openF(browser, md)
+    await installProbe(page)
+    await selectText(page, '被问的那段话')
+    const btn = await page.$('[data-testid="inline-toolbar"] [data-act="ask"]')
+    if (btn) await btn.click()
+    await page.waitForTimeout(400)
+    const quote = await page.evaluate(() => window.__asked[0])
+    await caretAfterText(page, '第一段。')
+    await mountChat(page, { quote, reply: '改写后的那段话。' })
+    await clickIns(page)
+    await page.waitForTimeout(1500)
+    const d = await vault(page)
+    check('F3 「问 Tangu」出处 → 落在被引用块之后(不是光标处)',
+      quote === '被问的那段话\n— [[Unified.md#第二节]]' && d.includes('被问的那段话，写得不太好。\n\n改写后的那段话。\n\n第二节的尾段。') && !d.includes('第一段。\n\n改写'),
+      JSON.stringify({ quote, d }))
+    await page.close()
+  }
+  // F4 回执撤销时笔记已又改过 → 不撤(那会连用户的字一起退),说明去笔记里撤
+  {
+    const page = await openF(browser, md)
+    await caretAfterText(page, '第一段。')
+    await mountChat(page, { reply: '回答丙' })
+    await clickIns(page)
+    await page.waitForTimeout(300)
+    await caretAfterText(page, '第二节的尾段。')
+    await page.keyboard.type('又打几个字')
+    await page.waitForTimeout(300)
+    await page.evaluate(() => window.__ntf[0]?.action?.run())
+    await page.waitForTimeout(1500)
+    const d = await vault(page)
+    const ntf = await page.evaluate(() => window.__ntf.map((x) => x.text))
+    check('F4 之后又改过 → 回执撤销不动文档,提示去笔记里撤', d.includes('回答丙') && d.includes('又打几个字') && ntf[1] === '笔记之后又有改动，请在笔记里撤销', JSON.stringify({ d, ntf }))
+    await page.close()
+  }
+  // F5 锁定 → 按钮 aria-disabled、点了给说明、零写入;解锁 → 恢复可用
+  {
+    const page = await openF(browser, md, '&ulock')
+    await mountChat(page, { reply: '回答丁' })
+    await page.evaluate(() => window.__upage.setLocked(true))
+    await page.waitForTimeout(800)
+    const w0 = await page.evaluate(() => window.__upage.writes.length)
+    const aria = await page.evaluate((s) => document.querySelector(s)?.getAttribute('aria-disabled'), insBtn)
+    await clickIns(page)
+    await page.waitForTimeout(800)
+    const st = await page.evaluate(() => ({ w: window.__upage.writes.length, ntf: window.__ntf.map((x) => x.text), d: window.__upage.vault.get('Unified.md') }))
+    await page.evaluate(() => window.__upage.setLocked(false))
+    await page.waitForTimeout(800)
+    const aria2 = await page.evaluate((s) => document.querySelector(s)?.getAttribute('aria-disabled'), insBtn)
+    check('F5 锁定:按钮 aria-disabled、点了说明「没有可写入的笔记」、零写入;解锁后恢复',
+      aria === 'true' && st.w === w0 && !st.d.includes('回答丁') && st.ntf.length === 1 && st.ntf[0].startsWith('没有可写入的笔记') && aria2 == null,
+      JSON.stringify({ aria, aria2, w0, st }))
+    await page.close()
+  }
+  // F6 源码模式 → 不接(不写进隐藏的编辑器),提示
+  {
+    const page = await openF(browser, md)
+    await mountChat(page, { reply: '回答戊' })
+    await page.evaluate(() => window.__upage.setEditorMode('source'))
+    await page.waitForTimeout(500)
+    await clickIns(page)
+    await page.waitForTimeout(800)
+    const ta = await page.evaluate(() => document.querySelector('.amx-source')?.value ?? '')
+    await page.evaluate(() => window.__upage.setEditorMode('wysiwyg'))
+    await page.waitForTimeout(800)
+    const back = await page.evaluate(() => window.__upage.probe.view().state.doc.textContent)
+    const ntf = await page.evaluate(() => window.__ntf.map((x) => x.text))
+    check('F6 源码模式:不插(textarea / 切回可视 / 盘上都没有),提示「没能插入」',
+      !ta.includes('回答戊') && !back.includes('回答戊') && !(await vault(page)).includes('回答戊') && ntf.length === 1 && ntf[0].startsWith('没能插入'),
+      JSON.stringify({ ntf, ta: ta.slice(0, 40) }))
+    await page.close()
+  }
+  // F7 一篇 v4 笔记都没开(台架缺省壳 = v3 编辑器)→ 按钮不出现;实例挂上 → 出现(只读 = 灰态、可写 = 可用);全卸下 → 再消失。
+  //    实例用生产 lifecycle 登记的最小桩(只读实例的形态 = 不登记 insertReply),验的是按钮对挂载通知的反应。
+  {
+    const page = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1560, height: 900 } })
+    page.on('pageerror', (e) => console.log('  [pageerror]', e.message))
+    await page.addInitScript(() => performance.setResourceTimingBufferSize(100000))
+    await page.goto(URL, { waitUntil: 'domcontentloaded', timeout: 120000 })
+    await page.waitForFunction(() => performance.getEntriesByType('resource').some((e) => /\/deps\/react-dom_client\.js\?/.test(e.name)), null, { timeout: 120000 })
+    await page.waitForTimeout(800)
+    await mountChat(page, { reply: '回答己' })
+    const btn = () => page.evaluate((s) => { const b = document.querySelector(s); return !b ? 'absent' : b.getAttribute('aria-disabled') === 'true' ? 'disabled' : 'ready' }, insBtn)
+    const lc = (fn) => page.evaluate(async ({ MOD, fn }) => {
+      const m = await eval(MOD)('/src/amadeus/unified/lifecycle\\.ts(\\?|$)', '/src/amadeus/unified/lifecycle.ts')
+      eval(fn)(m)
+      await new Promise((r) => setTimeout(r, 150))
+    }, { MOD, fn: fn.toString() })
+    const s0 = await btn()
+    await lc((m) => { window.__unRO = m.registerUnifiedPipe({ path: 'RO.md', flush: async () => {}, retire: () => {} }) })
+    const s1 = await btn()
+    await lc((m) => { window.__unRW = m.registerUnifiedPipe({ path: 'RW.md', flush: async () => {}, retire: () => {}, insertReply: () => null }) })
+    const s2 = await btn()
+    await lc(() => { window.__unRO(); window.__unRW() })
+    const s3 = await btn()
+    check('F7 没有 v4 实例 → 按钮不出现;只读实例挂上 → 灰态;可写实例挂上 → 可用;全卸下 → 再消失',
+      s0 === 'absent' && s1 === 'disabled' && s2 === 'ready' && s3 === 'absent', JSON.stringify({ s0, s1, s2, s3 }))
+    await page.close()
+  }
+  // F8 画布态:插入回答后右键形状设色(元素颜色只在 amadeus_canvas 行,PM 文档不变;舞台统一时间线记一格 fm)→
+  //    点回执「撤销」必须拒撤(否则舞台仲裁先退的是这格颜色:颜色没了、回答还在),提示去笔记里撤。
+  {
+    const CV = { v: 1, mode: 'canvas', main: { x: 0, y: 0, w: 400 }, elements: [{ id: 's1', type: 'shape', shape: 'rect', x: 0, y: 300, w: 200, h: 120, text: '方块' }] }
+    const page = await openF(browser, ['---', 'amadeus_schema: amadeus.page/4', `amadeus_canvas: ${JSON.stringify(CV)}`, '---', '', '# 画布', '', '主卡一段。', ''].join('\n'))
+    await page.waitForTimeout(800)
+    const cvOf = (d) => { const m = /^amadeus_canvas: (.*)$/m.exec(d ?? ''); try { return m ? JSON.parse(m[1]) : null } catch { return null } }
+    // 对照:画布态下插入后什么都没动 → 回执撤销照常撤回(拒撤的闸不许把正常撤销也挡掉)
+    await mountChat(page, { reply: '先撤的回答' })
+    await clickIns(page)
+    await page.waitForTimeout(1200)
+    const d0a = await vault(page)
+    await page.evaluate(() => window.__ntf[0]?.action?.run())
+    await page.waitForTimeout(1500)
+    const d0b = await vault(page)
+    check('F8a 画布态对照:插入后没动别的 → 回执撤销照常撤回', d0a.includes('先撤的回答') && !d0b.includes('先撤的回答'), JSON.stringify({ d0b }))
+    await mountChat(page, { reply: '画布里的回答' })
+    await clickIns(page)
+    await page.waitForTimeout(1200)
+    const d1 = await vault(page)
+    const at = await page.evaluate(() => { const r = document.querySelector('.amx-el-shape[data-el="s1"]')?.getBoundingClientRect(); return r ? { x: r.left + r.width / 2, y: r.top + r.height / 2 } : null })
+    if (at) {
+      await page.mouse.click(at.x, at.y, { button: 'right' })
+      await page.waitForTimeout(300)
+      await page.click('.amx-canvas-menu .amx-color-swatch[data-swatch="3"]').catch(() => {})
+      await page.waitForTimeout(800)
+    }
+    const d2 = await vault(page)
+    await page.evaluate(() => window.__ntf[0]?.action?.run())
+    await page.waitForTimeout(1500)
+    const d3 = await vault(page)
+    const ntf = await page.evaluate(() => window.__ntf.map((x) => x.text))
+    const col = (d) => cvOf(d)?.elements?.find((e) => e.id === 's1')?.color
+    check('F8b 画布里插入后改了形状颜色 → 回执撤销拒撤:颜色与回答都还在,提示去笔记里撤',
+      !!at && d1.includes('画布里的回答') && col(d2) === '3' && d3.includes('画布里的回答') && col(d3) === '3' && ntf[1] === '笔记之后又有改动，请在笔记里撤销',
+      JSON.stringify({ at, c2: col(d2), c3: col(d3), ans: d3?.includes('画布里的回答'), ntf }))
+    await page.close()
+  }
+}
+
+async function groupG(browser) {
+  const SK = '<b id="sk">交互</b><script>document.getElementById("sk").textContent = "已运行"</script>'
+  const md = '# 标题\n\n第一段。\n\n```forsion-sketch\n' + SK + '\n```\n'
+  // G1 笔记里的交互块:嵌入层渲成 sketch 卡(沙箱只 allow-scripts)、源码与代码块工具条都不露、打开零写入
+  {
+    const page = await openF(browser, md)
+    await page.waitForSelector('.unified-body .unified-embed .sketch-frame', { timeout: 8000 }).catch(() => {})
+    const st = await page.evaluate(() => {
+      const f = document.querySelector('.unified-body .unified-embed .sketch-frame')
+      const host = document.querySelector('.unified-body .unified-embed-host[data-language="forsion-sketch"]')
+      const tools = host?.querySelector(':scope > .amx-code-tools')
+      return { sandbox: f?.getAttribute('sandbox'), tools: tools ? getComputedStyle(tools).display : 'absent', writes: window.__upage.writes?.length ?? 0 }
+    })
+    check('G1 ```forsion-sketch → sketch 卡(sandbox=allow-scripts),代码块工具条收掉,打开零写入',
+      st.sandbox === 'allow-scripts' && (st.tools === 'none' || st.tools === 'absent') && st.writes === 0 && (await vault(page)) === md, JSON.stringify(st))
+    await page.close()
+  }
+  // G2 对话 sketch 卡「插入笔记」→ 围栏原样落盘(HTML 里的 \\( 不被公式归一改写),笔记里随即出卡
+  {
+    const page = await openF(browser, '# 标题\n\n第一段。\n')
+    await page.evaluate(async ({ MOD }) => {
+      const imp = eval(MOD)
+      const dep = (re) => performance.getEntriesByType('resource').map((e) => e.name).find((n) => re.test(n))
+      const R = await import(dep(/\/deps\/react\.js\?/))
+      const RD = await import(dep(/\/deps\/react-dom_client\.js\?/))
+      const React = R.default ?? R
+      const createRoot = RD.createRoot ?? RD.default.createRoot
+      const { EditorialMessage } = await imp('/src/views/chat2/EditorialMessage\\.tsx(\\?|$)', '/src/views/chat2/EditorialMessage.tsx')
+      const ins = await imp('/src/views/chat2/insertToNote\\.ts(\\?|$)', '/src/views/chat2/insertToNote.ts')
+      const host = document.createElement('div')
+      host.className = 'harness-chat t2-chat-view'
+      host.style.cssText = 'position:fixed;right:0;top:0;bottom:0;width:380px;overflow:auto;padding:16px;z-index:40'
+      document.body.appendChild(host)
+      const msg = { id: 'a1', role: 'assistant', content: '画好了', status: 'done', timestamp: 2, sketches: [{ callId: 'c1', title: '计算器', html: '<i>\\(x\\)</i>' }] }
+      createRoot(host).render(React.createElement(EditorialMessage, { msg, handlers: { onCopy: () => {}, onInsertNote: (text) => { ins.insertReplyToNote(text, null) } } }))
+    }, { MOD })
+    await page.waitForTimeout(400)
+    await page.click('.harness-chat .sketch-card [data-act="insert-note"]', { force: true })
+    await page.waitForTimeout(1500)
+    const d = await vault(page)
+    const frames = await page.evaluate(() => document.querySelectorAll('.unified-body .unified-embed .sketch-frame').length)
+    check('G2 对话 sketch 卡「插入笔记」→ ```forsion-sketch 围栏原样落盘,笔记里出卡',
+      d.includes('```forsion-sketch\n<i>\\(x\\)</i>\n```') && frames === 1, JSON.stringify({ d, frames }))
+    await page.close()
+  }
+  // G3 整段对话整理成笔记:complete 收到 custom + 对话记录;新笔记以一级标题命名、标题剥出正文;再来一次重名 → -2
+  {
+    const page = await openF(browser, '# 标题\n\n第一段。\n')
+    await installProbe(page, { complete: true })
+    const st = await page.evaluate(async ({ MOD }) => {
+      const imp = eval(MOD)
+      const { useApp } = await imp('/src/stores/appStore\\.ts(\\?|$)', '/src/stores/appStore.ts')
+      const c2n = await imp('/src/views/chat2/chatToNote\\.ts(\\?|$)', '/src/views/chat2/chatToNote.ts')
+      useApp.setState({
+        sessions: [{ id: 's1', title: '旧会话' }],
+        messagesBySession: { s1: [
+          { id: 'u1', role: 'user', content: '怎么发版?', status: 'done', timestamp: 1 },
+          { id: 'a1', role: 'assistant', content: '先 bump 再打 tag', status: 'done', timestamp: 2 },
+        ] },
+      })
+      window.__aiReply = '# 发版流程\n\n1. bump\n2. 打 tag'
+      const can = c2n.canTurnChatIntoNote()
+      const ok1 = await c2n.turnChatIntoNote('s1')
+      const ok2 = await c2n.turnChatIntoNote('s1')
+      return { can, ok1, ok2, req: window.__aiReqs[0], a: window.__upage.vault.get('发版流程.md'), b: window.__upage.vault.get('发版流程-2.md') }
+    }, { MOD })
+    check('G3 整理成笔记:custom 动作带对话记录;新笔记「发版流程.md」正文剥掉标题;再来一次 → 发版流程-2.md',
+      st.can && st.ok1 && st.ok2 && st.req?.action === 'custom' && /User:\n怎么发版\?/.test(st.req?.selection || '') && st.req?.title === '旧会话'
+        && st.a === '1. bump\n2. 打 tag\n' && st.b === st.a, JSON.stringify(st))
+    await page.close()
+  }
+  // G4 宿主没有正文 AI(探针不给 complete)→ 入口不出现
+  {
+    const page = await openF(browser, '# 标题\n')
+    await installProbe(page, { complete: false })
+    const can = await page.evaluate(async ({ MOD }) => (await eval(MOD)('/src/views/chat2/chatToNote\\.ts(\\?|$)', '/src/views/chat2/chatToNote.ts')).canTurnChatIntoNote(), { MOD })
+    check('G4 没有 complete → canTurnChatIntoNote 为假(菜单项不出现)', can === false, JSON.stringify({ can }))
+    await page.close()
+  }
+}
+
 async function main() {
   const browser = await chromium.launch({ executablePath: findChromium(), headless: true })
   const only = (process.argv.find((a) => a.startsWith('--group=')) || '').slice('--group='.length).toUpperCase()
@@ -778,6 +1115,8 @@ async function main() {
     if (!only || only.includes('C')) await groupC(browser)
     if (!only || only.includes('D')) await groupD(browser)
     if (!only || only.includes('E')) await groupE(browser)
+    if (!only || only.includes('F')) await groupF(browser)
+    if (!only || only.includes('G')) await groupG(browser)
   } finally {
     await browser.close()
   }

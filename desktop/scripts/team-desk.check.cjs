@@ -10,7 +10,7 @@
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
-const { _electron: electron } = require('playwright-core')
+const electron = require('./lib/launch-electron.cjs')
 const { startStubEngine } = require('./lib/stub-engine.cjs')
 
 const ROOT = path.join(__dirname, '..')
@@ -316,7 +316,8 @@ async function run(app, win, stub) {
   stub.state.noConfigPatch = false
   // ── 5j/5k 私聊:会话没存档时引擎按 Agent 定义的档跑(tangu-agent test/agentDefaultApproval),药丸照同一条链显示 ──
   // 修复前:药丸兜底「替我批准」「中」,引擎按该 Agent 的只读逐次弹审批(09-22 反馈)。
-  await win.locator('.t2o-row[title="Solo RO"]').or(win.locator('.t2s-srow').filter({ hasText: 'Solo RO' })).first().click()
+  // 一级行不再带原生 title(1a625a18 U-19 改用 hoverTip),按行内名字找;td-solo 不在会话列表夹具里,只有这一行入口
+  await win.locator('.t2o-row', { hasText: 'Solo RO' }).click()
   await win.waitForSelector(`[data-chat-surface="chat"][data-session-id="${SOLO_ID}"] .mode-pill-btn`)
   await sleep(600)
   const soloLabel = () => win.locator(`${mainPill} .t2c-pill-label`).textContent()

@@ -195,7 +195,7 @@ export function createPluginHost(fs: PluginFs, opts: { appVersion: () => string 
             readIcon(fs, dir),
           ])
           seen.add(id)
-          out.push({ id, ...installedPluginFields(m, name), iconUrl, code, readme, changelog, blocked: blocked ?? undefined })
+          out.push({ id, ...installedPluginFields(m, name, id), iconUrl, code, readme, changelog, blocked: blocked ?? undefined })
         } catch {
           /* skip malformed plugin */
         }

@@ -44,7 +44,7 @@ Thumbs.db
 .vscode/
 .idea/
 
-# 插件 drop-in 目录：运行时从 ./plugins 发现加载（见 src/tangu-agent/plugins/loader.ts）。
+# 插件 drop-in 目录：运行时从 ./plugins 发现加载（见 tangu-agent/src/plugins/loader.ts）。
 # worker 等插件独立维护/分发，永不提交进核心仓库（开源核心 = standalone/desktop/TUI）。
 /tangu-agent/plugins/
 
@@ -54,3 +54,6 @@ Thumbs.db
 # Isolated Coding Studio Electron acceptance artifacts
 /outputs/coding-studio-*
 /outputs/image-studio*
+
+# live 台架产物(live-harness --out 指到仓内时;里面有 provider-auth.json 凭据软链,绝不进库)
+/tangu-agent/outputs/

@@ -117,7 +117,7 @@ const EFFORT_PRO: LevelMap = {
 /** gpt-5.6 起的公开 API:'max' 是真档(5.5 的档表到 xhigh 为止)。 */
 const EFFORT_FULL_MAX: LevelMap = { ...EFFORT_FULL, max: 'max' };
 
-/** GPT-6 Astra 只支持 low/medium/high/xhigh/max,不可关闭思考,也不支持 minimal。 */
+/** GPT-6 Astra / GPT-6.1 Sol 只支持 low/medium/high/xhigh/max,不可关闭思考,也不支持 minimal。 */
 const EFFORT_ASTRA: LevelMap = { ...EFFORT_FULL_MAX, off: null, minimal: null };
 
 /**
@@ -298,11 +298,12 @@ const CLAUDE_ADAPTIVE_CAP: Omit<ModelCapability, 'rule'> = {
 const CLAUDE_ALWAYS_ON_CAP: Omit<ModelCapability, 'rule'> = { ...CLAUDE_ADAPTIVE_CAP, levels: CLAUDE_EFFORT_ALWAYS_ON };
 
 /**
- * 已核实的 GPT-6 型号(官方模型页三支都只有裸 id,没有日期快照)。未知 GPT-6 变体刻意不预支(default-deny)。
+ * 已核实的 GPT-6 型号(官方模型页只有裸 id,没有日期快照)。未知 GPT-6 变体刻意不预支(default-deny)。
  * Codex 目录里的 `ultra` 档是客户端概念(max + 自动派子任务),后端直接 400「Invalid value: 'ultra'」,
  * 不收(normalizeThinkingLevel 把 ultra 归到 max)。
  */
 const GPT6_ASTRA = /^gpt-6-astra$/i;
+const GPT61_SOL = /^gpt-6\.1-sol$/i;
 const GPT6_SOL_LUNA = /^gpt-6-(sol|luna)$/i;
 
 // 官方迁移指南要求带工具时走 Responses,并移除 temperature/top_p/top_logprobs。
@@ -319,6 +320,20 @@ const GPT6_CAP: Omit<ModelCapability, 'rule'> = { ...ASTRA_CAP, levels: EFFORT_G
 /** 首条命中即生效 —— 特例在前,族规则居中,兜底在后。 */
 const RULES: Rule[] = [
   // ── 订阅登录(协议已定,不看 host)────────────────────────────────────────
+  {
+    // 6.1 Sol 与 Astra 同为强制思考;不能复用旧 Sol 的 none 档(10-01 后端 400 实测)。
+    id: 'codex-gpt61-sol',
+    protocol: /^openai-responses$/,
+    model: GPT61_SOL,
+    cap: ASTRA_CAP,
+  },
+  {
+    id: 'codex-gpt61-sol',
+    host: /(^|\.)chatgpt\.com$/,
+    urlPath: /^\/backend-api\/codex(?:\/|$)/,
+    model: GPT61_SOL,
+    cap: ASTRA_CAP,
+  },
   {
     id: 'codex-astra',
     protocol: /^openai-responses$/,
@@ -376,6 +391,12 @@ const RULES: Rule[] = [
   },
 
   // ── OpenAI 官方 ────────────────────────────────────────────────────────
+  {
+    id: 'openai-gpt61-sol',
+    host: /(^|\.)api\.openai\.com$/,
+    model: GPT61_SOL,
+    cap: ASTRA_CAP,
+  },
   {
     id: 'openai-astra',
     host: /(^|\.)api\.openai\.com$/,

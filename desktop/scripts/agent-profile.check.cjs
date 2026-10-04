@@ -1,5 +1,5 @@
 /** Full ChatView child conversation + Agent loadout UI. Isolated Electron, no user data. */
-const { _electron: electron } = require('playwright-core')
+const electron = require('./lib/launch-electron.cjs')
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
@@ -18,9 +18,18 @@ const toolResult = 'Complete tool output '.repeat(100) + 'END-OF-TOOL-RESULT'
 const childMessages = [{ id: 'child-user', session_id: child.id, role: 'user', content: 'Research this thoroughly', timestamp: 1 }, { id: 'child-answer', session_id: child.id, role: 'model', content: text, reasoning: 'A detailed reasoning record.', agent_slug: 'research', timestamp: 2, tool_calls: [{ id: 'read-1', type: 'function', function: { name: 'read_file', arguments: '{"path":"evidence.md"}' } }], tool_results: [{ tool_call_id: 'read-1', content: toolResult, isError: false }] }]
 const solo = { ...base, id: 'profile-solo', title: 'Research notes', agent_config: { agentSlug: 'research', execMode: 'host', cwd: home } }
 // 进化(HARNESS 工作笔记):一条现存、一条已删可恢复;第二条日期是手改出来的非 ISO 串,不许渲出 Invalid Date。
-const harnessEntries = [{ id: 'h-cite', kind: 'recipe', title: 'Cite before concluding', body: 'Quote the primary source before concluding.', evidence: 'corrected twice', createdAt: '2026-09-10', updatedAt: '2026-09-16', version: 2 }, { id: 'h-scope', kind: 'note', title: 'Confirm scope first', body: 'Ask for time range and region.', createdAt: '2026-09-12', updatedAt: 'last week', version: 1 }]
+const harnessEntries = [{ id: 'h-cite', kind: 'recipe', title: 'Cite before concluding', body: 'Quote the primary source before concluding.', evidence: 'corrected twice', createdAt: '2026-09-10', updatedAt: '2026-09-16', version: 2 }, { id: 'h-scope', kind: 'note', title: 'Confirm scope first', body: 'Ask for time range and region.', createdAt: '2026-09-12', updatedAt: 'last week', version: 1 },
+  // 装备(10-04):Agent 自己收起的工具 / 技能 —— 面板要给出本地化的类型芯片,并列出收起了什么
+  { id: 'h-shelf', kind: 'equip', title: 'Shelve drawing tools', body: 'Not used in the last month.', evidence: 'usage review', tools: ['sketch', 'display_file'], skills: ['local:pptx'], createdAt: '2026-10-01', updatedAt: '2026-10-01', version: 1 }]
 const harnessOld = { id: 'h-old', kind: 'note', title: 'Prefer PDF over HTML', body: 'Superseded.', createdAt: '2026-09-01', updatedAt: '2026-09-01', version: 1 }
-const harnessJournal = [{ ts: '2026-09-01T10:00:00Z', action: 'upsert', entryId: 'h-old', before: null, after: harnessOld }, { ts: '2026-09-10T08:00:00Z', action: 'upsert', entryId: 'h-cite', before: null, after: { ...harnessEntries[0], version: 1 } }, { ts: '2026-09-14T15:00:00Z', action: 'delete', entryId: 'h-old', before: harnessOld, after: null }, { ts: '2026-09-16T09:30:00Z', action: 'upsert', entryId: 'h-cite', before: { ...harnessEntries[0], version: 1 }, after: harnessEntries[0] }]
+const harnessJournal = [{ ts: '2026-09-01T10:00:00Z', action: 'upsert', entryId: 'h-old', before: null, after: harnessOld }, { ts: '2026-09-10T08:00:00Z', action: 'upsert', entryId: 'h-cite', before: null, after: { ...harnessEntries[0], version: 1 } }, { ts: '2026-09-12T08:00:00Z', action: 'upsert', entryId: 'h-scope', before: null, after: harnessEntries[1], by: 'historian' }, { ts: '2026-09-14T15:00:00Z', action: 'delete', entryId: 'h-old', before: harnessOld, after: null }, { ts: '2026-09-16T09:30:00Z', action: 'upsert', entryId: 'h-cite', before: { ...harnessEntries[0], version: 1 }, after: harnessEntries[0], rev: '7c1d2f3a-9b4e-4c6d-8a1f-2b3c4d5e6f70' },
+  // 来源标注(10-04):后台复盘直接采纳的记 by: historian(上面 h-scope 那行),Muse 巡检后代收的记 by: muse
+  { ts: '2026-10-01T08:00:00Z', action: 'upsert', entryId: 'h-shelf', before: null, after: harnessEntries[2], by: 'muse' }]
+// 对话里的工作笔记更新卡(10-04 放开写入):Research notes 的历史里有一条 manage_harness 回执 → 回复下出卡。
+// 回执的 rev 就是上面编辑史的最后一行(h-cite v1→v2)→ 可撤;撤销请求必须原样带回 expectRev;撤完卡片变「已撤销」、不再给撤销键。
+const harnessChange = { rev: '7c1d2f3a-9b4e-4c6d-8a1f-2b3c4d5e6f70', at: '2026-09-16T09:30:00Z', agent: 'research', entryId: 'h-cite', action: 'revise', kind: 'recipe', title: 'Cite before concluding', body: 'Quote the primary source before concluding.', evidence: 'corrected twice', version: 2 }
+const soloMessages = [{ id: 'solo-user', session_id: solo.id, role: 'user', content: 'Quote sources before you conclude', timestamp: 1 }, { id: 'solo-answer', session_id: solo.id, role: 'model', content: 'Noted in my working notes.', agent_slug: 'research', timestamp: 2, tool_calls: [{ id: 'harness-1', type: 'function', function: { name: 'manage_harness', arguments: '{"action":"upsert","id":"h-cite"}' } }], tool_results: [{ tool_call_id: 'harness-1', content: JSON.stringify({ kind: 'harness_update', change: harnessChange, message: 'Applied' }), isError: false }] }]
+const harnessUndoRevs = []
 // Historian 自动档的提名(收件箱原始行):面板要显示「1 条待复盘候选」且不许把 `[日期 s:会话]` 内部记号渲出来;「进化」标签带角标。
 const harnessCandidates = ['- [2026-09-17 s:abcd1234] Check the marker file before answering']
 const harnessRollbacks = []
@@ -109,7 +118,14 @@ async function run() {
       if (sid === solo.id) { historianPolls.solo++; return { running: false, records: [], activity: nominate ? [nomination('act-hc-solo', solo.id)] : [] } }
       return { running: false, records: [], activity: [] }
     }
-    if (p === '/agent/agents/research/harness/rollback' && method === 'POST') { harnessRollbacks.push((await body()).id); return { ok: true, entry: harnessOld } }
+    if (p === '/agent/agents/research/harness/rollback' && method === 'POST') {
+      const b = await body()
+      if (!b.expectRev) { harnessRollbacks.push(b.id); return { ok: true, entry: harnessOld } }
+      harnessUndoRevs.push(b.expectRev)
+      harnessJournal.push({ ts: '2026-09-16T09:40:00Z', rev: '00000000-0000-4000-8000-000000000001', action: 'rollback', entryId: b.id, before: harnessEntries[0], after: { ...harnessEntries[0], version: 1 } })
+      return { ok: true, entry: { ...harnessEntries[0], version: 1 } }
+    }
+    if (p === `/agent/sessions/${solo.id}/messages`) return { messages: soloMessages }
     if (p.endsWith('/detail')) return { session: child }
     if (p.endsWith('/background')) return { background: [{ sessionId: child.id, kind: 'teamwork', title: child.title, agentSlug: 'research', runId: null, runStatus: null }] }
     if (p === `/agent/sessions/${child.id}/messages`) return { messages: childMessages }
@@ -349,8 +365,15 @@ async function run() {
     assert.ok(/17/.test(candidateText) && candidateText.endsWith('Check the marker file before answering') && !/2026|s:abcd/.test(candidateText), `A candidate shows its date and text only: ${candidateText}`)
     assert.equal(await evolution.locator('.harness-kind').first().textContent(), '做法', 'Kinds render as localized chips, not raw ids')
     assert.equal(await evolution.getByText(/Invalid Date|T\d\d:\d\d/).count(), 0, 'Dates are localized; a hand-edited date falls back to its raw text')
-    assert.equal(await evolution.locator('[data-harness-entry="h-scope"] .harness-meta').textContent(), 'v1 · last week')
-    assert.ok((await evolution.textContent()).includes('写入要经审批'), 'The panel itself explains that working notes need approval')
+    assert.equal(await evolution.locator('[data-harness-entry="h-scope"] .harness-meta').textContent(), 'v1 · last week · 后台复盘写入', 'A note adopted by the background review says so')
+    assert.equal(await evolution.locator('[data-harness-entry="h-cite"] [data-harness-by]').count(), 0, 'A note the agent wrote itself carries no source label')
+    const shelf = evolution.locator('[data-harness-entry="h-shelf"]')
+    assert.equal(await shelf.locator('.harness-kind').textContent(), '装备', 'An equip entry carries its own localized chip')
+    assert.equal(await shelf.locator('[data-harness-by="muse"]').textContent(), ' · Muse 代为收起', 'Equipment Muse shelved after a review says so')
+    assert.ok((await evolution.locator('.harness-history').textContent()).includes('后台复盘写入') && (await evolution.locator('.harness-history').textContent()).includes('Muse 代为收起'), 'The edit history names the source too')
+    assert.equal(await shelf.locator('[data-harness-shelved="tools"]').textContent(), '收起的工具：sketch、display_file')
+    assert.equal(await shelf.locator('[data-harness-shelved="skills"]').textContent(), '收起的技能：local:pptx')
+    assert.ok((await evolution.textContent()).includes('写入立即生效') && !(await evolution.textContent()).includes('要经审批'), 'The panel itself explains that the agent maintains its notes and that updates can be undone')
     assert.equal(await compact.locator('.agent-profile-save').evaluate((el) => getComputedStyle(el).display), 'none', 'Growth has its own save paths: the empty save dock takes no space')
     win.once('dialog', (d) => d.accept())
     await evolution.getByRole('button', { name: '恢复', exact: true }).click()
@@ -368,6 +391,25 @@ async function run() {
     await win.waitForTimeout(220)
     await win.locator('[data-tangu-details]').screenshot({ path: path.join(home, 'compact-evolution.png') })
     console.log('PASS evolution tab: localized notes, restore, in-place /refine and reload after the run')
+    // 对话里的更新卡:回执还原出卡片(Agent 名 · 修订 · 已生效 + 标题 / 正文 / 依据)→ 撤销带上回执的 rev → 变「已撤销」且撤销键消失;进化面板跟着重读。
+    const noteCard = win.locator(`[data-harness-update="${harnessChange.rev}"]`)
+    await noteCard.waitFor()
+    await win.locator('[data-harness-updates]').getByText('工作笔记已更新', { exact: true }).waitFor()
+    await win.locator(`[data-harness-update="${harnessChange.rev}"][data-harness-state="current"]`).waitFor()
+    assert.ok(/Research Lead · 修订 · 已生效/.test(await noteCard.locator('.human-scope').textContent()), `The card names the agent, the action and that it is live: ${await noteCard.locator('.human-scope').textContent()}`)
+    assert.ok((await noteCard.textContent()).includes('Cite before concluding') && (await noteCard.textContent()).includes('Quote the primary source before concluding.'))
+    await win.locator('[data-harness-updates]').scrollIntoViewIfNeeded()
+    await win.locator('[data-harness-updates]').screenshot({ path: path.join(home, 'harness-update-card.png') })
+    const readsBeforeUndo = harnessReads
+    await noteCard.getByRole('button', { name: '撤销本次更新' }).click()
+    await win.locator(`[data-harness-update="${harnessChange.rev}"][data-harness-state="undone"]`).waitFor()
+    assert.deepEqual(harnessUndoRevs, [harnessChange.rev], 'Undo carries the receipt identity so the engine can refuse a stale card')
+    assert.deepEqual(harnessRollbacks, ['h-old'], 'The card undo is not the unconditional panel rollback')
+    assert.ok((await noteCard.locator('.human-scope').textContent()).includes('本次更新已撤销'))
+    assert.equal(await noteCard.getByRole('button', { name: '撤销本次更新' }).count(), 0, 'An undone update offers no second undo')
+    assert.ok(harnessReads > readsBeforeUndo + 1, `The card and the open Evolution panel both reload after an undo (reads ${readsBeforeUndo} → ${harnessReads})`)
+    await win.locator('[data-harness-updates]').screenshot({ path: path.join(home, 'harness-update-card-undone.png') })
+    console.log('PASS working-note update card: restored from the receipt, undo carries its rev, undone state')
     // 提名提醒:活动流第 3 次轮询才出现那条 harness_candidates → 弹一张卡(带会话名);点「复盘」发 /refine 到该会话;同一条不再弹第二张。
     assert.ok(historianPolls.solo >= 1, `HistorianStatus already polled this session before the nomination lands (polls=${historianPolls.solo})`)
     nominate = true

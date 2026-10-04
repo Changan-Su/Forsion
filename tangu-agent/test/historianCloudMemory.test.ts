@@ -30,6 +30,7 @@ let charged: number[];
 let usage: string[];
 let quotaOk: boolean;
 let reply: string;
+let beforeReply: (() => Promise<void>) | undefined;
 let seq = 0;
 let sid = '';
 
@@ -54,6 +55,7 @@ beforeEach(async () => {
   db = local.db;
   db.exec(toSqliteDDL(STANDALONE_SCHEMA));
   mem = []; logs = []; prompts = []; models = []; charged = []; usage = []; quotaOk = true;
+  beforeReply = undefined;
   reply = JSON.stringify({
     title: '新标题',
     log: '确定团队只用 TypeScript',
@@ -66,7 +68,7 @@ beforeEach(async () => {
       llm: {
         resolveModelAndKey: async (id: string) => { models.push(id); return { model: { name: id, provider: 'p' }, apiKey: 'k', baseUrl: 'b', apiModelId: id }; },
         buildProviderPayload: async (p: any) => { prompts.push(p.messages.at(-1).content); return p; },
-        streamProviderCompletion: async () => ({ content: reply, usage: { prompt_tokens: 100, completion_tokens: 10 } }),
+        streamProviderCompletion: async () => { await beforeReply?.(); return { content: reply, usage: { prompt_tokens: 100, completion_tokens: 10 } }; },
       },
       users: { getUserById: async () => ({ username: 'alice' }) },
       models: { listModelsForProject: async (app: string) => ({ models: [], defaultModelId: 'chat-default', backgroundModelId: app === 'tangu' ? 'tangu-bg' : 'other-bg' }) },
@@ -91,6 +93,27 @@ beforeEach(async () => {
 afterEach(() => { stopHistorian(); db.close(); });
 
 describe('cloud per-round Historian (tangu sessions)', () => {
+  it('defaults to choosing an emoji; keeps a manual icon set while the model runs', async () => {
+    reply = JSON.stringify({ title: '新标题', emoji: '🔬', log: '', memory: [] });
+    await finishRun();
+    expect((await query<any[]>(`SELECT emoji FROM chat_sessions WHERE id = ?`, [sid]))[0].emoji).toBe('🔬');
+    sid = await newSession();
+    beforeReply = async () => { await query(`UPDATE chat_sessions SET emoji = '🎨' WHERE id = ?`, [sid]); };
+    await finishRun();
+    expect((await query<any[]>(`SELECT emoji FROM chat_sessions WHERE id = ?`, [sid]))[0].emoji).toBe('🎨');
+  });
+  it('opt-out blocks unsolicited emojis and survives reload', async () => {
+    await saveUserHistorianConfig(U, { autoEmoji: false });
+    reply = JSON.stringify({ title: '新标题', emoji: '🔬', log: '', memory: [] });
+    await finishRun();
+    expect((await query<any[]>(`SELECT emoji FROM chat_sessions WHERE id = ?`, [sid]))[0].emoji).toBeNull();
+  });
+  it('turning auto emoji off while the model runs prevents its write', async () => {
+    reply = JSON.stringify({ title: '新标题', emoji: '🔬', log: '', memory: [] });
+    beforeReply = async () => { await saveUserHistorianConfig(U, { autoEmoji: false }); };
+    await finishRun();
+    expect((await query<any[]>(`SELECT emoji FROM chat_sessions WHERE id = ?`, [sid]))[0].emoji).toBeNull();
+  });
   it('fires on rounds 1 and 3 (desktop defaults), not 2; charges the user; memory gated into the session agent scope', async () => {
     await finishRun();
     expect(models).toEqual(['tangu-bg']); // 模型跟随 tangu 的辅助槽(不是网关基线 app 的)
@@ -186,17 +209,18 @@ describe('GET/POST /agent/special/config on cloud (per-user)', () => {
     return { status: r.status, body: await r.json() };
   };
 
-  it('returns desktop defaults with cloud:true; POST keeps only the four historian keys', async () => {
+  it('returns desktop defaults with cloud:true; POST keeps the user-configurable historian keys', async () => {
     const g = await call('GET');
     expect(g.status).toBe(200);
     expect(g.body.cloud).toBe(true);
-    expect(g.body.config.historian).toMatchObject({ enabled: true, modelId: '', everyRounds: 3, firstRoundTrigger: true });
+    expect(g.body.config.historian).toMatchObject({ enabled: true, modelId: '', everyRounds: 3, firstRoundTrigger: true, autoEmoji: true });
     expect(g.body.config.muse.enabled).toBe(false);
     // 旧版前端整包 POST:muse / mode / prompt 一律忽略
-    const p = await call('POST', { historian: { everyRounds: 5, mode: 'fork', prompt: 'x' }, muse: { enabled: true } });
+    const p = await call('POST', { historian: { everyRounds: 5, autoEmoji: false, mode: 'fork', prompt: 'x' }, muse: { enabled: true } });
     expect(p.status).toBe(200);
     expect(p.body.config.historian).toMatchObject({ everyRounds: 5, mode: 'independent' });
     expect(p.body.config.muse.enabled).toBe(false);
     expect((await call('GET')).body.config.historian.everyRounds).toBe(5);
+    expect((await call('GET')).body.config.historian.autoEmoji).toBe(false);
   });
 });

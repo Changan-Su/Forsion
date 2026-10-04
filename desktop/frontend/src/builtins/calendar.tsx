@@ -59,6 +59,7 @@ export const calendarSpace: SpaceDefinition = {
   icon: CalendarDays,
   sidebarDefaults: CALENDAR_SIDE_VIEWS,
   listFirst: false, // 手机上先看日历:左栏是待办,不是「点开一项进主区」的列表
+  pinned: { main: [{ type: 'calendar', params: {} }], left: [{ type: 'todo-list', params: {} }] },
   build() {
     ws().setSidebarDefaults(CALENDAR_SIDE_VIEWS)
     ws().openView('calendar', {}, 'main')

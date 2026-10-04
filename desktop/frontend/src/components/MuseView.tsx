@@ -21,6 +21,7 @@ import { parseCalDate } from '@amadeus-shared/db/calDate'
 import { useAutomation } from '../stores/automationStore'
 import { deleteWithUndo, isPendingDelete } from '../views/automation/automationListSource'
 import { homeTarget, targetForSession } from '../services/engine/targets'
+import { previewNeedsScrollHint } from './approvalText'
 
 registerMessages({
   'special.muse.sleeping': { zh: '休眠至 {time}', en: 'Sleeping until {time}' },
@@ -203,7 +204,9 @@ export const MuseView: React.FC<{
           {approvals.map((a) => (
             <div key={a.id} className="file-row" style={{ cursor: 'default', alignItems: 'flex-start' }}>
               <span className="file-name" style={{ flex: 1, whiteSpace: 'normal' }}>
-                <b style={{ fontFamily: 'var(--font-mono, monospace)', fontSize: 'var(--ui-font-meta, 12px)' }}>{a.preview}</b>
+                {/* 批准 = 引擎按原参数直接执行:预览必须多行原样(`# 注释\nrm` 折成一行会像注释),超长给滚动与提示 */}
+                <b style={{ display: 'block', fontFamily: 'var(--font-mono, monospace)', fontSize: 'var(--ui-font-meta, 12px)', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', maxHeight: 240, overflow: 'auto' }}>{a.preview}</b>
+                {previewNeedsScrollHint(a.preview) && <div className="hint">{t('approval.previewScrollHint')}</div>}
                 <div style={{ color: 'var(--text-muted)', fontSize: 'var(--ui-font-meta, 12px)', marginTop: 2 }}>
                   {a.tool}{a.cwd ? ` · ${a.cwd}` : ''} · {String(a.created_at).replace('T', ' ').slice(5, 16)}
                   {a.note && <div>{t('special.muse.approvalNote', { note: a.note })}</div>}
@@ -218,8 +221,8 @@ export const MuseView: React.FC<{
         </div>
       )}
 
-      {/* 当前思考 */}
-      <div className="field">
+      {/* 当前思考。Muse 没开(与顶上状态药丸同一判据 !status?.enabled)整格不画:「未开启」药丸已经说过,关掉后残留的旧思考也不该冒充现状(10-02 用户拍板 v7)。 */}
+      {status?.enabled && <div className="field">
         <label>{t('special.muse.thinking')}</label>
         <div style={{
           fontSize: 'var(--ui-font-body, 13px)', lineHeight: 1.6, whiteSpace: 'pre-wrap', maxHeight: 220, overflowY: 'auto',
@@ -227,7 +230,7 @@ export const MuseView: React.FC<{
         }}>
           {thinking || <span className="hint">{status?.enabled ? '…' : t('special.muse.disabled')}</span>}
         </div>
-      </div>
+      </div>}
 
       {/* 追踪中:Muse 自己 SCHEDULE.db 的 auto 条目(任务卡「交给 Muse 追踪」/ Muse 自己排的后续),到期回灌它的周期;Calendar 同源可见。 */}
       <div className="field">

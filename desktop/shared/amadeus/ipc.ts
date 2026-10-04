@@ -80,6 +80,10 @@ export const IPC = {
   listPageProps: 'vault:page-props',
   renamePageFile: 'page:rename-file',
   renameDbFile: 'db:rename-file',
+  /** 页面版本历史(评审 C-20):快照存在库外(主进程 tanguDataDir()/amadeus-history),只有桌面主进程实现。 */
+  listPageHistory: 'page:history-list',
+  readPageHistory: 'page:history-read',
+  restorePageHistory: 'page:history-restore',
 } as const
 
 /** Plugin API version the host implements. Manifests without apiVersion are treated as 1 (back-compat). */
@@ -254,6 +258,46 @@ export function sanitizeEvents(raw: unknown): PluginEventDecl[] | undefined {
   return out.length ? out : undefined
 }
 
+/** A Forsion plugin this plugin cannot run without (manifest `requiresPlugins`, 2026-10-02+).
+ *  Satisfied only while the prerequisite is installed, not blocked, new enough **and running** —
+ *  a plugin whose prerequisites are missing stays installed but never activates; when a prerequisite
+ *  goes away its dependents pause and resume on their own once it is back (see pluginDeps.ts). */
+export interface PluginDependency {
+  /** The prerequisite's plugin id (its manifest id, not the market slug). */
+  id: string
+  /** Lowest acceptable version, compared with cmpVersion (e.g. "1.2.0"). */
+  minVersion?: string
+  /** Market install slug (install_slug ≠ id). Present → the host offers a one-click install. */
+  market?: string
+  /** Display-name fallback while the prerequisite isn't installed (the host only knows its id then). */
+  name?: string
+}
+
+/** Validate + cap a raw manifest `requiresPlugins` value. Accepts `"id"` shorthands and objects;
+ *  malformed entries drop silently (a broken dependency list must not block the plugin from being listed).
+ *  A plugin can't require itself; duplicate ids keep the first entry. */
+export function sanitizeRequiresPlugins(raw: unknown, selfId?: string): PluginDependency[] | undefined {
+  if (!Array.isArray(raw)) return undefined
+  const out: PluginDependency[] = []
+  const seen = new Set<string>()
+  for (const it of raw.slice(0, 32)) {
+    if (out.length >= 8) break
+    const o = typeof it === 'string' ? { id: it } : it && typeof it === 'object' ? (it as Record<string, unknown>) : null
+    const id = typeof o?.id === 'string' ? o.id.trim() : ''
+    if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(id) || id === selfId || seen.has(id)) continue
+    seen.add(id)
+    const dep: PluginDependency = { id }
+    const minVersion = str(o?.minVersion, 32)
+    if (minVersion && /^v?\d+(\.\d+){0,3}$/.test(minVersion)) dep.minVersion = minVersion
+    const market = str(o?.market, 64)
+    if (market && /^[a-z0-9][a-z0-9-]*$/.test(market)) dep.market = market
+    const name = str(o?.name, 80)
+    if (name) dep.name = name
+    out.push(dep)
+  }
+  return out.length ? out : undefined
+}
+
 /** Engine-side / cross-domain content embedded in a Forsion plugin folder (捆绑包 bundle)。
  *  识别全靠标志文件(tangu-plugin.json / config.toml / SKILL.md / space.json),manifest 无新增字段。
  *  引擎原地加载 tangu-plugins/ 与 skills/、播种 agents/(见 tangu-agent src/plugins/bundles.ts);
@@ -294,6 +338,8 @@ export interface ExternalPluginSource {
   minAppVersion?: string
   /** Companion app this plugin needs (manifest.requiresApp); only ids in the host KNOWN_APPS table get install UI. */
   requiresApp?: string
+  /** Prerequisite Forsion plugins (manifest `requiresPlugins`, sanitized by the main process). */
+  requiresPlugins?: PluginDependency[]
   /** 插件声明要用的宿主敏感能力(manifest `capabilities`,白名单外的一律丢)。宿主只给声明过的
    *  插件注入对应的 ctx 接缝——没声明 = 拿不到,不是「拿到了但没用」。目前只有 'activeWindow'。 */
   capabilities?: PluginCapability[]
@@ -485,6 +531,13 @@ export interface PathGoneEvent {
   root: string
 }
 
+/** 页面版本历史的一份快照(评审 C-20)。id 不透明(只拿来读 / 恢复);at = 快照时刻(毫秒);size = UTF-8 字节数。 */
+export interface PageHistoryEntry {
+  id: string
+  at: number
+  size: number
+}
+
 /** 回收站条目:name = .trash 内扁平文件名;original = 删除前的 vault 相对路径。 */
 export interface TrashEntry {
   name: string
@@ -634,6 +687,15 @@ export interface AmadeusApi {
   deleteTrashEntry?(name: string): Promise<void>
   /** 清空回收站。 */
   emptyTrash?(): Promise<void>
+  /** 页面版本历史(评审 C-20,可选:只有桌面主进程实现;缺位端 ⋯ 菜单不出「版本历史」,判据单源 amadeus/lib/hostCaps)。
+   *  快照由主进程在笔记的比对交换写里用手里的旧文顺手留(同一篇按时间窗最多一份),存在库外,不往智库里写任何东西。
+   *  列出 = 新 → 旧。 */
+  listPageHistory?(pagePath: string): Promise<PageHistoryEntry[]>
+  /** 读一份快照的原文;不在(已被淘汰)→ null。 */
+  readPageHistory?(pagePath: string, id: string): Promise<string | null>
+  /** 把笔记恢复成某份快照:base = 调用方读到的现文 `textFingerprint`。主进程在同篇写锁内比对 → 先给现文补一份快照
+   *  (补不成就不恢复)→ 原子写回;语义同带 base 的 writeTextFile(对不上 / 文件不在 = 不写,回 ok:false)。 */
+  restorePageHistory?(pagePath: string, id: string, base: string): Promise<TextWriteResult>
   /** 页面 emoji 图标表(fm icon: 键;可选:桌面索引提供,其余端优雅缺位)。 */
   pageIcons?(): Promise<Record<string, string>>
   /** fm `aliases:` 表(path → 别名;只含设置了的)。`[[` 补全用(L-13);可选:缺位端补全不含别名。 */

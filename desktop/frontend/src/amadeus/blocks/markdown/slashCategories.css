@@ -1,0 +1,37 @@
+.slash-category-tabs {
+  display: flex;
+  flex-shrink: 0;
+  gap: 3px;
+  margin: 4px 6px 8px;
+  padding: 3px;
+  border-radius: var(--radius-pill);
+  background: var(--overlay-light);
+}
+.slash-menu .slash-category-tab {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  border-radius: var(--radius-pill);
+  padding: 4px 8px;
+  background: transparent;
+  color: var(--text-sec);
+  font-family: var(--font-ui);
+  font-size: var(--menu-text-size, var(--ui-font-meta));
+  line-height: var(--ui-line-meta);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.slash-menu .slash-category-tab[aria-selected="true"] {
+  background: var(--menu-hover);
+  color: var(--text);
+}
+.slash-menu .slash-list {
+  display: flex;
+  flex-direction: column;
+  /* The shell keeps its height across categories (SlashMenu's height floor); a short list must push the footer down. */
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+.slash-menu .slash-scroll { min-height: 0; }
+.slash-menu .slash-foot { flex-shrink: 0; flex-wrap: wrap; }

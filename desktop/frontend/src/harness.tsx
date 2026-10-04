@@ -29,7 +29,7 @@ import { DeskCompanionHost } from './views/chat2/DeskCompanionHost'
 import { applyTheme as applyRealTheme } from './theme/loader'
 import { useTheme } from './stores/themeStore'
 import { resolveInitialLang, resolveInitialSkin, resolveInitialBg } from './theme/registry'
-import { HostLocaleProvider, LocaleProvider, setLocaleGlobal } from './i18n'
+import { HostLocaleProvider, LocaleProvider, setLocaleGlobal, translate, useI18n } from './i18n'
 import { Square } from 'lucide-react'
 import './i18n.generated'
 import { ModelPill } from './components/ModelPill'
@@ -43,12 +43,17 @@ import '@lcl/engine/engine.css'
 import { usePageStore, pageStoreFor, remapScopePaths, PageScopeCtx, onNotePathGone } from './amadeus/store/pageStore'
 import { onNoteLockChange, readNoteLocked } from './amadeus/unified/viewMemory'
 import { switchNoteLock } from './amadeus/unified/noteLock'
+import { PageStyleMenuItems, pageStyleAttrs, pageStyleEntries, setNotePageStyle, useNotePageStyle } from './amadeus/unified/pageStyle'
+import { PageHistoryHost } from './amadeus/unified/pageHistory'
+import { canPageHistory } from './amadeus/lib/hostCaps'
+import { OverlayAt } from '@lcl/engine'
 import { NoteFloatingToc } from './amadeus/unified/NoteFloatingToc'
-import { NoteTabIcon } from './amadeusViews'
+import { AmxMobileBar, NoteTabIcon, pageStyleSheetActions } from './amadeusViews'
 import { OutlineView, PluginListBody } from './views/WorkspaceView'
 import type { ListItem, ListSourceContribution, TableSpec } from '@amadeus/plugins/types'
 import { SidebarRow } from './components/SidebarRow'
-import { FileText as FileTextIcon } from 'lucide-react'
+import { FileText as FileTextIcon, Copy as CopyIcon } from 'lucide-react'
+import { noteMarkdownBody } from './amadeus/unified/copyMarkdown'
 import { QuickFind, useQuickFind } from './quickFind'
 import { treeRefBlocks } from './amadeus/unified/treeRefDrop'
 import { VIEW_FILE_MATCH } from './viewFileMatch'
@@ -564,6 +569,9 @@ if (new URLSearchParams(location.search).has('dock')) {
     mounts: {} as Record<string, number>,
     mainW: () => 0,
     toggle: (side: 'left' | 'right' | 'bottom') => useWorkspace.getState().toggleSidebar(side),
+    // 底部横跨哪几列(SpaceDefinition.bottomSpan 落到 store 的那一份),bottom-panel.check 的拓扑段用
+    span: (bottomSpan: 'right' | 'left' | 'full' | 'main') => useWorkspace.setState({ bottomSpan }),
+    realign: () => useWorkspace.getState().realignRegions(),
     extend: (side: 'right' | 'bottom') => presentDockedExtension({ id: 'region-probe', title: 'Region probe', side, mount() {} }, () => {}),
     // 底部面板(scripts/bottom-panel.check.cjs):量的是**高**,且要能读到「主区那一列」的宽 ——
     // 底部只该落在主区下方,不能横跨左右栏,这条只有真 Dockview 的几何能证。
@@ -709,7 +717,7 @@ if (new URLSearchParams(location.search).has('dock')) {
   const toggle = { on: false }
   ;(window as unknown as { __rbToggle: typeof toggle }).__rbToggle = toggle
   addCommand({ id: 'h-toggle', title: 'Harness toggle', checked: () => toggle.on, run: () => { toggle.on = !toggle.on } })
-  // &unit:Unit 切换器(head 常驻件)上架。stub 最小 host 面(getConfig/setConfig/名册/配对/
+  // &unit:Unit 切换器(命令区那枚,同生产 side:'bottom')上架。stub 最小 host 面(getConfig/setConfig/名册/配对/
   // openExternal 记账)+ amadeusSync 布尔门 —— 这支仪器验切换器的 DOM/开合/两态几何与「设备行 =
   // 打开对方页面」的 URL 组装,不验真隧道/真配对(那半在 server relay.test.ts 与 electron/unitWeb.test.ts)。
   // 见 scripts/unit-switcher.check.cjs。
@@ -795,7 +803,7 @@ if (new URLSearchParams(location.search).has('dock')) {
     w.amadeusSync = { get: async () => ({ state: 'idle', side: 'local' }), onStatus: () => () => {} }
     void Promise.all([import('./components/UnitSwitcher'), import('./stores/appStore')]).then(([{ UnitSwitcher, UnitRemoteSurface }, { useApp }]) => {
       useApp.setState({ desktopConfig: { ...cfg } as never })
-      addRibbonIcon({ id: 'rb-unit', side: 'head', component: UnitSwitcher })
+      addRibbonIcon({ id: 'rb-unit', side: 'bottom', component: UnitSwitcher })
       // 远程面(设备行「整个主区切过去」)也挂上:裸 harness 无 .shell-work → 组件原地渲染,CSS 退化 fixed 覆盖
       const rsHost = document.createElement('div')
       document.body.appendChild(rsHost)
@@ -1218,7 +1226,7 @@ if (new URLSearchParams(location.search).has('dock')) {
   // 那两条正是把 `position:fixed` 弹层锚歪并裁掉的元凶,不套上就恒绿。见 scripts/tablemount.check.cjs。
   const dark = new URLSearchParams(location.search).has('dark')
   applyRealTheme(resolveInitialLang(), resolveInitialSkin(), resolveInitialBg(), dark ? 'dark' : 'light')
-  useTheme.setState({ mode: dark ? 'dark' : 'light' }) // 表面读的是 store 的 mode,不是文档属性
+  useTheme.setState({ mode: dark ? 'dark' : 'light', modePref: dark ? 'dark' : 'light' }) // 表面读的是 store 的 mode,不是文档属性
   const rootEl = document.getElementById('root')!
   rootEl.style.cssText = 'position:fixed;inset:0;overflow:auto;padding:32px 24px'
   const skin = document.createElement('div')
@@ -1720,6 +1728,23 @@ if (new URLSearchParams(location.search).has('dock')) {
   const casRejects: Array<{ path: string; text: string; current: string | null }> = []
   const listeners = new Set<(p: string) => void>()
   let switchUPage: ((path: string) => void) | null = null
+  // `&uhist`:页面版本历史(评审 C-20)的内存版桥,口径同主进程 fs/pageHistory:CAS 写用盘上旧文留快照、时间窗内最多一份、
+  // 与最近一份相同不存;恢复 = 比对 base → 强制补快照 → 写回。`__upage.historyWindowMs` 调时间窗(缺省 5 分钟),
+  // `__upage.history`(路径 → 旧→新数组)可直接塞快照。没开 = 桥上没有这组成员 → ⋯ 里不出「版本历史」(门控同 web / 移动端)。
+  // 仪器:scripts/page-history.check.cjs。
+  const uhist = new URLSearchParams(location.search).has('uhist')
+  const history = new Map<string, Array<{ id: string; at: number; size: number; text: string }>>()
+  let histSeq = 0
+  const snapshotH = (p: string, text: string, force = false): void => {
+    const list = history.get(p) ?? []
+    const last = list[list.length - 1]
+    const at = Date.now()
+    const win = (window as unknown as { __upage?: { historyWindowMs?: number } }).__upage?.historyWindowMs ?? 5 * 60_000
+    if (last && last.text === text) return
+    if (!force && last && at - last.at < win) return
+    list.push({ id: `${at.toString(36)}-${(++histSeq).toString(16).padStart(8, '0')}`, at, size: new TextEncoder().encode(text).length, text })
+    history.set(p, list)
+  }
   Object.assign(g.amadeus ?? (g.amadeus = {}), {
     readTextFile: (p: string) => Promise.resolve(vault.get(p) ?? null),
     // 标签 / 别名面(评审 L-14 `#` 补全、L-13 `[[` 别名候选):用与主进程索引同一份解析(正文 #标签 + fm tags / aliases),
@@ -1773,6 +1798,7 @@ if (new URLSearchParams(location.search).has('dock')) {
         casRejects.push({ path: p, text, current: cur })
         return Promise.resolve({ ok: false, current: cur })
       }
+      if (uhist && typeof opts?.base === 'string' && cur != null && cur !== text && p.endsWith('.md')) snapshotH(p, cur)
       vault.set(p, text)
       writes.push({ path: p, text })
       // `__upage.writeLagMs = n`:盘先落、ack 晚 n ms 才回(web PUT / 网络盘的形态)—— 回灌在这段里读到的是
@@ -1817,6 +1843,22 @@ if (new URLSearchParams(location.search).has('dock')) {
       }
       return Promise.resolve()
     },
+    ...(uhist ? {
+      listPageHistory: (p: string) => Promise.resolve([...(history.get(p) ?? [])].reverse().map(({ id, at, size }) => ({ id, at, size }))),
+      readPageHistory: (p: string, id: string) => Promise.resolve(history.get(p)?.find((e) => e.id === id)?.text ?? null),
+      restorePageHistory: async (p: string, id: string, base: string) => {
+        const cur = vault.get(p)
+        if (cur == null) return { ok: false as const, current: null }
+        if (textFingerprint(cur) !== base) return { ok: false as const, current: cur }
+        const v = history.get(p)?.find((e) => e.id === id)
+        if (!v) throw new Error('This version is no longer available')
+        if (v.text === cur) return { ok: true as const }
+        snapshotH(p, cur, true)
+        vault.set(p, v.text)
+        writes.push({ path: p, text: v.text })
+        return { ok: true as const }
+      },
+    } : {}),
     renamePageFile: (p: string, next: string) => {
       const dir = p.split('/').slice(0, -1).join('/')
       const np = (dir ? dir + '/' : '') + next + '.md'
@@ -1839,6 +1881,7 @@ if (new URLSearchParams(location.search).has('dock')) {
     vault,
     writes,
     casRejects,
+    history,
     failWrites: 0,
     casDelayMs: 0,
     writeLagMs: 0,
@@ -1908,8 +1951,21 @@ if (new URLSearchParams(location.search).has('dock')) {
       const d = routeNote(path, raw, true, new Date().toISOString())
       return d.editor === 'unified' ? { path, initial: d.initial, diskRaw: d.diskRaw } : { path, initial: raw, block: true }
     }
-    function UPageHost({ file, probe = upageProbe }: { file?: string; probe?: Record<string, unknown> }): React.ReactElement {
+    function UPageHost({ file, probe = upageProbe, onPath }: { file?: string; probe?: Record<string, unknown>; onPath?: (path: string) => void }): React.ReactElement {
       const [st, setSt] = useState<{ path: string; initial: string; diskRaw?: string; block?: true }>(() => routeOf(file ?? 'Unified.md', vault.get(file ?? 'Unified.md') ?? seedMd))
+      // 页面排版选项(评审 C-21)的菜单一半,镜像 amadeusViews:顶栏 ⋯ 开的是生产同一个 PageStyleMenuItems(入口集合 pageStyleEntries);
+      // 属性一半在 UPane(= 生产 EditorScope)上。库根 null(台架无库)。仪器:scripts/page-style.check.cjs。
+      useEffect(() => { onPath?.(st.path) }, [st.path]) // eslint-disable-line react-hooks/exhaustive-deps
+      const pageStyle = useNotePageStyle(null, st.path)
+      const [styleMenu, setStyleMenu] = useState<{ x: number; y: number } | null>(null)
+      const [historyOpen, setHistoryOpen] = useState(false)
+      const { t: histT } = useI18n()
+      useEffect(() => {
+        if (!styleMenu) return
+        const close = (): void => setStyleMenu(null)
+        window.addEventListener('click', close)
+        return () => window.removeEventListener('click', close)
+      }, [styleMenu])
       useEffect(() => {
         // `&udual` 的第二实例不接 switchFile(那条只驱动主实例);它照生产 amadeusViews 的样子听「路径没了」广播改指
         // (别处改名 / 本端另一个标签行内改名 → remapScopePaths → onNotePathGone,评审 G1-02 仪器)。
@@ -1957,9 +2013,26 @@ if (new URLSearchParams(location.search).has('dock')) {
           {barReady && (
             <div className="amx-toolbar">
               <span className={SEG_SLOT} />
-              <button className="amx-mode-btn" type="button">⋯</button>
+              <button className="amx-mode-btn amx-more-btn" type="button" onClick={(e) => {
+                e.stopPropagation()
+                const r = e.currentTarget.getBoundingClientRect()
+                setStyleMenu((cur) => (cur ? null : { x: Math.max(8, Math.min(r.right - 180, window.innerWidth - 196)), y: r.bottom + 4 }))
+              }}>⋯</button>
             </div>
           )}
+          {styleMenu && (
+            <OverlayAt className="ctx-menu" x={styleMenu.x} y={styleMenu.y} onClick={(e) => e.stopPropagation()}>
+              <PageStyleMenuItems entries={pageStyleEntries(pageStyle, (patch) => setNotePageStyle(null, st.path, patch))} />
+              {/* 版本历史(C-20):门控与锁定口径镜像 amadeusViews(canPageHistory;锁定 = 能看不能恢复)。 */}
+              {!st.block && canPageHistory() && <button type="button" data-page-history onClick={() => { setStyleMenu(null); setHistoryOpen(true) }}>{histT('pghist.menu')}</button>}
+              {/* 「复制为 Markdown」(C-24),镜像 amadeusViews 的 ⋯:生产同一个 noteMarkdownBody(仪器 page-style 的 C24)。 */}
+              <div className="ctx-separator" />
+              <button data-copymd onClick={() => { setStyleMenu(null); void noteMarkdownBody(st.path).then((md) => (md == null ? undefined : navigator.clipboard.writeText(md))) }}>
+                <CopyIcon size={13} /> {translate('amxv.menu.copyMd')}
+              </button>
+            </OverlayAt>
+          )}
+          {historyOpen && <PageHistoryHost path={st.path} locked={locked} onClose={() => setHistoryOpen(false)} />}
           {st.block ? <div data-uroute="block" /> : <div
             style={{ display: 'contents' }}
             onDragOver={hostDrop ? (e) => { const ty = Array.from(e.dataTransfer?.types ?? []); if (ty.includes('Files') || ty.includes('application/x-forsion-chatref')) e.preventDefault() } : undefined}
@@ -1983,6 +2056,8 @@ if (new URLSearchParams(location.search).has('dock')) {
             readOnly={new URLSearchParams(location.search).has('uro') || locked}
             onUnlock={locked ? () => { void switchNoteLock(null, st.path, false) } : undefined}
             onRenamed={(np) => setSt({ path: np, initial: vault.get(np) ?? '' })}
+            // 生产由 amadeusViews 收(⋯ 菜单 / 移动端胶囊);台架挂在探针上,仪器经它调「导出 JSON Canvas」(V-19,C107)。
+            onCanvasMode={(s) => { if (probe) probe.canvasSeg = s }}
           /></div>}
           <AskStringHost />{/* 画布元素文字编辑走 askString(双击形状/连线标签);不挂它,仪器测不到弹窗 */}
           <DeleteAssetsHost />{/* 删文件引用块时的「磁盘文件也删吗」;生产由 AmadeusOverlays 挂 */}
@@ -2034,6 +2109,11 @@ if (new URLSearchParams(location.search).has('dock')) {
     //    做成 opt-in 而不是改默认壳:`unified-page` / `unified-columns` 两套仪器也吃 ?upage,
     //    换掉默认纸面宽度会连带动它们的几何。
     const upane = new URLSearchParams(location.search).has('upane')
+    // `&udark`(配 &upane):真 applyTheme 切暗色(token 选择子在 <html> 上,只给壳写 data-mode 只拿到半套变量)。截图自查用。
+    if (upane && new URLSearchParams(location.search).has('udark')) {
+      applyRealTheme(resolveInitialLang(), resolveInitialSkin(), resolveInitialBg(), 'dark')
+      useTheme.setState({ mode: 'dark', modePref: 'dark' }) // 视觉层按 modePref 合成(Space 外观),只写 mode 会被回刷成亮色
+    }
     // 页内查找:生产里浮条挂 Root、由 `find-in-page` 命令(mod+f)开;台架没有 Shell 也没有
     // installEngine,所以这里手动挂条 + 把开条函数露出来给仪器直接调 —— 仪器验的是**查找引擎**
     // (扫描/计数/步进/定位/收尾),热键与命令注册那半在真 Electron 里人工过(见 DESIGN.md §8)。
@@ -2054,10 +2134,26 @@ if (new URLSearchParams(location.search).has('dock')) {
     // `&utoc`(配 &upane):挂生产的笔记浮动目录(与 amadeusViews 同一个 NoteFloatingToc,根 = 滚动的 .amx-pane),评审 C-04。
     function UPane(): React.ReactElement {
       const paneRef = useRef<HTMLDivElement | null>(null)
+      // 页面排版选项(C-21)挂壳上,同生产 EditorScope。`&udark` = 暗色壳(截图自查用)。
+      const [path, setPath] = useState('Unified.md')
+      const pageStyle = useNotePageStyle(null, path)
       return (
-        <div ref={paneRef} className="am-app tangu-lovable amx-pane amx-editor" data-mode="light" data-flat="0" style={{ position: 'fixed', inset: 0 }}>
+        <div ref={paneRef} className="am-app tangu-lovable amx-pane amx-editor" data-mode={new URLSearchParams(location.search).has('udark') ? 'dark' : 'light'} data-flat="0" {...pageStyleAttrs(pageStyle)} style={{ position: 'fixed', inset: 0 }}>
           {new URLSearchParams(location.search).has('utoc') && <NoteFloatingToc host={paneRef} label="toc" scanTrigger="Unified.md" />}
-          <UPageHost />
+          <UPageHost onPath={setPath} />
+          {/* `&umbar`:移动端底栏胶囊 + ⋯ sheet(生产同一个 AmxMobileBar),sheet 里只放页面排版那几行(C-21)。 */}
+          {new URLSearchParams(location.search).has('umbar') && (
+            <AmxMobileBar
+              actions={pageStyleSheetActions(pageStyleEntries(pageStyle, (patch) => setNotePageStyle(null, path, patch)))}
+              onUpload={() => {}}
+              undo={() => {}}
+              redo={() => {}}
+              indent={null}
+              sourceMode={false}
+              onNeedFocus={() => {}}
+              canvas={null}
+            />
+          )}
         </div>
       )
     }

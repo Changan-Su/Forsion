@@ -10,6 +10,9 @@ export interface SpacePanelSpec {
   split?: 'right' | 'down'
   /** Zero-based index of an earlier main item to split. Defaults to the previous item. */
   splitFrom?: number
+  /** 固定 View(main / left / right):该区内始终至少留一个这种视图 —— 关不掉、拖不出本区、不被别的类型顶掉
+   *  (见 engine/pinnedViews.ts)。底部面板不支持。老宿主不认这个键,照旧当普通条目。 */
+  pinned?: boolean
 }
 
 export type MainPanelOpenStep =
@@ -17,10 +20,17 @@ export type MainPanelOpenStep =
   | { panel: SpacePanelSpec; mode: 'tab' }
   | { panel: SpacePanelSpec; mode: 'split'; direction: 'right' | 'down'; from: number }
 
+const BOTTOM_SPANS = ['right', 'left', 'full', 'main'] as const
+
 export interface SpaceSpec {
   id: string
   name: string | { zh?: string; en?: string }
+  /** 图标库里的名字(宿主精选表;不认识 → 方块)。写了 `iconFile` 也照写:老宿主、图读不到时退到它。 */
   icon?: string
+  /** 自绘图标:Space 目录里的一枚图片(裸文件名,`.png` / `.svg`)。插件 Space 自己目录里没有就取插件包根的
+   *  同名文件,所以 `"iconFile": "icon.png"` = 直接用插件图标。PNG 原色显示(方形 64~512px、≤256KB);
+   *  SVG 只取轮廓、颜色跟随主题(≤64KB)。宿主读图,本解析器只保留字段;老宿主不认这个键。 */
+  iconFile?: string
   /** 配方版本(插件/市场包升级时递增)。宿主据此判断「这份配方换过了」→ 丢弃该 Space 的
    *  已保存布局,让新配方真正落地;否则 setActiveSpace 恒走 applyNamed(保存布局优先),
    *  改了 layout 的新版对**用过该 Space 的用户永远不生效**。 */
@@ -28,7 +38,10 @@ export interface SpaceSpec {
   minAppVersion?: string
   /** Explicit compact surface; distinct view type, with a full-panel destination. */
   mini?: { view: SpacePanelSpec; mainView: SpacePanelSpec; name?: string | { zh?: string; en?: string } }
-  layout: { main: SpacePanelSpec[]; left: SpacePanelSpec[]; right: SpacePanelSpec[] }
+  /** `bottom` (optional) docks views into the native bottom panel and opens it, e.g. a video editor's timeline.
+   *  Older hosts ignore it, so a main view that relies on it should feature-detect `ctx.viewLocations`.
+   *  `bottomSpan` (optional) = which columns the bottom panel spans (SpaceDefinition.bottomSpan; default 'right'). */
+  layout: { main: SpacePanelSpec[]; left: SpacePanelSpec[]; right: SpacePanelSpec[]; bottom?: SpacePanelSpec[]; bottomSpan?: (typeof BOTTOM_SPANS)[number] }
   requires?: { views?: string[]; plugin?: string | null }
 }
 
@@ -75,11 +88,16 @@ function panelList(v: unknown, field: string): SpacePanelSpec[] | string {
     if (splitFrom !== undefined && (field !== 'main' || !split || !Number.isInteger(splitFrom) || (splitFrom as number) < 0 || (splitFrom as number) >= out.length)) {
       return `layout.${field} 的 splitFrom 必须指向此前的 main 条目(从 0 开始),且同时声明 split`
     }
+    const pinned = (it as { pinned?: unknown }).pinned
+    if (pinned !== undefined && (typeof pinned !== 'boolean' || (pinned && field === 'bottom'))) {
+      return `layout.${field} 的 pinned 必须是布尔值,且底部面板不支持固定`
+    }
     out.push({
       type: (it as { type: string }).type,
       ...(params ? { params: params as Record<string, unknown> } : {}),
       ...(split ? { split } : {}),
       ...(splitFrom !== undefined ? { splitFrom: splitFrom as number } : {}),
+      ...(pinned ? { pinned: true } : {}),
     })
   }
   return out
@@ -123,11 +141,15 @@ export function parseSpaceJson(raw: string, opts: ParseOpts): ParseResult {
   const main = panelList(lay.main, 'main')
   const left = panelList(lay.left, 'left')
   const right = panelList(lay.right, 'right')
-  for (const r of [main, left, right]) if (typeof r === 'string') return { ok: false, error: r }
+  const bottom = panelList(lay.bottom, 'bottom')
+  for (const r of [main, left, right, bottom]) if (typeof r === 'string') return { ok: false, error: r }
   if (!(main as SpacePanelSpec[]).length) return { ok: false, error: 'layout.main 至少要有一个视图' }
   if ((main as SpacePanelSpec[])[0].split) return { ok: false, error: 'layout.main 第一项不能声明 split' }
-  if ((left as SpacePanelSpec[]).some((p) => p.split) || (right as SpacePanelSpec[]).some((p) => p.split)) {
+  if ([left, right, bottom].some((side) => (side as SpacePanelSpec[]).some((p) => p.split))) {
     return { ok: false, error: 'split 只适用于 layout.main' }
+  }
+  if (lay.bottomSpan !== undefined && !BOTTOM_SPANS.includes(lay.bottomSpan as never)) {
+    return { ok: false, error: `layout.bottomSpan 必须是 ${BOTTOM_SPANS.join(' / ')} 之一` }
   }
 
   let mini: SpaceSpec['mini']
@@ -148,7 +170,7 @@ export function parseSpaceJson(raw: string, opts: ParseOpts): ParseResult {
 
   const req = d.requires as { views?: unknown } | undefined
   const reqViews = Array.isArray(req?.views) ? (req!.views as unknown[]).filter((v): v is string => typeof v === 'string') : []
-  const allTypes = [...(main as SpacePanelSpec[]), ...(left as SpacePanelSpec[]), ...(right as SpacePanelSpec[])].map((p) => p.type).concat(reqViews)
+  const allTypes = [main, left, right, bottom].flatMap((side) => side as SpacePanelSpec[]).map((p) => p.type).concat(reqViews)
   const missing = [...new Set(allTypes.filter((t) => !opts.isViewRegistered(t)))]
   if (missing.length) return { ok: false, error: `引用了未注册的视图: ${missing.join(', ')}(可能需要升级应用或安装对应 Space App)` }
 
@@ -158,10 +180,15 @@ export function parseSpaceJson(raw: string, opts: ParseOpts): ParseResult {
       id,
       name: name as SpaceSpec['name'],
       icon: typeof d.icon === 'string' ? d.icon : undefined,
+      iconFile: typeof d.iconFile === 'string' ? d.iconFile : undefined,
       version: typeof d.version === 'string' ? d.version : undefined,
       mini,
       minAppVersion: typeof d.minAppVersion === 'string' ? d.minAppVersion : undefined,
-      layout: { main: main as SpacePanelSpec[], left: left as SpacePanelSpec[], right: right as SpacePanelSpec[] },
+      layout: {
+        main: main as SpacePanelSpec[], left: left as SpacePanelSpec[], right: right as SpacePanelSpec[],
+        ...((bottom as SpacePanelSpec[]).length ? { bottom: bottom as SpacePanelSpec[] } : {}),
+        ...(lay.bottomSpan ? { bottomSpan: lay.bottomSpan as (typeof BOTTOM_SPANS)[number] } : {}),
+      },
       requires: reqViews.length ? { views: reqViews } : undefined,
     },
   }
@@ -185,8 +212,9 @@ export function uniqueId(base: string, taken: ReadonlySet<string>): string {
  * 引擎加了第四个 loc `'bottom'` 之后,断言仍然编译通过,但 `layout['bottom']` 是 undefined —— 调用方的
  * `layout[loc].push(...)` 当场抛(开着底部面板点「另存为 Space」必崩)。断言不会报错,实判才会。
  *
- * 底部**故意不进配方**:SpaceSpec.layout 只有 main/left/right 三桶,「底部的 per-Space 默认内容」是
- * 明确的未做项 —— 真要做得先扩配方格式并迁移已存的 space.json。
+ * 「另存为 Space」的底部**仍不进配方**:底部常放这次会话的工具(终端之类),存进去下次就是一个死终端。
+ * 配方格式本身 2026-10-02 起有可选的 `layout.bottom`(由手写 / 插件的 space.json 声明,如视频时间线),
+ * 缺省 = 旧行为,已存的 space.json 无需迁移。
  */
 export function recipeBucketOf(rawLoc: unknown): 'main' | 'left' | 'right' | null {
   if (rawLoc === 'bottom') return null

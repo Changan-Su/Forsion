@@ -15,13 +15,16 @@ import { PROTOCOL_MARK } from '../llm/openaiCompat.js';
 import { realpathSync } from 'node:fs';
 import { publish, drain, cleanup } from './eventBus.js';
 import { makeUiSettingsUpdater } from './uiAck.js';
-import { gateToolCall, requestApproval, setApprovalTray, type ApprovalDecision, type ApprovalMode } from './approvals.js';
+import { gateToolCall, requestApproval, normalizeApprovalMode, USER_REJECT_REASON, setApprovalTray, type ApprovalDecision, type ApprovalMode } from './approvals.js';
+import { takeRunThinking } from './sessionSettings.js';
+import { makeClientActionRequester } from './clientAck.js';
 import { runHooks, type HookRunContext, type HookVerdict } from '../hooks/index.js';
 import { enterRunContext, currentDisplayAgentSlug, setRunClientTag, setRunCwd } from '../seams/runContext.js';
 import path from 'node:path';
 import { agentsDir, readUserMd, DEFAULT_AGENT_SLUG, engineLibDir } from '../core/tanguHome.js';
-import { getRun, updateRunStatus, appendStep, listPendingRunsForRecovery } from './runStore.js';
-import { getToolDefinitions, executeTool, getToolCapabilities, listDeferredTools, type ToolContext } from '../tools/registry.js';
+import { getRun, updateRunStatus, appendStep, listPendingRunsForRecovery, failStaleRuns } from './runStore.js';
+import { getToolDefinitions, executeTool, getToolCapabilities, listDeferredTools, deferredUnlocksFromHistory, type ToolContext } from '../tools/registry.js';
+import { actionDeliveryNudgeNeeded, ACTION_DELIVERY_CHECK } from './actionDeliveryCheck.js';
 import { declaredPersistPlaceholder } from '../tools/toolRegistry.js';
 import type { DisplayFileItem } from '../tools/toolTypes.js';
 import { loadSkillLoadout } from './skillLoadout.js';
@@ -49,7 +52,7 @@ import {
 import { compactionSettingsFor, type CompactionSettings } from './compactionSettings.js';
 import { isContextOverflowError } from './contextWindowStore.js';
 import { getAgent, isValidSlug, DEFAULT_MAX_ITERATIONS, libDirOf, type NormalAgentDef } from '../agents/agentRegistry.js';
-import { loadHarness, renderHarnessSection, isRefineInvocation, REFINE_DIRECTIVE, consumeHarnessCandidates, renderPendingHarnessCandidates } from '../agents/harnessStore.js';
+import { loadHarness, shelvedOf, renderHarnessSection, isRefineInvocation, REFINE_DIRECTIVE, consumeHarnessCandidates, renderPendingHarnessCandidates } from '../agents/harnessStore.js';
 import { loadSchedule, entriesOf, upcomingScheduleLines } from './agentSchedule.js';
 import { agentIdentitySection, applyAgentActivation } from './agentActivation.js';
 import { clampApprovalMode, clearRunRemoteTaint, effectiveRemote, remoteApprovalCap, remoteOf, REMOTE_WRITABLE_CONFIG_KEYS } from './remoteOrigin.js';
@@ -62,17 +65,19 @@ import { describeImages, resolveVisionModelId, shouldDescribeImages } from './vi
 import { toolImageMessages, type ToolImage } from './toolImages.js';
 import { replayAssistantHistory, stepLlmResponse, loadReplaySteps, dropCoveredCalls } from './historyReplay.js';
 import { looksLikeToolCallText } from '../llm/textToolCalls.js';
-import { isRetryableLlmError, withLlmRetry, MODEL_MAX_RETRIES, MODEL_RETRY_BASE_MS, llmRetryBudgetExceeded, sleepOrAbort } from '../llm/retry.js';
+import { isRetryableLlmError, isAuthExpiredLlmError, withLlmRetry, MODEL_MAX_RETRIES, MODEL_RETRY_BASE_MS, llmRetryBudgetExceeded, sleepOrAbort } from '../llm/retry.js';
 import { runCostCeiling, isOverRunCost } from './runBudget.js';
 import { RepeatedToolFailureGuard, MAX_REPEATED_TOOL_FAILURES } from './repeatedToolFailure.js';
 import { runGroupChat, sanitizeTempAgents, teamMemberSection } from './groupChat.js';
 import { query } from '../core/db.js';
+import { SELF_OWNER, ownerAlive } from './runOwner.js';
 import { TEAMWORK_KIND } from './teamRuns.js';
 import { getTeam } from '../agents/teamRegistry.js';
 import { listPluginMetas } from '../plugins/registry.js';
 import { isPluginEnabledSync } from '../plugins/settingsStore.js';
 import { prepareAgentFilesForRun, scheduleAgentFilesSync } from './agentFileSync.js';
 import { buildAgentMemoryContext } from './memoryRecall.js';
+import { buildProjectMemoryContext, resolveProjectMemory } from './projectMemory.js';
 import { computerHistoryDigest, computerHistoryRecallHide } from './computerHistory.js';
 import { takeWorkspaceUploads, withUploadRefs } from './workspaceUploads.js';
 import './remoteTaint.js'; // 首次远程染色 → 落进 run 行(input.remoteTainted),会话级污点判据据此跨重启认得(P1 · M1A)
@@ -244,6 +249,7 @@ export function enqueueRun(sessionId: string, runId: string): void {
 
 /** 非阻塞启动一个 run（不 await）。AbortController 同步注册，保证早到的 abort 也生效。仅由 enqueueRun/advanceQueue 调用。 */
 export function startRun(runId: string): void {
+  if (exiting) return; // 进程正在退出:行留在 queued,下次启动按持有者已死认领
   const ac = new AbortController();
   abortControllers.set(runId, ac);
   const task = dispatchRun(runId, ac).catch(async (err) => {
@@ -589,9 +595,42 @@ async function terminalizeQueuedAbort(runId: string): Promise<void> {
   }
 }
 
-/** 进程重启自愈：把 DB 里仍 queued/running 的 run 按 session 分组、created_at 顺序重新入队。
- *  必须在 failStaleRuns() 之后调用（避免捡到即将被标 failed 的陈旧行）。返回重入队数量。 */
+const INTERRUPTED_DETAIL =
+  'The engine restarted while this run was in progress, so it was stopped here instead of starting over (that would repeat actions already taken). Send a message to continue.';
+
+/** 跑到一半就没了持有者的 run(崩溃 / 退出 / 更新):标失败 + 补一条终态事件,不从头重跑。 */
+async function terminalizeInterruptedRun(runId: string): Promise<void> {
+  try {
+    // 裸码 'orphaned':桌面 humanizeRunError 已有对应双语文案(chat.err.orphaned「运行意外中断…请重试」)
+    await updateRunStatus(runId, 'failed', { error: 'orphaned' });
+    await publish(runId, 'error', { error: 'orphaned', detail: INTERRUPTED_DETAIL });
+    await drain(runId);
+  } catch (e) {
+    console.warn('[agent-core] terminalizeInterruptedRun failed:', e);
+  } finally {
+    setTimeout(() => cleanup(runId), 30_000);
+  }
+}
+
+/** 进程重启自愈(PI-DSH 评审 R2 改过语义):先清陈旧行(30 分钟没动静 → failed),余下在飞 run 按 session 分组、created_at 顺序处理 ——
+ *  - 别的活着的引擎进程持有的(pid 在且启动时刻对得上,见 runOwner.ts):不碰,陈旧清扫也跳过(TUI 与桌面共用 state.db,从前桌面一起来就把 TUI 正在跑的 run 再跑一遍);
+ *  - running(持有者已死):标中断,**不从头重跑** —— 从 input 重跑会把已经执行过的工具副作用(写文件、发消息)再来一遍;
+ *  - queued(持有者已死 / 不明):从没开跑,先认领成自己的再入队(别让同时起来的另一个引擎也捡)。
+ *  返回重入队数量。复现台架:scripts/run-recovery.repro.mjs(crash / sigterm / cross 三场景)。 */
 export async function recoverQueuedRuns(): Promise<number> {
+  // 非 SQLite(外部 PG / PGlite 回退)不记持有者 → 持有者一律按已死处理,即「独占库」语义(单实例是这两种库唯一受支持的形态)。
+  // ponytail: 多个实例共用一个 PG 不受支持(会互相把在飞 run 标 orphaned、抢排队行;云端为此走网关 + recoverRuns:false);
+  // 真要支持,得上带主机标识的租约 + 执行前 CAS —— 本机 pid 跨主机探不了活。
+  const aliveCache = new Map<string, Promise<boolean>>();
+  const alive = (owner: string | null): Promise<boolean> => {
+    if (!owner) return Promise.resolve(false);
+    if (!aliveCache.has(owner)) aliveCache.set(owner, ownerAlive(owner));
+    return aliveCache.get(owner)!;
+  };
+  const owners = [...new Set((await listPendingRunsForRecovery()).map((r) => r.owner).filter((o): o is string => !!o))];
+  const live = (await Promise.all(owners.map(async (o) => ((await alive(o)) ? o : '')))).filter(Boolean);
+  const stale = await failStaleRuns(30, live);
+  if (stale) console.log(`[tangu] marked ${stale} stale runs as failed`);
   const rows = await listPendingRunsForRecovery();
   // 团队成员工作会话(kind=teamwork)里的子 run 只由团队 run 驱动:重启后团队 run 从头再激活、会新建子 run;遗留的子 run 不能再跑
   //(没人订阅它的事件、它的审批会永久占住成员会话的串行队列、工具动作会重做)→ 直接终态化(Codex 09-16 r4 #5)。
@@ -605,14 +644,41 @@ export async function recoverQueuedRuns(): Promise<number> {
   } catch { /* 查不到 kind 按普通会话处理 */ }
   let n = 0;
   for (const r of rows) {
+    if (await alive(r.owner)) continue;
     if (kinds.get(r.session_id) === 'teamwork') {
       await updateRunStatus(r.id, 'aborted', { error: 'orphaned teamwork run (engine restart)' }).catch(() => {});
       continue;
     }
+    if (r.status === 'running') {
+      await terminalizeInterruptedRun(r.id);
+      continue;
+    }
+    const claimed = await query<any[]>(
+      // 认领顺手刷新 updated_at:否则同时启动的另一个引擎按它旧快照做陈旧清扫,会把刚认领入队的行标失败(Codex 复审)
+      `UPDATE agent_runs SET owner = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'queued' AND COALESCE(owner, '') = ? RETURNING id`,
+      [SELF_OWNER, r.id, r.owner || ''],
+    ).catch(() => []);
+    if (!claimed.length) continue;
     enqueueRun(r.session_id, r.id);
     n++;
   }
   return n;
+}
+
+let exiting = false;
+/**
+ * 进程退出前(standalone 收到 SIGTERM / TUI 退出)调,**只在真退出时调**:不再起新 run(中止触发的推进队列也不起,排队行留到下次启动认领),
+ * 中止在飞 run,有界等它们落完终态 —— 中止分支会存下已生成的部分回答并标 aborted。不等的话行停在 running,
+ * 下次启动只能标 orphaned、部分回答也丢了(PI-DSH 评审 R2:dispose 后 2s 内 exit,实测来不及)。
+ */
+export async function drainRunsForExit(timeoutMs: number): Promise<void> {
+  exiting = true;
+  abortAllRuns();
+  const tasks = [...runTasks.values()];
+  if (!tasks.length) return;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  await Promise.race([Promise.allSettled(tasks), new Promise<void>((r) => { timer = setTimeout(r, timeoutMs); })]);
+  if (timer) clearTimeout(timer);
 }
 
 /** 中止所有在飞 run(dispose/卸载用)。各 run 的 finally 会自行清理 + 推进队列。 */
@@ -809,6 +875,11 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
   // 有能力握手就物化成 {}:回执刷新(updateUiSettings)要有落点;list_ui_commands 对空对象与 undefined 输出一样。
   const uiSettings: ToolContext['uiSettings'] = input.uiSettings && typeof input.uiSettings === 'object'
     ? input.uiSettings : (uiCommands ? {} : undefined);
+  // 客户端原生能力(phone.intents 等,routes/runs 已消毒):同链同冻结。带 clientCapability 的工具据此过中央闸,
+  // requestClientAction 也只在非空时装配。派生 run 自建 input → 天然不继承。
+  const clientCapabilities: readonly string[] | undefined = Array.isArray(input.clientCapabilities)
+    ? Object.freeze(input.clientCapabilities.filter((c: unknown): c is string => typeof c === 'string'))
+    : undefined;
   setRunClientTag(clientTag);
   // Normal Agent 激活:会话 agent_config.agentSlug → 合并 agent 定义里「会话未显式覆盖」的字段。
   // 本地形态读 ~/.tangu/agents;云端 worker 本地目录为空 → applyAgentActivation 经 brain.agents 兜底水合。
@@ -972,7 +1043,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
   // 换 Agent 时桌面会单独 PATCH thinkingLevel,「ultra + high」这种陈旧组合在这里自动失效。主动委派段见系统提示末尾。
   // 团队模式不吃 Ultra:成员各跑各的档,父 run 只做编排(桌面入口也不给,这里是引擎侧的同一口径)。
   const ultraRequested = agentConfig.ultra === true && !agentConfig.groupChat;
-  const thinkingLevel: ThinkingLevel = ultraRequested ? 'max' : (agentConfig.thinkingLevel || 'medium');
+  let thinkingLevel: ThinkingLevel = ultraRequested ? 'max' : (agentConfig.thinkingLevel || 'medium');
   const attachments = input.attachments || [];
   let imageInputs = normalizeImageAttachments(attachments);
   // host-exec（TUI/桌面本机模式）注入：execMode/cwd/approvalMode 只经 per-run agentConfig 传入。
@@ -1000,7 +1071,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
           .slice(0, 8)
       : [];
   const requestedApprovalMode: ApprovalMode =
-    agentConfig.approvalMode || (execMode === 'host' ? 'auto-edit' : 'full-auto');
+    normalizeApprovalMode(agentConfig.approvalMode, `run ${runId}`) || (execMode === 'host' ? 'auto-edit' : 'full-auto');
   // C3:远程污点 run 的快照档先钳一次(Agent 定义激活填进来的也在内);每次调用现读的会话存档由审批闸再钳。
   const approvalMode: ApprovalMode = remoteCap ? clampApprovalMode(requestedApprovalMode, remoteCap) : requestedApprovalMode;
   // 会话档现读只在本机引擎形态(hostExec;含本机的沙箱会话 —— 它们的 MCP 工具也过闸):云端形态的状态层是 HTTP,
@@ -1143,12 +1214,15 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     }
 
     // 有界重试:这一步在托管面是真实 HTTP,一次秒级 fetch failed 此前会让 run 还没开跑就报废。
-    const { model, apiKey, baseUrl, apiModelId } = await withLlmRetry(
+    const resolvedModel = await withLlmRetry(
       () => resolveModelAndKey(modelId),
       (attempt, wait, err) =>
         console.warn(`[agent-core] run=${runId} resolve 瞬时失败,${wait}ms 后重试 ${attempt}/${MODEL_MAX_RETRIES}: ${(err as any)?.message || err}`),
       ac.signal, // 停止后不再空转退避(resolve 接缝本身没有 signal 位,只能在重试层兜)
     );
+    const { model, baseUrl, apiModelId } = resolvedModel;
+    let apiKey = resolvedModel.apiKey; // 订阅登录的 token 可能在 run 中途过期 → 下面的重试圈会续期后换掉它
+    let credsRefreshedAt = 0;
     // 分步落库 / 跨 run 回放共用的模型身份键(两侧必须是**同一个表达式**,否则永远对不上)。
     // apiModelId 缺省时退回内部 modelId —— 只要求稳定可比,不要求是上游真名(同 resolveModelCapability 的口径)。
     const replayModelKey = apiModelId || modelId;
@@ -1228,8 +1302,18 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       { apiModelId: replayModelKey, protocol: stepItemBinding.protocol },
     );
 
+    // 工作笔记(HARNESS.md)在这里读一次:技能目录、工具面(agent 自己收起的装备,kind 'equip')与下面 2b) 的笔记段共用这一份。
+    // 笔记段不注入的 run(云端无 agent 目录 / coding 预设下的默认 agent / 临时成员)里收起也不生效 ——
+    // 模型看不见「我收起了什么」的时候不该少东西。读失败按空处理,不阻断 run。
+    // coding 预设 × 默认 agent:播种的陪伴人格(Tangu Arioso,"use log_event to record completed work")
+    // 对编码任务是行为毒药(WB-Bench:80/80 题每题浪费一轮 log_event、分析题答成用户报告)→ 整段跳过,
+    // 换 CODING_CONTRACT_SECTION。用户显式选择的自定义 agent 不受影响(人格照注,契约叠加)。
+    const suppressCompanionPersona = ps.persona === 'suppress' && activeAgentSlug === DEFAULT_AGENT_SLUG;
+    const notesApply = execMode === 'host' && !inlineMemberDef && !suppressCompanionPersona;
+    const harnessEntries = notesApply ? await loadHarness(activeAgentSlug).catch(() => []) : [];
+    const shelved = shelvedOf(harnessEntries);
     // 启用技能的装载（渐进式披露:目录进 prompt、全文按需 use_skill）——见 services/skillLoadout.ts。
-    const skillLoadout = await loadSkillLoadout(userId, appId, agentConfig);
+    const skillLoadout = await loadSkillLoadout(userId, appId, agentConfig, shelved.skills);
     const enabledSkillIds = skillLoadout.enabledSkillIds;
 
     // C-4:易变上下文(记忆 §2/§3 + sketch 本轮信号)的落点。tail=对话尾部 user 通道(缺省);
@@ -1264,10 +1348,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       : false;
     // 静态指引/环境段按 profile 装载（G4，见 profiles/promptSections.ts）。
     const promptSections = profile.promptSections({ execMode, cwd, extraRoots, channelSession, preset, sandboxExec: profile.features.sandbox });
-    // coding 预设 × 默认 agent:播种的陪伴人格(Tangu Arioso,"use log_event to record completed work")
-    // 对编码任务是行为毒药(WB-Bench:80/80 题每题浪费一轮 log_event、分析题答成用户报告)→ 整段跳过,
-    // 换 CODING_CONTRACT_SECTION。用户显式选择的自定义 agent 不受影响(人格照注,契约叠加)。
-    const suppressCompanionPersona = ps.persona === 'suppress' && activeAgentSlug === DEFAULT_AGENT_SLUG;
+    // (suppressCompanionPersona 在本 run 开头读工作笔记处已定义:coding 预设 × 默认 agent 时人格与笔记一并跳过。)
     // 系统块按「稳定 → 易变」排布,让记忆改写只失效最短后缀(单 pin 单断点,见末尾 pinMessage)。
     // 1) developer_instructions(config.toml;身份/稳定)
     if (agentConfig.systemPrompt && !suppressCompanionPersona) systemParts.push(String(agentConfig.systemPrompt));
@@ -1290,12 +1371,9 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     //     契约之前:属每-agent 身份层,只在 refine 轮低频变化 → 放稳定区护前缀缓存。与 6) 记忆放
     //     易变区尾部是刻意不同(记忆每几轮就重写),别「统一」。仅 host(云端无 agent 目录);
     //     随人格一起被 coding 预设抑制。
-    if (execMode === 'host' && !suppressCompanionPersona && !inlineMemberDef) {
-      try {
-        const harnessBlock = renderHarnessSection(await loadHarness(activeAgentSlug));
-        if (harnessBlock) systemParts.push(harnessBlock);
-      } catch { /* 读失败不阻断 run */ }
-    }
+    //     条目在本 run 开头已读好(harnessEntries,见 loadSkillLoadout 上方)。
+    const harnessBlock = renderHarnessSection(harnessEntries);
+    if (harnessBlock) systemParts.push(harnessBlock);
     ctxMark('harness');
     // HUMAN is collaboration context, including projectless Chat and Coding. It never
     // changes tool permissions. All documents are read anew at each user turn.
@@ -1362,6 +1440,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // 5) 你的专属文件夹(仅 host:agent 有文件读写工具、能访问绝对路径;云端 sandbox 文件夹不可达 → 不注入)。
     //    让 agent 认知自己的 home + Library,主动往 Library 沉淀/读取资料,并理解 MEMORY/LOG 的归属。
     //    coding 预设不注入(remember/log_event 已转 deferred,陪伴式沉淀指引与编码任务无关)。
+    //    SCHEDULE.db + 「谁的归谁」一段(10-02 反馈):过去只在日程非空时才有 Upcoming Schedule 段,空日程的 agent
+    //    不知道自己有日历,答应用户的事被写进用户的 Amadeus 日历,还说「我没有自己的日历」。只放静态文字,条目仍在易变区。
     if (execMode === 'host' && ps.hostExtras && !inlineMemberDef) { // 临时成员没有专属文件夹(不建、不教它往那里写)
       const home = path.join(agentsDir(), activeAgentSlug);
       const libDir = path.join(home, 'Library');
@@ -1371,7 +1451,11 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         '- `MEMORY.md` — your long-term memory (written with the remember tool; the same memory that is quoted for you under "My Long-Term Memory and Relevant Evidence")\n' +
         '- `LOG/<date>.md` — your daily logs (written with log_event, read with read_log)\n' +
         '- `SOUL.md` — your persona\n' +
-        `- \`Library/\` (\`${libDir}\`) — your reference library: use the file read/write tools (read_file/write_file/list_dir, etc.; this directory is already writable and needs no approval) to **store and retrieve long-term reference material** (character settings, tool manuals, knowledge documents, etc.). Proactively write down material worth keeping long-term, and read it back when needed.`;
+        `- \`Library/\` (\`${libDir}\`) — your reference library: use the file read/write tools (read_file/write_file/list_dir, etc.; this directory is already writable and needs no approval) to **store and retrieve long-term reference material** (character settings, tool manuals, knowledge documents, etc.). Proactively write down material worth keeping long-term, and read it back when needed.\n` +
+        '- `SCHEDULE.db` — your own calendar, shown in the user\'s Calendar under your name. Manage it with the manage_schedule tool (it is in Additional Tools, call load_tools first); an entry with auto=false is just a calendar record and needs no approval.\n\n' +
+        'What is yours and what is the user\'s: this folder and your schedule belong to you; the working directory and the user\'s Amadeus notes and calendars belong to the user. ' +
+        'When you yourself commit to something at a time (a plan, a promise, meeting the user), put it on your own schedule with manage_schedule — not in the user\'s calendar — update that entry when the details change, and never say you have no calendar. ' +
+        'Use the amadeus_* calendar tools only when the user wants an entry on their own calendar.';
       if (Array.isArray(agentConfig.libraryOrder) && agentConfig.libraryOrder.length) {
         const lines = agentConfig.libraryOrder.map((f: string, i: number) => `  ${i + 1}. ${path.join(libDir, String(f))}`);
         folderBlock += '\n\nLibrary preferred reading order:\n' + lines.join('\n');
@@ -1434,6 +1518,12 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       console.warn('[agent-core] load agent memory failed:', e);
       systemParts.push('Agent memory is currently unreadable. Do not claim it is empty or that anything was saved; explicit memory tools may be retried.');
     }
+    // 6b) 项目级记忆:只在本项目成立的事实,本项目里的 agent 共用(services/projectMemory.ts)。同一项目的会话之间不变 → 稳定区。
+    //     只在本机有(存用户目录、按会话存档的项目路径索引);无项目会话不注入。读不到只丢这一段,不影响上面的 agent 记忆。
+    if (profile.capabilities.hostExec) {
+      try { const projectMemory = await buildProjectMemoryContext(userId, sessionId); if (projectMemory) systemParts.push(projectMemory); }
+      catch (e) { ac.signal.throwIfAborted(); console.warn('[agent-core] load project memory failed:', (e as Error)?.message || e); }
+    }
     ctxMark('memory');
     // 7/8) 技能目录 + deferred 工具目录 + 环境段(environment 在技能段后,保留原相对次序)
     segAt('system:skills');
@@ -1457,8 +1547,10 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     const dispatchTargets: string[] = typeof agentConfig.soloAgentSlug === 'string' && Array.isArray(agentConfig.mentionedProjects)
       ? agentConfig.mentionedProjects.map((p: any) => (p && typeof p.path === 'string' ? safeRealpath(p.path) : '')).filter(Boolean).slice(0, 8)
       : [];
+    // 会话属于一个本机项目 → remember 露出「项目级」(定义多一段说明和一个参数);别的会话拿到的是精简定义。
+    const projectScoped = profile.capabilities.hostExec ? !!(await resolveProjectMemory(userId, sessionId)) || undefined : undefined;
     const toolGateCtx = {
-      userId, sessionId, appId, runId, client: clientTag, channelSession, preset, uiCommands, uiSettings,
+      userId, sessionId, appId, runId, client: clientTag, channelSession, preset, uiCommands, uiSettings, clientCapabilities, projectScoped,
       runOrigin: runCategory(input), // P1-K2:后台进程来源标签取这条 run 自己的来源(channelSession 是会话级旗标)
       dispatchTargets,
       hostSandbox: runHostSandbox,
@@ -1469,6 +1561,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       automationOrigin: typeof agentConfig.automationOrigin === 'string' ? agentConfig.automationOrigin : undefined,
       toolsMode,
       toolsList,
+      shelvedTools: shelved.tools.size ? shelved.tools : undefined, // agent 自己收起的工具 → 走按需目录(isDeferredIn)
       subAgentDepth: agentConfig.delegatedFrom ? 1 : undefined,
       subAgentGrants: agentConfig.delegatedFrom ? new Set<string>(agentConfig.subAgentGrants || []) : undefined,
       subAgentDelegator: agentConfig.delegatedBy,
@@ -1479,7 +1572,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       ephemeral: !!inlineMemberDef || undefined, // 临时成员:记忆 / 日志 / 人格 / 工作笔记等持久写面全关(没有自己的文件夹可写)
     };
     const deferredCatalog = deferBypass ? [] : listDeferredTools(toolGateCtx as ToolContext);
-    const unlockedTools = new Set<string>();
+    // 历史里用过的 deferred 工具延续解锁(见 deferredUnlocksFromHistory);目录文本不变,只影响 defs。
+    const unlockedTools = deferredUnlocksFromHistory(history, deferredCatalog);
     if (deferredCatalog.length) {
       systemParts.push(
         '## Additional Tools (load on demand)\n' +
@@ -1896,6 +1990,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // 铸新 assistantId(段 B)→ 发 turn_boundary 让前端关闭 A、插入 U 气泡、开 B 流。在迭代边界调用,
     // 即「一个 loop 结束即注入」。A 无正文且无工具调用(刚开跑就转向)则不落库,空段交前端丢弃。
     const applySteering = async (msgs: SteerMsg[]): Promise<void> => {
+      actionAskText += msgs.map((m) => `\n${String(m.content || '')}`).join('');
       toolFailureGuard.reset(); repeatedToolFailure = false;
       const finalizedId = currentAssistantId;
       const finalizedContent = finalContent;
@@ -2000,6 +2095,9 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       visionModelId: typeof agentConfig.visionModelId === 'string' ? agentConfig.visionModelId : undefined,
       approvalDeferral,
       unlockedTools,
+      // 延续解锁可能一次把目录解空 → lockedCount=0 会把 load_tools 从 defs 中间删掉,工具前缀与上一 run 末尾错位
+      // (Codex 10-02)。上一 run 能装上它们,load_tools 当时就在场 → 从起点就粘住。
+      loadToolsExposed: unlockedTools.size > 0 || undefined,
       unlockTools: (names) => {
         let changed = false;
         for (const n of names) if (!unlockedTools.has(n)) { unlockedTools.add(n); changed = true; }
@@ -2009,6 +2107,10 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       // 少了这一步,同 run 里 set 之后再 list 仍是 run 开始的旧值,模型把它当「没生效」的证据(2026-09-05 实报)。
       // ⚠️ 这一行被 uiCommands.test.ts 按源码文本钉住(装配本身没有可跑的测试路径)。
       updateUiSettings: makeUiSettingsUpdater(uiSettings),
+      // 客户端原生动作(phone_* 等):闭包绑死本 run 的 runId/sessionId/能力,run 级中止信号总会一并监听。
+      // 没声明能力的 run 根本不装配。这里是 run 级原件:registry.executeTool 再按工具收窄(bindClientActionToTool)——
+      // 只有声明了 clientCapability 的工具拿得到,且只能发自己那个 ns。⚠️ 这一行被 phoneTools.test.ts 按源码文本钉住。
+      ...(clientCapabilities?.length ? { requestClientAction: makeClientActionRequester({ runId, sessionId, caps: clientCapabilities, runSignal: ac.signal }) } : {}),
       // 激活的 agent 定义 slug → start_discussion 的「分身」据此取主 agent 人设(memScopeSlug 可能是共用默认,不可混用)。
       agentSlug: activeAgentSlug,
       collectImage: (img) => {
@@ -2106,7 +2208,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       }, hookCtx());
       if (ac.signal.aborted) throw new AbortLikeError();
       if (preV.block) {
-        return mkRejected(call, startedAt, parallelGroup, `⛔ Hook 拦截：${preV.blockReason || 'PreToolUse hook 阻止了该操作'}`);
+        // 模型面英文,且写清是 hook 挡的(不是用户拒的):同 approvals 的 rejectReason 口径
+        return mkRejected(call, startedAt, parallelGroup, `Blocked by a PreToolUse hook, so this tool call was NOT run: ${preV.blockReason || 'no reason given.'}`);
       }
       // hook 改写参数 → 用改写后的 call 走审批与执行（审批基于改写后的内容，更安全）。
       const effCall = preV.updatedInput
@@ -2137,8 +2240,9 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         };
       }
       if (decision.action === 'reject') {
-        // 规则自动拒绝时带上是哪条规则挡的(用户拒绝仍是原文案)
-        return mkRejected(call, startedAt, parallelGroup, decision.rejectReason || '用户拒绝了该操作。');
+        // 模型面文案英文、按原因区分:规则 / hook / 无人值守排队 / 中止各自带 rejectReason;
+        // 没带 = 用户在审批卡或通道里点了拒绝(中止在上一行已抛 AbortLikeError,不会走到这里)。
+        return mkRejected(call, startedAt, parallelGroup, decision.rejectReason || USER_REJECT_REASON);
       }
       return runApprovedCall(call, withArgsOverride(effCall, decision), startedAt, parallelGroup, preCtxText, decision.writeProtect);
     };
@@ -2337,6 +2441,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     let auditNudged = false; // 完成度审计只审一次:第二次收尾放行,避免「审计→敷衍收尾→再审计」死循环
     let planNudged = false; // 计划提交只催一次(理由同上;plan 模式也用于问答,催两次就成了逼它编计划)
     let sketchNudged = false; // 本轮已命中强视觉信号却没画:收尾前只补催一次,二次仍拒绝则放行
+    let actionNudged = false; // 零工具调用却在承诺 / 声称动作:收尾前只催一次(services/actionDeliveryCheck.ts)
+    let actionAskText = String(input.message || ''); // 兑现兜底看的「用户要了什么」:原话 + 运行中插话(applySteering 追加;Codex 10-02)
     let verifyRounds = 0; // 验证回路已跑次数(整 run 上限 VERIFY_MAX_ROUNDS,最后一次仍红则如实标注收尾)
     let tokensTotal = 0;
     let costTotal = 0; // 本 run 累计扣费点数(每-run 成本上限护栏用)
@@ -2403,6 +2509,11 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         await drain(runId);
         await updateRunStatus(runId, 'failed', { error: 'run_cost_exceeded', tokensTotal });
         return;
+      }
+      const thinkingOverride = takeRunThinking(runId);
+      if (thinkingOverride && thinkingOverride !== thinkingLevel) {
+        thinkingLevel = thinkingOverride;
+        toolCtx.thinkingLevel = thinkingOverride; // self_brainstorm 分身须同档
       }
       // load_tools 解锁后的 defs 重算(未解锁迭代零开销;解锁项按 registry 规则追加在内置 defs 末尾)
       if (toolDefsDirty) {
@@ -2621,6 +2732,17 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
             iteration -= 1;
             break; // 出尝试循环;下方检测到 resumedMidstream 即重进本迭代续写
           }
+          // 凭证失效(xAI 用 502 包装,按状态码看像网络抖动):同一个 token 再试必败。订阅登录的 provider 强制续期一次、
+          // 拿到新 token 立刻重试;续不了(API key、托管面、refresh_token 也失效)就直接抛,不白等三轮退避。
+          // 一分钟内只续一次:刚续的 token 仍被拒就别再续;跑过下一个有效期的长 run 到时还能再续。
+          if (!emitted && isAuthExpiredLlmError(err)) {
+            const fresh = Date.now() - credsRefreshedAt < 60_000 ? null : await deps().brain.llm.refreshModelKey?.(modelId).catch(() => null);
+            credsRefreshedAt = Date.now();
+            if (!fresh || fresh === apiKey) throw err;
+            apiKey = fresh;
+            console.warn(`[agent-core] run=${runId} 上游报凭证失效,已续期订阅登录的 token 后重试`);
+            continue;
+          }
           // 慢失败不重试:瞬时抖动(fetch failed / 网关 502 / 429)都是秒级就崩,重试便宜且有效;
           // 而「上游静默到 idle 看门狗超时」是分钟级慢失败——重试只是把用户的干等 ×4。
           // 服务端 180s idle 504 若照旧重试三次,最终失败要 4×180+9=729s,比不修好不了多少。
@@ -2825,7 +2947,9 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         //    没有计划卡=没有批准入口,整条计划流程静默失效。收尾前催一次。
         //    整 run 只催一次(第二次放行):plan 模式也用来问答/调研,不该把每一轮都逼成计划。
         //    不看 usedTools:「只读调研完直接口述计划」正是要拦的那种。——
-        if (planMode && !planNudged && !lastIter) {
+        // 本 run 已调过 exit_plan_mode(计划已提交 / 已批准):run 级 planMode 快照仍是 true,但不能再催 —— 否则批准后收尾又被催,
+        // 模型重交计划、桌面弹第二张计划卡、「自动开始」等不到 done(09-26 真模型 12/12 复现,698fb79b 起就在)。
+        if (planMode && !planNudged && !lastIter && !allToolCalls.some((c) => c.function.name === 'exit_plan_mode')) {
           planNudged = true;
           if (res.content || res.outputItems?.length) workingMessages.push(assistantTurnOf(res, res.content || ''));
           workingMessages.push({
@@ -2849,6 +2973,18 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
               '<visual_delivery_check>\nYou are about to finish a turn that was identified as strongly visual, but you did not call `sketch`. Re-check the actual user goal now. If a comparison, sequence, structure, data shape, or interaction would be clearer as a card, call `sketch` and make that card before the final reply; do not merely promise it. If closer inspection shows a card would genuinely add noise, finish normally and briefly preserve that judgment.\n</visual_delivery_check>',
           } as ChatMessage); // 不落库不上屏:harness 脚手架
           void publish(runId, 'status', { phase: 'sketch_delivery_nudge', iteration, signal: sketchTurnSignal.kind });
+          continue;
+        }
+
+        // —— 动作兑现兜底:用户要了一个动作,模型一个工具都没调就说「我这就写 / 建好了」收尾(10-02 live:luna ~1/5)。
+        //    只催一次;系统驱动的 run(Muse / 自动化)不在此列 —— kickoff 里满是动作词,零工具收尾在那边是正常结局。——
+        // iteration < maxIterations - 2:下一轮不能是收尾轮(收尾轮不给工具,催了也做不了;Codex 10-02)
+        if (!actionNudged && !usedTools && !planMode && iteration < maxIterations - 2 && !deferBypass
+          && actionDeliveryNudgeNeeded(actionAskText, res.content || '')) {
+          actionNudged = true;
+          if (res.content || res.outputItems?.length) workingMessages.push(assistantTurnOf(res, res.content || ''));
+          workingMessages.push({ role: 'user', content: ACTION_DELIVERY_CHECK } as ChatMessage); // 不落库不上屏:harness 脚手架
+          void publish(runId, 'status', { phase: 'action_delivery_nudge', iteration });
           continue;
         }
 
@@ -3099,6 +3235,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     steerArrivals.delete(runId);
     steerClosed.delete(runId);
     clearRunRemoteTaint(runId); // 远端 steer 染的色随 run 收尾(表长 = 在飞 run 数)
+    takeRunThinking(runId); // 末轮才改的思考档没被取走 → 丢弃(会话存值已写,下一个 run 照样生效)
     runSession.delete(runId);
     advanceQueue(sessionId); // 推进同会话队列：起下一个排队 run（正常完成/失败/中止都经此）
     setTimeout(() => cleanup(runId), 30_000);

@@ -1,0 +1,9 @@
+/* The restart action lives in the native pinned ribbon area; it never enters overflow or folders. */
+.rb-btn.rb-restart-update { color: var(--accent-ink, var(--accent)); background: var(--accent-dim); min-height: var(--ui-control-h, 32px); }
+.rb-restart-update-icon { position: relative; display: inline-flex; flex: none; }
+.rb-restart-update-dot { position: absolute; width: 5px; height: 5px; border-radius: var(--radius-pill); background: currentColor; right: -3px; top: -3px; }
+.rb-restart-update-copy { min-width: 0; display: flex; flex-direction: column; align-items: flex-start; line-height: var(--ui-line-body); }
+.rb-restart-update-copy > span { font-size: var(--ui-font-body); }
+.rb-restart-update-copy > small { font-size: var(--ui-font-caption); color: var(--text-muted); }
+.rb-btn.rb-restart-update:disabled { cursor: wait; opacity: .65; }
+.rb-btn.rb-restart-update:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }

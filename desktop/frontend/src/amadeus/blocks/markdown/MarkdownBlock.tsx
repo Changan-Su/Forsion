@@ -97,7 +97,9 @@ import { takeMachineSlash } from './machineSlash'
 import { applyTrigger, applyTypedTrigger, canAutoTriggerFromBlock, matchTrigger, posAtTextAnchor, slashRange, splitTail, textBeforeCursor, triggerAtCursor, unwrapAtStart, type Trigger } from './blockTriggers'
 import { fullWidthWikiRule, mentionSuggestPlugin, selectionToolbarPlugin, slashSuggestPlugin, toolbarDismissKey, wikiSuggestPlugin, type SelRect, type WikiQuery } from './wikiAutocomplete'
 import { InlineToolbar, TURN_LABEL_KEYS, type ToolbarAction, type ToolbarAiItem } from './InlineToolbar'
-import { Sparkles } from 'lucide-react'
+import { Sparkles, Bot, BookOpen, MessageSquare } from 'lucide-react'
+import { defaultSlashCategory, moveSlash, moveSlashCategory, slashCategory, SLASH_CATEGORIES, type SlashCategory } from './slashNavigation'
+import './slashCategories.css'
 import { readTangu } from '../../plugins/tanguSeam'
 import { OverlayPortal } from '../../lib/overlayPortal'
 import { OverlayAt } from '../../lib/clampMenu'
@@ -106,9 +108,12 @@ import { fdDirOf } from '../../lib/fd'
 import { fuzzyScore } from '../../lib/fuzzy'
 import { WikiSuggest } from './WikiSuggest'
 import { TagSuggest, tagSuggestPlugin } from './TagSuggest'
+import { EmojiSuggest, emojiSuggestPlugin } from './EmojiSuggest'
+import { footnoteInputRules, footnotePlugin } from './footnote'
 import { tagPillPlugin } from './tagPill'
 import { retargetWikiInner } from './wikiRetarget'
 import { BLANK_BUTTON_BLOCK } from '../button/format'
+import { newDocAgentSpec, serializeDocAgentSpec } from '../documentAgent/format'
 import { emptyTaskRemark, taskCheckboxPlugin } from './taskList'
 import { calloutPlugin, calloutTitleRemark, handleFoldKeyDown, unescapeCalloutToken } from './callout'
 import { codeBlockPlugin } from './codeBlock'
@@ -140,6 +145,16 @@ registerMessages({
   'amadeus.default.tableColumn': { zh: '列 {n}', en: 'Column {n}' },
   'mdblock.placeholder': { zh: '输入文字，或按 “/” 选择类型…', en: 'Type something, or press “/” to pick a block…' },
   // slash 菜单 / 移动端块面板的分组名
+  'mdblock.group.ai': { zh: 'AI', en: 'AI' },
+  'mdblock.category.basic': { zh: '基本', en: 'Basic' },
+  'mdblock.category.ai': { zh: 'AI', en: 'AI' },
+  'mdblock.category.plugin': { zh: '插件', en: 'Plugins' },
+  'mdblock.category.label': { zh: '命令分类', en: 'Command categories' },
+  'mdblock.category.empty': { zh: '此分类暂无可用命令', en: 'No commands available in this category' },
+  'mdblock.foot.category': { zh: '← → 分类', en: '← → Category' },
+  'mdblock.slash.instructions': { zh: '页指令', en: 'Instructions' },
+  'mdblock.slash.agentTask': { zh: 'Agent 任务', en: 'Agent task' },
+  'mdblock.slash.prompt': { zh: '提示模板', en: 'Prompt' },
   'mdblock.group.basic': { zh: '基础', en: 'Basic' },
   'mdblock.group.list': { zh: '列表', en: 'Lists' },
   'mdblock.group.advanced': { zh: '高级', en: 'Advanced' },
@@ -260,6 +275,9 @@ const DRAWING_SENTINEL = '\u0000__amadeus_drawing__'
 const CARD_SENTINEL = '\u0000__amadeus_card__'
 /** `/ai`(评审 G3-07):v4 统一实例开正文 AI 面板(UnifiedPage.applySlash 接)。 */
 const AI_SENTINEL = '\u0000__amadeus_ai__'
+const INSTRUCTIONS_SENTINEL = '\u0000__amadeus_instructions__'
+const AGENT_TASK_SENTINEL = '\u0000__amadeus_agent_task__'
+const PROMPT_SENTINEL = '\u0000__amadeus_prompt__'
 
 const NOTEVIEW_SENTINEL = '\u0000__amadeus_noteview__'
 
@@ -568,6 +586,8 @@ export function MilkdownInner({
   const [mention, setMention] = useState<WikiQuery | null>(null) // "@" 提及页面
   const [tagQ, setTagQ] = useState<WikiQuery | null>(null) // "#" 标签补全(L-14)
   const tagDismissedFrom = useRef<number | null>(null) // Esc 闩锁(同 @)
+  const [emojiQ, setEmojiQ] = useState<WikiQuery | null>(null) // ":" emoji 短代码补全(I-21)
+  const emojiDismissedFrom = useRef<number | null>(null) // Esc 闩锁(同 #)
   const [slash, setSlash] = useState<WikiQuery | null>(null) // "/" 命令菜单(query 驻留文档,同 @/[[)
   const [toolbar, setToolbar] = useState<SelRect | null>(null) // 选中文字上浮的格式工具栏
   const [pasteAs, setPasteAs] = useState<PasteAs | null>(null) // 粘贴链接后的「粘贴为」菜单
@@ -1145,6 +1165,11 @@ export function MilkdownInner({
         if (tagDismissedFrom.current === q.from) { setTagQ(null); return } // Esc 关掉的同一个 '#' 不再弹
         setTagQ(q)
       }))
+      .use(emojiSuggestPlugin((q, blurred) => {
+        if (!q) { if (!blurred) emojiDismissedFrom.current = null; setEmojiQ(null); return }
+        if (emojiDismissedFrom.current === q.from) { setEmojiQ(null); return } // Esc 关掉的同一个 ':' 不再弹
+        setEmojiQ(q)
+      }))
       // '/' 命令菜单:query 驻留文档(同 @/[[),字符不被吞、空格自动关成字面文本。注册在
       // wiki/mention 之后 —— 好让它们的 *OpenRef 已就绪,slash 在它们开着时让位(避免叠开两个菜单)。
       .use(slashSuggestPlugin((q, blurred) => {
@@ -1214,6 +1239,8 @@ export function MilkdownInner({
       .use(linkInputRule) // 打完 `[文字](地址)` 当场成链接(commonmark 预设没这条行内规则)
       .use(autolinkInputRule) // 手打裸 URL 在空格 / 全角标点收尾时成链接(I-13,见 ./autolink)
       .use(fullWidthWikiRule) // 全角【【→ 半角 [[(中文输入法不必切键盘)
+      .use(footnoteInputRules) // 手打 `[^a]` / `[^a]: ` 成脚注(R-18,往返陷阱见 ./footnote)
+      .use(footnotePlugin) // 脚注显示编号 + 点上标跳定义 / 点编号回引用
       // 插件贡献的编辑器扩展(ctx.registerEditorExtension)。**放在宿主全部插件之后**:
       // ProseMirror 按注册序问 handleKeyDown/handleTextInput,内置行为先说了算,插件只捡没人处理的。
       .use(pluginEditorExtensions('normal', { pagePath: () => pagePathRef.current }))
@@ -1460,6 +1487,19 @@ export function MilkdownInner({
     setMention(null)
   }
 
+  const pickMentionAgent = (agent: string): void => {
+    if (!mention || !unified || !readTangu()?.submitDocumentTask || readTangu()?.hostExecution?.() === false) return
+    const m = mention
+    getInstance()?.action((ctx) => {
+      const view = ctx.get(editorViewCtx)
+      const node = view.state.schema.nodes.code_block.create({ language: 'forsion-task' }, view.state.schema.text(serializeDocAgentSpec(newDocAgentSpec(agent))))
+      // A block insertion uses ProseMirror's fitting rules; nearby text survives as paragraphs.
+      view.dispatch(view.state.tr.replaceRangeWith(m.from - 1, m.to, node).scrollIntoView())
+      view.focus()
+    })
+    setMention(null)
+  }
+
   /** 日期候选:插入的是字面 `@2026-09-01T14:30`(见 dateQuery / mdMarks),不包 `[[ ]]`。
    *  ⚠️ 必须补一个尾随空格 —— 不然新插进去的 `@…` 立刻又满足 mention 的触发条件,面板当场再弹一次。 */
   const pickMentionRaw = (text: string): void => {
@@ -1487,6 +1527,19 @@ export function MilkdownInner({
       })
     }
     setTagQ(null)
+  }
+
+  /** `:` emoji 补全选中:`:查询`(含冒号)整段换成 emoji 字符本身(I-21)。 */
+  const pickEmoji = (emoji: string): void => {
+    const q = emojiQ
+    if (q) {
+      getInstance()?.action((ctx) => {
+        const view = ctx.get(editorViewCtx)
+        view.dispatch(view.state.tr.insertText(emoji, q.from - 1, q.to))
+        view.focus()
+      })
+    }
+    setEmojiQ(null)
   }
 
   // @ 与 [[ 候选:最近打开的页面排最前(宿主经 setRecentsProvider 注入),其余页面跟后;空查询即按此序展示(L-13)。
@@ -1684,6 +1737,8 @@ export function MilkdownInner({
           getFiles={getFiles}
           onPick={pickMention}
           onPickRaw={pickMentionRaw}
+          agents={unified && readTangu()?.submitDocumentTask && readTangu()?.hostExecution?.() !== false ? readTangu()?.agents?.() : undefined}
+          onPickAgent={unified && readTangu()?.submitDocumentTask && readTangu()?.hostExecution?.() !== false ? pickMentionAgent : undefined}
           editorFocused={editorFocused}
           dates
           allowCreate={false}
@@ -1705,6 +1760,20 @@ export function MilkdownInner({
           onClose={() => {
             tagDismissedFrom.current = tagQ.from // Esc:同一个 '#' 不再弹
             setTagQ(null)
+          }}
+        />
+      )}
+      {emojiQ && !wiki && !mention && !tagQ && !slash && !readOnly && (
+        <EmojiSuggest
+          query={emojiQ.query}
+          left={emojiQ.left}
+          top={emojiQ.top}
+          anchorTop={emojiQ.anchorTop}
+          onPick={pickEmoji}
+          editorFocused={editorFocused}
+          onClose={() => {
+            emojiDismissedFrom.current = emojiQ.from // Esc:同一个 ':' 不再弹
+            setEmojiQ(null)
           }}
         />
       )}
@@ -2246,6 +2315,8 @@ export interface SlashItem {
   unifiedOnly?: boolean
   /** 要宿主能做正文 AI(探针给了 complete)才露出(G3-07 的 `/ai`);纯 Amadeus 壳 / 台架缺省不给。 */
   needsAi?: boolean
+  category?: SlashCategory
+  needsDocumentTask?: boolean
 }
 
 /** SLASH_ITEMS 的**表内**形态:名字与分组存 i18n 键,useAllSlashItems 在渲染期取词。
@@ -2279,6 +2350,9 @@ export const SLASH_SENTINELS = {
   page: PAGE_SENTINEL,
   card: CARD_SENTINEL,
   ai: AI_SENTINEL,
+  instructions: INSTRUCTIONS_SENTINEL,
+  agentTask: AGENT_TASK_SENTINEL,
+  prompt: PROMPT_SENTINEL,
 } as const
 
 // 前缀型 scaffold → 块转换(slash 选中时经 SlashOps.transform 在编辑器内单事务完成,绝不新建块)。
@@ -2302,7 +2376,10 @@ export const PREFIX_TRIGGERS: Record<string, Trigger> = {
  *  共吃这一份 —— 别在别处再手写一张清单,否则新块类型只在其中一处露出。 */
 export const SLASH_ITEMS: SlashSeed[] = [
   // AI 排首位(Notion 的 /ai 同位);kw 里的 `ai` 精确命中 +10 分,`/ai` 不再被拼音模糊匹配到代码块(G3-09)。
-  { key: 'ai', labelKey: 'mdblock.slash.ai', hint: 'AI', icon: <Sparkles width="1em" height="1em" strokeWidth={1.6} />, groupKey: 'mdblock.group.basic', scaffold: AI_SENTINEL, kw: 'ai 人工智能 写作 xiezuo 续写 xuxie 生成 tangu ask 问', unifiedOnly: true, needsAi: true },
+  { key: 'ai', labelKey: 'mdblock.slash.ai', hint: 'AI', icon: <Sparkles width="1em" height="1em" strokeWidth={1.6} />, groupKey: 'mdblock.group.ai', category: 'ai', scaffold: AI_SENTINEL, kw: 'ai 人工智能 写作 xiezuo 续写 xuxie 生成 tangu ask 问', unifiedOnly: true, needsAi: true },
+  { key: 'instructions', labelKey: 'mdblock.slash.instructions', hint: '', icon: <BookOpen size="1em" />, groupKey: 'mdblock.group.ai', category: 'ai', scaffold: INSTRUCTIONS_SENTINEL, kw: 'ai instructions instruction 指令 zhiling 页指令 维护规则', unifiedOnly: true },
+  { key: 'agent-task', labelKey: 'mdblock.slash.agentTask', hint: '', icon: <Bot size="1em" />, groupKey: 'mdblock.group.ai', category: 'ai', scaffold: AGENT_TASK_SENTINEL, kw: 'ai agent task mention 任务 renwu 交办 提及', unifiedOnly: true, needsDocumentTask: true },
+  { key: 'prompt', labelKey: 'mdblock.slash.prompt', hint: '', icon: <MessageSquare size="1em" />, groupKey: 'mdblock.group.ai', category: 'ai', scaffold: PROMPT_SENTINEL, kw: 'ai prompt 提示词 tishici 模板', unifiedOnly: true, needsDocumentTask: true },
   { key: 'text', labelKey: 'mdblock.slash.text', hint: '', icon: <TextIcon />, groupKey: 'mdblock.group.basic', scaffold: '', kw: 'text 文本 paragraph zhengwen 正文' },
   { key: 'h1', labelKey: 'mdblock.slash.h1', hint: '#', icon: <Heading1Icon />, groupKey: 'mdblock.group.basic', scaffold: '# ', kw: 'h1 heading 标题 biaoti title 大标题' },
   { key: 'h2', labelKey: 'mdblock.slash.h2', hint: '##', icon: <Heading2Icon />, groupKey: 'mdblock.group.basic', scaffold: '## ', kw: 'h2 heading 标题 biaoti 中标题' },
@@ -2361,6 +2438,7 @@ export function useAllSlashItems({ unified = false }: { unified?: boolean } = {}
     })),
     ...pluginSlash.map(({ item }) => ({
       key: item.id,
+      category: 'plugin' as const,
       label: textOf(item.label), // 函数形态每次渲染求值(B-20)
       hint: item.hint ?? '',
       // 插件项走图标词表(见 components/icons 的 resolveIcon):写图标名 → 和内置项同一套 SVG;
@@ -2373,7 +2451,8 @@ export function useAllSlashItems({ unified = false }: { unified?: boolean } = {}
     })),
   ]
   const ai = !!readTangu()?.complete
-  return all.filter((it) => (unified || !it.unifiedOnly) && (ai || !it.needsAi))
+  const tasks = !!readTangu()?.submitDocumentTask && readTangu()?.hostExecution?.() !== false
+  return all.filter((it) => (unified || !it.unifiedOnly) && (ai || !it.needsAi) && (tasks || !it.needsDocumentTask))
 }
 
 /** 「最后一个获得过焦点的块」的 applySlash —— 移动端双列块面板的落点。
@@ -2560,6 +2639,7 @@ function SlashMenu({ query, left, top, anchorTop, hideKeys, ctx, unified, editor
 }) {
   const { t } = useI18n()
   const [active, setActive] = useState(0)
+  const [categoryChoice, setCategoryChoice] = useState<{ query: string; category: SlashCategory } | null>(null)
   const menuId = `amx-slash-${useId().replace(/[^\w-]/g, '')}`
   const editorDomRef = useRef(editorDom)
   editorDomRef.current = editorDom
@@ -2572,17 +2652,39 @@ function SlashMenu({ query, left, top, anchorTop, hideKeys, ctx, unified, editor
   const q = query.trim().toLowerCase()
   // 有输入 → 按匹配度排序(label 与各关键词取最佳 fuzzy 分,降序);无输入 → 保持分组固定顺序。
   // 修掉「text 恒第一」:此前只 includes 过滤不排序,SLASH_ITEMS 首项 text 永远最靠前。
-  const items = q
+  const matches = q
     ? allItems
         .map((it) => ({ it, s: slashScore(q, it) }))
         .filter((x): x is { it: SlashItem; s: number } => x.s !== null)
         .sort((a, b) => b.s - a.s)
         .map((x) => x.it)
     : allItems
+  const category = categoryChoice?.query === q ? categoryChoice.category : defaultSlashCategory(matches, q)
+  const categoryItems = matches.filter((it) => slashCategory(it) === category)
+  // Browsing groups share one visual/keyboard order, including late-added built-in and plugin items.
+  const groupNames = Array.from(new Set(categoryItems.map((it) => it.group)))
+  const items = q ? categoryItems : groupNames.flatMap((name) => categoryItems.filter((it) => it.group === name))
+  const chooseCategory = (next: SlashCategory): void => {
+    setCategoryChoice({ query: q, category: next })
+    setActive(0)
+  }
 
   useEffect(() => {
     setActive(0)
+    setCategoryChoice(null)
   }, [query])
+
+  // 切类别不许挪菜单:同一个 query 内只长不缩。菜单开在光标上方时底边贴着光标,一缩顶上的类别胶囊
+  // 就从鼠标底下滑走(基本 → AI 实测下移 206px)。按 query 记账(同 categoryChoice),换 query 当帧解锁。
+  // ponytail: 只防缩 —— query 缺省落在矮类别时切到高类别仍会长一次;真有人报再改成三个面板叠着量。
+  // 仪器:check:documentagents 的 slash-stable 组。
+  const menuEl = useRef<HTMLDivElement | null>(null)
+  const [heightFloor, setHeightFloor] = useState<{ query: string; height: number } | null>(null)
+  const minHeight = heightFloor?.query === q ? heightFloor.height : undefined
+  useLayoutEffect(() => {
+    const height = menuEl.current?.offsetHeight ?? 0
+    if (height > (minHeight ?? 0)) setHeightFloor({ query: q, height })
+  })
 
   // 读屏(P-10):焦点留在编辑器,高亮项靠编辑器根的 aria-activedescendant 指过去(菜单是 role=menu / menuitem,
   // menuitem 不支持 aria-selected,「当前项」就用 activedescendant 表达);关菜单时摘掉,别让读屏指向已卸载的节点。
@@ -2590,7 +2692,7 @@ function SlashMenu({ query, left, top, anchorTop, hideKeys, ctx, unified, editor
   useEffect(() => {
     const dom = editorDomRef.current?.()
     if (!dom) return
-    dom.setAttribute('aria-controls', menuId)
+    dom.setAttribute('aria-controls', `${menuId}-commands`)
     if (activeIdx >= 0) dom.setAttribute('aria-activedescendant', `${menuId}-${activeIdx}`)
     else dom.removeAttribute('aria-activedescendant')
     return () => {
@@ -2613,33 +2715,36 @@ function SlashMenu({ query, left, top, anchorTop, hideKeys, ctx, unified, editor
       if (e.key === 'Escape') {
         stop(e)
         onClose()
-      } else if (e.key === 'ArrowDown' && bareArrow) {
-        stop(e)
-        setActive((a) => Math.max(0, Math.min(a + 1, items.length - 1)))
-      } else if (e.key === 'ArrowUp' && bareArrow) {
-        stop(e)
-        setActive((a) => Math.max(a - 1, 0))
+      } else if (bareArrow && e.key.startsWith('Arrow')) {
+        const nextCategory = moveSlashCategory(category, e.key)
+        if (nextCategory !== null) { stop(e); chooseCategory(nextCategory) }
+        else {
+          const next = moveSlash(items.length, activeIdx, e.key)
+          if (next !== null) { stop(e); setActive(next) }
+        }
       } else if (e.key === 'Enter' || e.key === 'Tab') {
-        const it = items[active]
+        const it = items[activeIdx]
         if (it) { stop(e); onPick(it) }
         else onClose() // 无匹配:不拦截,让 Enter/Tab 正常落进编辑器(换行/缩进)
       }
-      // 其余(字母/空格/退格/←→/Home…)一律放行 → 落进编辑器,slashSuggestPlugin 重算 query。
+      // 其余(字母/空格/退格/Home…)一律放行 → 落进编辑器,slashSuggestPlugin 重算 query。
       // 空格/换行让 query 含空白 → 插件 report(null) → 菜单自动关、'/…' 留成字面文本(AFFiNE 式)。
       // 退格删到 '/' 之前 → 无 '/' → 插件 report(null) → 关菜单(Notion 式撤销)。
     }
     window.addEventListener('keydown', onKey, true)
     return () => window.removeEventListener('keydown', onKey, true)
-  }, [items, active, onPick, onClose, editorFocused])
+  }, [items, active, category, q, onPick, onClose, editorFocused])
 
   const renderItem = (it: SlashItem, i: number) => (
     <button
       key={it.key}
       id={`${menuId}-${i}`}
       className="slash-item"
-      data-active={i === active || undefined}
+      data-key={it.key}
+      aria-label={it.label}
+      data-active={i === activeIdx || undefined}
       // ↑↓ 走到可视区外的选项要跟着滚(block:'nearest' 已可见时是空操作,鼠标 hover 不会乱跳)。
-      ref={i === active ? (el) => el?.scrollIntoView({ block: 'nearest' }) : undefined}
+      ref={i === activeIdx ? (el) => el?.scrollIntoView({ block: 'nearest' }) : undefined}
       onMouseEnter={() => setActive(i)}
       // onMouseDown+preventDefault:选项按下时不夺走编辑器焦点(否则 consume/transform 前编辑器已 blur),同 WikiSuggest。
       onMouseDown={(e) => { e.preventDefault(); onPick(it) }}
@@ -2668,11 +2773,22 @@ function SlashMenu({ query, left, top, anchorTop, hideKeys, ctx, unified, editor
     <>
       <div className="slash-backdrop" onMouseDown={onClose} />
       {/* 按下菜单空白/分组标签/滚动条不夺编辑器焦点:失焦即关(L-04)后,不拦这一下菜单会自己关掉。 */}
-      <OverlayAt id={menuId} className="slash-menu" role="menu" x={left} y={top} anchorTop={anchorTop} onMouseDown={(e) => e.preventDefault()}>
-        {items.length === 0 && <div className="slash-empty">{t('mdblock.menu.noMatch')}</div>}
-        <div className="slash-scroll">
-          {q
-            ? items.map((it, i) => renderItem(it, i))
+      <OverlayAt id={menuId} className="slash-menu" x={left} y={top} anchorTop={anchorTop} style={{ minHeight }}
+        innerRef={(el) => { menuEl.current = el }} onMouseDown={(e) => e.preventDefault()}>
+        <div className="slash-category-tabs" role="tablist" aria-label={t('mdblock.category.label')}>
+          {SLASH_CATEGORIES.map((tab) => (
+            <button key={tab} type="button" id={`${menuId}-tab-${tab}`} className="slash-category-tab"
+              role="tab" data-category={tab} aria-selected={category === tab} aria-controls={`${menuId}-panel`}
+              tabIndex={-1} onMouseDown={(e) => e.preventDefault()} onClick={() => chooseCategory(tab)}>
+              {t(`mdblock.category.${tab}`)}
+            </button>
+          ))}
+        </div>
+        <div className="slash-list" id={`${menuId}-panel`} role="tabpanel" data-category={category} aria-labelledby={`${menuId}-tab-${category}`}>
+        {items.length === 0 && <div className="slash-empty">{t(q ? 'mdblock.menu.noMatch' : 'mdblock.category.empty')}</div>}
+        <div className="slash-scroll" id={`${menuId}-commands`} role="menu" aria-labelledby={`${menuId}-tab-${category}`}>
+          {q || grouped.length <= 1
+            ? items.map(renderItem)
             : grouped.map((g) => (
                 <div key={g.name} className="slash-group">
                   <div className="slash-group-label">{g.name}</div>
@@ -2680,13 +2796,13 @@ function SlashMenu({ query, left, top, anchorTop, hideKeys, ctx, unified, editor
                 </div>
               ))}
         </div>
-        {items.length > 0 && (
-          <div className="slash-foot">
-            <span>{t('mdblock.foot.select')}</span>
-            <span>{t('mdblock.foot.insert')}</span>
+        </div>
+        <div className="slash-foot">
+            <span>{t('mdblock.foot.category')}</span>
+            {items.length > 0 && <span>{t('mdblock.foot.select')}</span>}
+            {items.length > 0 && <span>{t('mdblock.foot.insert')}</span>}
             <span>{t('mdblock.foot.close')}</span>
-          </div>
-        )}
+        </div>
       </OverlayAt>
     </>
   )

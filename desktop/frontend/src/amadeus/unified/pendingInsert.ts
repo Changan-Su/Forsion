@@ -15,6 +15,7 @@ import type { Fragment } from '@milkdown/kit/prose/model'
 import { $prose } from '@milkdown/kit/utils'
 import type { MilkdownPlugin } from '@milkdown/kit/ctx'
 import { registerMessages, translate } from '../../i18n'
+import { unfoldCalloutsForInsert } from '../blocks/markdown/callout'
 
 registerMessages({
   'pendins.busy': { zh: '「{label}」进行中…', en: '"{label}" in progress…' },
@@ -116,7 +117,7 @@ export function endPending(view: EditorView, id: string): void {
 }
 
 /** 把内容插到锚所在的块(空块原地替换,否则插在后面),同一笔事务撤掉锚。锚已不在 = false,什么都不做。
- *  「顶层块」口径同 UnifiedPage 的 insertMd:doc 或分栏 cell 的直接子节点(列表项里 = 整份列表之后)。 */
+ *  容器口径同 UnifiedPage 的 insertMd:doc、分栏 cell 或引用/callout(列表项里 = 整份列表之后)。 */
 export function insertAtPending(view: EditorView, id: string, content: Fragment | null): boolean {
   const pos = pendingPos(view.state, id)
   if (pos == null) return false
@@ -127,7 +128,7 @@ export function insertAtPending(view: EditorView, id: string, content: Fragment 
   }
   const $p = view.state.doc.resolve(pos)
   let d = $p.depth
-  while (d >= 1 && !['doc', 'amadeusColumnCell'].includes($p.node(d - 1).type.name)) d--
+  while (d >= 1 && !['doc', 'amadeusColumnCell', 'blockquote'].includes($p.node(d - 1).type.name)) d--
   const sel = view.state.selection
   let at: number
   let end: number
@@ -146,6 +147,7 @@ export function insertAtPending(view: EditorView, id: string, content: Fragment 
     tr = blank ? tr.replaceWith(from, to, content) : tr.insert(to, content)
     end = at + content.size
   }
+  unfoldCalloutsForInsert(tr, at, end)
   if (focusHere) tr = tr.setSelection(TextSelection.near(tr.doc.resolve(Math.min(end, tr.doc.content.size)), -1)).scrollIntoView()
   view.dispatch(tr)
   return true

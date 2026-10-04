@@ -125,11 +125,20 @@ export interface ThemeContribution {
  * 下面**凡走库内路径**的方法都要求一个**已打开**的笔记库 —— `readFile / writeFile / watchFile /
  * openFile / loadPage / createPage / listPages / listFiles / searchVault / reveal / workFolder(的落点)`。
  * 没有活动库时:写类方法 reject、只读查询给空数组、`vaultRoot()` 给 null(**用它探测**)。
- * 而且库是**惰性恢复**的:用户这一程没进过 Amadeus 之前 `vaultRoot()` 就是 null,哪怕他有库。
+ * 而且库是**惰性恢复**的:用户这一程没进过 Amadeus 之前 `vaultRoot()` 就是 null,哪怕他有库。插件视图挂载时宿主会
+ * 唤醒它(2026-10-02 起),但恢复是异步的:视图刚挂上那一下仍可能是 null,读库前先等 `vaultRoot()` 有值。
  * 结论:与笔记无关的插件功能(仪表盘/远程系统面板/工具面)**不得**建立在这些方法上 ——
  * 用不依赖库的面(`ctx.dashboard.mount` / `ctx.loadData` / `ctx.saveData` / 自己的视图 DOM)。
  * 新增方法时把「需库 / 无需库」写进它的注释,别让下一个人再踩。
  */
+/** showResetCardCeremony 的额度快照(服务端 /token-quota/my 字段;-1 = 不限)。 */
+export interface ResetCardQuota {
+  dailyLimit?: number
+  dailyRemaining?: number
+  weeklyLimit?: number
+  weeklyRemaining?: number
+}
+
 export interface PluginAppApi extends BlockSurfaceApi {
   /** Vault-relative path of the note the active panel is showing (both carriers), or null. */
   getActivePage(): string | null
@@ -143,6 +152,10 @@ export interface PluginAppApi extends BlockSurfaceApi {
   /** 2026-09-28+:打开设置到某一页或某个子页,口径同宿主深链(如 'model/m-providers'、'forsion/fx:forsion-extend:quota')。
    *  旧宿主 / 没有设置页的宿主没有:`ctx.app.openSettings?.(…)`。 */
   openSettings?(target: string): void
+  /** 2026-09-29+:用完一张额度重置卡后弹宿主那张用卡动画(与左下角账号菜单同一张)。只对首方内置包(locked)生效,
+   *  别的插件调了是 no-op —— 这张卡说的是「你的额度已恢复」,不能让任意插件拿假数字弹。字段 = 服务端 /token-quota/my 原样。
+   *  旧宿主没有:`ctx.app.showResetCardCeremony?.(…)`,没有就自己画结果。 */
+  showResetCardCeremony?(result: { before: ResetCardQuota; after: ResetCardQuota; remainingCards?: number }): void
   openSwitcher(): void
   /** Show a transient toast. */
   notify(message: string): void
@@ -424,6 +437,9 @@ export interface StatusItemHandle {
   dispose(): void
 }
 
+/** A workbench area a plugin view can be docked into. */
+export type PluginViewLocation = 'main' | 'left' | 'right' | 'bottom'
+
 /** A workbench view a plugin can contribute (plain DOM mount — no React needed in the plugin).
  *  The host registers it into the engine view registry as `plugin:<pluginId>:<viewId>`, so custom
  *  Spaces can compose it (and declare it under `requires.views`), and the plugin's own commands
@@ -451,6 +467,11 @@ export interface ViewContribution {
   id: string
   /** Tab title shown in the workbench. */
   title: string
+  /** Tab icon (2026-10-03+): a name from the plugin icon vocabulary (the names `ListItem.icon` takes). Tabs in the
+   *  side panels show the icon only, so set one on every view that can share a side panel with another (a
+   *  navigation and a media bin, say) or the two tabs look the same. Absent or unknown name: the host's generic
+   *  plugin icon. Older hosts ignore it, and show no icon at all. */
+  icon?: string
   /** Build the view's DOM into the host-provided element; called once per opened instance.
    *  Return a cleanup to run when the instance closes (clear timers/observers here).
    *  May be async (2026-09-27+): the resolved function is the cleanup (run at once if the view already
@@ -796,6 +817,8 @@ export interface PluginContext {
   registerSelectionAction(action: SelectionActionContribution): void
   registerCommand(command: CommandContribution): void
   registerTheme(theme: ThemeContribution): void
+  /** Adds an image-only preset to Appearance settings; never changes the user's selection. */
+  registerAppearance?(preset: import('../../../../shared/startupAppearance').AppearancePreset): () => void
   /** Contribute a font to 设置 → 外观 → 字体. Returns a disposer; the host also revokes it on
    *  disable/reload, so plugins may ignore the return value.
    *  Old hosts (< 2026-08-28) lack it — call as `ctx.registerFont?.(…)`. */
@@ -822,8 +845,29 @@ export interface PluginContext {
   registerFileCreator(def: FileCreatorContribution): void
   /** Open (or focus) one of this plugin's own registered views. Defaults to the main area;
    *  pass { location: 'left' | 'right' } to dock it into a sidebar (2026-08-25+, older hosts
-   *  ignore the option and open in main). No-op on hosts without a workbench. */
-  openView(viewId: string, opts?: { location?: 'main' | 'left' | 'right' }): void
+   *  ignore the option and open in main), or 'bottom' for the native bottom panel (2026-10-02+).
+   *  ⚠️ Older desktop hosts open an unknown location in main, which navigates the active main view away:
+   *  check `viewLocations` before asking for 'bottom'. No-op on hosts without a workbench. */
+  openView(viewId: string, opts?: { location?: PluginViewLocation }): void
+  /** Where `openView` (and a Space's `layout`) can dock this plugin's views on this host (2026-10-02+).
+   *  Desktop/Web: main, left, right, bottom; mobile has no bottom panel. Undefined on older hosts and on hosts
+   *  without a workbench: feature-detect with `ctx.viewLocations?.includes('bottom')`. */
+  readonly viewLocations?: readonly PluginViewLocation[]
+  /** Close every open instance of one of this plugin's own views, wherever it is docked (2026-10-02+). A side
+   *  panel that loses its last view shows the host's empty placeholder; the bottom panel collapses — as when the
+   *  person closes the tab. A collapsed panel keeps its stash. No-op without a workbench; absent on older hosts.
+   *  A view the Space pins (`"pinned": true` in the recipe) keeps its last instance in that panel. */
+  closeView?(viewId: string): void
+  /** Swap this plugin's view `fromViewId` for `toViewId` where it stands (2026-10-02+): open tabs change in place
+   *  (same panel and size, the layout is not rebuilt, the active tab stays where it was), a collapsed panel keeps the
+   *  new view in its stash and stays collapsed, and the Space's panel defaults follow. This is the "launch layout →
+   *  project layout" move (a list in the left panel becomes the project's media). Returns how many instances were
+   *  replaced; 0 when `fromViewId` is open nowhere — then decide yourself whether to `openView` (that one expands a
+   *  collapsed panel). Absent on older hosts: fall back to `openView`.
+   *  When the Space pins `fromViewId` (`"pinned": true` in the recipe) it is not replaced: `toViewId` opens as a tab
+   *  beside it (in the stash for a collapsed panel) and comes to the front if `fromViewId` was in front; the count is
+   *  then the tabs newly opened, 0 if `toViewId` was already there. Swapping back removes only `toViewId`. */
+  replaceView?(fromViewId: string, toViewId: string, opts?: { params?: Record<string, unknown> }): number
   /** Open one of this plugin's registered views in the native Floating Panel window.
    *  Desktop-only; feature-detect because Web intentionally has no plugin window bridge. */
   openFloatingPanel?(viewId: string, opts?: PluginFloatingPanelOptions): void
@@ -877,6 +921,11 @@ export interface PluginContext {
   /** Host-native UI primitives (2026-09-07+). A plugin keeps ownership of its content DOM and gives
    *  the host a shell to overlay plus its scroll/content roots. Old hosts omit the whole member. */
   ui?: {
+    /** Native Amadeus editor for Markdown owned by the caller (API drafts, etc.). No active-vault access. */
+    mountMarkdownEditor?(
+      el: HTMLElement,
+      opts: import('../../../../shared/markdownEditor').PluginMarkdownEditorOptions,
+    ): import('../../../../shared/markdownEditor').PluginMarkdownEditorHandle
     /** Shared prompt input + live model catalog. Local draft; the plugin owns submission.
      *  Feature-detect on older hosts. The host disposes mounts on disable/reload/setup failure. */
     mountChatBox?(
@@ -968,7 +1017,9 @@ export interface PluginContext {
      *    「工作区外写入」的升级审批(仍按用户自己的审批档走)。
      *  - 返回 `{ ok:false, error }` 而不抛:Agent 不存在、后端没连上、送出失败。
      *  旧宿主没有:`ctx.tangu?.startChat?.(…)`,缺席时插件自己退化(把提示词复制到剪贴板之类)。 */
-    startChat?(o: { agent?: string; prompt: string; send?: boolean; folder?: string }): Promise<import('./tanguSeam').TanguStartChatResult>
+    /** True when startChat accepts explicit modelId / thinkingLevel from the native Chat Box. */
+    chatSelection?: true
+    startChat?(o: { agent?: string; prompt: string; send?: boolean; folder?: string; modelId?: string; thinkingLevel?: import('../../../../shared/chatBox').ChatBoxSelection['thinkingLevel'] }): Promise<import('./tanguSeam').TanguStartChatResult>
     /** 一次性文本补全(2026-09-28+,评审 G3-07):引擎 `POST /agent/inline`,无工具、不落库、不进任何会话。
      *  **收编插件直连 `/agent/runs` 的做法** —— 那条是 Agent 的 run(带工具、落会话、8192 字符上限),拿来做
      *  「改写这段」既重又危险。`prompt` 是给模型的指令;`selection` / `before` / `after` 是正文上下文(按数据对待,
@@ -1215,6 +1266,9 @@ export interface AmadeusPlugin {
   minAppVersion?: string
   /** Companion app id (manifest.requiresApp); detail page renders install/probe UI when whitelisted in KNOWN_APPS. */
   requiresApp?: string
+  /** 前置插件(manifest `requiresPlugins`,宿主已消毒):缺任何一个,本插件装着但不运行;前置没了自动暂停、回来自动恢复。
+   *  判定与原因见 pluginDeps.ts;代码内注册的内置插件也可以直接写这个字段。 */
+  requiresPlugins?: import('@amadeus-shared/ipc').PluginDependency[]
   /** 声明要用的宿主敏感能力(manifest `capabilities`,主进程已按白名单过滤)。没声明的能力宿主不注入。 */
   capabilities?: import('@amadeus-shared/ipc').PluginCapability[]
   /** README.md content for the detail page (external plugins only). */
@@ -1247,6 +1301,9 @@ export interface AmadeusPlugin {
   devProductId?: string
   /** 开发副本正遮蔽同 id 的安装版(撤下后安装版会回来)。 */
   shadowsInstalled?: boolean
-  /** Wire up contributions; optionally return a disposer for teardown on disable. */
-  setup(ctx: PluginContext): void | (() => void)
+  /** Wire up contributions; optionally return a disposer for teardown on disable.
+   *  May be async: the plugin counts as active once the synchronous part returns; a disposer the promise
+   *  resolves to is installed then (or run at once if the plugin was stopped meanwhile), and a rejection
+   *  rolls the whole activation back exactly like a synchronous throw. */
+  setup(ctx: PluginContext): void | (() => void) | Promise<void | (() => void)>
 }

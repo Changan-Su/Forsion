@@ -21,9 +21,13 @@ import { fuzzyScore } from '../../lib/fuzzy'
 import { amadeus } from '../../api'
 import { unifiedBody, unifiedHeadings } from '../../unified/lifecycle'
 import { anchorSafe, blockIdsOf, headingsOf, parseSubQuery } from './wikiSubpath'
+import { readTangu, type TanguAgentInfo } from '../../plugins/tanguSeam'
+import { Bot } from 'lucide-react'
 import { registerMessages, useI18n } from '../../../i18n'
 
 registerMessages({
+  'wiki.sec.agent': { zh: '交办 Agent', en: 'Assign to an agent' },
+  'wiki.agentTask': { zh: '新建任务块', en: 'New task block' },
   'wiki.sec.date': { zh: '日期', en: 'Date' },
   'wiki.sec.page': { zh: '链接到页面', en: 'Link to page' },
   'wiki.create': { zh: '新建链接 “{q}”', en: 'New link “{q}”' },
@@ -55,6 +59,8 @@ interface Props {
   editorFocused?: () => boolean
   /** 链接所在笔记(vault 相对路径):`[[名#` 按它就近解析目标,`[[#` 就是它本身。缺 = 不做 `#` / `^` 补全。 */
   sourcePath?: string
+  agents?: TanguAgentInfo[]
+  onPickAgent?: (slug: string) => void
 }
 
 /** 一行候选:section 变化处出分组标签(只在 @ 的日期 / 页面两区)。 */
@@ -63,7 +69,7 @@ interface Row {
   name: ReactNode
   hint?: string
   create?: boolean
-  section?: 'date' | 'page'
+  section?: 'date' | 'page' | 'agent'
   pick: () => void
 }
 
@@ -112,8 +118,12 @@ function dirOf(p: string): string {
 /** 重名判定 key:页面剥 .md 小写(pageKey),文件含扩展名小写 —— 两命名空间天然分立。 */
 const candKey = (c: Cand): string => (c.file ? c.base.toLowerCase() : pageKey(c.base))
 
-export function WikiSuggest({ query, left, top, anchorTop, getPageNames, getFiles, onPick, onPickRaw, onClose, editorFocused, sourcePath, allowCreate = true, dates = false }: Props) {
+export function WikiSuggest({ query, left, top, anchorTop, getPageNames, getFiles, onPick, onPickRaw, onClose, editorFocused, sourcePath, agents = [], onPickAgent, allowCreate = true, dates = false }: Props) {
   const [active, setActive] = useState(0)
+  const [, refreshAgents] = useState(0)
+  const agentMentions = !!onPickAgent
+  useEffect(() => agentMentions ? readTangu()?.subscribeAgents?.(() => refreshAgents((n) => n + 1)) : undefined, [agentMentions])
+  const roster = agentMentions ? readTangu()?.agents?.() ?? agents : agents
   const { t } = useI18n()
   const icons = usePageStore((s) => s.icons) // 页面 emoji(path 键);非 vault 候选池查不到 → 无图标,天然兼容
   const aliasMap = useVaultAliases()
@@ -159,6 +169,9 @@ export function WikiSuggest({ query, left, top, anchorTop, getPageNames, getFile
       rows.push({ key: `s:${it.insert}`, name: it.label, hint: it.hint, pick: () => onPick(`${sub.name}#${it.insert}`) })
     }
   } else {
+    if (onPickAgent) for (const agent of roster.filter((a) => !q || fuzzyScore(q, a.name) !== null || fuzzyScore(q, a.slug) !== null).slice(0, 6)) {
+      rows.push({ key: `agent:${agent.slug}`, name: <><Bot size="1em" aria-hidden="true" />{agent.name}</>, hint: t('wiki.agentTask'), section: 'agent', pick: () => onPickAgent(agent.slug) })
+    }
     const dateCands = dates ? dateCandidates(query) : []
     for (const d of dateCands) rows.push({ key: `d:${d.insert}`, name: d.label, hint: d.hint, section: 'date', pick: () => onPickRaw?.(d.insert) })
     // 排序 + 文件保底名额见 ./wikiRank(附件/数据库曾被页面整页挤掉,单测钉在 wikiRank.test.ts)。
@@ -245,7 +258,7 @@ export function WikiSuggest({ query, left, top, anchorTop, getPageNames, getFile
       {rows.map((r, i) => (
         <RowButton key={r.key} r={r} i={i} active={active} setActive={setActive} reveal={reveal}
           // 分组标签只在 @ 提及场景(Notion 的 Date / Link to page);[[ 只有页面,标签是噪音。
-          label={dates && r.section && r.section !== rows[i - 1]?.section ? t(r.section === 'date' ? 'wiki.sec.date' : 'wiki.sec.page') : undefined}
+          label={dates && r.section && r.section !== rows[i - 1]?.section ? t(`wiki.sec.${r.section}`) : undefined}
         />
       ))}
     </OverlayAt>

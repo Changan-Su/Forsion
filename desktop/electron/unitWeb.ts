@@ -165,7 +165,7 @@ export interface UnitWebDeps {
   }
   readPlugins: () => Promise<unknown[]>
   /** Space 配方清单(与 spaces:list IPC 同源):设备页没有它装不出插件 Space,Ribbon 上就没有插件图标。 */
-  readSpaces: () => Promise<Array<{ slug: string; json: string; plugin?: string }>>
+  readSpaces: () => Promise<Array<{ slug: string; json: string; plugin?: string; iconUrl?: string }>>
   /** UI 偏好配置面(白名单裁剪后的子集,绝不含 token/连接键):设备页据此长出 Agent Desk 等
    *  按 desktopConfig 门控的功能;写回同一张白名单(体验跟随本机设置,双向)。 */
   readConfig: () => Promise<Record<string, unknown>>
@@ -383,6 +383,13 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
       req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')))
       req.on('error', reject)
     })
+
+  /** /engine/* 反代:剥外来身份、盖本机引擎 token,请求/响应双向原始管道(SSE 天然直通)。 */
+  const isLocalOnlyEnginePath = (path: string): boolean => {
+    let p = path
+    try { p = decodeURIComponent(new URL(path, 'http://x').pathname) } catch { /* 解不开就按原样比 */ }
+    return p.toLowerCase().replace(/\/{2,}/g, '/').startsWith('/engine/agent/browser-extension')
+  }
 
   /** /engine/* 反代:剥外来身份、盖本机引擎 token,请求/响应双向原始管道(SSE 天然直通)。
    *  via 非空 = 远端来路:盖 x-forsion-remote(+ 标记密钥)。头是**白名单拷贝**,入站的 x-forsion-remote* / x-unit-caller
@@ -711,6 +718,10 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
       const method = req.method || 'GET'
       const info = authInfo(req)
       if (!info.ok) { json(res, 401, { detail: '未配对', code: 'UNPAIRED' }); return }
+      if (isLocalOnlyEnginePath(url)) {
+        if (!engineTarget(url.slice('/engine'.length))) { json(res, 400, { detail: 'Ambiguous engine path', code: 'BAD_PATH' }); return }
+        json(res, 403, LOCAL_ONLY_BODY); return
+      }
       if (ownerProjection) { proxyEngine(req, res, url.slice('/engine'.length) || '/', null, null); return }
       // default-deny 允许清单:规整后的路径既用来判,也原样转给引擎(query 不动)。判的是**整个请求目标**
       // (url,不是按 `?` 切过的 path):`#` 可能藏在 query 之后,也可能藏在路径里。

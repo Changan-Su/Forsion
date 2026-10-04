@@ -1,3 +1,4 @@
+import { startupAppearanceHtml } from '../frontend/startupAppearancePlugin'
 /**
  * 浏览器内调试用的独立 vite 配置(`npx vite frontend`):渲染层不依赖 Electron,
  * window.tangu 缺省时配置走内存/localStorage,便于无显示器环境冒烟与 UI 开发。
@@ -8,7 +9,7 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [startupAppearanceHtml(), react()],
   // worktree 软链主检出 node_modules 时,缺省 cacheDir(node_modules/.vite)是共享的:
   // 配置哈希不同会把主检出 dev 的 deps 整份重优化掉。worktree 里起 harness 设这个变量。
   cacheDir: process.env.FORSION_VITE_CACHE_DIR || undefined,

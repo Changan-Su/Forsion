@@ -3,6 +3,8 @@
  * agent 调用 renderer 直连 HTTP,不经主进程。
  */
 import type { ActiveWindowSample } from '../shared/activeWindow'
+import type { AppearancePatch, StartupAppearance } from '../shared/startupAppearance'
+import type { DocumentTaskClaimsApi } from '../shared/documentTasks'
 import type { DesktopPermissionId, DesktopPermissionRequestOptions, DesktopPermissionsSnapshot } from '../shared/desktopPermissions'
 import type { ComputerHistoryApi, ComputerHistoryView } from '../shared/computerHistory'
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
@@ -25,6 +27,14 @@ export interface BackendStatus {
   pid: number | null
   lastError: string | null
 }
+
+// Cache changes from the start of preload, including the interval before React subscribes.
+let currentAppearance: StartupAppearance = ipcRenderer.sendSync('appearance:initial')
+const appearanceListeners = new Set<(value: StartupAppearance) => void>()
+ipcRenderer.on('appearance:changed', (_event, value: StartupAppearance) => {
+  currentAppearance = value
+  for (const listener of appearanceListeners) listener(value)
+})
 
 const api = {
   /** 宿主平台('darwin' | 'win32' | 'linux');渲染层据此调标题栏/交通灯留白等。 */
@@ -53,6 +63,11 @@ const api = {
     },
   } satisfies ComputerHistoryApi,
   getConfig: (): Promise<any> => ipcRenderer.invoke('config:get'),
+  documentTasks: {
+    claim: (key, signature) => ipcRenderer.invoke('documentTasks:claim', key, signature),
+    complete: (key, token, sessionId) => ipcRenderer.invoke('documentTasks:complete', key, token, sessionId),
+    release: (key, token) => ipcRenderer.invoke('documentTasks:release', key, token),
+  } satisfies DocumentTaskClaimsApi,
   setConfig: (patch: Record<string, any>): Promise<any> => ipcRenderer.invoke('config:set', patch),
   backendStatus: (): Promise<BackendStatus> => ipcRenderer.invoke('backend:getStatus'),
   backendLogs: (): Promise<string[]> => ipcRenderer.invoke('backend:getLogs'),
@@ -151,7 +166,15 @@ const api = {
     ipcRenderer.invoke('feedback:submit', input),
   appVersion: (): Promise<string> => ipcRenderer.invoke('app:version'),
   // ── 应用内自动更新(检查 → 下载 → 重启安装;mac 仅检测,引导手动下载)──
+  getCorePluginUpdates: () => ipcRenderer.invoke('updater:core-status'),
+  onCorePluginUpdates: (cb: (status: any) => void): (() => void) => {
+    const fn = (_e: unknown, status: any) => cb(status)
+    ipcRenderer.on('updater:core-status', fn)
+    return () => { ipcRenderer.removeListener('updater:core-status', fn) }
+  },
   checkForUpdates: (): Promise<any> => ipcRenderer.invoke('updater:check'),
+  getUpdaterStatus: (): Promise<any> => ipcRenderer.invoke('updater:status'),
+  restartForUpdate: (): Promise<{ ok: boolean }> => ipcRenderer.invoke('updater:restart'),
   downloadUpdate: (): Promise<void> => ipcRenderer.invoke('updater:download'),
   installUpdate: (): Promise<{ ok: boolean }> => ipcRenderer.invoke('updater:install'),
   /** 测试版通道:开了才会收到 x.y.z-beta.N;关着连看都看不到(feed/端点两层都隔离)。 */
@@ -165,9 +188,11 @@ const api = {
   /** 带主进程半身的内置包(Forsion Extend)启停:只改下次开机装不装,回是否待重启。 */
   setBundleEnabled: (id: string, on: boolean): Promise<{ restartPending: boolean }> => ipcRenderer.invoke('plugins:setBundleEnabled', id, on),
   onUpdaterStatus: (cb: (st: any) => void): (() => void) => {
-    const listener = (_e: unknown, st: any): void => cb(st)
+    let off = false, received = false
+    const listener = (_e: unknown, st: any): void => { received = true; if (!off) cb(st) }
     ipcRenderer.on('updater:status', listener)
-    return () => ipcRenderer.removeListener('updater:status', listener)
+    void ipcRenderer.invoke('updater:status').then((st) => { if (!off && !received) cb(st) }).catch(() => {})
+    return () => { off = true; ipcRenderer.removeListener('updater:status', listener) }
   },
   onAuthDevice: (cb: (info: { url: string; userCode: string }) => void): (() => void) => {
     const listener = (_e: unknown, info: { url: string; userCode: string }): void => cb(info)
@@ -255,6 +280,7 @@ const api = {
   productsRegister: (source: string, within: string, strict: boolean) => ipcRenderer.invoke('products:register', source, within, strict),
   productsIsCreation: (dir: string): Promise<boolean> => ipcRenderer.invoke('products:isCreation', dir),
   productsExternalLaunchAllowed: (id: string): Promise<boolean> => ipcRenderer.invoke('products:externalLaunchAllowed', id),
+  productsExternalLaunchNeedsReauth: (id: string): Promise<boolean> => ipcRenderer.invoke('products:externalLaunchNeedsReauth', id),
   /** 开发态插件的加载 / 卸载由主进程向**每个窗口**广播:收到就重载这些插件 id(卸载 = 来源没了 → 拆掉)。 */
   onDevPluginsChanged: (cb: (change: { pluginIds: string[] }) => void) => {
     const listener = (_e: unknown, change: { pluginIds: string[] }) => cb(change)
@@ -306,12 +332,22 @@ const api = {
   discoveryImportMcp: (names: string[]): Promise<{ imported: string[]; reserved?: string[] }> =>
     ipcRenderer.invoke('discovery:importMcp', names),
   // ── 拖入式主题(~/.tangu/themes/;主进程读盘成字符串,渲染端 <style> 注入)──
+  startupAppearance: {
+    initial: currentAppearance,
+    update: (patch: AppearancePatch, clearPlugin?: string): Promise<StartupAppearance> => ipcRenderer.invoke('appearance:update', patch, clearPlugin),
+    subscribe: (cb: (value: StartupAppearance) => void) => {
+      appearanceListeners.add(cb)
+      cb(currentAppearance)
+      return () => { appearanceListeners.delete(cb) }
+    },
+  },
   listThemes: (): Promise<Array<{ id: string; manifest: Record<string, any>; css: string }>> =>
     ipcRenderer.invoke('themes:list'),
   openThemesDir: (): Promise<{ ok: boolean }> => ipcRenderer.invoke('themes:openDir'),
   /** 当前主题请求窗口级系统材质，并同步经白名单校验的实色降级底。 */
   setWindowMaterial: (input: { material: 'opaque' | 'system-glass'; mode: 'light' | 'dark'; backgroundColor?: string }): Promise<{ ok: boolean }> =>
     ipcRenderer.invoke('window:setMaterial', input),
+  sampleAmbientPalette: (rect: import('../shared/ambientPalette').AmbientRect): Promise<import('../shared/ambientPalette').AmbientPalette | null> => ipcRenderer.invoke('ui:ambientPalette', rect),
   // 设置界面「打开文件夹」:agent(slug 缺省=agents 根)/ skills 目录。
   openAgentDir: (slug?: string): Promise<{ ok: boolean }> => ipcRenderer.invoke('agents:openDir', slug),
   openSkillsDir: (): Promise<{ ok: boolean }> => ipcRenderer.invoke('skills:openDir'),
@@ -319,6 +355,16 @@ const api = {
   // ── Forsion Market(浏览/详情/安装全走主进程:公开浏览 + 本地解压安装)──
   marketList: (type?: string): Promise<{ items: any[] }> => ipcRenderer.invoke('market:list', type),
   marketDetail: (id: string): Promise<any> => ipcRenderer.invoke('market:detail', id),
+  marketUpdateStatus: () => ipcRenderer.invoke('market:updateStatus'),
+  marketSetAutoUpdate: (id: string, on: boolean) => ipcRenderer.invoke('market:setAutoUpdate', id, on),
+  marketCheckUpdates: (): Promise<void> => ipcRenderer.invoke('market:checkUpdates'),
+  onMarketUpdateStatus: (cb: (state: import('../shared/marketPluginUpdates').MarketPluginUpdates) => void): (() => void) => {
+    let off = false, received = false
+    const listener = (_e: unknown, state: import('../shared/marketPluginUpdates').MarketPluginUpdates): void => { received = true; cb(state) }
+    ipcRenderer.on('market:updateStatus', listener)
+    void ipcRenderer.invoke('market:updateStatus').then((state) => { if (!off && !received) cb(state) }).catch(() => {})
+    return () => { off = true; ipcRenderer.removeListener('market:updateStatus', listener) }
+  },
   marketInstall: (id: string): Promise<{ ok: boolean; path: string; files: number; type: string; slug: string }> =>
     ipcRenderer.invoke('market:install', id),
   // 安装进度(阶段 + 当前在试第几个下载地址 + 字节):主进程只推给发起窗口,渲染层按 id 过滤。
@@ -334,7 +380,7 @@ const api = {
   pluginsUserInstalled: (): Promise<Array<{ id: string; slug: string }>> => ipcRenderer.invoke('plugins:userInstalled'),
   pluginsUninstall: (id: string): Promise<{ ok: boolean }> => ipcRenderer.invoke('plugins:uninstall', id),
   // ── 用户自定义 Space(~/.tangu/spaces;数据化布局配方,market type='space' 同目录)──
-  spacesList: (): Promise<Array<{ slug: string; json: string; plugin?: string }>> => ipcRenderer.invoke('spaces:list'),
+  spacesList: (): Promise<Array<{ slug: string; json: string; plugin?: string; iconUrl?: string }>> => ipcRenderer.invoke('spaces:list'),
   spacesSave: (slug: string, json: string): Promise<{ ok: boolean }> => ipcRenderer.invoke('spaces:save', slug, json),
   spacesDelete: (slug: string): Promise<{ ok: boolean }> => ipcRenderer.invoke('spaces:delete', slug),
   // ── 环境检测 + 引导安装(首启向导;run 仅认 check 登记的 opaque id)──
@@ -518,6 +564,7 @@ const api = {
 // ── 产品档案收缩暴露面 ─────────────────────────────────────────────────────────
 // 渲染端遍布 window.tangu?.X 能力门控:删掉键 = 对应功能(Inbox/市场/设置 agent tab/账号…)自动隐藏,UI 零改动。
 const AGENT_KEYS = [
+  'documentTasks',
   'backendStatus', 'backendLogs', 'backendRestart', 'onBackendStatus',
   'notifyInbox', 'notify', 'setInboxBadge', 'onInboxOpen',
   'authStatus', 'forsionLogin', 'forsionLogout', 'authProviders', 'providerLogin', 'openAccountCenter', 'onAuthDevice', 'onAuthChanged',
@@ -545,7 +592,7 @@ const AGENT_KEYS = [
   'remoteSafety', // 急停 / 远程锁定管的是本机引擎上的远程 / 通道 / 无人值守 run
 ] as const
 if (!PRODUCT.agentBackend) for (const k of AGENT_KEYS) delete (api as Record<string, unknown>)[k]
-if (!PRODUCT.market) for (const k of ['marketList', 'marketDetail', 'marketInstall', 'onMarketInstallProgress', 'marketInstalled', 'marketUninstall'] as const) delete (api as Record<string, unknown>)[k]
+if (!PRODUCT.market) for (const k of ['marketList', 'marketDetail', 'marketInstall', 'onMarketInstallProgress', 'marketInstalled', 'marketUninstall', 'marketUpdateStatus', 'marketSetAutoUpdate', 'marketCheckUpdates', 'onMarketUpdateStatus'] as const) delete (api as Record<string, unknown>)[k]
 // 云端账号面(个人中心 / 会员页 / 额度与重置卡 / 反馈 / cloud:fetch)由内置包 Forsion Extend 的主进程半身提供
 // (electron/cloudHost.ts);没装载(验签失败 / 单品变体 / 没捆)就删键 —— 调了会 reject "No handler registered",
 // 删掉键渲染层按同一套 window.tangu?.X 门控自动隐藏。主进程在开窗前就答好 cloud:present(Extend 实际注册的通道名),

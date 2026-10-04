@@ -9,6 +9,7 @@
  */
 import { imageMimeOf, type CloudBrainServices, type BuildPayloadOpts, type StreamOpts, type ImageGenRequest, type ImageEditRequest, type ImageGenResult, type SpeechRequest, type SpeechResult } from '../../seams/cloudBrain.js';
 import type { ProviderRegistry } from '../../llm/providerRegistry.js';
+import { freshOAuthCred } from '../../llm/providerOAuth.js';
 import { loadLocalWebSearchConfig, hasLocalSearchProvider, runLocalSearch } from './localSearch.js';
 import { buildOpenAiCompatPayload, tuneOpenAiDirectPayload, streamOpenAiCompat, DIRECT_MARK, PROTOCOL_MARK } from '../../llm/openaiCompat.js';
 import { streamAnthropicMessages } from '../../llm/anthropicMessages.js';
@@ -129,7 +130,7 @@ export function pcmToWav(pcm: Uint8Array, sampleRate: number): Uint8Array {
 }
 
 /**
- * 百炼 CosyVoice(cosyvoice-v1/v2/v3):仅 WebSocket 实时协议(HTTP 直接 InvalidParameter),与 qwen3-tts 的一发一收不同。
+ * 百炼 CosyVoice(cosyvoice-v1/v2/v3/v3.5)与 Qwen-Audio-TTS(qwen-audio-*-tts-*,10-04 实测同一协议):WebSocket 实时协议,与 qwen3-tts 的一发一收不同。
  * run-task → task-started → continue-task(整段文本)+ finish-task → 收 binary 音频帧 → task-finished。
  * 我们非流式消费:拼齐所有 binary 帧作整段返回;wav 场景取 pcm 后自封 WAV 头(保证微信可播)。
  */
@@ -188,6 +189,16 @@ function synthesizeCosyVoiceWs(baseUrl: string, apiKey: string | undefined, apiM
 }
 
 export function createMultiBrain(httpBrain: CloudBrainServices, registry: ProviderRegistry): CloudBrainServices {
+  /** 订阅登录的 provider:调用前续期,并把新 token 换进注册表(图像 / 语音这些直接读 p.apiKey 的路径一并受益)。
+   *  显式配置的同名 provider(不带 oauth 标记)压过订阅登录 → 不碰它的 key。续期失败不拦调用,让上游的报错说话。 */
+  /** 订阅登录的凭证以盘上为准:快到期就续、别的进程换过(续期 / 换号重新登录)就跟上。有变化时 token 与 account id 成对换进注册表。 */
+  const syncOAuth = async (providerId: string, force = false): Promise<string | undefined> => {
+    const p = registry.list().find((x) => x.providerId === providerId);
+    if (!p?.oauth) return undefined;
+    const cred = await freshOAuthCred(providerId, force).catch(() => undefined);
+    if (cred && (cred.access_token !== p.apiKey || cred.account_id !== p.accountId)) registry.setCreds(providerId, cred.access_token, cred.account_id);
+    return cred?.access_token;
+  };
   return {
     ...httpBrain,
     search: {
@@ -243,7 +254,7 @@ export function createMultiBrain(httpBrain: CloudBrainServices, registry: Provid
           if (apiModelId) {
             const fn = !isDashScopeBase(p.baseUrl)
               ? synthesizeDirectTts
-              : /^cosyvoice/i.test(apiModelId) ? synthesizeCosyVoiceWs : synthesizeDashScopeTts; // CosyVoice 独占 WS,余走 HTTP
+              : /^cosyvoice|^qwen-audio-.*tts/i.test(apiModelId) ? synthesizeCosyVoiceWs : synthesizeDashScopeTts; // CosyVoice / Qwen-Audio-TTS 走同一套 WS,余走 HTTP
             return fn(p.baseUrl, p.apiKey, apiModelId, req);
           }
         }
@@ -268,8 +279,13 @@ export function createMultiBrain(httpBrain: CloudBrainServices, registry: Provid
     llm: {
       resolveModelAndKey: async (modelId: string) => {
         const local = registry.resolve(modelId);
-        if (local) return local; // local.model 带 DIRECT_MARK
-        return httpBrain.llm.resolveModelAndKey(modelId);
+        if (!local) return httpBrain.llm.resolveModelAndKey(modelId);
+        // 同步后重新解析:token 与 account id 都从注册表取,不会出现新 token 配旧账号。
+        return (await syncOAuth((local.model as any).provider)) ? registry.resolve(modelId)! : local; // local.model 带 DIRECT_MARK
+      },
+      refreshModelKey: async (modelId: string) => {
+        const local = registry.resolve(modelId);
+        return (local && (await syncOAuth((local.model as any).provider, true))) || null;
       },
       buildProviderPayload: async (opts: BuildPayloadOpts) => {
         if ((opts.model as any)?.[DIRECT_MARK]) {

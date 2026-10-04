@@ -14,7 +14,8 @@ if (!ordered.every((n, i) => Number.isFinite(n) && (!i || n > ordered[i - 1]))) 
 // These selectors represent editable/rendered documents, scale-compensated canvases, or graphic marks, not chrome text.
 const content = /ProseMirror|milkdown|md-body|msg-content|thinking-content|t2-content|t2-user(?:[\s.:,>]|$)|t2-think-body|amx-title-input|page-title(?:-edit)?(?:[\s.:,>]|$)|amx-db-peek-(?:title|body)|amx-db-form-title|amx-title-(?:bigicon|icon)|amx-iconpick-item|amx-tab-emoji|amx-bm-gen-letter|(?:-emoji|-avatar|-emblem)|\.hp-clock|\.hp-brand|\.am-words-n|\.cm-|\.pdfViewer|\.textLayer|\.amx-overview|\.amx-canvas/
 // Standalone legacy themes and third-party document renderers are not Genesis chrome.
-const skipFile = /\/amadeus\/theme\/|\/theme\/|\/amadeus\/pdf\/|\/blocks\/excalidraw\/|\/views\/coding\/editor\.css$|Harness\.css$/
+// sketch.css is injected as text into an isolated visualization document, never into application chrome.
+const skipFile = /\/amadeus\/theme\/|\/theme\/|\/amadeus\/pdf\/|\/blocks\/excalidraw\/|\/views\/coding\/editor\.css$|\/components\/sketch\.css$|Harness\.css$/
 let checked = 0, preserved = 0
 function walk(dir) {
   for (const e of fs.readdirSync(dir, { withFileTypes: true })) {

@@ -1,0 +1,170 @@
+/* 「⋯ → 版本历史」面板(评审 C-20)。外壳是 Amadeus 的 .dialog(层 4 浮层:--surface-2 底 + --shadow-panel + --radius-lg),
+   这里只管尺寸与内部两栏;选中行用全局选中态 --sel-fill,悬停用 --menu-hover(DESIGN §3 菜单几何)。
+   字号只用六档角色 token(check:uiscale)。 */
+.am-app .dialog.amx-hist {
+  width: min(880px, calc(100vw - 32px));
+  height: min(620px, calc(100vh - 64px));
+  padding: 0;
+  gap: 0;
+  overflow: hidden;
+}
+.amx-hist-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 12px 12px 18px;
+}
+.amx-hist-head .dialog-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.amx-hist-note {
+  margin-left: 10px;
+  font-size: var(--ui-font-meta, 12px);
+  font-weight: 400;
+  color: var(--text-muted);
+}
+.amx-hist-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--ui-control-height, 28px);
+  height: var(--ui-control-height, 28px);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+}
+.amx-hist-close:hover {
+  background: var(--menu-hover);
+  color: var(--text);
+}
+.amx-hist-body {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 232px minmax(0, 1fr);
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+.amx-hist-state {
+  grid-column: 1 / -1;
+  padding: 24px 18px;
+  font-size: var(--ui-font-body, 13px);
+  line-height: 1.6;
+  color: var(--text-muted);
+}
+.amx-hist-list {
+  min-height: 0;
+  overflow-y: auto;
+  padding: 6px;
+  border-right: 1px solid var(--border);
+  outline: none;
+}
+.amx-hist-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 7px 10px;
+  border-radius: var(--radius-sm);
+  color: var(--text-sec);
+  cursor: pointer;
+  user-select: none;
+}
+.amx-hist-row:hover {
+  background: var(--menu-hover);
+  color: var(--text);
+}
+.amx-hist-row[aria-selected='true'] {
+  background: var(--sel-fill);
+  color: var(--text);
+}
+.amx-hist-list:focus-visible .amx-hist-row[aria-selected='true'] {
+  box-shadow: 0 0 0 var(--focus-ring, 1px) var(--sel-line);
+}
+.amx-hist-rel {
+  font-size: var(--ui-font-body, 13px);
+  font-weight: 500;
+}
+.amx-hist-meta {
+  font-size: var(--ui-font-caption, 11px);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.amx-hist-preview {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.amx-hist-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 8px 12px 0;
+}
+.amx-hist-tab {
+  padding: 4px 10px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  font-size: var(--ui-font-meta, 12px);
+  color: var(--text-muted);
+}
+.amx-hist-tab:hover {
+  background: var(--menu-hover);
+  color: var(--text);
+}
+.amx-hist-tab[aria-selected='true'] {
+  background: var(--overlay-light, rgba(127, 127, 127, 0.08));
+  color: var(--text);
+  font-weight: 500;
+}
+.amx-hist-view {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: auto;
+  margin-top: 8px;
+}
+.amx-hist-text {
+  margin: 0;
+  padding: 4px 18px 18px;
+  font-family: var(--font-mono);
+  font-size: var(--ui-font-meta, 12px);
+  line-height: 1.6;
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.amx-hist-foot {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 18px;
+}
+.amx-hist-hint {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--ui-font-meta, 12px);
+  color: var(--text-muted);
+}
+.am-app .amx-hist-foot .dialog-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* 窄窗口:两栏改上下(列表限高,预览吃剩下的)。只改网格轨道,不碰带变量的简写(DESIGN §7-1)。 */
+@media (max-width: 640px) {
+  .amx-hist-body {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 34%) minmax(0, 1fr);
+  }
+  .amx-hist-list {
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+}

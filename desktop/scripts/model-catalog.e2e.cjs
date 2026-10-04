@@ -1,6 +1,6 @@
 /** 真 Electron × 假引擎：默认模型选择/保存、设置分区、本地分组/可见性、云端只读与标签倍率。先 npm run build。 */
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path')
-const { _electron: electron } = require('playwright-core')
+const electron = require('./lib/launch-electron.cjs')
 const { startStubEngine } = require('./lib/stub-engine.cjs')
 const ROOT = path.resolve(__dirname, '..')
 const models = [

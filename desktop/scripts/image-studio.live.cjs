@@ -5,7 +5,7 @@
 const fs = require('node:fs'), path = require('node:path'), os = require('node:os')
 const { spawn } = require('node:child_process'), { randomUUID } = require('node:crypto')
 const { createServer } = require('node:net'), assert = require('node:assert/strict')
-const { _electron: electron } = require('playwright-core')
+const electron = require('./lib/launch-electron.cjs')
 const ROOT = path.resolve(__dirname, '..'), OUT = path.resolve(ROOT, '../outputs/image-studio-live', new Date().toISOString().replace(/[:.]/g, '-'))
 const MODEL = process.env.TANGU_LIVE_MODEL || 'codex/gpt-5.6-luna'
 const AUTH_HOME = process.env.IMAGE_STUDIO_AUTH_HOME || path.join(os.homedir(), '.forsion-dev')
@@ -108,8 +108,9 @@ async function main() {
     if (await skip.isVisible().catch(() => false)) await skip.click()
     await win.waitForSelector('.dv-groupview')
     const icon = win.locator('.rb-space[aria-label="图像工作室"]').first()
-    if (!await icon.isVisible().catch(() => false)) await win.locator('.rb-top .rb-more').first().hover()
-    await icon.click(); await win.waitForSelector('.ims-empty')
+    if (!await icon.isVisible().catch(() => false)) await win.locator('.rb-top .rb-more').first().click() // 「…」= 展开
+    await icon.click()
+    await win.evaluate(() => document.querySelector('.rb-open-top .rb-more')?.click()) // 收起:展开时命令区让出来,后续步骤要用; await win.waitForSelector('.ims-empty')
     await win.locator('.ims input[type="file"][multiple]').setInputFiles(path.join(OUT, generated.files[0]))
     await win.locator('.ims-footer input').fill('Live · ceramic studies')
     const first = win.locator('.ims-image').first(); await first.click()

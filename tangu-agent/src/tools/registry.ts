@@ -9,7 +9,7 @@ import { DockerCleanupError } from '../sandbox/dockerLifecycle.js';
 import { isHostSandboxRestricted, isHostSandboxToolAllowed, resolveHostSandboxPolicy } from '../sandbox/hostSandboxPolicy.js';
 import { executeCustomTool } from './customTools.js';
 import { mcpResultForModel } from '../mcp/toolBridge.js';
-import { registerToolProvider, resolveTools, isDeferredIn, isSubAgentDenied, canonicalToolName, type ToolDef } from './toolRegistry.js';
+import { registerToolProvider, resolveTools, isDeferredIn, isSubAgentDenied, canonicalToolName, bindClientActionToTool, type ToolDef } from './toolRegistry.js';
 import { presetOf } from '../core/presetTable.js';
 import { effectiveRemote } from '../services/remoteOrigin.js';
 import { datetimeProvider, calculatorProvider } from './builtin/coreUtils.js';
@@ -48,11 +48,14 @@ import { readSessionProvider } from './builtin/readSession.js';
 import { searchSessionsProvider } from './builtin/searchSessions.js';
 import { manageHumanProvider } from './builtin/manageHuman.js';
 import { manageHarnessProvider } from './builtin/manageHarness.js';
+import { sessionSettingsProvider } from './builtin/sessionSettings.js';
 import { sketchProvider } from './builtin/sketch.js';
 import { manageAutomationProvider } from './builtin/manageAutomation.js';
 import { transcribeAudioProvider } from './builtin/transcribeAudio.js';
 import { viewVideoProvider } from './builtin/viewVideo.js';
 import { uiCommandsProvider } from './builtin/uiCommands.js';
+import { phoneToolsProvider } from './builtin/phoneTools.js';
+import { reviewLoadoutProvider } from './builtin/reviewLoadout.js';
 import { manageScheduleProvider } from './builtin/manageSchedule.js';
 import { loadToolsProvider } from './builtin/loadTools.js';
 import { appendActivityLine } from '../services/userActivity.js';
@@ -61,6 +64,7 @@ import { WRITE_TOOLS, writeTargetsOf } from './writeTargets.js';
 import { withWriteLock } from './writeLock.js';
 import path from 'node:path';
 import type { ToolContext, ToolResult, ToolImpl, ToolCapabilities } from './toolTypes.js';
+import { usableToolDefinition } from './toolDefinitionValidation.js';
 
 // 类型 re-export:保持既有 `from './registry.js'` 的 import 路径不变。
 export type { ToolContext, ToolResult, ToolImpl } from './toolTypes.js';
@@ -179,7 +183,7 @@ registerToolProvider(readSessionProvider); // both:read_session 按 id 读另一
 registerToolProvider(brainstormProvider); // host-only:self_brainstorm 从当前上下文分裂多视角分身自我批判(append 末尾,保前缀缓存)
 registerToolProvider(searchSessionsProvider); // both:search_sessions 列出/检索过去会话,找到 id 交给 read_session(append 末尾,保前缀缓存)
 registerToolProvider(manageHumanProvider);
-registerToolProvider(manageHarnessProvider); // host-only:agent 自维护工作笔记 HARNESS.md(自进化层;审批 command 档;append 末尾,保前缀缓存)
+registerToolProvider(manageHarnessProvider); // host-only:agent 自维护工作笔记 HARNESS.md(自进化层;10-04 起常驻、不审批、立即生效 + 可撤销卡;coding 预设按需)
 registerToolProvider(sketchProvider); // GUI 限定(ctx.client 门禁,CLI/TUI 不注册):sketch 在对话流内联画可交互 HTML 卡片(append 末尾,保前缀缓存)
 registerToolProvider(transcribeAudioProvider); // host-only:transcribe_audio 经桌面桥(desktop-bridge.json)调主进程 ASR;无桥文件不可见(append 末尾,保前缀缓存)
 registerToolProvider(viewVideoProvider); // host-only:view_video 用本机 ffmpeg 抽帧「看」视频(联络表+单帧两档);无 ffmpeg 不可见(append 末尾,保前缀缓存)
@@ -188,6 +192,9 @@ registerToolProvider(teamSayProvider); // 团队成员随时向主聊天发言(a
 registerToolProvider(browserTabsProvider); // host-only:browser_tabs 看/读用户自己 Chrome 里开着的标签(远程调试接管;append 末尾,保前缀缓存)
 registerToolProvider(museWakeProvider); // 仅 Muse 周期(ctx.muse,子代理除外):set_next_wake 按作息跳过心跳省额度(append 末尾;普通 run 不可见,快照不变)
 registerToolProvider(readComputerHistoryProvider); // 电脑历史开着 ∧ 本机客户端 ∧ 非通道/团队/子代理:读用户在 Forsion 之外的电脑活动(默认关,append 末尾;快照两侧剔除,见 dump-tooldefs)
+registerToolProvider(sessionSettingsProvider); // host-only 前台 run:session_settings 读 / update_session_settings 改本会话模型与思考档(写走 command 审批档;审批档不开放;append 末尾,保前缀缓存)
+registerToolProvider(phoneToolsProvider); // 手机端限定(clientCapability 'phone.intents' 中央闸;与 uiCommandsProvider 同属「发起端能力面」):phone_* 五件经 client_cmd 让手机原生执行(全 deferred,append 末尾;无能力的 run 不可见,快照不变)
+registerToolProvider(reviewLoadoutProvider); // 仅 Muse(周期或手聊):review_loadout 只读用量报告,供每周装备巡检(append 末尾;普通 run 不可见,快照不变)
 // 插件(表情包/分段等)现为文件夹插件(plugins/),经 activateAllPlugins→ctx.registerPlugin 注册其工具,不在此处。
 
 /** ctx 自带 profile(loop 按 run.app_id 解析)优先;缺省回退本进程装配的 profile。 */
@@ -258,10 +265,10 @@ export function getToolDefinitions(ctx: ToolContext): Tool[] {
       ctx.loadToolsExposed = true;
     }
     if (isDeferredIn(ctx, name, t.deferred) && !deferBypass) {
-      if (unlocked?.has(name)) unlockedDeferred.push(t.definition);
+      if (unlocked?.has(name)) unlockedDeferred.push(t.definitionFor?.(ctx) ?? t.definition);
       continue;
     }
-    defs.push(t.definition);
+    defs.push(t.definitionFor?.(ctx) ?? t.definition);
   }
   defs.push(...unlockedDeferred);
   const taken = new Set<string>(tools.keys());
@@ -270,6 +277,7 @@ export function getToolDefinitions(ctx: ToolContext): Tool[] {
   const externalOk = presetOf(ctx.preset).externalTools && !isHostSandboxRestricted(ctx);
   if (externalOk && ctx.customTools && ctx.customTools.size) {
     for (const t of ctx.customTools.values()) {
+      if (!usableToolDefinition(t?.definition, 'custom', t?.name)) continue;
       if (taken.has(t.name)) continue; // 内置同名优先
       taken.add(t.name);
       defs.push(t.definition);
@@ -278,6 +286,7 @@ export function getToolDefinitions(ctx: ToolContext): Tool[] {
   // MCP 工具(ctx 运行时注入,manager 已按 (server, tool) 排序 → defs 字节级稳定)
   if (externalOk && ctx.mcpTools && ctx.mcpTools.size) {
     for (const t of ctx.mcpTools.values()) {
+      if (!usableToolDefinition(t?.definition, `mcp:${t?.serverName || '(unknown)'}`, t?.name)) continue;
       if (taken.has(t.name)) continue; // mcp__ 前缀理论上不冲突,保险跳过
       taken.add(t.name);
       defs.push(t.definition);
@@ -296,6 +305,20 @@ export function listDeferredTools(ctx: ToolContext): { name: string; hint: strin
     out.push({ name, hint, ...(t.deferGroup ? { group: t.deferGroup } : {}) });
   }
   return out;
+}
+
+/** 跨 run 延续解锁(10-02):本 run 喂给模型的历史里调用过的 deferred 工具(连同其 deferGroup 整组)在 run 起点预解锁。
+ *  不延续时,上一轮 load_tools 装过的工具下一轮不在 defs 里,模型照着历史直接调同名工具,只能落到最近的常驻名
+ *  (实测 manage_schedule → manage_human 空刷 5–9 次,有一次放弃后还说「记好了」)。只看传进来的这份历史:
+ *  被压缩摘要吃掉的调用模型看不见,不延续。起点 defs 因此与上一 run 末尾一致,前缀缓存反而更连续。 */
+export function deferredUnlocksFromHistory(
+  history: ReadonlyArray<{ tool_calls?: ToolCall[] }>,
+  catalog: ReadonlyArray<{ name: string; group?: string }>,
+): Set<string> {
+  const used = new Set<string>();
+  for (const m of history) for (const c of m.tool_calls || []) used.add(canonicalToolName(String(c?.function?.name || '')));
+  const groups = new Set(catalog.filter((d) => used.has(d.name) && d.group).map((d) => d.group));
+  return new Set(catalog.filter((d) => used.has(d.name) || (d.group && groups.has(d.group))).map((d) => d.name));
 }
 
 // 旧工具名别名表(muse_watch → manage_automation)已迁 toolRegistry.ts:共享策略层的
@@ -322,17 +345,32 @@ export async function executeTool(call: ToolCall, ctx: ToolContext): Promise<Too
   if (!isHostSandboxToolAllowed(name, ctx)) {
     return { toolCallId: call.id, name, result: `Error: tool "${name}" is unavailable under the current host sandbox policy.`, isError: true };
   }
+  // 坏参数绝不当 `{}` 执行:原先静默吞掉,模型只收到「command is required」这类误导报错(PI-DSH 评审 R4)。
   let args: Record<string, any> = {};
+  let badArgs = '';
   try {
-    args = call.function.arguments ? JSON.parse(call.function.arguments) : {};
-  } catch {
-    args = {};
+    const parsed = call.function.arguments ? JSON.parse(call.function.arguments) : {};
+    if (parsed !== null && (typeof parsed !== 'object' || Array.isArray(parsed))) badArgs = 'must be a JSON object';
+    else args = parsed ?? {};
+  } catch (e: any) {
+    badArgs = `are not valid JSON (${String(e?.message || e).slice(0, 160)})`;
+  }
+  if (badArgs) {
+    return {
+      toolCallId: call.id, name,
+      result: `Error: the arguments for "${name}" ${badArgs}. Nothing was executed. Resend the call with one JSON object that matches the tool's parameter schema.`,
+      isError: true,
+    };
   }
 
   const impl: ToolDef | undefined = resolveTools(currentProfile(ctx), ctx).get(name);
   if (impl) {
     const caps = mergeCapabilities(name, impl);
-    const { scopedCtx, cleanup } = withTimeoutSignal(ctx, caps.defaultTimeoutMs);
+    const timed = withTimeoutSignal(ctx, caps.defaultTimeoutMs);
+    const cleanup = timed.cleanup;
+    // 客户端原生动作按工具收窄:没声明 clientCapability 的工具拿不到 requestClientAction,声明了的只能发自己的 ns
+    // (否则任何插件工具都能直调它绕过中央闸)。⚠️ 这一行被 clientCapabilityGate.test.ts 的执行侧用例覆盖。
+    const scopedCtx = bindClientActionToTool(timed.scopedCtx, impl);
     // ⚠️「拍 pre-image → 执行 → 取写后指纹 / 撤销」必须整段在**同一把写锁**里(codex 2026-08-17 P1)。
     // 原来快照在锁外拍:两个子代理/会话同时写同一个文件时,双方都会在任一方进锁之前拍完快照 ——
     // 后写的那个拍到的是**前写者改动之前**的字节,回退它就把前者的改动一起抹掉。
@@ -382,7 +420,7 @@ export async function executeTool(call: ToolCall, ctx: ToolContext): Promise<Too
 
   const externalOk = presetOf(ctx.preset).externalTools && !isHostSandboxRestricted(ctx); // 与 getToolDefinitions 同判
   const custom = externalOk ? ctx.customTools?.get(name) : undefined;
-  if (custom) {
+  if (custom && usableToolDefinition(custom.definition, 'custom', custom.name)) {
     try {
       const result = await executeCustomTool(custom, args, ctx);
       const isError = typeof result === 'string' && result.startsWith('Error:');
@@ -396,7 +434,7 @@ export async function executeTool(call: ToolCall, ctx: ToolContext): Promise<Too
   // 第三级 fallback:MCP 工具(经 deps().mcp 调远端;仅 standalone/TUI 装配了 mcp)。
   // 结果是第三方内容:文本已在 manager 圈进不可信围栏;图片经 collectImage 回灌并带不可信前言(M6)。
   const mcpTool = externalOk ? ctx.mcpTools?.get(name) : undefined;
-  if (mcpTool && deps().mcp) {
+  if (mcpTool && usableToolDefinition(mcpTool.definition, `mcp:${mcpTool.serverName}`, mcpTool.name) && deps().mcp) {
     const r = await deps().mcp!.callTool(mcpTool, args, ctx.signal);
     return { toolCallId: call.id, name, result: mcpResultForModel(r, mcpTool, ctx.collectImage), isError: r.isError };
   }
@@ -415,9 +453,38 @@ export async function executeTool(call: ToolCall, ctx: ToolContext): Promise<Too
   const canLoad = !!ctx.unlockTools && !ctx.muse && !ctx.automationOrigin &&
     [...resolveTools(currentProfile(ctx), ctx).values()].some((t) => isDeferredIn(ctx, t.name, t.deferred) && !ctx.unlockedTools?.has(t.name));
   const planNote = ctx.planMode ? ' Note: plan mode is active — custom/external tools are disabled until the plan is approved.' : '';
+  const known = [...resolveTools(currentProfile(ctx), ctx).keys(), ...(externalOk ? [...(ctx.customTools?.keys() ?? []), ...(ctx.mcpTools?.keys() ?? [])] : [])];
+  const near = closeToolNames(name, known);
+  const hint = near.length ? ` Did you mean ${near.map((n) => `"${n}"`).join(' or ')}?` : '';
   return {
     toolCallId: call.id, name,
-    result: `Tool "${name}" is not available in this session.${planNote} Use only tools from your tool list${canLoad ? ', or load a listed one from the "Additional Tools" catalog with load_tools' : ''}; do not retry this name.`,
+    result: `Tool "${name}" is not available in this session.${hint}${planNote} Use only tools from your tool list${canLoad ? ', or load a listed one from the "Additional Tools" catalog with load_tools' : ''}; do not retry this name.`,
     isError: true,
   };
+}
+
+/** 未知工具的相近名(借 pi codemode「错误即提示词」):忽略大小写与 `-`/`_`/`.` 后比包含关系与编辑距离≤2。最多 3 个。 */
+export function closeToolNames(name: string, candidates: Iterable<string>): string[] {
+  const norm = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]/g, '');
+  const a = norm(name);
+  if (a.length < 3) return [];
+  const scored: Array<[number, string]> = [];
+  for (const c of new Set(candidates)) {
+    const b = norm(c);
+    if (!b || c === name) continue;
+    const d = b === a ? 0 : (b.length >= 3 && (b.includes(a) || a.includes(b))) ? 1 : editDistance(a, b);
+    if (d <= 2) scored.push([d, c]);
+  }
+  return scored.sort((x, y) => x[0] - y[0] || x[1].length - y[1].length).slice(0, 3).map(([, c]) => c);
+}
+
+function editDistance(a: string, b: string): number {
+  if (Math.abs(a.length - b.length) > 2) return 3; // ponytail: 只关心 ≤2,长度差超了直接判远
+  let prev = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i++) {
+    const cur = [i];
+    for (let j = 1; j <= b.length; j++) cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    prev = cur;
+  }
+  return prev[b.length];
 }

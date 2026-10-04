@@ -14,6 +14,7 @@ import { Router, type Response } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { authMiddleware, AuthRequest } from '../core/http.js';
 import { query } from '../core/db.js';
+import { normalizeSessionEmoji } from '../core/sessionEmoji.js';
 import { resolveProfile } from '../seams/appProfile.js';
 import { compactSession, getLatestSummary, rowCoverage, type Checkpoint } from '../services/compaction.js';
 import { resolveCompactionSettings, globalCompactionLayer, updateGlobalCompaction, normalizeCompactionLayer, DEFAULT_COMPACTION_SETTINGS } from '../services/compactionSettings.js';
@@ -127,6 +128,8 @@ router.post('/agent/sessions', authMiddleware, async (req: AuthRequest, res) => 
   try {
     const userId = req.user!.userId;
     const { title, model_id, emoji, app_id, project_path, project_name, projectless, agent_config } = req.body || {};
+    const icon = normalizeSessionEmoji(emoji);
+    if (emoji != null && emoji !== '' && !icon) return res.status(400).json({ detail: 'emoji must be one emoji' });
     const profile = resolveProfile(app_id);
     if (!profile) return res.status(400).json({ detail: `unknown app_id: ${app_id}` });
     // 初始 agent_config 与建会话同一条 INSERT(原子):客户端不必再补一次 PUT——补 PUT 失败会留下没有 preset/execMode 的
@@ -150,7 +153,7 @@ router.post('/agent/sessions', authMiddleware, async (req: AuthRequest, res) => 
       [id, userId, profile.appId,
        typeof title === 'string' && title.trim() ? title.trim().slice(0, 200) : 'New Chat',
        typeof model_id === 'string' && model_id ? model_id : profile.defaultModelId || null,
-       typeof emoji === 'string' && emoji ? emoji.slice(0, 16) : null,
+       icon,
        typeof project_path === 'string' && project_path ? project_path.slice(0, 1000) : null,
        typeof project_name === 'string' && project_name ? project_name.slice(0, 255) : null,
        projectless === true,
@@ -261,6 +264,8 @@ router.patch('/agent/sessions/:id', authMiddleware, async (req: AuthRequest, res
     const s = await getOwnSession(req.params.id, userId);
     if (!s) return res.status(404).json({ detail: 'Session not found' });
     const { title, archived, model_id, emoji, project_path, project_name, projectless } = req.body || {};
+    const icon = normalizeSessionEmoji(emoji);
+    if (emoji !== undefined && emoji !== null && emoji !== '' && !icon) return res.status(400).json({ detail: 'emoji must be one emoji' });
     // 契约 C8:远端改会话的项目路径同样不许指到根 / 家目录 / 受保护目录(桌面据 project_path 给之后的 run 填 cwd)。
     const remote = parseRemoteOrigin(req.headers);
     const badCwd = remote ? remoteCwdViolation(project_path) : null;
@@ -270,7 +275,7 @@ router.patch('/agent/sessions/:id', authMiddleware, async (req: AuthRequest, res
     if (typeof title === 'string') { sets.push('title = ?'); params.push(title.trim().slice(0, 200)); }
     if (typeof archived === 'boolean') { sets.push('archived = ?'); params.push(archived); }
     if (typeof model_id === 'string') { sets.push('model_id = ?'); params.push(model_id || null); }
-    if (typeof emoji === 'string' || emoji === null) { sets.push('emoji = ?'); params.push(emoji ? String(emoji).slice(0, 16) : null); }
+    if (typeof emoji === 'string' || emoji === null) { sets.push('emoji = ?'); params.push(icon); }
     if (typeof project_path === 'string' || project_path === null) { sets.push('project_path = ?'); params.push(project_path ? String(project_path).slice(0, 1000) : null); }
     if (typeof project_name === 'string' || project_name === null) { sets.push('project_name = ?'); params.push(project_name ? String(project_name).slice(0, 255) : null); }
     if (typeof projectless === 'boolean') { sets.push('projectless = ?'); params.push(projectless); }
@@ -594,8 +599,13 @@ router.post('/agent/sessions/:id/compact', authMiddleware, async (req: AuthReque
     if (!s) return res.status(404).json({ detail: 'Session not found' });
     const modelId = (typeof req.body?.model_id === 'string' && req.body.model_id) || s.model_id || '';
     if (!modelId) return res.status(400).json({ detail: '需要 model_id 才能压缩（会话未设模型）' });
-    // 在途 run 正往 chat_messages 落段、也可能正落自己的检查点:手动压缩不与它并发(TUI 同款拒绝)
-    if (sessionHasActiveRun(req.params.id) || isDelegateActive(req.params.id)) return res.status(409).json({ detail: 'Session has an active run; compact after it finishes' });
+    // 在途 run 正往 chat_messages 落段、也可能正落自己的检查点:手动压缩不与它并发(TUI 同款拒绝)。
+    // 进程内 Map 看不到别的进程(TUI / 网关)的 run → 与删消息路由同样查 agent_runs 表(PI-DSH 评审 R6)。
+    const inflight = await query<any[]>(
+      `SELECT 1 FROM agent_runs WHERE session_id = ? AND status IN ('queued','running') LIMIT 1`,
+      [req.params.id],
+    );
+    if (inflight.length || sessionHasActiveRun(req.params.id) || isDelegateActive(req.params.id)) return res.status(409).json({ detail: 'Session has an active run; compact after it finishes' });
     // instructions = /compact <focus>:一次性的 Additional focus(pi 同款),不落配置
     const focus = typeof req.body?.instructions === 'string' ? req.body.instructions.trim().slice(0, 2000) : '';
     // 旋钮与自动压缩同一契约:会话 agent_config.compaction > 该会话 Agent 的 [compaction] > config.json > 缺省

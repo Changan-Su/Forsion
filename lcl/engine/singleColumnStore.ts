@@ -20,6 +20,7 @@ import { getView } from './viewRegistry'
 import { useNav } from './navStore'
 import type { PersistedPanel } from './layoutPersist'
 import { contentStorageKey } from './contentStorageScope'
+import { isLastPinned, isPinned, missingPinned, type PinnedViews } from './pinnedViews'
 
 /** 主区 leaf 快照(供顶栏/读者)。字段与桌面同名以兼容读者 —— ⚠️ 桌面 dockviewStore 那份加字段时
  *  这里必须同步:移动构建把整个 workspaceStore 换成本文件,漏一个字段就是静默少功能(typecheck 也不红,
@@ -70,6 +71,17 @@ interface SCBlob {
   activeMainId: string | null
   leftActiveId: string | null
   rightActiveId: string | null
+}
+
+/** 丢掉本窗的单列布局存档(当前布局 + 各 Space 的命名槽)。spaceRegistry.resetSpaceLayouts 的单列半身。 */
+export function clearSingleColumnLayouts(): void {
+  try {
+    localStorage.removeItem(SC_LAYOUT_KEY)
+    const all = readJSON<Record<string, unknown>>(SC_NAMED_KEY)
+    if (!all) return
+    for (const name of Object.keys(all)) if (name.startsWith('space:')) delete all[name]
+    localStorage.setItem(SC_NAMED_KEY, JSON.stringify(all))
+  } catch { /* 私密模式 */ }
 }
 
 function readJSON<T>(key: string): T | null {
@@ -186,6 +198,12 @@ if (typeof window !== 'undefined') {
  *  `api ?` 守卫故从不真正调用。保留导出以满足 barrel / bootstrapEngine 的 import。 */
 export function activeMainPanel(): null { return null }
 
+/** bootLayoutFellThrough / namedLayoutRestorable / liveLayoutOwner:桌面冷启动补定位(settleAsyncStartupSpace)用,
+ *  移动端不走那条路。保留导出以满足 barrel。 */
+export function bootLayoutFellThrough(): boolean { return false }
+export function namedLayoutRestorable(_name: string): boolean { return false }
+export function liveLayoutOwner(): string | null { return null }
+
 interface WS {
   api: null
   mainLeaves: LeafRec[]
@@ -203,6 +221,11 @@ interface WS {
   leftTabs: SideTab[]
   rightTabs: SideTab[]
   defaultBuilder: (() => void) | null
+  /** 同桌面版:当前 Space 的固定 View(pinnedViews.ts)。迷你面板只有一个内容面,不认固定。 */
+  pinned: PinnedViews
+  setPinned(pins: PinnedViews | undefined): void
+  isPinnedLeaf(id: string): boolean
+  ensurePinned(): void
 
   setApi(api: unknown): void
   setDefaultBuilder(fn: () => void): void
@@ -224,8 +247,10 @@ interface WS {
   toggleSidebar(side: 'left' | 'right'): void
   showSideView(side: 'left' | 'right', type: string): void
   activateLeaf(id: string): void
-  closeLeaf(id: string): void
-  closeViewsOfType(type: string): void
+  closeLeaf(id: string, force?: boolean): void
+  closeViewsOfType(type: string, force?: boolean): void
+  /** 同桌面版:原地换类型(抽屉里的视图收着也照换,不替用户打开抽屉),sidebarDefaults 跟着换;返回换掉的个数。 */
+  replaceViewsOfType(from: string, to: string, params?: Record<string, unknown>): number
   /** 同桌面版:三桶里的 leaf 一个不漏(单列壳只渲染当前那个,后台的视图没挂载、自己收不到任何广播)。 */
   remapLeaves(fn: (type: string, params: Record<string, unknown>) => Record<string, unknown> | null | undefined): void
   resetLayout(): void
@@ -238,6 +263,9 @@ interface WS {
 export const useWorkspace = create<WS>((set, get) => {
   const allRecs = (): LeafRec[] => [...get().mainLeaves, ...get().leftLeaves, ...get().rightLeaves]
   const find = (id: string): LeafRec | undefined => allRecs().find((r) => r.id === id)
+  const pins = (): PinnedViews => (IS_MINI_PANEL ? {} : get().pinned)
+  /** 固定 View 里「区内最后一个」:关不掉、不被别的类型顶掉(同桌面版 guarded)。 */
+  const guarded = (rec: LeafRec): boolean => isLastPinned(pins(), allRecs(), rec.loc, rec.type)
 
   const leaf = (rec: LeafRec): Leaf => ({
     id: rec.id,
@@ -287,6 +315,23 @@ export const useWorkspace = create<WS>((set, get) => {
     if (Object.keys(patch).length) set(patch)
   }
 
+  /** 就地把 leaf 换成另一种视图(navigateLeaf 的本体,不带固定守卫)。 */
+  const swapRec = (rec: LeafRec, type: string, params: Record<string, unknown>): Leaf | null => {
+    const def = getView(type)
+    if (!def) return null
+    const wasChat = rec.type === 'chat'
+    const nextRec: LeafRec = { ...rec, type, params: { ...params }, title: label(def.displayName) }
+    set((s) => ({ [bucketOf(rec.loc)]: s[bucketOf(rec.loc)].map((r) => r.id === rec.id ? nextRec : r) } as Partial<WS>))
+    if (type === 'chat') set({ focusedChatLeafId: rec.id })
+    else if (wasChat && get().focusedChatLeafId === rec.id) {
+      const otherChat = get().mainLeaves.find((r) => r.id !== rec.id && r.type === 'chat')
+      set({ focusedChatLeafId: otherChat?.id ?? null })
+    }
+    if (rec.loc === 'main') autoCloseDrawers()
+    get().refreshTabs()
+    return leaf(nextRec)
+  }
+
   return {
     api: null,
     mainLeaves: [],
@@ -305,6 +350,30 @@ export const useWorkspace = create<WS>((set, get) => {
     leftTabs: [],
     rightTabs: [],
     defaultBuilder: null,
+    pinned: {},
+
+    setPinned: (p) => { set({ pinned: p ?? {} }); get().refreshTabs() },
+    isPinnedLeaf: (id) => { const rec = find(id); return !!rec && guarded(rec) },
+    ensurePinned: () => {
+      // 抽屉桶空 = 还没按 sidebarDefaults 填过(toggleSidebar 打开时才填)→ 默认里有就算在。
+      const refs: Array<{ loc: string; type: string }> = [...allRecs()]
+      for (const side of ['left', 'right'] as const) {
+        if (!get()[bucketOf(side)].length) for (const v of get().sidebarDefaults[side]) refs.push({ loc: side, type: v.type })
+      }
+      const missing = missingPinned(pins(), refs, (t) => !!getView(t))
+      if (!missing.length) return
+      for (const pin of missing) {
+        const bkey = bucketOf(pin.loc)
+        const here = get()[bkey]
+        // 主区只剩空态占位 → 就地换成它
+        if (pin.loc === 'main' && here.length === 1 && here[0].type === 'home') { swapRec(here[0], pin.type, pin.params); continue }
+        const def = getView(pin.type)!
+        const rec: LeafRec = { id: def.singleton && !find(pin.type) ? pin.type : makeId(pin.type, allRecs().map((r) => r.id)), type: pin.type, loc: pin.loc, params: pin.params, title: label(def.displayName) }
+        // 排到桶首、不抢当前显示的那个;桶原本是空的才让它当 active
+        set({ [bkey]: [rec, ...here], ...(here.length ? {} : { [activeKeyOf(pin.loc)]: rec.id }) } as Partial<WS>)
+      }
+      get().refreshTabs()
+    },
 
     setApi: () => { /* 移动端无 Dockview api，恒 null */ },
     setWideMode: (v) => set({ wideMode: v }),
@@ -327,7 +396,7 @@ export const useWorkspace = create<WS>((set, get) => {
         return {
           id: r.id, type: r.type,
           title: r.title || (def ? label(def.displayName) : r.type),
-          active, closable: def?.closable !== false,
+          active, closable: def?.closable !== false && !guarded(r),
           sessionId: typeof r.params.sessionId === 'string' ? r.params.sessionId : undefined,
           followActive: r.params.followActive !== false,
           filePath: typeof r.params.notePath === 'string' ? r.params.notePath : typeof r.params.path === 'string' ? r.params.path : undefined,
@@ -337,7 +406,7 @@ export const useWorkspace = create<WS>((set, get) => {
       }
       const side = (arr: LeafRec[], activeId: string | null): SideTab[] => arr.map((r) => {
         const def = getView(r.type)
-        return { type: r.type, title: r.title || (def ? label(def.displayName) : r.type), active: r.id === activeId, closable: def?.closable !== false }
+        return { type: r.type, title: r.title || (def ? label(def.displayName) : r.type), active: r.id === activeId, closable: def?.closable !== false && !guarded(r) }
       })
       set({
         mainTabs: s.mainLeaves.map((r) => mk(r, r.id === s.activeMainId)),
@@ -403,19 +472,10 @@ export const useWorkspace = create<WS>((set, get) => {
         params = target.params ?? {}
       }
       const rec = find(leafId)
-      const def = getView(type)
-      if (!rec || !def) return null
-      const wasChat = rec.type === 'chat'
-      const nextRec: LeafRec = { ...rec, type, params: { ...params }, title: label(def.displayName) }
-      set((s) => ({ [bucketOf(rec.loc)]: s[bucketOf(rec.loc)].map((r) => r.id === leafId ? nextRec : r) } as Partial<WS>))
-      if (type === 'chat') set({ focusedChatLeafId: leafId })
-      else if (wasChat && get().focusedChatLeafId === leafId) {
-        const otherChat = get().mainLeaves.find((r) => r.id !== leafId && r.type === 'chat')
-        set({ focusedChatLeafId: otherChat?.id ?? null })
-      }
-      if (rec.loc === 'main') autoCloseDrawers()
-      get().refreshTabs()
-      return leaf(nextRec)
+      if (!rec || !getView(type)) return null
+      // 固定 View 不被别的类型顶掉:主区改开一个新的主 leaf(同类照旧就地换);抽屉里的固定视图直接拒绝。
+      if (rec.type !== type && guarded(rec)) return rec.loc === 'main' ? get().openView(type, params, 'main', { newTab: true }) : null
+      return swapRec(rec, type, params)
     },
 
     getActiveLeaf() {
@@ -468,7 +528,7 @@ export const useWorkspace = create<WS>((set, get) => {
       get().refreshTabs()
     },
 
-    closeLeaf(id) {
+    closeLeaf(id, force) {
       const rec = find(id)
       if (!rec) return
       if (rec.type === '__extend') {
@@ -476,8 +536,10 @@ export const useWorkspace = create<WS>((set, get) => {
         lease?.dismiss(); lease?.dispose(); return
       }
       if (rec.type === 'home') return // 主区空态占位,不可关
-      // 主区关掉最后一个 → 就地变 home 空态(不销毁主屏);两级导航下随即回列表层(空态页没什么可看)
-      if (!IS_MINI_PANEL && rec.loc === 'main' && get().mainLeaves.length <= 1) { get().navigateLeaf(id, 'home'); afterLayout?.(); return }
+      if (!force && guarded(rec)) return // 固定 View:区内最后一个关不掉(force = 清场路径)
+      // 主区关掉最后一个 → 就地变 home 空态(不销毁主屏)。不走 navigateLeaf:force 关固定 View 时会被守卫拦成「另开一个 home」。
+      // 两级导航下随即回列表层(空态页没什么可看),见 setAfterLayoutHook。
+      if (!IS_MINI_PANEL && rec.loc === 'main' && get().mainLeaves.length <= 1) { swapRec(rec, 'home', {}); afterLayout?.(); return }
       const bkey = bucketOf(rec.loc)
       const rest = get()[bkey].filter((r) => r.id !== id)
       set({ [bkey]: rest } as Partial<WS>)
@@ -491,16 +553,53 @@ export const useWorkspace = create<WS>((set, get) => {
       get().refreshTabs()
     },
 
-    closeViewsOfType(type) {
-      for (const rec of allRecs().filter((r) => r.type === type)) get().closeLeaf(rec.id)
+    closeViewsOfType(type, force) {
+      for (const rec of allRecs().filter((r) => r.type === type)) get().closeLeaf(rec.id, force)
+    },
+
+    replaceViewsOfType(from, to, params = {}) {
+      if (from === to || !getView(to)) return 0
+      let n = 0
+      // 同桌面版:固定 View 不被顶掉(`to` 加在它旁边,不弹开抽屉),往回换时摘掉 `from`;只有真新开 / 真摘掉才计数;
+      // 固定在那一侧的默认项也不换。
+      const def = getView(to)!
+      for (const rec of allRecs().filter((r) => r.type === from)) {
+        const keepFrom = guarded(rec)
+        const bkey = bucketOf(rec.loc)
+        // 「一区一个」:抽屉恒如此;主区多开同类是常态,只有牵涉固定 View 才这么算
+        const unique = rec.loc !== 'main' || keepFrom || isPinned(pins(), 'main', to)
+        const there = unique ? get()[bkey].find((r) => r.id !== rec.id && r.type === to) : undefined
+        const wasFront = get()[activeKeyOf(rec.loc)] === rec.id
+        if (there) {
+          if (Object.keys(params).length) leaf(there).setParams(params)
+          if (wasFront) setActive(rec.loc, there.id)
+          if (!keepFrom) { get().closeLeaf(rec.id); n++ }
+          continue
+        }
+        if (!keepFrom) { if (get().navigateLeaf(rec.id, to, params)) n++; continue }
+        // ⚠️不走 openView:它的跨桶单例复用会抓到**别的桶**里的同类 leaf,把参数并过去却一个都没新开 —— Coding 的
+        // studio 参数就这样漏到主区聊天上,回项目索引时那张主区聊天被当成 Coding 的对话误关(Codex 评审用真 store 复现)。
+        const ids = allRecs().map((r) => r.id)
+        const added: LeafRec = { id: def.singleton && !ids.includes(to) ? to : makeId(to, ids), type: to, loc: rec.loc, params: { ...params }, title: label(def.displayName) }
+        set((s) => ({ [bkey]: [...s[bkey], added] } as Partial<WS>))
+        if (wasFront) setActive(rec.loc, added.id)
+        n++
+      }
+      get().refreshTabs()
+      const swap = (side: 'left' | 'right', list: PersistedPanel[]): PersistedPanel[] =>
+        isPinned(pins(), side, from) ? list : list.map((v) => (v.type === from ? { type: to, params: { ...params } } : v))
+      const d = get().sidebarDefaults
+      set({ sidebarDefaults: { left: swap('left', d.left), right: swap('right', d.right) } })
+      return n
     },
 
     remapLeaves(fn) {
       for (const rec of allRecs()) {
         const next = fn(rec.type, rec.params)
-        if (next === null) get().closeLeaf(rec.id)
+        if (next === null) get().closeLeaf(rec.id, true) // 指向的东西没了:固定 View 也关,下面补一个空白的回来
         else if (next) leaf(rec).setParams(next)
       }
+      get().ensurePinned()
     },
 
     resetLayout() {

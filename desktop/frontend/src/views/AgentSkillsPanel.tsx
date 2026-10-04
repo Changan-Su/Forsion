@@ -12,6 +12,7 @@ import {
 } from '../services/backendService'
 import type { SkillCatalogEntry, SkillInfo, TanguDesktopConfig } from '../types'
 import { homeTarget } from '../services/engine/targets'
+import { nextExtraSelection } from './agentSkillSelection'
 
 type Props = {
   cfg: TanguDesktopConfig
@@ -182,8 +183,8 @@ export function AgentSkillsPanel({ cfg, agentSlug, surface, selectedIds, onSelec
     else if (mode !== 'selected') onSelectedIds([...new Set([...catalog.filter(currentlyAvailable).map((entry) => entry.id), ...extras.filter((entry) => entry.id.startsWith('local:')).map((entry) => entry.id), ...(selectedIds || [])])])
   }
   const toggleExtra = (id: string, enabled: boolean) => {
-    const all = selectedIds || [...new Set([...catalog.filter(currentlyAvailable).map((entry) => entry.id), ...extras.filter((entry) => entry.id.startsWith('local:')).map((entry) => entry.id)])]
-    onSelectedIds(enabled ? [...new Set([...all, id])] : all.filter((entry) => entry !== id))
+    const next = nextExtraSelection(selectedIds, id, enabled)
+    if (next) onSelectedIds(next)
   }
   const toggle = (entry: SkillCatalogEntry, enabled: boolean) => {
     if (mode === 'off' || legacyDirectory(entry) || entry.availability === 'shadowed' || (entry.scope === 'user' && entry.disabled)) return
@@ -314,6 +315,7 @@ export function AgentSkillsPanel({ cfg, agentSlug, surface, selectedIds, onSelec
       </div>
       <p className="agent-skills-policy-hint">{t('agentProfile.skillLegacyHint')}</p>
       <div className="agent-skill-list">{shown.map((entry) => <div key={entry.id} className="agent-skill-row"><label><input type="checkbox" aria-label={t('agentProfile.skillForAgent', { name: entry.name })} checked={mode === 'auto' ? entry.id.startsWith('local:') : mode === 'selected' && !!selectedIds?.includes(entry.id)} disabled={mode === 'off'} onChange={(event) => {
+          // 旧引擎没有按 agent 停用的名单,取消勾选只能落成清单;上方 skillLegacyHint 已明说会切到自选(与新面板的静默固化不同)。
           const all = mode === 'auto' ? legacy.filter((skill) => skill.id.startsWith('local:')).map((skill) => skill.id) : selectedIds || []
           onSelectedIds(event.target.checked ? [...new Set([...all, entry.id])] : all.filter((id) => id !== entry.id))
         }} /></label><span className="agent-skill-summary"><strong>{entry.name}</strong><span>{entry.description}</span></span></div>)}</div>
@@ -351,7 +353,7 @@ export function AgentSkillsPanel({ cfg, agentSlug, surface, selectedIds, onSelec
         const autoLocal = entry.id.startsWith('local:')
         const enabled = mode === 'selected' ? !!selectedIds?.includes(entry.id) : mode === 'auto' && autoLocal
         return <div key={entry.id} className={`agent-skill-row${enabled ? ' enabled' : ''}`} data-skill-id={entry.id}>
-          <label><input type="checkbox" checked={enabled} disabled={mode === 'off'} onChange={(e) => toggleExtra(entry.id, e.target.checked)} aria-label={t('agentProfile.skillForAgent', { name: entry.name })} /></label>
+          <label title={mode === 'auto' ? t('agentProfile.extraChoose') : undefined}><input type="checkbox" checked={enabled} disabled={mode !== 'selected'} onChange={(e) => toggleExtra(entry.id, e.target.checked)} aria-label={t('agentProfile.skillForAgent', { name: entry.name })} /></label>
           <span className="agent-skill-summary"><strong>{entry.name}</strong><span>{entry.description || entry.id}</span><small>{entry.id.startsWith('local:@') ? t('agentProfile.sharedAgentSkill') : autoLocal ? t('agentProfile.localExtraSkill') : t('agentProfile.cloudExtraSkill')} · {mode === 'auto' && !autoLocal ? t('agentProfile.extraChoose') : enabled ? t('agentProfile.skillAvailable') : t('agentProfile.skillNotSelected')}</small></span>
         </div>
       })}{missingVisible.map((id) => <div key={id} className="agent-skill-row" data-skill-id={id}>

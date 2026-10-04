@@ -13,7 +13,7 @@
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
-const { _electron: electron } = require('playwright-core')
+const electron = require('./lib/launch-electron.cjs')
 const { startStubEngine } = require('./lib/stub-engine.cjs')
 
 const ROOT = path.join(__dirname, '..')
@@ -60,12 +60,6 @@ async function openChatSession(win) {
   if (!(await win.locator('.t2s-search input').first().count().catch(() => 0))) {
     await win.click('.dv-edge-left').catch(() => {})
     await win.waitForTimeout(700)
-  }
-  const picker = win.locator('.t2sw-mode-picker').first()
-  if (await picker.count().catch(() => 0)) {
-    await picker.locator('.t2sw-mode-trigger').click().catch(() => {})
-    await picker.locator('[data-workspace-mode="sessions"]').click().catch(() => {})
-    await win.waitForTimeout(1000)
   }
   const row = win.locator('.t2s-srow', { hasText: 'LiveWait 验收' }).first()
   if (!(await row.count().catch(() => 0))) {

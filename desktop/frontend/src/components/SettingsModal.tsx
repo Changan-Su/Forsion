@@ -4,18 +4,21 @@ import { AutoCompactSetting } from './AutoCompactSetting'
 import { GitSettingsSection } from './GitSettingsSection'
 import { HostSandboxSettings } from './HostSandboxSettings'
 import { ErrorBoundary } from './ErrorBoundary'
+import { BrowserExtensionPanel } from './BrowserExtensionPanel'
 /**
  * 设置页:连接 / 模型 / MCP / Browser / WeChat / 主题 / 高级。
  * 在 Desktop 主界面内替换 Chat/Inspector 区域，而不是覆盖式弹窗。
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react'
-import { X, ArrowLeft, ChevronRight, Loader2, RefreshCw, Sun, Moon, MonitorCog, RotateCcw, LogIn, LogOut, KeyRound, Plus, Trash2, Plug, Search, Download, Sparkles, Wrench, Check, Copy, Globe2, FolderOpen, Play, Trophy, FileDown, Settings2, NotebookPen, Puzzle, LayoutGrid, Palette, Keyboard, Bug, Info, Brain, Bot, Webhook, MessageCircle, Blocks, Bell, PanelBottom, Image as ImageIcon, Server, Type, Layers3, MousePointer2, Scaling, Coffee, MonitorCheck, History, MonitorSmartphone, Cloud } from 'lucide-react'
+import { X, ArrowLeft, Undo2, ChevronRight, Loader2, RefreshCw, Sun, Moon, MonitorCog, RotateCcw, LogIn, LogOut, KeyRound, Plus, Trash2, Plug, Search, Download, Sparkles, Wrench, Check, Copy, Globe2, FolderOpen, Play, Trophy, FileDown, Settings2, NotebookPen, Puzzle, LayoutGrid, Palette, Keyboard, Bug, Info, Brain, Bot, Webhook, MessageCircle, Blocks, Bell, PanelBottom, Image as ImageIcon, Server, Type, Layers3, MousePointer2, CircleUserRound, Scaling, Coffee, MonitorCheck, History, MonitorSmartphone, Cloud } from 'lucide-react'
 import { ThemeCard } from './ThemeCard'
 import { ThemeSettingsPanel } from './ThemeSettingsPanel'
+import { StartupAppearanceSettings } from './StartupAppearanceSettings'
 import { backgroundSwatch, listLanguages, listSkins, skinSwatch, forcedSchemeForLanguage } from '../theme/registry'
 import { UI_MODE, UI_ZOOM_EVENT, useNativeChromeClaim, useNativeChromeInstalled, useWorkspace } from '@lcl/engine' // 工作区引擎:恢复默认布局 + 移动预览模式;原生顶栏(Android 可选宿主)
 import { useApp } from '../stores/appStore' // Agent Desk 开关改动即时回流(desktopConfig 平时只在 boot/后端就绪时刷新)
 import { testConnection } from '../services/agentRunService'
+import { listClientSurfaces } from '../services/clientSurfaces'
 import {
   fetchProviderModels,
   listModels, listTools, setModelContextWindow,
@@ -32,6 +35,7 @@ import type {
 import { SHOW_SYSTEM_PROMPT_KEY } from '../types'
 // 本组件已有同名的 useState setter,故取个别名。persist* = 写盘 + 应用 + 跨窗广播。
 import { isSmoothCaretOn, setSmoothCaret as persistSmoothCaret } from '../smoothCaret'
+import { isRibbonAutoHome, setRibbonAutoHome } from '@lcl/engine/ribbonRegistry'
 import { applyUiFonts, readFont, writeFont, type FontSlot } from '../uiFont'
 import { getUiZoom, setUiZoom } from '../uiZoom'
 import { listFonts, getFont } from '../fontPresets'
@@ -56,6 +60,7 @@ import { TtsVoiceStudio } from './TtsVoiceStudio'
 import { previewTts } from '../services/ttsService'
 import { ShortcutsTab } from './ShortcutsTab'
 import { PluginsTab } from './PluginsTab'
+import { CorePluginUpdates } from './CorePluginUpdates'
 import { AmadeusPluginsTab, PluginSettingsView, pluginListDetailBack } from './AmadeusPluginsTab'
 import { usePluginStore } from '@amadeus/plugins/pluginStore'
 import { isPlacedSettingsView, pluginDisplayName, pluginsWithSettingsPanel } from '../amadeus/plugins/display'
@@ -92,9 +97,10 @@ import { canvasDoubleClickFocusEnabled, canvasOverviewZoom, setCanvasDoubleClick
 import { aiSpaceTriggerEnabled, setAiSpaceTriggerEnabled } from '@amadeus/lib/aiSpaceTrigger'
 import { SettingsPanel, SettingsRow, SettingsSwitch } from './SettingsPrimitives'
 import { setChatWaitDetailsEnabled, useChatWaitDetailsEnabled } from '../chatWaitDetails'
+import { isChatAvatarsOn, setChatAvatarsOn } from '../views/chat2/chatAvatars'
 import { ipcErrorText } from '../ipcError'
 import { newReservedMcpNames } from '../../../shared/mcpNames'
-import { resolveSettingsTarget } from './settingsTarget'
+import { resolveSettingsTarget, SETTINGS_TABS } from './settingsTarget'
 import { SETTINGS_SEARCH_INDEX, matchesSettingsQuery, type SettingsSearchEntry } from './settingsSearchIndex'
 import { dropCommittedEdits, hasDirtyEdits, mergeEdits, pickEdits, withoutKeys, type SettingsEdits } from './settingsDraft'
 import { onRadioGroupKeyDown, radioTabIndex } from './radioGroupKeys'
@@ -108,10 +114,11 @@ registerMessages({
   // 「Forsion 云端」一级页:账号 + 云端地址 + 记忆同步 + 笔记在线同步,整页随内置插件 Forsion Extend 出现 / 消失
   'settings.tab.forsionCloud': { zh: 'Forsion 云端', en: 'Forsion Cloud' },
   'settings.page.forsionCloudDescription': {
-    zh: '管理 Forsion 账号、会员、额度与安全，以及笔记与记忆的云端同步。由内置插件 Forsion 扩展提供，可在插件页停用。',
-    en: 'Manage your Forsion account, membership, quota and security, plus cloud sync for notes and memory. Provided by the built-in Forsion Extend plugin, which you can turn off on the Plugins page.',
+    zh: '管理 Forsion 账号、会员、额度、安全与插件投稿，以及笔记与记忆的云端同步。由内置插件 Forsion 扩展提供，可在插件页停用。',
+    en: 'Manage your Forsion account, membership, quota, security and plugin submissions, plus cloud sync for notes and memory. Provided by the built-in Forsion Extend plugin, which you can turn off on the Plugins page.',
   },
   // 不叫「同步」:下面就是一级页「同步」(远程同步),左栏会出现两个同名项
+  'settingsmodal.forsionCloud.submissions': { zh: '插件投稿', en: 'Submissions' },
   'settings.forsionCloud.sync': { zh: '云端同步', en: 'Cloud sync' },
   'settings.forsionCloud.connection': { zh: '连接', en: 'Connection' },
   'settings.forsionCloud.noteSyncOn': { zh: '与云端智库同步', en: 'Sync with the cloud vault' },
@@ -126,6 +133,8 @@ registerMessages({
   // 持久配置读回前外部连接表单只读(Codex H1-1):此时表单里可能是托管后端的临时地址 / 令牌。
   'settingsmodal.external.cfgLoading': { zh: '正在读取已保存的连接配置…', en: 'Loading the saved connection settings…' },
   'settingsmodal.external.cfgFailed': { zh: '读不到已保存的连接配置，暂不能修改：{error}', en: 'Couldn\'t load the saved connection settings, so they can\'t be changed yet: {error}' },
+  // 已登录时云端地址跟随账号(主进程 loadConfig 以账号的 cloudUrl 覆盖,token 绝不发往别的服务器),这里只读。
+  'settingsmodal.cloudUrl.lockedHint': { zh: '该地址跟随已登录的账号，无法在此修改。要连接其他服务器，请先退出登录。', en: 'This address follows the signed-in account and can\'t be changed here. To connect to a different server, sign out first.' },
   'settingsmodal.keepAwake.title': { zh: '有会话运行时阻止休眠', en: 'Stay awake while sessions run' },
   'settingsmodal.keepAwake.description': {
     zh: '会话运行期间阻止电脑因闲置自动休眠，全部结束后恢复；屏幕仍会熄灭。合盖、手动睡眠照常生效；Windows 笔记本用电池时，系统仍可能按电源策略休眠。',
@@ -139,7 +148,10 @@ registerMessages({
   'modelsettings.displayHint': { zh: '整理模型选择器中的分组，选择本地模型的显示范围。', en: 'Organize picker groups and choose which local models appear.' },
   'modelsettings.providersHint': { zh: '管理提供方登录、API 连接与模型拉取。', en: 'Manage provider sign-ins, API connections and model discovery.' },
   'modelsettings.searchHint': { zh: '配置联网搜索的服务与凭据。', en: 'Configure web search services and credentials.' },
-  'modelsettings.voiceHint': { zh: '配置语音输入、朗读模型和音色。', en: 'Configure speech recognition, speech synthesis and voices.' },
+  'modelsettings.voiceHint': { zh: '语音通话、语音输入和朗读分开设置，音色互不通用。', en: 'Voice calls, voice input and read-aloud are set up separately; their voices are not shared.' },
+  'settings.voice.secCall': { zh: '语音通话', en: 'Voice call' },
+  'settings.voice.secInput': { zh: '语音输入', en: 'Voice input' },
+  'settings.voice.secRead': { zh: '朗读', en: 'Read aloud' },
   'modelsettings.defaultUses': { zh: '按用途选择', en: 'Models by purpose' },
   'modelsettings.refresh': { zh: '刷新模型', en: 'Refresh models' },
   'modelsettings.chat': { zh: '对话与任务', en: 'Conversations & tasks' },
@@ -220,7 +232,7 @@ registerMessages({
   'settingsmodal.status.connErr': { zh: '连接失败', en: 'Connection failed' },
 })
 
-type StaticTab = 'general' | 'connection' | 'forsion' | 'model' | 'mcp' | 'hooks' | 'skills' | 'agents' | 'plugins' | 'amadeus-plugins' | 'agent-clis' | 'browser' | 'channels' | 'notes' | 'sync' | 'spaces' | 'theme' | 'shortcuts' | 'notifications' | 'statusbar' | 'permissions' | 'remote-sessions' | 'computer-history' | 'advanced' | 'developer' | 'about'
+type StaticTab = typeof SETTINGS_TABS[number]
 // 动态插件设置页用 `plugin:<id>`(Tangu 引擎插件)/ `fplugin:<id>`(Forsion 插件),都是 Obsidian 式一级入口。
 // ⚠️ 两套 id 空间会重名(deutschland-reiseglueck 引擎侧与 Forsion 侧各有一份),前缀必须分开。
 export type Tab = StaticTab | `plugin:${string}` | `fplugin:${string}`
@@ -368,6 +380,8 @@ export const SettingsModal: React.FC<{
   })
   // 丝滑光标(默认关;localStorage,smoothCaret.ts 全局模块即时生效)。
   const [smoothCaret, setSmoothCaret] = useState<boolean>(isSmoothCaretOn)
+  const [chatAvatars, setChatAvatars] = useState<boolean>(isChatAvatarsOn)
+  const [ribbonAutoHome, setRibbonAutoHomeOn] = useState<boolean>(isRibbonAutoHome)
   // 画布双击聚焦(默认开;纯本机视口偏好，不进笔记/桌面后端配置)。
   const [canvasDoubleClickFocus, setCanvasDoubleClickFocus] = useState<boolean>(canvasDoubleClickFocusEnabled)
   const [aiSpaceTrigger, setAiSpaceTrigger] = useState<boolean>(aiSpaceTriggerEnabled) // 正文 AI 空行空格唤起(G3-07,缺省关,本机)
@@ -429,7 +443,7 @@ export const SettingsModal: React.FC<{
     ...(isDesktop ? ([['agents', t('settings.tab.agents')]] as Array<[Tab, string]>) : []),
     // 技能云端可用:desktop 或 Tangu Web 都显示(保持 desktop 原有顺序:agents→skills→mcp…)。
     ...((isDesktop || cloudWeb) ? ([['skills', t('settings.tab.skills')]] as Array<[Tab, string]>) : []),
-    // 统一插件页(amadeus-plugins):Forsion 插件(含捆绑包)+ Tangu 引擎插件两区一页;旧 'plugins' 入口已并入(effect 重定向)。
+    // 统一插件页(amadeus-plugins):Forsion 插件(含捆绑包)+ Tangu 引擎插件两区一页;旧 'plugins' 入口已并入(settingsTarget 的别名表)。
     ...(isDesktop ? ([['mcp', t('settingsmodal.tab.mcp')], ['hooks', t('settingsmodal.tab.hooks')], ['channels', t('settings.tab.channels')], ['browser', t('settings.tab.browser')]] as Array<[Tab, string]>) : []),
     // 插件页设备页也给(插件在 B 端真的装载运行,列表/启停是本页 runtime 行为,不碰对方设备)。
     ...(pluginsPage ? ([['amadeus-plugins', t('settings.tab.amadeusPlugins')]] as Array<[Tab, string]>) : []),
@@ -437,7 +451,7 @@ export const SettingsModal: React.FC<{
     ...(isDesktop && cloudAccount ? ([['forsion', t('settings.tab.forsionCloud')]] as Array<[Tab, string]>) : []),
     ...(isDesktop && !!window.amadeus ? ([['notes', t('settings.tab.notes')]] as Array<[Tab, string]>) : []),
     ...(isDesktop && !!window.amadeus && !!window.remoteSync ? ([['sync', t('settings.tab.sync')]] as Array<[Tab, string]>) : []),
-    ...(isDesktop ? ([['spaces', t('settings.tab.spaces')]] as Array<[Tab, string]>) : []),
+    ['spaces', t('settings.tab.spaces')],
     ['theme', t('settings.tab.theme')],
     ['shortcuts', t('settings.tab.shortcuts')],
     ['notifications', t('settings.tab.notifications')],
@@ -686,7 +700,6 @@ export const SettingsModal: React.FC<{
   const cloudViewKey = (o: { pluginId: string; item: { id: string } }): string => `fx:${o.pluginId}:${o.item.id}`
 
   // 旧「Tangu → 插件」独立入口已并入统一插件页:旧深链/持久化 tab 一律重定向。
-  useEffect(() => { if (tab === 'plugins') setTab('amadeus-plugins') }, [tab])
 
   const refreshMcp = (): void => {
     void window.tangu?.readMcpConfig?.().then((c) => setMcpServers(c.mcpServers)).catch(() => setMcpServers({}))
@@ -859,6 +872,8 @@ export const SettingsModal: React.FC<{
     }
   }, [p.open, isDesktop])
 
+  // An expired account token still binds the saved cloud address.
+  const cloudUrlLocked = !!authSt?.loggedIn
   const doProviderLogin = async (id: string): Promise<void> => {
     if (!window.tangu?.providerLogin) return
     setProviderBusy(id)
@@ -1103,7 +1118,7 @@ export const SettingsModal: React.FC<{
     ],
     'amadeus-plugins': [
       // Forsion 插件区整块在 window.amadeus 后面 —— 没有就只剩引擎插件一项,栏目条自动隐藏。
-      ...(window.amadeus ? [['pl-forsion', t('settings.plugins.secForsion')] as [string, string]] : []),
+      ...(window.amadeus ? [['pl-core', t('plugins.core.title')], ['pl-forsion', t('plugins.installed.title')]] as Array<[string, string]> : []),
       // 引擎插件管理桌面专属:设备页的 cfg.backendUrl=对方引擎,rescan/npm 装/启停会真打到对方机器(Codex P1)。
       ...(isDesktop ? [['pl-engine', t('settings.plugins.secEngine')] as [string, string]] : []),
     ],
@@ -2057,23 +2072,26 @@ export const SettingsModal: React.FC<{
 
                 {/* Forsion 云端 → 连接:云端地址(自建服务才用;cloudUrl 是 managedKey —— 写 = 重启后端 + 重建 unit host,保留显式保存,不做失焦提交) */}
                 {tab === 'forsion' && activeSub === 'f-conn' && stored && (
-                  <SettingsPanel anchor="cloud-url" icon={<Globe2 size={16} />} title={t('settings.forsion.cloudUrlLabel')} description={t('settings.forsion.cloudUrlHint')}>
+                  <SettingsPanel anchor="cloud-url" icon={<Globe2 size={16} />} title={t('settings.forsion.cloudUrlLabel')} description={t(cloudUrlLocked ? 'settingsmodal.cloudUrl.lockedHint' : 'settings.forsion.cloudUrlHint')}>
                     <div className="settings-control-list">
                       <SettingsRow label={t('settings.forsionCloud.address')}>
                         <div className="settings-inline-row settings-row-wide-control">
                           <input
                             type="text"
-                            value={stored.cloudUrl}
+                            value={cloudUrlLocked ? savedCfg?.cloudUrl ?? '' : stored.cloudUrl}
+                            readOnly={cloudUrlLocked}
                             onChange={(e) => edit({ cloudUrl: e.target.value })}
                             placeholder="https://api.forsion.net"
                             aria-label={t('settings.forsion.cloudUrlLabel')}
                           />
+                          {!cloudUrlLocked && (
                           <button
                             className="btn primary sm"
                             onClick={() => void commitEdits(['cloudUrl'], (v) => ({ cloudUrl: (v.cloudUrl || '').trim() }))}
                           >
                             {t('settings.forsion.save')}
                           </button>
+                          )}
                         </div>
                         {commitErrorHint('cloudUrl')}
                       </SettingsRow>
@@ -2565,13 +2583,21 @@ export const SettingsModal: React.FC<{
                   </>
                 )}
 
-                {/* 语音朗读(TTS):OpenAI 兼容 /audio/speech;模型 id 命中直连 provider 的 ttsModelIds 或 <providerId>/<model>。 */}
+                {/* 语音页分三节,各管输入框上的一个键(10-02 用户报「通话音色和朗读混在一起、很误导」):
+                    语音通话 = 空输入框的发送键 / 语音输入 = 麦克风键 / 朗读 = 回复的朗读(TTS:OpenAI 兼容 /audio/speech)。 */}
                 {tab === 'model' && isDesktop && activeSub === 'm-voice' && (
                   <>
-                    <AsrModelChoice models={models} />
-                    {stored && <RealtimeVoiceSettings stored={stored} providers={customProviders} onSaved={setStored} />}
                     {stored && (
                       <>
+                        <div className="settings-sec">{t('settings.voice.secCall')}</div>
+                        <RealtimeVoiceSettings stored={stored} providers={customProviders} onSaved={setStored} />
+                      </>
+                    )}
+                    <div className={`settings-sec${stored ? ' settings-sec--gap' : ''}`}>{t('settings.voice.secInput')}</div>
+                    <AsrModelChoice models={models} />
+                    {stored && (
+                      <>
+                        <div className="settings-sec settings-sec--gap">{t('settings.voice.secRead')}</div>
                         <div className="field">
                           <label>{t('settings.tts.model')}</label>
                           <div className="hint" style={{ marginBottom: 8 }}>{t('settings.tts.intro')}</div>
@@ -2849,10 +2875,11 @@ export const SettingsModal: React.FC<{
                 {/* 统一插件页:Forsion 插件(含捆绑包,带 Amadeus 时)/ Tangu 引擎插件 两个中分类。
                     设备页(unitPage)与 Android App 不传级联三件套:cfg 缺省=cascadeAfterToggle 不级联 —— 否则捆绑包
                     启停会经代理持久改对方引擎插件(Codex P1)/ 打到云端网关;引擎插件区同因整块桌面专属。 */}
+                {tab === 'amadeus-plugins' && activeSub === 'pl-core' && !!window.amadeus && (
+                  <AmadeusPluginsTab key="core" section="core" {...(pluginCascade ? { cfg: p.cfg, onEngineReload: reloadPlugins, enginePlugins: plugins } : {})} />
+                )}
                 {tab === 'amadeus-plugins' && activeSub === 'pl-forsion' && !!window.amadeus && (
-                  pluginCascade
-                    ? <AmadeusPluginsTab cfg={p.cfg} onEngineReload={reloadPlugins} enginePlugins={plugins} />
-                    : <AmadeusPluginsTab />
+                  <AmadeusPluginsTab key="installed" section="installed" {...(pluginCascade ? { cfg: p.cfg, onEngineReload: reloadPlugins, enginePlugins: plugins } : {})} />
                 )}
                 {tab === 'amadeus-plugins' && activeSub === 'pl-engine' && isDesktop && (
                   <>
@@ -2933,6 +2960,7 @@ export const SettingsModal: React.FC<{
                         <div className="settings-panel-footer"><span className="hint" role="status">{remoteMsg}</span></div>
                       ) : null}
                     </SettingsPanel>
+                    {isDesktop && !unitPage && <BrowserExtensionPanel cfg={p.cfg} managed={stored.mode !== 'external'} />}
                   </>
                 )}
 
@@ -3152,6 +3180,38 @@ export const SettingsModal: React.FC<{
                             }}
                           />
                         </div>
+                        <div className="settings-control-row" data-setting-anchor="chat-avatars">
+                          <div className="settings-control-copy"><CircleUserRound size={14} /><span><strong>{t('settings.theme.chatAvatars')}</strong><small>{t('settings.theme.chatAvatarsHint')}</small></span></div>
+                          <button
+                            type="button"
+                            role="switch"
+                            aria-checked={chatAvatars}
+                            aria-label={t('settings.theme.chatAvatars')}
+                            className={`switch${chatAvatars ? ' on' : ''}`}
+                            onClick={() => {
+                              const on = !chatAvatars
+                              setChatAvatars(on)
+                              setChatAvatarsOn(on)
+                            }}
+                          />
+                        </div>
+                        {!mobileSettings && (
+                          <div className="settings-control-row" data-setting-anchor="ribbon-auto-home">
+                            <div className="settings-control-copy"><Undo2 size={14} /><span><strong>{t('settings.theme.ribbonAutoHome')}</strong><small>{t('settings.theme.ribbonAutoHomeHint')}</small></span></div>
+                            <button
+                              type="button"
+                              role="switch"
+                              aria-checked={ribbonAutoHome}
+                              aria-label={t('settings.theme.ribbonAutoHome')}
+                              className={`switch${ribbonAutoHome ? ' on' : ''}`}
+                              onClick={() => {
+                                const on = !ribbonAutoHome
+                                setRibbonAutoHomeOn(on)
+                                setRibbonAutoHome(on)
+                              }}
+                            />
+                          </div>
+                        )}
                       </div>
                     </section>
                     <section className="settings-panel settings-theme-fonts" data-setting-anchor="fonts">
@@ -3197,6 +3257,7 @@ export const SettingsModal: React.FC<{
                         })}
                       </div>
                     </section>
+                    <StartupAppearanceSettings />
                   </>
                 )}
 
@@ -3476,6 +3537,9 @@ export const SettingsModal: React.FC<{
                         />
                       )}
                     />
+                    {/* 客户端能力面自带的设置行(手机操控等,见 services/clientSurfaces.ts):数据驱动,
+                        desktop/web 没注册就什么都不出,这里不写任何平台判断。 */}
+                    {listClientSurfaces().map(({ ns, surface: { SettingsRow: Row } }) => Row && <Row key={ns} />)}
                   </>
                 )}
 
@@ -3709,6 +3773,7 @@ export const SettingsModal: React.FC<{
                       <span className="grow" />
                       <UpdateActions upd={upd} />
                     </div>
+                    <CorePluginUpdates />
                     {(upd.phase === 'available' || upd.phase === 'downloaded') && (
                       <div className="field">
                         <div style={{ fontWeight: 600 }}>{t('about.update.available', { version: upd.version || '' })}</div>

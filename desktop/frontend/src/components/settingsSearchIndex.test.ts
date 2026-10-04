@@ -10,7 +10,7 @@ import { SETTINGS_SEARCH_INDEX, matchesSettingsQuery } from './settingsSearchInd
 // U-15 静态半边:索引项的锚点在源码里真有、子页 key 真存在、标签双语都有。
 // 真落点(本端门控下点结果 → 锚点可见)由 check:settingsmode 在真 Electron 里逐项点。
 // 锚点可以落在 SettingsModal 直接渲染的独立页组件里(P1-K4 远程会话页的三块面板)。
-const SRC = ['SettingsModal.tsx', 'RemoteSessionsSettings.tsx', 'RemoteSafetyPanel.tsx'].map((f) => readFileSync(join(__dirname, f), 'utf8')).join('\n')
+const SRC = ['SettingsModal.tsx', 'RemoteSessionsSettings.tsx', 'RemoteSafetyPanel.tsx', 'StartupAppearanceSettings.tsx'].map((f) => readFileSync(join(__dirname, f), 'utf8')).join('\n')
 
 describe('settings search index', () => {
   it('id 唯一,每项都有检索别名', () => {

@@ -1,5 +1,5 @@
 # =====================================================
-# Forsion Web(内部代号 Tangu Web)— 独立前端部署(同 AI Studio:只跑前端 nginx,连已部署的 Forsion server)。
+# Forsion Web(内部代号 Tangu Web)— 独立前端部署(只跑前端 nginx,连已部署的 Forsion server)。
 # 注意 context 是上一层(Forsion-Genesis/),因为 web 复用 desktop/frontend 源码。
 #
 #   cd Forsion-Genesis && BACKEND_URL=http://host.docker.internal:3001 docker compose -f web/docker-compose.yml up -d --build
@@ -31,5 +31,3 @@ services:
       timeout: 10s
       start_period: 10s
       retries: 3
-
-# retrigger: build-web(上一 run 未产出镜像,重触发)

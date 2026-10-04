@@ -2,7 +2,12 @@
  * sketch 卡安全边界回归钉(实证背景见 sketchWrapper.ts 头注):
  * 裸 sandbox 挡不住网络——没有内层 CSP 的变体能 fetch 任意 https。这里钉住包装器的不变式。
  */
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
+import { runInNewContext } from 'node:vm'
+// Vitest disables CSS processing in node tests; read the same stylesheet the renderer bundles.
+vi.mock('./sketch.css?raw', async () => ({
+  default: (await import('node:fs')).readFileSync(new URL('./sketch.css', import.meta.url), 'utf8'),
+}))
 import { buildSketchDoc, SKETCH_CSP, SKETCH_SANDBOX, SKETCH_STATIC_VARS, SKETCH_VARS } from './sketchWrapper'
 
 describe('sketch 包装器安全不变式', () => {
@@ -30,6 +35,20 @@ describe('sketch 包装器安全不变式', () => {
     expect(doc).toContain('sketch-height')
     expect(doc.endsWith('</body></html>')).toBe(true)
   })
+
+  it('runs both raw bootstrap scripts without accidental IIFE chaining', () => {
+    const script = buildSketchDoc('').match(/<script>([\s\S]*?)<\/script>/)![1]
+    const ready: Function[] = []
+    const register = vi.fn()
+    runInNewContext(script, {
+      window: { addEventListener() {} }, HTMLElement: class {},
+      document: { readyState: 'loading', addEventListener: (name: string, cb: Function) => { if (name === 'DOMContentLoaded') ready.push(cb) } },
+      customElements: { get: () => undefined, define: register },
+    })
+    expect(ready).toHaveLength(2)
+    ready[1]()
+    expect(register.mock.calls.map(([name]) => name)).toEqual(['fs-chart', 'fs-flow'])
+  })
 })
 
 describe('sketch 主题桥', () => {
@@ -52,15 +71,15 @@ describe('sketch 主题桥', () => {
   it('缺省无变量时仍产出可用文档(历史卡/单测路径)', () => {
     const doc = buildSketchDoc('<b>hi</b>')
     expect(doc).toContain('--fs-s1:var(--fs-accent)')
-    expect(doc).toContain('background:var(--fs-bg)')
+    expect(doc).toContain('background: var(--fs-bg)')
   })
 
-  it('自带编辑部质量地板:四段结构、数字层级、图场和来源行不靠模型重造', () => {
+  it('supplies legacy layout classes and native interactive controls', () => {
     const doc = buildSketchDoc('<header class="fs-header"><h1 class="fs-title">T</h1></header>')
-    for (const cls of ['.fs-header', '.fs-eyebrow', '.fs-title', '.fs-subtitle', '.fs-plot', '.fs-source', '.fs-stat-grid', '.fs-value', '.fs-bar-track']) {
+    for (const cls of ['.fs-header', '.fs-eyebrow', '.fs-title', '.fs-subtitle', '.fs-plot', '.fs-source', '.fs-stat-grid', '.fs-value', '.fs-bar-track', '.fs-controls', '.fs-range', '.fs-tabs']) {
       expect(doc).toContain(cls)
     }
-    expect(doc).toContain('font-variant-numeric:tabular-nums')
+    expect(doc).toContain('font-variant-numeric: tabular-nums')
     expect(doc).toContain('@media(max-width:480px)')
     expect(doc).toContain('@media(prefers-reduced-motion:reduce)')
   })
@@ -78,7 +97,17 @@ describe('sketch 主题桥', () => {
   it('换肤走 postMessage 就地改,且只认 parent(不重建 srcdoc)', () => {
     const doc = buildSketchDoc('')
     expect(doc).toContain('sketch-theme')
-    expect(doc).toContain('e.source!==parent')
+    expect(doc).toContain('event.source !== parent')
     expect(doc).toContain('setProperty')
+  })
+
+  it('escapes persisted state as script data, never markup or replacement syntax', () => {
+    const value = '</script><script>alert(1)</script>$&\u2028'
+    const doc = buildSketchDoc('<p>body</p>', {}, { value })
+    expect(doc).not.toContain('</script><script>alert(1)')
+    expect(doc).toContain('\\u003c/script>')
+    expect(doc).not.toContain('__SKETCH_INITIAL_STATE__')
+    expect(doc).toContain('$&\\u2028')
+    expect(doc.match(/<script>/g)).toHaveLength(1)
   })
 })

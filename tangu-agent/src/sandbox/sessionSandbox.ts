@@ -110,7 +110,7 @@ class PythonKernel {
       signal?.addEventListener('abort', onAbort, { once: true });
       try {
         this.child = spawn('docker', ['exec', '-i', this.containerName, 'python3', '-u', '-c', KERNEL_DRIVER],
-          { stdio: ['pipe', 'pipe', 'pipe'] });
+          { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
       } catch { this.dead = true; return done(false); }
       this.readyResolve = (ok) => done(ok);
       this.child.stdout.on('data', (d: Buffer) => this.onData(d));

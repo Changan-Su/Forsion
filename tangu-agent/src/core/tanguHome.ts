@@ -112,13 +112,6 @@ export const memoryDir = (): string => join(tanguHome(), 'memory');
 /** per-install 设备标识文件(日志条目按 deviceId 打标,供多端合并去重)。 */
 export const deviceIdFile = (): string => join(tanguHome(), 'device.json');
 
-/** 确保 home 及子目录存在(幂等);返回 home 路径。 */
-export function ensureHome(): string {
-  mkdirSync(skillsDir(), { recursive: true });
-  mkdirSync(agentsDir(), { recursive: true });
-  return tanguHome();
-}
-
 /** 工作区(用户项目目录)里 Tangu 自己那个点目录的名字 —— `<cwd>/.tangu/{skills,plans}`。
  *  ⚠️与家目录同名是**刻意**的,三家上游都这样(Claude Code `.claude`、Codex `.codex`、pi `.pi`
  *  各自家目录与工作区同名)。同名无害的前提是:**它绝不能进 `PROJECT_ROOT_MARKERS`**

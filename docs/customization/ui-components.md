@@ -75,3 +75,18 @@ Use `ctx.ui?.mountChatBox?.(element, options)` inside a plugin View. The host su
 `handle.update(patch)` preserves mounted state; `focus()` focuses the input; `dispose()` is idempotent. The host also cleans up on plugin disable, reload, or setup failure. Submission is locked while pending, and disposed instances ignore late results. Default keyboard submission is ⌘/Ctrl+Enter; Shift+Enter adds a line and IME confirmation never submits. Text, model selection, and effort are supported; conversation-only attachments, slash commands, approvals, and run controls require their session host. Feature-detect on older hosts. The canonical options and handle types live in `desktop/shared/chatBox.ts`.
 
 On Android, `presentNativeMenu` / `presentNativePrompt` / `presentNativeConfirm` from `@lcl/engine` show a Compose bottom sheet; elsewhere they resolve `{ handled: false }` and the caller renders its web UI. `ContextMenu`, `askString` and `ConfirmDialog` (without children) already use them, so plugins built on these primitives get native sheets for free. The shell pushes the native top bar with `setNativeChromeShell`; full-screen layers hide it with `useNativeChromeClaim({ mode: 'hidden' })`, and pages with their own back semantics (Settings) claim `{ mode: 'page', title, back, onBack, close?, onClose? }`. A custom menu that should also open natively keeps one `SheetMenu` (labels + `run` callbacks) for both renders: `openNativeSheetMenu(build, { onFallback })` for click-triggered menus, `useNativeSheetMenu(open, build, onClose)` for state-driven ones (right-click / long-press). Besides the ribbon's bottom items, the mobile "⋯" sheet lists every command that declares `Command.moreGroup = { id, title }` (one section per group id, titled `title`); commands an external plugin registers through `ctx.registerCommand` are grouped there per plugin automatically (section title = plugin name), with no plugin code changes. The app market's full-screen page claims `page` mode like Settings.
+
+## API 文档的 Amadeus 编辑器 / Amadeus for API-backed documents
+
+`ctx.ui?.mountMarkdownEditor(el, { value, label, readOnly, onChange })` 挂载原生 Amadeus / Milkdown 编辑器，支持可视编辑、Markdown 源码和发布预览。正文完全由调用方保存，不读写活动智库、不修改当前笔记、不自动请求模型。句法沿用 CommonMark、GFM、CJK 强调、`![[视频链接]]` 与 Obsidian callout；折叠 callout 使用 `> [!note]- 标题`。
+
+`handle.getValue()` 同步取最新事务，保存前必须调用；`update({value})` 切换文档，`insertMarkdown(text)` 追加上传附件或嵌入，`focus()` 聚焦，`dispose()` 幂等清理。插件禁用/重载与主视图卸载也会收回挂载，旧句柄不能再改内容。旧宿主缺少此 API 时应明确要求升级，不能伪装成原生编辑器。
+
+The caller owns the document and persistence. No implicit vault, active page, AI calls or autosave. The editor and publishing renderer share Amadeus Markdown semantics. Read `getValue()` immediately before saving; dispose mounts on view teardown. Feature-detect on older hosts.
+
+
+### Plugin Chat Box selection and Director hand-off (2026-09-30)
+
+When `ctx.tangu.chatSelection === true`, `startChat` accepts optional `modelId` and `thinkingLevel` from the native `ctx.ui.mountChatBox` submission. The host validates the live model catalog and supported thinking levels before changing the UI, then applies the explicit selection after Agent defaults, before prefill/send. Unrecognised selections return `ok:false`; keep the draft for retry. Older hosts omit the capability: retain a plain prompt adapter instead of showing a model picker whose selection cannot be honoured. Bundle ownership, vault-relative `folder`, plugin liveness and send gating remain unchanged.
+
+The editor accepts `previewBaseUrl` to resolve relative public media when mounted in a desktop or cross-origin admin host.

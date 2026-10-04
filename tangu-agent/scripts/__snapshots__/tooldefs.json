@@ -16,7 +16,7 @@
       "type": "function",
       "function": {
         "name": "remember",
-        "description": "Save one durable fact to the current Agent’s long-term memory, injected into every future session. Keep it small and high-signal. WHEN: stable user identity/preferences, environment (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SKIP: task progress, completed work, deliverables, versions, dated status and one-off requests; use log_event instead. FORMAT: one sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and version (fact: null); update replaces a listed entry and MUST include the new fact, id and expectedVersion; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence; never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
+        "description": "Save one durable fact to the current Agent’s long-term memory, injected into every future session. Keep it small and high-signal. WHEN: user identity/preferences/corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SKIP: task progress, completed work, deliverables, versions, dated status and one-off requests; use log_event instead. FORMAT: one sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and version (fact: null); update replaces a listed entry and MUST include the new fact, id and expectedVersion; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence; never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -549,7 +549,7 @@
       "type": "function",
       "function": {
         "name": "remember",
-        "description": "Save one durable fact to the current Agent’s long-term memory, injected into every future session. Keep it small and high-signal. WHEN: stable user identity/preferences, environment (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SKIP: task progress, completed work, deliverables, versions, dated status and one-off requests; use log_event instead. FORMAT: one sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and version (fact: null); update replaces a listed entry and MUST include the new fact, id and expectedVersion; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence; never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
+        "description": "Save one durable fact to the current Agent’s long-term memory, injected into every future session. Keep it small and high-signal. WHEN: user identity/preferences/corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SKIP: task progress, completed work, deliverables, versions, dated status and one-off requests; use log_event instead. FORMAT: one sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and version (fact: null); update replaces a listed entry and MUST include the new fact, id and expectedVersion; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence; never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -1101,7 +1101,7 @@
       "type": "function",
       "function": {
         "name": "remember",
-        "description": "Save one durable fact to the current Agent’s long-term memory, injected into every future session. Keep it small and high-signal. WHEN: stable user identity/preferences, environment (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SKIP: task progress, completed work, deliverables, versions, dated status and one-off requests; use log_event instead. FORMAT: one sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and version (fact: null); update replaces a listed entry and MUST include the new fact, id and expectedVersion; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence; never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
+        "description": "Save one durable fact to the current Agent’s long-term memory, injected into every future session. Keep it small and high-signal. WHEN: user identity/preferences/corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SKIP: task progress, completed work, deliverables, versions, dated status and one-off requests; use log_event instead. FORMAT: one sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and version (fact: null); update replaces a listed entry and MUST include the new fact, id and expectedVersion; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence; never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -1465,7 +1465,7 @@
       "type": "function",
       "function": {
         "name": "remember",
-        "description": "Save one durable fact to the current Agent’s long-term memory, injected into every future session. Keep it small and high-signal. WHEN: stable user identity/preferences, environment (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SKIP: task progress, completed work, deliverables, versions, dated status and one-off requests; use log_event instead. FORMAT: one sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and version (fact: null); update replaces a listed entry and MUST include the new fact, id and expectedVersion; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence; never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
+        "description": "Save one durable fact to the current Agent’s long-term memory, injected into every future session. Keep it small and high-signal. WHEN: user identity/preferences/corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SKIP: task progress, completed work, deliverables, versions, dated status and one-off requests; use log_event instead. FORMAT: one sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and version (fact: null); update replaces a listed entry and MUST include the new fact, id and expectedVersion; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence; never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -1848,7 +1848,7 @@
       "type": "function",
       "function": {
         "name": "remember",
-        "description": "Save one durable fact to the current Agent’s long-term memory, injected into every future session. Keep it small and high-signal. WHEN: stable user identity/preferences, environment (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SKIP: task progress, completed work, deliverables, versions, dated status and one-off requests; use log_event instead. FORMAT: one sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and version (fact: null); update replaces a listed entry and MUST include the new fact, id and expectedVersion; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence; never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
+        "description": "Save one durable fact to the current Agent’s long-term memory, injected into every future session. Keep it small and high-signal. WHEN: user identity/preferences/corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SKIP: task progress, completed work, deliverables, versions, dated status and one-off requests; use log_event instead. FORMAT: one sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and version (fact: null); update replaces a listed entry and MUST include the new fact, id and expectedVersion; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence; never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -2469,7 +2469,7 @@
       "type": "function",
       "function": {
         "name": "manage_human",
-        "description": "Read or update the human collaboration document HUMAN.md. First read to obtain content and version, then update with the full revised Markdown and expectedVersion. Changes are applied immediately; the user receives a card and may edit or undo. Scope project is only for this project; scope agent is for collaboration that remains useful outside it. Preserve user edits. Record your own adjustments, concrete input the human can contribute, and optional learning tied to a goal. Use specific evidence; avoid personality judgments, permissions, transient tool failures and unsolicited homework. Keep it concise; batch related changes. Never write this file using generic file or shell tools.",
+        "description": "Read or update the human collaboration document HUMAN.md. First read to obtain content and version, then update with the full revised Markdown and expectedVersion. Changes are applied immediately; the user receives a card and may edit or undo. Scope project is only for this project; scope agent is for collaboration that remains useful outside it. Preserve user edits. It holds YOUR advice and requests to the human: concrete input, context or decisions they can contribute, habits on their side that would help, and optional learning tied to a goal. What the human tells or requires of you (their corrections and preferences) does not belong here; save that with remember. Use specific evidence; avoid personality judgments, permissions, transient tool failures and unsolicited homework. Keep it concise; batch related changes. Never write this file using generic file or shell tools.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -2529,7 +2529,7 @@
       "type": "function",
       "function": {
         "name": "remember",
-        "description": "Save one durable fact to the current Agent’s long-term memory, injected into every future session. Keep it small and high-signal. WHEN: stable user identity/preferences, environment (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SKIP: task progress, completed work, deliverables, versions, dated status and one-off requests; use log_event instead. FORMAT: one sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and version (fact: null); update replaces a listed entry and MUST include the new fact, id and expectedVersion; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence; never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
+        "description": "Save one durable fact to the current Agent’s long-term memory, injected into every future session. Keep it small and high-signal. WHEN: user identity/preferences/corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SKIP: task progress, completed work, deliverables, versions, dated status and one-off requests; use log_event instead. FORMAT: one sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and version (fact: null); update replaces a listed entry and MUST include the new fact, id and expectedVersion; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence; never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -3169,7 +3169,7 @@
       "type": "function",
       "function": {
         "name": "manage_human",
-        "description": "Read or update the human collaboration document HUMAN.md. First read to obtain content and version, then update with the full revised Markdown and expectedVersion. Changes are applied immediately; the user receives a card and may edit or undo. Scope project is only for this project; scope agent is for collaboration that remains useful outside it. Preserve user edits. Record your own adjustments, concrete input the human can contribute, and optional learning tied to a goal. Use specific evidence; avoid personality judgments, permissions, transient tool failures and unsolicited homework. Keep it concise; batch related changes. Never write this file using generic file or shell tools.",
+        "description": "Read or update the human collaboration document HUMAN.md. First read to obtain content and version, then update with the full revised Markdown and expectedVersion. Changes are applied immediately; the user receives a card and may edit or undo. Scope project is only for this project; scope agent is for collaboration that remains useful outside it. Preserve user edits. It holds YOUR advice and requests to the human: concrete input, context or decisions they can contribute, habits on their side that would help, and optional learning tied to a goal. What the human tells or requires of you (their corrections and preferences) does not belong here; save that with remember. Use specific evidence; avoid personality judgments, permissions, transient tool failures and unsolicited homework. Keep it concise; batch related changes. Never write this file using generic file or shell tools.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -3229,7 +3229,7 @@
       "type": "function",
       "function": {
         "name": "remember",
-        "description": "Save one durable fact to the current Agent’s long-term memory, injected into every future session. Keep it small and high-signal. WHEN: stable user identity/preferences, environment (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SKIP: task progress, completed work, deliverables, versions, dated status and one-off requests; use log_event instead. FORMAT: one sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and version (fact: null); update replaces a listed entry and MUST include the new fact, id and expectedVersion; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence; never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
+        "description": "Save one durable fact to the current Agent’s long-term memory, injected into every future session. Keep it small and high-signal. WHEN: user identity/preferences/corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, commands and workflows proven to work here, landmines. A working method you worked out yourself is not a memory: it goes in your working notes (manage_harness). SKIP: task progress, completed work, deliverables, versions, dated status and one-off requests; use log_event instead. FORMAT: one sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and version (fact: null); update replaces a listed entry and MUST include the new fact, id and expectedVersion; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence; never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -4093,7 +4093,7 @@
       "type": "function",
       "function": {
         "name": "manage_human",
-        "description": "Read or update the human collaboration document HUMAN.md. First read to obtain content and version, then update with the full revised Markdown and expectedVersion. Changes are applied immediately; the user receives a card and may edit or undo. Scope project is only for this project; scope agent is for collaboration that remains useful outside it. Preserve user edits. Record your own adjustments, concrete input the human can contribute, and optional learning tied to a goal. Use specific evidence; avoid personality judgments, permissions, transient tool failures and unsolicited homework. Keep it concise; batch related changes. Never write this file using generic file or shell tools.",
+        "description": "Read or update the human collaboration document HUMAN.md. First read to obtain content and version, then update with the full revised Markdown and expectedVersion. Changes are applied immediately; the user receives a card and may edit or undo. Scope project is only for this project; scope agent is for collaboration that remains useful outside it. Preserve user edits. It holds YOUR advice and requests to the human: concrete input, context or decisions they can contribute, habits on their side that would help, and optional learning tied to a goal. What the human tells or requires of you (their corrections and preferences) does not belong here; save that with remember. Use specific evidence; avoid personality judgments, permissions, transient tool failures and unsolicited homework. Keep it concise; batch related changes. Never write this file using generic file or shell tools.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -4138,6 +4138,82 @@
     {
       "type": "function",
       "function": {
+        "name": "manage_harness",
+        "description": "Your Working Notes (HARNESS.md), the record of your own evolution: what you have worked out yourself about HOW you work, loaded into your system prompt on every run. You own them: changes apply at once and the user gets a card to undo, so do not ask permission or wait for /refine. Use it the moment you work something out yourself that will hold in any project: a technique or delegation pattern that proved itself, a pitfall and the way around it, a standard you set for your own work. Elsewhere: anything the user told, corrected or required of you, and facts about the user, a project or the world → remember; what you would like the human to do differently → manage_human; a reusable procedure → manage_skill (scope \"agent\"). One lesson, one place: if you are saving a point with remember or manage_human, do not repeat it here. Never record environment/setup failures, \"tool X is broken\", transient errors or one-off task stories; they harden into refusals. upsert without id creates an entry (title, body and evidence of what actually happened are required); with id it revises. rollback restores the previous version. propose (agent + candidates) drops suggestions into ANOTHER agent's candidate inbox; you never write its notes. propose with tools / skills passes on a usage review's equipment suggestion for that agent. Limits: title ≤80, body ≤300, evidence ≤200 chars, 30 entries; at the cap, merge or delete weaker ones. kind \"note\" = working method (default); \"recipe\" = a delegation pattern that worked; \"equip\" = shelve tools/skills you rarely use to keep your context lean (pass tools / skills): a shelved tool moves to the load-on-demand catalog (load_tools brings it back), a shelved skill leaves your skill list (use_skill by id still works). Shelving never removes or grants a capability; shelve on evidence such as a usage review, and revise or delete the entry to undo.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "enum": [
+                "upsert",
+                "delete",
+                "list",
+                "rollback",
+                "propose"
+              ],
+              "description": "The operation"
+            },
+            "agent": {
+              "type": "string",
+              "description": "propose: target agent slug"
+            },
+            "candidates": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "propose: 1-3 one-line lessons (leave out when passing tools / skills)"
+            },
+            "id": {
+              "type": "string",
+              "description": "Entry id, e.g. \"h-x3k9\" (delete / rollback / revise)"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "note",
+                "recipe",
+                "equip"
+              ],
+              "description": "Entry type (default \"note\")"
+            },
+            "tools": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "equip: exact tool names to shelve (replaces the list on revise). propose: the tools a usage review listed for that agent"
+            },
+            "skills": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "equip: exact skill ids to shelve, e.g. \"local:pptx\" (replaces the list on revise)"
+            },
+            "title": {
+              "type": "string",
+              "description": "Short label"
+            },
+            "body": {
+              "type": "string",
+              "description": "The lesson itself"
+            },
+            "evidence": {
+              "type": "string",
+              "description": "What actually happened that justifies it"
+            }
+          },
+          "required": [
+            "action"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
         "name": "transcribe_audio",
         "description": "Transcribe a local audio file via the Forsion Desktop speech-recognition pipeline (local offline model or the ASR provider configured in desktop settings). Returns JSON {text, segments?}. Use this when a transcription script reports the media has no subtitle track and hands back an audio_path (e.g. source:\"needs_asr\"). Requires the Forsion desktop app to be running. With timestamps:true you can cite a moment back to the user as [[<media path>#t=<seconds>|<mm:ss>]] — see the line printed after the transcript.",
         "parameters": {
@@ -4166,7 +4242,7 @@
       "type": "function",
       "function": {
         "name": "browser_tabs",
-        "description": "See the tabs open in the user's own Chrome and read one of them. Use this whenever the user refers to something already open in their browser (\"this page\", \"the video I have open\") — not browser_task, which starts a separate browser without the user's tabs. Without `select`, lists the open tabs (id, title, URL). With `select` — a tab id such as \"t3\", or text found in exactly one tab's title or URL — brings that tab to the front and returns its text plus @eN element refs that the browser_* control tools then act on. Chrome does not reveal which tab the user is looking at: match what they describe, and ask if several tabs fit. If Tangu is not connected, the result explains the one-time setup to relay to the user.",
+        "description": "See the tabs open in the user's own Chrome and read one of them. Use this whenever the user refers to something already open in their browser (\"this page\", \"the video I have open\") — not browser_task, which starts a separate browser without the user's tabs. Without `select`, lists the open tabs (id, title, URL). With `select` — a tab id such as \"t3\", or text found in exactly one tab's title or URL — reads that tab and returns its text plus element refs (eN) that the browser_* control tools then act on. The tab the user is looking at is marked focused when that is known; otherwise match what they describe, and ask if several tabs fit. Tabs Tangu opened itself are marked tangu. If Tangu is not connected, the result explains the one-time setup to relay to the user.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -4197,7 +4273,7 @@
       "type": "function",
       "function": {
         "name": "remember",
-        "description": "Save one durable fact to the current Agent’s long-term memory, injected into every future session. Keep it small and high-signal. WHEN: stable user identity/preferences, environment (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SKIP: task progress, completed work, deliverables, versions, dated status and one-off requests; use log_event instead. FORMAT: one sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and version (fact: null); update replaces a listed entry and MUST include the new fact, id and expectedVersion; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence; never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
+        "description": "Save one durable fact to the current Agent’s long-term memory, injected into every future session. Keep it small and high-signal. WHEN: user identity/preferences/corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, commands and workflows proven to work here, landmines. A working method you worked out yourself is not a memory: it goes in your working notes (manage_harness). SKIP: task progress, completed work, deliverables, versions, dated status and one-off requests; use log_event instead. FORMAT: one sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and version (fact: null); update replaces a listed entry and MUST include the new fact, id and expectedVersion; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence; never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -5080,7 +5156,7 @@
       "type": "function",
       "function": {
         "name": "manage_human",
-        "description": "Read or update the human collaboration document HUMAN.md. First read to obtain content and version, then update with the full revised Markdown and expectedVersion. Changes are applied immediately; the user receives a card and may edit or undo. Scope project is only for this project; scope agent is for collaboration that remains useful outside it. Preserve user edits. Record your own adjustments, concrete input the human can contribute, and optional learning tied to a goal. Use specific evidence; avoid personality judgments, permissions, transient tool failures and unsolicited homework. Keep it concise; batch related changes. Never write this file using generic file or shell tools.",
+        "description": "Read or update the human collaboration document HUMAN.md. First read to obtain content and version, then update with the full revised Markdown and expectedVersion. Changes are applied immediately; the user receives a card and may edit or undo. Scope project is only for this project; scope agent is for collaboration that remains useful outside it. Preserve user edits. It holds YOUR advice and requests to the human: concrete input, context or decisions they can contribute, habits on their side that would help, and optional learning tied to a goal. What the human tells or requires of you (their corrections and preferences) does not belong here; save that with remember. Use specific evidence; avoid personality judgments, permissions, transient tool failures and unsolicited homework. Keep it concise; batch related changes. Never write this file using generic file or shell tools.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -5125,6 +5201,82 @@
     {
       "type": "function",
       "function": {
+        "name": "manage_harness",
+        "description": "Your Working Notes (HARNESS.md), the record of your own evolution: what you have worked out yourself about HOW you work, loaded into your system prompt on every run. You own them: changes apply at once and the user gets a card to undo, so do not ask permission or wait for /refine. Use it the moment you work something out yourself that will hold in any project: a technique or delegation pattern that proved itself, a pitfall and the way around it, a standard you set for your own work. Elsewhere: anything the user told, corrected or required of you, and facts about the user, a project or the world → remember; what you would like the human to do differently → manage_human; a reusable procedure → manage_skill (scope \"agent\"). One lesson, one place: if you are saving a point with remember or manage_human, do not repeat it here. Never record environment/setup failures, \"tool X is broken\", transient errors or one-off task stories; they harden into refusals. upsert without id creates an entry (title, body and evidence of what actually happened are required); with id it revises. rollback restores the previous version. propose (agent + candidates) drops suggestions into ANOTHER agent's candidate inbox; you never write its notes. propose with tools / skills passes on a usage review's equipment suggestion for that agent. Limits: title ≤80, body ≤300, evidence ≤200 chars, 30 entries; at the cap, merge or delete weaker ones. kind \"note\" = working method (default); \"recipe\" = a delegation pattern that worked; \"equip\" = shelve tools/skills you rarely use to keep your context lean (pass tools / skills): a shelved tool moves to the load-on-demand catalog (load_tools brings it back), a shelved skill leaves your skill list (use_skill by id still works). Shelving never removes or grants a capability; shelve on evidence such as a usage review, and revise or delete the entry to undo.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "enum": [
+                "upsert",
+                "delete",
+                "list",
+                "rollback",
+                "propose"
+              ],
+              "description": "The operation"
+            },
+            "agent": {
+              "type": "string",
+              "description": "propose: target agent slug"
+            },
+            "candidates": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "propose: 1-3 one-line lessons (leave out when passing tools / skills)"
+            },
+            "id": {
+              "type": "string",
+              "description": "Entry id, e.g. \"h-x3k9\" (delete / rollback / revise)"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "note",
+                "recipe",
+                "equip"
+              ],
+              "description": "Entry type (default \"note\")"
+            },
+            "tools": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "equip: exact tool names to shelve (replaces the list on revise). propose: the tools a usage review listed for that agent"
+            },
+            "skills": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "equip: exact skill ids to shelve, e.g. \"local:pptx\" (replaces the list on revise)"
+            },
+            "title": {
+              "type": "string",
+              "description": "Short label"
+            },
+            "body": {
+              "type": "string",
+              "description": "The lesson itself"
+            },
+            "evidence": {
+              "type": "string",
+              "description": "What actually happened that justifies it"
+            }
+          },
+          "required": [
+            "action"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
         "name": "transcribe_audio",
         "description": "Transcribe a local audio file via the Forsion Desktop speech-recognition pipeline (local offline model or the ASR provider configured in desktop settings). Returns JSON {text, segments?}. Use this when a transcription script reports the media has no subtitle track and hands back an audio_path (e.g. source:\"needs_asr\"). Requires the Forsion desktop app to be running. With timestamps:true you can cite a moment back to the user as [[<media path>#t=<seconds>|<mm:ss>]] — see the line printed after the transcript.",
         "parameters": {
@@ -5153,7 +5305,7 @@
       "type": "function",
       "function": {
         "name": "browser_tabs",
-        "description": "See the tabs open in the user's own Chrome and read one of them. Use this whenever the user refers to something already open in their browser (\"this page\", \"the video I have open\") — not browser_task, which starts a separate browser without the user's tabs. Without `select`, lists the open tabs (id, title, URL). With `select` — a tab id such as \"t3\", or text found in exactly one tab's title or URL — brings that tab to the front and returns its text plus @eN element refs that the browser_* control tools then act on. Chrome does not reveal which tab the user is looking at: match what they describe, and ask if several tabs fit. If Tangu is not connected, the result explains the one-time setup to relay to the user.",
+        "description": "See the tabs open in the user's own Chrome and read one of them. Use this whenever the user refers to something already open in their browser (\"this page\", \"the video I have open\") — not browser_task, which starts a separate browser without the user's tabs. Without `select`, lists the open tabs (id, title, URL). With `select` — a tab id such as \"t3\", or text found in exactly one tab's title or URL — reads that tab and returns its text plus element refs (eN) that the browser_* control tools then act on. The tab the user is looking at is marked focused when that is known; otherwise match what they describe, and ask if several tabs fit. Tabs Tangu opened itself are marked tangu. If Tangu is not connected, the result explains the one-time setup to relay to the user.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -5184,7 +5336,7 @@
       "type": "function",
       "function": {
         "name": "remember",
-        "description": "Save one durable fact to the current Agent’s long-term memory, injected into every future session. Keep it small and high-signal. WHEN: stable user identity/preferences, environment (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SKIP: task progress, completed work, deliverables, versions, dated status and one-off requests; use log_event instead. FORMAT: one sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and version (fact: null); update replaces a listed entry and MUST include the new fact, id and expectedVersion; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence; never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
+        "description": "Save one durable fact to the current Agent’s long-term memory, injected into every future session. Keep it small and high-signal. WHEN: user identity/preferences/corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SKIP: task progress, completed work, deliverables, versions, dated status and one-off requests; use log_event instead. FORMAT: one sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and version (fact: null); update replaces a listed entry and MUST include the new fact, id and expectedVersion; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence; never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -5764,7 +5916,7 @@
       "type": "function",
       "function": {
         "name": "manage_human",
-        "description": "Read or update the human collaboration document HUMAN.md. First read to obtain content and version, then update with the full revised Markdown and expectedVersion. Changes are applied immediately; the user receives a card and may edit or undo. Scope project is only for this project; scope agent is for collaboration that remains useful outside it. Preserve user edits. Record your own adjustments, concrete input the human can contribute, and optional learning tied to a goal. Use specific evidence; avoid personality judgments, permissions, transient tool failures and unsolicited homework. Keep it concise; batch related changes. Never write this file using generic file or shell tools.",
+        "description": "Read or update the human collaboration document HUMAN.md. First read to obtain content and version, then update with the full revised Markdown and expectedVersion. Changes are applied immediately; the user receives a card and may edit or undo. Scope project is only for this project; scope agent is for collaboration that remains useful outside it. Preserve user edits. It holds YOUR advice and requests to the human: concrete input, context or decisions they can contribute, habits on their side that would help, and optional learning tied to a goal. What the human tells or requires of you (their corrections and preferences) does not belong here; save that with remember. Use specific evidence; avoid personality judgments, permissions, transient tool failures and unsolicited homework. Keep it concise; batch related changes. Never write this file using generic file or shell tools.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -5824,7 +5976,7 @@
       "type": "function",
       "function": {
         "name": "remember",
-        "description": "Save one durable fact to the current Agent’s long-term memory, injected into every future session. Keep it small and high-signal. WHEN: stable user identity/preferences, environment (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SKIP: task progress, completed work, deliverables, versions, dated status and one-off requests; use log_event instead. FORMAT: one sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and version (fact: null); update replaces a listed entry and MUST include the new fact, id and expectedVersion; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence; never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
+        "description": "Save one durable fact to the current Agent’s long-term memory, injected into every future session. Keep it small and high-signal. WHEN: user identity/preferences/corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SKIP: task progress, completed work, deliverables, versions, dated status and one-off requests; use log_event instead. FORMAT: one sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and version (fact: null); update replaces a listed entry and MUST include the new fact, id and expectedVersion; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence; never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -6423,7 +6575,7 @@
       "type": "function",
       "function": {
         "name": "manage_human",
-        "description": "Read or update the human collaboration document HUMAN.md. First read to obtain content and version, then update with the full revised Markdown and expectedVersion. Changes are applied immediately; the user receives a card and may edit or undo. Scope project is only for this project; scope agent is for collaboration that remains useful outside it. Preserve user edits. Record your own adjustments, concrete input the human can contribute, and optional learning tied to a goal. Use specific evidence; avoid personality judgments, permissions, transient tool failures and unsolicited homework. Keep it concise; batch related changes. Never write this file using generic file or shell tools.",
+        "description": "Read or update the human collaboration document HUMAN.md. First read to obtain content and version, then update with the full revised Markdown and expectedVersion. Changes are applied immediately; the user receives a card and may edit or undo. Scope project is only for this project; scope agent is for collaboration that remains useful outside it. Preserve user edits. It holds YOUR advice and requests to the human: concrete input, context or decisions they can contribute, habits on their side that would help, and optional learning tied to a goal. What the human tells or requires of you (their corrections and preferences) does not belong here; save that with remember. Use specific evidence; avoid personality judgments, permissions, transient tool failures and unsolicited homework. Keep it concise; batch related changes. Never write this file using generic file or shell tools.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -6483,7 +6635,7 @@
       "type": "function",
       "function": {
         "name": "remember",
-        "description": "Save one durable fact to the current Agent’s long-term memory, injected into every future session. Keep it small and high-signal. WHEN: stable user identity/preferences, environment (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SKIP: task progress, completed work, deliverables, versions, dated status and one-off requests; use log_event instead. FORMAT: one sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and version (fact: null); update replaces a listed entry and MUST include the new fact, id and expectedVersion; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence; never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
+        "description": "Save one durable fact to the current Agent’s long-term memory, injected into every future session. Keep it small and high-signal. WHEN: user identity/preferences/corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, commands and workflows proven to work here, landmines. A working method you worked out yourself is not a memory: it goes in your working notes (manage_harness). SKIP: task progress, completed work, deliverables, versions, dated status and one-off requests; use log_event instead. FORMAT: one sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and version (fact: null); update replaces a listed entry and MUST include the new fact, id and expectedVersion; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence; never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -7347,7 +7499,7 @@
       "type": "function",
       "function": {
         "name": "manage_human",
-        "description": "Read or update the human collaboration document HUMAN.md. First read to obtain content and version, then update with the full revised Markdown and expectedVersion. Changes are applied immediately; the user receives a card and may edit or undo. Scope project is only for this project; scope agent is for collaboration that remains useful outside it. Preserve user edits. Record your own adjustments, concrete input the human can contribute, and optional learning tied to a goal. Use specific evidence; avoid personality judgments, permissions, transient tool failures and unsolicited homework. Keep it concise; batch related changes. Never write this file using generic file or shell tools.",
+        "description": "Read or update the human collaboration document HUMAN.md. First read to obtain content and version, then update with the full revised Markdown and expectedVersion. Changes are applied immediately; the user receives a card and may edit or undo. Scope project is only for this project; scope agent is for collaboration that remains useful outside it. Preserve user edits. It holds YOUR advice and requests to the human: concrete input, context or decisions they can contribute, habits on their side that would help, and optional learning tied to a goal. What the human tells or requires of you (their corrections and preferences) does not belong here; save that with remember. Use specific evidence; avoid personality judgments, permissions, transient tool failures and unsolicited homework. Keep it concise; batch related changes. Never write this file using generic file or shell tools.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -7392,6 +7544,82 @@
     {
       "type": "function",
       "function": {
+        "name": "manage_harness",
+        "description": "Your Working Notes (HARNESS.md), the record of your own evolution: what you have worked out yourself about HOW you work, loaded into your system prompt on every run. You own them: changes apply at once and the user gets a card to undo, so do not ask permission or wait for /refine. Use it the moment you work something out yourself that will hold in any project: a technique or delegation pattern that proved itself, a pitfall and the way around it, a standard you set for your own work. Elsewhere: anything the user told, corrected or required of you, and facts about the user, a project or the world → remember; what you would like the human to do differently → manage_human; a reusable procedure → manage_skill (scope \"agent\"). One lesson, one place: if you are saving a point with remember or manage_human, do not repeat it here. Never record environment/setup failures, \"tool X is broken\", transient errors or one-off task stories; they harden into refusals. upsert without id creates an entry (title, body and evidence of what actually happened are required); with id it revises. rollback restores the previous version. propose (agent + candidates) drops suggestions into ANOTHER agent's candidate inbox; you never write its notes. propose with tools / skills passes on a usage review's equipment suggestion for that agent. Limits: title ≤80, body ≤300, evidence ≤200 chars, 30 entries; at the cap, merge or delete weaker ones. kind \"note\" = working method (default); \"recipe\" = a delegation pattern that worked; \"equip\" = shelve tools/skills you rarely use to keep your context lean (pass tools / skills): a shelved tool moves to the load-on-demand catalog (load_tools brings it back), a shelved skill leaves your skill list (use_skill by id still works). Shelving never removes or grants a capability; shelve on evidence such as a usage review, and revise or delete the entry to undo.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "enum": [
+                "upsert",
+                "delete",
+                "list",
+                "rollback",
+                "propose"
+              ],
+              "description": "The operation"
+            },
+            "agent": {
+              "type": "string",
+              "description": "propose: target agent slug"
+            },
+            "candidates": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "propose: 1-3 one-line lessons (leave out when passing tools / skills)"
+            },
+            "id": {
+              "type": "string",
+              "description": "Entry id, e.g. \"h-x3k9\" (delete / rollback / revise)"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "note",
+                "recipe",
+                "equip"
+              ],
+              "description": "Entry type (default \"note\")"
+            },
+            "tools": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "equip: exact tool names to shelve (replaces the list on revise). propose: the tools a usage review listed for that agent"
+            },
+            "skills": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "equip: exact skill ids to shelve, e.g. \"local:pptx\" (replaces the list on revise)"
+            },
+            "title": {
+              "type": "string",
+              "description": "Short label"
+            },
+            "body": {
+              "type": "string",
+              "description": "The lesson itself"
+            },
+            "evidence": {
+              "type": "string",
+              "description": "What actually happened that justifies it"
+            }
+          },
+          "required": [
+            "action"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
         "name": "transcribe_audio",
         "description": "Transcribe a local audio file via the Forsion Desktop speech-recognition pipeline (local offline model or the ASR provider configured in desktop settings). Returns JSON {text, segments?}. Use this when a transcription script reports the media has no subtitle track and hands back an audio_path (e.g. source:\"needs_asr\"). Requires the Forsion desktop app to be running. With timestamps:true you can cite a moment back to the user as [[<media path>#t=<seconds>|<mm:ss>]] — see the line printed after the transcript.",
         "parameters": {
@@ -7420,7 +7648,7 @@
       "type": "function",
       "function": {
         "name": "browser_tabs",
-        "description": "See the tabs open in the user's own Chrome and read one of them. Use this whenever the user refers to something already open in their browser (\"this page\", \"the video I have open\") — not browser_task, which starts a separate browser without the user's tabs. Without `select`, lists the open tabs (id, title, URL). With `select` — a tab id such as \"t3\", or text found in exactly one tab's title or URL — brings that tab to the front and returns its text plus @eN element refs that the browser_* control tools then act on. Chrome does not reveal which tab the user is looking at: match what they describe, and ask if several tabs fit. If Tangu is not connected, the result explains the one-time setup to relay to the user.",
+        "description": "See the tabs open in the user's own Chrome and read one of them. Use this whenever the user refers to something already open in their browser (\"this page\", \"the video I have open\") — not browser_task, which starts a separate browser without the user's tabs. Without `select`, lists the open tabs (id, title, URL). With `select` — a tab id such as \"t3\", or text found in exactly one tab's title or URL — reads that tab and returns its text plus element refs (eN) that the browser_* control tools then act on. The tab the user is looking at is marked focused when that is known; otherwise match what they describe, and ask if several tabs fit. Tabs Tangu opened itself are marked tangu. If Tangu is not connected, the result explains the one-time setup to relay to the user.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -7451,7 +7679,7 @@
       "type": "function",
       "function": {
         "name": "remember",
-        "description": "Save one durable fact to the current Agent’s long-term memory, injected into every future session. Keep it small and high-signal. WHEN: stable user identity/preferences, environment (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SKIP: task progress, completed work, deliverables, versions, dated status and one-off requests; use log_event instead. FORMAT: one sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and version (fact: null); update replaces a listed entry and MUST include the new fact, id and expectedVersion; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence; never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
+        "description": "Save one durable fact to the current Agent’s long-term memory, injected into every future session. Keep it small and high-signal. WHEN: user identity/preferences/corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, commands and workflows proven to work here, landmines. A working method you worked out yourself is not a memory: it goes in your working notes (manage_harness). SKIP: task progress, completed work, deliverables, versions, dated status and one-off requests; use log_event instead. FORMAT: one sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and version (fact: null); update replaces a listed entry and MUST include the new fact, id and expectedVersion; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence; never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -8334,7 +8562,7 @@
       "type": "function",
       "function": {
         "name": "manage_human",
-        "description": "Read or update the human collaboration document HUMAN.md. First read to obtain content and version, then update with the full revised Markdown and expectedVersion. Changes are applied immediately; the user receives a card and may edit or undo. Scope project is only for this project; scope agent is for collaboration that remains useful outside it. Preserve user edits. Record your own adjustments, concrete input the human can contribute, and optional learning tied to a goal. Use specific evidence; avoid personality judgments, permissions, transient tool failures and unsolicited homework. Keep it concise; batch related changes. Never write this file using generic file or shell tools.",
+        "description": "Read or update the human collaboration document HUMAN.md. First read to obtain content and version, then update with the full revised Markdown and expectedVersion. Changes are applied immediately; the user receives a card and may edit or undo. Scope project is only for this project; scope agent is for collaboration that remains useful outside it. Preserve user edits. It holds YOUR advice and requests to the human: concrete input, context or decisions they can contribute, habits on their side that would help, and optional learning tied to a goal. What the human tells or requires of you (their corrections and preferences) does not belong here; save that with remember. Use specific evidence; avoid personality judgments, permissions, transient tool failures and unsolicited homework. Keep it concise; batch related changes. Never write this file using generic file or shell tools.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -8379,6 +8607,82 @@
     {
       "type": "function",
       "function": {
+        "name": "manage_harness",
+        "description": "Your Working Notes (HARNESS.md), the record of your own evolution: what you have worked out yourself about HOW you work, loaded into your system prompt on every run. You own them: changes apply at once and the user gets a card to undo, so do not ask permission or wait for /refine. Use it the moment you work something out yourself that will hold in any project: a technique or delegation pattern that proved itself, a pitfall and the way around it, a standard you set for your own work. Elsewhere: anything the user told, corrected or required of you, and facts about the user, a project or the world → remember; what you would like the human to do differently → manage_human; a reusable procedure → manage_skill (scope \"agent\"). One lesson, one place: if you are saving a point with remember or manage_human, do not repeat it here. Never record environment/setup failures, \"tool X is broken\", transient errors or one-off task stories; they harden into refusals. upsert without id creates an entry (title, body and evidence of what actually happened are required); with id it revises. rollback restores the previous version. propose (agent + candidates) drops suggestions into ANOTHER agent's candidate inbox; you never write its notes. propose with tools / skills passes on a usage review's equipment suggestion for that agent. Limits: title ≤80, body ≤300, evidence ≤200 chars, 30 entries; at the cap, merge or delete weaker ones. kind \"note\" = working method (default); \"recipe\" = a delegation pattern that worked; \"equip\" = shelve tools/skills you rarely use to keep your context lean (pass tools / skills): a shelved tool moves to the load-on-demand catalog (load_tools brings it back), a shelved skill leaves your skill list (use_skill by id still works). Shelving never removes or grants a capability; shelve on evidence such as a usage review, and revise or delete the entry to undo.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "enum": [
+                "upsert",
+                "delete",
+                "list",
+                "rollback",
+                "propose"
+              ],
+              "description": "The operation"
+            },
+            "agent": {
+              "type": "string",
+              "description": "propose: target agent slug"
+            },
+            "candidates": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "propose: 1-3 one-line lessons (leave out when passing tools / skills)"
+            },
+            "id": {
+              "type": "string",
+              "description": "Entry id, e.g. \"h-x3k9\" (delete / rollback / revise)"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "note",
+                "recipe",
+                "equip"
+              ],
+              "description": "Entry type (default \"note\")"
+            },
+            "tools": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "equip: exact tool names to shelve (replaces the list on revise). propose: the tools a usage review listed for that agent"
+            },
+            "skills": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "equip: exact skill ids to shelve, e.g. \"local:pptx\" (replaces the list on revise)"
+            },
+            "title": {
+              "type": "string",
+              "description": "Short label"
+            },
+            "body": {
+              "type": "string",
+              "description": "The lesson itself"
+            },
+            "evidence": {
+              "type": "string",
+              "description": "What actually happened that justifies it"
+            }
+          },
+          "required": [
+            "action"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
         "name": "transcribe_audio",
         "description": "Transcribe a local audio file via the Forsion Desktop speech-recognition pipeline (local offline model or the ASR provider configured in desktop settings). Returns JSON {text, segments?}. Use this when a transcription script reports the media has no subtitle track and hands back an audio_path (e.g. source:\"needs_asr\"). Requires the Forsion desktop app to be running. With timestamps:true you can cite a moment back to the user as [[<media path>#t=<seconds>|<mm:ss>]] — see the line printed after the transcript.",
         "parameters": {
@@ -8407,7 +8711,7 @@
       "type": "function",
       "function": {
         "name": "browser_tabs",
-        "description": "See the tabs open in the user's own Chrome and read one of them. Use this whenever the user refers to something already open in their browser (\"this page\", \"the video I have open\") — not browser_task, which starts a separate browser without the user's tabs. Without `select`, lists the open tabs (id, title, URL). With `select` — a tab id such as \"t3\", or text found in exactly one tab's title or URL — brings that tab to the front and returns its text plus @eN element refs that the browser_* control tools then act on. Chrome does not reveal which tab the user is looking at: match what they describe, and ask if several tabs fit. If Tangu is not connected, the result explains the one-time setup to relay to the user.",
+        "description": "See the tabs open in the user's own Chrome and read one of them. Use this whenever the user refers to something already open in their browser (\"this page\", \"the video I have open\") — not browser_task, which starts a separate browser without the user's tabs. Without `select`, lists the open tabs (id, title, URL). With `select` — a tab id such as \"t3\", or text found in exactly one tab's title or URL — reads that tab and returns its text plus element refs (eN) that the browser_* control tools then act on. The tab the user is looking at is marked focused when that is known; otherwise match what they describe, and ask if several tabs fit. Tabs Tangu opened itself are marked tangu. If Tangu is not connected, the result explains the one-time setup to relay to the user.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -8438,7 +8742,7 @@
       "type": "function",
       "function": {
         "name": "remember",
-        "description": "Save one durable fact to the current Agent’s long-term memory, injected into every future session. Keep it small and high-signal. WHEN: stable user identity/preferences, environment (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SKIP: task progress, completed work, deliverables, versions, dated status and one-off requests; use log_event instead. FORMAT: one sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and version (fact: null); update replaces a listed entry and MUST include the new fact, id and expectedVersion; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence; never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
+        "description": "Save one durable fact to the current Agent’s long-term memory, injected into every future session. Keep it small and high-signal. WHEN: user identity/preferences/corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, commands and workflows proven to work here, landmines. A working method you worked out yourself is not a memory: it goes in your working notes (manage_harness). SKIP: task progress, completed work, deliverables, versions, dated status and one-off requests; use log_event instead. FORMAT: one sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and version (fact: null); update replaces a listed entry and MUST include the new fact, id and expectedVersion; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence; never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -9302,7 +9606,7 @@
       "type": "function",
       "function": {
         "name": "manage_human",
-        "description": "Read or update the human collaboration document HUMAN.md. First read to obtain content and version, then update with the full revised Markdown and expectedVersion. Changes are applied immediately; the user receives a card and may edit or undo. Scope project is only for this project; scope agent is for collaboration that remains useful outside it. Preserve user edits. Record your own adjustments, concrete input the human can contribute, and optional learning tied to a goal. Use specific evidence; avoid personality judgments, permissions, transient tool failures and unsolicited homework. Keep it concise; batch related changes. Never write this file using generic file or shell tools.",
+        "description": "Read or update the human collaboration document HUMAN.md. First read to obtain content and version, then update with the full revised Markdown and expectedVersion. Changes are applied immediately; the user receives a card and may edit or undo. Scope project is only for this project; scope agent is for collaboration that remains useful outside it. Preserve user edits. It holds YOUR advice and requests to the human: concrete input, context or decisions they can contribute, habits on their side that would help, and optional learning tied to a goal. What the human tells or requires of you (their corrections and preferences) does not belong here; save that with remember. Use specific evidence; avoid personality judgments, permissions, transient tool failures and unsolicited homework. Keep it concise; batch related changes. Never write this file using generic file or shell tools.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -9340,6 +9644,82 @@
           "required": [
             "action",
             "scope"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "manage_harness",
+        "description": "Your Working Notes (HARNESS.md), the record of your own evolution: what you have worked out yourself about HOW you work, loaded into your system prompt on every run. You own them: changes apply at once and the user gets a card to undo, so do not ask permission or wait for /refine. Use it the moment you work something out yourself that will hold in any project: a technique or delegation pattern that proved itself, a pitfall and the way around it, a standard you set for your own work. Elsewhere: anything the user told, corrected or required of you, and facts about the user, a project or the world → remember; what you would like the human to do differently → manage_human; a reusable procedure → manage_skill (scope \"agent\"). One lesson, one place: if you are saving a point with remember or manage_human, do not repeat it here. Never record environment/setup failures, \"tool X is broken\", transient errors or one-off task stories; they harden into refusals. upsert without id creates an entry (title, body and evidence of what actually happened are required); with id it revises. rollback restores the previous version. propose (agent + candidates) drops suggestions into ANOTHER agent's candidate inbox; you never write its notes. propose with tools / skills passes on a usage review's equipment suggestion for that agent. Limits: title ≤80, body ≤300, evidence ≤200 chars, 30 entries; at the cap, merge or delete weaker ones. kind \"note\" = working method (default); \"recipe\" = a delegation pattern that worked; \"equip\" = shelve tools/skills you rarely use to keep your context lean (pass tools / skills): a shelved tool moves to the load-on-demand catalog (load_tools brings it back), a shelved skill leaves your skill list (use_skill by id still works). Shelving never removes or grants a capability; shelve on evidence such as a usage review, and revise or delete the entry to undo.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "enum": [
+                "upsert",
+                "delete",
+                "list",
+                "rollback",
+                "propose"
+              ],
+              "description": "The operation"
+            },
+            "agent": {
+              "type": "string",
+              "description": "propose: target agent slug"
+            },
+            "candidates": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "propose: 1-3 one-line lessons (leave out when passing tools / skills)"
+            },
+            "id": {
+              "type": "string",
+              "description": "Entry id, e.g. \"h-x3k9\" (delete / rollback / revise)"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "note",
+                "recipe",
+                "equip"
+              ],
+              "description": "Entry type (default \"note\")"
+            },
+            "tools": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "equip: exact tool names to shelve (replaces the list on revise). propose: the tools a usage review listed for that agent"
+            },
+            "skills": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "equip: exact skill ids to shelve, e.g. \"local:pptx\" (replaces the list on revise)"
+            },
+            "title": {
+              "type": "string",
+              "description": "Short label"
+            },
+            "body": {
+              "type": "string",
+              "description": "The lesson itself"
+            },
+            "evidence": {
+              "type": "string",
+              "description": "What actually happened that justifies it"
+            }
+          },
+          "required": [
+            "action"
           ]
         }
       }
@@ -9433,7 +9813,7 @@
       "type": "function",
       "function": {
         "name": "browser_tabs",
-        "description": "See the tabs open in the user's own Chrome and read one of them. Use this whenever the user refers to something already open in their browser (\"this page\", \"the video I have open\") — not browser_task, which starts a separate browser without the user's tabs. Without `select`, lists the open tabs (id, title, URL). With `select` — a tab id such as \"t3\", or text found in exactly one tab's title or URL — brings that tab to the front and returns its text plus @eN element refs that the browser_* control tools then act on. Chrome does not reveal which tab the user is looking at: match what they describe, and ask if several tabs fit. If Tangu is not connected, the result explains the one-time setup to relay to the user.",
+        "description": "See the tabs open in the user's own Chrome and read one of them. Use this whenever the user refers to something already open in their browser (\"this page\", \"the video I have open\") — not browser_task, which starts a separate browser without the user's tabs. Without `select`, lists the open tabs (id, title, URL). With `select` — a tab id such as \"t3\", or text found in exactly one tab's title or URL — reads that tab and returns its text plus element refs (eN) that the browser_* control tools then act on. The tab the user is looking at is marked focused when that is known; otherwise match what they describe, and ask if several tabs fit. Tabs Tangu opened itself are marked tangu. If Tangu is not connected, the result explains the one-time setup to relay to the user.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -9464,7 +9844,7 @@
       "type": "function",
       "function": {
         "name": "remember",
-        "description": "Save one durable fact to the current Agent’s long-term memory, injected into every future session. Keep it small and high-signal. WHEN: stable user identity/preferences, environment (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SKIP: task progress, completed work, deliverables, versions, dated status and one-off requests; use log_event instead. FORMAT: one sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and version (fact: null); update replaces a listed entry and MUST include the new fact, id and expectedVersion; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence; never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
+        "description": "Save one durable fact to the current Agent’s long-term memory, injected into every future session. Keep it small and high-signal. WHEN: user identity/preferences/corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SKIP: task progress, completed work, deliverables, versions, dated status and one-off requests; use log_event instead. FORMAT: one sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and version (fact: null); update replaces a listed entry and MUST include the new fact, id and expectedVersion; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence; never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -9715,7 +10095,7 @@
       "type": "function",
       "function": {
         "name": "remember",
-        "description": "Save one durable fact to the current Agent’s long-term memory, injected into every future session. Keep it small and high-signal. WHEN: stable user identity/preferences, environment (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SKIP: task progress, completed work, deliverables, versions, dated status and one-off requests; use log_event instead. FORMAT: one sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and version (fact: null); update replaces a listed entry and MUST include the new fact, id and expectedVersion; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence; never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
+        "description": "Save one durable fact to the current Agent’s long-term memory, injected into every future session. Keep it small and high-signal. WHEN: user identity/preferences/corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SKIP: task progress, completed work, deliverables, versions, dated status and one-off requests; use log_event instead. FORMAT: one sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and version (fact: null); update replaces a listed entry and MUST include the new fact, id and expectedVersion; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence; never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -10271,7 +10651,7 @@
       "type": "function",
       "function": {
         "name": "remember",
-        "description": "Save one durable fact to the current Agent’s long-term memory, injected into every future session. Keep it small and high-signal. WHEN: stable user identity/preferences, environment (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SKIP: task progress, completed work, deliverables, versions, dated status and one-off requests; use log_event instead. FORMAT: one sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and version (fact: null); update replaces a listed entry and MUST include the new fact, id and expectedVersion; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence; never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
+        "description": "Save one durable fact to the current Agent’s long-term memory, injected into every future session. Keep it small and high-signal. WHEN: user identity/preferences/corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SKIP: task progress, completed work, deliverables, versions, dated status and one-off requests; use log_event instead. FORMAT: one sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and version (fact: null); update replaces a listed entry and MUST include the new fact, id and expectedVersion; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence; never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
         "parameters": {
           "type": "object",
           "properties": {

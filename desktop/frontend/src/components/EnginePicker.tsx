@@ -13,7 +13,7 @@ import { CompactChatPicker } from './CompactChatPicker'
 
 /**
  * pill 选择条外壳:宽度放不下时右端钉一个「⋯」,点击平滑翻到下一页(落点对齐 pill 边界),
- * 末页再点循环回第一页(用户拍板)。AgentPicker 复用。
+ * 末页再点循环回第一页(用户拍板)。AgentSelectStrip 复用。
  * ⋯ 在滚动容器外独占一列,不覆盖末尾选项;滚动宽度即完整可点击的宽度。
  */
 export const PillBar: React.FC<{ label: string; children: React.ReactNode; /** 多选条(aria-pressed 的 toggle)传 'group';缺省 radiogroup 给单选的引擎/Agent 选择器。 */ role?: 'radiogroup' | 'group' }> = ({ label, children, role = 'radiogroup' }) => {

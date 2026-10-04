@@ -29,7 +29,7 @@
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
-const { _electron: electron } = require('playwright-core')
+const electron = require('./lib/launch-electron.cjs')
 const { startStubEngine } = require('./lib/stub-engine.cjs')
 
 const ROOT = path.join(__dirname, '..')
@@ -106,10 +106,11 @@ async function openCodingSpace(win) {
   if (await win.evaluate(click('.rb-top')) || await win.evaluate(click('.rb-home'))) return true
   const more = win.locator('.rb-top .rb-more').first()
   if (await more.count().catch(() => 0)) {
-    await more.hover()
-    await win.waitForTimeout(500)
-    if (await win.evaluate(click('.rb-fly'))) return true
-    await win.mouse.move(700, 700)
+    await more.click() // 「…」= 展开:藏着的就在条上;点完收起
+    await win.waitForTimeout(300)
+    const hit = await win.evaluate(click('.rb-top'))
+    await win.evaluate(() => document.querySelector('.rb-open-top .rb-more')?.click())
+    if (hit) return true
   }
   const tile = win.locator('.hp-tile').filter({ hasText: /编码工作室|Coding Studio/ }).first()
   if (await tile.isVisible().catch(() => false)) { await tile.click(); return true }

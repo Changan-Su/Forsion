@@ -25,6 +25,7 @@ import { query } from '../core/db.js';
 import { createRun } from './runStore.js';
 import { runSubAgent, SUB_AGENT_UNLOCK_DENY } from './subAgent.js';
 import { listDeferredTools } from '../tools/registry.js';
+import { isShelvable } from '../tools/toolRegistry.js';
 import type { ToolContext } from '../tools/registry.js';
 
 const USER = 'u1';
@@ -171,6 +172,17 @@ describe('子代理的 deferred 解锁通道', () => {
     expect(parentSet.has(target)).toBe(false);
     // 子代理自己那边确实生效了(否则 ② 会因为「压根没解锁成功」而假绿)。
     expect(names(subPayloads[1])).toContain(target);
+  }, 20_000);
+
+  it('父 run 收起的装备不带给子代理:那是父 agent 自己工作笔记里的事,子代理按自己的工具面跑', async () => {
+    const done = () => ({ content: '好了。', reasoning: '', toolCalls: [], usage: { prompt_tokens: 1, completion_tokens: 1 }, finishReason: 'stop' });
+    script = [done];
+    await runSubAgent({ task: '随便', parentCtx: parentCtx(), modelId: 'm1' });
+    const resident = names(subPayloads[0]).find((n) => isShelvable(n));
+    expect(resident, '子代理常驻面上没有一个可收起的工具 → 本条空转').toBeTruthy();
+    script = [done];
+    await runSubAgent({ task: '随便', parentCtx: { ...(parentCtx() as any), shelvedTools: new Set([resident!]) } as ToolContext, modelId: 'm1' });
+    expect(names(subPayloads[1])).toContain(resident);
   }, 20_000);
 
   it('管理面 · seed 时剔除:父解锁过 manage_* 也不外溢给子代理', async () => {

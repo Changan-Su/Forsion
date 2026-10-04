@@ -65,6 +65,9 @@ export const CODING_PRESET_DEFERRED: ReadonlySet<string> = new Set([
   'amadeus_create_event', 'amadeus_edit_event', 'amadeus_delete_event',
   'inbox_send', 'display_file', 'read_session', 'search_sessions', 'read_document',
   'remember', 'log_event', 'read_log', 'read_computer_history',
+  // 10-04 起 manage_harness 在 work 面常驻;coding 面保持按需(与此前逐字节一致):同一份取证里 log_event 被反射式调了 80 次,
+  // 且默认 agent 在 coding 预设下不注入工作笔记段(人格抑制),常驻一个写它的工具只会带偏任务。
+  'manage_harness',
 ]);
 
 /** chat 常驻面(方案 §3.2 A 档):10 个 + GUI 端的 sketch。⚠️ 白名单只保证「不被 chat 砍掉」,不保证在场——
@@ -83,6 +86,8 @@ export const CHAT_PRESET_DEFERRED: ReadonlySet<string> = new Set([
   'search_sessions', 'read_session', 'todo_write', 'todo_read', 'search_files', 'glob_files',
   'amadeus_list_notes', 'amadeus_read_note', 'amadeus_list_calendars', 'amadeus_list_events',
   'calculator', 'generate_image', 'edit_image', 'read_log', 'log_event',
+  // 手机操控 T1(clientCapability 中央闸另管可见性;带能力的工具在 chat 面按能力放行,这里列名是让内置五件按需装载)
+  'phone_open', 'phone_navigate', 'phone_compose', 'phone_system', 'phone_control',
 ]);
 
 /** D11 形态:chat 落在 host execMode 时(桌面 standalone 的 rootless 会话仍是 sandbox,这里是纵深防御),

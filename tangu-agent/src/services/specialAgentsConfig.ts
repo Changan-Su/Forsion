@@ -22,6 +22,8 @@ export interface HistorianConfig {
   everyRounds: number;
   /** 首轮（roundN===1）必触发。 */
   firstRoundTrigger: boolean;
+  /** Pick an emoji for sessions without a user-selected icon. Default on. */
+  autoEmoji?: boolean;
   /**
    * 工作模式:independent=Historian 自己判断并写 LOG/memory(默认);
    * assist=触发后分支出简短后台讨论(branch+群聊,无主持人总结),与该会话的主 Agent 商议,
@@ -36,7 +38,7 @@ export interface HistorianConfig {
   prompt: string;
   /**
    * 自进化自动档(09-18 起默认开;老配置里落盘的 false 由下方一次性迁移翻开):judge 额外提名「工作笔记候选」→ 该 agent 的 .harness-raw.md 收件箱,
-   * 仅在下次 /refine 时注入供审阅,经 manage_harness(审批)采纳才落 HARNESS.md——自动采集、人工采纳。
+   * 仅在下次 /refine 时注入供审阅,由 agent 自己经 manage_harness 采纳才落 HARNESS.md(10-04 起写入不审批)——自动采集、agent 采纳。
    */
   harnessCandidates: boolean;
 }
@@ -118,10 +120,11 @@ export const SPECIAL_AGENTS_DEFAULTS: SpecialAgentsConfig = {
     modelId: '',
     everyRounds: 3,
     firstRoundTrigger: true,
+    autoEmoji: true,
     mode: 'independent',
     prompt: '',
     // 默认开(09-18 用户拍板,推翻 08-13「自动档默认关」):关着时这层三个月零使用(正式库 713 个 run 里 /refine 与 manage_harness 全 0)。
-    // 它只提名、不写入——采纳仍要 /refine + 审批;代价是判官提示词每轮多一段字段说明。
+    // 它只提名、不写入——采纳仍要 /refine(10-04 起 manage_harness 不再审批,但候选只在 /refine 时注入);代价是判官提示词每轮多一段字段说明。
     harnessCandidates: true,
   },
   muse: {
@@ -174,6 +177,7 @@ export function normalizeConfig(raw: any): SpecialAgentsConfig {
       // (它是用户感知的「多久维护一次」高频值;旧 everyMemoryRounds 的低频含义已废弃)。
       everyRounds: clampInt(h.everyRounds ?? h.everyTitleRounds, d.historian.everyRounds, 1, 100),
       firstRoundTrigger: asBool(h.firstRoundTrigger, d.historian.firstRoundTrigger),
+      autoEmoji: asBool(h.autoEmoji, true),
       mode: h.mode === 'assist' || h.mode === 'fork' ? h.mode : d.historian.mode,
       prompt: asStr(h.prompt, d.historian.prompt),
       harnessCandidates: asBool(h.harnessCandidates, d.historian.harnessCandidates),

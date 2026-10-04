@@ -34,12 +34,12 @@ import commandsRouter from './routes/commands.js';
 import hooksRouter from './routes/hooks.js';
 import wechatRouter from './routes/wechat.js';
 import channelsRouter from './routes/channels.js';
+import browserExtensionRouter from './routes/browserExtension.js';
 import inboxRouter from './routes/inbox.js';
 import ttsRouter from './routes/tts.js';
 import inlineRouter from './routes/inline.js';
 import adminRouter from './routes/admin.js';
 import { runMigration } from './db/migrate.js';
-import { failStaleRuns } from './services/runStore.js';
 import { recoverQueuedRuns, abortAllRuns } from './services/agentLoop.js';
 import { loadSandboxConfig } from './sandbox/sandboxConfig.js';
 import { startCacheJanitor, stopCacheJanitor, reapOrphanRunContainers } from './sandbox/dockerProvider.js';
@@ -49,6 +49,7 @@ import { startHistorian, stopHistorian } from './services/historian.js';
 import { startMuseSupervisor, stopMuseSupervisor } from './services/muse.js';
 import { startInboxPull, stopInboxPull } from './services/inboxPull.js';
 import { startChannels, stopChannels } from './channels/hub.js';
+import { startBrowserExtensionBridge, stopBrowserExtensionBridge } from './services/browserExtension.js';
 import { disposeAllProcesses } from './tools/processRegistry.js';
 
 export interface TanguModule {
@@ -105,21 +106,18 @@ export function createTanguModule(d: TanguDeps): TanguModule {
   dataRouter.use(hooksRouter);
   dataRouter.use(wechatRouter);
   dataRouter.use(channelsRouter);
+  dataRouter.use(browserExtensionRouter);
   dataRouter.use(inboxRouter);
   dataRouter.use(ttsRouter);
   dataRouter.use(inlineRouter); // 正文生成式 AI(G3-07):POST /agent/inline
   dataRouter.use(remoteRouter);
 
   const startBackgroundTasks = (opts?: { recoverRuns?: boolean; historian?: boolean; sandbox?: boolean; profilePolling?: boolean }): void => {
-    // 进程重启自愈:遗留 running 标 failed → 重新入队仍在飞的 run(顺序不可颠倒)。
+    // 进程重启自愈:陈旧行标 failed → 余下在飞行按持有者处理(别的活进程的不碰、跑到一半的标中断、排队的认领后入队;见 recoverQueuedRuns)。
     // 共享云库的 worker 集群必须关掉(opts.recoverRuns=false),否则跨 worker 互相干扰。
     // 纯调度网关(Forsion server)三个全关:loop 不在该进程跑,沙箱也不在该机。
     if (opts?.recoverRuns !== false) {
-      failStaleRuns()
-        .then((n) => {
-          if (n) console.log(`[tangu] marked ${n} stale runs as failed`);
-          return recoverQueuedRuns();
-        })
+      recoverQueuedRuns()
         .then((m) => { if (m) console.log(`[tangu] re-enqueued ${m} pending run(s)`); })
         .catch(() => {});
     }
@@ -150,6 +148,8 @@ export function createTanguModule(d: TanguDeps): TanguModule {
     startInboxPull();
     // 多通道(微信/Telegram/QQ):自带 hostExec 闸门,云端/worker no-op。
     void startChannels().catch((e: any) => console.warn('[tangu] Channels 启动失败:', e?.message || e));
+    // Tangu for Chrome 扩展的本机桥:只在本地形态(能碰用户浏览器的地方)起;云端 / worker 不起。
+    if (deps().profile.capabilities.hostExec) startBrowserExtensionBridge();
 
     // 配置驱动 profile:启动 app_profile_overrides 轮询(admin panel 改 → 本进程 ≤刷新窗口收敛)。
     // thin worker 无本地 DB(host.query 抛)→ 传 profilePolling:false,用基线 profile(admin 覆盖暂不下达,后续可经 state-API 取)。
@@ -163,6 +163,7 @@ export function createTanguModule(d: TanguDeps): TanguModule {
     stopMuseSupervisor();
     stopInboxPull();
     stopChannels();
+    stopBrowserExtensionBridge();
     deps().profileStore.dispose();
     abortAllRuns();
     disposeAllProcesses(); // run_background 的子进程(防热加载/退出泄漏)

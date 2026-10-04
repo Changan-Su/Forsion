@@ -5,7 +5,7 @@ import { Suspense, useEffect } from 'react'
 import { Skeleton } from '@lcl/engine'
 import type { ViewProps } from '@lcl/engine'
 import { lazyRetry } from '../lazyRetry'
-import { useTheme } from '../stores/themeStore'
+import { useVisualTheme as useTheme } from '../stores/themeStore'
 import { usePageStore } from '@amadeus/store/pageStore'
 import { isHostPath } from '@amadeus-shared/pdfLink'
 

@@ -87,6 +87,7 @@ export interface UserHistorianConfig {
   modelId: string;        // '' = 跟随(admin 配的模型 → tangu 辅助模型槽 → 对话默认)
   everyRounds: number;
   firstRoundTrigger: boolean;
+  autoEmoji: boolean;
 }
 
 export const USER_HISTORIAN_DEFAULTS: UserHistorianConfig = {
@@ -94,6 +95,7 @@ export const USER_HISTORIAN_DEFAULTS: UserHistorianConfig = {
   modelId: SPECIAL_AGENTS_DEFAULTS.historian.modelId,
   everyRounds: SPECIAL_AGENTS_DEFAULTS.historian.everyRounds,
   firstRoundTrigger: SPECIAL_AGENTS_DEFAULTS.historian.firstRoundTrigger,
+  autoEmoji: true,
 };
 
 // ponytail: 每用户一行 global_settings(键带 userId),零迁移;每用户旋钮再多就该建 per-user 表。
@@ -106,6 +108,7 @@ function normalizeUser(raw: any): UserHistorianConfig {
     modelId: typeof raw?.modelId === 'string' ? raw.modelId.trim().slice(0, 200) : d.modelId,
     everyRounds: raw?.everyRounds == null ? d.everyRounds : clampInt(Number(raw.everyRounds), 1, 100),
     firstRoundTrigger: typeof raw?.firstRoundTrigger === 'boolean' ? raw.firstRoundTrigger : d.firstRoundTrigger,
+    autoEmoji: typeof raw?.autoEmoji === 'boolean' ? raw.autoEmoji : d.autoEmoji,
   };
 }
 
@@ -115,7 +118,7 @@ export async function loadUserHistorianConfig(userId: string): Promise<UserHisto
   try { return normalizeUser(v ? JSON.parse(v) : {}); } catch { return { ...USER_HISTORIAN_DEFAULTS }; }
 }
 
-/** 只认四个键,其余字段(旧版前端整包 POST 的 muse / mode / prompt 等)忽略。 */
+/** 只认每用户 Historian 的可配置键,其余字段(旧版前端整包 POST 的 muse / mode / prompt 等)忽略。 */
 export async function saveUserHistorianConfig(userId: string, patch: Partial<UserHistorianConfig>): Promise<UserHistorianConfig> {
   const cur = await loadUserHistorianConfig(userId);
   const p = patch && typeof patch === 'object' ? patch : {};
@@ -125,6 +128,7 @@ export async function saveUserHistorianConfig(userId: string, patch: Partial<Use
     ...('modelId' in p ? { modelId: p.modelId } : {}),
     ...('everyRounds' in p ? { everyRounds: p.everyRounds } : {}),
     ...('firstRoundTrigger' in p ? { firstRoundTrigger: p.firstRoundTrigger } : {}),
+    ...('autoEmoji' in p ? { autoEmoji: p.autoEmoji } : {}),
   });
   await writeStr(userKey(userId), JSON.stringify(next));
   return next;

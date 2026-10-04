@@ -65,6 +65,16 @@ export interface UnifiedPipeHandle {
   /** 同窗同路径的**另一个**实例刚把这篇写盘成功(G1-01):盘上已是它的新版,本实例去回灌
    *  (与外部改动同一条回灌路径:等打字静默、有未落盘编辑则按冲突策略处理)。 */
   peerWrote?: () => void
+  /** 助手回答插回笔记(评审 G3-08):与 insertMarkdown 同一条解析 + 事务,但**不抢焦点**、单独一步撤销;
+   *  anchor 解析得到 → 落在被引用块之后,否则光标所在顶层块之后(正文从没被聚焦过 → 文末)。
+   *  只读 / 锁定实例不登记它;已退休 / 源码模式 → null(不接)。返回的 undo 只在文档仍是插入后那一版时撤回。 */
+  insertReply?: (md: string, anchor?: ReplyAnchor | null) => { undo: () => boolean } | null
+}
+
+/** 「问 Tangu」引用里带回来的出处(G3-08):标题锚 `[[路径#标题]]` 的标题 + 被引用的原文。 */
+export interface ReplyAnchor {
+  heading?: string
+  text?: string
 }
 
 const handles = new Set<UnifiedPipeHandle>()
@@ -97,10 +107,10 @@ export function registerUnifiedPipe(h: UnifiedPipeHandle): () => void {
 /** path 上的实例,**最近用过的在前**(评审 G1-02)。此前一律 `for…of handles` 取第一个登记的:同篇双开时在 B 里
  *  插模板,内容进了 A、焦点被抢到 A;大纲给的是 A 的标题;拖进 B 的文件插进 A、紧接着被 B 的写入盖掉。
  *  Obsidian 的命令都作用于当前活动的 leaf —— 这里的「活动」由实例自己报(lastActive),同分(都没被用过)按登记序。 */
-function byRecency(path: string): UnifiedPipeHandle[] {
+function byRecency(path?: string): UnifiedPipeHandle[] {
   const hit: Array<{ h: UnifiedPipeHandle; at: number; i: number }> = []
   let i = 0
-  for (const h of handles) if (h.path === path) hit.push({ h, at: h.lastActive?.() ?? 0, i: i++ })
+  for (const h of handles) if (path == null || h.path === path) hit.push({ h, at: h.lastActive?.() ?? 0, i: i++ })
   return hit.sort((a, b) => b.at - a.at || a.i - b.i).map((x) => x.h)
 }
 
@@ -234,6 +244,34 @@ export function unifiedFm(path: string): string | null {
 export function unifiedInsertMarkdown(path: string, md: string, where: 'cursor' | 'start' | 'end'): boolean {
   for (const h of byRecency(path)) if (h.insertMarkdown?.(md, where)) return true
   return false
+}
+
+/** 此刻有没有任何 v4 实例开着(G3-08:聊天操作行「插入笔记」没有实例就不出现 —— Mini / 浮窗 / 手机上不挂一排灰按钮)。 */
+export function unifiedHasAny(): boolean {
+  return handles.size > 0
+}
+
+/** 有没有能接住助手回答的 v4 实例(G3-08:聊天操作行「插入笔记」的可用态;实例增减经 subscribeUnified 通知)。 */
+export function unifiedHasReplyTarget(): boolean {
+  for (const h of handles) if (h.insertReply) return true
+  return false
+}
+
+/** 把助手回答插回笔记(评审 G3-08)。prefer = 这条对话由「问 Tangu」从哪篇发起:那篇开着就插回那篇(带锚,
+ *  落在被引用块之后);没开 / 都不接 → 全窗**最近用过**的那篇(与按路径的路由同一个 lastActive 口径,G1-02),
+ *  此时锚属于别的笔记,不带。返回实际落到哪篇(提示要点名)+ 撤销;没有实例接 → null。 */
+export function unifiedInsertReply(md: string, prefer?: { path: string; anchor?: ReplyAnchor | null } | null): { path: string; undo: () => boolean } | null {
+  if (prefer) {
+    for (const h of byRecency(prefer.path)) {
+      const r = h.insertReply?.(md, prefer.anchor ?? null)
+      if (r) return { path: h.path, undo: r.undo }
+    }
+  }
+  for (const h of byRecency()) {
+    const r = h.insertReply?.(md, null)
+    if (r) return { path: h.path, undo: r.undo }
+  }
+  return null
 }
 
 /** 正文聚焦(G4-06):落到 path 上最近用过的那个实例(同篇多开时 = 刚被 openNote 激活的那个,G1-02)。
