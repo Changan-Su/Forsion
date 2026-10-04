@@ -110,4 +110,4 @@ Agent 定义已有有效本地快照时立即开跑，云文件同步在后台�
 - **回忆片段的出处**:`Related past-message excerpts` 按 agent 检索、不分项目。来自别的项目的片段标 `project=<名>, not this session's project`,段头注明它说的不是当前项目(起因:另一个项目的会话靠这条通道答出了原项目的分支名)。
 - **界面**:项目详情 → 配置 → 项目记忆(列出、逐条删除,带版本,409 重新载入)。路由 `GET /agent/project-context` 的 `memory` 字段、`DELETE /agent/project-context/memory`;远端来源一律拒绝。
 - **没做**:项目级的 Dream(跨会话、换了说法的重复只能靠判官看到已有内容来避免)、跨设备同步、团队 / 群聊 / 子代理循环里的 `scope`(那几条循环不设 `projectScoped`)。
-- **验证**:`test/projectMemory.test.ts`、`test/historianMemoryPipeline.test.ts` 的「项目会话」一组;`npm run live:harness -- --only projmem`(落点、同项目共用、跨项目隔离)与 `--only realuse --real-legs q,i,c`(平常的话纠正 → 记到哪一级 → 换项目串不串;末尾另记后台这条路把项目规矩提名成 agent 级候选几轮、项目记忆里重复几轮)。
+- **验证**:`test/projectMemory.test.ts`、`test/historianMemoryPipeline.test.ts` 的「项目会话」一组;`npm run live:harness -- --only projmem`(落点、同项目共用、跨项目隔离)与 `--only realuse --real-legs q,i,c`(平常的话纠正 → 记到哪一级 → 换项目串不串;末尾另记后台这条路把项目规矩提名成 agent 级候选几轮、项目记忆里重复几轮;`--real-legs d` 单量「自己踩到、没人纠正 → 后台记到项目级 → 同项目新会话带上」)。

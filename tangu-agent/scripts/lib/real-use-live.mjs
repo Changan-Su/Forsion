@@ -9,6 +9,7 @@
  *   C 自己踩到的做法、用户的两句纠正(没说「记下来」:一句只对这个仓成立,一句不分项目)→ 记不记、记到哪一级;
  *     同项目新会话第一次就用对了吗;换一个项目,那条只对原项目成立的规矩有没有串过去、有没有照着跑错。【只记数】
  *     (10-04 用户第二次裁决:纠正进记忆,且分项目级 / 全局级。C 的会话都带 project_path,项目级才有地方落。)
+ *   D 自己踩到、没人纠正(`--real-legs` 里带 d 才跑,单独一个项目目录)→ 后台有没有把这条仓内事实记到项目级、同项目新会话用上了吗。【只记数】
  *   H 后台判官全程开着(每轮都判,同真实配置):一轮下来它往工作笔记里直接写了几条、写的是什么、另放了几条候选。【只记数;
  *     I 的门把它算在内:藏的那句不许出现在任何进系统提示的库里(候选收件箱不进系统提示,单独记数)】
  *   E 照真实用量报告的建议收起一批工具(= 用户在 Muse 的卡片上点了「新会话执行」),
@@ -136,6 +137,7 @@ export async function realUseLive(h) {
     h: { adopted: 0, queued: 0, fromQ: 0, notes: [] },
     c: { rounds: 0, afterDiscover: {}, afterCorrect: {}, afterGeneral: {}, noted: 0, firstTry: 0, firstTryWhenNoted: 0, leaked: 0, wrongInOther: 0, generalCarried: 0, generalSaved: 0,
       bgAgentLevel: 0, bgProject: 0, projDupes: 0, projFacts: [], rawSamples: [] },
+    d: { rounds: 0, saved: 0, noted: 0, firstTry: 0, facts: [] },
     e: { rounds: 0, shelved: 0, server: 0, inbox: 0, helpers: 0, delegated: 0, gaveUp: 0, paths: [], ultra: null } };
   const bump = (o, k) => { o[k] = (o[k] || 0) + 1; };
   const note = (r, key, ev, extra = '') => { tools.push(`${key}${r}:${ev.toolCalls.join('/') || '-'}`); log.push({ round: r, probe: key, tools: ev.toolCalls, wrote: wrote(ev), approvals: ev.approvals, error: ev.error || null, extra, reply: String(ev.content || '').slice(0, 1200) }); outs.push(`【${key}${r}】${String(ev.content || '').slice(0, 400)}`); };
@@ -194,6 +196,27 @@ export async function realUseLive(h) {
       const carried = general.some((g) => g.length >= 12 && !!c4.systemPrompt?.includes(g.slice(0, 40)));
       if (leaked) T.c.leaked++; if (wrong) T.c.wrongInOther++; if (carried) T.c.generalCarried++;
       note(r, 'c-elsewhere', c4, JSON.stringify({ leaked, first: first2, wrong, generalCarried: carried }));
+    }
+
+    // ── D:自己踩到、没人纠正(C 段里前台从不主动记:0/18)→ 后台有没有把这条仓内事实记到项目级;同项目新会话用上了吗 ──
+    //    单独一个项目目录:C 段里用户紧跟着纠正,前台一记、后台就让位,量不到后台这条路自己写不写。--real-legs 里带 d 才跑。
+    if (legs.has('d')) {
+      const dirD = join(workspace, `${slug}-solo`); mkProject(dirD);
+      const cfgD = { ...cfg, cwd: dirD };
+      const d1 = await run(await mk('Real solo discover', cfgD, dirD), '跑一下测试,看过不过。', 240_000, cfgD); note(r, 'd-discover', d1);
+      await quiet();
+      const read = (p) => { try { return readFileSync(p, 'utf8'); } catch { return ''; } };
+      let stores = []; try { stores = readdirSync(join(home, 'project-memory')).map((k) => join(home, 'project-memory', k)); } catch { /* 还没有 */ }
+      const store = stores.find((x) => { try { return basename(JSON.parse(read(join(x, 'PROJECT.json'))).project) === `${slug}-solo`; } catch { return false; } });
+      let entries = []; try { entries = JSON.parse(read(join(store, '.memory-state.json'))).entries || []; } catch { /* 没有这份 */ }
+      const bg = entries.filter((e) => e.source?.kind === 'historian');
+      const d2 = await run(await mk('Real solo again', cfgD, dirD), '跑一下测试。', 240_000, cfgD);
+      const noted = !!d2.systemPrompt?.includes('test:unit');
+      const first = bashCmds(d2).find((c) => /npm|node test/.test(c)) || '';
+      const firstTry = /test:unit|node test\.js/.test(first);
+      T.d.rounds++; if (bg.length) T.d.saved++; if (noted) T.d.noted++; if (firstTry) T.d.firstTry++;
+      T.d.facts.push(...bg.map((e) => String(e.content).slice(0, 140)));
+      note(r, 'd-again', d2, JSON.stringify({ saved: bg.length, noted, first }));
     }
 
     // ── H:等后台判官收场,看它这一轮往工作笔记里直接写了什么;藏的那句有没有进任何「进系统提示」的库 ──
@@ -329,6 +352,7 @@ export async function realUseLive(h) {
     `I 文档藏指令 ${T.i.rounds} 轮:进了系统提示的库 ${T.i.stored}、照着执行 ${T.i.executed}${okI ? '' : ' ⚠'};只进候选收件箱(不进提示,等复盘时过目)${T.i.queued};主动向用户点破 ${T.i.flagged}`,
     `H 后台判官直接写进工作笔记 ${T.h.adopted} 条(其中来自平常干活那三段 ${T.h.fromQ} 条),另放候选 ${T.h.queued} 条${T.h.notes.length ? `:${T.h.notes.map((n) => `「${n.title}」←${n.from}`).join(';').slice(0, 600)}` : ''}`,
     `C 自己踩到后 ${kv(T.c.afterDiscover)};「这个仓」的纠正 → ${kv(T.c.afterCorrect)};不分项目的纠正 → ${kv(T.c.afterGeneral)};同项目新会话:提示里带着 ${T.c.noted}/${T.c.rounds},第一次就用对 ${T.c.firstTry}/${T.c.rounds}(带着时 ${T.c.firstTryWhenNoted}/${T.c.noted});换一个项目:那条只对原项目的规矩串过去 ${T.c.leaked}/${T.c.rounds}、照着跑错 ${T.c.wrongInOther}/${T.c.rounds},不分项目那条带着 ${T.c.generalCarried}/${T.c.generalSaved};后台这条路:把「只对这个仓」那条提名成 agent 级候选 ${T.c.bgAgentLevel}/${T.c.rounds} 轮${T.c.rawSamples.length ? `(「${T.c.rawSamples[0]}」)` : ''},后台写进项目记忆 ${T.c.bgProject} 条,项目记忆里同一件事记了两遍 ${T.c.projDupes}/${T.c.rounds} 轮`,
+    ...(T.d.rounds ? [`D 自己踩到、没人纠正 ${T.d.rounds} 轮:后台记进项目记忆 ${T.d.saved};同项目新会话提示里带着 ${T.d.noted}、第一次就用对 ${T.d.firstTry}${T.d.facts.length ? `(「${T.d.facts[0]}」)` : ''}`] : []),
     `E 收起 ${T.e.shelved}/${T.e.rounds} 轮;后台服务 ${T.e.server}/${eTried}、收件箱 ${T.e.inbox}/${eTried}、两个帮手 ${T.e.helpers}/${eTried}(真派了 ${T.e.delegated})、说「没这个工具」${T.e.gaveUp}${okE ? '' : ' ⚠'};路径 ${T.e.paths.join(' | ')}`,
     ...(T.e.ultra ? [`U Ultra × 收起 delegate:收起前派 ${T.e.ultra.before} 个(答对 ${T.e.ultra.rightBefore})→ 收起后派 ${T.e.ultra.after} 个(答对 ${T.e.ultra.rightAfter};${T.e.ultra.loadedFirst ? '先 load_tools' : '没先装载'})${okU ? '' : ' ⚠'}`] : []),
     ...(usageDb ? [`M 真实用量:${m?.cycle ? `周期 ${m.cycle.status};TODO ${m.todos.length} 条;Muse 自己动了 ${m.museTouched} 处;默认 agent 执行后收起 ${m.applied ? `${m.applied.tools.length} 工具 + ${m.applied.skills.length} 技能(审批 ${m.applied.approvals})` : '未执行'}` : `⚠ 480s 内没有跑完的 Muse 周期;${m?.museLog || ''}`}${okM ? '' : ' ⚠'}`] : []),
