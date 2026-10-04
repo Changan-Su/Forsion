@@ -100,6 +100,36 @@ export interface TanguStartChatResult {
   error?: string
 }
 
+/** `mountChat` 入参(2026-10-04+)。放行规则(cwd 钳在库内)在 pluginStore;探针只执行。 */
+export interface TanguChatMountOptions {
+  /** 归属的插件 id:与 cwd 一起定「接哪一条会话」,也是引用通道的目标名。 */
+  owner: string
+  /** Agent slug;不给 = 用户默认 Agent。不存在的 slug → ready 给 ok:false。 */
+  agent?: string
+  /** 插件给的工作文件夹(库相对,已去尾斜杠)。只用来给引用通道起目标名;落到哪个绝对路径由 resolveCwd 说了算。 */
+  folder?: string
+  /** folder → **本机绝对路径**(pluginStore 的放行规则:钳在库内、须本机执行)。探针等后端就绪之后才调 ——
+   *  应用刚启动时桌面配置与笔记库都还没回来,当场解析会把「还没就绪」错当成「不能在本机跑」。解析不出来给 null。 */
+  resolveCwd?: () => string | null
+  /** 新建会话时的标题(重连既有会话时不改它)。 */
+  title?: string
+}
+
+/** 挂载出来的对话在引用通道里的目标名(也是它的 `data-chat-surface`)。跟着(插件, 工作文件夹)走、不跟着挂载实例走:
+ *  视图卸了重挂的那一拍里投的引用,新挂上的对话照样接得住。 */
+export const pluginChatType = (o: Pick<TanguChatMountOptions, 'owner' | 'folder'>): string => `plugin-chat:${o.owner}:${o.folder ?? ''}`
+
+/** `mountChat` 的句柄。同步返回;会话是异步接上的,`quote` / `prefill` 在接上之前调用也不丢。 */
+export interface TanguChatMount {
+  /** 会话接上(重连或新建)→ ok + sessionId;后端没连上 / Agent 不存在 / 建会话失败 → ok:false(不抛)。 */
+  ready: Promise<TanguStartChatResult>
+  /** 把一段文字挂成输入框上方的引用条:不发送、不动草稿,由用户接着打字。 */
+  quote(text: string): void
+  /** 把一段文字放进输入框(接在已有草稿后面)并聚焦:不发送,由用户按回车。对话要看得见才落进去。 */
+  prefill(text: string): void
+  dispose(): void
+}
+
 export interface TanguProbe {
   /** True only when the active engine executes against this host filesystem. */
   hostExecution?(): boolean
@@ -140,6 +170,9 @@ export interface TanguProbe {
   /** 用指定 Agent 开一个新对话(离开主页 Space → 新对话草稿 → 选 Agent → 预填或送出)。
    *  放行规则(send 只给自家捆绑 Agent、cwd 钳在库内)在 pluginStore 那层,这里只执行。 */
   startChat?(o: TanguStartChatOptions): Promise<TanguStartChatResult>
+  /** 把原生对话挂进插件自己的 DOM(2026-10-04+):一个(插件, 工作目录)接一条会话,本机记住、下次重连。
+   *  只在有 Tangu 对话能力的宿主上给;台架假探针 / 旧宿主不给 = 插件退回 startChat。 */
+  mountChat?(el: HTMLElement, o: TanguChatMountOptions): TanguChatMount
   /** Native document actions only; never exported into the plugin context. */
   submitDocumentTask?(o: {
     key: string; agent?: string; prompt: string; vaultRoot: string

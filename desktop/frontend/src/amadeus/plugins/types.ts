@@ -1020,6 +1020,20 @@ export interface PluginContext {
     /** True when startChat accepts explicit modelId / thinkingLevel from the native Chat Box. */
     chatSelection?: true
     startChat?(o: { agent?: string; prompt: string; send?: boolean; folder?: string; modelId?: string; thinkingLevel?: import('../../../../shared/chatBox').ChatBoxSelection['thinkingLevel'] }): Promise<import('./tanguSeam').TanguStartChatResult>
+    /** 把**原生对话**挂进你自己的视图(2026-10-04+):同一个输入框、消息流、审批与工具展示,固定在一条会话上
+     *  (不跟随主区)。典型用法:注册一个开在右栏的 `chat` 视图,它的 `mount(el)` 里调本方法。
+     *  - 会话:一个(插件, `folder`)一条,宿主记在本机;下次挂载接回同一条(历史照常在),用户把它删了 / 归档了就新开。
+     *    `title` 只在新建时用。它是一条普通会话,主区的会话列表里也看得到。
+     *  - `folder`:会话的工作目录,**库相对路径**(同 `startChat`:宿主解析并钳在库内)。给了它,Agent 的相对路径都落在
+     *    这个文件夹里 —— 例如 `generate_image` 写进 `<folder>/generated/`。不给 `folder` = 不带工作目录的沙箱对话;
+     *    给了却落不到本机路径(库外 / 无库 / 非本机执行)→ `ready` 给 `ok:false`,不悄悄退成沙箱对话。
+     *  - `agent`:名册里有就行(不要求是你捆绑的)—— 本接口**永不替用户送出**。
+     *  - 句柄:`ready`(接上后 `{ ok, sessionId }`;失败 `{ ok:false, error }`,不抛,界面上有重试)、
+     *    `quote(text)`(挂成输入框上方的引用条,不发送、不动草稿)、`prefill(text)`(接在输入框草稿后面并聚焦,回车由用户按)、
+     *    `dispose()`(之后 `el` 立刻还给你:宿主只动自己挂进去的那一层,清空 `el` 或在它上面再挂都行)。`quote` / `prefill` 在对话还没接上时调用也不丢;`prefill` 在视图还在后台标签里时也落进输入框,连调几次按先后都接上。
+     *    禁用 / 重载时宿主统一收掉。`el` 要有确定的高度(对话撑满它)。
+     *  旧宿主 / 没有对话能力的宿主没有:`ctx.tangu?.mountChat`,缺席时退回 `startChat`。 */
+    mountChat?(el: HTMLElement, o?: { agent?: string; folder?: string; title?: string }): import('./tanguSeam').TanguChatMount
     /** 一次性文本补全(2026-09-28+,评审 G3-07):引擎 `POST /agent/inline`,无工具、不落库、不进任何会话。
      *  **收编插件直连 `/agent/runs` 的做法** —— 那条是 Agent 的 run(带工具、落会话、8192 字符上限),拿来做
      *  「改写这段」既重又危险。`prompt` 是给模型的指令;`selection` / `before` / `after` 是正文上下文(按数据对待,
