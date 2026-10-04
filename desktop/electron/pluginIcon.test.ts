@@ -1,8 +1,9 @@
 import { execFileSync } from 'node:child_process'
+import { promises as fsp } from 'node:fs'
 import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterAll, describe, expect, it } from 'vitest'
+import { afterAll, describe, expect, it, vi } from 'vitest'
 import {
   PLUGIN_ICON_MAX_BYTES,
   pluginIconDataUrl,
@@ -69,6 +70,25 @@ describe('plugin icon.png', () => {
     const dir = await pluginDir()
     await mkdir(join(dir, 'icon.png'))
     expect(await readPluginIconDataUrl(dir)).toBeUndefined()
+  })
+
+  it('stat 之后被写大 → 只读到 stat 那么多,不出图', async () => {
+    const dir = await pluginDir()
+    await writeFile(join(dir, 'icon.png'), png(128, 128, 4096)) // 整份读进来是一枚合规的图
+    // 让 stat 报回写大之前的体积:确定性地复现「先 stat 后被写大」
+    const open = fsp.open.bind(fsp)
+    const spy = vi.spyOn(fsp, 'open').mockImplementation(async (...args) => {
+      const fh = await open(...args)
+      const stat = fh.stat.bind(fh)
+      fh.stat = (async () => Object.assign(await stat(), { size: 24 })) as typeof fh.stat
+      return fh
+    })
+    try {
+      expect(await readPluginIconDataUrl(dir)).toBeUndefined()
+    } finally {
+      spy.mockRestore()
+    }
+    expect(await readPluginIconDataUrl(dir)).toBe(pluginIconDataUrl(png(128, 128, 4096)))
   })
 
   it.runIf(posix)('FIFO 不挂住插件发现', async () => {
