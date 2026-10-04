@@ -486,7 +486,15 @@ function rawInboxPath(slug: string): string {
  *  一律留给 agent 自己看 —— 这些正是「存进系统提示的自我指令」最不该夹带的东西,也是从网页、文件渗进对话的注入最常见的样子。
  *  只挡形状,不是语义分类器;挡错了也只是多等一次 /refine。 */
 export function autoAdoptable(text: string): boolean {
-  return !/https?:\/\/|\bwww\.|\b(curl|wget|sudo|ssh|scp|base64|eval|chmod)\b|\|\s*(sh|bash|zsh|python\d?|node)\b|approv|permission|credential|password|passwd|secret|\btoken\b|api[\s_-]?key|sandbox|system prompt|ignore (all|any|previous|the)|审批|权限|密码|密钥|凭据|令牌|沙箱|系统提示/i.test(text);
+  return !/https?:\/\/|\bwww\.|\b(curl|wget|sudo|ssh|scp|base64|eval|chmod)\b|\|\s*(sh|bash|zsh|python\d?|node)\b|approv|permission|credential|password|passwd|secret|\btoken\b|api[\s_-]?key|sandbox|system prompt|ignore (all|any|previous|the)|审批|权限|密码|密钥|凭据|令牌|沙箱|系统提示/i.test(text)
+    // 破坏性命令的样子(Codex 评审 10-04:「每次开工先 rm -rf ……」能过上面那道闸)。仍然只是黑名单,认不出来源。
+    && !/\brm\s+-|\bmkfs|\bdd\s+if=|--force\b|\bkill(all)?\b|\bshutdown\b|\breboot\b|\bgit\s+(push|reset|clean)\b|\bdrop\s+(table|database)\b|\btruncate\b|>\s*\/dev\//i.test(text);
+}
+
+/** 工作笔记是「照着做」的自我指令,比记忆(引用数据)权重高,所以后台直接写的只收纯文字的做法:
+ *  带行内代码、家目录路径、命令替换 / 串联的一律留给 agent 自己过目。项目记忆不走这道(命令正是它该记的)。 */
+export function noteAutoAdoptable(text: string): boolean {
+  return autoAdoptable(text) && !/`|~\/|\$\(|&&|\|\|/.test(text);
 }
 
 const sameText = (a: string, b: string): boolean => a.replace(/\s+/g, ' ').trim().toLowerCase() === b.replace(/\s+/g, ' ').trim().toLowerCase();
@@ -505,7 +513,14 @@ export async function adoptHarnessNomination(
     // 10-04 live(refine):前台刚自己写完一条,8 秒后判官把同一个做法换成英文又采纳了一条 —— 换了说法,上面那道字面去重认不出。
     // 它在这个会话里自己动手写笔记了,后台就不再替它写。装备条目不算(那是收工具,不是总结做法)。
     // ponytail: 按会话一刀切;要更细就改成只看判官这次读到的那段对话里有没有它自己的写入。
-    if (sessionId && (await readJournal(slug)).some((l) => l.sessionId === sessionId && !l.by && l.action === 'upsert' && l.after?.kind !== 'equip')) return 'own';
+    const journal = await readJournal(slug);
+    if (sessionId && journal.some((l) => l.sessionId === sessionId && !l.by && l.action === 'upsert' && l.after?.kind !== 'equip')) return 'own';
+    // 被拿掉的不许后台再写回来(Codex 评审 10-04):同一句(标题或正文)在编辑史里、现在已不在 → 不写;
+    // 这个会话里后台写过的条目被撤 / 删了 → 这个会话后台不再写(判官每轮重写措辞,字面比对认不出「又是那一条」)。
+    const live = new Set(entries.map((e) => e.id));
+    const gone = journal.filter((l) => !live.has(l.entryId));
+    if (gone.some((l) => [l.before, l.after].some((e) => !!e && (sameText(e.title, nomination.title) || sameText(e.body, nomination.lesson))))) return 'duplicate';
+    if (sessionId && gone.some((l) => l.by === 'historian' && l.sessionId === sessionId)) return 'own';
     await applyEditUnlocked(slug, { action: 'upsert', kind: 'note', title: nomination.title, body: nomination.lesson, evidence: nomination.evidence }, { sessionId, by: 'historian' });
     return 'adopted';
   });

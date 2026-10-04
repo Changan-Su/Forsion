@@ -94,10 +94,16 @@ export async function addProjectFact(ref: ProjectMemoryRef, fact: string, sessio
   // 用户下一句纠正已经让前台记了一条,判官随后把同一件事换个说法又写了一条 —— 字面去重和「给判官看已有内容」都拦不住这个时序。
   // ponytail: 按会话一刀切(与工作笔记的 own 同一个取舍);项目级没有 Dream,要认「换了说法的同一件事」得另加整理。
   if (snapshot.entries.some((e) => e.source?.kind === 'explicit' && e.source.sessionId === sessionId)) return 'duplicate';
+  // 这个会话里后台记过的条目被用户删了 → 这个会话后台不再记(判官下一轮会换个说法再提,字面墓碑认不出)。
+  // 靠的是条目上那枚会话记号:删除时它随 evidenceIds 进了墓碑。
+  const sessionMark = `session:${sessionId}`;
+  if (snapshot.tombstones.some((t) => isMemoryTombstoneActive(t) && t.evidenceIds.includes(sessionMark))) return 'duplicate';
   try {
-    return repo.mutate({ action: 'add', fact, cap: PROJECT_MEMORY_CHAR_BUDGET, source: { kind: 'historian', sessionId } }).version === before ? 'duplicate' : 'added';
+    // 带读到的版本写:上面几道检查与写入之间别处改过(比如用户刚删了这一句)→ 冲突,这一轮不写(Codex 评审 10-04:不带版本会把刚立的墓碑复活)。
+    return repo.mutate({ action: 'add', fact, cap: PROJECT_MEMORY_CHAR_BUDGET, expectedVersion: before, evidenceIds: [sessionMark], source: { kind: 'historian', sessionId } }).version === before ? 'duplicate' : 'added';
   } catch (e) {
     if (e instanceof MemoryRepositoryError && e.code === 'MEMORY_FULL') return 'full';
+    if (e instanceof MemoryRepositoryError && e.code === 'MEMORY_VERSION_CONFLICT') return 'duplicate';
     throw e;
   }
 }

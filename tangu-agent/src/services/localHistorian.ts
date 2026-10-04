@@ -41,7 +41,7 @@ import { DEFAULT_AGENT_SLUG } from '../core/tanguHome.js';
 import { buildSharedPrefix } from './selfBrainstorm.js';
 import { effectiveContextWindowInfo, estimateMessageTokens } from './contextBudget.js';
 import { redactSecrets } from '../core/redact.js';
-import { appendHarnessCandidates, adoptHarnessNomination, autoAdoptable } from '../agents/harnessStore.js';
+import { appendHarnessCandidates, adoptHarnessNomination, autoAdoptable, noteAutoAdoptable } from '../agents/harnessStore.js';
 import { scheduleAgentFilesSync } from './agentFileSync.js';
 import { appendCandidates as appendRawCandidates, readCandidates as readRaw } from './memoryCandidates.js';
 import { startMemoryDream } from './memoryDream.js';
@@ -658,14 +658,19 @@ async function runHistorianForSession(sessionId: string, userId: string, memScop
             log('已更新会话摘要');
           }
         }
-        if (judgeLog && okShort(logText)) {
+        // 上面的闸是读对话之前算的。读对话前的那一瞬、或判官跑的这几秒里,会话可能已被远端驱动 / 调过电脑历史 —— 那段内容也许就在判官读到的对话里。
+        // 落长期内容之前重查一次,只会更严(Codex 评审 10-04:现在过闸的提名会直接写进工作笔记 / 项目记忆,这个时序不能留)。标题 / 摘要照常。
+        const stillClean = !(judgeLog || judgeMemory || judgeHarness)
+          || (!(await sessionRemoteTainted(sessionId)) && !(await sessionCalledTool(sessionId, COMPUTER_HISTORY_TOOL).catch(() => true)));
+        if (!stillClean) log(`会话 ${sessionId.slice(0, 8)} 在判官读对话前后变成了远端驱动 / 电脑历史隔离,本轮不写 LOG / 记忆 / 工作笔记`);
+        if (judgeLog && stillClean && okShort(logText)) {
           // LOG = 当天流水(append-only)。共享 LOG 经 brain(云端)。
           historianSignal.getStore()?.throwIfAborted();
           await deps().brain.memory.appendLogEntry(userId, logText, { signal: historianSignal.getStore() });
           await logActivity(userId, 'log_appended', logText, sessionId);
         }
         historianSignal.getStore()?.throwIfAborted();
-        if (judgeMemory && candidates.length) {
+        if (judgeMemory && stillClean && candidates.length) {
           // 采集:候选进 raw 层,正典 MEMORY 只由整固步骤改写(唯一仲裁点)。
           const n = appendRawCandidates(effectiveSlug, sessionId, candidates, { anchorMessageId: transcriptSnapshot.anchorMessageId });
           if (n) {
@@ -673,7 +678,7 @@ async function runHistorianForSession(sessionId: string, userId: string, memScop
             log(`已采集 ${n} 条记忆候选进 raw 层`);
           }
         }
-        if (projectRef && projectFacts.length) {
+        if (projectRef && stillClean && projectFacts.length) {
           const added: string[] = [];
           for (const fact of projectFacts) {
             // 与工作笔记的自动采纳同一道形状闸:带网址 / 管道进解释器 / 凭据·审批·权限字眼的,不由后台写进系统提示。
@@ -688,7 +693,7 @@ async function runHistorianForSession(sessionId: string, userId: string, memScop
           }
         }
         historianSignal.getStore()?.throwIfAborted();
-        if (judgeHarness) {
+        if (judgeHarness && stillClean) {
           const rawHc: unknown[] = Array.isArray((j as any).harness_candidates) ? (j as any).harness_candidates : [];
           const flat = (v: unknown, max: number): string => redactSecrets(String(v ?? '').replace(/\s*[\r\n]+\s*/g, '; ').trim()).slice(0, max);
           // 对象形 = 可直接采纳的提名;字符串形(旧格式 / 模型没照格式来)只进候选收件箱。
@@ -718,6 +723,10 @@ async function runHistorianForSession(sessionId: string, userId: string, memScop
                 else slugOk = false;
               }
             } catch { /* ignore */ }
+            // 用户在这个 agent 的工具名单里关掉了 manage_harness(文档里写的「不想让它自己改笔记」的办法)→ 后台也不替它直接写,
+            // 提名照旧只进候选(Codex 评审 10-04:自动采纳之前,关掉工具就等于没人能写)。
+            const def = slugOk ? await getAgent(displaySlug).catch(() => null) : null;
+            const notesOff = !!def?.toolsMode && !!def.toolsList && (def.toolsMode === 'deny') === def.toolsList.includes('manage_harness');
             if (slugOk) {
               // 自动采纳(10-04):过得了形状闸的提名直接写成条目;过不了的、写不进的(满了 / 校验不过)照旧进候选收件箱等 /refine。
               const adopted: string[] = [];
@@ -725,7 +734,7 @@ async function runHistorianForSession(sessionId: string, userId: string, memScop
               for (const nom of noms) {
                 if (typeof nom === 'string') { queued.push(nom); continue; }
                 const line = flat(`${nom.title}: ${nom.lesson} (evidence: ${nom.evidence})`, 300);
-                if (!autoAdoptable(`${nom.title} ${nom.lesson} ${nom.evidence}`)) { queued.push(line); continue; }
+                if (notesOff || !noteAutoAdoptable(`${nom.title} ${nom.lesson} ${nom.evidence}`)) { queued.push(line); continue; }
                 try { if ((await adoptHarnessNomination(displaySlug, nom, sessionId)) === 'adopted') adopted.push(nom.title); }
                 catch (e: any) { log(`工作笔记提名未能直接采纳,转入候选收件箱: ${e?.message || e}`); queued.push(line); }
               }

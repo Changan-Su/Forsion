@@ -381,6 +381,39 @@ describe('自进化自动档(harness_candidates,P3)', () => {
   });
 
   // 09-18 起自动档默认开,「关」必须显式写出来 —— 这条钉的是「关着 → 零行为」,不是「默认值是关」。
+  it('这个 agent 的工具名单里关掉了 manage_harness → 后台也不直接写,提名只进候选(Codex 评审 10-04)', async () => {
+    enableHarnessTier();
+    const { saveAgent } = await import('../src/agents/agentRegistry.js');
+    const { loadHarness } = await import('../src/agents/harnessStore.js');
+    await saveAgent({ slug: 'mybot', name: 'MyBot', systemPrompt: 'x', toolsMode: 'deny', toolsList: ['manage_harness'] });
+    await seedSession();
+    llmScript = [JSON.stringify({ title: '标题', log: '', memory_candidates: [], harness_candidates: [{ title: 'Verify before reporting', lesson: 'Rerun the failing test once after a fix and quote its output.', evidence: 'The rerun still failed.' }] })];
+    await onUserRunDone('S2', USER, DEFAULT_AGENT_SLUG);
+    expect(await loadHarness('mybot')).toEqual([]);
+    expect(readFileSync(join(agentsDir(), 'mybot', '.harness-raw.md'), 'utf8')).toContain('Verify before reporting');
+    expect(await query<any[]>(`SELECT id FROM special_agent_log WHERE action = 'harness_adopted'`)).toHaveLength(0);
+  });
+
+  it('判官跑着的时候会话被远端驱动了 → 落盘前重查,LOG / 记忆候选 / 工作笔记都不写;标题照常(Codex 评审 10-04)', async () => {
+    enableHarnessTier();
+    const { saveAgent } = await import('../src/agents/agentRegistry.js');
+    const { loadHarness } = await import('../src/agents/harnessStore.js');
+    await saveAgent({ slug: 'mybot', name: 'MyBot', systemPrompt: 'x' });
+    await seedSession();
+    beforeReply = async () => {
+      await createRun({ id: 'R-remote', sessionId: 'S2', userId: USER, appId: 'tangu', modelId: 'm1', assistantMessageId: 'A-remote',
+        input: { message: 'from phone', userMessageId: 'U-remote', attachments: [], agentConfig: {}, remote: { via: 'tunnel', marked: true } } as any });
+    };
+    llmScript = [JSON.stringify({ title: '远端来过', log: '做了一件事', memory_candidates: ['用户偏好中文回复'], harness_candidates: [{ title: 'Verify before reporting', lesson: 'Rerun the failing test once after a fix and quote its output.', evidence: 'The rerun still failed.' }] })];
+    await onUserRunDone('S2', USER, DEFAULT_AGENT_SLUG);
+    expect(llmPayloads.length).toBe(1);                              // 判官确实跑了(闸在它之前是开的)
+    expect(await loadHarness('mybot')).toEqual([]);
+    expect(existsSync(join(agentsDir(), 'mybot', '.harness-raw.md'))).toBe(false);
+    expect(existsSync(rawFile())).toBe(false);
+    expect(appendedLogs).toEqual([]);
+    expect((await query<any[]>(`SELECT title FROM chat_sessions WHERE id = 'S2'`))[0].title).toBe('远端来过');
+  });
+
   it('关档:judge 提示词无该字段;半服从模型硬给 harness_candidates 也被忽略', async () => {
     enableHarnessTier(false);
     llmScript = [JSON.stringify({ title: '标题', log: '', memory_candidates: [], harness_candidates: ['Sneaky lesson'] })];
@@ -464,6 +497,31 @@ describe('项目会话:只在这个项目成立的候选落项目记忆,不进 a
     llmScript = [judged([], ['该项目只从 release 分支发版'])];
     await onUserRunDone('SP2', USER);
     expect(await projectFacts('SP2')).toEqual(['本仓库运行测试统一使用 npm run test:unit', 'The API lives in services/api', '发版只从 release 分支切']);
+  });
+
+  it('后台记的那条被用户删了 → 这个会话后台不再记(换了说法也不写回来);别的会话照常', async () => {
+    await seedProjectSession();
+    llmScript = [judged([], ['该项目应使用 npm run test:unit 运行单元测试'])];
+    await onUserRunDone('SP', USER);
+    const ref = (await resolveProjectMemory(USER, 'SP'))!;
+    const repo = await openProjectMemory(ref);
+    const snap = repo.snapshot();
+    expect(snap.entries.map((e) => e.content)).toEqual(['该项目应使用 npm run test:unit 运行单元测试']);
+    repo.mutate({ action: 'forget', id: snap.entries[0].id, expectedVersion: snap.version }); // 用户在项目详情里删了
+
+    await query(`INSERT INTO chat_messages (id, session_id, role, content, timestamp, created_at) VALUES ('SP-u2', 'SP', 'user', ?, 3000, datetime('now', '+1 minute'))`, ['这是一段足够长的实质对话内容,用来越过 120 字的实质增量地板。'.repeat(4)]);
+    await createRun({ id: 'R-SP-2', sessionId: 'SP', userId: USER, appId: 'tangu', modelId: 'm1', assistantMessageId: 'A-SP-2', input: { message: 'x', userMessageId: 'SP-u2', attachments: [], agentConfig: {} } });
+    await updateRunStatus('R-SP-2', 'done');
+    writeFileSync(join(home, 'config.json'), JSON.stringify({ specialAgents: { historian: { enabled: true, modelId: 'm1', everyRounds: 1, firstRoundTrigger: true, mode: 'independent' } } }), 'utf8');
+    llmScript = [judged([], ['测试命令是 npm run test:unit(项目约定)'])];
+    await onUserRunDone('SP', USER);
+    expect(llmPayloads.length).toBe(2);                 // 第二轮判官确实跑了
+    expect(await projectFacts()).toEqual([]);
+
+    await seedProjectSession('SP3');
+    llmScript = [judged([], ['The API lives in services/api'])];
+    await onUserRunDone('SP3', USER);
+    expect(await projectFacts('SP3')).toEqual(['The API lives in services/api']);
   });
 
   it('满了就不写:不为了腾地方动已有条目', async () => {
