@@ -799,6 +799,7 @@ ctx.openView('chat', { location: 'right' }); chat?.prefill('Write an original sc
 - **已知限制**:同一个(插件, `folder`)同一时刻只挂一处 —— 挂两处是同一条会话的两个输入框,`prefill` 落到先接走的那个;
   `quote` 走的是全应用共用的一个引用位,连着引用两次只留后一次。
 - 视图卸载时自己 `dispose()`;插件被禁用 / 重载时宿主统一卸掉,旧句柄的 `quote` / `prefill` 不再生效。
+  `dispose()` 之后 `el` 立刻还给你(宿主只动自己挂进去的那一层):换一个 `folder` 时先 `dispose()`,再在同一个 `el` 上挂新的即可。
   **只在有对话能力的宿主上存在**:`ctx.tangu?.mountChat`,缺席时退回 `startChat`。
 
 ## 正文 AI:ctx.tangu.complete 与 registerSelectionAction(2026-09-28 起)

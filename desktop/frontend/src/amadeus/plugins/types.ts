@@ -1030,7 +1030,7 @@ export interface PluginContext {
      *  - `agent`:名册里有就行(不要求是你捆绑的)—— 本接口**永不替用户送出**。
      *  - 句柄:`ready`(接上后 `{ ok, sessionId }`;失败 `{ ok:false, error }`,不抛,界面上有重试)、
      *    `quote(text)`(挂成输入框上方的引用条,不发送、不动草稿)、`prefill(text)`(接在输入框草稿后面并聚焦,回车由用户按)、
-     *    `dispose()`。`quote` / `prefill` 在对话还没接上时调用也不丢;`prefill` 在视图还在后台标签里时也落进输入框,连调几次按先后都接上。
+     *    `dispose()`(之后 `el` 立刻还给你:宿主只动自己挂进去的那一层,清空 `el` 或在它上面再挂都行)。`quote` / `prefill` 在对话还没接上时调用也不丢;`prefill` 在视图还在后台标签里时也落进输入框,连调几次按先后都接上。
      *    禁用 / 重载时宿主统一收掉。`el` 要有确定的高度(对话撑满它)。
      *  旧宿主 / 没有对话能力的宿主没有:`ctx.tangu?.mountChat`,缺席时退回 `startChat`。 */
     mountChat?(el: HTMLElement, o?: { agent?: string; folder?: string; title?: string }): import('./tanguSeam').TanguChatMount

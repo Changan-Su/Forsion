@@ -229,6 +229,22 @@ describe('挂载(mountPluginChat)', () => {
     expect(other.querySelector('[role="alert"]')!.textContent).toContain('对话没接上：没有这个 Agent：nobody')
   })
 
+  it('dispose 之后 el 立刻还给插件:清空它、在同一个 el 上再挂,新的那份在 el 里(插件切工程就这么写)', async () => {
+    api.createSession.mockResolvedValueOnce(rec('s1')).mockResolvedValueOnce(rec('s2'))
+    let first!: ReturnType<typeof mountPluginChat>
+    await act(async () => { first = mountPluginChat(el, { owner: 'p', ...at('/v/A') }); await first.ready })
+    expect(el.querySelector('[data-plugin-chat="plugin-chat:p:A"]')).not.toBeNull()
+    await act(async () => {
+      first.dispose()
+      expect(el.childElementCount).toBe(0) // 不等 React 的卸载落地
+      el.replaceChildren()
+      const second = mountPluginChat(el, { owner: 'p', ...at('/v/B') }); cleanups.push(second.dispose)
+      await second.ready
+    })
+    expect([...el.querySelectorAll('[data-plugin-chat]')].map((x) => x.getAttribute('data-plugin-chat'))).toEqual(['plugin-chat:p:B'])
+    expect(api.seen.at(-1)).toMatchObject({ params: { sessionId: 's2' } })
+  })
+
   it('卸载后不再画东西(建会话那一拍里视图被关)', async () => {
     let release = (_: unknown): void => {}
     api.createSession.mockReturnValue(new Promise((resolve) => { release = resolve }))
