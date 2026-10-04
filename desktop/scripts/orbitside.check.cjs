@@ -35,9 +35,9 @@
  *   .t2o-row                                    一级行:私聊 / 团队 / 项目(§3.2)
  *   一级行的头像槽:.t2s-lead(复用)/ .t2o-lead / .t2o-avatar / .t2o-lead-slot —— 四者都认,取首个命中
  *   [data-mode="chat"|"work"]                   Chat/Work 胶囊(§3.1:.t2s-special 那行不变)
- *   [data-workspace-mode="orbits"|"sessions"]   档位菜单项(WorkspaceView 既有 data 属性)
- *   .t2sw-legacyhint                            旧档升级提示条(别名见 LEGACY_HINT_SELECTORS)
- *   槽 / 提示条的类名若被改,只改本文件顶部这两处常量即可,断言本体不动。
+ *   档位:Tangu Space 把左栏工作区条目写死成 mode='orbits'(spaces.tsx,2026-10-03 锁档),切档菜单与旧档
+ *   提示条都撤了 —— 本仪器不再点菜单选档,只断言「进来就是新版会话侧栏、而且没有切档入口」。
+ *   槽的类名若被改,只改本文件顶部的常量即可,断言本体不动。
  */
 const fs = require('fs')
 const http = require('http')
@@ -67,7 +67,6 @@ const LEVEL1_LEAD_LEFT = 20
 const LEVEL2_LEAD_LEFT = 30.5
 
 /** 旧档提示条:`.t2sw-legacyhint` 是 WorkspaceView 的现役类名,其余是容错别名(改名了先在这里加一条)。 */
-const LEGACY_HINT_SELECTORS = ['.t2sw-legacyhint', '.t2s-legacy-hint', '.t2sw-legacy-hint', '.t2o-legacy-hint', '[data-legacy-hint]']
 
 /** 2×2 不透明 PNG —— 放大到 30×30 就是一块纯色,截图里一眼看得出头像位。 */
 const AVATAR_PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAEElEQVR4nGPwr/oPRAwQCgAvLgchSE3WvgAAAABJRU5ErkJggg==', 'base64')
@@ -182,7 +181,6 @@ const PROBE = `(() => {
   const srowLead = q(srow, '.t2s-lead')
   const srowScroller = srow ? scrollerOf(srow) : null
   const modeOn = q(pane, '.t2s-mode button.on')
-  const modeTrigger = q(pane, '.t2sw-mode-trigger')
   const headRow = q(orbit, '.t2o-head .t2s-special-row')
   const headLead = q(orbit, '.t2o-head .t2s-special-ic')
   const filters = q(orbit, '.t2o-filters')
@@ -231,12 +229,11 @@ const PROBE = `(() => {
     modeActive: modeOn ? modeOn.dataset.mode || null : null,
     hasModeBtn: !!(q(orbit, '[data-mode="chat"]') || q(pane, '[data-mode="chat"]')),
     alignment: {
-      pane: rect(pane), trigger: rect(modeTrigger), head: rect(headRow), filters: rect(filters),
+      pane: rect(pane), head: rect(headRow), filters: rect(filters),
       headLead: rect(headLead), row: rect(firstRow), rowLead: rect(firstLead),
       group: rect(groups[0] || null), groupLead: rect(q(groups[0] || null, '.t2s-lead')),
     },
-    legacyHint: ${JSON.stringify(LEGACY_HINT_SELECTORS)}.find((sel) => vis(q(pane, sel))) || null,
-    modeLabel: (q(pane, '.t2sw-mode-label') || {}).textContent || null,
+    modeSwitcher: !!q(pane, '.t2sw-mode-trigger, .t2sw-mode-picker, [data-workspace-mode]'),
   }
 })()`
 
@@ -263,27 +260,6 @@ async function leftPaneIndex(win) {
 }
 const leftPane = async (win) => win.locator('.t2sw').nth(Math.max(0, await leftPaneIndex(win)))
 
-/** 档位菜单:展开 → 读全部选项 → 可选地点一项(id=null 只读不选,读完 Escape 关上)。 */
-async function pickWorkspaceMode(win, id) {
-  const pane = await leftPane(win)
-  await pane.locator('.t2sw-mode-trigger').first().click()
-  await sleep(350)
-  const options = await pane.locator('.t2sw-mode-menu [data-workspace-mode]').evaluateAll((els) => els.map((e) => ({
-    id: e.dataset.workspaceMode,
-    text: (e.textContent || '').trim().slice(0, 24),
-    selected: e.classList.contains('is-selected') || e.getAttribute('aria-selected') === 'true',
-  })))
-  const item = pane.locator(`.t2sw-mode-menu [data-workspace-mode="${id}"]`).first()
-  if (!id || !(await item.count().catch(() => 0))) {
-    await win.keyboard.press('Escape')
-    await sleep(250)
-    return { options, picked: false }
-  }
-  await item.click({ timeout: 10_000 })
-  await sleep(800)
-  return { options, picked: true }
-}
-
 async function run(app, win) {
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1280, 960))
   await win.waitForSelector('#root', { timeout: 30_000 })
@@ -308,23 +284,14 @@ async function run(app, win) {
     actions: path.join(os.tmpdir(), `forsion-orbitside-actions-${process.pid}.png`),
   }
 
-  // ── 1 档位菜单:新旧两档并存,选 orbits 生效且不弹回 ────────────────────────
-  const menu = await pickWorkspaceMode(win, 'orbits')
-  const ids = menu.options.map((o) => o.id)
-  check('1 档位菜单同时有新档 orbits 与旧档 sessions(§3.7 第 1/3 处)',
-    ids.includes('orbits') && ids.includes('sessions'), JSON.stringify(menu.options))
-  if (!ids.includes('orbits')) {
-    check('1! orbits 没接进 MODE_KEYS —— 新档不可达(cluster B/C 未落地),后续几何无从断言', false, `menu=${JSON.stringify(ids)}`)
-    throw new StopEarly('orbits 档不可达')
-  }
+  // ── 1 档位锁:Tangu Space 进来就是新版会话侧栏,且没有切档入口 ────────────────
   await win.waitForSelector('.t2o', { timeout: 15_000 }).catch(() => {})
   let st = await win.evaluate(PROBE)
-  check('1a 选 orbits 后真的渲染 .t2o 壳(§3.7 第 5 处漏了会静默渲染成笔记面板,tsc 抓不到)',
-    st.hasOrbit, JSON.stringify({ hasOrbit: st.hasOrbit, panes: st.panes, modeLabel: st.modeLabel }))
+  check('1 Tangu Space 左栏直接渲染 .t2o 壳(档位由 Space 写死成 orbits,不经任何菜单)',
+    st.hasOrbit, JSON.stringify({ hasOrbit: st.hasOrbit, panes: st.panes }))
   if (!st.hasOrbit) throw new StopEarly('.t2o 未渲染')
-  const reopened = await pickWorkspaceMode(win, null)
-  check('1b 再开菜单 orbits 仍是选中态(§3.7 第 4 处漏了 = 手选后立刻弹回 auto)',
-    !!reopened.options.find((o) => o.id === 'orbits' && o.selected), JSON.stringify(reopened.options))
+  check('1a 工作区视图里没有切档菜单(2026-10-03 撤掉:左栏永远是这个 Space 的那张列表)',
+    !st.modeSwitcher, JSON.stringify({ modeSwitcher: st.modeSwitcher }))
 
   // ── 0 名册里的本地 agent 变成一级行 ───────────────────────────────────────
   check(`0 桩引擎的 ${AGENTS.length} 个本地 agent 全部渲染成一级 .t2o-row(≥${AGENTS.length};引擎行/团队行会加进同一集合,故不写 ===)`,
@@ -452,19 +419,19 @@ async function run(app, win) {
   })
   check('5a New Session 图标槽与文字均对齐一级条目', near(alignment.title, alignment.row, .6) && near(alignment.lead, alignment.rowLead, .6) && alignment.filterTop >= alignment.headBottom - 1, JSON.stringify(alignment))
 
-  // ── 8 档位触发器响应 panel 宽度 + 筛选胶囊与图标列对齐 ─────────────────────
-  const alignedToTrigger = (a) => {
-    if (!a?.pane || !a.trigger || !a.head || !a.filters || !a.headLead || !a.row || !a.rowLead || !a.group || !a.groupLead) return false
-    const outerRows = [a.head, a.row, a.group]
+  // ── 8 一级行响应 panel 宽度 + 筛选胶囊与图标列对齐(基准 = 顶部 New Session 行;原先是档位下拉,已撤)──
+  const alignedToHead = (a) => {
+    if (!a?.pane || !a.head || !a.filters || !a.headLead || !a.row || !a.rowLead || !a.group || !a.groupLead) return false
+    const outerRows = [a.row, a.group]
     const iconColumn = [a.headLead, a.rowLead, a.groupLead]
-    return near(a.trigger.left - a.pane.left, 6, .75)
-      && near(a.pane.width - a.trigger.width, 12, 1.25)
-      && outerRows.every((r) => near(r.left, a.trigger.left, .75) && near(r.width, a.trigger.width, 1.25))
+    return near(a.head.left - a.pane.left, 6, .75)
+      && near(a.pane.width - a.head.width, 12, 1.25)
+      && outerRows.every((r) => near(r.left, a.head.left, .75) && near(r.width, a.head.width, 1.25))
       && iconColumn.every((r) => near(r.left, a.filters.left, .75))
       && near(a.pane.width - a.filters.width, 40, 1.25)
   }
-  check('8 档位下拉与一级行共用 6px 点击外框,筛选胶囊对齐 20px 图标列',
-    alignedToTrigger(st.alignment), JSON.stringify(st.alignment))
+  check('8 一级行共用 6px 点击外框,筛选胶囊对齐 20px 图标列',
+    alignedToHead(st.alignment), JSON.stringify(st.alignment))
 
   const panelBefore = st.alignment
   const leftSash = await win.evaluate(`(() => {
@@ -491,10 +458,10 @@ async function run(app, win) {
   }
   st = await win.evaluate(PROBE)
   const panelDelta = st.alignment.pane && panelBefore.pane ? st.alignment.pane.width - panelBefore.pane.width : 0
-  const triggerDelta = st.alignment.trigger && panelBefore.trigger ? st.alignment.trigger.width - panelBefore.trigger.width : 0
-  check('8a 拖动 panel sash 后档位下拉等量伸缩（不再锁死 224px）',
-    !!leftSash && Math.abs(panelDelta) > 40 && near(triggerDelta, panelDelta, 2) && alignedToTrigger(st.alignment),
-    JSON.stringify({ panelBefore: panelBefore.pane, panelAfter: st.alignment.pane, triggerBefore: panelBefore.trigger, triggerAfter: st.alignment.trigger, panelDelta: r1(panelDelta), triggerDelta: r1(triggerDelta) }))
+  const headDelta = st.alignment.head && panelBefore.head ? st.alignment.head.width - panelBefore.head.width : 0
+  check('8a 拖动 panel sash 后一级行等量伸缩（不锁死宽度）',
+    !!leftSash && Math.abs(panelDelta) > 40 && near(headDelta, panelDelta, 2) && alignedToHead(st.alignment),
+    JSON.stringify({ panelBefore: panelBefore.pane, panelAfter: st.alignment.pane, headBefore: panelBefore.head, headAfter: st.alignment.head, panelDelta: r1(panelDelta), headDelta: r1(headDelta) }))
 
   await win.locator('[data-filter="agent"]').first().click()
   const agent = await win.evaluate(PROBE)
@@ -590,10 +557,30 @@ async function run(app, win) {
     !!canSwitchSpace && spaceRestore.hasGroup && !spaceRestore.active && !spaceRestore.open && !spaceRestore.rowVisible,
     JSON.stringify({ canSwitchSpace: !!canSwitchSpace, ...spaceRestore }))
 
+  // ── 12 固定聊天 × ⌘点击会话(主聊天空白时)────────────────────────────────────
+  // 空白的主聊天要让位给新标签,顺序必须是「先开新的、再关旧的」:先关会被「区内最后一个聊天关不掉」拦住,
+  // 空白主聊天留下来跟着 activeId 也显示这个会话 = 两个标签同一个会话(2026-10-03 自查抓到,见 sessionNav.retire)。
+  const mainTabTitles = () => win.evaluate(() => Array.from(document.querySelector('.dv-new-tab')?.closest('.dv-tabs-and-actions-container')?.querySelectorAll('.wb-tab') || []).map((e) => (e.textContent || '').trim()))
+  await win.locator('.t2o-head .t2s-special-row').first().click()
+  await sleep(700)
+  const tabsBlank = await mainTabTitles()
+  const orbitGroup = win.locator('.t2o .t2s-group', { hasText: 'Orbit Project' }).first()
+  const orbitRow = win.locator('.t2o .t2s-srow', { hasText: '项目会话一' }).first()
+  if (!(await orbitRow.isVisible().catch(() => false))) { await orbitGroup.locator('.t2s-group-toggle').click().catch(() => {}); await sleep(500) }
+  await orbitRow.click({ modifiers: [process.platform === 'darwin' ? 'Meta' : 'Control'] })
+  await sleep(900)
+  const tabsAfter = await mainTabTitles()
+  check('12 ⌘点击会话(主聊天空白):空白主聊天让位,主区只剩一个显示该会话的标签',
+    tabsBlank.length === 1 && tabsAfter.length === 1 && tabsAfter[0].includes('项目会话一'), JSON.stringify({ tabsBlank, tabsAfter }))
+  // 该会话已钉在标签里:再普通点一次是切过去,不是再开一份
+  await orbitRow.click()
+  await sleep(600)
+  check('12a 再点同一个会话:仍是那一个标签', (await mainTabTitles()).length === 1, JSON.stringify(await mainTabTitles()))
+
   // ── 8b 暗色截图 ───────────────────────────────────────────────────────────
   // 明暗真源 = forsion_theme_pref(themeStore persistPref);落盘后 reload,装载器才会重算 token
   // (只改 html[data-mode] 不重算,截出来还是亮的)。
-  await sleep(700) // 等档位偏好(leaf.params)落盘,别让 reload 把 orbits 丢了
+  await sleep(700) // 等布局落盘再 reload
   await win.evaluate(`localStorage.setItem('forsion_theme_pref', 'dark')`)
   await win.reload({ waitUntil: 'domcontentloaded' })
   await win.waitForSelector('.t2sw', { timeout: 30_000 })
@@ -601,8 +588,8 @@ async function run(app, win) {
   const darkMode = await win.evaluate(`document.documentElement.dataset.mode`)
   const dark = await win.evaluate(PROBE)
   check('8b 暗色截图确实是暗色(html[data-mode]=dark)', darkMode === 'dark', `data-mode=${darkMode}`)
-  check('8c reload 后仍停在 orbits 档(leaf.params 持久化)', dark.hasOrbit,
-    JSON.stringify({ hasOrbit: dark.hasOrbit, modeLabel: dark.modeLabel }))
+  check('8c reload 后仍停在 orbits 档', dark.hasOrbit,
+    JSON.stringify({ hasOrbit: dark.hasOrbit, legacySide: dark.legacySide }))
   const persistedPins = await win.evaluate(`Array.from(document.querySelectorAll('.t2o [data-pinned="true"]')).map((e) => ((e.querySelector('.t2o-name, .t2s-group-label') || e).textContent || '').trim())`)
   check('10d reload 后 Pin 区与排序仍保留', persistedPins[0] === 'Orbit Project' && persistedPins[1] === 'Xyra', JSON.stringify(persistedPins))
   await dismissToasts(win)
@@ -643,16 +630,6 @@ async function run(app, win) {
     w.setContentSize(1280, 960)
   })
   await sleep(1200)
-
-  // ── 7 旧档仍可达 + 升级提示条(放最后:档位选择会写进 leaf.params 持久化)────
-  const legacy = await pickWorkspaceMode(win, 'sessions')
-  check('7 旧档 sessions 仍可从菜单选到', legacy.picked, JSON.stringify(legacy.options.map((o) => o.id)))
-  await sleep(900)
-  const leg = await win.evaluate(PROBE)
-  check('7a 旧档渲染的是老侧栏(.t2s-side 在、.t2o 不在)', leg.legacySide && !leg.hasOrbit,
-    JSON.stringify({ legacySide: leg.legacySide, hasOrbit: leg.hasOrbit }))
-  check(`7b 旧档顶部有「已有新版 →」提示条(§3.7 第 8 条;认 ${LEGACY_HINT_SELECTORS.join(' / ')})`,
-    !!leg.legacyHint, `matched=${leg.legacyHint}`)
 
   check('11 界面截图落盘(亮 / 暗 / 375px / Project hover 动作 —— DESIGN.md §8:自己看)',
     Object.values(shots).every((p) => fs.existsSync(p)), Object.values(shots).join(' '))

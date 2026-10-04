@@ -462,84 +462,8 @@
 
 .t2s-archived-toggle { margin-top: 4.5px; padding-left: 6px; }
 
-/* ── 统一「工作区」视图壳(WorkspaceView):头部模式切换器 + 模式体容器 ── */
+/* ── 统一「工作区」视图壳(WorkspaceView):模式体容器(档位由 Space 写死,头部切档菜单 2026-10-03 撤掉) ── */
 .t2sw { display: flex; flex-direction: column; height: 100%; min-height: 0; }
-.t2sw-mode-slot { position: relative; z-index: 6; flex: 0 0 36px; min-height: 36px; }
-.t2sw-mode-picker {
-  /* 与列表滚动区的 6px inset 共用一条外边线；左右同时锚定后，触发器会随 panel resize，
-   * 不再在宽面板里停在固定的 224px。 */
-  position: absolute; top: 6px; left: 6px; right: 6px;
-  border-radius: var(--radius-md, 10px);
-  background: var(--overlay-subtle, rgba(127, 127, 127, 0.04));
-  transition:
-    background 0.18s var(--ease-out, ease-out),
-    box-shadow 0.22s var(--ease-spring, ease-out);
-}
-.t2sw-mode-picker.is-open {
-  background: var(--bg-card, var(--bg));
-  box-shadow: var(--card-shadow);
-}
-.t2sw-mode-trigger {
-  display: flex; align-items: center; gap: 7px; width: 100%;
-  min-height: var(--menu-item-min-height, 28px);
-  padding: var(--menu-item-pad-block, 4px) var(--menu-item-pad-inline, 8px);
-  border: var(--border-width, 1px) solid transparent; border-radius: inherit;
-  outline: none; background: transparent;
-  color: var(--text-light, var(--text)); font-family: var(--font-ui); font-size: var(--ui-font-meta, 12px); text-align: left;
-  transition: background 0.18s var(--ease-out, ease-out), color 0.18s var(--ease-out, ease-out);
-}
-.t2sw-mode-trigger:hover,
-.t2sw-mode-trigger:focus-visible { background: var(--overlay-light, rgba(127, 127, 127, 0.08)); color: var(--text); }
-.t2sw-mode-trigger.is-open { background: transparent; color: var(--text); }
-.t2sw-mode-trigger > svg { flex: none; color: var(--text-muted); transition: transform 0.22s var(--ease-spring, ease-out); }
-.t2sw-mode-trigger.is-open > svg { transform: rotate(180deg); }
-.t2sw-mode-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.t2sw-auto-now { opacity: 0.7; margin-left: 3px; }
-.t2sw-mode-reveal {
-  display: grid; grid-template-rows: 0fr;
-  opacity: 0; visibility: hidden; pointer-events: none;
-  transform: translateY(-6px);
-  transition:
-    grid-template-rows 0.22s var(--ease-spring, ease-out),
-    opacity 0.12s ease,
-    transform 0.22s var(--ease-spring, ease-out),
-    visibility 0s linear 0.22s;
-}
-.t2sw-mode-reveal.is-open {
-  grid-template-rows: 1fr;
-  opacity: 1; visibility: visible; pointer-events: auto;
-  transform: none;
-  transition-delay: 0s;
-}
-.t2sw-mode-clip { min-height: 0; overflow: hidden; }
-.t2sw-mode-menu {
-  max-height: min(320px, calc(100vh - 64px)); overflow-y: auto;
-  padding: 0 var(--menu-shell-padding, 4px) var(--menu-shell-padding, 4px);
-}
-/* 不能只借 `.project-menu-item` 这个名字:它的布局基座原本由 `.composer-menu button` 提供，
- * WorkspaceView 不在 composer 里，结果菜单项退回浏览器原生 inline button，所有文字挤成一串
- * （2026-09-15 实报）。工作区下拉必须在自己的作用域里把完整按钮契约带齐。 */
-.t2sw-mode-item {
-  display: flex; align-items: center; justify-content: space-between; gap: 8px;
-  width: 100%; min-height: var(--menu-item-min-height, 28px);
-  padding: var(--menu-item-pad-block, 4px) var(--menu-item-pad-inline, 8px);
-  border: none; border-radius: var(--radius-md, 8px);
-  outline: none; background: transparent;
-  color: var(--text); font-family: var(--font-ui); font-size: var(--ui-font-meta, 12px); text-align: left;
-  cursor: pointer;
-}
-.t2sw-mode-item:hover { background: var(--menu-hover, rgba(127, 127, 127, 0.12)); }
-.t2sw-mode-item .project-menu-name { flex: 1; }
-.project-menu-item.t2sw-mode-item.is-selected { background: var(--accent-light); color: var(--accent-ink); }
-.project-menu-item.t2sw-mode-item:focus-visible { outline: none; background: var(--menu-hover, rgba(127, 127, 127, 0.12)); color: var(--text); }
-.project-menu-item.t2sw-mode-item.is-selected:focus-visible { background: var(--accent-light); color: var(--accent-ink); }
-.t2sw-mode-item .project-menu-check { display: inline-flex; width: 14px; justify-content: center; }
-@media (prefers-reduced-motion: reduce) {
-  .t2sw-mode-picker,
-  .t2sw-mode-trigger,
-  .t2sw-mode-trigger > svg,
-  .t2sw-mode-reveal { transition: none; }
-}
 .t2sw-body { display: flex; flex-direction: column; flex: 1; min-height: 0; }
 .t2sw-body > * { flex: 1; min-height: 0; }
 /* 子视图(会话/文件/笔记)不自带底色 —— 直接用工作区视图所在面板的背景,切换时无「另一层」。 */

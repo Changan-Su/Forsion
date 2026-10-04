@@ -71,6 +71,17 @@ describe('parseSpaceJson', () => {
     }
     expect(parseSpaceJson(JSON.stringify({ ...VALID, layout: { main: [main[0], { type: 'outline', splitFrom: 0 }] } }), opts()).ok).toBe(false)
   })
+  it('pinned:true 标出固定 View(main / left / right);缺省不出现该键;非布尔与底部面板报错', () => {
+    const layout = { main: [{ type: 'chat', pinned: true }, { type: 'outline', pinned: false }], left: [{ type: 'workspace', pinned: true }] }
+    const r = parseSpaceJson(JSON.stringify({ ...VALID, layout }), opts())
+    expect(r.ok).toBe(true)
+    if (r.ok) {
+      expect(r.spec.layout.main).toEqual([{ type: 'chat', pinned: true }, { type: 'outline' }])
+      expect(r.spec.layout.left).toEqual([{ type: 'workspace', pinned: true }])
+    }
+    expect(parseSpaceJson(JSON.stringify({ ...VALID, layout: { main: [{ type: 'chat', pinned: 'yes' }] } }), opts()).ok).toBe(false)
+    expect(parseSpaceJson(JSON.stringify({ ...VALID, layout: { ...VALID.layout, bottom: [{ type: 'outline', pinned: true }] } }), opts()).ok).toBe(false)
+  })
   it('layout.bottom 可选:声明的视图进底部面板;缺省不出现该键;同样查注册、不许 split', () => {
     const bottom = [{ type: 'outline', params: { follow: true } }]
     const r = parseSpaceJson(JSON.stringify({ ...VALID, layout: { ...VALID.layout, bottom } }), opts())

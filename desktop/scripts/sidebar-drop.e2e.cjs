@@ -119,15 +119,18 @@ async function main() {
     process.exit(1)
   }
 
-  /** 工作区 sub list 已改为下拉菜单；按第几个工作区面板选中精确档位。 */
-  const selectWorkspaceMode = async (win, index, modeId) => {
-    const picker = win.locator('.t2sw-mode-picker').nth(index)
-    const item = picker.locator(`[data-workspace-mode="${modeId}"]`)
-    // 前序拖放可能让菜单保留在展开态；只在目标项不可见时打开，避免反手把已开的菜单关掉。
-    if (!(await item.isVisible().catch(() => false))) {
-      await picker.locator('.t2sw-mode-trigger').click({ timeout: 10_000 })
-    }
-    await item.click({ timeout: 10_000 })
+  /** 文件面板:档位锁在条目上之后(2026-10-03)笔记 Space 里没有它了,它在 Tangu Space 的右栏。到那儿从 ＋ 的
+   *  「最近使用」把笔记A 开成聊天旁边的标签 —— 主区活动视图是编辑器时,库本身就是文件面板里的一个工作区
+   *  (WorkspaceView.FilesBody 的 vaultCtx 合并)。右栏默认收起:先展开,再点它的标签。 */
+  const showFilesPanel = async (win) => {
+    await win.locator('.rb-space[aria-label="Tangu"]').first().click({ timeout: 15_000 })
+    await win.waitForTimeout(2500)
+    await win.locator('.dv-new-tab').first().click({ timeout: 10_000 })
+    await win.locator('.newtab-card', { hasText: '笔记A' }).first().click({ timeout: 10_000 })
+    await win.waitForTimeout(1500)
+    const right = win.locator('.dv-edge-right')
+    if ((await right.getAttribute('aria-pressed')) !== 'true') await right.click({ timeout: 10_000 })
+    await win.locator('.wb-tab--icon:not(.wb-tab--left)[title="工作区"]').first().click({ timeout: 10_000 })
   }
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'forsion-sbdrop-'))
   const userData = path.join(home, 'userdata')
@@ -234,9 +237,15 @@ async function main() {
       !fs.existsSync(path.join(vault, '子文件夹', '不该进来.txt')),
       '带 REF_MIME 时若也复制 = 树内搬笔记会被这条分支抢走')
 
+    // 复合笔记的行拖要把自己的 .fd 一起带上,否则子笔记会被落下(9 的前置)。
+    const noteSrc = await win.evaluate(DRAG_START, { sel: '.t2s-srow', rowText: '合并', pathsMime: PATHS_MIME })
+    check('8b 笔记树的行拖:复合笔记连自己的 .fd 一起带走',
+      Array.isArray(noteSrc.paths) && noteSrc.paths.some((p) => p.endsWith('合并.md')) && noteSrc.paths.some((p) => p.endsWith('合并.fd')),
+      JSON.stringify(noteSrc))
+    // (dragstart 得到的 dt 留在 window.__dragDT 上,到 9 才投放;6 / 7 各用自己的 dt,不碰它。)
+
     // ── 6 文件档:拖到**文件行** → 落进它所在的目录(此前文件行不是落区,会一路冒泡到工作区根)──
-    // 编辑器开着时,库本身就是文件面板里的一个工作区(WorkspaceView.FilesBody 的 vaultCtx 合并)。
-    await selectWorkspaceMode(win, 0, 'files')
+    await showFilesPanel(win)
     await win.waitForTimeout(1500)
     // 逐层展开:工作区头 → 子文件夹(懒加载,各等一拍)
     // 工作区头是 .t2s-group(与笔记树同构),其下的目录行才是 .t2sf-row —— 逐层展开各等一拍(懒加载)。
@@ -285,17 +294,7 @@ async function main() {
         && rightPanelSrc.includes("effectAllowed = 'copyMove'") && !rightPanelSrc.includes("effectAllowed = 'move'")
         && viewsSrc.includes("effectAllowed = 'copyMove'"),
       'FilesPanel / RightPanel / 笔记树行拖三处')
-    // 复合笔记的行拖要把自己的 .fd 一起带上,否则子笔记会被落下(9 的前置)。
-    await selectWorkspaceMode(win, (await win.locator('.t2sw-mode-picker').count()) - 1, 'notes')
-    await win.waitForTimeout(1500)
-    const noteSrc = await win.evaluate(DRAG_START, { sel: '.t2s-srow', rowText: '合并', pathsMime: PATHS_MIME })
-    check('8b 笔记树的行拖:复合笔记连自己的 .fd 一起带走',
-      Array.isArray(noteSrc.paths) && noteSrc.paths.some((p) => p.endsWith('合并.md')) && noteSrc.paths.some((p) => p.endsWith('合并.fd')),
-      JSON.stringify(noteSrc))
-
     // ── 9 复合笔记落进**已有同名 .md** 的目录:两半必须拿同一个 stem ────────────────
-    await selectWorkspaceMode(win, 0, 'files')
-    await win.waitForTimeout(1500)
     await expandUntil('.t2s-group:has-text("Vault") .t2s-group-toggle', '.t2sf-row')
     const d9 = await win.evaluate(DROP_STAGED, { sel: '.t2sf-row:not(.t2sf-file)', rowText: '子文件夹' })
     await win.waitForTimeout(3500)
@@ -309,23 +308,6 @@ async function main() {
       fs.readFileSync(path.join(sub, '合并.md'), 'utf8').includes('目标里本来就有'),
       '被覆盖 = 用户的文件被拖拽吃掉了')
 
-    // 交付截图顺带覆盖新的 sub list 下拉展开态：菜单应叠在列表上方，不把工作区 body 顶下去。
-    await win.locator('.t2sw-mode-picker').first().locator('.t2sw-mode-trigger').click({ timeout: 10_000 })
-    await win.locator('.t2sw-mode-menu').first().waitFor({ state: 'visible', timeout: 10_000 })
-    await win.waitForTimeout(280) // 等 220ms 弹性展开结束；中途截图会把整张菜单连文字一起拍成半透明
-    const modeMenu = await win.locator('.t2sw-mode-menu').first().evaluate((menu) => {
-      const items = Array.from(menu.querySelectorAll('.t2sw-mode-item'))
-      const rects = items.map((el) => {
-        const r = el.getBoundingClientRect()
-        return { display: getComputedStyle(el).display, x: r.x, y: r.y, w: r.width, h: r.height }
-      })
-      return { menuW: menu.getBoundingClientRect().width, rects }
-    })
-    check('10 工作区 List 切换仍是纵向全宽下拉项(不退化成文字串)',
-      modeMenu.rects.length >= 4
-        && modeMenu.rects.every((r) => r.display === 'flex' && r.w >= modeMenu.menuW - 12 && r.h >= 26)
-        && modeMenu.rects.slice(1).every((r, i) => r.y >= modeMenu.rects[i].y + modeMenu.rects[i].h - 1),
-      JSON.stringify(modeMenu))
     await win.screenshot({ path: shot })
     console.log(`\n截图:${shot}`)
   } finally {

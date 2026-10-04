@@ -104,12 +104,6 @@ async function main() {
       await toTangu.click()
       await page.waitForTimeout(1500)
     }
-    const picker = page.locator('.t2sw-mode-picker').first()
-    if (await picker.count().catch(() => 0)) {
-      await picker.locator('.t2sw-mode-trigger').click().catch(() => {})
-      await picker.locator('[data-workspace-mode="orbits"]').click().catch(() => {})
-      await page.waitForTimeout(1200)
-    }
     const anyRow = page.locator('.t2s-srow').first()
     if (await anyRow.count().catch(() => 0)) {
       await anyRow.click().catch(() => {})   // 打开任一会话 → 活动面板变成聊天

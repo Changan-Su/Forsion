@@ -15,7 +15,9 @@ export interface ChatLeaf { id: string; sessionId?: string; followActive?: boole
 
 export type SessionOpenPlan =
   | { act: 'activate'; leafId: string }
-  | { act: 'newtab' | 'follow' | 'pin' | 'fresh' }
+  /** leafId = 把哪个 leaf 固定成该会话;不给 = 聚焦的那个。 */
+  | { act: 'pin'; leafId?: string }
+  | { act: 'newtab' | 'follow' | 'fresh' }
 
 /** 「新对话」落在哪:站在**空白标签**(＋ 开出来的启动器 / Space 空白首页)里 → 就开在这个标签(here);
  *  站在笔记/已有聊天上 → 复用主聊天(reuse),与「新建笔记」复用已有编辑器同一口径。
@@ -43,7 +45,9 @@ export function planChatRestore(leaf: { type?: string; followActive?: boolean } 
 
 export function planSessionOpen(
   focused: FocusedLeaf | null,
-  ctx?: { sessionId?: string; leaves?: ChatLeaf[]; newTab?: boolean },
+  /** pinnedChat:聊天在本 Space 主区是固定 View 时,站在内容标签上点会话该回到的那个聊天 leaf ——
+   *  跟随档主聊天(follows);没有(它被冻成钉住档了)就是现存的某个钉住会话的聊天。没有聊天 / 没固定则不传。 */
+  ctx?: { sessionId?: string; leaves?: ChatLeaf[]; newTab?: boolean; pinnedChat?: { id: string; follows: boolean } },
 ): SessionOpenPlan {
   if (ctx?.newTab) return { act: 'newtab' }
   const claimed = ctx?.sessionId
@@ -52,6 +56,13 @@ export function planSessionOpen(
   if (claimed) return { act: 'activate', leafId: claimed.id }
   if (!focused) return { act: 'fresh' }
   if (focused.type === 'chat' && focused.followActive !== false) return { act: 'follow' }
+  // 主聊天是固定 View(一直在):站在笔记 / 文件这类**内容标签**上点会话 → 回主聊天里显示,不把手头这个标签变成聊天
+  // (否则固定聊天旁边又多出一个聊天标签,用户正在看的那页还被顶掉)。空白标签(＋ 开出来的)与钉住别的会话的聊天
+  // 照旧就地接手 —— 那是「我就要开在这儿」。
+  // 跟随档:切过去即可(它随 activeId 换会话);钉住档:把它就地换成这个会话 —— 只切过去的话它还显示原来那个。
+  if (ctx?.pinnedChat && focused.type !== 'chat' && focused.type !== 'launcher' && focused.type !== 'home') {
+    return ctx.pinnedChat.follows ? { act: 'activate', leafId: ctx.pinnedChat.id } : { act: 'pin', leafId: ctx.pinnedChat.id }
+  }
   return { act: 'pin' }
 }
 

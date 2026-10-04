@@ -1863,11 +1863,6 @@ registerMessages({
   "spaces.saved": { "zh": "已另存为 Space「{name}」（见左侧功能条顶部）", "en": "Saved as Space \"{name}\" (see the ribbon top)" },
   "spaces.deleteConfirm": { "zh": "删除 Space「{name}」？其布局配方将从磁盘移除。", "en": "Delete Space \"{name}\"? Its recipe will be removed from disk." },
   "view.outline": { "zh": "大纲", "en": "Outline" },
-  "workspace.mode.auto": { "zh": "自动", "en": "Auto" },
-  "workspace.mode.autoTip": { "zh": "跟随主视图自动切换（对话→会话/文件，笔记→笔记/文件）", "en": "Follows the focused main view (chat → sessions/files, note → notes/files)" },
-  "workspace.mode.sessions": { "zh": "会话", "en": "Sessions" },
-  "workspace.mode.files": { "zh": "文件", "en": "Files" },
-  "workspace.mode.notes": { "zh": "笔记", "en": "Notes" },
   "workspace.notesUnavailable": { "zh": "笔记功能在当前环境不可用。", "en": "Notes are unavailable in this environment." },
   "outline.empty": { "zh": "当前视图没有大纲。", "en": "No outline for the current view." },
 })

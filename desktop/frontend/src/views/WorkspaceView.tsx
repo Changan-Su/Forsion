@@ -1,18 +1,18 @@
 import { amadeusAvailable, sessionsAvailable } from '../features/runtime'
 /**
  * 统一「工作区」视图 + 统一「大纲」视图 —— 会话列表 / 工作区文件 / 笔记库(以及 目录 / Amadeus 大纲)
- * 底层合并为两套共享视图,按 (所在侧栏左右 × focus 的主视图类型) 自动切换模式,也可手动切换。
+ * 底层合并为两套共享视图。模式体全部**包裹复用**现有组件(SessionsView / FilesPanel / AmadeusPagesView /
+ * TocView / AmadeusOutlineView),本文件只负责按档位挑哪一个来渲染。
  *
- * 模式体全部**包裹复用**现有组件(SessionsView / FilesPanel / AmadeusPagesView / TocView /
- * AmadeusOutlineView),本文件只提供:模式状态(存 leaf params,随布局持久化)+ 头部切换器 + 自动跟随。
- * 自动规则两级(见 workspaceMode.ts):主视图**硬规则**优先且跨 Space 一致(chat → 左=会话、右=文件;
- * Amadeus 文档家族(编辑器/图/多维表/PDF)→ 左=笔记、右=文件,定位到笔记所在目录;code-studio → 文件);
- * 无硬规则 → 落**本 Space 的默认档**(SpaceDefinition.autoWorkspaceMode,如 Amadeus → 笔记)。右栏恒为文件。
+ * **档位由 Space 写死**(2026-10-03 锁档,用户拍板):条目的 `params.mode`(内置 Space 与配方都这么写)
+ * 就是这个视图显示什么,不再跟着主区活动标签换档,头部那个切档菜单也一并撤了 —— 固定 View 的前提是
+ * 「左栏永远是这个 Space 的那张列表」。条目没带 mode(老的插件配方)才回落旧的自动规则(workspaceMode.ts):
+ * 主视图硬规则 → 本 Space 的默认档(SpaceDefinition.autoWorkspaceMode);右栏恒为文件。
  */
 import { useMemo, useState, useEffect, useReducer, useRef, type ReactNode } from 'react'
-import { useWorkspace, activeMainPanel, scheduleWorkspaceSave, useSpaceStore, getView } from '@lcl/engine'
+import { useWorkspace, activeMainPanel, useSpaceStore, getView } from '@lcl/engine'
 import type { ViewProps } from '@lcl/engine'
-import { Check, ChevronDown, FileText, ListFilter, MoreHorizontal, Search, X } from 'lucide-react'
+import { ChevronDown, FileText, ListFilter, MoreHorizontal, Search, X } from 'lucide-react'
 import { usePluginStore } from '@amadeus/plugins/pluginStore'
 import type { ListItem, ListSourceContribution } from '@amadeus/plugins/types'
 import { useApp } from '../stores/appStore'
@@ -27,7 +27,7 @@ import type { PreviewTarget } from '../components/WorkspaceFilePreview'
 import { AmadeusPagesView, AmadeusOutlineView, ScopedPageOutline } from '../amadeusViews'
 import { usePageStore } from '@amadeus/store/pageStore'
 import type { WorkspaceDescriptor } from '../types'
-import { autoWorkspaceMode, resolveWorkspaceModes, workspaceKeyForPath, type WorkspaceMode, type WorkspaceModeEx } from './workspaceMode'
+import { autoWorkspaceMode, resolveWorkspaceModes, workspaceKeyForPath, type WorkspaceModeEx } from './workspaceMode'
 import { useCodeStudio } from '../stores/codeStudioStore'
 import { VaultSideSwitch } from '../components/VaultSideSwitch'
 import { SidebarRow } from '../components/SidebarRow'
@@ -41,7 +41,7 @@ registerMessages({
   'wsview.noMatches': { zh: '没有匹配项', en: 'No matches' },
   'wsview.empty': { zh: '暂无内容', en: 'Nothing here yet' },
   'wsview.search': { zh: '搜索{source}', en: 'Search {source}' },
-  // 占位只写「搜索」:侧栏标题的选择器里已经有源名,英文长名在窄栏里会被硬裁成「Search Autom」(W-14)
+  // 占位只写「搜索」:带上源名的话,英文长名在窄栏里会被硬裁成「Search Autom」(W-14)
   'wsview.searchShort': { zh: '搜索', en: 'Search' },
   'wsview.clearSearch': { zh: '清空搜索', en: 'Clear search' },
   'wsview.filter': { zh: '筛选分类', en: 'Filter by category' },
@@ -49,15 +49,6 @@ registerMessages({
   'wsview.actions': { zh: '{source}操作', en: '{source} actions' },
   'wsview.itemActions': { zh: '{title}的操作', en: 'Actions for {title}' },
   'wsview.resultCount': { zh: '{count} 项', en: '{count} items' },
-  // 新旧两个会话档并存:新档(轨道侧栏)占「会话」这个名字,旧档降为「会话(旧)」——
-  // 档位 id 仍是 'sessions'(布局持久化键,发版即冻结),只改文案。
-  'workspace.mode.orbits': { zh: '会话', en: 'Sessions' },
-  'workspace.mode.sessionsLegacy': { zh: '会话（旧）', en: 'Sessions (legacy)' },
-  // 旧档顶部的升级提示条(存量用户手选过旧档 → 不迁移 params.mode,只给一条可点的路,方案 §11 ⑥)。
-  'workspace.legacyHint': { zh: '已有新版会话侧栏', en: 'A new sessions sidebar is available' },
-  'workspace.legacyHint.switch': { zh: '切换', en: 'Switch' },
-  // 纯图标的 × 需要可访问名;消隐只管这一次会话,故 zh 写「关闭」而非「不再提示」(后者是持久化承诺)。
-  'workspace.legacyHint.dismiss': { zh: '关闭', en: 'Dismiss' },
 })
 
 /** 当前活动主 leaf 的视图类型(订阅 mainTabs 驱动重算;焦点在侧栏时 activeMainPanel 有组内回退)。 */
@@ -132,37 +123,17 @@ function FilesBody({ vaultCtx, sideFilter }: { vaultCtx: { root: string; noteDir
   )
 }
 
-const MODE_KEYS: Array<{ id: WorkspaceMode | 'auto'; label: string }> = [
-  { id: 'auto', label: 'workspace.mode.auto' },
-  { id: 'orbits', label: 'workspace.mode.orbits' },
-  { id: 'sessions', label: 'workspace.mode.sessionsLegacy' },
-  { id: 'files', label: 'workspace.mode.files' },
-  { id: 'notes', label: 'workspace.mode.notes' },
-]
-
-/** 档位 → 文案键:必须查 MODE_KEYS 而不是拼 `workspace.mode.${mode}` —— 旧档的键名(sessions)
- *  与文案键(sessionsLegacy)从此不同名,拼串会让触发器把旧档也显示成「会话」,与新档撞名。
- *  插件列表源不在表内,回落原来的拼串路(它们本来就由 src.title 接管,不走这里)。 */
-const modeLabelKey = (mode: WorkspaceModeEx): string =>
-  MODE_KEYS.find((m) => m.id === mode)?.label ?? `workspace.mode.${mode}`
-
 export function WorkspaceView({ leaf, defaultMode }: ViewProps & { defaultMode?: WorkspaceModeEx }) {
   const { t } = useI18n()
-  const [modeMenuOpen, setModeMenuOpen] = useState(false)
-  // 旧档提示条的消隐:**只管这一次会话**(React state,不落盘)—— 存量用户手选过的档位不迁移,
-  // 提示条是他们唯一那条可点的路,下次开窗还得给。
-  const [legacyHintDismissed, setLegacyHintDismissed] = useState(false)
-  const modePickerRef = useRef<HTMLDivElement>(null)
-  const modeTriggerRef = useRef<HTMLButtonElement>(null)
   const hasNotes = amadeusAvailable()
   const hasSessions = sessionsAvailable()
   const mainType = useActiveMainType()
   const loc = leaf.loc
-  // 插件列表源(P2):活着的源集合 —— override/auto 落到已死的源(插件被禁)时回退,
+  // 插件列表源(P2):活着的源集合 —— 写死的档 / 回落档落到已死的源(插件被禁)时回退,
   // 不渲染死模式(与 layoutViewsAllRegistered 同类防线:params.mode 随布局持久化,可能指向已卸载的源)。
   const liveSources = usePluginStore((s) => s.listSources)
   const sourceAlive = (id: string): boolean => liveSources.some((o) => `plugin:${o.pluginId}:${o.item.id}` === id)
-  // 手动覆盖存 leaf params(随布局持久化);'auto'(默认)跟随主视图。
+  // 档位 = 条目上写死的 mode(Space 定义 / 配方给的,随布局持久化);没写(= 'auto')才走下面的回落规则。
   // defaultMode:宿主给某个视图类型钉的起始档(如 inbox-list → 收件箱),布局里没存 mode 时用它(Codex 09-11 P1)。
   const raw = leaf.params.mode ?? defaultMode
   const override: WorkspaceModeEx | 'auto' =
@@ -182,11 +153,7 @@ export function WorkspaceView({ leaf, defaultMode }: ViewProps & { defaultMode?:
   const availableMode = (mode: WorkspaceModeEx): WorkspaceModeEx => (mode === 'sessions' || mode === 'orbits') && !hasSessions
     ? hasNotes ? 'notes' : liveSources.length ? `plugin:${liveSources[0].pluginId}:${liveSources[0].item.id}` : 'files'
     : mode
-  const automaticMode = availableMode(resolvedModes.automatic)
   const mode = availableMode(resolvedModes.active)
-  // 生效档是旧「会话(旧)」时给一行升级提示(方案 §11 ⑥:不迁 params.mode,只给一条可点的路)。
-  // 只对手选过旧档的存量用户(leaf.params.mode==='sessions')露提示条;仅仅是自动落到 sessions 的别的 Space 不算(§11 ⑥)。
-  const showLegacyHint = override === 'sessions' && hasSessions && !legacyHintDismissed
 
   const vaultRoot = usePageStore((s) => s.vaultRoot)
   const activePage = usePageStore((s) => s.activePage ?? s.activeNotePath) // v4 不设 activePage
@@ -206,63 +173,6 @@ export function WorkspaceView({ leaf, defaultMode }: ViewProps & { defaultMode?:
     ? liveSources.find((o) => `plugin:${o.pluginId}:${o.item.id}` === mode)?.item ?? null
     : null
 
-  const modeOptions = [
-    ...MODE_KEYS.filter((m) => (m.id !== 'notes' || hasNotes) && ((m.id !== 'sessions' && m.id !== 'orbits') || hasSessions)).map((m) => ({ id: m.id as WorkspaceModeEx | 'auto', text: t(m.label) })),
-    ...liveSources.map((o) => ({ id: `plugin:${o.pluginId}:${o.item.id}` as WorkspaceModeEx, text: o.item.title })),
-  ]
-  const effectiveModeText = pluginSrc?.title ?? t(modeLabelKey(mode))
-  const automaticPluginSrc = automaticMode.startsWith('plugin:')
-    ? liveSources.find((o) => `plugin:${o.pluginId}:${o.item.id}` === automaticMode)?.item ?? null
-    : null
-  const automaticModeText = automaticPluginSrc?.title ?? t(modeLabelKey(automaticMode))
-  const modeTriggerText = override === 'auto'
-    ? `${t('workspace.mode.auto')} · ${automaticModeText}`
-    : effectiveModeText
-
-  // 选择菜单沿用其它 app 内下拉的行为:点外部 / Esc 关闭；打开后把焦点交给当前项，
-  // 方向键可在选项间移动。菜单就地叠在工作区 body 上方，不参与纵向布局。
-  useEffect(() => {
-    if (!modeMenuOpen) return
-    const raf = requestAnimationFrame(() => {
-      modePickerRef.current?.querySelector<HTMLElement>('[role="option"][aria-selected="true"]')?.focus()
-    })
-    const closeOutside = (event: MouseEvent): void => {
-      if (!modePickerRef.current?.contains(event.target as Node)) setModeMenuOpen(false)
-    }
-    const closeOnEscape = (event: KeyboardEvent): void => {
-      if (event.key !== 'Escape') return
-      setModeMenuOpen(false)
-      modeTriggerRef.current?.focus()
-    }
-    document.addEventListener('mousedown', closeOutside)
-    document.addEventListener('keydown', closeOnEscape)
-    return () => {
-      cancelAnimationFrame(raf)
-      document.removeEventListener('mousedown', closeOutside)
-      document.removeEventListener('keydown', closeOnEscape)
-    }
-  }, [modeMenuOpen])
-
-  const moveModeFocus = (event: React.KeyboardEvent<HTMLDivElement>): void => {
-    if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return
-    const options = Array.from(event.currentTarget.querySelectorAll<HTMLElement>('[role="option"]'))
-    if (!options.length) return
-    event.preventDefault()
-    const current = options.indexOf(document.activeElement as HTMLElement)
-    const next = event.key === 'Home' ? 0
-      : event.key === 'End' ? options.length - 1
-      : event.key === 'ArrowUp' ? (current <= 0 ? options.length - 1 : current - 1)
-      : (current + 1) % options.length
-    options[next]?.focus()
-  }
-
-  const pickMode = (id: WorkspaceModeEx | 'auto'): void => {
-    leaf.setParams({ mode: id })
-    scheduleWorkspaceSave()
-    setModeMenuOpen(false)
-    modeTriggerRef.current?.focus()
-  }
-
   const body: ReactNode =
     pluginSrc ? <PluginListBody key={mode} src={pluginSrc} />
     : mode === 'orbits' ? <OrbitsView sideFilter={sideFilter} />
@@ -274,95 +184,6 @@ export function WorkspaceView({ leaf, defaultMode }: ViewProps & { defaultMode?:
   return (
     <div className="t2sw">
       {loc === 'left' && <VaultSideSwitch />}
-      {/* Sub list = 内置三档 + **每个活着的插件列表源各一项**(P2),源随插件启停动态增减。
-          单个选择器替代横向胶囊条：名称再多也只在菜单内纵向滚动，不撑宽工作区。 */}
-      <div className="t2sw-mode-slot">
-        <div className={`t2sw-mode-picker${modeMenuOpen ? ' is-open' : ''}`} ref={modePickerRef}>
-          <button
-            ref={modeTriggerRef}
-            type="button"
-            className={`t2sw-mode-trigger${modeMenuOpen ? ' is-open' : ''}`}
-            title={modeTriggerText}
-            aria-haspopup="listbox"
-            aria-expanded={modeMenuOpen}
-            onClick={() => setModeMenuOpen((open) => !open)}
-            onKeyDown={(event) => {
-              if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return
-              event.preventDefault()
-              setModeMenuOpen(true)
-            }}
-          >
-            <span className="t2sw-mode-label">{effectiveModeText}</span>
-            <ChevronDown size={13} aria-hidden />
-          </button>
-          {/* 常驻 DOM 才能同时拥有展开与收起动画；关闭时 aria-hidden + tabIndex=-1 隔离交互。 */}
-          <div className={`t2sw-mode-reveal${modeMenuOpen ? ' is-open' : ''}`} aria-hidden={!modeMenuOpen}>
-            <div className="t2sw-mode-clip">
-              <div
-                className="t2sw-mode-menu"
-                role="listbox"
-                aria-label={t('view.workspace')}
-                onKeyDown={moveModeFocus}
-              >
-                {modeOptions.map((option) => (
-                  <button
-                    key={option.id}
-                    type="button"
-                    role="option"
-                    data-workspace-mode={option.id}
-                    tabIndex={modeMenuOpen ? 0 : -1}
-                    aria-selected={override === option.id}
-                    className={`project-menu-item t2sw-mode-item${override === option.id ? ' is-selected' : ''}`}
-                    title={option.id === 'auto' ? t('workspace.mode.autoTip') : option.text}
-                    onClick={() => pickMode(option.id)}
-                  >
-                    <span className="project-menu-name">
-                      {option.text}
-                      {option.id === 'auto' && <span className="t2sw-auto-now">· {automaticModeText}</span>}
-                    </span>
-                    <span className="project-menu-check">{override === option.id ? <Check size={13} /> : null}</span>
-                  </button>
-                ))}
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-      {/* 旧档升级提示条(26.8px = 工作区行基准)。放在 `.t2sw-body` **之前**:body 的
-          `> * { flex: 1 }` 会把任何直接子元素撑成半屏。
-          TODO(CSS):`.t2sw-legacyhint` 的几何暂用内联样式 —— sidebar2.css 本轮归别的簇改,
-          解锁后把这几条搬进 CSS(类名已就位);颜色一律走 token,不写死色值。 */}
-      {showLegacyHint && (
-        <div
-          className="t2sw-legacyhint"
-          style={{ flex: '0 0 26.8px', height: '26.8px', display: 'flex', alignItems: 'center', gap: 6, padding: '0 7.5px', background: 'var(--overlay-light, rgba(127, 127, 127, 0.08))' }}
-        >
-          <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--text-muted)', fontSize: '11.5px', fontWeight: 400 }}>
-            {t('workspace.legacyHint')}
-          </span>
-          {/* 与档位菜单同一条路:pickMode 已经做了 setParams + scheduleWorkspaceSave。
-              两枚小按钮借同文件内的 `.t2sw-plug-mini`(本视图的小文字按钮)**只为 hover 底色** ——
-              它的 `margin-left:auto` 与 `:hover{color:var(--text)}` 都被这里的内联值压掉。 */}
-          <button
-            type="button"
-            className="t2sw-legacyhint-btn t2sw-plug-mini"
-            style={{ marginLeft: 0, color: 'var(--accent-ink)', fontSize: '11.5px' }}
-            onClick={() => pickMode('orbits')}
-          >
-            {t('workspace.legacyHint.switch')}
-          </button>
-          <button
-            type="button"
-            className="t2sw-legacyhint-x t2sw-plug-mini"
-            style={{ marginLeft: 0, color: 'var(--text-muted)', display: 'inline-flex', alignItems: 'center' }}
-            title={t('workspace.legacyHint.dismiss')}
-            aria-label={t('workspace.legacyHint.dismiss')}
-            onClick={() => setLegacyHintDismissed(true)}
-          >
-            <X size={12} aria-hidden />
-          </button>
-        </div>
-      )}
       <div className="t2sw-body">{body}</div>
     </div>
   )

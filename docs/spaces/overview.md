@@ -37,7 +37,9 @@ Space 里的内容以标签页打开,支持拖拽分屏、拖出独立窗口、�
 
 默认分割上一项；`splitFrom` 可以指定前面某一项的索引（从 0 开始）。例如视频、右分的文档、`split:"down", splitFrom:0` 的 Chat，可得到左上视频、左下 Chat、右侧文档通高。Main 内部分屏不会改变外区边界：左栏通高，右栏在整个 Main 右边，底部横跨 Main 与右栏。旧的交错布局在恢复时按分区归位。回归仪器：`desktop` 下的 `npm run check:splitregions`（默认使用 5273 dev renderer）与 `npm run check:bluebirdspace`。
 
-**English:** `splitFrom` selects an earlier Main item by zero-based index; omitted means the previous item. Shell panels surround the entire Main subtree, preserving its internal splits. The left panel spans the window height; the right panel sits beside all Main views; the bottom panel spans Main and right. Saved interleaved layouts are repaired on restore.
+固定 View:`layout.main` / `left` / `right` 的条目可以写 `"pinned": true`,表示该区内始终至少留一个这种视图 —— 它关不掉、拖不出本区;在它上面打开别的类型会另开标签,同类型照旧就地换。多开出来的同类标签仍可以关,只有区内最后一个受保护。底部面板不支持固定。用来保证「无论怎么切,最初的界面都找得回来」;升级到支持固定 View 的版本时,各 Space 的已存布局会重置一次。
+
+**English:** `splitFrom` selects an earlier Main item by zero-based index; omitted means the previous item. Shell panels surround the entire Main subtree, preserving its internal splits. The left panel spans the window height; the right panel sits beside all Main views; the bottom panel spans Main and right. Saved interleaved layouts are repaired on restore. Pinned views: an item in `layout.main`, `left` or `right` may set `"pinned": true`, meaning that panel always keeps at least one view of that type. It cannot be closed or dragged out of its panel; opening a different type on it opens a new tab, while the same type still navigates in place. Extra tabs of the same type can be closed; only the last one in the panel is protected. The bottom panel does not support pinning. Saved Space layouts are reset once when upgrading to a version with pinned views.
 
 ## 下一步
 

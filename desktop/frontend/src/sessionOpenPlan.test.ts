@@ -40,6 +40,33 @@ describe('planSessionOpen', () => {
     expect(planSessionOpen({ type: 'chat', followActive: true }, { sessionId: 'A', leaves: [primary, pinnedA], newTab: true }))
       .toEqual({ act: 'newtab' })
   })
+
+  // ── 聊天是本 Space 主区的固定 View(2026-10-03)──────────────────────────────────
+  it('站在笔记 / 文件标签上点会话 → 回固定的主聊天,不把手头这个标签变成聊天', () => {
+    const ctx = { sessionId: 'B', leaves: [primary], pinnedChat: { id: 'chat', follows: true } }
+    expect(planSessionOpen({ type: 'amadeus-editor' }, ctx)).toEqual({ act: 'activate', leafId: 'chat' })
+    expect(planSessionOpen({ type: 'wsfile' }, ctx)).toEqual({ act: 'activate', leafId: 'chat' })
+  })
+  it('空白标签与钉住别的会话的聊天照旧就地接手;焦点就在主聊天时仍是 follow', () => {
+    const ctx = { sessionId: 'B', leaves: [primary, pinnedA], pinnedChat: { id: 'chat', follows: true } }
+    expect(planSessionOpen({ type: 'launcher' }, ctx)).toEqual({ act: 'pin' })
+    expect(planSessionOpen({ type: 'home' }, ctx)).toEqual({ act: 'pin' })
+    expect(planSessionOpen({ type: 'chat', followActive: false }, ctx)).toEqual({ act: 'pin' })
+    expect(planSessionOpen({ type: 'chat', followActive: true }, ctx)).toEqual({ act: 'follow' })
+  })
+  it('已有钉住该会话的标签仍然优先(比回主聊天更具体)', () => {
+    expect(planSessionOpen({ type: 'amadeus-editor' }, { sessionId: 'A', leaves: [primary, pinnedA], pinnedChat: { id: 'chat', follows: true } }))
+      .toEqual({ act: 'activate', leafId: 'chat#1' })
+  })
+})
+
+describe('planSessionOpen:主聊天已被冻成钉住档', () => {
+  // Codex 评审复现:⌘ 点开过别的会话后主区只剩钉住会话的聊天(没有跟随档了),站在笔记上点会话 → 笔记被变成聊天。
+  it('站在内容标签上点会话 → 把现存那个聊天就地换成该会话(pin 到它),不覆盖手头的标签', () => {
+    const ctx = { sessionId: 'C', leaves: [pinnedA], pinnedChat: { id: 'chat#1', follows: false } }
+    expect(planSessionOpen({ type: 'amadeus-editor' }, ctx)).toEqual({ act: 'pin', leafId: 'chat#1' })
+    expect(planSessionOpen({ type: 'launcher' }, ctx)).toEqual({ act: 'pin' }) // 空白标签照旧就地接手
+  })
 })
 
 describe('planChatRestore', () => {

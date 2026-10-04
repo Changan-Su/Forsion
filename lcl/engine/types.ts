@@ -211,6 +211,10 @@ export interface SpaceDefinition {
    *  2026-09-11 —— 列表源不在场时宿主退回缺省档)。
    *  右栏不受此影响(恒为 'files' = 参考/附件栏)。硬规则见 frontend/src/views/workspaceMode.ts。 */
   autoWorkspaceMode?: 'orbits' | 'sessions' | 'files' | 'notes' | `plugin:${string}`
+  /** 固定 View:该区内始终至少留一个这种 View —— 关不掉、拖不出本区、不被别的类型顶掉(别的类型开新标签,
+   *  同类照旧就地换),进入 Space 时缺了就补。params = 补回时的重建参数。判定见 pinnedViews.ts。
+   *  只管主区与左右栏;固定不等于常显,侧栏照常可以收起。 */
+  pinned?: import('./pinnedViews').PinnedViews
 }
 
 /** 插件契约 —— Amadeus PluginContext 的超集(加了 registerView / registerRibbonIcon)。 */

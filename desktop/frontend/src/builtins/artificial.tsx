@@ -47,6 +47,7 @@ export const artificialSpace: SpaceDefinition = {
   name: () => app().tr('space.artificial'),
   icon: Blocks,
   sidebarDefaults: ARTIFICIAL_SIDE_VIEWS,
+  pinned: { main: [{ type: 'artificial', params: {} }] },
   build() {
     ws().setSidebarDefaults(ARTIFICIAL_SIDE_VIEWS)
     ws().openView('artificial', {}, 'main')

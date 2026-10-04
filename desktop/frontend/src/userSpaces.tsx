@@ -14,6 +14,7 @@ import {
   registerSpace, unregisterSpace, addRibbonIcon, removeRibbonIcon, setActiveSpace, useSpaceStore,
   useWorkspace, deleteNamedLayout, clearLayout, getActiveSpace, getView, label, spaceLayoutName,
   setActiveSpaceCold, BOOT_ACTIVE_SPACE_ID, UI_MODE,
+  spaceLayoutsWereReset,
 } from '@lcl/engine'
 import type { Leaf, SpaceDefinition, PersistedPanel } from '@lcl/engine'
 import { SpaceButton } from './components/SpaceButton'
@@ -103,6 +104,8 @@ function specToDefinition(spec: SpaceSpec): SpaceDefinition {
     name: specName(spec),
     icon: SPACE_ICONS[spec.icon ?? ''] ?? Boxes,
     sidebarDefaults: sides,
+    // 配方条目上的 pinned:true → 固定 View(引擎按 Space 声明现判,不进布局存档)
+    pinned: { main: toPanels(spec.layout.main.filter((p) => p.pinned)), left: toPanels(spec.layout.left.filter((p) => p.pinned)), right: toPanels(spec.layout.right.filter((p) => p.pinned)) },
     bottomSpan: spec.layout.bottomSpan,
     build() {
       ws().setSidebarDefaults(sides)
@@ -205,12 +208,16 @@ export function settleAsyncStartupSpace(): void {
   const state = useSpaceStore.getState()
   if (!state.spaces.some((space) => space.id === want)) return
 
-  const migrated = pendingRecipeLayouts.delete(want)
+  // 配方升了版本 → 重建。升级那次的一次性重置(spaces.tsx registerSpaces)同理:当前布局键已清,onReady 摆出来的是
+  // **回落 Space** 的默认布局,不是本 Space 的现场 —— 只换活动 id 的话界面标着本 Space、内容却是回落 Space 的,
+  // 切走时还会把它存进 space:<本 Space>(Codex 评审)。
+  const migrated = pendingRecipeLayouts.delete(want) || (spaceLayoutsWereReset() && state.activeSpaceId !== want)
   const configure = (): void => {
     const space = getActiveSpace()
     if (!space) return
     ws().setSidebarDefaults(space.sidebarDefaults)
     ws().setSideProfile(space.id, space.resizableSides ?? {}, space.sideDefaultScale, space.bottomSpan)
+    ws().setPinned(space.pinned)
   }
 
   if (migrated) {

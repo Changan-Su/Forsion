@@ -21,7 +21,7 @@ import { ExtendViewHost } from './ExtendViewHost'
 import { presentInlineExtension, type ExtendViewController } from './extendView'
 import { NativeExtendView } from './nativeExtendView'
 import { allViews, getView, subscribeViews } from './viewRegistry'
-import { useWorkspace, tryRestoreLayout, scheduleWorkspaceSave, activeMainPanel, captureSideWidths, presentDockedExtension, markSelfTitled } from './dockviewStore'
+import { useWorkspace, tryRestoreLayout, scheduleWorkspaceSave, activeMainPanel, captureSideWidths, presentDockedExtension, markSelfTitled, dropAllowed } from './dockviewStore'
 import { useNav } from './navStore'
 import { useCommandStore, commandHotkeyText } from './commandRegistry'
 import { useEngineI18n } from './i18nSeam'
@@ -62,7 +62,7 @@ function leafFromProps(props: IDockviewPanelProps): Leaf {
     // (编辑器认领笔记、阅读器换 PDF)走的是这里;此前只 updateParameters,mainTabs[].filePath 要等下一次
     // 结构事件才跟上 → 侧栏对话默认引用挂不上 / 挂旧的那篇(09-22 check:chatside 6/7)。
     setParams: (p) => useWorkspace.getState().leafById(props.api.id)?.setParams(p),
-    close: () => props.api.close(),
+    close: () => { if (!useWorkspace.getState().isPinnedLeaf(props.api.id)) props.api.close() }, // 固定 View(区内最后一个)视图自己也关不掉
   }
 }
 
@@ -148,7 +148,8 @@ const WbTab: React.FC<IDockviewPanelHeaderProps> = ({ api, params }) => {
   const def = getView(type)
   const Icon = type === '__extend' ? AppWindow : def?.icon
   const TabIcon = def?.TabIcon // 有就压过静态 icon(如笔记 tab 显示用户设的 emoji);回退归它自己
-  const closable = def?.closable !== false
+  // 固定 View(区内最后一个)同样不可关:× 与右键菜单(关闭 / 移到新窗口)一并消失。订阅 store:多开一个同类标签后它又能关了。
+  const closable = useWorkspace((s) => !s.isPinnedLeaf(api.id)) && def?.closable !== false
   const loc = (params as { __loc?: string } | undefined)?.__loc
   const iconOnly = loc === 'left' || loc === 'right'
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null)
@@ -453,10 +454,15 @@ export const WorkspaceHost: React.FC<{
   //  提交走 moveTo(不受 app-region 影响);dragover/drop 命中 tab 栏需 data-dv-dragging 抑制窗拖区(onTabDragStart 已打)。
   //  收尾只认 dragend(HTML5 收尾信号:drop/取消/ESC 都 fire),drop 里也兜底清一次(源节点被 moveTo 移走时 dragend 可能不达 window)。
   useEffect(() => {
-    const onDragOver = (e: DragEvent): void => {
-      if (!draggingId && !draggingOpen) return // 搬面板 或 落点即开,两者共用提示
+    // 落点:提示与提交共用。搬的是固定 View 且落点在别的区 → 当作没有落点(不画提示、松手弹回)。
+    const dropTargetAt = (e: DragEvent): DropTarget | null => {
       const api = useWorkspace.getState().api
       const t = api ? computeDropTarget(api, e.clientX, e.clientY) : null
+      return t && api && draggingId && !dropAllowed(api, draggingId, t) ? null : t
+    }
+    const onDragOver = (e: DragEvent): void => {
+      if (!draggingId && !draggingOpen) return // 搬面板 或 落点即开,两者共用提示
+      const t = dropTargetAt(e)
       if (!t) { hideIndicator(); if (e.dataTransfer) e.dataTransfer.dropEffect = 'none'; return }
       e.preventDefault() // 有效落点才放行 drop
       if (e.dataTransfer) e.dataTransfer.dropEffect = draggingOpen ? 'copy' : 'move'
@@ -466,8 +472,7 @@ export const WorkspaceHost: React.FC<{
       const id = draggingId, open = draggingOpen
       if (!id && !open) return
       e.preventDefault()
-      const api = useWorkspace.getState().api
-      const t = api ? computeDropTarget(api, e.clientX, e.clientY) : null
+      const t = dropTargetAt(e)
       if (t) {
         if (open) openViewAtTarget(t, open)       // 落点即开(新视图,不搬面板)
         else if (id) useWorkspace.getState().dropView(id, t)
@@ -488,7 +493,7 @@ export const WorkspaceHost: React.FC<{
       const id = draggingId, view = draggingView
       const d = getDetachApi()
       const outside = e.clientX < 0 || e.clientY < 0 || e.clientX > window.innerWidth || e.clientY > window.innerHeight
-      if (id && view && d?.drop && outside) {
+      if (id && view && d?.drop && outside && !useWorkspace.getState().isPinnedLeaf(id)) { // 固定 View 不撕出窗口
         void d.drop(e.screenX, e.screenY, view).then((routed) => { if (routed) useWorkspace.getState().closeLeaf(id) })
       }
       clearDragState()

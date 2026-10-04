@@ -5,7 +5,7 @@ import { hasNativeFeature, amadeusAvailable, inboxAvailable } from './features/r
  *  Tangu Space = 会话/对话/主体详情/文件/目录;Agents Space = 智能体配置。Amadeus Space 见 Milestone 2。 */
 import { Bot, Inbox, NotebookText, Code2, Workflow, Rocket, Users } from 'lucide-react'
 import { INBOX_WORKSPACE_MODE } from './views/workspaceMode'
-import { registerSpace, addRibbonIcon, useSpaceStore, useWorkspace, deleteNamedLayout, clearLayout } from '@lcl/engine'
+import { registerSpace, addRibbonIcon, useSpaceStore, useWorkspace, deleteNamedLayout, clearLayout, resetSpaceLayouts } from '@lcl/engine'
 import type { SpaceDefinition, PersistedPanel, SidebarDefaults } from '@lcl/engine'
 import { useApp } from './stores/appStore'
 import { PRODUCT } from './product'
@@ -21,6 +21,7 @@ import { homepageAvailable, homepageSpace } from './builtins/homepage'
 import { imageStudioAvailable, imageStudioSpace } from './builtins/imageStudio'
 import { artificialAvailable, artificialSpace } from './builtins/artificial'
 import { homeSlotSpaceId, installHomeSlot } from './homeSlot'
+import { windowKind } from './windowKind'
 
 const ws = () => useWorkspace.getState()
 const app = () => useApp.getState()
@@ -51,12 +52,18 @@ export function resolveStartupTarget(lastExit: string): string {
   return useSpaceStore.getState().spaces.some((s) => s.id === pref) ? pref : PRODUCT.defaultSpace
 }
 
-/** Tangu Space 的侧栏默认:左=工作区(自动→会话);右=Tangu 详情/工作区(自动→文件)/大纲 同组 tab。 */
+/** 工作区视图的档位由 Space 写死在条目上(2026-10-03 锁档):不再跟着主区活动标签换档,也没有切档菜单。
+ *  没带 mode 的条目(老的插件配方)才回落 workspaceMode.autoWorkspaceMode 的旧规则。 */
+const WS_FILES: PersistedPanel = { type: 'workspace', params: { mode: 'files' } }
+const TANGU_MAIN: PersistedPanel = { type: 'chat', params: { followActive: true, reuseKey: 'primary' } }
+const TANGU_LEFT: PersistedPanel = { type: 'workspace', params: { mode: 'orbits' } }
+
+/** Tangu Space 的侧栏默认:左=工作区(会话);右=Tangu 详情/工作区(文件)/大纲 同组 tab。 */
 const TANGU_SIDE_VIEWS: SidebarDefaults = {
-  left: [{ type: 'workspace', params: {} }],
+  left: [TANGU_LEFT],
   right: [
     { type: 'tangu-details', params: {} },
-    { type: 'workspace', params: {} },
+    WS_FILES,
     { type: 'outline', params: {} },
   ],
   // 底部面板预置终端(默认折叠,见 build())。终端被禁用 / 非桌面宿主时 getView('terminal') 为空,
@@ -73,11 +80,13 @@ const tanguSpace: SpaceDefinition = {
   // workspaceSource 声明位管(features/tangu.tsx)。
   autoWorkspaceMode: 'orbits',
   sidebarDefaults: TANGU_SIDE_VIEWS,
-  /** 对话(主)→ 工作区(左,自动=会话)→ 右栏(主体详情 + 文件/大纲,默认折叠)。 */
+  // 固定:主区聊天、左栏会话、右栏 Tangu 详情(右栏的文件 / 大纲是辅助,不固定)。
+  pinned: { main: [TANGU_MAIN], left: [TANGU_LEFT], right: [{ type: 'tangu-details', params: {} }] },
+  /** 对话(主)→ 工作区(左,会话)→ 右栏(主体详情 + 文件/大纲,默认折叠)。 */
   build() {
     ws().setSidebarDefaults(TANGU_SIDE_VIEWS)
-    ws().openView('chat', { followActive: true, reuseKey: 'primary' }, 'main')
-    ws().openView('workspace', {}, 'left')
+    ws().openView(TANGU_MAIN.type, TANGU_MAIN.params, 'main')
+    ws().openView(TANGU_LEFT.type, TANGU_LEFT.params, 'left')
     // 右栏默认折叠 —— 内容入 stash,toggle 可展(仅作用于全新布局;已存布局尊重用户,见 spaceRegistry.applyNamed 路径)。
     ws().initializeSidebar('right', false)
     // 底部面板同样默认折叠,但 stash 里已放好终端 → 用户点开就是终端,而不是空停靠区。
@@ -88,6 +97,7 @@ const tanguSpace: SpaceDefinition = {
 const agentsSpace: SpaceDefinition = {
   id: 'agents', name: () => app().tr('agentProfile.space'), icon: Users,
   sidebarDefaults: { left: [{ type: 'agents-roster', params: {} }], right: [], bottom: [] },
+  pinned: { main: [{ type: 'agent-profile', params: {} }], left: [{ type: 'agents-roster', params: {} }] },
   build() {
     ws().setSidebarDefaults({ left: [{ type: 'agents-roster', params: {} }], right: [], bottom: [] })
     ws().openView('agent-profile', {}, 'main')
@@ -101,9 +111,10 @@ const agentsSpace: SpaceDefinition = {
  *  老布局由 lcl 的 RETIRED_VIEW_MAP 迁成 workspace);右=工作区(文件,默认收起,toggle 可展)。主区 = 阅读面板。
  *  不定义 newPage(曾指向 singleton 的 inbox-reader,使 ＋ 键永远只是重激活已有面板 = 死键):
  *  ＋ 与「关掉最后一个主区 view」统一落 launcher,与 Tangu/Amadeus 一致 —— 主区是启动器时左栏靠 autoWorkspaceMode 仍是收件箱。 */
+const INBOX_LEFT: PersistedPanel = { type: 'workspace', params: { mode: INBOX_WORKSPACE_MODE } }
 const INBOX_SIDE_VIEWS: Record<'left' | 'right', PersistedPanel[]> = {
-  left: [{ type: 'workspace', params: {} }],
-  right: [{ type: 'workspace', params: {} }],
+  left: [INBOX_LEFT],
+  right: [WS_FILES],
 }
 
 const inboxSpace: SpaceDefinition = {
@@ -111,6 +122,7 @@ const inboxSpace: SpaceDefinition = {
   name: () => app().tr('space.inbox'),
   icon: Inbox,
   sidebarDefaults: INBOX_SIDE_VIEWS,
+  pinned: { main: [{ type: 'inbox-reader', params: {} }], left: [INBOX_LEFT] },
   autoWorkspaceMode: INBOX_WORKSPACE_MODE,
   // 消息列表住在左栏:可拖宽 + 起手比黄金分割宽 30%(标题不再截到 8 个字),主区照样留足阅读宽度(U-10)。
   resizableSides: { left: true },
@@ -118,7 +130,7 @@ const inboxSpace: SpaceDefinition = {
   build() {
     ws().setSidebarDefaults(INBOX_SIDE_VIEWS)
     ws().openView('inbox-reader', {}, 'main')
-    ws().openView('workspace', {}, 'left')
+    ws().openView(INBOX_LEFT.type, INBOX_LEFT.params, 'left')
     ws().initializeSidebar('right', false)
   },
 }
@@ -129,9 +141,10 @@ const inboxSpace: SpaceDefinition = {
  *  `chat-panel` 视图只在含 tangu 的产品档案里注册(bootstrapEngine),Amadeus 单品档案没有它 → 那儿不排进来,
  *  否则侧栏会多出一个渲染不出内容的空 tab。 */
 const AMADEUS_HAS_CHAT = hasNativeFeature('tangu')
+const AMADEUS_LEFT: PersistedPanel = { type: 'workspace', params: { mode: 'notes' } }
 const AMADEUS_SIDE_VIEWS: Record<'left' | 'right', PersistedPanel[]> = {
   left: [
-    { type: 'workspace', params: {} },
+    AMADEUS_LEFT,
     { type: 'amadeus-search', params: {} },
     { type: 'amadeus-tags', params: {} },
   ],
@@ -149,6 +162,9 @@ const amadeusSpace: SpaceDefinition = {
   name: () => app().tr('space.amadeus'),
   icon: NotebookText,
   sidebarDefaults: AMADEUS_SIDE_VIEWS,
+  // 固定:只固定左栏笔记树。主区编辑器**刻意不固定** —— 笔记 / PDF / 多维表 / 白板是不同的视图类型,
+  // 固定编辑器之后点一个 PDF 就会另开标签,「点文件就地换」的手感没了;而笔记树在,点任何一篇都回得到编辑器。
+  pinned: { left: [AMADEUS_LEFT] },
   // 左栏(笔记/搜索/标签)= 可自由拖宽 + 记住宽度(否则每次钉回黄金分割默认,折叠再开也丢用户调节的宽度)。
   resizableSides: { left: true },
   // 主区没有硬规则时(启动器/搜索/图谱/日历…)左栏回笔记树,而不是全局默认的会话。
@@ -160,7 +176,7 @@ const amadeusSpace: SpaceDefinition = {
   build() {
     ws().setSidebarDefaults(AMADEUS_SIDE_VIEWS)
     ws().openView('amadeus-editor', {}, 'main')
-    const pagesLeaf = ws().openView('workspace', {}, 'left')
+    const pagesLeaf = ws().openView(AMADEUS_LEFT.type, AMADEUS_LEFT.params, 'left')
     ws().openView('amadeus-search', {}, 'left')
     ws().openView('amadeus-tags', {}, 'left')
     // 右栏默认折叠 —— 内容入 stash,toggle 可展(仅作用于全新布局;已存布局尊重用户,见 spaceRegistry.applyNamed 路径)。
@@ -174,7 +190,7 @@ const amadeusSpace: SpaceDefinition = {
  *  新会话默认落 Coding Agent(不改全局 defaultSlug,只设新会话草稿)。 */
 const CODING_SIDE_VIEWS: SidebarDefaults = {
   left: [{ type: 'coding-navigation', params: {} }],
-  right: [{ type: 'workspace', params: {} }],
+  right: [WS_FILES],
   bottom: [{ type: 'terminal', params: {} }],
 }
 
@@ -183,7 +199,9 @@ const codingSpace: SpaceDefinition = {
   name: () => app().tr('space.coding'),
   icon: Code2,
   sidebarDefaults: CODING_SIDE_VIEWS,
-  // 左栏 = 项目导航或对话:可自由拖宽 + 记住宽度。
+  // 固定:主区工作台 + 左栏项目导航。进项目时对话作为左栏的第二个标签开出来(CodeStudioView),导航一直在。
+  pinned: { main: [{ type: 'code-studio', params: {} }], left: [{ type: 'coding-navigation', params: {} }] },
+  // 左栏 = 项目导航 + 对话:可自由拖宽 + 记住宽度。
   resizableSides: { left: true },
   // 导航比旧对话更精简,起手用标准侧栏宽度;手动调整仍照常记住。
   sideDefaultScale: { left: 1 },
@@ -198,8 +216,9 @@ const codingSpace: SpaceDefinition = {
 }
 
 /** Automation Space:统一工作区列表 + 主区流程；配置与运行记录由主 View 按需打开 Extend View。 */
+const AUTOMATION_LEFT: PersistedPanel = { type: 'workspace', params: { mode: AUTOMATION_WORKSPACE_MODE } }
 const AUTOMATION_SIDE_VIEWS: Record<'left' | 'right', PersistedPanel[]> = {
-  left: [{ type: 'workspace', params: {} }],
+  left: [AUTOMATION_LEFT],
   right: [],
 }
 
@@ -209,11 +228,12 @@ const automationSpace: SpaceDefinition = {
   name: () => app().tr('space.automation'),
   icon: Workflow,
   sidebarDefaults: AUTOMATION_SIDE_VIEWS,
+  pinned: { main: [{ type: 'automation-detail', params: {} }], left: [AUTOMATION_LEFT] },
   resizableSides: { left: true, right: true },
   build() {
     ws().setSidebarDefaults(AUTOMATION_SIDE_VIEWS)
     ws().openView('automation-detail', {}, 'main')
-    ws().openView('workspace', {}, 'left')
+    ws().openView(AUTOMATION_LEFT.type, AUTOMATION_LEFT.params, 'left')
   },
 }
 
@@ -224,6 +244,7 @@ const publicSpace: SpaceDefinition = {
   name: () => app().tr('space.public'),
   icon: Rocket,
   sidebarDefaults: PUBLIC_SIDE_VIEWS,
+  pinned: { main: [{ type: 'public-view', params: {} }] },
   build() {
     ws().setSidebarDefaults(PUBLIC_SIDE_VIEWS)
     ws().openView('public-view', {}, 'main')
@@ -278,6 +299,15 @@ export function registerSpaces(): void {
     useSpaceStore.setState({ activeSpaceId: fallback })
     try { localStorage.setItem('forsion_tangu_active_space', fallback) } catch { /* ignore */ }
   }
+  // 固定 View + 工作区锁档(2026-10-03,用户拍板「升级后重置每个 Space 的默认布局」):此前存下的布局里,
+  // 固定项可能早被关掉 / 顶掉 / 拖走,工作区条目也没带档位 → 一次性丢掉全部 Space 的已存布局,各自按新默认重建。
+  // 只在主窗做:卫星窗的 clearLayout 清的是它自己那把键,却会把这面旗子先插上,主窗的当前布局就漏掉了。
+  try {
+    if (windowKind() === 'main' && localStorage.getItem('forsion_pinned_layout_v1') !== '1') {
+      resetSpaceLayouts()
+      localStorage.setItem('forsion_pinned_layout_v1', '1')
+    }
+  } catch { /* ignore */ }
   // 右栏默认折叠(2026-07-18):旧 Amadeus/Tangu 命名布局是「右栏展开」时存的,会经 applyNamed/tryRestoreLayout
   // 恢复、绕过新的 build()(其默认折叠右栏)→ 老用户永远看不到折叠。一次性清掉这两个空间的旧布局
   // (+ 若当前正停留其一则清当前布局),下次进入按新默认重建(右栏折叠)。代价=这两个空间的布局微调丢一次。
