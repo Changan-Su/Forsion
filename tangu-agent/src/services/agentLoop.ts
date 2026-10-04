@@ -52,7 +52,7 @@ import {
 import { compactionSettingsFor, type CompactionSettings } from './compactionSettings.js';
 import { isContextOverflowError } from './contextWindowStore.js';
 import { getAgent, isValidSlug, DEFAULT_MAX_ITERATIONS, libDirOf, type NormalAgentDef } from '../agents/agentRegistry.js';
-import { loadHarness, renderHarnessSection, isRefineInvocation, REFINE_DIRECTIVE, consumeHarnessCandidates, renderPendingHarnessCandidates } from '../agents/harnessStore.js';
+import { loadHarness, shelvedOf, renderHarnessSection, isRefineInvocation, REFINE_DIRECTIVE, consumeHarnessCandidates, renderPendingHarnessCandidates } from '../agents/harnessStore.js';
 import { loadSchedule, entriesOf, upcomingScheduleLines } from './agentSchedule.js';
 import { agentIdentitySection, applyAgentActivation } from './agentActivation.js';
 import { clampApprovalMode, clearRunRemoteTaint, effectiveRemote, remoteApprovalCap, remoteOf, REMOTE_WRITABLE_CONFIG_KEYS } from './remoteOrigin.js';
@@ -1301,8 +1301,14 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       { apiModelId: replayModelKey, protocol: stepItemBinding.protocol },
     );
 
+    // 工作笔记(HARNESS.md)在这里读一次:技能目录、工具面(agent 自己收起的装备,kind 'equip')与下面 2b) 的笔记段共用这一份。
+    // 笔记段不注入的 run(云端无 agent 目录 / coding 预设下的默认 agent / 临时成员)里收起也不生效 ——
+    // 模型看不见「我收起了什么」的时候不该少东西。读失败按空处理,不阻断 run。
+    const notesApply = execMode === 'host' && !inlineMemberDef && !(ps.persona === 'suppress' && activeAgentSlug === DEFAULT_AGENT_SLUG);
+    const harnessEntries = notesApply ? await loadHarness(activeAgentSlug).catch(() => []) : [];
+    const shelved = shelvedOf(harnessEntries);
     // 启用技能的装载（渐进式披露:目录进 prompt、全文按需 use_skill）——见 services/skillLoadout.ts。
-    const skillLoadout = await loadSkillLoadout(userId, appId, agentConfig);
+    const skillLoadout = await loadSkillLoadout(userId, appId, agentConfig, shelved.skills);
     const enabledSkillIds = skillLoadout.enabledSkillIds;
 
     // C-4:易变上下文(记忆 §2/§3 + sketch 本轮信号)的落点。tail=对话尾部 user 通道(缺省);
@@ -1363,12 +1369,9 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     //     契约之前:属每-agent 身份层,只在 refine 轮低频变化 → 放稳定区护前缀缓存。与 6) 记忆放
     //     易变区尾部是刻意不同(记忆每几轮就重写),别「统一」。仅 host(云端无 agent 目录);
     //     随人格一起被 coding 预设抑制。
-    if (execMode === 'host' && !suppressCompanionPersona && !inlineMemberDef) {
-      try {
-        const harnessBlock = renderHarnessSection(await loadHarness(activeAgentSlug));
-        if (harnessBlock) systemParts.push(harnessBlock);
-      } catch { /* 读失败不阻断 run */ }
-    }
+    //     条目在本 run 开头已读好(harnessEntries,见 loadSkillLoadout 上方)。
+    const harnessBlock = renderHarnessSection(harnessEntries);
+    if (harnessBlock) systemParts.push(harnessBlock);
     ctxMark('harness');
     // HUMAN is collaboration context, including projectless Chat and Coding. It never
     // changes tool permissions. All documents are read anew at each user turn.
@@ -1548,6 +1551,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       automationOrigin: typeof agentConfig.automationOrigin === 'string' ? agentConfig.automationOrigin : undefined,
       toolsMode,
       toolsList,
+      shelvedTools: shelved.tools.size ? shelved.tools : undefined, // agent 自己收起的工具 → 走按需目录(isDeferredIn)
       subAgentDepth: agentConfig.delegatedFrom ? 1 : undefined,
       subAgentGrants: agentConfig.delegatedFrom ? new Set<string>(agentConfig.subAgentGrants || []) : undefined,
       subAgentDelegator: agentConfig.delegatedBy,

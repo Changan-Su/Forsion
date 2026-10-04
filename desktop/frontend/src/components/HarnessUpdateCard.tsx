@@ -25,7 +25,8 @@ registerMessages({
 /** Agent 自己改了工作笔记(manage_harness 立即生效、不逐笔审批)→ 这条回复下出一张卡:改了什么、依据、可撤销。
  *  与协作说明的更新卡同一副样式(humanCollaboration.css 的 .human-update-card)。 */
 export function HarnessUpdateCard({ changes, sessionId }: { changes: HarnessChange[]; sessionId: string }) {
-  const { t } = useI18n()
+  const { t, locale } = useI18n()
+  const listSep = locale === 'zh' ? '、' : ', '
   const engine = targetForSession(sessionId)
   const slugs = [...new Set(changes.map((c) => c.agent))].join(',')
   const revs = changes.map((c) => c.rev).join(',')
@@ -60,6 +61,8 @@ export function HarnessUpdateCard({ changes, sessionId }: { changes: HarnessChan
         <div className="human-scope">{names.find((a) => a.slug === change.agent)?.name || change.agent} · {t(`harness.act.${change.action}`)} · <span className="human-applied">{t(state === 'undone' ? 'harness.undone' : 'harness.applied')}</span></div>
         <p><strong>{change.title}</strong></p>
         <p>{change.body}</p>
+        {!!change.tools?.length && <p className="human-scope">{t('settings.agents.harnessShelvedTools', { names: change.tools.join(listSep) })}</p>}
+        {!!change.skills?.length && <p className="human-scope">{t('settings.agents.harnessShelvedSkills', { names: change.skills.join(listSep) })}</p>}
         {change.evidence && <details><summary>{t('harness.evidence')}</summary><p>{change.evidence}</p></details>}
         <div className="human-actions">
           <button type="button" className="profile-text-action" onClick={() => showDetails({ kind: 'agent', slug: change.agent, evolution: Date.now() })}>{t('harness.view')}</button>

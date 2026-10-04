@@ -30,10 +30,13 @@ export interface SkillLoadout {
   requested: Array<{ id: string; name: string; description: string }>;
 }
 
+/** shelved = 本 agent 自己收起的技能 id(HARNESS.md 的 equip 条目):**只从目录里摘掉那一行**,
+ *  enabledSkillIds 不动 —— use_skill 按 id 照常放行(笔记段里列着它收起了哪些)。/skill 点名的不受影响。 */
 export async function loadSkillLoadout(
   userId: string,
   appId: string,
   agentConfig: any,
+  shelved?: ReadonlySet<string>,
 ): Promise<SkillLoadout> {
   // chat 预设:用户可扩展技能体系整体不在(方案 D23)——目录段不注、use_skill 不暴露(工具面由 core/presetTable 硬闸拒)。
   if (!presetOf(agentConfig?.preset).skills) return { enabledSkillIds: [], sections: [], requested: [] };
@@ -90,6 +93,7 @@ export async function loadSkillLoadout(
     }
   }
 
+  if (shelved?.size) deferredSkills = deferredSkills.filter((d) => !shelved.has(d.id));
   const sections: string[] = [];
   if (deferredSkills.length) {
     const lines = deferredSkills
@@ -113,14 +117,15 @@ export async function loadSkillLoadout(
   // 用户为该 agent **显式**配过装备(含显式卸空)= 「就这些」,借用池也不塞——委派路径的「卸空全部技能」同样要成立。
   if (!explicit && agentConfig.execMode !== 'sandbox' && hostExecEnabled()) {
     const shared = await listSharedAgentSkills(currentDisplayAgentSlug() || null).catch(() => []);
-    if (shared.length) {
-      const lines = shared.map((s) => `- ${s.name} (id: \`${s.id}\`, from ${s.ownerName})${s.description ? ` — ${s.description}` : ''}`).join('\n');
+    const listed = shelved?.size ? shared.filter((s) => !shelved.has(s.id)) : shared;
+    enabledSkillIds = [...enabledSkillIds, ...shared.map((s) => s.id)];
+    if (listed.length) {
+      const lines = listed.map((s) => `- ${s.name} (id: \`${s.id}\`, from ${s.ownerName})${s.description ? ` — ${s.description}` : ''}`).join('\n');
       sections.push(
         '## Skills shared by other agents (load on demand)\n' +
           'These belong to other agents and were written for their environment. When a task matches one, borrow it: **call `use_skill` with its id** to get the full instructions, then follow its stated scope. Leave them alone for unrelated tasks.\n\n' +
           lines,
       );
-      enabledSkillIds = [...enabledSkillIds, ...shared.map((s) => s.id)];
     }
   }
   return { enabledSkillIds, sections, requested };

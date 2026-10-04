@@ -135,6 +135,7 @@ const AUTH = resolve(opt('auth', process.env.TANGU_LIVE_AUTH || join(homedir(), 
 const KEYS = ['realtime', 'personas', 'rename', 'selfschedule', 'selfmodel', 'chat', 'tool', 'remember', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'parked', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human', 'emoji', 'visualize', 'visualfigures', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'control', 'phone', 'unattendedask', 'plugin', 'skillpick', 'settingsnav'];
 KEYS.push('pageinstructions');
 KEYS.push('harnessopen');
+KEYS.push('equip');
 // autocompact 要把模型窗口钉小(--window)才灌得满;窗口小了别的场景会被连累(系统提示+工具头就 13k+),所以它只能单独跑。
 const WINDOW = Number(opt('window', process.env.TANGU_LIVE_WINDOW || 0)) || 0;
 // P1-K9 · C3:--remote-cap <档> = 起引擎前经 K4 的新写入口写 remote.maxApprovalMode(缺省不写 = 引擎按 auto-edit)
@@ -156,6 +157,7 @@ OPT_IN.add('emoji'); // Three real-model rounds; run explicitly when session ico
 OPT_IN.add('plugin'); // 隔离 home 里放夹具插件 —— 只在显式跑它时放,别让多出来的工具改了别的场景的工具表。
 OPT_IN.add('pageinstructions'); // Scoped document maintenance; deliberately excluded from broad default runs.
 OPT_IN.add('harnessopen'); // 四个 run + 一条探针;只在动 manage_harness / 工作笔记注入时才有信息量。
+OPT_IN.add('equip'); // 三个 run;只在动装备层(HARNESS equip → isDeferredIn / 技能目录)时才有信息量。
 const NEEDS = { dream: ['historian'], recall: ['historian', 'dream'] }; // 记忆链三连有先后依赖;其余场景自包含
 const ONLY = new Set(opt('only', process.env.TANGU_LIVE_ONLY || KEYS.filter((k) => !OPT_IN.has(k)).join(',')).split(',').map((s) => s.trim()).filter(Boolean));
 const TTFT_ROUNDS = Number(opt('ttft-rounds', process.env.TANGU_LIVE_TTFT_ROUNDS || 5));
@@ -3029,6 +3031,41 @@ Then reply with only the command output.`,
       `④ 撤销后新会话 ${removed ? '不再带' : `还带着${gone.error ? `(${gone.error})` : ''}`}`,
       `探针(不设门):自然纠正 → ${stores.join('+') || '都没记'}${probe.approvals ? `;审批 ${probe.approvals}` : ''}`,
     ].join(';'), output: `【直写】${ev.content}\n\n【探针】${probe.content}`, toolCalls: [...ev.toolCalls, '|', ...probe.toolCalls], tokens: [ev, fresh, gone, probe].reduce((n, e) => n + (tokensOf(e) || 0), 0) };
+  });
+  // ── 装备层(10-04):agent 自己把少用的工具收起来 —— 只动上下文体量,不动能力 ──
+  //  ① 用户点名「把这两个工具收起来」→ manage_harness kind:"equip"(零审批,回执带 tools);
+  //  ② 同 agent 新会话:Additional Tools 目录里出现它们(= 定义已不在 defs)、笔记段写着收起了什么;
+  //     让它查时间 → 仍调得到 get_datetime 且有结果(收起 ≠ 删能力;先 load_tools 还是按名直调都算,原样记录);
+  //  ③ 撤销(rollback + expectRev)→ 再开新会话:目录里不再有它们。
+  await scenario('equip', 'equip 装备层:自己收起工具 → 走按需目录仍可用 → 撤销后回来', async () => {
+    const slug = 'live-equip';
+    // 两个都得是台架引擎里**真的常驻**的工具:带门禁的(如 transcribe_audio 要桌面语音桥)在隔离 home 里根本不在工具表,
+    // 工具会如实拒掉「不在你的工具表里」,模型改成只收一个 —— 那是对的行为,但本场景就测不到「两个都收」了。
+    const TOOLS = ['get_datetime', 'todo_read'];
+    await api('/agent/agents', { method: 'POST', body: JSON.stringify({ slug, name: 'Packer', systemPrompt: "You are Packer, a careful assistant. Reply in the user's language." }) });
+    const cfg = { ...AGENT_CONFIG, agentSlug: slug, approvalMode: 'auto-edit', debugSystemPrompt: true, thinkingLevel: 'low' };
+    const mk = async (title) => (await api('/agent/sessions', { method: 'POST', body: JSON.stringify({ title, model_id: MODEL, agent_config: cfg }) })).session.id;
+    const catalogOf = (ev) => String(ev.systemPrompt || '').split('## Additional Tools')[1]?.split('\n## ')[0] || '';
+    const listed = (ev) => TOOLS.filter((t) => catalogOf(ev).includes(`- ${t}:`));
+    const ev = await run(await mk('Equip shelve'), `我看了最近一个月的用量:${TOOLS.join(' 和 ')} 这两个工具你一次都没调过。把它们从常驻里收起来省点上下文,记进你的工作笔记(装备)。`, 240_000, cfg);
+    const change = ev.toolResults.flatMap((r) => { try { const v = JSON.parse(r.full); return v.kind === 'harness_update' && v.change?.kind === 'equip' ? [v.change] : []; } catch { return []; } }).at(-1);
+    const shelvedBoth = !!change && TOOLS.every((t) => (change.tools || []).includes(t));
+    if (ev.error || !ev.done || !shelvedBoth || ev.approvals || listed(ev).length) {
+      return { ok: false, detail: `① ${ev.error || JSON.stringify({ tools: ev.toolCalls, shelved: change?.tools || null, approvals: ev.approvals, alreadyDeferred: listed(ev), results: ev.toolResults.map((r) => r.result.slice(0, 200)) })}`, output: ev.content, toolCalls: ev.toolCalls };
+    }
+    const use = await run(await mk('Equip use'), '现在几点了?必须用工具查,不要猜。', 180_000, cfg);
+    const inCatalog = listed(use).length === TOOLS.length;
+    const noted = !!use.systemPrompt?.includes('Shelved equipment') && TOOLS.every((t) => use.systemPrompt.split('Shelved equipment')[1].includes(t));
+    const reached = !use.error && use.toolCalls.includes('get_datetime') && use.toolResults.some((r) => r.name === 'get_datetime' && !r.isError);
+    await api(`/agent/agents/${slug}/harness/rollback`, { method: 'POST', body: JSON.stringify({ id: change.entryId, expectRev: change.rev }) });
+    const back = await run(await mk('Equip restored'), '用一句话打个招呼。不调用工具。', 120_000, cfg);
+    const restored = !back.error && !!back.systemPrompt && listed(back).length === 0 && !back.systemPrompt.includes('Shelved equipment');
+    writeFileSync(join(OUT, 'equip-evidence.json'), JSON.stringify({ change, approvals: ev.approvals, inCatalog, noted, reached, useTools: use.toolCalls, restored, catalogAfterShelve: catalogOf(use).slice(0, 2000) }, null, 2));
+    return { ok: inCatalog && noted && reached && restored, detail: [
+      `① 收起 工具 ${ev.toolCalls.join(',')};审批 ${ev.approvals};回执 tools=${(change.tools || []).join('+')}`,
+      `② 新会话 目录${inCatalog ? '已列出两者' : `只列出 ${listed(use).join('+') || '无'}`};笔记段${noted ? '写着收起了什么' : '没写'};查时间 ${reached ? `调到了(${use.toolCalls.join(',')})` : `没调到:${use.error || use.toolCalls.join(',') || '无工具'}`}`,
+      `③ 撤销后新会话 ${restored ? '目录与笔记段都不再有' : `还在:${listed(back).join('+') || '笔记段'}${back.error ? `(${back.error})` : ''}`}`,
+    ].join(';'), output: `【收起】${ev.content}\n\n【查时间】${use.content}`, toolCalls: [...ev.toolCalls, '|', ...use.toolCalls], tokens: [ev, use, back].reduce((n, e) => n + (tokensOf(e) || 0), 0) };
   });
   // ── 缓存结构:A(新会话) / B(新会话·同文) / B′(新会话·异文) / C(S2 后续) / D(S1 后续)──
   // 台架**证不了 token 省了多少**(样本太小、上游路由不可控),它证的是「结构没塌」:同会话后续调用还命中得了吗?

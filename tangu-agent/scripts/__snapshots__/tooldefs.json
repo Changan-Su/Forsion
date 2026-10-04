@@ -4139,7 +4139,7 @@
       "type": "function",
       "function": {
         "name": "manage_harness",
-        "description": "Curate your own Working Notes (HARNESS.md) — durable lessons about HOW you should work, injected into your system prompt on every run. This is your self-evolution surface: you own it, changes apply immediately, and the user gets a card they can undo. Do not ask for permission or wait for /refine. WHEN: at a natural stopping point, once this conversation has taught you something durable about your own method — the user corrected how you work, a technique or delegation pattern proved itself, you hit a landmine you can avoid next time. NOT here: facts about the user or the world → remember; how the human can work with you → manage_human; a reusable step-by-step procedure (optionally with scripts) → manage_skill with scope \"agent\". NEVER record environment/setup failures, \"tool X is broken\" claims, transient errors, or one-off task narratives — they harden into refusals that bite you later. action ∈ upsert | delete | list | rollback | propose. upsert WITHOUT id creates an entry (needs title + body + evidence of what actually happened); upsert WITH id revises it (version bumps, old version stays recoverable). rollback restores an entry to its previous version (this also overwrites hand-edits made since). propose (with agent + candidates) suggests lessons to ANOTHER agent: they land in that agent's candidate inbox for it to triage — you never write another agent's notes directly. Keep entries sharp: title ≤80 chars, body ≤300, evidence ≤200, max 30 entries — at the cap, merge or delete weaker entries first. kind: \"note\" = working method (default); \"recipe\" = a delegation pattern that worked.",
+        "description": "Your Working Notes (HARNESS.md): durable lessons about HOW you work, loaded into your system prompt on every run. You own them: changes apply at once and the user gets a card to undo, so do not ask permission or wait for /refine. Use it when this conversation taught you something lasting about your own method: the user corrected how you work, a technique or delegation pattern proved itself, a pitfall you can avoid next time. Elsewhere: facts about the user or the world → remember; how the human can work with you → manage_human; a reusable procedure → manage_skill (scope \"agent\"). Never record environment/setup failures, \"tool X is broken\", transient errors or one-off task stories; they harden into refusals. upsert without id creates an entry (title, body and evidence of what actually happened are required); with id it revises. rollback restores the previous version. propose (agent + candidates) drops suggestions into ANOTHER agent's candidate inbox; you never write its notes. Limits: title ≤80, body ≤300, evidence ≤200 chars, 30 entries; at the cap, merge or delete weaker ones. kind \"note\" = working method (default); \"recipe\" = a delegation pattern that worked; \"equip\" = shelve tools/skills you rarely use to keep your context lean (pass tools / skills): a shelved tool moves to the load-on-demand catalog (load_tools brings it back), a shelved skill leaves your skill list (use_skill by id still works). Shelving never removes or grants a capability; shelve on evidence such as a usage review, and revise or delete the entry to undo.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -4156,38 +4156,53 @@
             },
             "agent": {
               "type": "string",
-              "description": "propose: slug of the agent to propose to"
+              "description": "propose: target agent slug"
             },
             "candidates": {
               "type": "array",
               "items": {
                 "type": "string"
               },
-              "description": "propose: 1-3 one-line lessons for that agent (each ≤300 chars)"
+              "description": "propose: 1-3 one-line lessons"
             },
             "id": {
               "type": "string",
-              "description": "Entry id (e.g. \"h-x3k9\"); required for delete/rollback; upsert with id = revise, without = create"
+              "description": "Entry id, e.g. \"h-x3k9\" (delete / rollback / revise)"
             },
             "kind": {
               "type": "string",
               "enum": [
                 "note",
-                "recipe"
+                "recipe",
+                "equip"
               ],
               "description": "Entry type (default \"note\")"
             },
+            "tools": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "equip: exact tool names to shelve (replaces the list on revise)"
+            },
+            "skills": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "equip: exact skill ids to shelve, e.g. \"local:pptx\" (replaces the list on revise)"
+            },
             "title": {
               "type": "string",
-              "description": "Short label (≤80 chars; required to create)"
+              "description": "Short label"
             },
             "body": {
               "type": "string",
-              "description": "The lesson itself (≤300 chars; required to create)"
+              "description": "The lesson itself"
             },
             "evidence": {
               "type": "string",
-              "description": "What actually happened that justifies this (≤200 chars; required to create)"
+              "description": "What actually happened that justifies it"
             }
           },
           "required": [
@@ -5187,7 +5202,7 @@
       "type": "function",
       "function": {
         "name": "manage_harness",
-        "description": "Curate your own Working Notes (HARNESS.md) — durable lessons about HOW you should work, injected into your system prompt on every run. This is your self-evolution surface: you own it, changes apply immediately, and the user gets a card they can undo. Do not ask for permission or wait for /refine. WHEN: at a natural stopping point, once this conversation has taught you something durable about your own method — the user corrected how you work, a technique or delegation pattern proved itself, you hit a landmine you can avoid next time. NOT here: facts about the user or the world → remember; how the human can work with you → manage_human; a reusable step-by-step procedure (optionally with scripts) → manage_skill with scope \"agent\". NEVER record environment/setup failures, \"tool X is broken\" claims, transient errors, or one-off task narratives — they harden into refusals that bite you later. action ∈ upsert | delete | list | rollback | propose. upsert WITHOUT id creates an entry (needs title + body + evidence of what actually happened); upsert WITH id revises it (version bumps, old version stays recoverable). rollback restores an entry to its previous version (this also overwrites hand-edits made since). propose (with agent + candidates) suggests lessons to ANOTHER agent: they land in that agent's candidate inbox for it to triage — you never write another agent's notes directly. Keep entries sharp: title ≤80 chars, body ≤300, evidence ≤200, max 30 entries — at the cap, merge or delete weaker entries first. kind: \"note\" = working method (default); \"recipe\" = a delegation pattern that worked.",
+        "description": "Your Working Notes (HARNESS.md): durable lessons about HOW you work, loaded into your system prompt on every run. You own them: changes apply at once and the user gets a card to undo, so do not ask permission or wait for /refine. Use it when this conversation taught you something lasting about your own method: the user corrected how you work, a technique or delegation pattern proved itself, a pitfall you can avoid next time. Elsewhere: facts about the user or the world → remember; how the human can work with you → manage_human; a reusable procedure → manage_skill (scope \"agent\"). Never record environment/setup failures, \"tool X is broken\", transient errors or one-off task stories; they harden into refusals. upsert without id creates an entry (title, body and evidence of what actually happened are required); with id it revises. rollback restores the previous version. propose (agent + candidates) drops suggestions into ANOTHER agent's candidate inbox; you never write its notes. Limits: title ≤80, body ≤300, evidence ≤200 chars, 30 entries; at the cap, merge or delete weaker ones. kind \"note\" = working method (default); \"recipe\" = a delegation pattern that worked; \"equip\" = shelve tools/skills you rarely use to keep your context lean (pass tools / skills): a shelved tool moves to the load-on-demand catalog (load_tools brings it back), a shelved skill leaves your skill list (use_skill by id still works). Shelving never removes or grants a capability; shelve on evidence such as a usage review, and revise or delete the entry to undo.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -5204,38 +5219,53 @@
             },
             "agent": {
               "type": "string",
-              "description": "propose: slug of the agent to propose to"
+              "description": "propose: target agent slug"
             },
             "candidates": {
               "type": "array",
               "items": {
                 "type": "string"
               },
-              "description": "propose: 1-3 one-line lessons for that agent (each ≤300 chars)"
+              "description": "propose: 1-3 one-line lessons"
             },
             "id": {
               "type": "string",
-              "description": "Entry id (e.g. \"h-x3k9\"); required for delete/rollback; upsert with id = revise, without = create"
+              "description": "Entry id, e.g. \"h-x3k9\" (delete / rollback / revise)"
             },
             "kind": {
               "type": "string",
               "enum": [
                 "note",
-                "recipe"
+                "recipe",
+                "equip"
               ],
               "description": "Entry type (default \"note\")"
             },
+            "tools": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "equip: exact tool names to shelve (replaces the list on revise)"
+            },
+            "skills": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "equip: exact skill ids to shelve, e.g. \"local:pptx\" (replaces the list on revise)"
+            },
             "title": {
               "type": "string",
-              "description": "Short label (≤80 chars; required to create)"
+              "description": "Short label"
             },
             "body": {
               "type": "string",
-              "description": "The lesson itself (≤300 chars; required to create)"
+              "description": "The lesson itself"
             },
             "evidence": {
               "type": "string",
-              "description": "What actually happened that justifies this (≤200 chars; required to create)"
+              "description": "What actually happened that justifies it"
             }
           },
           "required": [
@@ -7515,7 +7545,7 @@
       "type": "function",
       "function": {
         "name": "manage_harness",
-        "description": "Curate your own Working Notes (HARNESS.md) — durable lessons about HOW you should work, injected into your system prompt on every run. This is your self-evolution surface: you own it, changes apply immediately, and the user gets a card they can undo. Do not ask for permission or wait for /refine. WHEN: at a natural stopping point, once this conversation has taught you something durable about your own method — the user corrected how you work, a technique or delegation pattern proved itself, you hit a landmine you can avoid next time. NOT here: facts about the user or the world → remember; how the human can work with you → manage_human; a reusable step-by-step procedure (optionally with scripts) → manage_skill with scope \"agent\". NEVER record environment/setup failures, \"tool X is broken\" claims, transient errors, or one-off task narratives — they harden into refusals that bite you later. action ∈ upsert | delete | list | rollback | propose. upsert WITHOUT id creates an entry (needs title + body + evidence of what actually happened); upsert WITH id revises it (version bumps, old version stays recoverable). rollback restores an entry to its previous version (this also overwrites hand-edits made since). propose (with agent + candidates) suggests lessons to ANOTHER agent: they land in that agent's candidate inbox for it to triage — you never write another agent's notes directly. Keep entries sharp: title ≤80 chars, body ≤300, evidence ≤200, max 30 entries — at the cap, merge or delete weaker entries first. kind: \"note\" = working method (default); \"recipe\" = a delegation pattern that worked.",
+        "description": "Your Working Notes (HARNESS.md): durable lessons about HOW you work, loaded into your system prompt on every run. You own them: changes apply at once and the user gets a card to undo, so do not ask permission or wait for /refine. Use it when this conversation taught you something lasting about your own method: the user corrected how you work, a technique or delegation pattern proved itself, a pitfall you can avoid next time. Elsewhere: facts about the user or the world → remember; how the human can work with you → manage_human; a reusable procedure → manage_skill (scope \"agent\"). Never record environment/setup failures, \"tool X is broken\", transient errors or one-off task stories; they harden into refusals. upsert without id creates an entry (title, body and evidence of what actually happened are required); with id it revises. rollback restores the previous version. propose (agent + candidates) drops suggestions into ANOTHER agent's candidate inbox; you never write its notes. Limits: title ≤80, body ≤300, evidence ≤200 chars, 30 entries; at the cap, merge or delete weaker ones. kind \"note\" = working method (default); \"recipe\" = a delegation pattern that worked; \"equip\" = shelve tools/skills you rarely use to keep your context lean (pass tools / skills): a shelved tool moves to the load-on-demand catalog (load_tools brings it back), a shelved skill leaves your skill list (use_skill by id still works). Shelving never removes or grants a capability; shelve on evidence such as a usage review, and revise or delete the entry to undo.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -7532,38 +7562,53 @@
             },
             "agent": {
               "type": "string",
-              "description": "propose: slug of the agent to propose to"
+              "description": "propose: target agent slug"
             },
             "candidates": {
               "type": "array",
               "items": {
                 "type": "string"
               },
-              "description": "propose: 1-3 one-line lessons for that agent (each ≤300 chars)"
+              "description": "propose: 1-3 one-line lessons"
             },
             "id": {
               "type": "string",
-              "description": "Entry id (e.g. \"h-x3k9\"); required for delete/rollback; upsert with id = revise, without = create"
+              "description": "Entry id, e.g. \"h-x3k9\" (delete / rollback / revise)"
             },
             "kind": {
               "type": "string",
               "enum": [
                 "note",
-                "recipe"
+                "recipe",
+                "equip"
               ],
               "description": "Entry type (default \"note\")"
             },
+            "tools": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "equip: exact tool names to shelve (replaces the list on revise)"
+            },
+            "skills": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "equip: exact skill ids to shelve, e.g. \"local:pptx\" (replaces the list on revise)"
+            },
             "title": {
               "type": "string",
-              "description": "Short label (≤80 chars; required to create)"
+              "description": "Short label"
             },
             "body": {
               "type": "string",
-              "description": "The lesson itself (≤300 chars; required to create)"
+              "description": "The lesson itself"
             },
             "evidence": {
               "type": "string",
-              "description": "What actually happened that justifies this (≤200 chars; required to create)"
+              "description": "What actually happened that justifies it"
             }
           },
           "required": [
@@ -8563,7 +8608,7 @@
       "type": "function",
       "function": {
         "name": "manage_harness",
-        "description": "Curate your own Working Notes (HARNESS.md) — durable lessons about HOW you should work, injected into your system prompt on every run. This is your self-evolution surface: you own it, changes apply immediately, and the user gets a card they can undo. Do not ask for permission or wait for /refine. WHEN: at a natural stopping point, once this conversation has taught you something durable about your own method — the user corrected how you work, a technique or delegation pattern proved itself, you hit a landmine you can avoid next time. NOT here: facts about the user or the world → remember; how the human can work with you → manage_human; a reusable step-by-step procedure (optionally with scripts) → manage_skill with scope \"agent\". NEVER record environment/setup failures, \"tool X is broken\" claims, transient errors, or one-off task narratives — they harden into refusals that bite you later. action ∈ upsert | delete | list | rollback | propose. upsert WITHOUT id creates an entry (needs title + body + evidence of what actually happened); upsert WITH id revises it (version bumps, old version stays recoverable). rollback restores an entry to its previous version (this also overwrites hand-edits made since). propose (with agent + candidates) suggests lessons to ANOTHER agent: they land in that agent's candidate inbox for it to triage — you never write another agent's notes directly. Keep entries sharp: title ≤80 chars, body ≤300, evidence ≤200, max 30 entries — at the cap, merge or delete weaker entries first. kind: \"note\" = working method (default); \"recipe\" = a delegation pattern that worked.",
+        "description": "Your Working Notes (HARNESS.md): durable lessons about HOW you work, loaded into your system prompt on every run. You own them: changes apply at once and the user gets a card to undo, so do not ask permission or wait for /refine. Use it when this conversation taught you something lasting about your own method: the user corrected how you work, a technique or delegation pattern proved itself, a pitfall you can avoid next time. Elsewhere: facts about the user or the world → remember; how the human can work with you → manage_human; a reusable procedure → manage_skill (scope \"agent\"). Never record environment/setup failures, \"tool X is broken\", transient errors or one-off task stories; they harden into refusals. upsert without id creates an entry (title, body and evidence of what actually happened are required); with id it revises. rollback restores the previous version. propose (agent + candidates) drops suggestions into ANOTHER agent's candidate inbox; you never write its notes. Limits: title ≤80, body ≤300, evidence ≤200 chars, 30 entries; at the cap, merge or delete weaker ones. kind \"note\" = working method (default); \"recipe\" = a delegation pattern that worked; \"equip\" = shelve tools/skills you rarely use to keep your context lean (pass tools / skills): a shelved tool moves to the load-on-demand catalog (load_tools brings it back), a shelved skill leaves your skill list (use_skill by id still works). Shelving never removes or grants a capability; shelve on evidence such as a usage review, and revise or delete the entry to undo.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -8580,38 +8625,53 @@
             },
             "agent": {
               "type": "string",
-              "description": "propose: slug of the agent to propose to"
+              "description": "propose: target agent slug"
             },
             "candidates": {
               "type": "array",
               "items": {
                 "type": "string"
               },
-              "description": "propose: 1-3 one-line lessons for that agent (each ≤300 chars)"
+              "description": "propose: 1-3 one-line lessons"
             },
             "id": {
               "type": "string",
-              "description": "Entry id (e.g. \"h-x3k9\"); required for delete/rollback; upsert with id = revise, without = create"
+              "description": "Entry id, e.g. \"h-x3k9\" (delete / rollback / revise)"
             },
             "kind": {
               "type": "string",
               "enum": [
                 "note",
-                "recipe"
+                "recipe",
+                "equip"
               ],
               "description": "Entry type (default \"note\")"
             },
+            "tools": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "equip: exact tool names to shelve (replaces the list on revise)"
+            },
+            "skills": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "equip: exact skill ids to shelve, e.g. \"local:pptx\" (replaces the list on revise)"
+            },
             "title": {
               "type": "string",
-              "description": "Short label (≤80 chars; required to create)"
+              "description": "Short label"
             },
             "body": {
               "type": "string",
-              "description": "The lesson itself (≤300 chars; required to create)"
+              "description": "The lesson itself"
             },
             "evidence": {
               "type": "string",
-              "description": "What actually happened that justifies this (≤200 chars; required to create)"
+              "description": "What actually happened that justifies it"
             }
           },
           "required": [
@@ -9592,7 +9652,7 @@
       "type": "function",
       "function": {
         "name": "manage_harness",
-        "description": "Curate your own Working Notes (HARNESS.md) — durable lessons about HOW you should work, injected into your system prompt on every run. This is your self-evolution surface: you own it, changes apply immediately, and the user gets a card they can undo. Do not ask for permission or wait for /refine. WHEN: at a natural stopping point, once this conversation has taught you something durable about your own method — the user corrected how you work, a technique or delegation pattern proved itself, you hit a landmine you can avoid next time. NOT here: facts about the user or the world → remember; how the human can work with you → manage_human; a reusable step-by-step procedure (optionally with scripts) → manage_skill with scope \"agent\". NEVER record environment/setup failures, \"tool X is broken\" claims, transient errors, or one-off task narratives — they harden into refusals that bite you later. action ∈ upsert | delete | list | rollback | propose. upsert WITHOUT id creates an entry (needs title + body + evidence of what actually happened); upsert WITH id revises it (version bumps, old version stays recoverable). rollback restores an entry to its previous version (this also overwrites hand-edits made since). propose (with agent + candidates) suggests lessons to ANOTHER agent: they land in that agent's candidate inbox for it to triage — you never write another agent's notes directly. Keep entries sharp: title ≤80 chars, body ≤300, evidence ≤200, max 30 entries — at the cap, merge or delete weaker entries first. kind: \"note\" = working method (default); \"recipe\" = a delegation pattern that worked.",
+        "description": "Your Working Notes (HARNESS.md): durable lessons about HOW you work, loaded into your system prompt on every run. You own them: changes apply at once and the user gets a card to undo, so do not ask permission or wait for /refine. Use it when this conversation taught you something lasting about your own method: the user corrected how you work, a technique or delegation pattern proved itself, a pitfall you can avoid next time. Elsewhere: facts about the user or the world → remember; how the human can work with you → manage_human; a reusable procedure → manage_skill (scope \"agent\"). Never record environment/setup failures, \"tool X is broken\", transient errors or one-off task stories; they harden into refusals. upsert without id creates an entry (title, body and evidence of what actually happened are required); with id it revises. rollback restores the previous version. propose (agent + candidates) drops suggestions into ANOTHER agent's candidate inbox; you never write its notes. Limits: title ≤80, body ≤300, evidence ≤200 chars, 30 entries; at the cap, merge or delete weaker ones. kind \"note\" = working method (default); \"recipe\" = a delegation pattern that worked; \"equip\" = shelve tools/skills you rarely use to keep your context lean (pass tools / skills): a shelved tool moves to the load-on-demand catalog (load_tools brings it back), a shelved skill leaves your skill list (use_skill by id still works). Shelving never removes or grants a capability; shelve on evidence such as a usage review, and revise or delete the entry to undo.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -9609,38 +9669,53 @@
             },
             "agent": {
               "type": "string",
-              "description": "propose: slug of the agent to propose to"
+              "description": "propose: target agent slug"
             },
             "candidates": {
               "type": "array",
               "items": {
                 "type": "string"
               },
-              "description": "propose: 1-3 one-line lessons for that agent (each ≤300 chars)"
+              "description": "propose: 1-3 one-line lessons"
             },
             "id": {
               "type": "string",
-              "description": "Entry id (e.g. \"h-x3k9\"); required for delete/rollback; upsert with id = revise, without = create"
+              "description": "Entry id, e.g. \"h-x3k9\" (delete / rollback / revise)"
             },
             "kind": {
               "type": "string",
               "enum": [
                 "note",
-                "recipe"
+                "recipe",
+                "equip"
               ],
               "description": "Entry type (default \"note\")"
             },
+            "tools": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "equip: exact tool names to shelve (replaces the list on revise)"
+            },
+            "skills": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "equip: exact skill ids to shelve, e.g. \"local:pptx\" (replaces the list on revise)"
+            },
             "title": {
               "type": "string",
-              "description": "Short label (≤80 chars; required to create)"
+              "description": "Short label"
             },
             "body": {
               "type": "string",
-              "description": "The lesson itself (≤300 chars; required to create)"
+              "description": "The lesson itself"
             },
             "evidence": {
               "type": "string",
-              "description": "What actually happened that justifies this (≤200 chars; required to create)"
+              "description": "What actually happened that justifies it"
             }
           },
           "required": [

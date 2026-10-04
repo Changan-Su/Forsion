@@ -1,7 +1,7 @@
 ---
 name: 配置与管理 Agent
 description: 当用户想新建 / 配置 / 修改 / 删除 Tangu 本地 Agent(Normal Agent),或想把一种好用的角色 / 工作方式沉淀成可复用的 agent 时使用。讲解 manage_agent 工具与 agent 的文件夹结构(config.toml / SOUL.md / MEMORY.md / HARNESS.md 工作笔记 / LOG / Library),以及 manage_harness 自进化层与 /refine 复盘。
-version: 1.2.1
+version: 1.3.0
 category: agent 管理
 ---
 
@@ -27,6 +27,9 @@ Agent 也可能来自**插件捆绑包(bundle)播种**:安装带 `agents/` 子�
   对话里学到耐久的做法就可以直接记;用户敲 `/refine` 是让你专门复盘一次本次会话,把「以后该怎么做」沉淀成条目。
   **只记耐久的教训**(反复被纠正的偏好、验证过的做法、好用的委派配方);环境/安装失败、「某工具坏了」、
   一次性任务流水**绝不能记**——它们会硬化成日后的拒绝理由。
+  条目里还有一种**装备**(`kind: "equip"`,带 `tools` / `skills`):把自己很少用到的工具、技能**收起来**省上下文——
+  收起的工具改走按需目录(`load_tools` 随时取得回),收起的技能不再列进技能清单(`use_skill` 按 id 照常可用)。
+  只有「收起」这一个方向,不删能力、也不能给自己加能力;要有依据(比如 Muse 的用量巡检)再收,删掉或改掉那条就全部回来。
 - **LOG/<日期>.md** — 该 agent 的按日日志(用 `log_event` 写、`read_log` 读)。
 - **Library/** — 资料库:用文件读写工具往里存 / 取长期参考资料(人物设定、工具手册、知识文档)。`config.toml` 的 `library_order` 可指定优先阅读顺序。
 

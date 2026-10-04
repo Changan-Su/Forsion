@@ -11,9 +11,14 @@
  *      人格主权归用户,agent 唯一自有可进化层就是 HARNESS.md);给别的 agent 只能 propose 进它的候选收件箱;
  *   2. 远程污点 run 只许 list;临时成员(ephemeral)没有自己的文件夹,不可见;子代理缺省硬闸(toolRegistry.SUB_AGENT_DENY_TOOLS);
  *   3. 每笔改动经 harnessStore 唯一写点留 before/after 快照,rollback 可回滚。
+ * 装备层(kind 'equip',10-04):agent 给自己**收起**少用的工具 / 技能 —— 只有收起这一个方向(工具改走按需目录、技能不再列目录),
+ * 不删能力、更不能给自己加能力;名字在这里按「此刻真的有、且收得起」核过才落盘(读侧 toolRegistry.isShelvable 再认一遍)。
  * mode:'host':云端 sandbox 无持久 agent 目录,永不暴露。
  */
 import type { ToolProvider } from '../toolRegistry.js';
+import type { ToolContext } from '../toolTypes.js';
+import { resolveTools, isDeferredIn, isShelvable } from '../toolRegistry.js';
+import { deps } from '../../seams/runtime.js';
 import { DEFAULT_AGENT_SLUG } from '../../core/tanguHome.js';
 import { currentAgentSlug, currentDisplayAgentSlug } from '../../seams/runContext.js';
 import { applyHarnessEdit, loadHarness, appendHarnessCandidates, MAX_ENTRIES, TITLE_MAX, BODY_MAX, EVIDENCE_MAX, type HarnessEntry } from '../../agents/harnessStore.js';
@@ -34,6 +39,28 @@ export interface HarnessChange {
   body: string;
   evidence: string;
   version: number;
+  /** kind 'equip':改完之后这一条收起的工具 / 技能。 */
+  tools?: string[];
+  skills?: string[];
+}
+
+const names = (v: unknown): string[] | undefined => (Array.isArray(v) ? v.map((x) => String(x ?? '').trim()).filter(Boolean) : undefined);
+
+/** 收起之前先核名字:工具必须是这个 agent 此刻解析得到的注册表工具(内置 / 插件;MCP 与会话自定义工具不过 deferred 这条路)、
+ *  不在保护名单、且不是本来就按需;技能必须在本 run 准许 use_skill 的清单里。返回给模型看的英文说明,null = 没问题。 */
+function equipProblem(ctx: ToolContext, tools: string[], skills: string[]): string | null {
+  const base = { ...ctx, shelvedTools: undefined }; // 修订时自己已收起的那几个不能算「本来就按需」
+  const visible = resolveTools(ctx.profile ?? deps().profile, base);
+  const unknown = tools.filter((n) => !visible.has(n));
+  if (unknown.length) return `unknown tool name(s): ${unknown.join(', ')}. Shelve only tools from your own tool list, by exact name (MCP and session custom tools cannot be shelved).`;
+  const fixed = tools.filter((n) => !isShelvable(n));
+  if (fixed.length) return `${fixed.join(', ')} cannot be shelved: you need them to load tools, use skills or undo this.`;
+  const already = tools.filter((n) => isDeferredIn(base, n, visible.get(n)?.deferred));
+  if (already.length) return `${already.join(', ')} already load on demand, so shelving them saves nothing; leave them out.`;
+  const allowed = new Set(ctx.enabledSkillIds ?? []);
+  const badSkills = skills.filter((id) => !allowed.has(id));
+  if (badSkills.length) return `unknown skill id(s): ${badSkills.join(', ')}. Use the exact ids from your skill list (e.g. "local:name").`;
+  return null;
 }
 
 const receipt = (change: HarnessChange): string =>
@@ -55,28 +82,28 @@ export const manageHarnessProvider: ToolProvider = {
         function: {
           name: 'manage_harness',
           description:
-            'Curate your own Working Notes (HARNESS.md) — durable lessons about HOW you should work, injected into your system prompt on every run. ' +
-            'This is your self-evolution surface: you own it, changes apply immediately, and the user gets a card they can undo. Do not ask for permission or wait for /refine. ' +
-            'WHEN: at a natural stopping point, once this conversation has taught you something durable about your own method — the user corrected how you work, a technique or delegation pattern proved itself, you hit a landmine you can avoid next time. ' +
-            'NOT here: facts about the user or the world → remember; how the human can work with you → manage_human; a reusable step-by-step procedure (optionally with scripts) → manage_skill with scope "agent". ' +
-            'NEVER record environment/setup failures, "tool X is broken" claims, transient errors, or one-off task narratives — they harden into refusals that bite you later. ' +
-            'action ∈ upsert | delete | list | rollback | propose. ' +
-            'upsert WITHOUT id creates an entry (needs title + body + evidence of what actually happened); upsert WITH id revises it (version bumps, old version stays recoverable). ' +
-            'rollback restores an entry to its previous version (this also overwrites hand-edits made since). ' +
-            'propose (with agent + candidates) suggests lessons to ANOTHER agent: they land in that agent\'s candidate inbox for it to triage — you never write another agent\'s notes directly. ' +
-            `Keep entries sharp: title ≤${TITLE_MAX} chars, body ≤${BODY_MAX}, evidence ≤${EVIDENCE_MAX}, max ${MAX_ENTRIES} entries — at the cap, merge or delete weaker entries first. ` +
-            'kind: "note" = working method (default); "recipe" = a delegation pattern that worked.',
+            'Your Working Notes (HARNESS.md): durable lessons about HOW you work, loaded into your system prompt on every run. You own them: changes apply at once and the user gets a card to undo, so do not ask permission or wait for /refine. ' +
+            'Use it when this conversation taught you something lasting about your own method: the user corrected how you work, a technique or delegation pattern proved itself, a pitfall you can avoid next time. ' +
+            'Elsewhere: facts about the user or the world → remember; how the human can work with you → manage_human; a reusable procedure → manage_skill (scope "agent"). ' +
+            'Never record environment/setup failures, "tool X is broken", transient errors or one-off task stories; they harden into refusals. ' +
+            'upsert without id creates an entry (title, body and evidence of what actually happened are required); with id it revises. rollback restores the previous version. ' +
+            "propose (agent + candidates) drops suggestions into ANOTHER agent's candidate inbox; you never write its notes. " +
+            `Limits: title ≤${TITLE_MAX}, body ≤${BODY_MAX}, evidence ≤${EVIDENCE_MAX} chars, ${MAX_ENTRIES} entries; at the cap, merge or delete weaker ones. ` +
+            'kind "note" = working method (default); "recipe" = a delegation pattern that worked; "equip" = shelve tools/skills you rarely use to keep your context lean (pass tools / skills): a shelved tool moves to the load-on-demand catalog (load_tools brings it back), a shelved skill leaves your skill list (use_skill by id still works). ' +
+            'Shelving never removes or grants a capability; shelve on evidence such as a usage review, and revise or delete the entry to undo.',
           parameters: {
             type: 'object',
             properties: {
               action: { type: 'string', enum: ['upsert', 'delete', 'list', 'rollback', 'propose'], description: 'The operation' },
-              agent: { type: 'string', description: 'propose: slug of the agent to propose to' },
-              candidates: { type: 'array', items: { type: 'string' }, description: 'propose: 1-3 one-line lessons for that agent (each ≤300 chars)' },
-              id: { type: 'string', description: 'Entry id (e.g. "h-x3k9"); required for delete/rollback; upsert with id = revise, without = create' },
-              kind: { type: 'string', enum: ['note', 'recipe'], description: 'Entry type (default "note")' },
-              title: { type: 'string', description: `Short label (≤${TITLE_MAX} chars; required to create)` },
-              body: { type: 'string', description: `The lesson itself (≤${BODY_MAX} chars; required to create)` },
-              evidence: { type: 'string', description: `What actually happened that justifies this (≤${EVIDENCE_MAX} chars; required to create)` },
+              agent: { type: 'string', description: 'propose: target agent slug' },
+              candidates: { type: 'array', items: { type: 'string' }, description: 'propose: 1-3 one-line lessons' },
+              id: { type: 'string', description: 'Entry id, e.g. "h-x3k9" (delete / rollback / revise)' },
+              kind: { type: 'string', enum: ['note', 'recipe', 'equip'], description: 'Entry type (default "note")' },
+              tools: { type: 'array', items: { type: 'string' }, description: 'equip: exact tool names to shelve (replaces the list on revise)' },
+              skills: { type: 'array', items: { type: 'string' }, description: 'equip: exact skill ids to shelve, e.g. "local:pptx" (replaces the list on revise)' },
+              title: { type: 'string', description: 'Short label' },
+              body: { type: 'string', description: 'The lesson itself' },
+              evidence: { type: 'string', description: 'What actually happened that justifies it' },
             },
             required: ['action'],
           },
@@ -110,11 +137,16 @@ export const manageHarnessProvider: ToolProvider = {
 
             if (!entries.length) return '(working notes are empty)';
             return entries
-              .map((e) => `- [${e.id}] (${e.kind}, v${e.version}, ${e.updatedAt || e.createdAt}) ${e.title} — ${e.body.replace(/\s*\n\s*/g, ' ')}${e.evidence ? ` (evidence: ${e.evidence})` : ''}`)
+              .map((e) => `- [${e.id}] (${e.kind}, v${e.version}, ${e.updatedAt || e.createdAt}) ${e.title} — ${e.tools?.length ? `tools: ${e.tools.join(', ')}; ` : ''}${e.skills?.length ? `skills: ${e.skills.join(', ')}; ` : ''}${e.body.replace(/\s*\n\s*/g, ' ')}${e.evidence ? ` (evidence: ${e.evidence})` : ''}`)
               .join('\n');
           }
           if (action === 'upsert' || action === 'delete' || action === 'rollback') {
             ctx.signal?.throwIfAborted();
+            const tools = names(args.tools), skills = names(args.skills);
+            if (action === 'upsert' && (tools?.length || skills?.length)) {
+              const problem = equipProblem(ctx, tools ?? [], skills ?? []);
+              if (problem) return `Error: ${problem}`;
+            }
             const { entry, before, ts, rev } = await applyHarnessEdit(
               slug,
               {
@@ -124,6 +156,8 @@ export const manageHarnessProvider: ToolProvider = {
                 title: args.title != null ? String(args.title) : undefined,
                 body: args.body != null ? String(args.body) : undefined,
                 evidence: args.evidence != null ? String(args.evidence) : undefined,
+                tools,
+                skills,
               },
               { sessionId: ctx.sessionId },
             );
@@ -142,6 +176,8 @@ export const manageHarnessProvider: ToolProvider = {
               body: shown.body,
               evidence: shown.evidence || '',
               version: shown.version,
+              ...(shown.tools?.length ? { tools: shown.tools } : {}),
+              ...(shown.skills?.length ? { skills: shown.skills } : {}),
             });
           }
           return `Error: unknown action: ${action}`;

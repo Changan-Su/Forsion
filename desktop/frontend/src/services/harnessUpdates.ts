@@ -6,9 +6,12 @@ export interface HarnessChange {
   rev: string; at: string; agent: string; entryId: string
   action: 'create' | 'revise' | 'delete' | 'rollback'
   kind: string; title: string; body: string; evidence: string; version: number
+  /** kind 'equip':这一条收起的工具名 / 技能 id。 */
+  tools?: string[]; skills?: string[]
 }
 export const HARNESS_CHANGED_EVENT = 'forsion:harness-changed'
 const ACTIONS = new Set(['create', 'revise', 'delete', 'rollback'])
+const nameList = (v: unknown): boolean => v === undefined || (Array.isArray(v) && v.every((x) => typeof x === 'string'))
 
 /** 只认 manage_harness 自己落库的成功回执(重开历史会话照样还原出卡片);助手正文与别的工具输出一律不算。 */
 export function harnessChanges(events: ToolEvent[] = []): HarnessChange[] {
@@ -21,7 +24,7 @@ export function harnessChanges(events: ToolEvent[] = []): HarnessChange[] {
         typeof c.agent !== 'string' || !/^[a-z0-9][a-z0-9-]*$/.test(c.agent) ||
         typeof c.entryId !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(c.entryId) || !ACTIONS.has(c.action) ||
         typeof c.title !== 'string' || typeof c.body !== 'string' || typeof c.evidence !== 'string' ||
-        typeof c.kind !== 'string' || typeof c.at !== 'string' || typeof c.version !== 'number') continue
+        typeof c.kind !== 'string' || typeof c.at !== 'string' || typeof c.version !== 'number' || !nameList(c.tools) || !nameList(c.skills)) continue
       changes.set(c.rev, c)
     } catch { /* list / propose / 报错的回执是纯文本,不出卡 */ }
   }

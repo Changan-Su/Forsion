@@ -81,7 +81,8 @@ const AgentHarnessBody: React.FC<Props> = ({ cfg, slug, running, onRefine, onCan
     l.action === 'delete' ? t('settings.agents.harnessActDelete')
       : l.action === 'rollback' ? t('settings.agents.harnessActRollback')
         : l.before === null ? t('settings.agents.harnessActCreate') : t('settings.agents.harnessActUpdate')
-  const kindLabel = (kind: string): string => kind === 'note' ? t('settings.agents.harnessKindNote') : kind === 'recipe' ? t('settings.agents.harnessKindRecipe') : kind
+  const kindLabel = (kind: string): string => kind === 'note' ? t('settings.agents.harnessKindNote') : kind === 'recipe' ? t('settings.agents.harnessKindRecipe') : kind === 'equip' ? t('settings.agents.harnessKindEquip') : kind
+  const listSep = locale === 'zh' ? '、' : ', '
   // 条目日期是引擎写的 YYYY-MM-DD(纯日期,单源按本地那一天解读,不串到前后一天);journal ts 是完整 ISO,按本地时区显示。
   // HARNESS.md 允许手改,解析不了的原样显示,绝不渲出「Invalid Date」。
   const day = (d: string): string => formatDate(d, { locale }) || d
@@ -111,10 +112,13 @@ const AgentHarnessBody: React.FC<Props> = ({ cfg, slug, running, onRefine, onCan
           <ul className="harness-entries">{entries.map((e) => <li key={e.id} className="harness-entry" data-harness-entry={e.id}>
             <div className="harness-entry-head">
               {/* 芯片放进标题行内:窄栏里标题折行从左缘续排,不在芯片右侧挤成一条竖栏 */}
-              <strong><span className={`harness-kind${e.kind === 'recipe' ? ' recipe' : ''}`}>{kindLabel(e.kind)}</span>{e.title}</strong>
+              <strong><span className={`harness-kind${e.kind === 'recipe' || e.kind === 'equip' ? ' recipe' : ''}`}>{kindLabel(e.kind)}</span>{e.title}</strong>
               {latestIdx.has(e.id) && <button type="button" className="harness-undo" disabled={busy} title={t('settings.agents.harnessRollback')} aria-label={t('settings.agents.harnessRollback')} onClick={() => void rollback(e.id, e.title)}><Undo2 size={13} /></button>}
             </div>
             <p>{e.body}</p>
+            {/* 装备(equip):这一条收起了哪些工具 / 技能 —— 撤销或删掉这一条它们就回来 */}
+            {!!e.tools?.length && <small className="harness-evidence" data-harness-shelved="tools">{t('settings.agents.harnessShelvedTools', { names: e.tools.join(listSep) })}</small>}
+            {!!e.skills?.length && <small className="harness-evidence" data-harness-shelved="skills">{t('settings.agents.harnessShelvedSkills', { names: e.skills.join(listSep) })}</small>}
             {e.evidence && <small className="harness-evidence">{t('settings.agents.harnessEvidence', { text: e.evidence })}</small>}
             <small className="harness-meta">v{e.version}{e.updatedAt && <> · {day(e.updatedAt)}</>}</small>
           </li>)}</ul>

@@ -10,6 +10,10 @@ describe('working-note update receipts', () => {
     expect(harnessChanges([{ ...event, name: 'manage_human' }, { ...event, done: false }, { ...event, isError: true }, { ...event, result: '(working notes are empty)' },
       { ...event, result: JSON.stringify({ kind: 'human_update', change }) }, { ...event, result: JSON.stringify({ kind: 'harness_update', change: null }) }])).toEqual([])
   })
+  it('carries the shelved names of an equip entry and rejects a malformed list', () => {
+    expect(harnessChanges([withChange({ kind: 'equip', tools: ['sketch'], skills: ['local:pptx'] })])[0]).toMatchObject({ kind: 'equip', tools: ['sketch'], skills: ['local:pptx'] })
+    expect(harnessChanges([withChange({ kind: 'equip', tools: 'sketch' }), withChange({ kind: 'equip', skills: [1] })])).toEqual([])
+  })
   it('rejects malformed identities and unknown actions', () => {
     expect(harnessChanges([withChange({ agent: '../other' }), withChange({ entryId: 'a/b' }), withChange({ rev: 'x' }), withChange({ action: 'wipe' }), withChange({ version: '1' })])).toEqual([])
   })

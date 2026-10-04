@@ -18,7 +18,9 @@ const toolResult = 'Complete tool output '.repeat(100) + 'END-OF-TOOL-RESULT'
 const childMessages = [{ id: 'child-user', session_id: child.id, role: 'user', content: 'Research this thoroughly', timestamp: 1 }, { id: 'child-answer', session_id: child.id, role: 'model', content: text, reasoning: 'A detailed reasoning record.', agent_slug: 'research', timestamp: 2, tool_calls: [{ id: 'read-1', type: 'function', function: { name: 'read_file', arguments: '{"path":"evidence.md"}' } }], tool_results: [{ tool_call_id: 'read-1', content: toolResult, isError: false }] }]
 const solo = { ...base, id: 'profile-solo', title: 'Research notes', agent_config: { agentSlug: 'research', execMode: 'host', cwd: home } }
 // 进化(HARNESS 工作笔记):一条现存、一条已删可恢复;第二条日期是手改出来的非 ISO 串,不许渲出 Invalid Date。
-const harnessEntries = [{ id: 'h-cite', kind: 'recipe', title: 'Cite before concluding', body: 'Quote the primary source before concluding.', evidence: 'corrected twice', createdAt: '2026-09-10', updatedAt: '2026-09-16', version: 2 }, { id: 'h-scope', kind: 'note', title: 'Confirm scope first', body: 'Ask for time range and region.', createdAt: '2026-09-12', updatedAt: 'last week', version: 1 }]
+const harnessEntries = [{ id: 'h-cite', kind: 'recipe', title: 'Cite before concluding', body: 'Quote the primary source before concluding.', evidence: 'corrected twice', createdAt: '2026-09-10', updatedAt: '2026-09-16', version: 2 }, { id: 'h-scope', kind: 'note', title: 'Confirm scope first', body: 'Ask for time range and region.', createdAt: '2026-09-12', updatedAt: 'last week', version: 1 },
+  // 装备(10-04):Agent 自己收起的工具 / 技能 —— 面板要给出本地化的类型芯片,并列出收起了什么
+  { id: 'h-shelf', kind: 'equip', title: 'Shelve drawing tools', body: 'Not used in the last month.', evidence: 'usage review', tools: ['sketch', 'display_file'], skills: ['local:pptx'], createdAt: '2026-10-01', updatedAt: '2026-10-01', version: 1 }]
 const harnessOld = { id: 'h-old', kind: 'note', title: 'Prefer PDF over HTML', body: 'Superseded.', createdAt: '2026-09-01', updatedAt: '2026-09-01', version: 1 }
 const harnessJournal = [{ ts: '2026-09-01T10:00:00Z', action: 'upsert', entryId: 'h-old', before: null, after: harnessOld }, { ts: '2026-09-10T08:00:00Z', action: 'upsert', entryId: 'h-cite', before: null, after: { ...harnessEntries[0], version: 1 } }, { ts: '2026-09-14T15:00:00Z', action: 'delete', entryId: 'h-old', before: harnessOld, after: null }, { ts: '2026-09-16T09:30:00Z', action: 'upsert', entryId: 'h-cite', before: { ...harnessEntries[0], version: 1 }, after: harnessEntries[0], rev: '7c1d2f3a-9b4e-4c6d-8a1f-2b3c4d5e6f70' }]
 // 对话里的工作笔记更新卡(10-04 放开写入):Research notes 的历史里有一条 manage_harness 回执 → 回复下出卡。
@@ -362,6 +364,10 @@ async function run() {
     assert.equal(await evolution.locator('.harness-kind').first().textContent(), '做法', 'Kinds render as localized chips, not raw ids')
     assert.equal(await evolution.getByText(/Invalid Date|T\d\d:\d\d/).count(), 0, 'Dates are localized; a hand-edited date falls back to its raw text')
     assert.equal(await evolution.locator('[data-harness-entry="h-scope"] .harness-meta').textContent(), 'v1 · last week')
+    const shelf = evolution.locator('[data-harness-entry="h-shelf"]')
+    assert.equal(await shelf.locator('.harness-kind').textContent(), '装备', 'An equip entry carries its own localized chip')
+    assert.equal(await shelf.locator('[data-harness-shelved="tools"]').textContent(), '收起的工具：sketch、display_file')
+    assert.equal(await shelf.locator('[data-harness-shelved="skills"]').textContent(), '收起的技能：local:pptx')
     assert.ok((await evolution.textContent()).includes('写入立即生效') && !(await evolution.textContent()).includes('要经审批'), 'The panel itself explains that the agent maintains its notes and that updates can be undone')
     assert.equal(await compact.locator('.agent-profile-save').evaluate((el) => getComputedStyle(el).display), 'none', 'Growth has its own save paths: the empty save dock takes no space')
     win.once('dialog', (d) => d.accept())

@@ -20,6 +20,12 @@
  * 摘要、全文怎么读」的洞;超限工具直接报错,逼 agent 先合并/淘汰弱条(资源约束=进化压力)。
  * 未知 kind / 未知 meta 行解析时原样保留(扩展性契约:新 kind 只增不改,旧版渲染器忽略并保留)。
  *
+ * kind 'equip'(10-04,装备层)= agent 给自己**收起**少用的工具 / 技能,多两行 meta:
+ *   - tools: sketch, manage_automation      → 这些工具改走按需目录(load_tools 仍取得回,直接按名调用也照常执行)
+ *   - skills: local:pptx                    → 这些技能不再列进技能目录(use_skill 按 id 照常可用)
+ * 只有「收起」这一个方向:它动的是上下文体量,不是能力边界 —— 用户按 agent 的工具黑白名单 / 技能清单才是硬闸,这里碰不到。
+ * 老引擎把这两行当未知 meta 原样带回、把 equip 当普通笔记渲染(正文照样说明收起了什么),不丢数据。
+ *
  * 与跨设备同步的关系(设计取舍,勿当 bug 修):HARNESS.md 走 agentFileSync 全文件镜像
  * (LWW+冲突副本),对端改动**不经本管线**、不进本机 journal——journal 只是**本设备**的编辑史,
  * rollback 恢复的是本机视角的上一版,可能盖掉刚同步进来的对端版本(rollback 自身也留快照,可再撤)。
@@ -38,10 +44,12 @@ export const MAX_ENTRIES = 30;
 export const TITLE_MAX = 80;
 export const BODY_MAX = 300;
 export const EVIDENCE_MAX = 200;
+/** 一条 equip 条目里工具 / 技能各自的上限。 */
+export const EQUIP_MAX = 40;
 
 export interface HarnessEntry {
   id: string;
-  /** 'note'(工作方法) | 'recipe'(委托配方);未知值保留原样。 */
+  /** 'note'(工作方法) | 'recipe'(委托配方) | 'equip'(收起的装备);未知值保留原样。 */
   kind: string;
   title: string;
   body: string;
@@ -49,6 +57,9 @@ export interface HarnessEntry {
   createdAt: string; // YYYY-MM-DD
   updatedAt: string;
   version: number;
+  /** kind 'equip':这一条收起的工具名 / 技能 id(别的 kind 不带)。 */
+  tools?: string[];
+  skills?: string[];
   /** 手改时留下的未识别 meta 行(`- key: value`),序列化原样带回。 */
   extraMeta?: string[];
 }
@@ -63,6 +74,9 @@ export interface HarnessEditInput {
   title?: string;
   body?: string;
   evidence?: string;
+  /** kind 'equip' 专用(给了就整组替换;调用方先按注册表 / 技能清单核过名字,这里只管形状)。 */
+  tools?: string[];
+  skills?: string[];
 }
 
 interface JournalLine {
@@ -82,6 +96,8 @@ const HEADER =
 
 const HEADING_RE = /^## \[([a-z0-9][a-z0-9-]*)\]\s*(.*)$/;
 const SAFE_ID = /^[a-z0-9][a-z0-9-]{0,31}$/;
+/** 工具名 / 技能 id 的形状(`manage_schedule`、`mcp__srv__tool`、`local:pptx`):不含逗号与空白,meta 行才拆得回来。 */
+const EQUIP_NAME = /^[\w.:@/-]{1,80}$/;
 
 export function harnessPath(slug: string): string {
   return path.join(agentsDir(), slug, HARNESS_FILE);
@@ -137,6 +153,10 @@ export function parseHarness(raw: string): HarnessEntry[] {
           const uv = val.match(/^(\S+)(?:\s+v(\d+))?$/);
           cur.updatedAt = uv?.[1] ?? val;
           if (uv?.[2]) cur.version = parseInt(uv[2], 10) || 1;
+        } else if (key === 'tools' || key === 'skills') {
+          // 手改进来的名字照样过形状闸(不合形状的丢弃),读侧不信盘面
+          const names = [...new Set(val.split(',').map((x) => x.trim()).filter((x) => EQUIP_NAME.test(x)))].slice(0, EQUIP_MAX);
+          if (names.length) cur[key] = names;
         } else (cur.extraMeta ??= []).push(line);
         continue;
       }
@@ -154,6 +174,8 @@ export function serializeHarness(entries: HarnessEntry[]): string {
     if (e.evidence) lines.push(`- evidence: ${e.evidence}`);
     if (e.createdAt) lines.push(`- created: ${e.createdAt}`);
     lines.push(`- updated: ${e.updatedAt || e.createdAt || today()}${e.version > 1 ? ` v${e.version}` : ''}`);
+    if (e.tools?.length) lines.push(`- tools: ${e.tools.join(', ')}`);
+    if (e.skills?.length) lines.push(`- skills: ${e.skills.join(', ')}`);
     for (const x of e.extraMeta ?? []) lines.push(x);
     return lines.join('\n') + (e.body ? `\n\n${e.body}` : '');
   });
@@ -238,6 +260,39 @@ const cleanKind = (s: unknown): string => {
   return /^[a-z][a-z0-9-]*$/.test(v) ? v : 'note';
 };
 
+function cleanNames(list: unknown, label: string): string[] {
+  const names = [...new Set((Array.isArray(list) ? list : []).map((x) => String(x ?? '').trim()).filter(Boolean))];
+  const bad = names.filter((n) => !EQUIP_NAME.test(n));
+  if (bad.length) throw new Error(`invalid name in ${label}: ${bad.slice(0, 3).join(', ')}`);
+  if (names.length > EQUIP_MAX) throw new Error(`${label} lists too many names (${names.length} > ${EQUIP_MAX}); split it into two entries`);
+  return names;
+}
+/** equip 条目的两组名字落到条目上;非 equip 带了名字 → 报错(模型多半是忘了写 kind),equip 两组都空 → 报错。 */
+function applyEquip(entry: HarnessEntry, edit: HarnessEditInput): void {
+  if (entry.kind !== 'equip') {
+    if (edit.tools?.length || edit.skills?.length) throw new Error('tools / skills are only for kind "equip"; set kind to "equip" to shelve them');
+    delete entry.tools;
+    delete entry.skills;
+    return;
+  }
+  if (edit.tools != null) entry.tools = cleanNames(edit.tools, 'tools');
+  if (edit.skills != null) entry.skills = cleanNames(edit.skills, 'skills');
+  if (!entry.tools?.length) delete entry.tools;
+  if (!entry.skills?.length) delete entry.skills;
+  if (!entry.tools && !entry.skills) throw new Error('an "equip" entry must shelve at least one tool or skill; to bring everything back, delete the entry');
+}
+
+/** 全部 equip 条目收起的工具 / 技能并集。调用方(agentLoop)只在笔记段真的注入时才用它 —— 模型看不见「我收起了什么」的 run 里不该少东西。 */
+export function shelvedOf(entries: HarnessEntry[]): { tools: Set<string>; skills: Set<string> } {
+  const tools = new Set<string>(), skills = new Set<string>();
+  for (const e of entries) {
+    if (e.kind !== 'equip') continue;
+    for (const t of e.tools ?? []) tools.add(t);
+    for (const k of e.skills ?? []) skills.add(k);
+  }
+  return { tools, skills };
+}
+
 // 同 agent 并发写串行化(同一引擎进程内多会话;Codex 评审 #5)。
 // ponytail: 进程内 promise 链;跨进程并发(极罕见)仍是 LWW,journal 里两条都有据可查。
 const writeLocks = new Map<string, Promise<unknown>>();
@@ -319,6 +374,7 @@ async function applyEditUnlocked(
     if (edit.body != null) cur.body = cleanBody(edit.body) || cur.body;
     if (edit.evidence != null) cur.evidence = cleanLine(edit.evidence, EVIDENCE_MAX, 'evidence') || undefined;
     if (edit.kind != null && String(edit.kind).trim()) cur.kind = cleanKind(edit.kind);
+    applyEquip(cur, edit);
     cur.updatedAt = today();
     cur.version = (cur.version || 1) + 1;
     await appendJournal(slug, { ts, rev, action: 'upsert', entryId: id, before, after: { ...cur }, sessionId: opts?.sessionId });
@@ -346,6 +402,7 @@ async function applyEditUnlocked(
     updatedAt: today(),
     version: 1,
   };
+  applyEquip(entry, edit);
   entries.push(entry);
   await appendJournal(slug, { ts, rev, action: 'upsert', entryId: entry.id, before: null, after: { ...entry }, sessionId: opts?.sessionId });
   await saveHarness(slug, entries);
@@ -357,8 +414,9 @@ export function renderHarnessSection(entries: HarnessEntry[]): string {
   if (!entries.length) return '';
   const line = (e: HarnessEntry): string =>
     `- [${e.id}] ${e.title} — ${e.body.replace(/\s*\n\s*/g, ' ')}${e.evidence ? ` (evidence: ${e.evidence})` : ''}`;
-  const notes = entries.filter((e) => e.kind !== 'recipe');
+  const notes = entries.filter((e) => e.kind !== 'recipe' && e.kind !== 'equip');
   const recipes = entries.filter((e) => e.kind === 'recipe');
+  const equips = entries.filter((e) => e.kind === 'equip');
   const parts = [
     '## My Working Notes (self-curated)\n' +
       'Lessons you have accumulated about HOW to work for this user, curated by you via the manage_harness tool. ' +
@@ -368,6 +426,14 @@ export function renderHarnessSection(entries: HarnessEntry[]): string {
   ];
   if (notes.length) parts.push(notes.map(line).join('\n'));
   if (recipes.length) parts.push('Delegation recipes (patterns that worked; reuse when the task matches):\n' + recipes.map(line).join('\n'));
+  if (equips.length) {
+    const shelved = (e: HarnessEntry): string =>
+      [e.tools?.length ? `tools: ${e.tools.join(', ')}` : '', e.skills?.length ? `skills: ${e.skills.join(', ')}` : ''].filter(Boolean).join('; ');
+    parts.push(
+      'Shelved equipment (your own choice, to keep context lean; nothing is lost — a shelved tool is listed under "Additional Tools" and comes back with load_tools, a shelved skill still loads with use_skill by its id; delete or revise the entry to bring them back for good):\n' +
+        equips.map((e) => `- [${e.id}] ${e.title} — ${shelved(e) || 'nothing'} — ${e.body.replace(/\s*\n\s*/g, ' ')}${e.evidence ? ` (evidence: ${e.evidence})` : ''}`).join('\n'),
+    );
+  }
   return parts.join('\n\n');
 }
 

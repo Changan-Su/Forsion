@@ -64,7 +64,14 @@ export function isDeferredIn(ctx: ToolContext, name: string, deferred?: boolean)
   // 而不是可恢复的报错,发现不了就不会去 load。
   // ponytail: 上限=一个工具名。别在这儿续名单 —— 其余按需工具走 load_tools 那条通道即可。
   if (name === 'read_document' && (ctx.subAgentDepth || 0) >= 1) return false;
-  return !!deferred || presetOf(ctx.preset).toolFace.deferred.has(name);
+  return !!deferred || presetOf(ctx.preset).toolFace.deferred.has(name) || (!!ctx.shelvedTools?.has(name) && isShelvable(name));
+}
+
+/** agent 自己收不得的工具:收起后要靠它们才回得来 / 才继续得下去 —— 基建三件(同 LOADOUT_EXEMPT)、
+ *  自进化入口本身(撤回收起靠它)、技能入口(/skill 的「先 use_skill」指令靠它在 defs 里)。
+ *  读侧(isDeferredIn)与写侧(manage_harness 校验)共用:HARNESS.md 可手改 / 可同步,盘面写了也不认。 */
+export function isShelvable(name: string): boolean {
+  return !LOADOUT_EXEMPT.has(name) && name !== 'manage_harness' && name !== 'use_skill';
 }
 
 /** 旧工具名静默别名(不进 defs/快照):只兜升级瞬间仍引用旧名的存量会话上下文。
