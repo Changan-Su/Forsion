@@ -1,7 +1,7 @@
 ---
 name: 配置与管理 Agent
 description: 当用户想新建 / 配置 / 修改 / 删除 Tangu 本地 Agent(Normal Agent),或想把一种好用的角色 / 工作方式沉淀成可复用的 agent 时使用。讲解 manage_agent 工具与 agent 的文件夹结构(config.toml / SOUL.md / MEMORY.md / HARNESS.md 工作笔记 / LOG / Library),以及 manage_harness 自进化层与 /refine 复盘。
-version: 1.2.0
+version: 1.2.1
 category: agent 管理
 ---
 
@@ -23,8 +23,8 @@ Agent 也可能来自**插件捆绑包(bundle)播种**:安装带 `agents/` 子�
 - **HARNESS.md** — 该 agent 的「工作笔记」:**我该怎么干活**。这是 agent **唯一自有、可自我进化**的一层
   (人格与开发指令的主权归用户,agent 不能自己改 SOUL.md / config.toml)。每次会话注入系统提示。
   只能用 `manage_harness` 工具写(`upsert` / `delete` / `list` / `rollback`),不要用文件工具直接改;
-  每笔留 before/after 快照,`rollback` 可回退到上一版。写入走审批档,readonly / auto-edit 下逐笔弹确认。
-  常见触发是用户敲 `/refine`——复盘本次会话,把「以后该怎么做」沉淀成条目。
+  每笔留 before/after 快照,`rollback` 可回退到上一版。写入立即生效,不用等用户批准:对话里会出现一张更新卡,用户可以撤销。
+  对话里学到耐久的做法就可以直接记;用户敲 `/refine` 是让你专门复盘一次本次会话,把「以后该怎么做」沉淀成条目。
   **只记耐久的教训**(反复被纠正的偏好、验证过的做法、好用的委派配方);环境/安装失败、「某工具坏了」、
   一次性任务流水**绝不能记**——它们会硬化成日后的拒绝理由。
 - **LOG/<日期>.md** — 该 agent 的按日日志(用 `log_event` 写、`read_log` 读)。

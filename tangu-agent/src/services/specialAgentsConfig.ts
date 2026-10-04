@@ -38,7 +38,7 @@ export interface HistorianConfig {
   prompt: string;
   /**
    * 自进化自动档(09-18 起默认开;老配置里落盘的 false 由下方一次性迁移翻开):judge 额外提名「工作笔记候选」→ 该 agent 的 .harness-raw.md 收件箱,
-   * 仅在下次 /refine 时注入供审阅,经 manage_harness(审批)采纳才落 HARNESS.md——自动采集、人工采纳。
+   * 仅在下次 /refine 时注入供审阅,由 agent 自己经 manage_harness 采纳才落 HARNESS.md(10-04 起写入不审批)——自动采集、agent 采纳。
    */
   harnessCandidates: boolean;
 }
@@ -124,7 +124,7 @@ export const SPECIAL_AGENTS_DEFAULTS: SpecialAgentsConfig = {
     mode: 'independent',
     prompt: '',
     // 默认开(09-18 用户拍板,推翻 08-13「自动档默认关」):关着时这层三个月零使用(正式库 713 个 run 里 /refine 与 manage_harness 全 0)。
-    // 它只提名、不写入——采纳仍要 /refine + 审批;代价是判官提示词每轮多一段字段说明。
+    // 它只提名、不写入——采纳仍要 /refine(10-04 起 manage_harness 不再审批,但候选只在 /refine 时注入);代价是判官提示词每轮多一段字段说明。
     harnessCandidates: true,
   },
   muse: {

@@ -182,7 +182,7 @@ registerToolProvider(readSessionProvider); // both:read_session 按 id 读另一
 registerToolProvider(brainstormProvider); // host-only:self_brainstorm 从当前上下文分裂多视角分身自我批判(append 末尾,保前缀缓存)
 registerToolProvider(searchSessionsProvider); // both:search_sessions 列出/检索过去会话,找到 id 交给 read_session(append 末尾,保前缀缓存)
 registerToolProvider(manageHumanProvider);
-registerToolProvider(manageHarnessProvider); // host-only:agent 自维护工作笔记 HARNESS.md(自进化层;审批 command 档;append 末尾,保前缀缓存)
+registerToolProvider(manageHarnessProvider); // host-only:agent 自维护工作笔记 HARNESS.md(自进化层;10-04 起常驻、不审批、立即生效 + 可撤销卡;coding 预设按需)
 registerToolProvider(sketchProvider); // GUI 限定(ctx.client 门禁,CLI/TUI 不注册):sketch 在对话流内联画可交互 HTML 卡片(append 末尾,保前缀缓存)
 registerToolProvider(transcribeAudioProvider); // host-only:transcribe_audio 经桌面桥(desktop-bridge.json)调主进程 ASR;无桥文件不可见(append 末尾,保前缀缓存)
 registerToolProvider(viewVideoProvider); // host-only:view_video 用本机 ffmpeg 抽帧「看」视频(联络表+单帧两档);无 ffmpeg 不可见(append 末尾,保前缀缓存)

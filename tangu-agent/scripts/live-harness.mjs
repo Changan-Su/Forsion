@@ -134,6 +134,7 @@ const MODEL = opt('model', process.env.TANGU_LIVE_MODEL || 'codex/gpt-5.6-luna')
 const AUTH = resolve(opt('auth', process.env.TANGU_LIVE_AUTH || join(homedir(), '.forsion-dev', 'provider-auth.json')));
 const KEYS = ['realtime', 'personas', 'rename', 'selfschedule', 'selfmodel', 'chat', 'tool', 'remember', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'parked', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human', 'emoji', 'visualize', 'visualfigures', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'control', 'phone', 'unattendedask', 'plugin', 'skillpick', 'settingsnav'];
 KEYS.push('pageinstructions');
+KEYS.push('harnessopen');
 // autocompact 要把模型窗口钉小(--window)才灌得满;窗口小了别的场景会被连累(系统提示+工具头就 13k+),所以它只能单独跑。
 const WINDOW = Number(opt('window', process.env.TANGU_LIVE_WINDOW || 0)) || 0;
 // P1-K9 · C3:--remote-cap <档> = 起引擎前经 K4 的新写入口写 remote.maxApprovalMode(缺省不写 = 引擎按 auto-edit)
@@ -154,6 +155,7 @@ OPT_IN.add('visualize'); // --only visualize: real model -> sketch controls/stat
 OPT_IN.add('emoji'); // Three real-model rounds; run explicitly when session icons change.
 OPT_IN.add('plugin'); // 隔离 home 里放夹具插件 —— 只在显式跑它时放,别让多出来的工具改了别的场景的工具表。
 OPT_IN.add('pageinstructions'); // Scoped document maintenance; deliberately excluded from broad default runs.
+OPT_IN.add('harnessopen'); // 四个 run + 一条探针;只在动 manage_harness / 工作笔记注入时才有信息量。
 const NEEDS = { dream: ['historian'], recall: ['historian', 'dream'] }; // 记忆链三连有先后依赖;其余场景自包含
 const ONLY = new Set(opt('only', process.env.TANGU_LIVE_ONLY || KEYS.filter((k) => !OPT_IN.has(k)).join(',')).split(',').map((s) => s.trim()).filter(Boolean));
 const TTFT_ROUNDS = Number(opt('ttft-rounds', process.env.TANGU_LIVE_TTFT_ROUNDS || 5));
@@ -2935,10 +2937,10 @@ Then reply with only the command output.`,
   });
   // ── 自进化闭环(09-18):三个 run 串成一条链,每一环各自留证据,红了能看出断在哪。
   //  ① 一次明确的工作方法纠正 → Historian 判官(harnessCandidates 开)应提名候选进 agents/<slug>/.harness-raw.md(自动档那半从未真机点验过);
-  //  ② 同会话 /refine → 模型须自己 load_tools 再 manage_harness(审批由台架代批)→ HARNESS.md 出条目、收件箱被消费清空、GET harness 回 entries+candidates;
+  //  ② 同会话 /refine → 模型直接 manage_harness(10-04 放开:常驻、零审批 —— 出现任何一笔审批即红)→ HARNESS.md 出条目、收件箱被消费清空、GET harness 回 entries+candidates;
   //  ③ 同 agent **新**会话让它复述工作笔记标题 → 证注入槽真把 HARNESS 带进了系统提示(只有 ② 绿只证「文件写了」)。
   // 会话必须显式 POST 创建并带 agent_config.agentSlug:判官归桶读的是会话行存档的 agent_config,run 自动建的会话没有它 → 候选会错落进 xyra 的收件箱。
-  // 模型不配合(没 load_tools / 没写)与引擎坏是两种红,detail 里分开写:工具序列原样记录。
+  // 模型不配合(没写)与引擎坏是两种红,detail 里分开写:工具序列原样记录。
   await scenario('refine', 'refine 自进化闭环(自动档提名 → /refine 采纳 → 新会话带上)', async () => {
     const slug = 'live-refiner';
     await api('/agent/agents', { method: 'POST', body: JSON.stringify({ slug, name: 'Refiner', systemPrompt: "You are Refiner, a careful assistant. Reply in the user's language." }) });
@@ -2977,13 +2979,56 @@ Then reply with only the command output.`,
     const recalled = !!ev3 && !ev3.error && entries.some((e) => ev3.content.includes(e.title));
     // 辅助模式那一档还要证「这一轮真的是辅助模式」:同会话出现 assist_discussion(与主 Agent 商议)活动。没有它,提名可能来自独立判断,绿得没意义。
     const assistSeen = HIST_MODE !== 'assist' || (await rows()).some((x) => x.action === 'assist_discussion');
-    const ok = !!act && nominated > 0 && assistSeen && !ev2.error && wrote && entries.length > 0 && (after.candidates || []).length === 0 && (before.candidates || []).length === nominated && recalled;
+    const ok = !!act && nominated > 0 && assistSeen && !ev2.error && !ev2.approvals && wrote && entries.length > 0 && (after.candidates || []).length === 0 && (before.candidates || []).length === nominated && recalled;
     return { ok, detail: [
       `模式 ${HIST_MODE}${HIST_MODE === 'assist' ? (assistSeen ? '(本轮确为辅助模式:有 assist_discussion)' : '(⚠ 没看到 assist_discussion,本轮未必是辅助模式)') : ''}`,
       `① 提名 ${act ? `${nominated} 条进收件箱(GET candidates ${before.candidates?.length ?? '?'})` : seenActions.length ? `判官跑了(活动 ${seenActions.join('/')})但 180s 内没有 harness_candidates —— 模型没提名,不是引擎没跑` : '180s 无任何 Historian 活动 —— 判官没跑'}`,
-      `② refine ${ev2.error || `工具 ${ev2.toolCalls.join(',') || '无'}`}${ev2.approvals ? `;代批 ${ev2.approvals}` : ''};HARNESS ${entries.length} 条(之前 ${before.entries?.length ?? 0});收件箱剩 ${after.candidates?.length ?? '?'}`,
+      `② refine ${ev2.error || `工具 ${ev2.toolCalls.join(',') || '无'}`}${ev2.approvals ? `;⚠ 出现 ${ev2.approvals} 笔审批(放开后应为 0)` : ''};HARNESS ${entries.length} 条(之前 ${before.entries?.length ?? 0});收件箱剩 ${after.candidates?.length ?? '?'}`,
       `③ 新会话复述标题 ${ev3 ? (recalled ? '命中' : `未命中:${ev3.error || ev3.content.slice(0, 80)}`) : '未跑(② 没写出条目)'}`,
     ].join(';'), output: `【run① assistant】${ev1.content}\n\n【.harness-raw.md】\n${inboxText || '(空)'}\n\n【run② /refine assistant】${ev2.content}\n\n【HARNESS.md】\n${harnessText || '(空)'}\n\n【run③ 新会话】${ev3?.content ?? '(未跑)'}`, ttftMs: ttft(ev2), tokens: tokensOf(ev2), toolCalls: [...ev1.toolCalls, '|', ...ev2.toolCalls, '|', ...(ev3?.toolCalls || [])] };
+  });
+  // ── HARNESS 放开写入(10-04):不靠 /refine、不靠审批,四环各自留证据 ──
+  //  ① 用户点名「记一条你自己的工作方法」→ 模型直接 manage_harness:没先 load_tools 它(常驻)、零审批、回执 kind=harness_update 且带 rev;
+  //  ② 同 agent 新会话的系统提示里带上这条(debugSystemPrompt 取证,与模型复述无关);
+  //  ③ 撤销 = POST harness/rollback {id, expectRev: 回执里的 rev}:第一次成功且条目消失,同一张卡再点一次 → 409(不会把条目又翻回来);
+  //  ④ 撤销后的新会话系统提示里不再有它。
+  // 末尾一条**不设门**的探针:用户只是纠正做法、没说「记下来」时,模型把它记进了哪(remember / manage_human / manage_harness / 都没记)—— 只记录,供调提示词用。
+  await scenario('harnessopen', 'harness 放开写入:直写零审批 → 新会话带上 → 撤销一次有效', async () => {
+    const slug = 'live-harness-open';
+    await api('/agent/agents', { method: 'POST', body: JSON.stringify({ slug, name: 'Opener', systemPrompt: "You are Opener, a careful assistant. Reply in the user's language." }) });
+    const cfg = { ...AGENT_CONFIG, agentSlug: slug, approvalMode: 'auto-edit', debugSystemPrompt: true, thinkingLevel: 'low' };
+    const mk = async (title) => (await api('/agent/sessions', { method: 'POST', body: JSON.stringify({ title, model_id: MODEL, agent_config: cfg }) })).session.id;
+    const mark = `引用优先-${randomUUID().slice(0, 6)}`;
+    const ev = await run(await mk('Harness open'), `记一条你自己的工作方法,标题就叫“${mark}”:以后凡是我让你读文件回答,先原样引用文件里对应的那一行,再给结论。上次你没引用就直接下结论,我核对起来很费劲。`, 240_000, cfg);
+    const receipts = ev.toolResults.flatMap((r) => { try { const v = JSON.parse(r.full); return v.kind === 'harness_update' ? [v.change] : []; } catch { return []; } });
+    const change = receipts.find((c) => JSON.stringify(c).includes(mark));
+    const loadedIt = ev.toolArgs.some((a) => a.name === 'load_tools' && a.arguments.includes('manage_harness'));
+    const st1 = await api(`/agent/agents/${slug}/harness`);
+    const onDisk = !!change && (st1.entries || []).some((e) => e.id === change.entryId) && (st1.journal || []).some((j) => j.rev === change.rev);
+    const wrote = !ev.error && ev.done && !!change && !!change.rev && !loadedIt && !ev.approvals && onDisk;
+    if (!wrote) return { ok: false, detail: `① ${ev.error || JSON.stringify({ tools: ev.toolCalls, receipt: !!change, loadedIt, approvals: ev.approvals, onDisk })}`, output: ev.content, toolCalls: ev.toolCalls };
+    const fresh = await run(await mk('Harness open recall'), '用一句话打个招呼。不调用工具。', 120_000, cfg);
+    const injected = !fresh.error && !!fresh.systemPrompt?.includes(mark);
+    const undo = { method: 'POST', body: JSON.stringify({ id: change.entryId, expectRev: change.rev }) };
+    await api(`/agent/agents/${slug}/harness/rollback`, undo);
+    const st2 = await api(`/agent/agents/${slug}/harness`);
+    const undone = !(st2.entries || []).some((e) => e.id === change.entryId);
+    const second = await api(`/agent/agents/${slug}/harness/rollback`, undo).then(() => 'accepted', (e) => String(e.message));
+    const st3 = await api(`/agent/agents/${slug}/harness`);
+    const once = / 409 /.test(second) && !(st3.entries || []).some((e) => e.id === change.entryId);
+    const gone = await run(await mk('Harness open after undo'), '用一句话打个招呼。不调用工具。', 120_000, cfg);
+    const removed = !gone.error && !!gone.systemPrompt && !gone.systemPrompt.includes(mark);
+    // 探针(不设门):自然纠正,不点名任何库
+    const probe = await run(await mk('Harness open probe'), '刚才那种做法不行:你一口气把三处都改完才告诉我。以后动手之前先用一句话说清你打算改哪几处,我点头了再改。', 180_000, cfg);
+    const stores = ['manage_harness', 'manage_human', 'remember'].filter((t) => probe.toolCalls.includes(t));
+    writeFileSync(join(OUT, 'harnessopen-evidence.json'), JSON.stringify({ change, tools: ev.toolCalls, approvals: ev.approvals, injected, undone, second, removed, probe: { tools: probe.toolCalls, stores, approvals: probe.approvals, content: probe.content } }, null, 2));
+    return { ok: injected && undone && once && removed, detail: [
+      `① 直写 工具 ${ev.toolCalls.join(',')};审批 ${ev.approvals};回执 ${change.action} v${change.version}`,
+      `② 新会话系统提示 ${injected ? '带上了' : `没带上${fresh.error ? `(${fresh.error})` : ''}`}`,
+      `③ 撤销 ${undone ? '条目已消失' : '条目还在'};再点一次 → ${once ? '409 且没翻回来' : `⚠ ${second}`}`,
+      `④ 撤销后新会话 ${removed ? '不再带' : `还带着${gone.error ? `(${gone.error})` : ''}`}`,
+      `探针(不设门):自然纠正 → ${stores.join('+') || '都没记'}${probe.approvals ? `;审批 ${probe.approvals}` : ''}`,
+    ].join(';'), output: `【直写】${ev.content}\n\n【探针】${probe.content}`, toolCalls: [...ev.toolCalls, '|', ...probe.toolCalls], tokens: [ev, fresh, gone, probe].reduce((n, e) => n + (tokensOf(e) || 0), 0) };
   });
   // ── 缓存结构:A(新会话) / B(新会话·同文) / B′(新会话·异文) / C(S2 后续) / D(S1 后续)──
   // 台架**证不了 token 省了多少**(样本太小、上游路由不可控),它证的是「结构没塌」:同会话后续调用还命中得了吗?

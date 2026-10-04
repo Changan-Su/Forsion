@@ -65,6 +65,9 @@ export const CODING_PRESET_DEFERRED: ReadonlySet<string> = new Set([
   'amadeus_create_event', 'amadeus_edit_event', 'amadeus_delete_event',
   'inbox_send', 'display_file', 'read_session', 'search_sessions', 'read_document',
   'remember', 'log_event', 'read_log', 'read_computer_history',
+  // 10-04 起 manage_harness 在 work 面常驻;coding 面保持按需(与此前逐字节一致):同一份取证里 log_event 被反射式调了 80 次,
+  // 且默认 agent 在 coding 预设下不注入工作笔记段(人格抑制),常驻一个写它的工具只会带偏任务。
+  'manage_harness',
 ]);
 
 /** chat 常驻面(方案 §3.2 A 档):10 个 + GUI 端的 sketch。⚠️ 白名单只保证「不被 chat 砍掉」,不保证在场——

@@ -256,7 +256,8 @@ const LOADOUT_EXEMPT = new Set(['exit_plan_mode', 'ask_user', 'load_tools']);
 
 /** 有门禁、但**仍受**每-agent 黑白名单约束且进 UI 目录的工具:读用户隐私数据的面,全局开关打开后
  *  用户要能对单个 agent(市场导入的第三方 agent)关掉它。allow 模式的 agent 不列即不可见(默认拒)。 */
-const LOADOUT_GATED = new Set(['read_computer_history', 'manage_human']);
+// manage_harness(10-04 起常驻、不审批):它给自己写进系统提示的笔记,用户要能对单个 agent 关掉这条自进化通道。
+const LOADOUT_GATED = new Set(['read_computer_history', 'manage_human', 'manage_harness']);
 
 /** 注册一个 provider。同 id 幂等覆盖(保持原位置,热加载安全)。 */
 export function registerToolProvider(p: ToolProvider): void {

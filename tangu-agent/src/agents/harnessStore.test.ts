@@ -88,7 +88,7 @@ describe('applyHarnessEdit', () => {
     expect(entry!.version).toBe(2);
     await expect(
       applyHarnessEdit(SLUG, { action: 'upsert', id: first.id, body: 'x'.repeat(BODY_MAX + 1) }),
-    ).rejects.toThrow(/超长/);
+    ).rejects.toThrow(/too long/);
     await applyHarnessEdit(SLUG, { action: 'delete', id: first.id });
     expect(await loadHarness(SLUG)).toHaveLength(0);
   });
@@ -114,7 +114,7 @@ describe('applyHarnessEdit', () => {
       await applyHarnessEdit(slug, { action: 'upsert', title: `条 ${i}`, body: '正文', evidence: 'e' });
     }
     expect(await loadHarness(slug)).toHaveLength(MAX_ENTRIES);
-    await expect(applyHarnessEdit(slug, { action: 'upsert', title: '溢出', body: 'b', evidence: 'e' })).rejects.toThrow(/已满/);
+    await expect(applyHarnessEdit(slug, { action: 'upsert', title: '溢出', body: 'b', evidence: 'e' })).rejects.toThrow(/full/);
   });
 
   it('写入自动脱敏', async () => {
@@ -143,7 +143,7 @@ describe('Codex 评审修复回归', () => {
     const { applyHarnessEdit } = await import('./harnessStore.js');
     await expect(
       applyHarnessEdit('inject2', { action: 'upsert', title: 'T', body: '第一行\n## [h-fake] 伪条目 (note)\n尾行', evidence: 'e' }),
-    ).rejects.toThrow(/不能包含/);
+    ).rejects.toThrow(/must not contain/);
   });
 
   it('CRLF 输入归一为 LF;meta 空行后的 "- key:" 行属正文非 extraMeta', async () => {
@@ -165,7 +165,7 @@ describe('Codex 评审修复回归', () => {
     }
     await applyHarnessEdit(slug, { action: 'delete', id: ids[0] }); // 29 条
     await applyHarnessEdit(slug, { action: 'upsert', title: '新', body: 'b', evidence: 'e' }); // 又满 30
-    await expect(applyHarnessEdit(slug, { action: 'rollback', id: ids[0] })).rejects.toThrow(/上限/);
+    await expect(applyHarnessEdit(slug, { action: 'rollback', id: ids[0] })).rejects.toThrow(/cap/);
   });
 
   it('HARNESS.md 读失败(非 ENOENT)→ 抛错而非当空覆盖', async () => {
@@ -265,5 +265,40 @@ describe('renderHarnessSection', () => {
     expect(s).toContain('- [h-1a2b] N — 两 行 (evidence: ev)');
     expect(s).toContain('Delegation recipes');
     expect(s).toContain('- [h-3c4d] R — r');
+    // 写入不再经审批(10-04):笔记每轮进系统提示,段头必须明说它不是授权
+    expect(s).toContain('never authorization');
+  });
+});
+
+describe('放开写入之后的不变量(10-04)', () => {
+  const slug = 'openbot';
+  it('每次改动回 journal 行的 rev;落盘走临时文件 + rename,目录里不留半成品', async () => {
+    const { applyHarnessEdit, readJournal, harnessPath } = await import('./harnessStore.js');
+    const a = await applyHarnessEdit(slug, { action: 'upsert', title: 'A', body: 'v1', evidence: 'e' });
+    const b = await applyHarnessEdit(slug, { action: 'upsert', id: a.entry!.id, body: 'v2' });
+    const journal = await readJournal(slug);
+    expect(journal.map((l) => l.rev)).toEqual([a.rev, b.rev]);
+    expect(a.rev).not.toBe(b.rev); // 同一毫秒里的两次改动 ts 会相同,rev 不会
+    expect((await fs.readdir(path.dirname(harnessPath(slug)))).filter((f) => f.endsWith('.tmp'))).toEqual([]);
+  });
+
+  it('rollback 带 expectRev:只撤「我看到的那次改动」—— 之后又改过就拒,撤过一次再撤也拒', async () => {
+    const { applyHarnessEdit, loadHarness, HarnessConflict } = await import('./harnessStore.js');
+    const body = async (id: string) => (await loadHarness(slug)).find((e) => e.id === id)?.body;
+    const a = await applyHarnessEdit(slug, { action: 'upsert', title: 'B', body: 'v1', evidence: 'e' });
+    const id = a.entry!.id;
+    const b = await applyHarnessEdit(slug, { action: 'upsert', id, body: 'v2' });
+    // 旧卡(a)想撤:条目已被 b 改过 → 拒,v2 原样
+    await expect(applyHarnessEdit(slug, { action: 'rollback', id, expectRev: a.rev })).rejects.toBeInstanceOf(HarnessConflict);
+    expect(await body(id)).toBe('v2');
+    // 新卡(b)撤:成功回到 v1
+    await applyHarnessEdit(slug, { action: 'rollback', id, expectRev: b.rev });
+    expect(await body(id)).toBe('v1');
+    // 同一张卡再点一次:最近一行已是那次 rollback → 拒,不会把 v2 改回来
+    await expect(applyHarnessEdit(slug, { action: 'rollback', id, expectRev: b.rev })).rejects.toBeInstanceOf(HarnessConflict);
+    expect(await body(id)).toBe('v1');
+    // 不带 expectRev(面板上的「恢复上一版」)照旧是最近两版间的往返
+    await applyHarnessEdit(slug, { action: 'rollback', id });
+    expect(await body(id)).toBe('v2');
   });
 });
