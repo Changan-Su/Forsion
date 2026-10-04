@@ -6,7 +6,7 @@ import { AppWindow, ArrowLeft, Check, ChevronRight, Copy, ExternalLink, FileText
 import { useShallow } from 'zustand/react/shallow'
 import { useApp } from '../stores/appStore'
 import { useI18n } from '../i18n'
-import { createProjectSkill, deleteProjectIcon, generateGitCommitMessage, getGitSettings, getProjectContext, gitCommitProject, gitCreateProjectBranch, gitInitProject, gitPendingProject, gitPushProject, gitTrustProject, initProjectContext, putProjectDoc, putProjectSettings, setProjectIconEmoji, uploadProjectIcon } from '../services/backendService'
+import { createProjectSkill, deleteProjectIcon, forgetProjectMemory, generateGitCommitMessage, getGitSettings, getProjectContext, gitCommitProject, gitCreateProjectBranch, gitInitProject, gitPendingProject, gitPushProject, gitTrustProject, initProjectContext, putProjectDoc, putProjectSettings, setProjectIconEmoji, uploadProjectIcon } from '../services/backendService'
 import { askString } from '../amadeus/components/askString'
 import { normPath } from './coding/studioModel'
 import { addToCreations } from './chat2/CreationCards'
@@ -176,6 +176,18 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
   const relDoc = ctx ? ctx.doc.path.startsWith(`${ctx.cwd}/`) ? ctx.doc.path.slice(ctx.cwd.length + 1) : ctx.doc.path : ''
   const skillsDir = ctx ? `${ctx.workspaceDirName}/skills` : ''
   const clear = () => { setError(''); setNotice('') }
+  // 项目记忆:删一条(带版本)。别处刚改过 → 引擎回 409,重载后让用户再删一次,不拿旧版本硬删。
+  const forgetMemory = async (id: string): Promise<void> => {
+    if (!ctx?.memory?.version || busy) return
+    clear(); setBusy(`memory:${id}`)
+    try {
+      const memory = await forgetProjectMemory(homeTarget(), session.id, id, ctx.memory.version)
+      setCtx((c) => (c ? { ...c, memory } : c)); setNotice(t('projectProfile.memoryForgotten'))
+    } catch (e: any) {
+      if (e?.status === 409 || e?.status === 404) { setReloadAt((n) => n + 1); setError(t('projectProfile.memoryConflict')) }
+      else setError(String(e?.message || e))
+    } finally { setBusy('') }
+  }
   const open = (key: string) => { setSelected(key); setOpened((keys) => (keys.includes(key) ? keys : [...keys, key])) }
   const reveal = (p: string) => { void window.tangu?.revealHostPath?.(p) }
   const copyPath = () => { void navigator.clipboard?.writeText(dir).then(() => { setNotice(t('projectProfile.copied')) }) }
@@ -544,6 +556,14 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
               <div><button type="button" className="btn ghost sm" onClick={() => setSkillForm(null)}>{t('agentProfile.cancel')}</button><button type="submit" className="btn primary sm" disabled={!skillForm.slug.trim() || !skillForm.name.trim() || !skillForm.content.trim()}>{busy === 'skill' && <Loader2 size={13} className="spin" />}{t('projectProfile.newSkill')}</button></div>
             </form> : <div className="project-card-actions"><button type="button" className="btn ghost sm" onClick={() => { clear(); setSkillForm({ slug: '', name: '', description: '', content: '' }) }}><Plus size={13} />{t('projectProfile.newSkill')}</button></div>}
           </section>
+          {ctx.memory && <section className="project-card" data-project-memory>
+            <div className="project-card-head"><div><h3>{t('projectProfile.memory')}</h3><small>{t('projectProfile.memoryHint')}</small>
+              {ctx.memory.entries.length > 0 && <div className="project-chips"><span className="project-chip">{t('projectProfile.memoryUsage', { count: ctx.memory.entries.length, chars: ctx.memory.chars, limit: ctx.memory.limit })}</span></div>}</div></div>
+            {ctx.memory.entries.length ? <ul className="project-list project-memory-list">{ctx.memory.entries.map((entry) => <li key={entry.id} className="project-memory-row" data-project-memory-entry={entry.id}>
+              <span>{entry.content}</span>
+              <button type="button" title={t('projectProfile.memoryForget')} aria-label={t('projectProfile.memoryForget')} disabled={!!busy} onClick={() => void forgetMemory(entry.id)}>{busy === `memory:${entry.id}` ? <Loader2 size={13} className="spin" /> : <X size={13} />}</button>
+            </li>)}</ul> : <p className="agent-profile-muted">{t('projectProfile.memoryEmpty')}</p>}
+          </section>}
           {ctx.plans.length > 0 && <section className="project-card" data-project-plans>
             <div className="project-card-head"><div><h3>{t('projectProfile.plans')}</h3><small>{t('projectProfile.plansHint', { dir: `${ctx.workspaceDirName}/plans` })}</small></div></div>
             <div className="project-list">{ctx.plans.map((plan) => <button type="button" key={plan.path} className="project-row" title={plan.path} onClick={() => void window.tangu?.openHostPath?.(plan.path)}><strong>{plan.title || plan.name}</strong><small>{formatRelative(plan.mtimeMs, { now, locale })}</small></button>)}</div>

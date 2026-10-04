@@ -11,11 +11,22 @@ import { registerMessages, useI18n } from '../i18n'
 import { MuseView } from './MuseView'
 import { homeTarget } from '../services/engine/targets'
 
-registerMessages({ 'special.action.icon_updated': { zh: '更新图标', en: 'icon updated' } })
+registerMessages({
+  'special.action.icon_updated': { zh: '更新图标', en: 'icon updated' },
+  'special.action.memory_candidates': { zh: '记下记忆候选', en: 'memory candidates noted' },
+  'special.action.project_memory_added': { zh: '写入项目记忆', en: 'project memory saved' },
+  'special.action.harness_adopted': { zh: '写入工作笔记', en: 'working note added' },
+  'special.action.harness_candidates': { zh: '记下工作笔记候选', en: 'working-note candidates noted' },
+})
 const ACTION_KEY: Record<string, string> = {
   icon_updated: 'special.action.icon_updated',
   title_updated: 'special.action.title_updated',
+  summary_updated: 'special.action.summary_updated',
   log_appended: 'special.action.log_appended',
+  memory_candidates: 'special.action.memory_candidates',
+  project_memory_added: 'special.action.project_memory_added',
+  harness_adopted: 'special.action.harness_adopted',
+  harness_candidates: 'special.action.harness_candidates',
   memory_appended: 'special.action.memory_appended',
   memory_updated: 'special.action.memory_updated',
   assist_discussion: 'special.action.assist_discussion',

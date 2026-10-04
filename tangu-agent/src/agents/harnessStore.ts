@@ -492,15 +492,20 @@ export function autoAdoptable(text: string): boolean {
 const sameText = (a: string, b: string): boolean => a.replace(/\s+/g, ' ').trim().toLowerCase() === b.replace(/\s+/g, ' ').trim().toLowerCase();
 
 /** 把一条后台提名直接写成 note 条目(校验、封顶、journal 与 agent 自己写的完全同一条路,journal 里记 by:'historian')。
- *  已有同名或同正文的条目 → 'duplicate',不重复堆。写不进(满了 / 校验不过)抛错,调用方改放候选收件箱。 */
+ *  已有同名或同正文的条目 → 'duplicate',不重复堆。这个会话里 agent 自己写过笔记 → 'own',后台不再替它写。
+ *  写不进(满了 / 校验不过)抛错,调用方改放候选收件箱。 */
 export async function adoptHarnessNomination(
   slug: string,
   nomination: { title: string; lesson: string; evidence: string },
   sessionId?: string,
-): Promise<'adopted' | 'duplicate'> {
+): Promise<'adopted' | 'duplicate' | 'own'> {
   return withSlugLock(slug, async () => {
     const entries = await loadHarness(slug);
     if (entries.some((e) => sameText(e.title, nomination.title) || sameText(e.body, nomination.lesson))) return 'duplicate';
+    // 10-04 live(refine):前台刚自己写完一条,8 秒后判官把同一个做法换成英文又采纳了一条 —— 换了说法,上面那道字面去重认不出。
+    // 它在这个会话里自己动手写笔记了,后台就不再替它写。装备条目不算(那是收工具,不是总结做法)。
+    // ponytail: 按会话一刀切;要更细就改成只看判官这次读到的那段对话里有没有它自己的写入。
+    if (sessionId && (await readJournal(slug)).some((l) => l.sessionId === sessionId && !l.by && l.action === 'upsert' && l.after?.kind !== 'equip')) return 'own';
     await applyEditUnlocked(slug, { action: 'upsert', kind: 'note', title: nomination.title, body: nomination.lesson, evidence: nomination.evidence }, { sessionId, by: 'historian' });
     return 'adopted';
   });

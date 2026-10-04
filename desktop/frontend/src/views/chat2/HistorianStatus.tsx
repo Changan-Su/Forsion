@@ -5,7 +5,7 @@ import { notifyApp } from '../../stores/notificationStore'
 import { takeFreshNominations } from '../../stores/notificationWiring'
 import { getBackgroundSessions, getSessionDetail, getSessionHistorian, type SessionHistorianStatus } from '../../services/backendService'
 import { useChildChat } from '../../stores/childChatStore'
-import { registerMessages, useI18n } from '../../i18n'
+import { currentLocale, registerMessages, useI18n } from '../../i18n'
 import { Markdown } from '../../components/Markdown'
 import { openAgentProfile } from '../agentProfileNav'
 import { targetForSession } from '../../services/engine/targets'
@@ -53,6 +53,18 @@ function nudgeRefine(sessionId: string, activityId: string): void {
   })
 }
 
+/** 后台复盘把一条做法直接写进了这个 Agent 的工作笔记(10-04:不再等 /refine)→ 告诉用户写了什么,点一下去「进化」里看或撤销。 */
+function notifyAdopted(sessionId: string, activityId: string, titles: string): void {
+  const st = useApp.getState()
+  const slug = st.configBySession[sessionId]?.agentSlug || st.defaultAgentSlug
+  const name = st.agentDefs.find((a) => a.slug === slug)?.name || slug
+  notifyApp({
+    event: 'harness.candidates', level: 'info', sticky: true, dedupeKey: `harness.adopted:${activityId}`,
+    text: st.tr('ntf.harnessAdopted', { name, titles: titles.split(' | ').join(currentLocale() === 'zh' ? '、' : ', ') }),
+    action: { label: st.tr('ntf.actionView'), run: () => openAgentProfile(slug, 'evolution') },
+  })
+}
+
 export function HistorianStatus({ sessionId }: { sessionId: string }) {
   const { t } = useI18n()
   const cfg = useApp((s) => s.cfg)
@@ -95,7 +107,7 @@ export function HistorianStatus({ sessionId }: { sessionId: string }) {
           setData(result); setFailed(false)
           const { fresh, seen: next } = takeFreshNominations(result.activity || [], seen.current)
           seen.current = next
-          for (const item of fresh) nudgeRefine(sessionId, item.id)
+          for (const item of fresh) { if (item.action === 'harness_adopted') notifyAdopted(sessionId, item.id, item.detail || ''); else nudgeRefine(sessionId, item.id) }
           const icon = result.activity?.find((item) => item.action === 'icon_updated')
           if (icon && icon.id !== iconActivity.current) {
             iconActivity.current = icon.id

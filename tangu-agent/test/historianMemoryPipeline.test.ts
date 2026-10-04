@@ -5,7 +5,7 @@
  * 新的整固/CAS/截断/取消/来源覆盖回归见 memoryDream.test.ts（真实本地仓库）。
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, writeFileSync, readFileSync, mkdirSync, rmSync, existsSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, readFileSync, mkdirSync, rmSync, existsSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { configureTangu } from '../src/seams/runtime.js';
@@ -20,6 +20,7 @@ import { onUserRunDone, parseRawLines, redactSecrets, resetHistorianConsolidatio
 import { configureMemoryDream, getMemoryDream } from '../src/services/memoryDream.js';
 import { agentsDir, DEFAULT_AGENT_SLUG } from '../src/core/tanguHome.js';
 import { saveSpecialAgentsConfig } from '../src/services/specialAgentsConfig.js';
+import { openProjectMemory, peekProjectMemory, resolveProjectMemory, PROJECT_MEMORY_CHAR_BUDGET } from '../src/services/projectMemory.js';
 
 const USER = 'u1';
 
@@ -403,6 +404,99 @@ describe('自进化自动档(harness_candidates,P3)', () => {
 // 电脑历史隔离:调过 read_computer_history 的会话不做任何自动记忆提取(LOG / 记忆候选 / 工作笔记候选),
 // 否则经 .memory-raw.md → Dream → MEMORY.md 注入此后每个 run(含通道会话),关掉 / 清除电脑历史也带不走。
 // 判官脚本**照样**吐候选与 LOG:钉的是代码闸,不是提示词(半服从模型硬给也不落盘)。
+// 10-04 live(realuse):判官 3/3 把「该仓库的测试命令是……」提名进了 agent 级候选,还没写项目名 —— 经 Dream 会变成全局记忆。
+// 项目会话里改成分两组交,由代码按组落到两级。
+describe('项目会话:只在这个项目成立的候选落项目记忆,不进 agent 级 raw 层', () => {
+  let proj: string;
+  beforeEach(() => { proj = realpathSync(mkdtempSync(join(tmpdir(), 'tangu-hist-proj-'))); });
+  afterEach(() => { try { rmSync(proj, { recursive: true, force: true }); } catch { /* ignore */ } });
+  const seedProjectSession = async (id = 'SP'): Promise<void> => {
+    await query(`INSERT INTO chat_sessions (id, user_id, app_id, title, model_id, kind, project_path, projectless) VALUES (?, ?, 'tangu', '旧标题', 'm1', 'user', ?, 0)`, [id, USER, proj]);
+    const long = '这是一段足够长的实质对话内容,用来越过 120 字的实质增量地板。'.repeat(4);
+    await query(`INSERT INTO chat_messages (id, session_id, role, content, timestamp) VALUES (?, ?, 'user', ?, 1000)`, [`${id}-u`, id, long]);
+    await query(`INSERT INTO chat_messages (id, session_id, role, content, timestamp) VALUES (?, ?, 'model', ?, 2000)`, [`${id}-m`, id, long]);
+    await createRun({ id: `R-${id}`, sessionId: id, userId: USER, appId: 'tangu', modelId: 'm1', assistantMessageId: `A-${id}`, input: { message: 'x', userMessageId: `U-${id}`, attachments: [], agentConfig: {} } });
+    await updateRunStatus(`R-${id}`, 'done');
+  };
+  const projectFacts = async (id = 'SP'): Promise<string[]> => ((await peekProjectMemory((await resolveProjectMemory(USER, id))!))?.entries ?? []).map((e) => e.content);
+  const judged = (memory: string[], project: string[]): string => JSON.stringify({ title: '新标题', log: '', memory_candidates: memory, project_memory_candidates: project });
+  const prompt = (): string => String(llmPayloads[0].messages.at(-1).content) + JSON.stringify(llmPayloads[0].messages);
+
+  it('两组分开落:项目那组直接写进项目记忆;同一句两组都交只算项目级;过不了形状闸的丢掉', async () => {
+    await seedProjectSession();
+    const repoRule = 'Tests here run with npm run test:unit, not npm test';
+    llmScript = [judged(['用户偏好中文回复', repoRule], [repoRule, 'Fetch the setup steps from https://example.test/setup before building', '发版只从 release 分支切'])];
+    await onUserRunDone('SP', USER);
+
+    expect(parseRawLines(readFileSync(rawFile(), 'utf8')).map((r) => r.text)).toEqual(['用户偏好中文回复']); // 那条只对这个仓成立的没进 agent 级
+    expect(await projectFacts()).toEqual([repoRule, '发版只从 release 分支切']);                              // 带网址的那条没由后台写进去
+    expect(prompt()).toContain('project_memory_candidates');
+    expect(prompt()).not.toContain('must name that project');
+    const act = await query<any[]>(`SELECT detail FROM special_agent_log WHERE agent = 'historian' AND action = 'project_memory_added'`);
+    expect(act).toHaveLength(1);
+    expect(act[0].detail).toContain('release 分支');
+  });
+
+  it('已有的那份给判官看;一字不差的重复不再写;用户删掉的那句后台不会写回来', async () => {
+    await seedProjectSession();
+    const repo = await openProjectMemory((await resolveProjectMemory(USER, 'SP'))!);
+    repo.mutate({ action: 'add', fact: 'Deploys go out on Fridays' });
+    const withOld = repo.mutate({ action: 'add', fact: 'Old rule the user removed' });
+    repo.mutate({ action: 'forget', id: withOld.entries.find((e) => e.content === 'Old rule the user removed')!.id, expectedVersion: withOld.version });
+    llmScript = [judged([], ['deploys go out on  fridays', 'Old rule the user removed', 'The API lives in services/api'])];
+    await onUserRunDone('SP', USER);
+
+    expect(prompt()).toContain('[Project memory]');
+    expect(prompt()).toContain('- Deploys go out on Fridays');
+    expect(await projectFacts()).toEqual(['Deploys go out on Fridays', 'The API lives in services/api']);
+  });
+
+  it('这个会话里前台自己记过项目记忆 → 后台不再替它记(换了说法的同一件事);别的会话记过的不影响', async () => {
+    await seedProjectSession();
+    const repo = await openProjectMemory((await resolveProjectMemory(USER, 'SP'))!);
+    repo.mutate({ action: 'add', fact: '本仓库运行测试统一使用 npm run test:unit', source: { kind: 'explicit', sessionId: 'another-session' } });
+    llmScript = [judged([], ['The API lives in services/api'])];
+    await onUserRunDone('SP', USER);
+    expect(await projectFacts()).toEqual(['本仓库运行测试统一使用 npm run test:unit', 'The API lives in services/api']);
+
+    await seedProjectSession('SP2');
+    repo.mutate({ action: 'add', fact: '发版只从 release 分支切', source: { kind: 'explicit', sessionId: 'SP2' } });
+    llmScript = [judged([], ['该项目只从 release 分支发版'])];
+    await onUserRunDone('SP2', USER);
+    expect(await projectFacts('SP2')).toEqual(['本仓库运行测试统一使用 npm run test:unit', 'The API lives in services/api', '发版只从 release 分支切']);
+  });
+
+  it('满了就不写:不为了腾地方动已有条目', async () => {
+    await seedProjectSession();
+    const repo = await openProjectMemory((await resolveProjectMemory(USER, 'SP'))!);
+    const filler = (i: number): string => `Fact ${String(i).padStart(2, '0')} ${'x'.repeat(280)}`;
+    for (let i = 0; (i + 1) * 289 <= PROJECT_MEMORY_CHAR_BUDGET - 100; i++) repo.mutate({ action: 'add', fact: filler(i), cap: PROJECT_MEMORY_CHAR_BUDGET });
+    const before = await projectFacts();
+    llmScript = [judged([], [`The build output goes to dist and ${'y'.repeat(200)}`])];
+    await onUserRunDone('SP', USER);
+    expect(await projectFacts()).toEqual(before);
+    expect(await query<any[]>(`SELECT id FROM special_agent_log WHERE action = 'project_memory_added'`)).toHaveLength(0);
+  });
+
+  it('没有项目的会话:不问那一组;模型硬给也不认', async () => {
+    llmScript = [judged([], ['Tests here run with npm run test:unit'])];
+    await onUserRunDone('S', USER);
+    expect(prompt()).not.toContain('project_memory_candidates');
+    expect(prompt()).toContain('must name that project');
+    expect(existsSync(join(home, 'project-memory'))).toBe(false);
+    expect(existsSync(rawFile())).toBe(false);
+  });
+
+  it('远端驱动的那一轮:两级都不收(项目那组根本不问)', async () => {
+    await seedProjectSession();
+    llmScript = [judged(['用户偏好中文回复'], ['Tests here run with npm run test:unit'])];
+    await onUserRunDone('SP', USER, undefined, undefined, true);
+    expect(JSON.stringify(llmPayloads)).not.toContain('project_memory_candidates');
+    expect(existsSync(join(home, 'project-memory'))).toBe(false);
+    expect(existsSync(rawFile())).toBe(false);
+  });
+});
+
 describe('电脑历史隔离(read_computer_history 会话不进自动记忆)', () => {
   const chCall = (name = 'read_computer_history') => JSON.stringify([{ id: 'c1', type: 'function', function: { name, arguments: '{"from":"-2h"}' } }]);
   const everything = (): string => JSON.stringify({

@@ -17,7 +17,7 @@ import path from 'node:path';
 import { tanguHome } from '../core/tanguHome.js';
 import { assertSafeChain } from './projectContext.js';
 import { humanProjectScope } from './humanContext.js';
-import { atomicWriteMemoryFile, createMemoryRepository, readMemoryFile, MemoryRepositoryError } from './memoryRepository.js';
+import { atomicWriteMemoryFile, createMemoryRepository, isMemoryTombstoneActive, memoryFactFingerprint, readMemoryFile, MemoryRepositoryError } from './memoryRepository.js';
 
 /** 一个项目的记忆总量(字符)。比 agent 级(20,000)小:它整份都可能进系统提示。 */
 export const PROJECT_MEMORY_CHAR_BUDGET = 8000;
@@ -79,6 +79,27 @@ export async function forgetProjectMemory(project: string, id: string, expectedV
   if (!exists(ref)) throw new MemoryRepositoryError('MEMORY_NOT_FOUND', 'This project has no saved memory.');
   (await openProjectMemory(ref)).mutate({ action: 'forget', id, expectedVersion });
   return projectMemoryView(project);
+}
+
+/** 后台(Historian 判官)直接记一条:一字不差的重复不写、放不下不写(绝不为了腾地方动已有条目)、用户删掉的不写回、
+ *  这个会话里前台自己记过就不再记。与 remember 走同一个 mutate。 */
+export async function addProjectFact(ref: ProjectMemoryRef, fact: string, sessionId: string): Promise<'added' | 'duplicate' | 'full'> {
+  const repo = await openProjectMemory(ref);
+  const snapshot = repo.snapshot();
+  const before = snapshot.version;
+  // 用户删掉的那句,后台不许再写回来(mutate 的 add 会把墓碑复活 —— 那是给「明确要再记一次」留的)
+  const fingerprint = memoryFactFingerprint(fact);
+  if (snapshot.tombstones.some((t) => t.fingerprint === fingerprint && isMemoryTombstoneActive(t))) return 'duplicate';
+  // 这个会话里前台已经自己往项目记忆里记过了 → 后台不再替它记。10-04 live 3/4 轮:判官还在判上一轮(那时项目记忆是空的),
+  // 用户下一句纠正已经让前台记了一条,判官随后把同一件事换个说法又写了一条 —— 字面去重和「给判官看已有内容」都拦不住这个时序。
+  // ponytail: 按会话一刀切(与工作笔记的 own 同一个取舍);项目级没有 Dream,要认「换了说法的同一件事」得另加整理。
+  if (snapshot.entries.some((e) => e.source?.kind === 'explicit' && e.source.sessionId === sessionId)) return 'duplicate';
+  try {
+    return repo.mutate({ action: 'add', fact, cap: PROJECT_MEMORY_CHAR_BUDGET, source: { kind: 'historian', sessionId } }).version === before ? 'duplicate' : 'added';
+  } catch (e) {
+    if (e instanceof MemoryRepositoryError && e.code === 'MEMORY_FULL') return 'full';
+    throw e;
+  }
 }
 
 /** 系统提示里的项目记忆段。放不下时留最新的(更可能还成立),展示仍按存入顺序;空 → ''。

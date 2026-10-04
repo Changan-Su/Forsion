@@ -1569,14 +1569,17 @@ try {
     const same = await run(await mkS(b, p1, 'Project memory other agent'), ask, 120_000, cfgOf(b, p1));
     const shared = !same.error && !!same.systemPrompt?.includes('## Project Memory') && same.systemPrompt.includes(branch) && same.content.includes(branch) && !same.systemPrompt.includes(habit);
     const other = await run(await mkS(a, p2, 'Project memory other project'), ask, 120_000, cfgOf(a, p2));
-    const isolated = !other.error && !!other.systemPrompt && !other.systemPrompt.includes(branch) && !other.content.includes(branch) && other.systemPrompt.includes(habit);
+    // 项目记忆段不在提示里是硬门。回答里出现那个分支名不一定是串了:「相关历史片段」会把在项目一说过的话带进来(标着出处),
+    // 答成「那是 pm-one 的,这个项目我不知道」是对的;把它当成本项目的分支报出来才是错。
+    const attributed = !other.content.includes(branch) || /不知道|没有(找到|记录)|pm-one|另一个项目|别的项目|其他项目|其它项目/.test(other.content);
+    const isolated = !other.error && !!other.systemPrompt && !other.systemPrompt.includes(branch) && attributed && other.systemPrompt.includes(habit);
     const loose = await run(await mkS(a, null, 'Project memory no project'), ask, 120_000, cfgOf(a, null));
     const projectless = !loose.error && !!loose.systemPrompt && !loose.systemPrompt.includes(branch) && !loose.systemPrompt.includes('## Project Memory');
     writeFileSync(join(OUT, 'projmem-evidence.json'), JSON.stringify({ first, shared, isolated, projectless, calls, replies: { write: ev.content, sameProjectOtherAgent: same.content, otherProject: other.content, noProject: loose.content } }, null, 2));
     return { ok: shared && isolated && projectless, detail: [
       `① 落点 项目那条 scope=${first.scopes.branch}、不分项目那条 scope=${first.scopes.habit};各在各的库、互不串;项目目录没多文件;审批 ${ev.approvals}`,
       `② 同项目另一个 agent ${shared ? '提示里有项目那条、答对了,没有 A 自己那条' : `⚠ ${same.error || JSON.stringify({ block: !!same.systemPrompt?.includes('## Project Memory'), inPrompt: !!same.systemPrompt?.includes(branch), answered: same.content.includes(branch), sawAgentFact: !!same.systemPrompt?.includes(habit) })}`}`,
-      `③ 换一个项目 ${isolated ? '项目那条不在、答不出;自己那条还在' : `⚠ ${other.error || JSON.stringify({ leaked: !!other.systemPrompt?.includes(branch), answered: other.content.includes(branch), ownFact: !!other.systemPrompt?.includes(habit) })}`}`,
+      `③ 换一个项目 ${isolated ? `项目记忆段不在;${other.content.includes(branch) ? '提到了那个分支但说明它属于另一个项目' : '答不出'};自己那条还在` : `⚠ ${other.error || JSON.stringify({ leaked: !!other.systemPrompt?.includes(branch), claimedAsThisProject: other.content.includes(branch) && !attributed, ownFact: !!other.systemPrompt?.includes(habit) })}`}`,
       `④ 不属于项目的会话 ${projectless ? '没有项目记忆段' : `⚠ ${loose.error || '提示里出现了项目记忆'}`}`,
     ].join(';'), output: `【写入】${ev.content}\n【同项目另一个 agent】${same.content}\n【换项目】${other.content}\n【无项目】${loose.content}`, toolCalls: [...ev.toolCalls, '|', ...same.toolCalls, '|', ...other.toolCalls] };
   });
@@ -3011,11 +3014,12 @@ Then reply with only the command output.`,
     const cfg = { ...AGENT_CONFIG, agentSlug: slug, debugSystemPrompt: true };
     const mkS = async (title) => (await api('/agent/sessions', { method: 'POST', body: JSON.stringify({ title, model_id: MODEL, agent_config: cfg }) })).session.id;
     const rowsOf = (sid) => api('/agent/special/historian/activity?limit=100').then((a) => (a.activity || []).filter((r) => r.session_ref === sid));
-    /** 等这个会话的判官收场:活动行数比 base 多、且连续 9s 不再变(或超时)。同会话上一轮维护还在飞,下一轮会被整轮跳过。 */
+    /** 等这个会话的判官收场:主产出行比 base 多、且连续 9s 不再变(或超时)。同会话上一轮维护还在飞,下一轮会被整轮跳过。
+     *  标题 / 图标那两行不算:标题由前面单独一趟先出,隔十来秒判官正文才到 —— 把它算进去会在正文落地前就收工(10-04 第二轮 live 误判过一次)。 */
     const settled = async (sid, base, maxMs = 150_000) => {
       let last = -1, since = Date.now(); const t0 = Date.now();
       for (;;) {
-        const rows = await rowsOf(sid);
+        const rows = (await rowsOf(sid)).filter((x) => x.action !== 'title_updated' && x.action !== 'icon_updated');
         if (rows.length !== last) { last = rows.length; since = Date.now(); }
         if ((rows.length > base && Date.now() - since > 9000) || Date.now() - t0 > maxMs) return rows;
         await sleep(3000);

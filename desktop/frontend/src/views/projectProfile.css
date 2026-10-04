@@ -28,6 +28,14 @@
 .project-list { display: grid; gap: 2px; }
 .project-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 8px; align-items: center; width: 100%; padding: 7px 8px; border: 0; border-radius: var(--radius-sm, 8px); background: transparent; color: var(--text); text-align: left; cursor: pointer; font: inherit; transition: background 160ms ease; }
 .project-row:hover { background: var(--overlay-medium); }
+/* 项目记忆:一条一行,正文完整折行(不省略:它就是内容本身),右侧一个删除键 */
+.project-memory-list { margin: 0; padding: 0; list-style: none; }
+.project-memory-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: start; padding: 7px 8px; border-radius: var(--radius-sm, 8px); color: var(--text); font-size: var(--ui-font-meta, 12px); line-height: 1.55; }
+.project-memory-row:hover { background: var(--overlay-medium); }
+.project-memory-row span { min-width: 0; overflow-wrap: anywhere; }
+.project-memory-row button { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border: 0; border-radius: var(--radius-sm, 8px); background: transparent; color: var(--text-muted); cursor: pointer; }
+.project-memory-row button:hover:not(:disabled) { background: var(--overlay-strong, var(--overlay-medium)); color: var(--danger); }
+.project-memory-row button:disabled { opacity: .5; cursor: default; }
 .project-row strong { font-size: var(--ui-font-meta, 12px); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .project-row span, .project-row small { min-width: 0; color: var(--text-muted); font-size: var(--ui-font-caption, 11px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .project-row code { font-family: var(--font-mono, ui-monospace, monospace); font-size: var(--ui-font-caption, 11px); color: var(--text-muted); }

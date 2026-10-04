@@ -61,6 +61,16 @@ describe('adoptHarnessNomination:后台提名直接写成条目', () => {
     expect(await loadHarness('adopter')).toHaveLength(2);
   });
 
+  it('这个会话里 agent 自己写过笔记 → own,后台不再替它写(换了说法的同一个做法,字面去重认不出);别的会话、只收过装备的会话照常', async () => {
+    await applyHarnessEdit('selfwriter', { action: 'upsert', title: '读文件回答先核对原文', body: '回答前先读目标文件、核对原始行,再给精确值。', evidence: '这次从第 2 行确认了 code。' }, { sessionId: 's-own' });
+    const paraphrase = { title: 'Verify file answers from source', lesson: 'Read the file, locate the field and cite the exact line before answering.', evidence: 'Confirmed the code from line 2.' };
+    expect(await adoptHarnessNomination('selfwriter', paraphrase, 's-own')).toBe('own');
+    expect(await loadHarness('selfwriter')).toHaveLength(1);
+    expect(await adoptHarnessNomination('selfwriter', paraphrase, 's-other')).toBe('adopted');
+    await applyHarnessEdit('selfwriter', { action: 'upsert', kind: 'equip', title: 'Shelve sketch', body: 'Unused.', evidence: 'review', tools: ['sketch'] }, { sessionId: 's-equip' });
+    expect(await adoptHarnessNomination('selfwriter', { title: 'Batch lookups', lesson: 'Batch independent reads in one step.', evidence: 'Three parallel reads were faster.' }, 's-equip')).toBe('adopted');
+  });
+
   it('满了 / 校验不过 → 抛错(调用方改放候选收件箱),不挤掉已有条目', async () => {
     for (let i = 0; i < MAX_ENTRIES; i++) await applyHarnessEdit('full', { action: 'upsert', title: `Note ${i}`, body: `Body ${i}`, evidence: 'seen' });
     await expect(adoptHarnessNomination('full', nom)).rejects.toThrow(/full/);

@@ -53,6 +53,12 @@ function contextFixture(projectDir) {
     ],
     plans: [{ name: 'plan-20260921-101500.md', path: path.join(projectDir, '.tangu', 'plans', 'plan-20260921-101500.md'), mtimeMs: Date.now() - 86_400_000, size: 1200, title: 'Ship v1' }],
     settings: null,
+    // 项目记忆(10-04):形状 = 引擎 services/projectMemory.ts 的 ProjectMemoryView;一条长的看折行
+    memory: { version: 'v1', limit: 8000, chars: 212, entries: [
+      { id: 'pm-1', content: '这个仓的测试用 npm run test:unit 跑，npm test 是故意坏的。', updatedAt: Date.now() - 3_600_000 },
+      { id: 'pm-2', content: 'Release builds are cut only from the release-2026 branch; never tag from main. The changelog entry is written before the tag, and the build number comes from the CI run rather than from package.json.', updatedAt: Date.now() - 1_800_000 },
+      { id: 'pm-3', content: '这个项目的界面文案一律先写中文稿，再补英文。', updatedAt: Date.now() - 600_000 },
+    ] },
     git: {
       available: true, repo: true, nested: false, branch: 'main', detached: false, upstream: 'origin/main', ahead: 2, behind: 0,
       staged: 1, unstaged: 2, untracked: 1, changesTotal: 4,
@@ -224,6 +230,23 @@ async function run(app, win, stub, seen, home, ctx) {
   const put = seen.docPuts[0]
   check('4c 保存 → PUT /agent/project-context/doc 带 sessionId + 正文 + 读出时的 mtime(冲突检测),不传路径', !!put && put.sessionId === 'pd-main' && /Run npm test/.test(put.content) && put.expectedMtimeMs === 1000 && !('path' in put), JSON.stringify(put))
   check('4d 保存后提示「已保存」、保存栏收起', (await profile.locator('.profile-save-notice').textContent()).includes('已保存') && await saveBtn.count() === 0)
+  // ── 4f 项目记忆:列出条目(长的完整折行)→ 删一条(带读出时的版本)→ 冲突时重载、不硬删 ──
+  const memCard = profile.locator('[data-project-memory]')
+  const memRows = memCard.locator('[data-project-memory-entry]')
+  const longRow = memCard.locator('[data-project-memory-entry="pm-2"] span')
+  const wraps = await longRow.evaluate((el) => el.scrollWidth <= el.clientWidth + 1 && el.getBoundingClientRect().height > parseFloat(getComputedStyle(el).lineHeight) * 1.5)
+  check('4f 项目记忆卡列出三条、带用量;长条目完整折行(不省略)', await memRows.count() === 3 && (await memCard.textContent()).includes('3 条') && wraps, `rows=${await memRows.count()} wraps=${wraps}`)
+  await memCard.scrollIntoViewIfNeeded()
+  await win.waitForTimeout(200)
+  await memCard.screenshot({ path: shots.memoryLight = shot('project-memory-zh-light') })
+  await memCard.locator('[data-project-memory-entry="pm-1"] button').click()
+  await memCard.locator('[data-project-memory-entry="pm-1"]').waitFor({ state: 'detached' })
+  const forget = seen.memoryForgets[0]
+  check('4g 点删除 → DELETE /agent/project-context/memory 带 sessionId + 条目 id + 读出时的版本;该条消失、其余还在', !!forget && forget.sessionId === 'pd-main' && forget.id === 'pm-1' && forget.expectedVersion === 'v1' && await memRows.count() === 2, JSON.stringify(forget))
+  seen.memoryConflictOnce = true
+  await memCard.locator('[data-project-memory-entry="pm-3"] button').click()
+  await profile.locator('.agent-profile-error').waitFor()
+  check('4h 别处刚改过(409)→ 提示重新载入、这一条没被删', (await profile.locator('.agent-profile-error').textContent()).includes('重新载入') && await memRows.count() === 2 && seen.memoryForgets.length === 2, `forgets=${seen.memoryForgets.length}`)
   check('4e 配置页不横向溢出', await noOverflow(profile), await overflowReport(profile))
   await win.waitForTimeout(300)
   await details.screenshot({ path: shots.settingsLight = shot('project-settings-zh-light') })
@@ -470,6 +493,14 @@ async function run(app, win, stub, seen, home, ctx) {
     await dismissToasts(win)
     overflowEn.push([tab, await noOverflow(profile)])
     await details.screenshot({ path: shots[`en-dark-${tab}`] = shot(`project-${tab.toLowerCase()}-en-dark`) })
+    if (tab === 'Settings') { // 项目记忆卡的英文 × 暗色:标题 / 说明 / 用量都是英文(条目正文是用户数据,不算)
+      const card = profile.locator('[data-project-memory]')
+      await card.scrollIntoViewIfNeeded()
+      await win.waitForTimeout(200)
+      await card.screenshot({ path: shots.memoryEnDark = shot('project-memory-en-dark') })
+      const head = await card.locator('.project-card-head').textContent()
+      check('9f 英文 × 暗色的项目记忆卡:标题 / 说明 / 用量是英文', /Project memory/.test(head) && /Entries: 2/.test(head) && !/[一-鿿]/.test(head), head)
+    }
   }
   check('9a 英文 × 暗色三页都不横向溢出', overflowEn.every(([, ok]) => ok), JSON.stringify(overflowEn))
   // 停在 Git 页:暗色下提交框(生成中 → 填好)也截一张
@@ -603,7 +634,7 @@ async function main() {
   const projectDir = path.join(home, 'Demo Project')
   for (const dir of [userData, `${userData}-dev`, vault, projectDir]) fs.mkdirSync(dir, { recursive: true })
   const ctx = contextFixture(projectDir)
-  const seen = { ctxGets: [], init: 0, docPuts: [], settingsPuts: [], skills: [], sessionsCreated: 0, iconPosts: [], iconGets: 0, iconDeletes: [], sessionDeletes: [], agentDeletes: [],
+  const seen = { memoryForgets: [], memoryConflictOnce: false, ctxGets: [], init: 0, docPuts: [], settingsPuts: [], skills: [], sessionsCreated: 0, iconPosts: [], iconGets: 0, iconDeletes: [], sessionDeletes: [], agentDeletes: [],
     gitMessages: [], gitCommits: [], gitBranches: [], gitPushes: [], gitInits: [], gitSettingsPuts: [], gitPendings: [], gitTrusts: [], pushGate: false }
   let gitSettings = { branchPrefix: 'tangu/', commitInstructions: '', forceWithLease: false }
   const demoIds = new Set(['pd-main', 'pd-coder', 'pd-team']) // 默认项 / 图标只属于 Demo Project;别的项目组读到的是空
@@ -672,6 +703,15 @@ async function main() {
       // 前缀的响应故意晚到:用户这时已经在写提交说明,回写整份设置会把正在打的字冲掉(6n 靠它把竞态钉成必现)
       if ('branchPrefix' in b) await sleep(600)
       return { settings: gitSettings }
+    }
+    // 删一条项目记忆:同引擎,带版本;版本对不上(或被要求演一次冲突)→ 409,什么都不删
+    if (route === '/agent/project-context/memory' && method === 'DELETE') {
+      const b = await body(); seen.memoryForgets.push(b)
+      if (seen.memoryConflictOnce) { seen.memoryConflictOnce = false; ctx.memory = { ...ctx.memory, version: 'v-changed' }; return { __code: 409, body: { detail: 'Memory changed since it was read', code: 'MEMORY_VERSION_CONFLICT' } } }
+      if (b.expectedVersion !== ctx.memory.version) return { __code: 409, body: { detail: 'Memory changed since it was read', code: 'MEMORY_VERSION_CONFLICT' } }
+      const entries = ctx.memory.entries.filter((e) => e.id !== b.id)
+      ctx.memory = { ...ctx.memory, version: `v${seen.memoryForgets.length + 1}`, entries, chars: entries.reduce((n, e) => n + e.content.length, 0) }
+      return { memory: ctx.memory }
     }
     if (route === '/agent/project-context/doc' && method === 'PUT') { const b = await body(); seen.docPuts.push(b); ctx.doc = { ...ctx.doc, exists: true, content: b.content, mtimeMs: 2000 }; return { path: ctx.doc.path, mtimeMs: 2000 } }
     // 同引擎:PUT settings 不改 icon,保留现值
