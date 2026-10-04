@@ -21,7 +21,15 @@ import { ChatView } from './ChatView'
 
 registerMessages({
   'pluginChat.failed': { zh: '对话没接上：{error}', en: 'Could not open the chat: {error}' },
+  'pluginChat.noEngine': { zh: '引擎还没连上', en: 'the engine is not connected' },
+  'pluginChat.noFolder': { zh: '这台设备上打不开这个文件夹', en: 'this folder is not available on this device' },
+  'pluginChat.noAgent': { zh: '没有这个 Agent：{agent}', en: 'no such agent: {agent}' },
 })
+
+// 给插件的 error 是固定的英文原因(与 startChat 一个口径);挂载里显示给人看的那一份照界面语言说。
+const NO_ENGINE = 'engine is not connected'
+const NO_FOLDER = 'folder is not available on this host: '
+const NO_AGENT = 'unknown agent: '
 
 const SLOTS = 'tangu.pluginChats'
 const BACKEND_WAIT_MS = 15_000
@@ -31,22 +39,23 @@ const readSlots = (): Record<string, string> => {
 const errorText = (e: unknown): string => String((e as { message?: unknown } | null)?.message ?? e)
 
 // 同一个槽同时只跑一次:视图「卸了立刻重挂」时两次挂载撞在一起,各建一条会话,先建的那条就成了列表里的空会话。
+// 键是落盘用的那个槽(插件 + 绝对工作目录),不是插件给的相对文件夹:换了笔记库之后同名文件夹是另一个槽,
+// 不能接到上一个库还在建的那条上;同一个目录的两种写法(`a/b` 与 `a\b`)则是同一个槽。
 const inflight = new Map<string, Promise<TanguStartChatResult>>()
 
 /** 接回这个(插件, 工作目录)的会话,没有就建。不抛:失败一律 `{ ok:false, error }`。 */
-export function ensurePluginChat(o: TanguChatMountOptions): Promise<TanguStartChatResult> {
-  const key = pluginChatType(o)
-  const running = inflight.get(key)
+export async function ensurePluginChat(o: TanguChatMountOptions): Promise<TanguStartChatResult> {
+  if (!(await waitBackend(BACKEND_WAIT_MS))) return { ok: false, error: NO_ENGINE }
+  // 工作目录等后端就绪了才解析(刚启动时桌面配置 / 笔记库还没回来)。给了文件夹却落不到本机路径 = 接不上,
+  // 不悄悄退成沙箱对话:那样 Agent 碰不到项目文件,而且会占住「无目录」那个槽。
+  const cwd = o.resolveCwd?.() || undefined
+  if (o.folder && !cwd) return { ok: false, error: `${NO_FOLDER}${o.folder}` }
+  const slot = `${o.owner}\n${cwd ?? ''}`
+  const running = inflight.get(slot) // 从解析到登记之间没有 await:并发的两次挂载,后到的一定看得见先到的
   if (running) return running
   const task = (async (): Promise<TanguStartChatResult> => {
-    if (!(await waitBackend(BACKEND_WAIT_MS))) return { ok: false, error: 'engine is not connected' }
-    // 工作目录等后端就绪了才解析(刚启动时桌面配置 / 笔记库还没回来)。给了文件夹却落不到本机路径 = 接不上,
-    // 不悄悄退成沙箱对话:那样 Agent 碰不到项目文件,而且会占住「无目录」那个槽。
-    const cwd = o.resolveCwd?.() || undefined
-    if (o.folder && !cwd) return { ok: false, error: `folder is not available on this host: ${o.folder}` }
-    const slot = `${o.owner}\n${cwd ?? ''}`
     const agent = o.agent?.trim() || undefined
-    if (agent && !(await agentKnown(agent))) return { ok: false, error: `unknown agent: ${agent}` }
+    if (agent && !(await agentKnown(agent))) return { ok: false, error: `${NO_AGENT}${agent}` }
     const known = readSlots()[slot]
     if (known) {
       try {
@@ -87,10 +96,16 @@ export function ensurePluginChat(o: TanguChatMountOptions): Promise<TanguStartCh
       return { ok: false, error: errorText(e) }
     }
   })()
-  inflight.set(key, task)
-  void task.finally(() => { inflight.delete(key) })
+  inflight.set(slot, task)
+  void task.finally(() => { inflight.delete(slot) })
   return task
 }
+
+const failureText = (error: string, t: (key: string, vars?: Record<string, string>) => string): string =>
+  error === NO_ENGINE ? t('pluginChat.noEngine')
+    : error.startsWith(NO_FOLDER) ? t('pluginChat.noFolder')
+      : error.startsWith(NO_AGENT) ? t('pluginChat.noAgent', { agent: error.slice(NO_AGENT.length) })
+        : error
 
 function PluginChat({ leaf, state, retry }: { leaf: Leaf; state: TanguStartChatResult | null; retry(): void }) {
   const { t } = useI18n()
@@ -102,13 +117,14 @@ function PluginChat({ leaf, state, retry }: { leaf: Leaf; state: TanguStartChatR
   return (
     <div className="empty-state" data-plugin-chat={leaf.type} role={state ? 'alert' : 'status'} style={{ height: '100%', padding: 16, textAlign: 'center' }}>
       {state
-        ? <><span>{t('pluginChat.failed', { error: state.error || '' })}</span><button className="btn ghost sm" onClick={retry}>{t('common.retry')}</button></>
+        ? <><span>{t('pluginChat.failed', { error: failureText(state.error || '', t) })}</span><button className="btn ghost sm" onClick={retry}>{t('common.retry')}</button></>
         : <span>{t('common.loading')}</span>}
     </div>
   )
 }
 
-export function mountPluginChat(el: HTMLElement, o: TanguChatMountOptions): { ready: Promise<TanguStartChatResult>; dispose(): void } {
+/** `ready` 是第一次接的结果;`latest()` 是最近一次的(用户在挂载里点了「重试」之后,以重试的为准)。 */
+export function mountPluginChat(el: HTMLElement, o: TanguChatMountOptions): { ready: Promise<TanguStartChatResult>; latest(): Promise<TanguStartChatResult>; dispose(): void } {
   const type = pluginChatType(o)
   // 插件的 mount(el) 拿不到 Leaf,而 ChatView 要一个:标题 / 参数 / 关闭都归插件自己的视图管,这里一律空操作。
   // type 是引用通道认的目标名(tanguProbe.mountChat 的 quote 往这个名字投);有 childSurface 时 loc 不参与任何判断。
@@ -118,9 +134,11 @@ export function mountPluginChat(el: HTMLElement, o: TanguChatMountOptions): { re
   const render = (state: TanguStartChatResult | null): void => {
     if (alive) unmount = mountHostReact(el, <HostLocaleProvider><PluginChat leaf={leaf} state={state} retry={() => void attach()} /></HostLocaleProvider>)
   }
+  let current: Promise<TanguStartChatResult>
   const attach = (): Promise<TanguStartChatResult> => {
     render(null)
-    return ensurePluginChat(o).then((result) => { render(result); return result })
+    current = ensurePluginChat(o).then((result) => { render(result); return result })
+    return current
   }
-  return { ready: attach(), dispose() { if (alive) { alive = false; unmount() } } }
+  return { ready: attach(), latest: () => current, dispose() { if (alive) { alive = false; unmount() } } }
 }

@@ -7,6 +7,8 @@
  * 负对照(2026-10-04 八条都实跑红过;第六条 = 探针 prefill 不看 disposed → 「卸了之后不投」红;七 / 八 = 后端就绪前就解析工作目录、
  * 解析不出来悄悄退成沙箱 → 「等后端就绪后才解析…」红):接回时去掉 `status !== 404` 的判断 → 「连不上不新开」红;cwd 不进槽键 → 「换目录 = 新会话」红;
  * 接回时也标 fresh → 「不标全新」红;探针 quote 换一个目标名 → 「没挂上时投的引用」红;pluginStore 去掉 scope.own → 「禁用即收」红。
+ * 评审后补的四条(同日,也都实跑红过):在飞去重改回按「插件 + 相对文件夹」→ 「换了库的同名文件夹」红;预填改回单槽 → 「挨着投的两条都在」红;
+ * 预填只认第一次接的结果 → 「重试接上之后」红;`/` 归一化成空串 → 「整个就是分隔符」红。
  */
 import { act } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -59,7 +61,7 @@ beforeEach(() => {
   } as never)
   adopt.mockReset().mockImplementation(realAdopt)
   useApp.setState({ adoptSession: adopt } as never)
-  usePluginChat.setState({ pending: null })
+  usePluginChat.setState({ pending: [] })
   el = document.createElement('div')
   document.body.append(el)
 })
@@ -166,6 +168,27 @@ describe('会话规则(ensurePluginChat)', () => {
     expect(slots()).toEqual({ 'p\n/v/A': 's1' })
   })
 
+  it('在飞去重认的是落盘那个槽:换了库的同名文件夹各建各的;同一个目录的两种写法只建一条', async () => {
+    const releases: Array<(v: unknown) => void> = []
+    api.createSession.mockImplementation(() => new Promise((resolve) => { releases.push(resolve) }))
+    // 库 1 的 A 还在建,人已经换到库 2,同一个相对文件夹再挂一次
+    const first = ensurePluginChat({ owner: 'p', folder: 'A', resolveCwd: () => '/v1/A' })
+    const second = ensurePluginChat({ owner: 'p', folder: 'A', resolveCwd: () => '/v2/A' })
+    await vi.waitFor(() => expect(releases.length).toBe(2))
+    releases[0](rec('s1')); releases[1](rec('s2'))
+    expect(await Promise.all([first, second])).toEqual([{ ok: true, sessionId: 's1' }, { ok: true, sessionId: 's2' }])
+    expect(api.createSession.mock.calls.map((c) => (c[1] as { project_path: string }).project_path)).toEqual(['/v1/A', '/v2/A'])
+    expect(slots()).toEqual({ 'p\n/v1/A': 's1', 'p\n/v2/A': 's2' })
+
+    releases.length = 0
+    const a = ensurePluginChat({ owner: 'p', folder: 'Video/Demo', resolveCwd: () => '/v/Video/Demo' })
+    const b = ensurePluginChat({ owner: 'p', folder: 'Video\\Demo', resolveCwd: () => '/v/Video/Demo' })
+    await vi.waitFor(() => expect(releases.length).toBeGreaterThan(0))
+    releases.forEach((release) => release(rec('s3')))
+    expect(await Promise.all([a, b])).toEqual([{ ok: true, sessionId: 's3' }, { ok: true, sessionId: 's3' }])
+    expect(releases.length).toBe(1)
+  })
+
   it('不认识的 Agent / 后端没连上 → ok:false,不建会话', async () => {
     expect(await ensurePluginChat({ owner: 'p', agent: 'nobody', ...at('/v/A') })).toEqual({ ok: false, error: 'unknown agent: nobody' })
     vi.useFakeTimers()
@@ -196,6 +219,16 @@ describe('挂载(mountPluginChat)', () => {
     })
   })
 
+  it('没接上的原因照界面语言说(给插件的 error 仍是固定的英文)', async () => {
+    let ready!: Promise<unknown>
+    await act(async () => { const m = mountPluginChat(el, { owner: 'p', folder: '../x', resolveCwd: () => null }); cleanups.push(m.dispose); ready = m.ready; await ready })
+    expect(await ready).toEqual({ ok: false, error: 'folder is not available on this host: ../x' })
+    expect(el.querySelector('[role="alert"]')!.textContent).toContain('对话没接上：这台设备上打不开这个文件夹')
+    const other = document.createElement('div'); document.body.append(other); cleanups.push(() => other.remove())
+    await act(async () => { const m = mountPluginChat(other, { owner: 'p', agent: 'nobody', ...at('/v/A') }); cleanups.push(m.dispose); await m.ready })
+    expect(other.querySelector('[role="alert"]')!.textContent).toContain('对话没接上：没有这个 Agent：nobody')
+  })
+
   it('卸载后不再画东西(建会话那一拍里视图被关)', async () => {
     let release = (_: unknown): void => {}
     api.createSession.mockReturnValue(new Promise((resolve) => { release = resolve }))
@@ -224,10 +257,15 @@ describe('探针(tanguProbe.mountChat)', () => {
     expect(await chat.ready).toEqual({ ok: true, sessionId: 's1' })
     expect(useApp.getState().pendingChatQuote).toMatchObject({ targetType: api.seen.at(-1)!.leaf.type, text: '第 2 幕 · 标题' })
 
+    // 没被取走的引用是给这次挂载的:卸载带走它(同名的下一次挂载不该接到),别人的引用不动
     await act(async () => { chat.dispose() })
-    useApp.setState({ pendingChatQuote: null } as never)
+    expect(useApp.getState().pendingChatQuote).toBeNull()
     chat.quote('卸了之后')
     expect(useApp.getState().pendingChatQuote).toBeNull()
+    useApp.getState().setPendingChatQuote('chat-side', '主区给侧栏的')
+    const other = readTangu()!.mountChat!(el, { owner: 'p', ...at('/v/B') })
+    other.dispose()
+    expect(useApp.getState().pendingChatQuote).toMatchObject({ targetType: 'chat-side' })
   })
 
   it('预填按会话投:接上之前调用的排在 ready 后面;空的不投;卸了之后不投', async () => {
@@ -236,20 +274,43 @@ describe('探针(tanguProbe.mountChat)', () => {
     await act(async () => {
       chat = readTangu()!.mountChat!(el, { owner: 'p', ...at('/v/A') })
       cleanups.push(chat.dispose)
-      chat.prefill('为这支视频写一段配乐')
+      chat.prefill('一支 10 秒的开场')
       chat.prefill('')
-      expect(usePluginChat.getState().pending).toBeNull() // 会话还没接上:没有 id 可投
+      chat.prefill('为这支视频写一段配乐')
+      expect(usePluginChat.getState().pending).toEqual([]) // 会话还没接上:没有 id 可投
       await chat.ready
     })
-    expect(usePluginChat.getState().pending).toMatchObject({ sessionId: 's1', text: '为这支视频写一段配乐' })
-    const first = usePluginChat.getState().pending!.seq
-    expect(usePluginChat.getState().consume(first)).toBe(true)
-    expect(usePluginChat.getState().consume(first)).toBe(false) // 只消费一次
+    await flush()
+    // 挨着投的两条都在,先投的在前(单槽的话后一条会把想法顶掉)
+    expect(usePluginChat.getState().pending).toEqual([{ sessionId: 's1', text: '一支 10 秒的开场' }, { sessionId: 's1', text: '为这支视频写一段配乐' }])
+    usePluginChat.getState().queue('other', '别的会话的')
+    expect(usePluginChat.getState().take('s1')).toEqual(['一支 10 秒的开场', '为这支视频写一段配乐'])
+    expect(usePluginChat.getState().take('s1')).toEqual([]) // 只取一次
+    expect(usePluginChat.getState().pending).toEqual([{ sessionId: 'other', text: '别的会话的' }])
 
+    chat.prefill('还没被输入框取走的')
+    await flush()
     await act(async () => { chat.dispose() })
+    await flush()
     chat.prefill('卸了之后')
     await flush()
-    expect(usePluginChat.getState().pending).toBeNull()
+    expect(usePluginChat.getState().pending).toEqual([{ sessionId: 'other', text: '别的会话的' }]) // 卸载带走自己那几条,之后不再投
+  })
+
+  it('第一次没接上、用户点「重试」接上之后:预填投给接上的那条会话', async () => {
+    api.createSession.mockRejectedValueOnce(new Error('quota'))
+    let chat!: import('../amadeus/plugins/tanguSeam').TanguChatMount
+    await act(async () => { chat = readTangu()!.mountChat!(el, { owner: 'p', ...at('/v/A') }); cleanups.push(chat.dispose); await chat.ready })
+    expect(await chat.ready).toEqual({ ok: false, error: 'quota' })
+    chat.prefill('没接上时投的')
+    await flush()
+    expect(usePluginChat.getState().pending).toEqual([])
+    api.createSession.mockResolvedValue(rec('s1'))
+    await act(async () => { el.querySelector('button')!.click() })
+    await flush()
+    chat.prefill('为这支视频写一段配乐')
+    await flush()
+    expect(usePluginChat.getState().pending).toEqual([{ sessionId: 's1', text: '为这支视频写一段配乐' }])
   })
 
   it('界面那半还没装进来就卸了 → 不建会话、不挂东西', async () => {
@@ -290,8 +351,10 @@ describe('放行规则(ctx.tangu.mountChat)', () => {
     expect(last()).toEqual({ owner: 'fvs', agent: 'fvs-director', title: 'Demo', folder: 'Video/Demo', resolveCwd: expect.any(Function) })
     expect(last().resolveCwd!()).toBe('/v/Video/Demo')
     expect(last().resolveCwd!()).toBe(ctx.app.hostPath!('Video/Demo'))
-    for (const bad of ['../outside', 'Video/../../etc', '/etc', 'C:/x']) {
+    // 整个就是分隔符的也算「给了文件夹」:原样交下去、解析不出来 → 接不上,不能归一化成空串变成无目录对话
+    for (const bad of ['../outside', 'Video/../../etc', '/etc', 'C:/x', '/', '\\']) {
       ctx.tangu!.mountChat!(el, { folder: bad })
+      expect(last().folder, bad).toBeTruthy()
       expect(last().resolveCwd!(), bad).toBeNull()
     }
     // 解析是调用时才做的:挂载之后宿主才变成「非本机执行」,也按那一刻算

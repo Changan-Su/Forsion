@@ -1478,7 +1478,9 @@ export const usePluginStore = create<PluginState>((set, get) => {
                     const probe = readTangu()
                     if (!ctxAlive() || !probe?.mountChat) return { ready: Promise.resolve({ ok: false, error: 'plugin disabled' }), quote() {}, prefill() {}, dispose() {} }
                     const agent = typeof o?.agent === 'string' ? o.agent.trim() : ''
-                    const folder = typeof o?.folder === 'string' ? o.folder.trim().replace(/[\\/]+$/, '') : ''
+                    // 去掉尾巴上的分隔符;整个就是分隔符的(`/`)原样留着,交给 hostPath 判不合法 → 接不上,而不是当成「没给文件夹」
+                    const given = typeof o?.folder === 'string' ? o.folder.trim() : ''
+                    const folder = given.replace(/[\\/]+$/, '') || given
                     const title = typeof o?.title === 'string' ? o.title.trim().slice(0, 120) : ''
                     const mounted = probe.mountChat(el, {
                       owner: pluginId, ...(agent ? { agent } : {}), ...(title ? { title } : {}),

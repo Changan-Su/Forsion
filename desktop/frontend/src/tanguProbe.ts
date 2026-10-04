@@ -261,21 +261,33 @@ export async function startChat(o: TanguStartChatOptions): Promise<TanguStartCha
  *  动态 import:那边回头引本文件的 waitBackend / agentKnown。 */
 function mountChat(el: HTMLElement, o: TanguChatMountOptions): TanguChatMount {
   let disposed = false
-  let unmount = (): void => {}
+  let mounted: { latest(): Promise<TanguStartChatResult>; dispose(): void } | null = null
   const ready: Promise<TanguStartChatResult> = import('./views/pluginChat').then((m) => {
     if (disposed) return { ok: false, error: 'disposed' }
-    const mounted = m.mountPluginChat(el, o)
-    unmount = mounted.dispose
-    return mounted.ready
+    const made = m.mountPluginChat(el, o)
+    mounted = made
+    return made.ready
   }, (e) => ({ ok: false, error: String((e as { message?: unknown } | null)?.message ?? e) }))
+  // 这条对话现在接的是哪条会话:第一次没接上、用户点「重试」接上了的,以后来那次为准。
+  const session = (): Promise<TanguStartChatResult> => ready.then((first) => mounted?.latest() ?? first)
+  const type = pluginChatType(o)
   return {
     ready,
     // 引用条认的是目标名、不是挂载实例:对话还没挂上时投的引用,ChatView 一挂上就消费。
-    // ponytail: 引用条与预填都只有文字;要带附件时给 pluginChatStore 的 pending 加一栏(Image Studio 那条已有)。
-    quote: (text) => { if (!disposed && typeof text === 'string' && text.trim()) useApp.getState().setPendingChatQuote(pluginChatType(o), text) },
-    // 预填按会话投(Composer2 消费):会话接上之后才有 id,所以排在 ready 后面。
-    prefill: (text) => { if (typeof text === 'string' && text.trim()) void ready.then((r) => { if (!disposed && r.ok && r.sessionId) usePluginChat.getState().queue(r.sessionId, text) }) },
-    dispose: () => { disposed = true; unmount() },
+    // ponytail: 引用通道是整个应用共用的一个槽(主区 → 侧栏的引用也走它),没被取走之前后投的顶掉先投的;
+    // 引用条与预填都只有文字,要带附件时给 pluginChatStore 的 pending 加一栏(Image Studio 那条已有)。
+    quote: (text) => { if (!disposed && typeof text === 'string' && text.trim()) useApp.getState().setPendingChatQuote(type, text) },
+    // 预填按会话投(Composer2 消费):会话接上之后才有 id,所以排在接上之后。
+    prefill: (text) => { if (typeof text === 'string' && text.trim()) void session().then((r) => { if (!disposed && r.ok && r.sessionId) usePluginChat.getState().queue(r.sessionId, text) }) },
+    dispose: () => {
+      if (disposed) return
+      disposed = true
+      // 还没被取走的引用和预填是给这次挂载的:带走,别让同名的下一次挂载(换了库之后的同名文件夹)接到
+      const app = useApp.getState()
+      if (app.pendingChatQuote?.targetType === type) app.clearPendingChatQuote(app.pendingChatQuote.seq)
+      void session().then((r) => { if (r.sessionId) usePluginChat.getState().take(r.sessionId) }, () => {})
+      mounted?.dispose()
+    },
   }
 }
 
