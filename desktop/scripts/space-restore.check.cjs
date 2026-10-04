@@ -160,7 +160,15 @@ const check = (name, ok, detail) => {
     // E 上次退出的 Space **此刻尚未注册**(用户 L0 Space 异步装载 / 该 Space 已删):registerSpaces()
     //   会把活动 id 就地归一成产品默认,跑在启动策略之前。归档时若读归一后的值,上一程的布局就被
     //   写进**别人**的槽(Codex 评审抓的 High)。修法=用模块装载时的快照 BOOT_ACTIVE_SPACE_ID。
-    await dp.evaluate(() => localStorage.setItem('forsion_tangu_active_space', 'ghost-space'))
+    //   布局信封自己记着归属(2026-10-04,`space`):「上次退出在 ghost-space」得两把键一起写。只改活动 id 的话,
+    //   布局键仍标着 tangu = 「上一程 ghost-space 始终没就位、屏上一直是回落 Space」那种现场,按设计哪个槽都不进
+    //   (那条路由 check:spacefallback 的 A / B 守)。
+    await dp.evaluate(() => {
+      localStorage.setItem('forsion_tangu_active_space', 'ghost-space')
+      const b = JSON.parse(localStorage.getItem('tangu2_layout_v4'))
+      b.space = 'ghost-space'
+      localStorage.setItem('tangu2_layout_v4', JSON.stringify(b))
+    })
     await dboot()
     const e = await named()
     check('E 上次退出在未注册的 Space:布局归档到它自己名下,不串到产品默认', e.includes('space:ghost-space'), `namedLayouts=${JSON.stringify(e)}`)
@@ -193,6 +201,7 @@ const check = (name, ok, detail) => {
     const fmarked = await fp.evaluate(() => {
       localStorage.setItem('forsion_tangu_active_space', 'ghost-space')
       const b = JSON.parse(localStorage.getItem('tangu2_layout_v4'))
+      b.space = 'ghost-space' // 布局键自己记的归属要跟着改,见 E
       for (const p of Object.values(b.dockview.panels)) (p.params = p.params || {}).__probe = 'keepme'
       localStorage.setItem('tangu2_layout_v4', JSON.stringify(b))
       return Object.keys(b.dockview.panels).length

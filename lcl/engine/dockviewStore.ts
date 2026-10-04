@@ -443,9 +443,21 @@ function alignRegions(api: DockviewApi, before?: RegionTree | null): void {
 
 type Stashed = PersistedPanel
 
-function envelope(api: DockviewApi, state: Pick<WorkspaceState, 'leftVisible' | 'rightVisible' | 'stash'>): LayoutEnvelopeV4 {
+/** onReady 还原出来的那份布局自带的归属(信封里的 space)。只在一种情形下与画像键不同:「上次退出」档 × 纯内置视图的
+ *  用户 Space —— 布局还原成了,活动 id 却还是内存里的回落 Space(它的配方异步装载)。此时屏上是**它**的现场,存盘得
+ *  继续记在它名下;画像一重设(补定位 / 切 Space)或布局被重建成默认,就回到「画像键说了算」。
+ *  三态:undefined = 屏上不是启动还原出来的那份 → 归画像键;string = 还原出来的那份自带的归属;
+ *  null = 还原的是老存档(没记归属)→ **不知道**:存盘也不写,一切照升级前(信「上次退出」的活动 id)。不在这里替它
+ *  推定一个 —— 推定值得靠一次写盘传过来,写盘失败(配额满)时就成了「归画像键」,补定位会拿旧归档盖掉屏上更新的现场。 */
+let restoredOwner: string | null | undefined
+/** 屏上这份布局是给哪个 Space 摆的(= 存盘时写进信封的归属)。null = 不知道(老存档,或还没有任何 Space 画像)。 */
+export const liveLayoutOwner = (): string | null => restoredOwner === undefined ? useWorkspace.getState().sideProfileKey : restoredOwner
+
+function envelope(api: DockviewApi, state: Pick<WorkspaceState, 'leftVisible' | 'rightVisible' | 'stash' | 'sideProfileKey'>): LayoutEnvelopeV4 {
+  const space = restoredOwner === undefined ? state.sideProfileKey : restoredOwner
   return {
     version: 4,
+    ...(space ? { space } : {}),
     dockview: withoutTransientPanels(api.toJSON(), Object.fromEntries(Object.values(extensions).filter((lease) => lease.previousId).map((lease) => [lease.id, lease.previousId!]))),
     sidebars: {
       // 真实 panel 是唯一真源；状态事件可能落后于 Dockview 的异步布局沉降。
@@ -460,7 +472,7 @@ function envelope(api: DockviewApi, state: Pick<WorkspaceState, 'leftVisible' | 
  *  shape = 重置刚完成时的布局结构指纹(layoutShape),metrics = 尺寸 / 排列指纹(layoutMetrics,不含侧栏宽度),
  *  settleUntil = 重置自身的布局沉降窗口(这段里的回调只刷新 metrics 基线,不判作废),dismiss = 收回那条「撤销」提示。 */
 let layoutUndo: {
-  env: LayoutEnvelopeV4; api: DockviewApi; profile: string | null; stashActive: WorkspaceState['stashActive']
+  env: LayoutEnvelopeV4; api: DockviewApi; profile: string | null; owner: typeof restoredOwner; stashActive: WorkspaceState['stashActive']
   shape: string; metrics: LayoutMetrics; settleUntil: number; dismiss?: () => void
 } | null = null
 /** 重置后多久内的布局回调算「重置自己在沉降」(默认布局建完后 Dockview 异步派发的那批 + 双 raf 钉侧栏宽)。 */
@@ -692,6 +704,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     // ⚠️ 一并清 stashActive:它是全局单份、只在「折叠某侧」时写。不清的话,在 A 空间折叠右栏(记下
     // outline)→ 切到 B 空间首次展开右栏,会拿 A 的 outline 顶掉 B 配方的默认首项(B 里也有 outline
     // 就更隐蔽)。stash 本身在 applyNamed/resetLayout 已重置,这条是它漏下的那半。
+    restoredOwner = undefined // 画像重设 = 屏上的布局从此归这个 Space(调用方紧接着还原 / 重建 / 认领它)
     set({
       sideProfileKey: key,
       sideFree: { left: free.left !== false, right: free.right !== false },
@@ -1060,12 +1073,13 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     // 只有用户亲手重置才拍;拍不下来就不给撤销,重置照做。自动重置同时作废旧快照。
     let snap: Omit<NonNullable<typeof layoutUndo>, 'shape' | 'metrics' | 'settleUntil' | 'dismiss'> | null = null
     if (opts?.undoable) {
-      try { snap = { env: envelope(api, get()), api, profile: get().sideProfileKey, stashActive: { ...get().stashActive } } } catch { snap = null }
+      try { snap = { env: envelope(api, get()), api, profile: get().sideProfileKey, owner: restoredOwner, stashActive: { ...get().stashActive } } } catch { snap = null }
     }
     dropLayoutUndo() // 旧快照(连同它的提示)先作废:自动重置不给撤销,手动重置换一份新的
     dismissExtensions()
     try { api.clear() } catch { /* ignore */ }
     clearLayout()
+    restoredOwner = undefined // 默认布局是按当前画像的 Space 建的,不再是启动时还原出来的那份
     useNav.getState().reset() // 布局重建,旧 leaf id 全失效
     lastMainGroupId = null // 组 id 同样会被新布局复用
     set({ stash: { left: [], right: [], bottom: [] }, stashActive: { left: null, right: null, bottom: null }, leftVisible: true, rightVisible: true, bottomVisible: false, focusedChatLeafId: null })
@@ -1099,6 +1113,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     if (!u || !api || u.profile !== get().sideProfileKey || !undoStillMatches(u, api)) return false
     const ok = get().applyLayout(u.env)
     if (ok) {
+      restoredOwner = u.owner // 撤回来的是重置前那份:归属也回到拍快照那一刻的(画像没变过,上面刚核过)
       set({ stashActive: u.stashActive }) // 信封不带它:不还原的话,展开收起的侧栏会落到第一个视图而不是原来选中的那个
       scheduleWorkspaceSave()
     }
@@ -1461,7 +1476,27 @@ export function migrateLayoutBlob(layout: Pick<LayoutEnvelopeV4, 'dockview' | 's
   }
 }
 
+/** onReady 那次还原的结局:null = 还没跑;false = 落空(没有存档 / 存档引用了当时尚未注册的视图),屏上摆的是默认布局。 */
+let bootRestored: boolean | null = null
+/** 启动还原落空了:此刻屏上是「当时的活动 Space」的默认布局,不是布局键里原来那份现场。
+ *  异步就位的 Space(插件比 Dockview 就绪得晚)据此补还原自己的现场,而不是只换个活动 id。 */
+export const bootLayoutFellThrough = (): boolean => bootRestored === false
+
 export function tryRestoreLayout(api: DockviewApi): boolean {
+  bootRestored = restoreLayout(api)
+  return bootRestored
+}
+
+/** 命名布局此刻还原得了吗:存在,且引用的视图都已注册(口径同 tryRestoreLayout;applyNamed 自己不查)。 */
+export function namedLayoutRestorable(name: string): boolean {
+  const blob = loadNamedLayout(name)
+  if (!blob) return false
+  migrateLayoutBlob(blob)
+  return layoutViewsAllRegistered(blob.dockview)
+}
+
+function restoreLayout(api: DockviewApi): boolean {
+  restoredOwner = undefined
   const layout = loadLayout()
   if (!layout) return false
   migrateLayoutBlob(layout) // 必须先迁移再校验:退役视图(sessions 等)已无注册,迁移前校验会误丢整份布局
@@ -1487,7 +1522,9 @@ export function tryRestoreLayout(api: DockviewApi): boolean {
       : api.panels.find((p) => panelType(p) === 'chat')
     useWorkspace.getState().setFocusedLeaf(focused)
     pinSides(api)
-    return api.panels.length > 0
+    if (!api.panels.length) return false
+    restoredOwner = layout.space || null
+    return true
   } catch {
     return false
   }
