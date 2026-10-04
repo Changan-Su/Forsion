@@ -196,7 +196,8 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
       const memory = await resolveProjectCandidate(homeTarget(), session.id, id, action)
       setCtx((c) => (c ? { ...c, memory } : c)); setNotice(t(action === 'adopt' ? 'projectProfile.memoryAdopted' : 'projectProfile.memoryDismissed'))
     } catch (e: any) {
-      if (e?.status === 409 || e?.status === 404) { setReloadAt((n) => n + 1); setError(t('projectProfile.memoryCandidateGone')) }
+      // 404 = 那条已经不在了;409 = 别处正在改(候选还在,请再点一次)。两种都重载,话不能说成一样的(Codex 评审 10-04)
+      if (e?.status === 409 || e?.status === 404) { setReloadAt((n) => n + 1); setError(t(e.status === 404 ? 'projectProfile.memoryCandidateGone' : 'projectProfile.memoryBusy')) }
       else setError(e?.code === 'MEMORY_FULL' ? t('projectProfile.memoryFull') : String(e?.message || e))
     } finally { setBusy('') }
   }

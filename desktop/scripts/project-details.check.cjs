@@ -267,9 +267,14 @@ async function run(app, win, stub, seen, home, ctx) {
   await profile.locator('.agent-profile-error').waitFor()
   const goneText = await profile.locator('.agent-profile-error').textContent()
   check('4k 那条已经不在了(404)→ 提示已重新载入,不报成功', goneText.includes('已经不在了') && await memRows.count() === 3, goneText)
+  // 别处正在改(409 MEMORY_BUSY):候选还在,话不能说成「已经不在了」
+  seen.memoryCandidateBusyOnce = true
+  await memCard.locator('[data-project-memory-candidate="pc-2"]').getByRole('button', { name: '丢弃', exact: true }).click()
+  await profile.locator('.agent-profile-error').filter({ hasText: '请再点一次' }).waitFor()
+  check('4k2 别处正在改(409)→ 提示再点一次,候选还在', await pendRows.count() === 2 && !(await profile.locator('.agent-profile-error').textContent()).includes('已经不在了'), await profile.locator('.agent-profile-error').textContent())
   await memCard.locator('[data-project-memory-candidate="pc-2"]').getByRole('button', { name: '丢弃', exact: true }).click()
   await memCard.locator('[data-project-memory-candidate="pc-2"]').waitFor({ state: 'detached' })
-  check('4l 点丢弃 → 同一路由带 dismiss;候选消失、记忆清单不变', seen.memoryCandidates.at(-1).action === 'dismiss' && seen.memoryCandidates.at(-1).id === 'pc-2' && await pendRows.count() === 1 && await memRows.count() === 3, JSON.stringify(seen.memoryCandidates))
+  check('4l 点丢弃 → 同一路由带 dismiss;候选消失、记忆清单不变', seen.memoryCandidates.at(-1).action === 'dismiss' && seen.memoryCandidates.at(-1).id === 'pc-2' && await pendRows.count() === 1 && await memRows.count() === 3, JSON.stringify(seen.memoryCandidates.map((c) => `${c.id}:${c.action}`)))
   check('4e 配置页不横向溢出', await noOverflow(profile), await overflowReport(profile))
   await win.waitForTimeout(300)
   await details.screenshot({ path: shots.settingsLight = shot('project-settings-zh-light') })
@@ -660,7 +665,7 @@ async function main() {
   const projectDir = path.join(home, 'Demo Project')
   for (const dir of [userData, `${userData}-dev`, vault, projectDir]) fs.mkdirSync(dir, { recursive: true })
   const ctx = contextFixture(projectDir)
-  const seen = { memoryForgets: [], memoryConflictOnce: false, memoryCandidates: [], memoryCandidateGoneOnce: false, ctxGets: [], init: 0, docPuts: [], settingsPuts: [], skills: [], sessionsCreated: 0, iconPosts: [], iconGets: 0, iconDeletes: [], sessionDeletes: [], agentDeletes: [],
+  const seen = { memoryForgets: [], memoryConflictOnce: false, memoryCandidates: [], memoryCandidateGoneOnce: false, memoryCandidateBusyOnce: false, ctxGets: [], init: 0, docPuts: [], settingsPuts: [], skills: [], sessionsCreated: 0, iconPosts: [], iconGets: 0, iconDeletes: [], sessionDeletes: [], agentDeletes: [],
     gitMessages: [], gitCommits: [], gitBranches: [], gitPushes: [], gitInits: [], gitSettingsPuts: [], gitPendings: [], gitTrusts: [], pushGate: false }
   let gitSettings = { branchPrefix: 'tangu/', commitInstructions: '', forceWithLease: false }
   const demoIds = new Set(['pd-main', 'pd-coder', 'pd-team']) // 默认项 / 图标只属于 Demo Project;别的项目组读到的是空
@@ -743,6 +748,7 @@ async function main() {
     if (route === '/agent/project-context/memory/candidate' && method === 'POST') {
       const b = await body(); seen.memoryCandidates.push(b)
       const item = (ctx.memory.candidates || []).find((c) => c.id === b.id)
+      if (seen.memoryCandidateBusyOnce) { seen.memoryCandidateBusyOnce = false; return { __code: 409, body: { detail: 'Memory directory is locked by another writer.', code: 'MEMORY_BUSY', error: 'MEMORY_BUSY' } } }
       if (seen.memoryCandidateGoneOnce || !item) { seen.memoryCandidateGoneOnce = false; return { __code: 404, body: { detail: 'This candidate is no longer waiting.', code: 'MEMORY_NOT_FOUND', error: 'MEMORY_NOT_FOUND' } } }
       const entries = b.action === 'adopt' ? [...ctx.memory.entries, { id: `pm-${b.id}`, content: item.content, updatedAt: Date.now() }] : ctx.memory.entries
       ctx.memory = { ...ctx.memory, version: `vc${seen.memoryCandidates.length}`, entries, chars: entries.reduce((n, e) => n + e.content.length, 0), candidates: ctx.memory.candidates.filter((c) => c.id !== b.id) }

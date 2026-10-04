@@ -128,6 +128,21 @@ describe('项目记忆的待确认候选', () => {
     expect(await waiting('delta')).toHaveLength(20);
   });
 
+  it('丢弃记录比待确认留得久:丢弃过二十多条之后,最早那条和它的会话仍然不会再排', async () => {
+    session('z0', 'zeta');
+    const ref = await refOf('z0');
+    for (let n = 0; n < 25; n++) {
+      session(`z${n + 1}`, 'zeta');
+      const fact = `Mirror ${n} is at https://mirror-${n}.example.test`;
+      expect(await queueProjectFact(ref, fact, `z${n + 1}`)).toBe(true);
+      await resolveProjectCandidate(project('zeta'), await idOf('zeta', fact), false);
+    }
+    expect(await waiting('zeta')).toEqual([]);
+    expect(await queueProjectFact(ref, 'Mirror 0 is at https://mirror-0.example.test', 'z0')).toBe(false);   // 最早丢弃的那句
+    expect(await queueProjectFact(ref, 'Another fact with https://other.example.test', 'z1')).toBe(false);   // 最早丢弃过的那个会话
+    expect(pendingProjectFacts(ref)).toHaveLength(25);
+  });
+
   it('清单在、记忆文件还没有(或清单写坏了)也不出错:候选照常显示,坏清单当空', async () => {
     session('e1', 'epsilon');
     const ref = await refOf('e1');

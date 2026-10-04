@@ -77,6 +77,7 @@ registerMessages({
   'projectProfile.memoryDismissed': { zh: '已丢弃', en: 'Candidate dismissed' },
   'projectProfile.memoryCandidateGone': { zh: '这条候选已经不在了，已重新载入。', en: 'That candidate is no longer waiting. The list was reloaded.' },
   'projectProfile.memoryFull': { zh: '项目记忆已满。先删几条，再采纳。', en: 'Project memory is full. Delete a few entries before adopting.' },
+  'projectProfile.memoryBusy': { zh: '项目记忆正被别处改动，已重新载入；请再点一次。', en: 'Project memory is being changed elsewhere and was reloaded. Try again.' },
   'projectProfile.plans': { zh: '已批准的计划', en: 'Approved plans' },
   'projectProfile.plansHint': { zh: '计划模式里批准过的计划存档在 {dir}，点击打开。', en: 'Plans approved in plan mode are archived in {dir}. Select one to open it.' },
   'projectProfile.defaults': { zh: '项目默认', en: 'Project defaults' },

@@ -65,6 +65,8 @@ export async function peekProjectMemory(ref: ProjectMemoryRef): Promise<ReturnTy
 // dismissed = 用户丢弃过的,留着只为不再提:字面相同的不再排,同一个会话也不再排(判官每轮换说法,字面比对认不出「又是那一条」)。
 const PENDING = 'PENDING.json';
 const PENDING_MAX = 20;
+/** 丢弃记录留得比待确认多得多:它们被挤掉 = 同一句、同一个会话又能排回来(Codex 评审 10-04)。一条不到 400 字,封顶约 80 KB。 */
+const DISMISSED_KEEP = 200;
 interface PendingFact { id: string; fact: string; sessionId: string; at: number; dismissed?: boolean }
 
 /** 只读,不建目录(同 exists):文件不在 / 写坏了 → 空清单(候选不是资产,坏了重攒)。别的读错误照抛,免得写路径拿空清单盖掉整份。 */
@@ -103,8 +105,8 @@ export async function queueProjectFact(ref: ProjectMemoryRef, fact: string, sess
     const items = readPending(ref);
     if (items.some((p) => same(p.fact) || (p.dismissed && p.sessionId === sessionId))) return false;
     const next = [...items, { id: randomUUID().slice(0, 8), fact, sessionId, at: Date.now() }];
-    // 封顶:待确认与已丢弃各留最新的 PENDING_MAX 条,旧的自然淘汰
-    const keep = (dismissed: boolean): PendingFact[] => next.filter((p) => !!p.dismissed === dismissed).slice(-PENDING_MAX);
+    // 封顶:待确认留最新的 PENDING_MAX 条,已丢弃留最新的 DISMISSED_KEEP 条,旧的自然淘汰
+    const keep = (dismissed: boolean): PendingFact[] => next.filter((p) => !!p.dismissed === dismissed).slice(dismissed ? -DISMISSED_KEEP : -PENDING_MAX);
     atomicWriteMemoryFile(ref.dir, PENDING, JSON.stringify([...keep(true), ...keep(false)]));
     return true;
   });

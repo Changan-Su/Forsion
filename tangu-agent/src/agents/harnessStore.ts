@@ -668,8 +668,11 @@ export async function resolveHarnessCandidate(slug: string, line: string, adopt:
       if (!candidateAdoptable(line)) throw new HarnessCandidateError('equip', 'an equipment suggestion is adopted by the agent itself during /refine');
       const note = candidateNote(candidateBody(line));
       if (redactSecrets(note.body).trim().length > BODY_MAX) throw new HarnessCandidateError('too_long', `this candidate is longer than one entry holds (${BODY_MAX} characters)`);
-      if ((await loadHarness(slug)).length >= MAX_ENTRIES) throw new HarnessCandidateError('full', `the record is full (${MAX_ENTRIES} entries)`);
-      result = await applyEditUnlocked(slug, { action: 'upsert', kind: 'note', ...note }, { by: 'user' });
+      const entries = await loadHarness(slug);
+      // 上一次点击条目写成了、收件箱那一行没来得及拿掉(写盘失败)→ 这次不再写第二条,只把那一行收尾(Codex 评审 10-04)
+      const done = entries.find((e) => sameText(e.title, note.title) && sameText(e.body, redactSecrets(note.body)));
+      if (!done && entries.length >= MAX_ENTRIES) throw new HarnessCandidateError('full', `the record is full (${MAX_ENTRIES} entries)`);
+      result = done ? { entry: done, before: done, ts: new Date().toISOString(), rev: '' } : await applyEditUnlocked(slug, { action: 'upsert', kind: 'note', ...note }, { by: 'user' });
     }
     lines.splice(at, 1);
     await writeInbox(slug, lines);
