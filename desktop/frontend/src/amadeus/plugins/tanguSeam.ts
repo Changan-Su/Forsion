@@ -106,15 +106,18 @@ export interface TanguChatMountOptions {
   owner: string
   /** Agent slug;不给 = 用户默认 Agent。不存在的 slug → ready 给 ok:false。 */
   agent?: string
-  /** 会话的工作目录:**本机绝对路径**(pluginStore 已解析、钳在库内)。缺席 = 不带工作目录的沙箱对话。 */
-  cwd?: string
+  /** 插件给的工作文件夹(库相对,已去尾斜杠)。只用来给引用通道起目标名;落到哪个绝对路径由 resolveCwd 说了算。 */
+  folder?: string
+  /** folder → **本机绝对路径**(pluginStore 的放行规则:钳在库内、须本机执行)。探针等后端就绪之后才调 ——
+   *  应用刚启动时桌面配置与笔记库都还没回来,当场解析会把「还没就绪」错当成「不能在本机跑」。解析不出来给 null。 */
+  resolveCwd?: () => string | null
   /** 新建会话时的标题(重连既有会话时不改它)。 */
   title?: string
 }
 
-/** 挂载出来的对话在引用通道里的目标名(也是它的 `data-chat-surface`)。跟着(插件, 工作目录)走、不跟着挂载实例走:
+/** 挂载出来的对话在引用通道里的目标名(也是它的 `data-chat-surface`)。跟着(插件, 工作文件夹)走、不跟着挂载实例走:
  *  视图卸了重挂的那一拍里投的引用,新挂上的对话照样接得住。 */
-export const pluginChatType = (o: Pick<TanguChatMountOptions, 'owner' | 'cwd'>): string => `plugin-chat:${o.owner}:${o.cwd ?? ''}`
+export const pluginChatType = (o: Pick<TanguChatMountOptions, 'owner' | 'folder'>): string => `plugin-chat:${o.owner}:${o.folder ?? ''}`
 
 /** `mountChat` 的句柄。同步返回;会话是异步接上的,`quote` / `prefill` 在接上之前调用也不丢。 */
 export interface TanguChatMount {

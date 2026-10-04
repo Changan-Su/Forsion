@@ -1025,7 +1025,8 @@ export interface PluginContext {
      *  - 会话:一个(插件, `folder`)一条,宿主记在本机;下次挂载接回同一条(历史照常在),用户把它删了 / 归档了就新开。
      *    `title` 只在新建时用。它是一条普通会话,主区的会话列表里也看得到。
      *  - `folder`:会话的工作目录,**库相对路径**(同 `startChat`:宿主解析并钳在库内)。给了它,Agent 的相对路径都落在
-     *    这个文件夹里 —— 例如 `generate_image` 写进 `<folder>/generated/`。库外 / 无库 / 非本机执行 → 不带工作目录的沙箱对话。
+     *    这个文件夹里 —— 例如 `generate_image` 写进 `<folder>/generated/`。不给 `folder` = 不带工作目录的沙箱对话;
+     *    给了却落不到本机路径(库外 / 无库 / 非本机执行)→ `ready` 给 `ok:false`,不悄悄退成沙箱对话。
      *  - `agent`:名册里有就行(不要求是你捆绑的)—— 本接口**永不替用户送出**。
      *  - 句柄:`ready`(接上后 `{ ok, sessionId }`;失败 `{ ok:false, error }`,不抛,界面上有重试)、
      *    `quote(text)`(挂成输入框上方的引用条,不发送、不动草稿)、`prefill(text)`(接在输入框草稿后面并聚焦,回车由用户按)、

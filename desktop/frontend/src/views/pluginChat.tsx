@@ -3,7 +3,7 @@
  * 姿势(固定会话的 ChatView + childSurface)对插件开放。探针(tanguProbe.mountChat)动态 import 本文件。
  *
  * 会话规则:一个(插件, 工作目录)一条。id 记在本机 localStorage,下次挂载先问引擎它还在不在:
- * 在 → 接回去(历史照常拉);被删 / 被归档 → 新开一条。工作目录进了键,所以项目挪了地方 = 新键 = 新会话,
+ * 在 → 接回去(历史照常拉);被删 / 被归档 → 新开一条。工作目录(绝对路径)进了键,所以项目挪了地方 = 新键 = 新会话,
  * 不会接到一条还指着旧目录的会话上。
  */
 import { mountHostReact } from '@lcl/components'
@@ -35,11 +35,16 @@ const inflight = new Map<string, Promise<TanguStartChatResult>>()
 
 /** 接回这个(插件, 工作目录)的会话,没有就建。不抛:失败一律 `{ ok:false, error }`。 */
 export function ensurePluginChat(o: TanguChatMountOptions): Promise<TanguStartChatResult> {
-  const slot = `${o.owner}\n${o.cwd ?? ''}`
-  const running = inflight.get(slot)
+  const key = pluginChatType(o)
+  const running = inflight.get(key)
   if (running) return running
   const task = (async (): Promise<TanguStartChatResult> => {
     if (!(await waitBackend(BACKEND_WAIT_MS))) return { ok: false, error: 'engine is not connected' }
+    // 工作目录等后端就绪了才解析(刚启动时桌面配置 / 笔记库还没回来)。给了文件夹却落不到本机路径 = 接不上,
+    // 不悄悄退成沙箱对话:那样 Agent 碰不到项目文件,而且会占住「无目录」那个槽。
+    const cwd = o.resolveCwd?.() || undefined
+    if (o.folder && !cwd) return { ok: false, error: `folder is not available on this host: ${o.folder}` }
+    const slot = `${o.owner}\n${cwd ?? ''}`
     const agent = o.agent?.trim() || undefined
     if (agent && !(await agentKnown(agent))) return { ok: false, error: `unknown agent: ${agent}` }
     const known = readSlots()[slot]
@@ -61,8 +66,8 @@ export function ensurePluginChat(o: TanguChatMountOptions): Promise<TanguStartCh
     // 与「在某个本机项目里新建对话」(appStore.createInWorkspace)同一份配方,只是不动主区:
     // 上次用的审批 / 思考档 → 本机执行 + 工作目录 → Agent 自带的思考档压过它(同 selectNewChatAgent)。
     const init: AgentConfig = settleUltra(withAmadeusWorkspace({
-      ...(o.cwd
-        ? { ...newSessionConfig(stickyDefaults(app.desktopConfig, true), {}), execMode: 'host' as const, cwd: o.cwd }
+      ...(cwd
+        ? { ...newSessionConfig(stickyDefaults(app.desktopConfig, true), {}), execMode: 'host' as const, cwd }
         : { ...stickyDefaults(app.desktopConfig, false), execMode: 'sandbox' as const }),
       ...(def?.thinkingLevel ? { thinkingLevel: def.thinkingLevel, ...(def.thinkingLevel !== 'max' ? { ultra: false } : {}) } : {}),
       ...(slug ? { agentSlug: slug } : {}),
@@ -70,7 +75,7 @@ export function ensurePluginChat(o: TanguChatMountOptions): Promise<TanguStartCh
     try {
       const created = await createSession(homeTarget(), {
         ...(o.title ? { title: o.title } : {}),
-        ...(o.cwd ? { project_path: o.cwd, project_name: o.cwd.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || o.cwd } : { projectless: true }),
+        ...(cwd ? { project_path: cwd, project_name: cwd.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || cwd } : { projectless: true }),
         ...(def?.model ? { model_id: def.model } : {}),
         agent_config: init,
       })
@@ -82,8 +87,8 @@ export function ensurePluginChat(o: TanguChatMountOptions): Promise<TanguStartCh
       return { ok: false, error: errorText(e) }
     }
   })()
-  inflight.set(slot, task)
-  void task.finally(() => { inflight.delete(slot) })
+  inflight.set(key, task)
+  void task.finally(() => { inflight.delete(key) })
   return task
 }
 
