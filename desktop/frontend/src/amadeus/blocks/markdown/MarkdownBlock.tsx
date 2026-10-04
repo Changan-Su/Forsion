@@ -2674,6 +2674,18 @@ function SlashMenu({ query, left, top, anchorTop, hideKeys, ctx, unified, editor
     setCategoryChoice(null)
   }, [query])
 
+  // 切类别不许挪菜单:同一个 query 内只长不缩。菜单开在光标上方时底边贴着光标,一缩顶上的类别胶囊
+  // 就从鼠标底下滑走(基本 → AI 实测下移 206px)。按 query 记账(同 categoryChoice),换 query 当帧解锁。
+  // ponytail: 只防缩 —— query 缺省落在矮类别时切到高类别仍会长一次;真有人报再改成三个面板叠着量。
+  // 仪器:check:documentagents 的 slash-stable 组。
+  const menuEl = useRef<HTMLDivElement | null>(null)
+  const [heightFloor, setHeightFloor] = useState<{ query: string; height: number } | null>(null)
+  const minHeight = heightFloor?.query === q ? heightFloor.height : undefined
+  useLayoutEffect(() => {
+    const height = menuEl.current?.offsetHeight ?? 0
+    if (height > (minHeight ?? 0)) setHeightFloor({ query: q, height })
+  })
+
   // 读屏(P-10):焦点留在编辑器,高亮项靠编辑器根的 aria-activedescendant 指过去(菜单是 role=menu / menuitem,
   // menuitem 不支持 aria-selected,「当前项」就用 activedescendant 表达);关菜单时摘掉,别让读屏指向已卸载的节点。
   const activeIdx = items.length ? Math.min(active, items.length - 1) : -1
@@ -2761,7 +2773,8 @@ function SlashMenu({ query, left, top, anchorTop, hideKeys, ctx, unified, editor
     <>
       <div className="slash-backdrop" onMouseDown={onClose} />
       {/* 按下菜单空白/分组标签/滚动条不夺编辑器焦点:失焦即关(L-04)后,不拦这一下菜单会自己关掉。 */}
-      <OverlayAt id={menuId} className="slash-menu" x={left} y={top} anchorTop={anchorTop} onMouseDown={(e) => e.preventDefault()}>
+      <OverlayAt id={menuId} className="slash-menu" x={left} y={top} anchorTop={anchorTop} style={{ minHeight }}
+        innerRef={(el) => { menuEl.current = el }} onMouseDown={(e) => e.preventDefault()}>
         <div className="slash-category-tabs" role="tablist" aria-label={t('mdblock.category.label')}>
           {SLASH_CATEGORIES.map((tab) => (
             <button key={tab} type="button" id={`${menuId}-tab-${tab}`} className="slash-category-tab"

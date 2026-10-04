@@ -28,6 +28,8 @@
 .slash-menu .slash-list {
   display: flex;
   flex-direction: column;
+  /* The shell keeps its height across categories (SlashMenu's height floor); a short list must push the footer down. */
+  flex: 1 1 auto;
   min-height: 0;
   overflow: hidden;
 }

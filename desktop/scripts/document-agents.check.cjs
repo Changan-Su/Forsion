@@ -559,6 +559,71 @@ async function slashScreenshots(browser) {
   })
 }
 
+// Switching the category capsule must not move the menu. Above the caret the menu's bottom is pinned to the
+// caret, so a menu that shrinks slides the capsule out from under the pointer (Basic -> AI used to drop 206px).
+async function slashStability(browser) {
+  await scenario(browser, 'slash-stable', async (openPage) => {
+    const LONG = `# Stable\n\n${Array.from({ length: 40 }, (_, index) => `line ${index}`).join('\n\n')}\n`
+    const geometry = (page) => page.evaluate(() => {
+      const menu = document.querySelector('.slash-menu').getBoundingClientRect()
+      const caret = window.getSelection().getRangeAt(0).getBoundingClientRect()
+      return {
+        tabs: Math.round(document.querySelector('.slash-category-tabs').getBoundingClientRect().top),
+        height: Math.round(menu.height), above: menu.bottom <= caret.top + 1,
+        footGap: Math.round(menu.bottom - document.querySelector('.slash-foot').getBoundingClientRect().bottom),
+      }
+    })
+    // One click and two arrow presses: Basic -> AI -> Plugins -> Basic.
+    const walk = async (page) => {
+      // Not openSlash: the new last line scrolls into view first, and any outside scroll closes the menu.
+      await endOfPage(page)
+      await page.waitForTimeout(250)
+      await page.keyboard.type('/', { delay: 25 })
+      await page.waitForSelector('.slash-menu')
+      await settleSlashMenu(page)
+      const steps = [await geometry(page)]
+      for (const [category, act] of [['ai', () => page.locator('.slash-category-tab[data-category="ai"]').click()], ['plugin', () => page.keyboard.press('ArrowRight')], ['basic', () => page.keyboard.press('ArrowRight')]]) {
+        await act()
+        await waitCategory(page, category)
+        await settleSlashMenu(page)
+        steps.push(await geometry(page))
+      }
+      return steps
+    }
+    const spread = (steps) => Math.max(...steps.map((step) => step.tabs)) - Math.min(...steps.map((step) => step.tabs))
+
+    const low = await openPage(LONG, '&upane')
+    const above = await walk(low)
+    check('H1 above the caret, the category capsule stays put across Basic / AI / Plugins', above.every((step) => step.above) && spread(above) < 1, above)
+    check('H2 a short category keeps the footer on the bottom edge', above.every((step) => step.footGap >= 0 && step.footGap <= 8), above.map((step) => step.footGap))
+    await screenshot(low, 'slash-stable-above-basic', false)
+    await low.locator('.slash-category-tab[data-category="ai"]').click()
+    await waitCategory(low, 'ai')
+    await settleSlashMenu(low)
+    await screenshot(low, 'slash-stable-above-ai', false)
+    // The floor belongs to one query: filtering to nothing must still shrink the menu.
+    await low.keyboard.type('zzzz', { delay: 25 })
+    await low.waitForFunction(() => !document.querySelector('.slash-item[data-key]'))
+    await settleSlashMenu(low)
+    const filtered = await geometry(low)
+    check('H3 a new query releases the kept height', filtered.height < above[0].height - 50, { before: above[0].height, after: filtered.height })
+
+    // Negative control: without the height floor the same walk moves the capsule, so H1 is measuring something real.
+    const control = await openPage(LONG, '&upane')
+    await control.addStyleTag({ content: '.am-app .slash-menu{min-height:0!important}' })
+    const loose = await walk(control)
+    check('H4 negative control: without the height floor the capsule moves', loose.every((step) => step.above) && spread(loose) > 50, loose)
+
+    const high = await openPage('# Stable\n\nx\n', '&upane')
+    const below = await walk(high)
+    check('H5 below the caret, the capsule and the menu height stay put', below.every((step) => !step.above && step.height === below[0].height) && spread(below) < 1, below)
+    await high.locator('.slash-category-tab[data-category="ai"]').click()
+    await waitCategory(high, 'ai')
+    await settleSlashMenu(high)
+    await screenshot(high, 'slash-stable-below-ai', false)
+  })
+}
+
 async function main() {
   const browser = await chromium.launch({ executablePath: findChromium(), headless: true })
   const only = (process.argv.find((arg) => arg.startsWith('--group=')) || '').slice('--group='.length).split(',').filter(Boolean)
@@ -571,6 +636,7 @@ async function main() {
     if (selected('instructions')) await instructionsScenarios(browser)
     if (selected('shots')) await safetyAndShots(browser)
     if (selected('shots') || selected('slash-shots')) await slashScreenshots(browser)
+    if (selected('slash') || selected('slash-stable')) await slashStability(browser)
   } finally { await browser.close() }
   check('No browser page errors', errors.length === 0, errors)
   fs.writeFileSync(path.join(OUT, `report-${only.join('-') || 'all'}.json`), JSON.stringify({ url: URL, groups: only, results, errors }, null, 2))
