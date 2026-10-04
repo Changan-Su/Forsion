@@ -1564,7 +1564,7 @@ declare global {
       pluginsUserInstalled?(): Promise<Array<{ id: string; slug: string }>>
       pluginsUninstall?(id: string): Promise<{ ok: boolean }>
       /** 用户自定义 Space:~/.tangu/spaces/<slug>/space.json(数据化布局配方;market type='space' 同目录)。 */
-      spacesList?(): Promise<Array<{ slug: string; json: string; plugin?: string }>>
+      spacesList?(): Promise<Array<{ slug: string; json: string; plugin?: string; iconUrl?: string }>>
       spacesSave?(slug: string, json: string): Promise<{ ok: boolean }>
       spacesDelete?(slug: string): Promise<{ ok: boolean }>
       /** 收件箱:系统通知(点击回跳 Inbox Space)/ dock 角标(仅 mac 生效)/ 通知点击订阅。 */

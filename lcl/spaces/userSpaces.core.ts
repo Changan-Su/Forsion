@@ -25,7 +25,12 @@ const BOTTOM_SPANS = ['right', 'left', 'full', 'main'] as const
 export interface SpaceSpec {
   id: string
   name: string | { zh?: string; en?: string }
+  /** 图标库里的名字(宿主精选表;不认识 → 方块)。写了 `iconFile` 也照写:老宿主、图读不到时退到它。 */
   icon?: string
+  /** 自绘图标:Space 目录里的一枚图片(裸文件名,`.png` / `.svg`)。插件 Space 自己目录里没有就取插件包根的
+   *  同名文件,所以 `"iconFile": "icon.png"` = 直接用插件图标。PNG 原色显示(方形 64~512px、≤256KB);
+   *  SVG 只取轮廓、颜色跟随主题(≤64KB)。宿主读图,本解析器只保留字段;老宿主不认这个键。 */
+  iconFile?: string
   /** 配方版本(插件/市场包升级时递增)。宿主据此判断「这份配方换过了」→ 丢弃该 Space 的
    *  已保存布局,让新配方真正落地;否则 setActiveSpace 恒走 applyNamed(保存布局优先),
    *  改了 layout 的新版对**用过该 Space 的用户永远不生效**。 */
@@ -175,6 +180,7 @@ export function parseSpaceJson(raw: string, opts: ParseOpts): ParseResult {
       id,
       name: name as SpaceSpec['name'],
       icon: typeof d.icon === 'string' ? d.icon : undefined,
+      iconFile: typeof d.iconFile === 'string' ? d.iconFile : undefined,
       version: typeof d.version === 'string' ? d.version : undefined,
       mini,
       minAppVersion: typeof d.minAppVersion === 'string' ? d.minAppVersion : undefined,

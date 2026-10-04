@@ -59,6 +59,23 @@ Forsion / Tangu 的扩展**默认按捆绑包(bundle)形态发行**(2026-07-25 �
 
 `space.json` 声明视图布局配方(引用视图类型 id;插件视图用 `plugin:<插件id>:<视图id>` 并在 `requires.views` 声明)。纯数据,无代码。
 
+### 图标:`icon` + `iconFile`(2026-10-04 起)
+
+图标库只有 28 枚,几个 Space 一多就撞图标。给 Space 配一枚自己的图:
+
+```json
+{ "icon": "video", "iconFile": "icon.png" }
+```
+
+- `icon`:宿主图标库里的名字(全表见 `samples/forsion-sample-space/README.md`),不认识的回落方块。
+- `iconFile`:一枚图片的**裸文件名**(`.png` / `.svg`,不能带路径)。宿主先在 Space 自己的目录里找;插件内嵌的 Space 找不到,再到**插件包根**找。
+  所以 `"iconFile": "icon.png"` 而 Space 目录里不放图 = **直接用插件图标**;想单独画一枚,就把图放进 `spaces/<slug>/`。
+  - **PNG**:原色显示。和插件图标同一道门禁:正方形、边长 64~512 像素、≤256KB。
+  - **SVG**:只取轮廓,颜色跟随主题和选中态(≤64KB)。照 Ribbon 线形图标的规格画最协调:`viewBox="0 0 24 24"`、2px 描边、不填充。SVG 里写的颜色不生效,要彩色用 PNG。
+- **两个都写**。老宿主不认 `iconFile`;文件缺失或不合规时也退到 `icon`。
+- 只换图标**不要**升 `space.json` 的 `version` —— 那个版本号一变,宿主会丢掉用户保存的布局。升插件 `manifest.json` 的版本即可,图标随插件更新自动换。
+- 宿主只把图当图片显示(`<img>` / CSS mask),SVG 里的脚本、外链都不会执行,也别指望它们。
+
 ### 布局:原生 Panel 优先(2026-10-02 起规)
 
 插件视图**先摆进宿主的原生 Panel**,别在一个 view 里自造侧栏、底栏、分栏 —— 原生 Panel 自带标签、拖宽、折叠、
@@ -144,7 +161,7 @@ ctx.openMiniPanel?.('mini-counter', {
      tangu-plugins/<pid>/tangu-plugin.json   ← 内嵌引擎插件:引擎原地加载(优先级最低,顶不掉手装同 id)
      skills/<slug>/SKILL.md            ← 内嵌全局技能:引擎原地扫描(内置 < bundle < 用户)
      agents/<slug>/config.toml         ← 内嵌 Agent:人格面播种一次,其 skills/ 指纹自愈
-     spaces/<slug>/space.json          ← 内嵌 Space:随插件启停显隐
+     spaces/<slug>/space.json          ← 内嵌 Space:随插件启停显隐(图标见上文 `iconFile`)
 ```
 
 **三种生命周期,发包前必须分清**:

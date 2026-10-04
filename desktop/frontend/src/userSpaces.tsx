@@ -16,7 +16,7 @@ import {
   setActiveSpaceCold, BOOT_ACTIVE_SPACE_ID, UI_MODE,
   spaceLayoutsWereReset,
 } from '@lcl/engine'
-import type { Leaf, SpaceDefinition, PersistedPanel } from '@lcl/engine'
+import type { Leaf, SpaceDefinition, SpaceIcon, PersistedPanel } from '@lcl/engine'
 import { SpaceButton } from './components/SpaceButton'
 import { panelToast } from './components/PanelNotice'
 import { ipcErrorText } from './ipcError'
@@ -43,6 +43,19 @@ const SPACE_ICONS: Record<string, LucideIcon> = {
   sparkles: Sparkles, boxes: Boxes, 'list-tree': ListTree, server: Server, 'server-cog': ServerCog,
 }
 
+/** 自绘图标(space.json 的 `iconFile`;主进程验过并读成 data URL)→ 与 lucide 同签名的组件,渲染点零改动。
+ *  SVG = 单色蒙版:只取轮廓,颜色走 currentColor,明暗主题与选中态照常;PNG = 原色小图。
+ *  两种都只当图片消费(<img> / CSS mask),SVG 里的脚本与外链不会执行。 */
+/** 只收主进程产出的那两种形状。设备页的清单来自对端主机(/unit/spaces),别把任意串放进 src / mask。 */
+const ICON_URL_RE = /^data:image\/(png|svg\+xml);base64,[A-Za-z0-9+/=]+$/
+
+export function imageIcon(url: string): SpaceIcon {
+  const mask = `url("${url}") center / contain no-repeat`
+  return url.startsWith('data:image/svg+xml')
+    ? ({ size = 18 }) => <span aria-hidden="true" style={{ display: 'inline-block', flex: 'none', width: size, height: size, background: 'currentColor', mask, WebkitMask: mask }} />
+    : ({ size = 18 }) => <img aria-hidden="true" alt="" src={url} width={size} height={size} draggable={false} style={{ flex: 'none', borderRadius: '22%', objectFit: 'cover' }} />
+}
+
 const ws = () => useWorkspace.getState()
 const app = () => useApp.getState()
 /** 本进程内经此文件注册的用户 Space:id → 磁盘目录名。market 安装目录名来自上架名称的 slug,
@@ -52,6 +65,8 @@ const userIds = new Map<string, string>()
 const pluginSpaceOwner = new Map<string, string>()
 /** 已注册插件 Space 的原始 space.json:配方变了(插件更新)才注销重注册,不变则不动(防 ribbon 无谓抖动)。 */
 const pluginSpaceJson = new Map<string, string>()
+/** 已注册插件 Space 的自绘图标:只换了图就原地重注册(不走注销那条 —— 它会把正在用的 Space 打回 tangu)。 */
+const pluginSpaceIcon = new Map<string, string | undefined>()
 let pluginOnlyStartupResolved = false
 /** Recipe migrations can happen after WorkspaceHost has already restored the previous run's current layout:
  * plugin views and their bundled Spaces are loaded asynchronously. Keep the migration pending until the
@@ -96,13 +111,13 @@ function migrateRecipeLayout(spec: SpaceSpec): void {
   try { localStorage.setItem(RECIPE_VER_KEY, JSON.stringify(map)) } catch { /* 配额满:下次再试 */ }
 }
 
-function specToDefinition(spec: SpaceSpec): SpaceDefinition {
+function specToDefinition(spec: SpaceSpec, iconUrl?: string): SpaceDefinition {
   const sides: SpaceDefinition['sidebarDefaults'] = { left: toPanels(spec.layout.left), right: toPanels(spec.layout.right), bottom: toPanels(spec.layout.bottom ?? []) }
   return {
     id: spec.id,
     mini: spec.mini ? { ...spec.mini, name: spec.mini.name ? specName({ ...spec, name: spec.mini.name }) : undefined } : undefined,
     name: specName(spec),
-    icon: SPACE_ICONS[spec.icon ?? ''] ?? Boxes,
+    icon: iconUrl ? imageIcon(iconUrl) : SPACE_ICONS[spec.icon ?? ''] ?? Boxes,
     sidebarDefaults: sides,
     // 配方条目上的 pinned:true → 固定 View(引擎按 Space 声明现判,不进布局存档)
     pinned: { main: toPanels(spec.layout.main.filter((p) => p.pinned)), left: toPanels(spec.layout.left.filter((p) => p.pinned)), right: toPanels(spec.layout.right.filter((p) => p.pinned)) },
@@ -140,9 +155,9 @@ function specToDefinition(spec: SpaceSpec): SpaceDefinition {
   }
 }
 
-function installUserSpace(spec: SpaceSpec, dirSlug: string = spec.id): void {
+function installUserSpace(spec: SpaceSpec, dirSlug: string = spec.id, iconUrl?: string): void {
   migrateRecipeLayout(spec)
-  const def = specToDefinition(spec)
+  const def = specToDefinition(spec, iconUrl)
   registerSpace(def)
   userIds.set(spec.id, dirSlug)
   addRibbonIcon({
@@ -163,9 +178,9 @@ function installUserSpace(spec: SpaceSpec, dirSlug: string = spec.id): void {
 }
 
 /** 插件 Space 注册:同 installUserSpace 但不进 userIds(不可右键删除——生命周期随插件),悬停提示来源。 */
-function installPluginSpace(spec: SpaceSpec, pluginId: string): void {
+function installPluginSpace(spec: SpaceSpec, pluginId: string, iconUrl?: string): void {
   migrateRecipeLayout(spec)
-  const def = specToDefinition(spec)
+  const def = specToDefinition(spec, iconUrl)
   registerSpace(def)
   pluginSpaceOwner.set(spec.id, pluginId)
   addRibbonIcon({
@@ -182,6 +197,7 @@ function removePluginSpace(id: string): void {
   removeRibbonIcon(`space:${id}`)
   pluginSpaceOwner.delete(id)
   pluginSpaceJson.delete(id)
+  pluginSpaceIcon.delete(id)
 }
 
 /** 扫 ~/.tangu/spaces + 各插件捆绑包 spaces/ 装载全部合法配方(幂等:已注册 id 跳过;
@@ -252,12 +268,13 @@ async function loadUserSpacesOnce(): Promise<void> {
   const disabled = new Set(readDisabledPluginIds())
 
   // 想要的最终集合:解析全部配方,禁用插件的条目排除;同 spec id 先到先得(用户目录在前)。
-  const wanted = new Map<string, { spec: SpaceSpec; dirSlug: string; plugin?: string; raw: string }>()
-  for (const { slug, json, plugin } of list) {
+  const wanted = new Map<string, { spec: SpaceSpec; dirSlug: string; plugin?: string; raw: string; iconUrl?: string }>()
+  for (const { slug, json, plugin, iconUrl: rawIcon } of list) {
+    const iconUrl = typeof rawIcon === 'string' && ICON_URL_RE.test(rawIcon) ? rawIcon : undefined
     if (plugin && disabled.has(plugin)) continue
     const r = parseSpaceJson(json, { isViewRegistered: (t) => !!getView(t), appVersion, reservedIds: BUILTIN_IDS })
     if (!r.ok) { console.warn(`[spaces] 跳过 ${slug}: ${r.error}`); continue }
-    if (!wanted.has(r.spec.id)) wanted.set(r.spec.id, { spec: r.spec, dirSlug: slug, plugin, raw: json })
+    if (!wanted.has(r.spec.id)) wanted.set(r.spec.id, { spec: r.spec, dirSlug: slug, plugin, raw: json, iconUrl })
   }
 
   // 先注销:此前注册的插件 Space,如今主人被禁用/卸载、文件消失,或**配方内容变了**(插件更新,
@@ -269,13 +286,22 @@ async function loadUserSpacesOnce(): Promise<void> {
 
   const taken = new Set(useSpaceStore.getState().spaces.map((s) => s.id))
   for (const [id, w] of wanted) {
-    if (taken.has(id)) continue // 已注册(重复 reload / 两目录同 id,先到先得)
+    if (taken.has(id)) { // 已注册(重复 reload / 两目录同 id,先到先得)
+      // 插件更新只换了图(space.json 一字未动):registerSpace / addRibbonIcon 都按 id 替换,原地重装即可,
+      // 活动 Space、用户排的位置都不动。
+      if (w.plugin && pluginSpaceOwner.get(id) === w.plugin && pluginSpaceIcon.get(id) !== w.iconUrl) {
+        installPluginSpace(w.spec, w.plugin, w.iconUrl)
+        pluginSpaceIcon.set(id, w.iconUrl)
+      }
+      continue
+    }
     taken.add(id)
     if (w.plugin) {
-      installPluginSpace(w.spec, w.plugin)
+      installPluginSpace(w.spec, w.plugin, w.iconUrl)
       pluginSpaceJson.set(id, w.raw)
+      pluginSpaceIcon.set(id, w.iconUrl)
     } else {
-      installUserSpace(w.spec, w.dirSlug) // 目录名可与 id 不同(market 目录来自上架名称 slug)
+      installUserSpace(w.spec, w.dirSlug, w.iconUrl) // 目录名可与 id 不同(market 目录来自上架名称 slug)
     }
   }
   // 启动恢复时活动 Space 可能正是刚注册的用户 Space:installEngine 曾按 fallback(tangu)设过侧栏默认,补正。

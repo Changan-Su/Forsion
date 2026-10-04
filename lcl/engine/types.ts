@@ -174,6 +174,10 @@ export interface StatusItem {
   side?: 'left' | 'right'
 }
 
+/** Space 图标:lucide 图标,或任何只吃 `size` 的组件(自绘 / 插件图标,见 desktop userSpaces 的 imageIcon)。
+ *  渲染点一律 `<Icon size={n} />`,别传 lucide 专有属性(strokeWidth 等)—— 图片图标接不住。 */
+export type SpaceIcon = LucideIcon | ComponentType<{ size?: number }>
+
 /**
  * 一个 Space(空间)：取代传统「App」的功能组合 —— 一组视图 + 默认布局 + 侧栏默认。
  * Workbench ⊃ Space ⊃ View(+ Layout)。在 ribbon 顶部成组、单选切换;切换即整体换布局。
@@ -186,7 +190,7 @@ export interface SpaceDefinition {
   id: string
   /** 名称;函数形式支持 i18n 懒求值(同 ViewDefinition.displayName)。 */
   name: string | (() => string)
-  icon?: LucideIcon
+  icon?: SpaceIcon
   /** 构建该 Space 的默认布局(开它的几个视图)。无已存命名布局时调用。 */
   build(): void
   /** 该 Space 的侧栏默认内容;每次切换都重设(applyNamed 不会跑 build)。

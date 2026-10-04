@@ -24,6 +24,7 @@ import { createSerialQueue, lockedUpdateJson, writePrivateJson } from './configW
 import { existsSync, mkdirSync, realpathSync, watch as fsWatch } from 'fs'
 import { ensureCliInstalled } from './cliInstall'
 import { PRODUCT } from './product'
+import { readSpaceIconDataUrl } from './spaceIcon'
 import { bindDevTanguHome, forsionHomeDir, tanguDataDir, migrateForsionHome, migrateEngineData, migratePair, setDevMode, defaultWorkspaceDir as forsionWorkspaceDir } from './forsionHome'
 import { privateHostReason } from './netGuard'
 import { execFile, execFileSync, spawn } from 'child_process'
@@ -987,12 +988,19 @@ function unitLanUrl(): string | null {
  *  ~/.tangu/spaces/<slug>/space.json + 插件捆绑包内嵌 plugins/<id>/spaces/<slug>/space.json。
  *  设备页(B 端渲染)没有这份数据就装不出插件 Space → Ribbon 上一个插件图标都没有(2026-08-24 实测),
  *  而方案 §拍板口径是「A 看到 B 的完整 Forsion(含 Ribbon/Space)」。 */
-async function readSpacesList(): Promise<Array<{ slug: string; json: string; plugin?: string }>> {
-  const out: Array<{ slug: string; json: string; plugin?: string }> = []
+async function readSpacesList(): Promise<Array<{ slug: string; json: string; plugin?: string; iconUrl?: string }>> {
+  const out: Array<{ slug: string; json: string; plugin?: string; iconUrl?: string }> = []
+  // 自绘图标(space.json 的 iconFile)在这里读成 data URL 随清单带回去:设备页同源拿到,渲染层不必再开一条 IPC。
+  // ponytail: 每枚 ≤256KB 的 base64 直接进清单;插件多到拖慢 loadUserSpaces 再改走 amadeus-asset: 协议按需取。
+  const entry = async (slug: string, dir: string, plugin?: { id: string; dir: string }): Promise<void> => {
+    const json = await readFile(join(dir, 'space.json'), 'utf8')
+    const iconUrl = await readSpaceIconDataUrl(json, plugin ? [dir, plugin.dir] : [dir])
+    out.push({ slug, json, ...(plugin ? { plugin: plugin.id } : {}), ...(iconUrl ? { iconUrl } : {}) })
+  }
   try {
     const base = join(tanguHomeDir(), 'spaces')
     for (const e of (await readdir(base, { withFileTypes: true })).filter((x) => x.isDirectory())) {
-      try { out.push({ slug: e.name, json: await readFile(join(base, e.name, 'space.json'), 'utf8') }) } catch { /* 无 manifest 跳过 */ }
+      try { await entry(e.name, join(base, e.name)) } catch { /* 无 manifest 跳过 */ }
     }
   } catch { /* 目录不存在 = 空 */ }
   try {
@@ -1009,7 +1017,7 @@ async function readSpacesList(): Promise<Array<{ slug: string; json: string; plu
       try {
         const sroot = join(proot, p.name, 'spaces')
         for (const e of (await readdir(sroot, { withFileTypes: true })).filter((x) => x.isDirectory())) {
-          try { out.push({ slug: e.name, json: await readFile(join(sroot, e.name, 'space.json'), 'utf8'), plugin: pid }) } catch { /* 无 space.json 跳过 */ }
+          try { await entry(e.name, join(sroot, e.name), { id: pid, dir: join(proot, p.name) }) } catch { /* 无 space.json 跳过 */ }
         }
       } catch { /* 无 spaces/ 子目录 */ }
     }
