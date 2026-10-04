@@ -315,6 +315,10 @@ registerMessages({
     "zh": "输入消息，输入 / 唤起技能（Enter 发送，Shift+Enter 换行）",
     "en": "Type a message, type / to invoke skills (Enter to send, Shift+Enter for a new line)"
   },
+  "input.placeholderTouch": {
+    "zh": "输入消息，输入 / 唤起技能",
+    "en": "Type a message, type / to invoke skills"
+  },
   "input.addContent": {
     "zh": "添加内容",
     "en": "Add content"

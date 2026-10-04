@@ -133,7 +133,9 @@ function Drawer({ side, docked, showFoot, page }: { side: 'left' | 'right'; dock
   const visible = useWorkspace((s) => (side === 'left' ? s.leftVisible : s.rightVisible))
   const footAlive = useFootAlive() // 无条件调用:hooks 不能进条件分支
   const nativeSpaces = useNativeChromeSpaces()
-  const withFoot = side === 'left' && !!showFoot && footAlive
+  // 原生宿主自己画底部导航栏时(Android)整排都不画:切 Space 走底栏,账号是顶栏右侧的头像(宿主画,
+  // 见 mobile/src/nativeChrome.ts),设置与 mobileFoot 项在「⋯」的最前面(见 moreItems)。
+  const withFoot = side === 'left' && !!showFoot && footAlive && !nativeSpaces
   // 只订阅稳定量:该侧 leaf 的 id 签名(增删触发)+ active id(切换触发)。**不**订阅 title,
   // 否则视图渲染期调 leaf.setTitle → 宿主重渲染 → 再 setTitle 的无限循环(React #185)。
   const leavesSig = useWorkspace((s) => (side === 'left' ? s.leftLeaves : s.rightLeaves).map((r) => r.id).join(','))
@@ -147,8 +149,7 @@ function Drawer({ side, docked, showFoot, page }: { side: 'left' | 'right'; dock
   const def = active ? getView(active.type) : null
   const close = () => useWorkspace.getState().toggleSidebar(side)
   // 「这个抽屉有没有东西可给」:侧栏视图,或(仅左)底部常驻区。见 footAliveOf 上方的注释。
-  // 原生底栏在场时不留「只有底部那一排」的空抽屉:切 Space 走底栏,设置回到「⋯」(见 isMoreItem 的 footless)。
-  const alive = leaves.length > 0 || (withFoot && !nativeSpaces)
+  const alive = leaves.length > 0 || withFoot
   const inner = !alive ? null : (
     <>
       {/* page = 两级导航的列表层(见 listFirstNow):标题已在原生顶栏上,这里只在该侧有多个视图时留下切换下拉;
@@ -377,7 +378,8 @@ setAfterLayoutHook(landOnList)
 
 /** 左抽屉底部常驻区:Space 切换条(原全局底栏移入)+ 账号卡与设置钮。
  *  账号/设置是 feature 层的 ribbon 注册项(rb-account / rb-settings),引擎按 id 取用不 import feature;
- *  同两项已从「⋯」菜单滤掉(不重复出现)。切 Space 会走 resetLayout → 抽屉自动收回。 */
+ *  同两项已从「⋯」菜单滤掉(不重复出现)。切 Space 会走 resetLayout → 抽屉自动收回。
+ *  原生宿主画底部导航栏时不渲染(见 Drawer 的 withFoot)。 */
 function DrawerFoot() {
   const alive = useFootAlive()
   const spaces = useSpaceStore((s) => s.spaces)
@@ -388,8 +390,6 @@ function DrawerFoot() {
   const footExtras = useRibbonStore((s) => s.items).filter((i) => i.mobileFoot)
   const AccountC = account?.component
   const SettingsIcon = settings?.icon
-  // 原生宿主自己画底部导航栏时(Android,见 nativeChrome 的 spaces),这里不再重复渲染 Web 的 Space 条。
-  const nativeSpaces = useNativeChromeSpaces()
   const barRef = useRef<HTMLElement>(null)
   // Space 多到要横滚时(见 .mb-spacebar),当前那格可能压根不在视野里 —— 看着像哪个都没选中。
   // 挂载与切 Space 后把它拨到中间;没溢出时 scrollIntoView 本身就是空操作,不用另外判。
@@ -399,7 +399,7 @@ function DrawerFoot() {
   if (!alive) return null // 与 Drawer 的 withFoot 同源,免得两处判活漂移
   return (
     <div className="mb-drawer-foot" style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}>
-      {spaces.length > 1 && !nativeSpaces && (
+      {spaces.length > 1 && (
         <nav className="mb-spacebar" ref={barRef}>
           {spaces.map((sp) => {
             const Icon = sp.icon
@@ -447,14 +447,18 @@ function DrawerFoot() {
 }
 
 /** 「⋯」菜单收哪些 ribbon 项:底部区,去掉已迁去左抽屉底部常驻的账号 / 设置 / mobileFoot 项。
- *  footless(见 footlessNow)时那一排没有抽屉可住:设置与 mobileFoot 项回到这里(账号卡从设置页进)。 */
+ *  footless(见 footlessNow)时没有那一排:设置与 mobileFoot 项住在这里,并排到最前(天天要用的两个入口不该埋在中间);
+ *  账号不进来 —— 宿主把它画成顶栏右侧的头像。 */
 const isMoreItem = (i: RibbonItem, footless = false): boolean =>
   i.side === 'bottom' && i.id !== 'rb-account' && (footless || (i.id !== 'rb-settings' && !i.mobileFoot))
-/** 原生底栏在场且当前 Space 没有左栏(主页 / 发布…):不再为了「底部那一排」留一个空抽屉(见 Drawer 的 alive)。 */
-const footlessNow = (): boolean => {
-  const ws = useWorkspace.getState()
-  return nativeChromeDrawsSpaces() && ws.leftLeaves.length === 0 && ws.sidebarDefaults.left.length === 0
+const moreItems = (all: RibbonItem[], footless: boolean): RibbonItem[] => {
+  const items = all.filter((i) => isMoreItem(i, footless))
+  if (!footless) return items
+  const lead = (i: RibbonItem): boolean => i.id === 'rb-settings' || !!i.mobileFoot
+  return [...items.filter(lead), ...items.filter((i) => !lead(i))]
 }
+/** 原生宿主画底部导航栏时(Android)左栏没有底部那一排(见 Drawer 的 withFoot)。 */
+const footlessNow = (): boolean => nativeChromeDrawsSpaces()
 
 /** 「＋ 新建标签页」:desktop 同款 —— 当前 Space 有 newPage 则调,否则开 launcher 新标签。 */
 function newMainTab(): void {
@@ -503,7 +507,7 @@ async function presentNativeTabs(tr: Tr): Promise<boolean> {
  *  行 id 加 `cmd:` 前缀与 ribbon id 分开,选中走命令表 run(同命令面板),但只在注册表里那条仍是呈现时的对象时才跑。 */
 async function presentNativeMore(tr: Tr): Promise<boolean> {
   const footless = footlessNow()
-  const items = useRibbonStore.getState().items.filter((i) => isMoreItem(i, footless))
+  const items = moreItems(useRibbonStore.getState().items, footless)
   const groups = moreCommandGroups(useCommandStore.getState().commands)
   if ((!items.length && !groups.length) || items.some((i) => i.component)) return false
   const out = await presentNativeMenu({
@@ -531,10 +535,11 @@ async function presentNativeMore(tr: Tr): Promise<boolean> {
 }
 
 /** 底部弹出的「⋯」菜单:渲染 ribbon 底部注册项(明暗/语言/命令/反馈…)+ 声明了 `moreGroup` 的命令组(插件命令)。
- *  账号(rb-account)与设置(rb-settings)已迁去左抽屉底部常驻(用户拍板 2026-08-05),此处滤掉防重复。 */
+ *  账号(rb-account)与设置(rb-settings)住在左抽屉底部常驻(用户拍板 2026-08-05),此处滤掉防重复;
+ *  没有那一排的宿主(见 footlessNow)设置回到这里。 */
 function MoreSheet({ onClose }: { onClose: () => void }) {
   const footless = footlessNow() // 开着这张 sheet 时切不了 Space,取一次即可
-  const items = useRibbonStore((s) => s.items).filter((i) => isMoreItem(i, footless))
+  const items = moreItems(useRibbonStore((s) => s.items), footless)
   const groups = moreCommandGroups(useCommandStore((s) => s.commands))
   return (
     <div className="mb-sheet-scrim" onClick={onClose}>

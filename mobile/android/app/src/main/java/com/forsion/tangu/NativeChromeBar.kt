@@ -1,6 +1,9 @@
 package com.forsion.tangu
 
+import android.graphics.BitmapFactory
+import android.util.Base64
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
@@ -31,6 +34,8 @@ import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
@@ -49,9 +54,10 @@ import androidx.core.graphics.Insets
 internal val NATIVE_CHROME_HEIGHT = 56.dp
 
 /**
- * Native top app bar. Shell mode: left drawer · title · right drawer · tab count · more.
- * Page mode: back · title · optional close. JS owns everything; buttons only report actions.
- * Test anchors: `nativeChrome.{bar,left,right,tabs,more,back,close,title}` (Compose testTags as resource-ids).
+ * Native top app bar. Shell mode: left drawer · title · right drawer · tab count · more · account avatar
+ * (the avatar only when JS sends one: first-level pages). Page mode: back · title · optional close.
+ * JS owns everything; buttons only report actions.
+ * Test anchors: `nativeChrome.{bar,left,right,tabs,more,account,back,close,title}` (Compose testTags as resource-ids).
  */
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
@@ -83,6 +89,7 @@ internal fun NativeChromeBar(state: ChromeState, insets: Insets, onAction: (Stri
                         if (state.right) BarIconButton("right", state.labels.getValue("right"), state.icons.right, fg) { onAction("right") }
                         TabCountButton(state.tabCount, state.labels.getValue("tabs"), fg) { onAction("tabs") }
                         BarIconButton("more", state.labels.getValue("more"), state.icons.more, fg) { onAction("more") }
+                        state.account?.let { AvatarButton(it, Color(theme.accent)) { onAction("account") } }
                     }
                     ChromeState.Mode.PAGE -> {
                         BarIconButton("back", state.back, state.icons.back ?: BuiltinIcons.chevronLeft, fg) { onAction("back") }
@@ -117,6 +124,34 @@ private fun BarIconButton(id: String, label: String, icon: NativeIconSpec?, tint
         contentAlignment = Alignment.Center,
     ) {
         if (icon != null) NativeIconView(icon, tint, NATIVE_ICON_SIZE)
+    }
+}
+
+/** Account avatar: the picture when there is one, else the initial / person glyph on an accent-tinted disc. */
+@Composable
+private fun AvatarButton(account: ChromeAccount, accent: Color, onClick: () -> Unit) {
+    val picture = remember(account.png) {
+        if (account.png.isEmpty()) null else try {
+            val bytes = Base64.decode(account.png, Base64.DEFAULT)
+            BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap()
+        } catch (_: Exception) { null }
+    }
+    Box(
+        Modifier.padding(end = 3.dp).size(48.dp).clip(CircleShape) // 3dp: the disc ends where a 24dp bar icon would (16dp from the edge)
+            .clickable(role = Role.Button, onClick = onClick)
+            .semantics { contentDescription = account.label }
+            .testTag("nativeChrome.account"),
+        contentAlignment = Alignment.Center,
+    ) {
+        Box(Modifier.size(30.dp).clip(CircleShape).background(accent.copy(alpha = 0.16f)), contentAlignment = Alignment.Center) {
+            val icon = account.icon
+            when {
+                picture != null -> Image(picture, contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+                // The initial is laid out in the disc itself: inside an icon-sized box its line box does not fit and the letter sits low.
+                icon is NativeIconSpec.Text -> Text(icon.text, color = accent, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                icon != null -> NativeIconView(icon, accent, 18.dp)
+            }
+        }
     }
 }
 

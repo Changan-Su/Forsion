@@ -1566,7 +1566,7 @@ export const Composer2: React.FC<{
             rows={1}
             autoFocus={autoFocus}
             value={draft}
-            placeholder={disabled ? disabledPlaceholder || t('input.placeholderDisabled') : inCall ? t('livecall.typeHint') : running ? compactCard ? t('input.runningPlaceholder') : t('input.tip', { tip: t(waitTips[tipIdx % waitTips.length]) }) : t('input.placeholder')}
+            placeholder={disabled ? disabledPlaceholder || t('input.placeholderDisabled') : inCall ? t('livecall.typeHint') : running ? compactCard ? t('input.runningPlaceholder') : t('input.tip', { tip: t(waitTips[tipIdx % waitTips.length]) }) : t(touchUi ? 'input.placeholderTouch' : 'input.placeholder')}
             data-tip-fade={(running && !compactCard && tipFade) || undefined}
             data-tip-tall={(running && !compactCard && tipTall) || undefined}
             disabled={disabled}

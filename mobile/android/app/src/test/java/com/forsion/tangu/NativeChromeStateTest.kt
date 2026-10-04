@@ -31,6 +31,25 @@ class NativeChromeStateTest {
         assertFalse(page.spaceBar)
     }
 
+    @Test fun accountAvatarIsOptionalAndValidated() {
+        assertEquals(null, ChromeState.parse(shell(null)).account)
+        fun withAccount(account: String) = shell(null).put("account", JSONObject(account))
+        val letter = ChromeState.parse(withAccount("""{"label":"Ada","icon":{"kind":"text","text":"A"}}""")).account!!
+        assertEquals("Ada", letter.label)
+        assertTrue(letter.icon is NativeIconSpec.Text)
+        assertEquals("", letter.png)
+        assertEquals("iVBORw0KGgo=", ChromeState.parse(withAccount("""{"label":"Ada","png":"iVBORw0KGgo="}""")).account!!.png)
+        assertTrue("account" in ChromeState.ACTIONS)
+        // not base64 / oversized: the whole state is refused (JS then falls back to its web bar)
+        assertThrows(IllegalArgumentException::class.java) { ChromeState.parse(withAccount("""{"label":"Ada","png":"data:image/png;base64,AAAA"}""")) }
+        assertThrows(IllegalArgumentException::class.java) {
+            ChromeState.parse(withAccount("""{"label":"Ada","png":"${"A".repeat(ChromeState.MAX_AVATAR_CHARS + 4)}"}"""))
+        }
+        // the avatar belongs to the shell: a page has none
+        val page = JSONObject("""{"mode":"page","title":"Settings","back":"Back","theme":$theme}""").put("account", JSONObject("""{"label":"Ada"}"""))
+        assertEquals(null, ChromeState.parse(page).account)
+    }
+
     @Test fun rejectsDuplicateAndOversizedSpaceLists() {
         assertThrows(IllegalArgumentException::class.java) {
             ChromeState.parse(shell("""[{"id":"a","label":"A"},{"id":"a","label":"B"}]"""))

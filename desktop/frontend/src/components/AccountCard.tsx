@@ -17,6 +17,7 @@ import { TierBadge } from './TierBadge'
 import { track } from '../achievements/store'
 import { AccountSwitcher, accountSwitcherModel } from './AccountSwitcher'
 import { formatRemaining, publishAccountQuota, remainingPercent, type AccountQuotaView } from '../services/accountQuota'
+import { accountChip, publishAccountChip, type AccountChip } from '../services/accountChip'
 import { useApp } from '../stores/appStore'
 import { museAvailable } from '../features/runtime'
 import { presentResetCardCeremony } from './ResetCardCeremony'
@@ -301,21 +302,37 @@ export const AccountCard: React.FC<{
   const showMenu = (el: HTMLElement): void => { if (!openNativeMenu(el)) openMenu(el) }
 
   // 引擎未运行 → 点击重启引擎;过期 → 重新登录;已登录(有效)→ 弹账号菜单(无 IPC 则直开账号中心);未登录 → 登录。
-  const activate = (e: React.MouseEvent | React.KeyboardEvent): void => {
-    if (window.tangu?.authAccounts) { showMenu(e.currentTarget as HTMLElement); return }
+  const activateOn = (el: HTMLElement): void => {
+    if (window.tangu?.authAccounts) { showMenu(el); return }
     if (engineDown) { void window.tangu?.backendRestart?.().finally(refresh); return }
     if (!loggedIn || expired) { void login(); return }
-    if (window.tangu?.accountQuota || window.tangu?.forsionLogin) showMenu(e.currentTarget as HTMLElement)
+    if (window.tangu?.accountQuota || window.tangu?.forsionLogin) showMenu(el)
     else if (hasCloudPages) openCloudPage('account')
   }
+  const activate = (e: React.MouseEvent | React.KeyboardEvent): void => activateOn(e.currentTarget as HTMLElement)
   const stateClass = engineDown ? ' engine-down' : expired ? ' expired' : ''
   const subText = engineDown ? t('sidebar.account.engineDown')
     : engineStarting ? t('sidebar.account.engineStarting')
     : expired ? t('sidebar.account.expired')
     : loggedIn ? '' : t('sidebar.account.loginSub')
 
-  const avatarEl = loggedIn && auth?.avatar && !imgError ? (
-    <img className="account-avatar" src={auth.avatar} alt="" onError={() => setImgError(true)} />
+  // 头像的宿主接缝(services/accountChip.ts):Android 原生顶栏把账号入口画成头像,点它 = 点这张卡。
+  const stateLabel = engineDown ? t('sidebar.account.engineDown') : engineStarting ? t('sidebar.account.engineStarting') : expired ? t('sidebar.account.expired') : loggedIn ? display : t('sidebar.account.login')
+  const picture = loggedIn && auth?.avatar && !imgError ? auth.avatar : undefined
+  const anchorRef = useRef<HTMLElement | null>(null)
+  const activateRef = useRef(activateOn)
+  activateRef.current = activateOn
+  useEffect(() => {
+    const mine: AccountChip = {
+      label: stateLabel, loggedIn, initial, ...(picture ? { avatar: picture } : {}),
+      activate: () => { if (anchorRef.current) activateRef.current(anchorRef.current) },
+    }
+    publishAccountChip(mine)
+    return () => { if (accountChip() === mine) publishAccountChip(null) }
+  }, [stateLabel, loggedIn, initial, picture])
+
+  const avatarEl = picture ? (
+    <img className="account-avatar" src={picture} alt="" onError={() => setImgError(true)} />
   ) : (
     <span className="account-avatar fallback">{loggingIn ? <Loader2 size={14} className="spin" /> : initial}</span>
   )
@@ -422,8 +439,9 @@ export const AccountCard: React.FC<{
     return (
       <>
         <button
+          ref={(el) => { anchorRef.current = el }}
           className={`ribbon-account${stateClass}`}
-          title={engineDown ? t('sidebar.account.engineDown') : engineStarting ? t('sidebar.account.engineStarting') : expired ? t('sidebar.account.expired') : loggedIn ? display : t('sidebar.account.login')}
+          title={stateLabel}
           onClick={activate}
         >
           {avatarEl}
@@ -436,6 +454,7 @@ export const AccountCard: React.FC<{
   return (
     <>
       <div
+        ref={(el) => { anchorRef.current = el }}
         className={`account-card${stateClass}`}
         role="button"
         tabIndex={0}

@@ -412,11 +412,19 @@ async function run() {
 
   // ⑫ 真界面走一遍:UnitsSheet 点「Emu Mac」→ runOn 经原生中继问信任、探引擎(两条都该带票)→ 行变「可用」
   const hitsBefore = proxy.length
-  const opened = await js(`
-    document.querySelector('.mb-topbar [aria-label="left panel"]')?.click()
-    await new Promise((r) => setTimeout(r, 600))
-    const btn = [...document.querySelectorAll('.mb-foot-row .mb-icon-btn')].find((b) => /Forsion Unit/.test(b.getAttribute('aria-label') || ''))
-    btn?.click()
+  // 入口在原生「⋯」菜单的最前面(原生外壳下左栏底部那一排已撤):原生节点得按 uiautomator 的坐标点。
+  const tapNative = async (id) => {
+    const at = new RegExp(`resource-id="${id.replace(/\./g, '\\.')}"[^>]*bounds="\\[(\\d+),(\\d+)\\]\\[(\\d+),(\\d+)\\]"`)
+    for (let i = 0; i < 20; i++) {
+      adb('shell', 'uiautomator', 'dump', '/sdcard/forsion-ui.xml')
+      const m = at.exec(adb('shell', 'cat', '/sdcard/forsion-ui.xml'))
+      if (m) { adb('shell', 'input', 'tap', String((+m[1] + +m[3]) >> 1), String((+m[2] + +m[4]) >> 1)); return true }
+      await sleep(400)
+    }
+    return false
+  }
+  const reached = (await tapNative('nativeChrome.more')) && (await tapNative('nativeSheet.item.rb-units-mobile'))
+  const opened = reached && await js(`
     for (let i = 0; i < 30 && !document.querySelector('[data-run-row="${TARGET}"]'); i++) await new Promise((r) => setTimeout(r, 200))
     const row = document.querySelector('[data-run-row="${TARGET}"]')
     row?.click()
@@ -429,9 +437,12 @@ async function run() {
   }
   const sheetHits = proxy.slice(hitsBefore)
   const byPath = (p) => sheetHits.filter((x) => x.path === p)
-  check('真界面:UnitsSheet 点电脑 → 经中继 GET /unit/remote-access 与 GET /engine/agent/sessions,两条都带票 → 行状态 ready',
-    opened && sub === 'ready' && byPath('/unit/remote-access').length === 1 && byPath('/engine/agent/sessions').length === 1 && sheetHits.every((x) => !!x.caller),
-    { opened, sub, sheetHits })
+  // 选中电脑后焦点切过去,窗口里还会有后续请求(引擎探活、设备辅助面的 /unit/config …):票只随中继路径走(R-06),
+  // 所以判的是「中继路径都带票、设备辅助面都不带」,不是「窗口里每条都带」。
+  const relayed = (x) => x.path === '/engine' || x.path.startsWith('/engine/') || x.path.startsWith('/unit/remote-access')
+  check('真界面:UnitsSheet 点电脑 → 经中继 GET /unit/remote-access 与 GET /engine/agent/sessions,中继路径都带票、设备辅助面不带 → 行状态 ready',
+    opened && sub === 'ready' && byPath('/unit/remote-access').length === 1 && byPath('/engine/agent/sessions').length === 1 && sheetHits.every((x) => relayed(x) === !!x.caller),
+    { opened, sub, hits: sheetHits.map((x) => `${x.method} ${x.path}${x.caller ? '' : ' (no ticket)'}`) })
   if (process.env.SHOT_DIR) {
     const shot = path.join(process.env.SHOT_DIR, 'units-runon-emulator.png')
     require('node:fs').writeFileSync(shot, execFileSync(path.join(sdk, 'platform-tools/adb'), [...(SERIAL ? ['-s', SERIAL] : []), 'exec-out', 'screencap', '-p'], { maxBuffer: 64 * 1024 * 1024 }))

@@ -190,7 +190,7 @@ function installStub(cdp) {
         responseHeaders: [{ name: 'Access-Control-Allow-Origin', value: '*' }, { name: 'Access-Control-Allow-Headers', value: '*' }, { name: 'Access-Control-Allow-Methods', value: '*' }],
       }).catch(() => {})
     }
-    if (p.endsWith('/auth/me')) return json({ username: 'e2e', id: 'e2e' })
+    if (p.endsWith('/auth/me')) return json({ username: 'e2e', id: 'e2e', avatar: AVATAR })
     if (p.endsWith('/health')) return json({ ok: true, sandbox: 'e2e' })
     if (p.endsWith('/agent/special/config')) return json({})
     if (p.endsWith('/agent/agents') && m === 'GET') return json({ agents: [{ slug: 'e2e-agent', name: 'E2E Agent', description: 'Harness fixture' }, { slug: 'e2e-helper', name: 'E2E Helper', description: 'Second fixture' }] })
@@ -277,6 +277,15 @@ async function tapId(id, list) {
   const n = h.byId(list || ui(), id)
   assert.ok(n, `node missing: ${id}`)
   h.tapNode(n)
+}
+/** The fixture account's picture: 8×8 solid magenta. The native top bar must show it (see pixelAt), not the initial. */
+const AVATAR = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAEUlEQVR42mP4z/AfK2IYWhIA0ad/gQofP30AAAAASUVORK5CYII='
+/** One screen pixel (raw screencap: width, height, format[, colour space] header, then RGBA rows). */
+function pixelAt(x, y) {
+  const raw = h.adbBuffer('exec-out', 'screencap')
+  const w = raw.readUInt32LE(0)
+  const o = raw.length - w * raw.readUInt32LE(4) * 4 + (y * w + x) * 4
+  return { r: raw[o], g: raw[o + 1], b: raw[o + 2] }
 }
 const within = (outer, n) => n !== outer && n.rect.left >= outer.rect.left && n.rect.right <= outer.rect.right && n.rect.top >= outer.rect.top && n.rect.bottom <= outer.rect.bottom
 /** Merged Compose buttons may expose label / count on child nodes: read the node or anything inside its bounds. */
@@ -388,7 +397,7 @@ const tabCountText = (list) => {
   // Without the attribute the Space has no list level: its main view is the first level and a left panel is a drawer.
   const nav = "document.querySelector('.mb-shell')?.dataset.nav || ''"
   /** Show the left panel: a two-level Space's list (from its detail page: the back arrow) or a drawer Space's drawer.
-   *  A Space without a left panel (Home) has neither — callers want the foot (settings / units): use Tangu's list. */
+   *  A Space without a left panel (Home) has neither: use Tangu's list. */
   async function openDrawer() {
     if (await cdp.eval(drawerOpen)) return
     if (!h.byId(ui(), 'nativeChrome.left')) { await toSpace('tangu'); return }
@@ -409,6 +418,13 @@ const tabCountText = (list) => {
     } else h.key(4)
     assert.ok(await h.waitPage(cdp, `!(${drawerOpen})`, 5000), 'drawer stayed open')
     await h.pause(500)
+  }
+  /** No row at the foot of the left panel under the native bottom bar: settings and connected devices lead the ⋯ sheet
+   *  (reachable on every shell level), the account is the avatar at the end of the top bar. */
+  async function moreItem(id) {
+    await tapId('nativeChrome.more')
+    await tapId(`nativeSheet.item.${id}`, await waitSheet(true))
+    await waitSheet(false)
   }
   /** Tap a Space of the native bottom bar. With more than five the bar scrolls: bring the item in first. */
   async function tapSpace(id) {
@@ -456,12 +472,18 @@ const tabCountText = (list) => {
     assert.ok(await h.waitPage(cdp, `!(${drawerOpen}) && !!document.querySelector('.mode-pill-btn')`, 8000), `chat "${title}" did not open`)
     await h.pause(800)
   }
+  const homeShown = "!!document.querySelector('.hp-root .hp-spaces')"
   async function goHome() {
-    if (await cdp.eval("!!document.querySelector('.hp-spaces-actions button')")) return
+    if (await cdp.eval(homeShown)) return
     await toSpace('home')
     await closeDrawer()
-    assert.ok(await h.waitPage(cdp, "!!document.querySelector('.hp-spaces-actions button')", 6000), 'homepage did not come back')
+    assert.ok(await h.waitPage(cdp, homeShown, 6000), 'homepage did not come back')
   }
+  /** Homepage "new folder": the button lives in the All-Spaces layer, opened the way a long-press on the blank page does. */
+  const newFolderPrompt = () => cdp.eval(`(async () => {
+    if (!document.querySelector('.hp-organizer-new')) document.querySelector('.hp-root').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }))
+    for (let i = 0; i < 30 && !document.querySelector('.hp-organizer-new'); i++) await new Promise((r) => setTimeout(r, 100))
+    const b = document.querySelector('.hp-organizer-new'); if (!b) throw new Error('new folder button'); b.click(); return true })()`)
 
   let statusBar = 0
   const barPx = Math.round(56 * Number(h.adb('shell', 'wm', 'density').match(/(\d+)\s*$/)[1]) / 160)
@@ -477,11 +499,8 @@ const tabCountText = (list) => {
   })
 
   // Units sheet = an overlay that still claims `hidden` (it draws its own header). Settings no longer does.
-  const unitsBtn = `document.querySelector('.mb-drawer-foot .mb-icon-btn:not([aria-label="settings"])')`
   await check('hidden overlay (units sheet) hides the bar; WebView then starts at the status bar (measured)', async () => {
-    await openDrawer() // the drawer foot (units + settings) mounts on first open
-    assert.ok(await h.waitPage(cdp, `!!${unitsBtn}`, 5000), 'units button not in drawer')
-    await cdp.eval(`(${unitsBtn}.click(), true)`)
+    await moreItem('rb-units-mobile')
     assert.ok(await h.waitPage(cdp, "!!document.querySelector('[data-units-sheet]')", 5000), 'units sheet did not open')
     const r = await h.waitNodes((l) => (!h.byId(l, 'nativeChrome.bar') ? l : null), { timeout: 6000 })
     assert.ok(r.hit, 'bar still visible over the units sheet')
@@ -506,8 +525,7 @@ const tabCountText = (list) => {
     const L = lang === 'en'
       ? { title: 'Settings', toApp: 'Back to app' }
       : { title: '设置', toApp: '返回应用' }
-    await openDrawer()
-    await cdp.eval(`(document.querySelector('.mb-drawer-foot button[aria-label="settings"]').click(), true)`)
+    await moreItem('rb-settings')
     assert.ok(await h.waitPage(cdp, settingsOpen, 5000), 'settings did not open')
     let r = await h.waitNodes((l) => (h.byId(l, 'nativeChrome.back') && textOf(l, 'nativeChrome.title') === L.title ? l : null), { timeout: 6000 })
     assert.ok(r.hit, `settings home: no page bar titled ${L.title} (title=${textOf(r.nodes, 'nativeChrome.title')})`)
@@ -558,6 +576,8 @@ const tabCountText = (list) => {
   })
 
   await check('insets: bar = status bar + 56dp, WebView directly below, no double padding', async () => {
+    await toSpace('tangu')
+    await closeDrawer() // a main view under a list Space: the bar has its left (back) button
     await h.pause(400)
     const list = ui()
     const bar = h.byId(list, 'nativeChrome.bar')
@@ -587,9 +607,25 @@ const tabCountText = (list) => {
     assert.equal(textOf(at.list, 'nativeChrome.title'), 'Tangu', 'the list level is titled after its Space')
     const geo = await cdp.eval(`(() => { const d = document.querySelector('.mb-drawer--left').getBoundingClientRect(), b = document.querySelector('.mb-body').getBoundingClientRect()
       return { full: Math.abs(d.width - b.width) < 1 && Math.abs(d.left - b.left) < 1, bar: !!document.querySelector('.mb-drawer--left .mb-drawer-bar'), dim: getComputedStyle(document.querySelector('.mb-push-dim')).opacity,
-        foot: !!document.querySelector('.mb-drawer-foot button[aria-label="settings"]') } })()`)
-    assert.deepEqual(geo, { full: true, bar: false, dim: '0', foot: true }, 'list level is not a plain full-screen page')
+        foot: !!document.querySelector('.mb-drawer-foot') } })()`)
+    assert.deepEqual(geo, { full: true, bar: false, dim: '0', foot: false }, 'list level is not a plain full-screen page (no bar of its own, no row at its foot)')
+    // the account is the avatar at the end of the top bar (first-level pages only): label = the signed-in name
+    const more = h.byId(at.list, 'nativeChrome.more')
+    const avatar = h.byId(at.list, 'nativeChrome.account')
+    assert.ok(avatar, 'no account avatar on the list level')
+    assert.equal(descOf(at.list, 'nativeChrome.account'), 'e2e')
+    assert.ok(avatar.rect.left >= more.rect.right - 1 && avatar.rect.right - avatar.rect.left >= 120, 'avatar is not the trailing 48dp target')
+    // … and it is the account's picture (the fixture's is solid magenta), not the initial on a tinted disc
+    let px = pixelAt(avatar.rect.cx, avatar.rect.cy)
+    for (let i = 0; i < 10 && !(px.r > 200 && px.g < 80 && px.b > 200); i++) { await h.pause(300); px = pixelAt(avatar.rect.cx, avatar.rect.cy) }
+    assert.ok(px.r > 200 && px.g < 80 && px.b > 200, `the avatar does not show the account picture (centre pixel ${JSON.stringify(px)})`)
     shot('03-list-level')
+    h.tapNode(avatar)
+    const accountSheet = await waitSheet(true)
+    assert.ok(h.byId(accountSheet, 'nativeSheet.item.logout'), `the avatar did not open the account sheet (${ids(accountSheet)})`)
+    shot('03b-account-sheet')
+    h.key(4)
+    await waitSheet(false)
     // a horizontal swipe over the list must not slide it away (only an item enters the main view)
     const wv = webViewNode(at.list).rect
     h.adb('shell', 'input', 'swipe', String(wv.right - 120), String(wv.cy), String(wv.left + 120), String(wv.cy), '200')
@@ -605,6 +641,7 @@ const tabCountText = (list) => {
     const gone = await h.waitNodes((l) => (!h.byId(l, 'nativeChrome.spaces') && h.byId(l, 'nativeChrome.left') ? l : null), { timeout: 8000 })
     assert.ok(gone.hit, 'the bottom bar stayed on the detail level, or there is no back button')
     assert.equal(descOf(gone.nodes, 'nativeChrome.left'), '返回')
+    assert.ok(!h.byId(gone.nodes, 'nativeChrome.account'), 'the avatar stayed on the detail level')
     const screenH = Number(h.adb('shell', 'wm', 'size').match(/(\d+)x(\d+)\s*$/)[2])
     assert.ok(webViewNode(gone.nodes).rect.bottom > screenH * 0.93, 'the WebView did not take the room of the bottom bar')
     await h.pause(600)
@@ -639,13 +676,15 @@ const tabCountText = (list) => {
     at = await level()
     assert.equal(at.nav, '')
     assert.ok(h.byId(at.list, 'nativeChrome.spaces') && !h.byId(at.list, 'nativeChrome.left'), 'Home: bottom bar expected, left button not')
-    assert.ok(await h.waitPage(cdp, "!!document.querySelector('.hp-spaces-actions button')", 6000), 'Home does not show the homepage')
+    assert.ok(await h.waitPage(cdp, homeShown, 6000), 'Home does not show the homepage')
     await tapSpace('home') // re-tap: used to slide an empty drawer over the homepage
     await h.pause(700)
     assert.ok(!(await cdp.eval(drawerOpen)), 're-tapping Home opened a drawer')
     await tapId('nativeChrome.more')
     let list = await waitSheet(true)
-    assert.ok(h.byId(list, 'nativeSheet.item.rb-settings'), `Home has no drawer foot: ⋯ must offer settings (${ids(list)})`)
+    assert.ok(h.byId(at.list, 'nativeChrome.account'), 'Home is a first-level page: avatar expected')
+    assert.equal(ids(list)[0], 'rb-settings', `settings must lead the ⋯ sheet (${ids(list)})`)
+    assert.ok(h.byId(list, 'nativeSheet.item.rb-units-mobile'), `connected devices missing from the ⋯ sheet (${ids(list)})`)
     h.key(4)
     await waitSheet(false)
     // a start-up lands on the list too, not on the main view that was open (start-up Space pinned to Tangu for this:
@@ -747,13 +786,7 @@ const tabCountText = (list) => {
       const last = ids[ids.length - 1]
       await toSpace(last)
       assert.ok(widthOf(last) >= fullWidth - 2, `active Space "${last}" is not fully in view`)
-      if ((await cdp.eval(drawerOpen)) || h.byId(ui(), 'nativeChrome.left')) { // a left panel (list or drawer): settings sit in its foot
-        await openDrawer()
-        await cdp.eval(`(document.querySelector('.mb-drawer-foot button[aria-label="settings"]').click(), true)`)
-      } else { // no left panel → no foot: settings live in ⋯
-        await tapId('nativeChrome.more')
-        await tapId('nativeSheet.item.rb-settings', await waitSheet(true))
-      }
+      await moreItem('rb-settings')
       assert.ok(await h.waitPage(cdp, settingsOpen, 5000), 'settings did not open')
       assert.ok((await h.waitNodes((l) => h.byId(l, 'nativeChrome.back') && !h.byId(l, 'nativeChrome.spaces'), { timeout: 12000 })).hit, 'the space bar stayed up in page mode')
       await tapId('nativeChrome.back')
@@ -1205,7 +1238,7 @@ const tabCountText = (list) => {
     await tapId('nativeChrome.more')
     const list = await waitSheet(true)
     assert.ok(h.byId(list, 'nativeSheet.item.rb-mode'), 'theme mode command missing')
-    assert.ok(!h.byId(list, 'nativeSheet.item.rb-settings') && !h.byId(list, 'nativeSheet.item.rb-account'), 'account/settings must stay in the drawer')
+    assert.ok(h.byId(list, 'nativeSheet.item.rb-settings') && !h.byId(list, 'nativeSheet.item.rb-account'), 'settings belong in ⋯, the account does not (it is the avatar)')
     // a phone has no ⌘K: the desktop tooltip's shortcut hint is dropped from the row
     const palette = rowLabel(list, 'nativeSheet.item.rb-cmd')
     assert.ok(palette && !/[⌘(（]/.test(palette), `command palette row: "${palette}"`)
@@ -1240,7 +1273,7 @@ const tabCountText = (list) => {
   await check('prompt (askString): homepage "new folder" returns typed text to the web side', async () => {
     await goHome()
     assert.equal(await cdp.eval(folderTiles), 0, 'fixture name already present')
-    const openPrompt = () => cdp.eval(`(() => { const b = document.querySelector('.hp-spaces-actions button'); if (!b) throw new Error('new folder button'); b.click(); return true })()`)
+    const openPrompt = newFolderPrompt
     await openPrompt()
     let list = await waitSheet(true)
     assert.ok(h.byId(list, 'nativeSheet.prompt.field'), 'prompt field missing')
@@ -1560,8 +1593,7 @@ const tabCountText = (list) => {
 
   /** Settings → Plugins → Forsion plugins as a native page (the card list that painted scrambled under software GL). */
   async function settingsPluginsPage(name) {
-    await openDrawer()
-    await cdp.eval(`(document.querySelector('.mb-drawer-foot button[aria-label="settings"]').click(), true)`)
+    await moreItem('rb-settings')
     assert.ok(await h.waitPage(cdp, settingsOpen, 5000), 'settings did not open')
     await h.pause(400)
     if (!(await cdp.eval(`!!document.querySelector('[data-settings-sub="pl-forsion"]')`))) await tapEl(`document.querySelector('[data-settings-tab="amadeus-plugins"]')`)
@@ -1668,7 +1700,7 @@ const tabCountText = (list) => {
     await waitSheet(false)
     // prompt with the keyboard up (cancelled: nothing is created)
     await goHome()
-    await cdp.eval(`(() => { const b = document.querySelector('.hp-spaces-actions button'); if (!b) throw new Error('new folder button'); b.click(); return true })()`)
+    await newFolderPrompt()
     const list = await waitSheet(true)
     assert.ok(h.byId(list, 'nativeSheet.prompt.field'), 'prompt field missing')
     await h.pause(600)
@@ -1729,8 +1761,7 @@ const tabCountText = (list) => {
   })
 
   await check('plugins: uninstall from Settings → Plugins removes its files; ⋯ no longer lists its commands', async () => {
-    await openDrawer()
-    await cdp.eval(`(document.querySelector('.mb-drawer-foot button[aria-label="settings"]').click(), true)`)
+    await moreItem('rb-settings')
     assert.ok(await h.waitPage(cdp, settingsOpen, 5000), 'settings did not open')
     const row = `document.querySelector('[data-plugin-id="${PLUGIN_ID}"]')`
     if (!(await cdp.eval(`!!${row}`))) {

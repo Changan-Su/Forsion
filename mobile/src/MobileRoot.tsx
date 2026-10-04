@@ -33,7 +33,7 @@ import { installNotificationWiring } from '@/stores/notificationWiring'
 import { ensureAmadeusReady } from '@/amadeusPlugins'
 import { AnimatePresence, motion } from 'framer-motion'
 import { useShallow } from 'zustand/react/shallow'
-import { SingleColumnHost, listFirstNow, useWorkspace, useNav, useNativeChromeClaim, type NativeChromeClaim } from '@lcl/engine'
+import { SingleColumnHost, listFirstNow, useWorkspace, useNav, useNativeChromeClaim, useNativeChromeSpaces, useRibbonStore, type NativeChromeClaim } from '@lcl/engine'
 // 命令面板:desktop 由 `Shell.tsx` 渲染,而移动端把 Shell 换成了空壳(vite.config engineSwap)——
 // 于是 ribbon 的 rb-cmd 项(无条件注册,经「⋯」菜单在移动端可点)点了只是把 paletteOpen 置 true,
 // 没有任何东西渲染它。宿主责任随外壳一起被换掉了,得在这儿接回来。
@@ -151,12 +151,17 @@ export function MobileRoot() {
   const unitsOpen = useUnitsSheet((s) => s.open)
   const btwPage = useBtw((s) => btwWebVisible(s.webOpen, a.activeId))
   useNativeChromeClaim(a.onboarding || a.achievementsOpen || unitsOpen || btwPage ? CHROME_HIDDEN : null)
+  // 原生外壳(Android)把账号入口画成顶栏右侧的头像,左栏底部那一排不再渲染 —— 账号卡在这儿隐身挂着:
+  // 它自管登录态与菜单,头像显示什么、点了做什么由它发布(services/accountChip.ts → mobile/src/nativeChrome.ts)。
+  const nativeSpaces = useNativeChromeSpaces()
+  const AccountC = useRibbonStore((s) => s.items.find((i) => i.id === 'rb-account'))?.component
 
   return (
     <>
       <div className="shell-host">
         <SingleColumnHost dark={visualTheme.mode === 'dark'} buildDefault={buildDefaultLayout} />
       </div>
+      {nativeSpaces && AccountC && <div hidden><AccountC expanded={false} /></div>}
 
       {/* Amadeus 全局浮层。⚠️ 名字像「快速切换器」,实为**对话框宿主**:AskStringHost / DeleteAssetsHost /
           NewDrawingHost / ConfirmDialog / AutomationBuilderHost / TemplatePicker 都住在里面。
@@ -175,7 +180,7 @@ export function MobileRoot() {
           命令从「⋯ → 命令」点得到 —— 不挂宿主就是那种「点完什么都不出来」的静默死按钮。 */}
       <FindBar />
       <CommandPalette />
-      {/* 互联设备弹层(Forsion Unit):入口在 ⋯ 菜单(mobileEntry 的 installUnitsEntry 按桥上架)。 */}
+      {/* 互联设备弹层(Forsion Unit):入口由 mobileEntry 的 installUnitsEntry 按桥上架(左栏底部;原生外壳下在「⋯」最前)。 */}
       <MobileUnitsSheet />
 
       <AnimatePresence>

@@ -14,6 +14,12 @@ internal data class ChromeIcons(
 /** One destination of the bottom navigation bar (a Space). Label translated by JS; icon serialized by JS. */
 internal data class ChromeSpace(val id: String, val label: String, val active: Boolean, val icon: NativeIconSpec?)
 
+/**
+ * Account avatar at the trailing end of the bar (first-level pages only; JS decides). `png` = the picture as
+ * base64, already cropped square and downscaled by JS; blank or undecodable = draw `icon` (initial / person glyph).
+ */
+internal data class ChromeAccount(val label: String, val icon: NativeIconSpec?, val png: String)
+
 internal data class ChromeState(
     val mode: Mode,
     val title: String,
@@ -28,6 +34,7 @@ internal data class ChromeState(
     val close: String = "",
     /** Shell mode: Spaces for the bottom navigation bar; fewer than two = no bar. */
     val spaces: List<ChromeSpace> = emptyList(),
+    val account: ChromeAccount? = null,
 ) {
     enum class Mode { SHELL, PAGE, HIDDEN }
 
@@ -36,8 +43,17 @@ internal data class ChromeState(
     val spaceBar get() = mode == Mode.SHELL && spaces.size > 1
 
     companion object {
-        val ACTIONS = setOf("left", "right", "tabs", "more", "back", "close")
+        val ACTIONS = setOf("left", "right", "tabs", "more", "back", "close", "account")
         const val MAX_SPACES = 64 // = MAX_SPACES in mobile/src/nativeChrome.ts, which trims the list before sending
+        const val MAX_AVATAR_CHARS = 131_072 // = MAX_AVATAR_CHARS in mobile/src/nativeChrome.ts (a 96px PNG stays far below)
+        private val BASE64 = Regex("^[A-Za-z0-9+/]+={0,2}$")
+
+        private fun account(json: JSONObject): ChromeAccount? {
+            val o = json.optJSONObject("account") ?: return null
+            val png = NativeJson.optStr(o, "png", MAX_AVATAR_CHARS)
+            require(png.isEmpty() || BASE64.matches(png)) { "Invalid avatar" }
+            return ChromeAccount(NativeJson.str(o, "label", 128), o.optJSONObject("icon")?.let(NativeJson::icon), png)
+        }
 
         private fun spaces(json: JSONObject): List<ChromeSpace> {
             val array = json.optJSONArray("spaces") ?: return emptyList()
@@ -73,7 +89,7 @@ internal data class ChromeState(
                         left = NativeJson.optBool(json, "left"), right = NativeJson.optBool(json, "right"),
                         tabCount = count.toInt(),
                         labels = listOf("left", "right", "tabs", "more").associateWith { NativeJson.str(labels, it, 128) },
-                        back = "", theme = theme, icons = icons, spaces = spaces(json),
+                        back = "", theme = theme, icons = icons, spaces = spaces(json), account = account(json),
                     )
                 }
                 Mode.PAGE -> ChromeState(
