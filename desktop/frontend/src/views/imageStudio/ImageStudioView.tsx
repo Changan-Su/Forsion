@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ArrowLeft, Upload, Download, Undo2, Redo2, LayoutGrid, SlidersHorizontal, Layers, MessageCircle, Trash2, Loader2, ArrowUpRight, FileDown, Type, Square, Circle, Frame, MousePointer2, Hand, Copy, Sparkles, X } from 'lucide-react'
 import { useSpaceStore, type ViewProps } from '@lcl/engine'
+import { windowKind } from '../../windowKind'
 import { CanvasChrome, CanvasMiniMap, useCanvasViewport, useCanvasGestures, hostSize, zoomAt, gridLayerStyle, type ResizeEdge } from '../../amadeus/unified/canvasKit'
 import { useI18n } from '../../i18n'
 import { useApp } from '../../stores/appStore'
@@ -38,7 +39,8 @@ export function ImageStudioView(_props: ViewProps) {
   }, [])
   // 进出项目时两侧跟着换(照 Coding / Video Studio):进 = 导航旁开「图层」、右栏带出对话;出 = 收走。
   // 只在图像工作室这个 Space 里做 —— 别的 Space 里开着这个视图时,那里的侧栏不归它管。
-  const inSpace = useSpaceStore(s => s.activeSpaceId === 'image-studio')
+  // 摆位是这个 Space 的事,只在主窗做:分离窗读到的是同一个「当前 Space」,却不承载这套布局(没有固定 View、没有侧栏默认)。
+  const inSpace = useSpaceStore(s => s.activeSpaceId === 'image-studio') && windowKind() === 'main'
   const open = !!id, wasOpen = useRef(false)
   useEffect(() => {
     if (!ready || !inSpace) return

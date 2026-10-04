@@ -388,6 +388,27 @@ describe('升级时的一次性重置', () => {
     expect(Object.keys(listNamedLayouts())).toEqual(['我的布局'])
     expect(loadLayout()).toBeNull()
   })
+
+  it('resetSpaceLayouts(只丢一个 Space):它的槽和归它的当前布局清掉,别的 Space 的原样留着', () => {
+    const blob: LayoutEnvelopeV4 = { version: 4, dockview: { grid: {} }, sidebars: { left: { visible: true, stash: [] }, right: { visible: true, stash: [] } } }
+    saveNamedLayout('space:tangu', blob)
+    saveNamedLayout('space:image-studio', blob)
+    saveLayout({ ...blob, space: 'image-studio' })
+    localStorage.setItem('lcl_sc_named_layouts_v1', JSON.stringify({ 'space:tangu': {}, 'space:image-studio': {} }))
+    resetSpaceLayouts('image-studio')
+    expect(Object.keys(listNamedLayouts())).toContain('space:tangu')
+    expect(Object.keys(listNamedLayouts())).not.toContain('space:image-studio')
+    expect(loadLayout()).toBeNull()
+    expect(Object.keys(JSON.parse(localStorage.getItem('lcl_sc_named_layouts_v1')!))).toEqual(['space:tangu'])
+    // 当前布局是别的 Space 的现场:不动
+    saveNamedLayout('space:image-studio', blob)
+    saveLayout({ ...blob, space: 'tangu' })
+    localStorage.setItem('lcl_sc_layout_v1', '{}')
+    resetSpaceLayouts('image-studio')
+    expect(Object.keys(listNamedLayouts())).not.toContain('space:image-studio')
+    expect(loadLayout()?.space).toBe('tangu')
+    expect(localStorage.getItem('lcl_sc_layout_v1')).toBe('{}')
+  })
 })
 
 describe('固定 View:单列 store(移动端是独立重写的一份,漏接 = 静默少功能)', () => {

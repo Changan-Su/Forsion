@@ -195,7 +195,7 @@
 
 /* 启动台(主区,没打开项目时):页头 / 搜索 / 空态是 Coding 启动台的 csl-*,封面网格是这里的。
    卡片 = 纸面上的对象卡(DESIGN §5):--bg-card + --radius-md + --card-shadow,1px 透明边,不画装饰描边。 */
-.ims-launch-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(216px, 1fr)); gap: 16px; align-items: start; }
+.ims-launch-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(216px, 100%), 1fr)); gap: 16px; align-items: start; }
 .ims-launch-card { display: flex; flex-direction: column; min-width: 0; padding: 0; border: 1px solid transparent; border-radius: var(--radius-md); background: var(--bg-card); box-shadow: var(--card-shadow); color: var(--text); text-align: left; overflow: hidden; transition: border-color var(--duration-fast); }
 .ims-launch-card:hover { border-color: var(--sel-line); }
 .ims-cover { display: block; padding: 14px; background: var(--overlay-light); }

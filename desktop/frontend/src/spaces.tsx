@@ -5,7 +5,7 @@ import { hasNativeFeature, amadeusAvailable, inboxAvailable } from './features/r
  *  Tangu Space = 会话/对话/主体详情/文件/目录;Agents Space = 智能体配置。Amadeus Space 见 Milestone 2。 */
 import { Bot, Inbox, NotebookText, Code2, Workflow, Rocket, Users } from 'lucide-react'
 import { INBOX_WORKSPACE_MODE } from './views/workspaceMode'
-import { registerSpace, addRibbonIcon, useSpaceStore, useWorkspace, deleteNamedLayout, clearLayout, loadLayout, resetSpaceLayouts } from '@lcl/engine'
+import { registerSpace, addRibbonIcon, useSpaceStore, useWorkspace, deleteNamedLayout, clearLayout, resetSpaceLayouts } from '@lcl/engine'
 import type { SpaceDefinition, PersistedPanel, SidebarDefaults } from '@lcl/engine'
 import { useApp } from './stores/appStore'
 import { PRODUCT } from './product'
@@ -314,12 +314,10 @@ export function registerSpaces(): void {
   } catch { /* ignore */ }
   // 图像工作室改成「项目 + 详情」(2026-10-04):对话的固定位从左栏换到右栏,左栏换成项目导航。此前存下的布局里对话还在
   // 左边 —— 单例复用不看位置,它占着左边,右栏那个就开不出来 → 一次性丢掉这个 Space 的已存布局,按新默认重建。
-  // 只在主窗做(理由同上);当前布局是谁的,认信封自己记的归属,老存档没记才看「上次退出在哪」。
-  // 只影响 10-03 之后跑过这个 Space 的人:更早的存档已被上面那面旗整份清掉。
+  // 只在主窗做(理由同上);别的 Space 的布局不动。只影响 10-03 之后跑过这个 Space 的人:更早的存档已被上面那面旗整份清掉。
   try {
     if (windowKind() === 'main' && localStorage.getItem('forsion_image_studio_layout_v2') !== '1') {
-      deleteNamedLayout('space:image-studio')
-      if ((loadLayout()?.space ?? localStorage.getItem('forsion_tangu_active_space')) === 'image-studio') clearLayout()
+      resetSpaceLayouts('image-studio')
       localStorage.setItem('forsion_image_studio_layout_v2', '1')
     }
   } catch { /* ignore */ }

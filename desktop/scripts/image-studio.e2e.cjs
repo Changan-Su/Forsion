@@ -196,7 +196,7 @@ async function main() {
     check('Blank canvas offers paste without retaining the image selection', await win.locator('.ims-image.is-selected').count() === 0 && await menuAction(/^(粘贴对象|Paste objects)$/).isEnabled())
     await menuAction(/^(粘贴对象|Paste objects)$/).click()
     await win.waitForFunction(() => document.querySelectorAll('.ims-image').length === 3)
-    check('Context paste adds the copied canvas object', await win.locator('.ims-image.is-selected').count() === 1)
+    check('Context paste adds the copied canvas object', await eventually('pasted object selected', async () => ({ selected: await win.locator('.ims-image.is-selected').count() === 1 }))) // the selection lands a render after the object
     await win.getByRole('button', { name: /^(从画布移除|Remove from canvas)$/ }).first().click()
     await rightClick()
     await menuAction(/^(锁定图层|Lock layer)$/).click()
@@ -245,6 +245,14 @@ async function main() {
     await newProject()
     check('A new project has an independent canvas', await win.locator('.ims-image').count() === 0)
     await rightSettles(true)
+    // Back on the list the right side folds with a 200ms tween, and the engine reads a toggle during that tween as
+    // "fold again". Re-entering a project inside the tween must still end with the right side out. The second click
+    // is dispatched without Playwright's stability wait — that wait would sit the tween out and hide the race.
+    await win.locator('.ims-back').click(); await win.waitForSelector('.ims-launch-card')
+    await win.evaluate(() => document.querySelector('.ims-launch-card').click())
+    await win.waitForSelector('.ims'); await win.waitForTimeout(1200) // the fold, and the reopen that waits for it, have both finished
+    // Read after everything settled, and count the live tabs too: during the fold the toggle can read "open" for a moment.
+    check('Re-entering a project while the right side is still folding brings it out again', await rightOpen() && await win.locator('.wb-tab--icon:not(.wb-tab--left)').count() === 2)
     // 在项目里把右栏亲手收起:换项目、回启动台再进,都不该再自动弹出来。
     await win.locator('.dv-edge-right').click(); await rightSettles(false)
     await win.locator('.wb-tab--left[title="图像工作室"]').click() // 左栏的导航标签还在图层旁边

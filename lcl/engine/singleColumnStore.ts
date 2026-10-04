@@ -73,13 +73,14 @@ interface SCBlob {
   rightActiveId: string | null
 }
 
-/** 丢掉本窗的单列布局存档(当前布局 + 各 Space 的命名槽)。spaceRegistry.resetSpaceLayouts 的单列半身。 */
-export function clearSingleColumnLayouts(): void {
+/** 丢掉本窗的单列布局存档(当前布局 + 各 Space 的命名槽)。spaceRegistry.resetSpaceLayouts 的单列半身。
+ *  给了 `only` 就只丢那一个 Space 的:命名槽按名字丢;当前布局不记归属,由调用方说它是不是那个 Space 的现场。 */
+export function clearSingleColumnLayouts(only?: { space: string; current: boolean }): void {
   try {
-    localStorage.removeItem(SC_LAYOUT_KEY)
+    if (!only || only.current) localStorage.removeItem(SC_LAYOUT_KEY)
     const all = readJSON<Record<string, unknown>>(SC_NAMED_KEY)
     if (!all) return
-    for (const name of Object.keys(all)) if (name.startsWith('space:')) delete all[name]
+    for (const name of Object.keys(all)) if (only ? name === `space:${only.space}` : name.startsWith('space:')) delete all[name]
     localStorage.setItem(SC_NAMED_KEY, JSON.stringify(all))
   } catch { /* 私密模式 */ }
 }

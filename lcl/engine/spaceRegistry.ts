@@ -141,7 +141,15 @@ let layoutsResetThisBoot = false
  *  Space 的现场 —— 异步就位的 Space 据此重建自己的默认布局,而不是把回落 Space 的内容认成自己的。 */
 export const spaceLayoutsWereReset = (): boolean => layoutsResetThisBoot
 
-export function resetSpaceLayouts(): void {
+export function resetSpaceLayouts(only?: string): void {
+  if (only) {
+    // 只丢一个 Space 的(它的固定 View 换了边:单例复用不看位置,旧布局还原回来,新位置上那个就开不出来)。
+    // 命名槽按名字丢;当前布局认信封自己记的归属,老存档没记才看「上次退出在哪」;单列存档不记归属,只能看后者。
+    deleteNamedLayout(spaceLayoutName(only))
+    if ((loadLayout()?.space ?? BOOT_ACTIVE_SPACE_ID) === only) { clearLayout(); layoutsResetThisBoot = true }
+    clearSingleColumnLayouts({ space: only, current: BOOT_ACTIVE_SPACE_ID === only })
+    return
+  }
   layoutsResetThisBoot = true
   for (const name of Object.keys(listNamedLayouts())) if (name.startsWith('space:')) deleteNamedLayout(name)
   clearLayout()
