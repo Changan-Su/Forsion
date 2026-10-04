@@ -40,7 +40,7 @@ afterAll(() => {
 
 describe('收起工具 = 走按需目录,不是删能力', () => {
   // 从真实工具面里挑两个常驻、可收的工具,别把名字写死在测试里(工具增删不该连累这条)
-  const pick = () => visible().filter((n) => isShelvable(n) && !['manage_human', 'remember'].includes(n)).slice(0, 2);
+  const pick = () => visible().filter((n) => isShelvable(n)).slice(0, 2);
 
   it('收起的工具:定义出 defs、进目录、load_tools 取得回;解析表里它一直都在', async () => {
     const [a, b] = pick();
@@ -58,9 +58,9 @@ describe('收起工具 = 走按需目录,不是删能力', () => {
   });
 
   it('收不得的那几个:盘面写了也不认', () => {
-    const shelvedTools = new Set(['manage_harness', 'load_tools', 'use_skill', 'ask_user', 'exit_plan_mode']);
+    const shelvedTools = new Set(['manage_harness', 'load_tools', 'use_skill', 'ask_user', 'exit_plan_mode', 'remember', 'manage_human', 'log_event', 'todo_write']);
     const defs = visible({ shelvedTools });
-    for (const n of ['manage_harness', 'use_skill', 'ask_user']) expect(defs, n).toContain(n);
+    for (const n of ['manage_harness', 'use_skill', 'ask_user', 'remember', 'manage_human', 'log_event', 'todo_write']) expect(defs, n).toContain(n);
     for (const n of shelvedTools) expect(catalog({ shelvedTools }), n).not.toContain(n);
   });
 
@@ -75,6 +75,7 @@ describe('manage_harness kind:"equip"', () => {
     const eq = (extra: Record<string, unknown>) => call({ action: 'upsert', kind: 'equip', title: 'Shelf', body: 'unused', evidence: 'review', ...extra });
     expect(await eq({ tools: ['no_such_tool'] })).toMatch(/^Error: unknown tool name\(s\): no_such_tool/);
     expect(await eq({ tools: ['load_tools'] })).toMatch(/^Error: load_tools cannot be shelved/);
+    expect(await eq({ tools: ['remember'] })).toMatch(/^Error: remember cannot be shelved/);
     expect(await eq({ tools: [catalog()[0]] })).toMatch(/already load on demand/);
     expect(await eq({ skills: ['local:nope'] })).toMatch(/^Error: unknown skill id\(s\): local:nope/);
     expect(await eq({})).toMatch(/^Error: an "equip" entry must shelve at least one/);
@@ -82,7 +83,7 @@ describe('manage_harness kind:"equip"', () => {
   });
 
   it('收起 → 回执带名字 → 下一次 run 的工具面 / 技能目录跟着变;删掉条目全部回来', async () => {
-    const [a] = visible().filter((n) => isShelvable(n) && !['manage_human', 'remember'].includes(n));
+    const [a] = visible().filter((n) => isShelvable(n));
     const created = JSON.parse(await call({ action: 'upsert', kind: 'equip', title: 'Shelf', body: 'Unused for a month.', evidence: 'usage review', tools: [a], skills: ['local:foo'] }));
     expect(created.change).toMatchObject({ action: 'create', kind: 'equip', tools: [a], skills: ['local:foo'] });
     const shelved = shelvedOf(await loadHarness('equipper'));

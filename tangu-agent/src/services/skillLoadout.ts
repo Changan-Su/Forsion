@@ -28,6 +28,9 @@ export interface SkillLoadout {
    * 每条 /skill 都不改 system 前缀字节,前缀缓存照常命中(对比旧做法:正文进 system,/skill 轮整段前缀 miss)。
    */
   requested: Array<{ id: string; name: string; description: string }>;
+  /** 目录里**本该**列出的全部技能(收起之前;含别的 agent 共享来的),每条附它那一行的字节数。
+   *  用量巡检(services/loadoutUsage.ts)拿它对「哪些技能一直列着却没人装载」。 */
+  catalog: Array<{ id: string; name: string; bytes: number }>;
 }
 
 /** shelved = 本 agent 自己收起的技能 id(HARNESS.md 的 equip 条目):**只从目录里摘掉那一行**,
@@ -39,7 +42,7 @@ export async function loadSkillLoadout(
   shelved?: ReadonlySet<string>,
 ): Promise<SkillLoadout> {
   // chat 预设:用户可扩展技能体系整体不在(方案 D23)——目录段不注、use_skill 不暴露(工具面由 core/presetTable 硬闸拒)。
-  if (!presetOf(agentConfig?.preset).skills) return { enabledSkillIds: [], sections: [], requested: [] };
+  if (!presetOf(agentConfig?.preset).skills) return { enabledSkillIds: [], sections: [], requested: [], catalog: [] };
   // 旧客户端的空数组([])按「未配置」处理;skillsConfigured=true 则允许显式卸下全部技能。避免旧客户端传空
   // 列表时把整段技能从 system prompt 抹掉(表现为「装完技能后本轮 agent 不知道有哪些 skills,刷新才好」)。
   const explicit = Array.isArray(agentConfig.enabledSkillIds) && (agentConfig.enabledSkillIds.length > 0 || agentConfig.skillsConfigured === true);
@@ -93,12 +96,12 @@ export async function loadSkillLoadout(
     }
   }
 
+  const ownLine = (s: { id: string; name: string; description: string }): string => `- ${s.name} (id: \`${s.id}\`)${s.description ? ` — ${s.description}` : ''}`;
+  const catalog = deferredSkills.map((s) => ({ id: s.id, name: s.name, bytes: Buffer.byteLength(ownLine(s)) }));
   if (shelved?.size) deferredSkills = deferredSkills.filter((d) => !shelved.has(d.id));
   const sections: string[] = [];
   if (deferredSkills.length) {
-    const lines = deferredSkills
-      .map((s) => `- ${s.name} (id: \`${s.id}\`)${s.description ? ` — ${s.description}` : ''}`)
-      .join('\n');
+    const lines = deferredSkills.map(ownLine).join('\n');
     // coding 预设加一行降位提示:WB-Bench 实测 80/80 题反射式装载技能(每题 ≈1 个纯管理往返),
     // Codex 对谈定性为「错误路由策略」。非 coding 文本逐字节零变化(回归防线同本文件其余段)。
     const codingHint = agentConfig?.preset === 'coding'
@@ -117,10 +120,12 @@ export async function loadSkillLoadout(
   // 用户为该 agent **显式**配过装备(含显式卸空)= 「就这些」,借用池也不塞——委派路径的「卸空全部技能」同样要成立。
   if (!explicit && agentConfig.execMode !== 'sandbox' && hostExecEnabled()) {
     const shared = await listSharedAgentSkills(currentDisplayAgentSlug() || null).catch(() => []);
+    const sharedLine = (s: (typeof shared)[number]): string => `- ${s.name} (id: \`${s.id}\`, from ${s.ownerName})${s.description ? ` — ${s.description}` : ''}`;
+    for (const s of shared) catalog.push({ id: s.id, name: s.name, bytes: Buffer.byteLength(sharedLine(s)) });
     const listed = shelved?.size ? shared.filter((s) => !shelved.has(s.id)) : shared;
     enabledSkillIds = [...enabledSkillIds, ...shared.map((s) => s.id)];
     if (listed.length) {
-      const lines = listed.map((s) => `- ${s.name} (id: \`${s.id}\`, from ${s.ownerName})${s.description ? ` — ${s.description}` : ''}`).join('\n');
+      const lines = listed.map(sharedLine).join('\n');
       sections.push(
         '## Skills shared by other agents (load on demand)\n' +
           'These belong to other agents and were written for their environment. When a task matches one, borrow it: **call `use_skill` with its id** to get the full instructions, then follow its stated scope. Leave them alone for unrelated tasks.\n\n' +
@@ -128,7 +133,7 @@ export async function loadSkillLoadout(
       );
     }
   }
-  return { enabledSkillIds, sections, requested };
+  return { enabledSkillIds, sections, requested, catalog };
 }
 
 function hostExecEnabled(): boolean {

@@ -67,11 +67,13 @@ export function isDeferredIn(ctx: ToolContext, name: string, deferred?: boolean)
   return !!deferred || presetOf(ctx.preset).toolFace.deferred.has(name) || (!!ctx.shelvedTools?.has(name) && isShelvable(name));
 }
 
-/** agent 自己收不得的工具:收起后要靠它们才回得来 / 才继续得下去 —— 基建三件(同 LOADOUT_EXEMPT)、
- *  自进化入口本身(撤回收起靠它)、技能入口(/skill 的「先 use_skill」指令靠它在 defs 里)。
- *  读侧(isDeferredIn)与写侧(manage_harness 校验)共用:HARNESS.md 可手改 / 可同步,盘面写了也不认。 */
+/** agent 自己收不得的工具(读侧 isDeferredIn 与写侧 manage_harness 校验共用:HARNESS.md 可手改 / 可同步,盘面写了也不认):
+ *  - 基建三件(同 LOADOUT_EXEMPT)、自进化入口本身(撤回收起靠它)、技能入口(/skill 的「先 use_skill」指令靠它在 defs 里);
+ *  - 自我维护那几件(记忆 / 协作说明 / 日志 / 待办):它们是模型**不经提醒自己伸手**才有用的工具,「最近没调过」不等于没用 ——
+ *    收进按需目录后模型就不会再主动记了,用户看到的是「它不记事了」而找不到原因。用量巡检(loadoutUsage)也因此不把它们列为候选。 */
+const SELF_KEPT = new Set(['manage_harness', 'use_skill', 'remember', 'manage_human', 'log_event', 'todo_write']);
 export function isShelvable(name: string): boolean {
-  return !LOADOUT_EXEMPT.has(name) && name !== 'manage_harness' && name !== 'use_skill';
+  return !LOADOUT_EXEMPT.has(name) && !SELF_KEPT.has(name);
 }
 
 /** 旧工具名静默别名(不进 defs/快照):只兜升级瞬间仍引用旧名的存量会话上下文。

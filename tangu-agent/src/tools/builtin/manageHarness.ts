@@ -54,7 +54,7 @@ function equipProblem(ctx: ToolContext, tools: string[], skills: string[]): stri
   const unknown = tools.filter((n) => !visible.has(n));
   if (unknown.length) return `unknown tool name(s): ${unknown.join(', ')}. Shelve only tools from your own tool list, by exact name (MCP and session custom tools cannot be shelved).`;
   const fixed = tools.filter((n) => !isShelvable(n));
-  if (fixed.length) return `${fixed.join(', ')} cannot be shelved: you need them to load tools, use skills or undo this.`;
+  if (fixed.length) return `${fixed.join(', ')} cannot be shelved: they are how you load tools, use skills, keep your own memory and notes, or undo this.`;
   const already = tools.filter((n) => isDeferredIn(base, n, visible.get(n)?.deferred));
   if (already.length) return `${already.join(', ')} already load on demand, so shelving them saves nothing; leave them out.`;
   const allowed = new Set(ctx.enabledSkillIds ?? []);
@@ -123,6 +123,8 @@ export const manageHarnessProvider: ToolProvider = {
             // 只追加对方的候选收件箱(.harness-raw.md),不碰 HARNESS.md:候选是提名非资产,采纳权在对方自己。
             const target = String(args.agent || '').trim();
             if (!target || !isValidSlug(target)) return 'Error: propose needs a valid agent slug';
+            // 自己的笔记直接写:给自己提名只会躺在候选收件箱里等 /refine(10-04 live:接手巡检建议的 agent 照着「propose」给自己提了名,什么都没收起)
+            if (target === slug) return 'Error: propose is for ANOTHER agent. These are your own notes: use action "upsert" (kind "equip" with tools / skills to shelve your own equipment).';
             if (!(await getAgent(target))) return `Error: agent "${target}" does not exist`;
             const cands = (Array.isArray(args.candidates) ? args.candidates : [])
               .map((c: unknown) => String(c ?? '').replace(/\s+/g, ' ').trim().slice(0, 300))

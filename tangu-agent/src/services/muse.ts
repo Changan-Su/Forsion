@@ -39,7 +39,8 @@ import { DEFAULT_AGENT_SLUG, agentsDir, checkpointsDir, tanguHome } from '../cor
 import { backgroundClientTag } from '../core/version.js';
 import { displayText } from '../core/displayText.js';
 
-import { loadSchedule, entriesOf, dueEntries, markEntryFired, type ScheduleEntry } from './agentSchedule.js';
+import { loadSchedule, entriesOf, dueEntries, markEntryFired, ensureEntry, validateEntryInput, type ScheduleEntry } from './agentSchedule.js';
+import { L } from '../tui/i18n.js';
 import { countPendingApprovals } from './pendingApprovals.js';
 import { sendInboxMessage, MUSE_SENDER_ID } from '../tools/builtin/inboxSend.js';
 import { readActivityLines, readUserActivityStamps, activityRhythm, activitySince, parseActivityTs, type ActivityRhythm } from './userActivity.js';
@@ -253,6 +254,40 @@ export async function museDueSchedules(now = new Date()): Promise<ScheduleEntry[
   return due.filter((e) => { const m = MUSE_TODO_ENTRY.exec(e.description); return !m || live.has(m[1]); });
 }
 const MUSE_TODO_ENTRY = /^todo ([A-Za-z0-9_-]{1,64})$/;
+
+// ── 每周装备巡检(10-04 用户定「让 Muse 检查最近的工具和技能调用,看能不能降本增效」)────────────────────────
+// 一条播种进 Muse 自己 SCHEDULE.db 的周期条目:到期时走既有的「自己的日程 → 本周期 kickoff」管道,没有新机制。
+// Muse 只出建议(一条 add_muse_todo),不改任何 agent:收不收由各 agent 自己经 manage_harness kind:"equip" 决定,
+// 用户在收件箱卡片上点「新会话执行 / 交给 Muse / 忽略」。条目用户可在 Muse 的日程里改期或删掉 —— 删掉就不再巡检。
+const LOADOUT_REVIEW_NAME = { zh: '每周装备巡检', en: 'Weekly loadout review' };
+/** 条目的 prompt(模型读,英文)。同时是幂等匹配的依据之一。 */
+export const LOADOUT_REVIEW_PROMPT =
+  'Weekly loadout review (keep this weekly entry; do not remove it). Call review_loadout with days 30. It reports, per agent, which always-loaded tools and listed skills were never or rarely used in the user\'s own sessions. ' +
+  'If it says there is not enough data, or nothing stands out (under about 3 KB of unused definitions for an agent is not worth a todo), end this item quietly: no todo, no message. ' +
+  'Otherwise file exactly ONE add_muse_todo in the user\'s language. The user reads it as a suggestion; if they accept, its detail is handed verbatim to an agent as the task to carry out. So write the detail as that task: ' +
+  '(1) open with one sentence for the user: nothing has been changed yet, running this task shelves the equipment listed below, and shelving only moves a definition to the load-on-demand catalog (the tool or skill still works); ' +
+  '(2) per agent, the tools and skills to shelve, with the run and call counts from the report as evidence (keep to the per-agent limits the report states; skip anything called in the window, anything already shelved, and agents marked as not judgeable); ' +
+  '(3) end with the "Steps for whoever runs this task" paragraph that review_loadout prints at the bottom of its report, kept intact with both of its branches (do not write your own steps). ' +
+  'In this cycle you only file the todo: do not change any agent\'s notes, settings or files yourself, and do not copy that restriction into the todo (whoever runs the task is meant to act). Never suggest removing a capability.';
+const LOADOUT_REVIEW_MARKER = '.seeded-loadout-review-v1';
+
+/** 把「每周装备巡检」条目播种进 Muse 的日程:**只播一次**(标记文件在 Muse 的文件夹里)—— 用户删掉条目后不再补种。
+ *  锚点 = 今天(本地):第一次巡检在下一个放行的巡检周期就跑(库里本来就有历史用量),之后每 7 天一次。 */
+export async function seedLoadoutReviewOnce(now = new Date()): Promise<boolean> {
+  const marker = path.join(agentsDir(), MUSE_AGENT_SLUG, LOADOUT_REVIEW_MARKER);
+  try { await fs.access(marker); return false; } catch { /* 还没播过 */ }
+  const date = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  const v = validateEntryInput({
+    name: L(LOADOUT_REVIEW_NAME.zh, LOADOUT_REVIEW_NAME.en), date, repeat: '7d', auto: true, prompt: LOADOUT_REVIEW_PROMPT,
+    description: L('看各 Agent 最近 30 天的工具 / 技能用量,有值得收起的就提一条建议;不想要可以直接删掉这条。', 'Checks each agent\'s tool and skill usage over the last 30 days and files one suggestion when something is worth shelving. Delete this entry to stop it.'),
+  }, { slug: MUSE_AGENT_SLUG });
+  if (!v.ok) throw new Error(v.error);
+  const names = new Set(Object.values(LOADOUT_REVIEW_NAME));
+  const r = await ensureEntry(MUSE_AGENT_SLUG, v.value, (e) => names.has(e.name) || e.prompt === LOADOUT_REVIEW_PROMPT, 'Muse');
+  if (!r.ok) throw new Error(r.error);
+  await fs.writeFile(marker, now.toISOString(), 'utf-8');
+  return r.created;
+}
 
 function scheduleKickoff(due: ScheduleEntry[]): string {
   if (!due.length) return '';
@@ -798,6 +833,8 @@ async function tick(): Promise<void> {
     if (!cfg.modelId) { lastRunning = false; log('已启用但无可用模型(本地未选且云端无后台默认),跳过'); return; }
     // 播种/自愈 Muse 系统 agent 文件夹(幂等;首次创建时一次性迁移旧自定义 prompt)。
     await ensureMuseAgent(legacyMusePrompt()).catch((e: any) => log(`播种 muse agent 失败:${e?.message || e}`));
+    // 每周装备巡检条目(只播一次);放在读自己到期日程之前,同一个巡检周期就能看到它。失败不挡周期,下个巡检再试。
+    await seedLoadoutReviewOnce().then((created) => { if (created) log('已播种日程条目:每周装备巡检'); }).catch((e: any) => log(`播种装备巡检条目失败:${e?.message || e}`));
     const userId = museUserId();
     // Muse 自己定的休眠(set_next_wake)只挡心跳:规则命中、到期日程照常起。
     // 睡着时**每个巡检**都看用户回没回来(一次查询 + 读至多三天的活动文件):回来了就清掉休眠,心跳照常判。

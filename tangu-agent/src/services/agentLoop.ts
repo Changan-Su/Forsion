@@ -1304,7 +1304,11 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // 工作笔记(HARNESS.md)在这里读一次:技能目录、工具面(agent 自己收起的装备,kind 'equip')与下面 2b) 的笔记段共用这一份。
     // 笔记段不注入的 run(云端无 agent 目录 / coding 预设下的默认 agent / 临时成员)里收起也不生效 ——
     // 模型看不见「我收起了什么」的时候不该少东西。读失败按空处理,不阻断 run。
-    const notesApply = execMode === 'host' && !inlineMemberDef && !(ps.persona === 'suppress' && activeAgentSlug === DEFAULT_AGENT_SLUG);
+    // coding 预设 × 默认 agent:播种的陪伴人格(Tangu Arioso,"use log_event to record completed work")
+    // 对编码任务是行为毒药(WB-Bench:80/80 题每题浪费一轮 log_event、分析题答成用户报告)→ 整段跳过,
+    // 换 CODING_CONTRACT_SECTION。用户显式选择的自定义 agent 不受影响(人格照注,契约叠加)。
+    const suppressCompanionPersona = ps.persona === 'suppress' && activeAgentSlug === DEFAULT_AGENT_SLUG;
+    const notesApply = execMode === 'host' && !inlineMemberDef && !suppressCompanionPersona;
     const harnessEntries = notesApply ? await loadHarness(activeAgentSlug).catch(() => []) : [];
     const shelved = shelvedOf(harnessEntries);
     // 启用技能的装载（渐进式披露:目录进 prompt、全文按需 use_skill）——见 services/skillLoadout.ts。
@@ -1343,10 +1347,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       : false;
     // 静态指引/环境段按 profile 装载（G4，见 profiles/promptSections.ts）。
     const promptSections = profile.promptSections({ execMode, cwd, extraRoots, channelSession, preset, sandboxExec: profile.features.sandbox });
-    // coding 预设 × 默认 agent:播种的陪伴人格(Tangu Arioso,"use log_event to record completed work")
-    // 对编码任务是行为毒药(WB-Bench:80/80 题每题浪费一轮 log_event、分析题答成用户报告)→ 整段跳过,
-    // 换 CODING_CONTRACT_SECTION。用户显式选择的自定义 agent 不受影响(人格照注,契约叠加)。
-    const suppressCompanionPersona = ps.persona === 'suppress' && activeAgentSlug === DEFAULT_AGENT_SLUG;
+    // (suppressCompanionPersona 在本 run 开头读工作笔记处已定义:coding 预设 × 默认 agent 时人格与笔记一并跳过。)
     // 系统块按「稳定 → 易变」排布,让记忆改写只失效最短后缀(单 pin 单断点,见末尾 pinMessage)。
     // 1) developer_instructions(config.toml;身份/稳定)
     if (agentConfig.systemPrompt && !suppressCompanionPersona) systemParts.push(String(agentConfig.systemPrompt));
