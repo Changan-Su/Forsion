@@ -753,13 +753,18 @@ export const putAgentLibraryFile = (t: EngineTarget, slug: string, name: string,
 export const deleteAgentLibraryFile = (t: EngineTarget, slug: string, name: string) =>
   request<{ ok: boolean }>(t, `/agent/agents/${encodeURIComponent(slug)}/library/file?name=${encodeURIComponent(name)}`, { method: 'DELETE' })
 
-// 某 agent 的工作笔记进化史(HARNESS.md 条目 + 本机编辑史;journal 不跨设备同步)。
+// 某 agent 的进化记录(HARNESS.md 条目 + 本机编辑史;journal 不跨设备同步)。
 export type HarnessEntry = { id: string; kind: string; title: string; body: string; evidence?: string; createdAt: string; updatedAt: string; version: number; /** kind 'equip':收起的工具 / 技能 */ tools?: string[]; skills?: string[] }
-/** by = 不是 agent 自己在对话里写的改动:'historian' 后台复盘的提名直接采纳,'muse' 用量巡检后代为收起;缺省 = agent 自己(或面板 / 撤销卡)。 */
+/** by = 不是 agent 自己在对话里写的改动:'historian' 后台复盘的提名直接采纳,'muse' 用量巡检后代为收起,'user' 用户在面板上采纳的候选;缺省 = agent 自己(或面板 / 撤销卡)。 */
 export type HarnessJournalLine = { ts: string; rev?: string; action: 'upsert' | 'delete' | 'rollback'; entryId: string; before: HarnessEntry | null; after: HarnessEntry | null; by?: string }
-/** candidates = Historian 自动档提名的待复盘候选(收件箱原始行 `- [YYYY-MM-DD s:xxxx] 正文`,只读;/refine 才取走);旧引擎没有这一键。 */
+/** 一条候选的去处:needsUser = 带网址、命令或权限字眼,只等用户点头(/refine 不取);adoptable = 面板能不能直接采纳(装备建议不能)。 */
+export type HarnessCandidate = { line: string; needsUser: boolean; adoptable: boolean }
+/** candidates = 候选收件箱的原始行 `- [YYYY-MM-DD s:xxxx] 正文`(只读);candidateItems = 同一批行逐条带上去处。旧引擎两个键都可能没有。 */
 export const getAgentHarness = (t: EngineTarget, slug: string) =>
-  request<{ entries: HarnessEntry[]; journal: HarnessJournalLine[]; candidates?: string[] }>(t, `/agent/agents/${encodeURIComponent(slug)}/harness`)
+  request<{ entries: HarnessEntry[]; journal: HarnessJournalLine[]; candidates?: string[]; candidateItems?: HarnessCandidate[] }>(t, `/agent/agents/${encodeURIComponent(slug)}/harness`)
+/** 对一条候选点「采纳 / 丢弃」。line = 读到的那一行原文(身份)。失败时 err.code:HARNESS_CANDIDATE_GONE(404,已经不在了)/ _FULL / _TOO_LONG / _EQUIP。 */
+export const resolveHarnessCandidate = (t: EngineTarget, slug: string, line: string, action: 'adopt' | 'dismiss') =>
+  request<{ ok: boolean; entry: HarnessEntry | null }>(t, `/agent/agents/${encodeURIComponent(slug)}/harness/candidate`, { method: 'POST', body: JSON.stringify({ line, action }) })
 /** expectRev = 对话里更新卡带回的那一行编辑史:条目之后又改过 → 引擎回 409,不会撤掉后来的修改。面板里的「撤销最近一次改动」不带。 */
 export const rollbackHarnessEntry = (t: EngineTarget, slug: string, id: string, expectRev?: string) =>
   request<{ ok: boolean; entry: HarnessEntry | null }>(t, `/agent/agents/${encodeURIComponent(slug)}/harness/rollback`, { method: 'POST', body: JSON.stringify({ id, ...(expectRev ? { expectRev } : {}) }) })
@@ -1238,6 +1243,9 @@ export const setGitSettings = (t: EngineTarget, patch: { [K in keyof GitSettings
 /** 删一条项目记忆。409 = 记忆在读出之后被别处改过(没有删除);调用方重载后再删。 */
 export const forgetProjectMemory = (t: EngineTarget, sessionId: string, id: string, expectedVersion: string) =>
   request<{ memory: ProjectMemoryView }>(t, '/agent/project-context/memory', { method: 'DELETE', body: JSON.stringify({ sessionId, id, expectedVersion }) }).then((r) => r.memory)
+/** 对一条待确认的项目记忆候选点「采纳 / 丢弃」。404 = 那条已经不在了;采纳时放不下 → err.code 'MEMORY_FULL'。 */
+export const resolveProjectCandidate = (t: EngineTarget, sessionId: string, id: string, action: 'adopt' | 'dismiss') =>
+  request<{ memory: ProjectMemoryView }>(t, '/agent/project-context/memory/candidate', { method: 'POST', body: JSON.stringify({ sessionId, id, action }) }).then((r) => r.memory)
 export const initProjectContext = (t: EngineTarget, sessionId: string) =>
   request<{ createdDir: boolean; createdDoc: boolean; context: ProjectContext }>(t, '/agent/project-context/init', { method: 'POST', body: JSON.stringify({ sessionId }) }).then((r) => ({ ...r, context: projectContextShape(r.context) }))
 /** 409 = 文件在读出之后被别处改过(没有写入);调用方提示用户重载。 */

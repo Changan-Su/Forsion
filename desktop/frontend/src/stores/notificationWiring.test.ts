@@ -29,6 +29,12 @@ describe('takeFreshNominations', () => {
     const third = takeFreshNominations([ev('b'), ev('c', 'title')], second.seen)
     expect(third.fresh).toEqual([]) // 同一条不报第二次
   })
+  it('等用户点头的两种候选(harness_confirm / project_memory_candidates)也报,各一次;没写的记忆候选(memory_candidates)照旧不报', () => {
+    const first = takeFreshNominations([ev('a')], null)
+    const second = takeFreshNominations([ev('a'), ev('c', 'harness_confirm'), ev('p', 'project_memory_candidates'), ev('m', 'memory_candidates'), ev('w', 'project_memory_added')], first.seen)
+    expect(second.fresh).toEqual([ev('c', 'harness_confirm'), ev('p', 'project_memory_candidates')])
+    expect(takeFreshNominations([ev('c', 'harness_confirm'), ev('p', 'project_memory_candidates')], second.seen).fresh).toEqual([])
+  })
   it('后台直接采纳(harness_adopted)同样只报一次', () => {
     const first = takeFreshNominations([ev('a')], null)
     const second = takeFreshNominations([ev('a'), ev('d', 'harness_adopted')], first.seen)

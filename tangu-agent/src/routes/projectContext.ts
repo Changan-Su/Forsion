@@ -3,6 +3,7 @@
  *   GET  /agent/project-context?sessionId=      → ProjectContext(指令文件 / 项目技能 / 计划 / 默认项 / git)
  *   POST /agent/project-context/init            { sessionId }                              → 建 .tangu/ + 骨架
  *   DELETE /agent/project-context/memory        { sessionId, id, expectedVersion }         → 删一条项目记忆,返回 { memory }(GET 的 context 里带 memory;远端来源不给)
+ *   POST /agent/project-context/memory/candidate { sessionId, id, action: adopt|dismiss }  → 对一条待确认的后台候选点头或丢弃,返回 { memory }(远端来源不给)
  *   PUT  /agent/project-context/doc             { sessionId, content, expectedMtimeMs? }   → 写指令文件(409 = 别处改过)
  *   GET  /agent/project-context/settings?sessionId=|cwd= → { settings }(桌面建会话前的轻量预取;cwd 形态给没有会话可借的项目)
  *   PUT  /agent/project-context/settings        { sessionId, settings }                    → 用户侧项目默认项
@@ -28,7 +29,7 @@ import {
   canonicalProjectPath, createProjectSkill, deleteProjectIcon, initProjectWorkspace, projectContext, readProjectIcon, readProjectSettings,
   saveProjectIcon, setProjectIconEmoji, writeProjectDoc, writeProjectSettings,
 } from '../services/projectContext.js';
-import { forgetProjectMemory, projectMemoryView } from '../services/projectMemory.js';
+import { forgetProjectMemory, projectMemoryView, resolveProjectCandidate } from '../services/projectMemory.js';
 import { parseRemoteOrigin } from '../services/remoteOrigin.js';
 import { GitActionError, generateCommitMessage, gitCommit, gitCreateBranch, gitInit, gitPending, gitPush, gitTrustRepo, serialized } from '../services/gitActions.js';
 import { DEFAULT_GIT_SETTINGS, gitSettings, updateGitSettings } from '../services/gitSettings.js';
@@ -52,6 +53,10 @@ async function projectDirOf(req: AuthRequest, res: Response, sessionId: unknown)
 }
 
 const fail = (res: Response, e: any, fallback: string): void => { res.status(400).json({ detail: e?.message || fallback }); };
+/** 项目记忆的失败:404 = 那一条已经不在了,409 = 别处刚改过(都让界面重载);error 是机器码(桌面 request() 从它取 code)。 */
+const memoryFail = (res: Response, e: any, fallback: string): void => {
+  res.status(e?.code === 'MEMORY_NOT_FOUND' ? 404 : e?.code === 'MEMORY_VERSION_CONFLICT' || e?.code === 'MEMORY_BUSY' ? 409 : 400).json({ detail: e?.message || fallback, code: e?.code, error: e?.code });
+};
 
 /** 只读端点的目录解析:`?sessionId=` 照常绑定;也接 `?cwd=` —— 项目会话全删光再添加回来时没有会话可借,
  *  而这里读的只是用户家目录里自己的记录(图标图片也只在那份记录指向它时才出),不碰别的项目内容。 */
@@ -85,7 +90,21 @@ router.delete('/agent/project-context/memory', authMiddleware, async (req: AuthR
     if (typeof id !== 'string' || !id || typeof expectedVersion !== 'string' || !expectedVersion) return res.status(400).json({ detail: 'id and expectedVersion are required' });
     res.json({ memory: await forgetProjectMemory(cwd, id, expectedVersion) });
   } catch (e: any) {
-    res.status(e?.code === 'MEMORY_NOT_FOUND' ? 404 : e?.code === 'MEMORY_VERSION_CONFLICT' || e?.code === 'MEMORY_BUSY' ? 409 : 400).json({ detail: e?.message || 'forget project memory failed', code: e?.code });
+    memoryFail(res, e, 'forget project memory failed');
+  }
+});
+
+// 用户对一条待确认的后台候选(过不了形状闸、没有直接记的那些)点「采纳 / 丢弃」。同样只在主机上。
+router.post('/agent/project-context/memory/candidate', authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    if (parseRemoteOrigin(req.headers)) return res.status(403).json({ detail: 'Open the project on the host computer to edit its memory.' });
+    const cwd = await projectDirOf(req, res, req.body?.sessionId);
+    if (!cwd) return;
+    const { id, action } = req.body || {};
+    if (typeof id !== 'string' || !id || (action !== 'adopt' && action !== 'dismiss')) return res.status(400).json({ detail: 'id and action ("adopt" or "dismiss") are required' });
+    res.json({ memory: await resolveProjectCandidate(cwd, id, action === 'adopt') });
+  } catch (e: any) {
+    memoryFail(res, e, 'project memory candidate action failed');
   }
 });
 

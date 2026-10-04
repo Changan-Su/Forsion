@@ -6,7 +6,7 @@ import { AppWindow, ArrowLeft, Check, ChevronRight, Copy, ExternalLink, FileText
 import { useShallow } from 'zustand/react/shallow'
 import { useApp } from '../stores/appStore'
 import { useI18n } from '../i18n'
-import { createProjectSkill, deleteProjectIcon, forgetProjectMemory, generateGitCommitMessage, getGitSettings, getProjectContext, gitCommitProject, gitCreateProjectBranch, gitInitProject, gitPendingProject, gitPushProject, gitTrustProject, initProjectContext, putProjectDoc, putProjectSettings, setProjectIconEmoji, uploadProjectIcon } from '../services/backendService'
+import { createProjectSkill, deleteProjectIcon, forgetProjectMemory, generateGitCommitMessage, getGitSettings, getProjectContext, gitCommitProject, gitCreateProjectBranch, gitInitProject, gitPendingProject, gitPushProject, gitTrustProject, initProjectContext, putProjectDoc, putProjectSettings, setProjectIconEmoji, uploadProjectIcon, resolveProjectCandidate } from '../services/backendService'
 import { askString } from '../amadeus/components/askString'
 import { normPath } from './coding/studioModel'
 import { addToCreations } from './chat2/CreationCards'
@@ -186,6 +186,18 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
     } catch (e: any) {
       if (e?.status === 409 || e?.status === 404) { setReloadAt((n) => n + 1); setError(t('projectProfile.memoryConflict')) }
       else setError(String(e?.message || e))
+    } finally { setBusy('') }
+  }
+  // 待确认的后台候选(带网址、命令或权限字眼,没有直接记):逐条采纳 / 丢弃。那条已经不在了 → 重载。
+  const decideCandidate = async (id: string, action: 'adopt' | 'dismiss'): Promise<void> => {
+    if (busy) return
+    clear(); setBusy(`candidate:${id}`)
+    try {
+      const memory = await resolveProjectCandidate(homeTarget(), session.id, id, action)
+      setCtx((c) => (c ? { ...c, memory } : c)); setNotice(t(action === 'adopt' ? 'projectProfile.memoryAdopted' : 'projectProfile.memoryDismissed'))
+    } catch (e: any) {
+      if (e?.status === 409 || e?.status === 404) { setReloadAt((n) => n + 1); setError(t('projectProfile.memoryCandidateGone')) }
+      else setError(e?.code === 'MEMORY_FULL' ? t('projectProfile.memoryFull') : String(e?.message || e))
     } finally { setBusy('') }
   }
   const open = (key: string) => { setSelected(key); setOpened((keys) => (keys.includes(key) ? keys : [...keys, key])) }
@@ -563,6 +575,17 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
               <span>{entry.content}</span>
               <button type="button" title={t('projectProfile.memoryForget')} aria-label={t('projectProfile.memoryForget')} disabled={!!busy} onClick={() => void forgetMemory(entry.id)}>{busy === `memory:${entry.id}` ? <Loader2 size={13} className="spin" /> : <X size={13} />}</button>
             </li>)}</ul> : <p className="agent-profile-muted">{t('projectProfile.memoryEmpty')}</p>}
+            {!!ctx.memory.candidates?.length && <div className="project-memory-pending" data-project-memory-candidates={ctx.memory.candidates.length}>
+              <strong>{t('projectProfile.memoryCandidates', { count: ctx.memory.candidates.length })}</strong>
+              <ul className="project-memory-list">{ctx.memory.candidates.map((c) => <li key={c.id} className="project-memory-candidate" data-project-memory-candidate={c.id}>
+                <span>{c.content}</span>
+                <div>
+                  <button type="button" className="profile-text-action adopt" disabled={!!busy} onClick={() => void decideCandidate(c.id, 'adopt')}>{t('projectProfile.memoryAdopt')}</button>
+                  <button type="button" className="profile-text-action" disabled={!!busy} onClick={() => void decideCandidate(c.id, 'dismiss')}>{t('projectProfile.memoryDismiss')}</button>
+                </div>
+              </li>)}</ul>
+              <small>{t('projectProfile.memoryCandidatesHint')}</small>
+            </div>}
           </section>}
           {ctx.plans.length > 0 && <section className="project-card" data-project-plans>
             <div className="project-card-head"><div><h3>{t('projectProfile.plans')}</h3><small>{t('projectProfile.plansHint', { dir: `${ctx.workspaceDirName}/plans` })}</small></div></div>

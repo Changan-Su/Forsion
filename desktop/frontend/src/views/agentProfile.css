@@ -305,11 +305,16 @@ div.agent-equipment-item > label { display: flex; align-items: flex-start; gap: 
 .harness-empty > svg { color: var(--accent-ink); }
 .harness-empty > p { max-width: 34em; margin: 0; font-size: var(--ui-font-meta, 12px); line-height: 1.65; }
 .harness-empty > .btn { display: inline-flex; align-items: center; gap: 6px; }
-/* 待复盘候选:Historian 的提名,还不是笔记 —— 同一套底色卡,标题用 accent 提示「有东西等你」,不加描边。 */
+/* 候选:Historian 的提名,还不是记录 —— 同一套底色卡,标题用 accent 提示「有东西等你」,不加描边。 */
 .harness-candidates > h3 { margin: 10px 0 8px; font-size: var(--ui-font-meta, 12px); font-weight: 500; color: var(--accent-ink); }
 .harness-candidates > ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
 .harness-candidate { display: grid; grid-template-columns: auto minmax(0, 1fr); column-gap: 10px; padding: 8px 12px; font-size: var(--ui-font-meta, 12px); line-height: 1.6; border-radius: var(--radius-sm, 8px); background: var(--overlay-light); overflow-wrap: anywhere; }
 .harness-candidate > time { color: var(--text-faint, var(--text-muted)); font-variant-numeric: tabular-nums; white-space: nowrap; }
+/* 逐条「采纳 / 丢弃」:排在正文下面一行(窄栏里放右侧会把正文挤成竖条),文字键、不加底 */
+.harness-candidate-actions { grid-column: 2; display: flex; gap: 14px; }
+.harness-candidate-actions .profile-text-action { padding: 2px 0; }
+.harness-candidate-actions .profile-text-action.adopt { color: var(--accent-ink); }
+.harness-candidate-actions .profile-text-action:hover:not(:disabled) { text-decoration: underline; text-underline-offset: 3px; }
 .harness-candidates > small { display: block; margin-top: 8px; font-size: var(--ui-font-caption, 11px); line-height: 1.6; color: var(--text-muted); }
 /* 「进化」标签角标:待复盘候选数。绝对定位在按钮右上角 —— 紧凑模式下按钮是竖排(图标 / 文字),作为第三行会把整条标签栏撑高。 */
 .agent-section-nav button { position: relative; }

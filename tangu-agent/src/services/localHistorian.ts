@@ -41,13 +41,13 @@ import { DEFAULT_AGENT_SLUG } from '../core/tanguHome.js';
 import { buildSharedPrefix } from './selfBrainstorm.js';
 import { effectiveContextWindowInfo, estimateMessageTokens } from './contextBudget.js';
 import { redactSecrets } from '../core/redact.js';
-import { appendHarnessCandidates, adoptHarnessNomination, autoAdoptable, noteAutoAdoptable } from '../agents/harnessStore.js';
+import { appendHarnessCandidates, adoptHarnessNomination, autoAdoptable, noteAutoAdoptable, candidateNeedsUser } from '../agents/harnessStore.js';
 import { scheduleAgentFilesSync } from './agentFileSync.js';
 import { appendCandidates as appendRawCandidates, readCandidates as readRaw } from './memoryCandidates.js';
 import { startMemoryDream } from './memoryDream.js';
 import { MEMORY_CHAR_BUDGET, normalizeMemoryFact } from './memoryRepository.js';
 import { sessionCalledTool } from './sessionSearchSql.js';
-import { addProjectFact, peekProjectMemory, resolveProjectMemory } from './projectMemory.js';
+import { addProjectFact, peekProjectMemory, pendingProjectFacts, queueProjectFact, resolveProjectMemory } from './projectMemory.js';
 import { COMPUTER_HISTORY_TOOL } from './computerHistory.js';
 import { HISTORIAN_EMOJI_FIELD } from '../core/sessionEmoji.js';
 import { applyHistorianEmoji } from './sessionEmoji.js';
@@ -580,9 +580,10 @@ async function runHistorianForSession(sessionId: string, userId: string, memScop
     if (!transcript.trim()) { log('无可用对话内容,跳过'); return; }
     // 项目会话(归属只认会话存档的 project_path):判官把「只在这个项目成立」的候选单列一组,由代码写进项目记忆。
     // 判官看得到已有的那份,免得把前台刚 remember 过的同一件事换个说法再记一遍(项目记忆没有 Dream 去重)。
+    // 等用户确认的、用户丢弃过的候选也算「已经提过」:不给它看,它每轮换个说法再提一遍,待确认清单里就是一排近义句。
     const projectRef = judgeMemory && deps().profile.capabilities.hostExec ? await resolveProjectMemory(userId, sessionId) : null;
     const projectKnown = projectRef
-      ? ((await peekProjectMemory(projectRef).catch(() => null))?.entries ?? []).map((e) => `- ${e.content}`).join('\n').slice(-1500)
+      ? [...((await peekProjectMemory(projectRef).catch(() => null))?.entries ?? []).map((e) => e.content), ...pendingProjectFacts(projectRef)].map((c) => `- ${c}`).join('\n').slice(-1500)
       : '';
 
     if (titleDue || summaryDue || judgeLog || judgeMemory) { // 标题归起点后,辅助模式轮只剩摘要/提名要判
@@ -680,16 +681,22 @@ async function runHistorianForSession(sessionId: string, userId: string, memScop
         }
         if (projectRef && stillClean && projectFacts.length) {
           const added: string[] = [];
+          const waiting: string[] = [];
           for (const fact of projectFacts) {
-            // 与工作笔记的自动采纳同一道形状闸:带网址 / 管道进解释器 / 凭据·审批·权限字眼的,不由后台写进系统提示。
-            // ponytail: 项目级没有候选收件箱,过不了闸的直接丢(前台的 remember 仍可记);真有需要再加一个待过目的清单。
-            if (!autoAdoptable(fact)) { log(`项目记忆候选未过形状闸,丢弃: ${fact.slice(0, 60)}`); continue; }
-            try { if ((await addProjectFact(projectRef, fact, sessionId)) === 'added') added.push(fact); }
-            catch (e: any) { log(`写项目记忆失败: ${e?.message || e}`); }
+            // 与工作笔记的自动采纳同一道形状闸:带网址 / 管道进解释器 / 凭据·审批·权限字眼的,不由后台写进系统提示 ——
+            // 排进这个项目的待确认清单,等用户在项目详情里逐条点头(10-04 用户裁决「有风险的才需要确认」;此前是直接丢)。
+            try {
+              if (!autoAdoptable(fact)) { if (await queueProjectFact(projectRef, fact, sessionId)) waiting.push(fact); }
+              else if ((await addProjectFact(projectRef, fact, sessionId)) === 'added') added.push(fact);
+            } catch (e: any) { log(`写项目记忆失败: ${e?.message || e}`); }
           }
           if (added.length) {
             await logActivity(userId, 'project_memory_added', added.join(' | ').slice(0, 300), sessionId);
             log(`已写入 ${added.length} 条项目记忆(${projectRef.name})`);
+          }
+          if (waiting.length) {
+            await logActivity(userId, 'project_memory_candidates', waiting.join(' | ').slice(0, 300), sessionId);
+            log(`${waiting.length} 条项目记忆候选未过形状闸,等用户确认(${projectRef.name})`);
           }
         }
         historianSignal.getStore()?.throwIfAborted();
@@ -743,13 +750,16 @@ async function runHistorianForSession(sessionId: string, userId: string, memScop
                 await logActivity(userId, 'harness_adopted', adopted.join(' | ').slice(0, 300), sessionId);
                 log(`已采纳 ${adopted.length} 条工作笔记提名(${displaySlug})`);
               }
-              const n = queued.length ? await appendHarnessCandidates(displaySlug, sessionId, queued).catch((e: any) => {
-                log(`写工作笔记候选收件箱失败: ${e?.message || e}`);
-                return 0;
-              }) : 0;
-              if (n) {
-                await logActivity(userId, 'harness_candidates', queued.join(' | ').slice(0, 300), sessionId);
-                log(`已采集 ${n} 条工作笔记候选进收件箱(${displaySlug})`);
+              // 候选两种去处(10-04):过不了形状闸的等用户在「进化」页逐条点头(/refine 不取),其余等 /refine 时由 agent 过目。
+              // 活动分开记:桌面据此决定通知是请用户「去确认」还是「复盘一下」。归类与读侧同一个函数(按落盘的那一行算)。
+              for (const [action, lines] of [['harness_candidates', queued.filter((l) => !candidateNeedsUser(l))], ['harness_confirm', queued.filter(candidateNeedsUser)]] as const) {
+                const n = lines.length ? await appendHarnessCandidates(displaySlug, sessionId, lines).catch((e: any) => {
+                  log(`写工作笔记候选收件箱失败: ${e?.message || e}`);
+                  return 0;
+                }) : 0;
+                if (!n) continue;
+                await logActivity(userId, action, lines.join(' | ').slice(0, 300), sessionId);
+                log(`已采集 ${n} 条工作笔记候选进收件箱(${displaySlug}${action === 'harness_confirm' ? ',等用户确认' : ''})`);
               }
             } else {
               log('会话 agent_config.agentSlug 非法或 agent 已删,丢弃本轮工作笔记候选');
