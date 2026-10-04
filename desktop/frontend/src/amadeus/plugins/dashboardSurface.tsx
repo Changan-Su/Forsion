@@ -7,7 +7,7 @@
  * 有没有笔记库(用户 2026-09-02 实报「这太奇怪了」)。这里把「渲染」与「住在库里」解耦:
  *  · 配方 → 编译成页字节(与真文件逐字节同构)→ 喂进一个**内存作用域**的 pageStore
  *    (pageStoreFor(scope, { sink })):不 loadPage、不 savePage,库开没开与它无关;
- *  · 真 DashboardGridView 挂进插件容器(mountHostReact,复用块表面那套双 root 防线);
+ *  · 真 DashboardGridView 挂进插件容器(mountHostReact:树在宿主自己加的一层里,dispose 后容器立刻归还插件);
  *  · 用户在排版台手排 → 视图照常 setFmExtra → 防抖 save → **sink** 把编译后的整页文本交给
  *    插件的 onLayout,插件自己持久化(ctx.saveData);下次挂载把它作 layoutText 传回,
  *    compileDashboardRecipe 的「再生成保布局」按卡 id 合并 —— 手排存活,数据刷新。
@@ -104,8 +104,10 @@ export function mountPluginDashboard(pluginId: string, el: HTMLElement, o: Plugi
     pageId: `plugin-dash-${pluginId}`,
   })
   if (!compiled.ok) {
-    el.textContent = translate('plugindash.recipeInvalid', { err: compiled.error })
-    return { dispose: () => { el.replaceChildren() }, scope: '' }
+    // 提示也住在宿主自己的节点里:el 是插件的,不整个清空它
+    const note = el.appendChild(document.createElement('div'))
+    note.textContent = translate('plugindash.recipeInvalid', { err: compiled.error })
+    return { dispose: () => { note.remove() }, scope: '' }
   }
   const scope = `plugin:${pluginId}:dashboard:${++seq}`
   const dashPath = `plugin:${pluginId}/overview.dashboard.md`

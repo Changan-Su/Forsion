@@ -350,6 +350,10 @@ export interface BlockSurfaceApi {
   /** Modal text input. Electron has no `window.prompt` — use this, never the DOM one. */
   prompt(title: string, initial?: string, opts?: { label?: string }): Promise<string | null>
   /** Render a real, editable block into `el`. Returns a dispose function; call it when you drop the node.
+   *  After dispose `el` is yours again at once: the host renders inside a layer of its own (a `display:contents`
+   *  div it adds to `el`) and takes it out synchronously, so clearing `el` or mounting on it again right away is
+   *  fine. Don't reach host nodes with `el > …` or `el.firstElementChild`. Dispose + mount again is a fresh editor
+   *  (focus and selection are lost) — keep the mount stable while the user types.
    *  **v3 only** — a v4 note has no blocks to mount, so this is refused (and logged) there. In practice
    *  this is the surface plugin FILE TYPES use (`file.surface`), and those are pinned to v3 by design. */
   mountBlocks(el: HTMLElement, opts: MountBlockOptions): () => void
@@ -376,7 +380,8 @@ export interface PluginPageSurface extends BlockSurfaceApi {
   /** Render the native note editor (the same body a normal note gets: block list, ⠿ drag handles,
    *  enter/backspace semantics, slash menu, click-below-to-append) into `el`, bound to this view's
    *  scope. Title bar / cover / properties are deliberately not included (renaming compound suffixes
-   *  and exposing plugin fm keys are both corruption paths). Returns a dispose function. */
+   *  and exposing plugin fm keys are both corruption paths). Returns a dispose function; after it `el` is
+   *  yours again at once (same contract as `mountBlocks`). */
   mountNoteView(el: HTMLElement): () => void
 }
 
@@ -764,7 +769,8 @@ export interface PluginFloatingTocOptions extends FloatingTocOptions {
 export interface PluginFloatingTocHandle {
   /** Force a rescan after a DOM change that MutationObserver cannot see. */
   refresh(): void
-  /** Idempotent. The host also disposes every mount when the plugin is disabled/reloaded. */
+  /** Idempotent. Takes the host's overlay layer out of `shell` synchronously; your content is untouched.
+   *  The host also disposes every mount when the plugin is disabled/reloaded. */
   dispose(): void
 }
 
@@ -919,7 +925,11 @@ export interface PluginContext {
   /** 原子写本插件的私有 JSON blob(整体覆盖)。宿主缺位时静默 no-op。 */
   saveData?(value: unknown): Promise<void>
   /** Host-native UI primitives (2026-09-07+). A plugin keeps ownership of its content DOM and gives
-   *  the host a shell to overlay plus its scroll/content roots. Old hosts omit the whole member. */
+   *  the host a shell to overlay plus its scroll/content roots. Old hosts omit the whole member.
+   *  Every mount here renders inside a host-owned layer added to the element you pass (`display:contents`, so
+   *  your element's height / flex still apply). `dispose()` removes that layer synchronously: the element is
+   *  yours again at once — clear it, or mount on it again. Change a live mount through the handle's `update()`;
+   *  dispose + mount is a fresh instance. Don't select host nodes with `el > …`. */
   ui?: {
     /** Native Amadeus editor for Markdown owned by the caller (API drafts, etc.). No active-vault access. */
     mountMarkdownEditor?(
@@ -951,8 +961,8 @@ export interface PluginContext {
     ): import('../../../../shared/amadeus/dashboardRecipe').RecipeResult
     /** 在插件自己的容器里渲染一页**原生** Dashboard(真 dashboard3 网格/卡片/排版台),
      *  **不依赖笔记库**(库开没开、有没有库都能用 —— 与 source+writeFile 那条「住在库里」的路线
-     *  刻意区分)。`el` 通常就是 registerView 的 mount(el) 给的容器。返回卸载函数;插件禁用时
-     *  宿主也会统一卸掉。
+     *  刻意区分)。`el` 通常就是 registerView 的 mount(el) 给的容器。返回卸载函数;调用之后 `el` 立刻还给你
+     *  (宿主只动自己挂进去的那一层,清空 `el`、在它上面再挂都行);插件禁用时宿主也会统一卸掉。
      *  布局持久化归插件:用户在排版台手排后 `onLayout(text)` 交出整页文本,存进 `ctx.saveData`
      *  之类;下次挂载把它作 `layoutText` 传回,手排的卡按卡 id 保留、数据照常刷新。
      *  旧宿主没有:`ctx.dashboard?.mount?.(…)`。 */
@@ -1110,7 +1120,8 @@ export interface PluginContext {
    *
    *  `mount(el, spec)` 同步返回 `{ update(spec), dispose() }`:
    *  · 数据刷新调 `update(spec)` —— **原地重渲染**,用户的排序/筛选/列宽存活,别 dispose 了重挂;
-   *  · `dispose()` 幂等;插件禁用/重载时宿主也会统一卸掉。
+   *  · `dispose()` 幂等,之后 `el` 立刻还给你(宿主只动自己挂进去的那一层,清空 `el`、在它上面再挂都行;
+   *    再挂的是一张新表);插件禁用/重载时宿主也会统一卸掉。
    *  · **规格非法(没列 / 行缺 id / 单元格文案不是基元)当场同步抛** —— 调用方按「抛 = 宿主不收」
    *    降级到自己的经典表格(panel-lib 的 `L.table` 就是这么写的)。别把它当 no-op。
    *

@@ -1,36 +1,53 @@
 import { createRoot, type Root } from 'react-dom/client'
 import type { ReactNode } from 'react'
 
-// 一个容器只许有一个 React root。插件常「dispose 完立刻在同一个 el 上重挂」,而 unmount 推迟到
-// microtask(React 18+ 不许在渲染周期里同步 unmount)—— 不认容器的话第二次 createRoot 会在仍被
-// 标记为 root 的元素上再建一个,随后旧 root 的延迟 unmount 反过来把新挂载清掉(codex)。
-const rootsByEl = new WeakMap<HTMLElement, { root: Root; gen: number }>()
+// root 不建在调用方给的 el 上,建在宿主自己加进 el 的一层里(display:contents:不出盒子,el 的 flex / 百分比高度
+// 照旧落到里面那棵树上)。el 始终是调用方的:dispose 同步摘掉这一层,之后清空 el、在它上面再挂都行。
+// 直接建在 el 上时,「dispose → 清空 el → 再挂」会撞上晚一个 microtask 才落地的卸载(React 18+ 不许在渲染周期里
+// 同步 unmount):同一拍再挂复用了旧 root,画进已被摘走的节点(空白);晚一拍 / 不再挂,卸载去删一个已不在 el 里的
+// 节点(removeChild 抛 NotFoundError)。2026-10-04 在 ctx.tangu.mountChat 上实测到。
+// ⚠️ 所以别用 `el > .x` 选宿主渲染的节点,也别假设它是 el.firstElementChild。
+interface HostMount { layer: HTMLElement; root: Root; gen: number }
+const mountsByEl = new WeakMap<HTMLElement, HostMount>()
 let mountGen = 0
 
-/** 往插件的 DOM 里挂一棵宿主 React 树(容器去重 + 代际校验 + microtask 延迟卸载三件套)。
- *  mountBlocks 与 mountNoteView(viewSurface)共用 —— 这套纪律漏一处就是「新挂载被旧 dispose 清掉」。 */
-export function mountHostReact(el: HTMLElement, node: ReactNode): () => void {
-  const gen = ++mountGen
-  const existing = rootsByEl.get(el)
-  const root = existing?.root ?? createRoot(el)
-  rootsByEl.set(el, { root, gen })
-  root.render(node)
-  return () => {
-    const cur = rootsByEl.get(el)
-    if (!cur || cur.gen !== gen) return // 这个容器已经被新的挂载接管 → 本次 dispose 作废
-    // ⚠️ 表项**不能**在这里同步删:React effect 的 cleanup→setup 同步连跑,同一 el 立即重挂时
-    // 读不到 existing 就会在旧 root 仍挂载的容器上第二次 createRoot,而微任务里旧 root 的
-    // unmount 又被新表项跳过 —— 旧树永久泄漏 + 同容器双 root(评审 P1,2026-08-14)。
-    // 删除也推进微任务、按代际校验:同步重挂读到 existing → 复用同一 root 只换 render 内容。
-    queueMicrotask(() => {
-      if (rootsByEl.get(el)?.gen !== gen) return // 已被新挂载接管
-      rootsByEl.delete(el)
-      try {
-        cur.root.unmount()
-      } catch (e) {
-        console.error('[amadeus] 卸载插件挂载树失败', e)
-      }
-    })
-  }
+/** 摘层是同步的,卸载推迟到 microtask。旧树必须真卸掉(effect 清理、订阅退订),不然就是泄漏。 */
+function retire(m: HostMount): void {
+  m.layer.remove()
+  queueMicrotask(() => {
+    try {
+      m.root.unmount()
+    } catch (e) {
+      console.error('[amadeus] 卸载插件挂载树失败', e)
+    }
+  })
 }
 
+/** 往插件的 DOM 里挂一棵宿主 React 树;返回 dispose。各挂载接口(mountBlocks / mountNoteView / ctx.ui.* /
+ *  ctx.table / ctx.dashboard / ctx.tangu.mountChat)共用。
+ *  · 同一个 el 上一份还没 dispose 就再挂 = 原地更新:同一个 root 只换 render 内容,组件实例与 DOM 身份不变
+ *    (表格 / 输入卡 / 编辑器的 update 靠它);被顶掉的旧 disposer 作废,只有最新那个收得掉。
+ *  · 一层一个 root,同一个容器上不会有两个;旧 disposer 晚到或被重复调用,碰不到后来的挂载。 */
+export function mountHostReact(el: HTMLElement, node: ReactNode): () => void {
+  const gen = ++mountGen
+  let mount = mountsByEl.get(el)
+  // 调用方没 dispose 就把 el 清空了:那一层已经不在 el 里,当它收掉,另起一层
+  if (mount && mount.layer.parentNode !== el) {
+    retire(mount)
+    mount = undefined
+  }
+  if (mount) mount.gen = gen
+  else {
+    const layer = el.appendChild(document.createElement('div'))
+    layer.style.display = 'contents'
+    mount = { layer, root: createRoot(layer), gen }
+    mountsByEl.set(el, mount)
+  }
+  const mine = mount
+  mine.root.render(node)
+  return () => {
+    if (mountsByEl.get(el)?.gen !== gen) return // 已收过,或被后来的挂载 / 更新接管(代际号全局唯一)
+    mountsByEl.delete(el)
+    retire(mine)
+  }
+}
