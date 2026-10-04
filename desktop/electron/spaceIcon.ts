@@ -9,9 +9,8 @@
  * 绝不注入宿主 DOM),因此不做清洗,只卡体积与文件头。
  * ponytail: SVG 不验能否解码 —— 残缺的 SVG 会画成空白图标,作者自己一眼可见;要兜底就在渲染层先 decode 再决定回落。
  */
-import { constants, promises as fs } from 'node:fs'
 import path from 'node:path'
-import { PLUGIN_ICON_MAX_BYTES, pluginIconDataUrl } from './pluginIcon'
+import { PLUGIN_ICON_MAX_BYTES, pluginIconDataUrl, readSmallFile } from './pluginIcon'
 
 export const SPACE_ICON_SVG_MAX_BYTES = 64 * 1024
 
@@ -33,20 +32,6 @@ export function spaceIconDataUrl(name: string, buf: Buffer): string | undefined 
   if (/\.png$/i.test(name)) return pluginIconDataUrl(buf)
   if (buf.length > SPACE_ICON_SVG_MAX_BYTES || !/<svg[\s>]/i.test(buf.toString('utf8', 0, 2048))) return undefined
   return `data:image/svg+xml;base64,${buf.toString('base64')}`
-}
-
-/** 只读「就在这个目录里的普通小文件」。图标随清单发给渲染层和设备页,所以:
- *  O_NOFOLLOW —— 文件名本身是软链就不读(否则一枚指向别处的软链能把目录外的图带出去);
- *  O_NONBLOCK + isFile —— FIFO / 设备不挂住整份清单;先看体积再读,超限的不进内存。
- *  Windows 没有这两个常量(取 0),靠 isFile 与体积两道。 */
-async function readSmallFile(file: string, max: number): Promise<Buffer | undefined> {
-  const fh = await fs.open(file, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0))
-  try {
-    const st = await fh.stat()
-    return st.isFile() && st.size <= max ? await fh.readFile() : undefined
-  } finally {
-    await fh.close()
-  }
 }
 
 /** 按 `dirs` 次序找 `iconFile`,第一枚合规的胜出。 */
