@@ -8,7 +8,7 @@
 import { useEffect, useLayoutEffect, useReducer, useRef, useState } from 'react'
 import { ChevronDown, ChevronUp, ChevronsLeft, ChevronsRight, Folder as FolderIcon, MoreHorizontal, Plus, Zap } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
-import { useRibbonStore, rankIds, reorderBase, unionOrder, moveTo, slotIndexAt, ribbonActions, type RibbonZone, type RibbonFolder } from './ribbonRegistry'
+import { useRibbonStore, rankIds, reorderBase, unionOrder, moveTo, slotIndexAt, ribbonActions, isRibbonAutoHome, type RibbonZone, type RibbonFolder } from './ribbonRegistry'
 import { RIBBON_ICON_NAMES, iconByName } from './ribbonIcons'
 import { useCommandStore, openCommandPicker, addCommand, removeCommand } from './commandRegistry'
 import { setActiveSpace } from './spaceRegistry'
@@ -34,6 +34,8 @@ const GAP = 4
 /** 常驻上限:上区(Spaces)与命令区各露几项,超出的进「…」(见下面 capT / capB)。 */
 const TOP_VISIBLE = 5
 const BOTTOM_VISIBLE = 4
+// 滚轮翻看后,点了别处 / 点开一个条目,隔这么久再滑回原位。ponytail: 凭手感估的,嫌快嫌慢调这个数。
+const HOME_DELAY = 600
 /** 收起态浮签时序 = desktop hoverTip 已拍板的那套(引擎不能 import 宿主,只能同值抄一份):
  *  悬停 1s 弹;刚收起 0.1s 内移到下一枚 → 立刻弹(连续扫图标时不必每枚重等 1s)。 */
 const TIP_SHOW_DELAY = 1000
@@ -127,7 +129,8 @@ export function Ribbon() {
   // 手势进行中的连续位置(px,窗口起点 × 槽高)直写 .rb-strip-in 的 transform,不走 setState(每秒几十发,整条重渲太重)。
   const glide = useRef<Partial<Record<RibbonZone, { px: number; from: number; timer: number }>>>({})
   const stripRefs = useRef<Partial<Record<RibbonZone, HTMLDivElement | null>>>({})
-  useEffect(() => () => { for (const g of Object.values(glide.current)) window.clearTimeout(g?.timer) }, [])
+  const homeTimer = useRef<number | undefined>(undefined)
+  useEffect(() => () => { for (const g of Object.values(glide.current)) window.clearTimeout(g?.timer); window.clearTimeout(homeTimer.current) }, [])
 
   // ---- 收起态浮签(取代原生 title):根上事件委托,认 [data-rb-tip]。时序同 hoverTip(1s / 0.1s skip)。
   //      拖动、菜单、图标选择器、收纳夹浮层任一打开时不弹且立刻收;按下鼠标即收(点完别挂着)。 ----
@@ -263,6 +266,7 @@ export function Ribbon() {
   const onZoneWheel = (zone: RibbonZone, part: Part) => (e: React.WheelEvent): void => {
     const el = stripRefs.current[zone]
     if (!part.max || drag || !e.deltaY || !el) return
+    window.clearTimeout(homeTimer.current) // 又滚了 = 还在翻,待归位的那一下作废
     let g = glide.current[zone]
     if (!g) {
       g = glide.current[zone] = { px: part.start * slotH, from: part.start, timer: 0 }
@@ -281,17 +285,63 @@ export function Ribbon() {
     const moved = g.px - g.from * slotH
     let to = Math.round(g.px / slotH)
     if (to === g.from && moved) to += Math.sign(moved)
-    to = Math.max(0, Math.min(part.max, to))
+    glideTo(zone, part, Math.max(0, Math.min(part.max, to)))
+  }
+  /** 把某区的窗口滑到第 to 格(吸附与自动归位共用):没在手势里就先起一段(窗外格子临时画出图标)。 */
+  const glideTo = (zone: RibbonZone, part: Part, to: number): void => {
+    const el = stripRefs.current[zone]
+    if (!el) return
+    let g = glide.current[zone]
+    if (!g) {
+      g = glide.current[zone] = { px: part.start * slotH, from: part.start, timer: 0 }
+      setLive((s) => ({ ...s, [zone]: true }))
+    }
+    window.clearTimeout(g.timer)
     g.px = to * slotH
     // 必须与渲染期 style 逐字相同(start=0 时 React 不写 transform):提交时 React 只比 props,不看 DOM,
     // 写成别的形状(如 translateY(0px))会留着这一笔、跟后续渲染对不上。
     el.style.transform = to ? `translateY(${-to * slotH}px)` : ''
-    g.timer = window.setTimeout(() => { // 等吸附的 0.2s 过渡走完再换窗口,换窗口那一帧画面不动
+    g.timer = window.setTimeout(() => { // 等 0.2s 过渡走完再换窗口,换窗口那一帧画面不动
       delete glide.current[zone]
       setLive((s) => ({ ...s, [zone]: false }))
       setScrollOff((s) => ({ ...s, [zone]: zone === 'top' ? to : part.max - to }))
     }, 240)
   }
+  // 自动归位(10-04 用户要求,设置里可关):翻过以后,点了 Ribbon 以外的地方 / 点开条上的一个条目(跳转已发生),
+  // 隔 HOME_DELAY 滑回原位;窗口失焦同理(点进 iframe / webview 时事件到不了本窗口)。「…」、＋、标签钮、
+  // 右键菜单与图标选择器里的操作不算;用 click 而不是 pointerdown —— 拖动改序不产生 click。再滚一下就作废。
+  const goHome = useRef<() => void>(() => {})
+  goHome.current = () => { // 每次渲染刷新闭包,拿到最新的 top / bot
+    if (drag) return
+    for (const [zone, part] of [['top', top], ['bottom', bot]] as const) {
+      if (!scrollOff[zone]) continue
+      if (part.max) glideTo(zone, part, zone === 'top' ? 0 : part.max)
+      else setScrollOff((s) => ({ ...s, [zone]: 0 })) // 条目少到不用翻了:没有画面可滑,直接清
+    }
+  }
+  const scrolled = !!(scrollOff.top || scrollOff.bottom)
+  useEffect(() => {
+    if (!scrolled) return
+    const arm = (): void => {
+      if (!isRibbonAutoHome()) return
+      window.clearTimeout(homeTimer.current)
+      homeTimer.current = window.setTimeout(() => goHome.current(), HOME_DELAY)
+    }
+    const onClick = (e: MouseEvent): void => {
+      const t = e.target as Element | null
+      if (e.button !== 0 || t?.closest?.('.rb-menu, .rb-iconpick, [data-rb-overlay]')) return
+      const own = !!t && (!!rootRef.current?.contains(t) || !!t.closest('.rb-fly'))
+      // 条内只认「点了就走」的普通按钮;自带浮层的组件条目(设备互联胶囊)不是 .rb-btn,点它不归位。
+      if (own && !t.closest('.rb-btn:not(.rb-more, .rb-plus, .rb-toggle, .rb-folder)')) return
+      arm()
+    }
+    window.addEventListener('click', onClick, true)
+    window.addEventListener('blur', arm)
+    return () => {
+      window.removeEventListener('click', onClick, true)
+      window.removeEventListener('blur', arm)
+    }
+  }, [scrolled])
   // 浮层内容一律从 live store 派生(FlyState 只存 id)——拖出/重排后自动跟随,不诈尸。
   const flyFolder = fly?.folderId ? folders.find((f) => f.id === fly.folderId) : undefined
 
