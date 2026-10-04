@@ -10,7 +10,7 @@ import { BrowserExtensionPanel } from './BrowserExtensionPanel'
  * 在 Desktop 主界面内替换 Chat/Inspector 区域，而不是覆盖式弹窗。
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react'
-import { X, ArrowLeft, ChevronRight, Loader2, RefreshCw, Sun, Moon, MonitorCog, RotateCcw, LogIn, LogOut, KeyRound, Plus, Trash2, Plug, Search, Download, Sparkles, Wrench, Check, Copy, Globe2, FolderOpen, Play, Trophy, FileDown, Settings2, NotebookPen, Puzzle, LayoutGrid, Palette, Keyboard, Bug, Info, Brain, Bot, Webhook, MessageCircle, Blocks, Bell, PanelBottom, Image as ImageIcon, Server, Type, Layers3, MousePointer2, CircleUserRound, Scaling, Coffee, MonitorCheck, History, MonitorSmartphone, Cloud } from 'lucide-react'
+import { X, ArrowLeft, Undo2, ChevronRight, Loader2, RefreshCw, Sun, Moon, MonitorCog, RotateCcw, LogIn, LogOut, KeyRound, Plus, Trash2, Plug, Search, Download, Sparkles, Wrench, Check, Copy, Globe2, FolderOpen, Play, Trophy, FileDown, Settings2, NotebookPen, Puzzle, LayoutGrid, Palette, Keyboard, Bug, Info, Brain, Bot, Webhook, MessageCircle, Blocks, Bell, PanelBottom, Image as ImageIcon, Server, Type, Layers3, MousePointer2, CircleUserRound, Scaling, Coffee, MonitorCheck, History, MonitorSmartphone, Cloud } from 'lucide-react'
 import { ThemeCard } from './ThemeCard'
 import { ThemeSettingsPanel } from './ThemeSettingsPanel'
 import { StartupAppearanceSettings } from './StartupAppearanceSettings'
@@ -35,6 +35,7 @@ import type {
 import { SHOW_SYSTEM_PROMPT_KEY } from '../types'
 // 本组件已有同名的 useState setter,故取个别名。persist* = 写盘 + 应用 + 跨窗广播。
 import { isSmoothCaretOn, setSmoothCaret as persistSmoothCaret } from '../smoothCaret'
+import { isRibbonAutoHome, setRibbonAutoHome } from '@lcl/engine/ribbonRegistry'
 import { applyUiFonts, readFont, writeFont, type FontSlot } from '../uiFont'
 import { getUiZoom, setUiZoom } from '../uiZoom'
 import { listFonts, getFont } from '../fontPresets'
@@ -380,6 +381,7 @@ export const SettingsModal: React.FC<{
   // 丝滑光标(默认关;localStorage,smoothCaret.ts 全局模块即时生效)。
   const [smoothCaret, setSmoothCaret] = useState<boolean>(isSmoothCaretOn)
   const [chatAvatars, setChatAvatars] = useState<boolean>(isChatAvatarsOn)
+  const [ribbonAutoHome, setRibbonAutoHomeOn] = useState<boolean>(isRibbonAutoHome)
   // 画布双击聚焦(默认开;纯本机视口偏好，不进笔记/桌面后端配置)。
   const [canvasDoubleClickFocus, setCanvasDoubleClickFocus] = useState<boolean>(canvasDoubleClickFocusEnabled)
   const [aiSpaceTrigger, setAiSpaceTrigger] = useState<boolean>(aiSpaceTriggerEnabled) // 正文 AI 空行空格唤起(G3-07,缺省关,本机)
@@ -3167,6 +3169,23 @@ export const SettingsModal: React.FC<{
                             }}
                           />
                         </div>
+                        {!mobileSettings && (
+                          <div className="settings-control-row" data-setting-anchor="ribbon-auto-home">
+                            <div className="settings-control-copy"><Undo2 size={14} /><span><strong>{t('settings.theme.ribbonAutoHome')}</strong><small>{t('settings.theme.ribbonAutoHomeHint')}</small></span></div>
+                            <button
+                              type="button"
+                              role="switch"
+                              aria-checked={ribbonAutoHome}
+                              aria-label={t('settings.theme.ribbonAutoHome')}
+                              className={`switch${ribbonAutoHome ? ' on' : ''}`}
+                              onClick={() => {
+                                const on = !ribbonAutoHome
+                                setRibbonAutoHomeOn(on)
+                                setRibbonAutoHome(on)
+                              }}
+                            />
+                          </div>
+                        )}
                       </div>
                     </section>
                     <section className="settings-panel settings-theme-fonts" data-setting-anchor="fonts">
