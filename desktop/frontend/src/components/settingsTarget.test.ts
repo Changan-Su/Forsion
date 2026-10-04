@@ -42,11 +42,12 @@ describe('resolveAgentSettingsTarget', () => {
     ['voice', { tab: 'model', sub: 'm-voice' }], // 具体设置项 id → 它所在的子页
     ['fonts', { tab: 'theme' }],
     ['connection', { tab: 'general', sub: 'g-conn' }], // 旧别名照认
+    ['forsion/f-sync', { tab: 'forsion', sub: 'f-sync' }], // 索引 / 别名表里出现过的子页
     ['plugin:a/b', { tab: 'plugin:a/b' }],
     ['computer-history', { tab: 'computer-history' }], // 页 id 与设置项 id 同名:按页
   ])('%s → %j', (input, expected) => expect(resolveAgentSettingsTarget(input)).toEqual(expected))
 
-  it.each(['speech', 'voice-settings', 'model/', 'plugin:', 'nope/m-voice'])('认不出的 %s → null(调用方报错,不落到第一页装作成功)', (input) => {
+  it.each(['speech', 'voice-settings', 'model/', 'plugin:', 'nope/m-voice', 'model/no-such-page', 'theme/m-voice'])('认不出的 %s → null(调用方报错,不落到第一页装作成功)', (input) => {
     expect(resolveAgentSettingsTarget(input)).toBeNull()
   })
 
@@ -61,7 +62,7 @@ it('落点清单:列出的每个名字都解析得出来;真页不漏、旧别�
     expect(settings).toEqual(SETTINGS_SEARCH_INDEX.map((entry) => entry.id))
     for (const id of settings) expect(resolveAgentSettingsTarget(id)!.tab, id).toBe(SETTINGS_SEARCH_INDEX.find((entry) => entry.id === id)!.tab)
     // 引擎对命令 params 的 JSON 设 2000 字符上限,超了整个丢弃(模型连 tab 参数都看不到)。留 300 的余量给日后新增设置项。
-    const params = { type: 'object', properties: { tab: { type: 'string', description: `A page id, \`page/subpage\`, or a setting id. Omit for the default page. ${text}` } } }
+    const params = { type: 'object', properties: { tab: { type: 'string', description: `A page id or a setting id. Omit for the default page. ${text}` } } }
     expect(JSON.stringify(params).length).toBeLessThan(1700)
   })
 

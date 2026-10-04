@@ -1,9 +1,15 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { fetchProviderModels, loadOAuthDirectProviders, freshOAuthToken, OAUTH_PROVIDERS, CODEX_MODELS_CLIENT_VERSION } from './providerOAuth.js';
+import { fetchProviderModels, loadOAuthDirectProviders, freshOAuthCred, OAUTH_PROVIDERS, CODEX_MODELS_CLIENT_VERSION } from './providerOAuth.js';
 import { GROK_BUILD_CLIENT_IDENTIFIER, GROK_BUILD_CLIENT_MODE, GROK_BUILD_CLIENT_VERSION } from './grokBuildCompat.js';
 import { loadProviderCreds, saveProviderCred, type OAuthTokens } from '../standalone/providerCreds.js';
 
-vi.mock('../standalone/providerCreds.js', () => ({ loadProviderCreds: vi.fn(), saveProviderCred: vi.fn() }));
+vi.mock('../standalone/providerCreds.js', () => {
+  const loadProviderCreds = vi.fn();
+  const saveProviderCred = vi.fn();
+  // 与真实现同语义的替身:fn 拿盘上此刻那条,返回新记录才写(锁与原子落位另由 providerCreds.test.ts 测)。
+  const updateProviderCred = vi.fn((id: string, fn: (cur: unknown) => unknown) => { const next = fn(loadProviderCreds()?.[id]); if (next) saveProviderCred(id, next); });
+  return { loadProviderCreds, saveProviderCred, updateProviderCred };
+});
 
 describe('fetchProviderModels', () => {
   afterEach(() => vi.unstubAllGlobals());
@@ -145,7 +151,7 @@ describe('Codex 模型目录缓存升级', () => {
   });
 });
 
-describe('freshOAuthToken(调用前续期;反馈 6a239e58:token 只在启动时续一次,后端跑过 6h 后 grok 全 502)', () => {
+describe('freshOAuthCred(取用前续期;反馈 6a239e58:token 只在启动时续一次,后端跑过 6h 后 grok 全 502)', () => {
   afterEach(() => { vi.unstubAllGlobals(); vi.clearAllMocks(); });
 
   const xai = (extra: Partial<OAuthTokens> = {}): OAuthTokens => ({
@@ -154,24 +160,26 @@ describe('freshOAuthToken(调用前续期;反馈 6a239e58:token 只在启动时�
     modelIds: ['grok-build'], modelIdsAt: Date.now(), ...extra,
   });
   const tokenEndpoint = (body: any) => vi.fn().mockResolvedValue({ json: async () => body });
+  const token = async (force = false) => (await freshOAuthCred('xai', force))?.access_token;
 
   it('没到期 → 原样返回,不打网络不写盘', async () => {
     vi.mocked(loadProviderCreds).mockReturnValue({ xai: xai() });
     const fetchMock = vi.fn();
     vi.stubGlobal('fetch', fetchMock);
-    expect(await freshOAuthToken('xai')).toBe('old');
+    expect(await token()).toBe('old');
     expect(fetchMock).not.toHaveBeenCalled();
     expect(saveProviderCred).not.toHaveBeenCalled();
   });
 
-  it('快到期 → 续期,只换 token 三件套(模型目录等以盘上最新为准)', async () => {
+  it('快到期 → 续期,只换 token 三件套(模型目录等以盘上最新为准);令牌端点带超时', async () => {
     const stale = xai({ expires_at: Date.now() + 30_000 });
     // 续期期间别处(如模型目录懒刷)改了同一条记录的其它字段
     vi.mocked(loadProviderCreds).mockReturnValueOnce({ xai: stale }).mockReturnValue({ xai: { ...stale, modelIds: ['grok-4.7'] } });
     const fetchMock = tokenEndpoint({ access_token: 'new', refresh_token: 'r2', expires_in: 3600 });
     vi.stubGlobal('fetch', fetchMock);
-    expect(await freshOAuthToken('xai')).toBe('new');
+    expect(await token()).toBe('new');
     expect(String(fetchMock.mock.calls[0][1].body)).toContain('refresh_token=r1');
+    expect(fetchMock.mock.calls[0][1].signal).toBeInstanceOf(AbortSignal); // 挂住的令牌端点不能把所有 run 拖死
     expect(saveProviderCred).toHaveBeenCalledTimes(1);
     expect(saveProviderCred).toHaveBeenCalledWith('xai', expect.objectContaining({ access_token: 'new', refresh_token: 'r2', modelIds: ['grok-4.7'] }));
     expect(vi.mocked(saveProviderCred).mock.calls[0][1].expires_at).toBeGreaterThan(Date.now() + 3000_000);
@@ -180,14 +188,14 @@ describe('freshOAuthToken(调用前续期;反馈 6a239e58:token 只在启动时�
   it('force:没到期也续(上游已明说凭证失效)', async () => {
     vi.mocked(loadProviderCreds).mockReturnValue({ xai: xai() });
     vi.stubGlobal('fetch', tokenEndpoint({ access_token: 'new', expires_in: 3600 }));
-    expect(await freshOAuthToken('xai', true)).toBe('new');
+    expect(await token(true)).toBe('new');
     expect(saveProviderCred).toHaveBeenCalledWith('xai', expect.objectContaining({ access_token: 'new', refresh_token: 'r1' }));
   });
 
   it('续期失败 → 返回旧 token,不写盘', async () => {
     vi.mocked(loadProviderCreds).mockReturnValue({ xai: xai({ expires_at: Date.now() - 1 }) });
     vi.stubGlobal('fetch', tokenEndpoint({ error: 'invalid_grant' }));
-    expect(await freshOAuthToken('xai')).toBe('old');
+    expect(await token()).toBe('old');
     expect(saveProviderCred).not.toHaveBeenCalled();
   });
 
@@ -195,14 +203,14 @@ describe('freshOAuthToken(调用前续期;反馈 6a239e58:token 只在启动时�
     const stale = xai({ expires_at: Date.now() - 1 });
     vi.mocked(loadProviderCreds).mockReturnValueOnce({ xai: stale }).mockReturnValue({ xai: xai({ access_token: 'theirs', refresh_token: 'r9' }) });
     vi.stubGlobal('fetch', tokenEndpoint({ access_token: 'mine', refresh_token: 'r2', expires_in: 3600 }));
-    expect(await freshOAuthToken('xai')).toBe('theirs');
+    expect(await token()).toBe('theirs');
     expect(saveProviderCred).not.toHaveBeenCalled();
   });
 
-  it('续期期间用户登出 → 不把记录写回去', async () => {
+  it('续期期间记录从盘上消失(登出)→ 不写回去,也不把刚续出来的 token 交出去', async () => {
     vi.mocked(loadProviderCreds).mockReturnValueOnce({ xai: xai({ expires_at: Date.now() - 1 }) }).mockReturnValue({});
     vi.stubGlobal('fetch', tokenEndpoint({ access_token: 'mine', expires_in: 3600 }));
-    await freshOAuthToken('xai');
+    expect(await freshOAuthCred('xai')).toBeUndefined();
     expect(saveProviderCred).not.toHaveBeenCalled();
   });
 
@@ -210,13 +218,18 @@ describe('freshOAuthToken(调用前续期;反馈 6a239e58:token 只在启动时�
     vi.mocked(loadProviderCreds).mockReturnValue({ xai: xai({ expires_at: Date.now() - 1 }) });
     const fetchMock = tokenEndpoint({ access_token: 'new', refresh_token: 'r2', expires_in: 3600 });
     vi.stubGlobal('fetch', fetchMock);
-    expect(await Promise.all([freshOAuthToken('xai'), freshOAuthToken('xai'), freshOAuthToken('xai', true)])).toEqual(['new', 'new', 'new']);
+    expect(await Promise.all([token(), token(), token(true)])).toEqual(['new', 'new', 'new']);
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('返回整条凭证:Codex 的 account id 与 token 成对(别的进程换号登录后不能新 token 配旧账号)', async () => {
+    vi.mocked(loadProviderCreds).mockReturnValue({ codex: { ...xai({ access_token: 'tok-b' }), account_id: 'acct-b' } });
+    expect(await freshOAuthCred('codex')).toMatchObject({ access_token: 'tok-b', account_id: 'acct-b' });
   });
 
   it('不是订阅登录的 provider / 没登录 → undefined', async () => {
     vi.mocked(loadProviderCreds).mockReturnValue({ xai: xai() });
-    expect(await freshOAuthToken('openai')).toBeUndefined();
-    expect(await freshOAuthToken('codex')).toBeUndefined();
+    expect(await freshOAuthCred('openai')).toBeUndefined();
+    expect(await freshOAuthCred('codex')).toBeUndefined();
   });
 });

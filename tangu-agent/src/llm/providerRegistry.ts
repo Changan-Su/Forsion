@@ -35,8 +35,8 @@ export interface ProviderRegistry {
   resolve(modelId: string): ResolvedModel | null;
   list(): DirectProvider[];
   has(modelId: string): boolean;
-  /** 订阅登录的 access_token 续期后换进来;之后 resolve 与直接读 p.apiKey 的路径(图像 / 语音)都拿到新值。 */
-  setApiKey(providerId: string, apiKey: string): void;
+  /** 订阅登录的凭证续期 / 换号后换进来(token 与 account id 成对);之后 resolve 与直接读 p.apiKey 的路径(图像 / 语音)都拿到新值。 */
+  setCreds(providerId: string, apiKey: string, accountId?: string): void;
 }
 
 export function createProviderRegistry(providers: DirectProvider[]): ProviderRegistry {
@@ -71,6 +71,6 @@ export function createProviderRegistry(providers: DirectProvider[]): ProviderReg
     resolve,
     list: () => Array.from(byId.values()),
     has: (modelId: string) => resolve(modelId) !== null,
-    setApiKey: (providerId: string, apiKey: string) => { const p = byId.get(providerId); if (p) p.apiKey = apiKey; },
+    setCreds: (providerId: string, apiKey: string, accountId?: string) => { const p = byId.get(providerId); if (p) { p.apiKey = apiKey; p.accountId = accountId; } },
   };
 }

@@ -259,13 +259,15 @@ export async function runAgentCommand(id: unknown, args?: Record<string, unknown
   if (!cmd.invoke?.description) return { ok: false, error: `command "${cid}" is not exposed to agents` }
   const bad = checkArgs(cmd.invoke.params, args || {})
   if (bad) return { ok: false, error: bad }
+  let receipt: unknown
   try {
-    if (cmd.invoke.run) await cmd.invoke.run(args || {})
+    if (cmd.invoke.run) receipt = await cmd.invoke.run(args || {})
     else await cmd.run(args)
   } catch (e) {
     return { ok: false, error: `command failed: ${String((e as Error)?.message || e)}` }
   }
-  let state: string | undefined
-  try { state = cmd.invoke.state?.() } catch { /* ignore */ }
+  // 命令自己返回的回执优先(按调用给,并发不串);没有才读 state() 探针。
+  let state: string | undefined = typeof receipt === 'string' && receipt ? receipt : undefined
+  if (!state) try { state = cmd.invoke.state?.() } catch { /* ignore */ }
   return { ok: true, ...(state ? { state } : {}) }
 }

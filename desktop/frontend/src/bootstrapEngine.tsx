@@ -511,15 +511,13 @@ export function installEngine(): void {
   if (window.tangu?.marketList) addCommand({ id: 'open-market', icon: Store, title: () => app().tr('market.title'), keywords: 'market store plugin theme skill agent 市场 商店 插件 主题 技能 扩展', run: () => app().openMarket() })
   addCommand({ id: 'open-achievements', icon: Trophy, title: () => app().tr('achievements.title'), keywords: 'achievement trophy badge medal 成就 勋章 徽章', run: () => app().openAchievements() })
   if (window.tangu?.submitFeedback) addCommand({ id: 'open-feedback', icon: MessageSquare, title: () => app().tr('feedback.title'), keywords: 'feedback bug report 反馈 问题 建议 报错', run: () => { app().openFeedback() } })
-  // 刚替 agent 打开到哪一页:只回给紧接着的那次命令回执(读一次即清),不进目录 —— 窗口随时会被用户关掉。
-  let openedSettings = ''
   addCommand({ id: 'open-settings', icon: Settings, title: () => app().tr('settings.title'), keywords: 'settings 设置 preferences', hotkey: 'mod+,', run: () => app().openSettings() , invoke: {
     // ⚠️ ≤300 字符(引擎 normalizeUiCommands 的截断上限)。「not documented on the web」那半句是真模型台架量出来的:
     //    没有它,grok 打开对的页之后还会连搜五六次网页去找「这页有什么」(live:harness --only settingsnav)。
     description: "Open Forsion's settings window, optionally at one page or at the page holding one specific setting. To answer 'where/how do I set X', open that page and say which page you opened; these settings are not documented on the web, so do not search for them. Unknown targets are rejected.",
     params: {
       type: 'object',
-      properties: { tab: { type: 'string', description: `A page id, \`page/subpage\`, or a setting id. Omit for the default page. ${agentSettingsTargets()}` } },
+      properties: { tab: { type: 'string', description: `A page id or a setting id. Omit for the default page. ${agentSettingsTargets()}` } },
     },
     // ⚠️ 必须自校验:SettingsModal 对未知页静默落到第一页,不验就是「打开了常规页,回报已打开语音设置」(反馈 6a239e58)。
     run: (a) => {
@@ -531,11 +529,11 @@ export function installEngine(): void {
       }
       const path = target ? (target.sub ? `${target.tab}/${target.sub}` : target.tab) : undefined
       app().openSettings(path as never)
-      // 设置项的搜索别名顺带回给模型:它不知道这页有什么,别名(朗读 / 音色 / 通话…)是现成的一句话提示。
+      // 回执 = 实际打开的页(不进目录的 state:窗口随时会被用户关掉)。设置项的搜索别名顺带回给模型:
+      // 它不知道这页有什么,别名(朗读 / 音色 / 通话…)是现成的一句话提示。
       const hint = SETTINGS_SEARCH_INDEX.find((entry) => entry.id === want)?.keywords
-      openedSettings = `${path || 'the default page'}${hint ? ` (covers: ${hint})` : ''}`
+      return `opened ${path || 'the default page'}${hint ? ` (covers: ${hint})` : ''}`
     },
-    state: () => { const opened = openedSettings; openedSettings = ''; return opened && `opened ${opened}` },
   } })
   // ── agent 面专属命令(不进命令面板的人类语汇,而是补上模型独缺的两个原语)──────────────
   // 为什么这两条是新增而不是给现有命令加 invoke:命令表里 22 条「开面板」对模型价值极低,

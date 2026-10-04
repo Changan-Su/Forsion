@@ -38,3 +38,22 @@ describe('set_ui_setting(color_mode) 的回执报应用之后的明暗', () => {
     expect(r).toEqual({ ok: true, state: 'dark' })
   })
 })
+
+// Codex 评审(10-04):open-settings 的回执原先放在「读一次即清」的 state() 里 —— 目录每次起 run 都会读 state,
+// 并发的两次命令也会互相盖掉(给 theme 的回执是 model 的,model 的那次空着)。回执改由 run 的返回值按次给。
+describe('run_ui_command 的回执按调用返回', () => {
+  it('并发的两次调用各拿各的回执;没有返回值的命令照旧读 state()', async () => {
+    const { runAgentCommand, buildCommandCatalog } = await import('@/agentCommands')
+    const { addCommand } = await import('@lcl/engine')
+    addCommand({ id: 't-open', title: 'open', run: () => {}, invoke: {
+      description: 'test', params: { type: 'object', properties: { tab: { type: 'string' } } },
+      run: (a) => `opened ${String(a.tab)}`,
+    } })
+    addCommand({ id: 't-probe', title: 'probe', run: () => {}, invoke: { description: 'test', run: () => {}, state: () => 'on' } })
+    const [a, b] = await Promise.all([runAgentCommand('t-open', { tab: 'theme' }), runAgentCommand('t-open', { tab: 'model' })])
+    expect([a, b]).toEqual([{ ok: true, state: 'opened theme' }, { ok: true, state: 'opened model' }])
+    expect(await runAgentCommand('t-probe')).toEqual({ ok: true, state: 'on' })
+    // 目录里的 state 是探针,不带上一次调用的回执
+    expect(buildCommandCatalog().find((c) => c.id === 't-open')?.state).toBeUndefined()
+  })
+})

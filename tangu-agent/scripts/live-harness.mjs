@@ -2278,7 +2278,7 @@ Then reply with only the command output.`,
     const TARGETS = 'Pages: general, forsion, model, mcp, hooks, skills, agents, amadeus-plugins, browser, channels, notes, sync, spaces, theme, shortcuts, notifications, statusbar, permissions, remote-sessions, computer-history, advanced, developer, about. Settings: workspace-dir, keep-awake, backend-mode, sandbox, python, mirror, external-backend, forsion-account, forsion-submissions, cloud-url, memory-sync, inbox-notify, default-models, model-providers, web-search, voice, theme-language, startup-appearance, palette, color-mode, ui-zoom, glass, smooth-caret, chat-avatars, fonts, notes-attachments, daily-notes, agent-browser, remote-sessions-switch, remote-approval-cap, remote-trusted-devices, remote-safety, computer-history, mcp-server, reset-layout, clear-data, language.';
     const ENTRY = { id: 'open-settings',
       description: "Open Forsion's settings window, optionally at one page or at the page holding one specific setting. To answer 'where/how do I set X', open that page and say which page you opened; these settings are not documented on the web, so do not search for them. Unknown targets are rejected.",
-      params: { type: 'object', properties: { tab: { type: 'string', description: `A page id, \`page/subpage\`, or a setting id. Omit for the default page. ${TARGETS}` } } } };
+      params: { type: 'object', properties: { tab: { type: 'string', description: `A page id or a setting id. Omit for the default page. ${TARGETS}` } } } };
     const VOICE = new Set(['voice', 'model/m-voice']);
     const known = new Set(TARGETS.replace(/Pages: |Settings: /g, '').split(/[,.]\s*/).filter(Boolean));
     const asked = [];
@@ -2290,7 +2290,7 @@ Then reply with only the command output.`,
         asked.push(tab || '(default)');
         if (!tab) return { ok: true, state: 'opened the default page' };
         if (VOICE.has(tab)) return { ok: true, state: `opened model/m-voice${tab === 'voice' ? ' (covers: 语音 朗读 音色 通话 打电话 听写 voice tts speech call realtime dictation)' : ''}` };
-        if (known.has(tab) || known.has(tab.split('/')[0])) return { ok: true, state: `opened ${tab}` };
+        if (known.has(tab)) return { ok: true, state: `opened ${tab}` };
         return { ok: false, error: `command failed: no settings page or setting "${tab}". Valid targets are listed in this command's \`tab\` parameter.` };
       },
     });

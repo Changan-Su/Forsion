@@ -1221,7 +1221,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     );
     const { model, baseUrl, apiModelId } = resolvedModel;
     let apiKey = resolvedModel.apiKey; // 订阅登录的 token 可能在 run 中途过期 → 下面的重试圈会续期后换掉它
-    let credsRefreshed = false;
+    let credsRefreshedAt = 0;
     // 分步落库 / 跨 run 回放共用的模型身份键(两侧必须是**同一个表达式**,否则永远对不上)。
     // apiModelId 缺省时退回内部 modelId —— 只要求稳定可比,不要求是上游真名(同 resolveModelCapability 的口径)。
     const replayModelKey = apiModelId || modelId;
@@ -2719,10 +2719,11 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
             break; // 出尝试循环;下方检测到 resumedMidstream 即重进本迭代续写
           }
           // 凭证失效(xAI 用 502 包装,按状态码看像网络抖动):同一个 token 再试必败。订阅登录的 provider 强制续期一次、
-          // 拿到新 token 立刻重试;续不了(API key、托管面、refresh_token 也失效)就直接抛,不白等三轮退避。整 run 只续一次。
+          // 拿到新 token 立刻重试;续不了(API key、托管面、refresh_token 也失效)就直接抛,不白等三轮退避。
+          // 一分钟内只续一次:刚续的 token 仍被拒就别再续;跑过下一个有效期的长 run 到时还能再续。
           if (!emitted && isAuthExpiredLlmError(err)) {
-            const fresh = credsRefreshed ? null : await deps().brain.llm.refreshModelKey?.(modelId).catch(() => null);
-            credsRefreshed = true;
+            const fresh = Date.now() - credsRefreshedAt < 60_000 ? null : await deps().brain.llm.refreshModelKey?.(modelId).catch(() => null);
+            credsRefreshedAt = Date.now();
             if (!fresh || fresh === apiKey) throw err;
             apiKey = fresh;
             console.warn(`[agent-core] run=${runId} 上游报凭证失效,已续期订阅登录的 token 后重试`);

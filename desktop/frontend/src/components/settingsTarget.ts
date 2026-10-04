@@ -59,12 +59,20 @@ export function resolveSettingsTarget(target: string | null | undefined): Resolv
  * agent 的落点解析(run_ui_command `open-settings`)。比深链多认一层:设置搜索索引里的条目 id
  * (`voice`、`fonts`、`mirror`…)直接落到那项设置所在的子页。
  * 认不出的返回 null —— 此前未知名字静默落到第一页还回报成功,agent 以为自己打开了语音设置(反馈 6a239e58)。
- * ponytail: 只验名字,不验本端门控与子页(设置开在独立窗口里,主窗口读不到真实落点):本端没有的页仍会落到第一页。
+ * 子页只认搜索索引与别名表里出现过的(agent 的清单里也只有这些):`model/随便写` 会被弹窗落到该页第一项,不能回报成「已打开」。
+ * ponytail: 不验本端门控(设置开在独立窗口里,主窗口读不到真实落点):本端没有的页(未开开发者模式的 developer 等)仍会落到第一页。
  *           升级路径 = 把 SettingsModal 的 tabItems / subItemsByTab 门控抽成纯函数,这里与弹窗共用。
  */
 export function resolveAgentSettingsTarget(target: string): ResolvedSettingsTarget | null {
   const resolved = resolveSettingsTarget(target)
-  if ((SETTINGS_TABS as readonly string[]).includes(resolved.tab) || /^f?plugin:./.test(resolved.tab)) return resolved
+  if (/^f?plugin:./.test(resolved.tab)) return resolved
+  if ((SETTINGS_TABS as readonly string[]).includes(resolved.tab)) {
+    const { tab, sub } = resolved
+    const known = !sub
+      || SETTINGS_SEARCH_INDEX.some((entry) => entry.tab === tab && entry.sub === sub)
+      || Object.values(LEGACY_TARGETS).some(([t, s]) => t === tab && s === sub)
+    return known ? resolved : null
+  }
   const item = SETTINGS_SEARCH_INDEX.find((entry) => entry.id === target)
   return item ? { tab: item.tab, ...(item.sub ? { sub: item.sub } : {}) } : null
 }
@@ -73,6 +81,7 @@ export function resolveAgentSettingsTarget(target: string): ResolvedSettingsTarg
  * 给 agent 的落点清单,写进 `open-settings` 的参数说明。
  * ⚠️ 引擎把命令的 description / state 各截到 300 字符、params 的 JSON 超过 2000 字符整个丢弃(tangu-agent routes/runs.ts
  *    normalizeUiCommands),所以清单只能住在 params 里,而且只列 id(不带所在页);长度由 settingsTarget.test.ts 钉住。
+ *    命令的 state 是「当前值探针」、每次起 run 都会被读进目录,不适合放回执 —— 回执由 run 的返回值按次给。
  */
 export function agentSettingsTargets(): string {
   const pages = SETTINGS_TABS.filter((tab) => !(tab in LEGACY_TARGETS) || LEGACY_TARGETS[tab][0] === tab)
