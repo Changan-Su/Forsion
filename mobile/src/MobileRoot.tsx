@@ -99,7 +99,13 @@ function useAndroidBack(): void {
         // 落地页(`home` 空态占位 / 主页 Space 的 `homepage`)不关 —— 已经在链底,该挂起 app。
         // ⚠️ 漏掉 `homepage` 时:主页上按一下返回 = closeLeaf → 唯一主 leaf 就地变 `home` 空态
         // (只有 logo 的空页)并被存盘,重启也回不来 = 用户实报的「默认 Homepage 空白」。
-        if (active.type !== 'home' && active.type !== 'homepage') { ws.closeLeaf(active.id); return } // 白板/PDF/会话等 → 关回列表/home
+        if (active.type !== 'home' && active.type !== 'homepage') { // 白板/PDF/会话等 → 关回列表/home
+          ws.closeLeaf(active.id)
+          // 固定 View(Space 级 pinned,区内最后一个)关不掉,closeLeaf 是空操作 → 这就是链底,往下走到挂起。
+          // 不这样判,返回键在日历 / 图像工作台 / 浏览器里的 Tangu 会话上按了什么都不发生(2026-10-04 合并 main 后 e2e:homeback 抓到)。
+          const now = useWorkspace.getState().mainTabs.find((t) => t.active)
+          if (now?.id !== active.id || now.type !== active.type) return
+        }
       }
       void CapApp.minimizeApp() // 已在底:挂起(Android 默认原行为)
     })

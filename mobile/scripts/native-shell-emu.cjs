@@ -771,6 +771,14 @@ const tabCountText = (list) => {
       assert.ok(d, 'Calendar\'s left panel is not a drawer')
       await closeDrawer() // system back closes a drawer and stays in the app
       assert.ok(resumed(), 'closing the drawer left the app')
+      // … and once more on the main view: Calendar is a pinned view (cannot be closed) = the bottom of the chain, the app
+      // goes to the background. It used to do nothing at all (the handler stopped at the no-op close).
+      h.key(4)
+      await h.pause(1200)
+      assert.ok(!resumed(), 'system back on a pinned main view did nothing (the app should go to the background)')
+      h.adb('shell', 'am', 'start', '-n', ACTIVITY)
+      assert.ok((await h.waitNodes((l) => !!h.byId(l, 'nativeChrome.spaces'), { timeout: 10000 })).hit, 'the app did not come back with its bottom bar')
+      assert.equal(await cdp.eval("document.querySelector('.mb-shell').dataset.space"), 'calendar', 'the app came back on another Space')
     }
     // more Spaces than fit → the bar scrolls. While one of the first five is active nothing scrolls: Home stays in view
     // (the bar used to centre the active Space, which scrolled Home away from the fourth Space on — "the Home page is gone").

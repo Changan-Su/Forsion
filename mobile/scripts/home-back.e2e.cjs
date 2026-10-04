@@ -176,17 +176,20 @@ async function main() {
       await ctx.close()
     }
 
-    // ── 2. 负对照:非落地页的 tab 上按返回,照旧关掉 ──────────────────────────────────
-    // 启动落点改到 Tangu Space(主位槽键),主区是会话不是主页 → 返回应当把它关成空态。
+    // ── 2. 非落地页、但关不掉的页(固定 View)上按返回:不许被静默吃掉 ───────────────────────
+    // 启动落点改到 Tangu Space(主位槽键),主区是会话不是主页。会话是 Tangu 的固定 View(Space 级 pinned,
+    // 区内最后一个关不掉)→ closeLeaf 是空操作,返回必须继续走到链底「挂起 app」。
+    // 固定 View 进来之前这一条判的是「关成空态」;合进来之后处理器停在那个空操作上 = 返回键按了什么都不发生(2026-10-04)。
     {
-      const { ctx, page } = await backSession({ forsion_home_slot_space: 'tangu' })
+      const { ctx, page, seen } = await backSession({ forsion_home_slot_space: 'tangu' })
       const start = await view(page)
-      ok('2a 负对照起点:落在 Tangu Space(主区不是主页)', start.type === 'chat', JSON.stringify(start))
+      ok('2a 起点:落在 Tangu Space(主区不是主页)', start.type === 'chat', JSON.stringify(start))
       if (start.type === 'chat') {
+        const before = seen.length
         ok('2b0 这一下返回真的打进了 MobileRoot', await back(page))
         const after = await view(page)
-        ok('2b ⚠️ 负对照:非落地页上返回照旧关掉它(证明没把返回键整个焊死)',
-          after.type === 'home' && after.empty, JSON.stringify(after))
+        ok('2b ⚠️ 固定 View 上返回:视图留着,并且走到了链底「挂起 app」(没把返回键焊死)',
+          after.type === 'chat' && seen.length > before, JSON.stringify({ ...after, minimize: seen.slice(before) }))
       }
       await ctx.close()
     }
