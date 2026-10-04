@@ -8,7 +8,7 @@
  *   ④ 布局信封:bottom 是可选字段,老布局(无 bottom)照样合法且读成「收起」
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { useWorkspace, captureSideWidths, tryRestoreLayout, bootLayoutFellThrough, namedLayoutRestorable } from './dockviewStore'
+import { useWorkspace, captureSideWidths, tryRestoreLayout, bootLayoutFellThrough, namedLayoutRestorable, liveLayoutOwner } from './dockviewStore'
 import { computeBottomHeight, BOTTOM_MIN_HEIGHT } from './sideWidth'
 import { isLayoutEnvelopeV4, LAYOUT_KEY } from './layoutPersist'
 import { registerView, unregisterView } from './viewRegistry'
@@ -386,6 +386,46 @@ describe('底部面板:布局信封向后兼容', () => {
     localStorage.setItem(LAYOUT_KEY, blob('termv'))
     expect(tryRestoreLayout(api)).toBe(true)
     expect(bootLayoutFellThrough()).toBe(false)
+    vi.runAllTimers()
+  })
+
+  // 布局信封里的归属(space):冷启动归档按它认主(spaceRegistry.adoptSpaceLayoutCold),补定位按它判断屏上是谁的现场。
+  // 平时 = 画像键;例外是 onReady 原样还原出「别的 Space」的现场 —— 异步就位的用户 Space,那一刻画像键还是回落 Space。
+  it('存盘在信封里记归属:平时是画像键;启动还原出来的布局沿用它自带的,画像重设 / 重建默认后回到画像键', () => {
+    const { api } = mkApi(1600, 1000)
+    useWorkspace.getState().setApi(api)
+    const blob = (type: string, space: string): string => JSON.stringify({
+      version: 4, space, dockview: { panels: { p1: { contentComponent: type, params: { __loc: 'main', __type: type } } } },
+      sidebars: { left: { visible: true, stash: [] }, right: { visible: true, stash: [] } },
+    })
+    const onDisk = (): unknown => JSON.parse(localStorage.getItem(LAYOUT_KEY) || '{}').space
+    useWorkspace.getState().setSideProfile('tangu', {}, {})
+    useWorkspace.getState().saveCurrent()
+    expect(onDisk()).toBe('tangu')
+
+    // 还原成了:屏上是 user-space 的现场,存盘继续记在它名下(记成画像键 tangu 的话,下一程会被当成回落 Space 的布局)
+    localStorage.setItem(LAYOUT_KEY, blob('termv', 'user-space'))
+    expect(tryRestoreLayout(api)).toBe(true)
+    expect(liveLayoutOwner()).toBe('user-space')
+    useWorkspace.getState().saveCurrent()
+    expect(onDisk()).toBe('user-space')
+    // 「恢复默认布局」建的是画像那个 Space 的默认
+    useWorkspace.getState().resetLayout()
+    expect(liveLayoutOwner()).toBe('tangu')
+    // 补定位 / 切 Space 重设画像:归属跟着走
+    expect(tryRestoreLayout(api)).toBe(false) // resetLayout 清了布局键
+    localStorage.setItem(LAYOUT_KEY, blob('termv', 'user-space'))
+    expect(tryRestoreLayout(api)).toBe(true)
+    useWorkspace.getState().setSideProfile('amadeus', {}, {})
+    expect(liveLayoutOwner()).toBe('amadeus')
+
+    // 还原落空(引用了没注册的插件视图):屏上是按画像键建的默认布局,不认那份没还原出来的归属
+    localStorage.setItem(LAYOUT_KEY, blob('plugin:late:view', 'probe-space'))
+    expect(tryRestoreLayout(api)).toBe(false)
+    expect(liveLayoutOwner()).toBe('amadeus')
+    useWorkspace.getState().saveCurrent()
+    expect(onDisk()).toBe('amadeus')
+    useWorkspace.setState({ sideProfileKey: null })
     vi.runAllTimers()
   })
 

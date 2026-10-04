@@ -443,9 +443,18 @@ function alignRegions(api: DockviewApi, before?: RegionTree | null): void {
 
 type Stashed = PersistedPanel
 
-function envelope(api: DockviewApi, state: Pick<WorkspaceState, 'leftVisible' | 'rightVisible' | 'stash'>): LayoutEnvelopeV4 {
+/** onReady 还原出来的那份布局自带的归属(信封里的 space)。只在一种情形下与画像键不同:「上次退出」档 × 纯内置视图的
+ *  用户 Space —— 布局还原成了,活动 id 却还是内存里的回落 Space(它的配方异步装载)。此时屏上是**它**的现场,存盘得
+ *  继续记在它名下;画像一重设(补定位 / 切 Space)或布局被重建成默认,就回到「画像键说了算」。 */
+let restoredOwner: string | null = null
+/** 屏上这份布局是给哪个 Space 摆的(= 存盘时写进信封的归属)。没有任何 Space 画像时为 null。 */
+export const liveLayoutOwner = (): string | null => restoredOwner ?? useWorkspace.getState().sideProfileKey
+
+function envelope(api: DockviewApi, state: Pick<WorkspaceState, 'leftVisible' | 'rightVisible' | 'stash' | 'sideProfileKey'>): LayoutEnvelopeV4 {
+  const space = restoredOwner ?? state.sideProfileKey
   return {
     version: 4,
+    ...(space ? { space } : {}),
     dockview: withoutTransientPanels(api.toJSON(), Object.fromEntries(Object.values(extensions).filter((lease) => lease.previousId).map((lease) => [lease.id, lease.previousId!]))),
     sidebars: {
       // 真实 panel 是唯一真源；状态事件可能落后于 Dockview 的异步布局沉降。
@@ -692,6 +701,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     // ⚠️ 一并清 stashActive:它是全局单份、只在「折叠某侧」时写。不清的话,在 A 空间折叠右栏(记下
     // outline)→ 切到 B 空间首次展开右栏,会拿 A 的 outline 顶掉 B 配方的默认首项(B 里也有 outline
     // 就更隐蔽)。stash 本身在 applyNamed/resetLayout 已重置,这条是它漏下的那半。
+    restoredOwner = null // 画像重设 = 屏上的布局从此归这个 Space(调用方紧接着还原 / 重建 / 认领它)
     set({
       sideProfileKey: key,
       sideFree: { left: free.left !== false, right: free.right !== false },
@@ -1066,6 +1076,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     dismissExtensions()
     try { api.clear() } catch { /* ignore */ }
     clearLayout()
+    restoredOwner = null // 默认布局是按当前画像的 Space 建的,不再是启动时还原出来的那份
     useNav.getState().reset() // 布局重建,旧 leaf id 全失效
     lastMainGroupId = null // 组 id 同样会被新布局复用
     set({ stash: { left: [], right: [], bottom: [] }, stashActive: { left: null, right: null, bottom: null }, leftVisible: true, rightVisible: true, bottomVisible: false, focusedChatLeafId: null })
@@ -1481,6 +1492,7 @@ export function namedLayoutRestorable(name: string): boolean {
 }
 
 function restoreLayout(api: DockviewApi): boolean {
+  restoredOwner = null
   const layout = loadLayout()
   if (!layout) return false
   migrateLayoutBlob(layout) // 必须先迁移再校验:退役视图(sessions 等)已无注册,迁移前校验会误丢整份布局
@@ -1506,7 +1518,9 @@ function restoreLayout(api: DockviewApi): boolean {
       : api.panels.find((p) => panelType(p) === 'chat')
     useWorkspace.getState().setFocusedLeaf(focused)
     pinSides(api)
-    return api.panels.length > 0
+    if (!api.panels.length) return false
+    restoredOwner = layout.space || null
+    return true
   } catch {
     return false
   }

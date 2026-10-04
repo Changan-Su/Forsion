@@ -190,10 +190,11 @@ if (typeof window !== 'undefined') {
  *  `api ?` 守卫故从不真正调用。保留导出以满足 barrel / bootstrapEngine 的 import。 */
 export function activeMainPanel(): null { return null }
 
-/** bootLayoutFellThrough / namedLayoutRestorable:桌面冷启动补定位(settleAsyncStartupSpace)用,移动端不走那条路。
- *  保留导出以满足 barrel。 */
+/** bootLayoutFellThrough / namedLayoutRestorable / liveLayoutOwner:桌面冷启动补定位(settleAsyncStartupSpace)用,
+ *  移动端不走那条路。保留导出以满足 barrel。 */
 export function bootLayoutFellThrough(): boolean { return false }
 export function namedLayoutRestorable(_name: string): boolean { return false }
+export function liveLayoutOwner(): string | null { return null }
 
 interface WS {
   api: null

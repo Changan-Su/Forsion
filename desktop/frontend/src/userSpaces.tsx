@@ -14,7 +14,7 @@ import {
   registerSpace, unregisterSpace, addRibbonIcon, removeRibbonIcon, setActiveSpace, useSpaceStore,
   useWorkspace, deleteNamedLayout, clearLayout, getActiveSpace, getView, label, spaceLayoutName,
   setActiveSpaceCold, BOOT_ACTIVE_SPACE_ID, UI_MODE,
-  spaceLayoutsWereReset, bootLayoutFellThrough, namedLayoutRestorable,
+  spaceLayoutsWereReset, bootLayoutFellThrough, namedLayoutRestorable, liveLayoutOwner,
 } from '@lcl/engine'
 import type { Leaf, SpaceDefinition, SpaceIcon, PersistedPanel } from '@lcl/engine'
 import { SpaceButton } from './components/SpaceButton'
@@ -258,13 +258,17 @@ export function settleAsyncStartupSpace(): void {
 
   if (state.activeSpaceId !== want) {
     if (startupSpacePref() === LAST_EXIT_SPACE) {
+      const liveOwner = liveLayoutOwner() // 屏上这份布局是给谁摆的。取在 configure() 之前:它一重设画像,归属就成了 want
       setActiveSpaceCold(want)
       configure()
-      // 「布局键里本来就是它的现场」只在 onReady 那次还原成了的时候才成立。现场里有插件视图、而插件比 Dockview 就绪得晚
-      // (实测就是这个顺序)→ 那次还原落空,屏上摆的是回落 Space 的默认布局:只换 id 的话界面标着本 Space、内容是回落
-      // Space 的,下次启动还会把它归档进 space:<本 Space>。把启动时归档的那份现场(adoptSpaceLayoutCold 写的)补还原回来;
-      // 归档里还有别的没注册上的视图(另一个插件这次没装上)就不硬套,按本 Space 的默认重建 —— 口径同启动还原。
-      if (bootLayoutFellThrough()) {
+      // 「布局键里本来就是它的现场」只在屏上那份布局确实归它时才成立(纯内置视图的用户 Space:onReady 原样还原出来)。另两种不是:
+      //  · 现场里有插件视图、而插件比 Dockview 就绪得晚(实测就是这个顺序)→ 那次还原落空,屏上是回落 Space 的默认布局;
+      //  · 上一程本 Space 始终没就位(插件没装上 / 没等到它就退出了)→ 布局键里是回落 Space 的,onReady 原样还原了**它**。
+      // 只换 id 的话界面标着本 Space、内容是回落 Space 的,下次启动还会把它归档进 space:<本 Space>。把归档的那份现场
+      // (adoptSpaceLayoutCold 在本 Space 最后一次是主人的那一程写的)补还原回来;归档里还有别的没注册上的视图(另一个
+      // 插件这次没装上)就不硬套,按本 Space 的默认重建 —— 口径同启动还原。
+      // ponytail: 屏上那份回落 Space 的布局不存进它的槽(分不清是原样的默认还是用户动过的,见 adoptSpaceLayoutCold)。
+      if (bootLayoutFellThrough() || liveOwner !== want) {
         const archived = spaceLayoutName(want)
         if (namedLayoutRestorable(archived) && ws().applyNamed(archived)) { ws().ensurePinned(); ws().saveCurrent() }
         else ws().resetLayout()

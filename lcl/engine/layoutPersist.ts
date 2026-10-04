@@ -19,9 +19,12 @@ export interface PersistedSidebar {
 
 /** v4 布局信封：Dockview 图 + 引擎自己的侧栏状态。
  *  bottom(底部面板)**刻意做成可选、不升版本号**:老 blob 没有它 = 底部收起,新 blob 被老代码读到也只是
- *  多一个被忽略的键 —— 升 v5 会让所有人的布局重建一次,为一个新增区付这个代价不值。 */
+ *  多一个被忽略的键 —— 升 v5 会让所有人的布局重建一次,为一个新增区付这个代价不值。
+ *  space(这份布局是给哪个 Space 摆的)同理可选:它和布局**同一次写盘**,冷启动归档按它认主,不再只信
+ *  「上次退出在哪」那个单独的键(两把键不同步时,回落 Space 的布局会被归档到别人名下)。老 blob 没有它 = 照旧信那个键。 */
 export interface LayoutEnvelopeV4 {
   version: 4
+  space?: string
   dockview: unknown
   sidebars: {
     left: PersistedSidebar

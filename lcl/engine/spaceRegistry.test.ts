@@ -21,6 +21,7 @@ beforeEach(() => {
     clear: () => store.clear(),
   })
   useSpaceStore.setState({ spaces: [], activeSpaceId: 'tangu' })
+  useWorkspace.setState({ sideProfileKey: null }) // 真 setSideProfile 会留下上一条用例切到的 Space
 })
 
 describe('spaceRegistry', () => {
@@ -95,6 +96,20 @@ describe('spaceRegistry', () => {
     expect(calls).toEqual(['applyNamed', 'resetLayout'])
   })
 
+  // 屏上的布局不一定是内存里活动 Space 的:「上次退出」档下,异步就位的用户 Space 的现场在启动时就还原出来了,
+  // 那一两秒里活动 id 还是回落 Space。此时切走,存的是那个 Space 的现场 —— 按活动 id 存就写进了回落 Space 的槽。
+  it('switch saves the outgoing layout into the slot of the Space that owns it, not the in-memory active id', () => {
+    const calls: string[] = []
+    useWorkspace.setState({
+      sideProfileKey: 'user-space', // liveLayoutOwner() 的来源(启动还原出来的归属同样经它返回,见 bottomPanel.test)
+      saveNamed: (n: string) => { calls.push(n) }, setSidebarDefaults: () => {},
+      namedLayouts: () => [] as string[], resetLayout: () => {},
+    })
+    useSpaceStore.setState({ spaces: [mkSpace('tangu'), mkSpace('amadeus')], activeSpaceId: 'tangu' })
+    useSpaceStore.getState().setActiveSpace('amadeus')
+    expect(calls).toEqual([spaceLayoutName('user-space')])
+  })
+
   it('switch to same id is a no-op', () => {
     const calls: string[] = []
     useWorkspace.setState({ saveNamed: () => { calls.push('x') } })
@@ -138,6 +153,8 @@ describe('adoptSpaceLayoutCold', () => {
     sidebars: { left: { visible: true, stash: [] }, right: { visible: false, stash: [] } },
   })
   const tagOf = (b: LayoutBlob | null): string | undefined => (b?.dockview as { tag?: string } | undefined)?.tag
+  /** 新格式:信封自己记着是给哪个 Space 摆的。 */
+  const stamped = (tag: string, space: string): LayoutBlob => ({ ...blob(tag), space })
 
   it('同一个 Space:归档进它自己的命名槽,布局键原样留着(重启后照旧还原)', () => {
     saveLayout(blob('now'))
@@ -165,6 +182,59 @@ describe('adoptSpaceLayoutCold', () => {
     adoptSpaceLayoutCold('tangu', 'tangu')
     expect(loadNamedLayout(spaceLayoutName('tangu'))).toBeNull()
     expect(loadLayout()).toBeNull()
+  })
+
+  // ── 信封自带归属(2026-10-04)。布局键与「上次退出在哪」是两把键、两次写盘,对不上时认信封。
+  // 病史:「上次退出」档下某一程插件 Space 始终没注册上,那一程把回落 Space 的默认布局存进了布局键,活动 id 却仍是
+  // 插件 Space → 下一程按活动 id 归档,插件 Space 自己的槽被回落 Space 的布局盖掉,屏上也是它(check:spacefallback A / B)。
+  it('归属 = 上次退出的 Space(平常的一程):照旧归档', () => {
+    saveLayout(stamped('now', 'tangu'))
+    adoptSpaceLayoutCold('tangu', 'tangu')
+    expect(tagOf(loadNamedLayout(spaceLayoutName('tangu')))).toBe('now')
+    expect(tagOf(loadLayout())).toBe('now')
+  })
+
+  it('老存档没记归属:留在布局键里的那份补记成上次退出的 Space', () => {
+    saveLayout(blob('now'))
+    adoptSpaceLayoutCold('probe', 'probe')
+    expect(loadLayout()).toMatchObject({ space: 'probe', dockview: { tag: 'now' } })
+  })
+
+  it('归属 ≠ 上次退出、目标这一程也还没注册:哪个槽都不写,布局键留给回落 Space 原样还原', () => {
+    // 内存里的活动 Space = tangu(回落,见 beforeEach);probe 是异步注册的插件 Space,也可能永远不来
+    saveNamedLayout(spaceLayoutName('probe'), blob('probe-own'))
+    saveNamedLayout(spaceLayoutName('tangu'), blob('tangu-own'))
+    saveLayout(stamped('tangu-fallback', 'tangu'))
+    adoptSpaceLayoutCold('probe', 'probe')
+    expect(tagOf(loadNamedLayout(spaceLayoutName('probe')))).toBe('probe-own') // 修前:被回落 Space 的布局盖掉
+    expect(tagOf(loadNamedLayout(spaceLayoutName('tangu')))).toBe('tangu-own') // 也不拿「默认起步」的那份去盖回落 Space 的存档
+    expect(loadLayout()).toMatchObject({ space: 'tangu', dockview: { tag: 'tangu-fallback' } })
+  })
+
+  it('归属 ≠ 上次退出、目标这一程同步注册上了:布局键换成目标自己的归档(记成目标的),不归档', () => {
+    useSpaceStore.setState({ activeSpaceId: 'probe' }) // setActiveSpaceCold(target) 已先一步定位
+    saveNamedLayout(spaceLayoutName('probe'), blob('probe-own')) // 老归档:没记归属
+    saveLayout(stamped('tangu-fallback', 'tangu'))
+    adoptSpaceLayoutCold('probe', 'probe')
+    expect(loadLayout()).toMatchObject({ space: 'probe', dockview: { tag: 'probe-own' } })
+    expect(tagOf(loadNamedLayout(spaceLayoutName('probe')))).toBe('probe-own')
+    expect(loadNamedLayout(spaceLayoutName('tangu'))).toBeNull()
+  })
+
+  it('归属 ≠ 上次退出 × 固定启动别的 Space:不归档,也不被「归档没落盘」那道闸误拦', () => {
+    useSpaceStore.setState({ activeSpaceId: 'amadeus' })
+    saveNamedLayout(spaceLayoutName('amadeus'), blob('amadeus-old'))
+    saveLayout(stamped('tangu-fallback', 'tangu'))
+    adoptSpaceLayoutCold('probe', 'amadeus')
+    expect(loadNamedLayout(spaceLayoutName('probe'))).toBeNull() // 没归档 ≠ 归档失败:照常往下换
+    expect(tagOf(loadLayout())).toBe('amadeus-old')
+  })
+
+  it('归属 ≠ 上次退出、但就是固定启动的那个 Space:布局键原样留着', () => {
+    saveLayout(stamped('tangu-fallback', 'tangu'))
+    adoptSpaceLayoutCold('probe', 'tangu')
+    expect(tagOf(loadLayout())).toBe('tangu-fallback')
+    expect(loadNamedLayout(spaceLayoutName('probe'))).toBeNull()
   })
 
   // Codex 评审 2026-08-13:saveNamedLayout 吞异常且不返回成败。归档没落盘就往下搬/清,等于把
