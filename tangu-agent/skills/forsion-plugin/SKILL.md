@@ -796,6 +796,8 @@ ctx.openView('chat', { location: 'right' }); chat?.prefill('Write an original sc
   所以 `agent` 不要求是你捆绑的(与 `startChat` 的预填档同一口径)。
 - `ready` → `{ ok:true, sessionId }`;后端没连上 / `unknown agent` / 建会话失败 → `{ ok:false, error }`,不抛,界面上自带「重试」。
   拿到的 `sessionId` 可以喂给 `agentStatus(sessionId)` / `subscribeAgentStatus(cb, sessionId)`,跟着这条对话的状态做反应。
+- **已知限制**:同一个(插件, `folder`)同一时刻只挂一处 —— 挂两处是同一条会话的两个输入框,`prefill` 落到先接走的那个;
+  `quote` 走的是全应用共用的一个引用位,连着引用两次只留后一次。
 - 视图卸载时自己 `dispose()`;插件被禁用 / 重载时宿主统一卸掉,旧句柄的 `quote` / `prefill` 不再生效。
   **只在有对话能力的宿主上存在**:`ctx.tangu?.mountChat`,缺席时退回 `startChat`。
 
