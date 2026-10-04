@@ -454,6 +454,13 @@ async function main() {
     await page.evaluate(() => window.dispatchEvent(new Event('blur')))
     await page.waitForTimeout(HOME)
     check('Y8 窗口失焦(点进 iframe 视图)也归位', y8 !== yTop0 && (await topNow()) === yTop0, `${y8} → ${await topNow()}`)
+    await page.mouse.move(22, 200)
+    await page.mouse.wheel(0, 10)
+    await page.waitForTimeout(60) // 手势还在跟手、窗口没提交
+    const y10mid = ty((await stripNow()).tr)
+    await outside()
+    await page.waitForTimeout(HOME + 400)
+    check('Y10 滚一下马上点(吸附还没走完):照样归位', y10mid !== 0 && (await topNow()) === yTop0, `点的那一刻列位移 ${y10mid} ｜ ${await topNow()}`)
     const y9 = await page.evaluate(() => ({ tr: document.querySelector('.rb-top .rb-strip-in').style.transform, filled: [...document.querySelectorAll('.rb .rb-cell')].filter((c) => c.childElementCount).length }))
     check('Y9 归位后列的位移清零、窗外占位清空', y9.tr === '' && y9.filled === 0, JSON.stringify(y9))
 

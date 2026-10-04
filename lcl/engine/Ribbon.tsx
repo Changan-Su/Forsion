@@ -315,11 +315,12 @@ export function Ribbon() {
     if (drag) return
     for (const [zone, part] of [['top', top], ['bottom', bot]] as const) {
       if (!scrollOff[zone]) continue
-      if (part.max) glideTo(zone, part, zone === 'top' ? 0 : part.max)
-      else setScrollOff((s) => ({ ...s, [zone]: 0 })) // 条目少到不用翻了:没有画面可滑,直接清
+      if (part.max && stripRefs.current[zone]) glideTo(zone, part, zone === 'top' ? 0 : part.max)
+      else setScrollOff((s) => ({ ...s, [zone]: 0 })) // 条目少到不用翻了 / 该区被另一区的展开让出去了:没有画面可滑,直接清
     }
   }
-  const scrolled = !!(scrollOff.top || scrollOff.bottom)
+  // 手势还没提交(吸附要 360ms)时点下去也要算 —— 滚一下马上点开翻出来的图标是最常见的用法。
+  const scrolled = !!(scrollOff.top || scrollOff.bottom || live.top || live.bottom)
   useEffect(() => {
     if (!scrolled) return
     const arm = (): void => {
