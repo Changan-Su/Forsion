@@ -262,11 +262,11 @@ const MUSE_TODO_ENTRY = /^todo ([A-Za-z0-9_-]{1,64})$/;
 const LOADOUT_REVIEW_NAME = { zh: '每周装备巡检', en: 'Weekly loadout review' };
 /** 条目的 prompt(模型读,英文)。同时是幂等匹配的依据之一。 */
 export const LOADOUT_REVIEW_PROMPT =
-  'Weekly loadout review (keep this weekly entry; do not remove it). Call review_loadout with days 30. It reports, per agent, which always-loaded tools and listed skills were never or rarely used in the user\'s own sessions. ' +
+  'Weekly loadout review (keep this weekly entry; do not remove it). Call review_loadout with days 30. It reports, per agent, which always-loaded tools and listed skills went unused in the user\'s own sessions, and which of them it suggests shelving this time. ' +
   'If it says there is not enough data, or nothing stands out (under about 3 KB of unused definitions for an agent is not worth a todo), end this item quietly: no todo, no message. ' +
   'Otherwise file exactly ONE add_muse_todo in the user\'s language. The user reads it as a suggestion; if they accept, its detail is handed verbatim to an agent as the task to carry out. So write the detail as that task: ' +
   '(1) open with one sentence for the user: nothing has been changed yet, running this task shelves the equipment listed below, and shelving only moves a definition to the load-on-demand catalog (the tool or skill still works); ' +
-  '(2) per agent, the tools and skills to shelve, with the run and call counts from the report as evidence (keep to the per-agent limits the report states; skip anything called in the window, anything already shelved, and agents marked as not judgeable); ' +
+  '(2) per agent, exactly the tools and skills on that agent\'s "Suggested … this time" lines in the report, with its run counts as evidence. Add no other item, even one the report mentions elsewhere, and leave out agents marked as not judgeable; ' +
   '(3) end with the "Steps for whoever runs this task" paragraph that review_loadout prints at the bottom of its report, kept intact with both of its branches (do not write your own steps). ' +
   'In this cycle you only file the todo: do not change any agent\'s notes, settings or files yourself, and do not copy that restriction into the todo (whoever runs the task is meant to act). Never suggest removing a capability.';
 const LOADOUT_REVIEW_MARKER = '.seeded-loadout-review-v1';

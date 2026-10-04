@@ -23,6 +23,7 @@ import { getToolDefinitions } from '../tools/registry.js';
 import { isShelvable } from '../tools/toolRegistry.js';
 import type { ToolContext } from '../tools/toolTypes.js';
 import { loadSkillLoadout } from './skillLoadout.js';
+import { L } from '../tui/i18n.js';
 
 export interface UsageCount { calls: number; last: string }
 export interface AgentUsage { runs: number; tools: Map<string, UsageCount>; skills: Map<string, UsageCount> }
@@ -32,16 +33,26 @@ export const MIN_RUNS = 20;
 const MAX_AGENTS = 8;
 const MAX_NAMES = 40;
 const OUTPUT_CAP = 12_000;
-/** 一次巡检每个 agent 最多建议收几个工具 / 几个技能:一次收太多,出了问题分不清是哪一个;剩下的下周还会再列。 */
-const SUGGEST_MAX = 8;
+/** 一次巡检每个 agent 最多建议收几个工具 / 几个技能:一次收太多,出了问题分不清是哪一个;剩下的下周还会再列。
+ *  上限由报告自己执行(超出的**不列名字**),不靠提示里一句「最多 8 个」—— 10-04 grok 当 Muse 时把 28 个工具
+ *  (含 write_file / edit_file)和全部 21 个技能都抄进了建议,接手的 agent 照单全收。 */
+export const SUGGEST_MAX = 8;
+/** 定义小于这么多字节的工具不建议收:收起后目录里还要留一行(约 100 字节),省不下什么,用到时却多一个来回。 */
+const MIN_SHELVE_BYTES = 512;
 
 /** TODO 里的「执行步骤」段:由报告给出、Muse 原样带上。10-04 live 两次实翻都在这一段 ——
  *  Muse 自己写步骤时,一次把「本周期别动」抄了进去(接手的 agent 读完什么都不做),一次只写了「给别的 agent 提名」那一支
  *  (接手的正是被点名的 agent,于是给自己提了名、没收起)。两条分支缺一不可,所以不交给模型现写。 */
 export const LOADOUT_APPLY_STEPS =
-  'Steps for whoever runs this task: (1) if one of the agents listed above is you, shelve your own items now with manage_harness (action "upsert", kind "equip", tools and skills as listed for you, evidence = the counts above); ' +
-  '(2) for every other agent listed, call manage_harness with action "propose", agent = its slug, and one candidate line naming its items and counts, so that agent decides for itself. ' +
+  'Steps for whoever runs this task: (1) if one of the agents listed above is you, shelve your own items now with manage_harness (action "upsert", kind "equip", exactly the tools and skills listed for you and nothing else, evidence = the counts above); ' +
+  '(2) for every other agent listed, call manage_harness with action "propose", agent = its slug, and one candidate line naming all of its items and counts, so that agent decides for itself at its next /refine. ' +
   'Shelving only moves a definition to the load-on-demand catalog; nothing is removed.';
+/** 同一段的中文版:这段话最后落在用户收件箱的卡片上(用户可见产物 → 跟界面语言,同条目名的 L());
+ *  工具名 / 参数名不译。10-04 真实用量跑里 Muse 自己翻译时把「收起 / 装备」译成了「暂存 / 设备」。 */
+export const LOADOUT_APPLY_STEPS_ZH =
+  '执行步骤:(1) 上面列出的 agent 里如果有你自己,现在就用 manage_harness 把你名下的收起(action "upsert"、kind "equip",tools 和 skills 只填你名下列出的那几项,evidence 写上面的次数);' +
+  '(2) 其余每个被列出的 agent,用 manage_harness 的 action "propose"(agent = 它的 slug)给它留一条候选,写全要收起哪几项和各自的次数,由它在下次复盘(/refine)时自己决定。' +
+  '收起只是把定义挪进按需目录,需要时照常可用,不会删除任何东西。';
 
 /** 'YYYY-MM-DD HH:MM:SS'(UTC)—— 与 SQLite 的 CURRENT_TIMESTAMP 同格式,两种方言都能按它比(同 museTodo 的窗口算法)。 */
 const cutoffOf = (days: number, now = Date.now()): string => new Date(now - days * 86_400_000).toISOString().slice(0, 19).replace('T', ' ');
@@ -147,20 +158,26 @@ export async function buildLoadoutReview(ctx: ToolContext, opts: { days?: number
     const used = open.filter((t) => calls(t.name) > 2).sort((a, b) => calls(b.name) - calls(a.name));
     const total = resident.reduce((n, t) => n + t.bytes, 0);
     const lines = [`## ${slug} — ${u.runs} runs; ${resident.length} always-loaded tools, ${kb(total)} of definitions on every request`];
-    lines.push(never.length
-      ? `Never called (${never.length}, ${kb(never.reduce((n, t) => n + t.bytes, 0))}): ${cut(never.map((t) => `${t.name} (${kb(t.bytes)})`))}`
-      : 'Never called: none');
-    if (rare.length) lines.push(`Called 1-2 times: ${cut(rare.map((t) => `${t.name} ×${calls(t.name)} (${kb(t.bytes)}, last ${day(u.tools.get(t.name)!.last)})`))}`);
-    if (used.length) lines.push(`In use: ${cut(used.map((t) => `${t.name} ×${calls(t.name)}`))}`);
+    // 建议名单在这里定死:没调过的里挑最大的几个(太小的不值得收)。没列出名字的,模型就建议不了。
+    const worth = never.filter((t) => t.bytes >= MIN_SHELVE_BYTES);
+    const pick = worth.slice(0, SUGGEST_MAX);
+    const held = never.length - pick.length;
+    lines.push(pick.length
+      ? `Suggested tools to shelve this time (${pick.length}, ${kb(pick.reduce((n, t) => n + t.bytes, 0))}, each never called): ${pick.map((t) => `${t.name} (${kb(t.bytes)})`).join(', ')}`
+      : 'Suggested tools to shelve this time: none');
+    if (held > 0) lines.push(`Not suggested this time: ${held} more never-called tool(s), either small (under ${kb(MIN_SHELVE_BYTES)}, not worth a catalog line) or left for the next review.`);
+    if (rare.length) lines.push(`Not suggested — called 1-2 times: ${cut(rare.map((t) => `${t.name} ×${calls(t.name)} (last ${day(u.tools.get(t.name)!.last)})`))}`);
+    if (used.length) lines.push(`Not suggested — in use: ${cut(used.map((t) => `${t.name} ×${calls(t.name)}`))}`);
     if (shelved.tools.size) lines.push(`Already shelved by this agent: ${cut([...shelved.tools].map((n) => `${n}${calls(n) ? ` ×${calls(n)} since` : ''}`))}`);
     if (skills?.catalog.length) {
       const listed = skills.catalog.filter((s) => !shelved.skills.has(s.id));
       const idle = listed.filter((s) => !u.skills.has(s.id)).sort((a, b) => b.bytes - a.bytes);
       const loaded = listed.filter((s) => u.skills.has(s.id)).sort((a, b) => u.skills.get(b.id)!.calls - u.skills.get(a.id)!.calls);
-      lines.push(idle.length
-        ? `Skills listed but never loaded (${idle.length} of ${listed.length}, ${kb(idle.reduce((n, s) => n + s.bytes, 0))} of catalog lines): ${cut(idle.map((s) => s.id))}`
-        : `Skills listed but never loaded: none (of ${listed.length})`);
-      if (loaded.length) lines.push(`Skills loaded: ${cut(loaded.map((s) => `${s.id} ×${u.skills.get(s.id)!.calls}`))}`);
+      const pickSkills = idle.slice(0, SUGGEST_MAX);
+      lines.push(pickSkills.length
+        ? `Suggested skills to shelve this time (${pickSkills.length} of ${idle.length} never loaded, ${listed.length} listed; ${kb(pickSkills.reduce((n, s) => n + s.bytes, 0))} of catalog lines): ${pickSkills.map((s) => s.id).join(', ')}`
+        : `Suggested skills to shelve this time: none (${listed.length} listed)`);
+      if (loaded.length) lines.push(`Not suggested — skills loaded: ${cut(loaded.map((s) => `${s.id} ×${u.skills.get(s.id)!.calls}`))}`);
       if (shelved.skills.size) lines.push(`Skills already shelved: ${cut([...shelved.skills])}`);
     }
     blocks.push(lines.join('\n'));
@@ -169,10 +186,11 @@ export async function buildLoadoutReview(ctx: ToolContext, opts: { days?: number
     `Loadout usage over the last ${days} days (the user's own local work sessions only; chat-preset, coding-preset, cloud, team, sub-agent, Muse and automation runs are not counted; GUI-only tools are not listed). This is a report: nothing has been changed.\n` +
     'An always-loaded tool costs its full definition on every request. Shelving (each agent does it for itself with manage_harness, kind "equip") only moves a definition to the load-on-demand catalog; the tool still works.\n' +
     (judged
-      ? `${judged} agent(s) have enough runs to judge. Lists are sorted largest first; suggest at most ${SUGGEST_MAX} tools and ${SUGGEST_MAX} skills per agent per review (the rest can wait for the next one).`
+      ? `${judged} agent(s) have enough runs to judge. The "Suggested … this time" lines are the whole suggestion for this review (at most ${SUGGEST_MAX} tools and ${SUGGEST_MAX} skills per agent): pass them on exactly, add nothing. Everything else stays as it is.`
       : `No agent has enough runs (${MIN_RUNS}+) to judge: do not recommend anything.`);
   const body = [head, ...blocks].join('\n\n');
   const text = body.length > OUTPUT_CAP ? `${body.slice(0, OUTPUT_CAP)}\n… (report truncated; pass agent to see one agent in full)` : body;
   // 步骤段放在截断之后:报告再长它也在
-  return judged ? `${text}\n\nIf you turn this into a todo, end its detail with this paragraph, kept intact (translate the prose if you write in another language; keep tool and parameter names exactly):\n${LOADOUT_APPLY_STEPS}` : text;
+  // 产品用词随报告给出(种子 prompt 保持纯英文):Muse 用中文写建议时自己翻,会翻出「暂存 / 设备」这类不是界面用语的词
+  return judged ? `${text}\n\nIf you turn this into a todo, end its detail with this paragraph, kept intact (if you write in another language, translate the prose and keep tool and parameter names exactly; in Chinese use the product's own words: 收起 for shelve, 装备 for equipment, 按需目录 for the load-on-demand catalog):\n${L(LOADOUT_APPLY_STEPS_ZH, LOADOUT_APPLY_STEPS)}` : text;
 }

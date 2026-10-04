@@ -15,7 +15,8 @@ import { runMigration } from '../src/db/migrate.js';
 import { query } from '../src/core/db.js';
 import { saveAgent } from '../src/agents/agentRegistry.js';
 import { applyHarnessEdit } from '../src/agents/harnessStore.js';
-import { collectLoadoutUsage, buildLoadoutReview, MIN_RUNS, LOADOUT_APPLY_STEPS } from '../src/services/loadoutUsage.js';
+import { collectLoadoutUsage, buildLoadoutReview, MIN_RUNS, LOADOUT_APPLY_STEPS, LOADOUT_APPLY_STEPS_ZH, SUGGEST_MAX } from '../src/services/loadoutUsage.js';
+import { isShelvable } from '../src/tools/toolRegistry.js';
 import { reviewLoadoutProvider } from '../src/tools/builtin/reviewLoadout.js';
 import { getToolDefinitions, listDeferredTools } from '../src/tools/registry.js';
 import { seedLoadoutReviewOnce, museDueSchedules, LOADOUT_REVIEW_PROMPT } from '../src/services/muse.js';
@@ -128,33 +129,55 @@ describe('review_loadout 报告', () => {
     const worker = out.split('## ').find((b) => b.startsWith('worker'))!;
     expect(worker).toMatch(/^worker — 28 runs; \d+ always-loaded tools, [\d.]+ KB/);
     const line = (head: string): string => worker.split('\n').find((l) => l.startsWith(head)) || '';
-    expect(line('Never called')).toMatch(/web_search \([\d.]+ KB\)/);
-    expect(line('Never called')).not.toMatch(/run_bash|read_file|web_fetch/);
-    expect(line('Called 1-2 times')).toMatch(/web_fetch ×1 \([\d.]+ KB, last \d{4}-\d{2}-\d{2}\)/);
-    expect(line('In use')).toMatch(/run_bash ×25/);
+    // 建议名单由报告定死:没调过的里最大的几个,最多 SUGGEST_MAX 个;调过的一个都不进
+    const suggested = line('Suggested tools to shelve this time').split(': ').slice(1).join(': ').split(', ').map((x) => x.split(' ')[0]);
+    expect(line('Suggested tools to shelve this time')).toMatch(/^Suggested tools to shelve this time \(\d+, [\d.]+ KB, each never called\): delegate \([\d.]+ KB\)/);
+    expect(suggested.length).toBeLessThanOrEqual(SUGGEST_MAX);
+    for (const called of ['run_bash', 'read_file', 'web_fetch', 'list_dir']) expect(suggested, called).not.toContain(called);
+    expect(line('Not suggested — called 1-2 times')).toMatch(/web_fetch ×1 \(last \d{4}-\d{2}-\d{2}\)/);
+    expect(line('Not suggested — in use')).toMatch(/run_bash ×25/);
     // 收不得的不出现在任何一栏(列出来只会诱导模型去建议收它)
     for (const fixed of ['load_tools', 'ask_user', 'manage_harness', 'use_skill', 'remember', 'manage_human', 'log_event', 'todo_write']) expect(worker.includes(fixed), fixed).toBe(false);
     // 目录里除了这两个桩技能,还有播种 agent 共享出来的(local:@owner/name);只钉这两个各在哪一栏
-    expect(line('Skills listed but never loaded')).toMatch(/\(\d+ of \d+, [\d.]+ KB of catalog lines\): .*local:bar/);
-    expect(line('Skills listed but never loaded')).not.toMatch(/local:foo/);
-    expect(line('Skills loaded')).toBe('Skills loaded: local:foo ×3');
+    expect(line('Suggested skills to shelve this time')).toMatch(/\(\d+ of \d+ never loaded, \d+ listed; [\d.]+ KB of catalog lines\): .*local:bar/);
+    expect(line('Suggested skills to shelve this time')).not.toMatch(/local:foo/);
+    expect(line('Not suggested — skills loaded')).toBe('Not suggested — skills loaded: local:foo ×3');
     const rookie = out.split('## ').find((b) => b.startsWith('rookie'))!;
     expect(rookie).toMatch(/Too few runs to judge/);
     expect(rookie).not.toMatch(/Never called/);
-    expect(out).toMatch(/1 agent\(s\) have enough runs to judge\. Lists are sorted largest first; suggest at most 8 tools and 8 skills per agent/);
+    expect(out).toMatch(/1 agent\(s\) have enough runs to judge\. The "Suggested … this time" lines are the whole suggestion for this review \(at most 8 tools and 8 skills per agent\): pass them on exactly, add nothing\./);
     // 「执行步骤」段由报告给出(自己收 / 给别人提名两支都在),Muse 原样带进 TODO
     expect(out.endsWith(LOADOUT_APPLY_STEPS)).toBe(true);
     expect(LOADOUT_APPLY_STEPS).toMatch(/action "upsert", kind "equip"/);
     expect(LOADOUT_APPLY_STEPS).toMatch(/action "propose"/);
+    // 中文界面下这一段直接给中文版(落在用户收件箱的卡片上),两条分支与工具 / 参数名都在
+    setUiLocale('zh');
+    const zh = await buildLoadoutReview(ctx(), { days: 30 });
+    setUiLocale('en');
+    expect(zh.endsWith(LOADOUT_APPLY_STEPS_ZH)).toBe(true);
+    for (const must of ['manage_harness', 'action "upsert"', 'kind "equip"', 'action "propose"', '收起', '按需目录']) expect(LOADOUT_APPLY_STEPS_ZH, must).toContain(must);
+  });
+
+  it('上限由报告执行:没调过的再多也只列最大的 8 个,其余连名字都不给;太小的不建议', async () => {
+    const worker = (await buildLoadoutReview(ctx(), { days: 30, agent: 'worker' })).split('## ').find((b) => b.startsWith('worker'))!;
+    const face = getToolDefinitions({ userId: USER, sessionId: '', appId: 'tangu', execMode: 'host', profile: deps().profile, agentSlug: 'worker', unlockTools: () => {} } as any)
+      .map((t) => ({ name: t.function.name, bytes: Buffer.byteLength(JSON.stringify(t)) }));
+    const called = new Set(['run_bash', 'read_file', 'web_fetch', 'list_dir', 'use_skill']);
+    const never = face.filter((t) => isShelvable(t.name) && !called.has(t.name)).sort((a, b) => b.bytes - a.bytes);
+    expect(never.length, '前提:没调过的比上限多,否则本条空转').toBeGreaterThan(SUGGEST_MAX);
+    const line = worker.split('\n').find((l) => l.startsWith('Suggested tools to shelve this time'))!;
+    expect(line.split(': ').slice(1).join(': ').split(', ').map((x) => x.split(' ')[0])).toEqual(never.slice(0, SUGGEST_MAX).map((t) => t.name));
+    for (const t of never.slice(SUGGEST_MAX)) expect(worker.includes(t.name), `${t.name} 不该被点名`).toBe(false);
+    expect(worker).toMatch(new RegExp(`Not suggested this time: ${never.length - SUGGEST_MAX} more never-called tool\\(s\\)`));
   });
 
   it('已经收起的单列,不再当「没调过」重复建议', async () => {
-    await applyHarnessEdit('worker', { action: 'upsert', kind: 'equip', title: 'Shelf', body: 'unused', evidence: 'review', tools: ['web_search'], skills: ['local:bar'] });
+    await applyHarnessEdit('worker', { action: 'upsert', kind: 'equip', title: 'Shelf', body: 'unused', evidence: 'review', tools: ['delegate'], skills: ['local:bar'] });
     const worker = (await buildLoadoutReview(ctx(), { days: 30, agent: 'worker' })).split('## ').find((b) => b.startsWith('worker'))!;
-    expect(worker.split('\n').find((l) => l.startsWith('Never called'))).not.toMatch(/web_search/);
-    expect(worker).toMatch(/Already shelved by this agent: web_search/);
+    expect(worker.split('\n').find((l) => l.startsWith('Suggested tools'))).not.toMatch(/delegate/);
+    expect(worker).toMatch(/Already shelved by this agent: delegate/);
     expect(worker).toMatch(/Skills already shelved: local:bar/);
-    expect(worker.split('\n').find((l) => l.startsWith('Skills listed but never loaded'))).not.toMatch(/local:bar/);
+    expect(worker.split('\n').find((l) => l.startsWith('Suggested skills'))).not.toMatch(/local:bar/);
   });
 
   it('没有任何用量 / 点名的 agent 不存在 → 明说数据不够,不给名单', async () => {

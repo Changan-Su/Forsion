@@ -8,6 +8,8 @@
  *   npm run build && npm run live:harness                    # 全部场景(约 5-10 分钟,真烧订阅额度)
  *   npm run live:harness -- --only personas                 # 三位音乐人格的同题实测(身份自动验,表达读原话)
  *   npm run live:harness -- --only human --human-ui        # HUMAN.md 双作用域、真模型写入/读取/撤销 + 真 Electron 卡片与编辑;先构建 desktop
+ *   npm run live:harness -- --only musereview --via-muse     # 巡检建议走「交给 Muse」那条路:Muse 只给被点名的 agent 留候选 → 它 /refine 时采纳并收起
+ *   npm run live:harness -- --only harnessopen --harness-ui   # 工作笔记放开写入 + 真 Electron 里的更新卡与撤销(卡片从真模型的回执还原);先构建 desktop
  *   npm run live:harness -- --only rename                   # 改名即生效:同会话先答旧名,PATCH 改名+改简介后下一轮须用新名(改身份注入/人格组装后跑)
  *   npm run live:harness -- --only selfmodel --rounds 5 --model xai/grok-4.7   # 主体性探针(10-02):自己的资料库 vs 用户目录 / 提醒真落盘 / 教训落哪个存储 / 自我认知,按轮出通过率;改 Personal Folder 段 / 记忆·协作·工作笔记段后跑
  *   npm run live:harness -- --only selfschedule             # 自己的日程 vs 用户的日历(10-02):人设 agent 答应的约定进 SCHEDULE.db、用户日历不动;负对照「记进我的日历」须走 amadeus。改 Personal Folder 段 / 日程·日历工具措辞后跑
@@ -18,6 +20,8 @@
  *                                                           #   「语音在哪设置」经界面命令直达设置页、不用电脑操控,网页检索次数只计数(改 desktop open-settings 的 description / params 后跑)
  *   npm run live:harness -- --only plugin                    # 引擎插件热插拔(10-02):夹具插件开着调得到、停用后调不到、再启用回来(改 plugins/bootstrap 生命周期后跑)
  *   npm run live:harness -- --only btw                       # 旁聊 /btw(09-22):带主会话上下文答题外话、追问带前轮、不写回、主 run 在飞也能问;改 services/aside.ts 提示词后跑
+ *   npm run live:harness -- --only realuse --rounds 2 --model xai/grok-4.7   # 真实使用模拟(10-04):消息不点名任何库 / 工具;改 manage_harness / 装备层 / 工作笔记注入 / Muse 巡检后跑。
+ *                                                           #   --usage-db <抽取库>:再用真实用量跑一遍 Muse 巡检 → 建议 → 默认 agent 执行(抽取库先用 scripts/usage-extract.mjs 生成)
  *   TANGU_LIVE_MODEL=codex/gpt-5.6-sol npm run live:harness  # 换模型
  *   npm run live:harness -- --only historian,dream,muse --muse-mode auto   # Muse 三档:ask(缺省)|agent|auto
  *   npm run live:harness -- --only refine --historian-mode assist          # 自进化闭环走辅助模式(提名在辅助模式轮里出)
@@ -121,6 +125,7 @@ import { deflateSync } from 'node:zlib';
 import { fromDb, report as timelineReport } from './stall-timeline.mjs';
 import { launchChromePipe, pairExtension } from './lib/chrome-pipe.mjs';
 import { pageInstructionsLive } from './lib/page-instructions-live.mjs';
+import { realUseLive } from './lib/real-use-live.mjs';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const entry = join(root, 'dist', 'standalone', 'main.js');
@@ -137,6 +142,7 @@ KEYS.push('pageinstructions');
 KEYS.push('harnessopen');
 KEYS.push('equip');
 KEYS.push('musereview');
+KEYS.push('realuse');
 // autocompact 要把模型窗口钉小(--window)才灌得满;窗口小了别的场景会被连累(系统提示+工具头就 13k+),所以它只能单独跑。
 const WINDOW = Number(opt('window', process.env.TANGU_LIVE_WINDOW || 0)) || 0;
 // P1-K9 · C3:--remote-cap <档> = 起引擎前经 K4 的新写入口写 remote.maxApprovalMode(缺省不写 = 引擎按 auto-edit)
@@ -160,6 +166,7 @@ OPT_IN.add('pageinstructions'); // Scoped document maintenance; deliberately exc
 OPT_IN.add('harnessopen'); // 四个 run + 一条探针;只在动 manage_harness / 工作笔记注入时才有信息量。
 OPT_IN.add('equip'); // 三个 run;只在动装备层(HARNESS equip → isDeferredIn / 技能目录)时才有信息量。
 OPT_IN.add('musereview'); // 开 Muse 并往隔离库里写用量行:单独跑,别连累别的场景的工具表 / Muse 状态。
+OPT_IN.add('realuse'); // 真实使用模拟:每轮 12 个 run(--rounds),--usage-db 再加一个 Muse 周期;单独跑。
 const NEEDS = { dream: ['historian'], recall: ['historian', 'dream'] }; // 记忆链三连有先后依赖;其余场景自包含
 const ONLY = new Set(opt('only', process.env.TANGU_LIVE_ONLY || KEYS.filter((k) => !OPT_IN.has(k)).join(',')).split(',').map((s) => s.trim()).filter(Boolean));
 const TTFT_ROUNDS = Number(opt('ttft-rounds', process.env.TANGU_LIVE_TTFT_ROUNDS || 5));
@@ -3003,7 +3010,8 @@ Then reply with only the command output.`,
     const cfg = { ...AGENT_CONFIG, agentSlug: slug, approvalMode: 'auto-edit', debugSystemPrompt: true, thinkingLevel: 'low' };
     const mk = async (title) => (await api('/agent/sessions', { method: 'POST', body: JSON.stringify({ title, model_id: MODEL, agent_config: cfg }) })).session.id;
     const mark = `引用优先-${randomUUID().slice(0, 6)}`;
-    const ev = await run(await mk('Harness open'), `记一条你自己的工作方法,标题就叫“${mark}”:以后凡是我让你读文件回答,先原样引用文件里对应的那一行,再给结论。上次你没引用就直接下结论,我核对起来很费劲。`, 240_000, cfg);
+    const sid0 = await mk('Harness open');
+    const ev = await run(sid0, `记一条你自己的工作方法,标题就叫“${mark}”:以后凡是我让你读文件回答,先原样引用文件里对应的那一行,再给结论。上次你没引用就直接下结论,我核对起来很费劲。`, 240_000, cfg);
     const receipts = ev.toolResults.flatMap((r) => { try { const v = JSON.parse(r.full); return v.kind === 'harness_update' ? [v.change] : []; } catch { return []; } });
     const change = receipts.find((c) => JSON.stringify(c).includes(mark));
     const loadedIt = ev.toolArgs.some((a) => a.name === 'load_tools' && a.arguments.includes('manage_harness'));
@@ -3014,7 +3022,14 @@ Then reply with only the command output.`,
     const fresh = await run(await mk('Harness open recall'), '用一句话打个招呼。不调用工具。', 120_000, cfg);
     const injected = !fresh.error && !!fresh.systemPrompt?.includes(mark);
     const undo = { method: 'POST', body: JSON.stringify({ id: change.entryId, expectRev: change.rev }) };
-    await api(`/agent/agents/${slug}/harness/rollback`, undo);
+    // --harness-ui:第一次撤销由真 Electron 里的卡片来点(卡片从真模型落库的回执还原,撤销打到真引擎);先构建 desktop
+    if (argv.includes('--harness-ui')) {
+      const ui = await promisify(execFile)(process.execPath, [join(root, '../desktop/scripts/harness-update.live.check.cjs')], {
+        cwd: join(root, '../desktop'), timeout: 300_000, maxBuffer: 2 * 1024 * 1024,
+        env: { ...process.env, TANGU_BACKEND_URL: base, TANGU_HARNESS_TOKEN: TOKEN, TANGU_HARNESS_SESSION: sid0, TANGU_HARNESS_SLUG: slug, TANGU_HARNESS_REV: change.rev, TANGU_HARNESS_ENTRY: change.entryId, TANGU_HARNESS_UI_HOME: join(OUT, 'harness-ui') },
+      }).catch((e) => { writeFileSync(join(OUT, 'harness-ui.log'), `${e.stdout || ''}${e.stderr || ''}`); throw new Error(`harness-ui: ${String(e.stderr || e.message).split('\n').filter(Boolean).slice(0, 3).join(' | ').slice(0, 400)}`); });
+      writeFileSync(join(OUT, 'harness-ui.log'), ui.stdout + ui.stderr);
+    } else await api(`/agent/agents/${slug}/harness/rollback`, undo);
     const st2 = await api(`/agent/agents/${slug}/harness`);
     const undone = !(st2.entries || []).some((e) => e.id === change.entryId);
     const second = await api(`/agent/agents/${slug}/harness/rollback`, undo).then(() => 'accepted', (e) => String(e.message));
@@ -3127,22 +3142,49 @@ Then reply with only the command output.`,
     let applied = '未跑(没有 TODO)';
     let applyEv = null;
     let shelvedOwn = false;
-    if (todos[0]) {
+    if (todos[0] && !argv.includes('--via-muse')) {
       const brief = todos[0].detail ? `${todos[0].title}\n\n${todos[0].detail}` : todos[0].title;
       applyEv = await run((await api('/agent/sessions', { method: 'POST', body: JSON.stringify({ title: 'Apply review', model_id: MODEL, agent_config: cfg }) })).session.id, brief, 240_000, cfg);
       const after = await api(`/agent/agents/${slug}/harness`);
       const equip = (after.entries || []).filter((e) => e.kind === 'equip');
-      shelvedOwn = !applyEv.error && !applyEv.approvals && equip.some((e) => (e.tools || []).some((t) => named.includes(t)));
-      applied = applyEv.error ? `出错:${applyEv.error}` : equip.length ? `自己收起了 ${equip.flatMap((e) => [...(e.tools || []), ...(e.skills || [])]).join('+')}(审批 ${applyEv.approvals})` : `没收起(工具 ${applyEv.toolCalls.join(',') || '无'};回复 ${applyEv.content.slice(0, 120)})`;
+      // 上限由报告执行(每个 agent 每次最多 8 工具 + 8 技能):10-04 grok 当 Muse 时把 28 个工具 + 21 个技能全抄进了建议,接手的照单全收
+      const within = equip.flatMap((e) => e.tools || []).length <= 8 && equip.flatMap((e) => e.skills || []).length <= 8;
+      shelvedOwn = !applyEv.error && !applyEv.approvals && within && equip.some((e) => (e.tools || []).some((t) => named.includes(t)));
+      applied = applyEv.error ? `出错:${applyEv.error}` : equip.length ? `自己收起了 ${equip.flatMap((e) => e.tools || []).length} 工具 + ${equip.flatMap((e) => e.skills || []).length} 技能${within ? '' : '(⚠ 超出每次 8 + 8 的上限)'}:${equip.flatMap((e) => [...(e.tools || []), ...(e.skills || [])]).join('+')}(审批 ${applyEv.approvals})` : `没收起(工具 ${applyEv.toolCalls.join(',') || '无'};回复 ${applyEv.content.slice(0, 120)})`;
     }
-    writeFileSync(join(OUT, 'musereview-evidence.json'), JSON.stringify({ cycle: { status: cycle.status, tools }, report: cycle.report, todos, entry, harnessAfterCycle: untouched, applied, applyTools: applyEv?.toolCalls || null, applyReply: applyEv?.content || null }, null, 2));
-    return { ok: reviewed && oneTodo && handsOff && kept && shelvedOwn, detail: [
+    // ⑤ --via-muse:用户在卡片上点的是「交给 Muse」而不是「新会话执行」。Muse 不是被点名的 agent → 只能给它留候选(propose),
+    //    自己不写别人的笔记;候选要等那个 agent 复盘(/refine)时才被采纳。整条链:批准 → Muse 周期 → 候选 → /refine → 收起。
+    let viaMuse = null;
+    if (argv.includes('--via-muse') && todos[0]) {
+      const before = await api(`/agent/agents/${slug}/harness`);
+      await api(`/agent/special/muse/todos/${todos[0].id}/approve`, { method: 'POST', body: '{}' });
+      const second = await until(() => { const r = museRuns()[1]; return r && !['queued', 'running'].includes(r.status) ? r : null; }, 420_000, 4000);
+      const mid = await api(`/agent/agents/${slug}/harness`);
+      const proposed = (mid.candidates || []).length - (before.candidates || []).length;
+      const museWrote = (mid.entries || []).length - (before.entries || []).length;
+      let refined = null;
+      if (second && proposed > 0) {
+        const rv = await run((await api('/agent/sessions', { method: 'POST', body: JSON.stringify({ title: 'Refine after Muse', model_id: MODEL, agent_config: cfg }) })).session.id, '/refine', 300_000, cfg);
+        const eq = ((await api(`/agent/agents/${slug}/harness`)).entries || []).filter((e) => e.kind === 'equip' && !(before.entries || []).some((b) => b.id === e.id));
+        refined = { tools: eq.flatMap((e) => e.tools || []), skills: eq.flatMap((e) => e.skills || []), calls: rv.toolCalls, approvals: rv.approvals, error: rv.error || null, reply: String(rv.content || '').slice(0, 800) };
+      }
+      viaMuse = { cycle: second ? { status: second.status, tools: String(second.tools || '').split(',').filter(Boolean) } : null, proposed, museWrote, candidates: (mid.candidates || []).slice(-3), refined };
+    }
+    writeFileSync(join(OUT, 'musereview-evidence.json'), JSON.stringify({ cycle: { status: cycle.status, tools }, report: cycle.report, todos, entry, harnessAfterCycle: untouched, applied, applyTools: applyEv?.toolCalls || null, applyReply: applyEv?.content || null, viaMuse }, null, 2));
+    const okVia = !!viaMuse && !!viaMuse.cycle && viaMuse.proposed > 0 && viaMuse.museWrote === 0 && !!viaMuse.refined && !viaMuse.refined.error
+      && viaMuse.refined.tools.length > 0 && viaMuse.refined.tools.length <= 8 && viaMuse.refined.skills.length <= 8;
+    return { ok: reviewed && oneTodo && handsOff && kept && (argv.includes('--via-muse') ? okVia : shelvedOwn), detail: [
       `① 周期 ${cycle.status};工具 ${tools.join(',') || '无'}`,
       `② review_loadout ${reviewed ? '调了且报告里有该 agent' : `⚠ ${cycle.reviews ? '调了但报告里没有该 agent' : '没调'}`};TODO ${todos.length} 条${oneTodo ? `,点名 ${named.join('+')}` : `(⚠ 要恰好 1 条且点名 ${slug} 与一个没用过的工具;实得点名 ${named.join('+') || '无'})`}`,
       `③ Muse 没动它 ${handsOff ? '是' : `⚠ 笔记 ${(untouched.entries || []).length} 条 / 候选 ${(untouched.candidates || []).length} 条`};条目 ${kept ? `还在(${entry.name},已记 lastRun)` : entry ? '还在但没记 lastRun' : '⚠ 不见了'}`,
-      `④ 把任务书交给该 agent:${shelvedOwn ? '' : '⚠ '}${applied}`,
+      ...(argv.includes('--via-muse')
+        ? [`⑤ 交给 Muse:${okVia ? '' : '⚠ '}${viaMuse?.cycle ? `Muse 周期 ${viaMuse.cycle.status}(工具 ${viaMuse.cycle.tools.join(',') || '无'});给该 agent 留候选 ${viaMuse.proposed} 条,直接改它的笔记 ${viaMuse.museWrote} 处;该 agent /refine 后收起 ${viaMuse.refined ? `${viaMuse.refined.tools.length} 工具 + ${viaMuse.refined.skills.length} 技能(审批 ${viaMuse.refined.approvals})` : '未跑'}` : '420s 内 Muse 没有跑完第二个周期'}`]
+        : [`④ 把任务书交给该 agent:${shelvedOwn ? '' : '⚠ '}${applied}`]),
     ].join(';'), output: `【报告】\n${String(cycle.report || '').slice(0, 3000)}\n\n【TODO】\n${text.slice(0, 3000)}\n\n【执行】${applyEv?.content || ''}`, toolCalls: [...tools, '|', ...(applyEv?.toolCalls || [])], tokens: applyEv ? tokensOf(applyEv) : undefined };
   });
+  // ── 真实使用模拟(10-04):消息不点名任何存储库 / 工具 / 动作;判据与设计见 lib/real-use-live.mjs ──
+  await scenario('realuse', `realuse 真实使用模拟 ×${SELF_ROUNDS} 轮${opt('usage-db', '') ? ' + 真实用量巡检' : ''}`, () =>
+    realUseLive({ run, api, until, asList, home, workspace, OUT, MODEL, AGENT_CONFIG, MUSE_MODE, rounds: SELF_ROUNDS, usageDb: opt('usage-db', ''), museLogTail }));
   // ── 缓存结构:A(新会话) / B(新会话·同文) / B′(新会话·异文) / C(S2 后续) / D(S1 后续)──
   // 台架**证不了 token 省了多少**(样本太小、上游路由不可控),它证的是「结构没塌」:同会话后续调用还命中得了吗?
   // 跨会话那半(A vs B 的 headHash 相不相等)只**记录**不设门 —— 它受上游副本路由影响,红了也未必是引擎的锅(§2.4)。

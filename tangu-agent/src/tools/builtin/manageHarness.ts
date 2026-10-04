@@ -26,6 +26,9 @@ import { getAgent, isValidSlug } from '../../agents/agentRegistry.js';
 import { effectiveRemote, remoteManagementDenied } from '../../services/remoteOrigin.js';
 import { scheduleAgentFilesSync } from '../../services/agentFileSync.js';
 
+/** propose 一条候选的字数上限(候选进对方 /refine 那一轮的提示,所以要有上限)。 */
+const PROPOSE_MAX = 1000;
+
 /** 回执里的一次改动(桌面 services/harnessUpdates.ts 按这个形状校验后渲染撤销卡;字段只增不改)。
  *  rev = 这次改动的 journal 行身份,卡片用它认「我这次改动」:撤销时原样带回(expectRev),对不上就不撤。 */
 export interface HarnessChange {
@@ -85,6 +88,8 @@ export const manageHarnessProvider: ToolProvider = {
             'Your Working Notes (HARNESS.md): durable lessons about HOW you work, loaded into your system prompt on every run. You own them: changes apply at once and the user gets a card to undo, so do not ask permission or wait for /refine. ' +
             'Use it when this conversation taught you something lasting about your own method: the user corrected how you work, a technique or delegation pattern proved itself, a pitfall you can avoid next time. ' +
             'Elsewhere: facts about the user or the world → remember; how the human can work with you → manage_human; a reusable procedure → manage_skill (scope "agent"). ' +
+            // 10-04 真实场景量跑:grok 把同一句纠正同时写进这里、协作说明和记忆(三处都进系统提示;撤销一张卡,另外两处还在)
+            'One lesson, one place: if you are saving a point with remember or manage_human, do not repeat it here. ' +
             'Never record environment/setup failures, "tool X is broken", transient errors or one-off task stories; they harden into refusals. ' +
             'upsert without id creates an entry (title, body and evidence of what actually happened are required); with id it revises. rollback restores the previous version. ' +
             "propose (agent + candidates) drops suggestions into ANOTHER agent's candidate inbox; you never write its notes. " +
@@ -127,10 +132,14 @@ export const manageHarnessProvider: ToolProvider = {
             if (target === slug) return 'Error: propose is for ANOTHER agent. These are your own notes: use action "upsert" (kind "equip" with tools / skills to shelve your own equipment).';
             if (!(await getAgent(target))) return `Error: agent "${target}" does not exist`;
             const cands = (Array.isArray(args.candidates) ? args.candidates : [])
-              .map((c: unknown) => String(c ?? '').replace(/\s+/g, ' ').trim().slice(0, 300))
+              .map((c: unknown) => String(c ?? '').replace(/\s+/g, ' ').trim())
               .filter(Boolean)
               .slice(0, 3);
             if (!cands.length) return 'Error: propose needs 1-3 non-empty candidates';
+            // 超长就报错让对方缩短,不静默截断:一个 agent 的装备建议(8 工具 + 8 技能,带次数)要放得下。
+            // 10-04 live:原先截到 300 字,正好切在技能名中间,对方复盘时以「信息不完整」为由一项没采纳。
+            const long = cands.find((c: string) => c.length > PROPOSE_MAX);
+            if (long) return `Error: a candidate is ${long.length} characters; keep each within ${PROPOSE_MAX} (shorten it, or split it into separate candidates)`;
             const n = await appendHarnessCandidates(target, ctx.sessionId, cands.map((c: string) => `(proposed by ${slug}) ${c}`));
             return n ? `Proposed ${n} candidate(s) to "${target}" (they wait in its candidate inbox until it reviews them).` : `Nothing new to propose to "${target}" (duplicates of existing candidates).`;
           }

@@ -238,6 +238,8 @@ describe('候选收件箱(.harness-raw.md)', () => {
     expect(s).toContain('[Auto-collected candidates]');
     expect(s).toContain('manage_harness');
     expect(s).toContain('- [2026-08-13 s:abc] 先跑测试');
+    // 别的 agent 提来的装备建议有自己的收法(kind "equip"),不按「经验教训」的证据门槛去判
+    expect(s).toMatch(/proposed by <agent>[\s\S]*kind "equip"/);
   });
 });
 

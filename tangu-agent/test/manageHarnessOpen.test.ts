@@ -16,7 +16,7 @@ import { manageHarnessProvider } from '../src/tools/builtin/manageHarness.js';
 import { getToolDefinitions, listDeferredTools } from '../src/tools/registry.js';
 import { declaredApproval, listLoadoutTools } from '../src/tools/toolRegistry.js';
 import { toolNeedsApproval } from '../src/services/approvals.js';
-import { harnessPath, loadHarness } from '../src/agents/harnessStore.js';
+import { harnessPath, loadHarness, peekHarnessCandidates } from '../src/agents/harnessStore.js';
 import { scheduleAgentFilesSync } from '../src/services/agentFileSync.js';
 
 let home: string, database: { close(): void };
@@ -98,5 +98,19 @@ describe('manage_harness 放开写入', () => {
     // 给自己提名:指回 upsert(候选收件箱只在 /refine 时才被读,给自己提名等于什么都没做)
     expect(await call({ action: 'propose', agent: 'strict', candidates: ['shelve x'] }, {}, 'strict')).toMatch(/^Error: propose is for ANOTHER agent/);
     expect(await loadHarness('strict')).toEqual([]);
+  });
+
+  it('propose:一整条装备建议原样进对方候选收件箱(不截断);超长报错、不落半条', async () => {
+    // 8 工具 + 8 技能带次数 ≈ 500 字。原先 300 字静默截断,正好切在技能名中间,对方复盘时以「信息不完整」为由一项没采纳。
+    const names = Array.from({ length: 8 }, (_, i) => `tool_number_${i} (1.${i} KB)`).join(', ');
+    const skills = Array.from({ length: 8 }, (_, i) => `local:some-long-skill-name-${i}`).join(', ');
+    const line = `Usage review, 24 runs in 30 days: shelve never-called tools ${names}; never-loaded skills ${skills}.`;
+    expect(line.length).toBeGreaterThan(300);
+    expect(await call({ action: 'propose', agent: 'xyra', candidates: [line] })).toMatch(/^Proposed 1 candidate/);
+    const inbox = await peekHarnessCandidates('xyra');
+    expect(inbox).toHaveLength(1);
+    expect(inbox[0].endsWith(`(proposed by opener) ${line}`)).toBe(true);
+    expect(await call({ action: 'propose', agent: 'xyra', candidates: ['x'.repeat(1001)] })).toMatch(/^Error: a candidate is 1001 characters; keep each within 1000/);
+    expect(await peekHarnessCandidates('xyra')).toHaveLength(1);
   });
 });

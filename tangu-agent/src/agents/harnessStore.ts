@@ -546,7 +546,10 @@ export function renderPendingHarnessCandidates(lines: string[]): string {
   return (
     '[Auto-collected candidates] The background Historian proposed these working-note candidates from past sessions. ' +
     'They have been removed from the inbox and will NOT be shown again — triage each one THIS turn: ' +
-    'adopt the durable ones via manage_harness (same evidence bar and anti-patterns as above), silently drop the rest.\n' +
+    'adopt the durable ones via manage_harness (same evidence bar and anti-patterns as above), silently drop the rest. ' +
+    'A line marked "(proposed by <agent>)" came from another agent. If it names tools or skills to shelve together with usage counts, it is an equipment suggestion, not a lesson: ' +
+    'adopt it as ONE manage_harness entry of kind "equip" listing exactly those names (leave out any you know you rely on), with the counts as evidence. ' +
+    'Shelving only moves a definition to the load-on-demand catalog; nothing is removed.\n' +
     lines.join('\n')
   );
 }

@@ -49,7 +49,7 @@ Agent 可以根据明确反馈和反复出现的协作问题更新说明。更�
 
 笔记里有一类**装备**条目：Agent 把自己很少用到的工具或技能**收起来**，减少每次请求携带的内容。收起的工具改为按需加载、仍然可用，收起的技能不再出现在技能清单里、按名称仍可使用；撤销或删除这一条就全部恢复。它只能收起，不能给自己增加任何能力——工具黑白名单与技能清单仍以你的设置为准。记忆、协作说明、日志、待办和加载工具这几件不能收起。
 
-本功能目前连接本地 Tangu 引擎使用，文件位于 Agent 目录下的 `HARNESS.md`。本地普通会话中 `manage_harness` 每轮均可用（Coding 预设下按需加载）；计划、远程和子代理等边界仍按原规则限制。不想让某个 Agent 自己改笔记，可在它的工具黑名单里关掉 `manage_harness`。回归入口 `tangu-agent` 的 `npm run live:harness -- --only harnessopen,equip,refine`。
+本功能目前连接本地 Tangu 引擎使用，文件位于 Agent 目录下的 `HARNESS.md`。本地普通会话中 `manage_harness` 每轮均可用（Coding 预设下按需加载）；计划、远程和子代理等边界仍按原规则限制。不想让某个 Agent 自己改笔记，可在它的工具黑名单里关掉 `manage_harness`。回归入口 `tangu-agent` 的 `npm run live:harness -- --only harnessopen,equip,refine`。这三个场景的消息都点了名（「记一条工作方法」「把这两个工具收起来」），只证接线；平常使用的样子用 `--only realuse`（消息不提任何存储库或工具名，可加 `--usage-db` 用真实用量跑一遍巡检），更新卡在真 Electron 里的样子用 `--only harnessopen --harness-ui`。
 
 ## 内置 Agent
 
