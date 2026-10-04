@@ -32,7 +32,12 @@ import { createMemoryRepository } from './memoryRepository.js';
 
 export const REALTIME_PATH = '/agent/realtime';
 const HISTORY_TURNS = 12;
-const DEFAULT_VOICE = 'Tina';
+/**
+ * 没给音色时用的缺省,按模型家族分:Qwen-Audio 那一族没有 Tina 这类 Omni 音色。
+ * 两族都必须显式给 —— qwen-audio-3.1 不传 voice 时 session.updated 回一个它自己并不支持的名字,到生成才报错(10-04 实测)。
+ * longanqian 是 3.0 / 3.1 各型号都认的那个。
+ */
+export const defaultRealtimeVoice = (model: string): string => (/(^|\/)qwen-audio-/i.test(model) ? 'longanqian' : 'Tina');
 
 const ASK_TANGU = {
   type: 'function',
@@ -142,6 +147,8 @@ export function attachRealtimeVoice(server: Server): void {
 
 /** 上游自己出错断开、值得换一条重连的(服务端 5xxxx / 内部错误);鉴权、参数这类重连也没用,照常挂断。 */
 const RETRYABLE_UPSTREAM = /^<5\d{4}>|InternalError|ModelServingError/;
+/** `<400> InternalError.Algo.InvalidParameter: Voice … is not supported` 这类请求本身不对的,名字里带 InternalError 也不重连(重连一百次也是同一个错)。 */
+export const retryableUpstream = (code: number, why: string): boolean => !/^<4\d\d>/.test(why) && (code === 1011 || RETRYABLE_UPSTREAM.test(why));
 const MAX_RECONNECTS = 2;
 
 function handleCall(client: WebSocket, userId: string): void {
@@ -374,7 +381,7 @@ function handleCall(client: WebSocket, userId: string): void {
         type: 'session.update',
         session: {
           modalities: ['text', 'audio'],
-          voice: s.voice || DEFAULT_VOICE,
+          voice: s.voice || defaultRealtimeVoice(s.model),
           instructions,
           input_audio_format: 'pcm',
           output_audio_format: 'pcm',
@@ -395,7 +402,7 @@ function handleCall(client: WebSocket, userId: string): void {
     up.on('error', (e) => end(e.message));
     up.on('close', (code, reason) => {
       const why = reason.toString() || `upstream closed (${code})`;
-      if (closed || reconnects >= MAX_RECONNECTS || !(code === 1011 || RETRYABLE_UPSTREAM.test(why))) return end(why);
+      if (closed || reconnects >= MAX_RECONNECTS || !retryableUpstream(code, why)) return end(why);
       reconnects++;
       console.warn(`[realtime] upstream dropped (${why}); reconnecting ${reconnects}/${MAX_RECONNECTS}`);
       const unanswered = lastUserItem && lastUserItem !== answered && lastUserItem !== delegatedItem ? userRows.get(lastUserItem)?.text : undefined;

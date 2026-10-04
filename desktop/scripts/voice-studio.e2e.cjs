@@ -308,6 +308,49 @@ async function main() {
     const w5 = wavOf(clones[4]?.audioData)
     check('S14 16 kHz 的 m4a:提醒音质偏低;不原样交,重编码成 24 kHz WAV', /音质偏低/.test(lowText) && !!w5 && w5.rate === 24000 && w5.channels === 1, `${flat(lowText).slice(0, 60)};交出 ${String(clones[4]?.audioData).slice(0, 22)} ${JSON.stringify(w5)}`)
 
+    // ── 换到 Qwen-Audio 通话模型:音色换一套,带不过去的回默认;复刻绑新模型;切回来能把原来的挑回来 ──
+    const modelSel = sp.locator('select.realtime-model'), voiceSel = sp.locator('select.realtime-voice')
+    const cfgNow = () => sp.evaluate(() => window.tangu.getConfig())
+    const voiceOpts = () => voiceSel.locator('option').allTextContents()
+    await modelSel.scrollIntoViewIfNeeded()
+    const modelOpts = await modelSel.locator('option').allTextContents()
+    await modelSel.selectOption('bailian/qwen-audio-3.1-realtime-plus')
+    const a1 = await until(async () => { const c = await cfgNow(); return c.realtimeModelId === 'bailian/qwen-audio-3.1-realtime-plus' ? c : null }, 8000)
+    const audioOpts = await voiceOpts(), audioShown = await voiceSel.inputValue()
+    check('S15 换到 Qwen-Audio 通话模型:下拉里有它;Omni 的复刻音色带不过去 → 回默认 longanqian;音色表换成它那一套(只显示 ID)',
+      modelOpts.includes('qwen-audio-3.1-realtime-plus') && a1?.realtimeVoice === '' && audioShown === 'longanqian' && audioOpts.includes('longanqian') && audioOpts.includes('cally_v3.1')
+        && !audioOpts.some((o) => /Tina|v-e2e-4|settings\.realtime/.test(o)),
+      `模型 ${modelOpts.join(' / ')};realtimeVoice=${JSON.stringify(a1?.realtimeVoice)};显示 ${audioShown};音色 ${audioOpts.length} 个:${audioOpts.slice(0, 3).join(',')}…${audioOpts.slice(-2).join(',')}`)
+    await modelSel.scrollIntoViewIfNeeded()
+    await shot('voice-call-qwen-audio')
+    await toggle.scrollIntoViewIfNeeded()
+    await callBox.locator('input[type="file"][accept="audio/*"]').setInputFiles(m4a)
+    await until(async () => /me\.m4a/.test(await callBox.locator('.voice-sample-report').innerText().catch(() => '')), 8000)
+    await callGo.click()
+    await until(() => clones.length >= 6, 8000)
+    const c6 = clones[5] || {}
+    const a2 = await until(async () => { const c = await cfgNow(); return c.realtimeVoice === 'v-e2e-6' ? c : null }, 8000)
+    const audioMine = await until(async () => { const o = await voiceOpts(); return o.some((x) => /我的音色 · v-e2e-6/.test(x)) ? o : null }, 8000) || []
+    check('S16 在 Qwen-Audio 模型下复刻:请求绑这个模型、不带文案;成功后采用,并列进「我的音色」',
+      c6.targetModel === 'qwen-audio-3.1-realtime-plus' && !('text' in c6) && a2?.realtimeVoice === 'v-e2e-6' && audioMine.length > 0 && !audioMine.some((o) => /v-e2e-4/.test(o)),
+      JSON.stringify({ targetModel: c6.targetModel, realtimeVoice: a2?.realtimeVoice, 我的音色: audioMine.filter((o) => /我的音色/.test(o)) }))
+    await modelSel.selectOption('bailian/qwen3.8-omni-flash-realtime')
+    const a3 = await until(async () => { const c = await cfgNow(); return c.realtimeModelId === 'bailian/qwen3.8-omni-flash-realtime' ? c : null }, 8000)
+    const omniOpts = await until(async () => { const o = await voiceOpts(); return o.some((x) => /我的音色 · v-e2e-4/.test(x)) ? o : null }, 8000) || await voiceOpts()
+    await voiceSel.selectOption('v-e2e-4').catch(() => {})
+    const a4 = await until(async () => { const c = await cfgNow(); return c.realtimeVoice === 'v-e2e-4' ? c : null }, 8000)
+    check('S17 切回 Omni 模型:Qwen-Audio 的复刻音色不跟过来(回默认 Tina);之前在这个模型上复刻的列在下拉里,一点就挑回来',
+      a3?.realtimeVoice === '' && omniOpts.some((o) => /^Tina/.test(o)) && omniOpts.some((o) => /我的音色 · v-e2e-4/.test(o)) && !omniOpts.some((o) => /v-e2e-6|longanqian/.test(o)) && a4?.realtimeVoice === 'v-e2e-4',
+      `切回后 realtimeVoice=${JSON.stringify(a3?.realtimeVoice)};我的音色:${omniOpts.filter((o) => /我的音色/.test(o)).join(' | ')};挑回 ${a4?.realtimeVoice}`)
+    await modelSel.selectOption('bailian/qwen3.5-omni-flash-realtime')
+    const a5 = await until(async () => { const c = await cfgNow(); return c.realtimeModelId === 'bailian/qwen3.5-omni-flash-realtime' ? c : null }, 8000)
+    await modelSel.selectOption('bailian/qwen3.8-omni-flash-realtime'); await sp.waitForTimeout(600)
+    await voiceSel.selectOption('Cindy'); await until(async () => (await cfgNow()).realtimeVoice === 'Cindy', 5000)
+    await modelSel.selectOption('bailian/qwen3.5-omni-plus-realtime')
+    const a6 = await until(async () => { const c = await cfgNow(); return c.realtimeModelId === 'bailian/qwen3.5-omni-plus-realtime' ? c : null }, 8000)
+    check('S18 同一家族里换型号:复刻音色照样带不过去(绑死在型号上);系统音色通用,留着',
+      a5?.realtimeVoice === '' && a6?.realtimeVoice === 'Cindy', `带着复刻音色换型号 → ${JSON.stringify(a5?.realtimeVoice)};带着 Cindy 换型号 → ${JSON.stringify(a6?.realtimeVoice)}`)
+
     console.log(`截图目录 ${home}`)
   } finally {
     await browser?.close().catch(() => {})

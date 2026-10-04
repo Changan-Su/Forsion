@@ -3940,6 +3940,7 @@ Then reply with only the command output.`,
     if (process.platform !== 'darwin') return { ok: false, skipped: true, detail: '需要 macOS 的 say 合成测试语音' };
     const WS = createRequire(import.meta.url)('ws');
     const RT_MODEL = `bailian/${process.env.TANGU_LIVE_REALTIME_MODEL || 'qwen3.8-omni-flash-realtime'}`;
+    // TANGU_LIVE_REALTIME_MODEL 换通话模型(如 qwen-audio-3.1-realtime-plus);TANGU_LIVE_REALTIME_VOICE 指定音色,不给就走引擎按家族挑的缺省。
     // 随机文件名:模型猜不到,只有 Tangu 真去列目录才说得出来
     const ANIMAL = ['长颈鹿', '火烈鸟', '穿山甲', '北极熊', '海獭', '雪豹'][Math.floor(Math.random() * 6)];
     const MARK = ANIMAL + '账本';
@@ -3976,7 +3977,7 @@ Then reply with only the command output.`,
       if (m.type === 'end') ended = m.reason;
     });
     await new Promise((r, j) => { ws.once('open', r); ws.once('error', j); });
-    ws.send(JSON.stringify({ type: 'start', session_id: sid, model: RT_MODEL, voice: 'Tina', title: 'Voice call', run: { model_id: MODEL, agent_config: AGENT_CONFIG } }));
+    ws.send(JSON.stringify({ type: 'start', session_id: sid, model: RT_MODEL, voice: process.env.TANGU_LIVE_REALTIME_VOICE || undefined, title: 'Voice call', run: { model_id: MODEL, agent_config: AGENT_CONFIG } }));
     const pump = setInterval(() => { // 真麦克风节奏:100ms 一帧,没话说就送静音
       const cur = queue[0]; let chunk = SIL;
       if (cur) { chunk = cur.buf.subarray(cur.off, cur.off + 3200); cur.off += 3200; if (cur.off >= cur.buf.length) queue.shift(); if (chunk.length < 3200) chunk = Buffer.concat([chunk, Buffer.alloc(3200 - chunk.length)]); }
