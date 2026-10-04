@@ -91,8 +91,9 @@ export function analyzeSample(pcm: Float32Array, rate: number): SampleReport {
   const sorted = Float64Array.from(rms).sort()
   const loud = sorted[Math.min(n - 1, Math.floor(n * 0.95))]
   const quiet = sorted[Math.floor(n * 0.05)]
-  // 算作「在说话」:比说话电平低不超过 20 dB,且明显高过底噪
-  const thr = Math.max(loud * 0.1, quiet * 2)
+  // 算作「在说话」:比说话电平低不超过 20 dB,且明显高过底噪。底噪那头封顶在说话电平的一半 ——
+  // 一口气说到底、没有停顿的录音里,最安静的 5% 也是人声,不封顶就把整段都算成底噪了
+  const thr = Math.max(loud * 0.1, Math.min(quiet * 2, loud * 0.5))
   const speech: number[] = []
   let longestPause = 0, last = -1
   for (let f = 0; f < n; f++) {
@@ -116,6 +117,16 @@ export function analyzeSample(pcm: Float32Array, rate: number): SampleReport {
   if (report.longestPauseSec > 2) report.warns.push('pause')
   if (rate < 24000 || highBandShare(pcm, rate, speech, frameLen) < 1e-6) report.warns.push('narrowband')
   return report
+}
+
+/** 播一段 data URI 音频。页面 CSP 的 media-src 不放行 data:(直接 new Audio(dataUri) 会静默失败),转成 blob 再播。 */
+export function playDataUri(uri: string): void {
+  void fetch(uri).then((r) => r.blob()).then((b) => {
+    const url = URL.createObjectURL(b)
+    const a = new Audio(url)
+    a.onended = a.onerror = () => URL.revokeObjectURL(url)
+    return a.play()
+  }).catch(() => {})
 }
 
 /** 任意音频文件 → 48 kHz 单声道 PCM(渲染端解码;双声道只取首声道,百炼也只处理首声道)。 */

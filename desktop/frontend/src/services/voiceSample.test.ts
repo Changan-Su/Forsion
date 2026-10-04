@@ -32,6 +32,18 @@ describe('analyzeSample', () => {
     expect(analyzeSample(speech(61), RATE).blocks).toEqual(['tooLong'])
   })
 
+  it('does not mistake unbroken, level speech for a noise floor', () => {
+    const x = new Float32Array(RATE * 12)
+    for (let i = 0; i < x.length; i++) x[i] = 0.3 * Math.sin((2 * Math.PI * 200 * i) / RATE) + 0.05 * Math.sin((2 * Math.PI * 9000 * i) / RATE)
+    const r = analyzeSample(x, RATE)
+    expect(r.blocks).toEqual([])
+    expect(r.speechSeconds).toBeGreaterThan(11)
+  })
+
+  it('accepts exactly 60 seconds', () => {
+    expect(analyzeSample(speech(60), RATE).blocks).toEqual([])
+  })
+
   it('warns on a short but usable sample', () => {
     const r = analyzeSample(speech(8), RATE)
     expect(r.blocks).toEqual([])

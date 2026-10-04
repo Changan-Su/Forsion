@@ -7,7 +7,7 @@ import { useEffect, useRef, useState } from 'react'
 import { AlertTriangle, Check, Mic, Play, Square, Upload, XCircle } from 'lucide-react'
 import { registerMessages, useI18n } from '../i18n'
 import { wavBase64 } from '../hooks/useVoiceInput' // 顺带注册 voiceinput.* 那几条麦克风报错
-import { analyzeSample, decodeToMono, SAMPLE_MAX_SEC, type SampleReport } from '../services/voiceSample'
+import { analyzeSample, decodeToMono, playDataUri, SAMPLE_MAX_SEC, type SampleReport } from '../services/voiceSample'
 
 const MAX_FILE_MB = 50 // 只防误选整小时的录音把渲染进程解爆;真正的上限是 60 秒
 
@@ -50,6 +50,19 @@ export interface VoiceSample {
 
 interface Rec { ctx: AudioContext; stream: MediaStream; proc: ScriptProcessorNode; chunks: Float32Array[]; startedAt: number; timer: ReturnType<typeof setInterval> }
 
+/** 只读元数据拿时长(秒);拿不到回 0。 */
+function mediaSeconds(file: File): Promise<number> {
+  return new Promise((resolve) => {
+    const url = URL.createObjectURL(file)
+    const a = new Audio()
+    const done = (sec: number): void => { URL.revokeObjectURL(url); a.removeAttribute('src'); resolve(Number.isFinite(sec) ? sec : 0) }
+    a.preload = 'metadata'
+    a.onloadedmetadata = () => done(a.duration)
+    a.onerror = () => done(0)
+    a.src = url
+  })
+}
+
 const clock = (sec: number): string => `${Math.floor(sec / 60)}:${String(Math.floor(sec % 60)).padStart(2, '0')}`
 
 export function VoiceSamplePicker({ onChange, disabled }: { onChange: (s: VoiceSample | null) => void; disabled?: boolean }) {
@@ -61,6 +74,8 @@ export function VoiceSamplePicker({ onChange, disabled }: { onChange: (s: VoiceS
   const [error, setError] = useState('')
   const [sample, setSample] = useState<{ name: string; dataUri: string; report: SampleReport } | null>(null)
   const rec = useRef<Rec | null>(null)
+  const starting = useRef(false) // 等麦克风授权的那一会儿:再点一次不许开第二路
+  const alive = useRef(true)
   const fileRef = useRef<HTMLInputElement>(null)
 
   const release = (): void => {
@@ -73,28 +88,33 @@ export function VoiceSamplePicker({ onChange, disabled }: { onChange: (s: VoiceS
     r.stream.getTracks().forEach((tr) => tr.stop())
     void r.ctx.close().catch(() => {})
   }
-  useEffect(() => release, []) // 关设置页时别把麦克风一直占着
+  useEffect(() => { alive.current = true; return () => { alive.current = false; release() } }, []) // 关设置页时别把麦克风一直占着
 
   const accept = (name: string, pcm: Float32Array, rate: number, script?: VoiceSample['script']): void => {
     const report = analyzeSample(pcm, rate)
-    const dataUri = `data:audio/wav;base64,${wavBase64(pcm, rate)}`
+    const dataUri = report.blocks.includes('tooLong') ? '' : `data:audio/wav;base64,${wavBase64(pcm, rate)}` // 超长的不编码:反正交不出去,别白占内存
     setSample({ name, dataUri, report })
     onChange({ dataUri, ok: report.blocks.length === 0, script })
   }
   const clear = (): void => { setSample(null); setError(''); onChange(null) }
 
   const start = async (): Promise<void> => {
-    if (recording || busy) return
+    if (starting.current || rec.current || busy) return
     clear()
     if (!navigator.mediaDevices?.getUserMedia) { setError(t('voiceinput.unsupported')); return }
     let stream: MediaStream
+    starting.current = true
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: false, noiseSuppression: false, autoGainControl: false } })
     } catch (e: any) {
-      setError(e?.name === 'NotAllowedError' ? t('voiceinput.denied') : e?.name === 'NotFoundError' ? t('voiceinput.noDevice') : t('voiceinput.openFailed', { e: e?.message || String(e) }))
+      if (alive.current) setError(e?.name === 'NotAllowedError' ? t('voiceinput.denied') : e?.name === 'NotFoundError' ? t('voiceinput.noDevice') : t('voiceinput.openFailed', { e: e?.message || String(e) }))
       return
+    } finally {
+      starting.current = false
     }
-    const ctx = new AudioContext()
+    if (!alive.current) { stream.getTracks().forEach((tr) => tr.stop()); return } // 授权弹窗还没点完设置页就关了
+    // 固定 48 kHz:高采样率声卡(96 / 192 kHz)录满 60 秒会超过引擎的请求体上限
+    const ctx = new AudioContext({ sampleRate: 48000 })
     // ponytail: ScriptProcessorNode 已废弃但 Electron 仍支持(realtimeCall.ts 同款);换 AudioWorklet 要单独的 worklet 模块文件。
     const proc = ctx.createScriptProcessor(4096, 1, 1)
     const chunks: Float32Array[] = []
@@ -121,9 +141,10 @@ export function VoiceSamplePicker({ onChange, disabled }: { onChange: (s: VoiceS
     const r = rec.current
     if (!r) return
     const rate = r.ctx.sampleRate
-    const pcm = new Float32Array(r.chunks.reduce((a, c) => a + c.length, 0))
+    // 封顶 60 秒:自动停止由 250ms 的定时器触发,攒下的总会多出一点,不截就被自己的「超过 60 秒」拦住
+    const pcm = new Float32Array(Math.min(r.chunks.reduce((a, c) => a + c.length, 0), rate * SAMPLE_MAX_SEC))
     let at = 0
-    for (const c of r.chunks) { pcm.set(c, at); at += c.length }
+    for (const c of r.chunks) { if (at >= pcm.length) break; pcm.set(c.subarray(0, pcm.length - at), at); at += c.length }
     release()
     setRecording(false)
     accept(t('voicesample.recorded'), pcm, rate, { text: t('voicesample.script'), language: locale === 'en' ? 'en' : 'zh' })
@@ -134,10 +155,14 @@ export function VoiceSamplePicker({ onChange, disabled }: { onChange: (s: VoiceS
     clear()
     if (file.size > MAX_FILE_MB * 1024 * 1024) { setError(t('voicesample.fileTooLarge', { mb: MAX_FILE_MB })); return }
     setBusy(true)
-    file.arrayBuffer().then(decodeToMono)
-      .then(({ pcm, rate }) => accept(file.name, pcm, rate))
-      .catch(() => setError(t('voicesample.decodeFailed')))
-      .finally(() => setBusy(false))
+    // 先只读时长:一小时的 MP3 不到 50MB,整个解开是几百 MB 的 PCM。读不出时长(裸流等)就照常解码
+    mediaSeconds(file)
+      .then((sec) => {
+        if (sec > SAMPLE_MAX_SEC + 1) { setError(t('voicesample.block.tooLong')); return }
+        return file.arrayBuffer().then(decodeToMono).then(({ pcm, rate }) => { if (alive.current) accept(file.name, pcm, rate) })
+      })
+      .catch(() => { if (alive.current) setError(t('voicesample.decodeFailed')) })
+      .finally(() => { if (alive.current) setBusy(false) })
   }
 
   const r = sample?.report
@@ -172,7 +197,7 @@ export function VoiceSamplePicker({ onChange, disabled }: { onChange: (s: VoiceS
           <>
             <button className="btn ghost sm voice-sample-record" disabled={disabled || busy} onClick={() => void start()}><Mic size={12} /> {t(sample ? 'voicesample.rerecord' : 'voicesample.record')}</button>
             <button className="btn ghost sm voice-sample-pick" disabled={disabled || busy} onClick={() => fileRef.current?.click()}><Upload size={12} /> {t('voicesample.pick')}</button>
-            {sample && <button className="btn ghost sm voice-sample-play" onClick={() => void new Audio(sample.dataUri).play().catch(() => {})}><Play size={12} /> {t('voicesample.play')}</button>}
+            {sample?.dataUri && <button className="btn ghost sm voice-sample-play" onClick={() => playDataUri(sample.dataUri)}><Play size={12} /> {t('voicesample.play')}</button>}
           </>
         )}
       </div>

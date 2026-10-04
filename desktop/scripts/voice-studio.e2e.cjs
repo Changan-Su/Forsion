@@ -70,6 +70,8 @@ async function main() {
   execFileSync('afconvert', ['-f', 'WAVE', '-d', 'LEI16@48000', '-c', '2', path.join(home, 'l0.aiff'), good])
   execFileSync('afconvert', ['-f', 'WAVE', '-d', 'LEI16@48000', '-c', '1', path.join(home, 'l0.aiff'), mono])
   writeWav(tiny, readWav(mono).subarray(0, 3 * 48000), 48000)
+  const long = path.join(home, 'long.wav') // 70 秒:同一段话接 5 遍再截
+  writeWav(long, Int16Array.from({ length: 70 * 48000 }, ((src) => (_, i) => src[i % src.length])(readWav(mono))), 48000)
   console.log(`假麦克风 ${mic.file}(${mic.seconds.toFixed(1)}s)`)
 
   const stub = await startStubEngine({ sessions: [], messages: [] })
@@ -130,6 +132,19 @@ async function main() {
     const shot = (name) => sp.screenshot({ path: path.join(home, `${name}.png`) }).catch(() => {})
     const flat = (s) => s.replace(/\n+/g, ' / ')
 
+    // 记下页面里每次 play() 的来源和结果(「试听」那条:CSP 的 media-src 不放行 data:)
+    await sp.evaluate(() => {
+      const play = HTMLMediaElement.prototype.play
+      window.__plays = []
+      HTMLMediaElement.prototype.play = function () {
+        const r = play.call(this)
+        r.then(() => window.__plays.push(`ok ${this.src.slice(0, 5)}`), (e) => window.__plays.push(`${e.name} ${this.src.slice(0, 5)}`))
+        return r
+      }
+    })
+    const direct = await sp.evaluate((uri) => { const a = new Audio(uri); return a.play().then(() => { a.pause(); return 'ok' }, (e) => e.name) }, `data:audio/wav;base64,${fs.readFileSync(tiny).toString('base64')}`)
+    console.log(`(对照)同一个 WAV 直接当 data: URI 播 → ${direct}`)
+
     const opts = await sel.locator('option').allTextContents()
     const def = await sel.inputValue()
     check('S1 复刻模型下拉:9 个模型 + 自定义,缺省是官方推荐的 qwen-audio-3.0-tts-plus',
@@ -145,11 +160,19 @@ async function main() {
     const tinyMarks = await marks(), tinyBlocked = await go.isDisabled()
     check('S3 人声不到 5 秒的样本被拦住,说得出原因', /人声不到 5 秒/.test(tinyText) && tinyMarks.block === 1 && tinyBlocked, `${flat(tinyText)};复刻键禁用=${tinyBlocked}`)
 
+    await file.setInputFiles(long)
+    const longErr = await until(() => studio.locator('.voice-sample-error').innerText().catch(() => ''), 8000) || ''
+    const longBlocked = await go.isDisabled()
+    check('S3b 超过 60 秒的文件:只读时长就拦下(不整个解码),不能复刻', /超过 60 秒/.test(longErr) && !(await reportEl.count()) && longBlocked, `${flat(longErr)};复刻键禁用=${longBlocked}`)
+
     await sel.selectOption('cosyvoice-v3.5-plus')
     await file.setInputFiles(good)
     const goodText = await until(async () => { const s = await report(); return /me-48k/.test(s) ? s : null }, 8000) || ''
     const goodMarks = await marks()
-    check('S4 干净的样本:报出时长,没有问题', /me-48k\.wav · \d+\.\d 秒，人声 \d+\.\d 秒/.test(goodText) && goodMarks.ok === 1 && goodMarks.warn + goodMarks.block === 0, flat(goodText))
+    await studio.locator('.voice-sample-play').click()
+    const played = await until(() => sp.evaluate(() => window.__plays.find((p) => p.endsWith('blob:')) || ''), 5000) || ''
+    check('S4 干净的样本:报出时长,没有问题;「试听」真能播', /me-48k\.wav · \d+\.\d 秒，人声 \d+\.\d 秒/.test(goodText) && goodMarks.ok === 1 && goodMarks.warn + goodMarks.block === 0 && played === 'ok blob:', `${flat(goodText)};试听 ${played || '没播'}`)
+    await sp.evaluate(() => document.querySelectorAll('audio').forEach((a) => a.pause()))
     await go.click()
     await until(() => clones.length >= 1, 8000)
     const c1 = clones[0] || {}, w1 = wavOf(c1.audioData)
@@ -226,6 +249,34 @@ async function main() {
     const after = await sp.evaluate(() => window.tangu.getConfig())
     const said = await sp.locator('.settings-main', { hasText: '这是通话模型' }).count()
     check('S12 在朗读工作室手填通话模型:拦住不复刻,朗读配置不被写坏', clones.length === 3 && said > 0 && after.ttsModelId === 'bailian/my-future-tts-model', `请求 ${clones.length} 次;提示=${said > 0};朗读模型 ${after.ttsModelId}`)
+
+    // ── 语音通话那边的复刻面板:同一个录音区,绑当前通话模型 ──
+    await sp.locator('.realtime-switch').click()
+    const toggle = sp.locator('.realtime-clone-toggle')
+    await toggle.waitFor({ timeout: 8000 })
+    await toggle.click()
+    const callBox = sp.locator('.field', { has: toggle })
+    const callGo = callBox.locator('.realtime-clone-go')
+    const callIdle = await callGo.isDisabled()
+    const callPick = async () => {
+      await callBox.locator('input[type="file"][accept="audio/*"]').setInputFiles(good)
+      await until(async () => /me-48k/.test(await callBox.locator('.voice-sample-report').innerText().catch(() => '')), 8000)
+    }
+    await callPick()
+    const armed = !(await callGo.isDisabled())
+    await toggle.click(); await toggle.click() // 收起再展开:录音区是空的,之前选的样本不能还留着
+    const stale = !(await callGo.isDisabled())
+    await callPick()
+    await toggle.scrollIntoViewIfNeeded()
+    await shot('voice-call-clone')
+    await callGo.click()
+    await until(() => clones.length >= 4, 8000)
+    const c4 = clones[3] || {}, w4 = wavOf(c4.audioData)
+    const callCfg = await until(async () => { const c = await sp.evaluate(() => window.tangu.getConfig()); return c.realtimeVoice === 'v-e2e-4' ? c : null }, 8000)
+    check('S13 通话音色复刻:没样本不能点,收起再展开样本作废;绑当前通话模型发单声道 WAV;成功后通话音色切过去,朗读配置不动',
+      callIdle && armed && !stale && /omni.*realtime/.test(c4.targetModel || '') && callCfg?.realtimeModelId === `bailian/${c4.targetModel}` && !!w4 && w4.channels === 1 && !('text' in c4)
+        && callCfg?.realtimeVoice === 'v-e2e-4' && callCfg?.ttsVoice === after.ttsVoice && callCfg?.ttsModelId === after.ttsModelId,
+      JSON.stringify({ 选了可点: armed, 收起后还可点: stale, targetModel: c4.targetModel, wav: w4, realtimeVoice: callCfg?.realtimeVoice, ttsVoice: callCfg?.ttsVoice }))
 
     console.log(`截图目录 ${home}`)
   } finally {

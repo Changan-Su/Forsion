@@ -143,7 +143,7 @@ export function RealtimeVoiceSettings({ stored, providers, onSaved }: {
           <div className="hint">{t('settings.realtime.voiceHint')}</div>
           {provider && (
             <>
-              <button className="btn ghost sm realtime-clone-toggle" style={{ marginTop: 10 }} aria-expanded={cloneOpen} onClick={() => setCloneOpen((o) => !o)}>
+              <button className="btn ghost sm realtime-clone-toggle" style={{ marginTop: 10 }} aria-expanded={cloneOpen} onClick={() => { setCloneOpen((o) => !o); setSample(null) }}>{/* 收起 = 录音区卸载,选好的样本一并作废 */}
                 <Mic size={12} /> {t('settings.realtime.cloneTitle')}
               </button>
               {cloneOpen && (<>

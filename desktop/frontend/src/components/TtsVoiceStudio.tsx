@@ -12,6 +12,7 @@ import { cloneTtsVoice, deleteTtsVoice, designTtsVoice, listTtsVoices, type TtsV
 import { registerMessages, useI18n } from '../i18n'
 import { homeTarget } from '../services/engine/targets'
 import { VoiceSamplePicker, type VoiceSample } from './VoiceSamplePicker'
+import { playDataUri } from '../services/voiceSample'
 
 // 与后端 routes/tts.ts 的 DASHSCOPE_VC/VD_MODEL 保持一致(列表项缺 targetModel 时按 kind 兜底)。
 // voice-enrollment 那一类(kind=cosy)不兜底:它底下有十来个模型,猜错就是一对配不上的模型和音色 → 不知道绑的是谁就不给「使用」。
@@ -103,7 +104,7 @@ export function TtsVoiceStudio({ cfg, provider, onApplied }: { cfg: TanguDesktop
   }
 
   const playPreview = (): void => {
-    if (preview) void new Audio(`data:audio/wav;base64,${preview.b64}`).play().catch(() => {})
+    if (preview) playDataUri(`data:audio/wav;base64,${preview.b64}`)
   }
 
   return (
