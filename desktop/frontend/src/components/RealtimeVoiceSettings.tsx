@@ -25,6 +25,7 @@ const isAudioFamily = (model: string): boolean => /(^|\/)qwen-audio-/i.test(mode
 const presetsFor = (model: string): string[] => (isAudioFamily(model) ? AUDIO_VOICES : VOICES)
 const defaultVoiceFor = (model: string): string => (isAudioFamily(model) ? 'longanqian' : 'Tina') // 引擎留空时用的那个(realtimeVoice.ts defaultRealtimeVoice)
 const CUSTOM = '__custom__'
+const LAST_MODEL_KEY = 'forsion.realtime.lastModel' // 关掉通话前用的模型:再打开时回到它(音色才对得上)
 
 registerMessages({
   'settings.realtime.title': { zh: '语音通话', en: 'Voice call' },
@@ -75,14 +76,15 @@ export function RealtimeVoiceSettings({ stored, providers, onSaved }: {
   const presets = presetsFor(model)
   // 账号里绑在当前通话模型上的复刻音色:换模型后从这里挑回来,不用去翻 ID
   // 连同它属于哪个模型一起存:换模型的那一帧不能把上一个模型的音色列出来(列出来就能被选中,一接通就报错)
-  const [mineOf, setMineOf] = useState<{ model: string; voices: string[] }>({ model: '', voices: [] })
-  const mine = mineOf.model === apiModel ? mineOf.voices : []
+  const scope = provider && apiModel ? `${model}|${provider.baseUrl}|${provider.apiKey || ''}` : '' // 换提供方 / 换密钥也算换了一份
+  const [mineOf, setMineOf] = useState<{ scope: string; voices: string[] }>({ scope: '', voices: [] })
+  const mine = scope && mineOf.scope === scope ? mineOf.voices : []
   const [mineKey, setMineKey] = useState(0)
   useEffect(() => {
     if (!provider || !apiModel) return
     let stale = false
     listTtsVoices(homeTarget(), { baseUrl: provider.baseUrl, apiKey: provider.apiKey || '' })
-      .then((vs) => { if (!stale) setMineOf({ model: apiModel, voices: vs.filter((v) => v.targetModel === apiModel).map((v) => v.voice) }) })
+      .then((vs) => { if (!stale) setMineOf({ scope, voices: vs.filter((v) => v.targetModel === apiModel).map((v) => v.voice) }) })
       .catch(() => { /* 列不出来就只剩系统音色和手填 */ })
     return () => { stale = true }
   }, [provider?.providerId, provider?.baseUrl, provider?.apiKey, apiModel, mineKey])
@@ -92,14 +94,24 @@ export function RealtimeVoiceSettings({ stored, providers, onSaved }: {
   })
   // 关掉只清模型、不动音色:复刻出来的音色 ID 丢了就得重新花钱复刻
   const toggle = (): void => {
-    if (model) { lastModel.current = model; void save({ realtimeModelId: '' }) }
-    else void save({ realtimeModelId: lastModel.current || `${ds[0].providerId}/${MODELS[0]}` })
+    if (model) {
+      lastModel.current = model
+      try { localStorage.setItem(LAST_MODEL_KEY, model) } catch { /* ignore */ }
+      void save({ realtimeModelId: '' })
+      return
+    }
+    let remembered = lastModel.current
+    if (!remembered) try { remembered = localStorage.getItem(LAST_MODEL_KEY) || '' } catch { /* ignore */ }
+    // 记得上次的模型(且它的提供方还在)→ 原样开回来,音色跟它是一对;否则回落到第一个模型,这时留着的音色不一定是它的
+    if (remembered && ds.some((p) => remembered.startsWith(p.providerId + '/'))) { void save({ realtimeModelId: remembered }); return }
+    const next = `${ds[0].providerId}/${MODELS[0]}`
+    void save({ realtimeModelId: next, realtimeVoice: presetsFor(next).includes(voice) ? voice : '' })
   }
   // 换模型:系统音色在同一家族里通用,留着;复刻 / 手填的音色绑在原来那个模型上,带过去只会让通话一接通就报「音色不支持」→ 回到默认。
   // 复刻的音色没丢:还在账号里,切回原模型时列在音色下拉的「我的音色」里。
   const pickModel = (next: string): void => {
     setMsg('') // 「已采用复刻音色 …」说的是上一个模型
-    void save({ realtimeModelId: next, ...(voice && !presetsFor(next).includes(voice) ? { realtimeVoice: '' } : {}) })
+    void save({ realtimeModelId: next, realtimeVoice: presetsFor(next).includes(voice) ? voice : '' }) // 音色总是一并写:上一次改音色的保存可能还没落地
   }
   const pickVoice = (v: string): void => {
     if (v === CUSTOM) { setCustomId(presets.includes(voice) ? '' : voice); return }
@@ -138,14 +150,14 @@ export function RealtimeVoiceSettings({ stored, providers, onSaved }: {
       <div className="field">
         <div className="switch-row" style={{ minHeight: 30 }}>
           <button type="button" role="switch" aria-checked={!!model} aria-label={t('settings.realtime.enable')}
-            className={`switch realtime-switch${model ? ' on' : ''}`} onClick={toggle} />
+            className={`switch realtime-switch${model ? ' on' : ''}`} disabled={busy} onClick={toggle} />
           <span>{t('settings.realtime.enable')}</span>
         </div>
         <div className="hint" style={{ marginTop: 6 }}>{t('settings.realtime.intro')}</div>
         {model && (
           <>
             <label style={{ marginTop: 12 }}>{t('settings.realtime.model')}</label>
-            <select className="realtime-model" aria-label={t('settings.realtime.model')} value={model} onChange={(e) => pickModel(e.target.value)}>
+            <select className="realtime-model" aria-label={t('settings.realtime.model')} value={model} disabled={busy} onChange={(e) => pickModel(e.target.value)}>{/* 复刻途中不许换:完成时写进来的音色绑的是原模型 */}
               {ds.flatMap((p) => MODELS.map((m) => (
                 <option key={`${p.providerId}/${m}`} value={`${p.providerId}/${m}`}>{ds.length > 1 ? `${p.providerId} · ${m}` : m}</option>
               )))}
