@@ -46,6 +46,9 @@ const SPACE_ICONS: Record<string, LucideIcon> = {
 /** 自绘图标(space.json 的 `iconFile`;主进程验过并读成 data URL)→ 与 lucide 同签名的组件,渲染点零改动。
  *  SVG = 单色蒙版:只取轮廓,颜色走 currentColor,明暗主题与选中态照常;PNG = 原色小图。
  *  两种都只当图片消费(<img> / CSS mask),SVG 里的脚本与外链不会执行。 */
+/** 只收主进程产出的那两种形状。设备页的清单来自对端主机(/unit/spaces),别把任意串放进 src / mask。 */
+const ICON_URL_RE = /^data:image\/(png|svg\+xml);base64,[A-Za-z0-9+/=]+$/
+
 export function imageIcon(url: string): SpaceIcon {
   const mask = `url("${url}") center / contain no-repeat`
   return url.startsWith('data:image/svg+xml')
@@ -263,7 +266,8 @@ async function loadUserSpacesOnce(): Promise<void> {
 
   // 想要的最终集合:解析全部配方,禁用插件的条目排除;同 spec id 先到先得(用户目录在前)。
   const wanted = new Map<string, { spec: SpaceSpec; dirSlug: string; plugin?: string; raw: string; iconUrl?: string }>()
-  for (const { slug, json, plugin, iconUrl } of list) {
+  for (const { slug, json, plugin, iconUrl: rawIcon } of list) {
+    const iconUrl = typeof rawIcon === 'string' && ICON_URL_RE.test(rawIcon) ? rawIcon : undefined
     if (plugin && disabled.has(plugin)) continue
     const r = parseSpaceJson(json, { isViewRegistered: (t) => !!getView(t), appVersion, reservedIds: BUILTIN_IDS })
     if (!r.ok) { console.warn(`[spaces] 跳过 ${slug}: ${r.error}`); continue }
