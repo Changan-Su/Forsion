@@ -57,9 +57,9 @@ type T = (key: string, vars?: Record<string, unknown>) => string
 const kb = (s: VoiceSample): number => Math.round(s.dataUri.length / 1024)
 /** 复刻进行中的提示:慢网络上传要等,别让人以为卡死了。 */
 export const cloneBusyText = (s: VoiceSample, t: T): string => t('voicesample.uploading', { kb: kb(s) })
-/** 复刻失败的提示:引擎等百炼等到超时(Node 的原话是 "The operation was aborted due to timeout")换成人话,带上样本体积。 */
+/** 复刻失败的提示:引擎等百炼等到超时(Node 的原话 "The operation was aborted due to timeout")换成人话,带上样本体积;别的报错原样给,不吞诊断信息。 */
 export const cloneErrorText = (e: any, s: VoiceSample, t: T): string =>
-  /timeout|timed out/i.test(String(e?.message || e)) ? t('voicesample.uploadTimeout', { kb: kb(s) }) : `✗ ${e?.message || e}`
+  /aborted due to timeout/i.test(String(e?.message || e)) ? t('voicesample.uploadTimeout', { kb: kb(s) }) : `✗ ${e?.message || e}`
 
 interface Rec { ctx: AudioContext; stream: MediaStream; proc: ScriptProcessorNode; chunks: Float32Array[]; mr?: MediaRecorder; parts: Blob[]; startedAt: number; timer: ReturnType<typeof setInterval> }
 
@@ -167,7 +167,9 @@ export function VoiceSamplePicker({ onChange, disabled }: { onChange: (s: VoiceS
     if (!r) return
     const rate = r.ctx.sampleRate
     // 封顶 60 秒:自动停止由 250ms 的定时器触发,攒下的总会多出一点,不截就被自己的「超过 60 秒」拦住
-    const pcm = new Float32Array(Math.min(r.chunks.reduce((a, c) => a + c.length, 0), rate * SAMPLE_MAX_SEC))
+    const total = r.chunks.reduce((a, c) => a + c.length, 0)
+    const over = total > rate * SAMPLE_MAX_SEC // 渲染进程卡住、自动停止来晚了:m4a 里是整段(没法截),只能交截好的 WAV
+    const pcm = new Float32Array(Math.min(total, rate * SAMPLE_MAX_SEC))
     let at = 0
     for (const c of r.chunks) { if (at >= pcm.length) break; pcm.set(c.subarray(0, pcm.length - at), at); at += c.length }
     const name = t('voicesample.recorded')
@@ -179,7 +181,8 @@ export function VoiceSamplePicker({ onChange, disabled }: { onChange: (s: VoiceS
       setBusy(false)
       accept(name, pcm, rate, script, payload)
     }
-    const { mr, parts } = r
+    const { parts } = r
+    const mr = over ? undefined : r.mr
     if (mr) {
       mr.onstop = () => {
         const blob = new Blob(parts, { type: 'audio/mp4' }) // 不带 codecs 参数:data URI 原样转给百炼,实测过的是这个写法
@@ -205,7 +208,8 @@ export function VoiceSamplePicker({ onChange, disabled }: { onChange: (s: VoiceS
         return file.arrayBuffer().then(async (buf) => {
           const mime = passThroughMime(file.name, file.type)
           const { pcm, rate } = await decodeToMono(buf.slice(0)) // 解码器会收走传进去的缓冲,给它一份拷贝
-          const payload = mime
+          // 像 16 kHz 录的(narrowband)不原样交:百炼要 ≥ 24 kHz,原文件多半被拒;重编码后能交,检查结果里照样提醒音质偏低
+          const payload = mime && !analyzeSample(pcm, rate).warns.includes('narrowband')
             ? await blobDataUri(new Blob([buf], { type: mime }))
             : await decodeToMono(buf, 24000).then((d) => `data:audio/wav;base64,${wavBase64(d.pcm, d.rate)}`) // 24 kHz = 百炼的下限,体积是 48 kHz 的一半
           if (alive.current) accept(file.name, pcm, rate, undefined, payload)

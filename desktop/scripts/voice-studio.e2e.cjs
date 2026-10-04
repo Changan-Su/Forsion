@@ -72,6 +72,8 @@ async function main() {
   writeWav(tiny, readWav(mono).subarray(0, 3 * 48000), 48000)
   const m4a = path.join(home, 'me.m4a') // 压缩格式:应当原样交,不重编码
   execFileSync('afconvert', ['-f', 'm4af', '-d', 'aac', path.join(home, 'l0.aiff'), m4a])
+  const lowM4a = path.join(home, 'low.m4a') // 16 kHz 的压缩文件:低于百炼的采样率下限,不能原样交
+  execFileSync('afconvert', ['-f', 'm4af', '-d', 'aac', path.join(home, 'l0.wav'), lowM4a])
   const long = path.join(home, 'long.wav') // 70 秒:同一段话接 5 遍再截
   writeWav(long, Int16Array.from({ length: 70 * 48000 }, ((src) => (_, i) => src[i % src.length])(readWav(mono))), 48000)
   console.log(`假麦克风 ${mic.file}(${mic.seconds.toFixed(1)}s)`)
@@ -227,7 +229,8 @@ async function main() {
     const c2 = clones[1] || {}
     const recBytes = Buffer.from(String(c2.audioData || '').replace(/^data:audio\/mp4;base64,/, ''), 'base64')
     fs.writeFileSync(path.join(home, 'recorded.m4a'), recBytes)
-    const recSec = +(/estimated duration: ([\d.]+)/.exec(execFileSync('afinfo', [path.join(home, 'recorded.m4a')]).toString())?.[1] || 0)
+    let recSec = 0 // 交来的不是 m4a 时 afinfo 会报错 —— 那就是 0,由下面的断言判红
+    try { recSec = +(/estimated duration: ([\d.]+)/.exec(execFileSync('afinfo', [path.join(home, 'recorded.m4a')], { stdio: ['ignore', 'pipe', 'ignore'] }).toString())?.[1] || 0) } catch { /* ignore */ }
     check('S10 录音的复刻请求:交的是 m4a(20 秒不到 300 KB,WAV 要 2 MB),时长对得上,带文案原文和语种',
       c2.targetModel === 'qwen3-tts-vc-2026-01-22' && /^data:audio\/mp4;base64,/.test(c2.audioData || '') && recBytes.length > 20_000 && recBytes.length < 300_000 && Math.abs(recSec - mic.seconds) < 3 && c2.text === SCRIPT && c2.language === 'zh',
       JSON.stringify({ targetModel: c2.targetModel, 开头: String(c2.audioData).slice(0, 22), KB: Math.round(recBytes.length / 1024), 秒: recSec, language: c2.language, text: String(c2.text).slice(0, 12) + '…' }))
@@ -295,6 +298,15 @@ async function main() {
       callIdle && armed && !stale && /omni.*realtime/.test(c4.targetModel || '') && callCfg?.realtimeModelId === `bailian/${c4.targetModel}` && !!w4 && w4.channels === 1 && !('text' in c4)
         && callCfg?.realtimeVoice === 'v-e2e-4' && callCfg?.ttsVoice === after.ttsVoice && callCfg?.ttsModelId === after.ttsModelId,
       JSON.stringify({ 选了可点: armed, 收起后还可点: stale, targetModel: c4.targetModel, wav: w4, realtimeVoice: callCfg?.realtimeVoice, ttsVoice: callCfg?.ttsVoice }))
+
+    // 16 kHz 的 m4a:提醒音质偏低,交出去的是重编码的 24 kHz WAV(原样交会被百炼的采样率下限拒掉)
+    await sel.scrollIntoViewIfNeeded()
+    await file.setInputFiles(lowM4a)
+    const lowText = await until(async () => { const s = await report(); return /low\.m4a/.test(s) ? s : null }, 8000) || ''
+    await go.click()
+    await until(() => clones.length >= 5, 8000)
+    const w5 = wavOf(clones[4]?.audioData)
+    check('S14 16 kHz 的 m4a:提醒音质偏低;不原样交,重编码成 24 kHz WAV', /音质偏低/.test(lowText) && !!w5 && w5.rate === 24000 && w5.channels === 1, `${flat(lowText).slice(0, 60)};交出 ${String(clones[4]?.audioData).slice(0, 22)} ${JSON.stringify(w5)}`)
 
     console.log(`截图目录 ${home}`)
   } finally {
