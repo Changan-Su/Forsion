@@ -143,11 +143,16 @@ export const spaceLayoutsWereReset = (): boolean => layoutsResetThisBoot
 
 export function resetSpaceLayouts(only?: string): void {
   if (only) {
-    // 只丢一个 Space 的(它的固定 View 换了边:单例复用不看位置,旧布局还原回来,新位置上那个就开不出来)。
-    // 命名槽按名字丢;当前布局认信封自己记的归属,老存档没记才看「上次退出在哪」;单列存档不记归属,只能看后者。
+    // 只丢一个 Space 的(它的固定 View 换了边:单例复用不看位置,旧布局还原回来,新位置上那个就开不出来)。命名槽按名字丢。
+    // 当前布局要先认清是谁的:桌面的认信封自己记的归属,老存档没记才看「上次退出在哪」。单列存档不记归属,而「上次退出
+    // 在哪」那把键两种壳共用,证明不了它是谁的(在单列壳里停在 Tangu、回桌面壳后在这个 Space 退出 → 那份是 Tangu 的现场):
+    // 只有主区里摆着这个 Space 的固定主视图才算它的,认不出就留着 —— 留错了只是那台设备上旧排布多活一阵,删错了丢的是别人的现场。
+    // ⚠️不置 layoutsResetThisBoot:那面旗说的是「全部 Space 都重置了」,置了会让无关的异步启动 Space 被当成要重建,
+    // 它刚还原的现场被清掉、切走时再把默认布局存进它的槽(Codex 评审)。`only` 自己若是异步注册的 Space,调用方另行处理。
     deleteNamedLayout(spaceLayoutName(only))
-    if ((loadLayout()?.space ?? BOOT_ACTIVE_SPACE_ID) === only) { clearLayout(); layoutsResetThisBoot = true }
-    clearSingleColumnLayouts({ space: only, current: BOOT_ACTIVE_SPACE_ID === only })
+    if ((loadLayout()?.space ?? BOOT_ACTIVE_SPACE_ID) === only) clearLayout()
+    const mainTypes = useSpaceStore.getState().spaces.find((space) => space.id === only)?.pinned?.main?.map((view) => view.type) ?? []
+    clearSingleColumnLayouts({ space: only, mainTypes })
     return
   }
   layoutsResetThisBoot = true

@@ -1,4 +1,4 @@
-import { useWorkspace } from '@lcl/engine'
+import { useSpaceStore, useWorkspace } from '@lcl/engine'
 
 /** 图像工作室的面板摆位(项目 + 详情,2026-10-04):左 = 导航(固定)+ 进项目后的「图层」;右 = 对话(固定)| 属性。
  *  只用两种工作台 store 都有的方法,桌面 Dockview 壳与单列壳同一份逻辑。 */
@@ -25,6 +25,7 @@ let opened = false // 已经自动带出过右栏
 let folded = false // 右栏现在收着,而且是我们回启动台时收的(不是用户)
 let foldedAt = 0 // ……那一下的时刻
 let inProject = false // 项目开着没有:还没做完的那次展开靠它判断该不该继续
+let waiting: ReturnType<typeof setTimeout> | undefined // 等自己那次收起收完的轮询;同一时刻只留一条
 /** 我们收起右栏之后,最多等这么久让它收完(正常 200ms;主线程忙的时候会拖长)。 */
 const FOLD_WINDOW = 2000
 /** 两侧是停靠的栏,还是盖在主区上的抽屉(单列壳)?抽屉不自动开合 —— 开项目时弹出来会把画布整个挡住。
@@ -36,11 +37,13 @@ const docked = (): boolean => 'bottomVisible' in useWorkspace.getState()
  *  两样都不能信。所以以活面板为准(syncPanelState 按它重算 rightVisible):面板撤完了再展开。
  *  等的过程中用户回了启动台就作罢,folded 留着,下次进项目再还。 */
 function bringRightOut(): void {
-  if (!inProject) return
+  clearTimeout(waiting) // 快速进出会叠出第二条:多出来的那条等到面板没了会再 toggle 一次,把用户随后收起的右栏又弹出来
+  // 等的这一下里回了启动台,或者切去了别的 Space:工作台是全局的,再 toggle 就开到别人的右栏上了。folded 留着,下次进项目再还。
+  if (!inProject || useSpaceStore.getState().activeSpaceId !== 'image-studio') return
   const ws = useWorkspace.getState()
   ws.syncPanelState()
   if (!useWorkspace.getState().rightVisible) ws.toggleSidebar('right') // 没有活面板 = 真收着
-  else if (Date.now() - foldedAt < FOLD_WINDOW) { setTimeout(bringRightOut, 50); return } // 我们那一下还没收完
+  else if (Date.now() - foldedAt < FOLD_WINDOW) { waiting = setTimeout(bringRightOut, 50); return } // 我们那一下还没收完
   opened = true; folded = false
 }
 
@@ -62,10 +65,10 @@ export function enterProjectLayout(): void {
  *  挂载时就在启动台则不碰右栏 —— 用户在启动台自己展开过,重启后不该被收回去。 */
 export function leaveProjectLayout(leaving: boolean): void {
   const ws = useWorkspace.getState()
-  inProject = false
+  inProject = false; clearTimeout(waiting)
   ws.remapLeaves(type => (type === STUDIO_LAYERS ? null : undefined))
   if (docked() && leaving && useWorkspace.getState().rightVisible) { useWorkspace.getState().toggleSidebar('right'); folded = true; foldedAt = Date.now() }
 }
 
 /** 测试用:把本次运行的记忆清掉。 */
-export function resetStudioLayoutMemory(): void { opened = false; folded = false; inProject = false; foldedAt = 0 }
+export function resetStudioLayoutMemory(): void { clearTimeout(waiting); opened = false; folded = false; inProject = false; foldedAt = 0 }

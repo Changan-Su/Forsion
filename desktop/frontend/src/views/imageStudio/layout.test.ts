@@ -16,7 +16,7 @@ const ws = vi.hoisted(() => {
     toggleSidebar: vi.fn((side: 'left' | 'right') => {
       if (side === 'left') { state.leftVisible = !state.leftVisible; return }
       clearTimeout(tween)
-      if (state.rightLive) { state.rightVisible = false; tween = setTimeout(() => { state.rightLive = false }, 200) }
+      if (state.rightLive) { state.rightVisible = false; tween = setTimeout(() => { state.rightLive = false; state.rightVisible = false }, 200) } // panels gone: the host re-syncs
       else { state.rightLive = true; state.rightVisible = true }
     }),
     syncPanelState: vi.fn(() => { state.rightVisible = state.rightLive }),
@@ -28,7 +28,8 @@ const ws = vi.hoisted(() => {
   }
   return state
 })
-vi.mock('@lcl/engine', () => ({ useWorkspace: { getState: () => ws } }))
+const space = vi.hoisted(() => ({ activeSpaceId: 'image-studio' }))
+vi.mock('@lcl/engine', () => ({ useWorkspace: { getState: () => ws }, useSpaceStore: { getState: () => space } }))
 import { enterProjectLayout, leaveProjectLayout, resetStudioLayoutMemory, revealStudioPanel } from './layout'
 
 const NAV = 'image-studio-nav', CHAT = 'image-studio-chat', LAYERS = 'image-studio-assets', INSPECTOR = 'image-studio-inspector'
@@ -36,7 +37,7 @@ const SETTLED = 400 // the fold tween and the polling that waits for it are both
 const rightIs = (open: boolean): void => { ws.rightVisible = open; ws.rightLive = open } // the user did it; no tween to model
 afterEach(() => { vi.runOnlyPendingTimers(); vi.useRealTimers() })
 beforeEach(() => {
-  vi.useFakeTimers(); vi.clearAllMocks(); resetStudioLayoutMemory()
+  vi.useFakeTimers(); vi.clearAllMocks(); resetStudioLayoutMemory(); space.activeSpaceId = 'image-studio'
   Object.assign(ws, { mainTabs: [{ type: 'image-studio' }], leftTabs: [{ type: NAV }], rightTabs: [{ type: CHAT }, { type: INSPECTOR }], leftVisible: true, rightVisible: false, rightLive: false, bottomVisible: false, leaves: ['image-studio', NAV, CHAT, INSPECTOR] })
 })
 describe('Image Studio panel placement', () => {
@@ -109,6 +110,25 @@ describe('Image Studio panel placement', () => {
     expect([ws.rightVisible, ws.rightLive]).toEqual([false, false]) // nothing opens over the project list
     enterProjectLayout()
     expect(ws.rightVisible).toBe(true) // we folded it and never got to reopen it
+  })
+  it('runs one wait at a time: nothing is left polling to reopen a side the user folds afterwards', () => {
+    enterProjectLayout(); leaveProjectLayout(true)
+    enterProjectLayout(); leaveProjectLayout(true); enterProjectLayout() // in, out and in again inside the tween
+    vi.advanceTimersByTime(SETTLED)
+    expect(ws.rightVisible).toBe(true)
+    rightIs(false) // the user folds it
+    vi.advanceTimersByTime(SETTLED)
+    expect(ws.rightVisible).toBe(false)
+  })
+  it('gives up the wait when the user moves to another Space: the workspace is global, the toggle would land on that Space', () => {
+    enterProjectLayout(); leaveProjectLayout(true)
+    enterProjectLayout() // waiting for the fold…
+    space.activeSpaceId = 'amadeus' // …and the user switches Space, where the right side is folded
+    vi.advanceTimersByTime(SETTLED)
+    expect(ws.toggleSidebar).toHaveBeenCalledTimes(2) // open, fold — nothing after the switch
+    expect(ws.rightVisible).toBe(false)
+    space.activeSpaceId = 'image-studio'; enterProjectLayout() // back in the Space: the reopen is still owed
+    expect(ws.rightVisible).toBe(true)
   })
   it('never opens or closes a drawer on its own in the single-column shell', () => {
     delete (ws as { bottomVisible?: boolean }).bottomVisible // sides are drawers laid over the canvas
