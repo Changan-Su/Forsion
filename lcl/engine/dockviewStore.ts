@@ -1461,7 +1461,18 @@ export function migrateLayoutBlob(layout: Pick<LayoutEnvelopeV4, 'dockview' | 's
   }
 }
 
+/** onReady 那次还原的结局:null = 还没跑;false = 落空(没有存档 / 存档引用了当时尚未注册的视图),屏上摆的是默认布局。 */
+let bootRestored: boolean | null = null
+/** 启动还原落空了:此刻屏上是「当时的活动 Space」的默认布局,不是布局键里原来那份现场。
+ *  异步就位的 Space(插件比 Dockview 就绪得晚)据此补还原自己的现场,而不是只换个活动 id。 */
+export const bootLayoutFellThrough = (): boolean => bootRestored === false
+
 export function tryRestoreLayout(api: DockviewApi): boolean {
+  bootRestored = restoreLayout(api)
+  return bootRestored
+}
+
+function restoreLayout(api: DockviewApi): boolean {
   const layout = loadLayout()
   if (!layout) return false
   migrateLayoutBlob(layout) // 必须先迁移再校验:退役视图(sessions 等)已无注册,迁移前校验会误丢整份布局

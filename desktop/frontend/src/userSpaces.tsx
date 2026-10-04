@@ -14,7 +14,7 @@ import {
   registerSpace, unregisterSpace, addRibbonIcon, removeRibbonIcon, setActiveSpace, useSpaceStore,
   useWorkspace, deleteNamedLayout, clearLayout, getActiveSpace, getView, label, spaceLayoutName,
   setActiveSpaceCold, BOOT_ACTIVE_SPACE_ID, UI_MODE,
-  spaceLayoutsWereReset,
+  spaceLayoutsWereReset, bootLayoutFellThrough,
 } from '@lcl/engine'
 import type { Leaf, SpaceDefinition, SpaceIcon, PersistedPanel } from '@lcl/engine'
 import { SpaceButton } from './components/SpaceButton'
@@ -251,8 +251,16 @@ export function settleAsyncStartupSpace(): void {
     if (startupSpacePref() === LAST_EXIT_SPACE) {
       setActiveSpaceCold(want)
       configure()
-      // onReady 已按回落 Space 的 bottomSpan 摆过还原出来的布局 → 按本 Space 重摆(Dockview 未就绪则 no-op)
-      ws().realignRegions?.()
+      // 「布局键里本来就是它的现场」只在 onReady 那次还原成了的时候才成立。现场里有插件视图、而插件比 Dockview 就绪得晚
+      // (实测就是这个顺序)→ 那次还原落空,屏上摆的是回落 Space 的默认布局:只换 id 的话界面标着本 Space、内容是回落
+      // Space 的,下次启动还会把它归档进 space:<本 Space>。把启动时归档的那份现场(adoptSpaceLayoutCold 写的)补还原回来。
+      if (bootLayoutFellThrough()) {
+        if (ws().applyNamed(spaceLayoutName(want))) { ws().ensurePinned(); ws().saveCurrent() }
+        else ws().resetLayout()
+      } else {
+        // onReady 已按回落 Space 的 bottomSpan 摆过还原出来的布局 → 按本 Space 重摆(Dockview 未就绪则 no-op)
+        ws().realignRegions?.()
+      }
     } else setActiveSpace(want)
   } else if (ws().sideProfileKey !== want) {
     // 纯插件产品(PRODUCT.spaces 为空):bootstrap 时一个 Space 都没有,画像(含 bottomSpan)从没按它设过(Codex 评审)

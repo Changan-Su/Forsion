@@ -190,6 +190,9 @@ if (typeof window !== 'undefined') {
  *  `api ?` 守卫故从不真正调用。保留导出以满足 barrel / bootstrapEngine 的 import。 */
 export function activeMainPanel(): null { return null }
 
+/** bootLayoutFellThrough:桌面冷启动补定位(settleAsyncStartupSpace)用,移动端不走那条路。保留导出以满足 barrel。 */
+export function bootLayoutFellThrough(): boolean { return false }
+
 interface WS {
   api: null
   mainLeaves: LeafRec[]

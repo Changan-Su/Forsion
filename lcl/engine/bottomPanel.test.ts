@@ -8,7 +8,7 @@
  *   ④ 布局信封:bottom 是可选字段,老布局(无 bottom)照样合法且读成「收起」
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { useWorkspace, captureSideWidths, tryRestoreLayout } from './dockviewStore'
+import { useWorkspace, captureSideWidths, tryRestoreLayout, bootLayoutFellThrough } from './dockviewStore'
 import { computeBottomHeight, BOTTOM_MIN_HEIGHT } from './sideWidth'
 import { isLayoutEnvelopeV4, LAYOUT_KEY } from './layoutPersist'
 import { registerView, unregisterView } from './viewRegistry'
@@ -368,6 +368,24 @@ describe('底部面板:布局信封向后兼容', () => {
     expect(tryRestoreLayout(api)).toBe(true)
     expect(useWorkspace.getState().bottomVisible).toBe(false)
     expect(useWorkspace.getState().stash.bottom).toEqual([])
+    vi.runAllTimers()
+  })
+
+  // 冷启动补定位(desktop userSpaces.settleAsyncStartupSpace)靠这面旗子判断「屏上是不是布局键里那份现场」:
+  // 插件比 Dockview 就绪得晚,它的 Space 上次退出的现场在 onReady 那一刻还原不了。
+  it('布局引用了尚未注册的视图 ⇒ 还原落空,bootLayoutFellThrough 报 true;还原成了报 false', () => {
+    const { api } = mkApi(1600, 1000)
+    useWorkspace.getState().setApi(api)
+    const blob = (type: string): string => JSON.stringify({
+      version: 4, dockview: { panels: { p1: { contentComponent: type, params: { __loc: 'main', __type: type } } } },
+      sidebars: { left: { visible: true, stash: [] }, right: { visible: true, stash: [] } },
+    })
+    localStorage.setItem(LAYOUT_KEY, blob('plugin:late:view'))
+    expect(tryRestoreLayout(api)).toBe(false)
+    expect(bootLayoutFellThrough()).toBe(true)
+    localStorage.setItem(LAYOUT_KEY, blob('termv'))
+    expect(tryRestoreLayout(api)).toBe(true)
+    expect(bootLayoutFellThrough()).toBe(false)
     vi.runAllTimers()
   })
 })
