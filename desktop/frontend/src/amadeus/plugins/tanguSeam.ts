@@ -116,12 +116,14 @@ export interface TanguChatMountOptions {
  *  视图卸了重挂的那一拍里投的引用,新挂上的对话照样接得住。 */
 export const pluginChatType = (o: Pick<TanguChatMountOptions, 'owner' | 'cwd'>): string => `plugin-chat:${o.owner}:${o.cwd ?? ''}`
 
-/** `mountChat` 的句柄。同步返回;会话是异步接上的,`quote` 在接上之前调用也不丢。 */
+/** `mountChat` 的句柄。同步返回;会话是异步接上的,`quote` / `prefill` 在接上之前调用也不丢。 */
 export interface TanguChatMount {
   /** 会话接上(重连或新建)→ ok + sessionId;后端没连上 / Agent 不存在 / 建会话失败 → ok:false(不抛)。 */
   ready: Promise<TanguStartChatResult>
   /** 把一段文字挂成输入框上方的引用条:不发送、不动草稿,由用户接着打字。 */
   quote(text: string): void
+  /** 把一段文字放进输入框(接在已有草稿后面)并聚焦:不发送,由用户按回车。对话要看得见才落进去。 */
+  prefill(text: string): void
   dispose(): void
 }
 

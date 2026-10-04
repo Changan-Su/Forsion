@@ -13,6 +13,7 @@ import { useVoiceInput } from '../../hooks/useVoiceInput'
 import { CALL_TEXT_MAX, getCallPresence, onCallEvent, sendTextToCall, subscribeCallPresence, useRealtimeConfig } from '../../services/realtimeCall'
 import { useCodeStudio } from '../../stores/codeStudioStore'
 import { useImageStudio } from '../../stores/imageStudioStore'
+import { usePluginChat } from '../../stores/pluginChatStore'
 import { normPath } from '../coding/studioModel'
 import { VoiceRecordingBar } from './VoiceRecordingBar'
 import { THINKING_LEVELS } from '../../types'
@@ -1047,6 +1048,14 @@ export const Composer2: React.FC<{
     setAttachments(previous => [...previous, ...imagePrompt.attachments])
     requestAnimationFrame(() => { taRef.current?.focus(); autoGrow() })
   }, [imagePrompt, activeSessionId]) // eslint-disable-line react-hooks/exhaustive-deps
+  // 插件视图里的对话(ctx.tangu.mountChat)的预填:同上,只认本会话、且此刻看得见的那个输入框。
+  const pluginPrompt = usePluginChat(s => s.pending)
+  useEffect(() => {
+    if (!pluginPrompt || pluginPrompt.sessionId !== activeSessionId || !cardRef.current?.closest('[data-plugin-chat]') || !cardRef.current.getClientRects().length) return
+    if (!usePluginChat.getState().consume(pluginPrompt.seq)) return
+    setDraft(previous => previous.trim() ? `${previous}\n\n${pluginPrompt.text}` : pluginPrompt.text)
+    requestAnimationFrame(() => { taRef.current?.focus(); autoGrow() })
+  }, [pluginPrompt, activeSessionId]) // eslint-disable-line react-hooks/exhaustive-deps
   // Studio references append to this project's visible composer. Claim once before updating:
   // hidden / secondary chat views must not consume another project's request or erase its draft.
   useEffect(() => {

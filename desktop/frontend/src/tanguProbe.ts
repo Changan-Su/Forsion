@@ -21,6 +21,7 @@ import {
 } from '@amadeus/plugins/tanguSeam'
 import { activeChatModelId, stickyDefaults, useApp, type AppState } from './stores/appStore'
 import { agentStatusOf, statusKey } from './stores/agentStatus'
+import { usePluginChat } from './stores/pluginChatStore'
 import type { TanguDesktopConfig } from './types'
 import { getAgentSchedules, getMuseLibrary, getMuseLibraryFile, getMuseStatus, getMuseTodos, patchMuseTodo } from './services/backendService'
 import { hasNativeFeature } from './features/runtime'
@@ -261,7 +262,7 @@ export async function startChat(o: TanguStartChatOptions): Promise<TanguStartCha
 function mountChat(el: HTMLElement, o: TanguChatMountOptions): TanguChatMount {
   let disposed = false
   let unmount = (): void => {}
-  const ready = import('./views/pluginChat').then((m) => {
+  const ready: Promise<TanguStartChatResult> = import('./views/pluginChat').then((m) => {
     if (disposed) return { ok: false, error: 'disposed' }
     const mounted = m.mountPluginChat(el, o)
     unmount = mounted.dispose
@@ -270,8 +271,10 @@ function mountChat(el: HTMLElement, o: TanguChatMountOptions): TanguChatMount {
   return {
     ready,
     // 引用条认的是目标名、不是挂载实例:对话还没挂上时投的引用,ChatView 一挂上就消费。
-    // ponytail: 引用条只有文字;要带附件时走 Image Studio 那条 pending / consume(Composer2)。
+    // ponytail: 引用条与预填都只有文字;要带附件时给 pluginChatStore 的 pending 加一栏(Image Studio 那条已有)。
     quote: (text) => { if (!disposed && typeof text === 'string' && text.trim()) useApp.getState().setPendingChatQuote(pluginChatType(o), text) },
+    // 预填按会话投(Composer2 消费):会话接上之后才有 id,所以排在 ready 后面。
+    prefill: (text) => { if (typeof text === 'string' && text.trim()) void ready.then((r) => { if (!disposed && r.ok && r.sessionId) usePluginChat.getState().queue(r.sessionId, text) }) },
     dispose: () => { disposed = true; unmount() },
   }
 }

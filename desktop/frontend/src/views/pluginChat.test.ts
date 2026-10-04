@@ -2,9 +2,9 @@
 /**
  * `ctx.tangu.mountChat`(2026-10-04):三层各钉一处 ——
  *  ① 会话规则(views/pluginChat):新建 = 本机执行 + 工作目录 + Agent;记住的会话还在就接回,只有 404 / 已归档才新开;
- *  ② 探针(tanguProbe.mountChat):引用投给「目标名」,对话没挂上时投的也接得住;卸了就不再挂;
+ *  ② 探针(tanguProbe.mountChat):引用投给「目标名」、预填投给会话,对话没挂上时投的也接得住;卸了就不再挂;
  *  ③ 放行规则(pluginStore):folder 走 hostPath 钳在库内;禁用即收。
- * 负对照(2026-10-04 五条都实跑红过):接回时去掉 `status !== 404` 的判断 → 「连不上不新开」红;cwd 不进槽键 → 「换目录 = 新会话」红;
+ * 负对照(2026-10-04 六条都实跑红过;第六条 = 探针 prefill 不看 disposed → 「卸了之后不投」红):接回时去掉 `status !== 404` 的判断 → 「连不上不新开」红;cwd 不进槽键 → 「换目录 = 新会话」红;
  * 接回时也标 fresh → 「不标全新」红;探针 quote 换一个目标名 → 「没挂上时投的引用」红;pluginStore 去掉 scope.own → 「禁用即收」红。
  */
 import { act } from 'react'
@@ -28,6 +28,7 @@ const { readTangu, setTanguProbe } = await import('../amadeus/plugins/tanguSeam'
 const { usePluginStore } = await import('../amadeus/plugins/pluginStore')
 const { usePageStore } = await import('../amadeus/store/pageStore')
 const { useApp } = await import('../stores/appStore')
+const { usePluginChat } = await import('../stores/pluginChatStore')
 type Ctx = import('../amadeus/plugins/types').PluginContext
 
 const SLOTS = 'tangu.pluginChats'
@@ -55,6 +56,7 @@ beforeEach(() => {
   } as never)
   adopt.mockReset().mockImplementation(realAdopt)
   useApp.setState({ adoptSession: adopt } as never)
+  usePluginChat.setState({ pending: null })
   el = document.createElement('div')
   document.body.append(el)
 })
@@ -208,6 +210,28 @@ describe('探针(tanguProbe.mountChat)', () => {
     expect(useApp.getState().pendingChatQuote).toBeNull()
   })
 
+  it('预填按会话投:接上之前调用的排在 ready 后面;空的不投;卸了之后不投', async () => {
+    api.createSession.mockResolvedValue(rec('s1'))
+    let chat!: import('../amadeus/plugins/tanguSeam').TanguChatMount
+    await act(async () => {
+      chat = readTangu()!.mountChat!(el, { owner: 'p', cwd: '/v/A' })
+      cleanups.push(chat.dispose)
+      chat.prefill('为这支视频写一段配乐')
+      chat.prefill('')
+      expect(usePluginChat.getState().pending).toBeNull() // 会话还没接上:没有 id 可投
+      await chat.ready
+    })
+    expect(usePluginChat.getState().pending).toMatchObject({ sessionId: 's1', text: '为这支视频写一段配乐' })
+    const first = usePluginChat.getState().pending!.seq
+    expect(usePluginChat.getState().consume(first)).toBe(true)
+    expect(usePluginChat.getState().consume(first)).toBe(false) // 只消费一次
+
+    await act(async () => { chat.dispose() })
+    chat.prefill('卸了之后')
+    await flush()
+    expect(usePluginChat.getState().pending).toBeNull()
+  })
+
   it('界面那半还没装进来就卸了 → 不建会话、不挂东西', async () => {
     const chat = readTangu()!.mountChat!(el, { owner: 'p', cwd: '/v/A' })
     chat.dispose()
@@ -218,7 +242,7 @@ describe('探针(tanguProbe.mountChat)', () => {
 })
 
 describe('放行规则(ctx.tangu.mountChat)', () => {
-  const inner = { ready: Promise.resolve({ ok: true, sessionId: 's1' }), quote: vi.fn(), dispose: vi.fn() }
+  const inner = { ready: Promise.resolve({ ok: true, sessionId: 's1' }), quote: vi.fn(), prefill: vi.fn(), dispose: vi.fn() }
   const mountChat = vi.fn((_el: HTMLElement, _o: import('../amadeus/plugins/tanguSeam').TanguChatMountOptions) => inner)
   const probe = (over: Record<string, unknown> = {}) => ({
     activeModel: () => null, models: () => [], activeSpace: () => null, subscribe: () => () => {}, hostExecution: () => true, ...over,
@@ -230,7 +254,7 @@ describe('放行规则(ctx.tangu.mountChat)', () => {
     return ref!
   }
   beforeEach(() => {
-    mountChat.mockClear(); inner.quote.mockClear(); inner.dispose.mockClear()
+    mountChat.mockClear(); inner.quote.mockClear(); inner.prefill.mockClear(); inner.dispose.mockClear()
     setTanguProbe(probe({ mountChat }) as never)
   })
 
@@ -253,15 +277,17 @@ describe('放行规则(ctx.tangu.mountChat)', () => {
     expect(() => ctx.tangu!.mountChat!({} as never)).toThrow(TypeError)
   })
 
-  it('禁用即收:宿主卸掉挂载,旧句柄的 quote 不再转发,再挂不碰探针', async () => {
+  it('禁用即收:宿主卸掉挂载,旧句柄的 quote / prefill 不再转发,再挂不碰探针', async () => {
     const ctx = ctxOf('fvs-off') // 换个 id:scope 按插件 id 记账,上一个用例的挂载也会在 disable 时被收
     const chat = ctx.tangu!.mountChat!(el, { folder: 'Video/Demo' })
-    chat.quote('a')
+    chat.quote('a'); chat.prefill('p')
     expect(inner.quote).toHaveBeenCalledWith('a')
+    expect(inner.prefill).toHaveBeenCalledWith('p')
     usePluginStore.getState().disable('fvs-off')
     expect(inner.dispose).toHaveBeenCalledTimes(1)
-    chat.quote('b')
+    chat.quote('b'); chat.prefill('q')
     expect(inner.quote).toHaveBeenCalledTimes(1)
+    expect(inner.prefill).toHaveBeenCalledTimes(1)
     const n = mountChat.mock.calls.length
     expect(await ctx.tangu!.mountChat!(el).ready).toEqual({ ok: false, error: 'plugin disabled' })
     expect(mountChat.mock.calls.length).toBe(n)

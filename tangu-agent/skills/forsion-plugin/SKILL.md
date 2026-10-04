@@ -777,6 +777,8 @@ ctx.openView('chat', { location: 'right' })
 
 // 别处(时间线的右键菜单之类):把选中的东西引用进对话,由用户接着打字提问
 chat?.quote('Scene "intro" · <h1 data-in="0.4" data-fx="rise">Hello</h1>')
+// 一键任务:先把对话揭到前台,再把一句请求放进输入框,回车由用户按
+ctx.openView('chat', { location: 'right' }); chat?.prefill('Write an original score for this video.')
 ```
 
 - 挂进去的是**同一个**对话:输入框、模型 / 思考档、消息流、工具展示、审批都是原生的,只是固定在一条会话上(不跟随主区)。
@@ -785,11 +787,13 @@ chat?.quote('Scene "intro" · <h1 data-in="0.4" data-fx="rise">Hello</h1>')
 - **`folder`** 同 `startChat`:库相对,宿主解析并钳在库内。给了它,会话在本机执行、相对路径都落在这个文件夹里 ——
   `generate_image` 写进 `<folder>/generated/`,Agent 改的就是你的项目文件。没有库 / 引擎不在本机 / 路径越界 →
   **不带工作目录的沙箱对话**(不报错);要区分就先看 `ctx.app.hostPath?.(folder)`。
-- **永不替用户送出**。句柄只有 `quote(text)`:挂成输入框上方的引用条,不发送、不动草稿;对话还没接上时调用也不丢。
-  所以 `agent` 不要求是你捆绑的(与 `startChat` 的预填档同一口径)。引用条只有文字,没有附件。
+- **永不替用户送出**,回车由用户按。句柄给两条路:`quote(text)` 挂成输入框上方的引用条(不动草稿,适合「引用这个元素再提问」);
+  `prefill(text)` 接在输入框草稿后面并聚焦(适合一键任务,同 Image Studio)。两条在对话还没接上时调用都不丢;
+  `prefill` 要对话**看得见**才落进去 —— 先 `ctx.openView` 把你的视图揭到前台。都只有文字,没有附件。
+  所以 `agent` 不要求是你捆绑的(与 `startChat` 的预填档同一口径)。
 - `ready` → `{ ok:true, sessionId }`;后端没连上 / `unknown agent` / 建会话失败 → `{ ok:false, error }`,不抛,界面上自带「重试」。
   拿到的 `sessionId` 可以喂给 `agentStatus(sessionId)` / `subscribeAgentStatus(cb, sessionId)`,跟着这条对话的状态做反应。
-- 视图卸载时自己 `dispose()`;插件被禁用 / 重载时宿主统一卸掉,旧句柄的 `quote` 不再生效。
+- 视图卸载时自己 `dispose()`;插件被禁用 / 重载时宿主统一卸掉,旧句柄的 `quote` / `prefill` 不再生效。
   **只在有对话能力的宿主上存在**:`ctx.tangu?.mountChat`,缺席时退回 `startChat`。
 
 ## 正文 AI:ctx.tangu.complete 与 registerSelectionAction(2026-09-28 起)
