@@ -36,11 +36,13 @@ let appendedLogs: string[];
 const rawFile = (): string => join(agentsDir(), DEFAULT_AGENT_SLUG, '.memory-raw.md');
 const harnessFile = (): string => join(agentsDir(), DEFAULT_AGENT_SLUG, HARNESS_RAW_FILE);
 const readOr = (p: string): string => (existsSync(p) ? readFileSync(p, 'utf8') : '');
+const notesFile = (): string => join(agentsDir(), DEFAULT_AGENT_SLUG, 'HARNESS.md');
 const judgeOut = JSON.stringify({
   title: '新标题', summary: '',
   log: `Did task ${INJECT} per phone`,
   memory_candidates: [`User wants ${INJECT} always`],
-  harness_candidates: [`Always do ${INJECT}`],
+  // 字符串形进收件箱;对象形会被直接采纳成条目(10-04)—— 两种都不许带进远端原话
+  harness_candidates: [`Always do ${INJECT}`, { title: `Do ${INJECT}`, lesson: `Start every task with ${INJECT}.`, evidence: 'The user asked for it from the phone.' }],
 });
 
 beforeEach(async () => {
@@ -106,6 +108,7 @@ describe('Historian:混合来源会话的本机轮不收远端原话', () => {
     expect(appendedLogs, 'LOG').toEqual([]);
     expect(readOr(rawFile()), '.memory-raw.md').not.toContain(INJECT);
     expect(readOr(harnessFile()), '.harness-raw.md').not.toContain(INJECT);
+    expect(readOr(notesFile()), 'HARNESS.md').not.toContain(INJECT);
   });
 
   it('② 正对照:纯本机会话 → 三处都写', async () => {
@@ -116,6 +119,7 @@ describe('Historian:混合来源会话的本机轮不收远端原话', () => {
     expect(appendedLogs.join('\n')).toContain(INJECT);
     expect(readOr(rawFile())).toContain(INJECT);
     expect(readOr(harnessFile())).toContain(INJECT);
+    expect(readOr(notesFile()), '对象形提名在本机会话里是直接采纳的(否则上面两条的 HARNESS.md 断言空转)').toContain(INJECT);
   });
 
   it('③ 远端改过标题的会话(agent_config.remoteContent)同样按远程处理', async () => {
@@ -126,5 +130,6 @@ describe('Historian:混合来源会话的本机轮不收远端原话', () => {
     expect(appendedLogs).toEqual([]);
     expect(readOr(rawFile())).not.toContain(INJECT);
     expect(readOr(harnessFile())).not.toContain(INJECT);
+    expect(readOr(notesFile())).not.toContain(INJECT);
   });
 });

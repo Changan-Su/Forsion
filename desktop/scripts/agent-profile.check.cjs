@@ -22,7 +22,9 @@ const harnessEntries = [{ id: 'h-cite', kind: 'recipe', title: 'Cite before conc
   // 装备(10-04):Agent 自己收起的工具 / 技能 —— 面板要给出本地化的类型芯片,并列出收起了什么
   { id: 'h-shelf', kind: 'equip', title: 'Shelve drawing tools', body: 'Not used in the last month.', evidence: 'usage review', tools: ['sketch', 'display_file'], skills: ['local:pptx'], createdAt: '2026-10-01', updatedAt: '2026-10-01', version: 1 }]
 const harnessOld = { id: 'h-old', kind: 'note', title: 'Prefer PDF over HTML', body: 'Superseded.', createdAt: '2026-09-01', updatedAt: '2026-09-01', version: 1 }
-const harnessJournal = [{ ts: '2026-09-01T10:00:00Z', action: 'upsert', entryId: 'h-old', before: null, after: harnessOld }, { ts: '2026-09-10T08:00:00Z', action: 'upsert', entryId: 'h-cite', before: null, after: { ...harnessEntries[0], version: 1 } }, { ts: '2026-09-14T15:00:00Z', action: 'delete', entryId: 'h-old', before: harnessOld, after: null }, { ts: '2026-09-16T09:30:00Z', action: 'upsert', entryId: 'h-cite', before: { ...harnessEntries[0], version: 1 }, after: harnessEntries[0], rev: '7c1d2f3a-9b4e-4c6d-8a1f-2b3c4d5e6f70' }]
+const harnessJournal = [{ ts: '2026-09-01T10:00:00Z', action: 'upsert', entryId: 'h-old', before: null, after: harnessOld }, { ts: '2026-09-10T08:00:00Z', action: 'upsert', entryId: 'h-cite', before: null, after: { ...harnessEntries[0], version: 1 } }, { ts: '2026-09-12T08:00:00Z', action: 'upsert', entryId: 'h-scope', before: null, after: harnessEntries[1], by: 'historian' }, { ts: '2026-09-14T15:00:00Z', action: 'delete', entryId: 'h-old', before: harnessOld, after: null }, { ts: '2026-09-16T09:30:00Z', action: 'upsert', entryId: 'h-cite', before: { ...harnessEntries[0], version: 1 }, after: harnessEntries[0], rev: '7c1d2f3a-9b4e-4c6d-8a1f-2b3c4d5e6f70' },
+  // 来源标注(10-04):后台复盘直接采纳的记 by: historian(上面 h-scope 那行),Muse 巡检后代收的记 by: muse
+  { ts: '2026-10-01T08:00:00Z', action: 'upsert', entryId: 'h-shelf', before: null, after: harnessEntries[2], by: 'muse' }]
 // 对话里的工作笔记更新卡(10-04 放开写入):Research notes 的历史里有一条 manage_harness 回执 → 回复下出卡。
 // 回执的 rev 就是上面编辑史的最后一行(h-cite v1→v2)→ 可撤;撤销请求必须原样带回 expectRev;撤完卡片变「已撤销」、不再给撤销键。
 const harnessChange = { rev: '7c1d2f3a-9b4e-4c6d-8a1f-2b3c4d5e6f70', at: '2026-09-16T09:30:00Z', agent: 'research', entryId: 'h-cite', action: 'revise', kind: 'recipe', title: 'Cite before concluding', body: 'Quote the primary source before concluding.', evidence: 'corrected twice', version: 2 }
@@ -363,9 +365,12 @@ async function run() {
     assert.ok(/17/.test(candidateText) && candidateText.endsWith('Check the marker file before answering') && !/2026|s:abcd/.test(candidateText), `A candidate shows its date and text only: ${candidateText}`)
     assert.equal(await evolution.locator('.harness-kind').first().textContent(), '做法', 'Kinds render as localized chips, not raw ids')
     assert.equal(await evolution.getByText(/Invalid Date|T\d\d:\d\d/).count(), 0, 'Dates are localized; a hand-edited date falls back to its raw text')
-    assert.equal(await evolution.locator('[data-harness-entry="h-scope"] .harness-meta').textContent(), 'v1 · last week')
+    assert.equal(await evolution.locator('[data-harness-entry="h-scope"] .harness-meta').textContent(), 'v1 · last week · 后台复盘写入', 'A note adopted by the background review says so')
+    assert.equal(await evolution.locator('[data-harness-entry="h-cite"] [data-harness-by]').count(), 0, 'A note the agent wrote itself carries no source label')
     const shelf = evolution.locator('[data-harness-entry="h-shelf"]')
     assert.equal(await shelf.locator('.harness-kind').textContent(), '装备', 'An equip entry carries its own localized chip')
+    assert.equal(await shelf.locator('[data-harness-by="muse"]').textContent(), ' · Muse 代为收起', 'Equipment Muse shelved after a review says so')
+    assert.ok((await evolution.locator('.harness-history').textContent()).includes('后台复盘写入') && (await evolution.locator('.harness-history').textContent()).includes('Muse 代为收起'), 'The edit history names the source too')
     assert.equal(await shelf.locator('[data-harness-shelved="tools"]').textContent(), '收起的工具：sketch、display_file')
     assert.equal(await shelf.locator('[data-harness-shelved="skills"]').textContent(), '收起的技能：local:pptx')
     assert.ok((await evolution.textContent()).includes('写入立即生效') && !(await evolution.textContent()).includes('要经审批'), 'The panel itself explains that the agent maintains its notes and that updates can be undone')

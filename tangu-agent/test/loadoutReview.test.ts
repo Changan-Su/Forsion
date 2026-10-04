@@ -1,11 +1,12 @@
 /**
- * 装备用量巡检(10-04):Muse 每周看各 agent 的工具 / 技能用量,只出建议。
+ * 装备用量巡检(10-04):Muse 每周看各 agent 的工具 / 技能用量,把一直没用到的当场代收(不出卡片)。
  * 真 SQLite(内存)+ 临时 TANGU_HOME;用量行直接插进 agent_runs / agent_run_events,不起模型。
  */
-import { beforeAll, afterAll, describe, expect, it } from 'vitest';
+import { beforeAll, afterAll, describe, expect, it, vi } from 'vitest';
 import { existsSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+vi.mock('../src/services/agentFileSync.js', () => ({ scheduleAgentFilesSync: vi.fn() }));
 import { configureTangu, deps } from '../src/seams/runtime.js';
 import { createTanguProfile } from '../src/profiles/index.js';
 import { createSqliteHost } from '../src/adapters/standalone/sqliteHost.js';
@@ -14,8 +15,11 @@ import { STANDALONE_SCHEMA } from '../src/db/schemaStandalone.js';
 import { runMigration } from '../src/db/migrate.js';
 import { query } from '../src/core/db.js';
 import { saveAgent } from '../src/agents/agentRegistry.js';
-import { applyHarnessEdit } from '../src/agents/harnessStore.js';
-import { collectLoadoutUsage, buildLoadoutReview, MIN_RUNS, LOADOUT_APPLY_STEPS, LOADOUT_APPLY_STEPS_ZH, SUGGEST_MAX } from '../src/services/loadoutUsage.js';
+import { applyHarnessEdit, loadHarness, readJournal, peekHarnessCandidates, MUSE_EQUIP_TITLE } from '../src/agents/harnessStore.js';
+import { runWithAgentSlug } from '../src/seams/runContext.js';
+import { manageHarnessProvider } from '../src/tools/builtin/manageHarness.js';
+import { scheduleAgentFilesSync } from '../src/services/agentFileSync.js';
+import { collectLoadoutUsage, buildLoadoutReview, suggestedLoadout, MIN_RUNS, LOADOUT_APPLY_STEPS, SUGGEST_MAX } from '../src/services/loadoutUsage.js';
 import { isShelvable } from '../src/tools/toolRegistry.js';
 import { reviewLoadoutProvider } from '../src/tools/builtin/reviewLoadout.js';
 import { getToolDefinitions, listDeferredTools } from '../src/tools/registry.js';
@@ -146,16 +150,16 @@ describe('review_loadout 报告', () => {
     expect(rookie).toMatch(/Too few runs to judge/);
     expect(rookie).not.toMatch(/Never called/);
     expect(out).toMatch(/1 agent\(s\) have enough runs to judge\. The "Suggested … this time" lines are the whole suggestion for this review \(at most 8 tools and 8 skills per agent\): pass them on exactly, add nothing\./);
-    // 「执行步骤」段由报告给出(自己收 / 给别人提名两支都在),Muse 原样带进 TODO
+    // 「执行步骤」段由报告给出(只有 propose 这一支:Muse 巡检完当场代收),不交给模型现写
     expect(out.endsWith(LOADOUT_APPLY_STEPS)).toBe(true);
-    expect(LOADOUT_APPLY_STEPS).toMatch(/action "upsert", kind "equip"/);
-    expect(LOADOUT_APPLY_STEPS).toMatch(/action "propose"/);
-    // 中文界面下这一段直接给中文版(落在用户收件箱的卡片上),两条分支与工具 / 参数名都在
+    expect(LOADOUT_APPLY_STEPS).toMatch(/action "propose", agent = its slug, tools and skills = exactly its listed items/);
+    expect(LOADOUT_APPLY_STEPS).not.toMatch(/upsert|todo|inbox/); // 「自己收」「转交卡片」那两支随卡片一起去掉了
+    // 步骤是给 Muse 读的,不落在用户界面上:中文界面下也是同一段英文
     setUiLocale('zh');
     const zh = await buildLoadoutReview(ctx(), { days: 30 });
     setUiLocale('en');
-    expect(zh.endsWith(LOADOUT_APPLY_STEPS_ZH)).toBe(true);
-    for (const must of ['manage_harness', 'action "upsert"', 'kind "equip"', 'action "propose"', '收起', '按需目录']) expect(LOADOUT_APPLY_STEPS_ZH, must).toContain(must);
+    expect(zh.endsWith(LOADOUT_APPLY_STEPS)).toBe(true);
+    expect(/[一-鿿]/.test(LOADOUT_APPLY_STEPS)).toBe(false);
   });
 
   it('上限由报告执行:没调过的再多也只列最大的 8 个,其余连名字都不给;太小的不建议', async () => {
@@ -175,15 +179,15 @@ describe('review_loadout 报告', () => {
     await applyHarnessEdit('worker', { action: 'upsert', kind: 'equip', title: 'Shelf', body: 'unused', evidence: 'review', tools: ['delegate'], skills: ['local:bar'] });
     const worker = (await buildLoadoutReview(ctx(), { days: 30, agent: 'worker' })).split('## ').find((b) => b.startsWith('worker'))!;
     expect(worker.split('\n').find((l) => l.startsWith('Suggested tools'))).not.toMatch(/delegate/);
-    expect(worker).toMatch(/Already shelved by this agent: delegate/);
+    expect(worker).toMatch(/Already shelved for this agent: delegate/);
     expect(worker).toMatch(/Skills already shelved: local:bar/);
     expect(worker.split('\n').find((l) => l.startsWith('Suggested skills'))).not.toMatch(/local:bar/);
   });
 
   it('没有任何用量 / 点名的 agent 不存在 → 明说数据不够,不给名单', async () => {
     expect(await buildLoadoutReview({ ...ctx(), userId: 'nobody' }, {})).toMatch(/not enough data.*Do not recommend anything/);
-    expect(await buildLoadoutReview({ ...ctx(), userId: 'nobody' }, {})).not.toContain('Steps for whoever runs this task'); // 没有可判的 agent 就不给步骤
-    expect(await buildLoadoutReview(ctx(), { agent: 'rookie' })).not.toContain('Steps for whoever runs this task');
+    expect(await buildLoadoutReview({ ...ctx(), userId: 'nobody' }, {})).not.toContain(LOADOUT_APPLY_STEPS); // 没有可判的 agent 就不给步骤
+    expect(await buildLoadoutReview(ctx(), { agent: 'rookie' })).not.toContain(LOADOUT_APPLY_STEPS);
     expect(await buildLoadoutReview(ctx(), { agent: 'ghost' })).toMatch(/No user-session runs for agent "ghost"/);
   });
 
@@ -196,6 +200,114 @@ describe('review_loadout 报告', () => {
     expect(names({ muse: true, execMode: 'sandbox' })).not.toContain('review_loadout');
     const out = String(await reviewLoadoutProvider.tools()[0].execute({ days: 30, agent: 'worker' }, ctx()));
     expect(out).toMatch(/^Loadout usage over the last 30 days/);
+  });
+});
+
+// 10-04 用户裁决「Muse 也开放自动采纳」:Muse 的装备建议不再躺在对方的候选收件箱里等 /refine,直接替对方收起。
+// 能收什么由代码此刻重算的巡检名单把关;接着上面的用例跑(worker 自己已经收了 delegate / local:bar)。
+describe('Muse 代收:propose 带 tools / skills 直接生效', () => {
+  const tool = manageHarnessProvider.tools()[0];
+  const propose = (args: Record<string, unknown>, as = 'muse', extra: Record<string, unknown> = {}) =>
+    runWithAgentSlug(as, async () => String(await tool.execute({ action: 'propose', ...args }, { ...ctx(), ...extra })));
+  const suggested = async () => (await suggestedLoadout(ctx(), 'worker'))!;
+  /** 把时钟拨到一周之后再算一次名单(本周的量按编辑史里的时间算)。只假 Date,文件 / 数据库 I/O 照常。 */
+  const nextWeek = async () => {
+    vi.useFakeTimers({ toFake: ['Date'], now: Date.now() + 7 * 86_400_000 });
+    try { return await suggested(); } finally { vi.useRealTimers(); }
+  };
+  const museEntry = async () => (await loadHarness('worker')).find((e) => e.title === MUSE_EQUIP_TITLE);
+
+  it('只收巡检名单里的:多填的(在用的 / 收不得的 / 不存在的)不认并点名;回执与 agent 自己写的同形 → 出带撤销的更新卡', async () => {
+    const now = await suggested();
+    expect(now).toMatchObject({ runs: 28, days: 30 });
+    expect(now.tools).toHaveLength(SUGGEST_MAX);
+    expect(now.tools).not.toContain('delegate'); // worker 自己收过的不在名单里
+    const give = now.tools.slice(0, 3);
+    const out = JSON.parse(await propose({ agent: 'worker', tools: [...give, 'run_bash', 'load_tools', 'no_such_tool'], skills: ['local:foo'], evidence: 'x'.repeat(900) }));
+    expect(out.kind).toBe('harness_update');
+    expect(out.change).toMatchObject({ agent: 'worker', action: 'create', kind: 'equip', title: MUSE_EQUIP_TITLE, tools: give, version: 1 });
+    expect(out.change.rev).toMatch(/^[a-f0-9-]{36}$/);
+    expect(out.change.evidence).toBe('30-day usage review: 28 runs, none of these was called'); // 依据由代码拼,模型给的长句不进条目
+    expect(out.message).toContain(`Shelved for "worker": ${give.join(', ')}.`);
+    expect(out.message).toContain('Left out, not in the current review for that agent: run_bash, load_tools, no_such_tool, local:foo.');
+    const entry = (await museEntry())!;
+    expect(entry.tools).toEqual(give);
+    expect(entry.skills ?? []).toEqual([]);
+    expect((await readJournal('worker')).at(-1)).toMatchObject({ by: 'muse', sessionId: 's-muse', entryId: entry.id });
+    expect(vi.mocked(scheduleAgentFilesSync)).toHaveBeenLastCalledWith(USER, 'worker'); // 同步的是对方的文件夹
+    expect(await peekHarnessCandidates('worker')).toEqual([]); // 没有再往收件箱里放一份
+  });
+
+  it('一个名字都不在名单里 → 报错、什么都不收', async () => {
+    const before = await loadHarness('worker');
+    expect(await propose({ agent: 'worker', tools: ['run_bash', 'load_tools'], skills: ['local:foo'] })).toMatch(/^Error: none of these is in the current usage review for "worker" \(run_bash, load_tools, local:foo\)\..*Nothing was shelved\.$/);
+    // 用户直接跟 Muse 对话(不是后台周期)走的是同一支:换成「转交」那一支的话,没带依据会先报「needs evidence」
+    expect(await propose({ agent: 'worker', tools: ['run_bash', 'load_tools'], skills: ['local:foo'] }, 'muse', { muse: false })).toMatch(/^Error: none of these is in the current usage review for "worker"/);
+    expect(await loadHarness('worker')).toEqual(before);
+  });
+
+  it('一周一批:本周的量用完后,下一批的名字这周不认(Muse 再跑一遍巡检也越不过上限);一周后才轮到', async () => {
+    let now = await suggested();
+    expect(now.tools).toHaveLength(SUGGEST_MAX - 3); // 本周已经代收了 3 个
+    const out = JSON.parse(await propose({ agent: 'worker', tools: now.tools, skills: now.skills }, 'muse', { muse: false })); // 这一批由手聊的 Muse 收:同样当场生效
+    expect(out.change).toMatchObject({ action: 'revise', version: 2 }); // 并进同一条:撤销卡撤的正是这一次
+    expect(out.change.tools).toHaveLength(SUGGEST_MAX);
+    now = await suggested();
+    expect(now).toMatchObject({ tools: [], skills: [] });
+    const later = await nextWeek();
+    expect(later.tools.length, '前提:下周还有可建议的,否则下面的拒绝是空转').toBeGreaterThan(0);
+    const shelved = (await museEntry())!.tools!;
+    for (const n of later.tools) expect(shelved, n).not.toContain(n);
+    expect(await propose({ agent: 'worker', tools: [later.tools[0]] })).toMatch(/^Error: nothing is open to shelve for "worker" right now/);
+    expect((await museEntry())!.tools).toEqual(shelved);
+    // 报告与代收用的是同一份名单
+    expect((await buildLoadoutReview(ctx(), { days: 30, agent: 'worker' })).split('\n').find((l) => l.startsWith('Suggested tools'))).toBe('Suggested tools to shelve this time: none');
+  });
+
+  it('对方拿回来的不再建议:撤掉 Muse 那一条之后,同样的名字下周也不回到名单里(否则每周收一次、撤一次)', async () => {
+    const entry = (await museEntry())!;
+    const taken = [...entry.tools!];
+    await applyHarnessEdit('worker', { action: 'delete', id: entry.id }); // worker 自己删,或用户在面板 / 撤销卡上撤
+    const later = await nextWeek();
+    expect(later.tools.length, '前提:名单不是空的,否则「不包含」是空转').toBeGreaterThan(0);
+    for (const n of taken) expect(later.tools, n).not.toContain(n);
+  });
+
+  it('数据不够的 agent、不存在的 agent → 明确报错', async () => {
+    expect(await propose({ agent: 'rookie', tools: ['delegate'] })).toMatch(/^Error: no usage review covers "rookie"/);
+    expect(await loadHarness('rookie')).toEqual([]);
+    expect(await propose({ agent: 'ghost', tools: ['delegate'] })).toMatch(/^Error: agent "ghost" does not exist/);
+  });
+
+  it('不是 Muse 的 agent 转交同样的建议 → 只留一条由代码拼全的候选,对方的笔记不动', async () => {
+    const before = await loadHarness('worker');
+    const args = { agent: 'worker', tools: ['sketch', 'browser_task'], skills: ['local:baz'], evidence: '28 runs in 30 days; none called' };
+    expect(await propose({ ...args, evidence: '' }, 'rookie', { muse: false })).toMatch(/^Error: an equipment suggestion needs evidence/);
+    expect(await propose(args, 'rookie', { muse: false })).toMatch(/^Left the equipment suggestion in "worker"'s candidate inbox/);
+    expect(await loadHarness('worker')).toEqual(before);
+    const inbox = await peekHarnessCandidates('worker');
+    expect(inbox).toHaveLength(1);
+    expect(inbox[0].endsWith('(proposed by rookie) Equipment suggestion from a usage review: shelve tools sketch, browser_task and skills local:baz (evidence: 28 runs in 30 days; none called). To adopt: manage_harness upsert, kind "equip", with these tools / skills.')).toBe(true);
+    expect(await propose(args, 'rookie', { muse: false })).toBe('"worker" already has this suggestion waiting.');
+  });
+
+  it('用户关掉了对方的 manage_harness → 报告不给它建议、不给步骤,Muse 也不代收(它自己撤不了别人替它收的东西)', async () => {
+    const before = await loadHarness('worker');
+    expect(await nextWeek(), '前提:没关的时候下周是有名单的').toMatchObject({ runs: 28 });
+    await saveAgent({ slug: 'worker', name: 'Worker', systemPrompt: 'Work.', toolsMode: 'deny', toolsList: ['manage_harness'] } as any);
+    try {
+      expect(await nextWeek()).toBeNull();
+      const report = await buildLoadoutReview(ctx(), { days: 30, agent: 'worker' });
+      expect(report).toMatch(/## worker — 28 runs\nThe user turned off this agent's notes/);
+      expect(report).not.toMatch(/Suggested tools/);
+      expect(report).not.toContain(LOADOUT_APPLY_STEPS);
+      vi.useFakeTimers({ toFake: ['Date'], now: Date.now() + 7 * 86_400_000 });
+      try { expect(await propose({ agent: 'worker', tools: ['delegate'] })).toMatch(/^Error: no usage review covers "worker"/); } finally { vi.useRealTimers(); }
+      expect(await loadHarness('worker')).toEqual(before);
+    } finally {
+      await saveAgent({ slug: 'worker', name: 'Worker', systemPrompt: 'Work.', toolsMode: null, toolsList: null } as any);
+    }
+    expect(await nextWeek(), '恢复之后名单回来').toMatchObject({ runs: 28 });
   });
 });
 
@@ -225,13 +337,14 @@ describe('每周装备巡检的日程条目', () => {
     expect(entriesOf((await loadSchedule('muse'))!)).toHaveLength(1);
   });
 
-  it('条目的 prompt 是英文、够短、说清「只提建议」', () => {
+  it('条目的 prompt 是英文、够短、说清「当场代收、不出卡片、不问」', () => {
     expect(LOADOUT_REVIEW_PROMPT.length).toBeLessThan(4000);
     expect(/[一-鿿]/.test(LOADOUT_REVIEW_PROMPT)).toBe(false);
-    expect(LOADOUT_REVIEW_PROMPT).toMatch(/exactly ONE add_muse_todo/);
-    expect(LOADOUT_REVIEW_PROMPT).toMatch(/nothing has been changed yet/);
-    // 10-04 live 实翻:Muse 把「本周期别动任何东西」原样抄进了 TODO,接手的 agent 读到后就什么都不做
-    expect(LOADOUT_REVIEW_PROMPT).toMatch(/do not copy that restriction into the todo/);
-    expect(LOADOUT_REVIEW_PROMPT).toMatch(/do not write your own steps/);
+    expect(LOADOUT_REVIEW_PROMPT).toMatch(/shelve the suggested items for each agent yourself, now/);
+    expect(LOADOUT_REVIEW_PROMPT).toMatch(/do not file a todo for it and do not ask/);
+    expect(LOADOUT_REVIEW_PROMPT).not.toMatch(/add_muse_todo/);
+    // 步骤不由 Muse 现写:prompt 点的段名要与报告末尾那一段对得上,否则它找不到
+    expect(LOADOUT_REVIEW_PROMPT).toContain(`"${LOADOUT_APPLY_STEPS.slice(0, LOADOUT_APPLY_STEPS.indexOf(':'))}" paragraph`);
+    expect(LOADOUT_REVIEW_PROMPT).toMatch(/never remove a capability/);
   });
 });

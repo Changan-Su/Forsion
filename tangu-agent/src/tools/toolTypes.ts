@@ -81,6 +81,8 @@ export interface ToolContext {
   planMode?: boolean;
   /** Muse run 标记:仅此时 add_muse_todo(Muse 唯一写权限)可见。 */
   muse?: boolean;
+  /** 本会话属于一个本机项目(agentLoop 按会话存档的 project_path 定;可信,模型给不了)。remember 据此露出「项目级」。 */
+  projectScoped?: boolean;
   /** 无人值守 run 的异步审批档(仅引擎内部按 run 来源设定;delegate 子代理从父 ctx 继承,否则子代理越界会挂在同步审批上)。 */
   approvalDeferral?: 'queue' | 'agent';
 
@@ -245,6 +247,10 @@ export interface ToolCapabilities {
 
 export interface ToolImpl {
   definition: Tool;
+  /** 定义随运行上下文变的工具才给(缺省 = 恒用 definition)。返回的必须是同名工具的**预先建好**的定义对象之一
+   *  (别每次新建:同一个 run 里逐轮取到的定义要逐字节一致,前缀缓存靠它)。执行侧不看这个,参数多一个少一个都要兜得住。
+   *  现有用户:remember —— 「级别(scope)」那段说明只在会话属于一个项目时才有意义,云端聊天面的体量预算放不下它。 */
+  definitionFor?(ctx: ToolContext): Tool;
   execute: (args: Record<string, any>, ctx: ToolContext) => Promise<string> | string;
   /** 工具可见性域：'sandbox'=仅云沙箱模式，'host'=仅本地直连模式，缺省='both'=两者皆可。 */
   mode?: 'sandbox' | 'host' | 'both';

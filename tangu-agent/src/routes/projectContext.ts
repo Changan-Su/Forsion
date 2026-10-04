@@ -2,6 +2,7 @@
  * 项目上下文路由(桌面「PROJECT 详情」;handler 自带 authMiddleware):
  *   GET  /agent/project-context?sessionId=      → ProjectContext(指令文件 / 项目技能 / 计划 / 默认项 / git)
  *   POST /agent/project-context/init            { sessionId }                              → 建 .tangu/ + 骨架
+ *   DELETE /agent/project-context/memory        { sessionId, id, expectedVersion }         → 删一条项目记忆,返回 { memory }(GET 的 context 里带 memory;远端来源不给)
  *   PUT  /agent/project-context/doc             { sessionId, content, expectedMtimeMs? }   → 写指令文件(409 = 别处改过)
  *   GET  /agent/project-context/settings?sessionId=|cwd= → { settings }(桌面建会话前的轻量预取;cwd 形态给没有会话可借的项目)
  *   PUT  /agent/project-context/settings        { sessionId, settings }                    → 用户侧项目默认项
@@ -27,6 +28,8 @@ import {
   canonicalProjectPath, createProjectSkill, deleteProjectIcon, initProjectWorkspace, projectContext, readProjectIcon, readProjectSettings,
   saveProjectIcon, setProjectIconEmoji, writeProjectDoc, writeProjectSettings,
 } from '../services/projectContext.js';
+import { forgetProjectMemory, projectMemoryView } from '../services/projectMemory.js';
+import { parseRemoteOrigin } from '../services/remoteOrigin.js';
 import { GitActionError, generateCommitMessage, gitCommit, gitCreateBranch, gitInit, gitPending, gitPush, gitTrustRepo, serialized } from '../services/gitActions.js';
 import { DEFAULT_GIT_SETTINGS, gitSettings, updateGitSettings } from '../services/gitSettings.js';
 
@@ -64,9 +67,25 @@ router.get('/agent/project-context', authMiddleware, async (req: AuthRequest, re
   try {
     const cwd = await projectDirOf(req, res, req.query.sessionId);
     if (!cwd) return;
-    res.json(await projectContext(cwd));
+    // 项目记忆(10-04):同协作说明的口径,远端设备来的请求不给看、也不给改(见下面的 DELETE)。
+    const memory = parseRemoteOrigin(req.headers) ? undefined : await projectMemoryView(cwd).catch(() => undefined);
+    res.json({ ...(await projectContext(cwd)), ...(memory ? { memory } : {}) });
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'project context failed' });
+  }
+});
+
+// 用户删一条项目记忆(项目详情 › 设置)。只在主机上:与协作说明、agent 管理面同一条「持久配置只在本机改」的边界。
+router.delete('/agent/project-context/memory', authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    if (parseRemoteOrigin(req.headers)) return res.status(403).json({ detail: 'Open the project on the host computer to edit its memory.' });
+    const cwd = await projectDirOf(req, res, req.body?.sessionId);
+    if (!cwd) return;
+    const { id, expectedVersion } = req.body || {};
+    if (typeof id !== 'string' || !id || typeof expectedVersion !== 'string' || !expectedVersion) return res.status(400).json({ detail: 'id and expectedVersion are required' });
+    res.json({ memory: await forgetProjectMemory(cwd, id, expectedVersion) });
+  } catch (e: any) {
+    res.status(e?.code === 'MEMORY_NOT_FOUND' ? 404 : e?.code === 'MEMORY_VERSION_CONFLICT' || e?.code === 'MEMORY_BUSY' ? 409 : 400).json({ detail: e?.message || 'forget project memory failed', code: e?.code });
   }
 });
 

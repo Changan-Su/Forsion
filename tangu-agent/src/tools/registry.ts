@@ -265,10 +265,10 @@ export function getToolDefinitions(ctx: ToolContext): Tool[] {
       ctx.loadToolsExposed = true;
     }
     if (isDeferredIn(ctx, name, t.deferred) && !deferBypass) {
-      if (unlocked?.has(name)) unlockedDeferred.push(t.definition);
+      if (unlocked?.has(name)) unlockedDeferred.push(t.definitionFor?.(ctx) ?? t.definition);
       continue;
     }
-    defs.push(t.definition);
+    defs.push(t.definitionFor?.(ctx) ?? t.definition);
   }
   defs.push(...unlockedDeferred);
   const taken = new Set<string>(tools.keys());

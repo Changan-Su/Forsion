@@ -34,18 +34,20 @@ import { deps } from '../seams/runtime.js';
 import type { ChatMessage } from '../core/types.js';
 import { loadSpecialAgentsConfig, DEFAULT_HISTORIAN_PROMPT, resolveBackgroundModelId, type HistorianConfig } from './specialAgentsConfig.js';
 import { enterRunContext, currentAgentSlug } from '../seams/runContext.js';
-import { getAgent, resolveMemorySlug, isValidSlug } from '../agents/agentRegistry.js';
+import { getAgent, resolveMemorySlug, isValidSlug, agentNotesOff } from '../agents/agentRegistry.js';
 import { branchSession } from './sessionBranch.js';
 import { createRun } from './runStore.js';
 import { DEFAULT_AGENT_SLUG } from '../core/tanguHome.js';
 import { buildSharedPrefix } from './selfBrainstorm.js';
 import { effectiveContextWindowInfo, estimateMessageTokens } from './contextBudget.js';
 import { redactSecrets } from '../core/redact.js';
-import { appendHarnessCandidates } from '../agents/harnessStore.js';
+import { appendHarnessCandidates, adoptHarnessNomination, autoAdoptable, noteAutoAdoptable } from '../agents/harnessStore.js';
+import { scheduleAgentFilesSync } from './agentFileSync.js';
 import { appendCandidates as appendRawCandidates, readCandidates as readRaw } from './memoryCandidates.js';
 import { startMemoryDream } from './memoryDream.js';
-import { MEMORY_CHAR_BUDGET } from './memoryRepository.js';
+import { MEMORY_CHAR_BUDGET, normalizeMemoryFact } from './memoryRepository.js';
 import { sessionCalledTool } from './sessionSearchSql.js';
+import { addProjectFact, peekProjectMemory, resolveProjectMemory } from './projectMemory.js';
 import { COMPUTER_HISTORY_TOOL } from './computerHistory.js';
 import { HISTORIAN_EMOJI_FIELD } from '../core/sessionEmoji.js';
 import { applyHistorianEmoji } from './sessionEmoji.js';
@@ -63,6 +65,7 @@ const RAW_CONSOLIDATE_MIN = 5;
 const RAW_MAX_AGE_DAYS = 7;
 const RAW_MAX_PER_ROUND = 5;
 const HARNESS_RAW_MAX_PER_ROUND = 3;
+const PROJECT_FACTS_MAX_PER_ROUND = 3;
 // 会话级 Historian 互斥(Codex 评审 08-03 Critical):onUserRunDone 是 fire-and-forget,下一 run 的
 // done 可能在上一轮维护(judge/fork/整固)还在飞时到来——everyRounds=1 时必然。并发双跑会重复追加
 // LOG/候选、竞态覆盖标题/摘要。锁忙=直接跳过本轮(维护是尽力而为,下个到点轮自然补),绝不能把
@@ -76,7 +79,7 @@ export function resetHistorianConsolidationState(): void {
 }
 
 /** judge JSON 的字段规格+示例(独立模式 system prompt 与 fork 判官指令共用同一契约)。 */
-function judgeFieldSpecs(wantTitle: boolean, wantLog: boolean, wantMemory: boolean, wantSummary: boolean, wantHarness: boolean, wantEmoji = false): { fields: string[]; example: string } {
+function judgeFieldSpecs(wantTitle: boolean, wantLog: boolean, wantMemory: boolean, wantSummary: boolean, wantHarness: boolean, wantEmoji = false, wantProject = false): { fields: string[]; example: string } {
   const fields: string[] = [];
   if (wantTitle) fields.push('"title": a phrase of ≤16 characters in the user\'s language summarizing this conversation\'s topic, used as the session title (always provide it)');
   if (wantEmoji) fields.push(HISTORIAN_EMOJI_FIELD);
@@ -92,26 +95,43 @@ function judgeFieldSpecs(wantTitle: boolean, wantLog: boolean, wantMemory: boole
     fields.push(
       '"memory_candidates": an array of NEW long-term memory candidates observed in this conversation (usually empty). ' +
       'Gate each entry: include it ONLY if a future conversation would plausibly go better because of it. Qualifying: stable user facts/preferences the user stated or enforced, ' +
-      'high-leverage procedural knowledge (exact paths/commands/workflows proven to work), landmines to avoid. ' +
+      'corrections the user made to how the agent should work, high-leverage procedural knowledge (exact paths/commands/workflows proven to work), landmines to avoid. ' +
+      // 10-04 live(realuse):「必须写上项目名」那句判官 3/3 没照做(写成「该仓库……」),这种候选经 Dream 会变成全局记忆。
+      // 项目会话改成分两组交,由代码按组落到两级(只在这个项目成立的那组不进 agent 级 raw 层)。
+      (wantProject
+        ? 'This conversation happens inside a project: put here only what holds wherever the agent works; what holds only in this project goes in project_memory_candidates, never in both. '
+        : 'A fact that holds only inside one project must name that project in the sentence. ') +
+      // 10-04 live(refine):agent 自己总结的做法被判官改写成「用户希望……」记进了记忆候选。谁提出的就是谁的。
+      'What the agent itself proposed or committed to is not a user preference: never rephrase it as "the user wants…"' + (wantHarness ? ' (a method the agent formulated belongs in harness_candidates). ' : '. ') +
       'Never include: one-off requests, temporary or task-status facts, summaries of what happened (that is the log), or restated common knowledge. ' +
       'One short self-contained sentence per entry, in the user\'s language; replace any token/key/password with [REDACTED]. ' +
       'At most 5 entries — pick the highest-value ones. When in doubt, leave it out — an empty array is the normal outcome.',
     );
+    if (wantProject) {
+      fields.push(
+        '"project_memory_candidates": an array of NEW facts that hold only inside this project (usually empty): its commands, layout and conventions proven to work here, ' +
+        'landmines found here, what the user asked for in this project. Same gate and same form as memory_candidates; at most 3 entries. ' +
+        'Skip whatever a [Project memory] block below already says. ' +
+        'An entry is saved for every agent working in this project without anyone reviewing it, so include only what this conversation clearly established.',
+      );
+    }
   }
   if (wantHarness) {
     // 反模式清单抄 hermes skill-review 的负面门(环境失败/负面断言/一次性叙事会硬化成日后反噬的拒绝理由)。
     fields.push(
       '"harness_candidates": an array of NEW working-method lessons for the agent\'s own working notes (usually empty). ' +
-      'Qualifying: a durable, transferable lesson about HOW this agent should work — a workflow correction the user made, ' +
-      'a delegation pattern that worked well, a procedural landmine and how to avoid it. ' +
+      'Qualifying: a durable, transferable lesson the agent worked out by itself about HOW it should work — a technique or delegation pattern that proved itself, ' +
+      'a procedural landmine and the way around it, a working rule the agent itself formulated or committed to in this conversation (not one the user dictated). ' +
       'Never include: environment/setup hiccups, transient errors, negative claims like "tool X is broken" (they harden into refusals that bite the agent later), ' +
-      'one-off task narratives, or facts about the user (those belong in memory_candidates). ' +
-      'One short self-contained sentence per entry, in English. At most 3 entries; an empty array is the normal outcome.',
+      'one-off task narratives, anything the user told, corrected or required of the agent, or facts about the user or a project (those belong in memory_candidates). ' +
+      // 10-04:提名过得了形状闸就直接写进工作笔记(用户裁决「可以做自动采纳」)—— 所以要 title / lesson / evidence 三样,而不是一句话。
+      'Each entry is an object {"title": a short name of at most 60 characters, "lesson": one self-contained sentence saying what to do, "evidence": one short sentence saying what happened in this conversation that shows it}, all in English. ' +
+      'An entry may be written straight into the working notes without anyone reviewing it, so include only what clearly helped here. At most 3 entries; an empty array is the normal outcome.',
     );
   }
   const example =
     `{${wantTitle ? '"title":"Gradient visualization",' : ''}${wantEmoji ? '"emoji":"🎨",' : ''}${wantSummary ? '"summary":"Debugging the gradient page; settled on SVG rendering, axis scaling still open.",' : ''}` +
-    `"log":"Finished first draft of donk_intro.docx"${wantMemory ? ',"memory_candidates":["Prefers concise, direct answers"]' : ''}${wantHarness ? ',"harness_candidates":[]' : ''}}`;
+    `"log":"Finished first draft of donk_intro.docx"${wantMemory ? ',"memory_candidates":["Prefers concise, direct answers"]' : ''}${wantMemory && wantProject ? ',"project_memory_candidates":[]' : ''}${wantHarness ? ',"harness_candidates":[]' : ''}}`;
   return { fields, example };
 }
 
@@ -121,8 +141,8 @@ function judgeFieldSpecs(wantTitle: boolean, wantLog: boolean, wantMemory: boole
  * 关键:LOG(当天流水:发生了什么)与 memory(长期稳定事实/偏好,跨会话有用、绝非流水账)是**两类不同内容**,
  * 不得相同;memory 要克制,多数对话应为空。
  */
-function buildJudgeSystem(customPrompt: string, wantTitle: boolean, wantLog: boolean, wantMemory: boolean, wantSummary: boolean, wantHarness: boolean, wantEmoji = false): string {
-  const { fields, example } = judgeFieldSpecs(wantTitle, wantLog, wantMemory, wantSummary, wantHarness, wantEmoji);
+function buildJudgeSystem(customPrompt: string, wantTitle: boolean, wantLog: boolean, wantMemory: boolean, wantSummary: boolean, wantHarness: boolean, wantEmoji = false, wantProject = false): string {
+  const { fields, example } = judgeFieldSpecs(wantTitle, wantLog, wantMemory, wantSummary, wantHarness, wantEmoji, wantProject);
   return [
     (customPrompt && customPrompt.trim()) || DEFAULT_HISTORIAN_PROMPT,
     '\nRead the conversation below and judge; output **a single JSON object** only, with the following fields:',
@@ -133,8 +153,8 @@ function buildJudgeSystem(customPrompt: string, wantTitle: boolean, wantLog: boo
 }
 
 /** fork 判官的追加指令(user 消息,分叉尾部):上下文=上方完整对话,无需另拼 transcript。 */
-function buildForkJudgeMessage(customPrompt: string, wantTitle: boolean, wantLog: boolean, wantMemory: boolean, wantSummary: boolean, wantHarness: boolean, prevSummary: string, wantEmoji = false): string {
-  const { fields, example } = judgeFieldSpecs(wantTitle, wantLog, wantMemory, wantSummary, wantHarness, wantEmoji);
+function buildForkJudgeMessage(customPrompt: string, wantTitle: boolean, wantLog: boolean, wantMemory: boolean, wantSummary: boolean, wantHarness: boolean, prevSummary: string, wantEmoji = false, wantProject = false, projectKnown = ''): string {
+  const { fields, example } = judgeFieldSpecs(wantTitle, wantLog, wantMemory, wantSummary, wantHarness, wantEmoji, wantProject);
   return [
     '## Historian fork (tail-fork judge)',
     'You are a tail-fork of the assistant above, acting as the background Historian for this conversation. ' +
@@ -143,6 +163,7 @@ function buildForkJudgeMessage(customPrompt: string, wantTitle: boolean, wantLog
     'Judge the FULL conversation above and output **a single JSON object** with the following fields:',
     '- ' + fields.join('\n- '),
     prevSummary ? `[Previous summary]\n${prevSummary}` : '',
+    projectKnown ? `[Project memory]\n${projectKnown}` : '',
     `Example: ${example}`,
     'Give an empty string (or empty array) for fields that need no update. Output JSON only — no code fences, no extra text.',
   ].filter(Boolean).join('\n');
@@ -557,6 +578,12 @@ async function runHistorianForSession(sessionId: string, userId: string, memScop
     historianSignal.getStore()?.throwIfAborted();
     const transcript = transcriptSnapshot.text;
     if (!transcript.trim()) { log('无可用对话内容,跳过'); return; }
+    // 项目会话(归属只认会话存档的 project_path):判官把「只在这个项目成立」的候选单列一组,由代码写进项目记忆。
+    // 判官看得到已有的那份,免得把前台刚 remember 过的同一件事换个说法再记一遍(项目记忆没有 Dream 去重)。
+    const projectRef = judgeMemory && deps().profile.capabilities.hostExec ? await resolveProjectMemory(userId, sessionId) : null;
+    const projectKnown = projectRef
+      ? ((await peekProjectMemory(projectRef).catch(() => null))?.entries ?? []).map((e) => `- ${e.content}`).join('\n').slice(-1500)
+      : '';
 
     if (titleDue || summaryDue || judgeLog || judgeMemory) { // 标题归起点后,辅助模式轮只剩摘要/提名要判
       // 一次结构化判断:title / summary / log / memory_candidates 各自独立(到期才要、不需要则空)。
@@ -566,7 +593,7 @@ async function runHistorianForSession(sessionId: string, userId: string, memScop
       let raw = forkMode
         ? await forkJudge(
             sessionId, userId, String(sk.app_id || deps().profile.appId), forkSeed!,
-            buildForkJudgeMessage(cfg.prompt, titleDue, judgeLog, judgeMemory, summaryDue, judgeHarness, prevSummary, emojiDue),
+            buildForkJudgeMessage(cfg.prompt, titleDue, judgeLog, judgeMemory, summaryDue, judgeHarness, prevSummary, emojiDue, !!projectRef, projectKnown),
           )
         : '';
       // fork 产出非空但解析不出 JSON(判官跑偏成长文)= 判官失败,同样回落 independent——
@@ -576,8 +603,8 @@ async function runHistorianForSession(sessionId: string, userId: string, memScop
         raw = '';
       }
       if (!raw) {
-        const sys = buildJudgeSystem(cfg.prompt, titleDue, judgeLog, judgeMemory, summaryDue, judgeHarness, emojiDue);
-        const result = await completeHistorianTask({ sessionId, userId, modelId: cfg.modelId, task: 'judge', instructions: prevSummary ? `${sys}\n\n[Previous summary]\n${prevSummary}` : sys, transcript, maxTokens: 1600, signal: historianSignal.getStore() });
+        const sys = buildJudgeSystem(cfg.prompt, titleDue, judgeLog, judgeMemory, summaryDue, judgeHarness, emojiDue, !!projectRef);
+        const result = await completeHistorianTask({ sessionId, userId, modelId: cfg.modelId, task: 'judge', instructions: `${sys}${prevSummary ? `\n\n[Previous summary]\n${prevSummary}` : ''}${projectKnown ? `\n\n[Project memory]\n${projectKnown}` : ''}`, transcript, maxTokens: 1600, signal: historianSignal.getStore() });
         await recordJudgeUsage(userId, cfg.modelId, result.model, result);
         raw = result.content;
       }
@@ -600,9 +627,14 @@ async function runHistorianForSession(sessionId: string, userId: string, memScop
           : (typeof (j as any).memory === 'string' && (j as any).memory.trim()
               ? (j as any).memory.split('\n').map((s: string) => s.replace(/^[-*]\s*/, '').trim()).filter(Boolean)
               : []);
-        const candidates = rawCands
+        const cleanCands = (list: unknown[], max: number): string[] => list
           .map((c) => redactSecrets(String(c ?? '').replace(/\s*[\r\n]+\s*/g, '; ').trim()).slice(0, 300))
           .filter((c) => c.length >= 4 && c.toUpperCase() !== 'NOTHING')
+          .slice(0, max);
+        // 项目那组只在项目会话里收(非项目会话里模型硬给也不认);同一句两组都交了 → 算项目级,不进 agent 级 raw 层。
+        const projectFacts = projectRef && Array.isArray((j as any).project_memory_candidates) ? cleanCands((j as any).project_memory_candidates, PROJECT_FACTS_MAX_PER_ROUND) : [];
+        const candidates = cleanCands(rawCands, RAW_MAX_PER_ROUND + projectFacts.length)
+          .filter((c) => !projectFacts.some((f) => normalizeMemoryFact(f) === normalizeMemoryFact(c)))
           .slice(0, RAW_MAX_PER_ROUND);
         const okShort = (s: string) => !!s && s.toUpperCase() !== 'NOTHING' && s.length >= 2 && s.length <= 400;
         log(`判断: title="${title}" log="${logText.slice(0, 30)}" 候选=${candidates.length} 条`);
@@ -626,14 +658,19 @@ async function runHistorianForSession(sessionId: string, userId: string, memScop
             log('已更新会话摘要');
           }
         }
-        if (judgeLog && okShort(logText)) {
+        // 上面的闸是读对话之前算的。读对话前的那一瞬、或判官跑的这几秒里,会话可能已被远端驱动 / 调过电脑历史 —— 那段内容也许就在判官读到的对话里。
+        // 落长期内容之前重查一次,只会更严(Codex 评审 10-04:现在过闸的提名会直接写进工作笔记 / 项目记忆,这个时序不能留)。标题 / 摘要照常。
+        const stillClean = !(judgeLog || judgeMemory || judgeHarness)
+          || (!(await sessionRemoteTainted(sessionId)) && !(await sessionCalledTool(sessionId, COMPUTER_HISTORY_TOOL).catch(() => true)));
+        if (!stillClean) log(`会话 ${sessionId.slice(0, 8)} 在判官读对话前后变成了远端驱动 / 电脑历史隔离,本轮不写 LOG / 记忆 / 工作笔记`);
+        if (judgeLog && stillClean && okShort(logText)) {
           // LOG = 当天流水(append-only)。共享 LOG 经 brain(云端)。
           historianSignal.getStore()?.throwIfAborted();
           await deps().brain.memory.appendLogEntry(userId, logText, { signal: historianSignal.getStore() });
           await logActivity(userId, 'log_appended', logText, sessionId);
         }
         historianSignal.getStore()?.throwIfAborted();
-        if (judgeMemory && candidates.length) {
+        if (judgeMemory && stillClean && candidates.length) {
           // 采集:候选进 raw 层,正典 MEMORY 只由整固步骤改写(唯一仲裁点)。
           const n = appendRawCandidates(effectiveSlug, sessionId, candidates, { anchorMessageId: transcriptSnapshot.anchorMessageId });
           if (n) {
@@ -641,13 +678,37 @@ async function runHistorianForSession(sessionId: string, userId: string, memScop
             log(`已采集 ${n} 条记忆候选进 raw 层`);
           }
         }
-        if (judgeHarness) {
+        if (projectRef && stillClean && projectFacts.length) {
+          const added: string[] = [];
+          for (const fact of projectFacts) {
+            // 与工作笔记的自动采纳同一道形状闸:带网址 / 管道进解释器 / 凭据·审批·权限字眼的,不由后台写进系统提示。
+            // ponytail: 项目级没有候选收件箱,过不了闸的直接丢(前台的 remember 仍可记);真有需要再加一个待过目的清单。
+            if (!autoAdoptable(fact)) { log(`项目记忆候选未过形状闸,丢弃: ${fact.slice(0, 60)}`); continue; }
+            try { if ((await addProjectFact(projectRef, fact, sessionId)) === 'added') added.push(fact); }
+            catch (e: any) { log(`写项目记忆失败: ${e?.message || e}`); }
+          }
+          if (added.length) {
+            await logActivity(userId, 'project_memory_added', added.join(' | ').slice(0, 300), sessionId);
+            log(`已写入 ${added.length} 条项目记忆(${projectRef.name})`);
+          }
+        }
+        historianSignal.getStore()?.throwIfAborted();
+        if (judgeHarness && stillClean) {
           const rawHc: unknown[] = Array.isArray((j as any).harness_candidates) ? (j as any).harness_candidates : [];
-          const hCands = rawHc
-            .map((c) => redactSecrets(String(c ?? '').replace(/\s*[\r\n]+\s*/g, '; ').trim()).slice(0, 300))
-            .filter((c) => c.length >= 4 && c.toUpperCase() !== 'NOTHING')
+          const flat = (v: unknown, max: number): string => redactSecrets(String(v ?? '').replace(/\s*[\r\n]+\s*/g, '; ').trim()).slice(0, max);
+          // 对象形 = 可直接采纳的提名;字符串形(旧格式 / 模型没照格式来)只进候选收件箱。
+          const noms = rawHc
+            .map((c): { title: string; lesson: string; evidence: string } | string => {
+              if (c && typeof c === 'object') {
+                const o = c as Record<string, unknown>;
+                const nom = { title: flat(o.title, 80), lesson: flat(o.lesson ?? o.body, 300), evidence: flat(o.evidence, 200) };
+                return nom.title && nom.lesson.length >= 4 && nom.evidence ? nom : flat(`${nom.title}${nom.title && nom.lesson ? ': ' : ''}${nom.lesson}`, 300);
+              }
+              return flat(c, 300);
+            })
+            .filter((c) => (typeof c === 'string' ? c.length >= 4 && c.toUpperCase() !== 'NOTHING' : true))
             .slice(0, HARNESS_RAW_MAX_PER_ROUND);
-          if (hCands.length) {
+          if (noms.length) {
             // 归桶=展示身份(HARNESS.md 按 agent 本体,不折叠 shareDefaultMemory,与注入槽同源);
             // effectiveSlug/ALS 此刻都是折叠后的记忆域,不可用——从会话 agent_config 取 active slug。
             // 存储值必须过合法性闸(会话配置可塞任意串,'..' 会逃出 agentsDir——Codex P2/P3 评审 Major #1);
@@ -662,13 +723,32 @@ async function runHistorianForSession(sessionId: string, userId: string, memScop
                 else slugOk = false;
               }
             } catch { /* ignore */ }
+            // 用户在这个 agent 的工具名单里关掉了 manage_harness(文档里写的「不想让它自己改笔记」的办法)→ 后台也不替它直接写,
+            // 提名照旧只进候选(Codex 评审 10-04:自动采纳之前,关掉工具就等于没人能写)。
+            const def = slugOk ? await getAgent(displaySlug).catch(() => null) : null;
+            const notesOff = agentNotesOff(def);
             if (slugOk) {
-              const n = await appendHarnessCandidates(displaySlug, sessionId, hCands).catch((e: any) => {
+              // 自动采纳(10-04):过得了形状闸的提名直接写成条目;过不了的、写不进的(满了 / 校验不过)照旧进候选收件箱等 /refine。
+              const adopted: string[] = [];
+              const queued: string[] = [];
+              for (const nom of noms) {
+                if (typeof nom === 'string') { queued.push(nom); continue; }
+                const line = flat(`${nom.title}: ${nom.lesson} (evidence: ${nom.evidence})`, 300);
+                if (notesOff || !noteAutoAdoptable(`${nom.title} ${nom.lesson} ${nom.evidence}`)) { queued.push(line); continue; }
+                try { if ((await adoptHarnessNomination(displaySlug, nom, sessionId)) === 'adopted') adopted.push(nom.title); }
+                catch (e: any) { log(`工作笔记提名未能直接采纳,转入候选收件箱: ${e?.message || e}`); queued.push(line); }
+              }
+              if (adopted.length) {
+                scheduleAgentFilesSync(userId, displaySlug);
+                await logActivity(userId, 'harness_adopted', adopted.join(' | ').slice(0, 300), sessionId);
+                log(`已采纳 ${adopted.length} 条工作笔记提名(${displaySlug})`);
+              }
+              const n = queued.length ? await appendHarnessCandidates(displaySlug, sessionId, queued).catch((e: any) => {
                 log(`写工作笔记候选收件箱失败: ${e?.message || e}`);
                 return 0;
-              });
+              }) : 0;
               if (n) {
-                await logActivity(userId, 'harness_candidates', hCands.join(' | ').slice(0, 300), sessionId);
+                await logActivity(userId, 'harness_candidates', queued.join(' | ').slice(0, 300), sessionId);
                 log(`已采集 ${n} 条工作笔记候选进收件箱(${displaySlug})`);
               }
             } else {

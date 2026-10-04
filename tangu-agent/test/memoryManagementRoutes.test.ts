@@ -131,6 +131,12 @@ describe('versioned Agent memory management', () => {
     await saveAgent({ slug: 'name-fixture', name: 'Name fixture', systemPrompt: 'fixture' });
     const tool = memoryLogProvider.tools().find(t => t.name === 'remember')!;
     expect((tool.definition as any).function.parameters.required).toEqual(['action', 'fact']);
+    // 10-04 记忆分级:只有会话属于一个项目时,定义才多出 scope 并要求每次都选(别的会话 / 云端聊天面拿到的还是上面这份精简定义)
+    const scoped = (tool as any).definitionFor({ projectScoped: true, execMode: 'host' }).function;
+    expect(scoped.parameters.required).toEqual(['action', 'fact', 'scope']);
+    expect(scoped.parameters.properties.scope.enum).toEqual(['agent', 'project']);
+    expect((tool as any).definitionFor({ execMode: 'sandbox' })).toBe(tool.definition);
+    expect((tool as any).definitionFor({ projectScoped: true, execMode: 'host' })).toBe((tool as any).definitionFor({ projectScoped: true, execMode: 'host' })); // 同一份对象:逐轮字节一致
     const ctx = { userId: 'fixture-user', sessionId: 'name-session', runId: 'name-run', appId: 'tangu' };
     const run = (args: any) => runWithAgentSlug('name-fixture', () => tool.execute(args, ctx)) as Promise<string>;
     const added = JSON.parse(await run({ action: 'add', fact: '用户名字叫旧名字' }));

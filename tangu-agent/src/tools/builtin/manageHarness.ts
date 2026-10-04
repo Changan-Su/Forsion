@@ -21,8 +21,8 @@ import { resolveTools, isDeferredIn, isShelvable } from '../toolRegistry.js';
 import { deps } from '../../seams/runtime.js';
 import { DEFAULT_AGENT_SLUG } from '../../core/tanguHome.js';
 import { currentAgentSlug, currentDisplayAgentSlug } from '../../seams/runContext.js';
-import { applyHarnessEdit, loadHarness, appendHarnessCandidates, MAX_ENTRIES, TITLE_MAX, BODY_MAX, EVIDENCE_MAX, type HarnessEntry } from '../../agents/harnessStore.js';
-import { getAgent, isValidSlug } from '../../agents/agentRegistry.js';
+import { applyHarnessEdit, loadHarness, appendHarnessCandidates, shelveForAgent, MAX_ENTRIES, TITLE_MAX, BODY_MAX, EVIDENCE_MAX, type HarnessEntry } from '../../agents/harnessStore.js';
+import { getAgent, isValidSlug, MUSE_AGENT_SLUG } from '../../agents/agentRegistry.js';
 import { effectiveRemote, remoteManagementDenied } from '../../services/remoteOrigin.js';
 import { scheduleAgentFilesSync } from '../../services/agentFileSync.js';
 
@@ -66,8 +66,8 @@ function equipProblem(ctx: ToolContext, tools: string[], skills: string[]): stri
   return null;
 }
 
-const receipt = (change: HarnessChange): string =>
-  JSON.stringify({ kind: 'harness_update', change, message: 'Applied immediately; your next run reads this version. The user sees an update card and can undo it.' });
+const receipt = (change: HarnessChange, message = 'Applied immediately; your next run reads this version. The user sees an update card and can undo it.'): string =>
+  JSON.stringify({ kind: 'harness_update', change, message });
 
 export const manageHarnessProvider: ToolProvider = {
   id: 'builtin:manage_harness',
@@ -85,14 +85,15 @@ export const manageHarnessProvider: ToolProvider = {
         function: {
           name: 'manage_harness',
           description:
-            'Your Working Notes (HARNESS.md): durable lessons about HOW you work, loaded into your system prompt on every run. You own them: changes apply at once and the user gets a card to undo, so do not ask permission or wait for /refine. ' +
-            'Use it when this conversation taught you something lasting about your own method: the user corrected how you work, a technique or delegation pattern proved itself, a pitfall you can avoid next time. ' +
-            'Elsewhere: facts about the user or the world → remember; how the human can work with you → manage_human; a reusable procedure → manage_skill (scope "agent"). ' +
+            'Your Working Notes (HARNESS.md), the record of your own evolution: what you have worked out yourself about HOW you work, loaded into your system prompt on every run. You own them: changes apply at once and the user gets a card to undo, so do not ask permission or wait for /refine. ' +
+            // 10-04 用户第二次裁决:HARNESS = 自我进化的要求和内容;用户的纠正归记忆。此前「the user corrected how you work」也写在这里的触发条件里。
+            'Use it the moment you work something out yourself that will hold in any project: a technique or delegation pattern that proved itself, a pitfall and the way around it, a standard you set for your own work. ' +
+            'Elsewhere: anything the user told, corrected or required of you, and facts about the user, a project or the world → remember; what you would like the human to do differently → manage_human; a reusable procedure → manage_skill (scope "agent"). ' +
             // 10-04 真实场景量跑:grok 把同一句纠正同时写进这里、协作说明和记忆(三处都进系统提示;撤销一张卡,另外两处还在)
             'One lesson, one place: if you are saving a point with remember or manage_human, do not repeat it here. ' +
             'Never record environment/setup failures, "tool X is broken", transient errors or one-off task stories; they harden into refusals. ' +
             'upsert without id creates an entry (title, body and evidence of what actually happened are required); with id it revises. rollback restores the previous version. ' +
-            "propose (agent + candidates) drops suggestions into ANOTHER agent's candidate inbox; you never write its notes. " +
+            "propose (agent + candidates) drops suggestions into ANOTHER agent's candidate inbox; you never write its notes. propose with tools / skills passes on a usage review's equipment suggestion for that agent. " +
             `Limits: title ≤${TITLE_MAX}, body ≤${BODY_MAX}, evidence ≤${EVIDENCE_MAX} chars, ${MAX_ENTRIES} entries; at the cap, merge or delete weaker ones. ` +
             'kind "note" = working method (default); "recipe" = a delegation pattern that worked; "equip" = shelve tools/skills you rarely use to keep your context lean (pass tools / skills): a shelved tool moves to the load-on-demand catalog (load_tools brings it back), a shelved skill leaves your skill list (use_skill by id still works). ' +
             'Shelving never removes or grants a capability; shelve on evidence such as a usage review, and revise or delete the entry to undo.',
@@ -101,10 +102,10 @@ export const manageHarnessProvider: ToolProvider = {
             properties: {
               action: { type: 'string', enum: ['upsert', 'delete', 'list', 'rollback', 'propose'], description: 'The operation' },
               agent: { type: 'string', description: 'propose: target agent slug' },
-              candidates: { type: 'array', items: { type: 'string' }, description: 'propose: 1-3 one-line lessons' },
+              candidates: { type: 'array', items: { type: 'string' }, description: 'propose: 1-3 one-line lessons (leave out when passing tools / skills)' },
               id: { type: 'string', description: 'Entry id, e.g. "h-x3k9" (delete / rollback / revise)' },
               kind: { type: 'string', enum: ['note', 'recipe', 'equip'], description: 'Entry type (default "note")' },
-              tools: { type: 'array', items: { type: 'string' }, description: 'equip: exact tool names to shelve (replaces the list on revise)' },
+              tools: { type: 'array', items: { type: 'string' }, description: 'equip: exact tool names to shelve (replaces the list on revise). propose: the tools a usage review listed for that agent' },
               skills: { type: 'array', items: { type: 'string' }, description: 'equip: exact skill ids to shelve, e.g. "local:pptx" (replaces the list on revise)' },
               title: { type: 'string', description: 'Short label' },
               body: { type: 'string', description: 'The lesson itself' },
@@ -131,6 +132,42 @@ export const manageHarnessProvider: ToolProvider = {
             // 自己的笔记直接写:给自己提名只会躺在候选收件箱里等 /refine(10-04 live:接手巡检建议的 agent 照着「propose」给自己提了名,什么都没收起)
             if (target === slug) return 'Error: propose is for ANOTHER agent. These are your own notes: use action "upsert" (kind "equip" with tools / skills to shelve your own equipment).';
             if (!(await getAgent(target))) return `Error: agent "${target}" does not exist`;
+            const eqTools = names(args.tools) ?? [], eqSkills = names(args.skills) ?? [];
+            if (eqTools.length || eqSkills.length) {
+              // Muse 的周期,或用户直接跟 Muse 对话(手聊时让它「现在巡检一次」也该当场生效;review_loadout 的可见性同一口径)。
+              // 'muse' 这个 slug 是内置 agent 的文件夹名;即便别的东西占了这个名字,能收的也只有下面代码重算出来的那份名单。
+              if (ctx.muse || slug === MUSE_AGENT_SLUG) {
+                // 10-04 用户裁决「Muse 也开放自动采纳」:Muse 代收直接生效。能收什么由代码此刻重算的巡检名单说了算,
+                // 模型多填的名字一律不认 —— 保护名单、对方没有的工具、近期用过的、对方拿回来过的,都进不了那份名单。
+                // 动态取:loadoutUsage 静态依赖 tools/registry,而 registry 在模块求值时就注册本文件的 provider —— 静态 import 会绕成环。
+                const { suggestedLoadout } = await import('../../services/loadoutUsage.js');
+                const now = await suggestedLoadout(ctx, target);
+                if (!now) return `Error: no usage review covers "${target}" (too few recent runs, or no such agent). Nothing was shelved.`;
+                if (!now.tools.length && !now.skills.length) return `Error: nothing is open to shelve for "${target}" right now: this week's batch is already shelved, or what is left was brought back by that agent. Leave it until the next weekly review; running the review again will not change this. Nothing was shelved.`;
+                const tools = eqTools.filter((n) => now.tools.includes(n)), skills = eqSkills.filter((n) => now.skills.includes(n));
+                const dropped = [...eqTools, ...eqSkills].filter((n) => !tools.includes(n) && !skills.includes(n));
+                if (!tools.length && !skills.length) return `Error: none of these is in the current usage review for "${target}" (${dropped.join(', ')}). Call review_loadout for it and pass exactly the names it lists. Nothing was shelved.`;
+                ctx.signal?.throwIfAborted();
+                // ponytail: 名单在锁外算、落盘在锁里。夹在中间对方恰好把某一项拿回来,会被再收一次 —— 看得见、撤得掉,不值得把用量查询搬进文件锁。
+                // 依据由代码拼(短、对得上数):模型自己写的带次数长句会撞 evidence 的字数上限。
+                const { entry, before, ts, rev } = await shelveForAgent(target, { tools, skills, evidence: `${now.days}-day usage review: ${now.runs} runs, none of these was called` }, ctx.sessionId);
+                scheduleAgentFilesSync(ctx.userId, target);
+                const shown = entry as HarnessEntry;
+                // 回执与 agent 自己写的同形:Muse 的会话里照样出一张带撤销的更新卡(卡片按 change.agent 取那个 agent 的编辑史)。
+                return receipt(
+                  { rev, at: ts, agent: target, entryId: shown.id, action: before ? 'revise' : 'create', kind: shown.kind, title: shown.title, body: shown.body, evidence: shown.evidence || '', version: shown.version, tools: shown.tools, skills: shown.skills },
+                  `Shelved for "${target}": ${[...tools, ...skills].join(', ')}. It takes effect on that agent's next run. The user sees an update card and can undo it.` +
+                    (dropped.length ? ` Left out, not in the current review for that agent: ${dropped.join(', ')}.` : ''),
+                );
+              }
+              // 别的 agent 来转交:只留候选,由对方复盘时自己决定。这一行由代码拼,不靠模型转述(10-04 live:转述时漏项、截断)。
+              const evidence = String(args.evidence ?? '').replace(/\s+/g, ' ').trim();
+              if (!evidence) return 'Error: an equipment suggestion needs evidence (the run and call counts from the usage review)';
+              const line = `(proposed by ${slug}) Equipment suggestion from a usage review: shelve ${[eqTools.length ? `tools ${eqTools.join(', ')}` : '', eqSkills.length ? `skills ${eqSkills.join(', ')}` : ''].filter(Boolean).join(' and ')} (evidence: ${evidence}). To adopt: manage_harness upsert, kind "equip", with these tools / skills.`;
+              if (line.length > PROPOSE_MAX) return `Error: this suggestion is ${line.length} characters; keep it within ${PROPOSE_MAX} (shorten the evidence, or split the names across two calls)`;
+              const n = await appendHarnessCandidates(target, ctx.sessionId, [line]);
+              return n ? `Left the equipment suggestion in "${target}"'s candidate inbox; it decides at its next /refine.` : `"${target}" already has this suggestion waiting.`;
+            }
             const cands = (Array.isArray(args.candidates) ? args.candidates : [])
               .map((c: unknown) => String(c ?? '').replace(/\s+/g, ' ').trim())
               .filter(Boolean)

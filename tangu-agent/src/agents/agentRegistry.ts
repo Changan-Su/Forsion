@@ -818,6 +818,12 @@ function clampAgentMaxIterations(slug: string, v: number | string | null | undef
   return Math.min(200, Math.floor(n));
 }
 
+/** 用户在这个 agent 的工具名单里关掉了 manage_harness(文档里写的「不想让它自己改笔记」的办法)。
+ *  后台的两条直接写入(判官采纳提名、Muse 代收装备)都要让位:关掉工具不该变成「只有别人能替它写」。 */
+export function agentNotesOff(def: Pick<NormalAgentDef, 'toolsMode' | 'toolsList'> | null | undefined): boolean {
+  return !!def?.toolsMode && !!def.toolsList && (def.toolsMode === 'deny') === def.toolsList.includes('manage_harness');
+}
+
 /** 运行期取 Agent 定义的轮数上限:低于下限视为误设 → null 并告警。agentActivation / groupChat / automation 三处同口径
  *  (Codex 09-13 #3:只在激活处套下限,群聊和自动化仍会照跑磁盘上的 3);解析层 parseAgentConfig 仍忠实于磁盘值,UI 才看得见误设。 */
 export function agentCapOf(def: Pick<NormalAgentDef, 'slug' | 'maxIterations'>): number | null {

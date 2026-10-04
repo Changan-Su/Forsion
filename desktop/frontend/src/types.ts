@@ -748,6 +748,14 @@ export interface ProjectContext {
   plans: ProjectPlanInfo[]
   settings: ProjectSettings | null
   git: GitSummary
+  /** 项目记忆(只在这个项目里成立的事实,本项目的 agent 共用;存本机用户目录,不在项目文件夹里)。老引擎 / 远端来源不带。 */
+  memory?: ProjectMemoryView
+}
+export interface ProjectMemoryView {
+  version: string | null
+  entries: Array<{ id: string; content: string; updatedAt: number }>
+  chars: number
+  limit: number
 }
 
 export interface SkillInfo {

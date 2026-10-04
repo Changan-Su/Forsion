@@ -81,6 +81,8 @@ const AgentHarnessBody: React.FC<Props> = ({ cfg, slug, running, onRefine, onCan
     l.action === 'delete' ? t('settings.agents.harnessActDelete')
       : l.action === 'rollback' ? t('settings.agents.harnessActRollback')
         : l.before === null ? t('settings.agents.harnessActCreate') : t('settings.agents.harnessActUpdate')
+  // 这次改动不是 agent 自己在对话里写的:后台复盘直接采纳 / Muse 巡检后代为收起(10-04)。别的来源不标。
+  const byLabel = (by?: string): string => by === 'historian' ? t('settings.agents.harnessByHistorian') : by === 'muse' ? t('settings.agents.harnessByMuse') : ''
   const kindLabel = (kind: string): string => kind === 'note' ? t('settings.agents.harnessKindNote') : kind === 'recipe' ? t('settings.agents.harnessKindRecipe') : kind === 'equip' ? t('settings.agents.harnessKindEquip') : kind
   const listSep = locale === 'zh' ? '、' : ', '
   // 条目日期是引擎写的 YYYY-MM-DD(纯日期,单源按本地那一天解读,不串到前后一天);journal ts 是完整 ISO,按本地时区显示。
@@ -120,7 +122,7 @@ const AgentHarnessBody: React.FC<Props> = ({ cfg, slug, running, onRefine, onCan
             {!!e.tools?.length && <small className="harness-evidence" data-harness-shelved="tools">{t('settings.agents.harnessShelvedTools', { names: e.tools.join(listSep) })}</small>}
             {!!e.skills?.length && <small className="harness-evidence" data-harness-shelved="skills">{t('settings.agents.harnessShelvedSkills', { names: e.skills.join(listSep) })}</small>}
             {e.evidence && <small className="harness-evidence">{t('settings.agents.harnessEvidence', { text: e.evidence })}</small>}
-            <small className="harness-meta">v{e.version}{e.updatedAt && <> · {day(e.updatedAt)}</>}</small>
+            <small className="harness-meta">v{e.version}{e.updatedAt && <> · {day(e.updatedAt)}</>}{byLabel(rev[latestIdx.get(e.id) ?? -1]?.by) && <span data-harness-by={rev[latestIdx.get(e.id) ?? -1]?.by}> · {byLabel(rev[latestIdx.get(e.id) ?? -1]?.by)}</span>}</small>
           </li>)}</ul>
         </>}
     {/* 空态也要显示候选:第一次用的人正是「还没有笔记、但收件箱里已经有提名」这个状态 */}
@@ -135,7 +137,7 @@ const AgentHarnessBody: React.FC<Props> = ({ cfg, slug, running, onRefine, onCan
         const title = l.after?.title || l.before?.title || l.entryId
         const restorable = latestIdx.get(l.entryId) === i && !currentIds.has(l.entryId) && !!l.before
         return <li key={`${l.ts}-${i}`} className={`harness-event ${l.action}`}>
-          <span><b>{actLabel(l)}</b>{title}</span>
+          <span><b>{actLabel(l)}{byLabel(l.by) && ` · ${byLabel(l.by)}`}</b>{title}</span>
           {restorable && <button type="button" className="profile-text-action" disabled={busy} onClick={() => void rollback(l.entryId, title)}>{t('settings.agents.harnessRestore')}</button>}
           <time dateTime={l.ts}>{stamp(l.ts)}</time>
         </li>
