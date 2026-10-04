@@ -220,6 +220,7 @@ export const CLASSIFICATION = {
   'POST /agent/project-context/icon': [D, 'project icon write'],
   'GET /agent/project-context/icon': [A, 'project icon'],
   'DELETE /agent/project-context/icon': [D, 'project icon write'],
+  'DELETE /agent/project-context/memory': [D, 'project memory delete (host-only store; the route itself also refuses remote origin)'],
   // PROJECT 详情「Git」页:写仓库、跑提交钩子、信任仓库自带的可执行配置、带凭据推送 —— 只许本机
   'POST /agent/project-context/git/init': [D, 'git repository write'],
   'POST /agent/project-context/git/trust': [D, 'trusts repo-provided executable git config'],

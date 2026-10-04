@@ -819,9 +819,10 @@ function clampAgentMaxIterations(slug: string, v: number | string | null | undef
 }
 
 /** 用户在这个 agent 的工具名单里关掉了 manage_harness(文档里写的「不想让它自己改笔记」的办法)。
- *  后台的两条直接写入(判官采纳提名、Muse 代收装备)都要让位:关掉工具不该变成「只有别人能替它写」。 */
+ *  后台的两条直接写入(判官采纳提名、Muse 代收装备)都要让位:关掉工具不该变成「只有别人能替它写」。
+ *  与运行期同一口径(toolRegistry / agentActivation:名单缺失当空 —— 手改或导入的 allow 缺名单 = 全禁,Codex 评审 10-04)。 */
 export function agentNotesOff(def: Pick<NormalAgentDef, 'toolsMode' | 'toolsList'> | null | undefined): boolean {
-  return !!def?.toolsMode && !!def.toolsList && (def.toolsMode === 'deny') === def.toolsList.includes('manage_harness');
+  return !!def?.toolsMode && (def.toolsMode === 'deny') === (def.toolsList ?? []).includes('manage_harness');
 }
 
 /** 运行期取 Agent 定义的轮数上限:低于下限视为误设 → null 并告警。agentActivation / groupChat / automation 三处同口径
