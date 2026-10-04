@@ -21,18 +21,22 @@ import { createRun, getRun } from '../src/services/runStore.js';
 import { enqueueRun, abortRun } from '../src/services/agentLoop.js';
 import { subscribe } from '../src/services/eventBus.js';
 import { resolveInquiry } from '../src/services/inquiries.js';
+import { LlmError } from '../src/core/types.js';
 
 const USER = 'u1';
 let home: string;
 let llmPayloads: any[];
 /** 每轮一个出招函数;耗尽即抛(脚本写短了会立刻暴露)。 */
 let script: Array<(o: any) => any>;
+/** 订阅登录续期接缝(brain.llm.refreshModelKey)的替身;缺省 = 续不了。 */
+let refreshKey: ((modelId: string) => Promise<string | null>) | undefined;
 
 beforeEach(async () => {
   home = mkdtempSync(join(tmpdir(), 'tangu-gates-'));
   process.env.TANGU_HOME = home;
   llmPayloads = [];
   script = [];
+  refreshKey = undefined;
 
   const { host, db } = createSqliteHost({ dataDir: 'memory', localToken: 'x', userId: USER });
   db.exec(toSqliteDDL(STANDALONE_SCHEMA));
@@ -46,6 +50,7 @@ beforeEach(async () => {
       if (!step) throw new Error(`脚本耗尽:第 ${llmPayloads.length} 次 LLM 调用没有出招`);
       return step(o);
     },
+    refreshModelKey: async (id: string) => (refreshKey ? refreshKey(id) : null),
   };
   const fakeBrain: any = {
     llm: fakeLlm,
@@ -363,5 +368,46 @@ describe('动作兑现兜底(10-02 live:luna 说「我这就写」就收尾,零�
     const run = await runToSettled({ execMode: 'host', cwd: home, maxIterations: 2 }, '在我的工作文件夹里建一个 a.md');
     expect(run.status).toBe('done');
     expect(llmPayloads.length).toBe(1);
+  }, 20_000);
+});
+
+describe('凭证失效续期(反馈 6a239e58:xAI 订阅 token 过期,502 被当网络抖动用旧 token 重试)', () => {
+  const expired = () => { throw new LlmError(502, '{"error":"Invalid or expired credentials (auth_kind=bearer, upstream=PermissionDenied)"}'); };
+
+  it('上游报凭证失效 → 强制续期一次 → 用新 token 立刻重试,run 照常 done', async () => {
+    const keys: string[] = [];
+    let refreshed = 0;
+    refreshKey = async () => { refreshed++; return 'k2'; };
+    script = [(o) => { keys.push(o.apiKey); return expired(); }, (o) => { keys.push(o.apiKey); return finalStep('好了')(); }];
+    const run = await runToSettled();
+    expect(run.status).toBe('done');
+    expect(keys).toEqual(['k', 'k2']);
+    expect(refreshed).toBe(1);
+  }, 20_000);
+
+  it('续不了(不是订阅登录 / refresh_token 也失效)→ 直接失败,不用旧 token 白重试三轮', async () => {
+    script = [expired];
+    const run = await runToSettled();
+    expect(run.status).toBe('failed');
+    expect(llmPayloads.length).toBe(1);
+  }, 20_000);
+
+  it('续完仍被拒 → 不再续第二次', async () => {
+    let refreshed = 0;
+    refreshKey = async () => { refreshed++; return `k${refreshed + 1}`; };
+    script = [expired, expired];
+    const run = await runToSettled();
+    expect(run.status).toBe('failed');
+    expect(refreshed).toBe(1);
+    expect(llmPayloads.length).toBe(2);
+  }, 20_000);
+
+  it('负对照:普通 502 照旧按瞬时抖动重试,不触发续期', async () => {
+    let refreshed = 0;
+    refreshKey = async () => { refreshed++; return 'k2'; };
+    script = [() => { throw new LlmError(502, 'Bad Gateway'); }, finalStep('好了')];
+    const run = await runToSettled();
+    expect(run.status).toBe('done');
+    expect(refreshed).toBe(0);
   }, 20_000);
 });

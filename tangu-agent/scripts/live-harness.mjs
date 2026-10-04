@@ -14,6 +14,8 @@
  *                                                           #   额度用完时先跑离线接线证据:node scripts/rename-identity.smoke.mjs(假模型端点,截获系统提示词)
  *   npm run live:harness -- --only chat,tool,muse            # 子集(historian→dream→recall 三连有先后依赖)
  *   npm run live:harness -- --only chat,tool,loop            # loop = 轮数耗尽末轮收尾(改 agentLoop 末轮/收尾提示后跑)
+ *   npm run live:harness -- --only skillpick,settingsnav     # 反馈 6a239e58(10-04):指定技能清单只列目录、正文经 use_skill 取(改 services/skillLoadout.ts 后跑);
+ *                                                           #   「语音在哪设置」经界面命令直达设置页、不用电脑操控,网页检索次数只计数(改 desktop open-settings 的 description / params 后跑)
  *   npm run live:harness -- --only plugin                    # 引擎插件热插拔(10-02):夹具插件开着调得到、停用后调不到、再启用回来(改 plugins/bootstrap 生命周期后跑)
  *   npm run live:harness -- --only btw                       # 旁聊 /btw(09-22):带主会话上下文答题外话、追问带前轮、不写回、主 run 在飞也能问;改 services/aside.ts 提示词后跑
  *   TANGU_LIVE_MODEL=codex/gpt-5.6-sol npm run live:harness  # 换模型
@@ -130,7 +132,7 @@ const opt = (name, def) => { const i = argv.indexOf(`--${name}`); return i >= 0 
 const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
 const MODEL = opt('model', process.env.TANGU_LIVE_MODEL || 'codex/gpt-5.6-luna');
 const AUTH = resolve(opt('auth', process.env.TANGU_LIVE_AUTH || join(homedir(), '.forsion-dev', 'provider-auth.json')));
-const KEYS = ['realtime', 'personas', 'rename', 'selfschedule', 'selfmodel', 'chat', 'tool', 'remember', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'parked', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human', 'emoji', 'visualize', 'visualfigures', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'control', 'phone', 'unattendedask', 'plugin'];
+const KEYS = ['realtime', 'personas', 'rename', 'selfschedule', 'selfmodel', 'chat', 'tool', 'remember', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'parked', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human', 'emoji', 'visualize', 'visualfigures', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'control', 'phone', 'unattendedask', 'plugin', 'skillpick', 'settingsnav'];
 KEYS.push('pageinstructions');
 // autocompact 要把模型窗口钉小(--window)才灌得满;窗口小了别的场景会被连累(系统提示+工具头就 13k+),所以它只能单独跑。
 const WINDOW = Number(opt('window', process.env.TANGU_LIVE_WINDOW || 0)) || 0;
@@ -1086,7 +1088,7 @@ async function phoneResponder(runId, p, phone) {
 async function run(sessionId, message, timeoutMs = 240_000, extraAgentConfig = {}, client, onApproval, headers, approveHeaders, opts = {}) {
   const t0 = Date.now();
   // headers:只加在起 run 这一跳(remoteclamp 用它模拟 unitWeb 盖的 x-forsion-remote);事件流 / 审批兑现照旧本机直连。
-  const { runId } = await api('/agent/runs', { method: 'POST', headers, body: JSON.stringify({ session_id: sessionId, model_id: MODEL, message, client, ...(opts.clientCapabilities ? { client_capabilities: opts.clientCapabilities } : {}), ...(opts.ui ? { ui_commands: [], ui_settings: opts.ui } : {}), agent_config: { ...AGENT_CONFIG, ...extraAgentConfig } }) });
+  const { runId } = await api('/agent/runs', { method: 'POST', headers, body: JSON.stringify({ session_id: sessionId, model_id: MODEL, message, client, ...(opts.clientCapabilities ? { client_capabilities: opts.clientCapabilities } : {}), ...(opts.ui ? { ui_commands: opts.uiCommands || [], ui_settings: opts.ui } : {}), agent_config: { ...AGENT_CONFIG, ...extraAgentConfig } }) });
   const ev = { runId, tokens: 0, toolCalls: [], toolCallIds: [], toolArgs: [], clientCmds: [], uiCmds: [], toolOffsets: null, toolResults: [], subTools: [], subStarts: [], subDones: [], systemPrompt: null, approvals: 0, approvalList: [], approvalResults: [], usages: [], probes: [], statuses: [], content: '', error: null, done: false, group: { speakers: [], ended: null, starts: [], ends: [], summary: null, remarks: [], outputs: [] }, ttftMs: null, firstTokenMs: null, wallMs: 0 };
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), timeoutMs);
@@ -1112,9 +1114,11 @@ async function run(sessionId, message, timeoutMs = 240_000, extraAgentConfig = {
           // 应答器不在 / 核不过 → 什么都不回(= 真原生的行为:不 claim、不执行、不回执)。
           else if (e.type === 'client_cmd') ev.clientCmds.push(await phoneResponder(runId, p, opts.phone));
           else if (e.type === 'ui_cmd' && opts.ui) {
-            ev.uiCmds.push({ kind: p.kind, key: p.key, value: p.value, id: p.id });
+            ev.uiCmds.push({ kind: p.kind, key: p.key, value: p.value, id: p.id, args: p.args });
             const settings = p.kind === 'setting' && p.key ? { [p.key]: String(p.value) } : undefined;
-            await api(`/agent/runs/${runId}/inquiries/${p.ackId}`, { method: 'POST', body: JSON.stringify({ ok: true, ...(settings ? { state: String(p.value), settings } : {}) }) }).catch((err) => { ev.uiError = String(err.message); });
+            // uiRespond:场景自己扮渲染端(settingsnav 用它照 desktop 的口径校验 open-settings 的落点);缺省一律 ok。
+            const reply = opts.uiRespond?.(p) || { ok: true, ...(settings ? { state: String(p.value), settings } : {}) };
+            await api(`/agent/runs/${runId}/inquiries/${p.ackId}`, { method: 'POST', body: JSON.stringify(reply) }).catch((err) => { ev.uiError = String(err.message); });
           }
           // 「调用过」≠「跑成了」:deferred 场景要判 read_document 真解析出了标记,不是报错后被 read_file 兜住。
           // `full` 留**未截断**的原文:bigread 要判的截断标记落在第 4000 字符附近,先截到 4000 就永远看不见
@@ -2247,6 +2251,55 @@ Then reply with only the command output.`,
     const used = ev.toolCalls.includes('use_skill');
     const loaded = ev.toolResults.some((r) => r.name === 'use_skill' && !r.isError && /Forsion/.test(r.result));
     return { ok: !ev.error && roster && used && loaded, detail: ev.error || `名册${roster ? '提到 coding' : '未提 coding'};use_skill ${used ? '已调用' : '未调用'};正文${loaded ? '取回' : '未取回'};工具 ${ev.toolCalls.join(',') || '无'}`, output: ev.content, ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls };
+  });
+
+  // 指定技能清单(10-04,反馈 6a239e58):enabled_skill_ids 只收窄目录,正文不进 system,模型照样经 use_skill 取到。
+  // 负对照 = 改前的 dist:≤8000 字符的正文整篇内联(system 里出现「## Skill Instructions」),目录段不出现 → 红。
+  await scenario('skillpick', 'skillpick 指定技能清单:只列点名的、正文不内联、use_skill 按需取', async () => {
+    const ev = await run(`live-skillpick-${Date.now()}`, 'Load your git workflow skill and reply with only the first heading line of its instructions.', 240_000, { enabledSkillIds: ['local:git-workflow'], skillsConfigured: true, debugSystemPrompt: true });
+    const sys = ev.systemPrompt || '';
+    const listed = sys.includes('## Available Skills (load on demand)') && sys.includes('`local:git-workflow`');
+    const inlined = sys.includes('## Skill Instructions');
+    const narrowed = !sys.includes('`local:web-research`');
+    const loaded = ev.toolResults.some((r) => r.name === 'use_skill' && !r.isError && r.fullLength > 1000);
+    return { ok: !ev.error && ev.done && listed && !inlined && narrowed && loaded,
+      detail: ev.error || `目录${listed ? '列了点名的技能' : '没列'};正文${inlined ? '被内联' : '未内联'};${narrowed ? '没点名的不在' : '没点名的也在'};use_skill ${loaded ? '取回正文' : '未取回'};system ${sys.length} 字符;工具 ${ev.toolCalls.join(',') || '无'}`,
+      output: ev.content, ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls };
+  });
+
+  // 「X 在哪设置」(10-04,反馈 6a239e58):那次 agent 列待办、搜网页、再用电脑操控去点设置窗口,open-settings 传了个不存在的页名
+  // 还被回报成功。现在目录项的参数说明里列了可用落点(设置搜索索引的条目 id),认不出的名字会被拒并给相近项。
+  // 用户原话照搬那次反馈(没说「帮我打开」)。判:经 run_ui_command 打开到语音所在的页(voice / model/m-voice),且不用电脑操控、不列待办。
+  // 网页检索只计数不判红:模型不知道那一页里有什么选项(设置内容没有给到 agent,见方案文档 S1/S2),grok 首轮会顺手搜一次;
+  // 10-04 实测 grok-4.7 每次 5–9 次网页请求 → 改 description 后 0–1 次,luna 0 次。检索次数明显回升 = description 被改坏了。
+  // ⚠️ ENTRY 与 desktop/frontend/src/bootstrapEngine.tsx 的 open-settings 目录项同文(description + params);TARGETS 那一行由
+  //    desktop 的 settingsTarget.test.ts 逐字钉住(设置页 / 搜索索引一改,那条单测就红,照它的输出改这里)。
+  await scenario('settingsnav', 'settingsnav 「语音在哪设置」:界面命令直达设置页,不用电脑操控', async () => {
+    const TARGETS = 'Pages: general, forsion, model, mcp, hooks, skills, agents, amadeus-plugins, browser, channels, notes, sync, spaces, theme, shortcuts, notifications, statusbar, permissions, remote-sessions, computer-history, advanced, developer, about. Settings: workspace-dir, keep-awake, backend-mode, sandbox, python, mirror, external-backend, forsion-account, forsion-submissions, cloud-url, memory-sync, inbox-notify, default-models, model-providers, web-search, voice, theme-language, startup-appearance, palette, color-mode, ui-zoom, glass, smooth-caret, chat-avatars, fonts, notes-attachments, daily-notes, agent-browser, remote-sessions-switch, remote-approval-cap, remote-trusted-devices, remote-safety, computer-history, mcp-server, reset-layout, clear-data, language.';
+    const ENTRY = { id: 'open-settings',
+      description: "Open Forsion's settings window, optionally at one page or at the page holding one specific setting. To answer 'where/how do I set X', open that page and say which page you opened; these settings are not documented on the web, so do not search for them. Unknown targets are rejected.",
+      params: { type: 'object', properties: { tab: { type: 'string', description: `A page id or a setting id. Omit for the default page. ${TARGETS}` } } } };
+    const VOICE = new Set(['voice', 'model/m-voice']);
+    const known = new Set(TARGETS.replace(/Pages: |Settings: /g, '').split(/[,.]\s*/).filter(Boolean));
+    const asked = [];
+    const ev = await run(`live-settingsnav-${Date.now()}`, '怎么设置Forsion的语音模型', 240_000, {}, 'desktop/live-harness', undefined, undefined, undefined, {
+      ui: { locale: { value: 'zh', allowed: ['zh', 'en'] } }, uiCommands: [ENTRY],
+      uiRespond: (p) => {
+        if (p.kind !== 'command' || p.id !== 'open-settings') return null;
+        const tab = String(p.args?.tab ?? '').trim();
+        asked.push(tab || '(default)');
+        if (!tab) return { ok: true, state: 'opened the default page' };
+        if (VOICE.has(tab)) return { ok: true, state: `opened model/m-voice${tab === 'voice' ? ' (covers: 语音 朗读 音色 通话 打电话 听写 voice tts speech call realtime dictation)' : ''}` };
+        if (known.has(tab)) return { ok: true, state: `opened ${tab}` };
+        return { ok: false, error: `command failed: no settings page or setting "${tab}". Valid targets are listed in this command's \`tab\` parameter.` };
+      },
+    });
+    const hit = asked.some((t) => VOICE.has(t));
+    const detour = ev.toolCalls.filter((t) => /^(observe_ui|act_ui|find_roots|ensure_app|todo_write)/.test(t));
+    const web = ev.toolCalls.filter((t) => /^(web_search|web_fetch|browser_)/.test(t)).length;
+    return { ok: !ev.error && ev.done && hit && detour.length === 0,
+      detail: ev.error || `open-settings 落点 ${asked.join(' → ') || '未调用'};${hit ? '打开到语音页' : '没打开到语音页'};电脑操控/待办 ${detour.join(',') || '无'};网页检索 ${web} 次;工具 ${ev.toolCalls.join('→') || '无'}`,
+      output: ev.content, ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls };
   });
 
   // 旁聊(/btw,services/aside.ts):真模型才证得了「提示词让它只答题外话」。判据只钉事实命中 + 链路:

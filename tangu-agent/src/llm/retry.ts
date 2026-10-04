@@ -16,6 +16,13 @@ export function isRetryableLlmError(err: unknown): boolean {
   return true;
 }
 
+/** 上游在说「凭证失效」:401,或 xAI CLI proxy 那种用 502 包装的认证失败(只能看报错正文)。
+ *  同一个 token 再试必败 —— 调用方应先续期(brain.llm.refreshModelKey),续不了就别重试。 */
+export function isAuthExpiredLlmError(err: unknown): boolean {
+  return err instanceof LlmError && (err.status === 401 || AUTH_EXPIRED.test(err.message));
+}
+const AUTH_EXPIRED = /expired credentials|invalid or expired|token (has |is )?expired|PermissionDenied/i;
+
 /** 订阅额度 / 账单配额用尽的措辞(不可重试)。「rate limit」是秒级限流,不在此列。 */
 const QUOTA_EXHAUSTED = /usage limit|usage_limit_reached|usage_not_included|insufficient_quota|quota exceeded|exceeded your current quota|out of budget|billing_hard_limit/i;
 

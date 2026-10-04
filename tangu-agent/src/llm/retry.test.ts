@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { isRetryableLlmError, withLlmRetry, llmRetryBudgetExceeded, sleepOrAbort, MODEL_MAX_RETRIES, MODEL_RETRY_BASE_MS, SLOW_FAIL_NO_RETRY_MS } from './retry.js';
+import { isRetryableLlmError, isAuthExpiredLlmError, withLlmRetry, llmRetryBudgetExceeded, sleepOrAbort, MODEL_MAX_RETRIES, MODEL_RETRY_BASE_MS, SLOW_FAIL_NO_RETRY_MS } from './retry.js';
 import { LlmError } from '../core/types.js';
 
 describe('isRetryableLlmError', () => {
@@ -176,5 +176,18 @@ describe('stream retry primitives', () => {
       await rejected;
       expect(vi.getTimerCount()).toBe(0);
     } finally { vi.useRealTimers(); }
+  });
+});
+
+describe('isAuthExpiredLlmError', () => {
+  it('401,以及 xAI CLI proxy 用 502 包装的认证失败(看正文)', () => {
+    expect(isAuthExpiredLlmError(new LlmError(401, 'Unauthorized'))).toBe(true);
+    expect(isAuthExpiredLlmError(new LlmError(502, '{"error":"Invalid or expired credentials (auth_kind=bearer, x_xai_token_auth=xai-grok-cli, upstream=PermissionDenied, reason=no auth context)"}'))).toBe(true);
+    expect(isAuthExpiredLlmError(new LlmError(403, 'The access token has expired'))).toBe(true);
+  });
+  it('负对照:普通网关错 / 限流 / 传输错不算', () => {
+    expect(isAuthExpiredLlmError(new LlmError(502, 'Bad Gateway'))).toBe(false);
+    expect(isAuthExpiredLlmError(new LlmError(429, 'Rate limit reached'))).toBe(false);
+    expect(isAuthExpiredLlmError(new TypeError('fetch failed'))).toBe(false);
   });
 });

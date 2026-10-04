@@ -11,6 +11,8 @@ import { registerView, addCommand, addRibbonIcon, useRibbonStore, moveTo, openCo
 import type { ViewProps } from '@lcl/engine'
 import { useEffect } from 'react'
 import { windowKind } from './windowKind'
+import { agentSettingsTargets, resolveAgentSettingsTarget, suggestSettingsTargets } from './components/settingsTarget'
+import { SETTINGS_SEARCH_INDEX } from './components/settingsSearchIndex'
 import { askString } from '@amadeus/components/askString'
 import { useQuickFind } from './quickFind'
 import { findSupported, openFindBar } from './findInPage'
@@ -510,12 +512,28 @@ export function installEngine(): void {
   addCommand({ id: 'open-achievements', icon: Trophy, title: () => app().tr('achievements.title'), keywords: 'achievement trophy badge medal 成就 勋章 徽章', run: () => app().openAchievements() })
   if (window.tangu?.submitFeedback) addCommand({ id: 'open-feedback', icon: MessageSquare, title: () => app().tr('feedback.title'), keywords: 'feedback bug report 反馈 问题 建议 报错', run: () => { app().openFeedback() } })
   addCommand({ id: 'open-settings', icon: Settings, title: () => app().tr('settings.title'), keywords: 'settings 设置 preferences', hotkey: 'mod+,', run: () => app().openSettings() , invoke: {
-    description: "Open the Forsion settings window, optionally straight to one page. Use it to show the user where a control lives when you cannot change it yourself.",
+    // ⚠️ ≤300 字符(引擎 normalizeUiCommands 的截断上限)。「not documented on the web」那半句是真模型台架量出来的:
+    //    没有它,grok 打开对的页之后还会连搜五六次网页去找「这页有什么」(live:harness --only settingsnav)。
+    description: "Open Forsion's settings window, optionally at one page or at the page holding one specific setting. To answer 'where/how do I set X', open that page and say which page you opened; these settings are not documented on the web, so do not search for them. Unknown targets are rejected.",
     params: {
       type: 'object',
-      properties: { tab: { type: 'string', description: 'Settings page to open, e.g. theme, model, shortcuts, notifications, about. Omit for the default page.' } },
+      properties: { tab: { type: 'string', description: `A page id or a setting id. Omit for the default page. ${agentSettingsTargets()}` } },
     },
-    run: (a) => app().openSettings(typeof a.tab === 'string' && a.tab ? (a.tab as never) : undefined),
+    // ⚠️ 必须自校验:SettingsModal 对未知页静默落到第一页,不验就是「打开了常规页,回报已打开语音设置」(反馈 6a239e58)。
+    run: (a) => {
+      const want = typeof a.tab === 'string' ? a.tab.trim() : ''
+      const target = want ? resolveAgentSettingsTarget(want) : undefined
+      if (target === null) {
+        const near = suggestSettingsTargets(want)
+        throw new Error(`no settings page or setting "${want}".${near.length ? ` Did you mean: ${near.join(', ')}?` : ''} Valid targets are listed in this command's \`tab\` parameter.`)
+      }
+      const path = target ? (target.sub ? `${target.tab}/${target.sub}` : target.tab) : undefined
+      app().openSettings(path as never)
+      // 回执 = 实际打开的页(不进目录的 state:窗口随时会被用户关掉)。设置项的搜索别名顺带回给模型:
+      // 它不知道这页有什么,别名(朗读 / 音色 / 通话…)是现成的一句话提示。
+      const hint = SETTINGS_SEARCH_INDEX.find((entry) => entry.id === want)?.keywords
+      return `opened ${path || 'the default page'}${hint ? ` (covers: ${hint})` : ''}`
+    },
   } })
   // ── agent 面专属命令(不进命令面板的人类语汇,而是补上模型独缺的两个原语)──────────────
   // 为什么这两条是新增而不是给现有命令加 invoke:命令表里 22 条「开面板」对模型价值极低,

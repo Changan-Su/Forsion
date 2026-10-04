@@ -96,6 +96,8 @@ export interface LlmBrain {
   resolveModelAndKey(modelId: string): Promise<ResolvedModel>;
   buildProviderPayload(opts: BuildPayloadOpts): Promise<any>;
   streamProviderCompletion(opts: StreamOpts): Promise<StreamResult>;
+  /** 上游报凭证失效时强制续期,返回新 key;该模型的凭证续不了(API key、托管面)返回 null。仅订阅登录的直连 provider 实现。 */
+  refreshModelKey?(modelId: string): Promise<string | null>;
 }
 
 // ── 其余子接口 ──────────────────────────────────────────────────────────────

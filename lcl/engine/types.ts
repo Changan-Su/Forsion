@@ -120,8 +120,10 @@ export interface CommandInvoke {
   description: string
   /** 参数的 JSON Schema(`{type:'object',properties:{…},required:[…]}`);无参命令省略。 */
   params?: Record<string, unknown>
-  /** 接显式值的处理函数;缺省时回落 `Command.run()`(仅适用于真正无参且幂等的命令)。 */
-  run?(args: Record<string, unknown>): void | Promise<void>
+  /** 接显式值的处理函数;缺省时回落 `Command.run()`(仅适用于真正无参且幂等的命令)。
+   *  返回字符串 = **这一次调用**的回执(如「opened model/m-voice」),随结果回给模型,优先于 `state()`;
+   *  并发的两次调用各拿各的,不会串。 */
+  run?(args: Record<string, unknown>): void | string | Promise<void | string>
   /** 当前值探针,随目录一起回给模型,省得它靠猜(如当前语言 / 当前明暗档)。 */
   state?(): string
 }
