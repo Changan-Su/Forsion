@@ -83,7 +83,7 @@ export function installNativeChrome(): void {
     }
     const png = chip.avatar && picture?.src === chip.avatar ? picture.png : null
     const icon = chip.loggedIn ? { kind: 'text' as const, text: chip.initial } : await guest
-    return { label: chip.label, ...(icon ? { icon } : {}), ...(png ? { png } : {}) }
+    return { label: chip.label.slice(0, 120), ...(icon ? { icon } : {}), ...(png ? { png } : {}) } // Kotlin refuses a label over 128
   }
   let state: NativeChromeState | null = null
   let lastSent = ''
@@ -119,7 +119,9 @@ export function installNativeChrome(): void {
 
   void plugin.addListener('action', (e) => {
     if ((e.action === 'space' || e.action === 'spaceLong') && typeof e.id === 'string') dispatchNativeChromeSpace(e.id, e.action === 'spaceLong')
-    else if (e.action === 'account') accountChip()?.activate()
+    // The avatar exists only on a first-level shell page: a tap that arrives after a page / overlay took the bar
+    // (settings, a sheet) or after the shell went one level down must not open the account menu over it.
+    else if (e.action === 'account') { if (state?.mode === 'shell' && state.spaces) accountChip()?.activate() }
     else if ((ACTIONS as readonly string[]).includes(e.action)) dispatchNativeChromeAction(e.action as NativeChromeAction)
   }).catch(() => {})
   // Skin / mode / custom colour changes repaint the bar (same attributes the model picker watches + inline vars).

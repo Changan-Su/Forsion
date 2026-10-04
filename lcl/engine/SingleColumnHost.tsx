@@ -24,6 +24,7 @@ import { ExtendViewHost } from './ExtendViewHost'
 import { presentInlineExtension } from './extendView'
 import { NativeExtendView } from './nativeExtendView'
 import { useWorkspace, restoreSingleColumnLayout, presentDrawerExtension, setAfterLayoutHook } from './singleColumnStore'
+import { listFirstNow } from './listFirst'
 import { Skeleton, ViewErrorBoundary, skeletonVariantOf } from './Skeleton'
 import './singleColumn.css'
 import { useEngineI18n } from './i18nSeam'
@@ -358,17 +359,6 @@ function iconRev(icon: object | undefined): number {
   let rev = iconRevs.get(icon)
   if (!rev) { rev = ++iconRevSeq; iconRevs.set(icon, rev) }
   return rev
-}
-/** 两级导航(用户拍板 2026-10-04「和微信那样」)此刻生效吗:宿主画原生底部导航栏(Android)× 竖屏 ×
- *  当前 Space 有左栏且没退订(SpaceDefinition.listFirst)。生效时左栏整屏是这个 Space 的**第一层**
- *  (底部导航栏只在这一层),主区是点进条目后的第二层,顶栏左钮 / 系统返回 = 回列表。
- *  没有左栏或退订了的 Space(主页 / 日历…)主区就是第一层。web / 桌面手机框 / 手机浏览器没有原生宿主 →
- *  恒 false,抽屉行为逐像素不变。 */
-export function listFirstNow(): boolean {
-  if (!nativeChromeDrawsSpaces()) return false
-  const ws = useWorkspace.getState()
-  if (ws.wideMode || (ws.leftLeaves.length === 0 && ws.sidebarDefaults.left.length === 0)) return false
-  return getActiveSpace()?.listFirst !== false
 }
 /** 落到列表层:冷启动 / 进 Space / 布局重置之后(不生效或已在列表层时是空操作)。 */
 function landOnList(): void {

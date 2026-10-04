@@ -31,20 +31,44 @@ class NativeChromeStateTest {
         assertFalse(page.spaceBar)
     }
 
-    @Test fun accountAvatarIsOptionalAndValidated() {
+    /** Minimal PNG head (signature + IHDR declaring [w]×[h]) padded with [extra] bytes, as base64. */
+    private fun png(w: Int, h: Int, extra: Int = 40): String {
+        val b = java.io.ByteArrayOutputStream()
+        b.write(byteArrayOf(0x89.toByte(), 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 13))
+        b.write("IHDR".toByteArray())
+        for (v in listOf(w, h)) b.write(byteArrayOf((v ushr 24).toByte(), (v ushr 16).toByte(), (v ushr 8).toByte(), v.toByte()))
+        b.write(ByteArray(extra))
+        return java.util.Base64.getEncoder().encodeToString(b.toByteArray())
+    }
+
+    @Test fun accountAvatarIsOptionalAndItsPictureIsCheckedBeforeAnyDecode() {
         assertEquals(null, ChromeState.parse(shell(null)).account)
         fun withAccount(account: String) = shell(null).put("account", JSONObject(account))
         val letter = ChromeState.parse(withAccount("""{"label":"Ada","icon":{"kind":"text","text":"A"}}""")).account!!
         assertEquals("Ada", letter.label)
         assertTrue(letter.icon is NativeIconSpec.Text)
         assertEquals("", letter.png)
-        assertEquals("iVBORw0KGgo=", ChromeState.parse(withAccount("""{"label":"Ada","png":"iVBORw0KGgo="}""")).account!!.png)
         assertTrue("account" in ChromeState.ACTIONS)
-        // not base64 / oversized: the whole state is refused (JS then falls back to its web bar)
-        assertThrows(IllegalArgumentException::class.java) { ChromeState.parse(withAccount("""{"label":"Ada","png":"data:image/png;base64,AAAA"}""")) }
-        assertThrows(IllegalArgumentException::class.java) {
-            ChromeState.parse(withAccount("""{"label":"Ada","png":"${"A".repeat(ChromeState.MAX_AVATAR_CHARS + 4)}"}"""))
-        }
+        // a real PNG (the emulator harness fixture: 8×8) and the size JS sends (96×96) are kept as they are
+        val real = "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAEUlEQVR42mP4z/AfK2IYWhIA0ad/gQofP30AAAAASUVORK5CYII="
+        assertEquals(real, ChromeState.parse(withAccount("""{"label":"Ada","png":"$real"}""")).account!!.png)
+        assertEquals(png(96, 96), ChromeState.usablePng(png(96, 96)))
+        assertEquals(png(512, 512), ChromeState.usablePng(png(512, 512)))
+        // unusable pictures are dropped — the bar still renders (with the initial): the avatar is cosmetic
+        val dropped = listOf(
+            png(513, 96), png(96, 16384), png(16384, 16384), // a few KB can declare gigabytes of pixels
+            png(0, 96), png(-1, 96),
+            "data:image/png;base64,AAAA", "iVBORw0KGgo=", // not base64 / too short to hold a header
+            java.util.Base64.getEncoder().encodeToString(ByteArray(64) { 0x41 }), // base64, not a PNG
+            "A".repeat(ChromeState.MAX_AVATAR_CHARS + 4),
+        )
+        for (bad in dropped) assertEquals("kept: ${bad.take(40)}", "", ChromeState.usablePng(bad))
+        val state = ChromeState.parse(withAccount("""{"label":"Ada","icon":{"kind":"text","text":"A"},"png":"${png(16384, 16384)}"}"""))
+        assertEquals("", state.account!!.png)
+        assertTrue(state.account!!.icon is NativeIconSpec.Text)
+        assertEquals("", ChromeState.parse(withAccount("""{"label":"Ada","png":42}""")).account!!.png)
+        // the label stays strict, like every other string of the bar
+        assertThrows(IllegalArgumentException::class.java) { ChromeState.parse(withAccount("""{"label":"${"x".repeat(129)}"}""")) }
         // the avatar belongs to the shell: a page has none
         val page = JSONObject("""{"mode":"page","title":"Settings","back":"Back","theme":$theme}""").put("account", JSONObject("""{"label":"Ada"}"""))
         assertEquals(null, ChromeState.parse(page).account)

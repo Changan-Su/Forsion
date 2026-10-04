@@ -16,7 +16,9 @@ internal data class ChromeSpace(val id: String, val label: String, val active: B
 
 /**
  * Account avatar at the trailing end of the bar (first-level pages only; JS decides). `png` = the picture as
- * base64, already cropped square and downscaled by JS; blank or undecodable = draw `icon` (initial / person glyph).
+ * base64, already cropped square and downscaled by JS; blank = draw `icon` (initial / person glyph). An unusable
+ * picture (not base64, not a PNG, oversized, a canvas larger than MAX_AVATAR_PX) is dropped by the parser: the
+ * avatar is cosmetic, never a reason to refuse the bar — and never something to decode blindly.
  */
 internal data class ChromeAccount(val label: String, val icon: NativeIconSpec?, val png: String)
 
@@ -46,13 +48,28 @@ internal data class ChromeState(
         val ACTIONS = setOf("left", "right", "tabs", "more", "back", "close", "account")
         const val MAX_SPACES = 64 // = MAX_SPACES in mobile/src/nativeChrome.ts, which trims the list before sending
         const val MAX_AVATAR_CHARS = 131_072 // = MAX_AVATAR_CHARS in mobile/src/nativeChrome.ts (a 96px PNG stays far below)
+        /** Largest picture side the bar decodes (JS sends 96px). A few KB of PNG can declare a canvas of gigabytes. */
+        const val MAX_AVATAR_PX = 512
         private val BASE64 = Regex("^[A-Za-z0-9+/]+={0,2}$")
+        private val PNG_SIGNATURE = byteArrayOf(0x89.toByte(), 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A)
+
+        /** [raw] when it is a base64 PNG whose declared size is 1..MAX_AVATAR_PX on both sides, else "". */
+        internal fun usablePng(raw: String): String {
+            if (raw.length < 32 || raw.length > MAX_AVATAR_CHARS || !BASE64.matches(raw)) return ""
+            // Width and height live in the IHDR chunk, which is always first: bytes 16..23 = inside the first 32 characters.
+            val head = try { java.util.Base64.getDecoder().decode(raw.substring(0, 32)) } catch (_: IllegalArgumentException) { return "" }
+            if (head.size < 24 || !head.copyOfRange(0, 8).contentEquals(PNG_SIGNATURE)) return ""
+            if (String(head, 12, 4, Charsets.US_ASCII) != "IHDR") return ""
+            fun int(at: Int) = (0 until 4).fold(0L) { acc, i -> (acc shl 8) or (head[at + i].toLong() and 0xFF) }
+            return if (int(16) in 1..MAX_AVATAR_PX && int(20) in 1..MAX_AVATAR_PX) raw else ""
+        }
 
         private fun account(json: JSONObject): ChromeAccount? {
             val o = json.optJSONObject("account") ?: return null
-            val png = NativeJson.optStr(o, "png", MAX_AVATAR_CHARS)
-            require(png.isEmpty() || BASE64.matches(png)) { "Invalid avatar" }
-            return ChromeAccount(NativeJson.str(o, "label", 128), o.optJSONObject("icon")?.let(NativeJson::icon), png)
+            return ChromeAccount(
+                NativeJson.str(o, "label", 128), o.optJSONObject("icon")?.let(NativeJson::icon),
+                usablePng(o.opt("png") as? String ?: ""),
+            )
         }
 
         private fun spaces(json: JSONObject): List<ChromeSpace> {
