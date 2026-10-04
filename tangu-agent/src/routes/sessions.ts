@@ -810,6 +810,7 @@ async function writeSessionConfig(req: AuthRequest, res: Response, body: Record<
     if (remote && storedContentMarker == null && (['title', 'name'] as const).some((k) => cfg[k] !== storedObj[k])) {
       cfg = { ...cfg, remoteContent: remoteOriginMarker(remote) };
     }
+    if (storedObj.pluginOwner && s.kind === 'task') cfg.pluginOwner = storedObj.pluginOwner;
     // 锁合并之后再校验一次:请求体单看合法(只带 soloEngineId),合并回存值的 soloAgentSlug 就成了双身份 —— 这种写整条拒绝(creview 09-16 P0)。
     const mergedErr = validSessionFacts(cfg);
     if (mergedErr) return void res.status(400).json({ detail: mergedErr });

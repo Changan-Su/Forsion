@@ -92,6 +92,11 @@ export async function applyAgentActivation(
       }
       if (agentConfig.enabledMcpServers == null && def.enabledMcpServers) agentConfig.enabledMcpServers = def.enabledMcpServers;
       if (agentConfig.activityAccess == null && def.activityAccess) agentConfig.activityAccess = true;
+      if (def.toolsStrict) {
+        agentConfig.toolsStrict = true;
+        agentConfig.toolsMode = 'allow';
+        agentConfig.toolsList = def.toolsList || [];
+      }
       if (agentConfig.toolsMode == null && def.toolsMode) {
         agentConfig.toolsMode = def.toolsMode;
         agentConfig.toolsList = def.toolsList || [];

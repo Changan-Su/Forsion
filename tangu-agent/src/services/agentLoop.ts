@@ -1,3 +1,4 @@
+import { withTaskProjectQueue } from './taskProjectQueue.js';
 import { HUMAN_GUIDANCE, readHuman, renderHumanContext } from '../agents/humanStore.js';
 import { humanProjectScope } from './humanContext.js';
 /**
@@ -251,7 +252,7 @@ export function startRun(runId: string): void {
   if (exiting) return; // 进程正在退出:行留在 queued,下次启动按持有者已死认领
   const ac = new AbortController();
   abortControllers.set(runId, ac);
-  const task = dispatchRun(runId, ac).catch(async (err) => {
+  const task = withTaskProjectQueue(runId, ac.signal, () => dispatchRun(runId, ac)).catch(async (err) => {
     // Preparation precedes the main loop's resource setup. It must publish a real terminal
     // outcome too; otherwise a hydration failure releases the queue but leaves the UI hanging.
     const aborted = !(err instanceof DockerCleanupError) && (ac.signal.aborted || err?.name === 'AbortError' || err instanceof AbortLikeError);
@@ -1546,6 +1547,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       muse: !!agentConfig.muse,
       activityAccess: !!agentConfig.activityAccess,
       automationOrigin: typeof agentConfig.automationOrigin === 'string' ? agentConfig.automationOrigin : undefined,
+      toolsStrict: agentConfig.toolsStrict === true,
       toolsMode,
       toolsList,
       subAgentDepth: agentConfig.delegatedFrom ? 1 : undefined,

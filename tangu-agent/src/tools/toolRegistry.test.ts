@@ -98,3 +98,12 @@ describe('declaredApproval + toolNeedsApproval 联动', () => {
     expect(toolNeedsApproval('plain_a', 'readonly')).toBe(false);
   });
 });
+
+// Config-only strict mode is opt-in and covers gated, exempt, app and plugin tools.
+describe('strict agent tool surface', () => {
+  it('applies an exact allowlist to every provider without changing default semantics', () => {
+    const names = [...resolveTools(profile(true), ctx({toolsStrict:true, toolsMode:'allow', toolsList:['gated_x', 'app_tool']})).keys()];
+    expect(names).toEqual(['gated_x', 'app_tool']);
+    expect([...resolveTools(profile(true), ctx({toolsStrict:true, toolsList:[]})).keys()]).toEqual([]);
+  });
+});

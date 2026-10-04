@@ -151,8 +151,36 @@ export interface PluginStore {
   deletePluginFile(id: string, scope: Scope, name: string): Promise<void>;
 }
 
+/** Local task sessions owned by the calling engine plugin. requestId makes submission idempotent. */
+export interface PluginRunStart {
+  userId: string; prompt: string; cwd: string; modelId?: string; thinkingLevel?: string;
+  agentSlug?: string; engineId?: string; engineModelId?: string; planMode?: boolean;
+  parentSessionId?: string; sessionId?: string; requestId?: string; title?: string;
+}
+export interface PluginRunStatus {
+  runId: string; sessionId: string; status: string; error?: string | null;
+  tokens: number; summary: string; waiting: string[];
+}
+/** Minimal Express surface; authentication and the bundle/engine prefix are host-owned. */
+export interface ScopedPluginRouter {
+  get(path: string, handler: (req: any, res: any) => any): unknown;
+  post(path: string, handler: (req: any, res: any) => any): unknown;
+  put(path: string, handler: (req: any, res: any) => any): unknown;
+  patch(path: string, handler: (req: any, res: any) => any): unknown;
+  delete(path: string, handler: (req: any, res: any) => any): unknown;
+}
+
 /** 运行时句柄(按引用传入,核心同一模块实例)。只列稳定公开成员。 */
 export interface TanguSdk {
+  runs: {
+    start(input: PluginRunStart): Promise<{ sessionId: string; runId: string }>;
+    sessionRuns(sessionId: string, userId: string): Promise<Array<{runId:string; status:string; createdAt:string}>>;
+    status(runId: string, userId: string): Promise<PluginRunStatus>;
+    events(runId: string, userId: string, cursor?: number): Promise<Array<{ seq: number; type: string; payload: any }>>;
+    subscribe(runId: string, userId: string, onChange: () => void): Promise<() => void>;
+    stop(runId: string, userId: string): Promise<void>;
+  };
+  engines: { list(): Array<{ id: string; name: string; available: boolean; reason?: string }> };
   pluginStore: PluginStore;
   sendWechatMedia(
     userId: string,
@@ -176,9 +204,10 @@ export interface TanguPluginContext {
   registerToolProvider(p: ToolProvider): void;
   /** 注册 `tangu <name>` 子命令(如 computer-use 的 doctor/setup)。 */
   registerCommand(cmd: PluginCommand): void;
+  registerScopedRoutes(mount: (router: ScopedPluginRouter) => void): void;
   sdk: TanguSdk;
   log(msg: string): void;
-  paths: { pluginDir: string };
+  paths: { pluginDir: string; dataDir: string };
   /** 发用户活动事件(宿主强制加 `plugin:<id>:` 前缀)——自动化 event_seen 可盯;云端 worker no-op。 */
   activity: { append(event: string, detail?: Record<string, unknown>): void };
 }

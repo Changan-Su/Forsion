@@ -101,6 +101,7 @@ export interface TanguStartChatResult {
 }
 
 export interface TanguProbe {
+  openSession?(sessionId: string, alive?: () => boolean): Promise<void> | void
   /** True only when the active engine executes against this host filesystem. */
   hostExecution?(): boolean
   /** 主区聊天此刻**实际会用**的模型;一个都没有 → null。 */

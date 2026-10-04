@@ -12,6 +12,8 @@ import { registerAppearance, clearPluginAppearance, useAppearance } from '../../
 import { create } from 'zustand'
 import { toAssetUrl } from '@amadeus-shared/assets'
 import { pluginHostPath } from './hostPaths'
+import { pluginRequestPath, type PluginRequestOptions } from './engineRequest'
+import { request as engineJsonRequest } from '../../services/backendService'
 
 /** window.tangu,在没有 window 的环境(vitest node 环境、云端 worker)返回 undefined 而不是抛 ReferenceError。 */
 const hostTangu = (): typeof window.tangu => (typeof window !== 'undefined' ? window.tangu : undefined)
@@ -1412,6 +1414,39 @@ export const usePluginStore = create<PluginState>((set, get) => {
     ...(readTangu()
       ? {
           tangu: {
+            ...(readTangu()?.waitBackend ? {
+              request: async (engineId: string, path: string, opts: PluginRequestOptions = {}): Promise<unknown> => {
+                if (!ctxAlive()) throw new Error('plugin disabled')
+                const owned = get().plugins.find((p) => p.id === pluginId)?.bundle?.enginePlugins ?? []
+                const route = pluginRequestPath(pluginId, engineId, path, owned)
+                const method = opts.method ?? 'GET'
+                if (!['GET', 'POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) throw new Error('Invalid request method')
+                if (!readTangu()?.hostExecution?.()) throw new Error('A local engine is required')
+                const ac = new AbortController()
+                const stop = scope.own('request', () => ac.abort(), 'plugin route')
+                const onAbort = (): void => ac.abort()
+                opts.signal?.addEventListener('abort', onAbort)
+                if (opts.signal?.aborted) ac.abort()
+                try {
+                  const cfg = await readTangu()?.waitBackend?.(15_000)
+                  if (!ctxAlive() || ac.signal.aborted) throw new Error('plugin disabled or request cancelled')
+                  if (!cfg || !readTangu()?.hostExecution?.()) throw new Error('Local engine is unavailable')
+                  const result = await engineJsonRequest(connectionTarget(cfg), route, {
+                    method, signal: ac.signal,
+                    ...(opts.body === undefined ? {} : { body: JSON.stringify(opts.body) }),
+                  })
+                  if (!ctxAlive()) throw new Error('plugin disabled')
+                  return result
+                } finally { opts.signal?.removeEventListener('abort', onAbort); stop.forget() }
+              },
+            } : {}),
+            ...(readTangu()?.openSession ? {
+              openSession: async (sessionId: string): Promise<void> => {
+                if (!ctxAlive()) return
+                if (!/^[a-zA-Z0-9_-]{1,128}$/.test(sessionId)) throw new Error('Invalid session ID')
+                await readTangu()?.openSession?.(sessionId, ctxAlive)
+              },
+            } : {}),
             activeModel: () => readTangu()?.activeModel() ?? null,
             models: () => readTangu()?.models() ?? [],
             // Agent 名册(2026-09-20):同 agentStatus 的姿势 —— 调用时才读探针,探针缺这条(旧宿主 /

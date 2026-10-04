@@ -90,6 +90,7 @@ export interface ToolContext {
   automationOrigin?: string;
   /** 内置工具黑白名单(config.toml tools_mode/tools_list):'deny'=名单内禁用,'allow'=仅名单内可用;
    *  缺省=不限制。只约束无门禁的内置工具,见 resolveTools。 */
+  toolsStrict?: boolean;
   toolsMode?: 'allow' | 'deny';
   toolsList?: string[];
   /** 本会话是否连接着聊天通道(微信/TG/QQ 活跃绑定):channel_send_* 仅此时暴露。loop 每 run 预查一次。

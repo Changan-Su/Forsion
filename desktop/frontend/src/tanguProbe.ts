@@ -1,3 +1,4 @@
+import { useChildChat } from './stores/childChatStore';
 /**
  * `ctx.tangu` 探针的实现(2026-08-29+)。契约与「为什么要探针」见
  * `amadeus/plugins/tanguSeam.ts` —— 那边是叶子,这边才碰 store。
@@ -19,7 +20,7 @@ import {
 import { activeChatModelId, stickyDefaults, useApp, type AppState } from './stores/appStore'
 import { agentStatusOf, statusKey } from './stores/agentStatus'
 import type { TanguDesktopConfig } from './types'
-import { getAgentSchedules, getMuseLibrary, getMuseLibraryFile, getMuseStatus, getMuseTodos, patchMuseTodo } from './services/backendService'
+import { getSessionDetail, getAgentSchedules, getMuseLibrary, getMuseLibraryFile, getMuseStatus, getMuseTodos, patchMuseTodo } from './services/backendService'
 import { hasNativeFeature } from './features/runtime'
 import { quoteInChatPanel } from './views/chat2/chatPanelQuote'
 import { completeInline } from './services/inlineAi'
@@ -309,6 +310,15 @@ export function installTanguProbe(): void {
     agentStatus: readAgentStatus,
     subscribeAgentStatus,
     startChat,
+    ...(hasNativeFeature('tangu') ? { openSession: async (id: string, alive: () => boolean = () => true) => {
+      const cfg = await waitBackend(15_000);
+      if (!cfg) throw new Error('Local engine is unavailable');
+      const session = await getSessionDetail(connectionTarget(cfg), id);
+      if (!alive()) return;
+      useChildChat.getState().remember(session);
+      useApp.setState(s => ({ configBySession: { ...s.configBySession, [id]: session.agent_config || {} } }));
+      openSession(id, { newTab: true });
+    } } : {}),
     ...(hasNativeFeature('tangu') && typeof window !== 'undefined' && window.tangu?.documentTasks ? {
       submitDocumentTask: async (o: Parameters<typeof submitDocumentTask>[0]) => {
         if (!(window.tangu?.executionCapabilities?.host ?? (useApp.getState().desktopConfig?.mode === 'managed')) || !(await waitBackend(15_000))) {

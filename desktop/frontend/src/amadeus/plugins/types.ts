@@ -987,6 +987,10 @@ export interface PluginContext {
    *  `subscribe()` **只在这两个值真的变了**时回调 —— 不是每次 store 变更(流式回答期间每个 SSE
    *  增量都会动 store)。退订宿主也会在插件禁用/重载时统一收掉,但自己也 dispose。 */
   tangu?: {
+    /** Local authenticated JSON request to an engine plugin bundled by this plugin. */
+    request?(engineId: string, path: string, opts?: import('./engineRequest').PluginRequestOptions): Promise<unknown>
+    /** Open an existing session in a native chat tab. Does not start a run. */
+    openSession?(sessionId: string): Promise<void> | void
     activeModel(): import('./tanguSeam').TanguModelInfo | null
     models(): import('./tanguSeam').TanguModelInfo[]
     /** 用户的 Agent 名册(2026-09-20+):给「把某个东西绑给某个 Agent」的选择器用(Live3D 的「这个 Agent 用哪个形象」)。

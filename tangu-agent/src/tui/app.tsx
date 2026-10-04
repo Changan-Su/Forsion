@@ -1225,7 +1225,7 @@ export function App({ boot, storage }: { boot: TuiConfig; storage: string }): Re
           userId, sessionId: sessionIdRef.current, appId: 'tangu', profile: deps().profile,
           execMode: c.execMode, cwd: c.cwd, planMode: !!c.planMode,
           enabledSkillIds: c.enabledSkillIds || [], // /skill 开过的技能会解锁 use_skill,别写死空数组
-          toolsMode: agentDef?.toolsMode, toolsList: agentDef?.toolsList,
+          toolsStrict: agentDef?.toolsStrict, toolsMode: agentDef?.toolsMode, toolsList: agentDef?.toolsList,
           unlockedTools: new Set<string>(), unlockTools: () => {}, // load_tools 真实在场(registry 按 unlockTools 有无判定)
         };
         const names = getToolDefinitions(ctx).map((d) => d.function.name);

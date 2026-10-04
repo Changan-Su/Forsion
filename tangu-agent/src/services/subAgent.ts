@@ -357,6 +357,7 @@ export async function runSubAgent(p: SubAgentParams): Promise<string> {
     // 委派方身份:manage_agent 守卫要连它一起保护(具名子代理在自己的 ALS 里跑,父代理会变成「别人」)。
     subAgentDelegator: parentCtx.subAgentDelegator || parentCtx.agentSlug || currentAgentSlug(),
     customTools: subCustomTools,
+    ...(def?.toolsStrict ? { toolsStrict: true } : {}),
     ...(def?.toolsMode ? { toolsMode: def.toolsMode, toolsList: def.toolsList || [] } : {}),
     ...(def?.enabledMcpServers ? { mcpTools: new Map([...(parentCtx.mcpTools || [])].filter(([, tool]) => def.enabledMcpServers!.includes(tool.serverName))) } : {}),
     // 具名 agent 的可用技能集(use_skill 按 ctx.enabledSkillIds 鉴权);未装载则继承父。
