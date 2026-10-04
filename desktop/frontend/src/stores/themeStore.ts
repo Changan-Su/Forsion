@@ -354,7 +354,8 @@ export function toggleVisibleMode(): Promise<void> {
   // 全局语言锁了明暗、而本 Space 换成了不锁的语言:全局 setModePref 会直接返回(那条闸管着设置 / 引导 / Agent 命令,
   // 不在这里放松),按钮就成了摆设。这时把明暗记在本 Space 上。
   if (id && (local?.modePref !== undefined || useTheme.getState().modeLocked)) {
-    return withModeTransition(() => { setSpaceAppearance(id, { ...local, modePref: mode }) })
+    // 回调晚一帧才跑:重读而不是展开点击那一刻的值,别把另一个窗口刚「恢复全局外观」删掉的覆盖写回去。
+    return withModeTransition(() => { setSpaceAppearance(id, { ...useSpaceAppearance.getState().byId[id], modePref: mode }) })
   }
   return useTheme.getState().setModePref(mode)
 }

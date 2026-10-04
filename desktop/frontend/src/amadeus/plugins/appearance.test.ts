@@ -45,6 +45,40 @@ describe('plugin appearance lifecycle', () => {
     init(true)
     expect(useAppearance.getState().presets).toHaveLength(0)
   })
+  it('disabling a plugin also clears the artwork of the dependents it takes down', async () => {
+    const update = vi.fn().mockResolvedValue(DEFAULT_APPEARANCE)
+    const previous = window.tangu
+    window.tangu = { startupAppearance: { update } } as any
+    try {
+      usePluginStore.getState().init([
+        { id: 'base', name: 'Base', version: '1', setup() {} },
+        { id: 'skin', name: 'Skin', version: '1', requiresPlugins: [{ id: 'base' }], setup(c) { c.registerAppearance!({ id: 'blue', label: 'Blue', icon: image }) } },
+      ])
+      expect(usePluginStore.getState().activeIds).toEqual(expect.arrayContaining(['base', 'skin']))
+      usePluginStore.getState().disable('base')
+      await Promise.resolve()
+      expect(usePluginStore.getState().activeIds).not.toContain('skin')
+      expect(update).toHaveBeenCalledWith({}, 'skin')
+    } finally { window.tangu = previous }
+  })
+  it('a setup failure in a satellite window leaves the app-wide artwork alone', async () => {
+    const update = vi.fn().mockResolvedValue(DEFAULT_APPEARANCE)
+    const previous = window.tangu
+    window.tangu = { startupAppearance: { update } } as any
+    const url = location.href
+    try {
+      history.replaceState(null, '', '?window=mini')
+      // Its own id: a setup that already failed is not retried, which would leave this half with nothing to observe.
+      usePluginStore.getState().init([{ id: 'mini-probe', name: 'Mini', version: '1', setup: () => { throw new Error('failed setup') } }])
+      await Promise.resolve()
+      expect(usePluginStore.getState().lastSetupError['mini-probe']).toContain('failed setup')
+      expect(update).not.toHaveBeenCalled()
+      history.replaceState(null, '', url)
+      usePluginStore.getState().enable('mini-probe') // an explicit retry, now in the main window, still cleans up
+      await Promise.resolve()
+      expect(update).toHaveBeenCalledWith({}, 'mini-probe')
+    } finally { history.replaceState(null, '', url); window.tangu = previous }
+  })
   it('storage failure preserves the previous selection', async () => {
     const spy = vi.spyOn(localStorage, 'setItem').mockImplementation(() => { throw new Error('quota') })
     await expect(updateAppearance({ showSplash: false })).rejects.toThrow('quota')
