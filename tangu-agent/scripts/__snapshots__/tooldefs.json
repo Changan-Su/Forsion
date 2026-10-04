@@ -4138,6 +4138,82 @@
     {
       "type": "function",
       "function": {
+        "name": "manage_harness",
+        "description": "Your Working Notes (HARNESS.md): durable lessons about HOW you work, loaded into your system prompt on every run. You own them: changes apply at once and the user gets a card to undo, so do not ask permission or wait for /refine. Use it when this conversation taught you something lasting about your own method: the user corrected how you work, a technique or delegation pattern proved itself, a pitfall you can avoid next time. Elsewhere: facts about the user or the world → remember; how the human can work with you → manage_human; a reusable procedure → manage_skill (scope \"agent\"). One lesson, one place: if you are saving a point with remember or manage_human, do not repeat it here. Never record environment/setup failures, \"tool X is broken\", transient errors or one-off task stories; they harden into refusals. upsert without id creates an entry (title, body and evidence of what actually happened are required); with id it revises. rollback restores the previous version. propose (agent + candidates) drops suggestions into ANOTHER agent's candidate inbox; you never write its notes. Limits: title ≤80, body ≤300, evidence ≤200 chars, 30 entries; at the cap, merge or delete weaker ones. kind \"note\" = working method (default); \"recipe\" = a delegation pattern that worked; \"equip\" = shelve tools/skills you rarely use to keep your context lean (pass tools / skills): a shelved tool moves to the load-on-demand catalog (load_tools brings it back), a shelved skill leaves your skill list (use_skill by id still works). Shelving never removes or grants a capability; shelve on evidence such as a usage review, and revise or delete the entry to undo.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "enum": [
+                "upsert",
+                "delete",
+                "list",
+                "rollback",
+                "propose"
+              ],
+              "description": "The operation"
+            },
+            "agent": {
+              "type": "string",
+              "description": "propose: target agent slug"
+            },
+            "candidates": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "propose: 1-3 one-line lessons"
+            },
+            "id": {
+              "type": "string",
+              "description": "Entry id, e.g. \"h-x3k9\" (delete / rollback / revise)"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "note",
+                "recipe",
+                "equip"
+              ],
+              "description": "Entry type (default \"note\")"
+            },
+            "tools": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "equip: exact tool names to shelve (replaces the list on revise)"
+            },
+            "skills": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "equip: exact skill ids to shelve, e.g. \"local:pptx\" (replaces the list on revise)"
+            },
+            "title": {
+              "type": "string",
+              "description": "Short label"
+            },
+            "body": {
+              "type": "string",
+              "description": "The lesson itself"
+            },
+            "evidence": {
+              "type": "string",
+              "description": "What actually happened that justifies it"
+            }
+          },
+          "required": [
+            "action"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
         "name": "transcribe_audio",
         "description": "Transcribe a local audio file via the Forsion Desktop speech-recognition pipeline (local offline model or the ASR provider configured in desktop settings). Returns JSON {text, segments?}. Use this when a transcription script reports the media has no subtitle track and hands back an audio_path (e.g. source:\"needs_asr\"). Requires the Forsion desktop app to be running. With timestamps:true you can cite a moment back to the user as [[<media path>#t=<seconds>|<mm:ss>]] — see the line printed after the transcript.",
         "parameters": {
@@ -5118,6 +5194,82 @@
           "required": [
             "action",
             "scope"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "manage_harness",
+        "description": "Your Working Notes (HARNESS.md): durable lessons about HOW you work, loaded into your system prompt on every run. You own them: changes apply at once and the user gets a card to undo, so do not ask permission or wait for /refine. Use it when this conversation taught you something lasting about your own method: the user corrected how you work, a technique or delegation pattern proved itself, a pitfall you can avoid next time. Elsewhere: facts about the user or the world → remember; how the human can work with you → manage_human; a reusable procedure → manage_skill (scope \"agent\"). One lesson, one place: if you are saving a point with remember or manage_human, do not repeat it here. Never record environment/setup failures, \"tool X is broken\", transient errors or one-off task stories; they harden into refusals. upsert without id creates an entry (title, body and evidence of what actually happened are required); with id it revises. rollback restores the previous version. propose (agent + candidates) drops suggestions into ANOTHER agent's candidate inbox; you never write its notes. Limits: title ≤80, body ≤300, evidence ≤200 chars, 30 entries; at the cap, merge or delete weaker ones. kind \"note\" = working method (default); \"recipe\" = a delegation pattern that worked; \"equip\" = shelve tools/skills you rarely use to keep your context lean (pass tools / skills): a shelved tool moves to the load-on-demand catalog (load_tools brings it back), a shelved skill leaves your skill list (use_skill by id still works). Shelving never removes or grants a capability; shelve on evidence such as a usage review, and revise or delete the entry to undo.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "enum": [
+                "upsert",
+                "delete",
+                "list",
+                "rollback",
+                "propose"
+              ],
+              "description": "The operation"
+            },
+            "agent": {
+              "type": "string",
+              "description": "propose: target agent slug"
+            },
+            "candidates": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "propose: 1-3 one-line lessons"
+            },
+            "id": {
+              "type": "string",
+              "description": "Entry id, e.g. \"h-x3k9\" (delete / rollback / revise)"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "note",
+                "recipe",
+                "equip"
+              ],
+              "description": "Entry type (default \"note\")"
+            },
+            "tools": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "equip: exact tool names to shelve (replaces the list on revise)"
+            },
+            "skills": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "equip: exact skill ids to shelve, e.g. \"local:pptx\" (replaces the list on revise)"
+            },
+            "title": {
+              "type": "string",
+              "description": "Short label"
+            },
+            "body": {
+              "type": "string",
+              "description": "The lesson itself"
+            },
+            "evidence": {
+              "type": "string",
+              "description": "What actually happened that justifies it"
+            }
+          },
+          "required": [
+            "action"
           ]
         }
       }
@@ -7392,6 +7544,82 @@
     {
       "type": "function",
       "function": {
+        "name": "manage_harness",
+        "description": "Your Working Notes (HARNESS.md): durable lessons about HOW you work, loaded into your system prompt on every run. You own them: changes apply at once and the user gets a card to undo, so do not ask permission or wait for /refine. Use it when this conversation taught you something lasting about your own method: the user corrected how you work, a technique or delegation pattern proved itself, a pitfall you can avoid next time. Elsewhere: facts about the user or the world → remember; how the human can work with you → manage_human; a reusable procedure → manage_skill (scope \"agent\"). One lesson, one place: if you are saving a point with remember or manage_human, do not repeat it here. Never record environment/setup failures, \"tool X is broken\", transient errors or one-off task stories; they harden into refusals. upsert without id creates an entry (title, body and evidence of what actually happened are required); with id it revises. rollback restores the previous version. propose (agent + candidates) drops suggestions into ANOTHER agent's candidate inbox; you never write its notes. Limits: title ≤80, body ≤300, evidence ≤200 chars, 30 entries; at the cap, merge or delete weaker ones. kind \"note\" = working method (default); \"recipe\" = a delegation pattern that worked; \"equip\" = shelve tools/skills you rarely use to keep your context lean (pass tools / skills): a shelved tool moves to the load-on-demand catalog (load_tools brings it back), a shelved skill leaves your skill list (use_skill by id still works). Shelving never removes or grants a capability; shelve on evidence such as a usage review, and revise or delete the entry to undo.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "enum": [
+                "upsert",
+                "delete",
+                "list",
+                "rollback",
+                "propose"
+              ],
+              "description": "The operation"
+            },
+            "agent": {
+              "type": "string",
+              "description": "propose: target agent slug"
+            },
+            "candidates": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "propose: 1-3 one-line lessons"
+            },
+            "id": {
+              "type": "string",
+              "description": "Entry id, e.g. \"h-x3k9\" (delete / rollback / revise)"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "note",
+                "recipe",
+                "equip"
+              ],
+              "description": "Entry type (default \"note\")"
+            },
+            "tools": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "equip: exact tool names to shelve (replaces the list on revise)"
+            },
+            "skills": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "equip: exact skill ids to shelve, e.g. \"local:pptx\" (replaces the list on revise)"
+            },
+            "title": {
+              "type": "string",
+              "description": "Short label"
+            },
+            "body": {
+              "type": "string",
+              "description": "The lesson itself"
+            },
+            "evidence": {
+              "type": "string",
+              "description": "What actually happened that justifies it"
+            }
+          },
+          "required": [
+            "action"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
         "name": "transcribe_audio",
         "description": "Transcribe a local audio file via the Forsion Desktop speech-recognition pipeline (local offline model or the ASR provider configured in desktop settings). Returns JSON {text, segments?}. Use this when a transcription script reports the media has no subtitle track and hands back an audio_path (e.g. source:\"needs_asr\"). Requires the Forsion desktop app to be running. With timestamps:true you can cite a moment back to the user as [[<media path>#t=<seconds>|<mm:ss>]] — see the line printed after the transcript.",
         "parameters": {
@@ -8379,6 +8607,82 @@
     {
       "type": "function",
       "function": {
+        "name": "manage_harness",
+        "description": "Your Working Notes (HARNESS.md): durable lessons about HOW you work, loaded into your system prompt on every run. You own them: changes apply at once and the user gets a card to undo, so do not ask permission or wait for /refine. Use it when this conversation taught you something lasting about your own method: the user corrected how you work, a technique or delegation pattern proved itself, a pitfall you can avoid next time. Elsewhere: facts about the user or the world → remember; how the human can work with you → manage_human; a reusable procedure → manage_skill (scope \"agent\"). One lesson, one place: if you are saving a point with remember or manage_human, do not repeat it here. Never record environment/setup failures, \"tool X is broken\", transient errors or one-off task stories; they harden into refusals. upsert without id creates an entry (title, body and evidence of what actually happened are required); with id it revises. rollback restores the previous version. propose (agent + candidates) drops suggestions into ANOTHER agent's candidate inbox; you never write its notes. Limits: title ≤80, body ≤300, evidence ≤200 chars, 30 entries; at the cap, merge or delete weaker ones. kind \"note\" = working method (default); \"recipe\" = a delegation pattern that worked; \"equip\" = shelve tools/skills you rarely use to keep your context lean (pass tools / skills): a shelved tool moves to the load-on-demand catalog (load_tools brings it back), a shelved skill leaves your skill list (use_skill by id still works). Shelving never removes or grants a capability; shelve on evidence such as a usage review, and revise or delete the entry to undo.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "enum": [
+                "upsert",
+                "delete",
+                "list",
+                "rollback",
+                "propose"
+              ],
+              "description": "The operation"
+            },
+            "agent": {
+              "type": "string",
+              "description": "propose: target agent slug"
+            },
+            "candidates": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "propose: 1-3 one-line lessons"
+            },
+            "id": {
+              "type": "string",
+              "description": "Entry id, e.g. \"h-x3k9\" (delete / rollback / revise)"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "note",
+                "recipe",
+                "equip"
+              ],
+              "description": "Entry type (default \"note\")"
+            },
+            "tools": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "equip: exact tool names to shelve (replaces the list on revise)"
+            },
+            "skills": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "equip: exact skill ids to shelve, e.g. \"local:pptx\" (replaces the list on revise)"
+            },
+            "title": {
+              "type": "string",
+              "description": "Short label"
+            },
+            "body": {
+              "type": "string",
+              "description": "The lesson itself"
+            },
+            "evidence": {
+              "type": "string",
+              "description": "What actually happened that justifies it"
+            }
+          },
+          "required": [
+            "action"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
         "name": "transcribe_audio",
         "description": "Transcribe a local audio file via the Forsion Desktop speech-recognition pipeline (local offline model or the ASR provider configured in desktop settings). Returns JSON {text, segments?}. Use this when a transcription script reports the media has no subtitle track and hands back an audio_path (e.g. source:\"needs_asr\"). Requires the Forsion desktop app to be running. With timestamps:true you can cite a moment back to the user as [[<media path>#t=<seconds>|<mm:ss>]] — see the line printed after the transcript.",
         "parameters": {
@@ -9340,6 +9644,82 @@
           "required": [
             "action",
             "scope"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "manage_harness",
+        "description": "Your Working Notes (HARNESS.md): durable lessons about HOW you work, loaded into your system prompt on every run. You own them: changes apply at once and the user gets a card to undo, so do not ask permission or wait for /refine. Use it when this conversation taught you something lasting about your own method: the user corrected how you work, a technique or delegation pattern proved itself, a pitfall you can avoid next time. Elsewhere: facts about the user or the world → remember; how the human can work with you → manage_human; a reusable procedure → manage_skill (scope \"agent\"). One lesson, one place: if you are saving a point with remember or manage_human, do not repeat it here. Never record environment/setup failures, \"tool X is broken\", transient errors or one-off task stories; they harden into refusals. upsert without id creates an entry (title, body and evidence of what actually happened are required); with id it revises. rollback restores the previous version. propose (agent + candidates) drops suggestions into ANOTHER agent's candidate inbox; you never write its notes. Limits: title ≤80, body ≤300, evidence ≤200 chars, 30 entries; at the cap, merge or delete weaker ones. kind \"note\" = working method (default); \"recipe\" = a delegation pattern that worked; \"equip\" = shelve tools/skills you rarely use to keep your context lean (pass tools / skills): a shelved tool moves to the load-on-demand catalog (load_tools brings it back), a shelved skill leaves your skill list (use_skill by id still works). Shelving never removes or grants a capability; shelve on evidence such as a usage review, and revise or delete the entry to undo.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "enum": [
+                "upsert",
+                "delete",
+                "list",
+                "rollback",
+                "propose"
+              ],
+              "description": "The operation"
+            },
+            "agent": {
+              "type": "string",
+              "description": "propose: target agent slug"
+            },
+            "candidates": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "propose: 1-3 one-line lessons"
+            },
+            "id": {
+              "type": "string",
+              "description": "Entry id, e.g. \"h-x3k9\" (delete / rollback / revise)"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "note",
+                "recipe",
+                "equip"
+              ],
+              "description": "Entry type (default \"note\")"
+            },
+            "tools": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "equip: exact tool names to shelve (replaces the list on revise)"
+            },
+            "skills": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "equip: exact skill ids to shelve, e.g. \"local:pptx\" (replaces the list on revise)"
+            },
+            "title": {
+              "type": "string",
+              "description": "Short label"
+            },
+            "body": {
+              "type": "string",
+              "description": "The lesson itself"
+            },
+            "evidence": {
+              "type": "string",
+              "description": "What actually happened that justifies it"
+            }
+          },
+          "required": [
+            "action"
           ]
         }
       }

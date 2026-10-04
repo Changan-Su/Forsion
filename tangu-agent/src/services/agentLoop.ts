@@ -52,7 +52,7 @@ import {
 import { compactionSettingsFor, type CompactionSettings } from './compactionSettings.js';
 import { isContextOverflowError } from './contextWindowStore.js';
 import { getAgent, isValidSlug, DEFAULT_MAX_ITERATIONS, libDirOf, type NormalAgentDef } from '../agents/agentRegistry.js';
-import { loadHarness, renderHarnessSection, isRefineInvocation, REFINE_DIRECTIVE, consumeHarnessCandidates, renderPendingHarnessCandidates } from '../agents/harnessStore.js';
+import { loadHarness, shelvedOf, renderHarnessSection, isRefineInvocation, REFINE_DIRECTIVE, consumeHarnessCandidates, renderPendingHarnessCandidates } from '../agents/harnessStore.js';
 import { loadSchedule, entriesOf, upcomingScheduleLines } from './agentSchedule.js';
 import { agentIdentitySection, applyAgentActivation } from './agentActivation.js';
 import { clampApprovalMode, clearRunRemoteTaint, effectiveRemote, remoteApprovalCap, remoteOf, REMOTE_WRITABLE_CONFIG_KEYS } from './remoteOrigin.js';
@@ -1301,8 +1301,18 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       { apiModelId: replayModelKey, protocol: stepItemBinding.protocol },
     );
 
+    // 工作笔记(HARNESS.md)在这里读一次:技能目录、工具面(agent 自己收起的装备,kind 'equip')与下面 2b) 的笔记段共用这一份。
+    // 笔记段不注入的 run(云端无 agent 目录 / coding 预设下的默认 agent / 临时成员)里收起也不生效 ——
+    // 模型看不见「我收起了什么」的时候不该少东西。读失败按空处理,不阻断 run。
+    // coding 预设 × 默认 agent:播种的陪伴人格(Tangu Arioso,"use log_event to record completed work")
+    // 对编码任务是行为毒药(WB-Bench:80/80 题每题浪费一轮 log_event、分析题答成用户报告)→ 整段跳过,
+    // 换 CODING_CONTRACT_SECTION。用户显式选择的自定义 agent 不受影响(人格照注,契约叠加)。
+    const suppressCompanionPersona = ps.persona === 'suppress' && activeAgentSlug === DEFAULT_AGENT_SLUG;
+    const notesApply = execMode === 'host' && !inlineMemberDef && !suppressCompanionPersona;
+    const harnessEntries = notesApply ? await loadHarness(activeAgentSlug).catch(() => []) : [];
+    const shelved = shelvedOf(harnessEntries);
     // 启用技能的装载（渐进式披露:目录进 prompt、全文按需 use_skill）——见 services/skillLoadout.ts。
-    const skillLoadout = await loadSkillLoadout(userId, appId, agentConfig);
+    const skillLoadout = await loadSkillLoadout(userId, appId, agentConfig, shelved.skills);
     const enabledSkillIds = skillLoadout.enabledSkillIds;
 
     // C-4:易变上下文(记忆 §2/§3 + sketch 本轮信号)的落点。tail=对话尾部 user 通道(缺省);
@@ -1337,10 +1347,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       : false;
     // 静态指引/环境段按 profile 装载（G4，见 profiles/promptSections.ts）。
     const promptSections = profile.promptSections({ execMode, cwd, extraRoots, channelSession, preset, sandboxExec: profile.features.sandbox });
-    // coding 预设 × 默认 agent:播种的陪伴人格(Tangu Arioso,"use log_event to record completed work")
-    // 对编码任务是行为毒药(WB-Bench:80/80 题每题浪费一轮 log_event、分析题答成用户报告)→ 整段跳过,
-    // 换 CODING_CONTRACT_SECTION。用户显式选择的自定义 agent 不受影响(人格照注,契约叠加)。
-    const suppressCompanionPersona = ps.persona === 'suppress' && activeAgentSlug === DEFAULT_AGENT_SLUG;
+    // (suppressCompanionPersona 在本 run 开头读工作笔记处已定义:coding 预设 × 默认 agent 时人格与笔记一并跳过。)
     // 系统块按「稳定 → 易变」排布,让记忆改写只失效最短后缀(单 pin 单断点,见末尾 pinMessage)。
     // 1) developer_instructions(config.toml;身份/稳定)
     if (agentConfig.systemPrompt && !suppressCompanionPersona) systemParts.push(String(agentConfig.systemPrompt));
@@ -1363,12 +1370,9 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     //     契约之前:属每-agent 身份层,只在 refine 轮低频变化 → 放稳定区护前缀缓存。与 6) 记忆放
     //     易变区尾部是刻意不同(记忆每几轮就重写),别「统一」。仅 host(云端无 agent 目录);
     //     随人格一起被 coding 预设抑制。
-    if (execMode === 'host' && !suppressCompanionPersona && !inlineMemberDef) {
-      try {
-        const harnessBlock = renderHarnessSection(await loadHarness(activeAgentSlug));
-        if (harnessBlock) systemParts.push(harnessBlock);
-      } catch { /* 读失败不阻断 run */ }
-    }
+    //     条目在本 run 开头已读好(harnessEntries,见 loadSkillLoadout 上方)。
+    const harnessBlock = renderHarnessSection(harnessEntries);
+    if (harnessBlock) systemParts.push(harnessBlock);
     ctxMark('harness');
     // HUMAN is collaboration context, including projectless Chat and Coding. It never
     // changes tool permissions. All documents are read anew at each user turn.
@@ -1548,6 +1552,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       automationOrigin: typeof agentConfig.automationOrigin === 'string' ? agentConfig.automationOrigin : undefined,
       toolsMode,
       toolsList,
+      shelvedTools: shelved.tools.size ? shelved.tools : undefined, // agent 自己收起的工具 → 走按需目录(isDeferredIn)
       subAgentDepth: agentConfig.delegatedFrom ? 1 : undefined,
       subAgentGrants: agentConfig.delegatedFrom ? new Set<string>(agentConfig.subAgentGrants || []) : undefined,
       subAgentDelegator: agentConfig.delegatedBy,

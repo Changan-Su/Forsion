@@ -1,5 +1,7 @@
 import { HumanUpdateCard } from '../../components/HumanUpdateCard'
 import { humanChanges } from '../../services/humanCollaboration'
+import { HarnessUpdateCard } from '../../components/HarnessUpdateCard'
+import { harnessChanges } from '../../services/harnessUpdates'
 /**
  * 编辑式消息渲染(新视觉):助手在纸面流动(头像 + 安静署名 + 内容 + 悬浮动作),
  * 用户为暖色带尾气泡。子件(思考/工具/待办/审批/反问)以新 t2 风格内联呈现。
@@ -524,6 +526,7 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
         {!!creations.length && msg.status === 'done' && <CreationCards cards={creations} sessionId={runSid} />}
 
         {fileCtx && <HumanUpdateCard changes={humanChanges(msg.toolEvents)} cfg={fileCtx.cfg} sessionId={fileCtx.sessionId} />}
+        {fileCtx && <HarnessUpdateCard changes={harnessChanges(msg.toolEvents)} sessionId={fileCtx.sessionId} />}
 
         {msg.planProposal && (
 

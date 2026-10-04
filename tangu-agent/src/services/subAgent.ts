@@ -354,6 +354,8 @@ export async function runSubAgent(p: SubAgentParams): Promise<string> {
     clientCapabilities: undefined,
     subAgentDepth: (parentCtx.subAgentDepth || 0) + 1,
     subAgentGrants: grants,
+    // 收起的装备是父代理写在自己工作笔记里的选择,子代理的提示里没有那段笔记,也不该替它少带工具(Codex 10-04)
+    shelvedTools: undefined,
     // 委派方身份:manage_agent 守卫要连它一起保护(具名子代理在自己的 ALS 里跑,父代理会变成「别人」)。
     subAgentDelegator: parentCtx.subAgentDelegator || parentCtx.agentSlug || currentAgentSlug(),
     customTools: subCustomTools,

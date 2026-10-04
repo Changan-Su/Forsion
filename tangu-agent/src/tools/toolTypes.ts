@@ -104,6 +104,9 @@ export interface ToolContext {
   /** 已解锁的 deferred 工具名(P0-2):**严格 run-local**,每 run 从空集起步、本 run 内经 load_tools 增量;
    *  不从历史恢复(hydrate 不带 tool_calls)。 */
   unlockedTools?: ReadonlySet<string>;
+  /** 本 agent 自己收起的工具(HARNESS.md 的 equip 条目;agentLoop 只在笔记段注入的 run 里传):按 deferred 处理 ——
+   *  定义不进 defs、目录里留一行、load_tools 取得回。只是上下文体量,不是能力闸(按名直调照常执行)。 */
+  shelvedTools?: ReadonlySet<string>;
   /** load_tools 的解锁回调(loop 提供):记入 run 级集合并触发下一迭代 defs 重算。
    *  缺省(群聊等)= 不支持解锁 → load_tools 不暴露,deferred 保持隐藏。
    *  返回值可选:给回**实际解锁的**名字 —— 实现方可以拒掉一部分(子代理的管理面 deny 名单),

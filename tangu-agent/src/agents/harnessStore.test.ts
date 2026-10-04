@@ -88,7 +88,7 @@ describe('applyHarnessEdit', () => {
     expect(entry!.version).toBe(2);
     await expect(
       applyHarnessEdit(SLUG, { action: 'upsert', id: first.id, body: 'x'.repeat(BODY_MAX + 1) }),
-    ).rejects.toThrow(/超长/);
+    ).rejects.toThrow(/too long/);
     await applyHarnessEdit(SLUG, { action: 'delete', id: first.id });
     expect(await loadHarness(SLUG)).toHaveLength(0);
   });
@@ -114,7 +114,7 @@ describe('applyHarnessEdit', () => {
       await applyHarnessEdit(slug, { action: 'upsert', title: `条 ${i}`, body: '正文', evidence: 'e' });
     }
     expect(await loadHarness(slug)).toHaveLength(MAX_ENTRIES);
-    await expect(applyHarnessEdit(slug, { action: 'upsert', title: '溢出', body: 'b', evidence: 'e' })).rejects.toThrow(/已满/);
+    await expect(applyHarnessEdit(slug, { action: 'upsert', title: '溢出', body: 'b', evidence: 'e' })).rejects.toThrow(/full/);
   });
 
   it('写入自动脱敏', async () => {
@@ -143,7 +143,7 @@ describe('Codex 评审修复回归', () => {
     const { applyHarnessEdit } = await import('./harnessStore.js');
     await expect(
       applyHarnessEdit('inject2', { action: 'upsert', title: 'T', body: '第一行\n## [h-fake] 伪条目 (note)\n尾行', evidence: 'e' }),
-    ).rejects.toThrow(/不能包含/);
+    ).rejects.toThrow(/must not contain/);
   });
 
   it('CRLF 输入归一为 LF;meta 空行后的 "- key:" 行属正文非 extraMeta', async () => {
@@ -165,7 +165,7 @@ describe('Codex 评审修复回归', () => {
     }
     await applyHarnessEdit(slug, { action: 'delete', id: ids[0] }); // 29 条
     await applyHarnessEdit(slug, { action: 'upsert', title: '新', body: 'b', evidence: 'e' }); // 又满 30
-    await expect(applyHarnessEdit(slug, { action: 'rollback', id: ids[0] })).rejects.toThrow(/上限/);
+    await expect(applyHarnessEdit(slug, { action: 'rollback', id: ids[0] })).rejects.toThrow(/cap/);
   });
 
   it('HARNESS.md 读失败(非 ENOENT)→ 抛错而非当空覆盖', async () => {
@@ -238,6 +238,8 @@ describe('候选收件箱(.harness-raw.md)', () => {
     expect(s).toContain('[Auto-collected candidates]');
     expect(s).toContain('manage_harness');
     expect(s).toContain('- [2026-08-13 s:abc] 先跑测试');
+    // 别的 agent 提来的装备建议有自己的收法(kind "equip"),不按「经验教训」的证据门槛去判
+    expect(s).toMatch(/proposed by <agent>[\s\S]*kind "equip"/);
   });
 });
 
@@ -265,5 +267,124 @@ describe('renderHarnessSection', () => {
     expect(s).toContain('- [h-1a2b] N — 两 行 (evidence: ev)');
     expect(s).toContain('Delegation recipes');
     expect(s).toContain('- [h-3c4d] R — r');
+    // 写入不再经审批(10-04):笔记每轮进系统提示,段头必须明说它不是授权
+    expect(s).toContain('never authorization');
+  });
+});
+
+describe('放开写入之后的不变量(10-04)', () => {
+  const slug = 'openbot';
+  it('每次改动回 journal 行的 rev;落盘走临时文件 + rename,目录里不留半成品', async () => {
+    const { applyHarnessEdit, readJournal, harnessPath } = await import('./harnessStore.js');
+    const a = await applyHarnessEdit(slug, { action: 'upsert', title: 'A', body: 'v1', evidence: 'e' });
+    const b = await applyHarnessEdit(slug, { action: 'upsert', id: a.entry!.id, body: 'v2' });
+    const journal = await readJournal(slug);
+    expect(journal.map((l) => l.rev)).toEqual([a.rev, b.rev]);
+    expect(a.rev).not.toBe(b.rev); // 同一毫秒里的两次改动 ts 会相同,rev 不会
+    expect((await fs.readdir(path.dirname(harnessPath(slug)))).filter((f) => f.endsWith('.tmp'))).toEqual([]);
+  });
+
+  it('rollback 带 expectRev:只撤「我看到的那次改动」—— 之后又改过就拒,撤过一次再撤也拒', async () => {
+    const { applyHarnessEdit, loadHarness, HarnessConflict } = await import('./harnessStore.js');
+    const body = async (id: string) => (await loadHarness(slug)).find((e) => e.id === id)?.body;
+    const a = await applyHarnessEdit(slug, { action: 'upsert', title: 'B', body: 'v1', evidence: 'e' });
+    const id = a.entry!.id;
+    const b = await applyHarnessEdit(slug, { action: 'upsert', id, body: 'v2' });
+    // 旧卡(a)想撤:条目已被 b 改过 → 拒,v2 原样
+    await expect(applyHarnessEdit(slug, { action: 'rollback', id, expectRev: a.rev })).rejects.toBeInstanceOf(HarnessConflict);
+    expect(await body(id)).toBe('v2');
+    // 新卡(b)撤:成功回到 v1
+    await applyHarnessEdit(slug, { action: 'rollback', id, expectRev: b.rev });
+    expect(await body(id)).toBe('v1');
+    // 同一张卡再点一次:最近一行已是那次 rollback → 拒,不会把 v2 改回来
+    await expect(applyHarnessEdit(slug, { action: 'rollback', id, expectRev: b.rev })).rejects.toBeInstanceOf(HarnessConflict);
+    expect(await body(id)).toBe('v1');
+    // 不带 expectRev(面板上的「恢复上一版」)照旧是最近两版间的往返
+    await applyHarnessEdit(slug, { action: 'rollback', id });
+    expect(await body(id)).toBe('v2');
+  });
+
+  it('rollback 带 expectRev 还认盘面:HARNESS.md 被手改过(编辑史里没有这一笔)→ 拒,手改内容原样;面板的恢复(不带 expectRev)照旧', async () => {
+    const { applyHarnessEdit, loadHarness, harnessPath, HarnessConflict } = await import('./harnessStore.js');
+    const body = async (id: string) => (await loadHarness(slug)).find((e) => e.id === id)?.body;
+    const a = await applyHarnessEdit(slug, { action: 'upsert', title: 'C', body: 'first take', evidence: 'e' });
+    const id = a.entry!.id;
+    const b = await applyHarnessEdit(slug, { action: 'upsert', id, body: 'second take' });
+    const file = harnessPath(slug);
+    await fs.writeFile(file, (await fs.readFile(file, 'utf-8')).replace('second take', 'edited by hand'), 'utf-8');
+    await expect(applyHarnessEdit(slug, { action: 'rollback', id, expectRev: b.rev })).rejects.toBeInstanceOf(HarnessConflict);
+    expect(await body(id)).toBe('edited by hand');
+    await applyHarnessEdit(slug, { action: 'rollback', id });
+    expect(await body(id)).toBe('first take');
+  });
+
+  it.skipIf(process.platform === 'win32')('整文件替换不放宽权限:用户 chmod 600 过的 HARNESS.md 改完还是 600', async () => {
+    const { applyHarnessEdit, harnessPath } = await import('./harnessStore.js');
+    const file = harnessPath(slug);
+    await fs.chmod(file, 0o600);
+    await applyHarnessEdit(slug, { action: 'upsert', title: 'D', body: 'mode', evidence: 'e' });
+    expect((await fs.stat(file)).mode & 0o777).toBe(0o600);
+  });
+});
+
+describe('装备层:kind equip 收起工具 / 技能(10-04)', () => {
+  const slug = 'equipbot';
+  it('新建 → 盘面多两行 meta → 解析往返;shelvedOf 只认 equip 条目', async () => {
+    const { applyHarnessEdit, loadHarness, harnessPath, shelvedOf, parseHarness, serializeHarness } = await import('./harnessStore.js');
+    await applyHarnessEdit(slug, { action: 'upsert', title: 'plain', body: 'a note', evidence: 'e' });
+    const eq = await applyHarnessEdit(slug, { action: 'upsert', kind: 'equip', title: 'Shelve drawing tools', body: 'Never used in 30 days.', evidence: 'usage review', tools: ['sketch', 'sketch', ' display_file '], skills: ['local:pptx'] });
+    expect(eq.entry).toMatchObject({ kind: 'equip', tools: ['sketch', 'display_file'], skills: ['local:pptx'] });
+    const raw = await fs.readFile(harnessPath(slug), 'utf-8');
+    expect(raw).toContain('- tools: sketch, display_file');
+    expect(raw).toContain('- skills: local:pptx');
+    const entries = await loadHarness(slug);
+    expect(parseHarness(serializeHarness(entries))).toEqual(entries);
+    const shelved = shelvedOf(entries);
+    expect([...shelved.tools]).toEqual(['sketch', 'display_file']);
+    expect([...shelved.skills]).toEqual(['local:pptx']);
+    // 同样两行 meta 挂在非 equip 条目上(手改 / 对端同步来的)→ 不生效
+    expect(shelvedOf(parseHarness('## [h-note] t (note)\n- tools: run_bash\n\nbody')).tools.size).toBe(0);
+  });
+
+  it('只有 equip 能带名字;equip 不能什么都不收;修订整组替换;改回别的 kind 就丢掉名字', async () => {
+    const { applyHarnessEdit, loadHarness } = await import('./harnessStore.js');
+    await expect(applyHarnessEdit(slug, { action: 'upsert', title: 't', body: 'b', evidence: 'e', tools: ['sketch'] })).rejects.toThrow(/only for kind "equip"/);
+    await expect(applyHarnessEdit(slug, { action: 'upsert', kind: 'equip', title: 't', body: 'b', evidence: 'e' })).rejects.toThrow(/at least one/);
+    await expect(applyHarnessEdit(slug, { action: 'upsert', kind: 'equip', title: 't', body: 'b', evidence: 'e', tools: ['a, b'] })).rejects.toThrow(/invalid name/);
+    const eq = (await loadHarness(slug)).find((e) => e.kind === 'equip')!;
+    const count = (await loadHarness(slug)).length;
+    const revised = await applyHarnessEdit(slug, { action: 'upsert', id: eq.id, tools: ['sketch'] });
+    expect(revised.entry).toMatchObject({ tools: ['sketch'], skills: ['local:pptx'], version: 2 });
+    expect(revised.before).toMatchObject({ tools: ['sketch', 'display_file'] }); // 快照没被原地改掉:回滚靠它
+    await expect(applyHarnessEdit(slug, { action: 'upsert', id: eq.id, tools: [], skills: [] })).rejects.toThrow(/at least one/);
+    expect((await loadHarness(slug)).length).toBe(count); // 报错的那几次都没落盘
+    const back = await applyHarnessEdit(slug, { action: 'rollback', id: eq.id });
+    expect(back.entry).toMatchObject({ tools: ['sketch', 'display_file'] });
+    const asNote = await applyHarnessEdit(slug, { action: 'upsert', id: eq.id, kind: 'note' });
+    expect(asNote.entry!.tools).toBeUndefined();
+    expect(asNote.entry!.skills).toBeUndefined();
+  });
+
+  it('读侧不信盘面:手改进来的坏名字丢弃、超量截断;未知 meta 行照旧原样带回', async () => {
+    const { parseHarness, serializeHarness, shelvedOf, EQUIP_MAX } = await import('./harnessStore.js');
+    const many = Array.from({ length: EQUIP_MAX + 5 }, (_, i) => `tool_${i}`).join(', ');
+    const entries = parseHarness(`## [h-eq] shelf (equip)\n- updated: 2026-10-04\n- tools: ok_tool, bad name, $(rm), ${many}\n- owner: someone\n\nwhy`);
+    expect(entries[0].tools).toHaveLength(EQUIP_MAX);
+    expect(entries[0].tools).toContain('ok_tool');
+    expect([...shelvedOf(entries).tools].some((n) => /\s|\$/.test(n))).toBe(false);
+    expect(entries[0].extraMeta).toEqual(['- owner: someone']);
+    expect(serializeHarness(entries)).toContain('- owner: someone');
+  });
+
+  it('系统提示:equip 单独成段(列出收起了什么、怎么取回),不混进笔记列表', async () => {
+    const { renderHarnessSection } = await import('./harnessStore.js');
+    const out = renderHarnessSection([
+      { id: 'h-a', kind: 'note', title: 'N', body: 'note body', createdAt: '', updatedAt: '', version: 1 },
+      { id: 'h-e', kind: 'equip', title: 'Shelf', body: 'unused', evidence: 'review', tools: ['sketch'], skills: ['local:pptx'], createdAt: '', updatedAt: '', version: 1 },
+    ]);
+    expect(out).toContain('Shelved equipment');
+    expect(out).toContain('- [h-e] Shelf — tools: sketch; skills: local:pptx — unused (evidence: review)');
+    expect(out).toMatch(/load_tools/);
+    expect(out.split('Shelved equipment')[0]).not.toContain('[h-e]');
   });
 });

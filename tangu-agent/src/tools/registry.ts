@@ -55,6 +55,7 @@ import { transcribeAudioProvider } from './builtin/transcribeAudio.js';
 import { viewVideoProvider } from './builtin/viewVideo.js';
 import { uiCommandsProvider } from './builtin/uiCommands.js';
 import { phoneToolsProvider } from './builtin/phoneTools.js';
+import { reviewLoadoutProvider } from './builtin/reviewLoadout.js';
 import { manageScheduleProvider } from './builtin/manageSchedule.js';
 import { loadToolsProvider } from './builtin/loadTools.js';
 import { appendActivityLine } from '../services/userActivity.js';
@@ -182,7 +183,7 @@ registerToolProvider(readSessionProvider); // both:read_session 按 id 读另一
 registerToolProvider(brainstormProvider); // host-only:self_brainstorm 从当前上下文分裂多视角分身自我批判(append 末尾,保前缀缓存)
 registerToolProvider(searchSessionsProvider); // both:search_sessions 列出/检索过去会话,找到 id 交给 read_session(append 末尾,保前缀缓存)
 registerToolProvider(manageHumanProvider);
-registerToolProvider(manageHarnessProvider); // host-only:agent 自维护工作笔记 HARNESS.md(自进化层;审批 command 档;append 末尾,保前缀缓存)
+registerToolProvider(manageHarnessProvider); // host-only:agent 自维护工作笔记 HARNESS.md(自进化层;10-04 起常驻、不审批、立即生效 + 可撤销卡;coding 预设按需)
 registerToolProvider(sketchProvider); // GUI 限定(ctx.client 门禁,CLI/TUI 不注册):sketch 在对话流内联画可交互 HTML 卡片(append 末尾,保前缀缓存)
 registerToolProvider(transcribeAudioProvider); // host-only:transcribe_audio 经桌面桥(desktop-bridge.json)调主进程 ASR;无桥文件不可见(append 末尾,保前缀缓存)
 registerToolProvider(viewVideoProvider); // host-only:view_video 用本机 ffmpeg 抽帧「看」视频(联络表+单帧两档);无 ffmpeg 不可见(append 末尾,保前缀缓存)
@@ -193,6 +194,7 @@ registerToolProvider(museWakeProvider); // 仅 Muse 周期(ctx.muse,子代理除
 registerToolProvider(readComputerHistoryProvider); // 电脑历史开着 ∧ 本机客户端 ∧ 非通道/团队/子代理:读用户在 Forsion 之外的电脑活动(默认关,append 末尾;快照两侧剔除,见 dump-tooldefs)
 registerToolProvider(sessionSettingsProvider); // host-only 前台 run:session_settings 读 / update_session_settings 改本会话模型与思考档(写走 command 审批档;审批档不开放;append 末尾,保前缀缓存)
 registerToolProvider(phoneToolsProvider); // 手机端限定(clientCapability 'phone.intents' 中央闸;与 uiCommandsProvider 同属「发起端能力面」):phone_* 五件经 client_cmd 让手机原生执行(全 deferred,append 末尾;无能力的 run 不可见,快照不变)
+registerToolProvider(reviewLoadoutProvider); // 仅 Muse(周期或手聊):review_loadout 只读用量报告,供每周装备巡检(append 末尾;普通 run 不可见,快照不变)
 // 插件(表情包/分段等)现为文件夹插件(plugins/),经 activateAllPlugins→ctx.registerPlugin 注册其工具,不在此处。
 
 /** ctx 自带 profile(loop 按 run.app_id 解析)优先;缺省回退本进程装配的 profile。 */

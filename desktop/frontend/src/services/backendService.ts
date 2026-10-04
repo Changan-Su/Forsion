@@ -754,13 +754,14 @@ export const deleteAgentLibraryFile = (t: EngineTarget, slug: string, name: stri
   request<{ ok: boolean }>(t, `/agent/agents/${encodeURIComponent(slug)}/library/file?name=${encodeURIComponent(name)}`, { method: 'DELETE' })
 
 // 某 agent 的工作笔记进化史(HARNESS.md 条目 + 本机编辑史;journal 不跨设备同步)。
-export type HarnessEntry = { id: string; kind: string; title: string; body: string; evidence?: string; createdAt: string; updatedAt: string; version: number }
-export type HarnessJournalLine = { ts: string; action: 'upsert' | 'delete' | 'rollback'; entryId: string; before: HarnessEntry | null; after: HarnessEntry | null }
+export type HarnessEntry = { id: string; kind: string; title: string; body: string; evidence?: string; createdAt: string; updatedAt: string; version: number; /** kind 'equip':收起的工具 / 技能 */ tools?: string[]; skills?: string[] }
+export type HarnessJournalLine = { ts: string; rev?: string; action: 'upsert' | 'delete' | 'rollback'; entryId: string; before: HarnessEntry | null; after: HarnessEntry | null }
 /** candidates = Historian 自动档提名的待复盘候选(收件箱原始行 `- [YYYY-MM-DD s:xxxx] 正文`,只读;/refine 才取走);旧引擎没有这一键。 */
 export const getAgentHarness = (t: EngineTarget, slug: string) =>
   request<{ entries: HarnessEntry[]; journal: HarnessJournalLine[]; candidates?: string[] }>(t, `/agent/agents/${encodeURIComponent(slug)}/harness`)
-export const rollbackHarnessEntry = (t: EngineTarget, slug: string, id: string) =>
-  request<{ ok: boolean; entry: HarnessEntry | null }>(t, `/agent/agents/${encodeURIComponent(slug)}/harness/rollback`, { method: 'POST', body: JSON.stringify({ id }) })
+/** expectRev = 对话里更新卡带回的那一行编辑史:条目之后又改过 → 引擎回 409,不会撤掉后来的修改。面板里的「撤销最近一次改动」不带。 */
+export const rollbackHarnessEntry = (t: EngineTarget, slug: string, id: string, expectRev?: string) =>
+  request<{ ok: boolean; entry: HarnessEntry | null }>(t, `/agent/agents/${encodeURIComponent(slug)}/harness/rollback`, { method: 'POST', body: JSON.stringify({ id, ...(expectRev ? { expectRev } : {}) }) })
 
 // 全局用户画像 USER.md。
 export const getUserProfile = (t: EngineTarget) =>

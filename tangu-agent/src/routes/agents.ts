@@ -25,7 +25,7 @@ import { createMemoryRepository, MemoryRepositoryError } from '../services/memor
 import { createLocalMemoryStore } from '../adapters/standalone/localMemoryBrain.js';
 import { scheduleAgentFilesSync } from '../services/agentFileSync.js';
 import { agentSyncPermission, agentSyncScope, setAgentSyncPermission } from '../services/cloudSyncAccount.js';
-import { loadHarness, readJournal, applyHarnessEdit, peekHarnessCandidates } from '../agents/harnessStore.js';
+import { loadHarness, readJournal, applyHarnessEdit, peekHarnessCandidates, HarnessConflict } from '../agents/harnessStore.js';
 import { renameAgent, AgentRenameError } from '../agents/agentRename.js';
 import { parseRemoteOrigin, clampApprovalMode, remoteApprovalCap } from '../services/remoteOrigin.js';
 
@@ -459,13 +459,17 @@ router.get('/agent/agents/:slug/harness', authMiddleware, async (req: AuthReques
 });
 
 // 条目级回滚(恢复该条上一次改动前的状态;走 applyHarnessEdit 唯一写点,journal 照常留快照)。
+// expectRev(可选)= 调用方看到的该条最近一次改动的 journal rev:对话里的撤销卡必带 —— 对不上回 409,不撤别人后来的改动、也不把刚撤的再改回去。
 router.post('/agent/agents/:slug/harness/rollback', authMiddleware, async (req: AuthRequest, res) => {
   if (!ensureLocal(res)) return;
   try {
     if (!(await getAgent(req.params.slug))) return res.status(404).json({ detail: 'Agent not found' });
-    const { entry } = await applyHarnessEdit(req.params.slug, { action: 'rollback', id: String(req.body?.id || '') });
+    const expectRev = typeof req.body?.expectRev === 'string' && req.body.expectRev ? req.body.expectRev : undefined;
+    const { entry } = await applyHarnessEdit(req.params.slug, { action: 'rollback', id: String(req.body?.id || ''), expectRev });
+    scheduleAgentFilesSync(req.user!.userId, req.params.slug); // 没有 run 在跑时这是唯一的同步时机;不带 slug 是空操作
     res.json({ ok: true, entry });
   } catch (e: any) {
+    if (e instanceof HarnessConflict) return res.status(409).json({ error: 'HARNESS_CONFLICT', detail: e.message });
     res.status(400).json({ detail: e?.message || 'rollback failed' }); // 「没有可回滚历史/会超上限」等业务错误原样回给 UI
   }
 });
