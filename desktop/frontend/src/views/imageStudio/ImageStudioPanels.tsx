@@ -1,20 +1,45 @@
-import { useEffect, useState } from 'react'
-import { Images, MessageCircle, Download, Copy, Plus, RotateCcw, RotateCw, FlipHorizontal2, FlipVertical2, Crop, Loader2, Eye, EyeOff, Lock, Unlock, ArrowUp, ArrowDown, Trash2, GitBranch } from 'lucide-react'
-import type { ViewProps } from '@lcl/engine'
+import { useEffect, useMemo, useState } from 'react'
+import { Images, LayoutGrid, MessageCircle, Download, Copy, Plus, RotateCcw, RotateCw, FlipHorizontal2, FlipVertical2, Crop, Loader2, Eye, EyeOff, Lock, Unlock, ArrowUp, ArrowDown, Trash2, GitBranch } from 'lucide-react'
+import { useWorkspace, type ViewProps } from '@lcl/engine'
 import { useI18n } from '../../i18n'
 import { useImageStudio } from '../../stores/imageStudioStore'
 import { useApp } from '../../stores/appStore'
 import { ChatView } from '../ChatView'
 import { ensureImageSession } from './session'
 import { downloadBlob, renderImages } from './files'
-import { LayerPreview } from './LayerPreview'
+import { ImageThumbnail, LayerPreview } from './LayerPreview'
 import { CropEditor } from './CropEditor'
 import { AIEditPanel } from './AIEditPanel'
 import { pasteSelection, referenceSelection, removeSelection } from './actions'
 import { alignItems, itemKind } from './scene'
-import { boardItems, isImage, mapItems, moveItems, reorderItems, transformImage, imageSize, type StudioImage, type StudioItem, type StudioElement } from './model'
+import { boardItems, coverImages, isImage, mapItems, moveItems, reorderItems, transformImage, imageSize, type StudioImage, type StudioItem, type StudioElement } from './model'
 import './messages'
 import './imageStudio.css'
+import '../coding/codingNavigation.css' // 导航的样子与 Coding 的项目导航同一份(csn-*),不另抄一套
+
+/** Space 左栏的项目导航(固定 View):新建、回到项目列表、最近的项目。 */
+export function ImageStudioNav() {
+  const { t } = useI18n()
+  const boards = useImageStudio(s => s.boards), activeId = useImageStudio(s => s.activeId), ready = useImageStudio(s => s.ready)
+  useEffect(() => { void useImageStudio.getState().hydrate() }, [])
+  const recent = useMemo(() => Object.values(boards).sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 12), [boards])
+  // 主区可能停在别的标签上:导航点过之后把工作室带回前面。
+  const go = (act: () => void) => { act(); useWorkspace.getState().openView('image-studio', {}, 'main') }
+  return <nav className="csn ims-nav" aria-label={t('imageStudio.title')}>
+    <div className="csn-section"><span className="csn-heading">{t('imageStudio.nav.create')}</span>
+      <button type="button" className="csn-item" disabled={!ready} onClick={() => go(() => useImageStudio.getState().create(t('imageStudio.untitled')))}><Plus size={16} />{t('imageStudio.new')}</button>
+      <button type="button" className="csn-item" aria-current={ready && !activeId ? 'page' : undefined} onClick={() => go(() => useImageStudio.getState().close())}><LayoutGrid size={16} />{t('imageStudio.projects')}</button>
+    </div>
+    {recent.length > 0 && <div className="csn-section"><span className="csn-heading">{t('imageStudio.nav.recent')}</span>
+      {recent.map(board => {
+        const cover = coverImages(board, 1)[0]
+        return <button key={board.id} type="button" className="csn-item" title={board.name} aria-current={board.id === activeId ? 'page' : undefined} onClick={() => go(() => useImageStudio.getState().open(board.id))}>
+          {cover ? <span className="ims-nav-thumb"><ImageThumbnail image={cover} /></span> : <Images size={16} />}<span className="ims-nav-name">{board.name}</span>
+        </button>
+      })}
+    </div>}
+  </nav>
+}
 
 export function ImageStudioChat(props: ViewProps) {
   const { t } = useI18n()
@@ -47,7 +72,7 @@ export function ImageStudioAssets() {
       <button aria-label={t(item.hidden ? 'imageStudio.show' : 'imageStudio.hide')} title={t(item.hidden ? 'imageStudio.show' : 'imageStudio.hide')} onClick={() => patch(item.id, { hidden: !item.hidden })}>{item.hidden ? <EyeOff size={14} /> : <Eye size={14} />}</button>
       <button aria-label={t(item.locked ? 'imageStudio.unlock' : 'imageStudio.lock')} title={t(item.locked ? 'imageStudio.unlock' : 'imageStudio.lock')} onClick={() => patch(item.id, { locked: !item.locked })}>{item.locked ? <Lock size={14} /> : <Unlock size={14} />}</button>
     </div>)}</div>
-    {!items.length && <div className="ims-panel-empty"><Images size={26} /><p>{t('imageStudio.noLayers')}</p></div>}
+    {!items.length && <div className="ims-panel-empty"><Images size={26} /><p>{t(query.trim() ? 'imageStudio.noLayers' : 'imageStudio.layersEmpty')}</p></div>}
     <p className="ims-caption">{t('imageStudio.layersHint')}</p>
   </section>
 }

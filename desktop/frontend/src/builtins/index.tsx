@@ -93,7 +93,7 @@ interface BuiltinDef {
 
 export const BUILTINS: BuiltinDef[] = [
   {
-    id: 'image-studio', types: ['image-studio', 'image-studio-chat', 'image-studio-assets', 'image-studio-inspector'],
+    id: 'image-studio', types: ['image-studio', 'image-studio-nav', 'image-studio-chat', 'image-studio-assets', 'image-studio-inspector'],
     name: () => tr('imageStudio.title'), description: () => tr('imageStudio.desc'), available: imageStudioAvailable,
     install: installImageStudioViews, installSpace: installImageStudioSpace, removeSpace: removeImageStudioSpace,
   },

@@ -48,6 +48,29 @@ describe('Image Studio persistence and ownership', () => {
     finish(); await writing
     expect(io.saveBoard.mock.calls.map(call => (call[0] as ImageBoard).name)).toEqual(['A', 'A final'])
   })
+  it('goes back to the project list and stays there across a restart', async () => {
+    const kv = new Map<string, string>()
+    vi.stubGlobal('localStorage', { getItem: (key: string) => kv.get(key) ?? null, setItem: (key: string, value: string) => { kv.set(key, value) }, removeItem: (key: string) => { kv.delete(key) } })
+    const a = store.getState().create('A')
+    store.getState().queue('session-a', 'hello')
+    expect(kv.get('image-studio.active')).toBe(a)
+    store.getState().close()
+    expect(store.getState()).toMatchObject({ activeId: null, selection: [], pending: null })
+    expect(store.getState().boards[a].name).toBe('A') // closing never discards the project
+    expect(kv.has('image-studio.active')).toBe(false)
+    const saved = [store.getState().boards[a], { ...store.getState().boards[a], id: 'newer', updatedAt: Date.now() + 1000 }]
+    const reopen = async () => {
+      vi.resetModules(); io.loadBoards.mockResolvedValue(saved.map(board => ({ ...board })))
+      const next = (await import('./imageStudioStore')).useImageStudio
+      await next.getState().hydrate()
+      return next.getState().activeId
+    }
+    expect(await reopen()).toBeNull() // no pointer: the list, not the most recent project
+    kv.set('image-studio.active', a)
+    expect(await reopen()).toBe(a) // closed the app inside a project: back in it
+    kv.set('image-studio.active', 'gone')
+    expect(await reopen()).toBeNull()
+  })
   it('claims a queued prompt once and clears it when switching projects', () => {
     const a = store.getState().create('A'), b = store.getState().create('B')
     store.getState().open(a); store.getState().queue('session-a', 'hello')

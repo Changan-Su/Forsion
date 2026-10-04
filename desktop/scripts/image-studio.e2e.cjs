@@ -1,4 +1,4 @@
-/** Image Studio: real Electron, native canvas gestures, IndexedDB, project roundtrip and chat SSE.
+/** Image Studio: real Electron, project list ⇄ project layout, native canvas gestures, IndexedDB, project roundtrip and chat SSE.
  * Only the model backend is scripted. No paid model run or personal data is touched.
  * Run after npm run build: node scripts/image-studio.e2e.cjs
  */
@@ -30,13 +30,39 @@ async function main() {
   }
   const openStudio = async () => {
     await win.waitForSelector('.dv-groupview', { timeout: 45000 })
-    if (await win.locator('.ims').isVisible().catch(() => false)) return
+    if (await win.locator('.ims, .ims-launch').first().isVisible().catch(() => false)) return
     const icon = win.locator('.rb-space[aria-label="图像工作室"]').first()
     if (!await icon.isVisible().catch(() => false)) await win.locator('.rb-top .rb-more').first().click() // 「…」= 展开
     await icon.click()
     await win.evaluate(() => document.querySelector('.rb-open-top .rb-more')?.click()) // 收起:展开时命令区让出来,后续步骤要用
-    await win.waitForSelector('.ims')
+    await win.waitForSelector('.ims, .ims-launch')
   }
+  // 布局(项目 + 详情):面板在主区的哪一侧(没画出来 = null);右栏开合读顶栏那枚开关。
+  const sideOf = selector => win.evaluate(sel => {
+    const el = document.querySelector(sel), main = document.querySelector('.ims, .ims-launch')
+    if (!el || !main) return null
+    const r = el.getBoundingClientRect(), m = main.getBoundingClientRect()
+    return !r.width ? null : r.right <= m.left + 1 ? 'left' : r.left >= m.right - 1 ? 'right' : 'main'
+  }, selector)
+  const rightOpen = async () => await win.locator('.dv-edge-right').getAttribute('aria-pressed') === 'true'
+  const rightSettles = async open => { await win.waitForFunction(want => document.querySelector('.dv-edge-right')?.getAttribute('aria-pressed') === String(want), open); await win.waitForTimeout(700) } // 开合有补间 + 沉降
+  // After a (re)start or a layout rebuild the side panels arrive later than the main view (lazy chunks, restore tween):
+  // poll until every probed fact holds. The first unsettled reading and the last one on timeout are printed, so a
+  // failure says which fact was off instead of leaving a bare assertion.
+  const eventually = async (label, probe) => {
+    const started = Date.now(); let seen
+    for (let first = true; Date.now() - started < 6000; first = false) {
+      seen = await probe()
+      if (Object.values(seen).every(Boolean)) return true
+      if (first) console.log(`  settling — ${label}: ${JSON.stringify(seen)}`)
+      await win.waitForTimeout(100)
+    }
+    console.log(`  not settled — ${label}: ${JSON.stringify(seen)}`); return false
+  }
+  const toProjects = async () => { await win.locator('.ims-back').click(); await win.waitForSelector('.ims-launch') }
+  const newProject = async () => { await win.locator('.ims-launch').getByRole('button', { name: /^(新建项目|New project)$/ }).click(); await win.waitForSelector('.ims') }
+  const projectCard = id => win.locator(`.ims-launch-card[data-project-id="${id}"]`)
+  const openProjectId = async id => { await toProjects(); await projectCard(id).click(); await win.waitForSelector('.ims') }
   const mode = async value => {
     if (await win.evaluate(() => document.documentElement.dataset.mode) !== value) await win.locator('[data-id="rb-mode"]').click()
     await win.waitForFunction(expected => document.documentElement.dataset.mode === expected, value)
@@ -60,8 +86,14 @@ async function main() {
     if (await skip.isVisible().catch(() => false)) await skip.click()
     await win.waitForSelector('.dv-groupview', { timeout: 45000 })
     await openStudio()
+    await win.waitForSelector('.ims-launch')
+    check('The Space opens on the project list: navigation on the left, right side folded', await eventually('first open', async () => ({ nav: await sideOf('.ims-nav') === 'left', rightFolded: !await rightOpen(), empty: await win.locator('.ims-launch .csl-empty').isVisible() })))
+    await screenshot('launchpad-empty')
+    await newProject()
     await win.waitForSelector('.ims-empty')
     check('Native Space opens with an honest empty canvas', await win.locator('.ims-empty h1').isVisible())
+    await rightSettles(true)
+    check('Opening a project puts Layers beside the navigation and brings the chat out on the right', await sideOf('.ims-layers') === 'left' && await sideOf('.ims-chat-empty') === 'right' && await win.locator('.wb-tab--left').count() === 2)
     await screenshot('welcome')
 
     // Deterministic image fixtures: export tests compare real decoded pixels, not placeholders.
@@ -206,14 +238,35 @@ async function main() {
     await win.getByRole('button', { name: /^(下载项目|Download project)$/ }).click()
     const project = await waitDownload(); const projectFile = path.join(home, 'roundtrip.forsion-image.json'); fs.copyFileSync(project, projectFile)
     check('Portable project contains images and adjustments', JSON.parse(fs.readFileSync(projectFile)).images[0].brightness === 120)
-    await win.getByRole('button', { name: /^(新建项目|New project)$/ }).click()
+    await toProjects(); await rightSettles(false)
+    check('Going back takes Layers away and folds the right side', await sideOf('.ims-layers') === null && await sideOf('.ims-nav') === 'left' && await win.locator('.wb-tab--left').count() === 1)
+    await win.waitForSelector('.ims-launch-card .ims-cover-img:nth-child(2) image')
+    check('The project list shows the project with a cover made from its images', await win.locator('.ims-launch-card').count() === 1 && await win.locator('.ims-launch-card .ims-cover-img image').count() === 2 && (await win.locator('.ims-launch-card strong').textContent()) === 'Autumn studies')
+    await newProject()
     check('A new project has an independent canvas', await win.locator('.ims-image').count() === 0)
-    await win.locator('.ims-project-picker select').selectOption({ label: 'Autumn studies' })
+    await rightSettles(true)
+    // 在项目里把右栏亲手收起:换项目、回启动台再进,都不该再自动弹出来。
+    await win.locator('.dv-edge-right').click(); await rightSettles(false)
+    await win.locator('.wb-tab--left[title="图像工作室"]').click() // 左栏的导航标签还在图层旁边
+    await win.locator('.ims-nav').getByRole('button', { name: 'Autumn studies' }).click()
     await win.waitForSelector('.ims-image:nth-child(2)')
-    check('Switching projects restores images', await win.locator('.ims-image').count() === 2)
-    await win.locator('.ims input[type="file"][accept=".json"]').setInputFiles(projectFile)
-    await win.waitForFunction(() => document.querySelector('.ims-project-picker select').options.length === 4)
+    check('Switching projects from the navigation restores images', await win.locator('.ims-image').count() === 2 && (await win.locator('.ims-back').textContent()) === 'Autumn studies')
+    await toProjects(); await win.locator('.ims-launch-card', { hasText: 'Autumn studies' }).click(); await win.waitForSelector('.ims-image:nth-child(2)'); await win.waitForTimeout(900)
+    check('A right side the user folded stays folded for the next project', !await rightOpen() && await sideOf('.ims-layers') === 'left')
+    await toProjects()
+    await win.locator('.ims-launch input[type="file"][accept=".json"]').setInputFiles(projectFile)
+    await win.waitForSelector('.ims-image:nth-child(2)')
     check('Project import restores adjustments without borrowing a session', (await win.locator('.ims-image .ims-raster').first().getAttribute('style')).includes('brightness(120%)'))
+    await toProjects()
+    check('The imported copy is a third project', await win.locator('.ims-launch-card').count() === 3)
+    await win.locator('.ims-launch input[type="search"]').fill('zzz')
+    check('Searching the project list can come up empty', await win.locator('.ims-launch-card').count() === 0 && await win.locator('.ims-launch .csl-empty').isVisible())
+    await win.locator('.ims-launch input[type="search"]').fill('')
+    await mode('light'); await screenshot('launchpad-light'); await mode('dark'); await screenshot('launchpad-dark')
+    await win.locator('.ims-launch-card').first().click(); await win.waitForSelector('.ims-image:nth-child(2)') // 最近改动的在最前 = 刚导入的那份
+    // 生成的起手提示要有输入框接:显式动作不受「收起过就不再自动弹」的限制。
+    await win.locator('.ims-toolbar').getByRole('button', { name: /^(创作对话|Creative chat)$/ }).click(); await rightSettles(true)
+    check('Asking for the chat opens the folded right side with the chat in front', await sideOf('.ims-chat-empty') === 'right')
 
     await win.getByRole('button', { name: /^(开启创作对话|Open creative chat)$/ }).click()
     await win.waitForSelector('[data-image-studio-chat] textarea')
@@ -236,6 +289,9 @@ async function main() {
     await win.waitForSelector('[data-image-studio-chat] .attach-chip')
     check('Selected image is attached to its own project composer', await win.locator('[data-image-studio-chat] .attach-chip').count() > 0)
     const inspector = win.locator('.ims-inspector')
+    // 对话与属性是右栏的两个标签:「添加到对话」把对话带到了前面,回属性要点一下。
+    check('Adding to the chat brings the chat tab forward in the shared right side', await sideOf('[data-image-studio-chat]') === 'right' && !await inspector.isVisible())
+    await win.locator('.ims-toolbar').getByRole('button', { name: /^(属性与调整|Properties and adjustments)$/ }).click()
     await inspector.getByRole('button', { name: /^(裁切|Crop)$/ }).click()
     await inspector.getByRole('combobox', { name: /^(裁切比例|Crop ratio)$/ }).selectOption({ label: '16:9' })
     await inspector.getByRole('button', { name: /^(应用裁切|Apply crop)$/ }).click()
@@ -265,7 +321,7 @@ async function main() {
     await inspector.locator('input[type="color"]').first().fill('#c8d2be')
     check('Shape fill updates the actual vector artwork', await win.locator('.ims-rectangle rect').getAttribute('fill') === '#c8d2be')
     const shapeId = await win.locator('.ims-rectangle').getAttribute('data-image-id')
-    await win.locator('.ims-toolbar').getByRole('button', { name: /^(作品与素材|Images and references)$/ }).click()
+    await win.locator('.ims-toolbar').getByRole('button', { name: /^(图层|Layers)$/ }).click()
     const layerRow = win.locator(`[data-layer-id="${shapeId}"]`)
     await layerRow.getByRole('button', { name: /^(隐藏图层|Hide layer)$/ }).click()
     check('Hiding a layer removes it from the scene without deleting its row', await win.locator('.ims-rectangle').count() === 0 && await layerRow.count() === 1)
@@ -287,7 +343,7 @@ async function main() {
     const textId = await win.locator('.ims-text').getAttribute('data-image-id')
     const photoIds = await win.locator('.ims-image').evaluateAll(els => els.map(el => el.dataset.imageId))
     const pickLayer = async id => {
-      await win.locator('.ims-toolbar').getByRole('button', { name: /^(作品与素材|Images and references)$/ }).click()
+      await win.locator('.ims-toolbar').getByRole('button', { name: /^(图层|Layers)$/ }).click()
       await win.locator(`[data-layer-id="${id}"] .ims-asset`).click()
       await win.locator('.ims-toolbar').getByRole('button', { name: /^(属性与调整|Properties and adjustments)$/ }).click()
     }
@@ -343,17 +399,18 @@ async function main() {
     await win.getByRole('button', { name: /^(下载项目|Download project)$/ }).click()
     const mixedFile = await waitDownload(), mixed = JSON.parse(fs.readFileSync(mixedFile, 'utf8'))
     check('Portable v2 project preserves mixed objects and layer order', mixed.version === 2 && mixed.elements.length === 3 && mixed.order.length === 6 && mixed.images.length === 3)
-    await win.locator('.ims input[type="file"][accept=".json"]').setInputFiles(mixedFile)
-    await win.waitForFunction(() => document.querySelector('.ims-project-picker select').options.length === 5)
+    await toProjects()
+    await win.locator('.ims-launch input[type="file"][accept=".json"]').setInputFiles(mixedFile)
+    await win.waitForSelector('.ims-text')
     check('Mixed project import restores editable text, shapes and image transforms', await win.locator('.ims-text').count() === 1 && await win.locator('.ims-rectangle').count() === 1 && (await win.locator('.ims-image').nth(1).locator('.ims-raster > g').getAttribute('transform')).includes('scale(-1 1)'))
     // Imported projects deliberately do not borrow the original chat session.
-    await win.locator('.ims-project-picker select').selectOption(mixed.id)
+    await openProjectId(mixed.id)
     await pickLayer(textId)
     await win.locator('.ims-stage').focus(); await win.keyboard.press('Meta+c')
-    await win.getByRole('button', { name: /^(新建项目|New project)$/ }).click()
+    await toProjects(); await newProject()
     await win.locator('.ims-stage').focus(); await win.keyboard.press('Meta+v')
     check('Native canvas clipboard can reuse objects in another project', await win.locator('.ims-text').count() === 1 && await win.locator('.ims-image').count() === 0)
-    await win.locator('.ims-project-picker select').selectOption(mixed.id)
+    await openProjectId(mixed.id)
     await pickLayer(textId)
     await inspector.getByRole('textbox', { name: /^(图层名称|Layer name)$/ }).fill('Exhibition headline')
     await win.getByTitle(/^(适应内容|Fit to content)$/).click()
@@ -373,6 +430,7 @@ async function main() {
     await win.waitForSelector('.ims-image:nth-child(3)', { timeout: 45000 })
     check('Mixed objects survive a complete restart', await win.locator('.ims-text').count() === 1 && await win.locator('.ims-frame').count() === 1 && await win.locator('.ims-rectangle').count() === 1)
     check('Full Electron restart preserves the project and native Space layout', await win.locator('.ims-footer input').inputValue() === 'Persisted project')
+    check('After a restart the project is still laid out with Layers on the left and the chat on the right', await eventually('restart layout', async () => ({ leftTabs: await win.locator('.wb-tab--left').count() === 2, layers: await sideOf('.ims-layers') === 'left', right: await rightOpen(), rightTabs: await win.locator('.wb-tab--icon:not(.wb-tab--left)').count() === 2 })))
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(900, 760))
     await screenshot('narrow')
     check('Narrow main View has no horizontal overflow', await win.locator('.ims').evaluate(el => el.scrollWidth <= el.clientWidth + 1))
@@ -396,6 +454,7 @@ async function main() {
     await slot.waitFor({ state: 'visible' })
     const reserved = await slot.evaluate(el => ({ left: el.style.left, top: el.style.top, width: el.style.width, height: el.style.height }))
     check('AI edit shows an adjacent placeholder before the run is accepted', await win.locator('.ims-generation').count() === 1)
+    check('AI edit keeps its form in front instead of flipping the right side to the chat', await ai.isVisible())
     await screenshot('ai-edit-placeholder')
     const editingBody = (await editingRequest).postDataJSON()
     check('AI edit sends real reference pixels to its own project session', editingBody.session_id === stub.seen.runs[0].sessionId && editingBody.attachments.length === 1 && editingBody.attachments[0].data.startsWith('iVBOR'))
@@ -423,6 +482,29 @@ async function main() {
     await win.getByRole('button', { name: /^(移除占位|Remove placeholder)$/ }).click()
     await win.waitForFunction(() => document.querySelectorAll('.ims-generation').length === 0)
     check('Failed placeholders can be dismissed without changing artwork', await win.locator('.ims-image').count() === 4)
+
+    // Upgrade path: layouts saved before "project + detail" kept the chat pinned on the left. Rewrite the layouts on disk
+    // into that old panel set (same schema), take the one-time flag away and load the page again: the Space has to be
+    // rebuilt in the new arrangement. Restoring the old one would leave the chat on the left for good, because a
+    // singleton is reused wherever it already sits.
+    await toProjects(); await rightSettles(false)
+    await win.waitForTimeout(1200) // the layout save is debounced
+    await win.addInitScript(() => {
+      if (sessionStorage.getItem('ims-old-layout') !== null) return
+      let rewritten = 0
+      for (const key of Object.keys(localStorage)) {
+        const value = localStorage.getItem(key)
+        if (!value || !value.includes('image-studio-nav')) continue
+        localStorage.setItem(key, value.replaceAll('image-studio-chat', 'image-studio-assets').replaceAll('image-studio-nav', 'image-studio-chat')); rewritten++
+      }
+      localStorage.removeItem('forsion_image_studio_layout_v2')
+      sessionStorage.setItem('ims-old-layout', String(rewritten))
+    })
+    await win.reload(); await openStudio(); await win.waitForSelector('.ims-launch')
+    check('The upgrade check really planted a layout from the old arrangement', Number(await win.evaluate(() => sessionStorage.getItem('ims-old-layout'))) > 0)
+    check('A layout saved by the old arrangement is rebuilt once instead of restored', await eventually('upgrade', async () => ({ nav: await sideOf('.ims-nav') === 'left', leftTabs: await win.locator('.wb-tab--left').count() === 1, rightFolded: !await rightOpen(), flag: await win.evaluate(() => localStorage.getItem('forsion_image_studio_layout_v2')) === '1' })))
+    await win.locator('.ims-launch-card').first().click(); await win.waitForSelector('.ims'); await rightSettles(true)
+    check('After the upgrade the chat opens on the right and Layers beside the navigation', await eventually('upgrade, project open', async () => ({ layers: await sideOf('.ims-layers') === 'left', chat: await sideOf('[data-image-studio-chat], .ims-chat-empty') === 'right', leftTabs: await win.locator('.wb-tab--left').count() === 2 })))
     check('No renderer exceptions', errors.length === 0)
   } catch (error) {
     failed = true

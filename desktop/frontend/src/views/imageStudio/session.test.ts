@@ -2,12 +2,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const state = vi.hoisted(() => ({
   studio: { boards: {} as Record<string, any>, activeId: 'a', update: vi.fn(), queue: vi.fn() },
   app: { cfg: {}, desktopConfig: null, defaultAgentSlug: 'designer', adoptSession: vi.fn() },
-  createSession: vi.fn(), openView: vi.fn(),
+  createSession: vi.fn(), reveal: vi.fn(),
 }))
 vi.mock('../../stores/appStore', () => ({ useApp: { getState: () => state.app }, applyPreset: (c: unknown) => c, stickyDefaults: () => ({}) }))
 vi.mock('../../stores/imageStudioStore', () => ({ useImageStudio: { getState: () => state.studio } }))
 vi.mock('../../services/backendService', () => ({ createSession: state.createSession }))
-vi.mock('@lcl/engine', () => ({ useWorkspace: { getState: () => ({ openView: state.openView }) } }))
+vi.mock('./layout', () => ({ STUDIO_CHAT: 'image-studio-chat', revealStudioPanel: state.reveal }))
 import { ensureImageSession, promptImageStudio } from './session'
 import { homeTarget } from '../../services/engine/targets'
 beforeEach(() => {
@@ -35,7 +35,16 @@ describe('Image Studio native session seam', () => {
     expect(state.studio.boards.a.sessionId).toBe('session-a')
     expect(state.studio.boards.b.sessionId).toBe('session-b')
     expect(state.studio.queue).not.toHaveBeenCalled()
-    expect(state.openView).not.toHaveBeenCalled()
+    expect(state.reveal).not.toHaveBeenCalled()
+  })
+  it('brings the chat panel forward before queueing, so the composer is mounted to take the prompt', async () => {
+    await promptImageStudio('b', 'B prompt')
+    expect(state.reveal).not.toHaveBeenCalled() // b is not the open project
+    state.studio.activeId = 'b'
+    await promptImageStudio('b', 'B prompt')
+    expect(state.reveal).toHaveBeenCalledWith('image-studio-chat')
+    expect(state.studio.queue).toHaveBeenCalledWith('session-b', 'B prompt', [])
+    expect(state.reveal.mock.invocationCallOrder[0]).toBeLessThan(state.studio.queue.mock.invocationCallOrder[0])
   })
   it('retries a failed connection without leaving a false session binding', async () => {
     state.createSession.mockRejectedValueOnce(new Error('offline')).mockResolvedValueOnce({ id: 'session-a' })

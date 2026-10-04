@@ -6,7 +6,8 @@
 .ims .ims-primary, .ims-panel .ims-primary { background: var(--action-fill); color: var(--on-action); padding-inline: 12px; }
 .ims .ims-primary:hover, .ims-panel .ims-primary:hover { background: var(--action-fill-hover); color: var(--on-action); }
 .ims-header { display: flex; align-items: center; gap: 18px; padding: 12px 18px; flex-shrink: 0; border-bottom: 1px solid var(--border); }
-.ims-project-picker { display: flex; align-items: center; min-width: 0; }
+.ims .ims-back { min-width: 0; padding-left: 2px; color: var(--text); font-size: var(--ui-font-body, 13px); font-weight: 600; }
+.ims-back span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ims select { min-width: 0; max-width: 180px; background: transparent; color: var(--text-muted); font: inherit; font-size: var(--ui-font-meta, 12px); border: 1px solid transparent; border-radius: var(--radius-sm); padding: 6px; }
 .ims-head-actions { display: flex; gap: 4px; margin-left: auto; align-items: center; }
 .ims-toolbar { display: flex; align-items: center; gap: 3px; padding: 7px 14px; flex-shrink: 0; }
@@ -82,8 +83,7 @@
   .ims-toolbar { padding: 6px 8px; }
 }
 @container (max-width: 360px) {
-  .ims-project-picker select { max-width: 105px; }
-  .ims-head-actions > button:nth-child(2), .ims-toolbar > button > span { display: none; }
+  .ims-head-actions > button:not(.ims-primary), .ims-toolbar > button > span { display: none; }
   .ims-empty { padding: 20px 20px 68px; }
   .ims-eyebrow { margin-bottom: 12px; }
   .ims-empty p { font-size: var(--ui-font-meta, 12px); margin-bottom: 15px; }
@@ -187,3 +187,23 @@
   .ims-generation:not(.is-failed) .ims-generation-sheen { animation: ims-generation-sheen 1.8s cubic-bezier(.16, 1, .3, 1) infinite; }
 }
 @keyframes ims-generation-sheen { to { transform: translateX(110%); } }
+
+/* 项目导航(左栏):外形是 Coding 导航的 csn-*,这里只补「最近」一行的缩略图与截断。 */
+.ims-nav-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ims-nav-thumb { flex: none; width: 16px; height: 16px; border-radius: calc(var(--radius-sm) - 2px); overflow: hidden; background: var(--overlay-light); }
+.ims-nav-thumb > svg, .ims-cover-img > svg { display: block; width: 100%; height: 100%; }
+
+/* 启动台(主区,没打开项目时):页头 / 搜索 / 空态是 Coding 启动台的 csl-*,封面网格是这里的。
+   卡片 = 纸面上的对象卡(DESIGN §5):--bg-card + --radius-md + --card-shadow,1px 透明边,不画装饰描边。 */
+.ims-launch-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(216px, 1fr)); gap: 16px; align-items: start; }
+.ims-launch-card { display: flex; flex-direction: column; min-width: 0; padding: 0; border: 1px solid transparent; border-radius: var(--radius-md); background: var(--bg-card); box-shadow: var(--card-shadow); color: var(--text); text-align: left; overflow: hidden; transition: border-color var(--duration-fast); }
+.ims-launch-card:hover { border-color: var(--sel-line); }
+.ims-cover { display: block; padding: 14px; background: var(--overlay-light); }
+.ims-cover-in { display: flex; align-items: center; justify-content: center; gap: 5%; aspect-ratio: 4 / 3; }
+.ims-cover-img { flex: none; box-shadow: var(--card-shadow); }
+.ims-cover.is-empty { color: var(--text-faint); }
+.ims-launch-meta { display: flex; flex-direction: column; gap: 3px; min-width: 0; padding: 11px 13px 12px; }
+.ims-launch-meta strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--ui-font-body); line-height: var(--ui-line-body); font-weight: 550; }
+.ims-launch-meta small { color: var(--text-muted); font-size: var(--ui-font-caption); line-height: var(--ui-line-caption); }
+.ims-launch .ims-error { padding-inline: 0; }
+@media (prefers-reduced-motion: reduce) { .ims-launch-card { transition: none; } }

@@ -1,6 +1,5 @@
 import { useState } from 'react'
 import { Sparkles } from 'lucide-react'
-import { useWorkspace } from '@lcl/engine'
 import { useI18n } from '../../i18n'
 import { useApp } from '../../stores/appStore'
 import { useImageStudio } from '../../stores/imageStudioStore'
@@ -29,7 +28,8 @@ export function AIEditPanel({ board, images }: { board: ImageBoard; images: Stud
       })
       const sourceMode = mode === 'expand' ? 'current' : source
       const attachments = await editAttachments(images, mode, ratioPlan.requested, margin, sourceMode)
-      useWorkspace.getState().openView('image-studio-chat', {}, 'left')
+      // 不把对话带到前面:它和这块面板现在是同一栏的两个标签,带过去就把正在用的表单盖掉了。进度在画布占位上,
+      // 细节和停止在对话标签里(面板底部那句说明写着),失败的占位上有「查看对话」。
       const sent = await useApp.getState().send(editPrompt(mode, instruction, ratioPlan, count, sourceMode, quality), attachments, undefined, undefined, undefined, sessionId)
       if (!sent) throw new Error(t('imageStudio.ai.sendFailed'))
       useImageStudio.getState().activateGeneration(placeholderIds)
