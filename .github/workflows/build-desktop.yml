@@ -121,6 +121,8 @@ jobs:
       # 整棵项目树不监听),修复后两轮独立 probe 全绿。
       # 不在名单:agentLoopRuntimeSafety.test.ts(Windows 上清理临时目录偶发 ENOTEMPTY:异步写入的句柄还开着,与持久化写入无关)。
       # hostSandbox.winconsole.test.ts 不是写入类,借这道闸跑:agent 起子进程不许弹控制台窗口(只有 Windows 真机测得出)。
+      # 不在名单:electron/backendRunner.test.ts(用例全过,但 windows-2022 上 afterAll 删临时目录报 ENOTEMPTY,同上一类;
+      # 2026-10-04 probe 实测。它测的是 unit/backendRunner,与控制台 / 进程清理无关)。
       - name: Windows persistence and process tests
         if: runner.os == 'Windows'
         shell: bash
@@ -140,7 +142,7 @@ jobs:
             electron/hostTextWrite.test.ts electron/forsionHome.test.ts electron/accountCore.test.ts \
             electron/amadeus/settings.account.test.ts electron/amadeus/ipc.account.test.ts \
             electron/codeStudioProjects.test.ts electron/lclLink.test.ts \
-            electron/backendManager.test.ts electron/backendRunner.test.ts electron/cliInstall.test.ts
+            electron/backendManager.test.ts electron/cliInstall.test.ts
 
       # Verify the distributed tool/prompt contract on every native runner, without operating its GUI.
       - name: Check bundled Computer Use platform contract
