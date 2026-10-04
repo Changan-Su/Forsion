@@ -101,6 +101,9 @@ export function qwenCloneBody(targetModel: string, name: string, audioData: stri
   };
 }
 
+// 带样本的请求给足 5 分钟:10-04 实测境外到百炼(API 网关和 OSS 都一样)的上行只有 10–30 KB/s,1 MB 的样本要一分多钟。
+const CLONE_UPLOAD_MS = 300_000;
+
 /** 本地录音(data URI)→ 百炼临时空间(48 小时后自动清),换回 oss:// 地址。voice-enrollment 只收 URL,这样用户不用自己找地方挂文件。 */
 async function dsTempUpload(baseUrl: string, apiKey: string, dataUri: string): Promise<string> {
   const m = /^data:([^;,]+)[^,]*;base64,(.+)$/s.exec(dataUri);
@@ -119,7 +122,7 @@ async function dsTempUpload(baseUrl: string, apiKey: string, dataUri: string): P
   };
   for (const [k, v] of Object.entries(fields)) fd.append(k, String(v));
   fd.append('file', new Blob([Buffer.from(m[2], 'base64')], { type: m[1] }), `clone.${ext}`); // OSS 表单上传:file 必须排最后
-  const u = await fetch(d.upload_host, { method: 'POST', body: fd, signal: AbortSignal.timeout(60_000) });
+  const u = await fetch(d.upload_host, { method: 'POST', body: fd, signal: AbortSignal.timeout(CLONE_UPLOAD_MS) });
   if (!u.ok) throw new Error(`dashscope upload ${u.status}: ${(await u.text().catch(() => '')).slice(0, 200)}`);
   return `oss://${key}`;
 }
@@ -214,7 +217,7 @@ router.post('/agent/tts/voices/clone', authMiddleware, async (req: AuthRequest, 
       const j = await dsCustomization(p.baseUrl, p.apiKey, {
         model: 'voice-enrollment',
         input: { action: 'create_voice', target_model: targetModel, prefix: cleanName(req.body?.name).toLowerCase().replace(/_/g, '').slice(0, 10) || 'voice', url },
-      }, 120_000, isUrl ? {} : { 'X-DashScope-OssResourceResolve': 'enable' }); // oss:// 临时地址要这个头才解析
+      }, CLONE_UPLOAD_MS, isUrl ? {} : { 'X-DashScope-OssResourceResolve': 'enable' }); // oss:// 临时地址要这个头才解析
       const voice = j?.output?.voice_id || j?.output?.voice;
       if (!voice) throw new Error(`未返回音色 id:${JSON.stringify(j?.output || j).slice(0, 200)}`);
       await dsAwaitVoice(p.baseUrl, p.apiKey, voice);
@@ -229,7 +232,7 @@ router.post('/agent/tts/voices/clone', authMiddleware, async (req: AuthRequest, 
     const text = String(req.body?.text ?? '').trim().slice(0, 1000);
     const language = String(req.body?.language ?? '').trim();
     const script = text ? { text, language: /^[A-Za-z]{2,12}$/.test(language) ? language : undefined } : undefined;
-    const j = await dsCustomization(p.baseUrl, p.apiKey, qwenCloneBody(targetModel, cleanName(req.body?.name), audio, script), 120_000); // 复刻处理较慢,给足超时
+    const j = await dsCustomization(p.baseUrl, p.apiKey, qwenCloneBody(targetModel, cleanName(req.body?.name), audio, script), CLONE_UPLOAD_MS); // 样本就在请求体里,慢的是上传
     const voice = j?.output?.voice || j?.output?.voice_id;
     if (!voice) throw new Error(`未返回音色 id:${JSON.stringify(j?.output || j).slice(0, 200)}`);
     res.json({ voice, targetModel, ...(j.output.fallback_mode ? { fallbackReason: String(j.output.fallback_reason || 'fallback') } : {}) });

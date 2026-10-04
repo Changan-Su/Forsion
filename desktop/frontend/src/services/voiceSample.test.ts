@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { analyzeSample } from './voiceSample'
+import { analyzeSample, passThroughMime } from './voiceSample'
 
 const RATE = 48000
 let seed = 7
@@ -16,6 +16,19 @@ function speech(sec: number, { wide = true, gain = 0.3 } = {}): Float32Array {
   return x
 }
 const withNoise = (x: Float32Array, amp: number): Float32Array => x.map((v) => v + rnd() * amp)
+
+describe('passThroughMime', () => {
+  it('passes m4a / mp3 through untouched and re-encodes everything else', () => {
+    expect(passThroughMime('me.m4a', 'audio/x-m4a')).toBe('audio/mp4')
+    expect(passThroughMime('me.m4a', 'audio/mp4')).toBe('audio/mp4')
+    expect(passThroughMime('ME.M4A', '')).toBe('audio/mp4')
+    expect(passThroughMime('me.mp3', 'audio/mpeg')).toBe('audio/mpeg')
+    expect(passThroughMime('me.mp3', '')).toBe('audio/mpeg')
+    for (const [name, type] of [['me.wav', 'audio/wav'], ['me.flac', 'audio/flac'], ['me.aac', 'audio/aac'], ['me.ogg', 'audio/ogg'], ['clip.mp4', 'video/mp4'], ['noext', '']]) {
+      expect(passThroughMime(name, type)).toBe('')
+    }
+  })
+})
 
 describe('analyzeSample', () => {
   it('passes a clean 12-second sample', () => {
