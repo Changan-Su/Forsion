@@ -17,13 +17,12 @@ import { getDbType, query } from '../core/db.js';
 import { DEFAULT_AGENT_SLUG } from '../core/tanguHome.js';
 import { deps } from '../seams/runtime.js';
 import { runWithAgentSlug } from '../seams/runContext.js';
-import { getAgent, MUSE_AGENT_SLUG } from '../agents/agentRegistry.js';
+import { getAgent, agentNotesOff, MUSE_AGENT_SLUG } from '../agents/agentRegistry.js';
 import { loadHarness, shelvedOf, equipHistory } from '../agents/harnessStore.js';
 import { getToolDefinitions } from '../tools/registry.js';
 import { isShelvable } from '../tools/toolRegistry.js';
 import type { ToolContext } from '../tools/toolTypes.js';
 import { loadSkillLoadout } from './skillLoadout.js';
-import { L } from '../tui/i18n.js';
 
 export interface UsageCount { calls: number; last: string }
 export interface AgentUsage { runs: number; tools: Map<string, UsageCount>; skills: Map<string, UsageCount> }
@@ -40,19 +39,13 @@ export const SUGGEST_MAX = 8;
 /** 定义小于这么多字节的工具不建议收:收起后目录里还要留一行(约 100 字节),省不下什么,用到时却多一个来回。 */
 const MIN_SHELVE_BYTES = 512;
 
-/** TODO 里的「执行步骤」段:由报告给出、Muse 原样带上。10-04 live 两次实翻都在这一段 ——
- *  Muse 自己写步骤时,一次把「本周期别动」抄了进去(接手的 agent 读完什么都不做),一次只写了「给别的 agent 提名」那一支
- *  (接手的正是被点名的 agent,于是给自己提了名、没收起)。两条分支缺一不可,所以不交给模型现写。 */
+/** 报告末尾的「执行步骤」段:由报告给出,不交给模型现写。读它的只有 Muse(review_loadout 只有 Muse 看得见),所以只有英文、只有一支。
+ *  10-04 用户定「没有风险的可以做」:收起随时可撤、定义仍可按需加载,不再出卡片等用户点 —— Muse 巡检完当场代收。
+ *  调用形状沿用旧版第 (2) 支的原话(那一支 live 4/4);旧版还有「自己收 / 给别人提名」两支与一份中文版,都是为卡片转交准备的,随卡片一起去掉。 */
 export const LOADOUT_APPLY_STEPS =
-  'Steps for whoever runs this task: (1) if one of the agents listed above is you, shelve your own items now with manage_harness (action "upsert", kind "equip", exactly the tools and skills listed for you and nothing else, evidence = the counts above); ' +
-  '(2) for every other agent listed, call manage_harness with action "propose", agent = its slug, tools and skills = exactly its listed items, evidence = its counts. When Muse runs this task those items are shelved for that agent right away (it can undo them in its notes); when another agent runs it, the suggestion waits in that agent\'s inbox for its next /refine. ' +
+  'Steps for whoever runs this review: for every agent listed above with suggested items, call manage_harness with action "propose", agent = its slug, tools and skills = exactly its listed items, evidence = its counts. ' +
+  'Those items are shelved for that agent right away (it can undo them in its notes) and take effect on its next run. ' +
   'Shelving only moves a definition to the load-on-demand catalog; nothing is removed.';
-/** 同一段的中文版:这段话最后落在用户收件箱的卡片上(用户可见产物 → 跟界面语言,同条目名的 L());
- *  工具名 / 参数名不译。10-04 真实用量跑里 Muse 自己翻译时把「收起 / 装备」译成了「暂存 / 设备」。 */
-export const LOADOUT_APPLY_STEPS_ZH =
-  '执行步骤:(1) 上面列出的 agent 里如果有你自己,现在就用 manage_harness 把你名下的收起(action "upsert"、kind "equip",tools 和 skills 只填你名下列出的那几项,evidence 写上面的次数);' +
-  '(2) 其余每个被列出的 agent,用 manage_harness 的 action "propose"(agent = 它的 slug,tools 和 skills 只填它名下列出的那几项,evidence 写它的次数)。由 Muse 执行时,这几项会直接替它收起(它可以在自己的工作笔记里撤销);由别的 agent 执行时,只给它留一条候选,等它下次复盘(/refine)时自己决定。' +
-  '收起只是把定义挪进按需目录,需要时照常可用,不会删除任何东西。';
 
 /** Muse 代收的节奏:六天内算同一周(巡检每周一次,留一天余量)。 */
 const WEEK_MS = 6 * 86_400_000;
@@ -156,7 +149,7 @@ export async function suggestedLoadout(ctx: ToolContext, slug: string, days = 30
   const span = Math.min(Math.max(7, Math.floor(Number(days) || 30)), 90);
   const u = (await collectLoadoutUsage(ctx.userId, span)).get(slug);
   const def = slug === MUSE_AGENT_SLUG ? null : await getAgent(slug);
-  if (!u || !def || u.runs < MIN_RUNS) return null;
+  if (!u || !def || u.runs < MIN_RUNS || agentNotesOff(def)) return null;
   const { pick, pickSkills } = await pickLoadout(ctx, slug, def, u);
   return { runs: u.runs, days: span, tools: pick.map((t) => t.name), skills: pickSkills.map((s) => s.id) };
 }
@@ -178,6 +171,11 @@ export async function buildLoadoutReview(ctx: ToolContext, opts: { days?: number
     const u = usage.get(slug)!;
     const def = await getAgent(slug);
     if (!def) continue; // 已删除的 agent / 不是文件夹 agent 的归属名
+    // 用户关掉了它的 manage_harness:它自己撤不了别人替它收的东西,所以不建议、Muse 也不代收(suggestedLoadout 同口径)
+    if (agentNotesOff(def)) {
+      blocks.push(`## ${slug} — ${u.runs} runs\nThe user turned off this agent's notes (manage_harness is not in its tool list). Nothing is suggested for it; leave it alone.`);
+      continue;
+    }
     if (u.runs < MIN_RUNS) {
       blocks.push(`## ${slug} — ${u.runs} runs\nToo few runs to judge (fewer than ${MIN_RUNS}). Do not recommend shelving anything for this agent.`);
       continue;
@@ -213,6 +211,5 @@ export async function buildLoadoutReview(ctx: ToolContext, opts: { days?: number
   const body = [head, ...blocks].join('\n\n');
   const text = body.length > OUTPUT_CAP ? `${body.slice(0, OUTPUT_CAP)}\n… (report truncated; pass agent to see one agent in full)` : body;
   // 步骤段放在截断之后:报告再长它也在
-  // 产品用词随报告给出(种子 prompt 保持纯英文):Muse 用中文写建议时自己翻,会翻出「暂存 / 设备」这类不是界面用语的词
-  return judged ? `${text}\n\nIf you turn this into a todo, end its detail with this paragraph, kept intact (if you write in another language, translate the prose and keep tool and parameter names exactly; in Chinese use the product's own words: 收起 for shelve, 装备 for equipment, 按需目录 for the load-on-demand catalog):\n${L(LOADOUT_APPLY_STEPS_ZH, LOADOUT_APPLY_STEPS)}` : text;
+  return judged ? `${text}\n\n${LOADOUT_APPLY_STEPS}` : text;
 }

@@ -22,7 +22,7 @@ import { deps } from '../../seams/runtime.js';
 import { DEFAULT_AGENT_SLUG } from '../../core/tanguHome.js';
 import { currentAgentSlug, currentDisplayAgentSlug } from '../../seams/runContext.js';
 import { applyHarnessEdit, loadHarness, appendHarnessCandidates, shelveForAgent, MAX_ENTRIES, TITLE_MAX, BODY_MAX, EVIDENCE_MAX, type HarnessEntry } from '../../agents/harnessStore.js';
-import { getAgent, isValidSlug } from '../../agents/agentRegistry.js';
+import { getAgent, isValidSlug, MUSE_AGENT_SLUG } from '../../agents/agentRegistry.js';
 import { effectiveRemote, remoteManagementDenied } from '../../services/remoteOrigin.js';
 import { scheduleAgentFilesSync } from '../../services/agentFileSync.js';
 
@@ -134,7 +134,9 @@ export const manageHarnessProvider: ToolProvider = {
             if (!(await getAgent(target))) return `Error: agent "${target}" does not exist`;
             const eqTools = names(args.tools) ?? [], eqSkills = names(args.skills) ?? [];
             if (eqTools.length || eqSkills.length) {
-              if (ctx.muse) {
+              // Muse 的周期,或用户直接跟 Muse 对话(手聊时让它「现在巡检一次」也该当场生效;review_loadout 的可见性同一口径)。
+              // 'muse' 这个 slug 是内置 agent 的文件夹名;即便别的东西占了这个名字,能收的也只有下面代码重算出来的那份名单。
+              if (ctx.muse || slug === MUSE_AGENT_SLUG) {
                 // 10-04 用户裁决「Muse 也开放自动采纳」:Muse 代收直接生效。能收什么由代码此刻重算的巡检名单说了算,
                 // 模型多填的名字一律不认 —— 保护名单、对方没有的工具、近期用过的、对方拿回来过的,都进不了那份名单。
                 // 动态取:loadoutUsage 静态依赖 tools/registry,而 registry 在模块求值时就注册本文件的 provider —— 静态 import 会绕成环。

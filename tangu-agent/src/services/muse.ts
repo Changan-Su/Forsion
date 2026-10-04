@@ -257,18 +257,17 @@ const MUSE_TODO_ENTRY = /^todo ([A-Za-z0-9_-]{1,64})$/;
 
 // ── 每周装备巡检(10-04 用户定「让 Muse 检查最近的工具和技能调用,看能不能降本增效」)────────────────────────
 // 一条播种进 Muse 自己 SCHEDULE.db 的周期条目:到期时走既有的「自己的日程 → 本周期 kickoff」管道,没有新机制。
-// Muse 只出建议(一条 add_muse_todo),不改任何 agent:收不收由各 agent 自己经 manage_harness kind:"equip" 决定,
-// 用户在收件箱卡片上点「新会话执行 / 交给 Muse / 忽略」。条目用户可在 Muse 的日程里改期或删掉 —— 删掉就不再巡检。
+// Muse 巡检完当场代收(10-04 用户定「有风险的才需要确认,没有风险的可以做」):收起随时可撤、定义仍可按需加载,不出卡片、不等用户点。
+// 能收什么不听模型的:manage_harness propose 那一支由代码重算名单、一周一批、对方拿回来过的不再收(见 manageHarness / loadoutUsage)。
+// 痕迹:各 agent「成长 › 进化」里标着「Muse 代为收起」的条目(可撤)+ Muse 自己日志里的一行。条目用户可在 Muse 的日程里改期或删掉 —— 删掉就不再巡检。
 const LOADOUT_REVIEW_NAME = { zh: '每周装备巡检', en: 'Weekly loadout review' };
 /** 条目的 prompt(模型读,英文)。同时是幂等匹配的依据之一。 */
 export const LOADOUT_REVIEW_PROMPT =
   'Weekly loadout review (keep this weekly entry; do not remove it). Call review_loadout with days 30. It reports, per agent, which always-loaded tools and listed skills went unused in the user\'s own sessions, and which of them it suggests shelving this time. ' +
-  'If it says there is not enough data, or nothing stands out (under about 3 KB of unused definitions for an agent is not worth a todo), end this item quietly: no todo, no message. ' +
-  'Otherwise file exactly ONE add_muse_todo in the user\'s language. The user reads it as a suggestion; if they accept, its detail is handed verbatim to an agent as the task to carry out. So write the detail as that task: ' +
-  '(1) open with one sentence for the user: nothing has been changed yet, running this task shelves the equipment listed below, and shelving only moves a definition to the load-on-demand catalog (the tool or skill still works); ' +
-  '(2) per agent, exactly the tools and skills on that agent\'s "Suggested … this time" lines in the report, with its run counts as evidence. Add no other item, even one the report mentions elsewhere, and leave out agents marked as not judgeable; ' +
-  '(3) end with the "Steps for whoever runs this task" paragraph that review_loadout prints at the bottom of its report, kept intact with both of its branches (do not write your own steps). ' +
-  'In this cycle you only file the todo: do not change any agent\'s notes, settings or files yourself, and do not copy that restriction into the todo (whoever runs the task is meant to act). Never suggest removing a capability.';
+  'If it says there is not enough data, or nothing stands out (under about 3 KB of unused definitions for an agent is not worth acting on), end this item quietly: no change, no todo, no message. ' +
+  'Otherwise shelve the suggested items for each agent yourself, now: follow the "Steps for whoever runs this review" paragraph that review_loadout prints at the bottom of its report, one manage_harness call per agent, with exactly the tools and skills on that agent\'s "Suggested … this time" lines. Add no other item, even one the report mentions elsewhere, and leave out agents marked as not judgeable. ' +
+  'Shelving only moves a definition to the load-on-demand catalog (the tool or skill still works) and the agent or the user can undo it, so it needs no confirmation: do not file a todo for it and do not ask. ' +
+  'Then record one line with log_event: which agents, and how many tools and skills were shelved for each. Change nothing else on any agent, and never remove a capability.';
 const LOADOUT_REVIEW_MARKER = '.seeded-loadout-review-v1';
 
 /** 把「每周装备巡检」条目播种进 Muse 的日程:**只播一次**(标记文件在 Muse 的文件夹里)—— 用户删掉条目后不再补种。
@@ -279,7 +278,7 @@ export async function seedLoadoutReviewOnce(now = new Date()): Promise<boolean> 
   const date = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
   const v = validateEntryInput({
     name: L(LOADOUT_REVIEW_NAME.zh, LOADOUT_REVIEW_NAME.en), date, repeat: '7d', auto: true, prompt: LOADOUT_REVIEW_PROMPT,
-    description: L('看各 Agent 最近 30 天的工具 / 技能用量,有值得收起的就提一条建议;不想要可以直接删掉这条。', 'Checks each agent\'s tool and skill usage over the last 30 days and files one suggestion when something is worth shelving. Delete this entry to stop it.'),
+    description: L('看各 Agent 最近 30 天的工具 / 技能用量,把一直没用到的收起(随时可在它的「进化」里撤销);不想要可以直接删掉这条。', 'Checks each agent\'s tool and skill usage over the last 30 days and shelves what went unused (undo it any time under that agent\'s Evolution tab). Delete this entry to stop it.'),
   }, { slug: MUSE_AGENT_SLUG });
   if (!v.ok) throw new Error(v.error);
   const names = new Set(Object.values(LOADOUT_REVIEW_NAME));

@@ -8,7 +8,7 @@
  *   npm run build && npm run live:harness                    # 全部场景(约 5-10 分钟,真烧订阅额度)
  *   npm run live:harness -- --only personas                 # 三位音乐人格的同题实测(身份自动验,表达读原话)
  *   npm run live:harness -- --only human --human-ui        # HUMAN.md 双作用域、真模型写入/读取/撤销 + 真 Electron 卡片与编辑;先构建 desktop
- *   npm run live:harness -- --only musereview --via-muse     # 巡检建议走「交给 Muse」那条路:Muse 直接替被点名的 agent 收起(只认巡检名单里的)→ 它下一次 run 就生效,不用 /refine
+ *   npm run live:harness -- --only musereview [--hand]   # Muse 每周装备巡检:巡检完当场替各 agent 收起(只认巡检名单里的、不出卡片)→ 它下一次 run 就生效;--hand 再在对话里让 Muse 看一遍(改 LOADOUT_REVIEW_PROMPT / review_loadout 报告 / propose 代收那一支后跑)
  *   npm run live:harness -- --only harnessopen --harness-ui   # 工作笔记放开写入 + 真 Electron 里的更新卡与撤销(卡片从真模型的回执还原);先构建 desktop
  *   npm run live:harness -- --only projmem                  # 记忆分项目级 / 全局级(10-04):落点、同项目不同 agent 共用、跨项目隔离(改 services/projectMemory.ts / remember 的 scope 后跑)
  *   npm run live:harness -- --only rename                   # 改名即生效:同会话先答旧名,PATCH 改名+改简介后下一轮须用新名(改身份注入/人格组装后跑)
@@ -22,7 +22,7 @@
  *   npm run live:harness -- --only plugin                    # 引擎插件热插拔(10-02):夹具插件开着调得到、停用后调不到、再启用回来(改 plugins/bootstrap 生命周期后跑)
  *   npm run live:harness -- --only btw                       # 旁聊 /btw(09-22):带主会话上下文答题外话、追问带前轮、不写回、主 run 在飞也能问;改 services/aside.ts 提示词后跑
  *   npm run live:harness -- --only realuse --rounds 2 --model xai/grok-4.7   # 真实使用模拟(10-04):消息不点名任何库 / 工具;改 manage_harness / 装备层 / 工作笔记注入 / Muse 巡检后跑。
- *                                                           #   --usage-db <抽取库>:再用真实用量跑一遍 Muse 巡检 → 建议 → 默认 agent 执行(抽取库先用 scripts/usage-extract.mjs 生成)
+ *                                                           #   --usage-db <抽取库>:再用真实用量跑一遍 Muse 巡检 → 当场替默认 agent 收起(抽取库先用 scripts/usage-extract.mjs 生成)
  *   TANGU_LIVE_MODEL=codex/gpt-5.6-sol npm run live:harness  # 换模型
  *   npm run live:harness -- --only historian,dream,muse --muse-mode auto   # Muse 三档:ask(缺省)|agent|auto
  *   npm run live:harness -- --only refine --historian-mode assist          # 自进化闭环走辅助模式(提名在辅助模式轮里出)
@@ -3160,22 +3160,25 @@ Then reply with only the command output.`,
       `③ 撤销后新会话 ${restored ? '目录与笔记段都不再有' : `还在:${listed(back).join('+') || '笔记段'}${back.error ? `(${back.error})` : ''}`}`,
     ].join(';'), output: `【收起】${ev.content}\n\n【查时间】${use.content}`, toolCalls: [...ev.toolCalls, '|', ...use.toolCalls], tokens: [ev, use, back].reduce((n, e) => n + (tokensOf(e) || 0), 0) };
   });
-  // ── Muse 每周装备巡检(10-04):播种的日程条目叫醒 Muse → review_loadout → 只提一条建议,不动任何 agent ──
+  // ── Muse 每周装备巡检(10-04):播种的日程条目叫醒 Muse → review_loadout → 当场替各 agent 收起,不出卡片 ──
+  //  (10-04 用户定「有风险的才需要确认,没有风险的可以做」:收起随时可撤、定义仍可按需加载,所以不再出 TODO 等用户点。)
   //  ① 造一个「跑了 24 次、只用过 run_bash / read_file」的 agent(用量行直接写进隔离 state.db)→ 开 Muse,**心跳关**:
   //     这个周期只能是播种的「每周装备巡检」条目叫起来的(负对照 = 不播种 → 180s 内没有任何周期);
-  //  ② 周期里调了 review_loadout,提了**恰好一条** TODO,点名这个 agent 和至少一个它从没调过的常驻工具;
-  //  ③ Muse 自己什么都没改:那个 agent 的工作笔记与候选收件箱都还是空的;条目还在(没被它自己删掉),lastRun 已写;
-  //  ④ 「新会话执行」那条路:把 TODO 的任务书(卡片发给新会话的原文 = 标题 + detail)交给那个 agent → 它经 manage_harness kind:"equip" 自己收起。
-  //     ④ 也是门:建议点了却落不了地 = 这条功能没有用(10-04 首跑即红:Muse 把「本周期别动任何东西」抄进了任务书,接手的 agent 读完就什么都不做)。
-  await scenario('musereview', `muse 每周装备巡检(${MUSE_MODE}):日程叫醒 → 用量报告 → 一条建议`, async () => {
+  //  ② 周期里调了 review_loadout,报告里有这个 agent;
+  //  ③ 那个 agent 的笔记里多了装备条目:收起的全在报告给它列的名单里、工具与技能各不超过 8 个、编辑史署名 Muse;
+  //     没有出 TODO、也没有往它的候选收件箱里放(负对照 = 旧 prompt:TODO 1 条、收起 0 个);
+  //  ④ 条目还在(没被它自己删掉),lastRun 已写;
+  //  ⑤ 那个 agent 的下一次 run:笔记段写着收起了什么、按需目录里有它们(不用等它 /refine)。
+  await scenario('musereview', `muse 每周装备巡检(${MUSE_MODE}):日程叫醒 → 用量报告 → 当场代收`, async () => {
+    const LOADOUT_TODO = /review_loadout|manage_harness|loadout|shelv|装备|收起|按需目录/i;
     const slug = 'live-reviewed';
     const NAMES = ['每周装备巡检', 'Weekly loadout review'];
-    const IDLE = ['web_search', 'web_fetch', 'delegate', 'browser_task', 'browser_search', 'display_file', 'search_sessions', 'read_session', 'inbox_send', 'multi_edit', 'apply_patch', 'desk_present'];
-    await api('/agent/agents', { method: 'POST', body: JSON.stringify({ slug, name: 'Reviewed', systemPrompt: "You are Reviewed, a careful assistant. Reply in the user's language." }) });
     const cfg = { ...AGENT_CONFIG, agentSlug: slug, approvalMode: 'auto-edit', debugSystemPrompt: true, thinkingLevel: 'low' };
-    const sess = (await api('/agent/sessions', { method: 'POST', body: JSON.stringify({ title: 'Reviewed history', model_id: MODEL, agent_config: cfg }) })).session.id;
     const { default: Database } = await import('better-sqlite3');
-    {
+    /** 造一个「跑了 24 次、只用过 run_bash / read_file」的 agent:建 agent + 一个它的会话,用量行直接写进隔离 state.db。 */
+    const seedAgent = async (who, name) => {
+      await api('/agent/agents', { method: 'POST', body: JSON.stringify({ slug: who, name, systemPrompt: `You are ${name}, a careful assistant. Reply in the user's language.` }) });
+      const sess = (await api('/agent/sessions', { method: 'POST', body: JSON.stringify({ title: `${name} history`, model_id: MODEL, agent_config: { ...cfg, agentSlug: who } }) })).session.id;
       const db = new Database(join(home, 'state.db'), { fileMustExist: true });
       try {
         const owner = db.prepare('SELECT user_id, app_id FROM chat_sessions WHERE id = ?').get(sess);
@@ -3185,12 +3188,13 @@ Then reply with only the command output.`,
         db.transaction(() => {
           for (let i = 0; i < 24; i++) {
             const id = randomUUID();
-            addRun.run(id, sess, owner.user_id, owner.app_id, 'completed', JSON.stringify({ agentConfig: { agentSlug: slug, execMode: 'host' } }), at); // 巡检只数本机工作面的 run(真实 run 的入参都带 execMode)
-            ['run_bash', 'read_file'].forEach((name, n) => addEv.run(id, n + 1, 'tool_call', JSON.stringify({ id: `seed-${n}`, name, arguments: '{}', startedAt: 0 }), at));
+            addRun.run(id, sess, owner.user_id, owner.app_id, 'completed', JSON.stringify({ agentConfig: { agentSlug: who, execMode: 'host' } }), at); // 巡检只数本机工作面的 run(真实 run 的入参都带 execMode)
+            ['run_bash', 'read_file'].forEach((name2, n) => addEv.run(id, n + 1, 'tool_call', JSON.stringify({ id: `seed-${n}`, name: name2, arguments: '{}', startedAt: 0 }), at));
           }
         })();
       } finally { db.close(); }
-    }
+    };
+    await seedAgent(slug, 'Reviewed');
     const museRuns = () => {
       const db = new Database(join(home, 'state.db'), { readonly: true, fileMustExist: true });
       try {
@@ -3205,65 +3209,60 @@ Then reply with only the command output.`,
     const cycle = await until(() => { const r = museRuns()[0]; return r && !['queued', 'running'].includes(r.status) ? r : null; }, 420_000, 4000);
     if (!cycle) return { ok: false, detail: `① 420s 内没有跑完的 Muse 周期(心跳关,只能靠播种的日程条目);[muse] 日志:${museLogTail() || '(无)'}`, toolCalls: String(museRuns()[0]?.tools || '').split(',').filter(Boolean) };
     const tools = String(cycle.tools || '').split(',').filter(Boolean);
-    const todos = asList(await api('/agent/special/muse/todos'), 'todos');
-    const text = todos.map((t) => `${t.title}\n${t.detail || ''}`).join('\n');
-    const named = IDLE.filter((n) => text.includes(n));
+    // 只数与装备有关的 TODO:Muse 在同一个周期里照常可以为别的事提建议(10-04 真实用量那一遍,它顺手给工作区里的项目提了一条修测试入口的)
+    const loadoutTodos = (list) => list.filter((t) => LOADOUT_TODO.test(`${t.title}\n${t.detail || ''}`));
+    const todos = loadoutTodos(asList(await api('/agent/special/muse/todos'), 'todos'));
     const entry = (asList(await api('/agent/special/schedule').catch(() => []), 'schedules').find((x) => x.slug === 'muse')?.entries || []).find((e) => NAMES.includes(e.name));
-    const untouched = await api(`/agent/agents/${slug}/harness`);
-    const reviewed = cycle.reviews >= 1 && String(cycle.report || '').includes(`## ${slug} — 24 runs`);
-    const oneTodo = todos.length === 1 && text.includes(slug) && named.length > 0;
-    const handsOff = (untouched.entries || []).length === 0 && (untouched.candidates || []).length === 0;
-    const kept = !!entry && !!entry.lastRun;
-    // ④ 任务书 = 桌面卡片「新会话执行」发出的原文(museTodo.todoMailBody:标题 + 空行 + detail)
-    let applied = '未跑(没有 TODO)';
-    let applyEv = null;
-    let shelvedOwn = false;
-    if (todos[0] && !argv.includes('--via-muse')) {
-      const brief = todos[0].detail ? `${todos[0].title}\n\n${todos[0].detail}` : todos[0].title;
-      applyEv = await run((await api('/agent/sessions', { method: 'POST', body: JSON.stringify({ title: 'Apply review', model_id: MODEL, agent_config: cfg }) })).session.id, brief, 240_000, cfg);
-      const after = await api(`/agent/agents/${slug}/harness`);
-      const equip = (after.entries || []).filter((e) => e.kind === 'equip');
-      // 上限由报告执行(每个 agent 每次最多 8 工具 + 8 技能):10-04 grok 当 Muse 时把 28 个工具 + 21 个技能全抄进了建议,接手的照单全收
-      const within = equip.flatMap((e) => e.tools || []).length <= 8 && equip.flatMap((e) => e.skills || []).length <= 8;
-      shelvedOwn = !applyEv.error && !applyEv.approvals && within && equip.some((e) => (e.tools || []).some((t) => named.includes(t)));
-      applied = applyEv.error ? `出错:${applyEv.error}` : equip.length ? `自己收起了 ${equip.flatMap((e) => e.tools || []).length} 工具 + ${equip.flatMap((e) => e.skills || []).length} 技能${within ? '' : '(⚠ 超出每次 8 + 8 的上限)'}:${equip.flatMap((e) => [...(e.tools || []), ...(e.skills || [])]).join('+')}(审批 ${applyEv.approvals})` : `没收起(工具 ${applyEv.toolCalls.join(',') || '无'};回复 ${applyEv.content.slice(0, 120)})`;
-    }
-    // ⑤ --via-muse:用户在卡片上点的是「交给 Muse」而不是「新会话执行」。10-04 用户裁决「Muse 也开放自动采纳」:
-    //    Muse 直接替被点名的 agent 收起(引擎只认此刻巡检名单里的名字),不再往它的候选收件箱里放、也不用等它 /refine。
-    //    整条链:批准 → Muse 周期 → 那个 agent 的笔记里多一条装备条目(编辑史记 by:muse)→ 它的下一次 run 里这些工具已在按需目录。
-    let viaMuse = null;
-    if (argv.includes('--via-muse') && todos[0]) {
-      const before = await api(`/agent/agents/${slug}/harness`);
-      await api(`/agent/special/muse/todos/${todos[0].id}/approve`, { method: 'POST', body: '{}' });
-      const second = await until(() => { const r = museRuns()[1]; return r && !['queued', 'running'].includes(r.status) ? r : null; }, 420_000, 4000);
-      const mid = await api(`/agent/agents/${slug}/harness`);
-      const eq = (mid.entries || []).filter((e) => e.kind === 'equip' && !(before.entries || []).some((b) => b.id === e.id));
+    /** 这个 agent 的笔记里 Muse 替它收了什么,对照报告里给它列的名单
+     *  (「Suggested tools to shelve this time (n, x KB, each never called): a (1.2 KB), b (…)」;技能那一行同形,只是没有体量)。 */
+    const shelvedFor = async (who, report) => {
+      const after = await api(`/agent/agents/${who}/harness`);
+      const eq = (after.entries || []).filter((e) => e.kind === 'equip');
       const shelved = { tools: eq.flatMap((e) => e.tools || []), skills: eq.flatMap((e) => e.skills || []) };
-      const queued = (mid.candidates || []).length - (before.candidates || []).length;
-      // 报告里给这个 agent 列的名单(「Suggested tools to shelve this time (n, x KB, each never called): a (1.2 KB), b (…)」)
-      const block = String(cycle.report || '').split('## ').find((b) => b.startsWith(`${slug} `)) || '';
-      const reported = (block.split('\n').find((l) => l.startsWith('Suggested tools to shelve this time (')) || '').split('): ').slice(1).join('): ').split(', ').map((x) => x.split(' ')[0]).filter(Boolean);
-      const byMuse = (mid.journal || []).filter((l) => eq.some((e) => e.id === l.entryId)).every((l) => l.by === 'muse');
-      let next = null;
-      if (second && shelved.tools.length) {
-        const ev = await run((await api('/agent/sessions', { method: 'POST', body: JSON.stringify({ title: 'After Muse shelved', model_id: MODEL, agent_config: cfg }) })).session.id, '用一句话打个招呼。不调用工具。', 180_000, cfg);
-        const tail = ev.systemPrompt?.split('Shelved equipment')[1] || '';
-        next = { error: ev.error || null, noted: shelved.tools.filter((t) => tail.includes(t)).length, inCatalog: shelved.tools.filter((t) => (ev.systemPrompt || '').includes(`- ${t}:`)).length };
-      }
-      viaMuse = { cycle: second ? { status: second.status, tools: String(second.tools || '').split(',').filter(Boolean) } : null, shelved, reported, queued, byMuse, next, museEntry: eq[0] ? { title: eq[0].title, evidence: eq[0].evidence } : null };
+      const block = String(report || '').split('## ').find((b) => b.startsWith(`${who} `)) || '';
+      const listOf = (head) => (block.split('\n').find((l) => l.startsWith(head)) || '').split('): ').slice(1).join('): ').split(', ').map((x) => x.split(' ')[0]).filter(Boolean);
+      const reported = { tools: listOf('Suggested tools to shelve this time ('), skills: listOf('Suggested skills to shelve this time (') };
+      const outside = [...shelved.tools.filter((t) => !reported.tools.includes(t)), ...shelved.skills.filter((x) => !reported.skills.includes(x))];
+      const byMuse = eq.length > 0 && (after.journal || []).filter((l) => eq.some((e) => e.id === l.entryId)).every((l) => l.by === 'muse');
+      // 上限由代码执行(每个 agent 一周一批:8 工具 + 8 技能):10-04 grok 当 Muse 时把 28 个工具 + 21 个技能全抄进了建议
+      const within = shelved.tools.length > 0 && shelved.tools.length <= 8 && shelved.skills.length <= 8 && outside.length === 0;
+      return { block, shelved, reported, outside, byMuse, within, queued: (after.candidates || []).length, journal: after.journal || [], museEntry: eq[0] ? { title: eq[0].title, evidence: eq[0].evidence } : null };
+    };
+    const { block, shelved, reported, outside, byMuse, within, queued, journal, museEntry } = await shelvedFor(slug, cycle.report);
+    const reviewed = cycle.reviews >= 1 && block.startsWith(`${slug} — 24 runs`);
+    const noCard = todos.length === 0 && queued === 0;
+    const kept = !!entry && !!entry.lastRun;
+    let next = null;
+    if (shelved.tools.length) {
+      const ev = await run((await api('/agent/sessions', { method: 'POST', body: JSON.stringify({ title: 'After Muse shelved', model_id: MODEL, agent_config: cfg }) })).session.id, '用一句话打个招呼。不调用工具。', 180_000, cfg);
+      const tail = ev.systemPrompt?.split('Shelved equipment')[1] || '';
+      next = { error: ev.error || null, noted: shelved.tools.filter((t) => tail.includes(t)).length, inCatalog: shelved.tools.filter((t) => (ev.systemPrompt || '').includes(`- ${t}:`)).length };
     }
-    writeFileSync(join(OUT, 'musereview-evidence.json'), JSON.stringify({ cycle: { status: cycle.status, tools }, report: cycle.report, todos, entry, harnessAfterCycle: untouched, applied, applyTools: applyEv?.toolCalls || null, applyReply: applyEv?.content || null, viaMuse }, null, 2));
-    const okVia = !!viaMuse && !!viaMuse.cycle && viaMuse.shelved.tools.length > 0 && viaMuse.shelved.tools.length <= 8 && viaMuse.shelved.skills.length <= 8
-      && viaMuse.shelved.tools.every((t) => viaMuse.reported.includes(t)) && viaMuse.byMuse && viaMuse.queued === 0
-      && !!viaMuse.next && !viaMuse.next.error && viaMuse.next.noted === viaMuse.shelved.tools.length && viaMuse.next.inCatalog === viaMuse.shelved.tools.length;
-    return { ok: reviewed && oneTodo && handsOff && kept && (argv.includes('--via-muse') ? okVia : shelvedOwn), detail: [
+    const effective = !!next && !next.error && next.noted === shelved.tools.length && next.inCatalog === shelved.tools.length;
+    // ⑥ --hand:用户直接在对话里让 Muse 看一遍(不等每周那一次)。周期跑完之后才有用量的第二个 agent —— 上面那一批已经用掉了
+    //    第一个 agent 这一周的量,所以这一问能收的只有它。消息不点名任何工具;走的是同一支代收(手聊的 Muse 不是后台周期)。
+    let hand = null;
+    if (argv.includes('--hand')) {
+      const other = 'live-reviewed-2';
+      await seedAgent(other, 'Reviewed Two');
+      const mcfg = { ...AGENT_CONFIG, agentSlug: 'muse', approvalMode: 'auto-edit', thinkingLevel: 'low' };
+      const ev = await run((await api('/agent/sessions', { method: 'POST', body: JSON.stringify({ title: 'Ask Muse to review', model_id: MODEL, agent_config: mcfg }) })).session.id,
+        '帮我看看各个 Agent 最近一个月有哪些工具和技能一直没用上,该收起来的就收起来。', 300_000, mcfg);
+      const got = await shelvedFor(other, ev.toolResults.find((r) => r.name === 'review_loadout')?.full || '');
+      const first = await shelvedFor(slug, cycle.report); // 第一个 agent 这一周的量已经用完:这一问不该再多收它的
+      hand = { error: ev.error || null, approvals: ev.approvals, calls: ev.toolCalls, reply: String(ev.content || '').slice(0, 1500), shelved: got.shelved, outside: got.outside, byMuse: got.byMuse, within: got.within, queued: got.queued,
+        firstGrew: first.shelved.tools.length + first.shelved.skills.length - shelved.tools.length - shelved.skills.length, todos: loadoutTodos(asList(await api('/agent/special/muse/todos'), 'todos')).length };
+    }
+    const okHand = !hand || (!hand.error && !hand.approvals && hand.within && hand.byMuse && hand.queued === 0 && hand.firstGrew === 0 && hand.todos === 0);
+    writeFileSync(join(OUT, 'musereview-evidence.json'), JSON.stringify({ cycle: { status: cycle.status, tools }, report: cycle.report, todos, entry, shelved, reported, outside, byMuse, queued, next, museEntry, journal, hand }, null, 2));
+    return { ok: reviewed && within && byMuse && noCard && kept && effective && okHand, detail: [
       `① 周期 ${cycle.status};工具 ${tools.join(',') || '无'}`,
-      `② review_loadout ${reviewed ? '调了且报告里有该 agent' : `⚠ ${cycle.reviews ? '调了但报告里没有该 agent' : '没调'}`};TODO ${todos.length} 条${oneTodo ? `,点名 ${named.join('+')}` : `(⚠ 要恰好 1 条且点名 ${slug} 与一个没用过的工具;实得点名 ${named.join('+') || '无'})`}`,
-      `③ Muse 没动它 ${handsOff ? '是' : `⚠ 笔记 ${(untouched.entries || []).length} 条 / 候选 ${(untouched.candidates || []).length} 条`};条目 ${kept ? `还在(${entry.name},已记 lastRun)` : entry ? '还在但没记 lastRun' : '⚠ 不见了'}`,
-      ...(argv.includes('--via-muse')
-        ? [`⑤ 交给 Muse:${okVia ? '' : '⚠ '}${viaMuse?.cycle ? `Muse 周期 ${viaMuse.cycle.status}(工具 ${viaMuse.cycle.tools.join(',') || '无'});直接替它收起 ${viaMuse.shelved.tools.length} 工具 + ${viaMuse.shelved.skills.length} 技能(报告名单 ${viaMuse.reported.length} 个,名单外 ${viaMuse.shelved.tools.filter((t) => !viaMuse.reported.includes(t)).length} 个;编辑史署名 Muse ${viaMuse.byMuse ? '是' : '否'};另留候选 ${viaMuse.queued} 条);它的下一次 run ${viaMuse.next ? (viaMuse.next.error ? `出错 ${viaMuse.next.error}` : `笔记段写着 ${viaMuse.next.noted} 个、按需目录里有 ${viaMuse.next.inCatalog} 个`) : '未跑'}` : '420s 内 Muse 没有跑完第二个周期'}`]
-        : [`④ 把任务书交给该 agent:${shelvedOwn ? '' : '⚠ '}${applied}`]),
-    ].join(';'), output: `【报告】\n${String(cycle.report || '').slice(0, 3000)}\n\n【TODO】\n${text.slice(0, 3000)}\n\n【执行】${applyEv?.content || ''}`, toolCalls: [...tools, '|', ...(applyEv?.toolCalls || [])], tokens: applyEv ? tokensOf(applyEv) : undefined };
+      `② review_loadout ${reviewed ? '调了且报告里有该 agent' : `⚠ ${cycle.reviews ? '调了但报告里没有该 agent' : '没调'}`}(名单 ${reported.tools.length} 工具 + ${reported.skills.length} 技能)`,
+      `③ Muse 当场替它收起 ${within ? '' : '⚠ '}${shelved.tools.length} 工具 + ${shelved.skills.length} 技能(名单外 ${outside.length} 个${outside.length ? `:${outside.join('+')}` : ''};编辑史署名 Muse ${byMuse ? '是' : '⚠ 否'});没为这件事出卡片 ${noCard ? '是' : `⚠ 装备 TODO ${todos.length} 条 / 候选 ${queued} 条`};记了日志 ${tools.includes('log_event') ? '是' : '否(不设门)'}`,
+      `④ 条目 ${kept ? `还在(${entry.name},已记 lastRun)` : entry ? '⚠ 还在但没记 lastRun' : '⚠ 不见了'}`,
+      `⑤ 它的下一次 run ${next ? (next.error ? `⚠ 出错 ${next.error}` : `${effective ? '' : '⚠ '}笔记段写着 ${next.noted} 个、按需目录里有 ${next.inCatalog} 个`) : '⚠ 未跑(什么都没收起)'}`,
+      ...(hand ? [`⑥ 对话里让 Muse 看一遍:${okHand ? '' : '⚠ '}${hand.error ? `出错 ${hand.error}` : `工具 ${hand.calls.join(',') || '无'};替第二个 agent 收起 ${hand.shelved.tools.length} 工具 + ${hand.shelved.skills.length} 技能(名单外 ${hand.outside.length} 个;署名 Muse ${hand.byMuse ? '是' : '否'};审批 ${hand.approvals};候选 ${hand.queued} 条;TODO ${hand.todos} 条);第一个 agent 多收了 ${hand.firstGrew} 个`}`] : []),
+    ].join(';'), output: `【报告】\n${String(cycle.report || '').slice(0, 3000)}\n\n【收起】${[...shelved.tools, ...shelved.skills].join(', ')}\n\n【TODO】\n${todos.map((t) => `${t.title}\n${t.detail || ''}`).join('\n').slice(0, 2000)}${hand ? `\n\n【对话里让 Muse 看一遍】${hand.reply}` : ''}`, toolCalls: [...tools, ...(hand ? ['|', ...hand.calls] : [])] };
   });
   // ── 真实使用模拟(10-04):消息不点名任何存储库 / 工具 / 动作;判据与设计见 lib/real-use-live.mjs ──
   await scenario('realuse', `realuse 真实使用模拟 ×${SELF_ROUNDS} 轮${opt('usage-db', '') ? ' + 真实用量巡检' : ''}`, () =>

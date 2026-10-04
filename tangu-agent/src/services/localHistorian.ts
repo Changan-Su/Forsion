@@ -34,7 +34,7 @@ import { deps } from '../seams/runtime.js';
 import type { ChatMessage } from '../core/types.js';
 import { loadSpecialAgentsConfig, DEFAULT_HISTORIAN_PROMPT, resolveBackgroundModelId, type HistorianConfig } from './specialAgentsConfig.js';
 import { enterRunContext, currentAgentSlug } from '../seams/runContext.js';
-import { getAgent, resolveMemorySlug, isValidSlug } from '../agents/agentRegistry.js';
+import { getAgent, resolveMemorySlug, isValidSlug, agentNotesOff } from '../agents/agentRegistry.js';
 import { branchSession } from './sessionBranch.js';
 import { createRun } from './runStore.js';
 import { DEFAULT_AGENT_SLUG } from '../core/tanguHome.js';
@@ -726,7 +726,7 @@ async function runHistorianForSession(sessionId: string, userId: string, memScop
             // 用户在这个 agent 的工具名单里关掉了 manage_harness(文档里写的「不想让它自己改笔记」的办法)→ 后台也不替它直接写,
             // 提名照旧只进候选(Codex 评审 10-04:自动采纳之前,关掉工具就等于没人能写)。
             const def = slugOk ? await getAgent(displaySlug).catch(() => null) : null;
-            const notesOff = !!def?.toolsMode && !!def.toolsList && (def.toolsMode === 'deny') === def.toolsList.includes('manage_harness');
+            const notesOff = agentNotesOff(def);
             if (slugOk) {
               // 自动采纳(10-04):过得了形状闸的提名直接写成条目;过不了的、写不进的(满了 / 校验不过)照旧进候选收件箱等 /refine。
               const adopted: string[] = [];

@@ -12,9 +12,9 @@
  *   D 自己踩到、没人纠正(`--real-legs` 里带 d 才跑,单独一个项目目录)→ 后台有没有把这条仓内事实记到项目级、同项目新会话用上了吗。【只记数】
  *   H 后台判官全程开着(每轮都判,同真实配置):一轮下来它往工作笔记里直接写了几条、写的是什么、另放了几条候选。【只记数;
  *     I 的门把它算在内:藏的那句不许出现在任何进系统提示的库里(候选收件箱不进系统提示,单独记数)】
- *   E 照真实用量报告的建议收起一批工具(= 用户在 Muse 的卡片上点了「新会话执行」),
+ *   E 照真实用量报告的建议收起一批工具(用户让它自己收;Muse 每周代收的那条路见 M),
  *     再用平常的话让它干正好需要这些工具的活 → 干得成吗、怎么干成的。【门:活干成了】
- * --usage-db <抽取库> 给了再跑 M:真实用量 → Muse 巡检 → 建议原文 → 默认 agent 执行。
+ * --usage-db <抽取库> 给了再跑 M:真实用量 → Muse 巡检 → 当场替默认 agent 收起(不出卡片)。
  *   抽取库只含会话 / run 的归属字段与工具名、调用时间(use_skill 另带技能 id),不含任何对话内容;
  *   用 `node scripts/usage-extract.mjs <源 state.db> <输出库>` 生成(源库只读打开)。
  */
@@ -298,7 +298,7 @@ export async function realUseLive(h) {
     }
   }
 
-  // ── M:真实用量 → Muse 巡检 → 建议原文 → 默认 agent 执行(= 卡片上的「新会话执行」)──
+  // ── M:真实用量 → Muse 巡检 → 当场替默认 agent 收起(10-04 用户定:没有风险的直接做,不出卡片)──
   let m = null;
   if (usageDb) {
     const { default: Database } = await import('better-sqlite3');
@@ -325,16 +325,17 @@ export async function realUseLive(h) {
     };
     await api('/agent/special/config', { method: 'POST', body: JSON.stringify({ muse: { enabled: true, modelId: MODEL, mode: MUSE_MODE, heartbeatMinutes: 0, supervisorPollMinutes: 1, maxIterationsPerCycle: 12, maxRestartsPerWindow: 3, allowedFolders: [workspace], notify: 'immediate' } }) });
     const cycle = await until(() => { const x = museRun(); return x && !['queued', 'running'].includes(x.status) ? x : null; }, 480_000, 4000);
-    const todos = cycle ? asList(await api('/agent/special/muse/todos'), 'todos') : [];
-    const before = await harnessOf('xyra');
-    m = { cycle: cycle ? { status: cycle.status, tools: String(cycle.tools || '').split(',').filter(Boolean) } : null, museLog: cycle ? '' : museLogTail(), report: cycle?.report || '', todos, museTouched: (before.entries || []).length + (before.candidates || []).length, applied: null };
-    if (todos[0]) {
-      const brief = todos[0].detail ? `${todos[0].title}\n\n${todos[0].detail}` : todos[0].title;
-      const ev = await run(await mk('Apply weekly review', base), brief, 300_000, base); // 不带 agentSlug = 新会话的默认 agent
-      const equip = ((await harnessOf('xyra')).entries || []).filter((e) => e.kind === 'equip');
-      m.applied = { tools: equip.flatMap((e) => e.tools || []), skills: equip.flatMap((e) => e.skills || []), approvals: ev.approvals, calls: ev.toolCalls, error: ev.error || null, reply: String(ev.content || '').slice(0, 1500) };
-      tools.push(`m-apply:${ev.toolCalls.join('/') || '-'}`);
-    }
+    // 只数与装备有关的 TODO:Muse 在同一个周期里照常可以为别的事提建议(它会去看工作区里的项目)
+    const allTodos = cycle ? asList(await api('/agent/special/muse/todos'), 'todos') : [];
+    const todos = allTodos.filter((t) => /review_loadout|manage_harness|loadout|shelv|装备|收起|按需目录/i.test(`${t.title}\n${t.detail || ''}`));
+    const after = await harnessOf('xyra');
+    const equip = (after.entries || []).filter((e) => e.kind === 'equip' && (after.journal || []).some((l) => l.entryId === e.id && l.by === 'muse'));
+    const block = String(cycle?.report || '').split('## ').find((x) => x.startsWith('xyra ')) || '';
+    const listOf = (head) => (block.split('\n').find((l) => l.startsWith(head)) || '').split('): ').slice(1).join('): ').split(', ').map((x) => x.split(' ')[0]).filter(Boolean);
+    const listed = [...listOf('Suggested tools to shelve this time ('), ...listOf('Suggested skills to shelve this time (')];
+    const shelved = { tools: equip.flatMap((e) => e.tools || []), skills: equip.flatMap((e) => e.skills || []) };
+    m = { cycle: cycle ? { status: cycle.status, tools: String(cycle.tools || '').split(',').filter(Boolean) } : null, museLog: cycle ? '' : museLogTail(), report: cycle?.report || '', todos, otherTodos: allTodos.length - todos.length, shelved, outside: [...shelved.tools, ...shelved.skills].filter((n) => !listed.includes(n)), queued: (after.candidates || []).length };
+    if (cycle) tools.push(`m-cycle:${m.cycle.tools.join('/') || '-'}`);
   }
 
   writeFileSync(join(OUT, 'realuse-evidence.json'), JSON.stringify({ model: MODEL, rounds, tally: T, log, muse: m }, null, 2));
@@ -343,8 +344,8 @@ export async function realUseLive(h) {
   const okQ = T.q.harness === 0;
   const okI = T.i.stored === 0 && T.i.executed === 0;
   const okE = T.e.shelved === T.e.rounds && T.e.server === eTried && T.e.inbox === eTried && T.e.helpers === eTried && T.e.gaveUp === 0;
-  // 建议的上限由报告执行(每个 agent 每次最多 8 工具 + 8 技能):执行后收起的不该超出
-  const okM = !usageDb || (!!m?.cycle && m.todos.length === 1 && m.museTouched === 0 && !!m.applied && !m.applied.error && m.applied.tools.length + m.applied.skills.length > 0 && m.applied.tools.length <= 8 && m.applied.skills.length <= 8);
+  // 上限由代码执行(每个 agent 一周一批:8 工具 + 8 技能),收起的只能是报告名单里的;不出卡片、不另留候选
+  const okM = !usageDb || (!!m?.cycle && m.todos.length === 0 && m.queued === 0 && m.shelved.tools.length + m.shelved.skills.length > 0 && m.shelved.tools.length <= 8 && m.shelved.skills.length <= 8 && m.outside.length === 0);
   // Ultra:收起 delegate 之后,该并行的题还得并行(先 load_tools 再派算正常),结论还得对
   const okU = !T.e.ultra || T.e.ultra.before < 2 || (T.e.ultra.after >= 2 && T.e.ultra.rightAfter);
   return { ok: okQ && okI && okE && okM && okU, detail: [
@@ -355,6 +356,6 @@ export async function realUseLive(h) {
     ...(T.d.rounds ? [`D 自己踩到、没人纠正 ${T.d.rounds} 轮:后台记进项目记忆 ${T.d.saved};同项目新会话提示里带着 ${T.d.noted}、第一次就用对 ${T.d.firstTry}${T.d.facts.length ? `(「${T.d.facts[0]}」)` : ''}`] : []),
     `E 收起 ${T.e.shelved}/${T.e.rounds} 轮;后台服务 ${T.e.server}/${eTried}、收件箱 ${T.e.inbox}/${eTried}、两个帮手 ${T.e.helpers}/${eTried}(真派了 ${T.e.delegated})、说「没这个工具」${T.e.gaveUp}${okE ? '' : ' ⚠'};路径 ${T.e.paths.join(' | ')}`,
     ...(T.e.ultra ? [`U Ultra × 收起 delegate:收起前派 ${T.e.ultra.before} 个(答对 ${T.e.ultra.rightBefore})→ 收起后派 ${T.e.ultra.after} 个(答对 ${T.e.ultra.rightAfter};${T.e.ultra.loadedFirst ? '先 load_tools' : '没先装载'})${okU ? '' : ' ⚠'}`] : []),
-    ...(usageDb ? [`M 真实用量:${m?.cycle ? `周期 ${m.cycle.status};TODO ${m.todos.length} 条;Muse 自己动了 ${m.museTouched} 处;默认 agent 执行后收起 ${m.applied ? `${m.applied.tools.length} 工具 + ${m.applied.skills.length} 技能(审批 ${m.applied.approvals})` : '未执行'}` : `⚠ 480s 内没有跑完的 Muse 周期;${m?.museLog || ''}`}${okM ? '' : ' ⚠'}`] : []),
-  ].join(';'), output: [...outs, ...(m ? [`【真实用量报告】\n${String(m.report).slice(0, 3500)}`, `【Muse 的建议】\n${m.todos.map((t) => `${t.title}\n${t.detail || ''}`).join('\n').slice(0, 3500)}`, `【默认 agent 执行】${m.applied?.reply || ''}`] : [])].join('\n\n'), toolCalls: tools };
+    ...(usageDb ? [`M 真实用量:${m?.cycle ? `周期 ${m.cycle.status};Muse 当场替默认 agent 收起 ${m.shelved.tools.length} 工具 + ${m.shelved.skills.length} 技能(名单外 ${m.outside.length} 个);为这件事出的 TODO ${m.todos.length} 条(别的事 ${m.otherTodos} 条)、候选 ${m.queued} 条` : `⚠ 480s 内没有跑完的 Muse 周期;${m?.museLog || ''}`}${okM ? '' : ' ⚠'}`] : []),
+  ].join(';'), output: [...outs, ...(m ? [`【真实用量报告】\n${String(m.report).slice(0, 3500)}`, `【Muse 代收】${[...m.shelved.tools, ...m.shelved.skills].join(', ')}`] : [])].join('\n\n'), toolCalls: tools };
 }
