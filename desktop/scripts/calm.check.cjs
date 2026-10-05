@@ -88,12 +88,13 @@ const LEFT_COLORS = `(() => { ${HELPERS}
   const px = (s) => { cv.clearRect(0, 0, 1, 1); cv.fillStyle = '#000'; cv.fillStyle = s; cv.fillRect(0, 0, 1, 1); return [...cv.getImageData(0, 0, 1, 1).data].join(',') }
   const v = document.querySelector('.wb-view--left'); return v ? [...v.querySelectorAll('*')].filter((e) => !e.closest('.__calm_probe')).map((e) => px(cs(e).color)) : null
 })()`
-// 插件面板最常见的写法:行不写颜色、靠继承;选中行只标 aria-selected / .active
+// 插件面板最常见的写法:行不写颜色、靠继承;选中行只标 aria-selected / .active,自家插件多数标 .on(与 Ribbon 认的「开着」同一个词)
 const PLUGIN_ROWS = `(() => { ${HELPERS}
   const v = document.querySelector('.wb-view--left'); let p = v.querySelector('.__calm_probe')
   if (!p) { p = document.createElement('div'); p.className = '__calm_probe'; p.style.cssText = 'position:absolute;left:0;bottom:0;pointer-events:none'
-    p.innerHTML = '<div data-k="plain">行</div><div data-k="sel" aria-selected="true">行</div><button data-k="btn" class="active">行</button><div data-k="multi" class="sel">行</div><div data-k="tok" style="color:var(--text-muted)">行</div>'; v.appendChild(p) }
-  const o = {}; for (const e of p.children) o[e.dataset.k] = alpha(cs(e).color); return o
+    p.innerHTML = '<div data-k="plain">行</div><div data-k="sel" aria-selected="true">行</div><button data-k="btn" class="active">行</button><div data-k="multi" class="sel">行</div><div data-k="on" class="on">行</div><div data-k="ison" class="is-on">行</div><div data-k="tok" style="color:var(--text-muted)">行</div>'; v.appendChild(p) }
+  const o = {}; for (const e of p.children) o[e.dataset.k] = alpha(cs(e).color)
+  o.hostOn = [...v.querySelectorAll('.on, .is-on')].filter((e) => !e.closest('.__calm_probe')).map((e) => String(e.className).slice(0, 40)); return o
 })()`
 const MOTION = `(() => {
   const d = document.createElement('div'); d.className = 'wb-view wb-view-enter'; d.style.cssText = 'position:fixed;left:-9px;top:-9px;width:1px;height:1px'
@@ -176,7 +177,7 @@ async function main() {
     check('B5 指针回正文 → 外围各处退回去', near(back.ribbon, ON.ribbon, 0.011) && near(back.tab, ON.tab, 0.011) && near(back.side, ON.side, 0.021), JSON.stringify(back))
 
     const rows = await win.evaluate(PLUGIN_ROWS)
-    check('B6 插件式的行:不写颜色、靠继承的也跟着淡;标了 aria-selected / .active / 多选 .sel 的保持全亮', near(rows.plain, ON.side, 0.021) && rows.sel === 1 && rows.btn === 1 && rows.multi === 1 && near(rows.tok, ON.side, 0.021), JSON.stringify(rows))
+    check('B6 插件式的行:不写颜色、靠继承的也跟着淡;标了 aria-selected / .active / 多选 .sel / 开着的 .on · .is-on 的保持全亮', near(rows.plain, ON.side, 0.021) && rows.sel === 1 && rows.btn === 1 && rows.multi === 1 && rows.on === 1 && rows.ison === 1 && near(rows.tok, ON.side, 0.021), JSON.stringify(rows))
 
     // C 两处容易静默出事的:全宽笔记、画布
     const wide = await win.evaluate(`(() => { const pane = document.querySelector('.wb-view--main .amx-pane'); pane.setAttribute('data-page-wide', ''); const w = document.querySelector(${JSON.stringify(NOTE_SEL)} + ' > p').getBoundingClientRect().width; pane.removeAttribute('data-page-wide'); return Math.round(w) })()`)

@@ -2475,6 +2475,9 @@ Then reply with only the command output.`,
   // 插件技能的「外观开关:跟着宿主走」一节(10-05):技能正文只有经 use_skill 才到模型手里,所以判两件事 ——
   // 真调了 use_skill 取回正文,且答案里有那一节才写着的三样(左栏选中行用 aria-selected / aria-current 标、文字用 --text 家族、
   // 长文读 --reading-line-height)。负对照 = 改前的技能正文(没有这一节):这三个名字模型无从得知 → 红。
+  // ⚠️ 这一节必须留在技能正文的前 34k 字符里:工具结果入列有 48k 硬帽(contextBudget.capToolResult,只留头 34k + 尾 12k),
+  //    forsion-plugin 已 73k 字符,中段模型默认看不到。10-05 实测:这一节在中段时本场景 1 红(模型只读了头部就答)、
+  //    1 绿(模型自己又去读了落盘的全文,26s);挪进头部后 3/3 绿、8s。本场景变红先查这一节的位置,别先改措辞。
   await scenario('pluginlook', 'pluginlook 插件技能:外观开关一节经 use_skill 到达模型', async () => {
     const ev = await run(`live-pluginlook-${Date.now()}`, "I'm writing a Forsion desktop plugin with a left-sidebar list view and a long-form article view. Load your Forsion extension development skill first, then tell me in three short bullets what my CSS and markup must do so the plugin follows the user's appearance switches (dim surroundings, relaxed text, gentle transitions). Name the exact CSS variables and attributes.", 240_000, { enabledSkillIds: ['local:forsion-plugin'], skillsConfigured: true });
     const loaded = ev.toolResults.some((r) => r.name === 'use_skill' && !r.isError && r.fullLength > 1000);

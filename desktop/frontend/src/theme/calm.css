@@ -63,7 +63,8 @@ html:not([data-calm-motion='off']) {
   html:not([data-calm-dim='off']) .t2-rail:not(:hover, :has(:focus-visible), :has([aria-busy='true'], .t2-tsum-attn, .t2-tsum-state.error)) {
     opacity: 0.55;
   }
-  /* 左栏:调淡这一区里的文字变量,而不是整块降透明度 —— 选中的行(当前项 .active、多选 .sel、aria-selected / aria-current)
+  /* 左栏:调淡这一区里的文字变量,而不是整块降透明度 —— 选中的行(当前项 .active、多选 .sel、aria-selected / aria-current,
+     以及开着的 .on / .is-on:与上面 Ribbon 那条认的是同一个词,自家插件的选中项多数标 .on)
      要保持原样,子元素的不透明度高不过父元素。
      原值在父节点上取别名(同一元素上自引用是环),淡的程度走登记过的 --calm-ink 才能过渡。
      跟着淡的是消费 --text 家族的文字与线性图标;语义色(--accent-ink / --danger …)不动,图片与 emoji 也不动。
@@ -83,7 +84,7 @@ html:not([data-calm-motion='off']) {
     transition: --calm-ink var(--frame-reveal-duration, var(--duration-fast, 0.15s));
   }
   html:not([data-calm-dim='off']) .wb-view--left:not(:hover, :has(:focus-visible)) { --calm-ink: 60%; }
-  html:not([data-calm-dim='off']) .wb-view--left :is(.active, .sel, [aria-selected='true'], [aria-current]:not([aria-current='false'], [aria-current=''])) {
+  html:not([data-calm-dim='off']) .wb-view--left :is(.active, .sel, .on, .is-on, [aria-selected='true'], [aria-current]:not([aria-current='false'], [aria-current=''])) {
     --text: var(--calm-text);
     --text-light: var(--calm-text-light);
     --text-muted: var(--calm-text-muted);
@@ -96,7 +97,7 @@ html:not([data-calm-motion='off']) {
   html:where(:not([data-calm-dim='off'])) body :where(.wb-view--left) {
     color: color-mix(in srgb, currentColor var(--calm-ink), transparent);
   }
-  html:where(:not([data-calm-dim='off'])) body :where(.wb-view--left :is(.active, .sel, [aria-selected='true'], [aria-current]:not([aria-current='false'], [aria-current='']))) {
+  html:where(:not([data-calm-dim='off'])) body :where(.wb-view--left :is(.active, .sel, .on, .is-on, [aria-selected='true'], [aria-current]:not([aria-current='false'], [aria-current='']))) {
     color: var(--calm-text);
   }
 }
