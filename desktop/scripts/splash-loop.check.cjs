@@ -23,19 +23,7 @@ const fs = require('fs')
 const os = require('os')
 const path = require('path')
 const { chromium } = require('playwright-core')
-
-function findChromium() {
-  if (process.env.CHROMIUM_EXE) return process.env.CHROMIUM_EXE
-  const root = path.join(os.homedir(), 'Library/Caches/ms-playwright')
-  const dirs = fs.readdirSync(root).filter((d) => d.startsWith('chromium-')).sort()
-  for (const d of dirs.reverse()) {
-    for (const app of ['Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing', 'Chromium.app/Contents/MacOS/Chromium']) {
-      const p = path.join(root, d, 'chrome-mac-arm64', app)
-      if (fs.existsSync(p)) return p
-    }
-  }
-  throw new Error('找不到 chromium,设 CHROMIUM_EXE 环境变量')
-}
+const { findChromium } = require('./lib/find-chromium.cjs')
 
 const results = []
 function check(name, ok, detail) {
@@ -264,6 +252,21 @@ async function main() {
     }
   }
   await page.setViewportSize({ width: 1280, height: 800 })
+
+  // Windows fonts at raster scales corresponding to 100 / 125 / 150 percent. These are renderer DPI checks, not a change to OS settings.
+  for (const scale of [1, 1.25, 1.5]) for (const mode of ['light', 'dark']) {
+    const scaled = await browser.newContext({ locale: 'zh-CN', viewport: { width: 1280, height: 800 }, deviceScaleFactor: scale })
+    await scaled.addInitScript((mode) => localStorage.setItem('forsion_theme', mode), mode)
+    const shot = await scaled.newPage()
+    await shot.route('https://splash.test/**', (route) => new URL(route.request().url()).pathname === '/'
+      ? route.fulfill({ contentType: 'text/html; charset=utf-8', body: html() }) : route.abort())
+    await shot.goto('https://splash.test/', { waitUntil: 'domcontentloaded' })
+    await shot.waitForTimeout(2600)
+    const s = await shot.evaluate(shadowState)
+    check(`${mode} ${scale * 100}% DPI:诗句和字标在画内、版本行与树标对齐`, !!s.mounted && !!s.inView && !!s.verseOnWall && !!s.brandOnWall && s.ver === STAMP && aligned(s), lockupNote(s))
+    await shot.screenshot({ path: path.join(OUT, `tree-shadow-${mode}-${scale * 100}.png`) })
+    await scaled.close()
+  }
 
   // ── ⑧ 设置里的「预览开屏」:沙箱 iframe 没有同源,localStorage 一碰就抛;运行时不许因此停在半路 ──
   const framed = fs.readFileSync(path.join(__dirname, ENTRIES[0]), 'utf8').replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '')
