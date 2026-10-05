@@ -12,7 +12,7 @@ import { useRecentViews, type RecentView } from '../recentViews'
 import { usePluginStore } from '@amadeus/plugins/pluginStore'
 import { resolveIcon } from '@amadeus/components/icons'
 import { usePageStore } from '@amadeus/store/pageStore'
-import { openNote, openDb, openPdf, openDrawing, openDashboard, openImage, openFile, createDrawing, createDashboard } from '../amadeusNav'
+import { openNote, openDb, openDrawing, openDashboard, openImage, openFile, createDrawing, createDashboard } from '../amadeusNav'
 import { openDailyNote } from '../amadeusTemplates'
 import { openNewChat, openSession } from '../sessionNav'
 import { useI18n } from '../i18n'
@@ -147,7 +147,7 @@ export function NewTabView({ leaf }: ViewProps) {
     if (r.kind === 'file') {
       switch (r.viewType) {
         case 'amadeus-db': openDb(r.id); break
-        case 'amadeus-pdf': openPdf(r.id); break
+        case 'amadeus-pdf': openFile(r.id); break // 经 openFile:插件接管了 PDF 就进插件视图,否则(及库外 PDF)仍是内置阅读器
         case 'amadeus-drawing': openDrawing(r.id); break
         case 'amadeus-dashboard': // legacy:旧「最近使用」条目仍记着老类型 → 同样开进新画布版
         case 'dashboard': openDashboard(r.id); break

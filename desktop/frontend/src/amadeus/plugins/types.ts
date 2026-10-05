@@ -144,6 +144,9 @@ export interface PluginAppApi extends BlockSurfaceApi {
   getActivePage(): string | null
   /** The active note's whole body as markdown — same value (and same staleness) as `getPage().text`. */
   getActivePageText(): string
+  /** Load a note into the active editor. Only `.md` notes enter the note pipeline: any other path
+   *  (a PDF, an image, a `.excalidraw.md` whiteboard) is refused with a console warning — loading one
+   *  would let the next save rewrite it as markdown. Use `openFile` to open such files. */
   loadPage(path: string): void
   createPage(): void
   toggleMode(): void
@@ -209,7 +212,9 @@ export interface PluginAppApi extends BlockSurfaceApi {
   openFile(path: string): void
   /** Open a plain Markdown note in the native Amadeus editor. `reuseKey` addresses a dedicated editor
    *  declared by a Space (for example a document companion beside a plugin view); `activate:false`
-   *  updates that pane without stealing focus from the source view. Older hosts lack this seam. */
+   *  updates that pane without stealing focus from the source view. Older hosts lack this seam.
+   *  A path that is not a `.md` note (PDF, image, whiteboard) never reaches the note editor: it is
+   *  handed to `openFile` instead (2026-10-05+). */
   openNote?(path: string, options?: { reuseKey?: string; activate?: boolean; newTab?: boolean }): void
 
   // ── 只读 vault 查询面(2026-08-14+)。纯透传主进程既有能力,**没有任何写口**。

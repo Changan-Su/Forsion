@@ -22,6 +22,7 @@ import { amadeus } from '../api'
 import { BUILTIN_PLUGINS } from './builtins'
 import { getPropertyType, registerPropertyType as registerPropType, unregisterPropertyType as unregisterPropType } from '../blocks/database/propertyTypes'
 import { isBuiltinFileType, isOverridableBuiltinType } from '@amadeus-shared/builtinTypes'
+import { isHostPath } from '@amadeus-shared/pdfLink'
 import { claimHostMount, createBlockSurface, mountHostReact } from './blockSurface'
 import { addEditorExtension, clearEditorExtensions } from './editorExtensions'
 import { registerPluginSeries, track, unregisterPluginAchievements } from '../../achievements/store'
@@ -304,7 +305,14 @@ function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppAp
     // 两条路由通用(v4 不设 activePage;正文也不进 store —— 一律取块表面那份统一派生,别再各写各的)。
     getActivePage: () => noteOf(usePageStore.getState()),
     getActivePageText: () => surface.api.getPage().text,
-    loadPage: (p) => { if (ok()) void usePageStore.getState().loadPage(p) },
+    loadPage: (p) => {
+      if (!ok()) return
+      if (!isPagePipelinePath(String(p ?? ''))) {
+        console.warn(`[plugin:${pluginId}] ctx.app.loadPage(${String(p)}) 被拒:只有 .md 笔记能进笔记管线(二进制文件用 readBytes / writeBytes)`)
+        return
+      }
+      void usePageStore.getState().loadPage(p)
+    },
     createPage: () => { if (ok()) void usePageStore.getState().createPage() },
     toggleMode: () => void toggleMode(),
     setTheme: (t) => applyAccent(t),
@@ -387,7 +395,8 @@ function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppAp
     openFile: (p) => { if (ok()) void import('../../amadeusNav').then((m) => m.openFile(p)) },
     // 裸 Markdown 必须显式走 Amadeus editor,不能借 openFile(后者对未认领后缀会交给系统默认程序)。
     // reuseKey 让插件 Space 能稳定更新自己声明的文档伴随栏,activate:false 不抢回源视图焦点。
-    openNote: (p, options) => { if (ok()) void import('../../amadeusNav').then((m) => m.openNote(p, options)) },
+    // 非笔记路径(PDF / 图片 / 白板…)不进笔记编辑器:交给 openFile 按类型开对的视图(同 isPagePipelinePath)。
+    openNote: (p, options) => { if (ok()) void import('../../amadeusNav').then((m) => (isPagePipelinePath(String(p ?? '')) ? m.openNote(p, options) : m.openFile(p))) },
     // 只读 vault 查询面(2026-08-14,codex 评审后的口径):纯透传主进程既有 IPC,没有写口。
     // 三条统一语义 —— **桥缺席(web/台架未垫)或没有活动库都给空数组,绝不 reject**:
     // 插件侧的可选链只挡得住「宿主没这个方法」,挡不住「方法在但 window.amadeus 是 undefined」,
@@ -593,6 +602,13 @@ export function isValidPluginExt(e: string): boolean {
   if (!e.startsWith('.') || e.length < 2) return false
   if (/\.md$/i.test(e)) return /^\.[^.].*\.md$/i.test(e) // md 类必须复合后缀 '.X.md'
   return true
+}
+
+/** 这条路径能不能进笔记读写管线(loadPage → 编辑 → savePage)。只有 `.md`、且不是内置文件类型(白板)才行:
+ *  二进制(被插件覆盖的 `.pdf`)或白板进来,第一次保存就被写成 markdown = 毁档(主进程的 loadPage / savePage 不验后缀)。
+ *  插件够得着的三个入口共用这一条:ctx.app.loadPage、ctx.app.openNote、文件视图的页表面(viewSurface)。 */
+export function isPagePipelinePath(p: string): boolean {
+  return /\.md$/i.test(p) && !isBuiltinFileType(p)
 }
 
 /** 每个正在运行的插件一本副作用账(effectScope.ts);teardown 关账。模块级:视图宿主组件也要往里记。 */
@@ -1160,7 +1176,10 @@ export const usePluginStore = create<PluginState>((set, get) => {
       const fmKeys = Array.isArray(def?.fmKeys)
         ? def.fmKeys.map((k) => String(k ?? '').trim()).filter((k) => k && !/^amadeus_/.test(k))
         : undefined
-      set((s) => ({ fileTypes: [...s.fileTypes, { pluginId, item: fmKeys ? { ...def, fmKeys } : def }] }))
+      // 认领不了的内置后缀从贡献里剔掉(混着声明 ['.pdf', '.excalidraw.md'] 时只留 '.pdf'):留着的话,
+      // 页表面按「本类型的后缀」放行 loadPage,白板就能被这个插件拽进笔记管线(Codex 评审 P0)。
+      const extensions = exts.map((e) => String(e)).filter((e) => !taken(e))
+      set((s) => ({ fileTypes: [...s.fileTypes, { pluginId, item: { ...def, extensions, ...(fmKeys ? { fmKeys } : {}) } }] }))
       return true
     },
     registerEmbedRenderer: (def) =>
@@ -1931,7 +1950,8 @@ export function findFileType(
   const n = path.toLowerCase()
   const claims = (o: { item: FileTypeContribution }): boolean => o.item.extensions.some((ext) => n.endsWith(ext.toLowerCase()))
   if (isBuiltinFileType(path)) {
-    if (!isOverridableBuiltinType(path)) return undefined
+    // 绝对路径 = 库外文件(聊天引用里的本机 PDF):插件只读得到库内路径,一律留给内置阅读器。
+    if (!isOverridableBuiltinType(path) || isHostPath(path)) return undefined
     return list.find((o) => o.item.override === true && claims(o))?.item
   }
   return list.find(claims)?.item

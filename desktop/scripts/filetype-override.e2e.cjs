@@ -6,15 +6,17 @@
  *
  *   T1  探针以 override: true 认领 .pdf → 注册成功
  *   T2  树上点 PDF → 进插件视图(不是内置阅读器);插件经 ctx.app.readBytes 读到整份文件
- *   T2c 毁档防线:插件对 PDF 调 file.surface.loadPage 被拒,磁盘上的 PDF 一个字节没动
+ *   T2c / T2d 毁档防线:插件对 PDF 调 file.surface.loadPage / ctx.app.loadPage 都被拒(没把它装成当前页),T2e 磁盘上的 PDF 一个字节没动
  *   T3  右键菜单:「打开」+「用内置阅读器打开」;点后者进内置阅读器
  *   T4  再点树 → 仍归插件
  *   T5  停用插件:留下的标签页给出「用内置阅读器打开」,点了**就地**换成内置阅读器(不多开标签)
  *   T6  停用期间:树上点 PDF 进内置阅读器,右键菜单回到原样
  *   T7  重新启用 → 树上点 PDF 又归插件
  *
- * 负对照(2026-10-05 实跑,8 红 7 绿):`--nc=nooverride` 探针不写 override: true → T1 / T2 / T2a / T2b / T3 / T4 / T5a / T7 红
- *   (宿主照旧拒掉它,PDF 全程归内置阅读器)。
+ * 负对照(2026-10-05 实跑):`--nc=nooverride` 探针不写 override: true → T1 / T2 / T2a / T2b / T2c / T2d / T3 / T4 / T5a / T7 红
+ *   (宿主照旧拒掉它,PDF 全程归内置阅读器,探针视图没挂所以 T2* 也读不到)。
+ *   宿主侧负对照(同日实跑,临时改源码重建):去掉页表面那道 isPagePipelinePath → T2c 红(PDF 真被装成了当前页)。
+ *   T2d 认的是宿主的拒绝告警;ctx.app.loadPage 那道闸本身的负对照在 fileTypeOverride.test.ts。
  * 用法:npm run build && npm run e2e:ftoverride   (--shot 存截图到 /tmp/forsion-ftoverride-*.png)
  */
 const fs = require('fs')
@@ -47,7 +49,14 @@ st.registered = ctx.registerFileType({
     d.setAttribute('data-file', file.filePath)
     d.textContent = 'pdfprobe: ' + file.filePath
     el.appendChild(d)
+    // 两个页加载入口各捅一次:都必须被拒(放行 = PDF 进笔记管线,一编辑保存就成 markdown)。
     try { if (file.surface && file.surface.loadPage) file.surface.loadPage(file.filePath) } catch (e) { st.loadPageThrew = String(e) }
+    try { ctx.app.loadPage(file.filePath) } catch (e) { st.appLoadPageThrew = String(e) }
+    setTimeout(function () {
+      d.setAttribute('data-surface-page', String((file.surface && file.surface.getActivePage && file.surface.getActivePage()) || ''))
+      d.setAttribute('data-app-page', String(ctx.app.getActivePage() || ''))
+      d.setAttribute('data-probed', '1')
+    }, 1500)
     Promise.resolve(ctx.app.readBytes ? ctx.app.readBytes(file.filePath) : null).then(function (b) {
       d.setAttribute('data-bytes', b ? String(b.length) : '-1')
       d.setAttribute('data-head', b ? String.fromCharCode(b[0], b[1], b[2], b[3]) : '')
@@ -101,6 +110,8 @@ async function main() {
     const win = await app.firstWindow()
     const logs = []
     win.on('pageerror', (e) => logs.push(`[pageerror] ${e.message}`))
+    const warns = []
+    win.on('console', (m) => { if (m.type() === 'warning') warns.push(m.text()) })
     const shot = async (name) => { if (SHOT) await win.screenshot({ path: `/tmp/forsion-ftoverride-${name}.png` }).catch(() => {}) }
     const until = async (fn, ms = 10_000) => {
       const end = Date.now() + ms
@@ -161,9 +172,18 @@ async function main() {
       return d && d.getAttribute('data-bytes') ? `${d.getAttribute('data-bytes')}|${d.getAttribute('data-head')}` : ''
     }))
     check('T2b 插件经 ctx.app.readBytes 读到整份 PDF', bytes === `${pdfBytes.length}|%PDF`, `got=${bytes} want=${pdfBytes.length}|%PDF`)
-    await win.waitForTimeout(1500) // 给「万一 loadPage 放行了」留出落盘的时间
+    // 「文件没变」证明不了被拒(加载本身是只读的,Codex 评审 P2)—— 直接看两个入口有没有把 PDF 装成当前页。
+    const probed = await until(() => win.evaluate(() => {
+      const d = document.querySelector('.pdfprobe-view')
+      return d && d.getAttribute('data-probed') ? JSON.stringify({ surface: d.getAttribute('data-surface-page'), app: d.getAttribute('data-app-page') }) : ''
+    }))
+    const pages = probed ? JSON.parse(probed) : { surface: '?', app: '?' }
+    check('T2c 毁档防线:页表面 loadPage 对 PDF 被拒(没有把它装成当前页)', !!probed && pages.surface !== PDF_REL, `surface.getActivePage()=${JSON.stringify(pages.surface)}`)
+    // ctx.app.getActivePage() 只报笔记,PDF 就算被装进去也读不出来(宿主侧负对照实测)—— 认宿主的拒绝告警。
+    const refused = warns.some((w) => w.includes('[plugin:pdfprobe] ctx.app.loadPage(') && w.includes('被拒'))
+    check('T2d 毁档防线:ctx.app.loadPage 对 PDF 被拒(宿主打了拒绝告警)', !!probed && refused && pages.app !== PDF_REL, refused ? '' : `没见到拒绝告警;warns=${warns.length}`)
     const after = fs.readFileSync(pdfAbs)
-    check('T2c 毁档防线:插件对 PDF 调 loadPage 之后,磁盘上的文件一个字节没动', Buffer.compare(after, pdfBytes) === 0, `size ${pdfBytes.length} → ${after.length}`)
+    check('T2e 磁盘上的 PDF 一个字节没动', Buffer.compare(after, pdfBytes) === 0, `size ${pdfBytes.length} → ${after.length}`)
     await shot('1-plugin-view')
 
     // ── T3 右键菜单 ─────────────────────────────────────────────────────────────

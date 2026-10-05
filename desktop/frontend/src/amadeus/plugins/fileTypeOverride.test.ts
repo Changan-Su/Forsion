@@ -7,8 +7,8 @@
  *  ③ 毁档防线:页表面的 loadPage 只放行 `.md` 类后缀 —— 插件对 `x.pdf` 调 loadPage 必须被拒
  *     (放行 = PDF 被拽进笔记管线,一存就是 markdown)。
  *  ④ 开发副本:`.md` 类后缀照旧拒(笔记管线不保护开发根),非 md 后缀可以注册。
- * 负对照(2026-10-05 实跑):findFileType 去掉 `o.item.override === true` → ② 红;viewSurface 去掉 `.md` 过滤 → ③ 红;
- * registerFileType 的 taken() 去掉 override 判定 → ① 红。
+ * 负对照(2026-10-05 实跑):findFileType 去掉 `o.item.override === true` → ② 红;viewSurface 的 claims 去掉
+ * isPagePipelinePath → ③ / ③b 红;registerFileType 的 taken() 去掉 override 判定 → ① 红;ctx.app.loadPage 去掉闸 → ③b 红。
  */
 import { createContext } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -19,10 +19,13 @@ vi.mock('../components/PageView', () => ({ PageView: () => null }))
 vi.mock('../chrome/pageChrome', () => ({ NoteCover: () => null }))
 vi.mock('../../amadeusViews', () => ({ Breadcrumb: () => null, NoteTitle: () => null }))
 vi.mock('../../amadeusProperties', () => ({ AmadeusPropertiesPanel: () => null }))
+const nav = vi.hoisted(() => ({ openNote: vi.fn(), openFile: vi.fn() }))
+vi.mock('../../amadeusNav', () => nav)
 
 const { usePluginStore, findFileType, matchFileType, fileTypeBaseName } = await import('./pluginStore')
 const { createPluginViewSurface } = await import('./viewSurface')
-const { pageStoreFor } = await import('../store/pageStore')
+const { pageStoreFor, usePageStore } = await import('../store/pageStore')
+await import('../../amadeusNav') // 先把桩模块求值一次:两次并发的首次动态 import 在 vitest 里拿到的不是同一份导出
 type Ctx = import('./types').PluginContext
 type FileType = import('./types').FileTypeContribution
 
@@ -55,6 +58,13 @@ describe('① registerFileType:覆盖必须是显式的,而且只对可覆盖的
       expect(ctxOf('greedy').registerFileType(ft([ext], true)), ext).toBe(false)
     }
   })
+
+  it('混着声明:认领不了的内置后缀从贡献里剔掉,只留认领得了的', () => {
+    expect(ctxOf('mixed').registerFileType(ft(['.pdf', '.excalidraw.md', '.db', '.foo.md'], true))).toBe(true)
+    expect(usePluginStore.getState().fileTypes[0].item.extensions).toEqual(['.pdf', '.foo.md'])
+    expect(ctxOf('mixed2').registerFileType(ft(['.pdf', '.foo.md']))).toBe(true) // 没写 override:.pdf 也剔掉
+    expect(usePluginStore.getState().fileTypes[0].item.extensions).toEqual(['.foo.md'])
+  })
 })
 
 describe('② findFileType:可覆盖后缀只认 override 贡献,其余内置后缀谁也抢不到', () => {
@@ -72,6 +82,11 @@ describe('② findFileType:可覆盖后缀只认 override 贡献,其余内置后
     expect(findFileType([greedy], 'a.pdf')).toBe(greedy.item)
     expect(findFileType([greedy], '库.db')).toBeUndefined()
     expect(findFileType([greedy], '图.png')).toBeUndefined()
+  })
+
+  it('库外的 PDF(绝对路径,聊天引用里的本机文件)不归插件:插件只读得到库内路径', () => {
+    expect(findFileType([overriding], '/Users/me/Downloads/a.pdf')).toBeUndefined()
+    expect(findFileType([overriding], 'C:\\docs\\a.pdf')).toBeUndefined()
   })
 
   it('插件停用 → 同一路径立刻查不到(打开动作回落到内置阅读器)', () => {
@@ -101,6 +116,49 @@ describe('③ 毁档防线:页表面只放行 .md 类后缀', () => {
     view.surface.loadPage('卡片.deck.md')
     expect(load).toHaveBeenCalledWith('卡片.deck.md')
     view.dispose()
+  })
+})
+
+describe('③b 毁档防线:插件够得着的另外两个页加载入口', () => {
+  it('页表面:哪怕声明里混着白板后缀,也加载不了白板(页表面拿到的是原始声明时的纵深兜底)', () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const load = vi.fn(async () => {})
+    const scope = 'plug:ft-mixed'
+    pageStoreFor(scope).setState({ loadPage: load })
+    const view = createPluginViewSurface('mixed', scope, ['.pdf', '.excalidraw.md', '.deck.md'])
+    view.surface.loadPage('画板.excalidraw.md')
+    view.surface.loadPage('书.pdf')
+    expect(load).not.toHaveBeenCalled()
+    view.dispose()
+  })
+
+  it('ctx.app.loadPage:PDF / 白板被拒,普通笔记与插件自己的 .x.md 照常', () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const load = vi.fn(async (_path: string) => {})
+    const orig = usePageStore.getState().loadPage
+    usePageStore.setState({ loadPage: load })
+    try {
+      const ctx = ctxOf('pdf-load') // 别复用 'pdf-edit':上面那条把它停用了,偏好留在 localStorage 里
+      ctx.app.loadPage('资料/书.pdf')
+      ctx.app.loadPage('画板.excalidraw.md')
+      expect(load).not.toHaveBeenCalled()
+      ctx.app.loadPage('日记.md')
+      ctx.app.loadPage('导图.mindmap.md')
+      expect(load.mock.calls.map((c) => c[0])).toEqual(['日记.md', '导图.mindmap.md'])
+    } finally {
+      usePageStore.setState({ loadPage: orig })
+    }
+  })
+
+  it('ctx.app.openNote:非笔记路径不进笔记编辑器,改走 openFile 开对的视图', async () => {
+    nav.openNote.mockClear(); nav.openFile.mockClear()
+    const ctx = ctxOf('pdf-open')
+    ctx.app.openNote?.('资料/书.pdf')
+    await vi.waitFor(() => expect(nav.openFile).toHaveBeenCalledWith('资料/书.pdf'))
+    expect(nav.openNote).not.toHaveBeenCalled()
+    ctx.app.openNote?.('日记.md', { activate: false })
+    await vi.waitFor(() => expect(nav.openNote).toHaveBeenCalledWith('日记.md', { activate: false }))
+    expect(nav.openFile).toHaveBeenCalledTimes(1)
   })
 })
 
