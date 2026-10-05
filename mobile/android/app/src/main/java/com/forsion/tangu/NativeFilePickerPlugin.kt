@@ -1,6 +1,7 @@
 package com.forsion.tangu
 
 import android.app.Activity
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.provider.OpenableColumns
@@ -51,15 +52,13 @@ class NativeFilePickerPlugin : Plugin() {
     private fun onPicked(call: PluginCall?, result: ActivityResult) {
         if (call == null) return
         val uris = try { pickedUris(result) } catch (_: Exception) { emptyList() }
-        if (uris.isEmpty()) { call.resolve(answer(JSArray(), JSArray())); return }
+        if (uris.isEmpty()) { call.resolve(DocList.answer(JSArray(), JSArray())); return }
         // Provider queries can block (remote documents): off the main thread. One resolve, whatever happens inside.
         Thread {
-            val out = try { describe(uris) } catch (_: Exception) { answer(JSArray(), JSArray()) }
+            val out = try { DocList.describe(context, uris) } catch (_: Exception) { DocList.answer(JSArray(), JSArray()) }
             call.resolve(out)
         }.start()
     }
-
-    private fun answer(files: JSArray, skipped: JSArray): JSObject = JSObject().put("files", files).put("skipped", skipped)
 
     private fun pickedUris(result: ActivityResult): List<Uri> {
         val data = result.data
@@ -70,12 +69,22 @@ class NativeFilePickerPlugin : Plugin() {
         else data.data?.let(uris::add)
         return uris
     }
+}
+
+/**
+ * Describes documents for the page: `{ files: [{ uri, name, type, size }], skipped: [name] }`. No bytes are read here.
+ * Shared by the picker above and the share target (ShareInboxPlugin): both hand the page content URIs this activity
+ * holds a read grant for, and the page streams them the same way (mobile/src/pickedFiles.ts).
+ */
+internal object DocList {
+    fun answer(files: JSArray, skipped: JSArray): JSObject = JSObject().put("files", files).put("skipped", skipped)
 
     private class Described(val name: String, val type: String, val size: Long)
 
-    private fun describe(uris: List<Uri>): JSObject {
+    /** Blocking (provider queries): call off the main thread. */
+    fun describe(context: Context, uris: List<Uri>): JSObject {
         // A document whose provider throws (getType / query are provider calls) is skipped; the others go on.
-        val described = uris.map { uri -> try { describeOne(uri) } catch (_: Exception) { null } }
+        val described = uris.map { uri -> try { describeOne(context, uri) } catch (_: Exception) { null } }
         val plan = FilePickPlan.plan(described.map { it?.size })
         val files = JSArray()
         val skipped = JSArray()
@@ -90,9 +99,9 @@ class NativeFilePickerPlugin : Plugin() {
         return answer(files, skipped)
     }
 
-    private fun fallbackName(uri: Uri): String = try { uri.lastPathSegment } catch (_: Exception) { null } ?: "file"
+    fun fallbackName(uri: Uri): String = try { uri.lastPathSegment } catch (_: Exception) { null } ?: "file"
 
-    private fun describeOne(uri: Uri): Described {
+    private fun describeOne(context: Context, uri: Uri): Described {
         var name: String? = null
         var size = -1L
         context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE), null, null, null)?.use { c ->

@@ -13,6 +13,9 @@ registerMessages({
   'voiceinput.silent': { zh: '没采集到声音（输入电平≈0）：检查系统输入设备是否选对、麦克风没被静音', en: 'No audio captured (input level ≈ 0): check that the right input device is selected and that the microphone is not muted' },
   'voiceinput.unsupported': { zh: '此环境不支持语音输入', en: 'Voice input is not supported in this environment' },
   'voiceinput.denied': { zh: '麦克风权限被拒绝（打开 系统设置 › 隐私与安全 › 麦克风，允许本 App）', en: 'Microphone access was denied (open System Settings › Privacy & Security › Microphone and allow this app)' },
+  // 手机(window.tangu.mobile)的说法:没有「输入设备选没选对」,权限在系统的应用设置里。
+  'voiceinput.silentPhone': { zh: '没录到声音，再试一次', en: 'No sound was recorded — try again' },
+  'voiceinput.deniedPhone': { zh: '麦克风权限被拒绝（到系统设置 › 应用 › 权限里允许麦克风）', en: 'Microphone access was denied (allow it in system Settings › Apps › Permissions)' },
   'voiceinput.noDevice': { zh: '没检测到麦克风设备', en: 'No microphone found' },
   'voiceinput.openFailed': { zh: '麦克风打不开：{e}', en: 'Could not open the microphone: {e}' },
   'voiceinput.unclear': { zh: '没听清，再试一次', en: "Didn't catch that — try again" },
@@ -39,7 +42,7 @@ async function blobToWav16kBase64(blob: Blob): Promise<string> {
   let peak = 0, sum = 0
   for (let i = 0; i < pcm.length; i++) { const a = Math.abs(pcm[i]); if (a > peak) peak = a; sum += pcm[i] * pcm[i] }
   console.warn(`[voice] captured ${pcm.length} samples @16k, ${(pcm.length / 16000).toFixed(2)}s, peak=${peak.toFixed(4)} rms=${Math.sqrt(sum / (pcm.length || 1)).toFixed(4)}`)
-  if (peak < 0.005) throw new Error(translate('voiceinput.silent'))
+  if (peak < 0.005) throw new Error(window.tangu?.mobile ? translate('voiceinput.silentPhone') : translate('voiceinput.silent'))
   return wavBase64(pcm, 16000)
 }
 
@@ -114,7 +117,7 @@ export function useVoiceInput(onResult: (text: string) => void, modelId?: string
     } catch (e: any) {
       console.warn('[voice] getUserMedia failed:', e?.name, e?.message || e)
       setError(
-        e?.name === 'NotAllowedError' ? translate('voiceinput.denied')
+        e?.name === 'NotAllowedError' ? (window.tangu?.mobile ? translate('voiceinput.deniedPhone') : translate('voiceinput.denied'))
           : e?.name === 'NotFoundError' ? translate('voiceinput.noDevice')
           : translate('voiceinput.openFailed', { e: e?.name || e?.message || e }),
       )

@@ -26,6 +26,7 @@ import { installNativeModelPicker } from './nativeModelPicker'
 import { installNativeSheet } from './nativeSheet'
 import { installNativeChrome } from './nativeChrome'
 import { installNativeFilePicker } from './nativeFiles'
+import { installShareInbox } from './shareInbox'
 import { installPhoneControl } from './phoneControl'
 
 window.addEventListener('error', (e) => { console.error('[tangu-mobile] window error:', e.error || e.message) })
@@ -68,6 +69,8 @@ try {
   // 安卓 Space 快捷方式(长按 app 图标出 Space 列表 / 固定某个 Space 到桌面 / 接住点击)。
   // 必须排在 installEngine 之后:Space 是在那里面注册的,早了发布出去是空名单。
   installSpaceShortcuts()
+  // 分享到 Forsion(系统分享面板送来的文字 / 文件 → 先出半屏挑去处:会话的输入框或一篇笔记)。同样排在 installEngine 之后:要用到 Space 与聊天视图。
+  installShareInbox()
   // 互联设备入口(⋯ 菜单,Forsion Unit):数据桥在才上架 —— App(mobileShim)有 unitsList,
   // 设备页(unitShim)没有(设备页里不套设备页),自然隐藏。
   installUnitsEntry()

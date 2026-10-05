@@ -921,6 +921,9 @@ export interface AppState {
   sessionMode: SessionMode | null
   /** 瞬态:外部入口(反馈诊断/对话建 agent/插件)预填聊天框的草稿;Composer2 mount 消费一次即清,不落盘。 */
   pendingDraft: string | null
+  /** 瞬态:外部入口(手机「分享到 Forsion」)交给主聊天框的一份内容。与 pendingDraft 两处不同:文字是**接在**已有草稿
+   *  后面(别的 App 分享进来,不该顶掉用户打了一半的字);取走即清(takePendingShare),只给第一个来取的。不落盘。 */
+  pendingShare: { text: string; files: File[] } | null
   /** Chat View 划线后的定向引用交接。与 pendingDraft 分开:主区 chat 和侧栏 chat-panel 会同时挂载，
    *  只有 targetType 对应的承载面消费，避免选中文字误落进主输入框。 */
   pendingChatQuote: { targetType: string; text: string; seq: number } | null
@@ -1117,6 +1120,9 @@ export interface AppState {
   setNewChatModel(id: string | null): void
   /** 预填聊天框草稿(外部 via-chat 入口的统一接缝);Composer2 消费后自行清空。 */
   setPendingDraft(text: string | null): void
+  setPendingShare(share: { text: string; files: File[] } | null): void
+  /** 取走并清空:返回值只给第一个来取的人。 */
+  takePendingShare(): { text: string; files: File[] } | null
   /** 把选中文字作为引用交给指定 Chat View；seq 使连续交接同一段文字也会重新触发。 */
   setPendingChatQuote(targetType: string, text: string): void
   /** 只清掉自己消费的那一版，防止较晚的交接被旧 effect 清空。 */
@@ -1241,6 +1247,7 @@ export const useApp = create<AppState>((set, get) => ({
   focusModelId: '',
   sessionMode: loadSessionMode(),
   pendingDraft: null,
+  pendingShare: null,
   pendingChatQuote: null,
   draftRefs: null,
   steerPendingBySession: {},
@@ -3763,6 +3770,8 @@ export const useApp = create<AppState>((set, get) => ({
   }),
   setNewChatModel: (id) => set({ newChatModel: id }),
   setPendingDraft: (text) => set({ pendingDraft: text }),
+  setPendingShare: (share) => set({ pendingShare: share && (share.text || share.files.length) ? share : null }),
+  takePendingShare: () => { const share = get().pendingShare; if (share) set({ pendingShare: null }); return share },
   setPendingChatQuote: (targetType, text) => set({ pendingChatQuote: { targetType, text, seq: ++pendingChatQuoteSeq } }),
   clearPendingChatQuote: (seq) => set((s) => (s.pendingChatQuote?.seq === seq ? { pendingChatQuote: null } : {})),
   clearSteerRestore: (sessionId) => set((s) => ({ steerRestoreBySession: { ...s.steerRestoreBySession, [sessionId]: undefined } })),

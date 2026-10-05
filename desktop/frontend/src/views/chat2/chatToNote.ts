@@ -70,8 +70,9 @@ export function canTurnChatIntoNote(): boolean {
   return amadeusAvailable() && !!readTangu()?.complete
 }
 
-/** 只新建、不覆盖(create:true = 宿主原子的仅新建);重名依次试 `-2`…`-20`。返回落盘路径,全被占 → null。 */
-async function writeFresh(title: string, md: string): Promise<string | null> {
+/** 只新建、不覆盖(create:true = 宿主原子的仅新建);重名依次试 `-2`…`-20`。返回落盘路径,全被占 → null。
+ *  导出给手机的「分享到 Forsion → 存为笔记」(mobile/src/shareInbox.tsx)。 */
+export async function writeFresh(title: string, md: string): Promise<string | null> {
   for (let n = 1; n <= 20; n++) {
     const path = `${n === 1 ? title : `${title}-${n}`}.md`
     if ((await amadeus.readTextFile?.(path)?.catch(() => null)) != null) continue

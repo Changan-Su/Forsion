@@ -113,6 +113,8 @@ export function ChatView({ leaf, params }: ViewProps) {
     setSessionMode: state.setSessionMode,
     pendingDraft: state.pendingDraft,
     setPendingDraft: state.setPendingDraft,
+    pendingShare: state.pendingShare,
+    takePendingShare: state.takePendingShare,
     pendingChatQuote: state.pendingChatQuote,
     clearPendingChatQuote: state.clearPendingChatQuote,
     draftRefs: state.draftRefs,
@@ -787,6 +789,8 @@ export function ChatView({ leaf, params }: ViewProps) {
           costLimit={activeUsage.costLimit}
           onCompact={(focus) => void s.compact(activeId, focus)}
           seedText={s.steerRestore ?? (params.childSurface ? null : s.pendingDraft)}
+          seedShare={params.childSurface || leaf.type === 'chat-panel' ? null : s.pendingShare}
+          takeSeedShare={s.takePendingShare}
           appendRefs={params.childSurface ? null : s.draftRefs}
           onAppendRefsConsumed={s.clearDraftRefs}
           // 侧栏聊天默认引用主区当前笔记；Space 的主区分栏可显式 opt-in，

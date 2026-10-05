@@ -56,7 +56,7 @@ const test = async (name, fn) => {
 }
 
 ;(async () => {
-  const { loadPickedFiles, PICK_MAX_FILES, PICK_MAX_FILE_BYTES, PICK_MAX_TOTAL_BYTES } = await load('../src/pickedFiles.ts')
+  const { loadPickedFiles, staysInItsProvider, PICK_MAX_FILES, PICK_MAX_FILE_BYTES, PICK_MAX_TOTAL_BYTES } = await load('../src/pickedFiles.ts')
 
   await test('上限与原生 FilePickPlan.kt 同值(20 个 / 单个 25 MB / 合计 60 MB)', async () => {
     assert.deepEqual([PICK_MAX_FILES, PICK_MAX_FILE_BYTES, PICK_MAX_TOTAL_BYTES], [20, 25 * 1024 * 1024, 60 * 1024 * 1024])
@@ -136,6 +136,39 @@ const test = async (name, fn) => {
     assert.deepEqual(out.files.map((f) => [f.name, f.type]), [['ok', '']])
     assert.deepEqual(s.log.urls, ['https://localhost/_capacitor_content_/p/ok'])
     for (const junk of [undefined, null, {}, 'x']) assert.deepEqual(await loadPickedFiles(junk, s), { files: [], skipped: [] })
+  })
+
+  await test('规范化后会离开自己提供方的地址(.. / %2e%2e / 反斜杠 / authority 本身是 ..)→ 进 skipped,而且根本不发请求', async () => {
+    // 这些地址来自别的 App(「分享到 Forsion」)。toUrl 只换协议头,浏览器发请求前会消掉点段:
+    // 不拦的话前四条发出去就是本地服务器的裸文件路由 /_capacitor_file_/…(本应用的私有文件),第五条是别的提供方。
+    const pkg = 'com.forsion.tangu'
+    const prefs = `data/data/${pkg}/shared_prefs/CapacitorStorage.xml`
+    const evil = [
+      `content://x/../../_capacitor_file_/${prefs}`,
+      `content://x/%2e%2e/%2E./_capacitor_file_/${prefs}`,
+      `content://x/..\\..\\_capacitor_file_\\${prefs.replace(/\//g, '\\')}`,
+      `content://../_capacitor_file_/${prefs}`,
+      `content://x/../${pkg}.fileprovider/root/${prefs}`,
+      'content://x', // 没有路径
+      'content://x%/doc', `content://${pkg}%2Efileprovider/root/${prefs}`, // authority 里的转义(残缺的 / 完整的)
+    ]
+    const s = fakeServer({})
+    s.fetch = async (url) => { s.log.urls.push(url); return new Response('SECRET') } // 什么都肯给的服务器:被拒的地址连请求都不该有
+    const out = await loadPickedFiles(evil.map((uri, i) => ({ uri, name: `evil-${i}`, size: -1 })), s)
+    assert.deepEqual([out.files.map((f) => f.name), out.skipped, s.log.urls], [[], evil.map((_, i) => `evil-${i}`), []])
+    for (const uri of evil) assert.equal(staysInItsProvider(uri, s.toUrl(uri)), false, uri)
+    // 正常文档不受影响:文档 id 里编码过的冒号 / 斜杠 / 空格,带用户前缀的 authority
+    for (const uri of ['content://com.android.externalstorage.documents/document/primary%3ADownload%2Fa%20b.txt', 'content://10@media/external/file/42', 'content://p/a..b/c']) {
+      assert.equal(staysInItsProvider(uri, s.toUrl(uri)), true, uri)
+    }
+  })
+
+  await test('提供方报的名字只取末段、去掉控制字符(它往后会被当成文件名)', async () => {
+    const s = fakeServer({ 'content://p/1': bytes(1, 1), 'content://p/2': bytes(1, 1), 'content://p/3': bytes(1, 1) })
+    const out = await loadPickedFiles([
+      { uri: 'content://p/1', name: '../../etc/passwd' }, { uri: 'content://p/2', name: 'C:\\Users\\x\\a\u0000b.txt' }, { uri: 'content://p/3', name: '/' },
+    ], s)
+    assert.deepEqual(out.files.map((f) => f.name), ['passwd', 'ab.txt', 'file'])
   })
 
   const failed = results.filter((r) => !r[1]).length

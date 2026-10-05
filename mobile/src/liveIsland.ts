@@ -85,7 +85,7 @@ function schedule(): void {
 }
 
 /** 等单列壳把上次的布局还原完再开会话:早开的话,壳见主区已有 leaf 就跳过还原,用户上次的标签全丢。 */
-function whenShellReady(fn: () => void): void {
+export function whenShellReady(fn: () => void): void {
   if (useWorkspace.getState().mainTabs.length) { fn(); return }
   const off = useWorkspace.subscribe((s) => { if (s.mainTabs.length) { off(); fn() } })
 }

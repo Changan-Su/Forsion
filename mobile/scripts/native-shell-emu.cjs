@@ -174,6 +174,8 @@ const stubLog = [] // "METHOD /path body"
 const hold = { checkpoints: false, release: [] }
 // "Waiting for the user" index (GET …/agent/approvals/pending, polled by attentionStore): empty unless a check fills it.
 const pending = { rev: 'e2e-0', sessions: [] }
+// Cloud speech-to-text (POST …/brain/transcribe): answers a transcript, or the status a check sets.
+const transcribe = { status: 200 }
 function installStub(cdp) {
   cdp.on('Fetch.requestPaused', (ev) => {
     const url = new URL(ev.request.url)
@@ -199,6 +201,14 @@ function installStub(cdp) {
     if (p.endsWith('/agent/projects') && m === 'GET') return json({ projects: [{ name: 'E2E Alpha' }, { name: 'E2E Beta' }] })
     if (p.endsWith('/agent/sessions') && m === 'GET') return json({ sessions: url.searchParams.get('archived') === 'true' ? [] : sessions })
     if (p.endsWith('/agent/runs')) return json({ runs: [] })
+    if (p.endsWith('/brain/transcribe') && m === 'POST') {
+      if (transcribe.status === 200) return json({ text: ' e2e transcript ' })
+      return cdp.send('Fetch.fulfillRequest', {
+        requestId: ev.requestId, responseCode: transcribe.status,
+        responseHeaders: [{ name: 'Content-Type', value: 'application/json' }, { name: 'Access-Control-Allow-Origin', value: '*' }],
+        body: Buffer.from(JSON.stringify({ detail: '服务端的中文原话' })).toString('base64'),
+      }).catch(() => {})
+    }
     if (p.endsWith('/agent/approvals/pending')) return json(url.searchParams.get('rev') === pending.rev ? { rev: pending.rev, unchanged: true } : pending)
     if (p.endsWith('/agent/models') && m === 'GET') return json({ models: MODELS, directProviders: [], defaultModelId: MODELS[0].id })
     // fake market (only Forsion plugins are requested on the phone); install hands out the host download URL
@@ -1448,6 +1458,222 @@ const tabCountText = (list) => {
   })
   // Leave a clean stage whatever the check's outcome: no attachments in the composer, and no error toast left on
   // screen (they stay up for a while and cover the top of the drawer, where the next check taps "new chat").
+  try {
+    await cdp.eval(`(async () => { for (const sel of ['.t2c-chiprow .attach-chip button', '.ntf-close']) for (let i = 0; i < 8; i++) {
+      const b = document.querySelector(sel); if (!b) break; b.click(); await new Promise((r) => setTimeout(r, 150)) } return true })()`)
+  } catch { /* page reloading */ }
+
+  await check('voice input: the mic is live; the shim posts the recording to the cloud and returns its text; failures are worded for the user; a real tap records', async () => {
+    await goHome()
+    const mic = "document.querySelector('.t2c-mic-control')"
+    assert.equal(await cdp.eval(`${mic}?.disabled`), false, 'the mic button is disabled (window.tangu.transcribeAudio missing?)')
+    // the seam the shared hook calls: recording (base64 WAV) → POST …/brain/transcribe → text
+    let sent = stubLog.length
+    assert.equal(await cdp.eval("window.tangu.transcribeAudio({ audioBase64: 'UklGRg==', mime: 'audio/wav' })"), 'e2e transcript')
+    const line = stubLog.slice(sent).find((l) => l.startsWith('POST ') && l.includes('/brain/transcribe '))
+    assert.ok(line, `no POST …/brain/transcribe (${stubLog.slice(sent).join(' | ')})`)
+    const body = JSON.parse(line.slice(line.indexOf('{')))
+    assert.deepEqual({ audio: body.audioBase64, mime: body.mime, app: body.projectSource, model: 'modelId' in body }, { audio: 'UklGRg==', mime: 'audio/wav', app: 'tangu', model: false })
+    assert.match(String(body.client), /^mobile\/\d/, 'client tag')
+    // a refusal is told in the user's words, not with the server's (Chinese-only) detail
+    for (const [status, want] of [[402, '额度不够，这段语音没有转写'], [401, '请先登录，再用语音输入'], [500, '语音转写失败（500）']]) {
+      transcribe.status = status
+      try {
+        assert.equal(await cdp.eval("window.tangu.transcribeAudio({ audioBase64: 'UklGRg==' }).then(() => 'resolved', (e) => e.message)"), want)
+      } finally { transcribe.status = 200 }
+    }
+    // A real tap: the WebView asks for the microphone → Capacitor asks the system once → recording starts. The emulator's
+    // microphone is silent unless host audio is on, so the take ends either in the "nothing recorded" hint (the silence
+    // check runs after MediaRecorder → decode → 16 kHz WAV, i.e. the whole capture path ran) or in the stub's transcript.
+    await tapEl(mic)
+    const asked = await h.waitNodes((l) => l.find((n) => /permission_allow_foreground_only_button$/.test(n['resource-id'] || '')), { timeout: 5000 })
+    if (asked.hit) { console.log('  microphone permission asked: allowing while in use'); h.tapNode(asked.hit) }
+    assert.ok(await h.waitPage(cdp, "!!document.querySelector('.t2c-voicebar')", 8000), `recording did not start (hint: ${await cdp.eval("document.querySelector('.t2c-hint')?.textContent || ''")})`)
+    await h.pause(1500)
+    shot('24-voice-recording')
+    sent = stubLog.length
+    await tapEl("document.querySelector('.t2c-voicebar button')") // stop → transcribe
+    const done = "(document.querySelector('.t2c-hint')?.textContent || '') + '|' + (document.querySelector('.t2c-ta')?.value || '')"
+    assert.ok(await h.waitPage(cdp, `!document.querySelector('.t2c-voicebar') && (${done}).length > 1`, 15000), 'the take never ended')
+    const end = await cdp.eval(done)
+    console.log(`  take ended with: ${end}`)
+    assert.ok(end.includes('e2e transcript') || end.includes('没录到声音'), `neither a transcript nor the silence hint: ${end}`)
+    await cdp.eval("(() => { const ta = document.querySelector('.t2c-ta'); if (ta && ta.value) { const set = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set; set.call(ta, ''); ta.dispatchEvent(new Event('input', { bubbles: true })) } return true })()")
+  })
+
+  await check('share → Forsion: a share asks where it goes; a chat gets it in the message box (after what is typed, unsent), a document is attached, a note is written; a file path and our own provider are refused', async () => {
+    const share = (...extra) => h.adb('shell', 'am', 'start', '-n', ACTIVITY, '-a', 'android.intent.action.SEND', ...extra)
+    const shareText = (text) => share('-t', 'text/plain', '--es', 'android.intent.extra.TEXT', `'${text}'`)
+    const draft = "document.querySelector('.t2c-ta')?.value"
+    const setDraft = async (v) => assert.ok(await cdp.eval(`(() => { const ta = document.querySelector('.t2c-ta'); if (!ta) return false
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(ta, ${JSON.stringify(v)}); ta.dispatchEvent(new Event('input', { bubbles: true })); return true })()`), 'no message box on screen')
+    const closeToasts = () => cdp.eval(`(async () => { for (let i = 0; i < 8; i++) { const b = document.querySelector('.ntf-close'); if (!b) break; b.click(); await new Promise((r) => setTimeout(r, 150)) } return true })()`)
+    const chips = "[...document.querySelectorAll('.t2c-chiprow .attach-chip > span:first-of-type')].map((e) => e.textContent)"
+    const toasts = "[...document.querySelectorAll('.ntf-text')].map((e) => e.textContent).join(' | ')"
+    const inChat = "!!document.querySelector('.t2-userwrap')" // a message on screen = not a new chat
+    const unsent = (from) => assert.ok(!stubLog.slice(from).some((l) => /^POST \S+\/agent\/runs/.test(l)), 'the share was sent on its own')
+    /** The sheet a share lands on: its rows, then pick one. */
+    const destination = async (want, to) => {
+      const list = await waitSheet(true)
+      assert.equal(textOf(list, 'nativeSheet.title'), '分享到 Forsion')
+      assert.deepEqual(ids(list), want)
+      assert.ok(resumed(), 'the app is not in front')
+      if (to) { await tapId(`nativeSheet.item.${to}`, list); await waitSheet(false) }
+      return list
+    }
+    pushPickFixtures()
+    // The system offers the app for a share (the starts below name the activity, which would work without any filter).
+    for (const [action, type] of [['android.intent.action.SEND', 'text/plain'], ['android.intent.action.SEND', 'image/png'], ['android.intent.action.SEND_MULTIPLE', 'application/pdf']]) {
+      const offered = h.adb('shell', 'cmd', 'package', 'query-activities', '--brief', '-a', action, '-t', type)
+      assert.ok(offered.includes(`${PKG}/com.forsion.tangu.MainActivity`), `not a share target for ${action} ${type}`)
+    }
+    await openChat('E2E Session One')
+    await setDraft('typed first')
+    let sent = stubLog.length
+    // (1) the sheet: what is shared, the three places, and nothing moves before one is picked. Back = the share is dropped.
+    shareText('Shared from the harness')
+    const list = await destination(['new-chat', 'session', 'note'])
+    assert.equal(rowLabel(list, 'nativeSheet.item.session'), '发到「E2E Session One」')
+    assert.ok(list.some((n) => (n.text || '').includes('Shared from the harness')), 'the sheet does not say what is being shared')
+    assert.ok(h.byId(list, 'nativeSheet.footer')?.text, 'footer note missing')
+    shot('26-share-sheet')
+    h.key(4)
+    await waitSheet(false)
+    await h.pause(600)
+    assert.equal(await cdp.eval(draft), 'typed first', 'a cancelled share reached the message box')
+    // (2) → the chat on screen: after what was typed, the chat stays, nothing is sent
+    shareText('Shared from the harness')
+    await destination(['new-chat', 'session', 'note'], 'session')
+    assert.ok(await h.waitPage(cdp, `${draft} === 'typed first\\n\\nShared from the harness'`, 8000), `the shared text did not follow the typed draft (draft: ${JSON.stringify(await cdp.eval(draft))})`)
+    assert.equal(await cdp.eval(inChat), true, 'the chat was left')
+    unsent(sent)
+    shot('27-share-to-chat')
+    // (3) → a new chat
+    await setDraft('')
+    shareText('Second share')
+    await destination(['new-chat', 'session', 'note'], 'new-chat')
+    assert.ok(await h.waitPage(cdp, `${draft} === 'Second share' && !${inChat}`, 10000), `not a new chat holding the text (draft: ${JSON.stringify(await cdp.eval(draft))}, message on screen: ${await cdp.eval(inChat)})`)
+    assert.equal(await cdp.eval("document.querySelector('.mb-shell')?.dataset.space"), 'tangu')
+    unsent(sent)
+    await setDraft('')
+    // (4) a document, shared for real: the system Files app → Share → this app in the system share sheet. (A share started
+    // from the shell cannot hand over a read grant, and the read grant is the point: the document is another app's.)
+    // No note row for it (a note is its text); it is attached, like "Add files".
+    h.adb('shell', 'am', 'force-stop', 'com.google.android.documentsui') // no selection left over from an earlier run
+    h.adb('shell', 'am', 'start', '-a', 'android.intent.action.VIEW', '-t', 'vnd.android.document/root', '-d', 'content://com.android.providers.downloads.documents/root/downloads')
+    const inFiles = (await h.waitNodes((l) => l.find((n) => /documentsui/.test(n.package || '') && n.text === PICK.small.name), { timeout: 12000 })).hit
+    assert.ok(inFiles, `Files app: ${PICK.small.name} is not listed in Downloads`)
+    h.longPress(inFiles)
+    const shareAction = (await h.waitNodes((l) => h.byId(l, 'com.google.android.documentsui:id/action_menu_share'), { timeout: 6000 })).hit
+    assert.ok(shareAction, 'Files app: no Share action for the selected file')
+    h.tapNode(shareAction)
+    const offered = await h.waitNodes((l) => l.find((n) => /intentresolver/.test(n.package || '') && /^Forsion/.test(n.text || '')), { timeout: 10000 })
+    assert.ok(offered.hit, `the system share sheet does not offer the app (targets: ${offered.nodes.filter((n) => /intentresolver/.test(n.package || '') && n.text).map((n) => n.text).join(', ')})`)
+    await h.pause(500)
+    shot('28-system-share-sheet')
+    h.tapAt(offered.hit.rect.cx, offered.hit.rect.top - 75) // its icon, above the label
+    const fileSheet = await destination(['new-chat', 'session'])
+    assert.ok(fileSheet.some((n) => (n.text || '').includes('1 个文件')), 'the sheet does not say a file is being shared')
+    shot('28b-share-file-sheet')
+    await tapId('nativeSheet.item.new-chat', fileSheet)
+    await waitSheet(false)
+    assert.ok(await h.waitPage(cdp, `(${chips}).includes(${JSON.stringify(PICK.small.name)})`, 12000), `the shared document was not attached (chips: ${await cdp.eval(chips)}; toasts: ${await cdp.eval(toasts)})`)
+    unsent(sent)
+    shot('29-share-file')
+    // (5) what another app must not be able to make us attach: a raw path, anything from our own providers, and an
+    // address that only looks like someone else's — the WebView resolves `..` before it asks the local server, which
+    // would turn the last two into that server's raw-file route for this app's own private files (the sign-in is there).
+    // Each is named in the "not added" toast; there is nothing left to place, so no sheet, and the composer keeps what it had.
+    const had = await cdp.eval(chips)
+    const prefs = `data/data/${PKG}/shared_prefs/CapacitorStorage.xml`
+    for (const [uri, name] of [
+      [`file:///sdcard/Download/${PICK.small.name}`, PICK.small.name],
+      [`content://${PKG}.fileprovider/root/${prefs}`, 'CapacitorStorage.xml'],
+      [`content://x/../../_capacitor_file_/${prefs}`, 'CapacitorStorage.xml'],
+      [`content://x/%2e%2e/%2e%2e/_capacitor_file_/${prefs}`, 'CapacitorStorage.xml'],
+    ]) {
+      await closeToasts() // the same name is refused more than once: each case reads its own toast
+      share('-t', 'text/plain', '--eu', 'android.intent.extra.STREAM', uri)
+      assert.ok(await h.waitPage(cdp, `[...document.querySelectorAll('.ntf-text')].some((e) => e.textContent.includes('没有添加') && e.textContent.includes(${JSON.stringify(name)}))`, 10000), `no refusal toast for ${uri} (toasts: ${await cdp.eval(toasts)})`)
+      assert.equal(sheetOpen(ui()), false, `a sheet opened for ${uri}`)
+      assert.deepEqual(await cdp.eval(chips), had, `the composer changed for ${uri}`)
+      assert.ok(resumed(), 'the app is not in front')
+      await h.pause(600)
+    }
+    // (6) → a note: the text as it came, in a note named after its first line (on the device's own vault: no server in it)
+    const side = await cdp.eval('window.amadeusVaultMode.side')
+    // raced against a timer: a switch that never settles is reported as that, not as the bridge's "Promise was collected"
+    const vaultSide = async (to) => {
+      const r = await cdp.eval(`Promise.race([window.amadeusVaultMode.switch(${JSON.stringify(to)}).then(() => 'done', (e) => 'rejected: ' + e), new Promise((r) => setTimeout(() => r('still pending after 15 s'), 15000))])`)
+      assert.equal(r, 'done', `vault switch to ${to}: ${r} (side now ${await cdp.eval('window.amadeusVaultMode.side')})`)
+    }
+    const NOTE = 'E2E shared note'
+    await closeToasts() // the refusals above: they sit where the note's first line is
+    try {
+      if (side !== 'local') await vaultSide('local')
+      await cdp.eval(`window.amadeus.deletePage?.(${JSON.stringify(`${NOTE}.md`)}).then(() => true, () => true)`) // an earlier run's
+      shareText(NOTE)
+      await destination(['new-chat', 'session', 'note'], 'note')
+      assert.ok(await h.waitPage(cdp, `window.amadeus.readTextFile(${JSON.stringify(`${NOTE}.md`)}).then((t) => t === ${JSON.stringify(`${NOTE}\n`)}, () => false)`, 10000), `the note was not written (toasts: ${await cdp.eval(toasts)})`)
+      assert.ok(await h.waitPage(cdp, `[...document.querySelectorAll('.ntf-text')].some((e) => e.textContent.includes('已存为笔记「${NOTE}」'))`, 6000), `no receipt for the note (toasts: ${await cdp.eval(toasts)})`)
+      // … and the user is taken to it: the note is the page on screen, its text in the editor
+      assert.ok(await h.waitPage(cdp, `!document.querySelector('.t2c-ta') && [...document.querySelectorAll('[contenteditable="true"]')].some((e) => e.textContent.includes(${JSON.stringify(NOTE)}))`, 10000),
+        `the note did not open (editable: ${await cdp.eval(`JSON.stringify([...document.querySelectorAll('[contenteditable]')].map((e) => e.className + ':' + e.textContent.slice(0, 40)))`)})`)
+      assert.equal(textOf(ui(), 'nativeChrome.title'), NOTE, 'the top bar does not name the note')
+      await closeToasts()
+      await h.pause(600)
+      shot('30-share-note')
+    } finally {
+      await cdp.eval(`window.amadeus.deletePage?.(${JSON.stringify(`${NOTE}.md`)}).then(() => true, () => true)`).catch(() => {})
+      if (side !== 'local') await vaultSide(side)
+    }
+    // (7) what the task is started with again when it comes back from Recents is its last intent — not a second share
+    // (the plugin says so in the log: the absence of a sheet alone would also be what a share that never arrived looks like)
+    const skips = (why) => h.adb('logcat', '-d', '-s', 'ShareInbox:D').split('\n').filter((l) => l.includes('not a new share') && l.includes(why)).length
+    await openChat('E2E Session One') // back from the note
+    await setDraft('')
+    let skipped = skips('from Recents')
+    share('-f', '0x10100000', '-t', 'text/plain', '--es', 'android.intent.extra.TEXT', "'Old share'") // NEW_TASK | LAUNCHED_FROM_HISTORY
+    await h.pause(3000)
+    assert.equal(sheetOpen(ui()), false, 'an intent replayed from Recents was taken as a new share')
+    assert.equal(await cdp.eval(draft), '')
+    assert.equal(skips('from Recents'), skipped + 1, 'the replayed intent did not reach the plugin (flag stripped?)')
+    // (8) cold: the app is not running. The share starts it and is kept until the page gets to listen.
+    const boot = async () => {
+      cdp = await h.connect(PKG)
+      await cdp.send('Page.enable')
+      await installStub(cdp)
+      assert.ok(await h.waitPage(cdp, dom.shellUp, 30000), 'shell did not mount after the cold start')
+    }
+    cdp.close()
+    h.adb('shell', 'am', 'force-stop', PKG)
+    shareText('Cold share')
+    await boot()
+    const cold = await waitSheet(true, 30000)
+    assert.equal(textOf(cold, 'nativeSheet.title'), '分享到 Forsion')
+    assert.ok(cold.some((n) => (n.text || '').includes('Cold share')), 'the sheet does not say what is being shared')
+    await tapId('nativeSheet.item.new-chat', cold)
+    await waitSheet(false)
+    assert.ok(await h.waitPage(cdp, `${draft} === 'Cold share'`, 10000), `the cold share did not reach the message box (draft: ${JSON.stringify(await cdp.eval(draft))})`)
+    // (9) … and it is acted on once: the system kills the app in the background, the user comes back, the activity is
+    // re-created with that same launch intent — no second sheet.
+    cdp.close()
+    skipped = skips('activity recreated')
+    h.key(3) // home: the activity saves its state
+    await h.pause(1500)
+    const pid = () => h.adb('shell', 'pidof', PKG, '||', 'true').trim()
+    h.adb('shell', 'am', 'kill', PKG)
+    await h.pause(800)
+    if (pid()) { runAs('kill', '-9', pid()); await h.pause(800) } // not cached yet (a service still bound): end it like the low-memory killer would
+    assert.equal(pid(), '', 'the backgrounded app was not killed')
+    h.adb('shell', 'am', 'start', '-n', ACTIVITY)
+    await boot()
+    await h.pause(4000)
+    assert.equal(sheetOpen(ui()), false, 'the launch share came back after the activity was re-created')
+    assert.equal(skips('activity recreated'), skipped + 1, 'the activity was not re-created with the share as its launch intent: this case proved nothing')
+    await reload() // a clean stubbed boot (the cold starts' first requests went out before the stub)
+  })
+  // Leave a clean stage (see the same block before the voice check): no attachments, no toast over the drawer's top.
   try {
     await cdp.eval(`(async () => { for (const sel of ['.t2c-chiprow .attach-chip button', '.ntf-close']) for (let i = 0; i < 8; i++) {
       const b = document.querySelector(sel); if (!b) break; b.click(); await new Promise((r) => setTimeout(r, 150)) } return true })()`)

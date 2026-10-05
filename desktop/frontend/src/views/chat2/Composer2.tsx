@@ -337,6 +337,11 @@ export const Composer2: React.FC<{
   /** 外部预填草稿(反馈诊断/对话建 agent 等 via-chat 入口);非空时 mount/变更即写入输入框并回调清空。 */
   seedText?: string | null
   onSeedConsumed?: () => void
+  /** 外部交来的一份内容(手机「分享到 Forsion」):非空 = 有东西在等;真正的内容由 takeSeedShare 取走(取走即清,只给第一个来取的)。
+   *  文字**接在**已有草稿后面(不像 seedText 那样覆盖:别的 App 分享进来,不该顶掉打了一半的字);文件进的是与「添加文件」
+   *  同一个入口:图片成图片附件,其余成工作区文件,上限照旧。 */
+  seedShare?: { text: string; files: File[] } | null
+  takeSeedShare?: () => { text: string; files: File[] } | null
   /** 拖引用进聊天(工作区侧栏 / 笔记树 / 会话列表):直接挂到输入框上方的「已选择」芯片条。
    *  seq 让连拖同一条也能触发;消费后由宿主清空。 */
   appendRefs?: { refs: ChatRef[]; seq: number } | null
@@ -369,7 +374,7 @@ export const Composer2: React.FC<{
   onExecConfigChange, onSend, onStop,
   quotedText, onClearQuote, onBtw,
   contextWindow, ctxTokens, sessionTokens, runCost, costLimit, ctxInfo, onCompact,
-  seedText, onSeedConsumed, appendRefs, onAppendRefsConsumed, autoRefFromMain, sentHistory,
+  seedText, onSeedConsumed, seedShare, takeSeedShare, appendRefs, onAppendRefsConsumed, autoRefFromMain, sentHistory,
   pendingSteer, onCancelSteer, onWithdrawSteer, onSteerNow,
 }) => {
   const { t, locale } = useI18n()
@@ -1349,6 +1354,22 @@ export const Composer2: React.FC<{
       await pickWsFiles(dt.files)
     }
   }
+  // 外部交来的一份内容(seedShare):取走即清。桌面上没有人交,这段是空转。
+  useEffect(() => {
+    if (!seedShare) return
+    const share = takeSeedShare?.()
+    if (!share) return
+    if (share.text) {
+      setDraft((d) => (d.trim() ? `${d.replace(/\s+$/, '')}\n\n${share.text}` : share.text))
+      requestAnimationFrame(() => autoGrow())
+    }
+    if (share.files.length) {
+      const dt = new DataTransfer()
+      share.files.forEach((f) => dt.items.add(f))
+      void pickMixedFiles(dt.files)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [seedShare])
 
   /** Electron 原生「文件或文件夹」：文件读成原有附件格式；文件夹与超大文件保留为路径引用。 */
   const pickHostPaths = async (items: Array<{ path: string; isDirectory: boolean }>): Promise<void> => {

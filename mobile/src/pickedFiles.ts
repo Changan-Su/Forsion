@@ -34,6 +34,27 @@ export interface LoadPickedDeps {
   limits?: { maxFiles?: number; maxFileBytes?: number; maxTotalBytes?: number }
 }
 
+/** `url` 是 `toUrl` 给某个 `content://` 文档算出的地址;返回它在浏览器规范化之后**是否还指着这个文档自己的提供方**。
+ *  `toUrl` 只是把协议头换成本地服务器的 `/_capacitor_content_` 前缀,而请求发出去之前浏览器会消掉点段(`..`、`%2e%2e`,
+ *  反斜杠也当斜杠):`content://x/../../_capacitor_file_/data/data/<包名>/…` 发出去就成了本地服务器的**裸文件路由** ——
+ *  读到的是本应用自己的私有文件(登录凭据在里面),`content://x/../<别的提供方>/…` 同理。
+ *  地址可能来自别的 App(「分享到 Forsion」),所以规范化后不在「前缀 + 自己那个 authority」之下的一律不取。
+ *  前缀写死而不从 `toUrl` 反推:authority 本身就可以是 `..`,反推出来的前缀会跟着一起塌掉。
+ *  authority 里带 `%` 的也不取:提供方的名字里没有它,而本地服务器是按**解码后**的路径分路由的,
+ *  残缺的转义(`x%/doc`)解码时会把 authority 后面那个分隔符一起吃掉。 */
+export function staysInItsProvider(uri: string, url: string): boolean {
+  const authority = /^content:\/\/([^/?#\\%]+)\//.exec(uri)?.[1]
+  if (!authority) return false
+  try {
+    return new URL(url, 'https://localhost').pathname.startsWith(`/_capacitor_content_/${authority}/`)
+  } catch {
+    return false
+  }
+}
+
+/** 文档的名字是提供方报的,往后会被当成文件名用:只取末段,去掉控制字符。 */
+const leafName = (name: string): string => (name.split(/[\\/]/).pop() ?? '').replace(/[\u0000-\u001f\u007f]/g, '').trim() || 'file'
+
 const isDoc = (v: unknown): v is PickedDoc => {
   const d = v as PickedDoc | null
   return !!d && typeof d === 'object' && typeof d.name === 'string' && typeof d.uri === 'string' && d.uri.startsWith('content://')
@@ -75,8 +96,9 @@ export async function loadPickedFiles(docs: unknown, deps: LoadPickedDeps): Prom
     }
     let chunks: Uint8Array<ArrayBuffer>[] | null = null
     try {
-      const res = await deps.fetch(deps.toUrl(doc.uri))
-      chunks = res.ok ? await readCapped(res, budget) : null
+      const url = deps.toUrl(doc.uri)
+      const res = staysInItsProvider(doc.uri, url) ? await deps.fetch(url) : null
+      chunks = res?.ok ? await readCapped(res, budget) : null
     } catch {
       chunks = null // 提供方读失败 / 授权已失效:这一个跳过,其余照常
     }
@@ -84,7 +106,7 @@ export async function loadPickedFiles(docs: unknown, deps: LoadPickedDeps): Prom
       skipped.push(doc.name)
       continue
     }
-    const file = new File(chunks, doc.name, { type: typeof doc.type === 'string' ? doc.type : '' })
+    const file = new File(chunks, leafName(doc.name), { type: typeof doc.type === 'string' ? doc.type : '' })
     total += file.size
     files.push(file)
   }
