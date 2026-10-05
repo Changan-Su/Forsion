@@ -46,6 +46,8 @@ export interface ModelPillOption extends Pick<ModelInfo, 'id' | 'name' | 'tags' 
 export interface ModelPillGroup { key?: string; label: string; source?: ModelInfo['source']; options: ModelPillOption[] }
 type Thinking = NonNullable<AgentConfig['thinkingLevel']>
 type Pane = 'model' | 'context' | DefaultModelSlot
+/** 一级行悬停多久才开 / 切二级面板(手感旋钮:调大更不易误切,但悬停开面板更迟钝)。 */
+const PANE_HOVER_MS = 150
 
 const thinkingLabelKey = (lv: Thinking): string => `input.thinking.${lv}`
 // 档位显示名走 thinkingLabel 单源(U-28a);原先这里 'max' 写死英文 'Max',中文界面也露英文。
@@ -262,11 +264,13 @@ export const ModelPill: React.FC<{
   const wrapRef = useRef<HTMLSpanElement>(null)
   const menuRef = useRef<HTMLDivElement>(null)
   const subRef = useRef<HTMLDivElement>(null)
+  const hoverTimer = useRef(0)
+  const cancelHover = (): void => window.clearTimeout(hoverTimer.current)
   const menuFix = useEdgeNudge(open && !menuPortal, { boundary: '.t2-chat-view' })
   const subFix = useEdgeNudge(pane ? `${pane}:${placement}` : '', { boundary: '.t2-chat-view' })
 
   useEffect(() => {
-    if (!open) { setPane(null); setAdvanced(false); setQuery(''); return }
+    if (!open) { cancelHover(); setPane(null); setAdvanced(false); setQuery(''); return }
     // data-keep-menus:从本菜单弹出的确认框(开 Ultra)—— 点它、在它里面按 Esc 都不算离开菜单
     const keep = (t: EventTarget | null): boolean => !!(t as HTMLElement | null)?.closest?.('[data-keep-menus]')
     const onDown = (e: MouseEvent) => { if (!keep(e.target) && !wrapRef.current?.contains(e.target as Node) && !menuRef.current?.contains(e.target as Node)) setPillOpen(false) }
@@ -388,7 +392,10 @@ export const ModelPill: React.FC<{
     onDefaultModelChange?.(slot, id)
     setPane(null)
   }
-  const showPane = (p: Pane) => (): void => { if (pane !== p) setQuery(''); setPane(p) }
+  const showPane = (p: Pane) => (): void => { cancelHover(); if (pane !== p) setQuery(''); setPane(p) }
+  // ponytail: 悬停要停够 PANE_HOVER_MS 才开 / 切二级面板 —— 朝面板划过别的行(叠放时必经)不再被抢走。
+  // 划得比这还慢仍会误切;真有人报,再上「朝面板方向移动时不切」的安全三角。聚焦 / 点击照旧立即。
+  const hoverPane = (p: Pane) => (): void => { cancelHover(); hoverTimer.current = window.setTimeout(showPane(p), PANE_HOVER_MS) }
 
   if (readonly) {
     return (
@@ -468,7 +475,8 @@ export const ModelPill: React.FC<{
             <button type="button"
               className={`cm-row${pane === 'context' ? ' is-open' : ''}`}
               data-pane-trigger="context"
-              onMouseEnter={showPane('context')}
+              onMouseEnter={hoverPane('context')}
+              onMouseLeave={cancelHover}
               onFocus={showPane('context')}
               onClick={showPane('context')}
             >
@@ -482,7 +490,8 @@ export const ModelPill: React.FC<{
           <button type="button"
             className={`cm-row cm-model-row${pane === 'model' ? ' is-open' : ''}`}
             data-pane-trigger="model"
-            onMouseEnter={showPane('model')}
+            onMouseEnter={hoverPane('model')}
+            onMouseLeave={cancelHover}
             onFocus={showPane('model')}
             onClick={showPane('model')}
           >

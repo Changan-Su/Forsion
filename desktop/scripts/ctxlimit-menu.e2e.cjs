@@ -4,6 +4,7 @@
  *   npm run e2e:ctxlimit [-- <截图目录>]     需先 npm run build(读 out/main/main.js)
  * 断言:1M 模型露出该行且显示 272k、位置在高级与模型之间;选「最大」→ PUT {modelId, contextWindow:1000000} → 行变 1M、勾到最大;
  * 选「默认」→ PUT null 回 272k;窗口不超上限的模型不露该行。
+ * 悬停意图(10-05):模型面板开着时朝它划过「上下文上限」行,面板不被那一行抢走(T2a);停在那一行才切(T2b)。
  * 会话里:run 的 context_info 带 ctxWindowMax → 进度环弹层多一行「模型最大 1M,默认只用到 272k」;会话里开到最大 → 环分母当场变 1M;
  * run 在飞时改上限 → 环仍按这一轮开跑时的 272k(那轮的窗口 / 压缩线不会变);引擎报 modelOverridesWritable=false → 不露这一行。
  */
@@ -61,6 +62,20 @@ async function main() {
     const rowOrder = await menu.locator(':scope > .cm-row').evaluateAll((els) => els.map((e) => e.dataset.paneTrigger || (e.classList.contains('cm-advanced-toggle') ? 'advanced' : '?')))
     check('T1 1M 模型露出「上下文上限」行,显示 272k', (await ctxRow.count()) === 1 && /272k/.test(await ctxRow.innerText()), await ctxRow.innerText().catch(() => '(none)'))
     check('T2 该行位于「高级」与「模型」之间', JSON.stringify(rowOrder) === JSON.stringify(['advanced', 'context', 'model']), JSON.stringify(rowOrder))
+    // 悬停意图(10-05 用户实报):模型面板开着,朝它划过「上下文上限」行不许被那一行抢走;停住才切
+    const sub = win.locator('.cm-sub')
+    const mid = async (loc) => { const b = await loc.boundingBox(); return [b.x + b.width / 2, b.y + b.height / 2] }
+    await menu.locator('[data-pane-trigger="model"]').hover()
+    await win.locator('.cm-sub[data-pane="model"]').waitFor({ timeout: 5000 })
+    const [via, dest] = [await mid(ctxRow), await mid(sub)] // 先量好再连着动:两次移动之间不许夹别的往返
+    await win.mouse.move(...via)
+    await win.mouse.move(...dest)
+    await win.waitForTimeout(400)
+    check('T2a 朝模型面板划过「上下文上限」行 → 面板仍是模型', (await sub.getAttribute('data-pane')) === 'model', `pane=${await sub.getAttribute('data-pane')}`)
+    await ctxRow.hover()
+    await win.waitForTimeout(400)
+    check('T2b 停在「上下文上限」行 → 切到上下文面板', (await sub.getAttribute('data-pane')) === 'context', `pane=${await sub.getAttribute('data-pane')}`)
+
     await ctxRow.click()
     await win.locator('.cm-sub[data-pane="context"]').waitFor({ timeout: 5000 })
     await win.waitForTimeout(500) // 子面板有 pop 入场动画:立刻截图会抓到半透明的中间帧,看着像被主页时钟压住
