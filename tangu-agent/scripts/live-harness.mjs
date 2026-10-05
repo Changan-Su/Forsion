@@ -26,6 +26,7 @@
  *                                                           #   --usage-db <抽取库>:再用真实用量跑一遍 Muse 巡检 → 当场替默认 agent 收起(抽取库先用 scripts/usage-extract.mjs 生成)
  *   TANGU_LIVE_MODEL=codex/gpt-5.6-sol npm run live:harness  # 换模型
  *   npm run live:harness -- --only historian,dream,muse --muse-mode auto   # Muse 三档:ask(缺省)|agent|auto
+ *   npm run live:harness -- --only dreamseed [--dream-rounds 5] [--dream-entries 40]   # 有体量的记忆上的整理(10-06):改 memoryDream 的提示 / 校验 / 思考档 / 输出上限后跑;同一份种子连跑多轮,看完成率、有没有丢已有事实、没说过的有没有被记进去
  *   npm run live:harness -- --only refine --historian-mode assist          # 自进化闭环走辅助模式(提名在辅助模式轮里出)
  *   npm run live:harness -- --only chat,tool --exec-mode sandbox           # 负对照:sandbox 模式下工具走云工作区,未登录应报错而非假空目录
  *   npm run live:harness -- --only conflict                  # 改 skills/amadeus-note-format(同步冲突副本合并)后跑:四问都装载技能 + 双向并集 + 画布对不动 + 子集副本直接删 + 近似非子集不丢内容 + 一次都不许 ask_user
@@ -133,6 +134,7 @@ import { fromDb, report as timelineReport } from './stall-timeline.mjs';
 import { launchChromePipe, pairExtension } from './lib/chrome-pipe.mjs';
 import { pageInstructionsLive } from './lib/page-instructions-live.mjs';
 import { realUseLive } from './lib/real-use-live.mjs';
+import { dreamSeedLive } from './lib/dream-seed-live.mjs';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const entry = join(root, 'dist', 'standalone', 'main.js');
@@ -146,6 +148,7 @@ const MODEL = opt('model', process.env.TANGU_LIVE_MODEL || 'codex/gpt-5.6-luna')
 const AUTH = resolve(opt('auth', process.env.TANGU_LIVE_AUTH || join(homedir(), '.forsion-dev', 'provider-auth.json')));
 const KEYS = ['realtime', 'voiceclone', 'personas', 'rename', 'selfschedule', 'selfmodel', 'chat', 'tool', 'remember', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'parked', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human', 'emoji', 'visualize', 'visualfigures', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'control', 'phone', 'unattendedask', 'plugin', 'skillpick', 'pluginlook', 'settingsnav', 'appsettings'];
 KEYS.push('signals');
+KEYS.push('dreamseed');
 KEYS.push('pageinstructions');
 KEYS.push('harnessopen');
 KEYS.push('equip');
@@ -171,6 +174,7 @@ const GIT_PREFIX = 'livetest/'; const GIT_TAG = '[LIVE]';
 // grant 是两个委派 run(慢),且只在动过 delegate.grantTools / 子代理管理面闸时才有信息量。
 const OPT_IN = new Set(['realtime', 'remember', 'musewake', 'personas', 'rename', 'selfschedule', 'selfmodel', 'teamapproval', 'parked', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'appsettings', 'control', 'phone']);
 OPT_IN.add('signals');
+OPT_IN.add('dreamseed');
 OPT_IN.add('projdedupe'); // --only projdedupe:项目记忆换了说法的重复(真模型 + 后台判官,约 20 次调用)
 OPT_IN.add('projteam'); // --only projteam:项目记忆在团队会话里(三个两人团队各一轮)
 OPT_IN.add('visualfigures');
@@ -2887,6 +2891,12 @@ Then reply with only the command output.`,
     const hit = low.includes(FACT_DB.toLowerCase()) && low.includes(FACT_CODE.toLowerCase());
     return { ok: !ev.error && hit, detail: ev.error || (hit ? '两条都答中(源会话已删,只能来自记忆)' : `答偏:${ev.content.slice(0, 80)}`), output: ev.content, ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls };
   });
+
+  // 有体量的记忆上的整理(10-06):缺省 20 条已有记忆(含两对换了说法的重复)+ 8 条候选(4 条说过的长期事实 / 1 条已经记过 / 2 条只是当天进度 / 1 条没说过),
+  // 同一份种子连跑 --dream-rounds 轮(缺省 3)。判:每轮整理完成、已有事实一条没丢、没说过的那条没被记进去;该记的记了几条、当天进度混进去几条只记数。
+  // --dream-entries 40 = 加压;--dream-timeout <毫秒> 改整理时限(缺省不改,用出厂的 60 秒)。原来的 dream 场景只有两条事实,量不出档位之间的差别。
+  await scenario('dreamseed', 'dreamseed 有体量的记忆上的整理(同一份种子连跑多轮)', () =>
+    dreamSeedLive({ run, api, until, home, OUT, MODEL, AGENT_CONFIG, rounds: Number(opt('dream-rounds', 3)), entries: Number(opt('dream-entries', 20)), timeoutMs: Number(opt('dream-timeout', 0)) }));
 
   await scenario('compact', 'compact 压缩后续聊', async () => {
     // 自包含:自己的会话先把标记读进上下文,再压缩,再追问 —— 不依赖 tool 场景,答不出标记就是红。
