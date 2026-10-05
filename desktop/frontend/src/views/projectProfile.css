@@ -46,6 +46,11 @@
 .project-memory-candidate .profile-text-action { padding: 2px 0; }
 .project-memory-candidate .profile-text-action.adopt { color: var(--accent-ink); }
 .project-memory-candidate .profile-text-action:hover:not(:disabled) { text-decoration: underline; text-underline-offset: 3px; }
+/* 写满压缩的记录:原生 details,默认收起;展开是被合并 / 去掉的原句,逐句恢复 */
+.project-memory-compacted { margin-top: 6px; }
+.project-memory-compacted > summary { padding: 0 8px; font-size: var(--ui-font-meta, 12px); color: var(--text-muted); cursor: pointer; }
+.project-memory-compacted > ul { display: grid; gap: 6px; margin-top: 6px; }
+.project-memory-compacted > small { display: block; margin-top: 6px; padding: 0 8px; font-size: var(--ui-font-caption, 11px); line-height: 1.6; color: var(--text-muted); }
 .project-row strong { font-size: var(--ui-font-meta, 12px); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .project-row span, .project-row small { min-width: 0; color: var(--text-muted); font-size: var(--ui-font-caption, 11px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .project-row code { font-family: var(--font-mono, ui-monospace, monospace); font-size: var(--ui-font-caption, 11px); color: var(--text-muted); }

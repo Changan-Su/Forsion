@@ -18,6 +18,7 @@ import { query } from '../src/core/db.js';
 import { createRun, updateRunStatus } from '../src/services/runStore.js';
 import { onUserRunDone, parseRawLines, redactSecrets, resetHistorianConsolidationState } from '../src/services/localHistorian.js';
 import { configureMemoryDream, getMemoryDream } from '../src/services/memoryDream.js';
+import { resetProjectMemoryCompactionForTests } from '../src/services/projectMemoryCompact.js';
 import { agentsDir, DEFAULT_AGENT_SLUG } from '../src/core/tanguHome.js';
 import { saveSpecialAgentsConfig } from '../src/services/specialAgentsConfig.js';
 import { queueProjectFact, buildProjectMemoryContext, openProjectMemory, peekProjectMemory, projectMemoryView, resolveProjectCandidate, resolveProjectMemory, PROJECT_MEMORY_CHAR_BUDGET } from '../src/services/projectMemory.js';
@@ -57,6 +58,7 @@ beforeEach(async () => {
   appendedLogs = [];
   beforeReply = undefined;
   resetHistorianConsolidationState();
+  resetProjectMemoryCompactionForTests();
 
   const { host, db } = createSqliteHost({ dataDir: 'memory', localToken: 'x', userId: USER });
   db.exec(toSqliteDDL(STANDALONE_SCHEMA));
@@ -577,16 +579,55 @@ describe('项目会话:只在这个项目成立的候选落项目记忆,不进 a
     expect(await projectFacts('SP3')).toEqual(['The API lives in services/api']);
   });
 
-  it('满了就不写:不为了腾地方动已有条目', async () => {
-    await seedProjectSession();
+  const filler = (i: number): string => `Fact ${String(i).padStart(2, '0')} ${'x'.repeat(280)}`;
+  const fillUp = async (): Promise<string[]> => {
     const repo = await openProjectMemory((await resolveProjectMemory(USER, 'SP'))!);
-    const filler = (i: number): string => `Fact ${String(i).padStart(2, '0')} ${'x'.repeat(280)}`;
     for (let i = 0; (i + 1) * 289 <= PROJECT_MEMORY_CHAR_BUDGET - 100; i++) repo.mutate({ action: 'add', fact: filler(i), cap: PROJECT_MEMORY_CHAR_BUDGET });
-    const before = await projectFacts();
-    llmScript = [judged([], [`The build output goes to dist and ${'y'.repeat(200)}`])];
+    return projectFacts();
+  };
+  const NEW_FACT = `The build output goes to dist and ${'y'.repeat(200)}`;
+  const logged = async (action: string): Promise<any[]> => query<any[]>(`SELECT detail FROM special_agent_log WHERE action = ?`, [action]);
+
+  it('满了、压不成 → 不写:不为了腾地方动已有条目', async () => {
+    await seedProjectSession();
+    const before = await fillUp();
+    llmScript = [judged([], [NEW_FACT])]; // 压缩那次调用拿到空回答 → 方案不合格
     await onUserRunDone('SP', USER);
     expect(await projectFacts()).toEqual(before);
-    expect(await query<any[]>(`SELECT id FROM special_agent_log WHERE action = 'project_memory_added'`)).toHaveLength(0);
+    expect(llmPayloads).toHaveLength(2);
+    expect(String(llmPayloads[1].messages[0].content)).toMatch(/^Compact the saved memory of ONE software project/);
+    expect(await logged('project_memory_added')).toHaveLength(0);
+    expect(await logged('project_memory_compacted')).toHaveLength(0);
+  });
+
+  it('满了 → 让模型把整份压一遍再写(10-05 用户:「记忆满了就让 agent 压缩一下」);活动里记一笔', async () => {
+    await seedProjectSession();
+    const before = await fillUp();
+    const ids = before.map((_, i) => `m${i + 1}`);
+    llmScript = [judged([], [NEW_FACT]), JSON.stringify({ keep: ids.slice(0, 2), groups: [], discarded: ids.slice(2) })];
+    await onUserRunDone('SP', USER);
+    expect(await projectFacts()).toEqual([filler(0), filler(1), NEW_FACT]);
+    expect((await logged('project_memory_compacted'))[0].detail).toMatch(new RegExp(`^${before.length} → 2 entries, \\d+ → \\d+ characters`));
+    expect(await logged('project_memory_added')).toHaveLength(1);
+    // 给压缩模型看的只有项目记忆本身,没有这一轮的对话
+    expect(String(llmPayloads[1].messages[1].content)).not.toContain('实质对话内容');
+  });
+
+  it('压缩等模型的那几秒里会话被远端驱动了 → 压缩算数(它只重写已有的),这一句和这一轮剩下的都不写(Codex 评审 10-05)', async () => {
+    await seedProjectSession();
+    const before = await fillUp();
+    const ids = before.map((_, i) => `m${i + 1}`);
+    // 第二句很短:光跳过第一句的话,它会落进刚腾出来的地方
+    llmScript = [judged([], [NEW_FACT, 'The CLI entry point is bin/tool']), JSON.stringify({ keep: ids.slice(0, 2), groups: [], discarded: ids.slice(2) })];
+    beforeReply = async () => {
+      if (llmPayloads.length !== 2) return; // 只在压缩那次调用期间(判官那次之后闸还是开的)
+      await createRun({ id: 'R-remote-sp', sessionId: 'SP', userId: USER, appId: 'tangu', modelId: 'm1', assistantMessageId: 'A-remote-sp',
+        input: { message: 'from phone', userMessageId: 'U-remote-sp', attachments: [], agentConfig: {}, remote: { via: 'tunnel', marked: true } } as any });
+    };
+    await onUserRunDone('SP', USER);
+    expect(await projectFacts()).toEqual([filler(0), filler(1)]);
+    expect(await logged('project_memory_compacted')).toHaveLength(1);
+    expect(await logged('project_memory_added')).toHaveLength(0);
   });
 
   it('没有项目的会话:不问那一组;模型硬给也不认', async () => {

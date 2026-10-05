@@ -35,6 +35,12 @@ describe('takeFreshNominations', () => {
     expect(second.fresh).toEqual([ev('c', 'harness_confirm'), ev('p', 'project_memory_candidates')])
     expect(takeFreshNominations([ev('c', 'harness_confirm'), ev('p', 'project_memory_candidates')], second.seen).fresh).toEqual([])
   })
+  it('项目记忆写满被压缩(project_memory_compacted)也报,只报一次', () => {
+    const first = takeFreshNominations([ev('a')], null)
+    const second = takeFreshNominations([ev('a'), ev('k', 'project_memory_compacted'), ev('w', 'project_memory_added')], first.seen)
+    expect(second.fresh).toEqual([ev('k', 'project_memory_compacted')])
+    expect(takeFreshNominations([ev('k', 'project_memory_compacted')], second.seen).fresh).toEqual([])
+  })
   it('后台直接采纳(harness_adopted)同样只报一次', () => {
     const first = takeFreshNominations([ev('a')], null)
     const second = takeFreshNominations([ev('a'), ev('d', 'harness_adopted')], first.seen)

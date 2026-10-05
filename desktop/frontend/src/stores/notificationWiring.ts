@@ -49,10 +49,11 @@ export function pendingReminders(marks: MdMark[], now: number, fired: Record<str
  *  首轮(seen=null)一律不报 —— 打开一个旧会话不该被过去的提名轰炸;之后按活动 id 去重。
  *  判定与记账放同一个函数:调用方只拿返回值,不可能先记后判(那会让首轮全部漏成「新」)。
  *  接线在 chat2/HistorianStatus(它本来就每 2.5s 轮询会话活动),这里只放纯逻辑好单测。 */
-const NOMINATION_ACTIONS = new Set(['harness_candidates', 'harness_adopted', 'harness_confirm', 'project_memory_candidates'])
+const NOMINATION_ACTIONS = new Set(['harness_candidates', 'harness_adopted', 'harness_confirm', 'project_memory_candidates', 'project_memory_compacted'])
 export function takeFreshNominations<T extends { id: string; action: string }>(activity: T[], seen: ReadonlySet<string> | null): { fresh: T[]; seen: Set<string> } {
   // harness_adopted(10-04):后台提名被直接写进了进化记录 —— 同样要告诉用户,只是按钮不同(去看 / 撤销,而不是去复盘)。
   // harness_confirm / project_memory_candidates(10-04):带网址、命令或权限字眼的候选,后台没有写,等用户逐条点头 —— 不提醒就没人知道有东西在等。
+  // project_memory_compacted(10-05):项目记忆写满被压缩了一遍(有损)—— 不提醒,用户不打开项目详情就不知道有原句被合并 / 去掉、还能恢复。
   const fresh = seen ? activity.filter((a) => NOMINATION_ACTIONS.has(a.action) && !seen.has(a.id)) : []
   const next = new Set(seen ?? [])
   for (const a of activity) next.add(a.id)

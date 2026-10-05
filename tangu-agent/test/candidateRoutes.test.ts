@@ -15,7 +15,7 @@ import { runMigration } from '../src/db/migrate.js';
 import { toSqliteDDL } from '../src/core/dialectDDL.js';
 import { STANDALONE_SCHEMA } from '../src/db/schemaStandalone.js';
 import { appendHarnessCandidates, loadHarness, peekHarnessCandidates, readJournal } from '../src/agents/harnessStore.js';
-import { projectMemoryView, queueProjectFact, resolveProjectMemory } from '../src/services/projectMemory.js';
+import { projectMemoryView, queueProjectFact, recordProjectCompaction, resolveProjectMemory } from '../src/services/projectMemory.js';
 import agentsRouter from '../src/routes/agents.js';
 import projectContextRouter from '../src/routes/projectContext.js';
 
@@ -116,5 +116,36 @@ describe('POST /agent/project-context/memory/candidate', () => {
     expect(r.status).toBe(200);
     expect(r.body.memory.entries.map((e: any) => e.content)).toEqual([DEPLOY]);
     expect(r.body.memory.candidates).toEqual([]);
+  });
+});
+
+describe('POST /agent/project-context/memory/restore(写满压缩时合并 / 去掉的原句,逐句恢复)', () => {
+  const GONE = 'The old release branch was release/2026.08';
+  const idOf = async (): Promise<string> => (await projectMemoryView(project)).compacted!.removed[0]!.id;
+
+  it('项目详情带上压缩记录;远端来源既看不到、也点不了', async () => {
+    recordProjectCompaction((await resolveProjectMemory('owner', 'mine'))!, { count: 40, chars: 7900 }, { count: 12, chars: 3100 }, [GONE]);
+    const local = await api('/agent/project-context?sessionId=mine');
+    expect(local.body.memory.compacted).toMatchObject({ before: { count: 40, chars: 7900 }, after: { count: 12, chars: 3100 } });
+    expect(local.body.memory.compacted.removed.map((r: any) => r.content)).toEqual([GONE]);
+    expect((await api('/agent/project-context/memory/restore', 'POST', { sessionId: 'mine', id: await idOf() }, REMOTE)).status).toBe(403);
+  });
+
+  it('别人的会话、没给 id、那一句不在 → 拒绝,记录原样留着', async () => {
+    const id = await idOf();
+    expect((await api('/agent/project-context/memory/restore', 'POST', { sessionId: 'theirs', id })).status).toBe(404);
+    expect((await api('/agent/project-context/memory/restore', 'POST', { sessionId: 'mine' })).status).toBe(400);
+    const gone = await api('/agent/project-context/memory/restore', 'POST', { sessionId: 'mine', id: 'no-such-id' });
+    expect([gone.status, gone.body.error]).toEqual([404, 'MEMORY_NOT_FOUND']);
+    expect((await projectMemoryView(project)).compacted!.removed).toHaveLength(1);
+  });
+
+  it('恢复 → 记回项目记忆并从记录里拿掉;返回新的视图', async () => {
+    const before = (await projectMemoryView(project)).entries.length;
+    const r = await api('/agent/project-context/memory/restore', 'POST', { sessionId: 'mine', id: await idOf() });
+    expect(r.status).toBe(200);
+    expect(r.body.memory.entries.map((e: any) => e.content)).toContain(GONE);
+    expect(r.body.memory.entries).toHaveLength(before + 1);
+    expect(r.body.memory.compacted.removed).toEqual([]);
   });
 });

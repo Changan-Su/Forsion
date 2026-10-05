@@ -70,6 +70,8 @@ export const NOTIFY_EVENTS: Array<{ id: string; labelKey: string; defaultOn: boo
   { id: 'harness.candidates', labelKey: 'ntf.event.harnessCandidates', defaultOn: true },
   // 后台从项目会话里记下、但带网址 / 命令 / 权限字眼的事实:没有直接写进项目记忆,等用户在项目详情里逐条采纳或丢弃。
   { id: 'memory.projectCandidates', labelKey: 'ntf.event.projectCandidates', defaultOn: true },
+  // 项目记忆写满、Agent 把它压缩了一遍(有损:合并重复、去掉被取代的):告诉用户,项目详情里能逐句恢复。
+  { id: 'memory.projectCompacted', labelKey: 'ntf.event.projectCompacted', defaultOn: true },
 ]
 
 export function eventDefaultOn(event: string): boolean {

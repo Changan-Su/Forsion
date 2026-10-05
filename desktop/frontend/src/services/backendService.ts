@@ -1246,6 +1246,9 @@ export const forgetProjectMemory = (t: EngineTarget, sessionId: string, id: stri
 /** 对一条待确认的项目记忆候选点「采纳 / 丢弃」。404 = 那条已经不在了;采纳时放不下 → err.code 'MEMORY_FULL'。 */
 export const resolveProjectCandidate = (t: EngineTarget, sessionId: string, id: string, action: 'adopt' | 'dismiss') =>
   request<{ memory: ProjectMemoryView }>(t, '/agent/project-context/memory/candidate', { method: 'POST', body: JSON.stringify({ sessionId, id, action }) }).then((r) => r.memory)
+/** 把写满压缩时合并 / 去掉的一句原样记回项目记忆。404 = 那一句已经不在记录里;放不下 → err.code 'MEMORY_FULL'。 */
+export const restoreProjectMemoryFact = (t: EngineTarget, sessionId: string, id: string) =>
+  request<{ memory: ProjectMemoryView }>(t, '/agent/project-context/memory/restore', { method: 'POST', body: JSON.stringify({ sessionId, id }) }).then((r) => r.memory)
 export const initProjectContext = (t: EngineTarget, sessionId: string) =>
   request<{ createdDir: boolean; createdDoc: boolean; context: ProjectContext }>(t, '/agent/project-context/init', { method: 'POST', body: JSON.stringify({ sessionId }) }).then((r) => ({ ...r, context: projectContextShape(r.context) }))
 /** 409 = 文件在读出之后被别处改过(没有写入);调用方提示用户重载。 */

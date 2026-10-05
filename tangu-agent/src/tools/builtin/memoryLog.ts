@@ -9,6 +9,7 @@ import type { ToolContext } from '../toolTypes.js';
 import { MemoryRepositoryError, MEMORY_CHAR_BUDGET, normalizeMemoryFact, type MemoryEntry, type MemorySnapshot } from '../../services/memoryRepository.js';
 import { effectiveRemote, remoteManagementDenied } from '../../services/remoteOrigin.js';
 import { coveringProjectEntry, openProjectMemory, peekProjectMemory, resolveProjectMemory, PROJECT_MEMORY_CHAR_BUDGET } from '../../services/projectMemory.js';
+import { compactProjectMemory, type CompactionOutcome } from '../../services/projectMemoryCompact.js';
 
 /** 单条上限与 Historian 候选采集同口径(localHistorian `.slice(0, 300)`)。显式路径此前无闸:09-22 一份终端用户导出里
  *  41 条显式条目最长 1,477 字、21 条带日期、9 条是追加式「更正旧条目」——记忆被日志灌满,而候选路径 12 天只出 8 条一句话。 */
@@ -134,21 +135,32 @@ export const memoryLogProvider: ToolProvider = {
               entry: entryView(covering), count: before!.entries.length, chars: before!.content.length, limit,
             });
           }
-          let snapshot: MemorySnapshot;
-          try {
-            const mutation = {
-              action: action as 'add' | 'update' | 'forget', fact, id: args.id ? String(args.id) : undefined,
-              expectedVersion: args.expectedVersion ? String(args.expectedVersion) : undefined,
-              source: { kind: 'explicit' as const, sessionId: ctx.sessionId, runId: ctx.runId }, signal: ctx.signal,
-            };
-            snapshot = projectRepo ? projectRepo.mutate({ ...mutation, cap: PROJECT_MEMORY_CHAR_BUDGET }) : await brain.mutateMemory!(ctx.userId, mutation);
-          } catch (e) {
-            // 满了就回显现有条目,让模型一次删旧加新(Hermes 的 IF FULL),而不是只丢一句「超预算」。
-            const full = e instanceof MemoryRepositoryError && e.code === 'MEMORY_FULL' ? await read() : undefined;
-            if (full) {
-              return `Error: ${projectRepo ? 'project' : 'long-term'} memory is full (${full.content.length}/${limit} characters). Forget or shorten stale entries with update/forget (scope "${scope}", expectedVersion ${full.version}), then add. Current entries: ${JSON.stringify(full.entries.map(entryView))}`;
+          const mutation = {
+            action: action as 'add' | 'update' | 'forget', fact, id: args.id ? String(args.id) : undefined,
+            expectedVersion: args.expectedVersion ? String(args.expectedVersion) : undefined,
+            source: { kind: 'explicit' as const, sessionId: ctx.sessionId, runId: ctx.runId }, signal: ctx.signal,
+          };
+          const write = async (m = mutation): Promise<MemorySnapshot> => projectRepo ? projectRepo.mutate({ ...m, cap: PROJECT_MEMORY_CHAR_BUDGET }) : brain.mutateMemory!(ctx.userId, m);
+          const isFull = (e: unknown): boolean => e instanceof MemoryRepositoryError && e.code === 'MEMORY_FULL';
+          let snapshot: MemorySnapshot | undefined;
+          let compacted: Extract<CompactionOutcome, { status: 'compacted' }> | undefined;
+          let fullError: unknown;
+          try { snapshot = await write(); } catch (e) {
+            if (!isFull(e)) throw e;
+            fullError = e;
+            // 项目记忆写满(10-05 用户:「记忆满了就让 agent 压缩一下」):先让模型把整份压一遍,再记这一句。agent 级不走这条(那边有 Dream)。
+            // 只管 add:update 带着旧版本号和旧条目 id,压完都对不上了,那种照旧回现有条目。压不成(没模型 / 压不动 / 刚试过)同样照旧。
+            const made = projectRepo && action === 'add' ? await compactProjectMemory(ctx.userId, projectRef!, { fallbackModelId: ctx.modelId, sessionId: ctx.sessionId, signal: ctx.signal }) : undefined;
+            if (made?.status === 'compacted') {
+              // 不带模型给的 expectedVersion:压缩自己把版本改了,带着它这一句必然冲突
+              try { snapshot = await write({ ...mutation, expectedVersion: undefined }); compacted = made; } catch (again) { if (!isFull(again)) throw again; }
             }
-            throw e;
+          }
+          if (!snapshot) {
+            // 满了就回显现有条目,让模型一次删旧加新(Hermes 的 IF FULL),而不是只丢一句「超预算」。
+            const full = await read();
+            if (!full) throw fullError;
+            return `Error: ${projectRepo ? 'project' : 'long-term'} memory is full (${full.content.length}/${limit} characters). Forget or shorten stale entries with update/forget (scope "${scope}", expectedVersion ${full.version}), then add. Current entries: ${JSON.stringify(full.entries.map(entryView))}`;
           }
           // 回执只回受影响的条目:整份 entries 回灌一次就是几万字进上下文(09-22 导出实测 31k)。
           const id = args.id ? String(args.id) : undefined;
@@ -160,6 +172,8 @@ export const memoryLogProvider: ToolProvider = {
             ...(duplicate ? { duplicate: true, note: 'An identical fact already exists; nothing was written.' } : {}),
             ...(entry ? { entry: entryView(entry) } : id ? { id } : {}),
             count: snapshot.entries.length, chars: snapshot.content.length, limit,
+            // 压过一遍:条目 id 和版本都换过了,模型手里旧的那份 list 不能再用
+            ...(compacted ? { compacted: `Project memory was full, so it was compacted before this was saved: ${compacted.before.count} entries (${compacted.before.chars} characters) became ${compacted.after.count} (${compacted.after.chars}). Entry IDs and versions from earlier list calls are stale; list again before update or forget.` } : {}),
           });
         }
         if (action !== 'add') return 'Error: this memory backend does not support entry management.';
