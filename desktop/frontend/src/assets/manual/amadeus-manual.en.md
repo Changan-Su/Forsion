@@ -2908,7 +2908,7 @@ The "Built-in plugins" section at the top of the plugin page holds six items tha
 | Callouts | Three entries in the "Callouts" group of the `/` menu: "Note callout", "Info callout", "Warning callout", in Obsidian syntax | Those three `/` entries |
 | Word count | The command "Count words", which reports the page's characters and words | That command; the live word count in the status bar is unaffected |
 
-- The Browser card carries an extra checkbox, "Open in-app links in the built-in browser". Uncheck it and every external link goes to your system browser instead.
+- The Browser card carries an extra checkbox, "Open in-app links in the built-in browser". It is off by default, so web links in the app go to your system browser. Check it to open them in a built-in browser tab instead.
 - Calendar registers no command at all; its Space is the only door.
 - These switches are stored per machine and are not synced with your account; other windows on the same machine follow instantly.
 - The terminal depends on a native component shipped with the app; on the odd machine where it is not ready, opening it says so outright.

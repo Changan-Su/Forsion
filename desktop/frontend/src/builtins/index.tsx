@@ -57,7 +57,7 @@ registerMessages({
 
 const tr = (k: string, vars?: Record<string, unknown>): string => useApp.getState().tr(k, vars)
 
-// ── 开关持久化(localStorage;默认开)────────────────────────────────────────
+// ── 开关持久化(localStorage;内置能力默认开,「应用内链接」默认关)──────────────
 const key = (id: string): string => `builtin.${id}.enabled`
 const LINKS_KEY = 'builtin.browser.inAppLinks'
 function readFlag(k: string): boolean {
@@ -66,6 +66,9 @@ function readFlag(k: string): boolean {
 function writeFlag(k: string, on: boolean): void {
   try { localStorage.setItem(k, on ? '1' : '0') } catch { /* 隐私模式:本次会话生效即可 */ }
 }
+/** 「应用内链接用内置浏览器打开」:缺省关 —— 网页链接默认交给系统浏览器(2026-10-05 用户定,别改回缺省开)。
+ *  只有存过 '1'(用户自己勾上)才开;没存过 / 读不了都按关。 */
+const linksOn = (): boolean => { try { return localStorage.getItem(LINKS_KEY) === '1' } catch { return false } }
 
 /** 关掉工作台里该类型的**全部**实例,为反注册清场:Dockview 的 components map 收缩时不能留活面板。
  *  ⚠️改用引擎的 closeViewsOfType(以 api.panels 为准、循环到关光)。原来按 `mainTabs + left + right`
@@ -181,7 +184,7 @@ function applyBuiltin(def: BuiltinDef, on: boolean): void {
 
 interface BuiltinState {
   enabled: Record<string, boolean>
-  /** 应用内 http(s) 链接是否走内置浏览器(关 = 照旧转系统浏览器)。 */
+  /** 应用内 http(s) 链接是否走内置浏览器(缺省关 = 交给系统浏览器,见 linksOn)。 */
   inAppLinks: boolean
   toggle(id: string, on: boolean): void
   setInAppLinks(on: boolean): void
@@ -189,7 +192,7 @@ interface BuiltinState {
 
 export const useBuiltins = create<BuiltinState>((set, get) => ({
   enabled: Object.fromEntries(BUILTINS.map((b) => [b.id, builtinEnabled(b.id)])),
-  inAppLinks: readFlag(LINKS_KEY),
+  inAppLinks: linksOn(),
   toggle: (id, on) => {
     if (id === 'calendar' && PRODUCT.nativeFeatures !== undefined) return
     const def = BUILTINS.find((b) => b.id === id)
@@ -270,7 +273,7 @@ export function installBuiltins(): void {
   // 另一个窗口改了开关 → 本窗口跟着生效(每个渲染进程各有一份 store,只读 localStorage 快照
   // 会让 detached 窗继续用早已被关掉的内置能力)。
   window.addEventListener('storage', (e) => {
-    if (e.key === LINKS_KEY) { useBuiltins.setState({ inAppLinks: readFlag(LINKS_KEY) }); return }
+    if (e.key === LINKS_KEY) { useBuiltins.setState({ inAppLinks: linksOn() }); return }
     const def = BUILTINS.find((b) => key(b.id) === e.key)
     if (!def || !def.available() || (def.id === 'calendar' && PRODUCT.nativeFeatures !== undefined)) return
     const on = readFlag(key(def.id))
