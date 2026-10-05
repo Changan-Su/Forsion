@@ -19,6 +19,9 @@ import { streamOpenAiResponses } from '../../llm/openaiResponses.js';
 import WebSocket from 'ws';
 import { randomUUID } from 'node:crypto';
 
+/** TANGU_LLM_DEBUG=1:build 时记下的一行说明,stream 完成后连同用量一起打进引擎日志(按 payload 对象认,不进请求体)。 */
+const llmDebug = new WeakMap<object, string>();
+
 // 规范尺寸 → OpenAI 兼容像素(direct provider 用;Forsion /v1/images 自带换算,故仅 direct 需要)。
 const DIRECT_IMG_SIZE: Record<string, string> = {
   '1:1': '1024x1024', '3:2': '1792x1024', '16:9': '1792x1024', '2:3': '1024x1792', '9:16': '1024x1792',
@@ -312,11 +315,17 @@ export function createMultiBrain(httpBrain: CloudBrainServices, registry: Provid
           // 思考档位按 modelCapabilities 能力表下发(每家形态不同:effort / budget_tokens /
           // enable_thinking / thinking:{type} …;未知端点退到系统提示兜底)。见 tune 注释。
           const resolved = registry.resolve((opts.model as any).id);
-          tuneOpenAiDirectPayload(payload, opts.thinkingLevel, {
+          const effective = tuneOpenAiDirectPayload(payload, opts.thinkingLevel, {
             baseUrl: resolved?.baseUrl,
             provider: (opts.model as any).provider,
             apiModelId: resolved?.apiModelId,
           });
+          // 仪器:TANGU_LLM_DEBUG=1 时记下这次调用要的档位、夹紧后的档位和实际写进请求的思考字段(发出后再补用量与耗时)。
+          // 不传 thinkingLevel = 关思考且不报错,后台调用质量差时先看这一行(docs/agent-memory.md「直接模型调用的思考档位」)。
+          if (process.env.TANGU_LLM_DEBUG === '1') {
+            const sys = (opts.messages as any[]).find((m) => m?.role === 'system')?.content;
+            llmDebug.set(payload, `model=${resolved?.apiModelId || payload.model} tools=${opts.tools?.length || 0} asked=${opts.thinkingLevel ?? '(unset)'} effective=${effective} wire=${JSON.stringify({ reasoning_effort: payload.reasoning_effort, thinking: payload.thinking, reasoning: payload.reasoning, enable_thinking: payload.enable_thinking })} maxTokens=${opts.maxTokens ?? '(unset)'} system=${JSON.stringify(String(typeof sys === 'string' ? sys : '').slice(0, 48))}`);
+          }
           return payload;
         }
         return httpBrain.llm.buildProviderPayload(opts);
@@ -325,9 +334,15 @@ export function createMultiBrain(httpBrain: CloudBrainServices, registry: Provid
         const p = opts.payload as any;
         if (p?.[DIRECT_MARK]) {
           // 订阅登录的原生端点据协议再分发;缺省 OpenAI 兼容。
-          if (p[PROTOCOL_MARK] === 'anthropic-messages') return streamAnthropicMessages(opts);
-          if (p[PROTOCOL_MARK] === 'openai-responses') return streamOpenAiResponses(opts);
-          return streamOpenAiCompat(opts);
+          const send = () => p[PROTOCOL_MARK] === 'anthropic-messages' ? streamAnthropicMessages(opts)
+            : p[PROTOCOL_MARK] === 'openai-responses' ? streamOpenAiResponses(opts)
+            : streamOpenAiCompat(opts);
+          const tag = llmDebug.get(p);
+          if (!tag) return send();
+          const t0 = Date.now();
+          const res = await send();
+          console.log(`[llm-debug] ${tag} → ms=${Date.now() - t0} prompt=${res.usage?.prompt_tokens ?? 0} completion=${res.usage?.completion_tokens ?? 0} reasoning=${res.usage?.reasoning_tokens ?? 0} finish=${res.finishReason ?? ''}`);
+          return res;
         }
         return httpBrain.llm.streamProviderCompletion(opts);
       },
