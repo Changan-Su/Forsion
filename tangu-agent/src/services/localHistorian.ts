@@ -48,6 +48,7 @@ import { startMemoryDream } from './memoryDream.js';
 import { MEMORY_CHAR_BUDGET, normalizeMemoryFact } from './memoryRepository.js';
 import { sessionCalledTool } from './sessionSearchSql.js';
 import { addProjectFact, peekProjectMemory, pendingProjectFacts, projectKnownForJudge, queueProjectFact, resolveProjectMemory } from './projectMemory.js';
+import { compactProjectMemory } from './projectMemoryCompact.js';
 import { COMPUTER_HISTORY_TOOL } from './computerHistory.js';
 import { HISTORIAN_EMOJI_FIELD } from '../core/sessionEmoji.js';
 import { applyHistorianEmoji } from './sessionEmoji.js';
@@ -715,8 +716,20 @@ async function runHistorianForSession(sessionId: string, userId: string, memScop
             // 与工作笔记的自动采纳同一道形状闸:带网址 / 管道进解释器 / 凭据·审批·权限字眼的,不由后台写进系统提示 ——
             // 排进这个项目的待确认清单,等用户在项目详情里逐条点头(10-04 用户裁决「有风险的才需要确认」;此前是直接丢)。
             try {
-              if (!autoAdoptable(fact)) { if (await queueProjectFact(projectRef, fact, sessionId)) waiting.push(fact); }
-              else if ((await addProjectFact(projectRef, fact, sessionId)) === 'added') added.push(fact);
+              if (!autoAdoptable(fact)) { if (await queueProjectFact(projectRef, fact, sessionId)) waiting.push(fact); continue; }
+              let wrote = await addProjectFact(projectRef, fact, sessionId);
+              if (wrote === 'full') {
+                // 写满(10-05 用户:「记忆满了就让 agent 压缩一下」):让模型把整份压一遍再试一次。压不成 → 照旧不写,绝不为了腾地方直接删条目。
+                // 压没压成、为什么没成,compactProjectMemory 自己记日志;压成了的那一笔活动(project_memory_compacted)也由它记
+                const made = await compactProjectMemory(userId, projectRef, { fallbackModelId: cfg.modelId, sessionId, signal: historianSignal.getStore() });
+                if (made.status === 'compacted') {
+                  // 等模型的那几秒里会话可能已被远端驱动 / 调过电脑历史:和上面 stillClean 同一道闸,落这一句之前再核一次。
+                  // 没过 → 这一句和这一轮剩下的都不写(光跳过这一句,下一句会落进刚腾出来的地方;Codex 评审 10-05)
+                  if ((await sessionRemoteTainted(sessionId)) || (await sessionCalledTool(sessionId, COMPUTER_HISTORY_TOOL).catch(() => true))) break;
+                  wrote = await addProjectFact(projectRef, fact, sessionId);
+                }
+              }
+              if (wrote === 'added') added.push(fact);
             } catch (e: any) { log(`写项目记忆失败: ${e?.message || e}`); }
           }
           if (added.length) {

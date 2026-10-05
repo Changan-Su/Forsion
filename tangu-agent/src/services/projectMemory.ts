@@ -7,7 +7,8 @@
  *
  * 存本机用户目录 `tanguHome()/project-memory/<项目 realpath 的哈希>/`,不写进项目目录 —— 与 project-settings.json 同一取舍:
  * 这类内容取决于本人意愿,不该进仓库;也免得 clone 来的仓自带一份「记忆」进系统提示。代价:项目目录挪了位置,这份记忆就对不上了。
- * 落盘沿用 createMemoryRepository(版本 / CAS / 墓碑 / 外部编辑对账),没有新的写盘协议。不走云同步,不过 Dream。
+ * 落盘沿用 createMemoryRepository(版本 / CAS / 墓碑 / 外部编辑对账),没有新的写盘协议。不走云同步,不过 Dream;
+ *  写满时由模型压一遍(projectMemoryCompact.ts),这里只存它留下的记录(COMPACTED.json)。
  *
  * 归属只认会话存档的 project_path(humanProjectScope 的做法),绝不接受模型或客户端给的路径。
  */
@@ -115,7 +116,7 @@ function standsDown(snapshot: MemorySnapshot, fact: string, sessionId: string): 
   if (snapshot.tombstones.some((t) => t.fingerprint === fingerprint && isMemoryTombstoneActive(t))) return true;
   // 这个会话里前台已经自己往项目记忆里记过了 → 后台不再替它记。10-04 live 3/4 轮:判官还在判上一轮(那时项目记忆是空的),
   // 用户下一句纠正已经让前台记了一条,判官随后把同一件事换个说法又写了一条 —— 字面去重和「给判官看已有内容」都拦不住这个时序。
-  // ponytail: 按会话一刀切(与工作笔记的 own 同一个取舍);项目级没有 Dream,要认「换了说法的同一件事」得另加整理。
+  // ponytail: 按会话一刀切(与工作笔记的 own 同一个取舍);项目级没有 Dream,「换了说法的同一件事」要等写满时的压缩才合。
   if (snapshot.entries.some((e) => e.source?.kind === 'explicit' && e.source.sessionId === sessionId)) return true;
   // 这个会话里后台记过(或用户采纳过)的条目被用户删了 → 这个会话后台不再记(判官下一轮会换个说法再提,字面墓碑认不出)。
   // 靠的是条目上那枚会话记号:删除时它随 evidenceIds 进了墓碑。
@@ -164,18 +165,22 @@ export interface ProjectMemoryView {
   chars: number;
   limit: number;
   candidates: Array<{ id: string; content: string; at: number }>;
+  /** 最近一次写满时的自动压缩;没压过 → 不带。removed = 被合并或去掉、还能逐条恢复的原句(新的在前)。 */
+  compacted?: { at: number; before: CompactionSize; after: CompactionSize; removed: Array<{ id: string; content: string }> };
 }
 
 /** 只读视图;project 必须是调用方已经从会话存档解析出的 canonical 项目目录。还没有记忆 → 空清单,不建目录。 */
 export async function projectMemoryView(project: string): Promise<ProjectMemoryView> {
   const ref = refOf(project);
   const snapshot = await peekProjectMemory(ref);
+  const compaction = readCompaction(ref);
   return {
     version: snapshot?.version ?? null,
     entries: (snapshot?.entries ?? []).map(({ id, content, updatedAt }) => ({ id, content, updatedAt })),
     chars: snapshot?.content.length ?? 0,
     limit: PROJECT_MEMORY_CHAR_BUDGET,
     candidates: readPending(ref).filter((p) => !p.dismissed).map(({ id, fact, at }) => ({ id, content: fact, at })),
+    ...(compaction ? { compacted: { at: compaction.at, before: compaction.before, after: compaction.after, removed: compaction.removed.map(({ id, content }) => ({ id, content })) } } : {}),
   };
 }
 
@@ -187,12 +192,64 @@ export async function forgetProjectMemory(project: string, id: string, expectedV
   return projectMemoryView(project);
 }
 
+// ── 写满时那次压缩留下的记录(10-05)─────────────────────────────────────────────────────────
+// 压缩本身在 projectMemoryCompact.ts(模型把整份重写一遍,能合的合、被取代的和过时的去掉)。这里只存它的记录:
+// 哪一次、几条变几条、被合并或去掉的原句。原句是给用户留的后悔药 —— 项目详情里逐条「恢复」= 以用户的名义记回去
+// (manual:以后的压缩不再动它)。没做「整份退回压缩前」:压缩总是跟着一句新的记忆发生,整份退回会把那一句也退掉。
+const COMPACTED = 'COMPACTED.json';
+/** 还能恢复的原句留多少条(跨多次压缩累计,新的在前)。一条不超过几百字,封顶约 40 KB。 */
+const COMPACTED_KEEP = 100;
+export interface CompactionSize { count: number; chars: number }
+interface CompactionRecord { at: number; before: CompactionSize; after: CompactionSize; removed: Array<{ id: string; content: string; at: number }> }
+
+/** 只读,不建目录(同 readPending):没有 / 写坏了 → null(这份记录不是资产,坏了只是少一次后悔药)。 */
+function readCompaction(ref: ProjectMemoryRef): CompactionRecord | null {
+  try { if (!lstatSync(path.join(ref.dir, COMPACTED)).isFile()) return null; } catch { return null; }
+  let rec: any;
+  try { rec = JSON.parse(readMemoryFile(ref.dir, COMPACTED) ?? 'null'); } catch (e) { if (e instanceof SyntaxError) return null; throw e; }
+  const size = (v: any): v is CompactionSize => !!v && Number.isFinite(v.count) && Number.isFinite(v.chars);
+  if (!rec || !Number.isFinite(rec.at) || !size(rec.before) || !size(rec.after) || !Array.isArray(rec.removed)) return null;
+  return { at: rec.at, before: rec.before, after: rec.after, removed: rec.removed.filter((r: any) => !!r && typeof r.id === 'string' && typeof r.content === 'string') };
+}
+
+/** 压缩提交之后记一笔。removed = 这次被合并或去掉的原句;连同以前还没恢复的一起留最新的 COMPACTED_KEEP 条。 */
+export function recordProjectCompaction(ref: ProjectMemoryRef, before: CompactionSize, after: CompactionSize, removed: readonly string[]): void {
+  withMemoryDirectoryLock(ref.dir, () => {
+    const at = Date.now();
+    const earlier = readCompaction(ref)?.removed ?? [];
+    const fresh = removed.map((content) => ({ id: randomUUID().slice(0, 8), content, at }));
+    atomicWriteMemoryFile(ref.dir, COMPACTED, JSON.stringify({ at, before, after, removed: [...fresh, ...earlier].slice(0, COMPACTED_KEEP) } satisfies CompactionRecord));
+  });
+}
+
+/** 用户在项目详情里把一句被压缩掉的原句「恢复」:以用户的名义记回去(放不下 → MEMORY_FULL,界面提示先删几条),再从记录里拿掉。
+ *  那一句已经不在记录里 → MEMORY_NOT_FOUND(界面重载)。 */
+export async function restoreCompactedFact(project: string, id: string): Promise<ProjectMemoryView> {
+  const ref = refOf(project);
+  const gone = (): MemoryRepositoryError => new MemoryRepositoryError('MEMORY_NOT_FOUND', 'This sentence is no longer in the compaction record.');
+  if (!readCompaction(ref)?.removed.some((r) => r.id === id)) throw gone(); // 先只读地查:没有这条就不建任何目录
+  const repo = await openProjectMemory(ref);
+  withMemoryDirectoryLock(ref.dir, () => {
+    const rec = readCompaction(ref);
+    const item = rec?.removed.find((r) => r.id === id);
+    if (!rec || !item) throw gone();
+    // 先记后删(同 resolveProjectCandidate):记进去了、记录没来得及改 → 再点一次只是「已有同一条」
+    const snap = repo.snapshot();
+    const same = snap.entries.find((e) => normalizeMemoryFact(e.content) === normalizeMemoryFact(item.content));
+    // 已经在记忆里(压缩之后别处又记了一遍):add 会当重复直接放过、来源不变 —— 改成把那一条钉成用户手加的,「恢复的那句以后不再被压缩」才成立
+    if (same) repo.mutate({ action: 'update', id: same.id, fact: same.content, expectedVersion: snap.version, cap: PROJECT_MEMORY_CHAR_BUDGET, source: { kind: 'manual' } });
+    else repo.mutate({ action: 'add', fact: item.content, cap: PROJECT_MEMORY_CHAR_BUDGET, source: { kind: 'manual' } });
+    atomicWriteMemoryFile(ref.dir, COMPACTED, JSON.stringify({ ...rec, removed: rec.removed.filter((r) => r !== item) } satisfies CompactionRecord));
+  });
+  return projectMemoryView(project);
+}
+
 // ── 换了说法的重复(10-05)───────────────────────────────────────────────────────────────────
 // 项目记忆没有 Dream 那样的整理步骤,落库去重只认一字不差。同一件事跨会话换个说法再记一遍,主要靠「判官看得到已有内容」来避免
 // (projectKnownForJudge)。这里另补一道不用模型的闸,只认最保险的一种:新的一句是已有某一条里**连着的一段原话**
 // (少说了几个字 / 截了半句 / 只差标点),而且那一条多出来的部分不带否定、转折、限定 ——
 // 「不要用 npm 安装依赖」里有一段「用 npm 安装依赖」,意思正相反,那种不算。拿不准一律当成不重复(照记)。
-// ponytail: 词面判定,认不出真正换了措辞的同义句;要认得出就得加一次模型整理,连同撤销入口一起做。
+// ponytail: 词面判定,认不出真正换了措辞的同义句;那种留给写满时的压缩去合(projectMemoryCompact.ts)。
 
 const CJK_CHAR = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/gu;
 /** 一句话拆成词的序列:中日韩文字一字一个,其余文字 / 数字 / 路径 / 命令整个算一个;标点与空白不算。

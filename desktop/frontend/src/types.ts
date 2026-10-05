@@ -758,6 +758,8 @@ export interface ProjectMemoryView {
   limit: number
   /** 等用户点头的后台候选(带网址、命令或权限字眼,没有直接记):不是记忆,Agent 读不到。老引擎不带。 */
   candidates?: Array<{ id: string; content: string; at: number }>
+  /** 写满时的自动压缩:最近一次的前后规模;removed = 被合并或去掉、还能逐句恢复的原句(新的在前)。没压过 / 老引擎不带。 */
+  compacted?: { at: number; before: { count: number; chars: number }; after: { count: number; chars: number }; removed: Array<{ id: string; content: string }> }
 }
 
 export interface SkillInfo {

@@ -4,6 +4,7 @@
  *   POST /agent/project-context/init            { sessionId }                              → 建 .tangu/ + 骨架
  *   DELETE /agent/project-context/memory        { sessionId, id, expectedVersion }         → 删一条项目记忆,返回 { memory }(GET 的 context 里带 memory;远端来源不给)
  *   POST /agent/project-context/memory/candidate { sessionId, id, action: adopt|dismiss }  → 对一条待确认的后台候选点头或丢弃,返回 { memory }(远端来源不给)
+ *   POST /agent/project-context/memory/restore   { sessionId, id }                          → 把写满压缩时合并 / 去掉的一句原句记回去,返回 { memory }
  *   PUT  /agent/project-context/doc             { sessionId, content, expectedMtimeMs? }   → 写指令文件(409 = 别处改过)
  *   GET  /agent/project-context/settings?sessionId=|cwd= → { settings }(桌面建会话前的轻量预取;cwd 形态给没有会话可借的项目)
  *   PUT  /agent/project-context/settings        { sessionId, settings }                    → 用户侧项目默认项
@@ -29,7 +30,7 @@ import {
   canonicalProjectPath, createProjectSkill, deleteProjectIcon, initProjectWorkspace, projectContext, readProjectIcon, readProjectSettings,
   saveProjectIcon, setProjectIconEmoji, writeProjectDoc, writeProjectSettings,
 } from '../services/projectContext.js';
-import { forgetProjectMemory, projectMemoryView, resolveProjectCandidate } from '../services/projectMemory.js';
+import { forgetProjectMemory, projectMemoryView, resolveProjectCandidate, restoreCompactedFact } from '../services/projectMemory.js';
 import { parseRemoteOrigin } from '../services/remoteOrigin.js';
 import { GitActionError, generateCommitMessage, gitCommit, gitCreateBranch, gitInit, gitPending, gitPush, gitTrustRepo, serialized } from '../services/gitActions.js';
 import { DEFAULT_GIT_SETTINGS, gitSettings, updateGitSettings } from '../services/gitSettings.js';
@@ -105,6 +106,20 @@ router.post('/agent/project-context/memory/candidate', authMiddleware, async (re
     res.json({ memory: await resolveProjectCandidate(cwd, id, action === 'adopt') });
   } catch (e: any) {
     memoryFail(res, e, 'project memory candidate action failed');
+  }
+});
+
+// 用户把写满压缩时被合并 / 去掉的一句原句「恢复」(项目详情 › 设置)。同样只在主机上;放不下 → 400 + MEMORY_FULL(界面提示先删几条)。
+router.post('/agent/project-context/memory/restore', authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    if (parseRemoteOrigin(req.headers)) return res.status(403).json({ detail: 'Open the project on the host computer to edit its memory.' });
+    const cwd = await projectDirOf(req, res, req.body?.sessionId);
+    if (!cwd) return;
+    const { id } = req.body || {};
+    if (typeof id !== 'string' || !id) return res.status(400).json({ detail: 'id is required' });
+    res.json({ memory: await restoreCompactedFact(cwd, id) });
+  } catch (e: any) {
+    memoryFail(res, e, 'restore project memory failed');
   }
 });
 

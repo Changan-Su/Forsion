@@ -88,6 +88,17 @@ function notifyProjectCandidates(sessionId: string, activityId: string): void {
   })
 }
 
+/** 项目记忆写满、被压缩了一遍(前台 remember 或后台复盘触发):告诉用户,点一下去项目详情 › 配置 › 项目记忆,被合并 / 去掉的原句能逐句恢复。 */
+function notifyProjectCompacted(sessionId: string, activityId: string): void {
+  const st = useApp.getState()
+  const path = st.sessions.find((x) => x.id === sessionId)?.project_path || ''
+  notifyApp({
+    event: 'memory.projectCompacted', level: 'info', dedupeKey: `memory.projectCompacted:${activityId}`,
+    text: st.tr('ntf.projectCompacted', { name: path.split(/[\\/]/).filter(Boolean).pop() || '' }),
+    ...(path ? { action: { label: st.tr('ntf.actionView'), run: () => showDetails({ kind: 'project', path }) } } : {}),
+  })
+}
+
 export function HistorianStatus({ sessionId }: { sessionId: string }) {
   const { t } = useI18n()
   const cfg = useApp((s) => s.cfg)
@@ -134,6 +145,7 @@ export function HistorianStatus({ sessionId }: { sessionId: string }) {
             if (item.action === 'harness_adopted') notifyAdopted(sessionId, item.id, item.detail || '')
             else if (item.action === 'harness_confirm') notifyConfirm(sessionId, item.id)
             else if (item.action === 'project_memory_candidates') notifyProjectCandidates(sessionId, item.id)
+            else if (item.action === 'project_memory_compacted') notifyProjectCompacted(sessionId, item.id)
             else nudgeRefine(sessionId, item.id)
           }
           const icon = result.activity?.find((item) => item.action === 'icon_updated')

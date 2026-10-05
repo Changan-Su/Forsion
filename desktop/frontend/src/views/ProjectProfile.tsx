@@ -6,7 +6,7 @@ import { AppWindow, ArrowLeft, Check, ChevronRight, Copy, ExternalLink, FileText
 import { useShallow } from 'zustand/react/shallow'
 import { useApp } from '../stores/appStore'
 import { useI18n } from '../i18n'
-import { createProjectSkill, deleteProjectIcon, forgetProjectMemory, generateGitCommitMessage, getGitSettings, getProjectContext, gitCommitProject, gitCreateProjectBranch, gitInitProject, gitPendingProject, gitPushProject, gitTrustProject, initProjectContext, putProjectDoc, putProjectSettings, setProjectIconEmoji, uploadProjectIcon, resolveProjectCandidate } from '../services/backendService'
+import { createProjectSkill, deleteProjectIcon, forgetProjectMemory, generateGitCommitMessage, getGitSettings, getProjectContext, gitCommitProject, gitCreateProjectBranch, gitInitProject, gitPendingProject, gitPushProject, gitTrustProject, initProjectContext, putProjectDoc, putProjectSettings, setProjectIconEmoji, uploadProjectIcon, resolveProjectCandidate, restoreProjectMemoryFact } from '../services/backendService'
 import { askString } from '../amadeus/components/askString'
 import { normPath } from './coding/studioModel'
 import { addToCreations } from './chat2/CreationCards'
@@ -199,6 +199,18 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
       // 404 = 那条已经不在了;409 = 别处正在改(候选还在,请再点一次)。两种都重载,话不能说成一样的(Codex 评审 10-04)
       if (e?.status === 409 || e?.status === 404) { setReloadAt((n) => n + 1); setError(t(e.status === 404 ? 'projectProfile.memoryCandidateGone' : 'projectProfile.memoryBusy')) }
       else setError(e?.code === 'MEMORY_FULL' ? t('projectProfile.memoryFull') : String(e?.message || e))
+    } finally { setBusy('') }
+  }
+  // 写满压缩时被合并 / 去掉的原句:逐句恢复(原样记回去,之后的压缩不再改它)。那一句已经不在记录里 → 重载。
+  const restoreRemoved = async (id: string): Promise<void> => {
+    if (busy) return
+    clear(); setBusy(`removed:${id}`)
+    try {
+      const memory = await restoreProjectMemoryFact(homeTarget(), session.id, id)
+      setCtx((c) => (c ? { ...c, memory } : c)); setNotice(t('projectProfile.memoryRestored'))
+    } catch (e: any) {
+      if (e?.status === 409 || e?.status === 404) { setReloadAt((n) => n + 1); setError(t(e.status === 404 ? 'projectProfile.memoryRemovedGone' : 'projectProfile.memoryBusy')) }
+      else setError(e?.code === 'MEMORY_FULL' ? t('projectProfile.memoryFullRestore') : String(e?.message || e))
     } finally { setBusy('') }
   }
   const open = (key: string) => { setSelected(key); setOpened((keys) => (keys.includes(key) ? keys : [...keys, key])) }
@@ -587,6 +599,14 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
               </li>)}</ul>
               <small>{t('projectProfile.memoryCandidatesHint')}</small>
             </div>}
+            {ctx.memory.compacted && <details className="project-memory-compacted" data-project-memory-compacted={ctx.memory.compacted.removed.length}>
+              <summary>{t('projectProfile.memoryCompacted', { before: ctx.memory.compacted.before.count, after: ctx.memory.compacted.after.count, when: formatRelative(ctx.memory.compacted.at, { now, locale }), count: ctx.memory.compacted.removed.length })}</summary>
+              {ctx.memory.compacted.removed.length > 0 && <ul className="project-memory-list">{ctx.memory.compacted.removed.map((r) => <li key={r.id} className="project-memory-candidate" data-project-memory-removed={r.id}>
+                <span>{r.content}</span>
+                <div><button type="button" className="profile-text-action adopt" disabled={!!busy} onClick={() => void restoreRemoved(r.id)}>{t('projectProfile.memoryRestore')}</button></div>
+              </li>)}</ul>}
+              <small>{t('projectProfile.memoryCompactedHint')}</small>
+            </details>}
           </section>}
           {ctx.plans.length > 0 && <section className="project-card" data-project-plans>
             <div className="project-card-head"><div><h3>{t('projectProfile.plans')}</h3><small>{t('projectProfile.plansHint', { dir: `${ctx.workspaceDirName}/plans` })}</small></div></div>

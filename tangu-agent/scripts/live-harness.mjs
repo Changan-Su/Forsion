@@ -11,6 +11,7 @@
  *   npm run live:harness -- --only musereview [--hand]   # Muse 每周装备巡检:巡检完当场替各 agent 收起(只认巡检名单里的、不出卡片)→ 它下一次 run 就生效;--hand 再在对话里让 Muse 看一遍(改 LOADOUT_REVIEW_PROMPT / review_loadout 报告 / propose 代收那一支后跑)
  *   npm run live:harness -- --only harnessopen --harness-ui   # 工作笔记放开写入 + 真 Electron 里的更新卡与撤销(卡片从真模型的回执还原);先构建 desktop
  *   npm run live:harness -- --only projmem                  # 记忆分项目级 / 全局级(10-04):落点、同项目不同 agent 共用、跨项目隔离(改 services/projectMemory.ts / remember 的 scope 后跑)
+ *   npm run live:harness -- --only projcompact              # 项目记忆写满时的压缩(10-05):前台记一条触发压缩 → 现行的留着、带网址的不动、去掉的原句能恢复;后台复盘那条路量到几次记几次(改 services/projectMemoryCompact.ts / remember 写满那条路 / localHistorian 的项目记忆写入后跑);`--compact-rounds N` 前台那条腿另外加跑 N 次、出成功率;引擎环境变量 `TANGU_COMPACT_DEBUG=1` 把模型的原样回答记进 engine.log
  *   npm run live:harness -- --only rename                   # 改名即生效:同会话先答旧名,PATCH 改名+改简介后下一轮须用新名(改身份注入/人格组装后跑)
  *   npm run live:harness -- --only selfmodel --rounds 5 --model xai/grok-4.7   # 主体性探针(10-02):自己的资料库 vs 用户目录 / 提醒真落盘 / 教训落哪个存储 / 自我认知,按轮出通过率;改 Personal Folder 段 / 记忆·协作·工作笔记段后跑
  *   npm run live:harness -- --only selfschedule             # 自己的日程 vs 用户的日历(10-02):人设 agent 答应的约定进 SCHEDULE.db、用户日历不动;负对照「记进我的日历」须走 amadeus。改 Personal Folder 段 / 日程·日历工具措辞后跑
@@ -155,6 +156,7 @@ KEYS.push('projmem');
 KEYS.push('skillcreate');
 KEYS.push('projdedupe');
 KEYS.push('projteam');
+KEYS.push('projcompact');
 // autocompact 要把模型窗口钉小(--window)才灌得满;窗口小了别的场景会被连累(系统提示+工具头就 13k+),所以它只能单独跑。
 const WINDOW = Number(opt('window', process.env.TANGU_LIVE_WINDOW || 0)) || 0;
 // P1-K9 · C3:--remote-cap <档> = 起引擎前经 K4 的新写入口写 remote.maxApprovalMode(缺省不写 = 引擎按 auto-edit)
@@ -173,6 +175,7 @@ const OPT_IN = new Set(['realtime', 'remember', 'musewake', 'personas', 'rename'
 OPT_IN.add('signals');
 OPT_IN.add('projdedupe'); // --only projdedupe:项目记忆换了说法的重复(真模型 + 后台判官,约 20 次调用)
 OPT_IN.add('projteam'); // --only projteam:项目记忆在团队会话里(三个两人团队各一轮)
+OPT_IN.add('projcompact'); // --only projcompact:项目记忆写满时的压缩(4 个 run + 判官 + 2 次压缩,约 10 次调用);只在动 projectMemoryCompact.ts / remember 写满那条路时才有信息量
 OPT_IN.add('visualfigures');
 OPT_IN.add('visualize'); // --only visualize: real model -> sketch controls/state; HTML can feed desktop check:visualize.
 OPT_IN.add('emoji'); // Three real-model rounds; run explicitly when session icons change.
@@ -190,6 +193,7 @@ const NEEDS = { dream: ['historian'], recall: ['historian', 'dream'] }; // 记�
 const ONLY = new Set(opt('only', process.env.TANGU_LIVE_ONLY || KEYS.filter((k) => !OPT_IN.has(k)).join(',')).split(',').map((s) => s.trim()).filter(Boolean));
 const TTFT_ROUNDS = Number(opt('ttft-rounds', process.env.TANGU_LIVE_TTFT_ROUNDS || 5));
 const SELF_ROUNDS = Number(opt('rounds', 3)); // selfmodel:每轮一个新 agent,出通过率
+const COMPACT_ROUNDS = Number(opt('compact-rounds', 0)); // projcompact:前台那条腿另外加跑几次(每次一个新项目),给压缩的成功率一个分母
 const SELF_PROBES = new Set(opt('self-probes', 'library,libneg,remind,lesson,self').split(',')); // selfmodel 只跑其中几条(省额度地加轮数)
 { // --only 写错 / 缺上游 → 直接拒,别跑出 0/0 或靠猜答的假绿(Codex 09-12)
   const bad = [...ONLY].filter((k) => !KEYS.includes(k));
@@ -1680,6 +1684,158 @@ try {
       `A ${aOk ? '✓' : '⚠'} 立规矩后 ${n1} 条(前台 remember ${said(a1)});换个说法再提后 ${n2} 条(前台 remember ${said(a2)};判官 ${a2.acts.join('/') || '无'});另一条规矩 ${n3} 条${aErr ? `;${aErr}` : ''}`,
       ...b.map((x, i) => `B${i + 1} ${x.ok ? '✓' : '⚠'} ${x.note}`),
     ].join(' | '), output: `【A 之后的项目记忆】\n${a3.entries.map((c) => `- ${c}`).join('\n')}\n【A 等确认】\n${a3.waiting.map((c) => `- ${c}`).join('\n') || '(无)'}\n${b.map((x, i) => `【B${i + 1} 之后与那条分支有关的】\n${(x.extra || []).map((c) => `- ${c}`).join('\n') || '(种子没落成)'}`).join('\n')}`, toolCalls: [...a1.ev.toolCalls, '|', ...a2.ev.toolCalls, '|', ...a3.ev.toolCalls] };
+  });
+
+  // ── 项目记忆写满时的压缩(10-05 用户定:「参考 claude 和 codex 的做法,记忆满了就让 agent 压缩一下」)──
+  //  种子:直接写这份项目记忆的 MEMORY.md(引擎当成已有内容收下),贴着 8,000 字上限:被后来的说法取代的三对、换了说法的重复两组、
+  //    现行的命令 / 路径几条、一条带网址的(过不了形状闸 → 压缩不许动它)、其余是早就没用的进度流水。
+  //  A 前台:项目会话里让它记一条新规矩(明说「记一下」:随口一提时模型常常不调 remember,这条腿就量不到)→ remember 遇到写满 → 引擎让模型把整份压一遍 → 新规矩记上了。
+  //    硬判:回执带 compacted;新规矩在;整份不超过上限七成 + 新规矩;带网址那条一字没动;现行的命令 / 路径 / 端口都还在;
+  //         不在了的原句全在压缩记录里;恢复其中一句 → 原样回到记忆、从记录里消失;同项目新会话问得出新规矩。
+  //    只记不判:压完剩几条、进度流水还剩几条、被取代的旧说法还剩几句、模型改写出的句子(留证给人看)、回复提没提压缩。
+  //  B 后台:另一个项目同样写满,这次 agent 被要求不自己记(留给后台复盘)→ 复盘往项目记忆写时遇到写满 → 压缩 → 活动里记一笔。
+  //    前台没听话自己记了、或判官没提名项目级 → 这条腿没量到,照实写,不算过也不算没过;压缩被引擎拒收(日志里「没压成」)→ 不通过。
+  //  负对照 = 把 projectMemoryCompact.ts 的 compactProjectMemory 开头改成直接 return { status: 'skipped', reason: 'failed' } 后重建再跑:
+  //    A 回到「memory is full」、回执没有 compacted、新规矩记不上。
+  await scenario('projcompact', 'projcompact 项目记忆写满 → 压缩一遍再记:现行的留着、带网址的不动、去掉的原句能恢复', async () => {
+    const a = 'live-pc-a', b = 'live-pc-b';
+    await api('/agent/agents', { method: 'POST', body: JSON.stringify({ slug: a, name: 'Cedar', systemPrompt: 'Be concise and respond in Chinese.' }) });
+    await api('/agent/agents', { method: 'POST', body: JSON.stringify({ slug: b, name: 'Dune', systemPrompt: 'Be concise and respond in Chinese. In this conversation never call the remember tool: a separate background process records long-term notes for you.' }) });
+    const mkS = async (slug, cwd, title) => (await api('/agent/sessions', { method: 'POST', body: JSON.stringify({ title, model_id: MODEL, project_path: cwd, agent_config: { agentSlug: slug, execMode: 'host', cwd } }) })).session.id;
+    const memoryOf = async (sid) => (await api(`/agent/project-context?sessionId=${sid}`)).memory || { entries: [], chars: 0, limit: 0 };
+    const AREAS = ['settings page', 'billing module', 'search index', 'onboarding flow', 'export dialog', 'notification centre', 'audit log', 'theme editor', 'import wizard', 'report builder'];
+    const note = (i) => `Progress on 2026-08-${String(1 + (i % 28)).padStart(2, '0')}: the ${AREAS[i % AREAS.length]} cleanup reached step ${i + 1} of its checklist; the remaining items were handed to the next session and nothing else changed that day.`;
+    // 建项目目录并种一份写满的记忆;返回种下的每一行与要核对的词
+    const seed = (name) => {
+      const p = join(workspace, name); mkdirSync(p); writeFileSync(join(p, 'README.md'), `# ${name}\n\nA small demo project.\n`);
+      const m = randomUUID().slice(0, 4);
+      const pinned = `Deploys go through https://ci.example.test/deploy/${m}, never from a laptop.`;
+      const stale = [`Unit tests in this project run with npm test.`, `The release branch is release/2026.08-${m}; release builds are cut only from it.`, `The dev server listens on port 5173.`];
+      const durable = [
+        stale[0], stale[1], stale[2],
+        `Commit messages in this project are written in English, in the imperative mood.`,
+        `Never edit files under vendor/ by hand; scripts/sync-vendor.sh regenerates them.`,
+        `Database migrations live in db/migrations and are applied with npm run migrate:up -- --env stage-${m}.`,
+        `The API client is generated from openapi/spec-v3.yaml with npm run gen:api; src/api/generated is never edited by hand.`,
+        pinned,
+        `Write commit messages in English using the imperative mood, for example "Add parser".`,
+        `npm test is broken on purpose in this project; unit tests run with npm run test:unit-${m}.`,
+        `The vendor/ directory is generated by scripts/sync-vendor.sh, so manual edits there are overwritten.`,
+        `Releases are now cut from release/2026.10-${m}; release/2026.08-${m} is frozen and takes no more commits.`,
+        `The dev server port moved from 5173 to 6240; 5173 now belongs to the docs preview.`,
+      ];
+      const lines = []; let i = 0;
+      for (const d of durable) lines.push(note(i++), note(i++), d);
+      while (lines.join('\n').length + note(i).length + 1 <= 7985) lines.unshift(note(i++));
+      const gap = 7985 - lines.join('\n').length - 1; // 垫到离上限只剩十几个字:新规矩怎么措辞都放不下
+      if (gap >= 30) lines.unshift(`${note(i++).slice(0, gap - 1)}.`);
+      const dir = join(home, 'project-memory', createHash('sha256').update(realpathSync(p)).digest('hex').slice(0, 32));
+      mkdirSync(dir, { recursive: true }); writeFileSync(join(dir, 'MEMORY.md'), lines.join('\n'));
+      return { p, lines, pinned, stale, current: [`test:unit-${m}`, `release/2026.10-${m}`, '6240', 'migrate:up', `stage-${m}`, 'db/migrations', 'openapi/spec-v3.yaml', 'gen:api', 'scripts/sync-vendor.sh'] };
+    };
+    // 压完的这份记忆对不对:带网址那条原样在、现行的词都在、够小、不在了的原句都进了记录
+    const judge = (s, mem, mark) => {
+      const texts = mem.entries.map((e) => e.content), has = (t) => texts.some((c) => c.includes(t));
+      const removed = (mem.compacted?.removed || []).map((r) => r.content);
+      const gone = s.lines.filter((l) => !texts.includes(l));
+      const v = {
+        saved: has(mark), pinnedIntact: texts.includes(s.pinned), missing: s.current.filter((t) => !has(t)),
+        smallEnough: mem.chars <= Math.floor(mem.limit * 0.7) + 320, chars: mem.chars, entries: texts.length,
+        recorded: !!mem.compacted && mem.compacted.before.count === s.lines.length && mem.compacted.after.count < s.lines.length && gone.length > 0 && gone.every((l) => removed.includes(l)),
+        notesLeft: texts.filter((c) => c.startsWith('Progress on ')).length, staleLeft: s.stale.filter((l) => texts.includes(l)).length,
+        rewritten: texts.filter((c) => !s.lines.includes(c) && !c.includes(mark)),
+      };
+      return { ...v, ok: v.saved && v.pinnedIntact && !v.missing.length && v.smallEnough && v.recorded };
+    };
+
+    // ── A 前台 ──
+    const s1 = seed('pc-one');
+    const sidA = await mkS(a, s1.p, 'Compaction foreground');
+    const before = await memoryOf(sidA);
+    if (before.entries.length !== s1.lines.length || before.chars < 7960) return { ok: false, detail: `种子没落到引擎读的那份记忆:写了 ${s1.lines.length} 条 ${s1.lines.join('\n').length} 字,引擎读到 ${before.entries.length} 条 ${before.chars} 字` };
+    const env = `preprod-${randomUUID().slice(0, 6)}`;
+    const evA = await run(sidA, `记一下,这条只在这个项目里成立:合并之前都要先在预发环境 ${env} 上验一遍,验过了再合。`, 300_000, { agentSlug: a, cwd: s1.p, thinkingLevel: 'low' });
+    const receipts = evA.toolResults.filter((r) => r.name === 'remember').map((r) => { try { return JSON.parse(r.full); } catch { return { raw: String(r.full || '').slice(0, 400) }; } });
+    const receipt = receipts.find((r) => r.ok && typeof r.compacted === 'string');
+    const after = await memoryOf(sidA);
+    const A = judge(s1, after, env);
+    // 恢复一句(挑一条进度流水):原样回到记忆、从记录里消失
+    const pick = (after.compacted?.removed || []).find((r) => r.content.startsWith('Progress on ')) || (after.compacted?.removed || [])[0];
+    let restored = false, restoreNote = '记录里没有可恢复的原句';
+    if (pick) {
+      try {
+        const back = (await api('/agent/project-context/memory/restore', { method: 'POST', body: JSON.stringify({ sessionId: sidA, id: pick.id }) })).memory;
+        restored = back.entries.some((e) => e.content === pick.content) && !back.compacted.removed.some((r) => r.id === pick.id) && back.entries.some((e) => e.content.includes(env));
+        restoreNote = restored ? '原样回到记忆、从记录里消失' : '恢复后的记忆对不上';
+      } catch (e) { restoreNote = `恢复报错:${String(e?.message || e).slice(0, 160)}`; }
+    }
+    const ask = await run(await mkS(a, s1.p, 'Compaction recall'), '这个项目合并之前要先做什么?不知道就直说不知道。不调用工具。', 120_000, { agentSlug: a, cwd: s1.p, debugSystemPrompt: true, thinkingLevel: 'low' });
+    // 只认提示里「项目记忆」那一段带着它(没压成时模型会改记到 agent 级,那样新会话也答得出,不算)
+    const pmBlock = /## Project Memory[^\n]*\n([\s\S]*?)(?=\n## |$)/.exec(ask.systemPrompt || '')?.[1] || '';
+    const recalled = !ask.error && pmBlock.includes(env) && ask.content.includes(env);
+    const wentToAgent = receipts.some((r) => r.ok && r.scope === 'agent');
+    const aOk = !evA.error && evA.done && !evA.approvals && !!receipt && A.ok && restored && recalled;
+
+    // ── B 后台 ──
+    const s2 = seed('pc-two');
+    await api('/agent/special/config', { method: 'POST', body: JSON.stringify({ historian: { enabled: true, modelId: MODEL, everyRounds: 1, firstRoundTrigger: true, mode: 'independent' } }) });
+    const sidB = await mkS(b, s2.p, 'Compaction background');
+    const lint = `lint:strict-${randomUUID().slice(0, 4)}`;
+    const evB = await run(sidB, `帮我看一下 README 里写了什么。对了,这个项目提交之前要先跑 npm run ${lint},有报错就停下来告诉我,不要自动修。现在先不用跑。`, 240_000, { agentSlug: b, cwd: s2.p, thinkingLevel: 'low' });
+    // 等这个会话的判官收场:主产出行出现后连续 12s 不再变(压缩那次模型调用夹在中间,比平时久)
+    const rowsOf = () => api('/agent/special/historian/activity?limit=100').then((x) => (x.activity || []).filter((r) => r.session_ref === sidB && r.action !== 'title_updated' && r.action !== 'icon_updated'));
+    let rows = [], last = -1, since = Date.now(); const t0 = Date.now();
+    for (;;) {
+      rows = await rowsOf();
+      if (rows.length !== last) { last = rows.length; since = Date.now(); }
+      if ((rows.length > 0 && Date.now() - since > 12_000) || Date.now() - t0 > 210_000) break;
+      await sleep(3000);
+    }
+    const acts = rows.map((r) => r.action);
+    const foreB = evB.toolCalls.includes('remember');
+    const refusedIn = (name) => { try { return readFileSync(engineLog, 'utf8').split('\n').filter((l) => l.includes(`写满压缩没成(${name})`)).slice(-1)[0] || ''; } catch { return ''; } };
+    const refused = refusedIn('pc-two');
+    const afterB = await memoryOf(sidB);
+    const B = judge(s2, afterB, lint);
+    const bState = evB.error ? 'error' : foreB ? 'foreground' : acts.includes('project_memory_compacted') ? (acts.includes('project_memory_added') && B.ok ? 'ok' : 'wrong') : refused ? 'refused' : 'not-nominated';
+    const bNote = { ok: `复盘写时遇到写满 → 压缩(${rows.find((r) => r.action === 'project_memory_compacted')?.detail || ''})→ 记上了;带网址那条没动、现行的都在`,
+      wrong: `⚠ 压了但结果不对:${JSON.stringify({ acts, saved: B.saved, pinnedIntact: B.pinnedIntact, missing: B.missing, chars: B.chars, recorded: B.recorded })}`,
+      // 「没压成」分两种:failed = 那次模型调用自己没成(供应方过载 / 网络 / 超时),别的 = 模型交回的方案没被收下。都不算过,但报告里别混着说
+      refused: `⚠ ${/没成\([^)]*\):failed/.test(refused) ? '压缩那次模型调用没成(供应方 / 网络 / 超时,不是方案被拒)' : '引擎没收模型交回的压缩'}:${refused.slice(-220)}`, error: `⚠ ${evB.error}`,
+      foreground: `没量到:前台没听话,自己调了 remember(${B.saved ? '记上了' : '没记上'};回执 compacted ${evB.toolResults.some((r) => r.name === 'remember' && /"compacted"/.test(r.full || '')) ? '有' : '无'})`,
+      'not-nominated': `没量到:判官没往项目级提名(活动 ${acts.join('/') || '无'})` }[bState];
+    const bOk = bState === 'ok' || bState === 'foreground' || bState === 'not-nominated';
+
+    // ── 前台加跑(--compact-rounds N)──
+    //  真模型交的压缩方案不是每次都合格(10-05 头几轮:前台 7 次里 3 次被引擎拒收)。每次一个新项目、同样的种子,只量「压没压成、压完对不对」。
+    //  压成了但结果不对(丢了现行的词 / 动了带网址那条 / 记录对不上)→ 整个场景不通过;没压成只进比例(那时引擎回的是老的「写满了」,不是坏结果)。
+    const extra = [];
+    for (let k = 1; k <= COMPACT_ROUNDS; k++) {
+      const s = seed(`pc-x${k}`);
+      const sid = await mkS(a, s.p, `Compaction round ${k}`);
+      const mark = `preprod-${randomUUID().slice(0, 6)}`;
+      const ev = await run(sid, `记一下,这条只在这个项目里成立:合并之前都要先在预发环境 ${mark} 上验一遍,验过了再合。`, 300_000, { agentSlug: a, cwd: s.p, thinkingLevel: 'low' });
+      const got = ev.toolResults.some((r) => r.name === 'remember' && /"compacted":/.test(r.full || ''));
+      const v = judge(s, await memoryOf(sid), mark);
+      const row = { k, called: ev.toolCalls.includes('remember'), compacted: got, ok: got && v.ok, entries: v.entries, chars: v.chars, missing: v.missing, pinnedIntact: v.pinnedIntact, recorded: v.recorded,
+        refusal: refusedIn(`pc-x${k}`).replace(/^.*写满压缩没成\([^)]*\):/, '').trim(), error: ev.error || '' };
+      extra.push(row);
+      console.log(`  前台加跑 ${k}/${COMPACT_ROUNDS}:${got ? (v.ok ? `压成、结果对(${v.entries} 条 ${v.chars} 字)` : '压成但结果不对') : `没压成(${row.error || row.refusal || (row.called ? '原因不明' : '模型没调 remember')})`}`);
+    }
+    const extraWrong = extra.filter((x) => x.compacted && !x.ok);
+    const extraLine = extra.length ? `前台加跑 ${extra.length} 次:压成且结果对 ${extra.filter((x) => x.ok).length} 次${extraWrong.length ? `;⚠ 压成但结果不对 ${extraWrong.length} 次` : ''}${extra.some((x) => !x.compacted) ? `;没压成 ${extra.filter((x) => !x.compacted).length} 次(${extra.filter((x) => !x.compacted).map((x) => x.error || x.refusal || (x.called ? '原因不明' : '模型没调 remember')).join(' / ').slice(0, 400)})` : ''}` : '';
+
+    writeFileSync(join(OUT, 'projcompact-evidence.json'), JSON.stringify({
+      extra,
+      A: { seeded: { entries: s1.lines.length, chars: s1.lines.join('\n').length }, engineRefusal: refusedIn('pc-one'), wentToAgent, receipts, verdict: A, restore: { picked: pick?.content || null, note: restoreNote }, recalled, reply: evA.content, askReply: ask.content, entriesAfter: after.entries.map((e) => e.content), removed: (after.compacted?.removed || []).map((r) => r.content) },
+      B: { state: bState, acts, rows: rows.map((r) => `${r.action}: ${r.detail}`), refused, verdict: B, reply: evB.content, entriesAfter: afterB.entries.map((e) => e.content) },
+    }, null, 2));
+    return { ok: aOk && bOk && !extraWrong.length, detail: [
+      ...(extraLine ? [extraLine] : []),
+      `A ${aOk ? '✓' : '⚠'} 种子 ${s1.lines.length} 条 ${before.chars} 字 → 压完连新规矩 ${A.entries} 条 ${A.chars} 字;回执 compacted ${receipt ? '有' : `无(${refusedIn('pc-one').replace(/^.*写满压缩没成\(pc-one\):/, '引擎没压成:').slice(0, 260) || JSON.stringify(receipts).slice(0, 200)})`};新规矩${A.saved ? '记上了' : '没记上'};带网址那条${A.pinnedIntact ? '一字没动' : '被动了'};现行的词${A.missing.length ? `丢了 ${A.missing.join(' / ')}` : '都在'};不在了的原句${A.recorded ? '全在记录里' : '与记录对不上'};恢复一句:${restoreNote};新会话${recalled ? '问得出新规矩' : `问不出(${ask.error || ask.content.slice(0, 80)})`}${evA.error ? `;${evA.error}` : ''}`,
+      `A 只记不判:进度流水还剩 ${A.notesLeft} 条;被取代的旧说法还剩 ${A.staleLeft}/3 句;模型改写出 ${A.rewritten.length} 句;回复${/压缩|整理|compact/i.test(evA.content) ? '提到了压缩' : '没提压缩'}${wentToAgent ? ';⚠ 模型把这条项目规矩改记到了 agent 级' : ''}`,
+      `B ${bState === 'ok' ? '✓' : bOk ? '—' : '⚠'} ${bNote}`,
+    ].join(' | '), output: `【A 回复】${evA.content}\n【A 回执】${receipt?.compacted || '(无)'}\n【A 模型改写出的句子】\n${A.rewritten.map((c) => `- ${c}`).join('\n') || '(无:只删没改)'}\n【A 新会话问】${ask.content}\n【B 回复】${evB.content}\n【B 后台】${bNote}${bState === 'ok' ? `\n【B 模型改写出的句子】\n${B.rewritten.map((c) => `- ${c}`).join('\n') || '(无:只删没改)'}` : ''}`, toolCalls: [...evA.toolCalls, '|', ...ask.toolCalls, '|', ...evB.toolCalls] };
   });
 
   // ── 项目记忆在团队会话里(10-05)──
