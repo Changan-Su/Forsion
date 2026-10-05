@@ -21,6 +21,8 @@ export interface ThemeAxes {
   glass: boolean
   /** Optional for older windows that do not yet expose the shadow preference. */
   flat?: boolean
+  /** Optional for older windows that do not yet expose the content-tinted chrome preference. */
+  ambient?: boolean
 }
 
 export interface UiSyncPayload {
@@ -48,11 +50,13 @@ function theme(raw: unknown): ThemeAxes | undefined {
   if (!PREFS.has(v.modePref as string)) return undefined
   if (typeof v.glass !== 'boolean') return undefined
   if (v.flat !== undefined && typeof v.flat !== 'boolean') return undefined
+  if (v.ambient !== undefined && typeof v.ambient !== 'boolean') return undefined
   return {
     lang: v.lang as string, skin: v.skin as string, bg: v.bg as string,
     modePref: v.modePref as ThemeAxes['modePref'],
     seed: color(v.seed), bgSeed: color(v.bgSeed), glass: v.glass,
     ...(typeof v.flat === 'boolean' ? { flat: v.flat } : {}),
+    ...(typeof v.ambient === 'boolean' ? { ambient: v.ambient } : {}),
   }
 }
 

@@ -23,7 +23,6 @@ registerMessages({
   'spaceAppearance.reset': { zh: '恢复全局外观', en: 'Reset to global appearance' },
   'spaceAppearance.error': { zh: '无法保存外观，请重试。', en: 'Could not save appearance. Try again.' },
   'spaceAppearance.missing': { zh: '主题暂不可用，当前跟随全局', en: 'Theme unavailable; following global appearance' },
-  'spaceAppearance.ambient': { zh: 'Genesis 的外围磨砂玻璃会随当前可见内容取色，滚动和切换页面时平滑过渡。', en: 'Genesis frosted chrome picks up colors from visible content and blends smoothly as you scroll or change pages.' },
 })
 
 export function SpaceAppearancePanel() {
@@ -65,7 +64,7 @@ export function SpaceAppearancePanel() {
       <option value="">{t('spaceAppearance.inherit')}</option>
       {(['light', 'dark', 'system'] as const).map((mode) => <option key={mode} value={mode}>{t(`spaceAppearance.${mode}`)}</option>)}
     </select>} />
-    <SettingsRow description={t('spaceAppearance.ambient')} label={t('spaceAppearance.reset')} control={<button className="btn ghost sm" disabled={!Object.keys(appearance).length} onClick={() => setError(!setSpaceAppearance(id, {}))}>{t('spaceAppearance.reset')}</button>} />
+    <SettingsRow label={t('spaceAppearance.reset')} control={<button className="btn ghost sm" disabled={!Object.keys(appearance).length} onClick={() => setError(!setSpaceAppearance(id, {}))}>{t('spaceAppearance.reset')}</button>} />
     {error && <p role="alert" className="danger-ink">{t('spaceAppearance.error')}</p>}
   </SettingsPanel>
 }

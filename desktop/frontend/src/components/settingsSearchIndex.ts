@@ -14,7 +14,8 @@ import './startupAppearanceCopy'
  */
 
 /** cloud = Forsion 账号面在(内置包 Forsion Extend 装载了,桥键 forsionLogin 在)。 */
-export type SettingsSearchNeed = 'stored' | 'desktop' | 'managed' | 'external' | 'cloud'
+/** hover = 设备有悬停(「外围淡出」靠悬停恢复,没有悬停时那一行不渲染);wide = 非窄版设置页(Ribbon 那一行窄版不渲染)。 */
+export type SettingsSearchNeed = 'stored' | 'desktop' | 'managed' | 'external' | 'cloud' | 'hover' | 'wide'
 
 export interface SettingsSearchEntry {
   /** 结果行的稳定 id(台架按它点)。 */
@@ -54,8 +55,13 @@ export const SETTINGS_SEARCH_INDEX: readonly SettingsSearchEntry[] = [
   { id: 'color-mode', tab: 'theme', anchor: 'color-mode', labelKey: 'settings.theme.modeLabel', keywords: '深色 浅色 暗色 明暗 dark light' },
   { id: 'ui-zoom', tab: 'theme', anchor: 'ui-zoom', labelKey: 'settings.theme.zoomLabel', keywords: '缩放 界面大小 zoom scale' },
   { id: 'glass', tab: 'theme', anchor: 'glass', labelKey: 'settings.theme.glassLabel', keywords: '毛玻璃 透明 glass blur' },
+  { id: 'ambient', tab: 'theme', anchor: 'ambient', labelKey: 'settings.theme.ambient', keywords: '取色 染色 外壳 内容 颜色 ambient tint chrome color' },
   { id: 'smooth-caret', tab: 'theme', anchor: 'smooth-caret', labelKey: 'settings.theme.smoothCaret', keywords: '光标 caret cursor' },
   { id: 'chat-avatars', tab: 'theme', anchor: 'chat-avatars', labelKey: 'settings.theme.chatAvatars', keywords: '头像 聊天 avatar chat' },
+  { id: 'calm-dim', tab: 'theme', anchor: 'calm-dim', labelKey: 'settings.theme.calmDim', keywords: '外围淡出 呼吸感 变淡 退后 侧栏 标签 dim fade quiet calm surroundings sidebar ribbon', needs: ['hover'] },
+  { id: 'calm-reading', tab: 'theme', anchor: 'calm-reading', labelKey: 'settings.theme.calmReading', keywords: '宽松正文 呼吸感 行距 段距 行高 阅读宽度 line height spacing reading relaxed calm' },
+  { id: 'calm-motion', tab: 'theme', anchor: 'calm-motion', labelKey: 'settings.theme.calmMotion', keywords: '舒缓过渡 呼吸感 动画 节奏 慢 transition animation motion gentle calm' },
+  { id: 'ribbon-auto-home', tab: 'theme', anchor: 'ribbon-auto-home', labelKey: 'settings.theme.ribbonAutoHome', keywords: '归位 Ribbon 滚动 复位 滚轮 scroll reset', needs: ['wide'] },
   { id: 'fonts', tab: 'theme', anchor: 'fonts', labelKey: 'settings.theme.typographyTitle', keywords: '字体 font typography' },
   { id: 'notes-attachments', tab: 'notes', anchor: 'notes-attachments', labelKey: 'settings.notes.modeLabel', keywords: '附件 图片 attachment image', needs: ['stored'] },
   { id: 'daily-notes', tab: 'notes', anchor: 'daily-notes', labelKey: 'settings.notes.dailyLabel', keywords: '日记 每日 daily journal', needs: ['stored'] },
