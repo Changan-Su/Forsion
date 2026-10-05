@@ -18,9 +18,15 @@ try {
   const result = await build({ entryPoints: [resolve(root, 'main.ts'), resolve(root, 'backendWorker.ts')], outdir: stage, outExtension: { '.js': '.mjs' },
     absWorkingDir: repository, metafile: true, bundle: true, platform: 'node', target: 'node20', format: 'esm', tsconfig: resolve(root, '../desktop/tsconfig.json') })
   checkBundleInputs(Object.keys(result.metafile.inputs), repository)
-  await writeFile(resolve(stage, 'package.json'), JSON.stringify({ name: '@forsion/unit', version: baseline.desktopVersion, type: 'module' }, null, 2) + '\n')
+  // The npm package is the framework and its Web UI only: `files` keeps the platform-specific local plugins out of the tarball.
+  await writeFile(resolve(stage, 'package.json'), JSON.stringify({ name: '@forsion/unit', version: baseline.desktopVersion, type: 'module',
+    description: 'Forsion Unit: the independently runnable Forsion framework (plugin host and Web UI), prebuilt.',
+    license: 'SEE LICENSE IN LICENSE', repository: { type: 'git', url: 'git+https://github.com/Changan-Su/Forsion.git', directory: 'unit' },
+    engines: { node: '>=20' }, publishConfig: { access: 'public' },
+    files: ['main.mjs', 'backendWorker.mjs', 'release.json', 'README.md', 'LICENSE', 'web'] }, null, 2) + '\n')
   await writeFile(resolve(stage, 'release.json'), JSON.stringify({ ...baseline, builtAt: new Date().toISOString(), commercialServerIncluded: false }, null, 2) + '\n')
   await cp(resolve(root, 'README.md'), resolve(stage, 'README.md'))
+  await cp(resolve(root, '../LICENSE'), resolve(stage, 'LICENSE'))
   if (process.argv.includes('--package')) {
     for (const [script, assetOutput] of [['copy-excalidraw-assets.cjs', 'public/excalidraw'], ['gen-fonts.cjs', 'public/fonts']]) {
       const assets = spawnSync(process.execPath, [resolve(root, '../desktop/build', script), '--out', assetOutput], { cwd: resolve(root, '../web'), stdio: 'inherit' })

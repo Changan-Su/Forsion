@@ -59,6 +59,28 @@ node main.mjs access /absolute/path/my-unit/unit.json
 
 The default listener is loopback-only. The owner key stays in private instance data; the browser consumes it from the URL fragment, removes it and retains it only for that tab session. Keep instance data outside the release directory so code updates preserve data. `init` refuses to overwrite existing configuration.
 
+## npm 发布 / npm package
+
+每个桌面正式版（`v*` 标签）推上来后，`check-unit.yml` 的 `publish-npm` 把同一提交构建出的 Unit 发到 npm：`@forsion/unit`，版本号等于桌面版本号。包内是框架本体与网页壳（`main.mjs`、`backendWorker.mjs`、`web/`、`release.json`），不含按平台构建的本地插件。只发标签那一个提交的构建：`main` 上的构建与它跟着的正式版同号，`unit/check-publishable.mjs` 会拒绝。
+
+After each stable Desktop release (`v*` tag), the `publish-npm` job in `check-unit.yml` publishes the Unit built from that commit as `@forsion/unit`, versioned like Desktop. The package holds the framework and its Web UI (`main.mjs`, `backendWorker.mjs`, `web/`, `release.json`) without the platform-specific local plugins. Only the tagged commit is published: a build from `main` shares the version of the release it follows, so `unit/check-publishable.mjs` refuses it.
+
+```sh
+# Take the prebuilt Unit without a Genesis checkout; it has no dependencies to install.
+npm pack @forsion/unit@latest && tar -xzf forsion-unit-*.tgz   # → ./package/main.mjs
+```
+
+发布走 npm trusted publishing（OIDC），仓库里没有 npm 令牌。npm 规定包存在后才能登记，所以首个版本要人工发一次：从该标签的 `check-unit` 运行里下载产物 `forsion-unit-npm`，然后
+
+Publishing uses npm trusted publishing (OIDC); the repository holds no npm token. npm only lets an existing package register a publisher, so the first version is published once by hand: download the `forsion-unit-npm` artifact from that tag's `check-unit` run, then
+
+```sh
+npm login
+npm publish ./forsion-unit-<version>.tgz --access public
+# --allow-publish is required; `npm trust` needs npm ≥ 11.15.
+npx -y npm@11 trust github @forsion/unit --repo Changan-Su/Forsion --file check-unit.yml --allow-publish
+```
+
 ## 插件与生命周期 / Plugins and lifecycle
 
 ```sh

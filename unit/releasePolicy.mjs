@@ -4,7 +4,7 @@ import { readdir, readFile } from 'node:fs/promises'
 import { isAbsolute, relative, resolve, sep } from 'node:path'
 
 export const PUBLIC_PLUGIN_IDS = ['amadeus', 'tangu', 'calendar', 'automation', 'public']
-const topLevelFiles = new Set(['main.mjs', 'backendWorker.mjs', 'package.json', 'release.json', 'README.md', 'web', 'plugins'])
+const topLevelFiles = new Set(['main.mjs', 'backendWorker.mjs', 'package.json', 'release.json', 'README.md', 'LICENSE', 'web', 'plugins'])
 const commercialPath = /(?:^|\/)(?:server-admin|server-plugin|forsion-plugin-server-admin|forsion-backend-service|forsion-server|microserver|genesis-web)(?:\/|$)/i
 
 export function checkSourcePaths(paths) {
