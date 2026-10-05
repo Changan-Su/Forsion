@@ -19,6 +19,7 @@ let oldHome: string | undefined;
 let db: ReturnType<typeof createSqliteHost>['db'];
 let calls: any[];
 let provider: (payload: any, signal: AbortSignal) => Promise<any>;
+let resolved: any;
 const repo = (slug = 'alpha') => createMemoryRepository(join(home, 'agents', slug));
 const tick = () => new Promise<void>((resolve) => setImmediate(resolve));
 const result = (content: unknown) => ({ content: JSON.stringify(content), toolCalls: [], usage: { prompt_tokens: 10, completion_tokens: 10 } });
@@ -42,6 +43,7 @@ beforeEach(() => {
   db = sqlite.db;
   db.exec(toSqliteDDL(STANDALONE_SCHEMA));
   calls = [];
+  resolved = { model: { name: 'test', provider: 'test' }, apiKey: 'test', baseUrl: '', apiModelId: 'test' };
   provider = async (payload) => payload.messages[0].content.startsWith('Consolidate')
     ? result(proposal(JSON.parse(payload.messages[1].content))) : result({ ok: true });
   configureTangu({ host: sqlite.host, profile: createTanguProfile({ sandboxMode: 'none' }), billing: { calculateCost: async () => 0, logApiUsage: async () => {} } as any,
@@ -49,7 +51,7 @@ beforeEach(() => {
       getMemorySnapshot: async () => repo(currentAgentSlug()).snapshot(),
       commitMemory: async (_u: string, input: any) => repo(currentAgentSlug()).commit(input),
     }, llm: {
-      resolveModelAndKey: async () => ({ model: { name: 'test', provider: 'test' }, apiKey: 'test', baseUrl: '', apiModelId: 'test' }),
+      resolveModelAndKey: async () => resolved,
       buildProviderPayload: async (p: any) => p,
       streamProviderCompletion: async (p: any) => { calls.push(p); return provider(p.payload, p.signal); },
     } } as any });
@@ -104,9 +106,22 @@ describe('Agent-private, bounded Dream memory', () => {
     expect(next.version).not.toBe(old.version); expect(next.entries.find((e) => e.content.includes('中文'))?.evidenceIds[0]).toMatch(/^candidate:/);
     expect(readCandidates('alpha')).toHaveLength(0); expect(readCandidates('beta')).toHaveLength(1);
     expect(JSON.stringify(calls)).not.toContain('Beta 私有秘密'); expect(calls).toHaveLength(2);
-    // 两次调用都要带思考档(不带 = 关思考且不报错),并在正文预算 4096(提议 3072 / 核验 1024)之外各留 4096 给推理。
+    // 两次调用都要带思考档(不带 = 关思考且不报错)。这个夹具模型没有原生思考(档位只是一句系统提示),上限仍是正文预算 4096。
     expect(calls.map((c) => c.payload.thinkingLevel)).toEqual(['medium', 'medium']);
+    expect(calls.map((c) => c.payload.maxTokens)).toEqual([3072, 1024]);
+  });
+  it('leaves room for reasoning on a model that thinks natively: the configured budget stays the answer budget', async () => {
+    resolved = { model: { name: 'deepseek-v4-flash', provider: 'deepseek' }, apiKey: 'k', baseUrl: 'https://api.deepseek.com', apiModelId: 'deepseek-v4-flash' };
+    repo().add('已有事实'); seedCandidate();
+    startMemoryDream('u', 'alpha'); expect((await settle()).state).toBe('completed');
     expect(calls.map((c) => c.payload.maxTokens)).toEqual([3072 + 4096, 1024 + 4096]);
+  });
+  it('a verdict followed by a second, cut-off object is not read as approval', async () => {
+    const old = repo().add('一个必须保留的旧事实'); seedCandidate();
+    provider = async (p) => p.messages[0].content.startsWith('Consolidate') ? result(proposal(JSON.parse(p.messages[1].content)))
+      : { ...result({}), content: '{"ok":true}\n{"ok":false,"reason":"unsupported candidate"' };
+    startMemoryDream('u', 'alpha'); expect((await settle()).state).toBe('failed');
+    expect(repo().snapshot()).toEqual(old); expect(readCandidates('alpha')).toHaveLength(1);
   });
   it('reads the JSON even when the model writes a few words around it (endpoints where the thinking level is only a system-prompt nudge)', async () => {
     repo().add('已有事实'); seedCandidate();

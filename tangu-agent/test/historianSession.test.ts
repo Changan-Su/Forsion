@@ -10,6 +10,7 @@ import { completeHistorianTask, transcriptDelta, HISTORIAN_CONTEXT_CHARS, type H
 
 let db: ReturnType<typeof createSqliteHost>['db'];
 let calls: any[];
+let resolved: any;
 let inFlight: number;
 let maxInFlight: number;
 beforeEach(async () => {
@@ -17,8 +18,9 @@ beforeEach(async () => {
   db = local.db;
   db.exec(toSqliteDDL(STANDALONE_SCHEMA));
   calls = []; inFlight = 0; maxInFlight = 0;
+  resolved = { model: {}, apiKey: 'k', baseUrl: 'b', apiModelId: 'm' };
   configureTangu({ host: local.host, profile: createTanguProfile({ sandboxMode: 'none' }), brain: { llm: {
-    resolveModelAndKey: async () => ({ model: {}, apiKey: 'k', baseUrl: 'b', apiModelId: 'm' }),
+    resolveModelAndKey: async () => resolved,
     buildProviderPayload: async (p: any) => { calls.push(p); return p; },
     streamProviderCompletion: async () => {
       maxInFlight = Math.max(maxInFlight, ++inFlight);
@@ -39,6 +41,14 @@ describe('persistent Historian', () => {
     await completeHistorianTask(task({ task: 'team-summary', transcript: 'Team result' }));
     expect(calls[0].thinkingLevel).toBe('medium');
     expect('thinkingLevel' in calls[1]).toBe(false);
+    // 夹具模型没有原生思考:给了档位也不多留输出上限
+    expect(calls.map((c) => c.maxTokens)).toEqual([100, 100]);
+  });
+  it('adds reasoning headroom on top of the answer cap only for a natively thinking model, and only when a level is given', async () => {
+    resolved = { model: { provider: 'deepseek' }, apiKey: 'k', baseUrl: 'https://api.deepseek.com', apiModelId: 'deepseek-v4-flash' };
+    await completeHistorianTask(task({ thinkingLevel: 'medium' }));
+    await completeHistorianTask(task({ task: 'team-summary', transcript: 'Team result' }));
+    expect(calls.map((c) => c.maxTokens)).toEqual([100 + 4096, 100]);
   });
 
   it('shares one session across judge/team tasks, serializes concurrent calls, and isolates parents', async () => {

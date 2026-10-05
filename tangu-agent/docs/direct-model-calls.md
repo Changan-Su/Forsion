@@ -23,12 +23,20 @@
 
 ### 这次开了思考的两处怎么留的
 
-- **Historian 独立判官**：正文上限 1600，另留 4096 给推理（`localHistorian.ts` 的 `JUDGE_THINKING_HEADROOM`）。
-- **Dream**：设置里的「最大输出 tokens」（缺省 4096）是两次调用的**正文**预算，提议 75%、核验 25%；每次调用另留 4096 给推理（`memoryDream.ts` 的 `THINKING_HEADROOM`）。也就是缺省发出去的上限是 7168 和 5120。
+余量由 `llm/openaiCompat.ts` 的 `thinkingHeadroom(模型, 档位)` 统一给，调用点只写正文上限：
 
-GPT 6 Luna 中档实测：判官一次调用的输出（含推理）最多 344 token，Dream 提议最多 739、核验最多 464，离上限都远。留 4096 是为推理量大得多的模型（DeepSeek 一类）准备的，没有在那些模型上量过。
+- 原生思考的端点（能力表里的 effort / 预算 / 开关各形态）：正文上限之外另留 4096。
+- 档位只是一句系统提示的端点（`prefix`）和模型自带思考、不可调的端点（`none`）：不留。它们的推理量没有因为给了档位而变；其中的老模型输出上限往往只有 4096，多给会让原来能跑的调用直接被拒。
+- 托管模型按 `model.defaultBaseUrl` 认端点（`resolveModelAndKey` 给的 `baseUrl` 是网关占位），和主循环算「实际生效档位」是同一个口径。
 
-没有原生思考的端点，档位只是系统提示里的一句「先想再答」，模型可能在 JSON 前面写几句话。判官的解析本来就只取最外层的花括号；Dream 的解析 2026-10-06 起也这样做，结构仍由 `validateDreamProposal` 把关。
+落到这两处：
+
+- **Historian 独立判官**：正文上限 1600；原生思考的模型发出去是 5696。
+- **Dream**：设置里的「最大输出 tokens」（缺省 4096）是两次调用的**正文**预算，提议 75%、核验 25%；原生思考的模型发出去是 7168 和 5120。
+
+GPT 6 Luna 中档实测：判官一次调用的输出（含推理）最多 344 token，Dream 提议最多 739、核验最多 464，离上限都远。留 4096 是为推理量大得多的模型（DeepSeek 一类）准备的，没有在那些模型上量过。`thinkingHeadroom` 不认各模型自己的输出上限（能力表里没有这一项）；哪个原生思考的模型拒了这个上限，再按窗口的四分之一封顶（压缩摘要就是这么做的）。
+
+没有原生思考的端点，档位只是系统提示里的一句「先想再答」，模型可能在 JSON 前后写几句话。判官的解析本来就只取最外层的花括号；Dream 的解析 2026-10-06 起也容得下对象前后的话，但只认**恰好一个**对象：外面还有花括号（多个对象，或者后一个被截断了）一律照旧判失败，结构仍由 `validateDreamProposal` 把关。
 
 ## 档位怎么选的（2026-10-06，GPT 6 Luna）
 
@@ -54,11 +62,11 @@ GPT 6 Luna 中档实测：判官一次调用的输出（含推理）最多 344 t
 | 子代理 | `services/subAgent.ts` | agent 定义的档 → 父 run 的档 → medium | 不设 | 同上 |
 | 自我脑暴的分身 | `services/selfBrainstorm.ts` | 跟父 run 同档（缺省 medium）。档位不同前缀缓存就对不上 | 固定值 | 只是给主循环的参考意见 |
 | Historian 分身判官（`fork` 模式） | `services/localHistorian.ts` `forkJudge` | 跟父 run 同档（缺省 medium），理由同上 | 1600 | 同下一行；失败时回落到独立判官 |
-| **Historian 独立判官**（缺省模式；辅助模式下也由它出标题 / 摘要 / 进化记录提名） | `services/historianSession.ts` ← `localHistorian.ts` `runHistorianForSession` | **medium**（2026-10-06 起；此前没传 = 关） | 1600 + 4096 | 记忆候选进收件箱（Dream 还要对来源）；**项目级候选和进化记录提名里不带风险字眼的直接写进长期内容**；日志、摘要、标题 |
+| **Historian 独立判官**（缺省模式；辅助模式下也由它出标题 / 摘要 / 进化记录提名） | `services/historianSession.ts` ← `localHistorian.ts` `runHistorianForSession` | **medium**（2026-10-06 起；此前没传 = 关） | 1600，原生思考的模型另加 4096 | 记忆候选进收件箱（Dream 还要对来源）；**项目级候选和进化记录提名里不带风险字眼的直接写进长期内容**；日志、摘要、标题 |
 | 团队讨论的收尾总结 | 同一个函数，`task: 'team-summary'` ← `services/groupChat.ts` | 关（没传） | 1200 | 只是给用户看的一段总结，失败不影响团队那一轮 |
 | 首帧标题 | `localHistorian.ts` `onUserRunStart` | low | 600 | 标题不贴切 |
-| **Dream 提议** | `services/memoryDream.ts` `complete(PROPOSE)` | **medium**（2026-10-06 起；此前没传 = 关） | 3072 + 4096 | 校验不过 → 整轮失败、候选留到下次；过了校验但归并时丢了限定条件 → 靠下一行拦；该记的被当成噪音丢掉 → 这条候选就没了 |
-| **Dream 核验** | `memoryDream.ts` `complete(VERIFY)` | **medium**（同上） | 1024 + 4096 | 误放 → 错的归并写进 MEMORY.md（有版本可回退）；误拒 → 这一轮白跑 |
+| **Dream 提议** | `services/memoryDream.ts` `complete(PROPOSE)` | **medium**（2026-10-06 起；此前没传 = 关） | 3072，原生思考的模型另加 4096 | 校验不过 → 整轮失败、候选留到下次；过了校验但归并时丢了限定条件 → 靠下一行拦；该记的被当成噪音丢掉 → 这条候选就没了 |
+| **Dream 核验** | `memoryDream.ts` `complete(VERIFY)` | **medium**（同上） | 1024，原生思考的模型另加 4096 | 误放 → 错的归并写进 MEMORY.md（有版本可回退）；误拒 → 这一轮白跑 |
 | 项目记忆写满时的压缩 | `services/projectMemoryCompact.ts` | medium（2026-10-05 起；头两版没传，前台 19 次只对 8 次） | 12288 | 压错了会丢项目记忆里的现行规矩；去掉的原句进 `COMPACTED.json`、能逐句恢复 |
 | 云端 Historian（web / 安卓的 tangu 会话，网关上跑） | `services/historian.ts` `judgeAndWrite` | low | 800 | 直接追加进长期记忆（云端没有 Dream），每趟最多 3 条 |
 | 云端 Historian（AI Studio 空闲复盘） | `historian.ts` `summarizeSession` | 关（没传） | 300 | 一行日志 |
