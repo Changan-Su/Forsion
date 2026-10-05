@@ -43,6 +43,8 @@
     #tangu-splash .fts-cloud { background:inherit; opacity:0; animation:fts-clear 1700ms cubic-bezier(.4,0,.2,1) both; }\
     #tangu-splash .fts-brand { position:absolute; left:7%; bottom:calc(9% + env(safe-area-inset-bottom, 0px)); display:flex; align-items:center; gap:.92em; color:var(--fts-word); font:500 13px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; letter-spacing:.42em; animation:fts-in 1100ms 500ms both; }\
     #tangu-splash .fts-brand svg { width:1.54em; height:1.85em; fill:currentColor; }\
+    #tangu-splash .fts-brand span { display:flex; flex-direction:column; gap:.7em; }\
+    #tangu-splash .fts-ver { font-size:max(8px, .72em); letter-spacing:.16em; opacity:.7; }\
     #tangu-splash .fts-verse { position:absolute; left:7%; top:calc(13% + env(safe-area-inset-top, 0px)); -webkit-writing-mode:vertical-rl; writing-mode:vertical-rl; color:var(--fts-verse); font-family:"Songti SC", "STSong", "Noto Serif CJK SC", "Noto Serif SC", "Source Han Serif SC", "SimSun", serif; line-height:1; letter-spacing:.42em; }\
     #tangu-splash .fts-verse p { margin:0; animation:fts-in 900ms 300ms both; }\
     #tangu-splash .fts-verse p + p { margin-block-start:1.05em; padding-inline-start:1.5em; animation-delay:600ms; }\
@@ -86,6 +88,8 @@
       if (last >= 0 && pick >= last) pick++;
       try { localStorage.setItem('forsion_startup_verse', String(pick)); } catch (_) { /* preview */ }
       var mark = original.querySelector('#tree-mark');
+      // Stamped by whoever inlines this runtime (build plugin / settings preview); it goes into innerHTML, so only a plain version passes.
+      var version = /^\d+\.\d+\.\d+[-+.0-9A-Za-z]{0,20}$/.test(window.FORSION_APP_VERSION) ? window.FORSION_APP_VERSION : '';
       var scene = document.createElement('div');
       scene.className = 'fts';
       scene.style.cssText = '--fts-lit:' + look.lit + ';--fts-near:' + look.near + ';--fts-far:' + look.far + ';--fts-bloom:' + look.bloom
@@ -93,7 +97,7 @@
         + ';--fts-root:' + rootX / W * 100 + '% ' + rootY / H * 100 + '%';
       scene.innerHTML = '<div class="fts-view"><div class="fts-lit"></div><canvas class="fts-far"></canvas><canvas class="fts-near"></canvas><canvas class="fts-wall"></canvas><div class="fts-bloom"></div><div class="fts-grain"></div></div><div class="fts-cloud"></div>'
         + '<div class="fts-verse" style="font-size:' + Math.max(17, Math.min(34, Math.min(W, H) * .031)) + 'px"><p>' + VERSES[pick][0] + '</p><p>' + VERSES[pick][1] + '</p><p class="fts-src">' + VERSES[pick][2] + '</p></div>'
-        + '<div class="fts-brand" style="font-size:' + Math.max(9, Math.min(13, Math.min(W, H) * .02)) + 'px"><svg viewBox="210.585 128.215 588.13 706.57"><path d="' + (mark ? mark.getAttribute('d') : '') + '"/></svg>FORSION</div>';
+        + '<div class="fts-brand" style="font-size:' + Math.max(9, Math.min(13, Math.min(W, H) * .02)) + 'px"><svg viewBox="210.585 128.215 588.13 706.57"><path d="' + (mark ? mark.getAttribute('d') : '') + '"/></svg><span>FORSION' + (version ? '<small class="fts-ver">' + version + '</small>' : '') + '</span></div>';
       var layers = scene.getElementsByTagName('canvas');
       // WebKit has no canvas filter: blur the finished layer with CSS instead.
       var blur = function (canvas, context, px) {

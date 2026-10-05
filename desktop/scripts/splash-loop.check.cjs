@@ -49,11 +49,13 @@ const OUT = MUTANT ? fs.mkdtempSync(path.join(os.tmpdir(), 'splash-mutant-')) : 
 const RUNTIME = fs.readFileSync(MUTANT || path.join(__dirname, '../frontend/startupAppearance.js'), 'utf8')
 const ENTRIES = ['../frontend/index.html', '../../web/index.html', '../../mobile/index.html']
 /** 真实入口 + 真实运行时;config 给了就当作宿主已存的开屏设置(否则走各端自己的缺省读取)。函数替换:运行时文本里的 `$'` 不许被展开。 */
-function html(config, entry = ENTRIES[0]) {
-  const host = config ? `<script>window.tangu={startupAppearance:{initial:${JSON.stringify({ version: 1, ...config })}}};</script>` : ''
+function html(config, entry = ENTRIES[0], version = STAMP) {
+  const host = `<script>window.FORSION_APP_VERSION=${JSON.stringify(version)};</script>` + (config ? `<script>window.tangu={startupAppearance:{initial:${JSON.stringify({ version: 1, ...config })}}};</script>` : '')
   return fs.readFileSync(path.join(__dirname, entry), 'utf8').replace('<!-- forsion-startup-runtime -->', () => `${host}<script>${RUNTIME}</script>`)
 }
 const CYCLE = 1600
+/** 构建时盖进页面的版本号(真应用里取自更新日志的最新正式版);这里用一个认得出来的假值。 */
+const STAMP = '9.8.7'
 const VERSES = ['汤谷上有扶桑', '香风送紫蕊', '客止我且往', '万里扶桑客', '暾将出兮东方']
 const png = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aD1sAAAAASUVORK5CYII='
 const svg = 'data:image/svg+xml;base64,' + Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40"><circle cx="20" cy="20" r="18" fill="teal"/></svg>').toString('base64')
@@ -91,6 +93,8 @@ const shadowState = () => {
   const box = (el) => { const r = el.getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height } }
   const onWall = (b) => [[0, 0], [1, 0], [0, 1], [1, 1], [.5, .5]].every(([fx, fy]) => wallAlpha(b.x + b.w * fx, b.y + b.h * fy) > 250)
   const verse = box(scene.querySelector('.fts-verse')), brand = box(scene.querySelector('.fts-brand'))
+  const word = scene.querySelector('.fts-brand span'), ver = scene.querySelector('.fts-ver')
+  const wordBox = (() => { const r = document.createRange(); r.selectNode(word.firstChild); return r.getBoundingClientRect() })()
   const anims = scene.getAnimations({ subtree: true })
   const loops = anims.filter((a) => a.effect.getComputedTiming().iterations === Infinity)
   const cs = getComputedStyle(scene)
@@ -101,6 +105,8 @@ const shadowState = () => {
     far: painted(far), near: painted(near),
     wallCorner: [...alphaAt(wall, 2, 2)], paneAlpha: wallAlpha(parseFloat(cs.getPropertyValue('--fts-cx')) / 100 * innerWidth + innerWidth * .08, parseFloat(cs.getPropertyValue('--fts-cy')) / 100 * innerHeight + innerHeight * .08),
     verseOnWall: onWall(verse), brandOnWall: onWall(brand),
+    word: word.firstChild.textContent, ver: ver ? ver.textContent : null, brandKids: scene.querySelector('.fts-brand').querySelectorAll('*').length,
+    verUnder: !!ver && ver.getBoundingClientRect().top >= wordBox.bottom && Math.abs(ver.getBoundingClientRect().left - wordBox.left) < 1 && ver.getBoundingClientRect().height < wordBox.height,
     inView: [verse, brand].every((b) => b.x >= 0 && b.y >= 0 && b.x + b.w <= innerWidth && b.y + b.h <= innerHeight),
     names: anims.map((a) => a.animationName),
     loopNames: loops.map((a) => a.animationName).sort(),
@@ -140,6 +146,7 @@ async function main() {
     `far=${shadow.far?.toFixed(3)} near=${shadow.near?.toFixed(3)} corner=${shadow.wallCorner} pane=${shadow.paneAlpha}`)
   check('诗句是五句之一,两行加出处', shadow.lines?.length === 3 && VERSES.includes(shadow.lines[0]) && /《.+》/.test(shadow.lines[2]), (shadow.lines || []).join(' / '))
   check('诗句与字标落在墙上(不压窗光)、不出画', !!shadow.verseOnWall && !!shadow.brandOnWall && !!shadow.inView)
+  check('字标下面一行是盖进页面的版本号,左边对齐、字比字标小', shadow.word === 'FORSION' && shadow.ver === STAMP && !!shadow.verUnder, `${shadow.word} / ${shadow.ver}`)
   check('枝影 / 窗光三条循环都是 infinite,且还在走', shadow.loopNames?.join() === 'fts-drift,fts-sway,fts-sway-far' && !!shadow.loopsRunning && shadow.loopTime > 2000, `${shadow.loopNames} t=${Math.round(shadow.loopTime)}ms`)
   check('只动 transform / opacity', shadow.props?.join() === 'opacity,transform', (shadow.props || []).join())
   check('首帧未出:闪屏还在(没被定时器撤走)', !shadow.gone && !shadow.out)
@@ -147,6 +154,13 @@ async function main() {
   await firstFrame()
   await page.waitForTimeout(900) // 已过最短展示:只剩 380ms 淡出
   check('首帧画出后闪屏被移除(没有循环接缝要等)', (await page.evaluate(shadowState)).gone)
+  // 没盖版本号(老构建 / 别处拼的页面)→ 不出这一行;盖进来的不是版本号 → 一个字都不进页面
+  for (const [name, value] of [['没盖版本号', ''], ['盖进来的是一段标记', '1.2.3<img src=x onerror=alert(1)>']]) {
+    await open(html(undefined, undefined, value))
+    await page.waitForTimeout(400)
+    const bare = await page.evaluate(shadowState)
+    check(`${name}:只有字标,没有版本那一行`, !!bare.mounted && bare.word === 'FORSION' && bare.ver === null && bare.brandKids === 3 && !!bare.brandOnWall, `ver=${bare.ver} kids=${bare.brandKids}`)
+  }
 
   // ── ② 最短展示:首帧来得再早也守到 1.3 秒 ──
   await open(html())
@@ -229,7 +243,7 @@ async function main() {
       await open(html())
       await page.waitForTimeout(shot ? 2600 : 50)
       const s = await page.evaluate(shadowState)
-      check(`${w}×${h} ${mode}:画出来了,诗句与字标在墙上、在画内`, !!s.mounted && !!s.verseOnWall && !!s.brandOnWall && !!s.inView && s.paneAlpha < 30 && s.far > .005)
+      check(`${w}×${h} ${mode}:画出来了,诗句与字标(连同版本号)在墙上、在画内`, !!s.mounted && !!s.verseOnWall && !!s.brandOnWall && !!s.inView && s.ver === STAMP && !!s.verUnder && s.paneAlpha < 30 && s.far > .005)
       if (shot) await page.screenshot({ path: path.join(OUT, `tree-shadow-${shot}-${mode}.png`) })
     }
   }
@@ -237,14 +251,16 @@ async function main() {
 
   // ── ⑧ 设置里的「预览开屏」:沙箱 iframe 没有同源,localStorage 一碰就抛;运行时不许因此停在半路 ──
   const framed = fs.readFileSync(path.join(__dirname, ENTRIES[0]), 'utf8').replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '')
-    .replace('<!-- forsion-startup-runtime -->', () => `<script>window.tangu={startupAppearance:{initial:{"version":1,"showSplash":true}}};</script><script>${RUNTIME}</script><script>setTimeout(function(){document.getElementById('root').textContent=' ';},600);</script>`)
+    .replace('<!-- forsion-startup-runtime -->', () => `<script>window.FORSION_APP_VERSION=${JSON.stringify(STAMP)};window.tangu={startupAppearance:{initial:{"version":1,"showSplash":true}}};</script><script>${RUNTIME}</script><script>setTimeout(function(){document.getElementById('root').textContent=' ';},600);</script>`)
   await page.setContent(`<iframe sandbox="allow-scripts" style="width:900px;height:600px;border:0"></iframe>`)
   await page.locator('iframe').evaluate((el, doc) => { el.srcdoc = doc }, framed)
   const frame = page.frameLocator('iframe')
   const framedMounted = await frame.locator('#tangu-splash .fts').waitFor({ timeout: 5000 }).then(() => true, () => false)
+  const framedVersion = await frame.locator('#tangu-splash .fts-ver').textContent({ timeout: 1000 }).catch(() => null)
   const storageThrows = await page.frames()[1].evaluate(() => { try { localStorage.getItem('x'); return false } catch { return true } })
   await frame.locator('#tangu-splash').waitFor({ state: 'detached', timeout: 5000 }).catch(() => {})
   check('沙箱预览:存储不可用(负对照成立)时树影照常挂上并按时退场', framedMounted && storageThrows && await frame.locator('#tangu-splash').count() === 0)
+  check('沙箱预览:版本号照样在', framedVersion === STAMP, String(framedVersion))
 
   // ═══ 经典图标(原来的默认,可在「开屏素材」里选回)═══
   // ── ⑨ 首帧迟迟不来 → 一直循环;首帧一到 → 在循环接缝处撤走 ──
