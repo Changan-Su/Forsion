@@ -451,8 +451,11 @@ const tabCountText = (list) => {
   }
   /** Tap a Space of the native bottom bar. With more than five the bar scrolls: bring the item in first. */
   async function tapSpace(id) {
+    // The bar is away while a keyboard or an overlay is up and returns a moment after it leaves: wait, do not judge the first dump.
+    const up = await h.waitNodes((l) => (h.byId(l, 'nativeChrome.spaces') ? l : null), { timeout: 8000 })
+    assert.ok(up.hit, 'no native space bar')
     for (const dir of [0, 1, -1]) {
-      let list = ui()
+      let list = dir ? ui() : up.hit
       const bar = h.byId(list, 'nativeChrome.spaces')
       assert.ok(bar, 'no native space bar')
       if (dir) {
@@ -973,6 +976,25 @@ const tabCountText = (list) => {
     await tapId('nativeChrome.close')
     assert.ok(await h.waitPage(cdp, `!(${settingsOpen})`, 5000), '× did not close settings')
     assert.ok((await h.waitNodes((l) => h.byId(l, 'nativeChrome.tabs'), { timeout: 5000 })).hit, 'shell bar did not return')
+  })
+
+  // The phone's settings keep "open the app in" (Settings → Space). It must do something there: the boot code that reads
+  // it was written for the desktop shell (bootstrapEngine: `UI_MODE !== 'mobile'`, and UI_MODE is 'desktop' inside the app).
+  await check('startup Space on the phone: a boot lands on the default (Home), on the Space the setting names, or on the last one — as set', async () => {
+    const space = "document.querySelector('.mb-shell')?.dataset.space"
+    const KEY = 'forsion_default_space' // spaces.tsx DEFAULT_SPACE_KEY; '__last__' = LAST_EXIT_SPACE
+    const bootWith = async (value) => {
+      await toSpace('tangu') // where the user "was"
+      await cdp.eval(`(${value === null ? `localStorage.removeItem('${KEY}')` : `localStorage.setItem('${KEY}', ${JSON.stringify(value)})`}, true)`)
+      await reload()
+      return cdp.eval(space)
+    }
+    try {
+      assert.equal(await bootWith('agents'), 'agents', 'a pinned startup Space')
+      assert.equal(await bootWith('__last__'), 'tangu', 'last Space on exit')
+    } finally {
+      assert.equal(await bootWith(null), 'home', 'the default: the home slot')
+    }
   })
 
   await check('touch feedback: no WebView tap highlight; a held press tints the element; long-press selects no text', async () => {
