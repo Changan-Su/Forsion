@@ -663,6 +663,17 @@ export function activeChatModelId(
   if (!s.activeId) return newChatModelId(s) || ''
   return s.activeSession?.model_id || defaultModelOf(s) || s.modelsResp?.defaultModelId || ''
 }
+/** 重读主进程折算好的配置,刷新本地缓存(agent 改了 config.json 之后)。cfg 只动「设置里的值」那三项,连接信息不碰。 */
+function reloadDesktopConfig(): void {
+  const generation = authGeneration
+  void window.tangu?.getConfig?.().then((c) => {
+    if (generation !== authGeneration) return // 期间换了号:那份配置是上个账号的
+    useApp.setState((s) => ({
+      desktopConfig: c, homeDir: c.homeDir, defaultWsDir: c.defaultWorkspaceDir || '',
+      cfg: { ...s.cfg, modelId: c.modelId, visionModelId: c.visionModelId, visionMode: c.visionMode },
+    }))
+  }).catch(() => { /* 读不到就保留本地:关设置 / 下次启动都会再读 */ })
+}
 /** 记住「上次用的」审批档/思考档:**新会话据此起步**。先落内存(web/mobile 无 window.tangu,
  *  至少本次会期内粘住),再异步写盘(桌面跨重启)。 */
 function rememberDefaults(patch: Partial<StoredDesktopConfig>): void {
@@ -1601,6 +1612,12 @@ export const useApp = create<AppState>((set, get) => ({
         queueAgentConfigSync(sid, { modelId: modelId || undefined, thinkingLevel: level })
         break
       }
+      case 'app_settings_changed':
+        // agent 经 update_app_settings 改了本机 config.json(引擎已落盘)。这里缓存着那份配置:界面显示、朗读开关,
+        // 以及随每次 run 透传的默认 / 识图模型 —— 不重读,界面是旧值,下一次 run 还会把旧的识图模型带过去盖住新值。
+        // 事件存库、重新订阅会回放 → 只当「去重读一次」的信号,载荷不落地(重读是幂等的)。
+        reloadDesktopConfig()
+        break
       case 'team_output': {
         const row = pl.message
         if (!row?.id || row.role !== 'model') break
