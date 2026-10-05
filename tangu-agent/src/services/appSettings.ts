@@ -109,9 +109,23 @@ export const APP_SETTINGS: Readonly<Record<string, Section>> = {
   },
 };
 
+/** 每段一个写入口,段名写成字面量 —— test/remoteSectionWriters 的静态守卫要求每个 updateSection 的段名都看得见
+ *  (变量段名 = 什么段都能写,包括 remote 那段:远程会话的最高审批档)。开放新段:APP_SETTINGS 加一段,这里按同样的顺序加一行。 */
+const SECTION_WRITERS: Readonly<Record<string, (fn: (cur: unknown) => unknown) => void>> = {
+  cloud: (fn) => { updateSection('cloud', fn); },
+  models: (fn) => { updateSection('models', fn); },
+  tts: (fn) => { updateSection('tts', fn); },
+  asr: (fn) => { updateSection('asr', fn); },
+  webSearch: (fn) => { updateSection('webSearch', fn); },
+  workspace: (fn) => { updateSection('workspace', fn); },
+};
+
+/** 段名来自模型:只认表自己的键(`constructor` / `__proto__` 这类继承来的不算)。 */
+const sectionOf = (name: string): Section | undefined => (Object.hasOwn(APP_SETTINGS, name) ? APP_SETTINGS[name] : undefined);
+
 /** 只读段:提供方目录(id + 模型名)。 */
 export const PROVIDERS_SECTION = 'providers';
-export const WRITABLE_SECTIONS: readonly string[] = Object.keys(APP_SETTINGS);
+export const WRITABLE_SECTIONS: readonly string[] = Object.keys(SECTION_WRITERS);
 export const READABLE_SECTIONS: readonly string[] = [...WRITABLE_SECTIONS, PROVIDERS_SECTION];
 
 /** 默认工作目录决定以后每个新会话的免审批写入范围 —— 审批闸据此把它当保护配置(每次都问,完全通行也问)。 */
@@ -258,8 +272,9 @@ export interface AppSettingsUpdate {
 export async function updateAppSettings(profile: AppProfile, sectionName: unknown, values: unknown, beforeWrite?: () => string | null): Promise<AppSettingsUpdate> {
   const fail = (text: string): AppSettingsUpdate => ({ ok: false, text: `Error: ${text}`, changed: [] });
   const name = String(sectionName ?? '').trim();
-  const spec = APP_SETTINGS[name];
-  if (!spec) {
+  const spec = sectionOf(name);
+  const write = spec && SECTION_WRITERS[name];
+  if (!spec || !write) {
     return fail(name === PROVIDERS_SECTION
       ? 'providers are read-only here — only the user can add or change a provider or its key, in Settings (run_ui_command open-settings "model-providers").'
       : `unknown section "${name}". Sections you can change: ${WRITABLE_SECTIONS.join(', ')}.`);
@@ -298,7 +313,7 @@ export async function updateAppSettings(profile: AppProfile, sectionName: unknow
   const changed: string[] = [];
   const notes: string[] = [];
   try {
-    updateSection(name, (cur) => {
+    write((cur) => {
       if (spec.scalar) {
         const before = typeof cur === 'string' ? cur : '';
         const after = String(next[spec.scalar]);
@@ -329,7 +344,7 @@ export async function updateAppSettings(profile: AppProfile, sectionName: unknow
 /** 审批卡上「改什么」那几行:现值 → 新值(现值由闸门读,模型给不了)。不校验 —— 校验在执行时,卡上照原样显示模型要写的东西。 */
 export function describeAppSettingsChange(sectionName: unknown, values: unknown): string {
   const name = String(sectionName ?? '').trim();
-  const spec = APP_SETTINGS[name];
+  const spec = sectionOf(name);
   if (!spec || !isObj(values)) return '';
   const raw = rawOf(name, spec);
   return Object.entries(values).map(([key, v]) => {

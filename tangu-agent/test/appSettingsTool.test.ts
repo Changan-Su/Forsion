@@ -24,7 +24,7 @@ import { query } from '../src/core/db.js';
 import { getToolDefinitions, listDeferredTools, executeTool, type ToolContext } from '../src/tools/registry.js';
 import { subscribe } from '../src/services/eventBus.js';
 import { controlPlaneCall, gateToolCall, resolveApproval, toolNeedsApproval, type ApprovalAction } from '../src/services/approvals.js';
-import { APP_SETTINGS, renderAppSettings, updateAppSettings } from '../src/services/appSettings.js';
+import { APP_SETTINGS, WRITABLE_SECTIONS, describeAppSettingsChange, renderAppSettings, updateAppSettings } from '../src/services/appSettings.js';
 import { ZHIPU_ENGINES } from '../src/adapters/standalone/localSearch.js';
 import { clearRunRemoteTaint, taintRunRemote } from '../src/services/remoteOrigin.js';
 
@@ -348,6 +348,22 @@ describe('③ 写', () => {
     seed({ tts: 'oops', keep: 1 });
     expect((await updateAppSettings(profile, 'tts', { voice: 'nova' })).text).toMatch(/is not an object/);
     expect(readCfg()).toEqual({ tts: 'oops', keep: 1 });
+  });
+
+  it('每个可改的段都有一条段名写死的写入口,顺序与设置表一致(remoteSectionWriters 守卫不认变量段名)', () => {
+    expect([...WRITABLE_SECTIONS]).toEqual(Object.keys(APP_SETTINGS));
+    expect(WRITABLE_SECTIONS).not.toContain('remote');
+  });
+
+  it('表外的段写不进去:remote(远程会话的最高审批档)、审批规则、继承来的键(constructor / __proto__ / toString)', async () => {
+    seed();
+    for (const section of ['remote', 'approval', 'constructor', '__proto__', 'toString', 'hasOwnProperty']) {
+      const r = await updateAppSettings(profile, section, { maxApprovalMode: 'full-auto', base: 'full-auto' });
+      expect(r, section).toMatchObject({ ok: false, changed: [] });
+      expect(r.text, section).toMatch(/^Error: unknown section/);
+      expect(describeAppSettingsChange(section, { maxApprovalMode: 'full-auto' }), section).toBe('');
+    }
+    expect(readCfg()).toEqual(SEEDED);
   });
 });
 
