@@ -7,7 +7,8 @@ export function startupAppearanceHtml() {
   return {
     name: 'forsion-startup-appearance',
     transformIndexHtml(html: string) {
-      return html.replace('<!-- forsion-startup-runtime -->', `<script>${runtime}</script>`)
+      // Function replacer: `$'` and friends in the runtime text must not expand to page HTML.
+      return html.replace('<!-- forsion-startup-runtime -->', () => `<script>${runtime}</script>`)
     },
   }
 }
