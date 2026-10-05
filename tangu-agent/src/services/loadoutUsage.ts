@@ -96,9 +96,13 @@ export async function collectLoadoutUsage(userId: string, days: number, now = Da
     try { id = String(JSON.parse(String(r.args || '{}'))?.skill_id || ''); } catch { /* 坏参数的调用不算装载 */ }
     if (!id) continue;
     const m = of(r.slug).skills;
-    const cur = m.get(id) ?? { calls: 0, last: '' };
     const at = tsText(r.at);
-    m.set(id, { calls: cur.calls + 1, last: at > cur.last ? at : cur.last });
+    // 模型把本地技能的 id 写成不带前缀的名字时 use_skill 也认(tools/builtin/skills.ts):这种调用同样记在 `local:<名字>` 名下,
+    // 否则那个技能在巡检里显得「一直列着没人用」。
+    for (const key of id.includes(':') ? [id] : [id, `local:${id}`]) {
+      const cur = m.get(key) ?? { calls: 0, last: '' };
+      m.set(key, { calls: cur.calls + 1, last: at > cur.last ? at : cur.last });
+    }
   }
   return out;
 }

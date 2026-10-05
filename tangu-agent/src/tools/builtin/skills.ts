@@ -105,8 +105,11 @@ export const skillsProvider: ToolProvider = {
         },
       },
       execute: async (args, ctx) => {
-        const id = String(args.skill_id ?? '').trim();
+        let id = String(args.skill_id ?? '').trim();
         if (!id) return 'Error: skill_id is required';
+        // 模型常把本地技能的 id 写成不带前缀的名字(目录里是 `local:skill-creator`,它传 `skill-creator`;10-05 真模型实测):
+        // 原样不在准许清单、补上前缀就在 → 按补上的认。只在准许清单里找,不会因此多放行任何技能。
+        if (ctx.enabledSkillIds && !ctx.enabledSkillIds.includes(id) && ctx.enabledSkillIds.includes(`local:${id}`)) id = `local:${id}`;
         if (!ctx.enabledSkillIds || !ctx.enabledSkillIds.includes(id)) {
           return `Skill "${id}" is not available in this session.`;
         }
@@ -117,7 +120,10 @@ export const skillsProvider: ToolProvider = {
         if (cheat) return `# Skill: ${cheat.title}\n\n${cheat.body}`;
         const body = (s.content && String(s.content).trim()) || (s.description && String(s.description).trim()) || '';
         if (!body) return `Skill "${s.name}" has no instructions.`;
-        const head = `# Skill: ${s.name}\n\n`;
+        // 技能自带的文件(scripts/ references/ assets/)在正文里写的是相对路径:把文件夹告诉模型,它才找得到。
+        // 只对本机会话里的本地技能给:云端技能没有文件夹,沙箱里也够不着这个路径。
+        const dir = ctx.execMode === 'host' ? String((s as { dir?: string }).dir || '') : '';
+        const head = `# Skill: ${s.name}\n\n` + (dir ? `Skill folder: ${dir}\nRelative paths in this skill (scripts/, references/, assets/ …) resolve against that folder.\n\n` : '');
         return head + body.slice(0, USE_SKILL_MAX_CHARS) + (body.length > USE_SKILL_MAX_CHARS ? '\n\n…(truncated)' : '');
       },
     },
