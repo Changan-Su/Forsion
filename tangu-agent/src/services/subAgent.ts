@@ -32,6 +32,7 @@ import { agentIdentitySection } from './agentActivation.js';
 import { runWithAgentSlug, currentAgentSlug } from '../seams/runContext.js';
 import { runHooks, type HookRunContext, type HookVerdict } from '../hooks/index.js';
 import { projectDocSection } from './projectDoc.js';
+import { buildProjectMemoryContext } from './projectMemory.js';
 import { loadSkillLoadout, type SkillLoadout } from './skillLoadout.js';
 import { loadCustomTools } from '../tools/customTools.js';
 import { AUTONOMY_SECTION, TOOL_FAILURE_SECTION, hostEnvSection } from '../profiles/promptSections.js';
@@ -390,7 +391,14 @@ export async function runSubAgent(p: SubAgentParams): Promise<string> {
       'These tools exist but are not loaded into context yet. When a task needs one, FIRST call `load_tools` with the exact tool names (one call may load several), wait for its result, then call the loaded tools normally. Do not invent parameters for tools you have not loaded.\n' +
       deferredCatalog.map((d) => `- ${d.name}: ${d.hint}`).join('\n')
     : null;
-  const sysPrompt = [persona, SUB_SYSTEM_PROMPT, TOOL_FAILURE_SECTION, AUTONOMY_SECTION, envSection, projectDoc, ...(skills?.sections ?? []), deferSection]
+  // 项目记忆(父会话所在的那个项目):子 agent 与父会话同一个会话 id,remember 的项目级它本来就写得进,提示里也该看得到已有的。
+  // 读不到只丢这一段(同主循环)。
+  let projectMemory: string | null = null;
+  if (deps().profile.capabilities.hostExec) {
+    try { projectMemory = (await buildProjectMemoryContext(parentCtx.userId, parentCtx.sessionId)) || null; }
+    catch (e) { parentCtx.signal?.throwIfAborted(); console.warn('[sub-agent] load project memory failed:', (e as Error)?.message || e); }
+  }
+  const sysPrompt = [persona, SUB_SYSTEM_PROMPT, TOOL_FAILURE_SECTION, AUTONOMY_SECTION, envSection, projectDoc, projectMemory, ...(skills?.sections ?? []), deferSection]
     .filter((s): s is string => !!s)
     .join('\n\n---\n');
   let toolDefs = getToolDefinitions(subCtx);

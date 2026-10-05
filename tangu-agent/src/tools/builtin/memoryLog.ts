@@ -79,11 +79,14 @@ export const memoryLogProvider: ToolProvider = {
   tools: () => [
     {
       name: 'remember',
-      isEnabledFor: (profile) => profile.capabilities.memory,
+      // 临时成员(团队 / 讨论里现写的一次性人设)不给:它没有自己的身份,不该留下记忆,更不该往项目记忆里写。
+      // 以前照给,agent 级的一写就落在 agents/<临时名>/ 里。(读的那几条路仍会建出这个空目录,那是原有行为,这里没动。)
+      isEnabledFor: (profile, ctx) => profile.capabilities.memory && !ctx.ephemeral,
       definition: REMEMBER.base,
       definitionFor: rememberDefinitionFor,
       execute: async (args, ctx) => {
         ctx.signal?.throwIfAborted();
+        if (ctx.ephemeral) return 'Error: Memory is unavailable to a temporary team member.';
         const action = String(args.action ?? 'add');
         const brain = deps().brain.memory;
         if (!['add', 'list', 'update', 'forget'].includes(action)) return 'Error: unknown memory action';
@@ -169,7 +172,7 @@ export const memoryLogProvider: ToolProvider = {
     },
     {
       name: 'log_event',
-      isEnabledFor: (profile) => profile.capabilities.log,
+      isEnabledFor: (profile, ctx) => profile.capabilities.log && !ctx.ephemeral, // 临时成员:同 remember
       definition: {
         type: 'function',
         function: {
@@ -186,6 +189,7 @@ export const memoryLogProvider: ToolProvider = {
       },
       execute: async (args, ctx) => {
         ctx.signal?.throwIfAborted();
+        if (ctx.ephemeral) return 'Error: The activity log is unavailable to a temporary team member.';
         // 远程污点 run 不写每日日志(审批闸已硬拒;这里是同一判定的兜底,P1 · M1A)
         const remoteDenied = effectiveRemote(ctx) ? remoteManagementDenied('log_event', undefined) : null;
         if (remoteDenied) return `Error: ${remoteDenied}`;
