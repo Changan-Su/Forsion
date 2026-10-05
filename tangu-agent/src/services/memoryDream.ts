@@ -11,6 +11,7 @@ import { redactSecrets } from '../core/redact.js';
 import { readCandidates, consumeCandidates, readPrivateText, writePrivateText, withPrivateMemoryLock, type MemoryCandidate } from './memoryCandidates.js';
 import { memoryFactFingerprint, isMemoryTombstoneActive } from './memoryRepository.js';
 import { getAgent, resolveMemorySlug } from '../agents/agentRegistry.js';
+import type { ThinkingLevel } from '../core/types.js';
 
 export interface MemoryDreamConfig { enabled: boolean; modelId: string; timeoutMs: number; maxOutputTokens: number; intervalHours: number }
 export interface MemoryDreamStatus { state: 'idle' | 'running' | 'cancelling' | 'completed' | 'skipped' | 'failed' | 'cancelled'; running: boolean; startedAt?: string; finishedAt?: string; detail?: string; version?: number | string; calls?: number; candidateCursor?: string }
@@ -26,6 +27,8 @@ const INPUT_BUDGET = 32_000;
 /** Below this much conversation a candidate cannot be checked against its source; it waits for a later run instead. */
 const MIN_EVIDENCE = 1_000;
 const DEFAULTS: MemoryDreamConfig = { enabled: true, modelId: '', timeoutMs: 60_000, maxOutputTokens: 4096, intervalHours: 6 };
+/** 提议与核验两次调用的思考档。不给 = 关思考(不报错):逐条归并 / 核验是凭直觉一次交卷。 */
+const DREAM_THINKING: ThinkingLevel = 'medium';
 const jobs = new Map<string, { controller: AbortController; status: MemoryDreamStatus }>();
 const FILE = '.memory-dream.json';
 const clamp = (value: unknown, fallback: number, min: number, max: number): number => Number.isFinite(Number(value)) ? Math.max(min, Math.min(max, Math.floor(Number(value)))) : fallback;
@@ -213,7 +216,7 @@ export function startMemoryDream(userId: string, slug: string, opts: { automatic
       const complete = async (system: string, content: string, maxTokens: number): Promise<unknown> => {
         check();
         const payload = await brain.llm.buildProviderPayload({ model: model.model, apiModelId: model.apiModelId,
-          messages: [{ role: 'system', content: system }, { role: 'user', content }], projectSource: '', usageSource: 'tangu', temperature: 0, maxTokens, stream: true, signal });
+          messages: [{ role: 'system', content: system }, { role: 'user', content }], projectSource: '', usageSource: 'tangu', temperature: 0, maxTokens, thinkingLevel: DREAM_THINKING, stream: true, signal });
         check(); status.calls = (status.calls || 0) + 1;
         const result = await brain.llm.streamProviderCompletion({ ...model, payload, provider: (model.model as any)?.provider, signal });
         check();
