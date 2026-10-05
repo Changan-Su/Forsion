@@ -14,14 +14,19 @@
  *   T7  重新启用 → 树上点 PDF 又归插件
  *   T8  文件变了 → 内置阅读器原地重载:插件 writeBytes(阅读器在前台 / 在后台各一次)、外部工具直接改文件;
  *       插件自己的 ctx.app.watchFile 对 .pdf 也收到回调
+ *       T8e 多页 PDF 翻到第 8 页再被改写 → 重载后还在第 8 页、滚动位置没动;T8f 重载后 pdf.js 的编辑器没被重新打开
  *   T9  设置 → 插件 → 已安装 →「默认打开方式」:选内置阅读器 → 树上点 PDF 进内置、右键只剩「打开」;
  *       改选插件 → 又归插件(设置在独立浮窗里,偏好经 storage 事件传到主窗 —— 走的是真路径)
+ *       T9d 改偏好不卸载已经开着的插件视图(它可能有没存的改动)
  *
  * 负对照(2026-10-05 实跑):`--nc=nooverride` 探针不写 override: true → T1 / T2 / T2a / T2b / T2c / T2d / T3 / T4 / T5a / T7 红
  *   (宿主照旧拒掉它,PDF 全程归内置阅读器,探针视图没挂所以 T2* 也读不到)。
  *   宿主侧负对照(同日实跑,临时改源码重建):去掉页表面那道 isPagePipelinePath → T2c 红(PDF 真被装成了当前页)。
  *   T2d 认的是宿主的拒绝告警;ctx.app.loadPage 那道闸本身的负对照在 fileTypeOverride.test.ts。
- *   T8 的宿主侧负对照(同日实跑,临时改源码重建):watcher.ts 去掉「PDF 只报变了」那个分支 → T8a / T8b / T8c / T8d 红。
+ *   T8 的宿主侧负对照(同日实跑,临时改源码重建):watcher.ts 去掉「PDF 只报变了」那个分支 → T8a / T8b / T8c / T8d 红;
+ *   去掉 ResizeObserver 里「回前台补上欠着的重载」→ 只有 T8c 红。
+ *   T8e / T8f / T9d 是 Codex 评审指出问题后先写的断言:在修之前的构建上实跑三条都红(滚动 6587 → 10、
+ *   编辑层 0 → 2、插件视图被卸掉),修完重建后转绿 —— 那次红就是它们的负对照。
  * 用法:npm run build && npm run e2e:ftoverride   (--shot 存截图到 /tmp/forsion-ftoverride-*.png)
  */
 const fs = require('fs')
@@ -124,6 +129,10 @@ async function main() {
   const pdfBytes = Buffer.from(tinyPdf(['OVERRIDE']))
   const pdfAbs = path.join(dir, '书.pdf')
   fs.writeFileSync(pdfAbs, pdfBytes)
+  // 多页夹具:重载后「还在原来那页」只有多页才分辨得出(单页永远在第 1 页)。
+  const longAbs = path.join(dir, '长.pdf')
+  const longPdf = (tag) => Buffer.from(tinyPdf(Array.from({ length: 12 }, (_, i) => `${tag}${i + 1}`)))
+  fs.writeFileSync(longAbs, longPdf('L'))
   const probeDir = path.join(home, 'plugins', 'pdfprobe')
   fs.mkdirSync(probeDir, { recursive: true })
   fs.writeFileSync(path.join(probeDir, 'main.js'), NC === 'nooverride' ? PROBE_MAIN.replace('override: true,', '') : PROBE_MAIN)
@@ -289,6 +298,30 @@ async function main() {
     fs.writeFileSync(pdfAbs, Buffer.from(tinyPdf(['EXTERNAL'])))
     check('T8d 外部工具改了文件 → 开着的内置阅读器换成新内容', await sees('EXTERNAL'), await readerText())
 
+    // 多页:翻到第 8 页、再挪开一点(不停在页边界上),文件被改写后必须还在原地。
+    await row('长.pdf').click()
+    await until(async () => ((await win.locator('.amx-pdfview .pdfa-pagetotal').first().textContent().catch(() => '')) || '').includes('12'), 15_000)
+    const pageInput = win.locator('.amx-pdfview .pdfa-pageinput').first()
+    await pageInput.fill('8')
+    await pageInput.press('Enter')
+    await until(async () => (await win.locator('.amx-pdfview .pdfa-pageinput').first().inputValue().catch(() => '')) === '8')
+    const scrollTop = () => win.evaluate(() => document.querySelector('.amx-pdfview .pdfa-container')?.scrollTop ?? -1)
+    await win.evaluate(() => { const c = document.querySelector('.amx-pdfview .pdfa-container'); if (c) c.scrollTop += 137 })
+    await sees('L8')
+    await win.waitForTimeout(600)
+    const top0 = await scrollTop()
+    const editorLayers = () => win.evaluate(() => document.querySelectorAll('.amx-pdfview .annotationEditorLayer').length)
+    const layers0 = await editorLayers()
+    fs.writeFileSync(longAbs, longPdf('M'))
+    const sawM = await sees('M8')
+    await win.waitForTimeout(1500) // 等 pagesloaded 之后的补算与快照层撤掉
+    const top1 = await scrollTop()
+    const page1 = await win.locator('.amx-pdfview .pdfa-pageinput').first().inputValue().catch(() => '')
+    check('T8e 多页 PDF 在第 8 页被改写 → 重载后还在第 8 页、滚动位置没动', sawM && page1 === '8' && top0 > 500 && Math.abs(top1 - top0) < 4,
+      `看到新内容=${!!sawM} 页码=${page1} scrollTop ${top0} → ${top1}`)
+    const layers1 = await editorLayers()
+    check('T8f 重载后 pdf.js 的编辑器没被重新打开(没有编辑层)', layers0 === 0 && layers1 === 0, `编辑层 重载前=${layers0} 重载后=${layers1}`)
+
     // ── T7 重新启用 ─────────────────────────────────────────────────────────────
     await setDisabled([])
     await win.waitForTimeout(600)
@@ -310,9 +343,14 @@ async function main() {
       return want === 'builtin' ? builtin && !plugin : plugin && !builtin
     })
     const menuOnce = async () => { const m = await openMenu(); await closeMenu(); return m }
+    const mounts0 = await win.evaluate(() => window.__pdfprobe?.mounts || 0)
     await sel.selectOption('builtin').catch(() => {})
     const m9 = await until(async () => { const m = await menuOnce(); return m.includes('用内置阅读器打开') ? null : m })
     check('T9a 选「内置阅读器」→ 主窗跟上:右键菜单只剩「打开」', !!m9 && m9.includes('打开'), m9 ? m9.join(' / ') : '菜单里还有「用内置阅读器打开」')
+    await win.waitForTimeout(500)
+    const mounts1 = await win.evaluate(() => window.__pdfprobe?.mounts || 0)
+    check('T9d 改偏好不动已经开着的插件视图(没被卸载,也没重挂)', !!m9 && (await probeFile()) === PDF_REL && mounts1 === mounts0,
+      `data-file=${await probeFile()} mounts ${mounts0} → ${mounts1}`)
     await row('书.pdf').click()
     check('T9b 树上点 PDF → 内置阅读器在前台', await frontIs('builtin'), await typesFor())
     await sel.selectOption('pdfprobe').catch(() => {})

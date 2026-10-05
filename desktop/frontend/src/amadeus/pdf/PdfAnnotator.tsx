@@ -173,15 +173,28 @@ export function PdfAnnotator({ pdfPath, initialPage, initialQuote, embed }: { pd
     }
 
     /** 挂载文档(初载与文件变化后的重载共用)。
-     *  keep='preserve'(重载):滚动位置全程**物理保留**——快照层的撑高垫片让内容不塌缩,
-     *  scrollTop 从头到尾没变过,一个坐标都不写回。写回才是偏移/回跳的来源:塌缩把 scrollTop 钳到 0,
+     *  keep='preserve'(重载):滚动位置**物理保留**——快照层的撑高垫片让内容不塌缩,scrollTop 不会被
+     *  浏览器钳掉,也不跨 await 采集再恢复。事后写回才是偏移/回跳的来源:塌缩把 scrollTop 钳到 0,
      *  惯性滚动又从 0 接着滚,这时「恢复」与「不恢复」都错(拽回=偏移,放着=回到首页)。
+     *  唯一的例外是 onInit 里设缩放那一下(见那里的注释)。
      *  只在 pagesloaded 后补一个合成 scroll 让 pdf.js 按真实 scrollTop 重算页码
      *  (setDocument 会把内部页码直写回 1,不广播;scroll 监听是它自己绑在 container 上的)。
      *  keep={page}(初载):跳到目标页;pagesloaded 且用户没翻页时再钉一次(pagesinit 的页高还是占位值)。 */
     let offAttach: (() => void) | null = null
     const attach = (doc: any, keep: { page: number } | 'preserve'): void => {
       offAttach?.() // 连续换档时上一轮 attach 的 once 监听可能还没触发,不摘会拿着旧 keep 在新文档上乱跳
+      // ⚠️pdf.js 的 setDocument 在「替换已有文档」那一支里把编辑器模式无条件重置成 NONE(pdf_viewer.mjs 5.7),
+      // 重载之后就会建出编辑器(每页一层 .annotationEditorLayer;拖进 / 粘贴一张图 = 插入一个存不下来的图章),
+      // 而 DISABLE 不能经公开的 setter 设回去。所以那一支的清理这里自己做、唯独不碰模式,再把 pdfDocument
+      // 清空,让 setDocument 走「首次装载」那条路。升级 pdfjs-dist 后对一遍那一支;仪器 = e2e:ftoverride 的 T8f。
+      if (viewer.pdfDocument) {
+        const v = viewer as any
+        eventBus.dispatch('pagesdestroy', { source: viewer })
+        v._cancelRendering()
+        v._resetView()
+        findController.setDocument(null as any)
+        v.pdfDocument = null
+      }
       viewer.setDocument(doc)
       linkService.setDocument(doc, null)
       findController.setDocument(doc) // 不接的话 find 事件被 firstPageCapability 永远挂住
@@ -190,7 +203,12 @@ export function PdfAnnotator({ pdfPath, initialPage, initialQuote, embed }: { pd
       const wanted = (): number => Math.min(doc.numPages, Math.max(1, pendingGoto.current ?? target))
       const onInit = (): void => {
         if (dead) return
+        // 设缩放时 pdf.js 会把「当前页」滚进视野,而换档刚把它的当前页重置成第 1 页 —— 重载时这一下就是
+        // 「回到首页」(垫片只保得住滚动区不塌,挡不住这次主动滚动)。同一拍里把位置放回去:中间没有绘制,
+        // 看不到跳动。这不是下面注释说的那种「事后写回」—— 那指的是跨 await 采集再恢复。仪器 = T8e。
+        const top = container.scrollTop, left = container.scrollLeft
         viewer.currentScaleValue = curScale
+        if (keep === 'preserve') { container.scrollTop = top; container.scrollLeft = left }
         const want = wanted()
         if (want > 1) viewer.currentPageNumber = want
       }
@@ -407,15 +425,18 @@ export function PdfAnnotator({ pdfPath, initialPage, initialQuote, embed }: { pd
       try {
         do {
           again = false
-          const bytes = await amadeus.readVaultBytes(pdfPath)
-          if (dead) return
-          if (sameBytes(bytes, diskBytes)) continue
-          await swapDoc(bytes)
-          diskBytes = bytes
+          try {
+            const bytes = await amadeus.readVaultBytes(pdfPath)
+            if (dead) return
+            if (sameBytes(bytes, diskBytes)) continue
+            await swapDoc(bytes)
+            diskBytes = bytes
+          } catch (e) {
+            // 写到一半被读到 / 文件刚被挪走:留着旧画面。失败的这一轮不能把排着队的下一轮(again)也带走 ——
+            // 那一轮读到的才是写完整的文件。
+            console.warn('[pdf] 重载失败,保留当前画面', e)
+          }
         } while (again && !dead)
-      } catch (e) {
-        // 写到一半被读到 / 文件刚被挪走:留着旧画面,下一次变更再试
-        console.warn('[pdf] 重载失败,保留当前画面', e)
       } finally {
         reloading = false
       }

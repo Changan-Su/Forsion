@@ -7,6 +7,7 @@ import { useWorkspace, type ViewProps } from '@lcl/engine'
 import { useVisualTheme as useTheme } from '../stores/themeStore'
 import { usePageStore, pageStoreFor } from '../amadeus/store/pageStore'
 import { usePluginStore, findFileType, fileTypeBaseName, addPluginViewTeardown } from '../amadeus/plugins/pluginStore'
+import type { FileTypeContribution } from '../amadeus/plugins/types'
 import { createPluginViewSurface } from '../amadeus/plugins/viewSurface'
 import { isBuiltinFileType, isOverridableBuiltinType } from '@amadeus-shared/builtinTypes'
 import { openFile } from '../amadeusNav'
@@ -25,7 +26,14 @@ export function AmadeusPluginFileView({ leaf }: ViewProps) {
   const mode = useTheme((s) => s.mode)
   // 订阅 fileTypes:插件加载后新注册的类型会触发重渲染 → 从「无人能开」变为正常挂载。
   const fileTypes = usePluginStore((s) => s.fileTypes)
-  const ft = findFileType(fileTypes, filePath) // 引用稳定(=注册时存入的同一对象),effect 不会空转
+  const resolved = findFileType(fileTypes, filePath) // 引用稳定(=注册时存入的同一对象),effect 不会空转
+  // 已经挂着的那份贡献只要还注册着就接着用:「默认打开方式」只管**之后**的打开动作。偏好一改就按新结果换,
+  // 会把开着的插件视图当场卸掉,而它可能有没存的改动(Codex 评审 P1)。那份贡献不在表里了(插件停用 /
+  // 卸载 / 热换)才重新解析。仪器:e2e:ftoverride 的 T9d。
+  const held = useRef<{ path: string; ft: FileTypeContribution } | null>(null)
+  const prev = held.current
+  const ft = prev && prev.path === filePath && fileTypes.some((o) => o.item === prev.ft) ? prev.ft : resolved
+  held.current = ft ? { path: filePath, ft } : null
   // 订阅 vaultRoot:切库(filePath 是 vault 相对路径,换库后同名会指向另一个库)或库首次就绪时重挂 →
   // 插件按新库重读(不存在则显示错误态,不会用旧内容写坏新库);也自愈「库未就绪时先挂 → 读到 null」的启动态(Codex #1)。
   const vaultRoot = usePageStore((s) => s.vaultRoot)
