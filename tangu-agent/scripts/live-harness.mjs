@@ -145,6 +145,7 @@ KEYS.push('equip');
 KEYS.push('musereview');
 KEYS.push('realuse');
 KEYS.push('projmem');
+KEYS.push('skillcreate');
 // autocompact 要把模型窗口钉小(--window)才灌得满;窗口小了别的场景会被连累(系统提示+工具头就 13k+),所以它只能单独跑。
 const WINDOW = Number(opt('window', process.env.TANGU_LIVE_WINDOW || 0)) || 0;
 // P1-K9 · C3:--remote-cap <档> = 起引擎前经 K4 的新写入口写 remote.maxApprovalMode(缺省不写 = 引擎按 auto-edit)
@@ -170,6 +171,7 @@ OPT_IN.add('harnessopen'); // 四个 run + 一条探针;只在动 manage_harness
 OPT_IN.add('equip'); // 三个 run;只在动装备层(HARNESS equip → isDeferredIn / 技能目录)时才有信息量。
 OPT_IN.add('musereview'); // 开 Muse 并往隔离库里写用量行:单独跑,别连累别的场景的工具表 / Muse 状态。
 OPT_IN.add('projmem'); // 四个 run、两个 agent 两个项目;只在动项目记忆(services/projectMemory.ts、remember 的 scope)时才有信息量。
+OPT_IN.add('skillcreate'); // 四个 run;只在动 manage_skill / use_skill / 随包的 skill-creator 技能时才有信息量。
 OPT_IN.add('realuse'); // 真实使用模拟:每轮 12 个 run(--rounds),--usage-db 再加一个 Muse 周期;单独跑。
 const NEEDS = { dream: ['historian'], recall: ['historian', 'dream'] }; // 记忆链三连有先后依赖;其余场景自包含
 const ONLY = new Set(opt('only', process.env.TANGU_LIVE_ONLY || KEYS.filter((k) => !OPT_IN.has(k)).join(',')).split(',').map((s) => s.trim()).filter(Boolean));
@@ -3160,6 +3162,109 @@ Then reply with only the command output.`,
       `② 新会话 目录${inCatalog ? '已列出两者' : `只列出 ${listed(use).join('+') || '无'}`};笔记段${noted ? '写着收起了什么' : '没写'};查时间 ${reached ? `调到了(${use.toolCalls.join(',')})` : `没调到:${use.error || use.toolCalls.join(',') || '无工具'}`}`,
       `③ 撤销后新会话 ${restored ? '目录与笔记段都不再有' : `还在:${listed(back).join('+') || '笔记段'}${back.error ? `(${back.error})` : ''}`}`,
     ].join(';'), output: `【收起】${ev.content}\n\n【查时间】${use.content}`, toolCalls: [...ev.toolCalls, '|', ...use.toolCalls], tokens: [ev, use, back].reduce((n, e) => n + (tokensOf(e) || 0), 0) };
+  });
+  // ── 技能创建(10-05):随包的 skill-creator 接上 manage_skill;use_skill 带上技能文件夹 ──
+  // 用户照平时的说法提需求,不点工具名:
+  //   A 「把这套流程存成一个技能」→ 走 manage_skill create(不手写技能文件夹、不打 .skill 包、不往 /tmp 放东西),落盘带 origin: agent;
+  //   B 新会话「到周五了,整理一下这周的周报」→ 目录里列着 A 存的技能(引擎的事),模型 use_skill 装载它(模型的事,分开记);
+  //   C 「做一个带 Python 脚本的技能」→ manage_skill create 之后把脚本写进它返回的文件夹,正文按相对路径引用;
+  //   D 新会话让它处理一个 CSV → use_skill 装载 C,照「Skill folder」那行找到脚本并跑出结果(证带脚本的技能跨会话用得上)。
+  // 模型有没有先装载 skill-creator 只记不判(短流程不需要它);判的是落盘与工具调用,不是它怎么说。
+  await scenario('skillcreate', 'skillcreate 技能创建:存成技能 → 新会话用上;带脚本的技能 → 新会话跑它的脚本', async () => {
+    const stamp = Date.now();
+    const skillRoots = () => {
+      const roots = [join(shared, 'skills'), join(home, 'skills')];
+      for (const base of [join(shared, 'agents'), join(home, 'agents')]) {
+        let names = []; try { names = readdirSync(base); } catch { /* 没有这个目录 */ }
+        for (const n of names) roots.push(join(base, n, 'skills'));
+      }
+      return roots;
+    };
+    /** 模型自建的技能(frontmatter 带 origin: agent):slug → { dir, raw }。 */
+    const selfMade = () => {
+      const out = new Map();
+      for (const root of skillRoots()) {
+        let names = []; try { names = readdirSync(root); } catch { continue; }
+        for (const n of names) {
+          const f = join(root, n, 'SKILL.md');
+          if (!existsSync(f)) continue;
+          const raw = readFileSync(f, 'utf8');
+          if (/^origin:\s*agent\s*$/m.test(raw.split(/^---\s*$/m)[1] || '')) out.set(n, { dir: join(root, n), raw });
+        }
+      }
+      return out;
+    };
+    const walk = (dir) => { let out = []; let names = []; try { names = readdirSync(dir, { withFileTypes: true }); } catch { return out; } for (const e of names) { const f = join(dir, e.name); if (e.isDirectory()) out = out.concat(walk(f)); else out.push(f); } return out; };
+    const argsOf = (ev, name) => ev.toolArgs.filter((t) => t.name === name).map((t) => { try { return JSON.parse(t.arguments); } catch { return {}; } });
+    const allArgs = (ev) => ev.toolArgs.map((t) => `${t.name} ${t.arguments}`).join('\n');
+    /** 手写技能文件夹 / 打包 / 往 /tmp 放 —— skill-creator 通用正文教的那几样,在这里都不该出现。 */
+    const strays = (ev) => {
+      const bad = [];
+      for (const t of ev.toolArgs) {
+        if (t.name === 'manage_skill' || t.name === 'use_skill' || t.name === 'load_tools') continue;
+        if (/SKILL\.md/.test(t.arguments) && /write_file|edit_file|multi_edit|apply_patch|run_bash|run_background|run_python/.test(t.name)) bad.push(`${t.name} 手写 SKILL.md`);
+        if (/package_skill|quick_validate|\.skill\b/.test(t.arguments)) bad.push(`${t.name} 打包 / 校验`);
+        // 隔离目录本身就在系统临时目录下:先把它从参数里拿掉,再看有没有别的 /tmp 路径
+        if (/["' =](\/private)?\/tmp\//.test(t.arguments.split(OUT).join('<OUT>'))) bad.push(`${t.name} 用了 /tmp`);
+      }
+      return [...new Set(bad)];
+    };
+    const created = (before) => [...selfMade()].filter(([slug]) => !before.has(slug));
+    const brief = (ev) => `工具 ${ev.toolCalls.join('>') || '无'};审批 ${ev.approvals}`;
+
+    // A 存成技能
+    const before = selfMade();
+    const a = await run(`live-skill-A-${stamp}`, '我每周五都要整理周报,流程是固定的:先把这周的 git 提交按模块归类,再挑出最重要的三条写成要点,最后附上下周计划。帮我把这套流程存成一个技能,以后我说「整理周报」就照这个来。不用问我细节,直接存。', 300_000);
+    const aNew = created(before);
+    const aCreate = argsOf(a, 'manage_skill').filter((x) => x.action === 'create');
+    const aStray = strays(a);
+    const [aSlug, aSkill] = aNew[0] || [];
+    const aResult = a.toolResults.find((r) => r.name === 'manage_skill' && !r.isError && /^Created skill/.test(r.result))?.result || '';
+    const okA = !a.error && aCreate.length === 1 && aNew.length === 1 && !aStray.length && !!aSkill && aResult.includes(aSkill.dir);
+
+    // B 新会话用上
+    const b = aSlug ? await run(`live-skill-B-${stamp}`, '到周五了,帮我整理一下这周的周报。', 240_000, { debugSystemPrompt: true }) : { error: 'A 没存出技能', toolCalls: [], toolArgs: [], toolResults: [], approvals: 0, content: '' };
+    const bListed = !!aSlug && !!b.systemPrompt?.includes(`local:${aSlug}`);
+    const bLoaded = !!aSlug && argsOf(b, 'use_skill').some((x) => x.skill_id === `local:${aSlug}`);
+    const bFolder = b.toolResults.some((r) => r.name === 'use_skill' && !r.isError && aSkill && r.full.includes(`Skill folder: ${aSkill.dir}`));
+    const okB = !b.error && bListed && bLoaded && bFolder;
+
+    // C 带脚本的技能
+    const beforeC = selfMade();
+    const c = await run(`live-skill-C-${stamp}`, '帮我做一个技能:给一个 CSV 文件,按第一列排序并去掉重复的行,结果写到同目录下、文件名后面加 -sorted。要带一个 Python 脚本来干这件事,技能里说明怎么调用它。不用问我细节,也不用做评测,做完告诉我就行。', 420_000);
+    const cNew = created(beforeC);
+    const [cSlug, cSkill] = cNew[0] || [];
+    const cFiles = cSkill ? walk(cSkill.dir).map((f) => relative(cSkill.dir, f)) : [];
+    const cScripts = cFiles.filter((f) => f.endsWith('.py'));
+    const cRefers = !!cSkill && cScripts.some((f) => cSkill.raw.includes(f) || cSkill.raw.includes(f.split('/').pop()));
+    const cStray = strays(c);
+    const cPacked = [...walk(workspace), ...walk(join(home, 'skills'))].filter((f) => f.endsWith('.skill'));
+    const cUsedCreator = c.toolResults.some((r) => r.name === 'use_skill' && !r.isError && r.full.includes('## In Forsion'));
+    const okC = !c.error && argsOf(c, 'manage_skill').some((x) => x.action === 'create') && cNew.length === 1 && cScripts.length >= 1 && cRefers && !cStray.length && !cPacked.length;
+
+    // D 新会话跑它的脚本
+    const csv = join(workspace, 'people.csv');
+    writeFileSync(csv, 'name,team\ndora,ops\nalice,dev\nbob,qa\nalice,dev\ncarol,dev\n');
+    const d = cSlug ? await run(`live-skill-D-${stamp}`, `把 ${csv} 按第一列排序,去掉重复的行。`, 300_000) : { error: 'C 没做出技能', toolCalls: [], toolArgs: [], toolResults: [], approvals: 0, content: '' };
+    const dLoaded = !!cSlug && argsOf(d, 'use_skill').some((x) => x.skill_id === `local:${cSlug}`);
+    const dRanScript = !!cSkill && d.toolArgs.some((t) => t.name !== 'use_skill' && t.arguments.includes(cSkill.dir));
+    const sortedFile = join(workspace, 'people-sorted.csv');
+    const rows = existsSync(sortedFile) ? readFileSync(sortedFile, 'utf8').split(/\r?\n/).map((l) => l.trim()).filter(Boolean) : [];
+    // 表头留在首行还是参与了排序,取决于它写的脚本怎么理解「第一行」—— 用户没说,两种都算;判的是数据行排好了、重复的去掉了
+    const dOutput = rows.filter((r) => r !== 'name,team').join('|') === 'alice,dev|bob,qa|carol,dev|dora,ops' && rows.includes('name,team');
+    const okD = !d.error && dLoaded && dRanScript && dOutput;
+
+    // 收尾:只删本场景在隔离 home 里建的技能(别留到同一次跑的别的场景的系统提示里)
+    for (const [, sk] of [...aNew, ...cNew]) if (sk.dir.startsWith(OUT)) rmSync(sk.dir, { recursive: true, force: true });
+
+    return {
+      ok: okA && okB && okC && okD,
+      detail: `A ${okA ? '✓' : '✗'} manage_skill create ${aCreate.length} 次,新技能 ${aNew.map(([n]) => n).join(',') || '无'}${aStray.length ? `,多余动作 ${aStray.join('/')}` : ''}${aResult ? '' : ',结果里没有文件夹'};${brief(a)}${a.error ? ` 错 ${a.error}` : ''}`
+        + ` | B ${okB ? '✓' : '✗'} 目录${bListed ? '列着' : '没列'};${bLoaded ? '装载了' : '没装载'};${bFolder ? '带文件夹' : '没带文件夹'};${brief(b)}${b.error ? ` 错 ${b.error}` : ''}`
+        + ` | C ${okC ? '✓' : '✗'} 新技能 ${cNew.map(([n]) => n).join(',') || '无'},文件 ${cFiles.join(',') || '无'};正文${cRefers ? '引用了脚本' : '没引用脚本'}${cStray.length ? `;多余动作 ${cStray.join('/')}` : ''}${cPacked.length ? ';打了 .skill 包' : ''};${cUsedCreator ? '先装载了 skill-creator' : '没装载 skill-creator'};${brief(c)}${c.error ? ` 错 ${c.error}` : ''}`
+        + ` | D ${okD ? '✓' : '✗'} ${dLoaded ? '装载了' : '没装载'};${dRanScript ? '跑了技能文件夹里的脚本' : '没用技能文件夹里的脚本'};结果${dOutput ? '对' : `不对(${rows.join('|').slice(0, 80) || '没有输出文件'})`};${brief(d)}${d.error ? ` 错 ${d.error}` : ''}`,
+      output: `【A 的 SKILL.md】\n${aSkill?.raw || '(无)'}\n\n【A 的工具调用】\n${allArgs(a).slice(0, 3000)}\n\n【C 的 SKILL.md】\n${cSkill?.raw || '(无)'}\n\n【C 的工具调用】\n${allArgs(c).slice(0, 5000)}\n\n【D 的工具调用】\n${allArgs(d).slice(0, 3000)}\n\n【D 的回答】\n${d.content || ''}`,
+    };
   });
   // ── Muse 每周装备巡检(10-04):播种的日程条目叫醒 Muse → review_loadout → 当场替各 agent 收起,不出卡片 ──
   //  (10-04 用户定「有风险的才需要确认,没有风险的可以做」:收起随时可撤、定义仍可按需加载,所以不再出 TODO 等用户点。)

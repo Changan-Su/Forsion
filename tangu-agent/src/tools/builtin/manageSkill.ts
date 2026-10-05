@@ -77,7 +77,7 @@ export const manageSkillProvider: ToolProvider = {
             properties: {
               action: { type: 'string', enum: ['create', 'update', 'delete', 'list'], description: 'The operation' },
               scope: { type: 'string', enum: ['user', 'agent'], description: 'Where the skill lives: "user" (default, all agents) or "agent" (private to the currently active agent)' },
-              slug: { type: 'string', description: 'Unique skill id (lowercase alphanumerics and hyphens); required for update/delete, and for create when the name has no Latin letters or digits (otherwise derived from name)' },
+              slug: { type: 'string', description: 'Unique skill id (lowercase alphanumerics and hyphens); required for update/delete, and for create when the name is not plain ASCII (otherwise derived from name)' },
               name: { type: 'string', description: 'Display name (required for create)' },
               description: { type: 'string', description: 'One-sentence summary shown in the skill catalog so future-you knows when to load it (recommended)' },
               instructions: { type: 'string', description: 'The SKILL.md body — the actual step-by-step how-to (required for create/update)' },
@@ -141,8 +141,9 @@ export const manageSkillProvider: ToolProvider = {
             let slug: string;
             if (action === 'create') {
               if (!args.name) return 'Error: create needs name';
-              // 名字里没有拉丁字母 / 数字(中文名)时 slugify 推不出东西,会一律落到同一个兜底值 —— 让模型自己给一个。
-              if (!args.slug && !/[a-z0-9]/i.test(String(args.name))) return `Error: cannot derive a slug from the name "${oneLine(args.name)}"; pass slug as well (lowercase letters, digits, hyphens — e.g. "weekly-report")`;
+              // slugify 只留拉丁字母和数字:纯中文名推不出东西(一律落到同一个兜底值),中英混合的名字只剩下零碎
+              // (「CSV 排序去重」→ "csv",10-05 真模型实测)。名字里有别的文字时让模型自己给一个说得清的 slug。
+              if (!args.slug && /[^\x00-\x7f]/.test(String(args.name))) return `Error: cannot derive a clear slug from the name "${oneLine(args.name)}"; pass slug as well (lowercase letters, digits, hyphens — e.g. "weekly-report")`;
               slug = args.slug ? oneLine(args.slug) : slugify(String(args.name));
               if (!SAFE_SLUG.test(slug)) return `Error: invalid slug: ${slug} (lowercase letters, digits, hyphens)`;
               if (await isBuiltinSkillName(slug)) return `Error: "${slug}" is the name of a built-in skill (protected); pick another name`;

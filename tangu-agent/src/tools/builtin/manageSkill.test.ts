@@ -94,11 +94,14 @@ describe('manage_skill', () => {
     await fs.rm(path.join(home, 'skills', 'imported'), { recursive: true });
   });
 
-  // slugify 只认拉丁字母 / 数字:中文名推不出 slug,以前一律落到兜底值 "agent" —— 第一个中文名技能占掉它,第二个就报「已存在」
-  it('a name without Latin letters needs an explicit slug', async () => {
+  // slugify 只认拉丁字母 / 数字:纯中文名推不出 slug,以前一律落到兜底值 "agent" —— 第一个中文名技能占掉它,第二个就报「已存在」;
+  // 中英混合的名字只剩零碎(「CSV 排序去重」→ "csv")。名字不是纯 ASCII 就要模型自己给 slug。
+  it('a name that is not plain ASCII needs an explicit slug', async () => {
     const r = await run({ action: 'create', name: '周报整理', instructions: 'x' });
-    expect(r).toContain('Error: cannot derive a slug');
+    expect(r).toContain('Error: cannot derive a clear slug');
     expect(await exists(skillMd('agent'))).toBe(false);
+    expect(await run({ action: 'create', name: 'CSV 排序去重', instructions: 'x' })).toContain('Error: cannot derive a clear slug');
+    expect(await exists(skillMd('csv'))).toBe(false);
     expect(await run({ action: 'create', name: '周报整理', slug: 'weekly-report', instructions: 'x' })).toContain('Created skill "weekly-report" (周报整理)');
     expect(await fs.readFile(skillMd('weekly-report'), 'utf-8')).toContain('name: 周报整理');
     await fs.rm(path.join(home, 'skills', 'weekly-report'), { recursive: true });

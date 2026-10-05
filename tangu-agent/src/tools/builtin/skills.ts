@@ -105,8 +105,11 @@ export const skillsProvider: ToolProvider = {
         },
       },
       execute: async (args, ctx) => {
-        const id = String(args.skill_id ?? '').trim();
+        let id = String(args.skill_id ?? '').trim();
         if (!id) return 'Error: skill_id is required';
+        // 模型常把本地技能的 id 写成不带前缀的名字(目录里是 `local:skill-creator`,它传 `skill-creator`;10-05 真模型实测):
+        // 原样不在准许清单、补上前缀就在 → 按补上的认。只在准许清单里找,不会因此多放行任何技能。
+        if (ctx.enabledSkillIds && !ctx.enabledSkillIds.includes(id) && ctx.enabledSkillIds.includes(`local:${id}`)) id = `local:${id}`;
         if (!ctx.enabledSkillIds || !ctx.enabledSkillIds.includes(id)) {
           return `Skill "${id}" is not available in this session.`;
         }

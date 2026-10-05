@@ -50,6 +50,15 @@ describe('use_skill:技能文件夹', () => {
     expect(out.startsWith('# Skill: Ship Web\n')).toBe(true);
   });
 
+  // 目录里写的是 `local:ship-web`,模型有时只传 `ship-web`(10-05 真模型实测:装载 skill-creator 因此落空)
+  it('本地技能的 id 没带 local: 前缀也认;准许清单里没有的照样拒', async () => {
+    const bare = await useSkill.execute({ skill_id: 'ship-web' }, { userId: 'u1', sessionId: 's1', appId: 'tangu', execMode: 'host', enabledSkillIds: ['local:ship-web'] } as any);
+    expect(bare).toContain('# Skill: Ship Web');
+    expect(bare).toContain('Run scripts/ship.sh');
+    const denied = await useSkill.execute({ skill_id: 'ship-web' }, { userId: 'u1', sessionId: 's1', appId: 'tangu', execMode: 'host', enabledSkillIds: ['local:other'] } as any);
+    expect(denied).toBe('Skill "ship-web" is not available in this session.');
+  });
+
   it('沙箱会话 / 云端技能:不给(那个路径够不着 / 根本没有文件夹)', async () => {
     expect(await load('local:ship-web', { execMode: 'sandbox' })).not.toContain('Skill folder:');
     const cloud = await load(CLOUD.id);
