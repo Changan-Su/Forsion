@@ -114,21 +114,18 @@ export function mountPluginMarkdownEditor(
 ): PluginMarkdownEditorHandle {
   const options = { ...initial }
   let alive = true,
-    revision = 0,
-    unmount = () => {}
-  const render = (): void => {
-    unmount = mountHostReact(
-      el,
-      <HostLocaleProvider>
-        <EditorSurface
-          options={options}
-          revision={revision++}
-          alive={() => alive}
-        />
-      </HostLocaleProvider>,
-    )
-  }
-  render()
+    revision = 0
+  const tree = () => (
+    <HostLocaleProvider>
+      <EditorSurface
+        options={options}
+        revision={revision++}
+        alive={() => alive}
+      />
+    </HostLocaleProvider>
+  )
+  const mounted = mountHostReact(el, tree())
+  const render = (): void => mounted.render(tree())
   return {
     getValue() {
       return options.value
@@ -155,7 +152,7 @@ export function mountPluginMarkdownEditor(
     dispose() {
       if (alive) {
         alive = false
-        unmount()
+        mounted.dispose()
       }
     },
   }

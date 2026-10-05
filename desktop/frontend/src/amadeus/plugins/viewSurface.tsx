@@ -71,10 +71,10 @@ export function createPluginViewSurface(
     getActivePage: () => store.getState().activePage,
     mountNoteView(el) {
       if (!alive || !(el instanceof HTMLElement)) return () => {}
-      const disposeRoot = mountHostReact(el, <PluginNoteSurface scope={scope} />)
+      const mounted = mountHostReact(el, <PluginNoteSurface scope={scope} />)
       const dispose = (): void => {
         noteMounts.delete(dispose)
-        disposeRoot()
+        mounted.dispose()
       }
       noteMounts.add(dispose)
       return dispose

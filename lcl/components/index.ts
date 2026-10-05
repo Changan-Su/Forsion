@@ -2,3 +2,4 @@
 export { ChatBox, ChatBoxSurface, ChatBoxInput, ChatBoxToolbar, ChatBoxSubmit } from './ChatBox'
 export type { ChatBoxProps, ChatBoxInputProps } from './ChatBox'
 export { mountHostReact } from './mountHostReact'
+export type { HostReactMount } from './mountHostReact'

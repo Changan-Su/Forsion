@@ -318,10 +318,10 @@ export function createBlockSurface(pluginId: string, bind?: SurfaceBind): { api:
       const surface: BlockSurface | null = o.onInsertAfter
         ? { insertAfter: (id, content) => safeCall('onInsertAfter', o.onInsertAfter, id, content) }
         : null
-      const disposeRoot = mountHostReact(el, <MountedBlock blockId={blockId} surface={surface} scope={rt.scope} />)
+      const mounted = mountHostReact(el, <MountedBlock blockId={blockId} surface={surface} scope={rt.scope} />)
       const dispose = (): void => {
         mounts.delete(dispose)
-        disposeRoot()
+        mounted.dispose()
       }
       mounts.add(dispose)
       return dispose

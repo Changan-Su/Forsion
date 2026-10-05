@@ -245,22 +245,27 @@ describe('挂载(mountPluginChat)', () => {
     expect(api.seen.at(-1)).toMatchObject({ params: { sessionId: 's2' } })
   })
 
-  // 负对照(2026-10-04 实跑红):mountPluginChat 不用私有容器、直接挂在插件的 el 上 → 晚到的那次重画把后来的挂载换掉。
-  it('对话还没接上、插件没 dispose 就把同一个 el 交给了别的挂载:晚到的结果不顶掉后来那份', async () => {
+  // 负对照(2026-10-05 实跑红):mountHostReact 的 render 不看句柄死活 → 晚到的那次重画往已卸的 root 上画(React 抛错)。
+  // 10-04 的写法是「同一个 el 再调一次 mountHostReact = 原地更新」,那时晚到的结果会把后来的挂载换掉。
+  it('对话还没接上、插件没 dispose 就把同一个 el 交给了别的挂载:对话被收掉,晚到的结果不顶掉后来那份', async () => {
     const { mountHostReact } = await import('@lcl/components')
     const { createElement } = await import('react')
     let release = (_: unknown): void => {}
     api.createSession.mockReturnValue(new Promise((resolve) => { release = resolve }))
     let chat!: ReturnType<typeof mountPluginChat>
-    let disposeOther!: () => void
+    let other!: import('@lcl/components').HostReactMount
     await act(async () => { chat = mountPluginChat(el, { owner: 'p', ...at('/v/A') }); cleanups.push(chat.dispose) })
-    await act(async () => { disposeOther = mountHostReact(el, createElement('textarea', { 'data-other': '' })) })
-    const other = el.querySelector('[data-other]')
-    expect(other?.isConnected).toBe(true)
+    expect(el.querySelector('[data-plugin-chat]')).not.toBeNull() // 加载中
+    await act(async () => { other = mountHostReact(el, createElement('textarea', { 'data-other': '' })) })
+    const node = el.querySelector('[data-other]')
+    expect(node?.isConnected).toBe(true)
+    expect(el.querySelector('[data-plugin-chat]')).toBeNull()
     await act(async () => { release(rec('s1')); await chat.ready })
-    expect(el.querySelector('[data-other]')).toBe(other) // 后来那份原样留着
-    await act(async () => { disposeOther() })
-    expect(el.querySelector('[data-other]')).toBeNull() // 它的 disposer 还收得掉
+    expect(el.querySelector('[data-other]')).toBe(node) // 后来那份原样留着
+    expect(el.querySelector('[data-plugin-chat]')).toBeNull()
+    expect(api.seen).toEqual([])
+    await act(async () => { other.dispose() })
+    expect(el.childElementCount).toBe(0) // 它的句柄还收得掉
   })
 
   it('卸载后不再画东西(建会话那一拍里视图被关)', async () => {

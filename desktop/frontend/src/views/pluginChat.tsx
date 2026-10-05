@@ -129,21 +129,16 @@ export function mountPluginChat(el: HTMLElement, o: TanguChatMountOptions): { re
   // 插件的 mount(el) 拿不到 Leaf,而 ChatView 要一个:标题 / 参数 / 关闭都归插件自己的视图管,这里一律空操作。
   // type 是引用通道认的目标名(tanguProbe.mountChat 的 quote 往这个名字投);有 childSurface 时 loc 不参与任何判断。
   const leaf: Leaf = { id: type, type, loc: 'right', params: {}, setTitle() {}, setParams() {}, close() {} }
-  // 这次挂载私有的容器:对话接上之后宿主还会自己再画(加载中 → 接上 / 重试),而 mountHostReact 按容器认「原地更新」。
-  // 直接用插件的 el 的话,插件没 dispose 就把 el 交给别的挂载时,晚到的结果会把后来那份顶掉、它的 disposer 也跟着作废。
-  // (dispose 之后 el 立刻还给插件那条,mountHostReact 自己就保证了,不靠这一层。)display:contents:不出盒子,对话照旧撑满 el。
-  const host = el.appendChild(document.createElement('div'))
-  host.style.display = 'contents'
-  let alive = true
-  let unmount = (): void => {}
-  const render = (state: TanguStartChatResult | null): void => {
-    if (alive) unmount = mountHostReact(host, <HostLocaleProvider><PluginChat leaf={leaf} state={state} retry={() => void attach()} /></HostLocaleProvider>)
-  }
+  // 对话接上之后宿主还会自己再画(加载中 → 接上 / 重试):一律走这次挂载的句柄。句柄卸了、或者插件没 dispose 就把 el 交给了
+  // 别的挂载之后,晚到的那次重画是空操作,顶不掉后来那份。dispose() 之后 el 立刻还给插件(清空它、在同一个 el 上再挂都行)。
+  const mounted = mountHostReact(el, null)
+  const render = (state: TanguStartChatResult | null): void =>
+    mounted.render(<HostLocaleProvider><PluginChat leaf={leaf} state={state} retry={() => void attach()} /></HostLocaleProvider>)
   let current: Promise<TanguStartChatResult>
   const attach = (): Promise<TanguStartChatResult> => {
     render(null)
     current = ensurePluginChat(o).then((result) => { render(result); return result })
     return current
   }
-  return { ready: attach(), latest: () => current, dispose() { if (alive) { alive = false; unmount(); host.remove() } } }
+  return { ready: attach(), latest: () => current, dispose: mounted.dispose }
 }

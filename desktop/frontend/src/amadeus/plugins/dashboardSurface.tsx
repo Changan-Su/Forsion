@@ -119,7 +119,7 @@ export function mountPluginDashboard(pluginId: string, el: HTMLElement, o: Plugi
   // 宿主 PluginViewHost 的容器是 overflow:auto,而 .dash3-host 自己就是滚动容器 → 双滚动条(接缝评审 P4)
   el.style.height = '100%'
   el.style.overflow = 'hidden'
-  const disposeRoot = mountHostReact(
+  const mounted = mountHostReact(
     el,
     <PageScopeCtx.Provider value={scope}>
       <Surface scope={scope} dashPath={dashPath} locked={o.locked !== false} />
@@ -131,7 +131,7 @@ export function mountPluginDashboard(pluginId: string, el: HTMLElement, o: Plugi
     dispose: () => {
       if (disposed) return
       disposed = true
-      disposeRoot()
+      mounted.dispose()
       disposePageStoreScope(scope) // 先收树再摘店:内部 flushSave → sink 最后一发
     },
   }

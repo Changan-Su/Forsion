@@ -3,7 +3,7 @@
  * 「dispose 之后 el 立刻归还插件」逐接口各钉一条(2026-10-04,隔离层下沉到 mountHostReact 之后)。
  * mountHostReact 与 React 都是真的;只把各接口最里面那棵重组件(BlockHost / PageView / 多维表 / 仪表盘格子 / Markdown 编辑器)
  * 换成桩 —— 这里钉的是「容器归谁」,不是它们画什么。容器契约本身见 mountHostReact.test.ts;ctx.tangu.mountChat 那条在 views/pluginChat.test.ts。
- * 负对照(2026-10-04 实跑):mountHostReact 换回「root 直接建在 el 上」→ 除 mountFloatingToc 外六个接口全红,三处断言都中
+ * 负对照(2026-10-04 / 10-05 实跑):mountHostReact 换回「root 直接建在 el 上」→ 除 mountFloatingToc 外六个接口全红,三处断言都中
  * (el 里还留着宿主的节点 / 同一拍再挂的那份不在文档里 / 卸载抛 NotFoundError)。mountFloatingToc 一直挂在它自己加的 layer 里,
  * 旧实现下也是绿的,这条只是把契约钉住。最后一条(配方无效的提示)的负对照:改回 `el.textContent = …` + `el.replaceChildren()` → 红(实跑)。
  */
@@ -102,4 +102,33 @@ it('ctx.dashboard.mount 配方无效:提示住在宿主自己的节点里,dispos
   expect(own.isConnected).toBe(true)
   mounted.dispose()
   expect([...el.children]).toEqual([own])
+})
+
+// 所有权跟着句柄走(2026-10-05):插件没 dispose 上一份,就把同一个 el 交给了别的挂载 —— 上一份被收掉,它的句柄此后是哑的。
+// 改之前 mountHostReact 认的是容器:旧句柄再 update() 一次就把后来那份换掉了(这四条在改之前实跑红;
+// 改之后的负对照:再挂时不收前一份 / render 不看句柄死活 → 四条都红)。
+const tableSpec = (name: string) => ({ id: 't', columns: [{ key: 'name', label: 'Name', kind: 'text' as const }], rows: [{ id: 'r1', cells: { name } }] })
+describe.each<[name: string, start: (el: HTMLElement) => () => void]>([
+  ['ctx.ui.mountChatBox → update', (el) => { const h = mountPluginChatBox(el, { value: '', onSubmit: async () => true }); return () => h.update({ placeholder: 'late' }) }],
+  ['ctx.ui.mountMarkdownEditor → update', (el) => { const h = mountPluginMarkdownEditor(el, { value: 'a' }); return () => h.update({ value: 'late' }) }],
+  ['ctx.ui.mountMarkdownEditor → insertMarkdown', (el) => { const h = mountPluginMarkdownEditor(el, { value: 'a' }); return () => h.insertMarkdown('late') }],
+  ['ctx.table.mount → update', (el) => { const h = mountPluginTable('contract', el, tableSpec('x')); return () => h.update(tableSpec('late')) }],
+])('旧句柄在 el 被后来的挂载接走之后是哑的:%s', (_name, start) => {
+  it('后来那份原样留着,el 里只有它一层,它自己的 dispose 收得掉', async () => {
+    let late!: () => void
+    let disposeOther!: () => void
+    await act(async () => { late = start(el) })
+    await act(async () => { disposeOther = view.surface.mountNoteView(el) })
+    const other = el.querySelector('.plugin-note-surface')
+    expect(other?.isConnected).toBe(true)
+    expect(el.childElementCount).toBe(1)
+
+    await act(async () => { late() })
+    expect(el.querySelector('.plugin-note-surface')).toBe(other)
+    expect(el.childElementCount).toBe(1)
+
+    await act(async () => { disposeOther() })
+    expect(el.childElementCount).toBe(0)
+    expect(errors).toEqual([])
+  })
 })
