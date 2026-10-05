@@ -57,7 +57,7 @@ function equipProblem(ctx: ToolContext, tools: string[], skills: string[]): stri
   const unknown = tools.filter((n) => !visible.has(n));
   if (unknown.length) return `unknown tool name(s): ${unknown.join(', ')}. Shelve only tools from your own tool list, by exact name (MCP and session custom tools cannot be shelved).`;
   const fixed = tools.filter((n) => !isShelvable(n));
-  if (fixed.length) return `${fixed.join(', ')} cannot be shelved: they are how you load tools, use skills, keep your own memory and notes, or undo this.`;
+  if (fixed.length) return `${fixed.join(', ')} cannot be shelved: they are how you load tools, use skills, keep your own memory and evolution record, or undo this.`;
   const already = tools.filter((n) => isDeferredIn(base, n, visible.get(n)?.deferred));
   if (already.length) return `${already.join(', ')} already load on demand, so shelving them saves nothing; leave them out.`;
   const allowed = new Set(ctx.enabledSkillIds ?? []);
@@ -85,7 +85,7 @@ export const manageHarnessProvider: ToolProvider = {
         function: {
           name: 'manage_harness',
           description:
-            'Your Working Notes (HARNESS.md), the record of your own evolution: what you have worked out yourself about HOW you work, loaded into your system prompt on every run. You own them: changes apply at once and the user gets a card to undo, so do not ask permission or wait for /refine. ' +
+            'Your Evolution Record (HARNESS.md): what you have worked out yourself about HOW you work, loaded into your system prompt on every run. You own it: changes apply at once and the user gets a card to undo, so do not ask permission or wait for /refine. ' +
             // 10-04 用户第二次裁决:HARNESS = 自我进化的要求和内容;用户的纠正归记忆。此前「the user corrected how you work」也写在这里的触发条件里。
             'Use it the moment you work something out yourself that will hold in any project: a technique or delegation pattern that proved itself, a pitfall and the way around it, a standard you set for your own work. ' +
             'Elsewhere: anything the user told, corrected or required of you, and facts about the user, a project or the world → remember; what you would like the human to do differently → manage_human; a reusable procedure → manage_skill (scope "agent"). ' +
@@ -93,7 +93,7 @@ export const manageHarnessProvider: ToolProvider = {
             'One lesson, one place: if you are saving a point with remember or manage_human, do not repeat it here. ' +
             'Never record environment/setup failures, "tool X is broken", transient errors or one-off task stories; they harden into refusals. ' +
             'upsert without id creates an entry (title, body and evidence of what actually happened are required); with id it revises. rollback restores the previous version. ' +
-            "propose (agent + candidates) drops suggestions into ANOTHER agent's candidate inbox; you never write its notes. propose with tools / skills passes on a usage review's equipment suggestion for that agent. " +
+            "propose (agent + candidates) drops suggestions into ANOTHER agent's candidate inbox; you never write its record. propose with tools / skills passes on a usage review's equipment suggestion for that agent. " +
             `Limits: title ≤${TITLE_MAX}, body ≤${BODY_MAX}, evidence ≤${EVIDENCE_MAX} chars, ${MAX_ENTRIES} entries; at the cap, merge or delete weaker ones. ` +
             'kind "note" = working method (default); "recipe" = a delegation pattern that worked; "equip" = shelve tools/skills you rarely use to keep your context lean (pass tools / skills): a shelved tool moves to the load-on-demand catalog (load_tools brings it back), a shelved skill leaves your skill list (use_skill by id still works). ' +
             'Shelving never removes or grants a capability; shelve on evidence such as a usage review, and revise or delete the entry to undo.',
@@ -116,7 +116,7 @@ export const manageHarnessProvider: ToolProvider = {
         },
       },
       execute: async (args, ctx) => {
-        if (ctx.ephemeral) return 'Error: Working notes are unavailable in this execution context.';
+        if (ctx.ephemeral) return 'Error: The evolution record is unavailable in this execution context.';
         // 展示身份优先:prompt 注入槽用的是 activeAgentSlug,写入必须落同一个文件夹——
         // shareDefaultMemory 的 agent 其 currentAgentSlug()=xyra,拿它写会写进别人家(Codex 评审 #3)。
         const slug = currentDisplayAgentSlug() || currentAgentSlug() || DEFAULT_AGENT_SLUG;
@@ -130,7 +130,7 @@ export const manageHarnessProvider: ToolProvider = {
             const target = String(args.agent || '').trim();
             if (!target || !isValidSlug(target)) return 'Error: propose needs a valid agent slug';
             // 自己的笔记直接写:给自己提名只会躺在候选收件箱里等 /refine(10-04 live:接手巡检建议的 agent 照着「propose」给自己提了名,什么都没收起)
-            if (target === slug) return 'Error: propose is for ANOTHER agent. These are your own notes: use action "upsert" (kind "equip" with tools / skills to shelve your own equipment).';
+            if (target === slug) return 'Error: propose is for ANOTHER agent. This is your own record: use action "upsert" (kind "equip" with tools / skills to shelve your own equipment).';
             if (!(await getAgent(target))) return `Error: agent "${target}" does not exist`;
             const eqTools = names(args.tools) ?? [], eqSkills = names(args.skills) ?? [];
             if (eqTools.length || eqSkills.length) {
@@ -183,7 +183,7 @@ export const manageHarnessProvider: ToolProvider = {
           if (action === 'list') {
             const entries = await loadHarness(slug);
 
-            if (!entries.length) return '(working notes are empty)';
+            if (!entries.length) return '(evolution record is empty)';
             return entries
               .map((e) => `- [${e.id}] (${e.kind}, v${e.version}, ${e.updatedAt || e.createdAt}) ${e.title} — ${e.tools?.length ? `tools: ${e.tools.join(', ')}; ` : ''}${e.skills?.length ? `skills: ${e.skills.join(', ')}; ` : ''}${e.body.replace(/\s*\n\s*/g, ' ')}${e.evidence ? ` (evidence: ${e.evidence})` : ''}`)
               .join('\n');

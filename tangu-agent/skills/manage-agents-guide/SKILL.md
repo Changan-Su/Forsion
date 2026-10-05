@@ -1,7 +1,7 @@
 ---
 name: 配置与管理 Agent
-description: 当用户想新建 / 配置 / 修改 / 删除 Tangu 本地 Agent(Normal Agent),或想把一种好用的角色 / 工作方式沉淀成可复用的 agent 时使用。讲解 manage_agent 工具与 agent 的文件夹结构(config.toml / SOUL.md / MEMORY.md / HARNESS.md 工作笔记 / LOG / Library),以及 manage_harness 自进化层与 /refine 复盘。
-version: 1.3.0
+description: 当用户想新建 / 配置 / 修改 / 删除 Tangu 本地 Agent(Normal Agent),或想把一种好用的角色 / 工作方式沉淀成可复用的 agent 时使用。讲解 manage_agent 工具与 agent 的文件夹结构(config.toml / SOUL.md / MEMORY.md / HARNESS.md 进化记录 / LOG / Library),以及 manage_harness 自进化层与 /refine 复盘。
+version: 1.3.1
 category: agent 管理
 ---
 
@@ -20,7 +20,7 @@ Agent 也可能来自**插件捆绑包(bundle)播种**:安装带 `agents/` 子�
   也不要用文件工具去改它。新建的 agent 没有自己的审批档,跟随会话;`update` 保留用户设的原值。
 - **SOUL.md** — 人格设定:语气、态度、价值观(区别于「做什么」的开发指令,这里塑造「怎么说话、是个怎样的存在」)。
 - **MEMORY.md** — 该 agent 自己的长期记忆(用 `remember` 工具写,跨会话保留):**世界是什么样**。
-- **HARNESS.md** — 该 agent 的「工作笔记」:**我该怎么干活**。这是 agent **唯一自有、可自我进化**的一层
+- **HARNESS.md** — 该 agent 的「进化记录」:**我该怎么干活**。这是 agent **唯一自有、可自我进化**的一层
   (人格与开发指令的主权归用户,agent 不能自己改 SOUL.md / config.toml)。每次会话注入系统提示。
   只能用 `manage_harness` 工具写(`upsert` / `delete` / `list` / `rollback`),不要用文件工具直接改;
   每笔留 before/after 快照,`rollback` 可回退到上一版。写入立即生效,不用等用户批准:对话里会出现一张更新卡,用户可以撤销。
@@ -96,7 +96,7 @@ Agent 也可能来自**插件捆绑包(bundle)播种**:安装带 `agents/` 子�
 7. **记忆与日志**:让 agent 用 `remember` 记长期事实 / 偏好、`log_event` 记当天产出——都落在该 agent 自己的 MEMORY.md / LOG/。
 8. **四层各就各位,别互相串**:`developer_instructions`(用户定的职责)/ SOUL.md(用户定的人格)/ MEMORY.md(记住的事实)
    / HARNESS.md(agent 自己攒的工作方法)。用户说「你以后别再这样了」→ 看是要改开发指令(用户主权,走 `manage_agent update`)
-   还是让 agent 自己记下来(走 `manage_harness`)。**成体系的可复用流程**(带步骤、可能带脚本)比工作笔记条目更适合
+   还是让 agent 自己记下来(走 `manage_harness`)。**成体系的可复用流程**(带步骤、可能带脚本)比进化记录条目更适合
    `manage_skill` 且传 `scope: "agent"` ——只在该 agent 激活时装载,不污染其他 agent。
 
 ## 何时创建新 agent
