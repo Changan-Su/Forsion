@@ -28,6 +28,12 @@
  * goes through the system photo picker and "+" → Take photo through the permission question (refused once, then allowed)
  * and the device's camera app (com.android.camera2 on the emulator image) — an image fixture is pushed to Pictures/ and
  * the app's CAMERA grant is reset before the app starts; session rows end with a time; "Failed to fetch" is reworded.
+ * System notifications (2026-10-05, three checks, `ONLY='island:,notifications:'`): a stubbed run in flight (events
+ * stream + approvals) puts the island up with its answer buttons; what the buttons send is read from the system's own
+ * records, Deny is sent the way the system sends it (root shell → needs an emulator image) and Allow is tapped in the
+ * real shade, both with the app in the background; in-app notifications are mirrored only while the app is away; a
+ * finished run always leaves "finished" (six rounds). The app gets POST_NOTIFICATIONS before it starts, and a shade
+ * left open is closed.
  *
  * Build + install (README「Android 原生外壳」): rm -rf dist && npm run build && npx cap sync android &&
  *   ./android/gradlew -p android :app:assembleDebug && adb install -r android/app/build/outputs/apk/debug/app-debug.apk
@@ -180,6 +186,11 @@ const hold = { checkpoints: false, release: [] }
 const pending = { rev: 'e2e-0', sessions: [] }
 // Cloud speech-to-text (POST …/brain/transcribe): answers a transcript, or the status a check sets.
 const transcribe = { status: 200 }
+// A run in flight, off unless a check names its session: the session then lists the run as running (GET …/agent/runs
+// ?session_id=), its event stream (GET …/agent/runs/<id>/events?fromSeq=N) hands out `events` past N and ends — the
+// client asks again 0.8 s later, like after any dropped stream — and answers to its approvals (POST …/approvals/<id>)
+// are collected in `answers`.
+const live = { sessionId: '', runId: 'e2e-run', assistantId: 'e2e-run-reply', events: [], answers: [] }
 function installStub(cdp) {
   cdp.on('Fetch.requestPaused', (ev) => {
     const url = new URL(ev.request.url)
@@ -204,7 +215,25 @@ function installStub(cdp) {
     if (p.endsWith('/agent/agents') && m === 'GET') return json({ agents: [{ slug: 'e2e-agent', name: 'E2E Agent', description: 'Harness fixture' }, { slug: 'e2e-helper', name: 'E2E Helper', description: 'Second fixture' }] })
     if (p.endsWith('/agent/projects') && m === 'GET') return json({ projects: [{ name: 'E2E Alpha' }, { name: 'E2E Beta' }] })
     if (p.endsWith('/agent/sessions') && m === 'GET') return json({ sessions: url.searchParams.get('archived') === 'true' ? [] : sessions })
-    if (p.endsWith('/agent/runs')) return json({ runs: [] })
+    const stream = p.match(/\/agent\/runs\/([^/]+)\/events$/)
+    if (stream && live.sessionId && decodeURIComponent(stream[1]) === live.runId) {
+      stubLog.pop() // asked for every 0.8 s while the run lasts: keep the log readable
+      const from = Number(url.searchParams.get('fromSeq') || 0)
+      return cdp.send('Fetch.fulfillRequest', {
+        requestId: ev.requestId, responseCode: 200,
+        responseHeaders: [{ name: 'Content-Type', value: 'text/event-stream' }, { name: 'Access-Control-Allow-Origin', value: '*' }],
+        body: Buffer.from(live.events.filter((e) => e.seq > from).map((e) => `data: ${JSON.stringify(e)}\n\n`).join('')).toString('base64'),
+      }).catch(() => {})
+    }
+    const decided = p.match(/\/agent\/runs\/([^/]+)\/approvals\/([^/]+)$/)
+    if (decided && m === 'POST') {
+      live.answers.push({ runId: decodeURIComponent(decided[1]), approvalId: decodeURIComponent(decided[2]), ...JSON.parse(body || '{}') })
+      return json({ ok: true })
+    }
+    if (p.endsWith('/agent/runs')) {
+      const running = live.sessionId && url.searchParams.get('session_id') === live.sessionId && !live.events.some((e) => e.type === 'done')
+      return json({ runs: running ? [{ id: live.runId, status: 'running', assistant_message_id: live.assistantId }] : [] })
+    }
     if (p.endsWith('/brain/transcribe') && m === 'POST') {
       if (transcribe.status === 200) return json({ text: ' e2e transcript ' })
       return cdp.send('Fetch.fulfillRequest', {
@@ -346,12 +375,16 @@ const tabCountText = (list) => {
 ;(async () => {
   assert.ok(h.adb('shell', 'pm', 'path', PKG).includes('package:'), `${PKG} is not installed`)
   h.adb('shell', 'am', 'force-stop', PKG)
+  try { h.adb('shell', 'cmd', 'statusbar', 'collapse') } catch { /* no shade service */ } // a shade left open covers the app: uiautomator would read the shade
   // The camera check walks the system's permission question (refuse once, then allow). It is only asked while the app
   // neither holds the permission nor was refused for good, so the app's own grant is reset here — before the app starts:
   // revoking a held permission ends the process.
   for (const args of [['revoke', PKG, 'android.permission.CAMERA'], ['clear-permission-flags', PKG, 'android.permission.CAMERA', 'user-set', 'user-fixed']]) {
     try { h.adb('shell', 'pm', ...args) } catch { /* not held / a shell without the command */ }
   }
+  // The island asks for the notification permission on its first run. The notification checks read what the system
+  // holds, so the app has it from the start (its own runtime permission, like the camera above).
+  try { h.adb('shell', 'pm', 'grant', PKG, 'android.permission.POST_NOTIFICATIONS') } catch { /* before Android 13: not a runtime permission */ }
   h.adb('shell', 'am', 'start', '-n', ACTIVITY)
   let cdp = await h.connect(PKG)
   await cdp.send('Page.enable')
@@ -1582,10 +1615,16 @@ const tabCountText = (list) => {
       const open = (await h.waitNodes((l) => l.find((n) => n['content-desc'] === 'Show roots'), { timeout: 6000 })).hit
       assert.ok(open, 'picker: "Show roots" not found (the system language must be English)')
       h.tapNode(open)
-      const root = (await h.waitNodes((l) => (l.some((n) => n.text === 'Open from') ? title(l, label) : null), { timeout: 6000 })).hit
-      assert.ok(root, `picker: root "${label}" not listed`)
-      h.tapNode(root)
-      await h.pause(1200)
+      // A tap that lands on a root closes the drawer. In one full run on a freshly booted emulator it did not land (the
+      // drawer was still up 8 s later, the directory behind it unchanged): read again and tap once more.
+      for (let attempt = 0; ; attempt++) {
+        const root = (await h.waitNodes((l) => (l.some((n) => n.text === 'Open from') ? title(l, label) : null), { timeout: 6000 })).hit
+        assert.ok(root, `picker: root "${label}" not listed`)
+        h.tapNode(root)
+        await h.pause(1200)
+        if (attempt || !ui().some((n) => n.text === 'Open from')) break
+        console.log(`  (picker: the tap on "${label}" left the roots drawer open — tapping again)`)
+      }
     }
     const entry = async (text) => {
       const n = (await h.waitNodes((l) => (l.some((x) => x.text === 'Open from') ? null : title(l, text)), { timeout: 8000 })).hit
@@ -2372,6 +2411,280 @@ const tabCountText = (list) => {
     await settingsPluginsPage('p08-settings-plugins-light')
   })
 
+  // ── system notifications: the island's answer buttons, and in-app notifications mirrored while the app is away ──
+  /** This app's notifications as the system holds them (dumpsys, its "Notification List" only; raw = the record's dump). */
+  const notifications = () => {
+    const out = h.adb('shell', 'dumpsys', 'notification', '--noredact').split('\n')
+    const list = []
+    let cur = null
+    for (const l of out.slice(out.findIndex((x) => x.startsWith('  Notification List:')) + 1)) {
+      if (/^ {2}\S/.test(l)) break
+      const rec = l.match(/NotificationRecord\(\S+ pkg=(\S+) user=\S+ id=(\d+) tag=(\S+) /)
+      if (rec) { cur = rec[1] === PKG ? { id: Number(rec[2]), tag: rec[3], raw: '' } : null; if (cur) list.push(cur) }
+      if (cur) cur.raw += `${l}\n`
+    }
+    return list.map((n) => ({
+      ...n,
+      title: n.raw.match(/android\.title=String \((.*)\)/)?.[1] ?? '',
+      text: n.raw.match(/android\.text=String \((.*)\)/)?.[1] ?? '',
+      bigText: n.raw.match(/android\.bigText=String \(([\s\S]*?)\)\n/)?.[1] ?? '',
+      actions: [...n.raw.matchAll(/^\s*\[\d+\] "(.*)" -> PendingIntent/gm)].map((a) => a[1]),
+      ongoing: /flags=\S*ONGOING_EVENT/.test(n.raw),
+    }))
+  }
+  const ISLAND = 7201 // LiveIslandPlugin: ID (the ongoing island), EVENT_ID = 7202 (one tag per kind of event), DONE_ID = 7203
+  const island = () => notifications().find((n) => n.id === ISLAND)
+  const eventNotes = () => notifications().filter((n) => n.id === 7202)
+  const finished = () => notifications().find((n) => n.id === 7203)
+  const until = async (fn, timeout = 15000) => {
+    const end = Date.now() + timeout
+    for (;;) {
+      const hit = await fn()
+      if (hit || Date.now() > end) return hit
+      await h.pause(400)
+    }
+  }
+  const shade = (open) => h.adb('shell', 'cmd', 'statusbar', open ? 'expand-notifications' : 'collapse')
+  // The shade cannot be read through uiautomator while the island is up: its chronometer ticks every second and the
+  // UI never counts as idle (8 of 8 dumps failed, 11 s each). What the buttons do is read from the system's own
+  // records instead, and the island's place in the shade from the system UI's dump.
+  /** What a button of the island sends, as the system recorded it: the notification names one pending intent per
+   *  button, the activity manager knows what each of them sends. */
+  const buttonIntent = (n, label) => {
+    const rec = n.raw.match(new RegExp(`"${label}" -> PendingIntent\\{\\w+: PendingIntentRecord\\{(\\w+) `))?.[1]
+    assert.ok(rec, `no "${label}" button on the island (${JSON.stringify(n.actions)})`)
+    const all = h.adb('shell', 'dumpsys', 'activity', 'intents')
+    const at = all.indexOf(`PendingIntentRecord{${rec} `)
+    assert.ok(at >= 0, `the activity manager does not know the pending intent of "${label}"`)
+    const block = all.slice(at).split('\n').slice(0, 4).join('\n')
+    return { type: block.match(/type=(\w+)/)?.[1], send: block.match(/requestIntent=(.*)/)?.[1]?.trim() }
+  }
+  const answerBroadcast = (approvalId, action) => `act=com.forsion.tangu.island.ANSWER dat=tangu://answer?sessionId=e2e-s2&messageId=${live.assistantId}&approvalId=${approvalId}&action=${action} pkg=${PKG}`
+  /** A tap on a button makes the system send its broadcast; a root shell may deliver to the app's non-exported
+   *  receiver the same way (emulator images have one). */
+  const sendButton = (intent) => {
+    const m = intent.send.match(/^act=(\S+) dat=(\S+) pkg=(\S+)$/)
+    assert.ok(m, `not a broadcast with data: ${intent.send}`)
+    h.adb('shell', `su 0 am broadcast -a ${m[1]} -d '${m[2]}' -p ${m[3]}`)
+  }
+  const dp = (n) => Math.round(n * Number(h.adb('shell', 'wm', 'density').match(/(\d+)\s*$/)[1]) / 160)
+  /** Where the system UI drew the island in the open shade. */
+  const islandRow = () => {
+    const all = h.adb('shell', 'dumpsys', 'activity', 'service', 'com.android.systemui/.SystemUIService', 'NotificationStackScrollLayout')
+    const at = all.indexOf(`|${PKG}|${ISLAND}|`)
+    if (at < 0) return null
+    const rest = all.slice(at)
+    const next = rest.indexOf('\n      Notification: ')
+    const block = next > 0 ? rest.slice(0, next) : rest
+    const b = block.match(/ExpandableNotificationRow\{\S+ \S+ \S+ (\d+),\d+-(\d+),\d+/)
+    const v = block.match(/ViewState \{.*?height: (\d+),.*?mYTranslation: ([\d.]+)/)
+    const max = block.match(/maxExpanded=(\d+)/)
+    return b && v && max ? { left: Number(b[1]), right: Number(b[2]), top: Math.round(Number(v[2])), height: Number(v[1]), unfolded: Number(max[1]) } : null
+  }
+  /** Open the shade with the island unfolded (rows of the silent section come folded; the buttons are on the unfolded
+   *  row). Geometry of the AOSP shade: the fold chevron sits 28dp inside the row's right edge, at mid height. */
+  async function unfoldIsland() {
+    shade(true)
+    await h.pause(1500)
+    let row = islandRow()
+    assert.ok(row, 'the island is not in the shade')
+    if (row.height < row.unfolded) {
+      h.tapAt(row.right - dp(28), row.top + Math.round(row.height / 2))
+      row = await until(() => { const r = islandRow(); return r && r.height >= r.unfolded ? r : null }, 6000)
+      assert.ok(row, `the island did not unfold: ${JSON.stringify(islandRow())}`)
+      await h.pause(600)
+    }
+    return row
+  }
+  /** uiautomator over the open shade, for the moments nothing in it ticks. */
+  const shadeTitle = (l, title) => l.find((n) => n['resource-id'] === 'android:id/title' && n.text === title)
+  const leaveApp = async () => {
+    h.key(3) // HOME
+    assert.ok(await until(() => !resumed(), 6000), 'the app is still in front after HOME')
+    await h.pause(800)
+  }
+  const INBOX_KEY = 'tangu_inbox_msgs' // the phone's local inbox (desktop/frontend/src/services/localInbox.ts)
+  /** A new message in the local inbox, the way the periodic pull stores one; the inbox's own poll (15 s) finds it. */
+  const inboxArrives = (id, title) => cdp.eval(`(() => {
+    const rows = JSON.parse(localStorage.getItem(${JSON.stringify(INBOX_KEY)}) || '[]')
+    rows.push({ id: 'bc:' + ${JSON.stringify(id)}, title: ${JSON.stringify(title)}, body: 'Harness fixture', sender_kind: 'server', sender_id: 'forsion', origin_broadcast_id: ${JSON.stringify(id)},
+      read_at: null, archived_at: null, created_at: new Date().toISOString().slice(0, 19).replace('T', ' '), deleted_at: null })
+    localStorage.setItem(${JSON.stringify(INBOX_KEY)}, JSON.stringify(rows))
+    return true
+  })()`)
+
+  await check('island: a run that ends while the app is in the background always leaves "finished" (6 rounds), never the last running state', async () => {
+    // The finished state used to replace the ongoing notification under the same id, right after the keep-alive
+    // service let go of it; the system re-posts the service's last notification at that moment, and when that landed
+    // second the island was back on "thinking…" for good (3 rounds of 6 on API 35). Raw plugin calls: no run needed.
+    const show = (o) => cdp.eval(`Capacitor.Plugins.LiveIsland.show(${JSON.stringify({ title: 'E2E island', chip: '', sessionId: 'e2e-s1', channelName: 'Agent 运行状态', more: 0, ...o })}).then(() => true)`)
+    const stale = []
+    try {
+      for (let round = 1; round <= 6; round++) {
+        h.adb('shell', 'am', 'start', '-n', ACTIVITY)
+        assert.ok(await until(() => resumed(), 6000), 'the app did not come to the front')
+        const since = Date.now()
+        await cdp.eval('Capacitor.Plugins.LiveIsland.reset().then(() => true)')
+        await show({ text: 'running', since })
+        assert.ok(await until(() => island()?.text === 'running', 8000), `round ${round}: no island`)
+        await leaveApp()
+        await show({ text: 'thinking', since })
+        await h.pause(1200) // the page sends at most one update a second
+        await show({ text: 'finished', since, done: true, quiet: false })
+        await h.pause(2500)
+        const left = notifications().filter((n) => n.id === ISLAND || n.id === 7203).map((n) => `${n.id}:${n.text}${n.ongoing ? ' (ongoing)' : ''}`)
+        if (left.join() !== '7203:finished') stale.push(`round ${round}: ${left.join(' + ') || 'nothing'}`)
+      }
+      assert.deepEqual(stale, [], 'the finished state lost against a stale island')
+    } finally {
+      // leave nothing in the shade: a new island takes the last "finished" away, reset takes the island
+      h.adb('shell', 'am', 'start', '-n', ACTIVITY)
+      await until(() => resumed(), 6000)
+      await show({ text: 'running', since: Date.now() }).catch(() => {})
+      await h.pause(800)
+      await cdp.eval('Capacitor.Plugins.LiveIsland.reset().then(() => true)').catch(() => {})
+    }
+  })
+
+  await check('notifications: a waiting approval carries Deny, and Allow only when the whole request is on the notification; a tap in the shade answers it with the app in the background; the finished run is reported once, with its time, and a tap returns to its session', async () => {
+    const TWO = sessions.find((x) => x.id === 'e2e-s2').title // as listed now: the session-row check renames it
+    const LONG = `node scripts/build.mjs --target=android ${'--flag '.repeat(20)}`.trim() // past what a notification shows whole
+    // (the engine's wording: a shell command is previewed as `$ <command>`, whole)
+    const request = (seq, approvalId, command) => ({ seq, type: 'approval_request', payload: { approvalId, name: 'run_bash', arguments: JSON.stringify({ command }), preview: `$ ${command}`, reason: { kind: 'mode', mode: 'auto-edit' } } })
+    const waiting = (actions) => until(() => { const n = island(); return n && n.ongoing && n.text === '等你批准：run_bash' && n.actions.length === actions ? n : null })
+    Object.assign(live, { sessionId: 'e2e-s2', events: [request(1, 'apv-e2e-long', LONG)], answers: [] })
+    try {
+      await reload() // a session's history — and with it a run in flight — is loaded once per page
+      await openChat(TWO)
+      // 1. a request too long to be shown whole: Deny only, and none of it on the notification
+      let n = await waiting(1)
+      assert.ok(n, `no island for the waiting approval: ${JSON.stringify(island() || null)} (stub: ${stubLog.slice(-6).join(' | ')})`)
+      assert.equal(n.title, TWO)
+      assert.deepEqual(n.actions, ['拒绝'], 'a request that cannot be read whole must not offer Allow')
+      assert.ok(!n.raw.includes('build.mjs'), 'part of a long request is on the notification')
+      // … seen from another session, so the run's end below is also an in-app "finished" notification
+      await openChat('E2E Session One')
+      await leaveApp()
+      const deny = buttonIntent(island(), '拒绝')
+      assert.deepEqual(deny, { type: 'broadcastIntent', send: answerBroadcast('apv-e2e-long', 'reject') })
+      sendButton(deny)
+      assert.ok(await until(() => live.answers.length === 1, 10000), `Deny did not reach the engine with the app in the background (answers: ${JSON.stringify(live.answers)})`)
+      assert.deepEqual(live.answers[0], { runId: 'e2e-run', approvalId: 'apv-e2e-long', action: 'reject' })
+      assert.ok(!resumed(), 'answering from the shade brought the app to the front')
+      // 2. the next request fits: Deny + Allow, and the request itself is what the unfolded notification shows
+      live.events.push({ seq: 2, type: 'approval_result', payload: { approvalId: 'apv-e2e-long', action: 'reject' } }, request(3, 'apv-e2e-short', 'npm test'))
+      n = await waiting(2)
+      assert.ok(n, `no Allow for a short request: ${JSON.stringify(island()?.actions)}`)
+      assert.deepEqual(n.actions, ['拒绝', '允许'])
+      assert.equal(n.bigText, '等你批准：run_bash\n$ npm test')
+      assert.deepEqual(buttonIntent(n, '拒绝'), { type: 'broadcastIntent', send: answerBroadcast('apv-e2e-short', 'reject') })
+      const allow = buttonIntent(n, '允许')
+      assert.deepEqual(allow, { type: 'broadcastIntent', send: answerBroadcast('apv-e2e-short', 'approve') })
+      // … and this one is tapped for real: the buttons sit in a row 29dp above the unfolded row's bottom, the second
+      // 121dp from its left (two-glyph labels). Should the shade be laid out otherwise, the tap misses every button,
+      // which is said, and the button's broadcast is sent the other way.
+      const row = await unfoldIsland()
+      shot('46-island-approval-buttons')
+      h.tapAt(row.left + dp(121), row.top + row.height - dp(29))
+      if (!(await until(() => live.answers.length === 2, 8000))) {
+        console.log(`  (the tap on Allow at the assumed place did not answer — row ${JSON.stringify(row)}; sending its broadcast instead)`)
+        sendButton(allow)
+      }
+      assert.ok(await until(() => live.answers.length === 2, 10000), `Allow did not reach the engine with the app in the background (answers: ${JSON.stringify(live.answers)})`)
+      try { shade(false) } catch { /* already closed by the tap */ }
+      assert.deepEqual(live.answers[1], { runId: 'e2e-run', approvalId: 'apv-e2e-short', action: 'approve' }) // never approve_always
+      assert.ok(!resumed(), 'answering from the shade brought the app to the front')
+      live.events.push({ seq: 4, type: 'approval_result', payload: { approvalId: 'apv-e2e-short', action: 'approve' } })
+      n = await until(() => { const i = island(); return i && i.ongoing && !i.actions.length ? i : null })
+      assert.ok(n, `the answered approval kept its buttons: ${JSON.stringify(island()?.actions)}`)
+      // 3. the run ends: the ongoing island leaves, "finished · <time>" stays (no buttons); the app's own "finished"
+      //    notification for that session (it is not the one on screen) is not a second system notification
+      live.events.push({ seq: 5, type: 'done', payload: { content: 'E2E run reply.' } })
+      n = await until(() => finished())
+      assert.ok(n, `the run's end was not reported: ${JSON.stringify(notifications().map((x) => [x.id, x.text]))}`)
+      assert.deepEqual([n.title, n.ongoing, n.actions], [TWO, false, []])
+      assert.match(n.text, /^已完成 · (\d+s|\d+m \d+s)$/)
+      await h.pause(1500)
+      assert.ok(!island(), `the ongoing island outlived its run: ${island()?.text}`)
+      assert.deepEqual(eventNotes().map((e) => [e.tag, e.text]), [], 'the finished run was reported twice')
+      shade(true)
+      await h.pause(1500)
+      shot('47-run-finished-in-the-shade')
+      // (should the app have a second notification up, the system folds both into a group whose lines carry another
+      //  id: unfold it with the count button at its right, then the finished run is a row of its own)
+      const listed = await h.waitNodes((l) => l.find((x) => x.text === TWO && /:id\/(title|notification_title)$/.test(x['resource-id'] || '')), { timeout: 20000, out: OUT })
+      assert.ok(listed.hit, 'the finished run is not in the shade')
+      let done = listed.hit
+      if (done['resource-id'] !== 'android:id/title') {
+        h.tapNode(listed.nodes.find((x) => x['resource-id'] === 'android:id/expand_button_number') || done)
+        done = (await h.waitNodes((l) => shadeTitle(l, TWO), { timeout: 10000, out: OUT })).hit
+        assert.ok(done, 'the notification group did not unfold')
+        await h.pause(600)
+      }
+      // 4. a tap on it returns to that session and takes the notification away
+      h.tapNode(done)
+      assert.ok(await until(() => resumed(), 8000), 'the finished notification did not open the app')
+      // (the run's reply exists in Session Two only; the app was left on Session One)
+      assert.ok(await h.waitPage(cdp, `!(${drawerOpen}) && !!document.querySelector('.mb-main')?.textContent.includes('E2E run reply.')`, 8000), 'the tap did not open the session whose run finished')
+      assert.ok(await until(() => !notifications().length, 8000), `notifications left behind: ${JSON.stringify(notifications().map((x) => [x.id, x.tag, x.text]))}`)
+    } finally {
+      live.sessionId = ''
+      try { shade(false) } catch { /* no shade service */ }
+      h.adb('shell', 'am', 'start', '-n', ACTIVITY)
+      await reload()
+    }
+  })
+
+  await check('notifications: what the app notifies in-app is mirrored as a system notification while it is in the background (one per kind, not "run finished": the island reports that), never in front, and gone on return', async () => {
+    const inboxBefore = await cdp.eval(`localStorage.getItem(${JSON.stringify(INBOX_KEY)})`)
+    const bridge = (title, text, event) => cdp.eval(`window.tangu.notify(${JSON.stringify(title)}, ${JSON.stringify(text)}, { event: ${JSON.stringify(event)} }).then(() => true)`)
+    const problems = []
+    try {
+      await goHome()
+      // an island keeps the process alive in the background, like a running agent does
+      await cdp.eval(`Capacitor.Plugins.LiveIsland.show(${JSON.stringify({ title: 'E2E island', text: 'running', chip: '', since: Date.now(), sessionId: 'e2e-s1', channelName: 'Agent 运行状态', more: 0 })}).then(() => true)`)
+      assert.ok(await until(() => island()?.text === 'running', 8000), 'no island')
+      await leaveApp()
+      // the product path: the inbox's own poll (15 s) finds a new message and notifies; the store sees the page hidden
+      await inboxArrives('e2e-inbox-1', 'E2E inbox one')
+      let notes = await until(() => { const e = eventNotes(); return e.length ? e : null }, 25000)
+      assert.ok(notes, 'no system notification for an inbox message that arrived while the app was away')
+      assert.deepEqual(notes.map((e) => [e.tag, e.title, e.text]), [['inbox.message', 'Forsion', 'E2E inbox one']])
+      await inboxArrives('e2e-inbox-2', 'E2E inbox two')
+      notes = await until(() => { const e = eventNotes(); return e.some((x) => x.text === 'E2E inbox two') ? e : null }, 25000)
+      assert.ok(notes, `the second message did not arrive: ${JSON.stringify(eventNotes().map((e) => e.text))}`)
+      assert.equal(notes.length, 1, `one notification per kind expected: ${JSON.stringify(notes.map((e) => [e.tag, e.text]))}`)
+      // the bridge itself: another kind is a second notification, "run finished" is none
+      await bridge('E2E sync', 'E2E sync failed', 'sync.error')
+      await bridge('E2E', 'E2E run finished', 'agent.done')
+      await h.pause(1500)
+      const tags = eventNotes().map((e) => e.tag).sort()
+      if (tags.join() !== 'inbox.message,sync.error') problems.push(`in the background: ${tags.join(', ') || 'none'} (expected inbox.message, sync.error)`)
+      shade(true)
+      await h.pause(1500)
+      shot('48-event-notifications-in-the-shade')
+      shade(false)
+      // back in front: the mirrored notifications leave (the same items are in the app) …
+      h.adb('shell', 'am', 'start', '-n', ACTIVITY)
+      assert.ok(await until(() => resumed(), 6000), 'the app did not come to the front')
+      if (!(await until(() => !eventNotes().length, 6000))) problems.push(`left in the shade after returning: ${eventNotes().map((e) => e.tag).join(', ')}`)
+      // … and in front nothing is mirrored: neither through the app's own notifications, nor when the bridge is called
+      // (the page counts as unfocused under a native sheet too; the plugin goes by the activity)
+      await inboxArrives('e2e-inbox-3', 'E2E inbox three')
+      assert.ok(await h.waitPage(cdp, "[...document.querySelectorAll('.ntf-text')].some((e) => e.textContent.includes('E2E inbox three'))", 25000), 'no in-app card for the inbox message')
+      await bridge('E2E', 'E2E in front', 'sync.error')
+      await h.pause(1500)
+      if (eventNotes().length) problems.push(`posted while the app was in front: ${eventNotes().map((e) => `${e.tag} "${e.text}"`).join(', ')}`)
+      assert.deepEqual(problems, [])
+    } finally {
+      try { shade(false) } catch { /* no shade service */ }
+      h.adb('shell', 'am', 'start', '-n', ACTIVITY)
+      await cdp.eval('Capacitor.Plugins.LiveIsland.reset().then(() => true)').catch(() => {})
+      await cdp.eval(`(() => { const v = ${JSON.stringify(inboxBefore)}; v == null ? localStorage.removeItem(${JSON.stringify(INBOX_KEY)}) : localStorage.setItem(${JSON.stringify(INBOX_KEY)}, v); return true })()`).catch(() => {})
+      await reload()
+    }
+  })
+
   await check('plugins: survive a cold restart (force-stop + relaunch): files, enabled state and data persist', async () => {
     cdp.close()
     h.adb('shell', 'am', 'force-stop', PKG)
@@ -2587,4 +2900,4 @@ const tabCountText = (list) => {
   fs.writeFileSync(path.join(OUT, 'acceptance.json'), JSON.stringify({ package: PKG, checks, screenshots: shots.map((s) => path.basename(s)), stubRequests: stubLog.length, completedAt: new Date().toISOString() }, null, 2))
   console.log(`\n${checks.length - failed}/${checks.length} passed · artifacts: ${OUT}`)
   process.exitCode = failed ? 1 : 0
-})().catch((e) => { console.error(e); process.exitCode = 1; pluginServer.close() })
+})().catch((e) => { console.error(e); pluginServer.close(); process.exit(1) }) // exit: the DevTools socket would keep a failed run alive for good

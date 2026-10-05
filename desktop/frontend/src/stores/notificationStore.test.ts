@@ -124,6 +124,22 @@ describe('notificationStore', () => {
     expect(useNotifications.getState().items).toHaveLength(0)
   })
 
+  it('系统通知:页面看不见也算在后台(安卓 WebView 退后台仍报有焦点);桥收到这是哪类事件', () => {
+    const osNotify = vi.fn()
+    vi.stubGlobal('window', { tangu: { notify: osNotify } })
+    try {
+      vi.stubGlobal('document', { hasFocus: () => true, visibilityState: 'visible' })
+      notifyApp({ text: 'seen', event: 'inbox.message' })
+      expect(osNotify).not.toHaveBeenCalled()
+      vi.stubGlobal('document', { hasFocus: () => true, visibilityState: 'hidden' })
+      notifyApp({ text: 'unseen', title: 'Inbox', event: 'inbox.message' })
+      notifyApp({ text: 'untyped' })
+      expect(osNotify.mock.calls).toEqual([['Inbox', 'unseen', { event: 'inbox.message' }], ['Forsion', 'untyped', { event: 'system.generic' }]])
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
   it('inAppOnly:窗口无焦点也不跟发系统通知;缺省照发', () => {
     const osNotify = vi.fn()
     // node 环境:没有 window / document,按需桩(store 用 typeof document 判定有无 DOM)。

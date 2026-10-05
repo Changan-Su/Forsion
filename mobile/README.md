@@ -168,6 +168,26 @@ OUT=/absolute/out npm run emu:nativeshell   # ONLY=tabs,prompt 只跑子集
 `PKG=com.forsion.tangu.nativepreview` 可对并存预览包跑同一台架。模拟器建议 `-gpu host` 启动：软件 GL（SwiftShader）下 WebView 的
 半透明描边圆角卡片会花屏（与 App 无关，系统 HTML 查看器里的静态页同样复现），宿主 GPU 下正常。
 
+## 系统通知（2026-10-05）
+
+都只在进程活着时有（刚退到后台的那一阵，或有 agent 在跑、灵动岛的前台服务在保活）；进程被系统收走之后的推送要服务器来发，不在这里。
+实现在 `src/liveIsland.ts` / `src/liveIslandDerive.ts`（纯函数）与 `LiveIslandPlugin.java`，三个通知 id：`7201` 常驻的岛、`7202` 事件（每类一个 tag）、`7203` 完成态。
+
+- **岛上的「拒绝 / 允许」**：岛上显示的是待批审批时带按钮，点了走审批卡同一个 `decideApproval`，不用回 App。
+  - 放哪个按钮、点下去认不认，都由 `shadeAsk` / `shadeAnswer` 一处判（单测 `npm run test:liveisland`）。
+  - 「允许」只给普通审批（档位本就要问 / 你自己写的规则要问），而且这次请求的内容得短到通知展开后能整段显示（≤120 字、≤3 行，进 `BigTextStyle`）；
+    看不全的、越界写入、受保护路径、设备操控、只能在执行设备上批的，只给「拒绝」，要批准得进会话看完整的审批卡。远程来源的审批不放按钮。
+  - 两个按钮都要求设备已解锁（`setAuthenticationRequired`，Android 12+）；更老的系统不放按钮。「允许」永远只是这一次，不是「总是允许」。
+  - 按钮背后是一条只发给本应用的广播，接收器运行时注册、不导出；页面收到后照当时的 store 重判，通知是旧的就什么都不做。
+- **应用内通知跟发系统通知**：`window.tangu.notify`（与桌面同一座桥，`notificationStore` 调）。只在 App 不在前台时贴，同类只留最新一条，回到前台即撤；
+  「跑完了」不走这条（由岛报）。设置 → 通知里现有的开关照旧管着。通知权限只在第一次上岛时问，这里不另问。
+- **完成态**：run 结束时常驻那条随服务撤掉，另贴一条「已完成 · 用时」（用时与会话里末条回复下面那行同源）。
+  以前是同一个 id 原地覆盖：系统在服务松手时会把旧通知再贴一遍，落在后面就把「已完成」盖回「思考中…」且一直挂着（API 35 模拟器 6 轮里 3 轮）。
+
+台架：`ONLY='island:,notifications:' npm run emu:nativeshell`（三条，约 4 分钟；需要模拟器的 root shell）。岛在的时候通知栏读不了无障碍树
+（岛上的计时器每秒一跳，`uiautomator dump` 永远等不到空闲）：按钮背后的意图改从 `dumpsys notification` + `dumpsys activity intents` 核对，
+岛在通知栏里的位置从系统界面自己的 dump 取；「拒绝」用 root shell 发同一条广播，「允许」真点。
+
 ## Android 插件(2026-10-02)
 
 外部 Forsion 插件(`amadeus-plugin`)可从应用市场装进 App 并直接运行,与桌面同一份 `pluginStore` / `ctx`。

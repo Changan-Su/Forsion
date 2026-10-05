@@ -1587,8 +1587,9 @@ declare global {
       spacesDelete?(slug: string): Promise<{ ok: boolean }>
       /** 收件箱:系统通知(点击回跳 Inbox Space)/ dock 角标(仅 mac 生效)/ 通知点击订阅。 */
       notifyInbox?(title: string, body: string): Promise<void>
-      /** 通用系统通知(所有应用内通知同步发);web/mobile 下 undefined。 */
-      notify?(title: string, body: string): Promise<void>
+      /** 通用系统通知(所有应用内通知同步发);web 下 undefined。meta.event = 哪类通知(NOTIFY_EVENTS 的 id):
+       *  桌面不看;安卓(mobile/src/liveIsland.ts)据此给每类只留一条,并略过由灵动岛报的「跑完了」。 */
+      notify?(title: string, body: string, meta?: { event?: string }): Promise<void>
       setInboxBadge?(count: number): Promise<void>
       onInboxOpen?(cb: () => void): () => void
       // P1-K3

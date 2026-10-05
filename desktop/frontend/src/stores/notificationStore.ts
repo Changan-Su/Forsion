@@ -197,11 +197,14 @@ export const useNotifications = create<NtfState>((set, get) => {
         dedupeKey: input.dedupeKey, action: input.action, durationMs, onClose: input.onClose,
       }
       // 系统通知:与应用内通知同步发(所有事件,不止收件箱);仅窗口在后台时(前台已有卡片,免重复横幅);
-      // osEnabled 门控。web/mobile 无 window.tangu.notify → 可选链忽略。dedupe 合并不重发(上面已 return)。
+      // osEnabled 门控。web 无 window.tangu.notify → 可选链忽略(安卓有:mobile/src/liveIsland.ts)。dedupe 合并不重发(上面已 return)。
       // inAppOnly:调用方声明这是应用内即时反馈(见 NotifyInput.inAppOnly),不跟发。
-      if (!input.inAppOnly && !input.receipt && st.prefs.osEnabled && typeof document !== 'undefined' && !document.hasFocus()) {
+      // 「在后台」:桌面 = 窗口失焦。安卓 WebView 退到后台后 hasFocus() 仍是 true(模拟器实测),那里只有可见性说真话;
+      // 桌面上看不见的窗口本来就没有焦点,多看这一项不改变它的行为。
+      const away = typeof document !== 'undefined' && (!document.hasFocus() || document.visibilityState === 'hidden')
+      if (!input.inAppOnly && !input.receipt && st.prefs.osEnabled && away) {
         const osTitle = title || input.sourceLabel || 'Forsion'
-        try { window.tangu?.notify?.(osTitle, text) } catch { /* 无桥/web 忽略 */ }
+        try { window.tangu?.notify?.(osTitle, text, { event }) } catch { /* 无桥/web 忽略 */ }
       }
       if (st.items.length < MAX_VISIBLE) {
         set((s) => ({ items: [...s.items, n] }))

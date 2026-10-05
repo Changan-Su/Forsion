@@ -1,7 +1,7 @@
 /**
  * 灵动岛模拟器台架(2026-09-18)—— 真机/模拟器上跑着 debug 包时用:
  *   node scripts/live-island-emu.cjs eval "<js 表达式,可 await>"   在 app 的 WebView 里求值
- *   node scripts/live-island-emu.cjs notif                         只看活动通知里 id=7201 那条(没有就打 ABSENT)
+ *   node scripts/live-island-emu.cjs notif                         只看活动通知里岛那两条:id=7201 常驻、7203 完成态(都没有就打 ABSENT)
  *   PKG=com.forsion.tangu.islandtest node scripts/…               换包名(真机上与正式版并存的测试包)
  *
  * 例:node scripts/live-island-emu.cjs eval "Capacitor.Plugins.LiveIsland.show({ title: 't', text: 'x', chip: '', since: Date.now(), sessionId: 's', channelName: 'c', more: 0 })"
@@ -49,7 +49,7 @@ function notif() {
   let mine = false
   for (const l of out.slice(start + 1)) {
     if (/^ {2}\S/.test(l)) break
-    if (l.includes('NotificationRecord(')) mine = l.includes(`pkg=${PKG} `) && l.includes('id=7201')
+    if (l.includes('NotificationRecord(')) mine = l.includes(`pkg=${PKG} `) && /id=720[13] /.test(l)
     if (mine && /importance=|^\s*flags=|android\.(title|text|subText|requestPromotedOngoing|shortCriticalText|showChronometer)=/.test(l)) rows.push(l.trim().replace(/^NotificationRecord\(.*?(importance=\d).*/, 'record $1'))
   }
   return rows.length ? rows.join('\n') : 'ABSENT'
