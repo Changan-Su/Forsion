@@ -312,6 +312,15 @@ export function registerSpaces(): void {
       localStorage.setItem('forsion_pinned_layout_v1', '1')
     }
   } catch { /* ignore */ }
+  // 图像工作室改成「项目 + 详情」(2026-10-04):对话的固定位从左栏换到右栏,左栏换成项目导航。此前存下的布局里对话还在
+  // 左边 —— 单例复用不看位置,它占着左边,右栏那个就开不出来 → 一次性丢掉这个 Space 的已存布局,按新默认重建。
+  // 只在主窗做(理由同上);别的 Space 的布局不动。只影响 10-03 之后跑过这个 Space 的人:更早的存档已被上面那面旗整份清掉。
+  try {
+    if (windowKind() === 'main' && localStorage.getItem('forsion_image_studio_layout_v2') !== '1') {
+      resetSpaceLayouts('image-studio')
+      localStorage.setItem('forsion_image_studio_layout_v2', '1')
+    }
+  } catch { /* ignore */ }
   // 右栏默认折叠(2026-07-18):旧 Amadeus/Tangu 命名布局是「右栏展开」时存的,会经 applyNamed/tryRestoreLayout
   // 恢复、绕过新的 build()(其默认折叠右栏)→ 老用户永远看不到折叠。一次性清掉这两个空间的旧布局
   // (+ 若当前正停留其一则清当前布局),下次进入按新默认重建(右栏折叠)。代价=这两个空间的布局微调丢一次。

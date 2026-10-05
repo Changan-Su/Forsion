@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { arrangeImages, collectImageOutputs, imageBox, isImageBoard, newBoard, type StudioImage } from './model'
+import { arrangeImages, collectImageOutputs, coverImages, imageBox, isImageBoard, newBoard, type StudioImage } from './model'
 
 const photo = (id: string): StudioImage => ({ id, name: `${id}.png`, blob: new Blob(['png'], { type: 'image/png' }), width: 1200, height: 800, x: 0, y: 0, w: 300, h: 200, source: 'import', brightness: 100, contrast: 100, saturation: 100 })
 describe('Image Studio project data', () => {
@@ -17,6 +17,12 @@ describe('Image Studio project data', () => {
     expect(arranged[2].y).toBeGreaterThan(arranged[0].y + arranged[0].h)
     expect(arranged[0].blob).toBe(inputs[0].blob)
     expect(imageBox(800, 1600, arranged).x).toBeGreaterThan(Math.max(...arranged.map(i => i.x + i.w)))
+  })
+  it('picks a cover from the leftmost visible images', () => {
+    const board = { ...newBoard('A'), images: [{ ...photo('right'), x: 400 }, { ...photo('hidden'), x: -50, hidden: true }, { ...photo('left'), x: 10 }, { ...photo('far'), x: 900 }] }
+    expect(coverImages(board, 2).map(image => image.id)).toEqual(['left', 'right'])
+    expect(coverImages(newBoard('Empty'), 2)).toEqual([])
+    expect(board.images.map(image => image.id)).toEqual(['right', 'hidden', 'left', 'far']) // the project's own order is untouched
   })
   it('collects displayed images once and preserves their originating creative brief', () => {
     const file = { name: 'picture.png', mime: 'image/png', path: 'generated/picture.png' }

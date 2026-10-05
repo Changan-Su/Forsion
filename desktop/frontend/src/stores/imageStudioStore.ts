@@ -21,6 +21,8 @@ interface ImageStudioState {
   hydrate(): Promise<void>
   create(name: string): string
   open(id: string): void
+  /** Back to the project list. The board stays saved; only the "last open" pointer is cleared. */
+  close(): void
   update(id: string, edit: (board: ImageBoard) => ImageBoard, history?: boolean): void
   undo(id: string, redo?: boolean): void
   flush(): Promise<void>
@@ -51,7 +53,8 @@ export const useImageStudio = create<ImageStudioState>((set, get) => ({
       const boards = await loadBoards()
       let activeId: string | null = null
       try { activeId = localStorage.getItem('image-studio.active') } catch { /* optional preference */ }
-      set({ boards: Object.fromEntries(boards.map(b => [b.id, b])), activeId: boards.find(b => b.id === activeId)?.id || boards.sort((a, b) => b.updatedAt - a.updatedAt)[0]?.id || null, ready: true, error: '' })
+      // Reopen only what was open when the app closed. No pointer (first run, or the user went back to the list) = the project list.
+      set({ boards: Object.fromEntries(boards.map(b => [b.id, b])), activeId: boards.find(b => b.id === activeId)?.id || null, ready: true, error: '' })
     } catch (e) { set({ error: String(e), ready: false }); hydration = undefined }
   })(),
   create: name => {
@@ -65,6 +68,11 @@ export const useImageStudio = create<ImageStudioState>((set, get) => ({
     if (!get().boards[id]) return
     set({ activeId: id, selection: [], pending: null })
     try { localStorage.setItem('image-studio.active', id) } catch { /* board data uses IndexedDB */ }
+  },
+  close: () => {
+    if (!get().activeId) return
+    set({ activeId: null, selection: [], pending: null })
+    try { localStorage.removeItem('image-studio.active') } catch { /* optional preference */ }
   },
   update: (id, edit, history = true) => {
     const board = get().boards[id]

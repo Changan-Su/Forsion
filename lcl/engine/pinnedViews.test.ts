@@ -9,8 +9,8 @@ import { useWorkspace as useSingle } from './singleColumnStore'
 import { isPinned, isLastPinned, missingPinned, type PinnedViews } from './pinnedViews'
 import { registerView, unregisterView } from './viewRegistry'
 import type { DropTarget } from './dropModel'
-import { resetSpaceLayouts } from './spaceRegistry'
-import { listNamedLayouts, loadLayout, saveLayout, saveNamedLayout, type LayoutEnvelopeV4 } from './layoutPersist'
+import { resetSpaceLayouts, spaceLayoutsWereReset, useSpaceStore } from './spaceRegistry'
+import { deleteNamedLayout, listNamedLayouts, loadLayout, saveLayout, saveNamedLayout, type LayoutEnvelopeV4 } from './layoutPersist'
 import type { DockviewApi } from 'dockview-react'
 
 type G = { id: string; panels: P[]; activePanel?: P; api: Record<string, unknown> }
@@ -378,8 +378,38 @@ describe('固定 View:桌面 store', () => {
 })
 
 describe('升级时的一次性重置', () => {
+  const blob: LayoutEnvelopeV4 = { version: 4, dockview: { grid: {} }, sidebars: { left: { visible: true, stash: [] }, right: { visible: true, stash: [] } } }
+  const scBlob = (type: string): string => JSON.stringify({ v: 1, main: [{ id: type, type, loc: 'main', params: {}, title: type }], left: [], right: [], activeMainId: type, leftActiveId: null, rightActiveId: null })
+
+  // ⚠️排在整份重置那条之前:spaceLayoutsWereReset 是模块级的一次性旗,整份重置置过就回不去了。
+  it('resetSpaceLayouts(只丢一个 Space):它的槽和归它的当前布局清掉,别的 Space 的原样留着,也不谎报「全部重置过」', () => {
+    useSpaceStore.setState({ spaces: [{ id: 'image-studio', name: 'Image Studio', icon: (() => null) as never, sidebarDefaults: { left: [], right: [] }, pinned: { main: [{ type: 'image-studio', params: {} }] }, build() { } }] })
+    saveNamedLayout('space:tangu', blob)
+    saveNamedLayout('space:image-studio', blob)
+    saveLayout({ ...blob, space: 'image-studio' })
+    localStorage.setItem('lcl_sc_named_layouts_v1', JSON.stringify({ 'space:tangu': {}, 'space:image-studio': {} }))
+    localStorage.setItem('lcl_sc_layout_v1', scBlob('image-studio'))
+    resetSpaceLayouts('image-studio')
+    expect(Object.keys(listNamedLayouts())).toContain('space:tangu')
+    expect(Object.keys(listNamedLayouts())).not.toContain('space:image-studio')
+    expect(loadLayout()).toBeNull()
+    expect(Object.keys(JSON.parse(localStorage.getItem('lcl_sc_named_layouts_v1')!))).toEqual(['space:tangu'])
+    expect(localStorage.getItem('lcl_sc_layout_v1')).toBeNull() // 主区摆着它的固定主视图 = 它的现场
+    // 那面旗说的是「全部 Space 都重置了」:只丢一个时置了它,无关的异步启动 Space 会被当成要重建
+    expect(spaceLayoutsWereReset()).toBe(false)
+    // 当前布局是别的 Space 的现场:不动。单列那份不记归属,主区里没有这个 Space 的主视图就认不出是它的 → 留着
+    saveNamedLayout('space:image-studio', blob)
+    saveLayout({ ...blob, space: 'tangu' })
+    localStorage.setItem('lcl_sc_layout_v1', scBlob('chatv'))
+    resetSpaceLayouts('image-studio')
+    expect(Object.keys(listNamedLayouts())).not.toContain('space:image-studio')
+    expect(loadLayout()?.space).toBe('tangu')
+    expect(localStorage.getItem('lcl_sc_layout_v1')).toBe(scBlob('chatv'))
+    useSpaceStore.setState({ spaces: [] })
+  })
+
   it('resetSpaceLayouts:各 Space 的已存布局与当前布局清掉,用户自己起名存的布局留着', () => {
-    const blob: LayoutEnvelopeV4 = { version: 4, dockview: { grid: {} }, sidebars: { left: { visible: true, stash: [] }, right: { visible: true, stash: [] } } }
+    for (const name of Object.keys(listNamedLayouts())) deleteNamedLayout(name)
     saveNamedLayout('space:tangu', blob)
     saveNamedLayout('space:plugin:x', blob)
     saveNamedLayout('我的布局', blob)
@@ -387,6 +417,7 @@ describe('升级时的一次性重置', () => {
     resetSpaceLayouts()
     expect(Object.keys(listNamedLayouts())).toEqual(['我的布局'])
     expect(loadLayout()).toBeNull()
+    expect(spaceLayoutsWereReset()).toBe(true)
   })
 })
 

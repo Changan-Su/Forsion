@@ -73,13 +73,17 @@ interface SCBlob {
   rightActiveId: string | null
 }
 
-/** 丢掉本窗的单列布局存档(当前布局 + 各 Space 的命名槽)。spaceRegistry.resetSpaceLayouts 的单列半身。 */
-export function clearSingleColumnLayouts(): void {
+/** 丢掉本窗的单列布局存档(当前布局 + 各 Space 的命名槽)。spaceRegistry.resetSpaceLayouts 的单列半身。
+ *  给了 `only` 就只丢那一个 Space 的:命名槽按名字丢;当前布局不记归属,只有主区里摆着 `mainTypes`(那个 Space 的
+ *  固定主视图)之一才认作它的现场,认不出就留着。 */
+export function clearSingleColumnLayouts(only?: { space: string; mainTypes: readonly string[] }): void {
   try {
-    localStorage.removeItem(SC_LAYOUT_KEY)
+    const main = only ? readJSON<{ main?: unknown }>(SC_LAYOUT_KEY)?.main : null
+    const mine = !only || (Array.isArray(main) && main.some((leaf) => only.mainTypes.includes((leaf as { type?: string } | null)?.type ?? '')))
+    if (mine) localStorage.removeItem(SC_LAYOUT_KEY)
     const all = readJSON<Record<string, unknown>>(SC_NAMED_KEY)
     if (!all) return
-    for (const name of Object.keys(all)) if (name.startsWith('space:')) delete all[name]
+    for (const name of Object.keys(all)) if (only ? name === `space:${only.space}` : name.startsWith('space:')) delete all[name]
     localStorage.setItem(SC_NAMED_KEY, JSON.stringify(all))
   } catch { /* 私密模式 */ }
 }
