@@ -33,14 +33,26 @@ export async function readSessionSettings(sessionId: string, userId: string): Pr
   return { modelId: String(r.model_id || ''), title: String(r.title || ''), agentConfig: parse(r.agent_config) };
 }
 
+/**
+ * 团队模式下没有计划模式(10-05 用户定「团队模式不能开计划模式」)。成员各跑各的子 run(services/teamRuns.memberRunConfig 不带
+ * planMode),会话上的计划模式对它们从来不作数 —— 与其留一个亮着却不生效的开关,存的时候就落成关。桌面和终端界面各自也拦;
+ * 这里是兜底:建会话、PUT / PATCH、引擎内部的按键合并写都过它,哪个端都存不出「两个都开」。
+ * 团队模式的口径同 agentLoop.bindSessionFacts:groupChat 为真;团队轨道会话(teamSlug)没有显式切回普通(groupChat !== false)也算。
+ */
+export function settleTeamPlanMode<T extends Record<string, unknown>>(cfg: T): T {
+  const team = !!cfg.groupChat || (typeof cfg.teamSlug === 'string' && !!cfg.teamSlug && cfg.groupChat !== false);
+  return team && cfg.planMode ? { ...cfg, planMode: false } : cfg;
+}
+
 /** 按键合并写 agent_config(null = 删键)。与路由 PATCH 同锁,返回合并后的值。 */
 export function patchSessionAgentConfig(sessionId: string, patch: Record<string, unknown>): Promise<Record<string, unknown>> {
   return withKeyLock(`session:config:${sessionId}`, async () => {
-    const cfg = parse(await deps().state.getAgentConfig(sessionId));
+    const merged = parse(await deps().state.getAgentConfig(sessionId));
     for (const [k, v] of Object.entries(patch)) {
-      if (v === null) delete cfg[k];
-      else if (v !== undefined) cfg[k] = v;
+      if (v === null) delete merged[k];
+      else if (v !== undefined) merged[k] = v;
     }
+    const cfg = settleTeamPlanMode(merged);
     await deps().state.setAgentConfig(sessionId, JSON.stringify(cfg));
     return cfg;
   });
