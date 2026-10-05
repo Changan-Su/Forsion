@@ -180,7 +180,8 @@ export interface PluginAppApi extends BlockSurfaceApi {
    *  用途:导入用户从磁盘选来的模型 / 图片 / 音频(`<input type=file>` 的 `File.arrayBuffer()`),
    *  或把插件自己渲染的截图落盘给 Agent 看。
    *  ⚠️需要活动库。没有活动库时**reject**('No vault is open'),同 writeFile。
-   *  ⚠️**不走自写账本**:同一路径上的 `watchFile` 会把这次写当成外部改动回调一次 —— 别 watch 自己写的二进制。
+   *  ⚠️**不走自写账本**:同一路径上的 `watchFile` 会把这次写当成外部改动回调一次 —— watch 着自己写的文件时,
+   *  回调里先比一下内容再决定要不要重载(否则每次保存都把自己刷一遍)。
    *  旧宿主 / 桥缺席:方法整个不存在 → `ctx.app.writeBytes?.(…)`。 */
   writeBytes?(path: string, bytes: Uint8Array | ArrayBuffer): Promise<void>
   /** 读库内文件的原始字节(2026-09-19+)。不存在 / 越界 / 没有活动库 → null(不抛,同 readFile 口径)。
@@ -197,6 +198,8 @@ export interface PluginAppApi extends BlockSurfaceApi {
   /** 订阅某个 vault 文件的**外部**内容改动(2026-08-15+),返回退订。用途:插件把配置/片段库写成
    *  库里的一个文件,用户拿别的编辑器改完要能热重载。
    *  ⚠️只报「内容变了」这一类事件 —— 新建/删除/改名不报(那是文件树的事)。
+   *  ⚠️只盯文本配置类文件(js / json / yaml / csv / txt …,≤2MB)和 PDF(2026-10-05+);别的二进制(图片、音视频)不报。
+   *  PDF 的事件不比内容:你自己 `writeBytes` 的那次、只改了修改时间的那次也会来。
    *  ⚠️自写不回声:经 `writeFile` 落的盘走自写账本,不会把自己的保存当外部改动弹回来。
    *  ⚠️路径必须与 `readFile` 用的是同一个字符串(vault 相对、`/` 分隔);大小写按平台。
    *  旧宿主 / 非桌面宿主没有:`const off = ctx.app.watchFile?.(p, cb)`,缺位时自己退化成轮询。 */
@@ -631,6 +634,10 @@ export interface FileTypeContribution {
    *  `ctx.app.openFile`, recent items) mounts this view; the built-in reader stays as the fallback
    *  (plugin disabled or uninstalled → built-in again, and the tree's context menu always offers
    *  "Open with the built-in reader"). Without it the suffix is refused as before.
+   *  The user picks who opens the type in Settings → Plugins → Default openers (Automatic / built-in
+   *  reader / a specific plugin); Automatic gives it to the first enabled plugin that overrides it.
+   *  The built-in reader is read-only and reloads when the file changes, so what you write with
+   *  `ctx.app.writeBytes` shows up in an already-open built-in tab.
    *  Not taken over: jumps that carry a page or quote (chat citations, `[[x.pdf#page=3]]`) and
    *  `![[x.pdf]]` embeds — those keep using the built-in reader.
    *  ⚠️ Binary types get no page surface: `file.surface.loadPage` refuses non-`.md` paths. Read the

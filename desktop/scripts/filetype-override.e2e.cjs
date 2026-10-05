@@ -12,11 +12,16 @@
  *   T5  停用插件:留下的标签页给出「用内置阅读器打开」,点了**就地**换成内置阅读器(不多开标签)
  *   T6  停用期间:树上点 PDF 进内置阅读器,右键菜单回到原样
  *   T7  重新启用 → 树上点 PDF 又归插件
+ *   T8  文件变了 → 内置阅读器原地重载:插件 writeBytes(阅读器在前台 / 在后台各一次)、外部工具直接改文件;
+ *       插件自己的 ctx.app.watchFile 对 .pdf 也收到回调
+ *   T9  设置 → 插件 → 已安装 →「默认打开方式」:选内置阅读器 → 树上点 PDF 进内置、右键只剩「打开」;
+ *       改选插件 → 又归插件(设置在独立浮窗里,偏好经 storage 事件传到主窗 —— 走的是真路径)
  *
  * 负对照(2026-10-05 实跑):`--nc=nooverride` 探针不写 override: true → T1 / T2 / T2a / T2b / T2c / T2d / T3 / T4 / T5a / T7 红
  *   (宿主照旧拒掉它,PDF 全程归内置阅读器,探针视图没挂所以 T2* 也读不到)。
  *   宿主侧负对照(同日实跑,临时改源码重建):去掉页表面那道 isPagePipelinePath → T2c 红(PDF 真被装成了当前页)。
  *   T2d 认的是宿主的拒绝告警;ctx.app.loadPage 那道闸本身的负对照在 fileTypeOverride.test.ts。
+ *   T8 的宿主侧负对照(同日实跑,临时改源码重建):watcher.ts 去掉「PDF 只报变了」那个分支 → T8a / T8b / T8c / T8d 红。
  * 用法:npm run build && npm run e2e:ftoverride   (--shot 存截图到 /tmp/forsion-ftoverride-*.png)
  */
 const fs = require('fs')
@@ -37,6 +42,8 @@ function check(name, ok, detail) {
 /** 探针插件:把收到的 filePath、读到的字节数写进 DOM;挂载时故意对 PDF 调一次 loadPage(必须被拒)。 */
 const PROBE_MAIN = `
 var st = (window.__pdfprobe = window.__pdfprobe || { mounts: 0 })
+// 台架借探针的手写盘 / 监听(插件接管 PDF 后真会这么干):writeBytes 改写文件,watchFile 数回调。
+st.write = function (rel, arr) { return ctx.app.writeBytes(rel, new Uint8Array(arr)) }
 st.registered = ctx.registerFileType({
   id: 'pdfprobe',
   extensions: ['.pdf'],
@@ -44,6 +51,10 @@ st.registered = ctx.registerFileType({
   title: 'PDF Probe',
   mount: function (el, file) {
     st.mounts++
+    if (ctx.app.watchFile && !st.watching) {
+      st.watching = true
+      ctx.app.watchFile(file.filePath, function () { st.watchHits = (st.watchHits || 0) + 1 })
+    }
     var d = document.createElement('div')
     d.className = 'pdfprobe-view'
     d.setAttribute('data-file', file.filePath)
@@ -67,6 +78,35 @@ st.registered = ctx.registerFileType({
 `
 
 const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+/** 进设置 → 插件 → 已安装插件。设置画在独立浮窗里:开窗前先 arm window 事件,返回那个窗口的 page。
+ *  (照抄 plugin-seams.e2e.cjs 的 openPluginsTab。) */
+async function openPluginsTab(app, win) {
+  const opened = app.waitForEvent('window', { timeout: 20000 }).catch(() => null)
+  await win.keyboard.press('Meta+Comma')
+  let sp = await opened
+  if (!sp) {
+    const retry = app.waitForEvent('window', { timeout: 20000 }).catch(() => null)
+    await win.locator('#rb-settings, [data-ribbon-id="rb-settings"]').first().click({ timeout: 4000 }).catch(() => {})
+    sp = await retry
+  }
+  if (!sp) throw new Error('设置浮窗没开出来')
+  await sp.waitForLoadState('domcontentloaded').catch(() => {})
+  await sp.waitForSelector('.settings-main', { timeout: 20000 }).catch(() => {})
+  const nav = sp.locator('.settings-nav')
+  for (const label of ['插件', 'Plugins']) {
+    const b = nav.getByRole('button', { name: label, exact: true }).first()
+    if (await b.count().catch(() => 0)) {
+      await b.scrollIntoViewIfNeeded().catch(() => {})
+      await b.click().catch(() => {})
+      break
+    }
+  }
+  await sp.locator('.settings-sub--amadeus-plugins').first().waitFor({ timeout: 5000 }).catch(() => {})
+  await sp.locator('.settings-nav-subitem', { hasText: /^(已安装插件|Installed plugins)$/ }).first().click().catch(() => {})
+  await sp.waitForTimeout(900)
+  return sp
+}
 const PDF_REL = '资料/书.pdf'
 
 async function main() {
@@ -148,6 +188,10 @@ async function main() {
     const typesFor = async () => (await mainPanels()).filter((p) => p.path === PDF_REL).map((p) => p.type).sort().join(',')
     const probeFile = () => win.evaluate(() => document.querySelector('.pdfprobe-view')?.getAttribute('data-file') || '')
     /** 模拟「别的窗口拨了插件开关」:写偏好 + 发 storage 事件,主窗走 syncDisabledPreferences 对账(真路径)。 */
+    /** 内置阅读器文本层里的字(tinyPdf 每页一行大字);几个内置标签页开着同一份就拼在一起。 */
+    const readerText = () => win.evaluate(() => [...document.querySelectorAll('.amx-pdfview .textLayer')].map((l) => l.textContent || '').join('|'))
+    const sees = (word, ms = 12_000) => until(async () => (await readerText()).includes(word), ms)
+    const probeWrite = (line) => win.evaluate(([rel, arr]) => window.__pdfprobe?.write?.(rel, arr), [PDF_REL, [...Buffer.from(tinyPdf([line]))]]).catch(() => {})
     const setDisabled = (ids) => win.evaluate((list) => {
       localStorage.setItem('amadeus.plugins.disabled', JSON.stringify(list))
       window.dispatchEvent(new StorageEvent('storage', { key: 'amadeus.plugins.disabled' }))
@@ -197,6 +241,23 @@ async function main() {
     check('T3a 点「用内置阅读器打开」→ 进内置阅读器', t3, await typesFor())
     await closeMenu()
 
+    // ── T8 文件变了 → 内置阅读器原地重载(此刻内置阅读器在前台)──────────────────────
+    check('T8 内置阅读器显示的是原文件', await sees('OVERRIDE'), await readerText())
+    await probeWrite('RELOADED')
+    check('T8a 插件 writeBytes 之后,开着的内置阅读器换成新内容', await sees('RELOADED'), await readerText())
+    const hits = await until(() => win.evaluate(() => window.__pdfprobe?.watchHits || 0), 5000)
+    check('T8b 同一次写,插件自己的 ctx.app.watchFile 对 .pdf 也收到回调', hits > 0, `watchHits=${hits}`)
+    await shot('5-reader-reloaded')
+    // 内置标签页在后台时写盘:另开一个笔记标签把它压到后面,写完再切回来,必须是新内容。
+    // (树上单击会就地换掉当前标签,所以用 ⌘ 点击另开;不这样做的话「后台」那一刻内置标签页根本不存在。)
+    await row('1').click({ modifiers: ['Meta'] })
+    const hidden = await until(async () => !(await win.locator('.amx-pdfview').first().isVisible().catch(() => false)) && (await typesFor()).includes('amadeus-pdf'))
+    check('T8c0 前置:内置标签页还开着,但已经在后台', hidden, await typesFor())
+    await probeWrite('HIDDEN')
+    await win.waitForTimeout(1500)
+    await win.locator('.dv-tab', { hasText: /^书\.pdf$/ }).first().click()
+    check('T8c 内置阅读器在后台时文件被改 → 切回前台是新内容', await sees('HIDDEN'), await readerText())
+
     // ── T4 再点树 → 仍归插件 ────────────────────────────────────────────────────
     await row('书.pdf').click()
     const t4 = await until(async () => (await typesFor()).includes('amadeus-plugin-file') && (await probeFile()) === PDF_REL)
@@ -219,11 +280,14 @@ async function main() {
 
     // ── T6 停用期间 ─────────────────────────────────────────────────────────────
     const m6 = await openMenu()
-    check('T6 停用期间右键菜单回到原样', m6.includes('打开（可批注）') && !m6.includes('用内置阅读器打开'), m6.join(' / '))
+    check('T6 停用期间右键菜单只剩「打开」', m6.includes('打开') && !m6.includes('用内置阅读器打开') && !m6.includes('打开（可批注）'), m6.join(' / '))
     await closeMenu()
     await row('书.pdf').click()
     await win.waitForTimeout(800)
     check('T6a 停用期间树上点 PDF → 内置阅读器,没有插件文件标签', !(await typesFor()).includes('amadeus-plugin-file') && !(await probeFile()), await typesFor())
+    // 外部工具直接改文件(不经应用的写通道):同样跟上
+    fs.writeFileSync(pdfAbs, Buffer.from(tinyPdf(['EXTERNAL'])))
+    check('T8d 外部工具改了文件 → 开着的内置阅读器换成新内容', await sees('EXTERNAL'), await readerText())
 
     // ── T7 重新启用 ─────────────────────────────────────────────────────────────
     await setDisabled([])
@@ -231,6 +295,31 @@ async function main() {
     await row('书.pdf').click()
     const t7 = await until(async () => (await probeFile()) === PDF_REL && (await typesFor()).includes('amadeus-plugin-file'))
     check('T7 重新启用 → 树上点 PDF 又归插件', t7, await typesFor())
+
+    // ── T9 设置里的「默认打开方式」──────────────────────────────────────────────
+    const sp = await openPluginsTab(app, win)
+    const sel = sp.locator('select[data-file-opener=".pdf"]').first()
+    const opts = await until(async () => ((await sel.count()) ? sel.evaluate((el) => [...el.options].map((o) => `${o.value}=${(o.textContent || '').trim()}`)) : null), 15_000)
+    check('T9 设置里有「默认打开方式」,候选 = 自动 / 内置阅读器 / 接管 .pdf 的插件',
+      !!opts && opts.join(',') === '=自动,builtin=内置阅读器,pdfprobe=PDF Probe', opts ? opts.join(' / ') : '没找到下拉框')
+    await sel.scrollIntoViewIfNeeded().catch(() => {})
+    if (SHOT) await sp.screenshot({ path: '/tmp/forsion-ftoverride-6-settings-openers.png' }).catch(() => {})
+    const frontIs = (want) => until(async () => {
+      const builtin = await win.locator('.amx-pdfview').first().isVisible().catch(() => false)
+      const plugin = await win.locator('.pdfprobe-view').first().isVisible().catch(() => false)
+      return want === 'builtin' ? builtin && !plugin : plugin && !builtin
+    })
+    const menuOnce = async () => { const m = await openMenu(); await closeMenu(); return m }
+    await sel.selectOption('builtin').catch(() => {})
+    const m9 = await until(async () => { const m = await menuOnce(); return m.includes('用内置阅读器打开') ? null : m })
+    check('T9a 选「内置阅读器」→ 主窗跟上:右键菜单只剩「打开」', !!m9 && m9.includes('打开'), m9 ? m9.join(' / ') : '菜单里还有「用内置阅读器打开」')
+    await row('书.pdf').click()
+    check('T9b 树上点 PDF → 内置阅读器在前台', await frontIs('builtin'), await typesFor())
+    await sel.selectOption('pdfprobe').catch(() => {})
+    await until(async () => (await menuOnce()).includes('用内置阅读器打开'))
+    await row('书.pdf').click()
+    check('T9c 改选插件 → 树上点 PDF 归插件', await frontIs('plugin'), await typesFor())
+    await sel.selectOption('').catch(() => {})
 
     if (logs.length) console.log(`\n页面异常:\n${logs.join('\n')}`)
     check('全程无页面异常', logs.length === 0, logs[0])

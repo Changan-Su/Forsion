@@ -7,8 +7,12 @@
  *  ③ 毁档防线:页表面的 loadPage 只放行 `.md` 类后缀 —— 插件对 `x.pdf` 调 loadPage 必须被拒
  *     (放行 = PDF 被拽进笔记管线,一存就是 markdown)。
  *  ④ 开发副本:`.md` 类后缀照旧拒(笔记管线不保护开发根),非 md 后缀可以注册。
+ *  ⑤ 默认打开方式:用户设成内置 → 有插件接管也查不到;指定某个插件 → 它赢过先注册的;
+ *     指定的插件不在了 → 回到自动(设置页的下拉框也按自动报,不吃匹配不上的值)。
  * 负对照(2026-10-05 实跑):findFileType 去掉 `o.item.override === true` → ② 红;viewSurface 的 claims 去掉
  * isPagePipelinePath → ③ / ③b 红;registerFileType 的 taken() 去掉 override 判定 → ① 红;ctx.app.loadPage 去掉闸 → ③b 红。
+ * ⑤ 的负对照(同日实跑):findFileType 去掉「设成内置就不给」那一行 → 「设成内置」红;候选里不按选择挑、
+ * 一律取第一个 → 「指定第二个插件」红;fileOpenerChoice 原样报存着的值 → 「指定的插件不在了」红。
  */
 import { createContext } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -22,7 +26,7 @@ vi.mock('../../amadeusProperties', () => ({ AmadeusPropertiesPanel: () => null }
 const nav = vi.hoisted(() => ({ openNote: vi.fn(), openFile: vi.fn() }))
 vi.mock('../../amadeusNav', () => nav)
 
-const { usePluginStore, findFileType, matchFileType, fileTypeBaseName } = await import('./pluginStore')
+const { usePluginStore, findFileType, matchFileType, fileTypeBaseName, setFileOpener, syncFileOpeners, fileOpenerChoice, FILE_OPENERS_KEY, BUILTIN_OPENER } = await import('./pluginStore')
 const { createPluginViewSurface } = await import('./viewSurface')
 const { pageStoreFor, usePageStore } = await import('../store/pageStore')
 await import('../../amadeusNav') // 先把桩模块求值一次:两次并发的首次动态 import 在 vitest 里拿到的不是同一份导出
@@ -159,6 +163,53 @@ describe('③b 毁档防线:插件够得着的另外两个页加载入口', () =
     ctx.app.openNote?.('日记.md', { activate: false })
     await vi.waitFor(() => expect(nav.openNote).toHaveBeenCalledWith('日记.md', { activate: false }))
     expect(nav.openFile).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('⑤ 默认打开方式:谁来开可覆盖的内置类型由用户定', () => {
+  const a = { pluginId: 'a', item: { ...ft(['.pdf'], true), id: 'a' } }
+  const b = { pluginId: 'b', item: { ...ft(['.pdf'], true), id: 'b' } }
+  afterEach(() => setFileOpener('.pdf', ''))
+
+  it('没设 = 自动:归先注册的那个接管插件', () => {
+    expect(findFileType([a, b], '书.pdf')).toBe(a.item)
+    expect(fileOpenerChoice([a, b], '.pdf')).toEqual({ pick: '', pluginIds: ['a', 'b'] })
+  })
+
+  it('设成内置:有插件接管也查不到(打开动作落到内置阅读器);别的类型不受影响', () => {
+    const other = { pluginId: 'a', item: ft(['.foo']) }
+    setFileOpener('.pdf', BUILTIN_OPENER)
+    expect(findFileType([a, b, other], '书.pdf')).toBeUndefined()
+    expect(findFileType([a, b, other], 'x.foo')).toBe(other.item)
+    expect(fileOpenerChoice([a, b], '.pdf').pick).toBe(BUILTIN_OPENER)
+    expect(JSON.parse(localStorage.getItem(FILE_OPENERS_KEY)!)).toEqual({ '.pdf': BUILTIN_OPENER })
+  })
+
+  it('指定第二个插件:它赢过先注册的', () => {
+    setFileOpener('.pdf', 'b')
+    expect(findFileType([a, b], '论文/A.PDF')).toBe(b.item)
+    expect(fileOpenerChoice([a, b], '.pdf').pick).toBe('b')
+  })
+
+  it('指定的插件不在了(停用 / 卸载):打开动作与设置页都回到自动', () => {
+    setFileOpener('.pdf', 'b')
+    expect(findFileType([a], '书.pdf')).toBe(a.item)
+    expect(fileOpenerChoice([a], '.pdf')).toEqual({ pick: '', pluginIds: ['a'] })
+    expect(findFileType([], '书.pdf')).toBeUndefined()
+  })
+
+  it('改偏好会换一个 fileTypes 引用(订阅它的树 / 菜单 / 文件视图据此重算);别的窗口改的经 syncFileOpeners 跟上', () => {
+    ctxOf('pdf-pref').registerFileType(ft(['.pdf'], true))
+    const before = usePluginStore.getState().fileTypes
+    setFileOpener('.pdf', BUILTIN_OPENER)
+    expect(usePluginStore.getState().fileTypes).not.toBe(before)
+    expect(matchFileType('a.pdf')).toBeUndefined()
+    localStorage.setItem(FILE_OPENERS_KEY, '{}') // 另一个窗口改回了自动
+    syncFileOpeners()
+    expect(matchFileType('a.pdf')).toBeDefined()
+    localStorage.setItem(FILE_OPENERS_KEY, 'not json') // 存坏了按没设算
+    syncFileOpeners()
+    expect(matchFileType('a.pdf')).toBeDefined()
   })
 })
 

@@ -21,7 +21,7 @@ import { setTheme as applyAccent, toggleMode } from '../theme/ThemeManager'
 import { amadeus } from '../api'
 import { BUILTIN_PLUGINS } from './builtins'
 import { getPropertyType, registerPropertyType as registerPropType, unregisterPropertyType as unregisterPropType } from '../blocks/database/propertyTypes'
-import { isBuiltinFileType, isOverridableBuiltinType } from '@amadeus-shared/builtinTypes'
+import { isBuiltinFileType, isOverridableBuiltinType, OVERRIDABLE_BUILTIN_SUFFIXES } from '@amadeus-shared/builtinTypes'
 import { isHostPath } from '@amadeus-shared/pdfLink'
 import { claimHostMount, createBlockSurface, mountHostReact } from './blockSurface'
 import { addEditorExtension, clearEditorExtensions } from './editorExtensions'
@@ -1938,21 +1938,65 @@ subscribeLocale(() => {
 // 组件要响应「插件加载后才注册」须自行订阅 usePluginStore((s) => s.fileTypes / s.embedRenderers) 再调 find*;
 // 非响应式调用(nav 路由、视图挂载那一刻)用下面读快照的 match*。
 
-/** 在给定 fileTypes 列表里按路径后缀找命中的文件类型贡献(纯函数,便于组件订阅列表后调用)。
+// ── 默认打开方式(设置 → 插件 → 已安装):可覆盖的内置后缀 → 'builtin' | 插件 id。
+//    没记、或记的插件此刻不在候选里(停用 / 卸载了)= 自动:有插件接管就归它(先注册的那个),否则内置。
+//    偏好读进模块级缓存:findFileType 到处被同步调用,不能每次去读 localStorage。
+export const FILE_OPENERS_KEY = 'amadeus.fileOpeners'
+export const BUILTIN_OPENER = 'builtin'
+function readFileOpeners(): Record<string, string> {
+  try {
+    const v: unknown = JSON.parse(localStorage.getItem(FILE_OPENERS_KEY) || '{}')
+    return v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, string> : {}
+  } catch {
+    return {}
+  }
+}
+let fileOpeners = readFileOpeners()
+/** 换一个 fileTypes 数组引用:订阅它的组件(文件树、右键菜单、文件视图、设置页)据此重算 findFileType。 */
+const bumpFileTypes = (): void => usePluginStore.setState((st) => ({ fileTypes: [...st.fileTypes] }))
+/** 设置某个可覆盖后缀的默认打开方式;`''` = 自动。 */
+export function setFileOpener(ext: string, pick: string): void {
+  const next = { ...fileOpeners }
+  if (pick) next[ext] = pick
+  else delete next[ext]
+  fileOpeners = next
+  try { localStorage.setItem(FILE_OPENERS_KEY, JSON.stringify(next)) } catch { /* 存不下就只在本次运行生效 */ }
+  bumpFileTypes()
+}
+/** 别的窗口改了偏好(storage 事件):重读并让本窗跟上。 */
+export function syncFileOpeners(): void {
+  fileOpeners = readFileOpeners()
+  bumpFileTypes()
+}
+type OwnedFileType = { item: FileTypeContribution; pluginId?: string }
+/** 显式写了 override、且后缀对得上这个(小写)路径的贡献,按注册先后。 */
+const overriders = (list: OwnedFileType[], lowerPath: string): OwnedFileType[] =>
+  list.filter((o) => o.item.override === true && o.item.extensions.some((e) => lowerPath.endsWith(e.toLowerCase())))
+/** 设置页用:接管了 ext 的插件(启用中的)与当前选择。存着的选择对不上候选时按自动报,下拉框不会吃到匹配不上的值。 */
+export function fileOpenerChoice(list: OwnedFileType[], ext: string): { pick: string; pluginIds: string[] } {
+  const pluginIds = [...new Set(overriders(list, `x${ext}`).map((o) => o.pluginId).filter((id): id is string => !!id))]
+  const stored = fileOpeners[ext] ?? ''
+  return { pick: stored === BUILTIN_OPENER || pluginIds.includes(stored) ? stored : '', pluginIds }
+}
+
+/** 在给定 fileTypes 列表里按路径后缀找命中的文件类型贡献(便于组件订阅列表后调用)。
  *  内置文件类型的后缀不放行(生态硬规则,见 isBuiltinFileType):遮蔽内置 = 用户打不开内置视图。
  *  例外只有「可覆盖」的那几个后缀(isOverridableBuiltinType),而且只认显式写了 override: true 的贡献 ——
- *  命中即视为插件接管了「打开这个文件」,内置视图退为兜底。
- *  ponytail: 两个启用的插件都覆盖同一个后缀时先注册的赢、用户没得选;真出现第二个再加「默认打开方式」。 */
+ *  命中即视为插件接管了「打开这个文件」,内置视图退为兜底。由谁打开听「默认打开方式」(见上)。 */
 export function findFileType(
-  list: { item: FileTypeContribution }[],
+  list: OwnedFileType[],
   path: string,
 ): FileTypeContribution | undefined {
   const n = path.toLowerCase()
-  const claims = (o: { item: FileTypeContribution }): boolean => o.item.extensions.some((ext) => n.endsWith(ext.toLowerCase()))
+  const claims = (o: OwnedFileType): boolean => o.item.extensions.some((ext) => n.endsWith(ext.toLowerCase()))
   if (isBuiltinFileType(path)) {
     // 绝对路径 = 库外文件(聊天引用里的本机 PDF):插件只读得到库内路径,一律留给内置阅读器。
     if (!isOverridableBuiltinType(path) || isHostPath(path)) return undefined
-    return list.find((o) => o.item.override === true && claims(o))?.item
+    const ext = OVERRIDABLE_BUILTIN_SUFFIXES.find((e) => n.endsWith(e))!
+    const pick = fileOpeners[ext]
+    if (pick === BUILTIN_OPENER) return undefined
+    const cands = overriders(list, n)
+    return (cands.find((o) => o.pluginId === pick) ?? cands[0])?.item
   }
   return list.find(claims)?.item
 }
