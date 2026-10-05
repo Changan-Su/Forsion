@@ -20,7 +20,7 @@ import { onUserRunDone, parseRawLines, redactSecrets, resetHistorianConsolidatio
 import { configureMemoryDream, getMemoryDream } from '../src/services/memoryDream.js';
 import { agentsDir, DEFAULT_AGENT_SLUG } from '../src/core/tanguHome.js';
 import { saveSpecialAgentsConfig } from '../src/services/specialAgentsConfig.js';
-import { buildProjectMemoryContext, openProjectMemory, peekProjectMemory, projectMemoryView, resolveProjectCandidate, resolveProjectMemory, PROJECT_MEMORY_CHAR_BUDGET } from '../src/services/projectMemory.js';
+import { queueProjectFact, buildProjectMemoryContext, openProjectMemory, peekProjectMemory, projectMemoryView, resolveProjectCandidate, resolveProjectMemory, PROJECT_MEMORY_CHAR_BUDGET } from '../src/services/projectMemory.js';
 
 const USER = 'u1';
 
@@ -521,6 +521,20 @@ describe('项目会话:只在这个项目成立的候选落项目记忆,不进 a
     expect(prompt()).toContain('[Project memory]');
     expect(prompt()).toContain('- Deploys go out on Fridays');
     expect(await projectFacts()).toEqual(['Deploys go out on Fridays', 'The API lives in services/api']);
+  });
+
+  // 10-05:以前是「条目 + 候选」拼成一串截最后 1500 字。候选(待确认的,最多 20 条;丢弃过的,最多 200 条)排在后面,
+  // 候选一多,已有条目就整个被挤出判官的视野 —— 它认「这件事已经记过」只靠这一段。
+  it('等确认的候选再多,判官照样看得到已经记着的条目', async () => {
+    await seedProjectSession();
+    const ref = (await resolveProjectMemory(USER, 'SP'))!;
+    (await openProjectMemory(ref)).mutate({ action: 'add', fact: 'Deploys go out on Fridays' });
+    for (let i = 0; i < 20; i++) await queueProjectFact(ref, `Fetch step ${i} from https://example.test/setup/${i} before building, as the wiki page for that step describes in detail`, `other-${i}`);
+    llmScript = [judged([], [])];
+    await onUserRunDone('SP', USER);
+    expect(prompt()).toContain('[Project memory]');
+    expect(prompt()).toContain('- Deploys go out on Fridays');
+    expect(prompt()).toContain('Already proposed');
   });
 
   it('这个会话里前台自己记过项目记忆 → 后台不再替它记(换了说法的同一件事);别的会话记过的不影响', async () => {

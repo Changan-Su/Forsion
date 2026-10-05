@@ -96,14 +96,15 @@ function standsDown(snapshot: MemorySnapshot, fact: string, sessionId: string): 
   return snapshot.tombstones.some((t) => isMemoryTombstoneActive(t) && t.evidenceIds.includes(`session:${sessionId}`));
 }
 
-/** 后台把一条过不了形状闸的项目事实排进待确认清单。已经记着 / 排着 / 丢弃过、或该收手的(standsDown)→ false。 */
+/** 后台把一条过不了形状闸的项目事实排进待确认清单。已经记着 / 排着 / 丢弃过(含「是其中某一条里的一段原话」)、或该收手的(standsDown)→ false。 */
 export async function queueProjectFact(ref: ProjectMemoryRef, fact: string, sessionId: string): Promise<boolean> {
   const snapshot = (await openProjectMemory(ref)).snapshot();
   const same = (other: string): boolean => normalizeMemoryFact(other) === normalizeMemoryFact(fact);
-  if (standsDown(snapshot, fact, sessionId) || snapshot.entries.some((e) => same(e.content))) return false;
+  if (standsDown(snapshot, fact, sessionId) || snapshot.entries.some((e) => same(e.content)) || coveringProjectEntry(snapshot.entries, fact)) return false;
   return withMemoryDirectoryLock(ref.dir, () => {
     const items = readPending(ref);
     if (items.some((p) => same(p.fact) || (p.dismissed && p.sessionId === sessionId))) return false;
+    if (coveringProjectEntry(items.map((p) => ({ content: p.fact })), fact)) return false; // 排着的 / 丢弃过的某一条里已有这段原话
     const next = [...items, { id: randomUUID().slice(0, 8), fact, sessionId, at: Date.now() }];
     // 封顶:待确认留最新的 PENDING_MAX 条,已丢弃留最新的 DISMISSED_KEEP 条,旧的自然淘汰
     const keep = (dismissed: boolean): PendingFact[] => next.filter((p) => !!p.dismissed === dismissed).slice(dismissed ? -DISMISSED_KEEP : -PENDING_MAX);
@@ -160,16 +161,87 @@ export async function forgetProjectMemory(project: string, id: string, expectedV
   return projectMemoryView(project);
 }
 
+// ── 换了说法的重复(10-05)───────────────────────────────────────────────────────────────────
+// 项目记忆没有 Dream 那样的整理步骤,落库去重只认一字不差。同一件事跨会话换个说法再记一遍,主要靠「判官看得到已有内容」来避免
+// (projectKnownForJudge)。这里另补一道不用模型的闸,只认最保险的一种:新的一句是已有某一条里**连着的一段原话**
+// (少说了几个字 / 截了半句 / 只差标点),而且那一条多出来的部分不带否定、转折、限定 ——
+// 「不要用 npm 安装依赖」里有一段「用 npm 安装依赖」,意思正相反,那种不算。拿不准一律当成不重复(照记)。
+// ponytail: 词面判定,认不出真正换了措辞的同义句;要认得出就得加一次模型整理,连同撤销入口一起做。
+
+const CJK_CHAR = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/gu;
+/** 一句话拆成词的序列:中日韩文字一字一个,其余文字 / 数字 / 路径 / 命令整个算一个;标点与空白不算。 */
+function factWords(fact: string): string[] {
+  return normalizeMemoryFact(fact).replace(/’/g, "'").replace(CJK_CHAR, ' $& ')
+    .split(/[^\p{L}\p{N}_./:@+#'-]+/u)
+    .map((w) => w.replace(/^[_./:@+#'-]+|[_./:@+#'-]+$/g, ''))
+    .filter(Boolean);
+}
+const MIN_WORDS = 4; // 太短的句子(「用 npm」)是不是别人的一段原话说明不了什么,不判
+// 多出来的那部分里有这些词 → 它可能把那段原话否定 / 限定 / 转折了,不当重复。宁可多列(多列只是少拦)。
+const QUALIFIERS = new Set([
+  'no', 'not', 'never', 'none', 'nor', 'neither', 'without', 'cannot', "can't", "don't", "doesn't", "didn't", "isn't", "aren't", "wasn't",
+  "won't", "wouldn't", "shouldn't", "mustn't", 'avoid', 'stop', 'except', 'unless', 'instead', 'but', 'only',
+  '不', '别', '勿', '禁', '无', '没', '非', '未', '免', '除', '仅', '只', '但',
+]);
+/** part 是 whole 里连着的一段原话,且 whole 多出来的部分不带 QUALIFIERS。 */
+function saysAll(whole: readonly string[], part: readonly string[]): boolean {
+  if (part.length < MIN_WORDS) return false;
+  for (let at = 0; at + part.length <= whole.length; at++) {
+    if (!part.every((w, i) => whole[at + i] === w)) continue;
+    if (![...whole.slice(0, at), ...whole.slice(at + part.length)].some((w) => QUALIFIERS.has(w))) return true;
+  }
+  return false;
+}
+
+/** 已有的哪一条已经把这句话说全了(见上)。没有 → null。一字不差的那种不归这里管(mutate 自己去重)。 */
+export function coveringProjectEntry<T extends { content: string }>(entries: readonly T[], fact: string): T | null {
+  const mine = factWords(fact);
+  return entries.find((e) => normalizeMemoryFact(e.content) !== normalizeMemoryFact(fact) && saysAll(factWords(e.content), mine)) ?? null;
+}
+
+/** 给后台判官看的「已经记着的 / 已经提过的」。两类各有各的额度,放不下时留新的并写明少了几条。
+ *  以前是拼成一串再截最后 1500 字:候选(待确认 + 丢弃过的,最多 220 条)排在条目后面,候选一多,已有条目就整个被挤出去 ——
+ *  而判官认「这件事已经记过了」只靠这一段(10-05 代码走查发现的盲区)。 */
+export const PROJECT_KNOWN_ENTRY_CHARS = 4000;
+export const PROJECT_KNOWN_PROPOSED_CHARS = 1000;
+export function projectKnownForJudge(entries: readonly string[], proposed: readonly string[]): string {
+  const newest = (items: readonly string[], max: number): { lines: string[]; hidden: number } => {
+    const lines: string[] = [];
+    let used = 0;
+    for (const item of [...items].reverse()) {
+      const line = `- ${item}`;
+      if (used + line.length + 1 > max) break;
+      lines.unshift(line); used += line.length + 1;
+    }
+    return { lines, hidden: items.length - lines.length };
+  };
+  const saved = newest(entries, PROJECT_KNOWN_ENTRY_CHARS);
+  const asked = newest(proposed, PROJECT_KNOWN_PROPOSED_CHARS);
+  return [
+    ...(saved.hidden ? [`(${saved.hidden} older saved entr${saved.hidden === 1 ? 'y' : 'ies'} not shown)`] : []),
+    ...saved.lines,
+    ...(asked.lines.length ? ['Already proposed (waiting for the user, or declined by the user):'] : []),
+    ...(asked.hidden ? [`(${asked.hidden} older proposal${asked.hidden === 1 ? '' : 's'} not shown)`] : []),
+    ...asked.lines,
+  ].join('\n');
+}
+
 /** 后台(Historian 判官)直接记一条:一字不差的重复不写、放不下不写(绝不为了腾地方动已有条目)、该收手的不写(standsDown)。
- *  与 remember 走同一个 mutate。 */
+ *  与 remember 走同一个 mutate。
+ *  换了说法的重复(见上):这句是已有某一条里的一段原话 → 不写;**后台自己以前记的**某一条是这句里的一段原话 → 就地换成这句
+ *  (同一个 id,旧的那句原样在新的里面)。用户或前台记的条目后台不改写,那种情况照常另记一条。 */
 export async function addProjectFact(ref: ProjectMemoryRef, fact: string, sessionId: string): Promise<'added' | 'duplicate' | 'full'> {
   const repo = await openProjectMemory(ref);
   const snapshot = repo.snapshot();
   const before = snapshot.version;
   if (standsDown(snapshot, fact, sessionId)) return 'duplicate';
+  if (coveringProjectEntry(snapshot.entries, fact)) return 'duplicate';
+  const mine = factWords(fact);
+  const outgrown = snapshot.entries.find((e) => e.source?.kind === 'historian' && saysAll(mine, factWords(e.content)));
+  const write = { fact, cap: PROJECT_MEMORY_CHAR_BUDGET, expectedVersion: before, evidenceIds: [`session:${sessionId}`], source: { kind: 'historian' as const, sessionId } };
   try {
     // 带读到的版本写:上面几道检查与写入之间别处改过(比如用户刚删了这一句)→ 冲突,这一轮不写(Codex 评审 10-04:不带版本会把刚立的墓碑复活)。
-    return repo.mutate({ action: 'add', fact, cap: PROJECT_MEMORY_CHAR_BUDGET, expectedVersion: before, evidenceIds: [`session:${sessionId}`], source: { kind: 'historian', sessionId } }).version === before ? 'duplicate' : 'added';
+    return repo.mutate(outgrown ? { ...write, action: 'update', id: outgrown.id } : { ...write, action: 'add' }).version === before ? 'duplicate' : 'added';
   } catch (e) {
     if (e instanceof MemoryRepositoryError && e.code === 'MEMORY_FULL') return 'full';
     if (e instanceof MemoryRepositoryError && e.code === 'MEMORY_VERSION_CONFLICT') return 'duplicate';

@@ -8,7 +8,7 @@ import type { Tool } from '../../core/types.js';
 import type { ToolContext } from '../toolTypes.js';
 import { MemoryRepositoryError, MEMORY_CHAR_BUDGET, normalizeMemoryFact, type MemoryEntry, type MemorySnapshot } from '../../services/memoryRepository.js';
 import { effectiveRemote, remoteManagementDenied } from '../../services/remoteOrigin.js';
-import { openProjectMemory, peekProjectMemory, resolveProjectMemory, PROJECT_MEMORY_CHAR_BUDGET } from '../../services/projectMemory.js';
+import { coveringProjectEntry, openProjectMemory, peekProjectMemory, resolveProjectMemory, PROJECT_MEMORY_CHAR_BUDGET } from '../../services/projectMemory.js';
 
 /** 单条上限与 Historian 候选采集同口径(localHistorian `.slice(0, 300)`)。显式路径此前无闸:09-22 一份终端用户导出里
  *  41 条显式条目最长 1,477 字、21 条带日期、9 条是追加式「更正旧条目」——记忆被日志灌满,而候选路径 12 天只出 8 条一句话。 */
@@ -121,6 +121,16 @@ export const memoryLogProvider: ToolProvider = {
           const limit = projectRepo ? PROJECT_MEMORY_CHAR_BUDGET : MEMORY_CHAR_BUDGET;
           const read = async (): Promise<MemorySnapshot | undefined> => projectRepo ? projectRepo.snapshot() : brain.getMemorySnapshot ? brain.getMemorySnapshot(ctx.userId) : undefined;
           const before = action === 'add' ? await read() : undefined;
+          // 项目记忆没有整理步骤:这句话是已有某一条里的一段原话(少说了几个字 / 只差标点)→ 不另记一条,把那一条回给模型。
+          // 一字不差的重复不归这里管(下面 mutate 自己去重,回执一样)。agent 级不走这道:那边有 Dream 归并。
+          const covering = projectRepo && before ? coveringProjectEntry(before.entries, fact) : null;
+          if (covering) {
+            return JSON.stringify({
+              ok: true, action, scope, project: projectRef!.name, version: before!.version,
+              duplicate: true, note: 'An existing entry already contains this sentence; nothing was written. To reword that entry, call update with its id and this version.',
+              entry: entryView(covering), count: before!.entries.length, chars: before!.content.length, limit,
+            });
+          }
           let snapshot: MemorySnapshot;
           try {
             const mutation = {
