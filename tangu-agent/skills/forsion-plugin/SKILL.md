@@ -2,7 +2,7 @@
 name: forsion-extension-development
 description: 当用户要给 Forsion / Tangu 做插件、主题、Space、智能体(agent)或捆绑包(bundle)——或要把某个能力做成可分发/可上架市场的扩展——时使用。内置五类官方模板(samples/),讲清各自的格式基线与硬约束(尤其两种"插件"是完全不同的系统),照抄模板改比从零写靠谱。
 metadata:
-  version: 1.19.0
+  version: 1.20.0
   author: Forsion
   category: Forsion
 ---
@@ -402,7 +402,7 @@ ctx.registerCommand({
 ### ⚠️「没有活动库」时的统一行为(2026-09-02 立规)
 
 上面三组里**凡走库内路径**的方法(`readFile / writeFile / readBytes / writeBytes / watchFile / openFile / loadPage /
-createPage / listPages / listFiles / searchVault / reveal`)都要求一个**已打开**的笔记库。
+createPage / listPages / listFiles / searchVault / reveal / trash`)都要求一个**已打开**的笔记库。
 没有活动库时它们**各自失败得不一样**,而且大半是静默的:
 
 | 方法 | 没有活动库时 |
@@ -412,6 +412,7 @@ createPage / listPages / listFiles / searchVault / reveal`)都要求一个**已�
 | `readBytes(p)` / `writeBytes(p, bytes)`(2026-09-19+) | 同上两行:`readBytes` 给 `null` 不抛,`writeBytes` **reject** `'No vault is open'`。旧宿主 / 桥缺席时方法整个不存在 → `ctx.app.writeBytes?.(…)` |
 | `mutateDb(p, fn)`(2026-09-02+) | `{ ok:false, error }`,**不抛**;云端/移动端桥没有 CAS 写口时同样 `{ ok:false }`。⚠️**改活表(补列属性、加视图)一律走它**:比对交换 + 冲突重读重放,`fn` 返 `null` 不写;`readFile`+`writeFile` 整文件覆盖会盖掉读写之间自动化/用户刚写的行且零报错。旧宿主没有 → `ctx.app.mutateDb?.(…)` 再走自己的回落路 |
 | `listPages()` / `listFiles()` / `searchVault(q)` | 一律**给空数组、不 reject** |
+| `trash(p)`(2026-10-05+) | **reject**(宿主的清单里找不到这个路径)。没有回收站的端 / 旧宿主**方法整个不存在** |
 | `vaultRoot()` | `null` —— **唯一的可用性探针** |
 | `workFolder()` | **照常返值**(它只是一条设置项的值)—— ⚠️**不是可用性探针**,拿到字符串不代表写得进去 |
 
@@ -612,6 +613,7 @@ refresh = (rows) => h.update({ ...spec, rows })   // 数据刷新走 update:排�
 | `searchVault(q)` | 全库笔记全文检索。⚠️**最多 50 条且可能截断**,要穷举别靠它;`line` 是剥掉 frontmatter 后的行号**不是磁盘坐标**;`score` 不透明,跨版本不保证稳定 |
 | `vaultRoot()` | 库的绝对路径(把路径喂给 Agent 的 host 工具时才需要)。⚠️含用户名/组织目录等**敏感信息,不得默认持久化或上报**;切库瞬间与主进程短暂不同源,**别缓存过夜** |
 | `reveal(path)` | 在系统文件管理器里打开该路径所在目录并高亮它(2026-08-29 起)。⚠️对**不存在**的路径是静默 no-op,而工作文件夹是首写才诞生 → **先 `writeFile` 一份 README 再 reveal 它**;桥缺席时整条方法不存在,`if (ctx.app.reveal)` 才画按钮 |
+| `trash(path)` | 把库内的一个文件或文件夹移进回收站(2026-10-05 起),等同用户在文件树里删它:宿主收掉开着它的编辑器与标签、提示「已移入回收站」,之后可在回收站恢复。返回 Promise,路径不存在 / 没有活动库 / 调用途中换了库 / 移动失败 → **reject**(路径按清单逐字匹配,只归一分隔符与首尾斜杠)。⚠️**文件夹连同里面的一切一起走,宿主不确认、也不看里面是不是别人的文件** —— 只在确认那个文件夹里全是你自己的东西时才传文件夹,否则传文件;⚠️**先让自己的编辑器停笔**(你的视图若还握着待存内容,下一次自动保存会把文件写回来);只有带回收站的宿主(本机桌面)才有这个方法,web / 移动端 / 2.12.2 及更早**整个不存在** → `ctx.app.trash` 没有就别画删除按钮 |
 
 ### 统一左栏列表源(2026-08-25 起)
 

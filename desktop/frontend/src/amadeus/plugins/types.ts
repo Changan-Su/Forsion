@@ -123,7 +123,7 @@ export interface ThemeContribution {
 /**
  * ⚠️ 库依赖契约(2026-09-02 立规,起因:服务器总览误依赖笔记库,用户实报「太奇怪了」):
  * 下面**凡走库内路径**的方法都要求一个**已打开**的笔记库 —— `readFile / writeFile / watchFile /
- * openFile / loadPage / createPage / listPages / listFiles / searchVault / reveal / workFolder(的落点)`。
+ * openFile / loadPage / createPage / listPages / listFiles / searchVault / reveal / trash / workFolder(的落点)`。
  * 没有活动库时:写类方法 reject、只读查询给空数组、`vaultRoot()` 给 null(**用它探测**)。
  * 而且库是**惰性恢复**的:用户这一程没进过 Amadeus 之前 `vaultRoot()` 就是 null,哪怕他有库。插件视图挂载时宿主会
  * 唤醒它(2026-10-02 起),但恢复是异步的:视图刚挂上那一下仍可能是 null,读库前先等 `vaultRoot()` 有值。
@@ -239,6 +239,18 @@ export interface PluginAppApi extends BlockSurfaceApi {
    *  再 reveal 这个文件 —— 一步同时把目录建出来并在文件管理器里选中它。
    *  旧宿主 / 桥缺席(web / 移动端 / 台架)时**方法整个不存在**:`ctx.app.reveal?.(p)`。 */
   reveal?(path: string): void
+  /** 把库内的一个文件或文件夹移进回收站(2026-10-05+),效果等同用户在文件树里删它:在途的写先落盘,开着它的
+   *  编辑器与标签收掉,宿主提示「已移入回收站」(插件不必再提示一遍),之后能在回收站恢复到原位。
+   *  用途:插件让用户管理它自己产出的东西(一个工程和它的素材文件夹、一份生成的图)。
+   *  ⚠️**文件夹连同里面的一切一起移走,宿主不替你确认、也不看里面有没有别人的文件** —— 删哪一层由插件判断:
+   *  只在确认那个文件夹里全是自己的东西时才传文件夹,否则传文件。
+   *  ⚠️**先让你自己的编辑器停笔**:宿主只收它自己的编辑器,你的视图若还握着这份文件的待存内容,下一次自动保存
+   *  会把它原样写回来。
+   *  ⚠️需要活动库。路径按宿主的清单**逐字**找(只归一分隔符与首尾斜杠,名字里的空白不动)。路径不存在(含点目录
+   *  里的东西:宿主的清单看不见)/ 没有活动库 / 调用途中换了库 / 移动失败 → reject。
+   *  只在有回收站的宿主上存在(本机桌面)。web / 移动端 / 旧宿主**方法整个不存在**:`ctx.app.trash` 没有就别画
+   *  删除按钮 —— 没有回收站的端删除不可恢复,宿主不替插件做这件事。 */
+  trash?(path: string): Promise<void>
   /** 当前库的**绝对路径**(没打开库时 null)。用途:把路径交给 Agent 的 host 模式工具(view_image /
    *  run_bash)—— 它们跑在真实文件系统上,只有 vault 相对路径喂不进去。读的是渲染进程已有的
    *  pageStore 状态,**不会重开库、无副作用**。

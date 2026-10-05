@@ -408,6 +408,43 @@ function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppAp
     ...(amadeus?.revealInFileManager
       ? { reveal: (p: string): void => { if (ok()) void amadeus.revealInFileManager(p).catch(() => {}) } }
       : {}),
+    // 把库内的文件 / 文件夹移进回收站(2026-10-05+)。走用户在文件树里删它的同一条路(pageStore.deletePage /
+    // deleteFolder):冲洗在途写、移进回收站、收掉开着它的编辑器与标签、提示「已移入回收站」。那两条为了给界面
+    // 兜底都把失败吞进 store.error;插件要的是结果,所以删完按刷新后的清单再判一次,还在就 reject。
+    // 没有回收站的宿主**整条方法不挂**(同 reveal 的纪律):那里删除不可恢复,不替插件做。
+    ...(amadeus?.trashEntry
+      ? {
+          trash: async (p: string): Promise<void> => {
+            if (!ok()) throw new Error('plugin disabled')
+            // 只归一分隔符与首尾斜杠,**不修空白**:文件名首尾的空格是名字的一部分(`Foo` 与 `Foo ` 在 macOS / Linux 上
+            // 可以并存),normalizeVaultRel 的 trim 会让 `trash('Foo ')` 落到 `Foo` 头上(Codex 评审 P1)。
+            const rel = toSlash(String(p ?? '')).replace(/^\/+|\/+$/g, '')
+            const root = usePageStore.getState().vaultRoot
+            // 清单里的原样字符串才是仓库动作认的键(Windows 上主进程给的是 `\`)
+            const entry = (): { folder: boolean; raw: string } | null => {
+              const s = usePageStore.getState()
+              const hit = (list: string[]): string | undefined => list.find((x) => toSlash(x) === rel)
+              const folder = hit(s.folders)
+              if (folder !== undefined) return { folder: true, raw: folder }
+              const file = hit(s.pages) ?? hit(s.files)
+              return file !== undefined ? { folder: false, raw: file } : null
+            }
+            await usePageStore.getState().refreshStructure()
+            if (!alive) throw new Error('plugin disabled') // 上面那次 await 期间被停用
+            // 等清单的那一下换了库(Local ⇄ Cloud):同一个相对路径在另一个库里是别人的文件(Codex 评审 P1)
+            if (usePageStore.getState().vaultRoot !== root) throw new Error('The active vault changed')
+            const found = rel ? entry() : null
+            if (!found) throw new Error(`No such file or folder in the vault: ${p}`)
+            try {
+              if (found.folder) await usePageStore.getState().deleteFolder(found.raw)
+              else await usePageStore.getState().deletePage(found.raw)
+            } finally {
+              dropListCache() // 同 writeFile:落定之后清 —— 删之前拿到的清单里还有这一项,插件删完立刻重列会把它列回来
+            }
+            if (entry()) throw new Error(usePageStore.getState().error || `Could not move to the recycle bin: ${p}`)
+          },
+        }
+      : {}),
   }
   return {
     api,
