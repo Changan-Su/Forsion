@@ -21,7 +21,7 @@ const electron = require('./lib/launch-electron.cjs')
 const { startStubEngine } = require('./lib/stub-engine.cjs')
 const { skipOnboarding } = require('./lib/skip-onboarding.cjs')
 
-require('sucrase/register') // 不只 ts:索引经 startupAppearanceCopy 引到 i18n.tsx(只注册 ts 时这里直接 MODULE_NOT_FOUND,脚本起不来)
+require('sucrase/register/ts')
 const { SETTINGS_SEARCH_INDEX } = require(path.join(__dirname, '../frontend/src/components/settingsSearchIndex.ts'))
 
 const ROOT = path.resolve(__dirname, '..')
