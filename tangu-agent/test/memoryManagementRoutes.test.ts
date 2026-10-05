@@ -69,14 +69,12 @@ describe('versioned Agent memory management', () => {
     expect((await api('/agent/agents/second/memory')).body.content).toBe('');
   });
 
-  it('opening the memory view schedules one background sync for the display Agent; listing logs adds none', async () => {
+  it('opening the memory or log view does not start a cloud sync', async () => {
+    // 刻意不排(理由在 routes/agents.ts 的 GET /memory 旁):要开就带归属 agent 的 slug,并把这条改成断言 ('fixture-user', 'shared')。
     const sync = vi.mocked(scheduleAgentFilesSync); sync.mockClear();
     expect((await api('/agent/agents/shared/memory')).status).toBe(200);
-    expect(sync.mock.calls).toEqual([['fixture-user', 'shared']]); // 归属(显示)agent,不是它共用的默认记忆桶;不带 slug 是空操作
-    sync.mockClear();
     expect((await api('/agent/agents/shared/logs')).status).toBe(200);
-    expect((await api('/agent/agents/not-created/memory')).status).toBe(404);
-    expect(sync).not.toHaveBeenCalled(); // /logs 刻意不排:界面总是同时拉 /memory,两头都排就是背靠背两遍一样的同步
+    expect(sync).not.toHaveBeenCalled();
   });
 
   it('returns retained revisions and refuses restore to silently undo forgetting', async () => {
