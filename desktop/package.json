@@ -189,6 +189,7 @@
     "check:srcbtn": "node scripts/source-toggle.check.cjs",
     "check:bsurface": "node scripts/e2e-editor.cjs --check=plugin-blocksurface",
     "build:unitweb": "node scripts/build-unit-web.mjs",
+    "check:unitweb": "node ../web/scripts/docker-context-build.mjs --unit-web",
     "pack": "npm run build:unitweb && electron-builder --config electron-builder.config.cjs --dir",
     "dist": "npm run build:unitweb && electron-builder --config electron-builder.config.cjs",
     "fetch-python": "node build/fetch-python.cjs",

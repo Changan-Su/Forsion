@@ -5,7 +5,7 @@ import { startupAppearanceHtml } from '../desktop/frontend/startupAppearancePlug
  * 服务于自身 origin 的根路径(base '/'),产物落 web/dist;部署见同目录 Dockerfile/nginx.conf.template。
  */
 import { resolve } from 'path'
-import { defineConfig, loadEnv } from 'vite'
+import { defineConfig, loadEnv, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 import { checkBundleInputs } from '../unit/releasePolicy.mjs'
 
@@ -40,6 +40,28 @@ function capacitorStubGate() {
   }
 }
 
+/**
+ * 裸包兜底解析(2026-10-05 建)。被复用的 mobile/src、lcl、desktop/frontend、desktop/shared 都在 web/ 之外,
+ * 裸包 import 从它们自己的位置向上找,碰不到 `web/node_modules`(镜像里依赖装在公共祖先 /app,所以那里没事)。
+ * 真仓库里原先全靠「仓根有个解析得到依赖的 node_modules」顶着:build-unit-web.mjs 在仓根不存在该目录时补一条
+ * 临时软链,但仓根若已有一个**只装着 vite 缓存的真实目录**,软链被跳过、依赖照样找不到(2026-10-05 本机实翻:
+ * `Rollup failed to resolve import "zustand" from mobile/src/UnitsSheet.tsx`)。
+ *
+ * 不带 enforce = 排在 `vite:resolve` 之后,只有它没解析到的裸包才走到这里,改从 web 根再解析一次。
+ * 已经解析得到的一律不经过这里 → 原本就能过的构建,包图一字不变。
+ * 仪器:cd desktop && npm run check:unitweb。
+ */
+function resolveBareFromWebRoot(): Plugin {
+  return {
+    name: 'forsion:resolve-bare-from-web-root',
+    resolveId(id, importer, options) {
+      // 与 vite 自己的 bareImportRE 同式:相对 / 绝对路径、URL 不归这里管。
+      if (!importer || !/^(?![a-zA-Z]:)[\w@](?!.*:\/\/)/.test(id)) return null
+      return this.resolve(id, resolve(__dirname, 'index.html'), { ...options, skipSelf: true })
+    },
+  }
+}
+
 // dev 把后端相关路径代理到 Forsion server,让 localhost:PORT 同源化(webShim 用 location.origin+/api;
 // 登录页 /auth 也代理过去)。生产由各 app 自己的 nginx 代理 /api 等到后端(见 nginx.conf.template)。
 const PROXY_PATHS = ['/api', '/auth', '/account', '/shared', '/oauth', '/shop', '/pay', '/legal']
@@ -52,7 +74,7 @@ export default defineConfig(({ mode }) => {
   const DEV_PROXY = env.TANGU_DEV_PROXY || 'http://localhost:3001'
 
   return {
-    plugins: [startupAppearanceHtml(), react(), capacitorStubGate(), ...(process.env.FORSION_UNIT_RELEASE === '1' ? [{
+    plugins: [startupAppearanceHtml(), react(), capacitorStubGate(), resolveBareFromWebRoot(), ...(process.env.FORSION_UNIT_RELEASE === '1' ? [{
       name: 'forsion:unit-release-inputs',
       generateBundle() { checkBundleInputs([...this.getModuleIds()], resolve(__dirname, '..')) },
     }] : [])],
