@@ -720,12 +720,14 @@ const tabCountText = (list) => {
   // 2026-10-05 (user: "why is the local | cloud capsule still there? wasn't it folded into Unit?"): on a phone the two
   // sides are rows of the Unit sheet (desktop moved them into its Unit switcher on 08-23); the capsule no longer takes
   // the top of every left panel.
-  await check('vault side: no capsule on top of the left panel; the Unit sheet carries Local / Cloud and switches both ways', async () => {
+  await check('vault side: no capsule on top of the left panel; the Unit sheet leads with Local / Cloud and switches both ways', async () => {
     await tanguDrawer()
     assert.ok(!(await cdp.eval("!!document.querySelector('.mb-drawer--left [aria-label=\"vault side\"]')")), 'the local | cloud capsule is still on top of the left panel')
     await accountItem('rb-units-mobile')
     const side = "(document.querySelector('[data-units-sheet] [data-vault-side]')?.dataset.vaultSide || '')"
     assert.ok(await h.waitPage(cdp, `!!${side}`, 5000), 'the Unit sheet has no vault section')
+    // Same order as the desktop Unit switcher: Local / Cloud first, then where sessions run.
+    assert.ok(await cdp.eval("document.querySelector('[data-units-sheet] .us-section')?.hasAttribute('data-vault-side') === true"), 'the vault section is not the first section of the Unit sheet')
     const start = await cdp.eval(side)
     const other = start === 'cloud' ? 'local' : 'cloud'
     const row = (s) => `document.querySelector('[data-units-sheet] [data-vault-row="${s}"]')`

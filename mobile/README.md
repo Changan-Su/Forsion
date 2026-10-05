@@ -113,7 +113,7 @@ Kotlin 在 `NativeChrome*` / `NativeSheet*`。没装宿主（桌面、Web、浏�
   **设置与「Forsion Unit 切换」是这张菜单里的两行**（同微信「我 → 设置」；10-04 那一版排在「⋯」最前，一天后按用户意见搬走），所以只在第一层页面点得到；
   未登录 / 登录过期时点头像同样开菜单（登录是其中一行），不再直接跳登录。判据只有一份：`lcl/engine/moreSheet.ts` 的 `accountMenuItems` / `moreItems`
   —— 一项要么在头像菜单、要么在「⋯」；宿主没有账号项（没有头像）时这两项留在「⋯」最前。
-- **本地 / 云端**（2026-10-05）：原先占着每个左栏顶部一行的「本地 | 云端」胶囊，手机上并进了「Forsion Unit 切换」弹层的「智库」一段（桌面 08-23 就并进了 Unit 切换器）。
+- **本地 / 云端**（2026-10-05）：原先占着每个左栏顶部一行的「本地 | 云端」胶囊，手机上并进了「Forsion Unit 切换」弹层最前面的「智库」一段（桌面 08-23 就并进了 Unit 切换器，同样排在最前）。
   它只换笔记库（`window.amadeusVaultMode.switch`），与同一弹层里的「在哪运行」是两根轴。弹层没上架（无 `unitsList` 桥）时 `VaultSideSwitch` 仍画胶囊，库切换不会两头都没有。
 - **`NativeSheet`**：通用 Compose 半屏底单，三种 `kind`：`menu`（分组 / 勾选 / 子菜单 / 搜索 / 行尾按钮）、`prompt`、`confirm`。
   调用方用 `presentNativeMenu` / `presentNativePrompt` / `presentNativeConfirm`，拿到 `{ handled: false }` 就渲染自己的 Web UI。

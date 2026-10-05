@@ -3,15 +3,15 @@
  * 规格:docs/ToBeImproved/设备能力MCP_P1规格_2026-09-28/K8-mobile-native.md §3.7;K8 独占本文件(INTEGRATION R-28 / R-29)。
  *
  * 自上而下四段:
- *   1. 在哪运行:Forsion 云端(缺省)+ 每台电脑一行、带状态(services/deviceStatus.ts 的口径,R-22)。
+ *   1. 智库:本地 / 云端 —— 原左栏顶部的「本地 | 云端」胶囊(VaultSideSwitch 的手机分支)。桌面 2026-08-23 就把它并进了
+ *      Unit 切换器,手机 2026-10-05 跟上(用户实报「胶囊怎么还在」),排最前 = 桌面的顺序(用户同日拍板)。只有 App 有这座桥
+ *      (window.amadeusVaultMode:两个库桥运行时互换);它只换笔记库,与下一段的「在哪运行」是两根轴。
+ *   2. 在哪运行:Forsion 云端(缺省)+ 每台电脑一行、带状态(services/deviceStatus.ts 的口径,R-22)。
  *      点一台电脑 = unitsSheetModel.runOn:懒登记本机 → 问那台电脑认不认这台手机(需要就发起确认、轮询)→ 探一次引擎 → 生效。
  *      **生效只走本文件唯一的 selectRunLocation** = K7 的 setDraftLocation(loc, {explicit:true})(R-21:K6-S4 起焦点 = 新会话建在哪)。
- *   2. 智库:本地 / 云端 —— 原左栏顶部的「本地 | 云端」胶囊(VaultSideSwitch 的手机分支)。桌面 2026-08-23 就把它并进了
- *      Unit 切换器,手机 2026-10-05 跟上(用户实报「胶囊怎么还在」)。只有 App 有这座桥(window.amadeusVaultMode:两个库桥
- *      运行时互换);它只换笔记库,与上一段的「在哪运行」是两根轴。
  *   3. 打开设备界面(折叠,次要):P0 起的直连 / 中转行与手输地址,行为不变 —— 设备页开在 app 内 WebView(mobileShim.openUnitPage)。
  *   4. 本机:登记状态与「移除本机登记」。P1 起手机登记为 Unit(调用方,kind='phone');P2a 起可作被调用方。
- * 手机(kind='phone')与本机不出现在 1、3 两段:手机没有引擎也没有设备页。kind 缺席的老名册按电脑处理。
+ * 手机(kind='phone')与本机不出现在 2、3 两段:手机没有引擎也没有设备页。kind 缺席的老名册按电脑处理。
  *
  * ⚠️ 本组件也被 web 手机形态经 @mobile/mobileEntry 复用:不许 import capacitor(capacitor-stub-gate,build-unit-web 实翻),
  *    原生能力一律走 window.tangu 上的可选方法(unitsList / unitSelf / unitEnsureSelf / unitForgetSelf / openUnitPage)。
@@ -326,7 +326,24 @@ export function MobileUnitsSheet(): React.ReactElement | null {
           <button className="us-icon-btn" aria-label={t('common.close')} onClick={() => setOpen(false)}><X size={18} /></button>
         </div>
         <div className="us-body">
-          {/* ① 在哪运行 */}
+          {/* ① 智库:本地 / 云端(原左栏顶部的胶囊;只换笔记库)。排最前 = 桌面 Unit 切换器的顺序(用户 2026-10-05 拍板) */}
+          {vault && (
+            <section className="us-section" data-vault-side={vaultSide}>
+              <div className="us-section-title">{t('unitm.vault')}</div>
+              {(['local', 'cloud'] as const).map((side) => (
+                <button key={side} className="mb-sheet-row us-row" data-vault-row={side} aria-pressed={vaultSide === side} aria-busy={vaultBusy || undefined} onClick={() => pickVault(side)}>
+                  <span className="us-row-icon">{side === 'local' ? <Smartphone size={18} /> : <Cloud size={18} />}</span>
+                  <span className="us-row-main">
+                    <span className="us-row-title"><span className="us-row-name">{t(side === 'local' ? 'notes.cloud.local' : 'notes.cloud.cloud')}</span></span>
+                    <span className="us-row-sub">{t(side === 'local' ? 'unitm.vaultLocalDesc' : 'unitm.vaultCloudDesc')}</span>
+                  </span>
+                  <span className="us-row-end">{vaultSide === side && <><em className="us-pill">{t('unitm.current')}</em><Check size={16} /></>}</span>
+                </button>
+              ))}
+            </section>
+          )}
+
+          {/* ② 在哪运行 */}
           <section className="us-section" data-run-on>
             <div className="us-section-title">{t('unitm.runOn')}</div>
             {issue && <div className="us-banner" role="status" data-phone-issue={issue}>{t(ISSUE_KEY[issue])}</div>}
@@ -369,23 +386,6 @@ export function MobileUnitsSheet(): React.ReactElement | null {
               )
             })}
           </section>
-
-          {/* ② 智库:本地 / 云端(原左栏顶部的胶囊;只换笔记库) */}
-          {vault && (
-            <section className="us-section" data-vault-side={vaultSide}>
-              <div className="us-section-title">{t('unitm.vault')}</div>
-              {(['local', 'cloud'] as const).map((side) => (
-                <button key={side} className="mb-sheet-row us-row" data-vault-row={side} aria-pressed={vaultSide === side} aria-busy={vaultBusy || undefined} onClick={() => pickVault(side)}>
-                  <span className="us-row-icon">{side === 'local' ? <Smartphone size={18} /> : <Cloud size={18} />}</span>
-                  <span className="us-row-main">
-                    <span className="us-row-title"><span className="us-row-name">{t(side === 'local' ? 'notes.cloud.local' : 'notes.cloud.cloud')}</span></span>
-                    <span className="us-row-sub">{t(side === 'local' ? 'unitm.vaultLocalDesc' : 'unitm.vaultCloudDesc')}</span>
-                  </span>
-                  <span className="us-row-end">{vaultSide === side && <><em className="us-pill">{t('unitm.current')}</em><Check size={16} /></>}</span>
-                </button>
-              ))}
-            </section>
-          )}
 
           {/* ③ 打开设备界面(次要,缺省折叠;行为同 P0) */}
           <section className="us-section" data-open-screen>

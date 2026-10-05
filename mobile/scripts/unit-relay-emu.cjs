@@ -239,7 +239,9 @@ async function run() {
   // ② 非中继:设备辅助面照旧匿名(不带票)
   const before = proxy.length
   await js(`await fetch(${JSON.stringify(`${API}/units/${TARGET}/proxy/unit/hostfile?path=x`)}, { headers: { Authorization: 'Bearer ${TOKEN_A}' } }); return 1`)
-  const p2 = proxy.slice(before)
+  // 窗口里只认本步自己发的那条:应用的跨设备会话聚合(deviceSessionsStore)登记后会定时经中继拉那台的会话列表,
+  // 落进这个窗口不算数(2026-10-05 连红两次才看出来;之前一直是时序上碰巧错开)。
+  const p2 = proxy.slice(before).filter((x) => x.path.startsWith('/unit/hostfile'))
   check('非中继请求(unit/hostfile)不带 X-Forsion-Caller', p2.length === 1 && p2[0].caller === null, p2)
 
   // ③ remote-access 也经中继(R-06)
@@ -317,7 +319,7 @@ async function run() {
   const ck = proxy.slice(ck0)
   const jar1 = await js('return document.cookie')
   check('评审 P2 仪器自检:植入的 cookie 真在 WebView 罐里(document.cookie 读得到 k8stale)', /k8stale/.test(jar0), jar0)
-  check('评审 P2:中继请求不带全局罐里的 cookie;中继响应的 Set-Cookie 不进罐', ck.length === 2 && ck.every((x) => !x.cookie) && !/k8relay/.test(jar1), { cookies: ck.map((x) => x.cookie), jar1 })
+  check('评审 P2:中继请求不带全局罐里的 cookie;中继响应的 Set-Cookie 不进罐', ck.filter((x) => x.path === '/engine/agent/set-cookie' || x.path === '/engine/agent/sessions').length === 2 && ck.every((x) => !x.cookie) && !/k8relay/.test(jar1), { cookies: ck.map((x) => x.cookie), jar1 })
   await evaluate(`Capacitor.Plugins.CapacitorCookies.deleteCookie({ url: 'http://localhost:${PORT}', key: 'forsion_unit_session' }).then(() => 'ok')`).catch(() => 0)
 
   // ⑦ S4 失败关闭 × 三种原因(评审 P1):缓存票被拒 → 强制换票 → 换票失败。三种都不发匿名请求,但交给渲染层的不一样:
