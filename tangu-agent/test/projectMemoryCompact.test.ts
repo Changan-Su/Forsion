@@ -139,6 +139,26 @@ describe('方案校验(validateCompaction)', () => {
     expect(validateCompaction({ keep: [], groups: [{ sourceIds: ['m1'] }, null, 'x'], discarded: [] }, sources, 0)).toMatchObject({ keep: ALL, groups: [] });
   });
 
+  it('replaced:因为「别的条目已经说了」而去掉的,说它的那一条必须自己留着;互相指着对方的一对两条都留(真模型把一对重复的规矩两条都去掉过,10-05 live)', () => {
+    const run = (p: Record<string, unknown>, fixedChars = 0) => validateCompaction({ groups: [], discarded: [], ...p }, sources, fixedChars);
+    // m2 重复了 m1,m1 留着 → 照办(m1 没提到也算留着)
+    expect(run({ keep: ['m1', 'm3', 'm4', 'm5'], replaced: [{ id: 'm2', saidBy: 'm1' }] })).toMatchObject({ keep: ['m1', 'm3', 'm4', 'm5'], discarded: ['m2'], unsound: [] });
+    expect(run({ keep: ['m3', 'm4', 'm5'], replaced: [{ id: 'm2', saidBy: 'm1' }] })).toMatchObject({ keep: ['m1', 'm3', 'm4', 'm5'], discarded: ['m2'] });
+    // 互相指着对方 → 两条都留;别的照办
+    expect(run({ keep: ['m3', 'm5'], replaced: [{ id: 'm1', saidBy: 'm2' }, { id: 'm2', saidBy: 'm1' }], discarded: ['m4'] }))
+      .toMatchObject({ keep: ['m1', 'm2', 'm3', 'm5'], discarded: ['m4'], unsound: [expect.stringMatching(/does not stay/), expect.stringMatching(/does not stay/)] });
+    // 指向一条当进度去掉的、指向自己、指向不认识的、没写 saidBy、不成形 → 留
+    expect(run({ keep: ['m2', 'm3', 'm5'], replaced: [{ id: 'm1', saidBy: 'm4' }], discarded: ['m4'] })).toMatchObject({ keep: ['m1', 'm2', 'm3', 'm5'], discarded: ['m4'] });
+    expect(run({ keep: ['m5'], replaced: [{ id: 'm1', saidBy: 'm1' }, { id: 'm2', saidBy: 'm9' }, { id: 'm3', saidBy: 7 }, { id: 'm4' }, null, 'm5'] })).toMatchObject({ keep: ALL, discarded: [] });
+    // 同一条既说留、又说被别的说了 → 提到两次,留
+    expect(run({ keep: ['m1', 'm2', 'm3', 'm4', 'm5'], replaced: [{ id: 'm2', saidBy: 'm1' }] })).toMatchObject({ keep: ALL, discarded: [] });
+    // 说它的那一条是某一组的来源(那件事在合出来的句子里)→ 照办
+    expect(run({ keep: ['m4', 'm5'], groups: [{ fact: GOOD, sourceIds: ['m1'] }], replaced: [{ id: 'm2', saidBy: 'm1' }], discarded: ['m3'] })).toMatchObject({ keep: ['m4', 'm5'], discarded: ['m3', 'm2'] });
+    // "fixed":有不改写的条目时才认
+    expect(run({ keep: ['m1', 'm3', 'm4', 'm5'], replaced: [{ id: 'm2', saidBy: 'fixed' }] })).toMatchObject({ keep: ALL, discarded: [] });
+    expect(run({ keep: ['m1', 'm3', 'm4', 'm5'], replaced: [{ id: 'm2', saidBy: 'fixed' }] }, 40)).toMatchObject({ discarded: ['m2'] });
+  });
+
   it('两组写成同一句 → 后一组不用(库只认第一组的来源,后一组的证据会丢);落不了盘的一句 → 不用;来源都留原句(Codex 评审 10-05)', () => {
     const SHORT = 'Unit tests: pnpm test:unit.';
     expect(validateCompaction({ keep: ['m3', 'm4', 'm5'], groups: [{ fact: SHORT, sourceIds: ['m1'] }, { fact: `  ${SHORT.toUpperCase()}`, sourceIds: ['m2'] }], discarded: [] }, sources, 0))
