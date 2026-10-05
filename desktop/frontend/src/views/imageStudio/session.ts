@@ -2,8 +2,8 @@ import { useApp, applyPreset, stickyDefaults } from '../../stores/appStore'
 import { useImageStudio } from '../../stores/imageStudioStore'
 import { createSession } from '../../services/backendService'
 import type { Attachment } from '../../types'
-import { useWorkspace } from '@lcl/engine'
 import { homeTarget } from '../../services/engine/targets'
+import { STUDIO_CHAT, revealStudioPanel } from './layout'
 
 const pending = new Map<string, Promise<string>>()
 export async function ensureImageSession(boardId: string): Promise<string> {
@@ -26,6 +26,7 @@ export async function ensureImageSession(boardId: string): Promise<string> {
 export async function promptImageStudio(boardId: string, text: string, attachments: Attachment[] = []): Promise<void> {
   const sessionId = await ensureImageSession(boardId)
   if (useImageStudio.getState().activeId !== boardId) return
-  useWorkspace.getState().openView('image-studio-chat', {}, 'left')
+  // 输入框只在对话面板挂着时才接走这段话:右栏收着就先展开(显式动作,不受「本次收起过就不再自动弹」的限制)。
+  revealStudioPanel(STUDIO_CHAT)
   useImageStudio.getState().queue(sessionId, text, attachments)
 }

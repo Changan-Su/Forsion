@@ -123,7 +123,7 @@ export interface ThemeContribution {
 /**
  * ⚠️ 库依赖契约(2026-09-02 立规,起因:服务器总览误依赖笔记库,用户实报「太奇怪了」):
  * 下面**凡走库内路径**的方法都要求一个**已打开**的笔记库 —— `readFile / writeFile / watchFile /
- * openFile / loadPage / createPage / listPages / listFiles / searchVault / reveal / workFolder(的落点)`。
+ * openFile / loadPage / createPage / listPages / listFiles / searchVault / reveal / trash / workFolder(的落点)`。
  * 没有活动库时:写类方法 reject、只读查询给空数组、`vaultRoot()` 给 null(**用它探测**)。
  * 而且库是**惰性恢复**的:用户这一程没进过 Amadeus 之前 `vaultRoot()` 就是 null,哪怕他有库。插件视图挂载时宿主会
  * 唤醒它(2026-10-02 起),但恢复是异步的:视图刚挂上那一下仍可能是 null,读库前先等 `vaultRoot()` 有值。
@@ -239,6 +239,18 @@ export interface PluginAppApi extends BlockSurfaceApi {
    *  再 reveal 这个文件 —— 一步同时把目录建出来并在文件管理器里选中它。
    *  旧宿主 / 桥缺席(web / 移动端 / 台架)时**方法整个不存在**:`ctx.app.reveal?.(p)`。 */
   reveal?(path: string): void
+  /** 把库内的一个文件或文件夹移进回收站(2026-10-05+),效果等同用户在文件树里删它:在途的写先落盘,开着它的
+   *  编辑器与标签收掉,宿主提示「已移入回收站」(插件不必再提示一遍),之后能在回收站恢复到原位。
+   *  用途:插件让用户管理它自己产出的东西(一个工程和它的素材文件夹、一份生成的图)。
+   *  ⚠️**文件夹连同里面的一切一起移走,宿主不替你确认、也不看里面有没有别人的文件** —— 删哪一层由插件判断:
+   *  只在确认那个文件夹里全是自己的东西时才传文件夹,否则传文件。
+   *  ⚠️**先让你自己的编辑器停笔**:宿主只收它自己的编辑器,你的视图若还握着这份文件的待存内容,下一次自动保存
+   *  会把它原样写回来。
+   *  ⚠️需要活动库。路径按宿主的清单**逐字**找(只归一分隔符与首尾斜杠,名字里的空白不动)。路径不存在(含点目录
+   *  里的东西:宿主的清单看不见)/ 没有活动库 / 调用途中换了库 / 移动失败 → reject。
+   *  只在有回收站的宿主上存在(本机桌面)。web / 移动端 / 旧宿主**方法整个不存在**:`ctx.app.trash` 没有就别画
+   *  删除按钮 —— 没有回收站的端删除不可恢复,宿主不替插件做这件事。 */
+  trash?(path: string): Promise<void>
   /** 当前库的**绝对路径**(没打开库时 null)。用途:把路径交给 Agent 的 host 模式工具(view_image /
    *  run_bash)—— 它们跑在真实文件系统上,只有 vault 相对路径喂不进去。读的是渲染进程已有的
    *  pageStore 状态,**不会重开库、无副作用**。
@@ -350,6 +362,10 @@ export interface BlockSurfaceApi {
   /** Modal text input. Electron has no `window.prompt` — use this, never the DOM one. */
   prompt(title: string, initial?: string, opts?: { label?: string }): Promise<string | null>
   /** Render a real, editable block into `el`. Returns a dispose function; call it when you drop the node.
+   *  After dispose `el` is yours again at once: the host renders inside a layer of its own (a `display:contents`
+   *  div it adds to `el`) and takes it out synchronously, so clearing `el` or mounting on it again right away is
+   *  fine. Don't reach host nodes with `el > …` or `el.firstElementChild`. Dispose + mount again is a fresh editor
+   *  (focus and selection are lost) — keep the mount stable while the user types.
    *  **v3 only** — a v4 note has no blocks to mount, so this is refused (and logged) there. In practice
    *  this is the surface plugin FILE TYPES use (`file.surface`), and those are pinned to v3 by design. */
   mountBlocks(el: HTMLElement, opts: MountBlockOptions): () => void
@@ -376,7 +392,8 @@ export interface PluginPageSurface extends BlockSurfaceApi {
   /** Render the native note editor (the same body a normal note gets: block list, ⠿ drag handles,
    *  enter/backspace semantics, slash menu, click-below-to-append) into `el`, bound to this view's
    *  scope. Title bar / cover / properties are deliberately not included (renaming compound suffixes
-   *  and exposing plugin fm keys are both corruption paths). Returns a dispose function. */
+   *  and exposing plugin fm keys are both corruption paths). Returns a dispose function; after it `el` is
+   *  yours again at once (same contract as `mountBlocks`). */
   mountNoteView(el: HTMLElement): () => void
 }
 
@@ -447,7 +464,9 @@ export type PluginViewLocation = 'main' | 'left' | 'right' | 'bottom'
  *  (open instances are closed first). */
 /** Bound to this mounted instance, revoked on close/navigation/plugin disable.
  *  Main Views open it beside themselves; side-panel Views get it too, covering themselves behind Back (older hosts:
- *  side Views have none). Feature-detect view?.extendView. Rules and opt-in agent commands can call open(). */
+ *  side Views have none). Feature-detect view?.extendView. Rules and opt-in agent commands can call open().
+ *  onClose(reason): `dismiss` = the person closed that panel itself; `layout` = the workbench took it with its place
+ *  (side folded, layout reset or replaced, another view's extension) — hosts up to 2.12.2 report those as `dismiss`. */
 export interface PluginViewContext {
   /** Mount location. Mini/Floating receive no extendView/full workspace chrome. Feature-detect on older hosts. */
   surface?: 'main' | 'mini' | 'floating'
@@ -764,7 +783,8 @@ export interface PluginFloatingTocOptions extends FloatingTocOptions {
 export interface PluginFloatingTocHandle {
   /** Force a rescan after a DOM change that MutationObserver cannot see. */
   refresh(): void
-  /** Idempotent. The host also disposes every mount when the plugin is disabled/reloaded. */
+  /** Idempotent. Takes the host's overlay layer out of `shell` synchronously; your content is untouched.
+   *  The host also disposes every mount when the plugin is disabled/reloaded. */
   dispose(): void
 }
 
@@ -919,7 +939,16 @@ export interface PluginContext {
   /** 原子写本插件的私有 JSON blob(整体覆盖)。宿主缺位时静默 no-op。 */
   saveData?(value: unknown): Promise<void>
   /** Host-native UI primitives (2026-09-07+). A plugin keeps ownership of its content DOM and gives
-   *  the host a shell to overlay plus its scroll/content roots. Old hosts omit the whole member. */
+   *  the host a shell to overlay plus its scroll/content roots. Old hosts omit the whole member.
+   *  Every mount here renders inside a host-owned layer added to the element you pass (`display:contents`, so
+   *  your element's height / flex still apply). `dispose()` removes that layer synchronously: the element is
+   *  yours again at once — clear it, or mount on it again. Change a live mount through the handle's `update()`;
+   *  dispose + mount is a fresh instance. One element holds one host mount at a time: mounting on an element
+   *  whose previous mount was not disposed retires that mount first — fully, as if you had disposed it — and
+   *  its handle goes inert (the same holds for `ctx.app.mountBlocks`, `ctx.table.mount`, `ctx.dashboard.mount`
+   *  and `ctx.tangu.mountChat`; the call order decides, not which one finishes loading first).
+   *  `mountFloatingToc` is the exception: it overlays `shell` without taking it over, so it neither retires nor
+   *  is retired by other mounts on the same element. Don't select host nodes with `el > …`. */
   ui?: {
     /** Native Amadeus editor for Markdown owned by the caller (API drafts, etc.). No active-vault access. */
     mountMarkdownEditor?(
@@ -951,8 +980,8 @@ export interface PluginContext {
     ): import('../../../../shared/amadeus/dashboardRecipe').RecipeResult
     /** 在插件自己的容器里渲染一页**原生** Dashboard(真 dashboard3 网格/卡片/排版台),
      *  **不依赖笔记库**(库开没开、有没有库都能用 —— 与 source+writeFile 那条「住在库里」的路线
-     *  刻意区分)。`el` 通常就是 registerView 的 mount(el) 给的容器。返回卸载函数;插件禁用时
-     *  宿主也会统一卸掉。
+     *  刻意区分)。`el` 通常就是 registerView 的 mount(el) 给的容器。返回卸载函数;调用之后 `el` 立刻还给你
+     *  (宿主只动自己挂进去的那一层,清空 `el`、在它上面再挂都行);插件禁用时宿主也会统一卸掉。
      *  布局持久化归插件:用户在排版台手排后 `onLayout(text)` 交出整页文本,存进 `ctx.saveData`
      *  之类;下次挂载把它作 `layoutText` 传回,手排的卡按卡 id 保留、数据照常刷新。
      *  旧宿主没有:`ctx.dashboard?.mount?.(…)`。 */
@@ -1020,6 +1049,20 @@ export interface PluginContext {
     /** True when startChat accepts explicit modelId / thinkingLevel from the native Chat Box. */
     chatSelection?: true
     startChat?(o: { agent?: string; prompt: string; send?: boolean; folder?: string; modelId?: string; thinkingLevel?: import('../../../../shared/chatBox').ChatBoxSelection['thinkingLevel'] }): Promise<import('./tanguSeam').TanguStartChatResult>
+    /** 把**原生对话**挂进你自己的视图(2026-10-04+):同一个输入框、消息流、审批与工具展示,固定在一条会话上
+     *  (不跟随主区)。典型用法:注册一个开在右栏的 `chat` 视图,它的 `mount(el)` 里调本方法。
+     *  - 会话:一个(插件, `folder`)一条,宿主记在本机;下次挂载接回同一条(历史照常在),用户把它删了 / 归档了就新开。
+     *    `title` 只在新建时用。它是一条普通会话,主区的会话列表里也看得到。
+     *  - `folder`:会话的工作目录,**库相对路径**(同 `startChat`:宿主解析并钳在库内)。给了它,Agent 的相对路径都落在
+     *    这个文件夹里 —— 例如 `generate_image` 写进 `<folder>/generated/`。不给 `folder` = 不带工作目录的沙箱对话;
+     *    给了却落不到本机路径(库外 / 无库 / 非本机执行)→ `ready` 给 `ok:false`,不悄悄退成沙箱对话。
+     *  - `agent`:名册里有就行(不要求是你捆绑的)—— 本接口**永不替用户送出**。
+     *  - 句柄:`ready`(接上后 `{ ok, sessionId }`;失败 `{ ok:false, error }`,不抛,界面上有重试)、
+     *    `quote(text)`(挂成输入框上方的引用条,不发送、不动草稿)、`prefill(text)`(接在输入框草稿后面并聚焦,回车由用户按)、
+     *    `dispose()`(之后 `el` 立刻还给你:宿主只动自己挂进去的那一层,清空 `el` 或在它上面再挂都行)。`quote` / `prefill` 在对话还没接上时调用也不丢;`prefill` 在视图还在后台标签里时也落进输入框,连调几次按先后都接上。
+     *    禁用 / 重载时宿主统一收掉。`el` 要有确定的高度(对话撑满它)。
+     *  旧宿主 / 没有对话能力的宿主没有:`ctx.tangu?.mountChat`,缺席时退回 `startChat`。 */
+    mountChat?(el: HTMLElement, o?: { agent?: string; folder?: string; title?: string }): import('./tanguSeam').TanguChatMount
     /** 一次性文本补全(2026-09-28+,评审 G3-07):引擎 `POST /agent/inline`,无工具、不落库、不进任何会话。
      *  **收编插件直连 `/agent/runs` 的做法** —— 那条是 Agent 的 run(带工具、落会话、8192 字符上限),拿来做
      *  「改写这段」既重又危险。`prompt` 是给模型的指令;`selection` / `before` / `after` 是正文上下文(按数据对待,
@@ -1096,7 +1139,8 @@ export interface PluginContext {
    *
    *  `mount(el, spec)` 同步返回 `{ update(spec), dispose() }`:
    *  · 数据刷新调 `update(spec)` —— **原地重渲染**,用户的排序/筛选/列宽存活,别 dispose 了重挂;
-   *  · `dispose()` 幂等;插件禁用/重载时宿主也会统一卸掉。
+   *  · `dispose()` 幂等,之后 `el` 立刻还给你(宿主只动自己挂进去的那一层,清空 `el`、在它上面再挂都行;
+   *    再挂的是一张新表);插件禁用/重载时宿主也会统一卸掉。
    *  · **规格非法(没列 / 行缺 id / 单元格文案不是基元)当场同步抛** —— 调用方按「抛 = 宿主不收」
    *    降级到自己的经典表格(panel-lib 的 `L.table` 就是这么写的)。别把它当 no-op。
    *

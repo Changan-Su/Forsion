@@ -8,7 +8,7 @@ import type { Tool } from '../../core/types.js';
 import type { ToolContext } from '../toolTypes.js';
 import { MemoryRepositoryError, MEMORY_CHAR_BUDGET, normalizeMemoryFact, type MemoryEntry, type MemorySnapshot } from '../../services/memoryRepository.js';
 import { effectiveRemote, remoteManagementDenied } from '../../services/remoteOrigin.js';
-import { openProjectMemory, peekProjectMemory, resolveProjectMemory, PROJECT_MEMORY_CHAR_BUDGET } from '../../services/projectMemory.js';
+import { coveringProjectEntry, openProjectMemory, peekProjectMemory, resolveProjectMemory, PROJECT_MEMORY_CHAR_BUDGET } from '../../services/projectMemory.js';
 
 /** 单条上限与 Historian 候选采集同口径(localHistorian `.slice(0, 300)`)。显式路径此前无闸:09-22 一份终端用户导出里
  *  41 条显式条目最长 1,477 字、21 条带日期、9 条是追加式「更正旧条目」——记忆被日志灌满,而候选路径 12 天只出 8 条一句话。 */
@@ -34,7 +34,7 @@ function buildRememberDefinition(o: { project: boolean; notes: boolean }): Tool 
         // 10-04 用户裁决:「用户纠正肯定应该进记忆」—— 不进工作笔记,也不进协作说明。
         `WHEN: user identity/preferences/corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, ${o.notes ? 'commands and workflows proven to work here, landmines' : 'proven procedures or landmines'}. ` +
         // 10-04 live(refine):agent 自己总结的做法被它存进了这里 —— 「proven procedures」与工作笔记的触发条件说的是同一件事,两边打架。
-        (o.notes ? 'A working method you worked out yourself is not a memory: it goes in your working notes (manage_harness). ' : '') +
+        (o.notes ? 'A working method you worked out yourself is not a memory: it goes in your evolution record (manage_harness). ' : '') +
         // 两级(10-04 用户:「还要区分 Project 级别还是全局级别」):项目级只在本项目注入、项目里的 agent 共用;agent 级照旧。
         (o.project ? 'SCOPE: "project" = holds only inside the current project (its commands, layout, conventions, decisions, what the user wants done in this project); it is shown to every agent working in this project and nowhere else. "agent" = holds wherever you work with this user (who they are, how they want you to work in general). When unsure, ask yourself whether it would still be true in another project. ' : '') +
         'SKIP: task progress, completed work, deliverables, versions, dated status and one-off requests; use log_event instead. ' +
@@ -79,11 +79,14 @@ export const memoryLogProvider: ToolProvider = {
   tools: () => [
     {
       name: 'remember',
-      isEnabledFor: (profile) => profile.capabilities.memory,
+      // 临时成员(团队 / 讨论里现写的一次性人设)不给:它没有自己的身份,不该留下记忆,更不该往项目记忆里写。
+      // 以前照给,agent 级的一写就落在 agents/<临时名>/ 里。(读的那几条路仍会建出这个空目录,那是原有行为,这里没动。)
+      isEnabledFor: (profile, ctx) => profile.capabilities.memory && !ctx.ephemeral,
       definition: REMEMBER.base,
       definitionFor: rememberDefinitionFor,
       execute: async (args, ctx) => {
         ctx.signal?.throwIfAborted();
+        if (ctx.ephemeral) return 'Error: Memory is unavailable to a temporary team member.';
         const action = String(args.action ?? 'add');
         const brain = deps().brain.memory;
         if (!['add', 'list', 'update', 'forget'].includes(action)) return 'Error: unknown memory action';
@@ -121,6 +124,16 @@ export const memoryLogProvider: ToolProvider = {
           const limit = projectRepo ? PROJECT_MEMORY_CHAR_BUDGET : MEMORY_CHAR_BUDGET;
           const read = async (): Promise<MemorySnapshot | undefined> => projectRepo ? projectRepo.snapshot() : brain.getMemorySnapshot ? brain.getMemorySnapshot(ctx.userId) : undefined;
           const before = action === 'add' ? await read() : undefined;
+          // 项目记忆没有整理步骤:这句话是已有某一条里的一段原话(少说了几个字 / 只差标点)→ 不另记一条,把那一条回给模型。
+          // 一字不差的重复不归这里管(下面 mutate 自己去重,回执一样)。agent 级不走这道:那边有 Dream 归并。
+          const covering = projectRepo && before ? coveringProjectEntry(before.entries, fact) : null;
+          if (covering) {
+            return JSON.stringify({
+              ok: true, action, scope, project: projectRef!.name, version: before!.version,
+              duplicate: true, note: 'An existing entry already contains this sentence; nothing was written. To reword that entry, call update with its id and this version.',
+              entry: entryView(covering), count: before!.entries.length, chars: before!.content.length, limit,
+            });
+          }
           let snapshot: MemorySnapshot;
           try {
             const mutation = {
@@ -159,7 +172,7 @@ export const memoryLogProvider: ToolProvider = {
     },
     {
       name: 'log_event',
-      isEnabledFor: (profile) => profile.capabilities.log,
+      isEnabledFor: (profile, ctx) => profile.capabilities.log && !ctx.ephemeral, // 临时成员:同 remember
       definition: {
         type: 'function',
         function: {
@@ -176,6 +189,7 @@ export const memoryLogProvider: ToolProvider = {
       },
       execute: async (args, ctx) => {
         ctx.signal?.throwIfAborted();
+        if (ctx.ephemeral) return 'Error: The activity log is unavailable to a temporary team member.';
         // 远程污点 run 不写每日日志(审批闸已硬拒;这里是同一判定的兜底,P1 · M1A)
         const remoteDenied = effectiveRemote(ctx) ? remoteManagementDenied('log_event', undefined) : null;
         if (remoteDenied) return `Error: ${remoteDenied}`;

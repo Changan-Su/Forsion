@@ -22,7 +22,7 @@ import { amadeus } from '../api'
 import { BUILTIN_PLUGINS } from './builtins'
 import { getPropertyType, registerPropertyType as registerPropType, unregisterPropertyType as unregisterPropType } from '../blocks/database/propertyTypes'
 import { isBuiltinFileType } from '@amadeus-shared/builtinTypes'
-import { createBlockSurface } from './blockSurface'
+import { claimHostMount, createBlockSurface, mountHostReact } from './blockSurface'
 import { addEditorExtension, clearEditorExtensions } from './editorExtensions'
 import { registerPluginSeries, track, unregisterPluginAchievements } from '../../achievements/store'
 import { act } from '../../activity/log'
@@ -407,6 +407,43 @@ function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppAp
     // 纪律 —— 挂个空壳会让插件的「有这个方法就画按钮」分支画出一颗点了没反应的按钮。
     ...(amadeus?.revealInFileManager
       ? { reveal: (p: string): void => { if (ok()) void amadeus.revealInFileManager(p).catch(() => {}) } }
+      : {}),
+    // 把库内的文件 / 文件夹移进回收站(2026-10-05+)。走用户在文件树里删它的同一条路(pageStore.deletePage /
+    // deleteFolder):冲洗在途写、移进回收站、收掉开着它的编辑器与标签、提示「已移入回收站」。那两条为了给界面
+    // 兜底都把失败吞进 store.error;插件要的是结果,所以删完按刷新后的清单再判一次,还在就 reject。
+    // 没有回收站的宿主**整条方法不挂**(同 reveal 的纪律):那里删除不可恢复,不替插件做。
+    ...(amadeus?.trashEntry
+      ? {
+          trash: async (p: string): Promise<void> => {
+            if (!ok()) throw new Error('plugin disabled')
+            // 只归一分隔符与首尾斜杠,**不修空白**:文件名首尾的空格是名字的一部分(`Foo` 与 `Foo ` 在 macOS / Linux 上
+            // 可以并存),normalizeVaultRel 的 trim 会让 `trash('Foo ')` 落到 `Foo` 头上(Codex 评审 P1)。
+            const rel = toSlash(String(p ?? '')).replace(/^\/+|\/+$/g, '')
+            const root = usePageStore.getState().vaultRoot
+            // 清单里的原样字符串才是仓库动作认的键(Windows 上主进程给的是 `\`)
+            const entry = (): { folder: boolean; raw: string } | null => {
+              const s = usePageStore.getState()
+              const hit = (list: string[]): string | undefined => list.find((x) => toSlash(x) === rel)
+              const folder = hit(s.folders)
+              if (folder !== undefined) return { folder: true, raw: folder }
+              const file = hit(s.pages) ?? hit(s.files)
+              return file !== undefined ? { folder: false, raw: file } : null
+            }
+            await usePageStore.getState().refreshStructure()
+            if (!alive) throw new Error('plugin disabled') // 上面那次 await 期间被停用
+            // 等清单的那一下换了库(Local ⇄ Cloud):同一个相对路径在另一个库里是别人的文件(Codex 评审 P1)
+            if (usePageStore.getState().vaultRoot !== root) throw new Error('The active vault changed')
+            const found = rel ? entry() : null
+            if (!found) throw new Error(`No such file or folder in the vault: ${p}`)
+            try {
+              if (found.folder) await usePageStore.getState().deleteFolder(found.raw)
+              else await usePageStore.getState().deletePage(found.raw)
+            } finally {
+              dropListCache() // 同 writeFile:落定之后清 —— 删之前拿到的清单里还有这一项,插件删完立刻重列会把它列回来
+            }
+            if (entry()) throw new Error(usePageStore.getState().error || `Could not move to the recycle bin: ${p}`)
+          },
+        }
       : {}),
   }
   return {
@@ -1250,15 +1287,23 @@ export const usePluginStore = create<PluginState>((set, get) => {
         const pending = { ...opts }
         let mounted: import('../../../../shared/markdownEditor').PluginMarkdownEditorHandle | null = null
         let cancelled = false, focusPending = false
+        let failure: { dispose(): void } | null = null // 挂载失败的提示:也是一份宿主挂载(el 是插件的,不整个清空它),dispose 时收走
         if (!(el instanceof HTMLElement) || typeof opts?.value !== 'string') throw new TypeError('mountMarkdownEditor needs an HTMLElement and Markdown value')
         // 插件没接 disposer 时由关账统一卸;已停用时登记即撤(cancelled 当场为真,不挂)。
-        const dispose = scope.own('mount', () => { cancelled = true; if (mounted) pending.value = mounted.getValue(); mounted?.dispose(); mounted = null }, 'markdownEditor')
+        const dispose = scope.own('mount', () => { cancelled = true; if (mounted) pending.value = mounted.getValue(); mounted?.dispose(); mounted = null; failure?.dispose(); failure = null }, 'markdownEditor')
         if (!cancelled) {
+          // 调用这一刻就认领 el:动态 import 落地时 el 已经交给了后来的挂载 → 这次作废(见 claimHostMount)
+          const mine = claimHostMount(el)
           void import('./markdownEditorSurface').then(m => {
             if (cancelled) return
+            if (!mine()) { dispose(); return }
             mounted = m.mountPluginMarkdownEditor(el, pending)
             if (focusPending) mounted.focus()
-          }).catch(e => { if (!cancelled) { el.textContent = String(e); console.error('[amadeus] Markdown editor mount failed', e) } })
+          }).catch(e => {
+            console.error('[amadeus] Markdown editor mount failed', e)
+            if (cancelled || !mine()) return
+            failure = mountHostReact(el, String(e))
+          })
         }
         return {
           getValue() { return mounted?.getValue() ?? pending.value },
@@ -1276,8 +1321,10 @@ export const usePluginStore = create<PluginState>((set, get) => {
         let cancelled = false, focusPending = false
         const pending = { ...opts }
         const dispose = scope.own('mount', () => { cancelled = true; mounted?.dispose(); mounted = null }, 'chatBox')
+        const mine = cancelled ? () => false : claimHostMount(el) // 已吊销的上下文不许认领:会把新上下文那次请求挤掉
         void import('./chatBoxSurface').then(m => {
           if (cancelled) return
+          if (!mine()) { dispose(); return }
           mounted = m.mountPluginChatBox(el, pending)
           if (focusPending) requestAnimationFrame(() => mounted?.focus())
         }).catch(e => { console.error(`[amadeus] plugin "${pluginId}" Chat Box mount failed`, e) })
@@ -1323,8 +1370,9 @@ export const usePluginStore = create<PluginState>((set, get) => {
         let cancelled = false
         // 内存作用域的 pageStore 与 React 树不许在插件死后还活着:插件不卸,关账卸。
         const dispose = scope.own('mount', () => { cancelled = true; disposeMounted?.(); disposeMounted = null }, 'dashboard')
+        const mine = cancelled ? () => false : claimHostMount(el) // 已吊销的上下文不许认领:会把新上下文那次请求挤掉
         void import('./dashboardSurface').then((m) => {
-          if (cancelled || !el.isConnected) { dispose(); return }
+          if (cancelled || !el.isConnected || !mine()) { dispose(); return }
           disposeMounted = m.mountPluginDashboard(pluginId, el, o).dispose
         }).catch((e) => { console.error(`[amadeus] plugin "${pluginId}" dashboard mount failed`, e) })
         return dispose
@@ -1344,11 +1392,13 @@ export const usePluginStore = create<PluginState>((set, get) => {
         let cancelled = false
         // body 级弹层宿主也在这一卸里收,漏了就是页面上一堆空 div。
         const dispose = scope.own('mount', () => { cancelled = true; handle?.dispose(); handle = null }, 'table')
+        const mine = cancelled ? () => false : claimHostMount(el) // 已吊销的上下文不许认领:会把新上下文那次请求挤掉
         void import('./tableSurface').then((m) => {
           // 只认 cancelled,**不看 el.isConnected**:面板每次重渲都会把容器掀掉再由 panel-lib 认领回来,
           // import 落地那一刻容器多半正游离着 —— 此时放弃 = 句柄永远为空、容器永远空白且不回落。
           // React 往游离节点上挂根是合法的,认领回 DOM 就显示。
           if (cancelled) return
+          if (!mine()) { dispose(); return }
           handle = m.mountPluginTable(pluginId, el, pending)
         }).catch((e) => { console.error(`[amadeus] plugin "${pluginId}" table mount failed`, e) })
         return {
@@ -1463,6 +1513,32 @@ export const usePluginStore = create<PluginState>((set, get) => {
                       ...(cwd ? { cwd } : {}),
                       alive: ctxAlive,
                     })
+                  },
+                }
+              : {}),
+            // 把原生对话挂进插件自己的视图(2026-10-04):探针给得出才注入。与 startChat 的**预填档**同一条放行口径 ——
+            //  ① 永不替用户送出(句柄只有 quote / prefill:引用条与输入框草稿,回车由用户按),所以 Agent 不设「必须是自家捆绑」那道闸,
+            //     名册里有就行(不存在 → ready 给 ok:false);
+            //  ② folder(库相对)→ 本机绝对路径走 ctx.app.hostPath(同 startChat),但**等后端就绪后才解析**(探针调 resolveCwd):
+            //     给了 folder 却解析不出来 → ready 给 ok:false,不悄悄落成沙箱对话(常驻对话接错目录比开不了更糟);
+            //  ③ 禁用 / 重载时宿主把挂载收掉(scope),此后 quote / prefill 不再生效。
+            ...(readTangu()?.mountChat
+              ? {
+                  mountChat: (el: HTMLElement, o?: { agent?: string; folder?: string; title?: string }): import('./tanguSeam').TanguChatMount => {
+                    if (!(el instanceof HTMLElement)) throw new TypeError('mountChat needs an HTMLElement')
+                    const probe = readTangu()
+                    if (!ctxAlive() || !probe?.mountChat) return { ready: Promise.resolve({ ok: false, error: 'plugin disabled' }), quote() {}, prefill() {}, dispose() {} }
+                    const agent = typeof o?.agent === 'string' ? o.agent.trim() : ''
+                    // 去掉尾巴上的分隔符;整个就是分隔符的(`/`)原样留着,交给 hostPath 判不合法 → 接不上,而不是当成「没给文件夹」
+                    const given = typeof o?.folder === 'string' ? o.folder.trim() : ''
+                    const folder = given.replace(/[\\/]+$/, '') || given
+                    const title = typeof o?.title === 'string' ? o.title.trim().slice(0, 120) : ''
+                    const mounted = probe.mountChat(el, {
+                      owner: pluginId, ...(agent ? { agent } : {}), ...(title ? { title } : {}),
+                      ...(folder ? { folder, resolveCwd: () => appApi.hostPath?.(folder) ?? null } : {}),
+                    })
+                    const dispose = scope.own('mount', () => mounted.dispose(), 'chat')
+                    return { ready: mounted.ready, quote: (text) => { if (ctxAlive()) mounted.quote(text) }, prefill: (text) => { if (ctxAlive()) mounted.prefill(text) }, dispose }
                   },
                 }
               : {}),

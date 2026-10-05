@@ -13,6 +13,7 @@ import { useVoiceInput } from '../../hooks/useVoiceInput'
 import { CALL_TEXT_MAX, getCallPresence, onCallEvent, sendTextToCall, subscribeCallPresence, useRealtimeConfig } from '../../services/realtimeCall'
 import { useCodeStudio } from '../../stores/codeStudioStore'
 import { useImageStudio } from '../../stores/imageStudioStore'
+import { usePluginChat } from '../../stores/pluginChatStore'
 import { normPath } from '../coding/studioModel'
 import { VoiceRecordingBar } from './VoiceRecordingBar'
 import { THINKING_LEVELS } from '../../types'
@@ -64,6 +65,8 @@ registerMessages({
   'input.presetLocked': { zh: '模式在创建会话时确定；换模式请新建会话', en: 'Mode is fixed when the session is created; start a new session to change it' },
   // 团队成员子聊天:审批档读写的都是团队会话,选了对全队生效。
   'input.approvalSection.team': { zh: '团队审批档 · 改动对全队生效', en: 'Approval mode for the whole team' },
+  // 团队模式下没有计划模式(成员不吃它,10-05 用户定):那一项置灰,原因直接写在项上 —— 触屏没有悬停说明。
+  'input.planModeTeamOff': { zh: '团队模式下不可用', en: 'Not available in team mode' },
   // /export 导出的 markdown 里,用户那一侧消息的小标题(助手侧固定是品牌名 Tangu,不翻译)。
   'composer2.exportRoleUser': { zh: '我', en: 'Me' },
   // 「跳过了哪些文件」提示里的列表分隔符 —— 中文用顿号,英文用逗号+空格。
@@ -1054,6 +1057,16 @@ export const Composer2: React.FC<{
     setAttachments(previous => [...previous, ...imagePrompt.attachments])
     requestAnimationFrame(() => { taRef.current?.focus(); autoGrow() })
   }, [imagePrompt, activeSessionId]) // eslint-disable-line react-hooks/exhaustive-deps
+  // 插件视图里的对话(ctx.tangu.mountChat)的预填:只认本会话在插件挂载里的那个输入框,排着几条就接几条。
+  // 不看它此刻显不显示:标签在后台时投的,翻到前面就该已经在输入框里(这个 effect 不会因为「显示出来」再跑一次)。
+  const pluginPrompts = usePluginChat(s => s.pending)
+  useEffect(() => {
+    if (!activeSessionId || !pluginPrompts.some(p => p.sessionId === activeSessionId) || !cardRef.current?.closest('[data-plugin-chat]')) return
+    const texts = usePluginChat.getState().take(activeSessionId)
+    if (!texts.length) return
+    setDraft(previous => [...(previous.trim() ? [previous] : []), ...texts].join('\n\n'))
+    requestAnimationFrame(() => { taRef.current?.focus(); autoGrow() })
+  }, [pluginPrompts, activeSessionId]) // eslint-disable-line react-hooks/exhaustive-deps
   // Studio references append to this project's visible composer. Claim once before updating:
   // hidden / secondary chat views must not consume another project's request or erase its draft.
   useEffect(() => {
@@ -1453,7 +1466,13 @@ export const Composer2: React.FC<{
   }
   const planSection: SheetMenuSection | null = onPlanModeChange && !isChat ? {
     title: t('input.planMode'),
-    items: [{ id: 'plan-mode', label: planMode ? t('input.planModeOn') : t('input.planModeEnable'), icon: <ClipboardList size={14} />, checked: !!planMode, run: () => { onPlanModeChange(!planMode); closeModeMenu() } }],
+    // 团队模式下没有计划模式(2026-10-05 用户定):这一项置灰,原因写在项上;Web 菜单与原生半屏同一份。
+    items: [{
+      id: 'plan-mode', icon: <ClipboardList size={14} />,
+      label: groupChat ? t('input.planModeTeamOff') : planMode ? t('input.planModeOn') : t('input.planModeEnable'),
+      checked: !!planMode && !groupChat, disabled: !!groupChat,
+      run: () => { onPlanModeChange(!planMode); closeModeMenu() },
+    }],
   } : null
   const groupSection: SheetMenuSection | null = onGroupChange && !isEngine && !isChat ? {
     title: t('group.menu.section'),
@@ -1775,7 +1794,7 @@ export const Composer2: React.FC<{
                       <React.Fragment key={sec.items[0].id}>
                         <div className="menu-section">{sec.title}</div>
                         {sec.items.map((it) => (
-                          <button key={it.id} className={`menu-item${it.checked ? ' active' : ''}`} onClick={it.run}>
+                          <button key={it.id} className={`menu-item${it.checked ? ' active' : ''}`} disabled={it.disabled} onClick={it.run}>
                             {it.icon}
                             <span className="grow">{it.label}</span>
                             {it.checked && <Check size={13} />}

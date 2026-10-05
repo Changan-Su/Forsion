@@ -1,4 +1,4 @@
-/** Real Electron against the live-harness engine: the「工作笔记已更新」card is rebuilt from a real model's persisted
+/** Real Electron against the live-harness engine: the「进化记录已更新」card is rebuilt from a real model's persisted
  * manage_harness receipt, and its Undo reaches the real rollback API.
  * Invoked by live-harness --only harnessopen --harness-ui (which supplies the environment below); build desktop first.
  * The engine-side contract (409 on a second undo, notes gone from the next system prompt) stays in the live scenario. */
@@ -62,7 +62,7 @@ async function run() {
     assert.ok((await card.innerText()).includes('本次更新已撤销'))
     assert.equal(await card.getByRole('button', { name: '撤销本次更新' }).count(), 0, 'An undone card offers no second undo')
     await shot('harness-card-live-undone')
-    await card.getByRole('button', { name: '查看工作笔记' }).click()
+    await card.getByRole('button', { name: '查看进化记录' }).click()
     await win.locator('[data-tangu-details]').waitFor()
     await shot('harness-card-live-details')
     assert.deepEqual(errors, [], 'No renderer errors')

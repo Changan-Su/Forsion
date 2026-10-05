@@ -30,7 +30,7 @@ import { EmptyState2 } from './chat2/EmptyState2'
 import { FloatingToc } from './chat2/FloatingToc'
 import { TaskSummary } from './chat2/TaskSummary'
 import { useApp, stickyDefaults, activeChatModelId, withAmadeusWorkspace, applyPreset, newSessionPreset } from '../stores/appStore'
-import { settleUltra } from '../stores/projectSettings'
+import { settleModes } from '../stores/projectSettings'
 import { currentPlatform } from '../services/agentRunService'
 import { hasChatRef, readChatRefs } from './chat2/chatDragRef'
 import { useWorkspace, useSpaceStore, UI_MODE, Skeleton } from '@lcl/engine'
@@ -216,8 +216,8 @@ export function ChatView({ leaf, params }: ViewProps) {
         // 模式先于工作区:chat 会话恒 sandbox + 无根(方案 §2.1 接缝 0),与 send() 的建会话规则同源(newSessionPreset)。
         const preset = newSessionPreset(s.sessionMode, s.newChatWs, currentPlatform())
         const cloud = preset === 'chat' || s.newChatWs?.kind === 'cloud' || s.newChatWs?.kind === 'rootless'
-        // settleUltra:与建会话同一口径结算 Ultra(草稿换了云端 / 引擎 / 团队,或 Agent 自带非 max 档,药丸就不显示 Ultra)
-        return settleUltra(applyPreset({
+        // settleModes:与建会话同一口径结算 Ultra(草稿换了云端 / 引擎 / 团队,或 Agent 自带非 max 档,药丸就不显示 Ultra)与「团队模式下没有计划模式」
+        return settleModes(applyPreset({
           execMode: cloud ? 'sandbox' : 'host',
           ...stickyDefaults(s.desktopConfig, !cloud, preset),
           cwd: cloud ? undefined : (s.newChatWs?.path || undefined),
@@ -731,7 +731,8 @@ export function ChatView({ leaf, params }: ViewProps) {
             ? (cmd) => s.setExecConfig({ verifyCommand: cmd || undefined }, activeId)
             : (cmd) => s.setNewChatCfg((c) => ({ ...c, verifyCommand: cmd || undefined }))}
           planMode={mvCfg.planMode}
-          onPlanModeChange={activeId ? (v) => s.setSessionPlanMode(v, activeId) : (v) => s.setNewChatCfg((c) => ({ ...c, planMode: v }))}
+          // 成员会话不给计划模式:团队模式下没有它(成员的配置每次激活按团队重写,这里开了也不作数)。
+          onPlanModeChange={teamCfg ? undefined : activeId ? (v) => s.setSessionPlanMode(v, activeId) : (v) => s.setNewChatCfg((c) => ({ ...c, planMode: v }))}
           preset={mvCfg.preset}
           onPresetChange={activeId ? undefined : (p) => s.setSessionMode(p)}
           voiceMode={voiceOn}

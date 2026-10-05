@@ -77,6 +77,30 @@ async function main() {
       return { width: c.width, height: c.height, edge, corner: [...ctx.getImageData(0, 0, 1, 1).data], center: [...ctx.getImageData(Math.floor(c.width / 2), Math.floor(c.height / 2), 1, 1).data] }
     }, src)
     check('new installations still use the tree icon despite available built-in artwork', await settings.inputValue('#startup-icon') === '' && await settings.inputValue('#startup-splash') === '')
+    // Two built-in scenes: the tree shadow is the default; the original animated mark stays selectable and stores no image.
+    const sceneFrame = settings.frameLocator('.startup-appearance-preview iframe')
+    await settings.locator('.startup-appearance').screenshot({ path: path.join(OUT, 'tree-shadow-settings-zh-light.png'), animations: 'disabled' })
+    await settings.getByRole('button', { name: '预览开屏', exact: true }).click()
+    await sceneFrame.locator('#tangu-splash .fts canvas').nth(2).waitFor()
+    await settings.waitForTimeout(1500) // The scene emerges from the stage colour; the preview leaves at 2.4s.
+    const version = require(path.join(APP_ROOT, 'package.json')).version
+    check('the built page is stamped with the app version', fs.readFileSync(path.join(APP_ROOT, 'out/renderer/index.html'), 'utf8').includes(`<script>window.FORSION_APP_VERSION=${JSON.stringify(version)};`))
+    check('the preview shows that version under the wordmark', await sceneFrame.locator('#tangu-splash .fts-ver').textContent() === version)
+    await settings.locator('.startup-appearance-preview').screenshot({ path: path.join(OUT, 'tree-shadow-preview.png') })
+    await sceneFrame.locator('#tangu-splash').waitFor({ state: 'detached', timeout: 8000 })
+    check('default preview paints the tree shadow inside the sandboxed frame and leaves on the first frame', true)
+    await settings.getByRole('button', { name: '关闭预览', exact: true }).click()
+    await settings.selectOption('#startup-splash', 'classic')
+    await settings.waitForFunction(() => !document.querySelector('.startup-appearance-fields').disabled)
+    const classicScene = JSON.parse(fs.readFileSync(diskPath, 'utf8'))
+    check('the classic logo is a built-in scene stored without an image', classicScene.scene === 'classic' && classicScene.splash === null && await settings.inputValue('#startup-splash') === 'classic' && await settings.locator('#startup-splash optgroup[label="内置"] option[value="classic"]').count() === 1 && await settings.locator('#startup-icon option[value="classic"]').count() === 0)
+    await settings.getByRole('button', { name: '预览开屏', exact: true }).click()
+    await sceneFrame.locator('#tangu-splash .tangu-splash-logo').waitFor()
+    check('classic preview shows the original animated tree mark', await sceneFrame.locator('#tangu-splash .fts').count() === 0)
+    await settings.getByRole('button', { name: '关闭预览', exact: true }).click()
+    await settings.selectOption('#startup-splash', '')
+    await settings.waitForFunction(() => !document.querySelector('.startup-appearance-fields').disabled)
+    check('choosing Default returns to the tree shadow', JSON.parse(fs.readFileSync(diskPath, 'utf8')).scene === 'treeShadow')
     const legacyIcon = await settings.evaluate(() => {
       const c = document.createElement('canvas'); c.width = c.height = 64
       const ctx = c.getContext('2d'); ctx.fillStyle = '#4f8b77'; ctx.fillRect(0, 0, 64, 64)
@@ -331,7 +355,7 @@ async function main() {
     await settings.waitForFunction(() => !document.querySelector('.startup-appearance-fields').disabled)
     await settings.getByRole('button', { name: /^(恢复默认|Restore defaults)$/ }).click()
     await settings.waitForFunction(() => document.querySelector('#startup-motion').value === 'default')
-    check('restore defaults persists the full default tree appearance', JSON.parse(fs.readFileSync(diskPath, 'utf8')).splash === null && JSON.parse(fs.readFileSync(diskPath, 'utf8')).icon === null)
+    check('restore defaults persists the full default tree appearance', JSON.parse(fs.readFileSync(diskPath, 'utf8')).splash === null && JSON.parse(fs.readFileSync(diskPath, 'utf8')).icon === null && JSON.parse(fs.readFileSync(diskPath, 'utf8')).scene === 'treeShadow')
     console.log(`${checks} checks passed; screenshots: ${OUT}`)
   } catch (error) {
     if (settings && !settings.isClosed()) { await settings.screenshot({ path: path.join(OUT, 'failure.png') }).catch(() => {}); console.error((await settings.locator('body').innerText().catch(() => '')).slice(0, 5000)) }

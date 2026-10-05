@@ -68,6 +68,7 @@ import { looksLikeToolCallText } from '../llm/textToolCalls.js';
 import { isRetryableLlmError, isAuthExpiredLlmError, withLlmRetry, MODEL_MAX_RETRIES, MODEL_RETRY_BASE_MS, llmRetryBudgetExceeded, sleepOrAbort } from '../llm/retry.js';
 import { runCostCeiling, isOverRunCost } from './runBudget.js';
 import { RepeatedToolFailureGuard, MAX_REPEATED_TOOL_FAILURES } from './repeatedToolFailure.js';
+import { CORRECTION_SIGNAL, NUDGE_SIGNAL, looksLikeCorrection, noteUserStop, takePendingStop, toolLoopSignal } from './judgeSignals.js';
 import { runGroupChat, sanitizeTempAgents, teamMemberSection } from './groupChat.js';
 import { query } from '../core/db.js';
 import { SELF_OWNER, ownerAlive } from './runOwner.js';
@@ -214,6 +215,9 @@ const runSession = new Map<string, string>(); // runId -> sessionId（abort/清�
 const runTasks = new Map<string, Promise<void>>();
 // P1-K2:中止原因(急停 remote_estop / 锁定 remote_locked)。abortRun 记、四个终态 publish 点在 aborted 时展开、任务收尾清。
 const abortReasons = new Map<string, string>();
+/** 被用户亲手按停的 run(abortRun 的 byUser)。记在它的 AbortController 上:run 收尾后随控制器一起回收,
+ *  不用每条收尾路径(自有 loop / 外部引擎 / 起跑前失败)各记得清一次。 */
+const userStopped = new WeakSet<AbortController>();
 /** 终态 error 事件上的原因字段:只在中止且记过原因时带(旧客户端忽略未知字段)。 */
 const reasonOf = (runId: string): { reason?: string } => {
   const r = abortReasons.get(runId);
@@ -453,6 +457,7 @@ async function dispatchRun(runId: string, ac: AbortController): Promise<void> {
  */
 async function externalEngineLoop(runId: string, ac: AbortController, run: any, engineId: string): Promise<void> {
   const sessionId = run.session_id;
+  takePendingStop(sessionId); // 外部引擎这一轮不带信号复盘:上一轮按停留下的那条就此作废,别留给之后的自有 loop 轮错配
   const userId = run.user_id;
   const modelId = run.model_id || '';
   // 私聊引擎会话(存值 soloEngineId):工作区与记忆口径都随身份走(见下)。
@@ -530,10 +535,13 @@ async function externalEngineLoop(runId: string, ac: AbortController, run: any, 
 
 /** 请求中止某个 run。活跃 run 走 AbortController（finally 会推进队列）；排队中的 run 直接移出队列并标终态。
  *  opts.reason(P1-K2):写进终态 error 事件的 reason 字段('remote_estop' = 被那台电脑急停)。先到先得,不覆盖已记的原因。 */
-export function abortRun(runId: string, opts?: { reason?: string }): void {
+export function abortRun(runId: string, opts?: { reason?: string; byUser?: boolean }): void {
   if (opts?.reason && !abortReasons.has(runId) && (abortControllers.has(runId) || runSession.has(runId))) abortReasons.set(runId, opts.reason);
   const ac = abortControllers.get(runId);
   if (ac) {
+    // byUser = 用户自己按的停(停止键 / TUI Esc / 通道里的停止指令),不是团队级联、急停或通道下线。只对在跑的 run 记:
+    // 后台复盘据此认「折腾了半天被用户叫停」(services/judgeSignals.ts)。
+    if (opts?.byUser) userStopped.add(ac);
     ac.abort();
     return;
   }
@@ -843,6 +851,9 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
 
   const sessionId = run.session_id;
   const userId = run.user_id;
+  // 上一轮被用户按停留下的复盘信号:起跑时就取走,不管这一轮从哪条路收尾。只有正常 done 那条路把它交给判官,
+  // 别的路(钩子否决 / 群聊 / 出错 / 又被中止)上就此作废 —— 留着不取,它会被之后某一轮拿去,把更早那次按停说成「上一轮」。
+  const pendingStop = takePendingStop(sessionId);
   // 接缝①(G1):本 run 的 profile 按行内 app_id 解析;不匹配(如升级前遗留行)回退本进程 profile。
   const profile = resolveProfile((run as any).app_id) ?? deps().profile;
   const appId = profile.appId;
@@ -1148,6 +1159,9 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     finalContent = finalContent.trim() ? `${finalContent.trimEnd()}\n\n${t}` : t;
   };
   const allToolCalls: ToolCall[] = [];
+  // 整个 run 调过的工具名(allToolCalls 在插话边界会清空,这份不清)与本轮攒下的复盘信号(services/judgeSignals.ts)。
+  const runToolNames: string[] = [];
+  const judgeSignals: string[] = [];
   /**
    * Tool calls are stored separately from assistant text. Stamp the finalized-text offset at which
    * each call happened so clients can reconstruct interleaving after reload without a DB migration.
@@ -1156,6 +1170,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
   const persistToolCallsAtCurrentOffset = (calls: ToolCall[]): void => {
     const ui_content_offset = finalContent.length;
     allToolCalls.push(...calls.map((call) => ({ ...call, ui_content_offset })));
+    runToolNames.push(...calls.map((call) => call.function.name));
   };
   const allToolResults: any[] = [];
   // 已落库、但还挂着没兑现的挂起调用的段(托盘 run):留一份快照,兑现后按同一 id 再 finalize 一次(upsert),
@@ -1702,8 +1717,9 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     }
     // 开发者「显示 system prompt」:把本 run 组装好的系统提示原样作事件发出(仅 agentConfig.debugSystemPrompt)。
     // 纯只读文本,无 host 访问 → cloud/standalone/desktop 同一路径安全;前缀缓存不受影响(不改 workingMessages)。
+    // recalled:尾部通道那段召回(缺省不在系统提示里,稍后拼到最后一条用户消息)—— 台架要看的是「模型这一轮到底被喂了什么」。
     if (agentConfig.debugSystemPrompt && systemParts.length) {
-      await publish(runId, 'system_prompt', { content: systemParts.join('\n\n') });
+      await publish(runId, 'system_prompt', { content: systemParts.join('\n\n'), ...(volatilePlacement === 'tail' && volatileMemory ? { recalled: volatileMemory } : {}) });
     }
     ctxMark('plan');
     workingMessages.push(...history);
@@ -2436,6 +2452,10 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       return;
     }
 
+    // 复盘信号:这一轮开头的话像在纠正上一条回复(前面得真有过回复;系统驱动的 run 的开场白不算用户的话)。
+    if (!deferBypass && workingMessages.some((m) => m.role === 'assistant') && looksLikeCorrection(String(input.message || ''))) {
+      judgeSignals.push(CORRECTION_SIGNAL);
+    }
     let usedTools = false; // 本 run 是否真的执行过工具(循环耗尽提示的前提:没用工具的纯聊天/单轮 run 不该报"耗尽")
     let midstreamResumes = 0; // 中流断线恢复次数(整 run 累计上限 MIDSTREAM_MAX_RESUMES,防慢性抖动供应商刷成本)
     let auditNudged = false; // 完成度审计只审一次:第二次收尾放行,避免「审计→敷衍收尾→再审计」死循环
@@ -2982,6 +3002,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         if (!actionNudged && !usedTools && !planMode && iteration < maxIterations - 2 && !deferBypass
           && actionDeliveryNudgeNeeded(actionAskText, res.content || '')) {
           actionNudged = true;
+          judgeSignals.push(NUDGE_SIGNAL);
           if (res.content || res.outputItems?.length) workingMessages.push(assistantTurnOf(res, res.content || ''));
           workingMessages.push({ role: 'user', content: ACTION_DELIVERY_CHECK } as ChatMessage); // 不落库不上屏:harness 脚手架
           void publish(runId, 'status', { phase: 'action_delivery_nudge', iteration });
@@ -3142,7 +3163,10 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         toolResults,
       });
       repeatedToolFailure = toolFailureGuard.record(res.toolCalls, toolResults);
-      if (repeatedToolFailure) await publish(runId, 'status', { phase: 'tool_failure_loop', iteration, failures: MAX_REPEATED_TOOL_FAILURES });
+      if (repeatedToolFailure) {
+        judgeSignals.push(toolLoopSignal(res.toolCalls.map((c) => c.function.name)));
+        await publish(runId, 'status', { phase: 'tool_failure_loop', iteration, failures: MAX_REPEATED_TOOL_FAILURES });
+      }
     }
 
     await finalizeAssistantMessage(
@@ -3180,7 +3204,9 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       modelId,
       contextWindow: ctxWindowTokens,
     };
-    void onUserRunDone(sessionId, userId, memScopeSlug, historianSeed, !!(remote || effectiveRemote({ runId }))).finally(() => { if (!inlineMemberDef) scheduleAgentFilesSync(userId, activeAgentSlug); });
+    // 上一轮被用户按停留下的信号排最前(那句写的是「上一轮」,其余写的是「这一轮」)。
+    if (pendingStop) judgeSignals.unshift(pendingStop);
+    void onUserRunDone(sessionId, userId, memScopeSlug, historianSeed, !!(remote || effectiveRemote({ runId })), judgeSignals).finally(() => { if (!inlineMemberDef) scheduleAgentFilesSync(userId, activeAgentSlug); });
     // 惰性检查点:下个 run 的 hydrate 窗口之外若还有未被摘要覆盖的老行,现在(不占下个 run 首帧)做一份。
     // 登记在飞:下个 run(排队中的可能立刻起跑)hydrate 前先等它,别让窗口起点越过还没落检查点的老行。
     {
@@ -3214,6 +3240,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         }).catch((e) => console.warn('[agent-core] persist interrupt marker failed:', e));
       }
     }
+    // 用户按停、且这一轮已经调了好几次工具:记在会话上,等他的下一轮跑完再让后台复盘(那时才看得到他接下来说了什么)。
+    if (aborted && userStopped.has(ac)) noteUserStop(sessionId, runToolNames);
     // content 带上部分正文 → 在线前端把这条流式消息原地收尾为「已停止」,不丢已输出内容。
     // P1-K2:中止且记过原因(急停)→ 带 reason,手机 / 设备页据此显示「已被那台电脑急停」。
     await publish(runId, 'error', { error: msg, aborted, content: finalContent, ...(aborted ? reasonOf(runId) : {}) }).catch(() => {});

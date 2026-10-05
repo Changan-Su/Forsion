@@ -9,7 +9,7 @@ import { targetForSession } from '../services/engine/targets'
 import './humanCollaboration.css'
 
 registerMessages({
-  'harness.updated': { zh: '工作笔记已更新', en: 'Working notes updated' },
+  'harness.updated': { zh: '进化记录已更新', en: 'Evolution record updated' },
   'harness.act.create': { zh: '新增', en: 'Added' },
   'harness.act.revise': { zh: '修订', en: 'Revised' },
   'harness.act.delete': { zh: '删除', en: 'Removed' },
@@ -17,9 +17,9 @@ registerMessages({
   'harness.applied': { zh: '已生效', en: 'Applied' },
   'harness.undone': { zh: '本次更新已撤销', en: 'This update was undone' },
   'harness.evidence': { zh: '更新依据', en: 'Reason for this update' },
-  'harness.view': { zh: '查看工作笔记', en: 'View working notes' },
+  'harness.view': { zh: '查看进化记录', en: 'View evolution record' },
   'harness.undo': { zh: '撤销本次更新', en: 'Undo this update' },
-  'harness.undoConflict': { zh: '这条笔记后来又改过。请打开工作笔记调整，避免覆盖新的内容。', en: 'This note changed again later. Open the working notes to revise it without overwriting newer changes.' },
+  'harness.undoConflict': { zh: '这条记录后来又改过。请打开进化记录调整，避免覆盖新的内容。', en: 'This entry changed again later. Open the evolution record to revise it without overwriting newer changes.' },
 })
 
 /** Agent 自己改了工作笔记(manage_harness 立即生效、不逐笔审批)→ 这条回复下出一张卡:改了什么、依据、可撤销。

@@ -36,6 +36,16 @@
 .project-memory-row button { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border: 0; border-radius: var(--radius-sm, 8px); background: transparent; color: var(--text-muted); cursor: pointer; }
 .project-memory-row button:hover:not(:disabled) { background: var(--overlay-strong, var(--overlay-medium)); color: var(--danger); }
 .project-memory-row button:disabled { opacity: .5; cursor: default; }
+/* 待确认候选(后台没有直接记的那几条):同一张卡里另起一组,正文下面一行两个文字键 */
+.project-memory-pending { display: grid; gap: 6px; margin-top: 6px; }
+.project-memory-pending > strong { padding: 0 8px; font-size: var(--ui-font-meta, 12px); font-weight: 500; color: var(--accent-ink); }
+.project-memory-pending > ul { display: grid; gap: 6px; }
+.project-memory-pending > small { padding: 0 8px; font-size: var(--ui-font-caption, 11px); line-height: 1.6; color: var(--text-muted); }
+.project-memory-candidate { display: grid; gap: 2px; padding: 7px 8px; border-radius: var(--radius-sm, 8px); background: var(--overlay-light); color: var(--text); font-size: var(--ui-font-meta, 12px); line-height: 1.55; overflow-wrap: anywhere; }
+.project-memory-candidate > div { display: flex; gap: 14px; }
+.project-memory-candidate .profile-text-action { padding: 2px 0; }
+.project-memory-candidate .profile-text-action.adopt { color: var(--accent-ink); }
+.project-memory-candidate .profile-text-action:hover:not(:disabled) { text-decoration: underline; text-underline-offset: 3px; }
 .project-row strong { font-size: var(--ui-font-meta, 12px); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .project-row span, .project-row small { min-width: 0; color: var(--text-muted); font-size: var(--ui-font-caption, 11px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .project-row code { font-family: var(--font-mono, ui-monospace, monospace); font-size: var(--ui-font-caption, 11px); color: var(--text-muted); }

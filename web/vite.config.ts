@@ -56,6 +56,10 @@ export default defineConfig(({ mode }) => {
       name: 'forsion:unit-release-inputs',
       generateBundle() { checkBundleInputs([...this.getModuleIds()], resolve(__dirname, '..')) },
     }] : [])],
+    // 依赖预构建缓存放本检出自己的目录,不用缺省的 node_modules/.vite:worktree 里的 node_modules 是指向主检出的
+    // 软链,缺省目录等于所有检出共用,后起的 vite 会把别人的 deps 整份删掉重建(原因详见 desktop/frontend/vite.config.ts)。
+    // 仪器:cd desktop && npm run check:vitecache。
+    cacheDir: resolve(__dirname, '.vite-cache'),
     // publicDir 用 web 自己的(默认 web/public):白板引擎的自托管副本由 `npm run prepare-board`
     // 生成在那儿(见 package.json,build/dev 都会先跑一遍)。
     // ⚠️ **不能借 desktop 的 public** —— 那是 desktop postinstall 的产物、不入库,而 web 的镜像

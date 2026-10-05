@@ -20,35 +20,32 @@ export function mountPluginFloatingToc(
 
   let trigger = 0
   let disposed = false
-  let disposeRoot = (): void => {}
-  const render = (): void => {
-    disposeRoot = mountHostReact(layer, (
-      <FloatingToc
-        scrollContainer={opts.scrollContainer}
-        contentRoot={opts.contentRoot ?? opts.scrollContainer}
-        selector={opts.selector}
-        itemFromElement={opts.itemFromElement}
-        label={opts.label}
-        minItems={opts.minItems}
-        hideBelow={opts.hideBelow}
-        topOffset={opts.topOffset}
-        side={opts.side}
-        scanTrigger={trigger}
-      />
-    ))
-  }
-  render()
+  const tree = () => (
+    <FloatingToc
+      scrollContainer={opts.scrollContainer}
+      contentRoot={opts.contentRoot ?? opts.scrollContainer}
+      selector={opts.selector}
+      itemFromElement={opts.itemFromElement}
+      label={opts.label}
+      minItems={opts.minItems}
+      hideBelow={opts.hideBelow}
+      topOffset={opts.topOffset}
+      side={opts.side}
+      scanTrigger={trigger}
+    />
+  )
+  const mounted = mountHostReact(layer, tree())
 
   return {
     refresh: () => {
       if (disposed) return
       trigger++
-      render()
+      mounted.render(tree())
     },
     dispose: () => {
       if (disposed) return
       disposed = true
-      disposeRoot()
+      mounted.dispose()
       layer.remove()
       if (madeRelative && shell.style.position === 'relative') shell.style.position = originalPosition
     },

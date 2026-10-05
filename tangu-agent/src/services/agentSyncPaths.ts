@@ -15,7 +15,7 @@ export function validSyncPath(p: unknown): p is string {
   if (p === '.memory-tombstones.json') return true;
   const parts = p.split('/');
   if (parts.some((s) => !s || s.startsWith('.') || s.endsWith('.') || s.endsWith(' '))) return false;
-  if (['config.toml', 'SOUL.md', 'HARNESS.md', 'MEMORY.md'].includes(p)) return true;
+  if (['config.toml', 'SOUL.md', 'HARNESS.md', 'HUMAN.md', 'MEMORY.md'].includes(p)) return true;
   if (p.startsWith('LOG/')) return parts.length === 2 && p.endsWith('.md') && validLogDate(parts[1].slice(0, -3));
   return parts.length > 1 && parts[0] === 'Library';
 }

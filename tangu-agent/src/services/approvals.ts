@@ -37,6 +37,7 @@ import { MUSE_AGENT_SLUG, AGENT_MAX_ITERATIONS_MIN, buildAgentDef, getAgent, isV
 // 与本文件 ↔ agentRegistry 的既有互引同理,求值顺序无关。
 import { validateEntryInput } from './agentSchedule.js';
 import { validateTriggerInput } from './museTriggers.js';
+import { describeAppSettingsChange, touchesWorkspaceSetting } from './appSettings.js';
 
 export type ApprovalMode = 'readonly' | 'auto-edit' | 'full-auto' | 'custom';
 
@@ -137,6 +138,8 @@ export function toolNeedsApproval(name: string, rawMode: ApprovalMode | undefine
  *   - manage_schedule: set 且 auto=true(到期经 automation 管道以 full-auto 起跑);auto=false 纯规划免批。
  *                     例外:Muse 自己的后台周期给**自己**排的 auto 条目 —— 它们回灌进 Muse 的周期、按 Muse 当前档跑
  *                     (automation.ts 跳过 muse),不是提权;不豁免的话 ask/agent 档的 Muse 每个自排跟进都要排队等人批。
+ *   - update_app_settings: 恒是(改的是本机 config.json:默认模型 / 辅助模型 / 语音 / 联网搜索 / 默认工作目录,之后每个会话都吃它)。
+ *                     其中默认工作目录另按保护配置处理 —— 完全放行也问(见 gateToolCall 的 protectedAsk)。
  *   - manage_automation: set 且规则启用,并且含 agent_run / tool_call 步骤、或旧式 agent 简写(单步 agent_run);
  *                     更新时省略 actions = 保留旧动作链(upsertTrigger),看不到旧链 → 按控制面问(fail-closed)。
  *                     list / remove / 纯停用(enabled:false 且不同时写入 agent_run / tool_call / 旧式 agent)、
@@ -153,6 +156,7 @@ export function controlPlaneCall(
   const a: Record<string, any> = args && typeof args === 'object' ? (args as Record<string, any>) : {};
   const action = String(a.action ?? '');
   if (name === 'manage_agent') return action === 'create' || action === 'update';
+  if (name === 'update_app_settings') return true;
   if (name === 'manage_schedule') {
     if (action !== 'set' || !(a.auto === true || a.auto === 'true')) return false;
     const target = String(a.agent || opts.agentSlug || DEFAULT_AGENT_SLUG).trim(); // 与 manageSchedule.execute 同口径
@@ -178,7 +182,7 @@ export function controlPlaneCall(
 }
 
 /** controlPlaneCall 可能为真的工具(闸门据此决定要不要为非 host 调用解析参数)。 */
-const CONTROL_PLANE_TOOLS = new Set(['manage_agent', 'manage_schedule', 'manage_automation']);
+const CONTROL_PLANE_TOOLS = new Set(['manage_agent', 'manage_schedule', 'manage_automation', 'update_app_settings']);
 
 /*
  * 审批预览的排版(Codex 09-25 二轮 #2)。控制面审批卡的待批内容**一个字都不省**:无人值守要跑的提示词、tool_call 的参数、
@@ -397,6 +401,11 @@ function rawPreview(call: ToolCall, opts: { keptActions?: unknown[] | null } = {
   if (name === 'update_session_settings') {
     const parts = [args.model ? `model → ${args.model}` : '', args.thinking_level ? `thinking → ${args.thinking_level}` : ''].filter(Boolean);
     return `session settings: ${parts.join(' · ') || '(nothing)'}${args.reason ? ` — ${String(args.reason).slice(0, 200)}` : ''}`;
+  }
+  if (name === 'update_app_settings') {
+    const v = args.values && typeof args.values === 'object' && !Array.isArray(args.values) ? (args.values as Record<string, unknown>) : {};
+    const parts = Object.entries(v).map(([k, x]) => `${String(args.section ?? '')}.${k} → ${JSON.stringify(x)}`);
+    return `app settings: ${parts.join(' · ') || '(nothing)'}${args.reason ? ` — ${String(args.reason).slice(0, 200)}` : ''}`;
   }
   // 接管用户 Chrome 时 browser_console 要批:用户批的是整段页内 JS,不许在 200 字处截断藏住后半段(Codex 09-24 #5)
   if (name === 'browser_console') return args.expression != null ? `browser_console — run JS in the page:\n${String(args.expression)}` : 'browser_console (read console/errors)';
@@ -1010,6 +1019,11 @@ async function controlPreview(call: ToolCall): Promise<string> {
       // 第一行全是引擎写的:slug 已按 isValidSlug / slugify 归一,审批档来自磁盘。
       return previewText(`${what} · ${tier}\n${rawPreview(call)}`);
     }
+    if (name === 'update_app_settings') {
+      // 现值 → 新值排在第一段(引擎读的现值在前,模型写的理由在后;同 manage_agent 那条的排法)
+      const lines = describeAppSettingsChange(args.section, args.values);
+      if (lines) return previewText(`app settings\n${lines}${args.reason ? `\nreason: ${String(args.reason).slice(0, 200)}` : ''}`);
+    }
   } catch { /* 补充信息读不到就不补 */ }
   return approvalPreview(call);
 }
@@ -1067,6 +1081,8 @@ export async function gateToolCall(
       }
       if (!protectedAsk && protectedLocalWrite(abs)) protectedAsk = abs;
     }
+    // 默认工作目录(update_app_settings 的 workspace 段)决定以后每个新会话的免审批写入范围,与直接写 config.json 同档。
+    if (!protectedAsk && name === 'update_app_settings' && touchesWorkspaceSetting(parseCallArgs(call))) protectedAsk = 'config.json (default workspace folder)';
     if (protectedAsk && ctx.unattended && !ctx.approvalDeferral) {
       return { action: 'reject', rejectReason: `Unattended runs cannot write protected configuration or credential files (${protectedAsk}).` };
     }
@@ -1159,7 +1175,8 @@ export async function gateToolCall(
   // 否则桌面 / TUI 改完 bash 命令还得再批一次。越界写与 custom ask 规则看的是**参数**,照新参数重问(上面的 deny 规则与 hook 也已按新参数判过)。
   if (editedOnCard && !escalate && !forceAsk && !protectedAsk) return { action: 'approve' };
 
-  const base = control ? await controlPreview(call) : approvalPreview(call);
+  // 控制面调用因保护配置而问(完全放行档改默认工作目录)时,卡上同样先放引擎自己读到的事实,不只是模型写的那句。
+  const base = control || (protectedAsk && isControl) ? await controlPreview(call) : approvalPreview(call);
   const preview = protectedAsk
     ? '⚠ Protected config or credentials · ' + base
     : escalate ? '⚠ Write outside the workspace · ' + base : base;

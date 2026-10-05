@@ -8,6 +8,7 @@ import { useChildChat } from '../../stores/childChatStore'
 import { currentLocale, registerMessages, useI18n } from '../../i18n'
 import { Markdown } from '../../components/Markdown'
 import { openAgentProfile } from '../agentProfileNav'
+import { showDetails } from '../../stores/detailsSubject'
 import { targetForSession } from '../../services/engine/targets'
 
 registerMessages({
@@ -53,7 +54,7 @@ function nudgeRefine(sessionId: string, activityId: string): void {
   })
 }
 
-/** 后台复盘把一条做法直接写进了这个 Agent 的工作笔记(10-04:不再等 /refine)→ 告诉用户写了什么,点一下去「进化」里看或撤销。 */
+/** 后台复盘把一条做法直接写进了这个 Agent 的进化记录(10-04:不再等 /refine)→ 告诉用户写了什么,点一下去「进化」里看或撤销。 */
 function notifyAdopted(sessionId: string, activityId: string, titles: string): void {
   const st = useApp.getState()
   const slug = st.configBySession[sessionId]?.agentSlug || st.defaultAgentSlug
@@ -62,6 +63,28 @@ function notifyAdopted(sessionId: string, activityId: string, titles: string): v
     event: 'harness.candidates', level: 'info', sticky: true, dedupeKey: `harness.adopted:${activityId}`,
     text: st.tr('ntf.harnessAdopted', { name, titles: titles.split(' | ').join(currentLocale() === 'zh' ? '、' : ', ') }),
     action: { label: st.tr('ntf.actionView'), run: () => openAgentProfile(slug, 'evolution') },
+  })
+}
+
+/** 后台提名里带网址、命令或权限字眼的候选:没有写进进化记录、/refine 也不取,等用户在「进化」页逐条采纳或丢弃(10-04)。 */
+function notifyConfirm(sessionId: string, activityId: string): void {
+  const st = useApp.getState()
+  const slug = st.configBySession[sessionId]?.agentSlug || st.defaultAgentSlug
+  notifyApp({
+    event: 'harness.candidates', level: 'info', sticky: true, dedupeKey: `harness.confirm:${activityId}`,
+    text: st.tr('ntf.harnessConfirm', { name: st.agentDefs.find((a) => a.slug === slug)?.name || slug }),
+    action: { label: st.tr('ntf.actionView'), run: () => openAgentProfile(slug, 'evolution') },
+  })
+}
+
+/** 同上,项目记忆那一份:候选在项目详情 › 配置 › 项目记忆里等用户点头。会话不在项目里(理论上不会)就只提醒、不给按钮。 */
+function notifyProjectCandidates(sessionId: string, activityId: string): void {
+  const st = useApp.getState()
+  const path = st.sessions.find((x) => x.id === sessionId)?.project_path || ''
+  notifyApp({
+    event: 'memory.projectCandidates', level: 'info', sticky: true, dedupeKey: `memory.projectCandidates:${activityId}`,
+    text: st.tr('ntf.projectCandidates', { name: path.split(/[\\/]/).filter(Boolean).pop() || '' }),
+    ...(path ? { action: { label: st.tr('ntf.actionView'), run: () => showDetails({ kind: 'project', path }) } } : {}),
   })
 }
 
@@ -107,7 +130,12 @@ export function HistorianStatus({ sessionId }: { sessionId: string }) {
           setData(result); setFailed(false)
           const { fresh, seen: next } = takeFreshNominations(result.activity || [], seen.current)
           seen.current = next
-          for (const item of fresh) { if (item.action === 'harness_adopted') notifyAdopted(sessionId, item.id, item.detail || ''); else nudgeRefine(sessionId, item.id) }
+          for (const item of fresh) {
+            if (item.action === 'harness_adopted') notifyAdopted(sessionId, item.id, item.detail || '')
+            else if (item.action === 'harness_confirm') notifyConfirm(sessionId, item.id)
+            else if (item.action === 'project_memory_candidates') notifyProjectCandidates(sessionId, item.id)
+            else nudgeRefine(sessionId, item.id)
+          }
           const icon = result.activity?.find((item) => item.action === 'icon_updated')
           if (icon && icon.id !== iconActivity.current) {
             iconActivity.current = icon.id

@@ -79,6 +79,18 @@ export function mergeBlocks(a: string[], b: string[]): { merged: string[]; onlyI
   return { merged: dedup, onlyInA, onlyInB };
 }
 
+/** 合并日志页眉(首个 `### ` 之前的部分):按行并集,和块一样只增不减。行按去掉首尾空白后的文本比,空行不算。
+ *  header 以云端那份为底、本地独有的行接在后面 —— 各设备因此收敛到同一份文本;云端没有新行时原样保留本地页眉。 */
+export function mergeLogHeaders(local: string, remote: string): { header: string; localAdds: boolean; remoteAdds: boolean } {
+  const lines = (s: string): string[] => s.split('\n').filter((l) => l.trim());
+  const localKeys = new Set(lines(local).map((l) => l.trim()));
+  const remoteKeys = new Set(lines(remote).map((l) => l.trim()));
+  const localOnly = lines(local).filter((l) => !remoteKeys.has(l.trim()));
+  const remoteAdds = [...remoteKeys].some((k) => !localKeys.has(k));
+  if (!remoteAdds) return { header: local, localAdds: localOnly.length > 0, remoteAdds };
+  return { header: localOnly.length ? `${remote.trimEnd()}\n${localOnly.map((l) => l.trimEnd()).join('\n')}\n` : remote, localAdds: localOnly.length > 0, remoteAdds };
+}
+
 async function syncMemoryBlob(store: LocalMemoryStore, cloud: MemoryBrain, userId: string): Promise<SyncResult['memory']> {
   const cloudMem = await cloud.getMemory(userId);
   const meta = store.readMeta();

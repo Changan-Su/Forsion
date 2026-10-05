@@ -20,7 +20,7 @@ import { museAvailable, museSpace } from './builtins/muse'
 import { homepageAvailable, homepageSpace } from './builtins/homepage'
 import { imageStudioAvailable, imageStudioSpace } from './builtins/imageStudio'
 import { artificialAvailable, artificialSpace } from './builtins/artificial'
-import { homeSlotSpaceId, installHomeSlot } from './homeSlot'
+import { homeSlotChoice, homeSlotSpaceId, installHomeSlot } from './homeSlot'
 import { windowKind } from './windowKind'
 
 const ws = () => useWorkspace.getState()
@@ -50,6 +50,19 @@ export function resolveStartupTarget(lastExit: string): string {
   if (pref === HOME_SLOT_SPACE) return homeSlotSpaceId() ?? PRODUCT.defaultSpace
   if (pref === LAST_EXIT_SPACE) return lastExit
   return useSpaceStore.getState().spaces.some((s) => s.id === pref) ? pref : PRODUCT.defaultSpace
+}
+
+/** 「启动时进入」**点名**的那个 Space 此刻还没注册 → 它的 id,否则 null。点名 = 固定档的设置值 / 主位档下用户自己放进
+ *  主位槽的那个(没设过 = 主页,宿主内置,不会晚到)。没注册多半是异步就位的插件 / 用户 Space 还在路上(也可能已经删了)。
+ *  非 null 时 resolveStartupTarget() 给的只是**回落值**:启动先落在它上面,但
+ *   · 不落盘(bootstrapEngine)—— 盘上的活动 id 是「上次退出在哪」的唯一记录;
+ *   · 补定位不算完(settleAsyncStartupSpace)—— 点名的那个一注册就把人带过去。
+ *  「上次退出」档不在此列:目标没注册时 resolveStartupTarget 原样返回那个 id,两个消费点本来就在等它。 */
+export function awaitedStartupSpace(): string | null {
+  const pref = startupSpacePref()
+  if (pref === LAST_EXIT_SPACE) return null
+  const named = pref === HOME_SLOT_SPACE ? homeSlotChoice() : pref
+  return named && !useSpaceStore.getState().spaces.some((s) => s.id === named) ? named : null
 }
 
 /** 工作区视图的档位由 Space 写死在条目上(2026-10-03 锁档):不再跟着主区活动标签换档,也没有切档菜单。
@@ -310,6 +323,15 @@ export function registerSpaces(): void {
     if (windowKind() === 'main' && localStorage.getItem('forsion_pinned_layout_v1') !== '1') {
       resetSpaceLayouts()
       localStorage.setItem('forsion_pinned_layout_v1', '1')
+    }
+  } catch { /* ignore */ }
+  // 图像工作室改成「项目 + 详情」(2026-10-04):对话的固定位从左栏换到右栏,左栏换成项目导航。此前存下的布局里对话还在
+  // 左边 —— 单例复用不看位置,它占着左边,右栏那个就开不出来 → 一次性丢掉这个 Space 的已存布局,按新默认重建。
+  // 只在主窗做(理由同上);别的 Space 的布局不动。只影响 10-03 之后跑过这个 Space 的人:更早的存档已被上面那面旗整份清掉。
+  try {
+    if (windowKind() === 'main' && localStorage.getItem('forsion_image_studio_layout_v2') !== '1') {
+      resetSpaceLayouts('image-studio')
+      localStorage.setItem('forsion_image_studio_layout_v2', '1')
     }
   } catch { /* ignore */ }
   // 右栏默认折叠(2026-07-18):旧 Amadeus/Tangu 命名布局是「右栏展开」时存的,会经 applyNamed/tryRestoreLayout

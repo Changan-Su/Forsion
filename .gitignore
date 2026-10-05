@@ -8,7 +8,12 @@ designs/
 dist/
 out/
 desktop/out/
+# 台架截图(check:splash、startup-appearance.e2e 等),只供本机查看
+desktop/outputs/
 desktop/dist/
+# 每个检出自己的 vite 依赖预构建缓存(desktop / web / mobile 各一份,不用共用的 node_modules/.vite;可再生,
+# 见 desktop/frontend/vite.config.ts)
+.vite-cache/
 # 打包前 beforeBuild 下载的内置 Python / Node(体积大、按平台/arch 拉取,不入库)
 desktop/build/python/
 desktop/build/node/

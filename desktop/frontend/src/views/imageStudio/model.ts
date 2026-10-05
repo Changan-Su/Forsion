@@ -54,6 +54,10 @@ export interface ImageBoard {
 export function newBoard(name: string): ImageBoard {
   return { version: 2, id: crypto.randomUUID(), name, updatedAt: Date.now(), sessionId: null, images: [], elements: [], order: [], collected: [] }
 }
+/** A project's cover: its leftmost visible images, in canvas order. */
+export function coverImages(board: ImageBoard, count: number): StudioImage[] {
+  return board.images.filter(image => !image.hidden).sort((a, b) => a.x - b.x || a.y - b.y).slice(0, count)
+}
 export function imageBox(width: number, height: number, images: readonly StudioImage[]): Box {
   const scale = Math.min(1, 360 / Math.max(width, height))
   return { x: images.length ? Math.max(...images.map(i => i.x + i.w)) + 32 : 0, y: 0, w: width * scale, h: height * scale }

@@ -6,7 +6,7 @@ import { deps } from '../seams/runtime.js';
 import { agentsDir, userMdFile } from '../core/tanguHome.js';
 import { getDeviceId } from '../core/deviceId.js';
 import { getAgent, listAgents, parseAgentConfig, resolveMemorySlug, type NormalAgentDef } from '../agents/agentRegistry.js';
-import { splitLogBlocks, mergeBlocks } from './memorySync.js';
+import { splitLogBlocks, mergeBlocks, mergeLogHeaders } from './memorySync.js';
 import { AgentFileConflictError, type AgentFilesBrain, type AgentFileMeta } from '../seams/cloudBrain.js';
 import { agentSyncPermission, agentSyncScope, setAgentSyncPermission, captureAgentSyncPermission, agentSyncOperationSignal, agentSyncConsentSignal } from './cloudSyncAccount.js';
 import { agentSyncDir, assertSyncPath, atomicSyncWrite, readSyncBytes, validSyncPath, validSyncSlug } from './agentSyncPaths.js';
@@ -48,7 +48,7 @@ function localFiles(dir: string, cats: Set<Category>): string[] {
   walk(dir, '');
   return out;
 }
-function logText(header: string, blocks: string[]): string { return `${header.trimEnd()}\n\n${blocks.map((b) => `${b}\n`).join('\n')}`; }
+function logText(header: string, blocks: string[]): string { return blocks.length ? `${header.trimEnd()}\n\n${blocks.map((b) => `${b}\n`).join('\n')}` : `${header.trimEnd()}\n`; }
 interface ShadowVer { seq: number; hash: string }
 interface RemoteVer { seq: number; hash: string | null }
 type Decision =
@@ -131,6 +131,7 @@ async function syncAccount(cloud: AgentFilesBrain, userId: string, scope: string
   if (onlySlug && existsSync(agentSyncDir(onlySlug)) && !agentSyncPermission(onlySlug, scope).enabled) return;
   guard();
   const manifest = await cloud.getManifest(userId, { signal }); guard();
+  const human = manifest.paths?.includes('human') === true;
   const bySlug = new Map<string, AgentFileMeta[]>();
   for (const item of manifest) {
     if (item.slug !== '__user__' && !validSyncSlug(item.slug)) { fail(result, new Error('invalid cloud manifest slug')); continue; }
@@ -180,7 +181,7 @@ async function syncAccount(cloud: AgentFilesBrain, userId: string, scope: string
   for (const [slug, bucket] of buckets) {
     const check = (): void => { guard(); for (const consent of bucket.guards) consent(); agentSyncDir(slug); };
     check();
-    await syncBucket(cloud, userId, slug, scope, bucket.cats, bySlug.get(slug) ?? [], signal, check, result);
+    await syncBucket(cloud, userId, slug, scope, bucket.cats, bySlug.get(slug) ?? [], human, signal, check, result);
   }
   // USER is an explicit shared-data opt-in, never an implicit private-agent pool.
   if (shared.length) {
@@ -196,7 +197,7 @@ function verifyBytes(file: { hash?: string | null }, bytes: Buffer): void {
   if (bytes.length > MAX_FILE_BYTES) throw new Error('cloud file exceeds sync limit');
   if (file.hash != null && sha256(bytes) !== file.hash) throw new Error('cloud file hash mismatch');
 }
-async function syncBucket(cloud: AgentFilesBrain, uid: string, slug: string, scope: string, cats: Set<Category>, manifest: AgentFileMeta[], signal: AbortSignal, guard: Guard, result: AgentFileSyncResult): Promise<void> {
+async function syncBucket(cloud: AgentFilesBrain, uid: string, slug: string, scope: string, cats: Set<Category>, manifest: AgentFileMeta[], human: boolean, signal: AbortSignal, guard: Guard, result: AgentFileSyncResult): Promise<void> {
   const dir = agentSyncDir(slug);
   const prev = readPrev(dir, scope);
   const remote = new Map<string, AgentFileMeta>();
@@ -211,10 +212,11 @@ async function syncBucket(cloud: AgentFilesBrain, uid: string, slug: string, sco
   }
   const paths = new Set([...localFiles(dir, cats), ...remote.keys(), ...Object.keys(prev.files).filter((p) => validSyncPath(p) && cats.has(categoryOf(p)))]);
   paths.delete(TOMBSTONES);
+  if (!human) paths.delete('HUMAN.md'); // 服务端还不认它:不推不拉不记影子,等它升级后照常首次同步
   for (const p of paths) {
     guard();
     try {
-      if (p.startsWith('LOG/')) await reconcileLog(cloud, uid, slug, dir, p, signal, guard, result);
+      if (p.startsWith('LOG/')) await reconcileLog(cloud, uid, slug, dir, p, remote.get(p), signal, guard, result);
       else await reconcileFile(cloud, uid, slug, dir, p, remote.get(p), prev, signal, guard, result);
     } catch (e) { fail(result, e); guard(); }
   }
@@ -330,9 +332,15 @@ async function reconcileFile(cloud: AgentFilesBrain, uid: string, slug: string, 
   }
 }
 
-async function reconcileLog(cloud: AgentFilesBrain, uid: string, slug: string, dir: string, p: string, signal: AbortSignal, guard: Guard, result: AgentFileSyncResult): Promise<void> {
+/** 日志是只增不减的并集合并(块 + 页眉行),不是整份文件的后写者胜:
+ *  - 本地没有云端缺的东西 → 原样采用云端那份、不推(各设备收敛到同一份文本,不因排版 / 同分钟顺序来回推)
+ *  - 本地有云端缺的 → 合并后落本地(云端也有新东西时)并 CAS 推上去
+ *  清单里的内容哈希与本地一致 = 两边逐字节相同,不取文件;老服务端的行没有 hash,照旧每次取。 */
+async function reconcileLog(cloud: AgentFilesBrain, uid: string, slug: string, dir: string, p: string, meta: AgentFileMeta | undefined, signal: AbortSignal, guard: Guard, result: AgentFileSyncResult): Promise<void> {
   const store = createLocalMemoryStore(dir);
   const date = p.slice(4, -3);
+  guard(); assertSyncPath(agentsDir(), join(dir, p));
+  if (meta && !meta.deleted && meta.hash && meta.hash === sha256(store.readLogSnapshot!(date).content)) return;
   for (let attempt = 0; attempt < 4; attempt++) {
     guard(); const file = await cloud.getFile(uid, slug, p, { signal }); guard();
     if (file?.isBinary) throw new Error('invalid binary log');
@@ -345,9 +353,16 @@ async function reconcileLog(cloud: AgentFilesBrain, uid: string, slug: string, d
       const snapshot = store.readLogSnapshot!(date);
       const local = splitLogBlocks(snapshot.content);
       const merged = mergeBlocks(local.blocks, remote.blocks);
-      content = logText(local.header || remote.header || `# ${date}`, merged.merged);
-      if (merged.onlyInB.length) { store.writeLog(date, content, snapshot.version); result.pulled++; }
-      else content = snapshot.content;
+      const head = mergeLogHeaders(local.header, remote.header);
+      const remoteAdds = merged.onlyInB.length > 0 || head.remoteAdds;
+      if (!merged.onlyInA.length && !head.localAdds) {
+        if (remoteContent && remoteContent !== snapshot.content) { store.writeLog(date, remoteContent, snapshot.version); if (remoteAdds) result.pulled++; }
+      } else if (remoteAdds) {
+        content = logText(head.header || `# ${date}`, merged.merged);
+        // 并集可能比两边任何一份都大:超限就既不落盘也不上传(传上去之后别的设备每次同步都会在这个文件上失败)
+        if (Buffer.byteLength(content) > MAX_FILE_BYTES) throw new Error(`merged log exceeds sync limit: ${p}`);
+        store.writeLog(date, content, snapshot.version); result.pulled++;
+      } else content = snapshot.content;
     });
     if (!content || content === remoteContent) return;
     if (file && !file.deleted && typeof file.seq !== 'number') throw new Error('cloud upgrade required for safe log CAS');

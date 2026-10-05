@@ -21,9 +21,10 @@ afterEach(() => { delete process.env.TANGU_HOME; try { rmSync(home, { recursive:
 function fakeCloud(enabledSlugs: string[] = []) {
   const rows = new Map<string, any>();
   const puts = new Map<string, number>(); // 计数 putFile(键=slug/relPath),验证「去重一次」
+  const gets: string[] = []; // 每次 getFile 的 slug/relPath,验证「没变的日志不取」
   const key = (s: string, p: string) => `${s}\0${p}`;
-  const brain: AgentFilesBrain & { _rows: typeof rows; _puts: typeof puts } = {
-    _rows: rows, _puts: puts,
+  const brain: AgentFilesBrain & { _rows: typeof rows; _puts: typeof puts; _gets: typeof gets; _paths?: string[] } = {
+    _rows: rows, _puts: puts, _gets: gets, // _paths:服务端回带的可选路径族;不设 = 老服务端
     async getManifest() {
       const bySlug = new Map<string, any[]>();
       for (const [k, r] of rows) {
@@ -32,9 +33,10 @@ function fakeCloud(enabledSlugs: string[] = []) {
         arr.push({ relPath, mtimeMs: r.mtimeMs, size: r.size ?? 0, isBinary: !!r.isBinary, deleted: !!r.deleted, seq: r.seq, hash: r.hash });
         bySlug.set(slug, arr);
       }
-      return [...bySlug.entries()].map(([slug, files]) => ({ slug, files }));
+      return Object.assign([...bySlug.entries()].map(([slug, files]) => ({ slug, files })), brain._paths ? { paths: brain._paths } : {});
     },
     async getFile(_u, slug, relPath) {
+      gets.push(`${slug}/${relPath}`);
       const r = rows.get(key(slug, relPath));
       if (!r) return null;
       if (r.deleted) return { isBinary: false, mtimeMs: r.mtimeMs, deleted: true, seq: r.seq, hash: null };
@@ -163,6 +165,94 @@ describe('agentFileSync — LOG block-merge (additive, not LWW)', () => {
     expect(localLog).toContain('@devCloud cloud-entry');
     expect((await cloud.getFile('u', 'tester', 'LOG/2026-06-25.md'))!.content).toContain('@devLocal local-entry');
   });
+
+  const logFile = (date: string) => join(tDir('tester'), 'LOG', `${date}.md`);
+  const putsTotal = (cloud: ReturnType<typeof fakeCloud>) => [...cloud._puts.values()].reduce((a, b) => a + b, 0);
+  const seedLog = async (date: string, text: string) => {
+    await saveAgent({ slug: 'tester', name: 'Tester', systemPrompt: 'x', cloudSync: true });
+    mkdirSync(join(tDir('tester'), 'LOG'), { recursive: true });
+    writeFileSync(logFile(date), text);
+  };
+
+  it('keeps cloud-only text written above the first entry instead of overwriting it with the local copy', async () => {
+    // 10-05 复现的丢数据:两边的块一样,云端在首个 ### 之前多一段手写文字 → 旧逻辑把本地那份整份推上去,云端和本地都不再有那段。
+    const block = '### 10:00\n@dev entry\n';
+    await seedLog('2026-10-05', `# 2026-10-05\n\n${block}`);
+    const cloud = fakeCloud(['tester']);
+    const cloudText = `# 2026-10-05\n\nCLOUD-ONLY NOTE\n\n${block}`;
+    await cloud.putFile('u', 'tester', 'LOG/2026-10-05.md', { content: cloudText, isBinary: false, size: cloudText.length, mtimeMs: Date.now() });
+    expect((await runAgentFilesSync(cloud, 'u')).ok).toBe(true);
+    expect(cloud._rows.get('tester\0LOG/2026-10-05.md').content).toBe(cloudText); // 云端原样,没被推
+    expect(readFileSync(logFile('2026-10-05'), 'utf8')).toBe(cloudText); // 本地原样采用云端那份
+    expect(cloud._puts.get('tester/LOG/2026-10-05.md')).toBe(1); // 只有上面那次播种
+  });
+
+  it('unions header lines when both sides wrote some, and pulls a log that has no entries at all', async () => {
+    await seedLog('2026-10-05', '# 2026-10-05\n\nlocal note\n\n### 10:00\n@dev entry\n');
+    const cloud = fakeCloud(['tester']);
+    const put = (date: string, content: string) => cloud.putFile('u', 'tester', `LOG/${date}.md`, { content, isBinary: false, size: content.length, mtimeMs: Date.now() });
+    await put('2026-10-05', '# 2026-10-05\n\ncloud note\n\n### 10:00\n@dev entry\n');
+    await put('2026-10-04', '# 2026-10-04\n\nhand-written day, no entries\n');
+    expect((await runAgentFilesSync(cloud, 'u')).ok).toBe(true);
+    const local = readFileSync(logFile('2026-10-05'), 'utf8');
+    for (const text of [local, cloud._rows.get('tester\0LOG/2026-10-05.md').content]) {
+      expect(text).toContain('local note'); expect(text).toContain('cloud note'); expect(text.match(/### 10:00/g)).toHaveLength(1);
+    }
+    expect(cloud._rows.get('tester\0LOG/2026-10-05.md').content).toBe(local);
+    expect(readFileSync(logFile('2026-10-04'), 'utf8')).toBe('# 2026-10-04\n\nhand-written day, no entries\n'); // 旧逻辑:没有块就什么都不拉
+  });
+
+  it('refuses a union that would exceed the sync limit, leaving both sides as they were', async () => {
+    const big = (tag: string) => `# 2026-10-05\n\n${`${tag} `.repeat(600_000)}\n`; // 各约 3 MiB,合起来超过 5 MiB 上限
+    await seedLog('2026-10-05', big('local'));
+    const cloud = fakeCloud(['tester']);
+    await cloud.putFile('u', 'tester', 'LOG/2026-10-05.md', { content: big('cloud'), isBinary: false, size: big('cloud').length, mtimeMs: Date.now() });
+    const r = await runAgentFilesSync(cloud, 'u');
+    expect(r.ok).toBe(false); expect(r.error).toContain('merged log exceeds sync limit');
+    expect(readFileSync(logFile('2026-10-05'), 'utf8')).toBe(big('local'));
+    expect(cloud._rows.get('tester\0LOG/2026-10-05.md').content).toBe(big('cloud'));
+    expect((await cloud.getFile('u', 'tester', 'config.toml'))).not.toBeNull(); // 别的文件照常同步
+  });
+
+  it('does not fetch log files whose content already matches the manifest hash', async () => {
+    await seedLog('2026-10-01', '# 2026-10-01\n\n### 09:00\n@dev a\n');
+    for (const d of ['2026-10-02', '2026-10-03']) writeFileSync(logFile(d), `# ${d}\n\n### 09:00\n@dev b\n`);
+    const cloud = fakeCloud(['tester']);
+    expect((await runAgentFilesSync(cloud, 'u')).ok).toBe(true); // 首次:全量推上去
+    const puts = putsTotal(cloud); cloud._gets.length = 0;
+    expect((await runAgentFilesSync(cloud, 'u')).ok).toBe(true); // 稳态:什么都没变
+    expect(cloud._gets).toEqual(['tester/.memory-tombstones.json']); // 旧逻辑:每个日志文件再各取一次
+    expect(putsTotal(cloud)).toBe(puts);
+    // 云端变了(哈希对不上)才取那一个文件
+    const next = '# 2026-10-02\n\n### 09:00\n@dev b\n\n### 11:00\n@other c\n';
+    await cloud.putFile('u', 'tester', 'LOG/2026-10-02.md', { content: next, isBinary: false, size: next.length, mtimeMs: Date.now() });
+    cloud._gets.length = 0;
+    expect((await runAgentFilesSync(cloud, 'u')).ok).toBe(true);
+    expect(cloud._gets.filter((g) => g.includes('/LOG/'))).toEqual(['tester/LOG/2026-10-02.md']);
+    expect(readFileSync(logFile('2026-10-02'), 'utf8')).toBe(next);
+  });
+
+  it('two devices with same-minute entries and their own header notes converge and then stop pushing', async () => {
+    // 旧逻辑:同分钟的块各设备按「本地在前」排,页眉各用各的 → 两台设备轮流把自己的排法推上去,永远不停。
+    const homeA = home, homeB = mkdtempSync(join(tmpdir(), 'tangu-afs-b-'));
+    const on = (h: string) => { process.env.TANGU_HOME = h; };
+    try {
+      await seedLog('2026-10-05', '# 2026-10-05\n\nnote A\n\n### 10:00\n@devA from A\n');
+      const cloud = fakeCloud(['tester']);
+      on(homeB);
+      await seedLog('2026-10-05', '# 2026-10-05\n\nnote B\n\n### 10:00\n@devB from B\n');
+      setAgentSyncPermission('tester', agentSyncScope(cloud, 'u')!, true, true);
+      for (const h of [homeA, homeB, homeA, homeB]) { on(h); expect((await runAgentFilesSync(cloud, 'u', { onlySlug: 'tester' })).ok).toBe(true); }
+      const texts = [homeA, homeB].map((h) => { on(h); return readFileSync(logFile('2026-10-05'), 'utf8'); });
+      expect(texts[0]).toBe(texts[1]);
+      expect(texts[0]).toBe(cloud._rows.get('tester\0LOG/2026-10-05.md').content);
+      for (const marker of ['note A', 'note B', 'from A', 'from B']) expect(texts[0]).toContain(marker);
+      const puts = cloud._puts.get('tester/LOG/2026-10-05.md'); cloud._gets.length = 0;
+      for (const h of [homeA, homeB, homeA, homeB]) { on(h); expect((await runAgentFilesSync(cloud, 'u', { onlySlug: 'tester' })).ok).toBe(true); }
+      expect(cloud._puts.get('tester/LOG/2026-10-05.md')).toBe(puts);
+      expect(cloud._gets.filter((g) => g.includes('/LOG/'))).toEqual([]);
+    } finally { on(homeA); rmSync(homeB, { recursive: true, force: true }); }
+  });
 });
 
 describe('agentFileSync — shareDefaultMemory dedup', () => {
@@ -177,6 +267,36 @@ describe('agentFileSync — shareDefaultMemory dedup', () => {
     expect(cloud._puts.get('xyra/MEMORY.md')).toBe(1); // 只推一次(去重)
     // a1/a2 自己的 config 各推一次(DEF 桶),但它们 MEMORY 不落自己 slug
     expect(await cloud.getFile('u', 'a1', 'MEMORY.md')).toBeNull();
+  });
+});
+
+describe('agentFileSync — HUMAN.md (agent 级协作手册)', () => {
+  it('syncs with the owning agent, never with the shared memory bucket', async () => {
+    await saveAgent({ slug: 'a1', name: 'A1', systemPrompt: 'x', cloudSync: true, shareDefaultMemory: true });
+    writeFileSync(join(tDir('a1'), 'HUMAN.md'), '# Together\nShow options first.');
+    const cloud = fakeCloud(['a1']); cloud._paths = ['human'];
+    expect((await runAgentFilesSync(cloud, 'u')).ok).toBe(true);
+    expect((await cloud.getFile('u', 'a1', 'HUMAN.md'))!.content).toBe('# Together\nShow options first.');
+    expect(await cloud.getFile('u', 'xyra', 'HUMAN.md')).toBeNull(); // 记忆共用默认桶,手册仍归 a1 自己
+    // 别的设备改了 → 拉下来
+    const base = cloud._rows.get('a1\0HUMAN.md').seq;
+    await cloud.putFile('u', 'a1', 'HUMAN.md', { content: '# Together\nEdited elsewhere.', isBinary: false, size: 28, mtimeMs: future(), baseSeq: base });
+    expect((await runAgentFilesSync(cloud, 'u')).ok).toBe(true);
+    expect(readFileSync(join(tDir('a1'), 'HUMAN.md'), 'utf8')).toBe('# Together\nEdited elsewhere.');
+  });
+
+  it('leaves it alone until the server says it accepts the path, then syncs it', async () => {
+    await saveAgent({ slug: 'tester', name: 'Tester', systemPrompt: 'x', cloudSync: true });
+    writeFileSync(join(tDir('tester'), 'HUMAN.md'), '# Together');
+    const cloud = fakeCloud(['tester']); // 老服务端:清单不回带 paths,推 HUMAN.md 只会 400
+    const r = await runAgentFilesSync(cloud, 'u');
+    expect(r.ok).toBe(true);
+    expect(cloud._puts.has('tester/HUMAN.md')).toBe(false);
+    expect((await cloud.getFile('u', 'tester', 'config.toml'))).not.toBeNull(); // 其余文件照常
+    expect(readFileSync(join(tDir('tester'), 'HUMAN.md'), 'utf8')).toBe('# Together');
+    cloud._paths = ['human']; // 服务端升级后
+    expect((await runAgentFilesSync(cloud, 'u')).ok).toBe(true);
+    expect((await cloud.getFile('u', 'tester', 'HUMAN.md'))!.content).toBe('# Together');
   });
 });
 

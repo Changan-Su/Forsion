@@ -69,6 +69,8 @@ export const NOTIFY_EVENTS: Array<{ id: string; labelKey: string; defaultOn: boo
   { id: 'note.reminder', labelKey: 'ntf.event.noteReminder', defaultOn: true },
   // Historian 自动档提名了工作笔记候选(chat2/HistorianStatus 轮询处接线):点「复盘」就地发 /refine。自动档 09-18 起默认开,在设置 → 特殊 Agent 里可关。
   { id: 'harness.candidates', labelKey: 'ntf.event.harnessCandidates', defaultOn: true },
+  // 后台从项目会话里记下、但带网址 / 命令 / 权限字眼的事实:没有直接写进项目记忆,等用户在项目详情里逐条采纳或丢弃。
+  { id: 'memory.projectCandidates', labelKey: 'ntf.event.projectCandidates', defaultOn: true },
 ]
 
 export function eventDefaultOn(event: string): boolean {

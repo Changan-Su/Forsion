@@ -25,7 +25,7 @@ import { createMemoryRepository, MemoryRepositoryError } from '../services/memor
 import { createLocalMemoryStore } from '../adapters/standalone/localMemoryBrain.js';
 import { scheduleAgentFilesSync } from '../services/agentFileSync.js';
 import { agentSyncPermission, agentSyncScope, setAgentSyncPermission } from '../services/cloudSyncAccount.js';
-import { loadHarness, readJournal, applyHarnessEdit, peekHarnessCandidates, HarnessConflict } from '../agents/harnessStore.js';
+import { loadHarness, readJournal, applyHarnessEdit, peekHarnessCandidates, resolveHarnessCandidate, candidateNeedsUser, candidateAdoptable, HarnessConflict, HarnessCandidateError } from '../agents/harnessStore.js';
 import { renameAgent, AgentRenameError } from '../agents/agentRename.js';
 import { parseRemoteOrigin, clampApprovalMode, remoteApprovalCap } from '../services/remoteOrigin.js';
 
@@ -307,8 +307,10 @@ router.get('/agent/agents/:slug/memory', authMiddleware, async (req: AuthRequest
     const store = await storeForAgent(req.params.slug);
     if (!store) return res.status(404).json({ detail: 'Agent not found' });
     res.json(createMemoryRepository(store.baseDir).snapshot());
-    // 后台拉一次云端(不阻塞响应):云端 worker 侧写的新记忆迟一拍到位,重开视图即最新。
-    scheduleAgentFilesSync(req.user!.userId);
+    // 后台同步一次(不阻塞响应):云端 worker 侧写的新记忆 / 日志迟一拍到位,重开视图即最新。
+    // 带的是归属(显示)agent 的 slug,不是上面解析出的记忆桶;不带 slug 是空操作。没开云同步的 agent 不发任何请求,
+    // 开了的在什么都没变时是 2 个请求(清单 + 墓碑;没变的日志按清单哈希跳过)。
+    scheduleAgentFilesSync(req.user!.userId, req.params.slug);
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'read memory failed' });
   }
@@ -363,9 +365,7 @@ router.get('/agent/agents/:slug/logs', authMiddleware, async (req: AuthRequest, 
   try {
     const store = await storeForAgent(req.params.slug);
     if (!store) return res.status(404).json({ detail: 'Agent not found' });
-    res.json({ dates: store.listLogDates() });
-    scheduleAgentFilesSync(req.user!.userId); // 同 memory:后台拉云端新日志
-
+    res.json({ dates: store.listLogDates() }); // 这里不再排一次:拉日志的界面都同时拉了 /memory,那一次同步已覆盖 LOG/
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'list logs failed' });
   }
@@ -449,10 +449,12 @@ router.get('/agent/agents/:slug/harness', authMiddleware, async (req: AuthReques
   try {
     if (!(await getAgent(req.params.slug))) return res.status(404).json({ detail: 'Agent not found' });
     // journal 只回尾部 200 行:文件按次追加无上限,整份回传/渲染会随年头无界增长(Codex 评审 Minor)。
-    // candidates = Historian 自动档提名的待复盘候选(收件箱原始行,只读不消费;/refine 才取走)——面板上要能看见「有东西等着复盘」。
+    // candidates = Historian 自动档提名的候选(收件箱原始行,只读不消费)——面板上要能看见「有东西等着」。
+    // candidateItems(10-04)= 同一批行逐条带上去处:needsUser = 过不了形状闸,只等用户点头(/refine 不取);adoptable = 面板能不能直接采纳。
+    // 老桌面只认 candidates,所以两个键都回。
     const slug = req.params.slug;
     const [entries, journal, candidates] = await Promise.all([loadHarness(slug), readJournal(slug), peekHarnessCandidates(slug).catch(() => [])]);
-    res.json({ entries, journal: journal.slice(-200), candidates });
+    res.json({ entries, journal: journal.slice(-200), candidates, candidateItems: candidates.map((line) => ({ line, needsUser: candidateNeedsUser(line), adoptable: candidateAdoptable(line) })) });
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'read harness failed' });
   }
@@ -471,6 +473,25 @@ router.post('/agent/agents/:slug/harness/rollback', authMiddleware, async (req: 
   } catch (e: any) {
     if (e instanceof HarnessConflict) return res.status(409).json({ error: 'HARNESS_CONFLICT', detail: e.message });
     res.status(400).json({ detail: e?.message || 'rollback failed' }); // 「没有可回滚历史/会超上限」等业务错误原样回给 UI
+  }
+});
+
+// 候选逐条处理(10-04):用户在「进化」页对一条候选点「采纳 / 丢弃」。line = 面板看到的收件箱原始行(身份);不在了回 404,面板重载。
+// 只在主机上(与协作说明、项目记忆同一条「持久配置只在本机改」的边界);写进编辑史的 by 恒为 'user',不从请求体收。
+router.post('/agent/agents/:slug/harness/candidate', authMiddleware, async (req: AuthRequest, res) => {
+  if (!ensureLocal(res)) return;
+  try {
+    if (parseRemoteOrigin(req.headers)) return res.status(403).json({ detail: 'Open the agent on the host computer to decide on its candidates.' });
+    const slug = req.params.slug;
+    if (!(await getAgent(slug))) return res.status(404).json({ detail: 'Agent not found' });
+    const { line, action } = req.body || {};
+    if (typeof line !== 'string' || !line || (action !== 'adopt' && action !== 'dismiss')) return res.status(400).json({ detail: 'line and action ("adopt" or "dismiss") are required' });
+    const result = await resolveHarnessCandidate(slug, line, action === 'adopt');
+    if (result) scheduleAgentFilesSync(req.user!.userId, slug);
+    res.json({ ok: true, entry: result?.entry ?? null });
+  } catch (e: any) {
+    if (e instanceof HarnessCandidateError) return res.status(e.code === 'gone' ? 404 : 400).json({ error: `HARNESS_CANDIDATE_${e.code.toUpperCase()}`, detail: e.message });
+    res.status(400).json({ detail: e?.message || 'candidate action failed' });
   }
 });
 

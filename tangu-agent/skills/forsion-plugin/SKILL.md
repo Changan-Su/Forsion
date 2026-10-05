@@ -2,7 +2,7 @@
 name: forsion-extension-development
 description: 当用户要给 Forsion / Tangu 做插件、主题、Space、智能体(agent)或捆绑包(bundle)——或要把某个能力做成可分发/可上架市场的扩展——时使用。内置五类官方模板(samples/),讲清各自的格式基线与硬约束(尤其两种"插件"是完全不同的系统),照抄模板改比从零写靠谱。
 metadata:
-  version: 1.19.0
+  version: 1.21.0
   author: Forsion
   category: Forsion
 ---
@@ -53,6 +53,8 @@ Forsion / Tangu 的扩展**默认按捆绑包(bundle)形态发行**(2026-07-25 �
 
 - 主题 CSS 是**全局注入**(非隔离),因此**每条规则都要 scope 在 `[data-theme='<id>']` 下**,否则污染其它主题。
 - **不要硬编码颜色**:配色由 skin 提供,主题只定结构,消费 `var(--bg)`/`var(--text)`/`var(--accent)` 等词表 token —— 这样任意配色/明暗都成立。
+- **正文行距、段距和切视图的时长归用户的外观开关管**(见下文「外观开关:跟着宿主走」):主题别用更高权重的规则把笔记 / 对话正文的
+  `line-height`、段间距或 `wb-view-enter` 的时长写死 —— 写死了,用户拨那几个开关就没有反应。
 - 可选 `settings[]`(number/select/boolean/color)让用户在设置页调主题内参数:`key` **就是** CSS 自定义属性名,宿主把值写进 `:root` 内联变量,主题用 `var(--key, 默认值)` 消费。参考本仓内置 `genesis-glass` 主题(`desktop/frontend/src/theme/themes/genesis-glass/`)。
 
 ## Space(samples/forsion-sample-space)
@@ -287,12 +289,25 @@ ctx.registerView({ id: 'items', title: 'Items', mount(el, view) {
       // 保存成功可调用 handle.close();失败时保留输入并提示。
       return () => { input.remove() } // 清理订阅/监听器/计时器
     },
-    onClose(reason) { /* dismiss(原生关闭/折叠/Esc/系统返回) / close / replace / owner */ },
+    onClose(reason) { /* dismiss / layout / close / replace / owner,见下 */ },
   })
   el.appendChild(button)
   return () => { button.remove() }
 } })
 ```
+
+`onClose(reason)` 的五种原因:
+
+| reason | 谁关的 | 插件该怎么想 |
+|---|---|---|
+| `dismiss` | 用户关的就是这块面板:它的 × / 返回、Esc、系统返回、关掉它的标签 | 这是用户的意思;要记「用户不想看它」就记在这里 |
+| `layout` | 宿主连同它所在的位置一起收走:那一侧被收起(移动端抽屉被关上)、恢复默认布局、切 Space 换了整份布局、别的视图的扩展占了这一侧 | **不是**用户对这块面板的决定,别当成「已关闭」记下来;需要时再 `open` 即可(宿主不会替你还原) |
+| `close` | 你自己调了 `handle.close()` / `view.extendView.close()` | — |
+| `replace` | 同一个主视图开了另一份扩展 | — |
+| `owner` | 主视图被隐藏或卸载 | 主视图回来后按需重开 |
+
+`layout` 是 2.12.2 之后的宿主才有的;更早的宿主把这些情况一律报成 `dismiss`。两头都要跑的插件:把 `layout` 当作
+「位置没了」单独处理,`dismiss` 仍可能是收起或重置,别在它上面记不可恢复的状态。
 
 每个主视图同时至多一份扩展,同一个 Panel 也只容纳一份临时内容(后来者替换前者)。
 移动端临时 View 进入原生左右抽屉的视图选择器;请求 bottom 时回落到右抽屉。
@@ -377,7 +392,7 @@ ctx.registerCommand({
 | `ctx.loadData() / saveData()` | 每插件一份 JSON blob | 大块数据走这条(见下「编辑器」节) |
 | `ctx.dashboard` | 原生仪表盘(网格/卡片/排版台) | 2026-09-01 起;**两条路线**(视图内 `mount` 不依赖库 / `source` 生成 `.dashboard.md` 需要库)见下节;一律 `ctx.dashboard?.` |
 | `ctx.getLocale / subscribeLocale` | 跟随宿主中英切换 | 见下「双语」 |
-| `ctx.tangu` | 当前模型 / 模型目录 / 当前 Space / 会话用量 / **agent 此刻在干什么**(只读)+ `agents()` 用户的 Agent 名册 + `startChat` 用指定 Agent 开一个可见的新对话 + `complete` 一次性文本补全(2026-09-28 起) | ⚠️**非 Tangu 宿主上整个不存在** → 一律 `ctx.tangu?.`;`agentStatus` / `subscribeAgentStatus` / `startChat` 是 2026-09-19 起、`agents` 是 2026-09-20 起的可选方法 → `ctx.tangu?.startChat?.(…)`;见下「当前模型」「Agent 状态」「Agent 名册」「开新对话」 |
+| `ctx.tangu` | 当前模型 / 模型目录 / 当前 Space / 会话用量 / **agent 此刻在干什么**(只读)+ `agents()` 用户的 Agent 名册 + `startChat` 用指定 Agent 开一个可见的新对话 + `mountChat` 把原生对话挂进自己的视图(2026-10-04 起)+ `complete` 一次性文本补全(2026-09-28 起) | ⚠️**非 Tangu 宿主上整个不存在** → 一律 `ctx.tangu?.`;`agentStatus` / `subscribeAgentStatus` / `startChat` 是 2026-09-19 起、`agents` 是 2026-09-20 起的可选方法 → `ctx.tangu?.startChat?.(…)`;见下「当前模型」「Agent 状态」「Agent 名册」「开新对话」 |
 | `ctx.desk` | Tangu 聊天右侧 **Agent Desk** 里挂一块自绘区(`registerCompanion`,典型:跟着 agent 状态做反应的 3D 形象) | 2026-09-19 起;⚠️**只在桌面 Tangu 上存在**(web / 移动端 / 纯 Amadeus 壳整个没有)→ `ctx.desk?.`;两种模式 `idle` / `always`,见下「Agent Desk 伴随面」 |
 | `ctx.automation` | 播种多维表自动化规则(`ensure(rules)`) | 2026-09-02 起;⚠️**非 Tangu 宿主上整个不存在** → `void ctx.automation?.ensure(…)`;id 宿主加 `plugin:<id>:` 前缀;见下「自动化」 |
 | `ctx.calendar` | 把插件种的表登记进 Calendar Space(`ensureMember`) | 2026-09-02 起;显式成员制,不登记就不在日历里;旧宿主没有 → `ctx.calendar?.` |
@@ -389,7 +404,7 @@ ctx.registerCommand({
 ### ⚠️「没有活动库」时的统一行为(2026-09-02 立规)
 
 上面三组里**凡走库内路径**的方法(`readFile / writeFile / readBytes / writeBytes / watchFile / openFile / loadPage /
-createPage / listPages / listFiles / searchVault / reveal`)都要求一个**已打开**的笔记库。
+createPage / listPages / listFiles / searchVault / reveal / trash`)都要求一个**已打开**的笔记库。
 没有活动库时它们**各自失败得不一样**,而且大半是静默的:
 
 | 方法 | 没有活动库时 |
@@ -399,6 +414,7 @@ createPage / listPages / listFiles / searchVault / reveal`)都要求一个**已�
 | `readBytes(p)` / `writeBytes(p, bytes)`(2026-09-19+) | 同上两行:`readBytes` 给 `null` 不抛,`writeBytes` **reject** `'No vault is open'`。旧宿主 / 桥缺席时方法整个不存在 → `ctx.app.writeBytes?.(…)` |
 | `mutateDb(p, fn)`(2026-09-02+) | `{ ok:false, error }`,**不抛**;云端/移动端桥没有 CAS 写口时同样 `{ ok:false }`。⚠️**改活表(补列属性、加视图)一律走它**:比对交换 + 冲突重读重放,`fn` 返 `null` 不写;`readFile`+`writeFile` 整文件覆盖会盖掉读写之间自动化/用户刚写的行且零报错。旧宿主没有 → `ctx.app.mutateDb?.(…)` 再走自己的回落路 |
 | `listPages()` / `listFiles()` / `searchVault(q)` | 一律**给空数组、不 reject** |
+| `trash(p)`(2026-10-05+) | **reject**(宿主的清单里找不到这个路径)。没有回收站的端 / 旧宿主**方法整个不存在** |
 | `vaultRoot()` | `null` —— **唯一的可用性探针** |
 | `workFolder()` | **照常返值**(它只是一条设置项的值)—— ⚠️**不是可用性探针**,拿到字符串不代表写得进去 |
 
@@ -412,6 +428,39 @@ createPage / listPages / listFiles / searchVault / reveal`)都要求一个**已�
 - **启动期的写一律 try/catch**;要按「库在不在」分支就读 `vaultRoot()`,别去试探 `readFile` 的 null。
 - 与列表源那条纪律是同一个病根:`registerListSource` 的 `subscribe()` 必须顺手重读一次(见下)。
 
+### 外观开关:跟着宿主走(2026-10-05 起)
+
+用户在 设置 → 外观 有三个缺省开着、可以逐项关掉的开关:**外围淡出**(Ribbon 图标、未选中的标签、左栏文字平时退后,指针或键盘焦点
+进来恢复)、**宽松正文**(笔记与对话正文的行距、段距放宽)、**舒缓过渡**(切视图的淡入、外围恢复慢一点)。插件不用接任何 API,
+守住下面几条就自动跟上;违反了不报错,只是在用户眼里「就你这个插件不一样」:
+
+- **文字和线性图标只用宿主的文字 token**(`var(--text)` / `--text-light` / `--text-muted` / `--text-faint`),不写死颜色,也不自己叠
+  `opacity` 来表示「次要」。左栏的淡出是宿主把这几个变量调淡做出来的:写死的颜色不会跟着淡,在一片退后的侧栏里独自发亮;自己再叠一层
+  透明度会淡两次。状态(未读、出错、进行中)用语义色 `--accent-ink` / `--danger` —— 它们不淡,正好留给需要被看见的东西。
+- **左栏列表的选中行要标出来**:`aria-selected="true"` 或 `aria-current`(类名 `.active` / `.on` / `.is-on` 也认,后两个与 Ribbon 认的
+  「开着」是同一个词)。宿主让选中行保持全亮,没标的会和其它行一起退后。别把 `.on` 挂在包着整块面板的容器上——里面的东西会全都不退后。
+  走 `registerListSource` 的不用管,宿主画的行自带。
+- **整段阅读的正文读两个公开 token**:`line-height: var(--reading-line-height, 1.6)`,段间距 `var(--reading-paragraph-gap, 0.3em)`
+  (兜底值就是开关关着时的数)。只用于文章、说明、预览这类长文;列表、表单、卡片、表格是界面文字,不用这两个 token,也不跟这个开关。
+  `ctx.ui.mountMarkdownEditor` / `ctx.app.mountBlocks` / `ctx.tangu.mountChat` 挂出来的正文是宿主画的,自动跟随。
+- **视图根上不加自己的入场动画**:切主视图时宿主已经做了一次淡入,再加一层会叠成两段。视图里的悬停、展开过渡用宿主的
+  `--duration-fast` / `--duration-slow` / `--ease-out`,不写死毫秒;`prefers-reduced-motion` 下关掉。
+- **这三个开关是用户的**:不读、不写 `forsion_calm_*` 与 `<html data-calm-*>`,不提供同类的私有开关,也不在自己的视图里用 `:hover`
+  去点亮或压暗宿主的外围。iframe / webview 里的页面拿不到宿主变量、不会跟着淡,导航类内容别装进 iframe 再放到左栏。
+
+### 宿主挂载接口的 dispose 契约(2026-10-04 起)
+
+`ctx.app.mountBlocks` / 文件视图的 `mountNoteView` / `ctx.ui.mount*` / `ctx.table.mount` / `ctx.dashboard.mount` / `ctx.tangu.mountChat`
+都把宿主的界面挂进**宿主自己加到 `el` 里的一层**(`display:contents`,不出盒子:`el` 的高度、flex 照旧作用在里面的内容上)。
+
+- `dispose()` 同步摘掉这一层,**之后 `el` 立刻还给你**:清空它、放自己的内容、在同一个 `el` 上再挂,都不用等。
+- dispose 再挂 = 一份全新的实例(输入焦点、排序筛选这些状态不带过来)。只是换数据 / 换参数就用句柄的 `update()`。
+- 一个 `el` 同一时刻只有一份宿主界面:上一份没 dispose 就在同一个 `el` 上再挂,宿主先把上一份完整收掉(等同于你 dispose 了它,句柄此后不再生效),再挂新的;谁后调用谁留下,不看谁先加载完。要并排放两份,就各给一个子节点。
+  `mountFloatingToc` 例外:它是叠在 `shell` 上的一层,不占用 `shell`,不收掉 `shell` 上别的挂载,也不被它们收掉。
+- 别用 `el > .x` 去选宿主渲染的节点,也别假设它是 `el.firstElementChild` —— 中间隔着那一层。
+- 2.12.2 及更早的宿主没有这条保证:dispose 之后那一拍里清空 `el`,宿主的卸载会报一条页面错误,或者再挂之后一片空白。
+  要兼容它们,就把宿主内容挂进你自己建的子节点(`const slot = el.appendChild(document.createElement('div'))`),换内容时连子节点一起换掉。
+
 ### 可复用 UI 组件：ctx.ui.mountChatBox（2026-09-24 起）
 
 Space 管布局，View 管独立功能面，**UI component** 是 View 内可组合的部件；不要与 Amadeus 文档 Block / Dashboard Card 混用。
@@ -423,7 +472,7 @@ Space 管布局，View 管独立功能面，**UI component** 是 View 内可组�
 提交返回 true 清空已提交内容；false / reject 保留，等待中防重复。默认 ⌘/Ctrl+Enter，Shift+Enter 换行，输入法确认不提交。
 模型目录与聊天共用，只展示 LLM；模型与思考档是组件局部草稿，不改全局默认/当前会话，不自动开会话或调用模型。
 **调用方必须使用回调里的模型与思考档**，不能只接 text。附件、命令、审批与运行控制属于会话编排器，不是此提示表单 API。
-插件主动在 View 卸载时 dispose；宿主仍会在插件禁用/重载/setup 失败时统一回收，卸载后晚到的异步结果无效。
+插件主动在 View 卸载时 dispose（之后 `el` 立刻归还，见上「dispose 契约」）；宿主仍会在插件禁用/重载/setup 失败时统一回收，卸载后晚到的异步结果无效。
 完整双语示例与契约：`docs/customization/ui-components.md`；类型真源：`desktop/shared/chatBox.ts`。
 新增公共组件时一起维护类型、本文、原生消费者和生命周期测试，`contractDocs.test.ts` 覆盖 `ctx.ui` 嵌套方法。
 
@@ -433,7 +482,7 @@ Space 管布局，View 管独立功能面，**UI component** 是 View 内可组�
 返回 `{ getValue(), update(patch), insertMarkdown(md), focus(), dispose() }`。
 `opts` 支持 `value`(必填字符串)、`label`、`readOnly`、`previewBaseUrl`(预览里相对路径图片/视频的源)、`onChange(markdown)`。
 **正文与持久化归调用方**:不读写活动库、不改当前笔记、不自动保存、不调模型。保存前必须同步调 `getValue()`(含最新一笔编辑事务)。
-`update({ value })` 换文档,`insertMarkdown` 追加附件/嵌入(只读时无效),`dispose()` 幂等;宿主在插件禁用/重载/setup 失败时统一回收,旧句柄不再改内容。
+`update({ value })` 换文档,`insertMarkdown` 追加附件/嵌入(只读时无效),`dispose()` 幂等(之后 `el` 立刻归还,见上「dispose 契约」);宿主在插件禁用/重载/setup 失败时统一回收,旧句柄不再改内容。
 老宿主没有此方法时明确提示升级,不要拿 textarea 冒充原生编辑器。完整契约:`docs/customization/ui-components.md`;类型真源:`desktop/shared/markdownEditor.ts`。
 
 ### 原生悬浮目录 ctx.ui.mountFloatingToc(2026-09-07 起)
@@ -474,7 +523,7 @@ ctx.registerView({ id: 'manual', title: 'Manual', mount(el) {
 - 特殊 DOM 可传 `itemFromElement(element, index) → {text, level, primary?, onSelect?} | null`。
   回调抛错会被宿主隔离;不传 `onSelect` 就按元素位置在 `scrollContainer` 内平滑滚动。
 - DOM 的增删和文字变化会自动重扫;只有 Shadow DOM / 第三方画布等观察不到的变化才调返回句柄的 `refresh()`。
-  `dispose()` 幂等,插件禁用 / 重载时宿主也会统一卸载。
+  `dispose()` 幂等,同步摘掉宿主加在 `shell` 里的那层(你的正文不动);插件禁用 / 重载时宿主也会统一卸载。
 - 旧宿主整个 `ctx.ui` 不存在,一律 `ctx.ui?.mountFloatingToc(...)`;缺席时可继续显示正文,不必仿一份目录。
 
 ### 仪表盘 ctx.dashboard(2026-09-01 起)
@@ -491,7 +540,7 @@ ctx.registerView?.({ id: 'overview', title: '总览', mount(el) {
     layoutText: saved,                        // 上次存下的整页文本;首次传 null
     onLayout: (text) => ctx.saveData?.({ layout: text }),   // 用户在排版台手排后交出整页文本
     locked: true,                             // true=成品页(只看);false=排版台(可拖可改)
-  })                                          // 返回卸载函数 —— 正好当 mount 的 disposer
+  })                                          // 返回卸载函数 —— 正好当 mount 的 disposer(调用后 el 立刻归还,见「dispose 契约」)
 }})
 
 // 路线 B —— 编译成一份真 `.dashboard.md` 字节,落进库、用原生 tab 打开(**需要已打开的笔记库**)
@@ -551,7 +600,7 @@ const spec = {
 
 const h = ctx.table.mount(el, spec)               // 同步返回 { update, dispose }
 refresh = (rows) => h.update({ ...spec, rows })   // 数据刷新走 update:排序/筛选/列宽存活
-// 视图卸载时 h.dispose()(幂等;插件禁用时宿主也会统一卸掉)
+// 视图卸载时 h.dispose()(幂等,之后 el 立刻归还;插件禁用时宿主也会统一卸掉)
 ```
 
 - **数据刷新一律 `update(spec)`,不要 dispose 了重挂** —— 用户当前的排序 / 筛选 / 隐藏列 / 列宽住在表自己的
@@ -586,6 +635,7 @@ refresh = (rows) => h.update({ ...spec, rows })   // 数据刷新走 update:排�
 | `searchVault(q)` | 全库笔记全文检索。⚠️**最多 50 条且可能截断**,要穷举别靠它;`line` 是剥掉 frontmatter 后的行号**不是磁盘坐标**;`score` 不透明,跨版本不保证稳定 |
 | `vaultRoot()` | 库的绝对路径(把路径喂给 Agent 的 host 工具时才需要)。⚠️含用户名/组织目录等**敏感信息,不得默认持久化或上报**;切库瞬间与主进程短暂不同源,**别缓存过夜** |
 | `reveal(path)` | 在系统文件管理器里打开该路径所在目录并高亮它(2026-08-29 起)。⚠️对**不存在**的路径是静默 no-op,而工作文件夹是首写才诞生 → **先 `writeFile` 一份 README 再 reveal 它**;桥缺席时整条方法不存在,`if (ctx.app.reveal)` 才画按钮 |
+| `trash(path)` | 把库内的一个文件或文件夹移进回收站(2026-10-05 起),等同用户在文件树里删它:宿主收掉开着它的编辑器与标签、提示「已移入回收站」,之后可在回收站恢复。返回 Promise,路径不存在 / 没有活动库 / 调用途中换了库 / 移动失败 → **reject**(路径按清单逐字匹配,只归一分隔符与首尾斜杠)。⚠️**文件夹连同里面的一切一起走,宿主不确认、也不看里面是不是别人的文件** —— 只在确认那个文件夹里全是你自己的东西时才传文件夹,否则传文件;⚠️**先让自己的编辑器停笔**(你的视图若还握着待存内容,下一次自动保存会把文件写回来);只有带回收站的宿主(本机桌面)才有这个方法,web / 移动端 / 2.12.2 及更早**整个不存在** → `ctx.app.trash` 没有就别画删除按钮 |
 
 ### 统一左栏列表源(2026-08-25 起)
 
@@ -755,6 +805,52 @@ else if (!r.ok) ctx.notify(r.error)    // 'unknown agent: x' / 'send failed' / '
 - Agent 名册里没有这个 slug 时,宿主会先刷一次名册再等最多 3s(插件刚装、捆绑 Agent 刚播种进引擎的情况),仍没有才回
   `unknown agent`。提示词上限 20000 字符,超了直接拒(不截断)。
 - **别在 `setup` 里调**,只在用户点了按钮之后调 —— 它会切走用户当前的主区聊天。
+
+### 把对话挂进自己的视图:mountChat(2026-10-04 起)
+
+`startChat` 是把用户**送去**主区聊天。你的 Space 自己就需要一个常驻对话时(创作类工作台右栏那种:边看作品边让 Agent 改,
+生成的东西直接落进项目文件夹),把宿主的原生对话**挂进你自己的视图**:
+
+```js
+let chat = null
+ctx.registerView({ id: 'chat', title: 'Chat', mount(el) {
+  el.style.height = '100%'                        // 对话撑满容器,容器得有确定的高度
+  chat = ctx.tangu?.mountChat?.(el, {
+    agent: 'my-director',                         // 名册里有就行;不给 = 用户默认 Agent
+    folder: 'Video/My film',                      // 库相对路径 → 这条会话的工作目录(可选)
+    title: 'My film',                             // 只在新建会话时用(可选)
+  })
+  if (!chat) { el.textContent = 'Chat needs a newer Forsion'; return }   // 旧宿主:没有这个方法,退回 startChat
+  return () => { chat.dispose(); chat = null }
+} })
+ctx.openView('chat', { location: 'right' })
+
+// 别处(时间线的右键菜单之类):把选中的东西引用进对话,由用户接着打字提问
+chat?.quote('Scene "intro" · <h1 data-in="0.4" data-fx="rise">Hello</h1>')
+// 一键任务:先把对话揭到前台,再把一句请求放进输入框,回车由用户按
+ctx.openView('chat', { location: 'right' }); chat?.prefill('Write an original score for this video.')
+```
+
+- 挂进去的是**同一个**对话:输入框、模型 / 思考档、消息流、工具展示、审批都是原生的,只是固定在一条会话上(不跟随主区)。
+- **会话**:一个(插件, `folder`)一条,宿主记在本机。下次挂载先问引擎它还在不在 —— 在就接回(历史照常在);用户把它删了 / 归档了
+  就新开一条;换了 `folder` 就是另一条。它是一条普通会话,主区的会话列表里也看得到(用户想重新开始:在那里删掉它)。
+- **`folder`**:库相对,宿主解析并钳在库内(与 `ctx.app.hostPath` 同一个函数)。给了它,会话在本机执行、相对路径都落在这个
+  文件夹里 —— `generate_image` 写进 `<folder>/generated/`,Agent 改的就是你的项目文件。宿主**等后端就绪后才解析**,所以应用
+  刚启动、桌面配置和笔记库还没回来时就挂载也没问题(别自己拿 `hostPath` 抢先判断,那一刻它可能还是 null)。
+  ⚠️与 `startChat` 不同:给了 `folder` 却落不到本机路径(没有库 / 引擎不在本机 / 路径越界)→ `ready` 给 `ok:false`,
+  **不会悄悄退成沙箱对话** —— 常驻对话接错目录比开不了更糟。不给 `folder` 才是不带工作目录的沙箱对话。
+- **永不替用户送出**,回车由用户按。句柄给两条路:`quote(text)` 挂成输入框上方的引用条(不动草稿,适合「引用这个元素再提问」);
+  `prefill(text)` 接在输入框草稿后面并聚焦(适合一键任务,同 Image Studio)。两条在对话还没接上时调用都不丢;
+  `prefill` 在你的视图还压在后台标签里时也照样落进输入框,连调几次按先后都接上;想让用户马上看见,先 `ctx.openView`
+  把视图揭到前台。都只有文字,没有附件。
+  所以 `agent` 不要求是你捆绑的(与 `startChat` 的预填档同一口径)。
+- `ready` → `{ ok:true, sessionId }`;后端没连上 / `unknown agent` / 建会话失败 → `{ ok:false, error }`,不抛,界面上自带「重试」。
+  拿到的 `sessionId` 可以喂给 `agentStatus(sessionId)` / `subscribeAgentStatus(cb, sessionId)`,跟着这条对话的状态做反应。
+- **已知限制**:同一个(插件, `folder`)同一时刻只挂一处 —— 挂两处是同一条会话的两个输入框,`prefill` 落到先接走的那个;
+  `quote` 走的是全应用共用的一个引用位,连着引用两次只留后一次。
+- 视图卸载时自己 `dispose()`;插件被禁用 / 重载时宿主统一卸掉,旧句柄的 `quote` / `prefill` 不再生效。
+  `dispose()` 之后 `el` 立刻还给你(宿主只动自己挂进去的那一层,见「dispose 契约」):换一个 `folder` 时先 `dispose()`,再在同一个 `el` 上挂新的即可。
+  **只在有对话能力的宿主上存在**:`ctx.tangu?.mountChat`,缺席时退回 `startChat`。
 
 ## 正文 AI:ctx.tangu.complete 与 registerSelectionAction(2026-09-28 起)
 
@@ -1029,7 +1125,7 @@ const dispose = ctx.app.mountBlocks(el, {
 - **`blocks` 的引用是稳定的**:`subscribePage` 靠引用比较去重,自己缓存派生结果时也按引用判,别每帧深比较。快照本身是 `Object.freeze` 的(全插件共用一份,改它没用也不许改)。
 - **块 id 会被复用**:落盘前剪掉指向已不存在的块的记录,否则新块会继承旧记录的状态。
 - **自己的浮层要小心 `transform`**:`.slash-menu` / 行内工具栏这些是 `position: fixed` + 视口坐标;你的画布若带 pan/zoom 的 `transform`,它就成了 fixed 的包含块,浮层会被平移+缩放一次。把浮层传送到最近的 `.am-app` 下。
-- **忘记清理宿主也会兜**:插件被禁用/重载/`setup` 抛错时,你开的 `subscribePage` 与 `mountBlocks` 由宿主统一收掉,之后整份 `ctx.app` 块表面变哑(在飞的异步任务改不动用户文件)。但这是安全网不是设计:该 dispose 还是要 dispose。
+- **忘记清理宿主也会兜**:插件被禁用/重载/`setup` 抛错时,你开的 `subscribePage` 与 `mountBlocks` 由宿主统一收掉,之后整份 `ctx.app` 块表面变哑(在飞的异步任务改不动用户文件)。但这是安全网不是设计:该 dispose 还是要 dispose。`mountBlocks` 返回的 dispose 调用之后 `el` 立刻归还(见「dispose 契约」);dispose 再挂是一个新的编辑器,用户正在输入时别这么做(焦点和选区会丢)。
 - **内置类型优先是硬规则**:`registerFileType` 的后缀若已被内置认领(`.excalidraw.md`/`.db`/`.pdf`/图片),宿主**拒绝注册并返回 `false`** —— 拿到 `false` 就整体退让,连创建器/斜杠项/命令一起别注册(那几个宿主拦不住,不退让用户会看到两份「新建 X」)。旧宿主返回 `undefined`,所以判定写 `=== false`。
 - **四条新建主路径都要注册**:文件树右键(`registerFileCreator`)、命令面板(`registerCommand`)、笔记里的 `/`(`registerSlashItem` + `run()`,建完就地嵌入)、**新建标签页启动器**(2026-07-26 起也列 `registerFileCreator`,与内置的「新建白板」并排)。少注册一条,用户就会问「为什么 XX 里没有它」。
 - **想做「节点/卡片里是真块」的界面,照 `forsion-plugin-mindmap` 3.0.0 抄**:它是块表面 seam 的样板 —— 一层薄适配(`src/host.tsx`)把 `ctx.app` 伪装成宿主 store/组件的形状,画布本体几乎原样;令牌只在适配层管一次。⚠️那层里按内容去重的缓存**不是优化是正确性**:`getPage()` 每次返回新对象,不去重则 `useSyncExternalStore` 每次判「变了」→ 无限重渲挂死。React 也内联进包(插件拿不到宿主模块图;两份 React 共存没问题,边界就是 `mountBlocks` 那个 DOM 节点)。
@@ -1125,7 +1221,7 @@ Forsion Android App 也跑 Forsion 插件(同一份 `pluginStore`、同一个 `c
 
 ### API-backed Markdown editor
 
-`ctx.ui?.mountMarkdownEditor(el, { value, label, readOnly, onChange })` mounts native Amadeus without using the active vault. The caller owns save/publish. It offers visual/source/publishing preview modes. `getValue()` reads the latest synchronous editor transaction; `update`, `insertMarkdown`, `focus`, and idempotent `dispose` are available. The host revokes it on plugin unload. Feature-detect; absent hosts should ask for an upgrade.
+`ctx.ui?.mountMarkdownEditor(el, { value, label, readOnly, onChange })` mounts native Amadeus without using the active vault. The caller owns save/publish. It offers visual/source/publishing preview modes. `getValue()` reads the latest synchronous editor transaction; `update`, `insertMarkdown`, `focus`, and idempotent `dispose` are available; after `dispose` the element is yours again at once. The host revokes it on plugin unload. Feature-detect; absent hosts should ask for an upgrade.
 
 
 ### Plugin Chat Box selection and Director hand-off (2026-09-30)

@@ -63,11 +63,12 @@ beforeAll(async () => {
   await saveAgent({ slug: 'worker', name: 'Worker', systemPrompt: 'Work.' } as any);
   await saveAgent({ slug: 'rookie', name: 'Rookie', systemPrompt: 'Learn.' } as any);
 
-  // worker:25 次 run,只用 run_bash / read_file / use_skill(local:foo);一次坏参数的 use_skill 不算装载
+  // worker:25 次 run,只用 run_bash / read_file / use_skill(local:foo);一次坏参数的 use_skill 不算装载;
+  // 三次装载里有一次没带 local: 前缀(模型常这么写,use_skill 认)—— 照样记在 local:foo 名下
   // 统计口径 = 本机工作面:execMode 取 run 入参(真实 run 都带),没写再看会话存档
   const W = { agentSlug: 'worker', execMode: 'host' };
   await session('s-worker', 'user', W);
-  for (let i = 0; i < MIN_RUNS + 5; i++) await run('s-worker', { agentConfig: W }, ['run_bash', 'read_file', ...(i < 3 ? [['use_skill', '{"skill_id":"local:foo"}'] as [string, string]] : [])]);
+  for (let i = 0; i < MIN_RUNS + 5; i++) await run('s-worker', { agentConfig: W }, ['run_bash', 'read_file', ...(i < 3 ? [['use_skill', i === 0 ? '{"skill_id":"foo"}' : '{"skill_id":"local:foo"}'] as [string, string]] : [])]);
   await run('s-worker', { agentConfig: W }, [['use_skill', '{not json']]);
   await run('s-worker', { agentConfig: W }, ['web_fetch']); // 只调过 1 次 → 「偶尔」
   // 入参没写 agentSlug / execMode:按会话存档归到 worker、认作本机
@@ -115,7 +116,8 @@ describe('collectLoadoutUsage', () => {
     // 沙箱 / 团队 / chat / coding 的 run 不进分母也不进计数(worker.runs 上面已钉死没有多出来)
     for (const outside of ['x_sandbox', 'x_group_run', 'x_nomode', 'x_chat', 'x_chat_request', 'x_coding', 'x_group_session']) expect(worker.tools.has(outside), outside).toBe(false);
     expect(worker.tools.get('run_bash')?.last).toMatch(/^\d{4}-\d{2}-\d{2} /);
-    expect([...worker.skills.entries()]).toEqual([['local:foo', expect.objectContaining({ calls: 3 })]]); // 坏参数那次不算
+    expect(worker.skills.get('local:foo')).toEqual(expect.objectContaining({ calls: 3 })); // 没带前缀的那次也算在它名下;坏参数那次不算
+    expect([...worker.skills.keys()].sort()).toEqual(['foo', 'local:foo']);
     expect(usage.get('xyra')?.tools.get('get_datetime')?.calls).toBe(1);
     expect(usage.get('rookie')?.runs).toBe(3);
     expect(usage.has('muse')).toBe(false);

@@ -25,8 +25,9 @@ function loadActive(): string {
  *  它跑在 installEngine 的启动策略**之前**。读归一后的值 = 把上一程的布局归档到别人名下:
  *  上次退出在用户 Space U → 归一成 tangu → U 的现场被写进 `space:tangu`,U 自己的槽还停在上上次
  *  (Codex 评审 2026-08-13 抓的 High)。
- *  这份快照可信的前提:归一后的值**从不落盘**(registerSpaces 只改内存)。落了盘,下一程的快照就是回落 Space,
- *  等于把上面那个坑挪到下次启动再踩。 */
+ *  这份快照可信的前提:归一 / 回落后的值**从不落盘**(registerSpaces 只改内存;启动点名的 Space 还没注册时
+ *  bootstrapEngine 落在回落 Space 上,也只改内存 —— setActiveSpaceCold 的 persist=false)。落了盘,下一程的快照就是
+ *  回落 Space,等于把上面那个坑挪到下次启动再踩。 */
 export const BOOT_ACTIVE_SPACE_ID: string = loadActive()
 
 interface SpaceState {
@@ -89,12 +90,13 @@ export const getActiveSpace = (): SpaceDefinition | undefined => {
 
 /** 冷启动定位:直接把活动 Space 钉到 id + 写 ACTIVE_KEY,不存旧布局、不套命名布局 ——
  *  布局交给 onReady 的 buildDefault 重建成该 Space 的干净默认(「默认 Space」启动设置用)。
- *  id 未注册(如用户 L0 Space 尚未异步装载)则不动,调用方自行回退。 */
-export function setActiveSpaceCold(id: string): void {
+ *  id 未注册(如用户 L0 Space 尚未异步装载)则不动,调用方自行回退。
+ *  persist=false:id 只是回落值(启动点名的 Space 还没注册)→ 只改内存,盘上仍是「上次退出在哪」。 */
+export function setActiveSpaceCold(id: string, persist = true): void {
   const { spaces } = useSpaceStore.getState()
   if (!spaces.some((s) => s.id === id)) return
   useSpaceStore.setState({ activeSpaceId: id })
-  try { if (!IS_TRANSIENT_MINI_PANEL) localStorage.setItem(ACTIVE_KEY, id) } catch { /* ignore */ }
+  try { if (persist && !IS_TRANSIENT_MINI_PANEL) localStorage.setItem(ACTIVE_KEY, id) } catch { /* ignore */ }
 }
 
 /** 冷启动的每-Space 布局交接。**纯 Storage 搬运**,故可以跑在 Dockview api 就绪之前(onReady 之前
@@ -141,7 +143,20 @@ let layoutsResetThisBoot = false
  *  Space 的现场 —— 异步就位的 Space 据此重建自己的默认布局,而不是把回落 Space 的内容认成自己的。 */
 export const spaceLayoutsWereReset = (): boolean => layoutsResetThisBoot
 
-export function resetSpaceLayouts(): void {
+export function resetSpaceLayouts(only?: string): void {
+  if (only) {
+    // 只丢一个 Space 的(它的固定 View 换了边:单例复用不看位置,旧布局还原回来,新位置上那个就开不出来)。命名槽按名字丢。
+    // 当前布局要先认清是谁的:桌面的认信封自己记的归属,老存档没记才看「上次退出在哪」。单列存档不记归属,而「上次退出
+    // 在哪」那把键两种壳共用,证明不了它是谁的(在单列壳里停在 Tangu、回桌面壳后在这个 Space 退出 → 那份是 Tangu 的现场):
+    // 只有主区里摆着这个 Space 的固定主视图才算它的,认不出就留着 —— 留错了只是那台设备上旧排布多活一阵,删错了丢的是别人的现场。
+    // ⚠️不置 layoutsResetThisBoot:那面旗说的是「全部 Space 都重置了」,置了会让无关的异步启动 Space 被当成要重建,
+    // 它刚还原的现场被清掉、切走时再把默认布局存进它的槽(Codex 评审)。`only` 自己若是异步注册的 Space,调用方另行处理。
+    deleteNamedLayout(spaceLayoutName(only))
+    if ((loadLayout()?.space ?? BOOT_ACTIVE_SPACE_ID) === only) clearLayout()
+    const mainTypes = useSpaceStore.getState().spaces.find((space) => space.id === only)?.pinned?.main?.map((view) => view.type) ?? []
+    clearSingleColumnLayouts({ space: only, mainTypes })
+    return
+  }
   layoutsResetThisBoot = true
   for (const name of Object.keys(listNamedLayouts())) if (name.startsWith('space:')) deleteNamedLayout(name)
   clearLayout()

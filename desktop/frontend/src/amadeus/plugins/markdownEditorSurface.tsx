@@ -114,21 +114,21 @@ export function mountPluginMarkdownEditor(
 ): PluginMarkdownEditorHandle {
   const options = { ...initial }
   let alive = true,
-    revision = 0,
-    unmount = () => {}
-  const render = (): void => {
-    unmount = mountHostReact(
-      el,
-      <HostLocaleProvider>
-        <EditorSurface
-          options={options}
-          revision={revision++}
-          alive={() => alive}
-        />
-      </HostLocaleProvider>,
-    )
-  }
-  render()
+    revision = 0
+  const tree = () => (
+    <HostLocaleProvider>
+      <EditorSurface
+        options={options}
+        revision={revision++}
+        alive={() => alive}
+      />
+    </HostLocaleProvider>
+  )
+  // alive 跟着这次挂载走:被后来的挂载收掉之后,旧句柄不再改正文、不再回调 onChange(getValue 留着那一刻的值)
+  const mounted = mountHostReact(el, tree(), () => {
+    alive = false
+  })
+  const render = (): void => mounted.render(tree())
   return {
     getValue() {
       return options.value
@@ -152,11 +152,6 @@ export function mountPluginMarkdownEditor(
           '[contenteditable="true"],textarea',
         )?.focus()
     },
-    dispose() {
-      if (alive) {
-        alive = false
-        unmount()
-      }
-    },
+    dispose: mounted.dispose,
   }
 }

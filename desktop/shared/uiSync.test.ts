@@ -20,6 +20,13 @@ describe('normalizeUiSync', () => {
     expect(normalizeUiSync({ theme: legacy })?.theme).toEqual(legacy)
   })
 
+  it('同步「外壳随内容取色」开关;旧窗口不带这一项时不凭空补值,非布尔丢掉主题那半', () => {
+    expect(normalizeUiSync({ theme: { ...axes, ambient: true } })?.theme?.ambient).toBe(true)
+    expect(normalizeUiSync({ theme: { ...axes, ambient: false } })?.theme?.ambient).toBe(false)
+    expect(normalizeUiSync({ theme: axes })?.theme).not.toHaveProperty('ambient')
+    expect(normalizeUiSync({ theme: { ...axes, ambient: 'on' } })).toBeNull()
+  })
+
   it('非法颜色归成空串(收方读作「保留本窗现值」),不让任意串进 CSS 变量与 localStorage', () => {
     expect(normalizeUiSync({ theme: { ...axes, seed: 'red; content: url(x)', bgSeed: 'x'.repeat(9999) } })?.theme)
       .toEqual({ ...axes, seed: '', bgSeed: '' })

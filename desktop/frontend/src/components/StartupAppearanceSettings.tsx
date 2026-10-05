@@ -10,8 +10,12 @@ import { SettingsPanel, SettingsRow, SettingsSwitch } from './SettingsPrimitives
 import { AppearanceImportDialog } from './AppearanceImportDialog'
 import startupHtml from '../../index.html?raw'
 import startupRuntime from '../../startupAppearance.js?raw'
+import { APP_VERSION } from '../changelog'
 import './startupAppearance.css'
 import './startupAppearanceCopy'
+
+/** Picker value of the original animated tree mark; asset ids never collide with it (`upload`, `builtin:*`, `plugin:*`). */
+const CLASSIC = 'classic'
 
 export const StartupAppearanceSettings: React.FC = () => {
   const { t, locale } = useI18n()
@@ -27,6 +31,8 @@ export const StartupAppearanceSettings: React.FC = () => {
   const save = (patch: AppearancePatch): void => { void run(() => updateAppearance(patch)) }
   const label = (asset: AppearanceAsset): string => asset.id === 'upload' ? t('startupAppearance.uploaded') : locale === 'en' ? asset.labelEn || asset.label : asset.label
   const select = (slot: 'icon' | 'splash', key: string): void => {
+    // The two built-in scenes carry no image: they are what shows while no artwork is selected.
+    if (slot === 'splash' && (!key || key === CLASSIC)) { save({ splash: null, scene: key ? 'classic' : 'treeShadow' }); return }
     if (!key) { save({ [slot]: null }); return }
     const builtin = BUILTIN_APPEARANCES.find((p) => p.key === key)
     if (builtin?.[slot]) {
@@ -48,15 +54,15 @@ export const StartupAppearanceSettings: React.FC = () => {
     // Function replacer: an uploaded file name is part of the config, and `$'` in a replacement string expands to page HTML.
     const html = startupHtml.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '')
       .replace('<html', `<html data-mode="${document.documentElement.dataset.mode === 'dark' ? 'dark' : 'light'}"`)
-      .replace('<!-- forsion-startup-runtime -->', () => `<script>window.tangu={startupAppearance:{initial:${JSON.stringify({ ...value, showSplash: true }).replace(/</g, '\\u003c')}}};</script><script>${startupRuntime}</script><script>setTimeout(function(){document.getElementById('root').textContent=' ';},2400);</script>`)
+      .replace('<!-- forsion-startup-runtime -->', () => `<script>window.FORSION_APP_VERSION=${JSON.stringify(APP_VERSION)};window.tangu={startupAppearance:{initial:${JSON.stringify({ ...value, showSplash: true }).replace(/</g, '\\u003c')}}};</script><script>${startupRuntime}</script><script>setTimeout(function(){document.getElementById('root').textContent=' ';},2400);</script>`)
     setPreview(html)
   }
   const artworkControl = (slot: 'icon' | 'splash'): React.ReactNode => (
     <div className="startup-appearance-picker">
-      <select id={`startup-${slot}`} value={value[slot]?.id || ''} onChange={(e) => select(slot, e.target.value)}>
-        <option value="">{t('startupAppearance.default')}</option>
+      <select id={`startup-${slot}`} value={value[slot]?.id || (slot === 'splash' && value.scene === 'classic' ? CLASSIC : '')} onChange={(e) => select(slot, e.target.value)}>
+        <option value="">{t(slot === 'splash' ? 'startupAppearance.scene.treeShadow' : 'startupAppearance.default')}</option>
         {value[slot] && ![...BUILTIN_APPEARANCES, ...presets].some((p) => p.key === value[slot]!.id && p[slot]) && <option value={value[slot]!.id}>{label(value[slot]!)}</option>}
-        <optgroup label={t('startupAppearance.builtins')}>{BUILTIN_APPEARANCES.filter((p) => p[slot]).map((p) => <option key={p.key} value={p.key}>{locale === 'en' ? p.labelEn || p.label : p.label}</option>)}</optgroup>
+        <optgroup label={t('startupAppearance.builtins')}>{slot === 'splash' && <option value={CLASSIC}>{t('startupAppearance.scene.classic')}</option>}{BUILTIN_APPEARANCES.filter((p) => p[slot]).map((p) => <option key={p.key} value={p.key}>{locale === 'en' ? p.labelEn || p.label : p.label}</option>)}</optgroup>
         {presets.some((p) => p[slot]) && <optgroup label={t('startupAppearance.plugins')}>{presets.filter((p) => p[slot]).map((p) => <option key={p.key} value={p.key}>{locale === 'en' ? p.labelEn || p.label : p.label}</option>)}</optgroup>}
       </select>
       <label className="btn ghost sm startup-appearance-upload" title={t('startupAppearance.upload')}>
@@ -107,6 +113,7 @@ export const StartupAppearanceSettings: React.FC = () => {
       <summary><ChevronRight size={12} aria-hidden="true" />{t('startupAppearance.help')}</summary>
       <div>
         <p>{t('startupAppearance.behavior')}</p>
+        <p>{t('startupAppearance.sceneHint')}</p>
         <p>{t('startupAppearance.hint')}</p>
         {window.tangu?.startupAppearance && <p>{t('startupAppearance.nativeHint')}</p>}
         {!presets.length && <p>{t('startupAppearance.empty')}</p>}

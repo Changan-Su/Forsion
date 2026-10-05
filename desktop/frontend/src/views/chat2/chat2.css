@@ -101,16 +101,20 @@
 .t2-name .t2-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent-ink); }
 .t2-content {
   max-width: 700px;
-  font-size: 14px; line-height: 1.72; color: var(--text);
+  /* 行距 / 段距走 --chat-*:兜底是缺省值,「宽松正文」开着时由 theme/calm.css 换值。 */
+  font-size: 14px; line-height: var(--chat-line-height, 1.72); color: var(--text);
   word-break: break-word;
 }
 /* 让内嵌 Markdown 段落呼吸感更强(只在新外壳内,不影响旧组件) */
 .t2-content > :first-child { margin-top: 0; }
 .t2-content > :last-child { margin-bottom: 0; }
-.t2-content p { margin: 0 0 .7em; }
+.t2-content p { margin: 0 0 var(--chat-paragraph-gap, .7em); }
+/* 列表:缺省项与项、列表与下一段之间都不留空(全局 reset);宽松正文时各留一点。只管顶层列表,嵌套的不加底边距。 */
+.t2-content li { margin-block: var(--chat-item-gap, 0); }
+.t2-content > :is(ul, ol) { margin-bottom: var(--chat-list-after, 0); }
 /* 标题节奏(10-02 用户拍板 a5,与笔记同一口径):半粗、上远下近。原来没有这组规则,走浏览器默认的 700。
    首块的上边距由上面 > :first-child 清零(特异性更高)。 */
-.t2-content :is(h1, h2, h3, h4, h5, h6) { font-weight: 600; line-height: 1.35; margin: 1.3em 0 0.4em; }
+.t2-content :is(h1, h2, h3, h4, h5, h6) { font-weight: 600; line-height: 1.35; margin: 1.3em 0 var(--chat-heading-after, 0.4em); }
 .t2-content h1 { font-size: 1.4em; }
 .t2-content h2 { font-size: 1.25em; }
 .t2-content h3 { font-size: 1.1em; }

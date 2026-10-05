@@ -41,17 +41,18 @@ import { DEFAULT_AGENT_SLUG } from '../core/tanguHome.js';
 import { buildSharedPrefix } from './selfBrainstorm.js';
 import { effectiveContextWindowInfo, estimateMessageTokens } from './contextBudget.js';
 import { redactSecrets } from '../core/redact.js';
-import { appendHarnessCandidates, adoptHarnessNomination, autoAdoptable, noteAutoAdoptable } from '../agents/harnessStore.js';
+import { appendHarnessCandidates, adoptHarnessNomination, autoAdoptable, noteAutoAdoptable, candidateNeedsUser } from '../agents/harnessStore.js';
 import { scheduleAgentFilesSync } from './agentFileSync.js';
 import { appendCandidates as appendRawCandidates, readCandidates as readRaw } from './memoryCandidates.js';
 import { startMemoryDream } from './memoryDream.js';
 import { MEMORY_CHAR_BUDGET, normalizeMemoryFact } from './memoryRepository.js';
 import { sessionCalledTool } from './sessionSearchSql.js';
-import { addProjectFact, peekProjectMemory, resolveProjectMemory } from './projectMemory.js';
+import { addProjectFact, peekProjectMemory, pendingProjectFacts, projectKnownForJudge, queueProjectFact, resolveProjectMemory } from './projectMemory.js';
 import { COMPUTER_HISTORY_TOOL } from './computerHistory.js';
 import { HISTORIAN_EMOJI_FIELD } from '../core/sessionEmoji.js';
 import { applyHistorianEmoji } from './sessionEmoji.js';
 import { sessionRemoteTainted } from './remoteTaint.js';
+import { judgeTriggerBlock } from './judgeSignals.js';
 export { parseRawLines } from './memoryCandidates.js';
 const historianSignal = new AsyncLocalStorage<AbortSignal>();
 
@@ -72,10 +73,17 @@ const PROJECT_FACTS_MAX_PER_ROUND = 3;
 // 「锁忙」当 fork 失败再并发启动 independent。
 const historianBusySessions = new Set<string>();
 export const isHistorianBusy = (sessionId: string): boolean => historianBusySessions.has(sessionId);
+// 信号轮(E2,services/judgeSignals.ts):不到点也评一次。同一会话两次**加评**之间至少隔这么久 —— 纠正的词面判定会误报,
+// 爱说「不对」的用户不该每句话都烧一次后台调用。到点轮不受它限制(那本来就要评,只是多带一段说明)。
+export const SIGNAL_REVIEW_COOLDOWN_MS = 10 * 60_000;
+const lastSignalReview = new Map<string, number>();
+/** 测试用:还在冷却表里的会话数。 */
+export const signalCooldownCount = (): number => lastSignalReview.size;
 
 /** 测试用:清空整固互斥/退避/会话互斥状态(模块级,跨用例会串)。 */
 export function resetHistorianConsolidationState(): void {
   historianBusySessions.clear();
+  lastSignalReview.clear();
 }
 
 /** judge JSON 的字段规格+示例(独立模式 system prompt 与 fork 判官指令共用同一契约)。 */
@@ -119,14 +127,14 @@ function judgeFieldSpecs(wantTitle: boolean, wantLog: boolean, wantMemory: boole
   if (wantHarness) {
     // 反模式清单抄 hermes skill-review 的负面门(环境失败/负面断言/一次性叙事会硬化成日后反噬的拒绝理由)。
     fields.push(
-      '"harness_candidates": an array of NEW working-method lessons for the agent\'s own working notes (usually empty). ' +
+      '"harness_candidates": an array of NEW working-method lessons for the agent\'s own evolution record (usually empty). ' +
       'Qualifying: a durable, transferable lesson the agent worked out by itself about HOW it should work — a technique or delegation pattern that proved itself, ' +
       'a procedural landmine and the way around it, a working rule the agent itself formulated or committed to in this conversation (not one the user dictated). ' +
       'Never include: environment/setup hiccups, transient errors, negative claims like "tool X is broken" (they harden into refusals that bite the agent later), ' +
       'one-off task narratives, anything the user told, corrected or required of the agent, or facts about the user or a project (those belong in memory_candidates). ' +
       // 10-04:提名过得了形状闸就直接写进工作笔记(用户裁决「可以做自动采纳」)—— 所以要 title / lesson / evidence 三样,而不是一句话。
       'Each entry is an object {"title": a short name of at most 60 characters, "lesson": one self-contained sentence saying what to do, "evidence": one short sentence saying what happened in this conversation that shows it}, all in English. ' +
-      'An entry may be written straight into the working notes without anyone reviewing it, so include only what clearly helped here. At most 3 entries; an empty array is the normal outcome.',
+      'An entry may be written straight into the evolution record without anyone reviewing it, so include only what clearly helped here. At most 3 entries; an empty array is the normal outcome.',
     );
   }
   const example =
@@ -141,19 +149,20 @@ function judgeFieldSpecs(wantTitle: boolean, wantLog: boolean, wantMemory: boole
  * 关键:LOG(当天流水:发生了什么)与 memory(长期稳定事实/偏好,跨会话有用、绝非流水账)是**两类不同内容**,
  * 不得相同;memory 要克制,多数对话应为空。
  */
-function buildJudgeSystem(customPrompt: string, wantTitle: boolean, wantLog: boolean, wantMemory: boolean, wantSummary: boolean, wantHarness: boolean, wantEmoji = false, wantProject = false): string {
+function buildJudgeSystem(customPrompt: string, wantTitle: boolean, wantLog: boolean, wantMemory: boolean, wantSummary: boolean, wantHarness: boolean, wantEmoji = false, wantProject = false, trigger = ''): string {
   const { fields, example } = judgeFieldSpecs(wantTitle, wantLog, wantMemory, wantSummary, wantHarness, wantEmoji, wantProject);
   return [
     (customPrompt && customPrompt.trim()) || DEFAULT_HISTORIAN_PROMPT,
     '\nRead the conversation below and judge; output **a single JSON object** only, with the following fields:',
     '- ' + fields.join('\n- '),
+    trigger,
     `Example: ${example}`,
     'Give an empty string (or empty array) for fields that need no update. Output JSON only — no code fences, no extra text.',
   ].filter(Boolean).join('\n');
 }
 
 /** fork 判官的追加指令(user 消息,分叉尾部):上下文=上方完整对话,无需另拼 transcript。 */
-function buildForkJudgeMessage(customPrompt: string, wantTitle: boolean, wantLog: boolean, wantMemory: boolean, wantSummary: boolean, wantHarness: boolean, prevSummary: string, wantEmoji = false, wantProject = false, projectKnown = ''): string {
+function buildForkJudgeMessage(customPrompt: string, wantTitle: boolean, wantLog: boolean, wantMemory: boolean, wantSummary: boolean, wantHarness: boolean, prevSummary: string, wantEmoji = false, wantProject = false, projectKnown = '', trigger = ''): string {
   const { fields, example } = judgeFieldSpecs(wantTitle, wantLog, wantMemory, wantSummary, wantHarness, wantEmoji, wantProject);
   return [
     '## Historian fork (tail-fork judge)',
@@ -162,6 +171,7 @@ function buildForkJudgeMessage(customPrompt: string, wantTitle: boolean, wantLog
     (customPrompt && customPrompt.trim()) || DEFAULT_HISTORIAN_PROMPT,
     'Judge the FULL conversation above and output **a single JSON object** with the following fields:',
     '- ' + fields.join('\n- '),
+    trigger,
     prevSummary ? `[Previous summary]\n${prevSummary}` : '',
     projectKnown ? `[Project memory]\n${projectKnown}` : '',
     `Example: ${example}`,
@@ -210,8 +220,12 @@ export function isRoundDue(roundN: number, every: number, firstRoundTrigger: boo
 async function enoughNewSinceLastAction(sessionId: string): Promise<boolean> {
   try {
     const last = await query<any[]>(
-      // 标题在 run 起点写(onUserRunStart),落在本轮用户消息之后:算它做游标,done 时只剩助手回复可数,短回复会把整轮判断跳掉。
-      `SELECT created_at FROM special_agent_log WHERE session_ref = ? AND agent = 'historian' AND action <> 'title_updated'
+      // 游标只认到点维护写下的活动(摘要 / 日志 / 图标 / 辅助讨论):
+      //   · 标题在 run 起点写(onUserRunStart),落在本轮用户消息之后:算它做游标,done 时只剩助手回复可数,短回复会把整轮判断跳掉;
+      //   · 各类候选(记忆 / 项目记忆 / 进化记录)不算:信号加评(不到点)只写这几类,算进来的话它刚写完,下一个到点轮
+      //     就会被判成「无实质新增」,而摘要 / 日志在加评那轮根本没做(Codex 评审 10-05)。只漏不拦:游标偏旧 = 多评一次。
+      `SELECT created_at FROM special_agent_log WHERE session_ref = ? AND agent = 'historian'
+         AND action IN ('summary_updated', 'log_appended', 'icon_updated', 'assist_discussion')
        ORDER BY created_at DESC LIMIT 1`,
       [sessionId],
     );
@@ -424,14 +438,15 @@ export function historianRoundRemote(sk: { agent_config?: unknown } | undefined,
 }
 
 /** @param runRemote 刚结束的这条 run 是否来自远端 —— 由 agentLoop 在 run **收尾时**算好传入(input.remote,或远端 steer / 询问 /
- *  截屏 / ui_ 回执给本机 run 打的进程内污点;那张表随 run 收尾清掉,Historian 异步起来时已经查不到)。 */
-export async function onUserRunDone(sessionId: string, userId: string, memScopeSlug?: string, forkSeed?: HistorianForkSeed, runRemote = false): Promise<void> {
+ *  截屏 / ui_ 回执给本机 run 打的进程内污点;那张表随 run 收尾清掉,Historian 异步起来时已经查不到)。
+ *  @param signals 这一轮攒下的复盘信号(services/judgeSignals.ts;给判官读的英文句子)。有信号时不到点也评一次。 */
+export async function onUserRunDone(sessionId: string, userId: string, memScopeSlug?: string, forkSeed?: HistorianForkSeed, runRemote = false, signals?: readonly string[]): Promise<void> {
   if (!isLocal()) return;
   // 会话级互斥:上一轮维护(judge/fork/整固)还在飞 → 整轮跳过(尽力而为,下个到点轮自然补)。
   // 加锁在首个 await 之前,并发 done 只有一个能进。
   if (historianBusySessions.has(sessionId)) { log(`会话 ${sessionId.slice(0, 8)} 上一轮维护尚在进行,跳过本轮`); return; }
   if (historianBusySessions.size >= 2) return; // bounded background work; never queue user turns
-  await runHistorianSlot(sessionId, () => runHistorianForSession(sessionId, userId, memScopeSlug, forkSeed, { runRemote }));
+  await runHistorianSlot(sessionId, () => runHistorianForSession(sessionId, userId, memScopeSlug, forkSeed, { runRemote, signals }));
 }
 
 /** 私聊「新会话(先总结记忆)」用(方案 §5.3 ②):绕过到点轮与增量地板,立刻对该会话采一次候选(标题/摘要/LOG/记忆候选),
@@ -462,7 +477,7 @@ async function runHistorianSlot(sessionId: string, fn: () => Promise<void>): Pro
   }
 }
 
-async function runHistorianForSession(sessionId: string, userId: string, memScopeSlug?: string, forkSeed?: HistorianForkSeed, opts?: { force?: boolean; runRemote?: boolean }): Promise<void> {
+async function runHistorianForSession(sessionId: string, userId: string, memScopeSlug?: string, forkSeed?: HistorianForkSeed, opts?: { force?: boolean; runRemote?: boolean; signals?: readonly string[] }): Promise<void> {
   // 解析本 run 的记忆域:优先传入的 memScopeSlug;否则(外部引擎等未做激活的路径)从会话 agent_config.agentSlug
   // 兜底读——那存的是 active slug,须经 resolveMemorySlug 折叠 shareDefaultMemory 才与 run 内记忆读写同域。
   // 重注入 Historian 自己的异步上下文 → deps().brain.memory(动态本地库)读写落到该 agent 的文件夹(fire-and-forget
@@ -518,13 +533,18 @@ async function runHistorianForSession(sessionId: string, userId: string, memScop
 
     // 周期合一:标题 + LOG/memory 同一节奏(每 everyRounds 轮),用户设几轮就是几轮,节奏可预期。
     // force(私聊 rotate):不看到点轮与增量地板,本次一定采;其余闸(kind/roundN≥1/模型/预算)照旧。
-    const due = !!opts?.force || isRoundDue(roundN, cfg.everyRounds, cfg.firstRoundTrigger);
+    // 信号轮(E2):这一轮出了值得复盘的事 → 不到点也评一次,但只评记忆 / 进化记录两类候选;
+    // 标题 / 摘要 / 日志 / 图标 / 辅助讨论仍只跟到点轮(cadenceDue)。到点轮带着信号 = 照常评,多一段「为什么现在评」。
+    const cadenceDue = !!opts?.force || isRoundDue(roundN, cfg.everyRounds, cfg.firstRoundTrigger);
+    const signals = (opts?.signals ?? []).map((x) => String(x || '').trim()).filter(Boolean).slice(0, 4);
+    const signalDue = !cadenceDue && signals.length > 0 && Date.now() - (lastSignalReview.get(sessionId) ?? 0) >= SIGNAL_REVIEW_COOLDOWN_MS;
+    const due = cadenceDue || signalDue;
     if (!due) return;
     // 标题已由 run 起点那一路(只看用户消息)接手 → 判官不再要 title;起点失败/没跑才兜底。
     const earlyKey = `${sessionId}:${roundN}`;
     const early = opts?.force ? undefined : earlyTitles.get(earlyKey);
     earlyTitles.delete(earlyKey);
-    const titleDue = due && !(early && (await early));
+    const titleDue = cadenceDue && !(early && (await early));
     // 远程来源的一轮不写长期记忆(09-27 终审 P1 延伸):记忆会注入之后每一次会话(含本机 full-auto),远端 run 自己的
     // remember 已硬拒;Historian 的独立判官(候选 → Dream)与辅助讨论(主 Agent 自己 remember)是同一条旁路。标题 / 摘要照常(会话自有资产)。
     // 日志(LOG)与工作笔记候选同样不写(P1 · M1A,G7):LOG 按日进 Muse 周期提示词的活动摘要、read_log,远端原话经它流进 Muse;
@@ -539,12 +559,13 @@ async function runHistorianForSession(sessionId: string, userId: string, memScop
     if (roundRemote) log(`第 ${roundN} 轮来自远端设备,本轮不写长期记忆`);
     else if (remoteRound) log(`第 ${roundN} 轮所在会话经远端驱动过(远程 run / 远端改过标题),本轮不写长期记忆`);
     const memoryDue = due && !remoteRound;
-    const logDue = due && !remoteRound;
-    const summaryDue = due; // 摘要与标题同属 Historian 自有资产(非记忆资产):三种模式都由 judge 维护
-    const emojiDue = cfg.autoEmoji !== false && !String(sk.emoji || '').trim();
+    const logDue = cadenceDue && !remoteRound;
+    const summaryDue = cadenceDue; // 摘要与标题同属 Historian 自有资产(非记忆资产):三种模式都由 judge 维护
+    const emojiDue = cadenceDue && cfg.autoEmoji !== false && !String(sk.emoji || '').trim();
 
     // 实质增量地板:自上次维护以来新增内容太少 → 跳过整次判断(避免琐碎轮重复总结 / 反复重写记忆侵蚀)。
-    if (!opts?.force && !(await enoughNewSinceLastAction(sessionId))) { log(`第 ${roundN} 轮到点但自上次维护无实质新增,跳过`); return; }
+    // 带信号的一轮不看这道地板:纠正往往只有一句话,正是地板会筛掉的那种。
+    if (!opts?.force && !signals.length && !(await enoughNewSinceLastAction(sessionId))) { log(`第 ${roundN} 轮到点但自上次维护无实质新增,跳过`); return; }
 
     // 辅助模式(assist):LOG/memory 不由 Historian 写,分支(branch)出后台群聊讨论交主 Agent 定夺;
     // 标题仍由 Historian 独立维护(主 Agent 没有改标题的工具,标题也非记忆资产)。
@@ -572,7 +593,7 @@ async function runHistorianForSession(sessionId: string, userId: string, memScop
     // 采纳仍要 /refine + 审批,让出写入权的理由套不到它身上。判官这次调用在辅助模式下本来就为标题 / 摘要在跑,多的只是一个字段。
     // 从前挡在 !assistMode 后面 → 辅助模式用户每个会话只有首轮(恒走独立判断)会提名。
     const judgeHarness = due && cfg.harnessCandidates && !chIsolated && !remoteRound;
-    log(`第 ${roundN} 轮触发(${assistMode ? '辅助模式,' : forkMode ? '分身判官,' : ''}模型 ${cfg.modelId})`);
+    log(`第 ${roundN} 轮触发(${signalDue ? '信号加评,' : ''}${assistMode ? '辅助模式,' : forkMode ? '分身判官,' : ''}模型 ${cfg.modelId}${signals.length ? `;信号 ${signals.length} 条` : ''})`);
 
     const transcriptSnapshot = await recentTranscript(sessionId);
     historianSignal.getStore()?.throwIfAborted();
@@ -580,12 +601,21 @@ async function runHistorianForSession(sessionId: string, userId: string, memScop
     if (!transcript.trim()) { log('无可用对话内容,跳过'); return; }
     // 项目会话(归属只认会话存档的 project_path):判官把「只在这个项目成立」的候选单列一组,由代码写进项目记忆。
     // 判官看得到已有的那份,免得把前台刚 remember 过的同一件事换个说法再记一遍(项目记忆没有 Dream 去重)。
+    // 等用户确认的、用户丢弃过的候选也算「已经提过」:不给它看,它每轮换个说法再提一遍,待确认清单里就是一排近义句。
     const projectRef = judgeMemory && deps().profile.capabilities.hostExec ? await resolveProjectMemory(userId, sessionId) : null;
     const projectKnown = projectRef
-      ? ((await peekProjectMemory(projectRef).catch(() => null))?.entries ?? []).map((e) => `- ${e.content}`).join('\n').slice(-1500)
+      ? projectKnownForJudge(((await peekProjectMemory(projectRef).catch(() => null))?.entries ?? []).map((e) => e.content), pendingProjectFacts(projectRef))
       : '';
 
-    if (titleDue || summaryDue || judgeLog || judgeMemory) { // 标题归起点后,辅助模式轮只剩摘要/提名要判
+    // 远程轮 / 电脑历史隔离的会话里,信号加评没有可评的类别 → 不起这次调用。
+    if (titleDue || summaryDue || judgeLog || judgeMemory || (signalDue && judgeHarness)) { // 标题归起点后,辅助模式轮只剩摘要/提名要判
+      const trigger = judgeTriggerBlock(signals, { memory: judgeMemory, harness: judgeHarness, project: !!projectRef });
+      if (signalDue) {
+        // 过了冷却的条目已经没有用,顺手清掉(否则每个被加评过的会话各留一条到进程退出)
+        const now = Date.now();
+        for (const [sid, at] of lastSignalReview) if (now - at >= SIGNAL_REVIEW_COOLDOWN_MS) lastSignalReview.delete(sid);
+        lastSignalReview.set(sessionId, now);
+      }
       // 一次结构化判断:title / summary / log / memory_candidates 各自独立(到期才要、不需要则空)。
       // 采集刻意不看现有记忆(与 Codex Phase 1 同构:采集盲写、去重归整固),省下每轮 ~20K 字输入。
       const prevSummary = String((sk as any).summary || '').trim().replace(/\s+/g, ' ').slice(0, 600);
@@ -593,7 +623,7 @@ async function runHistorianForSession(sessionId: string, userId: string, memScop
       let raw = forkMode
         ? await forkJudge(
             sessionId, userId, String(sk.app_id || deps().profile.appId), forkSeed!,
-            buildForkJudgeMessage(cfg.prompt, titleDue, judgeLog, judgeMemory, summaryDue, judgeHarness, prevSummary, emojiDue, !!projectRef, projectKnown),
+            buildForkJudgeMessage(cfg.prompt, titleDue, judgeLog, judgeMemory, summaryDue, judgeHarness, prevSummary, emojiDue, !!projectRef, projectKnown, trigger),
           )
         : '';
       // fork 产出非空但解析不出 JSON(判官跑偏成长文)= 判官失败,同样回落 independent——
@@ -603,7 +633,7 @@ async function runHistorianForSession(sessionId: string, userId: string, memScop
         raw = '';
       }
       if (!raw) {
-        const sys = buildJudgeSystem(cfg.prompt, titleDue, judgeLog, judgeMemory, summaryDue, judgeHarness, emojiDue, !!projectRef);
+        const sys = buildJudgeSystem(cfg.prompt, titleDue, judgeLog, judgeMemory, summaryDue, judgeHarness, emojiDue, !!projectRef, trigger);
         const result = await completeHistorianTask({ sessionId, userId, modelId: cfg.modelId, task: 'judge', instructions: `${sys}${prevSummary ? `\n\n[Previous summary]\n${prevSummary}` : ''}${projectKnown ? `\n\n[Project memory]\n${projectKnown}` : ''}`, transcript, maxTokens: 1600, signal: historianSignal.getStore() });
         await recordJudgeUsage(userId, cfg.modelId, result.model, result);
         raw = result.content;
@@ -680,16 +710,22 @@ async function runHistorianForSession(sessionId: string, userId: string, memScop
         }
         if (projectRef && stillClean && projectFacts.length) {
           const added: string[] = [];
+          const waiting: string[] = [];
           for (const fact of projectFacts) {
-            // 与工作笔记的自动采纳同一道形状闸:带网址 / 管道进解释器 / 凭据·审批·权限字眼的,不由后台写进系统提示。
-            // ponytail: 项目级没有候选收件箱,过不了闸的直接丢(前台的 remember 仍可记);真有需要再加一个待过目的清单。
-            if (!autoAdoptable(fact)) { log(`项目记忆候选未过形状闸,丢弃: ${fact.slice(0, 60)}`); continue; }
-            try { if ((await addProjectFact(projectRef, fact, sessionId)) === 'added') added.push(fact); }
-            catch (e: any) { log(`写项目记忆失败: ${e?.message || e}`); }
+            // 与工作笔记的自动采纳同一道形状闸:带网址 / 管道进解释器 / 凭据·审批·权限字眼的,不由后台写进系统提示 ——
+            // 排进这个项目的待确认清单,等用户在项目详情里逐条点头(10-04 用户裁决「有风险的才需要确认」;此前是直接丢)。
+            try {
+              if (!autoAdoptable(fact)) { if (await queueProjectFact(projectRef, fact, sessionId)) waiting.push(fact); }
+              else if ((await addProjectFact(projectRef, fact, sessionId)) === 'added') added.push(fact);
+            } catch (e: any) { log(`写项目记忆失败: ${e?.message || e}`); }
           }
           if (added.length) {
             await logActivity(userId, 'project_memory_added', added.join(' | ').slice(0, 300), sessionId);
             log(`已写入 ${added.length} 条项目记忆(${projectRef.name})`);
+          }
+          if (waiting.length) {
+            await logActivity(userId, 'project_memory_candidates', waiting.join(' | ').slice(0, 300), sessionId);
+            log(`${waiting.length} 条项目记忆候选未过形状闸,等用户确认(${projectRef.name})`);
           }
         }
         historianSignal.getStore()?.throwIfAborted();
@@ -743,13 +779,16 @@ async function runHistorianForSession(sessionId: string, userId: string, memScop
                 await logActivity(userId, 'harness_adopted', adopted.join(' | ').slice(0, 300), sessionId);
                 log(`已采纳 ${adopted.length} 条工作笔记提名(${displaySlug})`);
               }
-              const n = queued.length ? await appendHarnessCandidates(displaySlug, sessionId, queued).catch((e: any) => {
-                log(`写工作笔记候选收件箱失败: ${e?.message || e}`);
-                return 0;
-              }) : 0;
-              if (n) {
-                await logActivity(userId, 'harness_candidates', queued.join(' | ').slice(0, 300), sessionId);
-                log(`已采集 ${n} 条工作笔记候选进收件箱(${displaySlug})`);
+              // 候选两种去处(10-04):过不了形状闸的等用户在「进化」页逐条点头(/refine 不取),其余等 /refine 时由 agent 过目。
+              // 活动分开记:桌面据此决定通知是请用户「去确认」还是「复盘一下」。归类与读侧同一个函数(按落盘的那一行算)。
+              for (const [action, lines] of [['harness_candidates', queued.filter((l) => !candidateNeedsUser(l))], ['harness_confirm', queued.filter(candidateNeedsUser)]] as const) {
+                const n = lines.length ? await appendHarnessCandidates(displaySlug, sessionId, lines).catch((e: any) => {
+                  log(`写工作笔记候选收件箱失败: ${e?.message || e}`);
+                  return 0;
+                }) : 0;
+                if (!n) continue;
+                await logActivity(userId, action, lines.join(' | ').slice(0, 300), sessionId);
+                log(`已采集 ${n} 条工作笔记候选进收件箱(${displaySlug}${action === 'harness_confirm' ? ',等用户确认' : ''})`);
               }
             } else {
               log('会话 agent_config.agentSlug 非法或 agent 已删,丢弃本轮工作笔记候选');
@@ -768,7 +807,7 @@ async function runHistorianForSession(sessionId: string, userId: string, memScop
     // 标题的高频周期(如 标题每2轮+记忆每3轮 → 讨论在 2,3,4,6,8,9… 轮触发),用户观感即「忽隔一轮
     // 忽隔两轮」。改为仅 memoryDue 拉起讨论,LOG 在辅助模式下随记忆周期一并商议,节奏可预期。
     historianSignal.getStore()?.throwIfAborted();
-    if (assistMode && memoryDue) {
+    if (assistMode && memoryDue && cadenceDue) {
       const discRunId = await startAssistDiscussion({ sessionId, userId, cfg, sk, wantLog: true, wantMemory: true });
       if (discRunId) {
         await logActivity(userId, 'assist_discussion', `与主 Agent 商议${memoryDue ? '日志+记忆' : '日志'}更新(run ${discRunId.slice(0, 8)})`, sessionId);

@@ -30,7 +30,8 @@ const putHuman: RequestHandler = async (req: AuthRequest, res) => {
     try {
       const scope = await scopeOf(req, res); if (!scope) return;
       const result = await writeHuman(scope, { ...req.body, undoId: undefined }, 'user');
-      if (scope.kind === 'agent' && result.change) scheduleAgentFilesSync(req.user!.userId);
+      // 不带 slug 是空操作;HUMAN.md 跟着归属 agent 的定义文件一起同步。
+      if (scope.kind === 'agent' && result.change) scheduleAgentFilesSync(req.user!.userId, scope.slug);
       res.json(result);
     } catch (e) { fail(res, e); }
 };
@@ -39,7 +40,7 @@ const undoHuman: RequestHandler = async (req: AuthRequest, res) => {
       const scope = await scopeOf(req, res); if (!scope) return;
       if (typeof req.body?.changeId !== 'string' || !req.body.changeId) throw new HumanError('HUMAN_CHANGE_REQUIRED', 'changeId is required.');
       const result = await writeHuman(scope, { expectedVersion: req.body.expectedVersion, undoId: req.body.changeId }, 'user');
-      if (scope.kind === 'agent' && result.change) scheduleAgentFilesSync(req.user!.userId);
+      if (scope.kind === 'agent' && result.change) scheduleAgentFilesSync(req.user!.userId, scope.slug);
       res.json(result);
     } catch (e) { fail(res, e); }
 };

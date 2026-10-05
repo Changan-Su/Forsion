@@ -4,6 +4,9 @@ export const MAX_IMAGE_LENGTH = 2_000_000
 export const MAX_ICON_LENGTH = 800_000
 export const ANIMATIONS = ['default', 'pulse', 'spin', 'none'] as const
 export type StartupAnimation = typeof ANIMATIONS[number]
+/** Built-in picture shown while no startup artwork is selected. `classic` is the original animated tree mark. */
+export const SCENES = ['treeShadow', 'classic'] as const
+export type StartupScene = typeof SCENES[number]
 export interface AppearanceAsset {
   id: string
   label: string
@@ -16,6 +19,8 @@ export interface AppearanceAsset {
 export interface StartupAppearance {
   version: 1
   showSplash: boolean
+  /** Files saved before this field existed read as the default. */
+  scene: StartupScene
   animation: StartupAnimation
   icon: AppearanceAsset | null
   splash: AppearanceAsset | null
@@ -23,7 +28,7 @@ export interface StartupAppearance {
 }
 export type AppearancePatch = Partial<Omit<StartupAppearance, 'version'>>
 export const DEFAULT_APPEARANCE: StartupAppearance = {
-  version: 1, showSplash: true, animation: 'default', icon: null, splash: null, nativeIcon: true,
+  version: 1, showSplash: true, scene: 'treeShadow', animation: 'default', icon: null, splash: null, nativeIcon: true,
 }
 export interface AppearancePreset {
   id: string
@@ -55,6 +60,7 @@ export function patchAppearance(current: StartupAppearance, input: unknown): Sta
   const next = { ...current }
   if ('showSplash' in p) { if (typeof p.showSplash !== 'boolean') throw new Error('Invalid splash switch'); next.showSplash = p.showSplash }
   if ('nativeIcon' in p) { if (typeof p.nativeIcon !== 'boolean') throw new Error('Invalid icon switch'); next.nativeIcon = p.nativeIcon }
+  if ('scene' in p) { if (!SCENES.includes(p.scene!)) throw new Error('Invalid scene'); next.scene = p.scene! }
   if ('animation' in p) { if (!ANIMATIONS.includes(p.animation!)) throw new Error('Invalid animation'); next.animation = p.animation! }
   if ('icon' in p) next.icon = asset(p.icon, true)
   if ('splash' in p) next.splash = asset(p.splash, false)

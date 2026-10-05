@@ -311,7 +311,8 @@
 .wb-view--right { height: calc(100% - var(--sb-h, 0px)); }
 /* 切换主 view 的丝滑淡入(激活时由 ViewHost 重放)。 */
 @keyframes wb-view-enter { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
-.wb-view.wb-view-enter { animation: wb-view-enter 0.22s cubic-bezier(0.2, 0.8, 0.3, 1); }
+/* 时长走 --view-enter-duration(宿主的「舒缓过渡」开关会放慢它,见 desktop theme/calm.css);动画名不变,ViewHost 的 onAnimationEnd 照旧。 */
+.wb-view.wb-view-enter { animation: wb-view-enter var(--view-enter-duration, 0.22s) cubic-bezier(0.2, 0.8, 0.3, 1); }
 @media (prefers-reduced-motion: reduce) { .wb-view.wb-view-enter { animation: none; } }
 
 /* ===== 命令面板浮层 ===== */
@@ -812,7 +813,8 @@ html[data-dv-dragging] .t2s-side { -webkit-app-region: no-drag; }
  * 单标签:只有一个 tab 时它不是「在多个里选中」,不画胶囊底;× 只在指针 / 焦点到它身上时出。
  * 框架图标(左前缀、＋、右上角浮钮)平时 0.38,指针进标签栏或浮钮组、或键盘焦点进来才亮;
  * 开着的开关(.is-on)保持全亮 —— 它在表达状态。笔记顶栏同一个值,见 amadeus-host.css 末尾。
- * 全部关在 (hover: hover) 里:触屏没有悬停,淡掉就等于找不到。放在文件末尾:要压过上面同特异性的规则(DESIGN §7)。 */
+ * 全部关在 (hover: hover) 里:触屏没有悬停,淡掉就等于找不到。放在文件末尾:要压过上面同特异性的规则(DESIGN §7)。
+ * 亮回来的时长走 --frame-reveal-duration(兜底 --duration-fast):宿主的「舒缓过渡」开关放慢的就是它。 */
 /* dockview 把 dv-single-tab 打在外层 .dv-tabs-and-actions-container 上(不是 .dv-tabs-container)。 */
 .dockview-theme-lcl .dv-tabs-and-actions-container.dv-single-tab .dv-tab.dv-active-tab:not(:has(.wb-tab--icon)) .wb-tab {
   background: transparent;
@@ -824,7 +826,7 @@ html[data-dv-dragging] .t2s-side { -webkit-app-region: no-drag; }
   .dockview-theme-lcl .dv-right-actions-container,
   .dv-edge-actions > .dv-edge-toggle:not(.is-on) {
     opacity: 0.38;
-    transition: opacity var(--duration-fast, 0.15s);
+    transition: opacity var(--frame-reveal-duration, var(--duration-fast, 0.15s));
   }
   .dockview-theme-lcl .dv-tabs-and-actions-container:hover > .dv-pre-actions-container,
   .dockview-theme-lcl .dv-tabs-and-actions-container:hover > .dv-right-actions-container,
@@ -836,7 +838,7 @@ html[data-dv-dragging] .t2s-side { -webkit-app-region: no-drag; }
   .rb:not(:hover) .rb-plus:not(:focus-visible) { opacity: 0; }
   /* 侧栏只有一个 tab(第二轮 v5):那枚图标不是「在多个里选」,平时不画;指针进这条、或键盘焦点进来才出。
      它仍是拖动面板的抓手,所以只淡不删。 */
-  .dockview-theme-lcl .dv-single-tab .wb-tab--icon { opacity: 0; transition: opacity var(--duration-fast, 0.15s); }
+  .dockview-theme-lcl .dv-single-tab .wb-tab--icon { opacity: 0; transition: opacity var(--frame-reveal-duration, var(--duration-fast, 0.15s)); }
   .dockview-theme-lcl .dv-single-tab:hover .wb-tab--icon,
   .dockview-theme-lcl .dv-single-tab:focus-within .wb-tab--icon { opacity: 1; }
 }

@@ -199,6 +199,14 @@ describe('freshOAuthCred(取用前续期;反馈 6a239e58:token 只在启动时�
     expect(saveProviderCred).not.toHaveBeenCalled();
   });
 
+  it('续期只轮换了 refresh_token(access_token 原样返回)→ 照样写回(Codex 评审 10-05:以前当成没续上,盘上留着作废的 refresh_token)', async () => {
+    vi.mocked(loadProviderCreds).mockReturnValue({ xai: xai({ expires_at: Date.now() - 1 }) });
+    vi.stubGlobal('fetch', tokenEndpoint({ access_token: 'old', refresh_token: 'r2', expires_in: 3600 }));
+    expect(await token()).toBe('old');
+    expect(saveProviderCred).toHaveBeenCalledTimes(1);
+    expect(saveProviderCred).toHaveBeenCalledWith('xai', expect.objectContaining({ access_token: 'old', refresh_token: 'r2' }));
+  });
+
   it('续期期间盘上记录已被别的进程轮换 → 用盘上那份,不拿自己的盖回去', async () => {
     const stale = xai({ expires_at: Date.now() - 1 });
     vi.mocked(loadProviderCreds).mockReturnValueOnce({ xai: stale }).mockReturnValue({ xai: xai({ access_token: 'theirs', refresh_token: 'r9' }) });
@@ -231,5 +239,105 @@ describe('freshOAuthCred(取用前续期;反馈 6a239e58:token 只在启动时�
     vi.mocked(loadProviderCreds).mockReturnValue({ xai: xai() });
     expect(await freshOAuthCred('openai')).toBeUndefined();
     expect(await freshOAuthCred('codex')).toBeUndefined();
+  });
+});
+
+// 10-05:启动装载此前有两处「网络往返之后整条写回」—— 期间别的进程(另一个引擎、TUI)续过期并轮换了 refresh_token 的话,
+// 整条写回会把它盖成旧值,那家登录就废了。现在续期走 freshOAuthCred(锁内比对才写),模型目录只补非凭证字段。
+describe('启动装载不把别的进程刚换过的凭证盖回去', () => {
+  afterEach(() => { vi.unstubAllGlobals(); vi.clearAllMocks(); });
+  const xai = (extra: Partial<OAuthTokens> = {}): OAuthTokens => ({
+    access_token: 'old', refresh_token: 'r1', expires_at: Date.now() + 3600_000,
+    baseUrl: OAUTH_PROVIDERS.xai.baseUrl, tokenEndpoint: OAUTH_PROVIDERS.xai.tokenEndpoint!, clientId: OAUTH_PROVIDERS.xai.clientId,
+    modelIds: ['grok-build'], modelIdsAt: Date.now(), ...extra,
+  });
+  const tokenEndpoint = (body: any) => vi.fn().mockResolvedValue({ json: async () => body });
+  const expired = () => xai({ expires_at: Date.now() - 1 });
+
+  it('到期 → 续期并写回,只换 token 三件套;装载出来的是新 token', async () => {
+    vi.mocked(loadProviderCreds).mockReturnValue({ xai: expired() });
+    vi.stubGlobal('fetch', tokenEndpoint({ access_token: 'new', refresh_token: 'r2', expires_in: 3600 }));
+    const providers = await loadOAuthDirectProviders();
+    expect(providers).toHaveLength(1);
+    expect(providers[0]).toMatchObject({ providerId: 'xai', apiKey: 'new', oauth: true });
+    expect(saveProviderCred).toHaveBeenCalledTimes(1);
+    expect(saveProviderCred).toHaveBeenCalledWith('xai', expect.objectContaining({ access_token: 'new', refresh_token: 'r2', modelIds: ['grok-build'] }));
+  });
+
+  it('续期期间别的进程已经轮换过 → 用盘上那份,不拿自己续出来的盖回去', async () => {
+    const stale = expired();
+    vi.mocked(loadProviderCreds).mockReturnValueOnce({ xai: stale }).mockReturnValueOnce({ xai: stale }).mockReturnValue({ xai: xai({ access_token: 'theirs', refresh_token: 'r9' }) });
+    vi.stubGlobal('fetch', tokenEndpoint({ access_token: 'mine', refresh_token: 'r2', expires_in: 3600 }));
+    const providers = await loadOAuthDirectProviders();
+    expect(providers[0].apiKey).toBe('theirs');
+    expect(saveProviderCred).not.toHaveBeenCalled();
+  });
+
+  it('续期失败 → 不写盘(以前会把读到的旧记录整条写回),带着旧 token 装载', async () => {
+    vi.mocked(loadProviderCreds).mockReturnValue({ xai: expired() });
+    vi.stubGlobal('fetch', tokenEndpoint({ error: 'invalid_grant' }));
+    const providers = await loadOAuthDirectProviders();
+    expect(providers[0].apiKey).toBe('old');
+    expect(saveProviderCred).not.toHaveBeenCalled();
+  });
+
+  it('续期期间登出 → 不装载这家,也不把它写回来', async () => {
+    const stale = expired();
+    vi.mocked(loadProviderCreds).mockReturnValueOnce({ xai: stale }).mockReturnValueOnce({ xai: stale }).mockReturnValue({});
+    vi.stubGlobal('fetch', tokenEndpoint({ access_token: 'mine', expires_in: 3600 }));
+    expect(await loadOAuthDirectProviders()).toEqual([]);
+    expect(saveProviderCred).not.toHaveBeenCalled();
+  });
+
+  it('刷新模型目录的那次写入:只补目录字段,别的字段以盘上此刻的为准', async () => {
+    const mine = xai({ modelIdsAt: 0 }); // 目录过期 → 要拉一次(网络往返)
+    // 期间别处改了同一条记录的别的字段(token 还是拉目录时用的那个)
+    vi.mocked(loadProviderCreds).mockReturnValueOnce({ xai: mine }).mockReturnValue({ xai: xai({ expires_at: 4102444800000, modelIdsAt: 0 }) });
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => ({ data: [{ id: 'grok-4.7' }] }) }));
+    const providers = await loadOAuthDirectProviders();
+    expect(saveProviderCred).toHaveBeenCalledTimes(1);
+    const written = vi.mocked(saveProviderCred).mock.calls[0][1];
+    expect(written).toMatchObject({ access_token: 'old', refresh_token: 'r1', expires_at: 4102444800000, modelIds: ['grok-4.7'] });
+    expect(written.modelIdsAt).toBeGreaterThan(Date.now() - 60_000);
+    expect(providers[0]).toMatchObject({ apiKey: 'old', modelIds: ['grok-4.7'] });
+  });
+
+  // Codex 评审 10-05:拉目录期间用户在桌面上换了账号重新登录 —— 旧账号的目录会被补到新账号的记录上,还被当成 24 小时内的新鲜缓存
+  it('拉目录期间 token 被换了(续过期 / 换账号重新登录)→ 目录不补、不写盘,改用盘上那条装载', async () => {
+    const theirs = xai({ access_token: 'theirs', refresh_token: 'r9', modelIds: ['their-model'], modelIdsAt: Date.now() });
+    vi.mocked(loadProviderCreds).mockReturnValueOnce({ xai: xai({ modelIdsAt: 0 }) }).mockReturnValue({ xai: theirs });
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => ({ data: [{ id: 'grok-4.7' }] }) }));
+    const providers = await loadOAuthDirectProviders();
+    expect(saveProviderCred).not.toHaveBeenCalled();
+    expect(providers[0]).toMatchObject({ apiKey: 'theirs', modelIds: ['their-model'] });
+  });
+
+  it('端点迁移与哪次登录无关:token 被换了也照补,目录仍不补', async () => {
+    const legacy = (extra: Partial<OAuthTokens>) => xai({ baseUrl: 'https://api.x.ai/v1', modelIdsAt: 0, ...extra });
+    vi.mocked(loadProviderCreds).mockReturnValueOnce({ xai: legacy({}) }).mockReturnValue({ xai: legacy({ access_token: 'theirs', refresh_token: 'r9', modelIds: ['their-model'] }) });
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => ({ data: [{ id: 'grok-4.7' }] }) }));
+    const providers = await loadOAuthDirectProviders();
+    expect(saveProviderCred).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(saveProviderCred).mock.calls[0][1]).toMatchObject({ baseUrl: OAUTH_PROVIDERS.xai.baseUrl, access_token: 'theirs', refresh_token: 'r9', modelIds: ['their-model'], modelIdsAt: 0 });
+    expect(providers[0]).toMatchObject({ apiKey: 'theirs', baseUrl: OAUTH_PROVIDERS.xai.baseUrl, modelIds: ['their-model'] });
+  });
+
+  it('刷新模型目录期间登出 → 不写回来,也不装载', async () => {
+    vi.mocked(loadProviderCreds).mockReturnValueOnce({ xai: xai({ modelIdsAt: 0 }) }).mockReturnValue({});
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => ({ data: [{ id: 'grok-4.7' }] }) }));
+    expect(await loadOAuthDirectProviders()).toEqual([]);
+    expect(saveProviderCred).not.toHaveBeenCalled();
+  });
+
+  // Codex 评审 10-05:有的端点续期只轮换 refresh_token、access_token 原样返回。以前拿「access_token 没变」当没续上 → 不落盘,
+  // 盘上留着一个已经作废的 refresh_token,下次续期必败。启动装载改走 freshOAuthCred 之后这条也会在启动时发生。
+  it('续期只轮换了 refresh_token(access_token 原样)→ 照样写回', async () => {
+    vi.mocked(loadProviderCreds).mockReturnValue({ xai: expired() });
+    vi.stubGlobal('fetch', tokenEndpoint({ access_token: 'old', refresh_token: 'r2', expires_in: 3600 }));
+    const providers = await loadOAuthDirectProviders();
+    expect(saveProviderCred).toHaveBeenCalledTimes(1);
+    expect(saveProviderCred).toHaveBeenCalledWith('xai', expect.objectContaining({ access_token: 'old', refresh_token: 'r2' }));
+    expect(vi.mocked(saveProviderCred).mock.calls[0][1].expires_at).toBeGreaterThan(Date.now() + 3000_000);
+    expect(providers[0].apiKey).toBe('old');
   });
 });

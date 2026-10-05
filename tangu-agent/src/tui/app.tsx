@@ -451,7 +451,7 @@ export function App({ boot, storage }: { boot: TuiConfig; storage: string }): Re
           input: { message, userMessageId: randomUUID(), attachments: [], agentConfig },
         }),
       enqueue: () => enqueueRun(sid, runId),
-      abort: () => abortRun(runId),
+      abort: () => abortRun(runId, { byUser: true }),
       abortRequested: () => preStartAbort.current === runId,
     })
       .then((r) => {
@@ -684,6 +684,7 @@ export function App({ boot, storage }: { boot: TuiConfig; storage: string }): Re
       }
       sessionIdRef.current = id;
       setSessionId(id);
+      if (groupAgentsRef.current) patch.planMode = false; // 团队模式还开着:恢复来的计划模式不作数
       patchCfg(patch);
       setCtxInfo(null);
       dispatch({ type: 'RESET_SESSION', items });
@@ -1136,7 +1137,11 @@ export function App({ boot, storage }: { boot: TuiConfig; storage: string }): Re
         const missing = slugs.filter((_, i) => !defs[i]);
         if (missing.length) { notice(`未找到 agent：${missing.join(', ')}（/agents 查看）`, 'error'); return; }
         groupAgentsRef.current = slugs;
-        notice(`团队模式已就绪：${slugs.join(' / ')}。直接发消息即开始多 Agent 协作（/groupchat off 退出）`, 'success');
+        // 团队模式下没有计划模式(成员不吃它):开着就顺手关掉,并说一声
+        const planWasOn = !!cfgRef.current.planMode;
+        if (planWasOn) setCfg((c) => ({ ...c, planMode: false }));
+        notice(`团队模式已就绪：${slugs.join(' / ')}。直接发消息即开始多 Agent 协作（/groupchat off 退出）`
+          + (planWasOn ? L('\n计划模式已关闭：团队模式下不能用。', '\nPlan mode was turned off: it is not available in team mode.') : ''), 'success');
         return;
       }
       case '/edit': {
@@ -1161,6 +1166,10 @@ export function App({ boot, storage }: { boot: TuiConfig; storage: string }): Re
       }
       case '/plan': {
         const next = !cfgRef.current.planMode;
+        if (next && groupAgentsRef.current) {
+          notice(L('团队模式下不能开计划模式（先 /groupchat off 退出团队模式）', 'Plan mode is not available in team mode (leave team mode with /groupchat off first)'), 'warn');
+          return;
+        }
         setCfg((c) => ({ ...c, planMode: next }));
         notice(
           next
@@ -1208,7 +1217,7 @@ export function App({ boot, storage }: { boot: TuiConfig; storage: string }): Re
         // 复盘轮:当普通消息发出,引擎检测 /refine 前缀注入单源复盘指令(agentLoop;与 /skill 同尾部通道)。
         // 发归一化文本而非原 line:引擎检测大小写敏感,用户敲 /REFINE 会静默不触发(Codex 评审 #10)。
         if (cfgRef.current.execMode !== 'host') {
-          notice('/refine 仅本机(host)会话可用(工作笔记写在本机 agent 目录)', 'warn');
+          notice('/refine 仅本机(host)会话可用(进化记录写在本机 agent 目录)', 'warn');
           return;
         }
         const outgoing = '/refine' + (rest ? ` ${rest}` : '');
@@ -1426,7 +1435,7 @@ export function App({ boot, storage }: { boot: TuiConfig; storage: string }): Re
     const rid = activeRunId.current;
     if (!rid) return;
     preStartAbort.current = rid; // 引擎里还没注册时 abortRun 是空操作:起跑链看到这个标记会自己收手
-    abortRun(rid);
+    abortRun(rid, { byUser: true });
   };
 
   // 前台浮层(审批 > 询问 > 选择器)开着时,输入框让出键盘但不卸载 —— 草稿与光标都留着。

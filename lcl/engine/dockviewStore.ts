@@ -46,13 +46,20 @@ function nextId(api: DockviewApi, type: string): string {
   return nextPanelId(api.panels.map((p) => p.id), type)
 }
 
+/** 「空侧栏」占位只在该区没有别的视图时才留着:区里有了别的,占位就退位(只剩占位自己时不动)。 */
+function retirePlaceholder(api: DockviewApi, loc: ViewLocation): void {
+  if (loc === 'main') return
+  const here = panelsAt(api, loc)
+  if (here.some((p) => panelType(p) !== 'sidebar-empty')) here.filter((p) => panelType(p) === 'sidebar-empty').forEach((p) => p.api.close())
+}
+
 /** 侧栏开合补间动画期间,pinSides 跳过该侧 —— 让 tween 独占其宽度,免被钉宽 setSize 打断。
  *  bottom 同理(它的补间量的是高),另外还挡住 captureSideWidths 记下补间中间高。 */
 const sidebarAnimating: Record<DockSide, boolean> = { left: false, right: false, bottom: false }
 const toggleReleases: Partial<Record<DockSide, () => void>> = {}
-const extensions: Partial<Record<DockSide, { dismiss(): void; dispose(instant?: boolean): void | Promise<void>; id: string; previousId?: string; defaultWidth?: number }>> = {}
+const extensions: Partial<Record<DockSide, { dismiss(reason?: 'dismiss' | 'layout'): void; dispose(instant?: boolean): void | Promise<void>; id: string; previousId?: string; defaultWidth?: number }>> = {}
 const dismissExtensions = (): void => {
-  for (const side of ['left', 'right', 'bottom'] as const) { extensions[side]?.dismiss(); extensions[side]?.dispose(true) } // layout is being rebuilt: no tween
+  for (const side of ['left', 'right', 'bottom'] as const) { extensions[side]?.dismiss('layout'); extensions[side]?.dispose(true) } // layout is being rebuilt: no tween
 }
 
 
@@ -140,6 +147,12 @@ function bottomTargetHeight(api: DockviewApi): number {
   return computeBottomHeight(api.height, useWorkspace.getState().sideWidths.bottom)
 }
 
+/** 正在沉降的底部组(pinPending 的纵向版)。从建组到 settleBottomHeight 落地的这一小段,它的高是 Dockview 的出生高
+ *  (~50%,缺省拓扑下更高)= 系统态,captureSideWidths 不得当成「用户拖出来的」记下 —— 记了,目标高从此取它,
+ *  面板一直半屏高(2026-10-04 实测:不经折叠钮直接 openView 到底部,通栏 450/900、缺省拓扑 700 → 钳到 540;
+ *  折叠钮那条路有 sidebarAnimating 挡着,所以一直是好的)。记组不记时间:换了 api / 组自然失效,不留残值。 */
+let bottomSettling: unknown = null
+
 /** 刚建出的底部组按 Dockview 默认高(~50%)诞生 → 把它落到目标高。≈pinSides 的纵向版,但**只在建组时用一次**
  *  (底部恒 free,用户拖多高就是多高,不做持续钉高)。补间动画期间跳过,让 tween 独占。 */
 function settleBottomHeight(api: DockviewApi): void {
@@ -148,8 +161,11 @@ function settleBottomHeight(api: DockviewApi): void {
     try { panelsAt(api, 'bottom')[0]?.group.api.setSize({ height: bottomTargetHeight(api) }) } catch { /* 跨版本兜底 */ }
   }
   const raf = typeof requestAnimationFrame === 'function' ? requestAnimationFrame : (f: () => void) => f()
+  const group = bottomSettling = panelsAt(api, 'bottom')[0]?.group ?? null
+  apply() // 当场先落一次:出生高一帧都不上屏
   raf(() => raf(apply))
-  setTimeout(apply, 60) // 同 pinSides:rAF 偶尔早于 Dockview 内部 resize
+  // 同 pinSides:rAF 偶尔早于 Dockview 内部 resize。这是最后一次落地,之后的高才算用户的。
+  setTimeout(() => { apply(); if (bottomSettling === group) bottomSettling = null }, 60)
 }
 
 /** 记住「可自由拖宽」侧栏的当前宽度(WorkspaceHost 在布局变更时调):用户拖动 sash 后即被捕获 +
@@ -169,10 +185,11 @@ export function captureSideWidths(api: DockviewApi): void {
     next[loc] = Math.round(w)
     changed = true
   }
-  // 底部面板高度:恒 free,判定复用同一个 shouldRecordSideWidth(pinPending 恒 false —— 底部无钉高窗口),
+  // 底部面板高度:恒 free,判定复用同一个 shouldRecordSideWidth(pinPending 恒 false —— 底部的沉降窗口由 bottomSettling 挡),
   // 于是「贴近目标高 = 系统设的」「<120 = 收起补间中间值」「与已记值几乎相同」三条豁免自动生效。
-  if (!sidebarAnimating.bottom) {
-    const h = (panelsAt(api, 'bottom')[0] as { group?: SizableGroup } | undefined)?.group?.api?.height
+  const bottomGroup = (panelsAt(api, 'bottom')[0] as { group?: SizableGroup } | undefined)?.group
+  if (!sidebarAnimating.bottom && bottomGroup !== bottomSettling) { // 沉降中的组:出生高是系统态(见 bottomSettling)
+    const h = bottomGroup?.api?.height
     if (typeof h === 'number'
       && shouldRecordSideWidth({ measured: h, target: bottomTargetHeight(api), prev: next.bottom, pinPending: false })) {
       next.bottom = Math.round(h)
@@ -181,7 +198,8 @@ export function captureSideWidths(api: DockviewApi): void {
   }
   if (changed) {
     useWorkspace.setState({ sideWidths: next })
-    try { localStorage.setItem(`lcl.sideWidth2.${st.sideProfileKey}`, JSON.stringify(next)) } catch { /* private mode */ }
+    // 底部高写 bottomH,不写 bottom(见 setSideProfile:旧字段被出生高污染过)
+    try { localStorage.setItem(`lcl.sideWidth2.${st.sideProfileKey}`, JSON.stringify({ left: next.left, right: next.right, bottomH: next.bottom })) } catch { /* private mode */ }
   }
 }
 
@@ -697,7 +715,9 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       // 升版丢弃 = 全员回默认一次(golden × sideDefaultScale),真拖过的用户重拖一次即可。
       localStorage.removeItem(`lcl.sideWidth.${key}`)
       const raw = localStorage.getItem(`lcl.sideWidth2.${key}`)
-      if (raw) { const p = JSON.parse(raw) as Record<string, unknown>; widths = { left: typeof p.left === 'number' ? p.left : null, right: typeof p.right === 'number' ? p.right : null, bottom: typeof p.bottom === 'number' ? p.bottom : null } }
+      // 底部高读 bottomH。旧字段 bottom 弃读:直接开在底部的视图把 Dockview 的出生高(~50%)当成用户拖的记了进去
+      // (见 bottomSettling),记录里分不出哪些是真拖的 —— 回默认一次(32%),真拖过的重拖一次即可;左右宽不受影响。
+      if (raw) { const p = JSON.parse(raw) as Record<string, unknown>; widths = { left: typeof p.left === 'number' ? p.left : null, right: typeof p.right === 'number' ? p.right : null, bottom: typeof p.bottomH === 'number' ? p.bottomH : null } }
     } catch { /* private mode */ }
     // 缺省 true:此前只有声明了 resizableSides 的那侧记宽,其余一律被 pinSides 钉回黄金分割 ——
     // 用户拖完、一折一开就打回原形(实报)。现在两侧默认都记,显式 false 才钉。
@@ -938,9 +958,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     else {
       // 旧布局 / 被用户关掉过的侧栏 tab 不在 stash 里:点击明确目标时应把它补回来,
       // 与 singleColumnStore 的同名方法对齐。否则命令看似执行,侧栏却只展示别的 tab。
-      get().openView(type, {}, side)
-      const now = panelsAt(get().api!, side)
-      if (now.length > 1) now.filter((p) => panelType(p) === 'sidebar-empty').forEach((p) => p.api.close())
+      get().openView(type, {}, side) // 占位由 openView 退位
     }
     get().refreshTabs()
   },
@@ -1140,6 +1158,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       })
       if (existing) {
         if (reuseKey === 'primary') existing.api.updateParameters({ ...(existing.params ?? {}), ...params })
+        retirePlaceholder(api, locOfPanel(existing)) // 旧存档里留在它旁边的占位(见下面同侧复用那条)
         existing.api.setActive()
         return makeLeaf(existing)
       }
@@ -1155,6 +1174,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       // 显式 newTab 让路(与主区同语义):代码块「运行」每次都要一个新的底部终端 tab。
       const existingSide = panelsAt(api, loc).find((p) => panelType(p) === type)
       if (existingSide) {
+        retirePlaceholder(api, loc) // 旧存档里留在真视图旁边的占位:它关不掉(closable: false),在这里清
         existingSide.api.setActive()
         return makeLeaf(existingSide)
       }
@@ -1178,6 +1198,9 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       if (loc === 'bottom') settleBottomHeight(api)
       restore()
     }
+    // 真视图进了只剩占位的那一侧 → 占位退位(拖入 / 补固定 View 各自早就这么做,唯独这条最常走的路漏了:
+    // 关掉最后一个侧栏视图后再由代码开一个,「空侧栏」标签就一直留在旁边)。
+    retirePlaceholder(api, loc)
     if (loc !== 'main') set({ [visKeyOf(loc)]: true } as Partial<WorkspaceState>)
     if (type === 'chat') set({ focusedChatLeafId: panel.id })
     scheduleWorkspaceSave()
@@ -1541,7 +1564,7 @@ export const presentDockedExtension: ExtendViewPresenter = (options, dismiss) =>
   if (!api) throw new Error('Workbench is not ready')
   const beforeExtension = captureRegionTree(api)
   const side = options.side ?? 'right'
-  extensions[side]?.dismiss()
+  extensions[side]?.dismiss('layout') // another view's extension takes this side
   extensions[side]?.dispose(true) // replacing: swap in place, never a collapse/expand pair
   ++toggleGen[side]
   toggleReleases[side]?.()
@@ -1663,7 +1686,9 @@ export const presentDockedExtension: ExtendViewPresenter = (options, dismiss) =>
         if (vert) settleBottomHeight(api); else pinSides(api)
       }
     }
-    removed = api.onDidRemovePanel((event) => { if (event === panel) { dismiss(); lease.dispose() } })
+    // The person's own close goes through closeLeaf / the header, which dismiss before the panel is removed. A panel
+    // that just disappears was taken with its place (the side was folded): 'layout', not a choice about this panel.
+    removed = api.onDidRemovePanel((event) => { if (event === panel) { dismiss('layout'); lease.dispose() } })
     useWorkspace.getState().syncPanelState()
     useWorkspace.getState().refreshTabs()
     scheduleWorkspaceSave()

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Plus, Upload, Download, Undo2, Redo2, LayoutGrid, SlidersHorizontal, Layers, MessageCircle, Trash2, Loader2, ArrowUpRight, FileDown, FolderOpen, Type, Square, Circle, Frame, MousePointer2, Hand, Copy, Sparkles, X } from 'lucide-react'
-import { useWorkspace, type ViewProps } from '@lcl/engine'
+import { ArrowLeft, Upload, Download, Undo2, Redo2, LayoutGrid, SlidersHorizontal, Layers, MessageCircle, Trash2, Loader2, ArrowUpRight, FileDown, Type, Square, Circle, Frame, MousePointer2, Hand, Copy, Sparkles, X } from 'lucide-react'
+import { useSpaceStore, type ViewProps } from '@lcl/engine'
+import { windowKind } from '../../windowKind'
 import { CanvasChrome, CanvasMiniMap, useCanvasViewport, useCanvasGestures, hostSize, zoomAt, gridLayerStyle, type ResizeEdge } from '../../amadeus/unified/canvasKit'
 import { useI18n } from '../../i18n'
 import { useApp } from '../../stores/appStore'
@@ -10,9 +11,11 @@ import { ExportPanel } from './ExportPanel'
 import { ImageContextMenu, type ImageMenuTarget } from './ImageContextMenu'
 import { copySelection, pasteSelection, referenceSelection, removeSelection } from './actions'
 import { useCollectImages } from './useImages'
-import { makeImage, exportProject, importProject } from './files'
+import { makeImage, exportProject } from './files'
 import { arrangeImages, imageBox, boardItems, replaceItems, moveItems, newElement, isImage, imageSize, type ImageBoard, type StudioElement } from './model'
 import { promptImageStudio } from './session'
+import { ImageLaunchpad } from './ImageLaunchpad'
+import { STUDIO_CHAT, STUDIO_INSPECTOR, STUDIO_LAYERS, enterProjectLayout, leaveProjectLayout, revealStudioPanel } from './layout'
 import type { GenerationPlaceholder } from './generation'
 import './messages'
 import './imageStudio.css'
@@ -34,13 +37,23 @@ export function ImageStudioView(_props: ViewProps) {
     window.addEventListener('beforeunload', beforeUnload)
     return () => { window.removeEventListener('pagehide', flush); window.removeEventListener('beforeunload', beforeUnload); flush() }
   }, [])
+  // 进出项目时两侧跟着换(照 Coding / Video Studio):进 = 导航旁开「图层」、右栏带出对话;出 = 收走。
+  // 只在图像工作室这个 Space 里做 —— 别的 Space 里开着这个视图时,那里的侧栏不归它管。
+  // 摆位是这个 Space 的事,只在主窗做:分离窗读到的是同一个「当前 Space」,却不承载这套布局(没有固定 View、没有侧栏默认)。
+  const inSpace = useSpaceStore(s => s.activeSpaceId === 'image-studio') && windowKind() === 'main'
+  const open = !!id, wasOpen = useRef(false)
+  useEffect(() => {
+    if (!ready || !inSpace) return
+    if (open) enterProjectLayout()
+    else leaveProjectLayout(wasOpen.current)
+    wasOpen.current = open
+  }, [ready, inSpace, open])
   if (!ready) return <div className="ims-panel ims-panel-empty">{error ? <><p role="alert">{t('imageStudio.error', { error })}</p><button onClick={() => void useImageStudio.getState().hydrate()}>{t('imageStudio.retry')}</button></> : <Loader2 className="ims-spin" />}</div>
-  return <ImageCanvas key={id || 'new'} />
+  return id ? <ImageCanvas key={id} /> : <ImageLaunchpad />
 }
 function ImageCanvas() {
   const { t } = useI18n()
   const board = useImageStudio(s => s.activeId ? s.boards[s.activeId] : undefined)
-  const boards = useImageStudio(s => s.boards)
   const saving = useImageStudio(s => s.saving), saveError = useImageStudio(s => s.error)
   const past = useImageStudio(s => board ? s.past[board.id]?.length || 0 : 0)
   const future = useImageStudio(s => board ? s.future[board.id]?.length || 0 : 0)
@@ -51,7 +64,7 @@ function ImageCanvas() {
   const [exporting, setExporting] = useState(false), [hand, setHand] = useState(false), [spaceHand, setSpaceHand] = useState(false)
   const pan = useRef<{ id: number; x: number; y: number; vx: number; vy: number } | null>(null)
   const [snap, setSnap] = useState(true), [mini, setMini] = useState(false), [dropping, setDropping] = useState(false)
-  const host = useRef<HTMLDivElement>(null), picker = useRef<HTMLInputElement>(null), projectPicker = useRef<HTMLInputElement>(null)
+  const host = useRef<HTMLDivElement>(null), picker = useRef<HTMLInputElement>(null)
   const [menu, setMenu] = useState<ImageMenuTarget | null>(null)
   const closeMenu = useCallback(() => { setMenu(null); host.current?.focus({ preventScroll: true }) }, [])
   const view = useCanvasViewport(host, `image-studio:${board?.id || ''}`, undefined, { x: 56, y: 64, z: 1 })
@@ -78,7 +91,7 @@ function ImageCanvas() {
     isEditing: key => !!items.find(i => i.id === key)?.locked,
     hitEdge: target => target.dataset.resize as ResizeEdge || null,
     onDelete: ids => { if (board) useImageStudio.getState().update(board.id, b => replaceItems(b, boardItems(b).filter(i => i.locked || !ids.includes(i.id)))) },
-    onDoubleClick: key => { if (key) { useImageStudio.setState({ selection: [key] }); useWorkspace.getState().openView('image-studio-inspector', {}, 'right') } },
+    onDoubleClick: key => { if (key) { useImageStudio.setState({ selection: [key] }); revealStudioPanel(STUDIO_INSPECTOR) } },
     onContextMenu: (key, at) => {
       const ids = key ? (gesture.sel.includes(key) ? gesture.sel : [key]) : []
       gesture.setSel(ids)
@@ -134,7 +147,6 @@ function ImageCanvas() {
     })
   }
   const seed = (key: string) => void run(async () => { const id = currentOrNew(); await promptImageStudio(id, t(key)) })
-  const openPanel = (type: string) => useWorkspace.getState().openView(type, {}, type === 'image-studio-chat' ? 'left' : 'right')
   const selected = items.filter(i => selection.includes(i.id))
   const liveItems = board && gesture.live ? boardItems(moveItems(board, gesture.live)) : items
   const addElement = (kind: StudioElement['kind']) => {
@@ -142,7 +154,7 @@ function ImageCanvas() {
     const element = newElement(kind, t(`imageStudio.new.${kind}`), (w / 2 - view.vp.x) / view.vp.z, (h / 2 - view.vp.y) / view.vp.z)
     element.x -= element.w / 2; element.y -= element.h / 2
     useImageStudio.getState().update(id, b => replaceItems(b, [...boardItems(b), element]))
-    useImageStudio.setState({ selection: [element.id] }); openPanel('image-studio-inspector')
+    useImageStudio.setState({ selection: [element.id] }); revealStudioPanel(STUDIO_INSPECTOR)
   }
   const zoomBy = (factor: number) => { const { w, h } = hostSize(host.current); view.setVp(zoomAt(view.vp, view.vp.z * factor, w / 2, h / 2)) }
   return <div className="ims" onKeyDownCapture={e => {
@@ -164,9 +176,9 @@ function ImageCanvas() {
     if (handled) { e.preventDefault(); e.stopPropagation() }
   }} onKeyUpCapture={e => { if (e.key === ' ') { setSpaceHand(false); e.preventDefault(); e.stopPropagation() } }} onBlur={e => { if (!e.currentTarget.contains(e.relatedTarget as Node)) { setSpaceHand(false); pan.current = null } }}>
     <header className="ims-header">
-      {/* 页头不再写「图像工作室」:标签已经是这个名字(10-02 用户拍板 v6)。 */}
-      <div className="ims-project-picker"><select aria-label={t('imageStudio.projects')} value={board?.id || ''} onChange={e => useImageStudio.getState().open(e.target.value)}><option value="" disabled>{t('imageStudio.projects')}</option>{Object.values(boards).sort((a, b) => b.updatedAt - a.updatedAt).map(b => <option key={b.id} value={b.id}>{b.name}</option>)}</select><button title={t('imageStudio.new')} aria-label={t('imageStudio.new')} onClick={() => useImageStudio.getState().create(t('imageStudio.untitled'))}><Plus size={16} /></button></div>
-      <div className="ims-head-actions"><button title={t('imageStudio.restore')} aria-label={t('imageStudio.restore')} onClick={() => projectPicker.current?.click()}><FolderOpen size={16} /></button>{board && <button disabled={busy} title={t('imageStudio.backup')} aria-label={t('imageStudio.backup')} onClick={() => void run(() => exportProject(board))}><FileDown size={16} /></button>}<button className="ims-primary" disabled={!visible.length || busy} onClick={() => setExporting(!exporting)}><Download size={14} /><span>{t('imageStudio.exportOptions')}</span></button></div>
+      {/* 页头不再写「图像工作室」:标签已经是这个名字(10-02 用户拍板 v6)。切项目走左栏导航或启动台,这里只留「← 项目名」回去(同 Coding)。 */}
+      <button className="ims-back" title={t('imageStudio.back')} onClick={() => useImageStudio.getState().close()}><ArrowLeft size={15} /><span>{board?.name}</span></button>
+      <div className="ims-head-actions">{board && <button disabled={busy} title={t('imageStudio.backup')} aria-label={t('imageStudio.backup')} onClick={() => void run(() => exportProject(board))}><FileDown size={16} /></button>}<button className="ims-primary" disabled={!visible.length || busy} onClick={() => setExporting(!exporting)}><Download size={14} /><span>{t('imageStudio.exportOptions')}</span></button></div>
     </header>
     <div className="ims-toolbar" role="toolbar" aria-label={t('imageStudio.title')}>
       <button disabled={busy} onClick={() => picker.current?.click()}><Upload size={15} /><span>{t('imageStudio.import')}</span></button>
@@ -180,7 +192,7 @@ function ImageCanvas() {
         <button disabled={!selected.length || busy} title={t('imageStudio.reference')} aria-label={t('imageStudio.reference')} onClick={() => void run(referenceSelection)}><MessageCircle size={15} /></button>
       </>}
       <span className="ims-toolbar-space" />
-      {([['image-studio-chat', MessageCircle, 'imageStudio.chat'], ['image-studio-assets', Layers, 'imageStudio.assets'], ['image-studio-inspector', SlidersHorizontal, 'imageStudio.inspector']] as const).map(([type, Icon, key]) => <button key={type} title={t(key)} aria-label={t(key)} onClick={() => openPanel(type)}><Icon size={16} /></button>)}
+      {([[STUDIO_CHAT, MessageCircle, 'imageStudio.chat'], [STUDIO_LAYERS, Layers, 'imageStudio.layers'], [STUDIO_INSPECTOR, SlidersHorizontal, 'imageStudio.inspector']] as const).map(([type, Icon, key]) => <button key={type} title={t(key)} aria-label={t(key)} onClick={() => revealStudioPanel(type)}><Icon size={16} /></button>)}
     </div>
     {exporting && board && <ExportPanel board={board} selection={selection} onClose={() => setExporting(false)} />}
     {saveError && <div className="ims-error" role="alert">{t('imageStudio.saveError')}<button onClick={() => void useImageStudio.getState().flush()}>{t('imageStudio.retry')}</button></div>}
@@ -213,7 +225,7 @@ function ImageCanvas() {
             {source && <small>{t('imageStudio.generation.versionOf', { name: source.name })}</small>}
             {item.count > 1 && <small>{item.index + 1} / {item.count}</small>}
           </div>
-          {item.status === 'failed' && <div className="ims-generation-actions amx-stage-tools"><button onClick={() => openPanel('image-studio-chat')}>{t('imageStudio.generation.openChat')}</button><button title={t('imageStudio.generation.dismiss')} aria-label={t('imageStudio.generation.dismiss')} onClick={() => useImageStudio.getState().removeGeneration(board!.id, item.id)}><X size={14} /></button></div>}
+          {item.status === 'failed' && <div className="ims-generation-actions amx-stage-tools"><button onClick={() => revealStudioPanel(STUDIO_CHAT)}>{t('imageStudio.generation.openChat')}</button><button title={t('imageStudio.generation.dismiss')} aria-label={t('imageStudio.generation.dismiss')} onClick={() => useImageStudio.getState().removeGeneration(board!.id, item.id)}><X size={14} /></button></div>}
         </div>
       })}{gesture.marquee && <div className="ims-marquee" style={{ left: gesture.marquee.x, top: gesture.marquee.y, width: gesture.marquee.w, height: gesture.marquee.h }} />}</div>
       {!items.length && !placeholders.length && <div className="ims-empty amx-stage-tools"><div className="ims-eyebrow">{t('imageStudio.title')} <span>/</span> {t('imageStudio.new')}</div><h1>{t('imageStudio.headline')}</h1><p>{t('imageStudio.intro')}</p>
@@ -232,9 +244,8 @@ function ImageCanvas() {
       <CanvasChrome zoom={view.vp.z} onZoomBy={zoomBy} onFit={() => view.fitTo(visibleWithPlaceholders)} snap={snap} onSnap={setSnap} mini={mini} onMini={setMini} />
     </div>
     <footer className="ims-footer"><span title={t('imageStudio.hint')}>{board ? t(saveError ? 'imageStudio.unsaved' : saving ? 'imageStudio.saving' : 'imageStudio.local') : t('imageStudio.empty')}</span>{board && <input aria-label={t('imageStudio.name')} value={board.name} onChange={e => useImageStudio.getState().update(board.id, b => ({ ...b, name: e.target.value }), false)} />}<span>{t('imageStudio.itemCount', { count: items.length })}</span></footer>
-    {menu && <ImageContextMenu target={menu} board={board} busy={busy} onClose={closeMenu} onImport={() => picker.current?.click()} onExport={() => setExporting(true)} onInspect={() => openPanel('image-studio-inspector')} run={run} />}
+    {menu && <ImageContextMenu target={menu} board={board} busy={busy} onClose={closeMenu} onImport={() => picker.current?.click()} onExport={() => setExporting(true)} onInspect={() => revealStudioPanel(STUDIO_INSPECTOR)} run={run} />}
     <input ref={picker} type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple hidden onChange={e => { const files = Array.from(e.target.files || []); e.target.value = ''; void run(() => importFiles(files)) }} />
-    <input ref={projectPicker} type="file" accept=".json" hidden onChange={e => { const file = e.target.files?.[0]; e.target.value = ''; if (file) void run(async () => { const imported = await importProject(file); const id = useImageStudio.getState().create(imported.name); useImageStudio.getState().update(id, b => ({ ...imported, id: b.id })) }) }} />
   </div>
 }
 const EMPTY_BOARD: ImageBoard = { version: 1, id: '', name: '', updatedAt: 0, sessionId: null, images: [], collected: [] }

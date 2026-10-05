@@ -287,16 +287,23 @@ async function run(app, win, stub) {
   faults.configPut = false
   await dismissToasts(win)
   await win.locator('.child-chat-panel .agent-desk-head button').click()
-  // 5h 别的 setter 也只写自己的键:团队主区开计划模式 → PATCH 恰好 { planMode: true }。整对象 PUT 会把本地缓存里的审批档一起写回去 ——
-  // 另一个窗口刚收紧的档,这里点一下计划模式就被悄悄放宽(引擎审批时现读存值)。
+  // 5h 团队模式下没有计划模式(10-05 用户定:成员各跑各的,不吃会话上的计划模式):主区模式菜单里那一项置灰、原因直接写在项上
+  //    (触屏没有悬停说明),点了也不写配置。「开计划模式只 PATCH 自己那一个键」改由 stores/sessionConfigWrite.test.ts 钉。
   const planBefore = stub.seen.configs.length
   await win.locator(mainPill).click()
-  await win.locator(`${mainMenu} .menu-item`, { hasText: '开启计划模式' }).click()
-  await sleep(300)
+  await win.waitForSelector(mainMenu, { state: 'visible' })
+  const planItem = win.locator(`${mainMenu} .menu-item`, { hasText: '团队模式下不可用' })
+  const planLocked = await planItem.count() === 1 && await planItem.isDisabled()
+    && await win.locator(`${mainMenu} .menu-item`, { hasText: '开启计划模式' }).count() === 0
+  if (planLocked) await planItem.click({ force: true, timeout: 2000 }).catch(() => {})
+  await sleep(400) // 等胶囊展开 + 菜单弹出动画走完再截图
+  shots.planLocked = path.join(os.tmpdir(), `forsion-teamdesk-planlocked-${process.pid}.png`)
+  await win.screenshot({ path: shots.planLocked })
   const planWrites = stub.seen.configs.slice(planBefore)
-  check('5h 开计划模式 → 只 PATCH { planMode: true },不带审批档等别的键',
-    planWrites.length === 1 && planWrites[0].sessionId === SESSION_ID && planWrites[0].method === 'PATCH' && JSON.stringify(planWrites[0].config) === JSON.stringify({ planMode: true }),
-    JSON.stringify(planWrites))
+  check('5h 团队模式下「计划模式」置灰并写明原因,点了不写配置', planLocked && planWrites.length === 0,
+    JSON.stringify({ items: await win.locator(`${mainMenu} .menu-item`).allInnerTexts().catch(() => []), planWrites }))
+  await win.locator(mainPill).click() // 置灰项不会自己关菜单:收起来,下一步再开
+  await win.waitForSelector(mainMenu, { state: 'detached' }).catch(() => {})
   // 5i 老引擎没有 PATCH(404)→ 回落整对象 PUT,改档照样生效、不回滚不报错(云端经 npm 包单独部署,版本会错开)
   stub.state.noConfigPatch = true
   const legacyBefore = stub.seen.configs.length

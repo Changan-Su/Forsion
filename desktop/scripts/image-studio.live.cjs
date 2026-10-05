@@ -111,6 +111,7 @@ async function main() {
     if (!await icon.isVisible().catch(() => false)) await win.locator('.rb-top .rb-more').first().click() // 「…」= 展开
     await icon.click()
     await win.evaluate(() => document.querySelector('.rb-open-top .rb-more')?.click()) // 收起:展开时命令区让出来,后续步骤要用; await win.waitForSelector('.ims-empty')
+    await win.locator('.ims-launch').getByRole('button', { name: /^(新建项目|New project)$/ }).click() // the Space opens on the project list
     await win.locator('.ims input[type="file"][multiple]').setInputFiles(path.join(OUT, generated.files[0]))
     await win.locator('.ims-footer input').fill('Live · ceramic studies')
     const first = win.locator('.ims-image').first(); await first.click()
