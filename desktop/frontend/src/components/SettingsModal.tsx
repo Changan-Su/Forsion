@@ -3140,20 +3140,19 @@ export const SettingsModal: React.FC<{
                             <button type="button" aria-pressed={!p.glassOn} className={!p.glassOn ? 'active' : ''} onClick={() => p.onGlassChange(false)}>{t('settings.theme.glassOff')}</button>
                           </div>
                         </div>
-                        {/* 取色只在毛玻璃开着时有东西可染;直接读写 themeStore(同背景轴,不走 props 链 → 三端自动到位)。 */}
-                        {p.glassOn && (
-                          <div className="settings-control-row" data-setting-anchor="ambient">
-                            <div className="settings-control-copy"><Droplets size={14} /><span><strong>{t('settings.theme.ambient')}</strong><small>{t('settings.theme.ambientHint')}</small></span></div>
-                            <button
-                              type="button"
-                              role="switch"
-                              aria-checked={ambientOn}
-                              aria-label={t('settings.theme.ambient')}
-                              className={`switch${ambientOn ? ' on' : ''}`}
-                              onClick={() => useTheme.getState().setAmbient(!ambientOn)}
-                            />
-                          </div>
-                        )}
+                        {/* 直接读写 themeStore(同背景轴,不走 props 链 → 三端自动到位)。毛玻璃关着时这行照样在:
+                            设置搜索的落点不能时有时无,开关本身只是记下偏好。 */}
+                        <div className="settings-control-row" data-setting-anchor="ambient">
+                          <div className="settings-control-copy"><Droplets size={14} /><span><strong>{t('settings.theme.ambient')}</strong><small>{t('settings.theme.ambientHint')}</small></span></div>
+                          <button
+                            type="button"
+                            role="switch"
+                            aria-checked={ambientOn}
+                            aria-label={t('settings.theme.ambient')}
+                            className={`switch${ambientOn ? ' on' : ''}`}
+                            onClick={() => useTheme.getState().setAmbient(!ambientOn)}
+                          />
+                        </div>
                         <div className="settings-control-row" data-setting-anchor="smooth-caret">
                           <div className="settings-control-copy"><MousePointer2 size={14} /><span><strong>{t('settings.theme.smoothCaret')}</strong><small>{t('settings.theme.smoothCaretHint')}</small></span></div>
                           <button

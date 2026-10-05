@@ -48,8 +48,13 @@ async function main() {
     const settings = await settingsOpened
     await settings.locator('.settings-nav').waitFor()
     // Turn it on from the settings window: the switch lives in another renderer, so this also proves the cross-window relay.
+    // Reach it through settings search, so a missing search-index entry fails here too.
+    await settings.locator('.settings-nav-search input').fill('取色')
+    await settings.locator('[data-setting-result="ambient"]').click()
     const tint = settings.getByRole('switch', { name: '外壳随内容取色', exact: true })
-    if (!(await tint.count())) await settings.locator('.settings-nav-list button').filter({ hasText: /^(外观|Appearance)$/ }).click()
+    await tint.waitFor()
+    check('settings search lands on the content tint switch, shown off', await tint.getAttribute('aria-checked') === 'false')
+    await settings.locator('.settings-nav-search input').fill('')
     await tint.click()
     await waitAxes(page, { ambient: 'on' })
     await page.waitForFunction(() => getComputedStyle(document.querySelector('.shell'), '::before').content !== 'none' && document.documentElement.style.getPropertyValue('--space-ambient-top'))
