@@ -138,6 +138,7 @@ async function main() {
   }
 
   let browser = null
+  let page = null
   const fails = []
   const pageErrors = []
   const marketQueries = []
@@ -157,7 +158,7 @@ async function main() {
     const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, locale: 'zh-CN' })
     await ctx.addInitScript(() => { try { localStorage.setItem('forsion_tangu_onboarding_done', '1') } catch { /* ignore */ } })
     await ctx.addInitScript(() => { try { localStorage.setItem('forsion_token', 'e2e-plugins') } catch { /* ignore */ } })
-    const page = await ctx.newPage()
+    page = await ctx.newPage()
     page.on('pageerror', (e) => pageErrors.push(e.message))
     page.on('dialog', (d) => { void d.accept() }) // 卸载确认
     await page.route('**/auth/me', (r) => r.fulfill({ status: 200, contentType: 'application/json', body: '{"username":"e2e"}' }))
@@ -218,6 +219,8 @@ async function main() {
       await page.waitForTimeout(2500)
     }
     const openMore = async (ribbonId) => {
+      // 从左抽屉底部进的设置,关掉后回到的还是开着的抽屉,它盖住顶栏的「⋯」—— 先收起(被推到右边的那颗左栏钮还点得到)。
+      if (await page.locator('.mb-drawer--left.open').count()) await tap(page.locator('.mb-topbar [aria-label="left panel"]'), '收起左抽屉')
       await tap(page.locator('.mb-topbar [aria-label="more"]'), '「⋯」')
       await tap(page.locator(`.mb-sheet [data-ribbon-id="${ribbonId}"]`), ribbonId)
     }
@@ -344,6 +347,7 @@ async function main() {
     if (evalErr.length) console.log(`      页面错误(CSP): ${evalErr[0].slice(0, 200)}`)
   } catch (e) {
     fail('台架异常', String(e && e.stack ? e.stack.split('\n').slice(0, 3).join(' / ') : e))
+    if (page) await page.screenshot({ path: path.join(SHOTS, 'exception.png') }).catch(() => {}) // 抛错那一刻页面长什么样
   } finally {
     if (browser) await browser.close().catch(() => {})
     killPreview()
