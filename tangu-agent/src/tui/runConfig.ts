@@ -75,14 +75,17 @@ export function buildRunAgentConfig(c: MutableConfig, groupAgents: string[] | nu
   if (c.seedSystem) ac.systemPrompt = c.seedSystem;
   if (c.tokenBudget) ac.tokenBudget = c.tokenBudget;
   if (c.maxIterations) ac.maxIterations = c.maxIterations;
-  if (c.planMode) ac.planMode = true;
+  // 团队模式下没有计划模式(10-05 用户定;成员的子 run 本来就不吃它,见 services/sessionSettings.settleTeamPlanMode)。
+  // /plan 与 /groupchat 互相拦着,这里兜的是 /resume 带回来的存值。
+  const team = !!groupAgents && groupAgents.length >= 2;
+  if (c.planMode && !team) ac.planMode = true;
   if (c.enabledSkillIds?.length) ac.enabledSkillIds = c.enabledSkillIds;
   // 激活的 Normal Agent 身份必须随 run 下发:少了它,引擎把身份解析成默认 agent(xyra)——
   // 记忆/HARNESS/agent 级技能全落错文件夹,manage_agent 的「不能改自己人格」守卫也拦不住自己
   // (Codex 复核 #2)。persona/model 等 TUI 已显式带上,引擎激活 only-if-unset 不会双重注入。
   if (c.activeAgentSlug) ac.agentSlug = c.activeAgentSlug;
   // 群聊就绪 → 本条消息走多 Agent 群聊(agentLoop 据 groupChat+capabilities.groupChat 分流到 runGroupChat)。
-  if (groupAgents && groupAgents.length >= 2) {
+  if (team) {
     ac.groupChat = true;
     ac.groupAgents = groupAgents;
   }

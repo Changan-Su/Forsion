@@ -63,7 +63,7 @@ tangu install npm:<包名>
 | `/diff` | 查看工作目录所在仓库的 git 改动(从子目录执行也按整个仓库):`git status`、改动统计,以及截断到 300 行的 diff(含未跟踪文件的内容)。不会运行仓库配置的 fsmonitor、外部 diff 工具或 textconv;但仓库给文件配置的 clean / smudge 过滤器照样会运行 —— 这和你自己在终端里敲 `git status` 一样,只在你不信任的仓库里需要留意 |
 | `/status` | 本会话概况:模型、思考档(请求 → 实际生效)、审批档、工作目录、用量 |
 | `/hotkeys` | 列出全部快捷键 |
-| `/plan` | 切换计划模式 |
+| `/plan` | 切换计划模式(团队模式下不可用;`/groupchat` 进入团队模式时会把它关掉) |
 | `/loop <1-200>` | 最大循环轮数 |
 | `/new` `/branch` `/compact` `/retry` `/edit` `/delete` | 会话管理(运行中不可用,先 `Esc` 中止) |
 

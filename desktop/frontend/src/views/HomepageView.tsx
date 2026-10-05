@@ -38,7 +38,7 @@ import { rankIds, reorderBase, unionOrder } from '@lcl/engine/ribbonRegistry'
 import type { SpaceDefinition, RibbonFolder, RibbonItem, ViewProps } from '@lcl/engine'
 import { askString } from '@amadeus/components/askString'
 import { useApp, newChatModelId, stickyDefaults, withAmadeusWorkspace, applyPreset, newSessionPreset, resolveNewSessionWorkspace } from '../stores/appStore'
-import { settleUltra } from '../stores/projectSettings'
+import { settleModes } from '../stores/projectSettings'
 import { currentPlatform } from '../services/agentRunService'
 import type { Attachment } from '../types'
 import { usePageStore } from '../amadeus/store/pageStore'
@@ -146,8 +146,8 @@ function HomepageChatbox({ onDispatch, onStartCall, onInputModeChange }: { onDis
   ])
   const preset = newSessionPreset(s.sessionMode, targetWorkspace, platform)
   const cloud = preset === 'chat' || targetWorkspace.kind === 'cloud' || targetWorkspace.kind === 'rootless'
-  // settleUltra:与建会话同一口径结算 Ultra,药丸显示什么首条消息就按什么跑
-  const config = useMemo(() => settleUltra(withAmadeusWorkspace(applyPreset({
+  // settleModes:与建会话同一口径结算 Ultra 与「团队模式下没有计划模式」,药丸显示什么首条消息就按什么跑
+  const config = useMemo(() => settleModes(withAmadeusWorkspace(applyPreset({
     execMode: cloud ? 'sandbox' : 'host',
     ...stickyDefaults(s.desktopConfig, !cloud, preset),
     cwd: cloud ? undefined : (targetWorkspace.path || undefined),

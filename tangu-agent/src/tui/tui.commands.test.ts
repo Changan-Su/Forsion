@@ -225,6 +225,14 @@ describe('run config (runConfig.ts)', () => {
     expect(buildRunAgentConfig(cfg({ planMode: false }), null).planMode).toBeUndefined();
   });
 
+  it('team mode never carries plan mode (members do not honour it); one agent is not a team', () => {
+    expect(buildRunAgentConfig(cfg({ planMode: true }), null).planMode).toBe(true);
+    expect(buildRunAgentConfig(cfg({ planMode: true }), ['a']).planMode).toBe(true);
+    const team = buildRunAgentConfig(cfg({ planMode: true }), ['a', 'b']);
+    expect(team.planMode).toBeUndefined();
+    expect(team.groupChat).toBe(true);
+  });
+
   it('session write never touches the shared approvalMode key (Desktop re-reads it live at approval time)', () => {
     const p = runSessionPatch(cfg({ approvalMode: 'full-auto', thinkingLevel: 'off' }));
     expect(p).not.toHaveProperty('approvalMode');

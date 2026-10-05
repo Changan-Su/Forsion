@@ -182,7 +182,11 @@ export const manageSkillProvider: ToolProvider = {
             return action === 'create'
               ? `Created skill "${slug}" (${shown})${scopeTag} in ${dir}. It is listed under Available Skills from the next message on (id: local:${slug}); ` +
                 'an agent that runs on a hand-picked skill list only gets it once the user ticks it there. ' +
-                'Helper scripts and reference files go in that folder; refer to them by relative path in the instructions.'
+                'Helper scripts and reference files go in that folder; refer to them by relative path in the instructions ' +
+                '(use_skill tells whoever loads the skill where the folder is, so the instructions never need this absolute path). ' +
+                // 10-05 真模型实测(6 次里 2 次):建完、写完脚本后顺手用 edit_file 改一句正文 —— 多弹一次审批。把正路和原因写在它刚读到的地方。
+                `To change the instructions afterwards, even by one sentence, call manage_skill again with action="update" and slug "${slug}" ` +
+                'instead of editing SKILL.md with the file tools: update needs no approval and keeps the frontmatter intact, a file edit asks the user to approve the write.'
               : `Updated skill "${slug}" (${shown})${scopeTag} in ${dir}.`;
           }
 

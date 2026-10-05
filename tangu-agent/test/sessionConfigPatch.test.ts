@@ -22,6 +22,7 @@ import { STANDALONE_SCHEMA } from '../src/db/schemaStandalone.js';
 import { runMigration } from '../src/db/migrate.js';
 import { query } from '../src/core/db.js';
 import sessionsRouter from '../src/routes/sessions.js';
+import { patchSessionAgentConfig, settleTeamPlanMode } from '../src/services/sessionSettings.js';
 
 let srv: Server;
 let base: string;
@@ -85,5 +86,70 @@ describe('PATCH /agent/sessions/:id/config', () => {
     const [a, b] = await Promise.all([send('PATCH', 'P6', { thinkingLevel: 'high' }), send('PATCH', 'P6', { planMode: true })]);
     expect([a.status, b.status]).toEqual([200, 200]);
     expect(await cfgOf('P6')).toEqual({ execMode: 'host', approvalMode: 'readonly', thinkingLevel: 'high', planMode: true });
+  });
+});
+
+// 10-05 用户定「团队模式不能开计划模式」:成员各跑各的子 run、不吃会话的计划模式。引擎存配置的每个入口都过 settleTeamPlanMode,
+// 哪个端都存不出两个都开(桌面 / 终端界面各自也拦,这里是兜底)。
+describe('团队模式下没有计划模式', () => {
+  it('团队会话里开计划模式的那一笔落成关(PATCH / PUT),响应回的是落库后的值', async () => {
+    await addSession('T1', { execMode: 'host', groupChat: true, groupAgents: ['a', 'b'] });
+    const r = await send('PATCH', 'T1', { planMode: true });
+    expect(r.status).toBe(200); // 不报错:客户端不等响应就改了本地值
+    expect(r.body.agent_config.planMode).toBe(false);
+    expect((await cfgOf('T1')).planMode).toBe(false);
+    expect((await send('PUT', 'T1', { execMode: 'host', groupChat: true, groupAgents: ['a', 'b'], planMode: true })).body.agent_config.planMode).toBe(false);
+    expect(await cfgOf('T1')).toEqual({ execMode: 'host', groupChat: true, groupAgents: ['a', 'b'], planMode: false });
+  });
+
+  it('开团队的那一笔顺手关掉开着的计划模式;关掉团队后不会自己回来', async () => {
+    await addSession('T2', { execMode: 'host', planMode: true });
+    expect((await send('PATCH', 'T2', { groupChat: true, groupAgents: ['a', 'b'] })).body.agent_config.planMode).toBe(false);
+    expect((await send('PATCH', 'T2', { groupChat: false })).status).toBe(200);
+    expect(await cfgOf('T2')).toEqual({ execMode: 'host', planMode: false, groupChat: false, groupAgents: ['a', 'b'] });
+  });
+
+  it('团队轨道会话缺省就是团队模式;显式切回普通(groupChat:false)之后计划模式照开', async () => {
+    await addSession('T3', { teamSlug: 'crew', execMode: 'host' });
+    expect((await send('PATCH', 'T3', { planMode: true })).body.agent_config.planMode).toBe(false);
+    expect((await send('PATCH', 'T3', { groupChat: false, planMode: true })).body.agent_config.planMode).toBe(true);
+    // 再切回团队:同一笔里关掉
+    expect((await send('PATCH', 'T3', { groupChat: true })).body.agent_config.planMode).toBe(false);
+  });
+
+  it('不是团队模式的会话不受影响;团队会话里没有 planMode 键时不凭空多一个', async () => {
+    await addSession('T4', { execMode: 'host' });
+    expect((await send('PATCH', 'T4', { planMode: true })).body.agent_config).toEqual({ execMode: 'host', planMode: true });
+    await addSession('T5', { execMode: 'host', groupChat: true, groupAgents: ['a', 'b'] });
+    expect((await send('PATCH', 'T5', { thinkingLevel: 'high' })).body.agent_config).toEqual({ execMode: 'host', groupChat: true, groupAgents: ['a', 'b'], thinkingLevel: 'high' });
+  });
+
+  it('同一笔里删掉团队键(null)并开计划模式 → 合并后不是团队模式,计划模式照开(桌面那边同样放行)', async () => {
+    await addSession('T7', { execMode: 'host', groupChat: true, groupAgents: ['a', 'b'] });
+    expect((await send('PATCH', 'T7', { groupChat: null, planMode: true })).body.agent_config).toEqual({ execMode: 'host', groupAgents: ['a', 'b'], planMode: true });
+    // 团队轨道会话删掉这个键 = 回到缺省的团队模式:计划模式落成关
+    await addSession('T8', { teamSlug: 'crew', execMode: 'host', groupChat: false });
+    expect((await send('PATCH', 'T8', { groupChat: null, planMode: true })).body.agent_config).toEqual({ teamSlug: 'crew', execMode: 'host', planMode: false });
+  });
+
+  it('建会话时带着两个都开 → 存成计划模式关', async () => {
+    const r = await fetch(`${base}/agent/sessions`, { method: 'POST', headers: { Authorization: 'Bearer x', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: 't', projectless: true, agent_config: { execMode: 'host', groupChat: true, groupAgents: ['a', 'b'], planMode: true } }) });
+    const created = (await r.json()).session;
+    expect(created.agent_config.planMode).toBe(false);
+    expect((await cfgOf(created.id)).planMode).toBe(false);
+  });
+
+  it('引擎内部的按键合并写(终端界面 / 通道 / session_settings 工具走的那条)同一个结算', async () => {
+    await addSession('T6', { execMode: 'host', groupChat: true, groupAgents: ['a', 'b'] });
+    expect((await patchSessionAgentConfig('T6', { planMode: true, thinkingLevel: 'high' })).planMode).toBe(false);
+    expect(await cfgOf('T6')).toEqual({ execMode: 'host', groupChat: true, groupAgents: ['a', 'b'], planMode: false, thinkingLevel: 'high' });
+  });
+
+  it('settleTeamPlanMode:不用改时原样返回同一个对象', () => {
+    for (const cfg of [{}, { planMode: true }, { groupChat: true }, { groupChat: true, planMode: false }, { teamSlug: 'crew', groupChat: false, planMode: true }, { teamSlug: '', planMode: true }]) {
+      expect(settleTeamPlanMode(cfg)).toBe(cfg);
+    }
+    expect(settleTeamPlanMode({ teamSlug: 'crew', planMode: true })).toEqual({ teamSlug: 'crew', planMode: false });
   });
 });

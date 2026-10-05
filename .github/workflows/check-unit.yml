@@ -59,3 +59,70 @@ jobs:
           name: forsion-unit-linux-x64
           path: unit/dist/
           if-no-files-found: error
+
+  # 发版 tag → 把上面那份 Unit 发到 npm(@forsion/unit,版本号 = 桌面版本号)。下游打包从 npm 取,不再需要相邻的 Genesis 检出。
+  # 只发正式版:main 上的构建与它跟着的那个正式版同号(release.json 里 prerelease: true),发出去会撞号 → check-publishable 挡住。
+  #
+  # npm 走 trusted publishing(OIDC),仓库里**没有 npm 令牌**:npm 只认本仓 + 本文件名(check-unit.yml)发来的请求。
+  # 首个版本必须人工发一次 —— npm 规定包存在后才能登记 trusted publisher(步骤见 unit/README.md「npm 发布」)。
+  # 包还不存在时 publish 步骤只告警、不变红;要人工发的 .tgz 就是本 job 上传的产物 forsion-unit-npm。
+  publish-npm:
+    needs: independent-unit
+    # workflow_dispatch 可以指到 tag ref,只看 ref 会把手动构建变成正式发布 → 必须是推 tag 触发。
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # npm trusted publishing(OIDC)
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: forsion-unit-linux-x64
+          path: unit-dist
+      # ⚠️ 这里刻意不设 registry-url:setup-node 会往 .npmrc 写 `_authToken=${NODE_AUTH_TOKEN}` 并导出占位令牌,
+      # npm 见到「已配令牌」就不走 OIDC,trusted publishing 以 ENEEDAUTH / E404 失败(npm/documentation#1960)。
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24 # trusted publishing 要 npm ≥ 11.5.1 + Node ≥ 22.14
+      - name: Only the tagged release build is publishable
+        id: gate
+        run: |
+          # 预发布 tag(v2.7.4-beta.1 之类)不发 npm,也不该让这个 job 变红。
+          if ! [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::notice::$GITHUB_REF_NAME is not a stable release tag; nothing to publish."
+            exit 0
+          fi
+          node unit/check-publishable.mjs unit-dist "$GITHUB_REF_NAME"
+          echo "publish=true" >> "$GITHUB_OUTPUT"
+      # package.json 的 files 白名单把按平台构建的本地插件(plugins/)留在包外;这里再核一遍,漏进去就别发。
+      - name: Pack
+        if: steps.gate.outputs.publish == 'true'
+        run: |
+          npm pack ./unit-dist
+          if tar -tzf forsion-unit-*.tgz | grep -q '^package/plugins/'; then
+            echo "::error::Local plugins leaked into the npm package."
+            exit 1
+          fi
+      - uses: actions/upload-artifact@v4
+        if: steps.gate.outputs.publish == 'true'
+        with:
+          name: forsion-unit-npm
+          path: forsion-unit-*.tgz
+          if-no-files-found: error
+      - name: Publish to npm
+        if: steps.gate.outputs.publish == 'true'
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          if npm view @forsion/unit name 2>&1 | grep -q E404; then
+            echo "::warning::@forsion/unit is not on npm yet. Publish the forsion-unit-npm artifact once by hand, then register check-unit.yml as its trusted publisher with --allow-publish (unit/README.md)."
+          elif [ -n "$(npm view "@forsion/unit@$version" version 2>/dev/null)" ]; then
+            echo "::notice::@forsion/unit@$version is already on npm; nothing to publish."
+          else
+            npm publish ./forsion-unit-*.tgz --access public
+          fi
+      # 大陆的打包机走 npmmirror,默认同步有分钟级延迟;这里催一下,失败不影响发布。
+      - name: Ask npmmirror to sync
+        if: steps.gate.outputs.publish == 'true'
+        continue-on-error: true
+        run: curl -fsS -X PUT "https://registry.npmmirror.com/-/package/%40forsion%2Funit/syncs"

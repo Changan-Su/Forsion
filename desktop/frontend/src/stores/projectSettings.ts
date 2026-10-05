@@ -47,6 +47,18 @@ export function settleUltra<T extends AgentConfig>(cfg: T): T {
   return rest as T
 }
 
+/** 团队模式(与引擎 services/sessionSettings.settleTeamPlanMode 同一口径):groupChat 为真;团队轨道会话没有显式切回普通也算。 */
+export const teamModeOn = (cfg: AgentConfig | null | undefined): boolean => !!cfg && (!!cfg.groupChat || (!!cfg.teamSlug && cfg.groupChat !== false))
+
+/** 团队模式下没有计划模式(10-05 用户定):成员各跑各的,不吃会话上的计划模式 —— 开着也不作数。结算放在配置上、不放在各个入口:
+ *  开团队的那一笔顺手关掉计划模式,团队会话里开计划模式的那一笔不作数。没动时原样返回同一个对象。 */
+export function settlePlanMode<T extends AgentConfig>(cfg: T): T {
+  return cfg.planMode && teamModeOn(cfg) ? { ...cfg, planMode: false } : cfg
+}
+
+/** 模式之间的互斥一次结清(Ultra 的资格 + 团队模式下没有计划模式):建会话、空态显示、发 run 共用。 */
+export const settleModes = <T extends AgentConfig>(cfg: T): T => settlePlanMode(settleUltra(cfg))
+
 /** 新会话初始配置的三层次序:**显式选择(picks,新对话草稿里用户点过的)> 项目默认 > 上次用的档位(sticky)**。
  *  sticky 在 host 会话里恒带 approvalMode,所以不能把它当底再「只补缺席键」—— 那样项目的审批档永远轮不到(codex 评审抓的)。 */
 export function newSessionConfig(sticky: Partial<AgentConfig>, project: Partial<AgentConfig>, picks: AgentConfig = {}): AgentConfig {

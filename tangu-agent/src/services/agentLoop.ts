@@ -1717,8 +1717,9 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     }
     // 开发者「显示 system prompt」:把本 run 组装好的系统提示原样作事件发出(仅 agentConfig.debugSystemPrompt)。
     // 纯只读文本,无 host 访问 → cloud/standalone/desktop 同一路径安全;前缀缓存不受影响(不改 workingMessages)。
+    // recalled:尾部通道那段召回(缺省不在系统提示里,稍后拼到最后一条用户消息)—— 台架要看的是「模型这一轮到底被喂了什么」。
     if (agentConfig.debugSystemPrompt && systemParts.length) {
-      await publish(runId, 'system_prompt', { content: systemParts.join('\n\n') });
+      await publish(runId, 'system_prompt', { content: systemParts.join('\n\n'), ...(volatilePlacement === 'tail' && volatileMemory ? { recalled: volatileMemory } : {}) });
     }
     ctxMark('plan');
     workingMessages.push(...history);

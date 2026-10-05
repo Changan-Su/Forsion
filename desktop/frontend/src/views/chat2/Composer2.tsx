@@ -64,6 +64,8 @@ registerMessages({
   'input.presetLocked': { zh: '模式在创建会话时确定；换模式请新建会话', en: 'Mode is fixed when the session is created; start a new session to change it' },
   // 团队成员子聊天:审批档读写的都是团队会话,选了对全队生效。
   'input.approvalSection.team': { zh: '团队审批档 · 改动对全队生效', en: 'Approval mode for the whole team' },
+  // 团队模式下没有计划模式(成员不吃它,10-05 用户定):那一项置灰,原因直接写在项上 —— 触屏没有悬停说明。
+  'input.planModeTeamOff': { zh: '团队模式下不可用', en: 'Not available in team mode' },
   // /export 导出的 markdown 里,用户那一侧消息的小标题(助手侧固定是品牌名 Tangu,不翻译)。
   'composer2.exportRoleUser': { zh: '我', en: 'Me' },
   // 「跳过了哪些文件」提示里的列表分隔符 —— 中文用顿号,英文用逗号+空格。
@@ -1724,10 +1726,10 @@ export const Composer2: React.FC<{
                     {onPlanModeChange && !isChat && (
                       <>
                         <div className="menu-section">{t('input.planMode')}</div>
-                        <button className={`menu-item${planMode ? ' active' : ''}`} onClick={() => { onPlanModeChange(!planMode); setOpenMenu(null) }}>
+                        <button className={`menu-item${planMode && !groupChat ? ' active' : ''}`} disabled={!!groupChat} onClick={() => { onPlanModeChange(!planMode); setOpenMenu(null) }}>
                           <ClipboardList size={14} />
-                          <span className="grow">{planMode ? t('input.planModeOn') : t('input.planModeEnable')}</span>
-                          {planMode && <Check size={13} />}
+                          <span className="grow">{groupChat ? t('input.planModeTeamOff') : planMode ? t('input.planModeOn') : t('input.planModeEnable')}</span>
+                          {planMode && !groupChat && <Check size={13} />}
                         </button>
                       </>
                     )}

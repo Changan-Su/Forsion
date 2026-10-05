@@ -684,6 +684,7 @@ export function App({ boot, storage }: { boot: TuiConfig; storage: string }): Re
       }
       sessionIdRef.current = id;
       setSessionId(id);
+      if (groupAgentsRef.current) patch.planMode = false; // 团队模式还开着:恢复来的计划模式不作数
       patchCfg(patch);
       setCtxInfo(null);
       dispatch({ type: 'RESET_SESSION', items });
@@ -1136,7 +1137,11 @@ export function App({ boot, storage }: { boot: TuiConfig; storage: string }): Re
         const missing = slugs.filter((_, i) => !defs[i]);
         if (missing.length) { notice(`未找到 agent：${missing.join(', ')}（/agents 查看）`, 'error'); return; }
         groupAgentsRef.current = slugs;
-        notice(`团队模式已就绪：${slugs.join(' / ')}。直接发消息即开始多 Agent 协作（/groupchat off 退出）`, 'success');
+        // 团队模式下没有计划模式(成员不吃它):开着就顺手关掉,并说一声
+        const planWasOn = !!cfgRef.current.planMode;
+        if (planWasOn) setCfg((c) => ({ ...c, planMode: false }));
+        notice(`团队模式已就绪：${slugs.join(' / ')}。直接发消息即开始多 Agent 协作（/groupchat off 退出）`
+          + (planWasOn ? L('\n计划模式已关闭：团队模式下不能用。', '\nPlan mode was turned off: it is not available in team mode.') : ''), 'success');
         return;
       }
       case '/edit': {
@@ -1161,6 +1166,10 @@ export function App({ boot, storage }: { boot: TuiConfig; storage: string }): Re
       }
       case '/plan': {
         const next = !cfgRef.current.planMode;
+        if (next && groupAgentsRef.current) {
+          notice(L('团队模式下不能开计划模式（先 /groupchat off 退出团队模式）', 'Plan mode is not available in team mode (leave team mode with /groupchat off first)'), 'warn');
+          return;
+        }
         setCfg((c) => ({ ...c, planMode: next }));
         notice(
           next
