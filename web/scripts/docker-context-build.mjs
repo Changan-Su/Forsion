@@ -26,7 +26,7 @@ try {
     for (const src of args.flatMap((a) => a.includes('*') ? globSync(a, { cwd: genesis }) : [a])) {
       if (!existsSync(join(genesis, src))) throw new Error(`Dockerfile COPY 源不存在:${src}`)
       const target = dest.endsWith('/') ? join(stage, dest, src.split('/').pop()) : join(stage, dest)
-      cpSync(join(genesis, src), target, { recursive: true, filter: (p) => !/(^|\/)(node_modules|dist)(\/|$)/.test(p) })
+      cpSync(join(genesis, src), target, { recursive: true, filter: (p) => !/(^|[\\/])(node_modules|dist)([\\/]|$)/.test(p) })
     }
   }
   if (process.argv.includes('--unit-web')) {
