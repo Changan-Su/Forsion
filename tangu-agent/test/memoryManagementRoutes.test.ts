@@ -16,6 +16,7 @@ import { runWithAgentSlug } from '../src/seams/runContext.js';
 import { memoryLogProvider } from '../src/tools/builtin/memoryLog.js';
 import agentsRouter from '../src/routes/agents.js';
 import memoryRouter from '../src/routes/memory.js';
+import { scheduleAgentFilesSync } from '../src/services/agentFileSync.js';
 let home: string;
 let server: Server;
 let base: string;
@@ -66,6 +67,16 @@ describe('versioned Agent memory management', () => {
     expect((await api('/agent/memory', 'POST', { slug: 'shared', text: 'explicit shared fact' })).status).toBe(200);
     expect((await api('/agent/memory')).body.content).toBe('explicit shared fact');
     expect((await api('/agent/agents/second/memory')).body.content).toBe('');
+  });
+
+  it('opening the memory view schedules one background sync for the display Agent; listing logs adds none', async () => {
+    const sync = vi.mocked(scheduleAgentFilesSync); sync.mockClear();
+    expect((await api('/agent/agents/shared/memory')).status).toBe(200);
+    expect(sync.mock.calls).toEqual([['fixture-user', 'shared']]); // 归属(显示)agent,不是它共用的默认记忆桶;不带 slug 是空操作
+    sync.mockClear();
+    expect((await api('/agent/agents/shared/logs')).status).toBe(200);
+    expect((await api('/agent/agents/not-created/memory')).status).toBe(404);
+    expect(sync).not.toHaveBeenCalled(); // /logs 不再排:界面总是同时拉 /memory,两头都排就是背靠背两遍一样的同步
   });
 
   it('returns retained revisions and refuses restore to silently undo forgetting', async () => {

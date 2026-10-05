@@ -25,3 +25,19 @@ describe('cloud Inbox capability advertisement', () => {
     expect((fetch.mock.calls[1] as any)[1].headers.Authorization).toBe('Bearer scoped-cloud-token');
   });
 });
+
+describe('agent file manifest path negotiation', () => {
+  it('declares the optional paths it understands and passes the server answer through', async () => {
+    const json = (body: unknown) => new Response(JSON.stringify(body), { headers: { 'Content-Type': 'application/json' } });
+    const fetch = vi.fn(async () => json({ agents: [{ slug: 'fixture', files: [] }], paths: ['human'] }));
+    vi.stubGlobal('fetch', fetch);
+    const files = createHttpBrain({ cloudUrl: 'https://server.example', token: 'static-cloud-token' }).agentFiles!;
+    const manifest = await files.getManifest('fixture-user');
+    // 不声明 → 服务端不列 HUMAN.md(老客户端见到不认识的路径会判整次同步失败);声明了才列
+    expect((fetch.mock.calls[0] as any)[0]).toBe('https://server.example/api/brain/agents/manifest?paths=human');
+    expect([...manifest]).toEqual([{ slug: 'fixture', files: [] }]);
+    expect(manifest.paths).toEqual(['human']);
+    fetch.mockResolvedValueOnce(json({ agents: [] })); // 老服务端:不回带 → 引擎本次不同步 HUMAN.md
+    expect((await files.getManifest('fixture-user')).paths).toBeUndefined();
+  });
+});

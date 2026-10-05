@@ -307,8 +307,10 @@ router.get('/agent/agents/:slug/memory', authMiddleware, async (req: AuthRequest
     const store = await storeForAgent(req.params.slug);
     if (!store) return res.status(404).json({ detail: 'Agent not found' });
     res.json(createMemoryRepository(store.baseDir).snapshot());
-    // 后台拉一次云端(不阻塞响应):云端 worker 侧写的新记忆迟一拍到位,重开视图即最新。
-    scheduleAgentFilesSync(req.user!.userId);
+    // 后台同步一次(不阻塞响应):云端 worker 侧写的新记忆 / 日志迟一拍到位,重开视图即最新。
+    // 带的是归属(显示)agent 的 slug,不是上面解析出的记忆桶;不带 slug 是空操作。没开云同步的 agent 不发任何请求,
+    // 开了的在什么都没变时是 2 个请求(清单 + 墓碑;没变的日志按清单哈希跳过)。
+    scheduleAgentFilesSync(req.user!.userId, req.params.slug);
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'read memory failed' });
   }
@@ -363,9 +365,7 @@ router.get('/agent/agents/:slug/logs', authMiddleware, async (req: AuthRequest, 
   try {
     const store = await storeForAgent(req.params.slug);
     if (!store) return res.status(404).json({ detail: 'Agent not found' });
-    res.json({ dates: store.listLogDates() });
-    scheduleAgentFilesSync(req.user!.userId); // 同 memory:后台拉云端新日志
-
+    res.json({ dates: store.listLogDates() }); // 这里不再排一次:拉日志的界面都同时拉了 /memory,那一次同步已覆盖 LOG/
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'list logs failed' });
   }
