@@ -36,6 +36,8 @@ export const MEMORY_RECALL_MAX_CHARS = 4000;
 export const MEMORY_RECALL_MAX_ENTRIES = 256;
 export const MEMORY_RECALL_SCAN_CHARS = 32_000;
 export const MEMORY_RECALL_HISTORY_SESSIONS = 16;
+/** 「相关历史片段」最多带几条。 */
+export const MEMORY_RECALL_HISTORY_EXCERPTS = 3;
 export const MEMORY_RECALL_HISTORY_MESSAGES = 16;
 export const MEMORY_RECALL_HISTORY_MESSAGE_CHARS = 2000;
 
@@ -159,7 +161,8 @@ export async function buildAgentMemoryContext(input: AgentMemoryContextInput): P
     let history: SessionHit[] = [];
     try {
       history = await searchSessions({ userId: input.userId, appId: input.appId,
-        toolScope: sessionToolScope(input.agentSlug), terms, limit: 3, matchAny: true,
+        // 取满候选再筛、筛完才截到 3 条:先截后筛的话,排在前头的若是别的项目的片段,本项目的那几条就轮不上了。
+        toolScope: sessionToolScope(input.agentSlug), terms, limit: MEMORY_RECALL_HISTORY_SESSIONS, matchAny: true,
         excludeSessionId: input.excludeSessionId, excludeSessionsWithTool: input.hideSessionsWithTool, ...(input.hideRemoteSessions ? { excludeRemoteSessions: true } : {}), signal: input.signal,
         candidateLimit: MEMORY_RECALL_HISTORY_SESSIONS, messagesPerSession: MEMORY_RECALL_HISTORY_MESSAGES,
         messageChars: MEMORY_RECALL_HISTORY_MESSAGE_CHARS });
@@ -170,20 +173,27 @@ export async function buildAgentMemoryContext(input: AgentMemoryContextInput): P
       console.warn('[memory-recall] session history unavailable; injecting memory only:', e?.message || e);
     }
     input.signal?.throwIfAborted();
-    const permittedHistory = history.filter((hit) => hit.hit
-      && !forgottenEvidence.has(hit.hit.messageId)
-      && !forgottenText.some((fact) => normalizeMemoryFact(hit.hit!.snippet).includes(fact)));
     // 片段出自哪个项目(10-04 记忆分项目级 / 全局级):同一个 agent 跨项目干活,在别的项目里说过的「这个项目的测试命令是……」
-    // 到了这里并不成立。实机(projmem / realuse)里换一个项目问同一句,模型拿着这种片段照答、照跑 —— 所以标出处,不删片段
-    // (在别处问「那个项目怎么跑测试」时它正是要找的东西)。出处由会话检索后端给(hit.project / hit.otherProject),这一层不碰库。
+    // 到了这里并不成立。只标出处不够:GPT 6 Luna 上换一个项目问同一句,三次里两次照着那条片段答成本项目的(projmem ③,10-05)。
+    // 所以别的项目的片段不自动带进来,除非这条消息点了那个项目的名字(在别处问「pm-one 怎么跑测试」时它正是要找的东西);
+    // 模型自己去搜(search_sessions / read_session)不受影响。出处由会话检索后端给(hit.project / hit.otherProject),这一层不碰库。
+    // ponytail: 「点了名」= 消息里出现那个目录名。目录名很短(web / app)时会误中 → 那条片段照旧带着出处标注进来,不比改之前差。
+    const asked = input.query.toLowerCase();
+    const named = (hit: SessionHit): boolean => !!hit.project && asked.includes(String(hit.project).toLowerCase());
+    const permittedHistory = history.filter((hit) => hit.hit
+      && (!hit.otherProject || named(hit))
+      && !forgottenEvidence.has(hit.hit.messageId)
+      && !forgottenText.some((fact) => normalizeMemoryFact(hit.hit!.snippet).includes(fact))).slice(0, MEMORY_RECALL_HISTORY_EXCERPTS);
     const from = (hit: SessionHit): string => hit.project
       ? `; project=${String(hit.project).replace(/[\]\[;\r\n]/g, ' ').slice(0, 60)}${hit.otherProject ? ", not this session's project" : ''}` : '';
     const lines = permittedHistory.map((hit) => ({
       text: `[session_id=${hit.id}; message_id=${hit.hit!.messageId}; timestamp=${hit.hit!.timestamp}; role=${hit.hit!.role}${from(hit)}] ${hit.hit!.snippet}`,
     }));
+    // 带标注的片段现在只在「这条消息点了那个项目的名字」时出现 → 段头照这个情形写:可以拿它回答那个项目的事(起初写的是「对本项目什么也说明不了」,
+    // 真模型点名问时三次里有一次因此说不知道),但不是本项目的事实。
     const foreign = permittedHistory.some((hit) => hit.otherProject);
     const before = parts.length;
-    appendSection('volatile', `Related past-message excerpts (read_session verifies original text; bounded recent window${foreign ? "; an excerpt marked \"not this session's project\" was said about that other project and tells you nothing about this one" : ''}):`, lines, Math.floor(cap / 4));
+    appendSection('volatile', `Related past-message excerpts (read_session verifies original text; bounded recent window${foreign ? "; an excerpt marked \"not this session's project\" is about the project named in its label, which this message mentions: it can answer questions about that project and tells you nothing about this one" : ''}):`, lines, Math.floor(cap / 4));
     if (parts.length > before) for (const hit of permittedHistory) {
       if (hit.hit && parts.at(-1)!.includes(`message_id=${hit.hit.messageId};`)) historyMessageIds.push(hit.hit.messageId);
     }
