@@ -263,12 +263,20 @@ describe('renderHarnessSection', () => {
       { id: 'h-1a2b', kind: 'note', title: 'N', body: '两\n行', evidence: 'ev', createdAt: '', updatedAt: '', version: 1 },
       { id: 'h-3c4d', kind: 'recipe', title: 'R', body: 'r', createdAt: '', updatedAt: '', version: 1 },
     ]);
-    expect(s).toContain('## My Working Notes');
+    expect(s).toContain('## My Evolution Record');
     expect(s).toContain('- [h-1a2b] N — 两 行 (evidence: ev)');
     expect(s).toContain('Delegation recipes');
     expect(s).toContain('- [h-3c4d] R — r');
     // 写入不再经审批(10-04):笔记每轮进系统提示,段头必须明说它不是授权
     expect(s).toContain('never authorization');
+  });
+  it('复盘指令引用的段名 = 注入段的标题;落盘抬头同名(旧抬头的文件照样读得进,见 parseHarness 那两例)', async () => {
+    const { renderHarnessSection, REFINE_DIRECTIVE, serializeHarness } = await import('./harnessStore.js');
+    const heading = renderHarnessSection([{ id: 'h-1a2b', kind: 'note', title: 'N', body: 'b', createdAt: '', updatedAt: '', version: 1 }]).split('\n')[0];
+    const name = heading.match(/^## (My .+?) \(self-curated\)$/)?.[1];
+    expect(name).toBe('My Evolution Record');
+    expect(REFINE_DIRECTIVE).toContain(`"${name}" section`);
+    expect(serializeHarness([]).split('\n')[0]).toBe('# Evolution Record');
   });
 });
 

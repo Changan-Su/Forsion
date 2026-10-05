@@ -94,7 +94,7 @@ describe('manage_harness 放开写入', () => {
     expect(await call({ action: 'upsert', title: 'T', body: 'B' }, {}, 'strict')).toMatch(/^Error: a new entry needs evidence/);
     expect(await call({ action: 'upsert', title: 'T', body: 'B', evidence: 'E' }, { ephemeral: true }, 'strict')).toMatch(/^Error:/);
     expect(await call({ action: 'upsert', title: 'T', body: 'B', evidence: 'E' }, { remote: { marked: true } }, 'strict')).toMatch(/^Error:/);
-    expect(await call({ action: 'list' }, { remote: { marked: true } }, 'strict')).toBe('(working notes are empty)');
+    expect(await call({ action: 'list' }, { remote: { marked: true } }, 'strict')).toBe('(evolution record is empty)');
     // 给自己提名:指回 upsert(候选收件箱只在 /refine 时才被读,给自己提名等于什么都没做)
     expect(await call({ action: 'propose', agent: 'strict', candidates: ['shelve x'] }, {}, 'strict')).toMatch(/^Error: propose is for ANOTHER agent/);
     expect(await loadHarness('strict')).toEqual([]);
