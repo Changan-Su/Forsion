@@ -22,7 +22,7 @@ import { healthOf, isRecoverable, isTerminal, noteHealth, probeTarget, resetHeal
 import { catalogFor, ensureCatalog, forgetCatalog, rememberCatalog } from '../services/engine/catalog'
 import { unitHostProfile } from '../services/engine/hostFs'
 import '../services/engine/messages'
-import { isProjectWorkspace, newSessionConfig, projectDefaultsForNewSession, settleUltra } from './projectSettings'
+import { isProjectWorkspace, newSessionConfig, projectDefaultsForNewSession, settleModes, settlePlanMode } from './projectSettings'
 import { effectiveSessionMode, type SessionMode } from '../views/sessionMode'
 import { abortRunAndWait, cancelSteer, currentPlatform, expediteSteer, listActiveRuns, resolveApproval, resolveInquiry, startRun, steerRun, subscribeRunEvents, testConnection } from '../services/agentRunService'
 import { speakMessage, stopSpeaking, ttsState } from '../services/ttsService'
@@ -52,6 +52,9 @@ import { normalizeSessionEmoji } from '../../../../tangu-agent/src/core/sessionE
 // store 活在 React 之外,取词一律走模块级 `translate`,不能用 hook。
 registerMessages({
   'appstore.dispatchStarted': { zh: '已在 {name} 新建会话开工', en: 'Started a session in {name}' },
+  // 团队模式下没有计划模式(成员不吃它):开团队时顺手关掉 / 团队会话里开不了
+  'appstore.planOffForTeam': { zh: '计划模式已关闭：团队模式下不能用', en: 'Plan mode was turned off: it is not available in team mode' },
+  'appstore.planNotInTeam': { zh: '团队模式下不能开计划模式', en: 'Plan mode is not available in team mode' },
   'app.ctxWindowSaveFail': { zh: '上下文上限没保存：{e}', en: 'Could not save the context limit: {e}' },
   'solo.engineTooOld': { zh: '当前引擎版本不支持私聊/团队会话，请升级引擎', en: 'This engine version does not support direct or team sessions; please update the engine' },
   'solo.rotateBusy': { zh: '这条私聊还在运行中，等它结束再开新会话', en: 'This direct chat is still running; wait for it to finish before starting a new session' },
@@ -2708,7 +2711,7 @@ export const useApp = create<AppState>((set, get) => ({
         ? { ...newSessionConfig(sticky, projectDefaults.config), execMode: 'host', cwd: path }
         : { ...sticky, execMode: 'sandbox', ...(cloudProject ? { workspaceProject: cloudProject } : {}) }, preset)
       // P1-K7a(S6):在那台电脑上建的会话不带手机本地的 Amadeus 根等(remoteSafeInit)
-      const init: AgentConfig = settleUltra(loc.kind === 'unit' ? remoteSafeInit(base) : withAmadeusWorkspace(base, activeAmadeusRoot()))
+      const init: AgentConfig = settleModes(loc.kind === 'unit' ? remoteSafeInit(base) : withAmadeusWorkspace(base, activeAmadeusRoot()))
       // Chat 不提供 Agent 选择器：创建时就把当下默认 Agent 固化为会话事实，避免空会话期间
       // 全局默认异步刷新后首轮“换人”。Work 仍保留空态选择器，按原逻辑到发送时固化。
       if (preset === 'chat' && get().defaultAgentSlug) init.agentSlug = get().defaultAgentSlug
@@ -3095,7 +3098,7 @@ export const useApp = create<AppState>((set, get) => ({
         ? { ...draft, execMode: 'host', cwd: path }
         : { ...draft, execMode: 'sandbox', cwd: undefined, ...(cloudProject ? { workspaceProject: cloudProject } : {}) }, preset)
       // P1-K7a(S6):在那台电脑上建的会话不带手机本地的 Amadeus 根 / 云端项目名 / 外部引擎等(remoteSafeInit)
-      const init: AgentConfig = settleUltra(loc.kind === 'unit' ? remoteSafeInit(base) : withAmadeusWorkspace(base, activeAmadeusRoot()))
+      const init: AgentConfig = settleModes(loc.kind === 'unit' ? remoteSafeInit(base) : withAmadeusWorkspace(base, activeAmadeusRoot()))
       // 新会话生效的 agent 当场固化(默认兜底也算):不落库的话后续轮次会随易变的
       // defaultAgentSlug 重新解析,同一会话可能「换人」。
       if (!init.agentSlug && get().defaultAgentSlug) init.agentSlug = get().defaultAgentSlug
@@ -3172,8 +3175,8 @@ export const useApp = create<AppState>((set, get) => ({
     if (mentions?.priorityAgent) agentConfig.priorityAgent = mentions.priorityAgent
     if (mentions?.mentionAgents?.length) agentConfig.mentionedAgentSlugs = mentions.mentionAgents
     if (mentions?.mentionProjects?.length) agentConfig.mentionedProjects = mentions.mentionProjects // 私聊里 @项目派遣(run 事实,不落库)
-    // Ultra 的资格按本条 run 的实际配置结算(换过引擎 / 进了团队模式 / 档位不是 max 的会话不带它),与药丸显示同一口径。
-    agentConfig = settleUltra(agentConfig)
+    // Ultra 的资格按本条 run 的实际配置结算(换过引擎 / 进了团队模式 / 档位不是 max 的会话不带它),与药丸显示同一口径;团队模式下不带计划模式。
+    agentConfig = settleModes(agentConfig)
     if (!onUnit && !agentConfig.imageModelId && get().cfg.imageModelId) agentConfig.imageModelId = get().cfg.imageModelId
     // 辅助视觉模型:本端刚改完就生效(不必等引擎那边 config.json 的 60s 槽缓存过期)。
     if (!onUnit && !agentConfig.visionModelId && get().cfg.visionModelId) agentConfig.visionModelId = get().cfg.visionModelId
@@ -3716,8 +3719,25 @@ export const useApp = create<AppState>((set, get) => ({
   patchSessionConfig: (patch, targetSessionId) => {
     const sid = targetSessionId === undefined ? get().activeId : targetSessionId
     if (!sid) return
-    set((s) => ({ configBySession: { ...s.configBySession, [sid]: { ...(s.configBySession[sid] || {}), ...patch } } }))
-    void saveSessionConfig(sid, patch).catch(() => {})
+    // 团队模式下没有计划模式:所有会话级 setter 都经这里,规矩只在这一处结算(引擎存的时候也这么落,见 settleTeamPlanMode)。
+    const prev = get().configBySession[sid] || {}
+    const merged = { ...prev, ...patch }
+    let out = patch
+    if (settlePlanMode(merged) !== merged) {
+      if (!prev.planMode) {
+        // 在团队会话里开计划模式:这一键不作数(别的键照写)
+        const { planMode: _refused, ...rest } = patch
+        out = rest
+        get().pushNotice(translate('appstore.planNotInTeam'))
+      } else {
+        // 开团队时计划模式开着(或老会话存着两个都开):同一笔里关掉
+        out = { ...patch, planMode: false }
+        if ('groupChat' in patch || 'planMode' in patch) get().pushNotice(translate('appstore.planOffForTeam'))
+      }
+    }
+    if (!Object.keys(out).length) return
+    set((s) => ({ configBySession: { ...s.configBySession, [sid]: { ...(s.configBySession[sid] || {}), ...out } } }))
+    void saveSessionConfig(sid, out).catch(() => {})
   },
 
   adoptSession: (raw, opts) => {
@@ -3768,7 +3788,14 @@ export const useApp = create<AppState>((set, get) => ({
   },
 
   setNewChatWs: (ws) => { set({ newChatWs: ws }); if (isProjectWorkspace(ws)) void get().ensureProjectSettings(ws.path) },
-  setNewChatCfg: (fn) => set((s) => ({ newChatCfg: fn(s.newChatCfg) })),
+  setNewChatCfg: (fn) => {
+    // 草稿同一条规矩:团队模式下没有计划模式(见 patchSessionConfig)
+    const prev = get().newChatCfg
+    const raw = fn(prev)
+    const next = settlePlanMode(raw)
+    set({ newChatCfg: next })
+    if (next !== raw) get().toast(translate(prev.planMode ? 'appstore.planOffForTeam' : 'appstore.planNotInTeam'))
+  },
   setSessionMode: (p) => set((s) => {
     // 持久模式(不是「下一个会话用一次」):侧栏胶囊 / 空态模式节 / /chat /work 三个入口都改它。
     // chat 无项目 → 空态的工作区选择清空(选择器随之隐藏);work 从无根退回端默认工作区。

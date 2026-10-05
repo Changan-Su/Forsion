@@ -29,12 +29,77 @@ describe('会话配置 setter 只发自己的键', () => {
   afterEach(() => { delete g.window })
 
   it('思考档 / 计划模式 / 最大轮数:只带那一个键', () => {
+    // 计划模式只在不是团队模式的会话里开得了(见下一组),这里换一个普通会话
+    useApp.setState((s) => ({ configBySession: { ...s.configBySession, s2: { execMode: 'host', cwd: '/p', approvalMode: 'full-auto', agentSlug: 'a' } } }))
     const st = useApp.getState()
     st.setSessionThinking('high', 's1', false)
-    st.setSessionPlanMode(true, 's1')
+    st.setSessionPlanMode(true, 's2')
     st.setSessionMaxIterations(20, 's1')
-    expect(sent()).toEqual([['s1', { thinkingLevel: 'high' }], ['s1', { planMode: true }], ['s1', { maxIterations: 20 }]])
+    expect(sent()).toEqual([['s1', { thinkingLevel: 'high' }], ['s2', { planMode: true }], ['s1', { maxIterations: 20 }]])
     expect(putMock).not.toHaveBeenCalled()
+  })
+
+  // 10-05 用户定「团队模式不能开计划模式」(成员各跑各的,不吃会话上的计划模式)。规矩在 patchSessionConfig / setNewChatCfg 一处结算。
+  describe('团队模式下没有计划模式', () => {
+    const notices = () => (useApp.getState().pushNotice as unknown as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0])
+
+    it('团队会话里开计划模式:不发、本地不变、说明原因', () => {
+      useApp.getState().setSessionPlanMode(true, 's1')
+      expect(sent()).toEqual([])
+      expect(useApp.getState().configBySession.s1.planMode).toBeUndefined()
+      expect(notices()).toEqual(['团队模式下不能开计划模式'])
+    })
+
+    it('开团队时计划模式开着:同一笔里关掉并说一声;之后关掉团队,计划模式不会自己回来', () => {
+      useApp.setState({ configBySession: { s3: { execMode: 'host', planMode: true } } })
+      useApp.getState().setSessionGroup({ groupChat: true, groupAgents: ['a', 'b'] }, 's3')
+      expect(sent()).toEqual([['s3', { groupChat: true, groupAgents: ['a', 'b'], planMode: false }]])
+      expect(useApp.getState().configBySession.s3).toMatchObject({ groupChat: true, planMode: false })
+      expect(notices()).toEqual(['计划模式已关闭：团队模式下不能用'])
+      useApp.getState().setSessionGroup({ groupChat: false }, 's3')
+      expect(useApp.getState().configBySession.s3).toMatchObject({ groupChat: false, planMode: false })
+    })
+
+    it('团队轨道会话缺省就是团队模式;切回普通模式后计划模式照开', () => {
+      useApp.setState({ configBySession: { s4: { execMode: 'host', teamSlug: 'crew' } } })
+      useApp.getState().setSessionPlanMode(true, 's4')
+      expect(sent()).toEqual([])
+      useApp.getState().setSessionGroup({ groupChat: false }, 's4')
+      useApp.getState().setSessionPlanMode(true, 's4')
+      expect(useApp.getState().configBySession.s4.planMode).toBe(true)
+      expect(sent()).toEqual([['s4', { groupChat: false }], ['s4', { planMode: true }]])
+    })
+
+    it('老会话存着两个都开:碰到别的键时顺手关掉,不打扰', () => {
+      useApp.setState({ configBySession: { s5: { execMode: 'host', groupChat: true, groupAgents: ['a', 'b'], planMode: true } } })
+      useApp.getState().setSessionMaxIterations(20, 's5')
+      expect(sent()).toEqual([['s5', { maxIterations: 20, planMode: false }]])
+      expect(notices()).toEqual([])
+    })
+
+    it('同一笔里还带着别的键:只有计划模式那一键不作数', () => {
+      useApp.getState().patchSessionConfig({ planMode: true, maxIterations: 9 }, 's1')
+      expect(sent()).toEqual([['s1', { maxIterations: 9 }]])
+      expect(useApp.getState().configBySession.s1).toMatchObject({ maxIterations: 9 })
+      expect(useApp.getState().configBySession.s1.planMode).toBeUndefined()
+    })
+
+    it('草稿同一条规矩:团队草稿里开不了;开团队时顺手关掉', () => {
+      const toast = vi.fn()
+      useApp.setState({ toast, newChatCfg: { groupChat: true, groupAgents: ['a', 'b'] } })
+      useApp.getState().setNewChatCfg((c) => ({ ...c, planMode: true }))
+      expect(useApp.getState().newChatCfg.planMode).toBe(false)
+      expect(toast.mock.calls.map((c) => c[0])).toEqual(['团队模式下不能开计划模式'])
+      useApp.setState({ newChatCfg: { planMode: true } })
+      useApp.getState().setNewChatCfg((c) => ({ ...c, groupChat: true, groupAgents: ['a', 'b'] }))
+      expect(useApp.getState().newChatCfg).toMatchObject({ groupChat: true, planMode: false })
+      expect(toast.mock.calls.map((c) => c[0])).toEqual(['团队模式下不能开计划模式', '计划模式已关闭：团队模式下不能用'])
+      // 不相干的改动不结算、不提示
+      useApp.setState({ newChatCfg: { planMode: true } })
+      useApp.getState().setNewChatCfg((c) => ({ ...c, maxIterations: 5 }))
+      expect(useApp.getState().newChatCfg).toEqual({ planMode: true, maxIterations: 5 })
+      expect(toast).toHaveBeenCalledTimes(2)
+    })
   })
 
   it('Ultra:开 = thinkingLevel max + ultra true 一起发;显式换别的档 = 连带删 ultra 键;调用方没表态的 max 不碰 ultra', () => {
@@ -71,8 +136,8 @@ describe('会话配置 setter 只发自己的键', () => {
   })
 
   it('老引擎回落 PUT 时拿的是本地最新整对象', () => {
-    useApp.getState().setSessionPlanMode(true, 's1')
+    useApp.getState().setSessionMaxIterations(20, 's1')
     const full = patchMock.mock.calls[0][3] as () => unknown
-    expect(full()).toMatchObject({ planMode: true, approvalMode: 'full-auto', groupAgents: ['a', 'b'] })
+    expect(full()).toMatchObject({ maxIterations: 20, approvalMode: 'full-auto', groupAgents: ['a', 'b'] })
   })
 })

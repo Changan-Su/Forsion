@@ -5,7 +5,7 @@
  */
 import { describe, it, expect } from 'vitest'
 import { stickyDefaults, DEFAULT_APPROVAL } from './appStore'
-import { newSessionConfig, settleUltra } from './projectSettings'
+import { newSessionConfig, settleModes, settlePlanMode, settleUltra, teamModeOn } from './projectSettings'
 import type { StoredDesktopConfig } from '../types'
 
 const cfg = (p: Partial<StoredDesktopConfig>): StoredDesktopConfig => p as StoredDesktopConfig
@@ -58,5 +58,27 @@ describe('stickyDefaults', () => {
     expect(settleUltra({ ...ok, ultra: false })).not.toHaveProperty('ultra') // 草稿里挡回填的 false 不落库
     const none = { execMode: 'host' as const }
     expect(settleUltra(none)).toBe(none) // 没这个键:原样返回
+  })
+
+  // 10-05 用户定「团队模式不能开计划模式」。口径与引擎 settleTeamPlanMode 一字不差:groupChat 为真;团队轨道会话没显式切回普通也算。
+  it('settlePlanMode:团队模式下计划模式落成关;不是团队模式、或没开计划模式时原样返回', () => {
+    expect(teamModeOn({ groupChat: true })).toBe(true)
+    expect(teamModeOn({ teamSlug: 'crew' })).toBe(true)
+    expect(teamModeOn({ teamSlug: 'crew', groupChat: false })).toBe(false) // 团队会话切回了普通模式
+    expect(teamModeOn({ groupChat: false })).toBe(false)
+    expect(teamModeOn({})).toBe(false)
+    expect(teamModeOn(undefined)).toBe(false)
+    expect(settlePlanMode({ groupChat: true, planMode: true })).toEqual({ groupChat: true, planMode: false })
+    expect(settlePlanMode({ teamSlug: 'crew', planMode: true })).toEqual({ teamSlug: 'crew', planMode: false })
+    for (const same of [{ planMode: true }, { groupChat: true }, { groupChat: true, planMode: false }, { teamSlug: 'crew', groupChat: false, planMode: true }]) {
+      expect(settlePlanMode(same)).toBe(same)
+    }
+  })
+
+  it('settleModes:两条互斥一起结(建会话 / 空态显示 / 发 run 用的就是它)', () => {
+    expect(settleModes({ execMode: 'host' as const, thinkingLevel: 'max' as const, ultra: true, groupChat: true, planMode: true }))
+      .toEqual({ execMode: 'host', thinkingLevel: 'max', groupChat: true, planMode: false })
+    const solo = { execMode: 'host' as const, thinkingLevel: 'max' as const, ultra: true, planMode: true }
+    expect(settleModes(solo)).toEqual(solo)
   })
 })

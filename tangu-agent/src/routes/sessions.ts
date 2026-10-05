@@ -31,6 +31,7 @@ import { isDelegateActive } from '../services/delegateTranscript.js';
 import { ensureMemberSession, memberRunConfig } from '../services/teamRuns.js';
 import { recoverTeamOutputs } from '../services/teamOutputs.js';
 import { withKeyLock } from '../core/keyLock.js';
+import { settleTeamPlanMode } from '../services/sessionSettings.js';
 import { answerAside, normalizeAsideInput } from '../services/aside.js';
 import { normalizeClientTag } from './runs.js';
 import { parseRemoteOrigin, applyRemoteConfigWrite, remoteCwdViolation, remoteCwdErrorBody, remoteOriginMarker } from '../services/remoteOrigin.js';
@@ -143,7 +144,8 @@ router.post('/agent/sessions', authMiddleware, async (req: AuthRequest, res) => 
     // preset 是会话事实(不在 C7 可写白名单里,因为既有会话的 preset 远端改不了):**建会话**时远端带来的、经 validSessionFacts 校验的
     // preset 原子落库 —— 否则远端建的空 Chat 会话重载后被当 Work 初始化(P0 第三轮 E7)。
     const remotePreset = remote && rawCfg && Object.prototype.hasOwnProperty.call(rawCfg, 'preset') ? { preset: rawCfg.preset } : {};
-    const initCfg = remote ? { ...applyRemoteConfigWrite({}, rawCfg || {}, undefined, { create: true }), ...remotePreset, remoteOrigin: remoteOriginMarker(remote) } : rawCfg;
+    const writtenCfg = remote ? { ...applyRemoteConfigWrite({}, rawCfg || {}, undefined, { create: true }), ...remotePreset, remoteOrigin: remoteOriginMarker(remote) } : rawCfg;
+    const initCfg = writtenCfg && settleTeamPlanMode(writtenCfg); // 团队模式下没有计划模式:建会话时就不存成两个都开
     const factErr = validSessionFacts(initCfg);
     if (factErr) return res.status(400).json({ detail: factErr });
     const id = uuidv4();
@@ -810,6 +812,9 @@ async function writeSessionConfig(req: AuthRequest, res: Response, body: Record<
     if (remote && storedContentMarker == null && (['title', 'name'] as const).some((k) => cfg[k] !== storedObj[k])) {
       cfg = { ...cfg, remoteContent: remoteOriginMarker(remote) };
     }
+    // 团队模式下没有计划模式(settleTeamPlanMode):在身份锁与远程白名单都合并完的最终值上结算 —— 开团队的那一笔顺手关掉计划模式,
+    // 团队会话里开计划模式的那一笔落成关。不报错:客户端不等这个响应就改了本地值,报错只会让两边对不上。
+    cfg = settleTeamPlanMode(cfg);
     // 锁合并之后再校验一次:请求体单看合法(只带 soloEngineId),合并回存值的 soloAgentSlug 就成了双身份 —— 这种写整条拒绝(creview 09-16 P0)。
     const mergedErr = validSessionFacts(cfg);
     if (mergedErr) return void res.status(400).json({ detail: mergedErr });
