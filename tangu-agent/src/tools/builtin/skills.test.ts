@@ -12,7 +12,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { configureTangu } from '../../seams/runtime.js';
 import { createTanguProfile } from '../../profiles/index.js';
-import { getLocalSkill, builtinSkillsDir } from '../../skills/localSkills.js';
+import { getLocalSkill, builtinSkillsDir, skillTreeHash } from '../../skills/localSkills.js';
 import { getToolDefinitions, listDeferredTools } from '../registry.js';
 import { skillsProvider } from './skills.js';
 import { manageSkillProvider } from './manageSkill.js';
@@ -74,6 +74,20 @@ describe('use_skill:技能文件夹', () => {
     for (const rel of ['scripts/quick_validate.py', 'agents/grader.md', 'references/schemas.md']) {
       await expect(fs.access(path.join(home, 'skills', 'skill-creator', rel))).resolves.toBeUndefined();
     }
+  });
+});
+
+describe('use_skill:镜像还是上一版时', () => {
+  // 放在这个文件靠后:它把家目录里的 git-workflow 镜像改成「没动过的上一版」(内容换掉、指纹照新内容重写),
+  // 模拟更新时替换失败(没有写权限)。正文来自包里的新版,文件夹若指向旧镜像,正文点名的新文件在那里找不到(Codex 评审 10-05)。
+  it('镜像内容与包里这一版不同 → 文件夹不改指镜像,仍是包里那一份', async () => {
+    await load('local:git-workflow'); // 先让播种跑完
+    const mirror = path.join(home, 'skills', 'git-workflow');
+    await fs.writeFile(path.join(mirror, 'SKILL.md'), '---\nname: git-workflow\n---\nthe previous version\n');
+    await fs.writeFile(path.join(mirror, '.seed-stamp'), (await skillTreeHash(mirror))!);
+    const out = await load('local:git-workflow');
+    expect(out).not.toContain('the previous version'); // 正文是包里的新版
+    expect(out).toContain(`Skill folder: ${path.join(builtinSkillsDir(), 'git-workflow')}\n`);
   });
 });
 

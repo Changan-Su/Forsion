@@ -80,18 +80,28 @@ describe('manage_skill', () => {
     for (const slug of ['lendable', 'plain-one']) await run({ action: 'delete', slug }); // 末尾用例要看到「no user skills」
   });
 
-  // 用户手写 / 导入的技能带着别的 frontmatter 键(版本、图标、分类、许可…):模型改正文时不许把它们抹掉
-  it('update keeps the other frontmatter keys of a hand-written skill; origin and name stay single', async () => {
+  // 用户手写 / 导入的技能带着别的 frontmatter 键(版本、图标、分类、许可、嵌套的 metadata…):模型改正文时不许动它们。
+  // 逐行照抄,不是「读出值再写回去」:读出来的值去了引号,写回去 `author: "A: B # C"` 成了坏 YAML、`icon: "#fff"` 成了空值(Codex 评审 10-05)。
+  it('update keeps every other frontmatter line verbatim (quotes, nested blocks); origin and name stay single', async () => {
     await fs.mkdir(path.join(home, 'skills', 'imported'), { recursive: true });
-    await fs.writeFile(skillMd('imported'), '---\nname: Imported\ndescription: old d\nversion: 1.2.0\nicon: "🧰"\ncategory: 写作\nlicense: MIT\norigin: agent\n---\nold body\n');
-    expect(await run({ action: 'update', slug: 'imported', description: 'new d', instructions: 'new body' })).toContain('Updated skill');
+    const others = ['version: 1.2.0', 'icon: "#fff"', 'author: "A: B # C"', 'category: "\\"quoted\\""', 'metadata:', '  team: docs', '  tags: [a, b]', 'license: MIT'];
+    await fs.writeFile(skillMd('imported'), ['---', 'name: Imported', 'description: old d', ...others, 'origin: agent', '---', 'old body', ''].join('\n'));
+    expect(await run({ action: 'update', slug: 'imported', description: 'new d', instructions: 'new body' })).toBe(`Updated skill "imported" (Imported) in ${path.join(home, 'skills', 'imported')}.`);
     const raw = await fs.readFile(skillMd('imported'), 'utf-8');
-    for (const line of ['name: Imported', 'description: new d', 'version: 1.2.0', 'icon: 🧰', 'category: 写作', 'license: MIT', 'new body']) expect(raw).toContain(line);
-    expect(raw.match(/^origin: agent$/gm)).toHaveLength(1);
-    expect(raw.match(/^name: /gm)).toHaveLength(1);
-    expect(raw.match(/^description: /gm)).toHaveLength(1);
-    expect(raw).not.toContain('old body');
+    expect(raw).toBe(['---', 'name: Imported', 'description: new d', ...others, 'origin: agent', '---', '', 'new body', ''].join('\n')); // 键的顺序也不动
     await fs.rm(path.join(home, 'skills', 'imported'), { recursive: true });
+  });
+
+  // 多行写法的 description(`>` 折叠块):没改它 → 连同缩进的续行原样留着(以前读成一个 ">" 再写回去,正文就没了);
+  // 改它 → 旧的续行一起去掉,不留在别的键底下。
+  it('a multi-line description survives an update that does not touch it, and is fully replaced by one that does', async () => {
+    await fs.mkdir(path.join(home, 'skills', 'folded'), { recursive: true });
+    await fs.writeFile(skillMd('folded'), ['---', 'name: Folded', 'description: >', '  Use when the user asks', '  for a folded thing.', 'version: 2', '---', 'old body', ''].join('\n'));
+    await run({ action: 'update', slug: 'folded', instructions: 'body 2' });
+    expect(await fs.readFile(skillMd('folded'), 'utf-8')).toBe(['---', 'name: Folded', 'description: >', '  Use when the user asks', '  for a folded thing.', 'version: 2', 'origin: agent', '---', '', 'body 2', ''].join('\n'));
+    await run({ action: 'update', slug: 'folded', name: 'Folded two', description: 'one line now', instructions: 'body 3' });
+    expect(await fs.readFile(skillMd('folded'), 'utf-8')).toBe(['---', 'name: Folded two', 'description: one line now', 'version: 2', 'origin: agent', '---', '', 'body 3', ''].join('\n'));
+    await fs.rm(path.join(home, 'skills', 'folded'), { recursive: true });
   });
 
   // slugify 只认拉丁字母 / 数字:纯中文名推不出 slug,以前一律落到兜底值 "agent" —— 第一个中文名技能占掉它,第二个就报「已存在」;
@@ -128,6 +138,26 @@ describe('manage_skill', () => {
     expect(r).toContain(path.join(home, 'skill-trash', kept[0]));
     expect(await fs.readFile(path.join(home, 'skill-trash', kept[0], 'scripts', 'ship.sh'), 'utf8')).toBe('echo ship\n');
     expect(await fs.readFile(path.join(home, 'skill-trash', kept[0], 'SKILL.md'), 'utf8')).toContain('new steps');
+    expect(await run({ action: 'list' })).toContain('no user skills');
+  });
+
+  // 回收目录要是个软链,删除会把私有技能的全部内容挪到链接指向的地方 —— 与设置页那条路同一套检查:拒绝,技能原样留着
+  it('delete refuses when the trash is a symlink; the skill stays where it is', async () => {
+    await run({ action: 'create', name: 'Keep Me', instructions: 'x' });
+    const elsewhere = await fs.mkdtemp(path.join(os.tmpdir(), 'tangu-elsewhere-'));
+    const trash = path.join(home, 'skill-trash');
+    await fs.rename(trash, `${trash}.real`);
+    await fs.symlink(elsewhere, trash);
+    try {
+      expect(await run({ action: 'delete', slug: 'keep-me' })).toContain('Error: Skill trash is not a regular directory');
+      expect(await exists(skillMd('keep-me'))).toBe(true);
+      expect(await fs.readdir(elsewhere)).toEqual([]);
+    } finally {
+      await fs.unlink(trash);
+      await fs.rename(`${trash}.real`, trash);
+      await fs.rm(elsewhere, { recursive: true, force: true });
+    }
+    expect(await run({ action: 'delete', slug: 'keep-me' })).toContain('Deleted skill "keep-me"');
     expect(await run({ action: 'list' })).toContain('no user skills');
   });
 

@@ -187,11 +187,15 @@ const SEED_STAMP = '.seed-stamp';
  *  一个内容不同的 `.DS_Store`(Finder 一开文件夹就写),被永久判成「用户改过」保护住,内置更新
  *  再也传不下去,还朝用户喊「删掉你的技能目录」。判据必须只看技能内容。 */
 const OS_JUNK = new Set(['.DS_Store', 'Thumbs.db', 'desktop.ini']);
-/** 跑脚本留下的缓存,同样不是技能内容:模型照技能说明在技能文件夹里跑 `python -m scripts.x`,解释器就往里写
- *  `__pycache__/*.pyc`。算进指纹的话,跑过一次脚本的内置镜像就被永久判成「用户改过」,内置更新再也传不下去
- *  (与 `.DS_Store` 同一种病;带脚本的内置技能正是 skill-creator)。老指纹不受影响:它是播种那一刻在干净副本上
- *  算的,那时还没有缓存,两种算法得出同一个值;旧算法(legacy)照旧什么都算。 */
-const isRuntimeCache = (name: string): boolean => name === '__pycache__' || name.endsWith('.pyc');
+/** 指纹算法的三代。判「用户没动过」时三种都认(见 treeHash 注释),写下去的一律是 current。
+ *    legacy  —— 什么都算(连 OS 垃圾);
+ *    v2      —— 不算 OS 垃圾(08-19);
+ *    current —— 再不算跑脚本留下的缓存(10-05):模型照技能说明在技能文件夹里跑 `python -m scripts.x`,解释器就往里写
+ *               `__pycache__/*.pyc`。算进去的话,跑过一次脚本的内置镜像就被永久判成「用户改过」,内置更新再也传不下去
+ *               (与 `.DS_Store` 同一种病;带脚本的内置技能正是 skill-creator)。
+ *  只放过名叫 `__pycache__` 的**目录**和以 `.pyc` 结尾的**普通文件**:名字碰巧以 .pyc 结尾的目录照常往里走 ——
+ *  整个跳过的话,用户放在里面的真文件不进指纹,镜像显得「没动过」,下一次内置更新就把它们替换掉了(Codex 评审 10-05)。 */
+type HashVariant = 'current' | 'v2' | 'legacy';
 
 /** 目录树指纹:相对路径 + 内容,排序后一起哈希;`.seed-stamp` 与 OS 垃圾不参与(都不是内容)。
  *
@@ -200,15 +204,20 @@ const isRuntimeCache = (name: string): boolean => name === '__pycache__' || name
  *  镜像会在下一次内置更新时算出不同的 curHash → 被误判成「用户改过」→ 永久停更。也就是把本次要修的
  *  病换个人群复发。所以判定处必须**两种算法都认**(`legacy=true` 复现旧值),更新/自愈时再把指纹
  *  改写成新算法值,逐台迁移过去。 */
-async function treeHash(dir: string, legacy = false): Promise<string | null> {
+async function treeHash(dir: string, variant: HashVariant = 'current'): Promise<string | null> {
   const files: string[] = [];
   const walk = async (rel: string): Promise<void> => {
     const entries = await fs.readdir(path.join(dir, rel), { withFileTypes: true });
     for (const e of entries) {
       const r = rel ? `${rel}/${e.name}` : e.name;
-      if (!legacy && isRuntimeCache(e.name)) continue;
-      if (e.isDirectory()) await walk(r);
-      else if (e.isFile() && r !== SEED_STAMP && (legacy || !OS_JUNK.has(e.name))) files.push(r);
+      if (e.isDirectory()) {
+        if (variant === 'current' && e.name === '__pycache__') continue;
+        await walk(r);
+      } else if (
+        e.isFile() && r !== SEED_STAMP &&
+        (variant === 'legacy' || !OS_JUNK.has(e.name)) &&
+        !(variant === 'current' && e.name.endsWith('.pyc'))
+      ) files.push(r);
     }
   };
   try {
@@ -325,7 +334,7 @@ export async function seedSkillsInto(srcDir: string, destRoot: string): Promise<
     const stamp = await readStamp(dest);
     // 指纹与「现在的目录内容」对得上 = 用户没动过。新旧两种算法都认:旧值是上一版代码写下的,
     // 不认它就等于把一批本来正常的镜像判成「用户改过」(见 treeHash 注释)。更新后写的是新算法值。
-    const untouched = !!stamp && (stamp === curHash || stamp === (await treeHash(dest, true)));
+    const untouched = !!stamp && (stamp === curHash || stamp === (await treeHash(dest, 'v2')) || stamp === (await treeHash(dest, 'legacy')));
     if (untouched) {
       if (await replaceDir(srcSkill, dest, srcHash)) out.updated.push(name); // 用户没动过 → 跟着更新
     } else {
@@ -363,9 +372,9 @@ export async function seedBuiltinSkills(): Promise<SeedReport> {
 /** 列出当前 run 可见的本地技能。作用域从泛到专,越具体越优先(同 id 覆盖):
  *  内置(全局) < bundle(Forsion 插件内嵌) < 用户 ~/.forsion/skills < **当前 agent** agents/<slug>/skills(+包内置默认) < **项目** <cwd>/.tangu/skills(旧位置 <cwd>/.forsion/skills 仍认,同 id 让新的赢)。
  *  agent/项目级仅在有激活 agent / host cwd 时加入,故云端/无上下文时行为与原来一致。 */
-/** 用户目录里指纹仍匹配的技能 id 集合 —— 即「原样的内置镜像,用户没动过」。 */
-async function untouchedMirrors(destRoot: string): Promise<Set<string>> {
-  const out = new Set<string>();
+/** 用户目录里指纹仍匹配的技能 —— 即「原样的内置镜像,用户没动过」:id → 它现在的指纹。 */
+async function untouchedMirrors(destRoot: string): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
   let names: string[];
   try {
     names = (await fs.readdir(destRoot, { withFileTypes: true })).filter((e) => e.isDirectory()).map((e) => e.name);
@@ -376,7 +385,7 @@ async function untouchedMirrors(destRoot: string): Promise<Set<string>> {
     names.map(async (n) => {
       const dir = path.join(destRoot, n);
       const stamp = await readStamp(dir);
-      if (stamp && stamp === (await treeHash(dir))) out.add(`${LOCAL_SKILL_PREFIX}${n}`);
+      if (stamp && stamp === (await treeHash(dir))) out.set(`${LOCAL_SKILL_PREFIX}${n}`, stamp);
     }),
   );
   return out;
@@ -387,6 +396,21 @@ export async function isUntouchedSeedMirror(dir: string): Promise<boolean> {
   const stamp = await readStamp(dir);
   return !!stamp && stamp === (await treeHash(dir));
 }
+
+// 包内置技能的指纹,按 SKILL.md 的 mtime 缓存(引擎运行期间包目录不变;每次列技能都重算要多读一遍全部文件)。
+const builtinHashCache = new Map<string, { at: number; hash: string | null }>();
+async function builtinTreeHash(name: string): Promise<string | null> {
+  const dir = path.join(builtinSkillsDir(), name);
+  const at = await fs.stat(path.join(dir, 'SKILL.md')).then((s) => s.mtimeMs, () => -1);
+  const hit = builtinHashCache.get(name);
+  if (hit && hit.at === at) return hit.hash;
+  const hash = at < 0 ? null : await treeHash(dir);
+  builtinHashCache.set(name, { at, hash });
+  return hash;
+}
+
+/** 测试用:某个技能文件夹现在的指纹(current 算法)。 */
+export const skillTreeHash = (dir: string): Promise<string | null> => treeHash(dir);
 
 export async function listLocalSkills(): Promise<SkillRecord[]> {
   await seedBuiltinSkills(); // 首启把内置复制进 ~/.forsion/skills(幂等;覆盖 TUI 等不走 standalone 启动的入口)
@@ -431,10 +455,14 @@ export async function listLocalSkills(): Promise<SkillRecord[]> {
           (disabledUser.has(name) || disabledInherited.has(name))) continue;
       if (source === 'agent' && disabledAgent.has(name)) continue;
       if (isUserRoot && mirrors.has(s.id) && byId.has(s.id)) {
-        // 未改镜像不覆盖已有(内置 / bundle)条目。留下的若是包内置那条,文件夹改指家目录里这份逐字节相同的镜像:
-        // 包目录在应用包里(只读、带签名),模型照说明去那里跑脚本会往里写缓存。bundle 盖过内置时内容不同,不改。
+        // 未改镜像不覆盖已有(内置 / bundle)条目。留下的若是包内置那条,文件夹改指家目录里的镜像:
+        // 包目录在应用包里(只读、带签名),模型照说明去那里跑脚本会往里写缓存。
+        // 只在镜像与包里这一版**内容相同**时才改指:镜像「没动过」但还是上一版(更新时替换失败,比如没有写权限)的话,
+        // 正文是新版、文件夹是旧版,正文点名的新脚本在那里找不到(Codex 评审 10-05)。bundle 盖过内置时内容不同,同样不改。
         // 展开成新对象:byId 里的是 scanDir 缓存着的那一条,不能原地改。
-        if (!fromBundle.has(s.id)) byId.set(s.id, { ...byId.get(s.id)!, dir: (s as { dir?: string }).dir } as SkillRecord);
+        if (!fromBundle.has(s.id) && mirrors.get(s.id) === (await builtinTreeHash(name))) {
+          byId.set(s.id, { ...byId.get(s.id)!, dir: (s as { dir?: string }).dir } as SkillRecord);
+        }
         continue;
       }
       // ⚠️无指纹的用户副本挡住 bundle 技能 —— 说出来,别静默。

@@ -13,13 +13,13 @@
  * 返回给模型的话一律英文(模型读的)。
  */
 import { promises as fs } from 'node:fs';
-import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import type { ToolProvider } from '../toolRegistry.js';
-import { skillsDir, agentsDir, tanguHome, DEFAULT_AGENT_SLUG } from '../../core/tanguHome.js';
+import { skillsDir, agentsDir, DEFAULT_AGENT_SLUG } from '../../core/tanguHome.js';
 import { slugify } from '../../agents/agentRegistry.js';
 import { currentAgentSlug, currentDisplayAgentSlug } from '../../seams/runContext.js';
 import { parseFrontmatter, isBuiltinSkillName, isUntouchedSeedMirror } from '../../skills/localSkills.js';
+import { moveSkillToTrash } from '../../skills/catalog.js';
 import { effectiveRemote, remoteManagementDenied } from '../../services/remoteOrigin.js';
 
 const SAFE_SLUG = /^[a-z0-9][a-z0-9-]{0,63}$/;
@@ -35,21 +35,34 @@ async function fileExists(p: string): Promise<boolean> {
   try { await fs.access(p); return true; } catch { return false; }
 }
 
-/** 本工具自己写的 frontmatter 键;其余的键在 update 时原样带过去。 */
-const OWN_KEYS = new Set(['name', 'description', 'origin']);
+/** 重写 SKILL.md 的 frontmatter:`set` 里的键就地换成给定的那一行(null = 删掉),连同它缩进的续行;其余各行**原样**照抄;
+ *  原文件里没有的键补在最后。
+ *  用户手写或导入的技能带着别的键(shared 共享开关、version / icon / category / author、license、嵌套的 metadata …),
+ *  模型改正文时不许动它们,顺序也不动。逐行照抄而不是「读出值再写回去」:读出来的值已经去了引号,写回去
+ *  `author: "A: B # C"` 就成了坏 YAML、`icon: "#fff"` 成了空值(Codex 评审 10-05)。 */
+function rewriteFrontmatter(raw: string, set: ReadonlyMap<string, string | null>): string[] {
+  const m = raw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?/);
+  const out: string[] = [];
+  const seen = new Set<string>();
+  let drop = false;
+  for (const line of m ? m[1].split(/\r?\n/) : []) {
+    const key = line.match(/^([A-Za-z][\w-]*)\s*:/)?.[1].toLowerCase();
+    if (key) { // 顶格的键开启新的一段;缩进行 / 空行 / 注释跟着上一个键走
+      drop = set.has(key);
+      if (drop && !seen.has(key) && set.get(key) != null) out.push(set.get(key)!);
+      if (drop) seen.add(key);
+    }
+    if (!drop) out.push(line);
+  }
+  for (const [key, line] of set) if (!seen.has(key) && line != null) out.push(line);
+  return out;
+}
 
-/** 组装 SKILL.md:frontmatter(name + 可选 description + 沿用的其余键 + origin)+ 正文。frontmatter 值强制单行(解析器按行读)。
+/** 组装 SKILL.md。新写的值强制单行(解析器按行读)。
  *  `origin: agent` = 来源标识:这个工具只会被 agent 调用,create/update 一律打上(用户手写后被 agent 改过的也算「agent 动过」),
- *  localSkills.toRecord 透传成 SkillRecord.origin → 桌面技能列表打「自建」徽标。没有它,用户级自建技能与手写技能无从分辨(09-18 取证)。
- *  keep = update 时现有 frontmatter 里的其余键(shared 共享开关、version / icon / category / author、导入技能带的 license …):
- *  用户手写或导入的技能带着它们,重写时别静默抹掉。只认解析器读得出的单行键;嵌套结构(缩进的子键)本来就读不到。 */
-function composeSkillMd(name: string, description: string, body: string, keep: Record<string, string> = {}): string {
-  const lines = ['---', `name: ${oneLine(name)}`];
-  const d = oneLine(description);
-  if (d) lines.push(`description: ${d}`);
-  for (const [k, v] of Object.entries(keep)) if (!OWN_KEYS.has(k) && oneLine(v)) lines.push(`${k}: ${oneLine(v)}`);
-  lines.push('origin: agent', '---', '', String(body ?? '').trim(), '');
-  return lines.join('\n');
+ *  localSkills.toRecord 透传成 SkillRecord.origin → 桌面技能列表打「自建」徽标。没有它,用户级自建技能与手写技能无从分辨(09-18 取证)。 */
+function composeSkillMd(raw: string, set: ReadonlyMap<string, string | null>, body: string): string {
+  return ['---', ...rewriteFrontmatter(raw, set), '---', '', String(body ?? '').trim(), ''].join('\n');
 }
 
 export const manageSkillProvider: ToolProvider = {
@@ -125,12 +138,9 @@ export const manageSkillProvider: ToolProvider = {
             if (await isBuiltinSkillName(slug)) return `Error: "${slug}" is a built-in skill and cannot be deleted`;
             if (await isUntouchedSeedMirror(path.join(root, slug))) return `Error: "${slug}" is a read-only skill shipped with the app; it cannot be deleted`;
             if (!(await fileExists(skillMdPath(root, slug)))) return `Skill not found: ${slug}${scopeTag}`;
-            // 整个文件夹移进回收目录(与设置页删技能同一处、同一命名,见 skills/catalog.deleteCatalogSkill),不直接删:
-            // 技能里可能带着脚本和资料,模型删错了还找得回来。挪不动(比如跨盘)就报错、原样留着。
-            const trash = path.join(tanguHome(), 'skill-trash');
-            await fs.mkdir(trash, { recursive: true });
-            const backup = path.join(trash, `${scope}-${scope === 'agent' ? scopeAgentSlug() : 'global'}-${slug}-${Date.now()}-${randomUUID()}`);
-            await fs.rename(path.join(root, slug), backup);
+            // 整个文件夹移进回收目录(与设置页删技能同一处、同一命名、同一套检查),不直接删:
+            // 技能里可能带着脚本和资料,模型删错了还找得回来。挪不动(跨盘、回收目录不是真目录)就报错、原样留着。
+            const backup = await moveSkillToTrash(path.join(root, slug), `${scope}-${scope === 'agent' ? scopeAgentSlug() : 'global'}-${slug}`);
             return `Deleted skill "${slug}"${scopeTag}. Its folder was moved to ${backup} (move it back to restore).`;
           }
 
@@ -156,25 +166,24 @@ export const manageSkillProvider: ToolProvider = {
               if (!(await fileExists(skillMdPath(root, slug)))) return `Error: skill to update not found: ${slug}${scopeTag} (skills marked [agent] in the list need scope:"agent"; create and update must use the same scope)`;
             }
 
-            // name/description:create 用给定值;update 缺省沿用现有 frontmatter(免得每次都重报)。
-            let name = args.name != null ? String(args.name) : '';
-            let description = args.description != null ? String(args.description) : '';
-            let keep: Record<string, string> = {};
-            if (action === 'update') {
-              const prev = parseFrontmatter(await fs.readFile(skillMdPath(root, slug), 'utf-8').catch(() => '')).meta;
-              if (!name) name = prev.name || slug;
-              if (args.description == null) description = prev.description || '';
-              keep = prev;
-            }
+            // name / description:create 用给定值;update 没给的就不动 —— 现有的那一行(连同多行写法的续行)原样留着,免得每次都重报。
+            const raw = action === 'update' ? await fs.readFile(skillMdPath(root, slug), 'utf-8').catch(() => '') : '';
+            const prevName = action === 'update' ? parseFrontmatter(raw).meta.name || '' : '';
+            const givenName = oneLine(args.name);
+            const set = new Map<string, string | null>();
+            if (givenName || !prevName) set.set('name', `name: ${givenName || slug}`); // 原文件连 name 都没有就补一个
+            if (args.description != null) set.set('description', oneLine(args.description) ? `description: ${oneLine(args.description)}` : null);
+            set.set('origin', 'origin: agent');
+            const shown = givenName || prevName || slug;
 
             const dir = path.join(root, slug);
             await fs.mkdir(dir, { recursive: true });
-            await fs.writeFile(skillMdPath(root, slug), composeSkillMd(name || slug, description, body, keep), 'utf-8');
+            await fs.writeFile(skillMdPath(root, slug), composeSkillMd(raw, set, body), 'utf-8');
             return action === 'create'
-              ? `Created skill "${slug}" (${oneLine(name) || slug})${scopeTag} in ${dir}. It is listed under Available Skills from the next message on (id: local:${slug}); ` +
+              ? `Created skill "${slug}" (${shown})${scopeTag} in ${dir}. It is listed under Available Skills from the next message on (id: local:${slug}); ` +
                 'an agent that runs on a hand-picked skill list only gets it once the user ticks it there. ' +
                 'Helper scripts and reference files go in that folder; refer to them by relative path in the instructions.'
-              : `Updated skill "${slug}" (${oneLine(name) || slug})${scopeTag} in ${dir}.`;
+              : `Updated skill "${slug}" (${shown})${scopeTag} in ${dir}.`;
           }
 
           return `Error: unknown action: ${action}`;

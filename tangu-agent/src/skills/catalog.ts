@@ -264,17 +264,24 @@ export async function setCatalogSkillDisabled(key: string, disabled: boolean, ag
   await setSkillDisabled(target, skill.slug, disabled, agentSlug || skill.owner || undefined);
 }
 
+/** 把一个技能文件夹整个移进回收目录,返回它的新位置。设置页删技能与 manage_skill 的 delete 共用这一处:
+ *  辅助文件一起走,删错了找得回来。技能文件夹与回收目录都必须是真目录 —— 回收目录要是个软链,
+ *  私有技能的全部内容就被挪到链接指向的地方去了。label = 回收目录里的名字前缀(scope-owner-slug)。 */
+export async function moveSkillToTrash(skillPath: string, label: string): Promise<string> {
+  if (!(await fs.lstat(skillPath)).isDirectory()) bad('Skill directory is not a regular directory', 409);
+  const trash = path.join(tanguHome(), 'skill-trash');
+  try { await fs.mkdir(trash); } catch (e) { if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e; }
+  if (!(await fs.lstat(trash)).isDirectory()) bad('Skill trash is not a regular directory', 403);
+  const backupPath = path.join(trash, `${label}-${Date.now()}-${randomUUID()}`);
+  await fs.rename(skillPath, backupPath); // 整个目录一起移走，辅助文件可恢复
+  return backupPath;
+}
+
 export async function deleteCatalogSkill(key: string, agentSlug?: string): Promise<{ backupPath: string }> {
   const skill = await findSkill(key, agentSlug);
   if (skill.readOnly) bad('This skill is read-only', 403);
   await ownedRoot(skill.scope, skill.owner || undefined);
-  if (!(await fs.lstat(skill.path)).isDirectory()) bad('Skill directory is not a regular directory', 409);
-  const trash = path.join(tanguHome(), 'skill-trash');
-  try { await fs.mkdir(trash); } catch (e) { if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e; }
-  if (!(await fs.lstat(trash)).isDirectory()) bad('Skill trash is not a regular directory', 403);
-  const backupPath = path.join(trash, `${skill.scope}-${skill.owner || 'global'}-${skill.slug}-${Date.now()}-${randomUUID()}`);
-  await fs.rename(skill.path, backupPath); // 整个目录一起移走，辅助文件可恢复
-  return { backupPath };
+  return { backupPath: await moveSkillToTrash(skill.path, `${skill.scope}-${skill.owner || 'global'}-${skill.slug}`) };
 }
 
 async function copyTree(src: string, dest: string): Promise<void> {

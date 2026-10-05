@@ -36,6 +36,27 @@ const legacyStamp = (dir: string): string => {
   }
   return h.digest('hex').slice(0, 16);
 };
+/** 复现**上一版** treeHash(不算 OS 垃圾,但 .pyc / __pycache__ 照算)。 */
+const v2Stamp = (dir: string): string => {
+  const files: string[] = [];
+  const walk = (rel: string): void => {
+    for (const e of readdirSync(path.join(dir, rel), { withFileTypes: true })) {
+      const r = rel ? `${rel}/${e.name}` : e.name;
+      if (e.isDirectory()) walk(r);
+      else if (e.isFile() && r !== '.seed-stamp' && !['.DS_Store', 'Thumbs.db', 'desktop.ini'].includes(e.name)) files.push(r);
+    }
+  };
+  walk('');
+  files.sort();
+  const h = createHash('sha256');
+  for (const f of files) {
+    h.update(f);
+    h.update('\0');
+    h.update(readFileSync(path.join(dir, f)));
+    h.update('\0');
+  }
+  return h.digest('hex').slice(0, 16);
+};
 const stampOf = (name: string): string => readFileSync(path.join(dest, name, '.seed-stamp'), 'utf8').trim();
 
 beforeEach(() => {
@@ -61,6 +82,30 @@ describe('内置技能播种', () => {
     expect(r.protectedStale).toEqual([]);
     expect(read('alpha')).toBe('v2');
     expect(existsSync(path.join(dest, 'alpha', 'scripts', '__pycache__'))).toBe(false); // 整夹替换:旧缓存不留
+  });
+  // 只放过名叫 __pycache__ 的目录和 .pyc 结尾的**文件**。名字碰巧以 .pyc 结尾的**目录**照常算:
+  // 整个跳过的话,用户放在里面的真文件不进指纹,镜像显得没动过,内置更新就把它替换掉了(Codex 评审 10-05)。
+  it('⚠️名字以 .pyc 结尾的目录里的文件照常算改动:保护,不被更新吃掉', async () => {
+    put(src, 'alpha', 'v1');
+    await seedSkillsInto(src, dest);
+    mkdirSync(path.join(dest, 'alpha', 'assets', 'model.pyc'), { recursive: true });
+    writeFileSync(path.join(dest, 'alpha', 'assets', 'model.pyc', 'settings.json'), '{"mine":true}');
+    put(src, 'alpha', 'v2');
+    const r = await seedSkillsInto(src, dest);
+    expect(r.protectedStale).toEqual(['alpha']);
+    expect(read('alpha', 'assets/model.pyc/settings.json')).toBe('{"mine":true}');
+  });
+  // 上一版算法(不算 OS 垃圾、但算缓存)写下的指纹也要认:源里自带 .pyc 的技能在上一版播种,之后 Finder 又放了个 .DS_Store ——
+  // 新算法(不算缓存)和最老的算法(连 .DS_Store 也算)都对不上那枚指纹,不认它,这个没动过的镜像就停更了(Codex 评审 10-05)。
+  it('⚠️上一版算法写下的指纹(含 .pyc)仍被认作没动过:内置更新照样传下去', async () => {
+    put(src, 'alpha', 'v1', { 'lib/mod.pyc': 'shipped-bytecode' });
+    await seedSkillsInto(src, dest);
+    writeFileSync(path.join(dest, 'alpha', '.seed-stamp'), v2Stamp(path.join(dest, 'alpha')));
+    writeFileSync(path.join(dest, 'alpha', '.DS_Store'), 'finder');
+    put(src, 'alpha', 'v2', { 'lib/mod.pyc': 'shipped-bytecode' });
+    const r = await seedSkillsInto(src, dest);
+    expect(r.updated).toEqual(['alpha']);
+    expect(read('alpha')).toBe('v2');
   });
   it('负对照:脚本本身被改了仍算用户改过(只放过缓存,不放过内容)', async () => {
     put(src, 'alpha', 'v1', { 'scripts/run.py': 'print(1)\n' });
