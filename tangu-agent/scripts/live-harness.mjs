@@ -3754,13 +3754,15 @@ Then reply with only the command output.`,
   // 第 2 轮本来轮不到它 —— 评了,就只能是信号触发的。用户的话照平时的说法,不说「记下来」:
   //   A1 / A2 第二句是纠正(「不对,我的项目都用 pnpm」/「不对,提交说明要用英文」)→ 第 2 轮被加评,且采到提到这件事的记忆候选;
   //   B  同样的两轮,第二句是普通追问 → 第 2 轮不评(负对照:证明 A 是信号触发的,不是别的原因);
-  //   C  让它连读八个文件,看到第三次工具调用就按停(走 /abort,与桌面的停止键同一条路)→ 中止那一刻不评;下一轮跑完时带着信号评。
+  //   C  先垫一轮普通对话,再让它连读八个文件,看到第三次工具调用就按停(走 /abort,与桌面的停止键同一条路)→ 中止那一刻不评;下一轮(第 2 轮)跑完时被信号叫起来评。
   //      C 只判「评了、带着信号」,不判它提名了什么(信号只决定现在评一次,写不写由判官定);提名了什么记在 detail 里。
   await scenario('signals', 'signals 后台复盘的触发信号(出言纠正 / 调了半天被按停 → 当轮加评)', async () => {
     await api('/agent/special/config', { method: 'POST', body: JSON.stringify({ historian: { enabled: true, modelId: MODEL, everyRounds: 5, firstRoundTrigger: true, mode: 'independent' } }) });
     const stamp = Date.now();
     const acts = (sid) => api('/agent/special/historian/activity?limit=100').then((a) => (a.activity || []).filter((r) => r.session_ref === sid));
-    const forced = () => (existsSync(engineLog) ? readFileSync(engineLog, 'utf8') : '').split('\n').filter((l) => /轮触发\(.*信号 \d+ 条/.test(l));
+    const logLines = (re) => (existsSync(engineLog) ? readFileSync(engineLog, 'utf8') : '').split('\n').filter((l) => re.test(l));
+    const forced = () => logLines(/轮触发\(信号加评/); // 只认「不到点、被信号叫起来」那种:到点的那轮就算带着信号,也证明不了是信号触发的
+    const reviews = () => logLines(/\[historian\] 第 \d+ 轮触发/); // 判官真起了一轮(起点写标题那一路不打这行)
     const rawNow = () => (existsSync(rawPath) ? readFileSync(rawPath, 'utf8') : '');
     /** 等第 1 轮(到点)的复盘落下来:标题由起点那一路写,别的动作出现一条即可;等不到也继续(忙着的话下一轮的信号会被跳过,判据自然红)。 */
     const settleFirst = async (sid) => { await until(async () => ((await acts(sid)).some((x) => x.action !== 'title_updated') ? true : null), 90_000, 2000); await sleep(1500); };
@@ -3787,15 +3789,19 @@ Then reply with only the command output.`,
     const sidB = `live-sig-B-${stamp}`;
     const b1 = await run(sidB, '给我一条给新项目装依赖的命令,只要命令。');
     await settleFirst(sidB);
-    const bBefore = { acts: (await acts(sidB)).length, forced: forced().length };
+    const bBefore = { acts: (await acts(sidB)).length, reviews: reviews().length };
     const b2 = await run(sidB, '好,那再给我一条运行测试的命令。');
     await sleep(20_000);
-    const bActs = (await acts(sidB)).length;
-    const okB = !b1.error && !b2.error && forced().length === bBefore.forced && bActs === bBefore.acts;
+    const bQuiet = reviews().length === bBefore.reviews && (await acts(sidB)).length === bBefore.acts;
+    const okB = !b1.error && !b2.error && bQuiet;
 
-    // C 调了半天被按停
+    // C 调了半天被按停。先垫一轮普通对话(第 1 轮到点评掉):被按停的那轮不算数,所以按停之后那一轮是第 2 轮 ——
+    // 平时轮不到,评了就只能是按停留下的信号叫起来的(不垫这一轮,它恰好落在第 1 轮,到点本来就评,什么也证明不了)。
     const sidC = `live-sig-C-${stamp}`;
     for (let i = 1; i <= 8; i++) writeFileSync(join(workspace, `sig-${i}.txt`), `value ${i * 7}\n`);
+    const c0 = await run(sidC, '给我一条查看当前目录下有哪些文件的命令,只要命令。');
+    await settleFirst(sidC);
+    const reviewsBeforeStop = reviews().length; // 起跑前数一次:按停后不该多出一轮判官(垫的那轮已经评完)
     const stopped = await (async () => {
       const { runId } = await api('/agent/runs', { method: 'POST', body: JSON.stringify({ session_id: sidC, model_id: MODEL, message: `依次读取 ${workspace} 下的 sig-1.txt 到 sig-8.txt(每次只读一个文件,读完一个再读下一个),最后把八个文件里的数字加起来告诉我。`, agent_config: { ...AGENT_CONFIG } }) });
       const out = { tools: 0, aborted: false, ended: '', error: null };
@@ -3823,20 +3829,21 @@ Then reply with only the command output.`,
       } catch (e) { out.error = String(e?.message || e); } finally { clearTimeout(timer); }
       return out;
     })();
-    const cBefore = { forced: forced().length, acts: (await acts(sidC)).length };
+    await sleep(6000); // 给「万一当场评了」留出打日志的时间
+    const cBefore = { forced: forced().length };
     const stoppedOk = stopped.ended === 'aborted' && stopped.tools >= 3;
-    const notAtStop = cBefore.acts === 0; // 中止那一刻不评
+    const notAtStop = reviews().length === reviewsBeforeStop; // 中止那一刻不评(看判官的日志行,不看活动表:起点写标题也记活动)
     const c2 = stoppedOk ? await run(sidC, '不用都读了,直接告诉我 sig-1.txt 里写的是什么就行。') : { error: '没停成', content: '' };
     const cForced = stoppedOk ? await until(async () => (forced().length > cBefore.forced ? true : null), 90_000, 2000) : null;
     if (cForced) await sleep(8000);
     const cActs = (await acts(sidC)).map((r) => r.action);
-    const okC = stoppedOk && notAtStop && !c2.error && !!cForced;
+    const okC = !c0.error && stoppedOk && notAtStop && !c2.error && !!cForced;
 
     return {
       ok: a1.ok && a2.ok && okB && okC,
       detail: `${a1.text} | ${a2.text}`
-        + ` | B ${okB ? '✓' : '✗'} 第二句是普通追问:第 2 轮${forced().length === bBefore.forced && bActs === bBefore.acts ? '没评' : '被评了'}${b1.error || b2.error ? ` 错 ${b1.error || b2.error}` : ''}`
-        + ` | C ${okC ? '✓' : '✗'} 按停:${stopped.ended || stopped.error || '?'},已调工具 ${stopped.tools} 次;中止当场${notAtStop ? '没评' : '评了'};下一轮${cForced ? '带着信号评了' : '没带信号评'};复盘留下的活动 ${cActs.join('/') || '无'}${c2.error ? ` 错 ${c2.error}` : ''}`,
+        + ` | B ${okB ? '✓' : '✗'} 第二句是普通追问:第 2 轮${bQuiet ? '没评' : '被评了'}${b1.error || b2.error ? ` 错 ${b1.error || b2.error}` : ''}`
+        + ` | C ${okC ? '✓' : '✗'} 按停:${stopped.ended || stopped.error || '?'},已调工具 ${stopped.tools} 次;中止当场${notAtStop ? '没评' : '评了'};下一轮(第 2 轮,平时轮不到)${cForced ? '被信号叫起来评了' : '没评'};复盘留下的活动 ${cActs.join('/') || '无'}${c0.error || c2.error ? ` 错 ${c0.error || c2.error}` : ''}`,
       output: `【信号评审的日志行】\n${forced().join('\n')}\n\n【.memory-raw.md】\n${rawNow()}`,
     };
   });
