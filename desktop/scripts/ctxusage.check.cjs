@@ -3,7 +3,7 @@
  * 钉:头部「已用 / 窗口 tokens(%)」、分段条的段数与总宽、分项口径(系统段 → 历史 → 余数=工具与本轮)、
  * 展开详情、自动压缩线、压缩按钮、登录后才有的今日 / 本周额度(已用百分比 + 重置时间 + 预警色)、
  * 英文界面无汉字、定宽无横向溢出;zh/en × 亮/暗展开截图各一张(自己看)。
- * 跑:npm run check:ctxusage   (worktree 里设 HARNESS_URL 指到另一个端口 + FORSION_VITE_CACHE_DIR)
+ * 跑:npm run check:ctxusage   (worktree 里设 HARNESS_URL 指到另一个端口)
  */
 const fs = require('fs')
 const os = require('os')
