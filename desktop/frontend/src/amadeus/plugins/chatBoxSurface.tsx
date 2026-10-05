@@ -56,10 +56,11 @@ export function mountPluginChatBox(el: HTMLElement, initial: PluginChatBoxOption
   const input = { current: null as HTMLTextAreaElement | null }
   let alive = true, revision = 0
   const tree = () => <HostLocaleProvider><PluginChatBox options={options} revision={revision++} input={input} isAlive={() => alive} /></HostLocaleProvider>
-  const mounted = mountHostReact(el, tree())
+  // alive 跟着这次挂载走:被后来的挂载收掉也算卸了,晚到的提交结果不再认
+  const mounted = mountHostReact(el, tree(), () => { alive = false })
   return {
     update(patch) { if (alive) { Object.assign(options, patch); mounted.render(tree()) } },
     focus() { if (alive) input.current?.focus() },
-    dispose() { if (alive) { alive = false; mounted.dispose() } },
+    dispose: mounted.dispose,
   }
 }

@@ -37,7 +37,7 @@
 // - **快照是冻结的**:派生表按引用缓存(每份 surface 一套),不冻住的话插件一句
 //   `page.blocks.b1 = …` 就污染了后续读到的内容,还会把去重判据带偏。
 import { mountHostReact } from '@lcl/components'
-export { mountHostReact } from '@lcl/components'
+export { mountHostReact, claimHostMount } from '@lcl/components'
 import { DndContext, useSensors } from '@dnd-kit/core'
 import { SortableContext } from '@dnd-kit/sortable'
 import { usePageStore, PageScopeCtx, noteOf, v4PathOf, type PageStoreApi } from '../store/pageStore'
@@ -318,11 +318,9 @@ export function createBlockSurface(pluginId: string, bind?: SurfaceBind): { api:
       const surface: BlockSurface | null = o.onInsertAfter
         ? { insertAfter: (id, content) => safeCall('onInsertAfter', o.onInsertAfter, id, content) }
         : null
-      const mounted = mountHostReact(el, <MountedBlock blockId={blockId} surface={surface} scope={rt.scope} />)
-      const dispose = (): void => {
-        mounts.delete(dispose)
-        mounted.dispose()
-      }
+      // 销账写在 onDispose 里:被后来的挂载收掉时也要销
+      const mounted = mountHostReact(el, <MountedBlock blockId={blockId} surface={surface} scope={rt.scope} />, () => { mounts.delete(dispose) })
+      const dispose = (): void => mounted.dispose()
       mounts.add(dispose)
       return dispose
     },

@@ -124,7 +124,10 @@ export function mountPluginMarkdownEditor(
       />
     </HostLocaleProvider>
   )
-  const mounted = mountHostReact(el, tree())
+  // alive 跟着这次挂载走:被后来的挂载收掉之后,旧句柄不再改正文、不再回调 onChange(getValue 留着那一刻的值)
+  const mounted = mountHostReact(el, tree(), () => {
+    alive = false
+  })
   const render = (): void => mounted.render(tree())
   return {
     getValue() {
@@ -149,11 +152,6 @@ export function mountPluginMarkdownEditor(
           '[contenteditable="true"],textarea',
         )?.focus()
     },
-    dispose() {
-      if (alive) {
-        alive = false
-        mounted.dispose()
-      }
-    },
+    dispose: mounted.dispose,
   }
 }

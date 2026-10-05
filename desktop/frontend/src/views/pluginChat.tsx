@@ -124,14 +124,14 @@ function PluginChat({ leaf, state, retry }: { leaf: Leaf; state: TanguStartChatR
 }
 
 /** `ready` 是第一次接的结果;`latest()` 是最近一次的(用户在挂载里点了「重试」之后,以重试的为准)。 */
-export function mountPluginChat(el: HTMLElement, o: TanguChatMountOptions): { ready: Promise<TanguStartChatResult>; latest(): Promise<TanguStartChatResult>; dispose(): void } {
+export function mountPluginChat(el: HTMLElement, o: TanguChatMountOptions, onDispose?: () => void): { ready: Promise<TanguStartChatResult>; latest(): Promise<TanguStartChatResult>; dispose(): void } {
   const type = pluginChatType(o)
   // 插件的 mount(el) 拿不到 Leaf,而 ChatView 要一个:标题 / 参数 / 关闭都归插件自己的视图管,这里一律空操作。
   // type 是引用通道认的目标名(tanguProbe.mountChat 的 quote 往这个名字投);有 childSurface 时 loc 不参与任何判断。
   const leaf: Leaf = { id: type, type, loc: 'right', params: {}, setTitle() {}, setParams() {}, close() {} }
   // 对话接上之后宿主还会自己再画(加载中 → 接上 / 重试):一律走这次挂载的句柄。句柄卸了、或者插件没 dispose 就把 el 交给了
   // 别的挂载之后,晚到的那次重画是空操作,顶不掉后来那份。dispose() 之后 el 立刻还给插件(清空它、在同一个 el 上再挂都行)。
-  const mounted = mountHostReact(el, null)
+  const mounted = mountHostReact(el, null, onDispose)
   const render = (state: TanguStartChatResult | null): void =>
     mounted.render(<HostLocaleProvider><PluginChat leaf={leaf} state={state} retry={() => void attach()} /></HostLocaleProvider>)
   let current: Promise<TanguStartChatResult>

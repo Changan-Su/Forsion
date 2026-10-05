@@ -31,6 +31,7 @@ const { mountPluginTable } = await import('./tableSurface')
 const { mountPluginDashboard } = await import('./dashboardSurface')
 const { mountPluginFloatingToc } = await import('./floatingTocSurface')
 const { useApp } = await import('../../stores/appStore')
+const { hasPageScope } = await import('../store/pageStore')
 
 // 插件文件类型的视图表面:mountBlocks 与 mountNoteView 都从它身上来
 const view = createPluginViewSurface('contract', 'plug:mount-contract', ['.mindmap.md'])
@@ -94,13 +95,14 @@ describe.each(cases)('%s', (_name, mount, selector) => {
   })
 })
 
-it('ctx.dashboard.mount 配方无效:提示住在宿主自己的节点里,dispose 只收它,插件放进 el 的节点不动', () => {
+it('ctx.dashboard.mount 配方无效:提示住在宿主自己的节点里,dispose 只收它,插件放进 el 的节点不动', async () => {
   const own = el.appendChild(document.createElement('p'))
-  const mounted = mountPluginDashboard('contract', el, { recipe: { cards: 'nope' } as never })
+  let mounted!: ReturnType<typeof mountPluginDashboard>
+  await act(async () => { mounted = mountPluginDashboard('contract', el, { recipe: { cards: 'nope' } as never }) })
   expect(mounted.scope).toBe('')
   expect(el.textContent).toContain('仪表盘配方无效')
   expect(own.isConnected).toBe(true)
-  mounted.dispose()
+  await act(async () => { mounted.dispose() })
   expect([...el.children]).toEqual([own])
 })
 
@@ -130,5 +132,49 @@ describe.each<[name: string, start: (el: HTMLElement) => () => void]>([
     await act(async () => { disposeOther() })
     expect(el.childElementCount).toBe(0)
     expect(errors).toEqual([])
+  })
+})
+
+// 被后来的挂载收掉 = 完整的卸载,与显式 dispose 走同一条清理(2026-10-05 评审):不只是摘掉 React 树。
+// 负对照(实跑红):各表面不接 mountHostReact 的 onDispose(只在自己的 dispose() 里清理)→ 三条都红。
+describe('被后来的挂载收掉 = 完整的卸载', () => {
+  it('Markdown 编辑器:旧句柄不再回写(onChange 不响),getValue 留着被收掉时的值', async () => {
+    const onChange = vi.fn()
+    let editor!: ReturnType<typeof mountPluginMarkdownEditor>
+    let disposeOther!: () => void
+    await act(async () => { editor = mountPluginMarkdownEditor(el, { value: 'a', onChange }) })
+    await act(async () => { disposeOther = view.surface.mountNoteView(el) })
+    await act(async () => { editor.insertMarkdown('late'); editor.update({ value: 'late' }); editor.focus() })
+    expect(onChange).not.toHaveBeenCalled()
+    expect(editor.getValue()).toBe('a')
+    await act(async () => { editor.dispose(); disposeOther() })
+    expect(el.childElementCount).toBe(0)
+  })
+
+  it('原生表:body 级弹层宿主一并收掉', async () => {
+    const pops = () => document.querySelectorAll('body > .amx-plugtable-pops').length
+    let disposeOther!: () => void
+    await act(async () => { mountPluginTable('contract', el, tableSpec('x')) })
+    expect(pops()).toBe(1)
+    await act(async () => { disposeOther = view.surface.mountNoteView(el) })
+    expect(pops()).toBe(0)
+    await act(async () => { disposeOther() })
+  })
+
+  it('仪表盘:内存作用域的 pageStore 一并回收;配方无效的提示也是一份挂载(收掉前一份,自己也被后来的收掉)', async () => {
+    const recipe = { cards: [{ kind: 'stat' as const, id: 'k', label: 'L', value: '1', w: 4, h: 2 }] }
+    let first!: ReturnType<typeof mountPluginDashboard>
+    await act(async () => { first = mountPluginDashboard('contract', el, { recipe }) })
+    expect(hasPageScope(first.scope)).toBe(true)
+    await act(async () => { mountPluginDashboard('contract', el, { recipe: { cards: 'nope' } as never }) })
+    await vi.waitFor(() => expect(hasPageScope(first.scope)).toBe(false))
+    expect(el.querySelector('[data-stub="dashboard"]')).toBeNull()
+    expect(el.textContent).toContain('仪表盘配方无效')
+    expect(el.childElementCount).toBe(1)
+    let disposeOther!: () => void
+    await act(async () => { disposeOther = view.surface.mountNoteView(el) })
+    expect(el.textContent).not.toContain('仪表盘配方无效')
+    await act(async () => { disposeOther() })
+    expect(el.childElementCount).toBe(0)
   })
 })

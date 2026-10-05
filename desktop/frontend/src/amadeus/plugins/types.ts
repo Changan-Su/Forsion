@@ -930,9 +930,11 @@ export interface PluginContext {
    *  your element's height / flex still apply). `dispose()` removes that layer synchronously: the element is
    *  yours again at once — clear it, or mount on it again. Change a live mount through the handle's `update()`;
    *  dispose + mount is a fresh instance. One element holds one host mount at a time: mounting on an element
-   *  whose previous mount was not disposed retires that mount first, and its handle goes inert (the same holds
-   *  for `ctx.app.mountBlocks`, `ctx.table.mount`, `ctx.dashboard.mount` and `ctx.tangu.mountChat`).
-   *  Don't select host nodes with `el > …`. */
+   *  whose previous mount was not disposed retires that mount first — fully, as if you had disposed it — and
+   *  its handle goes inert (the same holds for `ctx.app.mountBlocks`, `ctx.table.mount`, `ctx.dashboard.mount`
+   *  and `ctx.tangu.mountChat`; the call order decides, not which one finishes loading first).
+   *  `mountFloatingToc` is the exception: it overlays `shell` without taking it over, so it neither retires nor
+   *  is retired by other mounts on the same element. Don't select host nodes with `el > …`. */
   ui?: {
     /** Native Amadeus editor for Markdown owned by the caller (API drafts, etc.). No active-vault access. */
     mountMarkdownEditor?(

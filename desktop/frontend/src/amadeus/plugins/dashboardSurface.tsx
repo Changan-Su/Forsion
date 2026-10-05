@@ -104,10 +104,9 @@ export function mountPluginDashboard(pluginId: string, el: HTMLElement, o: Plugi
     pageId: `plugin-dash-${pluginId}`,
   })
   if (!compiled.ok) {
-    // 提示也住在宿主自己的节点里:el 是插件的,不整个清空它
-    const note = el.appendChild(document.createElement('div'))
-    note.textContent = translate('plugindash.recipeInvalid', { err: compiled.error })
-    return { dispose: () => { note.remove() }, scope: '' }
+    // 提示也是一份宿主挂载:住在宿主自己那一层里(el 是插件的,不整个清空它),同样「一个 el 一份」
+    const note = mountHostReact(el, translate('plugindash.recipeInvalid', { err: compiled.error }))
+    return { dispose: note.dispose, scope: '' }
   }
   const scope = `plugin:${pluginId}:dashboard:${++seq}`
   const dashPath = `plugin:${pluginId}/overview.dashboard.md`
@@ -124,15 +123,8 @@ export function mountPluginDashboard(pluginId: string, el: HTMLElement, o: Plugi
     <PageScopeCtx.Provider value={scope}>
       <Surface scope={scope} dashPath={dashPath} locked={o.locked !== false} />
     </PageScopeCtx.Provider>,
+    // 先收树再摘店:内部 flushSave → sink 最后一发。写在 onDispose 里:被后来的挂载收掉时作用域也要回收
+    () => disposePageStoreScope(scope),
   )
-  let disposed = false
-  return {
-    scope,
-    dispose: () => {
-      if (disposed) return
-      disposed = true
-      mounted.dispose()
-      disposePageStoreScope(scope) // 先收树再摘店:内部 flushSave → sink 最后一发
-    },
-  }
+  return { scope, dispose: mounted.dispose }
 }

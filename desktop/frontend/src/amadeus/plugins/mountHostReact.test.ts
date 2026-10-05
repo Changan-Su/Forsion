@@ -8,10 +8,12 @@
  * 负对照(2026-10-05 都实跑红过):root 直接建在 el 上(不加那一层)→ ① 前三条红(el 里还留着旧节点 / 再挂的内容不在文档里 /
  * 卸载抛 NotFoundError);再挂时不收前一份 → ③ 与「没 dispose 就清空 el」红;render 不看句柄死活 → ② ③ 红(往已卸的 root 上画);
  * dispose 不 unmount → 凡数卸载次数的都红;dispose 不看句柄死活 → ④ 末尾「登记没被旧句柄抹掉」红。
+ * 评审后补的三条(同日实跑红):render 不把游离的那一层接回去 → 「清空过 el」红;dispose 不调 onDispose → 「onDispose」红;
+ * 落地的挂载不登记认领 → 「认领」红。
  */
 import { act, createElement as h, useEffect, useState } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mountHostReact, type HostReactMount } from '@lcl/components'
+import { claimHostMount, mountHostReact, type HostReactMount } from '@lcl/components'
 
 let el: HTMLDivElement
 const errors: unknown[] = []
@@ -116,6 +118,61 @@ describe('原地更新走句柄的 render', () => {
     expect(log.mounted).toEqual(['a'])
     expect(warn).not.toHaveBeenCalled()
     expect(errors).toEqual([])
+  })
+})
+
+describe('原地更新:调用方没 dispose 就清空过 el', () => {
+  it('句柄的 render 把那一层接回去,组件实例和状态都还在', async () => {
+    let mount!: HostReactMount
+    await act(async () => { mount = mountHostReact(el, h(Probe, { name: 'a' })) })
+    const node = probe('a')!
+    await act(async () => { node.click() })
+    el.replaceChildren()
+    expect(node.isConnected).toBe(false)
+    await act(async () => { mount.render(h(Probe, { name: 'a', label: 'n=' })) })
+    expect(probe('a')).toBe(node)
+    expect(node.isConnected).toBe(true)
+    expect(node.textContent).toBe('n=1')
+    expect(el.childElementCount).toBe(1)
+    await act(async () => { mount.dispose() })
+    expect(el.childElementCount).toBe(0)
+    expect(errors).toEqual([])
+  })
+})
+
+describe('onDispose:这次挂载结束时恰好一次', () => {
+  it('自己 dispose 的、被后来的挂载收掉的都调;重复 dispose 不重复调;回调抛错不拦住后来的挂载', async () => {
+    const ended: string[] = []
+    let a!: HostReactMount, b!: HostReactMount
+    await act(async () => { a = mountHostReact(el, h(Probe, { name: 'a' }), () => { ended.push('a') }) })
+    await act(async () => { a.dispose(); a.dispose() })
+    expect(ended).toEqual(['a'])
+
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
+    await act(async () => { b = mountHostReact(el, h(Probe, { name: 'b' }), () => { ended.push('b'); throw new Error('cleanup blew up') }) })
+    await act(async () => { mountHostReact(el, h(Probe, { name: 'c' }), () => { ended.push('c') }).dispose() })
+    expect(ended).toEqual(['a', 'b', 'c'])
+    expect(logged).toHaveBeenCalledTimes(1)
+    await act(async () => { b.dispose() })
+    expect(ended).toEqual(['a', 'b', 'c'])
+    expect(log.unmounted).toEqual(['a', 'b']) // c 同一拍就卸了,组件没来得及挂上
+    expect(errors).toEqual([])
+  })
+})
+
+describe('认领(claimHostMount):真正挂载要等动态 import 的调用,落地时问一句 el 还归不归自己', () => {
+  it('后来的认领、后来落地的挂载都让先前的认领作废;换一个 el 互不相干', async () => {
+    const first = claimHostMount(el)
+    expect(first()).toBe(true)
+    const second = claimHostMount(el)
+    expect([first(), second()]).toEqual([false, true]) // 请求顺序说了算:先请求的那份就算后落地也不能挂
+
+    const elsewhere = claimHostMount(document.createElement('div'))
+    let mount!: HostReactMount
+    await act(async () => { mount = mountHostReact(el, h(Probe, { name: 'a' })) }) // 一次同步的挂载也是一次认领
+    expect([second(), elsewhere()]).toEqual([false, true])
+    await act(async () => { mount.dispose() })
+    expect(second()).toBe(false) // 那份挂载卸了,先前的请求也不会复活
   })
 })
 

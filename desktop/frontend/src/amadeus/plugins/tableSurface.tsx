@@ -102,8 +102,12 @@ export function mountPluginTable(pluginId: string, el: HTMLElement, spec: TableS
   const popHost = document.createElement('div')
   popHost.className = 'am-app tangu-lovable amx-plugtable-pops'
   document.body.appendChild(popHost)
-  const mounted = mountHostReact(el, <PluginTable pluginId={pluginId} spec={spec} popHost={popHost} />)
   let disposed = false
+  // 弹层宿主住在 body 上,不在树里:收在 onDispose,被后来的挂载收掉时才不会留一堆空 div
+  const mounted = mountHostReact(el, <PluginTable pluginId={pluginId} spec={spec} popHost={popHost} />, () => {
+    disposed = true
+    popHost.remove()
+  })
   return {
     update: (next) => {
       if (disposed) return
@@ -111,11 +115,6 @@ export function mountPluginTable(pluginId: string, el: HTMLElement, spec: TableS
       // 句柄的 render:同一个 root(组件实例、DOM 身份都不变)
       mounted.render(<PluginTable pluginId={pluginId} spec={next} popHost={popHost} />)
     },
-    dispose: () => {
-      if (disposed) return
-      disposed = true
-      mounted.dispose()
-      popHost.remove()
-    },
+    dispose: mounted.dispose,
   }
 }

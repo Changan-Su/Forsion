@@ -22,7 +22,7 @@ import { amadeus } from '../api'
 import { BUILTIN_PLUGINS } from './builtins'
 import { getPropertyType, registerPropertyType as registerPropType, unregisterPropertyType as unregisterPropType } from '../blocks/database/propertyTypes'
 import { isBuiltinFileType } from '@amadeus-shared/builtinTypes'
-import { createBlockSurface } from './blockSurface'
+import { claimHostMount, createBlockSurface, mountHostReact } from './blockSurface'
 import { addEditorExtension, clearEditorExtensions } from './editorExtensions'
 import { registerPluginSeries, track, unregisterPluginAchievements } from '../../achievements/store'
 import { act } from '../../activity/log'
@@ -1249,20 +1249,22 @@ export const usePluginStore = create<PluginState>((set, get) => {
         const pending = { ...opts }
         let mounted: import('../../../../shared/markdownEditor').PluginMarkdownEditorHandle | null = null
         let cancelled = false, focusPending = false
-        let failure: HTMLElement | null = null // 挂载失败的提示:住在宿主自己的节点里(el 是插件的,不整个清空它),dispose 时收走
+        let failure: { dispose(): void } | null = null // 挂载失败的提示:也是一份宿主挂载(el 是插件的,不整个清空它),dispose 时收走
         if (!(el instanceof HTMLElement) || typeof opts?.value !== 'string') throw new TypeError('mountMarkdownEditor needs an HTMLElement and Markdown value')
         // 插件没接 disposer 时由关账统一卸;已停用时登记即撤(cancelled 当场为真,不挂)。
-        const dispose = scope.own('mount', () => { cancelled = true; if (mounted) pending.value = mounted.getValue(); mounted?.dispose(); mounted = null; failure?.remove(); failure = null }, 'markdownEditor')
+        const dispose = scope.own('mount', () => { cancelled = true; if (mounted) pending.value = mounted.getValue(); mounted?.dispose(); mounted = null; failure?.dispose(); failure = null }, 'markdownEditor')
         if (!cancelled) {
+          // 调用这一刻就认领 el:动态 import 落地时 el 已经交给了后来的挂载 → 这次作废(见 claimHostMount)
+          const mine = claimHostMount(el)
           void import('./markdownEditorSurface').then(m => {
             if (cancelled) return
+            if (!mine()) { dispose(); return }
             mounted = m.mountPluginMarkdownEditor(el, pending)
             if (focusPending) mounted.focus()
           }).catch(e => {
-            if (cancelled) return
-            failure = el.appendChild(document.createElement('div'))
-            failure.textContent = String(e)
             console.error('[amadeus] Markdown editor mount failed', e)
+            if (cancelled || !mine()) return
+            failure = mountHostReact(el, String(e))
           })
         }
         return {
@@ -1281,8 +1283,10 @@ export const usePluginStore = create<PluginState>((set, get) => {
         let cancelled = false, focusPending = false
         const pending = { ...opts }
         const dispose = scope.own('mount', () => { cancelled = true; mounted?.dispose(); mounted = null }, 'chatBox')
+        const mine = claimHostMount(el)
         void import('./chatBoxSurface').then(m => {
           if (cancelled) return
+          if (!mine()) { dispose(); return }
           mounted = m.mountPluginChatBox(el, pending)
           if (focusPending) requestAnimationFrame(() => mounted?.focus())
         }).catch(e => { console.error(`[amadeus] plugin "${pluginId}" Chat Box mount failed`, e) })
@@ -1328,8 +1332,9 @@ export const usePluginStore = create<PluginState>((set, get) => {
         let cancelled = false
         // 内存作用域的 pageStore 与 React 树不许在插件死后还活着:插件不卸,关账卸。
         const dispose = scope.own('mount', () => { cancelled = true; disposeMounted?.(); disposeMounted = null }, 'dashboard')
+        const mine = claimHostMount(el)
         void import('./dashboardSurface').then((m) => {
-          if (cancelled || !el.isConnected) { dispose(); return }
+          if (cancelled || !el.isConnected || !mine()) { dispose(); return }
           disposeMounted = m.mountPluginDashboard(pluginId, el, o).dispose
         }).catch((e) => { console.error(`[amadeus] plugin "${pluginId}" dashboard mount failed`, e) })
         return dispose
@@ -1349,11 +1354,13 @@ export const usePluginStore = create<PluginState>((set, get) => {
         let cancelled = false
         // body 级弹层宿主也在这一卸里收,漏了就是页面上一堆空 div。
         const dispose = scope.own('mount', () => { cancelled = true; handle?.dispose(); handle = null }, 'table')
+        const mine = claimHostMount(el)
         void import('./tableSurface').then((m) => {
           // 只认 cancelled,**不看 el.isConnected**:面板每次重渲都会把容器掀掉再由 panel-lib 认领回来,
           // import 落地那一刻容器多半正游离着 —— 此时放弃 = 句柄永远为空、容器永远空白且不回落。
           // React 往游离节点上挂根是合法的,认领回 DOM 就显示。
           if (cancelled) return
+          if (!mine()) { dispose(); return }
           handle = m.mountPluginTable(pluginId, el, pending)
         }).catch((e) => { console.error(`[amadeus] plugin "${pluginId}" table mount failed`, e) })
         return {

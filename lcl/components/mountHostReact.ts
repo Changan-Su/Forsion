@@ -11,6 +11,17 @@ export interface HostReactMount {
 
 // 一个 el 上同一时刻只有一棵宿主树:后来的挂载先把前一份收掉。
 const mountByEl = new WeakMap<HTMLElement, HostReactMount>()
+// el 最近一次交给了谁:一次公开的挂载调用(真正挂载还在等动态 import),或一次已经落地的挂载。
+const claimByEl = new WeakMap<HTMLElement, object>()
+
+/** 公开的挂载调用一进来就同步认领 el;返回的函数在动态 import 落地时问一句「el 还归这次调用吗」。
+ *  这之后 el 上又来过别的挂载调用(不管它先落地还是后落地)→ false:这次调用作废,不能再挂 ——
+ *  不然先请求、后落地的那份会把后请求的收掉(请求顺序才是插件的意思,落地顺序不是)。 */
+export function claimHostMount(el: HTMLElement): () => boolean {
+  const claim = {}
+  claimByEl.set(el, claim)
+  return () => claimByEl.get(el) === claim
+}
 
 /** 往插件的 DOM 里挂一棵宿主 React 树。各挂载接口(mountBlocks / mountNoteView / ctx.ui.* / ctx.table /
  *  ctx.dashboard / ctx.tangu.mountChat)共用。
@@ -25,8 +36,10 @@ const mountByEl = new WeakMap<HTMLElement, HostReactMount>()
  *  · 一层一个 root:同一个容器上不会有两个 root;句柄只碰自己那一层,旧句柄晚到或被重复调用,碰不到后来的挂载。
  *  · el 上一份没 dispose 就再挂:前一份被收掉(旧树照样卸),它的句柄此后是哑的 —— 晚到的 render 顶不掉后来那份。
  *    调用方没 dispose 就把 el 清空了再挂,走的也是这条。
- *  · 想保住组件状态就留着句柄调 render();dispose 再挂是一棵新树。 */
-export function mountHostReact(el: HTMLElement, node: ReactNode): HostReactMount {
+ *  · 想保住组件状态就留着句柄调 render();dispose 再挂是一棵新树。
+ *  · onDispose:这次挂载结束时恰好调一次,不管是自己 dispose 的还是被后来的挂载收掉的。挂在树外面的东西
+ *    (body 上的弹层宿主、内存作用域的 store、上层句柄的 alive)在这里收,别只写在上层自己的 dispose() 里。 */
+export function mountHostReact(el: HTMLElement, node: ReactNode, onDispose?: () => void): HostReactMount {
   mountByEl.get(el)?.dispose()
   const layer = el.appendChild(document.createElement('div'))
   layer.style.display = 'contents'
@@ -35,7 +48,9 @@ export function mountHostReact(el: HTMLElement, node: ReactNode): HostReactMount
   let alive = true
   const mount: HostReactMount = {
     render(next) {
-      if (alive) root.render(next)
+      if (!alive) return
+      if (layer.parentNode !== el) el.appendChild(layer) // 调用方没 dispose 就清空过 el:把那一层接回去,组件状态还在
+      root.render(next)
     },
     dispose() {
       if (!alive) return
@@ -50,8 +65,14 @@ export function mountHostReact(el: HTMLElement, node: ReactNode): HostReactMount
           console.error('[amadeus] 卸载插件挂载树失败', e)
         }
       })
+      try {
+        onDispose?.()
+      } catch (e) {
+        console.error('[amadeus] 插件挂载的收尾回调抛错', e)
+      }
     },
   }
   mountByEl.set(el, mount)
+  claimByEl.set(el, mount)
   return mount
 }

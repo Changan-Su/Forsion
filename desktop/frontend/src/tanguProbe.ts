@@ -6,6 +6,7 @@
  * 建 plugin context 那一刻定的。三端共用 installEngine,移动端自动跟上(check:parity)。
  */
 import { setActiveSpace, useSpaceStore, useWorkspace } from '@lcl/engine'
+import { claimHostMount } from '@lcl/components'
 import {
   pluginChatType,
   setTanguProbe,
@@ -262,15 +263,28 @@ export async function startChat(o: TanguStartChatOptions): Promise<TanguStartCha
 function mountChat(el: HTMLElement, o: TanguChatMountOptions): TanguChatMount {
   let disposed = false
   let mounted: { latest(): Promise<TanguStartChatResult>; dispose(): void } | null = null
+  const type = pluginChatType(o)
+  const dispose = (): void => {
+    if (disposed) return
+    disposed = true
+    // 还没被取走的引用和预填是给这次挂载的:带走,别让同名的下一次挂载(换了库之后的同名文件夹)接到
+    const app = useApp.getState()
+    if (app.pendingChatQuote?.targetType === type) app.clearPendingChatQuote(app.pendingChatQuote.seq)
+    void session().then((r) => { if (r.sessionId) usePluginChat.getState().take(r.sessionId) }, () => {})
+    mounted?.dispose()
+  }
+  // 调用这一刻就认领 el:界面那半落地时 el 已经交给了后来的挂载 → 这次作废(见 claimHostMount)
+  const mine = claimHostMount(el)
   const ready: Promise<TanguStartChatResult> = import('./views/pluginChat').then((m) => {
+    if (!disposed && !mine()) dispose()
     if (disposed) return { ok: false, error: 'disposed' }
-    const made = m.mountPluginChat(el, o)
+    // 被后来的挂载收掉也走同一条收尾(带走没被取走的引用和预填)
+    const made = m.mountPluginChat(el, o, dispose)
     mounted = made
     return made.ready
   }, (e) => ({ ok: false, error: String((e as { message?: unknown } | null)?.message ?? e) }))
   // 这条对话现在接的是哪条会话:第一次没接上、用户点「重试」接上了的,以后来那次为准。
   const session = (): Promise<TanguStartChatResult> => ready.then((first) => mounted?.latest() ?? first)
-  const type = pluginChatType(o)
   return {
     ready,
     // 引用条认的是目标名、不是挂载实例:对话还没挂上时投的引用,ChatView 一挂上就消费。
@@ -279,15 +293,7 @@ function mountChat(el: HTMLElement, o: TanguChatMountOptions): TanguChatMount {
     quote: (text) => { if (!disposed && typeof text === 'string' && text.trim()) useApp.getState().setPendingChatQuote(type, text) },
     // 预填按会话投(Composer2 消费):会话接上之后才有 id,所以排在接上之后。
     prefill: (text) => { if (typeof text === 'string' && text.trim()) void session().then((r) => { if (!disposed && r.ok && r.sessionId) usePluginChat.getState().queue(r.sessionId, text) }) },
-    dispose: () => {
-      if (disposed) return
-      disposed = true
-      // 还没被取走的引用和预填是给这次挂载的:带走,别让同名的下一次挂载(换了库之后的同名文件夹)接到
-      const app = useApp.getState()
-      if (app.pendingChatQuote?.targetType === type) app.clearPendingChatQuote(app.pendingChatQuote.seq)
-      void session().then((r) => { if (r.sessionId) usePluginChat.getState().take(r.sessionId) }, () => {})
-      mounted?.dispose()
-    },
+    dispose,
   }
 }
 
