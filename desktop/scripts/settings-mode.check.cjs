@@ -91,12 +91,17 @@ async function main() {
     }
     // 「Forsion 云端」里 fx:<插件>:<页> 这类子页由内置的 Extend 包在运行期贡献,有哪几页跟包的版本走;宿主对老包向前兼容
     // (包里没有那一页 → 导航与搜索都不出现)。用深链实测本包有哪几页,D 段据此判该项「必须搜得到」还是「不许漏出来」。
+    // ponytail: 判据是宿主自己的深链路由,不是包的清单(manifest 不列子页,插件 store 也没露给台架)—— 宿主若把包里**有**的某一页
+    // 从路由 / 导航 / 搜索里一起弄丢,这里看不出来。「账号」页单独钉死;其余被当成「本包没有」的页每次都打在下面这行,
+    // 换 Extend 版本后对一眼。要更硬:等 manifest 声明子页,或给探针开一个读插件 settingsViews 的口子。
+    const fxEntries = SETTINGS_SEARCH_INDEX.filter((x) => x.sub?.startsWith('fx:'))
     const fxPresent = new Set()
-    for (const e of SETTINGS_SEARCH_INDEX.filter((x) => x.sub?.startsWith('fx:'))) {
+    for (const e of fxEntries) {
       fl = await openSettings({ tab: `${e.tab}/${e.sub}` })
       if (await waitFor(async () => (await fl.locator(`.settings-sub[data-settings-sub="${e.sub}"]`).count()) > 0, 2500)) fxPresent.add(e.sub)
     }
-    check('C 账号页(Extend 自绘)在本包里(前置:它不在,D 段的 fx 项全按「该藏」算,是假绿)', fxPresent.has('fx:forsion-extend:account'), [...fxPresent])
+    check('C 账号页(Extend 自绘)在本包里(前置:它不在,D 段的 fx 项全按「该藏」算,是假绿)', fxPresent.has('fx:forsion-extend:account'),
+      { present: [...fxPresent], absent: fxEntries.map((e) => e.sub).filter((sub) => !fxPresent.has(sub)) })
 
     // ── A 后端运行方式卡只改草稿 ──
     fl = await openSettings({ tab: 'connection' })
