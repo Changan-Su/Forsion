@@ -111,7 +111,7 @@ async function dirStamp(dir: string): Promise<string> {
   return parts.sort().join('|');
 }
 
-function toRecord(id: string, fallbackName: string, raw: string, source: SkillSource): SkillRecord {
+function toRecord(id: string, fallbackName: string, raw: string, source: SkillSource, dir: string): SkillRecord {
   const { meta, body } = parseFrontmatter(raw);
   const firstLine = body.split('\n').find((l) => l.trim() && !l.trim().startsWith('#'))?.trim() || '';
   return {
@@ -135,7 +135,10 @@ function toRecord(id: string, fallbackName: string, raw: string, source: SkillSo
     // shared: SKILL.md frontmatter `shared: true` —— 该 agent 愿意把这个技能借给别的 agent(listSharedAgentSkills 只认这一位)。
     // 只对 agent 级技能有意义;用户级 / 项目级写了也不生效(它们本来就人人可见)。
     shared: source === 'agent' && /^(true|yes|1)$/i.test(meta.shared || ''),
-  } as SkillRecord & { source: string; origin: 'agent' | null; shared: boolean };
+    // dir: 这个技能的文件夹(绝对路径)。use_skill 把它告诉模型 —— 正文里写的 scripts/ references/ 这类相对路径才有处可找。
+    // 引擎内部用:对外接口(routes/assets.skillSummary、上云)都是逐字段挑,不带它。
+    dir,
+  } as SkillRecord & { source: string; origin: 'agent' | null; shared: boolean; dir: string };
 }
 
 async function scanDir(dir: string, source: SkillSource): Promise<SkillRecord[]> {
@@ -160,7 +163,7 @@ async function scanDir(dir: string, source: SkillSource): Promise<SkillRecord[]>
     } catch {
       continue;
     }
-    skills.push(toRecord(`${LOCAL_SKILL_PREFIX}${e.name}`, e.name, raw, source));
+    skills.push(toRecord(`${LOCAL_SKILL_PREFIX}${e.name}`, e.name, raw, source, path.join(dir, e.name)));
   }
   cache.set(dir, { stamp, skills });
   return skills;
@@ -184,6 +187,11 @@ const SEED_STAMP = '.seed-stamp';
  *  一个内容不同的 `.DS_Store`(Finder 一开文件夹就写),被永久判成「用户改过」保护住,内置更新
  *  再也传不下去,还朝用户喊「删掉你的技能目录」。判据必须只看技能内容。 */
 const OS_JUNK = new Set(['.DS_Store', 'Thumbs.db', 'desktop.ini']);
+/** 跑脚本留下的缓存,同样不是技能内容:模型照技能说明在技能文件夹里跑 `python -m scripts.x`,解释器就往里写
+ *  `__pycache__/*.pyc`。算进指纹的话,跑过一次脚本的内置镜像就被永久判成「用户改过」,内置更新再也传不下去
+ *  (与 `.DS_Store` 同一种病;带脚本的内置技能正是 skill-creator)。老指纹不受影响:它是播种那一刻在干净副本上
+ *  算的,那时还没有缓存,两种算法得出同一个值;旧算法(legacy)照旧什么都算。 */
+const isRuntimeCache = (name: string): boolean => name === '__pycache__' || name.endsWith('.pyc');
 
 /** 目录树指纹:相对路径 + 内容,排序后一起哈希;`.seed-stamp` 与 OS 垃圾不参与(都不是内容)。
  *
@@ -198,6 +206,7 @@ async function treeHash(dir: string, legacy = false): Promise<string | null> {
     const entries = await fs.readdir(path.join(dir, rel), { withFileTypes: true });
     for (const e of entries) {
       const r = rel ? `${rel}/${e.name}` : e.name;
+      if (!legacy && isRuntimeCache(e.name)) continue;
       if (e.isDirectory()) await walk(r);
       else if (e.isFile() && r !== SEED_STAMP && (legacy || !OS_JUNK.has(e.name))) files.push(r);
     }
@@ -421,7 +430,13 @@ export async function listLocalSkills(): Promise<SkillRecord[]> {
       if ((source === 'builtin' || source === 'bundle' || source === 'user') &&
           (disabledUser.has(name) || disabledInherited.has(name))) continue;
       if (source === 'agent' && disabledAgent.has(name)) continue;
-      if (isUserRoot && mirrors.has(s.id) && byId.has(s.id)) continue; // 未改镜像不覆盖已有(bundle)条目
+      if (isUserRoot && mirrors.has(s.id) && byId.has(s.id)) {
+        // 未改镜像不覆盖已有(内置 / bundle)条目。留下的若是包内置那条,文件夹改指家目录里这份逐字节相同的镜像:
+        // 包目录在应用包里(只读、带签名),模型照说明去那里跑脚本会往里写缓存。bundle 盖过内置时内容不同,不改。
+        // 展开成新对象:byId 里的是 scanDir 缓存着的那一条,不能原地改。
+        if (!fromBundle.has(s.id)) byId.set(s.id, { ...byId.get(s.id)!, dir: (s as { dir?: string }).dir } as SkillRecord);
+        continue;
+      }
       // ⚠️无指纹的用户副本挡住 bundle 技能 —— 说出来,别静默。
       // 怎么会有这种副本:某个技能原本是**内置**、被播种进用户目录,后来它随能力搬进了 Forsion 插件
       // 捆绑包。播种早于指纹机制的老装机留下的那份没有指纹,于是既判不出「用户没改过」(不能降格),

@@ -117,7 +117,10 @@ export const skillsProvider: ToolProvider = {
         if (cheat) return `# Skill: ${cheat.title}\n\n${cheat.body}`;
         const body = (s.content && String(s.content).trim()) || (s.description && String(s.description).trim()) || '';
         if (!body) return `Skill "${s.name}" has no instructions.`;
-        const head = `# Skill: ${s.name}\n\n`;
+        // 技能自带的文件(scripts/ references/ assets/)在正文里写的是相对路径:把文件夹告诉模型,它才找得到。
+        // 只对本机会话里的本地技能给:云端技能没有文件夹,沙箱里也够不着这个路径。
+        const dir = ctx.execMode === 'host' ? String((s as { dir?: string }).dir || '') : '';
+        const head = `# Skill: ${s.name}\n\n` + (dir ? `Skill folder: ${dir}\nRelative paths in this skill (scripts/, references/, assets/ …) resolve against that folder.\n\n` : '');
         return head + body.slice(0, USE_SKILL_MAX_CHARS) + (body.length > USE_SKILL_MAX_CHARS ? '\n\n…(truncated)' : '');
       },
     },

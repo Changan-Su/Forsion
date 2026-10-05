@@ -47,6 +47,31 @@ beforeEach(() => {
 afterEach(() => rmSync(root, { recursive: true, force: true }));
 
 describe('内置技能播种', () => {
+  // 模型照技能说明在技能文件夹里跑 `python -m scripts.x`,解释器往里写 __pycache__/*.pyc。那不是用户的改动:
+  // 算进指纹的话,跑过一次脚本的内置镜像就被永久判成「用户改过」,内置更新再也传不下去(与 .DS_Store 同一种病)。
+  it('⚠️跑脚本留下的 __pycache__ / .pyc 不算改动:内置更新照样传下去,更新后缓存一并清掉', async () => {
+    put(src, 'alpha', 'v1', { 'scripts/run.py': 'print(1)\n' });
+    await seedSkillsInto(src, dest);
+    mkdirSync(path.join(dest, 'alpha', 'scripts', '__pycache__'), { recursive: true });
+    writeFileSync(path.join(dest, 'alpha', 'scripts', '__pycache__', 'run.cpython-312.pyc'), 'bytecode');
+    writeFileSync(path.join(dest, 'alpha', 'stray.pyc'), 'bytecode');
+    put(src, 'alpha', 'v2', { 'scripts/run.py': 'print(2)\n' });
+    const r = await seedSkillsInto(src, dest);
+    expect(r.updated).toEqual(['alpha']);
+    expect(r.protectedStale).toEqual([]);
+    expect(read('alpha')).toBe('v2');
+    expect(existsSync(path.join(dest, 'alpha', 'scripts', '__pycache__'))).toBe(false); // 整夹替换:旧缓存不留
+  });
+  it('负对照:脚本本身被改了仍算用户改过(只放过缓存,不放过内容)', async () => {
+    put(src, 'alpha', 'v1', { 'scripts/run.py': 'print(1)\n' });
+    await seedSkillsInto(src, dest);
+    writeFileSync(path.join(dest, 'alpha', 'scripts', 'run.py'), 'print("mine")\n');
+    put(src, 'alpha', 'v2', { 'scripts/run.py': 'print(2)\n' });
+    const r = await seedSkillsInto(src, dest);
+    expect(r.protectedStale).toEqual(['alpha']);
+    expect(read('alpha', 'scripts/run.py')).toBe('print("mine")\n');
+  });
+
   it('首次播种:整夹复制,并留下指纹', async () => {
     put(src, 'alpha', 'v1', { 'template.md': 'T1' });
     const r = await seedSkillsInto(src, dest);

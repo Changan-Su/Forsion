@@ -29,6 +29,28 @@ Then after the skill is done (but again, the order is flexible), you can also ru
 
 Cool? Cool.
 
+## In Forsion: where skills live and how to save them
+
+> This section was added by Forsion. Everything else in this file is the upstream skill-creator text (Apache-2.0, see LICENSE.txt), written for Claude Code and Claude.ai. Where the two disagree, follow this section.
+
+You are running in Forsion, not Claude Code. The method below (capture intent → interview → draft → test → iterate) applies as written. Storing, loading and delivering a skill work differently here.
+
+**Saving: use the `manage_skill` tool; do not hand-write the skill folder.** If `manage_skill` is not in your tool list yet, unlock it with `load_tools`.
+
+- `action: "create"` with `name`, `description` and `instructions` writes the `SKILL.md` for you and returns the skill's folder. `instructions` is the body only, without frontmatter. `name` and `description` are separate arguments, and everything this guide says about writing the description (it is what makes the skill trigger) applies to the `description` argument. If the name has no Latin letters or digits, pass a `slug` as well (lowercase letters, digits, hyphens).
+- `action: "update"` with `slug` and the complete new `instructions` replaces the body. Pass `description` only when it changes.
+- `scope: "user"` (the default) makes the skill available to every agent. `scope: "agent"` keeps it private to you, the agent active in this conversation; use it for know-how tied to your own role.
+- A skill that only makes sense inside one project belongs to that project: write `<project folder>/.tangu/skills/<slug>/SKILL.md` (with `name` and `description` frontmatter) using the file tools. This is the only case where you write the file by hand.
+- Built-in skills, this one included, are read-only. To change how one behaves, create your own skill under a different name.
+
+**Bundled files (`scripts/`, `references/`, `assets/`).** Create the skill first, then write the files into the folder `manage_skill` returned and refer to them by relative path in the instructions. When a skill is loaded, `use_skill` states its folder, so relative paths resolve; that is also how you find this skill's own `scripts/`, `agents/`, `references/` and `eval-viewer/`. Your own agent folder is writable without asking. A user-scope skill folder is outside the workspace, so the user may be asked to approve writes there.
+
+**Loading.** Skills are listed by name and description in your system prompt and loaded with `use_skill`. A skill you create now joins that list from the next message on, not in the turn that created it.
+
+**Delivering.** Saving the skill is the whole delivery: tell the user its name, what it is for and when it will kick in. Do not package a `.skill` file, do not stage anything in `/tmp`, and ignore `present_files`. Skip "Package and Present" and the Claude.ai / Cowork sections below.
+
+**Testing.** Run the test prompts with sub-agents through `delegate` when you have it, otherwise run them yourself one at a time, and give the with-skill run the skill's folder. Keep the `<skill-name>-workspace/` folder in the current working folder, not next to the skill: the skills folder is for skills only. `scripts/run_eval.py`, `scripts/run_loop.py` and `scripts/improve_description.py` (description optimization) call the `claude` CLI; use them only if `claude` is installed on this machine, otherwise tune the description by hand with the user. Do not run `scripts/quick_validate.py` or `scripts/package_skill.py` on a skill saved with `manage_skill`: they check upstream packaging rules and reject the `origin` key that `manage_skill` writes.
+
 ## Communicating with the user
 
 The skill creator is liable to be used by people across a wide range of familiarity with coding jargon. If you haven't heard (and how could you, it's only very recently that it started), there's a trend now where the power of Claude is inspiring plumbers to open up their terminals, parents and grandparents to google "how to install npm". On the other hand, the bulk of users are probably fairly computer-literate.
