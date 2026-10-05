@@ -83,6 +83,9 @@ async function main() {
     await settings.getByRole('button', { name: '预览开屏', exact: true }).click()
     await sceneFrame.locator('#tangu-splash .fts canvas').nth(2).waitFor()
     await settings.waitForTimeout(1500) // The scene emerges from the stage colour; the preview leaves at 2.4s.
+    const version = require(path.join(APP_ROOT, 'package.json')).version
+    check('the built page is stamped with the app version', fs.readFileSync(path.join(APP_ROOT, 'out/renderer/index.html'), 'utf8').includes(`<script>window.FORSION_APP_VERSION=${JSON.stringify(version)};`))
+    check('the preview shows that version under the wordmark', await sceneFrame.locator('#tangu-splash .fts-ver').textContent() === version)
     await settings.locator('.startup-appearance-preview').screenshot({ path: path.join(OUT, 'tree-shadow-preview.png') })
     await sceneFrame.locator('#tangu-splash').waitFor({ state: 'detached', timeout: 8000 })
     check('default preview paints the tree shadow inside the sandboxed frame and leaves on the first frame', true)

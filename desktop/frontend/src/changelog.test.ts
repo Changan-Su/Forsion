@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { gatePluginManifest } from '../../shared/amadeus/ipc'
 import { APP_VERSION, CHANGELOG, CHANGELOG_EN, changelogFor, latestReleasedVersion, parseChangelog } from './changelog'
 import { version } from '../../package.json'
+import { startupAppearanceHtml } from '../startupAppearancePlugin'
 
 describe('released app version', () => {
   it('keeps Unreleased in the changelog but selects the first released version', () => {
@@ -19,6 +20,10 @@ describe('released app version', () => {
   it('never feeds the Unreleased heading into plugin minAppVersion gating', () => {
     expect(APP_VERSION).toBe(version)
     expect(gatePluginManifest({ minAppVersion: '2.9.0' }, APP_VERSION)).toBeNull()
+  })
+
+  it('stamps the same version on the startup splash', () => {
+    expect(startupAppearanceHtml().transformIndexHtml('<!-- forsion-startup-runtime -->')).toContain(`<script>window.FORSION_APP_VERSION="${APP_VERSION}";`)
   })
 })
 

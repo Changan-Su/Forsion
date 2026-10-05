@@ -1271,6 +1271,8 @@ const zh: Dict = {
   'settings.theme.flatOn': '扁平',
   'settings.theme.flatDescription': '立体使用淡阴影，扁平隐藏装饰阴影。',
   'settings.theme.glassDescription': '为支持的表面加入半透明模糊效果。',
+  'settings.theme.ambient': '外壳随内容取色',
+  'settings.theme.ambientHint': 'Genesis 的外围磨砂玻璃跟随当前可见内容的颜色，需要开着毛玻璃。滚动和切换页面时会多占一些性能。',
   'settings.theme.typographyTitle': '字体',
   // 中分类(一级页标题下的横排栏目条);只给内容长的页,短页不设
   'settings.sub.connection': '连接',
@@ -3112,6 +3114,8 @@ const en: Dict = {
   'settings.theme.flatOn': 'Flat',
   'settings.theme.flatDescription': 'Raised adds subtle shadows. Flat hides decorative shadows.',
   'settings.theme.glassDescription': 'Add translucent blur to surfaces that support it.',
+  'settings.theme.ambient': 'Tint chrome from content',
+  'settings.theme.ambientHint': 'Genesis frosted chrome follows the colors of visible content. Needs frosted glass turned on. Uses more resources while scrolling and switching pages.',
   'settings.theme.typographyTitle': 'Typography',
   'settings.sub.connection': 'Connection',
   'settings.sub.models': 'Models',
