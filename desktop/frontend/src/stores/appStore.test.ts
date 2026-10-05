@@ -751,6 +751,36 @@ describe('appStore.send 新会话固化模型', () => {
     expect(keys).toContain('/vault/amadeus')
     expect(keys).toContain(ROOTLESS_WORKSPACE_KEY)
   })
+
+  // 10-05 用户定「团队模式不能开计划模式」。草稿经 setNewChatCfg 时已结算;这里钉的是建会话与发 run 那两处兜底
+  // (草稿之外还会并进项目默认的团队 / 上次用的档位,两个都开的组合可能在这一步才出现)。
+  it('团队模式下建会话、发 run 都不带计划模式', async () => {
+    useApp.setState({
+      desktopMode: 'managed',
+      newChatWs: { key: '/project', name: 'Project', kind: 'local', path: '/project' },
+      newChatCfg: { groupChat: true, groupAgents: ['a', 'b'], planMode: true }, // 直接塞进去,绕过 setNewChatCfg 的结算
+    })
+    createSessionMock.mockImplementation((_cfg: unknown, init: { model_id?: string; project_path?: string; agent_config?: unknown }) =>
+      Promise.resolve({ ...created('s-team', init?.model_id ?? null), project_path: init.project_path, agent_config: init.agent_config }))
+
+    await useApp.getState().send('开工', [])
+
+    expect(createSessionMock.mock.calls[0][1].agent_config).toMatchObject({ groupChat: true, planMode: false })
+    expect(startRunMock.mock.calls[0]?.[1].agentConfig).toMatchObject({ groupChat: true, planMode: false })
+  })
+
+  it('老会话本地存着两个都开:发 run 时不带计划模式', async () => {
+    useApp.setState({
+      desktopMode: 'managed', activeId: 's-old',
+      sessions: [{ ...created('s-old', 'm1'), project_path: '/project' }] as unknown as AppState['sessions'],
+      configBySession: { 's-old': { execMode: 'host', cwd: '/project', groupChat: true, groupAgents: ['a', 'b'], planMode: true } },
+    })
+
+    await useApp.getState().send('继续', [])
+
+    expect(createSessionMock).not.toHaveBeenCalled()
+    expect(startRunMock.mock.calls[0]?.[1].agentConfig).toMatchObject({ groupChat: true, planMode: false })
+  })
 })
 
 describe('withAmadeusWorkspace', () => {
