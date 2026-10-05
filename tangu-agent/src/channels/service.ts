@@ -888,7 +888,7 @@ export class ChannelService {
     for (const id of ids) {
       const st = this.runs.get(id);
       if (st) st.stopped = true;
-      abortRun(id); // 在跑的走 AbortController;排队的出队并补终态(agentLoop.abortRun 两种都认)
+      abortRun(id, { byUser: true }); // 在跑的走 AbortController;排队的出队并补终态(agentLoop.abortRun 两种都认)
     }
     // 卡片都属于这个 peer 的 run(刚全停了):审批 / 询问的 resolver 随 abort 信号释放,这里只摘表、清计时器。
     for (const p of this.prompts.get(key) ?? []) if (p.kind === 'approval' && p.timer) clearTimeout(p.timer);

@@ -99,6 +99,8 @@
  *                                                           #   + 负对照(无能力 / 桌面端 / 手机不 claim / 回微信 / 天气 / 候选列表注入);改 phone_* / clientAck / 工具闸后跑
  *   node scripts/live-harness.mjs --selftest                 # 纯判据(done 锚点 / load_tools 措辞 / 子代理归属 / 团队激活窗与真并行)的负对照;不起引擎、不需凭证
  *   npm run live:harness -- --only selfsettings            # agent 自调会话设置(09-25):一句话切模型/思考档 → load_tools→update_session_settings;替我批准档弹审批、完全放行零审批;让它改审批档必须什么都不改;改 session_settings 工具 / 描述后跑
+ *   npm run live:harness -- --only signals                 # 后台复盘的触发信号(10-05,方案 E2,services/judgeSignals.ts):用户没说「记下来」只是出言纠正 → 不到点的那一轮也评一次并采到记忆候选;
+ *                                                           #   同样的两轮、第二句不是纠正 → 不评(负对照);调了三次以上工具被按停 → 下一轮跑完时带着信号评;改 judgeSignals / 判官触发条件 / 判官提示后跑
  *   npm run live:harness -- --only control                 # 控制面审批(09-25,e0ad04aa):只读档一句话建「每天 9 点自动写新闻摘要」/ 建 agent 须弹 kind=control 审批卡,台架拒后落盘零新增;
  *                                                           #   完全放行档同一句话零审批真建出来(判完即删);加 --exec-mode sandbox = 沙箱会话的完全放行也得问(C 腿跳过);改 approvals.controlPlaneCall / manage_* 工具后跑
  *                                                           #   ⚠️ host 模式下 run_bash 跑在开发机上:每腿前后快照 crontab / atq / ~/Library/LaunchAgents / ~/.config/systemd/user,变了即红并打印人工还原命令(台架不自动改回)
@@ -138,7 +140,7 @@ const opt = (name, def) => { const i = argv.indexOf(`--${name}`); return i >= 0 
 const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
 const MODEL = opt('model', process.env.TANGU_LIVE_MODEL || 'codex/gpt-5.6-luna');
 const AUTH = resolve(opt('auth', process.env.TANGU_LIVE_AUTH || join(homedir(), '.forsion-dev', 'provider-auth.json')));
-const KEYS = ['realtime', 'voiceclone', 'personas', 'rename', 'selfschedule', 'selfmodel', 'chat', 'tool', 'remember', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'parked', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human', 'emoji', 'visualize', 'visualfigures', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'control', 'phone', 'unattendedask', 'plugin', 'skillpick', 'settingsnav'];
+const KEYS = ['realtime', 'voiceclone', 'personas', 'rename', 'selfschedule', 'selfmodel', 'chat', 'tool', 'remember', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'parked', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human', 'emoji', 'visualize', 'visualfigures', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'control', 'phone', 'unattendedask', 'plugin', 'skillpick', 'settingsnav', 'signals'];
 KEYS.push('pageinstructions');
 KEYS.push('harnessopen');
 KEYS.push('equip');
@@ -159,7 +161,7 @@ const GIT_PREFIX = 'livetest/'; const GIT_TAG = '[LIVE]';
 // opt-in:缺省全量跑里**不带**这几个 —— cache 7 个 run / churn 6 个 run(都慢),cache 与 recall-unprompted
 // 还会往隔离 home 播记忆行(会进别的场景的系统提示);deferred 要真装 liteparse 解析文档;
 // grant 是两个委派 run(慢),且只在动过 delegate.grantTools / 子代理管理面闸时才有信息量。
-const OPT_IN = new Set(['realtime', 'remember', 'musewake', 'personas', 'rename', 'selfschedule', 'selfmodel', 'teamapproval', 'parked', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'control', 'phone']);
+const OPT_IN = new Set(['realtime', 'remember', 'musewake', 'personas', 'rename', 'selfschedule', 'selfmodel', 'teamapproval', 'parked', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'signals', 'control', 'phone']);
 OPT_IN.add('visualfigures');
 OPT_IN.add('visualize'); // --only visualize: real model -> sketch controls/state; HTML can feed desktop check:visualize.
 OPT_IN.add('emoji'); // Three real-model rounds; run explicitly when session icons change.
@@ -3746,6 +3748,96 @@ Then reply with only the command output.`,
       detail: `A ${okA ? '✓' : '✗'} 工具 ${tools(a)} 审批 ${aAsked} 模型 ${aModel} 思考 ${aCfg.thinkingLevel}${a.error ? ` 错 ${a.error}` : ''}`
         + ` | B ${okB ? '✓' : '✗'} 工具 ${tools(b)} 档 ${bCfg.approvalMode || '(未存)'} 答「${b.content.replace(/\s+/g, ' ').slice(0, 100)}」`
         + ` | C ${okC ? '✓' : '✗'} 工具 ${tools(c)} 审批 ${c.approvals} 模型 ${cModel}`,
+    };
+  });
+  // 10-05 后台复盘的触发信号(方案 E2,services/judgeSignals.ts)。判官平时只在第 1 轮和每 N 轮评一次;这里把 N 设成 5,
+  // 第 2 轮本来轮不到它 —— 评了,就只能是信号触发的。用户的话照平时的说法,不说「记下来」:
+  //   A1 / A2 第二句是纠正(「不对,我的项目都用 pnpm」/「不对,提交说明要用英文」)→ 第 2 轮被加评,且采到提到这件事的记忆候选;
+  //   B  同样的两轮,第二句是普通追问 → 第 2 轮不评(负对照:证明 A 是信号触发的,不是别的原因);
+  //   C  让它连读八个文件,看到第三次工具调用就按停(走 /abort,与桌面的停止键同一条路)→ 中止那一刻不评;下一轮跑完时带着信号评。
+  //      C 只判「评了、带着信号」,不判它提名了什么(信号只决定现在评一次,写不写由判官定);提名了什么记在 detail 里。
+  await scenario('signals', 'signals 后台复盘的触发信号(出言纠正 / 调了半天被按停 → 当轮加评)', async () => {
+    await api('/agent/special/config', { method: 'POST', body: JSON.stringify({ historian: { enabled: true, modelId: MODEL, everyRounds: 5, firstRoundTrigger: true, mode: 'independent' } }) });
+    const stamp = Date.now();
+    const acts = (sid) => api('/agent/special/historian/activity?limit=100').then((a) => (a.activity || []).filter((r) => r.session_ref === sid));
+    const forced = () => (existsSync(engineLog) ? readFileSync(engineLog, 'utf8') : '').split('\n').filter((l) => /轮触发\(.*信号 \d+ 条/.test(l));
+    const rawNow = () => (existsSync(rawPath) ? readFileSync(rawPath, 'utf8') : '');
+    /** 等第 1 轮(到点)的复盘落下来:标题由起点那一路写,别的动作出现一条即可;等不到也继续(忙着的话下一轮的信号会被跳过,判据自然红)。 */
+    const settleFirst = async (sid) => { await until(async () => ((await acts(sid)).some((x) => x.action !== 'title_updated') ? true : null), 90_000, 2000); await sleep(1500); };
+
+    const correction = async (leg, first, second, mustMention) => {
+      const sid = `live-sig-${leg}-${stamp}`;
+      const t1 = await run(sid, first);
+      if (t1.error) return { ok: false, text: `${leg} 第一轮失败:${t1.error}` };
+      await settleFirst(sid);
+      const before = { acts: (await acts(sid)).length, forced: forced().length, raw: rawNow() };
+      const t2 = await run(sid, second);
+      if (t2.error) return { ok: false, text: `${leg} 第二轮失败:${t2.error}` };
+      const got = await until(async () => { const r = await acts(sid); return r.length > before.acts && r.some((x) => x.action === 'memory_candidates') ? r : null; }, 120_000, 3000);
+      const added = rawNow().slice(before.raw.length);
+      const wasForced = forced().length > before.forced;
+      const mentioned = mustMention.test(added);
+      return { ok: wasForced && !!got && mentioned,
+        text: `${leg} ${wasForced && got && mentioned ? '✓' : '✗'} 第 2 轮${wasForced ? '被加评' : '没加评'};记忆候选${got ? '有' : '无'}${mentioned ? '(提到了这件事)' : ''}:「${added.replace(/\s+/g, ' ').trim().slice(0, 140)}」;答「${t2.content.replace(/\s+/g, ' ').slice(0, 60)}」` };
+    };
+    const a1 = await correction('A1', '给我一条给新项目装依赖的命令,只要命令。', '不对,我的项目都用 pnpm,别给我 npm 的命令。', /pnpm/i);
+    const a2 = await correction('A2', '帮我写一句提交说明,改动是修复登录页的验证码不刷新。', '不对,提交说明要用英文写,开头带 fix: 这样的前缀。', /英文|English|fix:/i);
+
+    // B 负对照:第二句不是纠正
+    const sidB = `live-sig-B-${stamp}`;
+    const b1 = await run(sidB, '给我一条给新项目装依赖的命令,只要命令。');
+    await settleFirst(sidB);
+    const bBefore = { acts: (await acts(sidB)).length, forced: forced().length };
+    const b2 = await run(sidB, '好,那再给我一条运行测试的命令。');
+    await sleep(20_000);
+    const bActs = (await acts(sidB)).length;
+    const okB = !b1.error && !b2.error && forced().length === bBefore.forced && bActs === bBefore.acts;
+
+    // C 调了半天被按停
+    const sidC = `live-sig-C-${stamp}`;
+    for (let i = 1; i <= 8; i++) writeFileSync(join(workspace, `sig-${i}.txt`), `value ${i * 7}\n`);
+    const stopped = await (async () => {
+      const { runId } = await api('/agent/runs', { method: 'POST', body: JSON.stringify({ session_id: sidC, model_id: MODEL, message: `依次读取 ${workspace} 下的 sig-1.txt 到 sig-8.txt(每次只读一个文件,读完一个再读下一个),最后把八个文件里的数字加起来告诉我。`, agent_config: { ...AGENT_CONFIG } }) });
+      const out = { tools: 0, aborted: false, ended: '', error: null };
+      const ac = new AbortController();
+      const timer = setTimeout(() => ac.abort(), 180_000);
+      try {
+        const res = await fetch(`${base}/agent/runs/${runId}/events`, { headers: { Authorization: `Bearer ${TOKEN}` }, signal: ac.signal });
+        let buf = '';
+        outer: for await (const chunk of res.body) {
+          buf += Buffer.from(chunk).toString('utf8');
+          let i;
+          while ((i = buf.indexOf('\n\n')) >= 0) {
+            const frame = buf.slice(0, i); buf = buf.slice(i + 2);
+            for (const line of frame.split('\n')) {
+              if (!line.startsWith('data:')) continue;
+              let e; try { e = JSON.parse(line.slice(5).trim()); } catch { continue; }
+              if (e.type === 'tool_call') {
+                out.tools += 1;
+                if (out.tools === 3 && !out.aborted) { out.aborted = true; await api(`/agent/runs/${runId}/abort`, { method: 'POST', body: '{}' }).catch((err) => { out.error = String(err.message); }); }
+              } else if (e.type === 'done') { out.ended = 'done'; break outer; }
+              else if (e.type === 'error') { out.ended = e.payload?.aborted ? 'aborted' : `error:${e.payload?.error}`; break outer; }
+            }
+          }
+        }
+      } catch (e) { out.error = String(e?.message || e); } finally { clearTimeout(timer); }
+      return out;
+    })();
+    const cBefore = { forced: forced().length, acts: (await acts(sidC)).length };
+    const stoppedOk = stopped.ended === 'aborted' && stopped.tools >= 3;
+    const notAtStop = cBefore.acts === 0; // 中止那一刻不评
+    const c2 = stoppedOk ? await run(sidC, '不用都读了,直接告诉我 sig-1.txt 里写的是什么就行。') : { error: '没停成', content: '' };
+    const cForced = stoppedOk ? await until(async () => (forced().length > cBefore.forced ? true : null), 90_000, 2000) : null;
+    if (cForced) await sleep(8000);
+    const cActs = (await acts(sidC)).map((r) => r.action);
+    const okC = stoppedOk && notAtStop && !c2.error && !!cForced;
+
+    return {
+      ok: a1.ok && a2.ok && okB && okC,
+      detail: `${a1.text} | ${a2.text}`
+        + ` | B ${okB ? '✓' : '✗'} 第二句是普通追问:第 2 轮${forced().length === bBefore.forced && bActs === bBefore.acts ? '没评' : '被评了'}${b1.error || b2.error ? ` 错 ${b1.error || b2.error}` : ''}`
+        + ` | C ${okC ? '✓' : '✗'} 按停:${stopped.ended || stopped.error || '?'},已调工具 ${stopped.tools} 次;中止当场${notAtStop ? '没评' : '评了'};下一轮${cForced ? '带着信号评了' : '没带信号评'};复盘留下的活动 ${cActs.join('/') || '无'}${c2.error ? ` 错 ${c2.error}` : ''}`,
+      output: `【信号评审的日志行】\n${forced().join('\n')}\n\n【.memory-raw.md】\n${rawNow()}`,
     };
   });
   // 09-25 控制面审批(approvals.controlPlaneCall,e0ad04aa):agent 发起的「建出之后无人值守、以完全放行跑」的工作

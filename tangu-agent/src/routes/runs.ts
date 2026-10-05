@@ -400,7 +400,7 @@ router.post('/agent/runs/:id/abort', authMiddleware, async (req: AuthRequest, re
     const userId = req.user!.userId;
     const run = await getRunForUser(req.params.id, userId);
     if (!run) return res.status(404).json({ detail: 'Run not found' });
-    abortRun(req.params.id);
+    abortRun(req.params.id, { byUser: true });
     const settled = await waitForRunSettlement(req.params.id);
     const fresh = await getRunForUser(req.params.id, userId);
     // success 只代表接受取消;settled + status 才代表已退出。字段向后兼容现有客户端/网关。
