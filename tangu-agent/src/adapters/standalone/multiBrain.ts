@@ -142,6 +142,8 @@ function synthesizeCosyVoiceWs(baseUrl: string, apiKey: string | undefined, apiM
   const taskId = randomUUID();
   const wsUrl = `wss://${new URL(baseUrl).host}/api-ws/v1/inference`; // dashscope(-intl).aliyuncs.com 经典实时端点
   return new Promise<SpeechResult>((resolve, reject) => {
+    // 进来时已经取消了的:下面那个 abort 监听等不到已经发生过的事件,不拦就会照常连上去把文本发出去
+    if (req.signal?.aborted) { reject(new Error('cosyvoice tts aborted')); return; }
     const chunks: Buffer[] = [];
     let started = false, settled = false;
     let timer: NodeJS.Timeout | undefined;
@@ -203,9 +205,12 @@ export function createMultiBrain(httpBrain: CloudBrainServices, registry: Provid
   };
   /** 图像 / 语音:直接拿 provider 的 key 发请求,不经 resolveModelAndKey。订阅登录的 provider 在这里补上对话那条路的同一套续期 ——
    *  调用前按到期时间续;上游明说凭证失效时强制续一次,换到了新 token 才再试一次(同一个 token 再试必败)。
-   *  显式配置的 provider(用户自己的 key)原样直调:syncOAuth 对它立刻返回 undefined,失败也不重试。 */
+   *  显式配置的 provider(用户自己的 key)原样直调,失败也不重试。 */
   const withFreshKey = async <T>(providerId: string, call: (apiKey: string | undefined) => Promise<T>): Promise<T> => {
-    const keyNow = (): string | undefined => registry.list().find((x) => x.providerId === providerId)?.apiKey;
+    const now = () => registry.list().find((x) => x.providerId === providerId);
+    const keyNow = (): string | undefined => now()?.apiKey;
+    // 用户自己配 key 的 provider:不经任何 await,当场就调(与改之前同一个时序 —— 调用方紧跟着取消时,请求那头的取消监听来得及挂上)。
+    if (!now()?.oauth) return call(keyNow());
     await syncOAuth(providerId);
     const used = keyNow();
     try { return await call(used); } catch (e) {

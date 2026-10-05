@@ -286,7 +286,9 @@ export function freshOAuthCred(providerId: string, force = false): Promise<OAuth
       // 只换 token 三件套:模型目录等字段是别处(启动时的目录懒刷)写的,不拿续期前读到的旧值盖回去。
       updateProviderCred(providerId, (cur) => {
         out = cur;
-        if (!cur || next.access_token === tok.access_token || cur.refresh_token !== tok.refresh_token) return undefined;
+        // 没续上 = refresh 原样把传进去的那条还回来(next === tok)。不能拿「access_token 没变」当没续上:
+        // 有的端点续期只轮换 refresh_token、access_token 原样返回,那次不落盘,盘上就留着一个已经作废的 refresh_token。
+        if (!cur || next === tok || cur.refresh_token !== tok.refresh_token) return undefined;
         return (out = { ...cur, access_token: next.access_token, refresh_token: next.refresh_token, expires_at: next.expires_at });
       });
       return out;
@@ -347,10 +349,22 @@ export async function loadOAuthDirectProviders(): Promise<DirectProvider[]> {
       }
     }
     if (changed) {
-      // 只把这里算出来的非凭证字段补到盘上**此刻**的记录上(上面拉模型列表也是一次网络往返):
-      // token 三件套以盘上为准,不拿这一趟开头读到的旧值盖回去;期间登出了的不写回来。
-      const patch = Object.fromEntries(Object.entries({ baseUrl: tok.baseUrl, modelIds: tok.modelIds, modelIdsAt: tok.modelIdsAt, modelIdsClientVersion: tok.modelIdsClientVersion }).filter(([, v]) => v !== undefined));
-      updateProviderCred(id, (cur) => (cur ? { ...cur, ...patch } : undefined));
+      // 锁内对着盘上**此刻**的记录补(上面拉模型列表也是一次网络往返),token 三件套始终以盘上为准:
+      //  - 端点迁移与哪一次登录无关,照补;
+      //  - 模型目录是拿这一趟开头那个 token 拉的。盘上的 token 已经不是它(别的进程续过期,或换了账号重新登录)→ 目录不补
+      //    —— 换号的话那是另一个账号的目录,补上去还会被当成 24 小时内的新鲜缓存;改用盘上那条来装载,下次启动再拉;
+      //  - 期间登出了的不写回来,也不装载。
+      const fetchedWith = tok.access_token;
+      const catalogue = Object.fromEntries(Object.entries({ modelIds: tok.modelIds, modelIdsAt: tok.modelIdsAt, modelIdsClientVersion: tok.modelIdsClientVersion }).filter(([, v]) => v !== undefined));
+      let onDisk: OAuthTokens | undefined;
+      updateProviderCred(id, (cur) => {
+        if (!cur) return (onDisk = undefined);
+        const same = cur.access_token === fetchedWith;
+        onDisk = { ...cur, baseUrl: cfg.baseUrl, ...(same ? catalogue : {}) };
+        return same || cur.baseUrl !== cfg.baseUrl ? onDisk : undefined;
+      });
+      if (!onDisk) continue;
+      tok = onDisk;
     }
     const effectiveModelIds = normalizeProviderModelIds(id, tok.modelIds);
     out.push({

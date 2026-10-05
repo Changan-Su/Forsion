@@ -4,6 +4,9 @@ import { createProviderRegistry } from '../../llm/providerRegistry.js';
 import { freshOAuthCred } from '../../llm/providerOAuth.js';
 
 vi.mock('../../llm/providerOAuth.js', () => ({ freshOAuthCred: vi.fn() }));
+// 假 WebSocket:只记有没有被建出来(真的会连百炼)。
+const sockets = vi.hoisted(() => ({ opened: 0 }));
+vi.mock('ws', () => ({ default: class { constructor() { sockets.opened++; } on() {} send() {} close() {} } }));
 
 // CosyVoice 走 WS 取 pcm 后自封 WAV;微信只认头部合法的 WAV,这里守住头部字节正确。
 describe('pcmToWav', () => {
@@ -170,6 +173,25 @@ describe('订阅登录的凭证:生图 / 改图 / 朗读也在调用前续期,�
     expect(f).toHaveBeenCalledTimes(2);
     expect([bearer(f, 0), bearer(f, 1)]).toEqual(['Bearer sk-user', 'Bearer sk-user']);
     expect(freshOAuthCred).not.toHaveBeenCalled();
+  });
+
+  // Codex 评审 10-05:包了一层之后,用户自己配 key 的 provider 也要先过一个 await 才发请求 —— 调用方紧跟着取消时,
+  // 请求那头的取消监听挂晚了(百炼的流式合成走 WebSocket,监听等不到已经发生过的取消,文本照发)。
+  it('用户自己配 key 的 provider:当场就发,不先过任何 await', () => {
+    const { brain: b } = make();
+    const f = stubFetch(png, audio);
+    void b.images!.generate({ model: 'gpt-image-1', prompt: 'x' }).catch(() => {});
+    void b.tts!.synthesize({ model: 'tts-1', text: 'hi' }).catch(() => {});
+    expect(f).toHaveBeenCalledTimes(2); // 这一行与上面两次调用之间没有 await
+  });
+
+  it('百炼流式合成:进来时已经取消 → 不建连接', async () => {
+    const registry = createProviderRegistry([{ providerId: 'bailian', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', apiKey: 'sk-user', ttsModelIds: ['cosyvoice-v2'] }]);
+    const b = createMultiBrain(httpBrain, registry);
+    const ac = new AbortController(); ac.abort();
+    sockets.opened = 0;
+    await expect(b.tts!.synthesize({ model: 'cosyvoice-v2', text: 'hi', signal: ac.signal })).rejects.toThrow('aborted');
+    expect(sockets.opened).toBe(0);
   });
 
   it('续期本身抛错 → 不拦调用,带着现有的 token 照发', async () => {
