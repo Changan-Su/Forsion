@@ -226,7 +226,7 @@ export function openDb(dbPath: string, opts?: { newTab?: boolean }): void {
   ws.openView('amadeus-db', { dbPath }, 'main', opts?.newTab ? { newTab: true } : undefined)
 }
 
-/** 打开独立 PDF 视图(可批注):已有认领该文件的 tab → 激活(带页号则广播跳页);否则主区打开。page = 1-based。 */
+/** 打开内置 PDF 阅读器(只读):已有认领该文件的 tab → 激活(带页号则广播跳页);否则主区打开。page = 1-based。 */
 export function openPdf(pdfPath: string, page?: number, opts?: { newTab?: boolean; quote?: string }): void {
   actThrottled('view.open', { f: pdfPath }, `view.open|${pdfPath}`)
   const ws = useWorkspace.getState()

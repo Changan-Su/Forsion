@@ -848,7 +848,7 @@ function makePageStore(opts: PageStoreOptions = {}) {
       const raw = name.trim()
       if (!raw) return
       const src = sourcePath ?? get().activePage ?? undefined
-      // PDF 目标 [[report.pdf#page=N]] → 应用内可批注阅读器(必须先接住 raw:linkTarget 会砍掉 #page=)。
+      // PDF 目标 [[report.pdf#page=N]] → 应用内 PDF 阅读器(必须先接住 raw:linkTarget 会砍掉 #page=)。
       const pdf = parsePdfLinkInner(raw)
       if (pdf) {
         const pdfFile = resolveFileName(pdf.target, get().files, src)

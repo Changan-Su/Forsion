@@ -42,7 +42,7 @@ registerMessages({
   'blockhost.removeEmbed': { zh: '移除嵌入', en: 'Remove embed' },
   'blockhost.delete': { zh: '删除', en: 'Delete' },
   'blockhost.openInTab': { zh: '在 Forsion 标签页中打开', en: 'Open in a Forsion tab' },
-  'blockhost.openInTabAnnotate': { zh: '在 Forsion 标签页中打开（可批注）', en: 'Open in a Forsion tab (with annotations)' },
+  'blockhost.openPdfInTab': { zh: '在 Forsion 标签页中打开', en: 'Open in a Forsion tab' },
   'blockhost.openWithSystem': { zh: '用系统默认程序打开', en: 'Open with the default app' },
   'blockhost.open': { zh: '打开 ↗', en: 'Open ↗' },
   'blockhost.startAt': { zh: '起播时刻', en: 'Start time' },
@@ -58,7 +58,7 @@ registerMessages({
   'blockhost.unknownType': { zh: '未知块类型：{type}', en: 'Unknown block type: {type}' },
 })
 
-// PDF 预览用自家可批注阅读器的只读形态(Chromium 内置 iframe 阅读器观感突兀且不认主题)。
+// PDF 预览用内置阅读器的内嵌形态(Chromium 内置 iframe 阅读器观感突兀且不认主题)。
 // 懒加载:pdf.js viewer 较重,chunk 与独立 PDF 视图共用,笔记里真有 PDF 块才拉。
 const PdfEmbedViewer = lazyRetry(() => import('../pdf/PdfAnnotator').then((m) => ({ default: m.PdfAnnotator })))
 
@@ -767,9 +767,9 @@ export const BlockHost = memo(function BlockHost({
                 </button>
                 <button
                   className="embed-media-btn"
-                  title={embedFile.kind === 'pdf' ? t('blockhost.openInTabAnnotate') : t('blockhost.openWithSystem')}
+                  title={embedFile.kind === 'pdf' ? t('blockhost.openPdfInTab') : t('blockhost.openWithSystem')}
                   onClick={() => {
-                    // PDF 在应用内新 tab 打开可批注阅读器(openWikiLink 的 .pdf 分支);音视频仍交给系统播放器。
+                    // PDF 在应用内新 tab 打开阅读器(openWikiLink 的 .pdf 分支);音视频仍交给系统播放器。
                     if (embedFile.kind === 'pdf') openWikiLink(embedFile.name, pagePath)
                     else if (pagePath) void amadeus.openAttachment(pagePath, embedFile.name)
                   }}
@@ -781,7 +781,7 @@ export const BlockHost = memo(function BlockHost({
                 pdfVaultPath ? (
                   <div className="embed-pdf embed-pdf-live">
                     <Suspense fallback={<div className="embed-pdf-loading">{t('blockhost.loadingPdf')}</div>}>
-                      <PdfEmbedViewer pdfPath={pdfVaultPath} readOnly />
+                      <PdfEmbedViewer pdfPath={pdfVaultPath} embed />
                     </Suspense>
                   </div>
                 ) : (

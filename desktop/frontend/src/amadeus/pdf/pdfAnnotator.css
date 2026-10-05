@@ -1,4 +1,4 @@
-/* 可批注 PDF 阅读器布局 + 主题适配(对标 PDF Expert:左缩略图栏/顶部工具栏/底部悬浮胶囊)。
+/* 内置 PDF 阅读器(只读)布局 + 主题适配:左缩略图栏/顶部工具条/底部悬浮胶囊。
    用 amadeus/lovable 真实 token(--text/--border/--accent/…),
    页面样式由 pdfjs-dist/legacy/web/pdf_viewer.css 提供,这里覆写其配色变量对齐当前主题。 */
 
@@ -13,15 +13,6 @@
   min-height: 0;
   color: var(--text);
   font-family: var(--font-ui, inherit);
-  /* pdf.js 编辑器 UI(浮动「高亮」按钮/工具栏/对话框)默认是 pdf.js 蓝 → 对齐主题 accent。
-     未知/改名的变量被忽略(无害),已知会命中的对齐即可。 */
-  --editor-toolbar-bg: var(--bg-card, var(--surface));
-  --editor-toolbar-fg-color: var(--text);
-  --button-primary-bg-color: var(--accent);
-  --button-primary-hover-bg-color: var(--accent);
-  --button-primary-active-bg-color: var(--accent);
-  --dialog-bg-color: var(--bg-card, var(--surface));
-  --dialog-border-color: var(--border);
 }
 
 /* ---------- 顶部工具栏 ---------- */
@@ -69,31 +60,6 @@
 
 .pdfa-sep { width: 1px; height: 18px; background: var(--border); margin: 0 4px; flex: 0 0 auto; }
 .pdfa-flex { flex: 1 1 auto; }
-
-/* 形状选项(线宽/透明度)——只在形状工具激活时出现 */
-.pdfa-mini {
-  height: 26px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm, 6px);
-  background: transparent;
-  color: var(--text);
-  font-size: 12px;
-  cursor: pointer;
-}
-.pdfa-mini option { background: var(--bg-card, var(--surface)); color: var(--text); }
-.pdfa-tool:disabled { opacity: 0.35; cursor: default; }
-
-.pdfa-swatches { display: inline-flex; gap: 5px; align-items: center; }
-.pdfa-swatch {
-  width: 18px;
-  height: 18px;
-  padding: 0;
-  border: 2px solid transparent;
-  border-radius: 5px;
-  cursor: pointer;
-  box-shadow: inset 0 0 0 1px var(--border);
-}
-.pdfa-swatch.on { border-color: var(--accent-ink, var(--accent)); }
 
 /* ---------- 主体:侧栏 + 视口 ---------- */
 
@@ -167,89 +133,27 @@
   overflow: auto;
   background: var(--overlay-light, var(--bg));
   isolation: isolate;
-  /* 写后重载会整棵换掉 pdfViewer 子树;浏览器滚动锚定会对着防闪快照层做补偿,把 scrollTop 拽偏。 */
+  /* 文件变化后的重载会整棵换掉 pdfViewer 子树;浏览器滚动锚定会对着防闪快照层做补偿,把 scrollTop 拽偏。 */
   overflow-anchor: none;
-  /* 快捷键归属:tabIndex=-1 + 按下聚焦(见 focusSelf),焦点环不要。 */
+  /* 键盘滚动:tabIndex=-1 + 按下聚焦(见 focusSelf),焦点环不要。 */
   outline: none;
 }
 
-/* ⚠️文本标记类注释的 section 纯装饰(无弹窗无交互),但 pdf.js 只在**高亮编辑模式**下才关掉注释层的
-   点击区(AnnotationEditorLayer.updateMode:NONE 分支 toggleAnnotationLayerPointerEvents(true))。
-   于是鼠标/下划线等模式下,这些区块盖在文字上吃掉 mousedown,textLayer 拿不到 .selecting →
-   已标注过的文字再也选不中。这里让它们永不挡选区;链接/便签(有弹窗要点)不动。
-   注意 pdf.js 的类名是 strikeoutAnnotation(小写 o),写成 strikeOut 会静默失效。 */
+/* ⚠️文本标记类注释的 section 纯装饰(无弹窗无交互),但它盖在文字层上面、默认有点击区:
+   不关掉的话这些区块吃掉 mousedown,textLayer 拿不到 .selecting → 已标注过的文字再也选不中。
+   这里让它们永不挡选区;链接/便签(有弹窗要点)不动。
+   注意 pdf.js 的类名是 strikeoutAnnotation(小写 o),写成 strikeOut 会静默失效。
+   仪器:node scripts/pdf-selection.check.cjs。 */
 .pdfa-container .annotationLayer section:is(
   .highlightAnnotation, .underlineAnnotation, .squigglyAnnotation, .strikeoutAnnotation, .inkAnnotation
 ) { pointer-events: none; }
 
-/* 工具光标:标记类=文本选择,便签=放置,形状=十字。 */
-.pdfa-container[data-tool='underline'] .textLayer,
-.pdfa-container[data-tool='squiggly'] .textLayer,
-.pdfa-container[data-tool='strikeout'] .textLayer { cursor: text; }
-.pdfa-container[data-tool='note'] .page { cursor: copy; }
-.pdfa-container:is([data-tool='rect'], [data-tool='circle'], [data-tool='line'], [data-tool='arrow']) .page {
-  cursor: crosshair;
-}
-/* 形状拖拽时别让文字层抢走指针(否则拖出选区、预览抖动)。 */
-.pdfa-container:is([data-tool='rect'], [data-tool='circle'], [data-tool='line'], [data-tool='arrow']) :is(.textLayer, .annotationLayer section) {
-  pointer-events: none;
-}
-/* 手写笔/橡皮:事件穿透同形状;touch-action 关掉,数位笔/触屏一划才是写字/擦除不是滚页。 */
-.pdfa-container:is([data-tool='pen'], [data-tool='eraser']) { touch-action: none; }
-.pdfa-container[data-tool='pen'] .page { cursor: crosshair; }
-.pdfa-container[data-tool='eraser'] .page {
-  cursor: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='17' height='17'><circle cx='8.5' cy='8.5' r='7' fill='rgba(255,255,255,0.55)' stroke='black' stroke-width='1.5'/></svg>") 8 8, crosshair;
-}
-.pdfa-container:is([data-tool='pen'], [data-tool='eraser']) :is(.textLayer, .annotationLayer section) {
-  pointer-events: none;
-}
-
-/* 写后重载的防闪快照层:静态 canvas 拷贝压在重画中的页面上,不吃事件。
+/* 重载的防闪快照层:静态 canvas 拷贝压在重画中的页面上,不吃事件。
    spacer = 旧文档滚动尺寸的撑高垫片:setDocument 清空页面时滚动区不许塌缩(塌缩会把
    scrollTop 钳回 0,惯性滚动从 0 接着滚 → 「莫名回到首页」)。 */
 .pdfa-hold { position: absolute; top: 0; left: 0; width: 0; height: 0; pointer-events: none; }
 .pdfa-hold canvas { position: absolute; z-index: 3; }
 .pdfa-hold-spacer { position: absolute; top: 0; left: 0; visibility: hidden; }
-
-/* 手写预览层:挂在滚动容器里,0×0 锚点 + 每页一个绝对定位 svg(内容坐标)→ 滚动天然跟随。 */
-.pdfa-inkov { position: absolute; top: 0; left: 0; width: 0; height: 0; pointer-events: none; }
-.pdfa-inkov svg { position: absolute; z-index: 4; overflow: visible; }
-
-/* 注释选中:0×0 锚点定位到页原点,子元素(虚线框/替身/浮条)在页内绝对定位;浮条要吃点击,其余穿透。 */
-.pdfa-selov { position: absolute; width: 0; height: 0; overflow: visible; pointer-events: none; z-index: 5; }
-.pdfa-selbox {
-  position: absolute;
-  border: 1.5px dashed var(--primary, #4c8dff);
-  border-radius: 2px;
-  background: color-mix(in srgb, var(--primary, #4c8dff) 6%, transparent);
-}
-.pdfa-selghost { position: absolute; top: 0; left: 0; overflow: visible; }
-.pdfa-marquee {
-  position: absolute;
-  border: 1px dashed var(--primary, #4c8dff);
-  background: color-mix(in srgb, var(--primary, #4c8dff) 8%, transparent);
-}
-.pdfa-selbar {
-  position: absolute;
-  display: inline-flex;
-  gap: 4px;
-  padding: 3px;
-  border-radius: 7px;
-  background: var(--bg-elevated, var(--bg));
-  border: 1px solid var(--border);
-  box-shadow: var(--card-shadow);
-  pointer-events: auto;
-  white-space: nowrap;
-}
-
-/* 鼠标模式悬停在可编辑注释上 → 手型(几何命中由 JS 打 data-annhover;
-   文字层自带 cursor:text,必须连 span 一起压过)。 */
-.pdfa-container[data-annhover='1'] .page,
-.pdfa-container[data-annhover='1'] .textLayer,
-.pdfa-container[data-annhover='1'] .textLayer span { cursor: pointer !important; }
-
-/* 拖拽预览:纯覆盖层,不吃事件。 */
-.pdfa-preview { position: absolute; inset: 0; pointer-events: none; z-index: 4; }
 
 /* pdf.js 原生注释弹窗(便签内容)硬编码淡黄底 rgb(255 255 153)+黑字,暗色下刺眼 → 对齐主题。 */
 .pdfa-container .annotationLayer .popup {
@@ -304,21 +208,6 @@
 .pdfa-pagetotal { color: var(--text-muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
 
 /* ---------- 状态层 ---------- */
-
-.pdfa-notice {
-  position: absolute;
-  top: 10px;
-  left: 50%;
-  transform: translateX(-50%);
-  padding: 6px 14px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: var(--bg-card, var(--surface));
-  color: var(--text);
-  font-size: 12px;
-  box-shadow: var(--card-shadow);
-  z-index: 6;
-}
 
 .pdfa-state {
   position: absolute;

@@ -8,8 +8,9 @@
  *   S0 夹具:资料/ 下 笔记.md(内嵌 ![[表.db]])、图.png、书.pdf 各开一个标签
  *   S1 图片标签拖进右侧栏再折叠 → 它只剩 stash 里的一条
  *   S2 PDF 标签「移到新窗口」→ 分离窗口里的标签
- *   S3 另开一个 PDF 画一笔墨迹(2.5s 防抖内未落盘)后紧接着树上改文件夹名:stash 条目 / 分离窗口的标签 / 编辑器标签
- *      都跟到 资料改/;那一笔随文件挪过去,旧位置没被 PdfAnnotator 的卸载收尾写回来(整份 PDF 的幽灵副本)。
+ *   S3 另开一个 PDF 后紧接着树上改文件夹名:stash 条目 / 分离窗口的标签 / 编辑器标签都跟到 资料改/;
+ *      那份 PDF 原样随文件夹挪过去,旧位置没有被建回来。(内置阅读器 2026-10-05 起只读、不写盘,
+ *      原先「画一笔墨迹、卸载收尾把整份 PDF 写回旧位置」那类事故没有了;这里留着「开着的阅读器不碰盘」这一条。)
  *      笔记里内嵌表接着改 → 写进 资料改/表.db(冒烟:桌面 watcher 在旧路径消失时会按基名把 ![[表.db]] 的条目
  *      重新解析过去,所以这条在桌面上分辨不出 dbStore 的改指 —— 那半由 pageStore.filestores.test.ts 证明)
  *   S4 树上删文件夹:stash 条目摘掉、分离窗口的标签关掉(就地变 home)、编辑器标签回落到还活着的笔记;没有文件被建回来
@@ -163,28 +164,19 @@ async function main() {
     check('S2 PDF 标签移进分离窗口(主窗口里已经没有它)', inDetached && !(await tabTitles()).includes('书.pdf'),
       JSON.stringify(panelsOf(await detachedLayout())))
 
-    // ── S3 另开一个 PDF 画一笔墨迹(不切工具 = 不立即提交,2.5s 防抖),紧接着树上改文件夹名 ─────────
+    // ── S3 另开一个 PDF(内置阅读器开着它),紧接着树上改文件夹名 ───────────────────────────────
     await row('批注.pdf').click({ modifiers: ['Meta'] })
     await until(async () => (await tabTitles()).includes('批注.pdf'))
     await win.locator('.dv-tab', { hasText: /^批注\.pdf$/ }).first().click()
-    const pageBox = await until(async () => {
+    await until(async () => {
       const b = await win.locator('.amx-pdfview .page').first().boundingBox()
       return b && b.width > 50 && b.height > 50 ? b : null
     }, 15_000)
-    await win.locator('button.pdfa-tool[title^="手写笔"]').first().click()
-    const x0 = pageBox.x + pageBox.width * 0.3
-    const y0 = pageBox.y + Math.min(pageBox.height * 0.3, 160)
-    await win.mouse.move(x0, y0)
-    await win.mouse.down()
-    await win.mouse.move(x0 + 80, y0 + 30, { steps: 12 })
-    await win.mouse.up()
-    const inkedAt = Date.now()
 
     await menu(folder('资料'), '重命名')
     const nameInput = win.locator('.dialog input').last()
     await nameInput.fill('资料改')
     await nameInput.press('Enter')
-    const renameLag = Date.now() - inkedAt
     await until(async () => fs.existsSync(path.join(vault, '资料改', '表.db')))
     check('S3a 磁盘上文件夹已改名', fs.existsSync(path.join(vault, '资料改', '表.db')) && !fs.existsSync(dir))
     const stashFollowed = await until(async () => (await rightStash()).some((v) => v.params && v.params.imagePath === '资料改/图.png'))
@@ -193,14 +185,11 @@ async function main() {
     check('S3c 分离窗口里的 PDF 标签跟到 资料改/(主进程转来的路径广播)', detachedFollowed, JSON.stringify(panelsOf(await detachedLayout())))
     const editorFollowed = await until(async () => panelsOf(await mainLayout()).some((p) => p.notePath === '资料改/笔记.md'))
     check('S3d 编辑器标签跟到 资料改/笔记.md', editorFollowed)
-    // 前置态:改名必须在墨迹的 2.5s 提交防抖之内发起,否则那一笔早就正常落盘了,下面这条就测不到卸载收尾
-    check('S3g0 改名在墨迹落盘之前发起(< 2.5s)', renameLag < 2500, `lag=${renameLag}ms`)
-    const inked = await until(async () => {
-      try { return !fs.readFileSync(path.join(vault, '资料改', '批注.pdf')).equals(INKPDF) } catch { return false }
-    }, 8000)
+    const movedPdf = await until(async () => fs.existsSync(path.join(vault, '资料改', '批注.pdf')), 8000)
     await win.waitForTimeout(2500)
-    check('S3g PDF 里那一笔随文件挪到 资料改/,旧位置没被卸载收尾写回一份', inked && !fs.existsSync(path.join(dir, '批注.pdf')),
-      `新位置有墨迹=${!!inked} 旧位置=${fs.existsSync(path.join(dir, '批注.pdf'))}`)
+    const sameBytes = movedPdf && fs.readFileSync(path.join(vault, '资料改', '批注.pdf')).equals(INKPDF)
+    check('S3g 开着的 PDF 原样随文件夹挪到 资料改/,旧位置没被建回来', sameBytes && !fs.existsSync(path.join(dir, '批注.pdf')),
+      `新位置字节一致=${!!sameBytes} 旧位置=${fs.existsSync(path.join(dir, '批注.pdf'))}`)
 
     // 笔记里的内嵌表:引用 ![[表.db]] 没变,dbStore 里那条是改名前载入的 —— 接着改一个格子
     await win.locator('.dv-tab', { hasText: /^笔记$/ }).first().click()

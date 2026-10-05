@@ -62,7 +62,7 @@ Forsion（扶桑）是一个**本地优先的 AI 第二大脑**：把材料、�
 - [多维表](amadeus/databases.md) — 列类型、多视图、筛选排序统计
 - [白板](amadeus/whiteboard.md) — Excalidraw 兼容的无限画布、纸张与多页
 - [仪表盘](amadeus/dashboard.md) — 网格里摆卡片,把任何东西摆成一个面板
-- [PDF 批注](amadeus/pdf-annotation.md) — 批注直接写进 PDF 文件
+- [PDF 阅读](amadeus/pdf-annotation.md) — 内置阅读器只读,批注交给插件
 - [日历](amadeus/calendar.md) — 把表格与待办装进日历,订阅外部日历
 - [在线同步与共享](amadeus/cloud-and-sharing.md) — 云端库、第三方网盘、页面分享
 
