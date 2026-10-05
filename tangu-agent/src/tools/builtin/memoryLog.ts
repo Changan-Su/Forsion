@@ -79,7 +79,8 @@ export const memoryLogProvider: ToolProvider = {
   tools: () => [
     {
       name: 'remember',
-      // 临时成员(团队 / 讨论里现写的一次性人设)没有自己的文件夹:不给。以前照给,agent 级的一写就平白建出 agents/<临时名>/。
+      // 临时成员(团队 / 讨论里现写的一次性人设)不给:它没有自己的身份,不该留下记忆,更不该往项目记忆里写。
+      // 以前照给,agent 级的一写就落在 agents/<临时名>/ 里。(读的那几条路仍会建出这个空目录,那是原有行为,这里没动。)
       isEnabledFor: (profile, ctx) => profile.capabilities.memory && !ctx.ephemeral,
       definition: REMEMBER.base,
       definitionFor: rememberDefinitionFor,

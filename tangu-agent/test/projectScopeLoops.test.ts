@@ -5,7 +5,8 @@
  * remember 也没有「项目级」这个选项(写了报「这个会话没有项目」)。
  *   ① 这三种行自己没有项目时,沿 parent_session_id 往上找(只认同一个用户、最多 4 层、别的种类不找);
  *   ② 成员会话里读得到、写得进同一份项目记忆;
- *   ③ 临时成员(没有自己的文件夹)不给 remember / log_event —— 以前照给,写了会平白多出一个 agents/<临时名>/ 目录;
+ *   ③ 临时成员(一次性的人设)不给 remember / log_event —— 以前照给,它能往自己名下的记忆、日志乃至(这次起)项目记忆里写东西。
+ *      只管写:组装提示时读记忆的那条路仍会建出空的 agents/<临时名>/ 目录,那是原有行为,不在这里;
  *   ④ 子 agent(与父会话同一个会话 id):remember 本来就带项目级、写得进(钉住现状);这次补的是它提示里的项目记忆段。
  * 建行的形状以引擎自己的 INSERT 为准:teamRuns.ts findOrCreateMemberSession、discussion.ts、delegateTranscript.ts
  * (各自的形状由 test/teamRuns.test.ts、test/delegateTranscript.test.ts 钉着)。
@@ -148,13 +149,13 @@ describe('③ 临时成员(没有自己的文件夹)', () => {
     for (const n of ['remember', 'log_event']) { expect(named.has(n), `具名成员 ${n}`).toBe(true); expect(temp.has(n), `临时成员 ${n}`).toBe(false); }
     expect(temp.has('read_file')).toBe(true); // 别的工具不受影响
   });
-  it('直接调也拒:不写任何一级,也不平白建出 agents/<临时名>/', async () => {
+  it('直接调也拒:两级记忆和日志都没写进去', async () => {
     const out = await call('member', { action: 'add', scope: 'agent', fact: 'A temporary persona should not leave memory behind.' }, { ephemeral: true }, 'temp-reviewer');
     expect(out).toMatch(/^Error: /);
     expect(await call('member', { action: 'add', scope: 'project', fact: 'A temporary persona should not write project memory.' }, { ephemeral: true }, 'temp-reviewer')).toMatch(/^Error: /);
     const logged = await runWithAgentSlug('temp-reviewer', async () => String(await logEvent.execute({ text: 'did a thing' }, ctxOf('member', { ephemeral: true }))));
     expect(logged).toMatch(/^Error: /);
-    expect(existsSync(join(home, 'agents', 'temp-reviewer'))).toBe(false);
+    expect(existsSync(join(home, 'agents', 'temp-reviewer'))).toBe(false); // 工具这条路上连目录都没碰
     expect((await openProjectMemory((await resolveProjectMemory(USER, 'member'))!)).snapshot().entries.map((e) => e.content)).toEqual(['Releases are cut from the release branch only.']);
   });
 });
