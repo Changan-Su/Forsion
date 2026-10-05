@@ -82,6 +82,28 @@ describe('① 给判官看的「已经记着的 / 已经提过的」', () => {
   });
 });
 
+describe('① 续:超长的一条', () => {
+  // Codex 评审 10-05:最新的一条比整段额度还长(手改 MEMORY.md 写得出来)时,以前一条都不给判官看
+  it('超长的一条只给开头一截,别的条目照样在', () => {
+    const out = projectKnownForJudge(['Deploys go out on Fridays', `Long note ${'x'.repeat(PROJECT_KNOWN_ENTRY_CHARS + 1)}`], []);
+    expect(out).toContain('- Deploys go out on Fridays');
+    expect(out).toContain('- Long note xxx');
+    expect(out).toContain('…');
+    expect(out).not.toMatch(/not shown/);
+    expect(out.length).toBeLessThan(1000);
+  });
+  it('额度按实际字数算:换行只算在两行之间', () => {
+    // 9 行各 400 字 + 1 行 391 字 + 9 个换行 = 正好 4000 → 全放得下;最老那条多 1 个字就放不下它
+    const nine = Array.from({ length: 9 }, () => 'y'.repeat(398));
+    const exact = projectKnownForJudge(['w'.repeat(389), ...nine], []);
+    expect(exact.length).toBe(PROJECT_KNOWN_ENTRY_CHARS);
+    expect(exact).not.toMatch(/not shown/);
+    const over = projectKnownForJudge(['w'.repeat(390), ...nine], []);
+    expect(over.split('\n').filter((l) => l.startsWith('- ')).length).toBe(9);
+    expect(over).toContain('(1 older saved entry not shown)');
+  });
+});
+
 describe('② 词面闸:新的一句是已有某条里连着的一段原话才算重复', () => {
   const e = (content: string) => ({ content });
   it('少说几个字 / 截了半句 / 只差标点 → 已有那条把它说全了', () => {

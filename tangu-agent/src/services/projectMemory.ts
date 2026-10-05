@@ -205,14 +205,16 @@ export function coveringProjectEntry<T extends { content: string }>(entries: rea
  *  而判官认「这件事已经记过了」只靠这一段(10-05 代码走查发现的盲区)。 */
 export const PROJECT_KNOWN_ENTRY_CHARS = 4000;
 export const PROJECT_KNOWN_PROPOSED_CHARS = 1000;
+const PROJECT_KNOWN_ITEM_CHARS = 400; // 单条只给判官看这么多:认「这件事记过了」够用;手改 MEMORY.md 写出的超长一条不至于把别的全挤掉
 export function projectKnownForJudge(entries: readonly string[], proposed: readonly string[]): string {
   const newest = (items: readonly string[], max: number): { lines: string[]; hidden: number } => {
     const lines: string[] = [];
     let used = 0;
     for (const item of [...items].reverse()) {
-      const line = `- ${item}`;
-      if (used + line.length + 1 > max) break;
-      lines.unshift(line); used += line.length + 1;
+      const line = `- ${item.length > PROJECT_KNOWN_ITEM_CHARS ? `${item.slice(0, PROJECT_KNOWN_ITEM_CHARS)}…` : item}`;
+      const cost = line.length + (lines.length ? 1 : 0); // 换行只算在两行之间
+      if (used + cost > max) break;
+      lines.unshift(line); used += cost;
     }
     return { lines, hidden: items.length - lines.length };
   };
