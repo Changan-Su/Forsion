@@ -920,8 +920,8 @@ async function main() {
     //   display:none 后 rect 全 0 → 该分支永不命中,落点全交给「正文半屏分屏」分支;落成后占位退位、tab 条复现。
     //   这两步都在隐藏规则的下游,所以必须真拖一次:合成受控拖放层那三个原生事件(dragstart 在 .wb-tab 上,
     //   dragover/drop 落在左栏正文中心;落点由全局监听按 elementFromPoint 自己算,与 dispatch 目标无关)。
-    //   ⚠️先用 ＋ 多开一个主区 tab:把主区**唯一**的 tab 拖走会顺带销毁主区组、home 空态占位并进同一个组,
-    //   断言就得在一堆与本题无关的收支里辨认目标(实测踩过)。
+    //   ⚠️先用 ＋ 多开一个主区 tab,拖的就是它:主页那张是固定 View(SpaceDefinition.pinned,10-04 起),
+    //   拖不出主区、连落点提示都不给;带关闭钮的那张才是没被固定的。
     await enterHome(win)
     await win.click('.dv-new-tab')
     await win.waitForTimeout(500)
@@ -930,7 +930,7 @@ async function main() {
     const dropped = await win.evaluate(`(async () => {
       const nap = (ms) => new Promise((r) => setTimeout(r, ms))
       const icons = () => [...document.querySelectorAll('.wb-tab--icon')]
-      const tab = [...document.querySelectorAll('.wb-tab:not(.wb-tab--icon)')].find((t) => !t.classList.contains('wb-tab--empty'))
+      const tab = [...document.querySelectorAll('.wb-tab:not(.wb-tab--icon)')].find((t) => !t.classList.contains('wb-tab--empty') && t.querySelector('.wb-tab-close'))
       const side = [...document.querySelectorAll('.dv-groupview')].find((g) => g.querySelector('.wb-tab--icon'))
       const body = side && side.querySelector('.dv-content-container')
       if (!tab || !body) return { err: 'no tab / no empty side' }

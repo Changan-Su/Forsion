@@ -21,6 +21,8 @@
  *   7 ⚠️**折叠侧栏的 stash**:6 那条靠「fromJSON 抛 → 回退 resetLayout」兜住,但 stash 不在
  *     dockview blob 里 —— 活体面板全已注册时 applyNamed 成功,未注册的 stash 项原样进 store,
  *     一展开侧栏就 openView 一个死视图。tryRestoreLayout 早有 .filter(known),applyNamed 没有。
+ *     夹具:日历 Space 收起两侧的布局搬进 space:tangu,**进 Tangu 再关**主区那张日历 —— 日历 Space 里它是
+ *     固定 View(SpaceDefinition.pinned,10-04 起),没有关闭钮;到了 Tangu 它只是普通标签。
  *
  * ⚠️ 量的是 out/ 里的产物,源码改了没 `npm run build` 就是白测。
  * 跑:npm run check:calendarplugin
@@ -243,7 +245,8 @@ async function main() {
     await win.waitForTimeout(1000)
 
     // 7 stash 那半:造一份「活体面板全已注册、但 stash 里是日历视图」的布局 ——
-    //   进日历 → 收起两侧(todo-list/calendar-config 入 stash)→ 关掉主区那张日历 tab → 切走存档。
+    //   进日历 → 收起两侧(todo-list/calendar-config 入 stash)→ 切走存档 → 搬进 space:tangu 的槽
+    //   → 进 Tangu 关掉主区那张日历 tab → 再切走存档。
     await enterCalendar(win)
     // ⚠️两侧收起钮的类名不对称:左 = `.dv-edge-toggle`(**没有** .dv-edge-left 这个类,别照抄
     // newtab-open.check 里那句 `.dv-edge-left` —— 它被 .catch 吞掉了,实际一直是空转)。
@@ -252,8 +255,16 @@ async function main() {
     await win.waitForTimeout(1200)
     await win.click('.dv-edge-right') // 收右栏 → calendar-config 入 stash
     await win.waitForTimeout(1200)
-    // 主区那张日历**关掉**(不是收起):活体面板里不能再留未注册视图,否则 fromJSON 抛 →
-    // 回退 resetLayout 会把 stash 这条路整个盖住,验不到东西。
+    await enterSpace(win, ['笔记', 'Note'], 'amadeus') // 切走 = saveNamed('space:calendar')
+    await win.evaluate(`(() => {
+      const KEY = 'tangu2_named_layouts'
+      const m = JSON.parse(localStorage.getItem(KEY) || '{}')
+      if (m['space:calendar']) { m['space:tangu'] = m['space:calendar']; localStorage.setItem(KEY, JSON.stringify(m)) }
+    })()`)
+    // 主区那张日历**关掉**(不是收起):活体面板里不能再留日历视图,否则验到的是主区那张、不是 stash。
+    // ⚠️必须进了 Tangu 再关:日历 Space 把它声明成固定 View,在那里没有关闭钮,下面这记点击是空转
+    // (10-04 固定 View 合入后本条就是这样红的 —— 存下来的活体面板里一直留着 calendar)。
+    await enterSpace(win, ['Tangu'], 'tangu')
     await win.evaluate(`(() => {
       for (const t of document.querySelectorAll('.wb-tab')) {
         if (['日历', 'Calendar'].includes((t.querySelector('.wb-tab-name')?.textContent || '').trim())) t.querySelector('.wb-tab-close')?.click()
@@ -264,12 +275,10 @@ async function main() {
     const stashFix = await win.evaluate(`(() => {
       const KEY = 'tangu2_named_layouts'
       const m = JSON.parse(localStorage.getItem(KEY) || '{}')
-      const cal = m['space:calendar']
+      const cal = m['space:tangu'] // 引擎刚存的:上面那份日历布局、关掉了主区日历之后的样子
       if (!cal) return { ok: false }
       const panelTypes = Object.values(cal.dockview?.panels || {}).map((p) => (p.params || {}).__type)
       const sideTypes = ['left', 'right'].flatMap((s) => (cal.sidebars?.[s]?.stash || []).map((v) => v.type))
-      m['space:tangu'] = cal
-      localStorage.setItem(KEY, JSON.stringify(m))
       return { ok: true, panelTypes, sideTypes }
     })()`)
     const CAL_TYPES = ['calendar', 'todo-list', 'calendar-config']
@@ -286,8 +295,9 @@ async function main() {
     const afterExpand = await win.evaluate(`(() => ({
       groups: document.querySelectorAll('.dv-groupview').length,
       spaces: document.querySelectorAll('.rb-space').length,
-      deadTabs: [...document.querySelectorAll('.wb-tab-name')].filter((e) =>
-        ['日历', 'Calendar', '待办清单', 'To-do list', '日历设置', 'Calendar settings'].includes((e.textContent || '').trim())).length,
+      // 读 title 而不是 .wb-tab-name:侧栏 tab 只有图标、不渲染名字(死视图正是开在侧栏);未注册视图的标题回落成类型名。
+      deadTabs: [...document.querySelectorAll('.wb-tab')].filter((e) =>
+        ['日历', 'Calendar', '待办清单', 'To-do list', '日历设置', 'Calendar settings', ...${JSON.stringify(CAL_TYPES)}].includes((e.getAttribute('title') || '').trim())).length,
     }))()`)
     check(
       '7 折叠侧栏 stash 里的日历视图:关插件后展开侧栏不许开出死视图',
