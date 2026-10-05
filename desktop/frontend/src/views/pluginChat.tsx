@@ -124,27 +124,21 @@ function PluginChat({ leaf, state, retry }: { leaf: Leaf; state: TanguStartChatR
 }
 
 /** `ready` 是第一次接的结果;`latest()` 是最近一次的(用户在挂载里点了「重试」之后,以重试的为准)。 */
-export function mountPluginChat(el: HTMLElement, o: TanguChatMountOptions): { ready: Promise<TanguStartChatResult>; latest(): Promise<TanguStartChatResult>; dispose(): void } {
+export function mountPluginChat(el: HTMLElement, o: TanguChatMountOptions, onDispose?: () => void): { ready: Promise<TanguStartChatResult>; latest(): Promise<TanguStartChatResult>; dispose(): void } {
   const type = pluginChatType(o)
   // 插件的 mount(el) 拿不到 Leaf,而 ChatView 要一个:标题 / 参数 / 关闭都归插件自己的视图管,这里一律空操作。
   // type 是引用通道认的目标名(tanguProbe.mountChat 的 quote 往这个名字投);有 childSurface 时 loc 不参与任何判断。
   const leaf: Leaf = { id: type, type, loc: 'right', params: {}, setTitle() {}, setParams() {}, close() {} }
-  // 挂在宿主自己的一层里,不直接占插件给的 el:dispose() 之后 el 立刻还给插件,清空它、在同一个 el 上再挂都行。
-  // 直接挂在 el 上时,「dispose → 清空 el → 再挂」(插件切工程最顺手的写法)会撞上 React 晚一个 microtask 才落地的卸载:
-  // 卸载去删一个已经不在 el 里的节点(removeChild 抛错,切一次报一条),或者再挂时复用了旧 root、画进一个脱离文档的节点(空白)。
-  // display:contents:这一层不出盒子,对话照旧撑满 el。
-  const host = el.appendChild(document.createElement('div'))
-  host.style.display = 'contents'
-  let alive = true
-  let unmount = (): void => {}
-  const render = (state: TanguStartChatResult | null): void => {
-    if (alive) unmount = mountHostReact(host, <HostLocaleProvider><PluginChat leaf={leaf} state={state} retry={() => void attach()} /></HostLocaleProvider>)
-  }
+  // 对话接上之后宿主还会自己再画(加载中 → 接上 / 重试):一律走这次挂载的句柄。句柄卸了、或者插件没 dispose 就把 el 交给了
+  // 别的挂载之后,晚到的那次重画是空操作,顶不掉后来那份。dispose() 之后 el 立刻还给插件(清空它、在同一个 el 上再挂都行)。
+  const mounted = mountHostReact(el, null, onDispose)
+  const render = (state: TanguStartChatResult | null): void =>
+    mounted.render(<HostLocaleProvider><PluginChat leaf={leaf} state={state} retry={() => void attach()} /></HostLocaleProvider>)
   let current: Promise<TanguStartChatResult>
   const attach = (): Promise<TanguStartChatResult> => {
     render(null)
     current = ensurePluginChat(o).then((result) => { render(result); return result })
     return current
   }
-  return { ready: attach(), latest: () => current, dispose() { if (alive) { alive = false; unmount(); host.remove() } } }
+  return { ready: attach(), latest: () => current, dispose: mounted.dispose }
 }

@@ -15,7 +15,7 @@
  *     `position:fixed` 后代的包含块 —— 列菜单/筛选层会锚到面板盒子并被 `overflow:auto` 裁掉。
  *     所以本表在 body 上自带一个零尺寸宿主 `.amx-plugtable-pops`,把 pop 传送过去(popHost)。
  *     dispose 要连它一起收。
- *  ④ `update(spec)` **原地重渲染**(mountHostReact 按容器复用同一个 React root,组件实例不变)——
+ *  ④ `update(spec)` **原地重渲染**(走挂载句柄的 render:同一个 React root,组件实例不变)——
  *     用户的排序/筛选/列宽住在 DbTable 自己的 state 里,重挂就全丢了。
  */
 import { useLayoutEffect, useMemo, useRef } from 'react'
@@ -102,21 +102,19 @@ export function mountPluginTable(pluginId: string, el: HTMLElement, spec: TableS
   const popHost = document.createElement('div')
   popHost.className = 'am-app tangu-lovable amx-plugtable-pops'
   document.body.appendChild(popHost)
-  let disposeRoot = mountHostReact(el, <PluginTable pluginId={pluginId} spec={spec} popHost={popHost} />)
   let disposed = false
+  // 弹层宿主住在 body 上,不在树里:收在 onDispose,被后来的挂载收掉时才不会留一堆空 div
+  const mounted = mountHostReact(el, <PluginTable pluginId={pluginId} spec={spec} popHost={popHost} />, () => {
+    disposed = true
+    popHost.remove()
+  })
   return {
     update: (next) => {
       if (disposed) return
       validateTableSpec(next)
-      // 同一容器再 render:mountHostReact 复用同一个 root(组件实例、DOM 身份都不变),
-      // 旧 disposer 因代际校验作废 —— 只保留最新那份。
-      disposeRoot = mountHostReact(el, <PluginTable pluginId={pluginId} spec={next} popHost={popHost} />)
+      // 句柄的 render:同一个 root(组件实例、DOM 身份都不变)
+      mounted.render(<PluginTable pluginId={pluginId} spec={next} popHost={popHost} />)
     },
-    dispose: () => {
-      if (disposed) return
-      disposed = true
-      disposeRoot()
-      popHost.remove()
-    },
+    dispose: mounted.dispose,
   }
 }
