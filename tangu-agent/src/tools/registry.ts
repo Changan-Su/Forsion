@@ -49,6 +49,7 @@ import { searchSessionsProvider } from './builtin/searchSessions.js';
 import { manageHumanProvider } from './builtin/manageHuman.js';
 import { manageHarnessProvider } from './builtin/manageHarness.js';
 import { sessionSettingsProvider } from './builtin/sessionSettings.js';
+import { appSettingsProvider } from './builtin/appSettings.js';
 import { sketchProvider } from './builtin/sketch.js';
 import { manageAutomationProvider } from './builtin/manageAutomation.js';
 import { transcribeAudioProvider } from './builtin/transcribeAudio.js';
@@ -195,6 +196,7 @@ registerToolProvider(readComputerHistoryProvider); // 电脑历史开着 ∧ 本
 registerToolProvider(sessionSettingsProvider); // host-only 前台 run:session_settings 读 / update_session_settings 改本会话模型与思考档(写走 command 审批档;审批档不开放;append 末尾,保前缀缓存)
 registerToolProvider(phoneToolsProvider); // 手机端限定(clientCapability 'phone.intents' 中央闸;与 uiCommandsProvider 同属「发起端能力面」):phone_* 五件经 client_cmd 让手机原生执行(全 deferred,append 末尾;无能力的 run 不可见,快照不变)
 registerToolProvider(reviewLoadoutProvider); // 仅 Muse(周期或手聊):review_loadout 只读用量报告,供每周装备巡检(append 末尾;普通 run 不可见,快照不变)
+registerToolProvider(appSettingsProvider); // host-only 前台 run:app_settings 读 / update_app_settings 改本机 config.json 里开放的那几段(写走控制面审批;全 deferred,append 末尾)
 // 插件(表情包/分段等)现为文件夹插件(plugins/),经 activateAllPlugins→ctx.registerPlugin 注册其工具,不在此处。
 
 /** ctx 自带 profile(loop 按 run.app_id 解析)优先;缺省回退本进程装配的 profile。 */
