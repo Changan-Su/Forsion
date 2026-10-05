@@ -66,9 +66,9 @@ description: 从一篇项目笔记开始，体验 Forsion 的知识与记忆、�
 
 ## 6. 给这条工作流补上能力
 
-打开**应用市场**，按当前任务选择扩展：需要把视频收集成笔记，可以查看青鸟收藏夹；希望复用一套做事方法，可以安装 Skill；需要额外的工具或界面，可以安装插件。
+打开**插件商店**，按当前任务选择扩展：需要把视频收集成笔记，可以查看青鸟收藏夹；希望复用一套做事方法，可以安装 Skill；需要额外的工具或界面，可以安装插件。
 
-一个插件捆绑包可以同时带来界面、引擎工具、Agent、技能和 Space。安装后查看说明、依赖与设置，再把它用于项目。MCP 也能接入外部工具与数据。见[插件体系](../customization/plugins.md)、[市场](../customization/market.md)和[Skills](../agents/skills.md)。
+一个插件捆绑包可以同时带来界面、引擎工具、Agent、技能和 Space。安装后查看说明、依赖与设置，再把它用于项目。MCP 也能接入外部工具与数据。见[插件体系](../customization/plugins.md)、[插件商店](../customization/market.md)和[Skills](../agents/skills.md)。
 
 ## 继续把成果接回来
 

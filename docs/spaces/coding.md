@@ -89,7 +89,7 @@ description: 从项目简报开始，与 AI 一起构建应用、预览和定向
 
 准备发布静态项目时，使用「发布」打开原有 Forsion Connect 发布流程，确认应用名称、入口、公开链接与发布条款。项目需要位于 Forsion 的 `Project` 目录内；从其他位置打开的工程，应先复制到该目录。应用内 AI 使用访客自己的账号与额度。
 
-已发布的网站在「公开」Space 中管理，也可以申请上架[应用市场](../customization/market.md)。发布需要正常登录和网络，本地预览与源码版本不依赖云端发布成功。
+已发布的网站在「公开」Space 中管理，也可以申请上架[插件商店](../customization/market.md)。发布需要正常登录和网络，本地预览与源码版本不依赖云端发布成功。
 
 工作室当前没有自动全栈云部署、云数据库与 secrets 配置、GitHub 导入/双向同步或 Android 构建入口。有后端的工程需要按自身部署说明单独发布。
 
@@ -97,5 +97,5 @@ description: 从项目简报开始，与 AI 一起构建应用、预览和定向
 
 - [工具与审批](../chat/tools-and-approvals.md)
 - [外部引擎](../agents/external-engines.md)
-- [应用市场](../customization/market.md)
+- [插件商店](../customization/market.md)
 - [Space 总览](overview.md)

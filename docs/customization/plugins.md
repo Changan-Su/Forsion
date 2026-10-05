@@ -33,7 +33,7 @@ Forsion 的插件分两类,设置里统一成一页管理,**内置**与**外置*
 
 ## 安装渠道
 
-- **应用市场**(推荐)— 一键安装,更新统一管理,桌面插件与引擎插件按真实类型自动装到正确的位置,见[应用市场](market.md);
+- **插件商店**(推荐)— 一键安装,更新统一管理,桌面插件与引擎插件按真实类型自动装到正确的位置,见[插件商店](market.md);
 - **本地目录** — 插件住在 `~/.forsion/plugins/`,一插件一文件夹,手上有插件包直接放进去;
 - **npm**(引擎插件)— `tangu install npm:<包名>`,见[命令行](../reference/cli.md)。
 
@@ -59,7 +59,7 @@ Lay plugin views out in native panels instead of drawing sidebars or bottom bars
 
 ## 下一步
 
-- [应用市场](market.md) — 找现成的插件
+- [插件商店](market.md) — 找现成的插件
 - [工具与审批](../chat/tools-and-approvals.md) — 插件工具怎么被管住
 - [自动化](../spaces/automation.md) — 用插件事件触发规则
 

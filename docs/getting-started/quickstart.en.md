@@ -66,9 +66,9 @@ For a defined process, use **Automation** to create a daily trigger followed by 
 
 ## 6. Extend the workflow
 
-Open the **marketplace** and choose an extension for the task at hand. Explore Bluebird to turn videos into notes, install a Skill for a reusable way of working, or add a plugin for extra tools and interface features.
+Open the **plugin store** and choose an extension for the task at hand. Explore Bluebird to turn videos into notes, install a Skill for a reusable way of working, or add a plugin for extra tools and interface features.
 
-A plugin bundle can include an interface, engine tools, Agents, skills, and Spaces. Read its description, dependencies, and settings, then use it in the project. MCP can also connect external tools and data. See [plugins](../customization/plugins.md), [the marketplace](../customization/market.md), and [Skills](../agents/skills.md).
+A plugin bundle can include an interface, engine tools, Agents, skills, and Spaces. Read its description, dependencies, and settings, then use it in the project. MCP can also connect external tools and data. See [plugins](../customization/plugins.md), [the plugin store](../customization/market.md), and [Skills](../agents/skills.md).
 
 ## Bring the results back
 

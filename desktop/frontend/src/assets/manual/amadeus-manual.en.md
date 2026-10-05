@@ -31,7 +31,7 @@ This manual **is its own demo**: click the "Document / Canvas" pill in the top b
 13. Whiteboards and drawing
 14. Properties and metadata
 15. Working with the other Spaces
-16. Plugins and the market
+16. Plugins and the plugin store
 17. Commands and keyboard shortcuts
 18. Settings
 19. When something looks broken
@@ -156,7 +156,7 @@ Click "Amadeus" on the ribbon and the whole workspace becomes the notes layout. 
 
 | Region | What it holds | How to toggle |
 | --- | --- | --- |
-| Ribbon | The vertical strip on the far left. Spaces on top; Market, Achievements, light/dark, command palette, Settings and your account below | The top-most button collapses / expands it |
+| Ribbon | The vertical strip on the far left. Spaces on top; Plugin store, Achievements, light/dark, command palette, Settings and your account below | The top-most button collapses / expands it |
 | Left sidebar | Three tabs: "Workspace", "Search", "Tags" | `⌘/Ctrl + /`, or the panel button at the left end of the tab strip (tooltip "Toggle left panel") |
 | Main area | Notes, whiteboards and dashboards live here, opened as tabs, splittable | Always on |
 | Right sidebar | "Chat panel", "Outline", "Backlinks", "Graph" | The floating panel button at the top right (tooltip "Toggle right panel"); collapsed the first time you arrive |
@@ -176,7 +176,7 @@ Each icon in the ribbon's upper zone is a Space: Home, Tangu, Inbox, Amadeus, Co
 - Switch: click an icon; or press `⌘/Ctrl + N`, where N is that icon's position in the upper zone (the command reads "Switch to Space {n}"); or find the same command in the palette.
 - Collapse / expand: the top-most button. Collapsed shows icons only, with the name on hover (tooltip "Expand"); expanded shows icon plus name ("Collapse"), and the first nine also show their shortcut.
 - Home slot: the single centred cell, holding "Home" by default, and also the default startup target. Right-click it → "Space in the home slot" → pick any Space. Whatever you put there disappears from the upper zone, so it never shows twice.
-- The fixed strip at the bottom: "Market", "Achievements", "Toggle light/dark mode", "Command palette (⌘K)", "Settings", and your account card last.
+- The fixed strip at the bottom: "Plugin store", "Achievements", "Toggle light/dark mode", "Command palette (⌘K)", "Settings", and your account card last.
 - Tidying up: drag icons to reorder within their zone (you cannot drag between the two zones); create a folder from the ＋ or right-click menu ("New folder (Spaces)") and then drag icons onto it; when a zone runs out of room the tail collapses into "More". The same menu carries "New Space" and "Add command".
 
 > [!warning]
@@ -2850,7 +2850,7 @@ What you build in the Coding Space can be published straight to a public web app
 > [!warning]
 > This publishes a Coding project, not a note — it is a completely separate mechanism from the note-side "Publish".
 
-- **Manage it afterwards in the Public Space**: every row under "My sites" can "Apply to list" in the Forsion app market (a human reviews it), "Re-apply", "Withdraw" or "Delist". Visitors sign in with their own Forsion account and spend their own quota. The number of published slots is limited by your plan.
+- **Manage it afterwards in the Public Space**: every row under "My sites" can "Apply to list" in the Forsion plugin store (a human reviews it), "Re-apply", "Withdraw" or "Delist". Visitors sign in with their own Forsion account and spend their own quota. The number of published slots is limited by your plan.
 - **The external MCP endpoint**: Settings (`⌘/Ctrl + ,`) → "Advanced" → "MCP endpoint" → tick "Expose to external agents (Claude Code / Codex / OpenCode, etc.)". The panel gives you the endpoint address, a copy button, and ready-made connection snippets for Claude Code, Codex, OpenCode and "Generic JSON". Off by default, desktop only.
 - **The endpoint exposes exactly two tools**: `inbox_send` (post a titled message into the inbox of the running app on this machine) and `transcribe_audio` (transcribe a local audio file). No MCP tool reads or writes notes.
 - **The snippets carry the token, so treat them as secrets** and do not paste them anywhere public. The endpoint binds to 127.0.0.1. Port 3591 is the default, and if it is taken the app climbs to the next free one — so re-copy the snippet after a restart.
@@ -2866,9 +2866,9 @@ What you build in the Coding Space can be published straight to a public web app
 | How to turn it on | Connect is on the Coding toolbar; the MCP endpoint and Unit are both off by default and you turn them on yourself |
 | What does not cross | MCP can neither read nor write notes; Unit is same-LAN direct only |
 
-## 16 · Plugins and the market
+## 16 · Plugins and the plugin store
 
-Forsion is a shell; most of what it does arrives as plugins. This chapter covers what a plugin can add to Amadeus, what each built-in plugin does, how to install more from the market, and where to look when one misbehaves. The plugin page and the market are desktop only.
+Forsion is a shell; most of what it does arrives as plugins. This chapter covers what a plugin can add to Amadeus, what each built-in plugin does, how to install more from the plugin store, and where to look when one misbehaves. The plugin page and the plugin store are desktop only.
 
 ### What a plugin can add
 
@@ -2930,14 +2930,14 @@ Press `⌘/Ctrl + ,` to open settings, then "Extensions" → "Plugins" in the le
 
 > [!warning] Engine plugins can be installed from npm. Take the line on the install dialog literally: "Plugins run with your full system permissions — only install sources you trust."
 
-### The market
+### The plugin store
 
-The market has exactly two doors: the store icon at the bottom of the ribbon (tooltip "Market"), or the command palette `⌘/Ctrl + K` → "Market". There is no default hotkey. It is a full-window overlay rather than a tab; "Back to app" in the top left leaves it. Desktop only.
+The plugin store has exactly two doors: the store icon at the bottom of the ribbon (tooltip "Plugin store"), or the command palette `⌘/Ctrl + K` → "Plugin store". There is no default hotkey. It is a full-window overlay rather than a tab; "Back to app" in the top left leaves it. Desktop only.
 
 | Left nav group | What is in it |
 |---|---|
 | Discover | Store home: community pick, recently added, popular |
-| Categories | Skills, Agents, Plugins, Spaces, Themes, Web apps |
+| Categories | Skills, Plugins (Spaces and Agents are in here too), Themes, Web apps |
 | Manage | Installed, Updates, Submit |
 
 - Installing: click "Install" on a card or detail page (it reads "Installing…" while it runs). An installed item's button becomes "Reinstall", or "Update" when a newer version exists. A Forsion plugin hot-loads the moment it lands — its views, commands and `/` entries work immediately; a bundled Space appears at the top of the ribbon; a plugin with a setup flow pops its card right away.
@@ -2946,11 +2946,11 @@ The market has exactly two doors: the store icon at the bottom of the ribbon (to
 - "Web apps" are web apps other people built with Coding Space. "Open" runs one in the built-in browser, and the hint says AI features spend the visitor's own account quota. With the built-in Browser plugin turned off, it opens in your system browser instead.
 - "Submit" is only a signpost: "Open submission page" opens the web submission page in your system browser. The search box and sort control are hidden on that page.
 
-> [!warning] The "Plugins" category mixes Forsion plugins and Tangu engine plugins, and the card does not tell you which is which. The toast after installing does: "Forsion plugin \"{name}\" installed and loaded" is an interface plugin, "Plugin installed and enabled" is an engine plugin. They land in the two different sub-tabs of the plugin page.
+> [!warning] The "Plugins" category lists Forsion plugins, Tangu engine plugins, Spaces and Agents together. Space and Agent cards are labelled with their own type; the two kinds of plugin look the same on the card. The toast after installing tells them apart: "Forsion plugin \"{name}\" installed and loaded" is an interface plugin, "Plugin installed and enabled" is an engine plugin. They land in the two different sub-tabs of the plugin page.
 
 ### Where plugins live on disk
 
-The plugin folder is `~/.forsion/plugins/`, one folder per plugin, and market installs land there too. Three buttons under "External plugins" on the plugin page manage it.
+The plugin folder is `~/.forsion/plugins/`, one folder per plugin, and plugin store installs land there too. Three buttons under "External plugins" on the plugin page manage it.
 
 | Button | What it does |
 |---|---|
@@ -2965,7 +2965,7 @@ The plugin folder is `~/.forsion/plugins/`, one folder per plugin, and market in
 
 > [!warning] After you uninstall a plugin that owned its own file suffix, those files stay in your vault and are never rewritten as ordinary notes. You will see that they no longer open — reinstall the plugin and they open again. The files are not damaged.
 
-> [!note] What you put in the plugin folder must be a complete plugin package (what the market installs has exactly that shape). A folder you made yourself with a few files in it will not appear, however often you click "Reload".
+> [!note] What you put in the plugin folder must be a complete plugin package (what the plugin store installs has exactly that shape). A folder you made yourself with a few files in it will not appear, however often you click "Reload".
 
 ### When a plugin misbehaves
 
@@ -2973,7 +2973,7 @@ The plugin folder is `~/.forsion/plugins/`, one folder per plugin, and market in
 |---|---|
 | A plugin you dropped in by hand does not show up | Click "Reload" on the plugin page; if it still does not appear, that folder is not a complete plugin package |
 | A greyed-out card badged "Requires app version ≥ …" | Update the app, then come back and check the box |
-| A panel reads "Plugin view failed to load (see console)" | Toggle the plugin off and on again, then check "Updates" in the market for a newer version |
+| A panel reads "Plugin view failed to load (see console)" | Toggle the plugin off and on again, then check "Updates" in the plugin store for a newer version |
 | You switched interface language but the plugin's `/` entries and command names are still in the old one | Toggle that plugin off and on, or restart the app. Those names are fixed at the moment the plugin is enabled and do not follow a mid-session language switch |
 | One plugin sends too many notifications | Settings → "Appearance" → "Notifications" → "Plugin notifications", and switch off its row |
 | An unwanted item in the status bar | Settings → "Appearance" → "Status bar", uncheck it; drag to reorder |
@@ -3069,7 +3069,7 @@ These work in every Space, whether or not a vault is open.
 | Reset layout | — | Rebuilds the current Space’s panels from its default arrangement |
 | Save current layout as a Space | — | Saves the current arrangement as a new Space and adds its icon to the ribbon |
 | Show chat panel | — | Opens chat in the right sidebar so you can ask about the note you are reading |
-| Market | — | Install plugins, themes and Spaces |
+| Plugin store | — | Install plugins, themes and Spaces |
 | Achievements | — | View your achievements |
 | Feedback | — | Report a problem or send a suggestion |
 
@@ -3331,7 +3331,7 @@ The second row, "Ribbon home slot", changes which Space sits in the slot; right-
 
 - The Space placed in the home slot disappears from the group of icons above it, so it never shows twice.
 - Choosing the home slot or a fixed Space restores *that Space's own* last layout, not the layout of the Space you last quit from.
-- Below, "Installed Spaces · {count}" lists every Space. Ones badged "Built-in" ship with the app and cannot be removed; ones badged "Custom/Market" have an "Uninstall" button, which deletes their on-disk layout recipe.
+- Below, "Installed Spaces · {count}" lists every Space. Ones badged "Built-in" ship with the app and cannot be removed; ones badged "Custom/store" have an "Uninstall" button, which deletes their on-disk layout recipe.
 - To keep the arrangement you have now, run "Save current layout as a Space" from the command palette, give it a name, and it appears at the top of the ribbon straight away.
 
 > [!warning] A fresh install does **not** open in Amadeus: the default is the home slot, and the home slot holds Home by default. To start in your notes, set "Open the app in" to `Amadeus`. This default has changed twice historically, so a long-time user's landing Space may have moved without them touching the setting.

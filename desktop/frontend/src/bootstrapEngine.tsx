@@ -512,7 +512,7 @@ export function installEngine(): void {
   if (hasNativeFeature('tangu')) addCommand({ id: 'compact', title: () => app().tr('command.compact'), keywords: 'compact 压缩', run: () => void app().compact() })
   if (hasNativeFeature('tangu')) addCommand({ id: 'branch', title: () => app().tr('command.branch'), keywords: 'branch 分支', run: () => void app().branchFromMessage() })
   // 商店/成就此前**只有 ribbon 图标一个入口**,⌘K 搜不到 —— 这是「用户发现不了」的一半根因。
-  if (window.tangu?.marketList) addCommand({ id: 'open-market', icon: Store, title: () => app().tr('market.title'), keywords: 'market store plugin theme skill agent 市场 商店 插件 主题 技能 扩展', run: () => app().openMarket() })
+  if (window.tangu?.marketList) addCommand({ id: 'open-market', icon: Store, title: () => app().tr('market.title'), keywords: 'plugin store market marketplace plugin theme skill agent space 插件商店 应用市场 应用商店 市场 商店 插件 主题 技能 扩展', run: () => app().openMarket() })
   addCommand({ id: 'open-achievements', icon: Trophy, title: () => app().tr('achievements.title'), keywords: 'achievement trophy badge medal 成就 勋章 徽章', run: () => app().openAchievements() })
   if (window.tangu?.submitFeedback) addCommand({ id: 'open-feedback', icon: MessageSquare, title: () => app().tr('feedback.title'), keywords: 'feedback bug report 反馈 问题 建议 报错', run: () => { app().openFeedback() } })
   addCommand({ id: 'open-settings', icon: Settings, title: () => app().tr('settings.title'), keywords: 'settings 设置 preferences', hotkey: 'mod+,', run: () => app().openSettings() , invoke: {

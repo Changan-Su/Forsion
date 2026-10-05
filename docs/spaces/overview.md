@@ -1,6 +1,6 @@
 ---
 title: Space 总览
-description: Forsion 的功能以"空间"为单位组织——每个空间一套视图与数据,按需启用,还能从市场装新的。
+description: Forsion 的功能以"空间"为单位组织——每个空间一套视图与数据,按需启用,还能从插件商店装新的。
 ---
 
 # Space 总览
@@ -27,9 +27,9 @@ Space 图标排在 Ribbon 上区,点一下即切换。
 
 也可以指定**启动时进入哪个 Space**——冷启动直接进它的默认布局,而不是恢复上次退出时的样子。
 
-## 插件与市场里的空间
+## 插件与插件商店里的空间
 
-插件可以自带 Space:装好即出现在 Ribbon 上区,不用重启。[应用市场](../customization/market.md)的"空间"分类也提供第三方空间,每个自带说明,不合适就卸载。
+插件可以自带 Space:装好即出现在 Ribbon 上区,不用重启。[插件商店](../customization/market.md)的"插件"分类里也有第三方空间(卡片上标着 Space),每个自带说明,不合适就卸载。
 
 ## 空间与界面
 
@@ -45,7 +45,7 @@ Space 里的内容以标签页打开,支持拖拽分屏、拖出独立窗口、�
 
 - [工作区与界面](../getting-started/workspace.md)
 - [自动化](automation.md)
-- [应用市场](../customization/market.md)
+- [插件商店](../customization/market.md)
 
 ## Mini Panel
 

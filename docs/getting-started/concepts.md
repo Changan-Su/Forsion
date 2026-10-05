@@ -26,7 +26,7 @@ description: 理解 Forsion 的几个基本词汇:引擎、Agent、会话、Spac
 
 ## Space(空间)
 
-Forsion 的功能以"空间"为单位组织:对话、Amadeus 笔记、日历、收件箱、自动化、编码空间、公开……每个空间是一个独立的功能界面,可以按需启用或关闭,市场里还能安装第三方空间,插件自带的空间装好即出现在 Ribbon 上。详见 [Space 总览](../spaces/overview.md)。
+Forsion 的功能以"空间"为单位组织:对话、Amadeus 笔记、日历、收件箱、自动化、编码空间、公开……每个空间是一个独立的功能界面,可以按需启用或关闭,插件商店里还能安装第三方空间,插件自带的空间装好即出现在 Ribbon 上。详见 [Space 总览](../spaces/overview.md)。
 
 ## 工作区(Workspace)
 
