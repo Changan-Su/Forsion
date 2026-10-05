@@ -27,6 +27,8 @@ describe('manage_skill', () => {
     // 带脚本 / 资料的技能要往文件夹里放文件:结果里必须有它的绝对路径和装载用的 id
     expect(r).toContain(path.join(home, 'skills', 'deploy-web'));
     expect(r).toContain('local:deploy-web');
+    // 之后改正文的正路写在结果里(带上这个技能的 slug):模型建完顺手用文件工具改 SKILL.md 会多弹一次审批
+    expect(r).toContain('action="update" and slug "deploy-web"');
     const raw = await fs.readFile(skillMd('deploy-web'), 'utf-8');
     expect(raw).toContain('name: Deploy Web');
     expect(raw).toContain('description: how to ship the web app');
