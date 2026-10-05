@@ -315,8 +315,11 @@ export async function loadOAuthDirectProviders(): Promise<DirectProvider[]> {
     if (!cfg) continue;
     let tok = t;
     if (tok.expires_at && tok.expires_at < Date.now() + 120_000) {
-      tok = await refresh(tok, cfg);
-      saveProviderCred(id, tok);
+      // 与取用时同一条续期(freshOAuthCred):续完在锁内比对盘上此刻的记录才写。以前这里续完整条写回 —— 续期是一次网络往返,
+      // 期间别的进程(另一个引擎、TUI)已经续过并轮换了 refresh_token 的话,整条写回会把它盖成旧值,那家就只能重新登录。
+      const fresh = await freshOAuthCred(id).catch(() => tok);
+      if (!fresh) continue; // 续期期间已登出:不装载,也不写回来
+      tok = fresh;
     }
     let changed = false;
     // 配置是端点协议的唯一真源,避免旧版本把 xAI OAuth token 继续发往 api.x.ai。
@@ -343,7 +346,12 @@ export async function loadOAuthDirectProviders(): Promise<DirectProvider[]> {
         changed = true;
       }
     }
-    if (changed) saveProviderCred(id, tok);
+    if (changed) {
+      // 只把这里算出来的非凭证字段补到盘上**此刻**的记录上(上面拉模型列表也是一次网络往返):
+      // token 三件套以盘上为准,不拿这一趟开头读到的旧值盖回去;期间登出了的不写回来。
+      const patch = Object.fromEntries(Object.entries({ baseUrl: tok.baseUrl, modelIds: tok.modelIds, modelIdsAt: tok.modelIdsAt, modelIdsClientVersion: tok.modelIdsClientVersion }).filter(([, v]) => v !== undefined));
+      updateProviderCred(id, (cur) => (cur ? { ...cur, ...patch } : undefined));
+    }
     const effectiveModelIds = normalizeProviderModelIds(id, tok.modelIds);
     out.push({
       providerId: id,

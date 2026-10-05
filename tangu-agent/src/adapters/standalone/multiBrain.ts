@@ -10,6 +10,8 @@
 import { imageMimeOf, type CloudBrainServices, type BuildPayloadOpts, type StreamOpts, type ImageGenRequest, type ImageEditRequest, type ImageGenResult, type SpeechRequest, type SpeechResult } from '../../seams/cloudBrain.js';
 import type { ProviderRegistry } from '../../llm/providerRegistry.js';
 import { freshOAuthCred } from '../../llm/providerOAuth.js';
+import { isAuthExpiredLlmError } from '../../llm/retry.js';
+import { LlmError } from '../../core/types.js';
 import { loadLocalWebSearchConfig, hasLocalSearchProvider, runLocalSearch } from './localSearch.js';
 import { buildOpenAiCompatPayload, tuneOpenAiDirectPayload, streamOpenAiCompat, DIRECT_MARK, PROTOCOL_MARK } from '../../llm/openaiCompat.js';
 import { streamAnthropicMessages } from '../../llm/anthropicMessages.js';
@@ -35,7 +37,7 @@ async function generateDirectImage(baseUrl: string, apiKey: string | undefined, 
       ...(/^(gpt-image|chatgpt-image)/i.test(apiModelId) ? {} : { response_format: 'b64_json' }) }),
     signal: req.signal ?? AbortSignal.timeout(180_000),
   });
-  if (!r.ok) throw new Error(`image gen ${r.status}: ${(await r.text().catch(() => '')).slice(0, 200)}`);
+  if (!r.ok) throw new LlmError(r.status, `image gen ${r.status}: ${(await r.text().catch(() => '')).slice(0, 200)}`);
   const j: any = await r.json();
   const images = (j?.data || []).filter((d: any) => d?.b64_json).map((d: any) => ({ b64: d.b64_json as string, mime: imageMimeOf(d.b64_json) }));
   if (!images.length) throw new Error('provider 未返回图片');
@@ -59,7 +61,7 @@ async function editDirectImage(baseUrl: string, apiKey: string | undefined, mode
     method: 'POST', headers: { Authorization: `Bearer ${apiKey || ''}` }, body: form,
     signal: req.signal ? AbortSignal.any([req.signal, AbortSignal.timeout(180_000)]) : AbortSignal.timeout(180_000),
   });
-  if (!r.ok) throw new Error(`image edit ${r.status}: ${(await r.text().catch(() => '')).slice(0, 200)}`);
+  if (!r.ok) throw new LlmError(r.status, `image edit ${r.status}: ${(await r.text().catch(() => '')).slice(0, 200)}`);
   const j: any = await r.json();
   const images = (j?.data || []).filter((d: any) => d?.b64_json).map((d: any) => ({ b64: d.b64_json as string, mime: imageMimeOf(d.b64_json) }));
   if (!images.length) throw new Error('Image edit returned no images');
@@ -80,7 +82,7 @@ async function synthesizeDirectTts(baseUrl: string, apiKey: string | undefined, 
     body: JSON.stringify({ model: apiModelId, input: req.text, ...(req.voice ? { voice: req.voice } : {}), ...(req.speed ? { speed: req.speed } : {}), response_format: format }),
     signal: ttsSignal(req),
   });
-  if (!r.ok) throw new Error(`tts ${r.status}: ${(await r.text().catch(() => '')).slice(0, 200)}`);
+  if (!r.ok) throw new LlmError(r.status, `tts ${r.status}: ${(await r.text().catch(() => '')).slice(0, 200)}`);
   return { audio: new Uint8Array(await r.arrayBuffer()), mime };
 }
 
@@ -189,7 +191,7 @@ function synthesizeCosyVoiceWs(baseUrl: string, apiKey: string | undefined, apiM
 }
 
 export function createMultiBrain(httpBrain: CloudBrainServices, registry: ProviderRegistry): CloudBrainServices {
-  /** 订阅登录的 provider:调用前续期,并把新 token 换进注册表(图像 / 语音这些直接读 p.apiKey 的路径一并受益)。
+  /** 订阅登录的 provider:调用前续期,并把新 token 换进注册表。对话走 resolveModelAndKey,图像 / 语音走下面的 withFreshKey。
    *  显式配置的同名 provider(不带 oauth 标记)压过订阅登录 → 不碰它的 key。续期失败不拦调用,让上游的报错说话。 */
   /** 订阅登录的凭证以盘上为准:快到期就续、别的进程换过(续期 / 换号重新登录)就跟上。有变化时 token 与 account id 成对换进注册表。 */
   const syncOAuth = async (providerId: string, force = false): Promise<string | undefined> => {
@@ -198,6 +200,18 @@ export function createMultiBrain(httpBrain: CloudBrainServices, registry: Provid
     const cred = await freshOAuthCred(providerId, force).catch(() => undefined);
     if (cred && (cred.access_token !== p.apiKey || cred.account_id !== p.accountId)) registry.setCreds(providerId, cred.access_token, cred.account_id);
     return cred?.access_token;
+  };
+  /** 图像 / 语音:直接拿 provider 的 key 发请求,不经 resolveModelAndKey。订阅登录的 provider 在这里补上对话那条路的同一套续期 ——
+   *  调用前按到期时间续;上游明说凭证失效时强制续一次,换到了新 token 才再试一次(同一个 token 再试必败)。
+   *  显式配置的 provider(用户自己的 key)原样直调:syncOAuth 对它立刻返回 undefined,失败也不重试。 */
+  const withFreshKey = async <T>(providerId: string, call: (apiKey: string | undefined) => Promise<T>): Promise<T> => {
+    const keyNow = (): string | undefined => registry.list().find((x) => x.providerId === providerId)?.apiKey;
+    await syncOAuth(providerId);
+    const used = keyNow();
+    try { return await call(used); } catch (e) {
+      if (!isAuthExpiredLlmError(e) || !(await syncOAuth(providerId, true)) || keyNow() === used) throw e;
+      return call(keyNow());
+    }
   };
   return {
     ...httpBrain,
@@ -227,7 +241,7 @@ export function createMultiBrain(httpBrain: CloudBrainServices, registry: Provid
         for (const p of registry.list()) {
           const slash = req.model.startsWith(p.providerId + '/');
           const apiModelId = slash ? req.model.slice(p.providerId.length + 1) : ((p.imageModelIds || []).includes(req.model) ? req.model : null);
-          if (apiModelId) return editDirectImage(p.baseUrl, p.apiKey, apiModelId, req);
+          if (apiModelId) return withFreshKey(p.providerId, (key) => editDirectImage(p.baseUrl, key, apiModelId, req));
         }
         if (!httpBrain.images?.edit) throw new Error('Image editing is unavailable in this environment');
         return httpBrain.images.edit(req);
@@ -238,7 +252,7 @@ export function createMultiBrain(httpBrain: CloudBrainServices, registry: Provid
         for (const p of registry.list()) {
           const slash = req.model.startsWith(p.providerId + '/');
           const apiModelId = slash ? req.model.slice(p.providerId.length + 1) : ((p.imageModelIds || []).includes(req.model) ? req.model : null);
-          if (apiModelId) return generateDirectImage(p.baseUrl, p.apiKey, apiModelId, req);
+          if (apiModelId) return withFreshKey(p.providerId, (key) => generateDirectImage(p.baseUrl, key, apiModelId, req));
         }
         if (!httpBrain.images) throw new Error('当前未配置云端生图');
         return httpBrain.images.generate(req);
@@ -255,7 +269,7 @@ export function createMultiBrain(httpBrain: CloudBrainServices, registry: Provid
             const fn = !isDashScopeBase(p.baseUrl)
               ? synthesizeDirectTts
               : /^cosyvoice|^qwen-audio-.*tts/i.test(apiModelId) ? synthesizeCosyVoiceWs : synthesizeDashScopeTts; // CosyVoice / Qwen-Audio-TTS 走同一套 WS,余走 HTTP
-            return fn(p.baseUrl, p.apiKey, apiModelId, req);
+            return withFreshKey(p.providerId, (key) => fn(p.baseUrl, key, apiModelId, req));
           }
         }
         throw new Error(`未找到 TTS 模型 ${req.model} 对应的直连 provider(需在 provider 的 ttsModelIds 声明或用 <providerId>/<model> 形式)`);
