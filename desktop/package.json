@@ -27,6 +27,8 @@
     "e2e:dnd": "node scripts/block-dnd.e2e.cjs",
     "e2e:sidebardrop": "node scripts/sidebar-drop.e2e.cjs",
     "e2e:ribbon": "node scripts/ribbon-dnd.e2e.cjs",
+    "e2e:spacewindow": "node scripts/space-window.e2e.cjs",
+    "e2e:spacewindow-input": "node scripts/space-window-input.e2e.cjs",
     "e2e:mindmap": "node scripts/mindmap.e2e.cjs",
     "e2e:canvas": "node scripts/canvas.e2e.cjs",
     "e2e:daily": "node scripts/daily-template.e2e.cjs",

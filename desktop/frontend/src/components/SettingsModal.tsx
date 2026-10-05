@@ -35,7 +35,7 @@ import type {
 import { SHOW_SYSTEM_PROMPT_KEY } from '../types'
 // 本组件已有同名的 useState setter,故取个别名。persist* = 写盘 + 应用 + 跨窗广播。
 import { isSmoothCaretOn, setSmoothCaret as persistSmoothCaret } from '../smoothCaret'
-import { isRibbonAutoHome, setRibbonAutoHome } from '@lcl/engine/ribbonRegistry'
+import { isRibbonAutoHome, setRibbonAutoHome, useRibbonStore, RIBBON_RECENT_MAX } from '@lcl/engine/ribbonRegistry'
 import { applyUiFonts, readFont, writeFont, type FontSlot } from '../uiFont'
 import { getUiZoom, setUiZoom } from '../uiZoom'
 import { listFonts, getFont } from '../fontPresets'
@@ -404,6 +404,7 @@ export const SettingsModal: React.FC<{
   const [ribbonAutoHome, setRibbonAutoHomeOn] = useState<boolean>(isRibbonAutoHome)
   // 「外围淡出」靠悬停恢复(calm.css 整段关在 hover: hover 里):没有悬停的设备上那一行与它的搜索结果都不出。
   const hoverCapable = !!window.matchMedia?.('(hover: hover)').matches
+  const ribbonRecent = useRibbonStore((s) => s.recentCount)
   // 画布双击聚焦(默认开;纯本机视口偏好，不进笔记/桌面后端配置)。
   const [canvasDoubleClickFocus, setCanvasDoubleClickFocus] = useState<boolean>(canvasDoubleClickFocusEnabled)
   const [aiSpaceTrigger, setAiSpaceTrigger] = useState<boolean>(aiSpaceTriggerEnabled) // 正文 AI 空行空格唤起(G3-07,缺省关,本机)
@@ -3255,6 +3256,24 @@ export const SettingsModal: React.FC<{
                                 setRibbonAutoHome(on)
                               }}
                             />
+                          </div>
+                        )}
+                        {!mobileSettings && (
+                          <div className="settings-control-row" data-setting-anchor="ribbon-recent">
+                            <div className="settings-control-copy"><History size={14} /><span><strong>{t('settings.theme.ribbonRecent')}</strong><small>{t('settings.theme.ribbonRecentHint')}</small></span></div>
+                            <div className="seg" role="group" aria-label={t('settings.theme.ribbonRecent')}>
+                              {Array.from({ length: RIBBON_RECENT_MAX + 1 }, (_, n) => (
+                                <button
+                                  key={n}
+                                  type="button"
+                                  className={ribbonRecent === n ? 'active' : ''}
+                                  aria-pressed={ribbonRecent === n}
+                                  onClick={() => useRibbonStore.getState().setRecentCount(n)}
+                                >
+                                  {n === 0 ? t('settings.theme.ribbonRecentOff') : n}
+                                </button>
+                              ))}
+                            </div>
                           </div>
                         )}
                       </div>

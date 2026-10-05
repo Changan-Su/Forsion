@@ -5,7 +5,7 @@ import { hasNativeFeature, amadeusAvailable, inboxAvailable } from './features/r
  *  Tangu Space = 会话/对话/主体详情/文件/目录;Agents Space = 智能体配置。Amadeus Space 见 Milestone 2。 */
 import { Bot, Inbox, NotebookText, Code2, Workflow, Rocket, Users } from 'lucide-react'
 import { INBOX_WORKSPACE_MODE } from './views/workspaceMode'
-import { registerSpace, addRibbonIcon, useSpaceStore, useWorkspace, deleteNamedLayout, clearLayout, resetSpaceLayouts } from '@lcl/engine'
+import { registerSpace, addRibbonIcon, useSpaceStore, useWorkspace, deleteNamedLayout, clearLayout, resetSpaceLayouts, WINDOW_SPACE_ID } from '@lcl/engine'
 import type { SpaceDefinition, PersistedPanel, SidebarDefaults } from '@lcl/engine'
 import { useApp } from './stores/appStore'
 import { PRODUCT } from './product'
@@ -312,7 +312,8 @@ export function registerSpaces(): void {
   // 写回不发生根本不需要故障:卫星窗(设置 / 市场浮窗、分离窗)也跑到这里,而它们从不补定位。
   if (new URLSearchParams(location.search).get('window') === 'mini') return
   const activeId = useSpaceStore.getState().activeSpaceId
-  if (SPACES.length && !SPACES.some((sp) => sp.id === activeId)) {
+  // Space 窗口不归一:它的活动 id 恒为自己那个 Space,没注册上来就等(DetachedRoot),不落到别的 Space 上。
+  if (!WINDOW_SPACE_ID && SPACES.length && !SPACES.some((sp) => sp.id === activeId)) {
     const fallback = SPACES.some((sp) => sp.id === PRODUCT.defaultSpace) ? PRODUCT.defaultSpace : SPACES[0].id
     useSpaceStore.setState({ activeSpaceId: fallback })
   }

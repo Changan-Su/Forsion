@@ -1,0 +1,45 @@
+name: probe-space-window-windows
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/probe-space-window-windows.yml'
+      - 'desktop/scripts/space-window*.cjs'
+      - 'desktop/scripts/ribbon-dnd.e2e.cjs'
+      - 'desktop/scripts/lib/find-chromium.cjs'
+      - 'desktop/electron/main.ts'
+      - 'lcl/engine/Ribbon.tsx'
+      - 'lcl/engine/ribbonRegistry*'
+      - 'lcl/engine/spaceRegistry*'
+      - 'lcl/engine/spaceWindow.test.ts'
+permissions:
+  contents: read
+jobs:
+  space-window:
+    runs-on: windows-2022
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install desktop dependencies
+        working-directory: desktop
+        run: npm ci --no-audit --no-fund
+      - name: Build and check window behavior
+        working-directory: desktop
+        run: |
+          npm run build
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run e2e:spacewindow
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run e2e:spacewindow-input
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run e2e:ribbon
+          exit $LASTEXITCODE
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-space-window
+          path: desktop/outputs/spacewindow-input/

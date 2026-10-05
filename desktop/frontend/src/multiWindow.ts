@@ -3,7 +3,7 @@ import { useApp } from './stores/appStore'
 /** 桌面多窗接线:把引擎的 detach 缝(detachSeam)接到 window.tangu 多窗 IPC;订阅跨窗拖入(accept-view)
  *  与实时落点预览(drag-preview)。非桌面(web/移动)window.tangu.openDetached 缺省 → 整体 no-op。
  *  三种窗口(主/独立/mini)都调:mini 不是 dockview 落点(主进程 windowAtPoint 已排除),订阅空转无害。 */
-import { setDetachApi, useWorkspace, setActiveSpace, getView, subscribeViews } from '@lcl/engine'
+import { setDetachApi, useWorkspace, useSpaceStore, setActiveSpace, getView, subscribeViews, liveLayoutOwner, spaceLayoutName } from '@lcl/engine'
 
 let previewEl: HTMLDivElement | null = null
 /** 目标窗跨窗拖入预览:整窗 accent 边框+淡色底(at=null 清除)。localX/Y 预留精细化,v1 整窗高亮即可。 */
@@ -61,6 +61,14 @@ export function installMultiWindow(): void {
   }
   setDetachApi({
     detach: (views, at) => { void t.openDetached?.(views, at) },
+    // 整个 Space 开到它自己的窗口(Ribbon:右键 / ⌘·Ctrl 点击 / 拖出条外)。那扇窗第一次打开照这个 Space 存着的布局摆
+    // (seedSpaceWindowLayout);它此刻正开在本窗的话,现场只在本窗的布局键里(平时切走才存进槽)→ 先存一份,新窗才是眼前这个样子。
+    // 只在**确知**屏上这份布局归它时才存:归属不明(启动还原出一份没记归属的老存档,而它真正的主人 —— 异步就位的 Space ——
+    // 还没注册,内存里的活动 id 只是回落值)时不存,否则是拿别人的现场盖掉这个 Space 的槽(Codex 评审)。新窗就照槽里原有的摆。
+    openSpace: (id, at) => {
+      if (windowKind() === 'main' && liveLayoutOwner() === id && useSpaceStore.getState().activeSpaceId === id) useWorkspace.getState().saveNamed(spaceLayoutName(id))
+      void t.openDetached?.([], at, { space: id })
+    },
     dragUpdate: (x, y, view) => t.dragUpdate?.(x, y, view),
     drop: async (x, y, view) => (await t.dropView?.(x, y, view))?.routed ?? false,
   })

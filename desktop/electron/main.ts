@@ -21,7 +21,7 @@ import { pathToFileURL } from 'url'
 import { readFile, writeFile, mkdir, readdir, stat, lstat, rename, cp, rm } from 'fs/promises'
 import { writeHostTextFile } from './hostTextWrite'
 import { createSerialQueue, lockedUpdateJson, writePrivateJson } from './configWrite'
-import { existsSync, mkdirSync, realpathSync, watch as fsWatch } from 'fs'
+import { existsSync, mkdirSync, realpathSync, writeFileSync, renameSync, rmSync, watch as fsWatch } from 'fs'
 import { ensureCliInstalled } from './cliInstall'
 import { PRODUCT } from './product'
 import { readSpaceIconDataUrl } from './spaceIcon'
@@ -1587,8 +1587,10 @@ function showMainWindow(): void {
 interface ViewDesc { type: string; params?: Record<string, unknown> }
 
 const detachedWindows = new Map<string, BrowserWindow>()
+const readyDetachedWindows = new WeakSet<BrowserWindow>()
 const pendingDetachedViews = new Map<string, ViewDesc[]>() // 拖出登记的初始视图,渲染端 detachedReady 时 pull
-let persistedDetached: Array<{ id: string; bounds: Electron.Rectangle }> = [] // 内存副本 + 落盘(重启恢复)
+let persistedDetached: Array<{ id: string; bounds: Electron.Rectangle; space?: string }> = [] // 内存副本 + 落盘(重启恢复);space = 这扇是哪个 Space 的窗口
+let detachedStateLoaded = false
 let detachedSeq = 0
 
 const detachedStatePath = (): string => join(app.getPath('userData'), 'detached-windows.json')
@@ -1598,16 +1600,31 @@ async function loadDetachedState(): Promise<void> {
     const arr = JSON.parse(await readFile(detachedStatePath(), 'utf8'))
     if (Array.isArray(arr)) persistedDetached = arr.filter((x) => x && typeof x.id === 'string' && x.bounds)
   } catch { persistedDetached = [] }
+  detachedStateLoaded = true
 }
 let saveDetachedTimer: NodeJS.Timeout | null = null
+function saveDetachedState(): void {
+  if (saveDetachedTimer) clearTimeout(saveDetachedTimer)
+  saveDetachedTimer = null
+  if (!detachedStateLoaded) return // Quitting before startup reads the file must not erase the previous windows.
+  // This small window-state file must finish before app.exit, including a quit inside the debounce interval.
+  const file = detachedStatePath(), tmp = `${file}.${process.pid}.tmp`
+  try {
+    writeFileSync(tmp, JSON.stringify(persistedDetached), { encoding: 'utf8', mode: 0o600 })
+    renameSync(tmp, file)
+  } catch (error) {
+    try { rmSync(tmp, { force: true }) } catch { /* best effort */ }
+    console.error('[win] could not save detached window state:', error)
+  }
+}
 function scheduleSaveDetachedState(): void {
   if (saveDetachedTimer) clearTimeout(saveDetachedTimer)
-  saveDetachedTimer = setTimeout(() => { void writeFile(detachedStatePath(), JSON.stringify(persistedDetached)).catch(() => {}) }, 400)
+  saveDetachedTimer = setTimeout(saveDetachedState, 400)
 }
-function upsertDetachedBounds(id: string, bounds: Electron.Rectangle): void {
+function upsertDetachedBounds(id: string, bounds: Electron.Rectangle, space?: string): void {
   const i = persistedDetached.findIndex((x) => x.id === id)
   if (i >= 0) persistedDetached[i].bounds = bounds
-  else persistedDetached.push({ id, bounds })
+  else persistedDetached.push({ id, bounds, ...(space ? { space } : {}) })
   scheduleSaveDetachedState()
 }
 function removeDetachedState(id: string): void {
@@ -1617,12 +1634,24 @@ function removeDetachedState(id: string): void {
 
 function nextDetachedId(): string { detachedSeq += 1; return `d${Date.now().toString(36)}_${detachedSeq}` }
 
-function createDetachedWindow(opts: { id?: string; views?: ViewDesc[]; bounds?: Partial<Electron.Rectangle> }): string {
-  const id = opts.id || nextDetachedId()
+/** Space id 的形状(同 shared/spaceAppearance 的 ID):进 URL 参数与布局键之前先过一遍。 */
+const SPACE_ID = /^[A-Za-z0-9._-]{1,128}$/
+
+/** space = 把整个 Space 开在这扇窗里(渲染层据 ?space= 进入该 Space 并锁在里面)。一个 Space 一扇:id 由 Space id 定,
+ *  已开着就叫到前面;布局键跟着 id 走,所以关了再开还是这扇窗上次的样子。 */
+function createDetachedWindow(opts: { id?: string; views?: ViewDesc[]; bounds?: Partial<Electron.Rectangle>; space?: string }): string {
+  const space = opts.space
+  const id = opts.id || (space ? `sp_${space}` : nextDetachedId())
+  const open = detachedWindows.get(id)
+  if (open && !open.isDestroyed()) {
+    if (open.isMinimized()) open.restore()
+    if (readyDetachedWindows.has(open)) present(open)
+    return id
+  }
   if (opts.views?.length) pendingDetachedViews.set(id, opts.views)
   const win = new BrowserWindow({
-    width: opts.bounds?.width ?? 900,
-    height: opts.bounds?.height ?? 680,
+    width: opts.bounds?.width ?? (space ? 1100 : 900),
+    height: opts.bounds?.height ?? (space ? 760 : 680),
     x: opts.bounds?.x,
     y: opts.bounds?.y,
     minWidth: 480,
@@ -1631,31 +1660,58 @@ function createDetachedWindow(opts: { id?: string; views?: ViewDesc[]; bounds?: 
     autoHideMenuBar: true,
     transparent: process.platform === 'darwin',
     backgroundColor: process.platform === 'darwin' ? '#00000000' : '#fbf8f5',
-    show: !QUIET_WINDOWS,
+    show: false,
     webPreferences: satelliteWebPreferences(),
   })
-  if (QUIET_WINDOWS) win.showInactive()
+  win.once('ready-to-show', () => {
+    if (win.isDestroyed()) return
+    if (process.platform === 'win32' && opts.bounds) {
+      // Windows can add fractional-DPI frame rounding during construction. Reapply the saved outer bounds
+      // after the native frame exists, correcting the measured residual so repeated restores cannot grow it.
+      const target = { ...win.getBounds(), ...opts.bounds }
+      target.width = Math.max(480, target.width)
+      target.height = Math.max(360, target.height)
+      const requested = { ...target }
+      for (let attempt = 0; attempt < 3; attempt++) {
+        win.setBounds(requested)
+        const actual = win.getBounds()
+        if (actual.width === target.width && actual.height === target.height) break
+        requested.width = Math.max(480, requested.width + target.width - actual.width)
+        requested.height = Math.max(360, requested.height + target.height - actual.height)
+      }
+    }
+    readyDetachedWindows.add(win)
+    present(win)
+  })
   detachedWindows.set(id, win)
   win.webContents.setWindowOpenHandler(openUrlHandler(win.webContents))
   hardenNav(win.webContents)
-  const persist = (): void => { if (!win.isDestroyed()) upsertDetachedBounds(id, win.getBounds()) }
-  win.on('moved', persist)
-  win.on('resized', persist)
+  let closing = false
+  const persist = (): void => { if (!closing && !win.isDestroyed()) upsertDetachedBounds(id, win.getBounds()) }
+  // move/resize cover programmatic bounds changes too; Windows resized fires only for a manual resize.
+  win.on('move', persist)
+  win.on('resize', persist)
+  win.on('close', () => {
+    closing = true
+    if (!isQuitting) removeDetachedState(id) // Record the close intent before a subsequent app quit.
+  })
   win.on('closed', () => {
     console.log('[win] detached closed', id)
     detachedWindows.delete(id)
     pendingDetachedViews.delete(id)
-    removeDetachedState(id) // 用户主动关 = 不再恢复;布局键留 localStorage 无害
+    if (!isQuitting) removeDetachedState(id) // Also handles webContents being closed directly by a harness.
   })
-  upsertDetachedBounds(id, win.getBounds()) // 立即登记(拖出后崩溃也能恢复)
-  console.log('[win] detached open', id, 'views=', opts.views?.map((v) => v.type).join(','))
-  loadRendererWith(win, { window: 'detached', id, ui: 'desktop' })
+  upsertDetachedBounds(id, win.getBounds(), space) // 立即登记(拖出后崩溃也能恢复)
+  console.log('[win] detached open', id, space ? `space=${space}` : `views=${opts.views?.map((v) => v.type).join(',')}`)
+  loadRendererWith(win, { window: 'detached', id, ui: 'desktop', ...(space ? { space } : {}) })
   return id
 }
 
 async function restoreDetachedWindows(): Promise<void> {
   await loadDetachedState()
-  for (const { id, bounds } of [...persistedDetached]) createDetachedWindow({ id, bounds })
+  for (const { id, bounds, space } of [...persistedDetached]) {
+    createDetachedWindow({ id, bounds, space: typeof space === 'string' && SPACE_ID.test(space) ? space : undefined })
+  }
 }
 
 const floatingWindows = new Map<string, BrowserWindow>()
@@ -3416,10 +3472,13 @@ app.whenReady().then(async () => {
     pendingDetachedViews.delete(String(id))
     return v
   })
-  ipcMain.handle('window:openDetached', (_e, views: ViewDesc[], at?: { screenX: number; screenY: number }) => {
+  ipcMain.handle('window:openDetached', (_e, views: ViewDesc[], at?: { screenX: number; screenY: number }, opts?: { space?: unknown }) => {
     const list = Array.isArray(views) ? views.filter((v) => v && typeof v.type === 'string') : []
-    const bounds = at ? { x: Math.round(at.screenX), y: Math.round(at.screenY), width: 900, height: 680 } : undefined
-    return { id: createDetachedWindow({ views: list, bounds }) }
+    // 整个 Space 开窗(Ribbon 的右键 / ⌘·Ctrl 点击 / 拖出):不带初始视图,窗口自己进那个 Space
+    const space = typeof opts?.space === 'string' && SPACE_ID.test(opts.space) ? opts.space : undefined
+    const at2 = at && Number.isFinite(at.screenX) && Number.isFinite(at.screenY) ? at : undefined
+    const bounds = at2 ? { x: Math.round(at2.screenX), y: Math.round(at2.screenY), width: space ? 1100 : 900, height: space ? 760 : 680 } : undefined
+    return { id: createDetachedWindow(space ? { space, bounds } : { views: list, bounds }) }
   })
   ipcMain.on('window:openMini', (e, raw: unknown) => {
     if (!isTrustedSender(e)) return
@@ -3702,6 +3761,11 @@ app.whenReady().then(async () => {
 
 app.on('before-quit', (e) => {
   isQuitting = true // 放行 window close 拦截(否则 hide 会吞掉退出)
+  for (const state of persistedDetached) {
+    const win = detachedWindows.get(state.id)
+    if (win && !win.isDestroyed()) state.bounds = win.getBounds()
+  }
+  saveDetachedState()
   globalShortcut.unregisterAll() // 释放 mini 全局快捷键
   miniAutoPanel?.stop(); miniAutoPanel = null
   approvalDelivery.stop() // P1-K3

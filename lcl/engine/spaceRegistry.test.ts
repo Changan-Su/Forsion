@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { useSpaceStore, getActiveSpace, spaceLayoutName, setActiveSpaceCold, adoptSpaceLayoutCold } from './spaceRegistry'
+import { useSpaceStore, getActiveSpace, spaceLayoutName, setActiveSpaceCold, adoptSpaceLayoutCold, bumpRecent } from './spaceRegistry'
 import { useWorkspace } from './workspaceStore'
 import { loadLayout, saveLayout, loadNamedLayout, saveNamedLayout, type LayoutBlob } from './layoutPersist'
 import type { SpaceDefinition } from './types'
@@ -20,7 +20,7 @@ beforeEach(() => {
     removeItem: (k: string) => { store.delete(k) },
     clear: () => store.clear(),
   })
-  useSpaceStore.setState({ spaces: [], activeSpaceId: 'tangu' })
+  useSpaceStore.setState({ spaces: [], activeSpaceId: 'tangu', recent: [] })
   useWorkspace.setState({ sideProfileKey: null }) // 真 setSideProfile 会留下上一条用例切到的 Space
 })
 
@@ -284,5 +284,27 @@ describe('adoptSpaceLayoutCold', () => {
     vi.restoreAllMocks()
     expect(loadNamedLayout(spaceLayoutName('tangu'))).toBeNull() // 确实没归档成
     expect(tagOf(loadLayout())).toBe('tangu-now')                // 但布局键还在
+  })
+
+  // ---- 最近使用的 Space(Ribbon 中间那一段照它画) ----
+  it('bumpRecent: 切到的在最前、切走的紧跟,去重,其余顺序不动', () => {
+    expect(bumpRecent([], 'b', 'a')).toEqual(['b', 'a'])                      // 第一次切:切走的那个也没人记过
+    expect(bumpRecent(['b', 'a', 'c'], 'c', 'b')).toEqual(['c', 'b', 'a'])
+    expect(bumpRecent(['c', 'b', 'a'], 'a', 'c')).toEqual(['a', 'c', 'b'])
+    expect(bumpRecent(Array.from({ length: 30 }, (_, i) => `s${i}`), 'x', 'y')).toHaveLength(12) // 不会越攒越长
+  })
+
+  it('setActiveSpace 记进 recent 并落盘;setActiveSpaceCold(启动落位)不算「用过」', () => {
+    useWorkspace.setState({
+      api: null, saveNamed: () => {}, setSidebarDefaults: () => {}, namedLayouts: () => [] as string[],
+      applyNamed: () => true, resetLayout: () => {}, saveCurrent: () => {},
+    })
+    useSpaceStore.setState({ spaces: [mkSpace('tangu'), mkSpace('amadeus'), mkSpace('cal')], activeSpaceId: 'tangu' })
+    useSpaceStore.getState().setActiveSpace('amadeus')
+    useSpaceStore.getState().setActiveSpace('cal')
+    expect(useSpaceStore.getState().recent).toEqual(['cal', 'amadeus', 'tangu'])
+    expect(JSON.parse(localStorage.getItem('forsion_tangu_recent_spaces')!)).toEqual(['cal', 'amadeus', 'tangu'])
+    setActiveSpaceCold('tangu')
+    expect(useSpaceStore.getState().recent).toEqual(['cal', 'amadeus', 'tangu'])
   })
 })

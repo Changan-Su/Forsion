@@ -33,6 +33,8 @@ export const LCL_MESSAGES: Record<string, { zh: string; en: string }> = {
   'lcl.ribbon.moveOut': { zh: '移出收纳夹', en: 'Move out of folder' },
   'lcl.ribbon.folderEmpty': { zh: '把图标拖到收纳夹图标上即可放入', en: 'Drag icons onto the folder to collect them' },
   'lcl.ribbon.defaultIcon': { zh: '默认图标', en: 'Default icon' },
+  'lcl.ribbon.openInNewWindow': { zh: '在新窗口中打开', en: 'Open in new window' },
+  'lcl.ribbon.recentSpaces': { zh: '最近使用的 Space', en: 'Recent Spaces' },
 
   // 标签条 / 主区前后缀 / 右上角浮钮组
   'lcl.tab.close': { zh: '关闭', en: 'Close' },

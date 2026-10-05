@@ -2,12 +2,14 @@
  *  不跑主窗独有的更新检查 / inbox 角标轮询 / 通知回跳,也不挂 app 级浮层(设置/引导/市场/成就)。
  *  首次拖出的初始视图由主进程 pull 握手注入(detachedReady,避免「主进程先推、渲染端还没挂监听」竞态);
  *  重启时该窗自恢复 tangu2_layout_detached_<id> 布局(见 layoutPersist),detachedReady 返回空即可。 */
-import { useEffect } from 'react'
-import { Shell, useWorkspace } from '@lcl/engine'
+import { useEffect, useState } from 'react'
+import { Shell, useWorkspace, useSpaceStore, subscribeViews, savedLayoutRestorable, label, WINDOW_SPACE_ID } from '@lcl/engine'
+import type { SpaceDefinition } from '@lcl/engine'
+import { buildDefaultLayout } from './bootstrapEngine'
 import { useApp } from './stores/appStore'
 import { useTheme } from './stores/themeStore'
 import { getLanguage } from './theme/registry'
-import { useI18n } from './i18n'
+import { useI18n, registerMessages } from './i18n'
 import { AmadeusOverlays } from './amadeusOverlays'
 import { FindBar } from './findInPage'
 import { detachedId } from './windowKind'
@@ -20,9 +22,60 @@ function buildDetachedDefault(): void {
   useWorkspace.getState().openView('home', {}, 'main')
 }
 
+registerMessages({
+  'spaceWindow.stuck': {
+    zh: '这个 Space 还没准备好。它所属的插件可能还在加载，或已被停用、卸载。准备好后这里会自动打开，也可以直接关掉这扇窗。',
+    en: 'This Space is not ready yet. Its plugin may still be loading, or may have been disabled or removed. It will open here once it is ready, or you can close this window.',
+  },
+})
+
+/** 等这么久还没等到 → 把话说明白(继续等)。也是「本窗存着的布局里引用的视图没注册全」时最多再等的时间。 */
+const SPACE_WAIT_MS = 6000
+
+/** Space 窗口(整个 Space 开在这扇窗里,?space=<id>)什么时候能挂 Shell:
+ *   · 等这个 Space 注册上来(用户 / 插件 Space 是异步装载的)—— **一直等,不降级**:降级成普通独立窗会往同一把布局键里写一份
+ *     空布局,把这扇窗原来的布局盖掉,Space 晚到了也回不来(Codex 评审)。等久了只是把话说明白。
+ *   · 本窗存着的布局里引用的视图也要注册全(插件视图可能比 Space 晚到):挂早了还原落空,默认布局随即盖掉存档。
+ *     这一条最多等 SPACE_WAIT_MS(视图可能再也不来 —— 插件卸了),到点照挂,落空走默认布局,口径同主窗的启动还原。
+ *   · 挂上之后这个 Space 的定义换了 / 没了(插件更新、停用、卸载):整窗重载,从头再等一遍。
+ *  返回 'plain' = 普通独立窗(没带 space);'wait' / 'stuck' = 还在等(stuck = 等久了);'ready' = 可以挂了。 */
+function useWindowSpace(): 'plain' | 'wait' | 'stuck' | 'ready' {
+  const [state, setState] = useState<'plain' | 'wait' | 'stuck' | 'ready'>(WINDOW_SPACE_ID ? 'wait' : 'plain')
+  useEffect(() => {
+    const id = WINDOW_SPACE_ID
+    if (!id) return
+    const t0 = Date.now()
+    let mounted: SpaceDefinition | null = null
+    let reloading = false
+    const settle = (): void => {
+      const sp = useSpaceStore.getState().spaces.find((s) => s.id === id)
+      if (mounted) {
+        if (sp !== mounted && !reloading) { reloading = true; location.reload() }
+        return
+      }
+      if (!sp) return
+      if (!savedLayoutRestorable() && Date.now() - t0 < SPACE_WAIT_MS) return
+      mounted = sp
+      const ws = useWorkspace.getState()
+      ws.setSidebarDefaults(sp.sidebarDefaults)
+      ws.setSideProfile(sp.id, sp.resizableSides ?? {}, sp.sideDefaultScale, sp.bottomSpan)
+      ws.setPinned(sp.pinned)
+      document.title = label(sp.name)
+      setState('ready')
+    }
+    settle()
+    const offSpaces = useSpaceStore.subscribe(settle)
+    const offViews = subscribeViews(settle)
+    const timer = window.setTimeout(() => { settle(); if (!mounted) setState('stuck') }, SPACE_WAIT_MS + 50)
+    return () => { offSpaces(); offViews(); window.clearTimeout(timer) }
+  }, [])
+  return state
+}
+
 export function DetachedRoot() {
   const { t } = useI18n()
   const theme = useTheme()
+  const spaceState = useWindowSpace()
 
   useEffect(() => {
     useApp.getState().setTr((k, vars) => t(k, vars as Record<string, string | number> | undefined))
@@ -51,6 +104,20 @@ export function DetachedRoot() {
 
   const isMac = (() => { try { return window.tangu?.platform === 'darwin' } catch { return false } })()
 
+  // Space 窗口还在等它的 Space:只留拖窗带(窗口得能挪 / 关),不挂 Shell —— 不挂就不会往布局键里写东西。
+  if (spaceState === 'wait' || spaceState === 'stuck') {
+    return (
+      <div className="shell-host" style={{ display: 'flex', flexDirection: 'column' }}>
+        {isMac && <div style={{ height: 38, flex: '0 0 auto', WebkitAppRegion: 'drag' } as React.CSSProperties} />}
+        {spaceState === 'stuck' && (
+          <div className="space-window-wait" role="status" style={{ flex: 1, display: 'grid', placeItems: 'center', padding: 32, textAlign: 'center', color: 'var(--text-muted)', fontSize: 'var(--ui-font-body, 13px)', lineHeight: 1.6 }}>
+            <span style={{ maxWidth: 420 }}>{t('spaceWindow.stuck')}</span>
+          </div>
+        )}
+      </div>
+    )
+  }
+
   return (
     <>
       <div className="shell-host">
@@ -58,7 +125,8 @@ export function DetachedRoot() {
           noRibbon
           dark={theme.mode === 'dark'}
           soft={!!getLanguage(theme.lang)?.manifest.panelGap}
-          buildDefault={buildDetachedDefault}
+          // Space 窗口没有存过布局(且没播种到)时,摆这个 Space 自己的默认布局。
+          buildDefault={spaceState === 'ready' ? buildDefaultLayout : buildDetachedDefault}
           // mac hiddenInset:留一条可拖拽标题带给交通灯(win/linux 有原生标题栏,不需要)。
           header={isMac ? <div style={{ height: 38, flex: '0 0 auto', WebkitAppRegion: 'drag' } as React.CSSProperties} /> : undefined}
         />
