@@ -88,7 +88,8 @@ interface JournalLine {
   before: HarnessEntry | null;
   after: HarnessEntry | null;
   sessionId?: string;
-  /** 不是 agent 自己在对话里写的改动:谁代写的('historian' = 后台复盘的提名直接采纳;'muse' = 用量巡检代为收起)。缺省 = agent 自己。 */
+  /** 不是 agent 自己在对话里写的改动:谁代写的('historian' = 后台复盘的提名直接采纳;'muse' = 用量巡检代为收起;
+   *  'user' = 用户在面板上逐条采纳的候选,只由路由写、不从请求体收)。缺省 = agent 自己。 */
   by?: string;
 }
 
@@ -471,8 +472,9 @@ export function isRefineInvocation(text: string): boolean {
 
 // ── 自动档:后台提名 ───────────────────────────────────────────────────────
 // 10-04 用户裁决「可以做自动采纳」:Historian 的提名像方法、过得了下面这道形状闸的,直接写成条目(adoptHarnessNomination);
-// 过不了的、写不进的(满了 / 校验不过)照旧进候选收件箱(.harness-raw.md,行式,同 .memory-raw.md 格式),/refine 时一次性注入并消费,
-// 由 agent 自己逐条看。收件箱里的候选没有任何权威。dot-file → agentFileSync 不同步。
+// 过不了的、写不进的(满了 / 校验不过)照旧进候选收件箱(.harness-raw.md,行式,同 .memory-raw.md 格式)。收件箱里的候选分两种去处:
+// 过不了形状闸的等用户在「进化」页逐条采纳 / 丢弃(resolveHarnessCandidate),/refine 不取;其余的 /refine 时一次性注入并消费,由 agent 自己逐条看
+// (用户也可以先一步采纳 / 丢弃)。收件箱里的候选没有任何权威。dot-file → agentFileSync 不同步。
 // slug 必传且=展示身份(HARNESS.md 按 agent 本体,不折叠 shareDefaultMemory;与注入槽同源)——
 // 别抄 .memory-raw.md 的 currentAgentSlug() 兜底链,Historian 里 ALS 是折叠后的记忆域,会归错桶。
 export const HARNESS_RAW_FILE = '.harness-raw.md';
@@ -496,6 +498,17 @@ export function autoAdoptable(text: string): boolean {
 export function noteAutoAdoptable(text: string): boolean {
   return autoAdoptable(text) && !/`|~\/|\$\(|&&|\|\|/.test(text);
 }
+
+/** 收件箱一行 `- [YYYY-MM-DD s:xxxx] 正文` 的正文。 */
+const candidateBody = (line: string): string => line.replace(/^- \[[^\]]*\]\s*/, '');
+/** 别的 agent 转交的装备建议(manage_harness propose + tools / skills 由代码拼出的那一行):采纳要按对方的工具表核名字,只能由它自己在 /refine 里做。 */
+const EQUIP_SUGGESTION = /^\(proposed by [^)]*\) Equipment suggestion from a usage review:/;
+
+/** 这条候选要不要用户本人点头(10-04 用户裁决「有风险的才需要确认」):过不了形状闸的 —— 带网址、命令、行内代码、凭据 / 审批 / 权限字眼。
+ *  这类候选 /refine 不取(模型读不到),只在「进化」页等用户逐条采纳或丢弃。按正文现算,收件箱格式不变,老版本留下的行同样适用。 */
+export const candidateNeedsUser = (line: string): boolean => !noteAutoAdoptable(candidateBody(line));
+/** 面板上能不能点「采纳」(装备建议不行,见 EQUIP_SUGGESTION)。 */
+export const candidateAdoptable = (line: string): boolean => !EQUIP_SUGGESTION.test(candidateBody(line));
 
 const sameText = (a: string, b: string): boolean => a.replace(/\s+/g, ' ').trim().toLowerCase() === b.replace(/\s+/g, ' ').trim().toLowerCase();
 
@@ -599,35 +612,78 @@ export async function appendHarnessCandidates(slug: string, sessionId: string, c
   });
 }
 
-/** /refine 注入时一次性取走全部候选行(注入=消费,不再二次展示)。写锁内原子读清:
- *  同进程其他会话的 Historian 追加(也持锁)不会被吞;跨进程并发同上文 LWW 取舍。 */
+async function readInbox(slug: string): Promise<string[]> {
+  try {
+    return (await fs.readFile(rawInboxPath(slug), 'utf-8')).split('\n').filter((l) => l.trim());
+  } catch (e: any) {
+    if (e?.code === 'ENOENT') return [];
+    throw e;
+  }
+}
+const writeInbox = (slug: string, lines: string[]): Promise<void> => fs.writeFile(rawInboxPath(slug), lines.length ? lines.join('\n') + '\n' : '', 'utf-8');
+
+/** /refine 注入时一次性取走候选行(注入=消费,不再二次展示)。等用户点头的那些(candidateNeedsUser)不取、原样留在收件箱。
+ *  写锁内原子读改:同进程其他会话的 Historian 追加(也持锁)不会被吞;跨进程并发同上文 LWW 取舍。 */
 export async function consumeHarnessCandidates(slug: string): Promise<string[]> {
   return withSlugLock(slug, async () => {
-    const p = rawInboxPath(slug);
-    let raw: string;
-    try {
-      raw = await fs.readFile(p, 'utf-8');
-    } catch (e: any) {
-      if (e?.code === 'ENOENT') return [];
-      throw e;
+    const lines = await readInbox(slug);
+    const take = lines.filter((l) => !candidateNeedsUser(l));
+    if (take.length) await writeInbox(slug, lines.filter(candidateNeedsUser));
+    return take;
+  });
+}
+
+/** 面板上逐条「采纳 / 丢弃」失败的原因(路由按 code 回,桌面按 code 出文案)。 */
+export class HarnessCandidateError extends Error {
+  constructor(public readonly code: 'gone' | 'equip' | 'full' | 'too_long', message: string) { super(message); }
+}
+
+/** 候选正文 → 一条 note。Historian 的行是 `标题: 做法 (evidence: 依据)`(整行截到 300 字,右括号可能没了);
+ *  别的形状(旧格式的整句、别的 agent 提的)没有标题,取开头一段。依据缺了就记「用户采纳」—— 新条目必须带依据。 */
+function candidateNote(text: string): { title: string; body: string; evidence: string } {
+  const from = text.match(/^\(proposed by ([^)]*)\)\s*/);
+  const rest = from ? text.slice(from[0].length) : text;
+  const ev = rest.match(/\s*\(evidence: (.*?)\)?$/);
+  const head = (ev ? rest.slice(0, ev.index) : rest).trim();
+  const cut = head.indexOf(': ');
+  const titled = cut > 0 && cut <= TITLE_MAX && cut + 2 < head.length;
+  return {
+    title: titled ? head.slice(0, cut) : head.slice(0, TITLE_MAX),
+    body: titled ? head.slice(cut + 2) : head,
+    // 依据只是出处,超长截掉无妨(正文不截:截断一条「照着做」的指令会改它的意思,超长直接报错)
+    evidence: (ev?.[1]?.trim() || `${from ? `Proposed by ${from[1]}; adopted` : 'Adopted'} by the user on ${today()}`).slice(0, EVIDENCE_MAX),
+  };
+}
+
+/** 用户在「进化」页对一条候选点了「采纳 / 丢弃」(10-04)。line = 面板看到的收件箱原始行,拿它当身份:
+ *  已经不在了(被 /refine 取走、被另一次点击处理掉)→ 'gone',面板重新载入。采纳 = 写成一条 note(与 agent 自己写的同一条路:
+ *  校验、封顶、journal,记 by:'user'),写成了才把那一行拿掉;丢弃 = 只拿掉那一行。整个过程在一把锁里。 */
+export async function resolveHarnessCandidate(slug: string, line: string, adopt: boolean): Promise<HarnessEditResult | null> {
+  return withSlugLock(slug, async () => {
+    const lines = await readInbox(slug);
+    const at = lines.indexOf(line);
+    if (at < 0) throw new HarnessCandidateError('gone', 'this candidate is no longer in the inbox');
+    let result: HarnessEditResult | null = null;
+    if (adopt) {
+      if (!candidateAdoptable(line)) throw new HarnessCandidateError('equip', 'an equipment suggestion is adopted by the agent itself during /refine');
+      const note = candidateNote(candidateBody(line));
+      if (redactSecrets(note.body).trim().length > BODY_MAX) throw new HarnessCandidateError('too_long', `this candidate is longer than one entry holds (${BODY_MAX} characters)`);
+      const entries = await loadHarness(slug);
+      // 上一次点击条目写成了、收件箱那一行没来得及拿掉(写盘失败)→ 这次不再写第二条,只把那一行收尾(Codex 评审 10-04)
+      const done = entries.find((e) => sameText(e.title, note.title) && sameText(e.body, redactSecrets(note.body)));
+      if (!done && entries.length >= MAX_ENTRIES) throw new HarnessCandidateError('full', `the record is full (${MAX_ENTRIES} entries)`);
+      result = done ? { entry: done, before: done, ts: new Date().toISOString(), rev: '' } : await applyEditUnlocked(slug, { action: 'upsert', kind: 'note', ...note }, { by: 'user' });
     }
-    const lines = raw.split('\n').filter((l) => l.trim());
-    if (lines.length) await fs.writeFile(p, '', 'utf-8');
-    return lines;
+    lines.splice(at, 1);
+    await writeInbox(slug, lines);
+    return result;
   });
 }
 
 /** 只读看一眼收件箱(不消费):桌面「进化」标签显示「N 条待复盘候选」用。读失败只有 ENOENT 算空。
  *  也进 per-slug 锁:append 是整文件重写(先截断后写),锁外读可能撞见半截文件、少显示几条。 */
 export async function peekHarnessCandidates(slug: string): Promise<string[]> {
-  return withSlugLock(slug, async () => {
-    try {
-      return (await fs.readFile(rawInboxPath(slug), 'utf-8')).split('\n').filter((l) => l.trim());
-    } catch (e: any) {
-      if (e?.code === 'ENOENT') return [];
-      throw e;
-    }
-  });
+  return withSlugLock(slug, () => readInbox(slug));
 }
 
 /** /refine 指令的候选附录(空清单返回 '')。 */

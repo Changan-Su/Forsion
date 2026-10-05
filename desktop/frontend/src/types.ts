@@ -756,6 +756,8 @@ export interface ProjectMemoryView {
   entries: Array<{ id: string; content: string; updatedAt: number }>
   chars: number
   limit: number
+  /** 等用户点头的后台候选(带网址、命令或权限字眼,没有直接记):不是记忆,Agent 读不到。老引擎不带。 */
+  candidates?: Array<{ id: string; content: string; at: number }>
 }
 
 export interface SkillInfo {

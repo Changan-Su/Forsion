@@ -1208,7 +1208,7 @@ export function App({ boot, storage }: { boot: TuiConfig; storage: string }): Re
         // 复盘轮:当普通消息发出,引擎检测 /refine 前缀注入单源复盘指令(agentLoop;与 /skill 同尾部通道)。
         // 发归一化文本而非原 line:引擎检测大小写敏感,用户敲 /REFINE 会静默不触发(Codex 评审 #10)。
         if (cfgRef.current.execMode !== 'host') {
-          notice('/refine 仅本机(host)会话可用(工作笔记写在本机 agent 目录)', 'warn');
+          notice('/refine 仅本机(host)会话可用(进化记录写在本机 agent 目录)', 'warn');
           return;
         }
         const outgoing = '/refine' + (rest ? ` ${rest}` : '');

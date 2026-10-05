@@ -8,6 +8,11 @@ vi.mock('./markdownEditorSurface', () => ({
   mountPluginMarkdownEditor: surface.mount,
 }))
 vi.mock('../api', () => ({ amadeus: undefined }))
+// The revoked-context case calls ctx.table / ctx.dashboard / ctx.ui.mountChatBox: stub their surfaces so the test never
+// loads the real table, dashboard and chat graphs (over a second of imports, a timeout on a loaded machine).
+vi.mock('./tableSurface', () => ({ mountPluginTable: surface.mount }))
+vi.mock('./dashboardSurface', () => ({ mountPluginDashboard: surface.mount }))
+vi.mock('./chatBoxSurface', () => ({ mountPluginChatBox: surface.mount }))
 const { usePluginStore } = await import('./pluginStore')
 function context(id: string, fail = false): PluginContext {
   let ref!: PluginContext
@@ -63,6 +68,49 @@ afterEach(() => {
     usePluginStore.getState().disable(id)
 })
 describe('native Markdown plugin mount lifecycle', () => {
+  it('a failed mount shows its error in a host-owned node: plugin nodes stay, dispose takes the error away', async () => {
+    const c = context('failing')
+    const el = document.createElement('div')
+    const own = el.appendChild(document.createElement('p'))
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
+    surface.mount.mockImplementationOnce(() => { throw new Error('editor exploded') })
+    const h = c.ui!.mountMarkdownEditor!(el, { value: '# Draft' })
+    await vi.dynamicImportSettled()
+    await vi.waitFor(() => expect(el.textContent).toContain('editor exploded'))
+    logged.mockRestore()
+    expect(own.parentNode).toBe(el)
+    h.dispose()
+    expect([...el.children]).toEqual([own])
+  })
+  it('a revoked context cannot take an element away from a live request', async () => {
+    const { claimHostMount } = await import('@lcl/components')
+    const c = context('reloaded')
+    usePluginStore.getState().disable('reloaded') // the old context is dead; a late task of its still calls in
+    const el = document.createElement('div')
+    const stillMine = claimHostMount(el) // the new context's request, import still loading
+    const quiet = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    c.ui!.mountMarkdownEditor!(el, { value: '# late' })
+    c.ui!.mountChatBox!(el, { onSubmit: async () => true })
+    c.table!.mount(el, { id: 't', columns: [{ key: 'a', label: 'A', kind: 'text' }], rows: [] })
+    c.dashboard!.mount!(el, { recipe: { cards: [] } })
+    await vi.dynamicImportSettled()
+    quiet.mockRestore()
+    expect(stillMine()).toBe(true)
+    expect(surface.mount).not.toHaveBeenCalled()
+    expect(el.childElementCount).toBe(0)
+  })
+  it('a request loses its element to a later mount while its import is still loading: it never mounts', async () => {
+    const { mountHostReact } = await import('@lcl/components')
+    const c = context('outrun')
+    const el = document.createElement('div')
+    const h = c.ui!.mountMarkdownEditor!(el, { value: '# Draft' })
+    mountHostReact(el, 'later mount') // the plugin hands the same element to something else, without disposing
+    await vi.dynamicImportSettled()
+    await Promise.resolve()
+    expect(surface.mount).not.toHaveBeenCalled()
+    expect(h.getValue()).toBe('# Draft')
+    await vi.waitFor(() => expect(el.textContent).toBe('later mount'))
+  })
   it('revokes a pending import before it creates an editor', async () => {
     const c = context('pending')
     const h = c.ui!.mountMarkdownEditor!(document.createElement('div'), {

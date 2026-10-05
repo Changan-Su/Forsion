@@ -412,6 +412,19 @@ createPage / listPages / listFiles / searchVault / reveal`)都要求一个**已�
 - **启动期的写一律 try/catch**;要按「库在不在」分支就读 `vaultRoot()`,别去试探 `readFile` 的 null。
 - 与列表源那条纪律是同一个病根:`registerListSource` 的 `subscribe()` 必须顺手重读一次(见下)。
 
+### 宿主挂载接口的 dispose 契约(2026-10-04 起)
+
+`ctx.app.mountBlocks` / 文件视图的 `mountNoteView` / `ctx.ui.mount*` / `ctx.table.mount` / `ctx.dashboard.mount` / `ctx.tangu.mountChat`
+都把宿主的界面挂进**宿主自己加到 `el` 里的一层**(`display:contents`,不出盒子:`el` 的高度、flex 照旧作用在里面的内容上)。
+
+- `dispose()` 同步摘掉这一层,**之后 `el` 立刻还给你**:清空它、放自己的内容、在同一个 `el` 上再挂,都不用等。
+- dispose 再挂 = 一份全新的实例(输入焦点、排序筛选这些状态不带过来)。只是换数据 / 换参数就用句柄的 `update()`。
+- 一个 `el` 同一时刻只有一份宿主界面:上一份没 dispose 就在同一个 `el` 上再挂,宿主先把上一份完整收掉(等同于你 dispose 了它,句柄此后不再生效),再挂新的;谁后调用谁留下,不看谁先加载完。要并排放两份,就各给一个子节点。
+  `mountFloatingToc` 例外:它是叠在 `shell` 上的一层,不占用 `shell`,不收掉 `shell` 上别的挂载,也不被它们收掉。
+- 别用 `el > .x` 去选宿主渲染的节点,也别假设它是 `el.firstElementChild` —— 中间隔着那一层。
+- 2.12.2 及更早的宿主没有这条保证:dispose 之后那一拍里清空 `el`,宿主的卸载会报一条页面错误,或者再挂之后一片空白。
+  要兼容它们,就把宿主内容挂进你自己建的子节点(`const slot = el.appendChild(document.createElement('div'))`),换内容时连子节点一起换掉。
+
 ### 可复用 UI 组件：ctx.ui.mountChatBox（2026-09-24 起）
 
 Space 管布局，View 管独立功能面，**UI component** 是 View 内可组合的部件；不要与 Amadeus 文档 Block / Dashboard Card 混用。
@@ -423,7 +436,7 @@ Space 管布局，View 管独立功能面，**UI component** 是 View 内可组�
 提交返回 true 清空已提交内容；false / reject 保留，等待中防重复。默认 ⌘/Ctrl+Enter，Shift+Enter 换行，输入法确认不提交。
 模型目录与聊天共用，只展示 LLM；模型与思考档是组件局部草稿，不改全局默认/当前会话，不自动开会话或调用模型。
 **调用方必须使用回调里的模型与思考档**，不能只接 text。附件、命令、审批与运行控制属于会话编排器，不是此提示表单 API。
-插件主动在 View 卸载时 dispose；宿主仍会在插件禁用/重载/setup 失败时统一回收，卸载后晚到的异步结果无效。
+插件主动在 View 卸载时 dispose（之后 `el` 立刻归还，见上「dispose 契约」）；宿主仍会在插件禁用/重载/setup 失败时统一回收，卸载后晚到的异步结果无效。
 完整双语示例与契约：`docs/customization/ui-components.md`；类型真源：`desktop/shared/chatBox.ts`。
 新增公共组件时一起维护类型、本文、原生消费者和生命周期测试，`contractDocs.test.ts` 覆盖 `ctx.ui` 嵌套方法。
 
@@ -433,7 +446,7 @@ Space 管布局，View 管独立功能面，**UI component** 是 View 内可组�
 返回 `{ getValue(), update(patch), insertMarkdown(md), focus(), dispose() }`。
 `opts` 支持 `value`(必填字符串)、`label`、`readOnly`、`previewBaseUrl`(预览里相对路径图片/视频的源)、`onChange(markdown)`。
 **正文与持久化归调用方**:不读写活动库、不改当前笔记、不自动保存、不调模型。保存前必须同步调 `getValue()`(含最新一笔编辑事务)。
-`update({ value })` 换文档,`insertMarkdown` 追加附件/嵌入(只读时无效),`dispose()` 幂等;宿主在插件禁用/重载/setup 失败时统一回收,旧句柄不再改内容。
+`update({ value })` 换文档,`insertMarkdown` 追加附件/嵌入(只读时无效),`dispose()` 幂等(之后 `el` 立刻归还,见上「dispose 契约」);宿主在插件禁用/重载/setup 失败时统一回收,旧句柄不再改内容。
 老宿主没有此方法时明确提示升级,不要拿 textarea 冒充原生编辑器。完整契约:`docs/customization/ui-components.md`;类型真源:`desktop/shared/markdownEditor.ts`。
 
 ### 原生悬浮目录 ctx.ui.mountFloatingToc(2026-09-07 起)
@@ -474,7 +487,7 @@ ctx.registerView({ id: 'manual', title: 'Manual', mount(el) {
 - 特殊 DOM 可传 `itemFromElement(element, index) → {text, level, primary?, onSelect?} | null`。
   回调抛错会被宿主隔离;不传 `onSelect` 就按元素位置在 `scrollContainer` 内平滑滚动。
 - DOM 的增删和文字变化会自动重扫;只有 Shadow DOM / 第三方画布等观察不到的变化才调返回句柄的 `refresh()`。
-  `dispose()` 幂等,插件禁用 / 重载时宿主也会统一卸载。
+  `dispose()` 幂等,同步摘掉宿主加在 `shell` 里的那层(你的正文不动);插件禁用 / 重载时宿主也会统一卸载。
 - 旧宿主整个 `ctx.ui` 不存在,一律 `ctx.ui?.mountFloatingToc(...)`;缺席时可继续显示正文,不必仿一份目录。
 
 ### 仪表盘 ctx.dashboard(2026-09-01 起)
@@ -491,7 +504,7 @@ ctx.registerView?.({ id: 'overview', title: '总览', mount(el) {
     layoutText: saved,                        // 上次存下的整页文本;首次传 null
     onLayout: (text) => ctx.saveData?.({ layout: text }),   // 用户在排版台手排后交出整页文本
     locked: true,                             // true=成品页(只看);false=排版台(可拖可改)
-  })                                          // 返回卸载函数 —— 正好当 mount 的 disposer
+  })                                          // 返回卸载函数 —— 正好当 mount 的 disposer(调用后 el 立刻归还,见「dispose 契约」)
 }})
 
 // 路线 B —— 编译成一份真 `.dashboard.md` 字节,落进库、用原生 tab 打开(**需要已打开的笔记库**)
@@ -551,7 +564,7 @@ const spec = {
 
 const h = ctx.table.mount(el, spec)               // 同步返回 { update, dispose }
 refresh = (rows) => h.update({ ...spec, rows })   // 数据刷新走 update:排序/筛选/列宽存活
-// 视图卸载时 h.dispose()(幂等;插件禁用时宿主也会统一卸掉)
+// 视图卸载时 h.dispose()(幂等,之后 el 立刻归还;插件禁用时宿主也会统一卸掉)
 ```
 
 - **数据刷新一律 `update(spec)`,不要 dispose 了重挂** —— 用户当前的排序 / 筛选 / 隐藏列 / 列宽住在表自己的
@@ -799,7 +812,7 @@ ctx.openView('chat', { location: 'right' }); chat?.prefill('Write an original sc
 - **已知限制**:同一个(插件, `folder`)同一时刻只挂一处 —— 挂两处是同一条会话的两个输入框,`prefill` 落到先接走的那个;
   `quote` 走的是全应用共用的一个引用位,连着引用两次只留后一次。
 - 视图卸载时自己 `dispose()`;插件被禁用 / 重载时宿主统一卸掉,旧句柄的 `quote` / `prefill` 不再生效。
-  `dispose()` 之后 `el` 立刻还给你(宿主只动自己挂进去的那一层):换一个 `folder` 时先 `dispose()`,再在同一个 `el` 上挂新的即可。
+  `dispose()` 之后 `el` 立刻还给你(宿主只动自己挂进去的那一层,见「dispose 契约」):换一个 `folder` 时先 `dispose()`,再在同一个 `el` 上挂新的即可。
   **只在有对话能力的宿主上存在**:`ctx.tangu?.mountChat`,缺席时退回 `startChat`。
 
 ## 正文 AI:ctx.tangu.complete 与 registerSelectionAction(2026-09-28 起)
@@ -1075,7 +1088,7 @@ const dispose = ctx.app.mountBlocks(el, {
 - **`blocks` 的引用是稳定的**:`subscribePage` 靠引用比较去重,自己缓存派生结果时也按引用判,别每帧深比较。快照本身是 `Object.freeze` 的(全插件共用一份,改它没用也不许改)。
 - **块 id 会被复用**:落盘前剪掉指向已不存在的块的记录,否则新块会继承旧记录的状态。
 - **自己的浮层要小心 `transform`**:`.slash-menu` / 行内工具栏这些是 `position: fixed` + 视口坐标;你的画布若带 pan/zoom 的 `transform`,它就成了 fixed 的包含块,浮层会被平移+缩放一次。把浮层传送到最近的 `.am-app` 下。
-- **忘记清理宿主也会兜**:插件被禁用/重载/`setup` 抛错时,你开的 `subscribePage` 与 `mountBlocks` 由宿主统一收掉,之后整份 `ctx.app` 块表面变哑(在飞的异步任务改不动用户文件)。但这是安全网不是设计:该 dispose 还是要 dispose。
+- **忘记清理宿主也会兜**:插件被禁用/重载/`setup` 抛错时,你开的 `subscribePage` 与 `mountBlocks` 由宿主统一收掉,之后整份 `ctx.app` 块表面变哑(在飞的异步任务改不动用户文件)。但这是安全网不是设计:该 dispose 还是要 dispose。`mountBlocks` 返回的 dispose 调用之后 `el` 立刻归还(见「dispose 契约」);dispose 再挂是一个新的编辑器,用户正在输入时别这么做(焦点和选区会丢)。
 - **内置类型优先是硬规则**:`registerFileType` 的后缀若已被内置认领(`.excalidraw.md`/`.db`/`.pdf`/图片),宿主**拒绝注册并返回 `false`** —— 拿到 `false` 就整体退让,连创建器/斜杠项/命令一起别注册(那几个宿主拦不住,不退让用户会看到两份「新建 X」)。旧宿主返回 `undefined`,所以判定写 `=== false`。
 - **四条新建主路径都要注册**:文件树右键(`registerFileCreator`)、命令面板(`registerCommand`)、笔记里的 `/`(`registerSlashItem` + `run()`,建完就地嵌入)、**新建标签页启动器**(2026-07-26 起也列 `registerFileCreator`,与内置的「新建白板」并排)。少注册一条,用户就会问「为什么 XX 里没有它」。
 - **想做「节点/卡片里是真块」的界面,照 `forsion-plugin-mindmap` 3.0.0 抄**:它是块表面 seam 的样板 —— 一层薄适配(`src/host.tsx`)把 `ctx.app` 伪装成宿主 store/组件的形状,画布本体几乎原样;令牌只在适配层管一次。⚠️那层里按内容去重的缓存**不是优化是正确性**:`getPage()` 每次返回新对象,不去重则 `useSyncExternalStore` 每次判「变了」→ 无限重渲挂死。React 也内联进包(插件拿不到宿主模块图;两份 React 共存没问题,边界就是 `mountBlocks` 那个 DOM 节点)。
@@ -1163,7 +1176,7 @@ const off = ctx.app.watchFile?.('Snippets/latex.js', () => reload())
 
 ### API-backed Markdown editor
 
-`ctx.ui?.mountMarkdownEditor(el, { value, label, readOnly, onChange })` mounts native Amadeus without using the active vault. The caller owns save/publish. It offers visual/source/publishing preview modes. `getValue()` reads the latest synchronous editor transaction; `update`, `insertMarkdown`, `focus`, and idempotent `dispose` are available. The host revokes it on plugin unload. Feature-detect; absent hosts should ask for an upgrade.
+`ctx.ui?.mountMarkdownEditor(el, { value, label, readOnly, onChange })` mounts native Amadeus without using the active vault. The caller owns save/publish. It offers visual/source/publishing preview modes. `getValue()` reads the latest synchronous editor transaction; `update`, `insertMarkdown`, `focus`, and idempotent `dispose` are available; after `dispose` the element is yours again at once. The host revokes it on plugin unload. Feature-detect; absent hosts should ask for an upgrade.
 
 
 ### Plugin Chat Box selection and Director hand-off (2026-09-30)

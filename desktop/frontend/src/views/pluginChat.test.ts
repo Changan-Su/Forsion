@@ -245,6 +245,29 @@ describe('挂载(mountPluginChat)', () => {
     expect(api.seen.at(-1)).toMatchObject({ params: { sessionId: 's2' } })
   })
 
+  // 负对照(2026-10-05 实跑红):mountHostReact 的 render 不看句柄死活 → 晚到的那次重画往已卸的 root 上画(React 抛错)。
+  // 10-04 的写法是「同一个 el 再调一次 mountHostReact = 原地更新」,那时晚到的结果会把后来的挂载换掉。
+  it('对话还没接上、插件没 dispose 就把同一个 el 交给了别的挂载:对话被收掉,晚到的结果不顶掉后来那份', async () => {
+    const { mountHostReact } = await import('@lcl/components')
+    const { createElement } = await import('react')
+    let release = (_: unknown): void => {}
+    api.createSession.mockReturnValue(new Promise((resolve) => { release = resolve }))
+    let chat!: ReturnType<typeof mountPluginChat>
+    let other!: import('@lcl/components').HostReactMount
+    await act(async () => { chat = mountPluginChat(el, { owner: 'p', ...at('/v/A') }); cleanups.push(chat.dispose) })
+    expect(el.querySelector('[data-plugin-chat]')).not.toBeNull() // 加载中
+    await act(async () => { other = mountHostReact(el, createElement('textarea', { 'data-other': '' })) })
+    const node = el.querySelector('[data-other]')
+    expect(node?.isConnected).toBe(true)
+    expect(el.querySelector('[data-plugin-chat]')).toBeNull()
+    await act(async () => { release(rec('s1')); await chat.ready })
+    expect(el.querySelector('[data-other]')).toBe(node) // 后来那份原样留着
+    expect(el.querySelector('[data-plugin-chat]')).toBeNull()
+    expect(api.seen).toEqual([])
+    await act(async () => { other.dispose() })
+    expect(el.childElementCount).toBe(0) // 它的句柄还收得掉
+  })
+
   it('卸载后不再画东西(建会话那一拍里视图被关)', async () => {
     let release = (_: unknown): void => {}
     api.createSession.mockReturnValue(new Promise((resolve) => { release = resolve }))
@@ -327,6 +350,23 @@ describe('探针(tanguProbe.mountChat)', () => {
     chat.prefill('为这支视频写一段配乐')
     await flush()
     expect(usePluginChat.getState().pending).toEqual([{ sessionId: 's1', text: '为这支视频写一段配乐' }])
+  })
+
+  it('同一个 el 上前一次请求作废时,只带走它自己投的引用(后一次请求刚投的那条留着)', async () => {
+    api.createSession.mockResolvedValue(rec('s1'))
+    let first!: import('../amadeus/plugins/tanguSeam').TanguChatMount
+    let second!: import('../amadeus/plugins/tanguSeam').TanguChatMount
+    await act(async () => {
+      first = readTangu()!.mountChat!(el, { owner: 'p', ...at('/v/A') })
+      second = readTangu()!.mountChat!(el, { owner: 'p', ...at('/v/A') }) // 没 dispose 前一次,同一个 el、同一个目标名
+      cleanups.push(first.dispose, second.dispose)
+      second.quote('第 2 幕')
+      expect(await first.ready).toEqual({ ok: false, error: 'disposed' }) // 界面那半落地时 el 已经归后一次
+      expect(useApp.getState().pendingChatQuote).toMatchObject({ text: '第 2 幕' })
+      await second.ready
+    })
+    expect(await second.ready).toEqual({ ok: true, sessionId: 's1' })
+    expect(el.querySelectorAll('[data-plugin-chat]').length).toBe(1)
   })
 
   it('界面那半还没装进来就卸了 → 不建会话、不挂东西', async () => {

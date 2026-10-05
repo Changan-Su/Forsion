@@ -15,8 +15,10 @@ registerMessages({
   'special.action.icon_updated': { zh: '更新图标', en: 'icon updated' },
   'special.action.memory_candidates': { zh: '记下记忆候选', en: 'memory candidates noted' },
   'special.action.project_memory_added': { zh: '写入项目记忆', en: 'project memory saved' },
-  'special.action.harness_adopted': { zh: '写入工作笔记', en: 'working note added' },
-  'special.action.harness_candidates': { zh: '记下工作笔记候选', en: 'working-note candidates noted' },
+  'special.action.harness_adopted': { zh: '写入进化记录', en: 'evolution-record entry added' },
+  'special.action.harness_candidates': { zh: '记下进化记录候选', en: 'evolution-record candidates noted' },
+  'special.action.harness_confirm': { zh: '进化记录候选等你确认', en: 'evolution-record candidates awaiting your decision' },
+  'special.action.project_memory_candidates': { zh: '项目记忆候选等你确认', en: 'project-memory candidates awaiting your decision' },
 })
 const ACTION_KEY: Record<string, string> = {
   icon_updated: 'special.action.icon_updated',
@@ -27,6 +29,8 @@ const ACTION_KEY: Record<string, string> = {
   project_memory_added: 'special.action.project_memory_added',
   harness_adopted: 'special.action.harness_adopted',
   harness_candidates: 'special.action.harness_candidates',
+  harness_confirm: 'special.action.harness_confirm',
+  project_memory_candidates: 'special.action.project_memory_candidates',
   memory_appended: 'special.action.memory_appended',
   memory_updated: 'special.action.memory_updated',
   assist_discussion: 'special.action.assist_discussion',

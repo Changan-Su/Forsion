@@ -192,6 +192,7 @@ export const CLASSIFICATION = {
   'DELETE /agent/agents/:slug/library/file': [D, 'deletes from the Agent library'],
   'GET /agent/agents/:slug/harness': [A, 'read HARNESS'],
   'POST /agent/agents/:slug/harness/rollback': [D, 'harness rollback (design appendix C)'],
+  'POST /agent/agents/:slug/harness/candidate': [D, 'adopt / dismiss one harness candidate (writes HARNESS.md as the user; the route itself also refuses remote origin)'],
   'GET /agent/user-profile': [A, 'read user profile'],
   'PUT /agent/user-profile': [D, 'user profile write (design appendix C)'],
 
@@ -221,6 +222,7 @@ export const CLASSIFICATION = {
   'GET /agent/project-context/icon': [A, 'project icon'],
   'DELETE /agent/project-context/icon': [D, 'project icon write'],
   'DELETE /agent/project-context/memory': [D, 'project memory delete (host-only store; the route itself also refuses remote origin)'],
+  'POST /agent/project-context/memory/candidate': [D, 'adopt / dismiss one pending project-memory candidate (host-only store; the route itself also refuses remote origin)'],
   // PROJECT 详情「Git」页:写仓库、跑提交钩子、信任仓库自带的可执行配置、带凭据推送 —— 只许本机
   'POST /agent/project-context/git/init': [D, 'git repository write'],
   'POST /agent/project-context/git/trust': [D, 'trusts repo-provided executable git config'],

@@ -22,5 +22,6 @@ export interface PluginChatBoxOptions {
 export interface PluginChatBoxHandle {
   update(patch: Partial<PluginChatBoxOptions>): void
   focus(): void
+  /** Idempotent. Afterwards the element is the plugin's again at once: clear it, or mount on it again. */
   dispose(): void
 }
