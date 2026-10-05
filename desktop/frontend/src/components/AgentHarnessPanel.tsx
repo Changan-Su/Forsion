@@ -1,11 +1,12 @@
 /**
- * Agent 的自我进化层:HARNESS.md 工作笔记(Agent 自己沉淀的做法,写入立即生效、对话里出可撤销的更新卡)+ 本机编辑史。
+ * Agent 的自我进化层:HARNESS.md 进化记录(Agent 自己沉淀的做法,写入立即生效、对话里出可撤销的更新卡)+ 候选 + 本机编辑史。
+ * 候选(10-04):带网址、命令或权限字眼的只等用户逐条「采纳 / 丢弃」,/refine 不取;其余的等复盘,用户也可以先一步处理。
  * Agents 详情的「进化」标签与设置里的 Agent 大脑弹窗共用这一份。
  * 回滚 = 条目级「恢复上一版」(在最近两版间往返);journal 是本机编辑史,不跨设备同步。
  */
 import React, { useEffect, useRef, useState } from 'react'
 import { Loader2, NotebookPen, Sprout, Undo2 } from 'lucide-react'
-import { getAgentHarness, rollbackHarnessEntry, type HarnessEntry, type HarnessJournalLine } from '../services/backendService'
+import { getAgentHarness, resolveHarnessCandidate, rollbackHarnessEntry, type HarnessCandidate, type HarnessEntry, type HarnessJournalLine } from '../services/backendService'
 import type { TanguDesktopConfig } from '../types'
 import { useI18n } from '../i18n'
 import { formatDate, formatDateTime, formatRelative } from '../format/time'
@@ -15,6 +16,12 @@ import { HARNESS_CHANGED_EVENT } from '../services/harnessUpdates'
 
 const MAX_ENTRIES = 30 // 与引擎 harnessStore.MAX_ENTRIES 同值(写入时封顶)
 const HISTORY_PREVIEW = 8
+/** 采纳 / 丢弃失败的机器码 → 文案(引擎 harnessStore.HarnessCandidateError)。 */
+const CANDIDATE_ERRORS: Record<string, string> = {
+  HARNESS_CANDIDATE_GONE: 'settings.agents.harnessCandidateGone',
+  HARNESS_CANDIDATE_FULL: 'settings.agents.harnessCandidateFull',
+  HARNESS_CANDIDATE_TOO_LONG: 'settings.agents.harnessCandidateTooLong',
+}
 
 type Props = {
   cfg: TanguDesktopConfig
@@ -34,7 +41,8 @@ const AgentHarnessBody: React.FC<Props> = ({ cfg, slug, running, onRefine, onCan
   const { t, locale } = useI18n()
   const [entries, setEntries] = useState<HarnessEntry[] | null>(null)
   const [journal, setJournal] = useState<HarnessJournalLine[]>([])
-  const [candidates, setCandidates] = useState<string[]>([]) // Historian 自动档的提名,还不是笔记;/refine 时才被 Agent 审阅
+  const [candidates, setCandidates] = useState<HarnessCandidate[]>([]) // 提名,还不是记录
+  const [canDecide, setCanDecide] = useState(false) // 老引擎只回原始行、没有逐条处理的路由:照旧只读
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const [busy, setBusy] = useState(false)
@@ -48,7 +56,8 @@ const AgentHarnessBody: React.FC<Props> = ({ cfg, slug, running, onRefine, onCan
     const mine = ++seq.current
     try {
       const r = await getAgentHarness(homeTarget(), slug)
-      if (alive.current && mine === seq.current) { setEntries(r.entries); setJournal(r.journal); setCandidates(r.candidates || []); setError(''); onCandidates?.(r.candidates?.length ?? 0) }
+      const items = r.candidateItems ?? (r.candidates || []).map((line) => ({ line, needsUser: false, adoptable: false }))
+      if (alive.current && mine === seq.current) { setEntries(r.entries); setJournal(r.journal); setCandidates(items); setCanDecide(!!r.candidateItems); setError(''); onCandidates?.(items.length) }
     } catch (e: any) {
       // 吞掉会显示假「空」(Codex 评审 Minor);云端引擎的 404 detail 是中文硬编码,换成本地化文案。
       if (alive.current && mine === seq.current) setError(e?.status === 404 ? t('settings.agents.harnessLocalOnly') : String(e?.message || e))
@@ -64,6 +73,20 @@ const AgentHarnessBody: React.FC<Props> = ({ cfg, slug, running, onRefine, onCan
     try { await rollbackHarnessEntry(homeTarget(), slug, id); await load(); window.dispatchEvent(new CustomEvent(HARNESS_CHANGED_EVENT)) }
     catch (e: any) { if (alive.current) setError(String(e?.message || e)) }
     finally { if (alive.current) setBusy(false) }
+  }
+  const decide = async (c: HarnessCandidate, action: 'adopt' | 'dismiss'): Promise<void> => {
+    if (busy) return
+    setBusy(true); setError(''); setNotice('')
+    try {
+      await resolveHarnessCandidate(homeTarget(), slug, c.line, action)
+      await load()
+      if (action === 'adopt') window.dispatchEvent(new CustomEvent(HARNESS_CHANGED_EVENT))
+      if (alive.current) setNotice(t(action === 'adopt' ? 'settings.agents.harnessCandidateAdopted' : 'settings.agents.harnessCandidateDismissed'))
+    } catch (e: any) {
+      if (e?.code === 'HARNESS_CANDIDATE_GONE') await load() // 被复盘取走 / 别处已经处理:清单以引擎为准
+      const key = CANDIDATE_ERRORS[e?.code]
+      if (alive.current) setError(key ? t(key, { max: MAX_ENTRIES }) : String(e?.message || e))
+    } finally { if (alive.current) setBusy(false) }
   }
   const refine = async (): Promise<void> => {
     if (!onRefine || busy) return
@@ -81,8 +104,8 @@ const AgentHarnessBody: React.FC<Props> = ({ cfg, slug, running, onRefine, onCan
     l.action === 'delete' ? t('settings.agents.harnessActDelete')
       : l.action === 'rollback' ? t('settings.agents.harnessActRollback')
         : l.before === null ? t('settings.agents.harnessActCreate') : t('settings.agents.harnessActUpdate')
-  // 这次改动不是 agent 自己在对话里写的:后台复盘直接采纳 / Muse 巡检后代为收起(10-04)。别的来源不标。
-  const byLabel = (by?: string): string => by === 'historian' ? t('settings.agents.harnessByHistorian') : by === 'muse' ? t('settings.agents.harnessByMuse') : ''
+  // 这次改动不是 agent 自己在对话里写的:后台复盘直接采纳 / Muse 巡检后代为收起 / 用户采纳的候选(10-04)。别的来源不标。
+  const byLabel = (by?: string): string => by === 'historian' ? t('settings.agents.harnessByHistorian') : by === 'muse' ? t('settings.agents.harnessByMuse') : by === 'user' ? t('settings.agents.harnessByUser') : ''
   const kindLabel = (kind: string): string => kind === 'note' ? t('settings.agents.harnessKindNote') : kind === 'recipe' ? t('settings.agents.harnessKindRecipe') : kind === 'equip' ? t('settings.agents.harnessKindEquip') : kind
   const listSep = locale === 'zh' ? '、' : ', '
   // 条目日期是引擎写的 YYYY-MM-DD(纯日期,单源按本地那一天解读,不串到前后一天);journal ts 是完整 ISO,按本地时区显示。
@@ -128,7 +151,14 @@ const AgentHarnessBody: React.FC<Props> = ({ cfg, slug, running, onRefine, onCan
     {/* 空态也要显示候选:第一次用的人正是「还没有笔记、但收件箱里已经有提名」这个状态 */}
     {candidates.length > 0 && <section className="harness-candidates" data-harness-candidates={candidates.length}>
       <h3>{t('settings.agents.harnessCandidates', { count: candidates.length })}</h3>
-      <ul>{candidates.map((line, i) => { const c = candidate(line); return <li key={`${i}-${line}`} className="harness-candidate">{c.date ? <time dateTime={c.date}>{day(c.date)}</time> : <span />}<span>{c.text}</span></li> })}</ul>
+      <ul>{candidates.map((item, i) => { const c = candidate(item.line); return <li key={`${i}-${item.line}`} className="harness-candidate" data-harness-candidate={item.needsUser ? 'needs-user' : 'refine'}>
+        {c.date ? <time dateTime={c.date}>{day(c.date)}</time> : <span />}
+        <span>{item.needsUser && <span className="harness-kind recipe">{t('settings.agents.harnessCandidateNeedsYou')}</span>}{c.text}</span>
+        {canDecide && <div className="harness-candidate-actions">
+          {item.adoptable && <button type="button" className="profile-text-action adopt" disabled={busy} onClick={() => void decide(item, 'adopt')}>{t('settings.agents.harnessCandidateAdopt')}</button>}
+          <button type="button" className="profile-text-action" disabled={busy} onClick={() => void decide(item, 'dismiss')}>{t('settings.agents.harnessCandidateDismiss')}</button>
+        </div>}
+      </li> })}</ul>
       <small>{t('settings.agents.harnessCandidatesHint')}</small>
     </section>}
     {rev.length > 0 && <section className="harness-history">
