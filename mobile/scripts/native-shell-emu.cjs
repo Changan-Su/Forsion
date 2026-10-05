@@ -915,6 +915,19 @@ const tabCountText = (list) => {
       assert.ok((await h.waitNodes((l) => !!h.byId(l, 'nativeChrome.spaces'), { timeout: 10000 })).hit, 'the app did not come back with its bottom bar')
       assert.equal(await cdp.eval("document.querySelector('.mb-shell').dataset.space"), 'calendar', 'the app came back on another Space')
     }
+    // … and a Space whose left panel became such a list keeps the default: Image Studio's left panel is its project
+    // navigation since 2026-10-05 (it was the chat, and the Space opted out). It opens on that list; an entry enters the main view.
+    await toSpace('image-studio')
+    assert.equal(await cdp.eval(nav), 'list', 'Image Studio must open on its project navigation')
+    assert.ok(await h.waitPage(cdp, "document.querySelectorAll('.mb-drawer--left .csn-item').length >= 2", 8000), 'Image Studio: no navigation entries on the list level')
+    assert.ok(h.byId(ui(), 'nativeChrome.spaces'), 'the bar left on the Image Studio list')
+    shot('03h-image-studio-list')
+    await tapEl("document.querySelectorAll('.mb-drawer--left .csn-item')[1]") // 「项目」: the launchpad
+    assert.ok(await h.waitPage(cdp, `(${nav}) === 'detail'`, 6000), 'an Image Studio navigation entry did not enter the main view')
+    await h.pause(800)
+    assert.equal(await cdp.eval("document.querySelector('.mb-main .sk-error')?.textContent || ''"), '', 'Image Studio\'s main view failed to render')
+    shot('03h-image-studio-detail')
+    await openDrawer() // the back arrow: its list again
     // more Spaces than fit → Home (the first cell) stays put and the rest scroll beside it. While one of the first five is
     // active nothing scrolls (the bar used to centre the active Space, which scrolled Home away from the fourth Space on —
     // "the Home page is gone"; then it only scrolled as far as needed, and Home still left on the sixth).
