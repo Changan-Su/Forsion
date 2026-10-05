@@ -1,5 +1,5 @@
 # Tangu agent 配置。文件夹名 = agent 的 slug(kebab-case);本文件 + SOUL.md 即最小可用 agent。
-# version 必须带引号 —— 插件商店「可更新」检查用正则读带引号的值,裸值会读不到。
+# version 必须带引号 —— 商店「可更新」检查用正则读带引号的值,裸值会读不到。
 name = "示例助手"
 version = "1.0.0"
 description = "Agent 开发模板:演示 config.toml + SOUL.md + Library 参考文档的完整形态。"

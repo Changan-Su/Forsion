@@ -5,7 +5,7 @@ description: 第六种面板表面、跨端行为与插件 API。
 
 # Floating Panel 开发 / Development
 
-Floating Panel 是工作区的第六种面板表面，适合设置、插件商店、成就、反馈和插件的独立工具页。它不参与 Dockview 布局，也不占用主区标签：
+Floating Panel 是工作区的第六种面板表面，适合设置、商店、成就、反馈和插件的独立工具页。它不参与 Dockview 布局，也不占用主区标签：
 
 桌面 Floating、Mini 与从 Dockview 拖出的独立窗口都是已运行应用的卫星窗口，必须直接显示目标内容，不得重播只属于 Forsion 主窗口首次启动的品牌 Splash。
 

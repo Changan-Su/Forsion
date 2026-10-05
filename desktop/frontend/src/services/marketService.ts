@@ -5,7 +5,7 @@ import { registerMessages, translate } from '../i18n'
 import type { MarketCard, MarketDetail, MarketInstallProgress } from '../types'
 
 registerMessages({
-  'marketsvc.desktopOnly': { zh: '插件商店仅在桌面端可用', en: 'The plugin store is only available on desktop' },
+  'marketsvc.desktopOnly': { zh: '商店仅在桌面端可用', en: 'The store is only available on desktop' },
   'marketsvc.resolveFailed': { zh: '没能从 Forsion 服务器拿到下载地址（{detail}）', en: 'Couldn’t get the download link from the Forsion server ({detail})' },
 })
 

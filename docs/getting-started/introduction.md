@@ -33,7 +33,7 @@ Forsion is a **local-first AI second brain**: block editing on your own Markdown
 | **Forsion Web** | 浏览器版云客户端,不装应用也能用;手机上访问会自动切成移动界面 |
 | **Forsion Mobile** | Android 版,一套为触屏重做的界面:推开式侧栏、常驻标签页切换、笔记底部编辑工具栏 |
 | **Tangu CLI** | 终端里的 Tangu,随桌面端一键安装,跟着桌面端一起更新 |
-| **网页应用(Forsion Connect)** | 你在[编码空间](../spaces/coding.md)里做出来的网页,一键发布即得公开链接;访客用自己的 Forsion 账号付 AI 用量,页面里还能直接调用云端 Agent。填一句简介即可申请上架插件商店的「网站应用」分类 |
+| **网页应用(Forsion Connect)** | 你在[编码空间](../spaces/coding.md)里做出来的网页,一键发布即得公开链接;访客用自己的 Forsion 账号付 AI 用量,页面里还能直接调用云端 Agent。填一句简介即可申请上架商店的「网站应用」分类 |
 
 桌面、浏览器、手机是**同一套账号与同一批会话**:电脑上聊到一半,手机打开接着聊,Agent 的记忆和笔记也跟着走。详见[浏览器版与移动端](../reference/web-and-mobile.md)。
 
@@ -51,7 +51,7 @@ Forsion is a **local-first AI second brain**: block editing on your own Markdown
 - 反过来,你也可以从[通道](../chat/channels.md)那头找 AI:在手机上给微信里的它发一句话,它在电脑这边干活;
 - 干完的活不只是一段文字。[Agent Desk](../chat/agent-desk.md) 会把笔记、图片、网页、代码这类产物摆在聊天右侧,写文件的过程能实时看到。
 
-**一切可换。** 模型服务商可换、外观主题可换、功能空间可增删、插件可装——[插件商店](../customization/market.md)里技能、插件(含代理与空间)、主题、网站应用一站式安装。
+**一切可换。** 模型服务商可换、外观主题可换、功能空间可增删、插件可装——[商店](../customization/market.md)里技能、插件(含代理与空间)、主题、网站应用一站式安装。
 
 ## 下一步
 

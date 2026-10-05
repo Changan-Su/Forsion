@@ -1,5 +1,5 @@
 /**
- * Forsion 插件商店(原「应用市场」,2026-10-05 改名;标识符 / i18n key / CSS 类仍是 market / mk-*):
+ * Forsion 商店(原「应用市场」,2026-10-05 改名;标识符 / i18n key / CSS 类仍是 market / mk-*):
  * 发现首页 + 分类目录 + 安装管理 + 商品详情。
  * 浏览/安装全走主进程 IPC(marketService),token 不下发渲染层。
  */

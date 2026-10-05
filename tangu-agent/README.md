@@ -106,7 +106,7 @@
 
 - 中英双语界面，一键切换。
 - 微信远程（可选）：经官方 iLink bot 多账号接管，消息去重 + 输入态。
-- Forsion 插件商店（可选，连云端）：桌面端浏览 / 一键安装 skills · agents · plugins 到 `~/.tangu`。
+- Forsion 商店（可选，连云端）：桌面端浏览 / 一键安装 skills · agents · plugins 到 `~/.tangu`。
 
 ---
 

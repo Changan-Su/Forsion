@@ -1,5 +1,5 @@
 /**
- * Forsion 插件商店(原「应用市场」;标识符仍是 market / mk-*)真浏览器 UI 门禁:
+ * Forsion 商店(原「应用市场」;标识符仍是 market / mk-*)真浏览器 UI 门禁:
  * 发现首页、分类归并(Agent / Space 并进「插件」)、搜索、详情、已安装、明暗截图与横向溢出。
  * 自带起停隔离的 Vite；数据来自 marketHarnessBridge,不访问账号、网络或用户目录。
  * 截图缺省落 /tmp,可用 SHOT_DIR 换目录。
@@ -90,7 +90,7 @@ async function main() {
     check('发现首页有主精选区', initial.hero.width > 700 && initial.hero.height >= 240, `${Math.round(initial.hero.width)}x${Math.round(initial.hero.height)}`)
     check('最近上架与热门内容都有真实卡片', initial.recent === 4 && initial.popular >= 4, `recent=${initial.recent} popular=${initial.popular}`)
     check('侧栏按发现/分类/管理分成三组', initial.navGroups === 3, String(initial.navGroups))
-    check('左上角的名字是「插件商店」', initial.brand === '插件商店', String(initial.brand))
+    check('左上角的名字是「商店」', initial.brand === '商店', String(initial.brand))
     check('插件分类已合并且侧栏不再显示 Forsion 插件', initial.navLabels.filter((label) => label === '插件').length === 1 && !initial.navLabels.includes('Forsion 插件'), initial.navLabels.join(' / '))
     // 2026-10-05:Agent / Space 不再各占一格导航,并进「插件」。先证导航钮确实读得到(否则下面两个 includes 恒假 = 假绿)。
     check('导航里没有独立的 Agent / Space 分类', initial.navLabels.includes('技能') && initial.navLabels.includes('主题')
@@ -240,7 +240,7 @@ async function main() {
       brand: document.querySelector('.mk-nav-brand strong')?.textContent?.trim(),
       labels: [...document.querySelectorAll('.settings-nav-list button')].map((button) => button.textContent?.trim()),
     }))
-    check('英文界面的名字是 Plugin store', enNav.brand === 'Plugin store', String(enNav.brand))
+    check('英文界面的名字是 Store', enNav.brand === 'Store', String(enNav.brand))
     check('英文导航同样没有独立的 Agents / Spaces 分类', enNav.labels.includes('Skills') && enNav.labels.includes('Plugins')
       && !enNav.labels.includes('Agents') && !enNav.labels.includes('Spaces'), enNav.labels.join(' / '))
     await en.getByRole('button', { name: 'Plugins', exact: true }).click()

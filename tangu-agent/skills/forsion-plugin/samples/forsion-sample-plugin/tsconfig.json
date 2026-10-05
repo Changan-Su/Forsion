@@ -1,5 +1,5 @@
 {
-  "comment": "对 @forsion/tangu-agent 仅 import type(paths 指向本仓 types/ 类型契约,故可脱离核心仓库独立构建)。verbatimModuleSyntax=true 把任何【值导入】核心变成编译错误——P0 硬保证(插件绝不复制核心模块图)。运行时全走 ctx.sdk。`npm run build` 自包含,产出 dist/(已提交,供 Forsion 插件商店 源码 zip 安装免构建)。",
+  "comment": "对 @forsion/tangu-agent 仅 import type(paths 指向本仓 types/ 类型契约,故可脱离核心仓库独立构建)。verbatimModuleSyntax=true 把任何【值导入】核心变成编译错误——P0 硬保证(插件绝不复制核心模块图)。运行时全走 ctx.sdk。`npm run build` 自包含,产出 dist/(已提交,供 Forsion 商店 源码 zip 安装免构建)。",
   "compilerOptions": {
     "target": "ES2022",
     "module": "NodeNext",

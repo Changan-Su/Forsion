@@ -21,11 +21,11 @@ git clone https://github.com/Changan-Su/tangu-sample-theme
 
 ## 契约速查
 
-- `theme.json` 必填：`id`（=目录名）、`name`、`description`、`version`（插件商店更新检查读它）、`supportsDarkMode`、`preview.background`（可 light/dark 双值）、`preview.accent`。可选：`author`、`tags`、`panelGap`（>0 时外壳给停靠面板留间距做浮卡）、`fonts.google`（激活时懒加载，务必写本地字体兜底）、`preview.swatches/tagline/title`。
+- `theme.json` 必填：`id`（=目录名）、`name`、`description`、`version`（商店更新检查读它）、`supportsDarkMode`、`preview.background`（可 light/dark 双值）、`preview.accent`。可选：`author`、`tags`、`panelGap`（>0 时外壳给停靠面板留间距做浮卡）、`fonts.google`（激活时懒加载，务必写本地字体兜底）、`preview.swatches/tagline/title`。
 - `theme.css` 全局注入**不隔离**——每条规则都要挂 `[data-theme='<id>']` 前缀，否则泄漏到其他主题。暗色块用 `.dark[data-theme='<id>']`；建议尊重扁平开关 `[data-theme='<id>'][data-flat='1']`（清空阴影）。
 - 参考实现：应用首启种子的 `~/.forsion/themes/soft/`（渐变舞台 + 浮卡结构的完整案例）。
 
-## 发布到 Forsion 插件商店
+## 发布到 Forsion 商店
 
 把 `theme.json` + `theme.css` 打包成 zip（俩文件在 zip 根或单层文件夹内均可，安装器会自动重定根），在 Forsion 个人中心 → 投稿 选「主题」提交；或推成 GitHub 公开仓（发 release）。注意：**上架名称的 slug 会成为安装目录名**，须是合法主题 id（kebab，非 `lovable`）。
 

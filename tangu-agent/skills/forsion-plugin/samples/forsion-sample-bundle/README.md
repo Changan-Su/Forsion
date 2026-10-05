@@ -2,7 +2,7 @@
 
 **捆绑包 = 一个 Forsion 桌面插件目录,内嵌引擎侧/跨域内容,装一处全就位。**
 解决的痛点:此前「插件 + Agent + 技能 + Space」要分装三四处目录、靠 install 脚本铺;
-现在整包拷进 `~/.forsion/plugins/<id>/`(或插件商店一键装)即可。
+现在整包拷进 `~/.forsion/plugins/<id>/`(或商店一键装)即可。
 2026-07-25 起,捆绑包是新扩展的**默认推荐形态** —— 只发一类内容也可以用此布局,之后加层零迁移。
 
 ## 结构(全部子目录可选,按标志文件识别)
@@ -43,7 +43,7 @@ sample-bundle/
 - **随包**(引擎插件、Space):父插件禁用 → 内嵌引擎插件被级联关闭、Space 收起;卸载父插件 → 一并消失。
 - **播种一次**(Agent 的**人格面**:config.toml / SOUL.md / Library / MEMORY):首次发现拷入引擎成为**活体**
   (有自己的 MEMORY/LOG);包升级**不覆盖**用户已改的 SOUL/记忆,卸载包也**保留** agent(用户可在 Agents 页手动删)。
-  因此 onboarding 里**不要**再 recommends 自家已内嵌的 agent/skill(会引导去插件商店重复装)。
+  因此 onboarding 里**不要**再 recommends 自家已内嵌的 agent/skill(会引导去商店重复装)。
 - **指纹自愈**(Agent 的 `skills/`,2026-08-25 起):「播种一次」的**唯一例外**。每次启动比对指纹 ——
   用户没动过的技能副本跟着包更新,动过的(含无指纹的老副本)保护不覆盖并在引擎日志里报出来。
   没有这条,你改了 agent 技能的 SKILL.md,已装机器上永远看不到。
@@ -78,7 +78,7 @@ manifest 的 `onboarding.requires` 写了一条 `{ "kind": "setting", "key": "ni
 
 ## 发布
 
-zip 整个目录(单顶层文件夹)上架插件商店 **amadeus-plugin** 类;桌面安装路由按包内 manifest 实测
+zip 整个目录(单顶层文件夹)上架商店 **amadeus-plugin** 类;桌面安装路由按包内 manifest 实测
 (最浅的 manifest.json 优先),bundle 自然落到 `~/.forsion/plugins/<slug>/`。
 真实范例:`Forsion-Instrumentality-Project/bluebird/`(视频分析四件套的捆绑化)。
 
