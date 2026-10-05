@@ -13,6 +13,7 @@ import { DEFAULT_BOARD, writeBoard } from '@amadeus-shared/excalidraw/board'
 import { isDashboardPath } from '@amadeus-shared/dashboard'
 import { COMPILER_VERSION, PAGE_SCHEMA, compile, generatePageId, type PageManifest } from '@amadeus-shared/compiler'
 import { matchFileType } from '@amadeus/plugins/pluginStore'
+import { isOverridableBuiltinType } from '@amadeus-shared/builtinTypes'
 import { extHit } from './viewFileMatch'
 import { act, actThrottled } from './activity/log'
 import { track } from './achievements/store'
@@ -381,9 +382,13 @@ export function openFile(path: string, opts?: { newTab?: boolean }): void {
   if (isDrawingPath(path)) { openDrawing(path, opts); return }
   if (isDashboardPath(path)) { openDashboard(path, opts); return }
   // 单后缀分派查声明单源表(viewFileMatch;复合后缀在上面两行走 shared 判定函数=毁档防线,次序不动)。
-  if (extHit(path, 'amadeus-db')) { openDb(path, opts); return }
-  if (extHit(path, 'amadeus-pdf')) { openPdf(path, undefined, opts); return }
-  if (extHit(path, 'amadeus-image')) { openImage(path, opts); return }
+  // 可覆盖的内置类型(目前只有 .pdf)被启用的插件以 override 认领了 → 不走内置分派,落到下面的插件文件视图。
+  // 带页码 / 引语的跳转(openPdf 的直接调用方:聊天引用、PDF 链接)不经这里,照旧进内置阅读器。
+  if (!(isOverridableBuiltinType(path) && matchFileType(path))) {
+    if (extHit(path, 'amadeus-db')) { openDb(path, opts); return }
+    if (extHit(path, 'amadeus-pdf')) { openPdf(path, undefined, opts); return }
+    if (extHit(path, 'amadeus-image')) { openImage(path, opts); return }
+  }
   if (isMediaPath(path)) { openMedia(path, undefined, opts); return }
   // 本地库里的 .html → 内置浏览器(云端库没有本机路径 / 内置浏览器关着 → 照旧交系统默认程序)。
   if (/\.html?$/i.test(path)) {

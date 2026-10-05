@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { isBuiltinFileType, isPlainNoteRef } from './builtinTypes'
+import { isBuiltinFileType, isOverridableBuiltinType, isPlainNoteRef } from './builtinTypes'
 
 describe('isBuiltinFileType', () => {
   it('认领内置类型的确切后缀', () => {
@@ -28,6 +28,24 @@ describe('isBuiltinFileType', () => {
   it('只看后缀,不被路径中段的同名片段骗到', () => {
     expect(isBuiltinFileType('excalidraw.md 的备份.txt')).toBe(false)
     expect(isBuiltinFileType('.db 目录/说明.md')).toBe(false)
+  })
+})
+
+describe('isOverridableBuiltinType', () => {
+  it('只有 .pdf 可以被插件覆盖(大小写不敏感)', () => {
+    expect(isOverridableBuiltinType('论文.pdf')).toBe(true)
+    expect(isOverridableBuiltinType('A.PDF')).toBe(true)
+    expect(isOverridableBuiltinType('.pdf')).toBe(true)
+  })
+
+  it('宿主管线在读写的格式与图片不放 —— 往表里加后缀之前先看 builtinTypes.ts 的说明', () => {
+    for (const p of ['画板.excalidraw.md', '画板.excalidraw', '库.db', '照片.png', '日记.md', 'pdf 笔记.md']) {
+      expect(isOverridableBuiltinType(p), p).toBe(false)
+    }
+  })
+
+  it('可覆盖的一定是内置的(否则「覆盖」无从谈起,插件直接注册就行)', () => {
+    expect(isBuiltinFileType('x.pdf')).toBe(true)
   })
 })
 

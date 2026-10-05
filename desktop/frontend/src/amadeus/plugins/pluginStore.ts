@@ -21,7 +21,7 @@ import { setTheme as applyAccent, toggleMode } from '../theme/ThemeManager'
 import { amadeus } from '../api'
 import { BUILTIN_PLUGINS } from './builtins'
 import { getPropertyType, registerPropertyType as registerPropType, unregisterPropertyType as unregisterPropType } from '../blocks/database/propertyTypes'
-import { isBuiltinFileType } from '@amadeus-shared/builtinTypes'
+import { isBuiltinFileType, isOverridableBuiltinType } from '@amadeus-shared/builtinTypes'
 import { claimHostMount, createBlockSurface, mountHostReact } from './blockSurface'
 import { addEditorExtension, clearEditorExtensions } from './editorExtensions'
 import { registerPluginSeries, track, unregisterPluginAchievements } from '../../achievements/store'
@@ -1128,7 +1128,8 @@ export const usePluginStore = create<PluginState>((set, get) => {
       })),
     registerView: (view) => set((s) => ({ views: [...s.views, { pluginId, item: view }] })),
     registerListSource: (src) => set((s) => ({ listSources: [...s.listSources, { pluginId, item: src }] })),
-    // 内置后缀不给注册(内置优先是硬规则,见 isBuiltinFileType)。返回 false 让插件知道自己被内置取代了,
+    // 内置后缀不给注册(内置优先是硬规则,见 isBuiltinFileType);唯一的口子是「可覆盖」的那几个后缀
+    // 配上显式的 override: true(见 isOverridableBuiltinType)。返回 false 让插件知道自己被内置取代了,
     // 可以整体退让 —— 光靠 find* 那道闸拦不住插件继续贡献重复的「新建 X」右键项和斜杠项。
     // 旧宿主返回 undefined(≠ false),插件的 `if (ok === false) return` 判定天然兼容。
     registerFileType: (def) => {
@@ -1136,7 +1137,9 @@ export const usePluginStore = create<PluginState>((set, get) => {
       // ⚠️开发副本不给注册文件类型:主进程的毁档防线(collectPluginExts → listPages 排除)只扫已安装目录,
       // dev 根不在其中。清单里声明 fileExtensions 会被判 'dev-fileext' 拒载 —— 但只拦清单等于只拦了无害的那半:
       // 删掉那一行就能载入,setup 里照样调到这里,用户在真库里建出的 `.foo.md` 会被笔记管线改写(评审 MED)。
-      if (get().plugins.find((p) => p.id === pluginId)?.dev) {
+      // 这道防线只为 `.md` 类后缀而设:非 md 后缀(如覆盖内置的 `.pdf`)本来就不进笔记管线,
+      // 开发副本可以注册 —— 否则写一个 PDF 插件只能反复安装着测。
+      if (get().plugins.find((p) => p.id === pluginId)?.dev && exts.some((e) => /\.md$/i.test(String(e ?? '')))) {
         console.warn(`[plugin:${pluginId}] registerFileType(${exts.join(',')}) 被拒:开发副本的自定义文件类型不受宿主扩展名保护,请先安装再测`)
         return false
       }
@@ -1147,8 +1150,10 @@ export const usePluginStore = create<PluginState>((set, get) => {
         console.warn(`[plugin:${pluginId}] registerFileType(${exts.join(',')}) 被拒:后缀声明不合形态(须 '.x',md 类须复合后缀 '.X.md')`)
         return false
       }
-      if (exts.every((e) => isBuiltinFileType(String(e)))) {
-        console.warn(`[plugin:${pluginId}] registerFileType(${exts.join(',')}) 被拒:该后缀已由 Forsion 内置文件类型认领`)
+      const taken = (e: string): boolean => isBuiltinFileType(e) && !(def.override === true && isOverridableBuiltinType(e))
+      if (exts.every((e) => taken(String(e)))) {
+        const hint = exts.some((e) => isOverridableBuiltinType(String(e))) ? '(这个后缀可以覆盖,但要显式写 override: true)' : ''
+        console.warn(`[plugin:${pluginId}] registerFileType(${exts.join(',')}) 被拒:该后缀已由 Forsion 内置文件类型认领${hint}`)
         return false
       }
       // fmKeys(属性面板隐藏用)只收非空字符串;amadeus_* 是编译器地盘,插件不许认领。
@@ -1915,14 +1920,21 @@ subscribeLocale(() => {
 // 非响应式调用(nav 路由、视图挂载那一刻)用下面读快照的 match*。
 
 /** 在给定 fileTypes 列表里按路径后缀找命中的文件类型贡献(纯函数,便于组件订阅列表后调用)。
- *  内置文件类型的后缀一律不放行(生态硬规则,见 isBuiltinFileType):遮蔽内置 = 用户打不开内置视图。 */
+ *  内置文件类型的后缀不放行(生态硬规则,见 isBuiltinFileType):遮蔽内置 = 用户打不开内置视图。
+ *  例外只有「可覆盖」的那几个后缀(isOverridableBuiltinType),而且只认显式写了 override: true 的贡献 ——
+ *  命中即视为插件接管了「打开这个文件」,内置视图退为兜底。
+ *  ponytail: 两个启用的插件都覆盖同一个后缀时先注册的赢、用户没得选;真出现第二个再加「默认打开方式」。 */
 export function findFileType(
   list: { item: FileTypeContribution }[],
   path: string,
 ): FileTypeContribution | undefined {
-  if (isBuiltinFileType(path)) return undefined
   const n = path.toLowerCase()
-  return list.find((o) => o.item.extensions.some((ext) => n.endsWith(ext.toLowerCase())))?.item
+  const claims = (o: { item: FileTypeContribution }): boolean => o.item.extensions.some((ext) => n.endsWith(ext.toLowerCase()))
+  if (isBuiltinFileType(path)) {
+    if (!isOverridableBuiltinType(path)) return undefined
+    return list.find((o) => o.item.override === true && claims(o))?.item
+  }
+  return list.find(claims)?.item
 }
 
 /** 当前已注册文件类型里匹配 path 的那个(读快照,非响应式)。 */
@@ -1933,6 +1945,9 @@ export function matchFileType(path: string): FileTypeContribution | undefined {
 /** 文件名去掉命中的文件类型后缀(如 `思维导图.mindmap.md` + ['.mindmap.md'] → `思维导图`);兜底剥最后一段扩展名。 */
 export function fileTypeBaseName(path: string, extensions: string[]): string {
   const name = path.split(/[\\/]/).pop() || path
+  // 被插件覆盖的内置类型(.pdf)照内置的叫法带着后缀:树上的行、标签页、最近使用里它一直是「书.pdf」,
+  // 不能因为换了谁来打开就改名(插件一停一启,名字跟着来回变)。
+  if (isBuiltinFileType(path)) return name
   const lower = name.toLowerCase()
   const ext = extensions.find((e) => lower.endsWith(e.toLowerCase()))
   return ext ? name.slice(0, name.length - ext.length) : name.replace(/\.[^.]+$/, '')

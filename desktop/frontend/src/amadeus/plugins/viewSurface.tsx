@@ -53,7 +53,9 @@ export function createPluginViewSurface(
 
   // 畸形后缀(裸 '.md'/'md'/空串)不参与匹配:endsWith('') 恒真、endsWith('md') 命中一切笔记,
   // 会把文件头那条毁档防线整个打开。注册端(registerFileType)已拒,这里是纵深兜底。
-  const usable = extensions.map((e) => String(e ?? '')).filter(isValidPluginExt)
+  // 只认 `.md` 类后缀:页表面是笔记读写管线,loadPage 之后一存就是 markdown。非 md 类型
+  // (如覆盖内置的 `.pdf`)放进来,插件一句 loadPage('x.pdf') 就把二进制文件改写成 markdown = 毁档。
+  const usable = extensions.map((e) => String(e ?? '')).filter(isValidPluginExt).filter((e) => /\.md$/i.test(e))
   const claims = (p: string): boolean => usable.some((e) => p.toLowerCase().endsWith(e.toLowerCase()))
 
   const surface: PluginPageSurface = {

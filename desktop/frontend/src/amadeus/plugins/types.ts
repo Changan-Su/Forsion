@@ -621,6 +621,18 @@ export interface FileTypeContribution {
    *  hand-editing corrupts the view and a plain note has no such keys. Hidden ≠ droppable: the
    *  panel still round-trips them verbatim on every properties edit. (2026-08-14) */
   fmKeys?: string[]
+  /** Take over a built-in file type (2026-10-05+). Only meaningful for the overridable built-in
+   *  suffixes — currently just `.pdf`. With `override: true`, opening such a file (tree click,
+   *  `ctx.app.openFile`, recent items) mounts this view; the built-in reader stays as the fallback
+   *  (plugin disabled or uninstalled → built-in again, and the tree's context menu always offers
+   *  "Open with the built-in reader"). Without it the suffix is refused as before.
+   *  Not taken over: jumps that carry a page or quote (chat citations, `[[x.pdf#page=3]]`) and
+   *  `![[x.pdf]]` embeds — those keep using the built-in reader.
+   *  ⚠️ Binary types get no page surface: `file.surface.loadPage` refuses non-`.md` paths. Read the
+   *  file with `ctx.app.readBytes?.()` and save with `ctx.app.writeBytes?.()`.
+   *  Other built-in suffixes (`.excalidraw.md`, `.db`, images) cannot be overridden. Older hosts
+   *  ignore this field and return `false` from registerFileType — stand down as documented there. */
+  override?: boolean
   /** Build the editor for one file into the host element; called once per opened instance. Return a
    *  cleanup (flush/save-on-close, clear timers here). Read/write the file via ctx.app.readFile/writeFile.
    *  `file.surface` (2026-08-14, when present): a per-view page surface scoped to this tab — prefer it
@@ -843,7 +855,8 @@ export interface PluginContext {
   /** Contribute a custom file type: tree icon + dedicated editor view + click-to-open. Declare the same
    *  suffixes in manifest `fileExtensions`. See FileTypeContribution. */
   /** Returns false when EVERY declared suffix is already owned by a built-in file type — the host
-   *  refuses the registration (built-ins always win) and the plugin should stand down entirely
+   *  refuses the registration (built-ins win, except an overridable one claimed with
+   *  `override: true`; see FileTypeContribution.override) and the plugin should stand down entirely
    *  (skip its file creator / slash item too, or the user sees duplicate "New X" entries).
    *  Older hosts return undefined, so test with `=== false`. */
   registerFileType(def: FileTypeContribution): boolean | void

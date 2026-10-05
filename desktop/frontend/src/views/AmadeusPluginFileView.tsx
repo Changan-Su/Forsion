@@ -3,15 +3,24 @@
  *  注册的 FileTypeContribution,调它的 mount(el, { filePath }) 把编辑器画进容器。插件晚于 boot 加载
  *  也没关系(挂载/重渲即查表;fileTypes 变化会触发重挂)。与 AmadeusDrawingView 同一套契约域包裹。 */
 import { useEffect, useRef } from 'react'
-import type { ViewProps } from '@lcl/engine'
+import { useWorkspace, type ViewProps } from '@lcl/engine'
 import { useVisualTheme as useTheme } from '../stores/themeStore'
 import { usePageStore, pageStoreFor } from '../amadeus/store/pageStore'
 import { usePluginStore, findFileType, fileTypeBaseName, addPluginViewTeardown } from '../amadeus/plugins/pluginStore'
 import { createPluginViewSurface } from '../amadeus/plugins/viewSurface'
-import { isBuiltinFileType } from '@amadeus-shared/builtinTypes'
+import { isBuiltinFileType, isOverridableBuiltinType } from '@amadeus-shared/builtinTypes'
 import { openFile } from '../amadeusNav'
+import { FILE_VIEW_PARAM, fileMatchViewType } from '../viewFileMatch'
+import { registerMessages, useI18n } from '../i18n'
+
+registerMessages({
+  'pluginfile.noFile': { zh: '未指定文件。', en: 'No file specified.' },
+  'pluginfile.noPlugin': { zh: '没有已启用的插件能打开「{file}」。', en: 'No enabled plugin can open "{file}".' },
+  'pluginfile.openBuiltin': { zh: '用内置阅读器打开', en: 'Open with the built-in reader' },
+})
 
 export function AmadeusPluginFileView({ leaf }: ViewProps) {
+  const { t } = useI18n()
   const filePath = typeof leaf.params.filePath === 'string' ? leaf.params.filePath : ''
   const mode = useTheme((s) => s.mode)
   // 订阅 fileTypes:插件加载后新注册的类型会触发重渲染 → 从「无人能开」变为正常挂载。
@@ -29,8 +38,10 @@ export function AmadeusPluginFileView({ leaf }: ViewProps) {
   // 迁移旧标签页:某个文件类型被宿主收编成内置后(如 `.mindmap.md`),布局里存着的
   // `{amadeus-plugin-file, filePath}` 标签页会因 findFileType 被内置闸拒绝而变成「没有已启用的插件能打开」。
   // 认出内置类型就地导航到它自己的视图 —— 用户不该为一次内置化去手动关标签页(Codex)。
+  // 可覆盖的内置类型(.pdf)不在此列:它的标签页本来就可以归插件,ft 缺席可能只是插件还没装载完 / 正在热换,
+  // 自动换走会把用户开着的插件视图踢成内置的 —— 改在下面的空态里给一个「用内置阅读器打开」。
   useEffect(() => {
-    if (filePath && isBuiltinFileType(filePath)) openFile(filePath)
+    if (filePath && isBuiltinFileType(filePath) && !isOverridableBuiltinType(filePath)) openFile(filePath)
   }, [filePath])
 
   useEffect(() => {
@@ -81,8 +92,22 @@ export function AmadeusPluginFileView({ leaf }: ViewProps) {
     }
   }, [filePath, ft, vaultRoot]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  if (!filePath) return <div className="amx-draw-state">未指定文件。</div>
-  if (!ft) return <div className="amx-draw-state">没有已启用的插件能打开「{filePath}」。</div>
+  if (!filePath) return <div className="amx-draw-state">{t('pluginfile.noFile')}</div>
+  if (!ft) {
+    // 兜底:插件停用 / 卸载后留下的标签页,就地换成内置视图(同一个标签,不另开)。
+    const builtinType = isOverridableBuiltinType(filePath) ? fileMatchViewType(filePath) : null
+    const param = builtinType ? FILE_VIEW_PARAM[builtinType] : undefined
+    return (
+      <div className="amx-draw-state">
+        {t('pluginfile.noPlugin', { file: filePath })}
+        {builtinType && param && (
+          <button className="btn ghost sm" onClick={() => { useWorkspace.getState().navigateLeaf(leaf.id, builtinType, { [param]: filePath }) }}>
+            {t('pluginfile.openBuiltin')}
+          </button>
+        )}
+      </div>
+    )
+  }
   return (
     <div
       className="am-app tangu-lovable amx-pane amx-pluginfile"
