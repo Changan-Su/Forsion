@@ -6,7 +6,7 @@
 // 在同一夹具上量到的值)、重载后仍然关着。另钉两处容易静默出事的:全宽笔记不被阅读宽度压住、画布里按缺省排版。
 // 用法:node scripts/calm.check.cjs [--baseline] [--nc] [--light] [--lang=<设计语言 id>]
 //   --baseline 只打印当前产物的度量(改 CSS 前后各跑一遍对数用),不断言
-//   --nc       负对照:启动前把三个开关都存成关,「缺省开」那几组必须红 —— 此时退出码非 0 才算对
+//   --nc       负对照:启动前把三个开关都存成关,量「开着」的那几组必须红 —— 红了退出码才是 0
 //   --light    浅色下跑一遍(淡出的数与恢复都一样要成立)
 //   --lang=…   换一套设计语言跑(缺省 genesis-glass;出厂缺省语言是 lovable,两套都要绿)
 // 截图落 SHOT_DIR(缺省系统临时目录),断言管数、观感自己看(DESIGN §8)。
@@ -143,7 +143,7 @@ async function main() {
     const d0 = await win.evaluate(DIM)
     await shot('note-factory')
     if (!BASELINE) check('A0 没存过 = 外围淡出关、另两个开:<html> 上只有 dim 标着关,Ribbon / 页签 / 左栏都不退后', d0.attrs === 'off||' && d0.ribbon === 1 && d0.tab === 1 && d0.side === 1, JSON.stringify(d0))
-    if (!NC && !BASELINE) { await win.evaluate(() => localStorage.setItem('forsion_calm_dim', '1')); await reload(); await sleep(2500) }
+    if (!NC) { await win.evaluate(() => localStorage.setItem('forsion_calm_dim', '1')); await reload(); await sleep(2500) } // --baseline 也存:它打印的一直是三个都开着的数
 
     await toNote()
     const n1 = { body: await win.evaluate(BODY(NOTE_SEL)), ...(await read()) }
@@ -167,7 +167,8 @@ async function main() {
     // B 指针进去恢复、离开再退后(真鼠标);回到笔记页量左栏
     const hover = async (sel) => { const b = await win.locator(sel).first().boundingBox(); await win.mouse.move(b.x + b.width / 2, b.y + Math.min(b.height / 2, 200)); await sleep(900) }
     await hover('.t2-rail .t2-tsum')
-    check('B1 指针进对话右侧卡片 → 恢复', (await win.evaluate(DIM)).rail === 1)
+    const hr = await win.evaluate(DIM)
+    check('B1 指针进对话右侧卡片 → 恢复', hr.rail === 1, String(hr.rail))
     await toNote()
     await hover('.rb')
     const hb = await win.evaluate(DIM)
@@ -217,7 +218,7 @@ async function main() {
     const leftOff = await win.evaluate(LEFT_COLORS)
     await park()
     const diff = leftRestored && leftOff && leftRestored.length === leftOff.length ? leftRestored.filter((c, i) => c !== leftOff[i]).length : -1
-    check('D5 指针在左栏里时(恢复态),左栏每个元素的字色与关掉开关时逐个相同', diff === 0 && leftOff.length > 20, `${diff} / ${leftOff ? leftOff.length : 0} 个不同`)
+    check('D5 指针在左栏里时(恢复态),左栏每个元素的字色与关掉开关时逐个相同', diff === 0 && leftOff.length > 20, `${diff} / ${leftOff ? leftOff.length : 0} 个不同` + (diff > 0 ? ':' + leftRestored.map((c, i) => (c !== leftOff[i] ? `#${i} ${c} → ${leftOff[i]}` : '')).filter(Boolean).slice(0, 3).join('; ') : ''))
     await shot('note-all-off')
     if (fl) await fl.close().catch(() => {})
 
