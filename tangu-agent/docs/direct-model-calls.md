@@ -59,6 +59,7 @@ GPT 6 Luna 中档实测：判官一次调用的输出（含推理）最多 344 t
 | 首帧标题 | `localHistorian.ts` `onUserRunStart` | low | 600 | 标题不贴切 |
 | **Dream 提议** | `services/memoryDream.ts` `complete(PROPOSE)` | **medium**（2026-10-06 起；此前没传 = 关） | 3072 + 4096 | 校验不过 → 整轮失败、候选留到下次；过了校验但归并时丢了限定条件 → 靠下一行拦；该记的被当成噪音丢掉 → 这条候选就没了 |
 | **Dream 核验** | `memoryDream.ts` `complete(VERIFY)` | **medium**（同上） | 1024 + 4096 | 误放 → 错的归并写进 MEMORY.md（有版本可回退）；误拒 → 这一轮白跑 |
+| 项目记忆写满时的压缩 | `services/projectMemoryCompact.ts` | medium（2026-10-05 起；头两版没传，前台 19 次只对 8 次） | 12288 | 压错了会丢项目记忆里的现行规矩；去掉的原句进 `COMPACTED.json`、能逐句恢复 |
 | 云端 Historian（web / 安卓的 tangu 会话，网关上跑） | `services/historian.ts` `judgeAndWrite` | low | 800 | 直接追加进长期记忆（云端没有 Dream），每趟最多 3 条 |
 | 云端 Historian（AI Studio 空闲复盘） | `historian.ts` `summarizeSession` | 关（没传） | 300 | 一行日志 |
 | 会话压缩的摘要 | `services/compaction.ts` `summarizeWith` | 设置项 `compaction.thinking`，缺省 `off`；`inherit` = 跟本 run | 6144，另受窗口约束 | 摘要漏了东西，之后每个 run 都从这份摘要接着跑。档位是用户可调的，见 `docs/compaction.md` |
