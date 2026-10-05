@@ -8,12 +8,19 @@ describe('startup appearance storage boundary', () => {
     }
     expect(() => patchAppearance(DEFAULT_APPEARANCE, { animation: 'url(evil)' })).toThrow()
     expect(() => patchAppearance(DEFAULT_APPEARANCE, { nativeIcon: 'true' })).toThrow()
+    expect(() => patchAppearance(DEFAULT_APPEARANCE, { scene: 'url(evil)' })).toThrow()
   })
   it('retains unrelated fields and strips unexpected asset fields', () => {
     const changed = patchAppearance(DEFAULT_APPEARANCE, { icon: { id: 'upload', label: 'Mine', image, code: '<script>' } })
     expect(changed.icon).toEqual({ id: 'upload', label: 'Mine', image })
     expect(patchAppearance(changed, { showSplash: false }).icon).toEqual(changed.icon)
     expect(patchAppearance(changed, { icon: null }).icon).toBeNull()
+  })
+  it('files saved before the scene existed boot with the tree shadow and keep their other choices', () => {
+    expect(readAppearance({ version: 1, showSplash: true, animation: 'spin', icon: null, splash: null, nativeIcon: false }))
+      .toEqual({ ...DEFAULT_APPEARANCE, animation: 'spin', nativeIcon: false })
+    expect(readAppearance({ version: 1, scene: 'classic' }).scene).toBe('classic')
+    expect(patchAppearance({ ...DEFAULT_APPEARANCE, scene: 'classic' }, { showSplash: false }).scene).toBe('classic')
   })
   it('invalid or unknown persisted versions boot with defaults', () => {
     expect(readAppearance({ version: 2, showSplash: false })).toEqual(DEFAULT_APPEARANCE)
