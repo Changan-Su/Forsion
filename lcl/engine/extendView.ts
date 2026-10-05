@@ -1,6 +1,14 @@
 /** A transient extension of one mounted view. Presented in a real workbench panel; no permanent view registration or persisted content. */
 export type ExtendViewSide = 'left' | 'right' | 'bottom'
-export type ExtendViewCloseReason = 'dismiss' | 'close' | 'replace' | 'owner'
+/** Why an extension went away:
+ *  - `dismiss`: the person closed this panel itself (its × or Back, Esc, the system back gesture, closing its tab).
+ *  - `layout`:  the workbench took it away with the place it was in: its side was folded, the layout was reset or
+ *               replaced (a Space switch), or another view's extension took that side. Not a choice about this panel:
+ *               open it again when it is wanted. Hosts before this reason existed reported these as `dismiss`.
+ *  - `close`:   the owner closed it (`handle.close()` / `extendView.close()`).
+ *  - `replace`: the owner opened another extension in its place.
+ *  - `owner`:   the owner view was hidden or unmounted. */
+export type ExtendViewCloseReason = 'dismiss' | 'layout' | 'close' | 'replace' | 'owner'
 
 export interface ExtendViewHandle {
   readonly id: string
@@ -69,7 +77,8 @@ export function createExtendViewController() {
     controller,
     getSnapshot: () => entry,
     subscribe(fn: () => void) { listeners.add(fn); return () => { listeners.delete(fn) } },
-    dismiss: () => close('dismiss'),
+    // Anything but an explicit 'layout' is the person's own close: the header's × hands its click event to this.
+    dismiss: (reason?: unknown) => close(reason === 'layout' ? 'layout' : 'dismiss'),
     setVisible(value: boolean) { visible = value; if (!value) close('owner') },
     dispose() { alive = false; close('owner') },
   }
@@ -77,7 +86,7 @@ export function createExtendViewController() {
 
 /** The platform creates a native transient leaf, retaining ordinary panel tabs and sizing.
  *  `host` is the owner's own frame, for presenters that stay inside the owner (side Views). */
-export type ExtendViewPresenter = (options: ExtendViewOptions, dismiss: () => void, host?: HTMLElement) => {
+export type ExtendViewPresenter = (options: ExtendViewOptions, dismiss: (reason?: 'dismiss' | 'layout') => void, host?: HTMLElement) => {
   element: HTMLElement
   /** The platform surface already shows the title and a close control (named tabs, drawer bar). Otherwise the extension draws its own header. */
   titled?: boolean

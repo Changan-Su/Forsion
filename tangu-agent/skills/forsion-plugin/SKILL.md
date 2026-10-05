@@ -287,12 +287,25 @@ ctx.registerView({ id: 'items', title: 'Items', mount(el, view) {
       // 保存成功可调用 handle.close();失败时保留输入并提示。
       return () => { input.remove() } // 清理订阅/监听器/计时器
     },
-    onClose(reason) { /* dismiss(原生关闭/折叠/Esc/系统返回) / close / replace / owner */ },
+    onClose(reason) { /* dismiss / layout / close / replace / owner,见下 */ },
   })
   el.appendChild(button)
   return () => { button.remove() }
 } })
 ```
+
+`onClose(reason)` 的五种原因:
+
+| reason | 谁关的 | 插件该怎么想 |
+|---|---|---|
+| `dismiss` | 用户关的就是这块面板:它的 × / 返回、Esc、系统返回、关掉它的标签 | 这是用户的意思;要记「用户不想看它」就记在这里 |
+| `layout` | 宿主连同它所在的位置一起收走:那一侧被收起(移动端抽屉被关上)、恢复默认布局、切 Space 换了整份布局、别的视图的扩展占了这一侧 | **不是**用户对这块面板的决定,别当成「已关闭」记下来;需要时再 `open` 即可(宿主不会替你还原) |
+| `close` | 你自己调了 `handle.close()` / `view.extendView.close()` | — |
+| `replace` | 同一个主视图开了另一份扩展 | — |
+| `owner` | 主视图被隐藏或卸载 | 主视图回来后按需重开 |
+
+`layout` 是 2.12.2 之后的宿主才有的;更早的宿主把这些情况一律报成 `dismiss`。两头都要跑的插件:把 `layout` 当作
+「位置没了」单独处理,`dismiss` 仍可能是收起或重置,别在它上面记不可恢复的状态。
 
 每个主视图同时至多一份扩展,同一个 Panel 也只容纳一份临时内容(后来者替换前者)。
 移动端临时 View 进入原生左右抽屉的视图选择器;请求 bottom 时回落到右抽屉。

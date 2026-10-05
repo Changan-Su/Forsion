@@ -364,11 +364,7 @@ function openViewAtTarget(t: DropTarget, spec: { type: string; params?: Record<s
   if (loc === 'main') { ws.openView(spec.type, spec.params ?? {}, 'main', { newTab: true }); return }
   const visible = loc === 'left' ? ws.leftVisible : loc === 'right' ? ws.rightVisible : ws.bottomVisible
   if (!visible) ws.toggleSidebar(loc) // 收起态直接 openView 会把 stash 覆盖成单视图 → 先展开还原
-  ws.openView(spec.type, spec.params ?? {}, loc)
-  // 该侧原只有 sidebar-empty 占位时,落入真视图后清掉它(镜像 dockviewStore.dropView 的占位退位)。
-  const api = ws.api
-  const sidePanels = api ? api.panels.filter((p) => ((p.params as { __loc?: string } | undefined)?.__loc) === loc) : []
-  if (sidePanels.length > 1) sidePanels.filter((p) => ((p.params as { __type?: string } | undefined)?.__type) === 'sidebar-empty').forEach((p) => p.api.close())
+  ws.openView(spec.type, spec.params ?? {}, loc) // 该侧只剩 sidebar-empty 占位时,占位由 openView 退位
 }
 
 // WbTab 拖拽发起:记源 panelId + 标记源 tab(供 computeDropTarget/让位排除)+ 打 data-dv-dragging
