@@ -140,6 +140,14 @@
       w.translate(48 + cx, 48 + cy); w.rotate(-.04); w.transform(1, 0, -.34, 1, 0, 0);
       for (var sx = -1; sx <= 1; sx += 2) for (var sy = -1; sy <= 1; sy += 2) w.fillRect(sx > 0 ? gap / 2 : -gap / 2 - pw, sy > 0 ? gap / 2 : -gap / 2 - ph, pw, ph);
       target.replaceWith(scene);
+      if (!version) {
+        // Centre the actual capital-letter ink, not its line box. Segoe UI and the macOS fonts have different baselines.
+        var word = scene.querySelector('.fts-brand span'), font = getComputedStyle(word);
+        w.font = font.fontWeight + ' ' + font.fontSize + ' ' + font.fontFamily;
+        var metrics = w.measureText('FORSION');
+        var shift = -(metrics.fontBoundingBoxAscent - metrics.fontBoundingBoxDescent - metrics.actualBoundingBoxAscent + metrics.actualBoundingBoxDescent) / 2;
+        if (Number.isFinite(shift)) word.style.transform = 'translateY(' + shift + 'px)';
+      }
       splash.dataset.scene = 'tree-shadow';
       if (reduce || animation === 'none') splash.dataset.still = '';
       return true;

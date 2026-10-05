@@ -1,0 +1,44 @@
+name: probe-windows-ui
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/probe-windows-ui.yml'
+      - 'desktop/frontend/startupAppearance.js'
+      - 'desktop/scripts/startup-windows.probe.cjs'
+      - 'desktop/scripts/splash-loop.check.cjs'
+      - 'desktop/scripts/lib/find-chromium.cjs'
+permissions:
+  contents: read
+jobs:
+  startup:
+    runs-on: windows-2022
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install desktop dependencies
+        working-directory: desktop
+        run: npm ci --no-audit --no-fund
+      - name: Build and verify startup UI
+        working-directory: desktop
+        run: |
+          npm run build
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run check:splash
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run probe:startup-windows
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node scripts/startup-appearance.e2e.cjs
+          exit $LASTEXITCODE
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-startup-ui
+          path: |
+            desktop/outputs/splash/
+            desktop/outputs/windows-startup/
+            desktop/outputs/startup-appearance/

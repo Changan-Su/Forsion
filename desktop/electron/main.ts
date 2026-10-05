@@ -1522,10 +1522,11 @@ function createWindow(): void {
     // 其他平台保持原来的实色窗口,不改变稳定性/窗口行为。
     transparent: process.platform === 'darwin',
     backgroundColor: process.platform === 'darwin' ? '#00000000' : '#fbf8f5',
-    show: !QUIET_WINDOWS,
+    // Let the early HTML paint the saved light/dark splash before showing the native window.
+    show: false,
     webPreferences: satelliteWebPreferences(),
   })
-  if (QUIET_WINDOWS) mainWindow.showInactive()
+  mainWindow.once('ready-to-show', () => { if (mainWindow && !mainWindow.isDestroyed()) present(mainWindow) })
 
   mainWindow.webContents.setWindowOpenHandler(openUrlHandler(mainWindow.webContents))
   hardenNav(mainWindow.webContents)
