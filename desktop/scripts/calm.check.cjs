@@ -2,7 +2,7 @@
 //   外围淡出 = Ribbon 图标 / 未选中的标签 / 左栏文字 / 对话右侧卡片平时退后,指针进来恢复
 //   宽松正文 = 笔记与对话正文的行距、段距、笔记阅读宽度;界面字号与控件不动
 //   舒缓过渡 = 切主视图的淡入、外围恢复的时长
-// 钉四件事:缺省全开的数、指针进去真的恢复、在**设置浮窗**里关掉后主窗不重启就回到改动前的数(OFF 常量 = 10-05 改动前
+// 钉四件事:没存过时的缺省(外围淡出关、另两个开)与三个都开着时的数、指针进去真的恢复、在**设置浮窗**里关掉后主窗不重启就回到改动前的数(OFF 常量 = 10-05 改动前
 // 在同一夹具上量到的值)、重载后仍然关着。另钉两处容易静默出事的:全宽笔记不被阅读宽度压住、画布里按缺省排版。
 // 用法:node scripts/calm.check.cjs [--baseline] [--nc] [--light] [--lang=<设计语言 id>]
 //   --baseline 只打印当前产物的度量(改 CSS 前后各跑一遍对数用),不断言
@@ -138,6 +138,13 @@ async function main() {
       fs.writeFileSync(path.join(out, `${name}-${MODE}${LANG === 'genesis-glass' ? '' : '-' + LANG}.png`), Buffer.from(png, 'base64'))
     }
 
+    // A0 没存过时的缺省:外围淡出关(10-05 用户定,要的人自己开),另两个开。量完把外围淡出存成开,后面各组照旧量「开着」的数。
+    await toNote()
+    const d0 = await win.evaluate(DIM)
+    await shot('note-factory')
+    if (!BASELINE) check('A0 没存过 = 外围淡出关、另两个开:<html> 上只有 dim 标着关,Ribbon / 页签 / 左栏都不退后', d0.attrs === 'off||' && d0.ribbon === 1 && d0.tab === 1 && d0.side === 1, JSON.stringify(d0))
+    if (!NC && !BASELINE) { await win.evaluate(() => localStorage.setItem('forsion_calm_dim', '1')); await reload(); await sleep(2500) }
+
     await toNote()
     const n1 = { body: await win.evaluate(BODY(NOTE_SEL)), ...(await read()) }
     await shot('note-default')
@@ -146,8 +153,8 @@ async function main() {
     await shot('chat-default')
     if (BASELINE) { console.log(JSON.stringify({ note: n1, chat: c1 }, null, 1)); return 0 }
 
-    // A 缺省全开
-    check('A1 没存过 = 全开:<html> 上没有关的标记', n1.dim.attrs === '||', n1.dim.attrs)
+    // A 三个都开着时的数(外围淡出是上面存成开的)
+    check('A1 外围淡出存成开以后:<html> 上没有关的标记', n1.dim.attrs === '||', n1.dim.attrs)
     check('A2 Ribbon:非当前 Space 的图标退后,当前的不动', near(n1.dim.ribbon, ON.ribbon, 0.011) && n1.dim.ribbonOn === 1, JSON.stringify(n1.dim))
     check('A3 左栏未选中的图标页签退后,选中的不动', near(n1.dim.tab, ON.tab, 0.011) && n1.dim.tabOn === 1, `${n1.dim.tab} / ${n1.dim.tabOn}`)
     check('A4 左栏文字退后(字色变淡,不是整块降透明度),选中行不动', near(n1.dim.side, ON.side, 0.021) && n1.dim.sideOn === 1, `${n1.dim.side} / ${n1.dim.sideOn}`)
