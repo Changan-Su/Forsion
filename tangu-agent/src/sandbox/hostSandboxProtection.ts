@@ -388,6 +388,14 @@ function remoteCwdProtectedDirs(): string[] {
   ])];
 }
 
+/** p 是否落在上面那张表里某个目录**之内**(remoteCwdForbidden 只拒它们本身与祖先,且给引擎 Library 留了口子)。
+ *  agent 自己改默认工作目录时用(services/appSettings.ts):引擎包目录、Forsion / 引擎家目录、凭据目录里面的任何一层都不行 ——
+ *  工作目录是「替我批准」档下免审批的可写根,选进引擎包里就等于以后改审批代码不用问。 */
+export function withinRemoteCwdProtected(p: string): boolean {
+  const forms = [...new Set([path.resolve(p), canonicalFuturePath(p)])];
+  return remoteCwdProtectedDirs().some((d) => forms.some((f) => pathWithin(f, d)));
+}
+
 /** 应用配置 / 数据区(P0 第三轮 E11,C8 加固):远程 cwd 落在它们**之内**也拒(不只是祖先)。
  *  ~/Library(macOS:Application Support / Preferences / Cookies / Keychains / LaunchAgents …)、~/AppData 与 %APPDATA% / %LOCALAPPDATA%
  *  (Windows)、XDG 配置 / 数据 / 状态目录(~/.config、~/.local/share、~/.local/state 及其 $XDG_* 覆盖)。

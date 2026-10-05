@@ -10,7 +10,8 @@
  *      远程污点 run 直接拒(不弹卡);卡上写的是「现值 → 新值」。
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, existsSync, realpathSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, existsSync, realpathSync, symlinkSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { configureTangu } from '../src/seams/runtime.js';
@@ -25,6 +26,7 @@ import { subscribe } from '../src/services/eventBus.js';
 import { controlPlaneCall, gateToolCall, resolveApproval, toolNeedsApproval, type ApprovalAction } from '../src/services/approvals.js';
 import { APP_SETTINGS, renderAppSettings, updateAppSettings } from '../src/services/appSettings.js';
 import { ZHIPU_ENGINES } from '../src/adapters/standalone/localSearch.js';
+import { clearRunRemoteTaint, taintRunRemote } from '../src/services/remoteOrigin.js';
 
 const profile = createTanguProfile({ sandboxMode: 'none' });
 const stub: any = new Proxy({}, { get: () => () => { throw new Error('stub'); } });
@@ -35,9 +37,11 @@ const CLOUD = [
   { id: 'text-only-1', name: 'Text Only', provider: 'x', supportsVision: false },
   { id: 'img-1', name: 'Image One', provider: 'x', modelType: 'image_gen' },
 ];
+/** 取模型目录的那一刻要做的事(模拟「校验等网络时 run 被远端染色」)。 */
+let onCatalog: (() => void) | undefined;
 const brain: any = {
   models: {
-    listModelsForProject: async () => ({ models: CLOUD, defaultModelId: 'claude-sonnet-5' }),
+    listModelsForProject: async () => { onCatalog?.(); return { models: CLOUD, defaultModelId: 'claude-sonnet-5' }; },
     listDirectProviders: () => [{ providerId: 'bailian', baseUrl: 'https://provider-host.example/v1', modelIds: ['qwen-max'], imageModelIds: ['wan-1'], ttsModelIds: ['cosy-2'] }],
     hasDirectModel: () => false,
   },
@@ -70,6 +74,7 @@ beforeEach(async () => {
   home = mkdtempSync(join(tmpdir(), 'tangu-appset-'));
   outside = realpathSync(mkdtempSync(join(tmpdir(), 'tangu-appset-ws-')));
   process.env.TANGU_HOME = home;
+  onCatalog = undefined;
   const { host, db } = createSqliteHost({ dataDir: 'memory', localToken: 'x', userId: USER });
   db.exec(toSqliteDDL(STANDALONE_SCHEMA));
   configureTangu({ host, brain, billing: stub, profile });
@@ -258,6 +263,8 @@ describe('③ 写', () => {
     writeFileSync(file, 'x');
     const inside = join(home, 'agents', 'xyra', 'Library');
     mkdirSync(inside, { recursive: true });
+    const homeLink = join(outside, 'to-home');
+    symlinkSync(homedir(), homeLink);
     const before = readFileSync(cfgPath(), 'utf8');
     const bad: Array<[string, RegExp]> = [
       ['relative/dir', /must be an absolute path/],
@@ -268,6 +275,8 @@ describe('③ 写', () => {
       [dirname(homedir()), /cannot be set as the workspace by you/],
       [home, /cannot be set as the workspace by you/], // 应用自己的目录
       [inside, /cannot be set as the workspace by you/], // 其中的 agent 目录
+      [fileURLToPath(new URL('../src', import.meta.url)), /cannot be set as the workspace by you/], // 引擎包目录里面(选进来 = 以后改审批代码不用问)
+      [homeLink, /cannot be set as the workspace by you/], // 指向家目录的软链
     ];
     for (const [p, re] of bad) {
       const r = await updateAppSettings(profile, 'workspace', { path: p });
@@ -282,6 +291,34 @@ describe('③ 写', () => {
     expect(renderAppSettings({ section: 'workspace', writable: true })).toContain(`path = ${JSON.stringify(outside)}`);
     expect((await updateAppSettings(profile, 'workspace', { path: '' })).ok).toBe(true);
     expect(readCfg().workspace).toBe('');
+
+    // 软链:存的是它此刻指向的真实目录(存链接本身的话,之后改指别处,免审批的可写根就跟着换了)
+    const target = join(outside, 'proj');
+    mkdirSync(target);
+    const link = join(outside, 'link');
+    symlinkSync(target, link);
+    expect((await updateAppSettings(profile, 'workspace', { path: link })).text).toContain(`path: "" → ${JSON.stringify(target)}`);
+    expect(readCfg().workspace).toBe(target);
+  });
+
+  it('落盘前最后再问一次:校验等模型目录时 run 被远端染色 → 不写', async () => {
+    seed();
+    const before = readFileSync(cfgPath(), 'utf8');
+    expect(await updateAppSettings(profile, 'tts', { voice: 'nova' }, () => 'not now')).toEqual({ ok: false, text: 'Error: not now', changed: [] });
+    expect(readFileSync(cfgPath(), 'utf8')).toBe(before);
+
+    const ctx: ToolContext = { ...base(), runId: 'RT-taint' };
+    onCatalog = () => taintRunRemote('RT-taint', { via: 'tunnel', marked: true });
+    try {
+      const r = await executeTool(call('update_app_settings', { section: 'models', values: { background: 'sonnet' }, reason: 'x' }), ctx);
+      expect(r.isError).toBe(true);
+      expect(r.result).toContain('Remote sessions cannot change app settings');
+      expect(readFileSync(cfgPath(), 'utf8')).toBe(before);
+    } finally { clearRunRemoteTaint('RT-taint'); }
+    // 对照:没被染色的同一次调用写得进去
+    onCatalog = undefined;
+    expect((await executeTool(call('update_app_settings', { section: 'models', values: { background: 'sonnet' }, reason: 'x' }), ctx)).isError).toBe(false);
+    expect(readCfg().models).toEqual({ background: 'claude-sonnet-5' });
   });
 
   it('值没变:不写盘(连文件都不建)、不发事件;变了才发 app_settings_changed', async () => {
@@ -358,6 +395,12 @@ describe('④ 审批', () => {
     const first = await gate(WS(), ctx, 'approve_always');
     expect(first.asked.map((x) => x.reason)).toEqual([{ kind: 'protected', mode: 'full-auto' }]);
     expect(first.asked[0].preview).toMatch(/^⚠ Protected config or credentials · app settings\nworkspace\.path: "" → /);
+    // 模型给的是软链:卡上写出它实际指向哪
+    const link = join(outside, 'card-link');
+    mkdirSync(join(outside, 'card-target'));
+    symlinkSync(join(outside, 'card-target'), link);
+    const viaLink = await gate(call('update_app_settings', { section: 'workspace', values: { path: link }, reason: 'r' }), ctx, 'reject');
+    expect(viaLink.asked[0].preview).toContain(`→ ${JSON.stringify(link)} (resolves to ${join(outside, 'card-target')})`);
     expect(first.d.action).toBe('approve');
     expect((await gate(WS(), ctx, 'reject')).asked).toHaveLength(1);
   });

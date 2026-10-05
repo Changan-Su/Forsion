@@ -663,11 +663,15 @@ export function activeChatModelId(
   if (!s.activeId) return newChatModelId(s) || ''
   return s.activeSession?.model_id || defaultModelOf(s) || s.modelsResp?.defaultModelId || ''
 }
-/** 重读主进程折算好的配置,刷新本地缓存(agent 改了 config.json 之后)。cfg 只动「设置里的值」那三项,连接信息不碰。 */
+/** 重读主进程折算好的配置,刷新本地缓存(agent 改了 config.json 之后)。cfg 只动「设置里的值」那三项,连接信息不碰。
+ *  只认最后发起的那次读取:连改两次时两次读取的先后回来的顺序不保证,先发的那份(旧值)晚到就会把新值盖回去。 */
+let desktopConfigReloadSeq = 0
 function reloadDesktopConfig(): void {
   const generation = authGeneration
+  const seq = ++desktopConfigReloadSeq
   void window.tangu?.getConfig?.().then((c) => {
     if (generation !== authGeneration) return // 期间换了号:那份配置是上个账号的
+    if (seq !== desktopConfigReloadSeq) return // 后面又发起了一次读取:以那次为准
     useApp.setState((s) => ({
       desktopConfig: c, homeDir: c.homeDir, defaultWsDir: c.defaultWorkspaceDir || '',
       cfg: { ...s.cfg, modelId: c.modelId, visionModelId: c.visionModelId, visionMode: c.visionMode },

@@ -10,12 +10,12 @@
  *   - 整批校验通过才写(一个字段不合法 = 一个都不写)。
  * 审批、远程 / 通道限制在工具与审批闸那边(tools/builtin/appSettings.ts、services/approvals.ts、services/remoteOrigin.ts)。
  */
-import { statSync } from 'node:fs';
+import { realpathSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { getRawSection, updateSection } from '../core/config.js';
 import { ZHIPU_ENGINES } from '../adapters/standalone/localSearch.js';
 import { protectedLocalWrite } from '../tools/fsPolicy.js';
-import { remoteCwdForbidden, withinForsionDomains } from '../sandbox/hostSandboxProtection.js';
+import { remoteCwdForbidden, withinRemoteCwdProtected } from '../sandbox/hostSandboxProtection.js';
 import { chatModels, listModelCatalog, resolveModelQuery, type CatalogModel } from './modelCatalog.js';
 import { deps } from '../seams/runtime.js';
 import type { AppProfile } from '../seams/appProfile.js';
@@ -230,11 +230,18 @@ async function validate(key: string, f: Field, v: unknown, models: () => Promise
   const abs = path.resolve(s);
   try { if (!statSync(abs).isDirectory()) return { error: `${key}: ${abs} is not a folder` }; } catch { return { error: `${key}: ${abs} does not exist — the user has to create it first` }; }
   // 工作目录 = 以后每个新会话在「替我批准」档下免审批的可写根。与远程会话的 cwd 同一套禁区(remoteCwdForbidden:根目录、家目录及其祖先、
-  // 受保护目录及其祖先、应用配置区),再加 Forsion 自己的目录整片(agent 定义 / 技能 / 插件都在里面)。用户要选这些地方,自己在设置里选。
-  if (remoteCwdForbidden(abs) || withinForsionDomains(abs) || protectedLocalWrite(abs)) {
-    return { error: `${key}: ${abs} cannot be set as the workspace by you (it is the home folder or above it, or it holds app configuration or credentials) — only the user can pick it, in Settings` };
+  // 受保护目录及其祖先、应用配置区),再加受保护目录**里面**的任何一层(withinRemoteCwdProtected:引擎包目录、Forsion / 引擎家目录、
+  // 凭据目录 —— agent 定义 / 技能 / 插件 / 审批代码都在里面)。用户要选这些地方,自己在设置里选。
+  // 存的是解析后的真实路径:存软链的话,之后把链接改指家目录,免审批的可写根就跟着换了(校验过的是当时的目标)。
+  const real = realDir(abs);
+  if (remoteCwdForbidden(real) || withinRemoteCwdProtected(real) || protectedLocalWrite(real)) {
+    return { error: `${key}: ${real} cannot be set as the workspace by you (it is the home folder or above it, or it holds the app itself, its configuration or credentials) — only the user can pick it, in Settings` };
   }
-  return { value: abs };
+  return { value: real };
+}
+
+function realDir(abs: string): string {
+  try { return realpathSync.native(abs); } catch { return abs; }
 }
 
 export interface AppSettingsUpdate {
@@ -245,8 +252,10 @@ export interface AppSettingsUpdate {
   changed: string[];
 }
 
-/** 校验并写入一段的若干字段。整批校验通过才写;值没变的字段不算改动(全都没变 = 不写盘)。 */
-export async function updateAppSettings(profile: AppProfile, sectionName: unknown, values: unknown): Promise<AppSettingsUpdate> {
+/** 校验并写入一段的若干字段。整批校验通过才写;值没变的字段不算改动(全都没变 = 不写盘)。
+ *  @param beforeWrite 落盘前最后问一次(返回一句拒绝理由 = 不写)。校验要查模型目录(网络请求),这段时间里 run 可能被远端染色;
+ *  它在所有 await 之后、与写入同一拍里调用。 */
+export async function updateAppSettings(profile: AppProfile, sectionName: unknown, values: unknown, beforeWrite?: () => string | null): Promise<AppSettingsUpdate> {
   const fail = (text: string): AppSettingsUpdate => ({ ok: false, text: `Error: ${text}`, changed: [] });
   const name = String(sectionName ?? '').trim();
   const spec = APP_SETTINGS[name];
@@ -283,6 +292,8 @@ export async function updateAppSettings(profile: AppProfile, sectionName: unknow
     if (!(typeof k === 'string' && k.trim())) errors.push(`provider: ${spec.secrets[keyed]} has no API key yet — the user has to enter it in Settings first (run_ui_command open-settings "${spec.open}")`);
   }
   if (errors.length) return fail(`nothing was changed.\n- ${errors.join('\n- ')}`);
+  const denied = beforeWrite?.();
+  if (denied) return fail(denied);
 
   const changed: string[] = [];
   const notes: string[] = [];
@@ -323,6 +334,8 @@ export function describeAppSettingsChange(sectionName: unknown, values: unknown)
   const raw = rawOf(name, spec);
   return Object.entries(values).map(([key, v]) => {
     const f = Object.hasOwn(spec.fields, key) ? spec.fields[key] : undefined;
-    return `${name}.${key}: ${f ? lit(current(raw, key, f)) : '(not a setting)'} → ${lit(v)}`;
+    // 目录:卡上写出它实际指向哪(模型给的可能是软链;落盘的是解析后的路径)。
+    const real = f?.t === 'dir' && typeof v === 'string' && path.isAbsolute(v.trim()) ? realDir(path.resolve(v.trim())) : '';
+    return `${name}.${key}: ${f ? lit(current(raw, key, f)) : '(not a setting)'} → ${lit(v)}${real && real !== v ? ` (resolves to ${real})` : ''}`;
   }).join('\n');
 }

@@ -83,7 +83,9 @@ export const appSettingsProvider: ToolProvider = {
         // 审批闸已硬拒远程污点 run;这里是同一个判定的兜底(run 中途被远端 steer 染色、或有人绕过闸直调)。
         if (effectiveRemote(ctx)) return `Error: ${remoteManagementDenied('update_app_settings', undefined)}`;
         if (ctx.runOrigin === 'channel') return 'Error: App settings cannot be changed from a chat channel. Tell the user to change it in Settings on the computer.';
-        const r = await updateAppSettings(ctx.profile ?? deps().profile, args?.section, args?.values);
+        // 落盘前再问一次:校验模型字段要等模型目录(网络),这段时间里远端一条插话就能把这条 run 染色。
+        const r = await updateAppSettings(ctx.profile ?? deps().profile, args?.section, args?.values,
+          () => (effectiveRemote(ctx) ? remoteManagementDenied('update_app_settings', undefined) : null));
         if (r.changed.length && ctx.runId) {
           void publish(ctx.runId, 'app_settings_changed', { section: String(args?.section), fields: r.changed, source: 'agent' });
         }

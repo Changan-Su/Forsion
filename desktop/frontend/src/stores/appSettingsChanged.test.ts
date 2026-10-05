@@ -44,6 +44,26 @@ describe('app_settings_changed', () => {
     expect(s.cfg).toEqual({ ...LOCAL_CFG, modelId: 'new-default', visionModelId: 'new-vision', visionMode: 'always' })
   })
 
+  it('连改两次、先发的读取后到:以最后发起的那次为准(旧值不许盖回新值)', async () => {
+    let releaseOld!: () => void
+    const older = { modelId: 'older', visionModelId: 'older-v', visionMode: 'auto', ttsVoice: 'older', defaultWorkspaceDir: '/older' }
+    const newer = { modelId: 'newer', visionModelId: 'newer-v', visionMode: 'off', ttsVoice: 'newer', defaultWorkspaceDir: '/newer' }
+    const getConfig = vi.fn()
+      .mockImplementationOnce(() => new Promise((res) => { releaseOld = () => res(older) }))
+      .mockImplementationOnce(async () => newer)
+    g.window = { tangu: { getConfig } }
+    emit({ section: 'tts', fields: ['voice'] })
+    emit({ section: 'tts', fields: ['voice'] })
+    await flush()
+    expect(useApp.getState().cfg.modelId).toBe('newer')
+    releaseOld()
+    await flush()
+    const s = useApp.getState()
+    expect(s.cfg).toEqual({ ...LOCAL_CFG, modelId: 'newer', visionModelId: 'newer-v', visionMode: 'off' })
+    expect(s.desktopConfig).toEqual(newer)
+    expect(s.defaultWsDir).toBe('/newer')
+  })
+
   it('读不到(web / 手机没有这份配置,或主进程报错):保留本地,不抛', async () => {
     g.window = {} // 没有 window.tangu
     emit({ section: 'tts', fields: ['voice'] })
