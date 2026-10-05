@@ -28,7 +28,7 @@ import { act } from './activity/log'
 import { readDisabledPluginIds } from '@amadeus/plugins/pluginStore'
 import { hasBottomPanel } from './pluginViews'
 import { PRODUCT } from './product'
-import { LAST_EXIT_SPACE, resolveStartupTarget, startupSpacePref } from './spaces'
+import { LAST_EXIT_SPACE, awaitedStartupSpace, resolveStartupTarget, startupSpacePref } from './spaces'
 
 // 保留 id:用户/市场的 space.json 不许占用宿主 Space 的 id。calendar 现在是内置插件(关掉即不注册),
 // 更要留着 —— 否则关掉期间被别人占了 id,重新启用时两份 Space 撞车。
@@ -73,8 +73,18 @@ let pluginOnlyStartupResolved = false
  * startup target is actually registered, then clear/rebuild the live workbench in one step. */
 const pendingRecipeLayouts = new Set<string>()
 let asyncStartupSpaceResolved = false
+/** 启动点名的 Space 还没注册,人先落在回落 Space 上等它(补定位没结案)。 */
+let parkedOnFallback = false
 
 export const isUserSpace = (id: string): boolean => userIds.has(id)
+
+/** bootstrapEngine 把人落在回落 Space 上之后调:此后活动 Space 一变 —— 用户自己切(哪怕又切了回来)、宿主把他带去别处 ——
+ *  就算他接管了导航,补定位结案,点名的那个到了也不拽他。从落位那一刻就记,不等第一趟补定位(配方装载慢的时候,那之前的
+ *  一次往返会漏掉;Codex 评审)。补定位自己把人带过去时也会触发,那时本来就该结案。 */
+export function parkOnStartupFallback(): void {
+  parkedOnFallback = true
+  const off = useSpaceStore.subscribe((s, p) => { if (s.activeSpaceId !== p.activeSpaceId) { off(); asyncStartupSpaceResolved = true } })
+}
 
 function specName(spec: SpaceSpec): () => string {
   return () => {
@@ -217,12 +227,22 @@ export function loadUserSpaces(): Promise<void> {
  * required plugin view registered later missed that callback: its id was cold-restored afterwards while
  * Dockview kept the already-restored legacy layout. Recipe version had nevertheless been stamped, so the
  * stale UI survived every restart. Both bootstrap and the external-plugin completion path call this helper;
- * it resolves exactly once, and a pending recipe migration clears persistence before rebuilding. */
+ * it resolves exactly once, and a pending recipe migration clears persistence before rebuilding.
+ * A pass that only finds the fallback of a named-but-unregistered startup Space does not count as that once. */
 export function settleAsyncStartupSpace(): void {
   if (asyncStartupSpaceResolved || windowKind() !== 'main' || UI_MODE === 'mobile') return
   const want = resolveStartupTarget(BOOT_ACTIVE_SPACE_ID)
   const state = useSpaceStore.getState()
   if (!state.spaces.some((space) => space.id === want)) return
+
+  // 固定档 / 主位档点名的 Space 还没注册 → want 只是回落值,启动已经落在它上面(bootstrapEngine,只改内存)。这一趟照常往下走
+  // (纯插件产品的画像在下面补),但**不结案**:插件比第一趟配方装载晚装完时(两者只差几毫秒,真 Electron 重载 60 次里 2 次),
+  // 点名的那个到下一趟才注册 —— 以前在这里结了案,它注册上来也没人再把用户带过去,窗口停在回落 Space(10-04 实报)。
+  // 它永远不来(插件已删)就一直不结案,每一趟都是空转。等的这段时间里用户接管了导航 → parkOnStartupFallback 的订阅结案,
+  // 走不到这里。结案只进不退:下面只在 final 时置真,从不写回假。
+  const final = awaitedStartupSpace() === null
+  // 回落之后才等到它,屏上是回落 Space 的现场(Dockview 没就绪就谈不上现场),用户可能已经在里面动过(多开了标签)。
+  const late = final && parkedOnFallback && !!ws().api
 
   // 「上次退出」档下,盘上的活动 id 在补定位之前只有用户自己切 Space(setActiveSpace)才会变 —— 回落只改内存。
   // 变了 = 屏上是他刚选的那个 Space 的现场:不再把他拽回去,更不能拿归档 / 重建盖掉它(那份现场只在布局键里,
@@ -245,19 +265,22 @@ export function settleAsyncStartupSpace(): void {
     ws().setPinned(space.pinned)
   }
 
-  if (migrated) {
+  // late 不走这条:「清布局键 + 重建」是给「屏上是本 Space 的旧布局」准备的,屏上是回落 Space 的现场时会把用户在回落期间的
+  // 改动一起丢掉(Codex 评审;check:spacefallback 的 R)。走下面的正常切换 —— setActiveSpace 先把它存进它自己的槽,
+  // 本 Space 的槽已被迁移 / 重置清掉,照新配方重建。
+  if (migrated && !late) {
     // Clear the current-layout blob too, not only `space:<id>`. If Dockview is already mounted resetLayout
     // replaces the live legacy tree; if it is not, onReady sees the cleared blob and builds the new recipe.
     clearLayout()
     if (state.activeSpaceId !== want) setActiveSpaceCold(want)
     configure()
     ws().resetLayout()
-    asyncStartupSpaceResolved = true
+    if (final) asyncStartupSpaceResolved = true
     return
   }
 
   if (state.activeSpaceId !== want) {
-    if (startupSpacePref() === LAST_EXIT_SPACE) {
+    if (startupSpacePref() === LAST_EXIT_SPACE && !late) {
       const liveOwner = liveLayoutOwner() // 屏上这份布局是给谁摆的。取在 configure() 之前:它一重设画像,归属就成了 want
       setActiveSpaceCold(want)
       configure()
@@ -283,7 +306,7 @@ export function settleAsyncStartupSpace(): void {
     configure()
     ws().realignRegions?.()
   }
-  asyncStartupSpaceResolved = true
+  if (final) asyncStartupSpaceResolved = true
 }
 async function loadUserSpacesOnce(): Promise<void> {
   const list = await window.tangu?.spacesList?.().catch(() => null)

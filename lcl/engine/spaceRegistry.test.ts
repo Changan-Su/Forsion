@@ -136,6 +136,16 @@ describe('spaceRegistry', () => {
     expect(calls).toEqual([]) // 无任何布局操作
   })
 
+  // 启动点名的 Space 还没注册(异步就位的插件 Space)→ 落在回落 Space 上,但盘上的「上次退出在哪」不许被它盖掉:
+  // 补定位那一趟没赶上时,盘上就成了「上次退出 = 回落 Space」(10-04 实报,窗口停在 Tangu)。
+  it('setActiveSpaceCold(id, false): a startup fallback only changes memory', () => {
+    localStorage.setItem('forsion_tangu_active_space', 'plugin-space')
+    useSpaceStore.setState({ spaces: [mkSpace('tangu'), mkSpace('amadeus')], activeSpaceId: 'amadeus' })
+    setActiveSpaceCold('tangu', false)
+    expect(useSpaceStore.getState().activeSpaceId).toBe('tangu')
+    expect(localStorage.getItem('forsion_tangu_active_space')).toBe('plugin-space')
+  })
+
   it('setActiveSpaceCold ignores an unregistered id (caller falls back)', () => {
     useSpaceStore.setState({ spaces: [mkSpace('tangu')], activeSpaceId: 'tangu' })
     setActiveSpaceCold('ghost')
