@@ -1,4 +1,3 @@
-import './startupAppearanceCopy'
 /**
  * 设置搜索的静态索引(U-15):搜「镜像」「字体」「休眠」这类**具体设置项**,而不只是分类名。
  *
@@ -11,6 +10,8 @@ import './startupAppearanceCopy'
  *
  * ⚠️ 模块作用域只存 **key**,标签在渲染期 t() 求值(切语言要跟着变)。`keywords` 是模糊搜索别名,
  *    中英混写属于「刻意留中文」一类,不进字典。
+ * ⚠️ 这份表不 import 任何东西:check:settingsmode 在纯 Node 里用 sucrase(只认 .ts)直接 require 它。
+ *    标签所在的文案片段(xxxCopy.ts → i18n.tsx)由渲染那一页的组件自己 import,别挂到这里。
  */
 
 /** cloud = Forsion 账号面在(内置包 Forsion Extend 装载了,桥键 forsionLogin 在)。 */

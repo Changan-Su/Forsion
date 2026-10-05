@@ -1,9 +1,11 @@
+import { execFileSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import '../i18n.generated'
 import './remoteSessionsCopy' // P1-K4:远程会话页的标签是模块级 registerMessages 片段
 import './remoteSafetyCopy' // P1-K2:急停与远程锁定区块(经 K4 扩展槽挂在远程会话页末尾)
+import './startupAppearanceCopy' // 开屏与图标:片段由 StartupAppearanceSettings 自己 import,登记表不带
 import { __dictSnapshot } from '../i18n'
 import { SETTINGS_SEARCH_INDEX, matchesSettingsQuery } from './settingsSearchIndex'
 
@@ -46,6 +48,16 @@ describe('settings search index', () => {
       expect(zh[e.labelKey], `${e.labelKey} zh`).toBeTruthy()
       expect(en[e.labelKey], `${e.labelKey} en`).toBeTruthy()
     }
+  })
+
+  // check:settingsmode 在纯 Node 里 `require('sucrase/register/ts')` 后直接 require 这份登记表;那个钩子只认 .ts,
+  // 表一旦(连带)import 了 .tsx / 浏览器运行时(i18n.tsx 就是),台架一启动就崩 —— 而 check:* 不在 CI 里,坏了没人知道。
+  // 这里按台架同样的方式加载一次(别换成 lib/load-ts.cjs:那是 esbuild 打包,.tsx 照样解析,会假绿)。
+  it('纯 Node + sucrase 能直接加载这份表(check:settingsmode 的加载方式)', () => {
+    const out = execFileSync(process.execPath, ['-e',
+      "require('sucrase/register/ts'); process.stdout.write(String(require(process.argv[1]).SETTINGS_SEARCH_INDEX.length))",
+      join(__dirname, 'settingsSearchIndex.ts')], { cwd: __dirname, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+    expect(Number(out)).toBe(SETTINGS_SEARCH_INDEX.length)
   })
 
   it('按标签或别名匹配,不分大小写', () => {
