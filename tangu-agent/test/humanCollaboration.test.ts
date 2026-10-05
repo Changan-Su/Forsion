@@ -134,6 +134,19 @@ describe('HUMAN.md collaboration lifecycle', () => {
     rmSync(join(agentsDir(), 'shared', 'HUMAN.md'));
     expect(readFileSync(join(outside, 'HUMAN.md'), 'utf8')).toBe('private');
   });
+  it('takes the Agent directory lock that cloud sync commits under; project handbooks do not', async () => {
+    // Agent 级 HUMAN.md 参与云同步,同步落盘拿的是 agent 目录的 .memory.lock:另一个进程持锁时,这里必须让路而不是插进去写。
+    const lock = join(agentsDir(), 'first', '.memory.lock'), projectLock = join(project, '.memory.lock');
+    const before = await readHuman(scope);
+    for (const file of [lock, projectLock]) writeFileSync(file, JSON.stringify({ pid: 0, createdAt: Date.now() }));
+    try {
+      await expect(writeHuman(scope, { expectedVersion: before.version, content: '# Raced', summary: 'Raced' }, 'user')).rejects.toMatchObject({ code: 'MEMORY_BUSY' });
+      expect((await readHuman(scope)).version).toBe(before.version);
+      const projectDoc = await readHuman({ kind: 'project', cwd: project });
+      expect((await writeHuman({ kind: 'project', cwd: project }, { expectedVersion: projectDoc.version, content: `${projectDoc.content}\nStill writable.`, summary: 'Project edit' }, 'user')).change).not.toBeNull();
+    } finally { rmSync(lock); rmSync(projectLock); } // 项目目录里那把不是我们的锁:项目级手册不看它,也不在项目根留锁文件
+    expect((await writeHuman(scope, { expectedVersion: before.version, content: `${before.content}\nAfter the lock.`, summary: 'After lock' }, 'user')).change).not.toBeNull();
+  });
   it('keeps collaboration with the display Agent when memories are shared', async () => {
     const tool = manageHumanProvider.tools()[0];
     const ctx = { userId: 'owner', sessionId: 'rootless', appId: 'tangu', execMode: 'sandbox' as const, agentSlug: 'shared' };

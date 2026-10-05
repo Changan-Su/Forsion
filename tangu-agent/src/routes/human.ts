@@ -30,7 +30,7 @@ const putHuman: RequestHandler = async (req: AuthRequest, res) => {
     try {
       const scope = await scopeOf(req, res); if (!scope) return;
       const result = await writeHuman(scope, { ...req.body, undoId: undefined }, 'user');
-      // 不带 slug 是空操作。⚠️ HUMAN.md 还不在同步名单里(validSyncPath + 服务端同名校验),这次同步带不走它本身。
+      // 不带 slug 是空操作;HUMAN.md 跟着归属 agent 的定义文件一起同步。
       if (scope.kind === 'agent' && result.change) scheduleAgentFilesSync(req.user!.userId, scope.slug);
       res.json(result);
     } catch (e) { fail(res, e); }

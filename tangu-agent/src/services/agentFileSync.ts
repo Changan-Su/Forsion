@@ -131,6 +131,7 @@ async function syncAccount(cloud: AgentFilesBrain, userId: string, scope: string
   if (onlySlug && existsSync(agentSyncDir(onlySlug)) && !agentSyncPermission(onlySlug, scope).enabled) return;
   guard();
   const manifest = await cloud.getManifest(userId, { signal }); guard();
+  const human = manifest.paths?.includes('human') === true;
   const bySlug = new Map<string, AgentFileMeta[]>();
   for (const item of manifest) {
     if (item.slug !== '__user__' && !validSyncSlug(item.slug)) { fail(result, new Error('invalid cloud manifest slug')); continue; }
@@ -180,7 +181,7 @@ async function syncAccount(cloud: AgentFilesBrain, userId: string, scope: string
   for (const [slug, bucket] of buckets) {
     const check = (): void => { guard(); for (const consent of bucket.guards) consent(); agentSyncDir(slug); };
     check();
-    await syncBucket(cloud, userId, slug, scope, bucket.cats, bySlug.get(slug) ?? [], signal, check, result);
+    await syncBucket(cloud, userId, slug, scope, bucket.cats, bySlug.get(slug) ?? [], human, signal, check, result);
   }
   // USER is an explicit shared-data opt-in, never an implicit private-agent pool.
   if (shared.length) {
@@ -196,7 +197,7 @@ function verifyBytes(file: { hash?: string | null }, bytes: Buffer): void {
   if (bytes.length > MAX_FILE_BYTES) throw new Error('cloud file exceeds sync limit');
   if (file.hash != null && sha256(bytes) !== file.hash) throw new Error('cloud file hash mismatch');
 }
-async function syncBucket(cloud: AgentFilesBrain, uid: string, slug: string, scope: string, cats: Set<Category>, manifest: AgentFileMeta[], signal: AbortSignal, guard: Guard, result: AgentFileSyncResult): Promise<void> {
+async function syncBucket(cloud: AgentFilesBrain, uid: string, slug: string, scope: string, cats: Set<Category>, manifest: AgentFileMeta[], human: boolean, signal: AbortSignal, guard: Guard, result: AgentFileSyncResult): Promise<void> {
   const dir = agentSyncDir(slug);
   const prev = readPrev(dir, scope);
   const remote = new Map<string, AgentFileMeta>();
@@ -211,6 +212,7 @@ async function syncBucket(cloud: AgentFilesBrain, uid: string, slug: string, sco
   }
   const paths = new Set([...localFiles(dir, cats), ...remote.keys(), ...Object.keys(prev.files).filter((p) => validSyncPath(p) && cats.has(categoryOf(p)))]);
   paths.delete(TOMBSTONES);
+  if (!human) paths.delete('HUMAN.md'); // 服务端还不认它:不推不拉不记影子,等它升级后照常首次同步
   for (const p of paths) {
     guard();
     try {

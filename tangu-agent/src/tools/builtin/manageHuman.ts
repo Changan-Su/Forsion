@@ -36,7 +36,7 @@ export const manageHumanProvider: ToolProvider = {
         if (args.action === 'read') return JSON.stringify(await readHuman(scope));
         ctx.signal?.throwIfAborted();
         const result = await writeHuman(scope, { content: args.content, summary: args.summary, evidence: args.evidence, expectedVersion: args.expectedVersion }, 'agent');
-        // 不带 slug 是空操作;带的是归属(显示)agent。⚠️ HUMAN.md 还不在同步名单里(validSyncPath + 服务端同名校验),这次同步带不走它本身。
+        // 不带 slug 是空操作;带的是归属(显示)agent —— HUMAN.md 跟着它的定义文件一起同步,不进记忆桶。
         if (scope.kind === 'agent' && result.change) scheduleAgentFilesSync(ctx.userId, scope.slug);
         return JSON.stringify({ kind: 'human_update', change: result.change, version: result.document.version,
           message: result.change ? 'Applied immediately. The next run will read this version. The user can edit or undo from the update card.' : 'No change; the content is already current.' });

@@ -23,8 +23,8 @@ function fakeCloud(enabledSlugs: string[] = []) {
   const puts = new Map<string, number>(); // 计数 putFile(键=slug/relPath),验证「去重一次」
   const gets: string[] = []; // 每次 getFile 的 slug/relPath,验证「没变的日志不取」
   const key = (s: string, p: string) => `${s}\0${p}`;
-  const brain: AgentFilesBrain & { _rows: typeof rows; _puts: typeof puts; _gets: typeof gets } = {
-    _rows: rows, _puts: puts, _gets: gets,
+  const brain: AgentFilesBrain & { _rows: typeof rows; _puts: typeof puts; _gets: typeof gets; _paths?: string[] } = {
+    _rows: rows, _puts: puts, _gets: gets, // _paths:服务端回带的可选路径族;不设 = 老服务端
     async getManifest() {
       const bySlug = new Map<string, any[]>();
       for (const [k, r] of rows) {
@@ -33,7 +33,7 @@ function fakeCloud(enabledSlugs: string[] = []) {
         arr.push({ relPath, mtimeMs: r.mtimeMs, size: r.size ?? 0, isBinary: !!r.isBinary, deleted: !!r.deleted, seq: r.seq, hash: r.hash });
         bySlug.set(slug, arr);
       }
-      return [...bySlug.entries()].map(([slug, files]) => ({ slug, files }));
+      return Object.assign([...bySlug.entries()].map(([slug, files]) => ({ slug, files })), brain._paths ? { paths: brain._paths } : {});
     },
     async getFile(_u, slug, relPath) {
       gets.push(`${slug}/${relPath}`);
@@ -255,6 +255,36 @@ describe('agentFileSync — shareDefaultMemory dedup', () => {
     expect(cloud._puts.get('xyra/MEMORY.md')).toBe(1); // 只推一次(去重)
     // a1/a2 自己的 config 各推一次(DEF 桶),但它们 MEMORY 不落自己 slug
     expect(await cloud.getFile('u', 'a1', 'MEMORY.md')).toBeNull();
+  });
+});
+
+describe('agentFileSync — HUMAN.md (agent 级协作手册)', () => {
+  it('syncs with the owning agent, never with the shared memory bucket', async () => {
+    await saveAgent({ slug: 'a1', name: 'A1', systemPrompt: 'x', cloudSync: true, shareDefaultMemory: true });
+    writeFileSync(join(tDir('a1'), 'HUMAN.md'), '# Together\nShow options first.');
+    const cloud = fakeCloud(['a1']); cloud._paths = ['human'];
+    expect((await runAgentFilesSync(cloud, 'u')).ok).toBe(true);
+    expect((await cloud.getFile('u', 'a1', 'HUMAN.md'))!.content).toBe('# Together\nShow options first.');
+    expect(await cloud.getFile('u', 'xyra', 'HUMAN.md')).toBeNull(); // 记忆共用默认桶,手册仍归 a1 自己
+    // 别的设备改了 → 拉下来
+    const base = cloud._rows.get('a1\0HUMAN.md').seq;
+    await cloud.putFile('u', 'a1', 'HUMAN.md', { content: '# Together\nEdited elsewhere.', isBinary: false, size: 28, mtimeMs: future(), baseSeq: base });
+    expect((await runAgentFilesSync(cloud, 'u')).ok).toBe(true);
+    expect(readFileSync(join(tDir('a1'), 'HUMAN.md'), 'utf8')).toBe('# Together\nEdited elsewhere.');
+  });
+
+  it('leaves it alone until the server says it accepts the path, then syncs it', async () => {
+    await saveAgent({ slug: 'tester', name: 'Tester', systemPrompt: 'x', cloudSync: true });
+    writeFileSync(join(tDir('tester'), 'HUMAN.md'), '# Together');
+    const cloud = fakeCloud(['tester']); // 老服务端:清单不回带 paths,推 HUMAN.md 只会 400
+    const r = await runAgentFilesSync(cloud, 'u');
+    expect(r.ok).toBe(true);
+    expect(cloud._puts.has('tester/HUMAN.md')).toBe(false);
+    expect((await cloud.getFile('u', 'tester', 'config.toml'))).not.toBeNull(); // 其余文件照常
+    expect(readFileSync(join(tDir('tester'), 'HUMAN.md'), 'utf8')).toBe('# Together');
+    cloud._paths = ['human']; // 服务端升级后
+    expect((await runAgentFilesSync(cloud, 'u')).ok).toBe(true);
+    expect((await cloud.getFile('u', 'tester', 'HUMAN.md'))!.content).toBe('# Together');
   });
 });
 

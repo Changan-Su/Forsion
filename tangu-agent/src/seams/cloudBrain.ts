@@ -225,8 +225,11 @@ export interface AgentFilePutBody {
   /** CAS 票据:0=仅创建;>0=期望当前 seq。不符 → httpBrain 抛 AgentFileConflictError。缺省 = 旧 mtime-LWW。 */
   baseSeq?: number;
 }
+/** paths = 服务端回带的、它认识的可选路径族('human' = HUMAN.md)。老服务端不回带 → 那一族本次不同步(推上去只会 400)。
+ *  反方向同理:客户端请求清单时声明自己认识哪些族,服务端只对声明了的客户端列出那些文件(老客户端见到不认识的路径会判整次同步失败)。 */
+export type AgentManifest = Array<{ slug: string; files: AgentFileMeta[] }> & { paths?: string[] };
 export interface AgentFilesBrain {
-  getManifest(userId: string, opts?: { signal?: AbortSignal }): Promise<Array<{ slug: string; files: AgentFileMeta[] }>>;
+  getManifest(userId: string, opts?: { signal?: AbortSignal }): Promise<AgentManifest>;
   getFile(userId: string, slug: string, relPath: string, opts?: { signal?: AbortSignal }): Promise<AgentFileContent | null>;
   putFile(userId: string, slug: string, relPath: string, body: AgentFilePutBody, opts?: { signal?: AbortSignal }): Promise<{ mtimeMs: number; seq?: number; hash?: string | null }>;
   deleteFile(userId: string, slug: string, relPath: string, mtimeMs: number, deviceId?: string, baseSeq?: number, opts?: { signal?: AbortSignal }): Promise<void>;

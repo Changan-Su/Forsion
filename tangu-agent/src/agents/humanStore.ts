@@ -88,7 +88,7 @@ export async function writeHuman(scope: HumanScope, input: {
 }, actor: 'agent' | 'user'): Promise<{ document: HumanDocument; change: HumanChange | null }> {
   if (typeof input.expectedVersion !== 'string') throw new HumanError('HUMAN_VERSION_REQUIRED', 'Read the current document and supply expectedVersion before editing.');
   const loc = await location(scope);
-  return withMemoryDirectoryLock(loc.historyDir, () => {
+  const commit = (): { document: HumanDocument; change: HumanChange | null } => {
     const before = contentAt(loc), beforeVersion = version(before);
     if (beforeVersion !== input.expectedVersion) throw new HumanError('HUMAN_CONFLICT', 'The collaboration document changed elsewhere. Reload it before applying your edit.');
     const records = historyAt(loc).filter(r => r.committed || r.afterVersion === beforeVersion);
@@ -116,7 +116,9 @@ export async function writeHuman(scope: HumanScope, input: {
     revision.committed = true;
     atomicWriteMemoryFile(loc.historyDir, 'history.json', JSON.stringify(next));
     return { document: snapshot(loc), change: publicChange(revision) };
-  });
+  };
+  // Agent 级的 HUMAN.md 参与云同步:同步落盘拿的是 agent 目录锁,这里一并拿上,另一个进程里的同步才插不进「核版本 → 写」之间。
+  return withMemoryDirectoryLock(loc.historyDir, () => loc.scope.kind === 'agent' ? withMemoryDirectoryLock(loc.base, commit) : commit());
 }
 
 /** Even an emptied/removed handbook must be represented: an undo in the UI is a
