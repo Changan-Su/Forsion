@@ -352,6 +352,23 @@ describe('探针(tanguProbe.mountChat)', () => {
     expect(usePluginChat.getState().pending).toEqual([{ sessionId: 's1', text: '为这支视频写一段配乐' }])
   })
 
+  it('同一个 el 上前一次请求作废时,只带走它自己投的引用(后一次请求刚投的那条留着)', async () => {
+    api.createSession.mockResolvedValue(rec('s1'))
+    let first!: import('../amadeus/plugins/tanguSeam').TanguChatMount
+    let second!: import('../amadeus/plugins/tanguSeam').TanguChatMount
+    await act(async () => {
+      first = readTangu()!.mountChat!(el, { owner: 'p', ...at('/v/A') })
+      second = readTangu()!.mountChat!(el, { owner: 'p', ...at('/v/A') }) // 没 dispose 前一次,同一个 el、同一个目标名
+      cleanups.push(first.dispose, second.dispose)
+      second.quote('第 2 幕')
+      expect(await first.ready).toEqual({ ok: false, error: 'disposed' }) // 界面那半落地时 el 已经归后一次
+      expect(useApp.getState().pendingChatQuote).toMatchObject({ text: '第 2 幕' })
+      await second.ready
+    })
+    expect(await second.ready).toEqual({ ok: true, sessionId: 's1' })
+    expect(el.querySelectorAll('[data-plugin-chat]').length).toBe(1)
+  })
+
   it('界面那半还没装进来就卸了 → 不建会话、不挂东西', async () => {
     const chat = readTangu()!.mountChat!(el, { owner: 'p', ...at('/v/A') })
     chat.dispose()

@@ -1283,7 +1283,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
         let cancelled = false, focusPending = false
         const pending = { ...opts }
         const dispose = scope.own('mount', () => { cancelled = true; mounted?.dispose(); mounted = null }, 'chatBox')
-        const mine = claimHostMount(el)
+        const mine = cancelled ? () => false : claimHostMount(el) // 已吊销的上下文不许认领:会把新上下文那次请求挤掉
         void import('./chatBoxSurface').then(m => {
           if (cancelled) return
           if (!mine()) { dispose(); return }
@@ -1332,7 +1332,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
         let cancelled = false
         // 内存作用域的 pageStore 与 React 树不许在插件死后还活着:插件不卸,关账卸。
         const dispose = scope.own('mount', () => { cancelled = true; disposeMounted?.(); disposeMounted = null }, 'dashboard')
-        const mine = claimHostMount(el)
+        const mine = cancelled ? () => false : claimHostMount(el) // 已吊销的上下文不许认领:会把新上下文那次请求挤掉
         void import('./dashboardSurface').then((m) => {
           if (cancelled || !el.isConnected || !mine()) { dispose(); return }
           disposeMounted = m.mountPluginDashboard(pluginId, el, o).dispose
@@ -1354,7 +1354,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
         let cancelled = false
         // body 级弹层宿主也在这一卸里收,漏了就是页面上一堆空 div。
         const dispose = scope.own('mount', () => { cancelled = true; handle?.dispose(); handle = null }, 'table')
-        const mine = claimHostMount(el)
+        const mine = cancelled ? () => false : claimHostMount(el) // 已吊销的上下文不许认领:会把新上下文那次请求挤掉
         void import('./tableSurface').then((m) => {
           // 只认 cancelled,**不看 el.isConnected**:面板每次重渲都会把容器掀掉再由 panel-lib 认领回来,
           // import 落地那一刻容器多半正游离着 —— 此时放弃 = 句柄永远为空、容器永远空白且不回落。

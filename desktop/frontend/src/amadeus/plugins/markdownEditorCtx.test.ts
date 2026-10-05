@@ -77,6 +77,23 @@ describe('native Markdown plugin mount lifecycle', () => {
     h.dispose()
     expect([...el.children]).toEqual([own])
   })
+  it('a revoked context cannot take an element away from a live request', async () => {
+    const { claimHostMount } = await import('@lcl/components')
+    const c = context('reloaded')
+    usePluginStore.getState().disable('reloaded') // the old context is dead; a late task of its still calls in
+    const el = document.createElement('div')
+    const stillMine = claimHostMount(el) // the new context's request, import still loading
+    const quiet = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    c.ui!.mountMarkdownEditor!(el, { value: '# late' })
+    c.ui!.mountChatBox!(el, { onSubmit: async () => true })
+    c.table!.mount(el, { id: 't', columns: [{ key: 'a', label: 'A', kind: 'text' }], rows: [] })
+    c.dashboard!.mount!(el, { recipe: { cards: [] } })
+    await vi.dynamicImportSettled()
+    quiet.mockRestore()
+    expect(stillMine()).toBe(true)
+    expect(surface.mount).not.toHaveBeenCalled()
+    expect(el.childElementCount).toBe(0)
+  })
   it('a request loses its element to a later mount while its import is still loading: it never mounts', async () => {
     const { mountHostReact } = await import('@lcl/components')
     const c = context('outrun')

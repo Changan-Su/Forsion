@@ -9,7 +9,7 @@
  * 卸载抛 NotFoundError);再挂时不收前一份 → ③ 与「没 dispose 就清空 el」红;render 不看句柄死活 → ② ③ 红(往已卸的 root 上画);
  * dispose 不 unmount → 凡数卸载次数的都红;dispose 不看句柄死活 → ④ 末尾「登记没被旧句柄抹掉」红。
  * 评审后补的三条(同日实跑红):render 不把游离的那一层接回去 → 「清空过 el」红;dispose 不调 onDispose → 「onDispose」红;
- * 落地的挂载不登记认领 → 「认领」红。
+ * 落地的挂载不登记认领 → 「认领」红;先收前一份再登记新的(收尾回调重入时登记被盖)→ 「重入」红。
  */
 import { act, createElement as h, useEffect, useState } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -156,6 +156,27 @@ describe('onDispose:这次挂载结束时恰好一次', () => {
     await act(async () => { b.dispose() })
     expect(ended).toEqual(['a', 'b', 'c'])
     expect(log.unmounted).toEqual(['a', 'b']) // c 同一拍就卸了,组件没来得及挂上
+    expect(errors).toEqual([])
+  })
+})
+
+describe('onDispose 里又往同一个 el 上挂(重入)', () => {
+  it('只留最后调用的那一份,登记没乱:之后再挂照样收得掉它', async () => {
+    let inner: HostReactMount | null = null
+    let outer!: HostReactMount, last!: HostReactMount
+    await act(async () => { mountHostReact(el, h(Probe, { name: 'a' }), () => { inner = mountHostReact(el, h(Probe, { name: 'c' })) }) })
+    await act(async () => { outer = mountHostReact(el, h(Probe, { name: 'b' })) }) // 收掉 a → a 的收尾回调里挂了 c
+    expect(el.childElementCount).toBe(1)
+    expect(probe('c')?.isConnected).toBe(true) // c 是最后调用的
+    expect(probe('b')).toBeNull()
+    await act(async () => { outer.dispose() }) // 外层那份已经被 c 收掉,它的句柄是哑的
+    expect(probe('c')?.isConnected).toBe(true)
+
+    await act(async () => { last = mountHostReact(el, h(Probe, { name: 'd' })) })
+    expect(el.childElementCount).toBe(1)
+    expect(probe('d')?.isConnected).toBe(true)
+    await act(async () => { inner!.dispose(); last.dispose() })
+    expect(el.childElementCount).toBe(0)
     expect(errors).toEqual([])
   })
 })

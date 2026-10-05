@@ -264,12 +264,13 @@ function mountChat(el: HTMLElement, o: TanguChatMountOptions): TanguChatMount {
   let disposed = false
   let mounted: { latest(): Promise<TanguStartChatResult>; dispose(): void } | null = null
   const type = pluginChatType(o)
+  let ownQuote = 0 // 这次挂载自己投的那条引用的序号(引用位是全应用共用的一个槽,同名的另一次挂载也往里投)
   const dispose = (): void => {
     if (disposed) return
     disposed = true
-    // 还没被取走的引用和预填是给这次挂载的:带走,别让同名的下一次挂载(换了库之后的同名文件夹)接到
-    const app = useApp.getState()
-    if (app.pendingChatQuote?.targetType === type) app.clearPendingChatQuote(app.pendingChatQuote.seq)
+    // 还没被取走的引用和预填是给这次挂载的:带走,别让同名的下一次挂载(换了库之后的同名文件夹)接到。
+    // 只带走自己投的那条:同一个 el 上后一次请求刚投的引用不是它的。
+    useApp.getState().clearPendingChatQuote(ownQuote)
     void session().then((r) => { if (r.sessionId) usePluginChat.getState().take(r.sessionId) }, () => {})
     mounted?.dispose()
   }
@@ -290,7 +291,11 @@ function mountChat(el: HTMLElement, o: TanguChatMountOptions): TanguChatMount {
     // 引用条认的是目标名、不是挂载实例:对话还没挂上时投的引用,ChatView 一挂上就消费。
     // ponytail: 引用通道是整个应用共用的一个槽(主区 → 侧栏的引用也走它),没被取走之前后投的顶掉先投的;
     // 引用条与预填都只有文字,要带附件时给 pluginChatStore 的 pending 加一栏(Image Studio 那条已有)。
-    quote: (text) => { if (!disposed && typeof text === 'string' && text.trim()) useApp.getState().setPendingChatQuote(type, text) },
+    quote: (text) => {
+      if (disposed || typeof text !== 'string' || !text.trim()) return
+      useApp.getState().setPendingChatQuote(type, text)
+      ownQuote = useApp.getState().pendingChatQuote?.seq ?? 0
+    },
     // 预填按会话投(Composer2 消费):会话接上之后才有 id,所以排在接上之后。
     prefill: (text) => { if (typeof text === 'string' && text.trim()) void session().then((r) => { if (!disposed && r.ok && r.sessionId) usePluginChat.getState().queue(r.sessionId, text) }) },
     dispose,

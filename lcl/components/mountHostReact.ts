@@ -40,7 +40,7 @@ export function claimHostMount(el: HTMLElement): () => boolean {
  *  · onDispose:这次挂载结束时恰好调一次,不管是自己 dispose 的还是被后来的挂载收掉的。挂在树外面的东西
  *    (body 上的弹层宿主、内存作用域的 store、上层句柄的 alive)在这里收,别只写在上层自己的 dispose() 里。 */
 export function mountHostReact(el: HTMLElement, node: ReactNode, onDispose?: () => void): HostReactMount {
-  mountByEl.get(el)?.dispose()
+  const previous = mountByEl.get(el)
   const layer = el.appendChild(document.createElement('div'))
   layer.style.display = 'contents'
   const root = createRoot(layer)
@@ -55,7 +55,7 @@ export function mountHostReact(el: HTMLElement, node: ReactNode, onDispose?: () 
     dispose() {
       if (!alive) return
       alive = false
-      mountByEl.delete(el) // 活着的句柄一定就是 el 当前那一份(后来的挂载会先收掉它)
+      if (mountByEl.get(el) === mount) mountByEl.delete(el) // 被后来的挂载收掉时,登记已经是它的了
       layer.remove()
       // 旧树必须真卸掉(effect 清理、订阅退订),不然就是泄漏
       queueMicrotask(() => {
@@ -72,7 +72,10 @@ export function mountHostReact(el: HTMLElement, node: ReactNode, onDispose?: () 
       }
     },
   }
+  // 先登记这一份,再收前一份:前一份的收尾回调里要是又往这个 el 上挂(重入),它收掉的是这一份 ——
+  // 后调用的收掉先调用的,el 里不会留两棵树,登记也不会被盖乱。
   mountByEl.set(el, mount)
   claimByEl.set(el, mount)
+  previous?.dispose()
   return mount
 }
