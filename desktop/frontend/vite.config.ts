@@ -7,13 +7,15 @@ import { startupAppearanceHtml } from '../frontend/startupAppearancePlugin'
 import { resolve } from 'path'
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
-import { viteCacheDir } from './viteCacheDir'
 
 export default defineConfig({
   plugins: [startupAppearanceHtml(), react()],
-  // worktree(node_modules 软链到主检出)自动用本检出私有的缓存目录,不再与主检出的 dev 共用;
-  // 主检出保持 vite 缺省。FORSION_VITE_CACHE_DIR 仍可显式指定。原因与仪器见 viteCacheDir.ts。
-  cacheDir: viteCacheDir(resolve(__dirname, '..'), 'web'),
+  // 依赖预构建缓存放本检出自己的目录,不用 vite 缺省的 node_modules/.vite:worktree 的 node_modules 是指向
+  // 主检出的软链,缺省目录等于所有检出共用;配置哈希(含 root)不同的 vite 一启动就把它整份删掉重建,那边正开着
+  // 的 dev 之后懒加载的依赖 504(Outdated Optimize Dep)或加载到第二份 React,只能重启。electron-vite dev 的
+  // 哈希与这里也不同(多两只内置插件),所以两份配置各用一个子目录。必须是绝对路径(相对的按 root 解析)。
+  // 仪器:npm run check:vitecache。FORSION_VITE_CACHE_DIR 仍可显式指定。
+  cacheDir: process.env.FORSION_VITE_CACHE_DIR || resolve(__dirname, '../.vite-cache/web'),
   resolve: {
     // 与 Electron renderer 保持一致：浏览器预览/Vitest 也会穿过 lcl workspace，
     // 独立 worktree 下必须强制宿主和链接源共用一份 React。

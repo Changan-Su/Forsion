@@ -1,15 +1,17 @@
 #!/usr/bin/env node
 /**
- * vite 依赖预构建缓存的归属检查:本检出两份配置解析出的 cacheDir,必须物理落在本检出里。
+ * vite 依赖预构建缓存的归属检查:两份配置(`vite frontend` 台架 / electron-vite dev 的渲染层)解析出的
+ * cacheDir 必须在本检出里、不在 node_modules 里、且互不相同。
  *
- * 为什么:worktree 的 desktop/node_modules 是指向主检出的软链,缺省 cacheDir(node_modules/.vite)顺着软链
- * 落进主检出。配置哈希含 root,两边必然不同 → worktree 的 vite 一启动就把那份 deps 整份删掉重建,主检出里
- * 正开着的 dev 之后懒加载的依赖 504(Outdated Optimize Dep)或加载到第二份 React,只能重启。2026-10-05
- * 一天里两个会话各犯一次,所以改成配置的缺省行为(frontend/viteCacheDir.ts),这里是它的仪器。
+ * 为什么:worktree 的 desktop/node_modules 是指向主检出的软链,vite 缺省的 cacheDir(node_modules/.vite)
+ * 等于所有检出共用。配置哈希含 root(台架与 dev 之间还差两只插件),必然不同 → 后起的 vite 把那份 deps 整份
+ * 删掉重建,正开着的 dev 之后懒加载的依赖 504(Outdated Optimize Dep)或加载到第二份 React,只能重启。
+ * 2026-10-05 一天里两个会话各犯一次,所以两份配置都改成固定用本检出的 desktop/.vite-cache/<名字>。
+ * node_modules 里的那份缓存谁都不再用:基点更早、配置还是旧的 worktree 仍会去删它,但碰不到这里了。
  *
  * 只解析配置:不起服务、不跑预构建、不碰任何缓存目录,dev 开着也能跑。
  * 跑:npm run check:vitecache(主检出与 worktree 都该绿)。
- * 负对照:让 frontend/viteCacheDir.ts 恒返回 undefined,在软链检出里跑必红。
+ * 负对照:删掉任一份配置里的 cacheDir 一行,必红。
  */
 const fs = require('fs')
 const path = require('path')
@@ -38,24 +40,25 @@ function realpathLoose(p) {
     'electron-vite dev(渲染层)': { ...renderer, configFile: false },
   }
   const home = fs.realpathSync(DESKTOP) + path.sep
+  const modules = realpathLoose(path.join(DESKTOP, 'node_modules')) + path.sep
   const seen = new Map()
   let bad = 0
   for (const [name, inline] of Object.entries(cases)) {
     const { cacheDir } = await resolveConfig({ ...inline, logLevel: 'silent' }, 'serve')
-    const real = realpathLoose(cacheDir)
-    const own = real.startsWith(home)
-    if (!own) bad++
-    console.log(`${own ? '✓' : '✗'} ${name}: ${real}${own ? '' : '  ← 落在别的检出里'}`)
-    // 两份配置的哈希不同(electron-vite 多两只内置插件),共用一个目录 = 同一检出里 dev 与台架互删。
-    // 真目录检出(主检出)刻意保持 vite 缺省、确实共用,所以只提示不判红。
-    if (seen.has(real)) console.log(`  ⚠ 与「${seen.get(real)}」共用:这个检出里别同时开 dev 和台架 vite(或给其中一个设 FORSION_VITE_CACHE_DIR)`)
+    const real = realpathLoose(cacheDir) + path.sep
+    const why = []
+    if (!real.startsWith(home)) why.push('不在本检出里')
+    if (real.startsWith(modules)) why.push('在 node_modules 里(软链检出共用这一份)')
+    if (seen.has(real)) why.push(`与「${seen.get(real)}」共用(两份配置哈希不同,会互删)`)
     seen.set(real, name)
+    if (why.length) bad++
+    console.log(`${why.length ? '✗' : '✓'} ${name}: ${real}${why.length ? `  ← ${why.join(';')}` : ''}`)
   }
   if (bad) {
-    console.error(`\n✗ ${bad} 份配置的缓存落在别的检出里 —— 在这里起 vite 会删掉对方的 deps`)
+    console.error(`\n✗ ${bad} 份配置的缓存归属不对 —— 在这里起 vite 会删掉别人的 deps`)
     process.exit(1)
   }
-  console.log('\n✓ 缓存都在本检出里')
+  console.log('\n✓ 两份配置的缓存都在本检出里,互不共用')
 })().catch((e) => {
   console.error(e)
   process.exit(1)
