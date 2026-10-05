@@ -2098,7 +2098,7 @@ html:not(.sc-on) .am-app .milkdown .ProseMirror.ProseMirror-focused .callout-tog
 @media (hover: hover) {
   .amx-toolbar:not(.excalidraw *):not(.dash-viewcard *) .amx-mode-btn:not(.amx-pin-on) {
     opacity: 0.38;
-    transition: opacity var(--duration-fast, 0.15s);
+    transition: opacity var(--frame-reveal-duration, var(--duration-fast, 0.15s));
   }
   .amx-toolbar:not(.excalidraw *):not(.dash-viewcard *):hover .amx-mode-btn,
   .amx-toolbar:not(.excalidraw *):not(.dash-viewcard *) .amx-mode-btn:focus-visible { opacity: 1; }

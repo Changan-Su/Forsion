@@ -719,7 +719,8 @@
 }
 .am-app .milkdown .ProseMirror {
   font-size: 15px;
-  line-height: 1.6;
+  /* 行距 / 段距 / 标题上下走 --reading-*:兜底是缺省值,「宽松正文」开着时由 theme/calm.css 换值(别在这里写覆盖规则)。 */
+  line-height: var(--reading-line-height, 1.6);
   color: var(--text);
   caret-color: var(--primary);
   /* ProseMirror 的硬性要求(prosemirror-view/style/prosemirror.css 同款,我们没引那份表)。
@@ -741,7 +742,7 @@
 .am-app .milkdown .ProseMirror :is(h1, h2, h3, h4, h5, h6) {
   font-weight: 600;
   line-height: 1.3;
-  margin: 1.5em 0 0.35em;
+  margin: var(--reading-heading-before, 1.5em) 0 var(--reading-heading-after, 0.35em);
 }
 .am-app .milkdown .ProseMirror h1 {
   font-size: 1.7em;
@@ -817,7 +818,7 @@
   opacity: 0;
 }
 .am-app .milkdown .ProseMirror p {
-  margin: 0.3em 0;
+  margin: var(--reading-paragraph-gap, 0.3em) 0;
 }
 /* 段落缩进档(Tab,paragraphIndent.ts):margin-left 而非 padding/text-indent ——
    v4 块把手按段落边框盒 getBoundingClientRect().left 定位,margin 才能让把手跟着缩进走。

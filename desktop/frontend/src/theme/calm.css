@@ -1,0 +1,103 @@
+/* 「呼吸感」三个外观开关的全部样式(开关与缘由见 calm.ts;规范在 DESIGN §6「呼吸感」)。
+ * 关 = <html data-calm-*="off">,此时本文件一条都不生效,界面与 2026-10-05 之前逐项一致。
+ * 门写成 html:not([…='off']):自带权重(0,1,1),不依赖本文件与懒加载样式(chat2.css / amadeus)谁先谁后。
+ * 仪器:npm run check:calm(真 Electron;含设置浮窗里关掉后主窗跟上、全宽笔记、画布、负对照)。 */
+
+/* ── 宽松正文:只换 token ──────────────────────────────────────────────────────────────
+ * 消费方在 amadeus/styles.css 与 chat2.css,它们的兜底值就是关着时的数,所以这里不写任何覆盖规则,
+ * 表格格内段落、嵌入卡等原有的特例照旧生效。token 落在 <html> 上往下继承;
+ * 全宽笔记(.amx-pane[data-page-wide])在 pane 上改写 --amx-page-max,离正文更近,照样赢。
+ * --reading-line-height / --reading-paragraph-gap 是对插件公开的:插件的长文阅读面读它们就跟着这个开关走。 */
+html:not([data-calm-reading='off']) {
+  --reading-line-height: 1.8;
+  --reading-paragraph-gap: 0.7em;
+  --reading-heading-before: 2.1em;
+  --reading-heading-after: 0.5em;
+  --amx-page-max: 816px;
+  --chat-line-height: 1.8;
+  --chat-paragraph-gap: 1em;
+  --chat-heading-after: 0.6em;
+  --chat-item-gap: 0.3em;
+  --chat-list-after: 1em;
+}
+/* 列表项里的段落不跟着段距拉开(项与项仍是原来的间隔);画布卡片是定尺寸的盒子,里面按缺省排版 ——
+ * 与页面字体 / 字号设置同一口径(.unified-body:not(.amx-canvas))。initial = 让消费方落回各自的兜底值。 */
+html:not([data-calm-reading='off']) .am-app .milkdown .ProseMirror li { --reading-paragraph-gap: initial; }
+html:not([data-calm-reading='off']) .amx-canvas {
+  --reading-line-height: initial;
+  --reading-paragraph-gap: initial;
+  --reading-heading-before: initial;
+  --reading-heading-after: initial;
+}
+
+/* ── 舒缓过渡:两个时长 ──────────────────────────────────────────────────────────────
+ * --view-enter-duration 由 lcl engine.css 的 wb-view-enter 消费(兜底 0.22s);
+ * --frame-reveal-duration 是「退后的外围亮回来」的时长,10-02 框架收声那几条与下面的淡出共用(兜底 --duration-fast)。
+ * 不动 --duration-fast 本身:按钮悬停底色这类即时反馈不该跟着变慢。 */
+html:not([data-calm-motion='off']) {
+  --view-enter-duration: 0.45s;
+  --frame-reveal-duration: 0.36s;
+}
+
+/* ── 外围淡出 ────────────────────────────────────────────────────────────────────────
+ * 10-02「框架收声」(标签栏动作钮、右上角浮钮、笔记顶栏,0.38)不归这个开关管,这里也不在它们身上再叠一层。
+ * 这里只补它没管到的四处。表达状态的保持全亮:当前 Space、开着的开关、带未读角标的 Space、账号卡那一组
+ * (头像、「重启更新」)、选中的行、运行中 / 有待处理 / 出错的任务卡。
+ * 恢复条件是「指针在这一区」或「键盘焦点在这一区」(:focus-visible —— 鼠标点过按钮留下的焦点不算,
+ * 否则点完一个 Space 图标,整条 Ribbon 会一直亮到下一次点击)。
+ * 触屏没有悬停,淡掉就等于找不到;系统开了「增强对比度」也不淡。 */
+@property --calm-ink { syntax: '<percentage>'; inherits: false; initial-value: 100%; }
+@media (hover: hover) and (prefers-contrast: no-preference) {
+  html:not([data-calm-dim='off']) .rb .rb-btn > *,
+  html:not([data-calm-dim='off']) .dockview-theme-lcl .dv-tab .wb-tab,
+  html:not([data-calm-dim='off']) .t2-rail {
+    transition: opacity var(--frame-reveal-duration, var(--duration-fast, 0.15s));
+  }
+  /* 淡的是按钮里的图标与名字,不是按钮本身:.rb-plus 自己还有一层 0 / 0.4,按钮的悬停底色也不该被压淡。 */
+  html:not([data-calm-dim='off']) .rb:not(:hover, :has(:focus-visible)) .rb-btn:not(.on, .is-on, :has(.rb-badge), .rb-pinned *) > * {
+    opacity: 0.42;
+  }
+  html:not([data-calm-dim='off']) .dockview-theme-lcl .dv-tabs-and-actions-container:not(:hover, :has(:focus-visible)) .dv-tab:not(.dv-active-tab) .wb-tab {
+    opacity: 0.45;
+  }
+  html:not([data-calm-dim='off']) .t2-rail:not(:hover, :has(:focus-visible), :has([aria-busy='true'], .t2-tsum-attn, .t2-tsum-state.error)) {
+    opacity: 0.55;
+  }
+  /* 左栏:调淡这一区里的文字变量,而不是整块降透明度 —— 选中的行(当前项 .active、多选 .sel、aria-selected / aria-current,
+     以及开着的 .on / .is-on:与上面 Ribbon 那条认的是同一个词,自家插件的选中项多数标 .on)
+     要保持原样,子元素的不透明度高不过父元素。
+     原值在父节点上取别名(同一元素上自引用是环),淡的程度走登记过的 --calm-ink 才能过渡。
+     跟着淡的是消费 --text 家族的文字与线性图标;语义色(--accent-ink / --danger …)不动,图片与 emoji 也不动。
+     只管左栏:右栏放的是大纲、侧栏对话、表单这类内容,不是导航。 */
+  html:not([data-calm-dim='off']) :has(> .wb-view--left) {
+    --calm-text: var(--text);
+    --calm-text-light: var(--text-light);
+    --calm-text-muted: var(--text-muted);
+    --calm-text-faint: var(--text-faint);
+  }
+  html:not([data-calm-dim='off']) .wb-view--left {
+    --calm-ink-2: calc(100% - (100% - var(--calm-ink)) * 1.2);
+    --text: color-mix(in srgb, var(--calm-text) var(--calm-ink), transparent);
+    --text-muted: color-mix(in srgb, var(--calm-text-muted) var(--calm-ink), transparent);
+    --text-light: color-mix(in srgb, var(--calm-text-light) var(--calm-ink-2), transparent);
+    --text-faint: color-mix(in srgb, var(--calm-text-faint) var(--calm-ink-2), transparent);
+    transition: --calm-ink var(--frame-reveal-duration, var(--duration-fast, 0.15s));
+  }
+  html:not([data-calm-dim='off']) .wb-view--left:not(:hover, :has(:focus-visible)) { --calm-ink: 60%; }
+  html:not([data-calm-dim='off']) .wb-view--left :is(.active, .sel, .on, .is-on, [aria-selected='true'], [aria-current]:not([aria-current='false'], [aria-current=''])) {
+    --text: var(--calm-text);
+    --text-light: var(--calm-text-light);
+    --text-muted: var(--calm-text-muted);
+    --text-faint: var(--calm-text-faint);
+  }
+  /* 没自己写颜色、靠继承上色的文字(插件面板里最常见的写法)也跟着淡:把这一区继承进来的颜色按同一程度调淡
+     (color 里的 currentColor = 继承来的那个颜色)。选中行同理:自己没写颜色的,换回原来的字色。
+     两条的权重都压在 (0,0,2) —— 只赢 button { color: inherit } 这类标签级重置,任何带类名的颜色规则
+     (选中行的强调色等)都压得过它们;所以指针在左栏里时,这一区每个元素的颜色与关掉开关时逐个相同(check:calm 的 F 组)。 */
+  html:where(:not([data-calm-dim='off'])) body :where(.wb-view--left) {
+    color: color-mix(in srgb, currentColor var(--calm-ink), transparent);
+  }
+  html:where(:not([data-calm-dim='off'])) body :where(.wb-view--left :is(.active, .sel, .on, .is-on, [aria-selected='true'], [aria-current]:not([aria-current='false'], [aria-current='']))) {
+    color: var(--calm-text);
+  }
+}

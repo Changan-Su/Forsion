@@ -18,6 +18,7 @@ import { applyPrefs } from '../uiPrefsApply'
 import { useSpaceStore } from '@lcl/engine/spaceRegistry'
 import { useSpaceAppearance, receiveSpaceAppearance, setSpaceAppearance } from './spaceAppearanceStore'
 import { resolveSpaceAppearance } from '../theme/spaceAppearance'
+import '../theme/calm' // 「呼吸感」三个外观开关:落 <html data-calm-*>,每个窗口加载一次(见该文件)
 
 type Mode = 'light' | 'dark'
 type ModePref = 'light' | 'dark' | 'system'
