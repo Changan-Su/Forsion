@@ -215,8 +215,10 @@ describe('theme', () => {
     expect(dark.background.slice(1, 3)).toBe('FF')
     document.documentElement.dataset.mode = 'light'
     document.documentElement.style.setProperty('--bg', '#123456')
+    document.documentElement.style.setProperty('--warning', '#806000')
     const light = m.readNativeTheme()
     expect(light.dark).toBe(false)
     expect(light.background).toBe('#FF123456')
+    expect(light.warning).toBe('#FF806000')
   })
 })

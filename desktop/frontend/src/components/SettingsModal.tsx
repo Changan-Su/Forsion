@@ -434,6 +434,8 @@ export const SettingsModal: React.FC<{
   const pluginsPage = isDesktop || unitPage || (!!window.tangu?.mobile && !!window.amadeus)
   // 捆绑包级联(内嵌引擎插件随父插件启停)只给本机桌面:设备页的 cfg 指向对方引擎,手机的 cfg 指向云端网关 —— 都不能 PUT。
   const pluginCascade = isDesktop && !unitPage
+  // 单列壳(真机 / 开发者移动预览):没有键盘快捷键可录,也没有底部状态栏、ribbon。判据与 bootstrapEngine 的 singleColumn 同一条。
+  const phoneShell = !!window.tangu?.mobile || UI_MODE === 'mobile'
   const tabItems = [
     // = 连接 + Forsion 合并。⚠️ 云端 Web / 移动端(webShim、mobileShim 都是 cloudWeb:true 且不给
     // backendStatus)下这一页**每个块都是 false**——连接项全是桌面/自建后端专属——列出来点进去是白板,
@@ -453,9 +455,9 @@ export const SettingsModal: React.FC<{
     ...(isDesktop && !!window.amadeus && !!window.remoteSync ? ([['sync', t('settings.tab.sync')]] as Array<[Tab, string]>) : []),
     ['spaces', t('settings.tab.spaces')],
     ['theme', t('settings.tab.theme')],
-    ['shortcuts', t('settings.tab.shortcuts')],
+    ...(phoneShell ? [] : ([['shortcuts', t('settings.tab.shortcuts')]] as Array<[Tab, string]>)),
     ['notifications', t('settings.tab.notifications')],
-    ['statusbar', t('settings.tab.statusbar')],
+    ...(phoneShell ? [] : ([['statusbar', t('settings.tab.statusbar')]] as Array<[Tab, string]>)),
     ['advanced', t('settings.tab.advanced')],
     ...(hasDesktopPermissions() ? ([['permissions', t('desktopPermissions.title')]] as Array<[Tab, string]>) : []),
     // P1-K4:只在执行设备本机(有主进程 API)列;设备页 / web / 手机没有 —— 开关只能在本机改。
@@ -2891,7 +2893,7 @@ export const SettingsModal: React.FC<{
                     />
                   </>
                 )}
-                {tab === 'spaces' && <SpacesTab />}
+                {tab === 'spaces' && <SpacesTab phone={phoneShell} />}
                 {tab === 'notifications' && <NotificationsTab />}
                 {tab === 'statusbar' && <StatusBarTab />}
                 {/* 左栏点进来的 Forsion 插件设置页 = 插件页的详情面,受控于 tab(不再是卡片列表的内部 state)。 */}

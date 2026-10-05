@@ -2,6 +2,12 @@ package com.forsion.tangu
 
 import android.graphics.BitmapFactory
 import android.util.Base64
+import android.view.HapticFeedbackConstants
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -19,6 +25,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -28,6 +35,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
@@ -37,12 +45,15 @@ import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.testTagsAsResourceId
 import androidx.compose.ui.text.font.FontWeight
@@ -182,7 +193,8 @@ internal val NATIVE_SPACE_BAR_HEIGHT = 64.dp
 /**
  * Bottom navigation bar: one destination per Space (icon in a pill + label). Up to five share the width. With more,
  * the first one (Home) stays put and the rest scroll beside it, the next one peeking in (1 fixed + 4.5 scrolling per
- * screen). Tap = switch, long-press = pin to the launcher.
+ * screen). Tap = switch (with a light tick when it really switches), long-press = pin to the launcher.
+ * A Space may carry a badge: a dot at its icon's top-right corner (see ChromeBadge).
  * Test anchors: `nativeChrome.spaces`, `nativeChrome.space.<id>`.
  */
 @OptIn(ExperimentalComposeUiApi::class)
@@ -193,6 +205,7 @@ internal fun NativeSpaceBar(state: ChromeState, insets: Insets, onSpace: (id: St
     val scheme = remember(theme) { theme.colorScheme() }
     val accent = Color(theme.accent)
     val muted = Color(theme.muted)
+    val cell = CellColors(accent, muted, Color(theme.warning), Color(theme.background))
     MaterialTheme(colorScheme = scheme) { Column(
         Modifier.fillMaxSize().background(Color(theme.background))
             .semantics { testTagsAsResourceId = true }
@@ -229,7 +242,7 @@ internal fun NativeSpaceBar(state: ChromeState, insets: Insets, onSpace: (id: St
                 }
             }
             Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
-                for (space in pinned) SpaceCell(space, itemWidth, accent, muted, onSpace)
+                for (space in pinned) SpaceCell(space, itemWidth, cell, onSpace)
                 // While the rest is scrolled, a hairline marks the edge the cells slide under (at rest the bar looks like a
                 // plain five-slot bar). Drawn over the viewport, not laid out: the scroll maths above stays exact.
                 val edge = Color(theme.border)
@@ -243,35 +256,49 @@ internal fun NativeSpaceBar(state: ChromeState, insets: Insets, onSpace: (id: St
                     }.horizontalScroll(scrollState) else Modifier.weight(1f),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    for (space in rest) SpaceCell(space, itemWidth, accent, muted, onSpace)
+                    for (space in rest) SpaceCell(space, itemWidth, cell, onSpace)
                 }
             }
         }
     } }
 }
 
+private class CellColors(val accent: Color, val muted: Color, val warning: Color, val bar: Color)
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun SpaceCell(space: ChromeSpace, width: Dp, accent: Color, muted: Color, onSpace: (id: String, long: Boolean) -> Unit) {
-    val tint = if (space.active) accent else muted
+private fun SpaceCell(space: ChromeSpace, width: Dp, colors: CellColors, onSpace: (id: String, long: Boolean) -> Unit) {
+    val accent = colors.accent
+    val tint = if (space.active) accent else colors.muted
+    val pill = if (space.active) accent.copy(alpha = 0.16f) else Color.Transparent
+    val view = LocalView.current
+    val badgeLabel = space.badge?.label.orEmpty()
     Column(
         Modifier.width(width).height(NATIVE_SPACE_BAR_HEIGHT - 1.dp)
             .combinedClickable(
                 role = Role.Tab,
-                onClick = { onSpace(space.id, false) },
+                onClick = {
+                    // A light tick when the tap really switches Space. The system's own effect: the user's touch-feedback
+                    // setting applies and no VIBRATE permission is involved. (The long-press ticks by itself.)
+                    if (!space.active) view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+                    onSpace(space.id, false)
+                },
                 onLongClick = { onSpace(space.id, true) },
             )
-            .semantics { selected = space.active }
+            .semantics { selected = space.active; if (badgeLabel.isNotBlank()) stateDescription = badgeLabel }
             .testTag("nativeChrome.space.${space.id}"),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
         Box(
             Modifier.width(56.dp).height(30.dp).clip(RoundedCornerShape(15.dp))
-                .background(if (space.active) accent.copy(alpha = 0.16f) else Color.Transparent),
+                .background(pill),
             contentAlignment = Alignment.Center,
         ) {
             if (space.icon != null) NativeIconView(space.icon, tint, NATIVE_ICON_SIZE)
+            // The 24dp icon sits at x 16..40, y 3..27 of the pill and its strokes fill about 20dp of that: the dot's centre
+            // goes on the glyph's top-right corner. The ring is the colour under it, so the dot reads as cut out of the icon.
+            space.badge?.let { BadgeDot(it.kind, colors, pill.compositeOver(colors.bar), Modifier.align(Alignment.TopStart).offset(x = 33.dp, y = 1.dp)) }
         }
         Spacer(Modifier.height(3.dp))
         Text(
@@ -279,5 +306,27 @@ private fun SpaceCell(space: ChromeSpace, width: Dp, accent: Color, muted: Color
             fontWeight = if (space.active) FontWeight.SemiBold else FontWeight.Normal,
             modifier = Modifier.padding(horizontal = 2.dp),
         )
+    }
+}
+
+/**
+ * The session list's three dots (sidebar2.css `.t2s-dot`): running = accent, pulsing; waiting for the user =
+ * warning; unread = accent at 60%.
+ */
+@Composable
+private fun BadgeDot(kind: ChromeBadge.Kind, colors: CellColors, ring: Color, modifier: Modifier) {
+    val alpha = when (kind) {
+        ChromeBadge.Kind.RUNNING -> {
+            val pulse by rememberInfiniteTransition(label = "badge").animateFloat(
+                1f, 0.4f, infiniteRepeatable(tween(700), RepeatMode.Reverse), label = "badge",
+            )
+            pulse
+        }
+        ChromeBadge.Kind.UNREAD -> 0.6f
+        ChromeBadge.Kind.ATTENTION -> 1f
+    }
+    val color = if (kind == ChromeBadge.Kind.ATTENTION) colors.warning else colors.accent
+    Box(modifier.size(10.dp).clip(CircleShape).background(ring).testTag("nativeChrome.badge"), contentAlignment = Alignment.Center) {
+        Box(Modifier.size(7.dp).clip(CircleShape).background(color.copy(alpha = alpha).compositeOver(ring)))
     }
 }

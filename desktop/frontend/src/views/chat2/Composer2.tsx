@@ -19,7 +19,7 @@ import { THINKING_LEVELS } from '../../types'
 
 // context 视图已知注入段 key(与引擎 agentLoop ctxMark 调用一一对应);未知 key 显示原样
 import type { AgentConfig, Attachment, CtxInfo, DefaultModelSlot, MessageRecord, ModelInfo, ModelsResponse, NormalAgentDef, SkillInfo } from '../../types'
-import { openNativeSheetMenu, useEdgeNudge, useWorkspace, type SheetMenuItem, type SheetMenuSection } from '@lcl/engine'
+import { nativeHaptic, openNativeSheetMenu, useEdgeNudge, useWorkspace, type SheetMenuItem, type SheetMenuSection } from '@lcl/engine'
 import { ModelPill, contextRingWindow, type ModelPillGroup } from '../../components/ModelPill'
 import { UltraConfirmDialog, ultraConfirmSkipped } from './UltraConfirmDialog'
 import { registerMessages, useI18n } from '../../i18n'
@@ -1261,7 +1261,7 @@ export const Composer2: React.FC<{
     // 返回这次发送的 promise:实时对话据此判断「上一句还在途中」(键盘/按钮调用方忽略返回值)。
     return onSend(outgoing, attachments, wsFiles, pinnedSkills.map((s) => s.id), mentions).then((accepted) => {
       if (!accepted) return false
-      if (!override) { setDraft(''); setHistPos(0) }
+      if (!override) { setDraft(''); setHistPos(0); nativeHaptic('tick') } // 手机:自己发出去的那一下给个轻震(桌面 / 网页无宿主,空操作)
       setAttachments([])
       setWsFiles([])
       setRefChips([]) // 自动那条不在这里面 —— 它是 activePage 的派生量,下一条消息照旧自动挂上

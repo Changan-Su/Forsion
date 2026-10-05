@@ -40,11 +40,17 @@ export interface NativeChromePageState { mode: 'page'; title: string; back: stri
 export interface NativeChromeHiddenState { mode: 'hidden' }
 export type NativeChromeState = NativeChromeShellState | NativeChromePageState | NativeChromeHiddenState
 
+/** Touch feedback a page moment may ask for: 'tick' = something small went through (a message was sent).
+ *  A long-press needs none from here: the WebView gives its own as soon as the page takes `contextmenu`
+ *  (measured on Android 15: one LONG_PRESS per long-press; a second one from the page only cut the first short). */
+export type NativeHaptic = 'tick'
 export interface NativeChromeHost {
   /** Receives every change of the effective state (already deduplicated). */
   render(state: NativeChromeState): void
   /** The host draws the Space switcher itself (bottom navigation bar). */
   spaces?: boolean
+  /** The device can give touch feedback (see `nativeHaptic`). */
+  haptic?(kind: NativeHaptic): void
 }
 export type NativeChromeShellHandlers = Partial<Record<Exclude<NativeChromeAction, 'back' | 'close'>, () => void>>
   & { space?: (id: string) => void; spaceLong?: (id: string) => void }
@@ -85,6 +91,10 @@ export function installNativeChromeHost(next: NativeChromeHost): () => void {
   }
 }
 export function nativeChromeInstalled(): boolean { return !!host }
+/** Touch feedback, where a host offers it; a no-op everywhere else (desktop, web, a phone browser). Never throws. */
+export function nativeHaptic(kind: NativeHaptic): void {
+  try { host?.haptic?.(kind) } catch { /* feedback is never worth an error */ }
+}
 /** Whether the installed host draws the Space switcher (non-React callers: store subscriptions). */
 export function nativeChromeDrawsSpaces(): boolean { return !!host?.spaces }
 /** React: true while the installed host draws the Space switcher — the drawer foot then omits its web Space row. */

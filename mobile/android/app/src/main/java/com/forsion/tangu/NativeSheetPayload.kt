@@ -23,6 +23,7 @@ internal sealed interface NativeIconSpec {
 internal data class SheetTheme(
     val dark: Boolean, val background: Int, val surface: Int, val text: Int, val muted: Int,
     val border: Int, val accent: Int, val onAccent: Int, val danger: Int,
+    val warning: Int = danger,
 )
 
 internal data class MenuTrailingSpec(val id: String, val label: String, val icon: NativeIconSpec?)
@@ -214,6 +215,7 @@ internal object NativeJson {
         background = color(obj, "background"), surface = color(obj, "surface"), text = color(obj, "text"),
         muted = color(obj, "muted"), border = color(obj, "border"), accent = color(obj, "accent"),
         onAccent = color(obj, "onAccent"), danger = color(obj, "danger"),
+        warning = color(obj, if (obj.has("warning")) "warning" else "danger"),
     )
 
     fun number(array: JSONArray, index: Int): Float {

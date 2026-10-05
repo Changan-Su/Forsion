@@ -21,6 +21,8 @@ export interface NativeSheetTheme {
   accent: string
   onAccent: string
   danger: string
+  /** "Waiting for you" (the attention dot of the Space bar). Hosts older than this field fall back to `danger`. */
+  warning: string
 }
 
 export interface NativeMenuTrailing<I = NativeIconSource> { id: string; label: string; icon?: I }
@@ -160,14 +162,16 @@ type Rgba = [number, number, number, number]
 const LIGHT: Record<keyof Omit<NativeSheetTheme, 'dark'>, Rgba> = {
   background: [248, 247, 246, 1], surface: [255, 255, 255, 1], text: [32, 33, 36, 1], muted: [110, 112, 118, 1],
   border: [0, 0, 0, 0.1], accent: [77, 135, 148, 1], onAccent: [255, 255, 255, 1], danger: [208, 64, 64, 1],
+  warning: [128, 96, 0, 1],
 }
 const DARK: typeof LIGHT = {
   background: [32, 34, 36, 1], surface: [40, 42, 44, 1], text: [236, 238, 240, 1], muted: [160, 164, 170, 1],
   border: [255, 255, 255, 0.12], accent: [95, 163, 178, 1], onAccent: [255, 255, 255, 1], danger: [232, 96, 96, 1],
+  warning: [224, 184, 91, 1],
 }
 const TOKENS: Record<keyof typeof LIGHT, string> = {
   background: '--bg', surface: '--bg-card', text: '--text', muted: '--text-muted',
-  border: '--border', accent: '--accent', onAccent: '--on-accent', danger: '--danger',
+  border: '--border', accent: '--accent', onAccent: '--on-accent', danger: '--danger', warning: '--warning',
 }
 
 let canvasCtx: CanvasRenderingContext2D | null | undefined
@@ -255,6 +259,7 @@ export function readNativeTheme(): NativeSheetTheme {
     accent: toArgbHex(over(pick('accent'), surface)),
     onAccent: toArgbHex(pick('onAccent')),
     danger: toArgbHex(pick('danger')),
+    warning: toArgbHex(over(pick('warning'), background)),
   }
 }
 

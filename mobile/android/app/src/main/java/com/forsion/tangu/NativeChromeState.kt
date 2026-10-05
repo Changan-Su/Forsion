@@ -11,8 +11,15 @@ internal data class ChromeIcons(
     val close: NativeIconSpec? = null,
 )
 
+/**
+ * Dot on a Space's icon: something in that Space wants a look. Same three kinds as the dots of the session list
+ * (running / waiting for the user / unread); JS decides which one applies. `label` (translated by JS) is what a
+ * screen reader announces — the dot itself says nothing.
+ */
+internal data class ChromeBadge(val kind: Kind, val label: String) { enum class Kind { RUNNING, ATTENTION, UNREAD } }
+
 /** One destination of the bottom navigation bar (a Space). Label translated by JS; icon serialized by JS. */
-internal data class ChromeSpace(val id: String, val label: String, val active: Boolean, val icon: NativeIconSpec?)
+internal data class ChromeSpace(val id: String, val label: String, val active: Boolean, val icon: NativeIconSpec?, val badge: ChromeBadge? = null)
 
 /**
  * Account avatar at the trailing end of the bar (first-level pages only; JS decides). `png` = the picture as
@@ -72,6 +79,18 @@ internal data class ChromeState(
             )
         }
 
+        /** Cosmetic, like the avatar: an unknown kind (a newer page) draws no dot instead of refusing the whole bar. */
+        private fun badge(space: JSONObject): ChromeBadge? {
+            val o = space.optJSONObject("badge") ?: return null
+            val kind = when (o.opt("kind")) {
+                "running" -> ChromeBadge.Kind.RUNNING
+                "attention" -> ChromeBadge.Kind.ATTENTION
+                "unread" -> ChromeBadge.Kind.UNREAD
+                else -> return null
+            }
+            return ChromeBadge(kind, NativeJson.optStr(o, "label", 128))
+        }
+
         private fun spaces(json: JSONObject): List<ChromeSpace> {
             val array = json.optJSONArray("spaces") ?: return emptyList()
             require(array.length() <= MAX_SPACES) { "Too many spaces" }
@@ -79,7 +98,7 @@ internal data class ChromeState(
                 val o = array.getJSONObject(i)
                 ChromeSpace(
                     NativeJson.str(o, "id", 128), NativeJson.str(o, "label", 128), NativeJson.optBool(o, "active"),
-                    o.optJSONObject("icon")?.let(NativeJson::icon),
+                    o.optJSONObject("icon")?.let(NativeJson::icon), badge(o),
                 )
             }.also { list -> require(list.map { it.id }.toSet().size == list.size) { "Duplicate space id" } }
         }

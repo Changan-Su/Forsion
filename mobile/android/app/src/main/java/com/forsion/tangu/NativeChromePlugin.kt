@@ -2,6 +2,7 @@ package com.forsion.tangu
 
 import android.os.Build
 import android.util.TypedValue
+import android.view.HapticFeedbackConstants
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
@@ -72,6 +73,21 @@ class NativeChromePlugin : Plugin() {
     @PluginMethod
     fun clear(call: PluginCall) {
         activity.runOnUiThread { teardown(); call.resolve() }
+    }
+
+    /**
+     * Touch feedback for a moment that happens inside the page (JS decides when): "tick" = something small went
+     * through (a message was sent). The system's own effect, so the user's touch-feedback setting applies and no
+     * VIBRATE permission is involved. Unknown kinds do nothing. Long-presses are not routed here: the WebView already
+     * gives LONG_PRESS when the page takes one.
+     */
+    @PluginMethod
+    fun haptic(call: PluginCall) {
+        val tick = call.getString("kind") == "tick"
+        activity.runOnUiThread {
+            if (tick) bridge.webView?.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+            call.resolve()
+        }
     }
 
     /** Same decision Capacitor's CapacitorWebView.edgeToEdgeHandler makes. */

@@ -2,9 +2,13 @@ import { Capacitor, registerPlugin, type PluginListenerHandle } from '@capacitor
 import { ArrowLeft, MoreHorizontal, PanelLeft, PanelRight, UserRound, X } from 'lucide-react'
 import {
   dispatchNativeChromeAction, dispatchNativeChromeSpace, installNativeChromeHost, readNativeTheme, renderNativeIcons, useSpaceStore,
-  type NativeChromeAction, type NativeChromeSpace, type NativeChromeState, type NativeIcon, type NativeSheetTheme,
+  type NativeChromeAction, type NativeChromeSpace, type NativeChromeState, type NativeHaptic, type NativeIcon, type NativeSheetTheme,
 } from '@lcl/engine'
+import { registerMessages, translate } from '@/i18n'
 import { accountChip, subscribeAccountChip } from '@/services/accountChip'
+import { useApp } from '@/stores/appStore'
+import { attentionIndex, mergeAttention, useAttention } from '@/stores/attentionStore'
+import { useInbox } from '@/stores/inboxStore'
 
 /** Android-only host for the native top bar seam (lcl/engine/nativeChrome.ts). Kotlin: NativeChromePlugin.
  *  Pushes the effective state + live theme + serialized icons; relays bar actions back to the seam.
@@ -12,16 +16,21 @@ import { accountChip, subscribeAccountChip } from '@/services/accountChip'
  *  this host adds each Space's icon (serialized once per icon component) and relays taps / long-presses.
  *  On the same first-level pages it adds the account avatar (trailing end of the top bar): what to show and
  *  what a tap does come from the mounted account card (services/accountChip.ts); the engine seam is not involved.
+ *  And a badge per Space (a dot on its icon): which Spaces have something going on comes from the app's stores, here.
  *  If the plugin ever rejects, the host uninstalls itself so the shell falls back to its web top bar. */
 interface ChromeIcons { left?: NativeIcon; right?: NativeIcon; more?: NativeIcon; back?: NativeIcon; close?: NativeIcon }
 /** `png` = the picture as base64, cropped square and downscaled here (Kotlin only decodes and clips it to a circle);
  *  `icon` = what the bar draws without one: the initial, or a person glyph when signed out. */
 interface ChromeAccount { label: string; icon?: NativeIcon; png?: string }
+/** The session list's three dots (sidebar2.css `.t2s-dot`), one per Space cell. `label` is for screen readers. */
+type SpaceBadgeKind = 'running' | 'attention' | 'unread'
+interface ChromeBadge { kind: SpaceBadgeKind; label: string }
 interface NativeChromePlugin {
   setState(state: Omit<NativeChromeState, 'spaces'> & {
-    theme: NativeSheetTheme; icons: ChromeIcons; spaces?: Array<NativeChromeSpace & { icon?: NativeIcon }>
+    theme: NativeSheetTheme; icons: ChromeIcons; spaces?: Array<NativeChromeSpace & { icon?: NativeIcon; badge?: ChromeBadge }>
     account?: ChromeAccount
   }): Promise<void>
+  haptic(options: { kind: NativeHaptic }): Promise<void>
   clear(): Promise<void>
   addListener(event: 'action', cb: (e: { action: string; id?: string }) => void): Promise<PluginListenerHandle>
 }
@@ -29,6 +38,32 @@ const ACTIONS: readonly NativeChromeAction[] = ['left', 'right', 'tabs', 'more',
 const MAX_SPACES = 64 // = ChromeState.MAX_SPACES (Kotlin)
 const AVATAR_PX = 96 // the bar draws it at 30dp: enough for a 3x screen, a few KB on the bridge
 const MAX_AVATAR_CHARS = 131_072 // = ChromeState.MAX_AVATAR_CHARS (Kotlin); an oversized picture would reject the whole state
+
+registerMessages({
+  'nativebar.badge.running': { zh: '有会话在运行', en: 'A session is running' },
+  'nativebar.badge.attention': { zh: '有会话等你处理', en: 'A session is waiting for you' },
+  'nativebar.badge.unread': { zh: '有未读', en: 'Unread' },
+})
+const BADGE_LABEL: Record<SpaceBadgeKind, () => string> = {
+  running: () => translate('nativebar.badge.running'),
+  attention: () => translate('nativebar.badge.attention'),
+  unread: () => translate('nativebar.badge.unread'),
+}
+
+/** Which Spaces carry a dot right now. Tangu rolls up what its session list shows per row — waiting for the user
+ *  (approvals / questions, this device and "my computer") beats running beats unread, one dot per cell; Inbox = unread
+ *  mail. Unread only counts sessions that are still listed: the persisted set can outlive a deleted session.
+ *  ponytail: keyed by the two built-in Space ids; give SpaceDefinition a badge seam when a plugin Space needs one. */
+export function spaceBadges(): Record<string, SpaceBadgeKind> {
+  const app = useApp.getState()
+  const out: Record<string, SpaceBadgeKind> = {}
+  const waiting = mergeAttention(attentionIndex(useAttention.getState().byTarget), app.messagesBySession, app.runningBySession).size > 0
+  if (waiting) out.tangu = 'attention'
+  else if (Object.keys(app.runningBySession).length) out.tangu = 'running'
+  else if (app.unread.size && app.sessions.some((x) => app.unread.has(x.id))) out.tangu = 'unread'
+  if (useInbox.getState().unreadCount > 0) out.inbox = 'unread'
+  return out
+}
 
 /** Picture → square PNG (base64). null = cannot be read (broken image, or a remote one without CORS headers taints the canvas). */
 function avatarPng(src: string): Promise<string | null> {
@@ -85,6 +120,10 @@ export function installNativeChrome(): void {
     const icon = chip.loggedIn ? { kind: 'text' as const, text: chip.initial } : await guest
     return { label: chip.label.slice(0, 120), ...(icon ? { icon } : {}), ...(png ? { png } : {}) } // Kotlin refuses a label over 128
   }
+  const withBadges = <T extends NativeChromeSpace>(list: T[]): Array<T & { badge?: ChromeBadge }> => {
+    const badges = spaceBadges()
+    return list.map((sp) => { const kind = badges[sp.id]; return kind ? { ...sp, badge: { kind, label: BADGE_LABEL[kind]() } } : sp })
+  }
   let state: NativeChromeState | null = null
   let lastSent = ''
   let chain: Promise<void> = Promise.resolve()
@@ -100,7 +139,7 @@ export function installNativeChrome(): void {
       const payload = {
         // two-level navigation, detail level: the left button goes back to the Space's list → back arrow, not the panel icon
         ...current, theme: readNativeTheme(), icons: current.mode === 'shell' && current.leftBack ? { ...base, left: base.back } : base,
-        ...(current.mode === 'shell' && current.spaces ? { spaces: await withIcons(current.spaces) } : {}),
+        ...(current.mode === 'shell' && current.spaces ? { spaces: withBadges(await withIcons(current.spaces)) } : {}),
         ...(avatar ? { account: avatar } : {}),
       }
       const key = JSON.stringify(payload)
@@ -127,6 +166,15 @@ export function installNativeChrome(): void {
   // Skin / mode / custom colour changes repaint the bar (same attributes the model picker watches + inline vars).
   new MutationObserver(send).observe(document.documentElement, { attributes: true, attributeFilter: ['data-mode', 'data-skin', 'data-bg', 'data-theme', 'style', 'class'] })
   subscribeAccountChip(send) // sign-in / sign-out / a new picture repaints the avatar
+  // Badges: the stores change far more often than the answer does (every streamed token touches useApp) → re-send only
+  // when the set of dots changed.
+  let badgeKey = JSON.stringify(spaceBadges())
+  const onStores = (): void => { const key = JSON.stringify(spaceBadges()); if (key !== badgeKey) { badgeKey = key; send() } }
+  useApp.subscribe(onStores); useAttention.subscribe(onStores); useInbox.subscribe(onStores)
   // A reload (or the auth redirect) tears the native bar down; the new page re-installs and re-pushes.
-  uninstall = installNativeChromeHost({ spaces: true, render: (next) => { state = next; send() } })
+  uninstall = installNativeChromeHost({
+    spaces: true,
+    render: (next) => { state = next; send() },
+    haptic: (kind) => { void plugin.haptic({ kind }).catch(() => {}) },
+  })
 }

@@ -3,6 +3,7 @@ package com.forsion.tangu
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -72,6 +73,31 @@ class NativeChromeStateTest {
         // the avatar belongs to the shell: a page has none
         val page = JSONObject("""{"mode":"page","title":"Settings","back":"Back","theme":$theme}""").put("account", JSONObject("""{"label":"Ada"}"""))
         assertEquals(null, ChromeState.parse(page).account)
+    }
+
+    @Test fun spaceBadgeIsOptionalAndAnUnknownKindDrawsNothing() {
+        val s = ChromeState.parse(shell("""[
+          {"id":"home","label":"Home"},
+          {"id":"tangu","label":"Tangu","active":true,"badge":{"kind":"attention","label":"Waiting for you"}},
+          {"id":"inbox","label":"Inbox","badge":{"kind":"unread","label":"Unread"}},
+          {"id":"run","label":"Run","badge":{"kind":"running"}},
+          {"id":"later","label":"Later","badge":{"kind":"sparkles","label":"New"}},
+          {"id":"odd","label":"Odd","badge":"unread"}
+        ]"""))
+        assertNull(s.spaces[0].badge)
+        assertEquals(ChromeBadge(ChromeBadge.Kind.ATTENTION, "Waiting for you"), s.spaces[1].badge)
+        assertEquals(ChromeBadge.Kind.UNREAD, s.spaces[2].badge?.kind)
+        assertEquals(ChromeBadge(ChromeBadge.Kind.RUNNING, ""), s.spaces[3].badge) // no label = a silent dot, still drawn
+        assertNull(s.spaces[4].badge) // a kind this build does not know: no dot, the bar itself still renders
+        assertNull(s.spaces[5].badge) // not an object
+        assertEquals(6, s.spaces.size)
+    }
+
+    @Test fun warningColourFallsBackToDangerWhenThePageDoesNotSendOne() {
+        val plain = ChromeState.parse(shell(null))
+        assertEquals(plain.theme.danger, plain.theme.warning)
+        val themed = ChromeState.parse(shell(null).put("theme", JSONObject(theme).put("warning", "#FF806000")))
+        assertEquals(0xFF806000.toInt(), themed.theme.warning)
     }
 
     @Test fun rejectsDuplicateAndOversizedSpaceLists() {

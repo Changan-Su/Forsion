@@ -172,6 +172,8 @@ const stubLog = [] // "METHOD /path body"
 // Rewind stat (GET …/checkpoints): answered with an empty list; while `hold.checkpoints` is set the answers are parked
 // in `hold.release` instead (the "user leaves while the stat is still loading" check lets them go later).
 const hold = { checkpoints: false, release: [] }
+// "Waiting for the user" index (GET …/agent/approvals/pending, polled by attentionStore): empty unless a check fills it.
+const pending = { rev: 'e2e-0', sessions: [] }
 function installStub(cdp) {
   cdp.on('Fetch.requestPaused', (ev) => {
     const url = new URL(ev.request.url)
@@ -197,6 +199,7 @@ function installStub(cdp) {
     if (p.endsWith('/agent/projects') && m === 'GET') return json({ projects: [{ name: 'E2E Alpha' }, { name: 'E2E Beta' }] })
     if (p.endsWith('/agent/sessions') && m === 'GET') return json({ sessions: url.searchParams.get('archived') === 'true' ? [] : sessions })
     if (p.endsWith('/agent/runs')) return json({ runs: [] })
+    if (p.endsWith('/agent/approvals/pending')) return json(url.searchParams.get('rev') === pending.rev ? { rev: pending.rev, unchanged: true } : pending)
     if (p.endsWith('/agent/models') && m === 'GET') return json({ models: MODELS, directProviders: [], defaultModelId: MODELS[0].id })
     // fake market (only Forsion plugins are requested on the phone); install hands out the host download URL
     const mk = p.match(/\/market\/items(?:\/([^/]+))?(\/install)?$/)
@@ -286,6 +289,24 @@ function pixelAt(x, y) {
   const w = raw.readUInt32LE(0)
   const o = raw.length - w * raw.readUInt32LE(4) * 4 + (y * w + x) * 4
   return { r: raw[o], g: raw[o + 1], b: raw[o + 2] }
+}
+/** Vibrations the system recorded for the app ("Recent vibrations" of `dumpsys vibrator_manager`), one line each; null on
+ *  a device that keeps no such list. Each carries the View haptic constant that asked for it: 4 = CLOCK_TICK, 0 = LONG_PRESS. */
+function hapticLog() {
+  const dump = h.adb('shell', 'dumpsys', 'vibrator_manager')
+  const at = dump.indexOf('Recent vibrations:')
+  if (at < 0) return null
+  const end = dump.indexOf('Aggregated vibration history', at)
+  return dump.slice(at, end < 0 ? undefined : end).split('\n').filter((l) => l.includes(PKG) && l.includes('performHapticFeedback(constant='))
+}
+/** The constants of the vibrations recorded since `before` (a hapticLog()); null where there is no list. A record is
+ *  told apart by its creation + start times (its status and end are filled in later). */
+function hapticsSince(before) {
+  const now = hapticLog()
+  if (!before || !now) return null
+  const key = (l) => `${l.trim().slice(0, 18)}|${(l.match(/start: (\S+)/) || [])[1]}`
+  const old = new Set(before.map(key))
+  return now.filter((l) => !old.has(key(l))).map((l) => Number(l.match(/constant=(\d+)/)[1]))
 }
 const within = (outer, n) => n !== outer && n.rect.left >= outer.rect.left && n.rect.right <= outer.rect.right && n.rect.top >= outer.rect.top && n.rect.bottom <= outer.rect.bottom
 /** Merged Compose buttons may expose label / count on child nodes: read the node or anything inside its bounds. */
@@ -866,6 +887,83 @@ const tabCountText = (list) => {
 
   // 2026-10-02 real-phone recording: every tap flashed the WebView's blue tap-highlight box. It is off now, and a press
   // tints the element instead (base.css, @media (pointer: coarse)). The pressed state is sampled while a finger is down.
+  // Badges on the bottom bar's cells. Only "waiting for the user" is driven here: the stub token is no account, so the
+  // per-account unread set does not survive a reload (cloudAccountCache: a fresh anonymous scope every boot), and a
+  // running session needs a live run stream. The other two kinds are covered by the payload unit test (Kotlin).
+  await check('bottom bar badge: no dot at rest; a session waiting for the user puts a warning dot on Tangu; answered → the dot leaves', async () => {
+    const badges = (l) => h.byIdPrefix(l, 'nativeChrome.badge')
+    const refetch = () => cdp.eval("(document.dispatchEvent(new Event('visibilitychange')), true)") // attentionStore refetches when the page comes to the front
+    const polled = () => stubLog.filter((l) => l.includes('/agent/approvals/pending')).slice(-3).join(' | ')
+    await goHome()
+    assert.ok(h.byId(ui(), 'nativeChrome.space.tangu'), 'Tangu cell not on screen')
+    assert.equal(badges(ui()).length, 0, 'a dot at rest')
+    Object.assign(pending, { rev: 'e2e-1', sessions: [{ sessionId: 'e2e-s2', approvals: 1, inquiries: 0, localOnly: 0, oldestAt: iso(1000), remote: false }] })
+    try {
+      await refetch()
+      const r = await h.waitNodes((l) => (badges(l).length ? l : null), { timeout: 12000 })
+      assert.ok(r.hit, `no dot for a waiting session (index requests: ${polled() || 'none'})`)
+      assert.equal(badges(r.hit).length, 1, 'more than one dot')
+      const [dot, cell] = [badges(r.hit)[0], h.byId(r.hit, 'nativeChrome.space.tangu')]
+      assert.ok(cell && within(cell, dot), `the dot is not on the Tangu cell (${dot.bounds} vs ${cell?.bounds})`)
+      const c = pixelAt(dot.rect.cx, dot.rect.cy) // --warning: #806000 light, #e0b85b dark — warm either way
+      assert.ok(c.r > c.b + 60 && c.g > c.b + 40, `the dot is not the warning colour: ${JSON.stringify(c)}`)
+      shot('03f-space-bar-waiting')
+    } finally {
+      Object.assign(pending, { rev: 'e2e-2', sessions: [] })
+    }
+    await refetch()
+    const r = await h.waitNodes((l) => (h.byId(l, 'nativeChrome.spaces') && !badges(l).length ? l : null), { timeout: 12000 })
+    assert.ok(r.hit, `the dot stayed after the session was answered (index requests: ${polled()})`)
+  })
+
+  await check('haptics: switching Space ticks once (not on the Space you are on); the page-side seam ticks; an unknown kind is silent', async () => {
+    const call = (kind) => cdp.eval(`Capacitor.Plugins.NativeChrome.haptic({ kind: ${JSON.stringify(kind)} }).then(() => 'ok', (e) => 'rejected: ' + (e && e.message))`)
+    const onTangu = "document.querySelector('.mb-shell')?.dataset.space === 'tangu'"
+    await goHome()
+    let seen = hapticLog()
+    if (!seen) console.log('  (this device keeps no vibration records: only the plugin calls are checked)')
+    // the bottom bar (Kotlin): one CLOCK_TICK for a switch, none for the cell that is already active
+    await tapSpace('tangu')
+    assert.ok(await h.waitPage(cdp, onTangu, 6000), 'tap did not switch to Tangu')
+    await h.pause(600)
+    if (seen) assert.deepEqual(hapticsSince(seen), [4], 'switching Space')
+    seen = hapticLog()
+    await tapSpace('tangu')
+    await h.pause(900)
+    if (seen) assert.deepEqual(hapticsSince(seen), [], 'tapping the active Space')
+    // the seam the page uses (a message was sent): "tick" vibrates, anything else is a silent no-op
+    seen = hapticLog()
+    assert.equal(await call('no-such-kind'), 'ok')
+    await h.pause(400)
+    if (seen) assert.deepEqual(hapticsSince(seen), [], 'an unknown kind')
+    assert.equal(await call('tick'), 'ok')
+    await h.pause(400)
+    if (seen) assert.deepEqual(hapticsSince(seen), [4], 'the page-side tick')
+    assert.match(String(await cdp.eval("Capacitor.Plugins.NativeChrome.noSuchMethod ? Capacitor.Plugins.NativeChrome.noSuchMethod({}).then(() => 'ok', () => 'rejected') : 'rejected'")), /rejected/, 'control: a method the plugin lacks also resolves — the calls above prove nothing')
+    await goHome()
+  })
+
+  await check('settings on the phone: no Shortcuts / Status bar pages; the Space page drops the ribbon home slot', async () => {
+    await accountItem('rb-settings')
+    assert.ok(await h.waitPage(cdp, settingsOpen, 5000), 'settings did not open')
+    await h.pause(600)
+    const rows = await cdp.eval("[...document.querySelectorAll('.settings-mobile-row strong')].map((e) => e.textContent.trim())")
+    for (const want of ['Space', '通知', '关于']) assert.ok(rows.includes(want), `control: "${want}" not among the settings rows (${rows.join(', ')})`)
+    for (const gone of ['快捷键', '状态栏']) assert.ok(!rows.includes(gone), `"${gone}" is still listed on the phone`)
+    shot('02c-settings-home-phone')
+    await tapEl("[...document.querySelectorAll('.settings-mobile-row')].find((e) => e.querySelector('strong')?.textContent.trim() === 'Space')")
+    assert.ok((await h.waitNodes((l) => (textOf(l, 'nativeChrome.title') === 'Space' ? l : null), { timeout: 6000 })).hit, 'the Space page did not open')
+    await h.pause(500)
+    const text = await cdp.eval("(() => { const el = document.querySelector('.settings-page--mobile'); return el.innerText + ' | ' + [...el.querySelectorAll('option')].map((o) => o.textContent).join(' | ') })()")
+    assert.ok(text.includes('打开应用时进入'), 'control: the startup row is not on the page')
+    assert.ok(!/ribbon|主位槽|右键/i.test(text), `desktop wording on the phone: ${(text.match(/.{0,12}(ribbon|主位槽|右键).{0,12}/i) || [''])[0]}`)
+    assert.ok(text.includes('默认（当前是「'), 'the default startup option does not use the phone wording')
+    shot('02d-settings-space-phone')
+    await tapId('nativeChrome.close')
+    assert.ok(await h.waitPage(cdp, `!(${settingsOpen})`, 5000), '× did not close settings')
+    assert.ok((await h.waitNodes((l) => h.byId(l, 'nativeChrome.tabs'), { timeout: 5000 })).hit, 'shell bar did not return')
+  })
+
   await check('touch feedback: no WebView tap highlight; a held press tints the element; long-press selects no text', async () => {
     await tanguDrawer()
     // held target = the "new chat" button: a long-press there does nothing (a Space tab's long-press raises the
@@ -1049,13 +1147,56 @@ const tabCountText = (list) => {
     assert.ok(await h.waitPage(cdp, "!document.querySelector('.mode-pill-btn').hasAttribute('data-danger')", 5000), 'tier did not switch back')
   })
 
+  // A user message has no inline buttons under the native host (2026-10-05): a long-press on the bubble opens the same
+  // three actions natively. Rewind is therefore two sheets in a row — the message menu, then the rewind choices.
+  const bubble = "document.querySelector('.t2-userwrap .t2-user')"
+  /** Long-press the fixture user message (a real finger: the WebView turns it into `contextmenu`); the menu's nodes. */
+  async function bubbleMenu() {
+    const p = await elPoint(bubble)
+    await h.holdAt(p.x, p.y, 900)
+    return waitSheet(true, 8000)
+  }
+  async function pickRewind() { await tapId('nativeSheet.item.2', await bubbleMenu()) }
+  /** The second sheet opens right behind the first: wait for one of its own rows, not for "a sheet". */
+  const rewindSheet = async (timeout = 8000) => (await h.waitNodes((l) => (h.byId(l, 'nativeSheet.item.conversation') ? l : null), { timeout })).hit
+
+  await check('user message: no inline buttons — a long-press opens copy / edit / rewind natively and edit runs; the reply keeps its row with a taller touch area', async () => {
+    await openChat('E2E Session One')
+    assert.ok(await h.waitPage(cdp, `!!${bubble}`, 4000), 'fixture user message missing')
+    const css = await cdp.eval(`(() => { const u = [...document.querySelectorAll('.t2-userwrap .t2-actions .t2-iconbtn')], a = document.querySelector('.t2-asst .t2-actions .t2-iconbtn')
+      const r = a.getBoundingClientRect(); let z = 1; for (let e = a; e; e = e.parentElement) z *= parseFloat(getComputedStyle(e).zoom) || 1
+      const hit = (dy) => document.elementFromPoint((r.left + r.width / 2) * z, (r.top + dy) * z) === a
+      return { user: u.map((e) => getComputedStyle(e).display), asst: getComputedStyle(a).display, above: hit(-6), far: hit(-14) } })()`)
+    assert.ok(css.user.length >= 2 && css.user.every((d) => d === 'none'), `inline buttons under the user message: ${css.user}`)
+    assert.notEqual(css.asst, 'none', 'the reply lost its action row')
+    assert.ok(css.above, 'the reply button does not take a touch 6px above its edge')
+    assert.ok(!css.far, 'control: 14px above the reply button still hits it (the probe proves nothing)')
+    const felt = hapticLog()
+    const list = await bubbleMenu()
+    // The WebView vibrates by itself when the page takes a long-press. A second one from the page cut it short 1–2 ms in.
+    if (felt) assert.deepEqual(hapticsSince(felt), [0], 'one LONG_PRESS per long-press')
+    assert.deepEqual(ids(list), ['0', '1', '2'])
+    assert.deepEqual(['0', '1', '2'].map((i) => rowLabel(list, `nativeSheet.item.${i}`)), ['复制', '编辑', '回退到这条消息'])
+    assert.equal(textOf(list, 'nativeSheet.title'), 'Hello fixture')
+    assert.equal(await cdp.eval('String(getSelection())'), '', 'the long-press selected text')
+    assert.equal(await cdp.eval("!!document.querySelector('.ctx-menu')"), false, 'a web menu rendered as well')
+    shot('20a-message-menu')
+    await tapId('nativeSheet.item.1', list)
+    await waitSheet(false)
+    assert.ok(await h.waitPage(cdp, "document.querySelector('.t2-edit-ta')?.value === 'Hello fixture'", 5000), 'Edit did not open the edit box')
+    await cdp.eval("(document.activeElement?.blur(), document.querySelector('.t2-edit .t2-btn.ghost').click(), true)")
+    assert.ok(await h.waitPage(cdp, `!document.querySelector('.t2-edit') && !!${bubble}`, 5000), 'cancel did not bring the message back')
+    await h.pause(1200) // the keyboard the edit box raised leaves
+  })
+
   await check('rewind menu: native sheet with the note as footer; cancel changes nothing', async () => {
-    const btn = `document.querySelector('[data-act="rewind"]')`
+    const btn = `document.querySelector('[data-act="rewind"]')` // still in the DOM (hidden under the native host): tells the fixture message is up
     if (!(await cdp.eval(`!!${btn}`))) await openChat('E2E Session One')
-    assert.ok(await h.waitPage(cdp, `!!${btn}`, 4000), 'rewind button missing on the fixture user message')
+    assert.ok(await h.waitPage(cdp, `!!${btn}`, 4000), 'the fixture user message offers no rewind')
     const sent = stubLog.length
-    await tapEl(btn)
-    const list = await waitSheet(true, 8000)
+    await pickRewind()
+    const list = await rewindSheet()
+    assert.ok(list, 'the rewind sheet did not open after the message menu')
     const got = ids(list)
     assert.ok(got.includes('conversation'), `rewind items: ${got}`)
     assert.ok(h.byId(list, 'nativeSheet.footer')?.text, 'footer note missing')
@@ -1070,14 +1211,14 @@ const tabCountText = (list) => {
     const btn = `document.querySelector('[data-act="rewind"]')`
     const wrote = (since) => stubLog.slice(since).filter((l) => /^(POST|PATCH|DELETE|PUT) /.test(l) && /rewind|truncate|checkpoints|messages/.test(l))
     await openChat('E2E Session One')
-    assert.ok(await h.waitPage(cdp, `!!${btn}`, 4000), 'rewind button missing on the fixture user message')
+    assert.ok(await h.waitPage(cdp, `!!${btn}`, 4000), 'the fixture user message offers no rewind')
     // (1) the checkpoint stat is still loading when the user switches session
     hold.checkpoints = true
     let sent = stubLog.length
     try {
-      await tapEl(btn)
+      await pickRewind()
       assert.ok(await waitLog(sent, (l) => /^GET \S+\/e2e-s1\/checkpoints/.test(l), 6000), 'checkpoint stat was not requested')
-      assert.ok(!sheetOpen(ui()), 'sheet opened before the stat answered')
+      await waitSheet(false) // the message menu is gone, and nothing may follow it while the stat is parked
       await openChat('Two') // drawer → the other session: the message that asked is gone
     } finally {
       hold.checkpoints = false
@@ -1089,11 +1230,11 @@ const tabCountText = (list) => {
     assert.deepEqual(wrote(sent), [])
     // (2) the sheet is open and the session changes underneath (no key press: only the abort can close it)
     await openChat('E2E Session One')
-    assert.ok(await h.waitPage(cdp, `!!${btn}`, 4000), 'rewind button missing after coming back')
+    assert.ok(await h.waitPage(cdp, `!!${btn}`, 4000), 'the fixture user message offers no rewind after coming back')
     sent = stubLog.length
-    await tapEl(btn)
-    const list = await waitSheet(true, 8000)
-    assert.ok(ids(list).includes('conversation'), `rewind items: ${ids(list)}`)
+    await pickRewind()
+    const list = await rewindSheet()
+    assert.ok(list, 'the rewind sheet did not open after the message menu')
     await cdp.eval(`(${rowExpr('Two')}.click(), true)`)
     await waitSheet(false, 6000)
     assert.ok(await h.waitPage(cdp, `!${btn}`, 5000), 'did not switch to the other session')

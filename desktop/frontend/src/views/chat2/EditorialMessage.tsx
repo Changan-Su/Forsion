@@ -54,7 +54,7 @@ import { registerMessages, useI18n } from '../../i18n'
 import { useApp } from '../../stores/appStore'
 import { runResultText, type RunResult } from '../../builtins/runCommand'
 import { SUB_PROVIDER_LABELS } from '../../components/OnboardingWizard'
-import { UI_MODE, nativeSheetPresenter, runNativeSheetMenu, useEdgeNudge, type SheetMenuItem } from '@lcl/engine'
+import { UI_MODE, nativeSheetPresenter, runNativeCtxMenu, runNativeSheetMenu, useEdgeNudge, type SheetMenuItem } from '@lcl/engine'
 import { splitSuggestions, type FenceKind, type SuggestState, type TaskCard } from './suggest'
 import { CreationCards } from './CreationCards'
 import { formatDateTime, formatMessageTime } from '../../format/time'
@@ -422,11 +422,35 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
     // 目录标题用剥掉引用后的正文;复制 / 编辑仍拿原始 msg.content(发的是什么就是什么)。
     const lead = splitLeadingRefs(msg.content)
     const tocTitle = lead ? (lead.body.trim() || lead.refs.map((r) => r.name).join(' ')) : msg.content
+    const toggleRewind = (): void => {
+      // Android:三档改由原生半屏呈现;没有原生宿主时照旧切换 Web 菜单。
+      if (!rewindOpen) {
+        rewindReq.current?.abort() // 连点:上一次还在统计 / 还开着的请求作废,只留这一次
+        const req = new AbortController()
+        rewindReq.current = req
+        if (openNativeRewind(msg.timestamp, fileCtx, t, (mode) => handlers?.onRewind?.(mode), () => setRewindOpen(true), req.signal)) return
+        rewindReq.current = null
+      }
+      setRewindOpen((v) => !v)
+    }
+    // 手机(原生半屏宿主):气泡下面不常驻那三个小键(chat2.css 文件末尾按 [data-native-chrome] 藏掉),长按气泡出同样三项。
+    // 没有宿主(桌面 / 网页 / 手机浏览器)→ 不拦,系统右键菜单与行内按钮照旧。
+    // 只列这条消息真有的动作(只读会话没有编辑 / 回退);一个都没有就不拦,长按照系统的来。
+    const onBubbleMenu = (e: React.MouseEvent): void => {
+      const items = [
+        ...(handlers?.onCopy ? [{ label: t('chat.action.copy'), icon: <Copy size={14} />, run: () => handlers.onCopy?.(msg.content) }] : []),
+        ...(handlers?.onEdit ? [{ label: t('chat.action.edit'), icon: <Pencil size={14} />, run: () => handlers.onEdit?.() }] : []),
+        ...(handlers?.onRewind ? [{ label: t('rewind.title'), icon: <HistoryIcon size={14} />, run: toggleRewind }] : []),
+      ]
+      if (!items.length || !nativeSheetPresenter()) return
+      e.preventDefault()
+      void runNativeCtxMenu(items, { title: [...tocTitle.trim()].slice(0, 80).join('') }) // 按码点截:半个表情不过桥
+    }
     return (
       <div ref={rootRef} className="t2-userwrap" id={`tocmsg-${msg.id}`} data-toc-msg-role="user" data-toc-title={tocTitle}>
         <div className="t2-user-col">
           <div className="t2-username">{name}</div>
-          <div className="t2-user">
+          <div className="t2-user" onContextMenu={onBubbleMenu}>
             {!!msg.attachments?.length && (
               <div className="msg-attach-grid">
                 {msg.attachments.map((a, i) => a.mimeType?.startsWith('image/') && a.data
@@ -451,17 +475,7 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
             <button className="t2-iconbtn" title={t('chat.action.edit')} onClick={() => handlers?.onEdit?.()}><Pencil size={14} /></button>
             {handlers?.onRewind && (
               <span style={{ position: 'relative', display: 'inline-flex' }} data-cmenu>
-                <button className="t2-iconbtn" data-act="rewind" title={t('rewind.title')} onClick={() => {
-                  // Android:三档改由原生半屏呈现;没有原生宿主时照旧切换 Web 菜单。
-                  if (!rewindOpen) {
-                    rewindReq.current?.abort() // 连点:上一次还在统计 / 还开着的请求作废,只留这一次
-                    const req = new AbortController()
-                    rewindReq.current = req
-                    if (openNativeRewind(msg.timestamp, fileCtx, t, (mode) => handlers.onRewind?.(mode), () => setRewindOpen(true), req.signal)) return
-                    rewindReq.current = null
-                  }
-                  setRewindOpen((v) => !v)
-                }}><HistoryIcon size={14} /></button>
+                <button className="t2-iconbtn" data-act="rewind" title={t('rewind.title')} onClick={toggleRewind}><HistoryIcon size={14} /></button>
                 {rewindOpen && (
                   <RewindMenu at={msg.timestamp} ctx={fileCtx} onPick={(mode) => { setRewindOpen(false); handlers.onRewind?.(mode) }} />
                 )}
