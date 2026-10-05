@@ -56,6 +56,10 @@ function html(config, entry = ENTRIES[0], version = STAMP) {
 const CYCLE = 1600
 /** 构建时盖进页面的版本号(真应用里取自更新日志的最新正式版);这里用一个认得出来的假值。 */
 const STAMP = '9.8.7'
+/** 字的墨迹上下沿离树标上下沿最多差多少(单位:字标字号)。13px 字号下约 1.8px;改成按行盒居中的旧排法,下沿会差出 3px。 */
+const LOCKUP = .14
+const aligned = (s) => !!s.lockup && Math.abs(s.lockup[0]) <= LOCKUP && Math.abs(s.lockup[1]) <= LOCKUP
+const lockupNote = (s) => s.lockup ? `字顶 ${s.lockup[0] >= 0 ? '低' : '高'} ${Math.abs(s.lockup[0]).toFixed(3)}em,字底 ${s.lockup[1] >= 0 ? '低' : '高'} ${Math.abs(s.lockup[1]).toFixed(3)}em` : ''
 const VERSES = ['汤谷上有扶桑', '香风送紫蕊', '客止我且往', '万里扶桑客', '暾将出兮东方']
 const png = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aD1sAAAAASUVORK5CYII='
 const svg = 'data:image/svg+xml;base64,' + Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40"><circle cx="20" cy="20" r="18" fill="teal"/></svg>').toString('base64')
@@ -95,6 +99,16 @@ const shadowState = () => {
   const verse = box(scene.querySelector('.fts-verse')), brand = box(scene.querySelector('.fts-brand'))
   const word = scene.querySelector('.fts-brand span'), ver = scene.querySelector('.fts-ver')
   const wordBox = (() => { const r = document.createRange(); r.selectNode(word.firstChild); return r.getBoundingClientRect() })()
+  // 字的「墨迹」上下沿(大写字顶 / 数字底),不是行盒:行盒比字高,拿它对齐树标会差出一两个像素
+  const ink = (node) => {
+    const cs = getComputedStyle(node.parentElement), g = document.createElement('canvas').getContext('2d')
+    g.font = `${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`
+    const m = g.measureText(node.textContent), r = document.createRange(); r.selectNode(node)
+    const b = r.getBoundingClientRect(), base = b.top + (b.height - m.fontBoundingBoxAscent - m.fontBoundingBoxDescent) / 2 + m.fontBoundingBoxAscent
+    return [base - m.actualBoundingBoxAscent, base + m.actualBoundingBoxDescent]
+  }
+  const mark = scene.querySelector('.fts-brand svg').getBoundingClientRect(), em = parseFloat(getComputedStyle(scene.querySelector('.fts-brand')).fontSize)
+  const top = ink(word.firstChild), foot = ver ? ink(ver.firstChild) : top
   const anims = scene.getAnimations({ subtree: true })
   const loops = anims.filter((a) => a.effect.getComputedTiming().iterations === Infinity)
   const cs = getComputedStyle(scene)
@@ -106,6 +120,7 @@ const shadowState = () => {
     wallCorner: [...alphaAt(wall, 2, 2)], paneAlpha: wallAlpha(parseFloat(cs.getPropertyValue('--fts-cx')) / 100 * innerWidth + innerWidth * .08, parseFloat(cs.getPropertyValue('--fts-cy')) / 100 * innerHeight + innerHeight * .08),
     verseOnWall: onWall(verse), brandOnWall: onWall(brand),
     word: word.firstChild.textContent, ver: ver ? ver.textContent : null, brandKids: scene.querySelector('.fts-brand').querySelectorAll('*').length,
+    lockup: [(top[0] - mark.top) / em, (foot[1] - mark.bottom) / em], markTall: mark.height / em,
     verUnder: !!ver && ver.getBoundingClientRect().top >= wordBox.bottom && Math.abs(ver.getBoundingClientRect().left - wordBox.left) < 1 && ver.getBoundingClientRect().height < wordBox.height,
     inView: [verse, brand].every((b) => b.x >= 0 && b.y >= 0 && b.x + b.w <= innerWidth && b.y + b.h <= innerHeight),
     names: anims.map((a) => a.animationName),
@@ -147,6 +162,7 @@ async function main() {
   check('诗句是五句之一,两行加出处', shadow.lines?.length === 3 && VERSES.includes(shadow.lines[0]) && /《.+》/.test(shadow.lines[2]), (shadow.lines || []).join(' / '))
   check('诗句与字标落在墙上(不压窗光)、不出画', !!shadow.verseOnWall && !!shadow.brandOnWall && !!shadow.inView)
   check('字标下面一行是盖进页面的版本号,左边对齐、字比字标小', shadow.word === 'FORSION' && shadow.ver === STAMP && !!shadow.verUnder, `${shadow.word} / ${shadow.ver}`)
+  check('两行字和树标等高:大写字顶贴树标上沿、版本号的底贴树标下沿', aligned(shadow), lockupNote(shadow))
   check('枝影 / 窗光三条循环都是 infinite,且还在走', shadow.loopNames?.join() === 'fts-drift,fts-sway,fts-sway-far' && !!shadow.loopsRunning && shadow.loopTime > 2000, `${shadow.loopNames} t=${Math.round(shadow.loopTime)}ms`)
   check('只动 transform / opacity', shadow.props?.join() === 'opacity,transform', (shadow.props || []).join())
   check('首帧未出:闪屏还在(没被定时器撤走)', !shadow.gone && !shadow.out)
@@ -159,7 +175,7 @@ async function main() {
     await open(html(undefined, undefined, value))
     await page.waitForTimeout(400)
     const bare = await page.evaluate(shadowState)
-    check(`${name}:只有字标,没有版本那一行`, !!bare.mounted && bare.word === 'FORSION' && bare.ver === null && bare.brandKids === 3 && !!bare.brandOnWall, `ver=${bare.ver} kids=${bare.brandKids}`)
+    check(`${name}:只有字标,没有版本那一行`, !!bare.mounted && bare.word === 'FORSION' && bare.ver === null && bare.brandKids === 3 && !!bare.brandOnWall && Math.abs(bare.lockup[0] + bare.lockup[1]) < LOCKUP, `ver=${bare.ver} kids=${bare.brandKids} ${lockupNote(bare)}`)
   }
 
   // ── ② 最短展示:首帧来得再早也守到 1.3 秒 ──
@@ -243,7 +259,7 @@ async function main() {
       await open(html())
       await page.waitForTimeout(shot ? 2600 : 50)
       const s = await page.evaluate(shadowState)
-      check(`${w}×${h} ${mode}:画出来了,诗句与字标(连同版本号)在墙上、在画内`, !!s.mounted && !!s.verseOnWall && !!s.brandOnWall && !!s.inView && s.ver === STAMP && !!s.verUnder && s.paneAlpha < 30 && s.far > .005)
+      check(`${w}×${h} ${mode}:画出来了,诗句与字标(连同版本号)在墙上、在画内`, !!s.mounted && !!s.verseOnWall && !!s.brandOnWall && !!s.inView && s.ver === STAMP && !!s.verUnder && aligned(s) && s.paneAlpha < 30 && s.far > .005, lockupNote(s))
       if (shot) await page.screenshot({ path: path.join(OUT, `tree-shadow-${shot}-${mode}.png`) })
     }
   }
