@@ -1,7 +1,7 @@
 ---
 name: 配置与管理 Agent
 description: 当用户想新建 / 配置 / 修改 / 删除 Tangu 本地 Agent(Normal Agent),或想把一种好用的角色 / 工作方式沉淀成可复用的 agent 时使用。讲解 manage_agent 工具与 agent 的文件夹结构(config.toml / SOUL.md / MEMORY.md / HARNESS.md 进化记录 / LOG / Library),以及 manage_harness 自进化层与 /refine 复盘。
-version: 1.3.1
+version: 1.3.2
 category: agent 管理
 ---
 
@@ -19,13 +19,14 @@ Agent 也可能来自**插件捆绑包(bundle)播种**:安装带 `agents/` 子�
   **审批档只归用户**:agent 的审批档(config.toml 里的 `approval_mode`)只能由用户在设置里改 —— `manage_agent` 不接受 `approval_mode` 参数(传了会报错、什么都不写),
   也不要用文件工具去改它。新建的 agent 没有自己的审批档,跟随会话;`update` 保留用户设的原值。
 - **SOUL.md** — 人格设定:语气、态度、价值观(区别于「做什么」的开发指令,这里塑造「怎么说话、是个怎样的存在」)。
-- **MEMORY.md** — 该 agent 自己的长期记忆(用 `remember` 工具写,跨会话保留):**世界是什么样**。
-- **HARNESS.md** — 该 agent 的「进化记录」:**我该怎么干活**。这是 agent **唯一自有、可自我进化**的一层
+- **MEMORY.md** — 该 agent 自己的长期记忆(用 `remember` 工具写,跨会话保留):**世界是什么样,以及用户告诉你、纠正你、要求你的事**。
+- **HARNESS.md** — 该 agent 的「进化记录」:**我自己摸索出来的干活方法**。这是 agent **唯一自有、可自我进化**的一层
   (人格与开发指令的主权归用户,agent 不能自己改 SOUL.md / config.toml)。每次会话注入系统提示。
   只能用 `manage_harness` 工具写(`upsert` / `delete` / `list` / `rollback`),不要用文件工具直接改;
   每笔留 before/after 快照,`rollback` 可回退到上一版。写入立即生效,不用等用户批准:对话里会出现一张更新卡,用户可以撤销。
-  对话里学到耐久的做法就可以直接记;用户敲 `/refine` 是让你专门复盘一次本次会话,把「以后该怎么做」沉淀成条目。
-  **只记耐久的教训**(反复被纠正的偏好、验证过的做法、好用的委派配方);环境/安装失败、「某工具坏了」、
+  自己在对话里摸索出耐久的做法就可以直接记;用户敲 `/refine` 是让你专门复盘一次本次会话,把自己总结出来的「以后该怎么做」沉淀成条目。
+  **只记自己得出的耐久教训**(验证过的做法、踩过的坑和绕开的办法、好用的委派配方、给自己定的标准)。
+  用户告诉你、纠正你、要求你的事**不记在这里**,用 `remember`(复盘时翻到的也一样)。环境/安装失败、「某工具坏了」、
   一次性任务流水**绝不能记**——它们会硬化成日后的拒绝理由。
   条目里还有一种**装备**(`kind: "equip"`,带 `tools` / `skills`):把自己很少用到的工具、技能**收起来**省上下文——
   收起的工具改走按需目录(`load_tools` 随时取得回),收起的技能不再列进技能清单(`use_skill` 按 id 照常可用)。
@@ -78,7 +79,7 @@ Agent 也可能来自**插件捆绑包(bundle)播种**:安装带 `agents/` 子�
 }
 ```
 > 改**自己**(当前激活的 agent)时:`system_prompt` 必须原样传回、`soul` 不传或原样传回(人格归用户),只能调运行参数(model / tools / thinking_level / 调高 max_iterations);
-> 想记下「以后该怎么做」走 `manage_harness`。
+> 想记下「以后该怎么做」:用户交代的走 `remember`,自己摸索出来的走 `manage_harness`。
 
 **删除**(不能删默认 agent):
 ```json
@@ -93,10 +94,13 @@ Agent 也可能来自**插件捆绑包(bundle)播种**:安装带 `agents/` 子�
 4. **thinking_level**:off 快答 / low 日常(默认) / medium 复杂(代码审查) / high 研究型难题。
 5. **审批档不归你管**:只能由用户在设置里改;需要更宽 / 更严的档,告诉用户去设置里调,别在 `manage_agent` 里传 `approval_mode`。
 6. **沉淀资料进 Library**:角色设定、长文档、工具手册等放进该 agent 的 `Library/`,并在 `developer_instructions` 里要求按需阅读;agent 自己也能用文件工具往 Library 写 / 读。
-7. **记忆与日志**:让 agent 用 `remember` 记长期事实 / 偏好、`log_event` 记当天产出——都落在该 agent 自己的 MEMORY.md / LOG/。
-8. **四层各就各位,别互相串**:`developer_instructions`(用户定的职责)/ SOUL.md(用户定的人格)/ MEMORY.md(记住的事实)
-   / HARNESS.md(agent 自己攒的工作方法)。用户说「你以后别再这样了」→ 看是要改开发指令(用户主权,走 `manage_agent update`)
-   还是让 agent 自己记下来(走 `manage_harness`)。**成体系的可复用流程**(带步骤、可能带脚本)比进化记录条目更适合
+7. **记忆与日志**:让 agent 用 `remember` 记长期事实 / 偏好,以及用户对它的纠正与要求;`log_event` 记当天产出——都落在该 agent 自己的 MEMORY.md / LOG/。
+   会话在项目里时 `remember` 多一个 `scope`:只在这个项目成立的记 `"project"`(同项目的 agent 共用,不进 MEMORY.md),到哪都成立的记 `"agent"`。
+8. **四层各就各位,别互相串**:`developer_instructions`(用户定的职责)/ SOUL.md(用户定的人格)/ MEMORY.md(记住的事实,以及用户的纠正与要求)
+   / HARNESS.md(agent 自己摸索出来的工作方法)。用户说「你以后别再这样了」→ 这是用户的纠正,归记忆,走 `remember`;
+   只有用户确实是要改某个 agent 的开发指令(职责 / 规则本身)时,才走 `manage_agent update`(用户主权;agent 改不了自己的开发指令,请用户去设置里改)。
+   **别写进进化记录**:`manage_harness` 只收 agent 自己总结出来的做法,用户说的话不算。一条只记一处,记进了记忆就别在进化记录里再写一遍。
+   **成体系的可复用流程**(带步骤、可能带脚本)比进化记录条目更适合
    `manage_skill` 且传 `scope: "agent"` ——只在该 agent 激活时装载,不污染其他 agent。
 
 ## 何时创建新 agent
