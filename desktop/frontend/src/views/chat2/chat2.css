@@ -1052,8 +1052,12 @@ html[data-chat-avatars='off'] .t2-username { display: none; }
 /* ── 手机(Android 原生外壳):用户消息下面不再常驻三个小键,长按气泡出原生菜单(EditorialMessage 的 onBubbleMenu;
    用户 2026-10-05 在方案图里选的 B)。气泡因此不参与文字选择(菜单里有「复制」)。回复下面那排留着,键看起来不变,
    点击范围竖向撑开(28px + 16px,乘单列壳的 1.15 ≈ 50dp)。
+   三个键是「看不见」不是「没有」(不用 display:none):读屏逐项滑得到、外接键盘 Tab 到时原样显出来。
+   .t2-userwrap--inline = 这条消息的原生菜单弹不出来过 → 键和文字选择都还回来。
    只在原生宿主下命中(.mb-shell[data-native-chrome]);桌面 / 网页 / 手机浏览器逐像素不变。放文件末尾(DESIGN §7.2)。 */
-.mb-shell[data-native-chrome] .t2-userwrap .t2-actions .t2-iconbtn { display: none; }
-.mb-shell[data-native-chrome] .t2-userwrap .t2-user { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+.mb-shell[data-native-chrome] .t2-userwrap:not(.t2-userwrap--inline) .t2-actions .t2-iconbtn:not(:focus-visible) {
+  position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%);
+}
+.mb-shell[data-native-chrome] .t2-userwrap:not(.t2-userwrap--inline) .t2-user { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
 .mb-shell[data-native-chrome] .t2-asst .t2-actions .t2-iconbtn { position: relative; }
 .mb-shell[data-native-chrome] .t2-asst .t2-actions .t2-iconbtn::after { content: ''; position: absolute; inset: -8px 0; }

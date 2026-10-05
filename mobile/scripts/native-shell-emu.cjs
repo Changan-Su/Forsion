@@ -895,8 +895,19 @@ const tabCountText = (list) => {
     const refetch = () => cdp.eval("(document.dispatchEvent(new Event('visibilitychange')), true)") // attentionStore refetches when the page comes to the front
     const polled = () => stubLog.filter((l) => l.includes('/agent/approvals/pending')).slice(-3).join(' | ')
     await goHome()
-    assert.ok(h.byId(ui(), 'nativeChrome.space.tangu'), 'Tangu cell not on screen')
-    assert.equal(badges(ui()).length, 0, 'a dot at rest')
+    // An earlier check may have swiped the bar: Tangu then sits under the pinned Home cell, and so would its dot.
+    // Finger to the right = back to the first cells.
+    let list = ui()
+    const bar = h.byId(list, 'nativeChrome.spaces')
+    assert.ok(bar, 'no native space bar')
+    for (let i = 0; i < 2; i++) {
+      h.adb('shell', 'input', 'swipe', String(Math.round(bar.rect.left + (bar.rect.right - bar.rect.left) * 0.3)), String(bar.rect.cy), String(bar.rect.right - 80), String(bar.rect.cy), '250')
+      await h.pause(600)
+    }
+    list = ui()
+    const [homeCell, tanguCell] = [h.byId(list, 'nativeChrome.space.home'), h.byId(list, 'nativeChrome.space.tangu')]
+    assert.ok(homeCell && tanguCell && tanguCell.rect.left >= homeCell.rect.right - 2, `Tangu cell not fully on screen (${tanguCell?.bounds} beside ${homeCell?.bounds})`)
+    assert.equal(badges(list).length, 0, 'a dot at rest')
     Object.assign(pending, { rev: 'e2e-1', sessions: [{ sessionId: 'e2e-s2', approvals: 1, inquiries: 0, localOnly: 0, oldestAt: iso(1000), remote: false }] })
     try {
       await refetch()
@@ -1166,8 +1177,11 @@ const tabCountText = (list) => {
     const css = await cdp.eval(`(() => { const u = [...document.querySelectorAll('.t2-userwrap .t2-actions .t2-iconbtn')], a = document.querySelector('.t2-asst .t2-actions .t2-iconbtn')
       const r = a.getBoundingClientRect(); let z = 1; for (let e = a; e; e = e.parentElement) z *= parseFloat(getComputedStyle(e).zoom) || 1
       const hit = (dy) => document.elementFromPoint((r.left + r.width / 2) * z, (r.top + dy) * z) === a
-      return { user: u.map((e) => getComputedStyle(e).display), asst: getComputedStyle(a).display, above: hit(-6), far: hit(-14) } })()`)
-    assert.ok(css.user.length >= 2 && css.user.every((d) => d === 'none'), `inline buttons under the user message: ${css.user}`)
+      // out of sight, not out of the tree: a screen reader still reaches them (and each keeps its name)
+      const size = (e) => { const b = e.getBoundingClientRect(); return Math.max(b.width, b.height) }
+      return { user: u.map(size), named: u.every((e) => e.title && getComputedStyle(e).display !== 'none'), asst: getComputedStyle(a).display, above: hit(-6), far: hit(-14) } })()`)
+    assert.ok(css.user.length >= 2 && css.user.every((d) => d <= 1), `inline buttons still visible under the user message: ${css.user}`)
+    assert.ok(css.named, 'the hidden buttons left the accessibility tree (display:none) or lost their names')
     assert.notEqual(css.asst, 'none', 'the reply lost its action row')
     assert.ok(css.above, 'the reply button does not take a touch 6px above its edge')
     assert.ok(!css.far, 'control: 14px above the reply button still hits it (the probe proves nothing)')
@@ -1187,6 +1201,14 @@ const tabCountText = (list) => {
     await cdp.eval("(document.activeElement?.blur(), document.querySelector('.t2-edit .t2-btn.ghost').click(), true)")
     assert.ok(await h.waitPage(cdp, `!document.querySelector('.t2-edit') && !!${bubble}`, 5000), 'cancel did not bring the message back')
     await h.pause(1200) // the keyboard the edit box raised leaves
+    // The menu belongs to its message: the session changes underneath (no key press) → the sheet leaves by itself,
+    // so Edit / Rewind can never run against a session the user is no longer in.
+    await bubbleMenu()
+    await cdp.eval(`(${rowExpr('Two')}.click(), true)`)
+    await waitSheet(false, 6000)
+    assert.ok(await h.waitPage(cdp, `!${bubble}`, 5000), 'did not switch to the other session')
+    await h.pause(600)
+    assert.ok(resumed(), 'left the app')
   })
 
   await check('rewind menu: native sheet with the note as footer; cancel changes nothing', async () => {

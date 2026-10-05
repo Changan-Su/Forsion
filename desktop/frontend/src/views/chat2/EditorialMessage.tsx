@@ -363,6 +363,8 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
   // 建议芯片是一次性的:点了就等于用户按了回车,整排随即失效 —— 不然双击会把同一句排两遍。
   const [suggestSent, setSuggestSent] = useState(false)
   const [rewindOpen, setRewindOpen] = useState(false)
+  // 手机:长按菜单原生那头弹不出来过(宿主拒了这次请求)→ 这条消息把三个小键和文字选择还回来,动作不至于够不着。
+  const [inlineActions, setInlineActions] = useState(false)
   // 原生回退半屏的在途请求(Android):消息卸载、或它所属的会话 / 消息换了 → 作废(见 openNativeRewind)。
   const rewindReq = useRef<AbortController | null>(null)
   useEffect(() => () => { rewindReq.current?.abort(); rewindReq.current = null }, [msg.id, runSid])
@@ -433,8 +435,10 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
       }
       setRewindOpen((v) => !v)
     }
-    // 手机(原生半屏宿主):气泡下面不常驻那三个小键(chat2.css 文件末尾按 [data-native-chrome] 藏掉),长按气泡出同样三项。
-    // 没有宿主(桌面 / 网页 / 手机浏览器)→ 不拦,系统右键菜单与行内按钮照旧。
+    // 手机(原生半屏宿主):气泡下面不常驻那三个小键(chat2.css 文件末尾按 [data-native-chrome] 收成看不见、读屏与键盘仍够得着),
+    // 长按气泡出同样三项。没有宿主(桌面 / 网页 / 手机浏览器)→ 不拦,系统右键菜单与行内按钮照旧。
+    // 与回退共用 rewindReq 这一个槽:消息卸载 / 换会话时上面的 effect 一并作废 —— 菜单开着时会话换了,它跟着关,
+    // 不会对着已经离开的会话执行编辑 / 回退。
     // 只列这条消息真有的动作(只读会话没有编辑 / 回退);一个都没有就不拦,长按照系统的来。
     const onBubbleMenu = (e: React.MouseEvent): void => {
       const items = [
@@ -444,10 +448,15 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
       ]
       if (!items.length || !nativeSheetPresenter()) return
       e.preventDefault()
-      void runNativeCtxMenu(items, { title: [...tocTitle.trim()].slice(0, 80).join('') }) // 按码点截:半个表情不过桥
+      rewindReq.current?.abort()
+      const req = new AbortController()
+      rewindReq.current = req
+      const restore = (): void => { if (!req.signal.aborted) setInlineActions(true) }
+      void runNativeCtxMenu(items, { title: [...tocTitle.trim()].slice(0, 80).join(''), signal: req.signal }) // 按码点截:半个表情不过桥
+        .then((shown) => { if (!shown) restore() }, restore)
     }
     return (
-      <div ref={rootRef} className="t2-userwrap" id={`tocmsg-${msg.id}`} data-toc-msg-role="user" data-toc-title={tocTitle}>
+      <div ref={rootRef} className={`t2-userwrap${inlineActions ? ' t2-userwrap--inline' : ''}`} id={`tocmsg-${msg.id}`} data-toc-msg-role="user" data-toc-title={tocTitle}>
         <div className="t2-user-col">
           <div className="t2-username">{name}</div>
           <div className="t2-user" onContextMenu={onBubbleMenu}>
