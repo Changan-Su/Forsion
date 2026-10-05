@@ -47,7 +47,8 @@ public class LiveIslandService extends Service {
         return START_NOT_STICKY;
     }
 
-    /** 收尾。keepNotification=true:通知脱离服务留下来(插件随后用同一 id 覆盖成「已完成」);false:连通知一起撤。 */
+    /** 收尾。keepNotification=false:连通知一起撤(run 结束 —— 完成态由插件另贴一条);true:通知脱离服务留下来
+     *  (当日前台服务额度用完:岛照旧显示,只是不再保活)。 */
     static void finish(boolean keepNotification) {
         LiveIslandService s = instance;
         instance = null;

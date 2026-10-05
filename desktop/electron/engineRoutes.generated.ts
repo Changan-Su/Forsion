@@ -130,6 +130,7 @@ export const ENGINE_ROUTES: readonly EngineRoute[] = [
   { method: 'POST', path: '/agent/project-context/init', access: 'deny-remote', src: 'routes/projectContext.ts', why: 'project instruction write (design appendix C)' },
   { method: 'DELETE', path: '/agent/project-context/memory', access: 'deny-remote', src: 'routes/projectContext.ts', why: 'project memory delete (host-only store; the route itself also refuses remote origin)' },
   { method: 'POST', path: '/agent/project-context/memory/candidate', access: 'deny-remote', src: 'routes/projectContext.ts', why: 'adopt / dismiss one pending project-memory candidate (host-only store; the route itself also refuses remote origin)' },
+  { method: 'POST', path: '/agent/project-context/memory/restore', access: 'deny-remote', src: 'routes/projectContext.ts', why: 'put back one sentence removed by a project-memory compaction (host-only store; the route itself also refuses remote origin)' },
   { method: 'GET', path: '/agent/project-context/settings', access: 'allow', src: 'routes/projectContext.ts', why: 'read project settings' },
   { method: 'PUT', path: '/agent/project-context/settings', access: 'deny-remote', src: 'routes/projectContext.ts', why: 'project settings write (design appendix C)' },
   { method: 'POST', path: '/agent/project-context/skills', access: 'deny-remote', src: 'routes/projectContext.ts', why: 'project skill write (design appendix C)' },

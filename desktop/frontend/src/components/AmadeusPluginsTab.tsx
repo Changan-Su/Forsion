@@ -31,6 +31,7 @@ import type { TanguDesktopConfig } from '../types'
 import type { AmadeusPlugin, SettingContribution, SettingsViewContribution } from '@amadeus/plugins/types'
 import type { PluginDependency } from '@amadeus-shared/ipc'
 import { PluginLogo } from './PluginLogo'
+import { canOpenPluginsFolder } from '../amadeus/lib/hostCaps'
 import { homeTarget } from '../services/engine/targets'
 
 registerMessages({
@@ -69,6 +70,14 @@ registerMessages({
     zh: '开发副本不能声明自定义文件类型（fileExtensions）',
     en: 'A dev copy cannot claim custom file types (fileExtensions)',
   },
+  // manifest isDesktopOnly:true 的插件在 Android App 上列出但不装载
+  'settings.amadeusPlugins.blockedDesktopOnly': { zh: '仅支持桌面端', en: 'Desktop only' },
+  // 没有可见插件目录的宿主(Android App):插件只经应用市场装
+  'settings.amadeusPlugins.marketHint': {
+    zh: '启用/禁用即时生效，点击插件可查看详情。插件从应用市场安装；标为「仅支持桌面端」的插件只能在 Forsion 桌面端使用。',
+    en: 'Turning a plugin on or off takes effect immediately; tap a plugin for details. Plugins are installed from the market; plugins marked "Desktop only" work only in Forsion for desktop.',
+  },
+  'settings.amadeusPlugins.openMarket': { zh: '浏览应用市场', en: 'Browse the market' },
   // 前置插件(manifest requiresPlugins):装着但开不了 / 前置停了自动暂停、回来自动恢复
   'settings.amadeusPlugins.waitingDeps': { zh: '等待前置插件', en: 'Waiting for required plugins' },
   'settings.amadeusPlugins.loadFailed': { zh: '加载失败', en: 'Failed to load' },
@@ -362,7 +371,9 @@ const blockedLabel = (t: (k: string, v?: Record<string, string>) => string, p: A
       ? t('settings.amadeusPlugins.blockedInvalid', { reason: p.blockedReason || '' })
       : p.blocked === 'dev-fileext'
         ? t('settings.amadeusPlugins.blockedDevFileExt')
-        : t('settings.amadeusPlugins.blockedMinApp', { v: p.minAppVersion || '?' })
+        : p.blocked === 'desktopOnly'
+          ? t('settings.amadeusPlugins.blockedDesktopOnly')
+          : t('settings.amadeusPlugins.blockedMinApp', { v: p.minAppVersion || '?' })
 
 /** DEV 徽章:开发态加载的来源。卡片与详情页同款。 */
 const DevBadge: React.FC<{ t: (k: string) => string }> = ({ t }) => (
@@ -525,13 +536,20 @@ const RestartPending: React.FC<{ p: AmadeusPlugin }> = ({ p }) => {
   )
 }
 
+/** 从卡片列表点进去的详情页开着时 = 它的「返回列表」,否则 null。移动设置(SettingsModal)在 Android 原生顶栏的返回 /
+ *  系统返回上先退这一层,与 Web「返回列表」钮是同一个动作(此前直接回到设置首页,详情页还开在底下)。
+ *  受控详情(左栏 `fplugin:<id>` 直达)不登记:它不是从列表进来的,返回照旧回设置首页。 */
+export const pluginListDetailBack: { current: (() => void) | null } = { current: null }
+
 const PluginDetail: React.FC<{
   plugin: AmadeusPlugin
   onBack: () => void
+  /** 从卡片列表点进来的(非受控):原生顶栏在场时 Web「返回列表」钮让位给顶栏的返回(base.css 按这个标记藏)。 */
+  fromList?: boolean
   cfg?: TanguDesktopConfig | null
   onEngineReload?: () => void
   enginePlugins?: PluginInfo[] | null
-}> = ({ plugin: p, onBack, cfg, onEngineReload, enginePlugins }) => {
+}> = ({ plugin: p, onBack, fromList, cfg, onEngineReload, enginePlugins }) => {
   const { t, locale } = useI18n()
   const activeIds = usePluginStore((s) => s.activeIds)
   const commands = usePluginStore((s) => s.commands).filter((o) => o.pluginId === p.id)
@@ -599,7 +617,7 @@ const PluginDetail: React.FC<{
 
   return (
     <div data-plugin-detail={p.id} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-      <div>
+      <div data-plugin-back-row={fromList ? 'list' : undefined}>
         <button className="btn ghost sm" data-plugin-back onClick={onBack} style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
           <ArrowLeft size={13} /> {t('settings.amadeusPlugins.back')}
         </button>
@@ -638,7 +656,7 @@ const PluginDetail: React.FC<{
             <button className="btn ghost sm" onClick={() => void unloadDev()}>{t('settings.amadeusPlugins.devUnload')}</button>
           )
         ) : !p.builtin && !p.preinstalled && !p.agent && !!amadeus?.uninstallPlugin && !window.tangu?.unitPage && (
-          <button className="btn ghost sm" style={{ color: 'var(--danger, #c0392b)' }} onClick={() => void uninstall()}>
+          <button className="btn ghost sm" data-plugin-uninstall style={{ color: 'var(--danger, #c0392b)' }} onClick={() => void uninstall()}>
             {t('settings.amadeusPlugins.uninstall')}
           </button>
         )}
@@ -756,9 +774,16 @@ export const AmadeusPluginsTab: React.FC<{
 
   // 受控 id 解析得到才赢;插件被卸载/禁用后落回卡片列表,且**列表点得动**(见 resolvePluginDetail)。
   const { plugin: detailPlugin, controlled } = resolvePluginDetail(plugins, controlledDetail?.id, detail)
+  const listDetailOpen = !!detailPlugin && !controlled
+  useEffect(() => {
+    if (!listDetailOpen) return
+    const back = (): void => setDetail(null)
+    pluginListDetailBack.current = back
+    return () => { if (pluginListDetailBack.current === back) pluginListDetailBack.current = null }
+  }, [listDetailOpen])
   if (detailPlugin) {
     const back = controlled && controlledDetail ? controlledDetail.onBack : () => setDetail(null)
-    return <PluginDetail plugin={detailPlugin} onBack={back} cfg={cfg} onEngineReload={onEngineReload} enginePlugins={enginePlugins} />
+    return <PluginDetail plugin={detailPlugin} onBack={back} fromList={!controlled} cfg={cfg} onEngineReload={onEngineReload} enginePlugins={enginePlugins} />
   }
 
   // 核心独立一页；已安装页把编辑器扩展、宿主内置能力与开发操作折叠收纳。
@@ -831,7 +856,13 @@ export const AmadeusPluginsTab: React.FC<{
   return (
     <div className="plugin-management" data-plugin-section="installed">
       <div className="hint">{t('plugins.installed.hint')}</div>
-      <div className="plugin-management-toolbar"><input type="search" aria-label={t('plugins.search')} placeholder={t('plugins.search')} value={query} onChange={(e) => setQuery(e.target.value)} /></div>
+      <div className="plugin-management-toolbar">
+        <input type="search" aria-label={t('plugins.search')} placeholder={t('plugins.search')} value={query} onChange={(e) => setQuery(e.target.value)} />
+        {/* 没有插件文件夹的宿主(Android App)唯一的安装入口是市场:就地给一个,别让用户回去翻「⋯」菜单。 */}
+        {!canOpenPluginsFolder() && !!window.tangu?.marketList && (
+          <button className="btn ghost sm" data-plugins-open-market onClick={() => { useApp.getState().closeSettings(); useApp.getState().openMarket() }}>{t('settings.amadeusPlugins.openMarket')}</button>
+        )}
+      </div>
       {externals.map(renderCard)}
       {!externals.length && !builtins.length && <div className="hint">{t(query ? 'plugins.noResults' : managedFeatures ? 'settings.amadeusPlugins.unitEmpty' : 'settings.amadeusPlugins.empty')}</div>}
       {!!builtins.length && <details className="plugin-management-group" open={query ? true : undefined}>
@@ -844,11 +875,13 @@ export const AmadeusPluginsTab: React.FC<{
       </details>}
       <details className="plugin-management-group">
         <summary>{t('plugins.developer')}</summary>
-        <div className="hint">{t(managedFeatures ? 'settings.amadeusPlugins.unitHint' : 'settings.amadeusPlugins.hint')}</div>
+        <div className="hint">{t(managedFeatures ? 'settings.amadeusPlugins.unitHint' : canOpenPluginsFolder() ? 'settings.amadeusPlugins.hint' : 'settings.amadeusPlugins.marketHint')}</div>
         <div className="plugin-management-toolbar" style={{ flexWrap: 'wrap' }}>
-          {!window.tangu?.unitPage && <button className="btn ghost sm" onClick={() => openFolder()}>{t('settings.amadeusPlugins.openFolder')}</button>}
+          {/* 设备页(unitPage):插件目录/脚手架都是对方机器上的 shell 行为 —— 藏。Android App(hostCaps.pluginsFolder=false):
+              插件住在应用私有目录、只经市场装 —— 文件夹与脚手架两个按钮同样不给。 */}
+          {!window.tangu?.unitPage && canOpenPluginsFolder() && <button className="btn ghost sm" onClick={() => openFolder()}>{t('settings.amadeusPlugins.openFolder')}</button>}
           <button className="btn ghost sm" onClick={() => void reloadPluginsAndAnnounce({ all: true }).then(() => loadUserSpaces())}>{t('settings.amadeusPlugins.reload')}</button>
-          {!window.tangu?.unitPage && <button className="btn ghost sm" onClick={() => void scaffold()}>{t('settings.amadeusPlugins.scaffold')}</button>}
+          {!window.tangu?.unitPage && canOpenPluginsFolder() && <button className="btn ghost sm" onClick={() => void scaffold()}>{t('settings.amadeusPlugins.scaffold')}</button>}
         </div>
       </details>
     </div>

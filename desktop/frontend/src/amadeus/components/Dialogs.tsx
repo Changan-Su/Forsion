@@ -1,7 +1,8 @@
 // Small modal dialogs for file-management flows: confirm (delete), prompt (folder name),
 // and folder picker (move a page). They share the .dialog-* styles.
 
-import { useEffect, useId, useState, type ReactNode } from 'react'
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
+import { nativeSheetPresenter, presentNativeConfirm } from '@lcl/engine'
 import { registerMessages, useI18n } from '../../i18n'
 
 registerMessages({
@@ -43,6 +44,26 @@ export function ConfirmDialog({
   useEscape(onClose)
   const { t } = useI18n()
   const titleId = useId()
+  // Android 原生半屏确认(lcl nativeSheet 的可选宿主)。带附加内容(勾选项等)的确认原生层画不了,保持 Web;
+  // 宿主缺席或呈现失败同样回落 Web 对话框。
+  const plain = children === undefined || children === null || children === false || children === ''
+  const [web, setWeb] = useState(() => !(plain && nativeSheetPresenter()))
+  const latest = useRef({ onConfirm, onClose })
+  latest.current = { onConfirm, onClose }
+  const confirmText = confirmLabel ?? t('amdlg.delete')
+  const cancelText = t('amdlg.cancel')
+  useEffect(() => {
+    if (web) return
+    const ctl = new AbortController()
+    void presentNativeConfirm({ title, message, confirm: confirmText, cancel: cancelText, danger }, ctl.signal).then((out) => {
+      if (ctl.signal.aborted) return
+      if (!out.handled) { setWeb(true); return }
+      if (out.value) latest.current.onConfirm()
+      latest.current.onClose()
+    })
+    return () => ctl.abort()
+  }, [web, title, message, confirmText, cancelText, danger])
+  if (!web) return null
   return (
     <div className="dialog-overlay" onMouseDown={onClose}>
       <div className="dialog" role="dialog" aria-modal="true" aria-labelledby={titleId} onMouseDown={(e) => e.stopPropagation()}>

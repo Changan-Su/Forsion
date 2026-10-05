@@ -7,7 +7,15 @@ import { Folder, Cloud, ChevronDown, Check, Search, FolderPlus, FolderX } from '
 import type { WorkspaceDescriptor } from '../types'
 import { useI18n } from '../i18n'
 import { isCoarsePointer } from '../touch'
-import { useEdgeNudge } from '@lcl/engine'
+import { nativeSheetPresenter, openNativeSheetMenu, presentNativePrompt, useEdgeNudge, type SheetMenu, type SheetMenuItem } from '@lcl/engine'
+
+/** Web 下拉的搜索口径:名称 + 本地路径 + 云端 Project 名(同一串里做不分大小写的子串匹配)。 */
+export const projectSearchText = (w: Pick<WorkspaceDescriptor, 'name' | 'path' | 'project'>): string => `${w.name} ${w.path || ''} ${w.project || ''}`
+
+/** 原生半屏那一行的副文案:原生搜索只匹配「名称 + 副文案」,所以 Web 下拉能搜到的另外两个字段(路径、Project 名)
+ *  得放进来,两边才搜得出同一批项目(此前原生行只有名称,按路径搜不到)。与名称相同的不重复显示。 */
+export const projectSearchDetail = (w: Pick<WorkspaceDescriptor, 'name' | 'path' | 'project'>): string | undefined =>
+  [w.path, w.project].filter((v): v is string => !!v && v !== w.name).join(' · ') || undefined
 
 export const ProjectSelector: React.FC<{
   workspaces: WorkspaceDescriptor[]
@@ -56,12 +64,47 @@ export const ProjectSelector: React.FC<{
   const projectless = pickable.find((w) => w.kind === 'rootless') || null
   const projects = pickable.filter((w) => w.kind !== 'rootless')
   const query = q.trim().toLowerCase()
-  const list = projects.filter((w) => !query || `${w.name} ${w.path || ''} ${w.project || ''}`.toLowerCase().includes(query))
+  const list = projects.filter((w) => !query || projectSearchText(w).toLowerCase().includes(query))
   // 项目少时搜索只是一行噪音；达到需要浏览的数量再渐进披露。
   const showSearch = projects.length >= 6
   const SelectedIcon = selected?.kind === 'cloud' ? Cloud : selected?.kind === 'rootless' ? FolderX : Folder
   const closeMenu = (): void => { setOpen(false); setQ(''); setNaming(false); setDraft('') }
   const pick = (ws: WorkspaceDescriptor): void => { onChange(ws); closeMenu() }
+
+  // 菜单条目的唯一一份:Web 下拉与 Android 原生半屏(lcl nativeSheet 可选宿主)都从这里渲染。
+  const projectItem = (w: WorkspaceDescriptor): SheetMenuItem => ({
+    id: `ws:${w.key}`, label: w.name, detail: projectSearchDetail(w), icon: w.kind === 'cloud' ? <Cloud size={14} /> : <Folder size={14} />,
+    checked: w.key === selected?.key, run: () => pick(w),
+  })
+  const projectlessItem = projectless ? {
+    id: `ws:${projectless.key}`, label: t('input.project.dontWork'), icon: <FolderX size={14} />,
+    checked: projectless.key === selected?.key, run: () => pick(projectless),
+  } satisfies SheetMenuItem : null
+  /** 云端 Project 的名字:Web 是菜单里的内联输入,原生半屏是原生输入框;同一条提交规则(trim 后非空)。 */
+  const addCloudItem: SheetMenuItem | null = onAddCloudProject ? {
+    id: 'add-cloud', label: t('input.project.addCloud'), icon: <Cloud size={14} />,
+    run: () => {
+      if (!nativeSheetPresenter()) { setNaming(true); return }
+      void presentNativePrompt({ title: t('input.project.addCloud'), placeholder: t('input.project.cloudName'), confirm: t('common.confirm'), cancel: t('common.cancel') }).then((out) => {
+        if (!out.handled) { setOpen(true); setNaming(true); return }
+        const name = out.value?.text.trim()
+        if (name) onAddCloudProject(name)
+      })
+    },
+  } : null
+  const addLocalItem: SheetMenuItem | null = onAddProject ? {
+    id: 'add-local', label: t('input.project.add'), icon: <FolderPlus size={14} />, run: () => { onAddProject(); closeMenu() },
+  } : null
+  const nativeMenu = (): SheetMenu => ({
+    title: t('input.project.label'),
+    back: t('common.back'),
+    ...(showSearch ? { search: { placeholder: t('input.project.search'), empty: t('input.project.noMatches') } } : {}),
+    sections: [
+      { items: projects.map(projectItem) },
+      { items: projectlessItem ? [projectlessItem] : [] },
+      { items: [addCloudItem, addLocalItem].filter((x): x is SheetMenuItem => !!x) },
+    ],
+  })
 
   useEffect(() => {
     if (!open || isCoarsePointer()) return
@@ -92,7 +135,12 @@ export const ProjectSelector: React.FC<{
     <div className={`project-selector${open ? ' is-open' : ''}`} ref={ref}>
       <button
         className={`composer-chip project-pill${open ? ' is-open' : ''}`}
-        onClick={() => open ? closeMenu() : setOpen(true)}
+        onClick={() => {
+          if (open) { closeMenu(); return }
+          // Android:原生半屏;没有原生宿主(桌面 / 网页)照旧展开 Web 下拉,宿主呈现失败也回落 Web。
+          if (openNativeSheetMenu(nativeMenu, { onFallback: () => setOpen(true) })) return
+          setOpen(true)
+        }}
         title={t('input.project.label')}
         aria-haspopup="menu"
         aria-expanded={open}
@@ -118,39 +166,39 @@ export const ProjectSelector: React.FC<{
             </label>
           )}
           <div className="project-menu-list">
-            {list.map((w) => (
+            {list.map(projectItem).map((it) => (
               <button
-                key={w.key}
-                className={`menu-item project-menu-item${w.key === selected?.key ? ' active' : ''}`}
+                key={it.id}
+                className={`menu-item project-menu-item${it.checked ? ' active' : ''}`}
                 role="menuitemradio"
-                aria-checked={w.key === selected?.key}
-                onClick={() => pick(w)}
+                aria-checked={!!it.checked}
+                onClick={it.run}
               >
-                {w.kind === 'cloud' ? <Cloud size={14} /> : <Folder size={14} />}
-                <span className="grow project-menu-name">{w.name}</span>
-                <span className="project-menu-check">{w.key === selected?.key ? <Check size={13} /> : null}</span>
+                {it.icon}
+                <span className="grow project-menu-name">{it.label}</span>
+                <span className="project-menu-check">{it.checked ? <Check size={13} /> : null}</span>
               </button>
             ))}
             {!list.length && <div className="project-menu-empty">{t('input.project.noMatches')}</div>}
           </div>
           {/* 项目外是一种选择，与新建动作分组；每行保留自己的圆角和键盘聚焦底。 */}
-          {projectless && (
+          {projectlessItem && (
             <div className="project-menu-section project-menu-projectless-section" role="group">
               <button
-                className={`menu-item project-menu-item project-menu-projectless${projectless.key === selected?.key ? ' active' : ''}`}
+                className={`menu-item project-menu-item project-menu-projectless${projectlessItem.checked ? ' active' : ''}`}
                 role="menuitemradio"
-                aria-checked={projectless.key === selected?.key}
-                onClick={() => pick(projectless)}
+                aria-checked={projectlessItem.checked}
+                onClick={projectlessItem.run}
               >
-                <FolderX size={14} />
-                <span className="grow project-menu-name">{t('input.project.dontWork')}</span>
-                <span className="project-menu-check">{projectless.key === selected?.key ? <Check size={13} /> : null}</span>
+                {projectlessItem.icon}
+                <span className="grow project-menu-name">{projectlessItem.label}</span>
+                <span className="project-menu-check">{projectlessItem.checked ? <Check size={13} /> : null}</span>
               </button>
             </div>
           )}
-          {(onAddCloudProject || onAddProject) && (
+          {(addCloudItem || addLocalItem) && (
             <div className="project-menu-section project-menu-actions" role="group">
-              {onAddCloudProject && (naming ? (
+              {onAddCloudProject && addCloudItem && (naming ? (
                 <label className="project-menu-search project-menu-naming">
                   <Cloud size={13} />
                   <input
@@ -165,13 +213,13 @@ export const ProjectSelector: React.FC<{
                   />
                 </label>
               ) : (
-                <button className="menu-item project-menu-item project-menu-add" role="menuitem" onClick={() => setNaming(true)}>
-                  <Cloud size={14} /><span className="grow">{t('input.project.addCloud')}</span>
+                <button className="menu-item project-menu-item project-menu-add" role="menuitem" onClick={addCloudItem.run}>
+                  {addCloudItem.icon}<span className="grow">{addCloudItem.label}</span>
                 </button>
               ))}
-              {onAddProject && (
-                <button className="menu-item project-menu-item project-menu-add" role="menuitem" onClick={() => { onAddProject(); closeMenu() }}>
-                  <FolderPlus size={14} /><span className="grow">{t('input.project.add')}</span>
+              {addLocalItem && (
+                <button className="menu-item project-menu-item project-menu-add" role="menuitem" onClick={addLocalItem.run}>
+                  {addLocalItem.icon}<span className="grow">{addLocalItem.label}</span>
                 </button>
               )}
             </div>

@@ -8,11 +8,11 @@
  */
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Bot, Check, ChevronRight } from 'lucide-react'
-import { nestedPanelPlacement, nestedPanelTop, UI_ZOOM_EVENT, useEdgeNudge, zoomOf, type NestedPanelPlacement } from '@lcl/engine'
+import { nestedPanelPlacement, nestedPanelTop, UI_ZOOM_EVENT, useEdgeNudge, zoomOf, type NestedPanelPlacement, type SheetMenuItem } from '@lcl/engine'
 import { useI18n } from '../../i18n'
 import type { NormalAgentDef } from '../../types'
 
-export function NormalModeItem({ active, disabled, agents, currentAgentSlug, onNormalWork, onAgentSwitch, onClose }: {
+interface NormalModeProps {
   active: boolean
   disabled?: boolean
   agents: NormalAgentDef[]
@@ -21,7 +21,30 @@ export function NormalModeItem({ active, disabled, agents, currentAgentSlug, onN
   /** 不给(群聊态 / 引擎会话 / 空白会话)= 没有二级面板,行退回单按钮。 */
   onAgentSwitch?: (slug: string) => void
   onClose: () => void
-}): React.ReactElement {
+}
+
+/** 「普通模式」行 + 「切换 Agent」二级的唯一一份条目:Web 行 / 浮出面板与 Android 原生半屏(二级 = 推入页)共用。
+ *  `agentSwitch` 为 null = 没有二级(同 Web:没给 onAgentSwitch 或名册里没有可切换的 Agent)。 */
+export function normalModeItems(p: NormalModeProps, t: ReturnType<typeof useI18n>['t']): { normal: SheetMenuItem; agentSwitch: SheetMenuItem | null; agents: SheetMenuItem[] } {
+  const list = p.agents.filter((a) => a.createdBy !== 'system')
+  const current = p.agents.find((a) => a.slug === p.currentAgentSlug)
+  const normal: SheetMenuItem = {
+    id: 'normal-work', label: t('input.normalWork'), icon: <Bot size={14} />, checked: p.active, disabled: p.disabled,
+    run: () => { p.onNormalWork(); p.onClose() },
+  }
+  const agents: SheetMenuItem[] = p.onAgentSwitch ? list.map((a) => ({
+    id: `agent:${a.slug}`, label: a.name, icon: <Bot size={14} />, checked: p.currentAgentSlug === a.slug,
+    run: () => { p.onAgentSwitch!(a.slug); p.onClose() },
+  })) : []
+  const agentSwitch: SheetMenuItem | null = agents.length ? {
+    id: 'agent-switch', label: t('input.agentSwitch.section'), detail: current?.name, icon: <Bot size={14} />,
+    children: [{ items: agents }],
+  } : null
+  return { normal, agentSwitch, agents }
+}
+
+export function NormalModeItem(props: NormalModeProps): React.ReactElement {
+  const { currentAgentSlug, agents } = props
   const { t } = useI18n()
   const [open, setOpen] = useState(false)
   const [placement, setPlacement] = useState<NestedPanelPlacement>('right')
@@ -29,8 +52,8 @@ export function NormalModeItem({ active, disabled, agents, currentAgentSlug, onN
   const rowRef = useRef<HTMLDivElement>(null)
   const subRef = useRef<HTMLDivElement>(null)
   const subFix = useEdgeNudge(open ? placement : '', { boundary: '.t2-chat-view' })
-  const list = agents.filter((a) => a.createdBy !== 'system')
-  const openSub = onAgentSwitch && list.length ? () => setOpen(true) : undefined
+  const items = normalModeItems(props, t)
+  const openSub = items.agentSwitch ? () => setOpen(true) : undefined
   const current = agents.find((a) => a.slug === currentAgentSlug)
 
   useLayoutEffect(() => {
@@ -83,9 +106,9 @@ export function NormalModeItem({ active, disabled, agents, currentAgentSlug, onN
 
   return (
     <div ref={rowRef} className="mode-normal-row" onPointerEnter={openSub}>
-      <button className={`menu-item${active ? ' active' : ''}`} data-normal-work disabled={disabled} onClick={() => { onNormalWork(); onClose() }}>
-        <Bot size={14} /><span className="grow">{t('input.normalWork')}</span>
-        {active && <Check size={13} />}
+      <button className={`menu-item${items.normal.checked ? ' active' : ''}`} data-normal-work disabled={items.normal.disabled} onClick={items.normal.run}>
+        {items.normal.icon}<span className="grow">{items.normal.label}</span>
+        {items.normal.checked && <Check size={13} />}
       </button>
       {openSub && (
         <button className="menu-item mode-agent-trigger" data-agent-switch aria-haspopup="menu" aria-expanded={open}
@@ -103,12 +126,12 @@ export function NormalModeItem({ active, disabled, agents, currentAgentSlug, onN
           style={{ ...subFix.style, '--cm-sub-top': `${subTop}px` } as React.CSSProperties}
         >
           <div className="menu-section">{t('input.agentSwitch.section')}</div>
-          {list.map((a) => (
-            <button key={a.slug} role="menuitemradio" aria-checked={currentAgentSlug === a.slug}
-              className={`menu-item${currentAgentSlug === a.slug ? ' active' : ''}`}
-              onClick={() => { onAgentSwitch!(a.slug); onClose() }}>
-              <Bot size={14} /><span className="grow">{a.name}</span>
-              {currentAgentSlug === a.slug && <Check size={13} />}
+          {items.agents.map((it) => (
+            <button key={it.id} role="menuitemradio" aria-checked={!!it.checked}
+              className={`menu-item${it.checked ? ' active' : ''}`}
+              onClick={it.run}>
+              {it.icon}<span className="grow">{it.label}</span>
+              {it.checked && <Check size={13} />}
             </button>
           ))}
         </div>

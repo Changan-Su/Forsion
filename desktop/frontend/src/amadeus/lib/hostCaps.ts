@@ -22,6 +22,12 @@ export function canOpenAttachment(): boolean {
   return window.amadeus?.hostCaps?.openAttachment !== false
 }
 
+/** 插件页「打开插件文件夹」/「创建示例插件」:宿主得有一个用户看得见、能往里放文件的插件目录。
+ *  Android App 的插件住在应用私有目录(只经市场装),桥声明 false → 两个按钮不渲染(否则点了没反应)。 */
+export function canOpenPluginsFolder(): boolean {
+  return window.amadeus?.hostCaps?.pluginsFolder !== false
+}
+
 /** 页面版本历史(评审 C-20):快照存在主进程的库外目录,只有桌面主进程桥实现;web 云桥 / 移动本地库 / Unit 网页桥都没有
  *  这组可选成员 → 「版本历史」不渲染。按桥实不实现判,不另起声明位。 */
 export function canPageHistory(): boolean {

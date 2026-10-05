@@ -359,9 +359,14 @@ export interface ExternalPluginSource {
   /** Present → listed but not loadable: 'api' = apiVersion mismatch, 'minApp' = app too old,
    *  'invalid' = manifest.json missing/broken or main unreadable (agent Space / dev source; reason in `blockedReason`),
    *  'dev-fileext' = dev source declaring `fileExtensions` (see `dev` — the vault's protection only covers the
-   *  installed plugins dir, so a dev copy must never mint files the compiler would later rewrite). */
-  blocked?: 'api' | 'minApp' | 'invalid' | 'dev-fileext'
+   *  installed plugins dir, so a dev copy must never mint files the compiler would later rewrite),
+   *  'desktopOnly' = manifest `isDesktopOnly: true` on a host that is not the desktop app (Android). */
+  blocked?: 'api' | 'minApp' | 'invalid' | 'dev-fileext' | 'desktopOnly'
   blockedReason?: string
+  /** Manifest `isDesktopOnly` (Obsidian-style platform flag, 2026-10-02): the plugin relies on desktop-only host
+   *  APIs (Electron bridges, local engine, OS shell). Desktop lists and runs it as usual (informational only);
+   *  mobile hosts list it as `blocked: 'desktopOnly'`, never evaluate its code and refuse to install it. */
+  isDesktopOnly?: boolean
   /** 捆绑包内嵌内容清单(缺省 = 纯 UI 插件)。 */
   bundle?: PluginBundleInfo
   /** 随 App 内置(主进程 builtinPlugins.ts 播种的捆绑包):设置页标「内置」、不给卸载按钮(只能停用)。
@@ -565,6 +570,8 @@ export interface AmadeusHostCaps {
   exportPdf?: boolean
   /** 用系统程序打开附件(PDF 卡走应用内阅读器,不受此限)。 */
   openAttachment?: boolean
+  /** 插件页「打开插件文件夹」与「创建示例插件」(桌面才有能打开的插件目录;Android App 的插件住在应用私有目录)。 */
+  pluginsFolder?: boolean
 }
 
 export interface AmadeusApi {

@@ -10,6 +10,15 @@ const KEY = 'lcl.uiMode'
 export const IS_MINI_PANEL = typeof location !== 'undefined' && new URLSearchParams(location.search).get('window') === 'mini'
 export const IS_TRANSIENT_MINI_PANEL = IS_MINI_PANEL && new URLSearchParams(location.search).get('transient') === '1'
 export type UiMode = 'desktop' | 'mobile'
+/** Space 窗口:整个 Space 开在自己的 OS 窗口里(主进程经 `?window=detached&space=<id>` 注入)。这扇窗从头到尾只属于
+ *  这一个 Space —— 不切 Space,也从不写主窗那几把共用键(活动 Space / 命名布局槽),见 spaceRegistry。其余窗口 = null。 */
+export const WINDOW_SPACE_ID: string | null = (() => {
+  if (typeof location === 'undefined') return null
+  const p = new URLSearchParams(location.search)
+  return (p.get('window') === 'detached' && p.get('space')) || null
+})()
+/** 主窗(以及没有多窗口的 web / 移动端)= URL 上没有 `?window=`。只有它记「最近使用的 Space」。 */
+export const IS_MAIN_WINDOW = typeof location === 'undefined' || !new URLSearchParams(location.search).get('window')
 
 function read(): UiMode {
   if (IS_MINI_PANEL) return 'desktop'

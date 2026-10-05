@@ -758,6 +758,8 @@ export interface ProjectMemoryView {
   limit: number
   /** 等用户点头的后台候选(带网址、命令或权限字眼,没有直接记):不是记忆,Agent 读不到。老引擎不带。 */
   candidates?: Array<{ id: string; content: string; at: number }>
+  /** 写满时的自动压缩:最近一次的前后规模;removed = 被合并或去掉、还能逐句恢复的原句(新的在前)。没压过 / 老引擎不带。 */
+  compacted?: { at: number; before: { count: number; chars: number }; after: { count: number; chars: number }; removed: Array<{ id: string; content: string }> }
 }
 
 export interface SkillInfo {
@@ -1412,6 +1414,13 @@ declare global {
       pickDirectory?(opts?: { purpose?: 'project' }): Promise<string | null>
       /** Chat Box 添加文件或文件夹；取消返回空数组。 */
       pickPaths?(): Promise<Array<{ path: string; isDirectory: boolean }>>
+      /** Android:系统文件选择器选文件(内容随回,不是路径);取消返回空数组。原生半屏里没有用户激活,
+       *  `<input type=file>.click()` 会被 Chromium 静默丢掉 —— 有这个能力时 Chat Box「添加文件」走它。 */
+      pickFiles?(): Promise<File[]>
+      /** Android:系统照片选择器(只列图片) / 系统相机拍一张。同上:内容随回,取消或没拍成返回空数组;
+       *  两个都在时,Chat Box 的原生「＋」半屏把「添加文件」拆成 拍照 / 相册 / 文件 三行。 */
+      pickPhotos?(): Promise<File[]>
+      takePhoto?(): Promise<File[]>
       /** 另存为文本文件(导出日志等);取消返回 { ok:false }。 */
       saveTextFile?(defaultName: string, content: string): Promise<{ ok: boolean; path: string | null }>
       /** 用户活动日志埋点(fire-and-forget;拼行/消毒在 main 侧 activityLog.ts)。 */
@@ -1510,8 +1519,8 @@ declare global {
         items: Array<{ id: string; url: string; thumbnailUrl: string; title: string; copyright: string; startDate: string }>
         error?: string
       }>
-      /** 主进程回投的外链;渲染层决定进内置浏览器还是系统浏览器。返回取消订阅。 */
-      onOpenUrl?(cb: (url: string) => void): () => void
+      /** 主进程回投的外链;渲染层决定进内置浏览器还是系统浏览器。fromGuest = 内置浏览器里的页面自己开的新窗口。返回取消订阅。 */
+      onOpenUrl?(cb: (url: string, fromGuest?: boolean) => void): () => void
       /** 内置终端 PTY;spawn 失败(原生模块未就绪)返回 { error } 而非抛。 */
       pty?: {
         /** cmd:带命令启动(`shell -l -c cmd`,退出即 onExit 带退出码);缺省=交互登录 shell。 */
@@ -1570,6 +1579,9 @@ declare global {
       onMarketInstallProgress?(cb: (ev: MarketInstallProgress) => void): () => void
       marketInstalled?(): Promise<Record<string, Array<{ slug: string; version: string | null }>>>
       marketUninstall?(type: string, slug: string): Promise<{ ok: boolean; path: string; type: string; id?: string }>
+      /** 本宿主能装的市场类型(缺省 = 全部)。Android App 没有本机引擎 / 主题目录 / Space 目录,只声明 ['amadeus-plugin'];
+       *  MarketModal 只列这些类型,其余在发现页一句话说明去桌面端装。 */
+      marketTypes?: readonly string[]
       /** 后端插件卸载:列用户目录已装(manifest id→目录名)/ 按 id 删目录(仅 ~/.tangu/plugins,首方插件删不到)。 */
       pluginsUserInstalled?(): Promise<Array<{ id: string; slug: string }>>
       pluginsUninstall?(id: string): Promise<{ ok: boolean }>
@@ -1579,8 +1591,9 @@ declare global {
       spacesDelete?(slug: string): Promise<{ ok: boolean }>
       /** 收件箱:系统通知(点击回跳 Inbox Space)/ dock 角标(仅 mac 生效)/ 通知点击订阅。 */
       notifyInbox?(title: string, body: string): Promise<void>
-      /** 通用系统通知(所有应用内通知同步发);web/mobile 下 undefined。 */
-      notify?(title: string, body: string): Promise<void>
+      /** 通用系统通知(所有应用内通知同步发);web 下 undefined。meta.event = 哪类通知(NOTIFY_EVENTS 的 id):
+       *  桌面不看;安卓(mobile/src/liveIsland.ts)据此给每类只留一条,并略过由灵动岛报的「跑完了」。 */
+      notify?(title: string, body: string, meta?: { event?: string }): Promise<void>
       setInboxBadge?(count: number): Promise<void>
       onInboxOpen?(cb: () => void): () => void
       // P1-K3
@@ -1590,7 +1603,7 @@ declare global {
       /** 独立窗启动握手:pull 本窗待打开的初始视图(拖出时登记的 {type,params}[];重启已恢复布局则返回空)。 */
       detachedReady?(id: string): Promise<Array<{ type: string; params?: Record<string, unknown> }>>
       /** 开一个独立窗承载给定视图(右键「移到新窗口」/拖到空桌面);screen 坐标可选(拖出落点)。 */
-      openDetached?(views: Array<{ type: string; params?: Record<string, unknown> }>, at?: { screenX: number; screenY: number }): Promise<{ id: string }>
+      openDetached?(views: Array<{ type: string; params?: Record<string, unknown> }>, at?: { screenX: number; screenY: number }, opts?: { space?: string }): Promise<{ id: string }>
       /** 开/切换 mini 悬浮卡片。带 sessionId 时定向显示该正式会话,不另建临时会话。 */
       openMini?(opts?: import('../../shared/miniPanel').MiniOpenOptions): void
       /** Open/focus a native Floating Panel window. Undefined on Web/mobile. */

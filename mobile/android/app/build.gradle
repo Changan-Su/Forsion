@@ -1,8 +1,12 @@
 apply plugin: 'com.android.application'
+apply plugin: 'org.jetbrains.kotlin.android'
+apply plugin: 'org.jetbrains.kotlin.plugin.compose'
 
 android {
     namespace "com.forsion.tangu"
     compileSdk rootProject.ext.compileSdkVersion
+    buildFeatures { compose true; buildConfig true }
+    kotlinOptions { jvmTarget = '21' }
     defaultConfig {
         applicationId "com.forsion.tangu"
         minSdkVersion rootProject.ext.minSdkVersion
@@ -30,7 +34,21 @@ android {
         }
     }
     buildTypes {
+        debug {
+            // 并装预览(debug 签名,不碰正式 keystore):
+            //   -PnativePreview        = **真 App**,包名 com.forsion.tangu.nativepreview,与已装正式版及其数据并存;
+            //   -PnativePreviewSample  = 同一包名,启动直接进审阅用样本页(native-preview.html,
+            //                            dist 须以 FORSION_NATIVE_PREVIEW=1 构建)。命令见 mobile/README.md。
+            def previewId = project.hasProperty('nativePreview') || project.hasProperty('nativePreviewSample')
+            if (previewId) {
+                applicationIdSuffix '.nativepreview'
+                resValue 'string', 'app_name', 'Forsion Preview'
+                resValue 'string', 'title_activity_main', 'Forsion Preview'
+            }
+            buildConfigField 'boolean', 'NATIVE_PREVIEW_SAMPLE', project.hasProperty('nativePreviewSample') ? 'true' : 'false'
+        }
         release {
+            buildConfigField 'boolean', 'NATIVE_PREVIEW_SAMPLE', 'false'
             if (System.getenv("ANDROID_KEYSTORE_PATH")) {
                 signingConfig signingConfigs.release
             }
@@ -47,6 +65,10 @@ repositories {
 }
 
 dependencies {
+    // Pinned to the existing API 35 / AGP 8.7 toolchain. Upgrade the toolchain separately.
+    implementation platform('androidx.compose:compose-bom:2024.12.01')
+    implementation 'androidx.compose.material3:material3'
+    implementation 'androidx.activity:activity-compose:1.9.3'
     implementation fileTree(include: ['*.jar'], dir: 'libs')
     implementation "androidx.appcompat:appcompat:$androidxAppCompatVersion"
     implementation "androidx.coordinatorlayout:coordinatorlayout:$androidxCoordinatorLayoutVersion"

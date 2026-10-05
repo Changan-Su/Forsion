@@ -71,6 +71,7 @@ export function CommandPalette() {
             <button
               key={c.id}
               className="cmd-item"
+              data-command-id={c.id}
               data-active={i === active || undefined}
               onMouseEnter={() => setActive(i)}
               onClick={() => run(i)}

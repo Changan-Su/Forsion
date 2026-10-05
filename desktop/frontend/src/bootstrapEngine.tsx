@@ -7,7 +7,7 @@ import { registerMiniViews } from './mini/miniViews'
 /** 真实引擎装配:注册视图(会话/对话)+ ribbon + 命令 + 默认布局。替代 demoBootstrap。 */
 import { MessageCircle, Folder, Plus, Command as CommandIcon, Moon, Languages, MessageSquare, Store, Settings, FileText, ListTree, Search, Inbox, Mail, PanelLeft, PanelRight, PanelBottom, Code2, Trophy, Activity, AppWindow, Sun, TextCursorInput } from 'lucide-react'
 import type { LucideIcon, LucideProps } from 'lucide-react'
-import { registerView, addCommand, addRibbonIcon, useRibbonStore, moveTo, openCommandPalette, useWorkspace, useSpaceStore, getActiveSpace, setActiveSpaceCold, setActiveSpace, adoptSpaceLayoutCold, BOOT_ACTIVE_SPACE_ID, getView, label, recordNav, useNav, activeMainPanel, setEngineI18n, setRibbonActions, UI_MODE, supportsMiniPanel, LCL_MESSAGES } from '@lcl/engine'
+import { registerView, addCommand, addRibbonIcon, useRibbonStore, moveTo, openCommandPalette, useWorkspace, useSpaceStore, getActiveSpace, setActiveSpaceCold, setActiveSpace, adoptSpaceLayoutCold, seedSpaceWindowLayout, BOOT_ACTIVE_SPACE_ID, getView, label, recordNav, useNav, activeMainPanel, setEngineI18n, setRibbonActions, UI_MODE, WINDOW_SPACE_ID, supportsMiniPanel, LCL_MESSAGES } from '@lcl/engine'
 import type { ViewProps } from '@lcl/engine'
 import { useEffect } from 'react'
 import { windowKind } from './windowKind'
@@ -199,12 +199,15 @@ export function installEngine(): void {
     adoptSpaceLayoutCold(lastExit, target)
     if (parked) parkOnStartupFallback()
   }
+  // Space 窗口(整个 Space 开在自己的窗口里):第一次打开照这个 Space 存着的布局摆,之后记自己的。须在 Dockview 就绪之前。
+  seedSpaceWindowLayout()
   const activeSpace = getActiveSpace()
   if (activeSpace) {
     ws().setSidebarDefaults(activeSpace.sidebarDefaults)
     ws().setSideProfile(activeSpace.id, activeSpace.resizableSides ?? {}, activeSpace.sideDefaultScale, activeSpace.bottomSpan) // 首启 Space 的可拖宽侧栏画像(须先于 onReady 的 pinSides)
     // 固定 View 只在主窗生效:卫星窗(detached / mini)里只有被撕出去的那几个视图,不该被别人的固定清单管着。
-    if (windowKind() === 'main') ws().setPinned(activeSpace.pinned)
+    // Space 窗口是整个 Space,固定清单照样管(晚注册的 Space 由 DetachedRoot 等到之后再配一遍)。
+    if (windowKind() === 'main' || WINDOW_SPACE_ID) ws().setPinned(activeSpace.pinned)
   }
   // Forsion 插件在启动期就装(此前只在 Amadeus/Calendar/聊天输入框挂载时懒引导 → 从 Inbox 之类的 Space
   // 冷启动时插件根本没装):插件视图要尽早进注册表,内嵌 Space 才通得过「视图已注册」闸、旧布局引用
@@ -370,18 +373,23 @@ export function installEngine(): void {
   // 名册(unitsList)自 Forsion Extend 0.6 起随包出现;没有 Extend 的桌面仍有 unitHostStatus(宿主)→ 切换器照样上架,
   // 只是不列账号名下的设备:本地 / 按地址直连 / 「允许其他设备连接本机」与已配对设备都不经云端。
   if (window.tangu?.unitsList || window.tangu?.unitHostStatus) {
-    addRibbonIcon({ id: 'rb-unit', side: UI_MODE === 'mobile' ? 'head' : 'bottom', component: UnitSwitcher })
+    // ⚠️「单列壳」不能只看 UI_MODE:Android App 不经 uiMode 选壳(MobileRoot 直接渲染 SingleColumnHost),UI_MODE 在那里恒为 'desktop'。
+    //   只按它判,切换器会掉进 App 的「⋯」:与 rb-units-mobile 重复,还因为它是组件、把原生「⋯」半屏整张逼回网页版(2026-10-04 合并后实测)。
+    const singleColumn = UI_MODE === 'mobile' || !!window.tangu?.mobile
+    addRibbonIcon({ id: 'rb-unit', side: singleColumn ? 'head' : 'bottom', component: UnitSwitcher })
     // 老存档(用户拖过命令区)的 bottomOrder 里没有 rb-unit → rankIds 会把它排到区末尾(设置下面)。
     // 只挪一次到 rb-mode 之后,打标记后用户再拖到哪算哪(同上面反馈那条的一次性迁移)。
     const UNIT_MOVED_KEY = 'forsion_ribbon_unit_in_bottom'
-    if (UI_MODE !== 'mobile' && !localStorage.getItem(UNIT_MOVED_KEY)) {
+    if (!singleColumn && !localStorage.getItem(UNIT_MOVED_KEY)) {
       const rb = useRibbonStore.getState()
       const at = rb.bottomOrder.filter((id) => id !== 'rb-unit').indexOf('rb-mode')
       if (at >= 0 && !rb.folders.some((f) => f.items.includes('rb-unit'))) rb.setZoneOrder('bottom', moveTo(rb.bottomOrder, 'rb-unit', at + 1))
       try { localStorage.setItem(UNIT_MOVED_KEY, '1') } catch { /* ignore */ }
     }
   }
-  addRibbonIcon({ id: 'rb-cmd', side: 'bottom', icon: CommandIcon, tooltip: () => app().tr('command.palette'), onClick: openCommandPalette })
+  // 单列壳(手机)上它在「⋯」里:那里没有 ⌘K,「命令面板」是键盘上的叫法 → 叫「搜索」,图标也换(打开的是同一个面板)。
+  const phoneShell = UI_MODE === 'mobile' || !!window.tangu?.mobile
+  addRibbonIcon({ id: 'rb-cmd', side: 'bottom', icon: phoneShell ? Search : CommandIcon, tooltip: () => app().tr(phoneShell ? 'command.search' : 'command.palette'), onClick: openCommandPalette })
   // 底部常驻(side:'bottom'),无持久顺序时注册序即上下序:明暗/命令 → 设置 → 账号(账号最底)。
   // 用户拖过底部区后 bottomOrder 非空,新注册项按 rankIds 排到区末尾(反馈那条由注册处的一次性迁移兜住)。
   // ⚠️快速查找/语言**刻意不在条上**(2026-08-31):下区是杂物抽屉,八个同色图标一列谁也认不出,

@@ -35,6 +35,21 @@
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="tangu" android:host="auth-callback" />
             </intent-filter>
+
+            <!-- 分享到 Forsion:别的 App 的「分享」面板里出现本应用。分享进来先落一张半屏挑去处(新会话 / 最近的会话 /
+                 存为笔记);进会话 = 文字接在输入框已有内容后面、文件 / 图片成为附件,不替用户发送。
+                 ShareInboxPlugin 接(handleOnNewIntent),页面侧 src/shareInbox.tsx。
+                 */* 含 text/plain;附件的个数 / 大小上限与「添加文件」同一套(FilePickPlan)。 -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="*/*" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND_MULTIPLE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="*/*" />
+            </intent-filter>
         </activity>
 
         <provider
@@ -54,14 +69,25 @@
     <!-- Permissions -->
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- 语音输入(共享 hook useVoiceInput → WebView 的 getUserMedia):页面要麦克风时,Capacitor 的 BridgeWebChromeClient
+         向系统运行时申请这两项,缺任何一项整次请求即被拒。此前清单里没写,只靠 @capacitor/inappbrowser 依赖的清单顺带并进
+         安装包(2026-10-05 核过合并清单)—— 升个依赖就可能悄悄没了,所以写明。安装包的权限集合不因此变化。 -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <!-- 聊天「＋」→ 拍照(NativeFilePickerPlugin):照片由系统相机 App 拍(ACTION_IMAGE_CAPTURE),本 App 并不自己开摄像头。
+         但合并清单里本来就有 CAMERA(同样是 @capacitor/inappbrowser 顺带并进,2026-10-05 核过),而系统规定:清单声明了
+         CAMERA 却没拿到授权的 App,发 ACTION_IMAGE_CAPTURE 直接 SecurityException。所以拍照前先向用户申请这一项,并在这里
+         写明(理由同上面的麦克风:不靠依赖顺带)。安装包的权限集合不因此变化。 -->
+    <uses-permission android:name="android.permission.CAMERA" />
     <!-- 灵动岛(LiveIslandPlugin):通知运行时权限(13+)、Live Updates 推广(16+,安装时授予)、run 期间的前台服务。 -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.POST_PROMOTED_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <!-- 手机操控 T1(PhoneControlPlugin):AlarmClock.ACTION_SET_ALARM / SET_TIMER 要求的 normal 级权限(安装即授予)。
-         ⚠️ 刻意不加:无障碍服务、QUERY_ALL_PACKAGES、CALL_PHONE(拨号只用 ACTION_DIAL 填号)、CAMERA
-         (CameraManager.setTorchMode 不需要)。见 Forsion-Genesis/tangu-agent/docs/phone-control.md。 -->
+         ⚠️ 手机操控刻意不要:无障碍服务、QUERY_ALL_PACKAGES、CALL_PHONE(拨号只用 ACTION_DIAL 填号)。手电筒
+         (CameraManager.setTorchMode)也不需要 CAMERA —— 上面那条 CAMERA 是「拍照」用的,与手机操控无关。
+         见 Forsion-Genesis/tangu-agent/docs/phone-control.md。 -->
     <uses-permission android:name="com.android.alarm.permission.SET_ALARM" />
 
     <!-- 手机操控的包可见性(Android 11+):只声明要用的几类 Intent,不申请 QUERY_ALL_PACKAGES。

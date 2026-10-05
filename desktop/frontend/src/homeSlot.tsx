@@ -15,7 +15,7 @@
 import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { Check } from 'lucide-react'
-import { useSpaceStore, useRibbonStore, addRibbonIcon, label, OverlayAt } from '@lcl/engine'
+import { useSpaceStore, useRibbonStore, addRibbonIcon, label, OverlayAt, getDetachApi } from '@lcl/engine'
 import type { SpaceDefinition } from '@lcl/engine'
 import { SpaceButton } from './components/SpaceButton'
 import { PRODUCT } from './product'
@@ -23,6 +23,7 @@ import { registerMessages, useI18n } from './i18n'
 
 registerMessages({
   'homeSlot.menuHead': { zh: '主位放哪个 Space', en: 'Space in the home slot' },
+  'homeSlot.openInNewWindow': { zh: '在新窗口中打开', en: 'Open in new window' },
 })
 
 export const HOME_SLOT_KEY = 'forsion_home_slot_space'
@@ -75,6 +76,10 @@ function HomeSlotButton({ space, expanded }: { space: SpaceDefinition; expanded:
       <SpaceButton space={space} expanded={expanded} />
       {menu && createPortal(
         <OverlayAt className="ctx-menu" x={menu.x} y={menu.y} onClick={(e) => e.stopPropagation()}>
+          {/* 与条上别的 Space 图标同一项(宿主能开窗才有);主位槽自己接了右键,Ribbon 的通用菜单到不了这里。 */}
+          {getDetachApi()?.openSpace && (
+            <button onClick={() => { getDetachApi()?.openSpace?.(space.id); setMenu(null) }}>{t('homeSlot.openInNewWindow')}</button>
+          )}
           <div className="ctx-head">{t('homeSlot.menuHead')}</div>
           {spaces.map((sp) => (
             <button key={sp.id} onClick={() => { setHomeSlotSpace(sp.id); setMenu(null) }}>
@@ -100,7 +105,7 @@ export function syncHomeSlot(): void {
     const it = items.find((i) => i.id === id)
     if (!it || it.side === side) continue // 没注册过的交给注册方(registerSpaces/userSpaces);已就位的不动
     addRibbonIcon({
-      id,
+      ...it, // 条目自带的别的东西(右键项 menu…)跟着走:只换 side 与外壳
       side,
       component: side === 'home'
         ? ({ expanded }) => <HomeSlotButton space={sp} expanded={expanded} />

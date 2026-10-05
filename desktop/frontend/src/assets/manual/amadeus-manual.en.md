@@ -1518,7 +1518,7 @@ The things that really do land on an exact spot are the **citation chips** in a 
 | `lecture.mp4 @01:35` | Plays from that second; a range reads `@01:35–02:00` | On mobile the chip carries no timestamp and playback starts from the beginning |
 | `note › some heading` | Opens the note and scrolls to that heading | If no heading matches it just opens the note — it never jumps to the wrong one |
 | `note › ^abc123` | Opens the note and flashes that block | `^` block anchors only exist in notes imported from Obsidian; the app never mints one |
-| A plain link whose text is a quoted sentence | Opens the page in the built-in browser beside the conversation and scrolls to that sentence, highlighted | Desktop only, with Agent Desk and the built-in browser plugin both on; a quote under 8 or over 300 characters just opens the page at the top |
+| A plain link whose text is a quoted sentence | Opens the page in the built-in browser beside the conversation and scrolls to that sentence, highlighted | Desktop only, with Agent Desk and the built-in browser plugin both on and "Open in-app links in the built-in browser" checked (it is off by default, and the link then goes to your system browser); a quote under 8 or over 300 characters just opens the page at the top |
 
 When two files in the vault share a name, the chip shows as a dimmed, unclickable row rather than guessing which to open. Where a chip opens things: beside the conversation when Agent Desk is on, otherwise in a main-area tab.
 
@@ -2381,7 +2381,7 @@ After Tangu has read a document, its reply carries citation chips that jump stra
 - The quote highlight is transient: it is never written into the PDF and vanishes on reload. If the sentence is not found the page still opens, just without the band.
 - Heading matching is exact first, then format-stripped, then case-insensitive; if nothing matches, the note simply opens and never jumps to the wrong heading.
 - An unparseable time anchor still opens the player, from the start, and the hover text says "(invalid time anchor — playing from the start)". A broken range end degrades to the start point with "(invalid range end — ignored)".
-- A plain quoted-sentence link in a conversation opens in the built-in browser beside the chat and scrolls to that sentence in amber — this needs the desktop app with both Agent Desk and the built-in browser plugin enabled; with any of those off it is treated as an ordinary external link. Link text under 8 characters or over 300 is not located, and the page just opens at the top.
+- A plain quoted-sentence link in a conversation opens in the built-in browser beside the chat and scrolls to that sentence in amber — this needs the desktop app with both Agent Desk and the built-in browser plugin enabled, and "Open in-app links in the built-in browser" checked on the Browser card (off by default); with any of those missing it is treated as an ordinary external link and goes to your system browser. Link text under 8 characters or over 300 is not located, and the page just opens at the top.
 - On mobile, media citation chips carry no timestamp and play from the start.
 
 ### Supported file types
@@ -2908,7 +2908,7 @@ The "Built-in plugins" section at the top of the plugin page holds six items tha
 | Callouts | Three entries in the "Callouts" group of the `/` menu: "Note callout", "Info callout", "Warning callout", in Obsidian syntax | Those three `/` entries |
 | Word count | The command "Count words", which reports the page's characters and words | That command; the live word count in the status bar is unaffected |
 
-- The Browser card carries an extra checkbox, "Open in-app links in the built-in browser". Uncheck it and every external link goes to your system browser instead.
+- The Browser card carries an extra checkbox, "Open in-app links in the built-in browser". It is off by default, so web links in the app — in notes and in conversations alike — go to your system browser. Check it to open them in the built-in browser instead; quoted-sentence links in a conversation then open beside the chat. New windows opened by a page that is already in the built-in browser always stay there, whatever this checkbox says.
 - Calendar registers no command at all; its Space is the only door.
 - These switches are stored per machine and are not synced with your account; other windows on the same machine follow instantly.
 - The terminal depends on a native component shipped with the app; on the odd machine where it is not ready, opening it says so outright.

@@ -37,6 +37,7 @@ export function ChatBox({ selection, onSelectionChange, controls, ...props }: Ch
   })), [models, prefs])
   return <ChatBoxBase {...props} controls={<>
     <ModelPill menuPortal groups={groups} modelId={selection.modelId} disabled={props.disabled}
+      onSelectionChange={patch => onSelectionChange({ ...selection, ...patch })}
       onSelect={modelId => onSelectionChange({ ...selection, modelId })}
       thinkingLevel={selection.thinkingLevel}
       onThinkingChange={thinkingLevel => onSelectionChange({ ...selection, thinkingLevel })}

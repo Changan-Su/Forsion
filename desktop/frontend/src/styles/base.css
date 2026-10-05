@@ -2212,6 +2212,19 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
 .engine-pill .engine-pill-icon { display: inline-flex; flex-shrink: 0; }
 .engine-pill .engine-pill-label { max-width: 0; opacity: 0; overflow: hidden; font-size: var(--ui-font-body, 13px); transition: max-width 0.6s cubic-bezier(0.2, 0.8, 0.3, 1), opacity 0.5s cubic-bezier(0.2, 0.8, 0.3, 1) 0.05s, margin 0.6s cubic-bezier(0.2, 0.8, 0.3, 1); }
 .engine-pill:hover .engine-pill-label { max-width: 160px; opacity: 1; margin-left: 6px; }
+/* 触屏长按 = 打开菜单,不该同时选中药丸里的字(Android WebView 会选中并留下选区手柄)。 */
+@media (pointer: coarse) { .engine-pill { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; } }
+/* ── 触屏按压反馈(2026-10-02 真机录屏打回:「点哪儿都有蓝色遮罩」)。
+   蓝块 = Android WebView 缺省的点按高亮(一个直角矩形,不跟圆角,约 0.2s 淡出),整份样式从没关过它。
+   关掉后必须补一层按压态,否则会话行 / Agent 卡片这类原本只靠它反馈的元素按下去毫无动静:
+   用 inset box-shadow 当「状态层」—— 画在背景之上、内容之下,跟随元素自己的圆角,不必知道原背景是什么。
+   :active 由 WebView 的手势识别驱动:一开始滚动就撤销,所以滑列表不会一路闪。
+   长按按钮不该选中上面的字(链接除外:聊天正文里的链接要能长按复制)。 */
+@media (pointer: coarse) {
+  html { -webkit-tap-highlight-color: transparent; }
+  :is(button, summary, [role='button'], [role='tab'], [role='menuitem'], [role='option']) { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+  :is(button, a, summary, [role='button'], [role='tab'], [role='menuitem'], [role='option']):not(:disabled):active { box-shadow: inset 0 0 0 100vmax rgba(128, 128, 128, 0.2); }
+}
 .engine-pill.selected { opacity: 1; padding: 7px 13px; background: var(--overlay-light); color: var(--text); animation: agentSelectPop 0.4s ease-out; }
 .engine-pill.selected .engine-pill-label { max-width: 160px; opacity: 1; margin-left: 6px; font-weight: 600; }
 @keyframes agentSelectPop { 0% { transform: scale(1); } 35% { transform: scale(1.12); } 100% { transform: scale(1.02); } }
@@ -5031,3 +5044,17 @@ html:root :is(.project-menu, .composer-menu, .engine-picker, .t2c-menu) { transf
 /* 设置里失焦自动保存失败的就地提示(Codex 第一轮 A-2):同 .hint 的位置与字号,换危险色 + 一个「重试」。
  * 放文件末尾:与 .hint 同特异性,须压过它的颜色(DESIGN §7)。 */
 .settings-commit-error { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; color: var(--danger); }
+
+/* Android 原生顶栏(NativeChrome page 模式:标题 + 返回 + ×)接管移动设置的页头时,Web 页头让位。
+ * data-native-chrome 只在 SettingsModal 判定原生宿主在场时挂;手机浏览器 / 桌面手机框的页头照旧。
+ * 放文件末尾,与上面 .settings-page--mobile 那组页头规则的顺序无关也稳(DESIGN §7.2)。 */
+.settings-page--mobile[data-native-chrome] .settings-mobile-home-head,
+.settings-page--mobile[data-native-chrome] .settings-mobile-detail-head { display: none; }
+/* 插件详情(从列表点进去的那种)的 Web「返回列表」钮同理让位:原生顶栏的返回先退回插件列表(SettingsModal.backOneLevel)。 */
+.settings-page--mobile[data-native-chrome] [data-plugin-back-row="list"] { display: none; }
+
+/* 应用市场同款:原生顶栏 page 模式(标题 + 返回;详情页加 ×)接管时,Web 的返回钮 + 品牌块与详情页「返回列表」让位,
+ * 分类药丸行(.settings-nav-list)留着。要压过 @media (pointer: coarse) 里
+ * `.settings-page:not(.settings-page--mobile) .settings-nav-top`(0,3,0)的 display:flex → 同为 (0,3,0),靠放文件末尾(DESIGN §7.2)。 */
+.mk-page[data-native-chrome] .settings-nav-top,
+.mk-page[data-native-chrome] .mk-detail-back { display: none; }

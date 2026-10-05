@@ -54,7 +54,7 @@ import { registerMessages, useI18n } from '../../i18n'
 import { useApp } from '../../stores/appStore'
 import { runResultText, type RunResult } from '../../builtins/runCommand'
 import { SUB_PROVIDER_LABELS } from '../../components/OnboardingWizard'
-import { UI_MODE, useEdgeNudge } from '@lcl/engine'
+import { UI_MODE, nativeSheetPresenter, runNativeCtxMenu, runNativeSheetMenu, useEdgeNudge, type SheetMenuItem } from '@lcl/engine'
 import { splitSuggestions, type FenceKind, type SuggestState, type TaskCard } from './suggest'
 import { CreationCards } from './CreationCards'
 import { formatDateTime, formatMessageTime } from '../../format/time'
@@ -213,36 +213,76 @@ export interface MessageHandlers {
   onInsertNote?: (text: string) => void
 }
 
+type RewindMode = 'code' | 'conversation' | 'both'
+type RewindStat = { files: number; skipped: number }
+type TFn = ReturnType<typeof useI18n>['t']
+
+/** 该时刻之后可回退的文件数(检查点涉及的路径去重,减去当时没存下快照的)。Web 菜单与原生半屏共用这一份口径。 */
+function loadRewindStat(at: number, ctx?: FileCtx): Promise<RewindStat> {
+  // at=0(消息没时间戳)时 rewindTo 会直接拒绝 → 这里也必须报 0,别把整会话的检查点算进来点亮按钮。
+  if (!ctx?.sessionId || !at) return Promise.resolve({ files: 0, skipped: 0 })
+  return api.listCheckpoints(targetForSession(ctx.sessionId), ctx.sessionId)
+    .then((cps) => {
+      const files = new Set<string>()
+      const skipped = new Set<string>()
+      for (const c of cps) {
+        if (c.at < at) continue
+        c.files.forEach((p) => files.add(p))
+        c.skipped.forEach((p) => skipped.add(p))
+      }
+      // 能真回退的 = 全部条目减去「没存下快照」的那些(files 是全集,skipped 是它的子集)。
+      skipped.forEach((p) => files.delete(p))
+      return { files: files.size, skipped: skipped.size }
+    })
+    .catch(() => ({ files: 0, skipped: 0 }))
+}
+/** 回退菜单的唯一一份条目(三档);stat=null = 还在统计。 */
+function rewindMenuItems(stat: RewindStat | null, t: TFn, onPick: (mode: RewindMode) => void): SheetMenuItem[] {
+  const n = stat?.files ?? 0
+  return [
+    { id: 'code', label: stat ? t('rewind.codeOnly', { n }) : t('rewind.counting'), icon: <FileCode2 size={14} />, disabled: !n, run: () => onPick('code') },
+    { id: 'conversation', label: t('rewind.convOnly'), icon: <MessageSquare size={14} />, run: () => onPick('conversation') },
+    { id: 'both', label: t('rewind.both'), icon: <HistoryIcon size={14} />, disabled: !n, run: () => onPick('both') },
+  ]
+}
+const rewindNote = (stat: RewindStat | null, t: TFn): string =>
+  [t('rewind.scopeNote'), t('rewind.keepNote'), ...(stat?.skipped ? [t('rewind.skippedNote', { n: stat.skipped })] : [])].join(' ')
+
+/** Android(lcl nativeSheet 可选宿主):先统计再呈现原生半屏。没有宿主 → false,调用方照旧开 Web 菜单;
+ *  宿主呈现失败 → onFallback 开 Web 菜单。
+ *  `signal` = 发起这次请求的那条消息还在不在场(EditorialMessage 在卸载 / 换会话 / 换消息时 abort):
+ *  统计检查点可能很慢,期间用户切走了会话 —— 那就**不再弹**;已经弹出来的半屏随 signal 一起收掉,选了也不执行。
+ *  否则「回退对话」会落在用户已经离开的那个会话上(onPick 闭包里绑的是发起时的会话与消息)。
+ *  Web 菜单没有这个洞:它是消息自己的子节点,消息一卸载菜单就没了。`load` 仅供单测注入慢统计。 */
+export function openNativeRewind(
+  at: number, ctx: FileCtx | undefined, t: TFn, onPick: (mode: RewindMode) => void, onFallback: () => void,
+  signal: AbortSignal, load: typeof loadRewindStat = loadRewindStat,
+): boolean {
+  if (!nativeSheetPresenter()) return false
+  void load(at, ctx)
+    .then((stat) => {
+      if (signal.aborted) return true // 统计期间消息已不在场:不弹,也不回落 Web 菜单
+      const pick = (mode: RewindMode): void => { if (!signal.aborted) onPick(mode) }
+      return runNativeSheetMenu({ title: t('rewind.title'), sections: [{ items: rewindMenuItems(stat, t, pick), footer: rewindNote(stat, t) }] }, { signal })
+    })
+    .then((handled) => { if (!handled && !signal.aborted) onFallback() })
+  return true
+}
+
 /**
  * 回退菜单(用户消息 hover):三档 + 覆盖范围说明。文件数=该时刻之后所有检查点涉及的路径去重,
  * 打开时才拉(时间线不常看,没必要跟着每条消息常驻)。
  */
-const RewindMenu: React.FC<{ at: number; ctx?: FileCtx; onPick: (mode: 'code' | 'conversation' | 'both') => void }> = ({ at, ctx, onPick }) => {
+const RewindMenu: React.FC<{ at: number; ctx?: FileCtx; onPick: (mode: RewindMode) => void }> = ({ at, ctx, onPick }) => {
   const { t } = useI18n()
-  const [stat, setStat] = useState<{ files: number; skipped: number } | null>(null)
+  const [stat, setStat] = useState<RewindStat | null>(null)
   // 靠近底部时向上翻:.t2-stream 有 mask 自成层叠上下文,菜单的 z-index 出不去,会被悬浮输入卡盖住且点不到。
   const [up, setUp] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
   const edgeFix = useEdgeNudge(true, { boundary: '.t2-chat-view' })
   useEffect(() => {
-    // at=0(消息没时间戳)时 rewindTo 会直接拒绝 → 这里也必须报 0,别把整会话的检查点算进来点亮按钮。
-    if (!ctx?.sessionId || !at) { setStat({ files: 0, skipped: 0 }); return }
     let alive = true
-    void api.listCheckpoints(targetForSession(ctx.sessionId), ctx.sessionId)
-      .then((cps) => {
-        if (!alive) return
-        const files = new Set<string>()
-        const skipped = new Set<string>()
-        for (const c of cps) {
-          if (c.at < at) continue
-          c.files.forEach((p) => files.add(p))
-          c.skipped.forEach((p) => skipped.add(p))
-        }
-        // 能真回退的 = 全部条目减去「没存下快照」的那些(files 是全集,skipped 是它的子集)。
-        skipped.forEach((p) => files.delete(p))
-        setStat({ files: files.size, skipped: skipped.size })
-      })
-      .catch(() => { if (alive) setStat({ files: 0, skipped: 0 }) })
+    void loadRewindStat(at, ctx).then((next) => { if (alive) setStat(next) })
     return () => { alive = false }
   }, [at, ctx?.sessionId, ctx?.cfg])
   useLayoutEffect(() => {
@@ -252,7 +292,6 @@ const RewindMenu: React.FC<{ at: number; ctx?: FileCtx; onPick: (mode: 'code' | 
     const r = el.getBoundingClientRect()
     if (r.bottom > limit - 4) setUp(true)
   }, [stat])
-  const n = stat?.files ?? 0
   return (
     <div
       ref={(el) => { ref.current = el; edgeFix.ref.current = el }}
@@ -260,18 +299,12 @@ const RewindMenu: React.FC<{ at: number; ctx?: FileCtx; onPick: (mode: 'code' | 
       style={edgeFix.style}
     >
       <div className="menu-section">{t('rewind.title')}</div>
-      <button className="menu-item" disabled={!n} onClick={() => onPick('code')}>
-        <FileCode2 size={14} />
-        <span className="grow">{stat ? t('rewind.codeOnly', { n }) : t('rewind.counting')}</span>
-      </button>
-      <button className="menu-item" onClick={() => onPick('conversation')}>
-        <MessageSquare size={14} />
-        <span className="grow">{t('rewind.convOnly')}</span>
-      </button>
-      <button className="menu-item" disabled={!n} onClick={() => onPick('both')}>
-        <HistoryIcon size={14} />
-        <span className="grow">{t('rewind.both')}</span>
-      </button>
+      {rewindMenuItems(stat, t, onPick).map((it) => (
+        <button key={it.id} className="menu-item" disabled={it.disabled} onClick={it.run}>
+          {it.icon}
+          <span className="grow">{it.label}</span>
+        </button>
+      ))}
       <div className="menu-section rewind-note">
         {t('rewind.scopeNote')} {t('rewind.keepNote')}
         {!!stat?.skipped && <> {t('rewind.skippedNote', { n: stat.skipped })}</>}
@@ -330,6 +363,11 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
   // 建议芯片是一次性的:点了就等于用户按了回车,整排随即失效 —— 不然双击会把同一句排两遍。
   const [suggestSent, setSuggestSent] = useState(false)
   const [rewindOpen, setRewindOpen] = useState(false)
+  // 手机:长按菜单原生那头弹不出来过(宿主拒了这次请求)→ 这条消息把三个小键和文字选择还回来,动作不至于够不着。
+  const [inlineActions, setInlineActions] = useState(false)
+  // 原生回退半屏的在途请求(Android):消息卸载、或它所属的会话 / 消息换了 → 作废(见 openNativeRewind)。
+  const rewindReq = useRef<AbortController | null>(null)
+  useEffect(() => () => { rewindReq.current?.abort(); rewindReq.current = null }, [msg.id, runSid])
   // 点外面/Esc 关回退菜单(同 Composer2 的 [data-cmenu] 约定)。
   useEffect(() => {
     if (!rewindOpen) return
@@ -386,11 +424,42 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
     // 目录标题用剥掉引用后的正文;复制 / 编辑仍拿原始 msg.content(发的是什么就是什么)。
     const lead = splitLeadingRefs(msg.content)
     const tocTitle = lead ? (lead.body.trim() || lead.refs.map((r) => r.name).join(' ')) : msg.content
+    const toggleRewind = (): void => {
+      // Android:三档改由原生半屏呈现;没有原生宿主时照旧切换 Web 菜单。
+      if (!rewindOpen) {
+        rewindReq.current?.abort() // 连点:上一次还在统计 / 还开着的请求作废,只留这一次
+        const req = new AbortController()
+        rewindReq.current = req
+        if (openNativeRewind(msg.timestamp, fileCtx, t, (mode) => handlers?.onRewind?.(mode), () => setRewindOpen(true), req.signal)) return
+        rewindReq.current = null
+      }
+      setRewindOpen((v) => !v)
+    }
+    // 手机(原生半屏宿主):气泡下面不常驻那三个小键(chat2.css 文件末尾按 [data-native-chrome] 收成看不见、读屏与键盘仍够得着),
+    // 长按气泡出同样三项。没有宿主(桌面 / 网页 / 手机浏览器)→ 不拦,系统右键菜单与行内按钮照旧。
+    // 与回退共用 rewindReq 这一个槽:消息卸载 / 换会话时上面的 effect 一并作废 —— 菜单开着时会话换了,它跟着关,
+    // 不会对着已经离开的会话执行编辑 / 回退。
+    // 只列这条消息真有的动作(只读会话没有编辑 / 回退);一个都没有就不拦,长按照系统的来。
+    const onBubbleMenu = (e: React.MouseEvent): void => {
+      const items = [
+        ...(handlers?.onCopy ? [{ label: t('chat.action.copy'), icon: <Copy size={14} />, run: () => handlers.onCopy?.(msg.content) }] : []),
+        ...(handlers?.onEdit ? [{ label: t('chat.action.edit'), icon: <Pencil size={14} />, run: () => handlers.onEdit?.() }] : []),
+        ...(handlers?.onRewind ? [{ label: t('rewind.title'), icon: <HistoryIcon size={14} />, run: toggleRewind }] : []),
+      ]
+      if (!items.length || !nativeSheetPresenter()) return
+      e.preventDefault()
+      rewindReq.current?.abort()
+      const req = new AbortController()
+      rewindReq.current = req
+      const restore = (): void => { if (!req.signal.aborted) setInlineActions(true) }
+      void runNativeCtxMenu(items, { title: [...tocTitle.trim()].slice(0, 80).join(''), signal: req.signal }) // 按码点截:半个表情不过桥
+        .then((shown) => { if (!shown) restore() }, restore)
+    }
     return (
-      <div ref={rootRef} className="t2-userwrap" id={`tocmsg-${msg.id}`} data-toc-msg-role="user" data-toc-title={tocTitle}>
+      <div ref={rootRef} className={`t2-userwrap${inlineActions ? ' t2-userwrap--inline' : ''}`} id={`tocmsg-${msg.id}`} data-toc-msg-role="user" data-toc-title={tocTitle}>
         <div className="t2-user-col">
           <div className="t2-username">{name}</div>
-          <div className="t2-user">
+          <div className="t2-user" onContextMenu={onBubbleMenu}>
             {!!msg.attachments?.length && (
               <div className="msg-attach-grid">
                 {msg.attachments.map((a, i) => a.mimeType?.startsWith('image/') && a.data
@@ -415,7 +484,7 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
             <button className="t2-iconbtn" title={t('chat.action.edit')} onClick={() => handlers?.onEdit?.()}><Pencil size={14} /></button>
             {handlers?.onRewind && (
               <span style={{ position: 'relative', display: 'inline-flex' }} data-cmenu>
-                <button className="t2-iconbtn" title={t('rewind.title')} onClick={() => setRewindOpen((v) => !v)}><HistoryIcon size={14} /></button>
+                <button className="t2-iconbtn" data-act="rewind" title={t('rewind.title')} onClick={toggleRewind}><HistoryIcon size={14} /></button>
                 {rewindOpen && (
                   <RewindMenu at={msg.timestamp} ctx={fileCtx} onPick={(mode) => { setRewindOpen(false); handlers.onRewind?.(mode) }} />
                 )}

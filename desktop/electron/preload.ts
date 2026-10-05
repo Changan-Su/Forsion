@@ -433,8 +433,8 @@ const api = {
   // ── 多窗口:独立窗(拖出的 dockview,无 ribbon)+ mini 悬浮卡片 + floating 面板 ──
   detachedReady: (id: string): Promise<Array<{ type: string; params?: Record<string, unknown> }>> =>
     ipcRenderer.invoke('window:detachedReady', id),
-  openDetached: (views: Array<{ type: string; params?: Record<string, unknown> }>, at?: { screenX: number; screenY: number }): Promise<{ id: string }> =>
-    ipcRenderer.invoke('window:openDetached', views, at),
+  openDetached: (views: Array<{ type: string; params?: Record<string, unknown> }>, at?: { screenX: number; screenY: number }, opts?: { space?: string }): Promise<{ id: string }> =>
+    ipcRenderer.invoke('window:openDetached', views, at, opts),
   openMini: (opts?: import('../shared/miniPanel').MiniOpenOptions): void => ipcRenderer.send('window:openMini', opts),
   openFloatingPanel: (opts: import('../shared/floatingPanel').FloatingPanelOpenOptions): Promise<{ id: string } | undefined> =>
     ipcRenderer.invoke('window:openFloating', opts),
@@ -526,9 +526,10 @@ const api = {
   /** 主页的 Bing 壁纸目录。固定访问 Bing 官方 API,renderer 不能借此指定任意 URL。 */
   wallpaperListBing: (market?: string, count?: number): Promise<{ ok: boolean; items: any[]; error?: string }> =>
     ipcRenderer.invoke('wallpaper:listBing', market, count),
-  /** 主进程回投的外链(页面里的 target=_blank / webview guest 的弹窗):渲染层决定进内置浏览器还是系统浏览器。 */
-  onOpenUrl: (cb: (url: string) => void): (() => void) => {
-    const listener = (_e: unknown, url: string): void => cb(url)
+  /** 主进程回投的外链(页面里的 target=_blank / webview guest 的弹窗):渲染层决定进内置浏览器还是系统浏览器。
+   *  fromGuest = 内置浏览器里的页面自己开的新窗口(留在内置浏览器里,见 main.ts openUrlHandler)。 */
+  onOpenUrl: (cb: (url: string, fromGuest?: boolean) => void): (() => void) => {
+    const listener = (_e: unknown, url: string, fromGuest?: boolean): void => cb(url, fromGuest === true)
     ipcRenderer.on('app:open-url', listener)
     return () => ipcRenderer.removeListener('app:open-url', listener)
   },

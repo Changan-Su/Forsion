@@ -135,6 +135,22 @@ export function formatListTime(at: TimeInput, opts: TimeOpts = {}): string {
   return Math.abs(now - d.getTime()) < 7 * DAY ? formatRelative(d, { ...opts, now }) : formatDate(d, { ...opts, now })
 }
 
+/** 会话列表行尾(手机上的整屏列表,照通讯软件的读法):今天「12:35」,昨天「昨天」/「yesterday」,
+ *  6 天内「周五」/「Fri」,更早「9/17」,不是今年「2025/9/17」。按**日历日**算(同 formatMessageTime)。 */
+export function formatRowTime(at: TimeInput, opts: TimeOpts = {}): string {
+  const d = toDate(at)
+  if (!d) return ''
+  const locale = opts.locale ?? currentLocale()
+  const n = new Date(opts.now ?? Date.now())
+  const days = Math.round((new Date(n.getFullYear(), n.getMonth(), n.getDate()).getTime() - new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime()) / DAY)
+  if (days <= 0) return formatTime(d) // 今天(时钟差出来的「明天」也只给时刻)
+  if (days === 1) {
+    try { return new Intl.RelativeTimeFormat(intlLocale(locale), { numeric: 'auto' }).format(-1, 'day') } catch { /* 极老的运行时:落到星期 */ }
+  }
+  if (days < 7) return formatDateName(d, 'weekdayShort', locale)
+  return d.getFullYear() === n.getFullYear() ? formatMonthDay(d) : `${d.getFullYear()}/${formatMonthDay(d)}`
+}
+
 /** 聊天消息操作行的时刻:今天「23:03」,6 天内「星期四 23:03」/「Thursday 23:03」,更早「9月17日 23:03」。
  *  按**日历日**算而不是 24 小时滑窗:昨晚 23 点的消息今早看是「星期X 23:00」,不是光秃秃的「23:00」。 */
 export function formatMessageTime(at: TimeInput, opts: TimeOpts = {}): string {

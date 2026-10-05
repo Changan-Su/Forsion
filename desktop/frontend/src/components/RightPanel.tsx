@@ -14,7 +14,7 @@ import { DEFAULT_AGENT_SLUG } from '../types'
 import * as api from '../services/backendService'
 import { Markdown } from './Markdown'
 import { ChatToc } from './ChatToc'
-import { OverlayAt } from '@lcl/engine'
+import { OverlayAt, nativeSheetPresenter, pickNativeCtxItem } from '@lcl/engine'
 import { SubChatsTab } from './SubChatsTab'
 import type { PreviewTarget } from './WorkspaceFilePreview'
 import { fmtSize, b64ToBytes } from '../services/fileKinds'
@@ -112,11 +112,30 @@ function useSelection(orderedPaths: string[]) {
 export interface CtxItem { label: string; icon?: React.ReactNode; danger?: boolean; disabled?: boolean; separatorBefore?: boolean; shortcut?: string; run: () => void }
 export type CtxMenu = { x: number; y: number; items: CtxItem[] } | null
 
-/** 右键浮层菜单(portal 到 body;任意点击/右键/Esc/失焦关闭)。 */
+/** 右键浮层菜单(portal 到 body;任意点击/右键/Esc/失焦关闭)。
+ *  Android 装了原生半屏宿主(lcl nativeSheet)时改由原生菜单呈现,本组件不渲染 DOM;宿主缺席或呈现失败
+ *  才画 Web 菜单 —— 调用方零改动(AgentSelectStrip / FilesPanel / WorkspaceView / ImageContextMenu / 本文件)。 */
 export const ContextMenu: React.FC<{ menu: NonNullable<CtxMenu>; onClose: () => void; autoFocus?: boolean }> = ({ menu, onClose, autoFocus = false }) => {
-  const firstItem = useRef<HTMLButtonElement>(null)
-  useEffect(() => { if (autoFocus) firstItem.current?.focus({ preventScroll: true }) }, [autoFocus, menu.x, menu.y])
+  const [web, setWeb] = useState(() => !nativeSheetPresenter())
+  const latest = useRef({ menu, onClose })
+  latest.current = { menu, onClose }
   useEffect(() => {
+    if (web) return
+    const ctl = new AbortController()
+    // 菜单项在呈现那一刻定格:原生答复的下标只指向这一份,不会落到后来换掉的列表里。
+    void pickNativeCtxItem(latest.current.menu.items, { signal: ctl.signal }).then((out) => {
+      if (ctl.signal.aborted) return
+      if (!out.handled) { setWeb(true); return }
+      latest.current.onClose()
+      out.value?.run()
+    })
+    return () => ctl.abort()
+  }, [web, menu.x, menu.y])
+  const firstItem = useRef<HTMLButtonElement>(null)
+  useEffect(() => { if (web && autoFocus) firstItem.current?.focus({ preventScroll: true }) }, [web, autoFocus, menu.x, menu.y])
+  useEffect(() => {
+    // 原生菜单是独立窗口:WebView 失焦(blur)是它弹出的必然结果,不能当「点外面」把它关掉。
+    if (!web) return
     const close = () => onClose()
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
     window.addEventListener('pointerdown', close)
@@ -129,7 +148,8 @@ export const ContextMenu: React.FC<{ menu: NonNullable<CtxMenu>; onClose: () => 
       window.removeEventListener('keydown', onKey)
       window.removeEventListener('blur', close)
     }
-  }, [onClose])
+  }, [onClose, web])
+  if (!web) return null
   return createPortal(
     <OverlayAt
       className="ctx-menu"

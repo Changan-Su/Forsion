@@ -5,7 +5,10 @@
     <!-- 移动端：禁缩放、覆盖刘海安全区（viewport-fit=cover 配合 env(safe-area-inset-*)）。 -->
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
     <meta name="color-scheme" content="light dark" />
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; connect-src 'self' http://localhost:* http://127.0.0.1:* https:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob: https: http://localhost:* http://127.0.0.1:*;" />
+    <!-- 'unsafe-eval' 是 Forsion 插件的求值通道(渲染层 pluginStore 用 new Function 装载市场装来的 main.js,同桌面
+         desktop/frontend/index.html;信任模型 Obsidian 式「装 = 信任」,且 'unsafe-inline' 已在,eval 不扩大 XSS 面)。
+         删掉它 = Android 上所有外置插件 setup 抛 EvalError(仪器:npm run e2e:plugins -- --negative)。CSP 其余各项不动。 -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; connect-src 'self' http://localhost:* http://127.0.0.1:* https:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob: https: http://localhost:* http://127.0.0.1:*;" />
     <title>Tangu</title>
     <!-- base './'(Capacitor 从 file:// 载入);文件来自共用的 desktop/frontend/public/。 -->
     <link rel="icon" type="image/svg+xml" href="./Forsion-LOGO3.svg" />

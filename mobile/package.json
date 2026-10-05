@@ -17,6 +17,9 @@
     "test:unitbridge": "node scripts/unit-bridge.test.cjs",
     "test:unitssheet": "node scripts/units-sheet-model.test.cjs",
     "test:savedl": "node scripts/save-download.test.cjs",
+    "test:plugins": "node scripts/plugin-host.test.cjs",
+    "test:pickedfiles": "node scripts/picked-files.test.cjs",
+    "e2e:plugins": "node scripts/plugin-install.e2e.cjs",
     "e2e:boot": "node scripts/mobile-boot.e2e.cjs",
     "e2e:noteopen": "node scripts/note-open.e2e.cjs",
     "e2e:editorbar": "node scripts/editor-capsule.e2e.cjs",
@@ -32,6 +35,7 @@
     "e2e:runon": "node scripts/units-runon.e2e.cjs",
     "emu:unitrelay": "node scripts/unit-relay-emu.cjs",
     "emu:savedl": "node scripts/save-download-emu.cjs",
+    "emu:nativeshell": "node scripts/native-shell-emu.cjs",
     "emu:phone": "node scripts/phone-control-emu.cjs"
   },
   "dependencies": {

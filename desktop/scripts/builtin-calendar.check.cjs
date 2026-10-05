@@ -43,7 +43,7 @@ function check(name, ok, detail) {
 
 /** ribbon 上的 Space 名(折叠态在 title,展开态在 .rb-label)+ 日历视图可见性 + 活动 Space。 */
 const SNAP = `(() => {
-  const names = [...document.querySelectorAll('.rb-space')]
+  const names = [...document.querySelectorAll('.rb-space:not(.rb-recent .rb-space)')] // 中间的最近使用是同一个图标的第二份,不算
     .map((b) => b.getAttribute('aria-label') || b.getAttribute('title') || b.querySelector('.rb-label')?.textContent || '')
   const vis = (sel) => [...document.querySelectorAll(sel)].filter((e) => e.getBoundingClientRect().width > 0).length
   return {

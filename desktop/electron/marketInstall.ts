@@ -1,30 +1,18 @@
 /**
  * Market 安装核心:把下载到的 zip 解压到 ~/.tangu/<type>/<slug>/。
- * 纯逻辑(只依赖 jszip + fs/path,不 import electron),便于单测路径穿越 / 剥顶层。
+ * 只依赖 jszip + fs/path(不 import electron),便于单测路径穿越 / 剥顶层;不碰 I/O 的校验规则在 shared/marketPackage.ts。
  */
 import JSZip from 'jszip'
 import { mkdir, writeFile, readFile, readdir, chmod } from 'fs/promises'
-import { join, dirname, relative, isAbsolute } from 'path'
+import { join, dirname } from 'path'
+import {
+  MARKET_SUBDIR, MARKET_MANIFEST, isSafeSlug, isJunkPath, computeStripPrefix, safeEntryPath, planZipFiles,
+  detectMarketTypeFromNames, toArchiveUrl, downloadCandidates, ZIP_MAGIC, GZIP_MAGIC, hasMagic, ZipPlanError,
+} from '../shared/marketPackage'
 
-/** type → ~/.forsion 下的子目录(join 会展开嵌套)。引擎域装 tangu/;desktop 域留顶层。 */
-export const MARKET_SUBDIR: Record<string, string> = {
-  skill: 'tangu/skills',
-  agent: 'tangu/agents',
-  plugin: 'tangu/plugins',
-  space: 'spaces',
-  theme: 'themes',
-  'amadeus-plugin': 'plugins', // Forsion(UI)插件目录(类别 id 保留 amadeus-plugin 兼容市场后端)
-}
-
-/** type → manifest 文件名(用于 manifest 感知重定根,见 computeStripPrefix)。 */
-export const MARKET_MANIFEST: Record<string, string[]> = {
-  skill: ['SKILL.md'],
-  agent: ['config.toml'],
-  plugin: ['tangu-plugin.json'],
-  space: ['space.json'],
-  theme: ['theme.json'],
-  'amadeus-plugin': ['manifest.json'],
-}
+// 纯校验逻辑(白名单 / slug / 重定根 / 防穿越 / 双类型纠偏 / 镜像候选)住在 shared/marketPackage.ts,
+// Android App 的市场安装(mobile/src/plugins/mobileMarket.ts)共用同一份;这里再导出,既有调用方与单测不变。
+export { MARKET_SUBDIR, MARKET_MANIFEST, isSafeSlug, isJunkPath, computeStripPrefix, safeEntryPath, toArchiveUrl, downloadCandidates, ZIP_MAGIC, GZIP_MAGIC }
 
 /** 规整版本字符串(去前导 v、去空白);空 → null。 */
 function normVer(raw: unknown): string | null {
@@ -75,11 +63,6 @@ export function marketItemDir(home: string, type: string, slug: string): string 
   return join(home, sub, slug)
 }
 
-/** install_slug 必须是 kebab(防目录穿越 / data-attr 注入)。 */
-export function isSafeSlug(s: unknown): s is string {
-  return typeof s === 'string' && /^[a-z0-9][a-z0-9-]{0,63}$/.test(s)
-}
-
 /** 扫用户插件目录,读每个子目录的 tangu-plugin.json,返回 manifest id → 目录名(id 可能 ≠ 目录名)。 */
 export async function readUserPluginDirs(pluginsRoot: string): Promise<Array<{ id: string; slug: string }>> {
   let entries
@@ -96,133 +79,43 @@ export async function readUserPluginDirs(pluginsRoot: string): Promise<Array<{ i
   return out
 }
 
-/** zip 里常见的垃圾条目(macOS/Windows 压缩残留),解压时一律丢弃。 */
-const JUNK_SEG = new Set(['__MACOSX', '.DS_Store', 'Thumbs.db'])
-export function isJunkPath(name: string): boolean {
-  return name.replace(/\\/g, '/').split('/').some((seg) => JUNK_SEG.has(seg))
-}
-
-/**
- * 计算要剥掉的前缀('' = 不剥)。优先用 manifest 文件(SKILL.md / tangu-plugin.json / config.toml)
- * 定位:以「深度最浅的 manifest 文件所在目录」为根 —— 这样无论用户在 Finder「压缩文件夹」多套了
- * __MACOSX/ 兄弟目录、还是嵌了几层,都能把 manifest 重定根到 destRoot。无 manifest 时回退到旧的
- * 「单一顶级目录就剥」(GitHub source zip owner-repo-sha/)。垃圾条目在计算前已过滤。
- */
-export function computeStripPrefix(names: string[], manifestNames: string[] = []): string {
-  const files = names.map((n) => n.replace(/\\/g, '/')).filter((n) => n && !n.endsWith('/') && !isJunkPath(n))
-  if (!files.length) return ''
-  if (manifestNames.length) {
-    const want = new Set(manifestNames.map((s) => s.toLowerCase()))
-    let best: string | null = null
-    for (const f of files) {
-      const base = f.split('/').pop()!.toLowerCase()
-      if (!want.has(base)) continue
-      if (best === null || f.split('/').length < best.split('/').length) best = f
-    }
-    if (best !== null) {
-      const dir = best.split('/').slice(0, -1).join('/')
-      return dir ? dir + '/' : ''
-    }
-  }
-  const tops = new Set(files.map((n) => n.split('/')[0]))
-  if (tops.size === 1 && files.every((n) => n.includes('/'))) return files[0].split('/')[0] + '/'
-  return ''
-}
-
-/** 条目在 destRoot 下的安全相对路径;垃圾/不在前缀下/非法(穿越/绝对/空/目录)返回 null。 */
-export function safeEntryPath(name: string, prefix: string): string | null {
-  let rel = name.replace(/\\/g, '/')
-  if (isJunkPath(rel)) return null
-  if (prefix) {
-    if (!rel.startsWith(prefix)) return null // 不在 manifest 根下的旁支,丢弃
-    rel = rel.slice(prefix.length)
-  }
-  rel = rel.replace(/^\/+/, '')
-  if (!rel || rel.endsWith('/')) return null
-  const probe = relative('/__root__', join('/__root__', rel))
-  if (!probe || probe.startsWith('..') || isAbsolute(probe)) return null
-  return rel
-}
-
-/**
- * 插件双类型实测判定:市场后端的 category 会把 Forsion(UI)插件误标成引擎 'plugin'(反之亦然),
- * 装错目录后两边加载器都不认 → 插件失效(实测 forsion-mindmap 即被标成 'plugin')。下载后按包内
- * manifest 重定类型:`tangu-plugin.json` = 引擎插件('plugin');`manifest.json` = Forsion/Amadeus
- * 插件('amadeus-plugin')。只在 plugin 家族内纠偏;二者皆有/皆无 → 尊重后端;其它类型原样返回。
- */
+/** 插件双类型实测判定(规则见 shared/marketPackage.ts 的 detectMarketTypeFromNames):按包内最浅 manifest 纠偏后端 type。 */
 export async function detectMarketType(zipBuffer: Buffer, backendType: string): Promise<string> {
   if (backendType !== 'plugin' && backendType !== 'amadeus-plugin') return backendType
   const zip = await JSZip.loadAsync(zipBuffer)
-  // 以「最浅 manifest」定类型:包根那个 manifest 才代表包本体,嵌套的 example/子模块 manifest
-  // (如 Forsion 插件带 examples/engine/tangu-plugin.json)不能盖过它 —— 与 computeStripPrefix 重定根口径一致。
-  let tanguDepth = Infinity
-  let manifestDepth = Infinity
-  for (const f of Object.values(zip.files)) {
-    if (f.dir || isJunkPath(f.name)) continue
-    const parts = f.name.replace(/\\/g, '/').replace(/\/+$/, '').split('/')
-    const base = parts[parts.length - 1].toLowerCase()
-    if (base === 'tangu-plugin.json') tanguDepth = Math.min(tanguDepth, parts.length)
-    else if (base === 'manifest.json') manifestDepth = Math.min(manifestDepth, parts.length)
-  }
-  if (tanguDepth < manifestDepth) return 'plugin'
-  if (manifestDepth < tanguDepth) return 'amadeus-plugin'
-  return backendType // 同深度(含二者皆缺失)→ 尊重后端
+  return detectMarketTypeFromNames(Object.values(zip.files).filter((f) => !f.dir).map((f) => f.name), backendType)
 }
 
-/** 解压 zip 到 destRoot(manifest 感知重定根 + 防穿越)。返回写入文件数。遇到穿越路径直接抛错。 */
+/** 解压 zip 到 destRoot(manifest 感知重定根 + 防穿越)。返回写入文件数。遇到穿越 / 绝对路径条目直接抛错(写盘之前)。
+ *  计划按包里的**原名**判(planZipFiles 看 jszip 的 unsafeOriginalName):jszip 读包时会把 `../main.js`、`/main.js`
+ *  规整成 `main.js`,只看规整名就会把它当普通文件照装。 */
 export async function extractZipToDir(zipBuffer: Buffer, destRoot: string, manifestNames: string[] = []): Promise<number> {
   const zip = await JSZip.loadAsync(zipBuffer)
-  const entries = Object.values(zip.files).filter((f) => !f.dir && !isJunkPath(f.name))
-  const prefix = computeStripPrefix(entries.map((f) => f.name), manifestNames)
+  let plan: ReturnType<typeof planZipFiles>
+  try {
+    plan = planZipFiles(Object.values(zip.files), manifestNames)
+  } catch (e) {
+    if (!(e instanceof ZipPlanError)) throw e
+    throw new Error(e.code === 'traversal' ? `压缩包含非法路径: ${e.entry}` : '压缩包为空或无有效文件')
+  }
   await mkdir(destRoot, { recursive: true })
-  let n = 0
-  for (const f of entries) {
-    const rel = safeEntryPath(f.name, prefix)
-    if (rel === null) {
-      if (/(^|\/)\.\.(\/|$)/.test(f.name.replace(/\\/g, '/'))) throw new Error(`压缩包含非法路径: ${f.name}`)
-      continue
-    }
+  for (const { name, rel } of plan) {
     const out = join(destRoot, rel)
     await mkdir(dirname(out), { recursive: true })
+    const f = zip.files[name]
     await writeFile(out, Buffer.from(await f.async('arraybuffer')))
     // Fresh update directories must retain helper executable bits from ZIP/npm archives.
     // Only ordinary permission bits are copied; archive setuid/setgid bits never survive.
     const mode = typeof f.unixPermissions === 'string' ? parseInt(f.unixPermissions, 8) : f.unixPermissions
     if (typeof mode === 'number' && Number.isFinite(mode)) await chmod(out, mode & 0o777)
-    n++
   }
-  if (n === 0) throw new Error('压缩包为空或无有效文件')
-  return n
+  return plan.length
 }
 
 // ── 下载:候选地址 + 每个候选的连接/断流超时 + 字节进度 ──
 // 中国大陆直连 GitHub 的典型失败不是「快速报错」而是 SYN 挂起 / 慢到断流:没有超时,「换下一个地址」永远轮不到。
 // fetch 由调用方注入:主进程给 github 源传 electron `net.fetch`(Chromium 网络栈,认系统代理),
 // Node 的全局 fetch 不认系统代理 —— 挂着 VPN(系统代理模式)也照样直连被墙。
-
-const GH_PROXIES = ['https://ghfast.top', 'https://ghproxy.net', 'https://gh-proxy.com']
-
-/** api.github.com 的 zipball 地址 → github.com 的 archive 地址(同一份源码 zip,同样套一层顶级目录)。
- *  gh 代理站只前置 github.com / *.githubusercontent.com,不前置 API 域名;老服务端对「release 没挂 zip 资产」
- *  与「无 release」的条目回的恰恰是 zipball,于是镜像对它们一次都没被试过。其余地址原样返回。 */
-export function toArchiveUrl(url: string): string {
-  const m = /^https:\/\/api\.github\.com\/repos\/([^/]+)\/([^/]+)\/zipball(?:\/(.+))?$/.exec(url)
-  return m ? `https://github.com/${m[1]}/${m[2]}/archive/${m[3] || 'HEAD'}.zip` : url
-}
-
-/**
- * 下载候选序列。开了「中国大陆镜像」(mirror=china):多代理站(站点更迭频繁,单点必然间歇失效)→ 直连兜底,
- * customProxy(TANGU_GITHUB_PROXY)排最前;没开:只直连。
- * ⚠️ 代理站不能默认给所有人兜底(Codex 09-21):那是第三方,回来的字节未经校验就当插件代码执行 —— 这份信任得用户自己开。
- * 根治 = 服务端把包镜像进自家对象存储(待拍板)。非 github 地址(Forsion 对象存储等)原样单发。
- */
-export function downloadCandidates(url: string, mirror: string, customProxy = ''): string[] {
-  const u = toArchiveUrl(url)
-  if (!/^https:\/\/(github\.com|[^/]*\.githubusercontent\.com)\//.test(u)) return [u]
-  const custom = customProxy.replace(/\/+$/, '')
-  const proxied = (custom ? [custom, ...GH_PROXIES.filter((p) => p !== custom)] : GH_PROXIES).map((p) => `${p}/${u}`)
-  return mirror === 'china' ? [...proxied, u] : [u]
-}
 
 export interface DownloadProgress { attempt: number; attempts: number; host: string; received: number; total: number | null }
 
@@ -243,10 +136,6 @@ const MAX_ZIP_BYTES = 200 * 1024 * 1024
 function hostOf(url: string): string {
   try { return new URL(url).host } catch { return url.slice(0, 60) }
 }
-
-export const ZIP_MAGIC: readonly number[] = [0x50, 0x4b]
-/** gzip 魔数:npm tarball(.tgz)用,见 builtinUpdates.ts。 */
-export const GZIP_MAGIC: readonly number[] = [0x1f, 0x8b]
 
 /** 依次尝试候选,返回第一个完整下载到的归档(缺省 zip;传 GZIP_MAGIC 下 .tgz)。每个候选:响应头超时 + 断流超时 +
  *  大小上限 + 魔数(代理站被限流时常回 200 的 HTML 页面,不认魔数就会拿它去解压、把能用的下一个候选错过)。 */
@@ -285,7 +174,7 @@ export async function downloadZip(
         onProgress({ attempt: i + 1, attempts: urls.length, host, received, total })
       }
       const buf = Buffer.concat(chunks)
-      if (buf.length < 4 || magic.some((b, j) => buf[j] !== b)) throw new Error(magic === ZIP_MAGIC ? 'not a zip' : 'unexpected content')
+      if (!hasMagic(buf, magic)) throw new Error(magic === ZIP_MAGIC ? 'not a zip' : 'unexpected content')
       return buf
     } catch (e) {
       const cause = (e as { cause?: { code?: string; message?: string } })?.cause // Node fetch 把真原因(ECONNRESET 等)藏在 cause 里

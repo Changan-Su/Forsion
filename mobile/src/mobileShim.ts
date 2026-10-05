@@ -17,14 +17,29 @@ import { registerPlugin } from '@capacitor/core'
 import { App } from '@capacitor/app'
 import { Browser } from '@capacitor/browser'
 import { InAppBrowser, ToolbarPosition, iOSViewStyle, iOSAnimation } from '@capacitor/inappbrowser'
-import { translate } from '@/i18n'
+import { registerMessages, translate } from '@/i18n'
 import { APP_VERSION } from '@/changelog'
 import { isNewer } from '../../desktop/shared/updateVersion'
 import { clearCloudAccountCache, syncCloudAccountCache } from '@/services/cloudAccountCache'
-import { isNative, apiBase, forsionWebOrigin, getStoredToken, clearStoredToken, startNativeLogin, bindDeepLinkAuth, refreshStoredToken } from './capacitorAuth'
+import { isNative, apiBase, forsionWebOrigin, getStoredToken, clearStoredToken, startNativeLogin, bindDeepLinkAuth, refreshStoredToken, clientTag } from './capacitorAuth'
 import { createUnitBridge, type ForsionUnitPlugin } from './unitBridge'
 import { NATIVE_DOWNLOAD_MAX_BYTES } from '@/services/nativeDownload'
 import { createSaveDownload, type ForsionDownloadsPlugin } from './saveDownload'
+
+// 语音转写失败时给用户看的话。服务端的 detail 只有中文(brain-api/routes.ts),不原样透出,按状态码换成这几句。
+registerMessages({
+  'mobile.voice.signin': { zh: '请先登录，再用语音输入', en: 'Sign in to use voice input' },
+  'mobile.voice.quota': { zh: '额度不够，这段语音没有转写', en: 'Not enough quota — this recording was not transcribed' },
+  'mobile.voice.tooLong': { zh: '这段录音太长了，分几段说', en: 'That recording is too long — try shorter takes' },
+  'mobile.voice.offline': { zh: '连不上服务器，这段语音没有转写', en: 'Could not reach the server — this recording was not transcribed' },
+  'mobile.voice.failed': { zh: '语音转写失败（{code}）', en: 'Voice transcription failed ({code})' },
+})
+const voiceError = (status: number): string =>
+  status === 401 ? translate('mobile.voice.signin')
+    : status === 402 ? translate('mobile.voice.quota')
+    : status === 413 ? translate('mobile.voice.tooLong')
+    : status === 0 ? translate('mobile.voice.offline')
+    : translate('mobile.voice.failed', { code: status })
 
 const TOKEN_KEY = 'forsion_token'
 // 本机偏好(默认模型 / 生图模型 / 上次审批档与思考档…)。移动端没有引擎的 ~/.tangu/config.json,
@@ -296,6 +311,20 @@ function setWindowTangu(backendUrl: string, token: string, native: boolean): voi
     },
     openPayCenter: () =>
       openExternal(`${webOrigin}/pay?tab=membership${token ? `&token=${encodeURIComponent(token)}` : ''}&redirect=${encodeURIComponent(`${webOrigin}/account`)}`),
+    // 语音输入:共享 hook(hooks/useVoiceInput)只探测这一个方法 —— 此前移动端缺席,麦克风键一直是灰的。
+    // 直连云端转写端点,与桌面「Forsion 云端」那条同一路由、同一份计费;不带 modelId = 服务端用 tangu 应用的 asr 默认槽。
+    // 只给 native:录音靠 WebView 的 getUserMedia,权限由 Capacitor 向系统申请(清单里的 RECORD_AUDIO)。
+    // 只回纯文本(语音输入用的那一档);带时间戳的分段转写是桌面视频转录的事,这里不接。
+    transcribeAudio: native ? async (req: { audioBase64: string; mime?: string; modelId?: string; language?: string }): Promise<string> => {
+      const client = await clientTag()
+      const r = await cloudJson('POST', '/brain/transcribe', {
+        audioBase64: req.audioBase64, mime: req.mime || 'audio/wav', projectSource: 'tangu',
+        ...(req.modelId ? { modelId: req.modelId } : {}), ...(req.language ? { language: req.language } : {}), ...(client ? { client } : {}),
+      })
+      if (r.status !== 200) throw new Error(voiceError(r.status))
+      const text = (r.json as { text?: unknown } | null)?.text
+      return typeof text === 'string' ? text.trim() : ''
+    } : undefined,
   }
 
   // P1-K8 中继前置:`{cloudApiBase}/units/<id>/proxy/(engine…|unit/remote-access…)` 交原生中继(带调用方票);

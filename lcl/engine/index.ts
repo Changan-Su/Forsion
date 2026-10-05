@@ -20,22 +20,23 @@ export { label } from './types'
 
 export { Shell } from './Shell'
 export { startOpenDrag } from './WorkspaceHost'
-export { SingleColumnHost } from './SingleColumnHost'
+export { SingleColumnHost, accountMenuRows } from './SingleColumnHost'
+export { listFirstNow } from './listFirst'
 export { MiniColumnHost } from './MiniColumnHost'
 export { supportsMiniPanel, setMiniMainHandler, showInMainPanel, setMiniViewRouter } from './miniPanel'
 export type { MiniPanelDefinition, MiniViewTarget, MainPanelTarget } from './miniPanel'
-export { UI_MODE, setUiMode } from './uiMode'
+export { UI_MODE, setUiMode, WINDOW_SPACE_ID } from './uiMode'
 export type { UiMode } from './uiMode'
 export { registerView, unregisterView, getView, allViews, subscribeViews } from './viewRegistry'
-export { useWorkspace, activeMainPanel, scheduleWorkspaceSave, bootLayoutFellThrough, namedLayoutRestorable, liveLayoutOwner } from './workspaceStore'
+export { useWorkspace, activeMainPanel, scheduleWorkspaceSave, bootLayoutFellThrough, namedLayoutRestorable, liveLayoutOwner, savedLayoutRestorable } from './workspaceStore'
 export type { MainTab, SideTab } from './workspaceStore'
 export { useCommandStore, addCommand, removeCommand, openCommandPalette, openCommandPicker, installHotkeys, commandHotkeyText } from './commandRegistry'
 export { useShortcuts, effectiveHotkey, eventToHotkey, formatHotkey, isMacPlatform } from './shortcutStore'
-export { useRibbonStore, addRibbonIcon, removeRibbonIcon, setRibbonActions } from './ribbonRegistry'
+export { useRibbonStore, addRibbonIcon, removeRibbonIcon, setRibbonActions, RIBBON_RECENT_MAX } from './ribbonRegistry'
 /** 拖拽重排的公共语义(悬停谁就顶掉谁);侧栏等 app 层的可排序列表复用同一个,别再各写一份 splice。 */
 export { moveTo } from './ribbonRegistry'
 export type { RibbonFolder, RibbonZone } from './ribbonRegistry'
-export { useSpaceStore, registerSpace, unregisterSpace, setActiveSpace, setActiveSpaceCold, adoptSpaceLayoutCold, resetSpaceLayouts, spaceLayoutsWereReset, BOOT_ACTIVE_SPACE_ID, getActiveSpace, spaceLayoutName, setSpacePinHandler, pinSpaceToHome } from './spaceRegistry'
+export { useSpaceStore, registerSpace, unregisterSpace, setActiveSpace, setActiveSpaceCold, adoptSpaceLayoutCold, seedSpaceWindowLayout, resetSpaceLayouts, spaceLayoutsWereReset, BOOT_ACTIVE_SPACE_ID, getActiveSpace, spaceLayoutName, setSpacePinHandler, pinSpaceToHome } from './spaceRegistry'
 export { isPinned } from './pinnedViews'
 export type { PinnedViews } from './pinnedViews'
 export { useNav, recordNav } from './navStore'
@@ -79,3 +80,30 @@ export type { ExtendViewController, ExtendViewOptions, ExtendViewHandle, ExtendV
 export { ExtendViewHost } from './ExtendViewHost'
 
 export { contentStorageKey } from './contentStorageScope'
+
+/** Optional native presentation hosts (Android Compose). Absent host ⇒ callers keep their web UI. */
+export {
+  installNativeSheetPresenter, nativeSheetPresenter, presentNativeMenu, presentNativePrompt, presentNativeConfirm,
+  pickNativeCtxItem, runNativeCtxMenu, readNativeTheme, menuResult, promptResult, confirmResult, clipNativeText,
+} from './nativeSheet'
+export type {
+  NativeSheetTheme, NativeSheetRequest, NativeSheetPayload, NativeSheetPresenter, NativeSheetOutcome,
+  NativeMenuRequest, NativeMenuSection, NativeMenuItem, NativeMenuTrailing, NativeMenuResult, NativeMenuSearch,
+  NativePromptRequest, NativePromptResult, NativeConfirmRequest, NativeConfirmResult, NativeCtxItem,
+} from './nativeSheet'
+export { runNativeSheetMenu, openNativeSheetMenu, useNativeSheetMenu } from './nativeSheetMenu'
+export type { SheetMenu, SheetMenuSection, SheetMenuItem } from './nativeSheetMenu'
+export { installNativeSelect } from './nativeSelect'
+export type { NativeSelectOptions } from './nativeSelect'
+export { renderNativeIcons } from './nativeIcon'
+export type { NativeIcon, NativeIconSource, NativeVectorPath } from './nativeIcon'
+export {
+  installNativeChromeHost, nativeChromeInstalled, useNativeChromeInstalled, setNativeChromeShell,
+  claimNativeChrome, useNativeChromeClaim, dispatchNativeChromeAction, nativeChromeState,
+  nativeChromeDrawsSpaces, useNativeChromeSpaces, dispatchNativeChromeSpace, nativeHaptic,
+} from './nativeChrome'
+export type {
+  NativeChromeAction, NativeChromeState, NativeChromeShellState, NativeChromePageState, NativeChromeHiddenState,
+  NativeChromeHost, NativeChromeClaim, NativeChromeClaimHandle, NativeChromeShellLabels, NativeChromeShellHandlers,
+  NativeChromeSpace, NativeHaptic,
+} from './nativeChrome'

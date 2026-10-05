@@ -14,6 +14,23 @@ const AUTO_HOME_KEY = 'forsion_ribbon_auto_home'
 export const isRibbonAutoHome = (): boolean => { try { return localStorage.getItem(AUTO_HOME_KEY) !== '0' } catch { return true } }
 export const setRibbonAutoHome = (on: boolean): void => { try { localStorage.setItem(AUTO_HOME_KEY, on ? '1' : '0') } catch { /* private mode */ } }
 
+/** Ribbon 中间那段空当里露几个「最近使用的 Space」(10-05 用户要求):缺省 3,设置里可调 0–5(0 = 不显示)。
+ *  这是上限 —— 中间放不下时 Ribbon 自己再往下减,直到一个不露(见 recentRoom)。 */
+const RECENT_COUNT_KEY = 'forsion_ribbon_recent_spaces'
+export const RIBBON_RECENT_MAX = 5
+const RECENT_DEFAULT = 3
+function loadRecentCount(): number {
+  try {
+    const raw = localStorage.getItem(RECENT_COUNT_KEY)
+    const n = raw === null ? RECENT_DEFAULT : Number(raw)
+    return Number.isInteger(n) ? Math.max(0, Math.min(RIBBON_RECENT_MAX, n)) : RECENT_DEFAULT
+  } catch { return RECENT_DEFAULT }
+}
+/** 中间还能放几个:两区合计的槽数减去两区各自占掉的,再被设置的上限封顶;有一区展开(铺满整条)时一个不放。 */
+export function recentRoom(want: number, slots: number, capT: number, capB: number, zoneOpen: boolean): number {
+  return zoneOpen ? 0 : Math.max(0, Math.min(want, slots - capT - capB))
+}
+
 export type RibbonZone = 'top' | 'bottom'
 
 /** 收纳夹:同区图标的折叠容器(悬停在右侧浮层展开)。自身占一个槽位并可拖动改序;成员从条上隐藏。 */
@@ -67,6 +84,9 @@ interface RibbonState extends V2 {
   expanded: boolean
   /** 上区图标的用户自定义顺序(item id);未列出的新图标按注册序追加在后。 */
   order: string[]
+  /** 中间最多露几个最近使用的 Space(0–5)。 */
+  recentCount: number
+  setRecentCount(n: number): void
   addRibbonIcon(item: RibbonItem): void
   removeRibbonIcon(id: string): void
   toggleExpanded(): void
@@ -104,6 +124,11 @@ export const useRibbonStore = create<RibbonState>((set) => {
     items: [],
     expanded: loadExpanded(),
     order: loadOrder(),
+    recentCount: loadRecentCount(),
+    setRecentCount: (n) => {
+      try { localStorage.setItem(RECENT_COUNT_KEY, String(n)) } catch { /* private mode */ }
+      set({ recentCount: loadRecentCount() }) // 读回来 = 夹过边界的值;存不进去(隐私模式)就留着原样
+    },
     ...loadV2(),
     addRibbonIcon: (item) =>
       set((s) => ({ items: [...s.items.filter((i) => i.id !== item.id), item] })),
@@ -177,6 +202,11 @@ export const useRibbonStore = create<RibbonState>((set) => {
     }),
   }
 })
+
+// 设置开在另一扇窗(设置浮窗)里:那边改了个数,这边靠 storage 事件跟上(同一扇窗里改的走 setRecentCount)。
+if (typeof window !== 'undefined') {
+  window.addEventListener('storage', (e) => { if (e.key === RECENT_COUNT_KEY) useRibbonStore.setState({ recentCount: loadRecentCount() }) })
+}
 
 export const addRibbonIcon = (item: RibbonItem): void => useRibbonStore.getState().addRibbonIcon(item)
 export const removeRibbonIcon = (id: string): void => useRibbonStore.getState().removeRibbonIcon(id)

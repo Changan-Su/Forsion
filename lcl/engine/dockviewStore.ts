@@ -1518,6 +1518,15 @@ export function namedLayoutRestorable(name: string): boolean {
   return layoutViewsAllRegistered(blob.dockview)
 }
 
+/** 本窗布局键里存着的那份此刻还原得了吗:没有存档算「是」(没东西可等),有就要它引用的视图都已注册(口径同 tryRestoreLayout)。
+ *  Space 窗口据此多等一会儿再挂 Dockview:挂早了还原落空,默认布局随即盖掉这份存档。 */
+export function savedLayoutRestorable(): boolean {
+  const layout = loadLayout()
+  if (!layout) return true
+  migrateLayoutBlob(layout)
+  return layoutViewsAllRegistered(layout.dockview)
+}
+
 function restoreLayout(api: DockviewApi): boolean {
   restoredOwner = undefined
   const layout = loadLayout()

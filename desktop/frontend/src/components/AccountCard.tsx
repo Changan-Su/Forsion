@@ -3,20 +3,22 @@
  *  - 已登录:36px 头像(URL,或渐变圆+首字母)+ 昵称 + 会员徽章(TierBadge);
  *    点击弹出账号菜单:头部(→ 设置「Forsion 云端 → 账号」)、AI 额度(点开看今日 / 本周 / 后台额度、用额度重置卡、
  *    升级会员、去「额度与积分」)、背包、切换账号、退出登录。邀请、网页个人中心在 Extend 画的那几页里。悬停露出「退出登录」。
+ *    Android 原生外壳下这张菜单还带「设置」「Forsion Unit 切换」两行(左栏没有底部那一排,用户 2026-10-05 拍板;见 accountMenuRows)。
  *    09-28 曾把额度详情和用卡收进设置页,09-29 用户要回:额度随手看、卡随手用,用完弹用卡动画。
  *  - 未登录:头像占位 + 「登录 / 注册」+ 副标题「点击登录」;不登录 Tangu 也能正常用。
  * 自管 authStatus(挂载即拉 + 监听 auth:device 推登录链接);登录/登出后回调 onAuthChange 让上层重连。
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { OverlayAt } from '@lcl/engine'
+import { OverlayAt, accountMenuRows, nativeSheetPresenter, runNativeSheetMenu, type SheetMenuItem, type SheetMenuSection } from '@lcl/engine'
 import { LogIn, LogOut, Loader2, Gauge, ChevronDown, ChevronRight, RotateCcw, ExternalLink, Backpack } from 'lucide-react'
-import type { AuthStatusInfo } from '../types'
+import type { AuthAccountInfo, AuthStatusInfo } from '../types'
 import { registerMessages, useI18n } from '../i18n'
 import { TierBadge } from './TierBadge'
 import { track } from '../achievements/store'
-import { AccountSwitcher } from './AccountSwitcher'
+import { AccountSwitcher, accountSwitcherModel } from './AccountSwitcher'
 import { formatRemaining, publishAccountQuota, remainingPercent, type AccountQuotaView } from '../services/accountQuota'
+import { accountChip, publishAccountChip, type AccountChip } from '../services/accountChip'
 import { useApp } from '../stores/appStore'
 import { museAvailable } from '../features/runtime'
 import { presentResetCardCeremony } from './ResetCardCeremony'
@@ -246,26 +248,99 @@ export const AccountCard: React.FC<{
   const engineStarting = auth?.backendState === 'starting'
   const display = auth?.nickname || auth?.username || 'Forsion'
   const initial = display.trim().charAt(0).toUpperCase() || 'F'
+  // ── 菜单条目的唯一一份:Web 浮层(下方 JSX)与 Android 原生半屏(lcl nativeSheet 可选宿主)都从这里渲染 ──
+  const quotaText = (q: AccountQuotaView | null, failed: boolean): string => q
+    ? t('sidebar.account.menu.quotaLine', {
+      daily: formatRemaining(remainingPercent(q.dailyLimit, q.dailyRemaining, q.dailyPercent), t('sidebar.account.menu.unlimited')),
+      weekly: formatRemaining(remainingPercent(q.weeklyLimit, q.weeklyRemaining, q.weeklyPercent), t('sidebar.account.menu.unlimited')),
+    })
+    : failed ? t('sidebar.account.menu.quotaFail') : t('sidebar.account.menu.loading')
+  const accountItems = (q: AccountQuotaView | null, failed: boolean): Record<'head' | 'login' | 'restart' | 'quota' | 'backpack' | 'upgrade' | 'logout', SheetMenuItem | null> => ({
+    // 头部 = 进「Forsion 云端 → 账号」(资料、会员、安全都在那);没有那几页的宿主只是个标题
+    head: loggedIn && hasCloudPages ? { id: 'account', label: display, detail: t('sidebar.account.menu.openAccount'), run: () => { setMenu(null); openCloudPage('account') } } : null,
+    login: !loggedIn && !engineDown ? { id: 'login', label: t('sidebar.account.login'), icon: <LogIn size={14} />, disabled: loggingIn, run: () => { setMenu(null); void login() } } : null,
+    restart: engineDown ? { id: 'engine-restart', label: t('sidebar.account.engineDown'), icon: <RotateCcw size={14} />, run: () => { setMenu(null); void window.tangu?.backendRestart?.().finally(refresh) } } : null,
+    // 一行 AI 额度摘要(口径同全端:剩余向下取整、不足 1% 写 <1%)→「额度与积分」
+    quota: loggedIn && hasQuota ? { id: 'quota', label: t('sidebar.account.menu.quota'), detail: quotaText(q, failed), icon: <Gauge size={14} />, disabled: !hasCloudPages, run: () => { setMenu(null); openCloudPage('quota') } } : null,
+    // 背包 / 升级:Web 浮层里住在别处(背包一行、升级在额度展开区),原生半屏不能就地展开 → 各占一行,免得安卓静默少入口。
+    backpack: loggedIn && hasCloudPages && hasBackpackPage ? { id: 'backpack', label: t('sidebar.account.menu.backpack'), icon: <Backpack size={14} />, run: () => { setMenu(null); openCloudPage('backpack') } } : null,
+    upgrade: loggedIn && window.tangu?.openPayCenter ? { id: 'upgrade', label: t('sidebar.account.menu.upgrade'), icon: <ExternalLink size={14} />, run: () => { setMenu(null); void window.tangu?.openPayCenter?.() } } : null,
+    logout: loggedIn ? { id: 'logout', label: t('sidebar.account.logout'), icon: <LogOut size={14} />, danger: true, run: () => { setMenu(null); void logout() } } : null,
+  })
+
+  /** Android:额度与已存账号先取回(各自最多等 3 秒,与 Web 菜单同一套口径),再呈现原生半屏。
+   *  原生菜单不能就地刷新,所以等一下而不是先画「加载中」;超时就照实写「加载中」/「无法加载已登录账号」,不丢行。
+   *  没有原生宿主 → false(调用方开 Web 浮层);宿主呈现失败 → 回落 Web 浮层。 */
+  const openNativeMenu = (el: HTMLElement): boolean => {
+    if (!nativeSheetPresenter()) return false
+    setQuotaErr(false)
+    setQuota(null)
+    const request = ++quotaRequest.current
+    const within = <T,>(p: Promise<T>, fallback: T): Promise<T> => Promise.race([p, new Promise<T>((r) => setTimeout(() => r(fallback), 3000))])
+    const quotaP = auth?.loggedIn && window.tangu?.accountQuota
+      ? within(window.tangu.accountQuota().then(
+        (res) => (res?.status === 200 && res.json ? { q: res.json as AccountQuotaView, failed: false } : { q: null, failed: true }),
+        () => ({ q: null, failed: true }),
+      ), { q: null as AccountQuotaView | null, failed: false })
+      : Promise.resolve({ q: null as AccountQuotaView | null, failed: false })
+    const accountsP: Promise<{ accounts: AuthAccountInfo[]; failed: boolean; loaded: boolean }> = window.tangu?.authAccounts
+      ? within(window.tangu.authAccounts().then((accounts) => ({ accounts, failed: false, loaded: true }), () => ({ accounts: [], failed: true, loaded: false })), { accounts: [], failed: true, loaded: false })
+      : Promise.resolve({ accounts: [], failed: false, loaded: false })
+    void Promise.all([quotaP, accountsP]).then(([qr, ar]) => {
+      if (request !== quotaRequest.current) return true // 期间登录态变了 / 又点了一次:这一份作废
+      if (qr.q) { setQuota(qr.q); publishAccountQuota(qr.q) } else if (qr.failed) setQuotaErr(true)
+      const it = accountItems(qr.q, qr.failed)
+      const switcher = accountSwitcherModel({ ...ar, busy: loggingIn, onSelect: (id) => void login(id), onAdd: () => void login(), t })
+      const sections: SheetMenuSection[] = [
+        { items: [it.head, it.login, it.restart, it.quota, it.backpack, it.upgrade].filter((x): x is SheetMenuItem => !!x) },
+        { items: accountMenuRows() }, // Android 原生外壳:设置、互联设备(左栏没有底部那一排,见 lcl 的 accountMenuRows);其余宿主为空
+        ...(switcher ? [{ title: switcher.title, items: switcher.items, ...(switcher.failedNote ? { footer: switcher.failedNote } : {}) }] : []),
+        { items: it.logout ? [it.logout] : [] },
+      ]
+      return runNativeSheetMenu({ ...(it.head ? {} : { title: loggedIn ? display : t('sidebar.account.notSignedIn') }), sections })
+    }).then((handled) => { if (!handled) openMenu(el) })
+    return true
+  }
+  const showMenu = (el: HTMLElement): void => { if (!openNativeMenu(el)) openMenu(el) }
+
   // 引擎未运行 → 点击重启引擎;过期 → 重新登录;已登录(有效)→ 弹账号菜单(无 IPC 则直开账号中心);未登录 → 登录。
-  const activate = (e: React.MouseEvent | React.KeyboardEvent): void => {
-    if (window.tangu?.authAccounts) { openMenu(e.currentTarget as HTMLElement); return }
+  const activateOn = (el: HTMLElement): void => {
+    // 菜单里带着设置 / 互联设备时(Android 原生外壳)恒开菜单:未登录、登录过期也得进得了设置 —— 登录是菜单里的一行。
+    if (window.tangu?.authAccounts || accountMenuRows().length) { showMenu(el); return }
     if (engineDown) { void window.tangu?.backendRestart?.().finally(refresh); return }
     if (!loggedIn || expired) { void login(); return }
-    if (window.tangu?.accountQuota || window.tangu?.forsionLogin) openMenu(e.currentTarget as HTMLElement)
+    if (window.tangu?.accountQuota || window.tangu?.forsionLogin) showMenu(el)
     else if (hasCloudPages) openCloudPage('account')
   }
+  const activate = (e: React.MouseEvent | React.KeyboardEvent): void => activateOn(e.currentTarget as HTMLElement)
   const stateClass = engineDown ? ' engine-down' : expired ? ' expired' : ''
   const subText = engineDown ? t('sidebar.account.engineDown')
     : engineStarting ? t('sidebar.account.engineStarting')
     : expired ? t('sidebar.account.expired')
     : loggedIn ? '' : t('sidebar.account.loginSub')
 
-  const avatarEl = loggedIn && auth?.avatar && !imgError ? (
-    <img className="account-avatar" src={auth.avatar} alt="" onError={() => setImgError(true)} />
+  // 头像的宿主接缝(services/accountChip.ts):Android 原生顶栏把账号入口画成头像,点它 = 点这张卡。
+  const stateLabel = engineDown ? t('sidebar.account.engineDown') : engineStarting ? t('sidebar.account.engineStarting') : expired ? t('sidebar.account.expired') : loggedIn ? display : t('sidebar.account.login')
+  const picture = loggedIn && auth?.avatar && !imgError ? auth.avatar : undefined
+  const anchorRef = useRef<HTMLElement | null>(null)
+  const activateRef = useRef(activateOn)
+  activateRef.current = activateOn
+  useEffect(() => {
+    const mine: AccountChip = {
+      label: stateLabel, loggedIn, initial, ...(picture ? { avatar: picture } : {}),
+      activate: () => { if (anchorRef.current) activateRef.current(anchorRef.current) },
+    }
+    publishAccountChip(mine)
+    return () => { if (accountChip() === mine) publishAccountChip(null) }
+  }, [stateLabel, loggedIn, initial, picture])
+
+  const avatarEl = picture ? (
+    <img className="account-avatar" src={picture} alt="" onError={() => setImgError(true)} />
   ) : (
     <span className="account-avatar fallback">{loggingIn ? <Loader2 size={14} className="spin" /> : initial}</span>
   )
 
+  const webItems = accountItems(quota, quotaErr)
   const menuEl = menu ? createPortal(
     <OverlayAt
       className="account-pop"
@@ -281,8 +356,8 @@ export const AccountCard: React.FC<{
         className={`ap-head${loggedIn && hasCloudPages ? ' ap-head--link' : ''}`}
         {...(loggedIn && hasCloudPages ? {
           role: 'button', tabIndex: 0, title: t('sidebar.account.menu.openAccount'),
-          onClick: () => { setMenu(null); openCloudPage('account') },
-          onKeyDown: (e: React.KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setMenu(null); openCloudPage('account') } },
+          onClick: webItems.head?.run,
+          onKeyDown: (e: React.KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); webItems.head?.run?.() } },
         } : {})}
       >
         {avatarEl}
@@ -355,9 +430,15 @@ export const AccountCard: React.FC<{
           <Backpack size={14} /><span>{t('sidebar.account.menu.backpack')}</span>
         </button>
       )}
+      {/* 原生半屏呈现失败时的回落也得有这两行(设置不能两头都没有);桌面 / Web 上 accountMenuRows() 恒空 */}
+      {accountMenuRows().map((row) => (
+        <button key={row.id} className="ap-item" onClick={() => { setMenu(null); row.run?.() }}>
+          {row.icon}<span>{row.label}</span>
+        </button>
+      ))}
       <AccountSwitcher menu busy={loggingIn} onSelect={(id) => void login(id)} onAdd={() => void login()} />
-      {loggedIn && <button className="ap-item ap-danger" onClick={() => { setMenu(null); void logout() }}>
-        <LogOut size={14} /><span>{t('sidebar.account.logout')}</span>
+      {webItems.logout && <button className="ap-item ap-danger" onClick={webItems.logout.run}>
+        {webItems.logout.icon}<span>{webItems.logout.label}</span>
       </button>}
     </OverlayAt>,
     document.body,
@@ -367,8 +448,9 @@ export const AccountCard: React.FC<{
     return (
       <>
         <button
+          ref={(el) => { anchorRef.current = el }}
           className={`ribbon-account${stateClass}`}
-          title={engineDown ? t('sidebar.account.engineDown') : engineStarting ? t('sidebar.account.engineStarting') : expired ? t('sidebar.account.expired') : loggedIn ? display : t('sidebar.account.login')}
+          title={stateLabel}
           onClick={activate}
         >
           {avatarEl}
@@ -381,6 +463,7 @@ export const AccountCard: React.FC<{
   return (
     <>
       <div
+        ref={(el) => { anchorRef.current = el }}
         className={`account-card${stateClass}`}
         role="button"
         tabIndex={0}

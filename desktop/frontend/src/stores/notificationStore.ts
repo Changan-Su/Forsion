@@ -5,6 +5,7 @@
  * 渲染在 components/NotificationHost(仅主窗 Root 挂载,与旧 toast-wrap 同决策)。
  */
 import { create } from 'zustand'
+import { translate } from '../i18n'
 
 export type NotifyLevel = 'info' | 'success' | 'warning' | 'error'
 
@@ -70,6 +71,8 @@ export const NOTIFY_EVENTS: Array<{ id: string; labelKey: string; defaultOn: boo
   { id: 'harness.candidates', labelKey: 'ntf.event.harnessCandidates', defaultOn: true },
   // 后台从项目会话里记下、但带网址 / 命令 / 权限字眼的事实:没有直接写进项目记忆,等用户在项目详情里逐条采纳或丢弃。
   { id: 'memory.projectCandidates', labelKey: 'ntf.event.projectCandidates', defaultOn: true },
+  // 项目记忆写满、Agent 把它压缩了一遍(有损:合并重复、去掉被取代的):告诉用户,项目详情里能逐句恢复。
+  { id: 'memory.projectCompacted', labelKey: 'ntf.event.projectCompacted', defaultOn: true },
 ]
 
 export function eventDefaultOn(event: string): boolean {
@@ -119,6 +122,13 @@ interface NtfState {
   resume(): void
 }
 
+/** 手机上每个请求都是出网的:断网时各处把浏览器的原话(`Failed to fetch`)原样、或拼在自己那句后面交过来。
+ *  那几个词对用户没有信息量,在出口统一换成一句人话。只在手机上换:桌面连的是本机引擎,连不上不等于没网。 */
+function plainNetworkError(text: string): string {
+  if (typeof window === 'undefined' || !window.tangu?.mobile || !/Failed to fetch/i.test(text)) return text
+  return text.replace(/(?:TypeError:\s*)?Failed to fetch/gi, translate('net.unavailable'))
+}
+
 // 定时器簿记(React/zustand 外):active = {handle,deadline};paused = {handle:null,remaining}。
 type TimerRec = { handle: ReturnType<typeof setTimeout> | null; deadline: number; remaining: number }
 const timers = new Map<string, TimerRec>()
@@ -160,7 +170,7 @@ export const useNotifications = create<NtfState>((set, get) => {
       }
       const sticky = input.sticky ?? level === 'error'
       const durationMs = customDuration(input.durationMs)
-      const text = String(input.text ?? '').slice(0, 500) // 防插件超长字符串撑爆卡片
+      const text = plainNetworkError(String(input.text ?? '')).slice(0, 500) // 防插件超长字符串撑爆卡片
       const title = input.title ? String(input.title).slice(0, 120) : undefined
 
       // 去重合并:同 dedupeKey 更新原条(计数 + 文案 + 重置停留),可见或排队中皆然。
@@ -191,11 +201,14 @@ export const useNotifications = create<NtfState>((set, get) => {
         dedupeKey: input.dedupeKey, action: input.action, durationMs, onClose: input.onClose,
       }
       // 系统通知:与应用内通知同步发(所有事件,不止收件箱);仅窗口在后台时(前台已有卡片,免重复横幅);
-      // osEnabled 门控。web/mobile 无 window.tangu.notify → 可选链忽略。dedupe 合并不重发(上面已 return)。
+      // osEnabled 门控。web 无 window.tangu.notify → 可选链忽略(安卓有:mobile/src/liveIsland.ts)。dedupe 合并不重发(上面已 return)。
       // inAppOnly:调用方声明这是应用内即时反馈(见 NotifyInput.inAppOnly),不跟发。
-      if (!input.inAppOnly && !input.receipt && st.prefs.osEnabled && typeof document !== 'undefined' && !document.hasFocus()) {
+      // 「在后台」:桌面 = 窗口失焦。安卓 WebView 退到后台后 hasFocus() 仍是 true(模拟器实测),那里只有可见性说真话;
+      // 桌面上看不见的窗口本来就没有焦点,多看这一项不改变它的行为。
+      const away = typeof document !== 'undefined' && (!document.hasFocus() || document.visibilityState === 'hidden')
+      if (!input.inAppOnly && !input.receipt && st.prefs.osEnabled && away) {
         const osTitle = title || input.sourceLabel || 'Forsion'
-        try { window.tangu?.notify?.(osTitle, text) } catch { /* 无桥/web 忽略 */ }
+        try { window.tangu?.notify?.(osTitle, text, { event }) } catch { /* 无桥/web 忽略 */ }
       }
       if (st.items.length < MAX_VISIBLE) {
         set((s) => ({ items: [...s.items, n] }))

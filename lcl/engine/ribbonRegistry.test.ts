@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest'
-import { useRibbonStore, rankIds, reorderBase, moveTo, slotIndexAt } from './ribbonRegistry'
+import { useRibbonStore, rankIds, reorderBase, moveTo, slotIndexAt, recentRoom } from './ribbonRegistry'
 
 const reset = (): void => useRibbonStore.setState({ items: [], order: [], bottomOrder: [], folders: [], commandItems: [], commandIcons: {} })
 
@@ -177,5 +177,23 @@ describe('ribbon 命令项', () => {
     expect(s.commandItems).toEqual([])
     expect(s.bottomOrder).not.toContain('cmd:quick-find')
     expect(s.folders[0].items).not.toContain('cmd:quick-find')
+  })
+})
+
+// 中间露几个「最近使用的 Space」:设置的上限 × 两区占完之后还剩的槽数,不够就减,直到 0。
+describe('recentRoom', () => {
+  it('放得下 → 就是设置的个数', () => {
+    expect(recentRoom(3, 20, 6, 5, false)).toBe(3)
+    expect(recentRoom(5, 20, 6, 5, false)).toBe(5)
+  })
+  it('中间不够高 → 一个个减,直到没有;绝不为负', () => {
+    expect(recentRoom(3, 13, 6, 5, false)).toBe(2)
+    expect(recentRoom(3, 11, 6, 5, false)).toBe(0)
+    expect(recentRoom(3, 8, 4, 4, false)).toBe(0)
+    expect(recentRoom(3, 6, 4, 4, false)).toBe(0)
+  })
+  it('设成 0 = 不显示;有一区展开(铺满整条)时不露', () => {
+    expect(recentRoom(0, 20, 6, 5, false)).toBe(0)
+    expect(recentRoom(3, 20, 20, 5, true)).toBe(0)
   })
 })
