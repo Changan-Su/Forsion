@@ -89,7 +89,8 @@
       try { localStorage.setItem('forsion_startup_verse', String(pick)); } catch (_) { /* preview */ }
       var mark = original.querySelector('#tree-mark');
       // Stamped by whoever inlines this runtime (build plugin / settings preview); it goes into innerHTML, so only a plain version passes.
-      var version = /^\d+\.\d+\.\d+[-+.0-9A-Za-z]{0,20}$/.test(window.FORSION_APP_VERSION) ? window.FORSION_APP_VERSION : '';
+      var stamp = window.FORSION_APP_VERSION;
+      var version = typeof stamp === 'string' && /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(stamp) ? stamp : '';
       var scene = document.createElement('div');
       scene.className = 'fts';
       scene.style.cssText = '--fts-lit:' + look.lit + ';--fts-near:' + look.near + ';--fts-far:' + look.far + ';--fts-bloom:' + look.bloom

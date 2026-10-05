@@ -155,7 +155,7 @@ async function main() {
   await page.waitForTimeout(900) // 已过最短展示:只剩 380ms 淡出
   check('首帧画出后闪屏被移除(没有循环接缝要等)', (await page.evaluate(shadowState)).gone)
   // 没盖版本号(老构建 / 别处拼的页面)→ 不出这一行;盖进来的不是版本号 → 一个字都不进页面
-  for (const [name, value] of [['没盖版本号', ''], ['盖进来的是一段标记', '1.2.3<img src=x onerror=alert(1)>']]) {
+  for (const [name, value] of [['没盖版本号', ''], ['盖进来的是一段标记', '1.2.3<img src=x onerror=alert(1)>'], ['盖进来的不是字符串', ['1.2.3']]]) {
     await open(html(undefined, undefined, value))
     await page.waitForTimeout(400)
     const bare = await page.evaluate(shadowState)
