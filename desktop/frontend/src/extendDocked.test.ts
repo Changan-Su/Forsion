@@ -136,6 +136,18 @@ describe('侧栏占位', () => {
     expect(right(panels)).toEqual(['detailv'])
   })
 
+  it('单例视图走的是另一条复用路径:同样清掉旁边的旧占位', () => {
+    registerView({ type: 'onev', displayName: 'onev', factory: () => null, singleton: true })
+    try {
+      const { api, panels } = build()
+      const one = useWorkspace.getState().openView('onev', {}, 'right')!
+      api.addPanel({ id: 'sidebar-empty#9', component: 'sidebar-empty', params: { __loc: 'right', __type: 'sidebar-empty' }, position: { referencePanel: one.id } } as never)
+      expect(right(panels)).toEqual(['detailv', 'onev', 'sidebar-empty'])
+      useWorkspace.getState().openView('onev', {}, 'right')
+      expect(right(panels)).toEqual(['detailv', 'onev'])
+    } finally { unregisterView('onev') }
+  })
+
   it('空的一侧展开时照旧开出占位(否则开合键空转)', () => {
     const { panels } = build()
     const ws = useWorkspace.getState()
