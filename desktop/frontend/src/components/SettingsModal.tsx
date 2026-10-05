@@ -10,7 +10,7 @@ import { BrowserExtensionPanel } from './BrowserExtensionPanel'
  * 在 Desktop 主界面内替换 Chat/Inspector 区域，而不是覆盖式弹窗。
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react'
-import { X, ArrowLeft, Undo2, ChevronRight, Loader2, RefreshCw, Sun, Moon, MonitorCog, RotateCcw, LogIn, LogOut, KeyRound, Plus, Trash2, Plug, Search, Download, Sparkles, Wrench, Check, Copy, Globe2, FolderOpen, Play, Trophy, FileDown, Settings2, NotebookPen, Puzzle, LayoutGrid, Palette, Keyboard, Bug, Info, Brain, Bot, Webhook, MessageCircle, Blocks, Bell, PanelBottom, Image as ImageIcon, Server, Type, Layers3, MousePointer2, CircleUserRound, Scaling, Coffee, MonitorCheck, History, MonitorSmartphone, Cloud } from 'lucide-react'
+import { X, ArrowLeft, Undo2, ChevronRight, Loader2, RefreshCw, Sun, Moon, MonitorCog, RotateCcw, LogIn, LogOut, KeyRound, Plus, Trash2, Plug, Search, Download, Sparkles, Wrench, Check, Copy, Globe2, FolderOpen, Play, Trophy, FileDown, Settings2, NotebookPen, Puzzle, LayoutGrid, Palette, Keyboard, Bug, Info, Brain, Bot, Webhook, MessageCircle, Blocks, Bell, PanelBottom, Image as ImageIcon, Server, Type, Layers3, MousePointer2, CircleUserRound, Scaling, Coffee, MonitorCheck, History, MonitorSmartphone, Cloud, SunDim, AlignLeft, Wind } from 'lucide-react'
 import { ThemeCard } from './ThemeCard'
 import { ThemeSettingsPanel } from './ThemeSettingsPanel'
 import { StartupAppearanceSettings } from './StartupAppearanceSettings'
@@ -98,6 +98,7 @@ import { aiSpaceTriggerEnabled, setAiSpaceTriggerEnabled } from '@amadeus/lib/ai
 import { SettingsPanel, SettingsRow, SettingsSwitch } from './SettingsPrimitives'
 import { setChatWaitDetailsEnabled, useChatWaitDetailsEnabled } from '../chatWaitDetails'
 import { isChatAvatarsOn, setChatAvatarsOn } from '../views/chat2/chatAvatars'
+import { isCalmOn, setCalmOn, type CalmKey } from '../theme/calm'
 import { ipcErrorText } from '../ipcError'
 import { newReservedMcpNames } from '../../../shared/mcpNames'
 import { resolveSettingsTarget, SETTINGS_TABS } from './settingsTarget'
@@ -305,6 +306,24 @@ const BACKEND_STATE_LABEL: Record<string, string> = {
   crashed: 'settings.backend.state.crashed',
 }
 
+/** 「呼吸感」开关行(theme/calm.ts):纯本机渲染偏好,行自己持有状态,不进设置草稿;别的窗口经 storage 事件跟上。 */
+function CalmRow({ k, anchor, icon, label, hint }: { k: CalmKey; anchor: string; icon: React.ReactNode; label: string; hint: string }) {
+  const [on, setOn] = useState(() => isCalmOn(k))
+  return (
+    <div className="settings-control-row" data-setting-anchor={anchor}>
+      <div className="settings-control-copy">{icon}<span><strong>{label}</strong><small>{hint}</small></span></div>
+      <button
+        type="button"
+        role="switch"
+        aria-checked={on}
+        aria-label={label}
+        className={`switch${on ? ' on' : ''}`}
+        onClick={() => { setCalmOn(k, !on); setOn(!on) }}
+      />
+    </div>
+  )
+}
+
 export const SettingsModal: React.FC<{
   open: boolean
   cfg: TanguDesktopConfig
@@ -382,6 +401,8 @@ export const SettingsModal: React.FC<{
   const [smoothCaret, setSmoothCaret] = useState<boolean>(isSmoothCaretOn)
   const [chatAvatars, setChatAvatars] = useState<boolean>(isChatAvatarsOn)
   const [ribbonAutoHome, setRibbonAutoHomeOn] = useState<boolean>(isRibbonAutoHome)
+  // 「外围淡出」靠悬停恢复(calm.css 整段关在 hover: hover 里):没有悬停的设备上那一行与它的搜索结果都不出。
+  const hoverCapable = !!window.matchMedia?.('(hover: hover)').matches
   // 画布双击聚焦(默认开;纯本机视口偏好，不进笔记/桌面后端配置)。
   const [canvasDoubleClickFocus, setCanvasDoubleClickFocus] = useState<boolean>(canvasDoubleClickFocusEnabled)
   const [aiSpaceTrigger, setAiSpaceTrigger] = useState<boolean>(aiSpaceTriggerEnabled) // 正文 AI 空行空格唤起(G3-07,缺省关,本机)
@@ -1222,6 +1243,8 @@ export const SettingsModal: React.FC<{
     if (e.sub && !subItemsForTab(e.tab as Tab).some(([k]) => k === e.sub)) return false
     return (e.needs ?? []).every((need) => need === 'stored' ? !!stored
       : need === 'desktop' ? isDesktop
+      : need === 'hover' ? hoverCapable
+      : need === 'wide' ? !mobileSettings
       : need === 'cloud' ? isDesktop && cloudAccount // Forsion 账号面随 Extend 出现(forsion 一级页)
       : need === 'managed' ? isDesktop && mode === 'managed' // 托管参数只在已落盘为托管时渲染(g-runtime)
         : (!isDesktop || viewMode === 'external') && !cloudWeb)
@@ -3169,6 +3192,12 @@ export const SettingsModal: React.FC<{
                             }}
                           />
                         </div>
+                        {/* 「呼吸感」三项(theme/calm.ts)。「外围淡出」靠悬停恢复:没有悬停的设备上样式本来就不生效,开关也不摆出来。 */}
+                        {hoverCapable && (
+                          <CalmRow k="dim" anchor="calm-dim" icon={<SunDim size={14} />} label={t('settings.theme.calmDim')} hint={t('settings.theme.calmDimHint')} />
+                        )}
+                        <CalmRow k="reading" anchor="calm-reading" icon={<AlignLeft size={14} />} label={t('settings.theme.calmReading')} hint={t('settings.theme.calmReadingHint')} />
+                        <CalmRow k="motion" anchor="calm-motion" icon={<Wind size={14} />} label={t('settings.theme.calmMotion')} hint={t('settings.theme.calmMotionHint')} />
                         {!mobileSettings && (
                           <div className="settings-control-row" data-setting-anchor="ribbon-auto-home">
                             <div className="settings-control-copy"><Undo2 size={14} /><span><strong>{t('settings.theme.ribbonAutoHome')}</strong><small>{t('settings.theme.ribbonAutoHomeHint')}</small></span></div>

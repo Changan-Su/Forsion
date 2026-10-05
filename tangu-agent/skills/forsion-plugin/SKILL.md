@@ -2,7 +2,7 @@
 name: forsion-extension-development
 description: 当用户要给 Forsion / Tangu 做插件、主题、Space、智能体(agent)或捆绑包(bundle)——或要把某个能力做成可分发/可上架市场的扩展——时使用。内置五类官方模板(samples/),讲清各自的格式基线与硬约束(尤其两种"插件"是完全不同的系统),照抄模板改比从零写靠谱。
 metadata:
-  version: 1.20.0
+  version: 1.21.0
   author: Forsion
   category: Forsion
 ---
@@ -53,6 +53,8 @@ Forsion / Tangu 的扩展**默认按捆绑包(bundle)形态发行**(2026-07-25 �
 
 - 主题 CSS 是**全局注入**(非隔离),因此**每条规则都要 scope 在 `[data-theme='<id>']` 下**,否则污染其它主题。
 - **不要硬编码颜色**:配色由 skin 提供,主题只定结构,消费 `var(--bg)`/`var(--text)`/`var(--accent)` 等词表 token —— 这样任意配色/明暗都成立。
+- **正文行距、段距和切视图的时长归用户的外观开关管**(见下文「外观开关:跟着宿主走」):主题别用更高权重的规则把笔记 / 对话正文的
+  `line-height`、段间距或 `wb-view-enter` 的时长写死 —— 写死了,用户拨那几个开关就没有反应。
 - 可选 `settings[]`(number/select/boolean/color)让用户在设置页调主题内参数:`key` **就是** CSS 自定义属性名,宿主把值写进 `:root` 内联变量,主题用 `var(--key, 默认值)` 消费。参考本仓内置 `genesis-glass` 主题(`desktop/frontend/src/theme/themes/genesis-glass/`)。
 
 ## Space(samples/forsion-sample-space)
@@ -688,6 +690,25 @@ refresh = (rows) => h.update({ ...spec, rows })   // 数据刷新走 update:排�
   命中词表宿主就画和内置项同一套 SVG。全表见正典文档「图标」节与 `components/icons` 的 `PLUGIN_ICONS`;
   ⚠️词表键全是 `[a-z0-9-]`,只增不改不删。
 
+
+### 外观开关:跟着宿主走(2026-10-05 起)
+
+用户在 设置 → 外观 有三个缺省开着、可以逐项关掉的开关:**外围淡出**(Ribbon 图标、未选中的标签、左栏文字平时退后,指针或键盘焦点
+进来恢复)、**宽松正文**(笔记与对话正文的行距、段距放宽)、**舒缓过渡**(切视图的淡入、外围恢复慢一点)。插件不用接任何 API,
+守住下面几条就自动跟上;违反了不报错,只是在用户眼里「就你这个插件不一样」:
+
+- **文字和线性图标只用宿主的文字 token**(`var(--text)` / `--text-light` / `--text-muted` / `--text-faint`),不写死颜色,也不自己叠
+  `opacity` 来表示「次要」。左栏的淡出是宿主把这几个变量调淡做出来的:写死的颜色不会跟着淡,在一片退后的侧栏里独自发亮;自己再叠一层
+  透明度会淡两次。状态(未读、出错、进行中)用语义色 `--accent-ink` / `--danger` —— 它们不淡,正好留给需要被看见的东西。
+- **左栏列表的选中行要标出来**:`aria-selected="true"` 或 `aria-current`(类名 `.active` 也认)。宿主让选中行保持全亮,没标的会和其它行
+  一起退后。走 `registerListSource` 的不用管,宿主画的行自带。
+- **整段阅读的正文读两个公开 token**:`line-height: var(--reading-line-height, 1.6)`,段间距 `var(--reading-paragraph-gap, 0.3em)`
+  (兜底值就是开关关着时的数)。只用于文章、说明、预览这类长文;列表、表单、卡片、表格是界面文字,不用这两个 token,也不跟这个开关。
+  `ctx.ui.mountMarkdownEditor` / `ctx.app.mountBlocks` / `ctx.tangu.mountChat` 挂出来的正文是宿主画的,自动跟随。
+- **视图根上不加自己的入场动画**:切主视图时宿主已经做了一次淡入,再加一层会叠成两段。视图里的悬停、展开过渡用宿主的
+  `--duration-fast` / `--duration-slow` / `--ease-out`,不写死毫秒;`prefers-reduced-motion` 下关掉。
+- **这三个开关是用户的**:不读、不写 `forsion_calm_*` 与 `<html data-calm-*>`,不提供同类的私有开关,也不在自己的视图里用 `:hover`
+  去点亮或压暗宿主的外围。iframe / webview 里的页面拿不到宿主变量、不会跟着淡,导航类内容别装进 iframe 再放到左栏。
 
 ## 当前模型与当前 Space:ctx.tangu(2026-08-29 起)
 
