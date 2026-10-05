@@ -84,6 +84,15 @@ describe('会话配置 setter 只发自己的键', () => {
       expect(useApp.getState().configBySession.s1.planMode).toBeUndefined()
     })
 
+    // 同一笔里删掉团队键(undefined 上线为 null = 删键)再开计划模式:引擎那边删完键就不是团队模式了,两边都放行、不分叉
+    it('同一笔里退出团队(删键)并开计划模式:放行,与引擎合并后的结果一致', () => {
+      useApp.getState().patchSessionConfig({ groupChat: undefined, planMode: true }, 's1')
+      expect(sent()).toEqual([['s1', { groupChat: undefined, planMode: true }]])
+      expect(useApp.getState().configBySession.s1).toMatchObject({ planMode: true })
+      expect(useApp.getState().configBySession.s1.groupChat).toBeUndefined()
+      expect(notices()).toEqual([])
+    })
+
     it('草稿同一条规矩:团队草稿里开不了;开团队时顺手关掉', () => {
       const toast = vi.fn()
       useApp.setState({ toast, newChatCfg: { groupChat: true, groupAgents: ['a', 'b'] } })

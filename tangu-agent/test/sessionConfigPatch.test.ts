@@ -124,6 +124,14 @@ describe('团队模式下没有计划模式', () => {
     expect((await send('PATCH', 'T5', { thinkingLevel: 'high' })).body.agent_config).toEqual({ execMode: 'host', groupChat: true, groupAgents: ['a', 'b'], thinkingLevel: 'high' });
   });
 
+  it('同一笔里删掉团队键(null)并开计划模式 → 合并后不是团队模式,计划模式照开(桌面那边同样放行)', async () => {
+    await addSession('T7', { execMode: 'host', groupChat: true, groupAgents: ['a', 'b'] });
+    expect((await send('PATCH', 'T7', { groupChat: null, planMode: true })).body.agent_config).toEqual({ execMode: 'host', groupAgents: ['a', 'b'], planMode: true });
+    // 团队轨道会话删掉这个键 = 回到缺省的团队模式:计划模式落成关
+    await addSession('T8', { teamSlug: 'crew', execMode: 'host', groupChat: false });
+    expect((await send('PATCH', 'T8', { groupChat: null, planMode: true })).body.agent_config).toEqual({ teamSlug: 'crew', execMode: 'host', planMode: false });
+  });
+
   it('建会话时带着两个都开 → 存成计划模式关', async () => {
     const r = await fetch(`${base}/agent/sessions`, { method: 'POST', headers: { Authorization: 'Bearer x', 'Content-Type': 'application/json' },
       body: JSON.stringify({ title: 't', projectless: true, agent_config: { execMode: 'host', groupChat: true, groupAgents: ['a', 'b'], planMode: true } }) });
