@@ -9,6 +9,8 @@ dist/
 out/
 desktop/out/
 desktop/dist/
+# worktree 私有的 vite 依赖预构建缓存(desktop/frontend/viteCacheDir.ts;可再生)
+desktop/.vite-worktree/
 # 打包前 beforeBuild 下载的内置 Python / Node(体积大、按平台/arch 拉取,不入库)
 desktop/build/python/
 desktop/build/node/

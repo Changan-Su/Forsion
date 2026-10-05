@@ -7,12 +7,13 @@ import { startupAppearanceHtml } from '../frontend/startupAppearancePlugin'
 import { resolve } from 'path'
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
+import { viteCacheDir } from './viteCacheDir'
 
 export default defineConfig({
   plugins: [startupAppearanceHtml(), react()],
-  // worktree 软链主检出 node_modules 时,缺省 cacheDir(node_modules/.vite)是共享的:
-  // 配置哈希不同会把主检出 dev 的 deps 整份重优化掉。worktree 里起 harness 设这个变量。
-  cacheDir: process.env.FORSION_VITE_CACHE_DIR || undefined,
+  // worktree(node_modules 软链到主检出)自动用本检出私有的缓存目录,不再与主检出的 dev 共用;
+  // 主检出保持 vite 缺省。FORSION_VITE_CACHE_DIR 仍可显式指定。原因与仪器见 viteCacheDir.ts。
+  cacheDir: viteCacheDir(resolve(__dirname, '..'), 'web'),
   resolve: {
     // 与 Electron renderer 保持一致：浏览器预览/Vitest 也会穿过 lcl workspace，
     // 独立 worktree 下必须强制宿主和链接源共用一份 React。
