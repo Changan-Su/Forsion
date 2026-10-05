@@ -199,6 +199,8 @@ export function activeMainPanel(): null { return null }
 export function bootLayoutFellThrough(): boolean { return false }
 export function namedLayoutRestorable(_name: string): boolean { return false }
 export function liveLayoutOwner(): string | null { return null }
+/** 桌面 Space 窗口挂 Dockview 前用;单列壳没有这种窗口。保留导出以满足 barrel。 */
+export function savedLayoutRestorable(): boolean { return true }
 
 interface WS {
   api: null

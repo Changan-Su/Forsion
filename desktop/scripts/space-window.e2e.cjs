@@ -300,6 +300,18 @@ async function main() {
         check('H2b 主页没卡在退场动效里、主窗也没被切走', (await wH.locator('.hp-stack.leaving').count()) === 0 && (await wH.locator('.hp-tile').count()) > 0 && (await activeKey(win)) === activeBefore)
       } else check('H1b 主页的窗口开得出来', false)
     } else console.log('SKIP  H 这个产品档案没有主位槽')
+    // ───────── X 等不到的 Space:一直等、把话说明白,不往布局键里写东西 ─────────
+    const wX = await expectWindow(() => win.evaluate(() => { void window.tangu.openDetached([], undefined, { space: 'no-such-space' }) }))
+    if (wX) {
+      await wX.waitForSelector('.space-window-wait', { timeout: 15000 }).catch(() => {})
+      const stuck = await wX.evaluate(() => ({
+        msg: document.querySelector('.space-window-wait')?.textContent || '',
+        shell: document.querySelectorAll('.dv-groupview, .wb-dockview').length,
+        keys: Object.keys(localStorage).filter((k) => k.includes('sp_no-such-space')),
+      }))
+      check('X1 没这个 Space:窗口不挂界面、说明原因,本窗的布局键没被写过', /还没准备好/.test(stuck.msg) && stuck.shell === 0 && stuck.keys.length === 0, stuck)
+      await wX.close().catch(() => {})
+    } else check('X1 等不到的 Space 的窗口开得出来', false)
   } finally {
     await app.close().catch(() => {})
     fs.rmSync(home, { recursive: true, force: true })

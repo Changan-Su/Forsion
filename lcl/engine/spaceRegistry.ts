@@ -106,6 +106,9 @@ export const useSpaceStore = create<SpaceState>((set, get) => ({
 /** 当前活动 Space(找不到回退首个;无 Space 时 undefined)。 */
 export const getActiveSpace = (): SpaceDefinition | undefined => {
   const { spaces, activeSpaceId } = useSpaceStore.getState()
+  // Space 窗口只认自己的 Space:它暂时不在表里(还没装载完 / 插件更新时先注销再注册)也不拿别的 Space 顶上 ——
+  // 顶上了,这期间任何一次「按默认重建」摆出来的就是别人的布局,还会存进本窗的布局键。
+  if (WINDOW_SPACE_ID) return spaces.find((s) => s.id === WINDOW_SPACE_ID)
   return spaces.find((s) => s.id === activeSpaceId) ?? spaces[0]
 }
 

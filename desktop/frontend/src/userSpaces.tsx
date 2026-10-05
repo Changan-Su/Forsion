@@ -13,7 +13,7 @@ import type { LucideIcon } from 'lucide-react'
 import {
   registerSpace, unregisterSpace, addRibbonIcon, removeRibbonIcon, setActiveSpace, useSpaceStore,
   useWorkspace, deleteNamedLayout, clearLayout, getActiveSpace, getView, label, spaceLayoutName,
-  setActiveSpaceCold, BOOT_ACTIVE_SPACE_ID, UI_MODE,
+  setActiveSpaceCold, BOOT_ACTIVE_SPACE_ID, UI_MODE, WINDOW_SPACE_ID,
   spaceLayoutsWereReset, bootLayoutFellThrough, namedLayoutRestorable, liveLayoutOwner,
 } from '@lcl/engine'
 import type { Leaf, SpaceDefinition, SpaceIcon, PersistedPanel } from '@lcl/engine'
@@ -120,7 +120,10 @@ function migrateRecipeLayout(spec: SpaceSpec): void {
   pendingRecipeLayouts.add(spec.id)
   // 已经完整注册且正在使用的普通热更新仍可当场重建。启动期异步 Space 此时通常被暂时
   // 归一到了产品默认 Space，交给 settleAsyncStartupSpace() 在冷定位后再重建。
-  if (useSpaceStore.getState().activeSpaceId === spec.id) useWorkspace.getState().resetLayout()
+  // 这个 Space 自己的窗口:本窗布局键里也是旧配方的布局 → 清掉就行,不当场重建 —— 此刻它正处在「旧定义已注销、新定义还没注册」
+  // 的空当里,重建没有配方可照;窗口随后因定义换了而整窗重载(DetachedRoot),落空走新配方的默认布局。
+  if (WINDOW_SPACE_ID === spec.id) clearLayout()
+  else if (useSpaceStore.getState().activeSpaceId === spec.id) useWorkspace.getState().resetLayout()
   map[spec.id] = spec.version
   try { localStorage.setItem(RECIPE_VER_KEY, JSON.stringify(map)) } catch { /* 配额满:下次再试 */ }
 }

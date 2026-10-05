@@ -65,6 +65,18 @@ describe('Space 窗口', () => {
     expect(store.get('forsion_tangu_active_space')).toBe('tangu')
   })
 
+  it('getActiveSpace 只认自己的 Space:它不在表里(还没装载 / 插件更新的空当)就是 undefined,不拿别的顶上', async () => {
+    const m = await load('?window=detached&id=sp_probe&ui=desktop&space=probe')
+    m.useSpaceStore.setState({ spaces: [mkSpace('tangu')] })
+    expect(m.getActiveSpace()).toBeUndefined()
+    m.useSpaceStore.setState({ spaces: [mkSpace('tangu'), mkSpace('probe')], activeSpaceId: 'tangu' })
+    expect(m.getActiveSpace()?.id).toBe('probe')
+    // 主窗照旧:活动 id 没注册时回退第一个
+    const main = await load('')
+    main.useSpaceStore.setState({ spaces: [mkSpace('tangu')], activeSpaceId: 'gone' })
+    expect(main.getActiveSpace()?.id).toBe('tangu')
+  })
+
   it('第一次打开:本窗的布局键是空的 → 照这个 Space 的命名槽摆,归属记成它', async () => {
     const m = await load('?window=detached&id=sp_amadeus&ui=desktop&space=amadeus')
     m.saveNamedLayout(m.spaceLayoutName('amadeus'), blob('amadeus-saved'))

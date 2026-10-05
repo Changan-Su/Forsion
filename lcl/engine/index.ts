@@ -27,7 +27,7 @@ export type { MiniPanelDefinition, MiniViewTarget, MainPanelTarget } from './min
 export { UI_MODE, setUiMode, WINDOW_SPACE_ID } from './uiMode'
 export type { UiMode } from './uiMode'
 export { registerView, unregisterView, getView, allViews, subscribeViews } from './viewRegistry'
-export { useWorkspace, activeMainPanel, scheduleWorkspaceSave, bootLayoutFellThrough, namedLayoutRestorable, liveLayoutOwner } from './workspaceStore'
+export { useWorkspace, activeMainPanel, scheduleWorkspaceSave, bootLayoutFellThrough, namedLayoutRestorable, liveLayoutOwner, savedLayoutRestorable } from './workspaceStore'
 export type { MainTab, SideTab } from './workspaceStore'
 export { useCommandStore, addCommand, removeCommand, openCommandPalette, openCommandPicker, installHotkeys, commandHotkeyText } from './commandRegistry'
 export { useShortcuts, effectiveHotkey, eventToHotkey, formatHotkey, isMacPlatform } from './shortcutStore'
