@@ -37,10 +37,25 @@ async function main() {
     await page.locator('.rb-space').first().waitFor()
     await waitAxes(page, { theme: 'lovable', skin: 'teal', bg: 'cream', mode: 'light' })
     check('unconfigured Space inherits global', true)
+    // Content tint is opt-in (2026-10-05): with glass on and nothing stored, no tint layer and no sampling.
+    await page.locator('.shell').waitFor()
+    await page.waitForTimeout(1600) // longer than the sampler's 260ms debounce and its 1s poll
+    const plain = await page.evaluate(() => ({ ambient: document.documentElement.dataset.ambient, glass: document.documentElement.dataset.glass, pseudo: getComputedStyle(document.querySelector('.shell'), '::before').content, palette: document.documentElement.style.getPropertyValue('--space-ambient-top'), transition: getComputedStyle(document.documentElement).transitionDuration }))
+    check('content tint is off by default: no tint layer, no sampling, no root transition', plain.ambient === 'off' && plain.glass === 'on' && plain.pseudo === 'none' && !plain.palette && plain.transition.split(',').every((v) => parseFloat(v) === 0), plain)
+    await page.screenshot({ path: path.join(shots, 'genesis-light-default.png') })
     const settingsOpened = app.waitForEvent('window')
     await page.keyboard.press('Meta+Comma')
     const settings = await settingsOpened
     await settings.locator('.settings-nav').waitFor()
+    // Turn it on from the settings window: the switch lives in another renderer, so this also proves the cross-window relay.
+    const tint = settings.getByRole('switch', { name: '外壳随内容取色', exact: true })
+    if (!(await tint.count())) await settings.locator('.settings-nav-list button').filter({ hasText: /^(外观|Appearance)$/ }).click()
+    await tint.click()
+    await waitAxes(page, { ambient: 'on' })
+    await page.waitForFunction(() => getComputedStyle(document.querySelector('.shell'), '::before').content !== 'none' && document.documentElement.style.getPropertyValue('--space-ambient-top'))
+    check('settings switch turns content tint on in the main window', await tint.getAttribute('aria-checked') === 'true')
+    await tint.scrollIntoViewIfNeeded()
+    await settings.screenshot({ path: path.join(shots, 'settings-tint-zh.png') })
     await settings.locator('.settings-nav-list button').filter({ hasText: /^Spaces?$/ }).click()
     await settings.getByLabel('选择 Space', { exact: true }).selectOption('tangu')
     await settings.getByLabel('主题色', { exact: true }).selectOption('coral')

@@ -50,11 +50,12 @@ function clearPalette(): void {
 export function useSpaceAmbient(): void {
   const lang = useVisualTheme((s) => s.lang)
   const glass = useVisualTheme((s) => s.glass)
+  const ambient = useVisualTheme((s) => s.ambient)
   const mode = useVisualTheme((s) => s.mode)
   const space = useSpaceStore((s) => s.activeSpaceId)
   useEffect(() => () => clearPalette(), [])
   useEffect(() => {
-    if (lang !== 'lovable' || !glass) { clearPalette(); return }
+    if (lang !== 'lovable' || !glass || !ambient) { clearPalette(); return }
     const root = document.documentElement
     let disposed = false
     let running = false
@@ -104,5 +105,5 @@ export function useSpaceAmbient(): void {
       document.removeEventListener('visibilitychange', onVisibility)
       window.removeEventListener('resize', schedule)
     }
-  }, [lang, glass, mode, space])
+  }, [lang, glass, ambient, mode, space])
 }

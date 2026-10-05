@@ -69,6 +69,8 @@ interface ThemeState {
   bgSeed: string
   glass: boolean
   flat: boolean
+  /** 外壳随内容取色(Genesis + 毛玻璃下才有意义)。缺省关:开着时取色的过渡会让整页样式逐帧重算。 */
+  ambient: boolean
   /** 磁盘主题合并/重载后自增,驱动设置面板/引导/Shell 重渲染。 */
   themesVersion: number
   setLang(lang: string): void
@@ -84,6 +86,7 @@ interface ThemeState {
   setBgSeedValue(bg: string): void
   setGlass(on: boolean): void
   setFlat(on: boolean): void
+  setAmbient(on: boolean): void
   /** 快捷明暗翻转;resolve = 已落地(同 setModePref)。 */
   toggleMode(): Promise<void>
   cycleSkin(): void
@@ -107,6 +110,9 @@ function readGlass(): boolean {
 }
 function readFlat(): boolean {
   try { return localStorage.getItem('forsion_theme_flat') === '1' } catch { return false }
+}
+function readAmbient(): boolean {
+  try { return localStorage.getItem('forsion_theme_ambient') === 'on' } catch { return false }
 }
 
 function hasForcedSchemeHint(): boolean {
@@ -156,7 +162,7 @@ export const useTheme = create<ThemeState>((set, get) => {
     const s = get()
     try {
       window.tangu?.broadcastUi?.({ theme: { lang: s.lang, skin: s.skin, bg: s.bg, modePref: s.modePref,
-        seed: s.seed, bgSeed: s.bgSeed, glass: s.glass, flat: s.flat } })
+        seed: s.seed, bgSeed: s.bgSeed, glass: s.glass, flat: s.flat, ambient: s.ambient } })
     } catch { /* 无 preload */ }
   }
   // glass 只是 <html> 上的属性;抽出来给「本窗动作」和「跨窗重放」共用(后者不能带 notify)。
@@ -170,6 +176,11 @@ export const useTheme = create<ThemeState>((set, get) => {
     try { document.documentElement.dataset.flat = on ? '1' : '0' } catch { /* ignore */ }
     try { localStorage.setItem('forsion_theme_flat', on ? '1' : '0') } catch { /* ignore */ }
     set({ flat: on })
+  }
+  const applyAmbient = (on: boolean): void => {
+    try { document.documentElement.dataset.ambient = on ? 'on' : 'off' } catch { /* ignore */ }
+    try { localStorage.setItem('forsion_theme_ambient', on ? 'on' : 'off') } catch { /* ignore */ }
+    set({ ambient: on })
   }
   /** 重放别处的外观态。载荷已在主进程重建,这里再按**本窗 registry** 查一遍(轴不认识就保留现状)。
    *  明暗只同步**偏好**,落地值各窗自解析(system 要按本机系统值,主题强制优先)。持久化不用管——
@@ -187,6 +198,7 @@ export const useTheme = create<ThemeState>((set, get) => {
     apply(lang, skin, bg, pref, seed, bgSeed)
     if (typeof p?.glass === 'boolean') applyGlass(p.glass)
     if (typeof p?.flat === 'boolean') applyFlat(p.flat)
+    if (typeof p?.ambient === 'boolean') applyAmbient(p.ambient)
   }
   // 设置面板自 2026-09-20 起住在独立浮窗(独立渲染进程 = 独立 store 与 DOM):没有这条订阅,
   // 在设置里换肤只有设置窗自己变色(2.11.1 实报)。主进程只转给其余窗口,故收到的必是别处的改动。
@@ -224,6 +236,7 @@ export const useTheme = create<ThemeState>((set, get) => {
     bgSeed: readBgSeed(),
     glass: readGlass(),
     flat: readFlat(),
+    ambient: readAmbient(),
     themesVersion: 0,
     setLang: (lang) => { apply(lang, get().skin, get().bg, get().modePref, get().seed); notify() },
     // 成就打点只在用户显式换主题/配色的动作里(setTheme/setSkin/setBg);严禁挪进 apply——启动初始化也走 apply 会误计。
@@ -257,6 +270,7 @@ export const useTheme = create<ThemeState>((set, get) => {
     },
     setGlass: (on) => { applyGlass(on); notify() },
     setFlat: (on) => { applyFlat(on); notify() },
+    setAmbient: (on) => { applyAmbient(on); notify() },
     // 快捷明暗(ribbon/命令面板/插件):主题锁定时静默无效;否则翻到当前落地明暗的反面(显式覆盖 system)。
     toggleMode: () => { if (get().modeLocked) return Promise.resolve(); return get().setModePref(get().mode === 'dark' ? 'light' : 'dark') },
     cycleSkin: () => {
@@ -320,6 +334,10 @@ export const useTheme = create<ThemeState>((set, get) => {
 
 /** Visual consumers read this projection. Settings and commands keep the global
  * store, so entering a Space never persists or broadcasts its effective axes. */
+// 取色开关不进首帧脚本(三端各有一份 index.html):它管的 .shell 要等 React 挂载才出现,而本模块那时早已求值,
+// 在这里把属性落到 <html> 上就不会闪。
+try { document.documentElement.dataset.ambient = useTheme.getState().ambient ? 'on' : 'off' } catch { /* 无 DOM(测试) */ }
+
 export const useVisualTheme = create<ThemeState>(() => useTheme.getState())
 
 function refreshVisualTheme(): void {

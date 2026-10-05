@@ -135,6 +135,31 @@ describe('persistent global settings versus rendered Space settings', () => {
     expect(useVisualTheme.getState().mode).toBe('dark')
     expect(useTheme.getState().modePref).toBe('light') // 全局偏好没被动
   })
+  it('content-tinted chrome stays off until the user turns it on, follows another window, and survives a restart', async () => {
+    const { useTheme, useVisualTheme } = await import('../stores/themeStore')
+    expect(useTheme.getState().ambient).toBe(false)
+    expect(document.documentElement.dataset.ambient).toBe('off')
+    useTheme.getState().setAmbient(true)
+    expect(document.documentElement.dataset.ambient).toBe('on')
+    expect(localStorage.getItem('forsion_theme_ambient')).toBe('on')
+    expect(useVisualTheme.getState().ambient).toBe(true)
+    // 设置浮窗关掉它 → 本窗跟着关;不带这一项的旧窗口发来的主题变更不动它。
+    // vitest 里内置设计语言不注册 → 重放走「先重扫磁盘主题」那条异步路,所以要等。
+    const s = useTheme.getState()
+    const axes = { lang: s.lang, skin: s.skin, bg: s.bg, modePref: s.modePref, seed: s.seed, bgSeed: s.bgSeed, glass: s.glass }
+    s.syncFromWindow({ theme: { ...axes, flat: true } })
+    await vi.waitFor(() => expect(useTheme.getState().flat).toBe(true))
+    expect(useTheme.getState().ambient).toBe(true)
+    s.syncFromWindow({ theme: { ...axes, ambient: false } })
+    await vi.waitFor(() => expect(document.documentElement.dataset.ambient).toBe('off'))
+    expect(useVisualTheme.getState().ambient).toBe(false)
+    localStorage.setItem('forsion_theme_ambient', 'on')
+    vi.resetModules()
+    delete document.documentElement.dataset.ambient
+    const again = await import('../stores/themeStore')
+    expect(again.useTheme.getState().ambient).toBe(true)
+    expect(document.documentElement.dataset.ambient).toBe('on')
+  })
   it('keeps the previous setting if storage cannot save', async () => {
     const { useSpaceAppearance, setSpaceAppearance } = await import('../stores/spaceAppearanceStore')
     setSpaceAppearance('notes', { skin: 'teal' })
