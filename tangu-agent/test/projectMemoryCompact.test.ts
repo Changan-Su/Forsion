@@ -97,6 +97,9 @@ afterAll(() => {
   database?.close(); rmSync(home, { recursive: true, force: true }); rmSync(work, { recursive: true, force: true });
   if (previousHome === undefined) delete process.env.TANGU_HOME; else process.env.TANGU_HOME = previousHome;
 });
+// fill() 往真实的库里写三十来条,每条一次落盘:单跑每例 1 秒上下,全量并行时有例子超过 5 秒。
+// 超时的那一例没跑完的后半截还会接着改 answer、接着叫替身,把后面的用例一起带红(10-05 合并门禁见过),所以整份文件放宽。
+vi.setConfig({ testTimeout: 20_000 });
 beforeEach(() => { calls = []; resolved = []; answer = goodProposal; resetProjectMemoryCompactionForTests(); });
 
 describe('方案校验(validateCompaction)', () => {

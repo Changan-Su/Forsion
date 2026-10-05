@@ -598,7 +598,7 @@ describe('项目会话:只在这个项目成立的候选落项目记忆,不进 a
     expect(String(llmPayloads[1].messages[0].content)).toMatch(/^Compact the saved memory of ONE software project/);
     expect(await logged('project_memory_added')).toHaveLength(0);
     expect(await logged('project_memory_compacted')).toHaveLength(0);
-  });
+  }, 20_000);
 
   it('满了 → 让模型把整份压一遍再写(10-05 用户:「记忆满了就让 agent 压缩一下」);活动里记一笔', async () => {
     await seedProjectSession();
@@ -611,7 +611,7 @@ describe('项目会话:只在这个项目成立的候选落项目记忆,不进 a
     expect(await logged('project_memory_added')).toHaveLength(1);
     // 给压缩模型看的只有项目记忆本身,没有这一轮的对话
     expect(String(llmPayloads[1].messages[1].content)).not.toContain('实质对话内容');
-  });
+  }, 20_000);
 
   it('压缩等模型的那几秒里会话被远端驱动了 → 压缩算数(它只重写已有的),这一句和这一轮剩下的都不写(Codex 评审 10-05)', async () => {
     await seedProjectSession();
@@ -628,7 +628,7 @@ describe('项目会话:只在这个项目成立的候选落项目记忆,不进 a
     expect(await projectFacts()).toEqual([filler(0), filler(1)]);
     expect(await logged('project_memory_compacted')).toHaveLength(1);
     expect(await logged('project_memory_added')).toHaveLength(0);
-  });
+  }, 20_000);
 
   it('没有项目的会话:不问那一组;模型硬给也不认', async () => {
     llmScript = [judged([], ['Tests here run with npm run test:unit'])];
