@@ -22,6 +22,7 @@ import { getToolDefinitions, listDeferredTools } from '../src/tools/registry.js'
 import { humanProjectScope } from '../src/services/humanContext.js';
 import { checkWritePath } from '../src/tools/fsPolicy.js';
 import humanRouter from '../src/routes/human.js';
+import { scheduleAgentFilesSync } from '../src/services/agentFileSync.js';
 
 let home: string, project: string, base: string, server: Server, database: { close(): void };
 const previousHome = process.env.TANGU_HOME;
@@ -85,17 +86,23 @@ describe('HUMAN.md collaboration lifecycle', () => {
   });
   it('undo restores the previous content, persists its status and cannot undo twice', async () => {
     const before = await readHuman(scope);
+    const sync = vi.mocked(scheduleAgentFilesSync); sync.mockClear();
     const r = await api('/agent/agents/first/human', 'PUT', { expectedVersion: before.version, content: '# New agreement', summary: 'New agreement' });
     expect(r.status).toBe(200);
+    expect(sync.mock.calls).toEqual([['owner', 'first']]); // 不带 slug 的调用是空操作:同步按 agent 排队
+    sync.mockClear();
     const undo = await api('/agent/agents/first/human/undo', 'POST', { expectedVersion: r.body.document.version, changeId: r.body.change.id });
     expect(undo.status).toBe(200); expect(undo.body.document.content).toBe(before.content);
+    expect(sync.mock.calls).toEqual([['owner', 'first']]);
     expect(undo.body.document.history[0].undoOf).toBe(r.body.change.id);
     expect((await api('/agent/agents/first/human/undo', 'POST', { expectedVersion: undo.body.document.version, changeId: r.body.change.id })).status).toBe(409);
   });
   it('uses project metadata and keeps project history outside the repository', async () => {
     const before = await api('/agent/project-context/human?sessionId=project');
+    vi.mocked(scheduleAgentFilesSync).mockClear();
     const r = await api('/agent/project-context/human', 'PUT', { sessionId: 'project', expectedVersion: before.body.version, content: '# Project\nDesktop first.', summary: 'Project sequence' });
     expect(r.status).toBe(200); expect(r.body.document.path).toBe(join(project, '.tangu', 'HUMAN.md'));
+    expect(scheduleAgentFilesSync).not.toHaveBeenCalled(); // 项目级手册不在任何 agent 的文件夹里,不排 agent 同步
     expect((await readHuman(scope)).content).not.toContain('Desktop first');
     expect(await humanProjectScope('owner', 'project')).toEqual({ kind: 'project', cwd: project });
   });
@@ -131,11 +138,13 @@ describe('HUMAN.md collaboration lifecycle', () => {
     const tool = manageHumanProvider.tools()[0];
     const ctx = { userId: 'owner', sessionId: 'rootless', appId: 'tangu', execMode: 'sandbox' as const, agentSlug: 'shared' };
     expect(tool.isEnabledFor!(deps().profile, ctx)).toBe(true);
+    const sync = vi.mocked(scheduleAgentFilesSync); sync.mockClear();
     const result = await runWithAgentSlug('first', async () => {
       const before = JSON.parse(await tool.execute({ action: 'read', scope: 'agent' }, ctx));
       return JSON.parse(await tool.execute({ action: 'update', scope: 'agent', expectedVersion: before.version, content: '# Shared\nUse sketches.', summary: 'Sketches', evidence: 'Explicit request' }, ctx));
     }, 'shared');
     expect(result.kind).toBe('human_update'); expect(result.change.scope).toEqual({ kind: 'agent', slug: 'shared' });
+    expect(sync.mock.calls).toEqual([['owner', 'shared']]); // 归属(显示)agent,不是记忆桶 'first';只读那次不排同步
     expect((await readHuman(scope)).content).not.toContain('Use sketches');
     expect((await readHuman({ kind: 'agent', slug: 'shared' })).content).toContain('Use sketches');
   });
