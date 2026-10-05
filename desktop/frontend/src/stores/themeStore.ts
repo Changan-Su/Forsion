@@ -198,7 +198,6 @@ export const useTheme = create<ThemeState>((set, get) => {
     apply(lang, skin, bg, pref, seed, bgSeed)
     if (typeof p?.glass === 'boolean') applyGlass(p.glass)
     if (typeof p?.flat === 'boolean') applyFlat(p.flat)
-    if (typeof p?.ambient === 'boolean') applyAmbient(p.ambient)
   }
   // 设置面板自 2026-09-20 起住在独立浮窗(独立渲染进程 = 独立 store 与 DOM):没有这条订阅,
   // 在设置里换肤只有设置窗自己变色(2.11.1 实报)。主进程只转给其余窗口,故收到的必是别处的改动。
@@ -318,6 +317,9 @@ export const useTheme = create<ThemeState>((set, get) => {
       applyPrefs(payload?.prefs)
       const p = payload?.theme
       if (!p) return
+      // 取色开关与主题轴无关:消息一到就落,不跟下面「先重扫磁盘主题」那条异步路排队 ——
+      // 排了队,晚到的旧重放会把用户刚关掉的开关改回去并存盘(Codex 评审 P2)。
+      if (typeof p.ambient === 'boolean') applyAmbient(p.ambient)
       // 磁盘主题可能是**别的窗口刚装上 / 刚编辑**的,本窗 registry 里还没有它:直接重放会被 hasLanguage
       // 判为非法而保留现状 —— 症状与本次修的 bug 一模一样(只有设置窗变色)。先重扫一遍磁盘再重放。
       if (typeof p.lang === 'string' && !hasLanguage(p.lang)) {

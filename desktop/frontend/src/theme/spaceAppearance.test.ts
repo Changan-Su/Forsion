@@ -150,9 +150,14 @@ describe('persistent global settings versus rendered Space settings', () => {
     s.syncFromWindow({ theme: { ...axes, flat: true } })
     await vi.waitFor(() => expect(useTheme.getState().flat).toBe(true))
     expect(useTheme.getState().ambient).toBe(true)
+    // 开关本身不排那条异步路:消息一到就落(否则晚到的旧重放会盖掉更新的选择)。
+    s.syncFromWindow({ theme: { ...axes, lang: 'disk-theme-not-here', ambient: true } })
     s.syncFromWindow({ theme: { ...axes, ambient: false } })
-    await vi.waitFor(() => expect(document.documentElement.dataset.ambient).toBe('off'))
+    expect(document.documentElement.dataset.ambient).toBe('off')
     expect(useVisualTheme.getState().ambient).toBe(false)
+    await new Promise((r) => setTimeout(r, 30)) // 让两条延后的重放都跑完
+    expect(useTheme.getState().ambient).toBe(false)
+    expect(localStorage.getItem('forsion_theme_ambient')).toBe('off')
     localStorage.setItem('forsion_theme_ambient', 'on')
     vi.resetModules()
     delete document.documentElement.dataset.ambient
