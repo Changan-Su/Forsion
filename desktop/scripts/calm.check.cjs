@@ -4,10 +4,11 @@
 //   舒缓过渡 = 切主视图的淡入、外围恢复的时长
 // 钉四件事:缺省全开的数、指针进去真的恢复、在**设置浮窗**里关掉后主窗不重启就回到改动前的数(OFF 常量 = 10-05 改动前
 // 在同一夹具上量到的值)、重载后仍然关着。另钉两处容易静默出事的:全宽笔记不被阅读宽度压住、画布里按缺省排版。
-// 用法:node scripts/calm.check.cjs [--baseline] [--nc] [--light]
+// 用法:node scripts/calm.check.cjs [--baseline] [--nc] [--light] [--lang=<设计语言 id>]
 //   --baseline 只打印当前产物的度量(改 CSS 前后各跑一遍对数用),不断言
 //   --nc       负对照:启动前把三个开关都存成关,「缺省开」那几组必须红 —— 此时退出码非 0 才算对
 //   --light    浅色下跑一遍(淡出的数与恢复都一样要成立)
+//   --lang=…   换一套设计语言跑(缺省 genesis-glass;出厂缺省语言是 lovable,两套都要绿)
 // 截图落 SHOT_DIR(缺省系统临时目录),断言管数、观感自己看(DESIGN §8)。
 const fs = require('fs')
 const path = require('path')
@@ -16,6 +17,7 @@ const { sleep, shotDir, makeReporter, launch, boot, enterSpace } = require('./li
 const BASELINE = process.argv.includes('--baseline')
 const NC = process.argv.includes('--nc')
 const MODE = process.argv.includes('--light') ? 'light' : 'dark'
+const LANG = (process.argv.find((a) => a.startsWith('--lang=')) || '').slice(7) || 'genesis-glass'
 const W = 1512, H = 950
 
 const NOTE = `这一版只做一件事：让第一次打开的人，三分钟之内写下第一条笔记。其它的想法先记在后面，不排进这一期。
@@ -116,11 +118,11 @@ async function main() {
   try {
     await app.evaluate(({ nativeTheme }, m) => { nativeTheme.themeSource = m }, MODE)
     await boot(app, win, { space: 'tangu', width: W, height: H })
-    await win.evaluate(({ m, nc }) => {
-      localStorage.setItem('forsion_theme_lang', 'genesis-glass'); localStorage.setItem('forsion_theme_pref', m)
+    await win.evaluate(({ m, nc, lang }) => {
+      localStorage.setItem('forsion_theme_lang', lang); localStorage.setItem('forsion_theme_pref', m)
       localStorage.setItem('forsion_glass', 'off'); localStorage.setItem('tangu_locale', 'zh')
       for (const k of ['dim', 'reading', 'motion']) { if (nc) localStorage.setItem('forsion_calm_' + k, '0'); else localStorage.removeItem('forsion_calm_' + k) }
-    }, { m: MODE, nc: NC })
+    }, { m: MODE, nc: NC, lang: LANG })
     await win.emulateMedia({ colorScheme: MODE })
     const reload = async () => { await win.reload({ waitUntil: 'domcontentloaded' }); await win.waitForSelector('.rb .rb-space', { timeout: 30_000 }) }
     await reload(); await sleep(4000)
@@ -132,7 +134,7 @@ async function main() {
     // 截主窗:设置浮窗开着时 getAllWindows()[0] 是浮窗,lib 的 captureWindow 会截到它
     const shot = async (name) => {
       const png = await app.evaluate(async ({ BrowserWindow }) => { const w = BrowserWindow.getAllWindows().find((x) => !x.webContents.getURL().includes('window=')); return (await w.capturePage()).toPNG().toString('base64') })
-      fs.writeFileSync(path.join(out, `${name}-${MODE}.png`), Buffer.from(png, 'base64'))
+      fs.writeFileSync(path.join(out, `${name}-${MODE}${LANG === 'genesis-glass' ? '' : '-' + LANG}.png`), Buffer.from(png, 'base64'))
     }
 
     await toNote()
