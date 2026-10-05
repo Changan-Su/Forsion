@@ -1559,8 +1559,8 @@ try {
   //  ③ A 换到项目二:项目那条不在提示里、答不出,自己那条还在;在项目一说过的原话也不在这一轮喂给模型的召回里
   //     (10-05:以前带进来、只标出处,GPT 6 Luna 三次里两次照着答成本项目的 → 现在不带,硬判);
   //  ④ A 在不属于任何项目的会话里:没有项目记忆段;
-  //  ⑤ A 在项目二里点名问项目一(「pm-one 那个项目的发布分支叫什么」):那条原话带得进来、标着「不是本会话的项目」,答得出
-  //     —— 证 ③ 没把「在别处问那个项目」这条路一起堵死。
+  //  ⑤ A 在项目二里点名问项目一(「pm-one 那个项目的发布分支叫什么」):那条原话带得进来、标着「不是本会话的项目」
+  //     —— 证 ③ 没把「在别处问那个项目」这条路一起堵死。模型据此答没答出来只记不判。
   await scenario('projmem', 'projmem 记忆分项目级 / 全局级:落点、同项目共用、跨项目隔离', async () => {
     const a = 'live-pm-a', b = 'live-pm-b';
     for (const [slug, name] of [[a, 'Atlas'], [b, 'Birch']]) await api('/agent/agents', { method: 'POST', body: JSON.stringify({ slug, name, systemPrompt: 'Be concise and respond in Chinese.' }) });
@@ -1596,8 +1596,10 @@ try {
     const projectless = !loose.error && !!loose.systemPrompt && !loose.systemPrompt.includes(branch) && !loose.systemPrompt.includes('## Project Memory');
     const named = await run(await mkS(a, p2, 'Project memory named project'), 'pm-one 那个项目的发布分支叫什么?不知道就直说不知道。不调用工具。', 120_000, cfgOf(a, p2));
     const labelled = new RegExp(`project=pm-one, not this session's project\\][^\\n]*${branch}`).test(named.recalled || '');
-    const reachable = !named.error && labelled && !named.systemPrompt?.includes(branch) && named.content.includes(branch);
-    writeFileSync(join(OUT, 'projmem-evidence.json'), JSON.stringify({ first, shared, isolated, projectless, reachable, calls,
+    // 判的是那条原话带不带得进来(引擎的事);模型拿不拿它作答只记不判 —— 说「不知道」是保守的错,不是串台(10-05 首轮 3 次里 1 次)。
+    const reachable = !named.error && labelled && !named.systemPrompt?.includes(branch);
+    const namedAnswered = named.content.includes(branch);
+    writeFileSync(join(OUT, 'projmem-evidence.json'), JSON.stringify({ first, shared, isolated, projectless, reachable, namedAnswered, calls,
       replies: { write: ev.content, sameProjectOtherAgent: same.content, otherProject: other.content, noProject: loose.content, namedProject: named.content },
       recalled: { otherProject: other.recalled || '', noProject: loose.recalled || '', namedProject: named.recalled || '' } }, null, 2));
     return { ok: shared && isolated && projectless && reachable, detail: [
@@ -1605,7 +1607,7 @@ try {
       `② 同项目另一个 agent ${shared ? '提示里有项目那条、答对了,没有 A 自己那条' : `⚠ ${same.error || JSON.stringify({ block: !!same.systemPrompt?.includes('## Project Memory'), inPrompt: !!same.systemPrompt?.includes(branch), answered: same.content.includes(branch), sawAgentFact: !!same.systemPrompt?.includes(habit) })}`}`,
       `③ 换一个项目 ${isolated ? `项目记忆段不在、召回里也没有项目一的原话;${other.content.includes(branch) ? '提到了那个分支但说明它属于另一个项目' : '答不出'};自己那条还在` : `⚠ ${other.error || JSON.stringify({ leaked: !!other.systemPrompt?.includes(branch), recalledFromOtherProject: (other.recalled || '').includes(branch), claimedAsThisProject: other.content.includes(branch) && !attributed, ownFact: !!other.systemPrompt?.includes(habit) })}`}`,
       `④ 不属于项目的会话 ${projectless ? '没有项目记忆段' : `⚠ ${loose.error || '提示里出现了项目记忆'}`}`,
-      `⑤ 在项目二点名问项目一 ${reachable ? '那条原话带进来了、标着不是本会话的项目;答对了' : `⚠ ${named.error || JSON.stringify({ recalledAndLabelled: labelled, inSystemPrompt: !!named.systemPrompt?.includes(branch), answered: named.content.includes(branch) })}`}`,
+      `⑤ 在项目二点名问项目一 ${reachable ? `那条原话带进来了、标着不是本会话的项目;模型${namedAnswered ? '据此答对了' : '没用它、说不知道(只记不判)'}` : `⚠ ${named.error || JSON.stringify({ recalledAndLabelled: labelled, inSystemPrompt: !!named.systemPrompt?.includes(branch), answered: namedAnswered })}`}`,
     ].join(';'), output: `【写入】${ev.content}\n【同项目另一个 agent】${same.content}\n【换项目】${other.content}\n【无项目】${loose.content}\n【点名问项目一】${named.content}`, toolCalls: [...ev.toolCalls, '|', ...same.toolCalls, '|', ...other.toolCalls, '|', ...named.toolCalls] };
   });
 

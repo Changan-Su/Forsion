@@ -97,7 +97,7 @@ describe('Agent memory recall', () => {
     // 点了那个项目的名字(大小写不论):带进来,抬头标明不是本会话的项目,段头多一句说明
     const asked = (await recall('alpha', 'PM-One 那边 AlphaProject 插件的发布分支叫什么')).content;
     expect(asked).toContain("role=user; project=pm-one, not this session's project] AlphaProject 插件的发布分支叫 release-one");
-    expect(asked).toContain('was said about that other project and tells you nothing about this one');
+    expect(asked).toContain('it can answer questions about that project and tells you nothing about this one');
     // 点的是别的名字:不算
     expect((await recall('alpha', 'pm-three 那边 AlphaProject 插件的发布分支叫什么')).content).not.toContain('release-one');
   });

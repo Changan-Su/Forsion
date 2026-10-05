@@ -189,9 +189,11 @@ export async function buildAgentMemoryContext(input: AgentMemoryContextInput): P
     const lines = permittedHistory.map((hit) => ({
       text: `[session_id=${hit.id}; message_id=${hit.hit!.messageId}; timestamp=${hit.hit!.timestamp}; role=${hit.hit!.role}${from(hit)}] ${hit.hit!.snippet}`,
     }));
+    // 带标注的片段现在只在「这条消息点了那个项目的名字」时出现 → 段头照这个情形写:可以拿它回答那个项目的事(起初写的是「对本项目什么也说明不了」,
+    // 真模型点名问时三次里有一次因此说不知道),但不是本项目的事实。
     const foreign = permittedHistory.some((hit) => hit.otherProject);
     const before = parts.length;
-    appendSection('volatile', `Related past-message excerpts (read_session verifies original text; bounded recent window${foreign ? "; an excerpt marked \"not this session's project\" was said about that other project and tells you nothing about this one" : ''}):`, lines, Math.floor(cap / 4));
+    appendSection('volatile', `Related past-message excerpts (read_session verifies original text; bounded recent window${foreign ? "; an excerpt marked \"not this session's project\" is about the project named in its label, which this message mentions: it can answer questions about that project and tells you nothing about this one" : ''}):`, lines, Math.floor(cap / 4));
     if (parts.length > before) for (const hit of permittedHistory) {
       if (hit.hit && parts.at(-1)!.includes(`message_id=${hit.hit.messageId};`)) historyMessageIds.push(hit.hit.messageId);
     }
