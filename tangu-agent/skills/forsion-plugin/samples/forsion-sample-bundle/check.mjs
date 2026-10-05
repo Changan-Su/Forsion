@@ -10,7 +10,7 @@ const manifest = JSON.parse(readFileSync(path.join(ROOT, 'manifest.json'), 'utf8
 const fail = (msg) => { console.error(`❌ ${msg}`); process.exit(1) }
 if (/^\s*(import|export)\s/m.test(src)) fail('main.js 必须是裸 setup 体,不得有顶层 import/export')
 
-// CHANGELOG 顶节版本 = manifest.version(不 bump 市场推不下去更新)
+// CHANGELOG 顶节版本 = manifest.version(不 bump 插件商店推不下去更新)
 const top = readFileSync(path.join(ROOT, 'CHANGELOG.md'), 'utf8').match(/^## (\d+\.\d+\.\d+)/m)?.[1]
 if (top !== manifest.version) fail(`CHANGELOG 顶节 ${top} ≠ manifest.version ${manifest.version}`)
 

@@ -19,6 +19,7 @@
  *   npm run live:harness -- --only chat,tool,loop            # loop = 轮数耗尽末轮收尾(改 agentLoop 末轮/收尾提示后跑)
  *   npm run live:harness -- --only skillpick,settingsnav     # 反馈 6a239e58(10-04):指定技能清单只列目录、正文经 use_skill 取(改 services/skillLoadout.ts 后跑);
  *                                                           #   「语音在哪设置」经界面命令直达设置页、不用电脑操控,网页检索次数只计数(改 desktop open-settings 的 description / params 后跑)
+ *   npm run live:harness -- --only storename                 # 改名「插件商店」(10-05):改 skills/forsion-plugin / forsion-connect 里的商店叫法后跑;两问不点名技能,须装载技能并用新名字指路
  *   npm run live:harness -- --only plugin                    # 引擎插件热插拔(10-02):夹具插件开着调得到、停用后调不到、再启用回来(改 plugins/bootstrap 生命周期后跑)
  *   npm run live:harness -- --only btw                       # 旁聊 /btw(09-22):带主会话上下文答题外话、追问带前轮、不写回、主 run 在飞也能问;改 services/aside.ts 提示词后跑
  *   npm run live:harness -- --only realuse --rounds 2 --model xai/grok-4.7   # 真实使用模拟(10-04):消息不点名任何库 / 工具;改 manage_harness / 装备层 / 工作笔记注入 / Muse 巡检后跑。
@@ -138,7 +139,7 @@ const opt = (name, def) => { const i = argv.indexOf(`--${name}`); return i >= 0 
 const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
 const MODEL = opt('model', process.env.TANGU_LIVE_MODEL || 'codex/gpt-5.6-luna');
 const AUTH = resolve(opt('auth', process.env.TANGU_LIVE_AUTH || join(homedir(), '.forsion-dev', 'provider-auth.json')));
-const KEYS = ['realtime', 'voiceclone', 'personas', 'rename', 'selfschedule', 'selfmodel', 'chat', 'tool', 'remember', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'parked', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human', 'emoji', 'visualize', 'visualfigures', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'control', 'phone', 'unattendedask', 'plugin', 'skillpick', 'settingsnav'];
+const KEYS = ['realtime', 'voiceclone', 'personas', 'rename', 'selfschedule', 'selfmodel', 'chat', 'tool', 'remember', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'parked', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human', 'emoji', 'visualize', 'visualfigures', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'control', 'phone', 'unattendedask', 'plugin', 'skillpick', 'settingsnav', 'storename'];
 KEYS.push('pageinstructions');
 KEYS.push('harnessopen');
 KEYS.push('equip');
@@ -2332,6 +2333,29 @@ Then reply with only the command output.`,
     return { ok: !ev.error && ev.done && listed && !inlined && narrowed && loaded,
       detail: ev.error || `目录${listed ? '列了点名的技能' : '没列'};正文${inlined ? '被内联' : '未内联'};${narrowed ? '没点名的不在' : '没点名的也在'};use_skill ${loaded ? '取回正文' : '未取回'};system ${sys.length} 字符;工具 ${ev.toolCalls.join(',') || '无'}`,
       output: ev.content, ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls };
+  });
+
+  // 「应用市场」改名「插件商店」(10-05):forsion-plugin / forsion-connect 两份技能正文里的旧名(Forsion Market / 市场)一并改了。
+  // 两问都不点名技能、不点名商店,只说要办的事;改过的正文须到了模型眼前(use_skill 取回,或短技能已在 system 里)并用新名字指路。
+  // 负对照 = 改前的技能正文:forsion-plugin 没有「发布到插件商店」这一节、forsion-connect 写的是 Forsion Market → 「正文带新名」那一项红。
+  await scenario('storename', 'storename 技能正文改名:发布指路说「插件商店」、不再说应用市场 / Market', async () => {
+    const OLD = /应用市场|应用商店|Forsion Market|App Market/i, NEW = /插件商店|plugin store/i;
+    const ask = async (tag, text, marker) => {
+      const ev = await run(`live-storename-${tag}-${Date.now()}`, text, 240_000, { debugSystemPrompt: true });
+      // 改过的那段正文要真到了模型眼前:经 use_skill 取回,或(短技能)已整篇在 system 里。两条路都不带新名 = 没覆盖到。
+      const via = ev.toolResults.some((r) => r.name === 'use_skill' && !r.isError && String(r.full || '').includes(marker)) ? 'use_skill'
+        : (ev.systemPrompt || '').includes(marker) ? 'system' : '';
+      return { ev, read: !!via, via, named: NEW.test(ev.content), stale: OLD.test(ev.content) };
+    };
+    const a = await ask('plugin', '我照 Forsion 的插件模板做完了一个插件,想让别的 Forsion 用户也能一键装上。我该把它发到哪里?用户之后在桌面端从哪个入口安装?两句话说清,不要改任何文件。', '发布到插件商店');
+    const b = await ask('connect', '我想做一个网页小工具:把粘贴进来的文本交给 Forsion 的 AI 解析成表格。先别写代码,只回答两件事:①网页里能不能直接用 Forsion 的 AI?②做好并发布之后,想让所有 Forsion 用户都能在公开的地方看到它,要去哪里申请、那个地方叫什么?', 'Forsion plugin store');
+    const runs = [a, b], err = a.ev.error || b.ev.error;
+    const answered = !err && runs.every((r) => r.ev.done && r.named && !r.stale);
+    // Connect 那问模型有时不装载技能、凭 system 里的叫法直接答(10-05 三跑两次如此,答的名字是对的):证不了改过的那行起了作用,
+    // 记未判定项(verdict 只在 ok 时认 inconclusive)。插件那问稳定装载,没读到正文就是红。
+    return { ok: answered && a.read, inconclusive: answered && a.read && !b.read,
+      detail: err || runs.map((r, i) => `${i ? 'Connect' : '插件'}:技能正文${r.read ? `带新名(经 ${r.via})` : '没到模型眼前或不带新名'},回答${r.named ? '说了插件商店' : '没说插件商店'}${r.stale ? ',⚠️还在说旧名' : ''}`).join(';'),
+      output: `${a.ev.content}\n\n———\n\n${b.ev.content}`, ttftMs: ttft(a.ev), tokens: tokensOf(a.ev) + tokensOf(b.ev), toolCalls: [...a.ev.toolCalls, ...b.ev.toolCalls] };
   });
 
   // 「X 在哪设置」(10-04,反馈 6a239e58):那次 agent 列待办、搜网页、再用电脑操控去点设置窗口,open-settings 传了个不存在的页名

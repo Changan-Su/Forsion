@@ -1,6 +1,6 @@
 ---
 name: forsion-extension-development
-description: 当用户要给 Forsion / Tangu 做插件、主题、Space、智能体(agent)或捆绑包(bundle)——或要把某个能力做成可分发/可上架市场的扩展——时使用。内置五类官方模板(samples/),讲清各自的格式基线与硬约束(尤其两种"插件"是完全不同的系统),照抄模板改比从零写靠谱。
+description: 当用户要给 Forsion / Tangu 做插件、主题、Space、智能体(agent)或捆绑包(bundle)——或要把某个能力做成可分发/可上架插件商店的扩展——时使用。内置五类官方模板(samples/),讲清各自的格式基线与硬约束(尤其两种"插件"是完全不同的系统),照抄模板改比从零写靠谱。
 metadata:
   version: 1.19.0
   author: Forsion
@@ -37,7 +37,7 @@ Forsion / Tangu 的扩展**默认按捆绑包(bundle)形态发行**(2026-07-25 �
 三个常用贡献点:工具(`sample_greet`)、设置 schema(`text`/`toggle`,设置页通用渲染)、`promptSection`(启用时注入系统提示)。硬约束:
 
 - **绝不运行时 import 核心包**。对 `@forsion/tangu-agent` 只允许 `import type`(模板 tsconfig 开了 `verbatimModuleSyntax`,值导入直接编译错误)。运行时能力全走 `activate(ctx)` 的 **`ctx.sdk`** —— 否则核心的模块级单例被复制成第二份,行为诡异。
-- **`dist/` 必须提交**。市场安装 = 解压源码到 `~/.forsion/plugins/<id>/`,全程不构建;改 `src/` 后必须 `npm run build`(tsc→dist/)再提交。
+- **`dist/` 必须提交**。插件商店安装 = 解压源码到 `~/.forsion/plugins/<id>/`,全程不构建;改 `src/` 后必须 `npm run build`(tsc→dist/)再提交。
 - **工具门禁**:`isEnabledFor` 返回 `store.isPluginEnabledSync(id)`,插件启用才对模型可见。
 - **生命周期**:关掉插件时宿主调 `deactivate()`(限时 5s)并撤掉它注册的工具 / 命令 / 路由(meta 留着,设置页照样列出);再打开会在**同一个模块对象**上再调一次 `activate(ctx)`。所以 activate 可能跑多次 —— 别依赖模块级「只做一次」的状态,activate 里起的定时器 / 子进程 / 监听(含 `process.once`)一律在 deactivate 里收掉。
 - **限时**:import + `activate` 合计限时 30s,超时按激活失败处理(设置页显示错因);超时的 `activate` / `deactivate` 宿主不会再等,但在它真正结束前**不会**再激活同一个插件(防止迟到的收尾清掉新实例),结束后自动补上。activate 里别等永远不回的连接 —— 连不上就先返回、后台重试。
@@ -172,7 +172,7 @@ ctx.openMiniPanel?.('mini-counter', {
 | **播种一次** | Agent 的**人格面**(config.toml / SOUL.md / Library / MEMORY) | 首次发现拷入引擎成为活体,**永不覆盖**,卸载保留 |
 | **指纹自愈** | Agent 的 `skills/`(2026-08-25 起) | 每次启动比指纹:用户没动过的跟着 bundle 更新;动过的(含无指纹老副本)保护不覆盖并在引擎日志报出来 |
 
-包根 `skills/`(全局技能)是原地扫描、不落盘拷贝,不在上表内。因此 onboarding 里**不要** recommends 自家已内嵌的 agent/skill(会引导去市场重复装)。真实范例:`Forsion-Instrumentality-Project/bluebird/`。
+包根 `skills/`(全局技能)是原地扫描、不落盘拷贝,不在上表内。因此 onboarding 里**不要** recommends 自家已内嵌的 agent/skill(会引导去插件商店重复装)。真实范例:`Forsion-Instrumentality-Project/bluebird/`。
 
 ### 插件能自带 MCP 吗?——不能,也别绕(2026-09-06 立规)
 
@@ -382,7 +382,7 @@ ctx.registerCommand({
 | `ctx.automation` | 播种多维表自动化规则(`ensure(rules)`) | 2026-09-02 起;⚠️**非 Tangu 宿主上整个不存在** → `void ctx.automation?.ensure(…)`;id 宿主加 `plugin:<id>:` 前缀;见下「自动化」 |
 | `ctx.calendar` | 把插件种的表登记进 Calendar Space(`ensureMember`) | 2026-09-02 起;显式成员制,不登记就不在日历里;旧宿主没有 → `ctx.calendar?.` |
 | manifest `events[]` | 自动化(Automation)可订阅的事件 | 纯声明无代码;⚠️目前只有中文 `label`,英文界面下也显示中文 |
-| manifest `onboarding` | 有 `requires` = **闸**(宿主实测,未满足才弹检查卡);没有 = 详情页里折叠的使用说明 | 见下「前置条件:onboarding.requires」;**别 recommends 自家已内嵌的 agent/skill**(会引导去市场重复装);⚠ `recommends` 只在闸的检查卡里渲染,没有 `requires` 就一个字都不显示 |
+| manifest `onboarding` | 有 `requires` = **闸**(宿主实测,未满足才弹检查卡);没有 = 详情页里折叠的使用说明 | 见下「前置条件:onboarding.requires」;**别 recommends 自家已内嵌的 agent/skill**(会引导去插件商店重复装);⚠ `recommends` 只在闸的检查卡里渲染,没有 `requires` 就一个字都不显示 |
 
 `ctx.app` 上另有三组:**整库文件读写**、**只读全库查询**、**块表面** —— 各占下面一节。
 
@@ -635,7 +635,7 @@ refresh = (rows) => h.update({ ...spec, rows })   // 数据刷新走 update:排�
 4. `check()` 返回 `'ok' | 'unmet' | 'unknown'` 或 `{ state, detail }`(`detail` 用户可见 → 中英两份)。
    **拿不准一律 `'unknown'`**:离线、未登录、本端没有 `window.tangu`、探测出错、HTTP 失败说不清原因。
    只有**确认**没配才回 `'unmet'` —— unknown 永远不算未满足,宿主不拿它催用户。
-5. `check` 只在用户打开检查卡 / 点「重新检查」/ 手动启用 / 市场装完时被调,**启动期不调**,8 秒超时按 unknown。
+5. `check` 只在用户打开检查卡 / 点「重新检查」/ 手动启用 / 插件商店装完时被调,**启动期不调**,8 秒超时按 unknown。
    别在里面做重活,也别指望它在后台跑。
 6. key / id 须匹配 `^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$`,≤8 条;坏条目被 `sanitizeOnboarding` **静默丢弃**
    (全丢光闸就退化成说明,不报错)。英文走 `onboarding.en.intro` / `onboarding.en.steps`(与 `steps` 按下标对齐)。
@@ -646,7 +646,7 @@ refresh = (rows) => h.update({ ...spec, rows })   // 数据刷新走 update:排�
 ### 前置插件 requiresPlugins 与生命周期(2026-10-02 起)
 
 - manifest `"requiresPlugins": ["other-id", { "id": "x", "minVersion": "1.2.0", "market": "x-slug", "name": "X" }]`(≤8 条;
-  `market` = 市场 installSlug,设置页「在市场中查找」拿它预填搜索;`name` = 前置没装时显示的名字)。
+  `market` = 插件商店 installSlug,设置页「在插件商店中查找」拿它预填搜索;`name` = 前置没装时显示的名字)。
   前置算齐 ⇔ 已安装、没被门禁挡、版本 ≥ `minVersion`、**正在运行**。没齐时:用户关着 → 开关灰掉开不了;用户开着 → 「等待前置插件」,
   前置就位自动激活;前置停用 / 卸载 → 自动暂停(依赖方先停),回来自动恢复。互相依赖成环的永不激活。
 - 前置的意思是「我要它注册的东西在」(视图 / 命令 / 文件类型),**不是**「我能 import 它」—— 插件之间仍然不直接互调。
@@ -938,7 +938,7 @@ ctx.calendar?.ensureMember(`${ctx.app.workFolder()}/任务表.db`, 'c-date' /* �
 
 ## Floating Panel:正式第六种面板(2026-09-17 起)
 
-设置、市场、成就、反馈这类独立工具页不再自己盖全屏，统一走 Floating Panel。插件也先 `registerView`，再开面板：
+设置、插件商店、成就、反馈这类独立工具页不再自己盖全屏，统一走 Floating Panel。插件也先 `registerView`，再开面板：
 
 ```js
 ctx.openFloatingPanel?.('inspector', {
@@ -1158,7 +1158,7 @@ const off = ctx.app.watchFile?.('Snippets/latex.js', () => reload())
 
 `check.mjs` 仍然要留(通用纪律 4):Sandbox 证「在真宿主里能起来」,`check.mjs` 证「逻辑回归得了」,两个证的不是一件事。
 
-## 发布到市场
+## 发布到插件商店
 
 推成独立 GitHub 公开仓库(引擎插件记得含 `dist/`)→ 个人中心 → 投稿 选对应类型给仓库链接或传 zip(zip 内容放根或单层文件夹,两层路径装不了)。捆绑包(默认形态)按 **amadeus-plugin** 类投稿(桌面按包内 manifest 实测路由,自然落进 `~/.forsion/plugins/`)。GitHub 来源会**锁定过审时的 release tag**,发新版需重新过审。升版号必写 `CHANGELOG.md` 一节(`## x.y.z — YYYY-MM-DD`),宿主会渲染成插件详情页的更新日志。
 
