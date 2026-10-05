@@ -46,13 +46,20 @@ function nextId(api: DockviewApi, type: string): string {
   return nextPanelId(api.panels.map((p) => p.id), type)
 }
 
+/** 「空侧栏」占位只在该区没有别的视图时才留着:区里有了别的,占位就退位(只剩占位自己时不动)。 */
+function retirePlaceholder(api: DockviewApi, loc: ViewLocation): void {
+  if (loc === 'main') return
+  const here = panelsAt(api, loc)
+  if (here.some((p) => panelType(p) !== 'sidebar-empty')) here.filter((p) => panelType(p) === 'sidebar-empty').forEach((p) => p.api.close())
+}
+
 /** 侧栏开合补间动画期间,pinSides 跳过该侧 —— 让 tween 独占其宽度,免被钉宽 setSize 打断。
  *  bottom 同理(它的补间量的是高),另外还挡住 captureSideWidths 记下补间中间高。 */
 const sidebarAnimating: Record<DockSide, boolean> = { left: false, right: false, bottom: false }
 const toggleReleases: Partial<Record<DockSide, () => void>> = {}
-const extensions: Partial<Record<DockSide, { dismiss(): void; dispose(instant?: boolean): void | Promise<void>; id: string; previousId?: string; defaultWidth?: number }>> = {}
+const extensions: Partial<Record<DockSide, { dismiss(reason?: 'dismiss' | 'layout'): void; dispose(instant?: boolean): void | Promise<void>; id: string; previousId?: string; defaultWidth?: number }>> = {}
 const dismissExtensions = (): void => {
-  for (const side of ['left', 'right', 'bottom'] as const) { extensions[side]?.dismiss(); extensions[side]?.dispose(true) } // layout is being rebuilt: no tween
+  for (const side of ['left', 'right', 'bottom'] as const) { extensions[side]?.dismiss('layout'); extensions[side]?.dispose(true) } // layout is being rebuilt: no tween
 }
 
 
@@ -951,9 +958,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     else {
       // 旧布局 / 被用户关掉过的侧栏 tab 不在 stash 里:点击明确目标时应把它补回来,
       // 与 singleColumnStore 的同名方法对齐。否则命令看似执行,侧栏却只展示别的 tab。
-      get().openView(type, {}, side)
-      const now = panelsAt(get().api!, side)
-      if (now.length > 1) now.filter((p) => panelType(p) === 'sidebar-empty').forEach((p) => p.api.close())
+      get().openView(type, {}, side) // 占位由 openView 退位
     }
     get().refreshTabs()
   },
@@ -1153,6 +1158,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       })
       if (existing) {
         if (reuseKey === 'primary') existing.api.updateParameters({ ...(existing.params ?? {}), ...params })
+        retirePlaceholder(api, locOfPanel(existing)) // 旧存档里留在它旁边的占位(见下面同侧复用那条)
         existing.api.setActive()
         return makeLeaf(existing)
       }
@@ -1168,6 +1174,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       // 显式 newTab 让路(与主区同语义):代码块「运行」每次都要一个新的底部终端 tab。
       const existingSide = panelsAt(api, loc).find((p) => panelType(p) === type)
       if (existingSide) {
+        retirePlaceholder(api, loc) // 旧存档里留在真视图旁边的占位:它关不掉(closable: false),在这里清
         existingSide.api.setActive()
         return makeLeaf(existingSide)
       }
@@ -1191,6 +1198,9 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       if (loc === 'bottom') settleBottomHeight(api)
       restore()
     }
+    // 真视图进了只剩占位的那一侧 → 占位退位(拖入 / 补固定 View 各自早就这么做,唯独这条最常走的路漏了:
+    // 关掉最后一个侧栏视图后再由代码开一个,「空侧栏」标签就一直留在旁边)。
+    retirePlaceholder(api, loc)
     if (loc !== 'main') set({ [visKeyOf(loc)]: true } as Partial<WorkspaceState>)
     if (type === 'chat') set({ focusedChatLeafId: panel.id })
     scheduleWorkspaceSave()
@@ -1554,7 +1564,7 @@ export const presentDockedExtension: ExtendViewPresenter = (options, dismiss) =>
   if (!api) throw new Error('Workbench is not ready')
   const beforeExtension = captureRegionTree(api)
   const side = options.side ?? 'right'
-  extensions[side]?.dismiss()
+  extensions[side]?.dismiss('layout') // another view's extension takes this side
   extensions[side]?.dispose(true) // replacing: swap in place, never a collapse/expand pair
   ++toggleGen[side]
   toggleReleases[side]?.()
@@ -1676,7 +1686,9 @@ export const presentDockedExtension: ExtendViewPresenter = (options, dismiss) =>
         if (vert) settleBottomHeight(api); else pinSides(api)
       }
     }
-    removed = api.onDidRemovePanel((event) => { if (event === panel) { dismiss(); lease.dispose() } })
+    // The person's own close goes through closeLeaf / the header, which dismiss before the panel is removed. A panel
+    // that just disappears was taken with its place (the side was folded): 'layout', not a choice about this panel.
+    removed = api.onDidRemovePanel((event) => { if (event === panel) { dismiss('layout'); lease.dispose() } })
     useWorkspace.getState().syncPanelState()
     useWorkspace.getState().refreshTabs()
     scheduleWorkspaceSave()

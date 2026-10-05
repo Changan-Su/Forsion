@@ -627,12 +627,12 @@ export const useWorkspace = create<WS>((set, get) => {
 useWorkspace.subscribe(saveSoon)
 
 /** The mobile host puts the same temporary leaf in its ordinary drawer View selector. */
-const drawerExtensions: Partial<Record<'left' | 'right', { previousId: string | null; dismiss(): void; dispose(): void }>> = {}
+const drawerExtensions: Partial<Record<'left' | 'right', { previousId: string | null; dismiss(reason?: 'dismiss' | 'layout'): void; dispose(): void }>> = {}
 let extensionSerial = 0
 export const presentDrawerExtension: ExtendViewPresenter = (options, dismiss) => {
   // The mobile shell has two panels. Bottom requests use its right drawer.
   const side = options.side === 'left' ? 'left' : 'right'
-  drawerExtensions[side]?.dismiss()
+  drawerExtensions[side]?.dismiss('layout') // another view's extension takes this drawer
   drawerExtensions[side]?.dispose()
   const before = useWorkspace.getState()
   const bucket = side === 'left' ? 'leftLeaves' : 'rightLeaves'
@@ -667,7 +667,8 @@ export const presentDrawerExtension: ExtendViewPresenter = (options, dismiss) =>
     ...(side === 'left' ? { leftVisible: true, rightVisible: false } : { rightVisible: true, ...(!before.wideMode ? { leftVisible: false } : {}) }) })
   useWorkspace.getState().refreshTabs()
   unsubscribe = useWorkspace.subscribe((current) => {
-    if (!current[visibleKey] || !current[bucket].some((r) => r.id === id)) { dismiss(); lease.dispose() }
+    // The drawer was closed, or a navigation / reset replaced its Views: taken with its place, not closed on its own.
+    if (!current[visibleKey] || !current[bucket].some((r) => r.id === id)) { dismiss('layout'); lease.dispose() }
   })
   return { element, titled: true, activate: () => { if (!disposed) useWorkspace.getState().activateLeaf(id) }, dispose: lease.dispose }
 }

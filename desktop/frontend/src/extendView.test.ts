@@ -70,6 +70,15 @@ describe('owner-scoped extend views', () => {
     store.dismiss()
     expect(onClose).toHaveBeenCalledExactlyOnceWith('dismiss')
   })
+
+  it("reports the person's own close as dismiss and what the workbench takes as layout", () => {
+    const store = createExtendViewController(), onClose = vi.fn()
+    const open = () => store.controller.open(spec('edit', { onClose }))
+    open(); store.dismiss()
+    open(); store.dismiss({ type: 'click' }) // the header's × hands over its click event
+    open(); store.dismiss('layout')
+    expect(onClose.mock.calls).toEqual([['dismiss'], ['dismiss'], ['layout']])
+  })
 })
 
 describe('extend view DOM lifecycle', () => {
@@ -126,6 +135,14 @@ describe('extend view DOM lifecycle', () => {
     } })) })
     await act(async () => { document.querySelector('input')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })) })
     expect(document.querySelector('[role="dialog"]')).not.toBeNull()
+  })
+
+  it("the header's × is the person's own close", async () => {
+    await boot()
+    const onClose = vi.fn()
+    await act(async () => { api.open(spec('edit', { onClose })) })
+    await act(async () => { document.querySelector<HTMLButtonElement>('.wb-extend-close')!.click() })
+    expect(onClose).toHaveBeenCalledExactlyOnceWith('dismiss')
   })
 
   it('Escape still closes when a busy submit button has dropped focus to body', async () => {

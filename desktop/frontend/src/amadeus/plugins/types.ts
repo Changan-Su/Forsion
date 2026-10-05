@@ -452,7 +452,9 @@ export type PluginViewLocation = 'main' | 'left' | 'right' | 'bottom'
  *  (open instances are closed first). */
 /** Bound to this mounted instance, revoked on close/navigation/plugin disable.
  *  Main Views open it beside themselves; side-panel Views get it too, covering themselves behind Back (older hosts:
- *  side Views have none). Feature-detect view?.extendView. Rules and opt-in agent commands can call open(). */
+ *  side Views have none). Feature-detect view?.extendView. Rules and opt-in agent commands can call open().
+ *  onClose(reason): `dismiss` = the person closed that panel itself; `layout` = the workbench took it with its place
+ *  (side folded, layout reset or replaced, another view's extension) — hosts up to 2.12.2 report those as `dismiss`. */
 export interface PluginViewContext {
   /** Mount location. Mini/Floating receive no extendView/full workspace chrome. Feature-detect on older hosts. */
   surface?: 'main' | 'mini' | 'floating'
