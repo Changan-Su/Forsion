@@ -16,7 +16,8 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { Info, MoreHorizontal, Pencil, Pin, PinOff, Plus, SquarePen, Trash2, UserPlus, Users, UsersRound, FolderPlus, MessageSquarePlus } from 'lucide-react'
 import { useShallow } from 'zustand/react/shallow'
-import { OverlayAt, setActiveSpace, useSpaceStore } from '@lcl/engine'
+import { OverlayAt, setActiveSpace, useNativeSheetMenu, useSpaceStore, type SheetMenuItem } from '@lcl/engine'
+import { CtxMenuButtons } from '../components/CtxMenuButtons'
 import { SidebarPane, sessionActivityAt } from './chat2/SidebarPane'
 import { EngineIcon } from '../components/EngineIcon'
 import { useApp } from '../stores/appStore'
@@ -432,6 +433,61 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
     }
   }
 
+
+  /** 「+」与一级行「…」菜单的唯一一份条目:Web 浮层与 Android 原生半屏(lcl nativeSheet 可选宿主)都从这里渲染。 */
+  const plusMenuItems = (): SheetMenuItem[] => [
+    { id: 'new-agent', label: t('orbits.plus.agent'), icon: <UserPlus size={13} />, run: () => { setPlusMenu(null); s.openSettings('agents') } },
+    { id: 'new-team', label: t('orbits.plus.team'), icon: <UsersRound size={13} />, run: () => { setPlusMenu(null); setTeamEditor({ team: null }) } },
+    { id: 'new-project', label: t('orbits.plus.project'), icon: <FolderPlus size={13} />, run: () => { setPlusMenu(null); void s.addLocalWorkspace() } },
+  ]
+  const rowMenuItems = (m: RowMenu): SheetMenuItem[] => {
+    const items: SheetMenuItem[] = []
+    const pinned = isOrbitPinned(pinnedEntries, m.entryKey)
+    items.push({ id: pinned ? 'unpin' : 'pin', label: t(pinned ? 'orbits.row.unpin' : 'orbits.row.pin'), icon: pinned ? <PinOff size={13} /> : <Pin size={13} />, run: () => { const key = m.entryKey; setRowMenu(null); togglePinned(key) } })
+    if (m.kind === 'agent' && m.slug === 'muse') {
+      /* Muse 不进聊天(D18):没有私聊 rotate,只有 Space。 */
+      items.push({ id: 'open-muse', label: t('orbits.row.openMuseSpace'), icon: <SquarePen size={13} />, run: () => { setRowMenu(null); openMuse() } })
+    }
+    if (m.kind === 'agent' && m.slug !== 'muse') {
+      // 「新会话(先总结记忆)」= rotate 端点:归档旧私聊 + 建新,后台采记忆(§5.3)。云端 Agent 没有私聊,不给。
+      if (!cloudAgent(m.slug)) items.push({ id: 'new-session-memory', label: t('orbits.row.newSessionMemory'), icon: <MessageSquarePlus size={13} />, run: () => { const slug = m.slug; setRowMenu(null); rotateSolo('agent', slug) } })
+      items.push({ id: 'agent-details', act: 'agent-details', label: t('orbits.row.details'), icon: <Info size={13} />, run: () => { const slug = m.slug; setRowMenu(null); showDetails({ kind: 'agent', slug }) } })
+      items.push({ id: 'edit-agent', label: t('orbits.row.editAgent'), icon: <Pencil size={13} />, run: () => { setRowMenu(null); s.openSettings('agents') } })
+      // 默认 Agent 引擎拒删(同名册的禁用口径)
+      if (m.slug !== 'xyra' && m.slug !== s.defaultAgentSlug && !cloudAgent(m.slug)) {
+        items.push({ id: 'agent-delete', act: 'agent-delete', danger: true, label: t('orbits.row.deleteAgent'), icon: <Trash2 size={13} />, run: () => { const def = agents.find((a) => a.slug === m.slug) || null; setRowMenu(null); setAgentRemoving(def) } })
+      }
+    }
+    if (m.kind === 'engine') {
+      items.push({ id: 'new-session', label: t('orbits.row.newSession'), icon: <MessageSquarePlus size={13} />, run: () => { const id = m.slug; setRowMenu(null); rotateSolo('engine', id) } })
+    }
+    if (m.kind === 'team') {
+      items.push({ id: 'edit-team', label: t('orbits.row.editTeam'), icon: <Pencil size={13} />, run: () => { const tm = teams.find((x) => x.slug === m.slug) || null; setRowMenu(null); setTeamEditor({ team: tm }) } })
+      items.push({
+        id: 'delete-team', label: t('orbits.row.deleteTeam'), icon: <UsersRound size={13} />,
+        run: () => {
+          const slug = m.slug; setRowMenu(null)
+          // 引擎侧 fs.rm 整个 teams/<slug>/(含 Library/ 里的用户内容),不可逆 —— 与 SidebarPane 删工作区同款先确认。
+          const tm = teams.find((x) => x.slug === slug)
+          if (!window.confirm(t('orbits.team.confirmDelete', { name: tm?.name || slug }))) return
+          void api.deleteTeam(homeTarget(), slug)
+            .then((r) => { if (!r || r.ok !== true) throw new Error('delete failed') })
+            .then(() => Promise.all([s.refreshTeams(), s.refreshSessions(s.cfg)]))
+            .then(() => {
+              // 当前正开着这个团队的会话 → 它已被归档,换到新对话,别让人继续往已删的 cwd 里发消息
+              if (s.activeId && s.configBySession[s.activeId]?.teamSlug === slug) openNewChat()
+              s.toast(t('orbits.team.deleted'))
+            })
+            .catch((e: any) => s.toast(/409|run_active/.test(String(e?.message || '')) ? t('orbits.team.deleteBusy') : (e?.message || String(e)), true))
+        },
+      })
+    }
+    return items
+  }
+  // Android:两份菜单改由原生半屏呈现(Web 版此时不渲染);桌面 / 网页恒走 Web 浮层。
+  const webPlusMenu = useNativeSheetMenu(plusMenu, () => plusMenu && { title: t('orbits.plus.tip'), sections: [{ items: plusMenuItems() }] }, () => setPlusMenu(null))
+  const webRowMenu = useNativeSheetMenu(rowMenu, () => rowMenu && { sections: [{ items: rowMenuItems(rowMenu) }] }, () => setRowMenu(null))
+
   return (
     <div className="t2o">
       {/* New session and creation menu; the four-way filter occupies its own row below. */}
@@ -508,83 +564,15 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
         />
       </div>
 
-      {plusMenu && (
+      {plusMenu && webPlusMenu && (
         <OverlayAt className="ctx-menu" x={plusMenu.x} y={plusMenu.y} onClick={(e) => e.stopPropagation()}>
-          <button type="button" onClick={() => { setPlusMenu(null); s.openSettings('agents') }}>
-            <UserPlus size={13} /> {t('orbits.plus.agent')}
-          </button>
-          <button type="button" onClick={() => { setPlusMenu(null); setTeamEditor({ team: null }) }}>
-            <UsersRound size={13} /> {t('orbits.plus.team')}
-          </button>
-          <button type="button" onClick={() => { setPlusMenu(null); void s.addLocalWorkspace() }}>
-            <FolderPlus size={13} /> {t('orbits.plus.project')}
-          </button>
+          <CtxMenuButtons items={plusMenuItems()} />
         </OverlayAt>
       )}
 
-      {rowMenu && (
+      {rowMenu && webRowMenu && (
         <OverlayAt className="ctx-menu" x={rowMenu.x} y={rowMenu.y} onClick={(e) => e.stopPropagation()}>
-          <button type="button" onClick={() => { const key = rowMenu.entryKey; setRowMenu(null); togglePinned(key) }}>
-            {isOrbitPinned(pinnedEntries, rowMenu.entryKey) ? <PinOff size={13} /> : <Pin size={13} />}
-            {t(isOrbitPinned(pinnedEntries, rowMenu.entryKey) ? 'orbits.row.unpin' : 'orbits.row.pin')}
-          </button>
-          {rowMenu.kind === 'agent' && rowMenu.slug === 'muse' && (
-            /* Muse 不进聊天(D18):没有私聊 rotate,只有 Space。 */
-            <button type="button" onClick={() => { setRowMenu(null); openMuse() }}>
-              <SquarePen size={13} /> {t('orbits.row.openMuseSpace')}
-            </button>
-          )}
-          {rowMenu.kind === 'agent' && rowMenu.slug !== 'muse' && (
-            <>
-              {/* 「新会话(先总结记忆)」= rotate 端点:归档旧私聊 + 建新,后台采记忆(§5.3)。云端 Agent 没有私聊,不给。 */}
-              {!cloudAgent(rowMenu.slug) && (
-                <button type="button" onClick={() => { const slug = rowMenu.slug; setRowMenu(null); rotateSolo('agent', slug) }}>
-                  <MessageSquarePlus size={13} /> {t('orbits.row.newSessionMemory')}
-                </button>
-              )}
-              <button type="button" data-act="agent-details" onClick={() => { const slug = rowMenu.slug; setRowMenu(null); showDetails({ kind: 'agent', slug }) }}>
-                <Info size={13} /> {t('orbits.row.details')}
-              </button>
-              <button type="button" onClick={() => { setRowMenu(null); s.openSettings('agents') }}>
-                <Pencil size={13} /> {t('orbits.row.editAgent')}
-              </button>
-              {/* 默认 Agent 引擎拒删(同名册的禁用口径) */}
-              {rowMenu.slug !== 'xyra' && rowMenu.slug !== s.defaultAgentSlug && !cloudAgent(rowMenu.slug) && (
-                <button type="button" className="danger" data-act="agent-delete" onClick={() => { const def = agents.find((a) => a.slug === rowMenu.slug) || null; setRowMenu(null); setAgentRemoving(def) }}>
-                  <Trash2 size={13} /> {t('orbits.row.deleteAgent')}
-                </button>
-              )}
-            </>
-          )}
-          {rowMenu.kind === 'engine' && (
-            <button type="button" onClick={() => { const id = rowMenu.slug; setRowMenu(null); rotateSolo('engine', id) }}>
-              <MessageSquarePlus size={13} /> {t('orbits.row.newSession')}
-            </button>
-          )}
-          {rowMenu.kind === 'team' && (
-            <>
-              <button type="button" onClick={() => { const tm = teams.find((x) => x.slug === rowMenu.slug) || null; setRowMenu(null); setTeamEditor({ team: tm }) }}>
-                <Pencil size={13} /> {t('orbits.row.editTeam')}
-              </button>
-              <button type="button" onClick={() => {
-                const slug = rowMenu.slug; setRowMenu(null)
-                // 引擎侧 fs.rm 整个 teams/<slug>/(含 Library/ 里的用户内容),不可逆 —— 与 SidebarPane 删工作区同款先确认。
-                const tm = teams.find((x) => x.slug === slug)
-                if (!window.confirm(t('orbits.team.confirmDelete', { name: tm?.name || slug }))) return
-                void api.deleteTeam(homeTarget(), slug)
-                  .then((r) => { if (!r || r.ok !== true) throw new Error('delete failed') })
-                  .then(() => Promise.all([s.refreshTeams(), s.refreshSessions(s.cfg)]))
-                  .then(() => {
-                    // 当前正开着这个团队的会话 → 它已被归档,换到新对话,别让人继续往已删的 cwd 里发消息
-                    if (s.activeId && s.configBySession[s.activeId]?.teamSlug === slug) openNewChat()
-                    s.toast(t('orbits.team.deleted'))
-                  })
-                  .catch((e: any) => s.toast(/409|run_active/.test(String(e?.message || '')) ? t('orbits.team.deleteBusy') : (e?.message || String(e)), true))
-              }}>
-                <UsersRound size={13} /> {t('orbits.row.deleteTeam')}
-              </button>
-            </>
-          )}
+          <CtxMenuButtons items={rowMenuItems(rowMenu)} />
         </OverlayAt>
       )}
       {agentRemoving && (

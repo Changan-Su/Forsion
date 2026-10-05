@@ -15,7 +15,7 @@ import { ThemeCard } from './ThemeCard'
 import { ThemeSettingsPanel } from './ThemeSettingsPanel'
 import { StartupAppearanceSettings } from './StartupAppearanceSettings'
 import { backgroundSwatch, listLanguages, listSkins, skinSwatch, forcedSchemeForLanguage } from '../theme/registry'
-import { UI_MODE, UI_ZOOM_EVENT, useWorkspace } from '@lcl/engine' // 工作区引擎:恢复默认布局 + 移动预览模式
+import { UI_MODE, UI_ZOOM_EVENT, useNativeChromeClaim, useNativeChromeInstalled, useWorkspace } from '@lcl/engine' // 工作区引擎:恢复默认布局 + 移动预览模式;原生顶栏(Android 可选宿主)
 import { useApp } from '../stores/appStore' // Agent Desk 开关改动即时回流(desktopConfig 平时只在 boot/后端就绪时刷新)
 import { testConnection } from '../services/agentRunService'
 import { listClientSurfaces } from '../services/clientSurfaces'
@@ -61,7 +61,7 @@ import { previewTts } from '../services/ttsService'
 import { ShortcutsTab } from './ShortcutsTab'
 import { PluginsTab } from './PluginsTab'
 import { CorePluginUpdates } from './CorePluginUpdates'
-import { AmadeusPluginsTab, PluginSettingsView } from './AmadeusPluginsTab'
+import { AmadeusPluginsTab, PluginSettingsView, pluginListDetailBack } from './AmadeusPluginsTab'
 import { usePluginStore } from '@amadeus/plugins/pluginStore'
 import { isPlacedSettingsView, pluginDisplayName, pluginsWithSettingsPanel } from '../amadeus/plugins/display'
 import { SpacesTab } from './SpacesTab'
@@ -450,6 +450,14 @@ export const SettingsModal: React.FC<{
   // Unit 设备页(B 端渲染):插件真的在装(unit/plugins),插件页必须给 —— 只藏 shell 类操作;
   // 其余 host tab(MCP/Hooks/托管后端等)仍随 isDesktop 隐藏(shim 没有那些桥,列出来就是白板)。
   const unitPage = !!window.tangu?.unitPage
+  // 插件页(amadeus-plugins)与左栏 fplugin:<id> 直达项的**同一道闸**:桌面 / 设备页 / Android App(2026-10-02 起
+  // 市场能装 Forsion 插件,插件宿主在 mobile/src/plugins)。三处(tabItems、tab 推导、forsionNavItems)必须一致,
+  // 否则 fplugin: 深链在手机上被推导弹回首页。web 云壳没有插件宿主(listPlugins 恒空),照旧不列。
+  const pluginsPage = isDesktop || unitPage || (!!window.tangu?.mobile && !!window.amadeus)
+  // 捆绑包级联(内嵌引擎插件随父插件启停)只给本机桌面:设备页的 cfg 指向对方引擎,手机的 cfg 指向云端网关 —— 都不能 PUT。
+  const pluginCascade = isDesktop && !unitPage
+  // 单列壳(真机 / 开发者移动预览):没有键盘快捷键可录,也没有底部状态栏、ribbon。判据与 bootstrapEngine 的 singleColumn 同一条。
+  const phoneShell = !!window.tangu?.mobile || UI_MODE === 'mobile'
   const tabItems = [
     // = 连接 + Forsion 合并。⚠️ 云端 Web / 移动端(webShim、mobileShim 都是 cloudWeb:true 且不给
     // backendStatus)下这一页**每个块都是 false**——连接项全是桌面/自建后端专属——列出来点进去是白板,
@@ -462,16 +470,16 @@ export const SettingsModal: React.FC<{
     // 统一插件页(amadeus-plugins):Forsion 插件(含捆绑包)+ Tangu 引擎插件两区一页;旧 'plugins' 入口已并入(settingsTarget 的别名表)。
     ...(isDesktop ? ([['mcp', t('settingsmodal.tab.mcp')], ['hooks', t('settingsmodal.tab.hooks')], ['channels', t('settings.tab.channels')], ['browser', t('settings.tab.browser')]] as Array<[Tab, string]>) : []),
     // 插件页设备页也给(插件在 B 端真的装载运行,列表/启停是本页 runtime 行为,不碰对方设备)。
-    ...(isDesktop || unitPage ? ([['amadeus-plugins', t('settings.tab.amadeusPlugins')]] as Array<[Tab, string]>) : []),
+    ...(pluginsPage ? ([['amadeus-plugins', t('settings.tab.amadeusPlugins')]] as Array<[Tab, string]>) : []),
     // Forsion 云端(账号 / 云端地址 / 记忆同步 / 笔记在线同步)整页住在 Extend 的桥键后面:停用或没装 Extend 就没有这一页
     ...(isDesktop && cloudAccount ? ([['forsion', t('settings.tab.forsionCloud')]] as Array<[Tab, string]>) : []),
     ...(isDesktop && !!window.amadeus ? ([['notes', t('settings.tab.notes')]] as Array<[Tab, string]>) : []),
     ...(isDesktop && !!window.amadeus && !!window.remoteSync ? ([['sync', t('settings.tab.sync')]] as Array<[Tab, string]>) : []),
     ['spaces', t('settings.tab.spaces')],
     ['theme', t('settings.tab.theme')],
-    ['shortcuts', t('settings.tab.shortcuts')],
+    ...(phoneShell ? [] : ([['shortcuts', t('settings.tab.shortcuts')]] as Array<[Tab, string]>)),
     ['notifications', t('settings.tab.notifications')],
-    ['statusbar', t('settings.tab.statusbar')],
+    ...(phoneShell ? [] : ([['statusbar', t('settings.tab.statusbar')]] as Array<[Tab, string]>)),
     ['advanced', t('settings.tab.advanced')],
     ...(hasDesktopPermissions() ? ([['permissions', t('desktopPermissions.title')]] as Array<[Tab, string]>) : []),
     // P1-K4:只在执行设备本机(有主进程 API)列;设备页 / web / 手机没有 —— 开关只能在本机改。
@@ -485,7 +493,7 @@ export const SettingsModal: React.FC<{
   // 一级页也做 activeSub 同款推导:请求的页在本端不存在时(深链带来的旧 tab、或上面被摘掉的 general)
   // 落到第一个可用页,免得停在白板上。plugin:<id> 动态页不在 tabItems 里,单独放行。
   const tab: Tab = tabItems.some(([id]) => id === rawTab) || rawTab.startsWith('plugin:')
-    || (rawTab.startsWith('fplugin:') && (isDesktop || unitPage) && !!window.amadeus)
+    || (rawTab.startsWith('fplugin:') && pluginsPage && !!window.amadeus)
     ? rawTab
     : (tabItems[0]?.[0] ?? rawTab)
   const isPluginTab = tab.startsWith('plugin:') || tab.startsWith('fplugin:')
@@ -704,9 +712,9 @@ export const SettingsModal: React.FC<{
   const amxActiveIds = usePluginStore((s) => s.activeIds)
   const amxSettings = usePluginStore((s) => s.settings)
   const amxSettingsViews = usePluginStore((s) => s.settingsViews)
-  // ⚠️ 闸必须与「插件」页(amadeus-plugins,isDesktop/unitPage 限定)一致:移动端 window.amadeus 在、那一页却不在,
+  // ⚠️ 闸必须与「插件」页(amadeus-plugins,pluginsPage)一致:window.amadeus 在、那一页却不在(web 云壳),
   // 只按 amadeus 放行会列出一批点「返回」就被推导弹回首页的条目。
-  const forsionNavItems: Array<[Tab, string]> = !((isDesktop || unitPage) && window.amadeus) ? []
+  const forsionNavItems: Array<[Tab, string]> = !(pluginsPage && window.amadeus) ? []
     : pluginsWithSettingsPanel(amxPlugins, amxActiveIds, amxSettings, amxSettingsViews)
       .map((pl) => [`fplugin:${pl.id}`, pluginDisplayName(pl, locale)] as [Tab, string])
   // 首方内置包(Forsion Extend)挂进「Forsion 云端」的自绘子页:插件启用、面板声明了 category。设备页不挂(那边不是本机账号)。
@@ -1225,12 +1233,19 @@ export const SettingsModal: React.FC<{
     toggleTab(id)
   }
 
-  // Android 实体返回 / 系统侧滑:二级页先回设置首页;已在首页时再交给 MobileRoot 退出设置。
+  // 二级页的「返回」:页里还开着一层(从插件列表点进去的详情)→ 先退那一层,与它的 Web「返回列表」钮同一个动作;否则回设置首页。
+  const backOneLevel = (): void => {
+    const inner = pluginListDetailBack.current
+    if (inner) inner()
+    else setMobileMenuOpen(true)
+  }
+
+  // Android 实体返回 / 系统侧滑:二级页先退一层(见 backOneLevel);已在首页时再交给 MobileRoot 退出设置。
   useEffect(() => {
     if (!p.open || !mobileSettings || mobileMenuOpen) return
     const backToMenu = (event: Event): void => {
       event.preventDefault()
-      setMobileMenuOpen(true)
+      backOneLevel()
     }
     window.addEventListener('forsion:mobile-back', backToMenu)
     return () => window.removeEventListener('forsion:mobile-back', backToMenu)
@@ -1319,10 +1334,21 @@ export const SettingsModal: React.FC<{
     return () => { el.removeEventListener('scroll', sync); ro?.disconnect() }
   })
 
+  // Android 原生顶栏(lcl nativeChrome 的可选宿主)在场时由它画标题 + 返回(page 模式),Web 页头让位(data-native-chrome)。
+  // 返回 / × 与 Web 页头的按钮做的是同一件事:首页「返回」= 退出设置;二级页「返回」= 回设置首页(插件详情开着时先回插件列表),「×」= 退出设置。
+  // 没有原生宿主(手机浏览器、桌面手机框)时这个声明是空操作,Web 页头照旧。
+  const nativeChrome = useNativeChromeInstalled() && mobileSettings
+  useNativeChromeClaim(!p.open || !mobileSettings ? null : mobileMenuOpen
+    ? { mode: 'page', title: t('settings.title'), back: t('settings.backToApp'), onBack: p.onClose }
+    : { mode: 'page', title: activeSubLabel || activeTabLabel, back: t('settings.title'), onBack: backOneLevel, close: t('settings.backToApp'), onClose: p.onClose })
+
   if (!p.open) return null
 
   return (
-    <div className={`settings-page settings-page--control-center${mobileSettings ? ' settings-page--mobile' : ''}${mobileSettings && mobileMenuOpen ? ' settings-page--mobile-menu' : ''}`}>
+    <div
+      className={`settings-page settings-page--control-center${mobileSettings ? ' settings-page--mobile' : ''}${mobileSettings && mobileMenuOpen ? ' settings-page--mobile-menu' : ''}`}
+      data-native-chrome={nativeChrome ? '' : undefined}
+    >
       <section className="settings-mobile-home" aria-label={t('settings.title')}>
         <header className="settings-mobile-home-head">
           <button type="button" onClick={p.onClose} aria-label={t('settings.backToApp')} title={t('settings.backToApp')}>
@@ -1357,6 +1383,7 @@ export const SettingsModal: React.FC<{
                         <button
                           type="button"
                           className="settings-mobile-row"
+                          data-settings-tab={id}
                           aria-expanded={expandable ? expanded : undefined}
                           aria-controls={expandable ? childrenId : undefined}
                           onClick={() => {
@@ -1377,6 +1404,7 @@ export const SettingsModal: React.FC<{
                               <button
                                 type="button"
                                 className="settings-mobile-subrow"
+                                data-settings-sub={key}
                                 key={key}
                                 onClick={() => { openSubPage(id, key); setMobileMenuOpen(false) }}
                               >
@@ -2871,13 +2899,13 @@ export const SettingsModal: React.FC<{
                 {tab === 'agents' && activeSub === 'ag-special' && <SpecialAgentsTab cfg={p.cfg} localHost={!!(isDesktop && stored?.mode === 'managed')} />}
                 {tab === 'hooks' && <HooksTab cfg={p.cfg} />}
                 {/* 统一插件页:Forsion 插件(含捆绑包,带 Amadeus 时)/ Tangu 引擎插件 两个中分类。
-                    设备页(unitPage)不传级联三件套:cfg 缺省=cascadeAfterToggle 不级联 —— 否则捆绑包
-                    启停会经代理持久改对方引擎插件(Codex P1);引擎插件区同因整块桌面专属。 */}
+                    设备页(unitPage)与 Android App 不传级联三件套:cfg 缺省=cascadeAfterToggle 不级联 —— 否则捆绑包
+                    启停会经代理持久改对方引擎插件(Codex P1)/ 打到云端网关;引擎插件区同因整块桌面专属。 */}
                 {tab === 'amadeus-plugins' && activeSub === 'pl-core' && !!window.amadeus && (
-                  <AmadeusPluginsTab key="core" section="core" {...(unitPage ? {} : { cfg: p.cfg, onEngineReload: reloadPlugins, enginePlugins: plugins })} />
+                  <AmadeusPluginsTab key="core" section="core" {...(pluginCascade ? { cfg: p.cfg, onEngineReload: reloadPlugins, enginePlugins: plugins } : {})} />
                 )}
                 {tab === 'amadeus-plugins' && activeSub === 'pl-forsion' && !!window.amadeus && (
-                  <AmadeusPluginsTab key="installed" section="installed" {...(unitPage ? {} : { cfg: p.cfg, onEngineReload: reloadPlugins, enginePlugins: plugins })} />
+                  <AmadeusPluginsTab key="installed" section="installed" {...(pluginCascade ? { cfg: p.cfg, onEngineReload: reloadPlugins, enginePlugins: plugins } : {})} />
                 )}
                 {tab === 'amadeus-plugins' && activeSub === 'pl-engine' && isDesktop && (
                   <>
@@ -2889,13 +2917,13 @@ export const SettingsModal: React.FC<{
                     />
                   </>
                 )}
-                {tab === 'spaces' && <SpacesTab />}
+                {tab === 'spaces' && <SpacesTab phone={phoneShell} />}
                 {tab === 'notifications' && <NotificationsTab />}
                 {tab === 'statusbar' && <StatusBarTab />}
                 {/* 左栏点进来的 Forsion 插件设置页 = 插件页的详情面,受控于 tab(不再是卡片列表的内部 state)。 */}
                 {tab.startsWith('fplugin:') && (
                   <AmadeusPluginsTab
-                    {...(unitPage ? {} : { cfg: p.cfg, onEngineReload: reloadPlugins, enginePlugins: plugins })}
+                    {...(pluginCascade ? { cfg: p.cfg, onEngineReload: reloadPlugins, enginePlugins: plugins } : {})}
                     controlledDetail={{ id: tab.slice('fplugin:'.length), onBack: () => goTab('amadeus-plugins') }}
                   />
                 )}

@@ -2,8 +2,8 @@ import { useSpaceAmbient } from '@/theme/spaceAmbient'
 import { amadeusAvailable } from '@/features/runtime'
 /**
  * 移动端 App 根:启动副作用(连接/轮询,复用 desktop useBootstrap)+ 主题桥接给 MobileShell +
- * 设置浮层(账号/登录)+ 首启引导 + Amadeus 对话框宿主 + 通知。刻意精简 desktop Root 的桌面专属浮层
- * (商店/反馈/插件引导/QuickFind);哪些故意不要、为什么,以 `desktop/scripts/platform-parity.check.cjs`
+ * 设置浮层(账号/登录)+ 应用市场 + 插件就绪卡 + 首启引导 + Amadeus 对话框宿主 + 通知。刻意精简 desktop Root 的
+ * 桌面专属浮层(反馈等);哪些故意不要、为什么,以 `desktop/scripts/platform-parity.check.cjs`
  * 的 SKIP 表为准 —— 那张表是唯一台账,别只在这里凭记忆增删。
  *
  * ⚠️ 本文件消费的是 **desktop 的 appStore/组件**,而 vite build 不做类型检查 —— 桌面侧删个字段
@@ -18,6 +18,8 @@ import { useBootstrap } from '@/stores/bootstrap'
 import { useInbox } from '@/stores/inboxStore'
 import { pullInbox } from '@/services/backendService'
 import { SettingsModal } from '@/components/SettingsModal'
+import { MarketModal } from '@/components/MarketModal'
+import { PluginOnboardingHost } from '@/components/PluginOnboardingModal'
 import { OnboardingWizard } from '@/components/OnboardingWizard'
 import { NotificationHost } from '@/components/NotificationHost'
 import { AmadeusOverlays } from '@/amadeusOverlays'
@@ -31,13 +33,13 @@ import { installNotificationWiring } from '@/stores/notificationWiring'
 import { ensureAmadeusReady } from '@/amadeusPlugins'
 import { AnimatePresence, motion } from 'framer-motion'
 import { useShallow } from 'zustand/react/shallow'
-import { SingleColumnHost, useWorkspace, useNav } from '@lcl/engine'
+import { SingleColumnHost, listFirstNow, useWorkspace, useNav, useNativeChromeClaim, useNativeChromeSpaces, useRibbonStore, type NativeChromeClaim } from '@lcl/engine'
 // 命令面板:desktop 由 `Shell.tsx` 渲染,而移动端把 Shell 换成了空壳(vite.config engineSwap)——
 // 于是 ribbon 的 rb-cmd 项(无条件注册,经「⋯」菜单在移动端可点)点了只是把 paletteOpen 置 true,
 // 没有任何东西渲染它。宿主责任随外壳一起被换掉了,得在这儿接回来。
 import { CommandPalette } from '@lcl/engine/CommandPalette'
 import { buildDefaultLayout } from '@/bootstrapEngine'
-import { MobileUnitsSheet } from './UnitsSheet'
+import { MobileUnitsSheet, useUnitsSheet } from './UnitsSheet'
 import { homeTarget } from '@/services/engine/targets'
 
 /** 移动端本地 inbox 内容来自云端广播,但无服务端 inboxPull 调度器 → 客户端定时静默拉(绕开 inboxStore.pull 的 toast)。 */
@@ -79,24 +81,43 @@ function useAndroidBack(): void {
       if (app.onboarding) return
       // 旁聊全屏页在最上层:返回先关它。判据与 BtwHost 同一条 —— 它因切了会话而隐着时不能白吞一次返回
       if (btwWebVisible(useBtw.getState().webOpen, app.activeId)) { useBtw.getState().closeWeb(); return }
+      // 应用市场全屏页(详情页开着时,MarketModal 自己在 forsion:mobile-back 里先退回列表)
+      if (app.marketOpen) { app.closeMarket(); return }
       if (app.settingsOpen) { app.closeSettings(); return }
       const ws = useWorkspace.getState()
+      // 两级导航(原生底栏,见 lcl 的 listFirstNow):左栏是这个 Space 的第一层 → 在列表层按返回 = 已在链底,挂起 app;
+      // 在主区按返回 = 先页内后退,退无可退就回列表(不关视图,再点同一条目即回)。
+      const listFirst = listFirstNow()
+      if (listFirst && ws.leftVisible) { void CapApp.minimizeApp(); return }
       if (ws.leftVisible) { ws.toggleSidebar('left'); return }
       if (ws.rightVisible) { ws.toggleSidebar('right'); return }
       const active = ws.mainTabs.find((t) => t.active)
       if (active) {
         const st = useNav.getState().stacks[active.id]
         if (st && st.idx > 0) { useNav.getState().back(active.id); return }
+        if (listFirst) { ws.toggleSidebar('left'); return }
         // 落地页(`home` 空态占位 / 主页 Space 的 `homepage`)不关 —— 已经在链底,该挂起 app。
         // ⚠️ 漏掉 `homepage` 时:主页上按一下返回 = closeLeaf → 唯一主 leaf 就地变 `home` 空态
         // (只有 logo 的空页)并被存盘,重启也回不来 = 用户实报的「默认 Homepage 空白」。
-        if (active.type !== 'home' && active.type !== 'homepage') { ws.closeLeaf(active.id); return } // 白板/PDF/会话等 → 关回列表/home
+        if (active.type !== 'home' && active.type !== 'homepage') { // 白板/PDF/会话等 → 关回列表/home
+          ws.closeLeaf(active.id)
+          // 固定 View(Space 级 pinned,区内最后一个)关不掉,closeLeaf 是空操作 → 这就是链底,往下走到挂起。
+          // 不这样判,返回键在日历 / 图像工作台 / 浏览器里的 Tangu 会话上按了什么都不发生(2026-10-04 合并 main 后 e2e:homeback 抓到)。
+          const now = useWorkspace.getState().mainTabs.find((t) => t.active)
+          if (now?.id !== active.id || now.type !== active.type) return
+        }
       }
       void CapApp.minimizeApp() // 已在底:挂起(Android 默认原行为)
     })
     return () => { void sub.then((h) => h.remove()) }
   }, [])
 }
+
+/** 全屏 Web 浮层盖住单列壳时,原生顶栏(Android NativeChrome,可选宿主)收起,不能浮在浮层上面。
+ *  没装原生宿主(web / 手机浏览器)时这个声明是空操作。
+ *  设置页不在此列:SettingsModal 自己声明 page 模式(原生标题 + 返回 + ×)。⚠️ 别把 settingsOpen 加回来 ——
+ *  子组件的 effect 先于父组件跑,这里的 hidden 会后入栈、盖掉设置页的 page 声明(最后一个声明生效)。 */
+const CHROME_HIDDEN: NativeChromeClaim = { mode: 'hidden' }
 
 export function MobileRoot() {
   useBootstrap()
@@ -123,6 +144,7 @@ export function MobileRoot() {
     activeId: s.activeId,
     settingsOpen: s.settingsOpen,
     settingsTab: s.settingsTab,
+    marketOpen: s.marketOpen,
     onboarding: s.onboarding,
     setOnboarding: s.setOnboarding,
     achievementsOpen: s.achievementsOpen,
@@ -132,12 +154,20 @@ export function MobileRoot() {
     connect: s.connect,
   })))
   const activeSession = a.sessions.find((s) => s.id === a.activeId) || a.archivedSessions.find((s) => s.id === a.activeId) || null
+  const unitsOpen = useUnitsSheet((s) => s.open)
+  const btwPage = useBtw((s) => btwWebVisible(s.webOpen, a.activeId))
+  useNativeChromeClaim(a.onboarding || a.achievementsOpen || unitsOpen || btwPage ? CHROME_HIDDEN : null)
+  // 原生外壳(Android)把账号入口画成顶栏右侧的头像,左栏底部那一排不再渲染 —— 账号卡在这儿隐身挂着:
+  // 它自管登录态与菜单,头像显示什么、点了做什么由它发布(services/accountChip.ts → mobile/src/nativeChrome.ts)。
+  const nativeSpaces = useNativeChromeSpaces()
+  const AccountC = useRibbonStore((s) => s.items.find((i) => i.id === 'rb-account'))?.component
 
   return (
     <>
       <div className="shell-host">
         <SingleColumnHost dark={visualTheme.mode === 'dark'} buildDefault={buildDefaultLayout} />
       </div>
+      {nativeSpaces && AccountC && <div hidden><AccountC expanded={false} /></div>}
 
       {/* Amadeus 全局浮层。⚠️ 名字像「快速切换器」,实为**对话框宿主**:AskStringHost / DeleteAssetsHost /
           NewDrawingHost / ConfirmDialog / AutomationBuilderHost / TemplatePicker 都住在里面。
@@ -156,7 +186,7 @@ export function MobileRoot() {
           命令从「⋯ → 命令」点得到 —— 不挂宿主就是那种「点完什么都不出来」的静默死按钮。 */}
       <FindBar />
       <CommandPalette />
-      {/* 互联设备弹层(Forsion Unit):入口在 ⋯ 菜单(mobileEntry 的 installUnitsEntry 按桥上架)。 */}
+      {/* 互联设备弹层(Forsion Unit):入口由 mobileEntry 的 installUnitsEntry 按桥上架(左栏底部;原生外壳下在「⋯」最前)。 */}
       <MobileUnitsSheet />
 
       <AnimatePresence>
@@ -170,6 +200,24 @@ export function MobileRoot() {
             transition={{ duration: 0.22, ease: [0.2, 0.8, 0.2, 1] }}
           >
             <AchievementsModal />
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* 应用市场(2026-10-02 起 Android 能装 Forsion 插件):入口 rb-market 经「⋯」菜单、open-market 命令与
+          设置 → 插件页的「浏览应用市场」。手机上与设置同款全屏二级页;安装 / 卸载的结果由市场自己的提示条说。 */}
+      <AnimatePresence>
+        {a.marketOpen && (
+          <motion.div
+            key="market"
+            data-mobile-market
+            style={{ position: 'fixed', inset: 0, zIndex: 50, display: 'flex', minWidth: 0, minHeight: 0, overflow: 'hidden', background: 'var(--bg)' }}
+            initial={{ opacity: 0, scale: 0.985 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.985 }}
+            transition={{ duration: 0.22, ease: [0.2, 0.8, 0.2, 1] }}
+          >
+            <MarketModal onClose={() => useApp.getState().closeMarket()} />
           </motion.div>
         )}
       </AnimatePresence>
@@ -243,6 +291,9 @@ export function MobileRoot() {
           点它开成就总览 —— AchievementsModal 上面已挂(⋯ 菜单里的 rb-achievements 也进得去)。 */}
       {/* 旁聊(/btw):手机没有浮窗语义,走全屏二级页;只在它归属的会话仍是当前会话时显示 */}
       <BtwHost page />
+
+      {/* 插件就绪检查卡(带 requires 的插件刚装好 / 手动启用时弹):全屏二级页开着时延后,回到主界面再出(同桌面 Root)。 */}
+      {!a.settingsOpen && !a.marketOpen && !a.onboarding && <PluginOnboardingHost />}
 
       <AchievementToast onOpen={() => useApp.getState().openAchievements()} />
 

@@ -145,6 +145,10 @@ export interface Command {
    *  与 `.is-on` 高亮,一眼看出开没开。渲染期求值,须便宜、无副作用;Ribbon 在点击后与悬停时重读,
    *  别处改了状态要等下次重渲才跟上(引擎不订阅宿主状态)。不是开关就别声明 —— 否则会被读屏报成「未按下」。 */
   checked?: () => boolean
+  /** 手机单列壳「⋯」菜单里的分组:声明了 = 这条命令也直接列进「⋯」(同 id 的命令归一节,节标题 = title,
+   *  渲染期求值、跟随语言)。给**没有 ribbon 图标**的来源用 —— 外置插件只贡献命令,手机上又没有命令区可钉。
+   *  桌面 Ribbon / 命令面板不读这个字段。 */
+  moreGroup?: { id: string; title: string | (() => string) }
 }
 
 /** ribbon 竖条上的一个图标(≈ Obsidian addRibbonIcon)。 */
@@ -217,6 +221,10 @@ export interface SpaceDefinition {
    *  2026-09-11 —— 列表源不在场时宿主退回缺省档)。
    *  右栏不受此影响(恒为 'files' = 参考/附件栏)。硬规则见 frontend/src/views/workspaceMode.ts。 */
   autoWorkspaceMode?: 'orbits' | 'sessions' | 'files' | 'notes' | `plugin:${string}`
+  /** 手机两级导航(单列壳 × 原生底部导航栏,见 SingleColumnHost 的 listFirstNow):**缺省 = 有左栏就先落左栏**
+   *  —— 左栏整屏是这个 Space 的第一层(会话 / 笔记 / 名册这类「点开一项」的列表),主区是点进去的第二层。
+   *  左栏不是这种列表的 Space(日历的待办)写 false:主区即第一层,左栏照旧是侧滑抽屉。 */
+  listFirst?: boolean
   /** 固定 View:该区内始终至少留一个这种 View —— 关不掉、拖不出本区、不被别的类型顶掉(别的类型开新标签,
    *  同类照旧就地换),进入 Space 时缺了就补。params = 补回时的重建参数。判定见 pinnedViews.ts。
    *  只管主区与左右栏;固定不等于常显,侧栏照常可以收起。 */

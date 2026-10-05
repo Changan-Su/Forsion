@@ -11,6 +11,8 @@ import { usePageStore } from '@amadeus/store/pageStore'
 import { useUiStore } from '@amadeus/store/uiStore'
 import { useQuickFind } from './quickFind'
 import { addCommand, removeCommand } from '@lcl/engine'
+import { pluginDisplayName } from '@amadeus/plugins/display'
+import { currentLocale } from './i18n'
 import { openSearchView } from './amadeusCommands'
 import { syncPluginViews } from './pluginViews'
 import { installPluginStatusBridge } from './pluginStatusBridge'
@@ -75,16 +77,23 @@ export function installAmadeusPlugins(): void {
   const sync = (): void => {
     for (const id of bridged) removeCommand(id)
     bridged = []
-    for (const o of usePluginStore.getState().commands) {
+    const { plugins, commands } = usePluginStore.getState()
+    for (const o of commands) {
       const id = `amadeus:${o.pluginId}:${o.item.id}`
       bridged.push(id)
+      // 外置插件没有 ribbon 图标、手机上也没有命令区可钉 → 声明 moreGroup,手机「⋯」按插件分节直接列出
+      // (节标题 = 插件展示名,渲染期按当前语言求值)。内置插件(callout / 字数)的命令各有入口,不进「⋯」。
+      const owner = plugins.find((p) => p.id === o.pluginId)
+      const moreGroup = owner && !owner.builtin
+        ? { id: `amadeus:${o.pluginId}`, title: () => pluginDisplayName(owner, currentLocale()) }
+        : undefined
       // ⚠️ 这里是**逐字段重建**,不是透传 —— 给 CommandContribution 加字段必须同步加到这一行,
       //    否则插件声明了也永远到不了命令表(2026-09-04 加 invoke 时踩点)。
-      addCommand({ id, title: o.item.title, keywords: o.item.keywords, run: o.item.run, invoke: o.item.invoke, checked: o.item.checked })
+      addCommand({ id, title: o.item.title, keywords: o.item.keywords, run: o.item.run, invoke: o.item.invoke, checked: o.item.checked, ...(moreGroup ? { moreGroup } : {}) })
     }
   }
   sync()
-  usePluginStore.subscribe((s, p) => { if (s.commands !== p.commands) sync() })
+  usePluginStore.subscribe((s, p) => { if (s.commands !== p.commands || s.plugins !== p.plugins) sync() })
 
   // 插件 API 的两个 palette 动作 → 桌面等价物(快切浮层 / 左栏搜索 tab)。
   useUiStore.subscribe((s, p) => {

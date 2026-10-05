@@ -15,6 +15,22 @@ afterEach(() => {
 })
 
 describe('notificationStore', () => {
+  it('手机上把浏览器的原话 Failed to fetch 换成一句人话(单独出现 / 拼在别的话后面);桌面不换', () => {
+    vi.stubGlobal('window', { tangu: { mobile: true } })
+    try {
+      notifyApp({ text: 'TypeError: Failed to fetch', level: 'error' })
+      notifyApp({ text: '保存失败：Failed to fetch', level: 'error' })
+      notifyApp({ text: 'Fetch failed for another reason', level: 'error' })
+      expect(useNotifications.getState().items.map((n) => n.text)).toEqual(['网络不可用，请稍后再试', '保存失败：网络不可用，请稍后再试', 'Fetch failed for another reason'])
+    } finally { vi.unstubAllGlobals() }
+    reset()
+    vi.stubGlobal('window', { tangu: {} })
+    try {
+      notifyApp({ text: 'Failed to fetch', level: 'error' })
+      expect(useNotifications.getState().items.map((n) => n.text)).toEqual(['Failed to fetch'])
+    } finally { vi.unstubAllGlobals() }
+  })
+
   it('info 自动消失,error 常驻', () => {
     notifyApp({ text: 'hi', level: 'info' })
     notifyApp({ text: 'boom', level: 'error' })
@@ -106,6 +122,22 @@ describe('notificationStore', () => {
     expect(useNotifications.getState().items).toHaveLength(1)
     vi.advanceTimersByTime(1500)
     expect(useNotifications.getState().items).toHaveLength(0)
+  })
+
+  it('系统通知:页面看不见也算在后台(安卓 WebView 退后台仍报有焦点);桥收到这是哪类事件', () => {
+    const osNotify = vi.fn()
+    vi.stubGlobal('window', { tangu: { notify: osNotify } })
+    try {
+      vi.stubGlobal('document', { hasFocus: () => true, visibilityState: 'visible' })
+      notifyApp({ text: 'seen', event: 'inbox.message' })
+      expect(osNotify).not.toHaveBeenCalled()
+      vi.stubGlobal('document', { hasFocus: () => true, visibilityState: 'hidden' })
+      notifyApp({ text: 'unseen', title: 'Inbox', event: 'inbox.message' })
+      notifyApp({ text: 'untyped' })
+      expect(osNotify.mock.calls).toEqual([['Inbox', 'unseen', { event: 'inbox.message' }], ['Forsion', 'untyped', { event: 'system.generic' }]])
+    } finally {
+      vi.unstubAllGlobals()
+    }
   })
 
   it('inAppOnly:窗口无焦点也不跟发系统通知;缺省照发', () => {

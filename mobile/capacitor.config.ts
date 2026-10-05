@@ -19,6 +19,8 @@ const config: CapacitorConfig = {
     androidScheme: 'https',
   },
   android: {
+    // Android 15 enforces edge-to-edge: keep Web content clear of system bars/cutouts.
+    adjustMarginsForEdgeToEdge: 'auto',
     // dev 若要连 http 明文后端可临时开;prod 用 https,保持关闭。
     // allowMixedContent: false,
   },

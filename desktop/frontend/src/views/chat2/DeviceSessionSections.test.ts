@@ -14,6 +14,10 @@ vi.mock('@lcl/engine', () => ({
   OverlayAt: ({ children, className }: { children: React.ReactNode; className?: string }) => React.createElement('div', { className, 'data-overlay': '' }, children),
   setActiveSpace: () => {},
   useSpaceStore: { getState: () => ({ activeSpaceId: 'tangu' }) },
+  // 无原生半屏宿主(桌面 / 网页):菜单照旧画 Web 版。
+  nativeSheetPresenter: () => undefined,
+  presentNativePrompt: async () => ({ handled: false }),
+  useNativeSheetMenu: () => true,
 }))
 vi.mock('../../components/AnimatedUI', () => ({ AnimatedCollapse: ({ open, children }: { open: boolean; children: React.ReactNode }) => (open ? React.createElement(React.Fragment, null, children) : null) }))
 

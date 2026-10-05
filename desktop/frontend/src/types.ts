@@ -1412,6 +1412,13 @@ declare global {
       pickDirectory?(opts?: { purpose?: 'project' }): Promise<string | null>
       /** Chat Box 添加文件或文件夹；取消返回空数组。 */
       pickPaths?(): Promise<Array<{ path: string; isDirectory: boolean }>>
+      /** Android:系统文件选择器选文件(内容随回,不是路径);取消返回空数组。原生半屏里没有用户激活,
+       *  `<input type=file>.click()` 会被 Chromium 静默丢掉 —— 有这个能力时 Chat Box「添加文件」走它。 */
+      pickFiles?(): Promise<File[]>
+      /** Android:系统照片选择器(只列图片) / 系统相机拍一张。同上:内容随回,取消或没拍成返回空数组;
+       *  两个都在时,Chat Box 的原生「＋」半屏把「添加文件」拆成 拍照 / 相册 / 文件 三行。 */
+      pickPhotos?(): Promise<File[]>
+      takePhoto?(): Promise<File[]>
       /** 另存为文本文件(导出日志等);取消返回 { ok:false }。 */
       saveTextFile?(defaultName: string, content: string): Promise<{ ok: boolean; path: string | null }>
       /** 用户活动日志埋点(fire-and-forget;拼行/消毒在 main 侧 activityLog.ts)。 */
@@ -1570,6 +1577,9 @@ declare global {
       onMarketInstallProgress?(cb: (ev: MarketInstallProgress) => void): () => void
       marketInstalled?(): Promise<Record<string, Array<{ slug: string; version: string | null }>>>
       marketUninstall?(type: string, slug: string): Promise<{ ok: boolean; path: string; type: string; id?: string }>
+      /** 本宿主能装的市场类型(缺省 = 全部)。Android App 没有本机引擎 / 主题目录 / Space 目录,只声明 ['amadeus-plugin'];
+       *  MarketModal 只列这些类型,其余在发现页一句话说明去桌面端装。 */
+      marketTypes?: readonly string[]
       /** 后端插件卸载:列用户目录已装(manifest id→目录名)/ 按 id 删目录(仅 ~/.tangu/plugins,首方插件删不到)。 */
       pluginsUserInstalled?(): Promise<Array<{ id: string; slug: string }>>
       pluginsUninstall?(id: string): Promise<{ ok: boolean }>
@@ -1579,8 +1589,9 @@ declare global {
       spacesDelete?(slug: string): Promise<{ ok: boolean }>
       /** 收件箱:系统通知(点击回跳 Inbox Space)/ dock 角标(仅 mac 生效)/ 通知点击订阅。 */
       notifyInbox?(title: string, body: string): Promise<void>
-      /** 通用系统通知(所有应用内通知同步发);web/mobile 下 undefined。 */
-      notify?(title: string, body: string): Promise<void>
+      /** 通用系统通知(所有应用内通知同步发);web 下 undefined。meta.event = 哪类通知(NOTIFY_EVENTS 的 id):
+       *  桌面不看;安卓(mobile/src/liveIsland.ts)据此给每类只留一条,并略过由灵动岛报的「跑完了」。 */
+      notify?(title: string, body: string, meta?: { event?: string }): Promise<void>
       setInboxBadge?(count: number): Promise<void>
       onInboxOpen?(cb: () => void): () => void
       // P1-K3

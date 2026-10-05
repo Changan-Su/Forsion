@@ -20,7 +20,8 @@ export { label } from './types'
 
 export { Shell } from './Shell'
 export { startOpenDrag } from './WorkspaceHost'
-export { SingleColumnHost } from './SingleColumnHost'
+export { SingleColumnHost, accountMenuRows } from './SingleColumnHost'
+export { listFirstNow } from './listFirst'
 export { MiniColumnHost } from './MiniColumnHost'
 export { supportsMiniPanel, setMiniMainHandler, showInMainPanel, setMiniViewRouter } from './miniPanel'
 export type { MiniPanelDefinition, MiniViewTarget, MainPanelTarget } from './miniPanel'
@@ -79,3 +80,30 @@ export type { ExtendViewController, ExtendViewOptions, ExtendViewHandle, ExtendV
 export { ExtendViewHost } from './ExtendViewHost'
 
 export { contentStorageKey } from './contentStorageScope'
+
+/** Optional native presentation hosts (Android Compose). Absent host ⇒ callers keep their web UI. */
+export {
+  installNativeSheetPresenter, nativeSheetPresenter, presentNativeMenu, presentNativePrompt, presentNativeConfirm,
+  pickNativeCtxItem, runNativeCtxMenu, readNativeTheme, menuResult, promptResult, confirmResult, clipNativeText,
+} from './nativeSheet'
+export type {
+  NativeSheetTheme, NativeSheetRequest, NativeSheetPayload, NativeSheetPresenter, NativeSheetOutcome,
+  NativeMenuRequest, NativeMenuSection, NativeMenuItem, NativeMenuTrailing, NativeMenuResult, NativeMenuSearch,
+  NativePromptRequest, NativePromptResult, NativeConfirmRequest, NativeConfirmResult, NativeCtxItem,
+} from './nativeSheet'
+export { runNativeSheetMenu, openNativeSheetMenu, useNativeSheetMenu } from './nativeSheetMenu'
+export type { SheetMenu, SheetMenuSection, SheetMenuItem } from './nativeSheetMenu'
+export { installNativeSelect } from './nativeSelect'
+export type { NativeSelectOptions } from './nativeSelect'
+export { renderNativeIcons } from './nativeIcon'
+export type { NativeIcon, NativeIconSource, NativeVectorPath } from './nativeIcon'
+export {
+  installNativeChromeHost, nativeChromeInstalled, useNativeChromeInstalled, setNativeChromeShell,
+  claimNativeChrome, useNativeChromeClaim, dispatchNativeChromeAction, nativeChromeState,
+  nativeChromeDrawsSpaces, useNativeChromeSpaces, dispatchNativeChromeSpace, nativeHaptic,
+} from './nativeChrome'
+export type {
+  NativeChromeAction, NativeChromeState, NativeChromeShellState, NativeChromePageState, NativeChromeHiddenState,
+  NativeChromeHost, NativeChromeClaim, NativeChromeClaimHandle, NativeChromeShellLabels, NativeChromeShellHandlers,
+  NativeChromeSpace, NativeHaptic,
+} from './nativeChrome'

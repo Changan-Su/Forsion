@@ -59,4 +59,10 @@ export const LCL_MESSAGES: Record<string, { zh: string; en: string }> = {
   'lcl.mini.empty': { zh: '暂无已适配的 Space', en: 'No Mini Panel Spaces available' },
   'lcl.mini.closeMenu': { zh: '关闭菜单', en: 'Close menu' },
   'lcl.mobile.closeTab': { zh: '关闭标签页', en: 'Close tab' },
+  // Android 原生顶栏 / 半屏菜单(文案由 JS 传给原生层,Kotlin 不持有界面文案)
+  'lcl.mobile.leftPanel': { zh: '左侧面板', en: 'Left panel' },
+  'lcl.mobile.rightPanel': { zh: '右侧面板', en: 'Right panel' },
+  'lcl.mobile.tabs': { zh: '标签页', en: 'Tabs' },
+  'lcl.mobile.more': { zh: '更多', en: 'More' },
+  'lcl.mobile.back': { zh: '返回', en: 'Back' },
 }

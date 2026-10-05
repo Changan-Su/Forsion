@@ -1,8 +1,9 @@
 /**
  * Local | Cloud vault 切换(历史上的胶囊滑块)。
  * 2026-08-23:桌面端胶囊本体迁入 Ribbon 的 Unit 切换器(components/UnitSwitcher.tsx 的
- * 本地/云端两行,同一 switchVaultSide 语义)——本组件在桌面只剩「云端侧未登录」的登录引导条;
- * mobile 分支(amadeusVaultMode 桥)保持原胶囊形态不变。样式在 views/chat2/sidebar2.css。
+ * 本地/云端两行,同一 switchVaultSide 语义)——本组件在桌面只剩「云端侧未登录」的登录引导条。
+ * 2026-10-05:手机(amadeusVaultMode 桥)同样让位 —— 两行住进「Forsion Unit 切换」弹层的「智库」一段
+ * (mobile/src/UnitsSheet.tsx);那张弹层没上架(无 unitsList 桥)时才留原胶囊。样式在 views/chat2/sidebar2.css。
  */
 import React, { useEffect, useState } from 'react'
 import { usePageStore } from '../amadeus/store/pageStore'
@@ -32,6 +33,9 @@ export function VaultSideSwitch(): React.ReactElement | null {
     amadeusVaultMode?: { side: 'local' | 'cloud'; switch(next: 'local' | 'cloud'): void | Promise<void> }
   }).amadeusVaultMode
   if (!window.amadeusSync && mobileMode) {
+    // 「Forsion Unit 切换」弹层上架了(条件同 UnitsSheet.installUnitsEntry)→ 本地 / 云端在那里,这里不再占左栏顶部一行。
+    // ⚠️ 没上架时必须留胶囊,否则库切换整个消失(同下面桌面分支那条 Codex P1)。
+    if (window.tangu?.unitsList) return null
     const pickMobile = (next: 'local' | 'cloud'): void => {
       if (busy || next === side) return
       setBusy(true)

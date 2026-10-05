@@ -22,6 +22,11 @@ import { recordError } from '@/diag'
 import { installSpaceShortcuts } from './spaceShortcuts'
 import { installUnitsEntry } from './UnitsSheet'
 import { installLiveIsland } from './liveIsland'
+import { installNativeModelPicker } from './nativeModelPicker'
+import { installNativeSheet } from './nativeSheet'
+import { installNativeChrome } from './nativeChrome'
+import { installNativeFilePicker } from './nativeFiles'
+import { installShareInbox } from './shareInbox'
 import { installPhoneControl } from './phoneControl'
 
 window.addEventListener('error', (e) => { console.error('[tangu-mobile] window error:', e.error || e.message) })
@@ -44,6 +49,13 @@ try {
   // ⚠️check:parity 抓不到这条(`setTr(translate)` 不是「导入名直接调用」那种形态,属它已登记的假阴性)。
   useApp.getState().setTr(translate)
   installEngine()
+  installNativeModelPicker()
+  // Android 原生半屏(菜单 / 输入 / 确认)与原生顶栏:都是可选宿主,非 Android 或插件缺席时整段早退。
+  // 顶栏必须在首次渲染前装上,单列壳首帧就不画 Web 胶囊顶栏(否则先闪一下再消失)。
+  installNativeSheet()
+  installNativeChrome()
+  // 系统文件选择器(window.tangu.pickFiles):原生半屏里点「添加文件」时 WebView 没有用户激活,文件 input 打不开。
+  installNativeFilePicker()
   // 丝滑光标:desktop 在 main.tsx 装,移动端走的是本模块 —— 漏装过一轮(用户实报「移动端没生效」)。
   // 缺席即关(设置→外观里开);软键盘的重定位与偏移补偿在 smoothCaret 里接 visualViewport。
   // (旧注释写的「移动端没有设置开关」是错的:不列的只有「常规」页,「外观」页是共用的,
@@ -57,6 +69,8 @@ try {
   // 安卓 Space 快捷方式(长按 app 图标出 Space 列表 / 固定某个 Space 到桌面 / 接住点击)。
   // 必须排在 installEngine 之后:Space 是在那里面注册的,早了发布出去是空名单。
   installSpaceShortcuts()
+  // 分享到 Forsion(系统分享面板送来的文字 / 文件 → 先出半屏挑去处:会话的输入框或一篇笔记)。同样排在 installEngine 之后:要用到 Space 与聊天视图。
+  installShareInbox()
   // 互联设备入口(⋯ 菜单,Forsion Unit):数据桥在才上架 —— App(mobileShim)有 unitsList,
   // 设备页(unitShim)没有(设备页里不套设备页),自然隐藏。
   installUnitsEntry()

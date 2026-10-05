@@ -239,7 +239,9 @@ async function run() {
   // ② 非中继:设备辅助面照旧匿名(不带票)
   const before = proxy.length
   await js(`await fetch(${JSON.stringify(`${API}/units/${TARGET}/proxy/unit/hostfile?path=x`)}, { headers: { Authorization: 'Bearer ${TOKEN_A}' } }); return 1`)
-  const p2 = proxy.slice(before)
+  // 窗口里只认本步自己发的那条:应用的跨设备会话聚合(deviceSessionsStore)登记后会定时经中继拉那台的会话列表,
+  // 落进这个窗口不算数(2026-10-05 连红两次才看出来;之前一直是时序上碰巧错开)。
+  const p2 = proxy.slice(before).filter((x) => x.path.startsWith('/unit/hostfile'))
   check('非中继请求(unit/hostfile)不带 X-Forsion-Caller', p2.length === 1 && p2[0].caller === null, p2)
 
   // ③ remote-access 也经中继(R-06)
@@ -317,7 +319,7 @@ async function run() {
   const ck = proxy.slice(ck0)
   const jar1 = await js('return document.cookie')
   check('评审 P2 仪器自检:植入的 cookie 真在 WebView 罐里(document.cookie 读得到 k8stale)', /k8stale/.test(jar0), jar0)
-  check('评审 P2:中继请求不带全局罐里的 cookie;中继响应的 Set-Cookie 不进罐', ck.length === 2 && ck.every((x) => !x.cookie) && !/k8relay/.test(jar1), { cookies: ck.map((x) => x.cookie), jar1 })
+  check('评审 P2:中继请求不带全局罐里的 cookie;中继响应的 Set-Cookie 不进罐', ck.filter((x) => x.path === '/engine/agent/set-cookie' || x.path === '/engine/agent/sessions').length === 2 && ck.every((x) => !x.cookie) && !/k8relay/.test(jar1), { cookies: ck.map((x) => x.cookie), jar1 })
   await evaluate(`Capacitor.Plugins.CapacitorCookies.deleteCookie({ url: 'http://localhost:${PORT}', key: 'forsion_unit_session' }).then(() => 'ok')`).catch(() => 0)
 
   // ⑦ S4 失败关闭 × 三种原因(评审 P1):缓存票被拒 → 强制换票 → 换票失败。三种都不发匿名请求,但交给渲染层的不一样:
@@ -395,7 +397,12 @@ async function run() {
   await js(`localStorage.setItem('k8probe', ${JSON.stringify(MARK_LS)}); return 1`)
   // ⚠️ adb shell 把参数用空格拼成一条命令串:引号必须包在同一个参数里,否则 sh -c 只拿到 `cat`、glob 不展开 ——
   //    扫描器读了个空,下面的「一个都没有」就是假绿(本台架第一次跑就是被植入标记这条自检抓出来的)。
-  const dumpPrefs = adb('shell', `run-as ${PKG} sh -c 'cat shared_prefs/*.xml'`)
+  //    Preferences.set 走 SharedPreferences.apply():内存立刻生效、落盘是异步的 —— 紧跟着 cat 可能还读不到标记,等它落盘(封顶 2 秒)。
+  let dumpPrefs = ''
+  for (let i = 0; i < 10 && !dumpPrefs.includes(MARK_PREF); i++) {
+    if (i) await sleep(200)
+    dumpPrefs = adb('shell', `run-as ${PKG} sh -c 'cat shared_prefs/*.xml'`)
+  }
   const dumpLs = await js('return JSON.stringify(Object.entries(localStorage))')
   const dumpCap = await js('const k = (await Capacitor.Plugins.Preferences.keys()).keys; const o = {}; for (const key of k) o[key] = (await Capacitor.Plugins.Preferences.get({ key })).value; return JSON.stringify(o)')
   const dumpLog = adb('logcat', '-d')
@@ -412,11 +419,21 @@ async function run() {
 
   // ⑫ 真界面走一遍:UnitsSheet 点「Emu Mac」→ runOn 经原生中继问信任、探引擎(两条都该带票)→ 行变「可用」
   const hitsBefore = proxy.length
-  const opened = await js(`
-    document.querySelector('.mb-topbar [aria-label="left panel"]')?.click()
-    await new Promise((r) => setTimeout(r, 600))
-    const btn = [...document.querySelectorAll('.mb-foot-row .mb-icon-btn')].find((b) => /Forsion Unit/.test(b.getAttribute('aria-label') || ''))
-    btn?.click()
+  // 入口在顶栏头像的菜单里(2026-10-05;原生外壳下左栏底部那一排已撤,此前一天在「⋯」最前):原生节点得按 uiautomator 的坐标点。
+  // 头像只在每个 Space 的第一层页面上:停在主区时先点返回箭头回列表。
+  const tapNative = async (id, tries = 20) => {
+    const at = new RegExp(`resource-id="${id.replace(/\./g, '\\.')}"[^>]*bounds="\\[(\\d+),(\\d+)\\]\\[(\\d+),(\\d+)\\]"`)
+    for (let i = 0; i < tries; i++) {
+      adb('shell', 'uiautomator', 'dump', '/sdcard/forsion-ui.xml')
+      const m = at.exec(adb('shell', 'cat', '/sdcard/forsion-ui.xml'))
+      if (m) { adb('shell', 'input', 'tap', String((+m[1] + +m[3]) >> 1), String((+m[2] + +m[4]) >> 1)); return true }
+      await sleep(400)
+    }
+    return false
+  }
+  const avatar = (await tapNative('nativeChrome.account', 6)) || ((await tapNative('nativeChrome.left', 6)) && (await tapNative('nativeChrome.account')))
+  const reached = avatar && (await tapNative('nativeSheet.item.rb-units-mobile'))
+  const opened = reached && await js(`
     for (let i = 0; i < 30 && !document.querySelector('[data-run-row="${TARGET}"]'); i++) await new Promise((r) => setTimeout(r, 200))
     const row = document.querySelector('[data-run-row="${TARGET}"]')
     row?.click()
@@ -429,9 +446,12 @@ async function run() {
   }
   const sheetHits = proxy.slice(hitsBefore)
   const byPath = (p) => sheetHits.filter((x) => x.path === p)
-  check('真界面:UnitsSheet 点电脑 → 经中继 GET /unit/remote-access 与 GET /engine/agent/sessions,两条都带票 → 行状态 ready',
-    opened && sub === 'ready' && byPath('/unit/remote-access').length === 1 && byPath('/engine/agent/sessions').length === 1 && sheetHits.every((x) => !!x.caller),
-    { opened, sub, sheetHits })
+  // 选中电脑后焦点切过去,窗口里还会有后续请求(引擎探活、设备辅助面的 /unit/config …):票只随中继路径走(R-06),
+  // 所以判的是「中继路径都带票、设备辅助面都不带」,不是「窗口里每条都带」。
+  const relayed = (x) => x.path === '/engine' || x.path.startsWith('/engine/') || x.path.startsWith('/unit/remote-access')
+  check('真界面:UnitsSheet 点电脑 → 经中继 GET /unit/remote-access 与 GET /engine/agent/sessions,中继路径都带票、设备辅助面不带 → 行状态 ready',
+    opened && sub === 'ready' && byPath('/unit/remote-access').length === 1 && byPath('/engine/agent/sessions').length === 1 && sheetHits.every((x) => relayed(x) === !!x.caller),
+    { opened, sub, hits: sheetHits.map((x) => `${x.method} ${x.path}${x.caller ? '' : ' (no ticket)'}`) })
   if (process.env.SHOT_DIR) {
     const shot = path.join(process.env.SHOT_DIR, 'units-runon-emulator.png')
     require('node:fs').writeFileSync(shot, execFileSync(path.join(sdk, 'platform-tools/adb'), [...(SERIAL ? ['-s', SERIAL] : []), 'exec-out', 'screencap', '-p'], { maxBuffer: 64 * 1024 * 1024 }))

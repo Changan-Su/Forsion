@@ -8,7 +8,7 @@ import {
   GitBranch, Globe, LayoutGrid, Library, Loader2, Package, PackageOpen, Palette, Puzzle,
   RefreshCw, Search, Send, Settings, ShieldCheck, Sparkles, Trash2, Wrench, X,
 } from 'lucide-react'
-import { Skeleton } from '@lcl/engine'
+import { Skeleton, useNativeChromeClaim, useNativeChromeInstalled } from '@lcl/engine'
 import { registerMessages, useI18n } from '../i18n'
 import { formatDate as formatDateLabel } from '../format/time'
 import { useApp } from '../stores/appStore'
@@ -38,10 +38,28 @@ type Tab = 'discover' | MarketType | 'webapp' | 'installed' | 'updates' | 'submi
 type SortMode = 'popular' | 'latest' | 'name'
 
 const CONTENT_TABS: MarketType[] = ['skill', 'agent', 'plugin', 'space', 'theme', 'amadeus-plugin']
-const CATEGORY_TABS: Tab[] = [
-  ...CONTENT_TABS.filter((tp) => tp !== 'amadeus-plugin'),
-  ...(window.tangu?.connectStore ? (['webapp'] as Tab[]) : []),
-]
+
+registerMessages({
+  // 宿主只声明了部分可装类型(Android App:只有 Forsion 插件)时,发现页顶上的一句说明
+  'market.scopeHint': {
+    zh: '这里只列出可以在本设备上安装的插件。技能、Agent、引擎插件、主题与 Space 请在 Forsion 桌面端安装。',
+    en: 'Only plugins that can be installed on this device are listed here. Install skills, agents, engine plugins, themes and Spaces from Forsion for desktop.',
+  },
+})
+
+/** 本宿主能装的类型(window.tangu.marketTypes;缺省 = 全部)。**在组件里求值**:模块求值时宿主桥可能还没装好。 */
+function hostContentTypes(): MarketType[] {
+  const declared = window.tangu?.marketTypes
+  return Array.isArray(declared) ? CONTENT_TABS.filter((tp) => declared.includes(tp)) : CONTENT_TABS
+}
+
+/** 左栏分类:amadeus-plugin 并在「插件」一栏里(与引擎插件同栏),所以两者任一可装都给「插件」。 */
+function categoryTabsFor(types: MarketType[]): Tab[] {
+  return [
+    ...CONTENT_TABS.filter((tp) => tp !== 'amadeus-plugin' && (tp === 'plugin' ? types.includes('plugin') || types.includes('amadeus-plugin') : types.includes(tp))),
+    ...(window.tangu?.connectStore ? (['webapp'] as Tab[]) : []),
+  ]
+}
 
 interface WebApp { name: string; summary: string; handle: string; slug: string; url: string; updatedAt?: string }
 
@@ -125,6 +143,9 @@ export function MarketModal({ onClose, initialQuery }: { onClose?: () => void; i
     // 成功直接替换(它就是这条提示要解决的事);失败保留按钮,让「请重试」真的能重试。
     setNotice(ok ? { text: t('market.backendRestarted'), error: false } : { text: t('market.backendRestartFailed'), error: true, restart: 'idle' })
   }
+  const contentTypes = useMemo(hostContentTypes, [])
+  const categoryTabs = useMemo(() => categoryTabsFor(contentTypes), [contentTypes])
+  const scopeLimited = contentTypes.length < CONTENT_TABS.length
   const [tab, setTab] = useState<Tab>('discover')
   const [catalog, setCatalog] = useState<MarketCard[]>([])
   const [catalogError, setCatalogError] = useState('')
@@ -153,7 +174,7 @@ export function MarketModal({ onClose, initialQuery }: { onClose?: () => void; i
     setCatalogError('')
     const inst = await listInstalled().catch(() => ({} as Record<string, InstalledItem[]>))
     setInstalled(inst)
-    const settled = await Promise.allSettled(CONTENT_TABS.map((tp) => listMarket(tp)))
+    const settled = await Promise.allSettled(contentTypes.map((tp) => listMarket(tp)))
     const lists = settled.map((result) => result.status === 'fulfilled' ? result.value : [])
     const all = lists.flat()
     setCatalog(all)
@@ -167,7 +188,7 @@ export function MarketModal({ onClose, initialQuery }: { onClose?: () => void; i
     })
     setUpdatable(ups)
     setScanning(false)
-  }, [t])
+  }, [t, contentTypes])
 
   useEffect(() => { void scanCatalog() }, [scanCatalog])
 
@@ -292,6 +313,22 @@ export function MarketModal({ onClose, initialQuery }: { onClose?: () => void; i
     }
   }
 
+  // Android 原生顶栏(lcl nativeChrome 的可选宿主)在场时由它画标题 + 返回(page 模式),与设置页同一口径:
+  // 列表页「返回」= 退出市场;详情页「返回」= 回列表、「×」= 退出市场。Web 页头(返回钮 + 品牌)让位(data-native-chrome),
+  // 分类药丸行留着。没装宿主(桌面、Web、手机浏览器)时声明为 null = 空操作。
+  const nativeChrome = useNativeChromeInstalled()
+  useNativeChromeClaim(!nativeChrome ? null : detail
+    ? { mode: 'page', title: detail.name, back: t('market.detailBack'), onBack: () => setDetail(null), close: t('settings.backToApp'), onClose: close }
+    : { mode: 'page', title: t('market.title'), back: t('settings.backToApp'), onBack: close })
+
+  // Android 返回键(MobileRoot 先派发 forsion:mobile-back):详情页开着 → 先回列表,不关整个市场。
+  useEffect(() => {
+    if (!detail) return
+    const onBack = (e: Event): void => { setDetail(null); e.preventDefault() }
+    window.addEventListener('forsion:mobile-back', onBack)
+    return () => window.removeEventListener('forsion:mobile-back', onBack)
+  }, [detail])
+
   const openDetail = (c: MarketCard): void => {
     setDetailLoading(true)
     setDetail(null)
@@ -328,6 +365,7 @@ export function MarketModal({ onClose, initialQuery }: { onClose?: () => void; i
       <button
         className={`btn sm ${update || !done ? 'primary' : ''} ${extraClass}`.trim()}
         disabled={busy}
+        data-market-install={c.id}
         data-install-state={busy ? (state?.phase === 'downloading' ? 'download' : p?.phase || 'resolve') : retry ? 'failed' : undefined}
         title={p?.host || (update ? t('market.updateTitle', { from: inst?.version || '?', to: c.latestVersion || '?' }) : undefined)}
         onClick={(e) => { e.stopPropagation(); if (pending) void window.tangu?.restartForUpdate?.().catch((error) => toast(String(error?.message || error), true)); else void onInstall(c) }}
@@ -346,6 +384,7 @@ export function MarketModal({ onClose, initialQuery }: { onClose?: () => void; i
       <button
         className={`btn sm ghost ${extraClass}`.trim()}
         disabled={busy || !!installing[c.id]}
+        data-market-uninstall={c.id}
         title={t('market.uninstall')}
         aria-label={t('market.uninstall')}
         onClick={(e) => { e.stopPropagation(); void onUninstall(c) }}
@@ -452,7 +491,7 @@ export function MarketModal({ onClose, initialQuery }: { onClose?: () => void; i
   const showSort = !detail && tab !== 'submit' && tab !== 'webapp'
 
   return (
-    <div className="settings-page mk-page">
+    <div className="settings-page mk-page" data-native-chrome={nativeChrome ? '' : undefined}>
       <aside className="settings-nav" aria-label="Market navigation">
         <div className="settings-nav-top">
           <button className="settings-back" onClick={close}><ArrowLeft size={15} /> {t('settings.backToApp')}</button>
@@ -462,7 +501,7 @@ export function MarketModal({ onClose, initialQuery }: { onClose?: () => void; i
           <div className="settings-nav-group"><div className="settings-nav-grouphead">{t('market.group.discover')}</div><button className={tab === 'discover' ? 'active' : ''} onClick={() => switchTab('discover')}><Compass size={15} />{navLabel.discover}</button></div>
           <div className="settings-nav-group">
             <div className="settings-nav-grouphead">{t('market.group.categories')}</div>
-            {CATEGORY_TABS.map((id) => <button key={id} className={tab === id ? 'active' : ''} onClick={() => switchTab(id)}><TypeGlyph type={id as MarketType | 'webapp'} size={15} />{navLabel[id]}</button>)}
+            {categoryTabs.map((id) => <button key={id} className={tab === id ? 'active' : ''} onClick={() => switchTab(id)}><TypeGlyph type={id as MarketType | 'webapp'} size={15} />{navLabel[id]}</button>)}
           </div>
           <div className="settings-nav-group">
             <div className="settings-nav-grouphead">{t('market.group.manage')}</div>
@@ -482,7 +521,7 @@ export function MarketModal({ onClose, initialQuery }: { onClose?: () => void; i
         </div>
 
         {notice && (
-          <div className={`mk-notice${notice.error ? ' is-error' : ''}`} role={notice.error ? 'alert' : 'status'}>
+          <div className={`mk-notice${notice.error ? ' is-error' : ''}`} role={notice.error ? 'alert' : 'status'} data-market-notice={notice.error ? 'error' : 'ok'}>
             {notice.error ? <AlertCircle size={15} /> : <Check size={15} />}
             <div className="mk-notice-body"><span>{notice.text}</span>{notice.hint && <small>{notice.hint}</small>}</div>
             {notice.restart && <button className="btn sm primary" data-market-restart disabled={notice.restart === 'running'} onClick={() => void onRestartBackend()}>{notice.restart === 'running' ? t('market.backendRestarting') : t('market.restartBackend')}</button>}
@@ -512,6 +551,7 @@ export function MarketModal({ onClose, initialQuery }: { onClose?: () => void; i
                 <section className="mk-section"><div className="mk-section-head"><div><h2>{t('market.searchResults')}</h2><p>{t('market.resultCount', { n: visibleCatalog.length })}</p></div></div>{catalogState(visibleCatalog)}</section>
               ) : catalog.length === 0 ? catalogState([]) : (
                 <div className="mk-discover">
+                  {scopeLimited && <p className="mk-web-hint" data-market-scope-hint>{t('market.scopeHint')}</p>}
                   {featured && <section className="mk-featured" onClick={() => openDetail(featured)}><div className="mk-featured-copy"><span className="mk-featured-label"><Sparkles size={13} />{t('market.featured')}</span><h2>{featured.name}</h2><p>{featured.summary || t('market.summaryFallback')}</p><div className="mk-featured-meta">{navLabel[featured.type]}<span aria-hidden="true"> · </span>{featured.author}<span aria-hidden="true"> · </span>{t('market.downloadsShort', { n: featured.downloads })}</div><div className="mk-featured-actions"><button className="btn sm" onClick={(e) => { e.stopPropagation(); openDetail(featured) }}>{t('market.viewDetails')}<ArrowRight size={13} /></button>{installBtn(featured)}</div></div><div className="mk-featured-art" aria-hidden="true"><ItemIcon url={featured.iconUrl} type={featured.type} size={58} /><span>{navLabel[featured.type]}</span></div></section>}
                   {recent.length > 0 && <section className="mk-section"><div className="mk-section-head"><div><h2>{t('market.recent')}</h2><p>{t('market.recentHint')}</p></div><Clock size={18} /></div><div className="mk-recent-grid">{recent.map((item) => card(item, true))}</div></section>}
                   {popular.length > 0 && <section className="mk-section"><div className="mk-section-head"><div><h2>{t('market.popular')}</h2><p>{t('market.popularHint')}</p></div><Package size={18} /></div><div className="mk-grid">{popular.map((item) => card(item))}</div></section>}

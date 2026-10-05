@@ -564,6 +564,7 @@ function pluginMeta(src: ExternalPluginSource): Omit<AmadeusPlugin, 'setup'> {
     onboarding: src.onboarding,
     blocked: src.blocked,
     blockedReason: src.blockedReason,
+    isDesktopOnly: src.isDesktopOnly,
     agent: src.agent,
     bundle: src.bundle,
     events: src.events,

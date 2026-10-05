@@ -3,7 +3,19 @@ import React, { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
-vi.mock('@lcl/engine', () => ({ OverlayAt: ({ children }: any) => React.createElement('div', {}, children) }))
+// 宿主形态的三个旋钮(用例里改,beforeEach 复位)。缺省 = 桌面 / 网页:无原生半屏宿主,账号菜单照旧画 Web 浮层;
+// 头像菜单也不代收「设置 / Forsion Unit 切换」两行(那是 Android 原生外壳的事,见 lcl 的 accountMenuRows)。
+const engine = vi.hoisted(() => ({
+  rows: [] as Array<{ id: string; label: string; run: () => void }>,
+  presenter: undefined as (() => unknown) | undefined,
+  presented: [] as any[],
+}))
+vi.mock('@lcl/engine', () => ({
+  OverlayAt: ({ children, className }: any) => React.createElement('div', { className }, children),
+  nativeSheetPresenter: () => engine.presenter,
+  runNativeSheetMenu: async (menu: any) => { if (!engine.presenter) return false; engine.presented.push(menu); return true },
+  accountMenuRows: () => engine.rows,
+}))
 vi.mock('../achievements/store', () => ({ track: vi.fn() }))
 const { AccountCard } = await import('./AccountCard')
 const { LocaleProvider } = await import('../i18n')
@@ -26,6 +38,7 @@ function click(text: string): Promise<void> {
 beforeEach(() => {
   ;(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true
   onToast.mockReset()
+  engine.rows = []; engine.presenter = undefined; engine.presented = []
   usePluginStore.setState({ activeIds: ['forsion-extend'], settingsViews: [{ pluginId: 'forsion-extend', item: { id: 'backpack', category: 'forsion', mount() {} } }] })
   window.tangu = {
     authStatus: vi.fn().mockResolvedValue(alice),
@@ -250,4 +263,59 @@ it('opens the contributed backpack page from the account menu', async () => {
   await click('Alice')
   await click('背包')
   expect(openSettings).toHaveBeenCalledWith('forsion/fx:forsion-extend:backpack')
+})
+
+// Android 原生外壳(2026-10-05,用户拍板):左栏没有底部那一排,「设置」「Forsion Unit 切换」两行住进头像菜单。
+// 未登录 / 登录过期时点头像也得开菜单 —— 照旧直接去登录的话,设置就哪儿都进不去了(那台宿主没有 authAccounts 桥)。
+// 负对照:activateOn 去掉 `|| accountMenuRows().length` → 第一条红。
+const hostRows = (run = vi.fn()) => [{ id: 'rb-settings', label: '设置', run }, { id: 'rb-units-mobile', label: 'Forsion Unit 切换', run: vi.fn() }]
+
+it('opens the menu instead of signing in when it carries the host rows, so settings stay reachable signed out', async () => {
+  delete window.tangu!.authAccounts // 同 mobile/src/mobileShim.ts:没有这座桥
+  vi.mocked(window.tangu!.authStatus!).mockResolvedValue(signedOut as any)
+  const openSettings = vi.fn()
+  engine.rows = hostRows(openSettings)
+  await mount()
+  await act(async () => { host.querySelector<HTMLElement>('.account-card')!.click() })
+  await tick()
+  expect(window.tangu!.forsionLogin).not.toHaveBeenCalled()
+  const pop = document.querySelector('.account-pop')!
+  expect(pop.textContent).toContain('Forsion Unit 切换')
+  expect(pop.querySelectorAll('.ap-item').length).toBeGreaterThanOrEqual(3) // 登录 + 两行
+  await click('设置')
+  expect(openSettings).toHaveBeenCalledOnce()
+  expect(document.querySelector('.account-pop')).toBeNull() // 选了就关
+})
+
+it('still goes straight to sign-in when signed out on a host without those rows', async () => {
+  delete window.tangu!.authAccounts
+  vi.mocked(window.tangu!.authStatus!).mockResolvedValue(signedOut as any)
+  await mount()
+  await act(async () => { host.querySelector<HTMLElement>('.account-card')!.click() })
+  await tick()
+  expect(window.tangu!.forsionLogin).toHaveBeenCalledOnce()
+  expect(document.querySelector('.account-pop')).toBeNull()
+})
+
+it('native sheet: the host rows are one section between the account rows and the switcher / sign out', async () => {
+  engine.presenter = () => undefined
+  engine.rows = hostRows()
+  await mount()
+  await click('Alice')
+  await tick()
+  await tick()
+  expect(engine.presented).toHaveLength(1)
+  const sections: string[][] = engine.presented[0].sections.map((sec: any) => sec.items.map((i: any) => i.id)).filter((ids: string[]) => ids.length)
+  const at = sections.findIndex((ids) => ids.includes('rb-settings'))
+  expect(sections[at]).toEqual(['rb-settings', 'rb-units-mobile'])
+  expect(at).toBe(1) // 紧跟账号自己那几行
+  expect(sections.at(-1)).toEqual(['logout'])
+  expect(document.querySelector('.account-pop')).toBeNull() // 原生呈现成功就不画 Web 浮层
+})
+
+it('desktop / web: no host rows, the popover is exactly the account menu', async () => {
+  await mount()
+  await click('Alice')
+  await tick()
+  expect(document.querySelector('.account-pop')!.textContent).not.toContain('Forsion Unit 切换')
 })

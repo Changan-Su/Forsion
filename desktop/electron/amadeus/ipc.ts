@@ -5,6 +5,7 @@ import { pathToFileURL } from 'node:url'
 import { promisify } from 'node:util'
 import { app, BrowserWindow, clipboard, dialog, ipcMain, nativeImage, shell } from 'electron'
 import { IPC, gatePluginManifest, sanitizeOnboarding, sanitizeEvents, sanitizeRequiresPlugins, PLUGIN_CAPABILITIES, type ExternalPluginSource, type PluginBundleInfo } from '@amadeus-shared/ipc'
+import { installedPluginFields, type InstalledPluginManifest } from '@amadeus-shared/pluginSource'
 import { serializeDb, seedCalendarDb } from '@amadeus-shared/db/schema'
 import { isSafePluginExt } from '@amadeus-shared/pluginFiles'
 import { VaultManager } from './fs/vaultManager'
@@ -706,22 +707,9 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
       if (!e.isDirectory() || e.name.startsWith('.')) continue
       const pdir = path.join(globalPluginsDir(), e.name)
       try {
-        const m = JSON.parse(await fs.readFile(path.join(pdir, 'manifest.json'), 'utf8')) as {
+        const m = JSON.parse(await fs.readFile(path.join(pdir, 'manifest.json'), 'utf8')) as InstalledPluginManifest & {
           id?: string
-          name?: string
-          nameEn?: string
-          version?: string
-          description?: string
-          descriptionEn?: string
           main?: string
-          apiVersion?: number
-          minAppVersion?: string
-          requiresApp?: string
-          requiresPlugins?: unknown
-          capabilities?: unknown
-          onboarding?: unknown
-          fileExtensions?: unknown
-          events?: unknown
         }
         const id = pluginIdOf(e.name, m.id)
         if (!id) {
@@ -755,29 +743,14 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
         seen.add(id)
         out.push({
           id,
-          name: m.name || e.name,
-          version: m.version || '0.0.0',
-          description: m.description,
-          // 英文镜像:纯展示用,坏了就当没有(中文 canonical 永远兜底)。
-          nameEn: typeof m.nameEn === 'string' && m.nameEn.trim() ? m.nameEn.trim().slice(0, 120) : undefined,
-          descriptionEn: typeof m.descriptionEn === 'string' && m.descriptionEn.trim() ? m.descriptionEn.trim().slice(0, 2000) : undefined,
+          // manifest 推导的展示 / 门禁字段(名称回落目录名、英文镜像、能力白名单、onboarding / events 消毒、
+          // fileExtensions、isDesktopOnly)与 Android App 的插件宿主同一份映射(shared/amadeus/pluginSource.ts)。
+          // isDesktopOnly 在桌面只是信息位,照常装载。
+          ...installedPluginFields(m, e.name, id),
           iconUrl,
           code,
-          apiVersion: typeof m.apiVersion === 'number' ? m.apiVersion : 1,
-          minAppVersion: typeof m.minAppVersion === 'string' ? m.minAppVersion : undefined,
-          requiresApp: typeof m.requiresApp === 'string' ? m.requiresApp : undefined,
-          requiresPlugins: sanitizeRequiresPlugins(m.requiresPlugins, id),
-          // 敏感能力:只认白名单里的字符串,别的静默丢(插件写什么都不能凭空造出接缝)。
-          capabilities: Array.isArray(m.capabilities)
-            ? PLUGIN_CAPABILITIES.filter((c) => (m.capabilities as unknown[]).includes(c))
-            : undefined,
           readme,
           changelog,
-          onboarding: sanitizeOnboarding(m.onboarding),
-          events: sanitizeEvents(m.events),
-          fileExtensions: Array.isArray(m.fileExtensions)
-            ? m.fileExtensions.filter((x): x is string => typeof x === 'string' && !!x).slice(0, 8)
-            : undefined,
           blocked: blocked ?? undefined,
           bundle,
           preinstalled: builtinPluginIds().has(id) || undefined, // 随 App 播种的捆绑包(electron/builtinPlugins.ts)

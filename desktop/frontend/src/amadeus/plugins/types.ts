@@ -1323,10 +1323,13 @@ export interface AmadeusPlugin {
   onboarding?: PluginOnboardingSpec
   /** Present → gated out by the host: 'api' = apiVersion mismatch, 'minApp' = app too old,
    *  'invalid' = missing/broken manifest or unreadable main (agent Space / dev source, see `blockedReason`),
-   *  'dev-fileext' = dev source declaring `fileExtensions` (unprotected outside the installed plugins dir).
-   *  Never activated. */
-  blocked?: 'api' | 'minApp' | 'invalid' | 'dev-fileext'
+   *  'dev-fileext' = dev source declaring `fileExtensions` (unprotected outside the installed plugins dir),
+   *  'desktopOnly' = manifest `isDesktopOnly: true` on a non-desktop host (Android). Never activated. */
+  blocked?: 'api' | 'minApp' | 'invalid' | 'dev-fileext' | 'desktopOnly'
   blockedReason?: string
+  /** Manifest `isDesktopOnly` (Obsidian-style): the plugin needs desktop-only host APIs. Informational on desktop;
+   *  mobile hosts list it as `blocked: 'desktopOnly'` and never evaluate it. External plugins only. */
+  isDesktopOnly?: boolean
   /** Agent 自建 Space 插件的 agent slug(external only;设置页标「<slug> 的 Space」、不给卸载)。 */
   agent?: string
   /** 捆绑包内嵌内容清单(引擎插件 id / agent / 技能 / Space;缺省 = 纯 UI 插件)。External plugins only. */

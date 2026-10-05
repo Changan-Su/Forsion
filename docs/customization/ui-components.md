@@ -47,11 +47,35 @@ ctx.registerView({
 
 模型目录与聊天共用，主模型只展示 LLM，遵守用户的排序和隐藏设置，不额外按品牌限制。选择停留在此组件，不修改全局默认或当前会话。提交回调拿到的是当次选择；插件必须将它们传给自己的业务流程，不能展示了选择却丢弃它。挂载和编辑不发起模型请求、不自动创建会话。旧宿主必须 feature-detect，不复制内部 CSS 伪装支持。
 
+## Android 宿主展示
+
+Android 的共享 `ModelPill` 可通过 `modelPickerHost` 接口使用 Kotlin / Jetpack Compose 半屏选择器。
+插件继续调用 `ctx.ui.mountChatBox`，不用创建原生 View，也不用访问 Capacitor。
+宿主将模型目录、已选值、双语标签和主题传给原生层，用户点击完成后才原子更新该输入框的模型和思考档。
+取消与卸载不写回；宿主不可用时保留 Web 菜单。插件独立绘制的选择器不会自动获得该能力。
+
+通用底单与顶栏同理：`@lcl/engine` 的 `presentNativeMenu` / `presentNativePrompt` / `presentNativeConfirm`
+在 Android 上用 Compose 半屏底单展示菜单、输入与确认，其余平台返回 `{ handled: false }`，由调用方继续渲染 Web UI。
+共享原语已接入：`ContextMenu`、`askString`、无 children 的 `ConfirmDialog` 在 Android 上自动走原生底单，插件经这些原语即可获得。
+顶栏由外壳通过 `setNativeChromeShell` 推送；全屏层用 `useNativeChromeClaim({ mode: 'hidden' })` 临时收起，
+自带返回语义的页面（如设置）用 `{ mode: 'page', title, back, onBack, close?, onClose? }`。
+Space 切换在 Android 上是原生底部导航栏（宿主声明 `spaces: true`）：插件注册的 Space 自动出现在里面，图标取 `SpaceDefinition.icon`，不需要额外接线。
+有左栏的 Space 在 Android 上是两级导航：进来先看左栏（全屏列表），点条目进主区，返回回到列表。左栏不是这种列表的 Space 在定义里写 `listFirst: false`，主区就是第一层、左栏仍是抽屉。
+自绘菜单想同时支持原生底单时，把条目写成一份 `SheetMenu`（文案 + `run` 回调），Web 渲染与原生底单共用：
+点击触发用 `openNativeSheetMenu(build, { onFallback })`，状态驱动（右键 / 长按）用 `useNativeSheetMenu(open, build, onClose)`。
+手机「⋯」菜单除 ribbon 底部项外，还列出声明了 `Command.moreGroup = { id, title }` 的命令（同组一节、节标题 = `title`）；
+外置插件经 `ctx.registerCommand` 注册的命令由宿主自动按插件分节放进去（节标题 = 插件名），插件无需改代码。应用市场全屏页与设置同款走 `page` 模式。
+
+此接口只改变交互的展示层，不改变插件安装、DOM View 或编辑器扩展机制。
+移动端外部插件加载的支持情况需独立确认，详见 [Android 试点与验收](../../mobile/README.md)。
+
 ## English API notes
 
 Use `ctx.ui?.mountChatBox?.(element, options)` inside a plugin View. The host supplies the same input surface and model picker used by built-in Views; the plugin supplies localized labels and owns submission. `onSubmit` receives `{ text, modelId, thinkingLevel }`: return true to clear the submitted text, or false to keep it. Rejected submissions keep the draft and show a retryable error. Model and effort choices remain local, without changing the active conversation or global defaults.
 
 `handle.update(patch)` preserves mounted state; `focus()` focuses the input; `dispose()` is idempotent. The host also cleans up on plugin disable, reload, or setup failure. Submission is locked while pending, and disposed instances ignore late results. Default keyboard submission is ⌘/Ctrl+Enter; Shift+Enter adds a line and IME confirmation never submits. Text, model selection, and effort are supported; conversation-only attachments, slash commands, approvals, and run controls require their session host. Feature-detect on older hosts. The canonical options and handle types live in `desktop/shared/chatBox.ts`.
+
+On Android, `presentNativeMenu` / `presentNativePrompt` / `presentNativeConfirm` from `@lcl/engine` show a Compose bottom sheet; elsewhere they resolve `{ handled: false }` and the caller renders its web UI. `ContextMenu`, `askString` and `ConfirmDialog` (without children) already use them, so plugins built on these primitives get native sheets for free. The shell pushes the native top bar with `setNativeChromeShell`; full-screen layers hide it with `useNativeChromeClaim({ mode: 'hidden' })`, and pages with their own back semantics (Settings) claim `{ mode: 'page', title, back, onBack, close?, onClose? }`. A custom menu that should also open natively keeps one `SheetMenu` (labels + `run` callbacks) for both renders: `openNativeSheetMenu(build, { onFallback })` for click-triggered menus, `useNativeSheetMenu(open, build, onClose)` for state-driven ones (right-click / long-press). Besides the ribbon's bottom items, the mobile "⋯" sheet lists every command that declares `Command.moreGroup = { id, title }` (one section per group id, titled `title`); commands an external plugin registers through `ctx.registerCommand` are grouped there per plugin automatically (section title = plugin name), with no plugin code changes. The app market's full-screen page claims `page` mode like Settings.
 
 ## API 文档的 Amadeus 编辑器 / Amadeus for API-backed documents
 

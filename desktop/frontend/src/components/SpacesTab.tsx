@@ -14,7 +14,8 @@ import { LayoutGrid, Rocket } from 'lucide-react'
 import { SettingsPanel, SettingsRow } from './SettingsPrimitives'
 import { SpaceAppearancePanel } from './SpaceAppearancePanel'
 
-export const SpacesTab: React.FC = () => {
+/** phone = 单列壳:没有 ribbon,主位槽那一格不存在 —— 那一行不出,文案也不提 ribbon / 右键。 */
+export const SpacesTab: React.FC<{ phone?: boolean }> = ({ phone }) => {
   const { t } = useI18n()
   const spaces = useSpaceStore((s) => s.spaces)
   const [startup, setStartup] = React.useState<string>(startupSpacePref)
@@ -39,18 +40,18 @@ export const SpacesTab: React.FC = () => {
           Space」)。另两档:上次退出的 Space(连同当时开着的标签页一起恢复)/ 固定某个 Space ——
           后两者里的「固定」与「主位」冷启动进的都是**那个 Space 自己上次的布局**。
           下面第二行就是主位槽本身,与在 ribbon 那格上右键改的是同一个键。 */}
-      <SettingsPanel icon={<Rocket size={16} />} title={t('settings.spaces.startupTitle')} description={t('settings.spaces.startupHint')}>
+      <SettingsPanel icon={<Rocket size={16} />} title={t('settings.spaces.startupTitle')} description={phone ? t('settings.spaces.startupHintPhone') : t('settings.spaces.startupHint')}>
         <SettingsRow
           label={t('settings.spaces.startupLabel')}
           control={(
             <select value={startup} onChange={(e) => changeStartup(e.target.value)}>
-              <option value={HOME_SLOT_SPACE}>{t('settings.spaces.homeSlotStartup', { name: homeSlotName })}</option>
+              <option value={HOME_SLOT_SPACE}>{phone ? t('settings.spaces.homeSlotStartupPhone', { name: homeSlotName }) : t('settings.spaces.homeSlotStartup', { name: homeSlotName })}</option>
               <option value={LAST_EXIT_SPACE}>{t('settings.spaces.lastExit')}</option>
               {spaces.map((sp) => <option key={sp.id} value={sp.id}>{label(sp.name)}</option>)}
             </select>
           )}
         />
-        <SettingsRow
+        {!phone && <SettingsRow
           label={t('settings.spaces.homeSlotLabel')}
           description={t('settings.spaces.homeSlotHint')}
           control={(
@@ -58,12 +59,12 @@ export const SpacesTab: React.FC = () => {
               {spaces.map((sp) => <option key={sp.id} value={sp.id}>{label(sp.name)}</option>)}
             </select>
           )}
-        />
+        />}
       </SettingsPanel>
 
       <SpaceAppearancePanel />
 
-      <SettingsPanel icon={<LayoutGrid size={16} />} title={t('settings.spaces.libraryTitle', { count: spaces.length })} description={t('settings.spaces.hint')}>
+      <SettingsPanel icon={<LayoutGrid size={16} />} title={t('settings.spaces.libraryTitle', { count: spaces.length })} description={phone ? t('settings.spaces.hintPhone') : t('settings.spaces.hint')}>
         <div className="settings-collection-list">
           {spaces.length === 0 && <div className="settings-empty-row">{t('settings.spaces.empty')}</div>}
           {spaces.map((sp) => {

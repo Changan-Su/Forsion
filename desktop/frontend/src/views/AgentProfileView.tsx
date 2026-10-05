@@ -101,9 +101,13 @@ export function AgentsSpaceView({ leaf, params, extendView }: ViewProps) {
   useEffect(() => {
     useApp.getState().refreshAgents()
     const ws = useWorkspace.getState()
-    if (!ws.api?.panels.some((panel) => panel.params?.__type === 'agents-roster') && !ws.stash.left.some((panel) => panel.type === 'agents-roster')) {
-      ws.openView('agents-roster', {}, 'left')
-    }
+    // 单列壳(手机 / Web 窄屏)的 store 没有 dockview api,也没有 stash —— 左栏是 leftLeaves。少了这一支,
+    // 这里读 ws.stash.left 直接抛错,整个 Agents 主区在手机上塌成「此视图加载失败」(2026-10-02 真机录屏发现,09-23 起就在)。
+    const single = (ws as unknown as { leftLeaves?: Array<{ type: string }> }).leftLeaves
+    const hasRoster = single
+      ? single.some((leaf) => leaf.type === 'agents-roster')
+      : ws.api?.panels.some((panel) => panel.params?.__type === 'agents-roster') || ws.stash.left.some((panel) => panel.type === 'agents-roster')
+    if (!hasRoster) ws.openView('agents-roster', {}, 'left')
   }, [])
   // 带 section 打开(提醒点「复盘」→ 进化)是一次性的跳转:leaf.setParams 是合并语义,不清掉的话之后换 Agent 也会一直落在「进化」。
   // 用 sectionAt 当令牌:子组件按令牌导航(不靠重挂),父组件随即把两个键清掉;清掉后令牌归 0,不会再触发。

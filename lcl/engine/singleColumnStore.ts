@@ -119,6 +119,13 @@ const knownLeaves = (arr: LeafRec[]): LeafRec[] =>
 
 let autoSaveArmed = false
 
+/** 宿主钩子:主区布局**整份换新**之后调(冷启动还原 / 切 Space / 重置 / 关掉最后一个主区视图)。
+ *  SingleColumnHost 的两级导航用它落回「列表层」。做成钩子而不是让宿主去订阅 activeSpaceId:切 Space 是一串
+ *  同步 set,钩子跑在同一拍里,React 只提交终态 —— 不会先画一帧主区再滑出列表。
+ *  判据(原生底栏在不在、该 Space 认不认)全在宿主那边:本文件 import spaceRegistry 会成环。 */
+let afterLayout: (() => void) | null = null
+export function setAfterLayoutHook(fn: (() => void) | null): void { afterLayout = fn }
+
 /** 冷启动还原上次的三桶 leaf + 各自激活项。成功 true;首启/整份不可用返回 false,调用方 build 默认布局。
  *  同时是自动存盘的**发令枪** —— 还原之前 bootstrap 的那些 setSidebarDefaults 之类的 set() 不该
  *  把一份空布局先写回去,把真正要还原的东西冲掉。 */
@@ -153,6 +160,7 @@ function applySCBlob(raw: unknown): boolean {
     focusedChatLeafId: main.find((r) => r.type === 'chat')?.id ?? null,
   })
   useWorkspace.getState().refreshTabs()
+  afterLayout?.()
   return true
 }
 
@@ -534,7 +542,8 @@ export const useWorkspace = create<WS>((set, get) => {
       if (rec.type === 'home') return // 主区空态占位,不可关
       if (!force && guarded(rec)) return // 固定 View:区内最后一个关不掉(force = 清场路径)
       // 主区关掉最后一个 → 就地变 home 空态(不销毁主屏)。不走 navigateLeaf:force 关固定 View 时会被守卫拦成「另开一个 home」。
-      if (!IS_MINI_PANEL && rec.loc === 'main' && get().mainLeaves.length <= 1) { swapRec(rec, 'home', {}); return }
+      // 两级导航下随即回列表层(空态页没什么可看),见 setAfterLayoutHook。
+      if (!IS_MINI_PANEL && rec.loc === 'main' && get().mainLeaves.length <= 1) { swapRec(rec, 'home', {}); afterLayout?.(); return }
       const bkey = bucketOf(rec.loc)
       const rest = get()[bkey].filter((r) => r.id !== id)
       set({ [bkey]: rest } as Partial<WS>)
@@ -606,6 +615,7 @@ export const useWorkspace = create<WS>((set, get) => {
       useNav.getState().reset() // 同桌面版:布局重建,旧 leaf id 的历史全失效;须在重建之前,重建时记下的栈底要留着
       get().defaultBuilder?.() // = getActiveSpace().build()（切 Space 时 spaceRegistry 已先切 id）
       get().refreshTabs()
+      afterLayout?.()
     },
 
     saveCurrent() { writeJSON(SC_LAYOUT_KEY, snapshot()) },

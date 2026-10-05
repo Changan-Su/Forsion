@@ -6,10 +6,10 @@
  */
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import {
-  ChevronDown, ChevronRight, FileText, MessageSquarePlus, MessagesSquare,
+  Camera, ChevronDown, ChevronRight, FileText, Image as ImageIcon, MessageSquarePlus, MessagesSquare,
   PanelsTopLeft, Paperclip, Plus, Search, UserPlus,
 } from 'lucide-react'
-import { allViews, getView, label, nestedPanelPlacement, UI_ZOOM_EVENT, useEdgeNudge, useWorkspace, zoomOf } from '@lcl/engine'
+import { allViews, getView, label, nestedPanelPlacement, openNativeSheetMenu, UI_ZOOM_EVENT, useEdgeNudge, useWorkspace, zoomOf, type SheetMenu, type SheetMenuItem } from '@lcl/engine'
 import { registerMessages, useI18n } from '../../i18n'
 import { usePageStore } from '../../amadeus/store/pageStore'
 import { useRecentViews } from '../../recentViews'
@@ -21,6 +21,9 @@ registerMessages({
   'addMenu.newChat': { zh: '新会话', en: 'New session' },
   'addMenu.agent': { zh: '添加 Agent', en: 'Add agent' },
   'addMenu.files': { zh: '添加文件或文件夹', en: 'Add files or folders' },
+  'addMenu.camera': { zh: '拍照', en: 'Take photo' },
+  'addMenu.photos': { zh: '相册', en: 'Photos' },
+  'addMenu.file': { zh: '文件', en: 'Files' },
   'addMenu.conversation': { zh: '添加会话', en: 'Add session' },
   'addMenu.view': { zh: '添加正在使用的 View', en: 'Add an active View' },
   'addMenu.searchChats': { zh: '搜索全部会话', en: 'Search all sessions' },
@@ -43,6 +46,19 @@ interface ViewCandidate {
 }
 
 const OMIT_VIEW_TYPES = new Set(['chat', 'chat-panel', 'home', 'launcher', 'sidebar-empty'])
+/** 原生半屏「全部会话」页最多带多少条(原生解析上限 600 项/请求;搜索在原生侧对这份做)。 */
+export const NATIVE_ALL_SESSIONS_CAP = 300
+
+/**
+ * 原生半屏「添加会话」页的两节(最近 / 其余全部);**装不下就返回 null**,调用方改走 Web 二级面板。
+ * 原生页的搜索只在递过去的那份名单里找:此前超过上限时直接截到 300 条,第 301 条以后的会话在原生搜索里
+ * 永远搜不到,也没有任何提示(Web 面板搜的是全量)。截断的名单不如不给 —— 整页回落到能搜全量的 Web 面板。
+ */
+export function nativeSessionPage<S extends { id: string }>(recent: readonly S[], all: readonly S[], cap = NATIVE_ALL_SESSIONS_CAP): { recent: S[]; rest: S[] } | null {
+  const recentIds = new Set(recent.map((x) => x.id))
+  const rest = all.filter((x) => !recentIds.has(x.id))
+  return rest.length > cap ? null : { recent: [...recent], rest }
+}
 
 function uniqueViews(items: ViewCandidate[]): ViewCandidate[] {
   const seen = new Set<string>()
@@ -201,6 +217,17 @@ export const AddContentMenu: React.FC<{
     onOpenChange(false)
   }
 
+  /** Android:这几项是在原生半屏里点的,WebView 没有用户激活 → 文件 input 的 click() 会被 Chromium 丢掉,
+   *  改走宿主给的来源(系统文件选择器 / 照片选择器 / 相机)。取消、没拍成 = 空数组,什么都不加。 */
+  const attachFrom = async (pick: () => Promise<File[]>): Promise<void> => {
+    onOpenChange(false)
+    const files = await pick()
+    if (!files.length) return
+    const dt = new DataTransfer()
+    files.forEach((f) => dt.items.add(f))
+    await onPickFiles(dt.files)
+  }
+
   const choosePaths = async (): Promise<void> => {
     if (canUsePathPicker && window.tangu?.pickPaths) {
       onOpenChange(false)
@@ -208,19 +235,80 @@ export const AddContentMenu: React.FC<{
       if (items.length) await onPickPaths(items)
       return
     }
+    if (window.tangu?.pickFiles) return attachFrom(() => window.tangu!.pickFiles!())
     fileInputRef.current?.click()
   }
 
   const viewIcon = (type: string): React.ComponentType<{ size?: number; className?: string }> => getView(type)?.icon || PanelsTopLeft
 
-  const renderViewRows = (items: ViewCandidate[]): React.ReactNode => items.map((item) => {
+  // ── 条目的唯一一份:Web 菜单与 Android 原生半屏(lcl nativeSheet 可选宿主)都从这里渲染 ──
+  const viewItem = (item: ViewCandidate): SheetMenuItem => {
     const Icon = item.ref.kind === 'file' || item.ref.kind === 'note' ? FileText : viewIcon(item.type)
+    return { id: `ref:${item.key}`, label: item.title, detail: item.meta, icon: <Icon size={14} />, run: () => selectReference(item.ref) }
+  }
+  const sessionItem = (session: (typeof allSessions)[number]): SheetMenuItem => ({
+    id: `session:${session.id}`, label: session.title || 'Chat', detail: session.summary || undefined, icon: <MessagesSquare size={14} />,
+    run: () => selectReference({ kind: 'session', id: session.id, title: session.title || 'Chat' }),
+  })
+  const newChatItem: SheetMenuItem = { id: 'new-chat', label: t('addMenu.newChat'), icon: <MessageSquarePlus size={14} />, run: () => { onNewSession?.(); onOpenChange(false) } }
+  const addAgentItem: SheetMenuItem | null = onAddAgent ? { id: 'add-agent', act: 'add-agent', label: t('addMenu.agent'), icon: <UserPlus size={14} />, run: () => { onAddAgent(); onOpenChange(false) } } : null
+  const filesItem: SheetMenuItem = { id: 'files', label: t('addMenu.files'), icon: <Paperclip size={14} />, run: () => { void choosePaths() } }
+  /** 宿主给了相机和照片选择器(Android)时,原生半屏把「添加文件」拆成三行;手机上没有「文件夹」,那一行只叫「文件」。 */
+  const host = window.tangu
+  const sourceItems: SheetMenuItem[] = host?.takePhoto && host.pickPhotos && host.pickFiles ? [
+    { id: 'camera', label: t('addMenu.camera'), icon: <Camera size={14} />, run: () => { void attachFrom(() => host.takePhoto!()) } },
+    { id: 'photos', label: t('addMenu.photos'), icon: <ImageIcon size={14} />, run: () => { void attachFrom(() => host.pickPhotos!()) } },
+    { ...filesItem, label: t('addMenu.file') },
+  ] : [filesItem]
+
+  /** 原生半屏:一级 = 同样的动作入口;会话 / View 两个二级页带原生搜索(数据都已在 store 里,同步可得)。
+   *  会话多到原生页装不下时,「添加会话」这一项改为打开 Web 菜单并直达会话面板(那里搜的是全量)。 */
+  const nativeMenu = (): SheetMenu => {
+    const sessionPage = nativeSessionPage(recentSessions, allSessions)
+    const shownViews = uniqueViews([...openViews, ...recentViewCandidates])
+    const shownKeys = new Set(shownViews.map((v) => v.key))
+    const searchEmpty = t('addMenu.noMatches')
+    return {
+      title: t('addMenu.label'),
+      back: t('common.back'),
+      sections: [{
+        items: [
+          newChatItem,
+          ...(addAgentItem ? [addAgentItem] : []),
+          ...sourceItems,
+          sessionPage ? {
+            id: 'conversation', label: t('addMenu.conversation'), icon: <MessagesSquare size={14} />,
+            search: { placeholder: t('addMenu.searchChats'), empty: searchEmpty },
+            children: [
+              { title: t('addMenu.recent'), items: sessionPage.recent.map(sessionItem) },
+              { title: t('addMenu.allChats'), items: sessionPage.rest.map(sessionItem) },
+            ],
+          } : {
+            id: 'conversation', label: t('addMenu.conversation'), icon: <MessagesSquare size={14} />,
+            run: () => { onOpenChange(true); setPane('conversation') },
+          },
+          {
+            id: 'view', label: t('addMenu.view'), icon: <PanelsTopLeft size={14} />,
+            search: { placeholder: t('addMenu.searchViews'), empty: searchEmpty },
+            children: [
+              { title: t('addMenu.inUse'), items: openViews.map(viewItem) },
+              { title: t('addMenu.recent'), items: recentViewCandidates.filter((v) => !openViews.some((o) => o.key === v.key)).map(viewItem) },
+              { title: t('addMenu.allViews'), items: registeredViews.filter((v) => !shownKeys.has(v.key)).map(viewItem) },
+            ],
+          },
+        ],
+      }],
+    }
+  }
+
+  const renderViewRows = (items: ViewCandidate[]): React.ReactNode => items.map((item) => {
+    const it = viewItem(item)
     return (
-      <button key={item.key} className="menu-item add-menu-result" title={item.meta || item.title} onClick={() => selectReference(item.ref)}>
-        <Icon size={14} />
+      <button key={item.key} className="menu-item add-menu-result" title={item.meta || item.title} onClick={it.run}>
+        {it.icon}
         <span className="grow add-menu-result-main">
-          <span className="add-menu-result-title">{item.title}</span>
-          {item.meta && <span className="add-menu-result-meta">{item.meta}</span>}
+          <span className="add-menu-result-title">{it.label}</span>
+          {it.detail && <span className="add-menu-result-meta">{it.detail}</span>}
         </span>
       </button>
     )
@@ -233,7 +321,11 @@ export const AddContentMenu: React.FC<{
         title={t('input.addContent')}
         aria-expanded={open}
         disabled={disabled}
-        onClick={() => onOpenChange(!open)}
+        onClick={() => {
+          // Android:原生半屏;没有原生宿主(桌面 / 网页)照旧展开 Web 菜单,宿主呈现失败也回落 Web。
+          if (!open && openNativeSheetMenu(nativeMenu, { onFallback: () => onOpenChange(true) })) return
+          onOpenChange(!open)
+        }}
       >
         <Plus size={16} className="add-pill-plus" />
         <span className="add-pill-label">{t('addMenu.label')}</span>
@@ -246,16 +338,16 @@ export const AddContentMenu: React.FC<{
           className="composer-menu composer-menu--add"
           style={menuFix.style}
         >
-          <button className="menu-item" onClick={() => { onNewSession?.(); onOpenChange(false) }}>
-            <MessageSquarePlus size={14} />
-            <span className="grow">{t('addMenu.newChat')}</span>
+          <button className="menu-item" onClick={newChatItem.run}>
+            {newChatItem.icon}
+            <span className="grow">{newChatItem.label}</span>
           </button>
-          {onAddAgent && <button className="menu-item" data-add-agent onClick={() => { onAddAgent(); onOpenChange(false) }}>
-            <UserPlus size={14} /><span className="grow">{t('addMenu.agent')}</span>
+          {addAgentItem && <button className="menu-item" data-add-agent onClick={addAgentItem.run}>
+            {addAgentItem.icon}<span className="grow">{addAgentItem.label}</span>
           </button>}
-          <button className="menu-item" onClick={() => { void choosePaths() }}>
-            <Paperclip size={14} />
-            <span className="grow">{t('addMenu.files')}</span>
+          <button className="menu-item" onClick={filesItem.run}>
+            {filesItem.icon}
+            <span className="grow">{filesItem.label}</span>
           </button>
           <button
             className={`menu-item add-menu-parent${pane === 'conversation' ? ' active' : ''}`}
@@ -307,20 +399,23 @@ export const AddContentMenu: React.FC<{
             {pane === 'conversation' ? (
               <>
                 <div className="menu-section">{t(query.trim() ? 'addMenu.allChats' : 'addMenu.recent')}</div>
-                {sessionMatches.map((session) => (
-                  <button
-                    key={session.id}
-                    className="menu-item add-menu-result"
-                    title={session.summary || session.title || ''}
-                    onClick={() => selectReference({ kind: 'session', id: session.id, title: session.title || 'Chat' })}
-                  >
-                    <MessagesSquare size={14} />
-                    <span className="grow add-menu-result-main">
-                      <span className="add-menu-result-title">{session.title || 'Chat'}</span>
-                      {session.summary && <span className="add-menu-result-meta">{session.summary}</span>}
-                    </span>
-                  </button>
-                ))}
+                {sessionMatches.map((session) => {
+                  const it = sessionItem(session)
+                  return (
+                    <button
+                      key={session.id}
+                      className="menu-item add-menu-result"
+                      title={session.summary || session.title || ''}
+                      onClick={it.run}
+                    >
+                      {it.icon}
+                      <span className="grow add-menu-result-main">
+                        <span className="add-menu-result-title">{it.label}</span>
+                        {it.detail && <span className="add-menu-result-meta">{it.detail}</span>}
+                      </span>
+                    </button>
+                  )
+                })}
                 {!sessionMatches.length && <div className="add-menu-empty">{t('addMenu.noMatches')}</div>}
               </>
             ) : query.trim() ? (

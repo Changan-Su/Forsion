@@ -18,6 +18,8 @@ export const Capacitor = {
   isNativePlatform: (): boolean => false,
   getPlatform: (): string => 'web',
   isPluginAvailable: (_name: string): boolean => false,
+  /** mobile/src/nativeFiles.ts 在 Android 分支里用它把 content:// 换成可 fetch 的地址;浏览器里那条路整段早退,原样返回即可。 */
+  convertFileSrc: (filePath: string): string => filePath,
 }
 
 export function registerPlugin<T>(name: string): T {
