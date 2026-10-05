@@ -47,7 +47,7 @@ import { appendCandidates as appendRawCandidates, readCandidates as readRaw } fr
 import { startMemoryDream } from './memoryDream.js';
 import { MEMORY_CHAR_BUDGET, normalizeMemoryFact } from './memoryRepository.js';
 import { sessionCalledTool } from './sessionSearchSql.js';
-import { addProjectFact, peekProjectMemory, pendingProjectFacts, queueProjectFact, resolveProjectMemory } from './projectMemory.js';
+import { addProjectFact, peekProjectMemory, pendingProjectFacts, projectKnownForJudge, queueProjectFact, resolveProjectMemory } from './projectMemory.js';
 import { COMPUTER_HISTORY_TOOL } from './computerHistory.js';
 import { HISTORIAN_EMOJI_FIELD } from '../core/sessionEmoji.js';
 import { applyHistorianEmoji } from './sessionEmoji.js';
@@ -604,7 +604,7 @@ async function runHistorianForSession(sessionId: string, userId: string, memScop
     // 等用户确认的、用户丢弃过的候选也算「已经提过」:不给它看,它每轮换个说法再提一遍,待确认清单里就是一排近义句。
     const projectRef = judgeMemory && deps().profile.capabilities.hostExec ? await resolveProjectMemory(userId, sessionId) : null;
     const projectKnown = projectRef
-      ? [...((await peekProjectMemory(projectRef).catch(() => null))?.entries ?? []).map((e) => e.content), ...pendingProjectFacts(projectRef)].map((c) => `- ${c}`).join('\n').slice(-1500)
+      ? projectKnownForJudge(((await peekProjectMemory(projectRef).catch(() => null))?.entries ?? []).map((e) => e.content), pendingProjectFacts(projectRef))
       : '';
 
     // 远程轮 / 电脑历史隔离的会话里,信号加评没有可评的类别 → 不起这次调用。

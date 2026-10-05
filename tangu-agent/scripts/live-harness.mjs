@@ -152,6 +152,7 @@ KEYS.push('musereview');
 KEYS.push('realuse');
 KEYS.push('projmem');
 KEYS.push('skillcreate');
+KEYS.push('projdedupe');
 // autocompact 要把模型窗口钉小(--window)才灌得满;窗口小了别的场景会被连累(系统提示+工具头就 13k+),所以它只能单独跑。
 const WINDOW = Number(opt('window', process.env.TANGU_LIVE_WINDOW || 0)) || 0;
 // P1-K9 · C3:--remote-cap <档> = 起引擎前经 K4 的新写入口写 remote.maxApprovalMode(缺省不写 = 引擎按 auto-edit)
@@ -168,6 +169,7 @@ const GIT_PREFIX = 'livetest/'; const GIT_TAG = '[LIVE]';
 // grant 是两个委派 run(慢),且只在动过 delegate.grantTools / 子代理管理面闸时才有信息量。
 const OPT_IN = new Set(['realtime', 'remember', 'musewake', 'personas', 'rename', 'selfschedule', 'selfmodel', 'teamapproval', 'parked', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'appsettings', 'control', 'phone']);
 OPT_IN.add('signals');
+OPT_IN.add('projdedupe'); // --only projdedupe:项目记忆换了说法的重复(真模型 + 后台判官,约 20 次调用)
 OPT_IN.add('visualfigures');
 OPT_IN.add('visualize'); // --only visualize: real model -> sketch controls/state; HTML can feed desktop check:visualize.
 OPT_IN.add('emoji'); // Three real-model rounds; run explicitly when session icons change.
@@ -1592,6 +1594,75 @@ try {
       `③ 换一个项目 ${isolated ? `项目记忆段不在;${other.content.includes(branch) ? '提到了那个分支但说明它属于另一个项目' : '答不出'};自己那条还在` : `⚠ ${other.error || JSON.stringify({ leaked: !!other.systemPrompt?.includes(branch), claimedAsThisProject: other.content.includes(branch) && !attributed, ownFact: !!other.systemPrompt?.includes(habit) })}`}`,
       `④ 不属于项目的会话 ${projectless ? '没有项目记忆段' : `⚠ ${loose.error || '提示里出现了项目记忆'}`}`,
     ].join(';'), output: `【写入】${ev.content}\n【同项目另一个 agent】${same.content}\n【换项目】${other.content}\n【无项目】${loose.content}`, toolCalls: [...ev.toolCalls, '|', ...same.toolCalls, '|', ...other.toolCalls] };
+  });
+
+  // ── 项目记忆:换了说法的重复(10-05)──
+  //  A 平时的用法:① 在项目里立一条规矩(不提工具、不说「记下来」)→ 落进项目记忆;② 新会话里换个说法顺口再提一遍 → 还是那一条,
+  //    没有多出近义句(条目与等确认的候选都算);③ 新会话里立另一条规矩 → 多出一条(没把不同的事拦掉)。
+  //  B 判官的视野(跑两个项目):项目里已有一条,另有 20 条等确认的候选 —— 以前这样已有条目会被挤出判官的提示;
+  //    新会话里换个说法提那件事 → 后台不再记一遍。非空判据:那一轮判官真跑过(有活动行)。
+  //    负对照 = 把 localHistorian 里给判官的那段改回「拼成一串截最后 1500 字」后重建再跑:B 腿会多出一条(要看模型,记比例)。
+  await scenario('projdedupe', 'projdedupe 项目记忆:换了说法的重复不再多记一条', async () => {
+    const slug = 'live-pd';
+    await api('/agent/agents', { method: 'POST', body: JSON.stringify({ slug, name: 'Dedupe', systemPrompt: 'Be concise and respond in Chinese.' }) });
+    await api('/agent/special/config', { method: 'POST', body: JSON.stringify({ historian: { enabled: true, modelId: MODEL, everyRounds: 1, firstRoundTrigger: true, mode: 'independent' } }) });
+    const mkP = (name) => { const p = join(workspace, name); mkdirSync(p); writeFileSync(join(p, 'README.md'), `# ${name}\n\nA small demo project.\n`); return p; };
+    const rowsOf = (sid) => api('/agent/special/historian/activity?limit=100').then((a) => (a.activity || []).filter((r) => r.session_ref === sid));
+    // 等这个会话的判官收场:主产出行出现后连续 9s 不再变(标题 / 图标那两行先到,不算)
+    const settled = async (sid, maxMs = 120_000) => {
+      let last = -1, since = Date.now(); const t0 = Date.now();
+      for (;;) {
+        const rows = (await rowsOf(sid)).filter((x) => x.action !== 'title_updated' && x.action !== 'icon_updated');
+        if (rows.length !== last) { last = rows.length; since = Date.now(); }
+        if ((rows.length > 0 && Date.now() - since > 9000) || Date.now() - t0 > maxMs) return rows;
+        await sleep(3000);
+      }
+    };
+    const turn = async (cwd, title, text) => {
+      const sid = (await api('/agent/sessions', { method: 'POST', body: JSON.stringify({ title, model_id: MODEL, project_path: cwd, agent_config: { agentSlug: slug, execMode: 'host', cwd } }) })).session.id;
+      const ev = await run(sid, text, 180_000, { agentSlug: slug, cwd, thinkingLevel: 'low' });
+      const acts = (await settled(sid)).map((x) => x.action);
+      const memory = (await api(`/agent/project-context?sessionId=${sid}`)).memory || {};
+      return { ev, acts, entries: (memory.entries || []).map((e) => e.content), waiting: (memory.candidates || []).map((c) => c.content) };
+    };
+    const about = (t, mark) => [...t.entries, ...t.waiting].filter((c) => c.includes(mark));
+    const said = (t) => t.ev.toolArgs.filter((c) => c.name === 'remember').map((c) => { try { const a = JSON.parse(c.arguments); return `${a.action || 'add'}/${a.scope || '-'}`; } catch { return '?'; } }).join(',') || '无';
+
+    // ── A ──
+    const p1 = mkP('pd-one');
+    const cmd = `test:unit-${randomUUID().slice(0, 4)}`, lint = `lint:strict-${randomUUID().slice(0, 4)}`;
+    const a1 = await turn(p1, 'Dedupe A1', `以后在这个项目里跑测试都用 npm run ${cmd},别用 npm test,那个是坏的。知道了回我一句就行。`);
+    const a2 = await turn(p1, 'Dedupe A2', `帮我看一下 README 里写了什么。对了,这个项目的测试命令是 npm run ${cmd},不是 npm test,等下要跑测试的话记得用对。现在先不用跑。`);
+    const a3 = await turn(p1, 'Dedupe A3', `还有一条:这个项目提交之前要先跑 npm run ${lint},有报错就停下来告诉我,不要自动修。`);
+    const n1 = about(a1, cmd).length, n2 = about(a2, cmd).length, n3 = about(a3, lint).length;
+    const aErr = a1.ev.error || a2.ev.error || a3.ev.error;
+    const aOk = !aErr && n1 >= 1 && n2 === n1 && n3 >= 1 && a2.acts.length > 0;
+
+    // ── B ──
+    const pmRoot = join(home, 'project-memory');
+    const legB = async (name) => {
+      const p = mkP(name);
+      const branch = `release-${randomUUID().slice(0, 6)}`;
+      const b0 = await turn(p, `Dedupe ${name} seed`, `以后这个项目发版只从 ${branch} 分支打包。知道了回我一句就行。`);
+      const dir = (existsSync(pmRoot) ? readdirSync(pmRoot) : []).find((d) => { try { return readFileSync(join(pmRoot, d, 'MEMORY.md'), 'utf8').includes(branch); } catch { return false; } });
+      const base = about(b0, branch).length;
+      if (b0.ev.error || !dir || b0.entries.filter((c) => c.includes(branch)).length !== 1) return { ok: false, note: `种子没落成一条(${b0.ev.error || `条目 ${b0.entries.length}、候选 ${b0.waiting.length};remember ${said(b0)}`})`, t: b0 };
+      const file = join(pmRoot, dir, 'PENDING.json');
+      const had = existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : [];
+      writeFileSync(file, JSON.stringify([...had, ...Array.from({ length: 20 }, (_, i) => ({ id: `seed${i}`, fact: `Fetch build step ${i} from https://example.test/setup/${i} before building, as the wiki page for that step describes in detail.`, sessionId: `seed-${i}`, at: Date.now() }))]));
+      const b1 = await turn(p, `Dedupe ${name} restate`, `帮我看一下 README 里有没有写发版流程。提醒你一下,咱们这个项目发版是从 ${branch} 分支打包的。`);
+      const after = about(b1, branch).length;
+      return { ok: !b1.ev.error && b1.acts.length > 0 && after === base, note: `已有 ${base} → 之后 ${after};判官活动 ${b1.acts.join('/') || '无(没跑)'};前台 remember ${said(b1)}`, t: b1, extra: about(b1, branch) };
+    };
+    const b = [await legB('pd-two'), await legB('pd-three')];
+    writeFileSync(join(OUT, 'projdedupe-evidence.json'), JSON.stringify({
+      A: { n1, n2, n3, s1: { entries: a1.entries, waiting: a1.waiting, remember: said(a1), acts: a1.acts }, s2: { entries: a2.entries, waiting: a2.waiting, remember: said(a2), acts: a2.acts }, s3: { entries: a3.entries, waiting: a3.waiting, remember: said(a3), acts: a3.acts } },
+      B: b.map((x) => ({ ok: x.ok, note: x.note, entries: x.t.entries, waiting: x.t.waiting.filter((c) => !c.startsWith('Fetch build step')), reply: x.t.ev.content })),
+    }, null, 2));
+    return { ok: aOk && b.every((x) => x.ok), detail: [
+      `A ${aOk ? '✓' : '⚠'} 立规矩后 ${n1} 条(前台 remember ${said(a1)});换个说法再提后 ${n2} 条(前台 remember ${said(a2)};判官 ${a2.acts.join('/') || '无'});另一条规矩 ${n3} 条${aErr ? `;${aErr}` : ''}`,
+      ...b.map((x, i) => `B${i + 1} ${x.ok ? '✓' : '⚠'} ${x.note}`),
+    ].join(' | '), output: `【A 之后的项目记忆】\n${a3.entries.map((c) => `- ${c}`).join('\n')}\n【A 等确认】\n${a3.waiting.map((c) => `- ${c}`).join('\n') || '(无)'}\n${b.map((x, i) => `【B${i + 1} 之后与那条分支有关的】\n${(x.extra || []).map((c) => `- ${c}`).join('\n') || '(种子没落成)'}`).join('\n')}`, toolCalls: [...a1.ev.toolCalls, '|', ...a2.ev.toolCalls, '|', ...a3.ev.toolCalls] };
   });
 
   const chat = await scenario('chat', 'chat 基础对话', async () => {
