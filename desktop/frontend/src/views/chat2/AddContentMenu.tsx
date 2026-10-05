@@ -6,7 +6,7 @@
  */
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import {
-  ChevronDown, ChevronRight, FileText, MessageSquarePlus, MessagesSquare,
+  Camera, ChevronDown, ChevronRight, FileText, Image as ImageIcon, MessageSquarePlus, MessagesSquare,
   PanelsTopLeft, Paperclip, Plus, Search, UserPlus,
 } from 'lucide-react'
 import { allViews, getView, label, nestedPanelPlacement, openNativeSheetMenu, UI_ZOOM_EVENT, useEdgeNudge, useWorkspace, zoomOf, type SheetMenu, type SheetMenuItem } from '@lcl/engine'
@@ -21,6 +21,9 @@ registerMessages({
   'addMenu.newChat': { zh: '新会话', en: 'New session' },
   'addMenu.agent': { zh: '添加 Agent', en: 'Add agent' },
   'addMenu.files': { zh: '添加文件或文件夹', en: 'Add files or folders' },
+  'addMenu.camera': { zh: '拍照', en: 'Take photo' },
+  'addMenu.photos': { zh: '相册', en: 'Photos' },
+  'addMenu.file': { zh: '文件', en: 'Files' },
   'addMenu.conversation': { zh: '添加会话', en: 'Add session' },
   'addMenu.view': { zh: '添加正在使用的 View', en: 'Add an active View' },
   'addMenu.searchChats': { zh: '搜索全部会话', en: 'Search all sessions' },
@@ -214,6 +217,17 @@ export const AddContentMenu: React.FC<{
     onOpenChange(false)
   }
 
+  /** Android:这几项是在原生半屏里点的,WebView 没有用户激活 → 文件 input 的 click() 会被 Chromium 丢掉,
+   *  改走宿主给的来源(系统文件选择器 / 照片选择器 / 相机)。取消、没拍成 = 空数组,什么都不加。 */
+  const attachFrom = async (pick: () => Promise<File[]>): Promise<void> => {
+    onOpenChange(false)
+    const files = await pick()
+    if (!files.length) return
+    const dt = new DataTransfer()
+    files.forEach((f) => dt.items.add(f))
+    await onPickFiles(dt.files)
+  }
+
   const choosePaths = async (): Promise<void> => {
     if (canUsePathPicker && window.tangu?.pickPaths) {
       onOpenChange(false)
@@ -221,17 +235,7 @@ export const AddContentMenu: React.FC<{
       if (items.length) await onPickPaths(items)
       return
     }
-    // Android:原生半屏里点的这一项,WebView 没有用户激活 → 文件 input 的 click() 会被 Chromium 丢掉,改走系统选择器。
-    if (window.tangu?.pickFiles) {
-      onOpenChange(false)
-      const files = await window.tangu.pickFiles()
-      if (files.length) {
-        const dt = new DataTransfer()
-        files.forEach((f) => dt.items.add(f))
-        await onPickFiles(dt.files)
-      }
-      return
-    }
+    if (window.tangu?.pickFiles) return attachFrom(() => window.tangu!.pickFiles!())
     fileInputRef.current?.click()
   }
 
@@ -249,6 +253,13 @@ export const AddContentMenu: React.FC<{
   const newChatItem: SheetMenuItem = { id: 'new-chat', label: t('addMenu.newChat'), icon: <MessageSquarePlus size={14} />, run: () => { onNewSession?.(); onOpenChange(false) } }
   const addAgentItem: SheetMenuItem | null = onAddAgent ? { id: 'add-agent', act: 'add-agent', label: t('addMenu.agent'), icon: <UserPlus size={14} />, run: () => { onAddAgent(); onOpenChange(false) } } : null
   const filesItem: SheetMenuItem = { id: 'files', label: t('addMenu.files'), icon: <Paperclip size={14} />, run: () => { void choosePaths() } }
+  /** 宿主给了相机和照片选择器(Android)时,原生半屏把「添加文件」拆成三行;手机上没有「文件夹」,那一行只叫「文件」。 */
+  const host = window.tangu
+  const sourceItems: SheetMenuItem[] = host?.takePhoto && host.pickPhotos && host.pickFiles ? [
+    { id: 'camera', label: t('addMenu.camera'), icon: <Camera size={14} />, run: () => { void attachFrom(() => host.takePhoto!()) } },
+    { id: 'photos', label: t('addMenu.photos'), icon: <ImageIcon size={14} />, run: () => { void attachFrom(() => host.pickPhotos!()) } },
+    { ...filesItem, label: t('addMenu.file') },
+  ] : [filesItem]
 
   /** 原生半屏:一级 = 同样的动作入口;会话 / View 两个二级页带原生搜索(数据都已在 store 里,同步可得)。
    *  会话多到原生页装不下时,「添加会话」这一项改为打开 Web 菜单并直达会话面板(那里搜的是全量)。 */
@@ -264,7 +275,7 @@ export const AddContentMenu: React.FC<{
         items: [
           newChatItem,
           ...(addAgentItem ? [addAgentItem] : []),
-          filesItem,
+          ...sourceItems,
           sessionPage ? {
             id: 'conversation', label: t('addMenu.conversation'), icon: <MessagesSquare size={14} />,
             search: { placeholder: t('addMenu.searchChats'), empty: searchEmpty },

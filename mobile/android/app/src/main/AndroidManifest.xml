@@ -74,14 +74,20 @@
          安装包(2026-10-05 核过合并清单)—— 升个依赖就可能悄悄没了,所以写明。安装包的权限集合不因此变化。 -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <!-- 聊天「＋」→ 拍照(NativeFilePickerPlugin):照片由系统相机 App 拍(ACTION_IMAGE_CAPTURE),本 App 并不自己开摄像头。
+         但合并清单里本来就有 CAMERA(同样是 @capacitor/inappbrowser 顺带并进,2026-10-05 核过),而系统规定:清单声明了
+         CAMERA 却没拿到授权的 App,发 ACTION_IMAGE_CAPTURE 直接 SecurityException。所以拍照前先向用户申请这一项,并在这里
+         写明(理由同上面的麦克风:不靠依赖顺带)。安装包的权限集合不因此变化。 -->
+    <uses-permission android:name="android.permission.CAMERA" />
     <!-- 灵动岛(LiveIslandPlugin):通知运行时权限(13+)、Live Updates 推广(16+,安装时授予)、run 期间的前台服务。 -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.POST_PROMOTED_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <!-- 手机操控 T1(PhoneControlPlugin):AlarmClock.ACTION_SET_ALARM / SET_TIMER 要求的 normal 级权限(安装即授予)。
-         ⚠️ 刻意不加:无障碍服务、QUERY_ALL_PACKAGES、CALL_PHONE(拨号只用 ACTION_DIAL 填号)、CAMERA
-         (CameraManager.setTorchMode 不需要)。见 Forsion-Genesis/tangu-agent/docs/phone-control.md。 -->
+         ⚠️ 手机操控刻意不要:无障碍服务、QUERY_ALL_PACKAGES、CALL_PHONE(拨号只用 ACTION_DIAL 填号)。手电筒
+         (CameraManager.setTorchMode)也不需要 CAMERA —— 上面那条 CAMERA 是「拍照」用的,与手机操控无关。
+         见 Forsion-Genesis/tangu-agent/docs/phone-control.md。 -->
     <uses-permission android:name="com.android.alarm.permission.SET_ALARM" />
 
     <!-- 手机操控的包可见性(Android 11+):只声明要用的几类 Intent,不申请 QUERY_ALL_PACKAGES。

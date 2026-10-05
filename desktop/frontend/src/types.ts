@@ -1413,6 +1413,10 @@ declare global {
       /** Android:系统文件选择器选文件(内容随回,不是路径);取消返回空数组。原生半屏里没有用户激活,
        *  `<input type=file>.click()` 会被 Chromium 静默丢掉 —— 有这个能力时 Chat Box「添加文件」走它。 */
       pickFiles?(): Promise<File[]>
+      /** Android:系统照片选择器(只列图片) / 系统相机拍一张。同上:内容随回,取消或没拍成返回空数组;
+       *  两个都在时,Chat Box 的原生「＋」半屏把「添加文件」拆成 拍照 / 相册 / 文件 三行。 */
+      pickPhotos?(): Promise<File[]>
+      takePhoto?(): Promise<File[]>
       /** 另存为文本文件(导出日志等);取消返回 { ok:false }。 */
       saveTextFile?(defaultName: string, content: string): Promise<{ ok: boolean; path: string | null }>
       /** 用户活动日志埋点(fire-and-forget;拼行/消毒在 main 侧 activityLog.ts)。 */

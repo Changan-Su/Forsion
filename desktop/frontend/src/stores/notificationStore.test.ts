@@ -15,6 +15,22 @@ afterEach(() => {
 })
 
 describe('notificationStore', () => {
+  it('手机上把浏览器的原话 Failed to fetch 换成一句人话(单独出现 / 拼在别的话后面);桌面不换', () => {
+    vi.stubGlobal('window', { tangu: { mobile: true } })
+    try {
+      notifyApp({ text: 'TypeError: Failed to fetch', level: 'error' })
+      notifyApp({ text: '保存失败：Failed to fetch', level: 'error' })
+      notifyApp({ text: 'Fetch failed for another reason', level: 'error' })
+      expect(useNotifications.getState().items.map((n) => n.text)).toEqual(['网络不可用，请稍后再试', '保存失败：网络不可用，请稍后再试', 'Fetch failed for another reason'])
+    } finally { vi.unstubAllGlobals() }
+    reset()
+    vi.stubGlobal('window', { tangu: {} })
+    try {
+      notifyApp({ text: 'Failed to fetch', level: 'error' })
+      expect(useNotifications.getState().items.map((n) => n.text)).toEqual(['Failed to fetch'])
+    } finally { vi.unstubAllGlobals() }
+  })
+
   it('info 自动消失,error 常驻', () => {
     notifyApp({ text: 'hi', level: 'info' })
     notifyApp({ text: 'boom', level: 'error' })

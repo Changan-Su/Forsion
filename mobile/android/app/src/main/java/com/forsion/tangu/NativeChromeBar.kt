@@ -100,7 +100,8 @@ internal fun NativeChromeBar(state: ChromeState, insets: Insets, onAction: (Stri
                         else Spacer(Modifier.width(10.dp)) // a first-level page (Space list, Home): the title starts at the edge
                         BarTitle(state.title, fg, Modifier.weight(1f).padding(horizontal = 6.dp))
                         if (state.right) BarIconButton("right", state.labels.getValue("right"), state.icons.right, fg) { onAction("right") }
-                        TabCountButton(state.tabCount, state.labels.getValue("tabs"), fg) { onAction("tabs") }
+                        // One tab = nothing to switch between: the count would only take a slot ("New tab" is in ⋯).
+                        if (state.tabCount > 1) TabCountButton(state.tabCount, state.labels.getValue("tabs"), fg) { onAction("tabs") }
                         BarIconButton("more", state.labels.getValue("more"), state.icons.more, fg) { onAction("more") }
                         state.account?.let { AvatarButton(it, Color(theme.accent)) { onAction("account") } }
                     }

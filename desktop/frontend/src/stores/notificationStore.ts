@@ -5,6 +5,7 @@
  * 渲染在 components/NotificationHost(仅主窗 Root 挂载,与旧 toast-wrap 同决策)。
  */
 import { create } from 'zustand'
+import { translate } from '../i18n'
 
 export type NotifyLevel = 'info' | 'success' | 'warning' | 'error'
 
@@ -117,6 +118,13 @@ interface NtfState {
   resume(): void
 }
 
+/** 手机上每个请求都是出网的:断网时各处把浏览器的原话(`Failed to fetch`)原样、或拼在自己那句后面交过来。
+ *  那几个词对用户没有信息量,在出口统一换成一句人话。只在手机上换:桌面连的是本机引擎,连不上不等于没网。 */
+function plainNetworkError(text: string): string {
+  if (typeof window === 'undefined' || !window.tangu?.mobile || !/Failed to fetch/i.test(text)) return text
+  return text.replace(/(?:TypeError:\s*)?Failed to fetch/gi, translate('net.unavailable'))
+}
+
 // 定时器簿记(React/zustand 外):active = {handle,deadline};paused = {handle:null,remaining}。
 type TimerRec = { handle: ReturnType<typeof setTimeout> | null; deadline: number; remaining: number }
 const timers = new Map<string, TimerRec>()
@@ -158,7 +166,7 @@ export const useNotifications = create<NtfState>((set, get) => {
       }
       const sticky = input.sticky ?? level === 'error'
       const durationMs = customDuration(input.durationMs)
-      const text = String(input.text ?? '').slice(0, 500) // 防插件超长字符串撑爆卡片
+      const text = plainNetworkError(String(input.text ?? '')).slice(0, 500) // 防插件超长字符串撑爆卡片
       const title = input.title ? String(input.title).slice(0, 120) : undefined
 
       // 去重合并:同 dedupeKey 更新原条(计数 + 文案 + 重置停留),可见或排队中皆然。

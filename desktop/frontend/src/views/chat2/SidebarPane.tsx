@@ -30,6 +30,7 @@ import { CtxMenuButtons } from '../../components/CtxMenuButtons'
 import { AttentionDot } from './AttentionDot'
 import { homeTarget } from '../../services/engine/targets'
 import { canTurnChatIntoNote, turnChatIntoNote } from './chatToNote'
+import { formatRowTime } from '../../format/time'
 
 const CHANNEL_ICONS: Record<ChannelKind, typeof Smartphone> = { wechat: Smartphone, telegram: Send, qq: MessagesSquare }
 
@@ -439,7 +440,11 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
             ? <span className="t2s-dot running" title={t('sidebar.running')} />
             : p.unreadIds.has(s.id) ? <span className="t2s-dot unread" title={t('sidebar.unread')} /> : null}
       </>}
-      trailing={<span className="t2s-srow-menu" onClick={(e) => openMenu(e as React.MouseEvent, s)}><MoreHorizontal size={14} /></span>}
+      // 行尾的时间只在手机的整屏列表里显示(sidebar2.css 按 .mb-shell[data-native-chrome] 放出来);桌面侧栏窄,不显示。
+      trailing={<>
+        <span className="t2s-srow-time">{formatRowTime(s.updated_at)}</span>
+        <span className="t2s-srow-menu" onClick={(e) => openMenu(e as React.MouseEvent, s)}><MoreHorizontal size={14} /></span>
+      </>}
       // 统一点击语义(见 views/itemSelect):裸击开、⌘ 开新标签、shift/option 只动选中态。
       onClick={(e) => {
         const act = sel.click(s.id, e)

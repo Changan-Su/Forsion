@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { formatDate, formatDateTime, formatListTime, formatLongDate, formatMessageTime, formatMonthDay, formatRelative, formatTime, relativeParts, toDate } from './time'
+import { formatDate, formatDateTime, formatListTime, formatLongDate, formatMessageTime, formatMonthDay, formatRelative, formatRowTime, formatTime, relativeParts, toDate } from './time'
 
 const now = new Date(2026, 8, 25, 12, 0).getTime() // 2026-09-25 12:00 本地
 
@@ -79,6 +79,20 @@ describe('formatListTime:列表 7 天内相对时间,更早显示日期(收件�
     expect(formatListTime(now - 8 * 86_400_000, { now, locale: 'zh' })).toBe('9月17日')
     expect(formatListTime(now - 8 * 86_400_000, { now, locale: 'en' })).toBe('Sep 17')
     expect(formatListTime(now - 30_000, { now, locale: 'zh' })).toBe('刚刚')
+  })
+})
+
+describe('formatRowTime:会话列表行尾', () => {
+  it('今天给时刻;昨天;6 天内给星期;更早给月日;跨年带年份', () => {
+    expect(formatRowTime(new Date(2026, 8, 25, 0, 1), { now, locale: 'zh' })).toBe('00:01')
+    expect(formatRowTime(new Date(2026, 8, 24, 23, 59), { now, locale: 'zh' })).toBe('昨天') // 按日历日,不是 24 小时滑窗
+    expect(formatRowTime(new Date(2026, 8, 24, 23, 59), { now, locale: 'en' })).toBe('yesterday')
+    expect(formatRowTime(new Date(2026, 8, 19, 8, 0), { now, locale: 'zh' })).toBe('周六')
+    expect(formatRowTime(new Date(2026, 8, 19, 8, 0), { now, locale: 'en' })).toBe('Sat')
+    expect(formatRowTime(new Date(2026, 8, 18, 8, 0), { now, locale: 'zh' })).toBe('9/18')
+    expect(formatRowTime(new Date(2025, 11, 31, 8, 0), { now, locale: 'en' })).toBe('2025/12/31')
+    expect(formatRowTime(new Date(2026, 8, 25, 23, 0), { now, locale: 'zh' })).toBe('23:00') // 今天稍后(时钟不齐):仍是时刻
+    expect(formatRowTime('', { now })).toBe('')
   })
 })
 

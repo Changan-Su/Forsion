@@ -24,6 +24,10 @@
  * device's Download/ and Documents/ (removed again at the end); picks arrive in the composer with the right bytes
  * (content URIs streamed through https://localhost/_capacitor_content_/), the > 25 MB one is named in the toast and
  * not attached, cancel changes nothing. Needs an English system language (DocumentsUI labels).
+ * Phone polish (2026-10-05): a tapped <select> opens on the native sheet (never the WebView's own dialog); "+" → Photos
+ * goes through the system photo picker and "+" → Take photo through the permission question (refused once, then allowed)
+ * and the device's camera app (com.android.camera2 on the emulator image) — an image fixture is pushed to Pictures/ and
+ * the app's CAMERA grant is reset before the app starts; session rows end with a time; "Failed to fetch" is reworded.
  *
  * Build + install (README「Android 原生外壳」): rm -rf dist && npm run build && npx cap sync android &&
  *   ./android/gradlew -p android :app:assembleDebug && adb install -r android/app/build/outputs/apk/debug/app-debug.apk
@@ -342,6 +346,12 @@ const tabCountText = (list) => {
 ;(async () => {
   assert.ok(h.adb('shell', 'pm', 'path', PKG).includes('package:'), `${PKG} is not installed`)
   h.adb('shell', 'am', 'force-stop', PKG)
+  // The camera check walks the system's permission question (refuse once, then allow). It is only asked while the app
+  // neither holds the permission nor was refused for good, so the app's own grant is reset here — before the app starts:
+  // revoking a held permission ends the process.
+  for (const args of [['revoke', PKG, 'android.permission.CAMERA'], ['clear-permission-flags', PKG, 'android.permission.CAMERA', 'user-set', 'user-fixed']]) {
+    try { h.adb('shell', 'pm', ...args) } catch { /* not held / a shell without the command */ }
+  }
   h.adb('shell', 'am', 'start', '-n', ACTIVITY)
   let cdp = await h.connect(PKG)
   await cdp.send('Page.enable')
@@ -377,7 +387,10 @@ const tabCountText = (list) => {
     small: { name: 'e2e-pick-small.txt', dir: 'Download', data: Buffer.from('Forsion native picker fixture: small\n') },
     mid: { name: 'e2e-pick-1m.bin', dir: 'Documents', data: crypto.randomBytes(1024 * 1024) },
     big: { name: 'e2e-pick-big.bin', dir: 'Download', data: crypto.randomBytes(26 * 1024 * 1024) }, // past the 25 MB per-file cap
+    photo: { name: 'e2e-pick-photo.png', dir: 'Pictures', data: Buffer.from(AVATAR.split(',')[1], 'base64') }, // the photo picker lists indexed images only
   }
+  /** MediaStore learns about a pushed / removed file from this broadcast (deprecated for apps, still honoured from the shell). */
+  const mediaScan = (f) => { try { h.adb('shell', 'am', 'broadcast', '-a', 'android.intent.action.MEDIA_SCANNER_SCAN_FILE', '-d', `file:///sdcard/${f.dir}/${f.name}`) } catch { /* best effort */ } }
   const pickTmp = path.join(OUT, 'pick-fixtures')
   const pushPickFixtures = () => {
     fs.mkdirSync(pickTmp, { recursive: true })
@@ -387,8 +400,12 @@ const tabCountText = (list) => {
       h.adb('push', path.join(pickTmp, f.name), `/sdcard/${f.dir}/${f.name}`)
     }
     fs.rmSync(pickTmp, { recursive: true, force: true })
+    mediaScan(PICK.photo)
   }
-  const removePickFixtures = () => { for (const f of Object.values(PICK)) { try { h.adb('shell', 'rm', '-f', `/sdcard/${f.dir}/${f.name}`) } catch { /* not there */ } } }
+  const removePickFixtures = () => {
+    for (const f of Object.values(PICK)) { try { h.adb('shell', 'rm', '-f', `/sdcard/${f.dir}/${f.name}`) } catch { /* not there */ } }
+    mediaScan(PICK.photo) // drops its MediaStore row
+  }
   await new Promise((resolve, reject) => { pluginServer.once('error', reject); pluginServer.listen(PLUGIN_PORT, '127.0.0.1', resolve) })
   if (!process.env.PLUGIN_HOST) h.adb('reverse', `tcp:${PLUGIN_PORT}`, `tcp:${PLUGIN_PORT}`)
   cleanPluginFiles() // leftovers of an aborted earlier run
@@ -436,16 +453,23 @@ const tabCountText = (list) => {
     assert.ok(await h.waitPage(cdp, drawerOpen, 5000), 'drawer did not open')
     await h.pause(500)
   }
-  /** Leave the left panel. On a two-level Space that means entering its main page — through the tabs sheet, which
-   *  needs no particular list item; on a drawer Space system back closes the drawer. */
+  /** Leave the left panel. On a two-level Space that means entering its main page — through the tabs sheet when there
+   *  is one (two or more tabs), which needs no particular list item; on a drawer Space system back closes the drawer. */
   async function closeDrawer() {
     if (!(await cdp.eval(drawerOpen))) return
     if ((await cdp.eval(nav)) === 'list') {
-      await tapId('nativeChrome.tabs')
-      const cur = h.byIdPrefix(await waitSheet(true), 'nativeSheet.item.tab:').find((n) => n.checked === 'true')
-      assert.ok(cur, 'no active tab row to enter the main page with')
-      h.tapNode(cur)
-      await waitSheet(false)
+      if (h.byId(ui(), 'nativeChrome.tabs')) {
+        await tapId('nativeChrome.tabs')
+        const cur = h.byIdPrefix(await waitSheet(true), 'nativeSheet.item.tab:').find((n) => n.checked === 'true')
+        assert.ok(cur, 'no active tab row to enter the main page with')
+        h.tapNode(cur)
+        await waitSheet(false)
+      } else {
+        // One tab = no count button. In the way a user gets there: the row of what is open, else "new chat".
+        const row = `(document.querySelector('.mb-drawer--left .t2s-srow.active') || document.querySelector('.mb-drawer--left [data-act="new-chat"]'))`
+        assert.ok(await cdp.eval(`!!${row}`), 'one tab, no open row and no "new chat": nothing leads into the main page')
+        await tapEl(row)
+      }
     } else h.key(4)
     assert.ok(await h.waitPage(cdp, `!(${drawerOpen})`, 5000), 'drawer stayed open')
     await h.pause(500)
@@ -535,8 +559,9 @@ const tabCountText = (list) => {
 
   await check('native top bar replaces the web .mb-topbar (zh, light)', async () => {
     const list = ui()
-    for (const id of ['nativeChrome.bar', 'nativeChrome.tabs', 'nativeChrome.more', 'nativeChrome.title']) assert.ok(h.byId(list, id), `missing ${id}`)
-    assert.equal(descOf(list, 'nativeChrome.tabs'), '标签页')
+    for (const id of ['nativeChrome.bar', 'nativeChrome.more', 'nativeChrome.title']) assert.ok(h.byId(list, id), `missing ${id}`)
+    // the count button is there with two or more tabs only (the tabs check below walks both states)
+    if (h.byId(list, 'nativeChrome.tabs')) assert.ok(Number(tabCountText(list)) > 1, `a count button showing ${tabCountText(list)}`)
     const web = await cdp.eval(`({ topbar: !!document.querySelector('.mb-topbar'), native: document.querySelector('.mb-shell').hasAttribute('data-native-chrome'),
       mbTop: getComputedStyle(document.querySelector('.mb-shell')).getPropertyValue('--mb-top').trim(), lang: document.documentElement.lang })`)
     assert.deepEqual(web, { topbar: false, native: true, mbTop: '0px', lang: 'zh-CN' })
@@ -575,7 +600,7 @@ const tabCountText = (list) => {
     let r = await h.waitNodes((l) => (h.byId(l, 'nativeChrome.back') && textOf(l, 'nativeChrome.title') === L.title ? l : null), { timeout: 6000 })
     assert.ok(r.hit, `settings home: no page bar titled ${L.title} (title=${textOf(r.nodes, 'nativeChrome.title')})`)
     assert.equal(descOf(r.nodes, 'nativeChrome.back'), L.toApp)
-    assert.ok(!h.byId(r.nodes, 'nativeChrome.close') && !h.byId(r.nodes, 'nativeChrome.tabs'), 'home page must show back only')
+    assert.ok(!h.byId(r.nodes, 'nativeChrome.close') && !h.byId(r.nodes, 'nativeChrome.more'), 'home page must show back only')
     assert.deepEqual(await cdp.eval(settingsWeb), { native: true, home: 'none', detail: 'none' }) // both heads mounted, neither shown
     await h.pause(400)
     if (tag) shot(`${tag}-settings-home`)
@@ -607,7 +632,7 @@ const tabCountText = (list) => {
     assert.ok(r.hit, 'category did not reopen')
     await tapId('nativeChrome.close', r.nodes)
     assert.ok(await h.waitPage(cdp, `!(${settingsOpen})`, 5000), '× did not close settings')
-    r = await h.waitNodes((l) => h.byId(l, 'nativeChrome.tabs'), { timeout: 5000 })
+    r = await h.waitNodes((l) => h.byId(l, 'nativeChrome.more'), { timeout: 5000 })
     assert.ok(r.hit, 'shell bar did not return after ×')
     // system back from the settings home closes it (useAndroidBack) and stays in the app
     await settingsPageMode('zh', null)
@@ -615,7 +640,7 @@ const tabCountText = (list) => {
     await h.waitNodes((l) => (!h.byId(l, 'nativeChrome.close') ? l : null), { timeout: 4000 })
     h.key(4)
     assert.ok(await h.waitPage(cdp, `!(${settingsOpen})`, 5000), 'system back did not close settings')
-    assert.ok((await h.waitNodes((l) => h.byId(l, 'nativeChrome.tabs'), { timeout: 5000 })).hit, 'shell bar did not return')
+    assert.ok((await h.waitNodes((l) => h.byId(l, 'nativeChrome.more'), { timeout: 5000 })).hit, 'shell bar did not return')
     assert.ok(resumed(), 'back left the app')
     await closeDrawer()
   })
@@ -985,7 +1010,68 @@ const tabCountText = (list) => {
     shot('02d-settings-space-phone')
     await tapId('nativeChrome.close')
     assert.ok(await h.waitPage(cdp, `!(${settingsOpen})`, 5000), '× did not close settings')
-    assert.ok((await h.waitNodes((l) => h.byId(l, 'nativeChrome.tabs'), { timeout: 5000 })).hit, 'shell bar did not return')
+    assert.ok((await h.waitNodes((l) => h.byId(l, 'nativeChrome.more'), { timeout: 5000 })).hit, 'shell bar did not return')
+  })
+
+  // A <select> tapped in the WebView opens Chromium's own dialog (white, centred, untitled; rows are CheckedTextView
+  // android:id/text1) whatever the theme. Under the native sheet host the same options come up on the sheet and the pick
+  // reaches the control exactly like a browser pick (input + change), so the page's own onChange runs.
+  await check('dropdown: a tapped <select> opens on the native sheet (not the WebView dialog), titled by its row; a pick changes the setting, cancel does not', async () => {
+    const KEY = 'forsion_default_space' // what this select writes (spaces.tsx DEFAULT_SPACE_KEY)
+    const select = "document.querySelector('.settings-page--mobile .settings-setting-row select')"
+    const webDialog = (l) => l.some((n) => n['resource-id'] === 'android:id/text1' || /CheckedTextView$/.test(n.class || ''))
+    /** What opened must be the sheet. */
+    const opened = async () => {
+      const r = await h.waitNodes((l) => (sheetOpen(l) || webDialog(l) ? l : null), { timeout: 6000 })
+      assert.ok(r.hit, 'nothing opened')
+      assert.ok(!webDialog(r.nodes), "the WebView's own dialog opened")
+      return waitSheet(true)
+    }
+    const open = async () => { await tapEl(select); return opened() }
+    await accountItem('rb-settings')
+    assert.ok(await h.waitPage(cdp, settingsOpen, 5000), 'settings did not open')
+    await h.pause(600)
+    await tapEl("[...document.querySelectorAll('.settings-mobile-row')].find((e) => e.querySelector('strong')?.textContent.trim() === 'Space')")
+    assert.ok((await h.waitNodes((l) => (textOf(l, 'nativeChrome.title') === 'Space' ? l : null), { timeout: 6000 })).hit, 'the Space page did not open')
+    await h.pause(500)
+    try {
+      const options = await cdp.eval(`[...${select}.options].map((o) => ({ value: o.value, label: o.textContent.trim() }))`)
+      const before = await cdp.eval(`${select}.value`)
+      const agents = options.findIndex((o) => o.value === 'agents')
+      assert.ok(agents > 0 && before !== 'agents', `control: unexpected options / start value (${before}; ${options.map((o) => o.value)})`)
+      let list = await open()
+      assert.equal(textOf(list, 'nativeSheet.title'), '打开应用时进入', 'the sheet is not titled by the row')
+      const rows = ids(list)
+      assert.deepEqual(rows, rows.map((_, i) => `opt:${i}`), `rows are not the options in order: ${rows}`)
+      assert.ok(rows.length >= 4, `too few rows on screen: ${rows}`)
+      rows.forEach((id, i) => assert.equal(rowLabel(list, `nativeSheet.item.${id}`), options[i].label, `row ${i}`))
+      assert.deepEqual(rows.filter((id) => h.byId(list, `nativeSheet.item.${id}`).checked === 'true'), [`opt:${options.findIndex((o) => o.value === before)}`], 'the current option is not the checked row')
+      shot('39-dropdown-sheet')
+      h.key(4)
+      await waitSheet(false)
+      await h.pause(300)
+      assert.deepEqual(await cdp.eval(`[${select}.value, localStorage.getItem('${KEY}')]`), [before, null], 'cancel changed something')
+      await tapId(`nativeSheet.item.opt:${agents}`, await open())
+      await waitSheet(false)
+      assert.ok(await h.waitPage(cdp, `${select}.value === 'agents' && localStorage.getItem('${KEY}') === 'agents'`, 4000), `the pick did not reach the setting (${await cdp.eval(`[${select}.value, localStorage.getItem('${KEY}')].join()`)})`)
+      list = await open()
+      assert.equal(h.byId(list, `nativeSheet.item.opt:${agents}`).checked, 'true', 'the sheet does not show the new choice')
+      // a hardware key opens the same sheet (Space on the focused control)
+      h.key(4)
+      await waitSheet(false)
+      await cdp.eval(`(${select}.focus(), true)`)
+      h.key(62)
+      await tapId(`nativeSheet.item.opt:${options.findIndex((o) => o.value === before)}`, await opened())
+      await waitSheet(false)
+      assert.ok(await h.waitPage(cdp, `${select}.value === ${JSON.stringify(before)}`, 4000), 'picking the first choice back did not restore the control')
+    } finally {
+      if (sheetOpen(ui())) { h.key(4); await waitSheet(false) }
+      if (webDialog(ui())) h.key(4)
+      await cdp.eval(`(localStorage.removeItem('${KEY}'), true)`)
+      await tapId('nativeChrome.close')
+      assert.ok(await h.waitPage(cdp, `!(${settingsOpen})`, 5000), '× did not close settings')
+      assert.ok((await h.waitNodes((l) => h.byId(l, 'nativeChrome.more'), { timeout: 5000 })).hit, 'shell bar did not return')
+    }
   })
 
   // The phone's settings keep "open the app in" (Settings → Space). It must do something there: the boot code that reads
@@ -1034,25 +1120,56 @@ const tabCountText = (list) => {
     await closeDrawer()
   })
 
+  /** The tabs sheet, opened for a look (screenshots in another theme / language). With one tab there is no count button
+   *  to open it with: a second tab is made through ⋯ first and closed again by the returned function, which also
+   *  dismisses the sheet (and first hands the sheet's nodes to `look`, if given). */
+  async function tabsSheet() {
+    const extra = !h.byId(ui(), 'nativeChrome.tabs')
+    if (extra) {
+      await tapId('nativeChrome.more')
+      await tapId('nativeSheet.item.tab:new', await waitSheet(true))
+      await waitSheet(false)
+      assert.ok((await h.waitNodes((l) => h.byId(l, 'nativeChrome.tabs'), { timeout: 6000 })).hit, 'no count button with two tabs')
+    }
+    await tapId('nativeChrome.tabs')
+    const list = await waitSheet(true)
+    return async (look) => {
+      if (look) look(list)
+      if (extra) { // the tab made above is the open one: its × leaves the sheet up with the one tab that was there
+        const mine = h.byIdPrefix(list, 'nativeSheet.trailing.tab:').find((n) => h.byId(list, n['resource-id'].replace('nativeSheet.trailing.', 'nativeSheet.item.'))?.checked === 'true')
+        assert.ok(mine, 'no close action on the tab that was just made')
+        h.tapNode(mine)
+        assert.ok((await h.waitNodes((l) => (sheetOpen(l) && h.byIdPrefix(l, 'nativeSheet.item.tab:').length === 1 ? l : null), { timeout: 6000 })).hit, 'the extra tab was not closed')
+      }
+      h.key(4)
+      await waitSheet(false)
+    }
+  }
+
   let firstView = ''
-  await check('tabs sheet: lists tabs, + new tab, switch, close (re-presents), back cancels', async () => {
+  await check('tabs: no count button for a single tab and "New tab" in ⋯; the sheet lists tabs, + new tab, switch, close (re-presents), back cancels', async () => {
     firstView = await cdp.eval(dom.view)
     const before = Number(tabCountText(ui()) || '1')
-    await tapId('nativeChrome.tabs')
+    // One tab: no count button (nothing to switch between). "New tab" is in ⋯, and the button comes with the second tab.
+    assert.equal(!!h.byId(ui(), 'nativeChrome.tabs'), before > 1, 'the count button must be there with two or more tabs only')
+    await tapId('nativeChrome.more')
     let list = await waitSheet(true)
-    const tabs = h.byIdPrefix(list, 'nativeSheet.item.tab:')
-    assert.equal(tabs.length, before, 'tab rows != tab count')
-    assert.ok(tabs.some((n) => n.checked === 'true'), 'active tab not marked')
-    assert.ok(h.byId(list, 'nativeSheet.item.new'), 'new tab row missing')
-    shot('04-tabs-sheet-light')
-    await tapId('nativeSheet.item.new', list)
+    assert.equal(rowLabel(list, 'nativeSheet.item.tab:new'), '新建标签页')
+    await tapId('nativeSheet.item.tab:new', list)
     await waitSheet(false)
     const r = await h.waitNodes((l) => (Number(tabCountText(l)) === before + 1 ? l : null), { timeout: 6000 })
     assert.ok(r.hit, `tab count did not become ${before + 1} (is ${tabCountText(r.nodes)})`)
+    assert.equal(descOf(r.nodes, 'nativeChrome.tabs'), '标签页')
     const newView = await cdp.eval(dom.view)
-    // switch back to the first tab
+    // the tabs sheet: every tab, the open one marked, its own "new tab" row
     await tapId('nativeChrome.tabs')
     list = await waitSheet(true)
+    const tabs = h.byIdPrefix(list, 'nativeSheet.item.tab:')
+    assert.equal(tabs.length, before + 1, 'tab rows != tab count')
+    assert.ok(tabs.some((n) => n.checked === 'true'), 'active tab not marked')
+    assert.ok(h.byId(list, 'nativeSheet.item.new'), 'new tab row missing')
+    shot('04-tabs-sheet-light')
+    // switch back to the first tab
     const other = h.byIdPrefix(list, 'nativeSheet.item.tab:').find((n) => n.checked !== 'true')
     assert.ok(other, 'no inactive tab row')
     h.tapNode(other)
@@ -1073,10 +1190,78 @@ const tabCountText = (list) => {
     await waitSheet(false)
     assert.ok(resumed(), 'back left the app')
     assert.equal(Number(tabCountText(ui()) || '1'), before)
+    assert.equal(!!h.byId(ui(), 'nativeChrome.tabs'), before > 1, 'the count button did not follow the tab count back')
     assert.equal(await cdp.eval(dom.view), firstView)
   })
 
+  // The native ⋯ sheet cannot always be presented (a ribbon item drawn by a React component, a host that fails): the web
+  // sheet takes over. With one tab the bar has no count button, so "New tab" has to be on that sheet as well.
+  await check('more sheet fallback: when the host cannot present, the web sheet opens and carries "New tab", which opens one', async () => {
+    assert.equal(Number(tabCountText(ui()) || '1'), 1, 'control: this check starts from a single tab')
+    const row = `document.querySelector('.mb-sheet [data-act="new-tab"]')`
+    // the presenter's own bridge call fails → the sheet seam reports "not handled"
+    await cdp.eval(`(() => { const cap = window.Capacitor, real = cap.nativePromise
+      window.__e2eSheetBack = () => { cap.nativePromise = real; delete window.__e2eSheetBack }
+      cap.nativePromise = (plugin, method, options) => (plugin === 'NativeSheet' && method === 'present' ? Promise.reject(new Error('e2e: cannot present')) : real.call(cap, plugin, method, options))
+      return true })()`)
+    try {
+      await tapId('nativeChrome.more')
+      assert.ok(await h.waitPage(cdp, `!!${row}`, 6000), `the web sheet has no "New tab" row (sheet: ${await cdp.eval("document.querySelector('.mb-sheet')?.innerText || 'none'")})`)
+      assert.ok(!sheetOpen(ui()), 'a native sheet opened although the host refused')
+      assert.equal(await cdp.eval(`${row}.textContent.trim()`), '新建标签页')
+      shot('05b-more-web-fallback')
+      await tapEl(row)
+      assert.ok((await h.waitNodes((l) => (Number(tabCountText(l)) === 2 ? l : null), { timeout: 6000 })).hit, 'the row did not open a second tab')
+      assert.ok(await h.waitPage(cdp, "!document.querySelector('.mb-sheet')", 3000), 'the web sheet stayed open')
+    } finally {
+      await cdp.eval('(window.__e2eSheetBack?.(), true)')
+    }
+    // back to one tab: the new one is the open one, its × leaves the sheet up with the tab that was there
+    await tapId('nativeChrome.tabs')
+    const list = await waitSheet(true)
+    const mine = h.byIdPrefix(list, 'nativeSheet.trailing.tab:').find((n) => h.byId(list, n['resource-id'].replace('nativeSheet.trailing.', 'nativeSheet.item.'))?.checked === 'true')
+    assert.ok(mine, 'no close action on the tab that was just made')
+    h.tapNode(mine)
+    assert.ok((await h.waitNodes((l) => (sheetOpen(l) && h.byIdPrefix(l, 'nativeSheet.item.tab:').length === 1 ? l : null), { timeout: 6000 })).hit, 'the extra tab was not closed')
+    h.key(4)
+    await waitSheet(false)
+    assert.ok(!h.byId(ui(), 'nativeChrome.tabs'), 'the count button stayed with one tab')
+  })
+
   // ── chat surfaces (T1 consumers): JS owns the state, the sheet only renders the same item list ──
+  await check('session rows end with when the session was last touched (today → the time), in the meta size', async () => {
+    await tanguDrawer()
+    const at = sessions[0].updated_at
+    const t = await cdp.eval(`(() => { const row = ${rowExpr('E2E Session One')}; const el = row?.querySelector('.t2s-srow-time'); if (!el) return null
+      const d = new Date(${JSON.stringify(at)}), n = new Date(), r = el.getBoundingClientRect(), menu = row.querySelector('.t2s-srow-menu').getBoundingClientRect(), title = row.querySelector('.t2s-srow-title, .t2s-srow-name, .grow')?.getBoundingClientRect()
+      return { text: el.textContent, today: d.toDateString() === n.toDateString(), clock: String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'),
+        display: getComputedStyle(el).display, size: getComputedStyle(el).fontSize, width: Math.round(r.width), beforeMenu: r.right <= menu.left + 1, afterTitle: !title || title.right <= r.left + 1 } })()`)
+    assert.ok(t, 'the row has no time element')
+    assert.notEqual(t.display, 'none', 'the time is hidden under the native shell')
+    assert.ok(t.width > 0, 'the time takes no room')
+    if (t.today) assert.equal(t.text, t.clock, 'a session touched today shows its time')
+    else assert.equal(t.text, '昨天', 'the run crossed midnight: the stub sessions are from yesterday')
+    assert.equal(t.size, '12px', 'meta size')
+    assert.ok(t.beforeMenu && t.afterTitle, `the time is not between the title and the ⋯ (${JSON.stringify(t)})`)
+    shot('40-session-row-time')
+  })
+
+  // A failed request surfaces as the browser's own words ("TypeError: Failed to fetch"). On the phone the notification
+  // says it plainly; the rest of the message (what failed) is kept.
+  await check('offline wording: "Failed to fetch" in an error notification reads as "network unavailable"', async () => {
+    const texts = "[...document.querySelectorAll('.ntf-text')].map((e) => e.textContent)"
+    const closeToasts = () => cdp.eval(`(async () => { for (let i = 0; i < 8; i++) { const b = document.querySelector('.ntf-close'); if (!b) break; b.click(); await new Promise((r) => setTimeout(r, 150)) } return true })()`)
+    await closeToasts()
+    try {
+      for (const [raw, want] of [['TypeError: Failed to fetch', '网络不可用，请稍后再试'], ['同步失败：Failed to fetch', '同步失败：网络不可用，请稍后再试'], ['同步失败：磁盘已满', '同步失败：磁盘已满']]) {
+        await cdp.eval(`(window.dispatchEvent(new CustomEvent('amadeus:toast', { detail: { text: ${JSON.stringify(raw)}, level: 'error' } })), true)`)
+        assert.ok(await h.waitPage(cdp, `${texts}.includes(${JSON.stringify(want)})`, 4000), `"${raw}" was shown as: ${await cdp.eval(`${texts}.join(' | ')`)}`)
+      }
+      assert.ok(!(await cdp.eval(`${texts}.join(' | ')`)).includes('Failed to fetch'), "the browser's wording is still on screen")
+      shot('41-offline-wording')
+    } finally { await closeToasts() }
+  })
+
   await check('session row ⋯ menu: native sheet, rename through the native prompt reaches the server', async () => {
     await tanguDrawer()
     assert.equal(await cdp.eval(`getComputedStyle(${rowExpr('E2E Session Two')}.querySelector('.t2s-srow-menu')).opacity`), '0.7', '⋯ not visible on touch')
@@ -1302,7 +1487,10 @@ const tabCountText = (list) => {
     await tapEl("document.querySelector('.add-pill-btn')")
     let list = await waitSheet(true)
     const got = ids(list)
-    for (const id of ['new-chat', 'files', 'conversation', 'view']) assert.ok(got.includes(id), `missing ${id} in ${got}`)
+    for (const id of ['new-chat', 'camera', 'photos', 'files', 'conversation', 'view']) assert.ok(got.includes(id), `missing ${id} in ${got}`)
+    // "Add files or folders" is three rows on the phone, in this order, between the actions and the references
+    assert.deepEqual(got.slice(got.indexOf('camera'), got.indexOf('camera') + 4), ['camera', 'photos', 'files', 'conversation'], `source rows out of place: ${got}`)
+    assert.deepEqual(['camera', 'photos', 'files'].map((id) => rowLabel(list, `nativeSheet.item.${id}`)), ['拍照', '相册', '文件'])
     assert.equal(await cdp.eval("!!document.querySelector('.add-pill-btn.is-open')"), false, 'web add menu opened as well')
     shot('21-add-sheet-light')
     await tapId('nativeSheet.item.conversation', list)
@@ -1340,28 +1528,42 @@ const tabCountText = (list) => {
     assert.ok((await h.waitNodes(() => resumed(), { timeout: 6000 })).hit, 'did not return to the app')
   })
 
+  // ── picked content → composer: what the file, photo and camera checks all read ──
+  const top = () => h.adb('shell', 'dumpsys', 'activity', 'activities').match(/topResumedActivity=.*/)?.[0] || ''
+  /** Composer state (attachments + workspace files) read from the React fiber of a chip: name, declared size, decoded bytes, sha256. */
+  const composerFiles = `(async () => { const el = document.querySelector('.t2c-chiprow .attach-chip'); if (!el) return []
+    const key = Object.keys(el).find((k) => k.startsWith('__reactFiber$'))
+    for (let f = el[key]; f; f = f.return) {
+      const found = []
+      for (let st = f.memoizedState; st && typeof st === 'object' && 'next' in st; st = st.next) {
+        const v = st.memoizedState
+        if (Array.isArray(v) && v.length && v.every((a) => a && typeof a.name === 'string' && typeof a.data === 'string' && typeof a.size === 'number')) found.push(...v)
+      }
+      if (found.length) return Promise.all(found.map(async (a) => { const bin = Uint8Array.from(atob(a.data), (c) => c.charCodeAt(0))
+        const d = new Uint8Array(await crypto.subtle.digest('SHA-256', bin))
+        return { name: a.name, size: a.size, bytes: bin.length, sha256: [...d].map((b) => b.toString(16).padStart(2, '0')).join('') } }))
+    }
+    return null })()`
+  const want = (f) => ({ name: f.name, size: f.data.length, bytes: f.data.length, sha256: f.sha256 })
+  const chipNames = "[...document.querySelectorAll('.t2c-chiprow .attach-chip > span:first-of-type')].map((e) => e.textContent)"
+  const toasts = "[...document.querySelectorAll('.ntf-text')].map((e) => e.textContent).join(' | ')"
+
+  const backInApp = async () => assert.ok((await h.waitNodes(() => resumed(), { timeout: 15000 })).hit, 'did not return to the app (picker hung?)')
+  /** The composer's files once there are `count` of them (or whatever is there when the wait runs out). */
+  const settled = async (count) => {
+    const end = Date.now() + 20000
+    let got = null
+    while (Date.now() < end) { got = await cdp.eval(composerFiles); if (got && got.length === count) return got; await h.pause(400) }
+    return got
+  }
+  /** No attachments in the composer and no notification left on screen. */
+  const clearComposer = () => cdp.eval(`(async () => { for (const sel of ['.t2c-chiprow .attach-chip button', '.ntf-close']) for (let i = 0; i < 8; i++) {
+    const b = document.querySelector(sel); if (!b) break; b.click(); await new Promise((r) => setTimeout(r, 150)) } return true })()`)
+
   await check('files: system picker → composer (content URIs streamed through the local server): right name + bytes, > 25 MB named in the toast and not attached, cancel is a no-op', async () => {
     pushPickFixtures()
-    const top = () => h.adb('shell', 'dumpsys', 'activity', 'activities').match(/topResumedActivity=.*/)?.[0] || ''
     const title = (l, text) => l.find((n) => n['resource-id'] === 'android:id/title' && n.text === text)
     const DEVICE_ROOT = h.adb('shell', 'getprop', 'ro.product.model').trim() // the raw-storage root is labelled with the model name
-    /** Composer state (attachments + workspace files) read from the React fiber of a chip: name, declared size, decoded bytes, sha256. */
-    const composerFiles = `(async () => { const el = document.querySelector('.t2c-chiprow .attach-chip'); if (!el) return []
-      const key = Object.keys(el).find((k) => k.startsWith('__reactFiber$'))
-      for (let f = el[key]; f; f = f.return) {
-        const found = []
-        for (let st = f.memoizedState; st && typeof st === 'object' && 'next' in st; st = st.next) {
-          const v = st.memoizedState
-          if (Array.isArray(v) && v.length && v.every((a) => a && typeof a.name === 'string' && typeof a.data === 'string' && typeof a.size === 'number')) found.push(...v)
-        }
-        if (found.length) return Promise.all(found.map(async (a) => { const bin = Uint8Array.from(atob(a.data), (c) => c.charCodeAt(0))
-          const d = new Uint8Array(await crypto.subtle.digest('SHA-256', bin))
-          return { name: a.name, size: a.size, bytes: bin.length, sha256: [...d].map((b) => b.toString(16).padStart(2, '0')).join('') } }))
-      }
-      return null })()`
-    const want = (f) => ({ name: f.name, size: f.data.length, bytes: f.data.length, sha256: f.sha256 })
-    const chipNames = "[...document.querySelectorAll('.t2c-chiprow .attach-chip > span:first-of-type')].map((e) => e.textContent)"
-    const toasts = "[...document.querySelectorAll('.ntf-text')].map((e) => e.textContent).join(' | ')"
     // every local-server answer for a picked document (a 404 here = "Unable to open content URL" in logcat)
     const served = []
     await cdp.send('Network.enable')
@@ -1389,13 +1591,6 @@ const tabCountText = (list) => {
       const n = (await h.waitNodes((l) => (l.some((x) => x.text === 'Open from') ? null : title(l, text)), { timeout: 8000 })).hit
       assert.ok(n, `picker: "${text}" not listed`)
       return n
-    }
-    const backInApp = async () => assert.ok((await h.waitNodes(() => resumed(), { timeout: 15000 })).hit, 'did not return to the app (picker hung?)')
-    const settled = async (count) => {
-      const end = Date.now() + 20000
-      let got = null
-      while (Date.now() < end) { got = await cdp.eval(composerFiles); if (got && got.length === count) return got; await h.pause(400) }
-      return got
     }
 
     await openChat('E2E Session One')
@@ -1462,6 +1657,98 @@ const tabCountText = (list) => {
     await cdp.eval(`(async () => { for (const sel of ['.t2c-chiprow .attach-chip button', '.ntf-close']) for (let i = 0; i < 8; i++) {
       const b = document.querySelector(sel); if (!b) break; b.click(); await new Promise((r) => setTimeout(r, 150)) } return true })()`)
   } catch { /* page reloading */ }
+
+  // "+" → Photos / Take photo. Both leave the app for a system surface (the photo picker, the camera app) and come back
+  // with content the page reads like any other picked document. The camera needs the runtime permission first: the merged
+  // manifest declares CAMERA, and Android refuses ACTION_IMAGE_CAPTURE to an app that declares it without holding it.
+  await check('photos and camera: Photos → system photo picker → the image is attached (cancel adds nothing); Take photo asks for the camera, a refusal is told, an allowed shot from the camera app is attached and backing out leaves no file behind', async () => {
+    pushPickFixtures()
+    const indexed = () => h.adb('shell', 'content', 'query', '--uri', 'content://media/external/images/media', '--projection', '_display_name').includes(PICK.photo.name)
+    assert.ok((await h.waitNodes(() => indexed(), { timeout: 15000 })).hit, 'control: MediaStore did not index the pushed image')
+    const idEnds = (suffix) => (l) => l.find((n) => (n['resource-id'] || '').endsWith(suffix))
+    const source = async (id) => {
+      await tapEl("document.querySelector('.add-pill-btn')")
+      await tapId(`nativeSheet.item.${id}`, await waitSheet(true))
+    }
+    const openPhotos = async () => {
+      await source('photos')
+      assert.ok((await h.waitNodes(() => /photopicker/i.test(top()), { timeout: 8000 })).hit, `the system photo picker did not open (${top()})`)
+      await h.pause(700)
+    }
+    await openChat('E2E Session One')
+    assert.deepEqual(await cdp.eval(chipNames), [], 'precondition: composer already has attachments')
+
+    // Photos: cancel → nothing, no toast; then one image
+    await openPhotos()
+    shot('42-photo-picker')
+    h.key(4)
+    await backInApp()
+    await h.pause(800)
+    assert.deepEqual([await cdp.eval(chipNames), await cdp.eval(toasts)], [[], ''], 'cancelling the photo picker changed something')
+    await openPhotos()
+    const thumb = (await h.waitNodes(idEnds(':id/icon_thumbnail'), { timeout: 8000 })).hit
+    assert.ok(thumb, 'photo picker: no photo listed')
+    h.tapNode(thumb) // the newest = the fixture just pushed (the attached name + hash below prove which one it was)
+    const add = (await h.waitNodes(idEnds(':id/button_add'), { timeout: 6000 })).hit
+    assert.ok(add, 'photo picker: no "Add" after selecting a photo')
+    h.tapNode(add)
+    await backInApp()
+    // The system photo picker does not reveal a photo's own file name: what it hands over is called by its media id
+    // ("1000000071.png"). Which photo it was is told by its bytes.
+    const content = (f) => ({ size: f.size, bytes: f.bytes, sha256: f.sha256 })
+    const picked = await settled(1)
+    assert.deepEqual((picked || []).map(content), [content(want(PICK.photo))], `the picked photo is not in the composer: ${JSON.stringify(picked)} (toasts: ${await cdp.eval(toasts)})`)
+    assert.match(picked[0].name, /\.png$/, 'the photo lost its type')
+    const photoName = picked[0].name
+
+    // Take photo, refused: told in the user's words, nothing attached, no file left
+    await source('camera')
+    let asked = (await h.waitNodes(idEnds('permissioncontroller:id/permission_deny_button'), { timeout: 8000 })).hit
+    assert.ok(asked, `the system did not ask for the camera (${top()})`)
+    shot('43-camera-permission')
+    h.tapNode(asked)
+    assert.ok(await h.waitPage(cdp, `(${toasts}).includes('没有相机权限')`, 8000), `a refused camera was not told (toasts: ${await cdp.eval(toasts)})`)
+    assert.deepEqual(await cdp.eval(chipNames), [photoName], 'a refusal attached something')
+    assert.ok(!/camera/i.test(top()), 'the camera opened without the permission')
+    await cdp.eval(`(async () => { for (let i = 0; i < 8; i++) { const b = document.querySelector('.ntf-close'); if (!b) break; b.click(); await new Promise((r) => setTimeout(r, 150)) } return true })()`)
+
+    // Take photo, allowed: the camera app takes it into our cache file; the page attaches it
+    const shoot = async () => {
+      assert.ok((await h.waitNodes(() => /camera/i.test(top()), { timeout: 12000 })).hit, `the camera app did not open (${top()})`)
+      const shutter = (await h.waitNodes(idEnds(':id/shutter_button'), { timeout: 12000 })).hit
+      assert.ok(shutter, 'camera: no shutter button')
+      await h.pause(1500) // preview warm-up
+      return shutter
+    }
+    await source('camera')
+    asked = (await h.waitNodes(idEnds('permissioncontroller:id/permission_allow_foreground_only_button'), { timeout: 8000 })).hit
+    assert.ok(asked, 'a second request did not ask again')
+    h.tapNode(asked)
+    h.tapNode(await shoot())
+    const done = (await h.waitNodes(idEnds(':id/done_button'), { timeout: 20000 })).hit
+    assert.ok(done, 'camera: no "Done" after the shot')
+    h.tapNode(done)
+    await backInApp()
+    const files = await settled(2)
+    assert.ok(files && files.length === 2, `the shot was not attached: ${JSON.stringify(files)} (toasts: ${await cdp.eval(toasts)})`)
+    assert.deepEqual(files[0], picked[0])
+    assert.match(files[1].name, /^IMG_\d{8}_\d{6}\.jpg$/, 'the shot is named by when it was taken')
+    assert.ok(files[1].bytes > 1000 && files[1].bytes === files[1].size, `the shot has no content: ${JSON.stringify(files[1])}`)
+    assert.deepEqual(runAs('ls', 'cache/camera').split(/\s+/).filter(Boolean), [files[1].name], 'the cache holds something else than this shot')
+    shot('44-camera-attached')
+
+    // Backing out of the camera: nothing is added, and neither the empty target nor the earlier shot stays behind
+    await source('camera') // no question this time: the permission is held
+    await shoot()
+    h.key(4)
+    await backInApp()
+    await h.pause(800)
+    assert.deepEqual([(await settled(2)).map((f) => f.name), await cdp.eval(toasts)], [[photoName, files[1].name], ''], 'backing out of the camera changed something')
+    // the shot read a moment ago is kept for a minute (the next capture or app start removes it); the abandoned target is not
+    const left = runAs('ls', 'cache/camera').split(/\s+/).filter(Boolean)
+    assert.ok(left.every((f) => f === files[1].name), `files left in cache/camera: ${left}`)
+  })
+  try { await clearComposer() } catch { /* page reloading */ }
 
   await check('voice input: the mic is live; the shim posts the recording to the cloud and returns its text; failures are worded for the user; a real tap records', async () => {
     await goHome()
@@ -1715,9 +2002,9 @@ const tabCountText = (list) => {
     const list = await waitSheet(true)
     assert.ok(h.byId(list, 'nativeSheet.item.rb-mode'), 'theme mode command missing')
     assert.ok(!h.byId(list, 'nativeSheet.item.rb-settings') && !h.byId(list, 'nativeSheet.item.rb-account'), 'neither the account (the avatar) nor settings (in its menu) belongs in ⋯')
-    // a phone has no ⌘K: the desktop tooltip's shortcut hint is dropped from the row
-    const palette = rowLabel(list, 'nativeSheet.item.rb-cmd')
-    assert.ok(palette && !/[⌘(（]/.test(palette), `command palette row: "${palette}"`)
+    // a phone has no ⌘K: what the desktop calls the command palette is "Search" here (same panel)
+    assert.equal(rowLabel(list, 'nativeSheet.item.rb-cmd'), '搜索')
+    assert.equal(ids(list)[0], 'tab:new', '"New tab" does not lead the ⋯ sheet')
     shot('05-more-sheet-light')
     await tapId('nativeSheet.item.rb-mode', list)
     await waitSheet(false)
@@ -1730,15 +2017,13 @@ const tabCountText = (list) => {
     h.key(4)
     await waitSheet(false)
     assert.equal(await cdp.eval(dom.mode), 'dark', 'cancel must not run anything')
-    await tapId('nativeChrome.tabs')
-    await waitSheet(true)
+    const closeTabs = await tabsSheet()
     shot('08-tabs-sheet-dark')
-    h.key(4)
-    await waitSheet(false)
+    await closeTabs()
   })
 
   await check('page reload dismisses an open native sheet and the bar comes back', async () => {
-    await tapId('nativeChrome.tabs')
+    await tapId('nativeChrome.more')
     await waitSheet(true)
     await reload()
     assert.ok(!sheetOpen(ui()), 'sheet survived the reload')
@@ -1875,13 +2160,13 @@ const tabCountText = (list) => {
     await cdp.eval(`Capacitor.Plugins.NativeChrome.setState(${JSON.stringify({ mode: 'page', title: '设置', back: '返回', theme, icons: {} })}).then(() => true)`)
     const r = await h.waitNodes((l) => h.byId(l, 'nativeChrome.back'), { timeout: 4000 })
     assert.ok(r.hit, 'page back button missing')
-    assert.ok(!h.byId(r.nodes, 'nativeChrome.tabs'), 'shell buttons in page mode')
+    assert.ok(!h.byId(r.nodes, 'nativeChrome.more'), 'shell buttons in page mode')
     assert.equal(descOf(r.nodes, 'nativeChrome.back'), '返回')
     shot('13-page-mode')
     h.tapNode(h.byId(r.nodes, 'nativeChrome.back'))
     assert.deepEqual(await h.waitPage(cdp, "window.__e2eActions.length && window.__e2eActions", 4000), ['back'])
     await reload() // the app's host pushes its own (shell) state again
-    assert.ok(h.byId(ui(), 'nativeChrome.tabs'), 'shell state did not return')
+    assert.ok(h.byId(ui(), 'nativeChrome.more'), 'shell state did not return')
   })
 
   // ── Android plugins (merged feat/android-plugins × native shell): market as a native page, native download from the
@@ -1908,7 +2193,7 @@ const tabCountText = (list) => {
     const web = await cdp.eval(marketWeb)
     const r = await h.waitNodes((l) => (h.byId(l, 'nativeChrome.back') && web.brand && textOf(l, 'nativeChrome.title') === web.brand ? l : null), { timeout: 6000 })
     assert.ok(r.hit, `market: no page bar titled "${web.brand}" (title=${textOf(r.nodes, 'nativeChrome.title')})`)
-    assert.ok(!h.byId(r.nodes, 'nativeChrome.tabs') && !h.byId(r.nodes, 'nativeChrome.close'), 'market list page: back only')
+    assert.ok(!h.byId(r.nodes, 'nativeChrome.more') && !h.byId(r.nodes, 'nativeChrome.close'), 'market list page: back only')
     assert.ok(web.native && web.top === 'none' && web.pills !== 'none' && web.pills !== 'absent', `market web head: ${JSON.stringify(web)}`)
     if (lang === 'en') assert.ok(!hasCjk(r.nodes.filter((n) => (n['resource-id'] || '').startsWith('nativeChrome.'))), 'Chinese in the English market bar')
     assert.ok(await h.waitPage(cdp, `!!document.querySelector('[data-market-install="${PLUGIN_ID}"], [data-market-uninstall="${PLUGIN_ID}"]')`, 10000),
@@ -1919,7 +2204,7 @@ const tabCountText = (list) => {
   async function closeMarket() {
     await tapId('nativeChrome.back')
     assert.ok(await h.waitPage(cdp, `!(${marketOpen})`, 5000), 'back did not close the market')
-    assert.ok((await h.waitNodes((l) => h.byId(l, 'nativeChrome.tabs'), { timeout: 5000 })).hit, 'shell bar did not return after the market')
+    assert.ok((await h.waitNodes((l) => h.byId(l, 'nativeChrome.more'), { timeout: 5000 })).hit, 'shell bar did not return after the market')
   }
   // saveData counter as last observed: every run must add exactly one (an earlier failed check must not cascade)
   let pluginRuns = 0
@@ -2115,6 +2400,7 @@ const tabCountText = (list) => {
     await tapEl("document.querySelector('.add-pill-btn')")
     list = await waitSheet(true)
     if (lang === 'en') assert.ok(!hasCjk(list), 'Chinese text in the English add sheet')
+    if (lang === 'en') assert.deepEqual(['camera', 'photos', 'files'].map((id) => rowLabel(list, `nativeSheet.item.${id}`)), ['Take photo', 'Photos', 'Files'])
     shot(`${tag}-add-sheet`)
     h.key(4)
     await waitSheet(false)
@@ -2163,7 +2449,7 @@ const tabCountText = (list) => {
     shot('p15-market-detail-dark')
     await tapId('nativeChrome.close', r.nodes)
     assert.ok(await h.waitPage(cdp, `!(${marketOpen})`, 5000), '× did not leave the market from the detail page')
-    assert.ok((await h.waitNodes((l) => h.byId(l, 'nativeChrome.tabs'), { timeout: 5000 })).hit, 'shell bar did not return after the market')
+    assert.ok((await h.waitNodes((l) => h.byId(l, 'nativeChrome.more'), { timeout: 5000 })).hit, 'shell bar did not return after the market')
     // project sheet
     await tanguDrawer()
     await tapEl(`document.querySelector('.mb-drawer--left [data-act="new-chat"]')`)
@@ -2197,22 +2483,20 @@ const tabCountText = (list) => {
     await closeDrawer() // the main view: its left button goes back to the list
     let list = ui()
     assert.equal(descOf(list, 'nativeChrome.left'), 'Back')
-    assert.equal(descOf(list, 'nativeChrome.tabs'), 'Tabs')
     shot('14-shell-dark-en')
     await tapId('nativeChrome.more', list)
     list = await waitSheet(true)
     assert.ok(list.some((n) => n.text === 'More'), 'sheet title not English')
     assert.ok(!list.some((n) => /[一-鿿]/.test(n.text || '')), 'Chinese text in the English sheet')
+    assert.deepEqual([rowLabel(list, 'nativeSheet.item.tab:new'), rowLabel(list, 'nativeSheet.item.rb-cmd')], ['New tab', 'Search'])
     shot('15-more-sheet-dark-en')
     h.key(4)
     await waitSheet(false)
     await cdp.eval("localStorage.setItem('forsion_theme_pref', 'light'); localStorage.setItem('forsion_theme', 'light'); true")
     await reload()
-    await tapId('nativeChrome.tabs')
-    await waitSheet(true)
+    const closeTabs = await tabsSheet()
     shot('16-tabs-sheet-light-en')
-    h.key(4)
-    await waitSheet(false)
+    await closeTabs((sheet) => assert.equal(textOf(sheet, 'nativeSheet.title'), 'Tabs'))
   })
 
   await check('English: chat sheets and the settings page bar (light)', async () => {

@@ -23,8 +23,11 @@ const decode = (s) => s.replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(
 function nodes(out) {
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
-      adb('shell', 'uiautomator', 'dump', '/sdcard/forsion-ui.xml')
-      const xml = adb('shell', 'cat', '/sdcard/forsion-ui.xml')
+      // One round trip, and never an old tree: the previous dump is removed first, so a dump that fails ("could not
+      // get idle state" while the page keeps animating) leaves nothing for `cat` to print — the attempt is repeated
+      // instead of answering with what was on screen a while ago (a full run failed once with the bar on screen and
+      // absent from eight seconds of dumps).
+      const xml = adb('shell', 'rm -f /sdcard/forsion-ui.xml; uiautomator dump /sdcard/forsion-ui.xml >/dev/null 2>&1; cat /sdcard/forsion-ui.xml')
       if (out) fs.writeFileSync(path.join(out, 'last-ui.xml'), xml)
       return [...xml.matchAll(/<node\s+([^>]+?)\/?>/g)].map((m) => {
         const n = Object.fromEntries([...m[1].matchAll(/([\w-]+)="([^"]*)"/g)].map((a) => [a[1], decode(a[2])]))

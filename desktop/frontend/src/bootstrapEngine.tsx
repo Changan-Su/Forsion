@@ -380,7 +380,9 @@ export function installEngine(): void {
       try { localStorage.setItem(UNIT_MOVED_KEY, '1') } catch { /* ignore */ }
     }
   }
-  addRibbonIcon({ id: 'rb-cmd', side: 'bottom', icon: CommandIcon, tooltip: () => app().tr('command.palette'), onClick: openCommandPalette })
+  // 单列壳(手机)上它在「⋯」里:那里没有 ⌘K,「命令面板」是键盘上的叫法 → 叫「搜索」,图标也换(打开的是同一个面板)。
+  const phoneShell = UI_MODE === 'mobile' || !!window.tangu?.mobile
+  addRibbonIcon({ id: 'rb-cmd', side: 'bottom', icon: phoneShell ? Search : CommandIcon, tooltip: () => app().tr(phoneShell ? 'command.search' : 'command.palette'), onClick: openCommandPalette })
   // 底部常驻(side:'bottom'),无持久顺序时注册序即上下序:明暗/命令 → 设置 → 账号(账号最底)。
   // 用户拖过底部区后 bottomOrder 非空,新注册项按 rankIds 排到区末尾(反馈那条由注册处的一次性迁移兜住)。
   // ⚠️快速查找/语言**刻意不在条上**(2026-08-31):下区是杂物抽屉,八个同色图标一列谁也认不出,

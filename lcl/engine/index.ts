@@ -93,6 +93,8 @@ export type {
 } from './nativeSheet'
 export { runNativeSheetMenu, openNativeSheetMenu, useNativeSheetMenu } from './nativeSheetMenu'
 export type { SheetMenu, SheetMenuSection, SheetMenuItem } from './nativeSheetMenu'
+export { installNativeSelect } from './nativeSelect'
+export type { NativeSelectOptions } from './nativeSelect'
 export { renderNativeIcons } from './nativeIcon'
 export type { NativeIcon, NativeIconSource, NativeVectorPath } from './nativeIcon'
 export {

@@ -1,5 +1,5 @@
 import { Capacitor, registerPlugin } from '@capacitor/core'
-import { installNativeSheetPresenter, type NativeSheetPayload } from '@lcl/engine'
+import { installNativeSelect, installNativeSheetPresenter, type NativeSheetPayload } from '@lcl/engine'
 
 /** Android-only presenter for the generic native sheet seam (lcl/engine/nativeSheet.ts).
  *  Kotlin: NativeSheetPlugin + NativeSheetUi (Compose ModalBottomSheet). Desktop / web keep their web UI. */
@@ -26,4 +26,7 @@ export function installNativeSheet(): void {
       signal.removeEventListener('abort', cancel)
     }
   })
+  // 下拉框(<select>)也走这张半屏:WebView 自带的那块是白底居中对话框,不跟主题(深色下尤其扎眼)。
+  // 设置行的下拉没有自己的 label,标题取所在行的名字。
+  installNativeSelect({ titleOf: (select) => select.closest('.settings-setting-row')?.querySelector('.settings-control-copy strong')?.textContent })
 }

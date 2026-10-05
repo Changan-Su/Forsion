@@ -129,6 +129,12 @@ Kotlin 在 `NativeChrome*` / `NativeSheet*`。没装宿主（桌面、Web、浏�
   刻意留 Web：斜杠面板、@ 提及、`[[` 弹层、选区工具栏、上下文环、审批托盘、Ultra 确认、群聊设置、审批规则、壁纸面板、收纳层。
 - **`NativeFilePicker`**：底单里选「添加文件」时 WebView 没有用户激活，`<input type=file>.click()` 会被 Chromium 静默丢弃；
   改走系统文档选择器（`window.tangu.pickFiles`，单个 25MB / 合计 60MB / 最多 20 个，超限的列名提示，不静默丢）。
+  「＋」底单里它拆成三行：**拍照**（`takePhoto`：系统相机 App 拍进本应用缓存的 `camera/`，经自家 FileProvider 读回；
+  清单声明了 CAMERA，所以拍之前先申请这一项，被拒有提示）、**相册**（`pickPhotos`：系统照片选择器，只列图片，
+  文件名是系统给的编号 —— 选择器不透露原名）、**文件**（原来那条）。同一时刻只开一个选择器 / 相机（原生 `busy` 闸）。
+- **下拉框**（`lcl/engine/nativeSelect.ts`）：`<select>` 点开的是 WebView 自带的白底对话框、不跟主题。原生宿主在场时，
+  一只捕获阶段监听把这次按下接过去，选项走同一张原生底单，选中后写回元素并派发 `input` + `change`（React 的 `onChange` 照常走），
+  组件一处不用改。不接管的：多选 / 列表框、超过底单条数上限的、插件 iframe 里的；宿主呈现失败过一次的那个下拉此后交还浏览器。
 - 文案、图标、主题全部由 Web 侧传入（i18n 跟随当前语言）；Kotlin 不持有用户可见字符串，只做载荷校验（大小 / 深度 / id 唯一）。
 
 真机验收（一台模拟器/设备，debug APK，后端全由 CDP 桩住，不碰真服务器；结束时还原 token / 语言 / 主题）：

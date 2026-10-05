@@ -494,13 +494,18 @@ async function presentNativeTabs(tr: Tr): Promise<boolean> {
 /** 「⋯」菜单的原生版。带 React `component` 的项没法交给原生层画 → 有这种项时整张留在 Web sheet。
  *  ribbon 底部项一节在前;其后每个声明了 `moreGroup` 的命令组一节(外置插件的命令,节标题 = 插件名),
  *  行 id 加 `cmd:` 前缀与 ribbon id 分开,选中走命令表 run(同命令面板),但只在注册表里那条仍是呈现时的对象时才跑。 */
+/** 「⋯」里「新建标签页」那一行的 id(带冒号,撞不上 ribbon 项的 id)。 */
+const NEW_TAB = 'tab:new'
+
 async function presentNativeMore(tr: Tr): Promise<boolean> {
   const items = moreItems(useRibbonStore.getState().items, nativeChromeDrawsSpaces())
   const groups = moreCommandGroups(useCommandStore.getState().commands)
-  if ((!items.length && !groups.length) || items.some((i) => i.component)) return false
+  if (items.some((i) => i.component)) return false
   const out = await presentNativeMenu({
     title: tr('lcl.mobile.more'),
     sections: [
+      // 「新建标签页」:原生顶栏在只有一个标签页时不画计数钮(它本是这个动作的入口),所以这里常驻一行。
+      { items: [{ id: NEW_TAB, label: tr('lcl.tab.new'), icon: Plus }] },
       ...(items.length ? [{ items: items.map((it) => ({ id: it.id, label: it.tooltip ? moreRowLabel(label(it.tooltip)) : it.id, icon: it.icon })) }] : []),
       ...groups.map((g) => ({
         ...(g.title ? { title: g.title } : {}),
@@ -511,6 +516,7 @@ async function presentNativeMore(tr: Tr): Promise<boolean> {
   if (!out.handled) return false
   const id = out.value?.id
   if (!id) return true
+  if (id === NEW_TAB) { newMainTab(); return true }
   if (id.startsWith('cmd:')) {
     // 只执行呈现时的那条命令:半屏开着期间同 id 被重注册成别的处理器(插件重载)→ 不执行(见 presentedCommand)。
     const cmdId = id.slice('cmd:'.length)
@@ -528,10 +534,20 @@ async function presentNativeMore(tr: Tr): Promise<boolean> {
 function MoreSheet({ onClose }: { onClose: () => void }) {
   const items = moreItems(useRibbonStore((s) => s.items), nativeChromeDrawsSpaces()) // 宿主形态在这张 sheet 开着时不会变,取一次即可
   const groups = moreCommandGroups(useCommandStore((s) => s.commands))
+  const nativeChrome = useNativeChromeInstalled()
+  const { t: tr } = useEngineI18n()
   return (
     <div className="mb-sheet-scrim" onClick={onClose}>
       <div className="mb-sheet" onClick={(e) => e.stopPropagation()} style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}>
         <div className="mb-sheet-grip" />
+        {/* 原生顶栏只有一个标签页时不画计数钮(它本是「新建标签页」的入口)。原生「⋯」呈现不了(有带 component 的项 /
+            宿主失败)才落到这张 Web 版,所以这里同样要有这一行;Web 顶栏自己的计数钮常在,不重复给。 */}
+        {nativeChrome && (
+          <button className="mb-sheet-row" data-act="new-tab" onClick={() => { onClose(); newMainTab() }}>
+            <Plus size={20} />
+            <span>{tr('lcl.tab.new')}</span>
+          </button>
+        )}
         {items.map((it) => {
           if (it.component) {
             const C = it.component
