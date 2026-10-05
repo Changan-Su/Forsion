@@ -14,7 +14,7 @@ import type { BuildPayloadOpts, StreamOpts, StreamResult } from '../seams/cloudB
 import { learnFromUpstreamError } from '../services/contextWindowStore.js';
 import { LlmError, type AgentModel, type ThinkingLevel, type ToolCall } from '../core/types.js';
 import { parseTextToolCalls } from './textToolCalls.js';
-import { applyThinking, normalizeThinkingLevel, resolveModelCapability } from './modelCapabilities.js';
+import { applyThinking, clampThinkingLevel, normalizeThinkingLevel, resolveModelCapability } from './modelCapabilities.js';
 import { buildGrokBuildHeaders } from './grokBuildCompat.js';
 import { withStreamIdle, type StreamIdleGuard } from './streamIdle.js';
 import { assertToolDefinitions } from '../tools/toolDefinitionValidation.js';
@@ -209,6 +209,24 @@ export function tuneOpenAiDirectPayload(
   const { effective, viaResponses } = applyThinking(payload, level, cap, (text) => appendSystemToPayload(payload, text));
   if (viaResponses) payload[PROTOCOL_MARK] = 'openai-responses';
   return effective;
+}
+
+/**
+ * 开了思考的后台调用,输出上限该在正文之外另留多少给推理(调用点:Dream、Historian 判官;见 docs/direct-model-calls.md)。
+ * 原生思考的端点留 4096:多数供应方把推理 token 算在输出上限里,只按正文给,推理多的模型会把正文挤没。
+ * 档位只是一句系统提示(prefix)、或模型自带思考不可调(none)的端点不留:它们的推理量没有因为给了档位而变,
+ * 其中的老模型输出上限往往只有 4096,多给会被直接拒(原来能跑的调用变成 400)。
+ * 查询口径同 agentLoop 的 thinkingEffective:托管模型的 baseUrl 是网关占位,真实端点在 model.defaultBaseUrl。
+ * ponytail: 不认各模型的输出上限(能力表里没有);哪个原生思考的模型拒了这个上限,再按窗口 / 4 封顶(compaction 的做法)。
+ */
+export function thinkingHeadroom(target: { model?: any; baseUrl?: string; apiModelId?: string }, level: ThinkingLevel): number {
+  const cap = resolveModelCapability({
+    baseUrl: target.model?.defaultBaseUrl || target.baseUrl,
+    provider: target.model?.provider,
+    modelId: target.apiModelId || target.model?.id,
+    protocol: typeof target.model?.[PROTOCOL_MARK] === 'string' ? target.model[PROTOCOL_MARK] : undefined,
+  });
+  return cap.format === 'prefix' || cap.format === 'none' || clampThinkingLevel(cap, level) === 'off' ? 0 : 4096;
 }
 
 /** 从 providerRegistry 命中结果构造的 AgentModel 带此标记,buildProviderPayload 据此走直连。 */

@@ -441,7 +441,7 @@ export async function judgeApproval(input: {
       messages: [{ role: 'system', content: system }, { role: 'user', content: user }] as ChatMessage[],
       projectSource: '', usageSource: 'tangu', client: backgroundClientTag('muse'),
       temperature: 0, maxTokens: 300, stream: true, provider: (model as any)?.provider,
-      // D3:判官只做一次 JSON 二选一,不需要思考预算(缺省档在 DeepSeek 这类端点上 = high)。
+      // D3:判官只做一次 JSON 二选一,不需要多少思考预算(不给 = 关思考;DeepSeek 这类端点按 high 思考时推理会吃光输出上限)。
       thinkingLevel: 'low',
     } as any);
     const res = await llm.streamProviderCompletion({ apiKey, baseUrl, payload, provider: (model as any)?.provider });

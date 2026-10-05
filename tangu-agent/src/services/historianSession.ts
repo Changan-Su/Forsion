@@ -2,8 +2,9 @@
 import { v4 as uuidv4, v5 as uuidv5 } from 'uuid';
 import { query } from '../core/db.js';
 import { deps } from '../seams/runtime.js';
-import type { ChatMessage } from '../core/types.js';
+import type { ChatMessage, ThinkingLevel } from '../core/types.js';
 import { compactSession, getLatestSummary } from './compaction.js';
+import { thinkingHeadroom } from '../llm/openaiCompat.js';
 
 export const HISTORIAN_CONTEXT_CHARS = 24_000;
 const queues = new Map<string, Promise<unknown>>();
@@ -26,6 +27,9 @@ export interface HistorianTask {
   sessionId: string; userId: string; modelId: string;
   task: 'judge' | 'team-summary'; instructions: string; transcript: string;
   maxTokens: number; signal?: AbortSignal;
+  /** 这次调用的思考档。不给 = 关思考(能关的模型发的是「不思考」,不报错);要逐条判断的任务由调用方给。
+   *  给了档位时,maxTokens 仍只按正文给:原生思考的模型由这里另留推理的余量。 */
+  thinkingLevel?: ThinkingLevel;
 }
 
 export async function completeHistorianTask(p: HistorianTask) {
@@ -75,8 +79,10 @@ async function completeTask(p: HistorianTask) {
       ...(checkpoint ? [{ role: 'system', content: `[Historian checkpoint]\n${checkpoint.summary}` }] : []),
       ...history, { role: 'user', content: input },
     ] as ChatMessage[],
-    projectSource: '', usageSource: 'tangu', temperature: 0.3, maxTokens: p.maxTokens,
+    projectSource: '', usageSource: 'tangu', temperature: 0.3,
+    maxTokens: p.maxTokens + (p.thinkingLevel ? thinkingHeadroom({ model, baseUrl, apiModelId }, p.thinkingLevel) : 0),
     stream: true, cacheKey: `${id}:historian`, signal,
+    ...(p.thinkingLevel ? { thinkingLevel: p.thinkingLevel } : {}),
   });
   const result = await deps().brain.llm.streamProviderCompletion({ apiKey, baseUrl, payload, provider: (model as any)?.provider, signal });
   signal.throwIfAborted();

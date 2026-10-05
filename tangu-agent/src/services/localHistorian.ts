@@ -31,7 +31,7 @@ import { completeHistorianTask } from './historianSession.js';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { query } from '../core/db.js';
 import { deps } from '../seams/runtime.js';
-import type { ChatMessage } from '../core/types.js';
+import type { ChatMessage, ThinkingLevel } from '../core/types.js';
 import { loadSpecialAgentsConfig, DEFAULT_HISTORIAN_PROMPT, resolveBackgroundModelId, type HistorianConfig } from './specialAgentsConfig.js';
 import { enterRunContext, currentAgentSlug } from '../seams/runContext.js';
 import { getAgent, resolveMemorySlug, isValidSlug, agentNotesOff } from '../agents/agentRegistry.js';
@@ -276,6 +276,9 @@ async function recordJudgeUsage(userId: string, modelId: string, model: any, res
 }
 
 // ── fork 判官(mode='fork'):尾部分叉一次补全,借 self_brainstorm 的缓存对齐管线 ───────────────
+/** 独立判官的思考档。这次调用要逐条分拣(记忆候选 / 进化记录提名 / 项目级候选),其中一部分不经人看就写进长期内容;不给档位 = 关思考。
+ *  10-06 真模型(GPT 6 Luna):关着和 low 档(那个模型在 low 档一个推理 token 都不出)时,agent 自己总结的做法 6 次里一次都没被提名;medium 3 次都提了。 */
+const JUDGE_THINKING: ThinkingLevel = 'medium';
 const FORK_JUDGE_MAX_TOKENS = 1600;
 const FORK_CONTEXT_HEADROOM = 0.75; // 与 self_brainstorm 同款护栏:前缀估算超模型窗口此比例即回落
 // fork 无自己的互斥:onUserRunDone 顶部的 historianBusySessions 会话锁已保证同会话单飞。
@@ -403,7 +406,7 @@ export function onUserRunStart(sessionId: string, userId: string, message: strin
           { role: 'user', content: `[Current title]\n${current}\n\n[Conversation]\n${transcript}` },
         ] as ChatMessage[],
         projectSource: '', usageSource: 'tangu', temperature: 0.3, maxTokens: 600, stream: true, signal,
-        thinkingLevel: 'low', // 抢首帧的小活:缺省档在 DeepSeek 类端点 = high(同代批判官)
+        thinkingLevel: 'low', // 抢首帧的小活:不给 = 关思考,给 low 也只是稍微想一下(同代批判官)
       } as any);
       const res = await deps().brain.llm.streamProviderCompletion({ apiKey, baseUrl, payload, provider: (model as any)?.provider, signal });
       await recordJudgeUsage(userId, modelId, model, res);
@@ -635,7 +638,7 @@ async function runHistorianForSession(sessionId: string, userId: string, memScop
       }
       if (!raw) {
         const sys = buildJudgeSystem(cfg.prompt, titleDue, judgeLog, judgeMemory, summaryDue, judgeHarness, emojiDue, !!projectRef, trigger);
-        const result = await completeHistorianTask({ sessionId, userId, modelId: cfg.modelId, task: 'judge', instructions: `${sys}${prevSummary ? `\n\n[Previous summary]\n${prevSummary}` : ''}${projectKnown ? `\n\n[Project memory]\n${projectKnown}` : ''}`, transcript, maxTokens: 1600, signal: historianSignal.getStore() });
+        const result = await completeHistorianTask({ sessionId, userId, modelId: cfg.modelId, task: 'judge', instructions: `${sys}${prevSummary ? `\n\n[Previous summary]\n${prevSummary}` : ''}${projectKnown ? `\n\n[Project memory]\n${projectKnown}` : ''}`, transcript, maxTokens: 1600, thinkingLevel: JUDGE_THINKING, signal: historianSignal.getStore() });
         await recordJudgeUsage(userId, cfg.modelId, result.model, result);
         raw = result.content;
       }

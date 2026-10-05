@@ -42,7 +42,9 @@
 4. 第二次调用核验事实、条件、路径、日期及例外没有丢失，候选有对话证据支持。不会为了通过验证反复追加修复调用。
 5. 用读取时的版本 CAS 提交正文、来源和候选处理回执。并发修改则拒绝，原记忆和候选保留。提交后清理失败可下次恢复；已经提交就报告已完成，不能误报成取消。
 
-默认每 Agent 间隔 6 小时、总时限 60 秒、两次调用合计最多 4096 输出 tokens（提议 75%，验证 25%），进程同时最多 2 个 Dream；不排无限队列。自动触发依附用户 run 完成，不是独立定时守护。Historian 自己最多 2 个同时运行、单次总时限 90 秒。
+默认每 Agent 间隔 6 小时、总时限 60 秒、两次调用合计最多 4096 输出 tokens（提议 75%，验证 25%），进程同时最多 2 个 Dream；不排无限队列。
+
+两次调用都开中档思考（2026-10-06 起；此前没传档位 = 关思考）。4096 是两次调用的**正文**预算；原生思考的模型每次调用另留 4096 给推理（多数供应方把推理 token 算在输出上限里），档位只是一句系统提示的模型不留。各档位的实测和引擎里其余直接模型调用的档位见 [direct-model-calls.md](direct-model-calls.md)。自动触发依附用户 run 完成，不是独立定时守护。Historian 自己最多 2 个同时运行、单次总时限 90 秒。
 
 Provider 的 build/stream 接收真实 AbortSignal；每次持久化前再次检查取消。若第三方适配器忽略信号，状态会说明正在等待停止，保持单飞且拒绝迟到结果；不能把超时当成实际请求已经结束。模型和同步已经在远端提交的副作用不能靠客户端取消撤回。
 
@@ -64,6 +66,7 @@ Agent 定义已有有效本地快照时立即开跑，云文件同步在后台�
 - desktop 的 `AgentMemoryPanel.test.ts`、`AgentMemoryModal.log.test.ts`、`backendService.memory.test.ts`：晚回包隔离、409 草稿、单次写入与日志版本。
 - `desktop/scripts/agent-memory.check.cjs`：真实 Electron + 生产记忆/Dream 路由 + SQLite/临时 home，验证界面到持久化、遗忘/恢复、Agent 切换和中英/明暗截图。其他引擎端点和模型返回为可控替身，不读写个人记忆或发真实模型请求。
 
+- `npm run live:harness -- --only dreamseed [--dream-rounds 5] [--dream-entries 40]`（2026-10-06 起）：20 / 40 条已有记忆 + 8 条候选，同一份种子连跑多轮，看整理完成率、已有事实丢没丢、没说过的有没有被记进去。改 Dream 的提示、校验、思考档或输出上限后跑；下面那条只有两条事实，各档位都对。
 - `npm run live:harness -- --only historian,dream,recall`（tangu-agent，2026-09-11 起）：真 standalone × Codex 直连真模型 × 隔离 home，走完 Historian 首轮候选 → Dream 整固 → 新会话只凭记忆作答，`report.md` 里有 `.memory-raw.md`、整固后的 MEMORY 与模型原话。上面几条都是合成替身，只有这一条能回答「真模型到底记没记住」。
 
 ## 本地合成性能记录

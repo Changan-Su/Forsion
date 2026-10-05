@@ -5,6 +5,7 @@ import {
   compatWireMessages,
   resolveCacheKey,
   streamOpenAiCompat,
+  thinkingHeadroom,
   PROTOCOL_MARK,
   ACCOUNT_MARK,
 } from './openaiCompat.js';
@@ -141,6 +142,24 @@ describe('tuneOpenAiDirectPayload(直连档位下发)', () => {
 });
 
 // ── B5:prefix 兜底档不得改写调用方持有的 system 消息 ──────────────────────────
+describe('thinkingHeadroom(后台调用给推理另留的输出余量)', () => {
+  const codex = { model: { provider: 'codex', [PROTOCOL_MARK]: 'openai-responses' }, baseUrl: 'https://chatgpt.com/backend-api/codex', apiModelId: 'gpt-6-luna' };
+  it('原生思考的端点留 4096;关着时不留', () => {
+    expect(thinkingHeadroom(codex, 'medium')).toBe(4096);
+    expect(thinkingHeadroom(codex, 'off')).toBe(0);
+    expect(thinkingHeadroom({ model: { provider: 'deepseek' }, baseUrl: 'https://api.deepseek.com', apiModelId: 'deepseek-v4-flash' }, 'medium')).toBe(4096);
+  });
+  it('档位只是一句系统提示的端点不留:老模型输出上限只有 4096,多给会被直接拒', () => {
+    expect(thinkingHeadroom({ model: { provider: 'openai' }, baseUrl: 'https://api.openai.com/v1', apiModelId: 'gpt-3.5-turbo' }, 'medium')).toBe(0);
+    expect(thinkingHeadroom({ model: { provider: 'x' }, baseUrl: 'https://my.gateway.example/v1', apiModelId: 'some-model' }, 'medium')).toBe(0);
+    expect(thinkingHeadroom({ model: {}, baseUrl: 'b', apiModelId: 'm' }, 'medium')).toBe(0);
+  });
+  it('托管模型按 model.defaultBaseUrl 认端点(resolve 给的 baseUrl 是网关占位)', () => {
+    expect(thinkingHeadroom({ model: { provider: 'deepseek', defaultBaseUrl: 'https://api.deepseek.com' }, baseUrl: 'http://127.0.0.1:9', apiModelId: 'deepseek-v4-flash' }, 'medium')).toBe(4096);
+    expect(thinkingHeadroom({ model: { provider: 'deepseek' }, baseUrl: 'http://127.0.0.1:9', apiModelId: 'deepseek-v4-flash' }, 'medium')).toBe(0);
+  });
+});
+
 describe('buildOpenAiCompatPayload 深拷贝 system 消息', () => {
   const model = { id: 'my-model', name: 'my-model', provider: 'custom' } as any;
   const GATEWAY = 'https://llm.mycorp.internal/v1';

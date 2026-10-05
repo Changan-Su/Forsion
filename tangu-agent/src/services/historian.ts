@@ -328,7 +328,7 @@ async function judgeAndWrite(
     maxTokens: 800,
     stream: true,
     signal,
-    thinkingLevel: 'low', // 缺省档在 DeepSeek 类端点 = high,推理吃光 maxTokens 就只剩空正文
+    thinkingLevel: 'low', // 不给 = 关思考。只给到 low:DeepSeek 类端点按 high 思考时,推理吃光过这 800 的上限、只剩空正文
   });
   const res = await streamProviderCompletion({ apiKey, baseUrl, payload, provider: (model as any)?.provider, signal });
 
