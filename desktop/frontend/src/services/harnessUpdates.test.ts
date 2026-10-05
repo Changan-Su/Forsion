@@ -7,7 +7,7 @@ const withChange = (patch: Record<string, unknown>): ToolEvent => ({ ...event, r
 describe('working-note update receipts', () => {
   it('restores persisted receipts and deduplicates replayed events', () => { expect(harnessChanges([event, event])).toEqual([change]) })
   it('ignores list/propose/error/incomplete and foreign tool results', () => {
-    expect(harnessChanges([{ ...event, name: 'manage_human' }, { ...event, done: false }, { ...event, isError: true }, { ...event, result: '(working notes are empty)' },
+    expect(harnessChanges([{ ...event, name: 'manage_human' }, { ...event, done: false }, { ...event, isError: true }, { ...event, result: '(evolution record is empty)' },
       { ...event, result: JSON.stringify({ kind: 'human_update', change }) }, { ...event, result: JSON.stringify({ kind: 'harness_update', change: null }) }])).toEqual([])
   })
   it('carries the shelved names of an equip entry and rejects a malformed list', () => {

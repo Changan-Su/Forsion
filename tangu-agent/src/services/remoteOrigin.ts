@@ -258,7 +258,7 @@ const REMOTE_READONLY_MANAGEMENT = new Set(['manage_agent', 'manage_skill', 'man
 export function remoteManagementDenied(tool: string, action: unknown): string | null {
   if (!REMOTE_READONLY_MANAGEMENT.has(tool) || action === 'list') return null;
   if (tool === 'log_event') return 'Remote sessions cannot write to the daily log: it feeds background agents on the host computer. Tell the user the result in your reply instead.';
-  return `Remote sessions cannot create, change or delete agents, skills, working notes, long-term memory, automations or schedules (${tool} action "${String(action ?? '')}"): they take effect in later runs on the host computer. Only action "list" is available here; ask the user to make this change on the host computer.`;
+  return `Remote sessions cannot create, change or delete agents, skills, the evolution record, long-term memory, automations or schedules (${tool} action "${String(action ?? '')}"): they take effect in later runs on the host computer. Only action "list" is available here; ask the user to make this change on the host computer.`;
 }
 
 // ── 中途染色:远端对一个**本机**起的在飞 run 发 steer,注入的文字从下一个迭代起就在驱动它 → 这条 run 从此按远程钳制。

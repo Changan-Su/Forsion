@@ -3008,7 +3008,7 @@ Then reply with only the command output.`,
   //  ③ 撤销(面板 / 卡片走的同一个 rollback API,带 expectRev)→ 条目消失 —— 后台写进去的,用户照样撤得掉;
   //  ④ 只记数:用户立的规矩(「以后……你必须……」)归记忆,不该被写成工作笔记。记下它去了哪。
   // 会话必须显式 POST 创建并带 agent_config.agentSlug:判官归桶读的是会话行存档的 agent_config,run 自动建的会话没有它 → 会错落进 xyra。
-  await scenario('refine', 'refine 自进化闭环(自己总结的做法 → 直接进工作笔记 → 新会话带上 → 可撤)', async () => {
+  await scenario('refine', 'refine 自进化闭环(自己总结的做法 → 直接进进化记录 → 新会话带上 → 可撤)', async () => {
     const slug = 'live-refiner';
     await api('/agent/agents', { method: 'POST', body: JSON.stringify({ slug, name: 'Refiner', systemPrompt: "You are Refiner, a careful assistant. Reply in the user's language." }) });
     await api('/agent/special/config', { method: 'POST', body: JSON.stringify({ historian: { enabled: true, modelId: MODEL, everyRounds: 1, firstRoundTrigger: true, mode: HIST_MODE, harnessCandidates: true } }) });
@@ -3069,10 +3069,10 @@ Then reply with only the command output.`,
     const ok = entries.length > 0 && !approvals && assistSeen && carried && undone;
     return { ok, detail: [
       `模式 ${HIST_MODE}${HIST_MODE === 'assist' ? (assistSeen ? '(有 assist_discussion)' : '(⚠ 没看到 assist_discussion)') : ''}`,
-      `① 工作笔记 ${entries.length} 条:后台直接采纳 ${byHistorian.length}、前台自己写 ${byAgent.length};候选收件箱 ${(after.candidates || []).length} 条;判官活动 ${acts.join('/') || '无'};前台工具 ${ev2.toolCalls.join(',') || '无'};审批 ${approvals}${entries.length ? '' : ' ⚠ 没有任何一条路把它写进去'}`,
+      `① 进化记录 ${entries.length} 条:后台直接采纳 ${byHistorian.length}、前台自己写 ${byAgent.length};候选收件箱 ${(after.candidates || []).length} 条;判官活动 ${acts.join('/') || '无'};前台工具 ${ev2.toolCalls.join(',') || '无'};审批 ${approvals}${entries.length ? '' : ' ⚠ 没有任何一条路把它写进去'}`,
       `② 新会话提示里 ${ev3 ? (carried ? '带着' : `⚠ 没带全:${ev3.error || ''}`) : '未跑'}`,
       `③ 撤销 ${target ? (undone ? `成功(撤的是${lineOf(target)?.by === 'historian' ? '后台' : '前台'}写的那条)` : `⚠ 失败 ${undoErr}`) : '未跑'}`,
-      `④ 用户立规矩:前台工具 ${ev4.toolCalls.join(',') || '无'};判官活动 ${acts4.join('/') || '无'};被写成工作笔记 ${ruleNotes.length} 条${ruleNotes.length ? `(${ruleBy.join('/')})` : ''}`,
+      `④ 用户立规矩:前台工具 ${ev4.toolCalls.join(',') || '无'};判官活动 ${acts4.join('/') || '无'};被写进进化记录 ${ruleNotes.length} 条${ruleNotes.length ? `(${ruleBy.join('/')})` : ''}`,
     ].join(';'), output: `【run① assistant】${ev1.content}\n\n【run② 自己总结】${ev2.content}\n\n【HARNESS.md】\n${existsSync(harnessMd) ? readFileSync(harnessMd, 'utf8') : '(空)'}\n\n【④ 用户立规矩】${ev4.content}`, ttftMs: ttft(ev2), tokens: tokensOf(ev2), toolCalls: [...ev1.toolCalls, '|', ...ev2.toolCalls, '|', ...ev4.toolCalls] };
   });
   // ── HARNESS 放开写入(10-04):不靠 /refine、不靠审批,四环各自留证据 ──
@@ -3141,7 +3141,7 @@ Then reply with only the command output.`,
     const mk = async (title) => (await api('/agent/sessions', { method: 'POST', body: JSON.stringify({ title, model_id: MODEL, agent_config: cfg }) })).session.id;
     const catalogOf = (ev) => String(ev.systemPrompt || '').split('## Additional Tools')[1]?.split('\n## ')[0] || '';
     const listed = (ev) => TOOLS.filter((t) => catalogOf(ev).includes(`- ${t}:`));
-    const ev = await run(await mk('Equip shelve'), `我看了最近一个月的用量:${TOOLS.join(' 和 ')} 这两个工具你一次都没调过。把它们从常驻里收起来省点上下文,记进你的工作笔记(装备)。`, 240_000, cfg);
+    const ev = await run(await mk('Equip shelve'), `我看了最近一个月的用量:${TOOLS.join(' 和 ')} 这两个工具你一次都没调过。把它们从常驻里收起来省点上下文,记进你的进化记录(装备)。`, 240_000, cfg);
     const change = ev.toolResults.flatMap((r) => { try { const v = JSON.parse(r.full); return v.kind === 'harness_update' && v.change?.kind === 'equip' ? [v.change] : []; } catch { return []; } }).at(-1);
     const shelvedBoth = !!change && TOOLS.every((t) => (change.tools || []).includes(t));
     if (ev.error || !ev.done || !shelvedBoth || ev.approvals || listed(ev).length) {

@@ -34,7 +34,7 @@ function buildRememberDefinition(o: { project: boolean; notes: boolean }): Tool 
         // 10-04 用户裁决:「用户纠正肯定应该进记忆」—— 不进工作笔记,也不进协作说明。
         `WHEN: user identity/preferences/corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, ${o.notes ? 'commands and workflows proven to work here, landmines' : 'proven procedures or landmines'}. ` +
         // 10-04 live(refine):agent 自己总结的做法被它存进了这里 —— 「proven procedures」与工作笔记的触发条件说的是同一件事,两边打架。
-        (o.notes ? 'A working method you worked out yourself is not a memory: it goes in your working notes (manage_harness). ' : '') +
+        (o.notes ? 'A working method you worked out yourself is not a memory: it goes in your evolution record (manage_harness). ' : '') +
         // 两级(10-04 用户:「还要区分 Project 级别还是全局级别」):项目级只在本项目注入、项目里的 agent 共用;agent 级照旧。
         (o.project ? 'SCOPE: "project" = holds only inside the current project (its commands, layout, conventions, decisions, what the user wants done in this project); it is shown to every agent working in this project and nowhere else. "agent" = holds wherever you work with this user (who they are, how they want you to work in general). When unsure, ask yourself whether it would still be true in another project. ' : '') +
         'SKIP: task progress, completed work, deliverables, versions, dated status and one-off requests; use log_event instead. ' +

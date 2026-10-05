@@ -119,14 +119,14 @@ function judgeFieldSpecs(wantTitle: boolean, wantLog: boolean, wantMemory: boole
   if (wantHarness) {
     // 反模式清单抄 hermes skill-review 的负面门(环境失败/负面断言/一次性叙事会硬化成日后反噬的拒绝理由)。
     fields.push(
-      '"harness_candidates": an array of NEW working-method lessons for the agent\'s own working notes (usually empty). ' +
+      '"harness_candidates": an array of NEW working-method lessons for the agent\'s own evolution record (usually empty). ' +
       'Qualifying: a durable, transferable lesson the agent worked out by itself about HOW it should work — a technique or delegation pattern that proved itself, ' +
       'a procedural landmine and the way around it, a working rule the agent itself formulated or committed to in this conversation (not one the user dictated). ' +
       'Never include: environment/setup hiccups, transient errors, negative claims like "tool X is broken" (they harden into refusals that bite the agent later), ' +
       'one-off task narratives, anything the user told, corrected or required of the agent, or facts about the user or a project (those belong in memory_candidates). ' +
       // 10-04:提名过得了形状闸就直接写进工作笔记(用户裁决「可以做自动采纳」)—— 所以要 title / lesson / evidence 三样,而不是一句话。
       'Each entry is an object {"title": a short name of at most 60 characters, "lesson": one self-contained sentence saying what to do, "evidence": one short sentence saying what happened in this conversation that shows it}, all in English. ' +
-      'An entry may be written straight into the working notes without anyone reviewing it, so include only what clearly helped here. At most 3 entries; an empty array is the normal outcome.',
+      'An entry may be written straight into the evolution record without anyone reviewing it, so include only what clearly helped here. At most 3 entries; an empty array is the normal outcome.',
     );
   }
   const example =
