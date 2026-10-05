@@ -451,7 +451,7 @@ export function App({ boot, storage }: { boot: TuiConfig; storage: string }): Re
           input: { message, userMessageId: randomUUID(), attachments: [], agentConfig },
         }),
       enqueue: () => enqueueRun(sid, runId),
-      abort: () => abortRun(runId),
+      abort: () => abortRun(runId, { byUser: true }),
       abortRequested: () => preStartAbort.current === runId,
     })
       .then((r) => {
@@ -1426,7 +1426,7 @@ export function App({ boot, storage }: { boot: TuiConfig; storage: string }): Re
     const rid = activeRunId.current;
     if (!rid) return;
     preStartAbort.current = rid; // 引擎里还没注册时 abortRun 是空操作:起跑链看到这个标记会自己收手
-    abortRun(rid);
+    abortRun(rid, { byUser: true });
   };
 
   // 前台浮层(审批 > 询问 > 选择器)开着时,输入框让出键盘但不卸载 —— 草稿与光标都留着。

@@ -112,7 +112,7 @@ describe('通道入口 × 远程锁定', () => {
     const runId = state.created.id;
     state.locked = true;
     expect(await inbound(s, '停止')).toContain('已停止');
-    expect(state.aborted).toEqual([[runId]]);
+    expect(state.aborted).toEqual([[runId, { byUser: true }]]); // 「停止」是用户自己按的停(后台复盘据此认,见 services/judgeSignals.ts)
   });
 
   it('锁定时 slash 命令也不执行', async () => {
