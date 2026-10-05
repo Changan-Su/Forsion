@@ -1,8 +1,13 @@
-/* Filter only the empty material layer; fixed descendants keep viewport coordinates. */
+/* Content-tinted chrome. Off unless the user turns it on (data-ambient='on'): every rule below is gated on it,
+ * so the default is the plain Genesis glass shell. Cost when on: the inherited colour transition on :root
+ * restyles the whole document every frame while it runs (2026-10-05 measurement, check:fps).
+ * The gate is written with :where() so it adds no specificity: overrides that rely on equal specificity and
+ * source order (the dark lightness below, reduced motion at the end) keep working.
+ * Filter only the empty material layer; fixed descendants keep viewport coordinates. */
 @property --space-ambient-top { syntax: '<color>'; inherits: true; initial-value: transparent; }
 @property --space-ambient-middle { syntax: '<color>'; inherits: true; initial-value: transparent; }
 @property --space-ambient-bottom { syntax: '<color>'; inherits: true; initial-value: transparent; }
-:root[data-theme='lovable']:not([data-glass='off']) {
+:root[data-theme='lovable']:where([data-ambient='on']):not([data-glass='off']) {
   /* Keep sampled hue/chroma, constrain lightness so a white video frame cannot
    * wash out dark chrome and a black image cannot darken light chrome. */
   --space-ambient-lightness: 90%;
@@ -17,8 +22,8 @@
  * ponytail: calibrated for the default (cream) dark background; tune per background if another one drifts.
  * Instrument: check:spaceappearance "dark chrome stays a step below the paper". */
 :root.dark[data-theme='lovable'] { --space-ambient-lightness: 27%; }
-[data-theme='lovable']:not([data-glass='off']) .shell { position: relative; isolation: isolate; background: var(--sidebar-bg); }
-[data-theme='lovable']:not([data-glass='off']) .shell::before {
+[data-theme='lovable']:where([data-ambient='on']):not([data-glass='off']) .shell { position: relative; isolation: isolate; background: var(--sidebar-bg); }
+[data-theme='lovable']:where([data-ambient='on']):not([data-glass='off']) .shell::before {
   content: ''; position: absolute; inset: -36px; z-index: -1; pointer-events: none;
   background:
     radial-gradient(ellipse at 5% 5%, var(--space-ambient-tint-top), transparent 65%),
@@ -26,21 +31,21 @@
     radial-gradient(ellipse at 15% 100%, var(--space-ambient-tint-bottom), transparent 65%);
   filter: blur(32px) saturate(140%); opacity: .7;
 }
-[data-theme='lovable']:not([data-glass='off']) .shell::after {
+[data-theme='lovable']:where([data-ambient='on']):not([data-glass='off']) .shell::after {
   content: ''; position: absolute; inset: 0; z-index: -1; pointer-events: none;
   background: linear-gradient(135deg, color-mix(in srgb, var(--bg-card) 34%, transparent), color-mix(in srgb, var(--sidebar-bg) 58%, transparent));
   backdrop-filter: blur(28px) saturate(125%);
 }
-.dark[data-theme='lovable']:not([data-glass='off']) .shell::after {
+.dark[data-theme='lovable']:where([data-ambient='on']):not([data-glass='off']) .shell::after {
   background: linear-gradient(135deg, color-mix(in srgb, var(--sidebar-bg) 46%, transparent), color-mix(in srgb, var(--sidebar-bg) 58%, transparent));
 }
-[data-theme='lovable']:not([data-glass='off']) .rb,
-[data-theme='lovable']:not([data-glass='off']) .shell-top,
-[data-theme='lovable']:not([data-glass='off']) .shell-work,
-[data-theme='lovable']:not([data-glass='off']) .t2s-side,
-[data-theme='lovable']:not([data-glass='off']) .dockview-theme-lcl .dv-groupview,
-[data-theme='lovable']:not([data-glass='off']) .dockview-theme-lcl .dv-groupview:not(:has(.wb-tab--icon)) .dv-content-container { background: transparent; }
-[data-theme='lovable']:not([data-glass='off']) .dockview-theme-lcl {
+[data-theme='lovable']:where([data-ambient='on']):not([data-glass='off']) .rb,
+[data-theme='lovable']:where([data-ambient='on']):not([data-glass='off']) .shell-top,
+[data-theme='lovable']:where([data-ambient='on']):not([data-glass='off']) .shell-work,
+[data-theme='lovable']:where([data-ambient='on']):not([data-glass='off']) .t2s-side,
+[data-theme='lovable']:where([data-ambient='on']):not([data-glass='off']) .dockview-theme-lcl .dv-groupview,
+[data-theme='lovable']:where([data-ambient='on']):not([data-glass='off']) .dockview-theme-lcl .dv-groupview:not(:has(.wb-tab--icon)) .dv-content-container { background: transparent; }
+[data-theme='lovable']:where([data-ambient='on']):not([data-glass='off']) .dockview-theme-lcl {
   --dv-background-color: transparent;
   --dv-group-view-background-color: transparent;
   --dv-tabs-and-actions-container-background-color: transparent;
@@ -49,11 +54,11 @@
 .space-appearance-color select { flex: 1; min-width: 0; }
 .space-appearance-color input[type='color'] { width: 32px; min-width: 32px; padding: 2px; }
 @media (prefers-reduced-motion: reduce) {
-  :root[data-theme='lovable']:not([data-glass='off']) { transition: none; }
+  :root[data-theme='lovable']:where([data-ambient='on']):not([data-glass='off']) { transition: none; }
 }
 
 /* The single-column host has floating capsules instead of a surrounding frame. */
-[data-theme='lovable']:not([data-glass='off']) .mb-shell:not(.mini-shell) .mb-cap {
+[data-theme='lovable']:where([data-ambient='on']):not([data-glass='off']) .mb-shell:not(.mini-shell) .mb-cap {
   background: color-mix(in srgb, var(--space-ambient-tint-top) 22%, var(--bg-card));
   backdrop-filter: blur(28px) saturate(125%);
 }
