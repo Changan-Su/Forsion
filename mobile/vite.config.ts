@@ -63,6 +63,9 @@ export default defineConfig(({ mode }) => {
   const DEV_PROXY = env.BACKEND_URL || env.TANGU_DEV_PROXY || 'http://localhost:3001'
   return {
   plugins: [startupAppearanceHtml(), engineSwap(), react(), nativeConfig(env.VITE_API_ORIGIN)],
+  // 依赖预构建缓存放本检出自己的目录,不用缺省的 node_modules/.vite(软链检出共用那一份,后起的 vite 会把别人的
+  // deps 删掉重建;原因详见 desktop/frontend/vite.config.ts)。仪器:cd desktop && npm run check:vitecache。
+  cacheDir: resolve(__dirname, '.vite-cache'),
   // Vite 默认递归扫描 root 下的所有 HTML；Capacitor sync 生成的 android/.../public/index.html
   // 也会因此被当成 dev 入口，继而扫描旧 bundle/可选 peer dependency。dev 只认正典入口。
   optimizeDeps: {
