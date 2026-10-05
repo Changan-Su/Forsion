@@ -68,7 +68,7 @@ function writeFlag(k: string, on: boolean): void {
 }
 /** 「应用内链接用内置浏览器打开」:缺省关 —— 网页链接默认交给系统浏览器(2026-10-05 用户定,别改回缺省开)。
  *  只有存过 '1'(用户自己勾上)才开;没存过 / 读不了都按关。 */
-const linksOn = (): boolean => { try { return localStorage.getItem(LINKS_KEY) === '1' } catch { return false } }
+export const linksOn = (): boolean => { try { return localStorage.getItem(LINKS_KEY) === '1' } catch { return false } }
 
 /** 关掉工作台里该类型的**全部**实例,为反注册清场:Dockview 的 components map 收缩时不能留活面板。
  *  ⚠️改用引擎的 closeViewsOfType(以 api.panels 为准、循环到关光)。原来按 `mainTabs + left + right`
@@ -206,10 +206,12 @@ export const useBuiltins = create<BuiltinState>((set, get) => ({
 
 /** 外链去哪:遵「应用内链接」开关 —— 开着走内置浏览器标签,否则交给系统浏览器。
  *  主进程回投的外链(onOpenUrl)与渲染层自己拦下的链接(聊天网页引用条 Desk 走不通时)
- *  必须**同一个出口**,否则两条路的开关语义会悄悄分叉。 */
-export function routeExternalUrl(url: string): void {
+ *  必须**同一个出口**,否则两条路的开关语义会悄悄分叉。
+ *  fromGuest = 内置浏览器里的页面自己开的新窗口:不看开关,留在内置浏览器里(同一分区才有它的
+ *  登录态与注入的凭据;远程设备页的附件交给系统浏览器就是 401)。 */
+export function routeExternalUrl(url: string, fromGuest = false): void {
   const s = useBuiltins.getState()
-  if (s.inAppLinks && s.enabled.browser && windowKind() !== 'mini') {
+  if ((s.inAppLinks || fromGuest) && s.enabled.browser && windowKind() !== 'mini') {
     // 设备远程面(UnitRemoteSurface)开着时必须先退场:回投来的新标签(含远程页里 window.open
     // 的附件,见 main.ts did-attach-webview)会开在远程面**底下**,观感=点了没反应。
     const remote = useUnitRemote.getState()

@@ -238,8 +238,8 @@ export function TaskSummary({ messages, running, cwd, hostCwd, onJumpToAttention
                   {sc.hits > 1 && <span className="t2-tsum-hits">×{sc.hits}</span>}
                 </>
               )
-              // 网页来源与聊天正文里的网页引用**同一条路**:Desk 能显示就在 Desk 里开,否则退回
-              // 原出口(主区标签 / 系统浏览器,按「应用内链接」开关)。
+              // 网页来源与聊天正文里的网页引用**同一条路**:「应用内链接」开关勾着且 Desk 能显示就在 Desk 里开,
+              // 否则退回原出口(主区标签 / 系统浏览器,按同一个开关;缺省交给系统浏览器)。
               // ⚠️ 早先这里是 `<a target="_blank">` 直接交给主进程转外链 —— 于是同一张卡里文件来源进
               //    Desk、网页来源开新标签,用户实报「有时候 Desk 有时候新标签」。别改回去。
               // quote 给空串:来源行的标签是**主机名 + ×N 命中数**,拿它当引语搜索纯属噪音。

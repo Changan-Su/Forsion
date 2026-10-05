@@ -281,8 +281,9 @@ async function openMediaCitation(m: { abs: string; vaultRel: string | null; name
   openWsFile(hostTargetFor(m.abs, m.name), m.loc ? { t: m.loc.at, tTo: m.loc.to } : undefined)
 }
 
-/** 聊天里的普通网页链接 = 网页引用条:点开在 Agent Desk 的内置浏览器里并排打开,
- *  并滚到链接文字那句话(Chromium 原生 `#:~:text=`,见 withTextFragment)。
+/** 聊天里的普通网页链接 = 网页引用条。「应用内链接用内置浏览器打开」勾着时:点开在 Agent Desk 的
+ *  内置浏览器里并排打开,并滚到链接文字那句话(Chromium 原生 `#:~:text=`,见 withTextFragment)。
+ *  没勾(缺省,2026-10-05 用户定:网页链接默认交给系统浏览器,聊天里的也算)→ 走统一出口 routeExternalUrl。
  *  外观刻意**不动** —— 网页引用天生带标题文字,套成灰色文件条只会更难读。
  *  Desk 用不上(关着/移动端/内置浏览器被禁)时**不拦**,交回默认流程(主进程回投 → 主区标签
  *  或系统浏览器,还受「应用内链接」开关管)。 */
@@ -320,12 +321,14 @@ function textOf(node: ReactNode): string {
   return ''
 }
 
-/** 网页引用点击:Desk 开着就在演出区开内置浏览器(引用与对话并排),否则返回 false 交回默认流程。
+/** 网页引用点击:「应用内链接」开关勾着且 Desk 开着,就在演出区开内置浏览器(引用与对话并排),否则返回 false 交回默认流程。
  *  同一页的第二条引语**必须复用同一个 webview**(换 key = 重挂 = 整页重下),就地跳靠
  *  amadeus:browser-goto —— DeskShimView 的 leaf 只按 key memo,改 params 到不了已挂载的视图
  *  (PDF/WsFileView 同款通路,别再试写 params)。 */
 async function openWebCitation(href: string, quote: string): Promise<boolean> {
   if (UI_MODE === 'mobile') return false
+  // 开关没勾 = 网页链接一律交给系统浏览器,聊天里的引用也不例外(返回 false → 调用方走 routeExternalUrl)。
+  if (!(await import('../builtins')).useBuiltins.getState().inAppLinks) return false
   const { useApp } = await import('../stores/appStore')
   const { activeId, desktopConfig } = useApp.getState()
   if (!deskAcceptsFiles(!!desktopConfig?.agentDeskEnabled) || !activeId) return false

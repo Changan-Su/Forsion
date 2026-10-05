@@ -7,6 +7,10 @@
  *   W1 链接被当成普通外链(主区新标签/系统浏览器)而不是进 Desk;或进了 Desk 却停在页首
  *   W2 同一页第二条引语:换 key = 重挂 webview = 整页重下;或就地跳的事件没人接 → 不动
  *   W3 引语在页面上找不到时必须**照常打开**(退化成普通链接),不能崩、不能不开
+ *   D1 「应用内链接用内置浏览器打开」没勾(缺省,2026-10-05 用户定)时,聊天里的网页引用交给系统浏览器;
+ *      W1–W5 是勾上以后的行为(脚本自己把开关拨开)
+ *   D2 / D3 应用页面里 window.open 的链接(笔记里的链接同款写法):缺省交给系统浏览器,勾上以后开成内置浏览器标签
+ *   G1 内置浏览器里的页面自己开的新窗口,开关关着也留在内置浏览器里(远程设备页的附件靠这个分区里的凭据)
  *
  * 地基单独有桩:npm run check:textfrag(文本片段在 guest 里活不活,不依赖 app 构建)。
  * 需先 npm run build。用法:npm run e2e:webcite
@@ -17,6 +21,7 @@ const path = require('path')
 const http = require('http')
 const electron = require('./lib/launch-electron.cjs')
 const { startStubEngine } = require('./lib/stub-engine.cjs')
+const { enterSpace } = require('./lib/uiux-electron.cjs')
 
 const ROOT = path.join(__dirname, '..')
 const results = []
@@ -152,8 +157,10 @@ async function main() {
     await win.waitForTimeout(1200)
     // ⚠️ e2e 与用户 dev 实例共用 renderer 存储(dev userData 恒为 forsion-desktop-dev),「上次 Space」
     // 是谁最后用谁说了算 → 必须确定性切到 Tangu 聊天 Space 再断言(见 file-citation.e2e 同款守卫)。
-    const spaceBtn = win.locator('.rb-space[aria-label="Agent"]').first()
-    if (await spaceBtn.count().catch(() => 0)) { await spaceBtn.click().catch(() => {}); await win.waitForTimeout(1000) }
+    // (10-05:原来按 aria-label="Agent" 找 Ribbon 钮,那个 Space 早已改叫 Tangu、启动也改落在主页 → 一个都点不中、
+    //  W0 起全红。改用台架库里按 Space id 找的 enterSpace。)
+    await enterSpace(win, 'tangu')
+    await win.waitForTimeout(1000)
     if (!(await win.locator('.t2s-mode').first().count().catch(() => 0))) {
       await win.click('.dv-edge-left').catch(() => {})
       await win.waitForTimeout(700)
@@ -196,6 +203,51 @@ async function main() {
       await win.screenshot({ path: '/tmp/webcite-fail.png' }).catch(() => {})
       throw new Error('链接没渲染出来,截图 /tmp/webcite-fail.png')
     }
+
+    // 主进程的 shell.openExternal 换成只记账的桩:不换,下面 D1 那一下会真把这台机器的系统浏览器弹出来。
+    // 换没换成先核一遍,没换成就不点。
+    const stubbed = await app.evaluate(({ shell }) => {
+      globalThis.__extOpened = []
+      shell.openExternal = async (u) => { globalThis.__extOpened.push(String(u)) }
+      return String(shell.openExternal).includes('__extOpened')
+    }).catch(() => false)
+    const extOpened = () => app.evaluate(() => globalThis.__extOpened.slice()).catch(() => [])
+    // 拨「应用内链接用内置浏览器打开」:同窗写 localStorage 不触发 storage 事件,补派一个 ——
+    // 走的是应用自己的跨窗口同步那条路(builtins/index.tsx),不用重载、已挂的 webview 也不会重挂。
+    const setLinks = (v) => win.evaluate((val) => {
+      const k = 'builtin.browser.inAppLinks'
+      if (val === null) localStorage.removeItem(k); else localStorage.setItem(k, val)
+      window.dispatchEvent(new StorageEvent('storage', { key: k }))
+    }, v)
+
+    // D1 缺省(开关没存过):聊天里的网页引用交给系统浏览器,不进 Desk、也不开主区标签
+    if (!stubbed) {
+      check('D1 缺省(开关没存过):点聊天里的网页引用 → 交给系统浏览器', false, '主进程的 openExternal 没换成桩,没点(免得真弹出系统浏览器)')
+    } else {
+      await links.nth(0).click()
+      await win.waitForTimeout(1500)
+      const ext = await extOpened()
+      const wvN = await win.evaluate(() => document.querySelectorAll('webview').length)
+      check('D1 缺省(开关没存过):点聊天里的网页引用 → 交给系统浏览器,不在 Desk / 主区开内置浏览器',
+        ext.length === 1 && ext[0].startsWith(`${base}/page.html`) && wvN === 0, `交给系统浏览器的=${JSON.stringify(ext)} webview 数=${wvN}`)
+    }
+    // D2 缺省:应用页面里 window.open 的网页链接 —— 笔记里的链接就是这个写法(MarkdownBlock / linkCard / 多维表的网址格),
+    // 主进程把它回投给渲染层的统一出口 → 交给系统浏览器。
+    const openFromApp = async (tag) => {
+      const n0 = (await extOpened()).length
+      await win.evaluate((u) => { window.open(u, '_blank', 'noopener') }, `${base}/page2.html?${tag}`)
+      await win.waitForTimeout(2000)
+      return {
+        ext: (await extOpened()).slice(n0),
+        tab: await win.evaluate((t) => [...document.querySelectorAll('webview')].some((w) => (w.getAttribute('src') || '').includes(t)), tag),
+      }
+    }
+    if (stubbed) {
+      const d2 = await openFromApp('note=1')
+      check('D2 缺省:应用页面里 window.open 的网页链接(笔记里的链接同款写法)→ 交给系统浏览器,不开内置浏览器标签',
+        d2.ext.length === 1 && d2.ext[0].includes('note=1') && !d2.tab, `交给系统浏览器的=${JSON.stringify(d2.ext)} 开了标签=${d2.tab}`)
+    }
+    await setLinks('1') // 勾上:下面 W1–W5 量的是勾上以后的行为
 
     // W1 冷路径:点第一条 → Desk 开内置浏览器,落在引语上(~50%)而不是页首
     await links.nth(0).click()
@@ -275,6 +327,29 @@ async function main() {
     }))
     check('W4 Desk 不在场时(非聊天面同款条件)链接退回原出口,不写进看不见的 Desk',
       fb.outside > 0, `Desk 外的 webview=${fb.outside}`)
+
+    // D3 对照:勾上以后,同一个写法开成内置浏览器标签(说明 D2 量的是开关,不是恒真)
+    const d3 = await openFromApp('note=2')
+    check('D3 勾上以后:同样的 window.open → 开成内置浏览器标签,不交给系统浏览器',
+      d3.tab && d3.ext.length === 0, `开了标签=${d3.tab} 交给系统浏览器的=${JSON.stringify(d3.ext)}`)
+
+    // G1 内置浏览器里的页面自己开的新窗口:开关关着也必须留在内置浏览器里。远程设备页的附件就是这条路
+    // (window.open → 主进程回投),它靠这个分区里注入的凭据,交给系统浏览器就是 401。
+    // W4 之后主区正好有一个内置浏览器标签;把开关拨成关,在那个页面里 window.open。
+    await setLinks('0')
+    const extBefore = (await extOpened()).length
+    const popUrl = `${base}/page2.html?popup=1`
+    const popped = await app.evaluate(async ({ webContents }, url) => {
+      const g = webContents.getAllWebContents().find((w) => !w.isDestroyed() && w.getType() === 'webview')
+      if (!g) return false
+      await g.executeJavaScript(`window.open(${JSON.stringify(url)}, '_blank'); 1`, true)
+      return true
+    }, popUrl).catch(() => false)
+    await win.waitForTimeout(2500)
+    const popTab = await win.evaluate(() => [...document.querySelectorAll('webview')].some((w) => (w.getAttribute('src') || '').includes('popup=1')))
+    const extNew = (await extOpened()).slice(extBefore)
+    check('G1 开关关着时,内置浏览器里的页面自己开的新窗口仍开成内置浏览器标签(不交给系统浏览器)',
+      popped && popTab && extNew.length === 0, `页面里开了=${popped} 新标签在=${popTab} 交给系统浏览器的=${JSON.stringify(extNew)}`)
 
 
 
