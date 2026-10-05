@@ -8,6 +8,11 @@ vi.mock('./markdownEditorSurface', () => ({
   mountPluginMarkdownEditor: surface.mount,
 }))
 vi.mock('../api', () => ({ amadeus: undefined }))
+// The revoked-context case calls ctx.table / ctx.dashboard / ctx.ui.mountChatBox: stub their surfaces so the test never
+// loads the real table, dashboard and chat graphs (over a second of imports, a timeout on a loaded machine).
+vi.mock('./tableSurface', () => ({ mountPluginTable: surface.mount }))
+vi.mock('./dashboardSurface', () => ({ mountPluginDashboard: surface.mount }))
+vi.mock('./chatBoxSurface', () => ({ mountPluginChatBox: surface.mount }))
 const { usePluginStore } = await import('./pluginStore')
 function context(id: string, fail = false): PluginContext {
   let ref!: PluginContext
