@@ -2,7 +2,7 @@
  * 「整个 Space 开到新窗口」+「Ribbon 中间的最近使用」—— 真 Electron × 真主进程 × 真多窗口 IPC。
  *
  * 钉的都是台架外够不着的那一半:
- *  R  最近使用:切过的 Space 按「最近的在上」排进中间那段空当,**只列没露在条上的**(上区常驻的、主位槽里的不重复列);
+ *  R  最近使用:切过的 Space 按「最近的在上」排进中间那段空当,**照字面列**(10-05 用户定:当前的、已经露在条上的也照列);
  *     个数跟设置走(设置浮窗里改 → 主窗靠 storage 事件跟上);窗口矮了就减到没有,回高了再出来;任何高度下都不压到上下两区。
  *  W  开窗三条路(⌘/Ctrl+点击、右键菜单、拖出条外)都开出 `?window=detached&space=<id>` 的窗;一个 Space 一扇(再触发 = 叫到前面);
  *     那扇窗没有 Ribbon、摆的是这个 Space 存着的布局(不是默认布局);主窗的活动 Space 与共用的活动键不被它改掉。
@@ -119,7 +119,8 @@ async function main() {
     await win.waitForTimeout(800)
     await clickSpace(B)
     await clickSpace(C)
-    check('R2 切的都是条上露着的 → 中间不重复列它们', (await recents()).length === 0, await recents())
+    check('R2 切过条上露着的 A → B → C:中间照字面列 = C、B、A(最近的在上,当前的也列)', (await recents()).join() === [C, B, A].join(), await recents())
+    check('R2a 当前 Space 在条上、中间各亮一处', (await win.locator('.rb-space.on').count()) === 2 && (await win.locator(`.rb-recent-slot[data-recent-id="${C}"] .rb-space.on`).count()) === 1)
     // 排在「…」里的:展开上区挨个进一遍(点条上的按钮不收起),再收回
     await win.locator('.rb-top .rb-more').click()
     await win.waitForTimeout(500)
@@ -134,7 +135,8 @@ async function main() {
     check('R2c 当前 Space 不在条上露着 → 它在中间亮着(唯一一处)', (await win.locator('.rb-space.on').count()) === 1 && (await win.locator(`.rb-recent-slot[data-recent-id="${H[0]}"] .rb-space.on`).count()) === 1)
     await clickSpace(C)
     rc = await recents()
-    check('R2d 再切回条上露着的 C:它最近,但不进中间;同一个 Space 的图标全条只有一处', rc.join() === H.slice(0, 3).join() && (await win.locator('.rb-space.on').count()) === 1, rc)
+    const M = [C, ...H] // 此刻的「最近使用」:C 最近,后面是「…」里进过的那 5 个
+    check('R2d 再切回条上露着的 C:它排到中间第一个,后面两个顺延', rc.join() === M.slice(0, 3).join() && (await win.locator('.rb-space.on').count()) === 2, rc)
     const boxes = () => win.evaluate(() => {
       const r = (s) => { const e = document.querySelector(s); if (!e) return null; const b = e.getBoundingClientRect(); return { top: b.top, bottom: b.bottom } }
       const slots = Array.from(document.querySelectorAll('.rb-recent .rb-recent-slot')).map((e) => { const b = e.getBoundingClientRect(); return { top: b.top, bottom: b.bottom } })
@@ -207,14 +209,14 @@ async function main() {
       check('S1 设置 → 外观:有「Ribbon 中间显示最近使用的 Space」,档位 = 不显示 / 1…5', labels.join() === '不显示,1,2,3,4,5', labels)
       await row.locator('.seg button:text-is("1")').click()
       await win.waitForTimeout(600)
-      check('S2 设置里改成 1 → 主窗当场只露最近的 1 个', (await recents()).join() === H[0], await recents())
+      check('S2 设置里改成 1 → 主窗当场只露最近的 1 个', (await recents()).join() === M[0], await recents())
       await row.locator('.seg button:text-is("不显示")').click()
       await win.waitForTimeout(600)
       check('S3 改成不显示 → 中间一个不露', (await recents()).length === 0, await recents())
       await row.locator('.seg button:text-is("5")').click()
       await win.waitForTimeout(600)
       const five = await recents()
-      check('S4 改成 5 → 露出 5 个(上限),顺序仍是最近的在上', five.join() === H.join(), { got: five, want: H })
+      check('S4 改成 5 → 露出 5 个(上限),顺序仍是最近的在上', five.join() === M.slice(0, 5).join(), { got: five, want: M.slice(0, 5) })
       await row.locator('.seg button:text-is("3")').click()
       await sp.close().catch(() => {})
       await win.waitForTimeout(500)

@@ -268,14 +268,10 @@ export function Ribbon() {
   // ---- 中间那段空当:最近使用的 Space(10-05 用户要求),最近的在上。个数 = 设置的上限(缺省 3,最多 5)与中间还放得下的
   //      格数取小,窗口矮了就一个个减到没有;有一区展开(铺满整条)时不露。只是快捷入口:不进拖拽 / 溢出 / 快捷键编号,
   //      也不是 .rb-slot(拖拽量槽、台架数格子都按它)。
-  //      只列此刻**没露在条上**的(同 macOS 程序坞的「最近使用」:钉在坞上的不再重复一遍):上区常驻的那一窗与主位槽里的
-  //      不算 —— 它们本来就一点即达,再列一遍只是同一个图标亮两处。常驻的那一窗按没翻过的位置算,滚轮翻看时中间不跟着跳。
-  //      要改成照字面「最近用过的都列」:去掉下面那行 filter 即可。
-  const shownOnBar = new Set([...cut(topE, capT, false, 0).shown.map((e) => e.id), ...homeItems.map((i) => i.id)])
+  //      照字面列(10-05 用户定):最近用过的都列,当前的、已经露在条上的也照列 —— 同一个 Space 的图标会在条上出现两处。
   const recentItems = recentIds
     .map((id) => items.find((i) => i.id === `space:${id}`))
     .filter((i): i is RibbonItem => !!i)
-    .filter((i) => !shownOnBar.has(i.id))
     .slice(0, recentRoom(recentCount, slots, capT, capB, !!openZone))
   /** 滚轮在区上 = 平移露出的那一窗(DOM 不滚,拖拽落点、「…」、快捷键都照旧按条目算)。
    *  10-02 第二版「丝滑 + 吸附」:手势中按像素连续跟手(CSS 过渡把每发 delta 抹平),停手 120ms 后吸附到最近的整格,
