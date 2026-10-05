@@ -15,10 +15,11 @@ import { PanelLeft, PanelRight, X, MoreHorizontal, Plus, Zap } from 'lucide-reac
 import { useSpaceStore, setActiveSpace, getActiveSpace, pinSpaceToHome } from './spaceRegistry'
 import { useRibbonStore } from './ribbonRegistry'
 import { useCommandStore } from './commandRegistry'
-import { moreCommandGroups, moreCommandOn, moreCommandTitle, moreRowLabel, presentedCommand } from './moreSheet'
+import { accountMenuItems, moreCommandGroups, moreCommandOn, moreCommandTitle, moreItems, moreRowLabel, presentedCommand } from './moreSheet'
 import { getView } from './viewRegistry'
 import { label, identitySig, type RibbonItem } from './types'
 import { nativeSheetPresenter, presentNativeMenu, type NativeMenuItem } from './nativeSheet'
+import type { SheetMenuItem } from './nativeSheetMenu'
 import { setNativeChromeShell, useNativeChromeInstalled, useNativeChromeSpaces, nativeChromeDrawsSpaces, type NativeChromeShellLabels, type NativeChromeSpace } from './nativeChrome'
 import { ExtendViewHost } from './ExtendViewHost'
 import { presentInlineExtension } from './extendView'
@@ -135,7 +136,7 @@ function Drawer({ side, docked, showFoot, page }: { side: 'left' | 'right'; dock
   const footAlive = useFootAlive() // 无条件调用:hooks 不能进条件分支
   const nativeSpaces = useNativeChromeSpaces()
   // 原生宿主自己画底部导航栏时(Android)整排都不画:切 Space 走底栏,账号是顶栏右侧的头像(宿主画,
-  // 见 mobile/src/nativeChrome.ts),设置与 mobileFoot 项在「⋯」的最前面(见 moreItems)。
+  // 见 mobile/src/nativeChrome.ts),设置与 mobileFoot 项进头像菜单(见 accountMenuRows)。
   const withFoot = side === 'left' && !!showFoot && footAlive && !nativeSpaces
   // 只订阅稳定量:该侧 leaf 的 id 签名(增删触发)+ active id(切换触发)。**不**订阅 title,
   // 否则视图渲染期调 leaf.setTitle → 宿主重渲染 → 再 setTitle 的无限循环(React #185)。
@@ -436,19 +437,17 @@ function DrawerFoot() {
   )
 }
 
-/** 「⋯」菜单收哪些 ribbon 项:底部区,去掉已迁去左抽屉底部常驻的账号 / 设置 / mobileFoot 项。
- *  footless(见 footlessNow)时没有那一排:设置与 mobileFoot 项住在这里,并排到最前(天天要用的两个入口不该埋在中间);
- *  账号不进来 —— 宿主把它画成顶栏右侧的头像。 */
-const isMoreItem = (i: RibbonItem, footless = false): boolean =>
-  i.side === 'bottom' && i.id !== 'rb-account' && (footless || (i.id !== 'rb-settings' && !i.mobileFoot))
-const moreItems = (all: RibbonItem[], footless: boolean): RibbonItem[] => {
-  const items = all.filter((i) => isMoreItem(i, footless))
-  if (!footless) return items
-  const lead = (i: RibbonItem): boolean => i.id === 'rb-settings' || !!i.mobileFoot
-  return [...items.filter(lead), ...items.filter((i) => !lead(i))]
+/** 头像菜单里替左栏底部那一排收下的行(设置、互联设备…);不是「原生底栏 × 有账号项」的宿主时为空。
+ *  判据与「⋯」同一份(moreSheet.ts 的 accountMenuItems / moreItems):一项要么在这里、要么在「⋯」,不会两头都没有。
+ *  feature 层的账号卡取用(引擎不 import feature);行 id = ribbon id,原生测试锚点 `nativeSheet.item.<id>` 不变。 */
+export function accountMenuRows(): SheetMenuItem[] {
+  return accountMenuItems(useRibbonStore.getState().items, nativeChromeDrawsSpaces()).map((it) => ({
+    id: it.id,
+    label: it.tooltip ? moreRowLabel(label(it.tooltip)) : it.id,
+    ...(it.icon ? { icon: createElement(it.icon, { size: 14 }) } : {}),
+    run: () => it.onClick?.(),
+  }))
 }
-/** 原生宿主画底部导航栏时(Android)左栏没有底部那一排(见 Drawer 的 withFoot)。 */
-const footlessNow = (): boolean => nativeChromeDrawsSpaces()
 
 /** 「＋ 新建标签页」:desktop 同款 —— 当前 Space 有 newPage 则调,否则开 launcher 新标签。 */
 function newMainTab(): void {
@@ -496,8 +495,7 @@ async function presentNativeTabs(tr: Tr): Promise<boolean> {
  *  ribbon 底部项一节在前;其后每个声明了 `moreGroup` 的命令组一节(外置插件的命令,节标题 = 插件名),
  *  行 id 加 `cmd:` 前缀与 ribbon id 分开,选中走命令表 run(同命令面板),但只在注册表里那条仍是呈现时的对象时才跑。 */
 async function presentNativeMore(tr: Tr): Promise<boolean> {
-  const footless = footlessNow()
-  const items = moreItems(useRibbonStore.getState().items, footless)
+  const items = moreItems(useRibbonStore.getState().items, nativeChromeDrawsSpaces())
   const groups = moreCommandGroups(useCommandStore.getState().commands)
   if ((!items.length && !groups.length) || items.some((i) => i.component)) return false
   const out = await presentNativeMenu({
@@ -526,10 +524,9 @@ async function presentNativeMore(tr: Tr): Promise<boolean> {
 
 /** 底部弹出的「⋯」菜单:渲染 ribbon 底部注册项(明暗/语言/命令/反馈…)+ 声明了 `moreGroup` 的命令组(插件命令)。
  *  账号(rb-account)与设置(rb-settings)住在左抽屉底部常驻(用户拍板 2026-08-05),此处滤掉防重复;
- *  没有那一排的宿主(见 footlessNow)设置回到这里。 */
+ *  原生宿主画底栏时它们跟着头像走(见 moreSheet.ts 的 moreItems)。 */
 function MoreSheet({ onClose }: { onClose: () => void }) {
-  const footless = footlessNow() // 开着这张 sheet 时切不了 Space,取一次即可
-  const items = moreItems(useRibbonStore((s) => s.items), footless)
+  const items = moreItems(useRibbonStore((s) => s.items), nativeChromeDrawsSpaces()) // 宿主形态在这张 sheet 开着时不会变,取一次即可
   const groups = moreCommandGroups(useCommandStore((s) => s.commands))
   return (
     <div className="mb-sheet-scrim" onClick={onClose}>

@@ -101,15 +101,20 @@ Kotlin 在 `NativeChrome*` / `NativeSheet*`。没装宿主（桌面、Web、浏�
   WebView 由插件放在顶栏下方（自管 insets，`--mb-top` 归零）。引导、成就、互联设备、旁聊等自带头部的全屏层用 `useNativeChromeClaim({ mode: 'hidden' })` 收起顶栏；
   **设置**改用 `page` 模式（标题 + 返回，分类页再加 `close` ×），Web 头部只在 `data-native-chrome` 时隐藏。
   **底部导航栏**：Space 切换由同一插件画成原生底栏（外壳把 Space 列表随 `spaces` 推过去，图标由宿主按 Space 的图标组件序列化）。
-  点 = 切 Space；点当前那格不做事；长按 = 固定到桌面。超过 5 个时横向滚动（一屏 5.5 格）：当前格在前五个里时停在最左，不把「主页」滚出屏幕。
+  点 = 切 Space；点当前那格不做事；长按 = 固定到桌面。超过 5 个时**第一格（主页）固定不动**，其余格子在它右边横向滚动（固定 1 格 + 滚动 4.5 格）：
+  当前格在前五个里时不滚；再往后只滚到「当前格完整可见、下一格露半个」为止。固定按位置不按 id（JS 列出的第一个 Space）。
   只在 `shell` 模式的**第一层页面**且 Space ≥ 2 时出现，键盘弹起、`page` / `hidden` 时收起；WebView 的下边距由插件一并管理。当前 Space 镜像在 `.mb-shell[data-space]`（仪器锚点）。
 - **两级导航**（2026-10-04；只在画底栏的原生宿主下生效，Web / 桌面手机框 / 手机浏览器仍是抽屉）：有左栏的 Space 进来先看左栏 —— 全屏、标题 = Space 名、带底栏；
   点条目进主区（顶栏左侧变返回箭头、底栏收起）；系统返回 = 标签页内后退 → 回列表 → 在列表再按一次退到后台。冷启动、切 Space、重置布局都落在列表层。
   左栏不是「点开一项进主区」的列表时，在 Space 定义里写 `listFirst: false`（日历的待办、图像工作台的对话）：主区是第一层，左栏仍是抽屉。
   没有左栏的 Space（主页、Muse…）主区就是第一层。层级镜像在 `.mb-shell[data-nav]` = `list` / `detail` / 缺省（仪器锚点）。
-- **账号 / 设置 / 互联设备**（2026-10-04）：原生宿主下左栏底部那一排不再渲染。账号是第一层页面顶栏最右的头像（有头像图用图，否则首字母；未登录是人形图标），
+- **账号 / 设置 / Forsion Unit 切换**（2026-10-04，10-05 改）：原生宿主下左栏底部那一排不再渲染。账号是第一层页面顶栏最右的头像（有头像图用图，否则首字母；未登录是人形图标），
   点开是同一份账号菜单 —— 账号卡隐身挂在 `MobileRoot`，经 `@/services/accountChip` 把「显示什么 / 点了做什么」交给 `src/nativeChrome.ts`；头像图在 JS 侧裁方、缩到 96px 再过桥。
-  设置与互联设备排在「⋯」的最前面，任何层级都点得到。
+  **设置与「Forsion Unit 切换」是这张菜单里的两行**（同微信「我 → 设置」；10-04 那一版排在「⋯」最前，一天后按用户意见搬走），所以只在第一层页面点得到；
+  未登录 / 登录过期时点头像同样开菜单（登录是其中一行），不再直接跳登录。判据只有一份：`lcl/engine/moreSheet.ts` 的 `accountMenuItems` / `moreItems`
+  —— 一项要么在头像菜单、要么在「⋯」；宿主没有账号项（没有头像）时这两项留在「⋯」最前。
+- **本地 / 云端**（2026-10-05）：原先占着每个左栏顶部一行的「本地 | 云端」胶囊，手机上并进了「Forsion Unit 切换」弹层的「智库」一段（桌面 08-23 就并进了 Unit 切换器）。
+  它只换笔记库（`window.amadeusVaultMode.switch`），与同一弹层里的「在哪运行」是两根轴。弹层没上架（无 `unitsList` 桥）时 `VaultSideSwitch` 仍画胶囊，库切换不会两头都没有。
 - **`NativeSheet`**：通用 Compose 半屏底单，三种 `kind`：`menu`（分组 / 勾选 / 子菜单 / 搜索 / 行尾按钮）、`prompt`、`confirm`。
   调用方用 `presentNativeMenu` / `presentNativePrompt` / `presentNativeConfirm`，拿到 `{ handled: false }` 就渲染自己的 Web UI。
   已接入：标签页底单、更多底单（无自定义组件项时）、`ContextMenu` 原语（`pickNativeCtxItem`）、`askString`、无 children 的 `ConfirmDialog`。

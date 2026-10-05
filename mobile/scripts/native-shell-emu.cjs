@@ -419,10 +419,12 @@ const tabCountText = (list) => {
     assert.ok(await h.waitPage(cdp, `!(${drawerOpen})`, 5000), 'drawer stayed open')
     await h.pause(500)
   }
-  /** No row at the foot of the left panel under the native bottom bar: settings and connected devices lead the ⋯ sheet
-   *  (reachable on every shell level), the account is the avatar at the end of the top bar. */
-  async function moreItem(id) {
-    await tapId('nativeChrome.more')
+  /** No row at the foot of the left panel under the native bottom bar. The account is the avatar at the end of the top
+   *  bar (first-level pages only) and its menu carries settings and the Unit switcher (2026-10-05, like WeChat's
+   *  "Me → Settings"; they led the ⋯ sheet for one day). From a detail page go back to the Space's list first. */
+  async function accountItem(id) {
+    if (!h.byId(ui(), 'nativeChrome.account')) await openDrawer()
+    await tapId('nativeChrome.account')
     await tapId(`nativeSheet.item.${id}`, await waitSheet(true))
     await waitSheet(false)
   }
@@ -433,13 +435,22 @@ const tabCountText = (list) => {
       const bar = h.byId(list, 'nativeChrome.spaces')
       assert.ok(bar, 'no native space bar')
       if (dir) {
-        const [from, to] = dir > 0 ? [bar.rect.left + 80, bar.rect.right - 80] : [bar.rect.right - 80, bar.rect.left + 80]
+        // the first cell (Home) is pinned once the bar scrolls: swipe over the part that does scroll
+        const [near, far] = [Math.round(bar.rect.left + (bar.rect.right - bar.rect.left) * 0.3), bar.rect.right - 80]
+        const [from, to] = dir > 0 ? [near, far] : [far, near]
         h.adb('shell', 'input', 'swipe', String(from), String(bar.rect.cy), String(to), String(bar.rect.cy), '250')
         await h.pause(700)
         list = ui()
       }
       const n = h.byId(list, `nativeChrome.space.${id}`)
-      if (n && n.rect.right - n.rect.left > 40) { h.tapNode(n); return }
+      if (!n) continue
+      // More than five: the first cell is pinned and the others slide under it. A cell's reported bounds reach up to
+      // 24dp under the pinned one (Compose relaxes a scroll container's clip by half a touch target for touch bounds):
+      // only the part to the right of the pinned cell is on screen, and that is where a finger goes.
+      const cells = h.byIdPrefix(list, 'nativeChrome.space.')
+      const first = cells[0] && cells[0]['resource-id'] === n['resource-id']
+      const from = cells.length > 5 && !first ? Math.max(n.rect.left, Math.ceil(bar.rect.left + (bar.rect.right - bar.rect.left) / 5.5)) : n.rect.left
+      if (n.rect.right - from > 40) { h.tapAt(Math.round((from + n.rect.right) / 2), n.rect.cy); return }
     }
     assert.fail(`Space "${id}" is not in the native bar`)
   }
@@ -500,7 +511,7 @@ const tabCountText = (list) => {
 
   // Units sheet = an overlay that still claims `hidden` (it draws its own header). Settings no longer does.
   await check('hidden overlay (units sheet) hides the bar; WebView then starts at the status bar (measured)', async () => {
-    await moreItem('rb-units-mobile')
+    await accountItem('rb-units-mobile')
     assert.ok(await h.waitPage(cdp, "!!document.querySelector('[data-units-sheet]')", 5000), 'units sheet did not open')
     const r = await h.waitNodes((l) => (!h.byId(l, 'nativeChrome.bar') ? l : null), { timeout: 6000 })
     assert.ok(r.hit, 'bar still visible over the units sheet')
@@ -525,7 +536,7 @@ const tabCountText = (list) => {
     const L = lang === 'en'
       ? { title: 'Settings', toApp: 'Back to app' }
       : { title: '设置', toApp: '返回应用' }
-    await moreItem('rb-settings')
+    await accountItem('rb-settings')
     assert.ok(await h.waitPage(cdp, settingsOpen, 5000), 'settings did not open')
     let r = await h.waitNodes((l) => (h.byId(l, 'nativeChrome.back') && textOf(l, 'nativeChrome.title') === L.title ? l : null), { timeout: 6000 })
     assert.ok(r.hit, `settings home: no page bar titled ${L.title} (title=${textOf(r.nodes, 'nativeChrome.title')})`)
@@ -623,6 +634,11 @@ const tabCountText = (list) => {
     h.tapNode(avatar)
     const accountSheet = await waitSheet(true)
     assert.ok(h.byId(accountSheet, 'nativeSheet.item.logout'), `the avatar did not open the account sheet (${ids(accountSheet)})`)
+    // settings and the Unit switcher live in this menu (no row at the foot of the left panel to hold them), in that order
+    const rows = ids(accountSheet)
+    assert.ok(rows.includes('rb-settings') && rows.indexOf('rb-units-mobile') === rows.indexOf('rb-settings') + 1, `settings + Unit switcher expected in the account sheet (${rows})`)
+    assert.ok(rows.indexOf('rb-settings') < rows.indexOf('logout'), 'sign out must stay the last row')
+    assert.equal(rowLabel(accountSheet, 'nativeSheet.item.rb-settings'), '设置')
     shot('03b-account-sheet')
     h.key(4)
     await waitSheet(false)
@@ -671,7 +687,7 @@ const tabCountText = (list) => {
     h.adb('shell', 'am', 'start', '-n', ACTIVITY)
     assert.ok((await h.waitNodes((l) => !!h.byId(l, 'nativeChrome.spaces'), { timeout: 10000 })).hit, 'the app did not come back with its bottom bar')
     assert.equal(await cdp.eval(nav), 'list')
-    // a Space without a left list (Home): its main view is the first level — bottom bar, no left button, settings in ⋯
+    // a Space without a left list (Home): its main view is the first level — bottom bar, no left button, the avatar
     await toSpace('home')
     at = await level()
     assert.equal(at.nav, '')
@@ -683,8 +699,7 @@ const tabCountText = (list) => {
     await tapId('nativeChrome.more')
     let list = await waitSheet(true)
     assert.ok(h.byId(at.list, 'nativeChrome.account'), 'Home is a first-level page: avatar expected')
-    assert.equal(ids(list)[0], 'rb-settings', `settings must lead the ⋯ sheet (${ids(list)})`)
-    assert.ok(h.byId(list, 'nativeSheet.item.rb-units-mobile'), `connected devices missing from the ⋯ sheet (${ids(list)})`)
+    assert.ok(!ids(list).includes('rb-settings') && !ids(list).includes('rb-units-mobile'), `settings / the Unit switcher are in the avatar menu, not in ⋯ (${ids(list)})`)
     h.key(4)
     await waitSheet(false)
     // a start-up lands on the list too, not on the main view that was open (start-up Space pinned to Tangu for this:
@@ -700,6 +715,32 @@ const tabCountText = (list) => {
     } finally {
       await cdp.eval(`(${startPref === null ? "localStorage.removeItem('forsion_default_space')" : `localStorage.setItem('forsion_default_space', ${JSON.stringify(startPref)})`}, true)`)
     }
+  })
+
+  // 2026-10-05 (user: "why is the local | cloud capsule still there? wasn't it folded into Unit?"): on a phone the two
+  // sides are rows of the Unit sheet (desktop moved them into its Unit switcher on 08-23); the capsule no longer takes
+  // the top of every left panel.
+  await check('vault side: no capsule on top of the left panel; the Unit sheet carries Local / Cloud and switches both ways', async () => {
+    await tanguDrawer()
+    assert.ok(!(await cdp.eval("!!document.querySelector('.mb-drawer--left [aria-label=\"vault side\"]')")), 'the local | cloud capsule is still on top of the left panel')
+    await accountItem('rb-units-mobile')
+    const side = "(document.querySelector('[data-units-sheet] [data-vault-side]')?.dataset.vaultSide || '')"
+    assert.ok(await h.waitPage(cdp, `!!${side}`, 5000), 'the Unit sheet has no vault section')
+    const start = await cdp.eval(side)
+    const other = start === 'cloud' ? 'local' : 'cloud'
+    const row = (s) => `document.querySelector('[data-units-sheet] [data-vault-row="${s}"]')`
+    const settled = (s) => `${side} === '${s}' && ${row(s)}.getAttribute('aria-pressed') === 'true' && !${row(s)}.hasAttribute('aria-busy')`
+    assert.ok(await cdp.eval(settled(start)), 'the current side is not the marked row')
+    await h.pause(500)
+    shot('02c-units-vault')
+    await tapEl(row(other))
+    assert.ok(await h.waitPage(cdp, settled(other), 20000), `tapping "${other}" did not switch the vault side`)
+    assert.equal(await cdp.eval("localStorage.getItem('amadeus_vault_mode') || ''"), other, 'the choice was not remembered')
+    await tapEl(row(start)) // and back: the rest of the run works on the fixture vault
+    assert.ok(await h.waitPage(cdp, settled(start), 20000), `could not switch back to "${start}"`)
+    h.key(4)
+    assert.ok(await h.waitPage(cdp, "!document.querySelector('[data-units-sheet]')", 5000), 'the Unit sheet did not close')
+    assert.ok((await h.waitNodes((l) => h.byId(l, 'nativeChrome.bar'), { timeout: 6000 })).hit, 'the bar did not return after the Unit sheet')
   })
 
   await check('keyboard: the focused composer stays visible above the keyboard', async () => {
@@ -723,7 +764,7 @@ const tabCountText = (list) => {
   })
 
   // The Space switcher is a native bottom navigation bar (it used to be a web row at the bottom of the drawer).
-  await check('bottom space bar: native, switches Space, the first Spaces stay in view, away with the keyboard and in settings', async () => {
+  await check('bottom space bar: native, switches Space, Home pinned at the left, away with the keyboard and in settings', async () => {
     await goHome()
     const density = Number(h.adb('shell', 'wm', 'density').match(/(\d+)\s*$/)[1]) / 160
     const screenH = Number(h.adb('shell', 'wm', 'size').match(/(\d+)x(\d+)\s*$/)[2])
@@ -780,8 +821,9 @@ const tabCountText = (list) => {
       assert.ok((await h.waitNodes((l) => !!h.byId(l, 'nativeChrome.spaces'), { timeout: 10000 })).hit, 'the app did not come back with its bottom bar')
       assert.equal(await cdp.eval("document.querySelector('.mb-shell').dataset.space"), 'calendar', 'the app came back on another Space')
     }
-    // more Spaces than fit → the bar scrolls. While one of the first five is active nothing scrolls: Home stays in view
-    // (the bar used to centre the active Space, which scrolled Home away from the fourth Space on — "the Home page is gone").
+    // more Spaces than fit → Home (the first cell) stays put and the rest scroll beside it. While one of the first five is
+    // active nothing scrolls (the bar used to centre the active Space, which scrolled Home away from the fourth Space on —
+    // "the Home page is gone"; then it only scrolled as far as needed, and Home still left on the sixth).
     // The bar leaves composition on a detail level / in page mode and is recreated at offset 0: a Space past the fifth
     // must be scrolled back into view.
     if (ids.length > 5) {
@@ -794,7 +836,13 @@ const tabCountText = (list) => {
       const last = ids[ids.length - 1]
       await toSpace(last)
       assert.ok(widthOf(last) >= fullWidth - 2, `active Space "${last}" is not fully in view`)
-      await moreItem('rb-settings')
+      // Home is pinned (2026-10-05): with the last Space active the rest of the bar has scrolled, Home has not moved
+      // (reported width: a neighbour that slid under Home claims up to 24dp of its cell in the accessibility tree — see
+      // tapSpace — so "most of a cell at the left edge" is what can be read here; the real-finger tap below settles it)
+      const homeAt = () => { const n = h.byId(ui(), 'nativeChrome.space.home'); return n ? { left: n.rect.left, wide: n.rect.right - n.rect.left >= fullWidth * 0.6 } : null }
+      const pinnedHome = { left: bar.rect.left, wide: true }
+      assert.deepEqual(homeAt(), pinnedHome, `Home is not pinned at the left edge while "${last}" is active`)
+      await accountItem('rb-settings')
       assert.ok(await h.waitPage(cdp, settingsOpen, 5000), 'settings did not open')
       assert.ok((await h.waitNodes((l) => h.byId(l, 'nativeChrome.back') && !h.byId(l, 'nativeChrome.spaces'), { timeout: 12000 })).hit, 'the space bar stayed up in page mode')
       await tapId('nativeChrome.back')
@@ -802,7 +850,14 @@ const tabCountText = (list) => {
       assert.ok(r.hit, 'the space bar did not come back after settings')
       await h.pause(600)
       assert.ok(widthOf(last) >= fullWidth - 2, `active Space "${last}" is not fully in view after page mode (${widthOf(last)} of ${fullWidth}px)`)
+      assert.deepEqual(homeAt(), pinnedHome, 'Home is not pinned at the left edge after page mode')
       shot('03g-space-bar-scrolled')
+      // … and the whole pinned cell is Home's to tap: a finger near its right edge (where a scrolled-under neighbour's
+      // reported bounds reach) must switch to Home, not to that neighbour
+      h.tapAt(bar.rect.left + fullWidth - 24, h.byId(ui(), 'nativeChrome.space.home').rect.cy)
+      assert.ok(await h.waitPage(cdp, "document.querySelector('.mb-shell').dataset.space === 'home'", 6000), `a tap on the right part of the pinned Home cell did not switch to Home (now: ${await cdp.eval("document.querySelector('.mb-shell').dataset.space")})`)
+      await h.pause(800)
+      await toSpace(last)
       if ((await cdp.eval(nav)) === '') await closeDrawer() // a drawer Space: close its drawer again
     }
   })
@@ -1246,7 +1301,7 @@ const tabCountText = (list) => {
     await tapId('nativeChrome.more')
     const list = await waitSheet(true)
     assert.ok(h.byId(list, 'nativeSheet.item.rb-mode'), 'theme mode command missing')
-    assert.ok(h.byId(list, 'nativeSheet.item.rb-settings') && !h.byId(list, 'nativeSheet.item.rb-account'), 'settings belong in ⋯, the account does not (it is the avatar)')
+    assert.ok(!h.byId(list, 'nativeSheet.item.rb-settings') && !h.byId(list, 'nativeSheet.item.rb-account'), 'neither the account (the avatar) nor settings (in its menu) belongs in ⋯')
     // a phone has no ⌘K: the desktop tooltip's shortcut hint is dropped from the row
     const palette = rowLabel(list, 'nativeSheet.item.rb-cmd')
     assert.ok(palette && !/[⌘(（]/.test(palette), `command palette row: "${palette}"`)
@@ -1601,7 +1656,7 @@ const tabCountText = (list) => {
 
   /** Settings → Plugins → Forsion plugins as a native page (the card list that painted scrambled under software GL). */
   async function settingsPluginsPage(name) {
-    await moreItem('rb-settings')
+    await accountItem('rb-settings')
     assert.ok(await h.waitPage(cdp, settingsOpen, 5000), 'settings did not open')
     await h.pause(400)
     if (!(await cdp.eval(`!!document.querySelector('[data-settings-sub="pl-forsion"]')`))) await tapEl(`document.querySelector('[data-settings-tab="amadeus-plugins"]')`)
@@ -1769,7 +1824,7 @@ const tabCountText = (list) => {
   })
 
   await check('plugins: uninstall from Settings → Plugins removes its files; ⋯ no longer lists its commands', async () => {
-    await moreItem('rb-settings')
+    await accountItem('rb-settings')
     assert.ok(await h.waitPage(cdp, settingsOpen, 5000), 'settings did not open')
     const row = `document.querySelector('[data-plugin-id="${PLUGIN_ID}"]')`
     if (!(await cdp.eval(`!!${row}`))) {

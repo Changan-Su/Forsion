@@ -3,13 +3,14 @@
  *  - 已登录:36px 头像(URL,或渐变圆+首字母)+ 昵称 + 会员徽章(TierBadge);
  *    点击弹出账号菜单:头部(→ 设置「Forsion 云端 → 账号」)、AI 额度(点开看今日 / 本周 / 后台额度、用额度重置卡、
  *    升级会员、去「额度与积分」)、背包、切换账号、退出登录。邀请、网页个人中心在 Extend 画的那几页里。悬停露出「退出登录」。
+ *    Android 原生外壳下这张菜单还带「设置」「Forsion Unit 切换」两行(左栏没有底部那一排,用户 2026-10-05 拍板;见 accountMenuRows)。
  *    09-28 曾把额度详情和用卡收进设置页,09-29 用户要回:额度随手看、卡随手用,用完弹用卡动画。
  *  - 未登录:头像占位 + 「登录 / 注册」+ 副标题「点击登录」;不登录 Tangu 也能正常用。
  * 自管 authStatus(挂载即拉 + 监听 auth:device 推登录链接);登录/登出后回调 onAuthChange 让上层重连。
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { OverlayAt, nativeSheetPresenter, runNativeSheetMenu, type SheetMenuItem, type SheetMenuSection } from '@lcl/engine'
+import { OverlayAt, accountMenuRows, nativeSheetPresenter, runNativeSheetMenu, type SheetMenuItem, type SheetMenuSection } from '@lcl/engine'
 import { LogIn, LogOut, Loader2, Gauge, ChevronDown, ChevronRight, RotateCcw, ExternalLink, Backpack } from 'lucide-react'
 import type { AuthAccountInfo, AuthStatusInfo } from '../types'
 import { registerMessages, useI18n } from '../i18n'
@@ -292,6 +293,7 @@ export const AccountCard: React.FC<{
       const switcher = accountSwitcherModel({ ...ar, busy: loggingIn, onSelect: (id) => void login(id), onAdd: () => void login(), t })
       const sections: SheetMenuSection[] = [
         { items: [it.head, it.login, it.restart, it.quota, it.backpack, it.upgrade].filter((x): x is SheetMenuItem => !!x) },
+        { items: accountMenuRows() }, // Android 原生外壳:设置、互联设备(左栏没有底部那一排,见 lcl 的 accountMenuRows);其余宿主为空
         ...(switcher ? [{ title: switcher.title, items: switcher.items, ...(switcher.failedNote ? { footer: switcher.failedNote } : {}) }] : []),
         { items: it.logout ? [it.logout] : [] },
       ]
@@ -303,7 +305,8 @@ export const AccountCard: React.FC<{
 
   // 引擎未运行 → 点击重启引擎;过期 → 重新登录;已登录(有效)→ 弹账号菜单(无 IPC 则直开账号中心);未登录 → 登录。
   const activateOn = (el: HTMLElement): void => {
-    if (window.tangu?.authAccounts) { showMenu(el); return }
+    // 菜单里带着设置 / 互联设备时(Android 原生外壳)恒开菜单:未登录、登录过期也得进得了设置 —— 登录是菜单里的一行。
+    if (window.tangu?.authAccounts || accountMenuRows().length) { showMenu(el); return }
     if (engineDown) { void window.tangu?.backendRestart?.().finally(refresh); return }
     if (!loggedIn || expired) { void login(); return }
     if (window.tangu?.accountQuota || window.tangu?.forsionLogin) showMenu(el)
@@ -427,6 +430,12 @@ export const AccountCard: React.FC<{
           <Backpack size={14} /><span>{t('sidebar.account.menu.backpack')}</span>
         </button>
       )}
+      {/* 原生半屏呈现失败时的回落也得有这两行(设置不能两头都没有);桌面 / Web 上 accountMenuRows() 恒空 */}
+      {accountMenuRows().map((row) => (
+        <button key={row.id} className="ap-item" onClick={() => { setMenu(null); row.run?.() }}>
+          {row.icon}<span>{row.label}</span>
+        </button>
+      ))}
       <AccountSwitcher menu busy={loggingIn} onSelect={(id) => void login(id)} onAdd={() => void login()} />
       {webItems.logout && <button className="ap-item ap-danger" onClick={webItems.logout.run}>
         {webItems.logout.icon}<span>{webItems.logout.label}</span>

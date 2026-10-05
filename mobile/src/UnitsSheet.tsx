@@ -2,13 +2,16 @@
  * 互联设备(Forsion Unit)移动端弹层 —— P1-K8 起是「在哪运行」:把这台手机上的会话交给账号名下的某台电脑跑。
  * 规格:docs/ToBeImproved/设备能力MCP_P1规格_2026-09-28/K8-mobile-native.md §3.7;K8 独占本文件(INTEGRATION R-28 / R-29)。
  *
- * 自上而下三段:
+ * 自上而下四段:
  *   1. 在哪运行:Forsion 云端(缺省)+ 每台电脑一行、带状态(services/deviceStatus.ts 的口径,R-22)。
  *      点一台电脑 = unitsSheetModel.runOn:懒登记本机 → 问那台电脑认不认这台手机(需要就发起确认、轮询)→ 探一次引擎 → 生效。
  *      **生效只走本文件唯一的 selectRunLocation** = K7 的 setDraftLocation(loc, {explicit:true})(R-21:K6-S4 起焦点 = 新会话建在哪)。
- *   2. 打开设备界面(折叠,次要):P0 起的直连 / 中转行与手输地址,行为不变 —— 设备页开在 app 内 WebView(mobileShim.openUnitPage)。
- *   3. 本机:登记状态与「移除本机登记」。P1 起手机登记为 Unit(调用方,kind='phone');P2a 起可作被调用方。
- * 手机(kind='phone')与本机不出现在 1、2 两段:手机没有引擎也没有设备页。kind 缺席的老名册按电脑处理。
+ *   2. 智库:本地 / 云端 —— 原左栏顶部的「本地 | 云端」胶囊(VaultSideSwitch 的手机分支)。桌面 2026-08-23 就把它并进了
+ *      Unit 切换器,手机 2026-10-05 跟上(用户实报「胶囊怎么还在」)。只有 App 有这座桥(window.amadeusVaultMode:两个库桥
+ *      运行时互换);它只换笔记库,与上一段的「在哪运行」是两根轴。
+ *   3. 打开设备界面(折叠,次要):P0 起的直连 / 中转行与手输地址,行为不变 —— 设备页开在 app 内 WebView(mobileShim.openUnitPage)。
+ *   4. 本机:登记状态与「移除本机登记」。P1 起手机登记为 Unit(调用方,kind='phone');P2a 起可作被调用方。
+ * 手机(kind='phone')与本机不出现在 1、3 两段:手机没有引擎也没有设备页。kind 缺席的老名册按电脑处理。
  *
  * ⚠️ 本组件也被 web 手机形态经 @mobile/mobileEntry 复用:不许 import capacitor(capacitor-stub-gate,build-unit-web 实翻),
  *    原生能力一律走 window.tangu 上的可选方法(unitsList / unitSelf / unitEnsureSelf / unitForgetSelf / openUnitPage)。
@@ -19,6 +22,7 @@ import { ArrowRight, Check, ChevronDown, Cloud, Laptop, Monitor, MonitorSmartpho
 import { addRibbonIcon } from '@lcl/engine'
 import { registerMessages, useI18n } from '@/i18n'
 import { useApp } from '@/stores/appStore'
+import { usePageStore } from '@/amadeus/store/pageStore'
 import type { UnitInfo } from '@/types'
 import { cloudApiBase, focusRef, onFocusChange } from '@/services/engine/targets'
 import { installRunLocationChooser, setDraftLocation } from '@/stores/runLocationStore' // P1-K7a
@@ -89,6 +93,9 @@ registerMessages({
   'unitm.network': { zh: '暂时连不上 Forsion，请检查网络后重试', en: "Can't reach Forsion right now. Check your connection and try again" },
   'unitm.signedOut': { zh: '登录已失效，请重新登录后再试', en: 'Your sign-in has expired. Sign in again and retry' },
   'unitm.nativeOnly': { zh: '仅在 Forsion 安卓 App 中可用', en: 'Only available in the Forsion Android app' },
+  'unitm.vault': { zh: '智库', en: 'Vault' },
+  'unitm.vaultLocalDesc': { zh: '笔记存在这台手机上', en: 'Notes are stored on this phone' },
+  'unitm.vaultCloudDesc': { zh: '笔记存在云端，各设备都能打开', en: 'Notes are stored in the cloud for all your devices' },
   'unitm.openScreen': { zh: '打开设备界面', en: 'Open device screen' },
   'unitm.thisPhone': { zh: '本机', en: 'This phone' },
   'unitm.registeredAs': { zh: '已登记为「{name}」', en: 'Registered as "{name}"' },
@@ -104,7 +111,9 @@ export const useUnitsSheet = create<{ open: boolean; setOpen: (v: boolean) => vo
 }))
 
 /** 左抽屉底部常驻入口(设置钮左侧,mobileFoot;曾住「⋯」菜单被用户报太隐蔽 2026-08-30)。
- *  数据桥在才上架:App=mobileShim.unitsList;设备页(unitShim)/Tangu Web(webShim)无此桥 → 自然隐藏。 */
+ *  Android 原生外壳下没有那一排:它与设置一起进顶栏头像的菜单(用户 2026-10-05 拍板,见 lcl 的 accountMenuRows)。
+ *  数据桥在才上架:App=mobileShim.unitsList;设备页(unitShim)/Tangu Web(webShim)无此桥 → 自然隐藏。
+ *  ⚠️ 上架条件同时是 VaultSideSwitch 手机分支「胶囊让位给本弹层」的条件(window.tangu.unitsList):改一处要改两处。 */
 export function installUnitsEntry(): void {
   if (!window.tangu?.unitsList) return
   // P1-K7a:新对话的「在哪运行」药丸点开的就是本弹层(同一套状态与首次确认流程)
@@ -148,6 +157,12 @@ const rowIcon = (u: Pick<UnitInfo, 'icon' | 'platform'>): React.ReactNode => {
 
 type Self = { registered: boolean; unitId: string | null; name: string | null; relay?: 'ready' | 'unsupported' | 'native_only' }
 
+/** App 的库桥切换(mobile/src/main.tsx 挂的;web 手机形态没有 → 「智库」一段不画)。选中态读 pageStore.vaultSide:
+ *  这个对象的 side 是普通属性,变了不触发重渲染(同 VaultSideSwitch 的注释)。 */
+type VaultSide = 'local' | 'cloud'
+const vaultBridge = (): { switch(next: VaultSide): void | Promise<void> } | undefined =>
+  (window as unknown as { amadeusVaultMode?: { switch(next: VaultSide): void | Promise<void> } }).amadeusVaultMode
+
 const ISSUE_KEY: Record<PhoneIssue, string> = {
   nativeOnly: 'unitm.nativeOnly',
   callerUnavailable: 'unitm.callerUnavailable',
@@ -171,6 +186,8 @@ export function MobileUnitsSheet(): React.ReactElement | null {
   const [confirmForget, setConfirmForget] = useState(false)
   const [addr, setAddr] = useState('')
   const flight = useRef<AbortController | null>(null)
+  const vaultSide = usePageStore((s) => s.vaultSide)
+  const [vaultBusy, setVaultBusy] = useState(false)
 
   const loadSelf = (): void => {
     void (window.tangu?.unitSelf?.() ?? Promise.resolve(null))
@@ -291,6 +308,15 @@ export function MobileUnitsSheet(): React.ReactElement | null {
 
   const homeSelected = current.kind === 'home'
 
+  const vault = vaultBridge()
+  const pickVault = (next: VaultSide): void => {
+    if (!vault || vaultBusy || next === vaultSide) return
+    setVaultBusy(true)
+    void Promise.resolve().then(() => vault.switch(next))
+      .catch((e) => useApp.getState().toast(String((e as Error)?.message || e), true))
+      .finally(() => setVaultBusy(false))
+  }
+
   return (
     <div className="mb-sheet-scrim us-scrim" onClick={() => setOpen(false)} data-units-sheet>
       <div className="mb-sheet us-sheet" onClick={(e) => e.stopPropagation()}>
@@ -344,7 +370,24 @@ export function MobileUnitsSheet(): React.ReactElement | null {
             })}
           </section>
 
-          {/* ② 打开设备界面(次要,缺省折叠;行为同 P0) */}
+          {/* ② 智库:本地 / 云端(原左栏顶部的胶囊;只换笔记库) */}
+          {vault && (
+            <section className="us-section" data-vault-side={vaultSide}>
+              <div className="us-section-title">{t('unitm.vault')}</div>
+              {(['local', 'cloud'] as const).map((side) => (
+                <button key={side} className="mb-sheet-row us-row" data-vault-row={side} aria-pressed={vaultSide === side} aria-busy={vaultBusy || undefined} onClick={() => pickVault(side)}>
+                  <span className="us-row-icon">{side === 'local' ? <Smartphone size={18} /> : <Cloud size={18} />}</span>
+                  <span className="us-row-main">
+                    <span className="us-row-title"><span className="us-row-name">{t(side === 'local' ? 'notes.cloud.local' : 'notes.cloud.cloud')}</span></span>
+                    <span className="us-row-sub">{t(side === 'local' ? 'unitm.vaultLocalDesc' : 'unitm.vaultCloudDesc')}</span>
+                  </span>
+                  <span className="us-row-end">{vaultSide === side && <><em className="us-pill">{t('unitm.current')}</em><Check size={16} /></>}</span>
+                </button>
+              ))}
+            </section>
+          )}
+
+          {/* ③ 打开设备界面(次要,缺省折叠;行为同 P0) */}
           <section className="us-section" data-open-screen>
             <button className="us-section-title us-section-toggle" aria-expanded={devicesOpen} onClick={() => setDevicesOpen((v) => !v)}>
               <span style={{ flex: 1 }}>{t('unitm.openScreen')}</span>
@@ -396,7 +439,7 @@ export function MobileUnitsSheet(): React.ReactElement | null {
             )}
           </section>
 
-          {/* ③ 本机 */}
+          {/* ④ 本机 */}
           <section className="us-section" data-this-phone>
             <div className="us-section-title">{t('unitm.thisPhone')}</div>
             <div className="us-self">

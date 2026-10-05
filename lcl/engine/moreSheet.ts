@@ -1,7 +1,26 @@
 /** 手机单列壳「⋯」菜单的命令分组(Web sheet 与原生底单共用一份整形)。
  *  命令声明了 `moreGroup` 就按组列进「⋯」:同组 id 一节,节序 = 命令注册表里首次出现的顺序。
  *  宿主用它把**没有 ribbon 图标**的来源(外置插件的命令)摆到手机的「⋯」里;桌面 Ribbon / 命令面板不读它。 */
-import { label, type Command } from './types'
+import { label, type Command, type RibbonItem } from './types'
+
+/** 手机单列壳里没有固定座位的两样:设置,以及 mobileFoot 项(互联设备)。账号(rb-account)在哪,它们就跟到哪:
+ *   - 抽屉形态(Web / 手机浏览器 / 没有原生外壳的 App):三样都在左抽屉底部常驻那一排 → 都不进「⋯」;
+ *   - 原生宿主画底部导航栏(Android,左栏没有那一排):账号是顶栏右侧的头像,这两样进**头像菜单**(accountMenuItems)
+ *     → 也不进「⋯」(用户 2026-10-05 拍板,同微信「我 → 设置」);
+ *   - 同上但宿主没有账号项(没装账号桥 = 没有头像),或某一项点不了(没有 onClick,进不了菜单)→ 留在「⋯」最前。 */
+const isFootItem = (i: RibbonItem): boolean => i.id === 'rb-settings' || !!i.mobileFoot
+
+/** 头像菜单替左栏底部那一排收下的 ribbon 项(原生底栏 × 有账号项);其余宿主形态为空。 */
+export function accountMenuItems(all: readonly RibbonItem[], nativeSpaces: boolean): RibbonItem[] {
+  return nativeSpaces && all.some((i) => i.id === 'rb-account') ? all.filter((i) => isFootItem(i) && !!i.onClick) : []
+}
+
+/** 「⋯」菜单收哪些 ribbon 项:底部区,去掉账号与住在别处的 foot 项(见上)。原生底栏下没处去的 foot 项排最前。 */
+export function moreItems(all: readonly RibbonItem[], nativeSpaces: boolean): RibbonItem[] {
+  const elsewhere = new Set(nativeSpaces ? accountMenuItems(all, true) : all.filter(isFootItem))
+  const items = all.filter((i) => i.side === 'bottom' && i.id !== 'rb-account' && !elsewhere.has(i))
+  return nativeSpaces ? [...items.filter(isFootItem), ...items.filter((i) => !isFootItem(i))] : items
+}
 
 export interface MoreCommandGroup { id: string; title: string; commands: Command[] }
 

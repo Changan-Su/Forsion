@@ -33,6 +33,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
@@ -178,11 +180,12 @@ private fun TabCountButton(count: Int, label: String, tint: Color, onClick: () -
 internal val NATIVE_SPACE_BAR_HEIGHT = 64.dp
 
 /**
- * Bottom navigation bar: one destination per Space (icon in a pill + label). Up to five share the width; more
- * scroll sideways with the next one peeking in (5.5 per screen). Tap = switch, long-press = pin to the launcher.
+ * Bottom navigation bar: one destination per Space (icon in a pill + label). Up to five share the width. With more,
+ * the first one (Home) stays put and the rest scroll beside it, the next one peeking in (1 fixed + 4.5 scrolling per
+ * screen). Tap = switch, long-press = pin to the launcher.
  * Test anchors: `nativeChrome.spaces`, `nativeChrome.space.<id>`.
  */
-@OptIn(ExperimentalComposeUiApi::class, ExperimentalFoundationApi::class)
+@OptIn(ExperimentalComposeUiApi::class)
 @Composable
 internal fun NativeSpaceBar(state: ChromeState, insets: Insets, onSpace: (id: String, long: Boolean) -> Unit) {
     val theme = state.theme
@@ -202,52 +205,79 @@ internal fun NativeSpaceBar(state: ChromeState, insets: Insets, onSpace: (id: St
         ) {
             val scroll = state.spaces.size > 5
             val itemWidth = if (scroll) maxWidth / 5.5f else maxWidth / state.spaces.size
+            // More than five: the first destination never scrolls. On the sixth Space or later it used to slide off the
+            // left edge — "the Home page is gone" (2026-10-04); the user asked for Home to be pinned (2026-10-05).
+            // ponytail: pinned by position, not by id — Home is whatever JS lists first (a Space re-enabled at runtime
+            // is appended). Send a flag from JS if "first" ever stops meaning Home.
+            val pinned = if (scroll) state.spaces.take(1) else emptyList()
+            val rest = if (scroll) state.spaces.drop(1) else state.spaces
             val scrollState = rememberScrollState()
             // The bar leaves composition (page mode, a Space's detail level) and comes back at offset 0: bring the
-            // active Space back into view, otherwise "nothing looks selected" when it sits past the fifth slot.
-            // As little as possible from the start, not centred: centring scrolled the first Spaces (Home) off-screen
-            // as soon as the fourth or a later one was active — "the Home page is gone" (2026-10-04). While one of
-            // the first five is active the bar rests at offset 0.
-            val activeIndex = state.spaces.indexOfFirst { it.active }
+            // active Space back into view, otherwise "nothing looks selected" when it sits past the last visible slot.
+            // As little as possible from the start, not centred (the first scrolling Spaces stay where they were), plus
+            // half a cell while another one follows: the next Space keeps peeking in at the end, and the 4.5-cell
+            // viewport then starts on a cell boundary instead of cutting one in half beside the pinned cell.
+            val activeIndex = rest.indexOfFirst { it.active }
             val itemPx = with(density) { itemWidth.toPx() }
-            val viewportPx = with(density) { maxWidth.toPx() }
-            LaunchedEffect(activeIndex, scroll, itemPx, viewportPx) {
-                if (scroll && activeIndex >= 0) scrollState.scrollTo(kotlin.math.ceil((activeIndex + 1) * itemPx - viewportPx).toInt().coerceAtLeast(0))
+            val viewportPx = with(density) { (maxWidth - itemWidth * pinned.size).toPx() }
+            LaunchedEffect(activeIndex, scroll, itemPx, viewportPx, rest.size) {
+                if (scroll && activeIndex >= 0) {
+                    val peek = if (activeIndex < rest.lastIndex) itemPx / 2 else 0f
+                    // floor, not ceil: with the half-cell peek the target sits on a cell boundary, and a pixel past it
+                    // would leave a sliver of the previous cell's far edge out of view instead of the cell itself
+                    scrollState.scrollTo(((activeIndex + 1) * itemPx + peek - viewportPx).toInt().coerceAtLeast(0))
+                }
             }
-            Row(
-                if (scroll) Modifier.fillMaxSize().horizontalScroll(scrollState) else Modifier.fillMaxSize(),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                for (space in state.spaces) {
-                    val tint = if (space.active) accent else muted
-                    Column(
-                        Modifier.width(itemWidth).height(NATIVE_SPACE_BAR_HEIGHT - 1.dp)
-                            .combinedClickable(
-                                role = Role.Tab,
-                                onClick = { onSpace(space.id, false) },
-                                onLongClick = { onSpace(space.id, true) },
-                            )
-                            .semantics { selected = space.active }
-                            .testTag("nativeChrome.space.${space.id}"),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.Center,
-                    ) {
-                        Box(
-                            Modifier.width(56.dp).height(30.dp).clip(RoundedCornerShape(15.dp))
-                                .background(if (space.active) accent.copy(alpha = 0.16f) else Color.Transparent),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            if (space.icon != null) NativeIconView(space.icon, tint, NATIVE_ICON_SIZE)
+            Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
+                for (space in pinned) SpaceCell(space, itemWidth, accent, muted, onSpace)
+                // While the rest is scrolled, a hairline marks the edge the cells slide under (at rest the bar looks like a
+                // plain five-slot bar). Drawn over the viewport, not laid out: the scroll maths above stays exact.
+                val edge = Color(theme.border)
+                Row(
+                    if (scroll) Modifier.weight(1f).drawWithContent {
+                        drawContent()
+                        if (scrollState.value > 0) {
+                            val inset = 14.dp.toPx()
+                            drawLine(edge, Offset(0f, inset), Offset(0f, size.height - inset), strokeWidth = 1.dp.toPx())
                         }
-                        Spacer(Modifier.height(3.dp))
-                        Text(
-                            space.label, color = tint, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                            fontWeight = if (space.active) FontWeight.SemiBold else FontWeight.Normal,
-                            modifier = Modifier.padding(horizontal = 2.dp),
-                        )
-                    }
+                    }.horizontalScroll(scrollState) else Modifier.weight(1f),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    for (space in rest) SpaceCell(space, itemWidth, accent, muted, onSpace)
                 }
             }
         }
     } }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun SpaceCell(space: ChromeSpace, width: Dp, accent: Color, muted: Color, onSpace: (id: String, long: Boolean) -> Unit) {
+    val tint = if (space.active) accent else muted
+    Column(
+        Modifier.width(width).height(NATIVE_SPACE_BAR_HEIGHT - 1.dp)
+            .combinedClickable(
+                role = Role.Tab,
+                onClick = { onSpace(space.id, false) },
+                onLongClick = { onSpace(space.id, true) },
+            )
+            .semantics { selected = space.active }
+            .testTag("nativeChrome.space.${space.id}"),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        Box(
+            Modifier.width(56.dp).height(30.dp).clip(RoundedCornerShape(15.dp))
+                .background(if (space.active) accent.copy(alpha = 0.16f) else Color.Transparent),
+            contentAlignment = Alignment.Center,
+        ) {
+            if (space.icon != null) NativeIconView(space.icon, tint, NATIVE_ICON_SIZE)
+        }
+        Spacer(Modifier.height(3.dp))
+        Text(
+            space.label, color = tint, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
+            fontWeight = if (space.active) FontWeight.SemiBold else FontWeight.Normal,
+            modifier = Modifier.padding(horizontal = 2.dp),
+        )
+    }
 }

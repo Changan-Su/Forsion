@@ -136,6 +136,8 @@ async function scenario(browser, { lang, mode, shot, full }) {
     await page.waitForTimeout(400)
   }
   const tap = async (locator) => {
+    await locator.scrollIntoViewIfNeeded({ timeout: 5000 }).catch(() => {}) // 弹层会滚:折叠线以下的行,坐标触摸打不到
+    await page.waitForTimeout(150)
     const b = await locator.boundingBox()
     if (!b) throw new Error(`目标不可见: ${locator}`)
     await tapBox(b)
@@ -247,6 +249,8 @@ async function simScenario(browser) {
   await page.route('**/api/units', (r) => r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(ROSTER) }))
   const cdp = await ctx.newCDPSession(page)
   const tap = async (locator) => {
+    await locator.scrollIntoViewIfNeeded({ timeout: 5000 }).catch(() => {}) // 弹层会滚:折叠线以下的行,坐标触摸打不到
+    await page.waitForTimeout(150)
     const b = await locator.boundingBox()
     if (!b) throw new Error(`目标不可见: ${locator}`)
     await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: b.x + b.width / 2, y: b.y + b.height / 2 }] })
@@ -422,6 +426,8 @@ async function refusalMatrix(browser, lang) {
   await page.route('**/api/units', (r) => r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(ROSTER) }))
   const cdp = await ctx.newCDPSession(page)
   const tap = async (locator) => {
+    await locator.scrollIntoViewIfNeeded({ timeout: 5000 }).catch(() => {}) // 弹层会滚:折叠线以下的行,坐标触摸打不到
+    await page.waitForTimeout(150)
     const b = await locator.boundingBox()
     if (!b) throw new Error(`目标不可见: ${locator}`)
     await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: b.x + b.width / 2, y: b.y + b.height / 2 }] })

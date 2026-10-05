@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { moreCommandGroups, moreCommandOn, moreCommandTitle, moreRowLabel, presentedCommand } from './moreSheet'
+import { accountMenuItems, moreCommandGroups, moreCommandOn, moreCommandTitle, moreItems, moreRowLabel, presentedCommand } from './moreSheet'
 import { useCommandStore } from './commandRegistry'
-import type { Command } from './types'
+import type { Command, RibbonItem } from './types'
 
 const cmd = (id: string, extra: Partial<Command> = {}): Command => ({ id, title: id, run: () => {}, ...extra })
 
@@ -72,6 +72,40 @@ describe('more sheet command groups', () => {
     } finally {
       store.removeCommand('amadeus:p:go')
       store.removeCommand('amadeus:p:other')
+    }
+  })
+})
+
+describe('where settings and the foot entries live on a phone', () => {
+  const rb = (id: string, extra: Partial<RibbonItem> = {}): RibbonItem => ({ id, side: 'bottom', onClick: () => {}, ...extra })
+  const ALL = [rb('rb-theme'), rb('rb-settings'), rb('rb-units', { mobileFoot: true }), rb('rb-account'), rb('rb-palette'), rb('space:x', { side: 'top' })]
+  const ids = (list: RibbonItem[]): string[] => list.map((i) => i.id)
+
+  it('drawer shell (no native bottom bar): the drawer foot holds account / settings / foot entries → none of them in ⋯', () => {
+    expect(ids(moreItems(ALL, false))).toEqual(['rb-theme', 'rb-palette'])
+    expect(accountMenuItems(ALL, false)).toEqual([])
+  })
+
+  it('native bottom bar + an account item: settings and foot entries go to the avatar menu, not to ⋯', () => {
+    expect(ids(accountMenuItems(ALL, true))).toEqual(['rb-settings', 'rb-units'])
+    expect(ids(moreItems(ALL, true))).toEqual(['rb-theme', 'rb-palette'])
+  })
+
+  it('native bottom bar without an account item (no avatar): they stay in ⋯, leading', () => {
+    const noAccount = ALL.filter((i) => i.id !== 'rb-account')
+    expect(accountMenuItems(noAccount, true)).toEqual([])
+    expect(ids(moreItems(noAccount, true))).toEqual(['rb-settings', 'rb-units', 'rb-theme', 'rb-palette'])
+  })
+
+  it('an entry is never lost: one the avatar menu cannot carry (no onClick) stays in ⋯', () => {
+    const odd = [rb('rb-theme'), rb('rb-settings'), rb('rb-card', { mobileFoot: true, onClick: undefined }), rb('rb-account')]
+    expect(ids(accountMenuItems(odd, true))).toEqual(['rb-settings'])
+    expect(ids(moreItems(odd, true))).toEqual(['rb-card', 'rb-theme'])
+    for (const native of [true, false]) {
+      const noAccount = odd.filter((i) => i.id !== 'rb-account')
+      const placed = new Set([...ids(moreItems(noAccount, native)), ...ids(accountMenuItems(noAccount, native))])
+      // drawer shell: the foot row holds them; native: one of the two menus must
+      if (native) expect([...placed].sort()).toEqual(['rb-card', 'rb-settings', 'rb-theme'])
     }
   })
 })

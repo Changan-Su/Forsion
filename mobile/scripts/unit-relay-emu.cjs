@@ -395,7 +395,12 @@ async function run() {
   await js(`localStorage.setItem('k8probe', ${JSON.stringify(MARK_LS)}); return 1`)
   // ⚠️ adb shell 把参数用空格拼成一条命令串:引号必须包在同一个参数里,否则 sh -c 只拿到 `cat`、glob 不展开 ——
   //    扫描器读了个空,下面的「一个都没有」就是假绿(本台架第一次跑就是被植入标记这条自检抓出来的)。
-  const dumpPrefs = adb('shell', `run-as ${PKG} sh -c 'cat shared_prefs/*.xml'`)
+  //    Preferences.set 走 SharedPreferences.apply():内存立刻生效、落盘是异步的 —— 紧跟着 cat 可能还读不到标记,等它落盘(封顶 2 秒)。
+  let dumpPrefs = ''
+  for (let i = 0; i < 10 && !dumpPrefs.includes(MARK_PREF); i++) {
+    if (i) await sleep(200)
+    dumpPrefs = adb('shell', `run-as ${PKG} sh -c 'cat shared_prefs/*.xml'`)
+  }
   const dumpLs = await js('return JSON.stringify(Object.entries(localStorage))')
   const dumpCap = await js('const k = (await Capacitor.Plugins.Preferences.keys()).keys; const o = {}; for (const key of k) o[key] = (await Capacitor.Plugins.Preferences.get({ key })).value; return JSON.stringify(o)')
   const dumpLog = adb('logcat', '-d')
@@ -412,10 +417,11 @@ async function run() {
 
   // ⑫ 真界面走一遍:UnitsSheet 点「Emu Mac」→ runOn 经原生中继问信任、探引擎(两条都该带票)→ 行变「可用」
   const hitsBefore = proxy.length
-  // 入口在原生「⋯」菜单的最前面(原生外壳下左栏底部那一排已撤):原生节点得按 uiautomator 的坐标点。
-  const tapNative = async (id) => {
+  // 入口在顶栏头像的菜单里(2026-10-05;原生外壳下左栏底部那一排已撤,此前一天在「⋯」最前):原生节点得按 uiautomator 的坐标点。
+  // 头像只在每个 Space 的第一层页面上:停在主区时先点返回箭头回列表。
+  const tapNative = async (id, tries = 20) => {
     const at = new RegExp(`resource-id="${id.replace(/\./g, '\\.')}"[^>]*bounds="\\[(\\d+),(\\d+)\\]\\[(\\d+),(\\d+)\\]"`)
-    for (let i = 0; i < 20; i++) {
+    for (let i = 0; i < tries; i++) {
       adb('shell', 'uiautomator', 'dump', '/sdcard/forsion-ui.xml')
       const m = at.exec(adb('shell', 'cat', '/sdcard/forsion-ui.xml'))
       if (m) { adb('shell', 'input', 'tap', String((+m[1] + +m[3]) >> 1), String((+m[2] + +m[4]) >> 1)); return true }
@@ -423,7 +429,8 @@ async function run() {
     }
     return false
   }
-  const reached = (await tapNative('nativeChrome.more')) && (await tapNative('nativeSheet.item.rb-units-mobile'))
+  const avatar = (await tapNative('nativeChrome.account', 6)) || ((await tapNative('nativeChrome.left', 6)) && (await tapNative('nativeChrome.account')))
+  const reached = avatar && (await tapNative('nativeSheet.item.rb-units-mobile'))
   const opened = reached && await js(`
     for (let i = 0; i < 30 && !document.querySelector('[data-run-row="${TARGET}"]'); i++) await new Promise((r) => setTimeout(r, 200))
     const row = document.querySelector('[data-run-row="${TARGET}"]')
