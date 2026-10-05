@@ -5,9 +5,9 @@
  *   ① 纯判据:纠正的词面判定(中英正反例)、工具计数的写法、给判官的那段话;
  *   ② 判官层(真 SQLite + 脚本化模型):不到点的一轮,有信号 → 评一次,且只评记忆 / 进化记录(标题 / 摘要 / 日志不动),
  *      提示里写着信号;没信号 → 不评(负对照)。同一会话十分钟内只加评一次;远程轮有信号也不起调用;辅助模式不因信号拉讨论;
- *      到点轮带信号 = 照常评、多一段说明,且不被「新增太少」的地板筛掉;
+ *      到点轮带信号 = 照常评、多一段说明,且不被「新增太少」的地板筛掉;加评写下的候选不顶掉下一个到点轮;冷却表不只增不减;
  *   ③ 运行循环层(真 agentLoop,只把判官入口换成记录器):四种信号各自在该出现的时候传给判官,不该出现的时候不传 ——
- *      用户按停要等**下一轮**跑完才交;不是用户按的停、工具调用不足三次的停都不算。
+ *      用户按停要等**下一轮**跑完才交;不是用户按的停、工具调用不足三次的停都不算;下一轮没正常收尾 → 作废,不留给再下一轮。
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
@@ -37,7 +37,8 @@ import { runMigration } from '../src/db/migrate.js';
 import { query } from '../src/core/db.js';
 import { createRun, getRun, updateRunStatus } from '../src/services/runStore.js';
 import { abortRun, enqueueRun } from '../src/services/agentLoop.js';
-import { onUserRunDone, resetHistorianConsolidationState, SIGNAL_REVIEW_COOLDOWN_MS } from '../src/services/localHistorian.js';
+import { onUserRunDone, resetHistorianConsolidationState, signalCooldownCount, SIGNAL_REVIEW_COOLDOWN_MS } from '../src/services/localHistorian.js';
+import { LlmError } from '../src/core/types.js';
 import {
   CORRECTION_SIGNAL, NUDGE_SIGNAL, STOP_SIGNAL_MIN_TOOL_CALLS, judgeTriggerBlock, looksLikeCorrection, noteUserStop,
   resetJudgeSignals, takePendingStop, toolLoopSignal, toolTally,
@@ -161,14 +162,14 @@ describe('② 判官层', () => {
   const ANSWER = JSON.stringify({ title: '不该被采用的标题', summary: '不该被采用的摘要', log: '不该被写的日志', memory_candidates: ['用户要求命令一律用 pnpm,不用 npm'], harness_candidates: [] });
   let msgSeq = 0;
   /** 往会话里加一轮(短的一问一答)并记一条 done run。 */
-  async function round(userText = '不对，用 pnpm', reply = '好的，改用 pnpm。'): Promise<void> {
+  async function round(userText = '不对，用 pnpm', reply = '好的，改用 pnpm。', sid = 'S'): Promise<void> {
     const n = ++msgSeq;
-    await query(`INSERT INTO chat_messages (id, session_id, role, content, timestamp) VALUES (?, 'S', 'user', ?, ?)`, [`u${n}`, userText, n * 1000]);
-    await query(`INSERT INTO chat_messages (id, session_id, role, content, timestamp) VALUES (?, 'S', 'model', ?, ?)`, [`a${n}`, reply, n * 1000 + 1]);
-    await createRun({ id: `R${n}`, sessionId: 'S', userId: USER, appId: 'tangu', modelId: 'm1', assistantMessageId: `a${n}`, input: { message: userText, userMessageId: `u${n}`, attachments: [], agentConfig: {} } });
+    await query(`INSERT INTO chat_messages (id, session_id, role, content, timestamp) VALUES (?, ?, 'user', ?, ?)`, [`u${n}`, sid, userText, n * 1000]);
+    await query(`INSERT INTO chat_messages (id, session_id, role, content, timestamp) VALUES (?, ?, 'model', ?, ?)`, [`a${n}`, sid, reply, n * 1000 + 1]);
+    await createRun({ id: `R${n}`, sessionId: sid, userId: USER, appId: 'tangu', modelId: 'm1', assistantMessageId: `a${n}`, input: { message: userText, userMessageId: `u${n}`, attachments: [], agentConfig: {} } });
     await updateRunStatus(`R${n}`, 'done');
   }
-  const done = (signals?: string[], remote = false) => onUserRunDone('S', USER, undefined, undefined, remote, signals);
+  const done = (signals?: string[], remote = false, sid = 'S') => onUserRunDone(sid, USER, undefined, undefined, remote, signals);
 
   beforeEach(async () => {
     await boot();
@@ -241,6 +242,45 @@ describe('② 判官层', () => {
     expect(sys).toContain(CORRECTION_SIGNAL);
     expect(sys).toContain('"summary": an updated summary');
     expect((await sessionRow()).summary).toBe('改用 pnpm 安装依赖,用户纠正过一次。');
+  });
+
+  // Codex 评审 10-05:加评刚写过候选 → 下一个到点轮被「自上次维护以来新增太少」筛掉,而摘要 / 日志在加评那轮根本没做。
+  // SQLite 的时间戳只到秒,所以把各行的 created_at 显式排开:第 2 轮的对话 +1 分,加评写的候选 +2 分,第 3 轮的对话 +3 分。
+  it('信号加评写下的候选不算「维护」:下一个到点轮照常评,不被它顶掉', async () => {
+    const long = '这是一段足够长的实质对话内容,用来越过 120 字的实质增量地板。'.repeat(4);
+    await round(long, '好的。'); // 第 2 轮
+    await query(`UPDATE chat_messages SET created_at = datetime('now', '+1 minute') WHERE id IN ('u2', 'a2')`);
+    script.push(ANSWER);
+    await done([CORRECTION_SIGNAL]);
+    expect(payloads).toHaveLength(1);
+    expect(await activity()).toContain('memory_candidates');
+    await query(`UPDATE special_agent_log SET created_at = datetime('now', '+2 minutes') WHERE session_ref = 'S' AND action = 'memory_candidates'`);
+    await round('嗯', '好'); // 第 3 轮 = 到点;加评之后只有两个字
+    await query(`UPDATE chat_messages SET created_at = datetime('now', '+3 minutes') WHERE id IN ('u3', 'a3')`);
+    script.push(JSON.stringify({ title: '', summary: '装依赖改用 pnpm,用户纠正过一次。', log: '', memory_candidates: [], harness_candidates: [] }));
+    await done();
+    expect(payloads).toHaveLength(2);
+    expect((await sessionRow()).summary).toBe('装依赖改用 pnpm,用户纠正过一次。');
+  });
+
+  it('冷却表不只增不减:过了冷却的会话,在下一次加评时被清掉', async () => {
+    await round();
+    script.push(ANSWER);
+    await done([CORRECTION_SIGNAL]);
+    expect(signalCooldownCount()).toBe(1);
+    await query(`INSERT INTO chat_sessions (id, user_id, app_id, title, summary, model_id, kind) VALUES ('S2', ?, 'tangu', '', '', 'm1', 'user')`, [USER]);
+    await round('先问一句', '答一句', 'S2');
+    script.push(JSON.stringify({ title: '问一句', summary: '问了一句。', log: '', memory_candidates: [], harness_candidates: [] }));
+    await done(undefined, false, 'S2'); // S2 的第 1 轮(到点)
+    await round('不对', '改了', 'S2');
+    const realNow = Date.now();
+    vi.spyOn(Date, 'now').mockReturnValue(realNow + SIGNAL_REVIEW_COOLDOWN_MS + 1);
+    try {
+      script.push(JSON.stringify({ memory_candidates: [], harness_candidates: [] }));
+      await done([NUDGE_SIGNAL], false, 'S2');
+      expect(payloads).toHaveLength(3);
+      expect(signalCooldownCount()).toBe(1); // 只剩 S2:S 那条过了冷却,被清掉
+    } finally { vi.restoreAllMocks(); }
   });
 
   it('辅助模式:信号加评不拉讨论(讨论只跟到点轮)', async () => {
@@ -338,6 +378,21 @@ describe('③ 运行循环层', () => {
     ]);
     script.push('还有别的吗');
     expect(await turn('嗯')).toEqual([]);
+  });
+
+  // Codex 评审 10-05:按停留下的信号要是只在正常收尾时才取,下一轮走了别的路(出错 / 钩子否决 / 群聊 / 外部引擎)它就留着,
+  // 被之后某一轮拿去,把更早那次按停说成「上一轮」。起跑时就取走,走不到正常收尾就作废。
+  it('按停后的下一轮没走到正常收尾(出错)→ 那条信号作废,不留给再下一轮', async () => {
+    const h = hangAfterTools(3);
+    const runId = await start('帮我查清楚这个目录');
+    await h.reached;
+    abortRun(runId, { byUser: true });
+    await settle(runId, 'aborted');
+    script.push(() => { throw new LlmError(400, 'bad request'); }); // 400 不重试,这一轮直接失败
+    const failed = await start('直接说结论就行');
+    await settle(failed, 'failed');
+    script.push('好的');
+    expect(await turn('再试一次')).toEqual([]);
   });
 
   it('负对照:不是用户按的停 / 工具调用不足三次 → 下一轮不带', async () => {

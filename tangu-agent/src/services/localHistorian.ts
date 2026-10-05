@@ -77,6 +77,8 @@ export const isHistorianBusy = (sessionId: string): boolean => historianBusySess
 // 爱说「不对」的用户不该每句话都烧一次后台调用。到点轮不受它限制(那本来就要评,只是多带一段说明)。
 export const SIGNAL_REVIEW_COOLDOWN_MS = 10 * 60_000;
 const lastSignalReview = new Map<string, number>();
+/** 测试用:还在冷却表里的会话数。 */
+export const signalCooldownCount = (): number => lastSignalReview.size;
 
 /** 测试用:清空整固互斥/退避/会话互斥状态(模块级,跨用例会串)。 */
 export function resetHistorianConsolidationState(): void {
@@ -218,8 +220,12 @@ export function isRoundDue(roundN: number, every: number, firstRoundTrigger: boo
 async function enoughNewSinceLastAction(sessionId: string): Promise<boolean> {
   try {
     const last = await query<any[]>(
-      // 标题在 run 起点写(onUserRunStart),落在本轮用户消息之后:算它做游标,done 时只剩助手回复可数,短回复会把整轮判断跳掉。
-      `SELECT created_at FROM special_agent_log WHERE session_ref = ? AND agent = 'historian' AND action <> 'title_updated'
+      // 游标只认到点维护写下的活动(摘要 / 日志 / 图标 / 辅助讨论):
+      //   · 标题在 run 起点写(onUserRunStart),落在本轮用户消息之后:算它做游标,done 时只剩助手回复可数,短回复会把整轮判断跳掉;
+      //   · 各类候选(记忆 / 项目记忆 / 进化记录)不算:信号加评(不到点)只写这几类,算进来的话它刚写完,下一个到点轮
+      //     就会被判成「无实质新增」,而摘要 / 日志在加评那轮根本没做(Codex 评审 10-05)。只漏不拦:游标偏旧 = 多评一次。
+      `SELECT created_at FROM special_agent_log WHERE session_ref = ? AND agent = 'historian'
+         AND action IN ('summary_updated', 'log_appended', 'icon_updated', 'assist_discussion')
        ORDER BY created_at DESC LIMIT 1`,
       [sessionId],
     );
@@ -604,7 +610,12 @@ async function runHistorianForSession(sessionId: string, userId: string, memScop
     // 远程轮 / 电脑历史隔离的会话里,信号加评没有可评的类别 → 不起这次调用。
     if (titleDue || summaryDue || judgeLog || judgeMemory || (signalDue && judgeHarness)) { // 标题归起点后,辅助模式轮只剩摘要/提名要判
       const trigger = judgeTriggerBlock(signals, { memory: judgeMemory, harness: judgeHarness, project: !!projectRef });
-      if (signalDue) lastSignalReview.set(sessionId, Date.now());
+      if (signalDue) {
+        // 过了冷却的条目已经没有用,顺手清掉(否则每个被加评过的会话各留一条到进程退出)
+        const now = Date.now();
+        for (const [sid, at] of lastSignalReview) if (now - at >= SIGNAL_REVIEW_COOLDOWN_MS) lastSignalReview.delete(sid);
+        lastSignalReview.set(sessionId, now);
+      }
       // 一次结构化判断:title / summary / log / memory_candidates 各自独立(到期才要、不需要则空)。
       // 采集刻意不看现有记忆(与 Codex Phase 1 同构:采集盲写、去重归整固),省下每轮 ~20K 字输入。
       const prevSummary = String((sk as any).summary || '').trim().replace(/\s+/g, ' ').slice(0, 600);
