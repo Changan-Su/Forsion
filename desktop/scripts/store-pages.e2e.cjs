@@ -124,6 +124,8 @@ async function main() {
     await market.setViewportSize({ width: 780, height: 780 }); await view('membership').click(); await market.locator('.fx-shop-tier').first().waitFor()
     await market.screenshot({ path: path.join(OUT, `${lang}-membership-dark-narrow.png`) })
     assert.equal(await market.locator('.mk-body').evaluate((el) => el.scrollWidth > el.clientWidth + 1), false)
+    // 窄窗口下计费周期切换的最后一格不能被裁掉(曾经只露出前两格)
+    assert.equal(await market.locator('.mk-body').evaluate((el) => { const b = [...el.querySelectorAll('.fx-shop-head [role="radio"]')].pop(); if (!b) return false; const r = b.getBoundingClientRect().right; return r <= b.parentElement.getBoundingClientRect().right + 1 && r <= el.getBoundingClientRect().right - 1 }), true)
 
     // ⑥ 设置里的「Forsion 云端」没有被这三页混进去(它们只进商店左栏)
     await win.evaluate(() => window.tangu.openFloatingPanel({ id: 'settings', title: 'settings', builtin: 'settings', params: { tab: 'forsion/fx:forsion-extend:backpack', n: Date.now() } }))
