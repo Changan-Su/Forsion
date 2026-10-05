@@ -2,7 +2,7 @@
 name: forsion-extension-development
 description: 当用户要给 Forsion / Tangu 做插件、主题、Space、智能体(agent)或捆绑包(bundle)——或要把某个能力做成可分发/可上架市场的扩展——时使用。内置五类官方模板(samples/),讲清各自的格式基线与硬约束(尤其两种"插件"是完全不同的系统),照抄模板改比从零写靠谱。
 metadata:
-  version: 1.20.0
+  version: 1.21.0
   author: Forsion
   category: Forsion
 ---
@@ -375,6 +375,7 @@ ctx.registerCommand({
   按钮要等下一次重渲才跟上。旧宿主没有这个字段 = 静默忽略,不用做特性检测。
 
 | `registerSettingsView` | 详情页里自己画的面板 | 会被反复挂载卸载,状态别放模块级单例;`title` 可传函数(切语言跟上)。`category: 'forsion'`(2026-09-28 起)只对带主进程半身的首方内置包(Forsion Extend)生效:面板成为设置「Forsion 云端」的一个子页,别的插件写了照旧画在详情页 |
+| `registerStoreView` | 商店左栏里的一页(左栏多一个入口,整页正文自己画) | 2026-10-05 起;**只对带主进程半身的首方内置包(Forsion Extend)生效**,别的插件注册了不显示 —— 做普通插件用不到。旧宿主没有:`ctx.registerStoreView?.(…)`,没有就不注册,**别拿 `registerSettingsView` 顶替**(那会把页面画进插件详情页) |
 | `ctx.app.openSettings?(target)` | 打开设置到某一页 / 子页(2026-09-28 起) | 口径同宿主深链,如 `'model/m-providers'`;旧宿主没有,一律 `?.` 调 |
 | `registerReadiness` | onboarding 检查卡上的一行 `check` | 2026-09-21 起;**必须 `ctx.registerReadiness?.(…)`**;拿不准回 `'unknown'`,见下「前置条件」 |
 | `registerEditorExtension` | 笔记编辑器的按键 / 装饰 | `'high'` 档不处理**必须 `return false`** |

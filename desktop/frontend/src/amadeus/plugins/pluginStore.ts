@@ -56,6 +56,7 @@ import type {
   PropertyTypeContribution,
   SettingContribution,
   SettingsViewContribution,
+  StoreViewContribution,
   ReadinessContribution,
   SlashContribution,
   SelectionActionContribution,
@@ -146,6 +147,8 @@ interface PluginState {
   propertyTypes: Owned<PropertyTypeContribution>[]
   settings: Owned<SettingContribution>[]
   settingsViews: Owned<SettingsViewContribution>[]
+  /** 商店左栏里由插件提供的页(ctx.registerStoreView)。 */
+  storeViews: Owned<StoreViewContribution>[]
   /** 插件自报的就绪检查(manifest onboarding.requires 的 check 那类)。 */
   readiness: Owned<ReadinessContribution>[]
   views: Owned<ViewContribution>[]
@@ -884,7 +887,7 @@ function afterReconcile(): void {
 type OwnedKey = { [K in keyof PluginState]: PluginState[K] extends Owned<unknown>[] ? K : never }[keyof PluginState]
 const SLICE_KEYS = Object.keys({
   slashItems: 1, selectionActions: 1, commands: 1, themes: 1, panels: 1, statusItems: 1, propertyTypes: 1, settings: 1,
-  settingsViews: 1, readiness: 1, views: 1, listSources: 1, fileTypes: 1, embedRenderers: 1, fileCreators: 1,
+  settingsViews: 1, storeViews: 1, readiness: 1, views: 1, listSources: 1, fileTypes: 1, embedRenderers: 1, fileCreators: 1,
 } satisfies Record<OwnedKey, 1>) as OwnedKey[]
 
 /** 摘掉 id 的全部切片贡献;没有它的切片保持原数组身份(订阅者不白白重渲)。 */
@@ -1243,6 +1246,14 @@ export const usePluginStore = create<PluginState>((set, get) => {
           { pluginId, item: def },
         ],
       }))
+    },
+    // 商店左栏的插件页:同 id 重注册即覆盖。显示与否(首方内置包、非设备页)由 MarketModal 把关。
+    registerStoreView: (def) => {
+      if (!def?.id || !def.title || typeof def.mount !== 'function') {
+        console.warn(`[plugin:${pluginId}] registerStoreView 需要 { id, title, mount }`)
+        return
+      }
+      set((s) => ({ storeViews: [...s.storeViews.filter((o) => !(o.pluginId === pluginId && o.item.id === def.id)), { pluginId, item: def }] }))
     },
     // 就绪检查:同 id 重注册即覆盖。宿主只在注意力在场时调(引导卡 / 重新检查 / 手动启用),见 pluginOnboardingStore。
     registerReadiness: (def) => {
@@ -1798,6 +1809,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
     propertyTypes: [],
     settings: [],
     settingsViews: [],
+    storeViews: [],
     readiness: [],
     views: [],
     listSources: [],

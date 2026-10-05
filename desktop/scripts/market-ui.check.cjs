@@ -113,6 +113,51 @@ async function main() {
     check('插件分类同时展示引擎插件与 Forsion 插件', pluginNames.includes('Calendar Tools') && pluginNames.includes('LaTeX Suite') && pluginNames.includes('Mindmap'), pluginNames.join(' / '))
     await page.getByRole('button', { name: '商店首页', exact: true }).click()
 
+    // 插件提供的页(ctx.registerStoreView,2026-10-05):首方内置包的页进左栏、第三方的不进;点开整页归插件。
+    await page.evaluate(() => {
+      const S = window.__marketHarness.pluginStore
+      const log = (window.__storeViewLog = [])
+      const mount = (name) => (el) => { el.innerHTML = `<div data-stub-store-page="${name}">${name}</div>`; log.push(`mount:${name}`); return () => log.push(`dispose:${name}`) }
+      const plugin = (id, locked) => ({ id, name: id, version: '1.0.0', locked, setup() {} })
+      const s = S.getState()
+      S.setState({
+        plugins: [...s.plugins, plugin('first-party', true), plugin('third-party', false), plugin('first-party-off', true)],
+        activeIds: [...s.activeIds, 'first-party', 'third-party'],
+        storeViews: [
+          { pluginId: 'first-party', item: { id: 'membership', title: () => '会员', description: () => '升级档位', group: () => '会员与积分', icon: 'crown', mount: mount('membership') } },
+          { pluginId: 'first-party', item: { id: 'credits', title: '积分', group: '会员与积分', icon: 'no-such-icon', mount: mount('credits') } },
+          { pluginId: 'third-party', item: { id: 'x', title: '第三方页', mount: mount('third') } },
+          { pluginId: 'first-party-off', item: { id: 'y', title: '停用插件的页', mount: mount('off') } },
+        ],
+      })
+    })
+    const storeNav = async () => page.evaluate(() => ({
+      groups: [...document.querySelectorAll('.settings-nav-grouphead')].map((el) => el.textContent),
+      labels: [...document.querySelectorAll('.settings-nav-list button')].map((el) => el.textContent?.trim()),
+      active: [...document.querySelectorAll('.settings-nav-list button.active')].map((el) => el.textContent?.trim()),
+      title: document.querySelector('.settings-main-title')?.textContent,
+      subtitle: document.querySelector('.mk-title-subtitle')?.textContent,
+      search: !!document.querySelector('.mk-search'),
+      page: document.querySelector('[data-stub-store-page]')?.getAttribute('data-stub-store-page') ?? null,
+      icons: [...document.querySelectorAll('[data-store-view] svg')].length,
+      log: [...window.__storeViewLog],
+    }))
+    let sv = await storeNav()
+    check('插件页的分组排在「分类」与「管理」之间', sv.groups.join('/') === '发现/分类/会员与积分/管理', sv.groups.join('/'))
+    check('首方内置包的页进左栏,第三方与已停用插件的不进', sv.labels.includes('会员') && sv.labels.includes('积分') && !sv.labels.includes('第三方页') && !sv.labels.includes('停用插件的页'), sv.labels.join(' / '))
+    check('插件页入口都有图标(认不出的名字回落缺省图标)', sv.icons === 2 && !sv.labels.some((l) => l.includes('no-such-icon')), String(sv.icons))
+    await page.locator('[data-store-view="first-party:membership"]').click()
+    sv = await storeNav()
+    check('点开插件页:标题与说明来自插件,正文由插件挂载', sv.title === '会员' && sv.subtitle === '升级档位' && sv.page === 'membership', JSON.stringify({ title: sv.title, subtitle: sv.subtitle, page: sv.page }))
+    check('插件页不显示搜索框,左栏只亮这一项', !sv.search && sv.active.join() === '会员', `search=${sv.search} active=${sv.active.join()}`)
+    await page.locator('[data-store-view="first-party:credits"]').click()
+    sv = await storeNav()
+    check('换到另一个插件页:前一页已卸载,新页已挂载', sv.page === 'credits' && sv.log.join() === 'mount:membership,dispose:membership,mount:credits', sv.log.join())
+    await page.evaluate(() => { const S = window.__marketHarness.pluginStore; S.setState({ activeIds: S.getState().activeIds.filter((id) => id !== 'first-party') }) })
+    sv = await storeNav()
+    check('插件被停用:页面卸载,分组消失,退回原来的页', sv.page === null && !sv.groups.includes('会员与积分') && sv.active.join() === '商店首页' && sv.log.at(-1) === 'dispose:credits', JSON.stringify({ groups: sv.groups, active: sv.active, log: sv.log }))
+    await page.evaluate(() => { const S = window.__marketHarness.pluginStore; S.setState({ storeViews: [], plugins: S.getState().plugins.filter((p) => !/^(first|third)-party/.test(p.id)) }) })
+
     const search = page.locator('.mk-search input')
     await search.fill('LaTeX')
     await page.locator('.mk-card-title', { hasText: 'LaTeX Suite' }).waitFor()

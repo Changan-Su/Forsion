@@ -49,6 +49,7 @@
     "e2e:coreplugins": "node scripts/core-plugins.e2e.cjs",
     "e2e:restart-update": "node scripts/restart-update.e2e.cjs",
     "e2e:market-submissions": "node scripts/market-submissions.e2e.cjs",
+    "e2e:storepages": "node scripts/store-pages.e2e.cjs",
     "e2e:market-auto-update": "node scripts/market-auto-update.e2e.cjs",
     "e2e:account": "node scripts/account-center.shot.cjs",
     "e2e:accountpopups": "node scripts/account-popups.shot.cjs",
