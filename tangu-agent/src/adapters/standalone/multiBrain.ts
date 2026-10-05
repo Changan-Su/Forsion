@@ -321,7 +321,7 @@ export function createMultiBrain(httpBrain: CloudBrainServices, registry: Provid
             apiModelId: resolved?.apiModelId,
           });
           // 仪器:TANGU_LLM_DEBUG=1 时记下这次调用要的档位、夹紧后的档位和实际写进请求的思考字段(发出后再补用量与耗时)。
-          // 不传 thinkingLevel = 关思考且不报错,后台调用质量差时先看这一行(docs/agent-memory.md「直接模型调用的思考档位」)。
+          // 不传 thinkingLevel = 关思考且不报错,后台调用质量差时先看这一行(docs/direct-model-calls.md)。
           if (process.env.TANGU_LLM_DEBUG === '1') {
             const sys = (opts.messages as any[]).find((m) => m?.role === 'system')?.content;
             llmDebug.set(payload, `model=${resolved?.apiModelId || payload.model} tools=${opts.tools?.length || 0} asked=${opts.thinkingLevel ?? '(unset)'} effective=${effective} wire=${JSON.stringify({ reasoning_effort: payload.reasoning_effort, thinking: payload.thinking, reasoning: payload.reasoning, enable_thinking: payload.enable_thinking })} maxTokens=${opts.maxTokens ?? '(unset)'} system=${JSON.stringify(String(typeof sys === 'string' ? sys : '').slice(0, 48))}`);

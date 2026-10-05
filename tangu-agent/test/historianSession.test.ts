@@ -34,6 +34,13 @@ afterEach(() => db.close());
 const task = (over: Partial<HistorianTask> = {}): HistorianTask => ({ sessionId: 'p', userId: 'u', modelId: 'm', task: 'judge', instructions: 'Summarize.', transcript: 'First fact', maxTokens: 100, ...over });
 
 describe('persistent Historian', () => {
+  it('passes the thinking level only when the caller gives one: the judge sets it, the team summary does not', async () => {
+    await completeHistorianTask(task({ thinkingLevel: 'medium' }));
+    await completeHistorianTask(task({ task: 'team-summary', transcript: 'Team result' }));
+    expect(calls[0].thinkingLevel).toBe('medium');
+    expect('thinkingLevel' in calls[1]).toBe(false);
+  });
+
   it('shares one session across judge/team tasks, serializes concurrent calls, and isolates parents', async () => {
     const [a, b] = await Promise.all([completeHistorianTask(task()), completeHistorianTask(task({ task: 'team-summary', transcript: 'Team result' }))]);
     expect(a.historianSessionId).toBe(b.historianSessionId);

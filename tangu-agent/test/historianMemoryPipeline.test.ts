@@ -64,7 +64,7 @@ beforeEach(async () => {
   const fakeBrain: any = {
     llm: {
       resolveModelAndKey: async () => ({ model: { provider: 'test', name: 'test' }, apiKey: 'k', baseUrl: 'b', apiModelId: 'm' }),
-      buildProviderPayload: async (o: any) => ({ messages: o.messages }),
+      buildProviderPayload: async (o: any) => ({ messages: o.messages, thinkingLevel: o.thinkingLevel, maxTokens: o.maxTokens }),
       streamProviderCompletion: async (o: any) => {
         llmPayloads.push(o.payload);
         await beforeReply?.();
@@ -125,6 +125,13 @@ describe('Historian 会话图标', () => {
     expect(await icon()).toBe('👩🏽‍💻');
     expect(llmPayloads.flatMap((p) => p.messages.map((m: any) => m.content)).join('\n')).toContain('"emoji"');
     expect(await query<any[]>(`SELECT action FROM special_agent_log WHERE session_ref = 'S' AND action = 'icon_updated'`)).toHaveLength(1);
+  });
+  it('独立判官这次调用带中档思考,并在正文上限之外给推理留了余量(不带档位 = 关思考且不报错)', async () => {
+    llmScript.push(answer);
+    await onUserRunDone('S', USER);
+    const judge = llmPayloads.find((p) => String(p.messages[0]?.content).startsWith('You are the persistent background Historian'));
+    expect(judge.thinkingLevel).toBe('medium');
+    expect(judge.maxTokens).toBe(1600 + 4096);
   });
   it('关闭后不请求、不写图标，即使模型多返回字段', async () => {
     saveSpecialAgentsConfig({ historian: { autoEmoji: false } });

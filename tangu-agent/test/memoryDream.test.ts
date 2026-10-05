@@ -104,7 +104,18 @@ describe('Agent-private, bounded Dream memory', () => {
     expect(next.version).not.toBe(old.version); expect(next.entries.find((e) => e.content.includes('中文'))?.evidenceIds[0]).toMatch(/^candidate:/);
     expect(readCandidates('alpha')).toHaveLength(0); expect(readCandidates('beta')).toHaveLength(1);
     expect(JSON.stringify(calls)).not.toContain('Beta 私有秘密'); expect(calls).toHaveLength(2);
-    expect(calls.reduce((n, c) => n + c.payload.maxTokens, 0)).toBe(4096);
+    // 两次调用都要带思考档(不带 = 关思考且不报错),并在正文预算 4096(提议 3072 / 核验 1024)之外各留 4096 给推理。
+    expect(calls.map((c) => c.payload.thinkingLevel)).toEqual(['medium', 'medium']);
+    expect(calls.map((c) => c.payload.maxTokens)).toEqual([3072 + 4096, 1024 + 4096]);
+  });
+  it('reads the JSON even when the model writes a few words around it (endpoints where the thinking level is only a system-prompt nudge)', async () => {
+    repo().add('已有事实'); seedCandidate();
+    provider = async (p) => {
+      const body = p.messages[0].content.startsWith('Consolidate') ? proposal(JSON.parse(p.messages[1].content)) : { ok: true };
+      return { ...result(body), content: `Let me check each source first.\n${JSON.stringify(body)}\nDone.` };
+    };
+    startMemoryDream('u', 'alpha'); expect((await settle()).state).toBe('completed');
+    expect(repo().snapshot().content).toContain('用户偏好中文回复');
   });
   it('rejects source omission, alien IDs, duplicate coverage, canonical deletion and unsupported candidate promotion', () => {
     const sources: any[] = [{ id: 'a', kind: 'memory', fact: 'A' }, { id: 'c', kind: 'candidate', fact: 'C' }];
