@@ -3375,6 +3375,11 @@ Then reply with only the command output.`,
     const dOutput = rows.filter((r) => r !== 'name,team').join('|') === 'alice,dev|bob,qa|carol,dev|dora,ops' && rows.includes('name,team');
     const okD = !d.error && dLoaded && dRanScript && dOutput;
 
+    // 留证:碰了 SKILL.md 的文件工具调用的完整参数(报告里的「模型原话」会截断 —— 10-05 那两次红,事后看不到它改了哪一句)
+    const handEdits = [a, c].flatMap((ev) => ev.toolArgs.filter((t) => !['manage_skill', 'use_skill', 'load_tools'].includes(t.name) && /SKILL\.md/.test(t.arguments)));
+    writeFileSync(join(OUT, 'skillcreate-evidence.json'), JSON.stringify({ ok: { a: okA, b: okB, c: okC, d: okD }, approvals: { a: a.approvals, c: c.approvals }, strays: { a: aStray, c: cStray },
+      manageSkill: [a, c].map((ev) => argsOf(ev, 'manage_skill').map((x) => x.action)), handEdits }, null, 2));
+
     // 收尾:只删本场景在隔离 home 里建的技能(别留到同一次跑的别的场景的系统提示里)
     for (const [, sk] of [...aNew, ...cNew]) if (sk.dir.startsWith(OUT)) rmSync(sk.dir, { recursive: true, force: true });
 
