@@ -175,7 +175,8 @@ OUT=/absolute/out npm run emu:nativeshell   # ONLY=tabs,prompt 只跑子集
 
 - **岛上的「拒绝 / 允许」**：岛上显示的是待批审批时带按钮，点了走审批卡同一个 `decideApproval`，不用回 App。
   - 放哪个按钮、点下去认不认，都由 `shadeAsk` / `shadeAnswer` 一处判（单测 `npm run test:liveisland`）。
-  - 「允许」只给普通审批（档位本就要问 / 你自己写的规则要问），而且这次请求的内容得短到通知展开后能整段显示（≤120 字、≤3 行，进 `BigTextStyle`）；
+  - 「允许」只给普通审批（档位本就要问 / 你自己写的规则要问）里的命令类工具（`run_bash` / `run_background`：只有它们的预览是命令原文，
+    写文件 / 改文件 / 补丁的预览是一行摘要），而且命令得短到通知展开后能整段显示（≤120 字、≤3 行，进 `BigTextStyle`）；
     看不全的、越界写入、受保护路径、设备操控、只能在执行设备上批的，只给「拒绝」，要批准得进会话看完整的审批卡。远程来源的审批不放按钮。
   - 两个按钮都要求设备已解锁（`setAuthenticationRequired`，Android 12+）；更老的系统不放按钮。「允许」永远只是这一次，不是「总是允许」。
   - 按钮背后是一条只发给本应用的广播，接收器运行时注册、不导出；页面收到后照当时的 store 重判，通知是旧的就什么都不做。
@@ -187,6 +188,8 @@ OUT=/absolute/out npm run emu:nativeshell   # ONLY=tabs,prompt 只跑子集
 台架：`ONLY='island:,notifications:' npm run emu:nativeshell`（三条，约 4 分钟；需要模拟器的 root shell）。岛在的时候通知栏读不了无障碍树
 （岛上的计时器每秒一跳，`uiautomator dump` 永远等不到空闲）：按钮背后的意图改从 `dumpsys notification` + `dumpsys activity intents` 核对，
 岛在通知栏里的位置从系统界面自己的 dump 取；「拒绝」用 root shell 发同一条广播，「允许」真点。
+通知权限回执的两条路（第一发 `show` 弹权限框，答之前 run 已结束 → 不把旧岛贴回来；没结束 → 岛出现）：`node scripts/live-island-emu.cjs perm`
+（会撤掉本包的通知权限并冷启两次，不在上面那套里：那套要先把权限给上）。
 
 ## Android 插件(2026-10-02)
 

@@ -2,6 +2,7 @@
  * 灵动岛模拟器台架(2026-09-18)—— 真机/模拟器上跑着 debug 包时用:
  *   node scripts/live-island-emu.cjs eval "<js 表达式,可 await>"   在 app 的 WebView 里求值
  *   node scripts/live-island-emu.cjs notif                         只看活动通知里岛那两条:id=7201 常驻、7203 完成态(都没有就打 ABSENT)
+ *   node scripts/live-island-emu.cjs perm                          通知权限回执的两条路(Android 13+;会撤掉本包的通知权限并冷启两次,结束时权限是「已允许」)
  *   PKG=com.forsion.tangu.islandtest node scripts/…               换包名(真机上与正式版并存的测试包)
  *
  * 例:node scripts/live-island-emu.cjs eval "Capacitor.Plugins.LiveIsland.show({ title: 't', text: 'x', chip: '', since: Date.now(), sessionId: 's', channelName: 'c', more: 0 })"
@@ -55,9 +56,55 @@ function notif() {
   return rows.length ? rows.join('\n') : 'ABSENT'
 }
 
+/**
+ * 第一发 show 会弹系统的通知权限框,答完才贴。两条路都要对:
+ *  ① 答之前 run 已经结束 → 点「允许」后不许把那条旧岛贴回来(没人再去撤它,会一直挂着);
+ *  ② 没结束 → 点「允许」后岛出现。
+ * 权限框只能从没授权的状态问出来:每轮先撤权限(撤权限会杀进程)再冷启。
+ */
+async function perm() {
+  const pause = (ms) => new Promise((r) => setTimeout(r, ms))
+  const show = (o) => `Capacitor.Plugins.LiveIsland.show(${JSON.stringify({ title: 'perm', text: 'running', chip: '', sessionId: 's', channelName: 'c', more: 0, since: Date.now(), ...o })})`
+  async function allow() {
+    for (let i = 0; i < 20; i++) {
+      await pause(500)
+      let xml = ''
+      try { adb('shell', 'uiautomator', 'dump', '/sdcard/island-perm.xml'); xml = adb('shell', 'cat', '/sdcard/island-perm.xml') } catch { continue }
+      const m = xml.match(/resource-id="com\.android\.permissioncontroller:id\/permission_allow_button"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"/)
+      if (m) { adb('shell', 'input', 'tap', String((+m[1] + +m[3]) >> 1), String((+m[2] + +m[4]) >> 1)); return }
+    }
+    throw new Error('权限框没出现(系统低于 Android 13,或这个包被记成了「不再询问」)')
+  }
+  async function round(endsFirst) {
+    adb('shell', 'am', 'force-stop', PKG)
+    adb('shell', 'pm', 'revoke', PKG, 'android.permission.POST_NOTIFICATIONS')
+    adb('shell', 'pm', 'clear-permission-flags', PKG, 'android.permission.POST_NOTIFICATIONS', 'user-set', 'user-fixed')
+    adb('shell', 'am', 'start', '-n', `${PKG}/com.forsion.tangu.MainActivity`)
+    for (let i = 0; ; i++) {
+      await pause(1000)
+      try { if (await evaluate('document.readyState === "complete" && !!window.Capacitor?.Plugins?.LiveIsland')) break } catch (e) { if (i > 30) throw e }
+    }
+    await pause(3000) // 页面启动时自己那一发 reset 先过去
+    await evaluate(`void ${show({})}; 1`) // 答完权限框才落定:不等它
+    await pause(1500)
+    if (endsFirst) await evaluate(`void ${show({ done: true, quiet: true })}; 1`)
+    await pause(500)
+    await allow()
+    await pause(2500)
+    return notif()
+  }
+  const stale = await round(true)
+  const fresh = await round(false)
+  await evaluate(`void ${show({ done: true, quiet: true })}; 1`)
+  const [gone, up] = [stale === 'ABSENT', /android\.text=.*running/.test(fresh)]
+  console.log(`${gone && up ? 'PASS' : 'FAIL'} 权限回执:答之前已结束 → ${gone ? '不贴' : `把旧岛贴回来了\n${stale}`};没结束 → ${up ? '岛出现' : `岛没出现\n${fresh}`}`)
+  if (!gone || !up) process.exit(1)
+}
+
 const [cmd, arg] = process.argv.slice(2)
 ;(async () => {
   if (cmd === 'eval') console.log(JSON.stringify(await evaluate(arg)))
   else if (cmd === 'notif') console.log(notif())
-  else { console.log('用法:eval "<js>" | notif'); process.exit(2) }
+  else if (cmd === 'perm') await perm()
+  else { console.log('用法:eval "<js>" | notif | perm'); process.exit(2) }
 })().catch((e) => { console.error('ERR', e.message); process.exit(1) })
