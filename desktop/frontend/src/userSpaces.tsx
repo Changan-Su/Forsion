@@ -22,7 +22,11 @@ import { panelToast } from './components/PanelNotice'
 import { ipcErrorText } from './ipcError'
 import { parseSpaceJson, planMainPanels, slugifyId, uniqueId, recipeBucketOf, type SpaceSpec, type SpacePanelSpec } from '@lcl/spaces/userSpaces.core'
 import { useApp } from './stores/appStore'
-import { currentLocale } from './i18n'
+import { currentLocale, registerMessages } from './i18n'
+
+registerMessages({
+  'spaces.delete': { zh: '删除 Space…', en: 'Delete Space…' },
+})
 import { track } from './achievements/store'
 import { act } from './activity/log'
 import { readDisabledPluginIds } from '@amadeus/plugins/pluginStore'
@@ -173,17 +177,12 @@ function installUserSpace(spec: SpaceSpec, dirSlug: string = spec.id, iconUrl?: 
   addRibbonIcon({
     id: `space:${spec.id}`,
     side: 'top',
-    component: ({ expanded }) => (
-      <span
-        style={{ display: 'contents' }}
-        onContextMenu={(e) => {
-          e.preventDefault()
-          if (window.confirm(app().tr('spaces.deleteConfirm', { name: label(def.name) }))) void deleteUserSpace(spec.id)
-        }}
-      >
-        <SpaceButton space={def} expanded={expanded} />
-      </span>
-    ),
+    component: ({ expanded }) => <SpaceButton space={def} expanded={expanded} />,
+    // 右键项(Ribbon 把「在新窗口中打开」排在它前面)。原先是右键直接弹删除确认,现在先过一层菜单。
+    menu: () => [{
+      label: app().tr('spaces.delete'),
+      onClick: () => { if (window.confirm(app().tr('spaces.deleteConfirm', { name: label(def.name) }))) void deleteUserSpace(spec.id) },
+    }],
   })
 }
 

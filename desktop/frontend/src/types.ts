@@ -1590,7 +1590,7 @@ declare global {
       /** 独立窗启动握手:pull 本窗待打开的初始视图(拖出时登记的 {type,params}[];重启已恢复布局则返回空)。 */
       detachedReady?(id: string): Promise<Array<{ type: string; params?: Record<string, unknown> }>>
       /** 开一个独立窗承载给定视图(右键「移到新窗口」/拖到空桌面);screen 坐标可选(拖出落点)。 */
-      openDetached?(views: Array<{ type: string; params?: Record<string, unknown> }>, at?: { screenX: number; screenY: number }): Promise<{ id: string }>
+      openDetached?(views: Array<{ type: string; params?: Record<string, unknown> }>, at?: { screenX: number; screenY: number }, opts?: { space?: string }): Promise<{ id: string }>
       /** 开/切换 mini 悬浮卡片。带 sessionId 时定向显示该正式会话,不另建临时会话。 */
       openMini?(opts?: import('../../shared/miniPanel').MiniOpenOptions): void
       /** Open/focus a native Floating Panel window. Undefined on Web/mobile. */

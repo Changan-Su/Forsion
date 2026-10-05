@@ -8,10 +8,11 @@
 import { useEffect, useLayoutEffect, useReducer, useRef, useState } from 'react'
 import { ChevronDown, ChevronUp, ChevronsLeft, ChevronsRight, Folder as FolderIcon, MoreHorizontal, Plus, Zap } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
-import { useRibbonStore, rankIds, reorderBase, unionOrder, moveTo, slotIndexAt, ribbonActions, isRibbonAutoHome, type RibbonZone, type RibbonFolder } from './ribbonRegistry'
+import { useRibbonStore, rankIds, reorderBase, unionOrder, moveTo, slotIndexAt, ribbonActions, isRibbonAutoHome, recentRoom, type RibbonZone, type RibbonFolder } from './ribbonRegistry'
 import { RIBBON_ICON_NAMES, iconByName } from './ribbonIcons'
 import { useCommandStore, openCommandPicker, addCommand, removeCommand } from './commandRegistry'
-import { setActiveSpace } from './spaceRegistry'
+import { setActiveSpace, useSpaceStore } from './spaceRegistry'
+import { getDetachApi } from './detachSeam'
 import { effectiveHotkey, formatHotkey, isMacPlatform, useShortcuts } from './shortcutStore'
 import { engineTr, useEngineI18n } from './i18nSeam'
 import { label } from './types'
@@ -89,6 +90,11 @@ function CmdItemView({ cmd, expanded, overrideIcon }: { cmd: Command; expanded: 
   )
 }
 
+/** 把 Space 拖出 Ribbon 开窗:贴着条边这么宽以内不算(改序时手滑出去几像素,别给人开一扇窗)。 */
+const TEAR_MARGIN = 24
+/** Ribbon 条目 id → Space id(不是 Space 图标则 null)。 */
+const spaceIdOf = (id: string): string | null => (id.startsWith('space:') ? id.slice('space:'.length) : null)
+
 // 滚轮翻看后,点了别处 / 点开一个条目,隔这么久再滑回原位。ponytail: 凭手感估的,嫌快嫌慢调这个数。
 const HOME_DELAY = 600
 
@@ -100,6 +106,8 @@ export function Ribbon() {
   const folders = useRibbonStore((s) => s.folders)
   const commandItems = useRibbonStore((s) => s.commandItems)
   const commandIcons = useRibbonStore((s) => s.commandIcons)
+  const recentCount = useRibbonStore((s) => s.recentCount)
+  const recentIds = useSpaceStore((s) => s.recent)
   const commands = useCommandStore((s) => s.commands)
   useShortcuts((s) => s.overrides) // 设置里改了键 → 槽位上的快捷键提示当场跟着变
   const { t } = useEngineI18n()
@@ -257,6 +265,18 @@ export function Ribbon() {
   }
   const top = cut(topE, capT, false, scrollOff.top)
   const bot = cut(botE, capB, true, scrollOff.bottom)
+  // ---- 中间那段空当:最近使用的 Space(10-05 用户要求),最近的在上。个数 = 设置的上限(缺省 3,最多 5)与中间还放得下的
+  //      格数取小,窗口矮了就一个个减到没有;有一区展开(铺满整条)时不露。只是快捷入口:不进拖拽 / 溢出 / 快捷键编号,
+  //      也不是 .rb-slot(拖拽量槽、台架数格子都按它)。
+  //      只列此刻**没露在条上**的(同 macOS 程序坞的「最近使用」:钉在坞上的不再重复一遍):上区常驻的那一窗与主位槽里的
+  //      不算 —— 它们本来就一点即达,再列一遍只是同一个图标亮两处。常驻的那一窗按没翻过的位置算,滚轮翻看时中间不跟着跳。
+  //      要改成照字面「最近用过的都列」:去掉下面那行 filter 即可。
+  const shownOnBar = new Set([...cut(topE, capT, false, 0).shown.map((e) => e.id), ...homeItems.map((i) => i.id)])
+  const recentItems = recentIds
+    .map((id) => items.find((i) => i.id === `space:${id}`))
+    .filter((i): i is RibbonItem => !!i)
+    .filter((i) => !shownOnBar.has(i.id))
+    .slice(0, recentRoom(recentCount, slots, capT, capB, !!openZone))
   /** 滚轮在区上 = 平移露出的那一窗(DOM 不滚,拖拽落点、「…」、快捷键都照旧按条目算)。
    *  10-02 第二版「丝滑 + 吸附」:手势中按像素连续跟手(CSS 过渡把每发 delta 抹平),停手 120ms 后吸附到最近的整格,
    *  吸附完才把新窗口提交进 scrollOff。两区同一坐标:px = 窗口起点 × 槽高,往下滚 px 变大(内容跟着滚轮走:
@@ -444,6 +464,70 @@ export function Ribbon() {
     setDrag({ id, zone, from })
   }
   const endDrag = (): void => { geom.current = null; setDrag(null); setOverId(null); setOver(null); setOverFolder(null) }
+
+  // ---- 把 Space 拖出 Ribbon = 在它自己的窗口里打开(10-05 用户要求;宿主能开窗才有)。
+  //      条外不是任何人的落点,得自己在窗口级接:dragover 放行(不放行光标是禁止符,mac 上松手还要等拖影飞回去才收到
+  //      dragend),drop 开窗。贴着条边 TEAR_MARGIN 以内照样放行但不开窗(= 取消)—— 于是本文档里松手必有 drop,
+  //      「没有 drop 的 dragend」只剩两种:按 Esc 取消,或在本文档收不到事件的地方松的手(窗口外面、iframe / webview 上)。
+  //      后者在 dragend 里补开:松手点在视口外,或者底下是 iframe / webview。
+  //      ponytail: 指针停在窗口外 / iframe 上时按 Esc 也会开窗(那里分不出取消和松手);mac 的拖窗区(标题带)吞拖放事件,
+  //      松在那儿当取消。要更准得让主进程按屏幕坐标判落点。
+  const tearId = drag && getDetachApi()?.openSpace ? spaceIdOf(drag.id) : null
+  const tear = useRef<{ dropped: boolean; gone: boolean }>({ dropped: false, gone: false })
+  const nearBar = (x: number, y: number): boolean => {
+    const r = rootRef.current?.getBoundingClientRect()
+    if (!r) return true
+    const inRect = (b: DOMRect): boolean => x >= b.left - TEAR_MARGIN && x <= b.right + TEAR_MARGIN && y >= b.top - TEAR_MARGIN && y <= b.bottom + TEAR_MARGIN
+    const f = flyRef.current?.getBoundingClientRect()
+    return inRect(r) || (!!f && inRect(f))
+  }
+  const onBar = (e: DragEvent): boolean => {
+    const t = e.target as Node | null
+    return !!t && (!!rootRef.current?.contains(t) || !!flyRef.current?.contains(t))
+  }
+  useLayoutEffect(() => { // layout:要赶在 dragstart 之后的第一发拖放事件之前挂上
+    if (!tearId) return
+    const st = { dropped: false, gone: false }
+    tear.current = st
+    const onOver = (e: DragEvent): void => {
+      st.gone = false
+      if (onBar(e)) return // 条上 / 收纳夹浮层里:照旧由它们自己接
+      e.preventDefault()
+      e.stopPropagation()
+      if (e.dataTransfer) e.dataTransfer.dropEffect = 'move'
+      setOver((o) => (o ? null : o)) // 出了条:让位预览收回去(图标回原位 = 「它要走了」)
+      setOverFolder((o) => (o ? null : o))
+    }
+    const onDrop = (e: DragEvent): void => {
+      st.dropped = true
+      if (onBar(e)) return
+      e.preventDefault()
+      e.stopPropagation()
+      if (!nearBar(e.clientX, e.clientY)) getDetachApi()?.openSpace?.(tearId, { screenX: e.screenX, screenY: e.screenY })
+    }
+    // 从视口边上出去的 dragleave = 拖出了窗口(dragend 的坐标万一不可信,靠它兜);回来的第一发 dragover 复位。
+    const onLeave = (e: DragEvent): void => {
+      if (e.clientX <= 0 || e.clientY <= 0 || e.clientX >= window.innerWidth || e.clientY >= window.innerHeight) st.gone = true
+    }
+    window.addEventListener('dragover', onOver, true)
+    window.addEventListener('drop', onDrop, true)
+    window.addEventListener('dragleave', onLeave, true)
+    return () => {
+      window.removeEventListener('dragover', onOver, true)
+      window.removeEventListener('drop', onDrop, true)
+      window.removeEventListener('dragleave', onLeave, true)
+    }
+  }, [tearId]) // eslint-disable-line react-hooks/exhaustive-deps
+  const finishDrag = (e: React.DragEvent): void => {
+    const st = tear.current
+    if (tearId && !st.dropped) {
+      const { clientX: x, clientY: y } = e
+      const outside = x < 0 || y < 0 || x > window.innerWidth || y > window.innerHeight
+      const frame = !outside && /^(IFRAME|WEBVIEW)$/.test(document.elementFromPoint(x, y)?.tagName ?? '')
+      if (st.gone || outside || frame) getDetachApi()?.openSpace?.(tearId, e.screenX || e.screenY ? { screenX: e.screenX, screenY: e.screenY } : undefined)
+    }
+    endDrag()
+  }
   const acceptOver = (e: React.DragEvent, ok: boolean, mark?: () => void): void => {
     if (!ok) return
     e.preventDefault()
@@ -534,6 +618,24 @@ export function Ribbon() {
       ],
     })
   }
+  /** 图标自己的右键项(条上的格子、收纳夹浮层的行、中间的最近使用共用):Space 图标先给「在新窗口中打开」(宿主能开窗才有),
+   *  后面跟条目自带的(RibbonItem.menu,如用户 Space 的删除)。 */
+  const itemMenu = (item: RibbonItem): MenuState['entries'] => {
+    const sid = spaceIdOf(item.id)
+    const open = getDetachApi()?.openSpace
+    return [
+      ...(sid && open ? [{ label: t('lcl.ribbon.openInNewWindow'), onClick: () => open(sid) }] : []),
+      ...(item.menu?.() ?? []),
+    ]
+  }
+  const itemCtx = (item: RibbonItem) => (e: React.MouseEvent): void => {
+    if (e.defaultPrevented) return // 组件自己接了右键(主位槽)
+    const entries = itemMenu(item)
+    if (!entries.length) return // 没有自己的项 → 放它冒泡到区菜单
+    e.preventDefault()
+    e.stopPropagation()
+    setMenu({ x: e.clientX, y: e.clientY, entries })
+  }
   const cmdCtx = (cmdId: string) => (e: React.MouseEvent): void => {
     e.preventDefault()
     e.stopPropagation()
@@ -609,8 +711,8 @@ export function Ribbon() {
         style={to !== i ? { transform: `translateY(${(to - i) * slotH}px)` } : undefined}
         draggable
         onDragStart={(ev) => { snapGeom(ev.currentTarget, ev.clientY); startDrag(ev, e.id, zone, null) }}
-        onDragEnd={endDrag}
-        onContextMenu={e.kind === 'cmd' ? cmdCtx(e.cmd.id) : undefined}
+        onDragEnd={finishDrag}
+        onContextMenu={e.kind === 'cmd' ? cmdCtx(e.cmd.id) : e.kind === 'item' ? itemCtx(e.item) : undefined}
       >
         {renderEntry(e)}
         {/* 快捷键提示:只在展开态(收起态 32px 塞不下)、只给上区前 9 个。绝对定位 = 不进流,
@@ -686,11 +788,11 @@ export function Ribbon() {
       onDragOver={(ev) => acceptOver(ev, !!drag && drag.zone === folder.zone && drag.id !== e.id && !drag.id.startsWith('folder:'), () => setOverId(e.id))}
       onDragLeave={() => { if (overId === e.id) setOverId(null) }}
       onDrop={(ev) => { ev.preventDefault(); ev.stopPropagation(); dropIntoFolder(folder, at) }}
-      onDragEnd={endDrag}
+      onDragEnd={finishDrag}
       onContextMenu={e.kind === 'cmd' ? cmdCtx(e.cmd.id) : (ev) => {
         ev.preventDefault()
         ev.stopPropagation()
-        setMenu({ x: ev.clientX, y: ev.clientY, entries: [{ label: t('lcl.ribbon.moveOut'), onClick: () => { st().moveOutOfFolder(e.id); const persisted = folder.zone === 'top' ? st().order : st().bottomOrder; st().setZoneOrder(folder.zone, [...reorderBase(persisted, (folder.zone === 'top' ? topE : botE).map((x) => x.id), e.id), e.id]) } }] })
+        setMenu({ x: ev.clientX, y: ev.clientY, entries: [...(e.kind === 'item' ? itemMenu(e.item) : []), { label: t('lcl.ribbon.moveOut'), onClick: () => { st().moveOutOfFolder(e.id); const persisted = folder.zone === 'top' ? st().order : st().bottomOrder; st().setZoneOrder(folder.zone, [...reorderBase(persisted, (folder.zone === 'top' ? topE : botE).map((x) => x.id), e.id), e.id]) } }] })
       }}
     >
       {renderEntry(e, true)}
@@ -743,6 +845,15 @@ export function Ribbon() {
         {homeItems.map((i) => <RibbonItemView key={i.id} item={i} expanded={expanded} />)}
       </div>
       {openZone !== 'bottom' && renderZone('top', top)}
+      {recentItems.length > 0 && (
+        <div className="rb-group rb-recent" role="group" aria-label={t('lcl.ribbon.recentSpaces')}>
+          {recentItems.map((i) => (
+            <div key={i.id} className="rb-recent-slot" data-recent-id={i.id} /* 不叫 data-id:台架按它认上区的格子 */ onContextMenu={itemCtx(i)}>
+              <RibbonItemView item={i} expanded={expanded} />
+            </div>
+          ))}
+        </div>
+      )}
       {openZone !== 'top' && renderZone('bottom', bot)}
       <div ref={pinnedRef} className="rb-group rb-pinned">
         {pinned.map((i) => <RibbonItemView key={i.id} item={i} expanded={expanded} />)}

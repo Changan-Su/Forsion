@@ -7,7 +7,7 @@ import { registerMiniViews } from './mini/miniViews'
 /** 真实引擎装配:注册视图(会话/对话)+ ribbon + 命令 + 默认布局。替代 demoBootstrap。 */
 import { MessageCircle, Folder, Plus, Command as CommandIcon, Moon, Languages, MessageSquare, Store, Settings, FileText, ListTree, Search, Inbox, Mail, PanelLeft, PanelRight, PanelBottom, Code2, Trophy, Activity, AppWindow, Sun, TextCursorInput } from 'lucide-react'
 import type { LucideIcon, LucideProps } from 'lucide-react'
-import { registerView, addCommand, addRibbonIcon, useRibbonStore, moveTo, openCommandPalette, useWorkspace, useSpaceStore, getActiveSpace, setActiveSpaceCold, setActiveSpace, adoptSpaceLayoutCold, BOOT_ACTIVE_SPACE_ID, getView, label, recordNav, useNav, activeMainPanel, setEngineI18n, setRibbonActions, UI_MODE, supportsMiniPanel, LCL_MESSAGES } from '@lcl/engine'
+import { registerView, addCommand, addRibbonIcon, useRibbonStore, moveTo, openCommandPalette, useWorkspace, useSpaceStore, getActiveSpace, setActiveSpaceCold, setActiveSpace, adoptSpaceLayoutCold, seedSpaceWindowLayout, BOOT_ACTIVE_SPACE_ID, getView, label, recordNav, useNav, activeMainPanel, setEngineI18n, setRibbonActions, UI_MODE, WINDOW_SPACE_ID, supportsMiniPanel, LCL_MESSAGES } from '@lcl/engine'
 import type { ViewProps } from '@lcl/engine'
 import { useEffect } from 'react'
 import { windowKind } from './windowKind'
@@ -199,12 +199,15 @@ export function installEngine(): void {
     adoptSpaceLayoutCold(lastExit, target)
     if (parked) parkOnStartupFallback()
   }
+  // Space 窗口(整个 Space 开在自己的窗口里):第一次打开照这个 Space 存着的布局摆,之后记自己的。须在 Dockview 就绪之前。
+  seedSpaceWindowLayout()
   const activeSpace = getActiveSpace()
   if (activeSpace) {
     ws().setSidebarDefaults(activeSpace.sidebarDefaults)
     ws().setSideProfile(activeSpace.id, activeSpace.resizableSides ?? {}, activeSpace.sideDefaultScale, activeSpace.bottomSpan) // 首启 Space 的可拖宽侧栏画像(须先于 onReady 的 pinSides)
     // 固定 View 只在主窗生效:卫星窗(detached / mini)里只有被撕出去的那几个视图,不该被别人的固定清单管着。
-    if (windowKind() === 'main') ws().setPinned(activeSpace.pinned)
+    // Space 窗口是整个 Space,固定清单照样管(晚注册的 Space 由 DetachedRoot 等到之后再配一遍)。
+    if (windowKind() === 'main' || WINDOW_SPACE_ID) ws().setPinned(activeSpace.pinned)
   }
   // Forsion 插件在启动期就装(此前只在 Amadeus/Calendar/聊天输入框挂载时懒引导 → 从 Inbox 之类的 Space
   // 冷启动时插件根本没装):插件视图要尽早进注册表,内嵌 Space 才通得过「视图已注册」闸、旧布局引用

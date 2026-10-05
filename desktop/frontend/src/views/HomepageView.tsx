@@ -33,7 +33,7 @@ import {
   Check, FolderMinus, FolderOpen, FolderPlus, Grid2X2, Image, LogOut,
   Pencil, RefreshCw, Upload, X,
 } from 'lucide-react'
-import { setActiveSpace, useSpaceStore, useRibbonStore, useWorkspace, label, moveTo, OverlayAt } from '@lcl/engine'
+import { setActiveSpace, useSpaceStore, useRibbonStore, useWorkspace, label, moveTo, OverlayAt, getDetachApi, WINDOW_SPACE_ID } from '@lcl/engine'
 import { rankIds, reorderBase, unionOrder } from '@lcl/engine/ribbonRegistry'
 import type { SpaceDefinition, RibbonFolder, RibbonItem, ViewProps } from '@lcl/engine'
 import { askString } from '@amadeus/components/askString'
@@ -586,8 +586,17 @@ export function HomepageView(_props: ViewProps) {
       leaveTimer.current = null
       pending.current = null
       run()
+      // 平时走到这里主页已经随 Space 切换卸掉了(这一笔落空)。没切走(主页开在自己的窗口里、锁在主页上;或目标没切成)
+      // 就把缩淡收回来,不然整页一直是淡出去的样子。
+      setLeaving(false)
     }, LEAVE_MS)
     return true
+  }
+  /** 点磁贴进某个 Space。主页开在自己的窗口里时(Space 窗口锁在主页上,切不走):改成把那个 Space 开到它自己的窗口。 */
+  const launchSpace = (spaceId: string): void => {
+    const open = WINDOW_SPACE_ID ? getDetachApi()?.openSpace : undefined
+    if (open) open(spaceId)
+    else leaveThen(() => setActiveSpace(spaceId))
   }
 
   const hasTangu = spaces.some((s) => s.id === 'tangu')
@@ -869,7 +878,7 @@ export function HomepageView(_props: ViewProps) {
                 actions={fixedHomeActions}
                 spaces={pinnedSpaces}
                 labelText={t('home.pinnedSpaces')}
-                onLaunch={(spaceId) => leaveThen(() => setActiveSpace(spaceId))}
+                onLaunch={launchSpace}
               />
               <span className="hp-space-divider" aria-hidden />
               <div className="hp-space-main">
@@ -883,7 +892,7 @@ export function HomepageView(_props: ViewProps) {
                           over={over === tile.id}
                           open={openFolder?.id === tile.id}
                           onOpen={openFolderTile}
-                          onLaunch={(spaceId) => leaveThen(() => setActiveSpace(spaceId))}
+                          onLaunch={launchSpace}
                           onMenu={(event, id) => menuAt(event, 'folder', id)}
                         />
                       ))}
@@ -1099,7 +1108,7 @@ export function HomepageView(_props: ViewProps) {
                       over={over === tile.id}
                       open={false}
                       onOpen={openFolderTile}
-                      onLaunch={(spaceId) => { setOrganizerOpen(false); leaveThen(() => setActiveSpace(spaceId)) }}
+                      onLaunch={(spaceId) => { setOrganizerOpen(false); launchSpace(spaceId) }}
                       onMenu={(event, id) => menuAt(event, 'folder', id)}
                     />
                   ))}
@@ -1147,7 +1156,7 @@ export function HomepageView(_props: ViewProps) {
                       <SortableFolderMember
                         key={member.id}
                         member={member}
-                        onLaunch={(id) => { setOpenFolder(null); leaveThen(() => setActiveSpace(id)) }}
+                        onLaunch={(id) => { setOpenFolder(null); launchSpace(id) }}
                         onMenu={(event, id) => menuAt(event, 'member', id)}
                       />
                     ))}

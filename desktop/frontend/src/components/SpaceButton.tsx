@@ -1,7 +1,7 @@
 /** Space 的 ribbon 顶部图标:复用 .rb-btn,当前空间加 .on 高亮(订阅 activeSpaceId 自动刷新)。
  *  原住 spaces.tsx —— 2026-08-27 独立成文件:spaces.tsx 顶层就读 `window`(SPACES 的能力门控),
  *  node 单测里导入即炸,而内置插件(builtins/calendar)与用户 Space(userSpaces)都要复用这个按钮。 */
-import { setActiveSpace, useSpaceStore, label } from '@lcl/engine'
+import { setActiveSpace, useSpaceStore, label, getDetachApi } from '@lcl/engine'
 import type { SpaceDefinition } from '@lcl/engine'
 import { useInbox } from '../stores/inboxStore'
 import { useI18n } from '../i18n'
@@ -23,7 +23,12 @@ export function SpaceButton({ space, expanded }: { space: SpaceDefinition; expan
       aria-label={a11y}
       aria-current={active ? 'page' : undefined}
       data-rb-tip={expanded ? undefined : a11y}
-      onClick={() => setActiveSpace(space.id)}
+      // ⌘ / Ctrl + 点击 = 在它自己的窗口里打开(宿主能开窗才有;mac 上 Ctrl+点击是右键,走不到这里)。
+      onClick={(e) => {
+        const open = getDetachApi()?.openSpace
+        if ((e.metaKey || e.ctrlKey) && open) open(space.id)
+        else setActiveSpace(space.id)
+      }}
     >
       {Icon && <Icon size={18} />}
       {expanded && <span className="rb-label">{name}</span>}

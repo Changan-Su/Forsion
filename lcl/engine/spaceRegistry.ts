@@ -3,7 +3,7 @@
  *  存出当前 Space 的命名布局 → 设新 Space 侧栏默认 → 还原其命名布局(无则 build)。
  *  只依赖引擎自身(useWorkspace),不 import feature 代码。 */
 import { create } from 'zustand'
-import { IS_MINI_PANEL, IS_TRANSIENT_MINI_PANEL } from './uiMode'
+import { IS_MINI_PANEL, IS_TRANSIENT_MINI_PANEL, IS_MAIN_WINDOW, WINDOW_SPACE_ID } from './uiMode'
 import { supportsMiniPanel } from './miniPanel'
 import type { SpaceDefinition } from './types'
 import { useWorkspace, liveLayoutOwner } from './workspaceStore'
@@ -14,7 +14,19 @@ const ACTIVE_KEY = IS_MINI_PANEL ? 'forsion_mini_active_space' : 'forsion_tangu_
 /** 每个 Space 的布局存进既有命名布局表,用此前缀的保留名。 */
 export const spaceLayoutName = (id: string): string => `space:${id}`
 
+/** 最近用过的 Space(最近的在前),Ribbon 中间那一段照它画。只有主窗记、只有主窗落盘。 */
+const RECENT_KEY = 'forsion_tangu_recent_spaces'
+const RECENT_KEEP = 12 // 比最多露出的 5 个多留几个:里面会有已经卸掉的 Space
+function loadRecent(): string[] {
+  try { const v = JSON.parse(localStorage.getItem(RECENT_KEY) || '[]'); return Array.isArray(v) ? v.filter((x) => typeof x === 'string') : [] } catch { return [] }
+}
+/** 切到 to(从 from 切过来)之后的「最近使用」:to 在最前,from 紧跟(第一次切之前没人记过它)。 */
+export function bumpRecent(list: string[], to: string, from: string): string[] {
+  return [to, from, ...list.filter((x) => x !== to && x !== from)].slice(0, RECENT_KEEP)
+}
+
 function loadActive(): string {
+  if (WINDOW_SPACE_ID) return WINDOW_SPACE_ID
   if (IS_TRANSIENT_MINI_PANEL) return 'tangu'
   try { return localStorage.getItem(ACTIVE_KEY) || 'tangu' } catch { return 'tangu' }
 }
@@ -33,6 +45,8 @@ export const BOOT_ACTIVE_SPACE_ID: string = loadActive()
 interface SpaceState {
   spaces: SpaceDefinition[]
   activeSpaceId: string
+  /** 最近用过的 Space id(最近的在前;可能含已注销的,用的人自己滤)。 */
+  recent: string[]
   /** 注册一个 Space(按 id upsert,保持注册序)。 */
   registerSpace(def: SpaceDefinition): void
   /** 注销一个 Space(用户自定义 Space 删除用)。调用方须先切走活动 Space,再清 ribbon/命名布局。 */
@@ -44,6 +58,7 @@ interface SpaceState {
 export const useSpaceStore = create<SpaceState>((set, get) => ({
   spaces: [],
   activeSpaceId: loadActive(),
+  recent: loadRecent(),
 
   registerSpace: (def) =>
     set((s) => ({ spaces: [...s.spaces.filter((x) => x.id !== def.id), def] })),
@@ -56,13 +71,19 @@ export const useSpaceStore = create<SpaceState>((set, get) => ({
     const toSpace = spaces.find((s) => s.id === toId)
     if (!toSpace) return
     if (IS_MINI_PANEL && !supportsMiniPanel(toSpace)) return
+    // Space 窗口锁在自己的 Space:不切,也就不会把本窗的布局存进共用的命名槽、把共用的活动键改掉。
+    if (WINDOW_SPACE_ID) return
     const ws = useWorkspace.getState()
 
     // 1. 存出当前布局,存进**它的主人**的槽。平时主人就是 fromId;启动还原出异步 Space 的现场、而它还没就位时
     //    (内存里的活动 id 是回落 Space),屏上是那个 Space 的,按 fromId 存就写进了回落 Space 的槽。
     if (!IS_MINI_PANEL) ws.saveNamed(spaceLayoutName(liveLayoutOwner() ?? fromId))
-    set({ activeSpaceId: toId })           // 2. 先切 id(defaultBuilder 经 getActiveSpace 取新 Space)
-    try { if (!IS_TRANSIENT_MINI_PANEL) localStorage.setItem(ACTIVE_KEY, toId) } catch { /* ignore */ }
+    const recent = IS_MAIN_WINDOW ? bumpRecent(get().recent, toId, fromId) : get().recent
+    set({ activeSpaceId: toId, recent })   // 2. 先切 id(defaultBuilder 经 getActiveSpace 取新 Space)
+    try {
+      if (!IS_TRANSIENT_MINI_PANEL) localStorage.setItem(ACTIVE_KEY, toId)
+      if (IS_MAIN_WINDOW) localStorage.setItem(RECENT_KEY, JSON.stringify(recent))
+    } catch { /* ignore */ }
     if (IS_MINI_PANEL) {
       // Never restore the old Mini/mobile workspace blob or build desktop sidebars.
       ws.resetLayout()
@@ -96,7 +117,16 @@ export function setActiveSpaceCold(id: string, persist = true): void {
   const { spaces } = useSpaceStore.getState()
   if (!spaces.some((s) => s.id === id)) return
   useSpaceStore.setState({ activeSpaceId: id })
-  try { if (persist && !IS_TRANSIENT_MINI_PANEL) localStorage.setItem(ACTIVE_KEY, id) } catch { /* ignore */ }
+  try { if (persist && !IS_TRANSIENT_MINI_PANEL && !WINDOW_SPACE_ID) localStorage.setItem(ACTIVE_KEY, id) } catch { /* ignore */ }
+}
+
+/** Space 窗口第一次打开:照这个 Space 存着的布局摆(主窗切走 / 开窗前存的那份),没有就落空走它的默认布局。
+ *  之后这扇窗记自己的 —— 布局键按窗口隔离(layoutPersist.computeLayoutKey),一个 Space 一扇窗、id 固定,所以再开还是上次的样子。
+ *  纯 Storage 搬运(须在 Dockview 就绪之前跑):只读共用的命名槽,只写本窗自己的键。 */
+export function seedSpaceWindowLayout(): void {
+  if (!WINDOW_SPACE_ID || loadLayout()) return
+  const seed = loadNamedLayout(spaceLayoutName(WINDOW_SPACE_ID))
+  if (seed) saveLayout({ ...seed, space: WINDOW_SPACE_ID })
 }
 
 /** 冷启动的每-Space 布局交接。**纯 Storage 搬运**,故可以跑在 Dockview api 就绪之前(onReady 之前

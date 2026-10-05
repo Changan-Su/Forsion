@@ -167,6 +167,9 @@ export interface RibbonItem {
   mobileFoot?: boolean
   /** 复合项:自定义组件渲染,拿到 ribbon 展开态(替代 icon/onClick)。用于账号卡。 */
   component?: ComponentType<{ expanded: boolean }>
+  /** 这个图标自己的右键菜单项(弹的时候现取)。Ribbon 会把通用项排在前面(Space 图标的「在新窗口中打开」)。
+   *  组件自己接了右键(preventDefault)的,Ribbon 不再弹。 */
+  menu?: () => { label: string; onClick(): void }[]
 }
 
 /** 底部状态栏的一项(≈ Obsidian addStatusBarItem)。 */

@@ -433,8 +433,8 @@ const api = {
   // ── 多窗口:独立窗(拖出的 dockview,无 ribbon)+ mini 悬浮卡片 + floating 面板 ──
   detachedReady: (id: string): Promise<Array<{ type: string; params?: Record<string, unknown> }>> =>
     ipcRenderer.invoke('window:detachedReady', id),
-  openDetached: (views: Array<{ type: string; params?: Record<string, unknown> }>, at?: { screenX: number; screenY: number }): Promise<{ id: string }> =>
-    ipcRenderer.invoke('window:openDetached', views, at),
+  openDetached: (views: Array<{ type: string; params?: Record<string, unknown> }>, at?: { screenX: number; screenY: number }, opts?: { space?: string }): Promise<{ id: string }> =>
+    ipcRenderer.invoke('window:openDetached', views, at, opts),
   openMini: (opts?: import('../shared/miniPanel').MiniOpenOptions): void => ipcRenderer.send('window:openMini', opts),
   openFloatingPanel: (opts: import('../shared/floatingPanel').FloatingPanelOpenOptions): Promise<{ id: string } | undefined> =>
     ipcRenderer.invoke('window:openFloating', opts),
