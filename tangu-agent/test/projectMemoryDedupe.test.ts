@@ -115,6 +115,15 @@ describe('② 词面闸:新的一句是已有某条里连着的一段原话才�
     expect(coveringProjectEntry([e('Deploy from main on Fridays only when the release manager signs off')], 'Deploy from main on Fridays')).toBeNull();
     expect(coveringProjectEntry([e('用 npm 安装依赖是不行的')], '用 npm 安装依赖')).toBeNull();
   });
+  // 词两头只去句读:正负号、命令行开关、名字里的符号都是词的一部分(10-05 走查:以前两头的符号全去掉,-5 成了 5)
+  it('正负号 / 开关 / 名字里的符号不同 → 不是同一个词', () => {
+    expect(coveringProjectEntry([e('Set the retry offset to 5 seconds in the config')], 'Set the retry offset to -5 seconds')).toBeNull();
+    expect(coveringProjectEntry([e('Run deploy.sh with env staging before the smoke test')], 'Run deploy.sh with --env staging')).toBeNull();
+    expect(coveringProjectEntry([e('The engine core is written in C')], 'The engine core is written in C++')).toBeNull();
+    expect(coveringProjectEntry([e('Secrets are read from env at startup')], 'Secrets are read from .env at startup')).toBeNull();
+    const quoted = e("The test command is 'npm run test:unit'.");
+    expect(coveringProjectEntry([quoted], 'The test command is npm run test:unit')).toBe(quoted); // 引号、句号不算
+  });
   it('太短的不判;一字不差(只差大小写 / 空白)的不归它管', () => {
     expect(coveringProjectEntry([e('这个项目用 npm，也用 pnpm')], '用 npm')).toBeNull();
     expect(coveringProjectEntry([e('Deploys go out on Fridays')], 'deploys go out on  fridays')).toBeNull();
@@ -146,6 +155,14 @@ describe('③ 后台写入(addProjectFact)', () => {
     const now = repo.snapshot().entries;
     expect(now.map((x) => x.content)).toEqual(['用户的项目都使用 pnpm。', '用户的项目都使用 pnpm；提供项目命令时应优先给出 pnpm 命令。']);
     expect(now[0]).toMatchObject({ id: mine.id, source: { kind: 'explicit' } });
+  });
+  // 走查 10-05:新的一句已经一字不差地记着(用户记的),同时又把后台记的另一条说全了 → 以前会把后台那条改写成它,变成两条一样的
+  it('这句已经一字不差地记着 → 不拿它去改写后台记的另一条', async () => {
+    const repo = await openProjectMemory(await ref());
+    expect(await addProjectFact(await ref(), '这个项目的依赖一律用 pnpm 安装', 'first')).toBe('added');
+    repo.mutate({ action: 'add', fact: '这个项目的依赖一律用 pnpm 安装，锁文件要提交', source: { kind: 'explicit', sessionId: 'another-session' } });
+    expect(await addProjectFact(await ref(), '这个项目的依赖一律用 pnpm 安装，锁文件要提交', sid)).toBe('duplicate');
+    expect(await facts()).toEqual(['这个项目的依赖一律用 pnpm 安装', '这个项目的依赖一律用 pnpm 安装，锁文件要提交']);
   });
   it('后台以前记的那条被新的一句否定了 → 不就地换,另记一条(分不清是更正还是另一件事)', async () => {
     expect(await addProjectFact(await ref(), '用 npm 安装这个项目的依赖', 'first')).toBe('added');

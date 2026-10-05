@@ -169,11 +169,12 @@ export async function forgetProjectMemory(project: string, id: string, expectedV
 // ponytail: 词面判定,认不出真正换了措辞的同义句;要认得出就得加一次模型整理,连同撤销入口一起做。
 
 const CJK_CHAR = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/gu;
-/** 一句话拆成词的序列:中日韩文字一字一个,其余文字 / 数字 / 路径 / 命令整个算一个;标点与空白不算。 */
+/** 一句话拆成词的序列:中日韩文字一字一个,其余文字 / 数字 / 路径 / 命令整个算一个;标点与空白不算。
+ *  词两头只去掉句读(句尾的 . : 与引号):`-5` 与 `5`、`--env` 与 `env`、`c++` 与 `c`、`.env` 与 `env` 都是不同的词。 */
 function factWords(fact: string): string[] {
   return normalizeMemoryFact(fact).replace(/’/g, "'").replace(CJK_CHAR, ' $& ')
     .split(/[^\p{L}\p{N}_./:@+#'-]+/u)
-    .map((w) => w.replace(/^[_./:@+#'-]+|[_./:@+#'-]+$/g, ''))
+    .map((w) => w.replace(/^'+|[.:']+$/g, ''))
     .filter(Boolean);
 }
 const MIN_WORDS = 4; // 太短的句子(「用 npm」)是不是别人的一段原话说明不了什么,不判
@@ -237,7 +238,9 @@ export async function addProjectFact(ref: ProjectMemoryRef, fact: string, sessio
   if (standsDown(snapshot, fact, sessionId)) return 'duplicate';
   if (coveringProjectEntry(snapshot.entries, fact)) return 'duplicate';
   const mine = factWords(fact);
-  const outgrown = snapshot.entries.find((e) => e.source?.kind === 'historian' && saysAll(mine, factWords(e.content)));
+  // 这句已经一字不差地记着 → 不许拿它去改写另一条(改完就是两条一样的);交给下面的 add,由 mutate 自己认出重复
+  const saved = snapshot.entries.some((e) => normalizeMemoryFact(e.content) === normalizeMemoryFact(fact));
+  const outgrown = saved ? undefined : snapshot.entries.find((e) => e.source?.kind === 'historian' && saysAll(mine, factWords(e.content)));
   const write = { fact, cap: PROJECT_MEMORY_CHAR_BUDGET, expectedVersion: before, evidenceIds: [`session:${sessionId}`], source: { kind: 'historian' as const, sessionId } };
   try {
     // 带读到的版本写:上面几道检查与写入之间别处改过(比如用户刚删了这一句)→ 冲突,这一轮不写(Codex 评审 10-04:不带版本会把刚立的墓碑复活)。
