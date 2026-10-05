@@ -1800,7 +1800,8 @@ try {
     const bState = evB.error ? 'error' : foreB ? 'foreground' : acts.includes('project_memory_compacted') ? (acts.includes('project_memory_added') && B.ok ? 'ok' : 'wrong') : refused ? 'refused' : 'not-nominated';
     const bNote = { ok: `复盘写时遇到写满 → 压缩(${rows.find((r) => r.action === 'project_memory_compacted')?.detail || ''})→ 记上了;带网址那条没动、现行的都在`,
       wrong: `⚠ 压了但结果不对:${JSON.stringify({ acts, saved: B.saved, pinnedIntact: B.pinnedIntact, missing: B.missing, chars: B.chars, recorded: B.recorded })}`,
-      refused: `⚠ 引擎没收模型交回的压缩:${refused.slice(-220)}`, error: `⚠ ${evB.error}`,
+      // 「没压成」分两种:failed = 那次模型调用自己没成(供应方过载 / 网络 / 超时),别的 = 模型交回的方案没被收下。都不算过,但报告里别混着说
+      refused: `⚠ ${/没成\([^)]*\):failed/.test(refused) ? '压缩那次模型调用没成(供应方 / 网络 / 超时,不是方案被拒)' : '引擎没收模型交回的压缩'}:${refused.slice(-220)}`, error: `⚠ ${evB.error}`,
       foreground: `没量到:前台没听话,自己调了 remember(${B.saved ? '记上了' : '没记上'};回执 compacted ${evB.toolResults.some((r) => r.name === 'remember' && /"compacted"/.test(r.full || '')) ? '有' : '无'})`,
       'not-nominated': `没量到:判官没往项目级提名(活动 ${acts.join('/') || '无'})` }[bState];
     const bOk = bState === 'ok' || bState === 'foreground' || bState === 'not-nominated';
