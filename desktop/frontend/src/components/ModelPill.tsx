@@ -357,6 +357,7 @@ export const ModelPill: React.FC<{
     ? contextLimitOptions(modelsResponse.models.find((m) => m.id === modelId), modelsResponse.contextWindowCap, isUltra && !!modelsResponse.ultraUncapped)
     : null
   const pickContext = (tokens: number | null): void => {
+    cancelHover()
     setPane(null)
     if (modelId) onContextWindowChange?.(modelId, tokens)
   }
@@ -390,6 +391,7 @@ export const ModelPill: React.FC<{
   const paneValue = pane === 'model' ? modelId : slot ? (defaultModelIds?.[slot] || '') : ''
   const selectDefault = (slot: DefaultModelSlot, id: string): void => {
     onDefaultModelChange?.(slot, id)
+    cancelHover()
     setPane(null)
   }
   const showPane = (p: Pane) => (): void => { cancelHover(); if (pane !== p) setQuery(''); setPane(p) }
