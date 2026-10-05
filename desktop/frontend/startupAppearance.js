@@ -41,8 +41,8 @@
     #tangu-splash .fts-bloom { background:radial-gradient(ellipse 44% 58% at var(--fts-cx) var(--fts-cy), var(--fts-bloom), transparent 72%); }\
     #tangu-splash .fts-grain { opacity:.07; background:url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%22240%22 height=%22240%22%3E%3Cfilter id=%22n%22%3E%3CfeTurbulence type=%22fractalNoise%22 baseFrequency=%22.9%22 numOctaves=%222%22 stitchTiles=%22stitch%22/%3E%3CfeColorMatrix values=%220 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 .55 0%22/%3E%3C/filter%3E%3Crect width=%22100%25%22 height=%22100%25%22 filter=%22url(%23n)%22/%3E%3C/svg%3E"); }\
     #tangu-splash .fts-cloud { background:inherit; opacity:0; animation:fts-clear 1700ms cubic-bezier(.4,0,.2,1) both; }\
-    #tangu-splash .fts-brand { position:absolute; left:7%; bottom:calc(9% + env(safe-area-inset-bottom, 0px)); display:flex; align-items:center; gap:12px; color:var(--fts-word); font:500 13px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; letter-spacing:.42em; animation:fts-in 1100ms 500ms both; }\
-    #tangu-splash .fts-brand svg { width:20px; height:24px; fill:currentColor; }\
+    #tangu-splash .fts-brand { position:absolute; left:7%; bottom:calc(9% + env(safe-area-inset-bottom, 0px)); display:flex; align-items:center; gap:.92em; color:var(--fts-word); font:500 13px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; letter-spacing:.42em; animation:fts-in 1100ms 500ms both; }\
+    #tangu-splash .fts-brand svg { width:1.54em; height:1.85em; fill:currentColor; }\
     #tangu-splash .fts-verse { position:absolute; left:7%; top:calc(13% + env(safe-area-inset-top, 0px)); -webkit-writing-mode:vertical-rl; writing-mode:vertical-rl; color:var(--fts-verse); font-family:"Songti SC", "STSong", "Noto Serif CJK SC", "Noto Serif SC", "Source Han Serif SC", "SimSun", serif; line-height:1; letter-spacing:.42em; }\
     #tangu-splash .fts-verse p { margin:0; animation:fts-in 900ms 300ms both; }\
     #tangu-splash .fts-verse p + p { margin-block-start:1.05em; padding-inline-start:1.5em; animation-delay:600ms; }\
@@ -93,7 +93,7 @@
         + ';--fts-root:' + rootX / W * 100 + '% ' + rootY / H * 100 + '%';
       scene.innerHTML = '<div class="fts-view"><div class="fts-lit"></div><canvas class="fts-far"></canvas><canvas class="fts-near"></canvas><canvas class="fts-wall"></canvas><div class="fts-bloom"></div><div class="fts-grain"></div></div><div class="fts-cloud"></div>'
         + '<div class="fts-verse" style="font-size:' + Math.max(17, Math.min(34, Math.min(W, H) * .031)) + 'px"><p>' + VERSES[pick][0] + '</p><p>' + VERSES[pick][1] + '</p><p class="fts-src">' + VERSES[pick][2] + '</p></div>'
-        + '<div class="fts-brand"><svg viewBox="210.585 128.215 588.13 706.57"><path d="' + (mark ? mark.getAttribute('d') : '') + '"/></svg>FORSION</div>';
+        + '<div class="fts-brand" style="font-size:' + Math.max(9, Math.min(13, Math.min(W, H) * .02)) + 'px"><svg viewBox="210.585 128.215 588.13 706.57"><path d="' + (mark ? mark.getAttribute('d') : '') + '"/></svg>FORSION</div>';
       var layers = scene.getElementsByTagName('canvas');
       // WebKit has no canvas filter: blur the finished layer with CSS instead.
       var blur = function (canvas, context, px) {
@@ -143,11 +143,14 @@
   var IMAGE = /^data:image\/(png|jpeg|webp|gif|svg\+xml);base64,[A-Za-z0-9+/]+={0,2}$/;
   var usable = function (item) { return !!item && typeof item.image === 'string' && item.image.length <= 2000000 && IMAGE.test(item.image); };
   var classic = value.scene === 'classic';
-  var asset = (!reduce && value.splash) || value.icon;
+  // Classic keeps its original rule: artwork, else the app icon. The tree shadow yields only to chosen
+  // startup artwork and never follows the app icon, so reduced motion gets the artwork's still poster,
+  // a still format as it is, or the still tree shadow.
+  var asset = classic ? (!reduce && value.splash) || value.icon : value.splash;
+  if (!classic && reduce && asset && !asset.poster && !/^data:image\/(png|jpeg);/.test(asset.image)) asset = null;
   var usesIcon = asset && asset === value.icon;
-  if (animation === 'none' && asset && asset.poster) asset = { image: asset.poster };
-  // The tree shadow yields only to chosen startup artwork. It never follows the app icon.
-  if (!classic && !usable(value.splash) && treeShadow(original)) { /* default scene mounted */ }
+  if ((animation === 'none' || (reduce && !classic)) && asset && asset.poster) asset = { image: asset.poster };
+  if (!classic && !usable(asset) && treeShadow(original)) { /* default scene mounted */ }
   else if (usable(asset)) {
     var img = document.createElement('img');
     img.className = 'forsion-startup-image';

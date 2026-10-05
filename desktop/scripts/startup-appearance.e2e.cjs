@@ -79,9 +79,9 @@ async function main() {
     check('new installations still use the tree icon despite available built-in artwork', await settings.inputValue('#startup-icon') === '' && await settings.inputValue('#startup-splash') === '')
     // Two built-in scenes: the tree shadow is the default; the original animated mark stays selectable and stores no image.
     const sceneFrame = settings.frameLocator('.startup-appearance-preview iframe')
+    await settings.locator('.startup-appearance').screenshot({ path: path.join(OUT, 'tree-shadow-settings-zh-light.png'), animations: 'disabled' })
     await settings.getByRole('button', { name: '预览开屏', exact: true }).click()
     await sceneFrame.locator('#tangu-splash .fts canvas').nth(2).waitFor()
-    await settings.locator('.startup-appearance').screenshot({ path: path.join(OUT, 'tree-shadow-settings-zh-light.png') })
     await settings.waitForTimeout(1500) // The scene emerges from the stage colour; the preview leaves at 2.4s.
     await settings.locator('.startup-appearance-preview').screenshot({ path: path.join(OUT, 'tree-shadow-preview.png') })
     await sceneFrame.locator('#tangu-splash').waitFor({ state: 'detached', timeout: 8000 })

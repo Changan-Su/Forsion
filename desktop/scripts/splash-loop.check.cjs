@@ -194,6 +194,20 @@ async function main() {
   await firstFrame()
   await page.waitForTimeout(700)
   check('减少动态效果:首帧一到就撤(不守最短展示)', (await page.evaluate(shadowState)).gone)
+  // 选了开屏素材又开着减少动态效果:经典是换成应用图标;树影这边不许拿图标顶替 —— 用素材自己的静帧,
+  // 没有静帧又可能会动的(SVG / GIF / WebP)停在树影的一帧,解不开的照样回落树影。
+  const iconSrc = () => page.locator('#tangu-splash img').evaluateAll((imgs) => imgs.map((i) => i.src))
+  await open(html({ icon: { image: svg }, splash: { image: svg, poster: png } }))
+  check('减少动态效果 + 素材有静帧:显示静帧,不是应用图标', (await iconSrc()).join() === png)
+  await open(html({ icon: { image: png }, splash: { image: svg } }))
+  const noPoster = await page.evaluate(shadowState)
+  check('减少动态效果 + 会动的素材没有静帧:停在树影,不是应用图标', !!noPoster.mounted && noPoster.img === 0 && noPoster.names.length === 0)
+  await open(html({ icon: { image: png }, splash: { image: broken } }))
+  await page.locator('#tangu-splash .fts').waitFor({ timeout: 5000 }).catch(() => {})
+  const brokenReduced = await page.evaluate(shadowState)
+  check('减少动态效果 + 损坏的素材:回落树影,不是应用图标', !!brokenReduced.mounted && brokenReduced.img === 0)
+  await open(html({ scene: 'classic', icon: { image: png }, splash: { image: svg } }))
+  check('对照:经典在减少动态效果下仍换成应用图标', (await iconSrc()).join() === png)
   await page.emulateMedia({ reducedMotion: 'no-preference' })
 
   // ── ⑥ 暗色 = 月光;每次换一句,不连着出同一句 ──
@@ -208,7 +222,7 @@ async function main() {
   await page.screenshot({ path: path.join(OUT, 'tree-shadow-dark.png') })
 
   // ── ⑦ 竖屏 / 窄窗 / 小窗 / 大屏:诗句仍在墙上、不出画 ──
-  for (const [w, h, shot] of [[390, 844, 'portrait'], [600, 900], [800, 600], [1024, 768], [1920, 1080], [2560, 1440, 'wide']]) {
+  for (const [w, h, shot] of [[390, 844, 'portrait'], [500, 300, 'preview'], [600, 900], [800, 600], [1024, 768], [1920, 1080], [2560, 1440, 'wide']]) {
     for (const mode of shot === 'portrait' ? ['dark', 'light'] : ['light']) {
       await page.setViewportSize({ width: w, height: h })
       await page.evaluate((m) => localStorage.setItem('forsion_theme', m), mode)
@@ -284,8 +298,10 @@ async function main() {
     await at({ animation: 'none', splash: { image: svg, poster: png } })
     check(`${entry}: 静止素材使用首帧`, await page.locator('.forsion-startup-image').getAttribute('src') === png)
     await page.emulateMedia({ reducedMotion: 'reduce' })
+    await at({ scene: 'classic', animation: 'spin', icon: { image: png }, splash: { image: svg } })
+    check(`${entry}: 经典 + 减少动态效果,开屏素材换成静态图标`, await page.locator('#tangu-splash').evaluate((s) => s.querySelector('img')?.src.startsWith('data:image/png') && s.getAnimations({ subtree: true }).length === 0))
     await at({ animation: 'spin', icon: { image: png }, splash: { image: svg } })
-    check(`${entry}: 减少动态效果下,开屏素材换成静态图标`, await page.locator('#tangu-splash').evaluate((s) => s.querySelector('img')?.src.startsWith('data:image/png') && s.getAnimations({ subtree: true }).length === 0))
+    check(`${entry}: 减少动态效果下树影不拿应用图标顶替素材`, await page.locator('#tangu-splash').evaluate((s) => !!s.querySelector('.fts') && !s.querySelector('img') && s.getAnimations({ subtree: true }).length === 0))
     await page.emulateMedia({ reducedMotion: 'no-preference' })
     await at({ showSplash: false })
     check(`${entry}: 用户可关闭开屏`, await page.locator('#tangu-splash').count() === 0)
