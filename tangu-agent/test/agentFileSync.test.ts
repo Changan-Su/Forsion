@@ -202,6 +202,18 @@ describe('agentFileSync — LOG block-merge (additive, not LWW)', () => {
     expect(readFileSync(logFile('2026-10-04'), 'utf8')).toBe('# 2026-10-04\n\nhand-written day, no entries\n'); // 旧逻辑:没有块就什么都不拉
   });
 
+  it('refuses a union that would exceed the sync limit, leaving both sides as they were', async () => {
+    const big = (tag: string) => `# 2026-10-05\n\n${`${tag} `.repeat(600_000)}\n`; // 各约 3 MiB,合起来超过 5 MiB 上限
+    await seedLog('2026-10-05', big('local'));
+    const cloud = fakeCloud(['tester']);
+    await cloud.putFile('u', 'tester', 'LOG/2026-10-05.md', { content: big('cloud'), isBinary: false, size: big('cloud').length, mtimeMs: Date.now() });
+    const r = await runAgentFilesSync(cloud, 'u');
+    expect(r.ok).toBe(false); expect(r.error).toContain('merged log exceeds sync limit');
+    expect(readFileSync(logFile('2026-10-05'), 'utf8')).toBe(big('local'));
+    expect(cloud._rows.get('tester\0LOG/2026-10-05.md').content).toBe(big('cloud'));
+    expect((await cloud.getFile('u', 'tester', 'config.toml'))).not.toBeNull(); // 别的文件照常同步
+  });
+
   it('does not fetch log files whose content already matches the manifest hash', async () => {
     await seedLog('2026-10-01', '# 2026-10-01\n\n### 09:00\n@dev a\n');
     for (const d of ['2026-10-02', '2026-10-03']) writeFileSync(logFile(d), `# ${d}\n\n### 09:00\n@dev b\n`);

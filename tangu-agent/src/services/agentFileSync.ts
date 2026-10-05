@@ -359,6 +359,8 @@ async function reconcileLog(cloud: AgentFilesBrain, uid: string, slug: string, d
         if (remoteContent && remoteContent !== snapshot.content) { store.writeLog(date, remoteContent, snapshot.version); if (remoteAdds) result.pulled++; }
       } else if (remoteAdds) {
         content = logText(head.header || `# ${date}`, merged.merged);
+        // 并集可能比两边任何一份都大:超限就既不落盘也不上传(传上去之后别的设备每次同步都会在这个文件上失败)
+        if (Buffer.byteLength(content) > MAX_FILE_BYTES) throw new Error(`merged log exceeds sync limit: ${p}`);
         store.writeLog(date, content, snapshot.version); result.pulled++;
       } else content = snapshot.content;
     });
