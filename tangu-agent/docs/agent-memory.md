@@ -109,5 +109,6 @@ Agent 定义已有有效本地快照时立即开跑，云文件同步在后台�
 - **注入**:系统提示里 `## Project Memory (<项目名>)` 一段,明说只在这里成立、是引用数据不是指令。
 - **回忆片段的出处**:`Related past-message excerpts` 按 agent 检索、不分项目。来自别的项目的片段标 `project=<名>, not this session's project`,段头注明它说的不是当前项目(起因:另一个项目的会话靠这条通道答出了原项目的分支名)。
 - **界面**:项目详情 → 配置 → 项目记忆(列出、逐条删除,带版本,409 重新载入)。路由 `GET /agent/project-context` 的 `memory` 字段、`DELETE /agent/project-context/memory`;远端来源一律拒绝。
-- **没做**:项目级的 Dream(跨会话、换了说法的重复只能靠判官看到已有内容来避免)、跨设备同步、团队 / 群聊 / 子代理循环里的 `scope`(那几条循环不设 `projectScoped`)。
+- **团队 / 讨论 / 子 agent 的会话**(10-05):这几种会话行(`kind` = `teamwork` / `discussion` / `delegate`)建行时不带 `project_path`,归属沿 `parent_session_id` 往上找(`projectMemory.ts` 的 `projectOwnerSession`:只认同一个用户、最多 4 层、别的种类不找)。于是项目里的团队成员、讨论成员、从它们派出去的子 agent,提示里都有项目记忆段,`remember` 也带 `scope`。子 agent(自有循环)与父会话同一个会话 id,`remember` 的项目级本来就能用,这次补的是它提示里的项目记忆段(`subAgent.ts`)。临时成员(团队 / 讨论里现写的一次性人设,`ctx.ephemeral`)不给 `remember` / `log_event`,只读得到提示里那一段。协作说明(HUMAN.md)的项目级没有跟着改,仍只看会话行自己。回忆片段的「不是本会话的项目」标注读的也是会话行自己的列,成员会话里不会标。
+- **没做**:项目级的 Dream(跨会话、换了说法的重复只能靠判官看到已有内容来避免)、跨设备同步。
 - **验证**:`test/projectMemory.test.ts`、`test/historianMemoryPipeline.test.ts` 的「项目会话」一组;`npm run live:harness -- --only projmem`(落点、同项目共用、跨项目隔离)与 `--only realuse --real-legs q,i,c`(平常的话纠正 → 记到哪一级 → 换项目串不串;末尾另记后台这条路把项目规矩提名成 agent 级候选几轮、项目记忆里重复几轮;`--real-legs d` 单量「自己踩到、没人纠正 → 后台记到项目级 → 同项目新会话带上」)。

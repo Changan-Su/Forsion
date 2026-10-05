@@ -17,6 +17,7 @@ import path from 'node:path';
 import { tanguHome } from '../core/tanguHome.js';
 import { assertSafeChain } from './projectContext.js';
 import { humanProjectScope } from './humanContext.js';
+import { query } from '../core/db.js';
 import { atomicWriteMemoryFile, createMemoryRepository, isMemoryTombstoneActive, memoryFactFingerprint, normalizeMemoryFact, readMemoryFile, withMemoryDirectoryLock, MemoryRepositoryError, type MemorySnapshot } from './memoryRepository.js';
 
 /** 一个项目的记忆总量(字符)。比 agent 级(20,000)小:它整份都可能进系统提示。 */
@@ -33,10 +34,35 @@ function refOf(project: string): ProjectMemoryRef {
   return { project, name: path.basename(project), dir: path.join(tanguHome(), ROOT, key) };
 }
 
-/** 本会话所在项目的记忆位置;无项目会话 / 会话不存在 → null。只算路径,不建任何目录。 */
+// 团队成员的工作会话、讨论会话、子 agent 的记录会话,建行时都不带 project_path(teamRuns / discussion / delegateTranscript)——
+// 它们在哪个项目里干活,看的是父会话。别的种类(Muse、自动化、普通会话)不往上找:它们的父链不是「在同一个项目里替它干活」。
+const INHERITING_KINDS = new Set(['teamwork', 'discussion', 'delegate']);
+const PROJECT_PARENT_HOPS = 4; // 实际最深 3 层(子 agent ← 讨论成员 ← 讨论 ← 用户会话);成环 / 脏数据到此为止
+
+/** 这个会话的项目由哪一行会话说了算:自己带着项目(或明说不属于项目)→ 自己;上面三种且有父会话 → 往上找。
+ *  只认同一个用户的行;父会话不存在或是别人的 → null(没有项目)。归属仍然只来自库里的会话行,不接受模型或客户端给的路径。 */
+async function projectOwnerSession(userId: string, sessionId: string): Promise<string | null> {
+  let id = sessionId;
+  for (let hop = 0; hop < PROJECT_PARENT_HOPS; hop++) {
+    let row: any;
+    try { row = (await query<any[]>('SELECT user_id, kind, parent_session_id, project_path, projectless FROM chat_sessions WHERE id = ? LIMIT 1', [id]))[0]; }
+    catch { return sessionId; } // 会话表没有这几列的部署:照旧只看这一行
+    if (!row || row.user_id !== userId) return null;
+    if (row.project_path || row.projectless || !INHERITING_KINDS.has(String(row.kind)) || !row.parent_session_id) return id;
+    id = String(row.parent_session_id);
+  }
+  return id; // 走满层数:到的这一行自己没有项目就是没有
+}
+
+/** 本会话所在项目的记忆位置;无项目会话 / 会话不存在 → null。只算路径,不建任何目录。
+ *  团队成员 / 讨论 / 子 agent 的会话跟父会话走(见上)。协作说明(HUMAN.md)的项目级不走这条:那边仍只看会话行自己。 */
 export async function resolveProjectMemory(userId: string, sessionId: string): Promise<ProjectMemoryRef | null> {
   let scope: Awaited<ReturnType<typeof humanProjectScope>>;
-  try { scope = await humanProjectScope(userId, sessionId); } catch { return null; } // 会话不存在 / 项目目录没了:当作没有项目
+  try {
+    const owner = await projectOwnerSession(userId, sessionId);
+    if (!owner) return null;
+    scope = await humanProjectScope(userId, owner);
+  } catch { return null; } // 会话不存在 / 项目目录没了:当作没有项目
   return scope && scope.kind === 'project' ? refOf(scope.cwd) : null;
 }
 

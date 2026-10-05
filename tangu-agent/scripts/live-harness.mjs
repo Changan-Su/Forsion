@@ -145,6 +145,7 @@ KEYS.push('equip');
 KEYS.push('musereview');
 KEYS.push('realuse');
 KEYS.push('projmem');
+KEYS.push('projteam');
 // autocompact 要把模型窗口钉小(--window)才灌得满;窗口小了别的场景会被连累(系统提示+工具头就 13k+),所以它只能单独跑。
 const WINDOW = Number(opt('window', process.env.TANGU_LIVE_WINDOW || 0)) || 0;
 // P1-K9 · C3:--remote-cap <档> = 起引擎前经 K4 的新写入口写 remote.maxApprovalMode(缺省不写 = 引擎按 auto-edit)
@@ -160,6 +161,7 @@ const GIT_PREFIX = 'livetest/'; const GIT_TAG = '[LIVE]';
 // 还会往隔离 home 播记忆行(会进别的场景的系统提示);deferred 要真装 liteparse 解析文档;
 // grant 是两个委派 run(慢),且只在动过 delegate.grantTools / 子代理管理面闸时才有信息量。
 const OPT_IN = new Set(['realtime', 'remember', 'musewake', 'personas', 'rename', 'selfschedule', 'selfmodel', 'teamapproval', 'parked', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'control', 'phone']);
+OPT_IN.add('projteam'); // --only projteam:项目记忆在团队会话里(三个两人团队各一轮)
 OPT_IN.add('visualfigures');
 OPT_IN.add('visualize'); // --only visualize: real model -> sketch controls/state; HTML can feed desktop check:visualize.
 OPT_IN.add('emoji'); // Three real-model rounds; run explicitly when session icons change.
@@ -1583,6 +1585,47 @@ try {
       `③ 换一个项目 ${isolated ? `项目记忆段不在;${other.content.includes(branch) ? '提到了那个分支但说明它属于另一个项目' : '答不出'};自己那条还在` : `⚠ ${other.error || JSON.stringify({ leaked: !!other.systemPrompt?.includes(branch), claimedAsThisProject: other.content.includes(branch) && !attributed, ownFact: !!other.systemPrompt?.includes(habit) })}`}`,
       `④ 不属于项目的会话 ${projectless ? '没有项目记忆段' : `⚠ ${loose.error || '提示里出现了项目记忆'}`}`,
     ].join(';'), output: `【写入】${ev.content}\n【同项目另一个 agent】${same.content}\n【换项目】${other.content}\n【无项目】${loose.content}`, toolCalls: [...ev.toolCalls, '|', ...same.toolCalls, '|', ...other.toolCalls] };
+  });
+
+  // ── 项目记忆在团队会话里(10-05)──
+  //  成员的工作会话建行时不带项目路径,以前它们提示里没有项目记忆、remember 也没有「项目级」。现在沿父会话认项目。
+  //  A 项目里的团队:用户说一条只在这个项目成立的规矩,点名一位成员记 → 落进项目记忆,不进成员自己的记忆;
+  //  B 同一个项目里另开一个团队(两位都没见过这件事),点名问一位 → 答得出(只可能来自它提示里的项目记忆段);
+  //  C 别的项目里的团队(两位也都没见过),点名问一位 → 答不出。
+  //  负对照 = 把 projectMemory.ts 的 resolveProjectMemory 改回只看会话行自己后重建再跑:A 记不进项目级、B 答不出。
+  await scenario('projteam', 'projteam 项目记忆在团队会话里:成员记得进、别的成员看得到、别的项目看不到', async () => {
+    const names = { 'live-pt-wren': 'Wren', 'live-pt-kite': 'Kite', 'live-pt-lark': 'Lark', 'live-pt-robin': 'Robin', 'live-pt-finch': 'Finch', 'live-pt-heron': 'Heron' };
+    for (const [slug, name] of Object.entries(names)) {
+      await api('/agent/agents', { method: 'POST', body: JSON.stringify({ slug, name, description: 'live harness',
+        systemPrompt: `You are ${name}, a teammate. Be concise and reply in Chinese. When the user addresses a teammate by name and not you, reply with just "收到" and do nothing else.` }) }).catch(() => null);
+    }
+    const mkP = (name) => { const p = join(workspace, name); mkdirSync(p); writeFileSync(join(p, 'README.md'), `# ${name}\n`); return p; };
+    const p1 = mkP('pt-one'), p2 = mkP('pt-two');
+    const cfgOf = (cwd, members) => ({ execMode: 'host', cwd, groupChat: true, groupAgents: members, groupSeedHistory: false, groupNoSummary: true });
+    const teamRun = async (cwd, members, title, text) => {
+      const sid = (await api('/agent/sessions', { method: 'POST', body: JSON.stringify({ title, model_id: MODEL, project_path: cwd, agent_config: cfgOf(cwd, members) }) })).session.id;
+      const ev = await run(sid, text, 300_000, cfgOf(cwd, members));
+      const memory = (await api(`/agent/project-context?sessionId=${sid}`)).memory || {};
+      return { sid, ev, entries: (memory.entries || []).map((e) => e.content), said: (slug) => ev.group.remarks.filter((r) => r.slug === slug).map((r) => String(r.text || '')).join('\n') };
+    };
+    const branch = `release-${randomUUID().slice(0, 6)}`;
+    const a = await teamRun(p1, ['live-pt-wren', 'live-pt-kite'], 'Project team A', `这个项目的发版分支叫 ${branch},发版只从它打包。Wren,这条只在这个项目里成立,你记一下。Kite 不用管。`);
+    const saved = a.entries.filter((c) => c.includes(branch));
+    const own = async (slug) => String((await api(`/agent/memory?slug=${slug}`)).content || '').includes(branch);
+    const leaked = [await own('live-pt-wren'), await own('live-pt-kite')];
+    const aOk = !a.ev.error && saved.length >= 1 && !leaked[0] && !leaked[1];
+    const ask = (name, other) => `${name},这个项目的发版分支叫什么?不知道就直说不知道。不要调用工具。${other} 不用回答。`;
+    const b = await teamRun(p1, ['live-pt-lark', 'live-pt-robin'], 'Project team B', ask('Lark', 'Robin'));
+    const bOk = !b.ev.error && b.said('live-pt-lark').includes(branch);
+    const c = await teamRun(p2, ['live-pt-finch', 'live-pt-heron'], 'Project team C', ask('Finch', 'Heron'));
+    const cOk = !c.ev.error && c.said('live-pt-finch').length > 0 && !c.said('live-pt-finch').includes(branch) && !c.entries.some((x) => x.includes(branch));
+    writeFileSync(join(OUT, 'projteam-evidence.json'), JSON.stringify({ branch, A: { entries: a.entries, leakedToOwnMemory: leaked, remarks: a.ev.group.remarks.map((r) => ({ slug: r.slug, text: r.text })), toolCalls: a.ev.toolCalls },
+      B: { remarks: b.ev.group.remarks.map((r) => ({ slug: r.slug, text: r.text })) }, C: { remarks: c.ev.group.remarks.map((r) => ({ slug: r.slug, text: r.text })), entries: c.entries } }, null, 2));
+    return { ok: aOk && bOk && cOk, detail: [
+      `A ${aOk ? '✓' : '⚠'} 项目记忆里与那条分支有关的 ${saved.length} 条${saved.length > 1 ? '(两位成员各记了一遍)' : ''};成员自己的记忆里${leaked.some(Boolean) ? '也有(⚠ 记错了级)' : '没有'}${a.ev.error ? `;${a.ev.error}` : ''}`,
+      `B ${bOk ? '✓ 同项目、没见过这件事的成员答对了' : `⚠ ${b.ev.error || `Lark 说:${b.said('live-pt-lark').slice(0, 80) || '(没发言)'}`}`}`,
+      `C ${cOk ? '✓ 别的项目里的成员答不出' : `⚠ ${c.ev.error || `Finch 说:${c.said('live-pt-finch').slice(0, 80) || '(没发言)'}`}`}`,
+    ].join(' | '), output: [a, b, c].map((t, i) => `【${'ABC'[i]}】\n` + t.ev.group.remarks.map((r) => `[${r.slug}] ${r.text}`).join('\n')).join('\n\n'), toolCalls: [...a.ev.toolCalls, '|', ...b.ev.toolCalls, '|', ...c.ev.toolCalls] };
   });
 
   const chat = await scenario('chat', 'chat 基础对话', async () => {
