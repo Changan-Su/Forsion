@@ -17,19 +17,7 @@ const path = require('path')
 const http = require('http')
 const { spawn } = require('child_process')
 const { chromium } = require('playwright-core')
-
-function findChromium() {
-  if (process.env.CHROMIUM_EXE) return process.env.CHROMIUM_EXE
-  const root = path.join(os.homedir(), 'Library/Caches/ms-playwright')
-  const dirs = fs.readdirSync(root).filter((d) => d.startsWith('chromium-')).sort()
-  for (const d of dirs.reverse()) {
-    for (const app of ['Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing', 'Chromium.app/Contents/MacOS/Chromium']) {
-      const p = path.join(root, d, 'chrome-mac-arm64', app)
-      if (fs.existsSync(p)) return p
-    }
-  }
-  throw new Error('找不到 chromium,设 CHROMIUM_EXE 环境变量')
-}
+const { findChromium } = require('./lib/find-chromium.cjs')
 
 const BASE = process.env.HARNESS_URL || 'http://localhost:5173/harness.html'
 const URL = `${BASE}?ribbon`
@@ -89,7 +77,7 @@ async function fresh(page) {
 async function main() {
   let vite = null
   if (!(await ping())) {
-    vite = spawn('npx', ['vite', 'frontend'], { cwd: path.resolve(__dirname, '..'), stdio: 'ignore' })
+    vite = spawn(process.execPath, [path.join(__dirname, '../node_modules/vite/bin/vite.js'), 'frontend'], { cwd: path.resolve(__dirname, '..'), stdio: 'ignore', windowsHide: true })
     let up = false
     for (let i = 0; i < 60 && !up; i++) {
       await new Promise((r) => setTimeout(r, 500))
