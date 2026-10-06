@@ -71,9 +71,12 @@ async function main() {
       check(`Settings fits display scale ${d.scale}`, fits)
       await settings.screenshot({ path: path.join(OUT, `display-${d.scale}.png`) })
     }
-    await win.evaluate(() => window.tangu.computerHistory.clear({ all: true }))
+    await settings.locator('[data-clear="all"]').click()
+    await settings.locator('.ch-confirm button.danger').click()
+    await settings.locator('.ch-cleared').waitFor({ timeout: 10000 })
     check('Clear returns without a stuck operation', (await win.evaluate(() => window.tangu.computerHistory.get())).state.status === 'recording')
-    await win.evaluate(() => window.tangu.computerHistory.setEnabled(false))
+    await settings.locator('.ch-page [role="switch"]').first().click()
+    await settings.locator('.ch-page[data-ch-status="off"]').waitFor({ timeout: 10000 })
     check('Disable switches off', (await win.evaluate(() => window.tangu.computerHistory.get())).state.status === 'off')
     check('Recorder exits after its last subscriber disconnects', await until(() => recorderPids().length === 0, 75000, 1000))
   } finally {
