@@ -73,12 +73,12 @@ registerMessages({
   },
   // manifest isDesktopOnly:true 的插件在 Android App 上列出但不装载
   'settings.amadeusPlugins.blockedDesktopOnly': { zh: '仅支持桌面端', en: 'Desktop only' },
-  // 没有可见插件目录的宿主(Android App):插件只经应用市场装
+  // 没有可见插件目录的宿主(Android App):插件只经商店装
   'settings.amadeusPlugins.marketHint': {
-    zh: '启用/禁用即时生效，点击插件可查看详情。插件从应用市场安装；标为「仅支持桌面端」的插件只能在 Forsion 桌面端使用。',
-    en: 'Turning a plugin on or off takes effect immediately; tap a plugin for details. Plugins are installed from the market; plugins marked "Desktop only" work only in Forsion for desktop.',
+    zh: '启用/禁用即时生效，点击插件可查看详情。插件从商店安装；标为「仅支持桌面端」的插件只能在 Forsion 桌面端使用。',
+    en: 'Turning a plugin on or off takes effect immediately; tap a plugin for details. Plugins are installed from the store; plugins marked "Desktop only" work only in Forsion for desktop.',
   },
-  'settings.amadeusPlugins.openMarket': { zh: '浏览应用市场', en: 'Browse the market' },
+  'settings.amadeusPlugins.openMarket': { zh: '浏览商店', en: 'Browse the store' },
   // 前置插件(manifest requiresPlugins):装着但开不了 / 前置停了自动暂停、回来自动恢复
   'settings.amadeusPlugins.waitingDeps': { zh: '等待前置插件', en: 'Waiting for required plugins' },
   'settings.amadeusPlugins.loadFailed': { zh: '加载失败', en: 'Failed to load' },
