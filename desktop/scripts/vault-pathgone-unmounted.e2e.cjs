@@ -204,10 +204,14 @@ async function main() {
 
     // 笔记里的内嵌表:引用 ![[表.db]] 没变,dbStore 里那条是改名前载入的 —— 接着改一个格子
     await win.locator('.dv-tab', { hasText: /^笔记$/ }).first().click()
+    // 文本格平时是只读显示(.amx-db-value-display),点一下才换成输入框;打的字是草稿,Enter / 失焦才提交
+    const cellDisplay = win.locator('.amx-db-value-display').first()
+    await cellDisplay.waitFor({ timeout: 15_000 })
+    await cellDisplay.click()
     const cellInput = win.locator('.amx-db-input').first()
-    await cellInput.waitFor({ timeout: 15_000 })
-    await cellInput.click()
+    await cellInput.waitFor({ timeout: 5000 })
     await cellInput.pressSequentially('跟过去', { delay: 20 })
+    await cellInput.press('Enter')
     const written = await until(async () => {
       try { return fs.readFileSync(path.join(vault, '资料改', '表.db'), 'utf8').includes('跟过去') } catch { return false }
     }, 8000)
