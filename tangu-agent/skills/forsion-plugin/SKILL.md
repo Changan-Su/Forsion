@@ -1008,6 +1008,24 @@ ctx.openFloatingPanel?.('inspector', {
 
 参考实现 `Forsion-Instrumentality-Project/forsion-plugin-inspect`(检视台),`check.mjs` 把这几条做成了静态断言。
 
+## Pointer math under host zoom (2026-10-05)
+
+The host scales the whole interface with CSS `zoom` on `<body>` (the user changes it at any time; it is often not 1), so a view works in two pixel spaces. `clientX/clientY` and `getBoundingClientRect()` are **viewport** pixels; `style.left/top/width/height`, `translate()` offsets, `scrollLeft/scrollTop` and `clientWidth/offsetWidth` are the element's **own** pixels.
+
+**Rule: when a pointer position or a `getBoundingClientRect()` value becomes one of your own pixel values, divide the viewport distance by that element's `currentCSSZoom`.**
+
+```js
+const cz = () => track.currentCSSZoom || 1 // read at pointer time, never cached at mount
+const xIn = e => (e.clientX - track.getBoundingClientRect().left) / cz() // → style.left, scrollLeft, time = xIn / pxPerSecond
+const dx = e => (e.clientX - startX) / cz() // drag distance → width, translate offset
+```
+
+- Read it when the pointer event fires, on the element whose pixels you write: zoom can change while the view is open, and `currentCSSZoom` is 1 for an element that is not rendered (`display: none`, detached).
+- No division when both sides are viewport pixels: hit-testing `clientX` against a rect, or a ratio such as `(e.clientX - r.left) / r.width`.
+- Skipping it puts every landing off by (zoom − 1) × the distance from the element's origin: playheads, clips, sliders, resizers, canvas pan and marquee drift further the farther the pointer is from the left/top edge. Test rigs run at 100% and stay green.
+- Test once before shipping: run `document.body.style.zoom = '1.5'` in DevTools, drag far from the element's left edge, and check the thing stays under the pointer (reload to restore the user's zoom).
+- Anchored overlays are the same conversion; use `OverlayAt` / `clampMenu` (rule 3 above) instead of repeating it.
+
 ## 库内二进制资源 + 第三方库进包(2026-08-29 起)
 
 `ctx.app.readFile` 只读 UTF-8。`.glb` / 字体 / 任意 blob 走资源协议:
