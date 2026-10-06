@@ -6,6 +6,7 @@ import { installPackage } from '../../unit/install'
 import { readPackage } from '../../unit/packages'
 import { writeConfig, readConfig, installations } from '../../unit/config'
 import { controlAddress, startControl, sendControl } from '../../unit/control'
+import { stageRelease, resolveRelease } from '../../unit/releases'
 
 async function fixture() {
   const root = await mkdtemp(join(tmpdir(), 'unit-install-'))
@@ -17,6 +18,26 @@ async function fixture() {
   return { root, source, file }
 }
 describe('portable Unit installation', () => {
+  it('verifies the copied installation against the operator-staged digest before changing configuration', async () => {
+    const { root, source, file } = await fixture()
+    try {
+      const data = join(root, 'releases-data')
+      const release = await stageRelease(data, source, '3.0.0')
+      const staged = await resolveRelease(data, release.releaseId, 'fixture', '3.0.0')
+      await installPackage(file, staged.path, { releaseDigest: release.sha256 })
+      const before = await readFile(file, 'utf8')
+      let checkedAtActivation = false
+      await expect(installPackage(file, staged.path, { releaseDigest: release.sha256, applyUpdate: async () => {
+        checkedAtActivation = true; throw new Error('Administrator access revoked')
+      } })).rejects.toThrow('Administrator access revoked')
+      expect(checkedAtActivation).toBe(true)
+      expect(await readFile(file, 'utf8')).toBe(before)
+      await writeFile(join(staged.path, 'main.js'), 'changed after verification')
+      await expect(installPackage(file, staged.path, { releaseDigest: release.sha256 })).rejects.toThrow('changed during installation')
+      expect(await readFile(file, 'utf8')).toBe(before)
+      await expect(resolveRelease(data, release.releaseId, 'fixture', '3.0.0')).rejects.toThrow('content changed')
+    } finally { await rm(root, { recursive: true, force: true }) }
+  })
   it('copies a version independently, relocates internal absolute links, and replaces the configured version offline', async () => {
     const { root, source, file } = await fixture()
     try {

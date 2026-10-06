@@ -23,7 +23,7 @@ registerMessages({
 
 /** P1-K6:基址与鉴权头都归目标(头与改造前的 `headers(cfg.token)` 同形同序)。S3 起所有服务函数只收解析层给的
  *  EngineTarget(homeTarget / targetForSession / focusTarget / connectionTarget),本文件不读 cfg(棘轮 R1 + 品牌类型钉住)。 */
-async function request<T>(t: EngineTarget, path: string, init?: RequestInit, opts?: { timeoutMs?: number }): Promise<T> {
+export async function request<T>(t: EngineTarget, path: string, init?: RequestInit, opts?: { timeoutMs?: number }): Promise<T> {
   // home 目标的第三参与改造前逐字一致(opts 原样,可能是 undefined);非 home 恒带 target(401 分流,K6 §3.5)。
   const r = await authFetch(`${t.base}${path}`, { ...init, headers: await t.headers(true) }, t.key === 'home' ? opts : fetchOpts(t, opts?.timeoutMs))
   if (!r.ok) {

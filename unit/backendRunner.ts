@@ -234,7 +234,7 @@ class BackendSession {
       timer.unref()
       options.signal?.addEventListener('abort', cancel, { once: true })
       if (options.signal?.aborted) { cancel(); return }
-      try { this.worker.postMessage({ type: 'account-resolve', requestId, token } satisfies BackendWorkerCommand) }
+      try { this.worker.postMessage({ type: 'account-resolve', requestId, token, purpose: options.purpose } satisfies BackendWorkerCommand) }
       catch { finish(null, new Error('Account provider unavailable')) }
     })
   }

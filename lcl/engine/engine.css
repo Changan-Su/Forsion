@@ -76,12 +76,13 @@
 .rb-bottom { flex-shrink: 0; margin-top: auto; }
 /* 滚轮翻看的滑动框(10-02):框只露 n 格高,里面整区一列按窗口起点 translateY。overflow:clip 不建滚动容器
    (不会被 scrollIntoView / 键盘滚走);留 4px 裁切余量给焦点环、插入线、未读角标。窗外占位 .rb-cell 与槽等高。 */
-.rb-strip { flex-shrink: 0; overflow: clip; overflow-clip-margin: 4px; }
+.rb-strip { flex-shrink: 0; overflow: clip; overflow-clip-margin: 4px; transition: height 0.2s var(--ease-out, ease-out); }
 .rb-strip-in { display: flex; flex-direction: column; gap: 4px; align-items: center; transition: transform 0.2s var(--ease-out, ease-out); }
 .rb-cell { display: flex; justify-content: center; pointer-events: none; }
 .rb-expanded .rb-strip-in { align-items: stretch; }
 .rb-expanded .rb-cell { width: 100%; justify-content: stretch; }
-@media (prefers-reduced-motion: reduce) { .rb-strip-in { transition: none; } }
+/* 开合时框高与列位移必须同速，命令区底部图标才不会先跳再滑。 */
+@media (prefers-reduced-motion: reduce) { .rb-strip, .rb-strip-in { transition: none; } }
 .rb-pinned { flex-shrink: 0; margin-top: 4px; }
 /* 「…」展开(10-02):展开区铺满整条,另一区不渲染。上区展开时命令区没了,margin-top:auto 改由账号卡接着贴底;
    命令区展开时主位槽(属于 Space 那一侧)一起让出来 —— 用 CSS 藏不卸载,home 件的状态留着。 */

@@ -173,7 +173,8 @@ async function main() {
     //    但它的 drop 以前无条件吃掉再被 dropIntoFolder 拒收 = 预览骗人、松手不动。
     await fresh(page)
     await page.evaluate(() => { window.__rb.getState().addFolder('top', 'F1'); window.__rb.getState().addFolder('top', 'F2') })
-    await page.waitForTimeout(150)
+    await page.click('.rb-top .rb-more') // 6 项也遵守常驻 5 项；展开后才可拖动两个夹。
+    await page.waitForTimeout(300)
     s = await slots(page, 'top')
     const [f1, f2] = s.slice(-2).map((x) => x.id)
     await drag(page, 'top', f1, s[s.length - 1].top) // 把 F1 拖到 F2 占的槽上
@@ -337,7 +338,7 @@ async function main() {
     const bot0 = await idsIn('bottom')
     await wheelAt('bottom', -10)
     const bot1 = await idsIn('bottom')
-    check('W5 命令区往上滚一下:露出前面藏着的那一个(命令区「…」在上)', bot0.join() === 'bC,bD,bE,bF' && bot1.join() === 'bB,bC,bD,bE', `${bot0.join()} → ${bot1.join()}`)
+    check('W5 命令区往上滚一下:露出前面藏着的那一个(命令区「…」在上)', bot0.join() === 'bB,bC,bD,bE,bF' && bot1.join() === 'bA,bB,bC,bD,bE', `${bot0.join()} → ${bot1.join()}`)
     await wheelAt('bottom', 10, 3)
     check('W6 命令区往下滚回来:贴底复原', (await idsIn('bottom')).join() === bot0.join(), (await idsIn('bottom')).join())
     // 鼠标滚轮一格常见 100–120px:一下只许挪一格(照原生换算会跳 3 格,5 格的窗口一下翻掉大半)。

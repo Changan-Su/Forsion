@@ -163,7 +163,7 @@ export function clampApprovalMode(mode: string | undefined, cap: CapMode): CapMo
 export const REMOTE_STRIPPED_CONFIG_KEYS = [
   'verifyCommand', 'engineId', 'soloEngineId', 'extraRoots', 'clientCapabilities', 'client_capabilities', 'devices', 'remoteOrigin', 'remoteContent',
   'muse', 'activityAccess', 'automationOrigin', 'approvalDeferral', 'delegatedFrom', 'delegatedBy', 'subAgentGrants',
-  'systemPrompt', 'soul', 'toolsMode', 'toolsList',
+  'systemPrompt', 'soul', 'toolsMode', 'toolsList', 'toolsStrict',
 ] as const;
 
 /**

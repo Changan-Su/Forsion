@@ -80,6 +80,8 @@ export interface NormalAgentDef {
   compaction?: Record<string, unknown>;
   /** 内置工具名单模式:'deny'=toolsList 内禁用(其余可用);'allow'=仅 toolsList 可用;缺省=不限制。
    *  只约束无门禁的内置工具(见 toolRegistry.resolveTools);区别于 tools=自定义工具选择。 */
+  /** Strict allowlist for every tool source, including gated and plugin tools. Config-only. */
+  toolsStrict?: boolean;
   toolsMode?: 'allow' | 'deny';
   /** 配合 toolsMode 的内置工具名单(config.toml tools_list)。 */
   toolsList?: string[];
@@ -248,6 +250,7 @@ export function parseAgentConfig(slug: string, tomlRaw: string, soul: string): N
     shareDefaultMemory: !!meta.share_default_memory,
     cloudSync: !!meta.cloud_sync,
     activityAccess: !!meta.activity_access,
+    toolsStrict: meta.tools_strict === true,
     toolsMode: meta.tools_mode === 'allow' || meta.tools_mode === 'deny' ? meta.tools_mode : undefined,
     toolsList: Array.isArray(meta.tools_list)
       ? meta.tools_list.filter((t: any) => typeof t === 'string' && t.trim()).slice(0, 200)
@@ -284,6 +287,7 @@ export function serializeAgentConfig(def: NormalAgentDef): string {
   if (def.shareDefaultMemory) obj.share_default_memory = true;
   if (def.cloudSync) obj.cloud_sync = true;
   if (def.activityAccess) obj.activity_access = true;
+  if (def.toolsStrict) obj.tools_strict = true;
   if (def.toolsMode && def.toolsList) { // allow+空数组=全禁,合法;缺 mode 不落盘
     obj.tools_mode = def.toolsMode;
     obj.tools_list = def.toolsList;
@@ -868,6 +872,7 @@ export function buildAgentDef(slug: string, existing: NormalAgentDef | null, inp
     shareDefaultMemory: input.shareDefaultMemory !== undefined ? input.shareDefaultMemory : existing?.shareDefaultMemory,
     cloudSync: input.cloudSync !== undefined ? input.cloudSync : existing?.cloudSync,
     activityAccess: input.activityAccess !== undefined ? input.activityAccess : existing?.activityAccess,
+    toolsStrict: existing?.toolsStrict,
     toolsMode: input.toolsMode !== undefined
       ? (input.toolsMode === 'allow' || input.toolsMode === 'deny' ? input.toolsMode : undefined)
       : existing?.toolsMode,

@@ -279,6 +279,7 @@ export function getToolDefinitions(ctx: ToolContext): Tool[] {
   const externalOk = presetOf(ctx.preset).externalTools && !isHostSandboxRestricted(ctx);
   if (externalOk && ctx.customTools && ctx.customTools.size) {
     for (const t of ctx.customTools.values()) {
+      if (ctx.toolsStrict && !ctx.toolsList?.includes(t.name)) continue;
       if (!usableToolDefinition(t?.definition, 'custom', t?.name)) continue;
       if (taken.has(t.name)) continue; // 内置同名优先
       taken.add(t.name);
@@ -288,6 +289,7 @@ export function getToolDefinitions(ctx: ToolContext): Tool[] {
   // MCP 工具(ctx 运行时注入,manager 已按 (server, tool) 排序 → defs 字节级稳定)
   if (externalOk && ctx.mcpTools && ctx.mcpTools.size) {
     for (const t of ctx.mcpTools.values()) {
+      if (ctx.toolsStrict && !ctx.toolsList?.includes(t.name)) continue;
       if (!usableToolDefinition(t?.definition, `mcp:${t?.serverName || '(unknown)'}`, t?.name)) continue;
       if (taken.has(t.name)) continue; // mcp__ 前缀理论上不冲突,保险跳过
       taken.add(t.name);
@@ -332,6 +334,7 @@ export async function executeTool(call: ToolCall, ctx: ToolContext): Promise<Too
   // Legacy/internal callers still receive the trusted policy before executing a covered tool.
   if (ctx.execMode === 'host' && !ctx.hostSandbox) ctx = { ...ctx, hostSandbox: resolveHostSandboxPolicy() };
   const name = canonicalToolName(call.function.name);
+  if (ctx.toolsStrict && !ctx.toolsList?.includes(name)) return { toolCallId: call.id, name, result: `Error: tool "${name}" is outside this session's allowed tool set.`, isError: true };
   // 子代理硬闸(共享执行层):管理面对 subAgentDepth≥1 缺省拒,**早于**任何审批闸门 ——
   // 别去问用户批不批一个本就不该存在的调用。resolveTools 那边已让它不可见,这里是「模型凭名字
   // 硬调」那条路(defs 不是能力边界)。按归一后的名字判,旧别名 muse_watch 两种拼写都覆盖;

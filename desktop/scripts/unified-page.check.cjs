@@ -1616,7 +1616,7 @@ async function main() {
       return { n: labels.length, hasTemplate: labels.includes('模板'), hasDb: labels.includes('多维表') }
     })
     record(
-      'P19 slash 菜单接进统一实例:整块插入无残渣 + 前缀型原地转换 + 模板/数据库在列',
+      'P19 slash 菜单接进统一实例:整块插入无残渣 + 前缀型原地转换 + 模板/多维表在列',
       a19.open && a19.first === '代码块' && b19.pre >= 1 && !b19.text.includes('/code') && !b19.menu &&
         c19.h2 && !c19.residue && d19.n > 10 && d19.hasTemplate && d19.hasDb,
       JSON.stringify({ a19, b19: { ...b19, text: undefined }, c19, d19 }),

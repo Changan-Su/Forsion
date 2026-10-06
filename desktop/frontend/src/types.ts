@@ -1519,8 +1519,8 @@ declare global {
         items: Array<{ id: string; url: string; thumbnailUrl: string; title: string; copyright: string; startDate: string }>
         error?: string
       }>
-      /** 主进程回投的外链;渲染层决定进内置浏览器还是系统浏览器。返回取消订阅。 */
-      onOpenUrl?(cb: (url: string) => void): () => void
+      /** 主进程回投的外链;渲染层决定进内置浏览器还是系统浏览器。fromGuest = 内置浏览器里的页面自己开的新窗口。返回取消订阅。 */
+      onOpenUrl?(cb: (url: string, fromGuest?: boolean) => void): () => void
       /** 内置终端 PTY;spawn 失败(原生模块未就绪)返回 { error } 而非抛。 */
       pty?: {
         /** cmd:带命令启动(`shell -l -c cmd`,退出即 onExit 带退出码);缺省=交互登录 shell。 */

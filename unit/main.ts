@@ -4,18 +4,21 @@ import { fileURLToPath } from 'node:url'
 import { randomUUID } from 'node:crypto'
 import { startBasicUnit, type UnitConfig } from './host'
 import { readConfig, writeConfig, installations } from './config'
-import { readPackage } from './packages'
+import { readPackage, validId } from './packages'
 import { localOwnerToken } from './localWorkspace'
 import { installPackage } from './install'
 import { migrateBackend } from './backendRunner'
 import { sendControl, startControl, unitIsOffline, type ControlCommand } from './control'
 import desktop from '../desktop/package.json'
+import { stageRelease } from './releases'
+import type { ManagementCommand } from './management'
 
 const dist = dirname(fileURLToPath(import.meta.url))
 const args = process.argv.slice(2)
-const commands = ['init', 'install', 'run', 'migrate', 'enable', 'disable', 'restart', 'status', 'access']
+const commands = ['init', 'install', 'stage', 'update', 'run', 'migrate', 'enable', 'disable', 'restart', 'status', 'access']
 const action = commands.includes(args[0]) ? args.shift()! : 'run'
-const file = resolve(args.shift() || (action === 'init' ? 'forsion-unit' : 'unit.json'))
+const configArgument = args.shift()
+const file = resolve(configArgument || (action === 'init' ? 'forsion-unit' : 'unit.json'))
 const print = (result: unknown) => console.log(JSON.stringify(result, null, 2))
 async function findInstallation(config: UnitConfig, id?: string) {
   if (!id) throw new Error('A plugin id is required')
@@ -23,6 +26,15 @@ async function findInstallation(config: UnitConfig, id?: string) {
   throw new Error(`Plugin is not installed: ${id}`)
 }
 async function run() {
+  if (action === 'update') {
+    if (!configArgument?.trim() || args.length !== 2 || args.some((arg) => !arg.trim())) {
+      throw new Error('Usage: node main.mjs update <unit.json> <plugin-id> <package-path>')
+    }
+    if (!validId(args[0])) throw new Error('Invalid plugin id')
+  }
+  if (action === 'stage' && (!configArgument?.trim() || args.length !== 1 || !args[0]?.trim())) {
+    throw new Error('Usage: node main.mjs stage <unit.json> <bundled-package-path>')
+  }
   if (action === 'init') {
     const option = (key: string, fallback: string) => { const i = args.indexOf(key); return i < 0 ? fallback : args[i + 1] }
     const mode = option('--mode', 'public')
@@ -40,6 +52,11 @@ async function run() {
   if (action === 'install') { if (!args[0]) throw new Error('A plugin package directory is required'); print(await installPackage(file, resolve(args[0]))); return }
   const config = await readConfig(file)
   config.workerFile ||= resolve(dist, 'backendWorker.mjs')
+  if (action === 'stage') { print(await stageRelease(config.dataDir!, resolve(args[0]), config.version)); return }
+  if (action === 'update') {
+    await findInstallation(config, args[0])
+    print(await installPackage(file, resolve(args[1]), { updateId: args[0] })); return
+  }
   if (action === 'access') {
     if (config.workspace?.mode !== 'local') throw new Error('Public sites use their Account provider')
     const token = await localOwnerToken(config.dataDir!)
@@ -82,15 +99,24 @@ async function run() {
   await lock.writeFile(String(process.pid)); await lock.close()
   let unit: Awaited<ReturnType<typeof startBasicUnit>> | undefined
   let control: Awaited<ReturnType<typeof startControl>> | undefined
+  let executeManagement: ((command: ManagementCommand, authorize: () => Promise<void>) => Promise<unknown>) | undefined
   let shutdownRequested = false, requestStop: (() => Promise<void>) | undefined
   const onSignal = () => { shutdownRequested = true; void requestStop?.() }
   for (const signal of ['SIGINT', 'SIGTERM'] as const) process.on(signal, onSignal)
   try {
-    unit = await startBasicUnit(config)
+    unit = await startBasicUnit(config, { execute: async (command, authorize) => {
+      if (!executeManagement) throw new Error('Unit control is not ready')
+      return executeManagement(command, authorize)
+    } })
     let queue = Promise.resolve()
     const status = () => ({ running: true, pid: process.pid, instanceId: config.instanceId, port: unit!.port, plugins: unit!.status() })
     const dispatch = async (command: ControlCommand) => {
       if (command.action === 'status') return status()
+      if (command.action === 'stage') {
+        if (command.remote && config.management?.enabled !== true) throw new Error('Remote Unit management is disabled')
+        if (!command.path) throw new Error('A prepared package is required')
+        return stageRelease(config.dataDir!, command.path, config.version)
+      }
       if (!['enable', 'disable', 'restart', 'update', 'migrate'].includes(command.action)) throw new Error('Unknown Unit command')
       const entry = await findInstallation(config, command.id)
       const previous = { ...entry }
@@ -111,10 +137,17 @@ async function run() {
       }
       return status()
     }
-    control = await startControl(config.dataDir!, (command) => {
-      const next = queue.then(() => dispatch(command))
+    const enqueue = (run: () => Promise<unknown>) => {
+      const next = queue.then(run)
       queue = next.then(() => {}, () => {}); return next
-    })
+    }
+    executeManagement = async (command, authorize) => {
+      const apply = (action: ControlCommand) => enqueue(async () => { await authorize(); return dispatch(action) })
+      if (command.action === 'update') return installPackage(file, command.path!, { updateId: command.id,
+        releaseDigest: command.releaseDigest, applyUpdate: (id, path) => apply({ action: 'update', id, path }) })
+      return apply({ action: command.action, id: command.id })
+    }
+    control = await startControl(config.dataDir!, (command) => enqueue(() => dispatch(command)))
     print(status())
     console.log(`[unit] ${config.name} http://${config.bindHost || '127.0.0.1'}:${unit.port}${config.basePath}`)
     let stopping = false
@@ -122,7 +155,7 @@ async function run() {
       if (stopping) return
       stopping = true
       let failure = false
-      try { await control!.close(); await queue; await unit!.close() } catch (error) { console.error(error); failure = true }
+      try { await unit!.closeManagement(); await control!.close(); await queue; await unit!.close() } catch (error) { console.error(error); failure = true }
       finally { await rm(lockPath, { force: true }); process.exit(failure ? 1 : 0) }
     }
     requestStop = stop

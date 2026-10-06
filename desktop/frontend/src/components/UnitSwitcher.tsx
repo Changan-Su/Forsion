@@ -326,9 +326,9 @@ export function UnitSwitcher({ expanded }: { expanded: boolean }): React.ReactEl
         {expanded && <span className="rb-label unitsw-name">{current.name}</span>}
         {expanded && <ChevronDown size={12} className="unitsw-chev" />}
       </button>
-      {open && anchor && (
+      {open && anchor && createPortal(
         <div className="unitsw-backdrop" onMouseDown={() => setOpen(false)} onContextMenu={(e) => { e.preventDefault(); setOpen(false) }}>
-          <OverlayAt className="unitsw-menu" x={anchor.x} y={anchor.y} onMouseDown={(e) => e.stopPropagation()}>
+          <OverlayAt className="unitsw-menu" data-rb-overlay x={anchor.x} y={anchor.y} onMouseDown={(e) => e.stopPropagation()}>
             <div className="unitsw-row-group">
               <button className={`unitsw-row${current.key === 'local' ? ' on' : ''}`} onClick={() => pickLocalSide('local')}>
                 <span className="unitsw-ic"><Laptop size={15} /></span>
@@ -438,11 +438,11 @@ export function UnitSwitcher({ expanded }: { expanded: boolean }): React.ReactEl
               )}
             </div>
           </OverlayAt>
-        </div>
+        </div>, document.body
       )}
-      {ctxMenu && (
+      {ctxMenu && createPortal(
         <div className="unitsw-backdrop" onMouseDown={() => setCtxMenu(null)} onContextMenu={(e) => { e.preventDefault(); setCtxMenu(null) }}>
-          <OverlayAt className="unitsw-menu unitsw-ctx" x={ctxMenu.x} y={ctxMenu.y} onMouseDown={(e) => e.stopPropagation()}>
+          <OverlayAt className="unitsw-menu unitsw-ctx" data-rb-overlay x={ctxMenu.x} y={ctxMenu.y} onMouseDown={(e) => e.stopPropagation()}>
             <button className="unitsw-row" onClick={() => { const u = ctxMenu.u; setCtxMenu(null); editIcon(u) }}>
               <span className="unitsw-col"><span className="unitsw-title">{t('unit.menuEditIcon')}</span></span>
             </button>
@@ -462,7 +462,7 @@ export function UnitSwitcher({ expanded }: { expanded: boolean }): React.ReactEl
               <span className="unitsw-col"><span className="unitsw-title">{t('unit.menuInBrowser')}</span></span>
             </button>
           </OverlayAt>
-        </div>
+        </div>, document.body
       )}
     </>
   )

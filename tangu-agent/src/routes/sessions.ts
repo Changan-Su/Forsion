@@ -812,6 +812,12 @@ async function writeSessionConfig(req: AuthRequest, res: Response, body: Record<
     if (remote && storedContentMarker == null && (['title', 'name'] as const).some((k) => cfg[k] !== storedObj[k])) {
       cfg = { ...cfg, remoteContent: remoteOriginMarker(remote) };
     }
+    if (storedObj.pluginOwner && s.kind === 'task') {
+      cfg.pluginOwner = storedObj.pluginOwner;
+      cfg.pluginReadOnly = storedObj.pluginReadOnly;
+      cfg.pluginToolNames = storedObj.pluginToolNames;
+      cfg.externalSession = storedObj.externalSession;
+    }
     // 团队模式下没有计划模式(settleTeamPlanMode):在身份锁与远程白名单都合并完的最终值上结算 —— 开团队的那一笔顺手关掉计划模式,
     // 团队会话里开计划模式的那一笔落成关。不报错:客户端不等这个响应就改了本地值,报错只会让两边对不上。
     cfg = settleTeamPlanMode(cfg);

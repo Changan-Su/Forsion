@@ -1,3 +1,10 @@
+import { deps } from '../seams/runtime.js';
+import { tanguHome } from '../core/tanguHome.js';
+import { createPluginRuns, pluginEngines } from './runs.js';
+import { createPluginWorkspaces } from './workspaces.js';
+import { createPluginAutomation } from './automation.js';
+import { authMiddleware } from '../core/http.js';
+import path from 'node:path';
 /**
  * 插件宿主装配 + 生命周期。构造 `ctx`（含按引用的 `ctx.sdk`）、编排发现/激活/停用/依赖/热升级，给各入口（tui/standalone）
  * 与插件路由（routes/plugins.ts,经动态 import）用。
@@ -22,7 +29,7 @@
  *   - 工具 provider 记归属(providerOwner):停用只撤自己名下的。
  */
 import { Router, type NextFunction, type Request, type Response } from 'express';
-import { registerToolProvider, unregisterToolProvider } from '../tools/toolRegistry.js';
+import { registerToolProvider, unregisterToolProvider, listToolProviders } from '../tools/toolRegistry.js';
 import { registerPlugin, getPluginMeta, pluginsNeedingRestart, setPluginDormant, unregisterPlugin } from './registry.js';
 import * as pluginStore from './settingsStore.js';
 import { wechatRemote } from '../services/wechatRemote.js';
@@ -53,7 +60,7 @@ import type { CloudBrainServices } from '../seams/cloudBrain.js';
 import type { BillingServices } from '../seams/billing.js';
 
 /** 按引用的运行时构建块——核心同一模块图（见文件头 P0）。 */
-const sdk: TanguSdk = {
+const sdk: Omit<TanguSdk, 'runs' | 'engines' | 'workspaces' | 'automation'> = {
   createTanguModule,
   createHttpBrain,
   createNoopBilling,
@@ -71,6 +78,7 @@ const sdk: TanguSdk = {
 interface Instance {
   plugin?: TanguPlugin;
   disposed: boolean;
+  runtimeDisposers: (() => void)[];
   /** activate 已成功返回:此后 registerRoutes 立即挂;之前先攒着(激活失败就不必挂)。 */
   activated: boolean;
   providerIds: Set<string>;
@@ -92,6 +100,7 @@ interface Instance {
 function newInstance(metaIds: Set<string> = new Set()): Instance {
   return {
     disposed: false,
+    runtimeDisposers: [],
     activated: false,
     providerIds: new Set(),
     metaIds,
@@ -153,9 +162,27 @@ function makeContext(d: DiscoveredPlugin, inst: Instance): TanguPluginContext {
       inst.routeMounters.push(mount);
       if (inst.activated) mountRoutes(id, inst); // 激活完成之后才注册的路由:立即挂
     },
-    sdk,
+    registerScopedRoutes: (mount) => {
+      if (!live('scoped routes')) return;
+      // The directory discovered by the host is authoritative, never plugin-supplied IDs.
+      const owner = d.bundled ? path.basename(path.dirname(path.dirname(d.dir))) : id;
+      inst.routeMounters.push((r) => {
+        const router = Router();
+        router.use(authMiddleware);
+        router.use((req, res, next) => {
+          if (!deps().profile.capabilities.hostExec || req.headers['x-forsion-remote']) { res.status(403).json({ detail: 'Local plugin routes only' }); return; }
+          next();
+        });
+        mount(router);
+        r.userRouter.use(`/extensions/${owner}/${id}`, router);
+      });
+      if (inst.activated) mountRoutes(id, inst);
+    },
+    sdk: { ...sdk, runs: createPluginRuns(id, () => !inst.disposed, off => inst.runtimeDisposers.push(off), () => listToolProviders().filter(p => providerOwner.get(p.id) === id).flatMap(p => p.tools().map(t => t.name))), engines: pluginEngines,
+      automation: createPluginAutomation(id, () => !inst.disposed, () => listToolProviders().filter(p => providerOwner.get(p.id) === id).flatMap(p => p.tools().filter(t=>t.capabilities?.automationSafe).map(t => t.name))),
+      workspaces: createPluginWorkspaces(id, path.join(tanguHome(), 'plugin-data', id), () => !inst.disposed) },
     log: (msg) => console.log(`[plugin:${id}] ${msg}`),
-    paths: { pluginDir: d.dir },
+    paths: { pluginDir: d.dir, dataDir: path.join(tanguHome(), 'plugin-data', id) },
     activity: {
       append: (event, detail) => {
         // 强制插件命名空间前缀(与桌面 ctx.activity.log 同纪律);appendActivityLine 自身吞错,事件流是尽力而为的旁路。
@@ -386,6 +413,7 @@ async function stopEntry(e: Entry): Promise<void> {
   if (!inst) return;
   const id = e.d.manifest.id;
   inst.disposed = true; // 旧 ctx 从此失效
+  for (const off of inst.runtimeDisposers.splice(0)) { try { off(); } catch { /* dispose independently */ } }
   const p = inst.plugin;
   if (p?.deactivate) {
     try {

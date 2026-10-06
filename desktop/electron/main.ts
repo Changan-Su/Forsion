@@ -1415,11 +1415,14 @@ function satelliteWebPreferences(): Electron.WebPreferences {
 
 /** 子窗口打开处理:http(s) 回投渲染层(它决定进内置浏览器还是系统浏览器),其余一律拒绝(不产生游离子窗口)。
  *  回投而非主进程直接判:内置浏览器的开关/设置都住渲染层 localStorage,主进程不复制一份真源。
- *  渲染层的 openUrlRouter 在**每种窗口**(主/独立/mini)都装,没有内置浏览器的窗口自己转 openExternal。 */
-function openUrlHandler(wc: Electron.WebContents) {
+ *  渲染层的 openUrlRouter 在**每种窗口**(主/独立/mini)都装,没有内置浏览器的窗口自己转 openExternal。
+ *  fromGuest = 这次是内置浏览器里的页面(<webview> guest)自己开的新窗口:带给渲染层,它据此把新窗口留在
+ *  内置浏览器里、不看「应用内链接」开关 —— 远程设备页的附件、网页应用的登录跳转都靠这个分区里的凭据 /
+ *  会话,交给系统浏览器就是 401(该开关 2026-10-05 起缺省关,不带这个标记等于缺省全坏)。 */
+function openUrlHandler(wc: Electron.WebContents, fromGuest = false) {
   return ({ url }: { url: string }): { action: 'deny' } => {
     if (isHttpUrl(url)) {
-      if (!wc.isDestroyed()) wc.send('app:open-url', url)
+      if (!wc.isDestroyed()) wc.send('app:open-url', url, fromGuest)
       else shell.openExternal(url)
     }
     return { action: 'deny' }
@@ -1475,7 +1478,7 @@ function hardenNav(wc: Electron.WebContents): void {
 // 内置浏览器 <webview> 的安全边界:guest 装的是**任意第三方网页**,不是我们的代码。
 //  - will-attach-webview:强制剥掉 preload / nodeIntegration / 套娃 webviewTag —— 渲染层就算写错
 //    属性也拿不到 window.tangu(否则等于把 PTY/文件读写送给任意站点);
-//  - did-attach-webview:站点里的 target=_blank 回投**宿主**渲染层 → 开成新的内置浏览器标签,不产生游离窗。
+//  - did-attach-webview:站点里的 target=_blank 回投**宿主**渲染层(带 fromGuest)→ 开成新的内置浏览器标签,不产生游离窗。
 // guest 不套 hardenNav:本地 .html 预览要允许 file: 内的相对跳转。
 app.on('web-contents-created', (_e, contents) => {
   contents.on('will-attach-webview', (_ev, webPreferences, params) => {
@@ -1500,7 +1503,7 @@ app.on('web-contents-created', (_e, contents) => {
     delete params.webpreferences
   })
   contents.on('did-attach-webview', (_ev, guest) => {
-    guest.setWindowOpenHandler(openUrlHandler(contents))
+    guest.setWindowOpenHandler(openUrlHandler(contents, true))
   })
 })
 

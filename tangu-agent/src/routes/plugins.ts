@@ -48,6 +48,18 @@ async function pluginViews() {
   return listPluginMetas().map((m) => pluginView(m, pluginStatus(m.id)));
 }
 
+router.get('/agent/plugins/external-tools',authMiddleware,async(req:AuthRequest,res)=>{
+  if(!ensureLocal(res))return;if(req.headers['x-forsion-remote'])return res.status(403).json({detail:'Local Desktop MCP only'});
+  const {pluginExternalTools}=await import('../plugins/externalTools.js');
+  res.json({tools:pluginExternalTools(req.user!.userId).map(t=>t.definition.function)});
+});
+router.post('/agent/plugins/external-tools/call',authMiddleware,async(req:AuthRequest,res)=>{
+  if(!ensureLocal(res))return;if(req.headers['x-forsion-remote'])return res.status(403).json({detail:'Local Desktop MCP only'});
+  const ac=new AbortController(),timer=setTimeout(()=>ac.abort(),90000);res.on('close',()=>ac.abort());
+  try{const {callPluginExternalTool}=await import('../plugins/externalTools.js');const result=await callPluginExternalTool(req.user!.userId,String(req.body?.name||''),req.body?.arguments||{},ac.signal);res.json(result);}
+  catch(e:any){if(!res.headersSent)res.status(400).json({detail:e.message});}finally{clearTimeout(timer);}
+});
+
 router.get('/agent/plugins', authMiddleware, async (_req: AuthRequest, res) => {
   if (!ensureLocal(res)) return;
   try {
