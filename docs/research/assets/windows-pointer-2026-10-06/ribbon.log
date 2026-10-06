@@ -1,0 +1,76 @@
+
+> forsion-desktop@2.13.0 e2e:ribbon
+> node scripts/ribbon-dnd.e2e.cjs
+
+PASS  A1 tA 下移一格 = [tB,tA,tC,tD]  | tB,tA,tC,tD
+PASS  A2 让位预览 = 提交结果(提示在哪就落在哪)  | tB,tA,tC,tD
+PASS  B1 tA 拖到末槽 = [tB,tC,tD,tA]  | tB,tC,tD,tA
+PASS  C1 tD 拖到首槽 = [tD,tA,tB,tC]  | tD,tA,tB,tC
+PASS  D1 间隙松手落在最近一格,不滑到末尾  | tB,tA,tC,tD
+PASS  E1 原地松手顺序不变  | tA,tB,tC,tD
+PASS  F1 bA 拖到末槽 = [bB,bC,bA]  | bB,bC,bA
+PASS  J1 松手落在组外(ribbon 根)也照预览落  | tB,tA,tC,tD
+PASS  J2 engine.css 里 .rb.rb-dragging 抑掉窗口拖拽区
+PASS  K1 命令区溢出从最上面吃起(留下靠账号卡那一端)  | 留下 bH ｜ 全量 bA,bB,bC,bD,bE,bF,bG,bH
+PASS  K2 上区反向:从最下面吃起(留下靠 head 那一端)  | 留下  ｜ 全量 tA,tB,tC,tD
+PASS  I1 夹拖到另一个夹上 = 换位(不再被 dropIntoFolder 静默吞掉)  | folder:muwt3nsmjwd,folder:muwt3nsmf0g
+PASS  H1 展开态下移一格 = [tB,tA,tC,tD]  | tB,tA,tC,tD
+PASS  H2 展开态让位预览 = 提交结果  | tB,tA,tC,tD
+PASS  G1 下区首元素是 ＋(镜像对称)  | + slot
+PASS  G2 上区末元素是 ＋  | slot +
+PASS  L1 mod+2 = 上区第 2 个(tB)  | tB
+PASS  L2 改序后 mod+1 跟着走(tD)  | tB,tD
+PASS  L3 第 5 个是收纳夹 → 弹出它的浮层
+PASS  L4 Esc 关掉键盘开的浮层(鼠标不在上面,没有 mouseleave 可用)
+PASS  L5 空号(mod+9)什么也不做
+PASS  L6 收纳夹计数只算活成员(1 而非 2)  | FDEAD (1)
+PASS  L6b 全是死 id 的收纳夹给空态提示而不是空白
+PASS  M1 折叠态不显示快捷键提示  | |||
+PASS  M2 展开态按顺序标 ⌘1..4  | ⌘1,⌘2,⌘3,⌘4
+PASS  M3 提示不撑高槽位(撑高就会让位预览歪掉)  | 34,34,34,34 ｜ 折叠 32,32,32,32
+PASS  M4 改序后 ⌘1 标在新的第一个上  | tD / ⌘1
+PASS  M5 补到 10 个:上区只常驻 5 个(标 ⌘1..5),其余进「…」  | 5 个 ｜ ⌘1|⌘2|⌘3|⌘4|⌘5 ｜ more=true
+PASS  M5b 收进「…」的第 6 个照样 mod+6 直达  | tF
+PASS  W1 上区往下滚一下:窗口后移一格,提示标真实位置(⌘2..⌘6)  | tA,tB,tC,tE,tF ｜ ⌘2|⌘3|⌘4|⌘5|⌘6
+PASS  W1b 滚过以后 mod+1 仍是整区第一个(号不随滚动变)  | tD
+PASS  W1c 丝滑:手势中列停在两格之间、窗外格子画出图标;停手吸附到整格(第 3 格起)、占位清空  | {"pitch":38,"mid":-46.8278,"filledMid":5,"end":-76,"filledEnd":0}
+PASS  W8 连续小 delta 累加、停手按最近整格吸附(≈2.4 格 → 2 格)  | tB,tC,tE,tF,tG → tE,tF,tG,tH,tI
+PASS  W2 滚到底夹住:露最后 5 个(⌘6..⌘9,第 10 个无号)  | ⌘6|⌘7|⌘8|⌘9|
+PASS  W3 滚过去的前几个点「…」展开后就在条上  | tD,tA,tB,tC,tE,tF,tG,tH,tI,tJ
+PASS  W4 往上滚回来:窗口复原  | tD,tA,tB,tC,tE
+PASS  W5 命令区往上滚一下:露出前面藏着的那一个(命令区「…」在上)  | bB,bC,bD,bE,bF → bA,bB,bC,bD,bE
+PASS  W6 命令区往下滚回来:贴底复原  | bB,bC,bD,bE,bF
+PASS  W7 一下 120px 的滚轮只挪一格  | tD,tA,tB,tC,tE → tA,tB,tC,tE,tF
+PASS  X1 点上区「…」:上区 9 个全露、命令区让出来、钮变「收起」  | tA,tB,tC,tD,tE,tF,tG,tH,tI ｜ {"exp":"true","label":"收起"}
+PASS  X2 上区展开时账号卡仍贴底  | 792 → 792
+PASS  X3 点展开区里的图标:照常触发、不收起  | {"top":true,"bottom":false}
+PASS  X4 点 Ribbon 以外任意处:收回,命令区回来、上区回到 5 个  | 5 ｜ {"top":false,"bottom":false}
+PASS  X5 点命令区「…」:命令区全露、上区与主位槽让出来  | bA,bB,bC,bD,bE,bF ｜ home=false
+PASS  X6 Esc 收回  | {"top":false,"bottom":false}
+PASS  X7 窗口失焦(点进 iframe 视图)收回  | {"top":false,"bottom":false}
+PASS  X8 再点「收起」收回  | {"top":false,"bottom":false}
+PASS  Y1 光滚不点:停在翻到的位置  | tA,tB,tC,tD,tE → tB,tC,tD,tE,tF
+PASS  Y2 点 Ribbon 以外:先停一下(300ms 时还没动),随后滑回原位  | 300ms=tB,tC,tD,tE,tF ｜ 之后=tA,tB,tC,tD,tE
+PASS  Y3 点开翻出来的条目:照常触发,随后归位  | 点 tG 命中 tG ｜ tA,tB,tC,tD,tE
+PASS  Y4 点「…」再 Esc 收起:不触发归位  | tB,tC,tD,tE,tF → tB,tC,tD,tE,tF
+PASS  Y5 延迟内又滚:归位作废,停在新位置  | tB,tC,tD,tE,tF → tC,tD,tE,tF,tG
+PASS  Y6 设置关掉:点别处不归位;重新打开后下一次点击就归位(不用刷新)  | 关=tC,tD,tE,tF,tG ｜ 开=tA,tB,tC,tD,tE
+PASS  Y7 命令区同理:翻出藏着的,点别处后贴底复原  | bB,bC,bD,bE,bF → bA,bB,bC,bD,bE → bB,bC,bD,bE,bF
+PASS  Y8 窗口失焦(点进 iframe 视图)也归位  | tB,tC,tD,tE,tF → tA,tB,tC,tD,tE
+PASS  Y10 滚一下马上点(吸附还没走完):照样归位  | 点的那一刻列位移 -8.87478 ｜ tA,tB,tC,tD,tE
+PASS  Y11 归位滑动途中又滚 4px:挪一格,不被吞  | tB,tC,tD,tE,tF
+PASS  Y12 排队后才关掉开关:到点不执行;重新打开后归位  | 关=tB,tC,tD,tE,tF ｜ 开=tA,tB,tC,tD,tE
+PASS  Y9 归位后列的位移清零、窗外占位清空  | {"tr":"","filled":0}
+PASS  N1 展开态红点与快捷键提示不重合  | {"badge":{"l":29,"r":45.796875,"t":66,"b":81},"key":{"l":143.046875,"r":162,"t":75.5,"b":86.5},"icon":{"l":18,"r":36,"t":72,"b":90},"row":{"l":8,"r":172,"t":64,"b":98}}
+PASS  N2 红点贴在图标右上角(不是行右端)  | badge.l=29 icon.r=36 badge.t=66 rowMid=81
+PASS  O1 收起态 Ribbon 钮不挂原生 title(否则与浮签叠成两层)
+PASS  O2 悬停 0.5s 还不弹、1.2s 弹出且是该钮的名字  | 0.5s=null 1.2s=Top A
+PASS  O3 浮签贴在 Ribbon 右侧、与按钮垂直居中  | {"dy":0,"gap":6}
+PASS  O4 已弹过后换到相邻钮立刻弹(skip-delay)  | Top B
+PASS  O5 按下鼠标即收  | null
+PASS  O5b 点完鼠标还停在原钮上不再重新弹  | null
+PASS  O6 展开态(名称已可见)不弹浮签  | null
+PASS  O7 开关类命令钉进命令区:点前 aria-pressed=false、点后 true 且 .is-on  | {"pressed":"false","on":false} → {"pressed":"true","on":true}
+PASS  O8 非开关项不带 aria-pressed(不然读屏报「未按下」)
+
+70/70 passed, 0 failed

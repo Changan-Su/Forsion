@@ -1,0 +1,409 @@
+{
+  "checks": 12,
+  "results": [
+    {
+      "label": "light-1.5",
+      "scene": {
+        "mode": "light",
+        "scale": 1.5,
+        "lines": [
+          "汤谷上有扶桑",
+          "十日所浴",
+          "《山海经》"
+        ],
+        "inView": true,
+        "classic": false,
+        "mediaReduce": false,
+        "nativeReduce": false,
+        "reduce": false,
+        "animations": 8
+      },
+      "native": {
+        "events": [
+          {
+            "event": "created",
+            "visible": false
+          },
+          {
+            "event": "ready"
+          },
+          {
+            "event": "show",
+            "painted": true
+          }
+        ],
+        "observed": true,
+        "cpuRate": 6,
+        "cpuThrottle": {},
+        "pixel": [
+          245,
+          248,
+          251,
+          255
+        ]
+      },
+      "system": {
+        "bounds": {
+          "x": 680,
+          "y": 300,
+          "width": 1200,
+          "height": 820
+        },
+        "maximized": false,
+        "displays": [
+          {
+            "id": 2065300372,
+            "bounds": {
+              "x": 0,
+              "y": 0,
+              "width": 2560,
+              "height": 1440
+            },
+            "scale": 1.5
+          },
+          {
+            "id": 4240291700,
+            "bounds": {
+              "x": -2048,
+              "y": 285,
+              "width": 2048,
+              "height": 1153
+            },
+            "scale": 1.25
+          },
+          {
+            "id": 3612653111,
+            "bounds": {
+              "x": 2560,
+              "y": 287,
+              "width": 864,
+              "height": 1537
+            },
+            "scale": 1.25
+          }
+        ],
+        "gpu": {
+          "auxAttributes": {
+            "amdSwitchable": false,
+            "canSupportThreadedTextureMailbox": false,
+            "directMLFeatureLevel": "Not supported",
+            "dx12FeatureLevel": "Not supported",
+            "glImplementationParts": "(gl=none,angle=none)",
+            "glResetNotificationStrategy": 0,
+            "inProcessGpu": true,
+            "initializationTime": 0,
+            "isAsan": false,
+            "isClangCoverage": false,
+            "jpegDecodeAcceleratorSupported": false,
+            "optimus": false,
+            "overlayInfo": {
+              "bgra8OverlaySupport": "NONE",
+              "directComposition": false,
+              "nv12OverlaySupport": "NONE",
+              "p010OverlaySupport": "NONE",
+              "rgb10a2OverlaySupport": "NONE",
+              "supportsOverlays": false,
+              "yuy2OverlaySupport": "NONE"
+            },
+            "passthroughCmdDecoder": false,
+            "sandboxed": false,
+            "skiaBackendType": "None",
+            "subpixelFontRendering": true,
+            "supportsD3dSharedImages": false,
+            "supportsDirectML": false,
+            "supportsDx12": false,
+            "supportsVulkan": false,
+            "targetCpuBits": 64,
+            "visibilityCallbackCallCount": 0,
+            "vulkanVersion": "Not supported"
+          },
+          "gpuDevice": [
+            {
+              "active": false,
+              "deviceId": 11525,
+              "deviceString": "NVIDIA GeForce RTX 5060",
+              "driverVersion": "32.0.15.9621",
+              "gpuPreference": 2,
+              "revision": 161,
+              "subSysId": -1977675709,
+              "vendorId": 4318
+            },
+            {
+              "active": false,
+              "deviceId": 11525,
+              "deviceString": "NVIDIA GeForce RTX 5060",
+              "driverVersion": "32.0.15.9621",
+              "gpuPreference": 0,
+              "revision": 161,
+              "subSysId": -1977675709,
+              "vendorId": 4318
+            },
+            {
+              "active": false,
+              "deviceId": 11525,
+              "deviceString": "NVIDIA GeForce RTX 5060",
+              "driverVersion": "32.0.15.9621",
+              "gpuPreference": 0,
+              "revision": 161,
+              "subSysId": -1977675709,
+              "vendorId": 4318
+            },
+            {
+              "active": false,
+              "deviceId": 11525,
+              "deviceString": "NVIDIA GeForce RTX 5060",
+              "driverVersion": "32.0.15.9621",
+              "gpuPreference": 0,
+              "revision": 161,
+              "subSysId": -1977675709,
+              "vendorId": 4318
+            },
+            {
+              "active": false,
+              "deviceId": 140,
+              "deviceString": "Microsoft Basic Render Driver",
+              "driverVersion": "10.0.26100.7019",
+              "gpuPreference": 0,
+              "revision": 0,
+              "subSysId": 0,
+              "vendorId": 5140
+            }
+          ]
+        },
+        "gpuFeatures": {
+          "2d_canvas": "unavailable_software",
+          "direct_rendering_display_compositor": "disabled_off_ok",
+          "gpu_compositing": "disabled_software",
+          "multiple_raster_threads": "enabled_on",
+          "opengl": "disabled_off",
+          "rasterization": "disabled_software",
+          "raw_draw": "disabled_off_ok",
+          "skia_graphite": "disabled_off",
+          "trees_in_viz": "disabled_off",
+          "video_decode": "disabled_software",
+          "video_encode": "disabled_software",
+          "webgl": "unavailable_software",
+          "webgpu": "unavailable_software",
+          "webnn": "unavailable_software"
+        }
+      },
+      "timing": {
+        "frames": 46,
+        "fps": 3.831776496734475,
+        "p95": 1318.8000000000002,
+        "max": 3925.1000000000004
+      }
+    },
+    {
+      "label": "light-reduced-media",
+      "reduced": {
+        "reduce": true,
+        "animations": 0,
+        "verse": "1",
+        "cloud": "0"
+      }
+    },
+    {
+      "label": "dark-1.5",
+      "scene": {
+        "mode": "dark",
+        "scale": 1.5,
+        "lines": [
+          "客止我且往",
+          "濯发扶桑根",
+          "王安石《我欲往沧海》"
+        ],
+        "inView": true,
+        "classic": false,
+        "mediaReduce": false,
+        "nativeReduce": false,
+        "reduce": false,
+        "animations": 8
+      },
+      "native": {
+        "events": [
+          {
+            "event": "created",
+            "visible": false
+          },
+          {
+            "event": "ready"
+          },
+          {
+            "event": "show",
+            "painted": true
+          }
+        ],
+        "observed": true,
+        "cpuRate": 6,
+        "cpuThrottle": {},
+        "pixel": [
+          39,
+          35,
+          37,
+          255
+        ]
+      },
+      "system": {
+        "bounds": {
+          "x": 680,
+          "y": 300,
+          "width": 1200,
+          "height": 820
+        },
+        "maximized": false,
+        "displays": [
+          {
+            "id": 2065300372,
+            "bounds": {
+              "x": 0,
+              "y": 0,
+              "width": 2560,
+              "height": 1440
+            },
+            "scale": 1.5
+          },
+          {
+            "id": 4240291700,
+            "bounds": {
+              "x": -2048,
+              "y": 285,
+              "width": 2048,
+              "height": 1153
+            },
+            "scale": 1.25
+          },
+          {
+            "id": 3612653111,
+            "bounds": {
+              "x": 2560,
+              "y": 287,
+              "width": 864,
+              "height": 1537
+            },
+            "scale": 1.25
+          }
+        ],
+        "gpu": {
+          "auxAttributes": {
+            "amdSwitchable": false,
+            "canSupportThreadedTextureMailbox": false,
+            "directMLFeatureLevel": "Not supported",
+            "dx12FeatureLevel": "Not supported",
+            "glImplementationParts": "(gl=none,angle=none)",
+            "glResetNotificationStrategy": 0,
+            "inProcessGpu": true,
+            "initializationTime": 0,
+            "isAsan": false,
+            "isClangCoverage": false,
+            "jpegDecodeAcceleratorSupported": false,
+            "optimus": false,
+            "overlayInfo": {
+              "bgra8OverlaySupport": "NONE",
+              "directComposition": false,
+              "nv12OverlaySupport": "NONE",
+              "p010OverlaySupport": "NONE",
+              "rgb10a2OverlaySupport": "NONE",
+              "supportsOverlays": false,
+              "yuy2OverlaySupport": "NONE"
+            },
+            "passthroughCmdDecoder": false,
+            "sandboxed": false,
+            "skiaBackendType": "None",
+            "subpixelFontRendering": true,
+            "supportsD3dSharedImages": false,
+            "supportsDirectML": false,
+            "supportsDx12": false,
+            "supportsVulkan": false,
+            "targetCpuBits": 64,
+            "visibilityCallbackCallCount": 0,
+            "vulkanVersion": "Not supported"
+          },
+          "gpuDevice": [
+            {
+              "active": false,
+              "deviceId": 11525,
+              "deviceString": "NVIDIA GeForce RTX 5060",
+              "driverVersion": "32.0.15.9621",
+              "gpuPreference": 2,
+              "revision": 161,
+              "subSysId": -1977675709,
+              "vendorId": 4318
+            },
+            {
+              "active": false,
+              "deviceId": 11525,
+              "deviceString": "NVIDIA GeForce RTX 5060",
+              "driverVersion": "32.0.15.9621",
+              "gpuPreference": 0,
+              "revision": 161,
+              "subSysId": -1977675709,
+              "vendorId": 4318
+            },
+            {
+              "active": false,
+              "deviceId": 11525,
+              "deviceString": "NVIDIA GeForce RTX 5060",
+              "driverVersion": "32.0.15.9621",
+              "gpuPreference": 0,
+              "revision": 161,
+              "subSysId": -1977675709,
+              "vendorId": 4318
+            },
+            {
+              "active": false,
+              "deviceId": 11525,
+              "deviceString": "NVIDIA GeForce RTX 5060",
+              "driverVersion": "32.0.15.9621",
+              "gpuPreference": 0,
+              "revision": 161,
+              "subSysId": -1977675709,
+              "vendorId": 4318
+            },
+            {
+              "active": false,
+              "deviceId": 140,
+              "deviceString": "Microsoft Basic Render Driver",
+              "driverVersion": "10.0.26100.7019",
+              "gpuPreference": 0,
+              "revision": 0,
+              "subSysId": 0,
+              "vendorId": 5140
+            }
+          ]
+        },
+        "gpuFeatures": {
+          "2d_canvas": "unavailable_software",
+          "direct_rendering_display_compositor": "disabled_off_ok",
+          "gpu_compositing": "disabled_software",
+          "multiple_raster_threads": "enabled_on",
+          "opengl": "disabled_off",
+          "rasterization": "disabled_software",
+          "raw_draw": "disabled_off_ok",
+          "skia_graphite": "disabled_off",
+          "trees_in_viz": "disabled_off",
+          "video_decode": "disabled_software",
+          "video_encode": "disabled_software",
+          "webgl": "unavailable_software",
+          "webgpu": "unavailable_software",
+          "webnn": "unavailable_software"
+        }
+      },
+      "timing": {
+        "frames": 42,
+        "fps": 3.5098532710120365,
+        "p95": 1425,
+        "max": 4318.799999999999
+      }
+    },
+    {
+      "label": "dark-reduced-media",
+      "reduced": {
+        "reduce": true,
+        "animations": 0,
+        "verse": "1",
+        "cloud": "0"
+      }
+    }
+  ]
+}

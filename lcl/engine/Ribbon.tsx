@@ -13,6 +13,7 @@ import { RIBBON_ICON_NAMES, iconByName } from './ribbonIcons'
 import { useCommandStore, openCommandPicker, addCommand, removeCommand } from './commandRegistry'
 import { setActiveSpace, useSpaceStore } from './spaceRegistry'
 import { getDetachApi } from './detachSeam'
+import { beginRibbonPointerDrag } from './ribbonPointerDrag'
 import { effectiveHotkey, formatHotkey, isMacPlatform, useShortcuts } from './shortcutStore'
 import { engineTr, useEngineI18n } from './i18nSeam'
 import { label } from './types'
@@ -114,6 +115,8 @@ export function Ribbon() {
   const st = () => useRibbonStore.getState()
 
   const [drag, setDrag] = useState<DragState | null>(null)
+  const pointerCancel = useRef<(() => void) | undefined>(undefined)
+  useEffect(() => () => pointerCancel.current?.(), [])
   const [overId, setOverId] = useState<string | null>(null) // 浮层行插入线
   const [over, setOver] = useState<{ zone: RibbonZone; index: number } | null>(null) // 条上落点(槽下标),驱动让位预览
   const [overFolder, setOverFolder] = useState<string | null>(null) // 收纳夹/「…」高亮
@@ -570,8 +573,8 @@ export function Ribbon() {
   /** 顶层重排:把 drag 项挪到 targetId 当下占的槽位(顶掉它,其余让位;target 缺省 = 区末尾);
    *  从收纳夹拖出时顺带去 membership。
    *  基准序取「持久序 ∪ 可见项」,保住异步未加载的 Space(否则拖动会抹掉其存档位置,见 codex#2)。 */
-  const dropOnBar = (zone: RibbonZone, targetId: string | null): void => {
-    const d = drag
+  const dropOnBar = (zone: RibbonZone, targetId: string | null, current = drag): void => {
+    const d = current
     endDrag()
     if (!d || d.zone !== zone || d.id === targetId) return
     if (d.from) st().moveOutOfFolder(d.id)
@@ -580,8 +583,8 @@ export function Ribbon() {
     const ti = targetId ? full.indexOf(targetId) : -1
     st().setZoneOrder(zone, moveTo(full, d.id, ti >= 0 ? ti : full.length))
   }
-  const dropIntoFolder = (f: RibbonFolder, at?: number): void => {
-    const d = drag
+  const dropIntoFolder = (f: RibbonFolder, at?: number, current = drag): void => {
+    const d = current
     endDrag()
     if (!d || d.zone !== f.zone || d.id.startsWith('folder:')) return
     if (d.from === f.id) { // 夹内重排
@@ -595,6 +598,73 @@ export function Ribbon() {
       }
     }
   }
+
+  type PointerTarget = { kind: 'bar'; zone: RibbonZone; id: string | null }
+    | { kind: 'folder'; folder: RibbonFolder; at?: number } | { kind: 'tear' } | { kind: 'cancel' }
+  const pointerActions = useRef<{
+    target(e: PointerEvent, d: DragState): PointerTarget
+    drop(e: PointerEvent, d: DragState, target: PointerTarget): void
+  }>(null!)
+  pointerActions.current = {
+    target: (e, d) => {
+      const hit = document.elementFromPoint(e.clientX, e.clientY)
+      const own = !!hit && (!!rootRef.current?.contains(hit) || !!flyRef.current?.contains(hit))
+      if (own) {
+        const folderId = hit.closest<HTMLElement>('[data-rb-folder]')?.dataset.rbFolder
+        const folder = folders.find((f) => f.id === folderId)
+        if (folder && folder.zone === d.zone) {
+          const row = hit.closest<HTMLElement>('[data-rb-folder-index]')
+          setOver(null); setOverFolder(folder.id); setOverId(row?.dataset.id ?? null)
+          if (!row) openFly(folder.id, folder.zone, hit.closest<HTMLElement>('[data-rb-folder]')!, folder.id)
+          return { kind: 'folder', folder, at: row ? Number(row.dataset.rbFolderIndex) : undefined }
+        }
+        const more = hit.closest<HTMLElement>('[data-rb-more]')?.dataset.rbMore
+        if (more === d.zone) {
+          setOver(null); setOverFolder(`more:${more}`)
+          return { kind: 'bar', zone: d.zone, id: d.zone === 'bottom' ? (botE[0]?.id ?? null) : null }
+        }
+        const group = hit.closest<HTMLElement>('.rb-top, .rb-bottom')
+        if (group) {
+          const zone = group.classList.contains('rb-top') ? 'top' : 'bottom'
+          if (zone !== d.zone) return { kind: 'cancel' }
+          const ids = (zone === 'top' ? top : bot).shown.map((entry) => entry.id)
+          const ix = indexAt(group, e.clientY, ids.length)
+          setOverFolder(null); setOverId(null)
+          setOver((o) => o?.zone === zone && o.index === ix ? o : { zone, index: ix })
+          return { kind: 'bar', zone, id: ids[ix] ?? null }
+        }
+      }
+      setOver(null); setOverFolder(null); setOverId(null)
+      const outside = e.clientX < 0 || e.clientY < 0 || e.clientX >= window.innerWidth || e.clientY >= window.innerHeight
+      return { kind: outside || (!own && !nearBar(e.clientX, e.clientY)) ? 'tear' : 'cancel' }
+    },
+    drop: (e, d, target) => {
+      if (target.kind === 'bar') dropOnBar(target.zone, target.id, d)
+      else if (target.kind === 'folder') dropIntoFolder(target.folder, target.at, d)
+      else {
+        endDrag()
+        if (target.kind === 'tear') {
+          const api = getDetachApi(), id = spaceIdOf(d.id)
+          if (id) api?.openSpace?.(id, api.cursorScreenPoint?.() ?? { screenX: e.screenX, screenY: e.screenY })
+        }
+      }
+    },
+  }
+  const pointerDown = (e: React.PointerEvent, id: string, zone: RibbonZone, from: string | null): void => {
+    if (!getDetachApi()?.ribbonPointerDrag || !spaceIdOf(id) || e.button !== 0 || !e.isPrimary) return
+    e.stopPropagation()
+    pointerCancel.current?.()
+    const source = e.currentTarget as HTMLElement, d = { id, zone, from }
+    if (!from) snapGeom(source, e.clientY)
+    let target: PointerTarget = { kind: 'cancel' }
+    pointerCancel.current = beginRibbonPointerDrag(e.nativeEvent, source, {
+      start: () => { hideTip(); cancelClose(); setDrag(d) },
+      move: (ev) => { target = pointerActions.current.target(ev, d) },
+      drop: (ev) => { pointerActions.current.drop(ev, d, target) },
+      cancel: endDrag,
+    })
+  }
+  const nativeDraggable = (id: string): boolean => !(getDetachApi()?.ribbonPointerDrag && spaceIdOf(id))
 
   // ---- 菜单(右键 / + 号共用) ----
   const ask = ribbonActions.prompt ?? ((t: string, i?: string) => Promise.resolve(window.prompt(t, i)))
@@ -673,6 +743,7 @@ export function Ribbon() {
         // 记下按钮元素:mod+N 打开这个收纳夹时要拿它当浮层锚点(键盘路径没有 currentTarget)。
         ref={(el) => { el ? folderBtns.current.set(f.id, el) : folderBtns.current.delete(f.id) }}
         className={`rb-btn rb-folder${overFolder === f.id ? ' drag-into' : ''}`}
+        data-rb-folder={f.id}
         aria-label={`${f.name} (${liveCount(f)})`} /* 悬停即弹浮层(浮层头就是名字)→ 不再挂浮签 */
         onMouseEnter={(e) => openFly(f.id, f.zone, e.currentTarget, f.id)}
         onMouseLeave={scheduleClose}
@@ -696,6 +767,7 @@ export function Ribbon() {
     return (
       <button
         className={`rb-btn rb-more${open ? ' is-open' : ''}${overFolder === `more:${zone}` ? ' drag-into' : ''}`}
+        data-rb-more={zone}
         aria-label={name}
         aria-expanded={open}
         data-rb-tip={expanded ? undefined : name}
@@ -727,7 +799,8 @@ export function Ribbon() {
         data-id={e.id} /* 落点 e2e 用(scripts/ribbon-dnd.e2e.cjs) */
         className={`rb-slot${drag?.id === e.id ? ' dragging' : ''}${line ? ' drag-over' : ''}`}
         style={to !== i ? { transform: `translateY(${(to - i) * slotH}px)` } : undefined}
-        draggable
+        draggable={nativeDraggable(e.id)}
+        onPointerDown={(ev) => pointerDown(ev, e.id, zone, null)}
         onDragStart={(ev) => { snapGeom(ev.currentTarget, ev.clientY); startDrag(ev, e.id, zone, null) }}
         onDragEnd={finishDrag}
         onContextMenu={e.kind === 'cmd' ? cmdCtx(e.cmd.id) : e.kind === 'item' ? itemCtx(e.item) : undefined}
@@ -801,7 +874,10 @@ export function Ribbon() {
       key={e.id}
       data-id={e.id} /* 同条上格子的 data-id:台架按稳定 id 定位溢出行(未读角标会改可访问名;Codex 第三轮 H2-2) */
       className={`rb-fly-row${drag?.id === e.id ? ' dragging' : ''}${overId === e.id && drag?.id !== e.id ? ` drag-over${drag && list.indexOf(drag.id) >= 0 && list.indexOf(drag.id) < at ? ' below' : ''}` : ''}`}
-      draggable
+      data-rb-folder={folder.id}
+      data-rb-folder-index={at}
+      draggable={nativeDraggable(e.id)}
+      onPointerDown={(ev) => pointerDown(ev, e.id, folder.zone, folder.id)}
       onDragStart={(ev) => { ev.stopPropagation(); startDrag(ev, e.id, folder.zone, folder.id) }}
       onDragOver={(ev) => acceptOver(ev, !!drag && drag.zone === folder.zone && drag.id !== e.id && !drag.id.startsWith('folder:'), () => setOverId(e.id))}
       onDragLeave={() => { if (overId === e.id) setOverId(null) }}
@@ -881,6 +957,7 @@ export function Ribbon() {
         <div
           ref={flyRef}
           className="rb-fly"
+          data-rb-folder={flyFolder.id}
           /* rect/fly.top 是视口 px,fixed 的 left/top 会被祖先 zoom 再乘一遍 → 先除掉(见 menuAnchor.tsx)。 */
           style={(() => { const z = zoomOf(rootRef.current); return { left: ((rootRef.current?.getBoundingClientRect().right ?? 44) + 4) / z, top: fly.top / z } })()}
           onMouseEnter={cancelClose}

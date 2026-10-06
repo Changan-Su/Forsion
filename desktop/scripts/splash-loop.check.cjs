@@ -37,8 +37,8 @@ const OUT = MUTANT ? fs.mkdtempSync(path.join(os.tmpdir(), 'splash-mutant-')) : 
 const RUNTIME = fs.readFileSync(MUTANT || path.join(__dirname, '../frontend/startupAppearance.js'), 'utf8')
 const ENTRIES = ['../frontend/index.html', '../../web/index.html', '../../mobile/index.html']
 /** 真实入口 + 真实运行时;config 给了就当作宿主已存的开屏设置(否则走各端自己的缺省读取)。函数替换:运行时文本里的 `$'` 不许被展开。 */
-function html(config, entry = ENTRIES[0], version = STAMP, nativeReducedMotion = false) {
-  const host = `<script>window.FORSION_APP_VERSION=${JSON.stringify(version)};</script>` + (config || nativeReducedMotion ? `<script>window.tangu={startupAppearance:{prefersReducedMotion:${nativeReducedMotion},initial:${JSON.stringify({ version: 1, ...config })}}};</script>` : '')
+function html(config, entry = ENTRIES[0], version = STAMP, nativeReducedMotion = false, softwareRendering = false) {
+  const host = `<script>window.FORSION_APP_VERSION=${JSON.stringify(version)};</script>` + (config || nativeReducedMotion || softwareRendering ? `<script>window.tangu={startupAppearance:{prefersReducedMotion:${nativeReducedMotion},softwareRendering:${softwareRendering},initial:${JSON.stringify({ version: 1, ...config })}}};</script>` : '')
   return fs.readFileSync(path.join(__dirname, entry), 'utf8').replace('<!-- forsion-startup-runtime -->', () => `${host}<script>${RUNTIME}</script>`)
 }
 const CYCLE = 1600
@@ -342,6 +342,17 @@ async function main() {
     check(`${entry}: Windows 原生减少动画覆盖失真的媒体查询,树影是完整静帧`, await page.locator('#tangu-splash').evaluate((s) => !matchMedia('(prefers-reduced-motion:reduce)').matches && s.hasAttribute('data-reduced-motion') && s.getAnimations({ subtree: true }).length === 0 && getComputedStyle(s.querySelector('.fts-verse p')).opacity === '1'))
     await open(html({ scene: 'classic', animation: 'spin', icon: { image: png } }, entry, STAMP, true))
     check(`${entry}: Windows 原生减少动画同样停止经典和自定义图标`, await page.locator('#tangu-splash').evaluate((s) => s.getAnimations({ subtree: true }).length === 0))
+    await open(html(null, entry, STAMP, false, true))
+    check(`${entry}: 软件渲染显示完整静帧并限制位图`, await page.locator('#tangu-splash').evaluate(s => s.dataset.performanceStill === 'software' && s.getAnimations({ subtree: true }).length === 0 && getComputedStyle(s.querySelector('.fts-verse p')).opacity === '1' && s.querySelector('canvas').width <= 960))
+    await firstFrame()
+    await page.waitForTimeout(200)
+    check(`${entry}: 软件渲染准备好后立即退场`, await page.locator('#tangu-splash').count() === 0)
+    await open(html({ scene: 'classic', animation: 'spin', icon: { image: png } }, entry, STAMP, false, true))
+    check(`${entry}: 软件渲染降级不覆盖用户的经典图标动画`, await page.locator('#tangu-splash').evaluate(s => !s.hasAttribute('data-performance-still') && s.querySelector('img').getAnimations()[0]?.animationName === 'forsion-spin'))
+    const slowClock = '<script>var raf=requestAnimationFrame,stamp=0;requestAnimationFrame=function(cb){return raf(function(){cb(stamp+=80)})};</script>'
+    await open(html(null, entry).replace('<head>', '<head>' + slowClock))
+    await page.waitForTimeout(300)
+    check(`${entry}: 连续慢帧降级为完整静帧`, await page.locator('#tangu-splash').evaluate(s => s.dataset.performanceStill === 'frames' && s.getAnimations({ subtree: true }).length === 0 && getComputedStyle(s.querySelector('.fts-cloud')).opacity === '0'))
     await at({ showSplash: false })
     check(`${entry}: 用户可关闭开屏`, await page.locator('#tangu-splash').count() === 0)
     await at({ scene: 'classic', icon: { image: broken } })

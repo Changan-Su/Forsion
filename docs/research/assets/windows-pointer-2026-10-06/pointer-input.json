@@ -1,0 +1,872 @@
+{
+  "checks": 84,
+  "records": [
+    {
+      "scale": 1,
+      "drag": [
+        {
+          "kind": "pointermove",
+          "trusted": true,
+          "screenX": 1353,
+          "screenY": 828,
+          "buttons": 0,
+          "primary": true,
+          "target": "svg",
+          "pointerId": 1
+        },
+        {
+          "kind": "pointerdown",
+          "trusted": true,
+          "screenX": 1353,
+          "screenY": 828,
+          "buttons": 1,
+          "primary": true,
+          "target": "svg",
+          "pointerId": 1
+        },
+        {
+          "kind": "gotpointercapture",
+          "trusted": true,
+          "screenX": 1379.4000244140625,
+          "screenY": 841.5999755859375,
+          "buttons": 1,
+          "primary": true,
+          "target": "BUTTON",
+          "pointerId": 1
+        },
+        {
+          "kind": "pointermove",
+          "trusted": true,
+          "screenX": 1379.4000244140625,
+          "screenY": 841.5999755859375,
+          "buttons": 1,
+          "primary": true,
+          "target": "BUTTON",
+          "pointerId": 1
+        },
+        {
+          "kind": "pointermove",
+          "trusted": true,
+          "screenX": 1405.800048828125,
+          "screenY": 855.2000122070312,
+          "buttons": 1,
+          "primary": true,
+          "target": "BUTTON",
+          "pointerId": 1
+        },
+        {
+          "kind": "pointermove",
+          "trusted": true,
+          "screenX": 1432.199951171875,
+          "screenY": 868.7999877929688,
+          "buttons": 1,
+          "primary": true,
+          "target": "BUTTON",
+          "pointerId": 1
+        },
+        {
+          "kind": "pointermove",
+          "trusted": true,
+          "screenX": 1458.5999755859375,
+          "screenY": 882.4000244140625,
+          "buttons": 1,
+          "primary": true,
+          "target": "BUTTON",
+          "pointerId": 1
+        },
+        {
+          "kind": "pointermove",
+          "trusted": true,
+          "screenX": 1485,
+          "screenY": 896,
+          "buttons": 1,
+          "primary": true,
+          "target": "BUTTON",
+          "pointerId": 1
+        },
+        {
+          "kind": "pointermove",
+          "trusted": true,
+          "screenX": 1511.4000244140625,
+          "screenY": 909.5999755859375,
+          "buttons": 1,
+          "primary": true,
+          "target": "BUTTON",
+          "pointerId": 1
+        },
+        {
+          "kind": "pointermove",
+          "trusted": true,
+          "screenX": 1537.800048828125,
+          "screenY": 923.2000122070312,
+          "buttons": 1,
+          "primary": true,
+          "target": "BUTTON",
+          "pointerId": 1
+        },
+        {
+          "kind": "pointermove",
+          "trusted": true,
+          "screenX": 1564.199951171875,
+          "screenY": 936.7999877929688,
+          "buttons": 1,
+          "primary": true,
+          "target": "BUTTON",
+          "pointerId": 1
+        },
+        {
+          "kind": "pointermove",
+          "trusted": true,
+          "screenX": 1590.5999755859375,
+          "screenY": 950.4000244140625,
+          "buttons": 1,
+          "primary": true,
+          "target": "BUTTON",
+          "pointerId": 1
+        },
+        {
+          "kind": "pointermove",
+          "trusted": true,
+          "screenX": 1617,
+          "screenY": 964,
+          "buttons": 1,
+          "primary": true,
+          "target": "BUTTON",
+          "pointerId": 1
+        },
+        {
+          "kind": "pointermove",
+          "trusted": true,
+          "screenX": 1643.4000244140625,
+          "screenY": 977.5999755859375,
+          "buttons": 1,
+          "primary": true,
+          "target": "BUTTON",
+          "pointerId": 1
+        },
+        {
+          "kind": "pointermove",
+          "trusted": true,
+          "screenX": 1669.800048828125,
+          "screenY": 991.2000122070312,
+          "buttons": 1,
+          "primary": true,
+          "target": "BUTTON",
+          "pointerId": 1
+        },
+        {
+          "kind": "pointermove",
+          "trusted": true,
+          "screenX": 1696.199951171875,
+          "screenY": 1004.7999877929688,
+          "buttons": 1,
+          "primary": true,
+          "target": "BUTTON",
+          "pointerId": 1
+        },
+        {
+          "kind": "pointermove",
+          "trusted": true,
+          "screenX": 1722.5999755859375,
+          "screenY": 1018.4000244140625,
+          "buttons": 1,
+          "primary": true,
+          "target": "BUTTON",
+          "pointerId": 1
+        },
+        {
+          "kind": "pointermove",
+          "trusted": true,
+          "screenX": 1749,
+          "screenY": 1032,
+          "buttons": 1,
+          "primary": true,
+          "target": "BUTTON",
+          "pointerId": 1
+        },
+        {
+          "kind": "pointermove",
+          "trusted": true,
+          "screenX": 1775.4000244140625,
+          "screenY": 1045.5999755859375,
+          "buttons": 1,
+          "primary": true,
+          "target": "BUTTON",
+          "pointerId": 1
+        },
+        {
+          "kind": "pointermove",
+          "trusted": true,
+          "screenX": 1801.800048828125,
+          "screenY": 1059.199951171875,
+          "buttons": 1,
+          "primary": true,
+          "target": "BUTTON",
+          "pointerId": 1
+        },
+        {
+          "kind": "pointermove",
+          "trusted": true,
+          "screenX": 1828.199951171875,
+          "screenY": 1072.800048828125,
+          "buttons": 1,
+          "primary": true,
+          "target": "BUTTON",
+          "pointerId": 1
+        },
+        {
+          "kind": "pointermove",
+          "trusted": true,
+          "screenX": 1854.5999755859375,
+          "screenY": 1086.4000244140625,
+          "buttons": 1,
+          "primary": true,
+          "target": "BUTTON",
+          "pointerId": 1
+        },
+        {
+          "kind": "pointermove",
+          "trusted": true,
+          "screenX": 1881,
+          "screenY": 1100,
+          "buttons": 1,
+          "primary": true,
+          "target": "BUTTON",
+          "pointerId": 1
+        },
+        {
+          "kind": "pointermove",
+          "trusted": true,
+          "screenX": 1883,
+          "screenY": 1102,
+          "buttons": 1,
+          "primary": true,
+          "target": "BUTTON",
+          "pointerId": 1
+        },
+        {
+          "kind": "pointerup",
+          "trusted": true,
+          "screenX": 1883,
+          "screenY": 1102,
+          "buttons": 0,
+          "primary": true,
+          "target": "BUTTON",
+          "pointerId": 1,
+          "cursor": {
+            "screenX": 800,
+            "screenY": 650
+          }
+        },
+        {
+          "kind": "lostpointercapture",
+          "trusted": true,
+          "screenX": 1883,
+          "screenY": 1102,
+          "buttons": 0,
+          "primary": true,
+          "target": "BUTTON",
+          "pointerId": 1
+        }
+      ],
+      "show": {
+        "id": 2,
+        "visibleAtCreation": false,
+        "paintedAtShow": true
+      },
+      "expectedBounds": {
+        "x": 120,
+        "y": 90,
+        "width": 820,
+        "height": 620
+      },
+      "after": {
+        "title": "Agents",
+        "bounds": {
+          "x": 120,
+          "y": 90,
+          "width": 820,
+          "height": 620
+        }
+      }
+    },
+    {
+      "scale": 1.25,
+      "drag": [
+        {
+          "kind": "pointermove",
+          "trusted": true,
+          "screenX": 967,
+          "screenY": 570,
+          "buttons": 0,
+          "primary": true,
+          "target": "svg",
+          "pointerId": 1
+        },
+        {
+          "kind": "pointerdown",
+          "trusted": true,
+          "screenX": 967,
+          "screenY": 570,
+          "buttons": 1,
+          "primary": true,
+          "target": "svg",
+          "pointerId": 1
+        },
+        {
+          "kind": "gotpointercapture",
+          "trusted": true,
+          "screenX": 993.4000244140625,
+          "screenY": 585.4000244140625,
+          "buttons": 1,
+          "primary": true,
+          "target": "BUTTON",
+          "pointerId": 1
+        },
+        {
+          "kind": "pointermove",
+          "trusted": true,
+          "screenX": 993.4000244140625,
+          "screenY": 585.4000244140625,
+          "buttons": 1,
+          "primary": true,
+          "target": "BUTTON",
+          "pointerId": 1
+        },
+        {
+          "kind": "pointermove",
+          "trusted": true,
+          "screenX": 1019.7999877929688,
+          "screenY": 600.7999877929688,
+          "buttons": 1,
+          "primary": true,
+          "target": "BUTTON",
+          "pointerId": 1
+        },
+        {
+          "kind": "pointermove",
+          "trusted": true,
+          "screenX": 1046.199951171875,
+          "screenY": 616.2000122070312,
+          "buttons": 1,
+          "primary": true,
+          "target": "BUTTON",
+          "pointerId": 1
+        },
+        {
+          "kind": "pointermove",
+          "trusted": true,
+          "screenX": 1072.5999755859375,
+          "screenY": 631.5999755859375,
+          "buttons": 1,
+          "primary": true,
+          "target": "BUTTON",
+          "pointerId": 1
+        },
+        {
+          "kind": "pointermove",
+          "trusted": true,
+          "screenX": 1099,
+          "screenY": 647,
+          "buttons": 1,
+          "primary": true,
+          "target": "BUTTON",
+          "pointerId": 1
+        },
+        {
+          "kind": "pointermove",
+          "trusted": true,
+          "screenX": 1125.4000244140625,
+          "screenY": 662.4000244140625,
+          "buttons": 1,
+          "primary": true,
+          "target": "BUTTON",
+          "pointerId": 1
+        },
+        {
+          "kind": "pointermove",
+          "trusted": true,
+          "screenX": 1151.800048828125,
+          "screenY": 677.7999877929688,
+          "buttons": 1,
+          "primary": true,
+          "target": "BUTTON",
+          "pointerId": 1
+        },
+        {
+          "kind": "pointermove",
+          "trusted": true,
+          "screenX": 1178.199951171875,
+          "screenY": 693.2000122070312,
+          "buttons": 1,
+          "primary": true,
+          "target": "BUTTON",
+          "pointerId": 1
+        },
+        {
+          "kind": "pointermove",
+          "trusted": true,
+          "screenX": 1204.5999755859375,
+          "screenY": 708.5999755859375,
+          "buttons": 1,
+          "primary": true,
+          "target": "BUTTON",
+          "pointerId": 1
+        },
+        {
+          "kind": "pointermove",
+          "trusted": true,
+          "screenX": 1231,
+          "screenY": 724,
+          "buttons": 1,
+          "primary": true,
+          "target": "BUTTON",
+          "pointerId": 1
+        },
+        {
+          "kind": "pointermove",
+          "trusted": true,
+          "screenX": 1257.4000244140625,
+          "screenY": 739.4000244140625,
+          "buttons": 1,
+          "primary": true,
+          "target": "BUTTON",
+          "pointerId": 1
+        },
+        {
+          "kind": "pointermove",
+          "trusted": true,
+          "screenX": 1283.800048828125,
+          "screenY": 754.7999877929688,
+          "buttons": 1,
+          "primary": true,
+          "target": "BUTTON",
+          "pointerId": 1
+        },
+        {
+          "kind": "pointermove",
+          "trusted": true,
+          "screenX": 1310.199951171875,
+          "screenY": 770.2000122070312,
+          "buttons": 1,
+          "primary": true,
+          "target": "BUTTON",
+          "pointerId": 1
+        },
+        {
+          "kind": "pointermove",
+          "trusted": true,
+          "screenX": 1336.5999755859375,
+          "screenY": 785.5999755859375,
+          "buttons": 1,
+          "primary": true,
+          "target": "BUTTON",
+          "pointerId": 1
+        },
+        {
+          "kind": "pointermove",
+          "trusted": true,
+          "screenX": 1363,
+          "screenY": 801,
+          "buttons": 1,
+          "primary": true,
+          "target": "BUTTON",
+          "pointerId": 1
+        },
+        {
+          "kind": "pointermove",
+          "trusted": true,
+          "screenX": 1389.4000244140625,
+          "screenY": 816.4000244140625,
+          "buttons": 1,
+          "primary": true,
+          "target": "BUTTON",
+          "pointerId": 1
+        },
+        {
+          "kind": "pointermove",
+          "trusted": true,
+          "screenX": 1415.800048828125,
+          "screenY": 831.7999877929688,
+          "buttons": 1,
+          "primary": true,
+          "target": "BUTTON",
+          "pointerId": 1
+        },
+        {
+          "kind": "pointermove",
+          "trusted": true,
+          "screenX": 1442.199951171875,
+          "screenY": 847.2000122070312,
+          "buttons": 1,
+          "primary": true,
+          "target": "BUTTON",
+          "pointerId": 1
+        },
+        {
+          "kind": "pointermove",
+          "trusted": true,
+          "screenX": 1468.5999755859375,
+          "screenY": 862.5999755859375,
+          "buttons": 1,
+          "primary": true,
+          "target": "BUTTON",
+          "pointerId": 1
+        },
+        {
+          "kind": "pointermove",
+          "trusted": true,
+          "screenX": 1495,
+          "screenY": 878,
+          "buttons": 1,
+          "primary": true,
+          "target": "BUTTON",
+          "pointerId": 1
+        },
+        {
+          "kind": "pointermove",
+          "trusted": true,
+          "screenX": 1497,
+          "screenY": 880,
+          "buttons": 1,
+          "primary": true,
+          "target": "BUTTON",
+          "pointerId": 1
+        },
+        {
+          "kind": "pointerup",
+          "trusted": true,
+          "screenX": 1497,
+          "screenY": 880,
+          "buttons": 0,
+          "primary": true,
+          "target": "BUTTON",
+          "pointerId": 1,
+          "cursor": {
+            "screenX": 800,
+            "screenY": 650
+          }
+        },
+        {
+          "kind": "lostpointercapture",
+          "trusted": true,
+          "screenX": 1497,
+          "screenY": 880,
+          "buttons": 0,
+          "primary": true,
+          "target": "BUTTON",
+          "pointerId": 1
+        }
+      ],
+      "show": {
+        "id": 2,
+        "visibleAtCreation": false,
+        "paintedAtShow": true
+      },
+      "expectedBounds": {
+        "x": 120,
+        "y": 90,
+        "width": 820,
+        "height": 622
+      },
+      "after": {
+        "title": "Agents",
+        "bounds": {
+          "x": 120,
+          "y": 90,
+          "width": 820,
+          "height": 622
+        }
+      }
+    },
+    {
+      "scale": 1.5,
+      "drag": [
+        {
+          "kind": "pointermove",
+          "trusted": true,
+          "screenX": 709,
+          "screenY": 422,
+          "buttons": 0,
+          "primary": true,
+          "target": "svg",
+          "pointerId": 1
+        },
+        {
+          "kind": "pointerdown",
+          "trusted": true,
+          "screenX": 709,
+          "screenY": 422,
+          "buttons": 1,
+          "primary": true,
+          "target": "svg",
+          "pointerId": 1
+        },
+        {
+          "kind": "gotpointercapture",
+          "trusted": true,
+          "screenX": 735.4000244140625,
+          "screenY": 437.3999938964844,
+          "buttons": 1,
+          "primary": true,
+          "target": "BUTTON",
+          "pointerId": 1
+        },
+        {
+          "kind": "pointermove",
+          "trusted": true,
+          "screenX": 735.4000244140625,
+          "screenY": 437.3999938964844,
+          "buttons": 1,
+          "primary": true,
+          "target": "BUTTON",
+          "pointerId": 1
+        },
+        {
+          "kind": "pointermove",
+          "trusted": true,
+          "screenX": 761.7999877929688,
+          "screenY": 452.79998779296875,
+          "buttons": 1,
+          "primary": true,
+          "target": "BUTTON",
+          "pointerId": 1
+        },
+        {
+          "kind": "pointermove",
+          "trusted": true,
+          "screenX": 788.2000122070312,
+          "screenY": 468.20001220703125,
+          "buttons": 1,
+          "primary": true,
+          "target": "BUTTON",
+          "pointerId": 1
+        },
+        {
+          "kind": "pointermove",
+          "trusted": true,
+          "screenX": 814.5999755859375,
+          "screenY": 483.6000061035156,
+          "buttons": 1,
+          "primary": true,
+          "target": "BUTTON",
+          "pointerId": 1
+        },
+        {
+          "kind": "pointermove",
+          "trusted": true,
+          "screenX": 841,
+          "screenY": 499,
+          "buttons": 1,
+          "primary": true,
+          "target": "BUTTON",
+          "pointerId": 1
+        },
+        {
+          "kind": "pointermove",
+          "trusted": true,
+          "screenX": 867.4000244140625,
+          "screenY": 514.4000244140625,
+          "buttons": 1,
+          "primary": true,
+          "target": "BUTTON",
+          "pointerId": 1
+        },
+        {
+          "kind": "pointermove",
+          "trusted": true,
+          "screenX": 893.7999877929688,
+          "screenY": 529.7999877929688,
+          "buttons": 1,
+          "primary": true,
+          "target": "BUTTON",
+          "pointerId": 1
+        },
+        {
+          "kind": "pointermove",
+          "trusted": true,
+          "screenX": 920.2000122070312,
+          "screenY": 545.2000122070312,
+          "buttons": 1,
+          "primary": true,
+          "target": "BUTTON",
+          "pointerId": 1
+        },
+        {
+          "kind": "pointermove",
+          "trusted": true,
+          "screenX": 946.5999755859375,
+          "screenY": 560.5999755859375,
+          "buttons": 1,
+          "primary": true,
+          "target": "BUTTON",
+          "pointerId": 1
+        },
+        {
+          "kind": "pointermove",
+          "trusted": true,
+          "screenX": 973,
+          "screenY": 576,
+          "buttons": 1,
+          "primary": true,
+          "target": "BUTTON",
+          "pointerId": 1
+        },
+        {
+          "kind": "pointermove",
+          "trusted": true,
+          "screenX": 999.4000244140625,
+          "screenY": 591.4000244140625,
+          "buttons": 1,
+          "primary": true,
+          "target": "BUTTON",
+          "pointerId": 1
+        },
+        {
+          "kind": "pointermove",
+          "trusted": true,
+          "screenX": 1025.800048828125,
+          "screenY": 606.7999877929688,
+          "buttons": 1,
+          "primary": true,
+          "target": "BUTTON",
+          "pointerId": 1
+        },
+        {
+          "kind": "pointermove",
+          "trusted": true,
+          "screenX": 1052.199951171875,
+          "screenY": 622.2000122070312,
+          "buttons": 1,
+          "primary": true,
+          "target": "BUTTON",
+          "pointerId": 1
+        },
+        {
+          "kind": "pointermove",
+          "trusted": true,
+          "screenX": 1078.5999755859375,
+          "screenY": 637.5999755859375,
+          "buttons": 1,
+          "primary": true,
+          "target": "BUTTON",
+          "pointerId": 1
+        },
+        {
+          "kind": "pointermove",
+          "trusted": true,
+          "screenX": 1105,
+          "screenY": 653,
+          "buttons": 1,
+          "primary": true,
+          "target": "BUTTON",
+          "pointerId": 1
+        },
+        {
+          "kind": "pointermove",
+          "trusted": true,
+          "screenX": 1131.4000244140625,
+          "screenY": 668.4000244140625,
+          "buttons": 1,
+          "primary": true,
+          "target": "BUTTON",
+          "pointerId": 1
+        },
+        {
+          "kind": "pointermove",
+          "trusted": true,
+          "screenX": 1157.800048828125,
+          "screenY": 683.7999877929688,
+          "buttons": 1,
+          "primary": true,
+          "target": "BUTTON",
+          "pointerId": 1
+        },
+        {
+          "kind": "pointermove",
+          "trusted": true,
+          "screenX": 1184.199951171875,
+          "screenY": 699.2000122070312,
+          "buttons": 1,
+          "primary": true,
+          "target": "BUTTON",
+          "pointerId": 1
+        },
+        {
+          "kind": "pointermove",
+          "trusted": true,
+          "screenX": 1210.5999755859375,
+          "screenY": 714.5999755859375,
+          "buttons": 1,
+          "primary": true,
+          "target": "BUTTON",
+          "pointerId": 1
+        },
+        {
+          "kind": "pointermove",
+          "trusted": true,
+          "screenX": 1237,
+          "screenY": 730,
+          "buttons": 1,
+          "primary": true,
+          "target": "BUTTON",
+          "pointerId": 1
+        },
+        {
+          "kind": "pointermove",
+          "trusted": true,
+          "screenX": 1239,
+          "screenY": 732,
+          "buttons": 1,
+          "primary": true,
+          "target": "BUTTON",
+          "pointerId": 1
+        },
+        {
+          "kind": "pointerup",
+          "trusted": true,
+          "screenX": 1239,
+          "screenY": 732,
+          "buttons": 0,
+          "primary": true,
+          "target": "BUTTON",
+          "pointerId": 1,
+          "cursor": {
+            "screenX": 800,
+            "screenY": 650
+          }
+        },
+        {
+          "kind": "lostpointercapture",
+          "trusted": true,
+          "screenX": 1239,
+          "screenY": 732,
+          "buttons": 0,
+          "primary": true,
+          "target": "BUTTON",
+          "pointerId": 1
+        }
+      ],
+      "show": {
+        "id": 2,
+        "visibleAtCreation": false,
+        "paintedAtShow": true
+      },
+      "expectedBounds": {
+        "x": 120,
+        "y": 90,
+        "width": 820,
+        "height": 620
+      },
+      "after": {
+        "title": "Agents",
+        "bounds": {
+          "x": 120,
+          "y": 90,
+          "width": 820,
+          "height": 620
+        }
+      }
+    }
+  ]
+}

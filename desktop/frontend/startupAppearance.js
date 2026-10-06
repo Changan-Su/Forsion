@@ -14,6 +14,7 @@
   if (value.showSplash === false) { splash.remove(); return; }
   var reduce = matchMedia('(prefers-reduced-motion: reduce)').matches || !!(window.tangu && window.tangu.startupAppearance && window.tangu.startupAppearance.prefersReducedMotion);
   if (reduce) splash.dataset.reducedMotion = '';
+  var softwareRendering = !!(window.tangu && window.tangu.startupAppearance && window.tangu.startupAppearance.softwareRendering), performanceStill = false;
   var animation = ['default', 'pulse', 'spin', 'none'].indexOf(value.animation) !== -1 ? value.animation : 'default';
   var style = document.createElement('style');
   style.textContent = '\
@@ -57,7 +58,7 @@
     @keyframes fts-in { from {opacity:0} }\
     #tangu-splash.out .fts-view { animation:fts-open 380ms cubic-bezier(.4,0,.2,1) both; }\
     @keyframes fts-open { to {transform:scale(1.08)} }\
-    #tangu-splash[data-still] .fts *, #tangu-splash[data-reduced-motion] * { animation:none !important; }\
+    #tangu-splash[data-still] .fts *, #tangu-splash[data-reduced-motion] *, #tangu-splash[data-performance-still] * { animation:none !important; }\
     @media(prefers-reduced-motion:reduce) { #tangu-splash .fts * { animation:none; } }';
   document.head.appendChild(style);
   // Tree shadow, the built-in default scene: window light on a wall, branch shadows and one Fusang verse.
@@ -72,6 +73,7 @@
   var original = splash.firstElementChild;
   function treeShadow(target) {
     try {
+      if (softwareRendering) { performanceStill = true; splash.dataset.performanceStill = 'software'; }
       var look = document.documentElement.dataset.mode === 'dark'
         ? { wall: '#121419', ink: '#05070c', near: .66, far: .42, word: '#8a94a8', verse: '#ccd4e2', bloom: 'rgba(140,165,215,.1)', lit: 'radial-gradient(70% 80% at 55% 35%, rgba(235,242,255,.16), transparent 70%), linear-gradient(165deg, #7889a8, #47536c)' }
         : { wall: '#e4d9cb', ink: '#5f4636', near: .4, far: .26, word: '#9a7c68', verse: '#6b4f3e', bloom: 'transparent', lit: 'linear-gradient(160deg, #fff7ea, #fbeede)' };
@@ -80,7 +82,7 @@
       // The tree is sized and rooted relative to the window light, so its branches reach the panes at any aspect ratio.
       var rootX = cx + pw * 2.1, rootY = cy + ph * 1.946;
       // Everything on the canvases is blurred, so a capped bitmap stretched by CSS is enough on large displays.
-      var q = Math.min(1, 1600 / Math.max(W, H));
+      var q = Math.min(1, (performanceStill ? 960 : 1600) / Math.max(W, H));
       // A different verse on every launch. Storage is unavailable in the sandboxed settings preview.
       var last = -1, pick;
       try { last = parseInt(localStorage.getItem('forsion_startup_verse'), 10); } catch (_) { /* preview */ }
@@ -180,14 +182,30 @@
   } else if (animation !== 'default' || reduce) splash.dataset.customMotion = reduce ? 'none' : animation;
 
   // App readiness controls exit, with a hard upper bound even if initialization fails.
-  var start = Date.now(), done = false, frame = 0;
+  var start = Date.now(), done = false, frame = 0, performanceFrame = 0, lastFrame = 0, slowFrames = [];
+  // Hardware acceleration can still be too slow on an integrated GPU or while cold-loading modules.
+  // Freeze a complete scene after sustained frame delays, never after one startup spike/backgrounding.
+  function watchPerformance(now) {
+    if (done || performanceStill || reduce || splash.dataset.scene !== 'tree-shadow') return;
+    if (!document.hidden && lastFrame) {
+      slowFrames.push(now - lastFrame > 50);
+      if (slowFrames.length > 6) slowFrames.shift();
+      if (slowFrames.length === 6 && slowFrames.filter(Boolean).length >= 4) {
+        performanceStill = true; splash.dataset.performanceStill = 'frames'; return;
+      }
+    } else slowFrames = [];
+    lastFrame = document.hidden ? 0 : now;
+    performanceFrame = requestAnimationFrame(watchPerformance);
+  }
+  if (!performanceStill) performanceFrame = requestAnimationFrame(watchPerformance);
   var ceiling = setTimeout(fade, 10000);
   function fade() {
     if (done) return;
     done = true;
     clearTimeout(ceiling);
     cancelAnimationFrame(frame);
-    if (reduce) { splash.remove(); style.remove(); return; }
+    cancelAnimationFrame(performanceFrame);
+    if (reduce || performanceStill) { splash.remove(); style.remove(); return; }
     splash.classList.add('out');
     setTimeout(function () { splash.remove(); style.remove(); }, 450);
   }
@@ -201,7 +219,7 @@
     frame = requestAnimationFrame(function () {
       var elapsed = Date.now() - start;
       // The classic mark leaves at its loop seam; the tree shadow has none and only keeps a short minimum.
-      var duration = reduce ? 0 : splash.dataset.scene === 'tree-shadow' ? Math.max(0, 1300 - elapsed)
+      var duration = reduce || performanceStill ? 0 : splash.dataset.scene === 'tree-shadow' ? Math.max(0, 1300 - elapsed)
         : Math.max(0, Math.max(1, Math.ceil((elapsed + 300) / 1600)) * 1600 - 300 - elapsed);
       setTimeout(fade, duration);
     });

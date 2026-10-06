@@ -1,6 +1,6 @@
 /** Windows cold-start/first-show probe. Run after build; never modifies the user's profile or display settings.
  * STARTUP_SYSTEM_SCALE=1.25 checks the actual OS scaling (no Chromium scale override).
- * Optional: STARTUP_DISPLAY_ID, STARTUP_MAXIMIZED=1, STARTUP_SYSTEM_REDUCED=1, STARTUP_SOFTWARE_GPU=1.
+ * Optional: STARTUP_DISPLAY_ID, STARTUP_MAXIMIZED=1, STARTUP_SYSTEM_REDUCED=1, STARTUP_SOFTWARE_GPU=1, STARTUP_CPU_RATE=6.
  */
 const fs = require('node:fs')
 const os = require('node:os')
@@ -33,6 +33,11 @@ globalThis.__startupProbe = { events: [] };
 app.on('browser-window-created', (_event, win) => {
   if (globalThis.__startupProbe.observed) return;
   globalThis.__startupProbe.observed = true;
+  if (process.env.STARTUP_CPU_RATE) {
+    win.webContents.debugger.attach('1.3');
+    globalThis.__startupProbe.cpuRate = Number(process.env.STARTUP_CPU_RATE);
+    globalThis.__startupProbe.cpuThrottle = win.webContents.debugger.sendCommand('Emulation.setCPUThrottlingRate', { rate: globalThis.__startupProbe.cpuRate });
+  }
   if (process.env.STARTUP_DISPLAY_ID) {
     const display = screen.getAllDisplays().find(d => String(d.id) === process.env.STARTUP_DISPLAY_ID);
     if (!display) throw new Error('Requested native display is unavailable');
@@ -107,7 +112,7 @@ await import(${JSON.stringify(pathToFileURL(path.join(ROOT, 'out/main/main.js'))
           return { mode: document.documentElement.dataset.mode, scale: devicePixelRatio, lines: [...verse.querySelectorAll('p')].map((p) => p.textContent),
             inView: visible(verse) && visible(brand), classic: !!splash.querySelector('.tangu-splash-logo'),
             mediaReduce: matchMedia('(prefers-reduced-motion: reduce)').matches, nativeReduce: window.tangu.startupAppearance.prefersReducedMotion,
-            reduce: splash.hasAttribute('data-reduced-motion'), animations: scene.getAnimations({ subtree: true }).length }
+            reduce: splash.hasAttribute('data-reduced-motion'), performanceStill: splash.dataset.performanceStill, bitmap: [...scene.querySelectorAll('canvas')].map(c => [c.width, c.height]), animations: scene.getAnimations({ subtree: true }).length }
         })
         let native
         for (let attempt = 0; attempt < 50; attempt++) {
@@ -118,6 +123,7 @@ await import(${JSON.stringify(pathToFileURL(path.join(ROOT, 'out/main/main.js'))
         check(`${label}: hidden at creation, shown only after first paint`, native.events[0].visible === false && native.events.find((e) => e.event === 'show')?.painted)
         check(`${label}: first visible frame has the selected background`, native.pixel?.slice(0, 3).every((channel) => mode === 'dark' ? channel < 80 : channel > 150))
         check(`${label}: tree shadow and verse fit at requested DPI`, scene.mode === mode && Math.abs(scene.scale - scale) < .02 && scene.inView && !scene.classic && scene.lines.length === 3)
+        if (process.env.STARTUP_SOFTWARE_GPU === '1') check(`${label}: software compositing uses a complete static scene`, scene.performanceStill === 'software' && scene.animations === 0 && scene.bitmap[0][0] <= 960)
         await win.evaluate(() => {
           window.__startupFrames = []
           const scene = document.querySelector('#tangu-splash .fts')

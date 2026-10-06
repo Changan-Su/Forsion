@@ -1,0 +1,100 @@
+NOTE capture {"active":true,"cursor":"grabbing","capture":true,"platform":"win32","draggable":false,"events":[{"kind":"pointermove","trusted":true,"screenX":1854.5999755859375,"screenY":1086.4000244140625,"buttons":1,"primary":true,"target":"BUTTON","pointerId":1},{"kind":"pointermove","trusted":true,"screenX":1881,"screenY":1100,"buttons":1,"primary":true,"target":"BUTTON","pointerId":1},{"kind":"pointermove","trusted":true,"screenX":1883,"screenY":1102,"buttons":1,"primary":true,"target":"BUTTON","pointerId":1}]}
+PASS 1: captured drag retains pointer events and a grabbing cursor
+PASS 1: actual mouse input produces trusted gesture events
+PASS 1: dragged Space opens without switching the main window or adding Ribbon
+PASS 1: detached window remains hidden until its first paint
+NOTE position {"point":{"screenX":800,"screenY":650},"before":{"title":"Agents","bounds":{"x":800,"y":650,"width":1100,"height":760}}}
+PASS 1: window appears at the release point in native DIP coordinates
+PASS 1: system title follows the Space name
+PASS 1: detached layout is saved before close
+PASS 1: actual mouse release near Ribbon opens no window
+PASS 1: Escape during an in-page mouse drag opens no window
+NOTE reorder {"beforeOrder":["space:tangu","space:agents","space:inbox","space:amadeus","space:calendar"],"preview":["space:tangu","space:inbox","space:amadeus","space:calendar","space:agents"],"afterOrder":["space:tangu","space:inbox","space:amadeus","space:calendar","space:agents"]}
+PASS 1: pointer reorder commits the visible preview and opens no window
+PASS 1: captured release over iframe opens one Space
+PASS 1: Escape over iframe cancels and removes drag feedback
+PASS 1: captured release over webview opens one Space
+PASS 1: Escape over webview cancels and removes drag feedback
+PASS 1: capture releases outside left edge
+PASS 1: Escape outside left edge opens no window
+PASS 1: capture releases outside right edge
+PASS 1: Escape outside right edge opens no window
+PASS 1: ordinary click still switches the Space
+PASS 1: pointer drag preserves application zoom 0.8
+PASS 1: pointer drag preserves application zoom 1.25
+PASS 1: pointer drag into a folder persists membership
+PASS 1: pointer tear-off from a folder opens its Space
+PASS 1: pointer drag out of a folder restores the Ribbon item
+PASS 1: close/reopen restores the edited layout
+NOTE saved native state [{"id":"sp_agents","bounds":{"x":120,"y":90,"width":820,"height":620},"space":"agents"}]
+PASS 1: cold app restart restores one window for the Space
+NOTE restore {"expectedBounds":{"x":120,"y":90,"width":820,"height":620},"actualBounds":{"x":120,"y":90,"width":820,"height":620},"saved":{"tangu2_layout_detached_sp_agents":[["agent-profile","agent-profile"],["agents-roster","agents-roster"],["launcher#1","launcher"]]},"restoredLayout":{"tangu2_layout_detached_sp_agents":[["agent-profile","agent-profile"],["agents-roster","agents-roster"],["launcher#1","launcher"]]}}
+PASS 1: restart retains bounds and edited layout
+PASS 1: closing the native Space window then quitting removes its restore record
+NOTE capture {"active":true,"cursor":"grabbing","capture":true,"platform":"win32","draggable":false,"events":[{"kind":"pointermove","trusted":true,"screenX":1468.5999755859375,"screenY":862.5999755859375,"buttons":1,"primary":true,"target":"BUTTON","pointerId":1},{"kind":"pointermove","trusted":true,"screenX":1495,"screenY":878,"buttons":1,"primary":true,"target":"BUTTON","pointerId":1},{"kind":"pointermove","trusted":true,"screenX":1497,"screenY":880,"buttons":1,"primary":true,"target":"BUTTON","pointerId":1}]}
+PASS 1.25: captured drag retains pointer events and a grabbing cursor
+PASS 1.25: actual mouse input produces trusted gesture events
+PASS 1.25: dragged Space opens without switching the main window or adding Ribbon
+PASS 1.25: detached window remains hidden until its first paint
+NOTE position {"point":{"screenX":800,"screenY":650},"before":{"title":"Agents","bounds":{"x":800,"y":650,"width":1100,"height":761}}}
+PASS 1.25: window appears at the release point in native DIP coordinates
+PASS 1.25: system title follows the Space name
+PASS 1.25: detached layout is saved before close
+PASS 1.25: actual mouse release near Ribbon opens no window
+PASS 1.25: Escape during an in-page mouse drag opens no window
+NOTE reorder {"beforeOrder":["space:agents","space:tangu","space:inbox","space:amadeus","space:calendar"],"preview":["space:tangu","space:inbox","space:amadeus","space:calendar","space:agents"],"afterOrder":["space:tangu","space:inbox","space:amadeus","space:calendar","space:agents"]}
+PASS 1.25: pointer reorder commits the visible preview and opens no window
+PASS 1.25: captured release over iframe opens one Space
+PASS 1.25: Escape over iframe cancels and removes drag feedback
+PASS 1.25: captured release over webview opens one Space
+PASS 1.25: Escape over webview cancels and removes drag feedback
+PASS 1.25: capture releases outside left edge
+PASS 1.25: Escape outside left edge opens no window
+PASS 1.25: capture releases outside right edge
+PASS 1.25: Escape outside right edge opens no window
+PASS 1.25: ordinary click still switches the Space
+PASS 1.25: pointer drag preserves application zoom 0.8
+PASS 1.25: pointer drag preserves application zoom 1.25
+PASS 1.25: pointer drag into a folder persists membership
+PASS 1.25: pointer tear-off from a folder opens its Space
+PASS 1.25: pointer drag out of a folder restores the Ribbon item
+PASS 1.25: close/reopen restores the edited layout
+NOTE saved native state [{"id":"sp_agents","bounds":{"x":120,"y":90,"width":820,"height":622},"space":"agents"}]
+PASS 1.25: cold app restart restores one window for the Space
+NOTE restore {"expectedBounds":{"x":120,"y":90,"width":820,"height":622},"actualBounds":{"x":120,"y":90,"width":820,"height":622},"saved":{"tangu2_layout_detached_sp_agents":[["agent-profile","agent-profile"],["agents-roster","agents-roster"],["launcher#1","launcher"],["launcher#2","launcher"]]},"restoredLayout":{"tangu2_layout_detached_sp_agents":[["agent-profile","agent-profile"],["agents-roster","agents-roster"],["launcher#1","launcher"],["launcher#2","launcher"]]}}
+PASS 1.25: restart retains bounds and edited layout
+PASS 1.25: closing the native Space window then quitting removes its restore record
+NOTE capture {"active":true,"cursor":"grabbing","capture":true,"platform":"win32","draggable":false,"events":[{"kind":"pointermove","trusted":true,"screenX":1210.5999755859375,"screenY":714.5999755859375,"buttons":1,"primary":true,"target":"BUTTON","pointerId":1},{"kind":"pointermove","trusted":true,"screenX":1237,"screenY":730,"buttons":1,"primary":true,"target":"BUTTON","pointerId":1},{"kind":"pointermove","trusted":true,"screenX":1239,"screenY":732,"buttons":1,"primary":true,"target":"BUTTON","pointerId":1}]}
+PASS 1.5: captured drag retains pointer events and a grabbing cursor
+PASS 1.5: actual mouse input produces trusted gesture events
+PASS 1.5: dragged Space opens without switching the main window or adding Ribbon
+PASS 1.5: detached window remains hidden until its first paint
+NOTE position {"point":{"screenX":800,"screenY":650},"before":{"title":"Agents","bounds":{"x":800,"y":650,"width":1100,"height":760}}}
+PASS 1.5: window appears at the release point in native DIP coordinates
+PASS 1.5: system title follows the Space name
+PASS 1.5: detached layout is saved before close
+PASS 1.5: actual mouse release near Ribbon opens no window
+PASS 1.5: Escape during an in-page mouse drag opens no window
+NOTE reorder {"beforeOrder":["space:agents","space:tangu","space:inbox","space:amadeus","space:calendar"],"preview":["space:tangu","space:inbox","space:amadeus","space:calendar","space:agents"],"afterOrder":["space:tangu","space:inbox","space:amadeus","space:calendar","space:agents"]}
+PASS 1.5: pointer reorder commits the visible preview and opens no window
+PASS 1.5: captured release over iframe opens one Space
+PASS 1.5: Escape over iframe cancels and removes drag feedback
+PASS 1.5: captured release over webview opens one Space
+PASS 1.5: Escape over webview cancels and removes drag feedback
+PASS 1.5: capture releases outside left edge
+PASS 1.5: Escape outside left edge opens no window
+PASS 1.5: capture releases outside right edge
+PASS 1.5: Escape outside right edge opens no window
+PASS 1.5: ordinary click still switches the Space
+PASS 1.5: pointer drag preserves application zoom 0.8
+PASS 1.5: pointer drag preserves application zoom 1.25
+PASS 1.5: pointer drag into a folder persists membership
+PASS 1.5: pointer tear-off from a folder opens its Space
+PASS 1.5: pointer drag out of a folder restores the Ribbon item
+PASS 1.5: close/reopen restores the edited layout
+NOTE saved native state [{"id":"sp_agents","bounds":{"x":120,"y":90,"width":820,"height":620},"space":"agents"}]
+PASS 1.5: cold app restart restores one window for the Space
+NOTE restore {"expectedBounds":{"x":120,"y":90,"width":820,"height":620},"actualBounds":{"x":120,"y":90,"width":820,"height":620},"saved":{"tangu2_layout_detached_sp_agents":[["agent-profile","agent-profile"],["agents-roster","agents-roster"],["launcher#1","launcher"],["launcher#2","launcher"],["launcher#3","launcher"]]},"restoredLayout":{"tangu2_layout_detached_sp_agents":[["agent-profile","agent-profile"],["agents-roster","agents-roster"],["launcher#1","launcher"],["launcher#2","launcher"],["launcher#3","launcher"]]}}
+PASS 1.5: restart retains bounds and edited layout
+PASS 1.5: closing the native Space window then quitting removes its restore record
+84 checks passed; screenshots: C:\Users\Dream\.codex\worktrees\windows-space-validation\Forsion\desktop\outputs\spacewindow-input

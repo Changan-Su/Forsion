@@ -11,7 +11,7 @@ async function skipOnboarding(win, timeout = 15000) {
   await skip.waitFor({ timeout }).then(() => skip.click()).catch(() => {})
   return win.waitForFunction(() => {
     const host = document.querySelector('.shell-host')
-    return !!host && getComputedStyle(host).visibility !== 'hidden'
+    return !!host && getComputedStyle(host).visibility !== 'hidden' && !document.querySelector('.ob-shell')
   }, null, { timeout: 10000 }).then(() => true, () => false)
 }
 

@@ -54,7 +54,7 @@ export const StartupAppearanceSettings: React.FC = () => {
     // Function replacer: an uploaded file name is part of the config, and `$'` in a replacement string expands to page HTML.
     const html = startupHtml.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '')
       .replace('<html', `<html data-mode="${document.documentElement.dataset.mode === 'dark' ? 'dark' : 'light'}"`)
-      .replace('<!-- forsion-startup-runtime -->', () => `<script>window.FORSION_APP_VERSION=${JSON.stringify(APP_VERSION)};window.tangu={startupAppearance:{prefersReducedMotion:${window.tangu?.startupAppearance?.prefersReducedMotion === true},initial:${JSON.stringify({ ...value, showSplash: true }).replace(/</g, '\\u003c')}}};</script><script>${startupRuntime}</script><script>setTimeout(function(){document.getElementById('root').textContent=' ';},2400);</script>`)
+      .replace('<!-- forsion-startup-runtime -->', () => `<script>window.FORSION_APP_VERSION=${JSON.stringify(APP_VERSION)};window.tangu={startupAppearance:{prefersReducedMotion:${window.tangu?.startupAppearance?.prefersReducedMotion === true},softwareRendering:${window.tangu?.startupAppearance?.softwareRendering === true},initial:${JSON.stringify({ ...value, showSplash: true }).replace(/</g, '\\u003c')}}};</script><script>${startupRuntime}</script><script>setTimeout(function(){document.getElementById('root').textContent=' ';},2400);</script>`)
     setPreview(html)
   }
   const artworkControl = (slot: 'icon' | 'splash'): React.ReactNode => (
