@@ -65,6 +65,11 @@ export interface TanguAgentStatus {
   agentSlug?: string
   /** 该 Agent 的展示名;名册里查不到(还没拉回来 / 已删)时省略。 */
   agentName?: string
+  /** 语音通话里模型此刻的输出电平 0..1(2026-10-04+;RMS×4 截顶,正常说话多在 0.2–0.8)。
+   *  **只在这个会话正在语音通话时出现**(模型没在出声 = 0)—— 出现就按它做口型(真实声音),别再用 textChars 的
+   *  出字速度:通话中代办 run 在聊天区出字时,模型并没有出声。拉取式(~20Hz 更新),不进变更过滤。
+   *  通话相位同时叠在 `phase` 上:模型出声 → speaking(压过其余一切);用户说完、模型还没开口且没有 run 在跑 → thinking。 */
+  speechLevel?: number
 }
 
 /** Agent 名册的一条(2026-09-20+)。 */

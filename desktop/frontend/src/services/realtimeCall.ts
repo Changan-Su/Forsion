@@ -9,6 +9,7 @@
 import { useSyncExternalStore } from 'react'
 import type { EngineTarget } from './engine/target'
 import { realtimeSocketUrl } from './backendService'
+import { CALL_VOICE_BEAT_MS, CALL_VOICE_TICK_MS, postCallVoice } from './callVoice'
 
 /** 设置浮窗(另一个 renderer)存完实时通话配置后 bump 这个 key:storage 事件跨 renderer 送达,主窗当场重读。 */
 export const REALTIME_CFG_BUMP_KEY = 'forsion_realtime_cfg_rev'
@@ -225,11 +226,42 @@ export async function startCall(o: StartCallOptions): Promise<void> {
     if (state?.phase !== 'speaking') own({ phase: 'speaking', analyser: outAnalyser })
   }
 
+  // 把「模型此刻的声音」报给别的窗口:主窗 Desk 上的伴随形象按它做口型(见 callVoice.ts)。
+  // 定时器而不是 rAF:卡片被别的窗口盖住时 rAF 会停,放着音的页面定时器不降频。
+  const lvl = new Uint8Array(outAnalyser.fftSize)
+  let saidPhase = ''
+  let saidAt = 0
+  const voiceTimer = window.setInterval(() => {
+    if (ended || !state) return
+    // 按「真在放音」报,不看界面相位:上游重连时相位是 reconnecting,但已生成完的回答照常放完 —— 嘴不能先闭上(Codex 10-04)。
+    const speaking = sources.size > 0
+    const phase = speaking ? 'speaking' : state.phase
+    const now = Date.now()
+    if (!speaking && phase === saidPhase && now - saidAt < CALL_VOICE_BEAT_MS) return
+    let level = 0
+    if (speaking) {
+      outAnalyser.getByteTimeDomainData(lvl)
+      const from = lvl.length >> 1 // 后半窗 ≈ 最近 43ms,与上报节拍相当;整窗(85ms)会把音节抹平
+      let sum = 0
+      for (let i = from; i < lvl.length; i++) { const v = (lvl[i] - 128) / 128; sum += v * v }
+      level = Math.min(1, Math.sqrt(sum / (lvl.length - from)) * 4)
+    }
+    saidPhase = phase
+    saidAt = now
+    postCallVoice({ sessionId: o.sessionId, phase, level })
+  }, CALL_VOICE_TICK_MS)
+  // 关窗即挂断:渲染进程直接没了,finish 不一定跑得到 —— 走之前撤掉,主窗的形象当场收声(没撤也有心跳超时兜底)。
+  const voiceBye = (): void => postCallVoice(null)
+  window.addEventListener('pagehide', voiceBye)
+
   const finish = (error?: string): void => {
     if (ended) return
     ended = true
     const current = teardown === finish
     if (current) teardown = null
+    window.clearInterval(voiceTimer)
+    window.removeEventListener('pagehide', voiceBye)
+    if (current) voiceBye() // 被新通话顶掉的旧通话不许撤:那个 key 已经归新通话
     flush()
     try { ws?.close() } catch { /* ignore */ }
     stream?.getTracks().forEach((t) => t.stop())
