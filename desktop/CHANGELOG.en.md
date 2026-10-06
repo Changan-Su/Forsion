@@ -2,6 +2,39 @@
 
 <!-- English edition of CHANGELOG.md: same "## <version> (<date>)" headings, one bullet per Chinese bullet. Add both when releasing. -->
 
+## 2.13.0 (2026-10-06)
+
+- **A native shell on Android.** The top bar, bottom navigation bar and half-screen sheets now use native system controls: opening a Space shows its list first, tapping an item opens the main area, and Back returns to the list. The avatar menu switches between local and cloud, switches Units and opens Settings. You can also install and run external plugins on your phone. Other phone improvements: badges and haptic feedback on the bottom bar, a long-press menu on messages, voice input, Share to Forsion from other apps, the + button split into Camera, Photos and Files, dropdowns shown as half-screen sheets, times on session rows and a clearer offline message. System notifications tell you when a background task finishes or needs your approval, and command confirmations can be denied or allowed right on the notification.
+- **Open a whole Space in its own window.** Right-click it on the Ribbon, ⌘/Ctrl-click it, or drag its icon off the Ribbon. Each Space gets one window, and its position and size are kept across restarts. The middle of the Ribbon now lists recently used Spaces; set how many in Settings → Appearance, or turn the list off.
+- **A new default splash screen, Tree shadow.** Window light and branch shadows on a wall with a line of Fusang poetry, in daylight for light mode and moonlight for dark mode, with the version number in the lower left. The earlier tree-mark animation is still there as Splash media → Classic icon. You can also use your own splash media and app icon in Settings → Appearance → Splash & icon. On Windows, starting in dark mode no longer flashes a light background first.
+- **Each Space can have its own appearance.** In Settings → Space → Space appearance, set the design language, accent color, background color and light or dark mode for each Space. Tinting the shell from content is now off by default and can be turned on in Settings.
+- **Interface**: the layers of the dark theme have been retuned, and there is a new Ink color scheme. Primary buttons in dark mode are no longer a block of white. Two new appearance switches, Relaxed text and Gentle transitions, are on by default, and Dim surroundings is off by default. The Ribbon returns to its place after you scroll it, which you can turn off; its command area now keeps five items in view instead of four, and expanding or collapsing it is animated. The slash menu no longer shifts when you switch categories, and the model menu's submenu is no longer taken over by rows you pass on the way.
+- **Hand work to agents from a note**: three new blocks — Page instructions, Agent task and Reusable prompt. Type `@Agent` to insert a task to hand off; it runs in the background while the note stays open. AI commands in the slash menu are grouped into Writing, Instructions, Tasks and Prompts.
+- **PDF**: the built-in PDF reader is now read-only and reloads in place when the file changes. Plugins can take over .pdf files, and Settings lets you choose the default opener. Built-in PDF annotation is removed in this version and will come back as a plugin.
+- **Image Studio** now uses a project-and-detail layout: project navigation on the left, a launchpad or the canvas in the main area, and the conversation on the right beside the properties.
+- **Links**: web links in the app open in your system browser by default, and web citations in chat follow the same setting. You can switch back to the built-in browser in Settings.
+- **Voice**: Qwen-Audio-Realtime is available for calls. You can choose the cloning model for read-aloud voices, and the app guides you through recording a sample and checks it locally. Fixed voice sample uploads timing out from outside mainland China.
+- **Memory and self-improvement**:
+  - Memory is split into project and global scopes. When a project's memory is full, the model tidies it before saving, and sentences that were merged or dropped can be restored one by one in the project details.
+  - Working notes are now called the Evolution Record. Agents can write to it themselves, and you accept or discard risky entries one at a time. Agents put away tools and skills they rarely use, and Muse reviews usage weekly.
+  - Background reviews start as soon as something goes wrong: you correct the agent, you stop it, tools fail repeatedly, or it says it finished when it did not.
+  - Automatic recall in a project session no longer brings in what was said in other projects. Sessions for team members, discussions and sub-agents follow the project they belong to.
+- **Agents can read and change some settings on this device.** Every change takes effect only after you confirm it. Credentials, approval levels and permission settings are not available to agents.
+- **Plan mode is no longer available in team mode.** Its menu item is dimmed and says why.
+- **More reliable subscription sign-in**: tokens renew automatically when they are used, including for image generation, image editing and read aloud.
+- **Cloud sync**: agent-level collaboration notes (HUMAN.md) are now synced, and log sync no longer loses the cloud header. Syncing across devices takes effect once the server is updated.
+- **Windows**: running commands no longer opens a console window, and no child processes are left behind after a timeout, a cancel or a stop.
+- **Plugins (for authors)**:
+  - `ctx.tangu.mountChat` mounts the native conversation in a plugin's own view, and `ctx.app.trash` moves files in the vault to the trash.
+  - A Space can declare pinned Views (`pinned`) and use its own icon file (`iconFile`).
+  - Plugins can take over a file type with `override: true`. Only .pdf is open for now.
+  - Mount APIs return a `{ render, dispose }` handle. Extend View has a new close reason, `layout`, so layout changes are no longer reported as the user closing the view.
+  - During voice calls the host provides the audio level through `agentStatus.speechLevel`, which plugins can use for lip sync.
+  - Local plugin task APIs: `ctx.tangu.request` calls routes of an engine plugin in the same bundle, `ctx.tangu.openSession` opens a task session, `ctx.registerScopedRoutes` registers ownership-checked routes, `ctx.paths.dataDir` gives a stable data directory, and the `runs` APIs create and track background tasks. Tools provided by plugins can be called through the desktop app's outward MCP, on this device only.
+- **Unit**: the command line can update a plugin while Unit is running. A new optional management interface shows status, registers release packages and runs updates; it is off by default and is turned on in `unit.json`.
+- Fixed the layout being saved to the wrong place when startup temporarily fell back to another Space. A plugin Space set as the startup target is now opened when it finishes loading late.
+- Fixed the height of plugin views opened directly in the bottom panel, and stopped a chosen skill's full text from being pasted into the conversation.
+
 ## 2.12.2 (2026-10-02)
 
 - **Real-time voice calls**, like GPT Live. When the input box is empty, the send button starts a call. The call runs in the Mini card with the agent's avatar, a hang-up button and a microphone picker. Hand work off to the agent during the call and it reads the result back when it's done. You can also type during a call and the text goes straight into it, and voice transcripts are corrected with what the real-time model actually heard. If the service drops the connection with an error, the call reconnects instead of ending, and results from work handed off during the reconnect aren't lost. Calls replace hands-free auto-send.
