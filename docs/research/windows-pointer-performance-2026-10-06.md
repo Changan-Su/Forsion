@@ -41,7 +41,8 @@ DevTools 输入不会移动 OS 鼠标，自动化台架显式把主进程的鼠�
 
 - 开屏三端 Chromium 契约：102/102，包含软件静帧、即时退出、连续慢帧及经典图标不受降级影响。
 - Windows Electron 输入、多窗口、冷重启：84 项；原多窗契约 39/39；Ribbon 回归 70/70。
+- 小窗口回归（`SPACE_INPUT_SCALE=1.5 SPACE_INPUT_HEIGHT=480`）：28/28。CI 的小屏幕放大后可能将全部 Space 收进「更多」；台架现在先通过正常 UI 展开，等待可点击图标，并确认命中 Agents 后才按下鼠标。收纳夹同样先从溢出区露出。
 - Ribbon、Space、开屏相关单测：39/39。
-- Desktop / Web 类型检查、Desktop 生产构建、公共边界检查通过。移动端完整类型检查因本地缺少 Capacitor 包未完成；改动的共享引擎类型由 Desktop / Web 检查覆盖。
+- Desktop / Web / Mobile 类型检查、Desktop 生产构建、公共边界检查通过。Mobile 使用锁文件版本的 Capacitor 类型包，安装到独立临时目录后通过临时 tsconfig 的路径映射检查，没有改动项目依赖或锁文件。
 
 原生 OS 按住鼠标期间 Esc、从静止窗口跨到桌面或另一屏再释放、低配 / 集显实体机流畅度，仍需要对应的人工输入或设备；当前这些路径的代码行为已经由 Windows Electron 输入回归覆盖。原始 issue 人工清单中未执行的项目仍应如实保留，不把缺少验收等同于代码没有继续修。

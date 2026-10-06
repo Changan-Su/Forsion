@@ -38,6 +38,10 @@ async function main() {
     // Windows native drag delivery requires the input window in front. Run this probe separately from other UI harnesses.
     await app.evaluate(({ BrowserWindow }, url) => {
       const main = BrowserWindow.getAllWindows().find((window) => window.webContents.getURL() === url)
+      if (process.env.SPACE_INPUT_HEIGHT) {
+        main.setMinimumSize(880, 360)
+        main.setBounds({ x: 10, y: 10, width: 1000, height: Number(process.env.SPACE_INPUT_HEIGHT) })
+      }
       main.show(); main.focus()
     }, win.url())
   }
@@ -101,6 +105,11 @@ async function main() {
       })
       const active = await win.evaluate(() => localStorage.getItem('forsion_tangu_active_space'))
       const slot = win.locator('.rb-top .rb-slot[data-id="space:agents"]')
+      const revealAgents = async () => {
+        const more = win.locator('.rb-more[data-rb-more="top"]')
+        if (!await slot.isVisible() && await more.getAttribute('aria-expanded') === 'false') await more.click()
+        await slot.locator('.rb-btn').hover() // Wait for opening/cropping transitions and a hittable source.
+      }
       const begin = async () => {
         await win.bringToFront()
         await app.evaluate(({ BrowserWindow }, url) => {
@@ -109,7 +118,11 @@ async function main() {
         }, win.url())
         await win.waitForFunction(() => document.hasFocus())
         await win.waitForTimeout(100)
+        await revealAgents()
         const box = await slot.boundingBox()
+        assert.ok(box, 'The Agents source must be visible')
+        const hit = await win.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.closest('[data-id]')?.getAttribute('data-id'), { x: box.x + box.width / 2, y: box.y + box.height / 2 })
+        assert.equal(hit, 'space:agents', 'The mouse must start on the visible Agents source')
         await win.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
         await win.mouse.down()
         await win.waitForTimeout(100)
@@ -205,11 +218,16 @@ async function main() {
         for (const zoom of [.8, 1.25]) {
           await win.evaluate(zoom => { document.body.style.zoom = String(zoom); document.documentElement.style.setProperty('--uiz', String(zoom)) }, zoom)
           await win.waitForTimeout(350) // ResizeObserver may move the last visible item into overflow.
+          await win.bringToFront()
+          const more = win.locator('.rb-more[data-rb-more="top"]')
+          if (await more.count() && await more.getAttribute('aria-expanded') === 'false') await more.click()
           sat = await open(async () => { await begin(); await win.mouse.move(400, 300, { steps: 12 }); await win.mouse.up() })
           check(`${scale}: pointer drag preserves application zoom ${zoom}`, satellites().length === 1 && await win.locator('.rb-pointer-shield').count() === 0)
           await closeWindow(sat)
         }
         await win.evaluate(() => { document.body.style.zoom = ''; document.documentElement.style.setProperty('--uiz', '1') })
+        const expandedTop = win.locator('.rb-more[data-rb-more="top"][aria-expanded="true"]')
+        if (await expandedTop.count()) await expandedTop.click()
         const originalV2 = await win.evaluate(() => {
           const old = localStorage.getItem('forsion_tangu_ribbon_v2')
           const v2 = JSON.parse(old || '{}')
@@ -221,13 +239,19 @@ async function main() {
         })
         await win.reload(); await slot.waitFor(); await win.locator('#tangu-splash').waitFor({ state: 'detached' })
         const folder = win.locator('.rb-folder[data-rb-folder="folder:pointer-probe"]')
+        const revealFolder = async () => {
+          const more = win.locator('.rb-more[data-rb-more="top"]')
+          if (!await folder.isVisible() && await more.getAttribute('aria-expanded') === 'false') await more.click()
+          await folder.hover()
+        }
+        await revealFolder()
         const folderBox = await folder.boundingBox()
         await begin(); await win.mouse.move(folderBox.x + folderBox.width / 2, folderBox.y + folderBox.height / 2, { steps: 12 }); await win.mouse.up()
         await win.waitForTimeout(250)
         check(`${scale}: pointer drag into a folder persists membership`, await win.evaluate(() => JSON.parse(localStorage.getItem('forsion_tangu_ribbon_v2')).folders.find(f => f.id === 'folder:pointer-probe').items.includes('space:agents')) && satellites().length === 0)
         const row = win.locator('.rb-fly-row[data-id="space:agents"]')
         const beginRow = async () => {
-          await win.bringToFront(); await folder.hover(); await row.waitFor()
+          await win.bringToFront(); await revealFolder(); await row.waitFor()
           const box = await row.boundingBox(); await win.mouse.move(box.x + box.width / 2, box.y + box.height / 2); await win.mouse.down()
         }
         sat = await open(async () => { await beginRow(); await win.mouse.move(400, 300, { steps: 12 }); await win.mouse.up() })
