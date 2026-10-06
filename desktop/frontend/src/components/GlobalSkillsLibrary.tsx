@@ -29,7 +29,7 @@ registerMessages({
   'globalSkills.create': { zh: '新建技能', en: 'Create skill' },
   'globalSkills.import': { zh: '导入文件夹', en: 'Import folder' },
   'globalSkills.importCli': { zh: '从 Agent CLI 导入', en: 'Import from Agent CLI' },
-  'globalSkills.browseMarket': { zh: '浏览市场', en: 'Browse marketplace' },
+  'globalSkills.browseMarket': { zh: '浏览商店', en: 'Browse store' },
   'globalSkills.refresh': { zh: '刷新技能库', en: 'Refresh skill library' },
   'globalSkills.openFolder': { zh: '打开本机技能目录', en: 'Open host skills folder' },
   'globalSkills.remoteHost': { zh: '当前目录位于连接的后端。此设备的文件夹选择器不能访问它；可直接管理该后端已有的技能。', en: 'This library is on the connected backend. This device’s folder picker cannot access it; you can manage skills already on that backend.' },

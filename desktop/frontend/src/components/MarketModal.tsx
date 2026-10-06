@@ -1,5 +1,6 @@
 /**
- * Forsion 应用市场:发现首页 + 分类目录 + 安装管理 + 商品详情。
+ * Forsion 商店(原「应用市场」,2026-10-05 改名;标识符 / i18n key / CSS 类仍是 market / mk-*):
+ * 发现首页 + 分类目录 + 安装管理 + 商品详情。
  * 浏览/安装全走主进程 IPC(marketService),token 不下发渲染层。
  */
 import { useCallback, useEffect, useMemo, useState } from 'react'
@@ -53,10 +54,15 @@ function hostContentTypes(): MarketType[] {
   return Array.isArray(declared) ? CONTENT_TABS.filter((tp) => declared.includes(tp)) : CONTENT_TABS
 }
 
-/** 左栏分类:amadeus-plugin 并在「插件」一栏里(与引擎插件同栏),所以两者任一可装都给「插件」。 */
+/** 「插件」分类下一起列出的类型(2026-10-05):Agent / Space 不再各占一格导航,并进「插件」。
+ *  ⚠️ 只是浏览层的归并 —— 服务端 type、安装目录映射、详情页的类型名都不变,所以 CONTENT_TABS
+ *  (拉目录 / 判已装)与 navLabel(卡片与详情页上的类型字样)仍是全量,别跟着删。 */
+const PLUGIN_TAB_TYPES: MarketType[] = ['plugin', 'amadeus-plugin', 'agent', 'space']
+
+/** 左栏分类:PLUGIN_TAB_TYPES 都并在「插件」一栏里,本宿主其中任一可装就给「插件」;其余类型本宿主可装才列。 */
 function categoryTabsFor(types: MarketType[]): Tab[] {
   return [
-    ...CONTENT_TABS.filter((tp) => tp !== 'amadeus-plugin' && (tp === 'plugin' ? types.includes('plugin') || types.includes('amadeus-plugin') : types.includes(tp))),
+    ...CONTENT_TABS.filter((tp) => tp === 'plugin' ? PLUGIN_TAB_TYPES.some((x) => types.includes(x)) : !PLUGIN_TAB_TYPES.includes(tp) && types.includes(tp)),
     ...(window.tangu?.connectStore ? (['webapp'] as Tab[]) : []),
   ]
 }
@@ -429,7 +435,7 @@ export function MarketModal({ onClose, initialQuery }: { onClose?: () => void; i
         ? updatable
         : CONTENT_TABS.includes(tab as MarketType)
           ? catalog.filter((c) => tab === 'plugin'
-            ? c.type === 'plugin' || c.type === 'amadeus-plugin'
+            ? PLUGIN_TAB_TYPES.includes(c.type)
             : c.type === tab)
           : catalog
     cards = cards.filter(matchesQuery)
@@ -492,7 +498,7 @@ export function MarketModal({ onClose, initialQuery }: { onClose?: () => void; i
 
   return (
     <div className="settings-page mk-page" data-native-chrome={nativeChrome ? '' : undefined}>
-      <aside className="settings-nav" aria-label="Market navigation">
+      <aside className="settings-nav" aria-label={t('market.title')}>
         <div className="settings-nav-top">
           <button className="settings-back" onClick={close}><ArrowLeft size={15} /> {t('settings.backToApp')}</button>
           <div className="mk-nav-brand"><div className="mk-nav-mark"><Sparkles size={17} /></div><div><strong>{t('market.title')}</strong><span>{t('market.navSubtitle')}</span></div></div>
@@ -515,7 +521,7 @@ export function MarketModal({ onClose, initialQuery }: { onClose?: () => void; i
 
       <section className="settings-main">
         <div className="settings-main-head mk-main-head">
-          <div className="mk-title-block"><div className="settings-main-title">{detail ? detail.name : navLabel[tab]}</div><div className="mk-title-subtitle">{detail ? t('market.detailSubtitle') : tab === 'discover' ? t('market.subtitle') : tab === 'submit' ? t('market.submissionsDescription') : t('market.sectionSubtitle', { section: navLabel[tab] })}</div></div>
+          <div className="mk-title-block"><div className="settings-main-title">{detail ? detail.name : navLabel[tab]}</div><div className="mk-title-subtitle">{detail ? t('market.detailSubtitle') : tab === 'discover' ? t('market.subtitle') : tab === 'submit' ? t('market.submissionsDescription') : tab === 'plugin' ? t('market.pluginsSubtitle') : t('market.sectionSubtitle', { section: navLabel[tab] })}</div></div>
           {showSearch && <label className="mk-search"><Search size={16} /><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t('market.searchPlaceholder')} />{query && <button onClick={() => setQuery('')} aria-label={t('market.clearSearch')}>×</button>}</label>}
           {showSort && <label className="mk-sort"><span>{t('market.sort.label')}</span><select value={sort} onChange={(e) => setSort(e.target.value as SortMode)}><option value="popular">{t('market.sort.popular')}</option><option value="latest">{t('market.sort.latest')}</option><option value="name">{t('market.sort.name')}</option></select></label>}
         </div>

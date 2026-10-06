@@ -1,6 +1,8 @@
 /**
- * Forsion Market 真浏览器 UI 门禁:发现首页、搜索、详情、已安装、明暗截图与横向溢出。
+ * Forsion 商店(原「应用市场」;标识符仍是 market / mk-*)真浏览器 UI 门禁:
+ * 发现首页、分类归并(Agent / Space 并进「插件」)、搜索、详情、已安装、明暗截图与横向溢出。
  * 自带起停隔离的 Vite；数据来自 marketHarnessBridge,不访问账号、网络或用户目录。
+ * 截图缺省落 /tmp,可用 SHOT_DIR 换目录。
  */
 const fs = require('fs')
 const os = require('os')
@@ -10,12 +12,16 @@ const { chromium } = require('playwright-core')
 
 const ROOT = path.resolve(__dirname, '..')
 const ORIGIN = 'http://127.0.0.1:5197'
+const SHOT_DIR = process.env.SHOT_DIR || '/tmp'
+const shot = (name) => path.join(SHOT_DIR, `forsion-market-${name}.png`)
 const SHOTS = {
-  light: '/tmp/forsion-market-discover-light.png',
-  dark: '/tmp/forsion-market-discover-dark.png',
-  detail: '/tmp/forsion-market-detail.png',
-  installed: '/tmp/forsion-market-installed.png',
-  installFail: '/tmp/forsion-market-install-fail.png',
+  light: shot('discover-light'),
+  dark: shot('discover-dark'),
+  plugins: shot('plugins'),
+  pluginsEn: shot('plugins-en'),
+  detail: shot('detail'),
+  installed: shot('installed'),
+  installFail: shot('install-fail'),
 }
 
 function findChromium() {
@@ -74,6 +80,7 @@ async function main() {
         popular: document.querySelectorAll('.mk-section:last-child .mk-card').length,
         navGroups: document.querySelectorAll('.settings-nav-group').length,
         navLabels: [...document.querySelectorAll('.settings-nav-list button')].map((button) => button.textContent?.trim()),
+        brand: document.querySelector('.mk-nav-brand strong')?.textContent?.trim(),
         updateCount: document.querySelector('.mk-nav-count')?.textContent,
         border: card.borderTopColor,
         titleContrast: contrast(card.backgroundColor, title.color),
@@ -83,7 +90,11 @@ async function main() {
     check('发现首页有主精选区', initial.hero.width > 700 && initial.hero.height >= 240, `${Math.round(initial.hero.width)}x${Math.round(initial.hero.height)}`)
     check('最近上架与热门内容都有真实卡片', initial.recent === 4 && initial.popular >= 4, `recent=${initial.recent} popular=${initial.popular}`)
     check('侧栏按发现/分类/管理分成三组', initial.navGroups === 3, String(initial.navGroups))
+    check('左上角的名字是「商店」', initial.brand === '商店', String(initial.brand))
     check('插件分类已合并且侧栏不再显示 Forsion 插件', initial.navLabels.filter((label) => label === '插件').length === 1 && !initial.navLabels.includes('Forsion 插件'), initial.navLabels.join(' / '))
+    // 2026-10-05:Agent / Space 不再各占一格导航,并进「插件」。先证导航钮确实读得到(否则下面两个 includes 恒假 = 假绿)。
+    check('导航里没有独立的 Agent / Space 分类', initial.navLabels.includes('技能') && initial.navLabels.includes('主题')
+      && !initial.navLabels.includes('Agent') && !initial.navLabels.includes('Space'), initial.navLabels.join(' / '))
     check('可更新数量来自已安装版本比对', initial.updateCount === '1', String(initial.updateCount))
     check('普通商品卡没有装饰性实色描边', /rgba\([^)]*,\s*0\)|transparent/.test(initial.border), initial.border)
     check('亮色商品标题对比度达到 WCAG AA', initial.titleContrast >= 4.5, initial.titleContrast.toFixed(2))
@@ -111,6 +122,23 @@ async function main() {
     await page.locator('.mk-grid').waitFor()
     const pluginNames = await page.locator('.mk-grid .mk-card-title').allTextContents()
     check('插件分类同时展示引擎插件与 Forsion 插件', pluginNames.includes('Calendar Tools') && pluginNames.includes('LaTeX Suite') && pluginNames.includes('Mindmap'), pluginNames.join(' / '))
+    // 夹具里 Research Companion = agent、Longform Writing = space;技能 / 主题不许混进来。
+    check('插件分类下列出 agent / space 类型的条目', pluginNames.includes('Research Companion') && pluginNames.includes('Longform Writing'), pluginNames.join(' / '))
+    check('插件分类不混入技能与主题', pluginNames.length === 5 && !pluginNames.includes('Source Check') && !pluginNames.includes('Slate Paper'), `${pluginNames.length} 项`)
+    const kinds = await page.evaluate(() => Object.fromEntries([...document.querySelectorAll('.mk-grid .mk-card')].map((card) => [
+      card.querySelector('.mk-card-title')?.textContent?.trim(),
+      card.querySelector('.mk-card-eyeline span')?.textContent?.trim(),
+    ])))
+    check('并进来的卡片仍标着自己的类型', kinds['Research Companion'] === 'Agent' && kinds['Longform Writing'] === 'Space' && kinds['LaTeX Suite'] === '插件', JSON.stringify(kinds))
+    const pluginsSubtitle = (await page.locator('.mk-title-subtitle').textContent()) || ''
+    check('插件分类的说明点名 Space 与 Agent', pluginsSubtitle.includes('Space') && pluginsSubtitle.includes('Agent'), pluginsSubtitle)
+    await page.screenshot({ path: SHOTS.plugins, fullPage: true })
+    // 详情页的类型名不跟着归并:从「插件」分类点进 Space 条目,类型一栏仍是 Space。
+    await page.locator('.mk-grid .mk-card-title', { hasText: 'Longform Writing' }).click()
+    await page.locator('.mk-detail-sidebar').waitFor()
+    const spaceKind = { kind: (await page.locator('.mk-detail-kind').textContent())?.trim(), fact: (await page.locator('.mk-facts dd').first().textContent())?.trim() }
+    check('Space 条目的详情页类型仍是 Space', spaceKind.kind === 'Space' && spaceKind.fact === 'Space', JSON.stringify(spaceKind))
+    await page.locator('.mk-detail-back').click()
     await page.getByRole('button', { name: '商店首页', exact: true }).click()
 
     const search = page.locator('.mk-search input')
@@ -126,9 +154,9 @@ async function main() {
     await page.locator('.mk-detail-back').click()
     await page.locator('.settings-nav-list button', { hasText: '已安装' }).click()
     await page.locator('.mk-grid').waitFor()
-    check('已安装区只列出本机已有市场内容', await page.locator('.mk-grid .mk-card').count() === 2)
+    check('已安装区只列出本机已有的商店内容', await page.locator('.mk-grid .mk-card').count() === 2)
 
-    // 卸载(2026-08-25):此前市场只有「重新安装」,装错/不想要的东西没有出口。
+    // 卸载(2026-08-25):此前商店只有「重新安装」,装错/不想要的东西没有出口。
     // ⚠️ 卸载走 window.confirm,Playwright 不接管 dialog 会一直挂着 —— 这条断言最初就是这么卡住的。
     await page.screenshot({ path: SHOTS.installed, fullPage: true })
     page.on('dialog', (d) => { void d.accept() })
@@ -152,7 +180,7 @@ async function main() {
       const r = n.getBoundingClientRect()
       return { text: n.textContent || '', inView: r.top >= 0 && r.bottom <= innerHeight, role: n.getAttribute('role') }
     })
-    check('安装失败在市场内出提示条且在视野内', fail.inView && fail.role === 'alert', JSON.stringify({ inView: fail.inView, role: fail.role }))
+    check('安装失败在商店内出提示条且在视野内', fail.inView && fail.role === 'alert', JSON.stringify({ inView: fail.inView, role: fail.role }))
     check('失败提示点名条目并列出各地址原因', fail.text.includes('Calendar Tools') && fail.text.includes('github.com: timeout') && fail.text.includes('gh-proxy.com: not a zip'), fail.text.slice(0, 120))
     check('失败提示剥掉了 Electron 的 IPC 包装前缀', !fail.text.includes('Error invoking remote method'))
     check('GitHub 源失败附带网络指引', fail.text.includes('使用中国大陆镜像源'))
@@ -178,7 +206,7 @@ async function main() {
     await footBtn('Mindmap').click()
     check('下载中显示已收字节(无总长时)', await labelSeen('已下载 340 KB'))
     await page.locator('.mk-notice:not(.is-error)').waitFor({ timeout: 4000 })
-    check('安装成功在市场内出提示条', (await page.locator('.mk-notice').textContent()).includes('Mindmap'))
+    check('安装成功在商店内出提示条', (await page.locator('.mk-notice').textContent()).includes('Mindmap'))
     await page.locator('.mk-featured').waitFor({ state: 'visible' })
     await page.waitForFunction(() => !document.querySelector('.mk-notice'), null, { timeout: 6000 }).catch(() => {})
     check('成功提示数秒后自动收起', await page.locator('.mk-notice').count() === 0)
@@ -202,12 +230,36 @@ async function main() {
     check('暗色态商品卡仍有独立表面', dark.bg !== dark.text, `${dark.bg} / ${dark.text}`)
     check('暗色商品标题对比度达到 WCAG AA', dark.titleContrast >= 4.5, dark.titleContrast.toFixed(2))
     check('暗色态没有横向溢出', dark.overflow <= 0, `${dark.overflow}px`)
+    // 英文界面(改名与归并都要成对):⚠️ 钉语言只能走 newPage({ locale }),launch 的 --lang 对浏览器台架无效。
+    const en = await browser.newPage({ locale: 'en-US', viewport: { width: 1360, height: 900 }, deviceScaleFactor: 1 })
+    en.on('console', (message) => { if (message.type() === 'error') errors.push(`[en] ${message.text()}`) })
+    en.on('pageerror', (error) => errors.push(`[en] ${error.message}`))
+    await en.goto(`${ORIGIN}/market-harness.html`, { waitUntil: 'networkidle' })
+    await en.locator('.mk-featured').waitFor({ state: 'visible' })
+    const enNav = await en.evaluate(() => ({
+      brand: document.querySelector('.mk-nav-brand strong')?.textContent?.trim(),
+      labels: [...document.querySelectorAll('.settings-nav-list button')].map((button) => button.textContent?.trim()),
+    }))
+    check('英文界面的名字是 Store', enNav.brand === 'Store', String(enNav.brand))
+    check('英文导航同样没有独立的 Agents / Spaces 分类', enNav.labels.includes('Skills') && enNav.labels.includes('Plugins')
+      && !enNav.labels.includes('Agents') && !enNav.labels.includes('Spaces'), enNav.labels.join(' / '))
+    await en.getByRole('button', { name: 'Plugins', exact: true }).click()
+    await en.locator('.mk-grid').waitFor()
+    const enPlugins = await en.evaluate(() => ({
+      names: [...document.querySelectorAll('.mk-grid .mk-card-title')].map((el) => el.textContent?.trim()),
+      kinds: [...new Set([...document.querySelectorAll('.mk-grid .mk-card-eyeline span:first-child')].map((el) => el.textContent?.trim()))].sort(),
+      subtitle: document.querySelector('.mk-title-subtitle')?.textContent?.trim() || '',
+      chrome: [document.querySelector('.settings-nav')?.textContent, document.querySelector('.settings-main-head')?.textContent, ...[...document.querySelectorAll('.mk-card-eyeline, .mk-card-foot button')].map((el) => el.textContent)].join(' '),
+    }))
+    check('英文「Plugins」分类下也列出 agent / space 条目', enPlugins.names.includes('Research Companion') && enPlugins.names.includes('Longform Writing') && enPlugins.names.length === 5, enPlugins.names.join(' / '))
+    check('英文卡片类型字样与说明成对', enPlugins.kinds.join() === 'Agents,Plugins,Spaces' && /Spaces and Agents/.test(enPlugins.subtitle), `${enPlugins.kinds.join()} | ${enPlugins.subtitle}`)
+    check('英文界面的导航、标题区与卡片按钮不含汉字', !/[\u4e00-\u9fff]/.test(enPlugins.chrome), (enPlugins.chrome.match(/[\u4e00-\u9fff]+/g) || []).slice(0, 5).join(' / '))
+    await en.screenshot({ path: SHOTS.pluginsEn, fullPage: true })
+    await en.close()
+
     check('页面运行无 console/page error', errors.length === 0, errors.slice(0, 3).join(' ; '))
 
-    console.log(`SHOT  ${SHOTS.light}`)
-    console.log(`SHOT  ${SHOTS.dark}`)
-    console.log(`SHOT  ${SHOTS.detail}`)
-    console.log(`SHOT  ${SHOTS.installFail}`)
+    for (const file of Object.values(SHOTS)) console.log(`SHOT  ${file}`)
   } finally {
     if (browser) await browser.close()
     vite.kill('SIGTERM')

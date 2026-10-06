@@ -30,15 +30,15 @@ npm run build        # tsc → dist/
 ## 硬约束（必读）
 
 - **绝不在运行时 import 核心包**。对 `@forsion/tangu-agent` 只允许 `import type`（本仓 tsconfig 开了 `verbatimModuleSyntax`，值导入直接编译错误）。运行时能力一律走 `activate(ctx)` 传入的 **`ctx.sdk`**（按引用，核心同一模块实例）——否则核心的模块级单例会被复制成第二份，行为诡异。
-- **`dist/` 必须提交**。Forsion Market 安装 = 解压源码 zip 到 `~/.forsion/plugins/<slug>/`，全程不构建；改了 `src/` 请重新 `npm run build` 再提交（CI 会用 `git diff --exit-code dist/` 卡住忘记重建的提交）。
+- **`dist/` 必须提交**。Forsion 商店安装 = 解压源码 zip 到 `~/.forsion/plugins/<slug>/`，全程不构建；改了 `src/` 请重新 `npm run build` 再提交（CI 会用 `git diff --exit-code dist/` 卡住忘记重建的提交）。
 - **类型契约**：`types/tangu-agent.d.ts` 是 Tangu 公开插件 API（apiVersion 1）的拷贝，随模板分发。宿主升 apiVersion 时会发布新契约，届时替换此文件并更新 manifest 的 `apiVersion`。
 - **注入模型的文本一律英文**：工具 `description`/参数说明是给模型读的，全部英文（本仓 `sample_greet` 即是）；用户可见字段走 `name`/`nameEn`、`description`/`descriptionEn` 双语镜像。
 
-## 发布到 Forsion Market
+## 发布到 Forsion 商店
 
 1. 把插件推成独立 GitHub 公开仓库（记得包含构建好的 `dist/`），建议打 release tag。
 2. 在 Forsion 个人中心 → 投稿 页提交（类型选「插件」，给 GitHub 仓库链接或直接传 zip；zip 直传时内容放 zip 根或**单层**文件夹，两层路径安装器不认）。
-3. 审核通过后，用户在桌面端 市场 → 插件 一键安装，免重启热生效（贡献路由的插件除外）。
+3. 审核通过后，用户在桌面端 商店 → 插件 一键安装，免重启热生效（贡献路由的插件除外）。
 
 > 注：GitHub 来源的上架会**锁定过审时的 release tag**——之后发新版需要重新过审（或联系管理员更新锁定）。
 
@@ -53,6 +53,6 @@ npm run build        # tsc → dist/
 
 A template for Tangu backend plugins (folder plugins). It demonstrates a tool, a settings schema and a promptSection. Build with `npm install && npm run build`, drop the folder into `~/.forsion/plugins/sample-plugin/`, restart the Tangu backend, then enable it under Settings → Plugins.
 
-Hard rules: only `import type` from `@forsion/tangu-agent` (all runtime access goes through `ctx.sdk`), and commit `dist/` (Market installs are unzip-only, no build step). `types/tangu-agent.d.ts` is the vendored public API contract (apiVersion 1).
+Hard rules: only `import type` from `@forsion/tangu-agent` (all runtime access goes through `ctx.sdk`), and commit `dist/` (Store installs are unzip-only, no build step). `types/tangu-agent.d.ts` is the vendored public API contract (apiVersion 1).
 
 MIT © Changan Su

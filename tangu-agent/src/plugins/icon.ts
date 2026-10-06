@@ -1,4 +1,4 @@
-/** 引擎插件包根 icon.png → 设置页 data URL；约束与 Forsion Market 一致。 */
+/** 引擎插件包根 icon.png → 设置页 data URL；约束与 Forsion 商店一致。 */
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 

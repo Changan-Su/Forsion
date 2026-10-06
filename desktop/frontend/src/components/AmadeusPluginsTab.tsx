@@ -103,7 +103,7 @@ registerMessages({
   'settings.amadeusPlugins.dep.cycle': { zh: '与它互相依赖，无法启用', en: 'Requires this plugin in turn, so neither can run' },
   'settings.amadeusPlugins.dep.off': { zh: '已关闭', en: 'Turned off' },
   'settings.amadeusPlugins.dep.waiting': { zh: '已开启，但尚未运行', en: 'Turned on but not running' },
-  'settings.amadeusPlugins.dep.findInMarket': { zh: '在市场中查找', en: 'Find in market' },
+  'settings.amadeusPlugins.dep.findInMarket': { zh: '在商店中查找', en: 'Find in store' },
   'settings.amadeusPlugins.dep.enable': { zh: '启用', en: 'Turn on' },
   // 运行占用(副作用账 + 注册项)
   'settings.amadeusPlugins.effects': { zh: '运行占用 · {n}', en: 'Active effects · {n}' },

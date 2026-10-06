@@ -8,7 +8,7 @@ Space 是纯数据的布局配方（L0）：把**已注册的视图**组合成�
 
 最省事的做法是在应用里摆好布局，命令面板（Cmd/Ctrl+K）→「**将当前布局另存为 Space**」——配方自动落到 `~/.forsion/spaces/<id>/space.json`，功能条立即出现图标（右键图标可删除）。然后打开该文件微调（改名、换图标、加 `version`）即可发布。
 
-手动安装本模板：拷贝文件夹到 `~/.forsion/spaces/research-desk/`，重启或从市场装任一 space 触发重载（市场安装是免重启热注册的）。
+手动安装本模板：拷贝文件夹到 `~/.forsion/spaces/research-desk/`，重启或从商店装任一 space 触发重载（商店安装是免重启热注册的）。
 
 ## space.json 契约速查
 
@@ -22,12 +22,12 @@ Space 是纯数据的布局配方（L0）：把**已注册的视图**组合成�
 - **插件视图也能组合**：桌面插件经 `ctx.registerView` 注册的视图，类型名固定为 `plugin:<插件id>:<视图id>`——配方可直接引用，记得在 `requires.views` 里声明，让没装该插件的安装尽早报清晰错误。
 - 有意义的 params 只有 `workspace.mode` 与 `chat.followActive/reuseKey`——其余（sessionId、notePath 等）都是机器特定的，别写。
 - `minAppVersion`（可选）：低于此版本的应用拒载。
-- `version`（可选但**发布必填**）：解析器忽略它，但市场「可更新」检查读它。
+- `version`（可选但**发布必填**）：解析器忽略它，但商店「可更新」检查读它。
 - `requires.views`（可选）：显式声明依赖的视图，让不满足的安装尽早报清晰错误。
 
-## 发布到 Forsion Market
+## 发布到 Forsion 商店
 
-把 `space.json`（用了 `iconFile` 就连同那枚图片）打包成 zip（在 zip 根或单层文件夹内均可），个人中心 → 投稿 选「空间」；或推成 GitHub 公开仓。用户在 市场 → 空间 一键安装，功能条实时出现，免重启。
+把 `space.json`（用了 `iconFile` 就连同那枚图片）打包成 zip（在 zip 根或单层文件夹内均可），个人中心 → 投稿 选「空间」；或推成 GitHub 公开仓。用户在 商店 → 插件 一键安装，功能条实时出现，免重启。
 
 ---
 

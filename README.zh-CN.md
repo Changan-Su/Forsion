@@ -120,9 +120,9 @@ Forsion（扶桑）是一个**本地优先的 AI 第二大脑**。用 Notion 风
 
 - **收集与行动。** 青鸟收藏夹把视频整理成笔记；Computer Use 让 Agent 操作支持平台上的桌面应用；插件事件可以触发自动化。
 - **复用做事方法。** Skills 保存任务方法，MCP 接入外部工具与数据，插件扩展笔记块、视图和工作空间。
-- **建立专属环境。** 从市场安装插件、Agent、技能、Space、主题和网页应用；也可以让 Agent 借助内置扩展开发技能创建自己的扩展。
+- **建立专属环境。** 从商店安装插件、Agent、技能、Space、主题和网页应用；也可以让 Agent 借助内置扩展开发技能创建自己的扩展。
 
-[插件体系](./docs/customization/plugins.md) · [应用市场](./docs/customization/market.md) · [Skills](./docs/agents/skills.md)
+[插件体系](./docs/customization/plugins.md) · [商店](./docs/customization/market.md) · [Skills](./docs/agents/skills.md)
 
 ## 从几份资料，到一份能继续推进的研究分享
 
@@ -259,7 +259,7 @@ npm run server    # HTTP / SSE 服务，默认 127.0.0.1:8787
 
 ### 构建其他产品档案
 
-默认档案是包含六个 Space 的 Forsion。仓库还提供不捆绑 Agent 后端和应用市场的 Amadeus 档案：
+默认档案是包含六个 Space 的 Forsion。仓库还提供不捆绑 Agent 后端和商店的 Amadeus 档案：
 
 ```bash
 cd desktop

@@ -24,7 +24,7 @@ Forsion（扶桑）是一个**本地优先的 AI 第二大脑**：把材料、�
 | 给 AI 接入工具并配置行动权限 | [工具与审批](chat/tools-and-approvals.md) |
 | 从 Obsidian 迁过来 | [Amadeus 总览](amadeus/overview.md) → [编辑器](amadeus/editor.md) |
 | 在手机 / 浏览器上用 | [浏览器版与移动端](reference/web-and-mobile.md) |
-| 把工作台改造成自己的样子 | [插件](customization/plugins.md) → [应用市场](customization/market.md) |
+| 把工作台改造成自己的样子 | [插件](customization/plugins.md) → [商店](customization/market.md) |
 | 出问题了 | [常见问题](reference/faq.md) |
 
 ## 入门
@@ -82,7 +82,7 @@ Forsion（扶桑）是一个**本地优先的 AI 第二大脑**：把材料、�
 
 - [外观与主题](customization/themes.md) — 设计语言、配色、玻璃、字体三档
 - [插件](customization/plugins.md) — 桌面插件与引擎插件、捆绑包、扩展点、安全模型
-- [应用市场](customization/market.md) — 技能 / 代理 / 插件 / 空间 / 主题 / 网站应用
+- [商店](customization/market.md) — 技能 / 插件(含代理与空间)/ 主题 / 网站应用
 - [成就系统](customization/achievements.md) — 边探索边解锁
 
 ## 参考

@@ -120,9 +120,9 @@ This version turns on Muse and Historian once for anyone who has not enabled the
 
 - **Collect and act.** Bluebird turns videos into notes; Computer Use lets Agents operate desktop applications on supported platforms; plugin events can trigger automation.
 - **Reuse a method.** Skills preserve ways of doing tasks, MCP connects external tools and data, and plugins extend note blocks, views, and workspaces.
-- **Build your own environment.** Install plugins, Agents, skills, Spaces, themes, and web apps from the marketplace. Agents can also use built-in extension-development skills to create extensions for you.
+- **Build your own environment.** Install plugins, Agents, skills, Spaces, themes, and web apps from the store. Agents can also use built-in extension-development skills to create extensions for you.
 
-[Plugins (中文)](./docs/customization/plugins.md) · [Marketplace (中文)](./docs/customization/market.md) · [Skills (中文)](./docs/agents/skills.md)
+[Plugins (中文)](./docs/customization/plugins.md) · [Store (中文)](./docs/customization/market.md) · [Skills (中文)](./docs/agents/skills.md)
 
 ## From a few sources to a research talk you can keep developing
 
@@ -261,7 +261,7 @@ npm run server    # HTTP / SSE service, default 127.0.0.1:8787
 
 ### Build Other Product Profiles
 
-The default profile is Forsion, with all six Spaces. The repository also provides an Amadeus profile that does not bundle the Agent backend or the app marketplace:
+The default profile is Forsion, with all six Spaces. The repository also provides an Amadeus profile that does not bundle the Agent backend or the store:
 
 ```bash
 cd desktop

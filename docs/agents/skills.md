@@ -19,7 +19,7 @@ description: 给 AI 装"做事说明书":可安装、可自写、按需加载。
 
 ## 获取技能
 
-- **应用市场**:市场的"技能"分类里一键安装,见[应用市场](../customization/market.md);
+- **商店**:商店的"技能"分类里一键安装,见[商店](../customization/market.md);
 - **随插件包**:一个[插件](../customization/plugins.md)捆绑包可以同时带引擎插件、Agent、技能和 Space,装一次全就位;
 - **自己写**:一个文件夹 + 一份 `SKILL.md` 说明书就是一个技能。用 Markdown 写清楚"什么时候用、步骤是什么、注意什么"即可——你甚至可以让 AI 帮你把一段成功的操作总结成技能。
 
@@ -31,7 +31,7 @@ Forsion 自带一个「Forsion 扩展开发」技能。装着它的 Agent 可以
 
 ## 引擎插件的 npm 通道
 
-Tangu 引擎插件除了应用市场,也可以从 npm 安装:
+Tangu 引擎插件除了商店,也可以从 npm 安装:
 
 ```
 tangu install npm:<包名>
@@ -53,6 +53,6 @@ tangu install npm:<包名>
 ## 下一步
 
 - [Agent 总览](overview.md)
-- [应用市场](../customization/market.md)
+- [商店](../customization/market.md)
 - [插件](../customization/plugins.md)
 - [命令行(Tangu CLI)](../reference/cli.md)
