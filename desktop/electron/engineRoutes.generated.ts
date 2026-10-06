@@ -110,6 +110,8 @@ export const ENGINE_ROUTES: readonly EngineRoute[] = [
   { method: 'GET', path: '/agent/plugins/:id/settings', access: 'deny-remote', src: 'routes/plugins.ts', why: 'plugin settings may hold secrets' },
   { method: 'PUT', path: '/agent/plugins/:id/settings', access: 'deny-remote', src: 'routes/plugins.ts', why: 'engine plugins are local-only' },
   { method: 'GET', path: '/agent/plugins/:id/source', access: 'deny-remote', src: 'routes/plugins.ts', why: 'engine plugins are local-only' },
+  { method: 'GET', path: '/agent/plugins/external-tools', access: 'deny-remote', src: 'routes/plugins.ts', why: 'plugin tools for the local Desktop MCP only; the handler also refuses remote callers' },
+  { method: 'POST', path: '/agent/plugins/external-tools/call', access: 'deny-remote', src: 'routes/plugins.ts', why: 'runs a plugin tool; local Desktop MCP only' },
   { method: 'POST', path: '/agent/plugins/install', access: 'deny-remote', src: 'routes/plugins.ts', why: 'installs code (design appendix C)' },
   { method: 'POST', path: '/agent/plugins/rescan', access: 'deny-remote', src: 'routes/plugins.ts', why: 'engine plugins are local-only' },
   { method: 'POST', path: '/agent/reply-segments', access: 'allow', src: 'routes/plugins.ts', why: 'chat bubble segmentation helper (read-only)' },

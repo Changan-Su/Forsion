@@ -2,7 +2,8 @@
 // node scripts/e2e-editor.cjs --check=task-checkbox [--electron] [--shot=/tmp/checkbox-shots]
 // --electron 在隔离 Electron 窗口加载同一生产 UnifiedPage 台架,不碰用户的库或应用实例。
 const fs = require('fs'), os = require('os'), path = require('path')
-const { chromium, _electron } = require('playwright-core')
+const { chromium } = require('playwright-core')
+const electron = require('./lib/launch-electron.cjs')
 const URL = process.env.HARNESS_URL || 'http://localhost:5173/harness.html'
 const PM = '.unified-body .ProseMirror'
 const TASK = `${PM} li[data-item-type="task"]`
@@ -123,7 +124,7 @@ async function main() {
     const main = path.join(home, 'main.cjs')
     fs.writeFileSync(main, `const {app,BrowserWindow}=require('electron');
 app.whenReady().then(()=>{const w=new BrowserWindow({width:1000,height:760,webPreferences:{contextIsolation:true}});w.loadURL(${JSON.stringify(URL)});});`)
-    app = await _electron.launch({ args: [`--user-data-dir=${path.join(home, 'userdata')}`, main], env: { ...process.env, TANGU_HOME: home } })
+    app = await electron.launch({ args: [`--user-data-dir=${path.join(home, 'userdata')}`, main], env: { ...process.env, TANGU_HOME: home } })
   } else browser = await chromium.launch({ executablePath: findChromium() })
   try {
     const cases = [

@@ -1,7 +1,8 @@
 // 折叠标题行首：原生/丝滑光标、删除、方向键与 Chromium 原生 IME 组合输入。
 // node scripts/e2e-editor.cjs --check=toggle-caret [--electron] [--quick] [--shot=/tmp/toggle-caret]
 const fs = require('fs'), os = require('os'), path = require('path')
-const { chromium, _electron } = require('playwright-core')
+const { chromium } = require('playwright-core')
+const electron = require('./lib/launch-electron.cjs')
 const URL = process.env.HARNESS_URL || 'http://localhost:5173/harness.html'
 const HEAD = '.unified-body .ProseMirror .callout-toggle-title'
 const results = []
@@ -170,7 +171,7 @@ async function main() {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'forsion-toggle-caret-'))
     const main = path.join(home, 'main.cjs')
     fs.writeFileSync(main, `const {app,BrowserWindow}=require('electron');app.whenReady().then(()=>{const w=new BrowserWindow({width:1200,height:860,webPreferences:{contextIsolation:true}});w.loadURL(${JSON.stringify(URL)});});`)
-    app = await _electron.launch({ args: [`--user-data-dir=${path.join(home, 'userdata')}`, '--lang=zh-CN', main], env: { ...process.env, TANGU_HOME: home } })
+    app = await electron.launch({ args: [`--user-data-dir=${path.join(home, 'userdata')}`, '--lang=zh-CN', main], env: { ...process.env, TANGU_HOME: home } })
   } else browser = await chromium.launch({ executablePath: findChromium() })
   try {
     for (const config of process.argv.includes('--quick') ? configs.slice(0, 1) : configs)

@@ -237,6 +237,8 @@ export const CLASSIFICATION = {
 
   // ── plugins.ts —— 除渲染助手外整组本机 ──
   'GET /agent/plugins': [D, 'engine plugins are local-only'],
+  'GET /agent/plugins/external-tools': [D, 'plugin tools for the local Desktop MCP only; the handler also refuses remote callers'],
+  'POST /agent/plugins/external-tools/call': [D, 'runs a plugin tool; local Desktop MCP only'],
   'POST /agent/reply-segments': [A, 'chat bubble segmentation helper (read-only)'],
   'POST /agent/plugins/rescan': [D, 'engine plugins are local-only'],
   'POST /agent/plugins/install': [D, 'installs code (design appendix C)'],
