@@ -1,0 +1,77 @@
+
+> forsion-desktop@2.13.0 check:computerhistory
+> node scripts/e2e-editor.cjs --check=computer-history-settings
+
+PASS light-recording 无横向溢出
+PASS dark-recording 无横向溢出
+PASS light-no-permission 无横向溢出
+PASS dark-no-permission 无横向溢出
+PASS light-helper-missing 无横向溢出
+PASS dark-helper-missing 无横向溢出
+PASS dark-en-outdated 无横向溢出
+PASS light-en-recording 无横向溢出
+PASS win-en-recording 无横向溢出
+PASS win-helper-missing-dark 无横向溢出
+PASS light-consent 确认条出现且开关仍关
+PASS dark-consent 确认条出现且开关仍关
+PASS [cream-light] 同意条 p 对比度 ≥ 4.5
+PASS [cream-light] 同意条 strong 对比度 ≥ 4.5
+PASS [cream-light] 清除确认 p 对比度 ≥ 4.5
+PASS [cream-light] 清除确认 strong 对比度 ≥ 4.5
+PASS [cream-dark] 同意条 p 对比度 ≥ 4.5
+PASS [cream-dark] 同意条 strong 对比度 ≥ 4.5
+PASS [cream-dark] 清除确认 p 对比度 ≥ 4.5
+PASS [cream-dark] 清除确认 strong 对比度 ≥ 4.5
+PASS [coral-light] 同意条 p 对比度 ≥ 4.5
+PASS [coral-light] 同意条 strong 对比度 ≥ 4.5
+PASS [coral-light] 清除确认 p 对比度 ≥ 4.5
+PASS [coral-light] 清除确认 strong 对比度 ≥ 4.5
+PASS [coral-dark] 同意条 p 对比度 ≥ 4.5
+PASS [coral-dark] 同意条 strong 对比度 ≥ 4.5
+PASS [coral-dark] 清除确认 p 对比度 ≥ 4.5
+PASS [coral-dark] 清除确认 strong 对比度 ≥ 4.5
+PASS [teal-light] 同意条 p 对比度 ≥ 4.5
+PASS [teal-light] 同意条 strong 对比度 ≥ 4.5
+PASS [teal-light] 清除确认 p 对比度 ≥ 4.5
+PASS [teal-light] 清除确认 strong 对比度 ≥ 4.5
+PASS [teal-dark] 同意条 p 对比度 ≥ 4.5
+PASS [teal-dark] 同意条 strong 对比度 ≥ 4.5
+PASS [teal-dark] 清除确认 p 对比度 ≥ 4.5
+PASS [teal-dark] 清除确认 strong 对比度 ≥ 4.5
+PASS [lavender-light] 同意条 p 对比度 ≥ 4.5
+PASS [lavender-light] 同意条 strong 对比度 ≥ 4.5
+PASS [lavender-light] 清除确认 p 对比度 ≥ 4.5
+PASS [lavender-light] 清除确认 strong 对比度 ≥ 4.5
+PASS [lavender-dark] 同意条 p 对比度 ≥ 4.5
+PASS [lavender-dark] 同意条 strong 对比度 ≥ 4.5
+PASS [lavender-dark] 清除确认 p 对比度 ≥ 4.5
+PASS [lavender-dark] 清除确认 strong 对比度 ≥ 4.5
+PASS [zhi-light] 同意条 p 对比度 ≥ 4.5
+PASS [zhi-light] 同意条 strong 对比度 ≥ 4.5
+PASS [zhi-light] 清除确认 p 对比度 ≥ 4.5
+PASS [zhi-light] 清除确认 strong 对比度 ≥ 4.5
+PASS [zhi-dark] 同意条 p 对比度 ≥ 4.5
+PASS [zhi-dark] 同意条 strong 对比度 ≥ 4.5
+PASS [zhi-dark] 清除确认 p 对比度 ≥ 4.5
+PASS [zhi-dark] 清除确认 strong 对比度 ≥ 4.5
+PASS 开关与暂停按钮右缘对齐(±1px)
+PASS 面板头按钮与行内控件到面板右缘距离一致
+PASS 添加行(app):按钮与输入框等高、顶对齐
+PASS 添加行(site):按钮与输入框等高、顶对齐
+PASS [helper-missing-light] 刷新状态在首张面板的状态行
+PASS [helper-missing-light] 权限卡是 .settings-panel、有描边、圆角同首张面板
+PASS [helper-missing-light] 权限卡头 / 图标与首张面板左缘对齐
+PASS [helper-missing-light] 权限行文字左缘与状态行对齐、按钮右缘与刷新按钮对齐
+PASS [helper-missing-light] 不给暂停、卡上没有自带工具条
+PASS [helper-missing-dark] 刷新状态在首张面板的状态行
+PASS [helper-missing-dark] 权限卡是 .settings-panel、有描边、圆角同首张面板
+PASS [helper-missing-dark] 权限卡头 / 图标与首张面板左缘对齐
+PASS [helper-missing-dark] 权限行文字左缘与状态行对齐、按钮右缘与刷新按钮对齐
+PASS [helper-missing-dark] 不给暂停、卡上没有自带工具条
+PASS [win-helper_missing] 不挂权限卡、刷新在首张面板
+PASS [win-helper_outdated] 不挂权限卡、刷新在首张面板
+PASS narrow-recording 无横向溢出
+PASS narrow-no-permission-dark 无横向溢出
+PASS narrow-win-en-recording 无横向溢出
+PASS 无页面错误
+72 passed / 0 failed; SHOT C:\Users\Dream\AppData\Local\Temp\forsion-computer-history-settings

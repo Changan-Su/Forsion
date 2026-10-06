@@ -1,0 +1,19 @@
+PASS Onboarding dismissed
+PASS Windows default off
+PASS App Dock IPC gated
+PASS App Dock command absent: 把对话贴到应用旁边
+PASS App Dock command absent: Dock a chat
+PASS Consent required
+PASS Actual recorder connected
+PASS Private recorder process exists
+PASS Windows has no permission card
+PASS Settings uses actual display scale 1.5
+PASS Settings fits display scale 1.5
+PASS Settings uses actual display scale 1.25
+PASS Settings fits display scale 1.25
+PASS Settings uses actual display scale 1.25
+PASS Settings fits display scale 1.25
+PASS Clear returns without a stuck operation
+PASS Disable switches off
+PASS Recorder exits after its last subscriber disconnects
+18 passed
