@@ -3,7 +3,7 @@
  * 在商店浮窗里点开「会员 / 积分 / 物品」,走一次积分兑换,核对「去支付」打开的地址。云端是本地假服务,绝不碰生产;
  * 浏览器不会真的打开(主进程的 shell.openExternal 被换成记录)。
  *
- * 前置:① desktop 先 `npm run build`(读 out/);② Extend 已 `npm run build`,且带商店页(0.9 起);
+ * 前置:① desktop 先 `npm run build`(读 out/);② Extend 已 `npm run build`,且带商店页(0.8.1 起);
  *       ③ 本机有 Extend 的签名钥(同 market-submissions.e2e.cjs)。Extend 目录缺省 ../../Forsion-Extend,用 EXTEND_DIR 指别处。
  * 用法:node scripts/store-pages.e2e.cjs [--en]
  */

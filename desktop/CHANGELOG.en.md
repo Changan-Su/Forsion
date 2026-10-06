@@ -2,6 +2,16 @@
 
 <!-- English edition of CHANGELOG.md: same "## <version> (<date>)" headings, one bullet per Chinese bullet. Add both when releasing. -->
 
+## 2.13.1 (2026-10-06)
+
+- **The Market is now the Store.** Agents and Spaces are listed under Plugins. A new Membership & points section in the sidebar works once you sign in to your Forsion account: it shows your current plan and points balance, and lets you pick a plan and pay, buy point packs and redeem items with points.
+- **Dock a chat beside an app (macOS).** Run “Dock a chat beside an app” from the command palette and pick a window on screen. The chat panel docks beside it and follows when you drag, move or resize that window. Messages in the panel reference the app by default, so the agent can look at it and control it directly.
+- **Computer History now works on Windows.** Once you turn it on in Settings, it records app switches, window titles, browser URLs and typed text. Password fields, password managers and private windows are never recorded.
+- **Windows**: dragging a Space icon off the Ribbon no longer opens a window when you press Esc or release it elsewhere. On machines without hardware acceleration or with slow rendering, the “Tree shadow” splash shows a static scene instead of stuttering.
+- The current Space is no longer highlighted in the Ribbon's recently used group. Only its icon on the bar marks where you are.
+- Fixed: the web version always failed its connection check, which left the input box disabled.
+- The built-in Computer Use is updated to 0.6.2.
+
 ## 2.13.0 (2026-10-06)
 
 - **A native shell on Android.** The top bar, bottom navigation bar and half-screen sheets now use native system controls: opening a Space shows its list first, tapping an item opens the main area, and Back returns to the list. The avatar menu switches between local and cloud, switches Units and opens Settings. You can also install and run external plugins on your phone. Other phone improvements: badges and haptic feedback on the bottom bar, a long-press menu on messages, voice input, Share to Forsion from other apps, the + button split into Camera, Photos and Files, dropdowns shown as half-screen sheets, times on session rows and a clearer offline message. System notifications tell you when a background task finishes or needs your approval, and command confirmations can be denied or allowed right on the notification.
