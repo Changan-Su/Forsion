@@ -62,8 +62,13 @@ export async function authFetch(
 function reportBodyTimeouts(res: Response, deadline: AbortSignal): void {
   for (const method of ['json', 'text', 'arrayBuffer', 'blob'] as const) {
     if (typeof res[method] !== 'function') continue // 单测里的 fetch 桩常回一个只带 json 的普通对象
+    // 宿主的 fetch 可能回一个已把读取方法锁死的响应(网页版账号层的 guardedResponse 曾是这样):再定义会抛
+    // 「Cannot redefine property: json」,整条带超时的请求跟着失败 —— 网页版 2.12.0–2.13.0 的连接探测因此必败、输入框一直禁用。
+    // 包不上就不包(代价只是读体超时那一下报通用 AbortError),绝不让一层报错美化把请求本身打挂。
+    if (Object.getOwnPropertyDescriptor(res, method)?.configurable === false) continue
     const read = res[method].bind(res) as () => Promise<unknown>
     Object.defineProperty(res, method, {
+      configurable: true,
       value: () => read().catch((e: unknown) => {
         throw deadline.aborted && (deadline.reason as { name?: string } | undefined)?.name === 'TimeoutError' ? deadline.reason : e
       }),

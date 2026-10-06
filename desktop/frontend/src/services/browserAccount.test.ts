@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { AccountChangedError, AccountHttpError, createBrowserAccount } from '../../../../web/src/account'
+import { authFetch } from './http'
 
 function memoryStorage() {
   const values = new Map<string, string>()
@@ -129,6 +130,24 @@ describe('shared browser Account', () => {
     expect(storage.getItem('forsion_token')).toBeNull()
     expect(account.getIdentity()).toBeNull()
     expect(await account.authStatus()).toMatchObject({ loggedIn: false, username: null, tokenSource: null })
+  })
+
+  // The web shell routes window.fetch through account.request; the shared request layer then wraps the same read
+  // methods for requests with a timeout. Both layers must coexist (web 2.12.0–2.13.0 threw "Cannot redefine property: json").
+  it('lets the shared request layer add its timeout wrapper, and still guards the body underneath it', async () => {
+    const { account, fetcher } = fixture()
+    await account.adoptToken('token-a')
+    vi.stubGlobal('fetch', (input: RequestInfo | URL, init?: RequestInit) => account.request(String(input), init))
+    try {
+      fetcher.mockResolvedValueOnce(json({ status: 'healthy' }))
+      const ok = await authFetch('https://forsion.test/api/health', {}, { timeoutMs: 5000 })
+      expect(await ok.json()).toEqual({ status: 'healthy' })
+
+      fetcher.mockResolvedValueOnce(json({ secret: 'account-a' }))
+      const stale = await authFetch('https://forsion.test/api/private/a', {}, { timeoutMs: 5000 })
+      await account.adoptToken('token-b')
+      await expect(stale.json()).rejects.toBeInstanceOf(AccountChangedError)
+    } finally { vi.unstubAllGlobals() }
   })
 
   it('keeps different visitor stores and keys isolated while detecting external shared-Web changes', async () => {

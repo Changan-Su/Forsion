@@ -173,7 +173,9 @@ export function createBrowserAccount(options: BrowserAccountOptions) {
     // separated by a switch in another microtask, even for an already buffered body.
     for (const method of ['json', 'text', 'arrayBuffer', 'blob', 'formData'] as const) {
       const consume = guarded[method].bind(guarded)
-      Object.defineProperty(guarded, method, { value: async () => { check(); const value = await consume(); check(); return value } })
+      // configurable: the shared request layer (services/http.ts reportBodyTimeouts) wraps these same methods for
+      // requests with a timeout. It binds the guarded method first, so the account check still runs underneath.
+      Object.defineProperty(guarded, method, { configurable: true, value: async () => { check(); const value = await consume(); check(); return value } })
     }
     const clone = guarded.clone.bind(guarded)
     Object.defineProperty(guarded, 'clone', { value: () => { check(); return guardedResponse(clone(), check, () => {}, signal) } })
