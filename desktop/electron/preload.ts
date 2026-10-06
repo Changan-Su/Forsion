@@ -334,6 +334,8 @@ const api = {
   // ── 拖入式主题(~/.tangu/themes/;主进程读盘成字符串,渲染端 <style> 注入)──
   startupAppearance: {
     initial: currentAppearance,
+    // Windows can report reduced motion in the main process while renderer media queries miss it.
+    prefersReducedMotion: ipcRenderer.sendSync('appearance:reducedMotion') === true,
     update: (patch: AppearancePatch, clearPlugin?: string): Promise<StartupAppearance> => ipcRenderer.invoke('appearance:update', patch, clearPlugin),
     subscribe: (cb: (value: StartupAppearance) => void) => {
       appearanceListeners.add(cb)

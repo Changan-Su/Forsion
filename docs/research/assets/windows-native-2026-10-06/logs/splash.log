@@ -1,0 +1,96 @@
+
+> forsion-desktop@2.13.0 check:splash
+> node scripts/splash-loop.check.cjs
+
+PASS  缺省 = 树影(不是树标)
+PASS  三张图层都画出来了(远影 / 近影 / 带窗格洞的暗墙)  | far=0.276 near=0.253 corner=228,217,203,255 pane=0
+PASS  诗句是五句之一,两行加出处  | 汤谷上有扶桑 / 十日所浴 / 《山海经》
+PASS  诗句与字标落在墙上(不压窗光)、不出画
+PASS  字标下面一行是盖进页面的版本号,左边对齐、字比字标小  | FORSION / 9.8.7
+PASS  两行字和树标等高:大写字顶贴树标上沿、版本号的底贴树标下沿  | 字顶 低 0.106em,字底 低 0.020em
+PASS  枝影 / 窗光三条循环都是 infinite,且还在走  | fts-drift,fts-sway,fts-sway-far t=2637ms
+PASS  只动 transform / opacity  | opacity,transform
+PASS  首帧未出:闪屏还在(没被定时器撤走)
+PASS  首帧画出后闪屏被移除(没有循环接缝要等)
+PASS  没盖版本号:只有字标,没有版本那一行  | ver=null kids=3 字顶 低 0.578em,字底 高 0.579em
+PASS  盖进来的是一段标记:只有字标,没有版本那一行  | ver=null kids=3 字顶 低 0.578em,字底 高 0.579em
+PASS  盖进来的不是字符串:只有字标,没有版本那一行  | ver=null kids=3 字顶 低 0.578em,字底 高 0.579em
+PASS  首帧很早:1.3 秒之前不退场
+PASS  首帧很早:过了最短展示就撤走
+PASS  天花板前不早退(9s 仍在)
+PASS  10s 天花板:首帧永远不来也会自己撤走
+PASS  换了应用图标:树影照常,画面上没有那张图标
+PASS  对照:经典图标仍跟随应用图标(呼吸)
+PASS  选了开屏素材:显示素材,不挂树影
+PASS  损坏的开屏素材回落到树影
+PASS  加载动画选「pulse」:树影照常(呼吸 / 旋转只作用于图标类开屏)
+PASS  加载动画选「spin」:树影照常(呼吸 / 旋转只作用于图标类开屏)
+PASS  静止:树影停在一帧(没有任何动画,云已散、诗句可见)
+PASS  减少动态效果:树影停在一帧
+PASS  减少动态效果:首帧一到就撤(不守最短展示)
+PASS  减少动态效果 + 素材有静帧:显示静帧,不是应用图标
+PASS  减少动态效果 + 会动的素材没有静帧:停在树影,不是应用图标
+PASS  减少动态效果 + 损坏的素材:回落树影,不是应用图标
+PASS  对照:经典在减少动态效果下仍换成应用图标
+PASS  连开 14 次:都在五句之内,且不连着出同一句  | 43214213231402
+PASS  暗色:墙是墨色、字是月光下的浅色,诗句仍在墙上  | 18,20,25,255 #ccd4e2
+PASS  390×844 dark:画出来了,诗句与字标(连同版本号)在墙上、在画内  | 字顶 高 0.014em,字底 低 0.014em
+PASS  390×844 light:画出来了,诗句与字标(连同版本号)在墙上、在画内  | 字顶 高 0.014em,字底 低 0.014em
+PASS  500×300 light:画出来了,诗句与字标(连同版本号)在墙上、在画内  | 字顶 高 0.014em,字底 低 0.014em
+PASS  600×900 light:画出来了,诗句与字标(连同版本号)在墙上、在画内  | 字顶 低 0.042em,字底 高 0.012em
+PASS  800×600 light:画出来了,诗句与字标(连同版本号)在墙上、在画内  | 字顶 低 0.042em,字底 高 0.012em
+PASS  1024×768 light:画出来了,诗句与字标(连同版本号)在墙上、在画内  | 字顶 低 0.106em,字底 低 0.020em
+PASS  1920×1080 light:画出来了,诗句与字标(连同版本号)在墙上、在画内  | 字顶 低 0.106em,字底 低 0.020em
+PASS  2560×1440 light:画出来了,诗句与字标(连同版本号)在墙上、在画内  | 字顶 低 0.106em,字底 低 0.020em
+PASS  light 100% DPI:诗句和字标在画内、版本行与树标对齐  | 字顶 低 0.106em,字底 低 0.020em
+PASS  dark 100% DPI:诗句和字标在画内、版本行与树标对齐  | 字顶 低 0.106em,字底 低 0.020em
+PASS  light 125% DPI:诗句和字标在画内、版本行与树标对齐  | 字顶 低 0.106em,字底 低 0.020em
+PASS  dark 125% DPI:诗句和字标在画内、版本行与树标对齐  | 字顶 低 0.106em,字底 低 0.020em
+PASS  light 150% DPI:诗句和字标在画内、版本行与树标对齐  | 字顶 低 0.106em,字底 低 0.020em
+PASS  dark 150% DPI:诗句和字标在画内、版本行与树标对齐  | 字顶 低 0.106em,字底 低 0.020em
+PASS  沙箱预览:存储不可用(负对照成立)时树影照常挂上并按时退场
+PASS  沙箱预览:版本号照样在  | 9.8.7
+PASS  经典:首帧未出,闪屏还在
+PASS  经典:四条动画都是 infinite(含接缝遮罩 forsion-seam)  | forsion-seam,p2m-panel,p2m-tree,p2m-outline
+PASS  经典:两轮之后仍在跑(真循环,不是播完僵住)  | t=3500ms
+PASS  经典:接缝被遮住(回卷处近乎透明,中段全不透明)  | start=0.15625 mid=1 edge=0.15625
+PASS  经典:首帧画出后闪屏被移除
+PASS  经典:损坏的开屏素材回落到树标
+PASS  floating 卫星窗口从未挂载启动闪屏
+PASS  detached 卫星窗口从未挂载启动闪屏
+PASS  mini 卫星窗口从未挂载启动闪屏
+PASS  ../frontend/index.html: 缺省挂树影
+PASS  ../frontend/index.html: 静止时树影没有任何动画
+PASS  ../frontend/index.html: 经典 + 静止关闭树标的所有内部动画
+PASS  ../frontend/index.html: 经典 + 自定义图标使用所选动画
+PASS  ../frontend/index.html: 静止素材使用首帧
+PASS  ../frontend/index.html: 经典 + 减少动态效果,开屏素材换成静态图标
+PASS  ../frontend/index.html: 减少动态效果下树影不拿应用图标顶替素材
+PASS  ../frontend/index.html: Windows 原生减少动画覆盖失真的媒体查询,树影是完整静帧
+PASS  ../frontend/index.html: Windows 原生减少动画同样停止经典和自定义图标
+PASS  ../frontend/index.html: 用户可关闭开屏
+PASS  ../frontend/index.html: 经典下损坏的图标恢复树标
+PASS  ../../web/index.html: 缺省挂树影
+PASS  ../../web/index.html: 静止时树影没有任何动画
+PASS  ../../web/index.html: 经典 + 静止关闭树标的所有内部动画
+PASS  ../../web/index.html: 经典 + 自定义图标使用所选动画
+PASS  ../../web/index.html: 静止素材使用首帧
+PASS  ../../web/index.html: 经典 + 减少动态效果,开屏素材换成静态图标
+PASS  ../../web/index.html: 减少动态效果下树影不拿应用图标顶替素材
+PASS  ../../web/index.html: Windows 原生减少动画覆盖失真的媒体查询,树影是完整静帧
+PASS  ../../web/index.html: Windows 原生减少动画同样停止经典和自定义图标
+PASS  ../../web/index.html: 用户可关闭开屏
+PASS  ../../web/index.html: 经典下损坏的图标恢复树标
+PASS  ../../mobile/index.html: 缺省挂树影
+PASS  ../../mobile/index.html: 静止时树影没有任何动画
+PASS  ../../mobile/index.html: 经典 + 静止关闭树标的所有内部动画
+PASS  ../../mobile/index.html: 经典 + 自定义图标使用所选动画
+PASS  ../../mobile/index.html: 静止素材使用首帧
+PASS  ../../mobile/index.html: 经典 + 减少动态效果,开屏素材换成静态图标
+PASS  ../../mobile/index.html: 减少动态效果下树影不拿应用图标顶替素材
+PASS  ../../mobile/index.html: Windows 原生减少动画覆盖失真的媒体查询,树影是完整静帧
+PASS  ../../mobile/index.html: Windows 原生减少动画同样停止经典和自定义图标
+PASS  ../../mobile/index.html: 用户可关闭开屏
+PASS  ../../mobile/index.html: 经典下损坏的图标恢复树标
+
+90/90 通过   截图:outputs\splash/

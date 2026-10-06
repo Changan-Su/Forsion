@@ -225,7 +225,7 @@ async function main() {
     // ───────── 拖出条外 ─────────
     const barRight = await win.evaluate(() => document.querySelector('.rb').getBoundingClientRect().right)
     /** 合成一次拖拽。over = 拖到哪(null = 不发 dragover);drop = 松手发不发 drop(false = Esc / 拖出了本文档);end = dragend 的坐标。 */
-    const dragOut = async (rid, { over, drop, leaveAtEdge = false, end }) => {
+    const dragOut = async (rid, { over, drop, leaveAtEdge = false, zeroLeave = false, end }) => {
       const sel = `.rb-top .rb-slot[data-id="${rid}"]`
       const dt = await win.evaluateHandle(() => new DataTransfer())
       const r = await win.locator(sel).boundingBox()
@@ -239,6 +239,7 @@ async function main() {
         if (drop) await win.dispatchEvent(target, 'drop', ev)
       }
       if (leaveAtEdge) await win.evaluate(() => document.documentElement.dispatchEvent(new DragEvent('dragleave', { bubbles: true, clientX: window.innerWidth, clientY: 300 })))
+      if (zeroLeave) await win.evaluate(() => document.documentElement.dispatchEvent(new DragEvent('dragleave', { bubbles: true })))
       await win.waitForTimeout(40)
       await win.dispatchEvent(sel, 'dragend', { dataTransfer: dt, clientX: end.x, clientY: end.y, screenX: 320, screenY: 220 })
       await win.waitForTimeout(150)
@@ -247,9 +248,11 @@ async function main() {
     const orderBefore = await win.evaluate(() => localStorage.getItem('forsion_tangu_ribbon_order'))
     let none = await expectWindow(() => dragOut(D, { over: { x: barRight + 10, y: 300 }, drop: true, end: { x: barRight + 10, y: 300 } }), 2000)
     check('D1 贴着条边松手(24px 以内)不开窗', none === null)
+    none = await expectWindow(() => dragOut(D, { over: null, drop: false, zeroLeave: true, end: { x: barRight + 10, y: 300 } }), 2000)
+    check('D1b Windows 全零 dragleave 后贴着条边松手:不开窗、不把它误当作拖到窗外', none === null)
     none = await expectWindow(() => dragOut(D, { over: { x: 600, y: 400 }, drop: false, end: { x: 600, y: 400 } }), 2000)
     check('D2 拖到条外按 Esc(没有 drop,松手点在本文档里)不开窗', none === null)
-    check('D2b 条上的顺序没被这两次动过', orderBefore === await win.evaluate(() => localStorage.getItem('forsion_tangu_ribbon_order')))
+    check('D2b 取消拖拽没有改变条上的顺序', orderBefore === await win.evaluate(() => localStorage.getItem('forsion_tangu_ribbon_order')))
     const wD = await expectWindow(() => dragOut(D, { over: { x: 600, y: 400 }, drop: true, end: { x: 600, y: 400 } }))
     check('D3 拖到条外松手 → 开出这个 Space 的窗口', !!wD && spaceOf(wD) === sid(D), wD ? spaceOf(wD) : null)
     check('D3b 拖出去不改条上的顺序、主窗也不切走', orderBefore === await win.evaluate(() => localStorage.getItem('forsion_tangu_ribbon_order')) && (await activeKey(win)) === activeBefore)
@@ -275,6 +278,9 @@ async function main() {
     if (wD) { await wD.close(); await sleep(600) }
     const wOut = await expectWindow(() => dragOut(D, { over: { x: 600, y: 400 }, drop: false, leaveAtEdge: true, end: { x: 5000, y: 300 } }))
     check('D4 拖到窗口外面松手 → 照样开窗', !!wOut && spaceOf(wOut) === sid(D), wOut ? spaceOf(wOut) : null)
+    if (wOut) { await wOut.close(); await sleep(600) }
+    const wLeft = await expectWindow(() => dragOut(D, { over: null, drop: false, leaveAtEdge: true, end: { x: -10, y: 300 } }))
+    check('D4b 左侧桌面释放不被 Ribbon 的 24px 取消边距吞掉', !!wLeft && spaceOf(wLeft) === sid(D), wLeft ? spaceOf(wLeft) : null)
 
     // ───────── H 主页开在自己的窗口里 ─────────
     const homeBtn = win.locator('.rb-home .rb-btn').first()

@@ -12,7 +12,8 @@
     if (saved && saved.version === 1) value = saved;
   } catch (_) { /* Default brand remains visible. */ }
   if (value.showSplash === false) { splash.remove(); return; }
-  var reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  var reduce = matchMedia('(prefers-reduced-motion: reduce)').matches || !!(window.tangu && window.tangu.startupAppearance && window.tangu.startupAppearance.prefersReducedMotion);
+  if (reduce) splash.dataset.reducedMotion = '';
   var animation = ['default', 'pulse', 'spin', 'none'].indexOf(value.animation) !== -1 ? value.animation : 'default';
   var style = document.createElement('style');
   style.textContent = '\
@@ -56,7 +57,7 @@
     @keyframes fts-in { from {opacity:0} }\
     #tangu-splash.out .fts-view { animation:fts-open 380ms cubic-bezier(.4,0,.2,1) both; }\
     @keyframes fts-open { to {transform:scale(1.08)} }\
-    #tangu-splash[data-still] .fts * { animation:none; }\
+    #tangu-splash[data-still] .fts *, #tangu-splash[data-reduced-motion] * { animation:none !important; }\
     @media(prefers-reduced-motion:reduce) { #tangu-splash .fts * { animation:none; } }';
   document.head.appendChild(style);
   // Tree shadow, the built-in default scene: window light on a wall, branch shadows and one Fusang verse.
@@ -186,6 +187,7 @@
     done = true;
     clearTimeout(ceiling);
     cancelAnimationFrame(frame);
+    if (reduce) { splash.remove(); style.remove(); return; }
     splash.classList.add('out');
     setTimeout(function () { splash.remove(); style.remove(); }, 450);
   }

@@ -5,10 +5,12 @@ import { join } from 'node:path'
 const mock = vi.hoisted(() => ({
   dir: '', handlers: new Map<string, (...args: any[]) => any>(), listeners: new Map<string, (...args: any[]) => any>(),
   dock: vi.fn(), windowIcon: vi.fn(), send: vi.fn(),
+  animation: vi.fn(() => ({ prefersReducedMotion: false })),
 }))
 vi.mock('electron', () => ({
   app: { getPath: () => mock.dir, isPackaged: false, dock: { setIcon: mock.dock }, on: (key: string, cb: any) => mock.listeners.set(key, cb) },
   ipcMain: { on: (key: string, cb: any) => mock.listeners.set(key, cb), handle: (key: string, cb: any) => mock.handlers.set(key, cb) },
+  systemPreferences: { getAnimationSettings: mock.animation },
   BrowserWindow: { getAllWindows: () => [{ isDestroyed: () => false, setIcon: mock.windowIcon, webContents: { send: mock.send } }] },
   nativeImage: {
     createFromPath: () => ({ isEmpty: () => false, tag: 'default' }),
@@ -28,6 +30,16 @@ afterEach(async () => { Object.defineProperty(process, 'platform', { value: plat
 const update = (patch: unknown, owner?: string) => mock.handlers.get('appearance:update')!({ trusted: true }, patch, owner)
 const initial = () => { const event = { returnValue: undefined }; mock.listeners.get('appearance:initial')!(event); return event.returnValue as any }
 describe('desktop appearance persistence and OS icon', () => {
+  it('reads current native reduced motion independently of saved artwork preferences', async () => {
+    await registerStartupAppearance(() => true)
+    const event = { returnValue: undefined as unknown }
+    mock.animation.mockReturnValueOnce({ prefersReducedMotion: true })
+    mock.listeners.get('appearance:reducedMotion')!(event)
+    expect(event.returnValue).toBe(true)
+    mock.listeners.get('appearance:reducedMotion')!(event)
+    expect(event.returnValue).toBe(false)
+    expect(initial()).not.toHaveProperty('prefersReducedMotion')
+  })
   it('serializes concurrent patches, persists across launches and resets the macOS Dock', async () => {
     Object.defineProperty(process, 'platform', { value: 'darwin' })
     await registerStartupAppearance((event: any) => event.trusted)

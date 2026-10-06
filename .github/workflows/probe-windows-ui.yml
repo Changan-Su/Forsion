@@ -6,6 +6,10 @@ on:
     paths:
       - '.github/workflows/probe-windows-ui.yml'
       - 'desktop/frontend/startupAppearance.js'
+      - 'desktop/frontend/src/components/StartupAppearanceSettings.tsx'
+      - 'desktop/electron/startupAppearance.ts'
+      - 'desktop/electron/startupAppearance.test.ts'
+      - 'desktop/electron/preload.ts'
       - 'desktop/scripts/startup-windows.probe.cjs'
       - 'desktop/scripts/splash-loop.check.cjs'
       - 'desktop/scripts/lib/find-chromium.cjs'
@@ -27,6 +31,8 @@ jobs:
         working-directory: desktop
         run: |
           npm run build
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npx vitest run electron/startupAppearance.test.ts
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm run check:splash
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

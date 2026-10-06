@@ -1,0 +1,341 @@
+{
+  "baselineNear": [
+    {
+      "kind": "dragstart",
+      "trusted": true,
+      "clientX": 21,
+      "clientY": 126,
+      "screenX": 708,
+      "screenY": 456,
+      "effect": "none",
+      "target": "DIV"
+    },
+    {
+      "kind": "dragleave",
+      "trusted": true,
+      "clientX": 0,
+      "clientY": 0,
+      "screenX": 0,
+      "screenY": 0,
+      "effect": "none",
+      "target": "DIV"
+    },
+    {
+      "kind": "dragend",
+      "trusted": true,
+      "clientX": 57,
+      "clientY": 370,
+      "screenX": 744,
+      "screenY": 700,
+      "effect": "none",
+      "target": "DIV"
+    }
+  ],
+  "near": {
+    "events": [
+      {
+        "kind": "dragstart",
+        "trusted": true,
+        "clientX": 21,
+        "clientY": 126,
+        "screenX": 964,
+        "screenY": 603,
+        "effect": "none"
+      },
+      {
+        "kind": "dragleave",
+        "trusted": true,
+        "clientX": 0,
+        "clientY": 0,
+        "screenX": 0,
+        "screenY": 0,
+        "effect": "none"
+      },
+      {
+        "kind": "dragend",
+        "trusted": true,
+        "clientX": 57,
+        "clientY": 368,
+        "screenX": 1000,
+        "screenY": 845,
+        "effect": "none"
+      }
+    ],
+    "windows": [
+      "Forsion"
+    ]
+  },
+  "drop": {
+    "events": [
+      {
+        "kind": "dragstart",
+        "trusted": true,
+        "clientX": 21,
+        "clientY": 126,
+        "screenX": 964,
+        "screenY": 603,
+        "effect": "none"
+      },
+      {
+        "kind": "dragleave",
+        "trusted": true,
+        "clientX": 0,
+        "clientY": 0,
+        "screenX": 0,
+        "screenY": 0,
+        "effect": "none"
+      },
+      {
+        "kind": "dragend",
+        "trusted": true,
+        "clientX": 549,
+        "clientY": 368,
+        "screenX": 1492,
+        "screenY": 845,
+        "effect": "none"
+      }
+    ],
+    "native": {
+      "windows": [
+        {
+          "title": "forsion-desktop",
+          "bounds": {
+            "x": 1492,
+            "y": 845,
+            "width": 1103,
+            "height": 764
+          }
+        },
+        {
+          "title": "Forsion",
+          "bounds": {
+            "x": 936,
+            "y": 446,
+            "width": 1200,
+            "height": 821
+          }
+        }
+      ],
+      "cursor": {
+        "x": 1492,
+        "y": 845
+      }
+    }
+  },
+  "layoutBefore": {
+    "version": 4,
+    "space": "agents",
+    "dockview": {
+      "grid": {
+        "root": {
+          "type": "branch",
+          "data": [
+            {
+              "type": "branch",
+              "data": [
+                {
+                  "type": "leaf",
+                  "data": {
+                    "views": [
+                      "agent-profile"
+                    ],
+                    "activeView": "agent-profile",
+                    "id": "1"
+                  },
+                  "size": 846
+                },
+                {
+                  "type": "leaf",
+                  "data": {
+                    "views": [
+                      "sidebar-empty#2"
+                    ],
+                    "activeView": "sidebar-empty#2",
+                    "id": "3"
+                  },
+                  "size": 240
+                }
+              ],
+              "size": 491
+            },
+            {
+              "type": "leaf",
+              "data": {
+                "views": [
+                  "sidebar-empty#1"
+                ],
+                "activeView": "sidebar-empty#1",
+                "id": "2"
+              },
+              "size": 231
+            }
+          ],
+          "size": 1086
+        },
+        "width": 1086,
+        "height": 722,
+        "orientation": "VERTICAL"
+      },
+      "panels": {
+        "agent-profile": {
+          "id": "agent-profile",
+          "contentComponent": "__frame",
+          "tabComponent": "props.defaultTabComponent",
+          "params": {
+            "__loc": "main",
+            "__type": "agent-profile"
+          },
+          "title": "Agents"
+        },
+        "sidebar-empty#1": {
+          "id": "sidebar-empty#1",
+          "contentComponent": "sidebar-empty",
+          "tabComponent": "props.defaultTabComponent",
+          "params": {
+            "__loc": "bottom",
+            "__type": "sidebar-empty"
+          },
+          "title": "空面板"
+        },
+        "sidebar-empty#2": {
+          "id": "sidebar-empty#2",
+          "contentComponent": "sidebar-empty",
+          "tabComponent": "props.defaultTabComponent",
+          "params": {
+            "__loc": "right",
+            "__type": "sidebar-empty"
+          },
+          "title": "空侧栏"
+        }
+      },
+      "activeGroup": "3"
+    },
+    "sidebars": {
+      "left": {
+        "visible": false,
+        "stash": [
+          {
+            "type": "agents-roster",
+            "params": {}
+          }
+        ]
+      },
+      "right": {
+        "visible": true,
+        "stash": []
+      },
+      "bottom": {
+        "visible": true,
+        "stash": []
+      }
+    }
+  },
+  "layoutAfter": {
+    "version": 4,
+    "space": "agents",
+    "dockview": {
+      "grid": {
+        "root": {
+          "type": "branch",
+          "data": [
+            {
+              "type": "branch",
+              "data": [
+                {
+                  "type": "leaf",
+                  "data": {
+                    "views": [
+                      "agent-profile"
+                    ],
+                    "activeView": "agent-profile",
+                    "id": "1"
+                  },
+                  "size": 846
+                },
+                {
+                  "type": "leaf",
+                  "data": {
+                    "views": [
+                      "sidebar-empty#2"
+                    ],
+                    "activeView": "sidebar-empty#2",
+                    "id": "3"
+                  },
+                  "size": 240
+                }
+              ],
+              "size": 492
+            },
+            {
+              "type": "leaf",
+              "data": {
+                "views": [
+                  "sidebar-empty#1"
+                ],
+                "activeView": "sidebar-empty#1",
+                "id": "2"
+              },
+              "size": 231
+            }
+          ],
+          "size": 1086
+        },
+        "width": 1086,
+        "height": 723,
+        "orientation": "VERTICAL"
+      },
+      "panels": {
+        "agent-profile": {
+          "id": "agent-profile",
+          "contentComponent": "__frame",
+          "tabComponent": "props.defaultTabComponent",
+          "params": {
+            "__loc": "main",
+            "__type": "agent-profile"
+          },
+          "title": "Agents"
+        },
+        "sidebar-empty#2": {
+          "id": "sidebar-empty#2",
+          "contentComponent": "sidebar-empty",
+          "tabComponent": "props.defaultTabComponent",
+          "params": {
+            "__loc": "right",
+            "__type": "sidebar-empty"
+          },
+          "title": "空侧栏"
+        },
+        "sidebar-empty#1": {
+          "id": "sidebar-empty#1",
+          "contentComponent": "sidebar-empty",
+          "tabComponent": "props.defaultTabComponent",
+          "params": {
+            "__loc": "bottom",
+            "__type": "sidebar-empty"
+          },
+          "title": "空面板"
+        }
+      },
+      "activeGroup": "3"
+    },
+    "sidebars": {
+      "left": {
+        "visible": false,
+        "stash": [
+          {
+            "type": "agents-roster",
+            "params": {}
+          }
+        ]
+      },
+      "right": {
+        "visible": true,
+        "stash": []
+      },
+      "bottom": {
+        "visible": true,
+        "stash": []
+      }
+    }
+  }
+}

@@ -1397,6 +1397,7 @@ declare global {
       setBundleEnabled?(id: string, on: boolean): Promise<{ restartPending: boolean }>
       /** 主题请求窗口级材质;system-glass 在 macOS 映射为可取样窗口后方的高透原生 vibrancy。 */
       startupAppearance?: {
+        readonly prefersReducedMotion?: boolean
         initial: import('../../shared/startupAppearance').StartupAppearance
         update(patch: import('../../shared/startupAppearance').AppearancePatch, clearPlugin?: string): Promise<import('../../shared/startupAppearance').StartupAppearance>
         subscribe(cb: (value: import('../../shared/startupAppearance').StartupAppearance) => void): () => void
