@@ -3611,6 +3611,10 @@ app.whenReady().then(async () => {
   }
 
   // ── 多窗口 IPC:独立窗 + mini 卡片 + floating 面板 ──
+  ipcMain.on('window:cursorScreenPoint', (e) => {
+    const point = isTrustedSender(e) ? screen.getCursorScreenPoint() : { x: 0, y: 0 }
+    e.returnValue = { screenX: point.x, screenY: point.y }
+  })
   ipcMain.handle('window:detachedReady', (_e, id: string) => {
     const v = pendingDetachedViews.get(String(id)) || []
     pendingDetachedViews.delete(String(id))

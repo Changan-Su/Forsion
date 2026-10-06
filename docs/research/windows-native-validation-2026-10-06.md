@@ -1,5 +1,7 @@
 # Windows 原生验收补充（2026-10-06）
 
+后续继续排查和补修见[拖拽与开屏性能报告](windows-pointer-performance-2026-10-06.md)：Windows 指针捕获解决窗外 / guest 上 Esc 歧义，原生副屏及 webview 释放已补验，开屏新增软件渲染和连续慢帧降级。本文保留此前那一轮的结果。
+
 对应 [#6](https://github.com/Changan-Su/Forsion/issues/6)、[#7](https://github.com/Changan-Su/Forsion/issues/7)。基于 main `a3ff47a3`（2.13.0），包含已经合并的 [#8](https://github.com/Changan-Su/Forsion/pull/8)、[#9](https://github.com/Changan-Su/Forsion/pull/9)。本轮继续执行之前报告中未做的真实 Windows 系统设置、原生输入和多屏启动项目，并修复新复现的两处问题。
 
 环境为 Windows 11 Pro 10.0.26200、Electron 40、NVIDIA RTX 5060。使用临时用户数据、桩后端；未接触用户 Forsion 数据。通过 Windows 设置界面切换主屏 100% / 125% / 150% 和系统动画开关，结束时恢复主屏 150%、3840×2160、动画开启。

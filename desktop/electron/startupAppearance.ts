@@ -44,6 +44,9 @@ export async function registerStartupAppearance(isTrusted: (e: Electron.IpcMainI
   ipcMain.on('appearance:reducedMotion', (event) => {
     event.returnValue = systemPreferences.getAnimationSettings().prefersReducedMotion
   })
+  ipcMain.on('appearance:softwareRendering', (event) => {
+    event.returnValue = process.platform === 'win32' && app.getGPUFeatureStatus().gpu_compositing !== 'enabled'
+  })
   const serialize = createSerialQueue()
   ipcMain.handle('appearance:update', (event, patch, clearPlugin?: string) => {
     if (!isTrusted(event)) throw new Error('Untrusted appearance request')

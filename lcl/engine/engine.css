@@ -152,6 +152,9 @@
 .rb.rb-dragging { -webkit-app-region: no-drag; }
 .rb-slot { -webkit-app-region: no-drag; position: relative; display: flex; justify-content: center; border-radius: var(--radius-sm, 8px); transition: opacity var(--duration-fast, 0.15s) var(--ease-out, ease); }
 .rb-slot.dragging { opacity: 0.4; }
+html.rb-pointer-dragging, html.rb-pointer-dragging * { cursor: grabbing !important; user-select: none !important; }
+.rb-pointer-ghost { position: fixed; z-index: 2147483647; pointer-events: none; opacity: .75; background: var(--surface, #fbf8f5); border-radius: 8px; }
+.rb-pointer-shield { position: fixed; inset: 0; z-index: 2147483646; -webkit-app-region: no-drag; }
 /* 落点提示 = 让位动画本身(手机桌面那套排斥占位):图标整槽平移让出空位,ghost 滑进去,松手即落。
  * transition 只在 .rb-dragging 期间挂 —— 松手那一帧 DOM 顺序变了、transform 归零,带着过渡会从错位飞回来。 */
 .rb-dragging .rb-slot { transition: transform 0.19s cubic-bezier(0.3, 1.3, 0.5, 1), opacity var(--duration-fast, 0.15s) var(--ease-out, ease); }

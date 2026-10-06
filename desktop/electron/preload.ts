@@ -336,6 +336,7 @@ const api = {
     initial: currentAppearance,
     // Windows can report reduced motion in the main process while renderer media queries miss it.
     prefersReducedMotion: ipcRenderer.sendSync('appearance:reducedMotion') === true,
+    softwareRendering: ipcRenderer.sendSync('appearance:softwareRendering') === true,
     update: (patch: AppearancePatch, clearPlugin?: string): Promise<StartupAppearance> => ipcRenderer.invoke('appearance:update', patch, clearPlugin),
     subscribe: (cb: (value: StartupAppearance) => void) => {
       appearanceListeners.add(cb)
@@ -490,6 +491,7 @@ const api = {
   // P1-KF:本窗**生效**界面语言(i18n.tsx 四级链的结论)→ 主进程文案(托盘 / 系统通知 / 对话框)。单向,主进程只认 zh/en。
   reportUiLocale: (locale: 'zh' | 'en'): void => ipcRenderer.send(UI_LOCALE_CHANNEL, locale),
   closeSelf: (): void => ipcRenderer.send('window:closeSelf'),
+  cursorScreenPoint: (): { screenX: number; screenY: number } => ipcRenderer.sendSync('window:cursorScreenPoint'),
   // 跨窗撕拽:实时坐标(节流 send)+ 最终落点路由(invoke)+ 目标窗接收订阅(on)。
   dragUpdate: (screenX: number, screenY: number, view: { type: string; params?: Record<string, unknown> }): void =>
     ipcRenderer.send('window:dragUpdate', { screenX, screenY, view }),

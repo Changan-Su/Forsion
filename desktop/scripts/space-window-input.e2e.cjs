@@ -23,6 +23,7 @@ async function main() {
     app = await electron.launch({ args: [`--user-data-dir=${userdata}`, `--force-device-scale-factor=${scale}`, '--lang=zh-CN', ROOT], cwd: ROOT,
       env: { ...process.env, TANGU_HOME: home, TANGU_BACKEND_URL: stub.url } })
     win = await app.firstWindow()
+    win.on('pageerror', error => console.log('PAGEERROR', error.message))
     await win.waitForSelector('#root')
     if (!onboardingSkipped) {
       assert.ok(await skipOnboarding(win), 'The main window must leave onboarding')
@@ -37,6 +38,10 @@ async function main() {
     // Windows native drag delivery requires the input window in front. Run this probe separately from other UI harnesses.
     await app.evaluate(({ BrowserWindow }, url) => {
       const main = BrowserWindow.getAllWindows().find((window) => window.webContents.getURL() === url)
+      if (process.env.SPACE_INPUT_HEIGHT) {
+        main.setMinimumSize(880, 360)
+        main.setBounds({ x: 10, y: 10, width: 1000, height: Number(process.env.SPACE_INPUT_HEIGHT) })
+      }
       main.show(); main.focus()
     }, win.url())
   }
@@ -56,7 +61,7 @@ async function main() {
   }
   const open = async (action) => {
     const created = app.waitForEvent('window', { timeout: 10000 }).catch(async (error) => {
-      console.log('Input events:', await win.evaluate(() => window.__inputDrags))
+      console.log('Input events:', await win.evaluate(() => window.__inputDrags.slice(-10)))
       await win.screenshot({ path: path.join(OUT, 'failed-main.png') }).catch(() => {})
       throw error
     })
@@ -88,13 +93,23 @@ async function main() {
           win.once('show', () => { row.paintedAtShow = painted })
         })
       })
+      if (process.platform === 'win32') await app.evaluate(({ screen }) => {
+        // DevTools mouse input does not move the OS cursor. Use a fixed native DIP snapshot for routing;
+        // the separate Sky acceptance run checks the actual OS cursor on physical displays.
+        screen.getCursorScreenPoint = () => ({ x: 800, y: 650 })
+      })
       await win.evaluate(() => {
         window.__inputDrags = []
-        for (const kind of ['dragstart', 'drop', 'dragend']) window.addEventListener(kind, (event) => window.__inputDrags.push({ kind, trusted: event.isTrusted, effect: event.dataTransfer?.dropEffect, screenX: event.screenX, screenY: event.screenY }), true)
+        for (const kind of ['dragstart', 'drop', 'dragend', 'pointerdown', 'pointermove', 'pointerup', 'gotpointercapture', 'lostpointercapture', 'pointercancel', 'blur']) window.addEventListener(kind, (event) => window.__inputDrags.push({ kind, trusted: event.isTrusted, effect: event.dataTransfer?.dropEffect, screenX: event.screenX, screenY: event.screenY, buttons: event.buttons, primary: event.isPrimary, target: event.target?.tagName,
+          pointerId: event.pointerId, cursor: kind === 'pointerup' ? window.tangu.cursorScreenPoint?.() : undefined }), true)
       })
       const active = await win.evaluate(() => localStorage.getItem('forsion_tangu_active_space'))
       const slot = win.locator('.rb-top .rb-slot[data-id="space:agents"]')
-      const box = await slot.boundingBox()
+      const revealAgents = async () => {
+        const more = win.locator('.rb-more[data-rb-more="top"]')
+        if (!await slot.isVisible() && await more.getAttribute('aria-expanded') === 'false') await more.click()
+        await slot.locator('.rb-btn').hover() // Wait for opening/cropping transitions and a hittable source.
+      }
       const begin = async () => {
         await win.bringToFront()
         await app.evaluate(({ BrowserWindow }, url) => {
@@ -103,6 +118,11 @@ async function main() {
         }, win.url())
         await win.waitForFunction(() => document.hasFocus())
         await win.waitForTimeout(100)
+        await revealAgents()
+        const box = await slot.boundingBox()
+        assert.ok(box, 'The Agents source must be visible')
+        const hit = await win.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.closest('[data-id]')?.getAttribute('data-id'), { x: box.x + box.width / 2, y: box.y + box.height / 2 })
+        assert.equal(hit, 'space:agents', 'The mouse must start on the visible Agents source')
         await win.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
         await win.mouse.down()
         await win.waitForTimeout(100)
@@ -111,10 +131,16 @@ async function main() {
         await begin()
         await win.mouse.move(550, 400, { steps: 20 })
         await win.mouse.move(552, 402)
+        if (process.platform === 'win32') {
+          const state = await win.evaluate(() => ({ active: document.documentElement.classList.contains('rb-pointer-dragging'), cursor: getComputedStyle(document.querySelector('.rb-btn')).cursor, capture: [...document.querySelectorAll('.rb-btn')].some(button => button.hasPointerCapture(window.__inputDrags.find(e => e.kind === 'pointerdown')?.pointerId)), platform: window.tangu.platform, draggable: document.querySelector('.rb-slot[data-id="space:agents"]').draggable, events: window.__inputDrags }))
+          console.log('NOTE capture', JSON.stringify({ ...state, events: state.events.slice(-3) }))
+          check(`${scale}: captured drag retains pointer events and a grabbing cursor`, state.active && state.cursor === 'grabbing' && state.capture)
+        }
         await win.mouse.up()
       })
       const drag = await win.evaluate(() => window.__inputDrags)
-      check(`${scale}: actual mouse input produces trusted dragstart/drop/dragend`, ['dragstart', 'drop', 'dragend'].every((kind) => drag.some((event) => event.kind === kind && event.trusted)))
+      const pointer = process.platform === 'win32'
+      check(`${scale}: actual mouse input produces trusted gesture events`, (pointer ? ['pointerdown', 'pointermove', 'pointerup'] : ['dragstart', 'drop', 'dragend']).every((kind) => drag.some((event) => event.kind === kind && event.trusted)) && (!pointer || !drag.some(event => event.kind === 'dragstart')))
       check(`${scale}: dragged Space opens without switching the main window or adding Ribbon`, new URL(sat.url()).searchParams.get('space') === 'agents' && await sat.locator('.rb').count() === 0 && await win.evaluate(() => localStorage.getItem('forsion_tangu_active_space')) === active)
       const show = await app.evaluate(({ BrowserWindow }, url) => {
         const id = BrowserWindow.getAllWindows().find((window) => window.webContents.getURL() === url)?.webContents.id
@@ -122,8 +148,10 @@ async function main() {
       }, sat.url())
       check(`${scale}: detached window remains hidden until its first paint`, show.visibleAtCreation === false && show.paintedAtShow === true)
       const before = await native(sat)
-      const drop = drag.find((event) => event.kind === 'drop')
-      check(`${scale}: window appears at the mouse release point with move accepted`, Math.abs(before.bounds.x - drop.screenX) <= 2 && Math.abs(before.bounds.y - drop.screenY) <= 2 && drag.some((event) => event.kind === 'dragend' && event.effect === 'move'))
+      const drop = drag.find((event) => event.kind === (pointer ? 'pointerup' : 'drop'))
+      const point = pointer ? drop.cursor : drop
+      console.log('NOTE position', JSON.stringify({ point, before }))
+      check(`${scale}: window appears at the release point in native DIP coordinates`, Math.abs(before.bounds.x - point.screenX) <= 2 && Math.abs(before.bounds.y - point.screenY) <= 2)
       check(`${scale}: system title follows the Space name`, before.title === await sat.title() && before.title === 'Agents')
       await sat.screenshot({ path: path.join(OUT, `agents-${scale}.png`) })
       await sat.locator('.dv-new-tab').first().click()
@@ -144,6 +172,99 @@ async function main() {
       await win.mouse.up()
       await win.waitForTimeout(500)
       check(`${scale}: Escape during an in-page mouse drag opens no window`, satellites().length === 0)
+      if (pointer) {
+        const beforeOrder = await win.locator('.rb-top .rb-slot').evaluateAll(els => els.map(el => el.dataset.id))
+        const other = win.locator('.rb-top .rb-slot').nth(beforeOrder.at(-1) === 'space:agents' ? 0 : beforeOrder.length - 1)
+        const destination = await other.boundingBox()
+        await begin()
+        await win.mouse.move(destination.x + destination.width / 2, destination.y + destination.height / 2, { steps: 15 })
+        await win.waitForTimeout(250)
+        const preview = await win.locator('.rb-top .rb-slot').evaluateAll(els => els.map(el => ({ id: el.dataset.id, y: el.getBoundingClientRect().y })).sort((a,b) => a.y-b.y).map(el => el.id))
+        await win.mouse.up()
+        await win.waitForTimeout(250)
+        const afterOrder = await win.locator('.rb-top .rb-slot').evaluateAll(els => els.map(el => el.dataset.id))
+        console.log('NOTE reorder', JSON.stringify({ beforeOrder, preview, afterOrder }))
+        check(`${scale}: pointer reorder commits the visible preview and opens no window`, JSON.stringify(preview) === JSON.stringify(afterOrder) && JSON.stringify(beforeOrder) !== JSON.stringify(afterOrder) && satellites().length === 0)
+        for (const guest of ['iframe', 'webview']) {
+          await win.evaluate(guest => {
+            const el = document.createElement(guest)
+            el.id = 'pointer-guest'; el.style.cssText = 'position:fixed;left:200px;top:180px;width:550px;height:400px;z-index:10000;background:#eee'
+            if (guest === 'iframe') { el.setAttribute('sandbox', ''); el.srcdoc = '<h1>Isolated guest content</h1>' }
+            else el.setAttribute('src', 'data:text/html,<h1>Embedded browser</h1>')
+            document.body.appendChild(el)
+          }, guest)
+          await win.waitForTimeout(400)
+          sat = await open(async () => { await begin(); await win.mouse.move(400, 300, { steps: 15 }); await win.mouse.up() })
+          check(`${scale}: captured release over ${guest} opens one Space`, satellites().length === 1 && new URL(sat.url()).searchParams.get('space') === 'agents')
+          await closeWindow(sat)
+          await begin(); await win.mouse.move(400, 300, { steps: 15 }); await win.keyboard.press('Escape'); await win.mouse.up()
+          await win.waitForTimeout(200)
+          check(`${scale}: Escape over ${guest} cancels and removes drag feedback`, satellites().length === 0 && await win.locator('.rb-pointer-ghost').count() === 0 && !await win.evaluate(() => document.documentElement.classList.contains('rb-pointer-dragging')))
+          await win.locator('#pointer-guest').evaluate(el => el.remove())
+        }
+        for (const x of [-140, (await win.evaluate(() => window.innerWidth)) + 140]) {
+          sat = await open(async () => { await begin(); await win.mouse.move(150, 300, { steps: 8 }); await win.mouse.move(x, 300, { steps: 15 }); await win.mouse.up() })
+          check(`${scale}: capture releases outside ${x < 0 ? 'left' : 'right'} edge`, satellites().length === 1)
+          await closeWindow(sat)
+          await begin(); await win.mouse.move(150, 300, { steps: 8 }); await win.mouse.move(x, 300, { steps: 15 }); await win.keyboard.press('Escape'); await win.mouse.up()
+          await win.waitForTimeout(200)
+          check(`${scale}: Escape outside ${x < 0 ? 'left' : 'right'} edge opens no window`, satellites().length === 0)
+        }
+        await slot.locator('.rb-btn').click()
+        check(`${scale}: ordinary click still switches the Space`, await win.evaluate(() => localStorage.getItem('forsion_tangu_active_space')) === 'agents')
+        const firstSlot = await win.locator('.rb-top .rb-slot').first().boundingBox()
+        await begin(); await win.mouse.move(firstSlot.x + firstSlot.width / 2, firstSlot.y + firstSlot.height / 2, { steps: 12 }); await win.mouse.up()
+        await win.waitForTimeout(250)
+        for (const zoom of [.8, 1.25]) {
+          await win.evaluate(zoom => { document.body.style.zoom = String(zoom); document.documentElement.style.setProperty('--uiz', String(zoom)) }, zoom)
+          await win.waitForTimeout(350) // ResizeObserver may move the last visible item into overflow.
+          await win.bringToFront()
+          const more = win.locator('.rb-more[data-rb-more="top"]')
+          if (await more.count() && await more.getAttribute('aria-expanded') === 'false') await more.click()
+          sat = await open(async () => { await begin(); await win.mouse.move(400, 300, { steps: 12 }); await win.mouse.up() })
+          check(`${scale}: pointer drag preserves application zoom ${zoom}`, satellites().length === 1 && await win.locator('.rb-pointer-shield').count() === 0)
+          await closeWindow(sat)
+        }
+        await win.evaluate(() => { document.body.style.zoom = ''; document.documentElement.style.setProperty('--uiz', '1') })
+        const expandedTop = win.locator('.rb-more[data-rb-more="top"][aria-expanded="true"]')
+        if (await expandedTop.count()) await expandedTop.click()
+        const originalV2 = await win.evaluate(() => {
+          const old = localStorage.getItem('forsion_tangu_ribbon_v2')
+          const v2 = JSON.parse(old || '{}')
+          v2.folders = [...(v2.folders || []), { id: 'folder:pointer-probe', name: 'Pointer probe', zone: 'top', items: [] }]
+          localStorage.setItem('forsion_tangu_ribbon_v2', JSON.stringify(v2))
+          const order = JSON.parse(localStorage.getItem('forsion_tangu_ribbon_order') || '[]')
+          localStorage.setItem('forsion_tangu_ribbon_order', JSON.stringify(['space:agents', 'folder:pointer-probe', ...order.filter(id => id !== 'space:agents')]))
+          return old
+        })
+        await win.reload(); await slot.waitFor(); await win.locator('#tangu-splash').waitFor({ state: 'detached' })
+        const folder = win.locator('.rb-folder[data-rb-folder="folder:pointer-probe"]')
+        const revealFolder = async () => {
+          const more = win.locator('.rb-more[data-rb-more="top"]')
+          if (!await folder.isVisible() && await more.getAttribute('aria-expanded') === 'false') await more.click()
+          await folder.hover()
+        }
+        await revealFolder()
+        const folderBox = await folder.boundingBox()
+        await begin(); await win.mouse.move(folderBox.x + folderBox.width / 2, folderBox.y + folderBox.height / 2, { steps: 12 }); await win.mouse.up()
+        await win.waitForTimeout(250)
+        check(`${scale}: pointer drag into a folder persists membership`, await win.evaluate(() => JSON.parse(localStorage.getItem('forsion_tangu_ribbon_v2')).folders.find(f => f.id === 'folder:pointer-probe').items.includes('space:agents')) && satellites().length === 0)
+        const row = win.locator('.rb-fly-row[data-id="space:agents"]')
+        const beginRow = async () => {
+          await win.bringToFront(); await revealFolder(); await row.waitFor()
+          const box = await row.boundingBox(); await win.mouse.move(box.x + box.width / 2, box.y + box.height / 2); await win.mouse.down()
+        }
+        sat = await open(async () => { await beginRow(); await win.mouse.move(400, 300, { steps: 12 }); await win.mouse.up() })
+        check(`${scale}: pointer tear-off from a folder opens its Space`, satellites().length === 1)
+        await closeWindow(sat)
+        await beginRow()
+        const topBox = await win.locator('.rb-top .rb-slot[data-id^="space:"]').first().boundingBox()
+        await win.mouse.move(topBox.x + topBox.width / 2, topBox.y + topBox.height / 2, { steps: 12 }); await win.mouse.up()
+        await win.waitForTimeout(250)
+        check(`${scale}: pointer drag out of a folder restores the Ribbon item`, await slot.count() === 1 && !await win.evaluate(() => JSON.parse(localStorage.getItem('forsion_tangu_ribbon_v2')).folders.find(f => f.id === 'folder:pointer-probe').items.includes('space:agents')))
+        await win.evaluate(old => { if (old === null) localStorage.removeItem('forsion_tangu_ribbon_v2'); else localStorage.setItem('forsion_tangu_ribbon_v2', old) }, originalV2)
+        await win.reload(); await slot.waitFor(); await win.locator('#tangu-splash').waitFor({ state: 'detached' })
+      }
       const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
       sat = await open(() => slot.locator('.rb-btn').click({ modifiers: [mod] }))
       check(`${scale}: close/reopen restores the edited layout`, JSON.stringify(await layout(sat)) === JSON.stringify(saved))

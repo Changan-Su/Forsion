@@ -1,0 +1,444 @@
+{
+  "reorder": {
+    "before": [
+      "space:tangu",
+      "space:agents",
+      "space:inbox",
+      "space:amadeus",
+      "space:calendar"
+    ],
+    "after": [
+      "space:tangu",
+      "space:inbox",
+      "space:amadeus",
+      "space:calendar",
+      "space:agents"
+    ],
+    "events": [
+      {
+        "kind": "pointermove",
+        "trusted": true,
+        "x": 598,
+        "y": 381.3333435058594,
+        "screenX": 1285.3333740234375,
+        "screenY": 711.3333740234375,
+        "buttons": 0
+      },
+      {
+        "kind": "pointermove",
+        "trusted": true,
+        "x": 21.33333396911621,
+        "y": 126.66667175292969,
+        "screenX": 708.6666870117188,
+        "screenY": 456.66668701171875,
+        "buttons": 0
+      },
+      {
+        "kind": "pointerdown",
+        "trusted": true,
+        "x": 21.33333396911621,
+        "y": 126.66667175292969,
+        "screenX": 708.6666870117188,
+        "screenY": 456.66668701171875,
+        "buttons": 1
+      },
+      {
+        "kind": "gotpointercapture",
+        "trusted": true,
+        "x": 21.33333396911621,
+        "y": 126.66667175292969,
+        "screenX": 708.6666870117188,
+        "screenY": 456.66668701171875,
+        "buttons": 1
+      },
+      {
+        "kind": "pointermove",
+        "trusted": true,
+        "x": 21.33333396911621,
+        "y": 126.66667175292969,
+        "screenX": 708.6666870117188,
+        "screenY": 456.66668701171875,
+        "buttons": 1
+      },
+      {
+        "kind": "pointermove",
+        "trusted": true,
+        "x": 21.33333396911621,
+        "y": 234,
+        "screenX": 708.6666870117188,
+        "screenY": 564,
+        "buttons": 1
+      },
+      {
+        "kind": "pointermove",
+        "trusted": true,
+        "x": 21.33333396911621,
+        "y": 234,
+        "screenX": 708.6666870117188,
+        "screenY": 564,
+        "buttons": 1
+      },
+      {
+        "kind": "pointerup",
+        "trusted": true,
+        "x": 21.33333396911621,
+        "y": 234,
+        "screenX": 708.6666870117188,
+        "screenY": 564,
+        "buttons": 0
+      },
+      {
+        "kind": "lostpointercapture",
+        "trusted": true,
+        "x": 21.33333396911621,
+        "y": 234,
+        "screenX": 708.6666870117188,
+        "screenY": 564,
+        "buttons": 0
+      },
+      {
+        "kind": "pointermove",
+        "trusted": true,
+        "x": 21.33333396911621,
+        "y": 234,
+        "screenX": 708.6666870117188,
+        "screenY": 564,
+        "buttons": 0
+      }
+    ]
+  },
+  "primary": {
+    "events": [
+      {
+        "kind": "pointerdown",
+        "trusted": true,
+        "x": 21.33333396911621,
+        "y": 234.6666717529297,
+        "screenX": 708.6666870117188,
+        "screenY": 564.6666870117188,
+        "buttons": 1
+      },
+      {
+        "kind": "gotpointercapture",
+        "trusted": true,
+        "x": 548.6666870117188,
+        "y": 370,
+        "screenX": 1236,
+        "screenY": 700,
+        "buttons": 1
+      },
+      {
+        "kind": "pointermove",
+        "trusted": true,
+        "x": 548.6666870117188,
+        "y": 370,
+        "screenX": 1236,
+        "screenY": 700,
+        "buttons": 1
+      },
+      {
+        "kind": "pointerup",
+        "trusted": true,
+        "x": 548.6666870117188,
+        "y": 370,
+        "screenX": 1236,
+        "screenY": 700,
+        "buttons": 0
+      },
+      {
+        "kind": "lostpointercapture",
+        "trusted": true,
+        "x": 548.6666870117188,
+        "y": 370,
+        "screenX": 1236,
+        "screenY": 700,
+        "buttons": 0
+      },
+      {
+        "kind": "pointermove",
+        "trusted": true,
+        "x": 548.6666870117188,
+        "y": 370,
+        "screenX": 1236,
+        "screenY": 700,
+        "buttons": 0
+      }
+    ],
+    "native": {
+      "cursor": {
+        "x": 1236,
+        "y": 700
+      },
+      "windows": [
+        {
+          "title": "forsion-desktop",
+          "bounds": {
+            "x": 1236,
+            "y": 700,
+            "width": 1100,
+            "height": 760
+          }
+        },
+        {
+          "title": "Forsion",
+          "bounds": {
+            "x": 680,
+            "y": 300,
+            "width": 1200,
+            "height": 820
+          }
+        }
+      ]
+    }
+  },
+  "secondary": {
+    "events": [
+      {
+        "kind": "pointermove",
+        "trusted": true,
+        "x": 20.80000114440918,
+        "y": 234.40000915527344,
+        "screenX": -1872,
+        "screenY": 654.5999755859375,
+        "buttons": 0
+      },
+      {
+        "kind": "pointerdown",
+        "trusted": true,
+        "x": 20.80000114440918,
+        "y": 234.40000915527344,
+        "screenX": -1872,
+        "screenY": 654.5999755859375,
+        "buttons": 1
+      },
+      {
+        "kind": "gotpointercapture",
+        "trusted": true,
+        "x": 548.7999877929688,
+        "y": 368.8000183105469,
+        "screenX": -1344,
+        "screenY": 789,
+        "buttons": 1
+      },
+      {
+        "kind": "pointermove",
+        "trusted": true,
+        "x": 548.7999877929688,
+        "y": 368.8000183105469,
+        "screenX": -1344,
+        "screenY": 789,
+        "buttons": 1
+      },
+      {
+        "kind": "pointermove",
+        "trusted": true,
+        "x": 548.7999877929688,
+        "y": 368.8000183105469,
+        "screenX": -1344,
+        "screenY": 789,
+        "buttons": 1
+      },
+      {
+        "kind": "pointermove",
+        "trusted": true,
+        "x": 548.7999877929688,
+        "y": 368.8000183105469,
+        "screenX": -1344,
+        "screenY": 789,
+        "buttons": 1
+      },
+      {
+        "kind": "pointerup",
+        "trusted": true,
+        "x": 548.7999877929688,
+        "y": 368.8000183105469,
+        "screenX": -1344,
+        "screenY": 789,
+        "buttons": 0
+      },
+      {
+        "kind": "lostpointercapture",
+        "trusted": true,
+        "x": 548.7999877929688,
+        "y": 368.8000183105469,
+        "screenX": -1344,
+        "screenY": 789,
+        "buttons": 0
+      },
+      {
+        "kind": "pointermove",
+        "trusted": true,
+        "x": 548.7999877929688,
+        "y": 368.8000183105469,
+        "screenX": -1344,
+        "screenY": 789,
+        "buttons": 0
+      }
+    ],
+    "renderer": {
+      "scale": 1.25
+    },
+    "native": {
+      "cursor": {
+        "x": -1344,
+        "y": 789
+      },
+      "windows": [
+        {
+          "title": "forsion-desktop",
+          "bounds": {
+            "x": -1344,
+            "y": 789,
+            "width": 918,
+            "height": 636
+          }
+        },
+        {
+          "title": "Forsion",
+          "bounds": {
+            "x": -1900,
+            "y": 390,
+            "width": 1000,
+            "height": 685
+          }
+        }
+      ]
+    },
+    "presented": {
+      "cursor": {
+        "x": -1344,
+        "y": 789
+      },
+      "windows": [
+        {
+          "title": "Agents",
+          "bounds": {
+            "x": -1344,
+            "y": 789,
+            "width": 1100,
+            "height": 760
+          }
+        },
+        {
+          "title": "Forsion",
+          "bounds": {
+            "x": -1900,
+            "y": 390,
+            "width": 1000,
+            "height": 685
+          }
+        }
+      ]
+    }
+  },
+  "webview": {
+    "events": [
+      {
+        "kind": "pointermove",
+        "trusted": true,
+        "x": 20.80000114440918,
+        "y": 234.40000915527344,
+        "screenX": -1872,
+        "screenY": 654.5999755859375,
+        "buttons": 0
+      },
+      {
+        "kind": "pointerdown",
+        "trusted": true,
+        "x": 20.80000114440918,
+        "y": 234.40000915527344,
+        "screenX": -1872,
+        "screenY": 654.5999755859375,
+        "buttons": 1
+      },
+      {
+        "kind": "gotpointercapture",
+        "trusted": true,
+        "x": 399.20001220703125,
+        "y": 268.8000183105469,
+        "screenX": -1493.5999755859375,
+        "screenY": 689,
+        "buttons": 1
+      },
+      {
+        "kind": "pointermove",
+        "trusted": true,
+        "x": 399.20001220703125,
+        "y": 268.8000183105469,
+        "screenX": -1493.5999755859375,
+        "screenY": 689,
+        "buttons": 1
+      },
+      {
+        "kind": "pointerup",
+        "trusted": true,
+        "x": 399.20001220703125,
+        "y": 268.8000183105469,
+        "screenX": -1493.5999755859375,
+        "screenY": 689,
+        "buttons": 0
+      },
+      {
+        "kind": "lostpointercapture",
+        "trusted": true,
+        "x": 399.20001220703125,
+        "y": 268.8000183105469,
+        "screenX": -1493.5999755859375,
+        "screenY": 689,
+        "buttons": 0
+      }
+    ],
+    "native": {
+      "cursor": {
+        "x": -1494,
+        "y": 689
+      },
+      "windows": [
+        {
+          "title": "forsion-desktop",
+          "bounds": {
+            "x": -1494,
+            "y": 689,
+            "width": 921,
+            "height": 636
+          }
+        },
+        {
+          "title": "Forsion",
+          "bounds": {
+            "x": -1900,
+            "y": 390,
+            "width": 1000,
+            "height": 685
+          }
+        }
+      ]
+    },
+    "presented": {
+      "cursor": {
+        "x": -1494,
+        "y": 689
+      },
+      "windows": [
+        {
+          "title": "Agents",
+          "bounds": {
+            "x": -1494,
+            "y": 689,
+            "width": 1101,
+            "height": 760
+          }
+        },
+        {
+          "title": "Forsion",
+          "bounds": {
+            "x": -1900,
+            "y": 390,
+            "width": 1000,
+            "height": 685
+          }
+        }
+      ]
+    }
+  }
+}

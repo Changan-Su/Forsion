@@ -10,6 +10,10 @@ export interface DetachApi {
   detach(views: ViewRef[], at?: { screenX: number; screenY: number }): void
   /** 把整个 Space 开到它自己的窗口里(一个 Space 一扇,已开着就叫到前面);at 同上。没有 OS 窗口的宿主不提供。 */
   openSpace?(spaceId: string, at?: { screenX: number; screenY: number }): void
+  /** Windows host avoids the native HTML drag loop for Ribbon Spaces. */
+  ribbonPointerDrag?: boolean
+  /** Snapshot OS cursor DIP coordinates at release, including mixed-DPI monitors. */
+  cursorScreenPoint?(): { screenX: number; screenY: number }
   /** 跨窗拖拽:拖拽中实时上报屏幕坐标(节流后调;主进程据此给光标下窗口发落点预览)。 */
   dragUpdate?(screenX: number, screenY: number, view: ViewRef): void
   /** 跨窗拖拽:最终落点路由。返回是否已跨窗处理(true → 源窗应关掉该 panel)。 */

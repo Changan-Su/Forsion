@@ -1398,6 +1398,7 @@ declare global {
       /** 主题请求窗口级材质;system-glass 在 macOS 映射为可取样窗口后方的高透原生 vibrancy。 */
       startupAppearance?: {
         readonly prefersReducedMotion?: boolean
+        readonly softwareRendering?: boolean
         initial: import('../../shared/startupAppearance').StartupAppearance
         update(patch: import('../../shared/startupAppearance').AppearancePatch, clearPlugin?: string): Promise<import('../../shared/startupAppearance').StartupAppearance>
         subscribe(cb: (value: import('../../shared/startupAppearance').StartupAppearance) => void): () => void
@@ -1614,6 +1615,7 @@ declare global {
       detachedReady?(id: string): Promise<Array<{ type: string; params?: Record<string, unknown> }>>
       /** 开一个独立窗承载给定视图(右键「移到新窗口」/拖到空桌面);screen 坐标可选(拖出落点)。 */
       openDetached?(views: Array<{ type: string; params?: Record<string, unknown> }>, at?: { screenX: number; screenY: number }, opts?: { space?: string }): Promise<{ id: string }>
+      cursorScreenPoint?(): { screenX: number; screenY: number }
       /** 开/切换 mini 悬浮卡片。带 sessionId 时定向显示该正式会话,不另建临时会话。 */
       openMini?(opts?: import('../../shared/miniPanel').MiniOpenOptions): void
       /** Open/focus a native Floating Panel window. Undefined on Web/mobile. */

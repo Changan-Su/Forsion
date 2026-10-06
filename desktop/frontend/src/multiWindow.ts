@@ -60,6 +60,8 @@ export function installMultiWindow(): void {
     })
   }
   setDetachApi({
+    ribbonPointerDrag: t.platform === 'win32',
+    cursorScreenPoint: t.cursorScreenPoint,
     detach: (views, at) => { void t.openDetached?.(views, at) },
     // 整个 Space 开到它自己的窗口(Ribbon:右键 / ⌘·Ctrl 点击 / 拖出条外)。那扇窗第一次打开照这个 Space 存着的布局摆
     // (seedSpaceWindowLayout);它此刻正开在本窗的话,现场只在本窗的布局键里(平时切走才存进槽)→ 先存一份,新窗才是眼前这个样子。
