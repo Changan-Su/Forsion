@@ -30,16 +30,17 @@ PASS  S4 改成 5 → 露出 5 个(上限),顺序仍是最近的在上  | {"got"
 PASS  D1 贴着条边松手(24px 以内)不开窗
 PASS  D1b Windows 全零 dragleave 后贴着条边松手:不开窗、不把它误当作拖到窗外
 PASS  D2 拖到条外按 Esc(没有 drop,松手点在本文档里)不开窗
-PASS  D2b 条上的顺序没被这两次动过
+PASS  D2b 取消拖拽没有改变条上的顺序
 PASS  D3 拖到条外松手 → 开出这个 Space 的窗口  | inbox
 PASS  D3b 拖出去不改条上的顺序、主窗也不切走
 PASS  A1 「…」里的用户 Space ⌘ 点击 → 开出它的窗口  | probe-win
 PASS  A2 窗口等它注册上来才挂界面:里面是它自己的布局(固定的 outline),不是回落 Space 的  | ["outline"]
 PASS  A2b 它的窗口同样没有 Ribbon、没动共用的活动键
 PASS  D4 拖到窗口外面松手 → 照样开窗  | inbox
+PASS  D4b 左侧桌面释放不被 Ribbon 的 24px 取消边距吞掉  | inbox
 PASS  H1 主位槽右键:也有「在新窗口中打开」  | ["在新窗口中打开","主页","Tangu","Agents","收件箱","笔记","日历","编码工作室","造物","图像工作室","自动化","Muse","发布","探针空间"]
 PASS  H2 主页窗口里点磁贴 → 那个 Space 开到它自己的窗口  | {"tiles":["Tangu","Agents","收件箱","笔记","日历","编码工作室","全部 Spaces"],"opened":"amadeus"}
 PASS  H2b 主页没卡在退场动效里、主窗也没被切走
 PASS  X1 没这个 Space:窗口不挂界面、说明原因,本窗的布局键没被写过  | {"msg":"这个 Space 还没准备好。它所属的插件可能还在加载，或已被停用、卸载。准备好后这里会自动打开，也可以直接关掉这扇窗。","shell":0,"keys":[]}
 
-38/38 passed
+39/39 passed

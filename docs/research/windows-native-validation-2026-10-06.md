@@ -14,7 +14,7 @@
 
 **系统动画关闭仍播放开屏。** Electron 主进程的 `systemPreferences.getAnimationSettings().prefersReducedMotion` 为 `true`，渲染器的媒体查询却仍为 `false`。preload 现在向初始开屏和设置预览传递原生偏好，与媒体查询合并；完整静止画面不播放内部动画，应用准备好时立即移除开屏。本机关闭系统动画后的亮暗冷启动记录均为 `mediaReduce:false, nativeReduce:true, reduce:true, animations:0`，静止画面、诗句和退场通过 14 项检查。这项系统偏好单独读取，不写入用户素材配置。
 
-**快速拖拽在 Ribbon 边缘误开窗。** Windows 原生输入先发出坐标全为零的 `dragleave`，随后在边缘取消区发出 `dragend`；旧代码把留下的 `gone` 状态当成窗外释放。现在最终落点处于 Ribbon 或浮层周围的取消区时不执行补开窗。原生 125% 输入复测只留下主窗，拖到主区仍开窗。新增全零 `dragleave` 回归；原始事件和窗口结果见 [记录](assets/windows-native-2026-10-06/drag-native-125.json)。
+**快速拖拽在 Ribbon 边缘误开窗。** Windows 原生输入先发出坐标全为零的 `dragleave`，随后在边缘取消区发出 `dragend`；旧代码把留下的 `gone` 状态当成窗外释放。现在最终落点在视口内、处于 Ribbon 或浮层周围的取消区时不执行补开窗；真正的窗外坐标仍优先补开，包含距离 Ribbon 左侧不足 24px 的桌面落点。原生 125% 输入复测只留下主窗，拖到主区仍开窗。新增全零 `dragleave` 与左侧桌面边界契约回归；原始事件和窗口结果见 [记录](assets/windows-native-2026-10-06/drag-native-125.json)。
 
 ## #6 开屏逐项结果
 
@@ -52,12 +52,12 @@
 | 系统标题栏、无 Ribbon、侧栏与底栏 | 原生 125% 操作验证 Agents 标题、独立窗口、左右侧栏及底栏开合。附 [渲染器截图](assets/windows-native-2026-10-06/space-native-125.png)，该图片不包含原生标题栏。 |
 | 关窗重开保留布局 | 原生操作改变侧栏 / 底栏后，通过标题栏关闭并重开，面板集合和侧栏状态保持。JSON 属性次序变化不视为布局变化；前后记录在拖拽 JSON。 |
 | 应用退出重启恢复 Space、大小位置及布局 | Electron 输入台架在 100% / 125% / 150% 渲染比下全部通过；立即退出和用户主动关闭也覆盖。详见 [先前报告](windows-space-validation-2026-10-05.md)。 |
-| 原生快速拖到主区 | 本机系统 125% 通过。释放后 Space 原生窗口初始位置 `(1492,845)` 与 `screen.getCursorScreenPoint()` 一致。该手势只产生 dragstart / dragleave / dragend，走补开窗路径。 |
-| 原生快速释放于 20px 边缘取消区 | 复现后修复，系统 125% 通过；新增合成回归通过。 |
+| 原生快速拖到主区 | 本机系统 125% / 150% 通过。释放后 Space 原生窗口初始位置分别为 `(1492,845)`、`(1236,700)`，均与 `screen.getCursorScreenPoint()` 一致。该手势只产生 dragstart / dragleave / dragend，走补开窗路径。[150% 事件及窗口记录](assets/windows-native-2026-10-06/drag-native-150.json)、[渲染器截图](assets/windows-native-2026-10-06/space-native-150.png)；原生标题栏另确认显示 Agents。 |
+| 原生快速释放于 20px 边缘取消区 | 复现后修复，系统 125% / 150% 通过；新增合成回归通过。 |
 | 条内重排、主区接受 move、Esc 取消 | 浏览器输入 / 合成契约检查通过。**本轮原生手势工具未产生 dragover/drop，也无法按住鼠标期间再按 Esc，未完成原生验收。** |
 | 桌面、另一屏释放与实际系统指针 | **未完成。** 原生工具拒绝窗外落点；跨屏窗口截图只返回主屏可见部分，无法据此操作副屏 Ribbon。未将合成窗外事件当作系统拖放证据。 |
 | 内置浏览器 webview / 插件 iframe 原生落点 | **未完成。** 现有自动化覆盖补开窗契约，未用原生手势验证目标视图。 |
-| 实际 125% / 150% / 混合 DPI 拖拽位置 | 原生 125% 主区落点通过；三档浏览器输入落点通过；**跨屏原生拖放仍需补验**。开屏跨屏启动结果不用于替代拖放结果。 |
+| 实际 125% / 150% / 混合 DPI 拖拽位置 | 原生 125% / 150% 主区落点通过；三档浏览器输入落点通过；**跨屏原生拖放仍需补验**。开屏跨屏启动结果不用于替代拖放结果。 |
 | 最近隐藏 Space 新到旧、淡色、缩矮不重叠、设置 1 / 5 / 不显示 | Windows 真实多窗口、Ribbon 检查通过，先前报告附高低窗口与设置截图。 |
 
 ## 自动化结果与复现
@@ -68,7 +68,7 @@
 | --- | --- |
 | `npm run check:splash` | 90/90；新增三端原生偏好桥接与经典 / 自定义动画停止检查 |
 | `npx vitest run electron/startupAppearance.test.ts` | 4/4 |
-| `npm run e2e:spacewindow` | 38/38 |
+| `npm run e2e:spacewindow` | 39/39 |
 | `npm run e2e:spacewindow-input` | 36/36，浏览器调试协议输入，三档渲染比 |
 | `npm run e2e:ribbon` | 70/70 |
 | `node scripts/startup-appearance.e2e.cjs` | 48/48 |

@@ -542,7 +542,7 @@ export function Ribbon() {
       const frame = !outside && /^(IFRAME|WEBVIEW)$/.test(document.elementFromPoint(x, y)?.tagName ?? '')
       // Windows can send a zero-coordinate dragleave before a quick native release.
       // Its stale `gone` flag must never override the final Ribbon cancellation zone.
-      if (!nearBar(x, y) && (st.gone || outside || frame)) getDetachApi()?.openSpace?.(tearId, e.screenX || e.screenY ? { screenX: e.screenX, screenY: e.screenY } : undefined)
+      if (outside || (!nearBar(x, y) && (st.gone || frame))) getDetachApi()?.openSpace?.(tearId, e.screenX || e.screenY ? { screenX: e.screenX, screenY: e.screenY } : undefined)
     }
     endDrag()
   }

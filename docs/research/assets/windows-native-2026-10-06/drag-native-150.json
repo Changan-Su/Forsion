@@ -1,0 +1,126 @@
+{
+  "near": {
+    "events": [
+      {
+        "kind": "dragstart",
+        "trusted": true,
+        "clientX": 21,
+        "clientY": 126,
+        "screenX": 708,
+        "screenY": 456,
+        "effect": "none"
+      },
+      {
+        "kind": "dragleave",
+        "trusted": true,
+        "clientX": 0,
+        "clientY": 0,
+        "screenX": 0,
+        "screenY": 0,
+        "effect": "none"
+      },
+      {
+        "kind": "dragend",
+        "trusted": true,
+        "clientX": 59,
+        "clientY": 370,
+        "screenX": 746,
+        "screenY": 700,
+        "effect": "none"
+      }
+    ],
+    "native": {
+      "windows": [
+        {
+          "title": "Forsion",
+          "bounds": {
+            "x": 680,
+            "y": 300,
+            "width": 1200,
+            "height": 820
+          }
+        }
+      ],
+      "cursor": {
+        "x": 746,
+        "y": 700
+      }
+    }
+  },
+  "drop": {
+    "events": [
+      {
+        "kind": "dragstart",
+        "trusted": true,
+        "clientX": 21,
+        "clientY": 126,
+        "screenX": 708,
+        "screenY": 456,
+        "effect": "none"
+      },
+      {
+        "kind": "dragleave",
+        "trusted": true,
+        "clientX": 0,
+        "clientY": 0,
+        "screenX": 0,
+        "screenY": 0,
+        "effect": "none"
+      },
+      {
+        "kind": "dragend",
+        "trusted": true,
+        "clientX": 549,
+        "clientY": 370,
+        "screenX": 1236,
+        "screenY": 700,
+        "effect": "none"
+      }
+    ],
+    "native": {
+      "windows": [
+        {
+          "title": "Agents",
+          "bounds": {
+            "x": 1236,
+            "y": 700,
+            "width": 1100,
+            "height": 760
+          }
+        },
+        {
+          "title": "Forsion",
+          "bounds": {
+            "x": 680,
+            "y": 300,
+            "width": 1200,
+            "height": 820
+          }
+        }
+      ],
+      "cursor": {
+        "x": 1236,
+        "y": 700
+      },
+      "startup": [
+        {
+          "id": 1,
+          "createdVisible": false,
+          "ready": true,
+          "shownAfterReady": true
+        },
+        {
+          "id": 2,
+          "createdVisible": false,
+          "ready": true,
+          "shownAfterReady": true
+        }
+      ]
+    },
+    "renderer": {
+      "scale": 1.5,
+      "ribbon": 0,
+      "panels": 3
+    }
+  }
+}

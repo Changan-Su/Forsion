@@ -278,6 +278,9 @@ async function main() {
     if (wD) { await wD.close(); await sleep(600) }
     const wOut = await expectWindow(() => dragOut(D, { over: { x: 600, y: 400 }, drop: false, leaveAtEdge: true, end: { x: 5000, y: 300 } }))
     check('D4 拖到窗口外面松手 → 照样开窗', !!wOut && spaceOf(wOut) === sid(D), wOut ? spaceOf(wOut) : null)
+    if (wOut) { await wOut.close(); await sleep(600) }
+    const wLeft = await expectWindow(() => dragOut(D, { over: null, drop: false, leaveAtEdge: true, end: { x: -10, y: 300 } }))
+    check('D4b 左侧桌面释放不被 Ribbon 的 24px 取消边距吞掉', !!wLeft && spaceOf(wLeft) === sid(D), wLeft ? spaceOf(wLeft) : null)
 
     // ───────── H 主页开在自己的窗口里 ─────────
     const homeBtn = win.locator('.rb-home .rb-btn').first()
