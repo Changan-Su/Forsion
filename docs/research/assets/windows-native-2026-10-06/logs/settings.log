@@ -1,0 +1,50 @@
+PASS disk plugin contributes a selectable preset
+PASS new installations still use the tree icon despite available built-in artwork
+PASS the built page is stamped with the app version
+PASS the preview shows that version under the wordmark
+PASS default preview paints the tree shadow inside the sandboxed frame and leaves on the first frame
+PASS the classic logo is a built-in scene stored without an image
+PASS classic preview shows the original animated tree mark
+PASS choosing Default returns to the tree shadow
+PASS compressed Arioso is selectable as a built-in icon and startup image without plugin ownership
+PASS built-in icon has real transparent rounded corners at 256px
+PASS built-in option appears once in its own localized group
+PASS selection persisted as PNG icon and animated SVG startup artwork
+PASS settings window updates the main-window brand without reload
+PASS late renderer subscribers receive updates buffered by real preload
+PASS startup settings occupy the full appearance column after fonts
+PASS compact settings keep upload beside its picker without squeezing its icon
+PASS startup switch works from the keyboard and persists
+PASS native icon switch persists independently
+PASS format and platform details remain keyboard accessible with a visible focus ring
+PASS preview runs the actual startup runtime in an isolated frame
+PASS decode failure is specific and preserves the selected icon
+PASS unsupported formats and source size failures explain the cause
+PASS generic MIME images decode without replacing the previous selection
+PASS cancel leaves the previous icon untouched
+PASS save failure keeps the draft open and preserves the old icon
+PASS confirmed upload uses the persisted pipeline after retry
+PASS image larger than the old 1.4 MB limit is automatically reduced
+PASS large non-square images support zoom and drag with a live crop
+PASS crop position supports keyboard adjustments
+PASS import preview and thumbnail show transparent icon corners before saving
+PASS saved 256px square pixels match the crop preview
+PASS uploaded crop stores transparent corners in the PNG itself
+PASS image/png with empty MIME imports in fit mode
+PASS fit preserves transparent margins on portrait images
+PASS image/jpeg with empty MIME imports in fit mode
+PASS image/webp with empty MIME imports in fit mode
+PASS extreme dimensions report their limit without changing the selection
+PASS large startup artwork is automatically compressed with a static poster
+Compression: 4645565 source bytes -> 417886 startup bytes
+PASS transparent animation preview does not reveal a frozen frame underneath
+PASS animated originals stay animated in fit mode and disclose static crop output
+PASS English narrow settings do not overflow horizontally
+PASS crop dialog stays within the narrow window
+PASS cold restart has the cached plugin appearance in preload
+PASS cold restart retains the selected plugin choices
+PASS disabling the real plugin clears its selected icon and artwork
+PASS removed plugin restores default artwork on discovery
+PASS built-in choices persist across restart after the sample plugin is removed
+PASS restore defaults persists the full default tree appearance
+48 checks passed; screenshots: C:\Users\Dream\.codex\worktrees\windows-space-validation\Forsion\desktop\outputs\startup-appearance

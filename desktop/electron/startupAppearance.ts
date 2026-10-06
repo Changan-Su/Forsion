@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, nativeImage } from 'electron'
+import { app, BrowserWindow, ipcMain, nativeImage, systemPreferences } from 'electron'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { createSerialQueue, writePrivateJson } from './configWrite'
@@ -41,6 +41,9 @@ export async function registerStartupAppearance(isTrusted: (e: Electron.IpcMainI
   })
   // Read-only public visual data, also available in preload before its page has a URL.
   ipcMain.on('appearance:initial', (event) => { event.returnValue = state })
+  ipcMain.on('appearance:reducedMotion', (event) => {
+    event.returnValue = systemPreferences.getAnimationSettings().prefersReducedMotion
+  })
   const serialize = createSerialQueue()
   ipcMain.handle('appearance:update', (event, patch, clearPlugin?: string) => {
     if (!isTrusted(event)) throw new Error('Untrusted appearance request')

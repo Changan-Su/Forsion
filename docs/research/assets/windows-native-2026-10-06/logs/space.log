@@ -1,0 +1,45 @@
+
+> forsion-desktop@2.13.0 e2e:spacewindow
+> node scripts/space-window.e2e.cjs
+
+上区露出的 Space: space:tangu space:agents space:inbox space:amadeus space:calendar
+PASS  R1 没切过 Space:中间不露东西  | []
+PASS  R2 切过条上露着的 A → B → C:中间照字面列 = C、B、A(最近的在上,当前的也列)  | ["space:inbox","space:agents","space:tangu"]
+PASS  R2a 当前 Space 在条上、中间各亮一处
+PASS  R2b 进过「…」里的 5 个之后:中间 = 最近的 3 个,最近的在上  | {"got":["space:muse","space:automation","space:image-studio"],"want":["space:muse","space:automation","space:image-studio"]}
+PASS  R2c 当前 Space 不在条上露着 → 它在中间亮着(唯一一处)
+PASS  R2d 再切回条上露着的 C:它排到中间第一个,后面两个顺延  | ["space:inbox","space:muse","space:automation"]
+PASS  R3 最近使用的图标整个落在两区之间(不压上区、不压命令区)  | {"top":{"top":76,"bottom":324},"bottom":{"top":653.3333740234375,"bottom":901.3333740234375},"slots":[{"top":436.66668701171875,"bottom":468.66668701171875},{"top":472.66668701171875,"bottom":504.66668701171875},{"top":508.66668701171875,"bottom":540.6666870117188}]}
+PASS  R4 窗口越矮露得越少(不增),每一档都不压到两区  | [{"h":820,"n":3,"clear":true},{"h":760,"n":1,"clear":true},{"h":700,"n":0,"clear":true},{"h":640,"n":0,"clear":true},{"h":600,"n":0,"clear":true}]
+PASS  R5 矮到放不下 → 一个不露  | {"h":600,"n":0,"clear":true}
+PASS  R6 回高了 → 3 个都回来  | ["space:inbox","space:muse","space:automation"]
+PASS  W1 ⌘/Ctrl+点击 Space 图标 → 开出这个 Space 的窗口  | ?window=detached&id=sp_tangu&ui=desktop&space=tangu
+PASS  W1b 主窗没跟着切走(⌘ 点击不是切换)  | {"before":"inbox","after":"inbox"}
+PASS  W2 Space 窗口没有 Ribbon
+PASS  W2b 窗口摆的是这个 Space 存着的布局(含多开的那张),不是默认布局  | {"slot":["chat","launcher","workspace"],"own":["chat","launcher","workspace"]}
+PASS  W2c Space 窗口里记的活动 Space = 它自己
+PASS  W2d 开窗没动共用的活动键  | inbox
+PASS  W3 右键 Space 图标:菜单里有「在新窗口中打开」  | ["在新窗口中打开"]
+PASS  W3b 已经开着的 Space 再开 = 叫到前面,不多开一扇  | ["tangu"]
+PASS  W3c 右键另一个 Space → 开出它的窗口  | agents
+PASS  W3d 中间的最近使用图标右键也是这一项
+PASS  S1 设置 → 外观:有「Ribbon 中间显示最近使用的 Space」,档位 = 不显示 / 1…5  | ["不显示","1","2","3","4","5"]
+PASS  S2 设置里改成 1 → 主窗当场只露最近的 1 个  | ["space:inbox"]
+PASS  S3 改成不显示 → 中间一个不露  | []
+PASS  S4 改成 5 → 露出 5 个(上限),顺序仍是最近的在上  | {"got":["space:inbox","space:muse","space:automation","space:image-studio","space:artificial"],"want":["space:inbox","space:muse","space:automation","space:image-studio","space:artificial"]}
+PASS  D1 贴着条边松手(24px 以内)不开窗
+PASS  D1b Windows 全零 dragleave 后贴着条边松手:不开窗、不把它误当作拖到窗外
+PASS  D2 拖到条外按 Esc(没有 drop,松手点在本文档里)不开窗
+PASS  D2b 条上的顺序没被这两次动过
+PASS  D3 拖到条外松手 → 开出这个 Space 的窗口  | inbox
+PASS  D3b 拖出去不改条上的顺序、主窗也不切走
+PASS  A1 「…」里的用户 Space ⌘ 点击 → 开出它的窗口  | probe-win
+PASS  A2 窗口等它注册上来才挂界面:里面是它自己的布局(固定的 outline),不是回落 Space 的  | ["outline"]
+PASS  A2b 它的窗口同样没有 Ribbon、没动共用的活动键
+PASS  D4 拖到窗口外面松手 → 照样开窗  | inbox
+PASS  H1 主位槽右键:也有「在新窗口中打开」  | ["在新窗口中打开","主页","Tangu","Agents","收件箱","笔记","日历","编码工作室","造物","图像工作室","自动化","Muse","发布","探针空间"]
+PASS  H2 主页窗口里点磁贴 → 那个 Space 开到它自己的窗口  | {"tiles":["Tangu","Agents","收件箱","笔记","日历","编码工作室","全部 Spaces"],"opened":"amadeus"}
+PASS  H2b 主页没卡在退场动效里、主窗也没被切走
+PASS  X1 没这个 Space:窗口不挂界面、说明原因,本窗的布局键没被写过  | {"msg":"这个 Space 还没准备好。它所属的插件可能还在加载，或已被停用、卸载。准备好后这里会自动打开，也可以直接关掉这扇窗。","shell":0,"keys":[]}
+
+38/38 passed

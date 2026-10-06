@@ -1,0 +1,33 @@
+
+> forsion-desktop@2.13.0 probe:startup-windows
+> node scripts/startup-windows.probe.cjs
+
+PASS light-1: hidden at creation, shown only after first paint
+PASS light-1: first visible frame has the selected background
+PASS light-1: tree shadow and verse fit at requested DPI
+PASS light-1: splash exits
+PASS light-1.25: hidden at creation, shown only after first paint
+PASS light-1.25: first visible frame has the selected background
+PASS light-1.25: tree shadow and verse fit at requested DPI
+PASS light-1.25: splash exits
+PASS light-1.5: hidden at creation, shown only after first paint
+PASS light-1.5: first visible frame has the selected background
+PASS light-1.5: tree shadow and verse fit at requested DPI
+PASS light-1.5: splash exits
+PASS light: emulated reduced motion paints a complete still scene
+PASS light: reduced-motion splash exits
+PASS dark-1: hidden at creation, shown only after first paint
+PASS dark-1: first visible frame has the selected background
+PASS dark-1: tree shadow and verse fit at requested DPI
+PASS dark-1: splash exits
+PASS dark-1.25: hidden at creation, shown only after first paint
+PASS dark-1.25: first visible frame has the selected background
+PASS dark-1.25: tree shadow and verse fit at requested DPI
+PASS dark-1.25: splash exits
+PASS dark-1.5: hidden at creation, shown only after first paint
+PASS dark-1.5: first visible frame has the selected background
+PASS dark-1.5: tree shadow and verse fit at requested DPI
+PASS dark-1.5: splash exits
+PASS dark: emulated reduced motion paints a complete still scene
+PASS dark: reduced-motion splash exits
+28 checks passed; screenshots: C:\Users\Dream\.codex\worktrees\windows-space-validation\Forsion\desktop\outputs\windows-startup
