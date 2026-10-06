@@ -76,11 +76,12 @@
 .rb-bottom { flex-shrink: 0; margin-top: auto; }
 /* 中间那段空当里的「最近使用的 Space」(10-05):吃掉两区之间剩下的高度,图标在里面垂直居中 —— 离上下两区都留着距离,
    读作单独的一小撮,不像哪一区的延伸。露几个由 Ribbon 按剩余槽数算好了(不够就不渲染这一组),这里不裁。
-   比两区的图标淡一档:它是「顺手回去」的快捷入口,不是用户摆在条上的东西;悬停 / 当前 Space 回到正常。 */
+   比两区的图标淡一档:它是「顺手回去」的快捷入口,不是用户摆在条上的东西;悬停回到正常。
+   当前 Space 在这一组里不另外标(10-06 用户定):不亮、也不回到全亮,「现在在哪」只由条上那一处表达(见下面 .rb-space.on)。 */
 .rb-recent { flex: 1 1 0; min-height: 0; justify-content: center; }
 .rb-recent-slot { -webkit-app-region: no-drag; display: flex; justify-content: center; }
 .rb-recent .rb-btn { opacity: 0.6; transition: opacity var(--duration-fast, 0.15s) var(--ease-out, ease); }
-.rb-recent .rb-btn:hover, .rb-recent .rb-btn:focus-visible, .rb-recent .rb-btn.on { opacity: 1; }
+.rb-recent .rb-btn:hover, .rb-recent .rb-btn:focus-visible { opacity: 1; }
 .rb-expanded .rb-recent { padding: 0 8px; }
 .rb-expanded .rb-recent-slot { width: 100%; justify-content: stretch; }
 /* 滚轮翻看的滑动框(10-02):框只露 n 格高,里面整区一列按窗口起点 translateY。overflow:clip 不建滚动容器
@@ -102,9 +103,10 @@
 .rb-plus:hover { opacity: 1; }
 /* 收纳夹/「…」作为拖入目标时的高亮(整钮描边,区别于槽位间的插入线)。 */
 .rb-btn.drag-into { background: var(--accent-light, var(--overlay-light, rgba(127, 127, 127, 0.18))); box-shadow: inset 0 0 0 1.5px var(--accent-ink); color: var(--accent-ink, var(--accent, var(--text))); }
-/* Space 图标 = 顶部 ribbon 项(可拖动改序,排在折叠钮之下、商店之上):当前空间高亮。 */
-.rb-space.on { background: var(--accent-light, var(--overlay-light, rgba(127, 127, 127, 0.12))); color: var(--accent-ink, var(--accent, var(--text))); }
-.rb-space.on:hover { color: var(--accent-ink, var(--accent, var(--text))); }
+/* Space 图标 = 顶部 ribbon 项(可拖动改序,排在折叠钮之下、商店之上):当前空间高亮。
+   「最近使用」那一组里的同一个图标不吃这两条(在源头排除,不另写覆盖:悬停等状态照普通按钮走)。 */
+.rb-space.on:not(.rb-recent .rb-space) { background: var(--accent-light, var(--overlay-light, rgba(127, 127, 127, 0.12))); color: var(--accent-ink, var(--accent, var(--text))); }
+.rb-space.on:not(.rb-recent .rb-space):hover { color: var(--accent-ink, var(--accent, var(--text))); }
 /* 收件箱未读角标(数字胶囊;模板源自 base.css .ribbon-account.expired 红点)。 */
 .rb-space { position: relative; }
 .rb-badge {
