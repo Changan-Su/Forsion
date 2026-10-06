@@ -67,6 +67,17 @@ describe('authFetch opt-in timeout × response body', () => {
     expect(await settle(r.json(), 1000)).toBe('rejected:TimeoutError')
   })
 
+  // 网页版 2.12.0–2.13.0:账号层把响应的读取方法锁成不可再定义,这里再包一层就抛「Cannot redefine property: json」,
+  // 连接探测(带 15s 超时)因此必败、输入框一直是「先在设置里连接后端」。
+  it('a response whose read methods the host locked still resolves (never "Cannot redefine property")', async () => {
+    const locked = new Response('{"ok":true}')
+    const read = locked.json.bind(locked)
+    Object.defineProperty(locked, 'json', { value: () => read() })
+    vi.stubGlobal('fetch', async () => locked)
+    const r = await authFetch('http://engine.test/health', undefined, { timeoutMs: 5000 })
+    expect(await r.json()).toEqual({ ok: true })
+  })
+
   it('request() callers that opted in fail on time too (getProjectSettings)', async () => {
     vi.stubGlobal('fetch', stalledBody())
     const cfg = { backendUrl: 'http://engine.test', token: 't' } as TanguDesktopConfig
