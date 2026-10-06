@@ -3,6 +3,7 @@
  *
  * 钉的都是台架外够不着的那一半:
  *  R  最近使用:切过的 Space 按「最近的在上」排进中间那段空当,**照字面列**(10-05 用户定:当前的、已经露在条上的也照列);
+ *     当前 Space 在中间那组里不标亮(10-06 用户定):画出来与旁边的最近项一样,亮的只有条上那一处。
  *     个数跟设置走(设置浮窗里改 → 主窗靠 storage 事件跟上);窗口矮了就减到没有,回高了再出来;任何高度下都不压到上下两区。
  *  W  开窗三条路(⌘/Ctrl+点击、右键菜单、拖出条外)都开出 `?window=detached&space=<id>` 的窗;一个 Space 一扇(再触发 = 叫到前面);
  *     那扇窗没有 Ribbon、摆的是这个 Space 存着的布局(不是默认布局);主窗的活动 Space 与共用的活动键不被它改掉。
@@ -71,6 +72,9 @@ async function main() {
 
     const topSpaces = () => win.$$eval('.rb-top .rb-slot', (els) => els.map((e) => e.dataset.id).filter((id) => id && id.startsWith('space:')))
     const recents = () => win.$$eval('.rb-recent .rb-recent-slot', (els) => els.map((e) => e.dataset.recentId))
+    // 一个按钮此刻画出来的样子(底色 / 字色 / 透明度)。量之前把鼠标挪出图标条并等过渡走完:悬停会让中间那组的按钮回到全亮。
+    const look = async (sel) => { await win.mouse.move(640, 420); await win.waitForTimeout(350); return win.$eval(sel, (e) => { const c = getComputedStyle(e); return `${c.backgroundColor}|${c.color}|${c.opacity}` }) }
+    const recentBtn = (id) => `.rb-recent-slot[data-recent-id="${id}"] .rb-space`
     const activeKey = (page) => page.evaluate(() => localStorage.getItem('forsion_tangu_active_space'))
     const clickSpace = async (rid, mods) => {
       await win.locator(`.rb-top .rb-slot[data-id="${rid}"] .rb-btn`).click(mods ? { modifiers: mods } : undefined)
@@ -120,7 +124,9 @@ async function main() {
     await clickSpace(B)
     await clickSpace(C)
     check('R2 切过条上露着的 A → B → C:中间照字面列 = C、B、A(最近的在上,当前的也列)', (await recents()).join() === [C, B, A].join(), await recents())
-    check('R2a 当前 Space 在条上、中间各亮一处', (await win.locator('.rb-space.on').count()) === 2 && (await win.locator(`.rb-recent-slot[data-recent-id="${C}"] .rb-space.on`).count()) === 1)
+    // 10-06 用户定:当前 Space 在中间那组里不标 —— 画出来与旁边不是当前的那个一模一样(不亮、也不回到全亮),亮的只有条上那一处。
+    const onBar = await look('.rb-top .rb-space.on'), midCur = await look(recentBtn(C)), midOther = await look(recentBtn(B))
+    check('R2a 当前 Space 只在条上亮;中间那一处与旁边的最近项画得一样', midCur === midOther && onBar !== midCur && !/rgba\(0, 0, 0, 0\)|transparent/.test(onBar.split('|')[0]), { onBar, midCur, midOther })
     // 排在「…」里的:展开上区挨个进一遍(点条上的按钮不收起),再收回
     await win.locator('.rb-top .rb-more').click()
     await win.waitForTimeout(500)
@@ -132,7 +138,7 @@ async function main() {
     const H = [...hidden].reverse() // 最近的在前
     let rc = await recents()
     check('R2b 进过「…」里的 5 个之后:中间 = 最近的 3 个,最近的在上', rc.join() === H.slice(0, 3).join(), { got: rc, want: H.slice(0, 3) })
-    check('R2c 当前 Space 不在条上露着 → 它在中间亮着(唯一一处)', (await win.locator('.rb-space.on').count()) === 1 && (await win.locator(`.rb-recent-slot[data-recent-id="${H[0]}"] .rb-space.on`).count()) === 1)
+    check('R2c 当前 Space 不在条上露着 → 中间那一处照样不亮(与旁边的最近项画得一样)', (await look(recentBtn(H[0]))) === (await look(recentBtn(H[1]))), { cur: await look(recentBtn(H[0])), other: await look(recentBtn(H[1])) })
     await clickSpace(C)
     rc = await recents()
     const M = [C, ...H] // 此刻的「最近使用」:C 最近,后面是「…」里进过的那 5 个
