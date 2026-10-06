@@ -53,7 +53,7 @@ async function fixture(id: string, options: FixtureOptions = {}): Promise<string
   await writeFile(join(dir, 'backend.mjs'), `
     import { appendFile } from 'node:fs/promises';
     import { join } from 'node:path';
-    import { isMainThread } from 'node:worker_threads';
+    import { isMainThread, threadId } from 'node:worker_threads';
     const privateBackendValue = ${JSON.stringify(PRIVATE)};
     export default (ctx) => {
       const event = (kind) => appendFile(ctx.config.eventLog || join(ctx.dataDir, 'events'), ${JSON.stringify(id)} + ':' + kind + '\\n');
@@ -75,7 +75,7 @@ async function fixture(id: string, options: FixtureOptions = {}): Promise<string
           req.once('end', () => {
             res.setHeader('Content-Type', 'application/json');
             res.end(JSON.stringify({ plugin: ${JSON.stringify(id)}, version: ${JSON.stringify(version)},
-              method: req.method, url: req.url, body, pid: process.pid, isMainThread,
+              method: req.method, url: req.url, body, pid: process.pid, isMainThread, threadId,
               unitPort: process.env.PORT, unitOrigin: process.env.UNIT_HTTP_ORIGIN,
               configured: ctx.config.secret === privateBackendValue,
               envConfigured: process.env.UNIT_RUNTIME_TEST_SECRET === privateBackendValue }));
@@ -83,6 +83,40 @@ async function fixture(id: string, options: FixtureOptions = {}): Promise<string
         }
       };
     };
+  `)
+  return dir
+}
+
+// This is a DB-free business package, not the production Server's Bluebird module.
+async function bluebirdFixture(version: string, failStart = false): Promise<string> {
+  const dir = await fixture('bluebird-fixture', { version, requires: ['server-fixture'], ui: false })
+  await writeFile(join(dir, 'service.mjs'), `
+    export const failStart = ${failStart};
+    export function listFolders() {
+      return { serviceVersion: ${JSON.stringify(version)}, folders: [{ id: 'fixture-folder', title: 'Bluebird fixture' }] };
+    }
+  `)
+  await writeFile(join(dir, 'backend.mjs'), `
+    import { appendFile } from 'node:fs/promises';
+    import { isMainThread, threadId } from 'node:worker_threads';
+    import { failStart, listFolders } from './service.mjs';
+    export default (ctx) => ({
+      mounts: ['/api/bluebird'],
+      async start() {
+        // Probe through the real Unit listener while this worker is still activating.
+        const origin = process.env.UNIT_HTTP_ORIGIN;
+        const server = await fetch(origin + '/api/unrelated');
+        const account = await fetch(origin + '/admin/unit/account', { headers: { Authorization: 'Bearer alice' } });
+        await appendFile(ctx.config.probeLog, JSON.stringify({ serviceVersion: listFolders().serviceVersion,
+          serverStatus: server.status, server: await server.json(), accountStatus: account.status,
+          account: await account.json(), pid: process.pid, threadId }) + '\\n');
+        if (failStart) throw new Error('Rejected business fixture activation');
+      },
+      handle(req, res) {
+        res.setHeader('Content-Type', 'application/json');
+        res.end(JSON.stringify({ plugin: 'bluebird-fixture', ...listFolders(), pid: process.pid, isMainThread, threadId }));
+      }
+    });
   `)
   return dir
 }
@@ -321,6 +355,66 @@ describe('composed Unit package lifecycle', () => {
       expect(await get(app, '/api/version').then((r) => r.json())).toMatchObject({ version: '2.0.1' })
       expect(await metadata(app)).toEqual(identity)
     } finally { await close(app) }
+  })
+
+  it('updates an imported business service and rolls back failed activation without restarting its Server dependency', async () => {
+    const eventLog = join(root, `server-update-${++sequence}.log`)
+    const probeLog = join(root, `business-update-${sequence}.jsonl`)
+    const server = await fixture('server-fixture', { mounts: ['/'], account: true, ui: false })
+    const original = await bluebirdFixture('1.0.0')
+    const replacement = await bluebirdFixture('2.0.0')
+    const rejected = await bluebirdFixture('3.0.0', true)
+    const app = await unit([{ path: original, config: { probeLog } }, { path: server, config: { eventLog } }])
+    try {
+      const identity = await metadata(app)
+      const provider = await get(app, '/api/unrelated').then((r) => r.json())
+      expect(provider).toMatchObject({ plugin: 'server-fixture', pid: process.pid, isMainThread: false })
+      expect(provider.threadId).toBeGreaterThan(0)
+      expect(await get(app, '/api/bluebirdish').then((r) => r.json())).toEqual({ ...provider, url: '/api/bluebirdish' })
+      const assertVersion = async (serviceVersion: string) => {
+        const business = await get(app, '/api/bluebird/folders').then((r) => r.json())
+        expect(business).toMatchObject({ plugin: 'bluebird-fixture', serviceVersion, pid: process.pid,
+          isMainThread: false, folders: [{ id: 'fixture-folder', title: 'Bluebird fixture' }] })
+        expect(business.threadId).not.toBe(provider.threadId)
+        expect(await get(app, '/api/unrelated').then((r) => r.json())).toEqual(provider)
+        expect(await metadata(app)).toEqual(identity)
+        expect(app.status()).toEqual([
+          { id: 'bluebird-fixture', version: serviceVersion, state: 'active' },
+          { id: 'server-fixture', version: '1.0.0', state: 'active' },
+        ])
+        expect(await readFile(eventLog, 'utf8')).toBe('server-fixture:start\n')
+        return business.threadId
+      }
+      const firstThread = await assertVersion('1.0.0')
+      await app.update('bluebird-fixture', replacement)
+      const secondThread = await assertVersion('2.0.0')
+      expect(secondThread).not.toBe(firstThread)
+
+      await expect(app.update('bluebird-fixture', rejected)).rejects.toThrow('Rejected business fixture activation')
+      const rollbackThread = await assertVersion('2.0.0')
+      expect(rollbackThread).not.toBe(secondThread)
+
+      // Reuse the same entry and service URLs: refreshing only the entry import
+      // would leave a stale transitive ESM module in a reused worker.
+      const backend = await readFile(join(replacement, 'backend.mjs'), 'utf8')
+      const service = await readFile(join(replacement, 'service.mjs'), 'utf8')
+      await writeFile(join(replacement, 'service.mjs'), service.replace('2.0.0', '2.0.1'))
+      const manifest = JSON.parse(await readFile(join(replacement, 'manifest.json'), 'utf8'))
+      await writeFile(join(replacement, 'manifest.json'), JSON.stringify({ ...manifest, version: '2.0.1' }))
+      await app.update('bluebird-fixture', replacement)
+      expect(await assertVersion('2.0.1')).not.toBe(rollbackThread)
+      expect(await readFile(join(replacement, 'backend.mjs'), 'utf8')).toBe(backend)
+
+      const probes = (await readFile(probeLog, 'utf8')).trim().split('\n').map((line) => JSON.parse(line))
+      expect(probes.map((p) => p.serviceVersion)).toEqual(['1.0.0', '2.0.0', '3.0.0', '2.0.0', '2.0.1'])
+      for (const probe of probes) {
+        expect(probe).toMatchObject({ serverStatus: 200, server: provider, accountStatus: 200,
+          account: { userId: 'alice', workspaceId: 'personal:alice' }, pid: process.pid })
+        expect(probe.threadId).not.toBe(provider.threadId)
+      }
+      expect(new Set(probes.map((p) => p.threadId)).size).toBe(5)
+    } finally { await close(app) }
+    expect(await readFile(eventLog, 'utf8')).toBe('server-fixture:start\nserver-fixture:stop\n')
   })
 
   it.each(['/admin', '/admin/unit', '/admin/vault', '/admin/engine'])('rejects a backend claiming reserved route %s', async (mount) => {

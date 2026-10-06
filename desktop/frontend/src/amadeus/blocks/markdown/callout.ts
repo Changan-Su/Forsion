@@ -318,26 +318,30 @@ function toggleFold(view: EditorView, c: { marker?: string; collapsed: boolean; 
  */
 function alignFoldTitleCaret(view: EditorView): void {
   const selection = view.state.selection
-  if (!selection.empty || !view.hasFocus()) return
+  // 组合输入期间浏览器持有正在编辑的文字节点，不能搬动它的选区。
+  if (!selection.empty || !view.hasFocus() || view.composing) return
   const c = calloutAt(selection.$from)
   if (!c || c.type !== 'fold' || !c.inHead || calloutKey.getState(view.state)?.srcAt === c.bqPos) return
   if (selection.from !== c.hidden[c.hidden.length - 1][1]) return
-  const domSelection = document.getSelection()
+  const domSelection = view.dom.ownerDocument.getSelection()
   const anchor = domSelection?.anchorNode
-  const origin = anchor instanceof Element ? anchor : anchor?.parentElement
-  if (!origin?.closest('.callout-syntax')) return
+  // selectionchange 尚未同步时，模型可能仍在行首；不能覆盖正在划选的范围或新落点。
+  if (!domSelection?.isCollapsed || !anchor || !view.dom.contains(anchor)) return
+  if (view.posAtDOM(anchor, domSelection.anchorOffset) !== selection.from) return
   const head = view.nodeDOM(c.bqStart)
   if (!(head instanceof HTMLElement)) return
   const walker = document.createTreeWalker(head, NodeFilter.SHOW_TEXT)
   let node: Node | null
   while ((node = walker.nextNode())) {
     if (!node.textContent || node.parentElement?.closest('.callout-syntax,button')) continue
+    if (node.parentElement?.closest('.ProseMirror-widget')) continue
     if (view.posAtDOM(node, 0) !== selection.from) continue
+    if (anchor === node && domSelection.anchorOffset === 0) return
     const range = document.createRange()
     range.setStart(node, 0)
     range.collapse(true)
-    domSelection!.removeAllRanges()
-    domSelection!.addRange(range)
+    domSelection.removeAllRanges()
+    domSelection.addRange(range)
     return
   }
 }
@@ -441,6 +445,12 @@ export function calloutPlugin() {
             const node = tr.doc.nodeAt(at)
             return { srcAt: node && calloutOf(node) && tr.selection.from > at && tr.selection.to < at + node.nodeSize ? at : null, animations }
           },
+        },
+        view(view) {
+          // PM 每次更新/结束上次组合输入都会重新写 DOM 选区；点击与 Home 的
+          // 一次性校正覆盖不到删除、方向键、撤销以及下一次 compositionstart。
+          alignFoldTitleCaret(view)
+          return { update: alignFoldTitleCaret }
         },
         /**
          * 折叠区 = 光标不可达区。内容只是高度归零,骗得过眼睛骗不过 ProseMirror:光标照样能落进去
@@ -584,11 +594,19 @@ export function calloutPlugin() {
                 const headEnd = headStart + c.first.nodeSize
                 if (type === 'fold') {
                   const empty = !inSrcMode && c.first.content.size === hideLen + (mark?.len ?? 0)
+                  // 真实行内盒隔开字号 0 的语法与可见标题。PM 将行首选区放在它之后，
+                  // 浏览器组合输入也不再向前吸附到隐藏 token。widget 不进入文档/落盘。
+                  if (!inSrcMode) decos.push(Decoration.widget(pos + 2 + hideLen + (mark?.len ?? 0), () => {
+                    const anchor = document.createElement('span')
+                    anchor.className = 'callout-title-anchor'
+                    anchor.contentEditable = 'false'
+                    anchor.setAttribute('aria-hidden', 'true')
+                    anchor.textContent = '\u200b'
+                    return anchor
+                  }, { side: -1, ignoreSelection: true, key: `ca${pos}` }))
                   decos.push(Decoration.node(headStart, headEnd, {
                     class: 'callout-toggle-title',
                     ...(empty ? { 'data-placeholder': translate('mdcallout.title') } : {}),
-                    ...(empty && state.selection.empty && state.selection.from === pos + 2 + c.first.content.size
-                      ? { 'data-empty-caret': '' } : {}),
                   }))
                 }
                 if (mark) decos.push(Decoration.node(headStart, headEnd, { class: `callout-title-${mark.cls}` }))
@@ -680,7 +698,9 @@ export function calloutPlugin() {
                   ),
                 )
                 if (type === 'fold') {
-                  decos.push(Decoration.widget(headEnd - 1, (view) => {
+                  // 按钮绝对定位在右侧，但 DOM 装饰放在令牌前；空标题的尾部必须留给
+                  // 定位点与 trailingBreak，否则 IME 会把行末的非编辑按钮当作插入边界。
+                  decos.push(Decoration.widget(pos + 2, (view) => {
                     const b = document.createElement('button')
                     b.type = 'button'
                     b.className = 'amx-src-btn callout-source'
@@ -697,7 +717,7 @@ export function calloutPlugin() {
                       view.focus()
                     }
                     return b
-                  }, { side: 1, stopEvent: () => true, key: `cs${pos}` }))
+                  }, { side: -1, stopEvent: () => true, key: `cs${pos}` }))
                   if (!collapsed && node.childCount === 1) decos.push(Decoration.widget(headEnd, (view) => {
                     const b = document.createElement('button')
                     b.type = 'button'

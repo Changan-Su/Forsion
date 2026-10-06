@@ -1349,21 +1349,25 @@ body.amx-marquee-active * {
 }
 /* GFM task lists: render data-checked as a clickable checkbox in the left gutter. */
 .am-app .milkdown .ProseMirror li[data-item-type='task'] {
+  --amx-task-size: 16px;
+  --amx-task-gap: 8px;
   list-style: none;
   position: relative;
+  /* 小字号的 1.4em 列表槽容不下方框与间距,只给待办补足,不挤进正文或外侧块把手。 */
+  margin-left: max(0px, calc(var(--amx-task-size) + var(--amx-task-gap) - 1.4em));
 }
-/* 复选框是绝对定位 ::before(top 对准首行中心);milkdown 把 li 内容包进 <p> 带 0.3em 上边距
-   会把文字推低、复选框显得偏高 → 清掉任务项内段落纵向边距,文字首行与复选框中心对齐。 */
+/* 方框按首行行高居中,嵌套/换行不按整个 li 的高度居中;段落纵向边距不能把首行推开。 */
 .am-app .milkdown .ProseMirror li[data-item-type='task'] > p {
   margin: 0;
 }
 .am-app .milkdown .ProseMirror li[data-item-type='task']::before {
   content: '';
   position: absolute;
-  left: -1.5em;
-  top: 0.28em;
-  width: 16px;
-  height: 16px;
+  box-sizing: border-box;
+  left: calc(0px - var(--amx-task-size) - var(--amx-task-gap));
+  top: calc((1lh - var(--amx-task-size)) / 2);
+  width: var(--amx-task-size);
+  height: var(--amx-task-size);
   border: 1.5px solid var(--border-strong);
   border-radius: 5px;
   background: var(--surface-2);
@@ -1400,10 +1404,11 @@ body.amx-marquee-active * {
 .am-app .milkdown .ProseMirror li[data-item-type='task'][data-checked='true']::after {
   content: '';
   position: absolute;
-  left: -1.04em;
-  top: 0.42em;
-  width: 4px;
-  height: 8px;
+  box-sizing: border-box;
+  left: calc(0px - var(--amx-task-size) - var(--amx-task-gap) + (var(--amx-task-size) - 6px) / 2);
+  top: calc((1lh - 10px) / 2 - 1px);
+  width: 6px;
+  height: 10px;
   border: solid var(--on-primary);
   border-width: 0 2px 2px 0;
   transform: rotate(45deg);

@@ -122,7 +122,7 @@
  */
 import { execFile, execFileSync, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
-import { mkdirSync, writeFileSync, readFileSync, existsSync, symlinkSync, appendFileSync, readdirSync, realpathSync, rmSync } from 'node:fs';
+import { mkdirSync, writeFileSync, readFileSync, existsSync, symlinkSync, cpSync, appendFileSync, readdirSync, realpathSync, rmSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { createServer as createHttpServer } from 'node:http';
 import { randomUUID, createHash } from 'node:crypto';
@@ -150,7 +150,7 @@ const AUTH = resolve(opt('auth', process.env.TANGU_LIVE_AUTH || join(homedir(), 
 const KEYS = ['realtime', 'voiceclone', 'personas', 'rename', 'selfschedule', 'selfmodel', 'chat', 'tool', 'remember', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'parked', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human', 'emoji', 'visualize', 'visualfigures', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'control', 'phone', 'unattendedask', 'plugin', 'skillpick', 'pluginlook', 'settingsnav', 'appsettings'];
 KEYS.push('signals');
 KEYS.push('dreamseed');
-KEYS.push('pageinstructions');
+KEYS.push('pageinstructions', 'dispatch');
 KEYS.push('harnessopen');
 KEYS.push('equip');
 KEYS.push('musereview');
@@ -184,6 +184,7 @@ OPT_IN.add('visualfigures');
 OPT_IN.add('visualize'); // --only visualize: real model -> sketch controls/state; HTML can feed desktop check:visualize.
 OPT_IN.add('emoji'); // Three real-model rounds; run explicitly when session icons change.
 OPT_IN.add('plugin'); // 隔离 home 里放夹具插件 —— 只在显式跑它时放,别让多出来的工具改了别的场景的工具表。
+OPT_IN.add('dispatch');
 OPT_IN.add('pageinstructions'); // Scoped document maintenance; deliberately excluded from broad default runs.
 OPT_IN.add('voiceclone'); // 真百炼复刻(会在账号里建音色再删);改 routes/tts.ts 的复刻 / 朗读分发时显式跑。
 OPT_IN.add('harnessopen'); // 四个 run + 一条探针;只在动 manage_harness / 工作笔记注入时才有信息量。
@@ -779,6 +780,12 @@ const desktopCfg = join(OUT, 'userData', 'tangu-desktop-config.json');
 mkdirSync(dirname(OUT), { recursive: true });
 try { mkdirSync(OUT); } catch (e) { console.error(e?.code === 'EEXIST' ? `产物目录已存在:${OUT}(旧 state.db/旧 MEMORY 会污染结论,换一个或删掉)` : String(e?.message || e)); process.exit(2); }
 mkdirSync(home, { recursive: true }); mkdirSync(workspace, { recursive: true });
+if (ONLY.has('dispatch')) {
+  const bundle = opt('dispatch-plugin', '');
+  if (!bundle || !existsSync(join(bundle, 'tangu-plugins/dispatch-core/dist/index.mjs'))) throw new Error('--dispatch-plugin must point to a built Dispatch bundle');
+  cpSync(bundle, join(shared, 'plugins/forsion-plugin-dispatch'), {recursive:true, filter: p => !p.split('/').some(x=>['.git','node_modules','artifacts'].includes(x))});
+}
+
 // selfschedule:隔离的 Amadeus 笔记库(一个带 calendarDate 列的日历,一行既有事件)。不设 FORSION_AMADEUS_VAULT 引擎会落到
 // 开发机真实的 ~/Forsion/Amadeus —— 负对照那一腿真会往里写事件,所以只在跑这个场景时注入,且一定指进产物目录。
 const SELF_SCHED_VAULT = join(OUT, 'vault');
@@ -1358,6 +1365,10 @@ try {
   if (!models.some((m) => m.id === MODEL)) throw new Error(`模型目录无 ${MODEL};直连可用:${models.filter((m) => m.source === 'direct').map((m) => m.id).join(', ') || '(无 —— 凭证未装载或已失效)'}`);
   rmSync(authLink, { force: true }); // 凭证只在引擎启动时装载一次,之后不再读文件 → 立刻拆掉软链
 
+  await scenario('dispatch', 'Dispatch Chief and native task lifecycle', async () => {
+    const { dispatchLive } = await import('./lib/dispatch-live.mjs');
+    return dispatchLive({api, run, until, workspace, model:MODEL, home});
+  });
   const sessA = `live-a-${Date.now()}`;
   // 同题分别激活三位内置人格。自动断言只证身份接线与完成;表达差异读报告里的模型原话判断。
   for (const [slug, name] of [['xyra', 'Arioso'], ['aria', 'Aria'], ['recita', 'Recita']]) {

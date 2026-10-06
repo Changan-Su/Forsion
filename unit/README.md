@@ -88,12 +88,17 @@ node main.mjs status /absolute/path/my-unit/unit.json
 node main.mjs disable /absolute/path/my-unit/unit.json calendar
 node main.mjs enable /absolute/path/my-unit/unit.json calendar
 node main.mjs restart /absolute/path/my-unit/unit.json tangu
+node main.mjs update /absolute/path/my-unit/unit.json calendar /absolute/path/calendar-package
 node main.mjs install /absolute/path/my-unit/unit.json /absolute/path/new-plugin-package
 ```
 
 相同 ID 的新包是更新；已运行的插件可在线替换，激活失败恢复旧版本。依赖按顺序启停，不能先停用仍被其他活跃插件依赖的包。安装全新插件前停止 Unit。迁移命令 `migrate <config> <plugin-id>` 仅用于提供迁移能力且未激活的插件。控制通道仅对本机所有者开放，独立于网页访问者。
 
 Installing a new package with the same ID updates it. Running plugins can be replaced live, with rollback on activation failure. Dependencies determine lifecycle order; a dependency cannot be disabled while its dependents are active. Stop Unit before adding a new plugin. `migrate <config> <plugin-id>` applies only to inactive plugins that provide migrations. The local owner control channel is separate from browser visitor access.
+
+显式在线更新使用 `update <unit.json> <plugin-id> <package-path>`。ID 必须已安装且与新包 manifest 一致；Unit 未运行时命令直接失败，不修改配置或执行迁移。包路径相对当前工作目录解析，必须指向已解包的插件目录。更新复用安装器的包、依赖与路径检查，将包复制到实例下独立的版本目录，再通过本机控制通道切换并持久化；之后移动或删除源包不会影响已安装版本。Unit 的进程和端口保持不变，更新包及其活跃依赖方按依赖顺序重启；无关插件继续运行。新包激活失败时恢复旧版服务，配置保留旧路径。离线替换仍可使用 `install`，下次启动时加载。
+
+Use `update <unit.json> <plugin-id> <package-path>` for an explicit live update. The ID must already be installed and match the new manifest. If Unit is offline, the command fails without changing configuration or running migrations. The package path resolves from the current working directory and must name an unpacked plugin directory. Updates reuse the installer's package, dependency and path checks, copy the package into a separate instance version directory, then activate and persist it through the local control channel. Moving or deleting the source package afterward does not affect the installed version. Unit keeps its process and port; the updated plugin and its active dependents restart in dependency order while unrelated plugins keep running. Failed activation restores the previous service and keeps its configured path. Use `install` for an offline replacement that loads at the next startup.
 
 插件继续使用 Forsion 的 `main`、Space 配方和插件 API。可选 `frontend.features` 激活共享界面中的 Amadeus、Tangu、Calendar、Automation、Public 功能；新增界面实现仍需更新 Unit。可信插件可声明 `runtime` 提供设备能力，或声明 `backend` 提供 HTTP 服务。接口分别见 `runtimeTypes.ts` 和 `backendTypes.ts`；支持这些通用接口不代表预装任何商业实现。
 
@@ -116,8 +121,42 @@ cd desktop
 npm run typecheck
 npm run check:parity
 npx vitest run electron/unit*.test.ts electron/backendRunner.test.ts electron/basicUnit.test.ts
+# Focused real-process CLI update, rollback and persistence checks.
+npx vitest run electron/unitCli.test.ts
 ```
 
 `node unit/verify-local.mjs --qbird /absolute/path/bluebird` 使用已构建的发行包，在临时目录验证安装、真实本地笔记、插件和引擎生命周期、重启持久化；不需要商业后端或数据库。`--serve` 可保留独立预览。必须使用与发行包原生模块匹配的 Node；构建时可用 `UNIT_SQLITE_PACKAGE` 指向同版本、目标 ABI 的 SQLite 包。
 
 `node unit/verify-local.mjs --qbird /absolute/path/bluebird` verifies the built release in a temporary directory, including installation, real local notes, plugin and engine lifecycle, and restart persistence. It needs no commercial backend or database. `--serve` retains an isolated preview. Use a Node runtime matching the package's native modules; `UNIT_SQLITE_PACKAGE` can select the same locked SQLite version built for the target ABI.
+
+
+## 管理 MCP 与 Unit 运维任务
+
+Admin Panel MCP 新增 `unit_status`、`unit_releases`、`unit_operations`、`unit_operation_get`、`unit_plugin_action`、`unit_update`。
+需同时更新 Unit 与 Server，并在实例私有 `unit.json` 顶层开启：
+
+```json
+{"management": {"enabled": true}}
+```
+
+默认关闭。重启 Unit 后生效；该配置不下发浏览器。Unit 自己接管 `/api/admin/unit/*`，使用活动账户提供者重新验证原 Bearer、当前 ADMIN 账户与令牌权限，拒绝普通用户/伪造身份，并在提交与实际执行前再次验证。服务端校验不依赖模型传入的角色。
+
+准备一次后，操作顺序为：
+
+1. 用 owner MCP 令牌上传并提交 unit-release ZIP，或在部署机用 CLI 登记可信、已包含依赖的发行包：`node main.mjs stage /path/to/unit.json /path/to/bundled-package`。
+2. 调用 `unit_releases` 选择 releaseId，`unit_status` 检查目标版本、状态与依赖。
+3. 生成 UUID v4 requestId，调用 `unit_update`，提供 pluginId、releaseId、requestId、confirm:true。
+4. 用同一 requestId 调用 `unit_operation_get`；连接中断时仍用该编号查询或重试，不另建编号。
+
+stage 将包复制到 Unit 私有发行目录并保存 SHA256；安装前与安装副本都会检查摘要。源目录移动不影响已登记包。MCP 不接受包路径、下载 URL 或 shell 命令；npm-ci 包先在目标平台安装依赖并封装，远程任务不执行 npm 安装。发行目录最多保留 200 项，满后由本机运维归档不用的条目。
+
+任务由 Unit 主进程持有，状态为 queued/running/succeeded/failed/interrupted，更新还显示 verifying-release/applying 阶段；保存操作人、目标、发行编号与时间；不持久化 Bearer、私有配置或完整包路径。最近 100 条任务持久化，幂等检查限于这些保留记录；同一编号换参数或换操作人会被拒绝。Unit 重启将未完成任务标为 interrupted，须先检查实际状态再决定是否重试。当前串行执行，一个任务运行时其他新任务返回 409。
+
+`unit_plugin_action` 支持 enable/disable/restart/migrate。迁移须先停用目标模块；更新不自动迁移，失败尝试恢复旧代码，不回滚数据库。为保持远程恢复入口，停用或迁移账户提供者本身只能用本地 CLI；允许重启和更新账户提供者。Server 自身更新时其 MCP 连接可能断开，账户服务恢复前查询可能短暂失败，恢复后可继续查 Unit 保存的任务。
+
+所有运维写操作都要求 confirm:true；它只是显式意图参数，真人审批仍由调用客户端负责。MCP auditor 可读取，operator 可启停/重启/更新已暂存包，owner 另可上传暂存包和迁移。账户提供者投射 ADMIN_SCOPED 与 adminPermissions；缺失权限时拒绝，账户解析须携带 administration 用途，旧 Unit 无法接收 scoped 身份，避免回滚后的越权。常规登录会话和旧未收窄令牌保留既有权限。
+
+验收：`cd desktop && npx vitest run electron/unitManagement.test.ts electron/unitCli.test.ts electron/unitInstall.test.ts electron/unitRuntime.test.ts`。
+真实 Server/MCP/Bluebird/私有 PG 验收见相邻 server 的 `scripts/verify-unit-installation.mjs --management --bluebird ...`。
+
+上传、角色和本地直传 helper 详见 [Admin MCP](../../server/microserver/admin-mcp/README.md)。上传只登记发行包，激活仍须独立调用 unit_update。

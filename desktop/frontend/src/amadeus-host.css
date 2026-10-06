@@ -609,6 +609,7 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
   min-height: 1.65em;
   cursor: text;
 }
+.am-app .milkdown .ProseMirror .callout-title-anchor { display: inline-block; width: 0; line-height: normal; }
 .am-app .milkdown .ProseMirror .callout-toggle-title > .callout-chevron {
   position: absolute;
   font: inherit;
@@ -624,18 +625,6 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
   top: 0;
   color: var(--text-muted);
   pointer-events: none;
-}
-/* 空标题只有被隐藏的 Markdown token，浏览器没有可绘制的原生 caret；给可输入位置画一根。 */
-html:not(.sc-on) .am-app .milkdown .ProseMirror.ProseMirror-focused .callout-toggle-title[data-empty-caret]::before {
-  content: '';
-  position: absolute;
-  left: 0;
-  top: calc((1lh - 1.2em) / 2);
-  width: 1px;
-  height: 1.2em;
-  background: currentColor;
-  pointer-events: none;
-  animation: sc-blink 1s step-end infinite;
 }
 .am-app .callout-toggle-title:hover > .callout-source,
 .am-app .callout-toggle-title:focus-within > .callout-source {

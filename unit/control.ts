@@ -1,11 +1,11 @@
-/** Local owner-only control plane. No administrative lifecycle routes are published over HTTP. */
+/** Local owner-only control channel, also used by explicitly enabled authenticated management jobs. */
 import net from 'node:net'
 import { chmod, rm, mkdir } from 'node:fs/promises'
 import { resolve, dirname } from 'node:path'
 import { tmpdir } from 'node:os'
 import { createHash } from 'node:crypto'
 
-export interface ControlCommand { action: 'status' | 'enable' | 'disable' | 'restart' | 'update' | 'migrate'; id?: string; path?: string }
+export interface ControlCommand { action: 'stage' | 'status' | 'enable' | 'disable' | 'restart' | 'update' | 'migrate'; id?: string; path?: string; remote?: boolean }
 export const controlAddress = (dataDir: string) => process.platform === 'win32'
   ? `\\\\.\\pipe\\forsion-unit-${createHash('sha256').update(resolve(dataDir)).digest('hex').slice(0, 24)}`
   : resolve(tmpdir(), `forsion-unit-${process.getuid?.() ?? 'user'}`, createHash('sha256').update(resolve(dataDir)).digest('hex').slice(0, 24) + '.sock')

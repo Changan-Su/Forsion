@@ -111,17 +111,19 @@ function neighborCaretRect(el: Element, offset: number): { x: number; y: number;
   }
   // input/widget 可能吃的是整行 line-height（h1 实测 33px），原生文字 caret 只吃字体行内盒
   // （同处 h1 为 30px）。位置取邻居边缘，高度取「邻居盒与本行字体盒的较小者」并垂直居中。
-  const at = (r: DOMRect, x: number): { x: number; y: number; h: number } => {
+  const at = (n: Node, r: DOMRect, x: number): { x: number; y: number; h: number } => {
+    // 空行的 br 已经给出真实字体行内盒,截成 1.2em 会让首个字输入前后的光标高度跳变。
+    if (n.nodeName === 'BR') return { x, y: r.top, h: r.height }
     const h = Math.min(r.height, caretEm(el))
     return { x, y: r.top + (r.height - h) / 2, h }
   }
   for (let i = offset - 1; i >= 0; i--) {
     const r = usable(el.childNodes[i])
-    if (r) return at(r, r.right)
+    if (r) return at(el.childNodes[i], r, r.right)
   }
   for (let i = offset; i < el.childNodes.length; i++) {
     const r = usable(el.childNodes[i])
-    if (r) return at(r, r.left)
+    if (r) return at(el.childNodes[i], r, r.left)
   }
   return null
 }
@@ -147,10 +149,12 @@ function caretInfo(): { x: number; y: number; h: number; host: Element; origin: 
   const range = sel.getRangeAt(0)
   const c = range.startContainer
   let r: DOMRect | undefined = range.getClientRects()[0]
-  // 空折叠标题只有字号 0 的 Markdown token，collapsed Range 会落在 token 末尾、给出高度 0 的
-  // 矩形（y 还在行底）。它的可见插入点是标题左上角的正文基线。
+  // 空折叠标题的选区位于定位 widget 后的段落边界，collapsed Range 可能没有矩形。
+  // trailingBreak 给出真实字体盒；不按段落高度或近似 em 推算首字符的基线。
   const emptyFold = el?.closest('.callout-toggle-title[data-placeholder]')
   if (emptyFold && (!r || r.height === 0)) {
+    const br = emptyFold.querySelector('br.ProseMirror-trailingBreak')?.getBoundingClientRect()
+    if (br?.height) return { x: br.left, y: br.top, h: br.height, host, origin: emptyFold }
     const box = emptyFold.getBoundingClientRect()
     const h = caretEm(emptyFold)
     return { x: box.left, y: box.top + (box.height - h) / 2, h, host, origin: emptyFold }

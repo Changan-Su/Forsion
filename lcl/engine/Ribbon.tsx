@@ -34,7 +34,7 @@ interface Part { shown: Entry[]; tail: Entry[]; start: number; max: number }
 const GAP = 4
 /** 常驻上限:上区(Spaces)与命令区各露几项,超出的进「…」(见下面 capT / capB)。 */
 const TOP_VISIBLE = 5
-const BOTTOM_VISIBLE = 4
+const BOTTOM_VISIBLE = 5
 /** 收起态浮签时序 = desktop hoverTip 已拍板的那套(引擎不能 import 宿主,只能同值抄一份):
  *  悬停 1s 弹;刚收起 0.1s 内移到下一枚 → 立刻弹(连续扫图标时不必每枚重等 1s)。 */
 const TIP_SHOW_DELAY = 1000
@@ -140,6 +140,26 @@ export function Ribbon() {
   const glide = useRef<Partial<Record<RibbonZone, { px: number; from: number; timer: number; at?: number }>>>({})
   const stripRefs = useRef<Partial<Record<RibbonZone, HTMLDivElement | null>>>({})
   useEffect(() => () => { for (const g of Object.values(glide.current)) window.clearTimeout(g?.timer) }, [])
+  // 开合期间保留离场图标，等裁切框与内部位移一起走完再清空窗外占位。
+  const [resizing, setResizing] = useState(false)
+  const resizeTimer = useRef<number | undefined>(undefined)
+  useEffect(() => () => window.clearTimeout(resizeTimer.current), [])
+  const changeOpenZone = (zone: RibbonZone | null): void => {
+    for (const z of ['top', 'bottom'] as const) {
+      const g = glide.current[z]
+      if (!g) continue
+      window.clearTimeout(g.timer)
+      const el = stripRefs.current[z]
+      if (el) el.style.transform = g.from ? `translateY(${-g.from * slotH}px)` : ''
+      delete glide.current[z]
+    }
+    setLive({})
+    window.clearTimeout(resizeTimer.current)
+    const animate = !window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    setResizing(animate)
+    if (animate) resizeTimer.current = window.setTimeout(() => setResizing(false), 240)
+    setOpenZone(zone)
+  }
 
   // ---- 收起态浮签(取代原生 title):根上事件委托,认 [data-rb-tip]。时序同 hoverTip(1s / 0.1s skip)。
   //      拖动、菜单、图标选择器、收纳夹浮层任一打开时不弹且立刻收;按下鼠标即收(点完别挂着)。 ----
@@ -227,9 +247,8 @@ export function Ribbon() {
     if (pinnedRef.current) ro.observe(pinnedRef.current)
     return () => ro.disconnect()
   }, [expanded, slotH, items.length, folders.length, commandItems.length, openZone]) // openZone:命令区展开时主位槽让出来
-  // 常驻上限(10-02 用户拍板「Ribbon 减负」):上区最多 5 个 Space、命令区最多 4 项,其余进各自的「…」。
-  // 写成 `len ≤ N ? len : N + 1`,cut() 留一格给「…」后正好露 N 个。命令区从头吃起 → 注册序排在前面的
-  // 反馈 / 市场 / 成就进「…」,明暗 / 设备互联 / 命令面板 / 设置常驻(钉死的账号卡不在 botE 里,不占名额)。
+  // 两区各常驻 5 项，头像与其他 pinned 件不在 botE 里，不占名额。
+  // 写成 `len ≤ N ? len : N + 1`,cut() 留一格给「…」后正好露 N 个。命令区从头吃起。
   // ponytail: 用户钉进命令区的命令与收纳夹也占名额,钉多了会把明暗挤进「…」;要按项豁免再给 RibbonItem 加标记。
   const cap = (len: number, max: number): number => (len <= max ? len : max + 1)
   const wantT = cap(topE.length, TOP_VISIBLE)
@@ -255,16 +274,17 @@ export function Ribbon() {
    *  两区都是「离锚点最远的先被收走」:上区锚在顶(head),命令区锚在底(账号卡)。
    *  off = 滚轮挪过的格数(从锚点那一端往里数):露出的是连续一窗,窗外两侧的都进「…」。
    *  start / max 给快捷键提示与滚轮夹边用。 */
-  const cut = (list: Entry[], cap: number, fromFront: boolean, off: number): Part => {
-    if (list.length <= cap) return { shown: list, tail: [], start: 0, max: 0 }
+  const cut = (list: Entry[], cap: number, fromFront: boolean, off: number, limit: number): Part => {
+    // cap 包含「…」的槽，刚好 N+1 项时也必须收纳，不能把该槽当第 N+1 个图标。
+    if (list.length <= cap && list.length <= limit) return { shown: list, tail: [], start: 0, max: 0 }
     const n = Math.max(0, cap - 1) // 留一格给「…」
     const max = list.length - n
     const o = Math.min(Math.max(0, off), max)
     const start = fromFront ? list.length - n - o : o
     return { shown: list.slice(start, start + n), tail: [...list.slice(0, start), ...list.slice(start + n)], start, max }
   }
-  const top = cut(topE, capT, false, scrollOff.top)
-  const bot = cut(botE, capB, true, scrollOff.bottom)
+  const top = cut(topE, capT, false, scrollOff.top, openZone === 'top' ? Infinity : TOP_VISIBLE)
+  const bot = cut(botE, capB, true, scrollOff.bottom, openZone === 'bottom' ? Infinity : BOTTOM_VISIBLE)
   // ---- 中间那段空当:最近使用的 Space(10-05 用户要求),最近的在上。个数 = 设置的上限(缺省 3,最多 5)与中间还放得下的
   //      格数取小,窗口矮了就一个个减到没有;有一区展开(铺满整条)时不露。只是快捷入口:不进拖拽 / 溢出 / 快捷键编号,
   //      也不是 .rb-slot(拖拽量槽、台架数格子都按它)。
@@ -399,11 +419,11 @@ export function Ribbon() {
   // 点进 iframe / webview 的视图时事件到不了本窗口 → 靠窗口 blur 兜。右键不收(空白处右键要弹区菜单)。
   useEffect(() => {
     if (!openZone) return
-    const close = (): void => setOpenZone(null)
+    const close = (): void => changeOpenZone(null)
     const onDown = (e: PointerEvent): void => {
       if (e.button !== 0) return
       const t = e.target as Element | null
-      if (t?.closest?.('.rb-menu, .rb-iconpick, .rb-fly') || (t && rootRef.current?.contains(t) && t.closest('button'))) return
+      if (t?.closest?.('.rb-menu, .rb-iconpick, .rb-fly, [data-rb-overlay]') || (t && rootRef.current?.contains(t) && t.closest('button'))) return
       close()
     }
     const onKey = (e: KeyboardEvent): void => { if (e.key === 'Escape') close() }
@@ -415,7 +435,7 @@ export function Ribbon() {
       window.removeEventListener('keydown', onKey)
       window.removeEventListener('blur', close)
     }
-  }, [openZone])
+  }, [openZone, slotH]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ---- Space 快捷键:mod+1..9 = 上区第 N 个条目,**纯按当前排序**(拖动改序,号跟着走)。
   //      收纳夹同样占一个号,按下 = 弹它的浮层;溢出进「…」的条目也按得到(没有按钮锚点就贴条顶)。 ----
@@ -677,7 +697,7 @@ export function Ribbon() {
         aria-label={name}
         aria-expanded={open}
         data-rb-tip={expanded ? undefined : name}
-        onClick={() => setOpenZone(open ? null : zone)}
+        onClick={() => changeOpenZone(open ? null : zone)}
         onDragOver={(e) => acceptOver(e, !!drag && drag.zone === zone, () => { setOver(null); setOverFolder(`more:${zone}`) })}
         onDragLeave={() => { if (overFolder === `more:${zone}`) setOverFolder(null) }}
         // 收进「…」= 挪到它吃的那一端:上区 = 区末尾,命令区 = 区开头。
@@ -763,7 +783,7 @@ export function Ribbon() {
             {(zone === 'top' ? topE : botE).map((en, k) => {
               const i = k - part.start
               if (i >= 0 && i < part.shown.length) return renderSlot(en, zone, i, preview, !preview && over?.zone === zone && over.index === i, k)
-              return <div key={en.id} className="rb-cell" aria-hidden inert style={{ height: slotH - GAP }}>{live[zone] && renderEntry(en)}</div>
+              return <div key={en.id} className="rb-cell" aria-hidden inert style={{ height: slotH - GAP }}>{(live[zone] || resizing) && renderEntry(en)}</div>
             })}
           </div>
         </div>

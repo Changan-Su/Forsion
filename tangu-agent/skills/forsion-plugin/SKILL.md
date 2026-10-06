@@ -1269,3 +1269,19 @@ Registration never selects or replaces the user's appearance. On selection, the 
 The returned disposer removes only its own current registration. Disable, unload and failed setup revoke registrations; disabling or removing the plugin clears selected cached assets. A normal reload retains the selected snapshot: select the preset again to refresh artwork after editing it. Stale contexts cannot register again. Always feature-detect with optional chaining. A complete installable example is in `samples/forsion-sample-appearance/`.
 
 中文：插件只贡献选项，不自动改用户选择。选择后缓存图像供离线启动使用，图标同步到应用内部及运行中的 Dock／任务栏；普通重载保留快照，重新选择可更新素材。禁用或移除插件时恢复默认，旧上下文不能重新注册。安装包与系统固定的快捷方式图标不随此设置修改。
+
+
+## Local plugin task APIs (Dispatch host branch, 2026-10-04)
+
+Feature-detect these additive interfaces; released 2.12.2 builds do not contain them.
+
+- Renderer `ctx.tangu.request?(enginePluginId, path, {method?,body?,signal?})`: authenticated JSON through the host, restricted to an engine plugin in the caller's bundle. Absolute route fragments only, no query/encoded/dot segments. Local desktop only. Disable aborts pending requests.
+- Renderer `await ctx.tangu.openSession?(id)`: hydrates hidden session metadata/model/config into the native child-session cache, then opens a native chat tab. No new run is started.
+- Engine `ctx.registerScopedRoutes(router => { router.get('/snapshot', handler); })`: host mounts `/extensions/<bundle directory>/<engine id>`, applies user authentication and rejects remote callers. `req.user.userId` is authoritative. Host removes the route on disable.
+- Engine `ctx.paths.dataDir`: stable host-owned plugin data directory. Do not derive writable runtime data from installation paths.
+- `ctx.sdk.runs.start({userId,cwd,prompt,modelId,thinkingLevel,agentSlug|engineId,engineModelId?,planMode?,sessionId?,requestId?,parentSessionId?,title?})` creates a local plugin-owned `kind=task` session/run. Persist an intent and reuse requestId on an uncertain outcome. Native approval/inquiry behavior remains active; callers cannot supply an approval mode. External engines require local host execution and do not support plan mode.
+- `runs.status(runId,userId)` gives real status, bounded final summary, tokens and waiting kinds; `sessionRuns(sessionId,userId)` also tracks native continuations. `events`, `subscribe` and `stop` validate ownership. Subscribe returns an unsubscribe function and the host disposes it on disable.
+- `ctx.sdk.engines.list()` reports available local external engines and sandbox restrictions. A registry entry does not prove the CLI is authenticated.
+- Agent config `tools_strict=true` makes `tools_list` an exact allowlist over all tool sources, including gated/plugin/MCP tools. It is opt-in and config-only; old agents retain existing blacklist/allowlist behavior. Include `ask_user` explicitly when needed.
+
+Task sessions, including native continuations, share a host FIFO by canonical project path. This is a single local engine guarantee, not a distributed lock between independent engine processes. Plugins still own task metadata, scheduling and lifecycle. Disabling a plugin removes its contributions but does not abort previously accepted native runs.

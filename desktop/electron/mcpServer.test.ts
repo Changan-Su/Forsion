@@ -359,3 +359,11 @@ describe('启动竞态(端口被抢 / 并发启动 / 开关顺序)', () => {
     expect(t.published()).toBe(false)
   })
 })
+
+describe('opt-in plugin tools',()=>{
+ it('proxies plugin schemas and calls through Desktop MCP, and revokes the bridge key when external access is off',async()=>{
+  let enabled=true;const calls:any[]=[];const engine=createServer(async(req,res)=>{let raw='';for await(const chunk of req)raw+=chunk;calls.push({url:req.url,auth:req.headers.authorization,body:raw?JSON.parse(raw):null});res.setHeader('content-type','application/json');res.end(req.method==='GET'?JSON.stringify({tools:[{name:'dispatch_task_list'}]}):JSON.stringify({result:'PLUGIN_OK'}));});
+  const port=await listen(engine),home=mkdtempSync(join(tmpdir(),'dispatch-mcp-'));const reservation=createServer();const mPort=await listen(reservation);await new Promise<void>(r=>reservation.close(()=>r()));const mcp=await startForsionMcp(deps({homeDir:home,getEngine:()=>({url:`http://127.0.0.1:${port}`,token:'ENGINE'}),externalEnabled:()=>enabled}),{port:mPort});const client=new Client({name:'dispatch-test',version:'1'});await client.connect(new StreamableHTTPClientTransport(new URL(mcp.url),{requestInit:{headers:{Authorization:'Bearer bridge'}}}));
+  try{const list=await client.callTool({name:'plugin_tools',arguments:{}});expect(JSON.stringify(list)).toContain('dispatch_task_list');const result=await client.callTool({name:'plugin_call',arguments:{name:'dispatch_task_list',arguments:{cursor:4}}});expect(JSON.stringify(result)).toContain('PLUGIN_OK');expect(calls[1]).toMatchObject({url:'/agent/plugins/external-tools/call',auth:'Bearer ENGINE',body:{name:'dispatch_task_list',arguments:{cursor:4}}});enabled=false;expect((await client.callTool({name:'plugin_call',arguments:{name:'dispatch_task_list'}})).isError).toBe(true);expect(calls).toHaveLength(2);}finally{await client.close();mcp.close();engine.close();rmSync(home,{recursive:true,force:true});}
+ });
+});

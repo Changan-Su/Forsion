@@ -63,6 +63,10 @@ export interface PluginCommand {
  * 插件用 `ctx.sdk.*` 调到的全是核心**同一份**模块实例（同一 `als`/`_deps`/registry）。
  */
 export interface TanguSdk {
+  automation: ReturnType<typeof import('./automation.js').createPluginAutomation>;
+  workspaces: ReturnType<typeof import('./workspaces.js').createPluginWorkspaces>;
+  runs: ReturnType<typeof import('./runs.js').createPluginRuns>;
+  engines: typeof import('./runs.js').pluginEngines;
   createTanguModule: typeof createTanguModule;
   createHttpBrain: typeof createHttpBrain;
   createNoopBilling: typeof createNoopBilling;
@@ -113,12 +117,14 @@ export interface TanguPluginContext {
    *  挂在核心路由之后(按插件 id 序);运行期激活(重扫/启用/升级)即时生效、停用即摘除,都不用重启。
    *  `mount` 在 `createTanguModule` 之后才调(彼时 deps() 已就绪)。 */
   registerRoutes(mount: (r: PluginRouters) => void): void;
+  /** Authenticated JSON routes under /extensions/<bundle>/<engine>. Host assigns ownership and removes on disable. */
+  registerScopedRoutes(mount: (router: Router) => void): void;
   /** 运行时构建块（按引用，见 `TanguSdk`）。 */
   sdk: TanguSdk;
   /** 带插件 id 前缀的日志。 */
   log(msg: string): void;
   /** 路径信息。 */
-  paths: { pluginDir: string };
+  paths: { pluginDir: string; dataDir: string };
   /**
    * 发用户活动事件(强制 `plugin:<id>:` 前缀,对齐桌面 ctx.activity.log)——自动化 event_seen 可盯,
    * Muse/read_activity 可读。仅本地形态生效(云端 worker 静默 no-op)。detail 值折叠空白截断,勿放敏感原文。

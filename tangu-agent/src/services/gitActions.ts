@@ -67,16 +67,16 @@ const baseEnv = (): NodeJS.ProcessEnv => {
 };
 
 /** 只读、加固的 git(清单 / 摘要 / 生成信息用):不跑 fsmonitor / 钩子 / 外部 diff,不抢索引锁。 */
-async function readGit(cwd: string, args: string[], opts: { input?: string; maxOutputBytes?: number; timeoutMs?: number } = {}): Promise<RunResult> {
+export async function readGit(cwd: string, args: string[], opts: { input?: string; maxOutputBytes?: number; timeoutMs?: number; indexFile?: string } = {}): Promise<RunResult> {
   const r = await runBoundedProcess(gitExecutable(), [...READ_ONLY_GIT_ARGS, '-c', 'core.quotepath=false', '-C', cwd, ...args], {
-    cwd, env: baseEnv(), input: opts.input, timeoutMs: opts.timeoutMs ?? ACTION_TIMEOUT_MS, maxOutputBytes: opts.maxOutputBytes ?? 1024 * 1024,
+    cwd, env: { ...baseEnv(), ...(opts.indexFile ? { GIT_INDEX_FILE: opts.indexFile } : {}) }, input: opts.input, timeoutMs: opts.timeoutMs ?? ACTION_TIMEOUT_MS, maxOutputBytes: opts.maxOutputBytes ?? 1024 * 1024,
   });
   if (r.reason === 'spawn-error') throw new GitActionError('git_unavailable', 'git is not available on this machine');
   return r;
 }
 
 /** 用户的写动作:照用户自己的 git 配置跑(仓库级的可执行配置须先经 requireTrust),只关终端交互。 */
-async function runAction(cwd: string, args: string[], opts: { timeoutMs?: number; input?: string } = {}): Promise<RunResult> {
+export async function runAction(cwd: string, args: string[], opts: { timeoutMs?: number; input?: string } = {}): Promise<RunResult> {
   const env = baseEnv();
   // 口令短语 / 首次连接确认都会让 ssh 等一个不存在的终端;ssh-agent / 钥匙串里的钥匙照常可用。用户自己设了就不动。
   if (!env.GIT_SSH_COMMAND && !env.GIT_SSH) env.GIT_SSH_COMMAND = 'ssh -o BatchMode=yes';
@@ -102,7 +102,7 @@ async function insideWorkTree(cwd: string): Promise<boolean> {
 
 /** 写动作的前提:这里就是仓库根目录。项目是大仓的子目录时 `add -A` 会暂存整个父仓;`.git` 文件 / core.worktree 把工作树
  *  指到别处也一样 —— 都按 nested_repo 拒。 */
-async function requireRepoRoot(cwd: string): Promise<void> {
+export async function requireRepoRoot(cwd: string): Promise<void> {
   if (!(await insideWorkTree(cwd))) throw new GitActionError('not_repo', 'This folder is not a git repository');
   const top = await readGit(cwd, ['rev-parse', '--show-toplevel'], { timeoutMs: 5000 });
   const real = await fs.realpath(cwd).catch(() => cwd);
@@ -111,7 +111,7 @@ async function requireRepoRoot(cwd: string): Promise<void> {
 }
 
 /** 仓库级可执行配置的信任闸:没有该级风险 / 已信任 → 放行;trust=true = 用户刚在面板上点了「信任并继续」→ 记下再放行。 */
-async function requireTrust(cwd: string, level: 'read' | 'write', trust: boolean | undefined): Promise<void> {
+export async function requireTrust(cwd: string, level: 'read' | 'write', trust: boolean | undefined): Promise<void> {
   const blocked = await untrustedRisks(cwd, level);
   if (!blocked) return;
   if (trust === true) { await trustRepo(blocked.commonDir); return; }

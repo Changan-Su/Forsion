@@ -16,6 +16,8 @@ export type BackendUpgrade = (request: IncomingMessage, socket: Duplex, head: Bu
 
 /** A verified visitor identity. It never represents the Unit host's own account. */
 export interface BackendIdentity {
+  adminAccessRole?: string
+  adminPermissions?: string[]
   userId: string
   username: string
   role: string
@@ -29,7 +31,7 @@ export interface BackendIdentity {
 export interface BackendAccount {
   /** Public, same-origin endpoints used by the shared browser Account adapter. */
   metadata?: { apiBase: string; loginPath: string }
-  resolve: (token: string, options?: { signal?: AbortSignal }) => Promise<BackendIdentity | null>
+  resolve: (token: string, options?: { signal?: AbortSignal; purpose?: 'administration' }) => Promise<BackendIdentity | null>
 }
 
 export interface BackendPlugin {
@@ -96,7 +98,7 @@ export interface BackendWorkerData {
 export type BackendWorkerCommand =
   | { type: 'connection'; port: MessagePort; socket: SocketMetadata }
   | { type: 'stop' }
-  | { type: 'account-resolve'; requestId: string; token: string }
+  | { type: 'account-resolve'; requestId: string; token: string; purpose?: 'administration' }
   | { type: 'account-cancel'; requestId: string }
 
 export type BackendWorkerEvent =

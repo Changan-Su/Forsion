@@ -31,6 +31,7 @@ import { killProcessTree } from '../utils/boundedProcess.js';
 
 /** createAcpClient 需要的最小上下文（EngineRunCtx 结构上即满足）。 */
 export interface AcpClientCtx {
+  replaying?: () => boolean;
   signal: AbortSignal;
   publish: (type: string, payload: any) => void;
   requestApproval: (preview: string, toolCall: ToolCall) => Promise<ApprovalDecision>;
@@ -168,12 +169,14 @@ export function createAcpClient(
 ): { client: Client; result(): EngineResult } {
   let content = '';
   let reasoning = '';
+  let tokensTotal: number | undefined;
   const toolCalls: ToolCall[] = [];
   const toolResults: any[] = [];
   const toolNames = new Map<string, string>(); // toolCallId -> name（给 tool_result 补名）
 
   const client: Client = {
     async sessionUpdate(params: SessionNotification): Promise<void> {
+      if (ctx.replaying?.()) return;
       const u: any = params.update;
       switch (u.sessionUpdate) {
         case 'agent_message_chunk': {
@@ -213,6 +216,8 @@ export function createAcpClient(
         case 'usage_update': {
           // 附带计：外部 run 跑用户自己的账号，仅展示，不进 Tangu 计费。
           const us = u.usage ?? u;
+          if (Number.isFinite(us.totalTokens)) tokensTotal = us.totalTokens;
+          else if (Number.isFinite(us.inputTokens) && Number.isFinite(us.outputTokens)) tokensTotal = us.inputTokens + us.outputTokens;
           ctx.publish('usage', {
             prompt: us.inputTokens ?? us.promptTokens ?? 0,
             completion: us.outputTokens ?? us.completionTokens ?? 0,
@@ -249,7 +254,7 @@ export function createAcpClient(
 
   return {
     client,
-    result: () => ({ content, reasoning, toolCalls, toolResults }),
+    result: () => ({ content, reasoning, toolCalls, toolResults, tokensTotal }),
   };
 }
 
@@ -297,10 +302,18 @@ export async function runAcpEngine(def: EngineDef, ctx: EngineRunCtx): Promise<E
     engineIdle = setTimeout(() => { try { onAbort(); } catch { /* ignore */ } }, ENGINE_IDLE_MS);
   };
   // 包一层 ctx:每次事件回灌续命；审批期间停表(审批不经 publish，等用户点批准不能被 idle 误杀)。
+  let replaying = false;
   const wrappedCtx: AcpClientCtx = {
+    replaying: () => replaying,
     signal: ctx.signal,
     publish: (type, payload) => { armEngineIdle(); ctx.publish(type, payload); },
     requestApproval: async (preview, toolCall) => {
+      // Read-only ACP modes remain host-enforced at permission boundaries.
+      // The scoped MCP bridge gates its own tools independently.
+      if (ctx.readOnly) {
+        // The host MCP server enforces its exact tool list and native approval separately.
+        return {action:toolCall.function.name.startsWith('mcp__forsion_task__')?'approve':'reject'};
+      }
       if (engineIdle) { clearTimeout(engineIdle); engineIdle = null; }
       try { return await ctx.requestApproval(preview, toolCall); }
       finally { armEngineIdle(); }
@@ -322,13 +335,32 @@ export async function runAcpEngine(def: EngineDef, ctx: EngineRunCtx): Promise<E
   const guard = <T>(p: Promise<T>, label: string): Promise<T> =>
     Promise.race([withTimeout(p, HANDSHAKE_TIMEOUT_MS, label), spawnFailed]) as Promise<T>;
   try {
-    await guard(conn.initialize({
+    const initialized = await guard(conn.initialize({
       protocolVersion: PROTOCOL_VERSION,
       // fs/terminal 不声明 → 外部 agent 用自带工具直接在 cwd 上做文件/命令操作（host 模式与 Tangu 一致）。
       clientCapabilities: { fs: { readTextFile: false, writeTextFile: false } },
     }), 'initialize');
-    const s = await guard(conn.newSession({ cwd, mcpServers: [] }), 'newSession');
-    sessionId = s.sessionId;
+    const mcpServers = ctx.mcpServers || [];
+    if (mcpServers.some(s => 'type' in s && s.type === 'http') && !initialized.agentCapabilities?.mcpCapabilities?.http) throw new Error('This external engine does not support HTTP MCP tool bridges');
+    const claudeReadOnly=ctx.readOnly && initialized.agentInfo?.name==='@zed-industries/claude-code-acp';
+    const codexReadOnly=ctx.readOnly && initialized.agentInfo?.name==='@agentclientprotocol/codex-acp';
+    if(ctx.readOnly&&!claudeReadOnly&&!codexReadOnly)throw new Error('Read-only execution is not verified for this ACP adapter');
+    const meta=claudeReadOnly?{disableBuiltInTools:true,claudeCode:{options:{strictMcpConfig:true,settingSources:[]}}}:undefined;
+    let s: any;
+    if (ctx.resumeSessionId) {
+      if (!initialized.agentCapabilities?.loadSession) throw new Error('This external engine cannot resume an existing session');
+      replaying = true;
+      try { s = await guard(conn.loadSession({ cwd, mcpServers, _meta:meta, sessionId: ctx.resumeSessionId }), 'loadSession'); }
+      finally { replaying = false; }
+      sessionId = ctx.resumeSessionId;
+    } else {
+      s = await guard(conn.newSession({ cwd, mcpServers, _meta:meta }), 'newSession'); sessionId = s.sessionId;
+    }
+    if (ctx.readOnly) {
+      const mode = s.modes?.availableModes?.find((m: any) => (claudeReadOnly ? m.id==='plan' : m.id==='read-only'));
+      if (!mode) throw new Error('This external engine does not advertise a read-only or plan mode');
+      await guard(conn.setSessionMode({ sessionId, modeId: mode.id }), 'setSessionMode');
+    }
     // 应用用户为该引擎选的模型(若与当前不同);失败不阻断,用引擎默认继续。
     if (ctx.engineModelId && ctx.engineModelId !== (s as any).models?.currentModelId) {
       try {
@@ -344,7 +376,7 @@ export async function runAcpEngine(def: EngineDef, ctx: EngineRunCtx): Promise<E
       conn.prompt({ sessionId, prompt: [{ type: 'text', text: ctx.message }] }),
       spawnFailed,
     ]);
-    return { ...result(), stopReason: res.stopReason };
+    return { ...result(), stopReason: res.stopReason, externalSessionId: initialized.agentCapabilities?.loadSession ? sessionId : undefined };
   } finally {
     startup.disarm(); // 到此子进程的死活不再是「起不来」:下面 killNow() 是我们自己杀的
     if (engineIdle) clearTimeout(engineIdle);
@@ -391,7 +423,7 @@ export async function probeAcpEngine(def: EngineDef): Promise<EngineCapabilities
   const guard = <T>(p: Promise<T>, label: string): Promise<T> =>
     Promise.race([withTimeout(p, HANDSHAKE_TIMEOUT_MS, label), spawnFailed]) as Promise<T>;
   try {
-    await guard(conn.initialize({
+    const initialized = await guard(conn.initialize({
       protocolVersion: PROTOCOL_VERSION,
       clientCapabilities: { fs: { readTextFile: false, writeTextFile: false } },
     }), 'initialize');
@@ -399,7 +431,7 @@ export async function probeAcpEngine(def: EngineDef): Promise<EngineCapabilities
     const { models, currentModelId } = mapAcpModels((s as any).models);
     // 命令在 newSession 后异步到达;收到即返回,否则 1.5s 超时。
     await Promise.race([commandsReceived, new Promise<void>((r) => setTimeout(r, 1500))]);
-    return { models, currentModelId, commands };
+    return { models, currentModelId, commands, loadSession:!!initialized.agentCapabilities?.loadSession, modes:(s as any).modes?.availableModes };
   } finally {
     startup.disarm(); // 下面这刀是我们自己捅的,不算「起不来」
     if (process.platform === 'win32') await killProcessTree(child);

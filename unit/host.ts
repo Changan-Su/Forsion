@@ -12,6 +12,7 @@ import { startBackend, migrateBackend } from './backendRunner'
 import { createAccountHttp } from './accountHttp'
 import { createLocalWorkspace } from './localWorkspace'
 import type { LocalRuntime, RuntimeFactory } from './runtimeTypes'
+import { createManagement, MANAGEMENT_PATH, type ManagementCommand } from './management'
 export { loadPackages } from './packages'
 
 export interface PluginInstallation { path: string; enabled?: boolean; publish?: boolean; config?: Record<string, unknown>; env?: Record<string, string> }
@@ -20,6 +21,7 @@ export interface UnitConfig {
   basePath: string; webDist: string; plugins: Array<string | PluginInstallation>
   defaultSpace?: string; dataDir?: string; workerFile?: string
   workspace?: { mode: 'local'; path?: string }
+  management?: { enabled: boolean }
 }
 type Backend = Awaited<ReturnType<typeof startBackend>>
 type State = 'disabled' | 'starting' | 'active' | 'stopping' | 'failed'
@@ -27,7 +29,7 @@ interface RecordState { package: InstalledPackage; installation: PluginInstallat
 const matches = (path: string, prefix: string) => prefix === '/' || path === prefix || path.startsWith(prefix + '/')
 const pathname = (url: string | undefined) => (url || '/').split('?')[0]
 
-export async function startBasicUnit(config: UnitConfig) {
+export async function startBasicUnit(config: UnitConfig, managementOptions: { execute?: (command: ManagementCommand, authorize: () => Promise<void>) => Promise<unknown> } = {}) {
   if (!config.instanceId || !config.name || !config.version) throw new Error('Unit identity is required')
   await readFile(resolve(config.webDist, 'index.html'))
   const dataDir = resolve(config.dataDir || resolve(homedir(), '.forsion', 'units', config.instanceId))
@@ -42,6 +44,7 @@ export async function startBasicUnit(config: UnitConfig) {
   const localWorkspace = local ? await createLocalWorkspace(dataDir, workspaceDir, () => runtimeVault()?.root() || null) : null
   const prefix = config.basePath.replace(/\/$/, '') || '/'
   const protectedPaths = ['unit', 'vault', 'engine'].map((name) => (prefix === '/' ? '' : prefix) + '/' + name)
+  protectedPaths.push(MANAGEMENT_PATH)
   for (const entry of config.plugins) {
     const installation = typeof entry === 'string' ? { path: entry } : { ...entry }
     const pack = await readPackage(installation.path, config.version)
@@ -131,7 +134,7 @@ export async function startBasicUnit(config: UnitConfig) {
   const options = (id: string, rec: RecordState) => ({ id, entry: rec.package.backendEntry!,
     packageDir: rec.package.root, dataDir: resolve(dataDir, 'plugins', id), config: rec.installation.config || {},
     env: { ...(rec.installation.config?.env as Record<string, string> || {}), ...rec.installation.env,
-      PORT: String(web.port), UNIT_HTTP_ORIGIN: `http://${localHost}:${web.port}` }, workerFile, startTimeoutMs: 120_000,
+      UNIT_DATA_DIR: dataDir, PORT: String(web.port), UNIT_HTTP_ORIGIN: `http://${localHost}:${web.port}` }, workerFile, startTimeoutMs: 120_000,
     onLog: (message: string) => console.log(`[plugin:${id}] ${message}`),
     onRestart: () => { if (!closing) void serialize(() => restart(id)).catch(() => console.error(`[unit] Plugin ${id} restart failed`)) },
     onFailure: (error: Error) => { console.error(`[unit] Plugin ${id}: ${error.message}`); rec.state = 'failed'; rec.backend = undefined; refreshProduct() },
@@ -209,11 +212,17 @@ export async function startBasicUnit(config: UnitConfig) {
   }
   const accountHttp = createAccountHttp({ dataDir, provider: accountProvider,
     pluginActive: (id) => { const rec = records.get(id); return !!rec && usable(rec) } })
+  const management = await createManagement({ enabled: config.management?.enabled === true, dataDir, version: config.version,
+    provider: accountProvider, execute: managementOptions.execute,
+    status: () => ({ instanceId: config.instanceId, version: config.version, pid: process.pid,
+      plugins: [...records.values()].map((r) => ({ id: r.package.manifest.id, version: r.package.manifest.version, state: r.state,
+        requires: r.package.manifest.requires || [] })) }) })
   const web = await startUnitWeb({
     account: local ? undefined : { metadata: () => accountProvider()?.account.metadata, handle: accountHttp },
     meta: { instanceId: config.instanceId, name: config.name, version: config.version },
     projection: { mode: local ? 'local' : 'public', basePath: config.basePath, product, capabilities, localCapabilities: () => ({ vault: !!runtimeVault(), engine: !!runtimeEngine()?.endpoint().url, host: !!runtimeEngine()?.endpoint().url }) },
     routeRequest: (req, res) => {
+      if (management.route(req, res)) return true
       const path = pathname(req.url), backend = select(path)
       if (backend) { backend.handle(req, res); return true }
       // Preserve UI-only gateways. Composed Units project under their declared prefix.
@@ -243,6 +252,7 @@ export async function startBasicUnit(config: UnitConfig) {
     throw error
   }
   return { ...web,
+    closeManagement: management.close,
     status: () => [...records.values()].map((r) => ({ id: r.package.manifest.id, version: r.package.manifest.version, state: r.state })),
     enable: (id: string) => serialize(() => activate(id)), disable: (id: string) => serialize(() => deactivate(id)),
     restart: (id: string) => serialize(() => restart(id)),
@@ -274,13 +284,13 @@ export async function startBasicUnit(config: UnitConfig) {
       if (!rec.package.backendEntry) throw new Error('Plugin has no backend migration')
       await migrateBackend(options(id, rec))
     }),
-    close: () => serialize(async () => {
+    close: async () => { await management.close(); return serialize(async () => {
       if (closing) return
       closing = true
       await web.close()
       const errors: unknown[] = []
       for (const id of [...ordered].reverse()) { try { await deactivate(id, true) } catch (error) { errors.push(error) } }
       if (errors.length) throw new AggregateError(errors, 'Some plugins failed to stop cleanly')
-    }),
+    }) },
   }
 }

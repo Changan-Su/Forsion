@@ -81,7 +81,7 @@ function identityFields(value: BackendIdentity | null): BackendIdentity | null {
   if (value === null) return null
   if (!value || typeof value !== 'object') throw new Error('Invalid account identity')
   const identity = {} as BackendIdentity
-  for (const field of ['userId', 'username', 'role', 'tenantId', 'workspaceId', 'nickname', 'avatar'] as const) {
+  for (const field of ['userId', 'username', 'role', 'tenantId', 'workspaceId', 'nickname', 'avatar', 'adminAccessRole'] as const) {
     const input = value[field]
     if (input === undefined && !['userId', 'username', 'role'].includes(field)) continue
     const limit = field === 'avatar' ? 1024 * 1024 : 512
@@ -90,6 +90,10 @@ function identityFields(value: BackendIdentity | null): BackendIdentity | null {
       throw new Error('Invalid account identity')
     }
     identity[field] = input
+  }
+  if (value.adminPermissions !== undefined) {
+    if (!Array.isArray(value.adminPermissions) || value.adminPermissions.length > 32 || value.adminPermissions.some((v) => typeof v !== 'string' || v.length > 64)) throw new Error('Invalid admin permissions')
+    identity.adminPermissions = [...value.adminPermissions]
   }
   return identity
 }
@@ -103,7 +107,7 @@ async function resolveAccount(command: Extract<BackendWorkerCommand, { type: 'ac
   const call = new AbortController()
   accountCalls.set(command.requestId, call)
   try {
-    const result = await plugin.account.resolve(command.token, { signal: call.signal })
+    const result = await plugin.account.resolve(command.token, { signal: call.signal, purpose: command.purpose === 'administration' ? 'administration' : undefined })
     if (!call.signal.aborted && ready) send({ type: 'account-result', requestId: command.requestId, identity: identityFields(result) })
   } catch {
     // A provider may include credentials in an exception. Neither errors nor stacks

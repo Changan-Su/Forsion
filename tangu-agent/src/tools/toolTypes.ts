@@ -92,6 +92,7 @@ export interface ToolContext {
   automationOrigin?: string;
   /** 内置工具黑白名单(config.toml tools_mode/tools_list):'deny'=名单内禁用,'allow'=仅名单内可用;
    *  缺省=不限制。只约束无门禁的内置工具,见 resolveTools。 */
+  toolsStrict?: boolean;
   toolsMode?: 'allow' | 'deny';
   toolsList?: string[];
   /** 本会话是否连接着聊天通道(微信/TG/QQ 活跃绑定):channel_send_* 仅此时暴露。loop 每 run 预查一次。
@@ -238,6 +239,8 @@ export interface ToolCapabilities {
   /** 正向声明:允许作为自动化 tool_call 动作(不经 LLM 定参直执行)。缺省 false——
    *  插件工具不声明就不进动作目录(declaredAutomationSafe;内置另有 curated 白名单)。 */
   automationSafe?: boolean;
+  /** Explicitly expose this plugin tool through Desktop MCP. Writes require native approval. */
+  externalMcp?: boolean;
   /** 结果不落库:本轮模型拿到全文(tool 消息),而 chat_messages.tool_results / agent_steps.tool_results /
    *  tool_result 事件(agent_run_events,也是界面工具卡的数据)只存这句占位,下一轮回放也只见占位。
    *  给数据自带保留期 / 清除语义的工具(read_computer_history:7 天 + 用户清除)—— 落库副本会绕过它。
