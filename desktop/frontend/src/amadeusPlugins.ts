@@ -4,7 +4,7 @@ import { amadeusAvailable } from './features/runtime'
  *    outline(壳有原生大纲视图)、extra-themes(其 [data-theme=…] 选择器在桌面 EditorScope 下永不命中)。
  *  - 插件贡献的 commands 桥进 engine 命令面板(全局可见,id 前缀 amadeus:)。
  *  - 插件 API 的 openSearch/openSwitcher(uiStore.palette)映射到桌面等价物,外部插件不改也能用。 */
-import { applyPluginEnableStamp, PLUGIN_ENABLE_STAMP_KEY, usePluginStore } from '@amadeus/plugins/pluginStore'
+import { applyPluginEnableStamp, FILE_OPENERS_KEY, PLUGIN_ENABLE_STAMP_KEY, syncFileOpeners, usePluginStore } from '@amadeus/plugins/pluginStore'
 import type { AmadeusPlugin } from '@amadeus/plugins/types'
 import { calloutBlocks, wordCount } from '@amadeus/plugins/builtins'
 import { usePageStore } from '@amadeus/store/pageStore'
@@ -41,7 +41,9 @@ export function installAmadeusPlugins(): void {
   // immediately when another window disables their owner; do not repeat automation mutations.
   window.addEventListener('storage', (event) => {
     if (event.key === PLUGIN_ENABLE_STAMP_KEY) return applyPluginEnableStamp(event.newValue)
+    if (event.key === FILE_OPENERS_KEY) return syncFileOpeners() // 别的窗口改了默认打开方式
     if (event.key !== 'amadeus.plugins.disabled' && event.key !== null) return
+    if (event.key === null) syncFileOpeners() // 整个存储被清空:打开方式也回到自动
     usePluginStore.getState().syncDisabledPreferences()
     void import('./userSpaces').then(async (m) => { await m.loadUserSpaces(); m.settleAsyncStartupSpace() })
   })

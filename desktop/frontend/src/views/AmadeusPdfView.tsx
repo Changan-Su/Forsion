@@ -1,5 +1,5 @@
-/** 独立 PDF 视图:树上点 .pdf / 笔记里点 [[x.pdf#page=N]] 在应用内打开可批注阅读器。
- *  多实例(params.pdfPath 认领文件、随布局持久化);批注写进 PDF 本身,见 PdfAnnotator。
+/** 独立 PDF 视图:树上点 .pdf / 笔记里点 [[x.pdf#page=N]] 在应用内打开内置阅读器(只读)。
+ *  多实例(params.pdfPath 认领文件、随布局持久化);阅读器本体见 PdfAnnotator(旧名,不再批注)。
  *  PdfAnnotator 懒加载 —— pdf.js viewer 较重,只在真的打开 PDF 时才拉那块 chunk(不进主包)。 */
 import { Suspense, useEffect } from 'react'
 import { Skeleton } from '@lcl/engine'
@@ -22,8 +22,8 @@ export function AmadeusPdfView({ leaf }: ViewProps) {
   // 若在 root 落地前就读字节 → 主进程「No vault is open」。gate 住:vault ready 前不挂 PdfAnnotator(不读字节)。
   // 库外 PDF(引用条给的绝对路径)不经 vault 通道读字节 → 不必等 vault 落地。
   const vaultReady = usePageStore((s) => !!s.vaultRoot) || isHostPath(pdfPath)
-  // 换库(本地 ⇄ 云端、换根)后同一个相对路径指的是另一份文件:阅读器按库根重挂,不然它攥着旧库的整份字节,
-  // 下一笔批注经 saveVaultBytes 写进新库的同名 PDF(Codex 评审 P1)。库外 PDF 与库无关,不跟着重挂。
+  // 换库(本地 ⇄ 云端、换根)后同一个相对路径指的是另一份文件:阅读器按库根重挂,不然它显示的还是旧库那份
+  // (文件变化后的重载也会按新库的同名文件去读)。库外 PDF 与库无关,不跟着重挂。
   const vaultRoot = usePageStore((s) => s.vaultRoot)
   // navigateLeaf 会把标题重置为 displayName,挂载/换文件后设回 PDF 名(AmadeusDbView 同款)。
   useEffect(() => {

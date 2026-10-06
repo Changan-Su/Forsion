@@ -14,7 +14,7 @@ import { Breadcrumb, NoteTitle } from '../../amadeusViews'
 import { AmadeusPropertiesPanel } from '../../amadeusProperties'
 import { isCoarsePointer } from '../../touch'
 import { createBlockSurface, mountHostReact } from './blockSurface'
-import { isValidPluginExt } from './pluginStore'
+import { isPagePipelinePath, isValidPluginExt } from './pluginStore'
 import type { PluginPageSurface } from './types'
 
 /** 文档模式要的是「与普通笔记**完全无差**的身体」(2026-08-14 用户验收拍板):封面横幅 + emoji
@@ -54,7 +54,9 @@ export function createPluginViewSurface(
   // 畸形后缀(裸 '.md'/'md'/空串)不参与匹配:endsWith('') 恒真、endsWith('md') 命中一切笔记,
   // 会把文件头那条毁档防线整个打开。注册端(registerFileType)已拒,这里是纵深兜底。
   const usable = extensions.map((e) => String(e ?? '')).filter(isValidPluginExt)
-  const claims = (p: string): boolean => usable.some((e) => p.toLowerCase().endsWith(e.toLowerCase()))
+  // 先过 isPagePipelinePath:页表面是笔记读写管线,loadPage 之后一存就是 markdown。非 md 类型(覆盖内置的
+  // `.pdf`)或内置的白板放进来,插件一句 loadPage 就把文件改写掉 = 毁档 —— 哪怕它声明的后缀里有这一条。
+  const claims = (p: string): boolean => isPagePipelinePath(p) && usable.some((e) => p.toLowerCase().endsWith(e.toLowerCase()))
 
   const surface: PluginPageSurface = {
     ...api,

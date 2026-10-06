@@ -5,6 +5,7 @@ import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import chokidar, { type FSWatcher } from 'chokidar'
 import type { VaultManager } from './vaultManager'
+import { isOverridableBuiltinType } from '@amadeus-shared/builtinTypes'
 
 /** `ctx.app.watchFile` 能监听的文件类型白名单:只有文本配置类。见 handle() 里的说明。 */
 const WATCHABLE_TEXT = /\.(js|mjs|cjs|json|jsonc|ya?ml|toml|txt|csv|tsv|css|html?|xml|ini|conf)$/i
@@ -56,6 +57,13 @@ export class VaultWatcher {
     // 规则表 .json),而库里躺着的是图片/PDF/视频 —— 外部工具改写它们是常事,无条件
     // readFile('utf8') 会把整个文件拽进主进程内存,换一次注定被丢弃的比较(500MB 的视频被剪辑
     // 软件存一次盘 = 主进程读 500MB)。这里也不能靠「有没有人订阅」来省:回调是 ipc 无条件挂上的。
+    // 例外:插件可接管的内置格式(目前只有 PDF)只报「变了」,**不读内容** —— 内置阅读器与接管它的插件
+    // 各自重读。不读就没有上面那笔开销;也就没法按内容滤掉自写的回声,而宿主自己不写这类文件
+    // (saveVaultBytes 本来就不记自写账本),没有要压掉的回声。
+    if (isOverridableBuiltinType(abs)) {
+      this.onExternalFileChange?.(path.relative(root, abs))
+      return
+    }
     const isWatchable = !isMd && !isDb && !!this.onExternalFileChange && WATCHABLE_TEXT.test(abs)
     if (!isMd && !isDb && !isWatchable) return
     let content = ''

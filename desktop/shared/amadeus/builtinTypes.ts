@@ -27,6 +27,23 @@ export function isBuiltinFileType(p: string): boolean {
   return BUILTIN_FILE_SUFFIXES.some((ext) => n.endsWith(ext))
 }
 
+/** 内置类型里**允许插件覆盖**的后缀(2026-10-05 用户定:内置视图是兜底,插件可以覆盖)。
+ *  覆盖 = 启用的插件用 `registerFileType({ override: true })` 认领之后,「打开这个文件」进插件的视图;
+ *  插件禁用 / 卸载 / 没装时照旧是内置视图,右键菜单也始终留着「用内置阅读器打开」。
+ *  不写 `override: true` 的插件照旧被拒 —— 07-26 那次是旧插件**碰巧**声明了同名后缀,覆盖必须是显式的。
+ *
+ *  ⚠️ 这张表只收「宿主管线不持续读写」的格式。`.excalidraw.md` / `.db` 是编译器、数据库引擎、同步
+ *  合并都在读写的数据格式,第二个编辑器进来 = 两套口径改同一份文件,不放。往这儿加后缀之前先过这一条。
+ *  覆盖的只是「打开文件」:带页码 / 引语的跳转(聊天引用、`[[x.pdf#page=3]]`)与 `![[x.pdf]]` 嵌入
+ *  仍走内置阅读器(findEmbedRenderer 那道闸没放开)。 */
+export const OVERRIDABLE_BUILTIN_SUFFIXES = ['.pdf'] as const
+
+/** path(或一条扩展名声明)是否落在「可被插件覆盖的内置类型」上。 */
+export function isOverridableBuiltinType(p: string): boolean {
+  const n = p.toLowerCase()
+  return OVERRIDABLE_BUILTIN_SUFFIXES.some((ext) => n.endsWith(ext))
+}
+
 /** `.md` 目标是不是「笔记」(而不是某个文件类型)。
  *  判据 = **不在内置后缀表上**就是笔记。刻意不写「带两个点就不是笔记」那种形状启发式:
  *  `X.fd.md`(子笔记夹)、`ADR.001.md`(带版本号的名字)都是货真价实的笔记(Codex 评审 medium)。

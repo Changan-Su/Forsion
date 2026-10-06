@@ -144,6 +144,9 @@ export interface PluginAppApi extends BlockSurfaceApi {
   getActivePage(): string | null
   /** The active note's whole body as markdown — same value (and same staleness) as `getPage().text`. */
   getActivePageText(): string
+  /** Load a note into the active editor. Only `.md` notes enter the note pipeline: any other path
+   *  (a PDF, an image, a `.excalidraw.md` whiteboard) is refused with a console warning — loading one
+   *  would let the next save rewrite it as markdown. Use `openFile` to open such files. */
   loadPage(path: string): void
   createPage(): void
   toggleMode(): void
@@ -177,7 +180,8 @@ export interface PluginAppApi extends BlockSurfaceApi {
    *  用途:导入用户从磁盘选来的模型 / 图片 / 音频(`<input type=file>` 的 `File.arrayBuffer()`),
    *  或把插件自己渲染的截图落盘给 Agent 看。
    *  ⚠️需要活动库。没有活动库时**reject**('No vault is open'),同 writeFile。
-   *  ⚠️**不走自写账本**:同一路径上的 `watchFile` 会把这次写当成外部改动回调一次 —— 别 watch 自己写的二进制。
+   *  ⚠️**不走自写账本**:同一路径上的 `watchFile` 会把这次写当成外部改动回调一次 —— watch 着自己写的文件时,
+   *  回调里先比一下内容再决定要不要重载(否则每次保存都把自己刷一遍)。
    *  旧宿主 / 桥缺席:方法整个不存在 → `ctx.app.writeBytes?.(…)`。 */
   writeBytes?(path: string, bytes: Uint8Array | ArrayBuffer): Promise<void>
   /** 读库内文件的原始字节(2026-09-19+)。不存在 / 越界 / 没有活动库 → null(不抛,同 readFile 口径)。
@@ -194,6 +198,8 @@ export interface PluginAppApi extends BlockSurfaceApi {
   /** 订阅某个 vault 文件的**外部**内容改动(2026-08-15+),返回退订。用途:插件把配置/片段库写成
    *  库里的一个文件,用户拿别的编辑器改完要能热重载。
    *  ⚠️只报「内容变了」这一类事件 —— 新建/删除/改名不报(那是文件树的事)。
+   *  ⚠️只盯文本配置类文件(js / json / yaml / csv / txt …,≤2MB)和 PDF(2026-10-05+);别的二进制(图片、音视频)不报。
+   *  PDF 的事件不比内容:你自己 `writeBytes` 的那次、只改了修改时间的那次也会来。
    *  ⚠️自写不回声:经 `writeFile` 落的盘走自写账本,不会把自己的保存当外部改动弹回来。
    *  ⚠️路径必须与 `readFile` 用的是同一个字符串(vault 相对、`/` 分隔);大小写按平台。
    *  旧宿主 / 非桌面宿主没有:`const off = ctx.app.watchFile?.(p, cb)`,缺位时自己退化成轮询。 */
@@ -209,7 +215,9 @@ export interface PluginAppApi extends BlockSurfaceApi {
   openFile(path: string): void
   /** Open a plain Markdown note in the native Amadeus editor. `reuseKey` addresses a dedicated editor
    *  declared by a Space (for example a document companion beside a plugin view); `activate:false`
-   *  updates that pane without stealing focus from the source view. Older hosts lack this seam. */
+   *  updates that pane without stealing focus from the source view. Older hosts lack this seam.
+   *  A path that is not a `.md` note (PDF, image, whiteboard) never reaches the note editor: it is
+   *  handed to `openFile` instead (2026-10-05+). */
   openNote?(path: string, options?: { reuseKey?: string; activate?: boolean; newTab?: boolean }): void
 
   // ── 只读 vault 查询面(2026-08-14+)。纯透传主进程既有能力,**没有任何写口**。
@@ -633,6 +641,22 @@ export interface FileTypeContribution {
    *  hand-editing corrupts the view and a plain note has no such keys. Hidden ≠ droppable: the
    *  panel still round-trips them verbatim on every properties edit. (2026-08-14) */
   fmKeys?: string[]
+  /** Take over a built-in file type (2026-10-05+). Only meaningful for the overridable built-in
+   *  suffixes — currently just `.pdf`. With `override: true`, opening such a file (tree click,
+   *  `ctx.app.openFile`, recent items) mounts this view; the built-in reader stays as the fallback
+   *  (plugin disabled or uninstalled → built-in again, and the tree's context menu always offers
+   *  "Open with the built-in reader"). Without it the suffix is refused as before.
+   *  The user picks who opens the type in Settings → Plugins → Default openers (Automatic / built-in
+   *  reader / a specific plugin); Automatic gives it to the first enabled plugin that overrides it.
+   *  The built-in reader is read-only and reloads when the file changes, so what you write with
+   *  `ctx.app.writeBytes` shows up in an already-open built-in tab.
+   *  Not taken over: jumps that carry a page or quote (chat citations, `[[x.pdf#page=3]]`) and
+   *  `![[x.pdf]]` embeds — those keep using the built-in reader.
+   *  ⚠️ Binary types get no page surface: `file.surface.loadPage` refuses non-`.md` paths. Read the
+   *  file with `ctx.app.readBytes?.()` and save with `ctx.app.writeBytes?.()`.
+   *  Other built-in suffixes (`.excalidraw.md`, `.db`, images) cannot be overridden. Older hosts
+   *  ignore this field and return `false` from registerFileType — stand down as documented there. */
+  override?: boolean
   /** Build the editor for one file into the host element; called once per opened instance. Return a
    *  cleanup (flush/save-on-close, clear timers here). Read/write the file via ctx.app.readFile/writeFile.
    *  `file.surface` (2026-08-14, when present): a per-view page surface scoped to this tab — prefer it
@@ -855,7 +879,8 @@ export interface PluginContext {
   /** Contribute a custom file type: tree icon + dedicated editor view + click-to-open. Declare the same
    *  suffixes in manifest `fileExtensions`. See FileTypeContribution. */
   /** Returns false when EVERY declared suffix is already owned by a built-in file type — the host
-   *  refuses the registration (built-ins always win) and the plugin should stand down entirely
+   *  refuses the registration (built-ins win, except an overridable one claimed with
+   *  `override: true`; see FileTypeContribution.override) and the plugin should stand down entirely
    *  (skip its file creator / slash item too, or the user sees duplicate "New X" entries).
    *  Older hosts return undefined, so test with `=== false`. */
   registerFileType(def: FileTypeContribution): boolean | void

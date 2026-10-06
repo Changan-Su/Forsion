@@ -21,7 +21,8 @@ import { setTheme as applyAccent, toggleMode } from '../theme/ThemeManager'
 import { amadeus } from '../api'
 import { BUILTIN_PLUGINS } from './builtins'
 import { getPropertyType, registerPropertyType as registerPropType, unregisterPropertyType as unregisterPropType } from '../blocks/database/propertyTypes'
-import { isBuiltinFileType } from '@amadeus-shared/builtinTypes'
+import { isBuiltinFileType, isOverridableBuiltinType, OVERRIDABLE_BUILTIN_SUFFIXES } from '@amadeus-shared/builtinTypes'
+import { isHostPath } from '@amadeus-shared/pdfLink'
 import { claimHostMount, createBlockSurface, mountHostReact } from './blockSurface'
 import { addEditorExtension, clearEditorExtensions } from './editorExtensions'
 import { registerPluginSeries, track, unregisterPluginAchievements } from '../../achievements/store'
@@ -304,7 +305,14 @@ function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppAp
     // 两条路由通用(v4 不设 activePage;正文也不进 store —— 一律取块表面那份统一派生,别再各写各的)。
     getActivePage: () => noteOf(usePageStore.getState()),
     getActivePageText: () => surface.api.getPage().text,
-    loadPage: (p) => { if (ok()) void usePageStore.getState().loadPage(p) },
+    loadPage: (p) => {
+      if (!ok()) return
+      if (!isPagePipelinePath(String(p ?? ''))) {
+        console.warn(`[plugin:${pluginId}] ctx.app.loadPage(${String(p)}) 被拒:只有 .md 笔记能进笔记管线(二进制文件用 readBytes / writeBytes)`)
+        return
+      }
+      void usePageStore.getState().loadPage(p)
+    },
     createPage: () => { if (ok()) void usePageStore.getState().createPage() },
     toggleMode: () => void toggleMode(),
     setTheme: (t) => applyAccent(t),
@@ -387,7 +395,8 @@ function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppAp
     openFile: (p) => { if (ok()) void import('../../amadeusNav').then((m) => m.openFile(p)) },
     // 裸 Markdown 必须显式走 Amadeus editor,不能借 openFile(后者对未认领后缀会交给系统默认程序)。
     // reuseKey 让插件 Space 能稳定更新自己声明的文档伴随栏,activate:false 不抢回源视图焦点。
-    openNote: (p, options) => { if (ok()) void import('../../amadeusNav').then((m) => m.openNote(p, options)) },
+    // 非笔记路径(PDF / 图片 / 白板…)不进笔记编辑器:交给 openFile 按类型开对的视图(同 isPagePipelinePath)。
+    openNote: (p, options) => { if (ok()) void import('../../amadeusNav').then((m) => (isPagePipelinePath(String(p ?? '')) ? m.openNote(p, options) : m.openFile(p))) },
     // 只读 vault 查询面(2026-08-14,codex 评审后的口径):纯透传主进程既有 IPC,没有写口。
     // 三条统一语义 —— **桥缺席(web/台架未垫)或没有活动库都给空数组,绝不 reject**:
     // 插件侧的可选链只挡得住「宿主没这个方法」,挡不住「方法在但 window.amadeus 是 undefined」,
@@ -631,6 +640,13 @@ export function isValidPluginExt(e: string): boolean {
   if (!e.startsWith('.') || e.length < 2) return false
   if (/\.md$/i.test(e)) return /^\.[^.].*\.md$/i.test(e) // md 类必须复合后缀 '.X.md'
   return true
+}
+
+/** 这条路径能不能进笔记读写管线(loadPage → 编辑 → savePage)。只有 `.md`、且不是内置文件类型(白板)才行:
+ *  二进制(被插件覆盖的 `.pdf`)或白板进来,第一次保存就被写成 markdown = 毁档(主进程的 loadPage / savePage 不验后缀)。
+ *  插件够得着的三个入口共用这一条:ctx.app.loadPage、ctx.app.openNote、文件视图的页表面(viewSurface)。 */
+export function isPagePipelinePath(p: string): boolean {
+  return /\.md$/i.test(p) && !isBuiltinFileType(p)
 }
 
 /** 每个正在运行的插件一本副作用账(effectScope.ts);teardown 关账。模块级:视图宿主组件也要往里记。 */
@@ -1166,7 +1182,8 @@ export const usePluginStore = create<PluginState>((set, get) => {
       })),
     registerView: (view) => set((s) => ({ views: [...s.views, { pluginId, item: view }] })),
     registerListSource: (src) => set((s) => ({ listSources: [...s.listSources, { pluginId, item: src }] })),
-    // 内置后缀不给注册(内置优先是硬规则,见 isBuiltinFileType)。返回 false 让插件知道自己被内置取代了,
+    // 内置后缀不给注册(内置优先是硬规则,见 isBuiltinFileType);唯一的口子是「可覆盖」的那几个后缀
+    // 配上显式的 override: true(见 isOverridableBuiltinType)。返回 false 让插件知道自己被内置取代了,
     // 可以整体退让 —— 光靠 find* 那道闸拦不住插件继续贡献重复的「新建 X」右键项和斜杠项。
     // 旧宿主返回 undefined(≠ false),插件的 `if (ok === false) return` 判定天然兼容。
     registerFileType: (def) => {
@@ -1174,7 +1191,9 @@ export const usePluginStore = create<PluginState>((set, get) => {
       // ⚠️开发副本不给注册文件类型:主进程的毁档防线(collectPluginExts → listPages 排除)只扫已安装目录,
       // dev 根不在其中。清单里声明 fileExtensions 会被判 'dev-fileext' 拒载 —— 但只拦清单等于只拦了无害的那半:
       // 删掉那一行就能载入,setup 里照样调到这里,用户在真库里建出的 `.foo.md` 会被笔记管线改写(评审 MED)。
-      if (get().plugins.find((p) => p.id === pluginId)?.dev) {
+      // 这道防线只为 `.md` 类后缀而设:非 md 后缀(如覆盖内置的 `.pdf`)本来就不进笔记管线,
+      // 开发副本可以注册 —— 否则写一个 PDF 插件只能反复安装着测。
+      if (get().plugins.find((p) => p.id === pluginId)?.dev && exts.some((e) => /\.md$/i.test(String(e ?? '')))) {
         console.warn(`[plugin:${pluginId}] registerFileType(${exts.join(',')}) 被拒:开发副本的自定义文件类型不受宿主扩展名保护,请先安装再测`)
         return false
       }
@@ -1185,15 +1204,20 @@ export const usePluginStore = create<PluginState>((set, get) => {
         console.warn(`[plugin:${pluginId}] registerFileType(${exts.join(',')}) 被拒:后缀声明不合形态(须 '.x',md 类须复合后缀 '.X.md')`)
         return false
       }
-      if (exts.every((e) => isBuiltinFileType(String(e)))) {
-        console.warn(`[plugin:${pluginId}] registerFileType(${exts.join(',')}) 被拒:该后缀已由 Forsion 内置文件类型认领`)
+      const taken = (e: string): boolean => isBuiltinFileType(e) && !(def.override === true && isOverridableBuiltinType(e))
+      if (exts.every((e) => taken(String(e)))) {
+        const hint = exts.some((e) => isOverridableBuiltinType(String(e))) ? '(这个后缀可以覆盖,但要显式写 override: true)' : ''
+        console.warn(`[plugin:${pluginId}] registerFileType(${exts.join(',')}) 被拒:该后缀已由 Forsion 内置文件类型认领${hint}`)
         return false
       }
       // fmKeys(属性面板隐藏用)只收非空字符串;amadeus_* 是编译器地盘,插件不许认领。
       const fmKeys = Array.isArray(def?.fmKeys)
         ? def.fmKeys.map((k) => String(k ?? '').trim()).filter((k) => k && !/^amadeus_/.test(k))
         : undefined
-      set((s) => ({ fileTypes: [...s.fileTypes, { pluginId, item: fmKeys ? { ...def, fmKeys } : def }] }))
+      // 认领不了的内置后缀从贡献里剔掉(混着声明 ['.pdf', '.excalidraw.md'] 时只留 '.pdf'):留着的话,
+      // 页表面按「本类型的后缀」放行 loadPage,白板就能被这个插件拽进笔记管线(Codex 评审 P0)。
+      const extensions = exts.map((e) => String(e)).filter((e) => !taken(e))
+      set((s) => ({ fileTypes: [...s.fileTypes, { pluginId, item: { ...def, extensions, ...(fmKeys ? { fmKeys } : {}) } }] }))
       return true
     },
     registerEmbedRenderer: (def) =>
@@ -1952,15 +1976,67 @@ subscribeLocale(() => {
 // 组件要响应「插件加载后才注册」须自行订阅 usePluginStore((s) => s.fileTypes / s.embedRenderers) 再调 find*;
 // 非响应式调用(nav 路由、视图挂载那一刻)用下面读快照的 match*。
 
-/** 在给定 fileTypes 列表里按路径后缀找命中的文件类型贡献(纯函数,便于组件订阅列表后调用)。
- *  内置文件类型的后缀一律不放行(生态硬规则,见 isBuiltinFileType):遮蔽内置 = 用户打不开内置视图。 */
+// ── 默认打开方式(设置 → 插件 → 已安装):可覆盖的内置后缀 → 'builtin' | 插件 id。
+//    没记、或记的插件此刻不在候选里(停用 / 卸载了)= 自动:有插件接管就归它(先注册的那个),否则内置。
+//    偏好读进模块级缓存:findFileType 到处被同步调用,不能每次去读 localStorage。
+export const FILE_OPENERS_KEY = 'amadeus.fileOpeners'
+export const BUILTIN_OPENER = 'builtin'
+function readFileOpeners(): Record<string, string> {
+  try {
+    const v: unknown = JSON.parse(localStorage.getItem(FILE_OPENERS_KEY) || '{}')
+    return v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, string> : {}
+  } catch {
+    return {}
+  }
+}
+let fileOpeners = readFileOpeners()
+/** 换一个 fileTypes 数组引用:订阅它的组件(文件树、右键菜单、文件视图、设置页)据此重算 findFileType。 */
+const bumpFileTypes = (): void => usePluginStore.setState((st) => ({ fileTypes: [...st.fileTypes] }))
+/** 设置某个可覆盖后缀的默认打开方式;`''` = 自动。 */
+export function setFileOpener(ext: string, pick: string): void {
+  const next = { ...fileOpeners }
+  if (pick) next[ext] = pick
+  else delete next[ext]
+  fileOpeners = next
+  try { localStorage.setItem(FILE_OPENERS_KEY, JSON.stringify(next)) } catch { /* 存不下就只在本次运行生效 */ }
+  bumpFileTypes()
+}
+/** 别的窗口改了偏好(storage 事件):重读并让本窗跟上。 */
+export function syncFileOpeners(): void {
+  fileOpeners = readFileOpeners()
+  bumpFileTypes()
+}
+type OwnedFileType = { item: FileTypeContribution; pluginId?: string }
+/** 显式写了 override、且后缀对得上这个(小写)路径的贡献,按注册先后。 */
+const overriders = (list: OwnedFileType[], lowerPath: string): OwnedFileType[] =>
+  list.filter((o) => o.item.override === true && o.item.extensions.some((e) => lowerPath.endsWith(e.toLowerCase())))
+/** 设置页用:接管了 ext 的插件(启用中的)与当前选择。存着的选择对不上候选时按自动报,下拉框不会吃到匹配不上的值。 */
+export function fileOpenerChoice(list: OwnedFileType[], ext: string): { pick: string; pluginIds: string[] } {
+  const pluginIds = [...new Set(overriders(list, `x${ext}`).map((o) => o.pluginId).filter((id): id is string => !!id))]
+  const stored = fileOpeners[ext] ?? ''
+  return { pick: stored === BUILTIN_OPENER || pluginIds.includes(stored) ? stored : '', pluginIds }
+}
+
+/** 在给定 fileTypes 列表里按路径后缀找命中的文件类型贡献(便于组件订阅列表后调用)。
+ *  内置文件类型的后缀不放行(生态硬规则,见 isBuiltinFileType):遮蔽内置 = 用户打不开内置视图。
+ *  例外只有「可覆盖」的那几个后缀(isOverridableBuiltinType),而且只认显式写了 override: true 的贡献 ——
+ *  命中即视为插件接管了「打开这个文件」,内置视图退为兜底。由谁打开听「默认打开方式」(见上)。 */
 export function findFileType(
-  list: { item: FileTypeContribution }[],
+  list: OwnedFileType[],
   path: string,
 ): FileTypeContribution | undefined {
-  if (isBuiltinFileType(path)) return undefined
   const n = path.toLowerCase()
-  return list.find((o) => o.item.extensions.some((ext) => n.endsWith(ext.toLowerCase())))?.item
+  const claims = (o: OwnedFileType): boolean => o.item.extensions.some((ext) => n.endsWith(ext.toLowerCase()))
+  if (isBuiltinFileType(path)) {
+    // 绝对路径 = 库外文件(聊天引用里的本机 PDF):插件只读得到库内路径,一律留给内置阅读器。
+    if (!isOverridableBuiltinType(path) || isHostPath(path)) return undefined
+    const ext = OVERRIDABLE_BUILTIN_SUFFIXES.find((e) => n.endsWith(e))!
+    const pick = fileOpeners[ext]
+    if (pick === BUILTIN_OPENER) return undefined
+    const cands = overriders(list, n)
+    return (cands.find((o) => o.pluginId === pick) ?? cands[0])?.item
+  }
+  return list.find(claims)?.item
 }
 
 /** 当前已注册文件类型里匹配 path 的那个(读快照,非响应式)。 */
@@ -1971,6 +2047,9 @@ export function matchFileType(path: string): FileTypeContribution | undefined {
 /** 文件名去掉命中的文件类型后缀(如 `思维导图.mindmap.md` + ['.mindmap.md'] → `思维导图`);兜底剥最后一段扩展名。 */
 export function fileTypeBaseName(path: string, extensions: string[]): string {
   const name = path.split(/[\\/]/).pop() || path
+  // 被插件覆盖的内置类型(.pdf)照内置的叫法带着后缀:树上的行、标签页、最近使用里它一直是「书.pdf」,
+  // 不能因为换了谁来打开就改名(插件一停一启,名字跟着来回变)。
+  if (isBuiltinFileType(path)) return name
   const lower = name.toLowerCase()
   const ext = extensions.find((e) => lower.endsWith(e.toLowerCase()))
   return ext ? name.slice(0, name.length - ext.length) : name.replace(/\.[^.]+$/, '')

@@ -24,7 +24,7 @@ Amadeus 是 Forsion 内置的笔记空间。它的第一原则:**你的笔记是
 | [多维表](databases.md) | 类 Notion 的表格数据库,多视图 |
 | [白板](whiteboard.md) | Excalidraw 兼容的无限画布,可选有限纸张与多页文档 |
 | [仪表盘](dashboard.md) | 24 列网格里自由摆卡片:正文、图片、嵌入的笔记 / 多维表 / 白板,外加时钟、天气、网页卡 |
-| [PDF](pdf-annotation.md) | 原生批注,写进 PDF 文件本身 |
+| [PDF](pdf-annotation.md) | 内置阅读器(只读);批注由接管 PDF 的插件提供 |
 | [日历](calendar.md) | 聚合多维表、待办与 Agent 日程,也能订阅外部日历 |
 | 思维导图 | 由[插件](../customization/plugins.md)提供,装上就和其他形态并列出现 |
 

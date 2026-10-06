@@ -53,7 +53,7 @@ import { HostLocaleProvider, registerMessages, subscribeLocale, translate } from
 registerMessages({
   'uembed.openInTab': { zh: '在 Forsion 标签页中打开', en: 'Open in a Forsion tab' },
   'uembed.openWithSystem': { zh: '用系统默认程序打开', en: 'Open with the system default app' },
-  'uembed.openPdfInTab': { zh: '在 Forsion 标签页中打开（可批注）', en: 'Open in a Forsion tab (with annotations)' },
+  'uembed.openPdfInTab': { zh: '在 Forsion 标签页中打开', en: 'Open in a Forsion tab' },
   'uembed.open': { zh: '打开 ↗', en: 'Open ↗' },
   'uembed.startAt': { zh: '起播时刻', en: 'Start time' },
   'uembed.badAnchor': { zh: '锚点无效 · 从 0 秒起播', en: 'Invalid anchor · playing from 0:00' },
@@ -247,7 +247,7 @@ function FileEmbed({ name, fileKind, pagePath, loc, badAnchor, insertAfter }: {
         pdfVaultPath ? (
           <div className="embed-pdf embed-pdf-live">
             <Suspense fallback={<div className="embed-pdf-loading">{t('uembed.loadingPdf')}</div>}>
-              <PdfEmbedViewer pdfPath={pdfVaultPath} readOnly />
+              <PdfEmbedViewer pdfPath={pdfVaultPath} embed />
             </Suspense>
           </div>
         ) : (

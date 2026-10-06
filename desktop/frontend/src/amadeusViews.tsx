@@ -163,7 +163,7 @@ registerMessages({
   'amxv.menu.delete': { zh: '删除', en: 'Delete' },
   'amxv.menu.open': { zh: '打开', en: 'Open' },
   'amxv.menu.openWithSystem': { zh: '用系统程序打开', en: 'Open with the system app' },
-  'amxv.menu.openAnnotate': { zh: '打开（可批注）', en: 'Open (annotatable)' },
+  'amxv.menu.openBuiltinReader': { zh: '用内置阅读器打开', en: 'Open with the built-in reader' },
   'amxv.menu.openDrawing': { zh: '打开白板', en: 'Open whiteboard' },
   'amxv.menu.newSubfolder': { zh: '新建子文件夹', en: 'New subfolder' },
   'amxv.menu.publishFolder': { zh: '发布此文件夹（公开链接）', en: 'Publish this folder (public link)' },
@@ -1619,7 +1619,11 @@ export function AmadeusPagesView() {
             </>
           ) : isPdfPath(menu.path) ? (
             <>
-              <button onClick={() => { openPdf(menu.path); setMenu(null) }}><Eye size={13} /> {t('amxv.menu.openAnnotate')}</button>
+              {/* 「打开」走默认打开方式;插件接管了 PDF 时,内置阅读器留一条永远够得着的入口。 */}
+              <button onClick={() => { openFile(menu.path); setMenu(null) }}><Eye size={13} /> {t('amxv.menu.open')}</button>
+              {findFileType(pluginFileTypes, menu.path) && (
+                <button onClick={() => { openPdf(menu.path); setMenu(null) }}><BookOpen size={13} /> {t('amxv.menu.openBuiltinReader')}</button>
+              )}
               <button onClick={() => { void amadeus.openVaultFile(menu.path).catch(() => {}); setMenu(null) }}><ExternalLink size={13} /> {t('amxv.menu.openWithSystem')}</button>
             </>
           ) : isImagePath(menu.path) ? (

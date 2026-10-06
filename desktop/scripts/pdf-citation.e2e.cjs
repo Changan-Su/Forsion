@@ -102,7 +102,8 @@ async function main() {
     // ⚠️ e2e 与用户 dev 实例共用 renderer 存储(dev 模式 userData 恒为 forsion-desktop-dev),
     // 「上次 Space」是谁最后用谁说了算 —— 用户停在主页/Amadeus,这里就会开在那儿,聊天侧栏根本不存在
     // (08-28 深夜三连红的真相,失败截图= 主页 Space)。确定性切到 Tangu 聊天 Space 再断言,幂等。
-    const spaceBtn = win.locator('.rb-space[aria-label="Agent"]').first()
+    // 聊天 Space 的名字改过(Agent → Tangu):两个都认,否则一直停在主页、聊天侧栏根本不存在(2026-10-05 实测)。
+    const spaceBtn = win.locator('.rb-space[aria-label="Tangu"], .rb-space[aria-label="Agent"]').first()
     if (await spaceBtn.count().catch(() => 0)) { await spaceBtn.click().catch(() => {}); await win.waitForTimeout(1000) }
     if (!(await win.locator('.t2s-mode').first().count().catch(() => 0))) {
       await win.click('.dv-edge-left').catch(() => {})
@@ -152,12 +153,12 @@ async function main() {
     await chips.nth(1).click()   // 研究 第 3 页 —— 最终必须是它
     const page3 = await waitPage(win, 3)
     check('C5 加载中连点两条引用,最终停在后点的那页(第 3 页)', page3 === '3', `pageinput=${page3}`)
-    // C6 库外 PDF(绝对路径锚点):照样点得开,停在第 12 页,且是**只读**(没有批注工具栏)
+    // C6 库外 PDF(绝对路径锚点):照样点得开,停在第 12 页;没有「复制本页链接」(笔记链接按库内文件名解析,库外的落不了地)
     await chips.nth(3).click()
     const hostPage = await waitPage(win, 12)
-    const toolbars = await win.locator('.agent-desk .pdfa-toolbar').count().catch(() => -1)
-    check('C6 库外 PDF 按绝对路径只读打开,停在第 12 页(无批注工具栏)', hostPage === '12' && toolbars === 0,
-      `pageinput=${hostPage} toolbars=${toolbars}`)
+    const copyLinks = await win.locator('.agent-desk .pdfa-copy').count().catch(() => -1)
+    check('C6 库外 PDF 按绝对路径打开,停在第 12 页(不给「复制本页链接」)', hostPage === '12' && copyLinks === 0,
+      `pageinput=${hostPage} copyLinks=${copyLinks}`)
 
     // C7 单层方括号的引用(模型实测会这么写)也点得开 —— 走的是同一条通路,只是解析放宽
     await chips.nth(4).click()

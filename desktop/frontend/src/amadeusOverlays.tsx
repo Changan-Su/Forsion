@@ -144,7 +144,7 @@ export function AmadeusOverlays() {
     window.addEventListener('amadeus:navigate-note', onNav)
     return () => window.removeEventListener('amadeus:navigate-note', onNav)
   }, [])
-  // [[xxx.pdf#page=N]] 点击应用内开可批注 PDF tab(pageStore 发事件解耦,同 open-db 模式)。
+  // [[xxx.pdf#page=N]] 点击应用内开 PDF 阅读器 tab(pageStore 发事件解耦,同 open-db 模式)。
   useEffect(() => {
     const onOpenPdf = (e: Event): void => {
       const d = (e as CustomEvent<{ path?: string; page?: number }>).detail

@@ -256,7 +256,7 @@ ctx.registerView({ id: 'home', title: 'Muse', mount(el) {
 | `openFloatingPanel` | 第六种 Floating Panel | 先注册 view，再按相对 id 打开；桌面是真原生窗口，Web 是不可拖动居中面板；可选链兼容旧宿主 |
 | `openMiniPanel` | 320×420 Mini Panel | 不建 Space 也能直开紧凑 view；用 `mainViewId` 声明回主面板的目标；仅原生桌面宿主提供 |
 | `registerListSource` | **统一左栏**里的一条列表(收藏/任务/订阅…) | 宿主渲染,与会话/笔记行同一套 UI;⚠️`subscribe()` 里**必须重读一次数据**,见下 |
-| `registerFileType` | 自定义 `.x.md` 文件类型 | 撞内置后缀返回 **`false`** → 整体退让(判定写 `=== false`) |
+| `registerFileType` | 自定义 `.x.md` 文件类型;`override: true` 可接管内置的 `.pdf` | 撞内置后缀返回 **`false`** → 整体退让(判定写 `=== false`) |
 | `registerFileCreator` | 文件树右键 + 新建标签页启动器 | 与文件类型配套;**四条新建路径都要注册**,少一条用户就会问「为什么这儿没有」 |
 | `registerEmbedRenderer` | `![[x]]` 嵌入的自绘渲染 | |
 | `registerSetting` | 详情页声明式表单(number/boolean/text) | 每键一个字符串,**没有原子性**;同 key 重注册即覆盖 |
@@ -1054,7 +1054,7 @@ const back = await ctx.app.readBytes?.(`${ctx.app.workFolder()}/models/${file.na
 
 - 路径口径同 `writeFile`(库相对、越界由宿主钳死);收 `Uint8Array` / `ArrayBuffer` / 任意 TypedArray 视图(按字节原样)。
   没有活动库 → `writeBytes` reject `'No vault is open'`,`readBytes` 给 `null`(见上「没有活动库」表)。
-- ⚠️**不走自写账本**:同一路径上的 `watchFile` 会把你自己这次写当成外部改动回调一次 —— 别 watch 自己写的二进制。
+- ⚠️**不走自写账本**:同一路径上的 `watchFile` 会把你自己这次写当成外部改动回调一次 —— watch 着自己写的文件时,回调里先比一下内容。(`watchFile` 只盯文本配置类文件和 PDF,别的二进制不报。)
 - 多文件模型(`.gltf` + `.bin` + 贴图)要保留相对目录:`<input webkitdirectory>` 给每个 `File` 带 `webkitRelativePath`,逐个写到
   `${dest}/${f.webkitRelativePath}`。
 
@@ -1150,7 +1150,12 @@ const dispose = ctx.app.mountBlocks(el, {
 - **块 id 会被复用**:落盘前剪掉指向已不存在的块的记录,否则新块会继承旧记录的状态。
 - **自己的浮层要小心 `transform`**:`.slash-menu` / 行内工具栏这些是 `position: fixed` + 视口坐标;你的画布若带 pan/zoom 的 `transform`,它就成了 fixed 的包含块,浮层会被平移+缩放一次。把浮层传送到最近的 `.am-app` 下。
 - **忘记清理宿主也会兜**:插件被禁用/重载/`setup` 抛错时,你开的 `subscribePage` 与 `mountBlocks` 由宿主统一收掉,之后整份 `ctx.app` 块表面变哑(在飞的异步任务改不动用户文件)。但这是安全网不是设计:该 dispose 还是要 dispose。`mountBlocks` 返回的 dispose 调用之后 `el` 立刻归还(见「dispose 契约」);dispose 再挂是一个新的编辑器,用户正在输入时别这么做(焦点和选区会丢)。
-- **内置类型优先是硬规则**:`registerFileType` 的后缀若已被内置认领(`.excalidraw.md`/`.db`/`.pdf`/图片),宿主**拒绝注册并返回 `false`** —— 拿到 `false` 就整体退让,连创建器/斜杠项/命令一起别注册(那几个宿主拦不住,不退让用户会看到两份「新建 X」)。旧宿主返回 `undefined`,所以判定写 `=== false`。
+- **内置类型优先是硬规则**:`registerFileType` 的后缀若已被内置认领(`.excalidraw.md`/`.db`/`.pdf`/图片),又没有按下一条显式覆盖,宿主**拒绝注册并返回 `false`** —— 拿到 `false` 就整体退让,连创建器/斜杠项/命令一起别注册(那几个宿主拦不住,不退让用户会看到两份「新建 X」)。旧宿主返回 `undefined`,所以判定写 `=== false`。
+- **接管内置的 PDF(2026-10-05 起)**:`.pdf` 是唯一可覆盖的内置后缀。`registerFileType({ id, extensions: ['.pdf'], override: true, mount })` 注册成功后,文件树点击、`ctx.app.openFile`、最近使用都进你的视图;内置阅读器退为兜底 —— 插件停用 / 卸载即回到内置,文件树右键始终有「用内置阅读器打开」。由谁打开归用户定:设置 → 插件 → 已安装 →「默认打开方式」(自动 / 内置阅读器 / 指定插件);「自动」= 归第一个启用中的接管插件,所以别假设注册成功就一定轮到你。不写 `override: true` 照旧返回 `false`;`.excalidraw.md` / `.db` / 图片写了也不行。旧宿主不认这个字段、返回 `false`,照上一条整体退让。要点:
+  - **不接管的**:带页码 / 引语的跳转(聊天引用、`[[x.pdf#page=3]]`)和 `![[x.pdf]]` 嵌入仍进内置阅读器;`registerEmbedRenderer` 对 `.pdf` 不会被问到。
+  - **读写走字节**:`ctx.app.readBytes?.(file.filePath)` 读、`ctx.app.writeBytes?.(…)` 存。`file.surface.loadPage` 和 `ctx.app.loadPage` 都只收 `.md` 笔记,对 PDF(以及白板)调用会被拒并打告警(那是笔记管线,放行就把文件写成 markdown);`ctx.app.openNote` 收到非笔记路径会改走 `openFile` 开对的视图。
+  - **manifest 不要写 `fileExtensions: ['.pdf']`**:那个字段只保护 `.md` 类文件不被当笔记改写,PDF 用不着;写了反而让开发副本被判 `dev-fileext` 拒载。不写的话可以直接从 Sandbox 加载着测(开发副本只是不能注册 `.md` 类后缀)。
+  - **内置阅读器只读(2026-10-05 起不再批注)**,文件一变就原地重载:你 `writeBytes` 之后,已经开着的内置标签页和 `![[x.pdf]]` 嵌入会跟上,不用你通知。`ctx.app.watchFile?.()` 对 `.pdf` 也会回调(外部工具改了文件、另一个插件写了它),但事件不比内容 —— 你自己写的那次也会来,回调里先比一下字节再决定要不要重载。
 - **四条新建主路径都要注册**:文件树右键(`registerFileCreator`)、命令面板(`registerCommand`)、笔记里的 `/`(`registerSlashItem` + `run()`,建完就地嵌入)、**新建标签页启动器**(2026-07-26 起也列 `registerFileCreator`,与内置的「新建白板」并排)。少注册一条,用户就会问「为什么 XX 里没有它」。
 - **想做「节点/卡片里是真块」的界面,照 `forsion-plugin-mindmap` 3.0.0 抄**:它是块表面 seam 的样板 —— 一层薄适配(`src/host.tsx`)把 `ctx.app` 伪装成宿主 store/组件的形状,画布本体几乎原样;令牌只在适配层管一次。⚠️那层里按内容去重的缓存**不是优化是正确性**:`getPage()` 每次返回新对象,不去重则 `useSyncExternalStore` 每次判「变了」→ 无限重渲挂死。React 也内联进包(插件拿不到宿主模块图;两份 React 共存没问题,边界就是 `mountBlocks` 那个 DOM 节点)。
 
@@ -1214,7 +1219,7 @@ const off = ctx.app.watchFile?.('Snippets/latex.js', () => reload())
 - **报错在哪看**:Sandbox 面板收口三样——`setup` 抛错、视图 `mount` 抛错、这个插件自己的 `console` 输出(经 `ctx` 闭包归属,不会和别的插件混)。用户可以一键把它们发回对话;**以这些为准**,别凭空猜。
 - ⚠️**这不是隔离沙箱**:dev 插件跑在真应用、用户的真笔记库上,与已安装插件同权。试验期间不要写、挪、删用户数据;定时器与监听必须在 disposer 里清(热重载会反复 `setup`,漏清一次就叠一层)。
 - ⚠️**同 id 影子**:dev 副本会顶掉同 id 的已安装副本(卡片带 DEV 徽标,期间该插件的「卸载」被禁用)。要对比已安装版,先在 Sandbox 里卸载 dev 副本。
-- ⚠️**声明了 `fileExtensions` 的插件不能从 Sandbox 加载**(宿主的毁档防线只覆盖已安装目录)——这类插件必须装上再测,面板会直说。
+- ⚠️**声明了 `fileExtensions` 的插件不能从 Sandbox 加载**(宿主的毁档防线只覆盖已安装目录)——这类插件必须装上再测,面板会直说。只注册非 md 后缀的插件(如覆盖 `.pdf` 的)不必声明 `fileExtensions`,可以从 Sandbox 加载。
 - 引擎插件(`tangu-plugin.json`)**不在 Sandbox 范围**:装进插件目录后重扫生效;同 id 覆盖升级可热换代(单文件 bundle,或纯 ESM 多文件包),带 CommonJS / node_modules / 软链 / 引到包外文件的仍须重启后端。
 
 `check.mjs` 仍然要留(通用纪律 4):Sandbox 证「在真宿主里能起来」,`check.mjs` 证「逻辑回归得了」,两个证的不是一件事。

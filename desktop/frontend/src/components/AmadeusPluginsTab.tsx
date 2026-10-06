@@ -32,6 +32,7 @@ import type { AmadeusPlugin, SettingContribution, SettingsViewContribution } fro
 import type { PluginDependency } from '@amadeus-shared/ipc'
 import { PluginLogo } from './PluginLogo'
 import { canOpenPluginsFolder } from '../amadeus/lib/hostCaps'
+import { FileOpenersPanel } from './FileOpenersPanel'
 import { homeTarget } from '../services/engine/targets'
 
 registerMessages({
@@ -869,6 +870,7 @@ export const AmadeusPluginsTab: React.FC<{
         <summary>{t('plugins.editorExtensions')} · {builtins.length}</summary>
         {builtins.map(renderCard)}
       </details>}
+      {!query && <FileOpenersPanel />}
       {!query && <details className="plugin-management-group">
         <summary>{t('plugins.bundledFeatures')}</summary>
         <BuiltinPluginsSection />
