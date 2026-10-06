@@ -48,6 +48,8 @@ if (!existsSync(resolve(webRoot, 'node_modules'))) {
 // `failed to resolve import "framer-motion" from mobile/src/MobileRoot.tsx`。
 // 本机之所以从来不报,是仓根碰巧躺着一个历史遗留的 node_modules 顶着 —— CI 的干净 checkout 没有,
 // 所以这支脚本一接进 CI 就红(2026-08-30 实翻)。构建期补一份、构建完拆掉 = 等价镜像里的 /app 布局。
+// ⚠️ 「仓根目录存在」≠「解析得到依赖」:它可能是个只装着别人 vite 缓存的真实目录(2026-10-05 本机实翻),
+// 那种情况这里不补也不动它,由 web/vite.config.ts 的 resolveBareFromWebRoot 兜底。仪器:npm run check:unitweb。
 const rootNodeModules = resolve(desktopRoot, '..', 'node_modules')
 let linkedRoot = false
 if (!existsSync(rootNodeModules)) {
