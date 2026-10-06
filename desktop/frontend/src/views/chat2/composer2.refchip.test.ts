@@ -6,7 +6,7 @@
  * 每条用例都反向断言 token,而不只断言名字。
  */
 import { describe, expect, it } from 'vitest'
-import { refChipOf, fileChip, folderChip, viewChip, composeOutgoing } from './Composer2'
+import { refChipOf, fileChip, folderChip, viewChip, appChip, composeOutgoing } from './Composer2'
 import { refToText, type ChatRef } from './chatDragRef'
 import { splitLeadingRefs } from './RefChipView'
 
@@ -69,6 +69,14 @@ describe('refChipOf', () => {
       kind: 'view',
     })
   })
+
+  it('App 引用(侧边拼接):属性顺序与名字是 CU 提示词的契约,标题里的引号/尖括号/换行不突破 token', () => {
+    expect(appChip({ app: 'Notes', bundleId: 'com.apple.Notes', pid: 42, windowId: 7, title: '周报 <草稿> "v2"\n第二行' })).toEqual({
+      token: '<forsion-app app="Notes" bundleId="com.apple.Notes" pid="42" windowId="7" title="周报 &lt;草稿&gt; &quot;v2&quot; 第二行" />',
+      name: 'Notes',
+      kind: 'app',
+    })
+  })
 })
 
 /** 气泡侧的逆运算(U-11):Composer 把芯片 token 用空格连成正文第一行再接 \n,气泡要能原样拆回来。
@@ -85,12 +93,14 @@ describe('splitLeadingRefs', () => {
       folderChip('/Users/x/My Project'),
       viewChip('canvas&board', '规划 <A> "主视图"'),
       refChipOf({ kind: 'file', path: 'src/app.ts' }, VAULT),
+      appChip({ app: 'Final Cut "Pro"', pid: 9, windowId: 3, title: 'a > b' }),
     ]
     const out = splitLeadingRefs(send(chips, '帮我看看'))!
     expect(out).not.toBeNull()
     expect(out.refs.map((r) => r.token)).toEqual(chips.map((c) => c.token))
     expect(out.body).toBe('帮我看看')
-    expect(out.refs.map((r) => r.kind)).toEqual(['note', 'session', 'file', 'file', 'file', 'view', 'file'])
+    expect(out.refs.map((r) => r.kind)).toEqual(['note', 'session', 'file', 'file', 'file', 'view', 'file', 'app'])
+    expect(out.refs[7].name).toBe('Final Cut "Pro"')
     expect(out.refs[1].name).toBe('昨天那个 bug')
     expect(out.refs[3].name).toBe('Screen Shot 2026-09-25 at 10.00.png') // 气泡里不再是带引号的原路径
     expect(out.refs[4].name).toBe('My Project')

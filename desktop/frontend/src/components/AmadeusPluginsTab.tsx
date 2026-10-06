@@ -707,7 +707,7 @@ const PluginDetail: React.FC<{
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             {commands.map((o) => (
               <button key={o.item.id} className="btn ghost sm" onClick={() => { try { o.item.run() } catch (e) { console.error(`[plugin] command "${o.item.id}" failed`, e) } }}>
-                {o.item.title}
+                {typeof o.item.title === 'function' ? o.item.title() : o.item.title}
               </button>
             ))}
           </div>

@@ -16,6 +16,11 @@ export function detachedId(): string {
   return params().get('id') || 'default'
 }
 
+/** 侧边拼接面板:Mini 形态的窗口,贴在别的 App 窗口旁边(主进程开窗时带 dock=1)。 */
+export function isDockWindow(): boolean {
+  return params().get('dock') === '1'
+}
+
 export function floatingId(): string {
   return params().get('id') || 'default'
 }

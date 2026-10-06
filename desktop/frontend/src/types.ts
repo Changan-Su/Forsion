@@ -1545,6 +1545,15 @@ declare global {
       /** Computer Use:最近被操控窗口的一帧画面。只读——helper 没跑就 active:false,绝不因此拉起它。
        *  仅 macOS(Windows helper 是 stdio 子进程,桌面够不着);拿不到图会带 error 而不是伪造画面。 */
       computerUseLiveView?(opts?: { maxDimension?: number; quality?: number; activeWithinMs?: number; image?: boolean; sinceFrame?: string }): Promise<CuLiveFrame>
+      /** 侧边拼接(App Dock,仅 macOS):对话面板贴在别的 App 窗口旁边。open 任何窗口可调(打开面板,先挑窗口);
+       *  其余只在面板窗口自己里调得通,别处调回空结果。 */
+      appDockOpen?(): Promise<{ ok: boolean; error?: string }>
+      appDockReady?(): Promise<import('../../shared/appDock').DockState>
+      appDockCandidates?(): Promise<{ windows: import('../../shared/appDock').DockCandidate[]; error?: string }>
+      appDockAttach?(target: import('../../shared/appDock').DockWindow): Promise<{ ok: boolean; error?: string }>
+      appDockDetach?(): Promise<void>
+      appDockSelection?(): Promise<import('../../shared/appDock').DockSelection & { error?: string }>
+      onAppDockState?(cb: (state: import('../../shared/appDock').DockState) => void): () => void
       /** 本地语音模型(SenseVoice)状态 / 下载 / 删除 + 下载进度订阅(返回取消函数)。 */
       asrLocalStatus?(): Promise<{ ready: boolean; sizeBytes: number }>
       asrLocalDownload?(): Promise<{ ok: boolean; ready: boolean }>

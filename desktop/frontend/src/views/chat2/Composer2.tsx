@@ -131,7 +131,7 @@ export interface RefChip {
   token: string
   /** 芯片上显示的名字。 */
   name: string
-  kind: 'note' | 'file' | 'folder' | 'session' | 'view'
+  kind: 'note' | 'file' | 'folder' | 'session' | 'view' | 'app'
 }
 
 const chipBaseName = (p: string): string => p.split(/[\\/]/).pop() || p
@@ -196,6 +196,17 @@ export const folderChip = (path: string): RefChip => ({
 export const viewChip = (type: string, title: string): RefChip => {
   const attr = (value: string): string => String(value).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
   return { token: `<forsion-view type="${attr(type)}" title="${attr(title)}" />`, name: title, kind: 'view' }
+}
+
+/** 侧边拼接面板贴着的那扇 App 窗口。电脑操作插件教模型:消息以它开头 = 用户在这个 App 里,默认就操作它
+ *  (find_roots({pid}) 起步)。属性顺序与名字是那段提示词的契约,改了要同步 tangu-computer-use 的 promptSection。 */
+export const appChip = (w: { app: string; bundleId?: string; pid: number; windowId: number; title: string }): RefChip => {
+  const attr = (value: string): string => String(value).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, ' ')
+  return {
+    token: `<forsion-app app="${attr(w.app)}" bundleId="${attr(w.bundleId || '')}" pid="${w.pid}" windowId="${w.windowId}" title="${attr(w.title)}" />`,
+    name: w.app,
+    kind: 'app',
+  }
 }
 
 /** 一条结构化引用 → 芯片。token 由 refToText 生成 = **与行内插入完全同一段文本**,
@@ -352,6 +363,8 @@ export const Composer2: React.FC<{
   /** 聊天开在侧栏(left/right)时为 true:自动把**主区当前打开的那篇笔记**作为默认引用挂上
    *  「已选择」条(用户可 ×,换一篇即复活)。聊天自己就是主区时无「另一个主区文件」可言,恒 false。 */
   autoRefFromMain?: boolean
+  /** 侧边拼接面板里:贴着的那扇 App 窗口。挂成默认引用(用户可 ×),优先于主区笔记。 */
+  appRef?: { app: string; bundleId?: string; pid: number; windowId: number; title: string } | null
   /** 本会话已发送的用户消息(旧→新);输入框空/首行按 ↑↓ 召回,类 shell / codex / claude code。 */
   sentHistory?: string[]
   /** steer 等待区:run 跑动中已发出、还没被引擎注入的消息(注入即从这里消失并上屏)。
@@ -377,7 +390,7 @@ export const Composer2: React.FC<{
   onExecConfigChange, onSend, onStop,
   quotedText, onClearQuote, onBtw,
   contextWindow, ctxTokens, sessionTokens, runCost, costLimit, ctxInfo, onCompact,
-  seedText, onSeedConsumed, seedShare, takeSeedShare, appendRefs, onAppendRefsConsumed, autoRefFromMain, sentHistory,
+  seedText, onSeedConsumed, seedShare, takeSeedShare, appendRefs, onAppendRefsConsumed, autoRefFromMain, appRef, sentHistory,
   pendingSteer, onCancelSteer, onWithdrawSteer, onSteerNow,
 }) => {
   const { t, locale } = useI18n()
@@ -1133,6 +1146,10 @@ export const Composer2: React.FC<{
     return mainReferenceKey(w.mainTabs)
   }) // 选择器返回**字符串**:zustand v5 没有 equalityFn,返回新对象会每次都判「变了」→ 无限重渲
   const autoChip = useMemo<RefChip | null>(() => {
+    if (appRef) {
+      const chip = appChip(appRef)
+      return autoRefOff === chip.token || refChips.some((c) => c.token === chip.token) ? null : chip
+    }
     // 仅 host 会话:引用是一条**本机绝对路径**,云端/沙箱会话的 agent 读不到 —— 挂上去就是
     // 「显示了路径但模型读不到」,与 [[ 候选、粘贴本机文件那两处的门控同一条理由。
     if (!isHost || !autoRefFromMain || !mainRefKey) return null
@@ -1145,7 +1162,7 @@ export const Composer2: React.FC<{
     if (!chip || autoRefOff === chip.token) return null
     if (refChips.some((c) => c.token === chip.token)) return null // 用户已显式引过同一个 → 不重复挂
     return chip
-  }, [isHost, autoRefFromMain, mainRefKey, mainNote, vaultRoot, autoRefOff, refChips])
+  }, [appRef, isHost, autoRefFromMain, mainRefKey, mainNote, vaultRoot, autoRefOff, refChips])
   const allRefChips = autoChip ? [autoChip, ...refChips] : refChips
 
   /** override = 实时对话直接发的转写文本(不读也不清草稿)。返回这次发送的 promise(accepted);没发出去返回 undefined。 */
