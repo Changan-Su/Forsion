@@ -76,6 +76,8 @@
  *                                                           #   /unit/hostfile/download 取回原字节(中文文件名);第二腿要它把引擎 home 里的(假)凭据文件发过来 → 不许出卡片、内容不进回复。
  *                                                           #   手机端 → hub → unitHost 那一跳由 desktop 的 electron/unitHostFileDownload.test.ts 钉(>10MB 走流式回包)。改 display_file / 下载路由后跑
  *   npm run live:harness -- --only coding                    # 改 agents/codingPrompt.ts / skills/forsion-plugin 后跑:Coding 人格面对插件项目须指向 Sandbox 面板、且不自己动手 git init/commit(版本由宿主管)
+ *   npm run live:harness -- --only storeview                 # 商店左栏的插件页(10-05):ctx.registerStoreView 只给首方内置包。第三方作者问「怎么往商店左栏加一页」→ 须装载手册、
+ *                                                           #   说清这条路不对普通插件开放,不许教他照着注册(注册了也不显示)。改 skills/forsion-plugin 那一行后跑。
  *   npm run live:harness -- --only creation                  # 进造物(09-27):要做「拿来用的东西」→ 回复带 forsion-creation 作品卡;只问概念 / 一次性脚本 → 不出卡。改 skills/forsion-creations 后跑
  *   npm run live:harness -- --only git                       # 「设置 → Git」(09-26):agent 自己起的分支名带前缀、提交照提交说明;PROJECT 详情「提交…」生成的信息也照做并能提交。
  *                                                           #   改 runtimeContext.gitPreferenceLines / gitActions 的提交信息提示词后跑;负对照 --git-prefs off(不写设置,须红)
@@ -152,7 +154,7 @@ const KEYS = ['realtime', 'voiceclone', 'personas', 'rename', 'selfschedule', 's
 KEYS.push('signals');
 KEYS.push('dreamseed');
 KEYS.push('pageinstructions', 'dispatch');
-KEYS.push('storename');
+KEYS.push('storename', 'storeview');
 KEYS.push('harnessopen');
 KEYS.push('equip');
 KEYS.push('musereview');
@@ -194,6 +196,7 @@ OPT_IN.add('equip'); // 三个 run;只在动装备层(HARNESS equip → isDeferr
 OPT_IN.add('musereview'); // 开 Muse 并往隔离库里写用量行:单独跑,别连累别的场景的工具表 / Muse 状态。
 OPT_IN.add('projmem'); // 四个 run、两个 agent 两个项目;只在动项目记忆(services/projectMemory.ts、remember 的 scope)时才有信息量。
 OPT_IN.add('pluginlook'); // 一个 run;只在动 skills/forsion-plugin 的「外观开关」一节或 use_skill 时才有信息量。
+OPT_IN.add('storeview'); // 一个 run;只在动 forsion-plugin 手册里 registerStoreView 那行、或商店左栏的插件页接缝时才有信息量。
 OPT_IN.add('skillcreate'); // 四个 run;只在动 manage_skill / use_skill / 随包的 skill-creator 技能时才有信息量。
 OPT_IN.add('realuse'); // 真实使用模拟:每轮 12 个 run(--rounds),--usage-db 再加一个 Muse 周期;单独跑。
 const NEEDS = { dream: ['historian'], recall: ['historian', 'dream'] }; // 记忆链三连有先后依赖;其余场景自包含
@@ -2629,6 +2632,15 @@ Then reply with only the command output.`,
     const used = ev.toolCalls.includes('use_skill');
     const loaded = ev.toolResults.some((r) => r.name === 'use_skill' && !r.isError && /Forsion/.test(r.result));
     return { ok: !ev.error && roster && used && loaded, detail: ev.error || `名册${roster ? '提到 coding' : '未提 coding'};use_skill ${used ? '已调用' : '未调用'};正文${loaded ? '取回' : '未取回'};工具 ${ev.toolCalls.join(',') || '无'}`, output: ev.content, ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls };
+  });
+
+  // 商店左栏的插件页(10-05):ctx.registerStoreView 只认首方内置包,手册里那一行写明了。第三方作者问起时,模型得读过手册、
+  // 说清这条路不对普通插件开放;把它当成普通接口教人注册 = 红(注册了也不显示,作者白忙)。use_skill 进 PASS 门:没读手册就答对,证不了那一行起了作用。
+  await scenario('storeview', 'storeview 商店左栏的插件页只给首方包:第三方作者问起时说清楚、不教他注册', async () => {
+    const ev = await run(`live-storeview-${Date.now()}`, '我在做一个 Forsion 插件(普通的第三方插件)。我想在商店窗口的左栏里加一个我自己的页面,有这样的接口吗?要怎么写?先查清楚再回答,回答简短。');
+    const used = ev.toolResults.some((r) => r.name === 'use_skill' && !r.isError && r.fullLength > 1000);
+    const scoped = /首方|第一方|内置包|官方|Forsion Extend|first[- ]party|不对.{0,12}(开放|生效)|只对.{0,24}生效|不(会)?显示|用不到|不支持|没有.{0,10}(接口|办法|开放)/i.test(ev.content);
+    return { ok: !ev.error && used && scoped, detail: ev.error || `手册${used ? '已装载' : '未装载'};${scoped ? '说明了只给首方包 / 普通插件用不了' : '没说明限制'};提到 registerStoreView:${/registerStoreView/.test(ev.content) ? '是' : '否'};工具 ${ev.toolCalls.join(',') || '无'}`, output: ev.content, ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls };
   });
 
   // 指定技能清单(10-04,反馈 6a239e58):enabled_skill_ids 只收窄目录,正文不进 system,模型照样经 use_skill 取到。

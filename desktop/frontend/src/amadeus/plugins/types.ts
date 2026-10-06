@@ -755,6 +755,24 @@ export interface SettingsViewContribution {
   mount(el: HTMLElement): void | (() => void)
 }
 
+/** 商店左栏里由插件提供的一页(2026-10-05):左栏多一个入口,点开后整页正文归插件画(版式、数据都归插件)。
+ *
+ *  只认首方内置包(locked)—— 商店左栏不对第三方插件开放,别的插件注册了不显示。
+ *  设备页(Unit 页)不显示。挂载 / 卸载的纪律同 SettingsViewContribution.mount。 */
+export interface StoreViewContribution {
+  /** 本插件内唯一(同 id 重注册即覆盖)。 */
+  id: string
+  /** 左栏入口的文字,也是页面标题。传函数则每次渲染求值(切语言即时跟上)。 */
+  title: string | (() => string)
+  /** 页面标题下面那行说明。 */
+  description?: string | (() => string)
+  /** 左栏分组的小标题;同名的页排进同一组(组与页都按注册顺序),排在「分类」与「管理」之间。省略 → 宿主的缺省组。 */
+  group?: string | (() => string)
+  /** 入口图标名:'crown' | 'coins' | 'package' | 'sparkles' | 'globe' | 'palette' | 'wrench' | 'bot'。认不出 → 缺省图标,不会把名字当文字画出来。 */
+  icon?: string
+  mount(el: HTMLElement): void | (() => void)
+}
+
 /** 宿主交给编辑器扩展的 ProseMirror 工具箱(2026-08-15)。
  *
  *  外置插件是 `new Function('ctx', code)` 求值的裸 setup 体 —— **没有 import**,自己造不出
@@ -941,6 +959,9 @@ export interface PluginContext {
   /** 自绘设置面板(2026-08-15+)。声明式旋钮装不下的复杂设置走这里。见 SettingsViewContribution。
    *  旧宿主没有:`ctx.registerSettingsView?.(…)`。 */
   registerSettingsView?(def: SettingsViewContribution): void
+  /** 往商店左栏加一页(2026-10-05+,只认首方内置包,见 StoreViewContribution)。
+   *  旧宿主没有,而且**不能**拿 registerSettingsView 顶替(那会把页面画进插件详情页):`ctx.registerStoreView?.(…)`,没有就不注册。 */
+  registerStoreView?(def: StoreViewContribution): void
   /** 就绪检查(2026-09-21+),对应 manifest `onboarding.requires` 的 `{ kind: 'check', id }`。见 ReadinessContribution。
    *  旧宿主没有:`ctx.registerReadiness?.(…)`。 */
   registerReadiness?(def: ReadinessContribution): void

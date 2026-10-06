@@ -5,7 +5,7 @@
  */
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
-  AlertCircle, ArrowLeft, ArrowRight, Bot, Check, Clock, Compass, Download, ExternalLink,
+  AlertCircle, ArrowLeft, ArrowRight, Bot, Check, Clock, Coins, Compass, Crown, Download, ExternalLink,
   GitBranch, Globe, LayoutGrid, Library, Loader2, Package, PackageOpen, Palette, Puzzle,
   RefreshCw, Search, Send, Settings, ShieldCheck, Sparkles, Trash2, Wrench, X,
 } from 'lucide-react'
@@ -32,9 +32,15 @@ import { compareMarketVersions } from '../../../shared/marketPluginUpdates'
 
 registerMessages({
   'market.submissionsDescription': { zh: '投稿内容，查看审核结果并管理版本更新。', en: 'Submit your work, view review results and manage version updates.' },
+  'market.group.more': { zh: '更多', en: 'More' },
 })
 
 type MarketType = MarketCard['type']
+
+/** 左栏里由插件提供的页(ctx.registerStoreView)的图标词表;认不出回落 Package(不把名字当文字画出来)。 */
+const STORE_VIEW_ICONS: Record<string, typeof Package> = { crown: Crown, coins: Coins, package: Package, sparkles: Sparkles, globe: Globe, palette: Palette, wrench: Wrench, bot: Bot }
+const storeViewIcon = (name?: string): typeof Package => (name && Object.hasOwn(STORE_VIEW_ICONS, name) ? STORE_VIEW_ICONS[name] : Package)
+const resolveText = (v: string | (() => string) | undefined): string => { try { return (typeof v === 'function' ? v() : v) || '' } catch { return '' } }
 type Tab = 'discover' | MarketType | 'webapp' | 'installed' | 'updates' | 'submit'
 type SortMode = 'popular' | 'latest' | 'name'
 
@@ -125,6 +131,13 @@ export function MarketModal({ onClose, initialQuery }: { onClose?: () => void; i
   const submissionView = !window.tangu?.unitPage && window.tangu?.cloudInvoke
     ? settingsViews.find((o) => o.pluginId === 'forsion-extend' && o.item.id === 'submission' && activeIds.includes(o.pluginId) && isPlacedSettingsView(plugins.find((p) => p.id === o.pluginId), o.item))
     : undefined
+  // 插件提供的页:只认已启用的首方内置包(locked),设备页不显示。按 group 分组,组与页都保持注册顺序。
+  const allStoreViews = usePluginStore((s) => s.storeViews)
+  const storeViews = useMemo(() => (window.tangu?.unitPage ? [] : allStoreViews.filter((o) => activeIds.includes(o.pluginId) && !!plugins.find((p) => p.id === o.pluginId)?.locked)), [allStoreViews, activeIds, plugins])
+  const [storeViewKey, setStoreViewKey] = useState<string | null>(null)
+  const storeViewKeyOf = (o: { pluginId: string; item: { id: string } }): string => `${o.pluginId}:${o.item.id}`
+  // 页面所属的插件被停用 / 卸载 → 找不到了,自然退回 tab 指着的那页
+  const storeView = storeViewKey ? storeViews.find((o) => storeViewKeyOf(o) === storeViewKey) ?? null : null
   const storeClose = useApp((s) => s.closeMarket)
   const close = onClose ?? storeClose
   // 市场住在独立浮窗(桌面)或全屏覆盖层(主窗)里:全局通知在浮窗不渲染、在主窗被 overlayOpen 挡住,
@@ -346,6 +359,7 @@ export function MarketModal({ onClose, initialQuery }: { onClose?: () => void; i
 
   const switchTab = (next: Tab): void => {
     setTab(next)
+    setStoreViewKey(null)
     setDetail(null)
     setQuery('')
   }
@@ -493,8 +507,17 @@ export function MarketModal({ onClose, initialQuery }: { onClose?: () => void; i
     return <div className="mk-grid">{cards.map((item) => card(item))}</div>
   }
 
-  const showSearch = !detail && tab !== 'submit'
-  const showSort = !detail && tab !== 'submit' && tab !== 'webapp'
+  const showSearch = !detail && !storeView && tab !== 'submit'
+  const showSort = !detail && !storeView && tab !== 'submit' && tab !== 'webapp'
+  /** 左栏高亮:开着插件页时内置入口都不亮。 */
+  const navTab: Tab | null = storeView ? null : tab
+  const openStoreView = (key: string): void => { setStoreViewKey(key); setDetail(null); setQuery('') }
+  const storeGroups: Array<{ label: string; views: typeof storeViews }> = []
+  for (const o of storeViews) {
+    const label = resolveText(o.item.group) || t('market.group.more')
+    const g = storeGroups.find((x) => x.label === label)
+    if (g) g.views.push(o); else storeGroups.push({ label, views: [o] })
+  }
 
   return (
     <div className="settings-page mk-page" data-native-chrome={nativeChrome ? '' : undefined}>
@@ -504,24 +527,30 @@ export function MarketModal({ onClose, initialQuery }: { onClose?: () => void; i
           <div className="mk-nav-brand"><div className="mk-nav-mark"><Sparkles size={17} /></div><div><strong>{t('market.title')}</strong><span>{t('market.navSubtitle')}</span></div></div>
         </div>
         <div className="settings-nav-list">
-          <div className="settings-nav-group"><div className="settings-nav-grouphead">{t('market.group.discover')}</div><button className={tab === 'discover' ? 'active' : ''} onClick={() => switchTab('discover')}><Compass size={15} />{navLabel.discover}</button></div>
+          <div className="settings-nav-group"><div className="settings-nav-grouphead">{t('market.group.discover')}</div><button className={navTab === 'discover' ? 'active' : ''} onClick={() => switchTab('discover')}><Compass size={15} />{navLabel.discover}</button></div>
           <div className="settings-nav-group">
             <div className="settings-nav-grouphead">{t('market.group.categories')}</div>
-            {categoryTabs.map((id) => <button key={id} className={tab === id ? 'active' : ''} onClick={() => switchTab(id)}><TypeGlyph type={id as MarketType | 'webapp'} size={15} />{navLabel[id]}</button>)}
+            {categoryTabs.map((id) => <button key={id} className={navTab === id ? 'active' : ''} onClick={() => switchTab(id)}><TypeGlyph type={id as MarketType | 'webapp'} size={15} />{navLabel[id]}</button>)}
           </div>
+          {storeGroups.map((g) => (
+            <div key={g.label} className="settings-nav-group" data-store-group>
+              <div className="settings-nav-grouphead">{g.label}</div>
+              {g.views.map((o) => { const Icon = storeViewIcon(o.item.icon); const key = storeViewKeyOf(o); return <button key={key} data-store-view={key} className={storeView && storeViewKeyOf(storeView) === key ? 'active' : ''} onClick={() => openStoreView(key)}><Icon size={15} />{resolveText(o.item.title)}</button> })}
+            </div>
+          ))}
           <div className="settings-nav-group">
             <div className="settings-nav-grouphead">{t('market.group.manage')}</div>
-            <button className={tab === 'installed' ? 'active' : ''} onClick={() => switchTab('installed')}><Library size={15} />{navLabel.installed}</button>
-            <button className={tab === 'updates' ? 'active' : ''} onClick={() => switchTab('updates')}><RefreshCw size={15} />{navLabel.updates}{updatable.length > 0 && <span className="mk-nav-count">{updatable.length}</span>}</button>
+            <button className={navTab === 'installed' ? 'active' : ''} onClick={() => switchTab('installed')}><Library size={15} />{navLabel.installed}</button>
+            <button className={navTab === 'updates' ? 'active' : ''} onClick={() => switchTab('updates')}><RefreshCw size={15} />{navLabel.updates}{updatable.length > 0 && <span className="mk-nav-count">{updatable.length}</span>}</button>
             {/* Extend 的投稿页同时挂在市场与云端设置中;旧包仍可打开网页个人中心。 */}
-            {(!!submissionView || !!window.tangu?.openAccountCenter) && <button className={tab === 'submit' ? 'active' : ''} onClick={() => switchTab('submit')}><Send size={15} />{navLabel.submit}</button>}
+            {(!!submissionView || !!window.tangu?.openAccountCenter) && <button className={navTab === 'submit' ? 'active' : ''} onClick={() => switchTab('submit')}><Send size={15} />{navLabel.submit}</button>}
           </div>
         </div>
       </aside>
 
       <section className="settings-main">
         <div className="settings-main-head mk-main-head">
-          <div className="mk-title-block"><div className="settings-main-title">{detail ? detail.name : navLabel[tab]}</div><div className="mk-title-subtitle">{detail ? t('market.detailSubtitle') : tab === 'discover' ? t('market.subtitle') : tab === 'submit' ? t('market.submissionsDescription') : tab === 'plugin' ? t('market.pluginsSubtitle') : t('market.sectionSubtitle', { section: navLabel[tab] })}</div></div>
+          <div className="mk-title-block"><div className="settings-main-title">{detail ? detail.name : storeView ? resolveText(storeView.item.title) : navLabel[tab]}</div><div className="mk-title-subtitle">{detail ? t('market.detailSubtitle') : storeView ? resolveText(storeView.item.description) : tab === 'discover' ? t('market.subtitle') : tab === 'submit' ? t('market.submissionsDescription') : tab === 'plugin' ? t('market.pluginsSubtitle') : t('market.sectionSubtitle', { section: navLabel[tab] })}</div></div>
           {showSearch && <label className="mk-search"><Search size={16} /><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t('market.searchPlaceholder')} />{query && <button onClick={() => setQuery('')} aria-label={t('market.clearSearch')}>×</button>}</label>}
           {showSort && <label className="mk-sort"><span>{t('market.sort.label')}</span><select value={sort} onChange={(e) => setSort(e.target.value as SortMode)}><option value="popular">{t('market.sort.popular')}</option><option value="latest">{t('market.sort.latest')}</option><option value="name">{t('market.sort.name')}</option></select></label>}
         </div>
@@ -552,6 +581,7 @@ export function MarketModal({ onClose, initialQuery }: { onClose?: () => void; i
               </div>
             </div>
           ) : detailLoading ? <Skeleton variant="document" />
+            : storeView ? <PluginSettingsView key={storeViewKeyOf(storeView)} pluginId={storeView.pluginId} def={storeView.item} bare />
             : tab === 'discover' ? (
               scanning ? <Skeleton variant="document" /> : catalogError && catalog.length === 0 ? catalogState([]) : query ? (
                 <section className="mk-section"><div className="mk-section-head"><div><h2>{t('market.searchResults')}</h2><p>{t('market.resultCount', { n: visibleCatalog.length })}</p></div></div>{catalogState(visibleCatalog)}</section>
