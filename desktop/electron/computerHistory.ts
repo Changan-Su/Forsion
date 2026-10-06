@@ -5,7 +5,9 @@
  * 策略、落盘、保留、清除、暂停全在这里。引擎 read_computer_history 只读 `<forsionHome>/computer-history/`。
  *
  * 纪律:
- *  1. **功能关着绝不连 socket、绝不拉起 helper**(拉起会顺带把权限框带出来);非 darwin 恒 unsupported。
+ *  1. **功能关着绝不连 socket、绝不拉起 helper**(拉起会顺带把权限框带出来);只支持 darwin / win32,其余平台恒 unsupported。
+ *     win32:helper 是 CU 包里的 windows-bridge.exe,拷成私有副本后以常驻服务(命名管道)跑,线协议与 macOS 逐字节相同;
+ *     找源 / 拷贝 / 探协议 / 管道名 / 拉起见 computerHistoryWin.ts。Windows 没有要授的系统权限(axTrusted 恒真)。
  *  2. **单写者**:事件追加 / 清除重写 / 保留删除 / state.json 全排进同一条串行队列,清除的原子重写
  *     (tmp + rename)才不会吞掉并发追加、也不会把刚清掉的事件写回来。
  *  3. 清除 / 改排除表 = 关掉订阅再重开:连接一断,旧连接上迟到的事件按代号(gen)丢弃;
@@ -24,6 +26,7 @@ import path from 'node:path'
 import { promisify } from 'node:util'
 import { ipcMain, type IpcMainInvokeEvent } from 'electron'
 import { appIconDataUrls } from './appIcons'
+import { launchWindowsRecorder, type WindowsRecorderTarget } from './computerHistoryWin'
 import { createSerialQueue } from './configWrite'
 import {
   COMPUTER_HISTORY_KEEP_DAYS, COMPUTER_HISTORY_PROTOCOL,
@@ -66,11 +69,15 @@ const STATE_RETRY_MAX_MS = 60_000
 /** 应用内「清空数据」等在途写落定的上限(每段);见 stopComputerHistoryForWipe。 */
 const WIPE_CAP_MS = 10_000
 
-/** 默认「只记切换与标题」:Forsion 自己(应用内动作归活动日志)+ 终端(命令行里常有密钥)。 */
+/** 默认「只记切换与标题」:Forsion 自己(应用内动作归活动日志)+ 终端(命令行里常有密钥)。
+ *  Windows 的 App 标识是小写 exe 文件名(见 shared 契约);两套并列下发,在另一个平台上匹配不到任何东西,无害。 */
 export const DEFAULT_TITLE_ONLY_BUNDLE_IDS: readonly string[] = [
   'com.forsion.*',
   'com.apple.Terminal', 'com.googlecode.iterm2', 'dev.warp.Warp-Stable',
   'net.kovidgoyal.kitty', 'com.mitchellh.ghostty', 'io.alacritty',
+  'forsion.exe',
+  'windowsterminal.exe', 'openconsole.exe', 'conhost.exe', 'cmd.exe', 'powershell.exe', 'pwsh.exe',
+  'wezterm-gui.exe', 'alacritty.exe', 'mintty.exe', 'wt.exe',
 ]
 
 const KINDS = new Set(['app', 'window', 'text', 'click', 'key', 'system'])
@@ -141,7 +148,9 @@ export function sanitizeEvent(raw: unknown, now: number): ComputerHistoryEvent |
   return ev
 }
 
-const BUNDLE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._*-]{0,254}$/
+// Windows 的 App 标识是 exe 文件名,能带空格、逗号、括号、非 ASCII(`Code - Insiders.exe`、`Acme, Inc.exe`)——按 Windows
+// 文件名规则收(只拒路径分隔与保留字符、控制字符):收窄就会把用户排除的 App 悄悄丢掉、照样被记录。macOS bundle id 是它的子集。
+const BUNDLE_ID_RE = /^[^\s<>:"/\\|?\u0000-\u001f][^<>:"/\\|?\u0000-\u001f]{0,254}$/u
 /** 用户排除表收敛(渲染层来的,当不可信输入):bundle id 字符集 + 域名规整成 punycode 主机名,去重封顶。 */
 export function normalizeExclude(raw: unknown): ComputerHistoryExclude {
   const r = (raw && typeof raw === 'object' ? raw : {}) as { apps?: unknown; domains?: unknown }
@@ -251,8 +260,11 @@ export function applyExclude(
 }
 
 /** 本 App 的 bundle id(packaged:Forsion 的 appId;dev:com.github.Electron)。读 execPath 旁的 Info.plist,
- *  二进制 plist / 读不到就 undefined(还有 `com.forsion.*` 兜着)。 */
-export function readSelfBundleId(execPath: string): string | undefined {
+ *  二进制 plist / 读不到就 undefined(还有 `com.forsion.*` 兜着)。
+ *  win32:App 标识 = 小写 exe 文件名(打包版 forsion.exe,dev electron.exe),与 helper 事件里的 app.bundleId 同口径。 */
+export function readSelfBundleId(execPath: string, platform: string = process.platform): string | undefined {
+  if (platform === 'win32') return path.win32.basename(execPath).toLowerCase() || undefined
+  if (platform !== 'darwin') return undefined
   try {
     const plist = readFileSync(path.join(path.dirname(execPath), '..', 'Info.plist'), 'utf8')
     return /<key>CFBundleIdentifier<\/key>\s*<string>([^<]+)<\/string>/.exec(plist)?.[1]
@@ -709,22 +721,36 @@ export interface ComputerHistoryPersistPatch {
   computerHistoryExclude?: ComputerHistoryExclude
 }
 
+/** 这一次连接的 helper 端点 + 拉起参数(launchHelper 的入参)。 */
+export interface HelperLaunchTarget {
+  /** darwin:unix socket 路径;win32:命名管道名。 */
+  socketPath: string
+  /** win32:要拉起的私有副本 exe。 */
+  exe?: string
+}
+
 export interface ComputerHistoryDeps {
   root: string
   platform: string
+  /** darwin 的 helper socket(win32 不用:管道名每次连接由 windowsRecorder 现给)。 */
   socketPath: string
-  /** PI_CU_SOCKET_PATH 指向外部 helper:不替它拉起(同 desktopPermissions.prepareHelper)。 */
+  /** PI_CU_SOCKET_PATH 指向外部 helper:不替它拉起(同 desktopPermissions.prepareHelper)。只对 darwin 有意义。 */
   externalSocket: boolean
-  /** 每次现取:helper 可能在运行中才被权限页装进 /Applications 或 ~/Applications。 */
+  /** 每次现取:helper 可能在运行中才被权限页装进 /Applications 或 ~/Applications。darwin 专用。 */
   helperAppPath: () => string
+  /** win32:每次连接现取录制服务(找源 → 私有副本 → 探协议 → 管道名,见 computerHistoryWin.createWindowsRecorderResolver)。
+   *  null / 缺省 = 没有源(helper_missing);protocol 为 null 或 < 13 = helper_outdated;reject = 一时失败(disconnected + 退避)。 */
+  windowsRecorder?(): Promise<WindowsRecorderTarget | null>
   selfBundleId?: string
   /** 写回桌面配置(SHELL_KEYS)。函数形态 = 在配置写队列里、紧挨写盘前才求值(main 的 saveConfig 原生支持;后台补落用它
    *  在写盘那一刻复核代号,见 persistOwed)。 */
   persist(patch: ComputerHistoryPersistPatch | (() => ComputerHistoryPersistPatch)): Promise<unknown>
-  /** 缺省:`open -n -g <helper.app> --args serve --socket <sock>`(与 CU 插件 / 权限页同一条拉起路径)。 */
-  launchHelper?(): Promise<void>
+  /** 缺省:darwin = `open -n -g <helper.app> --args serve --socket <sock>`(与 CU 插件 / 权限页同一条拉起路径);
+   *  win32 = 分离拉起 `<exe> serve --pipe <pipe>`(computerHistoryWin.launchWindowsRecorder)。 */
+  launchHelper?(target: HelperLaunchTarget): Promise<void>
   /** 权限页正在关停 / 重装 helper(DesktopPermissions.helperBusy)。为真时绝不 `open -n`:关停→装新之间拉起的是
-   *  **旧包**,它占住 helper 的锁,随后新包一启动就退,helper 永远停在旧协议(状态卡死在 helper_outdated)。 */
+   *  **旧包**,它占住 helper 的锁,随后新包一启动就退,helper 永远停在旧协议(状态卡死在 helper_outdated)。
+   *  只管 darwin(Windows 跑的是自己的私有副本,权限页碰不到它)。 */
   helperBusy?(): boolean
   /** 上面那段忙完时回调(DesktopPermissions.onHelperIdle),返回取消订阅:忙完立刻重连一次,不干等退避。 */
   onHelperIdle?(cb: () => void): () => void
@@ -822,12 +848,14 @@ export class ComputerHistory {
     // 代次跨重启单调:接着盘上 state.json 的往下数(老文件没有这个字段 = 0)
     this.dataGen = readDataGen(this.store.statePath)
     this.diskDataGen = this.dataGen
-    this.state = { v: 1, enabled: false, pausedUntil: null, status: this.isDarwin() ? 'off' : 'unsupported', since: t, updatedAt: t, platform: d.platform, dataGen: this.dataGen }
+    this.state = { v: 1, enabled: false, pausedUntil: null, status: this.supported() ? 'off' : 'unsupported', since: t, updatedAt: t, platform: d.platform, dataGen: this.dataGen }
   }
 
   private isDarwin(): boolean { return this.d.platform === 'darwin' }
+  /** 有采集端的平台:macOS(helper.app)与 Windows(windows-bridge.exe 常驻服务)。 */
+  private supported(): boolean { return this.d.platform === 'darwin' || this.d.platform === 'win32' }
   private isPaused(): boolean { return this.pausedUntil !== null && this.pausedUntil > this.now() }
-  private wantRecording(): boolean { return this.isDarwin() && this.enabled && !this.isPaused() && this.started && !this.disposed }
+  private wantRecording(): boolean { return this.supported() && this.enabled && !this.isPaused() && this.started && !this.disposed }
   /** 下发给 helper 的策略(排除表一换就是新对象,按引用缓存;onRaw 每条事件都要用 titleOnly)。 */
   private policy(): RecordPolicy {
     if (this.policyMemo?.exclude !== this.exclude) this.policyMemo = { exclude: this.exclude, policy: buildPolicy(this.exclude, this.d.selfBundleId) }
@@ -861,7 +889,8 @@ export class ComputerHistory {
   }
 
   /** 权限页据此把「运行中的 helper 协议太老」也判成需要更新(→「更新并重启助手」)。只在功能开着时要求:
-   *  没开电脑历史的 CU 用户不会为一个用不上的协议被提示重启。 */
+   *  没开电脑历史的 CU 用户不会为一个用不上的协议被提示重启。只对 darwin:权限页那条流程管的是 mac 的 helper.app,
+   *  Windows 的录制服务是私有副本,协议在拉起前就探过了。 */
   requiredHelperProtocol(): number | undefined {
     return this.isDarwin() && this.enabled && !this.disposed ? COMPUTER_HISTORY_PROTOCOL : undefined
   }
@@ -986,7 +1015,7 @@ export class ComputerHistory {
    * 落配置一律排进 ops,按发出顺序一个个落:盘上最后留下的是最后发出的意愿。
    */
   async setEnabled(on: boolean): Promise<ComputerHistoryView> {
-    if (on && !this.isDarwin()) return this.view() // 采集只有 mac 的 helper 能做;别让引擎看到 enabled:true 却永远没事件
+    if (on && !this.supported()) return this.view() // 采集只有 mac / Windows 的 helper 能做;别让引擎看到 enabled:true 却永远没事件
     const eop = ++this.enableSeq
     const pop = ++this.pauseSeq // 开关一拨,旧的暂停作废(关了再开不该还停在上次的暂停里)
     const patch = { computerHistoryEnabled: on, computerHistoryPausedUntil: null }
@@ -1339,7 +1368,7 @@ export class ComputerHistory {
   // ── 状态 ──
 
   private computeStatus(): ComputerHistoryStatus {
-    if (!this.isDarwin()) return 'unsupported'
+    if (!this.supported()) return 'unsupported'
     if (!this.enabled) return 'off'
     if (this.isPaused()) return 'paused'
     if (this.connStatus === 'recording' && this.storeFailing) return 'disconnected' // 连着但写不进盘:不能说「记录中」
@@ -1357,7 +1386,7 @@ export class ComputerHistory {
     const status = this.computeStatus()
     const now = this.now()
     const next: ComputerHistoryState = {
-      v: 1, enabled: this.enabled && this.isDarwin(), pausedUntil: this.isPaused() ? this.pausedUntil : null, status,
+      v: 1, enabled: this.enabled && this.supported(), pausedUntil: this.isPaused() ? this.pausedUntil : null, status,
       since: status === this.state.status ? this.state.since : now, updatedAt: now, platform: this.d.platform, dataGen: this.dataGen,
     }
     const sig = JSON.stringify([next.enabled, next.pausedUntil, next.status, next.dataGen])
@@ -1469,13 +1498,25 @@ export class ComputerHistory {
     this.retryTimer.unref?.()
   }
 
+  /** 这一次连接的端点。darwin:固定的 socket;win32:现取录制服务(源 / 私有副本 / 协议 / 管道名),没源 → helper_missing,
+   *  协议不够(老 helper 没有常驻录制服务)→ helper_outdated —— 都在连之前就判掉,不去拉起一个注定不行的 exe。 */
+  private async helperTarget(): Promise<HelperLaunchTarget> {
+    if (this.d.platform !== 'win32') return { socketPath: this.d.socketPath }
+    const rec = await this.d.windowsRecorder?.()
+    if (!rec) throw codeError('helper_missing')
+    if (rec.protocol === null || rec.protocol < COMPUTER_HISTORY_PROTOCOL) throw codeError('helper_outdated')
+    return { socketPath: rec.pipe, exe: rec.exe }
+  }
+
   private async connect(): Promise<void> {
     const gen = this.gen
     this.connecting = true
     this.lastAttemptAt = this.now()
     let sub: RecorderSubscription | null = null
     try {
-      const open = (): RecorderSubscription => openRecorderSubscription(this.d.socketPath, this.policy(), (raw) => this.onRaw(raw, gen))
+      const target = await this.helperTarget()
+      if (gen !== this.gen) return // 现取途中被断开(暂停 / 清除 / 改表):finally 按最新意愿重来
+      const open = (): RecorderSubscription => openRecorderSubscription(target.socketPath, this.policy(), (raw) => this.onRaw(raw, gen))
       sub = open()
       let info: { protocolVersion: number; axTrusted: boolean }
       try {
@@ -1484,13 +1525,13 @@ export class ComputerHistory {
         const code = errCode(err)
         if (code !== 'ENOENT' && code !== 'ECONNREFUSED') throw err
         // socket 不在 / 没人听 = helper 没跑:装了就拉起(功能开着才走到这里),没装就如实报
-        if (!await this.launchHelper(gen)) throw codeError(this.d.externalSocket ? 'external_unavailable' : 'helper_missing')
+        if (!await this.launchHelper(gen, target)) throw codeError(this.isDarwin() && this.d.externalSocket ? 'external_unavailable' : 'helper_missing')
         if (gen !== this.gen) return
         sub = open()
         info = await sub.ready
       }
       if (gen !== this.gen) { sub.close(); return }
-      if (!info.axTrusted) { sub.close(); throw codeError('accessibility_denied') }
+      if (!info.axTrusted && this.isDarwin()) { sub.close(); throw codeError('accessibility_denied') } // Windows 没有这项授权
       this.sub = sub
       this.subSince = this.now()
       this.connStatus = 'recording'
@@ -1519,23 +1560,30 @@ export class ComputerHistory {
   }
 
   /** 拉起 helper 并等它 bind。返回 false = 没装(或外部 socket 不归我们拉起);权限页正忙 → 抛 helper_busy。 */
-  private async launchHelper(gen: number): Promise<boolean> {
-    if (this.d.externalSocket) return false
-    const appPath = this.d.helperAppPath()
-    if (!existsSync(path.join(appPath, 'Contents', 'MacOS', 'bridge'))) return false
-    // 权限页正在关停 / 重装 helper:这会儿拉起的是旧包(见 deps.helperBusy)。不拉、也不占节流窗口
-    // (否则忙完那次重连拉不起来);落 disconnected + 退避,忙完由 helperIdle 立刻重连
-    if (this.d.helperBusy?.()) throw codeError('helper_busy')
+  private async launchHelper(gen: number, target: HelperLaunchTarget): Promise<boolean> {
+    let launch: (t: HelperLaunchTarget) => Promise<void>
+    if (this.isDarwin()) {
+      if (this.d.externalSocket) return false
+      const appPath = this.d.helperAppPath()
+      if (!existsSync(path.join(appPath, 'Contents', 'MacOS', 'bridge'))) return false
+      // 权限页正在关停 / 重装 helper:这会儿拉起的是旧包(见 deps.helperBusy)。不拉、也不占节流窗口
+      // (否则忙完那次重连拉不起来);落 disconnected + 退避,忙完由 helperIdle 立刻重连
+      if (this.d.helperBusy?.()) throw codeError('helper_busy')
+      launch = this.d.launchHelper ?? (async (t) => {
+        await mkdir(path.dirname(t.socketPath), { recursive: true })
+        await execFileP('/usr/bin/open', ['-n', '-g', appPath, '--args', 'serve', '--socket', t.socketPath], { timeout: 10_000 })
+      })
+    } else {
+      const exe = target.exe
+      if (!exe || !existsSync(exe)) return false
+      launch = this.d.launchHelper ?? ((t) => launchWindowsRecorder(exe, t.socketPath))
+    }
     // 节流窗口内不再拉、也不干等:直接让下一次连接失败落到 disconnected + 退避
     if (this.now() - this.lastLaunchAt < LAUNCH_THROTTLE_MS) return true
     this.lastLaunchAt = this.now()
-    const launch = this.d.launchHelper ?? (async () => {
-      await mkdir(path.dirname(this.d.socketPath), { recursive: true })
-      await execFileP('/usr/bin/open', ['-n', '-g', appPath, '--args', 'serve', '--socket', this.d.socketPath], { timeout: 10_000 })
-    })
-    await launch().catch((e) => console.warn('[computer-history] helper launch failed', e))
+    await launch(target).catch((e) => console.warn('[computer-history] helper launch failed', e))
     for (let i = 0; i < 30 && gen === this.gen; i++) {
-      if (await canConnect(this.d.socketPath)) return true
+      if (await canConnect(target.socketPath)) return true
       await sleep(150)
     }
     return true // 装了但没起来:交给下一次连接失败去报 disconnected

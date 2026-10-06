@@ -365,10 +365,10 @@ describe('ComputerHistorySettings', () => {
     expect(computerHistoryApi()).toBe(api)
   })
 
-  it('非 macOS:只说明「目前仅支持 macOS」,不读不写', async () => {
-    ;(window.tangu as { platform?: string }).platform = 'win32'
+  it('不支持的平台(linux):只说明「目前仅支持 macOS 和 Windows」,不读不写', async () => {
+    ;(window.tangu as { platform?: string }).platform = 'linux'
     await mount()
-    expect(text()).toContain('目前仅支持 macOS')
+    expect(text()).toContain('目前仅支持 macOS 和 Windows')
     expect(api.get).not.toHaveBeenCalled()
     expect(host.querySelector('[role="switch"]')).toBeNull()
   })
@@ -376,8 +376,58 @@ describe('ComputerHistorySettings', () => {
   it('主进程回 unsupported 同样收起控件', async () => {
     view = makeView({ status: 'unsupported', enabled: false })
     await mount()
-    expect(text()).toContain('目前仅支持 macOS')
+    expect(text()).toContain('目前仅支持 macOS 和 Windows')
     expect(host.querySelector('[role="switch"]')).toBeNull()
+  })
+
+  it('Windows:正常读写;同意说明换 Windows 说法(无辅助功能 / 钥匙串 / ⌘,文件资源管理器);排除 App 手填程序文件名(规整成小写)', async () => {
+    ;(window.tangu as { platform?: string }).platform = 'win32'
+    view = makeView({ platform: 'win32' })
+    await mount()
+    expect(api.get).toHaveBeenCalled()
+    expect(host.querySelector('[role="switch"]')).not.toBeNull()
+    expect(text()).toContain('记录中')
+    expect(text()).toContain('不需要额外的系统权限')
+    expect(text()).toContain('Ctrl+S')
+    expect(text()).toContain('在文件资源管理器中显示')
+    for (const mac of ['辅助功能', '钥匙串', '⌘', '访达', 'tangu-computer-use', 'Bundle ID']) expect(text(), mac).not.toContain(mac)
+    const input = host.querySelector<HTMLInputElement>('form[data-ch-add="app"] input')!
+    expect(input.placeholder).toContain('chrome.exe')
+    const submit = async (value: string) => {
+      await act(async () => {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, value)
+        input.dispatchEvent(new Event('input', { bubbles: true }))
+      })
+      await act(async () => host.querySelector<HTMLFormElement>('form[data-ch-add="app"]')!.requestSubmit())
+    }
+    await submit('Notepad')
+    expect(text()).toContain('请输入有效的程序文件名')
+    expect(api.setExclude).not.toHaveBeenCalled()
+    await submit(' Code.EXE ')
+    expect(api.setExclude).toHaveBeenCalledWith({ apps: ['code.exe'], domains: [] })
+    await act(async () => root.unmount())
+    root = createRoot(host)
+    setLocaleGlobal('en')
+    await mount()
+    expect(text()).toContain('No extra system permission is needed')
+    expect(text()).toContain('Show in File Explorer')
+    for (const mac of ['Accessibility', 'Keychain', '⌘', 'Finder', 'bundle ID']) expect(text(), mac).not.toContain(mac)
+  })
+
+  it('Windows:组件缺失 / 过旧 → 状态行说「重装 / 更新 Forsion」,不挂权限卡(没有要授的权限、也没有单独安装的助手),给「刷新状态」', async () => {
+    ;(window.tangu as { platform?: string }).platform = 'win32'
+    for (const [status, words] of [['helper_missing', '重新安装 Forsion'], ['helper_outdated', '更新 Forsion']] as const) {
+      view = makeView({ status, platform: 'win32' })
+      await mount()
+      expect(text(), status).toContain(words)
+      expect(text(), status).not.toContain('活动监视器')
+      expect(host.querySelector('.ch-permission'), status).toBeNull()
+      expect(host.querySelector('[data-permission]'), status).toBeNull()
+      expect(permissionsStatus, status).not.toHaveBeenCalled()
+      expect(host.querySelector('[data-ch-refresh-status]'), status).not.toBeNull()
+      await act(async () => root.unmount())
+      root = createRoot(host)
+    }
   })
 
   it('写失败就地报错,读失败可重试', async () => {

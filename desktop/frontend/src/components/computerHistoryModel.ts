@@ -51,6 +51,23 @@ export const STATUS_KEYS: Readonly<Record<ComputerHistoryStatus, { label: string
   unsupported: { label: 'computerHistory.status.unsupported', hint: 'computerHistory.status.unsupportedHint' },
 }
 
+/** Windows 上说法不同的状态:没有单独安装的助手,组件随 Forsion 内置的 Computer Use 包走(缺 = 重装,旧 = 更新 Forsion)。
+ *  no_permission 在 Windows 上不会出现(没有要授的系统权限)。 */
+export const WINDOWS_STATUS_KEYS: Readonly<Partial<Record<ComputerHistoryStatus, { label: string; hint: string }>>> = {
+  helper_missing: { label: 'computerHistory.win.helperMissing', hint: 'computerHistory.win.helperMissingHint' },
+  helper_outdated: { label: 'computerHistory.win.helperOutdated', hint: 'computerHistory.win.helperOutdatedHint' },
+}
+
+/** 本平台下这个状态的标签 + 提示。 */
+export function statusKeys(status: ComputerHistoryStatus, platform: string | undefined): { label: string; hint: string } {
+  return (platform === 'win32' ? WINDOWS_STATUS_KEYS[status] : undefined) ?? STATUS_KEYS[status]
+}
+
+/** 有采集端的平台(与主进程 ComputerHistory.supported 同口径)。 */
+export function isSupportedPlatform(platform: string | undefined): boolean {
+  return platform === 'darwin' || platform === 'win32'
+}
+
 /** 状态点的色调:ok 绿、warn 黄(等用户处理 / 自动重连)、idle 灰。 */
 export function statusTone(status: ComputerHistoryStatus): 'ok' | 'warn' | 'idle' {
   if (status === 'recording') return 'ok'
@@ -179,5 +196,14 @@ export function normalizeDomain(input: string): string | null {
 export function normalizeBundleId(input: string): string | null {
   const id = input.trim()
   if (id.length > 255 || !/^[A-Za-z0-9][A-Za-z0-9_-]*(?:\.[A-Za-z0-9_-]+)+$/.test(id)) return null
+  return id
+}
+
+/** Windows 手填的程序文件名 → 小写规整值(helper 按小写 exe 名比对);必须以 .exe 结尾,允许空格、+、括号、&、'
+ *  (`notepad++.exe`、`Code - Insiders.exe`),不收路径。不合法返回 null。 */
+export function normalizeExeName(input: string): string | null {
+  const id = input.trim().toLowerCase()
+  // Windows 文件名规则:拒路径分隔、保留字符(含通配 *)与控制字符;不以空格或点开头。
+  if (id.length > 255 || !/^[^\s.<>:"/\\|?*\u0000-\u001f][^<>:"/\\|?*\u0000-\u001f]*\.exe$/u.test(id)) return null
   return id
 }

@@ -2,7 +2,8 @@
  * 设置 ·「电脑历史」页:真组件 + 生产 CSS,Chromium 里点一遍(桩 window.tangu.computerHistory,不连 helper)。
  * 覆盖:各状态 × 深浅色 × zh/en 无横向溢出、开启前同意确认(开关保持关)、窄栏;
  *   同意条 / 清除确认的正文与标题对比度 ≥ 4.5(五套配色 × 深浅色,底色逐层按 alpha 合成);
- *   helper_missing 版式(刷新在首张面板状态行、权限卡是同页面板且左缘对齐、不给暂停);面板头动作与行内控件同一右缘;添加按钮与输入框等高。
+ *   helper_missing 版式(刷新在首张面板状态行、权限卡是同页面板且左缘对齐、不给暂停);面板头动作与行内控件同一右缘;添加按钮与输入框等高;
+ *   Windows 版(?platform=win32):不挂权限卡、刷新照给,中英 × 宽窄无横向溢出。
  * Run: npm run check:computerhistory   (worktree 里加 HARNESS_URL=http://localhost:<port>/harness.html;--shot 留截图)
  */
 const fs = require('fs')
@@ -80,6 +81,8 @@ async function main() {
     ['dark-helper-missing', 'status=helper_missing&dark'],
     ['dark-en-outdated', 'status=helper_outdated&dark&lang=en'],
     ['light-en-recording', 'status=recording&lang=en'],
+    ['win-en-recording', 'status=recording&lang=en&platform=win32'],
+    ['win-helper-missing-dark', 'status=helper_missing&dark&platform=win32'],
   ]) {
     await open(query)
     await page.locator('.ch-page').screenshot({ path: path.join(out, `${name}.png`) })
@@ -164,9 +167,20 @@ async function main() {
     check(`[${tag}] 不给暂停、卡上没有自带工具条`, !layout.pauseRow && !layout.toolbar, layout)
   }
 
+  // Windows:没有要授的权限、没有单独安装的助手 —— 缺 / 旧组件不挂权限卡,刷新照样在首张面板状态行
+  for (const st of ['helper_missing', 'helper_outdated']) {
+    await open(`status=${st}&platform=win32`)
+    const w = await page.evaluate(() => {
+      const panels = [...document.querySelectorAll('.ch-page .settings-panel')]
+      const refresh = document.querySelector('[data-ch-refresh-status]')
+      return { card: !!document.querySelector('.ch-page .ch-permission, .ch-page [data-permission]'), refreshInFirstPanel: !!refresh && !!panels[0]?.contains(refresh) }
+    })
+    check(`[win-${st}] 不挂权限卡、刷新在首张面板`, !w.card && w.refreshInFirstPanel, w)
+  }
+
   // 窄栏(≈ 设置浮窗最窄 / 手机宽)
   await page.setViewportSize({ width: 420, height: 1600 })
-  for (const [name, query] of [['narrow-recording', 'status=recording'], ['narrow-no-permission-dark', 'status=no_permission&dark']]) {
+  for (const [name, query] of [['narrow-recording', 'status=recording'], ['narrow-no-permission-dark', 'status=no_permission&dark'], ['narrow-win-en-recording', 'status=recording&lang=en&platform=win32']]) {
     await open(query)
     await page.locator('.ch-page').screenshot({ path: path.join(out, `${name}.png`) })
     const o = await overflow()

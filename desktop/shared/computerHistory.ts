@@ -3,6 +3,8 @@
  * 采集在 CU helper(recordSubscribe,协议 13),落盘/保留/清除/暂停全在主进程;引擎 read_computer_history
  * 只读 <forsionHome>/computer-history/(state.json + events/*.jsonl),格式改动三处同步:helper / 主进程 / 引擎。
  * 单独一个文件是为了不让渲染层 import 到 electron/(那边带 node:net / fs)。
+ * 平台:macOS(helper.app,unix socket)与 Windows(windows-bridge.exe 常驻服务,命名管道;见 electron/computerHistoryWin.ts),
+ * 线协议逐字节相同;其余平台 status 恒 unsupported。
  */
 
 /** helper 推来的一条事件,主进程原样落盘(一行一条 JSON)。 */
@@ -10,6 +12,7 @@ export interface ComputerHistoryEvent {
   /** epoch ms(helper 时钟)。 */
   t: number
   kind: 'app' | 'window' | 'text' | 'click' | 'key' | 'system'
+  /** bundleId:macOS = bundle id(com.google.Chrome);Windows = 小写 exe 文件名(chrome.exe),name = exe 的 FileDescription。 */
   app?: { name: string; bundleId?: string; excluded?: true }
   title?: string
   url?: string
@@ -53,7 +56,7 @@ export interface ComputerHistoryState {
 }
 
 export interface ComputerHistoryExclude {
-  /** bundle id */
+  /** App 标识(macOS bundle id / Windows 小写 exe 文件名),不分大小写,`.*` 结尾 = 前缀通配 */
   apps: string[]
   /** 域名(含子域) */
   domains: string[]

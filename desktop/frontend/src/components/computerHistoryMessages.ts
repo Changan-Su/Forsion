@@ -1,6 +1,7 @@
 import { registerMessages } from '../i18n'
 
 // 电脑历史设置页文案(zh / en 成对)。导航标签与页说明在 SettingsModal 自己的片段里(settingsmodal.tab/page.computerHistory)。
+// Windows 与 macOS 说法不同的条目单独成键(computerHistory.win.*),不在一个键里按平台拼文案;页面按 View 的 platform 选键。
 registerMessages({
   'computerHistory.summary': { zh: '默认关闭，可随时暂停或清除。', en: 'Off by default. Pause or clear it at any time.' },
   'computerHistory.enable': { zh: '记录电脑历史', en: 'Record computer history' },
@@ -22,10 +23,10 @@ registerMessages({
     zh: '电脑历史的状态文件 state.json 没能更新（{error}），正在自动重试。更新成功前，Agent 读到的记录状态可能是旧的；关闭记录后，Agent 仍会以已保存的设置为准。',
     en: 'Couldn’t update the computer history status file, state.json ({error}). Retrying automatically. Until it’s updated, agents may see an outdated recording status. If you turned recording off, agents still follow your saved setting.',
   },
-  'computerHistory.macOnly.title': { zh: '目前仅支持 macOS', en: 'macOS only for now' },
-  'computerHistory.macOnly.body': {
-    zh: '电脑历史依赖 macOS 的辅助功能接口，这台电脑的系统暂不支持。',
-    en: 'Computer history relies on the macOS Accessibility API, so it isn’t available on this system yet.',
+  'computerHistory.unsupportedPlatform.title': { zh: '目前仅支持 macOS 和 Windows', en: 'macOS and Windows only for now' },
+  'computerHistory.unsupportedPlatform.body': {
+    zh: '电脑历史目前只能在 macOS 和 Windows 上记录，这台电脑的系统暂不支持。',
+    en: 'Computer history can only record on macOS and Windows for now, so it isn’t available on this system yet.',
   },
 
   'computerHistory.status.title': { zh: '当前状态', en: 'Status' },
@@ -57,11 +58,43 @@ registerMessages({
     zh: '与 Computer Use 助手的连接断开了，正在自动重连。',
     en: 'Lost the connection to the Computer Use helper. Reconnecting automatically.',
   },
-  'computerHistory.status.unsupported': { zh: '目前仅支持 macOS', en: 'macOS only for now' },
+  'computerHistory.status.unsupported': { zh: '目前仅支持 macOS 和 Windows', en: 'macOS and Windows only for now' },
   'computerHistory.status.unsupportedHint': { zh: '这台电脑的系统暂不支持电脑历史。', en: 'Computer history isn’t available on this system yet.' },
   'computerHistory.status.refresh': { zh: '刷新状态', en: 'Refresh status' },
   'computerHistory.helper.title': { zh: 'Computer Use 助手', en: 'Computer Use helper' },
   'computerHistory.helper.hint': { zh: '电脑历史只需要它的辅助功能权限，不需要屏幕录制。', en: 'Computer history only needs its Accessibility access, not Screen Recording.' },
+
+  // ── Windows:采集组件随 Forsion 内置的 Computer Use 包一起安装,没有要授的系统权限,也没有单独安装的助手 ──
+  'computerHistory.win.helperMissing': { zh: '缺少 Computer Use 组件', en: 'Computer Use component missing' },
+  'computerHistory.win.helperMissingHint': {
+    zh: '电脑历史由 Forsion 内置的 Computer Use 组件采集，但在这台电脑上没有找到它。请重新安装 Forsion，再回到本页。',
+    en: 'Computer history is captured by the Computer Use component built into Forsion, but it wasn’t found on this computer. Reinstall Forsion, then come back here.',
+  },
+  'computerHistory.win.helperOutdated': { zh: 'Computer Use 组件需要更新', en: 'Computer Use component needs an update' },
+  'computerHistory.win.helperOutdatedHint': {
+    zh: 'Forsion 内置的 Computer Use 组件版本过旧，还不能记录电脑历史。请更新 Forsion，再回到本页。',
+    en: 'The Computer Use component built into Forsion is too old to record computer history. Update Forsion, then come back here.',
+  },
+  'computerHistory.win.recorded': {
+    zh: '前台切换到了哪个 App、窗口标题、浏览器网址、你在输入框里输入的文字、点击的按钮名称，以及 Ctrl+S 这类快捷键。只在 Forsion 运行且未暂停时记录。',
+    en: 'Which app is in front, window titles, browser URLs, text you type into focused fields, the names of buttons you click, and keyboard shortcuts such as Ctrl+S. Recording happens only while Forsion is running and not paused.',
+  },
+  'computerHistory.win.never': {
+    zh: '原始按键和屏幕截图；密码管理器、密码输入框，以及无痕或隐私浏览窗口里的任何内容。',
+    en: 'Raw keystrokes and screenshots, and anything in password managers, password fields, or private and incognito windows.',
+  },
+  'computerHistory.win.permission': {
+    zh: '不需要额外的系统权限。记录由 Forsion 内置的 Computer Use 组件完成，无需另行安装。',
+    en: 'No extra system permission is needed. Recording is done by the Computer Use component built into Forsion, so there’s nothing else to install.',
+  },
+  'computerHistory.win.reveal': { zh: '在文件资源管理器中显示', en: 'Show in File Explorer' },
+  'computerHistory.win.appsHint': {
+    zh: '这些 App 在前台时不记录任何内容，只留一条不带标题的切换记录。只对之后的活动生效，之前的记录请用下方「清除历史」删除。密码管理器始终排除；终端和 Forsion 自身只记录 App 与窗口标题。',
+    en: 'Nothing is recorded while these apps are in front, except an untitled app switch. This applies to new activity only; use Clear history below to remove earlier records. Password managers are always excluded, and terminals and Forsion itself only record app and window titles.',
+  },
+  'computerHistory.win.manualLabel': { zh: 'App 的程序文件名', en: 'App program file name' },
+  'computerHistory.win.manualPlaceholder': { zh: '或输入程序文件名，例如 chrome.exe', en: 'Or enter a program file name, e.g. chrome.exe' },
+  'computerHistory.win.invalid': { zh: '请输入有效的程序文件名，例如 chrome.exe。', en: 'Enter a valid program file name, such as chrome.exe.' },
 
   'computerHistory.pause.label': { zh: '暂停记录', en: 'Pause recording' },
   'computerHistory.pause.hint': { zh: '到时间后自动恢复。', en: 'Recording resumes automatically when the time is up.' },

@@ -3,8 +3,8 @@ import { __dictSnapshot } from '../i18n'
 import './computerHistoryMessages'
 import type { ComputerHistorySession, ComputerHistoryStatus } from '../../../shared/computerHistory'
 import {
-  CLEAR_CHOICES, PAUSE_CHOICES, STATUS_KEYS, clearArg, clockLabel, needsHelperSetup, normalizeBundleId,
-  normalizeDomain, pauseArg, startOfLocalDay, statusTone, historyBlocks, urlHost, dayOptions, dayRange, dayStartAgo, localDayKey,
+  CLEAR_CHOICES, PAUSE_CHOICES, STATUS_KEYS, WINDOWS_STATUS_KEYS, clearArg, clockLabel, isSupportedPlatform, needsHelperSetup, normalizeBundleId, normalizeExeName,
+  normalizeDomain, statusKeys, pauseArg, startOfLocalDay, statusTone, historyBlocks, urlHost, dayOptions, dayRange, dayStartAgo, localDayKey,
 } from './computerHistoryModel'
 
 const MIN = 60_000
@@ -110,6 +110,20 @@ describe('computerHistoryModel', () => {
     expect(Object.keys(STATUS_KEYS).sort()).toEqual([...all].sort())
   })
 
+  it('平台:darwin / win32 支持,其余不支持;Windows 的「缺 / 旧」换成组件说法,其余状态与 mac 同键', () => {
+    expect(['darwin', 'win32', 'linux', undefined].map(isSupportedPlatform)).toEqual([true, true, false, false])
+    expect(statusKeys('helper_missing', 'win32').label).toBe('computerHistory.win.helperMissing')
+    expect(statusKeys('helper_outdated', 'win32').hint).toBe('computerHistory.win.helperOutdatedHint')
+    expect(statusKeys('helper_missing', 'darwin')).toBe(STATUS_KEYS.helper_missing)
+    expect(statusKeys('recording', 'win32')).toBe(STATUS_KEYS.recording)
+    expect(normalizeBundleId('chrome.exe')).toBe('chrome.exe') // Windows 的 App 标识 = exe 文件名,照样过校验
+    expect(normalizeExeName(' Notepad++.EXE ')).toBe('notepad++.exe')
+    expect(normalizeExeName('Code - Insiders.exe')).toBe('code - insiders.exe')
+    expect(normalizeExeName('Acme, Inc.exe')).toBe('acme, inc.exe')
+    expect(normalizeExeName('微信.exe')).toBe('微信.exe')
+    for (const bad of ['chrome', 'C:\\Windows\\notepad.exe', '../x.exe', ' .exe', '*.exe']) expect(normalizeExeName(bad), bad).toBeNull()
+  })
+
   it('主机名:解析失败给空串', () => {
     expect(urlHost('https://docs.example.com/a/b')).toBe('docs.example.com')
     expect(urlHost(undefined)).toBe('')
@@ -120,6 +134,7 @@ describe('computerHistoryModel', () => {
     const { zh, en } = __dictSnapshot()
     const keys = [
       ...Object.values(STATUS_KEYS).flatMap((k) => [k.label, k.hint]),
+      ...Object.values(WINDOWS_STATUS_KEYS).flatMap((k) => [k!.label, k!.hint]),
       ...PAUSE_CHOICES.map((c) => c.labelKey),
       ...CLEAR_CHOICES.flatMap((c) => [c.labelKey, c.confirmKey]),
       'computerHistory.sites.invalid', 'computerHistory.sites.duplicate', 'computerHistory.apps.invalid', 'computerHistory.apps.duplicate',

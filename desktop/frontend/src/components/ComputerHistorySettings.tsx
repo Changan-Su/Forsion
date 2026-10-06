@@ -7,6 +7,8 @@
  * 旧助手 shutdown 到新字节落盘之间一重连,就会把旧版拉起来占住 socket,新版随即作为多余实例退出。
  * 清除 / 改排除表同样会让主进程重订阅,期间一并禁用(主进程的拉起本身也按 helperBusy 把关)。
  * 辅助功能授权复用 DesktopPermissions(只画 computerAccessibility;不涉及屏幕录制)。
+ * Windows:没有要授的系统权限,也没有单独安装的助手(采集组件随 Forsion 内置的 Computer Use 包走)—— 不挂权限卡,
+ * 缺 / 旧组件的状态行改说「重装 / 更新 Forsion」,同意说明里与 mac 不同的条目换 computerHistory.win.* 的键。
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { Ban, FolderOpen, Globe2, History, Loader2, MousePointer2, Play, RefreshCw, ShieldCheck, Trash2, X } from 'lucide-react'
@@ -17,13 +19,13 @@ import { ipcErrorText } from '../ipcError'
 import { DesktopPermissions, hasDesktopPermissions } from './DesktopPermissions'
 import { SettingsPanel, SettingsRow, SettingsState, SettingsSwitch } from './SettingsPrimitives'
 import {
-  CLEAR_CHOICES, PAUSE_CHOICES, STATUS_KEYS, clearArg, clockLabel, dayOptions, dayRange, dayStartAgo, needsHelperSetup, normalizeBundleId,
-  normalizeDomain, historyBlocks, pauseArg, statusTone, type ClearChoice,
+  CLEAR_CHOICES, PAUSE_CHOICES, clearArg, clockLabel, dayOptions, dayRange, dayStartAgo, isSupportedPlatform, needsHelperSetup, normalizeBundleId, normalizeExeName,
+  normalizeDomain, historyBlocks, pauseArg, statusKeys, statusTone, type ClearChoice,
 } from './computerHistoryModel'
 import './computerHistoryMessages'
 import './computerHistory.css'
 
-/** 本端有主进程 API 才列这一页(非 darwin 也列,页内写「目前仅支持 macOS」);云端 Web / 移动端 / 设备页没有。 */
+/** 本端有主进程 API 才列这一页(不支持的平台也列,页内写「目前仅支持 macOS 和 Windows」);云端 Web / 移动端 / 设备页没有。 */
 export function computerHistoryApi(): ComputerHistoryApi | undefined {
   const tangu = window.tangu
   if (!tangu || tangu.cloudWeb || tangu.mobile || tangu.unitPage) return undefined
@@ -77,8 +79,8 @@ export function ComputerHistorySettings({ mode, anchor }: { mode: 'light' | 'dar
   const revRef = useRef(-Infinity)
   /** 预览请求序号:只认最后发出的那次(清除后的重拉不能被清除前发出、晚到的旧结果盖回去)。 */
   const recentSeq = useRef(0)
-  // 平台已知不是 darwin 就不去读(主进程那边只会回 unsupported)。
-  const hostUnsupported = !!hostPlatform && hostPlatform !== 'darwin'
+  // 平台已知不支持(不是 darwin / win32)就不去读(主进程那边只会回 unsupported)。
+  const hostUnsupported = !!hostPlatform && !isSupportedPlatform(hostPlatform)
 
   /** 收一份 View:比手上的旧(或一样)就丢。 */
   const accept = useCallback((next: ComputerHistoryView): void => {
@@ -165,8 +167,8 @@ export function ComputerHistorySettings({ mode, anchor }: { mode: 'light' | 'dar
   }
 
   if (!api) return null
-  if (hostUnsupported || view?.state.status === 'unsupported' || (view && view.state.platform !== 'darwin')) {
-    return <SettingsState icon={<History size={20} />} title={t('computerHistory.macOnly.title')} description={t('computerHistory.macOnly.body')} />
+  if (hostUnsupported || view?.state.status === 'unsupported' || (view && !isSupportedPlatform(view.state.platform))) {
+    return <SettingsState icon={<History size={20} />} title={t('computerHistory.unsupportedPlatform.title')} description={t('computerHistory.unsupportedPlatform.body')} />
   }
   if (!view) {
     return loadError !== null
@@ -181,14 +183,17 @@ export function ComputerHistorySettings({ mode, anchor }: { mode: 'light' | 'dar
   const now = Date.now()
   const { state, exclude } = view
   const status = state.status
+  /** 主进程所在平台(View 自带,比 window.tangu.platform 更贴近真正在采集的那一端)。 */
+  const windows = state.platform === 'win32'
   const pausedUntil = status === 'paused' && state.pausedUntil != null ? state.pausedUntil : null
   const tone = statusTone(status)
+  const keys = statusKeys(status, state.platform)
   const statusLabel = pausedUntil != null
     ? t('computerHistory.status.pausedUntil', { time: clockLabel(pausedUntil, now) })
-    : t(STATUS_KEYS[status].label)
+    : t(keys.label)
   const statusHint = status === 'recording'
     ? t('computerHistory.status.recordingHint', { time: clockLabel(state.since, now) })
-    : pausedUntil != null ? t('computerHistory.status.pausedUntilHint') : t(STATUS_KEYS[status].hint)
+    : pausedUntil != null ? t('computerHistory.status.pausedUntilHint') : t(keys.hint)
 
   // 芯片上显示 App 名:先查最近见过的 App,再查今天的会话;都没有就露 bundle id。
   const appNames = new Map<string, string>()
@@ -210,8 +215,9 @@ export function ComputerHistorySettings({ mode, anchor }: { mode: 'light' | 'dar
   const saveExclude = async (next: ComputerHistoryExclude): Promise<boolean> =>
     permissionBusyRef.current ? false : act('exclude', (a) => a.setExclude(next))
   const addApp = async (): Promise<void> => {
-    const id = normalizeBundleId(appDraft)
-    if (!id) { setAppError('computerHistory.apps.invalid'); return }
+    // Windows 的 App 标识是小写 exe 文件名(事件里就是小写):手填的也规整成小写,芯片才对得上最近用过的 App 名
+    const id = windows ? normalizeExeName(appDraft) : normalizeBundleId(appDraft)
+    if (!id) { setAppError(windows ? 'computerHistory.win.invalid' : 'computerHistory.apps.invalid'); return }
     if (exclude.apps.some((x) => x.toLowerCase() === id.toLowerCase())) { setAppError('computerHistory.apps.duplicate'); return }
     setAppError(null)
     if (await saveExclude({ apps: [...exclude.apps, id], domains: exclude.domains })) setAppDraft('')
@@ -252,9 +258,10 @@ export function ComputerHistorySettings({ mode, anchor }: { mode: 'light' | 'dar
     setStatusRefreshing(true)
     try { await load() } finally { if (alive.current) setStatusRefreshing(false) }
   }
-  const showPermission = state.enabled && (needsHelperSetup(status) || permissionBusy) && hasDesktopPermissions()
-  /** 等用户处理 / 正在重连:状态行给「刷新状态」(授权回来、手动重连)。 */
-  const showRefresh = showPermission || (state.enabled && status === 'disconnected')
+  /** 权限卡只在 mac:Windows 没有要授的权限、没有单独安装的助手,缺 / 旧组件由状态行说明怎么办(重装 / 更新 Forsion)。 */
+  const showPermission = !windows && state.enabled && (needsHelperSetup(status) || permissionBusy) && hasDesktopPermissions()
+  /** 等用户处理 / 正在重连:状态行给「刷新状态」(授权回来、手动重连;Windows 上重装 / 更新回来)。 */
+  const showRefresh = showPermission || (state.enabled && (status === 'disconnected' || (windows && needsHelperSetup(status))))
   /**
    * 暂停只在「在录 / 随时会录上」时有意义:recording,以及 disconnected(主进程正自动重连,随时可能录上;
    * pause() 不看连接态,照样落 pausedUntil 并断订阅,所以想先停一会儿的意愿不该被瞬时断线挡住)。
@@ -335,14 +342,14 @@ export function ComputerHistorySettings({ mode, anchor }: { mode: 'light' | 'dar
         icon={<ShieldCheck size={16} />}
         title={t('computerHistory.about.title')}
         description={t('computerHistory.about.hint')}
-        actions={<button type="button" className="btn ghost sm" onClick={reveal}><FolderOpen size={13} aria-hidden="true" />{t('computerHistory.reveal')}</button>}
+        actions={<button type="button" className="btn ghost sm" onClick={reveal}><FolderOpen size={13} aria-hidden="true" />{t(windows ? 'computerHistory.win.reveal' : 'computerHistory.reveal')}</button>}
       >
         <dl className="ch-about">
-          <div className="ch-about-row"><dt>{t('computerHistory.about.recordedLabel')}</dt><dd>{t('computerHistory.about.recorded')}</dd></div>
-          <div className="ch-about-row"><dt>{t('computerHistory.about.neverLabel')}</dt><dd>{t('computerHistory.about.never')}</dd></div>
+          <div className="ch-about-row"><dt>{t('computerHistory.about.recordedLabel')}</dt><dd>{t(windows ? 'computerHistory.win.recorded' : 'computerHistory.about.recorded')}</dd></div>
+          <div className="ch-about-row"><dt>{t('computerHistory.about.neverLabel')}</dt><dd>{t(windows ? 'computerHistory.win.never' : 'computerHistory.about.never')}</dd></div>
           <div className="ch-about-row"><dt>{t('computerHistory.about.storageLabel')}</dt><dd>{t('computerHistory.about.storage', { path: view.root, days: view.keepDays })}</dd></div>
           <div className="ch-about-row"><dt>{t('computerHistory.about.accessLabel')}</dt><dd>{t('computerHistory.about.access')}</dd></div>
-          <div className="ch-about-row"><dt>{t('computerHistory.about.permissionLabel')}</dt><dd>{t('computerHistory.about.permission')}</dd></div>
+          <div className="ch-about-row"><dt>{t('computerHistory.about.permissionLabel')}</dt><dd>{t(windows ? 'computerHistory.win.permission' : 'computerHistory.about.permission')}</dd></div>
         </dl>
         <p className="ch-tip">{t('computerHistory.about.tip')}</p>
       </SettingsPanel>
@@ -395,7 +402,7 @@ export function ComputerHistorySettings({ mode, anchor }: { mode: 'light' | 'dar
             </ol>}
       </SettingsPanel>
 
-      <SettingsPanel icon={<Ban size={16} />} title={t('computerHistory.apps.title')} description={t('computerHistory.apps.hint')}>
+      <SettingsPanel icon={<Ban size={16} />} title={t('computerHistory.apps.title')} description={t(windows ? 'computerHistory.win.appsHint' : 'computerHistory.apps.hint')}>
         <div className="ch-chips">
           {exclude.apps.length === 0
             ? <span className="ch-empty">{t('computerHistory.apps.empty')}</span>
@@ -431,8 +438,8 @@ export function ComputerHistorySettings({ mode, anchor }: { mode: 'light' | 'dar
             type="text"
             value={appDraft}
             onChange={(e) => { setAppDraft(e.target.value); setAppError(null) }}
-            placeholder={t('computerHistory.apps.manualPlaceholder')}
-            aria-label={t('computerHistory.apps.manualLabel')}
+            placeholder={t(windows ? 'computerHistory.win.manualPlaceholder' : 'computerHistory.apps.manualPlaceholder')}
+            aria-label={t(windows ? 'computerHistory.win.manualLabel' : 'computerHistory.apps.manualLabel')}
             aria-invalid={appError !== null || undefined}
             spellCheck={false}
             autoCapitalize="off"
