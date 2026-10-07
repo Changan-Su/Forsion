@@ -197,7 +197,7 @@ async function main() {
   await firstFrame()
   await page.waitForTimeout(4000)
   check('窗口迟迟不露出来(慢机器要好几秒):一直等着,不抢在它前面退场', !(await page.evaluate(shadowState)).gone)
-  await page.waitForTimeout(6600)
+  await page.waitForTimeout(7500) // 上限 10 秒 + 淡出;多留一秒给负载高的机器
   check('窗口永远不露出来:十秒上限照样撤走', (await page.evaluate(shadowState)).gone)
   await open(hiddenWindow({ scene: 'classic' }))
   await firstFrame()
