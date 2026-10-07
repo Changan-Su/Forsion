@@ -3205,7 +3205,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
           ? async (batch) => describeImages(batch, { modelId: await resolveVisionModelId(toolCtx.visionModelId, appId), userId, appId, signal: ac.signal })
           : null, (e: any) => console.warn(`[agent-core] run=${runId} 图像识别降级失败(可信图退回直接送图,不可信图丢弃):`, e?.message || e)));
         // 旧截图不再每轮重发:只留最近几条带图,更早的就地换成占位(否则请求体随步数线性涨,慢上行必撞上传超时)。
-        dropStaleToolImages(liveToolImageTurns, workingMessages.slice(firstToolImageTurn));
+        // 被改的那几条用量只减不增 → 上次的实测基准仍是上界,别让它退回粗估(见 ContextUsageTracker.keepBaseline)。
+        for (const m of dropStaleToolImages(liveToolImageTurns, workingMessages.slice(firstToolImageTurn))) contextUsage.keepBaseline(m);
       }
       allToolResults.push(...toolResults);
 

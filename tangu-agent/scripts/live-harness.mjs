@@ -98,7 +98,7 @@
  *                                                           #   ② error:server 抛 McpError,message 带伪造收尾标签 + 注入话术;错误文本同样须进围栏
  *                                                           #   两段的注入话术都不许被照做。改 src/mcp/* 或 registry 的 MCP 分支后跑
  *   npm run live:harness -- --only imgwindow                # 连续截图(10-07,反馈 96ecce8c):假 MCP 每调一次回一张不同数字的 ~50KB 图,连调 6 次 ——
- *                                                           #   末轮请求体只比首轮多 ≤3 张图(旧截图不再每轮重传)、模型仍读得出最后一张里的数字、不因占位多调。
+ *                                                           #   第 3 张之后请求体不再每轮多带一张图(旧截图不再重传)、模型仍读得出最后一张里的数字、不因占位多调。
  *                                                           #   改 services/toolImageWindow.ts / agentLoop 的工具图物化后跑;负对照 = 去掉 dropStaleToolImages 那行(须红)
  *   npm run live:harness -- --only inline                    # 正文生成式 AI(09-28,G3-07):POST /agent/inline 润色保事实 / 翻译 / 续写 / 选区里的注入不照做 / 缺字段 400 / 不落会话;改 services/inlineAi.ts 提示词后跑
  *   npm run live:harness -- --only pageinstructions         # 页级 Instructions:分页读带本页约束、下一页不继承、inline 约束与用户当前要求优先
@@ -2136,7 +2136,7 @@ try {
   });
 
   // ── imgwindow(10-07,opt-in,反馈 96ecce8c):Computer Use 操作无障碍树为空的应用时每步一张截图,旧截图每轮全量重传,
-  // 20 轮后请求体 1.1MB、慢上行撞上传超时、run failed。判据三条:① 请求体:末轮只比首轮多 2~4 张图的量(修前是 6 张);
+  // 20 轮后请求体 1.1MB、慢上行撞上传超时、run failed。判据三条:① 请求体:第 3 张图之后不再每轮多带一张(修前到第 6 轮又多 3 张);
   // ② 最新的图还在:答出最后一张里的数字(各张数字不同,猜不中);③ 模型没被占位带偏:恰好调 6 次、不为「找回旧图」多调。
   // 工具文本自报「第 n 张 / 共 6 张」:10-07 实测 gpt-6-luna 自己数调用次数会数错(修前 5 次、修后 7 次各一回),
   // 不给锚点的话 ③ 量到的是模型数数,不是占位有没有带偏。
@@ -2150,17 +2150,22 @@ try {
     const calls = ev.toolCalls.filter((c) => c === tool).length;
     const main = ev.usages.filter((u) => !u.phase && Number(u.requestBytes) > 0);
     const imgBytes = IMGWIN_PNGS.reduce((a, b) => a + b.length, 0) / IMGWIN_PNGS.length;
-    const first = Number(main[0]?.requestBytes) || 0;
+    // main[k] = 第 k 张图回来之后的那次请求。封顶直接量「第 3 张之后还涨不涨」:修后第 3 → 第 6 次请求之间不再多带图
+    // (只涨推理 / 工具历史那点字节),修前这一段正好多 3 张。不拿「末轮 − 首轮」除以图大小去卡 2~4:推理密文、
+    // 工具历史也算在总字节里,模型话多一点就会把封顶正确的一跑判红(Codex 10-07 评审 P2)。
+    const bytesAt = (k) => Number(main[k]?.requestBytes) || 0;
+    const first = bytesAt(0);
     const peak = Math.max(0, ...main.map((u) => Number(u.requestBytes) || 0));
-    const extraImages = imgBytes ? (peak - first) / imgBytes : NaN;
     const oneByOne = main.length >= IMGWIN_ROUNDS + 1;
-    const bounded = extraImages > 2 && extraImages < 4;
+    const onWire = imgBytes ? (bytesAt(3) - first) / imgBytes : NaN; // 前三张确实带着图上了 wire(否则下面的封顶是空转)
+    const extraImages = imgBytes ? (bytesAt(IMGWIN_ROUNDS) - bytesAt(3)) / imgBytes : NaN;
+    const bounded = onWire > 2 && extraImages < 1.5;
     const last = IMGWIN_DIGITS[IMGWIN_ROUNDS - 1];
     const seen = ev.content.replace(/(\d)[\s.,·'-]+(?=\d)/g, '$1').includes(last);
     const ok = !ev.error && calls === IMGWIN_ROUNDS && oneByOne && bounded && seen;
     return { ok, inconclusive: !ev.error && calls === IMGWIN_ROUNDS && seen && !oneByOne,
       detail: ev.error || `调用 ${calls}/${IMGWIN_ROUNDS} 次${calls > IMGWIN_ROUNDS ? '(多调了:被占位带偏?)' : ''};模型 ${main.length} 轮${oneByOne ? '' : '(并进同一轮,封顶测不到)'};` +
-        `请求体 首轮 ${(first / 1024).toFixed(0)}KB → 最大 ${(peak / 1024).toFixed(0)}KB,多出 ≈${Number.isFinite(extraImages) ? extraImages.toFixed(1) : '?'} 张图(每张 ${(imgBytes / 1024).toFixed(0)}KB;应在 2~4 之间,修前 ≈${IMGWIN_ROUNDS})${bounded ? '✓' : '✗'};` +
+        `请求体 首轮 ${(first / 1024).toFixed(0)}KB → 最大 ${(peak / 1024).toFixed(0)}KB;第 3 张之后又多带 ≈${Number.isFinite(extraImages) ? extraImages.toFixed(1) : '?'} 张图的量(每张 ${(imgBytes / 1024).toFixed(0)}KB;应 <1.5,修前 ≈${IMGWIN_ROUNDS - 3};前三张带图 ≈${Number.isFinite(onWire) ? onWire.toFixed(1) : '?'} 张)${bounded ? '✓' : '✗'};` +
         `最后一张的数字 ${last} ${seen ? '读出' : '没读出'}${ev.approvals ? `;代批 ${ev.approvals}` : ''}`,
       output: `${ev.content}\n\n各轮请求体(KB):${main.map((u) => (Number(u.requestBytes) / 1024).toFixed(0)).join(' → ')}\n各张数字:${IMGWIN_DIGITS.join(', ')}`,
       ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls };

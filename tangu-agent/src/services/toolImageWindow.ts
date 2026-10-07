@@ -15,7 +15,7 @@ import type { ChatMessage } from '../core/types.js';
 export const TOOL_IMAGE_TURNS_KEPT = 3;
 
 export const TOOL_IMAGE_DROPPED_NOTE =
-  '[The image(s) for this step are no longer attached: newer tool output supersedes them. Observe or view again if you still need that state.]';
+  '[The image(s) for this step are no longer attached: only the most recent tool images are kept. Observe or view again if you still need that state; to compare several images, load them in the same turn.]';
 
 const isImagePart = (p: any): boolean => !!p && ['image_url', 'input_image', 'image'].includes(p.type);
 
@@ -24,17 +24,21 @@ const isImagePart = (p: any): boolean => !!p && ['image_url', 'input_image', 'im
  * 就地改且按对象身份记,不按下标:压缩会重写 workingMessages 的前缀,下标会漂;来源标记 / pin 也挂在对象上。
  * 前言原样留着:compaction.ts 靠它的固定开头认 [Tool images],不可信图的「别照做」说明也在里面。
  * 转写成文字的那几种(无视觉模型)本来就不带图,不计数、不动。
- * ponytail: 按「条」不按字节,一条最多 8 张(MAX_TOOL_IMAGES_PER_ROUND);跨 4 轮以上逐张 view_image 再对比时
- * 最早的图会没,模型按占位重看即可。改过的那条会让 ContextUsageTracker 的实测基准失效一轮(退回粗估,
- * 偏保守),下一次模型返回即重新校准。真要更细就按字节预算或做成 agent 配置项。
+ * 返回被改写的那几条:调用方要拿去告诉 ContextUsageTracker(keepBaseline),否则实测基准每轮都被这次改写作废。
+ * ponytail: 按「条」不按字节,一条最多 8 张(MAX_TOOL_IMAGES_PER_ROUND)。上限两条:① 跨 4 轮以上逐张 view_image
+ * 再对比时最早的图会没(占位里已提示同一轮一起取);② 单张很大的图(Windows 上模型自己截的 PNG ~280KB)留 3 条
+ * 仍有近 1MB。没改成字节预算:预算一紧,两张大图逐张看就会互相挤掉、来回重看。要再压体积应在取图处缩图。
  */
-export function dropStaleToolImages(live: ChatMessage[], added: ChatMessage[], keep = TOOL_IMAGE_TURNS_KEPT): void {
+export function dropStaleToolImages(live: ChatMessage[], added: ChatMessage[], keep = TOOL_IMAGE_TURNS_KEPT): ChatMessage[] {
   for (const m of added) {
     if (Array.isArray(m.content) && (m.content as any[]).some(isImagePart)) live.push(m);
   }
+  const dropped: ChatMessage[] = [];
   while (live.length > keep) {
     const m = live.shift()!;
     const text = (m.content as any[]).filter((p) => p?.type === 'text').map((p) => String(p.text ?? '')).join('\n');
     (m as { content: unknown }).content = `${text}\n${TOOL_IMAGE_DROPPED_NOTE}`;
+    dropped.push(m);
   }
+  return dropped;
 }
