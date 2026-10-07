@@ -145,7 +145,7 @@ export interface DescribeImagesOpts {
  * 反复 observe_ui(每次转写 36s 以上)也定位不到任何东西。说清楚之后它该改走元素引用 / 快捷键,走不通就停下来告诉用户。
  * ⚠️ 这是软约束,不是闸。live 台架(--only novision,gpt-6-luna,用户明说「按坐标点它」的任务;归档在
  *   harness-runs/2026-10-07)上:不补说明 5/5 轮照着「图 310×110、数字居中」点了中心、没有一轮提到自己看不到图;
- *   补了之后 13 轮里仍有 6 轮去点,5 轮请用户换能看图的模型。要做成闸得在取坐标的工具那一侧拒绝(引擎不知道哪些工具吃坐标)。
+ *   补了之后 14 轮里仍有 6 轮去点,5 轮请用户换能看图的模型。要做成闸得在取坐标的工具那一侧拒绝(引擎不知道哪些工具吃坐标)。
  * 措辞是在那个台架上试出来的(每版 3~5 轮,样本小,只当方向),改之前先跑它:
  *   - 必须是第二人称「You cannot see」。写成「the model running this session has no image input」,模型不当成在说自己,3/3 轮照点;
  *   - 要讲原因(描述里没有量出来的坐标)。只下禁令(「do not click … at x/y coordinates at all, estimated ones included」)
