@@ -226,6 +226,7 @@
     "check:deskshot": "node scripts/desk-shot.check.cjs",
     "check:splash": "node scripts/splash-loop.check.cjs",
     "probe:startup-windows": "node scripts/startup-windows.probe.cjs",
+    "probe:startup-trace": "node scripts/startup-trace.probe.cjs",
     "check:parity": "node scripts/platform-parity.check.cjs",
     "check:vitecache": "node scripts/vite-cachedir.check.cjs",
     "check:enginetarget": "node scripts/engine-target.check.cjs",
