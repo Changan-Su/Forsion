@@ -190,8 +190,9 @@
   if (typeof whenShown === 'function') {
     hidden = true;
     var onShown = function (at) { if (hidden) { hidden = false; shown = Math.max(start, +at || 0); } };
+    // No timer of its own: a slow machine can take seconds to show the window, and leaving before it does is
+    // the very flash this prevents. A reply that never comes ends at the ceiling below.
     try { whenShown().then(onShown, onShown); } catch (_) { hidden = false; }
-    setTimeout(onShown, 3000); // A lost reply must not hold the exit.
   }
   var ceiling = setTimeout(fade, 10000);
   // Every mode leaves the same way. A still scene (reduced motion, software rendering) that vanished the
