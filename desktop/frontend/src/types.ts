@@ -653,6 +653,8 @@ export interface ModelsResponse {
   asrModelId?: string | null
   /** admin 的 app 级「辅助模型 · 图像识别」槽(本端未显式选择时跟随)。 */
   visionModelId?: string | null
+  /** Forsion 云端的实时语音通话模型(不在 models 里;apiModelId = 上游模型名,音色家族按它分)。没有 = 云端没开通话 / 没登录 / 老引擎。 */
+  realtimeModel?: { id: string; name: string; apiModelId?: string | null } | null
   /** 引擎的缺省上下文上限(272k):自动识别出的窗口超过它就封顶,本机覆盖才开更大。 */
   contextWindowCap?: number
   /** 该引擎能不能写本机模型覆盖(PUT /agent/models/overrides 同一道 hostExec 门)。false / 缺省 = 不露「上下文上限」。 */
@@ -1184,8 +1186,10 @@ export interface StoredDesktopConfig extends TanguDesktopConfig {
   ttsSpeed?: number
   /** 新回复完成后自动朗读(仅当前活跃会话)。 */
   ttsAutoSpeak?: boolean
-  /** 实时语音通话模型 <providerId>/<model>(百炼 Qwen-Omni-Realtime);空 = 未启用,输入框不出通话按钮。 */
+  /** 实时语音通话模型:<providerId>/<model>(自带百炼 key)或 Forsion 云端的实时模型 id;空 = 未启用。实际用哪个见 services/realtimeModel.ts。 */
   realtimeModelId?: string
+  /** 只读:用户从没动过「语音通话」(这时已登录 Forsion 的用户默认开、用云端模型)。主进程按 config.json 算出来,写它无效。 */
+  realtimeModelUnset?: boolean
   /** 实时通话音色(预置名或复刻音色 id;复刻音色须以同一实时模型为 target_model 复刻)。空 = Tina。 */
   realtimeVoice?: string
   /** 语音输入偏好后端:local=本地 SenseVoice(需下载);cloud=Forsion 云端/自带 key。缺省 cloud。(就绪与否走 asrLocalStatus IPC,不落 config) */

@@ -1,11 +1,14 @@
 /**
- * 设置 → 模型 → 语音 →「语音通话」一节(对标 GPT Live):开关 + 百炼 Qwen-Omni-Realtime 模型 + 通话音色,可就地复刻自己的声音。
- * 开了(选了模型)输入框空着时发送键才变成通话键(Composer2)。
+ * 设置 → 模型 → 语音 →「语音通话」一节(对标 GPT Live):开关 + 通话模型 + 通话音色,可就地复刻自己的声音。
+ * 通话模型两种来源:Forsion 云端的实时模型(登录即用,按通话时长从额度里扣),或用户自己的百炼提供方(Qwen-Omni / Qwen-Audio Realtime)。
+ * 从没动过这个开关、已登录 Forsion 的用户默认开着、用云端模型(口径在 services/realtimeModel.ts,与输入框同一处)。
+ * 开着时输入框空着发送键才变成通话键(Composer2)。
  * 百炼铁律:复刻音色只能配复刻时的 target_model —— 朗读那边的 cosyvoice / qwen3-tts 音色在这里一律不能用,换模型就得重新复刻。
  */
 import { useEffect, useRef, useState } from 'react'
 import { Loader2, Mic } from 'lucide-react'
 import type { DirectProviderConfig, StoredDesktopConfig } from '../types'
+import { defaultVoiceFor, effectiveRealtimeModel, isAudioFamily, type CloudCallModel } from '../services/realtimeModel'
 import { cloneTtsVoice, listTtsVoices } from '../services/backendService'
 import { homeTarget } from '../services/engine/targets'
 import { REALTIME_CFG_BUMP_KEY } from '../services/realtimeCall'
@@ -21,9 +24,6 @@ const VOICES = ['Tina', 'Cindy', 'Raymond', 'Katerina', 'Ryan', 'Mia', 'Jennifer
 const AUDIO_VOICES = ['longanqian', 'longanlingxin', 'longanlufeng', 'longanlingxi', 'longanxiaoxin', 'longanfengyue', 'longanyuanfei', 'longanhuan_v3.6', 'longjielidou_v3.6',
   'longpaopao_v3.6', 'longhuohuo_v3.6', 'longchuanshu_v3.6', 'loongmary', 'loongeva_v3.6', 'loongjohn', 'daniel', 'echo', 'hannah', 'sherry',
   'longanqian_v3.1', 'longanhuan_v3.1', 'longanlingxin_v3.1', 'longanfengyue_v3.1', 'xunanchuan_v3.1', 'beth_v3.1', 'betty_v3.1', 'cally_v3.1']
-const isAudioFamily = (model: string): boolean => /(^|\/)qwen-audio-/i.test(model)
-const presetsFor = (model: string): string[] => (isAudioFamily(model) ? AUDIO_VOICES : VOICES)
-const defaultVoiceFor = (model: string): string => (isAudioFamily(model) ? 'longanqian' : 'Tina') // 引擎留空时用的那个(realtimeVoice.ts defaultRealtimeVoice)
 const CUSTOM = '__custom__'
 const LAST_MODEL_KEY = 'forsion.realtime.lastModel' // 关掉通话前用的模型:再打开时回到它(音色才对得上)
 
@@ -33,7 +33,10 @@ registerMessages({
   'settings.realtime.intro': { zh: '像打电话一样和 Agent 对话，随时插话打断；要动手的事（查资料、读写文件、跑任务）交给 Agent 办完再说给你听。开启后，输入框空着时发送键就是通话键。', en: 'Talk to the agent like a phone call and interrupt any time; anything that needs real work (looking things up, files, tasks) is handed to the agent and read back to you. Once on, the send button becomes the call button while the composer is empty.' },
   'settings.realtime.model': { zh: '通话模型', en: 'Call model' },
   'settings.realtime.billing': { zh: '走阿里云百炼的实时语音模型（Qwen-Omni / Qwen-Audio），费用由百炼按各模型的价格收取，不同模型差别很大。', en: 'Runs on Alibaba Cloud Bailian realtime voice models (Qwen-Omni / Qwen-Audio). Bailian bills each model at its own rate, and rates differ a lot between models.' },
+  'settings.realtime.billingCloud': { zh: '走 Forsion 云端的实时语音模型，不用自己配密钥；按通话时长从你的额度里扣。', en: 'Runs on the Forsion cloud voice model, with no key to set up. Calls are charged to your quota by call time.' },
+  'settings.realtime.cloudOption': { zh: 'Forsion 云端 · {name}', en: 'Forsion cloud · {name}' },
   'settings.realtime.needProvider': { zh: '需要先在「模型 → 提供方」里添加一个阿里云百炼（DashScope）提供方。', en: 'Add an Alibaba Cloud Bailian (DashScope) provider under Models → Providers first.' },
+  'settings.realtime.needProviderOrSignIn': { zh: '登录 Forsion 账号就能直接用云端的通话模型；也可以在「模型 → 提供方」里添加自己的阿里云百炼（DashScope）提供方。', en: 'Sign in to your Forsion account to use the cloud call model, or add your own Alibaba Cloud Bailian (DashScope) provider under Models → Providers.' },
   'settings.realtime.voice': { zh: '通话音色', en: 'Call voice' },
   'settings.realtime.voiceHint': { zh: '只用于语音通话，和下面「朗读」的音色互不通用。', en: 'Used only in voice calls; it is not shared with the read-aloud voices below.' },
   'settings.realtime.voiceCustom': { zh: '自定义音色 ID…', en: 'Custom voice ID…' },
@@ -53,10 +56,16 @@ registerMessages({
   'settings.realtime.voice.Aiden': { zh: '艾登 · 美语男声', en: 'American male' },
 })
 
-export function RealtimeVoiceSettings({ stored, providers, onSaved }: {
+export function RealtimeVoiceSettings({ stored, providers, onSaved, cloudModel = null, signedIn = false, cloudAccount = false }: {
   stored: StoredDesktopConfig
   providers: DirectProviderConfig[]
   onSaved: (c: StoredDesktopConfig) => void
+  /** Forsion 云端的通话模型(引擎目录的 realtimeModel);没有 = 云端没开通话 / 没登录。 */
+  cloudModel?: CloudCallModel | null
+  /** 装了 Forsion Extend 且当前登录有效。 */
+  signedIn?: boolean
+  /** 装了 Forsion Extend(有登录入口):没有可用模型时的提示里才提「登录」。 */
+  cloudAccount?: boolean
 }) {
   const { t } = useI18n()
   const [customId, setCustomId] = useState<string | null>(null) // 非 null = 正在填自定义音色 ID
@@ -69,10 +78,14 @@ export function RealtimeVoiceSettings({ stored, providers, onSaved }: {
   const [cloneOpen, setCloneOpen] = useState(false)
   const lastModel = useRef('') // 关掉再打开回到上次选的模型
   const ds = providers.filter((p) => /dashscope|aliyuncs\.com/i.test(p.baseUrl))
-  const model = stored.realtimeModelId || ''
+  // 云端那一项只在登录着时可选;已经选着它(哪怕这会儿没登录)也照列,不然下拉显示不出当前值
+  const cloud = cloudModel && (signedIn || stored.realtimeModelId === cloudModel.id) ? cloudModel : null
+  const model = effectiveRealtimeModel(stored, { model: cloudModel, signedIn }) // 实际生效的:存了就是存的,从没动过且已登录 = 云端那个
+  const onCloud = !!cloud && model === cloud.id
   const provider = ds.find((p) => model.startsWith(p.providerId + '/'))
   const voice = stored.realtimeVoice || ''
   const apiModel = provider ? model.slice(provider.providerId.length + 1) : ''
+  const presetsFor = (m: string): string[] => (isAudioFamily(m, cloudModel) ? AUDIO_VOICES : VOICES)
   const presets = presetsFor(model)
   // 账号里绑在当前通话模型上的复刻音色:换模型后从这里挑回来,不用去翻 ID
   // 连同它属于哪个模型一起存:换模型的那一帧不能把上一个模型的音色列出来(列出来就能被选中,一接通就报错)
@@ -102,9 +115,9 @@ export function RealtimeVoiceSettings({ stored, providers, onSaved }: {
     }
     let remembered = lastModel.current
     if (!remembered) try { remembered = localStorage.getItem(LAST_MODEL_KEY) || '' } catch { /* ignore */ }
-    // 记得上次的模型(且它的提供方还在)→ 原样开回来,音色跟它是一对;否则回落到第一个模型,这时留着的音色不一定是它的
-    if (remembered && ds.some((p) => remembered.startsWith(p.providerId + '/'))) { void save({ realtimeModelId: remembered }); return }
-    const next = `${ds[0].providerId}/${MODELS[0]}`
+    // 记得上次的模型(且它的提供方还在 / 就是云端那个)→ 原样开回来,音色跟它是一对;否则回落到缺省模型,这时留着的音色不一定是它的
+    if (remembered && (remembered === cloud?.id || ds.some((p) => remembered.startsWith(p.providerId + '/')))) { void save({ realtimeModelId: remembered }); return }
+    const next = cloud ? cloud.id : `${ds[0].providerId}/${MODELS[0]}` // 缺省:有云端用云端(不用配密钥),否则自己的第一个百炼模型
     void save({ realtimeModelId: next, realtimeVoice: presetsFor(next).includes(voice) ? voice : '' })
   }
   // 换模型:系统音色在同一家族里通用,留着;复刻 / 手填的音色绑在原来那个模型上,带过去只会让通话一接通就报「音色不支持」→ 回到默认。
@@ -137,11 +150,11 @@ export function RealtimeVoiceSettings({ stored, providers, onSaved }: {
       .finally(() => setBusy(false))
   }
 
-  if (!ds.length) {
+  if (!ds.length && !cloud) {
     return (
       <div className="field">
         <label>{t('settings.realtime.title')}</label>
-        <div className="hint">{t('settings.realtime.needProvider')}</div>
+        <div className="hint">{t(cloudAccount ? 'settings.realtime.needProviderOrSignIn' : 'settings.realtime.needProvider')}</div>
       </div>
     )
   }
@@ -158,20 +171,21 @@ export function RealtimeVoiceSettings({ stored, providers, onSaved }: {
           <>
             <label style={{ marginTop: 12 }}>{t('settings.realtime.model')}</label>
             <select className="realtime-model" aria-label={t('settings.realtime.model')} value={model} disabled={busy} onChange={(e) => pickModel(e.target.value)}>{/* 复刻途中不许换:完成时写进来的音色绑的是原模型 */}
+              {cloud && <option value={cloud.id}>{t('settings.realtime.cloudOption', { name: cloud.name })}</option>}
               {ds.flatMap((p) => MODELS.map((m) => (
                 <option key={`${p.providerId}/${m}`} value={`${p.providerId}/${m}`}>{ds.length > 1 ? `${p.providerId} · ${m}` : m}</option>
               )))}
-              {!provider && <option value={model}>{model}</option>}
+              {!provider && !onCloud && <option value={model}>{model}</option>}
             </select>
-            <div className="hint">{t('settings.realtime.billing')}</div>
+            <div className="hint">{t(onCloud ? 'settings.realtime.billingCloud' : 'settings.realtime.billing')}</div>
           </>
         )}
       </div>
       {model && (
         <div className="field">
           <label>{t('settings.realtime.voice')}</label>
-          <select ref={voiceRef} className="realtime-voice" aria-label={t('settings.realtime.voice')} value={customId !== null ? CUSTOM : voice || defaultVoiceFor(model)} onChange={(e) => pickVoice(e.target.value)}>
-            {presets.map((v) => <option key={v} value={v}>{isAudioFamily(model) ? v : `${v} · ${t(`settings.realtime.voice.${v}`)}`}</option>)}
+          <select ref={voiceRef} className="realtime-voice" aria-label={t('settings.realtime.voice')} value={customId !== null ? CUSTOM : voice || defaultVoiceFor(model, cloudModel)} onChange={(e) => pickVoice(e.target.value)}>
+            {presets.map((v) => <option key={v} value={v}>{isAudioFamily(model, cloudModel) ? v : `${v} · ${t(`settings.realtime.voice.${v}`)}`}</option>)}
             {[...new Set([...(voice && !presets.includes(voice) ? [voice] : []), ...mine])].map((v) => <option key={v} value={v}>{t('settings.realtime.voiceMine', { id: v })}</option>)}
             <option value={CUSTOM}>{t('settings.realtime.voiceCustom')}</option>
           </select>

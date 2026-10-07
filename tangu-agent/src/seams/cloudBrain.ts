@@ -182,6 +182,8 @@ export interface ModelsBrain {
     imageModelId?: string | null;
     /** 辅助模型 · 图像识别槽(主模型无原生视觉时的兜底;空 = 不启用)。 */
     visionModelId?: string | null;
+    /** 云端的实时语音通话模型(不在 models 里;apiModelId = 上游模型名,客户端按它分音色家族)。老云端不给 = 没有云端通话。 */
+    realtimeModel?: { id: string; name: string; apiModelId?: string | null } | null;
     /** 这次目录是真读到了,还是被降级填的空?未实现此字段的实现留 undefined(调用方回落长度启发式)。
      *  空列表有两种成因(未登录/断网 vs admin 真没授权),分不清就会把掉线用户支去设置页空等。 */
     reachable?: boolean;
@@ -307,7 +309,7 @@ export interface TtsBrain {
 
 /** 实时语音(speech-to-speech)上游:给出 WebSocket 地址与鉴权头,连接与转发归调用方(services/realtimeVoice)。 */
 export interface RealtimeBrain {
-  /** model 形如 `<providerId>/<model>`;未命中 provider 抛错。 */
+  /** model = `<providerId>/<model>`(自带百炼 key 直连)或 Forsion 云端的实时模型 id(经云端中转,计费在云端)。 */
   endpoint(model: string): { url: string; headers: Record<string, string> };
 }
 
@@ -364,7 +366,7 @@ export interface CloudBrainServices {
   images?: ImagesBrain;
   /** 语音合成;可选:仅 standalone multiBrain 实现(BYO-key 直连),云端未注入 → /agent/tts 返回 501。 */
   tts?: TtsBrain;
-  /** 实时语音;可选:仅 standalone multiBrain 实现(BYO-key 直连百炼),云端未注入 → /agent/realtime 拒连。 */
+  /** 实时语音;可选:standalone 实现(multiBrain 自带 key 直连百炼,否则 httpBrain 走 Forsion 云端中转);云端 worker 未注入 → /agent/realtime 拒连。 */
   realtime?: RealtimeBrain;
   /** 每-agent 云文件(Phase 2);可选:旧云端/纯本地未注入 → 同步/水合调用方跳过。 */
   agentFiles?: AgentFilesBrain;

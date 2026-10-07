@@ -886,6 +886,10 @@ export const SettingsModal: React.FC<{
       refreshAuth()
       const request = authRequest.current
       void window.tangu!.getConfig().then((value) => {
+        // 登录 / 登出时引擎已带新凭据重启完(主进程重启完才广播):模型目录跟着重拉 —— 云端的通话模型、
+        // 云端模型列表都随账号变,不拉的话「语音通话」这节还停在登录前的说法,和输入框的通话键对不上。
+        // 不受下面那道序号闸管:登录态一变 p.cfg 跟着变,上面的 effect 会再调 refreshAuth 把序号顶掉。
+        void loadModels(value)
         if (request === authRequest.current) setStored(value)
       }).catch(() => {})
     })
@@ -2617,7 +2621,8 @@ export const SettingsModal: React.FC<{
                     {stored && (
                       <>
                         <div className="settings-sec">{t('settings.voice.secCall')}</div>
-                        <RealtimeVoiceSettings stored={stored} providers={customProviders} onSaved={setStored} />
+                        <RealtimeVoiceSettings stored={stored} providers={customProviders} onSaved={setStored}
+                          cloudModel={models?.realtimeModel} cloudAccount={cloudAccount} signedIn={cloudAccount && !!authSt?.loggedIn && authSt.tokenValid !== false} />
                       </>
                     )}
                     <div className={`settings-sec${stored ? ' settings-sec--gap' : ''}`}>{t('settings.voice.secInput')}</div>

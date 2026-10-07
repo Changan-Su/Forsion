@@ -202,3 +202,33 @@ describe('订阅登录的凭证:生图 / 改图 / 朗读也在调用前续期,�
     expect(bearer(f, 0)).toBe('Bearer boot');
   });
 });
+
+// 通话模型的分发:`<providerId>/<model>` 命中本机百炼 → 带用户自己的 key 直连;其余(Forsion 云端的实时模型 id)→ 交给 httpBrain 走云端中转。
+describe('实时语音:自带百炼直连,否则走 Forsion 云端', () => {
+  const cloud = vi.fn((model: string) => ({ url: `wss://cloud.test/api/brain/realtime?model=${model}`, headers: { Authorization: 'Bearer forsion-token' } }));
+  const make = (withCloud = true) => createMultiBrain({ llm: {}, assets: {}, ...(withCloud ? { realtime: { endpoint: cloud } } : {}) } as any, createProviderRegistry([
+    { providerId: 'bailian', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', apiKey: 'sk-user' },
+    { providerId: 'deepseek', baseUrl: 'https://api.deepseek.com/v1', apiKey: 'sk-ds' },
+  ]));
+  beforeEach(() => { cloud.mockClear(); delete process.env.TANGU_REALTIME_UPSTREAM; });
+
+  it('命中本机百炼 provider:直连、用用户的 key,不碰云端', () => {
+    expect(make().realtime!.endpoint('bailian/qwen3.5-omni-flash-realtime')).toEqual({
+      url: 'wss://dashscope.aliyuncs.com/api-ws/v1/realtime?model=qwen3.5-omni-flash-realtime', headers: { Authorization: 'Bearer sk-user' } });
+    expect(cloud).not.toHaveBeenCalled();
+  });
+  it('不带 provider 前缀(云端的实时模型 id,含导入出来的 pr-<hash>):走云端,用 Forsion 的 token,用户的 key 不外带', () => {
+    for (const id of ['qwen3.5-omni-flash-realtime', 'pr-0a1b2c']) {
+      const ep = make().realtime!.endpoint(id);
+      expect(ep.url).toBe(`wss://cloud.test/api/brain/realtime?model=${id}`);
+      expect(JSON.stringify(ep)).not.toContain('sk-user');
+    }
+  });
+  it('命中的 provider 不是百炼:照旧报错,不悄悄改走云端计费', () => {
+    expect(() => make().realtime!.endpoint('deepseek/some-realtime')).toThrow(/Bailian/);
+    expect(cloud).not.toHaveBeenCalled();
+  });
+  it('没有云端通话的大脑(老实现):保持原来的报错', () => {
+    expect(() => make(false).realtime!.endpoint('qwen3.5-omni-flash-realtime')).toThrow(/No provider/);
+  });
+});

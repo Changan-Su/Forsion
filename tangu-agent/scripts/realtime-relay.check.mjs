@@ -10,9 +10,12 @@
  *   E 只差标点 / 空白不算听错,不改那行。
  *   G 委派的 run 在重连途中收尾:结果攒着、接上后送达并要回复(不丢、不把 responding 卡死)。
  *   F 上游报 <50002> 断开:通话不挂、换一条上游重连(指令带上文);断在没答完的那句上就重喂那句;空闲时断不重喂;超过 2 次才挂断。
+ *   H 通话模型不带提供方前缀 = Forsion 云端的实时模型:引擎改连云端中转(ws <cloud>/api/brain/realtime,带 Forsion token,不碰直连上游);
+ *     云端握手拒绝(402 + detail)/ 接通后以 <402> 挂断 → 原因原样到客户端且不重连;云端转来的 <50002> 照旧重连。
  * 不花额度、不需要模型。用法:npm run build && npm run check:realtime
  */
 import { spawn } from 'node:child_process';
+import http from 'node:http';
 import { mkdtempSync, mkdirSync, writeFileSync, appendFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -52,6 +55,34 @@ wss.on('connection', (ws) => {
   });
 });
 const up = (o) => fake.sock.send(JSON.stringify(o));
+
+// ── 假 Forsion 云端:只认实时语音中转那条 Upgrade。普通请求一律掐连接,扮「云端不通」——
+// 这台架原来把 cloud-url 指向死端口,G 靠「假模型的 run 连不上云端、重试一阵才失败」卡时序;回 404 的话 run 立刻失败,G 就测不到重连途中收尾了。
+const cloud = { sock: null, got: [], conns: 0, urls: [], auth: [], refuse: null };
+const cloudWss = new WebSocketServer({ noServer: true });
+const cloudHttp = http.createServer((q) => { q.socket.destroy(); });
+cloudHttp.on('upgrade', (req, socket, head) => {
+  cloud.urls.push(req.url); cloud.auth.push(req.headers.authorization || '');
+  if (cloud.refuse?.stall) { // 只给状态行和头,正文不来、连接不收
+    socket.write(`HTTP/1.1 ${cloud.refuse.status} Refused\r\nContent-Type: application/json\r\nContent-Length: 64\r\n\r\n`);
+    return;
+  }
+  if (cloud.refuse) {
+    const body = JSON.stringify(cloud.refuse.body);
+    socket.end(`HTTP/1.1 ${cloud.refuse.status} Refused\r\nContent-Type: application/json\r\nContent-Length: ${Buffer.byteLength(body)}\r\nConnection: close\r\n\r\n${body}`);
+    return;
+  }
+  cloudWss.handleUpgrade(req, socket, head, (ws) => {
+    cloud.sock = ws; cloud.conns++;
+    ws.on('message', (d) => {
+      const m = JSON.parse(d.toString());
+      cloud.got.push({ ...m, _conn: cloud.conns });
+      if (m.type === 'session.update') ws.send(JSON.stringify({ type: 'session.updated', session: m.session }));
+    });
+  });
+});
+await new Promise((r) => cloudHttp.listen(0, '127.0.0.1', r));
+const cloudUrl = `http://127.0.0.1:${cloudHttp.address().port}`;
 const fakeUrl = `ws://127.0.0.1:${wss.address().port}/api-ws/v1/realtime`;
 
 // ── 隔离引擎(布局同 live-harness:<out>/forsion/{config.json, tangu/})
@@ -61,7 +92,7 @@ mkdirSync(home, { recursive: true }); mkdirSync(workspace, { recursive: true });
 writeFileSync(join(shared, 'config.json'), JSON.stringify({ providers: [{ providerId: 'bailian', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', apiKey: 'sk-fake', modelIds: [] }] }));
 const TOKEN = randomUUID(), port = await freePort(), engineLog = join(OUT, 'engine.log');
 const child = spawn(process.execPath, [join(root, 'dist', 'standalone', 'main.js'), '--port', String(port), '--host', '127.0.0.1',
-  '--data-dir', join(home, 'state.db'), '--sandbox', 'none', '--cloud-url', 'http://127.0.0.1:9', '--token', TOKEN], {
+  '--data-dir', join(home, 'state.db'), '--sandbox', 'none', '--cloud-url', cloudUrl, '--token', TOKEN], {
   env: { ...process.env, TANGU_HOME: home, TANGU_DEFAULT_WORKSPACE: workspace, TANGU_REALTIME_UPSTREAM: fakeUrl, TANGU_BROWSER_CDP: 'off', TANGU_BROWSER_EXTENSION: '0',
     FORSION_DESKTOP_CONFIG: join(OUT, 'desktop-config.json') },
   stdio: ['ignore', 'pipe', 'pipe'],
@@ -71,7 +102,7 @@ child.stderr.on('data', (d) => appendFileSync(engineLog, d));
 const db = () => new Database(join(home, 'state.db'), { readonly: true, fileMustExist: true });
 const rows = (sql, ...a) => { const d = db(); try { return d.prepare(sql).all(...a); } finally { d.close(); } };
 
-let client, client2;
+let client, client2, client3;
 try {
   const ok = await until(() => fetch(`http://127.0.0.1:${port}/health`).then((r) => r.ok).catch(() => false), 30_000, 300);
   if (!ok) throw new Error(`引擎 30s 没起来,见 ${engineLog}`);
@@ -220,13 +251,59 @@ try {
   check('G 委派的 run 在重连途中收尾:结果攒着,新上游接上后送达并要回复;那句已委派不重喂',
     !!runEnd && !!openedAt && runEnd.at < openedAt && !!delivered && !fake.got.some((m) => m._conn === connG + 1 && m.item?.role === 'user'),
     JSON.stringify({ runEndBeforeReady: runEnd && openedAt ? runEnd.at < openedAt : null, delivered }));
+
+  // ── H:Forsion 云端的实时模型(id 不带提供方前缀)→ 经云端中转
+  const dial = async (model) => {
+    const evs = [];
+    const c = new WebSocket(`ws://127.0.0.1:${port}/agent/realtime?token=${TOKEN}`);
+    c.on('message', (d, bin) => { if (!bin) evs.push(JSON.parse(d.toString())); });
+    await new Promise((r, j) => { c.once('open', r); c.once('error', j); });
+    c.send(JSON.stringify({ type: 'start', session_id: `relay-cloud-${Date.now()}-${Math.random()}`, model, title: 'Voice call', run: run0 }));
+    return { c, evs };
+  };
+  const directBefore = fake.conns;
+  let h = await dial('forsion-voice');
+  client3 = h.c;
+  const readyH = await until(() => h.evs.some((m) => m.type === 'ready'), 10_000);
+  const su = cloud.got.find((m) => m.type === 'session.update');
+  check('H1 不带提供方前缀的通话模型走云端中转:地址 / Forsion token 对,session.update 照常,不碰直连上游',
+    !!readyH && cloud.urls[0] === '/api/brain/realtime?model=forsion-voice&projectSource=tangu' && cloud.auth[0] === `Bearer ${TOKEN}`
+      && su?.session?.voice === 'Tina' && su?.session?.tools?.[0]?.name === 'ask_tangu' && fake.conns === directBefore,
+    JSON.stringify({ url: cloud.urls[0], auth: cloud.auth[0] === `Bearer ${TOKEN}`, voice: su?.session?.voice, direct: fake.conns - directBefore }));
+  // 云端转来的百炼服务端错误:照旧重连(再走一遍云端)
+  let connsH = cloud.conns;
+  cloud.sock.close(1011, ERR);
+  const reH = await until(() => cloud.conns === connsH + 1 && h.evs.filter((m) => m.type === 'ready').length === 2, 10_000);
+  check('H2 云端原样转来的 <50002>:通话不挂,经云端再接一条', !!reH && !h.evs.some((m) => m.type === 'end'), JSON.stringify({ conns: cloud.conns - connsH, types: h.evs.map((m) => m.type) }));
+  // 接通后云端以 <402> 挂断(额度用尽):原因原样到客户端,不重连
+  connsH = cloud.conns;
+  cloud.sock.close(1008, '<402> token_quota_exceeded');
+  const endH = await until(() => h.evs.find((m) => m.type === 'end'), 5000);
+  await sleep(400);
+  check('H3 云端以 <402> 挂断:原因原样到客户端,不重连(重连 = 再开一条上游、再过一次额度)',
+    endH?.reason === '<402> token_quota_exceeded' && cloud.conns === connsH, JSON.stringify({ reason: endH?.reason, reconnects: cloud.conns - connsH }));
+  // 握手就被拒(没额度 / 没登录):正文里的 detail 带回来
+  cloud.refuse = { status: 402, body: { detail: 'token_quota_exceeded', reason: 'daily_exceeded' } };
+  h = await dial('forsion-voice');
+  const refusedH = await until(() => h.evs.find((m) => m.type === 'end'), 5000);
+  check('H4 云端握手拒绝(402 + detail):客户端拿到 <402> token_quota_exceeded,没有 ready', refusedH?.reason === '<402> token_quota_exceeded' && !h.evs.some((m) => m.type === 'ready'), JSON.stringify(refusedH));
+  // 拒了却不收尾:不能一直停在「接通中」
+  cloud.refuse = { status: 503, stall: true };
+  h = await dial('forsion-voice');
+  const t5 = Date.now();
+  const stalledH = await until(() => h.evs.find((m) => m.type === 'end'), 8000);
+  check('H5 云端握手拒绝后正文迟迟不来:几秒内照样收场,原因带状态码', stalledH?.reason === 'upstream HTTP 503' && Date.now() - t5 < 6000, JSON.stringify({ reason: stalledH?.reason, ms: Date.now() - t5 }));
+  cloud.refuse = null;
+  try { h.c.close(); } catch { /* ignore */ }
 } catch (e) {
   check('台架异常', false, String(e?.stack || e));
 } finally {
   try { client?.close(); } catch { /* ignore */ }
   try { client2?.close(); } catch { /* ignore */ }
+  try { client3?.close(); } catch { /* ignore */ }
   child.kill('SIGTERM');
   wss.close();
+  cloudHttp.close(); cloudHttp.closeAllConnections();
 }
 console.log(`\n${results.filter(Boolean).length}/${results.length} 通过;产物 ${OUT}`);
 process.exit(results.length && results.every(Boolean) ? 0 : 1);

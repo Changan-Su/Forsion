@@ -20,6 +20,9 @@ registerMessages({
   'livecall.connecting': { zh: '正在接通…', en: 'Connecting…' },
   'livecall.reconnecting': { zh: '信号断了一下，正在重新接通…', en: 'Connection dropped, reconnecting…' },
   'livecall.serviceError': { zh: '语音服务出错，可以重新拨打', en: 'the voice service hit an error. You can call again' },
+  'livecall.quotaExhausted': { zh: '额度用完了', en: 'you are out of quota' },
+  'livecall.signInExpired': { zh: '登录已失效，请重新登录 Forsion 后再拨', en: 'your Forsion sign-in has expired. Sign in again, then call' },
+  'livecall.replaced': { zh: '这个账号又打了一通新的，这一通已挂断', en: 'a newer call started on this account' },
   'livecall.listening': { zh: '正在听', en: 'Listening' },
   'livecall.thinking': { zh: '在想…', en: 'Thinking…' },
   'livecall.speaking': { zh: '正在说', en: 'Speaking' },
@@ -35,6 +38,15 @@ registerMessages({
   'livecall.effort': { zh: 'Effort（Tangu 办事时的思考档位）', en: 'Effort (thinking level when Tangu works)' },
   'livecall.systemDefault': { zh: '系统默认', en: 'System default' },
 })
+
+/** 通话为什么结束:常见的几种说人话(Forsion 云端中转的拒绝 / 挂断以 `<4xx> …` 回来),其余原样给。 */
+export function callEndText(error: string, t: (key: string) => string): string {
+  if (/token_quota_exceeded/.test(error)) return t('livecall.quotaExhausted')
+  if (/^<401>/.test(error)) return t('livecall.signInExpired')
+  if (/^<409>/.test(error)) return t('livecall.replaced')
+  if (/^<5\d{4}>|InternalError|ModelServingError/.test(error)) return t('livecall.serviceError')
+  return error
+}
 
 /** 设备选择跟着这台电脑走(不进会话配置):localStorage,拔掉的设备由 getUserMedia 自己退回默认。 */
 const DEVICES_KEY = 'forsion_voice_call_devices'
@@ -172,7 +184,7 @@ function CallCard({ sessionId, params }: { sessionId: string; params: ViewProps[
   }
 
   // 百炼服务端错误(<50002> InternalError…)原文太长也看不懂:说人话,原文放悬停里。
-  const status = error ? t('livecall.failed', { e: /^<5\d{4}>|InternalError|ModelServingError/.test(error) ? t('livecall.serviceError') : error })
+  const status = error ? t('livecall.failed', { e: callEndText(error, t) })
     : !call ? ''
     : call.phase === 'connecting' ? t('livecall.connecting')
     : call.phase === 'reconnecting' ? t('livecall.reconnecting')

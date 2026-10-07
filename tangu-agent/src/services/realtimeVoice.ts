@@ -1,5 +1,7 @@
 /**
  * 实时语音通话(对标 GPT Live):渲染端 ⇄ 本引擎 ⇄ 百炼 Qwen-Omni-Realtime 的 WebSocket 中转。
+ * 上游有两条路(brain.realtime.endpoint 按模型 id 分):自带百炼 key 直连;或 Forsion 云端的实时模型 —— 经云端 /api/brain/realtime
+ * 中转(key 与计费在云端,帧协议不变,云端拒绝 / 挂断的原因以 `<4xx> …` 回来)。
  *
  *   ws://<engine>/agent/realtime?token=<本机 token>
  *   客户端 → 引擎:首帧 JSON {type:'start', session_id, model, voice?, title?, run:{model_id, app_id?, agent_config?}};
@@ -150,6 +152,12 @@ const RETRYABLE_UPSTREAM = /^<5\d{4}>|InternalError|ModelServingError/;
 /** `<400> InternalError.Algo.InvalidParameter: Voice … is not supported` 这类请求本身不对的,名字里带 InternalError 也不重连(重连一百次也是同一个错)。 */
 export const retryableUpstream = (code: number, why: string): boolean => !/^<4\d\d>/.test(why) && (code === 1011 || RETRYABLE_UPSTREAM.test(why));
 const MAX_RECONNECTS = 2;
+/** 上游握手被拒时给客户端的原因:正文带 { detail } 就写成 `<状态码> detail`(与云端中转接通后挂断的 reason 同一个写法),否则只报状态码。 */
+export function handshakeRefusal(status: number, body: string): string {
+  let detail = '';
+  try { const d = JSON.parse(body)?.detail; if (typeof d === 'string') detail = d.trim(); } catch { /* 不是 JSON */ }
+  return detail ? `<${status}> ${clip(detail, 200)}` : `upstream HTTP ${status}`;
+}
 
 function handleCall(client: WebSocket, userId: string): void {
   let upstream: WebSocket | null = null;
@@ -398,7 +406,16 @@ function handleCall(client: WebSocket, userId: string): void {
     });
     // 新上游在旧的 close 之后才建,旧的不会再来事件,不用区分新旧。
     up.on('message', onUpstream);
-    up.on('unexpected-response', (_q, r) => end(`upstream HTTP ${r.statusCode}`));
+    // 握手被拒:Forsion 云端中转会在正文里给 { detail }(额度用尽 / 没登录 / 模型没开),带上它界面才说得清为什么打不通。
+    up.on('unexpected-response', (q, r) => {
+      let body = '';
+      // 正文只等 3 秒:挂了这个监听,ws 就不再替我们中止握手,对端给了状态行却不收尾的话通话会一直停在「接通中」。
+      const done = (): void => { clearTimeout(wait); q.destroy(); end(handshakeRefusal(r.statusCode || 0, body)); };
+      const wait = setTimeout(done, 3000);
+      r.on('data', (d) => { if (body.length < 4096) body += d; });
+      r.on('end', done);
+      r.on('error', done);
+    });
     up.on('error', (e) => end(e.message));
     up.on('close', (code, reason) => {
       const why = reason.toString() || `upstream closed (${code})`;
