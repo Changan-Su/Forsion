@@ -15,7 +15,7 @@
  *    (act_ui 的坐标按 look image 的像素算),悄悄缩了就点歪。要缩的调用方自己先过这里,尺寸变了要告诉模型。
  *
  * 不动的(返回 null,调用方照原样走):够小的、尺寸在上限内的 JPEG(有损再压一遍不值)、省不到两成的、
- * 认不出 / 解不开的(GIF / WebP / BMP / 损坏文件)、像素多到解码要吃几百 MB 的。
+ * 认不出 / 解不开的(GIF / WebP / BMP / 损坏文件)、隔行扫描的 PNG、像素多到解码要吃几百 MB 的。
  * 依赖 pngjs + jpeg-js:纯 JS、零传递依赖。引擎还跑在 Windows / Linux worker / Electron 自带的 Node 上,
  * 原生库(sharp)得按平台带预编译包、Electron ABI 另算;没有纯 JS 的 WebP 编码器,所以只出 JPEG。
  * ponytail: 同步跑在主线程。截图 < 150ms;1200 万像素的照片解码 ~200ms、瞬时多占 ~250MB。成了瓶颈再挪进 worker_threads。
@@ -47,20 +47,25 @@ interface Header { kind: 'png' | 'jpeg'; width: number; height: number; orientat
 /** 只读文件头:格式按字节认,不信扩展名 / 声明的 MIME。 */
 function readHeader(buf: Buffer): Header | null {
   try {
-    if (buf.length > 24 && buf.readUInt32BE(0) === 0x89504e47 && buf.toString('latin1', 12, 16) === 'IHDR') {
+    if (buf.length > 29 && buf.readUInt32BE(0) === 0x89504e47 && buf.toString('latin1', 12, 16) === 'IHDR') {
+      // 隔行扫描的 PNG 不碰:pngjs 解它时 inflate 不设输出上限(非隔行的按 IHDR 尺寸封顶),几 MB 的压缩炸弹能撑爆内存。
+      // 16 位的也不碰:同样的像素数解出来多一倍,截图没有这种。
+      if (buf[28] !== 0 || buf[24] > 8) return null;
       return { kind: 'png', width: buf.readUInt32BE(16), height: buf.readUInt32BE(20), orientation: 1 };
     }
     if (buf[0] !== 0xff || buf[1] !== 0xd8) return null;
-    let orientation = 1;
+    let orientation = 1, frame: Header | null = null;
     for (let p = 2; p + 4 <= buf.length;) {
       if (buf[p] !== 0xff) return null;
       const marker = buf[p + 1];
       if (marker === 0xff) { p++; continue; } // 填充字节
+      // 走到扫描数据(SOS)才算数:只有帧头、没有画面的文件,jpeg-js 会「解」出一张纯灰图(Codex 10-07 评审)
+      if (marker === 0xda) return frame;
       const len = buf.readUInt16BE(p + 2);
       if (marker === 0xe1 && buf.toString('latin1', p + 4, p + 10) === 'Exif\0\0') orientation = exifOrientation(buf.subarray(p + 10, p + 2 + len));
       // SOFn(帧头)带宽高;C4 / C8 / CC 是同一段号区间里的别的东西
       if (marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) {
-        return { kind: 'jpeg', height: buf.readUInt16BE(p + 5), width: buf.readUInt16BE(p + 7), orientation };
+        frame = { kind: 'jpeg', height: buf.readUInt16BE(p + 5), width: buf.readUInt16BE(p + 7), orientation };
       }
       p += 2 + len;
     }
@@ -186,7 +191,7 @@ export function fitImageForModel(buf: Buffer): FittedImage | null {
 
 /** data: URL 进、data: URL 出;没缩(或根本不是 base64 的 data: URL)就把同一个字符串还回去。 */
 export function fitImageUrlForModel(url: string): string {
-  const m = /^data:[^;,]+;base64,/.exec(url);
+  const m = /^data:[^,]*;base64,/i.exec(url);
   if (!m) return url;
   const fit = fitImageForModel(Buffer.from(url.slice(m[0].length), 'base64'));
   return fit ? `data:${fit.mime};base64,${fit.buf.toString('base64')}` : url;

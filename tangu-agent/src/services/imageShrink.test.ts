@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import jpeg from 'jpeg-js';
 import { PNG } from 'pngjs';
 import { KEEP_BYTES, MAX_EDGE, MAX_PIXELS, fitImageForModel, fitImageUrlForModel } from './imageShrink.js';
@@ -139,12 +139,46 @@ describe('fitImageForModel', () => {
     const truncated = real.subarray(0, Math.floor(real.length / 2));
     const jpegTruncated = jpg(2400, 1800, quadrants(2400, 1800)).subarray(0, 150_000);
     const gif = Buffer.concat([Buffer.from('GIF89a', 'latin1'), garbage]);
-    const hugeHeader = Buffer.from(real); hugeHeader.writeUInt32BE(30_000, 16); hugeHeader.writeUInt32BE(30_000, 20); // 头里写 9 亿像素
-    for (const [name, buf] of Object.entries({ garbage, pngHeadOnly, truncated, gif, hugeHeader, text: Buffer.from('not an image '.repeat(20_000)) })) {
+    for (const [name, buf] of Object.entries({ garbage, pngHeadOnly, truncated, gif, text: Buffer.from('not an image '.repeat(20_000)) })) {
       expect(fitImageForModel(buf), name).toBeNull();
     }
     // 截断的 JPEG:jpeg-js 能解出一部分就照缩,解不出就 null —— 两种都行,只要不抛
     expect(() => fitImageForModel(jpegTruncated)).not.toThrow();
+  });
+});
+
+describe('fitImageForModel 的解码闸', () => {
+  // 改了头的 PNG 校验和对不上,解码器本来也会抛 → 只看返回 null 分不出闸在不在,所以钉「根本没交给解码器」。
+  it('头里写着天量像素的、隔行扫描的 PNG:不交给解码器', () => {
+    const read = vi.spyOn(PNG.sync, 'read');
+    const real = png(1800, 1500, quadrants(1800, 1500));
+    const hugeHeader = Buffer.from(real); hugeHeader.writeUInt32BE(30_000, 16); hugeHeader.writeUInt32BE(30_000, 20); // 9 亿像素
+    const interlaced = Buffer.from(real); interlaced[28] = 1; // pngjs 解隔行时 inflate 不封顶
+    expect(fitImageForModel(hugeHeader)).toBeNull();
+    expect(fitImageForModel(interlaced)).toBeNull();
+    expect(read).not.toHaveBeenCalled();
+    expect(fitImageForModel(real)).not.toBeNull(); // 对照:正常的图确实走解码器,上面那条不是空转
+    expect(read).toHaveBeenCalledTimes(1);
+    read.mockRestore();
+  });
+
+  it('16 位的 PNG 不交给解码器', () => {
+    const read = vi.spyOn(PNG.sync, 'read');
+    const deep = Buffer.from(png(1800, 1500, quadrants(1800, 1500))); deep[24] = 16;
+    expect(fitImageForModel(deep)).toBeNull();
+    expect(read).not.toHaveBeenCalled();
+    read.mockRestore();
+  });
+
+  it('只有帧头、没有画面数据的 JPEG:原样放行,不是「解」成一张灰图', () => {
+    const real = jpg(2400, 1800, quadrants(2400, 1800));
+    let sos = 2; // 沿着段走到 SOS(FF DA),把它连同后面的扫描数据全切掉
+    while (real[sos + 1] !== 0xda) sos += 2 + real.readUInt16BE(sos + 2);
+    const pad = Buffer.concat([Buffer.from([0xff, 0xfe, 0xff, 0xff]), Buffer.alloc(65_533, 0x20)]); // 注释段,撑体积
+    const noScan = Buffer.concat([real.subarray(0, sos), pad, pad, Buffer.from([0xff, 0xd9])]);
+    expect(noScan.length).toBeGreaterThan(KEEP_BYTES);
+    expect(() => jpeg.decode(noScan)).not.toThrow(); // 前提:解码器真的不拒它(否则这条测不到新加的闸)
+    expect(fitImageForModel(noScan)).toBeNull();
   });
 });
 
@@ -156,6 +190,13 @@ describe('fitImageUrlForModel', () => {
     expect(fitImageUrlForModel(small)).toBe(small);
     const broken = `data:image/png;base64,${Buffer.alloc(200_000, 1).toString('base64')}`;
     expect(fitImageUrlForModel(broken)).toBe(broken);
+  });
+
+  it('前缀带参数 / 大写 BASE64 的 data: URL 一样缩', () => {
+    const b64 = png(1800, 1500, quadrants(1800, 1500)).toString('base64');
+    for (const head of ['data:image/png;charset=utf-8;base64,', 'data:image/png;BASE64,', 'data:IMAGE/PNG;base64,']) {
+      expect(fitImageUrlForModel(head + b64).startsWith('data:image/jpeg;base64,'), head).toBe(true);
+    }
   });
 
   it('大图:换成缩后的 JPEG data: URL', () => {
