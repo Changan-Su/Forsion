@@ -34,7 +34,20 @@ describe('listAllMessages', () => {
     const r = await api.listAllMessages(T.homeTarget(), 's1')
     expect(r.complete).toBe(true)
     expect(r.messages.map((m) => m.id)).toEqual(rows.map((m) => m.id))
-    expect(befores).toEqual([0, 1703, 1203])
+    expect(befores).toEqual([0, 1704, 1205]) // 每页回看一毫秒,重叠的那条按 id 去重
+  })
+  it('does not skip messages that share a timestamp across a page boundary', async () => {
+    rows = make(501)
+    rows[1].timestamp = rows[0].timestamp // 最旧的两条同一毫秒:第一页只带走其中一条
+    const r = await api.listAllMessages(T.homeTarget(), 's1')
+    expect(r.complete).toBe(true)
+    expect(r.messages.map((m) => m.id)).toEqual(rows.map((m) => m.id))
+  })
+  it('stops instead of looping when a whole page shares one timestamp', async () => {
+    rows = make(1203).map((m) => ({ ...m, timestamp: 1000 }))
+    const r = await api.listAllMessages(T.homeTarget(), 's1')
+    expect(r).toMatchObject({ complete: false, messages: { length: 500 } })
+    expect(befores).toEqual([0, 1001])
   })
   it('a conversation of exactly one full page is complete', async () => {
     rows = make(500)
@@ -52,7 +65,7 @@ describe('listAllMessages', () => {
   it('stops paging once the size budget is spent', async () => {
     rows = make(1203, 100)
     const r = await api.listAllMessages(T.homeTarget(), 's1', { maxChars: 100_000 }) // 一页约 72k 字符:第二页翻完才超
-    expect(r).toMatchObject({ complete: false, messages: { length: 1000 } })
+    expect(r).toMatchObject({ complete: false, messages: { length: 999 } })
     expect(befores).toHaveLength(2)
   })
   it('a stalled later page ends at the time budget with the newest page kept', async () => {
