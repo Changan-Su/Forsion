@@ -15,8 +15,8 @@ const electron = require('./lib/launch-electron.cjs')
 const { startStubEngine } = require('./lib/stub-engine.cjs')
 const ROOT = path.resolve(__dirname, '..')
 const RUNS = Number(process.env.STARTUP_RUNS) || 3
-/** 树影最少停留(与 startupAppearance.js 的下限一致);窗口露出来之后看得到的时长要接近它。 */
-const MIN_VISIBLE = 1000
+/** 树影的最短展示(startupAppearance.js 里是 1300ms):从窗口露出来算,到开始淡出。留 50ms 给两个进程的时钟差。 */
+const MIN_HELD = 1250
 
 // 每个新文档里先于页面脚本执行:只观察,不改任何行为。
 const TRACE = `(() => {
@@ -46,15 +46,20 @@ async function main() {
   }
   fs.writeFileSync(path.join(home, 'package.json'), JSON.stringify({ name: 'forsion-desktop', version: require('../package.json').version, type: 'module', main: 'probe.mjs' }))
   fs.writeFileSync(path.join(home, 'probe.mjs'), `
-import { app } from 'electron';
+import { app, ipcMain } from 'electron';
 app.setAppPath(${JSON.stringify(ROOT)});
 const probe = globalThis.__startupProbe = { events: [] };
+// Chromium answers "disabled" for every feature until the GPU process has reported; gpuKnownAtCreate tells the two apart.
 app.once('gpu-info-update', () => { probe.gpuAfterInfo = app.getGPUFeatureStatus().gpu_compositing ?? null; });
+// A second listener on the preload's own question: what the status reads at that very moment, and whether it can be trusted yet.
+ipcMain.on('appearance:softwareRendering', () => {
+  if (probe.gpuAtPreload !== undefined) return;
+  probe.gpuAtPreload = app.getGPUFeatureStatus().gpu_compositing ?? null;
+  probe.gpuKnownAtPreload = probe.gpuAfterInfo !== undefined;
+});
 app.on('browser-window-created', (_event, win) => {
   if (probe.observed) return;
   probe.observed = true;
-  // What the preload's synchronous question would be answered with at this point.
-  probe.gpuAtCreate = app.getGPUFeatureStatus().gpu_compositing ?? null;
   if (process.env.STARTUP_CPU_RATE) {
     win.webContents.debugger.attach('1.3');
     win.webContents.debugger.sendCommand('Emulation.setCPUThrottlingRate', { rate: Number(process.env.STARTUP_CPU_RATE) });
@@ -79,9 +84,11 @@ await import(${JSON.stringify(pathToFileURL(path.join(ROOT, 'out/main/main.js'))
       await app.close(); app = null
       const at = (name) => trace.events.find((e) => e[0] === name)?.[1] ?? null
       const shown = native.events.find((e) => e[0] === 'show')
-      const visible = shown ? Math.round(trace.origin + at('removed') - shown[1]) : null
-      const row = { run, still: trace.still ?? null, scene: at('scene'), stillAt: at('still'), app: at('app'), fade: at('fade'), removed: at('removed'), visible,
-        slowFrames: trace.gaps.filter((gap) => gap > 50).length, maxGap: Math.max(0, ...trace.gaps), gpuAtCreate: native.gpuAtCreate, gpuAfterInfo: native.gpuAfterInfo ?? null }
+      // shownAt:窗口露出来的时刻(和别的几项一样,从页面开始加载算);held:露出来之后到开始淡出;visible:到整块移除。
+      const shownAt = shown ? Math.round(shown[1] - trace.origin) : null
+      const held = shown && at('fade') !== null ? at('fade') - shownAt : null, visible = shown ? at('removed') - shownAt : null
+      const row = { run, still: trace.still ?? null, scene: at('scene'), shownAt, app: at('app'), fade: at('fade'), removed: at('removed'), held, visible,
+        slowFrames: trace.gaps.filter((gap) => gap > 50).length, maxGap: Math.max(0, ...trace.gaps), gpuAtPreload: native.gpuAtPreload ?? null, gpuKnownAtPreload: native.gpuKnownAtPreload ?? null, gpuAfterInfo: native.gpuAfterInfo ?? null }
       rows.push(row)
       console.log(JSON.stringify(row))
     }
@@ -95,7 +102,7 @@ await import(${JSON.stringify(pathToFileURL(path.join(ROOT, 'out/main/main.js'))
   const software = rows.some((row) => row.still === 'software')
   check('主线程忙不会把树影降级成静帧', rows.every((row) => row.still === null || row.still === 'software'))
   check('开屏淡出,而不是直接消失', rows.every((row) => row.fade !== null))
-  check(`窗口露出来之后开屏至少留 ${MIN_VISIBLE}ms`, rows.every((row) => row.visible === null || row.visible >= MIN_VISIBLE))
+  check('窗口露出来之后守满最短展示才开始淡出', rows.every((row) => row.held !== null && row.held >= MIN_HELD))
   console.log(`${failed ? 'FAILED' : 'OK'}${software ? '(软件合成:静帧)' : ''};记录:${path.join(out, 'results.json')}`)
   if (failed) process.exitCode = 1
 }

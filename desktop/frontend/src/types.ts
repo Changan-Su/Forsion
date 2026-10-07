@@ -1399,6 +1399,8 @@ declare global {
       startupAppearance?: {
         readonly prefersReducedMotion?: boolean
         readonly softwareRendering?: boolean
+        /** Resolves with the time the window came on screen (0 when it already was). */
+        whenShown?(): Promise<number>
         initial: import('../../shared/startupAppearance').StartupAppearance
         update(patch: import('../../shared/startupAppearance').AppearancePatch, clearPlugin?: string): Promise<import('../../shared/startupAppearance').StartupAppearance>
         subscribe(cb: (value: import('../../shared/startupAppearance').StartupAppearance) => void): () => void

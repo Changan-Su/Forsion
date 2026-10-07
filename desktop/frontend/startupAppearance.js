@@ -14,7 +14,7 @@
   if (value.showSplash === false) { splash.remove(); return; }
   var reduce = matchMedia('(prefers-reduced-motion: reduce)').matches || !!(window.tangu && window.tangu.startupAppearance && window.tangu.startupAppearance.prefersReducedMotion);
   if (reduce) splash.dataset.reducedMotion = '';
-  var softwareRendering = !!(window.tangu && window.tangu.startupAppearance && window.tangu.startupAppearance.softwareRendering), performanceStill = false;
+  var softwareRendering = !!(window.tangu && window.tangu.startupAppearance && window.tangu.startupAppearance.softwareRendering);
   var animation = ['default', 'pulse', 'spin', 'none'].indexOf(value.animation) !== -1 ? value.animation : 'default';
   var style = document.createElement('style');
   style.textContent = '\
@@ -73,7 +73,8 @@
   var original = splash.firstElementChild;
   function treeShadow(target) {
     try {
-      if (softwareRendering) { performanceStill = true; splash.dataset.performanceStill = 'software'; }
+      // Without GPU compositing the layers would be animated on the CPU: paint a smaller, complete still instead.
+      if (softwareRendering) splash.dataset.performanceStill = 'software';
       var look = document.documentElement.dataset.mode === 'dark'
         ? { wall: '#121419', ink: '#05070c', near: .66, far: .42, word: '#8a94a8', verse: '#ccd4e2', bloom: 'rgba(140,165,215,.1)', lit: 'radial-gradient(70% 80% at 55% 35%, rgba(235,242,255,.16), transparent 70%), linear-gradient(165deg, #7889a8, #47536c)' }
         : { wall: '#e4d9cb', ink: '#5f4636', near: .4, far: .26, word: '#9a7c68', verse: '#6b4f3e', bloom: 'transparent', lit: 'linear-gradient(160deg, #fff7ea, #fbeede)' };
@@ -82,7 +83,7 @@
       // The tree is sized and rooted relative to the window light, so its branches reach the panes at any aspect ratio.
       var rootX = cx + pw * 2.1, rootY = cy + ph * 1.946;
       // Everything on the canvases is blurred, so a capped bitmap stretched by CSS is enough on large displays.
-      var q = Math.min(1, (performanceStill ? 960 : 1600) / Math.max(W, H));
+      var q = Math.min(1, (softwareRendering ? 960 : 1600) / Math.max(W, H));
       // A different verse on every launch. Storage is unavailable in the sandboxed settings preview.
       var last = -1, pick;
       try { last = parseInt(localStorage.getItem('forsion_startup_verse'), 10); } catch (_) { /* preview */ }
@@ -182,30 +183,24 @@
   } else if (animation !== 'default' || reduce) splash.dataset.customMotion = reduce ? 'none' : animation;
 
   // App readiness controls exit, with a hard upper bound even if initialization fails.
-  var start = Date.now(), done = false, frame = 0, performanceFrame = 0, lastFrame = 0, slowFrames = [];
-  // Hardware acceleration can still be too slow on an integrated GPU or while cold-loading modules.
-  // Freeze a complete scene after sustained frame delays, never after one startup spike/backgrounding.
-  function watchPerformance(now) {
-    if (done || performanceStill || reduce || splash.dataset.scene !== 'tree-shadow') return;
-    if (!document.hidden && lastFrame) {
-      slowFrames.push(now - lastFrame > 50);
-      if (slowFrames.length > 6) slowFrames.shift();
-      if (slowFrames.length === 6 && slowFrames.filter(Boolean).length >= 4) {
-        performanceStill = true; splash.dataset.performanceStill = 'frames'; return;
-      }
-    } else slowFrames = [];
-    lastFrame = document.hidden ? 0 : now;
-    performanceFrame = requestAnimationFrame(watchPerformance);
+  var start = Date.now(), shown = start, hidden = false, done = false, frame = 0;
+  // Desktop creates its window hidden and shows it after the first paint, which takes a while on Windows.
+  // The minimum stay counts from the moment the window is on screen, not from this script.
+  var whenShown = window.tangu && window.tangu.startupAppearance && window.tangu.startupAppearance.whenShown;
+  if (typeof whenShown === 'function') {
+    hidden = true;
+    var onShown = function (at) { if (hidden) { hidden = false; shown = Math.max(start, +at || 0); } };
+    try { whenShown().then(onShown, onShown); } catch (_) { hidden = false; }
+    setTimeout(onShown, 3000); // A lost reply must not hold the exit.
   }
-  if (!performanceStill) performanceFrame = requestAnimationFrame(watchPerformance);
   var ceiling = setTimeout(fade, 10000);
+  // Every mode leaves the same way. A still scene (reduced motion, software rendering) that vanished the
+  // instant the app was ready read as a flash; its descendants do not animate, so only the opacity fades.
   function fade() {
     if (done) return;
     done = true;
     clearTimeout(ceiling);
     cancelAnimationFrame(frame);
-    cancelAnimationFrame(performanceFrame);
-    if (reduce || performanceStill) { splash.remove(); style.remove(); return; }
     splash.classList.add('out');
     setTimeout(function () { splash.remove(); style.remove(); }, 450);
   }
@@ -215,12 +210,13 @@
   function waitForPaint() {
     if (done) return;
     var root = document.getElementById('root');
-    if (!root || !root.firstChild) { frame = requestAnimationFrame(waitForPaint); return; }
+    if (hidden || !root || !root.firstChild) { frame = requestAnimationFrame(waitForPaint); return; }
     frame = requestAnimationFrame(function () {
-      var elapsed = Date.now() - start;
-      // The classic mark leaves at its loop seam; the tree shadow has none and only keeps a short minimum.
-      var duration = reduce || performanceStill ? 0 : splash.dataset.scene === 'tree-shadow' ? Math.max(0, 1300 - elapsed)
-        : Math.max(0, Math.max(1, Math.ceil((elapsed + 300) / 1600)) * 1600 - 300 - elapsed);
+      var now = Date.now(), elapsed = now - start, seen = now - shown;
+      // The classic mark leaves at a loop seam, the first one that has kept it on screen for most of a loop.
+      // A scene without a loop (the tree shadow, any still) keeps a short minimum instead.
+      var duration = reduce || splash.dataset.scene === 'tree-shadow' ? Math.max(0, 1300 - seen)
+        : Math.ceil((elapsed + Math.max(0, 900 - seen) + 300) / 1600) * 1600 - 300 - elapsed;
       setTimeout(fade, duration);
     });
   }

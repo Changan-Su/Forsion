@@ -6,9 +6,10 @@ const mock = vi.hoisted(() => ({
   dir: '', handlers: new Map<string, (...args: any[]) => any>(), listeners: new Map<string, (...args: any[]) => any>(),
   dock: vi.fn(), windowIcon: vi.fn(), send: vi.fn(),
   animation: vi.fn(() => ({ prefersReducedMotion: false })),
+  gpu: vi.fn(() => ({ gpu_compositing: 'disabled_software' })),
 }))
 vi.mock('electron', () => ({
-  app: { getPath: () => mock.dir, isPackaged: false, dock: { setIcon: mock.dock }, on: (key: string, cb: any) => mock.listeners.set(key, cb) },
+  app: { getPath: () => mock.dir, isPackaged: false, dock: { setIcon: mock.dock }, on: (key: string, cb: any) => mock.listeners.set(key, cb), getGPUFeatureStatus: mock.gpu },
   ipcMain: { on: (key: string, cb: any) => mock.listeners.set(key, cb), handle: (key: string, cb: any) => mock.handlers.set(key, cb) },
   systemPreferences: { getAnimationSettings: mock.animation },
   BrowserWindow: { getAllWindows: () => [{ isDestroyed: () => false, setIcon: mock.windowIcon, webContents: { send: mock.send } }] },
@@ -19,6 +20,8 @@ vi.mock('electron', () => ({
   },
 }))
 import { registerStartupAppearance } from './startupAppearance'
+// Registered when the module loads, before beforeEach clears the map.
+const gpuReports = mock.listeners.get('gpu-info-update')!
 const png = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aD1sAAAAASUVORK5CYII='
 const asset = { id: 'plugin:probe:one', label: 'Probe', pluginId: 'probe', image: png }
 const platform = process.platform
@@ -30,6 +33,19 @@ afterEach(async () => { Object.defineProperty(process, 'platform', { value: plat
 const update = (patch: unknown, owner?: string) => mock.handlers.get('appearance:update')!({ trusted: true }, patch, owner)
 const initial = () => { const event = { returnValue: undefined }; mock.listeners.get('appearance:initial')!(event); return event.returnValue as any }
 describe('desktop appearance persistence and OS icon', () => {
+  it('trusts the GPU compositing status only after the GPU process has reported', async () => {
+    Object.defineProperty(process, 'platform', { value: 'win32' })
+    await registerStartupAppearance(() => true)
+    const ask = () => { const event = { returnValue: undefined as unknown }; mock.listeners.get('appearance:softwareRendering')!(event); return event.returnValue }
+    // Chromium reports every feature as disabled until then: a hardware-accelerated machine must not look like software.
+    expect(ask()).toBe(false)
+    gpuReports()
+    expect(ask()).toBe(true)
+    mock.gpu.mockReturnValue({ gpu_compositing: 'enabled' })
+    expect(ask()).toBe(false)
+    mock.gpu.mockReturnValue({} as any)
+    expect(ask()).toBe(false)
+  })
   it('reads current native reduced motion independently of saved artwork preferences', async () => {
     await registerStartupAppearance(() => true)
     const event = { returnValue: undefined as unknown }

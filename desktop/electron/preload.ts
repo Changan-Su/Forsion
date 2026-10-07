@@ -337,6 +337,7 @@ const api = {
     // Windows can report reduced motion in the main process while renderer media queries miss it.
     prefersReducedMotion: ipcRenderer.sendSync('appearance:reducedMotion') === true,
     softwareRendering: ipcRenderer.sendSync('appearance:softwareRendering') === true,
+    whenShown: (): Promise<number> => ipcRenderer.invoke('appearance:shown'),
     update: (patch: AppearancePatch, clearPlugin?: string): Promise<StartupAppearance> => ipcRenderer.invoke('appearance:update', patch, clearPlugin),
     subscribe: (cb: (value: StartupAppearance) => void) => {
       appearanceListeners.add(cb)
