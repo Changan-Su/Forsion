@@ -9,13 +9,13 @@
  * 两臂只差一位:发给服务端的模型记录里 promptCachingEnabled 是 false 还是 true —— 服务端据此决定
  * 发不发 prompt_cache_key(server llmService.buildProviderPayload),所以**不用改后台的模型配置**。
  * 每臂各用一个随机会话 id 和一段带随机数开头的系统提示,两臂互不串缓存;两臂交替发,时段影响对等。
- * 判读:adjacent = 命中了上一轮写下的前缀;older = 只命中更早某一轮的;miss = cached 0。
+ * 判读:adjacent = 命中了上一轮写下的前缀;older = 只命中更早某一轮的;hit = 命中了但对不上具体哪一轮;miss = cached 0。
  * 带键那臂全是 adjacent 而不带键那臂零散 → 上游认这个键,把后台该模型的「请求侧缓存提示」打开即可。
  * 两臂都零散 → 上游不认,Forsion 这边无解。凭证只读、不打印;每发约 3k–8k prompt token,真实计费。
  *
  * 10-07 实测(本机 dev 服务端 2.3.36 → api.gpt.ge,Responses 协议):
- *   gpt-5-mini 各 9 轮后续:不带键 adjacent 4 / older 2 / miss 3;带键 adjacent 3 / older 3 / 分不清 1 / miss 2
- *   (那次每轮只涨约 107 token,是按「cached 等于哪一轮 prompt 的 128 取整」逐条对出来的;之后才把每轮增量加到约 400)。
+ *   gpt-5-mini 各 9 轮后续(那次每轮只涨约 107 token):不带键 命中上一轮 4 / 命中但不是上一轮或分不清 2 / miss 3;
+ *   带键 3 / 4 / 2。
  *   gpt-5.5 各 11 轮后续(上游计数粒度 1024,只能分命中与否):不带键 miss 4;带键 miss 2。
  * 带键没有让命中稳定落到上一轮,中转站也没有因为多了这个字段报 400 —— 它不按 prompt_cache_key 粘会话。
  * 起因是会话 96ecce8c 的 GPT 6.1 SOL(同一个中转站)后续 19 轮只命中 7 次;SOL 和 GPT 6 Luna 在 dev 服务端上没有行,没测到。
@@ -33,7 +33,8 @@ const ROUNDS = Number(opt('rounds', 10));
 const THINKING = opt('thinking', 'low'); // 'off' 会被部分模型拒(gpt-5-mini 不收 effort=none)
 const ARMS = opt('arms', 'off,on').split(',').filter((a) => a === 'off' || a === 'on');
 if (!MODEL || !ARMS.length || !(ROUNDS >= 2)) { console.error('用法:--model <模型 id> [--rounds 10] [--arms off,on] [--thinking low] [--auth <auth.json>]'); process.exit(2); }
-if (realpathSync(AUTH).startsWith(join(homedir(), '.forsion') + '/') && !argv.includes('--allow-production-auth')) {
+const real = (p) => { try { return realpathSync(p); } catch { return p; } };
+if (real(AUTH).startsWith(real(join(homedir(), '.forsion')) + '/') && !argv.includes('--allow-production-auth')) {
   console.error(`--auth 指向生产登录 ${AUTH};要用它请显式加 --allow-production-auth`); process.exit(2);
 }
 // JSON.parse 的原生报错会把出错那一行(含 token)打到 stderr,所以这里吞掉原错误只报文件名。
@@ -102,33 +103,37 @@ for (let round = 1; round <= ROUNDS && arms.some((a) => !a.failed); round++) {
   }
 }
 
-// 上游报的 cached 有计数粒度:OpenAI 是 128,这个中转站上有的模型是 1024(gpt-5.5)。从本臂非零 cached
-// 的差值里认出来。每轮增量要跨过「一个粒度 + 一个 128 块」才分得清命中的是上一轮还是更早某一轮,
-// 不够就只报 hit,不硬判。
-const gcd = (a, b) => (b ? gcd(b, a % b) : a);
-function classify(rows) {
-  const vals = [...new Set(rows.map((r) => r.cached).filter(Boolean))].sort((x, y) => x - y);
-  // ponytail: 只认 128 和 1024 两种粒度;至少三个不同的值且差值全是 1024 的倍数才判 1024,否则按 128。
-  // 上限:别的粒度(256 / 512)会被当成 128,真遇到再把这里换成按差值分布估。
-  const diffGcd = vals.slice(1).reduce((g, v, i) => gcd(g, v - vals[i]), 0);
-  const quantum = vals.length >= 3 && diffGcd % 1024 === 0 ? 1024 : 128;
-  const step = rows.length > 1 ? rows[1].prompt - rows[0].prompt : 0;
-  const resolvable = step >= quantum + 128;
-  const verdicts = rows.map((r, i) => (i === 0 ? 'first' : !r.cached ? 'miss' : !resolvable ? 'hit'
-    : rows[i - 1].prompt - r.cached < quantum + 128 ? 'adjacent' : 'older'));
-  return { quantum, step, resolvable, verdicts };
+// 归因只认「对得上具体某一轮」的:上游按 128 细报时,命中第 j 轮写下的前缀 = cached 等于第 j 轮 prompt 的
+// 128 取整(容一个块的尾差)。恰好对上一轮 → adjacent / older;对不上或同时对上两轮 → 只报 hit,不硬判。
+// 上游没报 cached 的轮记 unknown,不进命中率。
+// ponytail: 「上游是不是按 128 细报」靠全部非零 cached 之间有没有非 1024 倍数的差来认(这个中转站上 gpt-5.5
+// 是 1024 一档,那种上游的 cached 停着不动既可能是粒度粗也可能是落到了旧缓存,分不开)。认不出细粒度(含样本
+// 太少)就整场只报 hit / miss。上限:真 128 粒度但几次命中恰好相差 1024 的倍数时会少报归因,不会报错归因。
+const f128 = (x) => Math.floor(x / 128) * 128;
+function classify(rows, fine) {
+  return rows.map((r, i) => {
+    if (i === 0) return 'first';
+    if (!r.reported) return 'unknown';
+    if (!r.cached) return 'miss';
+    if (!fine) return 'hit';
+    const src = rows.slice(0, i).flatMap((e, j) => ([0, 128].includes(f128(e.prompt) - r.cached) ? [j] : []));
+    return src.length !== 1 ? 'hit' : src[0] === i - 1 ? 'adjacent' : 'older';
+  });
 }
+const isFine = (allRows) => { const v = allRows.map((r) => r.cached).filter(Boolean); return v.some((x) => (x - v[0]) % 1024 !== 0); };
+const FINE = isFine(arms.flatMap((arm) => arm.rows));
+if (!FINE) console.log('\n⚠️ 认不出这个上游按 128 细报 cached(粒度更粗或样本太少),下面只分命中 / 未命中,不做归因');
 for (const arm of arms) {
   console.log(`\n== ${arm.name === 'on' ? '带 prompt_cache_key' : '不带 prompt_cache_key'}(会话 ${arm.sessionId.slice(0, 8)})`);
   if (arm.rows.length < 2) { console.log('  成功的请求不足两轮,没有可判的后续轮'); continue; }
-  const { quantum, step, resolvable, verdicts } = classify(arm.rows);
-  const tally = { adjacent: 0, older: 0, hit: 0, miss: 0 };
+  const verdicts = classify(arm.rows, FINE);
+  const tally = { adjacent: 0, older: 0, hit: 0, miss: 0, unknown: 0 };
   arm.rows.forEach((r, i) => {
     if (i > 0) tally[verdicts[i]]++;
-    console.log(`  轮 ${String(r.round).padStart(2)}  prompt ${String(r.prompt).padStart(6)}  cached ${String(r.cached).padStart(6)}  ${r.reported ? '' : '(上游没报) '}${verdicts[i]}  ${(r.ms / 1000).toFixed(1)}s`);
+    console.log(`  轮 ${String(r.round).padStart(2)}  prompt ${String(r.prompt).padStart(6)}  cached ${String(r.reported ? r.cached : '-').padStart(6)}  ${verdicts[i]}  ${(r.ms / 1000).toFixed(1)}s`);
   });
-  const follow = arm.rows.slice(1);
-  const pct = follow.length ? Math.round(100 * follow.reduce((s, r) => s + r.cached, 0) / follow.reduce((s, r) => s + r.prompt, 0)) : 0;
-  const hits = resolvable ? `adjacent ${tally.adjacent} / older ${tally.older}` : `hit ${tally.hit}(每轮增量 ${step} 不够跨过上游计数粒度 ${quantum},分不出命中的是哪一轮)`;
-  console.log(`  后续 ${follow.length} 轮:${hits} / miss ${tally.miss} ｜ 按 token 命中 ${pct}% ｜ 计数粒度 ${quantum}`);
+  const known = arm.rows.filter((r, i) => i > 0 && r.reported);
+  const pct = known.length ? Math.round(100 * known.reduce((s, r) => s + r.cached, 0) / known.reduce((s, r) => s + r.prompt, 0)) : 0;
+  console.log(`  后续 ${arm.rows.length - 1} 轮:adjacent ${tally.adjacent} / older ${tally.older} / hit(对不上具体哪一轮)${tally.hit} / miss ${tally.miss}`
+    + `${tally.unknown ? ` / 上游没报 ${tally.unknown}` : ''} ｜ 按 token 命中 ${pct}%${tally.unknown ? '(只算报了的轮)' : ''}`);
 }
