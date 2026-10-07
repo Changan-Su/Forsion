@@ -4,7 +4,7 @@
  */
 import { describe, it, expect } from 'vitest';
 // @ts-expect-error 脚本是无类型的 .mjs
-import { attribute, collapse, stateAfter } from '../scripts/stall-timeline.mjs';
+import { attribute, collapse, report, stateAfter } from '../scripts/stall-timeline.mjs';
 
 const T0 = 1_700_000_000_000;
 const ev = (type: string, t: number, extra: Record<string, unknown> = {}) => ({ seq: t, type, t, ...extra });
@@ -50,5 +50,27 @@ describe('stall-timeline attribute', () => {
     expect(r.unanswered).toBe(1);
     expect(stateAfter({ type: 'status', phase: 'queued' }, { type: 'status' })).toBe('queue');
     expect(stateAfter({ type: 'status', phase: 'llm_retry' }, { type: 'token' })).toBe('retry');
+  });
+
+  // 10-07 反馈 dbb04870:observe_ui 之后 36s 没有事件 —— 主模型没有图像输入,截图在转写。那段单列 vision,不再混进等首帧。
+  it('图像转写(describing_images start→done)单列 vision 桶;done 之后才是等首帧;上传 / 体积进 vision 明细', () => {
+    const events = collapse([
+      ev('tool_call', T0, { name: 'observe_ui' }),
+      ev('tool_result', T0 + 3_000, { name: 'observe_ui', elapsedMs: 3000 }),
+      ev('status', T0 + 3_000, { phase: 'describing_images', stage: 'start' }),
+      ev('status', T0 + 39_000, { phase: 'describing_images', stage: 'done', elapsedMs: 36_000, uploadMs: 21_000, bytes: 120_000, ok: true }),
+      ev('status', T0 + 39_000, {}),
+      ev('status', T0 + 39_000, { phase: 'llm_call', stage: 'sending', bytes: 108_000 }),
+      ev('token', T0 + 43_000),
+      ev('done', T0 + 43_000),
+    ]);
+    const r = attribute([{ id: 'R', model: 'm', created: T0, events }]);
+    expect(r.tot.vision).toBe(36_000);
+    expect(r.tot.llm_wait).toBe(4_000); // 只剩真正等主模型的那 4s
+    expect(r.tot.tool).toBe(3_000);
+    expect(r.vision).toEqual([{ ms: 36_000, uploadMs: 21_000, bytes: 120_000, ok: true }]);
+    expect(r.big.map((b: any) => b.k)).toEqual(['vision']);
+    expect(stateAfter({ type: 'status', phase: 'describing_images', stage: 'start' }, { type: 'error' })).toBe('vision'); // 转写途中被中止
+    expect(report([{ id: 'R', model: 'm', status: 'completed', created: T0, events }])).toContain('图像转写');
   });
 });

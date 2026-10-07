@@ -5,7 +5,10 @@
  *  ① 测试性开关默认关:status:llm_call 只显示通用「思考中」,不泄露诊断详情;
  *  ② 开关打开后 sending →「正在发送上下文 N KB」;accepted →「等待模型首帧」;
  *  ③ 2 秒起带「已等待 N 秒」且每秒递增;
- *  ④ 首帧(token)到达即整行消失;done 后不残留。
+ *  ④ 首帧(token)到达即整行消失;done 后不残留;
+ *  ⑤ 主模型没有图像输入、截图在转成文字(status:describing_images):开关**关着**也画「当前模型不能直接看图,
+ *     正在把图片转成文字(N 张)。换用能看图的模型可以省掉这一步」+ 已等待秒数,转写结束即消失
+ *     (10-07 反馈 dbb04870:这一步 36s 界面不动;引擎给模型的那句「你看不到图」只是软约束,给用户的提示落在这一行)。
  *
  * 需先 npm run build。用法:npm run e2e:livewait
  * 负对照:node scripts/chat-livewait.e2e.cjs --nc(剧本改发未知 phase,实况行不该出现 → 存在类断言必须转红)。
@@ -19,10 +22,12 @@ const { startStubEngine } = require('./lib/stub-engine.cjs')
 const ROOT = path.join(__dirname, '..')
 const NEGATIVE_CONTROL = process.argv.includes('--nc')
 const PHASE = NEGATIVE_CONTROL ? 'llm_call_bogus' : 'llm_call'
+const DESCRIBE_PHASE = NEGATIVE_CONTROL ? 'describing_images_bogus' : 'describing_images'
 const SHOTS = {
   light: path.join(os.tmpdir(), 'forsion-chat-livewait-light.png'),
   dark: path.join(os.tmpdir(), 'forsion-chat-livewait-dark.png'),
   view: path.join(os.tmpdir(), 'forsion-chat-livewait-view.png'),
+  describing: path.join(os.tmpdir(), 'forsion-chat-livewait-describing.png'),
 }
 const results = []
 function check(name, ok, detail) {
@@ -187,9 +192,54 @@ async function main() {
     try { await stub2.close() } catch { /* ignore */ }
   }
 
+  // ── run 3(新进程,测试性开关保持默认关):截图在转成文字 —— 这一行不归开关管 ──
+  const stub3 = await startStubEngine({
+    sessions: [SESSION], messages: [],
+    models: [{ id: 'm1', name: 'Stub 模型', provider: 'stub', contextWindow: 128_000 }],
+  })
+  const home3 = fs.mkdtempSync(path.join(os.tmpdir(), 'forsion-chat-livewait3-'))
+  const app3 = await electron.launch({
+    args: [`--user-data-dir=${path.join(home3, 'userdata')}`, '--lang=zh-CN', ROOT],
+    cwd: ROOT,
+    env: { ...process.env, TANGU_HOME: home3, TANGU_BACKEND_URL: stub3.url },
+  })
+  try {
+    const win = await app3.firstWindow()
+    await win.setViewportSize({ width: 1600, height: 900 })
+    await win.waitForSelector('#root', { timeout: 30_000 })
+    await win.waitForTimeout(2500)
+    for (const label of ['跳过引导', 'Skip']) {
+      const b = win.locator(`text=${label}`).first()
+      if (await b.count().catch(() => 0)) { await b.click().catch(() => {}); break }
+    }
+    await openChatSession(win)
+    stub3.script([
+      { type: 'tool_call', delay: 200, payload: { id: 't1', name: 'observe_ui', arguments: '{}' } },
+      { type: 'tool_result', delay: 300, payload: { id: 't1', name: 'observe_ui', result: 'Outline (3 nodes): close / minimize / zoom', elapsedMs: 300 } },
+      { type: 'status', delay: 100, payload: { phase: DESCRIBE_PHASE, stage: 'start', count: 1, iteration: 0 } },
+      { type: 'status', delay: 4200, payload: { phase: DESCRIBE_PHASE, stage: 'done', count: 1, iteration: 0, ok: true, elapsedMs: 4200, bytes: 120_000, uploadMs: 2500 } },
+      { type: 'status', delay: 50, payload: { phase: 'llm_call', stage: 'sending', iteration: 1, bytes: 4096 } },
+      { type: '__hold' },
+    ])
+    await send(win, '看看微信窗口里有什么')
+    await win.waitForTimeout(1400)
+    const d1 = await liveText(win)
+    check('开关关着,转写中也显示「当前模型不能直接看图,正在把图片转成文字(1 张)。换用能看图的模型…」', !!d1 && d1.includes('不能直接看图') && d1.includes('转成文字') && d1.includes('1 张') && d1.includes('换用能看图的模型'), JSON.stringify(d1))
+    await win.waitForTimeout(2200)
+    const d2 = await liveText(win)
+    check('转写中 2 秒起带「已等待 N 秒」', Number((String(d2 || '').match(/已等待 (\d+) 秒/) || [])[1]) >= 2, JSON.stringify(d2))
+    if (!NEGATIVE_CONTROL) await win.locator('.t2-chat-view').first().screenshot({ path: SHOTS.describing })
+    await win.waitForTimeout(1800)
+    const gone = await win.locator('.chat-thinking-live').count()
+    check('转写结束即消失(开关关着,后面的 llm_call 不画)', gone === 0, `count=${gone}`)
+  } finally {
+    await app3.close().catch(() => {})
+    try { await stub3.close() } catch { /* ignore */ }
+  }
+
   const failed = results.filter((r) => !r.ok)
-  console.log(`\n${results.length - failed.length}/${results.length} 通过` + (NEGATIVE_CONTROL ? '(负对照:存在类断言应转红)' : `;截图 ${SHOTS.view} / ${SHOTS.light} / ${SHOTS.dark}`))
-  if (NEGATIVE_CONTROL) process.exit(failed.length >= 4 ? 0 : 1)
+  console.log(`\n${results.length - failed.length}/${results.length} 通过` + (NEGATIVE_CONTROL ? '(负对照:存在类断言应转红)' : `;截图 ${SHOTS.view} / ${SHOTS.light} / ${SHOTS.dark} / ${SHOTS.describing}`))
+  if (NEGATIVE_CONTROL) process.exit(failed.length >= 6 ? 0 : 1) // 原有 4 条存在类断言 + 转写行的 2 条
   process.exit(failed.length ? 1 : 0)
 }
 

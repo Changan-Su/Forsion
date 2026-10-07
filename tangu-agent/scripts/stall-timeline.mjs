@@ -7,9 +7,12 @@
  *   node scripts/stall-timeline.mjs tangu-session-xxxx.json               # 设置→高级→导出日志(含 timeline)
  *
  * 桶:llm_wait(等首帧,含上传)/ stream(生成:token+reasoning+工具参数)/ tool / approval / inquiry /
- *     retry / compaction / queue / post_llm。usage 事件带 ttftMs/uploadMs/requestBytes(≥ 2.9.8 引擎)时
+ *     retry / compaction / queue / vision / post_llm。usage 事件带 ttftMs/uploadMs/requestBytes(≥ 2.9.8 引擎)时
  *     按测量值报首帧与上传;老数据退回事件间隙(秒级精度)。带 `usage.phase` 的是后台调用
  *     (压缩 / delegate / muse-judge / brainstorm),单列一行,不进主循环的 prompt / 缓存 / 首帧分布。
+ *     vision = 主模型没有图像输入时,把工具截图 / 附件图交给辅助模型转成文字的那段(status describing_images 的
+ *     start → done,≥ 2.13.2 引擎);done 带 elapsedMs / bytes / uploadMs,报告里单列「图像转写」分开上传与模型。
+ *     老数据里这段没有事件,仍算在 tool_result 之后的 llm_wait 里。
  * 2026-09-06 本机取证:llm_wait 52% / stream 43% / tool 2%(见 docs/Log/v2.0_2026-09-06.md)。
  * attribute()/collapse()/stateAfter() 是纯函数,test/stallTimeline.test.ts 钉它们。
  */
@@ -32,6 +35,7 @@ export function stateAfter(e, n) {
       if (e.phase === 'llm_retry') return 'retry';
       if (e.phase === 'compacting') return 'compaction';
       if (e.phase === 'queued') return 'queue';
+      if (e.phase === 'describing_images') return e.stage === 'done' ? 'llm_wait' : 'vision';
       return 'llm_wait';
     case 'usage': return 'post_llm';
     default: return STREAM.has(e.type) ? 'stream' : 'llm_wait';
@@ -56,7 +60,7 @@ export function collapse(events) {
 /** runs: [{ id, model, created(ms), events: collapse() 后的事件 }] → 各桶毫秒、每模型分位原料、工具耗时、审批等待、最长间隙。 */
 export function attribute(runs) {
   const tot = {}; const gaps = {}; const big = []; const perRun = []; const perModel = {}; const tools = {};
-  const approvals = []; let unanswered = 0;
+  const approvals = []; let unanswered = 0; const vision = [];
   const add = (k, dt) => { tot[k] = (tot[k] || 0) + dt; (gaps[k] ||= []).push(dt); };
   for (const r of runs) {
     const es = r.events || [];
@@ -82,6 +86,7 @@ export function attribute(runs) {
         }
       }
       if (e.type === 'tool_result' && e.elapsedMs != null) (tools[e.name || '?'] ||= []).push(e.elapsedMs);
+      if (e.type === 'status' && e.phase === 'describing_images' && e.stage === 'done') vision.push({ ms: e.elapsedMs, uploadMs: e.uploadMs, bytes: e.bytes, ok: e.ok !== false });
       if (e.type === 'approval_request') {
         const res = es.slice(i + 1).find((x) => x.type === 'approval_result');
         if (res) approvals.push(res.t - e.t); else unanswered++;
@@ -103,7 +108,7 @@ export function attribute(runs) {
     pm.silent.push(silent);
   }
   big.sort((a, b) => b.dt - a.dt);
-  return { tot, gaps, big, perRun, perModel, tools, approvals, unanswered };
+  return { tot, gaps, big, perRun, perModel, tools, approvals, unanswered, vision };
 }
 
 // ── 装载:SQLite / 导出 JSON ─────────────────────────────────────────────────
@@ -116,7 +121,7 @@ const pick = (type, p) => {
   switch (type) {
     case 'tool_call': case 'approval_request': return { name: p?.name };
     case 'tool_result': return { name: p?.name, elapsedMs: p?.elapsedMs, isError: !!p?.isError };
-    case 'status': return { phase: p?.phase ?? p?.state, stage: p?.stage, bytes: p?.bytes, uploadMs: p?.uploadMs };
+    case 'status': return { phase: p?.phase ?? p?.state, stage: p?.stage, bytes: p?.bytes, uploadMs: p?.uploadMs, elapsedMs: p?.elapsedMs, ok: p?.ok };
     case 'usage': return { prompt: p?.prompt, cached: p?.cached, phase: p?.phase, ttftMs: p?.ttftMs, uploadMs: p?.uploadMs, llmMs: p?.llmMs, requestBytes: p?.requestBytes };
     case 'error': return { error: String(p?.error ?? '').slice(0, 120) };
     default: return {};
@@ -177,6 +182,10 @@ export function report(runs) {
     lines.push(`${name.padEnd(22)} n=${String(xs.length).padStart(4)} sum=${sec(xs.reduce((a, b) => a + b, 0)).padStart(6)} p50=${(pct(xs, 0.5) / 1000).toFixed(1).padStart(6)} p90=${(pct(xs, 0.9) / 1000).toFixed(1).padStart(6)} max=${(Math.max(...xs) / 1000).toFixed(1).padStart(6)}`);
   }
   lines.push(`\n## 审批:请求 ${r.approvals.length + r.unanswered},未应答 ${r.unanswered},等待 p50=${sec(pct(r.approvals, 0.5))}s max=${sec(Math.max(0, ...r.approvals))}s`);
+  if (r.vision.length) {
+    const num = (k) => r.vision.map((v) => v[k]).filter((x) => Number.isFinite(x));
+    lines.push(`\n## 图像转写(主模型没有图像输入):${r.vision.length} 次,失败 ${r.vision.filter((v) => !v.ok).length};整段 p50=${sec(pct(num('ms'), 0.5))}s max=${sec(Math.max(0, ...num('ms')))}s;其中上传 p50=${sec(pct(num('uploadMs'), 0.5))}s max=${sec(Math.max(0, ...num('uploadMs')))}s;请求体 p50=${Math.round((pct(num('bytes'), 0.5) || 0) / 1024)}KB`);
+  }
   lines.push('\n## 最长间隙 top 20');
   for (const b of r.big.slice(0, 20)) lines.push(`${sec(b.dt).padStart(5)}s ${b.k.padEnd(10)} ${String(b.model).slice(0, 28).padEnd(28)} run=${String(b.run).slice(0, 8)} ${b.from}->${b.to}${b.phase ? ' ' + b.phase : ''}`);
   return lines.join('\n');

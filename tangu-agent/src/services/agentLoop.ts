@@ -62,7 +62,7 @@ import { registerRun, runCategory, unregisterRun, type RunCategory } from './rem
 import { loadProjectDocSafe, wrapProjectDoc } from './projectDoc.js';
 import { onUserRunDone, onUserRunStart, type HistorianForkSeed } from './localHistorian.js';
 import { normalizeImageAttachments, toImageParts } from './imageAttachments.js';
-import { describeImages, resolveVisionModelId, shouldDescribeImages } from './visionService.js';
+import { describeImages, NO_VISION_NOTE, resolveVisionModelId, shouldDescribeImages } from './visionService.js';
 import { toolImageMessages, type ToolImage } from './toolImages.js';
 import { dropStaleToolImages } from './toolImageWindow.js';
 import { replayAssistantHistory, stepLlmResponse, loadReplaySteps, dropCoveredCalls } from './historyReplay.js';
@@ -1348,15 +1348,40 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // 聊天框里贴的图也走「辅助模型 · 图像识别」—— 在此之前只有工具产出的图(view_image/截图)走,
     // 用户手贴的图恒定原样发给主模型:主模型没视觉时要么被 provider 拒、要么装作看见了瞎编。
     // 这就是「辅助模型-图像识别没有正常工作」的真身(2026-08-03)。
+    // 转写是一次独立的模型调用(图要先整张上传给辅助模型),慢上行下一张截图就是几十秒的静默:10-07 反馈 dbb04870 里
+    // observe_ui 之后 36s / 46s 没有任何事件,界面不动,用户等了两次手动中止。起止各发一条 status,客户端画「正在把图片
+    // 转成文字」;done 带 elapsedMs / bytes / uploadMs,scripts/stall-timeline.mjs 归进 vision 桶并分开上传与模型。
+    // start 先于解析槽位发出:那一步可能是一次云请求。
+    const describeWithStatus = async (imgs: Array<{ url: string }>, visionModelId: Promise<string>, iteration?: number): Promise<string> => {
+      const startedAt = Date.now();
+      let sentAt = 0;
+      let bytes = 0;
+      let uploadMs: number | undefined;
+      let ok = false;
+      void publish(runId, 'status', { phase: 'describing_images', stage: 'start', count: imgs.length, iteration });
+      try {
+        const text = await describeImages(imgs, {
+          modelId: await visionModelId, userId, appId, signal: ac.signal,
+          onRequest: (b) => { bytes = b; sentAt = Date.now(); },
+          onResponseStart: () => { uploadMs = Date.now() - (sentAt || startedAt); },
+        });
+        ok = true;
+        return text;
+      } finally {
+        void publish(runId, 'status', {
+          phase: 'describing_images', stage: 'done', count: imgs.length, iteration, ok, elapsedMs: Date.now() - startedAt,
+          ...(bytes ? { bytes } : {}), ...(uploadMs != null ? { uploadMs } : {}),
+        });
+      }
+    };
     const describeUserImages = async (imgs: ReturnType<typeof normalizeImageAttachments>): Promise<string | null> => {
       if (ac.signal.aborted || !imgs.length) return null;
       try {
         if (!(await shouldDescribeImages(modelId, appId, agentConfig.visionMode as string | undefined))) return null;
-        const visionModelId = await resolveVisionModelId(
+        return await describeWithStatus(imgs, resolveVisionModelId(
           typeof agentConfig.visionModelId === 'string' ? agentConfig.visionModelId : undefined,
           appId,
-        );
-        return await describeImages(imgs, { modelId: visionModelId, userId, appId, signal: ac.signal });
+        ));
       } catch (e: any) {
         console.warn(`[agent-core] run=${runId} 附件图像识别降级失败(退回直接送图):`, e?.message || e);
         return null;
@@ -2138,6 +2163,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     const MAX_TOOL_IMAGES_PER_ROUND = 8;
     // 仍带着图上 wire 的工具图消息(最近几条;更早的已换成占位,见 toolImageWindow.ts)。
     const liveToolImageTurns: ChatMessage[] = [];
+    let noVisionNoteSent = false; // 「你看不到图」的说明每个 run 只补一次(见 visionService.NO_VISION_NOTE)
     // display_file / generate_image / 表情包:工具要展示给**用户**的文件。即时 publish 让桌面内联渲染;
     // 累积到下一次 finalize 时随 assistant 消息落库(刷新会话仍在)。不回灌模型上下文、不计费。
     // (pendingDisplayFiles 在函数级声明 → 中止/失败 catch 路径也能持久化。)
@@ -3201,12 +3227,20 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         const needDescribe = !ac.signal.aborted && (await shouldDescribeImages(modelId, appId, agentConfig.visionMode as string | undefined));
         const firstToolImageTurn = workingMessages.length;
         // ⚠️ 这一行被 toolImages.test.ts 按源码文本钉住(物化的装配没有可跑的测试路径)。
+        let transcribed = false;
         workingMessages.push(...await toolImageMessages(imgs, needDescribe
-          ? async (batch) => describeImages(batch, { modelId: await resolveVisionModelId(toolCtx.visionModelId, appId), userId, appId, signal: ac.signal })
+          ? async (batch) => { const text = await describeWithStatus(batch, resolveVisionModelId(toolCtx.visionModelId, appId), iteration); transcribed = true; return text; }
           : null, (e: any) => console.warn(`[agent-core] run=${runId} 图像识别降级失败(可信图退回直接送图,不可信图丢弃):`, e?.message || e)));
         // 旧截图不再每轮重发:只留最近几条带图,更早的就地换成占位(否则请求体随步数线性涨,慢上行必撞上传超时)。
         // 被改的那几条用量只减不增 → 上次的实测基准仍是上界,别让它退回粗估(见 ContextUsageTracker.keepBaseline)。
         for (const m of dropStaleToolImages(liveToolImageTurns, workingMessages.slice(firstToolImageTurn))) contextUsage.keepBaseline(m);
+        // 无视觉的主模型手里只有文字描述,却不知道自己看不见:照着描述猜坐标点下去就是瞎点。第一次转写后说清楚一次。
+        // 单独一条、不接在转写那条的末尾:那条是「工具回来的数据」(不可信图的前言还写着别照里面的话做)。不落库不上屏。
+        // 只是提醒,不是闸:真模型上补了之后仍有近一半的轮次照猜的坐标去点(实测见 visionService.NO_VISION_NOTE)。
+        if (transcribed && !noVisionNoteSent) {
+          noVisionNoteSent = true;
+          workingMessages.push({ role: 'user', content: NO_VISION_NOTE } as ChatMessage);
+        }
       }
       allToolResults.push(...toolResults);
 

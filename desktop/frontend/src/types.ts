@@ -1045,9 +1045,12 @@ export interface TeamWork {
 }
 
 export interface LiveWait {
-  phase: 'sending' | 'accepted'
+  /** describing = 主模型没有图像输入,工具截图 / 附件图正在转成文字(引擎 status:describing_images 的 start → done)。 */
+  phase: 'sending' | 'accepted' | 'describing'
   bytes?: number
   uploadMs?: number
+  /** describing 时这批图的张数。 */
+  images?: number
   since: number
 }
 

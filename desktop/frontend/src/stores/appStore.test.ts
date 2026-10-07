@@ -380,6 +380,31 @@ describe('appStore.reduceEvent', () => {
     expect(msg().status).toBe('done')
   })
 
+  // 10-07 反馈 dbb04870:主模型没有图像输入,observe_ui 的截图在转成文字,36s 没有事件、界面不动。
+  it('status describing_images 落 live(start)→ done 清掉;随后的 llm_call 重新计时;转写途中中止也清', () => {
+    const ref = { current: 'a1' }
+    let seq = 0
+    const emit = (type: string, payload: Record<string, unknown> = {}) => {
+      useApp.getState().reduceEvent('s1', 'r1', ref, { seq: ++seq, type, payload } as AgentRunEvent)
+    }
+    const msg = () => useApp.getState().messagesBySession.s1.find((m) => m.id === 'a1')!
+    emit('tool_call', { id: 't1', name: 'observe_ui', arguments: '{}' })
+    emit('tool_result', { id: 't1', name: 'observe_ui', result: 'ok' })
+    emit('status', { phase: 'describing_images', stage: 'start', count: 2, iteration: 3 })
+    expect(msg().live).toMatchObject({ phase: 'describing', images: 2 })
+    emit('status', { phase: 'describing_images', stage: 'done', count: 2, iteration: 3, ok: true, elapsedMs: 36_000 })
+    expect(msg().live).toBeUndefined()
+    emit('status', { phase: 'llm_call', stage: 'sending', iteration: 4, bytes: 10 })
+    expect(msg().live?.phase).toBe('sending') // 转写那段不算进「等模型」的已等待
+    // done 不许误清别的阶段(乱序 / 重放)
+    emit('status', { phase: 'describing_images', stage: 'done', count: 2, iteration: 3, ok: true })
+    expect(msg().live?.phase).toBe('sending')
+    emit('status', { phase: 'describing_images', stage: 'start', count: 0, iteration: 4 })
+    expect(msg().live).toMatchObject({ phase: 'describing', images: 1 }) // 张数缺失 / 0 按 1 张画
+    emit('error', { error: 'aborted', aborted: true })
+    expect(msg().live).toBeUndefined()
+  })
+
   it('usage 事件存 runCost/costLimit,越 80% 提示一次;status compacted 落一条系统提示', () => {
     const ref = { current: 'a1' }
     let seq = 0 // per-run 单调:compacted/costwarn 的消息 id 掺 seq 防撞

@@ -2006,6 +2006,14 @@ export const useApp = create<AppState>((set, get) => ({
           }))
           break
         }
+        // 主模型没有图像输入:工具截图 / 附件图先交给辅助模型转成文字,一步可以是几十秒(10-07 反馈 dbb04870:
+        // observe_ui 之后 36s 没有任何事件,界面不动,用户以为卡死)。start 落 live、done 清掉;这一行不受「等待详情」开关管。
+        if (pl.phase === 'describing_images') {
+          patchMessage(sessionId, assistantId, (m) => (pl.stage === 'done'
+            ? (m.live?.phase === 'describing' ? { ...m, live: undefined } : m)
+            : { ...m, live: { phase: 'describing' as const, since: Date.now(), images: Math.max(1, Number(pl.count) || 1) } }))
+          break
+        }
         // 模型调用等待实况:sending(正在上传上下文)→ accepted(已送达,等首帧)。首帧/工具/结束即清(见 token 等分支)。
         // since 续用上一条(重试后引擎重发 sending 不归零):用户看到的是「这次调用总共等了多久」。
         if (pl.phase === 'llm_call') {

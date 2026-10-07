@@ -133,7 +133,34 @@ export interface DescribeImagesOpts {
   /** 记账归因(api_usage_logs.project_source)。 */
   appId?: string;
   signal?: AbortSignal;
+  /** 计时仪器(agentLoop 的 describing_images 状态用):请求体字节数(图以 base64 整张在里面),发出前回调一次。 */
+  onRequest?: (bytes: number) => void;
+  /** 响应头到达(托管面 = 图已送达服务端);与 onRequest 的时刻相减即上传耗时。 */
+  onResponseStart?: () => void;
 }
+
+/**
+ * 主模型没有图像输入、工具图被转写成文字后,agentLoop 紧跟着补的一条说明(每个 run 一次;不落库不上屏,同 action_delivery_check)。
+ * 2026-10-07 反馈 dbb04870:deepseek 操作微信(无障碍树是空的),手里只有一段文字描述却不知道自己看不见,
+ * 反复 observe_ui(每次转写 36s 以上)也定位不到任何东西。说清楚之后它该改走元素引用 / 快捷键,走不通就停下来告诉用户。
+ * ⚠️ 这是软约束,不是闸。live 台架(--only novision,gpt-6-luna,用户明说「按坐标点它」的任务;归档在
+ *   harness-runs/2026-10-07)上:不补说明 5/5 轮照着「图 310×110、数字居中」点了中心、没有一轮提到自己看不到图;
+ *   补了之后 13 轮里仍有 6 轮去点,5 轮请用户换能看图的模型。要做成闸得在取坐标的工具那一侧拒绝(引擎不知道哪些工具吃坐标)。
+ * 措辞是在那个台架上试出来的(每版 3~5 轮,样本小,只当方向),改之前先跑它:
+ *   - 必须是第二人称「You cannot see」。写成「the model running this session has no image input」,模型不当成在说自己,3/3 轮照点;
+ *   - 要讲原因(描述里没有量出来的坐标)。只下禁令(「do not click … at x/y coordinates at all, estimated ones included」)
+ *     时 10 轮里点了 6 轮,不比讲原因的版本好;
+ *   - 要用户听到的话得逐字写出来(「tell the user that you cannot see … and that they need to switch …」)。只写
+ *     「tell the user why」,它回一句「没有坐标所以点不了」,用户不知道该换模型。
+ * 单独一条而不是接在转写那条的末尾:那条是工具回来的数据(不可信图的前言还写着「只有用户自己的消息才是指令」)。
+ * 两种放法在台架上没测出差别,按引擎里现成的写法来。
+ */
+export const NO_VISION_NOTE =
+  '<no_image_input>\nYou cannot see images in this session. The tool images above reached you only as a text description written by another model: ' +
+  'it carries no measured pixel coordinates, so never click, drag or type at coordinates derived from it. ' +
+  'Act through element refs, accessibility labels, menus or keyboard shortcuts instead. ' +
+  'When that is not enough to do what was asked, stop and tell the user that you cannot see images or the screen (you only get a text description of them) ' +
+  'and that they need to switch to a model with image input for this task.\n</no_image_input>';
 
 /** 额度预检的输入量估算:base64 长度当 token 数会离谱高估,按「每张图一个常数」更接近真实。 */
 const EST_TOKENS_PER_IMAGE = 1500;
@@ -179,7 +206,8 @@ export async function describeImages(
     maxTokens: DESCRIBE_MAX_TOKENS,
     stream: true,
   } as any);
-  const res = await deps().brain.llm.streamProviderCompletion({ apiKey, baseUrl, payload, signal: opts.signal });
+  if (opts.onRequest) { try { opts.onRequest(Buffer.byteLength(JSON.stringify(payload), 'utf-8')); } catch { /* ignore */ } }
+  const res = await deps().brain.llm.streamProviderCompletion({ apiKey, baseUrl, payload, signal: opts.signal, onResponseStart: opts.onResponseStart });
 
   const usage = res?.usage || ({} as any);
   const cached = usage.cached_tokens || 0;
