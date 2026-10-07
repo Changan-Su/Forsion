@@ -36,7 +36,7 @@ import { useApp } from '../../stores/appStore'
 import { ApprovalRulesModal } from '../../components/ApprovalRulesModal'
 import { thinkingLabel } from '../../components/thinkingLabel'
 import { commandsFor } from '../../commandCatalog'
-import { getCustomCommands, expandCustomCommand, listMessages, type CustomCommandInfo } from '../../services/backendService'
+import { getCustomCommands, expandCustomCommand, listAllMessages, type CustomCommandInfo } from '../../services/backendService'
 import { AddContentMenu, type AddContentReference } from './AddContentMenu'
 import { NormalModeItem, normalModeItems } from './NormalModeItem'
 import { mainReferenceKey } from './mainReference'
@@ -511,16 +511,7 @@ export const Composer2: React.FC<{
     const sess = st.sessions.find((x) => x.id === sid)
     let msgs: Array<Pick<MessageRecord, 'role' | 'content' | 'tool_calls' | 'attachments'> & { timestamp?: number }> = []
     try {
-      // 服务端单页硬限 500 且只回最近一页 —— 长会话必须用 before 游标向前翻页,否则早期内容静默丢失。
-      let before = 0
-      for (let page = 0; page < 20; page++) { // 防御上限 1 万条
-        const batch = await listMessages(targetForSession(sid), sid, 500, before || undefined)
-        if (!batch.length) break
-        msgs = [...batch, ...msgs]
-        if (batch.length < 500) break
-        before = Number(batch[0]?.timestamp) || 0
-        if (!before) break
-      }
+      msgs = (await listAllMessages(targetForSession(sid), sid)).messages // 翻页拉全:单页只回最近 500 条
     } catch { /* 离线/云端不可达 → 退回内存切片 */ }
     if (!msgs.length) msgs = (st.messagesBySession[sid] || []) as any
     if (!msgs.length) { st.toast(t('input.slash.nothingToExport'), true); return }
