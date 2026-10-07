@@ -7,6 +7,7 @@
  *   ③ 转写失败:丢图留说明,不把图塞给无视觉模型(整个请求里找不到这张图的 base64)。
  * 负对照:把 agentLoop.ts 换回移植前(collectImage 只留 url、整批一条 analyze them accordingly)三条全红。
  *   ⑤ 转写起止各发一条 status(describing_images),「你看不到图」的说明每个 run 只补一次、落在围栏之外。
+ *   ⑥ 聊天框里贴的图走的是同一个转写(另一条调用路径),同样有起止 status。
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -105,11 +106,11 @@ afterEach(() => {
 
 let runSeq = 0;
 /** 跑到终态;MCP 工具(sideEffect unknown)在 auto-edit 下要批 → 一律批准。 */
-async function run(agentConfig: Record<string, any>): Promise<{ status: string; toolResultSeen: boolean }> {
+async function run(agentConfig: Record<string, any>, attachments: any[] = []): Promise<{ status: string; toolResultSeen: boolean }> {
   const runId = `I${++runSeq}`;
   await createRun({
     id: runId, sessionId: 'S', userId: USER, appId: 'tangu', modelId: 'm1', assistantMessageId: `${runId}-a`,
-    input: { message: 'take a screenshot', userMessageId: `${runId}-u`, attachments: [], agentConfig: { execMode: 'host', cwd: ws, ...agentConfig }, origin: 'client' },
+    input: { message: 'take a screenshot', userMessageId: `${runId}-u`, attachments, agentConfig: { execMode: 'host', cwd: ws, ...agentConfig }, origin: 'client' },
   });
   const off = subscribe(runId, (ev) => {
     if (ev.type === 'approval_request') resolveApproval(ev.payload.approvalId, { action: 'approve' });
@@ -238,5 +239,17 @@ describe('MCP 图片 × 真 loop:物化成不可信 user 消息', () => {
     const kinds = mainPayloads[2].map((m: any) => (m.content === NO_VISION_NOTE ? 'note'
       : m.role === 'user' && typeof m.content === 'string' && m.content.includes(`<${UNTRUSTED_IMAGE_TAG}>`) ? 'transcript' : '')).filter(Boolean);
     expect(kinds).toEqual(['transcript', 'note', 'transcript']);
+  });
+
+  // 聊天框贴的图(describeUserImages)与工具图共用 describeWithStatus,但是另一条调用路径:发生在第一次模型调用之前,没有轮次。
+  it('⑥ 聊天框贴的图 × 无视觉:转写起止同样各一条 status;那句「你看不到图」只跟工具图,这里不补', async () => {
+    script = [final()];
+    const r = await run({ approvalMode: 'full-auto', visionMode: 'always', visionModelId: 'vision-m' }, [{ type: 'image', url: `data:image/png;base64,${PNG}` }]);
+    expect(r.status).toBe('done');
+    expect(describeCalls).toBe(1);
+    expect(describeStatuses.map((p) => [p.stage, p.count, p.iteration, p.ok])).toEqual([['start', 1, undefined, undefined], ['done', 1, undefined, true]]);
+    expect(describeStatuses[1].bytes).toBeGreaterThan(PNG.length);
+    expect(JSON.stringify(mainPayloads[0])).not.toContain(PNG); // 图没有原样发给无视觉的主模型
+    expect(mainPayloads[0].some((m: any) => m.content === NO_VISION_NOTE)).toBe(false);
   });
 });
