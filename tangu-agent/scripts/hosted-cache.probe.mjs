@@ -36,7 +36,8 @@ if (!MODEL || !ARMS.length || !(ROUNDS >= 2)) { console.error('用法:--model <�
 if (realpathSync(AUTH).startsWith(join(homedir(), '.forsion') + '/') && !argv.includes('--allow-production-auth')) {
   console.error(`--auth 指向生产登录 ${AUTH};要用它请显式加 --allow-production-auth`); process.exit(2);
 }
-const { cloudUrl, token } = JSON.parse(readFileSync(AUTH, 'utf8'));
+// JSON.parse 的原生报错会把出错那一行(含 token)打到 stderr,所以这里吞掉原错误只报文件名。
+const { cloudUrl, token } = (() => { try { return JSON.parse(readFileSync(AUTH, 'utf8')); } catch { console.error(`${AUTH} 读不出来或不是合法 JSON`); process.exit(2); } })();
 if (!cloudUrl || !token) { console.error(`${AUTH} 里没有 cloudUrl / token`); process.exit(2); }
 const BASE = String(cloudUrl).replace(/\/+$/, '');
 const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
@@ -46,6 +47,9 @@ if (!resolved.ok) { console.error(`resolve 失败:HTTP ${resolved.status} ${(awa
 const { model, apiModelId } = await resolved.json();
 const host = (() => { try { return new URL(model.defaultBaseUrl).hostname; } catch { return '?'; } })();
 console.log(`服务端 ${BASE} ｜ 模型 ${model.name}(${apiModelId})｜ 上游 ${host} ｜ 后台开关现值 promptCachingEnabled=${!!model.promptCachingEnabled}`);
+if (/anthropic|claude|gemini/i.test(String(model.provider))) {
+  console.error(`provider=${model.provider}:这类行不发 prompt_cache_key(Claude 的开关改的是 cache_control 断点),两臂不可比,不测`); process.exit(2);
+}
 
 // ~3k token 的稳定系统提示,远大于 1024 的起缓存门槛和 128 的计数粒度。
 const rules = Array.from({ length: 70 }, (_, i) =>
@@ -68,17 +72,23 @@ async function call(arm, round) {
     }),
   });
   if (!res.ok || !res.body) throw new Error(`HTTP ${res.status} ${(await res.text()).slice(0, 200)}`);
+  // 读到 done 帧就收手:它之后连接怎么断都不该把这一轮已完成的结果丢掉。
   let buf = '', done = null;
-  for await (const chunk of res.body.pipeThrough(new TextDecoderStream())) {
-    buf += chunk;
-    for (let i; (i = buf.indexOf('\n\n')) >= 0; buf = buf.slice(i + 2)) {
-      const line = buf.slice(0, i).split('\n').find((l) => l.startsWith('data: '));
-      if (!line) continue;
-      const ev = JSON.parse(line.slice(6));
-      if (ev.t === 'error') throw new Error(`服务端回了 error 帧 ${ev.status ?? ''} ${ev.message ?? ''}`);
-      if (ev.t === 'done') done = ev;
+  const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
+  try {
+    while (!done) {
+      const { value, done: eof } = await reader.read();
+      if (eof) break;
+      buf += value;
+      for (let i; !done && (i = buf.indexOf('\n\n')) >= 0; buf = buf.slice(i + 2)) {
+        const line = buf.slice(0, i).split('\n').find((l) => l.startsWith('data: '));
+        if (!line) continue;
+        const ev = JSON.parse(line.slice(6));
+        if (ev.t === 'error') throw new Error(`服务端回了 error 帧 ${ev.status ?? ''} ${ev.message ?? ''}`);
+        if (ev.t === 'done') done = ev;
+      }
     }
-  }
+  } finally { reader.cancel().catch(() => {}); }
   if (!done) throw new Error('流结束但没有 done 帧');
   arm.messages.push({ role: 'assistant', content: done.content || `ok ${round}` });
   const u = done.usage || {};
