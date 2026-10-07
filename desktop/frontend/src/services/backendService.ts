@@ -240,6 +240,44 @@ export const listMessages = (t: EngineTarget, sessionId: string, limit = 200, be
     t, `/agent/sessions/${encodeURIComponent(sessionId)}/messages?limit=${limit}${before ? `&before=${before}` : ''}`,
   ).then((r) => r.messages)
 
+/**
+ * 整段对话:接口单页硬限 500 且只回最近一页,必须用 before 游标向前翻页,否则早期内容静默丢失。
+ * 第一页失败照抛;后面的页失败 / 超时 / 超出 maxChars 就停,留住已拿到的(complete=false),不整份作废。
+ * maxChars 按脱敏前的原文算,只用来挡住超大会话,不是精确截断(精确的那一刀在 feedbackReport)。
+ */
+export async function listAllMessages(
+  t: EngineTarget, sessionId: string,
+  { maxChars = Infinity, timeoutMs }: { maxChars?: number; timeoutMs?: number } = {},
+): Promise<{ messages: MessageRecord[]; complete: boolean }> {
+  const deadline = timeoutMs ? Date.now() + timeoutMs : Infinity
+  let messages: MessageRecord[] = []
+  let chars = 0
+  for (let page = 0; page < 20; page++) { // 防御上限 1 万条
+    // 游标是 timestamp < before:+1 把同一毫秒的也带回来再按 id 去重,否则卡在页边界上、时间戳相同的消息会被跳过
+    const before = Number(messages[0]?.timestamp) + 1 || 0
+    if (page && !before) break
+    let timer: ReturnType<typeof setTimeout> | undefined
+    let batch: MessageRecord[]
+    try {
+      const req = listMessages(t, sessionId, 500, before || undefined)
+      batch = await (deadline === Infinity ? req : Promise.race([req, new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error('timeout')), Math.max(0, deadline - Date.now()))
+      })]))
+    } catch (e) {
+      if (!page) throw e
+      break
+    } finally { clearTimeout(timer) }
+    const seen = new Set(messages.map((m) => m.id))
+    const fresh = batch.filter((m) => !seen.has(m.id))
+    messages = [...fresh, ...messages]
+    if (batch.length < 500) return { messages, complete: true }
+    if (!fresh.length) break // 整页都是同一毫秒的:游标走不动了
+    chars += JSON.stringify(fresh).length
+    if (chars > maxChars) break
+  }
+  return { messages, complete: false }
+}
+
 /** 按精确 id 列表删除会话内消息(编辑重发 / 重新生成前截断该点及之后的消息)。 */
 export const deleteMessages = (t: EngineTarget, sessionId: string, ids: string[]) =>
   requestCap<{ ok: boolean; deleted: number }>(

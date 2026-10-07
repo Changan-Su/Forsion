@@ -1,11 +1,11 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { buildFeedbackReport, redactFeedback } from './feedbackReport'
+import { buildFeedbackReport, redactFeedback, FEEDBACK_LOG_LIMIT } from './feedbackReport'
 import { buildSessionLogPayload } from './sessionLog'
-import { getSessionConfig, getSessionTimeline, getSessionUsage, listMessages } from './backendService'
+import { getSessionConfig, getSessionTimeline, getSessionUsage, listAllMessages } from './backendService'
 import type { SessionRecord, TanguDesktopConfig } from '../types'
 
-vi.mock('./backendService', () => ({ listMessages: vi.fn(), getSessionConfig: vi.fn(), getSessionUsage: vi.fn(), getSessionTimeline: vi.fn() }))
+vi.mock('./backendService', () => ({ listAllMessages: vi.fn(), getSessionConfig: vi.fn(), getSessionUsage: vi.fn(), getSessionTimeline: vi.fn() }))
 vi.mock('./agentRunService', () => ({ currentClientId: () => 'test-client' }))
 vi.mock('../agentCommands', () => ({ readUiSettings: () => ({ mode: 'dark' }), buildCommandCatalog: () => [{ id: 'open-feedback' }] }))
 vi.mock('../diag', () => ({ rendererErrors: [{ msg: 'Authorization: Bearer private-secret' }], uiActionLog: [] }))
@@ -13,7 +13,7 @@ const cfg = { backendUrl: 'https://engine.example', token: 'not-exported' } as T
 const session = { id: 'session-12345678', title: 'Test conversation', model_id: 'model' } as SessionRecord
 
 beforeEach(() => {
-  vi.mocked(listMessages).mockResolvedValue([{ content: 'Private conversation' }] as any)
+  vi.mocked(listAllMessages).mockResolvedValue({ messages: [{ content: 'Private conversation' }] as any, complete: true })
   vi.mocked(getSessionConfig).mockResolvedValue({ apiKey: 'secret-config' } as any)
   vi.mocked(getSessionUsage).mockResolvedValue({ base: 500, ctx: 200 })
   vi.mocked(getSessionTimeline).mockResolvedValue([{ runId: 'run-1', events: [{ type: 'run:done' }] }])
@@ -35,7 +35,7 @@ describe('feedback diagnostic collection', () => {
     expect(p.uiState.settings.mode).toBe('dark')
     expect(p.usage.tokensTotal).toBe(500)
     expect(p.messages).toBeUndefined()
-    expect(listMessages).not.toHaveBeenCalled()
+    expect(listAllMessages).not.toHaveBeenCalled()
     expect(window.tangu!.exportActivity).not.toHaveBeenCalled()
     expect(report.json).not.toMatch(/secret-config|secret-runtime|private-secret|host-secret|not-exported/)
     expect(report.bytes).toBe(new TextEncoder().encode(report.json).byteLength)
@@ -47,6 +47,29 @@ describe('feedback diagnostic collection', () => {
     expect(window.tangu!.getConfig).not.toHaveBeenCalled()
     expect(getSessionConfig).not.toHaveBeenCalled()
     expect(getSessionTimeline).not.toHaveBeenCalled()
+  })
+  it('drops the oldest messages, not the newest, when the conversation exceeds the attachment limit', async () => {
+    const messages = Array.from({ length: 60 }, (_, i) => ({ id: `m${i}`, content: 'x'.repeat(100 * 1024) }))
+    vi.mocked(listAllMessages).mockResolvedValue({ messages: messages as any, complete: true })
+    const report = await buildFeedbackReport(cfg, session, { diagnostics: false, conversation: true, activity: false })
+    const p = JSON.parse(report.json)
+    expect(report.bytes).toBeLessThanOrEqual(FEEDBACK_LOG_LIMIT)
+    expect(report.bytes).toBe(new TextEncoder().encode(report.json).byteLength)
+    expect(p.messages.at(-1).id).toBe('m59')
+    expect(p.messages.length).toBeGreaterThan(40) // 贴着上限留,不是一刀砍掉一半
+    expect(p.messages[0].id).toBe(`m${60 - p.messages.length}`)
+    expect(p).toMatchObject({ messageCount: p.messages.length, messagesTruncated: true })
+    expect(report.truncated).toBe(true)
+    expect(vi.mocked(listAllMessages).mock.calls[0][2]).toMatchObject({ maxChars: FEEDBACK_LOG_LIMIT })
+    expect(p.feedbackSelection).toEqual({ diagnostics: false, conversation: true, activity: false })
+  })
+  it('marks a conversation that could not be fetched in full, and leaves a whole one unmarked', async () => {
+    const whole = await buildFeedbackReport(cfg, session, { diagnostics: false, conversation: true })
+    expect(whole.truncated).toBe(false)
+    vi.mocked(listAllMessages).mockResolvedValue({ messages: [{ content: 'recent' }] as any, complete: false })
+    const partial = await buildFeedbackReport(cfg, session, { diagnostics: false, conversation: true })
+    expect(partial.truncated).toBe(true)
+    expect(JSON.parse(partial.json)).toMatchObject({ messageCount: 1, messagesTruncated: true })
   })
   it('supports app issues without an active session and bounds opt-in activity', async () => {
     const report = await buildFeedbackReport(cfg, null, { diagnostics: true, conversation: false, activity: true })
@@ -62,7 +85,7 @@ describe('feedback diagnostic collection', () => {
   it('distinguishes missing/failed sources from a successful empty response', async () => {
     delete window.tangu!.backendLogs
     vi.mocked(getSessionTimeline).mockRejectedValue(new Error('disconnected'))
-    vi.mocked(listMessages).mockResolvedValue([])
+    vi.mocked(listAllMessages).mockResolvedValue({ messages: [], complete: true })
     const p = await buildSessionLogPayload(cfg, session)
     expect(p.sources).toMatchObject({ backendLogs: 'unavailable', timeline: 'failed', messages: 'included' })
     expect(p.messages).toEqual([])

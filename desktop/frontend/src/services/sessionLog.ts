@@ -1,12 +1,12 @@
 /**
  * 「当前会话日志」打包器 —— 设置·高级「导出日志」与「反馈弹窗附件」共用,保证两处口径一致。
- * 对话/会话配置走后端 REST(messages 取后端硬上限 500 条);后端日志走主进程托管缓冲(仅 managed 有)。
+ * 对话/会话配置走后端 REST(messages 翻页拉整段对话,见 listAllMessages);后端日志走主进程托管缓冲(仅 managed 有)。
  *
  * 除对话本身,还带渲染端这一侧的**实况**:端/环境、界面实际状态、界面动作轨迹、渲染端错误、引擎状态、用量。
  * 2026-09-05 一份只有对话的导出,看得见模型说「还是深色」,看不见界面其实已经是浅色 —— 没有渲染端
  * 的真相就只能相信模型的转述。⚠️ 一律手挑字段:cfg / stored 里有 token,绝不整份序列化。
  */
-import { listMessages, getSessionConfig, getSessionUsage, getSessionTimeline } from './backendService'
+import { listAllMessages, getSessionConfig, getSessionUsage, getSessionTimeline } from './backendService'
 import { currentClientId } from './agentRunService'
 import { readUiSettings, buildCommandCatalog } from '../agentCommands'
 import { rendererErrors, uiActionLog } from '../diag'
@@ -41,12 +41,14 @@ export interface SessionLogOptions {
   diagnostics?: boolean
   conversation?: boolean
   activity?: boolean
+  /** 附件体积上限(反馈传);对话翻到超过它就不再往前翻,多拿的也带不走。 */
+  maxBytes?: number
 }
 
 /** 选项只影响反馈；设置页不传选项时仍导出完整会话日志。未勾选的来源不会读取。 */
 export async function buildSessionLogPayload(
   cfg: TanguDesktopConfig, session: SessionRecord | null,
-  { diagnostics = true, conversation = true, activity = false }: SessionLogOptions = {},
+  { diagnostics = true, conversation = true, activity = false, maxBytes }: SessionLogOptions = {},
 ): Promise<Record<string, any>> {
   const sources: Record<string, 'included' | 'unavailable' | 'failed'> = {}
   const read = async <T,>(key: string, task: (() => Promise<T>) | undefined, fallback: T): Promise<T> => {
@@ -64,8 +66,9 @@ export async function buildSessionLogPayload(
     } catch { sources[key] = 'failed'; return fallback }
   }
   const host = window.tangu
-  const [messages, agentConfig, backendLogs, stored, appVersion, backendStatus, usage, timeline, activityLog] = await Promise.all([
-    conversation && session ? read('messages', () => listMessages(targetForSession(session.id), session.id, 500), []) : undefined,
+  const [history, agentConfig, backendLogs, stored, appVersion, backendStatus, usage, timeline, activityLog] = await Promise.all([
+    conversation && session ? read('messages', () => listAllMessages(targetForSession(session.id), session.id,
+      { maxChars: maxBytes, timeoutMs: 7000 }), { messages: [], complete: true }) : undefined, // 7s < read() 的 8s:超时也留住已翻到的页
     diagnostics && session ? read('agentConfig', () => getSessionConfig(targetForSession(session.id), session.id), {}) : undefined,
     diagnostics ? read('backendLogs', host?.backendLogs ? () => host.backendLogs!() : undefined, []) : undefined,
     diagnostics ? read('connection', host?.getConfig ? () => host.getConfig() : undefined, null) : null,
@@ -101,9 +104,9 @@ export async function buildSessionLogPayload(
       created_at: session.created_at, updated_at: session.updated_at,
     } : null,
     ...(conversation && session ? {
-      messageCount: messages?.length ?? 0,
-      messagesTruncated: (messages?.length ?? 0) >= 500,
-      messages,
+      messageCount: history?.messages.length ?? 0,
+      messagesTruncated: !(history?.complete ?? true),
+      messages: history?.messages,
     } : {}),
     ...(activity ? {
       activityLog: activityLines?.slice(-500).join('\n') || '',
