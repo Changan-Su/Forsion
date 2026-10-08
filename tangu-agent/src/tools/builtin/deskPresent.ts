@@ -14,6 +14,7 @@ import path from 'node:path';
 import type { ToolProvider } from '../toolRegistry.js';
 import type { DeskPresentSpec } from '../toolTypes.js';
 import { requestDeskShot, type DeskShotResult } from '../../services/deskCapture.js';
+import { fitImageUrlForModel } from '../../services/imageShrink.js';
 import { amadeusVaultPath } from './amadeus.js';
 
 const MAX_VIEWS = 2;
@@ -146,7 +147,8 @@ export const deskPresentProvider: ToolProvider = {
           return `Error: could not capture the Agent Desk (${shot.error || 'unknown'}). ` +
             'The panel may be turned off, hidden, or the window too narrow — carry on without the screenshot.';
         }
-        ctx.collectImage({ url: shot.dataUrl, name: 'agent-desk.png' });
+        // 桌面端截的时候已把长边压到 1024(main.ts ui:captureRect),这里只会把偏大的 PNG 换成 JPEG,尺寸不变。
+        ctx.collectImage({ url: fitImageUrlForModel(shot.dataUrl), name: 'agent-desk.png' });
         return deskShotReply(shot);
       },
     },

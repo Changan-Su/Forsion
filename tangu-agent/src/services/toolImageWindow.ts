@@ -26,8 +26,9 @@ const isImagePart = (p: any): boolean => !!p && ['image_url', 'input_image', 'im
  * 转写成文字的那几种(无视觉模型)本来就不带图,不计数、不动。
  * 返回被改写的那几条:调用方要拿去告诉 ContextUsageTracker(keepBaseline),否则实测基准每轮都被这次改写作废。
  * ponytail: 按「条」不按字节,一条最多 8 张(MAX_TOOL_IMAGES_PER_ROUND)。上限两条:① 跨 4 轮以上逐张 view_image
- * 再对比时最早的图会没(占位里已提示同一轮一起取);② 单张很大的图(Windows 上模型自己截的 PNG ~280KB)留 3 条
- * 仍有近 1MB。没改成字节预算:预算一紧,两张大图逐张看就会互相挤掉、来回重看。要再压体积应在取图处缩图。
+ * 再对比时最早的图会没(占位里已提示同一轮一起取);② 这里不管单张多大。没改成字节预算:预算一紧,两张大图逐张看
+ * 就会互相挤掉、来回重看。单张的体积在取图处压:view_image / desk_screenshot / 用户附件过 imageShrink.ts
+ * (Windows 上模型自己截的 PNG ~280KB → ~80KB);插件和 MCP 回的图不缩(可能是坐标系),大小归它们自己管。
  */
 export function dropStaleToolImages(live: ChatMessage[], added: ChatMessage[], keep = TOOL_IMAGE_TURNS_KEPT): ChatMessage[] {
   for (const m of added) {

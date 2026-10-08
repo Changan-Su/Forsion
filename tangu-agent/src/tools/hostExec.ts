@@ -23,6 +23,7 @@ import { citeHitFor, citeHowFor, citeRefFor, docxText, grepPages, pageFilter, pa
 import { amadeusVaultPath } from './builtin/amadeus.js';
 import { contentFingerprint, noteAgentWrite, noteRead, readFingerprint } from './readState.js';
 import { pageInstructionsForFile } from '../services/pageInstructions.js';
+import { fitImageForModel } from '../services/imageShrink.js';
 import { killProcessTree } from '../utils/boundedProcess.js';
 
 const READ_MAX_CHARS = 100_000;
@@ -613,8 +614,16 @@ export const HOST_TOOLS: Record<string, ToolImpl> = {
       if (!ctx.collectImage) {
         return 'Error: this runtime cannot display images (no image return channel).';
       }
-      ctx.collectImage({ url: `data:${mime};base64,${buf.toString('base64')}`, name: path.basename(abs) });
-      return `Loaded image ${relDisplay(ctx, abs)} (${mime}, ${(buf.length / 1024).toFixed(0)} KB). ` +
+      // 大图先缩再进上下文(imageShrink.ts);缩不了 / 不值得缩的照旧原样送。尺寸变了必须告诉模型:
+      // 它从图上读出来的位置是缩后那张的,和原图、和别的工具自己的截图坐标都对不上。
+      const fit = fitImageForModel(buf);
+      const sent = fit ?? { buf, mime };
+      ctx.collectImage({ url: `data:${sent.mime};base64,${sent.buf.toString('base64')}`, name: path.basename(abs) });
+      const resized = fit && (fit.width !== fit.fromWidth || fit.height !== fit.fromHeight)
+        ? `It is ${fit.fromWidth}x${fit.fromHeight} px on disk and was downscaled to ${fit.width}x${fit.height} px for you, so positions you read off it are in the downscaled image. ` +
+          'If you need finer detail than this, crop the region of interest into its own file and view that. '
+        : '';
+      return `Loaded image ${relDisplay(ctx, abs)} (${mime}, ${(buf.length / 1024).toFixed(0)} KB). ${resized}` +
         'The image itself has been provided to you as content — answer from it directly; do not try to read_file it.';
     },
   },

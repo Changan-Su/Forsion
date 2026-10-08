@@ -97,6 +97,8 @@
  *                                                           #     图经 collectImage 回灌 —— 模型**读出图里的随机数字**才算图到了(颜色可猜,随机数猜不中)
  *                                                           #   ② error:server 抛 McpError,message 带伪造收尾标签 + 注入话术;错误文本同样须进围栏
  *                                                           #   两段的注入话术都不许被照做。改 src/mcp/* 或 registry 的 MCP 分支后跑
+ *   npm run live:harness -- --only viewimage                # view_image 读大图(10-07,反馈 1cc9c620):工作区里一张 1800×1500、~250KB 的「截图」,模型 view_image 读它 ——
+ *                                                           #   工具结果须报「原尺寸 → 缩后尺寸」、那一轮请求体只涨缩后那张的量、图里的数字照样读得出(改 services/imageShrink.ts / view_image 后跑)
  *   npm run live:harness -- --only imgwindow                # 连续截图(10-07,反馈 96ecce8c):假 MCP 每调一次回一张不同数字的 ~50KB 图,连调 6 次 ——
  *                                                           #   第 3 张之后请求体不再每轮多带一张图(旧截图不再重传)、模型仍读得出最后一张里的数字、不因占位多调。
  *                                                           #   改 services/toolImageWindow.ts / agentLoop 的工具图物化后跑;负对照 = 去掉 dropStaleToolImages 那行(须红)
@@ -153,7 +155,7 @@ const opt = (name, def) => { const i = argv.indexOf(`--${name}`); return i >= 0 
 const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
 const MODEL = opt('model', process.env.TANGU_LIVE_MODEL || 'codex/gpt-5.6-luna');
 const AUTH = resolve(opt('auth', process.env.TANGU_LIVE_AUTH || join(homedir(), '.forsion-dev', 'provider-auth.json')));
-const KEYS = ['realtime', 'voiceclone', 'personas', 'rename', 'selfschedule', 'selfmodel', 'chat', 'tool', 'remember', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'parked', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human', 'emoji', 'visualize', 'visualfigures', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'control', 'phone', 'unattendedask', 'plugin', 'skillpick', 'pluginlook', 'settingsnav', 'appsettings', 'imgwindow'];
+const KEYS = ['realtime', 'voiceclone', 'personas', 'rename', 'selfschedule', 'selfmodel', 'chat', 'tool', 'remember', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'parked', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human', 'emoji', 'visualize', 'visualfigures', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'control', 'phone', 'unattendedask', 'plugin', 'skillpick', 'pluginlook', 'settingsnav', 'appsettings', 'imgwindow', 'viewimage'];
 KEYS.push('signals');
 KEYS.push('dreamseed');
 KEYS.push('pageinstructions', 'dispatch');
@@ -184,6 +186,7 @@ const GIT_PREFIX = 'livetest/'; const GIT_TAG = '[LIVE]';
 const OPT_IN = new Set(['realtime', 'remember', 'musewake', 'personas', 'rename', 'selfschedule', 'selfmodel', 'teamapproval', 'parked', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'appsettings', 'control', 'phone']);
 OPT_IN.add('signals');
 OPT_IN.add('imgwindow');
+OPT_IN.add('viewimage');
 OPT_IN.add('dreamseed');
 OPT_IN.add('projdedupe'); // --only projdedupe:项目记忆换了说法的重复(真模型 + 后台判官,约 20 次调用)
 OPT_IN.add('projteam'); // --only projteam:项目记忆在团队会话里(三个两人团队各一轮)
@@ -824,15 +827,16 @@ function rgbPng(w, h, pixel) {
   const raw = Buffer.concat(Array.from({ length: h }, (_, y) => Buffer.from([0, ...Array.from({ length: w }, (_, x) => pixel(x, y)).flat()])));
   return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk('IHDR', ihdr), chunk('IDAT', deflateSync(raw)), chunk('IEND', Buffer.alloc(0))]);
 }
-/** 白底深蓝的数字图:5×7 点阵,每点放大 10 倍。noisePx > 0 时底下加一条随机噪点(压不动),把图撑到真截图的体量。 */
-function digitsPng(text, noisePx = 0) {
+/** 白底深蓝的数字图:5×7 点阵,每点放大 scale 倍(缺省 10)。noisePx > 0 时底下加一条随机噪点(压不动),把图撑到真截图的体量。
+ *  width / height 给了就把画布垫到那么大(数字留在左上),造「整屏截图」那种尺寸用。 */
+function digitsPng(text, noisePx = 0, { scale = 10, width = 0, height = 0 } = {}) {
   const FONT = { 0: ['01110', '10001', '10011', '10101', '11001', '10001', '01110'], 1: ['00100', '01100', '00100', '00100', '00100', '00100', '01110'],
     2: ['01110', '10001', '00001', '00010', '00100', '01000', '11111'], 3: ['11111', '00010', '00100', '00010', '00001', '10001', '01110'],
     4: ['00010', '00110', '01010', '10010', '11111', '00010', '00010'], 5: ['11111', '10000', '11110', '00001', '00001', '10001', '01110'],
     6: ['00110', '01000', '10000', '11110', '10001', '10001', '01110'], 7: ['11111', '00001', '00010', '00100', '01000', '01000', '01000'],
     8: ['01110', '10001', '10001', '01110', '10001', '10001', '01110'], 9: ['01110', '10001', '10001', '01111', '00001', '00010', '01100'] };
-  const S = 10, PAD = 2, CELL = 7; // 字宽 5 + 字距 2(点)
-  const w = (text.length * CELL - 1 + PAD * 2) * S, h = (7 + PAD * 2) * S;
+  const S = scale, PAD = 2, CELL = 7; // 字宽 5 + 字距 2(点)
+  const w = Math.max(width, (text.length * CELL - 1 + PAD * 2) * S), h = Math.max(height - noisePx, (7 + PAD * 2) * S);
   const rnd = () => Math.floor(Math.random() * 256);
   return rgbPng(w, h + noisePx, (x, y) => {
     if (y >= h) return [rnd(), rnd(), rnd()];
@@ -849,6 +853,11 @@ const IMGWIN_DIGITS = (() => { const s = new Set(); while (s.size < IMGWIN_ROUND
 const IMGWIN_PNGS = ONLY.has('imgwindow') ? IMGWIN_DIGITS.map((d) => digitsPng(d, 40).toString('base64')) : [];
 const IMGWIN_SEQ_FILE = join(OUT, 'imgwindow-seq.json');
 if (IMGWIN_PNGS.length) writeFileSync(IMGWIN_SEQ_FILE, JSON.stringify(IMGWIN_PNGS));
+// viewimage(10-07,反馈 1cc9c620):Windows 上模型自己截了 1342×1355～1800×1500 的 PNG(194～260KB)再 view_image。这里造一张同量级的:
+// 1800×1500,数字放大 40 倍,底下 46 行噪点把体积撑到 ~250KB。落在工作区里,场景开跑时才写(workspace 那时才建好)。
+const VIEWIMG_DIGITS = randDigits();
+const VIEWIMG_FILE = 'screen-capture.png';
+const VIEWIMG_PNG = ONLY.has('viewimage') ? digitsPng(VIEWIMG_DIGITS, 46, { scale: 40, width: 1800, height: 1500 }) : null;
 const fakeMcp = (env) => ({ command: process.execPath, args: [join(root, 'test', 'fixtures', 'fake-mcp-server.mjs')], env });
 const MCP_CFG = ONLY.has('mcp') || ONLY.has('imgwindow') ? { mcpServers: {
   ...(ONLY.has('mcp') ? { fake: fakeMcp({
@@ -2168,6 +2177,36 @@ try {
         `请求体 首轮 ${(first / 1024).toFixed(0)}KB → 最大 ${(peak / 1024).toFixed(0)}KB;第 3 张之后又多带 ≈${Number.isFinite(extraImages) ? extraImages.toFixed(1) : '?'} 张图的量(每张 ${(imgBytes / 1024).toFixed(0)}KB;应 <1.5,修前 ≈${IMGWIN_ROUNDS - 3};前三张带图 ≈${Number.isFinite(onWire) ? onWire.toFixed(1) : '?'} 张)${bounded ? '✓' : '✗'};` +
         `最后一张的数字 ${last} ${seen ? '读出' : '没读出'}${ev.approvals ? `;代批 ${ev.approvals}` : ''}`,
       output: `${ev.content}\n\n各轮请求体(KB):${main.map((u) => (Number(u.requestBytes) / 1024).toFixed(0)).join(' → ')}\n各张数字:${IMGWIN_DIGITS.join(', ')}`,
+      ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls };
+  });
+
+  // ── viewimage(10-07,opt-in,反馈 1cc9c620):模型自己截的全分辨率 PNG 经 view_image 原样 base64 进对话(一张 280～350KB),
+  // 慢上行下每轮光上传就要半分钟。判据三条:① 工具结果报了「原尺寸 → 缩后尺寸」,缩后在两条上限内;
+  // ② 图上了 wire 的那一轮,请求体只涨缩后那张的量(修前涨的是整张原图的 base64);③ 缩完还看得清:读出图里的随机数字。
+  // 负对照 = dist/tools/hostExec.js 里把 `const fit = fitImageForModel(buf)` 换成 `const fit = null`,①② 须红。
+  await scenario('viewimage', 'viewimage view_image 读大图先缩再进上下文', async () => {
+    if (EXEC_MODE !== 'host') return { ok: false, skipped: true, detail: 'view_image 只在 host 形态有' };
+    writeFileSync(join(workspace, VIEWIMG_FILE), VIEWIMG_PNG);
+    const rawB64 = Math.ceil(VIEWIMG_PNG.length / 3) * 4;
+    const ev = await run(`live-viewimage-${Date.now()}`,
+      `Use the view_image tool to look at the file ${VIEWIMG_FILE} in the working directory (call it once), then answer in one short line with the 4-digit number shown in it.`,
+      240_000);
+    const results = ev.toolResults.filter((r) => r.name === 'view_image').map((r) => String(r.result));
+    const m = results.map((r) => /It is (\d+)x(\d+) px on disk and was downscaled to (\d+)x(\d+) px/.exec(r)).find(Boolean);
+    const [fromW, fromH, toW, toH] = m ? m.slice(1).map(Number) : [];
+    const reported = !!m && fromW === 1800 && fromH === 1500 && Math.max(toW, toH) <= 1568 && toW * toH <= 1_150_000;
+    const main = ev.usages.filter((u) => !u.phase && Number(u.requestBytes) > 0);
+    // main[0] = 还没图的那次请求,main[1] = 图回来之后的第一次。涨幅里还有推理 / 工具历史那点字节,所以只卡「不到原图 base64 的六成」。
+    const grew = main.length >= 2 ? Number(main[1].requestBytes) - Number(main[0].requestBytes) : NaN;
+    const small = grew > 0 && grew < rawB64 * 0.6;
+    const seen = ev.content.replace(/(\d)[\s.,·'-]+(?=\d)/g, '$1').includes(VIEWIMG_DIGITS);
+    const calls = ev.toolCalls.filter((c) => c === 'view_image').length;
+    return { ok: !ev.error && calls >= 1 && reported && small && seen,
+      detail: ev.error || `view_image ${calls} 次;原图 1800x1500 PNG ${(VIEWIMG_PNG.length / 1024).toFixed(0)}KB(base64 ${(rawB64 / 1024).toFixed(0)}KB);` +
+        `工具结果${m ? `报 ${fromW}x${fromH} → ${toW}x${toH}` : '没报缩放'}${reported ? '✓' : '✗'};` +
+        `带图那轮请求体涨 ${Number.isFinite(grew) ? (grew / 1024).toFixed(0) : '?'}KB(应 < ${(rawB64 * 0.6 / 1024).toFixed(0)}KB,修前 ≈ ${(rawB64 / 1024).toFixed(0)}KB)${small ? '✓' : '✗'};` +
+        `图里的数字 ${VIEWIMG_DIGITS} ${seen ? '读出' : '没读出'}`,
+      output: `${ev.content}\n\n各轮请求体(KB):${main.map((u) => (Number(u.requestBytes) / 1024).toFixed(0)).join(' → ')}\nview_image 结果:${results.map((r) => r.slice(0, 400)).join(' | ')}`,
       ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls };
   });
 

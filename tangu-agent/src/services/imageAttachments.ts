@@ -10,6 +10,8 @@
  *  缓存稳定且模型全程可见图片。
  */
 
+import { fitImageUrlForModel } from './imageShrink.js';
+
 export interface NormalizedImage {
   url: string; // data: URL 或 http(s) URL
 }
@@ -49,6 +51,11 @@ export function normalizeImageAttachments(raw: any): NormalizedImage[] {
     if (url && url.length <= MAX_URL_CHARS) out.push({ url });
   }
   return out;
+}
+
+/** 用户附件进上下文前先缩(大照片 / 高分屏截图,见 imageShrink.ts);http(s) 的和够小的原样。 */
+export function fitUserImages(images: NormalizedImage[]): NormalizedImage[] {
+  return images.map((i) => ({ url: fitImageUrlForModel(i.url) }));
 }
 
 /** 把纯文本 user content 转成 OpenAI 形态的 parts 数组(text + image_url...)。 */
