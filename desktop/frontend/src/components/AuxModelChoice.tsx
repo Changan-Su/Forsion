@@ -19,6 +19,7 @@ registerMessages({
   'aux.backgroundCompactHint': { zh: '用于后台 Agent、摘要与整理。', en: 'For background agents, summaries and organization.' },
   'aux.visionCompact': { zh: '图像识别', en: 'Image recognition' },
   'aux.visionCompactHint': { zh: '主模型无法看图时，辅助理解图片。', en: 'Helps interpret images when the main model cannot.' },
+  // 这一行的名字和下面三个选项的字,被引擎写进了给模型读的一句话里(tangu-agent toolRegistry.computerUseUnavailableReason),改文案时那边一起改。
   'aux.visionBehavior': { zh: '图像处理方式', en: 'Image handling' },
   'aux.visionCompact.auto': { zh: '按需使用', en: 'When needed' },
   'aux.visionCompact.always': { zh: '始终使用', en: 'Always' },

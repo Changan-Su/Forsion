@@ -22,6 +22,35 @@ export const COMPUTER_USE_CONCURRENCY_KEY = 'computer-use';
 export function isComputerUseTool(t: { capabilities?: { concurrencyKey?: string } }): boolean {
   return t.capabilities?.concurrencyKey === COMPUTER_USE_CONCURRENCY_KEY;
 }
+/**
+ * 主模型收不到原图时 Computer Use 不可用,给模型读的那句原因(英文)。系统提示 / 按名调用 / load_tools 三处共用。
+ * 必须说清「不是插件没开」:工具从工具面里消失后,模型自己的诊断是「请启用 Computer Use 插件」(live 10-08 实测,
+ * 尤其读了配套技能里那句「看不到观察工具就报告缺能力」之后)—— 用户照做也没用。
+ * 两种原因各说各的(Codex 10-08):「图像识别」设成「总是」时模型也许本来能看图,那时说「这个模型没有图像输入」是错的,
+ * 出路也不同:只有把那个设置改回按需这一条 —— 「总是」是全局设置,不看模型,换哪个模型图都照样先转成文字,
+ * 所以这句里不能出现「或者换模型」(头两版写了,模型照着告诉用户,用户换了也没用)。
+ * 「总是」那句里的设置名和选项名照抄桌面设置页实际显示的字(desktop AuxModelChoice 的 aux.visionBehavior / aux.visionCompact.*),
+ * 用户要照着去找;第一版写的是引擎内部的叫法 "Auto",下拉里没有这一项。那边改文案时这句一起改。
+ * 中文那套字(图像处理方式 / 始终使用 / 按需使用)另起一句、限定「用户用中文写的时候才用」,live 10-08 试了三种写法:
+ *   · 括号里顺带一提「(in the Chinese interface …)」→ 英文提问 10 次里 2 次被整段用中文回答,其余 8 次英文里夹一段中文(之前 29 次是 0 次);
+ *   · 完全不写 → 英文正常,但中文提问 6 次里只有 0 次用对设置页上的字(译成「图像处理 / 始终 / 需要时」,或者干脆留着英文);
+ *   · 现在这样 → 见当天汇总。
+ */
+export function computerUseUnavailableReason(why: ToolContext['computerUseUnavailable']): string {
+  // 两种原因同一个句式,只换「为什么」和「怎么办」。句式是 live 10-08 试出来的(见当天汇总),改之前重跑 --only cuoff:
+  //   · 「不是插件没开」必须有 —— 工具消失后模型自己的诊断就是「请启用插件」;
+  //   · 「别只报告工具缺失」必须有 —— 配套技能里写着「看不到观察工具就报告缺能力」,模型读完它会只说一句「工具用不了」,不带原因和出路;
+  //   · 不带括号条件、不绕 —— 「总是」那句的第一版又长又带「(if the current model has image input)」,带技能时 0/3。
+  const [cause, tell] = why === 'always-transcribe'
+    ? ['because the "Image handling" setting is on "Always": every image is turned into text first, so no model gets to see the screen',
+      'that computer control does not work while "Image handling" in Settings is on "Always", that they need to change it to "When needed", and that switching models will not help until they do. ' +
+      'Reply in the language the user wrote in; only when that is Chinese, use the names shown in the Chinese interface instead: 图像处理方式, 始终使用, 按需使用']
+    : ['with the current model because it has no image input',
+      'that computer control does not work with this model and that they need to switch this chat to a model with image input'];
+  return `Computer control (looking at the screen, clicking and typing in desktop apps) is unavailable ${cause}. ` +
+    'This is not a missing plugin or permission, and enabling anything will not help. ' +
+    `When the user asks for it, do not just report that the tools are missing: tell them plainly ${tell}.`;
+}
 
 export interface ToolDef extends ToolImpl {
   name: string;
@@ -330,6 +359,8 @@ export function resolveTools(profile: AppProfile, ctx: ToolContext, origins?: Ma
     // (看屏幕、读任意窗口的文字)在 auto-edit 上限下不过审批。按 runId 现取 —— 起跑后被远端 steer 染上的 run,
     // 执行侧按名解析也经这里(registry.executeTool),工具随即变成未知工具。
     if (isComputerUseTool(t) && effectiveRemote(ctx)) return;
+    // 主模型看不到图:整组不给(ctx.computerUseUnavailable 的注释)。没有截图它只能照文字猜坐标去点。
+    if (isComputerUseTool(t) && ctx.computerUseUnavailable) return;
     if (!clientCapabilityAllowed(t, ctx)) return;
     if (sandboxRestricted && (!isBuiltin || fromPlugin || !isHostSandboxToolAllowed(t.name, sandboxCtx))) return;
     const m = t.mode || 'both';
@@ -422,4 +453,11 @@ export function declaredAutomationSafe(name: string): boolean {
     }
   }
   return found;
+}
+
+/** `names` 里因「主模型看不到图」被收起的 Computer Use 工具(去掉标记再解析一次才看得见的那些)。 */
+export function computerUseHiddenNames(profile: AppProfile, ctx: ToolContext, names: string[]): string[] {
+  if (!ctx.computerUseUnavailable || !names.length) return [];
+  const full = resolveTools(profile, { ...ctx, computerUseUnavailable: undefined });
+  return names.filter((n) => { const t = full.get(n); return !!t && isComputerUseTool(t); });
 }
