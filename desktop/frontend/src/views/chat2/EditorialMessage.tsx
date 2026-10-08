@@ -608,7 +608,8 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
             看 content 会让整条消息只剩一个署名圆点,连「思考中」都不显示。 */}
         {/* 测试性等待详情:开启时每次调用(含工具轮之后)画「发送 N KB / 等首帧 + 已等秒数」。
             默认关闭时仍保留通用「思考中」反馈，不能因 msg.live 存在而把两行一起吞掉。 */}
-        {showWaitDetails && msg.status === 'streaming' && msg.live && <LiveWaitLine live={msg.live} />}
+        {/* 图在转成文字(describing)不归这个开关管:那是一步几十秒的真实工作,默认设置下不画就是「界面不动」。 */}
+        {msg.status === 'streaming' && msg.live && (showWaitDetails || msg.live.phase === 'describing') && <LiveWaitLine live={msg.live} />}
         {/* 并行团队:成员在自己的工作会话里干活,这条是它本次激活的占位 —— 一行动态(当前工具 / 等审批),发言到达才有正文;详情在 Team Desk。 */}
         {msg.status === 'streaming' && msg.work && (
           <div className="t2-dim chat-thinking-live" role="status" aria-live="polite" data-team-work={msg.work.waiting ? 'waiting' : 'working'}>
@@ -620,7 +621,7 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
             </span>
           </div>
         )}
-        {!body && msg.status === 'streaming' && !msg.work && !msg.toolEvents?.length && !msg.reasoning && (!msg.live || !showWaitDetails) && (
+        {!body && msg.status === 'streaming' && !msg.work && !msg.toolEvents?.length && !msg.reasoning && (!msg.live || (!showWaitDetails && msg.live.phase !== 'describing')) && (
           <div className="t2-dim chat-thinking-live chat-run-shimmer-text" role="status" aria-live="polite">
             {t('chat.thinking')}
           </div>
@@ -695,12 +696,14 @@ function useElapsedSec(since: number): number {
 }
 
 /** 等模型期间的实况行:正在发送上下文 N KB → 等待模型首帧,2 秒起带已等待秒数。
- *  2026-09-06 取证:本机 52% 墙钟在这段静默里,原先只有一行不动的 shimmer,用户报「卡住」。 */
+ *  2026-09-06 取证:本机 52% 墙钟在这段静默里,原先只有一行不动的 shimmer,用户报「卡住」。
+ *  describing(10-07):主模型没有图像输入,截图在转成文字 —— 文案顺带说明原因,用户据此知道该换能看图的模型。 */
 function LiveWaitLine({ live }: { live: LiveWait }) {
   const { t } = useI18n()
   const sec = useElapsedSec(live.since)
   const kb = Math.max(1, Math.round((live.bytes || 0) / 1024))
-  const label = live.phase === 'sending' && live.bytes ? t('chat.wait.sending', { kb }) : t('chat.wait.firstToken')
+  const label = live.phase === 'describing' ? t('chat.wait.describing', { n: live.images || 1 })
+    : live.phase === 'sending' && live.bytes ? t('chat.wait.sending', { kb }) : t('chat.wait.firstToken')
   return (
     <div className="t2-dim chat-thinking-live" role="status" aria-live="polite">
       <span className="chat-run-shimmer-text">{label}</span>

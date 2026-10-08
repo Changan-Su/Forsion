@@ -527,6 +527,8 @@ export function timelineFields(type: string, p: any): Record<string, unknown> {
       phase: p?.phase ?? p?.state, stage: p?.stage, bytes: p?.bytes, uploadMs: p?.uploadMs, attempt: p?.attempt, waitMs: p?.waitMs, iteration: p?.iteration,
       ctxWindow: p?.ctxWindow, ctxWindowSource: p?.ctxWindowSource, ctxWindowMax: p?.ctxWindowMax, compactAt: p?.compactAt, compactionEnabled: p?.compactionEnabled,
       reason: p?.reason, persisted: p?.persisted, fallback: p?.fallback, summarized: p?.summarized, beforeTokens: p?.beforeTokens, afterTokens: p?.afterTokens,
+      // describing_images(主模型没有图像输入时的转写):张数 / 整段耗时 / 成败。bytes 与 uploadMs 上面已有。
+      count: p?.count, elapsedMs: p?.elapsedMs, ok: p?.ok,
     };
     // phase 分辨「后台调用(compaction/historian/brainstorm/muse-judge/delegate)」与主循环调用(无 phase);
     // 缺了它导出的时间线两者混在一起,stall-timeline.mjs 也分不开。主循环侧 undefined,res.json 直接丢掉,不占体积。

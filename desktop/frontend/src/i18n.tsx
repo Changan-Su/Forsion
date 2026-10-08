@@ -103,6 +103,7 @@ const zh: Dict = {
   // 等模型期间的实况行(EditorialMessage LiveWaitLine)
   'chat.wait.sending': '正在发送上下文 {kb} KB',
   'chat.wait.firstToken': '等待模型首帧',
+  'chat.wait.describing': '当前模型不能直接看图，正在把图片转成文字（{n} 张）。换用能看图的模型可以省掉这一步',
   'chat.wait.elapsed': '已等待 {s} 秒',
   // 内置 Python / 网络镜像(设置 + 引导)
   'settings.python.label': 'Python',
@@ -1971,6 +1972,7 @@ const en: Dict = {
   // Live wait line while calling the model (EditorialMessage LiveWaitLine)
   'chat.wait.sending': 'Sending context ({kb} KB)',
   'chat.wait.firstToken': 'Waiting for the model',
+  'chat.wait.describing': 'This model can’t view images, so they are being transcribed to text ({n}). A model with image input skips this step',
   'chat.wait.elapsed': '{s}s elapsed',
   // Bundled Python / network mirror (settings + onboarding)
   'settings.python.label': 'Python',

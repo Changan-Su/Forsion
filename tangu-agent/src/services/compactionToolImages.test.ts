@@ -16,6 +16,7 @@ import { describe, it, expect } from 'vitest';
 import { buildTranscript, compactSystemPrompt, type FileOps } from './compaction.js';
 import { toolImageMessages, UNTRUSTED_IMAGE_TAG } from './toolImages.js';
 import { MCP_IMAGE_PREFACE } from '../mcp/toolBridge.js';
+import { NO_VISION_NOTE } from './visionService.js';
 import type { ChatMessage } from '../core/types.js';
 
 const fresh = (): FileOps => ({ read: new Set(), modified: new Set() });
@@ -61,6 +62,21 @@ describe('buildTranscript × toolImages 物化消息', () => {
       expect(t).not.toContain(UNTRUSTED_LABEL);
       expect(t.match(/\[User\]/g)).toHaveLength(1);
     }
+  });
+
+  // 引擎在转写后补的「你看不到图」说明(agentLoop,每 run 一次)是 user 角色的一条内存消息。它只对当前 run 的主模型成立:
+  // 进了转写就标成 [User],摘要落库后以 system 身份跟到以后的 run,换了能看图的模型还带着「别按坐标点」(Codex 10-07 评审 P2)。
+  // 负对照:去掉 transcriptEntries 里那行 `if (raw === NO_VISION_NOTE) continue` → 本条红。
+  it('「你看不到图」的说明不进转写:不留 [User] 条目,也不留正文;前面那条转写照旧是 [Tool images]', async () => {
+    const t = await transcriptOf([
+      ...await toolImageMessages([{ url: A }], async () => 'a window with a Send button'),
+      { role: 'user', content: NO_VISION_NOTE } as ChatMessage,
+    ]);
+    expect(t).toContain('[Tool images]\n(The images read by the tools above');
+    expect(t).toContain('a window with a Send button');
+    expect(t).not.toContain('no_image_input');
+    expect(t).not.toContain('cannot see images in this session');
+    expect(t.match(/\[User\]/g)).toHaveLength(1); // 只有真正的用户那条
   });
 
   it('普通用户消息(含自己带的图)照旧 [User];摘要提示说明工具条目是数据', () => {
