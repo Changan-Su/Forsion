@@ -6,7 +6,7 @@
  * deferGroup 连坐:解锁组内任一成员即整组解锁(如 start/wait_discussion),防"解锁了开头没解锁收尾"。
  */
 import type { ToolProvider, ToolDef } from '../toolRegistry.js';
-import { resolveTools, isDeferredIn, computerUseHiddenNames, COMPUTER_USE_UNAVAILABLE_REASON } from '../toolRegistry.js';
+import { resolveTools, isDeferredIn, computerUseHiddenNames, computerUseUnavailableReason } from '../toolRegistry.js';
 import { deps } from '../../seams/runtime.js';
 
 export const loadToolsProvider: ToolProvider = {
@@ -67,7 +67,7 @@ export const loadToolsProvider: ToolProvider = {
         if (ready.size) msg += ` Already available: ${[...ready].join(', ')}. Call these tools directly; no loading is needed.`;
         // 主模型看不到图而被收起的那几个单独说原因,不并进下面那句(「可能是插件设置或权限」正是把模型带偏的话)。
         const noVision = computerUseHiddenNames(profile, ctx, [...new Set(unknown)]);
-        if (noVision.length) msg += ` Not loadable: ${noVision.join(', ')}. ${COMPUTER_USE_UNAVAILABLE_REASON}`;
+        if (noVision.length) msg += ` Not loadable: ${noVision.join(', ')}. ${computerUseUnavailableReason(ctx.computerUseUnavailable)}`;
         const unavailable = [...new Set(unknown)].filter((n) => !noVision.includes(n));
         if (unavailable.length) msg += ` Unavailable in this session: ${unavailable.join(', ')}. This may reflect platform support, plugin settings or permissions; it does not mean the other tools failed. Use only visible tools or exact names from the Additional Tools catalog.`;
         return msg;

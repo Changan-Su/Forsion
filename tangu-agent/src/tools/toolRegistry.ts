@@ -23,14 +23,26 @@ export function isComputerUseTool(t: { capabilities?: { concurrencyKey?: string 
   return t.capabilities?.concurrencyKey === COMPUTER_USE_CONCURRENCY_KEY;
 }
 /**
- * 主模型看不到图时 Computer Use 不可用,给模型读的那句原因(英文)。系统提示 / 按名调用 / load_tools 三处共用。
+ * 主模型收不到原图时 Computer Use 不可用,给模型读的那句原因(英文)。系统提示 / 按名调用 / load_tools 三处共用。
  * 必须说清「不是插件没开」:工具从工具面里消失后,模型自己的诊断是「请启用 Computer Use 插件」(live 10-08 实测,
  * 尤其读了配套技能里那句「看不到观察工具就报告缺能力」之后)—— 用户照做也没用。
+ * 两种原因各说各的(Codex 10-08):「图像识别」设成「总是」时模型也许本来能看图,那时说「这个模型没有图像输入」是错的,
+ * 出路也不同(把那个设置改回自动)。
  */
-export const COMPUTER_USE_UNAVAILABLE_REASON =
-  'Computer control (looking at the screen, clicking and typing in desktop apps) is unavailable with the current model because it has no image input. ' +
-  'This is not a missing plugin, permission or setting, and enabling anything will not help. ' +
-  'When the user asks for it, tell them plainly that computer control does not work with this model and that they need to switch this chat to a model with image input.';
+export function computerUseUnavailableReason(why: ToolContext['computerUseUnavailable']): string {
+  // 两种原因同一个句式,只换「为什么」和「怎么办」。句式是 live 10-08 试出来的(见当天汇总),改之前重跑 --only cuoff:
+  //   · 「不是插件没开」必须有 —— 工具消失后模型自己的诊断就是「请启用插件」;
+  //   · 「别只报告工具缺失」必须有 —— 配套技能里写着「看不到观察工具就报告缺能力」,模型读完它会只说一句「工具用不了」,不带原因和出路;
+  //   · 不带括号条件、不绕 —— 「总是」那句的第一版又长又带「(if the current model has image input)」,带技能时 0/3。
+  const [cause, tell] = why === 'always-transcribe'
+    ? ['in this chat because image recognition is set to "Always": every image is turned into text first, so the model never sees the screen',
+      'that computer control does not work while image recognition is set to "Always", and that they need to set it to "Auto" in Settings or switch this chat to a model with image input']
+    : ['with the current model because it has no image input',
+      'that computer control does not work with this model and that they need to switch this chat to a model with image input'];
+  return `Computer control (looking at the screen, clicking and typing in desktop apps) is unavailable ${cause}. ` +
+    'This is not a missing plugin or permission, and enabling anything will not help. ' +
+    `When the user asks for it, do not just report that the tools are missing: tell them plainly ${tell}.`;
+}
 
 export interface ToolDef extends ToolImpl {
   name: string;

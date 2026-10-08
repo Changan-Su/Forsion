@@ -104,8 +104,8 @@
  *                                                           #   转写起止各一条 status(describing_images,done 带体积 / 耗时)、转写到了主模型(答得出数字)—— 这两条决定红绿;
  *                                                           #   模型有没有照文字描述猜坐标去点、有没有请用户换模型只记进详情(软约束,单轮会抖;要看比例就多跑几次)。
  *                                                           #   改 agentLoop 的工具图转写 / visionService.NO_VISION_NOTE 后跑;负对照 = describeWithStatus 不发 status(须红)
- *   npm run live:harness -- --only cuoff                    # 主模型看不到图 → Computer Use 不可用(10-08):夹具插件给两个声明了 concurrencyKey:'computer-use' 的工具
- *                                                           #   (看屏幕回一张截图 / 按坐标点),visionMode=always —— 那两个工具一次都没跑成、没有发生转写、
+ *   npm run live:harness -- --only cuoff                    # 主模型看不到图 → Computer Use 不可用(10-08):夹具插件给几个声明了 concurrencyKey:'computer-use' 的工具
+ *                                                           #   (名字与真插件一致:find_roots / observe_ui / act_ui / ensure_app),visionMode=always —— 它们一次都没跑成、没有发生转写、
  *                                                           #   回答里告诉用户「这个模型用不了电脑控制,请换有图像输入的模型」且没有让用户去开插件。
  *                                                           #   改 toolRegistry 的收起 / COMPUTER_USE_UNAVAILABLE_REASON / agentLoop 起点判定后跑;负对照 = 引擎不收(须红)。
  *                                                           #   单独跑(与 novision / mcp / imgwindow 同跑时引擎里还有它们的假截图工具,主模型会去调,判不了)。
@@ -921,9 +921,12 @@ if (ONLY.has('plugin')) {
 };
 `);
 }
-// cuoff(10-08):隔离 home 里放一个夹具引擎插件,两个工具都声明 concurrencyKey:'computer-use' —— 引擎认「Computer Use 那组工具」
+// cuoff(10-08):隔离 home 里放一个夹具引擎插件,几个工具都声明 concurrencyKey:'computer-use' —— 引擎认「Computer Use 那组工具」
 // 只看这个声明(toolRegistry.isComputerUseTool),MCP 工具声明不了,所以不能复用上面的假 MCP。
-// 看屏幕的那个经 ctx.collectImage 回一张画着四位数的图(真插件在无障碍树太稀时就是这么附截图的);点击的那个走命令审批档(同 act_ui)。
+// ⚠️ 工具名必须与真插件一致(find_roots / observe_ui / act_ui / ensure_app):带 --cu-skill 时模型会照真技能里写的名字去
+// load_tools。起初夹具用的是 desk_observe / desk_click,那些真名字在台架里根本不存在 → 引擎回的是通用的「不可用,可能是插件设置
+// 或权限」而不是原因,场景跟着假红(10-08 下午白追了三轮措辞才发现)。
+// observe_ui 经 ctx.collectImage 回一张画着四位数的图(真插件在无障碍树太稀时就是这么附截图的);act_ui 走命令审批档。
 if (ONLY.has('cuoff')) {
   const pdir = join(home, 'plugins', 'live-desk');
   mkdirSync(join(pdir, 'dist'), { recursive: true });
@@ -931,16 +934,18 @@ if (ONLY.has('cuoff')) {
   writeFileSync(join(pdir, 'package.json'), '{"type":"module"}');
   writeFileSync(join(pdir, 'dist', 'index.js'), `const PNG = ${JSON.stringify(digitsPng(randDigits()).toString('base64'))};
 const cu = (sideEffect, approval) => ({ sideEffect, parallel: false, concurrencyKey: 'computer-use', ...(approval ? { approval } : {}) });
+const tool = (name, capabilities, description, properties, execute) => ({ name, capabilities, execute,
+  definition: { type: 'function', function: { name, description, parameters: { type: 'object', properties } } } });
 export default {
   activate(ctx) {
     ctx.registerPlugin({ id: 'live-desk', name: 'Live desk', description: 'live-harness fixture', defaultEnabled: true,
       toolProvider: { id: 'plugin:live-desk', tools: () => [
-        { name: 'desk_observe', capabilities: cu('read'),
-          definition: { type: 'function', function: { name: 'desk_observe', description: 'Observe the Counter app window. Returns its accessibility outline and, when the outline is too sparse to act on, a screenshot.', parameters: { type: 'object', properties: {} } } },
-          execute: (_args, tcx) => { tcx.collectImage?.({ url: 'data:image/png;base64,' + PNG, name: 'screen.png' }); return 'Counter window observed (310x110 px). The accessibility outline is empty; a screenshot is attached.'; } },
-        { name: 'desk_click', capabilities: cu('system', 'command'),
-          definition: { type: 'function', function: { name: 'desk_click', description: 'Click in the Counter app window at pixel coordinates (x, y) of the latest screenshot.', parameters: { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' } }, required: ['x', 'y'] } } },
-          execute: (args) => 'clicked (' + Number(args.x) + ', ' + Number(args.y) + ')' },
+        tool('find_roots', cu('read'), 'List the windows, menus and sheets that can be observed. Returns @r refs.', {}, () => '@r1 Counter — window (app: Counter)'),
+        tool('observe_ui', cu('read'), 'Observe a root. Returns its accessibility outline and, when the outline is too sparse to act on, a screenshot.', { root: { type: 'string' } },
+          (_args, tcx) => { tcx.collectImage?.({ url: 'data:image/png;base64,' + PNG, name: 'screen.png' }); return 'Counter window observed (310x110 px). The accessibility outline is empty; a screenshot is attached.'; }),
+        tool('act_ui', cu('system', 'command'), 'Act on the observed UI: click at pixel coordinates (x, y) of the latest screenshot.', { x: { type: 'number' }, y: { type: 'number' } },
+          (args) => 'clicked (' + Number(args.x) + ', ' + Number(args.y) + ')'),
+        tool('ensure_app', cu('system'), 'Launch an app in the background if it is not running.', { app: { type: 'string' } }, () => 'Counter is running. @r1 Counter — window'),
       ] } });
   },
   deactivate() {},
@@ -2258,19 +2263,27 @@ try {
   });
 
   // cuoff(10-08,用户定:「主模型没有图像识别能力,就告诉用户该模型电脑控制不可用」)。
-  // visionMode=always 把主模型当成看不到图的。四条都是硬判据:
-  //   ① 那两个桌面工具一次都没跑成(模型凭名字去调也只会拿到原因);
+  // visionMode=always 让主模型收不到原图(台架按约定只用 gpt-6-luna,它本身能看图,自动档下触发不了;「模型没有图像输入」那一句
+  // 由单测 ① 钉着,它的真模型证据是 10-08 下午 175112～175222 那 6 次 —— 那时两种原因还共用这一句)。四条都是硬判据:
+  //   ① 那几个桌面工具一次都没跑成(模型凭名字去调也只会拿到原因);
   //   ② 全程没有转写(describing_images 一条都没有)—— 没有截图进过这次对话;
-  //   ③ 回答里把原因和出路告诉了用户:提到图像输入 / 看图,并且让他换模型 —— 这一条就是用户要的「告诉用户」;
+  //   ③ 回答里把原因和出路告诉了用户:提到图像 / 看图,并且给了出路(换成有图像输入的模型,或把「图像识别」改回自动)
+  //      —— 这一条就是用户要的「告诉用户」;
   //   ④ 没有让用户去开插件 / 查权限(工具消失后模型自己的诊断就是这个,10-08 上午实测;那是错的,用户照做也没用)。
-  // 负对照 = toolRegistry.resolveTools 里不收那组工具(须红:主模型调了 desk_observe、出现转写)。单独跑,见文件头。
+  // 负对照 = toolRegistry.resolveTools 里不收那组工具(须红:主模型调了 observe_ui、出现转写)。单独跑,见文件头。
   await scenario('cuoff', 'cuoff 主模型看不到图:Computer Use 不可用,并把原因告诉用户', async () => {
     const withSkill = !!opt('cu-skill', '');
+    // 夹具插件没装上的话,下面四条会空转成绿(本来就没有工具可调)—— 先确认它在。
+    const fixture = (await api('/agent/plugins')).plugins?.find((p) => p.id === 'live-desk');
+    if (!fixture || fixture.enabled === false) return { ok: false, detail: `夹具插件 live-desk 没装上或没启用(${JSON.stringify(fixture ?? null).slice(0, 200)}),场景无效` };
     const ev = await run(`live-cuoff-${Date.now()}`,
       // 带了配套技能时点名让它先读(不点名的话多数时候不读,而被带偏的正是读了的那些)
-      `${withSkill ? 'Use the "Desktop app control" skill for this. ' : ''}The Counter app window shows a 4-digit number. Find out what the number is, click on it in the window, and then tell me the number.`,
+      // --cu-lang zh:用中文提问(真实用户是中文的;看模型用中文转述时原因和出路还在不在)
+      opt('cu-lang', 'en') === 'zh'
+        ? `${withSkill ? '这件事请用「Desktop app control」这个技能来做。' : ''}Counter 应用的窗口里显示着一个四位数。看一下是多少,在窗口里点一下它,然后把这个数字告诉我。`
+        : `${withSkill ? 'Use the "Desktop app control" skill for this. ' : ''}The Counter app window shows a 4-digit number. Find out what the number is, click on it in the window, and then tell me the number.`,
       240_000, { visionMode: 'always', visionModelId: MODEL });
-    const DESK = ['desk_observe', 'desk_click'];
+    const DESK = ['find_roots', 'observe_ui', 'act_ui', 'ensure_app'];
     const otherShots = ev.toolCalls.filter((n) => n.startsWith('mcp__'));
     if (!ev.error && otherShots.length) {
       return { ok: false, inconclusive: true,
@@ -2281,12 +2294,13 @@ try {
     const tried = ev.toolCalls.filter((n) => DESK.includes(n));
     const described = ev.statuses.filter((p) => p.phase === 'describing_images');
     const saysVision = /image input|image[- ]capable|vision|multimodal|(see|view|read|look at|process|accept)s? (the )?(images?|screenshots?|screen)|看图|图像|图片|视觉|截图/i.test(ev.content);
-    const saysSwitch = /(switch|chang|us(e|ing)|select|pick|choos|try)[^.。]{0,60}model|another model|different model|换[^。]{0,12}模型|切换[^。]{0,12}模型|改用[^。]{0,12}模型/i.test(ev.content);
-    const blamesPlugin = /(enabl|turn(ed)? on|install|activat|check)[^.。]{0,60}(plugin|permission|accessibility|screen recording)|plugin[^.。]{0,40}(is |be )?(enabled|disabled|turned on|installed|missing)|(启用|打开|开启|安装|检查)[^。]{0,20}(插件|权限)|插件[^。]{0,20}(没开|未启用|没有启用|是否启用)/i.test(ev.content);
-    const ok = !ev.error && !ran.length && !described.length && saysVision && saysSwitch && !blamesPlugin;
+    const saysSwitch = /(switch|chang|us(e|ing)|select|pick|choos|try)[^.。]{0,60}model|another model|different model|(换|切换|改用|选用|选择|使用)[^。]{0,16}模型/i.test(ev.content);
+    const saysSetting = /image recognition[^.。]{0,80}(auto|setting)|(setting|settings)[^.。]{0,60}image recognition|图像识别[^。]{0,24}(自动|设置)|设置[^。]{0,24}图像识别/i.test(ev.content);
+    const blamesPlugin = /(enabl|turn(ed)? on|install|activat|check)[^.。]{0,60}(plugin|permission|accessibility|screen recording|computer use|desktop[- ]control tools?)|plugin[^.。]{0,40}(is |be )?(enabled|disabled|turned on|installed|missing)|(启用|打开|开启|安装|检查)[^。]{0,20}(插件|权限)|插件[^。]{0,20}(没开|未启用|没有启用|是否启用)/i.test(ev.content);
+    const ok = !ev.error && !ran.length && !described.length && saysVision && (saysSwitch || saysSetting) && !blamesPlugin;
     return { ok,
       detail: ev.error || `桌面工具跑成 ${ran.length} 次${ran.length ? ' ✗' : ' ✓'}(主模型去调了 ${tried.length} 次);转写 ${described.length} 条${described.length ? ' ✗' : ' ✓'};` +
-        `回答里${saysVision ? '提到了看不到图 ✓' : '没提看不到图 ✗'}、${saysSwitch ? '让用户换模型 ✓' : '没让用户换模型 ✗'}、${blamesPlugin ? '让用户去开插件 / 查权限 ✗' : '没有怪到插件头上 ✓'}` +
+        `回答里${saysVision ? '提到了图像 / 看不到图 ✓' : '没提图像 ✗'}、${saysSwitch || saysSetting ? `给了出路(${[saysSwitch && '换模型', saysSetting && '改图像识别设置'].filter(Boolean).join(' + ')})✓` : '没给出路 ✗'}、${blamesPlugin ? '让用户去开插件 / 查权限 ✗' : '没有怪到插件头上 ✓'}` +
         `${withSkill ? `;带了配套技能,主模型读技能 ${ev.toolCalls.filter((n) => n === 'use_skill').length} 次` : ''}${ev.approvals ? `;代批 ${ev.approvals}` : ''}`,
       output: ev.content, ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls };
   });

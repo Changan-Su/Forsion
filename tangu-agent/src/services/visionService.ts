@@ -92,12 +92,20 @@ export function resolveVisionMode(explicit?: string): VisionMode {
     ?? 'auto';
 }
 
-/** 这批图要不要先转成文字。auto 档才去问主模型能力(那次查询有 60s 缓存 + 可能的云请求)。 */
-export async function shouldDescribeImages(modelId: string, appId?: string, explicitMode?: string): Promise<boolean> {
+/** 主模型为什么收不到原图:它没有图像输入,还是「图像识别」设成了「总是」(所有图都先转成文字)。 */
+export type NoImagesReason = 'no-image-input' | 'always-transcribe';
+
+/** 主模型收不到原图的原因;'' = 收得到。auto 档才去问主模型能力(那次查询有 60s 缓存 + 可能的云请求)。 */
+export async function whyNoImages(modelId: string, appId?: string, explicitMode?: string): Promise<NoImagesReason | ''> {
   const mode = resolveVisionMode(explicitMode);
-  if (mode === 'off') return false;
-  if (mode === 'always') return true;
-  return !(await mainModelSupportsVision(modelId, appId));
+  if (mode === 'off') return '';
+  if (mode === 'always') return 'always-transcribe';
+  return (await mainModelSupportsVision(modelId, appId)) ? '' : 'no-image-input';
+}
+
+/** 这批图要不要先转成文字(whyNoImages 的布尔版 —— 单源,Computer Use 的可用性也看它)。 */
+export async function shouldDescribeImages(modelId: string, appId?: string, explicitMode?: string): Promise<boolean> {
+  return !!(await whyNoImages(modelId, appId, explicitMode));
 }
 
 /**
