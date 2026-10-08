@@ -27,7 +27,10 @@ export function isComputerUseTool(t: { capabilities?: { concurrencyKey?: string 
  * 必须说清「不是插件没开」:工具从工具面里消失后,模型自己的诊断是「请启用 Computer Use 插件」(live 10-08 实测,
  * 尤其读了配套技能里那句「看不到观察工具就报告缺能力」之后)—— 用户照做也没用。
  * 两种原因各说各的(Codex 10-08):「图像识别」设成「总是」时模型也许本来能看图,那时说「这个模型没有图像输入」是错的,
- * 出路也不同(把那个设置改回自动)。
+ * 出路也不同:只有把那个设置改回按需这一条 —— 「总是」是全局设置,不看模型,换哪个模型图都照样先转成文字,
+ * 所以这句里不能出现「或者换模型」(头两版写了,模型照着告诉用户,用户换了也没用)。
+ * 「总是」那句里的设置名和选项名照抄桌面设置页实际显示的字(desktop AuxModelChoice 的 aux.visionBehavior / aux.visionCompact.*),
+ * 用户要照着去找;第一版写的是引擎内部的叫法 "Auto",下拉里没有这一项。那边改文案时这句一起改。
  */
 export function computerUseUnavailableReason(why: ToolContext['computerUseUnavailable']): string {
   // 两种原因同一个句式,只换「为什么」和「怎么办」。句式是 live 10-08 试出来的(见当天汇总),改之前重跑 --only cuoff:
@@ -35,8 +38,9 @@ export function computerUseUnavailableReason(why: ToolContext['computerUseUnavai
   //   · 「别只报告工具缺失」必须有 —— 配套技能里写着「看不到观察工具就报告缺能力」,模型读完它会只说一句「工具用不了」,不带原因和出路;
   //   · 不带括号条件、不绕 —— 「总是」那句的第一版又长又带「(if the current model has image input)」,带技能时 0/3。
   const [cause, tell] = why === 'always-transcribe'
-    ? ['in this chat because image recognition is set to "Always": every image is turned into text first, so the model never sees the screen',
-      'that computer control does not work while image recognition is set to "Always", and that they need to set it to "Auto" in Settings or switch this chat to a model with image input']
+    ? ['because the "Image handling" setting is on "Always": every image is turned into text first, so no model gets to see the screen',
+      'that computer control does not work while "Image handling" in Settings is on "Always", that they need to change it to "When needed", and that switching models will not help until they do ' +
+      '(in the Chinese interface the setting is 图像处理方式 and the two options are 始终使用 and 按需使用)']
     : ['with the current model because it has no image input',
       'that computer control does not work with this model and that they need to switch this chat to a model with image input'];
   return `Computer control (looking at the screen, clicking and typing in desktop apps) is unavailable ${cause}. ` +

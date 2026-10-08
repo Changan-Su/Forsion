@@ -147,7 +147,12 @@ describe('主模型看不到图 → Computer Use 不可用,并把原因告诉用
     const sys = systemOf(requests[0]);
     expect(sys).toContain(ALWAYS);
     expect(sys).not.toContain('because it has no image input');
-    expect(ALWAYS).toMatch(/set it to "Auto" in Settings or switch this chat to a model with image input/);
+    // 设置名 / 选项名照抄桌面设置页实际显示的字(AuxModelChoice 的 aux.visionBehavior / aux.visionCompact.*):用户要照着去找。
+    expect(ALWAYS).toMatch(/"Image handling" in Settings is on "Always", that they need to change it to "When needed", and that switching models will not help/);
+    // 「总是」不看模型:换模型不是出路,这句里不能把它当成二选一给出去。
+    expect(ALWAYS).not.toMatch(/or switch this chat to a model/);
+    expect(ALWAYS).toMatch(/图像处理方式.*始终使用.*按需使用/);
+    expect(ALWAYS).not.toMatch(/"Auto"/);
   });
 
   it('② 凭名字去调 / 去 load_tools 那组工具:回的是同一句原因,工具没有执行', async () => {
