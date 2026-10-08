@@ -33,7 +33,9 @@ async function main() {
   let vite = null
   if (!(await ping())) {
     const port = new (require('url').URL)(URL).port || '5173'
-    vite = spawn('npx', ['vite', 'frontend', '--port', port, '--strictPort'], {
+    // Launch the installed JS entry directly: Windows cannot spawn the npx.cmd shim without a shell.
+    const viteEntry = path.join(path.dirname(require.resolve('vite/package.json')), 'bin/vite.js')
+    vite = spawn(process.execPath, [viteEntry, 'frontend', '--port', port, '--strictPort'], {
       cwd: path.resolve(__dirname, '..'),
       stdio: 'ignore',
     })
@@ -55,7 +57,7 @@ async function main() {
   const script = named || (only ? `${only}.check.cjs` : 'editor-triggers.e2e.cjs')
   // 自己不认的参数原样转给子脚本(如 --shot[=目录];别在这儿列白名单,否则每加一个都要改两处)。
   const passthrough = process.argv.slice(2).filter((a) => !a.startsWith('--check=') && !a.startsWith('--script='))
-  const e2e = spawn('node', [path.join(__dirname, script), ...passthrough], { stdio: 'inherit' })
+  const e2e = spawn(process.execPath, [path.join(__dirname, script), ...passthrough], { stdio: 'inherit' })
   e2e.on('exit', (code) => {
     if (vite) vite.kill()
     process.exit(code ?? 1)
