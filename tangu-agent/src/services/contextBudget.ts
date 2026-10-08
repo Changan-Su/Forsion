@@ -284,6 +284,15 @@ export class ContextUsageTracker {
 
   invalidate(): void { this.baseline = undefined; }
 
+  /** 基准前缀里的一条消息被就地改写、且**实际用量只减不增**(旧工具图换成一句占位,见 toolImageWindow.ts)后调用:
+   *  上次的实测值此时只会偏高(多算了被拿掉的图),仍是可用的上界,不必整份退回粗估。不调的话,从第 4 张截图起
+   *  每轮都改一条 → 整个 run 都按粗估(每张图 4096)判预算,小窗口 + 不开 LLM 压缩时会把放得下的上下文判成超限
+   *  (Codex 10-07 评审 P1)。下一次 observe 重新校准。 */
+  keepBaseline(message: ChatMessage): void {
+    const p = this.baseline?.prefix.find((x) => x.message === message);
+    if (p) p.estimate = estimateMessageTokens(message);
+  }
+
   /** 实测口径的用量(基准前缀仍完整时 = 上次 prompt_tokens + 之后新增的粗估);没有可用基准 → undefined。
    *  与 estimate 的区别:这里绝不拿纯粗估冒充实测 —— 压缩时按「实测/粗估」换算保留预算,粗估冒充会把
    *  固定的工具头当成消息膨胀比例(Codex 09-15 评审 #9)。 */

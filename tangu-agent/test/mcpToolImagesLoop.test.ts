@@ -24,6 +24,7 @@ import { resolveApproval } from '../src/services/approvals.js';
 import { enqueueRun } from '../src/services/agentLoop.js';
 import { bridgeTool, MCP_IMAGE_PREFACE, type LoadedMcpTool } from '../src/mcp/toolBridge.js';
 import { UNTRUSTED_IMAGE_TAG } from '../src/services/toolImages.js';
+import { TOOL_IMAGE_DROPPED_NOTE, TOOL_IMAGE_TURNS_KEPT } from '../src/services/toolImageWindow.js';
 import type { McpManager } from '../src/mcp/manager.js';
 
 const USER = 'u1';
@@ -177,5 +178,32 @@ describe('MCP 图片 × 真 loop:物化成不可信 user 消息', () => {
     expect(typeof m.content).toBe('string');
     expect(m.content).toMatch(/could not be shown[^]*Rely on the text results/);
     expect(JSON.stringify(mainPayloads[1])).not.toContain(PNG);
+  });
+
+  // 2026-10-07 实证:Computer Use 每步一张截图,全部历史截图每轮重传,20 轮后请求体 1.1MB、慢上行撞上传超时。
+  // 负对照:去掉 agentLoop.ts 里那行 dropStaleToolImages → 末轮请求带 6 张图,本条红。
+  it('④ 连续多轮截图:每次请求最多带最近几轮的图,更早的换成占位(前言留着),请求体不随步数涨', async () => {
+    const ROUNDS = 6;
+    script = [...Array.from({ length: ROUNDS }, () => callMcp), final()];
+    const r = await run({ approvalMode: 'full-auto', visionMode: 'off' });
+    expect(r.status).toBe('done');
+    expect(mainPayloads).toHaveLength(ROUNDS + 1); // 六轮工具真的都跑了(否则下面的上限断言是空转)
+    const imageTurns = (msgs: any[]) => msgs.filter((m) => Array.isArray(m.content) && m.content.some((p: any) => p?.type === 'image_url'));
+    const carried = mainPayloads.map((msgs) => imageTurns(msgs).length);
+    expect(carried).toEqual([0, 1, 2, 3, 3, 3, 3]);
+    expect(TOOL_IMAGE_TURNS_KEPT).toBe(3);
+
+    const last = mainPayloads[ROUNDS];
+    const opening = `(The images returned by the tools above are shown below.) ${MCP_IMAGE_PREFACE}`;
+    const dropped = last.filter((m: any) => typeof m.content === 'string' && m.content.includes(TOOL_IMAGE_DROPPED_NOTE));
+    expect(dropped).toHaveLength(ROUNDS - TOOL_IMAGE_TURNS_KEPT);
+    for (const m of dropped) {
+      expect(m.role).toBe('user');
+      expect(m.content).toBe(`${opening}\n${TOOL_IMAGE_DROPPED_NOTE}`); // 不可信前言原样留着,压缩那边照旧认得出
+    }
+    // 留下的是最新的那几条:末尾三条图消息排在所有占位之后
+    const order = last.map((m: any) => (dropped.includes(m) ? 'd' : imageTurns([m]).length ? 'i' : '')).join('');
+    expect(order).toBe('dddiii');
+    expect(JSON.stringify(last).split(PNG).length - 1).toBe(TOOL_IMAGE_TURNS_KEPT);
   });
 });
