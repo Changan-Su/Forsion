@@ -23,7 +23,6 @@ export type { InboxMessage, InboxFilter }
 let pollTimer: number | null = null
 let unsubConn: (() => void) | null = null
 let lastLatestId: string | null | undefined = undefined
-let lastServerCount = 0
 /** 未读轮询单飞(Codex 09-11 P2):挂载刷新、15s 轮询、多个列表实例撞在一起时,并发的 refreshUnread 会在
  *  lastLatestId 更新前都判成「新消息」→ 同一条通知两遍。同一时刻只跑一个,期间再来的合成一次尾随重跑。 */
 let unreadRun: Promise<void> | null = null
@@ -108,15 +107,18 @@ export const useInbox = create<InboxState>((set, get) => ({
     const once = async (): Promise<void> => {
       let r: { count: number; latestId: string | null }
       try { r = await getInboxUnreadCount(homeTarget()) } catch { return }
-      const isNew = lastLatestId !== undefined && r.latestId && r.latestId !== lastLatestId && r.count > lastServerCount
-      if (isNew) {
+      // 服务端和手上的对不上就重拉列表:最新一封换了,或未读数不等于本地这份(本地这份已含「点开即已读」等乐观改动)。
+      // 旧判据拿「上一次轮询的未读数」比:读掉一封、同一轮询间隔里又来一封时是 1 → 1,判成没新信 → 红点亮了列表不动。
+      const had = get().unreadCount
+      const latestChanged = r.latestId !== lastLatestId
+      if (lastLatestId !== undefined && (latestChanged || r.count !== had)) {
         try {
           const msgs = await listInbox(homeTarget(), 'all')
           set({ messages: msgs })
-          const m = msgs.find((x) => x.id === r.latestId)
+          const m = latestChanged && r.count > had ? msgs.find((x) => x.id === r.latestId) : undefined
           // 收件箱新消息 → 统一通知入口(应用内卡片 + 系统通知由 notifyApp 一并发,受通知设置门控;
           // 不再单发 notifyInbox,避免与统一系统通知重复)。
-          if (m) {
+          if (m && !m.read_at) {
             notifyApp({
               event: 'inbox.message', level: 'info',
               title: senderOf(m), text: m.title,
@@ -128,7 +130,6 @@ export const useInbox = create<InboxState>((set, get) => ({
       setBadge(r.count)
       set({ unreadCount: r.count })
       lastLatestId = r.latestId
-      lastServerCount = r.count
     }
     unreadRun = (async () => { do { unreadAgain = false; await once() } while (unreadAgain) })().finally(() => { unreadRun = null })
     return unreadRun
