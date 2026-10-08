@@ -137,6 +137,13 @@ async function main() {
   })
   const open = async (content, query = '') => { body = content; await page.goto('https://splash.test/' + query, { waitUntil: 'domcontentloaded' }) }
   const firstFrame = () => page.evaluate(() => { document.getElementById('root').appendChild(document.createElement('div')) })
+  /** 等到开始退场,回报那一刻整块开屏上在跑的动画名(只淡出 = 只有 tangu-splash-out;带放大的还有 fts-open)。 */
+  const leaving = async () => {
+    const seen = await page.waitForFunction(() => document.getElementById('tangu-splash')?.classList.contains('out'), null, { timeout: 4000 }).catch(() => null)
+    return seen && page.evaluate(() => [...new Set(document.getElementById('tangu-splash')?.getAnimations({ subtree: true }).map((a) => a.animationName))].sort().join())
+  }
+  /** 桌面端的「窗口露出来了」:宿主给一个 whenShown,页面里调 __show() 才兑现(不调 = 回信丢了)。 */
+  const hiddenWindow = (config) => html({ ...config }).replace('initial:', 'whenShown:function(){return new Promise(function(done){window.__show=function(){done(Date.now())}})},initial:')
 
   // ═══ 树影(内置默认)═══
   // ── ① 没存过任何设置 → 树影;画布画出来了,诗句是五句之一 ──
@@ -175,6 +182,31 @@ async function main() {
   await page.waitForTimeout(1300)
   check('首帧很早:过了最短展示就撤走', (await page.evaluate(shadowState)).gone)
 
+  // ── ②b 桌面端窗口先藏着、首帧画完才露出来(Windows 上这段不短):最短展示从露出来那一刻算 ──
+  await open(hiddenWindow())
+  await firstFrame()
+  await page.waitForTimeout(1700)
+  const unseen = await page.evaluate(shadowState)
+  check('窗口还没露出来:过了 1.3 秒也不退场', !unseen.gone && !unseen.out)
+  await page.evaluate(() => window.__show?.())
+  await page.waitForTimeout(900)
+  const justSeen = await page.evaluate(shadowState)
+  check('窗口露出来之后再守满最短展示', !justSeen.gone && !justSeen.out)
+  check('守满之后撤走', await page.locator('#tangu-splash').waitFor({ state: 'detached', timeout: 1500 }).then(() => true, () => false))
+  await open(hiddenWindow())
+  await firstFrame()
+  await page.waitForTimeout(4000)
+  check('窗口迟迟不露出来(慢机器要好几秒):一直等着,不抢在它前面退场', !(await page.evaluate(shadowState)).gone)
+  await page.waitForTimeout(7500) // 上限 10 秒 + 淡出;多留一秒给负载高的机器
+  check('窗口永远不露出来:十秒上限照样撤走', (await page.evaluate(shadowState)).gone)
+  await open(hiddenWindow({ scene: 'classic' }))
+  await firstFrame()
+  await page.waitForTimeout(1000)
+  await page.evaluate(() => window.__show?.())
+  await page.waitForTimeout(900) // 第一个接缝(1.3 秒)已过:那时才露出来 0.3 秒
+  check('经典图标:露出来不到大半轮,不在第一个接缝退场', await page.evaluate(() => !!document.getElementById('tangu-splash') && !document.getElementById('tangu-splash').classList.contains('out')))
+  check('经典图标:下一个接缝退场', await page.locator('#tangu-splash').waitFor({ state: 'detached', timeout: 2200 }).then(() => true, () => false))
+
   // ── ③ 天花板:首帧永远不来也必须自己撤(10s) ──
   await open(html())
   await page.waitForTimeout(9000)
@@ -211,7 +243,10 @@ async function main() {
   check('减少动态效果:树影停在一帧', !!reduced.mounted && reduced.names.length === 0 && reduced.cloudOpacity === '0')
   await firstFrame()
   await page.waitForTimeout(700)
-  check('减少动态效果:首帧一到就撤(不守最短展示)', (await page.evaluate(shadowState)).gone)
+  const reducedHeld = await page.evaluate(shadowState)
+  check('减少动态效果:静帧也守最短展示(不是一闪就没)', !reducedHeld.gone && !reducedHeld.out)
+  check('减少动态效果:退场只淡出,画面不放大', await leaving() === 'tangu-splash-out')
+  await page.locator('#tangu-splash').waitFor({ state: 'detached', timeout: 2000 })
   // 选了开屏素材又开着减少动态效果:经典是换成应用图标;树影这边不许拿图标顶替 —— 用素材自己的静帧,
   // 没有静帧又可能会动的(SVG / GIF / WebP)停在树影的一帧,解不开的照样回落树影。
   const iconSrc = () => page.locator('#tangu-splash img').evaluateAll((imgs) => imgs.map((i) => i.src))
@@ -345,14 +380,16 @@ async function main() {
     await open(html(null, entry, STAMP, false, true))
     check(`${entry}: 软件渲染显示完整静帧并限制位图`, await page.locator('#tangu-splash').evaluate(s => s.dataset.performanceStill === 'software' && s.getAnimations({ subtree: true }).length === 0 && getComputedStyle(s.querySelector('.fts-verse p')).opacity === '1' && s.querySelector('canvas').width <= 960))
     await firstFrame()
-    await page.waitForTimeout(200)
-    check(`${entry}: 软件渲染准备好后立即退场`, await page.locator('#tangu-splash').count() === 0)
+    await page.waitForTimeout(600)
+    check(`${entry}: 软件渲染的静帧也守最短展示(不是一闪就没)`, await page.locator('#tangu-splash').evaluate(s => !s.classList.contains('out')).catch(() => false))
+    check(`${entry}: 软件渲染退场只淡出`, await leaving() === 'tangu-splash-out')
+    await page.locator('#tangu-splash').waitFor({ state: 'detached', timeout: 2000 })
     await open(html({ scene: 'classic', animation: 'spin', icon: { image: png } }, entry, STAMP, false, true))
     check(`${entry}: 软件渲染降级不覆盖用户的经典图标动画`, await page.locator('#tangu-splash').evaluate(s => !s.hasAttribute('data-performance-still') && s.querySelector('img').getAnimations()[0]?.animationName === 'forsion-spin'))
     const slowClock = '<script>var raf=requestAnimationFrame,stamp=0;requestAnimationFrame=function(cb){return raf(function(){cb(stamp+=80)})};</script>'
     await open(html(null, entry).replace('<head>', '<head>' + slowClock))
     await page.waitForTimeout(300)
-    check(`${entry}: 连续慢帧降级为完整静帧`, await page.locator('#tangu-splash').evaluate(s => s.dataset.performanceStill === 'frames' && s.getAnimations({ subtree: true }).length === 0 && getComputedStyle(s.querySelector('.fts-cloud')).opacity === '0'))
+    check(`${entry}: 主线程慢帧不降级(图层动画在合成线程上,不看主线程)`, await page.locator('#tangu-splash').evaluate(s => !s.hasAttribute('data-performance-still') && s.getAnimations({ subtree: true }).length >= 3))
     await at({ showSplash: false })
     check(`${entry}: 用户可关闭开屏`, await page.locator('#tangu-splash').count() === 0)
     await at({ scene: 'classic', icon: { image: broken } })

@@ -5,6 +5,11 @@ import { createSerialQueue, writePrivateJson } from './configWrite'
 import { DEFAULT_APPEARANCE, patchAppearance, readAppearance, type StartupAppearance } from '../shared/startupAppearance'
 import { roundIconBitmap } from '../shared/iconShape'
 
+// Until the GPU process has reported, Chromium answers "disabled" for every feature, so asking early made
+// hardware-accelerated machines look like software rendering. Registered at import: the report can beat `ready`.
+let gpuReported = false
+app.on('gpu-info-update', () => { gpuReported = true })
+
 /** Initialized before any windows/preloads. One serialized writer for every app window. */
 export async function registerStartupAppearance(isTrusted: (e: Electron.IpcMainInvokeEvent) => boolean): Promise<void> {
   const file = join(app.getPath('userData'), 'startup-appearance.json')
@@ -45,8 +50,14 @@ export async function registerStartupAppearance(isTrusted: (e: Electron.IpcMainI
     event.returnValue = systemPreferences.getAnimationSettings().prefersReducedMotion
   })
   ipcMain.on('appearance:softwareRendering', (event) => {
-    event.returnValue = process.platform === 'win32' && app.getGPUFeatureStatus().gpu_compositing !== 'enabled'
+    event.returnValue = process.platform === 'win32' && gpuReported && /^(disabled|unavailable)/.test(String(app.getGPUFeatureStatus().gpu_compositing))
   })
+  // The window is created hidden and shown after its first paint; the splash counts its minimum stay from then.
+  ipcMain.handle('appearance:shown', (event) => new Promise<number>((resolve) => {
+    const win = BrowserWindow.fromWebContents(event.sender)
+    if (!win || win.isVisible()) resolve(0)
+    else win.once('show', () => resolve(Date.now()))
+  }))
   const serialize = createSerialQueue()
   ipcMain.handle('appearance:update', (event, patch, clearPlugin?: string) => {
     if (!isTrusted(event)) throw new Error('Untrusted appearance request')

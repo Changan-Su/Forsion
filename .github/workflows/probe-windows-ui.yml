@@ -11,6 +11,7 @@ on:
       - 'desktop/electron/startupAppearance.test.ts'
       - 'desktop/electron/preload.ts'
       - 'desktop/scripts/startup-windows.probe.cjs'
+      - 'desktop/scripts/startup-trace.probe.cjs'
       - 'desktop/scripts/splash-loop.check.cjs'
       - 'desktop/scripts/lib/find-chromium.cjs'
 permissions:
@@ -32,6 +33,8 @@ jobs:
         run: |
           npm run build
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run probe:startup-trace
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npx vitest run electron/startupAppearance.test.ts
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm run check:splash
@@ -47,4 +50,5 @@ jobs:
           path: |
             desktop/outputs/splash/
             desktop/outputs/windows-startup/
+            desktop/outputs/startup-trace/
             desktop/outputs/startup-appearance/
