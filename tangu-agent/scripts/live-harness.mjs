@@ -2296,18 +2296,25 @@ try {
     const saysVision = /image input|image[- ]capable|image handling|vision|multimodal|(see|view|read|look at|process|accept)s? (the )?(images?|screenshots?|screen)|看图|图像|图片|视觉|截图/i.test(ev.content);
     const saysSwitch = /(switch|chang|us(e|ing)|select|pick|choos|try)[^.。]{0,60}model|another model|different model|(换|切换|改用|选用|选择|使用)[^。]{0,16}模型/i.test(ev.content);
     // 设置名 / 选项名 = 桌面设置页实际显示的字(Image handling / When needed;图像处理方式 / 按需使用)。
-    const saysSetting = /image handling|图像处理/i.test(ev.content) && /when needed|按需/i.test(ev.content);
-    const exactLabels = (/Image handling/i.test(ev.content) && /When needed/i.test(ev.content)) || (/图像处理方式/.test(ev.content) && /按需使用/.test(ev.content));
+    const saysSetting = /image handling|图像处理/i.test(ev.content) && /when needed|按需|需要时/i.test(ev.content);
+    // 回答的语言跟不跟提问:英文提问却整段中文 = 不对(把中文选项名顺带写进那句话的一版出过 2/10)。
+    const zhAsk = opt('cu-lang', 'en') === 'zh';
+    const cjk = (ev.content.match(/[\u4e00-\u9fff]/g) || []).length;
+    const langOk = zhAsk ? cjk > 10 : cjk === 0;
+    const exactLabels = opt('cu-lang', 'en') === 'zh'
+      ? /图像处理方式/.test(ev.content) && /按需使用/.test(ev.content)
+      : /Image handling/i.test(ev.content) && /When needed/i.test(ev.content);
     // 「总是」是全局设置,不看模型 —— 把「换模型」当成另一条出路给用户是错的(换了也没用)。
     const offersSwitch = /\bor\b[^.。]{0,24}(switch|chang|us(e|ing))[^.。]{0,40}model|(或|或者)[^。]{0,12}(换|切换|改用|使用)[^。]{0,16}模型/i.test(ev.content);
     // 台架的模型本身能看图,不打补丁只触发得了「总是」那句(出路 = 改设置);用临时补丁测「模型没有图像输入」那句时带 --cu-expect model(出路 = 换模型)。
     const expectModel = opt('cu-expect', 'setting') === 'model';
-    const wayOut = expectModel ? saysSwitch : (saysSetting && !offersSwitch);
+    // 中文提问时还要求用的是设置页上的字(用户要照着去找);英文提问同理。
+    const wayOut = expectModel ? saysSwitch : (saysSetting && exactLabels && !offersSwitch && langOk);
     const blamesPlugin = /(enabl|turn(ed)? on|install|activat|check)[^.。]{0,60}(plugin|permission|accessibility|screen recording|computer use|desktop[- ]control tools?)|plugin[^.。]{0,40}(is |be )?(enabled|disabled|turned on|installed|missing)|(启用|打开|开启|安装|检查)[^。]{0,20}(插件|权限)|插件[^。]{0,20}(没开|未启用|没有启用|是否启用)/i.test(ev.content);
     const ok = !ev.error && !ran.length && !described.length && saysVision && wayOut && !blamesPlugin;
     return { ok,
       detail: ev.error || `桌面工具跑成 ${ran.length} 次${ran.length ? ' ✗' : ' ✓'}(主模型去调了 ${tried.length} 次);转写 ${described.length} 条${described.length ? ' ✗' : ' ✓'};` +
-        `回答里${saysVision ? '提到了图像 / 看不到图 ✓' : '没提图像 ✗'}、${wayOut ? `给了对的出路(${expectModel ? '换模型' : '改设置'})✓` : `出路不对 ✗(该说${expectModel ? '换模型' : '改设置,且不能说「或者换模型」'};实际:${[saysSwitch && '提了换模型', saysSetting && '提了改设置', offersSwitch && '把换模型当成另一条出路'].filter(Boolean).join('、') || '都没提'})`}、${blamesPlugin ? '让用户去开插件 / 查权限 ✗' : '没有怪到插件头上 ✓'}` +
+        `回答里${saysVision ? '提到了图像 / 看不到图 ✓' : '没提图像 ✗'}、${wayOut ? `给了对的出路(${expectModel ? '换模型' : '改设置'})✓` : `出路不对 ✗(该说${expectModel ? '换模型' : '改设置,且不能说「或者换模型」'};实际:${[saysSwitch && '提了换模型', saysSetting && '提了改设置', saysSetting && !exactLabels && '设置名 / 选项名不是设置页上的字', offersSwitch && '把换模型当成另一条出路', !langOk && (zhAsk ? '没用中文回答' : '英文提问却夹了中文')].filter(Boolean).join('、') || '都没提'})`}、${blamesPlugin ? '让用户去开插件 / 查权限 ✗' : '没有怪到插件头上 ✓'}` +
         `${saysSetting ? `;〔只记录〕设置名和选项名${exactLabels ? '用的是设置页上的字' : '不是设置页上的字'}` : ''}` +
         `${withSkill ? `;带了配套技能,主模型读技能 ${ev.toolCalls.filter((n) => n === 'use_skill').length} 次` : ''}${ev.approvals ? `;代批 ${ev.approvals}` : ''}`,
       output: ev.content, ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls };

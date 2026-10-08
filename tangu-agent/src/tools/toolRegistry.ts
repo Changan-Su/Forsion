@@ -31,6 +31,10 @@ export function isComputerUseTool(t: { capabilities?: { concurrencyKey?: string 
  * 所以这句里不能出现「或者换模型」(头两版写了,模型照着告诉用户,用户换了也没用)。
  * 「总是」那句里的设置名和选项名照抄桌面设置页实际显示的字(desktop AuxModelChoice 的 aux.visionBehavior / aux.visionCompact.*),
  * 用户要照着去找;第一版写的是引擎内部的叫法 "Auto",下拉里没有这一项。那边改文案时这句一起改。
+ * 中文那套字(图像处理方式 / 始终使用 / 按需使用)另起一句、限定「用户用中文写的时候才用」,live 10-08 试了三种写法:
+ *   · 括号里顺带一提「(in the Chinese interface …)」→ 英文提问 10 次里 2 次被整段用中文回答,其余 8 次英文里夹一段中文(之前 29 次是 0 次);
+ *   · 完全不写 → 英文正常,但中文提问 6 次里只有 0 次用对设置页上的字(译成「图像处理 / 始终 / 需要时」,或者干脆留着英文);
+ *   · 现在这样 → 见当天汇总。
  */
 export function computerUseUnavailableReason(why: ToolContext['computerUseUnavailable']): string {
   // 两种原因同一个句式,只换「为什么」和「怎么办」。句式是 live 10-08 试出来的(见当天汇总),改之前重跑 --only cuoff:
@@ -39,8 +43,8 @@ export function computerUseUnavailableReason(why: ToolContext['computerUseUnavai
   //   · 不带括号条件、不绕 —— 「总是」那句的第一版又长又带「(if the current model has image input)」,带技能时 0/3。
   const [cause, tell] = why === 'always-transcribe'
     ? ['because the "Image handling" setting is on "Always": every image is turned into text first, so no model gets to see the screen',
-      'that computer control does not work while "Image handling" in Settings is on "Always", that they need to change it to "When needed", and that switching models will not help until they do ' +
-      '(in the Chinese interface the setting is 图像处理方式 and the two options are 始终使用 and 按需使用)']
+      'that computer control does not work while "Image handling" in Settings is on "Always", that they need to change it to "When needed", and that switching models will not help until they do. ' +
+      'Reply in the language the user wrote in; only when that is Chinese, use the names shown in the Chinese interface instead: 图像处理方式, 始终使用, 按需使用']
     : ['with the current model because it has no image input',
       'that computer control does not work with this model and that they need to switch this chat to a model with image input'];
   return `Computer control (looking at the screen, clicking and typing in desktop apps) is unavailable ${cause}. ` +

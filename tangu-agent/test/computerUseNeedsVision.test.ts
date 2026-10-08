@@ -151,7 +151,9 @@ describe('主模型看不到图 → Computer Use 不可用,并把原因告诉用
     expect(ALWAYS).toMatch(/"Image handling" in Settings is on "Always", that they need to change it to "When needed", and that switching models will not help/);
     // 「总是」不看模型:换模型不是出路,这句里不能把它当成二选一给出去。
     expect(ALWAYS).not.toMatch(/or switch this chat to a model/);
-    expect(ALWAYS).toMatch(/图像处理方式.*始终使用.*按需使用/);
+    // 中文那套字只在「用户用中文写」时才用:顺带一提的那一版,英文提问会被用中文回答。
+    expect(ALWAYS).toMatch(/only when that is Chinese, use the names shown in the Chinese interface instead: 图像处理方式, 始终使用, 按需使用/);
+    expect(NO_INPUT).not.toMatch(/[\u4e00-\u9fff]/);
     expect(ALWAYS).not.toMatch(/"Auto"/);
   });
 
