@@ -9,7 +9,7 @@ import { DockerCleanupError } from '../sandbox/dockerLifecycle.js';
 import { isHostSandboxRestricted, isHostSandboxToolAllowed, resolveHostSandboxPolicy } from '../sandbox/hostSandboxPolicy.js';
 import { executeCustomTool } from './customTools.js';
 import { mcpResultForModel } from '../mcp/toolBridge.js';
-import { registerToolProvider, resolveTools, isDeferredIn, isSubAgentDenied, canonicalToolName, bindClientActionToTool, type ToolDef } from './toolRegistry.js';
+import { registerToolProvider, resolveTools, isDeferredIn, isSubAgentDenied, canonicalToolName, bindClientActionToTool, computerUseHiddenNames, COMPUTER_USE_UNAVAILABLE_REASON, type ToolDef } from './toolRegistry.js';
 import { presetOf } from '../core/presetTable.js';
 import { effectiveRemote } from '../services/remoteOrigin.js';
 import { datetimeProvider, calculatorProvider } from './builtin/coreUtils.js';
@@ -451,6 +451,10 @@ export async function executeTool(call: ToolCall, ctx: ToolContext): Promise<Too
       result: `Tool "${name}" is blocked by plan mode (read-only). Finish researching with read-only tools and submit your plan via exit_plan_mode; it becomes available after the user approves.`,
       isError: true,
     };
+  }
+  // 主模型看不到图而被收起的 Computer Use 工具:回真正的原因,别落到下面那句「不可用,别再试」(模型会把它转述成「插件没开」)。
+  if (computerUseHiddenNames(currentProfile(ctx), ctx, [name]).length) {
+    return { toolCallId: call.id, name, result: `Tool "${name}" was not run. ${COMPUTER_USE_UNAVAILABLE_REASON}`, isError: true };
   }
   // 目录提示只在本 ctx 真有可解锁目录时给(delegate 无 unlockTools、Muse/自动化全量豁免,这些场景
   // 没有 load_tools,瞎指会把「出路」变成第二次失败——Codex 评审 #4);plan 模式下 custom/MCP 工具

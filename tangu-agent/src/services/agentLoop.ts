@@ -31,7 +31,7 @@ import type { DisplayFileItem } from '../tools/toolTypes.js';
 import { loadSkillLoadout } from './skillLoadout.js';
 import { buildAgentRoster } from './agentRoster.js';
 import { AUTONOMY_SECTION, PERSISTENCE_SECTION, TOOL_FAILURE_SECTION, ULTRA_SECTION, presetContractSection, responseStyleSection } from '../profiles/promptSections.js';
-import { resolveTools } from '../tools/toolRegistry.js';
+import { resolveTools, isComputerUseTool, COMPUTER_USE_UNAVAILABLE_REASON } from '../tools/toolRegistry.js';
 import { parsePreset, presetOf, type Preset } from '../core/presetTable.js';
 import { SKETCH_SECTION, sketchEnabledFor, sketchTurnSignalFor } from '../tools/builtin/sketch.js';
 import { loadTodos as loadSessionTodos, renderTodos, type TodoItem } from '../tools/builtin/todo.js';
@@ -1582,6 +1582,12 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // B1:§1 存储证据留原位(与查询/会话无关,跨会话同一份);§2/§3 带 [session_id=…] 且按本条消息打分,
     // 卡在系统提示 44% 处 = 每来一条新消息就把后面的技能目录与 13k 工具头一起作废 → 按 volatilePlacement 挪走。
     let volatileMemory = '';
+    // 主模型看不到图 → Computer Use 不可用(ctx.computerUseUnavailable)。run 起点判一次:resolveTools 是同步的,工具面也不该
+    // 在一个 run 中途换。这里先起跑、到 toolGateCtx 才等 —— auto 档下它可能是一次云请求(60s 缓存),与下面装记忆那段并行。
+    // 判据与工具图转写同一个 shouldDescribeImages:两条路不会一个说能看、一个说不能。
+    const noImageInputP: Promise<boolean> = profile.capabilities.hostExec
+      ? shouldDescribeImages(modelId, appId, agentConfig.visionMode as string | undefined).catch(() => false)
+      : Promise.resolve(false);
     // ponytail:system 档(A/B 基线)整块一次 push,拆不出两段 → 这一档 memoryStable 覆盖整块记忆。
     segAt('system:memoryStable');
     try {
@@ -1662,7 +1668,18 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       teamSessionId: isTeamMember ? String(teamMember.teamSessionId) : undefined,
       inDiscussion: isTeamMember || undefined, // 团队成员不可再起讨论 / 派遣 / 界面动作(防裂变;与旧群聊发言人同款)
       ephemeral: !!inlineMemberDef || undefined, // 临时成员:记忆 / 日志 / 人格 / 工作笔记等持久写面全关(没有自己的文件夹可写)
+      computerUseUnavailable: undefined as boolean | undefined, // 见下
     };
+    // 这一 run 里确有 Computer Use 工具才等上面那次判定(没有就无事可做,不为它多等)。
+    // ponytail: 最多等 2s、可中止 —— 网络卡住时不能让「停止」和首帧陪着等到 HTTP 超时。没等到 = 这一 run 照旧给工具
+    // (改动前的行为:截图转成文字)。结果有 60s 缓存,下一 run 通常就有了。
+    const computerUseTools = [...resolveTools(profile, toolGateCtx as ToolContext).values()].filter(isComputerUseTool).map((t) => t.name);
+    if (computerUseTools.length) {
+      toolGateCtx.computerUseUnavailable = (await Promise.race([
+        noImageInputP,
+        new Promise<boolean>((res) => { const t = setTimeout(res, 2000, false); t.unref?.(); ac.signal.addEventListener('abort', () => res(false), { once: true }); }),
+      ])) || undefined;
+    }
     const deferredCatalog = deferBypass ? [] : listDeferredTools(toolGateCtx as ToolContext);
     // 历史里用过的 deferred 工具延续解锁(见 deferredUnlocksFromHistory);目录文本不变,只影响 defs。
     const unlockedTools = deferredUnlocksFromHistory(history, deferredCatalog);
@@ -1672,6 +1689,11 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
           'These tools exist but are not loaded into context yet. When a task needs one, FIRST call `load_tools` with the exact tool names (one call may load several), wait for its result, then call the loaded tools normally. Do not invent parameters for tools you have not loaded.\n' +
           deferredCatalog.map((d) => `- ${d.name}: ${d.hint}`).join('\n'),
       );
+    }
+    // 工具不在工具面里,模型自己只会说「用不了」甚至「请启用插件」—— 把真正的原因和出路写给它,由它告诉用户。
+    // 只在这类 run 出现(别的 run 系统提示一个字节不变);列出名字是因为技能 / 用户会按名字提到它们。
+    if (toolGateCtx.computerUseUnavailable) {
+      systemParts.push(`## Computer control is unavailable\n${COMPUTER_USE_UNAVAILABLE_REASON}\nThe tools this covers are not in your tool list: ${computerUseTools.join(', ')}.`);
     }
     segAt('system:env');
     systemParts.push(...promptSections.environment);

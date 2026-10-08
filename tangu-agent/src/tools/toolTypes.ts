@@ -126,6 +126,13 @@ export interface ToolContext {
   /** 辅助模型 · 图像识别 id(主模型无原生视觉时,collectImage 的图先经它转文字;来自 agentConfig.visionModelId)。 */
   visionModelId?: string;
   /**
+   * 主模型看不到图,而这一 run 里本来有 Computer Use 那组工具 → 这组工具不给它(10-08 用户定:
+   * 「主模型没有图像识别能力,就告诉用户该模型电脑控制不可用」)。run 起点定一次(agentLoop)。
+   * resolveTools 据此收起整组;系统提示 / 按名调用 / load_tools 三处回同一句原因(toolRegistry.COMPUTER_USE_UNAVAILABLE_REASON)。
+   * 子代理随父 ctx 继承:它们没有自己的图像通道,放给它们等于留一条盲操作的后门。
+   */
+  computerUseUnavailable?: boolean;
+  /**
    * 工具产出图片的回流闸(view_image 用):工具把图片 data URL 交回 loop,
    * loop 在本轮工具执行完后把它物化成一条 user 图像消息追加到对话尾部,让模型"看见"图片。
    * 缺省(未装配此闸的运行环境)时工具应优雅降级,不要假定一定可用。

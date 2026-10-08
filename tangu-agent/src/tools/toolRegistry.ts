@@ -22,6 +22,15 @@ export const COMPUTER_USE_CONCURRENCY_KEY = 'computer-use';
 export function isComputerUseTool(t: { capabilities?: { concurrencyKey?: string } }): boolean {
   return t.capabilities?.concurrencyKey === COMPUTER_USE_CONCURRENCY_KEY;
 }
+/**
+ * 主模型看不到图时 Computer Use 不可用,给模型读的那句原因(英文)。系统提示 / 按名调用 / load_tools 三处共用。
+ * 必须说清「不是插件没开」:工具从工具面里消失后,模型自己的诊断是「请启用 Computer Use 插件」(live 10-08 实测,
+ * 尤其读了配套技能里那句「看不到观察工具就报告缺能力」之后)—— 用户照做也没用。
+ */
+export const COMPUTER_USE_UNAVAILABLE_REASON =
+  'Computer control (looking at the screen, clicking and typing in desktop apps) is unavailable with the current model because it has no image input. ' +
+  'This is not a missing plugin, permission or setting, and enabling anything will not help. ' +
+  'When the user asks for it, tell them plainly that computer control does not work with this model and that they need to switch this chat to a model with image input.';
 
 export interface ToolDef extends ToolImpl {
   name: string;
@@ -330,6 +339,8 @@ export function resolveTools(profile: AppProfile, ctx: ToolContext, origins?: Ma
     // (看屏幕、读任意窗口的文字)在 auto-edit 上限下不过审批。按 runId 现取 —— 起跑后被远端 steer 染上的 run,
     // 执行侧按名解析也经这里(registry.executeTool),工具随即变成未知工具。
     if (isComputerUseTool(t) && effectiveRemote(ctx)) return;
+    // 主模型看不到图:整组不给(ctx.computerUseUnavailable 的注释)。没有截图它只能照文字猜坐标去点。
+    if (isComputerUseTool(t) && ctx.computerUseUnavailable) return;
     if (!clientCapabilityAllowed(t, ctx)) return;
     if (sandboxRestricted && (!isBuiltin || fromPlugin || !isHostSandboxToolAllowed(t.name, sandboxCtx))) return;
     const m = t.mode || 'both';
@@ -422,4 +433,11 @@ export function declaredAutomationSafe(name: string): boolean {
     }
   }
   return found;
+}
+
+/** `names` 里因「主模型看不到图」被收起的 Computer Use 工具(去掉标记再解析一次才看得见的那些)。 */
+export function computerUseHiddenNames(profile: AppProfile, ctx: ToolContext, names: string[]): string[] {
+  if (!ctx.computerUseUnavailable || !names.length) return [];
+  const full = resolveTools(profile, { ...ctx, computerUseUnavailable: undefined });
+  return names.filter((n) => { const t = full.get(n); return !!t && isComputerUseTool(t); });
 }
