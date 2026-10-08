@@ -41,7 +41,7 @@ describe('refreshUnread 单飞', () => {
  *  读掉那封(本地未读 1 → 0)和回信到达(服务端未读又是 1)落在同一个 15 秒轮询间隔里,
  *  旧判据拿的是「上一次轮询的未读数」,1 > 1 不成立 → 只更新红点不刷列表。 */
 describe('refreshUnread 刷列表', () => {
-  const mk = (id: string, read = false) => ({ id, title: id, body: '', sender_kind: 'agent', sender_id: 'muse', origin_broadcast_id: null, read_at: read ? '2026-09-11 09:00:01' : null, archived_at: null, created_at: '2026-09-11 09:00:00' })
+  const mk = (id: string, read = false) => ({ id, title: id, body: '', sender_kind: 'agent' as const, sender_id: 'muse', origin_broadcast_id: null, read_at: read ? '2026-09-11 09:00:01' : null, archived_at: null, created_at: '2026-09-11 09:00:00' })
 
   it('读掉一封后同一轮询间隔里来了新的一封(未读数 1 → 1):照样刷列表并通知', async () => {
     h.count.mockResolvedValue({ count: 1, latestId: 'x' })
@@ -69,5 +69,23 @@ describe('refreshUnread 刷列表', () => {
     h.list.mockClear()
     await useInbox.getState().refreshUnread() // 服务端和手上的一致 → 不多拉
     expect(h.list).not.toHaveBeenCalled()
+  })
+
+  it('拉列表期间本地又点开了一封:旧快照不盖回去,重跑一遍(Codex 评审)', async () => {
+    useInbox.setState({ messages: [mk('p'), mk('q')], unreadCount: 2 })
+    h.notify.mockClear(); h.list.mockReset(); h.count.mockReset()
+    let release: ((v: unknown[]) => void) | undefined
+    h.count.mockResolvedValueOnce({ count: 3, latestId: 'r' }).mockResolvedValue({ count: 2, latestId: 'r' })
+    h.list.mockImplementationOnce(() => new Promise((r) => { release = r })).mockResolvedValue([mk('r'), mk('p', true), mk('q')])
+
+    const run = useInbox.getState().refreshUnread()
+    await vi.waitFor(() => expect(release).toBeDefined())
+    useInbox.getState().select('p') // 快照在路上时点开 p
+    release!([mk('r'), mk('p'), mk('q')]) // 旧快照里 p 还是未读
+    await run
+
+    expect(h.list).toHaveBeenCalledTimes(2) // 判别断言:没有守卫时只拉一次,旧快照直接落地
+    expect(useInbox.getState().messages.find((m) => m.id === 'p')?.read_at).toBeTruthy()
+    expect(h.notify).toHaveBeenCalledTimes(1)
   })
 })

@@ -113,7 +113,10 @@ export const useInbox = create<InboxState>((set, get) => ({
       const latestChanged = r.latestId !== lastLatestId
       if (lastLatestId !== undefined && (latestChanged || r.count !== had)) {
         try {
+          const held = get().messages
           const msgs = await listInbox(homeTarget(), 'all')
+          // 拉列表这会儿本地又动过(点开 / 标记 / 删除,或别处刚刷过):这份快照是旧的,盖回去会吃掉那次改动 —— 丢掉,重跑一遍。
+          if (get().messages !== held) { unreadAgain = true; return }
           set({ messages: msgs })
           const m = latestChanged && r.count > had ? msgs.find((x) => x.id === r.latestId) : undefined
           // 收件箱新消息 → 统一通知入口(应用内卡片 + 系统通知由 notifyApp 一并发,受通知设置门控;
