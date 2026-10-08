@@ -294,6 +294,59 @@ describe('Unit backend workers', () => {
     } finally { socket.destroy(); await app.close() }
   })
 
+  // Server 的实时语音中转(/api/brain/realtime)用 ws 库在后端 worker 里接 WebSocket:握手、帧、ping/pong、关闭码与 reason
+  // 都要穿过 worker 的字节桥(PortDuplex)。上一条只证了手写的 101 + 回显,这条证真的 ws 库两头都通。
+  it('carries a real ws WebSocket through the worker bridge: frames both ways, ping/pong, close code and reason', async () => {
+    const wsModule = JSON.stringify(resolve('node_modules/ws/wrapper.mjs'))
+    const options = await fixture(`
+      import { WebSocketServer } from ${wsModule};
+      const wss = new WebSocketServer({ noServer: true });
+      export default () => ({ mounts: ['/api'], handle(_req, res) { res.end('http'); },
+        upgrade(req, socket, head) {
+          if (req.headers.authorization !== 'Bearer fixture') { socket.end('HTTP/1.1 401 Unauthorized\\r\\nContent-Length: 0\\r\\nConnection: close\\r\\n\\r\\n'); return; }
+          wss.handleUpgrade(req, socket, head, (ws) => {
+            ws.send('hello ' + req.url);
+            ws.on('message', (data, isBinary) => {
+              if (!isBinary && data.toString() === 'bye') ws.close(1008, '<402> token_quota_exceeded');
+              else ws.send(data, { binary: isBinary });
+            });
+            ws.ping();
+          });
+        }
+      });
+    `)
+    const { default: WebSocket } = await import('ws')
+    const backend = await startBackend(options)
+    const app = await gateway(backend)
+    try {
+      const refused = new WebSocket(`ws://127.0.0.1:${app.port}/api/ws`)
+      refused.on('error', () => {}) // terminate() 在握手被拒后会再报一次「连接建立前已关闭」
+      const [, response] = await once(refused, 'unexpected-response') as [unknown, http.IncomingMessage]
+      expect(response.statusCode).toBe(401)
+      refused.terminate()
+
+      const socket = new WebSocket(`ws://127.0.0.1:${app.port}/api/ws?model=m`, { headers: { Authorization: 'Bearer fixture' } })
+      const got: Array<{ text: string; binary: boolean }> = []
+      let pings = 0
+      socket.on('message', (data, binary) => got.push({ text: data.toString(), binary }))
+      socket.on('ping', () => { pings++ })
+      await once(socket, 'open')
+      socket.send('{"type":"session.update"}')
+      socket.send(Buffer.alloc(64 * 1024, 7)) // 比一个 TCP 段大:帧要在桥上被拆开再拼回
+      await eventually(async () => {
+        expect(got.map((m) => m.binary)).toEqual([false, false, true])
+        expect(got[0].text).toBe('hello /api/ws?model=m')
+        expect(got[1].text).toBe('{"type":"session.update"}')
+        expect(got[2].text.length).toBe(64 * 1024)
+        expect(pings).toBe(1)
+      })
+      const closed = once(socket, 'close')
+      socket.send('bye')
+      const [code, reason] = await closed as [number, Buffer]
+      expect([code, reason.toString()]).toEqual([1008, '<402> token_quota_exceeded'])
+    } finally { await app.close() }
+  })
+
   it('preserves chunked request and response trailers through the byte bridge', async () => {
     const options = await fixture(`
       export default () => ({ mounts: ['/api'], handle(req, res) {

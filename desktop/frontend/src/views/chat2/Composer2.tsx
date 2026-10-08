@@ -11,6 +11,7 @@ import {
   Hand, ShieldCheck, ShieldAlert, Settings2, SlidersHorizontal, MessageSquare, Loader2, Clock, Zap, AudioLines, type LucideIcon } from 'lucide-react'
 import { useVoiceInput } from '../../hooks/useVoiceInput'
 import { CALL_TEXT_MAX, getCallPresence, onCallEvent, sendTextToCall, subscribeCallPresence, useRealtimeConfig } from '../../services/realtimeCall'
+import { resolveRealtimeCall } from '../../services/realtimeModel'
 import { useCodeStudio } from '../../stores/codeStudioStore'
 import { useImageStudio } from '../../stores/imageStudioStore'
 import { usePluginChat } from '../../stores/pluginChatStore'
@@ -576,9 +577,15 @@ export const Composer2: React.FC<{
   const activeSessionId = sessionId === undefined ? storeActiveSessionId : sessionId
   const composerRef = useComposerRef(activeSessionId)
   // 语音通话(对标 GPT Live):电话键只把会话与委派参数算好,通话本体跑在 Mini 卡片里(mini/VoiceCallView)。
-  // 双方的话与代跑的 Tangu run 由引擎写进会话,聊天区照常显示。设置 → 语音 → 实时通话 选了模型才出按钮。
+  // 双方的话与代跑的 Tangu run 由引擎写进会话,聊天区照常显示。设置 → 语音 → 语音通话 开着才出按钮。
   const liveOwnerResolved = liveOwner ?? sessionId === null // 缺省只有主页输入框是接收方;ChatView 显式传
-  const { model: realtimeModel, voice: realtimeVoice } = useRealtimeConfig()
+  // 存了模型就用它;从没动过这个开关、装了 Forsion Extend 且已登录时默认用云端的通话模型(见 services/realtimeModel.ts)。
+  const realtimeStored = useRealtimeConfig()
+  const cloudCallModel = useApp((s) => s.modelsResp?.realtimeModel ?? null)
+  const forsionSignedIn = useApp((s) => !!s.authInfo?.loggedIn && s.authInfo.tokenValid !== false) && !!window.tangu?.forsionLogin
+  const { model: realtimeModel, voice: realtimeVoice } = useMemo(
+    () => resolveRealtimeCall(realtimeStored, { model: cloudCallModel, signedIn: forsionSignedIn }),
+    [realtimeStored, cloudCallModel, forsionSignedIn])
   const [callStarting, setCallStarting] = useState(false)
   const [callError, setCallError] = useState('')
   // 这个会话正在 Mini 里通话 → 纯文字送进电话(见 sendMessage)

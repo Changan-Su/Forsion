@@ -63,6 +63,7 @@ router.get('/agent/models', authMiddleware, async (req: AuthRequest, res) => {
       backgroundModelId: cat.backgroundModelId,
       imageModelId: cat.imageModelId,
       visionModelId: cat.visionModelId,
+      realtimeModel: cat.realtimeModel, // Forsion 云端的实时语音通话模型(设置页「语音通话」与输入框通话键的云端缺省)
       contextWindowCap: CONTEXT_WINDOW_TOKENS, // 缺省上限:模型菜单「默认」档显示 min(maxContextWindow, 它)
       // Ultra 的 run 不受缺省上限约束(09-27,agentLoop 按 ultraRequested 传 uncapped)。客户端只在引擎声明了它时才按拉满显示窗口:
       // 老引擎 Ultra 照样封顶,context_info 也不带 ultra —— 不声明的话新桌面会把 272k 的 run 显示成 1M(Codex 09-27)。

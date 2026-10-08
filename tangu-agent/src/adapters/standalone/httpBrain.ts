@@ -399,6 +399,7 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
             backgroundModelId: r?.backgroundModelId ?? null,
             imageModelId: r?.imageModelId ?? null,
             visionModelId: r?.visionModelId ?? null,
+            realtimeModel: r?.realtimeModel?.id ? { id: String(r.realtimeModel.id), name: String(r.realtimeModel.name || r.realtimeModel.id), apiModelId: r.realtimeModel.apiModelId ?? null } : null,
             reachable: true,
           };
         } catch {
@@ -406,6 +407,13 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
           return { models: [], defaultModelId: null, backgroundModelId: null, imageModelId: null, visionModelId: null, reachable: false };
         }
       },
+    },
+    // 实时语音通话走云端中转(ws /api/brain/realtime):key 住云端、按通话时长计费;帧协议与直连百炼相同,连接与转发仍归 services/realtimeVoice。
+    realtime: {
+      endpoint: (model: string) => ({
+        url: `${base.replace(/^http/, 'ws')}/api/brain/realtime?model=${encodeURIComponent(model)}&projectSource=tangu`,
+        headers: { Authorization: authHeaders().Authorization },
+      }),
     },
     images: {
       edit: async (req) => {

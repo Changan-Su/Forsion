@@ -55,6 +55,8 @@
  *                                                           #   写 lock:null + /agent/remote/unlock → 远程 run 又能起。负对照 = 改前的 dist(无 estop 路由 → 红)
  *   npm run live:harness -- --only realtime                  # 实时语音通话(10-01,仅 macOS:say 合成中文语音):真百炼 Qwen-Omni-Realtime × 真引擎 ws /agent/realtime。
  *                                                           #   百炼 provider 取自 TANGU_LIVE_DASHSCOPE_CONFIG(缺省 ~/.forsion-dev/config.json 里第一个百炼 provider),烧用户百炼额度(几分钱)。
+ *                                                           #   云端线路(10-07):TANGU_LIVE_CLOUD_URL=<Forsion 服务端> TANGU_LIVE_CLOUD_TOKEN=<登录令牌> TANGU_LIVE_REALTIME_CLOUD_MODEL=<实时通话模型 id> TANGU_LIVE_REALTIME_VOICE=Tina
+ *                                                           #   —— 引擎不拿百炼 key,经服务端 ws /api/brain/realtime 中转(按通话时长扣那个账号的额度)。
  *                                                           #   判:说完→出声时延、人设名(不自称 Qwen)、双方转写落库、ask_tangu 委派 → 真 Tangu run 读出工作区里的随机文件名 → 结果被念回。
  *   npm run live:harness -- --only remotesession             # 远程会话子集(P1 · K9 / M1A):合成的手机调用方(同 remotecaller 的盖章头)经「隧道」上传附件进会话工作区,
  *                                                           #   附件腿只给文件名、要模型读出来(host 模式;引擎把附件绝对路径拼在本轮用户消息第一行,审批一律代拒),
@@ -881,7 +883,8 @@ const MCP_CFG = ONLY.has('mcp') || ONLY.has('imgwindow') || ONLY.has('novision')
   const gitCfg = ONLY.has('git') && GIT_PREFS ? { branchPrefix: GIT_PREFIX, commitInstructions: `Start every commit subject with the tag ${GIT_TAG} followed by a space.` } : null;
   // realtime / voiceclone:把开发机上的百炼 provider 抄进隔离 config(只这一个 provider;id 钉成 bailian,场景按 bailian/<model> 叫)
   let realtimeProviders = null;
-  if (ONLY.has('realtime') || ONLY.has('voiceclone')) {
+  // 云端线路(TANGU_LIVE_REALTIME_CLOUD_MODEL)不抄:引擎手里一把百炼 key 都没有,接得通就只能是经 Forsion 服务端中转的
+  if ((ONLY.has('realtime') && !process.env.TANGU_LIVE_REALTIME_CLOUD_MODEL) || ONLY.has('voiceclone')) {
     const src = process.env.TANGU_LIVE_DASHSCOPE_CONFIG || join(homedir(), '.forsion-dev', 'config.json');
     const p = (JSON.parse(readFileSync(src, 'utf8')).providers || []).find((x) => /dashscope|aliyuncs\.com/i.test(x?.baseUrl || '') && x.apiKey);
     if (!p) { console.error(`realtime:${src} 里没有带 key 的百炼 provider`); process.exit(2); }
@@ -940,7 +943,7 @@ const PAD_TOKEN = `PAD-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
 const SEED_PAD = `${PAD_TOKEN} Archival filler row for prefix-budget testing; it carries no instruction and answers no question. `
   + Array.from({ length: 8 }, (_, i) => `Note ${i + 1}: the coastal survey team logged tidal range, wind bearing and cloud cover at six-hour intervals along the northern estuary terraces.`).join(' ');
 if (SEED_PAD.length < 1000) { console.error(`填充行只有 ${SEED_PAD.length} 字,吃不掉 §1 的 1000 字预算`); process.exit(2); }
-const TOKEN = randomUUID(); // 每次随机:撞上别的台架/引擎也只会 401,不会串到别人的引擎上报绿
+const TOKEN = process.env.TANGU_LIVE_CLOUD_TOKEN || randomUUID(); // 引擎的 --token 同时是它带给 Forsion 云端的登录令牌:走云端的场景(realtime 云端线路)传真令牌。缺省每次随机:撞上别的台架/引擎也只会 401,不会串到别人的引擎上报绿
 const port = await new Promise((r) => { const srv = createServer(); srv.listen(0, '127.0.0.1', () => { const p = srv.address().port; srv.close(() => r(p)); }); });
 const base = `http://127.0.0.1:${port}`;
 const engineLog = join(OUT, 'engine.log');
@@ -1001,7 +1004,7 @@ if (ONLY.has('browserext')) {
 
 const child = spawn(process.execPath, [
   entry, '--port', String(port), '--host', '127.0.0.1', '--data-dir', join(home, 'state.db'),
-  '--sandbox', SANDBOX, '--cloud-url', 'http://127.0.0.1:9', '--token', TOKEN,
+  '--sandbox', SANDBOX, '--cloud-url', process.env.TANGU_LIVE_CLOUD_URL || 'http://127.0.0.1:9', '--token', TOKEN,
 ], { env: {
   ...process.env, TANGU_HOME: home, TANGU_DEFAULT_WORKSPACE: workspace, TANGU_CACHE_PROBE: '1',
   TANGU_BROWSER_CDP: userChromeWs || 'off',
@@ -4725,7 +4728,9 @@ Then reply with only the command output.`,
   await scenario('realtime', 'realtime 实时语音通话:百炼 speech-to-speech × ask_tangu 委派', async () => {
     if (process.platform !== 'darwin') return { ok: false, skipped: true, detail: '需要 macOS 的 say 合成测试语音' };
     const WS = createRequire(import.meta.url)('ws');
-    const RT_MODEL = `bailian/${process.env.TANGU_LIVE_REALTIME_MODEL || 'qwen3.8-omni-flash-realtime'}`;
+    // 云端线路:TANGU_LIVE_REALTIME_CLOUD_MODEL=<Forsion 上实时通话模型的 id>(不带提供方前缀),连同 TANGU_LIVE_CLOUD_URL / TANGU_LIVE_CLOUD_TOKEN;
+    // 云端模型的 id 看不出家族,音色要用 TANGU_LIVE_REALTIME_VOICE 明说(桌面端也是这么传的)
+    const RT_MODEL = process.env.TANGU_LIVE_REALTIME_CLOUD_MODEL || `bailian/${process.env.TANGU_LIVE_REALTIME_MODEL || 'qwen3.8-omni-flash-realtime'}`;
     // TANGU_LIVE_REALTIME_MODEL 换通话模型(如 qwen-audio-3.1-realtime-plus);TANGU_LIVE_REALTIME_VOICE 指定音色,不给就走引擎按家族挑的缺省。
     // 随机文件名:模型猜不到,只有 Tangu 真去列目录才说得出来
     const ANIMAL = ['长颈鹿', '火烈鸟', '穿山甲', '北极熊', '海獭', '雪豹'][Math.floor(Math.random() * 6)];
@@ -4819,7 +4824,7 @@ Then reply with only the command output.`,
       };
       const ok = Object.values(checks).every(Boolean);
       writeFileSync(join(OUT, 'realtime-timeline.txt'), timeline.join('\n') + '\n'); // 事件时间线(相对通话开始的毫秒),排查播报 / 委派时序用
-      return { ok, detail: `说完→出声 ${latencies.join('/')}ms;人设「${helloText}」(应含 ${agentName || '?'});委派 task=「${started?.task || '-'}」→ ${finished?.status || '没回'}${runMsg ? `,run 读到 ${MARK}` : `,run 没读到 ${MARK}`};念回「${afterText || afterAll || '-'}」;落库 user=${userSaved} ai=${aiSaved};「工作目录」用户行 ${askRows} 条${taskRow ? '(含转述任务行)' : ''};换档后委派 run 档位 ${runThinking ?? '-'};heard「${toolArgs.map((a) => a.heard || '-').join(' / ')}」;打字答「${typedReply && typeof typedReply === 'object' ? typedReply.text : '-'}」;失败项 ${Object.entries(checks).filter(([, v]) => !v).map(([k]) => k).join(',') || '无'}${ended ? `;通话结束:${ended}` : ''}` };
+      return { ok, detail: `线路 ${process.env.TANGU_LIVE_REALTIME_CLOUD_MODEL ? `Forsion 云端(${RT_MODEL})` : `自带百炼(${RT_MODEL})`};说完→出声 ${latencies.join('/')}ms;人设「${helloText}」(应含 ${agentName || '?'});委派 task=「${started?.task || '-'}」→ ${finished?.status || '没回'}${runMsg ? `,run 读到 ${MARK}` : `,run 没读到 ${MARK}`};念回「${afterText || afterAll || '-'}」;落库 user=${userSaved} ai=${aiSaved};「工作目录」用户行 ${askRows} 条${taskRow ? '(含转述任务行)' : ''};换档后委派 run 档位 ${runThinking ?? '-'};heard「${toolArgs.map((a) => a.heard || '-').join(' / ')}」;打字答「${typedReply && typeof typedReply === 'object' ? typedReply.text : '-'}」;失败项 ${Object.entries(checks).filter(([, v]) => !v).map(([k]) => k).join(',') || '无'}${ended ? `;通话结束:${ended}` : ''}` };
     } finally { clearInterval(pump); try { ws.close(); } catch { /* ignore */ } }
   });
 

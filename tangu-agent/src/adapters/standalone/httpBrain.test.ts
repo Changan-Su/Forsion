@@ -278,3 +278,16 @@ describe('account sync cancellation transport', () => {
     }
   });
 });
+
+// 实时语音通话:云端中转的地址与鉴权(连接与转发归 services/realtimeVoice,这里只给地址 + 头)。
+describe('httpBrain realtime endpoint', () => {
+  it('云端基址换成 ws(s),模型 id 进 query,带当下的 Forsion token', () => {
+    let token = 'tok-1';
+    const brain = createHttpBrain({ cloudUrl: 'https://cloud.test/', token: () => token });
+    expect(brain.realtime!.endpoint('pr-0a/b c')).toEqual({
+      url: 'wss://cloud.test/api/brain/realtime?model=pr-0a%2Fb%20c&projectSource=tangu', headers: { Authorization: 'Bearer tok-1' } });
+    token = 'tok-2'; // 登录换了 token:每次现取,不缓存
+    expect(brain.realtime!.endpoint('m').headers.Authorization).toBe('Bearer tok-2');
+    expect(createHttpBrain({ cloudUrl: 'http://127.0.0.1:3001', token: 't' }).realtime!.endpoint('m').url).toBe('ws://127.0.0.1:3001/api/brain/realtime?model=m&projectSource=tangu');
+  });
+});

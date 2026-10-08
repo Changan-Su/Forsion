@@ -284,12 +284,16 @@ export function createMultiBrain(httpBrain: CloudBrainServices, registry: Provid
       },
     },
     realtime: {
-      // 实时语音只认 <providerId>/<model>,且只接百炼(Qwen-Omni-Realtime;OpenAI 兼容事件协议)。
+      // 实时语音分发:<providerId>/<model> 命中本机 provider → 直连(只接百炼:Qwen-Omni / Qwen-Audio Realtime,OpenAI 兼容事件协议);
+      // 否则是 Forsion 云端的实时模型 → 委托 httpBrain(云端中转,计费在云端)。
       // 端点用经典域名 wss://dashscope(-intl).aliyuncs.com/api-ws/v1/realtime(10-01 实测可用,无需业务空间 ID)。
-      // TANGU_REALTIME_UPSTREAM:台架把上游换成本地假百炼(desktop scripts/realtime-voice.e2e.cjs),免烧额度。
+      // TANGU_REALTIME_UPSTREAM:台架把直连的上游换成本地假百炼(desktop scripts/realtime-voice.e2e.cjs),免烧额度。
       endpoint: (model: string) => {
         const p = registry.list().find((x) => model.startsWith(x.providerId + '/'));
-        if (!p) throw new Error(`No provider for realtime model ${model} (use <providerId>/<model>)`);
+        if (!p) {
+          if (!httpBrain.realtime) throw new Error(`No provider for realtime model ${model} (use <providerId>/<model>)`);
+          return httpBrain.realtime.endpoint(model);
+        }
         if (!isDashScopeBase(p.baseUrl)) throw new Error(`Realtime voice needs an Alibaba Cloud Bailian (DashScope) provider; ${p.providerId} is not one`);
         const apiModelId = model.slice(p.providerId.length + 1);
         return {

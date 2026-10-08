@@ -76,7 +76,7 @@ export const APP_SETTINGS: Readonly<Record<string, Section>> = {
       voice: { t: 'text', max: 120, note: 'read-aloud voice id (provider-specific); "" = the provider default' },
       speed: { t: 'number', min: 0.5, max: 2, def: 1, note: 'read-aloud speed' },
       autoSpeak: { t: 'bool', note: 'read new replies aloud automatically' },
-      realtimeModel: { t: 'text', max: 200, note: 'voice-call model as "<providerId>/<model>"; "" = voice call is off' },
+      realtimeModel: { t: 'text', max: 200, note: 'voice-call model: "<providerId>/<model>" (the user\'s own Bailian provider) or a Forsion cloud voice-call model id; "" = voice call is off; never set = on with the Forsion cloud model while signed in to Forsion' },
       realtimeVoice: { t: 'text', max: 120, note: 'voice-call voice id; "" = the model default' },
     },
     locked: { realtimeModel: CALL_LOCKED, realtimeVoice: CALL_LOCKED },

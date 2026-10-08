@@ -8,24 +8,27 @@
  */
 import { useSyncExternalStore } from 'react'
 import type { EngineTarget } from './engine/target'
+import type { StoredDesktopConfig } from '../types'
 import { realtimeSocketUrl } from './backendService'
 import { CALL_VOICE_BEAT_MS, CALL_VOICE_TICK_MS, postCallVoice } from './callVoice'
 
 /** 设置浮窗(另一个 renderer)存完实时通话配置后 bump 这个 key:storage 事件跨 renderer 送达,主窗当场重读。 */
 export const REALTIME_CFG_BUMP_KEY = 'forsion_realtime_cfg_rev'
-let rtCfg = { model: '', voice: '' }
+export type RealtimeStoredConfig = Pick<StoredDesktopConfig, 'realtimeModelId' | 'realtimeModelUnset' | 'realtimeVoice'>
+let rtCfg: RealtimeStoredConfig = { realtimeModelId: '', realtimeModelUnset: false, realtimeVoice: '' }
 let rtCfgWired = false
 const rtCfgListeners = new Set<() => void>()
 function readRealtimeConfig(): void {
   void window.tangu?.getConfig?.().then((c) => {
-    const next = { model: c.realtimeModelId?.trim() || '', voice: c.realtimeVoice?.trim() || '' }
-    if (next.model === rtCfg.model && next.voice === rtCfg.voice) return
+    const next = { realtimeModelId: c.realtimeModelId?.trim() || '', realtimeModelUnset: !!c.realtimeModelUnset, realtimeVoice: c.realtimeVoice?.trim() || '' }
+    if (next.realtimeModelId === rtCfg.realtimeModelId && next.realtimeModelUnset === rtCfg.realtimeModelUnset && next.realtimeVoice === rtCfg.realtimeVoice) return
     rtCfg = next
     rtCfgListeners.forEach((l) => l())
   }).catch(() => {})
 }
-/** 输入框读的实时通话配置(模型空 = 不出按钮)。desktopConfig 只在本窗关设置时重读,设置浮窗改的它看不见,所以单独一条线。 */
-export function useRealtimeConfig(): { model: string; voice: string } {
+/** 输入框读的实时通话配置(存盘原样;实际用哪个模型 / 出不出通话键由 services/realtimeModel.ts 结合登录态与云端目录定)。
+ *  desktopConfig 只在本窗关设置时重读,设置浮窗改的它看不见,所以单独一条线。 */
+export function useRealtimeConfig(): RealtimeStoredConfig {
   return useSyncExternalStore((fn) => {
     if (!rtCfgWired) {
       rtCfgWired = true
@@ -55,7 +58,7 @@ export interface CallState {
 export interface StartCallOptions {
   target: EngineTarget
   sessionId: string
-  /** <providerId>/<model>(设置 → 语音 → 实时通话)。 */
+  /** <providerId>/<model>(自带百炼)或 Forsion 云端的实时模型 id(设置 → 语音 → 语音通话;缺省见 services/realtimeModel.ts)。 */
   model: string
   voice?: string
   /** 会话由引擎补建时的标题(正常路径会话已存在)。 */
