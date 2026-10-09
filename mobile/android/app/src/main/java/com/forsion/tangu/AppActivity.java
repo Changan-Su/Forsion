@@ -4,7 +4,11 @@ import android.os.Bundle;
 
 import com.getcapacitor.BridgeActivity;
 
-public class MainActivity extends BridgeActivity {
+/**
+ * 唯一的 Activity。⚠️ 清单里的 `.MainActivity` 不是它,而是指向它的默认桌面入口(activity-alias,见 LauncherIconPlugin):
+ * 代码里要显式打开本页一律用 AppActivity.class —— 入口会随应用图标被关掉,这个类不会。
+ */
+public class AppActivity extends BridgeActivity {
     @Override
     public void onCreate(Bundle savedInstanceState) {
         // ⚠️ 必须排在 super.onCreate **之前**:BridgeActivity 在 super 里就把桥连同插件表一起装好了,
@@ -21,11 +25,13 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(NativeChromePlugin.class);
         // 系统文件选择器:原生半屏里点「添加文件」时 WebView 没有用户激活,<input type=file>.click() 会被 Chromium 静默丢掉。
         registerPlugin(NativeFilePickerPlugin.class);
-        // 分享到 Forsion:系统分享面板送来的文字 / 文件(清单里 MainActivity 的 SEND / SEND_MULTIPLE 过滤器)。
+        // 分享到 Forsion:系统分享面板送来的文字 / 文件(清单里 AppActivity 的 SEND / SEND_MULTIPLE 过滤器)。
         registerPlugin(ShareInboxPlugin.class);
         // 市场安装包的封顶下载:流式落盘、超过上限当场中止(Filesystem.downloadFile 是整个下完才看大小,能把存储写满)。
         registerPlugin(MarketDownloadPlugin.class);
         registerPlugin(PhoneControlPlugin.class);
+        // 桌面图标跟随「设置 → 外观 → 应用图标」里的内置图标(清单里的入口别名)。
+        registerPlugin(LauncherIconPlugin.class);
         // 重建(配置变更 / 进程被杀后从最近任务回来)会重放当初的启动 intent:点岛跳会话只在全新启动时认一次。
         LiveIslandPlugin.freshLaunch = savedInstanceState == null;
         super.onCreate(savedInstanceState);

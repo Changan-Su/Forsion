@@ -57,7 +57,7 @@ final class PhoneVerbs {
 
     /**
      * view 一律拒绝的 scheme。契约列的五个之外加了 android-app:它就是 intent: 的另一种写法(Intent.parseUri 认)。
-     * tangu = 本 App 自己的 scheme:`tangu://auth-callback?token=…` 会被 MainActivity 当登录回跳吃下(换成对方的账号,
+     * tangu = 本 App 自己的 scheme:`tangu://auth-callback?token=…` 会被 AppActivity 当登录回跳吃下(换成对方的账号,
      * 登录 CSRF),确认框上只看得到「Forsion (tangu://auth-callback)」。接手者是本包的兜底在 PhoneControlPlugin.view。
      * ⚠️ 比较前先转小写 —— `JavaScript:` 也得拒。
      */

@@ -26,7 +26,7 @@ import java.util.List;
  *    点一条直接进那个 Space。顺带,安卓自己允许把列表里的一条长按拖到桌面变成固定图标。
  *  - pin:直接请求把某个 Space **固定到桌面**(系统弹自己的确认框,我们不画任何 UI)。
  *
- * 两者用的是同一个 Intent:`tangu://space?id=<id>`,显式指向 MainActivity(显式 Intent 不吃
+ * 两者用的是同一个 Intent:`tangu://space?id=<id>`,显式指向 AppActivity(显式 Intent 不吃
  * intent-filter,所以 AndroidManifest 不用动)。JS 侧冷启走 App.getLaunchUrl()、热启走 appUrlOpen,
  * 见 mobile/src/spaceShortcuts.ts。
  *
@@ -37,7 +37,7 @@ import java.util.List;
 public class SpaceShortcutsPlugin extends Plugin {
 
     private ShortcutInfoCompat build(Context ctx, String id, String shortLabel, int rank) {
-        Intent intent = new Intent(ctx, MainActivity.class);
+        Intent intent = new Intent(ctx, AppActivity.class);
         // ⚠️ 必须带 action:没有 action 的 Intent 建快捷方式会被系统直接拒(IllegalArgumentException)。
         intent.setAction(Intent.ACTION_VIEW);
         intent.setData(Uri.parse("tangu://space?id=" + Uri.encode(id)));

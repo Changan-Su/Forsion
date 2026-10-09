@@ -1291,6 +1291,8 @@ declare global {
       cloudWeb?: boolean
       /** 移动端(Capacitor/Android)标志:由 mobile 垫片注入;Inbox 等据此走设备本地存储实现。 */
       mobile?: boolean
+      /** 安卓 App:桌面图标能跟随**内置**应用图标(Android 只能在安装包自带的图标之间切换);mobile 垫片注入。 */
+      launcherIcon?: boolean
       /** unit 设备页标志(B 端渲染,unitShim 注入):本页是另一台设备曝出来的 Forsion 面 ——
        *  插件清单走对方的 unit/plugins,无 vault 桥(本地 vault 面 = v2.1)。 */
       unitPage?: boolean

@@ -68,6 +68,9 @@ function applyUrl(url: string | null | undefined): void {
   } catch { /* 畸形 URL:忽略 */ }
 }
 
+/** 桌面入口换了(应用图标,见 launcherIcon.ts)之后重发:快捷方式是挂在入口上的。 */
+export function publishSpaceShortcuts(): void { publishSoon() }
+
 let installed = false
 export function installSpaceShortcuts(): void {
   if (installed || !Capacitor.isNativePlatform()) return

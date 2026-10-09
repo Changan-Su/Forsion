@@ -24,6 +24,8 @@ export const StartupAppearanceSettings: React.FC = () => {
   const [error, setError] = useState<string | null>(null)
   const [importing, setImporting] = useState<{ image: ImportedAppearance; slot: 'icon' | 'splash' } | null>(null)
   const [preview, setPreview] = useState<string | null>(null)
+  // Where the icon also lives outside the app: the desktop system (Dock / taskbar), or the Android home screen.
+  const system = window.tangu?.startupAppearance ? 'native' : window.tangu?.launcherIcon ? 'launcher' : null
   const run = async (work: () => Promise<void>): Promise<void> => {
     setBusy(true); setError(null)
     try { await work() } catch (e) { setError(e instanceof AppearanceImportError ? `startupAppearance.error.${e.reason}` : 'startupAppearance.error.save') } finally { setBusy(false) }
@@ -92,11 +94,11 @@ export const StartupAppearanceSettings: React.FC = () => {
         label={<label className="startup-appearance-icon-label" htmlFor="startup-icon"><BrandLogo size={28} />{t('startupAppearance.icon')}</label>}
         control={artworkControl('icon')}
       />
-      {window.tangu?.startupAppearance && <SettingsRow
-        label={t('startupAppearance.native')}
-        description={t('startupAppearance.nativeScope')}
+      {system && <SettingsRow
+        label={t(`startupAppearance.${system}`)}
+        description={t(`startupAppearance.${system}Scope`)}
         className="startup-appearance-switch-row"
-        control={<SettingsSwitch checked={value.nativeIcon} onChange={(nativeIcon) => save({ nativeIcon })} label={t('startupAppearance.native')} />}
+        control={<SettingsSwitch checked={value.nativeIcon} onChange={(nativeIcon) => save({ nativeIcon })} label={t(`startupAppearance.${system}`)} />}
       />}
       <SettingsRow
         label={t('startupAppearance.show')}
@@ -115,7 +117,7 @@ export const StartupAppearanceSettings: React.FC = () => {
         <p>{t('startupAppearance.behavior')}</p>
         <p>{t('startupAppearance.sceneHint')}</p>
         <p>{t('startupAppearance.hint')}</p>
-        {window.tangu?.startupAppearance && <p>{t('startupAppearance.nativeHint')}</p>}
+        {system && <p>{t(`startupAppearance.${system}Hint`)}</p>}
         {!presets.length && <p>{t('startupAppearance.empty')}</p>}
       </div>
     </details>

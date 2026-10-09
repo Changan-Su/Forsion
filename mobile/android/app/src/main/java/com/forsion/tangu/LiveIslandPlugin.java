@@ -65,7 +65,7 @@ public class LiveIslandPlugin extends Plugin {
     /** 收尾 / 重置各记一笔。等通知权限回执的那一发若跨过了一笔,就是过期的:再贴会把已经结束的 run 的岛贴回来一直挂着。 */
     private final AtomicInteger epoch = new AtomicInteger();
     private volatile int askedAt;
-    /** MainActivity 在插件装载前写入:本次是全新启动(不是重建)。 */
+    /** AppActivity 在插件装载前写入:本次是全新启动(不是重建)。 */
     static boolean freshLaunch;
 
     /**
@@ -384,9 +384,9 @@ public class LiveIslandPlugin extends Plugin {
         }
     }
 
-    /** 点岛 = 回到那个会话。显式 Intent 直指 MainActivity(同 SpaceShortcutsPlugin,不用动 intent-filter),见 emitOpen。 */
+    /** 点岛 = 回到那个会话。显式 Intent 直指 AppActivity(同 SpaceShortcutsPlugin,不用动 intent-filter),见 emitOpen。 */
     private static PendingIntent openSession(Context ctx, String sessionId) {
-        Intent i = new Intent(ctx, MainActivity.class)
+        Intent i = new Intent(ctx, AppActivity.class)
             .setAction(Intent.ACTION_VIEW)
             .setData(Uri.parse("tangu://session?id=" + Uri.encode(sessionId == null ? "" : sessionId)))
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
