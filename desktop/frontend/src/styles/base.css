@@ -657,7 +657,7 @@ a:hover { color: var(--accent-ink); }
 .newtab-card.nt-row:hover, .newtab-card.nt-chip:hover, .newtab-card.nt-tilebtn:hover, .newtab-card.nt-pchip:hover { transform: none; }
 .newtab-card.nt-row .newtab-card-ic, .newtab-card.nt-chip .newtab-card-ic, .newtab-card.nt-tilebtn .newtab-card-ic, .newtab-card.nt-pchip .newtab-card-ic { display: inline-flex; flex-shrink: 0; }
 .newtab-card.nt-row .newtab-card-label, .newtab-card.nt-chip .newtab-card-label, .newtab-card.nt-tilebtn .newtab-card-label { font-size: var(--ui-font-body, 13px); }
-.nt-rows { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 2px 16px; }
+.nt-rows { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr)); gap: 2px 16px; } /* min(…,100%):窄分栏里列宽不许撑出横向滚动 */
 .newtab-card.nt-row { justify-content: flex-start; gap: 9px; min-width: 0; height: 34px; padding: 0 8px; background: transparent; border-color: transparent; border-radius: var(--radius-sm); }
 .newtab-card.nt-row:hover { background: var(--overlay-light); border-color: transparent; }
 .newtab-card.nt-row .newtab-card-ic, .newtab-card.nt-chip .newtab-card-ic, .newtab-card.nt-pchip .newtab-card-ic { color: var(--text-faint); }

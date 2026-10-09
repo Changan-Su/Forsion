@@ -12,6 +12,7 @@ import { openSpecial } from './SpecialViews'
 import { useWorkspace, useSpaceStore, useRibbonStore, getActiveSpace, setActiveSpace, getView, label, startOpenDrag, rankIds, OverlayAt, formatHotkey, effectiveHotkey, isMacPlatform, type PersistedPanel } from '@lcl/engine'
 import { AMADEUS_ENABLED } from '../spaces'
 import { pluginOfSpace } from '../userSpaces'
+import { homeSlotSpaceId } from '../homeSlot'
 import { useRecentViews, type RecentView } from '../recentViews'
 import { usePluginStore } from '@amadeus/plugins/pluginStore'
 import { usePageStore } from '@amadeus/store/pageStore'
@@ -57,6 +58,7 @@ export function NewTabView({ leaf }: ViewProps) {
   const spaces = useSpaceStore((state) => state.spaces) // 插件 / 用户 Space 是异步注册的,订阅着才会补出格子
   useSpaceStore((state) => state.activeSpaceId) // 换 Space 重渲(侧栏面板取自当前 Space 的 defaults)
   const ribbonOrder = useRibbonStore((state) => state.order)
+  useRibbonStore((state) => state.items) // 主位槽换 Space 时条目会重挂 → 重渲(下面 homeSlotSpaceId 是现读的)
   const recents = useRecentViews((state) => state.items)
   const pluginViews = usePluginStore((state) => state.views)
   const pluginCreators = usePluginStore((state) => state.fileCreators)
@@ -120,7 +122,10 @@ export function NewTabView({ leaf }: ViewProps) {
 
   // 打开 —— 一个 Space 一格,顺序跟 Ribbon 一致(归属规则见 newTabModel)。内置的和插件带来的不再区分;
   // 名字、图标用 Space 自己的。单击 = 开它的第一个视图(开在这个标签里);多视图的在展开菜单里选。
-  const ordered = rankIds(spaces.map((sp) => `space:${sp.id}`), ribbonOrder).flatMap((id) => spaces.find((sp) => `space:${sp.id}` === id) ?? [])
+  // 主位槽里的那个 Space 在 Ribbon 上恒排最前(不看它在持久顺序里的名次)。
+  const homeId = homeSlotSpaceId()
+  const ranked = rankIds(spaces.map((sp) => `space:${sp.id}`), ribbonOrder).flatMap((id) => spaces.find((sp) => `space:${sp.id}` === id) ?? [])
+  const ordered = [...ranked.filter((sp) => sp.id === homeId), ...ranked.filter((sp) => sp.id !== homeId)]
   const { tiles, free } = launcherTiles(ordered, getView, pluginOfSpace, pluginViews.map((o) => `plugin:${o.pluginId}:${o.item.id}`))
   const spaceItems: Item[] = tiles.map(({ space, views }) => {
     const vs = views.map((p, i) => viewItem(p, `view:${space.id}:${i}`))
@@ -316,7 +321,14 @@ export function NewTabView({ leaf }: ViewProps) {
       {menu && menu.item.views && createPortal(
         <OverlayAt className="ctx-menu" x={menu.x} y={menu.y} onClick={(e) => e.stopPropagation()}>
           {menu.item.views.map((v) => (
-            <button key={v.key} onClick={() => { setMenu(null); pick(v) }}>{v.icon}{v.label}</button>
+            // 菜单里的视图同样可拖(待办原先是一张可拖的卡);拖完收起菜单 —— 拖拽不产生 click,window 那条监听关不掉它。
+            <button
+              key={v.key}
+              draggable={!!v.drag}
+              onDragStart={v.drag ? (e) => startOpenDrag(e.dataTransfer, v.drag!) : undefined}
+              onDragEnd={() => setMenu(null)}
+              onClick={() => { setMenu(null); pick(v) }}
+            >{v.icon}{v.label}</button>
           ))}
           <div className="ctx-separator" />
           <button onClick={() => { const id = menu.item.spaceId; setMenu(null); if (id) setActiveSpace(id) }}>
