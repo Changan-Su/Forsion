@@ -610,10 +610,22 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
       // ref 末尾带 '/':对不含 '/' 的 ref,服务端在精确路径找不到时会按文件名全库兜底(给 `![[pic.png]]` 用的),会把别的
       // 目录里的同名文件读成库根这一个。带上 '/' 就只做精确匹配(server routes.ts 的 /asset:normalizePath 剥掉尾斜杠,
       // 兜底只在原始 ref 不含 '/' 时才走)。
-      const r = await (cfg.request ?? fetch)(
-        `${cfg.apiBase}/amadeus/vaults/${encodeURIComponent(v)}/asset?ref=${encodeURIComponent(`${norm}/`)}`,
-        { headers: { Authorization: `Bearer ${cfg.getToken()}` } }, // assetAuth 收 Bearer 主 token,无需等 asset-token
-      )
+      // 超时闸(同 cloudHttp,到响应头为止):无超时的 fetch 在弱网下挂死,插件的 readFile 就永不返回。
+      const ctrl = new AbortController()
+      const timer = setTimeout(() => ctrl.abort(), 30_000)
+      let r: Response
+      try {
+        r = await (cfg.request ?? fetch)(
+          `${cfg.apiBase}/amadeus/vaults/${encodeURIComponent(v)}/asset?ref=${encodeURIComponent(`${norm}/`)}`,
+          { headers: { Authorization: `Bearer ${cfg.getToken()}` }, signal: ctrl.signal }, // assetAuth 收 Bearer 主 token,无需等 asset-token
+        )
+      } catch (e) {
+        throw new HttpError(0, null, ctrl.signal.aborted
+          ? translate('amxbridge.timeout', { s: 30 })
+          : translate('amxbridge.network', { msg: e instanceof Error ? e.message : String(e) }))
+      } finally {
+        clearTimeout(timer)
+      }
       if (r.ok) return r
       if (r.status !== 404) throw new HttpError(r.status, null, translate('amxbridge.readFailed', { status: r.status }))
       // 404 有两种:没有这一行;行在、对象取不到(别处正好在覆盖:查到的是旧对象,旧对象随即被删)。后一种不能当「没有」。

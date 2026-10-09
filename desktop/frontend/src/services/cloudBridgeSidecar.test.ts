@@ -5,7 +5,8 @@
  * 假服务端的判据镜像 server/microserver/amadeus(同 mobile/scripts/plugin-install.e2e.cjs 的 startFakeCloud;那台是整条
  * 插件链路的端到端,这里钉它覆盖不到的:仅新建 / 比对交换写两条分支、对象字节一时取不到、BOM)。
  * 负对照(实跑过):writeTextFile 去掉分流 → 写的用例红(HTTP 400);取字节的 ref 不带尾斜杠 → 读成别的目录的同名文件(OTHER);
- * 把资源端点的 404 一律当「没有」→ 「对象取不到」那条红(读成 null);改回 Response.text() → BOM 那条红。
+ * 把资源端点的 404 一律当「没有」→ 「对象取不到」那条红(读成 null);改回 Response.text() → BOM 那条红;
+ * 取字节的请求不带中止信号 → 超时那条挂到用例超时。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createCloudAmadeusBridge } from '../../../../web/src/amadeus/cloudBridge'
@@ -129,6 +130,24 @@ describe('cloud bridge: non-.md/.db text files go through the binary endpoints',
     expect(await bridge.readTextFile(IDX)).toBe('{"decks":[1,2,3]}')
     bytesMissing = 5
     await expect(bridge.readTextFile(IDX)).rejects.toThrow() // null 会让插件按「还没有索引」把整份盖掉
+  })
+
+  it('a read that never answers times out as a failure instead of hanging the plugin', async () => {
+    const bridge = boot()
+    put(IDX, '{}', 'binary')
+    await bridge.readTextFile(IDX) // 选库等前置请求先走完
+    const real = globalThis.fetch as unknown as (i: string, init?: RequestInit) => Promise<Response>
+    vi.stubGlobal('fetch', (input: string, init?: RequestInit) => (input.includes('/asset?')
+      ? new Promise<Response>((_, reject) => init?.signal?.addEventListener('abort', () => reject(new Error('aborted'))))
+      : real(input, init)))
+    vi.useFakeTimers()
+    try {
+      const pending = expect(bridge.readTextFile(IDX)).rejects.toThrow()
+      await vi.advanceTimersByTimeAsync(30_000)
+      await pending
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('keeps a UTF-8 BOM through read and write', async () => {
