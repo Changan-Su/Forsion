@@ -17,6 +17,11 @@ import { request as engineJsonRequest } from '../../services/backendService'
 
 /** window.tangu,在没有 window 的环境(vitest node 环境、云端 worker)返回 undefined 而不是抛 ReferenceError。 */
 const hostTangu = (): typeof window.tangu => (typeof window !== 'undefined' ? window.tangu : undefined)
+/** 这个宿主有没有「自动化规则」这回事:探针给得出后端配置,且宿主没有声明「这里没有本机引擎」。
+ *  规则存在引擎的本机档案里(/agent/special/* 只在 hostExec 的引擎上有),手机接的是云端引擎 —— 那边一律答 404。
+ *  闸看宿主的**静态声明**(executionCapabilities.host === false),不看 hostExecution():后者在桌面要等配置
+ *  读回来才准,插件 setup 时往往还没到。桌面主进程不声明这一项 = 照旧注入。 */
+const automationHost = (): boolean => !!readTangu()?.waitBackend && hostTangu()?.executionCapabilities?.host !== false
 import { noteOf, usePageStore } from '../store/pageStore'
 import { useUiStore } from '../store/uiStore'
 import { setTheme as applyAccent, toggleMode } from '../theme/ThemeManager'
@@ -419,7 +424,9 @@ function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppAp
     vaultRoot: () => usePageStore.getState().vaultRoot || null,
     // 在系统文件管理器里定位库内路径(2026-08-29+)。桥缺席时**整条方法不挂**,同 watchFile 的
     // 纪律 —— 挂个空壳会让插件的「有这个方法就画按钮」分支画出一颗点了没反应的按钮。
-    ...(amadeus?.revealInFileManager
+    // 桥上有这个方法、但宿主声明做不了(hostCaps.revealInFileManager === false:手机本地库是空操作,
+    // 云端库只弹一句「仅桌面」)同样不挂 —— 与宿主自己的菜单同一把尺子(amadeus/lib/hostCaps.ts)。
+    ...(typeof amadeus?.revealInFileManager === 'function' && amadeus.hostCaps?.revealInFileManager !== false
       ? { reveal: (p: string): void => { if (ok()) void amadeus.revealInFileManager(p).catch(() => {}) } }
       : {}),
     // 把库内的文件 / 文件夹移进回收站(2026-10-05+)。走用户在文件树里删它的同一条路(pageStore.deletePage /
@@ -891,7 +898,7 @@ const pendingRulesOff = new Set<string>()
 /** 对齐之后的引擎侧收尾,只主窗做(各窗都会对齐,发 N 遍没意义):想开却因前置没齐停着的插件,规则先停 ——
  *  用户看到的是「没在运行」,引擎里不许照跑;再让捆绑包内嵌引擎插件跟上父插件的运行态。 */
 function afterReconcile(): void {
-  if (windowKind() !== 'main' || !readTangu()?.waitBackend) return
+  if (windowKind() !== 'main' || !automationHost()) return
   const s = usePluginStore.getState()
   for (const p of s.plugins) {
     if (s.activeIds.includes(p.id) || p.blocked || pendingRulesOff.has(p.id) || !pluginWanted(p, s.disabledIds) || !unmetPluginDeps(p, s).length) continue
@@ -1470,8 +1477,9 @@ export const usePluginStore = create<PluginState>((set, get) => {
     },
     // 自动化播种:**探针给得出后端配置的宿主才注入**(闸看 waitBackend 在不在,不看 readTangu() 本身:
     // 台架假探针 / 旧宿主没有这条 = 与非 Tangu 宿主同口径,ctx.automation 整个不存在)。
+    // 没有本机引擎的宿主(手机)同样不注入 —— 判据见 automationHost。
     // 前缀纪律同 achievements/activity:id 在宿主拼,插件只给 key(见 pluginAutomation.ts)。
-    ...(readTangu()?.waitBackend
+    ...(automationHost()
       ? {
           automation: {
             ensure: (rules: PluginAutomationRule[]) => ensurePluginAutomation(pluginId, rules),
@@ -1839,7 +1847,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
       loadedCode.delete(cur.id)
       dropDevRecords(cur.id) // 来源整个没了 → 连开发态记账一起丢
       // 卸掉了:它种在引擎里的规则不许成为没人管的孤儿(只主窗发;同 id 很快又装回来,它的 setup 会 ensure 回去)。
-      if (windowKind() === 'main' && readTangu()?.waitBackend) {
+      if (windowKind() === 'main' && automationHost()) {
         void disablePluginRules(cur.id).catch((e) => console.warn(`[amadeus] plugin "${cur.id}" 停用自动化规则失败`, e))
       }
     }
@@ -1919,7 +1927,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
       // 连带停掉的依赖方也要收:它们的预设已撤,选中的图标 / 开屏不能留着。
       for (const stopped of new Set([id, ...before])) if (!get().activeIds.includes(stopped)) clearPluginAppearance(stopped)
       // 用户明确禁用 → 它种下的自动化规则一并停(只此一条路;非 Tangu 宿主没有探针就没有规则可关)。
-      if (wasOn && readTangu()?.waitBackend) {
+      if (wasOn && automationHost()) {
         void disablePluginRules(id).catch((e) => console.warn(`[amadeus] plugin "${id}" 停用自动化规则失败`, e))
       }
     },

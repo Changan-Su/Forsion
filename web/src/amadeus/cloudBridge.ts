@@ -95,6 +95,10 @@ export interface CloudBridgeCfg {
   onAuthError(): void
   request?(path: string, init?: RequestInit): Promise<Response>
   signal?: AbortSignal
+  /** 插件声明的文件后缀(小写,如 `.deck.md`):这些文件服务端按 .md 记成 page,但内容归插件管,不是笔记。
+   *  给了就把它们从页面列表挪进文件列表(树上还在,不进笔记管线)。服务端不知道这台设备装了哪些插件,所以在这里分。
+   *  今天只有 Android App 传(mobile/src/main.tsx,名单来自 pluginHost.fileExtensions);不传 = 行为不变。 */
+  pluginExts?(): string[]
 }
 
 // ---------------------------------------------------------------------------
@@ -362,6 +366,15 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
   /** 点开头路径段(.amadeus/.trash/.forsion-vault…)对树/搜索隐身 —— 镜像桌面主进程扫描
    *  「点目录天然跳过」语义。只滤 list* 出口;原始 tree(fetchTree)不滤,ref 解析/回收站仍可寻址。 */
   const visiblePath = (p: string): boolean => !p.split('/').some((seg) => seg.startsWith('.'))
+  /** 这条 page 其实是插件的文件(cfg.pluginExts)。 */
+  const isPluginFile = (p: string): boolean => {
+    const exts = cfg.pluginExts?.() ?? []
+    if (!exts.length) return false
+    const n = p.toLowerCase()
+    return exts.some((ext) => n.endsWith(ext))
+  }
+  /** 「树上看得见的笔记」的单一判据:首屏载荷、listPages、改名重写的页表、嵌入解析全用这一把尺子。 */
+  const visiblePage = (p: string): boolean => visiblePath(p) && !isPluginFile(p)
 
   // ---- per-path 串行写队列(rename/move 占两个 key) ---------------------------
   const queues = new Map<string, Promise<unknown>>()
@@ -782,7 +795,7 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
       })()
       let lp: string | undefined
       try { lp = localStorage.getItem(lastPageKey(snap.v)) || undefined } catch { /* ignore */ }
-      const pages = snap.tree.pages.filter(visiblePath)
+      const pages = snap.tree.pages.filter(visiblePage)
       return {
         root: `cloud://${snap.v}`,
         pages,
@@ -798,7 +811,7 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
     const lp = readLastPage()
     // 与 listPages/listFolders 同一把 visiblePath 尺子:首屏这份载荷直接进 pageStore.pages,
     // 不滤的话 .trash/ 里的笔记与库标记会当成真笔记出现在树里(桌面主进程那侧本就滤)。
-    const pages = tree.pages.filter(visiblePath)
+    const pages = tree.pages.filter(visiblePage)
     return {
       root: `cloud://${v}`,
       pages,
@@ -875,8 +888,13 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
     openVault: () => openCloud(),
     restoreVault: () => openCloud(),
 
-    listPages: async () => (await fetchTree()).pages.filter(visiblePath),
-    listFiles: async () => (await fetchTree()).files.map((f) => f.path).filter(visiblePath),
+    listPages: async () => (await fetchTree()).pages.filter(visiblePage),
+    listFiles: async () => {
+      const t = await fetchTree()
+      const files = t.files.map((f) => f.path).filter(visiblePath)
+      const pluginFiles = t.pages.filter((p) => visiblePath(p) && isPluginFile(p)) // 挪出 pages 的那些:树上照样列
+      return pluginFiles.length ? [...files, ...pluginFiles].sort() : files
+    },
     listFolders: async () => (await fetchTree()).folders.filter(visiblePath),
 
     loadPage: async (pagePath) => {
@@ -968,7 +986,7 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
             return { newPath: oldPath, page: await fetchAndParse(oldPath) }
           }
           const tree = await fetchTree(true)
-          pagesBefore = tree.pages.filter(visiblePath) // 点目录(.trash 等)与桌面 listPages 同样不算:否则裸名链接会被解析到回收站那份
+          pagesBefore = tree.pages.filter(visiblePage) // 点目录(.trash 等)与桌面 listPages 同样不算:否则裸名链接会被解析到回收站那份
           if (allTreePaths(tree).includes(newPath) || tree.folders.includes(newPath)) throw new Error(translate('amxbridge.pageExists'))
           // v3 单文件:先把在途编辑落到旧路径(重命名是显式用户动作 → force,桌面同款「无条件落盘再移动」)。
           const content = compile(manifest, contents)
@@ -1108,7 +1126,7 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
       // 解析不到才退回服务端(`|` 已剥),保留它对老目标形态的兜底。
       const { note, subpath } = splitNoteEmbed(target)
       // 点目录(.trash / .amadeus)不参与解析,与桌面索引、listPages 同一把尺子 —— 否则删了再建的同名笔记会嵌到回收站那份。
-      const pages = (await fetchTree()).pages.filter(visiblePath).sort()
+      const pages = (await fetchTree()).pages.filter(visiblePage).sort()
       const owner = note ? resolvePageName(note, pages, sourcePath) : sourcePath && pages.includes(sourcePath) ? sourcePath : null
       if (owner) {
         let raw: string | null = null
@@ -1150,7 +1168,7 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
         const dstRel = destFolder.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '')
         const newPath = dstRel ? `${dstRel}/${fileName}` : fileName
         if (newPath === pagePath) return pagePath
-        if (newPath.endsWith('.md')) pagesBefore = (await fetchTree(true)).pages.filter(visiblePath)
+        if (newPath.endsWith('.md')) pagesBefore = (await fetchTree(true)).pages.filter(visiblePage)
         let moved: MoveResultDto
         try {
           moved = await http.post<MoveResultDto>(`/amadeus/vaults/${encodeURIComponent(vid())}/move`, { from: pagePath, to: newPath })
@@ -1190,7 +1208,7 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
       const parent = dirnamePosix(folderPath)
       const newPath = parent ? `${parent}/${clean}` : clean
       if (newPath === folderPath) return folderPath
-      const pagesBefore = (await fetchTree(true)).pages.filter(visiblePath) // G2-04 引用重写的「操作前」页表(点目录不算)
+      const pagesBefore = (await fetchTree(true)).pages.filter(visiblePage) // G2-04 引用重写的「操作前」页表(点目录不算)
       let r: { path: string }
       try {
         r = await http.post<{ path: string }>(`/amadeus/vaults/${encodeURIComponent(vid())}/folders/rename`, { path: folderPath, newName: clean })
@@ -1223,7 +1241,7 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
       const newPath = dst ? `${dst}/${name}` : name
       if (newPath === src) return src
       if (dst === src || dst.startsWith(`${src}/`)) throw new Error(translate('amxbridge.moveIntoSelf'))
-      const pagesBefore = (await fetchTree(true)).pages.filter(visiblePath) // G2-04 引用重写的「操作前」页表(点目录不算)
+      const pagesBefore = (await fetchTree(true)).pages.filter(visiblePage) // G2-04 引用重写的「操作前」页表(点目录不算)
       let r: { path: string }
       try {
         r = await http.post<{ path: string }>(`/amadeus/vaults/${encodeURIComponent(vid())}/folders/move`, { path: src, dest: dst })
@@ -1650,7 +1668,7 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
         await ensureVault()
         const newPath = sanitizedSiblingPath(oldPath, newBaseName, translate('amxbridge.noteNameEmpty'))
         if (newPath === oldPath) return oldPath
-        pagesBefore = (await fetchTree(true)).pages.filter(visiblePath)
+        pagesBefore = (await fetchTree(true)).pages.filter(visiblePage)
         let moved: MoveResultDto
         try {
           moved = await http.post<MoveResultDto>(`/amadeus/vaults/${encodeURIComponent(vid())}/move`, { from: oldPath, to: newPath })

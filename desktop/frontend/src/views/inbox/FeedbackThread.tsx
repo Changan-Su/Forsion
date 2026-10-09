@@ -5,6 +5,8 @@
  * 信件正文只是通知。这里渲整条对话(票 + 历次回复 + 各自附件)+ 回复框(文字 + 附件),发 `POST /api/feedback/:id/replies`;
  * 对方那侧由服务端再投一封定向广播进收件箱。打开即 `POST …/read` 标已读(反馈中心 / 收件箱两边的未读点同源)。
  * 只在有 `window.tangu.cloudFetch` 的桌面壳出现(token 留主进程);Web / 移动端只看到信件正文。
+ * 2026-10-09 起 Android App 也有 cloudFetch(给插件用,mobile/src/cloudFetch.ts)—— 这块面板在手机上没验过版式与附件,
+ * 所以下面的判定显式排掉手机,行为与之前一样;要在手机上开,去掉那半句并在手机视口下验一遍。
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { MessageSquareReply, Paperclip, Send, X } from 'lucide-react'
@@ -18,7 +20,7 @@ import {
 type Load = 'loading' | { error: 'signIn' | 'missing' | 'loadFail' } | { data: FeedbackThreadData }
 
 export function feedbackThreadAvailable(): boolean {
-  return typeof window.tangu?.cloudFetch === 'function'
+  return typeof window.tangu?.cloudFetch === 'function' && !window.tangu?.mobile
 }
 
 export function FeedbackThread({ ticketId, event }: { ticketId: string; event?: string }) {

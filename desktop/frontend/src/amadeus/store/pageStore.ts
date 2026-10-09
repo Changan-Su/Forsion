@@ -247,6 +247,11 @@ interface PageState {
   folders: string[]
   /** Non-page files (attachments/.db/…), vault-relative — shown in the vault tree. */
   files: string[]
+  /** files 还在路上的那个库根;null = 没有在途的。打开 / 恢复 / 切库时 files 先清空再异步补齐,这段时间里
+   *  「files 里没有它」不等于「它不是插件文件」—— 编辑器面板据此先不给归属没确认的 .md 挂编辑器(amadeusViews 的 ownership)。
+   *  列表读失败就一直挂着(下一次 refreshStructure 成功才清):宁可多等,也不把插件的文件当笔记打开。
+   *  只有下面三条装载路径会置它;直接 setState 摆好 files 的(台架、手机切库前的清空)不受影响。 */
+  filesPendingFor: string | null
   /** 页面 emoji 图标(fm icon: 键;path → emoji)。桌面索引供给,其余端为空表。 */
   icons: Record<string, string>
   activePage: string | null
@@ -465,6 +470,14 @@ function makePageStore(opts: PageStoreOptions = {}) {
     return !pages.includes(path) && !files.includes(path) && !folders.includes(path)
   }
 
+  /** 补齐非笔记文件列表(打开 / 恢复 / 切库三条装载路径共用)。迟到的结果只在库没再换时落下(防旧库的文件列表污染新库的树);
+   *  落下的同时清掉 filesPendingFor。读失败 = 不清(见该字段注释)。旧 preload 没有 listFiles → 当空列表。 */
+  const loadFiles = (root: string): void => {
+    void (amadeus.listFiles?.() ?? Promise.resolve([] as string[]))
+      .then((files) => { if (get().vaultRoot === root) set({ files, filesPendingFor: null }) })
+      .catch(() => {})
+  }
+
   const fetchIcons = (root: string | null, attempt = 0): void => {
     void amadeus.pageIcons?.()
       .then((icons) => { if (get().vaultRoot === root) set({ icons }) })
@@ -479,6 +492,7 @@ function makePageStore(opts: PageStoreOptions = {}) {
     pages: [],
     folders: [],
     files: [],
+    filesPendingFor: null,
     icons: {},
     activePage: null,
     pendingPage: null,
@@ -576,8 +590,8 @@ function makePageStore(opts: PageStoreOptions = {}) {
         resetAllScopeDocs()
         // files 先清空再异步补齐;迟到的结果只在 vault 未再切换时落盘(防旧库文件列表污染新库的树)。
         // 用户手选文件夹 = 本地侧(主进程同步记 localVault)。
-        set({ vaultRoot: info.root, vaultSide: 'local', pages: info.pages, folders: info.folders ?? [], files: [], error: null })
-        void amadeus.listFiles?.().then((files) => { if (get().vaultRoot === info.root) set({ files }) }).catch(() => {})
+        set({ vaultRoot: info.root, vaultSide: 'local', pages: info.pages, folders: info.folders ?? [], files: [], filesPendingFor: info.root, error: null })
+        loadFiles(info.root)
         fetchIcons(info.root)
         if (info.pages.length > 0) await get().loadPage(info.pages[0])
       } catch (e) {
@@ -590,8 +604,8 @@ function makePageStore(opts: PageStoreOptions = {}) {
       try {
         const info = await amadeus.restoreVault()
         if (!info) return
-        set({ vaultRoot: info.root, pages: info.pages, folders: info.folders ?? [], files: [], error: null })
-        void amadeus.listFiles?.().then((files) => { if (get().vaultRoot === info.root) set({ files }) }).catch(() => {})
+        set({ vaultRoot: info.root, pages: info.pages, folders: info.folders ?? [], files: [], filesPendingFor: info.root, error: null })
+        loadFiles(info.root)
         fetchIcons(info.root)
         const target =
           info.lastPage && info.pages.includes(info.lastPage) ? info.lastPage : info.pages[0]
@@ -619,6 +633,7 @@ function makePageStore(opts: PageStoreOptions = {}) {
           pages: info.pages,
           folders: info.folders ?? [],
           files: [],
+          filesPendingFor: info.root,
           icons: {}, // 换库必清:图标是 path 键,跨库残留会张冠李戴
           error: null,
           // 旧库编辑器状态即刻作废:switchSide 往返窗口里的输入不得再借任何 flush 写进新根
@@ -628,7 +643,7 @@ function makePageStore(opts: PageStoreOptions = {}) {
           blocks: {},
         })
         resetAllScopeDocs() // 隔壁面板也一起作废,否则它那份旧库笔记随时会写进新根
-        void amadeus.listFiles?.().then((files) => { if (get().vaultRoot === info.root) set({ files }) }).catch(() => {})
+        loadFiles(info.root)
         fetchIcons(info.root)
         const target = info.lastPage && info.pages.includes(info.lastPage) ? info.lastPage : info.pages[0]
         if (target) await get().loadPage(target)
@@ -1040,12 +1055,14 @@ function makePageStore(opts: PageStoreOptions = {}) {
     },
 
     async refreshStructure() {
+      const root = get().vaultRoot
       const [pages, folders, files] = await Promise.all([
         amadeus.listPages(),
         amadeus.listFolders(),
         amadeus.listFiles?.() ?? [], // 旧 preload(无 listFiles)下优雅降级为空
       ])
-      set({ pages, folders, files })
+      // 这一趟期间换了库 → 这份 files 不是新库的,别替新库把「还在路上」清掉。
+      set({ pages, folders, files, ...(get().vaultRoot === root ? { filesPendingFor: null } : {}) })
       fetchIcons(get().vaultRoot)
     },
 
@@ -1665,10 +1682,10 @@ export function setActivePageScope(id: string): void {
 // 状态分两类:**文档级**(activePage/manifest/blocks/status/focusRequest…)每个面板各一份 —— 这才是分屏;
 // **仓库级**(vault 根、页面/文件/文件夹清单、页面图标)全局只有一份真相,必须在面板间镜像:
 // 新面板的 store 生下来是空的,不同步的话它里面的 [[ 补全没有候选、双链全判成未解析(红链)。
-const VAULT_KEYS = ['vaultRoot', 'vaultSide', 'pages', 'folders', 'files', 'icons'] as const
+const VAULT_KEYS = ['vaultRoot', 'vaultSide', 'pages', 'folders', 'files', 'filesPendingFor', 'icons'] as const
 type VaultSlice = Pick<PageState, (typeof VAULT_KEYS)[number]>
 const vaultSlice = (s: PageState): VaultSlice =>
-  ({ vaultRoot: s.vaultRoot, vaultSide: s.vaultSide, pages: s.pages, folders: s.folders, files: s.files, icons: s.icons })
+  ({ vaultRoot: s.vaultRoot, vaultSide: s.vaultSide, pages: s.pages, folders: s.folders, files: s.files, filesPendingFor: s.filesPendingFor, icons: s.icons })
 
 /**
  * 换库(切本地/云端、换根)、改名、移动前:**所有面板**的待存内容先在旧根 / 旧路径落盘。
