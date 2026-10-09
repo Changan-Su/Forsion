@@ -16,5 +16,9 @@ it('destroy 后不留定时器(milkdown Timer 的 3s 超时被清掉)', async ()
   await b.destroy()
   // happy-dom 自己的 AsyncTaskManager 在任务收尾时也起一个毫秒级定时器(拆环境时会清),等它落定再数;milkdown 那 10 个是 3s 的,等不掉。
   await (window as unknown as { happyDOM: { waitUntilComplete(): Promise<void> } }).happyDOM.waitUntilComplete()
-  expect(timeouts() - before).toBe(0)
+  // 只钉「没变多」,不钉「一个不差」:数的是整个进程里挂着的定时器,里面常有一个不是我们的 —— vitest 上报任务状态的
+  // 节流定时器(@vitest/runner 的 sendTasksUpdateThrottled,最长 100ms),用例开始时多半挂着。它撑到第二次数的时候,前后都数到它(差 0);
+  // 在两次之间响掉,就差 -1 —— 机器一忙、用例体一慢就容易撞上,全量里偶发红的就是这个。
+  // 往下掉不可能是泄漏;真漏的时候一次是 9 个(关掉夹具的清理实测:+9,那个定时器同时响掉时 +8)。
+  expect(timeouts() - before).toBeLessThanOrEqual(0)
 })
