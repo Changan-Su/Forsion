@@ -111,7 +111,7 @@ fs-chart + fs-flow, fs-flow + fs-chart, fs-chart + fs-chart { margin-top: 28px; 
 [data-fs-new] { animation: fs-in .28s ease-out both; }
 @keyframes fs-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
 /* 统一拼装部件(10-09,对标 Intelligent UI 的固定组件库):网格 / 选项 / 按钮行 / 提示块 / 对比 / 追问选择 / 勾选清单。 */
-.fs-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(150px, 100%), 1fr)); gap: 14px 16px; margin: 4px 0 12px; } /* 150:聊天栏里卡内宽 ≈510px 时并排得下三个选项 */
+.fs-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(128px, 100%), 1fr)); gap: 12px; margin: 4px 0 12px; } /* 128:1200 宽的窗口里聊天栏卡内只有 ≈430px,要并排得下三个选项 */
 .fs-option { display: grid; align-content: start; gap: 6px; min-width: 0; padding: 12px 14px; border-radius: var(--fs-radius); background: var(--fs-surface); }
 .fs-option > h4 { margin: 0; font-size: 14px; }
 .fs-points { margin: 0; padding-left: 18px; font-size: 13px; display: grid; gap: 3px; }
