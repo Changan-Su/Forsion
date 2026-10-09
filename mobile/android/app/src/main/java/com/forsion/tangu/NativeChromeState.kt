@@ -9,6 +9,8 @@ import org.json.JSONObject
 internal data class ChromeIcons(
     val left: NativeIconSpec?, val right: NativeIconSpec?, val more: NativeIconSpec?, val back: NativeIconSpec?,
     val close: NativeIconSpec? = null,
+    /** The dock's "all Spaces" cell, the right capsule's search button, the mark after a title that can be tapped. */
+    val all: NativeIconSpec? = null, val search: NativeIconSpec? = null, val titleMore: NativeIconSpec? = null,
 )
 
 /**
@@ -22,10 +24,11 @@ internal data class ChromeBadge(val kind: Kind, val label: String) { enum class 
  * One destination of the bottom navigation bar (a Space). Label translated by JS; icon serialized by JS.
  * `png` = the Space's own picture (a plugin Space's `iconFile`) as base64, downscaled by JS; blank = draw `icon`.
  * Vetted like the avatar's (see usablePng): an unusable one is dropped and the line icon is drawn instead.
+ * `pinned` = the user keeps it in the dock (JS owns the choice); the others are reached through the "all" cell.
  */
 internal data class ChromeSpace(
     val id: String, val label: String, val active: Boolean, val icon: NativeIconSpec?, val badge: ChromeBadge? = null,
-    val png: String = "",
+    val png: String = "", val pinned: Boolean = false,
 )
 
 /**
@@ -59,6 +62,13 @@ internal data class ChromeState(
     val floating: Boolean = false,
     /** With [floating]: the page blurs what is behind each capsule (it draws a plate where `layout` says), so the fill is thin. */
     val frosted: Boolean = false,
+    /** Shell mode: name of the dock's last cell, the one that opens the list of all Spaces (the list itself is JS's to show). */
+    val allLabel: String = "",
+    /** Shell mode: label of a search button in the right capsule; blank = the page has nothing to search. */
+    val search: String = "",
+    /** Shell mode: a second, quieter part of the title (which vault, which account); with [titleTap] the title is a button. */
+    val titleSub: String = "",
+    val titleTap: Boolean = false,
 ) {
     enum class Mode { SHELL, PAGE, HIDDEN }
 
@@ -66,8 +76,26 @@ internal data class ChromeState(
     /** The bottom bar belongs to the shell only: pages (settings, market) and covering overlays have none. */
     val spaceBar get() = mode == Mode.SHELL && spaces.size > 1
 
+    /**
+     * The dock's own cells (2026-10-09, variant ③ of the mock-up the user picked): every Space while they fit in
+     * DOCK_CELLS, otherwise the pinned ones — the first ones when the page marked none — with the last cell left
+     * for "all". List order, never the order of pinning: a Space keeps its place when another one is swapped.
+     */
+    val dock: List<ChromeSpace> by lazy {
+        if (spaces.size <= DOCK_CELLS) spaces
+        else spaces.filter { it.pinned }.ifEmpty { spaces }.take(DOCK_CELLS - 1)
+    }
+    /** The Spaces behind the "all" cell. */
+    val more: List<ChromeSpace> by lazy { val shown = dock.map { it.id }.toSet(); spaces.filterNot { it.id in shown } }
+    /** What the "all" cell shows for them: the most pressing dot of any (waiting for the user > running > unread). */
+    val moreBadge: ChromeBadge? by lazy {
+        more.mapNotNull { it.badge }.minByOrNull { listOf(ChromeBadge.Kind.ATTENTION, ChromeBadge.Kind.RUNNING, ChromeBadge.Kind.UNREAD).indexOf(it.kind) }
+    }
+
     companion object {
-        val ACTIONS = setOf("left", "right", "tabs", "more", "back", "close", "account")
+        val ACTIONS = setOf("left", "right", "tabs", "more", "back", "close", "account", "search", "title", "spacesAll")
+        /** How many cells the dock has room for; with more Spaces than that the last one is "all". */
+        const val DOCK_CELLS = 5
         const val MAX_SPACES = 64 // = MAX_SPACES in mobile/src/nativeChrome.ts, which trims the list before sending
         const val MAX_AVATAR_CHARS = 131_072 // = MAX_AVATAR_CHARS in mobile/src/nativeChrome.ts (a 96px PNG stays far below)
         /** Largest picture side the bar decodes (JS sends 96px). A few KB of PNG can declare a canvas of gigabytes. */
@@ -114,6 +142,7 @@ internal data class ChromeState(
                 ChromeSpace(
                     NativeJson.str(o, "id", 128), NativeJson.str(o, "label", 128), NativeJson.optBool(o, "active"),
                     o.optJSONObject("icon")?.let(NativeJson::icon), badge(o), usablePng(o.opt("png") as? String ?: ""),
+                    pinned = NativeJson.optBool(o, "pinned"),
                 )
             }.also { list -> require(list.map { it.id }.toSet().size == list.size) { "Duplicate space id" } }
         }
@@ -129,7 +158,7 @@ internal data class ChromeState(
             val theme = NativeJson.theme(json.getJSONObject("theme"))
             val iconsJson = json.optJSONObject("icons")
             fun icon(key: String) = iconsJson?.optJSONObject(key)?.let(NativeJson::icon)
-            val icons = ChromeIcons(icon("left"), icon("right"), icon("more"), icon("back"), icon("close"))
+            val icons = ChromeIcons(icon("left"), icon("right"), icon("more"), icon("back"), icon("close"), icon("all"), icon("search"), icon("titleMore"))
             return when (mode) {
                 Mode.SHELL -> {
                     val labels = json.getJSONObject("labels")
@@ -143,6 +172,8 @@ internal data class ChromeState(
                         back = "", theme = theme, icons = icons, spaces = spaces(json), account = account(json),
                         floating = NativeJson.optBool(json, "floating"),
                         frosted = NativeJson.optBool(json, "floating") && NativeJson.optBool(json, "frosted"),
+                        allLabel = NativeJson.optStr(json, "allLabel", 128), search = NativeJson.optStr(json, "search", 128),
+                        titleSub = NativeJson.optStr(json, "titleSub", 128), titleTap = NativeJson.optBool(json, "titleTap"),
                     )
                 }
                 Mode.PAGE -> ChromeState(

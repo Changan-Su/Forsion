@@ -99,6 +99,16 @@ class NativeSheetPayloadTest {
         }
     }
 
+    @Test fun sectionMayBeAGridOfTiles() {
+        val json = menu()
+        json.getJSONArray("sections").getJSONObject(0).put("grid", true)
+        val p = SheetPayload.parse(json) as SheetPayload.Menu
+        assertTrue(p.sections[0].grid)
+        assertFalse(p.sections[1].grid)
+        json.getJSONArray("sections").getJSONObject(0).put("grid", "yes")
+        assertThrows(IllegalArgumentException::class.java) { SheetPayload.parse(json) }
+    }
+
     @Test fun nestedPageSearchOnlyWithChildren() {
         val json = menu()
         val items = json.getJSONArray("sections").getJSONObject(0).getJSONArray("items")

@@ -580,45 +580,49 @@ const tabCountText = (list) => {
     await tapId(`nativeSheet.item.${id}`, await waitSheet(true))
     await waitSheet(false)
   }
-  /** The dock's cells from left to right. Not the order of the dump: the pinned first cell is the upper layer (a
-   *  neighbour that slid under it must not claim part of it) and is listed last; a cell that slid under it is
-   *  reported by what still shows, or not at all. */
+  /** The dock's Space cells from left to right (its last cell, "all", is `nativeChrome.spacesAll`). */
   const dockCells = (list) => h.byIdPrefix(list, 'nativeChrome.space.').sort((a, b) => a.rect.left - b.rect.left)
-  /** The dock's scrolling part: its first cell (Home) is pinned, the others slide in the lane beside it. */
-  const dockLane = (list) => {
-    const dock = h.byId(list, 'nativeChrome.dock')
-    const first = dockCells(list)[0]
-    return dock ? { dock, first, left: first ? first.rect.right : dock.rect.left, right: dock.rect.right - Math.round(7 * density), cy: dock.rect.cy } : null
-  }
-  /** Slide the dock's lane: `dir` > 0 = finger to the right (back to the first cells), < 0 = on to the last ones. */
-  async function swipeDock(dir) {
-    const lane = dockLane(ui())
-    assert.ok(lane, 'no native dock')
-    const [lo, hi] = [lane.left + 40, lane.right - 40]
-    const [from, to] = dir > 0 ? [lo, hi] : [hi, lo]
-    h.adb('shell', 'input', 'swipe', String(from), String(lane.cy), String(to), String(lane.cy), '250')
-    await h.pause(700)
-  }
-  /** Tap a Space of the native dock. With more than fit the lane scrolls: bring the cell in first. */
-  async function tapSpace(id) {
+  const idOfCell = (n) => n['resource-id'].slice('nativeChrome.space.'.length)
+  /** Marked as the one you are in / the one that is on. A tab reports `selected`; any other role reports the same state as `checked`. */
+  const isOn = (n) => n?.selected === 'true' || n?.checked === 'true'
+  /** The name a dock cell shows: the cell is one button, its name a text node inside it. */
+  const cellName = (list, cell) => list.find((n) => n !== cell && n.text && within(cell, n))?.text || ''
+  const waitDock = async () => {
     // The dock is away while a keyboard or an overlay is up and returns a moment after it leaves: wait, do not judge the first dump.
     const up = await h.waitNodes((l) => (h.byId(l, 'nativeChrome.dock') ? l : null), { timeout: 8000 })
     assert.ok(up.hit, 'no native dock')
-    for (const dir of [0, 1, -1]) {
-      if (dir) await swipeDock(dir)
-      const list = dir ? ui() : up.hit
-      const lane = dockLane(list)
-      assert.ok(lane, 'no native dock')
-      const n = h.byId(list, `nativeChrome.space.${id}`)
-      if (!n) continue
-      if (lane.first && n['resource-id'] === lane.first['resource-id']) { h.tapNode(n); return }
-      // A cell past the lane's right end is still reported (up to the screen edge), though the dock clips it there:
-      // a finger goes where the cell shows.
-      const [from, to] = [Math.max(n.rect.left, lane.left), Math.min(n.rect.right, lane.right)]
-      if (to - from > 40) { h.tapAt(Math.round((from + to) / 2), n.rect.cy); return }
-    }
-    assert.fail(`Space "${id}" is not in the native dock`)
+    return up.hit
   }
+  /** The sheet behind the dock's "all" cell, opened: every Space is a tile `nativeSheet.item.space:<id>`. */
+  async function openAllSpaces() {
+    const all = h.byId(await waitDock(), 'nativeChrome.spacesAll')
+    assert.ok(all, 'the dock has no "all" cell')
+    h.tapNode(all)
+    return waitSheet(true)
+  }
+  /** Ids of every Space, the dock's first (list order), then the ones behind "all". Leaves the screen as it was. */
+  async function allSpaceIds() {
+    const list = await waitDock()
+    const inDock = dockCells(list).map(idOfCell)
+    if (!h.byId(list, 'nativeChrome.spacesAll')) return inDock
+    const tiles = h.byIdPrefix(await openAllSpaces(), 'nativeSheet.item.space:').sort((a, b) => a.rect.top - b.rect.top || a.rect.left - b.rect.left)
+    h.key(4)
+    await waitSheet(false)
+    const ids = tiles.map((n) => n['resource-id'].slice('nativeSheet.item.space:'.length))
+    return [...inDock, ...ids.filter((id) => !inDock.includes(id))]
+  }
+  /** Tap a Space: its cell in the dock, or — when the dock does not hold it — its tile in the sheet behind "all". */
+  async function tapSpace(id) {
+    const cell = h.byId(await waitDock(), `nativeChrome.space.${id}`)
+    if (cell) { h.tapNode(cell); return }
+    const tile = h.byId(await openAllSpaces(), `nativeSheet.item.space:${id}`)
+    assert.ok(tile, `Space "${id}" is neither in the native dock nor behind its "all" cell`)
+    h.tapNode(tile)
+    await waitSheet(false)
+  }
+  /** Which Spaces stand in the dock is the user's choice, kept on the device: `picks` = ids besides Home, null = as shipped.
+   *  The bar is sent again on the next shell change — a Space switch does it. */
+  const setDockPicks = (picks) => cdp.eval(`(${picks ? `localStorage.setItem('lcl_dock_pins_v1', ${JSON.stringify(JSON.stringify(picks))})` : "localStorage.removeItem('lcl_dock_pins_v1')"}, true)`)
   /** Switch Space. Ends on its first level: the list of a two-level Space (left panel open), else its main view. */
   async function toSpace(id) {
     // The bottom bar exists on a Space's first level only: from a detail page go back to the list first.
@@ -665,7 +669,7 @@ const tabCountText = (list) => {
   let detailBottom = 0
   const density = Number(h.adb('shell', 'wm', 'density').match(/(\d+)\s*$/)[1]) / 160
   const barPx = Math.round(58 * density) // the capsules' room below the status bar (NATIVE_CHROME_HEIGHT)
-  const dockPx = Math.round(68 * density) // the dock's room above the navigation inset (NATIVE_SPACE_BAR_HEIGHT)
+  const dockPx = Math.round(80 * density) // the dock's room above the navigation inset (NATIVE_SPACE_BAR_HEIGHT)
   const screen = (() => { const m = h.adb('shell', 'wm', 'size').match(/(\d+)x(\d+)\s*$/); return { w: Number(m[1]), h: Number(m[2]) } })()
   /** A page element's box in device pixels (see elPoint for the zoom arithmetic); null when it is not there. */
   const elRect = async (expr) => {
@@ -935,7 +939,7 @@ const tabCountText = (list) => {
 
   // A first level runs under the dock so that the page shows through the glass — but nothing may end up there for
   // good: a list scrolls its last row clear of the dock, and a view that never opted in to running underneath simply
-  // ends above it (the shell's default). Every Space of the dock is visited; what each one's panel is made of is
+  // ends above it (the shell's default). Every Space is visited (the dock's, then the ones behind "all"); what each one's panel is made of is
   // printed, so that a new Space's first level can be judged from the log.
   await check('floating chrome: on every Space\'s first level, scrolled to its end, nothing to read or tap stays behind the dock', async () => {
     /** What the dock covers once everything that scrolls is at its end: text and controls (a wallpaper is the point). */
@@ -957,14 +961,10 @@ const tabCountText = (list) => {
         if (control || text) { const k = control || el; hits.set(k, name(k) + ' "' + (k.textContent || k.getAttribute('aria-label') || '').trim().slice(0, 24) + '"') }
       }
       return { panel: name(panel) + (panel.dataset.view ? '[' + panel.dataset.view + ']' : ''), padding: getComputedStyle(panel).paddingBottom, scrollers: scrollers.map(name), behind: [...hits.values()] } })()`)
-    const idOf = (n) => n['resource-id'].slice('nativeChrome.space.'.length)
     await goHome()
-    for (let i = 0; i < 2; i++) await swipeDock(1)
     const seen = []
     const bad = []
-    for (;;) {
-      const next = dockCells(ui()).map(idOf).find((id) => !seen.includes(id))
-      if (!next) break
+    for (const next of await allSpaceIds()) {
       seen.push(next)
       await toSpace(next)
       await h.pause(900)
@@ -975,7 +975,7 @@ const tabCountText = (list) => {
       if (got.scrollers.length) { await h.pause(300); shot(`04-dock-${next}-end`) }
       if (got.behind.length) bad.push(`${next}: ${got.behind.join(' / ')}`)
     }
-    assert.ok(seen.length >= 5, `only ${seen.length} Spaces were found in the dock (${seen.join(', ')})`)
+    assert.ok(seen.length >= 5, `only ${seen.length} Spaces were found (${seen.join(', ')})`)
     assert.deepEqual(bad, [], 'behind the dock with everything scrolled to its end')
   })
 
@@ -1139,31 +1139,40 @@ const tabCountText = (list) => {
     await cdp.eval('(document.activeElement && document.activeElement.blur(), true)')
   })
 
-  // The Space switcher is native: a web row at the bottom of the drawer until 2026-10-02, a full-width bar with a label
-  // under every icon until 2026-10-09, now a dock — one capsule floating over the page, icons only, the active Space
-  // alone carrying its name. (The check keeps its old first words: `ONLY='bottom space bar'` is in people's notes.)
-  await check('bottom space bar: a native dock, switches Space, Home pinned at its left, away with the keyboard and in settings', async () => {
+  // The Space switcher, native: a Material bar with a label under every icon until 2026-10-09, an icon-only dock for a few
+  // hours, and since that evening (the user: "too small, put the names back under the icons" — variant ③ of the second
+  // mock-up) a dock of five equal cells, icon over name: Home, the Spaces the user keeps there, and "all" for the rest.
+  // Nothing scrolls. (The check keeps its old first words: `ONLY='bottom space bar'` is in people's notes.)
+  await check('bottom space bar: a native dock of named cells, Home first and "all" last; switches Space; the user picks which Spaces it holds; away with the keyboard and in settings', async () => {
+    await setDockPicks(null)
     await goHome()
-    for (let i = 0; i < 2; i++) await swipeDock(1) // an earlier check may have left the lane scrolled
     let list = ui()
     const [bar, dock] = [h.byId(list, 'nativeChrome.spaces'), h.byId(list, 'nativeChrome.dock')]
     assert.ok(bar && dock, 'no native dock')
-    const idOf = (n) => n['resource-id'].slice('nativeChrome.space.'.length)
+    const ids = await allSpaceIds()
+    for (const id of ['home', 'tangu', 'agents']) assert.ok(ids.includes(id), `Space "${id}" missing (${ids.join(', ')})`)
+    list = ui()
     const items = dockCells(list)
-    const ids = items.map(idOf)
-    for (const id of ['home', 'tangu', 'agents']) assert.ok(ids.includes(id), `Space "${id}" missing from the dock (${ids.join(', ')})`)
+    const all = h.byId(list, 'nativeChrome.spacesAll')
     assert.equal(bar.rect.bottom, screen.h, 'the dock\'s strip does not reach the screen edge')
-    assert.ok(within(bar, dock) && near(dock.rect.bottom - dock.rect.top, 56 * density, 1), `the dock is not a 56dp capsule inside its strip (${dock.bounds} in ${bar.bounds})`)
-    // every cell is a whole touch target though it shows an icon only; the active one alone shows its name, the
-    // others keep theirs as the spoken label
-    const cell = Math.round(48 * density)
-    for (const n of items) assert.ok(n.rect.bottom - n.rect.top >= cell - 1, `dock cell "${idOf(n)}" is shorter than 48dp (${n.bounds})`)
-    for (const n of items) if (n.rect.right <= dock.rect.right) assert.ok(n.rect.right - n.rect.left >= cell - 1, `dock cell "${idOf(n)}" is narrower than 48dp (${n.bounds})`)
-    assert.deepEqual(items.filter((n) => !n['content-desc']).map(idOf), ['home'], 'the active Space alone shows its name; the others speak theirs')
-    assert.ok(list.some((n) => n.text === '主页' && within(h.byId(list, 'nativeChrome.space.home'), n)), 'the active cell does not show its name')
+    assert.ok(within(bar, dock) && near(dock.rect.bottom - dock.rect.top, 68 * density, 1), `the dock is not a 68dp capsule inside its strip (${dock.bounds} in ${bar.bounds})`)
+    // more Spaces than cells: Home, three more in list order, and "all" — five equal cells across the dock, each with its name
+    assert.ok(ids.length > 5, `the fixture has ${ids.length} Spaces: the "all" cell cannot be tried`)
+    assert.deepEqual(items.map(idOfCell), ids.slice(0, 4), 'as shipped the dock holds the first four Spaces')
+    assert.ok(all && all.rect.left >= items[3].rect.right - 1, `no "all" cell after the Spaces (${all?.bounds})`)
+    const cells = [...items, all]
+    const fifth = (dock.rect.right - dock.rect.left - 12 * density) / 5
+    for (const n of cells) {
+      assert.ok(near(n.rect.right - n.rect.left, fifth, 3) && near(n.rect.bottom - n.rect.top, 56 * density, 2), `dock cell ${n['resource-id']} is not a fifth of the dock × 56dp (${n.bounds}, a fifth = ${Math.round(fifth)}px)`)
+      assert.ok(cellName(list, n) && !n['content-desc'], `dock cell ${n['resource-id']} does not show its name ("${cellName(list, n)}", spoken "${n['content-desc']}")`)
+    }
+    assert.equal(cellName(list, items[0]), '主页')
+    assert.equal(cellName(list, all), '全部')
     assert.equal(await cdp.eval("document.querySelectorAll('.mb-spacebar, .mb-tab').length"), 0, 'the web Space row is still rendered')
     assert.equal(await cdp.eval("document.querySelector('.mb-shell').dataset.space"), 'home')
-    assert.equal(h.byId(list, 'nativeChrome.space.home').selected || h.byId(list, 'nativeChrome.space.home').checked, 'true', 'active Space not marked selected')
+    const chosen = (l) => [...dockCells(l), h.byId(l, 'nativeChrome.spacesAll')].filter(isOn).map((n) => n['resource-id'].replace('nativeChrome.', ''))
+    assert.deepEqual(chosen(list), ['space.home'], 'the cell of the Space you are in is the selected one')
+    shot('03c-dock-home')
     // keyboard (Home's composer — a first-level page with a text field): the bar leaves, the WebView takes its room; back brings it back
     await tapEl("document.querySelector('.composer textarea, .composer [contenteditable], textarea')")
     assert.ok((await h.waitNodes((l) => !h.byId(l, 'nativeChrome.spaces'), { timeout: 12000 })).hit, 'the bar stayed up with the keyboard')
@@ -1171,11 +1180,26 @@ const tabCountText = (list) => {
     h.key(4)
     assert.ok((await h.waitNodes((l) => !!h.byId(l, 'nativeChrome.spaces'), { timeout: 12000 })).hit, 'the bar did not come back after the keyboard')
     await cdp.eval('(document.activeElement && document.activeElement.blur(), true)')
-    // switch to a Space with a list: lands on the list, the bar stays (it is that Space's first level)
-    await tapSpace('agents')
-    assert.ok(await h.waitPage(cdp, `document.querySelector('.mb-shell').dataset.space === 'agents' && (${nav}) === 'list'`, 6000), 'tap did not switch to the Agents list')
+    // "all": a sheet with every Space as a tile, the dock's own first; the one you are in is marked
+    const places = (l) => [...dockCells(l), h.byId(l, 'nativeChrome.spacesAll')].map((n) => n.bounds).join(' ')
+    const homePlaces = places(ui())
+    let sheet = await openAllSpaces()
+    assert.equal(textOf(sheet, 'nativeSheet.title'), '全部 Space')
+    for (const id of ids) assert.ok(h.byId(sheet, `nativeSheet.item.space:${id}`), `no tile for Space "${id}" in the sheet`)
+    const tile = (l, id) => h.byId(l, `nativeSheet.item.space:${id}`)
+    assert.ok(near(tile(sheet, 'home').rect.top, tile(sheet, ids[3]).rect.top, 2) && tile(sheet, ids[4]).rect.top > tile(sheet, 'home').rect.bottom, 'the tiles are not four to a row, the dock\'s own first')
+    assert.deepEqual(ids.filter((id) => isOn(tile(sheet, id))), ['home'], 'the tile of the Space you are in — and only that one — is marked')
+    assert.ok(h.byId(sheet, 'nativeSheet.item.dock:edit'), 'no way to choose the dock\'s Spaces from the sheet')
+    shot('03c-dock-all-sheet')
+    // a Space that is not in the dock: reached through its tile; lands on its list, the bar stays, and "all" is the selected cell
+    h.tapNode(tile(sheet, 'agents'))
+    await waitSheet(false)
+    assert.ok(await h.waitPage(cdp, `document.querySelector('.mb-shell').dataset.space === 'agents' && (${nav}) === 'list'`, 6000), 'the tile did not switch to the Agents list')
     await h.pause(800)
-    assert.ok(h.byId(ui(), 'nativeChrome.spaces'), 'the bar left on the Agents list')
+    list = ui()
+    assert.ok(h.byId(list, 'nativeChrome.spaces'), 'the bar left on the Agents list')
+    assert.deepEqual(chosen(list), ['spacesAll'], 'in a Space behind "all", "all" is the selected cell')
+    assert.equal(places(list), homePlaces, 'the dock\'s cells moved when the Space changed')
     shot('03c-space-bar')
     // an Agents row enters the profile. That main view used to crash on the single-column shell (it read the dockview-only `stash`).
     await tapEl("document.querySelector('.mb-drawer--left .agents-roster-item')")
@@ -1217,46 +1241,46 @@ const tabCountText = (list) => {
     assert.equal(await cdp.eval("document.querySelector('.mb-main .sk-error')?.textContent || ''"), '', 'Image Studio\'s main view failed to render')
     shot('03h-image-studio-detail')
     await openDrawer() // the back arrow: its list again
-    // more Spaces than fit → Home (the first cell) stays put and the rest scroll beside it. While one that fits is
-    // active nothing scrolls (the bar used to centre the active Space, which scrolled Home away from the fourth Space on —
-    // "the Home page is gone"; then it only scrolled as far as needed, and Home still left on the sixth).
-    // The dock leaves composition on a detail level / in page mode and is recreated at offset 0: a Space past the ones
-    // that fit must be scrolled back into view.
-    if (ids.length > 5) {
-      /** Is the cell all there? Home sits at the dock's left edge whatever scrolled; the others show in the lane. */
-      const whole = (id) => {
-        const l = ui(), n = h.byId(l, `nativeChrome.space.${id}`), lane = dockLane(l)
-        if (!n || !lane || n.rect.right - n.rect.left < cell - 2) return false
-        return id === 'home' ? near(n.rect.left, lane.dock.rect.left + 7 * density, 2) : n.rect.left >= lane.left - 1 && n.rect.right <= lane.right + 1
-      }
-      const at = (id) => h.byId(ui(), `nativeChrome.space.${id}`)?.bounds
-      await toSpace(ids[4])
-      assert.ok(whole('home'), `Home is not whole at the dock's left while the fifth Space is active (${at('home')})`)
-      assert.ok(whole(ids[4]), `the fifth Space is not fully in view (${at(ids[4])})`)
-      shot('03g-space-bar-fifth')
-      const last = ids[ids.length - 1]
-      await toSpace(last)
-      assert.ok(whole(last), `active Space "${last}" is not fully in view (${at(last)})`)
-      assert.ok(whole('home'), `Home is not pinned at the dock's left while "${last}" is active (${at('home')})`)
-      await accountItem('rb-settings')
-      assert.ok(await h.waitPage(cdp, settingsOpen, 5000), 'settings did not open')
-      assert.ok((await h.waitNodes((l) => h.byId(l, 'nativeChrome.back') && !h.byId(l, 'nativeChrome.spaces'), { timeout: 12000 })).hit, 'the dock stayed up in page mode')
-      await tapId('nativeChrome.back')
-      const r = await h.waitNodes((l) => (h.byId(l, 'nativeChrome.spaces') ? l : null), { timeout: 12000 })
-      assert.ok(r.hit, 'the dock did not come back after settings')
-      await h.pause(600)
-      assert.ok(whole(last), `active Space "${last}" is not fully in view after page mode (${at(last)})`)
-      assert.ok(whole('home'), `Home is not pinned at the dock's left after page mode (${at('home')})`)
-      shot('03g-space-bar-scrolled')
-      // … and the whole pinned cell is Home's to tap: a finger near its right edge (a neighbour that slid under it is
-      // reported right there) must switch to Home, not to that neighbour
-      const home = h.byId(ui(), 'nativeChrome.space.home')
-      h.tapAt(home.rect.right - 8, home.rect.cy)
-      assert.ok(await h.waitPage(cdp, "document.querySelector('.mb-shell').dataset.space === 'home'", 6000), `a tap on the right part of the pinned Home cell did not switch to Home (now: ${await cdp.eval("document.querySelector('.mb-shell').dataset.space")})`)
-      await h.pause(800)
-      await toSpace(last)
-      if ((await cdp.eval(nav)) === '') await closeDrawer() // a drawer Space: close its drawer again
+    // the dock is away in page mode (settings) and comes back as it was
+    await accountItem('rb-settings')
+    assert.ok(await h.waitPage(cdp, settingsOpen, 5000), 'settings did not open')
+    assert.ok((await h.waitNodes((l) => h.byId(l, 'nativeChrome.back') && !h.byId(l, 'nativeChrome.spaces'), { timeout: 12000 })).hit, 'the dock stayed up in page mode')
+    await tapId('nativeChrome.back')
+    const back = await h.waitNodes((l) => (h.byId(l, 'nativeChrome.spaces') ? l : null), { timeout: 12000 })
+    assert.ok(back.hit, 'the dock did not come back after settings')
+    await h.pause(600)
+    assert.equal(places(ui()), homePlaces, 'the dock came back from page mode with other cells')
+    // which Spaces the dock holds is the user's to choose: Home stays, three more; a full dock offers nothing until one is taken out
+    try {
+      await tapId('nativeSheet.item.dock:edit', await openAllSpaces())
+      sheet = await waitSheet(true)
+      assert.equal(textOf(sheet, 'nativeSheet.title'), '固定在 Dock')
+      const pick = (l, id) => h.byId(l, `nativeSheet.item.pick:${id}`)
+      assert.ok(!pick(sheet, 'home'), 'Home is offered as something to take out')
+      assert.deepEqual(ids.slice(1).filter((id) => isOn(pick(sheet, id))), ids.slice(1, 4), 'the picks shown are not the dock\'s Spaces')
+      assert.equal(pick(sheet, 'agents')?.enabled, 'false', 'a full dock still offers a fourth Space')
+      assert.match(sheet.map((n) => n.text).join(' '), /最多固定 3 个/, 'the sheet does not say how many fit')
+      shot('03g-dock-picks')
+      h.tapNode(pick(sheet, ids[3])) // out — the sheet comes back with the new state
+      let again = await h.waitNodes((l) => (h.byId(l, 'nativeSheet.item.pick:agents')?.enabled === 'true' && !isOn(h.byId(l, `nativeSheet.item.pick:${ids[3]}`)) ? l : null), { timeout: 12000 })
+      assert.ok(again.hit, `taking "${ids[3]}" out did not free a cell`)
+      h.tapNode(pick(again.hit, 'agents')) // in
+      again = await h.waitNodes((l) => (isOn(h.byId(l, 'nativeSheet.item.pick:agents')) ? l : null), { timeout: 12000 })
+      assert.ok(again.hit, 'Agents was not put in the dock')
+      await tapId('nativeSheet.item.dock:done', again.hit)
+      await waitSheet(false)
+      const now = await h.waitNodes((l) => (h.byId(l, 'nativeChrome.space.agents') ? l : null), { timeout: 8000 })
+      assert.ok(now.hit, 'the dock did not take the new Space')
+      // list order, not the order of picking: Agents stands where the Space list has it
+      assert.deepEqual(dockCells(now.hit).map(idOfCell), ids.filter((id) => [ids[0], ids[1], ids[2], 'agents'].includes(id)), 'the dock is not Home + the picks in list order')
+      shot('03g-dock-picked')
+      await reload() // the choice is kept on the device
+      assert.deepEqual(dockCells(await waitDock()).map(idOfCell), ids.filter((id) => [ids[0], ids[1], ids[2], 'agents'].includes(id)), 'the picks did not survive a reload')
+    } finally {
+      await setDockPicks(null)
+      await reload()
     }
+    assert.deepEqual(dockCells(await waitDock()).map(idOfCell), ids.slice(0, 4), 'the dock is not back to what it ships with')
   })
 
   // 2026-10-02 real-phone recording: every tap flashed the WebView's blue tap-highlight box. It is off now, and a press
@@ -1269,9 +1293,6 @@ const tabCountText = (list) => {
     const refetch = () => cdp.eval("(document.dispatchEvent(new Event('visibilitychange')), true)") // attentionStore refetches when the page comes to the front
     const polled = () => stubLog.filter((l) => l.includes('/agent/approvals/pending')).slice(-3).join(' | ')
     await goHome()
-    // An earlier check may have swiped the dock: Tangu then sits under the pinned Home cell, and so would its dot.
-    // Finger to the right = back to the first cells.
-    for (let i = 0; i < 2; i++) await swipeDock(1)
     const list = ui()
     const [homeCell, tanguCell] = [h.byId(list, 'nativeChrome.space.home'), h.byId(list, 'nativeChrome.space.tangu')]
     assert.ok(homeCell && tanguCell && tanguCell.rect.left >= homeCell.rect.right - 2, `Tangu cell not fully on screen (${tanguCell?.bounds} beside ${homeCell?.bounds})`)
@@ -2721,7 +2742,10 @@ const tabCountText = (list) => {
     // the plugin also ships a Space with a 200-character name: the native bars must still be there
     assert.ok((await h.waitNodes((l) => (h.byId(l, 'nativeChrome.bar') && h.byId(l, 'nativeChrome.spaces') ? l : null), { timeout: 8000 })).hit,
       'the native bars went away after the install (a Space label the native side refuses?)')
-    await toSpace(PLUGIN_SPACE) // fails with "is not in the native bar" when the Space was not registered
+    // A Space that came later is behind "all" until the user puts it in the dock. Put it there (it stands last in the
+    // list): the dock shows a picture, the sheet's tile only the line icon.
+    await setDockPicks(['tangu', PLUGIN_SPACE])
+    await toSpace(PLUGIN_SPACE) // fails with "is neither in the native dock nor behind its all cell" when the Space was not registered
     assert.ok(await h.waitPage(cdp, "!!document.querySelector('.mb-main [data-e2e-plugin-view]')", 8000), 'the Space did not open the plugin view its recipe names')
     // A recipe Space is main-first on the phone even with a left panel (written for the desktop's three columns, the
     // panel may not lead into the main view at all): no list level, the bar stays, the panel is a drawer.
@@ -2737,7 +2761,8 @@ const tabCountText = (list) => {
     const px = pixelAt(pic.rect.cx, pic.rect.cy)
     assert.ok(PLUGIN_ICON_RGB.every((v, i) => Math.abs(v - [px.r, px.g, px.b][i]) <= 8), `the cell's picture is not the plugin icon: ${JSON.stringify(px)}`)
     shot('p02b-plugin-space')
-    await goHome() // where the install check left the app
+    await setDockPicks(null)
+    await goHome() // where the install check left the app (the switch also sends the dock as shipped again)
   })
 
   await check('plugins: oversized downloads (declared > 25 MB, endless stream) are refused by the native capped download; cache and files/plugins stay clean', async () => {

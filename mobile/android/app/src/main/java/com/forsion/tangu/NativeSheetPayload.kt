@@ -34,8 +34,12 @@ internal data class MenuItemSpec(
     /** Search field on the nested page this item opens (only with children). */
     val search: SearchSpec? = null,
 )
-/** `footer`: muted note rendered under the section's rows. */
-internal data class MenuSectionSpec(val title: String, val items: List<MenuItemSpec>, val footer: String = "")
+/**
+ * `footer`: muted note rendered under the section's rows.
+ * `grid`: the items are places to go — tiles (icon over name) four to a row; details, trailing actions and nested
+ * pages are a row's business and are not drawn.
+ */
+internal data class MenuSectionSpec(val title: String, val items: List<MenuItemSpec>, val footer: String = "", val grid: Boolean = false)
 internal data class SearchSpec(val placeholder: String, val empty: String)
 
 /** What the user chose; the plugin converts it to the JS result shape. */
@@ -154,7 +158,7 @@ private class MenuParser {
             val items = s.getJSONArray("items")
             MenuSectionSpec(
                 NativeJson.optStr(s, "title"), (0 until items.length()).map { j -> item(items.getJSONObject(j), depth) },
-                NativeJson.optStr(s, "footer", 1024),
+                NativeJson.optStr(s, "footer", 1024), grid = NativeJson.optBool(s, "grid"),
             )
         }
     }

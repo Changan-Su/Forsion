@@ -101,6 +101,7 @@ export {
   installNativeChromeHost, nativeChromeInstalled, useNativeChromeInstalled, setNativeChromeShell,
   claimNativeChrome, useNativeChromeClaim, dispatchNativeChromeAction, nativeChromeState,
   nativeChromeDrawsSpaces, useNativeChromeSpaces, dispatchNativeChromeSpace, nativeHaptic,
+  useNativeChromeExtras, nativeChromeExtras, subscribeNativeChromeExtras,
 } from './nativeChrome'
 export type {
   NativeChromeAction, NativeChromeState, NativeChromeShellState, NativeChromePageState, NativeChromeHiddenState,
