@@ -16,7 +16,9 @@
  *   A 四段都在;「新建」里的项不可拖,「打开」里的格子可拖;Tangu 自己不出格子
  *   B 侧栏面板那一行没有重名(原先两张都叫「工作区」)
  *   C 搜索行点开的是快速查找
- *   D 日历那一格的箭头展开出「日历 / 待办清单 / 进入 Space」;选「待办清单」→ 这个标签自己变成待办
+ *   D 日历那一格的箭头展开出「日历 / 待办清单 / 进入 Space」;选「待办清单」→ 这个标签自己变成待办。
+ *     先多开一张空白页、回到前一张里操作:就地打开时待办落在前一张的位置;另开标签会跑到末尾(空白页随后自己关掉,
+ *     只开一张时这两种结果长得一样,分不出来)
  *   E 启动器整页不出横向滚动,格子里的字没有被截断
  *   F 「打开」里每一格点下去,这个标签都就地变成那个视图(不留空白启动器、不出错误面板)—— 格子是按 Space 定义
  *     推出来的,新加一个 Space 就会多一格,这里替它把关
@@ -129,7 +131,13 @@ async function main() {
     await win.waitForTimeout(300)
     check('C 搜索行点开的是快速查找', palette && (await win.evaluate(SNAP)).launcherVisible === 1, `palette=${palette}`)
 
-    const calTile = win.locator('.newtab .nt-tile', { hasText: /^(日历|Calendar)$/ }).first()
+    const LAUNCHER_TAB = /新建标签页|New tab/
+    await win.click('.dv-new-tab')
+    await win.waitForTimeout(700)
+    await win.locator('.wb-tab', { hasText: LAUNCHER_TAB }).first().click()
+    await win.waitForTimeout(500)
+    const slot = (await win.evaluate(SNAP)).tabs.findIndex((n) => LAUNCHER_TAB.test(n))
+    const calTile = win.locator('.newtab .nt-tile:visible', { hasText: /^(日历|Calendar)$/ }).first()
     await calTile.locator('.nt-more').click()
     await win.waitForTimeout(400)
     const menuItems = await win.evaluate(`[...document.querySelectorAll('.ctx-menu button')].map((b) => (b.textContent || '').trim())`)
@@ -141,11 +149,11 @@ async function main() {
     const afterTodo = await win.evaluate(SNAP)
     check(
       'D 日历那一格展开出「日历 / 待办 / 进入 Space」;选待办 → 这个标签自己变成待办',
-      menuItems.length === 3 && /Space/.test(menuItems[2]) && afterTodo.launcherVisible === 0 && afterTodo.launcherTabs === 0 && afterTodo.tabs.length === tabsBefore && afterTodo.tabs.includes(todo),
-      JSON.stringify({ menuItems, afterTodo }),
+      menuItems.length === 3 && /Space/.test(menuItems[2]) && afterTodo.launcherVisible === 0 && afterTodo.launcherTabs === 1 && afterTodo.tabs.length === tabsBefore && afterTodo.tabs[slot] === todo,
+      JSON.stringify({ menuItems, slot, afterTodo }),
     )
-    // 回到「主区里有一张空白启动器」的起点,接着走原来的 2 / 3
-    await win.click('.dv-new-tab')
+    // 回到「主区里有一张空白启动器」的起点(D 多开的那张还在),接着走原来的 2 / 3
+    await win.locator('.wb-tab', { hasText: LAUNCHER_TAB }).first().click()
     await win.waitForTimeout(900)
 
     // 侧栏新建入口(OrbitsView 顶行,走 openNewChat);左栏折叠时先展开(折叠态可能还挂在 DOM 里,故看可见而非 count)。

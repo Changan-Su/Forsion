@@ -21,7 +21,6 @@ import { openDailyNote } from '../amadeusTemplates'
 import { openNewChat, openSession } from '../sessionNav'
 import { useQuickFind } from '../quickFind'
 import { useI18n, registerMessages } from '../i18n'
-import { openBrowser, openTerminal } from '../builtins'
 import { launcherTiles } from './newTabModel'
 import type { ViewProps } from '@lcl/engine/types'
 import { useShallow } from 'zustand/react/shallow'
@@ -132,11 +131,12 @@ export function NewTabView({ leaf }: ViewProps) {
     const SpIcon = space.icon
     return { ...vs[0], key: `space:${space.id}`, icon: SpIcon ? <SpIcon size={16} /> : vs[0].icon, label: label(space.name), spaceId: space.id, views: vs }
   })
-  // 不属于任何 Space:浏览器 / 终端(内置插件的两个视图,插件页关掉即反注册 → getView 落空 → 自动消失)、
+  // 不属于任何 Space:浏览器 / 终端(内置插件的两个视图,插件页关掉即反注册 → getView 落空 → 自动消失;
+  // 和别的格子一样就地开在这个标签里,所以不走 builtins 那两个「恒另开标签」的门面)、
   // 后台 Agent 详情(特殊视图,不带 drag),以及没带 Space 的插件视图。
   const freeItems: Item[] = [
-    { key: 'browser', icon: <Globe size={16} />, label: t('browser.title'), run: () => openBrowser(), show: !!getView('browser'), drag: { type: 'browser' } },
-    { key: 'terminal', icon: <TerminalSquare size={16} />, label: t('terminal.title'), run: () => openTerminal(), show: !!getView('terminal'), drag: { type: 'terminal' } },
+    { key: 'browser', icon: <Globe size={16} />, label: t('browser.title'), run: () => ws().openView('browser', {}, 'main'), show: !!getView('browser'), drag: { type: 'browser' } },
+    { key: 'terminal', icon: <TerminalSquare size={16} />, label: t('terminal.title'), run: () => ws().openView('terminal', {}, 'main'), show: !!getView('terminal'), drag: { type: 'terminal' } },
     { key: 'agents', icon: <Bot size={16} />, label: t('special.agents.title'), run: () => openSpecial('agents'), show: hasBackend && (s.specialEnabled.historian || s.specialEnabled.muse) },
     ...free.map((type) => viewItem({ type, params: {} }, type)),
   ]
