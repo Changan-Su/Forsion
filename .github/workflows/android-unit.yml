@@ -33,14 +33,14 @@ jobs:
           cache: gradle
 
       # Gradle 工程引用 node_modules 里各 Capacitor 插件的 android 模块,以及 cap 生成的 capacitor-cordova-android-plugins
-      # (不入库)。`cap update` 只生成这些,不拷网页产物,所以这里不用先 build;它要往 assets/ 里写插件清单,
-      # 而这个目录平时是拷网页产物那一步建的(同样不入库),所以先建出来。
+      # (不入库),所以要先 `cap sync`。单测用不到网页产物,cap 却要求 dist/index.html 在:放一个空壳,省掉整套前端构建
+      # (那要先装 desktop 的依赖)。出包的流水线照旧用真产物。
       - name: Capacitor's Gradle modules
         working-directory: mobile
         run: |
           npm install --no-audit --no-fund
-          mkdir -p android/app/src/main/assets
-          npx cap update android
+          mkdir -p dist && echo '<!doctype html>' > dist/index.html
+          npx cap sync android
 
       - name: Android JVM unit tests
         working-directory: mobile/android
