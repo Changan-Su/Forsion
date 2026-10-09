@@ -20,6 +20,7 @@
     "test:plugins": "node scripts/plugin-host.test.cjs",
     "test:pickedfiles": "node scripts/picked-files.test.cjs",
     "e2e:plugins": "node scripts/plugin-install.e2e.cjs",
+    "e2e:pluginfiles": "node scripts/plugin-filetypes.e2e.cjs",
     "e2e:boot": "node scripts/mobile-boot.e2e.cjs",
     "e2e:noteopen": "node scripts/note-open.e2e.cjs",
     "e2e:editorbar": "node scripts/editor-capsule.e2e.cjs",
