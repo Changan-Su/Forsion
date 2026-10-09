@@ -1,0 +1,426 @@
+{
+  "dinner": {
+    "version": 1,
+    "id": "dinner",
+    "title": "周末晚餐计划",
+    "inputs": [
+      {
+        "id": "people",
+        "kind": "number",
+        "label": "用餐人数",
+        "initial": 4,
+        "min": 2,
+        "max": 8,
+        "step": 1
+      },
+      {
+        "id": "main",
+        "kind": "choice",
+        "label": "选择主菜",
+        "initial": "chicken",
+        "options": [
+          {
+            "id": "chicken",
+            "label": "宫保鸡丁",
+            "description": "约 25 分钟 · 微辣酸甜"
+          },
+          {
+            "id": "beef",
+            "label": "番茄炖牛腩",
+            "description": "约 100 分钟 · 浓郁软烂"
+          },
+          {
+            "id": "tofu",
+            "label": "香菇烧豆腐",
+            "description": "约 20 分钟 · 鲜香清淡"
+          }
+        ]
+      }
+    ],
+    "resources": [],
+    "blocks": [
+      {
+        "id": "intro",
+        "kind": "text",
+        "markdown": "三道家常菜，按人数调整采购量。以下为示例食谱估算，可按口味调整。"
+      },
+      {
+        "id": "controls",
+        "kind": "controls",
+        "inputIds": [
+          "people",
+          "main"
+        ]
+      },
+      {
+        "id": "menu",
+        "kind": "comparison",
+        "title": "本次菜单",
+        "items": [
+          {
+            "id": "side",
+            "title": "蒜蓉西兰花",
+            "description": "清爽配菜",
+            "facts": [
+              "约 10 分钟",
+              "临开饭前炒制"
+            ]
+          },
+          {
+            "id": "cold",
+            "title": "拍黄瓜",
+            "description": "开胃凉菜",
+            "facts": [
+              "约 10 分钟",
+              "可提前准备"
+            ]
+          },
+          {
+            "id": "rice",
+            "title": "米饭",
+            "description": "按胃口准备主食",
+            "facts": [
+              "电饭煲先煮",
+              "和主菜同时上桌"
+            ]
+          }
+        ]
+      },
+      {
+        "id": "shopping",
+        "kind": "checklist",
+        "title": "采购清单",
+        "items": [
+          {
+            "id": "chicken",
+            "label": "去骨鸡腿肉",
+            "quantity": {
+              "value": 600,
+              "unit": "g",
+              "scaleBy": "people",
+              "base": 4
+            },
+            "when": {
+              "input": "main",
+              "equals": "chicken"
+            }
+          },
+          {
+            "id": "peanut",
+            "label": "熟花生米",
+            "quantity": {
+              "value": 100,
+              "unit": "g",
+              "scaleBy": "people",
+              "base": 4
+            },
+            "when": {
+              "input": "main",
+              "equals": "chicken"
+            }
+          },
+          {
+            "id": "beef",
+            "label": "牛腩",
+            "quantity": {
+              "value": 800,
+              "unit": "g",
+              "scaleBy": "people",
+              "base": 4
+            },
+            "when": {
+              "input": "main",
+              "equals": "beef"
+            }
+          },
+          {
+            "id": "tomato",
+            "label": "番茄",
+            "quantity": {
+              "value": 500,
+              "unit": "g",
+              "scaleBy": "people",
+              "base": 4
+            },
+            "when": {
+              "input": "main",
+              "equals": "beef"
+            }
+          },
+          {
+            "id": "tofu",
+            "label": "豆腐",
+            "quantity": {
+              "value": 600,
+              "unit": "g",
+              "scaleBy": "people",
+              "base": 4
+            },
+            "when": {
+              "input": "main",
+              "equals": "tofu"
+            }
+          },
+          {
+            "id": "mushroom",
+            "label": "香菇",
+            "quantity": {
+              "value": 200,
+              "unit": "g",
+              "scaleBy": "people",
+              "base": 4
+            },
+            "when": {
+              "input": "main",
+              "equals": "tofu"
+            }
+          },
+          {
+            "id": "broccoli",
+            "label": "西兰花",
+            "quantity": {
+              "value": 500,
+              "unit": "g",
+              "scaleBy": "people",
+              "base": 4
+            }
+          },
+          {
+            "id": "cucumber",
+            "label": "黄瓜",
+            "quantity": {
+              "value": 500,
+              "unit": "g",
+              "scaleBy": "people",
+              "base": 4
+            }
+          },
+          {
+            "id": "garlic-side",
+            "label": "大蒜",
+            "quantity": {
+              "value": 30,
+              "unit": "g",
+              "scaleBy": "people",
+              "base": 4
+            },
+            "itemKey": "garlic"
+          },
+          {
+            "id": "garlic-main",
+            "label": "大蒜",
+            "quantity": {
+              "value": 5,
+              "unit": "g",
+              "scaleBy": "people",
+              "base": 4
+            },
+            "when": {
+              "input": "main",
+              "equals": "chicken"
+            },
+            "itemKey": "garlic"
+          },
+          {
+            "id": "ginger",
+            "label": "生姜",
+            "quantity": {
+              "value": 20,
+              "unit": "g",
+              "scaleBy": "people",
+              "base": 4
+            }
+          }
+        ]
+      },
+      {
+        "id": "steps",
+        "kind": "disclosure",
+        "title": "准备顺序",
+        "markdown": "1. 先准备凉菜并冷藏。\n2. 洗切西兰花，备好调料。\n3. 烹饪主菜，最后炒配菜。"
+      },
+      {
+        "id": "note",
+        "kind": "text",
+        "markdown": "选择牛腩时，建议提前约两小时开始准备。复制清单会使用当前人数和主菜。"
+      },
+      {
+        "id": "followup",
+        "kind": "actions",
+        "items": [
+          {
+            "id": "vegetarian",
+            "kind": "model",
+            "label": "改成全素菜单",
+            "prompt": "根据这份计划和我的当前选择，重新设计全素菜单。"
+          }
+        ]
+      }
+    ]
+  },
+  "media": {
+    "version": 1,
+    "id": "images",
+    "title": "把图片放进回答里",
+    "inputs": [
+      {
+        "id": "cover",
+        "kind": "choice",
+        "label": "选择封面方向",
+        "initial": "jetty",
+        "options": [
+          {
+            "id": "jetty",
+            "label": "中心构图"
+          },
+          {
+            "id": "diagonal",
+            "label": "斜线构图"
+          },
+          {
+            "id": "shore",
+            "label": "岸边留白"
+          }
+        ]
+      }
+    ],
+    "resources": [
+      {
+        "id": "origin",
+        "kind": "source",
+        "url": "https://github.com/sachinchoolur/lightGallery",
+        "title": "lightGallery 示例图库",
+        "description": "演示图片的来源。此处只比较构图，不对拍摄地点作判断。"
+      },
+      {
+        "id": "jetty",
+        "kind": "image",
+        "url": "https://cdn.jsdelivr.net/gh/sachinchoolur/lightGallery@9813e97837fddca82e4734bcbf4b77b0cd227772/site/static/images/demo/1-480.jpg",
+        "alt": "湖面与栈桥，中心引导线",
+        "sourceId": "origin"
+      },
+      {
+        "id": "diagonal",
+        "kind": "image",
+        "url": "https://cdn.jsdelivr.net/gh/sachinchoolur/lightGallery@9813e97837fddca82e4734bcbf4b77b0cd227772/site/static/images/demo/4-480.jpg",
+        "alt": "斜向延伸的栈桥",
+        "sourceId": "origin"
+      },
+      {
+        "id": "shore",
+        "kind": "image",
+        "url": "https://cdn.jsdelivr.net/gh/sachinchoolur/lightGallery@9813e97837fddca82e4734bcbf4b77b0cd227772/site/static/images/demo/13-480.jpg",
+        "alt": "安静的岸边与留白",
+        "sourceId": "origin"
+      }
+    ],
+    "blocks": [
+      {
+        "id": "intro",
+        "kind": "text",
+        "markdown": "图片、说明与来源留在同一条回答里。点击图片可按原始比例展开。"
+      },
+      {
+        "id": "pictures",
+        "kind": "gallery",
+        "resourceIds": [
+          "jetty",
+          "diagonal",
+          "shore"
+        ]
+      },
+      {
+        "id": "choose",
+        "kind": "controls",
+        "inputIds": [
+          "cover"
+        ]
+      },
+      {
+        "id": "comparison",
+        "kind": "comparison",
+        "title": "不同画面的用途",
+        "items": [
+          {
+            "id": "a",
+            "title": "中心构图",
+            "description": "视线集中",
+            "facts": [
+              "适合标题居中",
+              "纵深感较强"
+            ]
+          },
+          {
+            "id": "b",
+            "title": "斜线构图",
+            "description": "视线流动",
+            "facts": [
+              "适合内容导读",
+              "保留图像边缘"
+            ]
+          },
+          {
+            "id": "c",
+            "title": "岸边留白",
+            "description": "气氛平静",
+            "facts": [
+              "适合短文封面",
+              "注意文字对比度"
+            ]
+          }
+        ]
+      },
+      {
+        "id": "sources",
+        "kind": "sources",
+        "title": "图片来源",
+        "resourceIds": [
+          "origin"
+        ]
+      }
+    ]
+  },
+  "research": {
+    "version": 1,
+    "id": "research",
+    "title": "网页信息，变成可读的答案",
+    "inputs": [],
+    "resources": [
+      {
+        "id": "react",
+        "kind": "source",
+        "url": "https://react.dev/learn/preserving-and-resetting-state",
+        "title": "React：保留与重置状态",
+        "description": "组件类型、位置与 key 影响状态是否保留。长久的用户选择需要独立存储。"
+      },
+      {
+        "id": "streams",
+        "kind": "source",
+        "url": "https://platform.openai.com/docs/guides/streaming-responses",
+        "title": "OpenAI：流式响应",
+        "description": "传输层逐步接收事件。界面应以已经验证的完整内容单元提交。"
+      }
+    ],
+    "blocks": [
+      {
+        "id": "summary",
+        "kind": "text",
+        "markdown": "两条工程原则：**用户状态独立保存**；**完整区块验证后显示**。下面的来源可以展开摘要，也可打开原文。"
+      },
+      {
+        "id": "sources",
+        "kind": "sources",
+        "resourceIds": [
+          "react",
+          "streams"
+        ]
+      },
+      {
+        "id": "more",
+        "kind": "disclosure",
+        "title": "如何用在 Forsion",
+        "markdown": "人数与选项在本地更新。模型内容更新时保留用户已操作的值，历史记录继续使用原有工具事件恢复。"
+      }
+    ]
+  }
+}

@@ -5,7 +5,9 @@ description: Create clear interactive explanations, charts, simulations and inte
 
 # Visualize in Forsion
 
-Deliver with `sketch`. The host supplies a transparent, theme-aware document with native controls,
+When `intelligent_ui` is available, use the `intelligent-ui` skill for interactive plans, images,
+linked sources and qualitative comparisons. Use this skill and `sketch` for custom charts,
+simulations and diagrams. Deliver those with `sketch`. The host supplies a transparent, theme-aware document with native controls,
 automatic height and local interaction state. Supply a literal HTML fragment with scoped CSS and
 JavaScript. Do not emit an OpenAI visualization directive, `window.openai` calls or a file link.
 Do not send a conversational visualization to Agent Desk in place of the inline result.

@@ -1,3 +1,4 @@
+import { intelligentUiEnabledFor, INTELLIGENT_UI_SECTION } from '../tools/builtin/intelligentUi.js';
 import { withTaskProjectQueue } from './taskProjectQueue.js';
 import { HUMAN_GUIDANCE, readHuman, renderHumanContext } from '../agents/humanStore.js';
 import { humanProjectScope } from './humanContext.js';
@@ -1510,12 +1511,14 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     //     visuals(渲染端 ui_settings 快照):off → 段与工具一起缺席;less → 段还在但只认明确要求(隐式信号与收尾补催不触发)。
     const sketchEnabled = sketchEnabledFor({ client: clientTag, planMode, channelSession, preset, uiSettings });
     const visualsPref = visualsPrefOf(uiSettings);
+    const nativeUiEnabled = intelligentUiEnabledFor({ client: clientTag, planMode, channelSession, preset, uiSettings, clientCapabilities });
     const sketchTurnSignal = sketchEnabled ? sketchTurnSignalFor(String(input.message || ''), visualsPref) : undefined;
     if (sketchEnabled) {
       systemParts.push(SKETCH_SECTION);
+      if (nativeUiEnabled) systemParts.push(INTELLIGENT_UI_SECTION);
       if (visualsPref === 'less') systemParts.push(SKETCH_LESS_NOTE);
       // 常驻段稳定,但本轮信号按消息正则取 3 种值 → 跟记忆易变段同一落点(B1),别留在稳定前缀里。
-      if (sketchTurnSignal && volatilePlacement === 'system') systemParts.push(sketchTurnSignal.section);
+      if (sketchTurnSignal && volatilePlacement === 'system') systemParts.push(nativeUiEnabled ? sketchTurnSignal.section.replaceAll('`sketch`', '`intelligent_ui` or `sketch`') : sketchTurnSignal.section);
     }
     ctxMark('guidance');
     // 4) USER.md 全局用户画像(所有 agent 可见,用户维护,半稳定)。读失败不阻断。
@@ -1812,7 +1815,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     if (volatilePlacement === 'system-end' && (volatileMemory || sketchTurnSignal)) {
       segAt('system:memoryVolatile');
       if (volatileMemory) systemParts.push(RECALLED_MEMORY_HEADER + volatileMemory);
-      if (sketchTurnSignal) systemParts.push(sketchTurnSignal.section);
+      if (sketchTurnSignal) systemParts.push(nativeUiEnabled ? sketchTurnSignal.section.replaceAll('`sketch`', '`intelligent_ui` or `sketch`') : sketchTurnSignal.section);
       ctxMark('memory'); // ponytail:ctx 视图里这一档会出现第二条 memory —— 只为变体 S,不新增 key
     }
     // A4:系统块字节量随 usage 事件出账 ——「固定头到底多大」以后不用再估。
@@ -1965,7 +1968,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     if (humanCorrections.length) appendToLastUserMessage('[Collaboration settings updated outside this chat. The following are separate scopes: an empty project handbook does not cancel the Agent handbook. Current saved context, not tool authorization.]\n' + humanCurrentBlocks.join('\n\n'));
     if (volatilePlacement === 'tail') {
       if (volatileMemory) appendToLastUserMessage(RECALLED_MEMORY_HEADER + volatileMemory);
-      if (sketchTurnSignal) appendToLastUserMessage(sketchTurnSignal.section);
+      if (sketchTurnSignal) appendToLastUserMessage(nativeUiEnabled ? sketchTurnSignal.section.replaceAll('`sketch`', '`intelligent_ui` or `sketch`') : sketchTurnSignal.section);
     }
 
     // /skill 点名技能(参考 Hermes 的「指针+按需加载」):强指令拼到**尾部 user 消息**,正文由模型
@@ -3096,13 +3099,13 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         // —— Sketch 交付兜底:常驻提示不足以对抗部分模型「直接写完文字就收尾」的惯性。
         //    本轮启发式命中、工具确实在场、且整 run 没调过 sketch 时,在收尾前补催一次。
         //    只催一次:模型二次检查仍认为图是噪声时允许收尾;用户的「纯文字/不要画」在信号层已排除。——
-        if (sketchTurnSignal && !sketchNudged && !lastIter && !allToolCalls.some((c) => c.function.name === 'sketch')) {
+        if (sketchTurnSignal && !sketchNudged && !lastIter && !allToolCalls.some((c) => ['sketch', 'intelligent_ui'].includes(c.function.name))) {
           sketchNudged = true;
           if (res.content || res.outputItems?.length) workingMessages.push(assistantTurnOf(res, res.content || ''));
           workingMessages.push({
             role: 'user',
             content:
-              '<visual_delivery_check>\nYou are about to finish a turn that was identified as strongly visual, but you did not call `sketch`. Re-check the actual user goal now. If a comparison, sequence, structure, data shape, or interaction would be clearer as a card, call `sketch` and make that card before the final reply; do not merely promise it. If closer inspection shows a card would genuinely add noise, finish normally and briefly preserve that judgment.\n</visual_delivery_check>',
+              '<visual_delivery_check>\nYou are about to finish a turn that was identified as strongly visual, but you did not call a visual tool. Re-check the actual user goal now. If a comparison, sequence, structure, data shape, or interaction would be clearer as a card, call an available visual tool and make that card before the final reply; do not merely promise it. If closer inspection shows a card would genuinely add noise, finish normally and briefly preserve that judgment.\n</visual_delivery_check>',
           } as ChatMessage); // 不落库不上屏:harness 脚手架
           void publish(runId, 'status', { phase: 'sketch_delivery_nudge', iteration, signal: sketchTurnSignal.kind });
           continue;

@@ -1198,12 +1198,12 @@ const zh: Dict = {
   // 双轴主题:设计语言(结构)× 配色(颜色)
   'settings.theme.langLabel': '设计语言',
   // 对话里的可视化卡多少(对标 ChatGPT「Layout and visuals」)
-  'settings.theme.visuals': '对话里的可视化',
+  'settings.theme.visuals': 'Intelligent UI',
   'settings.theme.visualsOpt.auto': '自动',
   'settings.theme.visualsOpt.less': '少一点',
   'settings.theme.visualsOpt.off': '关闭',
-  'settings.theme.visuals.auto': '关系、流程或数据适合看图时，Tangu 会用图表和可交互卡片作答。',
-  'settings.theme.visuals.less': '只在你明确要图时才画；下一次对话起生效。',
+  'settings.theme.visuals.auto': '按问题组织图文、来源与交互控件，简单问题保持文字回答。',
+  'settings.theme.visuals.less': '只在你明确要求图片、图表或交互界面时使用；下一轮生效。',
   'settings.theme.visuals.off': '只用文字回答，不再画卡片；下一次对话起生效。',
   'settings.theme.openFolder': '打开主题文件夹',
   'settings.theme.reload': '重载主题',
@@ -3063,12 +3063,12 @@ const en: Dict = {
   // Two-axis theme: design language (structure) × color scheme (palette)
   'settings.theme.langLabel': 'Design language',
   // Visuals in chat (cf. ChatGPT "Layout and visuals")
-  'settings.theme.visuals': 'Visuals in chat',
+  'settings.theme.visuals': 'Intelligent UI',
   'settings.theme.visualsOpt.auto': 'Auto',
   'settings.theme.visualsOpt.less': 'Less',
   'settings.theme.visualsOpt.off': 'Off',
-  'settings.theme.visuals.auto': 'Tangu answers with charts and interactive cards when a relationship, process or data reads better as a picture.',
-  'settings.theme.visuals.less': 'Only when you explicitly ask for a picture; takes effect from the next turn.',
+  'settings.theme.visuals.auto': 'Organize images, sources and controls around your question. Simple answers stay in prose.',
+  'settings.theme.visuals.less': 'Use only when you ask for images, charts or an interactive view. Applies from the next turn.',
   'settings.theme.visuals.off': 'Text only, no cards; takes effect from the next turn.',
   'settings.theme.openFolder': 'Open themes folder',
   'settings.theme.reload': 'Reload themes',

@@ -11,6 +11,8 @@
     "predev": "node scripts/dev-version.check.cjs",
     "dev": "electron-vite dev --noSandbox",
     "check:visualize": "node scripts/visualize.check.cjs",
+    "check:intelligent-ui": "node scripts/intelligent-ui.e2e.cjs",
+    "demo:intelligent-ui": "node scripts/intelligent-ui.e2e.cjs --preview",
     "demo:sketch": "node scripts/sketch-demo.record.cjs",
     "check:version": "node scripts/dev-version.check.cjs",
     "build": "electron-vite build",

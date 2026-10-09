@@ -158,9 +158,9 @@ export async function startRun(
       ui_settings: readUiSettings(),
       // 同类握手:本端有输入框上方的审批托盘(views/chat2/ApprovalTray),待批卡能攒多张、各自兑现。
       approval_tray: true,
-      // 客户端能力握手(tangu-agent/docs/phone-control.md §2):已注册能力面的能力并集,desktop/web 恒为 []。
+      // Native UI is declarative; this capability advertises a renderer, not a client command surface.
       // 引擎据此 default-deny `clientCapability` 工具;请求时现算(移动端开关随时会变)。
-      client_capabilities: collectClientCapabilities(),
+      client_capabilities: [...collectClientCapabilities(), ...(currentPlatform() !== 'mobile' ? ['intelligent-ui.v1'] : [])],
       message: params.message,
       attachments: params.attachments || [],
       agent_config: params.agentConfig || {},

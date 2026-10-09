@@ -5,6 +5,16 @@ import { partitionToolSegment } from './EditorialMessage'
 const done = (id: string, name: string): ToolEvent => ({ id, name, done: true, result: 'ok' })
 
 describe('EditorialMessage inline Sketch ordering', () => {
+  it('keeps native documents at their tool position alongside legacy sketches', () => {
+    const events = [done('read', 'read_file'), done('native', 'intelligent_ui'), done('legacy', 'sketch')]
+    const legacy = { callId: 'legacy', html: '<p>old</p>' }
+    expect(partitionToolSegment(events, [legacy])).toEqual([
+      { t: 'tools', events: events.slice(0, 2) },
+      { t: 'intelligent', event: events[1] },
+      { t: 'tools', events: [events[2]] },
+      { t: 'sketch', item: legacy },
+    ])
+  })
   it('places every completed Sketch immediately after its own tool call', () => {
     const events = [done('read1', 'read_file'), done('sk1', 'sketch'), done('run1', 'run_bash'), done('sk2', 'sketch')]
     const sketches: SketchItem[] = [
@@ -12,7 +22,7 @@ describe('EditorialMessage inline Sketch ordering', () => {
       { callId: 'sk2', html: '<p>TWO</p>' },
     ]
     const parts = partitionToolSegment(events, sketches)
-    expect(parts.map((part) => part.t === 'tools' ? `tools:${part.events.map((ev) => ev.id).join(',')}` : `sketch:${part.item.callId}`)).toEqual([
+    expect(parts.map((part) => part.t === 'tools' ? `tools:${part.events.map((ev) => ev.id).join(',')}` : part.t === 'sketch' ? `sketch:${part.item.callId}` : `intelligent:${part.event.id}`)).toEqual([
       'tools:read1,sk1',
       'sketch:sk1',
       'tools:run1,sk2',

@@ -210,6 +210,7 @@ OPT_IN.add('projdedupe'); // --only projdedupe:项目记忆换了说法的重复
 OPT_IN.add('projteam'); // --only projteam:项目记忆在团队会话里(三个两人团队各一轮)
 OPT_IN.add('projcompact'); // --only projcompact:项目记忆写满时的压缩(4 个 run + 判官 + 2 次压缩,约 10 次调用);只在动 projectMemoryCompact.ts / remember 写满那条路时才有信息量
 OPT_IN.add('visualfigures');
+for (const key of ['intelligentplan', 'intelligentmedia', 'intelligentplain']) { OPT_IN.add(key); KEYS.push(key); }
 OPT_IN.add('visualize'); // --only visualize: real model -> sketch controls/state; HTML can feed desktop check:visualize.
 OPT_IN.add('visualask'); // --only visualask:卡内按钮回头改答案(forsionSketch.ask);改 sketch.ts 的 INTERACTION / SKETCH_SECTION 那段后跑
 OPT_IN.add('visualsdial'); // --only visualsdial:可视化档位 less / off(ui_settings 快照):off 工具与段都不在、less 隐式信号不触发;两个 run
@@ -2027,6 +2028,35 @@ try {
     const success = ev.toolResults.some((r) => r.name === 'sketch' && !r.isError);
     const contract = html.includes('<fs-chart') && html.includes('<fs-flow');
     return { ok: !ev.error && ev.done && success && contract, detail: ev.error || `cards=${cards.length};native figures=${contract}`, output: ev.content, toolCalls: ev.toolCalls, ttftMs: ttft(ev), tokens: tokensOf(ev) };
+  });
+
+  // Real documents also feed the desktop Electron acceptance script.
+  for (const [key, prompt] of [
+    ['intelligentplan', '在聊天里安排周末晚餐，默认4人，人数可在2–8调整。并排给宫保鸡丁、番茄炖牛腩、香菇烧豆腐三个主菜选项，配菜和凉菜固定。人数和主菜改变时采购清单本地联动，可勾选、复制，步骤可以折叠。再放一个按钮让我要求全素方案。用原生 Intelligent UI，数量标为食谱估算，不写项目文件。'],
+    ['intelligentmedia', '用原生 Intelligent UI 做摄影封面选择：三张图并列、可展开原图，给出构图差异、本地单选控件和图片来源。只使用给定图片：https://cdn.jsdelivr.net/gh/sachinchoolur/lightGallery@9813e97837fddca82e4734bcbf4b77b0cd227772/site/static/images/demo/1-480.jpg 、同目录 4-480.jpg 和 13-480.jpg。来源：https://github.com/sachinchoolur/lightGallery 。必须先实际查看三张图片再比较构图；若无法查看就明确说明，不猜图中主体或拍摄地点。'],
+  ]) {
+    await scenario(key, key, async () => {
+      const ev = await run(`live-${key}-${Date.now()}`, prompt, 300_000, key === 'intelligentplan' ? { preset: 'chat' } : {}, 'desktop/2.13.1', undefined, undefined, undefined, { clientCapabilities: ['intelligent-ui.v1'] });
+      const { validateUIDocument } = await import('../dist/shared/intelligentUi.js');
+      const documents = [], errors = [];
+      for (const c of ev.toolArgs.filter(c => c.name === 'intelligent_ui')) {
+        try { documents.push(validateUIDocument(JSON.parse(JSON.parse(c.arguments).document))); } catch (e) { errors.push(String(e.message)); }
+      }
+      const blocks = documents.flatMap(d => d.blocks);
+      const contract = key === 'intelligentplan'
+        ? blocks.some(b => b.kind === 'checklist' && b.items.some(i => i.quantity?.scaleBy)) && documents.some(d => d.inputs.some(i => i.kind === 'choice')) && blocks.some(b => b.kind === 'disclosure')
+        : blocks.some(b => b.kind === 'gallery' && b.resourceIds.length === 3) && blocks.some(b => b.kind === 'sources');
+      const groundedImages = key !== 'intelligentmedia' || (ev.toolArgs.some(c => c.name === 'view_image') && !/人像|人脸|面部|portrait/i.test(JSON.stringify(documents)));
+      const noPayloadEcho = !ev.content.includes('\"document\":') && !ev.content.includes('\"blocks\":');
+      const success = ev.toolResults.some(r => r.name === 'intelligent_ui' && !r.isError && !/^Error:/i.test(r.result || ''));
+      writeFileSync(join(OUT, `${key}-evidence.json`), JSON.stringify({ documents, errors, toolArgs: ev.toolArgs, toolResults: ev.toolResults }, null, 2));
+      return { ok: !ev.error && ev.done && success && contract && noPayloadEcho && groundedImages, detail: ev.error || `groundedImages=${groundedImages}; noPayloadEcho=${noPayloadEcho}; documents=${documents.length}; contract=${contract}; correctedErrors=${errors.length}`, output: ev.content, toolCalls: ev.toolCalls, ttftMs: ttft(ev), tokens: tokensOf(ev) };
+    });
+  }
+  await scenario('intelligentplain', 'Intelligent UI 关闭偏好', async () => {
+    const ev = await run(`live-intelligentplain-${Date.now()}`, '给我一个四人晚餐建议，三道菜，保持简短。', 150_000, {}, 'desktop/2.13.1', undefined, undefined, undefined, { clientCapabilities: ['intelligent-ui.v1'], ui: { visuals: { value: 'off' } } });
+    const noVisuals = !ev.toolArgs.some(c => ['intelligent_ui', 'sketch'].includes(c.name)) && !String(ev.systemPrompt).includes('## Intelligent UI');
+    return { ok: !ev.error && ev.done && noVisuals && ev.content.length > 0, detail: ev.error || `noVisuals=${noVisuals}`, output: ev.content, toolCalls: ev.toolCalls, ttftMs: ttft(ev), tokens: tokensOf(ev) };
   });
 
   await scenario('visualize', 'visualize 交互图与本地状态', async () => {
