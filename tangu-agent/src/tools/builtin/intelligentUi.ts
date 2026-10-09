@@ -27,7 +27,10 @@ browser_navigate, then browser_screenshot, then view_image on the returned scree
 Load those tools if needed. An empty DOM snapshot of an image page is not a failed image load:
 inspect its pixels before giving up. web_fetch is for text; it does not show image pixels.
 When the user wants to pick a candidate, include a bound choice input; expanding an image does
-not select it. If comparison items include images, omit a duplicate gallery of those same images.
+not select it. When the candidates are pictures, set imageId on EVERY option of that choice and
+put the one-line reason to pick it in description: the options render as one row of selectable
+picture cards. Do NOT also show those pictures in a gallery or comparison. Use gallery only for
+pictures that are not options. If comparison items include images, omit a duplicate gallery.
 Keep checklist labels brief and actionable; put worked answers or long explanations
 in disclosures so the task list remains easy to scan.
 When revising a plan, retain completed work as history; new time constraints apply to remaining
@@ -43,7 +46,8 @@ Use [] for empty arrays. IDs are unique semantic strings (letters, digits, dots,
 underscores; max 80). Max 8 inputs,24 resources,40 blocks,64 KiB total. Optional fields use ? below.
 Input:
 - {id,kind:"number",label,initial:number,min:number,max:number,step:number}: nonnegative, initial on step grid.
-- {id,kind:"choice",label,initial:optionId,options:[{id,label,description?:string}]}: local radio selection.
+- {id,kind:"choice",label,initial:optionId,options:[{id,label,description?:string,imageId?:imageId}]}: local radio
+  selection. imageId goes on all options or none; with it the options are picture cards.
 Resource:
 - {id,kind:"source",url,title,description?:string}
 - {id,kind:"image",url,alt,sourceId?:sourceId}

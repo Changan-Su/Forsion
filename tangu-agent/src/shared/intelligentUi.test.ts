@@ -50,6 +50,19 @@ describe('Intelligent UI trust boundary and semantic streaming', () => {
     const twice = dinner(); twice.blocks.push({ ...twice.blocks[1], id: 'duplicate' })
     expect(() => validateUIDocument(twice)).toThrow('each input must appear once')
   })
+  it('accepts picture options only as a complete row of image references', () => {
+    const pick = (): any => structuredClone(fixtures.pick)
+    expect(validateUIDocument(pick()).inputs[0]).toMatchObject({ kind: 'choice', options: [{ imageId: 'jetty' }, { imageId: 'diagonal' }, { imageId: 'shore' }] })
+    const mixed = pick(); delete mixed.inputs[0].options[1].imageId
+    expect(() => validateUIDocument(mixed)).toThrow('every option or none')
+    const source = pick(); source.inputs[0].options[0].imageId = 'origin'
+    expect(() => validateUIDocument(source)).toThrow('expected image resource reference')
+    const missing = pick(); missing.inputs[0].options[0].imageId = 'nowhere'
+    expect(() => validateUIDocument(missing)).toThrow('expected image resource reference')
+    // A streamed prefix validates the same references, so a card can never point at a missing picture.
+    expect(parseUIDraft(JSON.stringify(missing))).toBeUndefined()
+    expect(parseUIDraft(JSON.stringify(pick()))).toEqual(validateUIDocument(pick()))
+  })
   it('normalizes decimal step values so conditions match after repeated clicks', () => {
     const doc = dinner(); Object.assign(doc.inputs[0], { min: 0, max: 1, step: 0.1, initial: 0.3 })
     expect(() => validateUIDocument(doc)).not.toThrow()

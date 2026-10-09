@@ -4,7 +4,7 @@ import { validAppCardId } from './intelligentCards.js'
 export type UICondition = { input: string; equals: string | number }
 export type UIInput =
   | { id: string; kind: 'number'; label: string; initial: number; min: number; max: number; step: number }
-  | { id: string; kind: 'choice'; label: string; initial: string; options: { id: string; label: string; description?: string }[] }
+  | { id: string; kind: 'choice'; label: string; initial: string; options: { id: string; label: string; description?: string; imageId?: string }[] }
 export type UIResource =
   | { id: string; kind: 'image'; url: string; alt: string; sourceId?: string }
   | { id: string; kind: 'source'; url: string; title: string; description?: string }
@@ -82,8 +82,10 @@ export function validateUIDocument(raw: unknown, options: { draft?: boolean } = 
     if (o.kind === 'choice') {
       const options = unique(list(o.options, `${p}.options`, 8, (v, q) => {
         const a = obj(v, q)
-        return { id: id(a.id, `${q}.id`), label: str(a.label, `${q}.label`, 160), ...(a.description === undefined ? {} : { description: str(a.description, `${q}.description`, 400) }) }
+        return { id: id(a.id, `${q}.id`), label: str(a.label, `${q}.label`, 160), ...(a.description === undefined ? {} : { description: str(a.description, `${q}.description`, 400) }), ...(a.imageId === undefined ? {} : { imageId: id(a.imageId, `${q}.imageId`) }) }
       }), `${p}.options`)
+      // Picture options render as one row of selectable cards; a mixed row has no sensible layout.
+      if (options.some(v => v.imageId) && !options.every(v => v.imageId)) fail(p, 'imageId must be set on every option or none')
       const initial = id(o.initial, `${p}.initial`)
       if (!options.some(v => v.id === initial)) fail(p, 'initial must reference an option')
       return { ...common, kind: 'choice', options, initial }
@@ -112,6 +114,7 @@ export function validateUIDocument(raw: unknown, options: { draft?: boolean } = 
     return ref
   }
   for (const r of resources) if (r.kind === 'image' && r.sourceId) resourceRef(r.sourceId, `${r.id}.sourceId`, 'source')
+  for (const i of inputs) if (i.kind === 'choice') for (const o of i.options) if (o.imageId) resourceRef(o.imageId, `${i.id}.${o.id}.imageId`, 'image')
   const blocks = unique(list(d.blocks, 'blocks', 40, (v, p): UIBlock => {
     const o = obj(v, p), common: BlockBase = { id: id(o.id, `${p}.id`), ...(o.title === undefined ? {} : { title: str(o.title, `${p}.title`, 200) }), when: condition(o.when, `${p}.when`) }
     switch (o.kind) {

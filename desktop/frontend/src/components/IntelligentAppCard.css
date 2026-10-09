@@ -1,17 +1,31 @@
-.iui-app-card { border: var(--border-width, 1px) solid var(--border); border-radius: var(--radius-md); overflow: hidden; min-width: 0; }
-.iui-app-card > header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; padding: 12px 14px; }
-.iui-app-card > header strong { font-size: var(--ui-font-body); font-weight: 600; }
-.iui-app-card > header span { margin-left: auto; font-size: var(--ui-font-caption); color: var(--text-muted); }
-.iui-app-body { padding: 0 14px 8px; }
-.iui-app-body .dash-compact { height: auto; padding: 0; }
-.iui-app-card > footer { padding: 6px 14px 10px; }
+/* A live app card is an object on the answer (DESIGN §5 object-card recipe): the one place in an
+ * Intelligent UI document that gets a face. The glass language drops the hairline (theme.css). */
+.iui-app-card { border: var(--border-width, 1px) solid var(--overlay-medium, rgba(127, 127, 127, 0.12)); border-radius: var(--radius-md); background: var(--bg-card); box-shadow: var(--card-shadow); overflow: hidden; min-width: 0; }
+.iui-app-card > header { display: flex; align-items: center; gap: 8px; min-height: 39px; padding: 9px 9px 4px 14px; }
+.iui-app-card > header strong { min-width: 0; font-size: var(--ui-font-body); font-weight: 600; }
+.iui-app-icon { flex: none; color: var(--text-muted); }
+.iui-app-card > header .plugin-logo { border: 0; border-radius: 4px; background: none; }
+.iui-live { flex: none; margin-left: auto; display: inline-flex; align-items: center; gap: 5px; font-size: var(--ui-font-caption); color: var(--text-faint, var(--text-muted)); }
+.iui-live > i { width: 6px; height: 6px; border-radius: 50%; background: var(--green); }
 .iui-app-card button { font: inherit; color: var(--text); cursor: pointer; }
-.iui-app-card > footer button { display: inline-flex; align-items: center; gap: 6px; background: transparent; border: 0; padding: 4px 0; color: var(--text-muted); font-size: var(--ui-font-meta); }
-.iui-app-search { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; color: var(--text-muted); }
+.iui-app-card .iui-app-open { flex: none; width: 26px; height: 26px; display: grid; place-items: center; padding: 0; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--text-muted); }
+.iui-app-card .iui-app-open:hover { background: var(--bg-hover); color: var(--text); }
+.iui-app-body { padding: 0 14px 10px; }
+.iui-app-body .dash-compact { height: auto; padding: 0; }
+.iui-app-body .dash-compact-kpi { min-height: 34px; }
+.iui-app-body .dash-compact-row:last-child { border-bottom-color: transparent; }
+.iui-app-search { display: flex; align-items: center; gap: 8px; margin: 2px 0 4px; padding: 0 8px; border-radius: var(--radius-sm); background: var(--overlay-light); color: var(--text-muted); }
+.iui-app-search:focus-within { box-shadow: 0 0 0 var(--focus-ring) var(--sel-line); }
 .iui-app-search input { flex: 1; min-width: 0; border: 0; background: transparent; font: inherit; color: var(--text); padding: 6px 0; }
-.iui-app-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 10px; width: 100%; text-align: left; padding: 9px 0; background: transparent; border: 0; border-bottom: 1px solid var(--border); }
+.iui-app-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 10px; width: 100%; text-align: left; padding: 8px 0; background: transparent; border: 0; border-bottom: 1px solid color-mix(in srgb, var(--border) 44%, transparent); }
+.iui-app-row:last-of-type { border-bottom-color: transparent; }
+.iui-app-row-icon { display: grid; place-items: center; width: 15px; height: 15px; color: var(--text-muted); }
+.iui-app-row-icon > :is(svg, img) { width: 15px; height: 15px; object-fit: contain; }
 .iui-app-row span { overflow-wrap: anywhere; }
 .iui-app-row small { color: var(--text-muted); font-size: var(--ui-font-caption); }
 .iui-app-row:hover { color: var(--primary); }
 .iui-app-empty { color: var(--text-muted); font-size: var(--ui-font-meta); }
-.iui-app-card :is(button,input):focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.iui-app-card :is(button, input):focus-visible { outline: var(--focus-ring) solid var(--accent-ink); outline-offset: 2px; }
+/* The search field shows focus on its own surface, not as a second ring around the bare input. */
+.iui-app-card .iui-app-search input:focus-visible { outline: none; }
+@media (pointer: coarse) { .iui-app-card .iui-app-open { width: 36px; height: 36px; } }

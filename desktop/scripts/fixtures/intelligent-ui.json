@@ -422,5 +422,92 @@
         "markdown": "人数与选项在本地更新。模型内容更新时保留用户已操作的值，历史记录继续使用原有工具事件恢复。"
       }
     ]
+  },
+  "pick": {
+    "version": 1,
+    "id": "cover-pick",
+    "title": "选一张做封面",
+    "inputs": [
+      {
+        "id": "cover",
+        "kind": "choice",
+        "label": "封面图",
+        "initial": "jetty",
+        "options": [
+          {
+            "id": "jetty",
+            "label": "中心构图",
+            "description": "视线集中，适合标题居中",
+            "imageId": "jetty"
+          },
+          {
+            "id": "diagonal",
+            "label": "斜线构图",
+            "description": "视线流动，适合内容导读",
+            "imageId": "diagonal"
+          },
+          {
+            "id": "shore",
+            "label": "岸边留白",
+            "description": "气氛平静，适合短文封面",
+            "imageId": "shore"
+          }
+        ]
+      }
+    ],
+    "resources": [
+      {
+        "id": "origin",
+        "kind": "source",
+        "url": "https://github.com/sachinchoolur/lightGallery",
+        "title": "lightGallery 示例图库",
+        "description": "演示图片的来源。此处只比较构图，不对拍摄地点作判断。"
+      },
+      {
+        "id": "jetty",
+        "kind": "image",
+        "url": "https://cdn.jsdelivr.net/gh/sachinchoolur/lightGallery@9813e97837fddca82e4734bcbf4b77b0cd227772/site/static/images/demo/1-480.jpg",
+        "alt": "湖面与栈桥，中心引导线",
+        "sourceId": "origin"
+      },
+      {
+        "id": "diagonal",
+        "kind": "image",
+        "url": "https://cdn.jsdelivr.net/gh/sachinchoolur/lightGallery@9813e97837fddca82e4734bcbf4b77b0cd227772/site/static/images/demo/4-480.jpg",
+        "alt": "斜向延伸的栈桥",
+        "sourceId": "origin"
+      },
+      {
+        "id": "shore",
+        "kind": "image",
+        "url": "https://cdn.jsdelivr.net/gh/sachinchoolur/lightGallery@9813e97837fddca82e4734bcbf4b77b0cd227772/site/static/images/demo/13-480.jpg",
+        "alt": "安静的岸边与留白",
+        "sourceId": "origin"
+      }
+    ],
+    "blocks": [
+      {
+        "id": "intro",
+        "kind": "text",
+        "markdown": "三张候选图各有用途。点卡片就是选它；左上角的按钮只用来放大看。"
+      },
+      {
+        "id": "choose",
+        "kind": "controls",
+        "inputIds": [
+          "cover"
+        ]
+      },
+      {
+        "id": "shore-note",
+        "kind": "text",
+        "title": "用这张时注意",
+        "markdown": "画面上半部分很亮，标题用深色字，别压在水面反光上。",
+        "when": {
+          "input": "cover",
+          "equals": "shore"
+        }
+      }
+    ]
   }
 }

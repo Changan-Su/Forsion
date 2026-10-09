@@ -23,7 +23,10 @@ An image page can have an empty DOM snapshot while displaying a valid picture. `
 not provide image pixels. Do not claim inspection is impossible just because the DOM is empty.
 If actual inspection fails, retain neutral labels and clearly explain the limitation.
 When a user wants to choose a candidate, add a bound choice input; expanding an image is not a
-selection. When comparison items contain images, omit a duplicate gallery of the same candidates.
+selection. When the candidates are pictures, put `imageId` on every option of that choice and the
+one-line reason to pick it in `description`: the options render as one row of selectable picture
+cards, so do not repeat those pictures in a gallery or comparison. Use a gallery only for pictures
+that are not options. When comparison items contain images, omit a duplicate gallery.
 Keep checklist labels short and actionable. Put explanations, exercises and worked
 answers in disclosure blocks instead of crowding the checklist with paragraphs.
 
@@ -44,8 +47,11 @@ empty collections. Do not add extra styling fields. Document IDs are scoped to t
 
 - `{id,kind:"number",label,initial:number,min:number,max:number,step:number}` — nonnegative,
   finite, initial in range on the step grid. Use step 1 for people.
-- `{id,kind:"choice",label,initial:optionId,options:[{id,label,description?:string}]}` — up to
-  8 mutually exclusive options. Changing a choice is local, not a prompt submission.
+- `{id,kind:"choice",label,initial:optionId,options:[{id,label,description?:string,imageId?:imageId}]}`
+  — up to 8 mutually exclusive options. Changing a choice is local, not a prompt submission.
+  `imageId` goes on all options or none. With it the options are one row of picture cards (click
+  selects, a corner control expands); without it, short options without descriptions become one
+  segmented control and the rest are option cards.
 
 **Resource** (public HTTPS URLs, no credentials, local addresses, arbitrary ports or data URLs):
 
@@ -61,9 +67,9 @@ empty collections. Do not add extra styling fields. Document IDs are scoped to t
 | kind | Fields | Behavior |
 |---|---|---|
 | text | `markdown:string` | Safe prose, lists, links, code and tables; no HTML or images |
-| controls | `inputIds:string[]` | Stepper and local radio choices |
-| gallery | `resourceIds:imageId[]` | Candidate gallery, expand/collapse, source caption |
-| sources | `resourceIds:sourceId[]` | Linked titles, domains, expandable source summaries |
+| controls | `inputIds:string[]` | Stepper and local radio choices (picture cards when options carry `imageId`) |
+| gallery | `resourceIds:imageId[]` | Pictures that are not options: expand/collapse, source caption |
+| sources | `resourceIds:sourceId[]` | Linked titles and domains; each summary shows two lines and opens in place |
 | comparison | `items:[{id,title,description,imageId?:imageId,facts:string[]}]` | 2–6 options side by side; factual differences, no decoration |
 | checklist | `items:[{id,label,itemKey?:string,quantity?:Quantity,when?:Condition}]` | Local progress, copy, reset; up to 100 items |
 | disclosure | `title:string,markdown:string` | Independent expand/collapse |

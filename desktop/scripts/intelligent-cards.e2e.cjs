@@ -161,7 +161,7 @@ async function main() {
     await win.reload()
     await win.locator('[data-app-card="plugin:bluebird:library-list"]').getByPlaceholder('Search this list').waitFor()
     await win.locator('[data-app-card="plugin:bluebird:library-list"]').scrollIntoViewIfNeeded(); await shot('bluebird-card-english')
-    check('英文界面使用对应卡片文案', await win.getByText('Live data', { exact: true }).count() >= 3)
+    check('英文界面使用对应卡片文案', await win.locator('.iui-app-card .iui-live').evaluateAll(es => es.length >= 3 && es.every(e => e.textContent === 'Live')) && await win.locator('[data-app-card="native:calendar"]').getByRole('button', { name: 'Open full view', exact: true }).count() === 1)
     report.ok = true
   } catch (e) { report.ok = false; report.detail = String(e.stack || e); if (win) await win.screenshot({ path: path.join(OUT, 'failure.png') }).catch(() => {}); throw e }
   finally { report.ms = Date.now() - t0; save(); if (app) await app.close().catch(() => {}); if (stub) await stub.close() }

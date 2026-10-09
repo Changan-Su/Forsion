@@ -1470,7 +1470,7 @@ try {
     try {
       const ui = await promisify(execFile)(process.execPath, [join(root, '../desktop/scripts/intelligent-ui.live.cjs')], {
         cwd: join(root, '../desktop'), timeout: 25 * 60_000, maxBuffer: 4 * 1024 * 1024,
-        env: { ...process.env, TANGU_BACKEND_URL: base, TANGU_IUI_TOKEN: TOKEN, TANGU_IUI_OUT: OUT, TANGU_IUI_MODEL: MODEL, TANGU_IUI_WORKSPACE: workspace, TANGU_IUI_CASES: opt('intelligent-cases', '') },
+        env: { ...process.env, TANGU_BACKEND_URL: base, TANGU_IUI_TOKEN: TOKEN, TANGU_IUI_OUT: OUT, TANGU_IUI_MODEL: MODEL, TANGU_IUI_WORKSPACE: workspace, TANGU_IUI_CASES: opt('intelligent-cases', ''), TANGU_IUI_RANDOM: opt('intelligent-random', '') },
       });
       writeFileSync(join(OUT, 'intelligent-users-ui.log'), ui.stdout + ui.stderr);
     } catch (e) { failure = e; writeFileSync(join(OUT, 'intelligent-users-ui.log'), String(e.stdout || '') + String(e.stderr || '') + String(e.message)); }
@@ -1478,7 +1478,8 @@ try {
     if (existsSync(path)) {
       const rows = JSON.parse(readFileSync(path, 'utf8')).results;
       for (const row of rows) record(row.key, row.name, row, row.ms);
-      const expected = opt('intelligent-cases', '').split(',').filter(Boolean).length || 5;
+      // --intelligent-random <seed>:<slot> draws one journey per kind (pick / list / compare) from the pool.
+      const expected = opt('intelligent-random', '') ? 3 : opt('intelligent-cases', '').split(',').filter(Boolean).length || 5;
       if (rows.length !== expected || failure) record('intelligentusers-incomplete', '用户场景执行完整性', { ok: false, detail: String(failure?.message || `Expected ${expected}, got ${rows.length}`) }, 0);
     }
     else record('intelligentusers', '真实用户 Electron 测试启动', { ok: false, detail: String(failure?.message || 'Missing evidence') }, 0);
@@ -2080,14 +2081,17 @@ try {
         try { documents.push(validateUIDocument(JSON.parse(JSON.parse(c.arguments).document))); } catch (e) { errors.push(String(e.message)); }
       }
       const blocks = documents.flatMap(d => d.blocks);
+      // Pictures the user picks among are the options themselves (one row of picture cards), not a gallery beside a list.
+      const pickIds = new Set(documents.flatMap(d => d.inputs).filter(i => i.kind === 'choice' && i.options.length === 3 && i.options.every(o => o.imageId)).flatMap(i => i.options.map(o => o.imageId)));
+      const pickRow = pickIds.size === 3 && !blocks.some(b => (b.kind === 'gallery' && b.resourceIds.some(id => pickIds.has(id))) || (b.kind === 'comparison' && b.items.some(i => pickIds.has(i.imageId))));
       const contract = key === 'intelligentplan'
         ? blocks.some(b => b.kind === 'checklist' && b.items.some(i => i.quantity?.scaleBy)) && documents.some(d => d.inputs.some(i => i.kind === 'choice')) && blocks.some(b => b.kind === 'disclosure')
-        : blocks.some(b => b.kind === 'gallery' && b.resourceIds.length === 3) && blocks.some(b => b.kind === 'sources');
+        : pickRow && blocks.some(b => b.kind === 'sources');
       const groundedImages = key !== 'intelligentmedia' || (ev.toolArgs.some(c => c.name === 'view_image') && !/人像|人脸|面部|portrait/i.test(JSON.stringify(documents)));
       const noPayloadEcho = !ev.content.includes('\"document\":') && !ev.content.includes('\"blocks\":');
       const success = ev.toolResults.some(r => r.name === 'intelligent_ui' && !r.isError && !/^Error:/i.test(r.result || ''));
       writeFileSync(join(OUT, `${key}-evidence.json`), JSON.stringify({ documents, errors, toolArgs: ev.toolArgs, toolResults: ev.toolResults }, null, 2));
-      return { ok: !ev.error && ev.done && success && contract && noPayloadEcho && groundedImages, detail: ev.error || `groundedImages=${groundedImages}; noPayloadEcho=${noPayloadEcho}; documents=${documents.length}; contract=${contract}; correctedErrors=${errors.length}`, output: ev.content, toolCalls: ev.toolCalls, ttftMs: ttft(ev), tokens: tokensOf(ev) };
+      return { ok: !ev.error && ev.done && success && contract && noPayloadEcho && groundedImages, detail: ev.error || `groundedImages=${groundedImages}; noPayloadEcho=${noPayloadEcho}; documents=${documents.length}; contract=${contract}; pickRow=${key === 'intelligentmedia' ? pickRow : 'n/a'}; correctedErrors=${errors.length}`, output: ev.content, toolCalls: ev.toolCalls, ttftMs: ttft(ev), tokens: tokensOf(ev) };
     });
   }
   await scenario('intelligentplain', 'Intelligent UI 关闭偏好', async () => {

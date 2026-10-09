@@ -40,9 +40,18 @@ Chat 模式不开放技能工具，必需格式也包含在 `INTELLIGENT_UI_SECT
 
 ## 外观
 
-沿用 Genesis 字体、主题、边框、圆角、动效角色；透明外层、平静分隔、最多三列并列规划。
-区块按可用容器宽度堆叠，320px 容器可用；图片区保留比例展开、说明与来源。
-保留原生 radio/checkbox/details 键盘行为，focus-visible 可见，减少动态效果遵守系统偏好。
+沿用 Genesis 字体、主题、边框、圆角、动效角色。模型写的内容平铺在回答里（不垫卡面），只有实时应用卡是对象卡。
+读的地方（文字区块、折叠里的内容、一项一句话的清单）跟回答正文同一个字号和行距，文档标题等于回答里二级标题的大小；
+控件、数量、计数仍走六档界面字号。区块按可用容器宽度堆叠，最多三列，320px 容器可用。
+
+- 选择：原生 radio 留在节点里（方向键、空格、读屏照旧），外观自己画，选中 = 强调带加一个勾。没有说明的短选项收成一枚分段控件；
+  选项带 `imageId` 时是一排可选图卡：点卡片就是选它，左上角的按钮只放大、不改选择。`imageId` 要么每个选项都给，要么都不给。
+- 清单：标题、进度（已完成数 / 总数）、复制、清空同在一行；勾掉的行退后并划线。
+- 对比：各项的名字、一句话、要点落在同一条横线上，要点用淡线分行。
+- 折叠：三角在左，不画整行底线。来源：标题和域名一行，摘要直接露两行，点一下看全文。
+- 追问（model action）用回答末尾「建议」那枚芯片；复制、打开来源仍是普通按钮与链接。
+- 生成中：还没到的部分用骨架占位，到了的区块淡入；回放历史时不动。减少动态效果时全部静止。
+- 聚焦圈统一走 `--focus-ring`；checkbox / details 保留原生键盘行为。
 
 ## 可重复验收
 
@@ -54,7 +63,7 @@ Chat 模式不开放技能工具，必需格式也包含在 `INTELLIGENT_UI_SECT
    晚餐运行 Chat 预设，图库运行 Work 并实际查看图片，关闭偏好是负向行为回归。证据文件以 `-evidence.json` 归档。
 4. 真 Electron：遵循仓根 gui-verify 的 e2e 锁与独立数据目录流程，运行 `npm run check:intelligent-ui`。
    `--evidence=<raw 目录>` 可回放真模型结果。脚本覆盖流式焦点、数量与采购差额、复制、刷新、键盘、来源、
-   图片展开/失败重试、320/375/768 容器、减少动态、英文深色和历史 Sketch；结果在 `desktop/outputs/intelligent-ui`。
+   图片展开/失败重试、图卡（点选、放大不改选择、方向键、放大钮不挤偏卡片）、320/375/768 容器、减少动态、英文深色和历史 Sketch；结果在 `desktop/outputs/intelligent-ui`。
 5. `npm run demo:intelligent-ui` 打开已验证样本的隔离窗口（`--evidence` 可加真模型记录），关闭后删除临时数据。`--demo` 则先验收再保留窗口。演示不更新安装版、不上线。
 6. 普通用户端到端：通过归档工具运行 `--only intelligentusers --timeout 1800000`（或 desktop 的 `npm run e2e:intelligent-live` 后补归档）。
    五个独立会话覆盖聚餐、搬家、学习、相册与网页比较；提示不指定 UI 工具或 schema。真实引擎先完成启动，隔离编译版
@@ -79,6 +88,12 @@ Catalogs are normalized at ingress and run assembly, limited to 64 entries, with
 records. The renderer resolves current availability again and tears down on disable.
 Displaying a card is not model access to records, nor a save operation. Completed tasks
 use the existing domain write path; newly generated checklists remain message-local.
+
+A live card is the one object card in a document (DESIGN §5 recipe: `--bg-card`, `--radius-md`,
+`--card-shadow`; the glass language drops the hairline). Its header is drawn by the host: the
+app's own icon and name (a plugin card leads with the plugin's name), a dot with “Live”, and the
+open-full-view button. A block `title` written by the model is not drawn on app cards. Plugin
+rows show each item's own `iconUrl` / `icon`.
 
 Acceptance: build engine and desktop, set `TANGU_IUI_BLUEBIRD` to the adapted Bluebird
 checkout, then run `desktop/scripts/intelligent-cards.e2e.cjs` through the e2e devlock.

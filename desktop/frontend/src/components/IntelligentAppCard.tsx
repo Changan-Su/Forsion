@@ -1,15 +1,18 @@
 import React, { useEffect, useState, useSyncExternalStore } from 'react'
 import { getView, subscribeViews, useWorkspace } from '@lcl/engine'
-import { ExternalLink, Search, Link as LinkIcon } from 'lucide-react'
+import { ArrowUpRight, LayoutGrid, Search, Link as LinkIcon } from 'lucide-react'
 import { registerMessages, useI18n, translate } from '../i18n'
 import { getIntelligentSources, subscribeIntelligentSources, type PluginIntelligentSource } from '../services/intelligentCardCatalog'
-import { notePluginGesture } from '../amadeus/plugins/pluginStore'
+import { notePluginGesture, usePluginStore } from '../amadeus/plugins/pluginStore'
+import { pluginDisplayName } from '../amadeus/plugins/display'
+import { resolveIcon } from '../amadeus/components/icons'
+import { PluginLogo } from './PluginLogo'
 import { usePageStore } from '../amadeus/store/pageStore'
 import type { ListItem } from '../amadeus/plugins/types'
 import './IntelligentAppCard.css'
 
 registerMessages({
-  'iui.cardLive': { zh: '实时数据', en: 'Live data' },
+  'iui.cardLive': { zh: '实时', en: 'Live' },
   'iui.cardUnavailable': { zh: '此卡片暂不可用，请启用对应功能或插件。', en: 'This card is unavailable. Enable its feature or plugin.' },
   'iui.cardFailed': { zh: '卡片加载失败，请重试。', en: 'Card failed to load. Try again.' },
   'iui.cardRetry': { zh: '重试', en: 'Retry' },
@@ -33,6 +36,11 @@ function NativeSurface({ render }: { render: () => React.ReactNode }) {
   if (failed) throw new Error('Native data source unavailable')
   return ready ? render() : <div role="status">{translate('dashcompact.loading')}</div>
 }
+/** Row icon by the shared list-source contract: the item's favicon, else its vocabulary icon, else a generic link. */
+function RowIcon({ row }: { row: ListItem }) {
+  const [failed, setFailed] = useState(false)
+  return <span className="iui-app-row-icon">{row.iconUrl && !failed ? <img src={row.iconUrl} alt="" onError={() => setFailed(true)} /> : resolveIcon(row.icon, <LinkIcon />)}</span>
+}
 function PluginList({ source, initialQuery }: { source: PluginIntelligentSource; initialQuery?: string }) {
   const { t } = useI18n(), { item, pluginId } = source
   const vault = usePageStore(s => s.vaultRoot)
@@ -50,24 +58,32 @@ function PluginList({ source, initialQuery }: { source: PluginIntelligentSource;
   }
   return <div className="iui-app-list">
     {item.search && <label className="iui-app-search"><Search size={14} /><input aria-label={t('iui.cardSearch')} placeholder={t('iui.cardSearch')} value={query} onChange={e => setQuery(e.target.value)} /></label>}
-    {rows.slice(0, 6).map(row => <button type="button" className="iui-app-row" key={row.key} onClick={e => open(row, e.isTrusted)}><LinkIcon size={15} /><span>{row.title}</span><small>{row.hint}</small></button>)}
+    {rows.slice(0, 6).map(row => <button type="button" className="iui-app-row" key={row.key} onClick={e => open(row, e.isTrusted)}><RowIcon key={row.iconUrl ?? ''} row={row} /><span>{row.title}</span><small>{row.hint}</small></button>)}
     {!rows.length && <p className="iui-app-empty">{t('iui.cardEmpty')}</p>}
     {rows.length > 6 && <p className="iui-app-empty">{t('iui.cardMore', { n: rows.length - 6 })}</p>}
     {failed && <p role="status">{t('iui.cardFailed')}</p>}
   </div>
 }
 export function IntelligentAppCard({ cardId, query }: { cardId: string; query?: string }) {
-  const { t } = useI18n()
+  const { t, locale } = useI18n()
   const sources = useSyncExternalStore(subscribeIntelligentSources, getIntelligentSources)
   const native = useSyncExternalStore(subscribeViews, () => cardId.startsWith('native:') ? getView(cardId.slice(7)) : undefined)
   const source = sources.find(s => `plugin:${s.pluginId}:${s.item.id}` === cardId)
   const target = native?.intelligent ? native.type : source ? `plugin:${source.pluginId}:${source.item.intelligent!.viewId}` : ''
   const fullView = useSyncExternalStore(subscribeViews, () => getView(target))
+  const plugin = usePluginStore(s => source ? s.plugins.find(p => p.id === source.pluginId) : undefined)
   if ((!native?.intelligent && !source) || (query !== undefined && !source?.item.search)) return <div className="iui-status" data-card-unavailable={cardId} role="status">{t('iui.cardUnavailable')}</div>
-  const title = native ? (typeof native.displayName === 'function' ? native.displayName() : native.displayName) : source!.item.title
+  // The card is named by the app it shows, never by the model: a plugin card leads with the plugin's name,
+  // unless one name already says the other (青鸟收藏夹 + 收藏夹).
+  const owner = plugin && pluginDisplayName(plugin, locale), list = source?.item.title || ''
+  const title = native ? (typeof native.displayName === 'function' ? native.displayName() : native.displayName) : !owner || list.includes(owner) ? list : owner.includes(list) ? owner : `${owner} · ${list}`
+  const Icon = (native ?? fullView)?.icon ?? LayoutGrid
   return <section className="iui-app-card" data-app-card={cardId} aria-label={title}>
-    <header><strong>{title}</strong><span>{t('iui.cardLive')}</span></header>
+    <header>
+      {plugin?.iconUrl ? <PluginLogo url={plugin.iconUrl} size={16} /> : <Icon size={15} className="iui-app-icon" aria-hidden="true" />}
+      <strong>{title}</strong><span className="iui-live"><i />{t('iui.cardLive')}</span>
+      {fullView && <button type="button" className="iui-app-open" aria-label={t('iui.cardOpen')} title={t('iui.cardOpen')} onClick={() => useWorkspace.getState().openView(target, {}, 'main', { newTab: true })}><ArrowUpRight size={15} /></button>}
+    </header>
     <CardBoundary><div className="iui-app-body"><NativeSurface render={() => native?.intelligent ? native.intelligent.render() : <PluginList source={source!} initialQuery={query} />} /></div></CardBoundary>
-    {fullView && <footer><button type="button" onClick={() => useWorkspace.getState().openView(target, {}, 'main', { newTab: true })}>{t('iui.cardOpen')}<ExternalLink size={14} /></button></footer>}
   </section>
 }

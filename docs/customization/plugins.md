@@ -122,6 +122,12 @@ plugin. Keep the English discovery description under 400 characters. Older hosts
 props, HTML, CSS, handlers or component names are accepted from the model. The first six
 items appear in the compact list; the full-view button opens the existing registered view.
 
+The host draws the card frame, so there is nothing to style: the header shows your plugin's
+icon and `name · source title` (manifest `nameEn` in English), a “Live” dot, and the full-view
+button; a title the model writes for the block is not shown. Each row uses the item's own
+`iconUrl`, falling back to `icon` and then a generic link icon, exactly as in the sidebar list —
+set both so rows stay recognisable.
+
 Agents discover the current catalog with `list_intelligent_cards`, then use an
 `intelligent_ui` block such as `{id:'bookmarks',kind:'app-card',cardId:'plugin:bluebird:library-list'}`.
 The run request carries metadata only. Rendering a live card does not send its records to

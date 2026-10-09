@@ -1,6 +1,8 @@
-/** Five ordinary user journeys: compiled Electron -> real standalone -> GPT-6 Luna.
+/** Ordinary user journeys: compiled Electron -> real standalone -> the model the harness was given.
  * Run through live-harness --only intelligentusers; no stub, route fulfillment or document injection.
- * Setup creates empty sessions only. Every model request originates from an actual composer/button. */
+ * Setup creates empty sessions only. Every model request originates from an actual composer/button.
+ * The first five journeys are the fixed acceptance set. --intelligent-random <seed>:<slot> instead draws
+ * one journey of each kind (pick / list / compare) from the whole pool; two slots never share a journey. */
 const fs = require('node:fs'), path = require('node:path'), assert = require('node:assert/strict')
 const electron = require('./lib/launch-electron.cjs')
 const { enterSpace } = require('./lib/uiux-electron.cjs')
@@ -8,15 +10,37 @@ const ROOT = path.resolve(__dirname, '..')
 const OUT = process.env.TANGU_IUI_OUT, base = process.env.TANGU_BACKEND_URL, token = process.env.TANGU_IUI_TOKEN
 const MODEL = process.env.TANGU_IUI_MODEL, workspace = process.env.TANGU_IUI_WORKSPACE
 const imageBase = 'https://cdn.jsdelivr.net/gh/sachinchoolur/lightGallery@9813e97837fddca82e4734bcbf4b77b0cd227772/site/static/images/demo/'
+const img = n => `${imageBase}${n}-480.jpg`
 const cases = [
-  { key: 'user-dinner', name: '朋友聚餐：改人数、换菜、采购量联动', preset: 'chat', prompt: '周六请朋友来家里吃饭，暂定4个人，可能增加到6个。我想在咖喱鸡、番茄炖牛肉、香菇豆腐里挑一个主菜，再配西兰花和拍黄瓜。帮我安排一下。我想自己切换主菜和人数，买菜用量能跟着变，买完的东西可以打勾。用量按家常估算即可。' },
-  { key: 'user-moving', name: '搬宿舍：逐项勾选、复制与刷新恢复', preset: 'chat', prompt: '下周我要搬宿舍，一个人、两个行李箱，没有车。从今天到搬完，帮我整理一份实用的待办清单，分成提前准备、搬家当天、入住以后。我想做完一项就勾掉一项，还能复制发给家人。控制在12项左右，不需要替我设提醒或联系别人。' },
-  { key: 'user-study', name: '复习计划：真实追问、调整约束', preset: 'chat', prompt: '我还有一周考线性代数，矩阵运算还行，特征值和特征向量很不熟。每天能学40分钟，帮我安排7天复习，任务要具体，做完能勾掉。最后给我一个继续细化第一天练习的入口，我想先看总体再决定。' },
-  { key: 'user-photos', name: '旅行相册封面：实际看图、并列查看和放大', prompt: `我想给旅行相册挑一张安静、适合放标题的封面。这三张是候选：${[1, 4, 13].map(i => imageBase + i + '-480.jpg').join(' ，')}。帮我看看哪张合适，把图片放在一起方便比较，能点开放大，我想自己选。说清各自适合把标题放哪里，附上来源。` },
-  { key: 'user-research', name: '选笔记工具：官方网页检索、摘要与来源', prompt: '我在选个人笔记工具，主要写中文学习笔记，经常离线，希望以后能方便导出。请查 Obsidian 和 Notion 的官方资料，按离线使用、数据存放、导出格式比较一下，给一个建议。把依据的网页放在回答里，摘要可以展开，我想点开核实。不要只凭旧印象回答，不用查价格。' },
+  { key: 'user-dinner', kind: 'compare', name: '朋友聚餐：改人数、换菜、采购量联动', preset: 'chat', prompt: '周六请朋友来家里吃饭，暂定4个人，可能增加到6个。我想在咖喱鸡、番茄炖牛肉、香菇豆腐里挑一个主菜，再配西兰花和拍黄瓜。帮我安排一下。我想自己切换主菜和人数，买菜用量能跟着变，买完的东西可以打勾。用量按家常估算即可。' },
+  { key: 'user-moving', kind: 'list', name: '搬宿舍：逐项勾选、复制与刷新恢复', preset: 'chat', prompt: '下周我要搬宿舍，一个人、两个行李箱，没有车。从今天到搬完，帮我整理一份实用的待办清单，分成提前准备、搬家当天、入住以后。我想做完一项就勾掉一项，还能复制发给家人。控制在12项左右，不需要替我设提醒或联系别人。' },
+  { key: 'user-study', kind: 'list', name: '复习计划：真实追问、调整约束', preset: 'chat', prompt: '我还有一周考线性代数，矩阵运算还行，特征值和特征向量很不熟。每天能学40分钟，帮我安排7天复习，任务要具体，做完能勾掉。最后给我一个继续细化第一天练习的入口，我想先看总体再决定。' },
+  { key: 'user-photos', kind: 'pick', images: [1, 4, 13], name: '旅行相册封面：实际看图、并列查看和放大', prompt: `我想给旅行相册挑一张安静、适合放标题的封面。这三张是候选：${[1, 4, 13].map(img).join(' ，')}。帮我看看哪张合适，把图片放在一起方便比较，能点开放大，我想自己选。说清各自适合把标题放哪里，附上来源。` },
+  { key: 'user-research', kind: 'compare', name: '选笔记工具：官方网页检索、摘要与来源', prompt: '我在选个人笔记工具，主要写中文学习笔记，经常离线，希望以后能方便导出。请查 Obsidian 和 Notion 的官方资料，按离线使用、数据存放、导出格式比较一下，给一个建议。把依据的网页放在回答里，摘要可以展开，我想点开核实。不要只凭旧印象回答，不用查价格。' },
+  // Pool only: drawn by --intelligent-random, never part of the fixed five.
+  { key: 'user-poster', kind: 'pick', images: [2, 4, 13], pool: true, name: '读书会海报底图：实际看图、三选一', prompt: `社团下周办读书会，我要做一张竖版海报，标题字比较多。这三张图想挑一张当底图：${[2, 4, 13].map(img).join(' ，')}。帮我看看每张压上标题会不会乱，放在一起让我自己选，能点开看大图。图是从 https://github.com/sachinchoolur/lightGallery 拿的，注明一下出处。` },
+  { key: 'user-wallpaper', kind: 'pick', images: [1, 2, 4, 13], pool: true, name: '电脑壁纸：四张里挑一张', prompt: `我想换电脑壁纸，桌面左边会放两列图标。这四张里帮我挑：${[1, 2, 4, 13].map(img).join(' ，')}。看看哪张左边比较干净、图标不会看不清，把四张摆在一起我自己定，想放大看细节。图片来源是 https://github.com/sachinchoolur/lightGallery 。` },
+  { key: 'user-trip', kind: 'list', min: 8, pool: true, name: '带爸妈短途出行：行李逐项勾选、复制', preset: 'chat', prompt: '周末带爸妈去苏州玩两天一夜，高铁往返，住一晚酒店。帮我列一份出发前要收拾的东西，分成证件和票、衣物洗漱、给爸妈带的药和零食。我想收拾好一样勾一样，还能复制发到家庭群里。10 到 14 项就够，不用帮我订票。' },
+  { key: 'user-party', kind: 'list', min: 8, pool: true, name: '给同事办生日会：准备事项逐项勾选', preset: 'chat', prompt: '周五下班后在公司会议室给同事小林过生日，大概 10 个人，预算 300 块以内。帮我把要准备的事排一下：前两天订什么买什么、当天下午布置什么、结束后收拾什么。做完一件勾一件，清单能复制给一起帮忙的同事。' },
+  { key: 'user-commute', kind: 'compare', pool: true, name: '三种通勤方式：自己切换看差别', preset: 'chat', prompt: '我下个月换到新公司，家到公司大概 9 公里。骑电动车、地铁加步行、自己开车这三种我都行，帮我比一比时间稳不稳、每月大概花多少、下雨天麻不麻烦，按一般城市的情况估算就行，不用查实时数据。我想自己点着切换，看每种方式分别要提前准备什么。' },
+  { key: 'user-gym', kind: 'compare', pool: true, name: '健身安排：每周几练自己切换', preset: 'chat', prompt: '我想开始规律健身，纯新手，只有哑铃和瑜伽垫。每周练 3 次还是 4 次我还没想好，帮我各排一版一周的安排，我想自己切换着对比，每次练什么要具体，练完能勾掉。再简单说说两种安排各自适合什么情况。' },
 ]
-const selectedKeys = process.env.TANGU_IUI_CASES ? process.env.TANGU_IUI_CASES.split(',').filter(Boolean) : null
-if (selectedKeys) {
+let selectedKeys = process.env.TANGU_IUI_CASES ? process.env.TANGU_IUI_CASES.split(',').filter(Boolean) : null
+let draw = null
+if (process.env.TANGU_IUI_RANDOM) {
+  const [seed, slot] = process.env.TANGU_IUI_RANDOM.split(':').map(Number)
+  assert.ok(Number.isInteger(seed) && Number.isInteger(slot) && slot >= 0, 'Use --intelligent-random <seed>:<slot>')
+  let a = seed >>> 0
+  const rand = () => { a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296 }
+  const order = Object.fromEntries(['pick', 'list', 'compare'].map(kind => {
+    const keys = cases.filter(c => c.kind === kind).map(c => c.key)
+    for (let i = keys.length - 1; i > 0; i--) { const j = Math.floor(rand() * (i + 1)); [keys[i], keys[j]] = [keys[j], keys[i]] }
+    return [kind, keys]
+  }))
+  selectedKeys = Object.values(order).map(keys => keys[slot % keys.length])
+  draw = { seed, slot, order, picked: selectedKeys }
+} else if (!selectedKeys) selectedKeys = cases.filter(c => !c.pool).map(c => c.key)
+{
   assert.ok(selectedKeys.length && selectedKeys.every(k => cases.some(c => c.key === k)), 'Unknown user journey')
   for (let i = cases.length - 1; i >= 0; i--) if (!selectedKeys.includes(cases[i].key)) cases.splice(i, 1)
 }
@@ -72,7 +96,7 @@ async function observeRun(runId) {
   return evidence
 }
 async function main() {
-  assert.ok(OUT && base && token && MODEL === 'codex/gpt-6-luna', 'Use the real live harness and GPT-6 Luna')
+  assert.ok(OUT && base && token && MODEL, 'Use the real live harness')
   const home = path.join(OUT, 'intelligent-ui-shell'), shots = path.join(OUT, 'intelligent-ui-shots')
   fs.mkdirSync(shots, { recursive: true })
   for (const dir of [path.join(home, 'userdata'), path.join(home, 'userdata-dev')]) {
@@ -83,7 +107,7 @@ async function main() {
     const config = c.preset ? { preset: c.preset, execMode: 'sandbox' } : { execMode: 'host', cwd: workspace }
     c.sid = (await api('/agent/sessions', 'POST', { title: `ZZ-IUI ${c.name}`, model_id: MODEL, project_path: workspace, project_name: '真实用户验收', agent_config: config })).session.id
   }
-  const report = { model: MODEL, transport: 'real Electron composer and native actions', startedAt: new Date().toISOString(), results: [] }
+  const report = { model: MODEL, transport: 'real Electron composer and native actions', draw, startedAt: new Date().toISOString(), results: [] }
   const save = () => fs.writeFileSync(path.join(OUT, 'intelligent-users-evidence.json'), JSON.stringify(report, null, 2))
   let app, win
   const requests = [], pageErrors = []
@@ -107,7 +131,7 @@ async function main() {
       if (click) await click()
       else { const ta = win.locator('.t2c-ta').first(); await ta.fill(prompt); await ta.press('Enter') }
       const res = await response, req = res.request().postDataJSON()
-      assert.equal(req.model_id, MODEL, 'Actual composer selected GPT-6 Luna')
+      assert.equal(req.model_id, MODEL, 'Actual composer selected the requested model')
       assert.ok(req.client_capabilities.includes('intelligent-ui.v1'), 'Actual client advertises native UI')
       const { runId } = await res.json(), ev = await observeRun(runId)
       const docs = ev.calls.filter(x => x.name === 'intelligent_ui').flatMap(x => { try { const a = typeof x.arguments === 'string' ? JSON.parse(x.arguments) : x.arguments; return [JSON.parse(a.document)] } catch { return [] } })
@@ -126,6 +150,8 @@ async function main() {
       await win.waitForTimeout(250)
       await win.screenshot({ path: path.join(shots, `${c.key}-${suffix}.png`) })
     }
+    // The composer floats over the bottom of the stream; bring a target to the middle before clicking it.
+    const center = async target => { await target.evaluate(el => el.scrollIntoView({ block: 'center', behavior: 'instant' })); await win.waitForTimeout(150) }
     for (const c of cases) {
       const t0 = Date.now(), r = { key: c.key, name: c.name, prompt: c.prompt, ok: false, turns: [], checks: [], sessionId: c.sid }
       report.results.push(r); console.log(`START ${c.key}`); save()
@@ -149,9 +175,9 @@ async function main() {
           await ui.getByRole('radio').last().check()
           check('切换主菜后采购内容变化', JSON.stringify(rows) !== JSON.stringify(await ui.locator('.iui-check-rows').allTextContents()))
           await ui.getByRole('checkbox').first().check()
-        } else if (c.key === 'user-moving') {
-          check('搬家任务数量合理', await ui.getByRole('checkbox').count() >= 10)
-          check('待办按单列排列便于顺序阅读', await ui.locator('.iui-check-rows').first().evaluate(el => getComputedStyle(el).gridTemplateColumns.split(' ').length === 1))
+        } else if (c.kind === 'list' && c.key !== 'user-study') {
+          check('清单任务数量合理', await ui.getByRole('checkbox').count() >= (c.min || 10))
+          if (c.key === 'user-moving') check('待办按单列排列便于顺序阅读', await ui.locator('.iui-check-rows').first().evaluate(el => getComputedStyle(el).gridTemplateColumns.split(' ').length === 1))
           await ui.getByRole('checkbox').nth(0).check(); await ui.getByRole('checkbox').nth(1).check()
           r.clipboard = []
           const lists = ui.locator('.iui-checklist')
@@ -183,20 +209,29 @@ async function main() {
           check('多轮修改后仍有可读答复', await win.locator('.t2-asst-col').last().innerText().then(t => t.length > 50))
           check('后续回复不清掉原回答已勾任务', await win.locator(`[data-document-id="${originalId}"] input[type=checkbox]`).first().isChecked())
           check('新清单不把已完成事项变成未勾待办', revision.docs.every(d => d.blocks.filter(b => b.kind === 'checklist').every(b => !/已完成/.test(b.title || '') && b.items.every(i => !/^已完成/.test(i.label)))))
-        } else if (c.key === 'user-photos') {
-          r.inspectedImageUrls = inspectionCoverage(ev)
-          const expectedImages = [1, 4, 13].map(i => imageBase + i + '-480.jpg')
-          check('三张候选图分别有导航、截图及实际看图回执', expectedImages.every(url => r.inspectedImageUrls.includes(url)))
-          await win.waitForFunction(() => { const imgs = [...document.querySelectorAll('.intelligent-ui img')]; return imgs.length >= 3 && imgs.every(i => i.complete && i.naturalWidth > 0) }, { timeout: 30000 })
+        } else if (c.kind === 'pick') {
+          const expectedImages = c.images.map(img), n = expectedImages.length
+          await win.waitForFunction(n => { const imgs = [...document.querySelectorAll('.intelligent-ui img')]; return imgs.length >= n && imgs.every(i => i.complete && i.naturalWidth > 0) }, n, { timeout: 30000 })
           const renderedImages = await ui.locator('img').evaluateAll(imgs => imgs.map(i => i.src))
           r.renderedImageUrls = renderedImages
-          check('三张原始候选图加载成功且没有替换', new Set(renderedImages).size === 3 && expectedImages.every(url => renderedImages.includes(url)) && renderedImages.every(url => expectedImages.includes(url)))
-          await ui.locator('.iui-image-toggle').first().click()
-          check('点击图片展开原比例', await ui.locator('.iui-picture[data-expanded]').count() === 1)
+          check('原始候选图全部加载成功且没有替换', new Set(renderedImages).size === n && expectedImages.every(url => renderedImages.includes(url)) && renderedImages.every(url => expectedImages.includes(url)))
+          const cards = ui.locator('.iui-pick-card'), radios = ui.getByRole('radio')
+          check('候选图并成一排可选图卡，同一张图不重复出现', await cards.count() === n && renderedImages.length === n)
+          await center(cards.last()); await cards.last().click()
+          check('点图卡就是选它', await radios.last().isChecked() && await cards.last().getAttribute('data-selected') !== null)
+          await center(cards.first()); await cards.first().hover(); await cards.first().getByRole('button', { name: '展开原图', exact: true }).click()
+          check('放大看图不改变选择', await ui.locator('.iui-pick-card[data-expanded]').count() === 1 && await radios.last().isChecked())
           await screenshot(c, 'expanded', ui)
-          await ui.locator('.iui-image-toggle').first().click()
-          const radios = ui.getByRole('radio'); check('有用户自己挑选的控件', await radios.count() >= 3)
-          await radios.last().check(); check('封面选择成功', await radios.last().isChecked())
+          await center(cards.first()); await cards.first().getByRole('button', { name: '收起原图', exact: true }).click()
+          // Last on purpose: a model that skipped looking must not hide how the answer rendered.
+          r.inspectedImageUrls = inspectionCoverage(ev)
+          check('每张候选图都有导航、截图及实际看图回执', expectedImages.every(url => r.inspectedImageUrls.includes(url)))
+        } else if (c.kind === 'compare' && c.pool) {
+          const radios = ui.getByRole('radio')
+          check('有可以自己切换的选项', await radios.count() >= 2)
+          const shown = await ui.innerText()
+          await center(radios.last()); await radios.last().check()
+          check('切换选项后内容跟着变', shown !== await ui.innerText())
         } else if (c.key === 'user-research') {
           r.retrievedUrls = ev.results.filter(x => ['web_fetch', 'browser_navigate'].includes(x.name) && succeeded(x) && x.result.length > 400).map(x => {
             const call = ev.calls.find(c => c.id === x.id)
@@ -221,6 +256,20 @@ async function main() {
           await open(c)
         }
         if (c.key !== 'user-study') check('本地操作没有触发模型请求', requests.length === before)
+        // Rendering contract on what a real model actually wrote, whatever shape that took.
+        r.look = await win.locator('.intelligent-ui[data-complete="true"]').evaluateAll(els => els.map(el => ({
+          title: getComputedStyle(el.querySelector('.iui-title')).fontSize,
+          prose: [...new Set([...el.querySelectorAll('.iui-prose')].map(p => getComputedStyle(p).fontSize))],
+          oldToolbar: el.querySelectorAll('.iui-list-toolbar').length,
+          lists: el.querySelectorAll('.iui-checklist').length, heads: el.querySelectorAll('.iui-checklist > .iui-list-head').length,
+          // Facts of the items in one visual row must start on the same line (rows are 3 wide, or the pair when there are two).
+          misaligned: innerWidth < 600 ? 0 : [...el.querySelectorAll('.iui-comparison')].filter(grid => {
+            const items = [...grid.children].slice(0, 3), tops = items.map(a => a.querySelector('ul:not(:empty)')?.getBoundingClientRect().top).filter(v => v !== undefined)
+            return tops.length > 1 && Math.max(...tops) - Math.min(...tops) > 1
+          }).length,
+          kinds: [...el.querySelectorAll('.iui-block')].map(b => b.className.replace('iui-block iui-block-', '')), seg: el.querySelectorAll('.iui-seg').length, pick: el.querySelectorAll('.iui-pick').length,
+        })))
+        check('新版界面：标题与正文字号、清单标题行、对比对齐', r.look.length > 0 && r.look.every(d => d.title === '17.5px' && d.prose.every(s => s === '14px') && d.oldToolbar === 0 && d.lists === d.heads && d.misaligned === 0))
         check('可用宽度无横向溢出', await win.locator('.intelligent-ui').last().evaluate(el => el.scrollWidth <= el.clientWidth + 1))
         await screenshot(c, 'interacted')
         r.messages = (await api(`/agent/sessions/${c.sid}/messages`)).messages

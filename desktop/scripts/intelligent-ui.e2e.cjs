@@ -54,7 +54,7 @@ async function main() {
     for (const label of ['跳过引导', 'Skip']) { const b = win.getByText(label, { exact: true }); if (await b.count()) await b.first().click().catch(() => {}) }
     await openSession(win)
     if (PREVIEW) {
-      const previews = [record('preview-dinner', 'preview-dinner', fixtures.dinner), record('preview-media', 'preview-media', fixtures.media), record('preview-research', 'preview-research', fixtures.research)]
+      const previews = [record('preview-dinner', 'preview-dinner', fixtures.dinner), record('preview-media', 'preview-media', fixtures.media), record('preview-pick', 'preview-pick', fixtures.pick), record('preview-research', 'preview-research', fixtures.research)]
       previews[0].content = 'Intelligent UI · 本地演示。人数、选项、清单与图片可直接操作。下方附真模型生成样本；此窗口使用隔离的测试后端。'
       if (evidence) for (const name of ['intelligentplan', 'intelligentmedia']) {
         const payload = JSON.parse(fs.readFileSync(path.join(evidence, `${name}-evidence.json`), 'utf8'))
@@ -131,7 +131,7 @@ async function main() {
     check('model action sends exactly one visible contextual prompt', stub.seen.runs.length === 2 && /当前选择/.test(stub.seen.runs[1].message))
     // Replay multimedia + linked research as persisted events, including a historical Sketch.
     const legacy = { id: 'legacy', role: 'model', content: '', timestamp: Date.now(), tool_calls: [{ id: 'sk-old', type: 'function', function: { name: 'sketch', arguments: JSON.stringify({ html: '<p>Legacy Sketch still renders</p>', title: 'Historical Sketch' }) } }], tool_results: [{ tool_call_id: 'sk-old', name: 'sketch', content: 'Sketch rendered.' }] }
-    const records = [record('a-r1', 'ui1', fixtures.dinner), record('media', 'ui-media', fixtures.media), record('sources', 'ui-sources', fixtures.research), legacy]
+    const records = [record('a-r1', 'ui1', fixtures.dinner), record('media', 'ui-media', fixtures.media), record('pick', 'ui-pick', fixtures.pick), record('sources', 'ui-sources', fixtures.research), legacy]
     if (evidence) for (const name of ['intelligentplan', 'intelligentmedia']) {
       const payload = JSON.parse(fs.readFileSync(path.join(evidence, `${name}-evidence.json`), 'utf8'))
       payload.documents.forEach((doc, i) => records.push(record(`${name}-${i}`, `${name}-${i}`, doc)))
@@ -149,8 +149,31 @@ async function main() {
     await reveal(win, media); await win.screenshot({ path: path.join(OUT, 'media-light.png') })
     check('historical Sketch is still sandboxed', await win.locator('iframe.sketch-frame').getAttribute('sandbox') === 'allow-scripts')
     const sources = win.locator('[data-document-id="research"]')
-    await sources.getByText('摘要', { exact: true }).first().click()
-    check('source summary expands independently', await sources.locator('.iui-source details[open]').count() === 1)
+    await reveal(win, sources); await win.screenshot({ path: path.join(OUT, 'research-light.png') })
+    const brief = sources.locator('.iui-source summary > span').first()
+    check('source summary is readable without opening it', await brief.evaluate(el => el.getBoundingClientRect().height > 10 && getComputedStyle(el).webkitLineClamp === '2'))
+    await sources.locator('.iui-source summary').first().click()
+    check('source summary expands independently', await sources.locator('.iui-source details[open]').count() === 1 && await brief.evaluate(el => getComputedStyle(el).display === 'block'))
+    // Picture options: one row of selectable cards. Looking closer must never change the choice.
+    const pick = win.locator('.intelligent-ui[data-document-id="cover-pick"]'), cards = pick.locator('.iui-pick-card')
+    await reveal(win, pick)
+    await win.waitForFunction(() => [...document.querySelectorAll('[data-document-id="cover-pick"] img')].length === 3 && [...document.querySelectorAll('[data-document-id="cover-pick"] img')].every(i => i.complete && i.naturalWidth > 0), { timeout: 20000 })
+    const tops = await cards.evaluateAll(es => es.map(e => Math.round(e.getBoundingClientRect().top)))
+    check('picture options sit in one row', tops.length === 3 && new Set(tops).size === 1 && await pick.locator('.iui-gallery, .iui-comparison').count() === 0)
+    await cards.nth(1).click()
+    check('clicking a picture card selects it', await pick.getByRole('radio', { name: /斜线构图/ }).isChecked() && await cards.nth(1).getAttribute('data-selected') !== null && await cards.nth(0).getAttribute('data-selected') === null)
+    await cards.nth(0).hover(); await cards.nth(0).getByRole('button', { name: '展开原图', exact: true }).click()
+    check('expanding a picture does not change the choice', await pick.locator('.iui-pick-card[data-expanded]').count() === 1 && await pick.getByRole('radio', { name: /斜线构图/ }).isChecked())
+    await cards.nth(0).getByRole('button', { name: '收起原图', exact: true }).click()
+    await pick.getByRole('radio', { name: /斜线构图/ }).focus(); await win.keyboard.press('ArrowRight')
+    check('picture cards keep radio keyboard behaviour and drive conditions', await pick.getByRole('radio', { name: /岸边留白/ }).isChecked() && await pick.locator('[data-block-id="shore-note"]').count() === 1)
+    check('picture card keeps its source when no source list repeats it', await cards.nth(0).getByRole('link', { name: 'github.com', exact: true }).getAttribute('href') === 'https://github.com/sachinchoolur/lightGallery')
+    // The corner control must stay inside the card: an overflowing one scrolls the clipped card when focused.
+    check('picture card content is not displaced by its corner control', await cards.evaluateAll(es => es.every(e => e.scrollLeft === 0 && e.scrollWidth <= e.clientWidth && e.querySelector('button').getBoundingClientRect().width < 40)))
+    await win.evaluate(() => document.activeElement?.blur?.()); await win.mouse.move(700, 120)
+    await reveal(win, pick); await win.screenshot({ path: path.join(OUT, 'pick-light.png') })
+    await pick.getByRole('radio', { name: /岸边留白/ }).focus(); await win.keyboard.press('ArrowLeft'); await win.waitForTimeout(400)
+    await win.screenshot({ path: path.join(OUT, 'pick-focus-light.png') })
     // Component widths within the real chat container, not a separate prototype page.
     for (const width of [320, 375, 768]) {
       await media.evaluate((el, w) => { el.style.width = `${w}px`; el.style.maxWidth = '100%' }, width)
@@ -159,11 +182,14 @@ async function main() {
     }
     await media.evaluate(el => { el.style.removeProperty('width'); el.style.removeProperty('max-width') })
     await win.emulateMedia({ reducedMotion: 'reduce' })
-    check('reduced motion removes chevron transitions', await sources.locator('summary svg').first().evaluate(el => parseFloat(getComputedStyle(el).transitionDuration) <= 0.00001))
+    check('reduced motion removes chevron transitions', await win.locator('[data-document-id="dinner"] [data-block-id="steps"] summary svg').evaluate(el => parseFloat(getComputedStyle(el).transitionDuration) <= 0.00001))
     await win.evaluate(() => { localStorage.setItem('tangu_locale', 'en'); localStorage.setItem('forsion_theme_pref', 'dark') })
     await win.reload(); await openSession(win); await media.scrollIntoViewIfNeeded()
     check('English native controls', await win.getByRole('button', { name: 'Copy list', exact: true }).count() >= 1)
     await reveal(win, media); await win.screenshot({ path: path.join(OUT, 'media-dark-en.png') })
+    await reveal(win, pick); await win.screenshot({ path: path.join(OUT, 'pick-dark-en.png') })
+    await reveal(win, dinner); await win.screenshot({ path: path.join(OUT, 'dinner-dark-en.png') })
+    await reveal(win, sources); await win.screenshot({ path: path.join(OUT, 'research-dark-en.png') })
     if (evidence) check('real model documents render after history hydration', await win.locator('.intelligent-ui').count() === records.length - 1)
     await win.route('**/1-480.jpg', route => route.abort())
     await win.reload(); await openSession(win)
