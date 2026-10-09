@@ -13,14 +13,20 @@
  *
  * ⚠️ 后缀判定**区分大小写**,与库这一层的 isPagePath 同一个口径:`README.MD` 在库那边本来就列在 files 里,
  *    却一直能当笔记打开(文件树按不分大小写的 .md 送进编辑器)—— 这里不分大小写的话,它就被说成「归插件管理」。
+ * ⚠️ 名字不带复合后缀(`x.<段>.md`)的一律是笔记,**不进待确认**:库层排出页面列表的 .md 只有白板与插件声明的
+ *    后缀(isSafePluginExt 只认 `.<段>.md` 这种形态),`B.md` 这样的名字不可能归插件。不加这一条的话,文件列表
+ *    迟迟不到(云端库启动时那一发失败)时,页面列表里还没有的普通笔记会一直打不开(Codex 二轮评审 P1)。
  */
 export type NoteOwnership = 'note' | 'plugin' | 'pending'
+
+/** `名字.<段>.md`:文件名在 `.md` 之前还有一段后缀(段里不含点和路径分隔符)。 */
+const COMPOUND_MD = /[^./\\]\.[^./\\]+\.md$/
 
 export function noteOwnership(
   notePath: string | null | undefined,
   s: { pages: string[]; files: string[]; vaultRoot: string | null; filesPendingFor: string | null },
 ): NoteOwnership {
-  if (!notePath || !notePath.endsWith('.md') || s.pages.includes(notePath)) return 'note'
+  if (!notePath || !COMPOUND_MD.test(notePath) || s.pages.includes(notePath)) return 'note'
   if (s.filesPendingFor != null && s.filesPendingFor === s.vaultRoot) return 'pending'
   const n = notePath.replace(/\\/g, '/')
   return s.files.some((f) => f.replace(/\\/g, '/') === n) ? 'plugin' : 'note'

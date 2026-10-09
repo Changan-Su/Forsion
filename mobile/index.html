@@ -11,14 +11,17 @@
 
          其余各项(2026-10-09 补齐;此前 media / worker / frame 三项没写,全落到 default-src 'self',音视频、blob 线程、
          内嵌播放器、实时通话的 wss 在手机上被静默拦掉)。**不是桌面那一行的照抄**,三处有意更紧,改之前先跑 npm run e2e:csp:
-           · frame-src 只有本页自己 + 两家内嵌播放器(笔记的书签卡、青鸟收藏夹用的就是这两家)。任意 https 页面、
-             blob: / data: 页面不许进框架 —— 安卓 WebView 上 Capacitor 的原生桥在老内核(不支持按来源限定的消息通道)
-             里对**所有**框架可见,框进来的页面等于拿到文件 / 设备接口。带 sandbox 的 srcdoc 框架不归这一项管,本来就能用;
+           · frame-src 只有本页自己。**外站页面一律不许进框架,桌面放行的两家内嵌播放器(youtube-nocookie /
+             player.bilibili.com)在手机上也不放** —— Capacitor 的原生桥在支持「按来源限定的消息通道」的内核上只认
+             主框架,但老内核(或注册失败)会退回 addJavascriptInterface,那条路对**所有**框架可见(见
+             @capacitor/android 的 MessageHandler.java):框进来的播放器页(连同它带的广告脚本)就能调文件 / 设备接口。
+             要在手机上内嵌播放,得先换成不带原生桥的独立 WebView 或交给系统浏览器,不是在这里加域名。
+             带 sandbox 的 srcdoc 框架不归这一项管,本来就能用;
            · 不放行 amadeus-asset:(桌面的自定义协议;安卓这一侧没有接它的拦截器,放了也加载不出来);
            · 明文 ws: 只给本机回环(连本机引擎调试),任意主机只能走 wss:(与 https: 同一档)。
          新放开的各项都不带新的执行面:脚本早有 'unsafe-inline' / 'unsafe-eval'(blob 线程不比它多什么),
          blob: / data: 取数不出网,media 的 https: 与 img-src 已有的同档。 -->
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; worker-src 'self' blob:; connect-src 'self' blob: data: http://localhost:* http://127.0.0.1:* ws://localhost:* ws://127.0.0.1:* https: wss:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob: https: http://localhost:* http://127.0.0.1:*; media-src 'self' data: blob: https: http://localhost:* http://127.0.0.1:*; frame-src 'self' https://www.youtube-nocookie.com https://player.bilibili.com;" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; worker-src 'self' blob:; connect-src 'self' blob: data: http://localhost:* http://127.0.0.1:* ws://localhost:* ws://127.0.0.1:* https: wss:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob: https: http://localhost:* http://127.0.0.1:*; media-src 'self' data: blob: https: http://localhost:* http://127.0.0.1:*; frame-src 'self';" />
     <title>Tangu</title>
     <!-- base './'(Capacitor 从 file:// 载入);文件来自共用的 desktop/frontend/public/。 -->
     <link rel="icon" type="image/svg+xml" href="./Forsion-LOGO3.svg" />

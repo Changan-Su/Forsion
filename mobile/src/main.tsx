@@ -48,6 +48,9 @@ void installMobileShim().then(async (ok) => {
   // 先拿上次的树快照渲染首屏 —— 名单晚到一拍,这些文件就已经当笔记进了树和索引。
   // 读不出来(私有目录一时 I/O 失败)不挡启动,但也不退成空名单 —— 那等于这一次启动里所有插件文件都当笔记开:
   // 用上一次成功清点时记下的那份(localStorage),下一趟 listPlugins 再对齐。
+  // 名单**只增不减**:每次清点的结果与记下的那份取并集。墓碑文件本来就只增不减,这里是它的第二份底 —— 原生层的
+  // stat 把「一时读不到」也报成「不存在」,墓碑槽因此被缩水的名单盖掉时(Codex 二轮评审 P1),这台设备上的保护不跟着缩。
+  // (代价:插件更新后不再声明的后缀也留着 —— 与「卸载后留着」同一个取向:宁可多拦,不让文件掉回笔记编辑器。)
   const EXTS_KEY = 'forsion.mobile.pluginExts'
   const lastKnownExts = (): string[] => {
     try {
@@ -57,7 +60,7 @@ void installMobileShim().then(async (ok) => {
   }
   const scanExts = async (fallback: () => string[]): Promise<string[]> => {
     try {
-      const exts = await plugins.host.fileExtensions()
+      const exts = [...new Set([...lastKnownExts(), ...(await plugins.host.fileExtensions())])].sort()
       try { localStorage.setItem(EXTS_KEY, JSON.stringify(exts)) } catch { /* 存不下:下次读失败时退到更旧的一份 */ }
       return exts
     } catch { return fallback() }

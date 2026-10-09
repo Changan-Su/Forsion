@@ -2274,6 +2274,13 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
   // 三种结果与判据见 amadeus/lib/noteOwnership.ts;仪器:mobile 的 npm run e2e:pluginfiles。
   const ownership = usePageStore((s) => noteOwnership(notePath, s))
   const pluginOwned = ownership === 'plugin'
+  // 待确认 = 文件列表还没到。正常它自己会到;装载时那一发要是失败了(云端库断网启动)就没人再要 ——
+  // 由还等着的这个面板隔几秒重列一次,列到即清标记、照常打开;面板关了 / 归属定了就停。
+  useEffect(() => {
+    if (ownership !== 'pending') return
+    const timer = setInterval(() => { void usePageStore.getState().refreshStructure().catch(() => {}) }, 3000)
+    return () => clearInterval(timer)
+  }, [ownership])
   useEffect(() => {
     if (!notePath) {
       setRoute(null)

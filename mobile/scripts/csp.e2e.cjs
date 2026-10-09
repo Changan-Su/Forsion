@@ -2,19 +2,21 @@
  * 手机版内容安全策略(mobile/index.html 的 CSP)观测台架 —— `npm run build && npm run e2e:csp`(mobile 目录)。
  *
  * 起因(2026-10-09 盘点):手机的策略比桌面少 media-src / worker-src / frame-src,connect-src 少 wss: blob: data:,
- * 这些都回落到 `default-src 'self'` —— 笔记里的音视频、three.js 的 blob 线程与 blob / data 取数、实时通话的 wss、
- * 两家视频站的内嵌播放器在手机上被静默拦掉(页面上只是「不动」,控制台才有一行违规)。
+ * 这些都回落到 `default-src 'self'` —— 笔记里的音视频、three.js 的 blob 线程与 blob / data 取数、实时通话的 wss
+ * 在手机上被静默拦掉(页面上只是「不动」,控制台才有一行违规)。
  *
  * 真把 mobile/dist 在手机视口的 headless Chromium 里跑,在页面里逐类发起一次真实加载,按浏览器派发的
  * `securitypolicyviolation` 事件判定(不解析策略文本:文本对不对不算数,浏览器拦没拦才算)。两张表:
  *   · 该放行的:策略不许拦(网络本身通不通无所谓 —— 台架把外站掐了,判据只有「有没有违规事件」);
  *   · 该拦着的:策略必须拦 —— 这是安全边界,放开任何一条都要先想清楚再改这张表。
  * 手机与桌面不同的地方(别照抄桌面那一行):
- *   · 内嵌框架只放行桌面同款的两家播放器;任意 https 页面、blob: / data: 页面不许进框架。安卓 WebView 里
- *     Capacitor 的原生桥在老系统上对**所有**框架可见,框进来的页面等于拿到文件 / 账号 / 设备接口;
+ *   · 外站页面一律不许进框架,**桌面放行的两家内嵌播放器也不放**;blob: / data: 页面同样不许。安卓 WebView 里
+ *     Capacitor 的原生桥在老内核上退回 addJavascriptInterface,对**所有**框架可见 —— 框进来的页面等于拿到
+ *     文件 / 设备接口。要在手机上内嵌播放,先换成不带原生桥的独立 WebView 或交给系统浏览器;
  *   · 不放行 amadeus-asset:(安卓这一侧没有接这个协议的拦截器,放了也加载不出来);
  *   · ws: 只给本机回环(调试),不给任意主机的明文长连接。
- * 负对照(2026-10-09 实跑):改之前的策略 → 「该放行的」里红 10 条(三种媒体 / blob 线程 / wss / 本机 ws / blob 与 data 取数 / 两家播放器;带 sandbox 的 srcdoc 框架本来就不被拦),「该拦着的」全绿。
+ * 负对照(2026-10-09 实跑):改之前的策略 → 「该放行的」里红 8 条(三种媒体 / blob 线程 / wss / 本机 ws / blob 与 data 取数;
+ * 带 sandbox 的 srcdoc 框架本来就不被拦),「该拦着的」全绿。
  */
 const http = require('http')
 const net = require('net')
@@ -47,13 +49,13 @@ const PROBES = [
     run: () => fetch(URL.createObjectURL(new Blob(['x']))).catch(() => {}) },
   { id: 'connect-data', want: 'allow', directive: 'connect-src', what: '按 data: 地址取数(模型里内嵌的贴图 / 缓冲)',
     run: () => fetch('data:text/plain,x').catch(() => {}) },
-  { id: 'frame-youtube', want: 'allow', directive: 'frame-src', what: '内嵌播放器:youtube-nocookie',
-    run: () => { const f = document.createElement('iframe'); f.src = 'https://www.youtube-nocookie.com/embed/e2e'; document.body.appendChild(f) } },
-  { id: 'frame-bilibili', want: 'allow', directive: 'frame-src', what: '内嵌播放器:player.bilibili.com',
-    run: () => { const f = document.createElement('iframe'); f.src = 'https://player.bilibili.com/player.html?bvid=e2e'; document.body.appendChild(f) } },
   { id: 'frame-srcdoc-sandbox', want: 'allow', directive: 'frame-src', what: '沙箱化的内联框架(视频工作室的场景预览、聊天里的草图)',
     run: () => { const f = document.createElement('iframe'); f.setAttribute('sandbox', 'allow-scripts'); f.srcdoc = '<p>e2e</p>'; document.body.appendChild(f) } },
   // ── 该拦着的(安全边界) ─────────────────────────────────────────────────────────
+  { id: 'frame-youtube', want: 'block', directive: 'frame-src', what: '内嵌播放器 youtube-nocookie(桌面放行;手机上外站框架拿得到原生桥,不放)',
+    run: () => { const f = document.createElement('iframe'); f.src = 'https://www.youtube-nocookie.com/embed/e2e'; document.body.appendChild(f) } },
+  { id: 'frame-bilibili', want: 'block', directive: 'frame-src', what: '内嵌播放器 player.bilibili.com(同上)',
+    run: () => { const f = document.createElement('iframe'); f.src = 'https://player.bilibili.com/player.html?bvid=e2e'; document.body.appendChild(f) } },
   { id: 'frame-any-https', want: 'block', directive: 'frame-src', what: '任意 https 页面进框架',
     run: () => { const f = document.createElement('iframe'); f.src = 'https://evil.e2e.test/'; document.body.appendChild(f) } },
   { id: 'frame-data', want: 'block', directive: 'frame-src', what: 'data: 页面进框架',
