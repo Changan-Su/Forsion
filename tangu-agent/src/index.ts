@@ -46,6 +46,7 @@ import { startCacheJanitor, stopCacheJanitor, reapOrphanRunContainers } from './
 import { startSessionReaper, stopSessionReaper, reapOrphanSessions } from './sandbox/sessionSandbox.js';
 import { loadHistorianConfig } from './services/historianConfig.js';
 import { startHistorian, stopHistorian } from './services/historian.js';
+import { startRunEventRetention, stopRunEventRetention } from './services/runEventRetention.js';
 import { startMuseSupervisor, stopMuseSupervisor } from './services/muse.js';
 import { startInboxPull, stopInboxPull } from './services/inboxPull.js';
 import { startChannels, stopChannels } from './channels/hub.js';
@@ -67,9 +68,11 @@ export interface TanguModule {
    * failed / 重复入队 / 重复复盘。故 worker 传 `{ recoverRuns:false, historian:false }`,只留
    * **本机本地**的沙箱 janitor(docker/session);Forsion 纯调度网关(loop 在远端 worker,
    * 本机无沙箱)传 `{ recoverRuns:false, sandbox:false, historian:true }`。
+   * eventRetention:agent_run_events 保留期(已结束 run 的流式帧留 7 天,过期 display_file 剥 dataUrl;
+   * services/runEventRetention.ts)。持库进程(standalone / 网关)开;thin worker 没库,传 false(不传也会在第一遍失败后自停)。
    * 默认全开,standalone 行为不变。
    */
-  startBackgroundTasks: (opts?: { recoverRuns?: boolean; historian?: boolean; sandbox?: boolean; profilePolling?: boolean }) => void;
+  startBackgroundTasks: (opts?: { recoverRuns?: boolean; historian?: boolean; sandbox?: boolean; profilePolling?: boolean; eventRetention?: boolean }) => void;
   /** 卸载/热加载:停掉所有 interval 定时器 + 中止在飞 run(防 interval 泄漏)。 */
   dispose: () => void;
 }
@@ -112,7 +115,7 @@ export function createTanguModule(d: TanguDeps): TanguModule {
   dataRouter.use(inlineRouter); // 正文生成式 AI(G3-07):POST /agent/inline
   dataRouter.use(remoteRouter);
 
-  const startBackgroundTasks = (opts?: { recoverRuns?: boolean; historian?: boolean; sandbox?: boolean; profilePolling?: boolean }): void => {
+  const startBackgroundTasks = (opts?: { recoverRuns?: boolean; historian?: boolean; sandbox?: boolean; profilePolling?: boolean; eventRetention?: boolean }): void => {
     // 进程重启自愈:陈旧行标 failed → 余下在飞行按持有者处理(别的活进程的不碰、跑到一半的标中断、排队的认领后入队;见 recoverQueuedRuns)。
     // 共享云库的 worker 集群必须关掉(opts.recoverRuns=false),否则跨 worker 互相干扰。
     // 纯调度网关(Forsion server)三个全关:loop 不在该进程跑,沙箱也不在该机。
@@ -154,12 +157,16 @@ export function createTanguModule(d: TanguDeps): TanguModule {
     // 配置驱动 profile:启动 app_profile_overrides 轮询(admin panel 改 → 本进程 ≤刷新窗口收敛)。
     // thin worker 无本地 DB(host.query 抛)→ 传 profilePolling:false,用基线 profile(admin 覆盖暂不下达,后续可经 state-API 取)。
     if (opts?.profilePolling !== false) deps().profileStore.start();
+
+    // agent_run_events 保留期:全局 DB 任务,幂等,多进程同库重复跑也无害;只需要持库。
+    if (opts?.eventRetention !== false) startRunEventRetention();
   };
 
   const dispose = (): void => {
     stopCacheJanitor();
     stopSessionReaper();
     stopHistorian();
+    stopRunEventRetention();
     stopMuseSupervisor();
     stopInboxPull();
     stopChannels();

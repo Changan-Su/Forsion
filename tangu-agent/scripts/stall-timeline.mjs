@@ -6,6 +6,8 @@
  *   node scripts/stall-timeline.mjs ~/.forsion/tangu/state.db [days=60]   # 直接读 SQLite(只读打开)
  *   node scripts/stall-timeline.mjs tangu-session-xxxx.json               # 设置→高级→导出日志(含 timeline)
  *
+ * ⚠️ 已结束 run 的流式帧(token/reasoning/tool_stream)只保留 7 天(services/runEventRetention.ts),更早的 run 这里
+ *    只剩非流式事件,stream 桶会是空的 —— 不是 bug,要诊断就得趁 7 天内。
  * 桶:llm_wait(等首帧,含上传)/ stream(生成:token+reasoning+工具参数)/ tool / approval / inquiry /
  *     retry / compaction / queue / vision / post_llm。usage 事件带 ttftMs/uploadMs/requestBytes(≥ 2.9.8 引擎)时
  *     按测量值报首帧与上传;老数据退回事件间隙(秒级精度)。带 `usage.phase` 的是后台调用

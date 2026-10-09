@@ -283,6 +283,8 @@ npm test            # vitest
 
 桌面端构建隔离，自带 `electron-vite`：`npm run desktop:dev`（dev 用系统 node 跑后端，免原生模块重建）。
 
+会话搜索快不快：`npm run bench:search`（只读打开真库，量 `sessionSearchSql.ts` 管理路径那条 LIKE + EXISTS；`npm run bench:search -- --synthetic` 造数对照 sqlite FTS5 trigram）。2026-10-09 实测不换索引，数字与重看阈值见脚本头注。
+
 停止/重启与图片上下文回归：在 `../desktop` 运行 `npm run check:run-lifecycle`。离线使用合成截图、真实 agent loop + 内存 SQLite、前端 store 和 HTTP 故障桩；覆盖图片编码误计、实测用量与新增工具结果、无进展重复压缩、压缩/首帧阶段取消、迟到结果、停止确认与继续运行。用例同时纳入两端既有的 `npm test` 发布门禁，不需要模型密钥或真实用户数据。
 
 预算与取消纪律：传输字节不能作为图片 token；上下文基准必须在前缀改写后失效。`abort` 的 `success` 只表示请求已接受，只有 `settled: true` 且 `status` 为终态才表示运行与清理已退出。退出未确认时保留忙状态并允许重试，禁止只清 UI 或用超时竞速假装底层任务已停止；现有会话及原始附件不得为恢复运行而静默删除。

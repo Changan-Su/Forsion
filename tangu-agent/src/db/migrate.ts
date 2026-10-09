@@ -74,7 +74,9 @@ export async function runMigration(): Promise<void> {
       UNIQUE(run_id, seq)
     )
   `));
-  await query(`CREATE INDEX IF NOT EXISTS idx_agent_events_run ON agent_run_events(run_id)`);
+  // idx_agent_events_run(run_id) 是上面 UNIQUE(run_id, seq) 自动索引的左前缀,纯冗余:dev 库实测它占 47MB、
+  // 删掉后 run_id 查找照样走 UNIQUE 索引(2026-10-09)。老库在这里顺手删;两方言 DROP INDEX IF EXISTS 通用。
+  await query(`DROP INDEX IF EXISTS idx_agent_events_run`);
 
   // 配置驱动 profile：per-app 覆盖(admin panel 可改;DB > 文件 > 基线)。所有方言都建(经 ddl()
   // 把 JSONB 转 SQLite TEXT),故 server / 远程 worker / standalone 共享同一表语义。
