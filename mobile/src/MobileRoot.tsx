@@ -27,7 +27,7 @@ import { AchievementToast } from '@/achievements/AchievementToast'
 import { AchievementsModal } from '@/achievements/AchievementsModal'
 import { BtwHost } from '@/views/chat2/BtwPanel'
 import { btwWebVisible, useBtw } from '@/views/chat2/btwStore'
-import { QuickFind } from '@/quickFind'
+import { QuickFind, useQuickFind } from '@/quickFind'
 import { FindBar } from '@/findInPage'
 import { installNotificationWiring } from '@/stores/notificationWiring'
 import { ensureAmadeusReady } from '@/amadeusPlugins'
@@ -81,6 +81,8 @@ function useAndroidBack(): void {
       if (app.onboarding) return
       // 旁聊全屏页在最上层:返回先关它。判据与 BtwHost 同一条 —— 它因切了会话而隐着时不能白吞一次返回
       if (btwWebVisible(useBtw.getState().webOpen, app.activeId)) { useBtw.getState().closeWeb(); return }
+      // 搜索面板盖在整页之上(下拉搜索 / 顶栏搜索钮打开):返回先关它。不排在这儿的话,列表层上按返回会直接把 app 退到后台。
+      if (useQuickFind.getState().open) { useQuickFind.getState().close(); return }
       // 应用市场全屏页(详情页开着时,MarketModal 自己在 forsion:mobile-back 里先退回列表)
       if (app.marketOpen) { app.closeMarket(); return }
       if (app.settingsOpen) { app.closeSettings(); return }

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Images, LayoutGrid, MessageCircle, Download, Copy, Plus, RotateCcw, RotateCw, FlipHorizontal2, FlipVertical2, Crop, Loader2, Eye, EyeOff, Lock, Unlock, ArrowUp, ArrowDown, Trash2, GitBranch } from 'lucide-react'
-import { useWorkspace, type ViewProps } from '@lcl/engine'
+import { useListFirst, useWorkspace, type ViewProps } from '@lcl/engine'
+import { ListFab } from '../../components/phoneList'
 import { useI18n } from '../../i18n'
 import { useImageStudio } from '../../stores/imageStudioStore'
 import { useApp } from '../../stores/appStore'
@@ -25,9 +26,11 @@ export function ImageStudioNav() {
   const recent = useMemo(() => Object.values(boards).sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 12), [boards])
   // 主区可能停在别的标签上:导航点过之后把工作室带回前面。
   const go = (act: () => void) => { act(); useWorkspace.getState().openView('image-studio', {}, 'main') }
-  return <nav className="csn ims-nav" aria-label={t('imageStudio.title')}>
-    <div className="csn-section"><span className="csn-heading">{t('imageStudio.nav.create')}</span>
-      <button type="button" className="csn-item" disabled={!ready} onClick={() => go(() => useImageStudio.getState().create(t('imageStudio.untitled')))}><Plus size={16} />{t('imageStudio.new')}</button>
+  const newProject = () => go(() => useImageStudio.getState().create(t('imageStudio.untitled')))
+  const phone = useListFirst() // 手机的整屏列表:「新建项目」是右下角的主按钮(布局「二」),这一段只剩「我的项目」
+  return <nav className="csn ims-nav pl-fab-room" aria-label={t('imageStudio.title')}>
+    <div className="csn-section">{!phone && <span className="csn-heading">{t('imageStudio.nav.create')}</span>}
+      {!phone && <button type="button" className="csn-item" disabled={!ready} onClick={newProject}><Plus size={16} />{t('imageStudio.new')}</button>}
       <button type="button" className="csn-item" aria-current={ready && !activeId ? 'page' : undefined} onClick={() => go(() => useImageStudio.getState().close())}><LayoutGrid size={16} />{t('imageStudio.projects')}</button>
     </div>
     {recent.length > 0 && <div className="csn-section"><span className="csn-heading">{t('imageStudio.nav.recent')}</span>
@@ -38,6 +41,7 @@ export function ImageStudioNav() {
         </button>
       })}
     </div>}
+    {phone && ready && <ListFab label={t('imageStudio.new')} icon={<Plus />} onClick={newProject} />}
   </nav>
 }
 

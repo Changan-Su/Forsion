@@ -31,6 +31,7 @@ import { AttentionDot } from './AttentionDot'
 import { homeTarget } from '../../services/engine/targets'
 import { canTurnChatIntoNote, turnChatIntoNote } from './chatToNote'
 import { formatRowTime } from '../../format/time'
+import { ListSection, PullHint, SwipeRow, closeOtherSwipes, dayBucket, usePullToSearch, withSections, type SwipeAction } from '../../components/phoneList'
 
 const CHANNEL_ICONS: Record<ChannelKind, typeof Smartphone> = { wechat: Smartphone, telegram: Send, qq: MessagesSquare }
 
@@ -130,6 +131,14 @@ export interface SidebarPaneProps {
   onActivateEntry?: (entryKey: string) => void
   /** P1-K7a:「我的电脑」分组(DeviceSessionSections)。排在本端条目之后、归档区之前;两种排序、平铺都渲染。 */
   deviceSections?: React.ReactNode
+  /** 手机的整屏列表(布局「二」,样式见 components/phoneList.css):不分组,会话与 extraRows 合成**一条**按最近活动排的
+   *  两行列表(标题 + 项目名 · 摘要),带日期分段,置顶的在最前;会话行左滑露出操作。置顶沿用 pinnedEntries,
+   *  会话的 key 是 `ses:${id}`。只由两级导航的列表层传(lcl useListFirst);桌面 / 网页不走这条。 */
+  timeline?: boolean
+  /** timeline 下列表顶上的内容(首次提示),跟着列表滚。 */
+  timelineHead?: React.ReactNode
+  /** timeline 下「下拉搜索」要做的事(与顶栏搜索钮同一个动作);不给就没有下拉。 */
+  onSearch?: () => void
 }
 
 /** 会话最近活动时间(ms):updated_at 随每条助手消息落库刷新(引擎 sqlStateStore.finalizeAssistantMessage),解析不了 = 0。 */
@@ -159,6 +168,8 @@ const SpecialRow: React.FC<{
 export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
   const { t } = useI18n()
   const rootRef = useRef<HTMLElement>(null)
+  const scrollRef = useRef<HTMLDivElement>(null)
+  usePullToSearch(scrollRef, p.timeline ? p.onSearch : undefined)
   const allSessions = p.allSessions ?? p.sessions
   const allArchived = p.allArchived ?? p.archivedSessions
   // 会话行的多选(判据与文件树/笔记树同源,见 views/itemSelect)。范围选按 DOM 顺序 → 要整个 aside
@@ -218,8 +229,15 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
 
   /** 一级条目 = 工作区组 ∪ 额外行。manual = 组按 wsOrder;activity = 两者按最近活动降序合成一个列表
    *  (稳定排序:同一时间戳时额外行按给定序在前、组按手排序在后;从未活动的沉底)。 */
-  type Entry = { key: string; at: number; ws?: WorkspaceDescriptor; node?: React.ReactNode }
+  type Entry = { key: string; at: number; ws?: WorkspaceDescriptor; node?: React.ReactNode; session?: SessionRecord }
   const entries = useMemo<Entry[]>(() => {
+    // 手机时间线:没有组这一层,每条会话自己是一个条目,与额外行一起排。
+    if (p.timeline) {
+      return orderOrbitEntries<Entry>([
+        ...(p.extraRows || []).map((r) => ({ key: `row:${r.key}`, at: r.at, node: r.node })),
+        ...p.sessions.map((s) => ({ key: `ses:${s.id}`, at: sessionActivityAt(s.updated_at), session: s })),
+      ], p.pinnedEntries || {})
+    }
     const wsEntries: Entry[] = orderedWorkspaces.map((ws) => ({
       key: `ws:${ws.key}`, ws,
       at: (grouped.get(ws.key) || []).reduce((m, s) => Math.max(m, sessionActivityAt(s.updated_at)), 0),
@@ -227,7 +245,7 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
     if (p.orderBy !== 'activity') return wsEntries
     const extra: Entry[] = (p.extraRows || []).map((r) => ({ key: `row:${r.key}`, at: r.at, node: r.node }))
     return orderOrbitEntries([...extra, ...wsEntries], p.pinnedEntries || {})
-  }, [orderedWorkspaces, grouped, p.orderBy, p.extraRows, p.pinnedEntries])
+  }, [orderedWorkspaces, grouped, p.orderBy, p.extraRows, p.pinnedEntries, p.timeline, p.sessions])
   const manualOrder = p.orderBy !== 'activity'
 
   /** 落到 targetKey 上 = 顶掉它的位置,其余顺次让位。语义与 ribbon 共用 lcl 的 moveTo(已单测),
@@ -420,7 +438,29 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
     )
   }
 
-  const renderItem = (s: SessionRecord) => (
+  /** 时间线里左滑一行露出的操作。删除仍只给已归档的(先归档再删),所以活动会话是 置顶 / 重命名 / 归档。 */
+  const swipeActions = (s: SessionRecord): SwipeAction[] => {
+    const acts: SwipeAction[] = []
+    if (!s.archived && p.onTogglePinned) {
+      const pinned = isOrbitPinned(p.pinnedEntries || {}, `ses:${s.id}`)
+      acts.push({ id: pinned ? 'unpin' : 'pin', label: t(pinned ? 'sidebar.unpin' : 'sidebar.pin'), icon: pinned ? <PinOff /> : <Pin />, run: () => p.onTogglePinned?.(`ses:${s.id}`) })
+    }
+    if (!s.archived) acts.push({ id: 'rename', label: t('sidebar.rename'), icon: <Pencil />, run: () => startRename(s.id) })
+    acts.push({ id: s.archived ? 'unarchive' : 'archive', label: t(s.archived ? 'sidebar.unarchive' : 'sidebar.archive'), icon: s.archived ? <ArchiveRestore /> : <Archive />, tone: 'accent', run: () => p.onArchive(s.id, !s.archived) })
+    // 同一条规矩、同一句确认:直接借菜单里的那一项(只有已归档的才有;归档区展开时才会渲染到这里)
+    const del = s.archived ? sessionMenuItems({ id: s.id, ids: [s.id], x: 0, y: 0, archived: true }).find((it) => it.id === 'delete') : undefined
+    if (del) acts.push({ id: 'delete', label: t('sidebar.delete'), icon: <Trash2 />, tone: 'danger', run: () => del.run?.() })
+    return acts
+  }
+  /** 时间线第二行的项目名:无项目 / 常驻系统工作区(默认云 Project 等)不写,免得每行都挂着同一个词。 */
+  const projectTag = (s: SessionRecord): string => {
+    const key = sessionWorkspaceKey(s, p.workspaces)
+    const ws = p.workspaces.find((w) => w.key === key)
+    return ws && ws.kind !== 'rootless' && !ws.system ? workspaceGroupLabel(ws, t) : ''
+  }
+
+  const renderItem = (s: SessionRecord) => {
+    const row = (
     <SidebarRow
       key={s.id}
       as="button"
@@ -430,6 +470,8 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
       title={s.summary || s.title || undefined}
       // 组内行缩进一级(组头 depth 0)—— 与笔记树「文件夹内的笔记」同档,见 treeIndent.ts;平铺(Chat 模式)没有组头,顶格。
       depth={p.flat ? 0 : 1}
+      // 时间线的行不走树的缩进:左边距由 phoneList.css 给
+      style={p.timeline ? { paddingLeft: undefined } : undefined}
       // 前导槽:与笔记/插件源 view 同构 → 三模式切换时图标不跳。状态点绝对定位贴在图标角上,
       // **不能内联排在标题前** —— 那样有状态的行会被推右 6px,会话行自己就先不齐了。
       lead={<>
@@ -458,7 +500,7 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
       }}
       onContextMenu={(e) => openMenu(e, s)}
       // 拖到聊天区 = 插入 [[session:id]] 引用(agent 用 read_session 读)。重命名中不拖,否则选不了文字。
-      draggable={renaming !== s.id}
+      draggable={!p.timeline && renaming !== s.id}
       onDragStart={(e) => {
         const r = e.currentTarget.getBoundingClientRect()
         e.dataTransfer.setDragImage(e.currentTarget, e.clientX - r.left, e.clientY - r.top)
@@ -482,11 +524,20 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
           onKeyDown={(e) => { if (e.key === 'Enter') commitRename(); if (e.key === 'Escape') setRenaming(null) }}
           onClick={(e) => e.stopPropagation()}
         />
+      ) : p.timeline ? (
+        <span className="t2s-srow-text">
+          <span className="t2s-srow-title">{displaySessionTitle(s.title, t)}</span>
+          {(projectTag(s) || s.summary) && (
+            <span className="t2s-srow-sub">{projectTag(s) && <span className="t2s-srow-tag">{projectTag(s)}</span>}{projectTag(s) && s.summary ? ' · ' : ''}{s.summary}</span>
+          )}
+        </span>
       ) : (
         <span className="t2s-srow-title">{displaySessionTitle(s.title, t)}</span>
       )}
     </SidebarRow>
-  )
+    )
+    return p.timeline ? <SwipeRow key={s.id} actions={swipeActions(s)}>{row}</SwipeRow> : row
+  }
 
   // 「添加本地工作区」+「已归档」常驻侧栏底部(sticky footer),不随会话列表滚走。
   // 「添加本地工作区」是 Work 的事:Chat 模式(平铺)不露出,列表里也没有其它项目。
@@ -510,10 +561,12 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
   )
 
   return (
-    <aside className="t2s-side" ref={rootRef}>
+    <aside className="t2s-side" ref={rootRef} data-timeline={p.timeline ? '' : undefined}>
       <div
         className="t2s-scroll"
+        ref={scrollRef}
         data-under-dock={dockHost ? '' : undefined}
+        onTouchStart={p.timeline ? closeOtherSwipes : undefined}
         // 拖组时整列表放行 drop:落在组间外边距 / 列表空白处也提交到当前落点,不再「松手什么都没发生」。
         onDragOver={(e) => { if (dragKey) { e.preventDefault(); e.dataTransfer.dropEffect = 'move' } }}
         onDrop={(e) => { if (dragKey && dragOverKey) { e.preventDefault(); dropWorkspace(dragOverKey) } }}
@@ -537,7 +590,14 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
           </div>
         )}
 
-        {entries.map((en, wi) => {
+        {p.timeline && p.onSearch && <PullHint />}
+        {p.timeline && p.timelineHead}
+        {p.timeline && withSections(entries, (en) => (isOrbitPinned(p.pinnedEntries || {}, en.key) ? 'pinned' : dayBucket(en.at))).map((x) => (
+          'section' in x ? <ListSection key={`sec:${x.section}`} bucket={x.section} />
+            : x.item.session ? renderItem(x.item.session)
+              : <React.Fragment key={x.item.key}>{x.item.node}</React.Fragment>
+        ))}
+        {!p.timeline && entries.map((en, wi) => {
               if (en.node) return <React.Fragment key={en.key}>{en.node}</React.Fragment>
               const ws = en.ws!
               const pinned = isOrbitPinned(p.pinnedEntries || {}, en.key)

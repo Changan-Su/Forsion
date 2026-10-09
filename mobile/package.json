@@ -38,6 +38,7 @@
     "emu:nativeshell": "node scripts/native-shell-emu.cjs",
     "emu:treecompare": "node scripts/uitree-compare.cjs",
     "test:nativebar": "./android/gradlew -p android :app:testDebugUnitTest --tests '*NativeChromeBarLayoutTest'",
+    "stage:phone": "node scripts/phone-stage.cjs",
     "emu:launchericon": "node scripts/launcher-icon-upgrade-emu.cjs",
     "emu:phone": "node scripts/phone-control-emu.cjs"
   },

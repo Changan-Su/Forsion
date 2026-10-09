@@ -85,8 +85,12 @@ import { track } from './achievements/store'
 import { act } from './activity/log'
 import '@amadeus/blocks' // 注册内置块类型(markdown→Milkdown);缺此 side-effect 导入则块显示「未知块类型」
 import './views/chat2/sidebar2.css' // t2s- 侧栏样式(通常已随 SessionsView 全局加载;显式引入以防独立挂载)
-import { OverlayAt } from '@lcl/engine'
+import { OverlayAt, useListFirst, useNativeChromeExtras, useNativeSheetMenu, useRibbonStore, type SheetMenuItem } from '@lcl/engine'
+import { CtxMenuButtons } from './components/CtxMenuButtons'
 import { SidebarRow } from './components/SidebarRow'
+import { ListChips, ListFab, ListHint, ListSection, PullHint, SwipeRow, closeOtherSwipes, dayBucket, usePullToSearch, withSections, type SwipeAction } from './components/phoneList'
+import { useQuickFind } from './quickFind'
+import { formatRowTime } from './format/time'
 import { parentOf, rowDropTarget, dropKeyOf, takesHostPaths } from './views/treeDrop'
 import { FILE_VIEW_PARAM } from './viewFileMatch'
 import { windowKind } from './windowKind'
@@ -141,6 +145,15 @@ registerMessages({
   'amxv.empty': { zh: '空', en: 'Empty' },
   'amxv.syncNotArrived': { zh: '同步内容尚未到达', en: 'Synced content has not arrived yet' },
   'amxv.searchNotes': { zh: '搜索笔记', en: 'Search notes' },
+  // 手机的整屏列表(布局「二」)
+  'amxv.phone.tabs': { zh: '笔记分类', en: 'Note lists' },
+  'amxv.phone.tab.recent': { zh: '最近', en: 'Recent' },
+  'amxv.phone.tab.tree': { zh: '文件夹', en: 'Folders' },
+  'amxv.phone.tab.boards': { zh: '白板', en: 'Whiteboards' },
+  'amxv.phone.noRecent': { zh: '还没有最近打开的笔记', en: 'No recently opened notes yet' },
+  'amxv.phone.noBoards': { zh: '还没有白板', en: 'No whiteboards yet' },
+  'amxv.phone.new': { zh: '新建', en: 'New' },
+  'amxv.phone.hint': { zh: '向左滑动一行：收藏、重命名、删除。长按右下角的按钮：新建白板、文件夹等。', en: 'Swipe a row left to star, rename or delete it. Press and hold the button at the bottom right for a new whiteboard, folder and more.' },
   'amxv.noMatches': { zh: '没有匹配的笔记', en: 'No matching notes' },
   'amxv.openVaultHint': { zh: '打开一个智库文件夹开始。', en: 'Open a vault folder to get started.' },
   'amxv.cloudVault': { zh: '云端智库', en: 'Cloud vault' },
@@ -774,6 +787,9 @@ function CloudSyncSection({ dragPath }: { dragPath: string | null }) {
   )
 }
 
+const NO_RECENT_VIEWS: ReturnType<typeof useRecentViews.getState>['items'] = []
+const NO_PATHS: string[] = []
+
 export function AmadeusPagesView() {
   const { t } = useI18n()
   const pages = usePageStore((s) => s.pages)
@@ -798,6 +814,43 @@ export function AmadeusPagesView() {
   const scrollRef = useRef<HTMLDivElement>(null)
   // 行多选:判据与会话列表/文件树同源(views/itemSelect);范围选按 DOM 顺序 → 要容器 ref。
   const sel = useItemSelect(scrollRef)
+
+  // ── 手机的整屏列表(两级导航的列表层,布局「二」):三档胶囊 最近 / 文件夹 / 白板、一颗悬浮主按钮,
+  //    搜索与切换智库在原生顶栏上。「文件夹」就是原来那棵树;另两档是两行的平铺列表。 ──
+  const phone = useListFirst()
+  type PhoneTab = 'recent' | 'tree' | 'boards'
+  const [savedTab, setSavedTab] = useState<PhoneTab | null>(() => {
+    const v = localStorage.getItem('forsion_notes_phone_tab')
+    return v === 'recent' || v === 'tree' || v === 'boards' ? v : null
+  })
+  // 只有手机这种摆法用得到:桌面上别为它多订阅两份状态(每开一个视图就重画一遍整棵树)
+  const recentViews = useRecentViews((s) => (phone ? s.items : NO_RECENT_VIEWS))
+  const prefsRecents = useAmadeusPrefs((s) => (phone ? s.recents : NO_PATHS))
+  /** 「最近」= 本机最近打开过的。时刻取「最近使用」登记(recentViews:带时刻,与会话等共用 24 条),
+   *  后面接上这个库自己的最近打开(amadeusPrefs.recents:只有先后,没有时刻)里还没出现的。 */
+  const recentList = useMemo(() => {
+    const exists = new Set([...pages, ...files])
+    const seen = new Set<string>()
+    const out: Array<{ path: string; at: number }> = []
+    for (const v of recentViews) if ((v.kind === 'note' || v.kind === 'file') && exists.has(v.id) && !seen.has(v.id)) { seen.add(v.id); out.push({ path: v.id, at: v.ts }) }
+    for (const path of prefsRecents) if (exists.has(path) && !seen.has(path)) { seen.add(path); out.push({ path, at: 0 }) }
+    return out
+  }, [recentViews, prefsRecents, pages, files])
+  const boards = useMemo(() => pages.filter(isDrawingPath).sort((a, b) => baseName(a).localeCompare(baseName(b))), [pages])
+  // 没选过档位时:有最近打开的就从「最近」起,否则直接给树(新装的手机上「最近」是空的)
+  const phoneTab: PhoneTab = savedTab ?? (recentList.length ? 'recent' : 'tree')
+  const pickPhoneTab = (tab: PhoneTab): void => { setSavedTab(tab); localStorage.setItem('forsion_notes_phone_tab', tab) }
+  // 没开库时三档都无从谈起:只剩「打开智库」的提示与末尾两行(胶囊也不画)
+  const flatList = phone && !!vaultRoot && phoneTab !== 'tree'
+  const openSearch = (): void => useQuickFind.getState().openPalette()
+  usePullToSearch(scrollRef, phone ? openSearch : undefined)
+  // 顶栏标题后面那一段 = 现在开着的智库;有「互联设备 / 智库」入口(手机的 rb-units-mobile)时点它就是切换。
+  const unitsEntry = useRibbonStore((s) => s.items.find((item) => item.id === 'rb-units-mobile'))
+  useNativeChromeExtras(phone ? {
+    where: 'list',
+    search: { label: t('amxv.searchNotes'), run: openSearch },
+    ...(vaultRoot ? { title: { sub: vaultSide === 'cloud' ? t('amxv.cloudVault') : baseName(vaultRoot), run: unitsEntry?.onClick } } : {}),
+  } : null)
 
   // 侧栏分区(置顶/云同步/与我共享/收藏集合/笔记树)拖拽排序:抓分区头拖整块,顺序持久化。
   // ponytail: 云端侧的多个 vault 分区随「tree」整体挪,不支持分区内再排 —— 需要时再细分。
@@ -1191,6 +1244,21 @@ export function AmadeusPagesView() {
       if (rel && parent) setExpanded((prev) => new Set([...prev, ...prefixesOf(parent)]))
     })
   }
+  /** 根目录「新建」菜单的唯一一份条目:空白处右键的 Web 菜单与手机主按钮长按的原生半屏(useNativeSheetMenu)都从这里渲染。 */
+  const rootMenuItems = (): SheetMenuItem[] => [
+    { id: 'new-note', label: t('amadeus.new.note'), icon: <SquarePen size={13} />, run: () => { void ps().createPage(); setMenu(null) } },
+    { id: 'new-folder', label: t('amadeus.new.folder'), icon: <FolderPlus size={13} />, run: () => { void newFolder('') } },
+    { id: 'new-database', label: t('amadeus.new.database'), icon: <Database size={13} />, run: () => { void newBase('') } },
+    { id: 'new-drawing', label: t('amadeus.new.drawing'), icon: <PenTool size={13} />, run: () => newDrawing('') },
+    { id: 'new-dashboard', label: t('amadeus.new.dashboard'), icon: <LayoutDashboard size={13} />, run: () => newDashboard('') },
+    ...pluginFileCreators.map((o): SheetMenuItem => ({
+      id: `creator:${o.item.id}`, label: o.item.label,
+      icon: <span style={{ display: 'inline-flex', width: 13, justifyContent: 'center', fontSize: 13 }}>{resolveIcon(o.item.icon, '📄')}</span>,
+      run: () => runFileCreator('', o.item.label, o.item.run),
+    })),
+  ]
+  const rootMenu = menu?.kind === 'root' ? menu : null
+  const webRootMenu = useNativeSheetMenu(rootMenu, () => rootMenu && { title: t('amxv.phone.new'), sections: [{ items: rootMenuItems() }] }, () => setMenu(null))
 
   /** 落区高亮一律只看 `dragOver`(它只在「这儿可落」时才被置上)。**别再加 `dragPath &&` 的闸** ——
    *  dragPath 只有树内搬动才有,OS 文件 / 文件面板拖来的东西一律为空,加了闸 = 拖着文件在树上走
@@ -1237,6 +1305,56 @@ export function AmadeusPagesView() {
     else if (isPdfPath(path)) openPdf(path, undefined, nt)
     else if (isImagePath(path)) openImage(path, nt)
     else void amadeus.openVaultFile(path).catch(() => {})
+  }
+
+  /** 手机「最近 / 白板」两档的行:名字 + 所在文件夹,行尾是最近一次打开的时刻;左滑出 收藏 / 重命名 / 删除。
+   *  点、长按(菜单)、改名、删除都走树里那一行的同一套流程 —— 这里只是另一种摆法。 */
+  const flatRow = (path: string, at: number): ReactNode => {
+    const isDraw = isDrawingPath(path)
+    const isDash = !isDraw && isDashboardPath(path)
+    const ft = !isDraw && !isDash ? findFileType(pluginFileTypes, path) : undefined
+    const isNote = !isDraw && !isDash && !ft && isNotePath(path)
+    const isPage = isNote || isDash
+    const LeadIcon = isDbPath(path) ? Database : isDraw ? PenTool : isDash ? LayoutDashboard : isNote ? FileText : isImagePath(path) ? FileImage : Paperclip
+    const starred = useAmadeusPrefs.getState().starred.includes(path)
+    const actions: SwipeAction[] = [
+      ...(isPage ? [
+        { id: 'star', label: t(starred ? 'amxv.menu.unstar' : 'amxv.menu.star'), icon: <Star />, run: () => useAmadeusPrefs.getState().toggleStar(path) },
+        { id: 'rename', label: t('amxv.menu.rename'), icon: <Pencil />, run: () => startRename(path) },
+      ] : []),
+      // 删除照旧:笔记走 deleteNoteFlow(确认 + 独占附件),其余文件确认后直接删
+      { id: 'delete', label: t('amxv.menu.delete'), icon: <Trash2 />, tone: 'danger', run: () => { if (isPage) void deleteNoteFlow(path); else if (confirmedDelete('file', path)) void ps().deletePage(path) } },
+    ]
+    return (
+      <SwipeRow key={path} actions={actions}>
+        <SidebarRow
+          as="button"
+          className={path === (activeViewFile ?? activePage) ? 'active' : undefined}
+          style={{ paddingLeft: undefined }}
+          lead={icons[path] ? <span className="amx-page-emoji">{icons[path]}</span> : <LeadIcon className="t2s-lead-icon t2s-dim" />}
+          trailing={at ? <span className="t2s-srow-time">{formatRowTime(at)}</span> : undefined}
+          onClick={() => openEntry(path)}
+          onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setMenu({ kind: isPage ? 'page' : 'asset', path, x: e.clientX, y: e.clientY }) }}
+        >
+          {renaming === path ? (
+            <input
+              ref={renameRef}
+              className="t2s-rename"
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onBlur={commitRename}
+              onKeyDown={(e) => { if (e.key === 'Enter') commitRename(); if (e.key === 'Escape') setRenaming(null) }}
+              onClick={(e) => e.stopPropagation()}
+            />
+          ) : (
+            <span className="t2s-srow-text">
+              <span className="t2s-srow-title">{ft ? fileTypeBaseName(path, ft.extensions) : isDraw ? baseName(path).replace(/\.excalidraw$/i, '') : isNote ? baseName(path) : path.split(/[\\/]/).pop()}</span>
+              {parentOf(path) && <span className="t2s-srow-sub">{parentOf(path)}</span>}
+            </span>
+          )}
+        </SidebarRow>
+      </SwipeRow>
+    )
   }
 
   const row = (path: string, depth = 0, merged?: { fd: string; open: boolean; count: number }): ReactNode => {
@@ -1483,17 +1601,43 @@ export function AmadeusPagesView() {
     <>{tree.children.map((n) => renderNode(n, 0))}</>
   )
 
+  const foot = (
+    <div className="t2s-foot">
+      <TrashSection />
+      <button
+        className="t2s-special"
+        onClick={() => (cloudLib ? setCloudPanel(true) : void ps().openVault())}
+        title={cloudLib ? t('amxv.cloudVaultTip') : vaultRoot || undefined}
+      >
+        <span className="t2s-special-ic"><FolderOpen /></span>
+        <span className="t2s-special-title">{cloudLib ? t('amxv.cloudVault') : vaultRoot ? t('amxv.vaultNamed', { name: baseName(vaultRoot) }) : t('amxv.openVault')}</span>
+      </button>
+    </div>
+  )
+
   return (
     <div style={{ display: 'flex', flex: 1, minHeight: 0, minWidth: 0 }}>
-      <aside className="t2s-side amx-tree">
-        <div className="t2s-search">
-          <Search size={13} className="t2s-dim" />
-          <input value={query} placeholder={t('amxv.searchNotes')} onChange={(e) => setQuery(e.target.value)} />
-        </div>
+      <aside className="t2s-side amx-tree" data-timeline={flatList ? '' : undefined}>
+        {/* 手机:搜索在顶栏(和下拉),这里换成三档胶囊 */}
+        {phone ? !!vaultRoot && (
+          <ListChips
+            label={t('amxv.phone.tabs')}
+            items={[{ id: 'recent', label: t('amxv.phone.tab.recent') }, { id: 'tree', label: t('amxv.phone.tab.tree') }, { id: 'boards', label: t('amxv.phone.tab.boards') }]}
+            value={phoneTab} onChange={pickPhoneTab}
+          />
+        ) : (
+          <div className="t2s-search">
+            <Search size={13} className="t2s-dim" />
+            <input value={query} placeholder={t('amxv.searchNotes')} onChange={(e) => setQuery(e.target.value)} />
+          </div>
+        )}
 
         <div
           ref={scrollRef}
           className={`t2s-scroll${dragOver === '' ? ' amx-drop-root' : ''}`}
+          // 手机:列表从 Dock 底下穿过去(回收站与智库两行改排在列表末尾,见下),与会话列表同一种让位
+          data-under-dock={phone ? '' : undefined}
+          onTouchStart={flatList ? closeOtherSwipes : undefined}
           onClick={(e) => { if (e.target === e.currentTarget) sel.clear() }} // 点空白 = 清选中
           onContextMenu={(e) => {
             // 空白处右键 = 根目录新建。行/文件夹头/顶部特殊按钮各有自己的右键菜单(已 stopPropagation),这里只兜真空白。
@@ -1520,11 +1664,17 @@ export function AmadeusPagesView() {
             dropTo('')
           }}
         >
-          {q ? (
+          {phone && <PullHint />}
+          {flatList && <ListHint id="notes">{t('amxv.phone.hint')}</ListHint>}
+          {flatList && phoneTab === 'recent' && (recentList.length
+            ? withSections(recentList, (x) => dayBucket(x.at)).map((x) => ('section' in x ? <ListSection key={`sec:${x.section}`} bucket={x.section} /> : flatRow(x.item.path, x.item.at)))
+            : <div className="t2s-hint">{t('amxv.phone.noRecent')}</div>)}
+          {flatList && phoneTab === 'boards' && (boards.length ? boards.map((path) => flatRow(path, 0)) : <div className="t2s-hint">{t('amxv.phone.noBoards')}</div>)}
+          {flatList ? null : q ? (
             matches.length ? matches.map((p) => row(p)) : <div className="t2s-hint">{t('amxv.noMatches')}</div>
           ) : (
             <>
-              <div className="t2s-special-group">
+              {!phone && <div className="t2s-special-group">
                 <button className="t2s-special" onClick={() => void ps().createPage()}>
                   <span className="t2s-special-ic"><SquarePen /></span>
                   <span className="t2s-special-title">{t('amadeus.new.note')}</span>
@@ -1534,7 +1684,7 @@ export function AmadeusPagesView() {
                   <span className="t2s-special-title">{t('amadeus.new.drawing')}</span>
                 </button>
                 {/* 「今天」已移除;「Vault」入口移到底部 footer(回收站下方)。 */}
-              </div>
+              </div>}
 
               {/* 恢复 Vault 在途(云端首开 GET /vaults+/tree)→ 列表骨架;真没库才提示「打开 Vault」。 */}
               {!vaultRoot && (vaultLoading ? <Skeleton variant="list" /> : <div className="t2s-hint">{t('amxv.openVaultHint')}</div>)}
@@ -1551,19 +1701,12 @@ export function AmadeusPagesView() {
               })()}
             </>
           )}
+          {phone && foot}
         </div>
-        {/* 回收站 + Vault 常驻侧栏底部(sticky footer),不随笔记树滚走;Vault 在回收站下方最底。 */}
-        <div className="t2s-foot">
-          <TrashSection />
-          <button
-            className="t2s-special"
-            onClick={() => (cloudLib ? setCloudPanel(true) : void ps().openVault())}
-            title={cloudLib ? t('amxv.cloudVaultTip') : vaultRoot || undefined}
-          >
-            <span className="t2s-special-ic"><FolderOpen /></span>
-            <span className="t2s-special-title">{cloudLib ? t('amxv.cloudVault') : vaultRoot ? t('amxv.vaultNamed', { name: baseName(vaultRoot) }) : t('amxv.openVault')}</span>
-          </button>
-        </div>
+        {/* 回收站 + Vault 常驻侧栏底部(sticky footer),不随笔记树滚走;Vault 在回收站下方最底。
+            手机上这一块排进列表末尾(见上面的 phoneFoot):钉在底部的话它会挡在 Dock 与列表之间。 */}
+        {!phone && foot}
+        {phone && vaultRoot && <ListFab label={t('amadeus.new.note')} icon={<SquarePen />} onClick={() => void ps().createPage()} onMenu={(at) => setMenu({ kind: 'root', path: '', x: at.x, y: at.y })} />}
       </aside>
 
       {/* 多选菜单:只放对整批说得通的两件事。删除逐个走各自的既有流程(笔记要问独占附件,
@@ -1685,18 +1828,9 @@ export function AmadeusPagesView() {
           <button className="danger" onClick={() => { const f = menu.path; setMenu(null); if (confirmedDelete('folder', f)) void ps().deleteFolder(f) }}><Trash2 size={13} /> {t('amxv.menu.delete')}</button>
         </OverlayAt>
       )}
-      {menu?.kind === 'root' && (
-        <OverlayAt className="ctx-menu" x={menu.x} y={menu.y} onClick={(e) => e.stopPropagation()}>
-          <button onClick={() => { void ps().createPage(); setMenu(null) }}><SquarePen size={13} /> {t('amadeus.new.note')}</button>
-          <button onClick={() => newFolder('')}><FolderPlus size={13} /> {t('amadeus.new.folder')}</button>
-          <button onClick={() => newBase('')}><Database size={13} /> {t('amadeus.new.database')}</button>
-          <button onClick={() => newDrawing('')}><PenTool size={13} /> {t('amadeus.new.drawing')}</button>
-          <button onClick={() => newDashboard('')}><LayoutDashboard size={13} /> {t('amadeus.new.dashboard')}</button>
-          {pluginFileCreators.map((o) => (
-            <button key={o.item.id} onClick={() => runFileCreator('', o.item.label, o.item.run)}>
-              <span style={{ display: 'inline-flex', width: 13, justifyContent: 'center', fontSize: 13 }}>{resolveIcon(o.item.icon, '📄')}</span> {o.item.label}
-            </button>
-          ))}
+      {rootMenu && webRootMenu && (
+        <OverlayAt className="ctx-menu" x={rootMenu.x} y={rootMenu.y} onClick={(e) => e.stopPropagation()}>
+          <CtxMenuButtons items={rootMenuItems()} />
         </OverlayAt>
       )}
 

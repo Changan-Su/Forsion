@@ -1,0 +1,134 @@
+/* 手机整屏列表(布局「二」)。全部挂在 `.mb-shell[data-nav]` 之下:两级导航生效时才命中(原生底栏 × 竖屏 × 该 Space
+ * 有列表);桌面 / 网页 / 手机浏览器逐像素不变。组件在 phoneList.tsx,会话行的两行样式在本文件后半。
+ *
+ * 尺寸按屏幕 dp 写(与方案图同一套数):`--pl-dp` = 1dp 在当前容器里折合多少 CSS px。壳里的 px 被 body zoom 放大过
+ * (--uiz),列表所在的 .mb-drawer-body 又放大一档 1.15,所以两处各算各的 —— 换了容器也还是那么大。
+ * 字号不走 --pl-dp:只用六档界面角色(DESIGN §3;列表层 body ≈ 17dp、caption ≈ 14.5dp)。 */
+.mb-shell[data-nav] { --pl-dp: calc(1px / var(--uiz, 1)); --pl-bottom: var(--mb-bottom, 0px); }
+.mb-shell[data-nav] .mb-drawer-body { --pl-dp: calc(1px / var(--uiz, 1) / 1.15); --pl-bottom: calc(var(--mb-bottom, 0px) / 1.15); }
+
+/* ── 分类胶囊 ── */
+.mb-shell[data-nav] .pl-chips {
+  display: flex; flex-shrink: 0; gap: calc(8 * var(--pl-dp));
+  padding: calc(6 * var(--pl-dp)) calc(16 * var(--pl-dp)) calc(8 * var(--pl-dp));
+  overflow-x: auto; scrollbar-width: none;
+}
+.mb-shell[data-nav] .pl-chips > button {
+  flex: 0 0 auto; height: calc(34 * var(--pl-dp)); padding: 0 calc(15 * var(--pl-dp));
+  border: 0; border-radius: var(--radius-pill, 999px);
+  background: var(--overlay-light, rgba(127, 127, 127, 0.08)); color: var(--text-muted);
+  font-family: var(--font-ui); font-size: var(--ui-font-caption, 11px); white-space: nowrap;
+}
+.mb-shell[data-nav] .pl-chips > button.on {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--accent-ink, var(--accent)); font-weight: 600;
+}
+
+/* ── 日期分段头 ── */
+.mb-shell[data-nav] .pl-sec {
+  padding: calc(14 * var(--pl-dp)) calc(20 * var(--pl-dp)) calc(4 * var(--pl-dp));
+  font-size: var(--ui-font-caption, 11px); font-weight: 600; color: var(--text-faint, var(--text-muted));
+}
+
+/* ── 左滑一行出操作:横向滚动 + 吸附 ── */
+.mb-shell[data-nav] .pl-swipe {
+  display: flex; overflow-x: auto; overflow-y: hidden;
+  scroll-snap-type: x mandatory; scrollbar-width: none; overscroll-behavior-x: contain;
+}
+.mb-shell[data-nav] .pl-swipe > :first-child { flex: 0 0 100%; min-width: 0; scroll-snap-align: start; }
+.mb-shell[data-nav] .pl-swipe-acts {
+  display: flex; flex: 0 0 auto; align-items: center; gap: calc(6 * var(--pl-dp));
+  padding: 0 calc(12 * var(--pl-dp)) 0 calc(2 * var(--pl-dp)); scroll-snap-align: end;
+}
+.mb-shell[data-nav] .pl-swipe-act {
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: calc(3 * var(--pl-dp));
+  width: calc(60 * var(--pl-dp)); height: calc(56 * var(--pl-dp));
+  border: 0; border-radius: var(--radius-md, 12px);
+  background: var(--overlay-strong, rgba(127, 127, 127, 0.24)); color: var(--text);
+  font-family: var(--font-ui); font-size: var(--ui-font-caption, 11px);
+}
+.mb-shell[data-nav] .pl-swipe-act > svg { width: calc(20 * var(--pl-dp)); height: calc(20 * var(--pl-dp)); }
+.mb-shell[data-nav] .pl-swipe-act.accent { background: var(--accent); color: var(--on-accent, #fff); }
+.mb-shell[data-nav] .pl-swipe-act.danger { background: var(--danger); color: var(--on-accent, #fff); }
+
+/* ── 悬浮主按钮:锚在 .mb-drawer-body(position: relative)。列表从 Dock 底下穿过去时(滚动器标了 data-under-dock)
+ *    抽屉铺到屏幕底,按钮要自己让到 Dock 之上;否则抽屉本来就止于 Dock 上沿。 ── */
+.mb-shell[data-nav] .pl-fab {
+  position: absolute; z-index: 4;
+  right: calc(16 * var(--pl-dp)); bottom: calc(14 * var(--pl-dp));
+  display: grid; place-items: center;
+  width: calc(58 * var(--pl-dp)); height: calc(58 * var(--pl-dp));
+  border: 0; border-radius: var(--radius-lg, 16px);
+  background: var(--accent); color: var(--on-accent, #fff);
+  /* 投影收在 14dp 以内:抽屉止于 Dock 之上的列表里,再大就被 .mb-drawer-body 的裁剪切出一条直边 */
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--accent) 30%, transparent), 0 1px 3px var(--shadow, rgba(0, 0, 0, 0.12));
+  -webkit-touch-callout: none; user-select: none;
+}
+.mb-shell[data-nav] .pl-fab:active { transform: scale(0.95); }
+.mb-shell[data-nav] .pl-fab > svg { width: calc(24 * var(--pl-dp)); height: calc(24 * var(--pl-dp)); }
+.mb-shell[data-nav] .mb-drawer:has([data-under-dock]) .pl-fab { bottom: calc(var(--pl-bottom) + 8 * var(--pl-dp)); }
+/* 按钮压住右下角一块:列表多留一段,最后一行(和它的操作)滚得出来。从 Dock 底下穿过去的滚动器把这段并进让位;
+ * 抽屉整块止于 Dock 之上的列表(Agents 名册、图像工作室的导航),在自己的滚动器上标 .pl-fab-room。 */
+.mb-shell[data-nav] .mb-drawer-body:has(.pl-fab) [data-under-dock] { --under-dock-pad: calc(80 * var(--pl-dp)); }
+.mb-shell[data-nav] .mb-drawer-body:has(.pl-fab) .pl-fab-room { padding-bottom: calc(80 * var(--pl-dp)); }
+
+/* ── 下拉搜索的提示:高度 0 的首个子节点,提示悬在它上面,随拉动的比例(--pl-pull,0 → 1)落下来 ── */
+.mb-shell[data-nav] .pl-pull { position: relative; height: 0; pointer-events: none; }
+.mb-shell[data-nav] .pl-pull-pill {
+  position: absolute; left: 50%; bottom: 0;
+  display: inline-flex; align-items: center; gap: calc(6 * var(--pl-dp));
+  padding: calc(7 * var(--pl-dp)) calc(14 * var(--pl-dp));
+  border-radius: var(--radius-pill, 999px); background: var(--overlay-light, rgba(127, 127, 127, 0.08));
+  font-size: var(--ui-font-caption, 11px); color: var(--text-muted); white-space: nowrap;
+  opacity: var(--pl-pull, 0);
+  transform: translate(-50%, calc(var(--pl-pull, 0) * 46 * var(--pl-dp)));
+}
+.mb-shell[data-nav] .pl-pull-pill > svg { width: calc(15 * var(--pl-dp)); height: calc(15 * var(--pl-dp)); }
+.mb-shell[data-nav] .pl-pull-armed { display: none; }
+.mb-shell[data-nav] [data-pull-armed] .pl-pull-idle { display: none; }
+.mb-shell[data-nav] [data-pull-armed] .pl-pull-armed { display: inline; }
+.mb-shell[data-nav] [data-pull-armed] .pl-pull-pill { color: var(--accent-ink, var(--accent)); }
+
+/* ── 首次提示 ── */
+.mb-shell[data-nav] .pl-hint {
+  display: flex; align-items: center; gap: calc(10 * var(--pl-dp));
+  margin: calc(4 * var(--pl-dp)) calc(16 * var(--pl-dp)) calc(6 * var(--pl-dp));
+  padding: calc(10 * var(--pl-dp)) calc(8 * var(--pl-dp)) calc(10 * var(--pl-dp)) calc(14 * var(--pl-dp));
+  border-radius: var(--radius-md, 12px); background: var(--overlay-light, rgba(127, 127, 127, 0.08));
+  font-size: var(--ui-font-caption, 11px); line-height: 1.45; color: var(--text-muted);
+}
+.mb-shell[data-nav] .pl-hint > span { flex: 1; min-width: 0; }
+.mb-shell[data-nav] .pl-hint > button {
+  flex-shrink: 0; border: 0; background: none; padding: calc(8 * var(--pl-dp));
+  font-family: var(--font-ui); font-size: var(--ui-font-caption, 11px); font-weight: 600; color: var(--accent-ink, var(--accent));
+}
+
+/* ══ 两行的行(会话 / 私聊 / 团队 / 笔记共用 `.t2s-srow`):图标块 + 标题 / 第二行 + 时间。
+ *    命中 = 列表根上有 data-timeline。高度钉在 68dp:没有第二行的行,标题自己垂直居中。 ══ */
+.mb-shell[data-nav] [data-timeline] .t2s-scroll { padding-inline: 0; padding-top: 0; }
+.mb-shell[data-nav] [data-timeline] .t2s-srow {
+  min-height: calc(68 * var(--pl-dp)); padding: 0 calc(16 * var(--pl-dp)); gap: calc(12 * var(--pl-dp));
+  border-radius: 0;
+  --t2s-icon: calc(22 * var(--pl-dp));
+}
+/* 「正开着的那一条」在整屏列表里不标:旁边没有并排的主区,那条底色只像一行卡在按下的状态 */
+.mb-shell[data-nav] [data-timeline] .t2s-srow.active { background: transparent; }
+.mb-shell[data-nav] [data-timeline] .t2s-srow.active::before { display: none; }
+.mb-shell[data-nav] [data-timeline] .t2s-srow > .t2s-lead {
+  width: calc(44 * var(--pl-dp)); height: calc(44 * var(--pl-dp));
+  border-radius: var(--radius-md, 12px); background: var(--overlay-light, rgba(127, 127, 127, 0.08));
+}
+/* 头像自己就是一块:不再垫底色 */
+.mb-shell[data-nav] [data-timeline] .t2s-srow > .t2s-lead:has(.t2o-avatar, .avatar-stack, img) { background: transparent; }
+.mb-shell[data-nav] [data-timeline] .t2s-srow-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: calc(3 * var(--pl-dp)); }
+.mb-shell[data-nav] [data-timeline] .t2s-srow-title { flex: none; font-size: var(--ui-font-body, 13px); font-weight: 500; line-height: 1.3; }
+.mb-shell[data-nav] [data-timeline] .t2s-srow-sub {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: var(--ui-font-caption, 11px); line-height: 1.3; color: var(--text-muted);
+}
+.mb-shell[data-nav] [data-timeline] .t2s-srow-tag { color: var(--accent-ink, var(--accent)); font-weight: 500; }
+/* 时间跟标题那一行:有第二行的行,它靠上;只有标题的行,它和标题一起居中 */
+.mb-shell[data-nav] [data-timeline] .t2s-srow-time { margin: 0; font-size: var(--ui-font-caption, 11px); }
+.mb-shell[data-nav] [data-timeline] .t2s-srow:has(.t2s-srow-sub) .t2s-srow-time { align-self: flex-start; margin-top: calc(15 * var(--pl-dp)); }
+/* 行尾的 ⋯ 让给左滑和长按 */
+.mb-shell[data-nav] [data-timeline] .t2s-srow-menu { display: none; }
