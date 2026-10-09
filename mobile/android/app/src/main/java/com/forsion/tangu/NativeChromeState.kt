@@ -18,8 +18,15 @@ internal data class ChromeIcons(
  */
 internal data class ChromeBadge(val kind: Kind, val label: String) { enum class Kind { RUNNING, ATTENTION, UNREAD } }
 
-/** One destination of the bottom navigation bar (a Space). Label translated by JS; icon serialized by JS. */
-internal data class ChromeSpace(val id: String, val label: String, val active: Boolean, val icon: NativeIconSpec?, val badge: ChromeBadge? = null)
+/**
+ * One destination of the bottom navigation bar (a Space). Label translated by JS; icon serialized by JS.
+ * `png` = the Space's own picture (a plugin Space's `iconFile`) as base64, downscaled by JS; blank = draw `icon`.
+ * Vetted like the avatar's (see usablePng): an unusable one is dropped and the line icon is drawn instead.
+ */
+internal data class ChromeSpace(
+    val id: String, val label: String, val active: Boolean, val icon: NativeIconSpec?, val badge: ChromeBadge? = null,
+    val png: String = "",
+)
 
 /**
  * Account avatar at the trailing end of the bar (first-level pages only; JS decides). `png` = the picture as
@@ -98,7 +105,7 @@ internal data class ChromeState(
                 val o = array.getJSONObject(i)
                 ChromeSpace(
                     NativeJson.str(o, "id", 128), NativeJson.str(o, "label", 128), NativeJson.optBool(o, "active"),
-                    o.optJSONObject("icon")?.let(NativeJson::icon), badge(o),
+                    o.optJSONObject("icon")?.let(NativeJson::icon), badge(o), usablePng(o.opt("png") as? String ?: ""),
                 )
             }.also { list -> require(list.map { it.id }.toSet().size == list.size) { "Duplicate space id" } }
         }

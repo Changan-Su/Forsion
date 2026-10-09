@@ -3,7 +3,9 @@ import { windowKind } from './windowKind'
  *  设计:Space=纯数据布局配方(只组合已注册视图,无信任问题,可自建/market 分发);
  *  新视图代码/后端能力属于 Space App(L1:前端编进主包由包门控,后端走 tangu-plugin),不在此层。
  *  本文件只做 L0:装载 / 另存为 / 删除;market 装完 type='space' 由 MarketModal 再调 loadUserSpaces() 热注册。
- *  仅桌面(window.tangu.spacesList);Tangu Web 缺省不装载。 */
+ *  数据来自宿主的 window.tangu.spacesList:桌面 = 用户目录 + 各插件包里带的;设备页 = 对端主机那一份;
+ *  Android App = 只有插件包里带的(mobile/src/plugins/pluginHost.ts 的 listSpaces,手机上没有用户自建 Space 的目录)。
+ *  没有这座桥的宿主(Tangu Web)不装载。 */
 import {
   Bot, Inbox, Mail, NotebookText, BookOpen, Briefcase, CalendarDays, MessageCircle, Folder, FolderOpen,
   FileText, Star, Heart, Home, Target, Zap, Globe, Music, Image, Video, Code, Terminal, LayoutGrid, Sparkles,
@@ -53,11 +55,16 @@ const SPACE_ICONS: Record<string, LucideIcon> = {
 /** 只收主进程产出的那两种形状。设备页的清单来自对端主机(/unit/spaces),别把任意串放进 src / mask。 */
 const ICON_URL_RE = /^data:image\/(png|svg\+xml);base64,[A-Za-z0-9+/=]+$/
 
-export function imageIcon(url: string): SpaceIcon {
+/** `fallback` = 画不了任意 React 内容的宿主(Android 的原生底部导航栏)在这张图用不上时画的线条图标;
+ *  连同图本身的地址一起挂在组件上(SpaceIcon 的 imageUrl / nativeFallback),那一侧自己取。 */
+export function imageIcon(url: string, fallback?: LucideIcon): SpaceIcon {
   const mask = `url("${url}") center / contain no-repeat`
-  return url.startsWith('data:image/svg+xml')
+  const Icon: SpaceIcon = url.startsWith('data:image/svg+xml')
     ? ({ size = 18 }) => <span aria-hidden="true" style={{ display: 'inline-block', flex: 'none', width: size, height: size, background: 'currentColor', mask, WebkitMask: mask }} />
     : ({ size = 18 }) => <img aria-hidden="true" alt="" src={url} width={size} height={size} draggable={false} style={{ flex: 'none', borderRadius: '22%', objectFit: 'cover' }} />
+  Icon.imageUrl = url
+  Icon.nativeFallback = fallback
+  return Icon
 }
 
 const ws = () => useWorkspace.getState()
@@ -130,11 +137,16 @@ function migrateRecipeLayout(spec: SpaceSpec): void {
 
 function specToDefinition(spec: SpaceSpec, iconUrl?: string): SpaceDefinition {
   const sides: SpaceDefinition['sidebarDefaults'] = { left: toPanels(spec.layout.left), right: toPanels(spec.layout.right), bottom: toPanels(spec.layout.bottom ?? []) }
+  const glyph = SPACE_ICONS[spec.icon ?? ''] ?? Boxes
   return {
     id: spec.id,
     mini: spec.mini ? { ...spec.mini, name: spec.mini.name ? specName({ ...spec, name: spec.mini.name }) : undefined } : undefined,
     name: specName(spec),
-    icon: iconUrl ? imageIcon(iconUrl) : SPACE_ICONS[spec.icon ?? ''] ?? Boxes,
+    icon: iconUrl ? imageIcon(iconUrl, glyph) : glyph,
+    // 手机两级导航(引擎 listFirstNow):配方 Space 一律**主区即第一层**、左栏是抽屉。配方是照桌面的三栏写的,
+    // 它的左栏未必是「点一项进主区」的列表(常常只是文件树 / 筛选栏),当成第一层就可能根本进不了主区。
+    // ponytail: 没有按配方开关 —— 哪个插件的左栏确实是这种列表、想在手机上先落它,再给 space.json 加一个键。
+    listFirst: false,
     sidebarDefaults: sides,
     // 配方条目上的 pinned:true → 固定 View(引擎按 Space 声明现判,不进布局存档)
     pinned: { main: toPanels(spec.layout.main.filter((p) => p.pinned)), left: toPanels(spec.layout.left.filter((p) => p.pinned)), right: toPanels(spec.layout.right.filter((p) => p.pinned)) },

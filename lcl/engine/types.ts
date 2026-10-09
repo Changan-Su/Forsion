@@ -185,7 +185,9 @@ export interface StatusItem {
 
 /** Space 图标:lucide 图标,或任何只吃 `size` 的组件(自绘 / 插件图标,见 desktop userSpaces 的 imageIcon)。
  *  渲染点一律 `<Icon size={n} />`,别传 lucide 专有属性(strokeWidth 等)—— 图片图标接不住。 */
-export type SpaceIcon = LucideIcon | ComponentType<{ size?: number }>
+/** 图片图标(用户 / 插件 Space 的 `iconFile`)另带两样,给画不了任意 React 内容的原生宿主(Android 的底部导航栏):
+ *  `imageUrl` = 那张图(data URL);`nativeFallback` = 图用不上时画的线条图标。普通图标组件两样都没有。 */
+export type SpaceIcon = (LucideIcon | ComponentType<{ size?: number }>) & { imageUrl?: string; nativeFallback?: LucideIcon }
 
 /**
  * 一个 Space(空间)：取代传统「App」的功能组合 —— 一组视图 + 默认布局 + 侧栏默认。
@@ -226,7 +228,8 @@ export interface SpaceDefinition {
   autoWorkspaceMode?: 'orbits' | 'sessions' | 'files' | 'notes' | `plugin:${string}`
   /** 手机两级导航(单列壳 × 原生底部导航栏,见 SingleColumnHost 的 listFirstNow):**缺省 = 有左栏就先落左栏**
    *  —— 左栏整屏是这个 Space 的第一层(会话 / 笔记 / 名册这类「点开一项」的列表),主区是点进去的第二层。
-   *  左栏不是这种列表的 Space(日历的待办)写 false:主区即第一层,左栏照旧是侧滑抽屉。 */
+   *  左栏不是这种列表的 Space(日历的待办)写 false:主区即第一层,左栏照旧是侧滑抽屉。
+   *  配方 Space(用户 / 插件的 space.json)一律 false(见 userSpaces.specToDefinition):配方照桌面的三栏写,左栏未必是这种列表。 */
   listFirst?: boolean
   /** 固定 View:该区内始终至少留一个这种 View —— 关不掉、拖不出本区、不被别的类型顶掉(别的类型开新标签,
    *  同类照旧就地换),进入 Space 时缺了就补。params = 补回时的重建参数。判定见 pinnedViews.ts。

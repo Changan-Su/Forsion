@@ -75,6 +75,23 @@ class NativeChromeStateTest {
         assertEquals(null, ChromeState.parse(page).account)
     }
 
+    @Test fun spacePictureIsOptionalAndCheckedLikeTheAvatar() {
+        val real = png(72, 72)
+        val s = ChromeState.parse(shell("""[
+          {"id":"home","label":"Home","active":true,"icon":$icon},
+          {"id":"studio","label":"Studio","icon":$icon,"png":"$real"},
+          {"id":"bomb","label":"Bomb","icon":$icon,"png":"${png(16384, 16384)}"},
+          {"id":"odd","label":"Odd","png":42}
+        ]"""))
+        assertEquals("", s.spaces[0].png) // no picture: the line icon
+        assertEquals(real, s.spaces[1].png)
+        assertTrue(s.spaces[1].icon is NativeIconSpec.Vector) // the line icon travels along: drawn until / unless the picture decodes
+        assertEquals("", s.spaces[2].png) // dropped, never decoded — and the bar still renders with its line icon
+        assertTrue(s.spaces[2].icon is NativeIconSpec.Vector)
+        assertEquals("", s.spaces[3].png)
+        assertEquals(4, s.spaces.size)
+    }
+
     @Test fun spaceBadgeIsOptionalAndAnUnknownKindDrawsNothing() {
         val s = ChromeState.parse(shell("""[
           {"id":"home","label":"Home"},

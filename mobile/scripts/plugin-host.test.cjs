@@ -194,6 +194,82 @@ const test = async (name, fn) => {
     assert.deepEqual(list.map((p) => [p.id, p.code]), [['sub', 'ok']])
   })
 
+  // ── listSpaces(插件包里带的 Space 配方)─────────────────────────────────────
+  await test('listSpaces:各插件 spaces/<slug>/space.json 原样给出,归属 = 插件的生效 id(目录名 ≠ id 也认);没带 Space 的插件不出条目', async () => {
+    const fs = memFs()
+    assert.deepEqual(await host(fs).listSpaces(), []) // 插件根还不存在
+    put(fs, 'plugins/market-slug/manifest.json', manifest({ id: 'real-id' })); put(fs, 'plugins/market-slug/main.js', '')
+    put(fs, 'plugins/market-slug/spaces/desk/space.json', '{"id":"desk"}')
+    put(fs, 'plugins/market-slug/spaces/b-second/space.json', '{"id":"second"}')
+    put(fs, 'plugins/market-slug/spaces/empty/readme.txt', 'no space.json here')
+    put(fs, 'plugins/market-slug/spaces/.hidden/space.json', '{"id":"hidden"}')
+    put(fs, 'plugins/market-slug/spaces/loose.json', '{"id":"not-in-a-folder"}')
+    put(fs, 'plugins/plain/manifest.json', manifest({ id: 'plain' })); put(fs, 'plugins/plain/main.js', '')
+    assert.deepEqual(await host(fs).listSpaces(), [
+      { slug: 'b-second', json: '{"id":"second"}', plugin: 'real-id' },
+      { slug: 'desk', json: '{"id":"desk"}', plugin: 'real-id' },
+    ])
+  })
+
+  await test('listSpaces 图标:iconFile 先找 Space 自己的目录、再找插件包根;不合规 / 越界的名字 / 没写 → 没有 iconUrl,配方照给', async () => {
+    const fs = memFs()
+    const spec = (iconFile) => JSON.stringify({ id: 'x', icon: 'video', iconFile })
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 4h16v16H4z"/></svg>'
+    put(fs, 'plugins/p/manifest.json', manifest({ id: 'p' })); put(fs, 'plugins/p/main.js', '')
+    fs.files.set('plugins/p/icon.png', png(128, 128)) // 插件图标
+    put(fs, 'plugins/p/spaces/root/space.json', spec('icon.png')) // 自己目录里没放图 → 用插件图标
+    put(fs, 'plugins/p/spaces/own/space.json', spec('icon.png'))
+    fs.files.set('plugins/p/spaces/own/icon.png', png(64, 64)) // 自己放了一枚 → 用自己的
+    put(fs, 'plugins/p/spaces/vector/space.json', spec('mark.svg')); put(fs, 'plugins/p/spaces/vector/mark.svg', svg)
+    put(fs, 'plugins/p/spaces/badown/space.json', spec('icon.png'))
+    fs.files.set('plugins/p/spaces/badown/icon.png', png(128, 64)) // 自己那枚不合规 → 退到包根的
+    put(fs, 'plugins/p/spaces/escape/space.json', spec('../../icon.png'))
+    put(fs, 'plugins/p/spaces/notsvg/space.json', spec('fake.svg')); put(fs, 'plugins/p/spaces/notsvg/fake.svg', 'plain text')
+    put(fs, 'plugins/p/spaces/none/space.json', '{"id":"none","icon":"video"}')
+    const by = Object.fromEntries((await host(fs).listSpaces()).map((s) => [s.slug, s.iconUrl]))
+    const url = (bytes) => `data:image/png;base64,${Buffer.from(bytes).toString('base64')}`
+    assert.equal(by.root, url(png(128, 128)))
+    assert.equal(by.own, url(png(64, 64)))
+    assert.equal(by.badown, url(png(128, 128)))
+    assert.equal(by.vector, `data:image/svg+xml;base64,${Buffer.from(svg).toString('base64')}`)
+    assert.deepEqual([by.escape, by.notsvg, by.none], [undefined, undefined, undefined])
+    assert.equal(Object.keys(by).length, 7)
+  })
+
+  await test('listSpaces:装不起来的插件(仅桌面 / apiVersion 不符 / 应用太旧)与坏 manifest 的目录不贡献 Space', async () => {
+    const fs = memFs()
+    const space = (dir) => put(fs, `plugins/${dir}/spaces/s/space.json`, `{"id":"${dir}-space"}`)
+    put(fs, 'plugins/ok/manifest.json', manifest({ id: 'ok' })); space('ok')
+    put(fs, 'plugins/desk/manifest.json', manifest({ id: 'desk', isDesktopOnly: true })); space('desk')
+    put(fs, 'plugins/api2/manifest.json', manifest({ id: 'api2', apiVersion: 2 })); space('api2')
+    put(fs, 'plugins/newer/manifest.json', manifest({ id: 'newer', minAppVersion: '99.0.0' })); space('newer')
+    put(fs, 'plugins/broken/manifest.json', '{oops'); space('broken')
+    put(fs, 'plugins/Bad_Dir/manifest.json', manifest({ id: 'NOPE' })); space('Bad_Dir')
+    assert.deepEqual((await host(fs).listSpaces()).map((s) => s.plugin), ['ok'])
+    // 宿主版本未知(Unreleased)时不按 0.0.0 误杀声明了 minAppVersion 的插件 —— 与 listPlugins 同口径
+    assert.deepEqual((await host(fs, null).listSpaces()).map((s) => s.plugin), ['newer', 'ok'])
+  })
+
+  await test('listSpaces 坏包:超重的 space.json 不读、一个插件最多 16 个;同 id 两份只认前一份(它被拦下,后一份也不顶上来)', async () => {
+    const fs = memFs()
+    put(fs, 'plugins/big/manifest.json', manifest({ id: 'big' }))
+    put(fs, 'plugins/big/spaces/fat/space.json', `{"id":"fat","pad":"${'x'.repeat(64 * 1024)}"}`) // > 64KB
+    put(fs, 'plugins/big/spaces/slim/space.json', '{"id":"slim"}')
+    put(fs, 'plugins/many/manifest.json', manifest({ id: 'many' }))
+    for (let i = 0; i < 20; i++) put(fs, `plugins/many/spaces/s${String(i).padStart(2, '0')}/space.json`, `{"id":"s${i}"}`)
+    // 目录按名排序:a-desk 在前。它声明仅桌面 → 整个 id 不贡献 Space,哪怕 b-phone 那份装得起来。
+    put(fs, 'plugins/a-desk/manifest.json', manifest({ id: 'twin', isDesktopOnly: true })); put(fs, 'plugins/a-desk/spaces/s/space.json', '{"id":"from-a"}')
+    put(fs, 'plugins/b-phone/manifest.json', manifest({ id: 'twin' })); put(fs, 'plugins/b-phone/spaces/s/space.json', '{"id":"from-b"}')
+    // 两份都装得起来:只出前一份的
+    put(fs, 'plugins/c-one/manifest.json', manifest({ id: 'pair' })); put(fs, 'plugins/c-one/spaces/s/space.json', '{"id":"from-c"}')
+    put(fs, 'plugins/d-two/manifest.json', manifest({ id: 'pair' })); put(fs, 'plugins/d-two/spaces/s/space.json', '{"id":"from-d"}')
+    const list = await host(fs).listSpaces()
+    assert.deepEqual(list.filter((s) => s.plugin === 'big').map((s) => s.slug), ['slim'])
+    assert.equal(list.filter((s) => s.plugin === 'many').length, 16)
+    assert.deepEqual(list.filter((s) => s.plugin === 'twin'), [])
+    assert.deepEqual(list.filter((s) => s.plugin === 'pair').map((s) => s.json), ['{"id":"from-c"}'])
+  })
+
   // ── uninstallPlugin ───────────────────────────────────────────────────────
   await test('uninstallPlugin 按生效 id 定位目录(slug ≠ id)、整目录删;插件私有数据保留(同桌面)', async () => {
     const fs = memFs()

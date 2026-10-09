@@ -44,6 +44,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.layout.ContentScale
@@ -141,15 +142,19 @@ private fun BarIconButton(id: String, label: String, icon: NativeIconSpec?, tint
     }
 }
 
+/** A picture the state parser let through (ChromeState.usablePng) → bitmap; blank or undecodable → null. */
+@Composable
+private fun rememberPng(png: String): ImageBitmap? = remember(png) {
+    if (png.isEmpty()) null else try {
+        val bytes = Base64.decode(png, Base64.DEFAULT)
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap()
+    } catch (_: Exception) { null }
+}
+
 /** Account avatar: the picture when there is one, else the initial / person glyph on an accent-tinted disc. */
 @Composable
 private fun AvatarButton(account: ChromeAccount, accent: Color, onClick: () -> Unit) {
-    val picture = remember(account.png) {
-        if (account.png.isEmpty()) null else try {
-            val bytes = Base64.decode(account.png, Base64.DEFAULT)
-            BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap()
-        } catch (_: Exception) { null }
-    }
+    val picture = rememberPng(account.png)
     Box(
         Modifier.padding(end = 3.dp).size(48.dp).clip(CircleShape) // 3dp: the disc ends where a 24dp bar icon would (16dp from the edge)
             .clickable(role = Role.Button, onClick = onClick)
@@ -296,7 +301,15 @@ private fun SpaceCell(space: ChromeSpace, width: Dp, colors: CellColors, onSpace
                 .background(pill),
             contentAlignment = Alignment.Center,
         ) {
-            if (space.icon != null) NativeIconView(space.icon, tint, NATIVE_ICON_SIZE)
+            // A Space with a picture of its own (a plugin's icon) shows it, in its own colours like the desktop ribbon:
+            // the pill and the label carry the selection. Otherwise — or while the picture is not there — its line icon.
+            val picture = rememberPng(space.png)
+            if (picture != null) {
+                Image(
+                    picture, contentDescription = null, contentScale = ContentScale.Crop,
+                    modifier = Modifier.size(NATIVE_ICON_SIZE).clip(RoundedCornerShape(6.dp)).testTag("nativeChrome.spacePicture"),
+                )
+            } else if (space.icon != null) NativeIconView(space.icon, tint, NATIVE_ICON_SIZE)
             // The 24dp icon sits at x 16..40, y 3..27 of the pill and its strokes fill about 20dp of that: the dot's centre
             // goes on the glyph's top-right corner. The ring is the colour under it, so the dot reads as cut out of the icon.
             space.badge?.let { BadgeDot(it.kind, colors, pill.compositeOver(colors.bar), Modifier.align(Alignment.TopStart).offset(x = 33.dp, y = 1.dp)) }

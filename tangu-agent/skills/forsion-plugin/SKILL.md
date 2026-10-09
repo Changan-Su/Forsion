@@ -2,7 +2,7 @@
 name: forsion-extension-development
 description: 当用户要给 Forsion / Tangu 做插件、主题、Space、智能体(agent)或捆绑包(bundle)——或要把某个能力做成可分发/可上架商店的扩展——时使用。内置五类官方模板(samples/),讲清各自的格式基线与硬约束(尤其两种"插件"是完全不同的系统),照抄模板改比从零写靠谱。
 metadata:
-  version: 1.24.0
+  version: 1.24.1
   author: Forsion
   category: Forsion
 ---
@@ -1235,7 +1235,8 @@ const off = ctx.app.watchFile?.('Snippets/latex.js', () => reload())
 
 Forsion Android App 也跑 Forsion 插件(同一份 `pluginStore`、同一个 `ctx`),**只经市场装**、只装 `amadeus-plugin` 类;插件住在 App 私有目录,`ctx.loadData` / `ctx.saveData` 照常可用。
 - 依赖桌面才有的东西(本机程序 / Node / `ctx.app.hostPath` 必须非 null / 引擎插件 / 浮窗)且没有降级路径的,manifest 写 `"isDesktopOnly": true`(只认布尔 `true`):手机市场拒装并说明原因,已在列表里的显示「仅支持桌面端」且代码不执行。桌面上这个字段不影响任何行为。
-- 能在手机上跑的,照「能力判断运行环境」写:`openFloatingPanel` / `openMiniPanel` 手机没有(可选链),状态栏项手机不显示,捆绑包里的引擎插件 / Agent / 技能 / Space 手机不装。
+- 能在手机上跑的,照「能力判断运行环境」写:`openFloatingPanel` / `openMiniPanel` 手机没有(可选链),状态栏项手机不显示,捆绑包里的引擎插件 / Agent / 技能手机不装(手机上没有本机引擎)。
+- 捆绑包里的 **Space**(`spaces/<slug>/space.json`)手机上照常注册(2026-10-09 起;此前不装),出现在底部导航栏,图标用 `iconFile` 那张 PNG(没有或是 SVG 就用 `icon` 的线条图标)。手机是单列:进这个 Space 先看到 `layout.main` 的第一个视图,`left` / `right` 是从顶栏按钮拉出来的抽屉,`bottom` 不开 —— 主视图要在约 400px 宽里独立可用,别把必经的操作只放在左栏或底部面板里。
 - 手机上插件包的上限:下载 25 MB、解压 64 MB、2000 个文件。
 - 手机没有 ribbon:插件的 `registerCommand` 命令由宿主按插件分节列进顶栏「⋯」菜单(节标题 = 插件展示名),`checked` 开关在那里显示为勾选态 —— 命令 `title` 要能独立看懂(手机上它就是菜单行文案)。
 
