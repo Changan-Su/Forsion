@@ -24,4 +24,23 @@ describe('EditorialMessage inline Sketch ordering', () => {
     const events = [done('sk-bad', 'sketch'), done('read1', 'read_file')]
     expect(partitionToolSegment(events, [])).toEqual([{ t: 'tools', events }])
   })
+
+  it('draws a draft card for a streaming (unfinished) Sketch only while the message is live', () => {
+    const streaming: ToolEvent = { id: 'sk1', name: 'sketch', done: false, arguments: '{"title":"柱状图","html":"<h1>HALF</h1><scr' }
+    const events = [streaming, done('read1', 'read_file')]
+    // 直播:草稿卡紧跟在它的工具行后面,html 是半截 JSON 里解出来的那部分
+    expect(partitionToolSegment(events, [], true)).toEqual([
+      { t: 'tools', events: [streaming] },
+      { t: 'sketch', item: { callId: 'sk1', html: '<h1>HALF</h1><scr', title: '柱状图', draft: true } },
+      { t: 'tools', events: [events[1]] },
+    ])
+    // 历史 / 中断:同样的事件不出幻影卡
+    expect(partitionToolSegment(events, [], false)).toEqual([{ t: 'tools', events }])
+    // html 还没流到(只到了 title)→ 不画空卡
+    expect(partitionToolSegment([{ id: 'sk2', name: 'sketch', done: false, arguments: '{"title":"x"' }], [], true))
+      .toEqual([{ t: 'tools', events: [{ id: 'sk2', name: 'sketch', done: false, arguments: '{"title":"x"' }] }])
+    // 终稿到了(sketches 里有)→ 正式卡优先,不再是草稿
+    const final = { callId: 'sk1', html: '<h1>FULL</h1>' }
+    expect(partitionToolSegment([streaming], [final], true)).toEqual([{ t: 'tools', events: [streaming] }, { t: 'sketch', item: final }])
+  })
 })

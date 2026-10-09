@@ -111,6 +111,25 @@ Persist only choices; recompute paths, values and temporary hover state.
 Theme changes do not reload the card. CSS/SVG follows variables; canvas should listen for
 `forsion:themechange` and repaint with resolved computed colors.
 
+The card renders progressively while the `sketch` call is still being written: the host shows the
+markup as it arrives and runs scripts only once the call completes. Put the headline and the
+structure first and every `<script>` last, so the first visible frame is already useful.
+
+## Buttons that change the answer
+
+`window.forsionSketch.ask(text)` sends `text` as the user's next visible message in this
+conversation. Call it only from a click handler (it refuses to run on load or from a timer), with
+the follow-up the user would type, e.g. `ask("Explain the hybrid option in detail")`. Use it for
+choices that need a new answer from you; keep recomputation that needs no new answer inside the
+card. One request per click; do not chain several. The card does not receive a reply itself.
+
+```html
+<button class="fs-button" type="button"
+  onclick="window.forsionSketch.ask('Show the pessimistic scenario with the same assumptions')">
+  Pessimistic scenario
+</button>
+```
+
 ## Responsive figures
 
 - Design for 320px through 700px, with natural height. Avoid fixed outer widths and viewport units.

@@ -9,6 +9,14 @@
       state = JSON.parse(json)
       parent.postMessage({ type: 'sketch-state', state }, '*')
     },
+    // 卡内按钮回头改答案:把这句话当用户的下一条消息发出去(宿主侧再限频、限长、只在对话里接)。
+    // 只认用户手势之后(navigator.userActivation 是本浏览上下文自己的):模型写的卡不能一加载 / 定时就替用户发话。
+    ask(text) {
+      if (!navigator.userActivation?.isActive) throw new Error('forsionSketch.ask() must be called from a user gesture')
+      const t = String(text ?? '').trim().slice(0, 400)
+      if (!t) throw new Error('forsionSketch.ask() needs a non-empty text')
+      parent.postMessage({ type: 'sketch-ask', text: t }, '*')
+    },
   })
 
   // An href must never turn a sandbox frame into an external navigation surface.

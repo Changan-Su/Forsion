@@ -33,7 +33,7 @@ import { buildAgentRoster } from './agentRoster.js';
 import { AUTONOMY_SECTION, PERSISTENCE_SECTION, TOOL_FAILURE_SECTION, ULTRA_SECTION, presetContractSection, responseStyleSection } from '../profiles/promptSections.js';
 import { resolveTools, isComputerUseTool, computerUseHiddenNames, computerUseUnavailableReason } from '../tools/toolRegistry.js';
 import { parsePreset, presetOf, type Preset } from '../core/presetTable.js';
-import { SKETCH_SECTION, sketchEnabledFor, sketchTurnSignalFor } from '../tools/builtin/sketch.js';
+import { SKETCH_LESS_NOTE, SKETCH_SECTION, sketchEnabledFor, sketchTurnSignalFor, visualsPrefOf } from '../tools/builtin/sketch.js';
 import { loadTodos as loadSessionTodos, renderTodos, type TodoItem } from '../tools/builtin/todo.js';
 import { collectGitState, formatRuntimeContext, renderTodoState, runVerifyCommand } from './runtimeContext.js';
 import { loadCustomTools, type LoadedCustomTool } from '../tools/customTools.js';
@@ -1507,10 +1507,13 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // 3c) 可视化卡片段:与 sketch 工具**同一个判定源**(sketchEnabledFor),CLI/TUI run 两者一起缺席。
     //     常驻段管「什么时候该画 + 怎么画到下限之上」;本轮信号对比较/流程/数据形状再加一次定向提醒,
     //     不等用户必须说「画」。子代理走 subAgent.ts 自己的提示装配,天然不经过这里。
-    const sketchEnabled = sketchEnabledFor({ client: clientTag, planMode, channelSession, preset });
-    const sketchTurnSignal = sketchEnabled ? sketchTurnSignalFor(String(input.message || '')) : undefined;
+    //     visuals(渲染端 ui_settings 快照):off → 段与工具一起缺席;less → 段还在但只认明确要求(隐式信号与收尾补催不触发)。
+    const sketchEnabled = sketchEnabledFor({ client: clientTag, planMode, channelSession, preset, uiSettings });
+    const visualsPref = visualsPrefOf(uiSettings);
+    const sketchTurnSignal = sketchEnabled ? sketchTurnSignalFor(String(input.message || ''), visualsPref) : undefined;
     if (sketchEnabled) {
       systemParts.push(SKETCH_SECTION);
+      if (visualsPref === 'less') systemParts.push(SKETCH_LESS_NOTE);
       // 常驻段稳定,但本轮信号按消息正则取 3 种值 → 跟记忆易变段同一落点(B1),别留在稳定前缀里。
       if (sketchTurnSignal && volatilePlacement === 'system') systemParts.push(sketchTurnSignal.section);
     }
@@ -1650,6 +1653,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     const projectScoped = profile.capabilities.hostExec ? !!(await resolveProjectMemory(userId, sessionId)) || undefined : undefined;
     const toolGateCtx = {
       userId, sessionId, appId, runId, client: clientTag, channelSession, preset, uiCommands, uiSettings, clientCapabilities, projectScoped,
+      visuals: visualsPref, // run 冻结的可视化档位:与上面拼提示用的同一个值,set_ui_setting 中途改了也到下一次 run 才生效
       runOrigin: runCategory(input), // P1-K2:后台进程来源标签取这条 run 自己的来源(channelSession 是会话级旗标)
       dispatchTargets,
       hostSandbox: runHostSandbox,

@@ -1493,6 +1493,9 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
   transition: color var(--duration-fast, 0.15s), background var(--duration-fast, 0.15s);
 }
 .sketch-card-toggle:hover { color: var(--text); background: var(--overlay-light, rgba(127, 127, 127, 0.1)); }
+/* 草稿卡(参数还在流式生成,结构先于行为):淡一点示意「还在画」,且不接指针 —— 半成品不该被点;终稿到达即恢复。 */
+.sketch-card[data-sketch-draft] { opacity: .78; }
+.sketch-card[data-sketch-draft] .sketch-frame { pointer-events: none; }
 .inquiry-q {
   display: flex;
   align-items: center;

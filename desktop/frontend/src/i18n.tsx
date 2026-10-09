@@ -1197,6 +1197,14 @@ const zh: Dict = {
   'settings.theme.customBgHint': '不设置时背景由主题色微染；设置后将所选色作为独立氛围种子，并自动调至当前明暗模式的可读范围。',
   // 双轴主题:设计语言(结构)× 配色(颜色)
   'settings.theme.langLabel': '设计语言',
+  // 对话里的可视化卡多少(对标 ChatGPT「Layout and visuals」)
+  'settings.theme.visuals': '对话里的可视化',
+  'settings.theme.visualsOpt.auto': '自动',
+  'settings.theme.visualsOpt.less': '少一点',
+  'settings.theme.visualsOpt.off': '关闭',
+  'settings.theme.visuals.auto': '关系、流程或数据适合看图时，Tangu 会用图表和可交互卡片作答。',
+  'settings.theme.visuals.less': '只在你明确要图时才画；下一次对话起生效。',
+  'settings.theme.visuals.off': '只用文字回答，不再画卡片；下一次对话起生效。',
   'settings.theme.openFolder': '打开主题文件夹',
   'settings.theme.reload': '重载主题',
   'settings.theme.dropHint': '把 theme.json + theme.css 放进 ~/.forsion/themes/<id>/ 即可装第三方主题，放好后点「重载主题」。',
@@ -3054,6 +3062,14 @@ const en: Dict = {
   'settings.theme.customBgHint': 'Unset: the accent softly tints the background. Set: use this hue as an independent ambience seed, adjusted into the current mode’s readable range.',
   // Two-axis theme: design language (structure) × color scheme (palette)
   'settings.theme.langLabel': 'Design language',
+  // Visuals in chat (cf. ChatGPT "Layout and visuals")
+  'settings.theme.visuals': 'Visuals in chat',
+  'settings.theme.visualsOpt.auto': 'Auto',
+  'settings.theme.visualsOpt.less': 'Less',
+  'settings.theme.visualsOpt.off': 'Off',
+  'settings.theme.visuals.auto': 'Tangu answers with charts and interactive cards when a relationship, process or data reads better as a picture.',
+  'settings.theme.visuals.less': 'Only when you explicitly ask for a picture; takes effect from the next turn.',
+  'settings.theme.visuals.off': 'Text only, no cards; takes effect from the next turn.',
   'settings.theme.openFolder': 'Open themes folder',
   'settings.theme.reload': 'Reload themes',
   'settings.theme.dropHint': 'Drop theme.json + theme.css into ~/.forsion/themes/<id>/ to install a third-party theme, then click “Reload themes”.',

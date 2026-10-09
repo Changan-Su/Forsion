@@ -49,6 +49,8 @@ export function uiSurfaceEnabledFor(
 const SETTING_KEYS = [
   'locale', 'color_mode', 'accent', 'background', 'theme_lang', 'flat',
   'font_ui', 'font_body', 'font_mono', 'ui_zoom', 'smooth_caret',
+  // visuals:对话里的可视化卡多少(auto / less / off;渲染端 UI_SETTINGS.visuals,引擎侧 sketch.ts 按它开关工具与提示段)。
+  'visuals',
 ] as const;
 
 // ⚠️ 这里**刻意不枚举合法值**:主题包与插件字体可上盘,内置设计语言的真实 id 也是
