@@ -133,6 +133,15 @@ async function main() {
     )
     check('2 同一个 Space 不出现两次:主页只在主位槽,上区没有它', s0.slot[0] === '主页' && !s0.top.includes('主页'), JSON.stringify({ slot: s0.slot, top: s0.top }))
 
+    // 2b 从没拖过(盘上没有顺序存档)的用户走默认序(10-09 用户定;= spaces.tsx 的 SPACES 注册序)。
+    const DEFAULT_ORDER = ['tangu', 'amadeus', 'calendar', 'inbox', 'agents', 'coding', 'image-studio', 'artificial', 'automation', 'muse', 'public'].map((id) => `space:${id}`)
+    const seen = idsOf(s0).filter((id) => DEFAULT_ORDER.includes(id))
+    check(
+      '2b 没有顺序存档时上区按默认序:Tangu → 笔记 → 日历 → 收件箱 → Agents → 编码 → 图像 → 其余',
+      s0.order.length === 0 && seen.length >= 5 && JSON.stringify(seen) === JSON.stringify(DEFAULT_ORDER.filter((id) => seen.includes(id))),
+      JSON.stringify({ order: s0.order, top: idsOf(s0) }),
+    )
+
     // 3 右键换主位 → 再换回来;全程持久顺序一个字都不许变,且主页回到它原来那一格。
     //   先种一份**非空**顺序(把主页放中间),否则「顺序没变」是空断言。
     const SEED = ['space:tangu', 'space:inbox', 'space:home', 'space:amadeus', 'space:calendar', 'space:coding', 'space:automation', 'space:public']

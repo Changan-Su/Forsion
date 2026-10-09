@@ -273,19 +273,22 @@ const SPACES: SpaceDefinition[] = [
   // 主页也是**内置插件**(builtins/homepage:Space + homepage 视图随插件启停)。排第一 = ribbon 顶格,
   // 与旧 Forsion Desktop 的「先看到桌面首页」一致;插件页关掉后下次启动即整条不出现。
   ...(homepageAvailable() && builtinEnabled('home') ? [homepageSpace] : []),
-  ...(hasNativeFeature('tangu') ? [tanguSpace, agentsSpace] : []),
-  // Inbox 与视图注册同门控(inboxAvailable:旧档案 spaces 点名 + backendStatus/mobile;Unit 宿主 = tangu 包 + 本地引擎)。
-  ...(inboxAvailable() ? [inboxSpace] : []),
+  // 默认序(10-09 用户定):Tangu → 笔记 → 日历 → 收件箱 → Agents → 编码 → 图像 → 其余。
+  // 没拖过图标的用户盘上没有顺序存档(forsion_tangu_ribbon_order 只由拖拽 / 收纳夹写),直接跟这里走;拖过的保留自己的。
+  ...(hasNativeFeature('tangu') ? [tanguSpace] : []),
   ...(hasNativeFeature('amadeus') && amadeusAvailable() && AMADEUS_ENABLED ? [amadeusSpace] : []),
   // Calendar 已是**内置插件**(builtins/calendar:Space + 三个视图随插件启停)。这里仍按槽位声明式带上,
   // 保住 ribbon 默认序与「上次退出停在日历」的启动恢复;插件页关掉后下次启动即整条不出现。
   ...(calendarAvailable() && builtinEnabled('calendar') ? [calendarSpace] : []),
+  // Inbox 与视图注册同门控(inboxAvailable:旧档案 spaces 点名 + backendStatus/mobile;Unit 宿主 = tangu 包 + 本地引擎)。
+  ...(inboxAvailable() ? [inboxSpace] : []),
+  ...(hasNativeFeature('tangu') ? [agentsSpace] : []),
   // Coding 依赖 host 文件桥 + 本地静态预览服务器(仅桌面 electron;Tangu Web 无 codePreviewServe → 不注册)。
   ...(PRODUCT.nativeFeatures === undefined && PRODUCT.spaces.includes('coding') && window.tangu?.codePreviewServe ? [codingSpace] : []),
-  // 造物也是**内置插件**(builtins/artificial:Space + artificial/product 两个视图随插件启停)。
-  // 紧跟编码之后 —— 它管的正是编码工作室的产出;插件页关掉后下次启动即整条不出现。
-  ...(artificialAvailable() && builtinEnabled('artificial') ? [artificialSpace] : []),
   ...(imageStudioAvailable() && builtinEnabled('image-studio') ? [imageStudioSpace] : []),
+  // 造物也是**内置插件**(builtins/artificial:Space + artificial/product 两个视图随插件启停)。
+  // 插件页关掉后下次启动即整条不出现。
+  ...(artificialAvailable() && builtinEnabled('artificial') ? [artificialSpace] : []),
   // Automation 依赖本地 tangu 后端(triggers/automation 端点都是本地特性;Tangu Web 无 backendStatus → 不注册)。
   ...(hasNativeFeature('automation') && window.tangu?.backendStatus ? [automationSpace] : []),
   // Muse 也是**内置插件**(builtins/muse:Space + 两个视图随插件启停;本地后端特性)。同 Calendar 的槽位纪律。
