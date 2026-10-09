@@ -25,7 +25,7 @@ import {
   isSafeSlug, planZipFiles,
 } from '../../../desktop/shared/marketPackage'
 import { effectivePluginId } from '../../../desktop/shared/products'
-import { PLUGINS_DIR, backupDirOf, mainRelOf, pluginDirNames, readManifest, recoverPluginDirs, stagingDirOf } from './pluginHost'
+import { PLUGINS_DIR, backupDirOf, mainRelOf, pluginDirNames, readManifest, recoverPluginDirs, stagingDirOf, tombstoneExtensions } from './pluginHost'
 import { withPluginDirLock, type PluginFs } from './pluginFs'
 import { UnpackLimitError, countCentralHeaders, unpackCapped } from './zipUnpack'
 
@@ -415,6 +415,7 @@ export function createMobileMarket(deps: MobileMarketDeps): MobileMarket {
         await recoverPluginDirs(deps.fs) // 先恢复:否则备份里的旧版会在下次启动时又被挪回来
         const st = await deps.fs.stat(dir)
         if (!st || st.type !== 'directory') throw new MarketUserError(deps.t('mobilemarket.notInstalled'))
+        await tombstoneExtensions(deps.fs, dir) // 它声明过的文件后缀留下来(同 pluginHost.uninstallPlugin)
         await deps.fs.removeDir(dir)
       })
       return { ok: true, path: dir, type }

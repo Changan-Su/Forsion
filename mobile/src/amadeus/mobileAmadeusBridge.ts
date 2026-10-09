@@ -29,9 +29,10 @@ const nowIso = (): string => new Date().toISOString()
 const rememberPage = (p: string): void => { try { localStorage.setItem(LAST_PAGE_KEY, p) } catch { /* ignore */ } }
 const lastPage = (): string | undefined => { try { return localStorage.getItem(LAST_PAGE_KEY) || undefined } catch { return undefined } }
 
-/** cfg 可选:提供后端基址与 token 时,fetchLinkMeta 走 server 代理(书签卡);缺省优雅降级 null。 */
-export function createMobileAmadeusBridge(cfg?: { apiBase?: () => string; getToken?: () => string }): AmadeusApi {
-  const vault = new VaultManager()
+/** cfg 可选:提供后端基址与 token 时,fetchLinkMeta 走 server 代理(书签卡);缺省优雅降级 null。
+ *  pluginExts = 插件声明的文件后缀(见 VaultManager):这些 .md 不算笔记。 */
+export function createMobileAmadeusBridge(cfg?: { apiBase?: () => string; getToken?: () => string; pluginExts?: () => string[] }): AmadeusApi {
+  const vault = new VaultManager(cfg?.pluginExts)
   const index = new VaultIndex(vault)
   let built = false
 

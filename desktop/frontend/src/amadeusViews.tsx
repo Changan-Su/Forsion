@@ -115,6 +115,8 @@ registerMessages({
   'amxv.missing.title': { zh: '当前库里没有这篇笔记', en: 'This note is not in the current vault' },
   'amxv.missing.sub': { zh: '「{path}」在这一侧不存在 —— 它可能属于另一侧（本地/云端）、已改名或已删除。这里不会替你新建同名空文件。', en: '“{path}” does not exist on this side. It may belong to the other side (local/cloud), or it was renamed or deleted. No empty file is created in its place.' },
   'amxv.missing.close': { zh: '关闭标签页', en: 'Close tab' },
+  'amxv.pluginFile.title': { zh: '这个文件归插件管理', en: 'This file belongs to a plugin' },
+  'amxv.pluginFile.sub': { zh: '「{path}」是某个插件的专属格式，而那个插件没有安装或没有启用。当成笔记来编辑会改坏它的格式，所以这里不打开；启用对应的插件后再打开它。', en: '“{path}” is in a plugin’s own format, and that plugin is not installed or not enabled. Editing it as a note would break the format, so it is not opened here. Enable the plugin, then open the file again.' },
 
   'amxv.sec.starred': { zh: '收藏', en: 'Starred' },
   'amxv.sec.collections': { zh: '集合', en: 'Collections' },
@@ -2266,8 +2268,23 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
   const routedFor = useRef<{ path: string; root: string | null } | null>(null)
   // 文件在当前库出现/消失(pages 随结构事件刷新)也要重判:missing 占位不能永远停在那里。
   const noteKnown = usePageStore((s) => (notePath ? s.pages.includes(notePath) : false))
+  // 库这一层把它列在「文件」里而不在「页面」里的 .md = 归插件管的文件,而且此刻没有插件接着它(有的话
+  // openNote 早就改道去了插件视图):对应插件没装 / 被关掉 / 被门禁拦下。**绝不进笔记读写管线** —— 编辑器一存就是
+  // 按笔记的写法重排,插件的格式当场坏(实测:敲一个字,卡组的卡片标记前后多出空行)。树上点它、[[链接]]、
+  // 搜索命中、恢复的旧标签都落到这个面板,所以闸放在这里而不是各个入口。仪器:mobile 的 npm run e2e:pluginfiles。
+  const pluginOwned = usePageStore((s) => {
+    if (!notePath || !/\.md$/i.test(notePath) || s.pages.includes(notePath)) return false
+    const n = notePath.replace(/\\/g, '/')
+    return s.files.some((f) => f.replace(/\\/g, '/') === n)
+  })
   useEffect(() => {
     if (!notePath) {
+      setRoute(null)
+      return
+    }
+    if (pluginOwned) {
+      retireUnifiedPath(notePath) // 名单晚到(刚装上声明这个后缀的插件)时,已经挂着的编辑器实例一并退休
+      routedFor.current = null
       setRoute(null)
       return
     }
@@ -2318,8 +2335,8 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
     })()
     return () => { alive = false }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [notePath, vaultRoot, noteKnown, retryTick])
-  const routed = route && route.forPath === notePath ? route.decision : null
+  }, [notePath, vaultRoot, noteKnown, retryTick, pluginOwned])
+  const routed = !pluginOwned && route && route.forPath === notePath ? route.decision : null
   const unifiedRoute = routed?.editor === 'unified' ? routed : null
   const unreadableNote = !!notePath && !!route?.unreadable && route.forPath === notePath
   const missingNote = routed?.editor === 'missing' && !!notePath && !unreadableNote
@@ -2371,7 +2388,7 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
   //    v4 自 2026-08-14 起是缺省路由,等于手机上从那天起就没有底栏了(没有「+」/撤销/上传/「⋯」,
   //    自然也没有画布入口)。2026-08-20 用户实报「移动端没有画布」时查出。
   //    (声明也随之从 route 之前挪到了这里 —— 它只被下面的 JSX 用,没有前移的必要。)
-  const loadingNote = !unifiedRoute && !missingNote && !unreadableNote
+  const loadingNote = !unifiedRoute && !missingNote && !unreadableNote && !pluginOwned
     && ((!!pendingPage && pendingPage !== activePage) || (!!notePath && !loadError && notePath !== activePage))
 
   // 顶栏/菜单/移动端胶囊的「当前笔记」:v3 = activePage;unified 不设 activePage,用 leaf 认领的路径。
@@ -2691,7 +2708,16 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
       {shareCard && barPath && (
         <ShareCard path={barPath} anchor={shareCard} onClose={() => { setShareCard(null); setShareVer((v) => v + 1) }} />
       )}
-      {unifiedRoute && notePath ? (
+      {pluginOwned && notePath ? (
+        /* 归插件管的文件、此刻没有插件接着它:只占位,不挂任何编辑器(见 pluginOwned)。 */
+        <div className="amx-welcome" data-plugin-owned-file={notePath}>
+          <div className="amx-welcome-title">{t('amxv.pluginFile.title')}</div>
+          <p className="amx-welcome-sub">{t('amxv.pluginFile.sub', { path: notePath })}</p>
+          <div className="amx-welcome-actions">
+            <button className="amx-welcome-btn" onClick={() => useWorkspace.getState().closeLeaf(leaf.id)}>{t('amxv.missing.close')}</button>
+          </div>
+        </div>
+      ) : unifiedRoute && notePath ? (
         /* v4 统一实例编辑器:不碰 pageStore(activePage 不设),故必须排在骨架屏判定之前。
            页面 chrome(封面/图标/标题/属性)在 UnifiedPage 内部;顶栏/菜单走上面的 barPath 门。 */
         <UnifiedPage

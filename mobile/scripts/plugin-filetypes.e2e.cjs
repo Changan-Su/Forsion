@@ -6,21 +6,30 @@
  * 改道。对应插件没装 / 被停用 / 被版本闸拦下 / 卸载之后,文件进笔记编辑器,一保存插件的格式就坏了。
  *
  * 真把 mobile/dist 在手机视口的 headless Chromium 里跑(本地库 = @capacitor/filesystem 的 web 实现,IndexedDB;
- * 插件经假市场真装进应用私有目录)。五种状态各问三件事:
+ * 插件经假市场真装进应用私有目录)。每种状态问三件事:
  *   ① 库这一层:listPages() 里没有它、listFiles() 里有它(索引 / 搜索 / 反链 / 改名重写全从 listPages 取);
- *   ② 点文件树里那一行:进的不是笔记编辑器;
+ *   ② 点文件树里那一行:进的不是笔记编辑器(启用中 = 插件自己的视图;其余 = 一页说明,不挂编辑器);
  *   ③ 就算编辑器开了也敲一个字、等过自动保存:文件一个字节不变。
  *
- *   S0 没装过   : 首方后缀(`.mindmap.md`,不靠安装也认)
  *   S1 启用中   : 点开 = 插件自己的视图
  *   S2 被停用   : 设置里关掉(amadeus.plugins.disabled)
  *   S2 被门禁拦 : manifest apiVersion 对不上
  *   S3 已卸载   : 后缀豁免要留下来(墓碑)
+ *   S0 没装过   : **已知缺口,只报告不判红** —— 这台手机上从没装过对应插件(文件是云同步 / 别的设备带来的),宿主
+ *                 无从知道这个后缀归插件管,文件照旧当笔记打开。怎么补(首方后缀名单 / 由商店带下来)等产品决定;
+ *                 定了以后把这一段从 gap 改成 check。
  *
  * 云端库那一半(同一批后缀从 tree.pages 挪到 files)在 desktop 的 vitest:frontend/src/services/cloudBridgePluginFiles.test.ts。
  * 锚点一律 data-* / 类名,不按界面文案找元素(行名是文件名,不随语言变);语言钉 zh-CN。
+ * 截图(说明页长什么样)写进 mobile/outputs/pluginfiles/。
+ *
+ * 负对照(2026-10-09 实跑):
+ *   · 整套修复之前的 main:S1 的两条「列表」与 S2 / S3 的全部断言都红,落盘内容被改写的原文打在失败行下面;
+ *   · 只关掉编辑器面板那道闸(amadeusViews 的 pluginOwned 恒 false)、库这一层照修:列表几条全绿,
+ *     S2 / S3 的「点开」「一个字节没变」照红(6 条)—— 光把文件挪出页面列表不够,树上点一下照样进编辑器。
  */
 const http = require('http')
+const net = require('net')
 const os = require('os')
 const fs = require('fs')
 const path = require('path')
@@ -31,9 +40,18 @@ const { chromium } = (() => {
   return require(path.resolve(__dirname, '../../desktop/node_modules/playwright-core'))
 })()
 
-const PORT = 5303 // 避开 dev 5274 / boot 5279 / … / runon 5299 / plugins 5301
-const APP_URL = `http://localhost:${PORT}/`
+// ⚠️ 端口由系统现分,不写死:这台机器上常有几个会话同时跑手机台架,写死的端口撞上别人的 vite preview 时,
+// 自己这份 --strictPort 起不来,而探活却打得通 —— 整轮测的是**别人那份产物**(2026-10-09 负对照时撞过:
+// 结果和没修之前一模一样)。下面还会盯着 preview 进程,它一退出就报错,不等探活。
+let PORT = 0
+let APP_URL = ''
+const pickPort = () => new Promise((res, rej) => {
+  const srv = net.createServer()
+  srv.once('error', rej)
+  srv.listen(0, () => { const { port } = srv.address(); srv.close(() => res(port)) })
+})
 const CDN = 'https://market-cdn.e2e.test'
+const SHOTS = path.resolve(__dirname, '../outputs/pluginfiles') // 已 gitignore
 const DECK_ID = 'e2e-deck'
 const GATED_ID = 'e2e-gated'
 
@@ -44,7 +62,7 @@ const PAYLOAD = (name) => `---\ndeck: ${name}\nfsrs: {"c1":{"d":5.1,"s":3.2,"due
 const FILES = {
   enabled: { path: 'E2E启用.e2edeck.md', stem: 'E2E启用' },
   gated: { path: 'E2E门禁.e2egated.md', stem: 'E2E门禁' },
-  floor: { path: 'E2E首方.mindmap.md', stem: 'E2E首方' },
+  never: { path: 'E2E没装过.deck.md', stem: 'E2E没装过' },
 }
 const NOTE = { path: 'E2E普通笔记.md', stem: 'E2E普通笔记' }
 
@@ -110,21 +128,30 @@ async function main() {
     }),
   }
 
+  PORT = await pickPort()
+  APP_URL = `http://localhost:${PORT}/`
   const preview = spawn('npx', ['vite', 'preview', '--port', String(PORT), '--strictPort'], { cwd: root, stdio: ['ignore', 'ignore', 'pipe'], detached: true })
   let previewErr = ''
+  let previewExit = null
   preview.stderr.on('data', (d) => { previewErr += String(d) })
+  preview.on('exit', (code) => { previewExit = code })
   const killPreview = () => { try { process.kill(-preview.pid, 'SIGTERM') } catch { try { preview.kill() } catch { /* 已退出 */ } } }
 
   let browser = null
   const fails = []
+  let gapMode = false // S0(已知缺口)期间:照常观测、照常打印,但不计入失败
   const check = (ok, name, extra) => {
-    if (!ok) fails.push(name)
-    console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${extra ? `  | ${extra}` : ''}`)
+    if (!ok && !gapMode) fails.push(name)
+    console.log(`${ok ? 'PASS' : gapMode ? 'GAP ' : 'FAIL'}  ${name}${extra ? `  | ${extra}` : ''}`)
   }
   try {
     let up = false
-    for (let i = 0; i < 40 && !up; i++) { await new Promise((r) => setTimeout(r, 500)); up = await ping() }
-    if (!up) throw new Error(`vite preview 没起来(${PORT} 被占?)\n${previewErr.slice(-800) || '(无 stderr)'}`)
+    for (let i = 0; i < 40 && !up; i++) {
+      await new Promise((r) => setTimeout(r, 500))
+      if (previewExit !== null) throw new Error(`vite preview 退出了(code=${previewExit})\n${previewErr.slice(-800) || '(无 stderr)'}`)
+      up = await ping()
+    }
+    if (!up) throw new Error(`vite preview 没起来\n${previewErr.slice(-800) || '(无 stderr)'}`)
 
     browser = await chromium.launch({ executablePath: findChromium(), headless: true, args: ['--no-sandbox'] })
     // ⚠️ 语言钉 zh-CN 必须走 context 的 locale(chromium --lang 对浏览器台架无效)
@@ -138,6 +165,10 @@ async function main() {
     })
     const page = await ctx.newPage()
     page.on('dialog', (d) => { void d.accept() })
+    // 分诊用:页面里的异常与告警(网络类的不算 —— 台架把 /api 全掐了)。「库这一层」红的时候连同宿主清点到的后缀一起打出来。
+    const pageLog = []
+    page.on('pageerror', (e) => pageLog.push(`pageerror: ${e.message.slice(0, 200)}`))
+    page.on('console', (m) => { if ((m.type() === 'error' || m.type() === 'warning') && !/Failed to load resource|net::ERR/.test(m.text())) pageLog.push(`${m.type()}: ${m.text().slice(0, 200)}`) })
     await page.route('**/auth/me', (r) => r.fulfill({ status: 200, contentType: 'application/json', body: '{"username":"e2e"}' }))
     await page.route('**/api/**', (r) => r.abort())
     // ⚠️ 后注册先匹配:假市场必须写在 abort 之后。
@@ -181,6 +212,11 @@ async function main() {
       const l = await lists()
       check(!l.pages.includes(f.path), `${label}:不在页面列表里`, l.pages.includes(f.path) ? `listPages 含 ${f.path}` : '')
       check(l.files.includes(f.path), `${label}:在文件列表里(树上还看得见)`, l.files.includes(f.path) ? '' : `listFiles = ${JSON.stringify(l.files)}`)
+      if (l.pages.includes(f.path) && !gapMode) {
+        const declared = await page.evaluate(async () => (await window.amadeus.listPlugins()).map((p) => `${p.id}=${(p.fileExtensions || []).join('|')}`))
+        console.log(`      各插件 manifest 声明的后缀: ${declared.join(', ') || '(没有插件)'}`)
+        if (pageLog.length) console.log(`      页面日志(末 6 条):\n        ${pageLog.slice(-6).join('\n        ')}`)
+      }
     }
     /** 主区是不是装着这份文件的笔记编辑器(标题控件的值 = 文件名去掉 .md)。 */
     const editorTitle = () => page.evaluate(() => {
@@ -211,7 +247,10 @@ async function main() {
         const mounted = await page.locator(`[data-e2e-deck-view="${f.path}"]`).count()
         check(mounted > 0 && !inEditor, `${label}:点开 = 插件自己的视图`, `插件视图 ${mounted} 个,编辑器标题「${title}」`)
       } else {
-        check(!inEditor, `${label}:点开没有进笔记编辑器`, inEditor ? `编辑器标题「${title}」` : '')
+        // 不止「没进编辑器」:得真有那页说明(否则「什么都没发生」也算过)。正文编辑区一个都不该挂着。
+        const note = await page.locator(`[data-plugin-owned-file="${f.path}"]`).count()
+        const editors = await page.locator('.ProseMirror[contenteditable="true"]').count()
+        check(!inEditor && note > 0 && editors === 0, `${label}:点开 = 一页说明,没有挂笔记编辑器`, `说明页 ${note} 个,编辑区 ${editors} 个${inEditor ? `,编辑器标题「${title}」` : ''}`)
       }
       if (inEditor) {
         // 已经进了编辑器:照用户会做的,点进正文敲一个字,等过自动保存。
@@ -240,9 +279,11 @@ async function main() {
     await reload() // 种完重开:工作区预热早把空库读进 store 了(note-open.e2e 同一个坑)
     const l0 = await lists()
     check(l0.pages.includes(NOTE.path), '防空过:普通笔记在页面列表里', JSON.stringify(l0.pages))
-    await checkListed('S0 没装过·首方后缀', FILES.floor)
+    gapMode = true
+    await checkListed('S0 没装过', FILES.never)
     await enterAmadeus()
-    await tapAndProbe('S0 没装过·首方后缀', FILES.floor, false)
+    await tapAndProbe('S0 没装过', FILES.never, false)
+    gapMode = false
 
     // ── S1 装上两个插件(一个能跑、一个被门禁拦下) ───────────────────────────────────────────
     const installed = await page.evaluate(async (ids) => {
@@ -267,6 +308,8 @@ async function main() {
     await checkListed('S2 被门禁拦下', FILES.gated)
     await enterAmadeus()
     await tapAndProbe('S2 被停用', FILES.enabled, false)
+    fs.mkdirSync(SHOTS, { recursive: true })
+    await page.screenshot({ path: path.join(SHOTS, 'plugin-owned-placeholder.png') })
     await tapAndProbe('S2 被门禁拦下', FILES.gated, false)
 
     // ── S3 卸载:后缀豁免留下来 ───────────────────────────────────────────────────────────

@@ -37,6 +37,24 @@ void installMobileShim().then(async (ok) => {
   // 手机把引擎切到「我的电脑」后 backendUrl 就变成隧道地址了,云桥不能跟着走。
   const cloudApi = cloudApiBaseOf(cfg)
 
+  // Forsion 插件宿主 + 应用市场(2026-10-02):插件住在应用私有目录、不属于任何库 —— 叠在下面的转发壳上,
+  // 云端库 / 本地库两种模式(以及切库之后)同一份,不往两座库桥里各抄一遍。市场桥挂到 window.tangu,
+  // 必须早于 import('./mobileEntry')(bootstrapEngine 按 window.tangu?.marketList 注册入口)。
+  const plugins = installMobilePlugins({ cloudApiBase: () => cloudApi })
+
+  // 插件声明的文件后缀(`.deck.md` 之类:磁盘上是 .md,内容归插件管)。两座库桥都按它把这些文件排出笔记列表。
+  // ⚠️ 必须在建桥**之前**清点好(桌面主进程同理,同步预扫 manifest):本地库一建桥就按 listPages 建索引,云端库
+  // 先拿上次的树快照渲染首屏 —— 名单晚到一拍,这些文件就已经当笔记进了树和索引。读不出来 = 空名单(退回原行为),不挡启动。
+  let pluginExts: string[] = await plugins.host.fileExtensions().catch(() => [])
+  const refreshPluginExts = async (): Promise<void> => {
+    const next = await plugins.host.fileExtensions().catch(() => pluginExts)
+    if (next.join('\n') === pluginExts.join('\n')) return
+    pluginExts = next
+    // 装 / 卸插件改了名单:本地库的索引按新口径重建,树重列一遍(云端库的树每次现分,不用管)。
+    if (side === 'local') await (impl.reindex as (() => Promise<void>) | undefined)?.().catch(() => {})
+    void import('@/amadeus/store/pageStore').then((ps) => ps.usePageStore.getState().refreshStructure()).catch(() => {})
+  }
+
   type Bridge = Record<string, unknown>
   const makeBridge = (side: 'local' | 'cloud'): Bridge =>
     side === 'cloud'
@@ -46,16 +64,17 @@ void installMobileShim().then(async (ok) => {
           onAuthError: () => {
             void (window as unknown as { tangu?: { forsionLogout?: () => Promise<void> } }).tangu?.forsionLogout?.()
           },
+          pluginExts: () => pluginExts,
         }) as unknown as Bridge)
       : // 本地 Capacitor vault;cfg 供 fetchLinkMeta(书签卡 server 代理)/searchImages。
-        (createMobileAmadeusBridge({ apiBase: () => cloudApi, getToken }) as unknown as Bridge)
+        (createMobileAmadeusBridge({ apiBase: () => cloudApi, getToken, pluginExts: () => pluginExts }) as unknown as Bridge)
 
-  // Forsion 插件宿主 + 应用市场(2026-10-02):插件住在应用私有目录、不属于任何库 —— 叠在下面的转发壳上,
-  // 云端库 / 本地库两种模式(以及切库之后)同一份,不往两座库桥里各抄一遍。市场桥挂到 window.tangu,
-  // 必须早于 import('./mobileEntry')(bootstrapEngine 按 window.tangu?.marketList 注册入口)。
-  const plugins = installMobilePlugins({ cloudApiBase: () => cloudApi })
   const pluginHost: Record<string, unknown> = {
-    listPlugins: plugins.host.listPlugins,
+    // 渲染层装 / 卸 / 更新插件之后都会重新 listPlugins(pluginStore.reloadExternal)—— 借这一趟把后缀名单对齐。
+    listPlugins: async () => {
+      await refreshPluginExts()
+      return plugins.host.listPlugins()
+    },
     uninstallPlugin: plugins.host.uninstallPlugin,
     readPluginData: plugins.host.readPluginData,
     writePluginData: plugins.host.writePluginData,

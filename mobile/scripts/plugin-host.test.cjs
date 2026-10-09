@@ -289,6 +289,62 @@ const test = async (name, fn) => {
     await assert.rejects(h.uninstallPlugin('ghost'), /^Error: plugin-not-found$/)
   })
 
+  // ── fileExtensions(库这一层据此把插件文件排出笔记列表;真浏览器里的整条链在 scripts/plugin-filetypes.e2e.cjs) ──
+  await test('fileExtensions:只读 manifest、不过任何闸 —— 被门禁拦下的 / 仅桌面的 / main.js 读不出来的插件照样算', async () => {
+    const fs = memFs()
+    put(fs, 'plugins/ok/manifest.json', manifest({ id: 'ok', fileExtensions: ['.Deck.MD'] })); put(fs, 'plugins/ok/main.js', '')
+    put(fs, 'plugins/gated/manifest.json', manifest({ id: 'gated', apiVersion: 99, fileExtensions: ['.gated.md'] })); put(fs, 'plugins/gated/main.js', '')
+    put(fs, 'plugins/old/manifest.json', manifest({ id: 'old', minAppVersion: '99.0.0', fileExtensions: ['.old.md'] })); put(fs, 'plugins/old/main.js', '')
+    put(fs, 'plugins/desk/manifest.json', manifest({ id: 'desk', isDesktopOnly: true, fileExtensions: ['.desk.md'] }))
+    put(fs, 'plugins/nomain/manifest.json', manifest({ id: 'nomain', fileExtensions: ['.nomain.md', '.bin'] }))
+    const h = host(fs)
+    assert.deepEqual(await h.fileExtensions(), ['.bin', '.deck.md', '.desk.md', '.gated.md', '.nomain.md', '.old.md'])
+    // 防空过:这几个确实没在跑(listPlugins 把它们列成 blocked,或干脆不列)
+    const listed = Object.fromEntries((await h.listPlugins()).map((p) => [p.id, p.blocked ?? 'ok']))
+    assert.deepEqual(listed, { ok: 'ok', gated: 'api', old: 'minApp', desk: 'desktopOnly' })
+  })
+
+  await test('fileExtensions:只认专属后缀 —— 裸 .md / .txt、漏点的、非字符串一律不认(否则所有笔记都被排出列表)', async () => {
+    const fs = memFs()
+    put(fs, 'plugins/greedy/manifest.json', manifest({ id: 'greedy', fileExtensions: ['.md', '.markdown', '.txt', 'md', 'deck.md', '', 7, null, '.a b.md', '.fine.md'] }))
+    put(fs, 'plugins/broken/manifest.json', '{not json')
+    put(fs, 'plugins/none/manifest.json', manifest({ id: 'none', fileExtensions: 'x.md' }))
+    assert.deepEqual(await host(fs).fileExtensions(), ['.fine.md'])
+    assert.deepEqual(await host(memFs()).fileExtensions(), [])
+  })
+
+  await test('卸载之后后缀留下来(墓碑):两条卸载路径都记,重装再卸不丢别人的,墓碑不撞插件私有数据', async () => {
+    const fs = memFs()
+    const mk = createMobileMarket({ fs, cloudApiBase: () => 'https://c/api', fetch: async () => new Response('{}'), download: async () => enc(''), t: T })
+    put(fs, 'plugins/a/manifest.json', manifest({ id: 'a', fileExtensions: ['.a.md'] })); put(fs, 'plugins/a/main.js', '')
+    put(fs, 'plugins/b/manifest.json', manifest({ id: 'b', fileExtensions: ['.b.md'] })); put(fs, 'plugins/b/main.js', '')
+    put(fs, 'plugins/c/manifest.json', manifest({ id: 'c' })); put(fs, 'plugins/c/main.js', '')
+    const h = host(fs)
+    await h.writePluginData('a', '{"keep":1}')
+    await h.uninstallPlugin('a')                       // 设置页的卸载
+    await mk.marketUninstall('amadeus-plugin', 'b')    // 商店的卸载
+    await h.uninstallPlugin('c')                       // 没声明后缀的:不写墓碑
+    assert.deepEqual(await h.listPlugins(), [])
+    assert.deepEqual(await h.fileExtensions(), ['.a.md', '.b.md'])
+    assert.equal(await h.readPluginData('a'), '{"keep":1}')
+    // 进程重启(新建宿主)后还在;墓碑槽名不是合法插件 id,公开的读写接口够不着它
+    assert.deepEqual(await host(fs).fileExtensions(), ['.a.md', '.b.md'])
+    await assert.rejects(h.writePluginData('.ext-tombstones', '[]'), /invalid-plugin-id/)
+  })
+
+  await test('墓碑记不下来 → 不删插件(抛出去):宁可卸载失败,也不让它的文件掉回笔记列表', async () => {
+    const fs = memFs()
+    put(fs, 'plugins/a/manifest.json', manifest({ id: 'a', fileExtensions: ['.a.md'] })); put(fs, 'plugins/a/main.js', '')
+    const h = host(fs)
+    fs.failWriteAt = 1
+    await assert.rejects(h.uninstallPlugin('a'), /killed/)
+    assert.ok(fs.files.has('plugins/a/manifest.json'))
+    assert.deepEqual(await h.fileExtensions(), ['.a.md'])
+    // 写到一半的那一槽是坏的:下一次卸载照样记得下来(双槽,读取方跳过坏槽)
+    await h.uninstallPlugin('a')
+    assert.deepEqual(await h.fileExtensions(), ['.a.md'])
+  })
+
   // ── 插件私有数据 ─────────────────────────────────────────────────────────
   await test('readPluginData / writePluginData 往返;没写过 = null;非法 id 读 null、写拒', async () => {
     const h = host(memFs())
