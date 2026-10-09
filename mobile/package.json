@@ -36,6 +36,7 @@
     "emu:unitrelay": "node scripts/unit-relay-emu.cjs",
     "emu:savedl": "node scripts/save-download-emu.cjs",
     "emu:nativeshell": "node scripts/native-shell-emu.cjs",
+    "emu:launchericon": "node scripts/launcher-icon-upgrade-emu.cjs",
     "emu:phone": "node scripts/phone-control-emu.cjs"
   },
   "dependencies": {

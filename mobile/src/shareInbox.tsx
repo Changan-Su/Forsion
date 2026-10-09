@@ -13,7 +13,7 @@ import { loadPickedFiles } from './pickedFiles'
 import { whenShellReady } from './liveIsland'
 
 /** Android share target: "Share → Forsion" in another app's share sheet (Kotlin: ShareInboxPlugin, the SEND /
- *  SEND_MULTIPLE filters on MainActivity). What was shared lands on a native sheet that asks where it goes:
+ *  SEND_MULTIPLE filters on AppActivity). What was shared lands on a native sheet that asks where it goes:
  *  a new chat, the chat the user was last in, or a note. A chat gets it in its message box — text appended to the
  *  draft, documents as attachments through the same intake (and caps) as "Add files". Nothing is sent: what another app hands
  *  over is not ours to forward to an agent, the user reads it and presses send.

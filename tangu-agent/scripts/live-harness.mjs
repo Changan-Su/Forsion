@@ -21,6 +21,7 @@
  *   npm run live:harness -- --only skillpick,settingsnav     # 反馈 6a239e58(10-04):指定技能清单只列目录、正文经 use_skill 取(改 services/skillLoadout.ts 后跑);
  *                                                           #   「语音在哪设置」经界面命令直达设置页、不用电脑操控,网页检索次数只计数(改 desktop open-settings 的 description / params 后跑)
  *   npm run live:harness -- --only pluginlook                # 改 skills/forsion-plugin 的「外观开关:跟着宿主走」一节后跑:须经 use_skill 取回正文并答出那一节的三样
+ *   npm run live:harness -- --only pluginicon                # 改 skills/forsion-plugin「Startup appearance」一节里图标作用范围那两句后跑:须装载手册并答出「桌面端退出后仍保留、安卓桌面只跟内置图标」
  *   npm run live:harness -- --only storename                 # 改名「商店」(10-05):改 skills/forsion-plugin / forsion-connect 里的商店叫法后跑;两问不点名技能,须装载技能并用新名字指路
  *   npm run live:harness -- --only plugin                    # 引擎插件热插拔(10-02):夹具插件开着调得到、停用后调不到、再启用回来(改 plugins/bootstrap 生命周期后跑)
  *   npm run live:harness -- --only btw                       # 旁聊 /btw(09-22):带主会话上下文答题外话、追问带前轮、不写回、主 run 在飞也能问;改 services/aside.ts 提示词后跑
@@ -174,6 +175,7 @@ KEYS.push('cuoff');
 KEYS.push('dreamseed');
 KEYS.push('pageinstructions', 'dispatch');
 KEYS.push('storename', 'storeview');
+KEYS.push('pluginicon');
 KEYS.push('harnessopen');
 KEYS.push('equip');
 KEYS.push('musereview');
@@ -219,6 +221,7 @@ OPT_IN.add('equip'); // 三个 run;只在动装备层(HARNESS equip → isDeferr
 OPT_IN.add('musereview'); // 开 Muse 并往隔离库里写用量行:单独跑,别连累别的场景的工具表 / Muse 状态。
 OPT_IN.add('projmem'); // 四个 run、两个 agent 两个项目;只在动项目记忆(services/projectMemory.ts、remember 的 scope)时才有信息量。
 OPT_IN.add('pluginlook'); // 一个 run;只在动 skills/forsion-plugin 的「外观开关」一节或 use_skill 时才有信息量。
+OPT_IN.add('pluginicon'); // 一个 run;只在动 forsion-plugin 手册「Startup appearance」一节里图标作用范围那两句时才有信息量。
 OPT_IN.add('storeview'); // 一个 run;只在动 forsion-plugin 手册里 registerStoreView 那行、或商店左栏的插件页接缝时才有信息量。
 OPT_IN.add('skillcreate'); // 四个 run;只在动 manage_skill / use_skill / 随包的 skill-creator 技能时才有信息量。
 OPT_IN.add('realuse'); // 真实使用模拟:每轮 12 个 run(--rounds),--usage-db 再加一个 Muse 周期;单独跑。
@@ -2883,6 +2886,21 @@ Then reply with only the command output.`,
     const used = ev.toolResults.some((r) => r.name === 'use_skill' && !r.isError && r.fullLength > 1000);
     const scoped = /首方|第一方|内置包|官方|Forsion Extend|first[- ]party|不对.{0,12}(开放|生效)|只对.{0,24}生效|不(会)?显示|用不到|不支持|没有.{0,10}(接口|办法|开放)/i.test(ev.content);
     return { ok: !ev.error && used && scoped, detail: ev.error || `手册${used ? '已装载' : '未装载'};${scoped ? '说明了只给首方包 / 普通插件用不了' : '没说明限制'};提到 registerStoreView:${/registerStoreView/.test(ev.content) ? '是' : '否'};工具 ${ev.toolCalls.join(',') || '无'}`, output: ev.content, ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls };
+  });
+
+  // 插件贡献的应用图标管到哪(10-09):桌面安装版把图标写进系统,退出后仍保留;安卓桌面图标只跟内置图标,插件图标只在 App 内。
+  // 手册「Startup appearance」一节那两句写明了。问法不点名技能;MARKER 是新句里才有的原话,且须落在模型看得到的那部分
+  // (工具结果 48k 硬帽只留头 34k + 尾 12k,这一节在尾部)。答案按「①是 / ②否」定格式,免得从散文里猜肯定否定。
+  // 负对照 = 改前的正文(「installers and pinned shortcut artwork are unchanged」,没有 Android 那句):MARKER 不在 → 红。
+  await scenario('pluginicon', 'pluginicon 插件图标管到哪:桌面端退出后仍保留、安卓桌面只跟内置图标', async () => {
+    const MARKER = 'stays after Forsion quits';
+    const ev = await run(`live-pluginicon-${Date.now()}`, '我的 Forsion 插件用 ctx.registerAppearance 贡献了一个应用图标,用户在安装版里选中了它。①退出 Forsion 之后,macOS 程序坞 / Windows 任务栏快捷方式上显示的还是这个图标吗?②安卓手机桌面上的 Forsion 图标会变成它吗?先查清楚再回答,不要改任何文件。只回两行:第一行以「①是」或「①否」开头,第二行以「②是」或「②否」开头,各跟一句理由。');
+    const seen = (r) => (r.fullLength > 48_000 ? r.full.slice(0, 34_000) + r.full.slice(-12_000) : r.full);
+    const read = ev.toolResults.some((r) => r.name === 'use_skill' && !r.isError && seen(r).includes(MARKER));
+    const c = ev.content || '', kept = /①\s*是/.test(c), builtinOnly = /②\s*否/.test(c);
+    return { ok: !ev.error && ev.done && read && kept && builtinOnly,
+      detail: ev.error || `手册新句${read ? '到了模型眼前' : '没到模型眼前(未装载,或正文里没有)'};①退出后仍保留:${kept ? '答是' : '没答是'};②安卓桌面:${builtinOnly ? '答否' : '没答否'};工具 ${ev.toolCalls.join(',') || '无'}`,
+      output: ev.content, ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls };
   });
 
   // 指定技能清单(10-04,反馈 6a239e58):enabled_skill_ids 只收窄目录,正文不进 system,模型照样经 use_skill 取到。

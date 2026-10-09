@@ -263,6 +263,8 @@ function setWindowTangu(backendUrl: string, token: string, native: boolean): voi
   ;(window as unknown as { tangu: unknown }).tangu = {
     cloudWeb: true,
     mobile: true,
+    // 桌面图标能跟随内置应用图标(仅安卓 App;设置页据此出那一行说明,实际切换在 launcherIcon.ts)。
+    launcherIcon: native || undefined,
     getConfig: async () => config(),
     // 契约同 electron 的 config:set —— 并入并回全份快照。共享渲染层的 patchConfig / rememberDefaults /
     // setDefaultModel 都打这里,移动端此前整个缺席(可选链不短路 → 直接 TypeError,见 e2e:settingscfg)。

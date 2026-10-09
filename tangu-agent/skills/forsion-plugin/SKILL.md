@@ -2,7 +2,7 @@
 name: forsion-extension-development
 description: 当用户要给 Forsion / Tangu 做插件、主题、Space、智能体(agent)或捆绑包(bundle)——或要把某个能力做成可分发/可上架商店的扩展——时使用。内置五类官方模板(samples/),讲清各自的格式基线与硬约束(尤其两种"插件"是完全不同的系统),照抄模板改比从零写靠谱。
 metadata:
-  version: 1.24.1
+  version: 1.25.0
   author: Forsion
   category: Forsion
 ---
@@ -1268,11 +1268,11 @@ For API-backed public documents, `ctx.ui.mountMarkdownEditor` accepts `previewBa
 
 `ctx.registerAppearance?.({ id, label, labelEn, icon?, splash? })` registers a choice in Settings → Appearance → Startup and icons. `id` is a stable ASCII slug; the host namespaces it by plugin ID. Provide both localized labels. `icon` and `splash` are embedded base64 data images (`image/png`, `jpeg`, `webp`, `gif`, `svg+xml`), each at most 2,000,000 characters and 4096 × 4096 pixels. URLs, HTML, executable scripts and arbitrary CSS are not accepted by this contract. Render SVG as an image, never inject it into the host DOM.
 
-Registration never selects or replaces the user's appearance. On selection, the host validates the image and snapshots it for offline startup before plugin code loads. Icons become static 256 × 256 PNGs for the application, macOS Dock and running Windows taskbar windows; installers and pinned shortcut artwork are unchanged. Animated GIF/WebP/SVG may be used as splash artwork. Reduced motion uses the static icon. The host owns the readiness exit and 10-second safety ceiling, so a plugin cannot extend loading time.
+Registration never selects or replaces the user's appearance. On selection, the host validates the image and snapshots it for offline startup before plugin code loads. Icons become static 256 × 256 PNGs and show inside the application at once. With the user's "Use in Dock / taskbar" switch on, an installed desktop build also saves the icon to the system, so it stays after Forsion quits: the Finder / Dock / Launchpad icon on macOS, and the Start menu, desktop and taskbar shortcuts on Windows (written again after an update). On Linux and in development builds it lasts only while the app runs. The installer's own icon is unchanged. On Android the home screen icon can only switch between icons shipped inside the app, so a plugin's icon (like an uploaded picture) stays inside the app and never becomes the home screen icon. Animated GIF/WebP/SVG may be used as splash artwork. Reduced motion uses the static icon. The host owns the readiness exit and 10-second safety ceiling, so a plugin cannot extend loading time.
 
 The returned disposer removes only its own current registration. Disable, unload and failed setup revoke registrations; disabling or removing the plugin clears selected cached assets. A normal reload retains the selected snapshot: select the preset again to refresh artwork after editing it. Stale contexts cannot register again. Always feature-detect with optional chaining. A complete installable example is in `samples/forsion-sample-appearance/`.
 
-中文：插件只贡献选项，不自动改用户选择。选择后缓存图像供离线启动使用，图标同步到应用内部及运行中的 Dock／任务栏；普通重载保留快照，重新选择可更新素材。禁用或移除插件时恢复默认，旧上下文不能重新注册。安装包与系统固定的快捷方式图标不随此设置修改。
+中文：插件只贡献选项，不自动改用户选择。选择后缓存图像供离线启动使用，图标立即同步到应用内部；「同步到 Dock／任务栏」开着时，桌面安装版还会把它写进系统，退出 Forsion 后仍保留（macOS 的访达／Dock／启动台图标，Windows 的开始菜单、桌面和任务栏快捷方式，更新后重新写入；Linux 与开发版仅运行时）。安卓桌面图标只能在应用内置的图标之间切换，插件图标只在 App 内显示。普通重载保留快照，重新选择可更新素材。禁用或移除插件时恢复默认，旧上下文不能重新注册。安装包自身的图标不随此设置修改。
 
 
 ## Local plugin task APIs (Dispatch host branch, 2026-10-04)

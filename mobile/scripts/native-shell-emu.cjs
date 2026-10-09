@@ -327,7 +327,10 @@ const dom = {
 const ui = () => h.nodes(OUT)
 // The activity class keeps its name under any applicationId (`-PnativePreview` installs com.forsion.tangu.nativepreview):
 // PKG=com.forsion.tangu.nativepreview runs the same harness against the side-by-side preview package.
-const ACTIVITY = `${PKG}/com.forsion.tangu.MainActivity`
+// AppActivity is the activity itself; `.MainActivity` is only the default home screen entry and goes away with the app icon.
+// ACTIVITY_CLASS=MainActivity runs this harness against a build from before that (≤ 2.13.x), for comparisons.
+const ACTIVITY_CLASS = process.env.ACTIVITY_CLASS || 'AppActivity'
+const ACTIVITY = `${PKG}/com.forsion.tangu.${ACTIVITY_CLASS}`
 const resumed = () => h.adb('shell', 'dumpsys', 'activity', 'activities').split('\n').some((l) => l.includes('topResumedActivity=') && l.includes(` ${PKG}/`))
 const webViewNode = (list) => list.find((n) => n.class === 'android.webkit.WebView')
 const sheetOpen = (list) => !!h.byId(list, 'nativeSheet.sheet')
@@ -1317,6 +1320,113 @@ const tabCountText = (list) => {
     }
   })
 
+  // Settings → Appearance → App icon. Inside the app any picture works; the icon on the home screen is a launcher entry,
+  // and Android only lets an app switch between the entries its manifest declares (activity-alias): built-in icons follow,
+  // an upload or a plugin icon cannot. The default entry keeps the component name `.MainActivity` so the icon people
+  // already have on their home screen survives the update. The switch waits until the app is left: in front it would
+  // take the user's task down with the old entry (scripts/launcher-icon-upgrade-emu.cjs starts the app the way a
+  // launcher does and shows that; here the app was started by its activity name, which survives either way).
+  await check('app icon: a built-in pick changes the mark in the app at once and the home screen icon once the app is left; anything else keeps the default entry; shortcuts move along', async () => {
+    const KEY = 'forsion_startup_appearance_v1'
+    const select = "document.querySelector('.settings-page--mobile #startup-icon')"
+    const toggle = "[...document.querySelectorAll('.settings-page--mobile .startup-appearance [role=switch]')].find((e) => e.getAttribute('aria-label') === '同步到桌面图标')"
+    const saved = () => cdp.eval(`(() => { const v = JSON.parse(localStorage.getItem('${KEY}') || 'null'); return v ? { icon: v.icon && v.icon.id, native: v.nativeIcon } : null })()`)
+    const entry = () => h.adb('shell', 'cmd', 'package', 'resolve-activity', '--brief', '-c', 'android.intent.category.LAUNCHER', PKG).trim().split('\n').pop().trim().replace(`/${PKG}.`, '/.')
+    const DEFAULT = `${PKG}/.MainActivity`, ARIOSO = `${PKG}/.IconArioso`
+    const pid = () => h.adb('shell', 'pidof', PKG).trim()
+    const shortcuts = () => {
+      const out = h.adb('shell', 'dumpsys', 'shortcut', '-p', PKG)
+      const own = out.slice(out.indexOf(`Package: ${PKG} `))
+      const blocks = own.slice(0, own.indexOf('\n  Package: ', 1) > 0 ? own.indexOf('\n  Package: ', 1) : undefined).split('ShortcutInfo {').slice(1)
+      return blocks.map((b) => ({ id: /id=([^,]+)/.exec(b)?.[1], activity: /activity=ComponentInfo\{([^}]+)\}/.exec(b)?.[1], off: !/disabledReason=\[Not disabled\]/.test(b) }))
+    }
+    const back = async () => {
+      h.adb('shell', 'am', 'start', '-n', ACTIVITY)
+      assert.ok((await h.waitNodes((l) => (textOf(l, 'nativeChrome.title') === '外观' ? l : null), { timeout: 8000 })).hit, 'the app did not come back to the Appearance page')
+      await h.pause(400)
+    }
+    /** Nothing changes while the app is in front; leaving it brings the entry asked for. */
+    const afterLeaving = async (want, was) => {
+      await h.pause(2000)
+      assert.equal(entry(), was, 'the home screen entry changed while the app was in front')
+      assert.ok(resumed(), 'the app left the foreground on its own')
+      h.key(3)
+      const end = Date.now() + 10000
+      while (entry() !== want && Date.now() < end) await h.pause(300)
+      assert.equal(entry(), want, 'the home screen entry after leaving the app')
+    }
+    const pick = async (value) => {
+      const index = await cdp.eval(`[...${select}.options].findIndex((o) => o.value === ${JSON.stringify(value)})`)
+      assert.ok(index >= 0, `control: no "${value}" among the icon options`)
+      await tapEl(select)
+      await tapId(`nativeSheet.item.opt:${index}`, await waitSheet(true))
+      await waitSheet(false)
+    }
+    await accountItem('rb-settings')
+    assert.ok(await h.waitPage(cdp, settingsOpen, 5000), 'settings did not open')
+    await h.pause(600)
+    await tapEl("[...document.querySelectorAll('.settings-mobile-row')].find((e) => e.querySelector('strong')?.textContent.trim() === '外观')")
+    assert.ok((await h.waitNodes((l) => (textOf(l, 'nativeChrome.title') === '外观' ? l : null), { timeout: 6000 })).hit, 'the Appearance page did not open')
+    assert.ok(await h.waitPage(cdp, `!!${select}`, 5000), 'no app icon control on the page')
+    const app = pid()
+    try {
+      assert.equal(entry(), DEFAULT, 'control: the run starts on the default entry')
+      const published = shortcuts().length
+      assert.ok(published > 0, 'control: the app published no Space shortcuts')
+      await pick('builtin:arioso')
+      assert.ok(await h.waitPage(cdp, `(() => { const v = JSON.parse(localStorage.getItem('${KEY}') || 'null'); return !!v && !!v.icon && v.icon.id === 'builtin:arioso' })()`, 4000), `the pick was not saved (${JSON.stringify(await saved())})`)
+      assert.ok(await cdp.eval("document.querySelector('.startup-appearance-icon-label img').src.startsWith('data:image/png')"), 'the mark in the app did not change')
+      const text = await cdp.eval("document.querySelector('.settings-page--mobile .startup-appearance').innerText")
+      assert.ok(text.includes('同步到桌面图标') && text.includes('离开应用后生效') && !/Dock|任务栏/.test(text), `the phone page does not explain the home screen icon (${text.replace(/\s+/g, ' ').slice(0, 160)})`)
+      await cdp.eval("(document.querySelector('.settings-page--mobile .startup-appearance').scrollIntoView({ block: 'start' }), true)")
+      await h.pause(900) // a screenshot taken while the page still scrolls mixes two positions
+      shot('40-app-icon-arioso-settings')
+      await afterLeaving(ARIOSO, DEFAULT)
+      // Shortcuts hang on a launcher entry: the system drops those of an entry that goes away (and the launcher takes
+      // pinned ones off the home screen). They are moved to the new entry before the old one is switched off.
+      await h.pause(1500)
+      const list = shortcuts()
+      assert.ok(list.length === published && !list.some((x) => x.off || !x.activity.endsWith('.IconArioso')), `Space shortcuts were not moved to the new entry (${published} before): ${JSON.stringify(list)}`)
+      // What the user looks at: the launcher's own drawing of the entry.
+      h.adb('shell', 'input', 'swipe', '540', '1900', '540', '500', '300')
+      const drawn = await h.waitNodes((l) => l.find((n) => n.package !== PKG && (n.text === 'Forsion' || n['content-desc'] === 'Forsion')), { timeout: 8000 })
+      assert.ok(drawn.hit, 'the launcher lists no Forsion entry')
+      shot('41-app-icon-arioso-launcher')
+      h.tapNode(drawn.hit) // and it opens the app that is already running
+      assert.ok((await h.waitNodes((l) => (textOf(l, 'nativeChrome.title') === '外观' ? l : null), { timeout: 8000 })).hit, 'the new entry did not bring the app back')
+      assert.equal(pid(), app, 'the new entry started a second process')
+      // The switch, then things Android cannot draw on the home screen: all leave for the default entry.
+      await tapEl(toggle)
+      await afterLeaving(DEFAULT, ARIOSO)
+      await back()
+      await tapEl(toggle)
+      await afterLeaving(ARIOSO, DEFAULT)
+      await back()
+      await cdp.eval("Capacitor.Plugins.LauncherIcon.set({ id: 'upload' }).then(() => true)")
+      await afterLeaving(DEFAULT, ARIOSO)
+      await back()
+      await cdp.eval("Capacitor.Plugins.LauncherIcon.set({ id: 'builtin:arioso' }).then(() => true)")
+      await afterLeaving(ARIOSO, DEFAULT)
+      await back()
+      await pick('')
+      assert.equal((await saved()).icon, null, 'the default pick was not saved')
+      await afterLeaving(DEFAULT, ARIOSO)
+      await h.pause(1500)
+      assert.ok(shortcuts().length === published && !shortcuts().some((x) => x.off || !x.activity.endsWith('.MainActivity')), `Space shortcuts did not come back with the default entry: ${JSON.stringify(shortcuts())}`)
+      await back()
+      assert.equal(pid(), app, 'the app was restarted on the way')
+    } finally {
+      h.adb('shell', 'am', 'start', '-n', ACTIVITY)
+      await h.pause(800)
+      if (sheetOpen(ui())) { h.key(4); await waitSheet(false) }
+      await cdp.eval(`Promise.resolve(Capacitor.Plugins.LauncherIcon && Capacitor.Plugins.LauncherIcon.set({ id: null })).catch(() => null).then(() => (localStorage.removeItem('${KEY}'), true))`)
+      if (entry() !== DEFAULT) { h.key(3); await h.pause(2500); h.adb('shell', 'am', 'start', '-n', ACTIVITY); await h.pause(800) }
+      await tapId('nativeChrome.close')
+      assert.ok(await h.waitPage(cdp, `!(${settingsOpen})`, 5000), '× did not close settings')
+      assert.ok((await h.waitNodes((l) => h.byId(l, 'nativeChrome.more'), { timeout: 5000 })).hit, 'shell bar did not return')
+    }
+  })
+
   // The phone's settings keep "open the app in" (Settings → Space). It must do something there: the boot code that reads
   // it was written for the desktop shell (bootstrapEngine: `UI_MODE !== 'mobile'`, and UI_MODE is 'desktop' inside the app).
   await check('startup Space on the phone: a boot lands on the default (Home), on the Space the setting names, or on the last one — as set', async () => {
@@ -2061,7 +2171,8 @@ const tabCountText = (list) => {
     // The system offers the app for a share (the starts below name the activity, which would work without any filter).
     for (const [action, type] of [['android.intent.action.SEND', 'text/plain'], ['android.intent.action.SEND', 'image/png'], ['android.intent.action.SEND_MULTIPLE', 'application/pdf']]) {
       const offered = h.adb('shell', 'cmd', 'package', 'query-activities', '--brief', '-a', action, '-t', type)
-      assert.ok(offered.includes(`${PKG}/com.forsion.tangu.MainActivity`), `not a share target for ${action} ${type}`)
+      // `--brief` prints `pkg/.Class` when the class lives in the package, the full name under the preview applicationId
+      assert.ok((offered.split('\n').find((l) => l.trim().startsWith(`${PKG}/`)) || '').trim().replace(`/${PKG}.`, '/.').replace('/com.forsion.tangu.', '/.') === `${PKG}/.${ACTIVITY_CLASS}`, `not a share target for ${action} ${type}`)
     }
     await openChat('E2E Session One')
     await setDraft('typed first')

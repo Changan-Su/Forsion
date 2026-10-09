@@ -10,7 +10,7 @@ import com.getcapacitor.annotation.CapacitorPlugin
 
 /**
  * "Share → Forsion": the app is a target of the system share sheet (ACTION_SEND / ACTION_SEND_MULTIPLE filters on
- * MainActivity). What arrives is handed to the page as one `shared` event —
+ * AppActivity). What arrives is handed to the page as one `shared` event —
  * `{ text, files: [{ uri, name, type, size }], skipped: [name] }` — and the page asks where it goes: a chat's message
  * box (text into the draft, documents as attachments) or a note (mobile/src/shareInbox.tsx). Nothing is sent on the
  * user's behalf.

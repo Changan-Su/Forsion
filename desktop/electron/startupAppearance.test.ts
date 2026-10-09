@@ -4,32 +4,37 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 const mock = vi.hoisted(() => ({
   dir: '', handlers: new Map<string, (...args: any[]) => any>(), listeners: new Map<string, (...args: any[]) => any>(),
-  dock: vi.fn(), windowIcon: vi.fn(), send: vi.fn(),
+  dock: vi.fn(), windowIcon: vi.fn(), send: vi.fn(), packaged: false, keepMac: vi.fn(async () => {}), keepWindows: vi.fn(async () => {}),
   animation: vi.fn(() => ({ prefersReducedMotion: false })),
   gpu: vi.fn(() => ({ gpu_compositing: 'disabled_software' })),
 }))
 vi.mock('electron', () => ({
-  app: { getPath: () => mock.dir, isPackaged: false, dock: { setIcon: mock.dock }, on: (key: string, cb: any) => mock.listeners.set(key, cb), getGPUFeatureStatus: mock.gpu },
+  app: { getPath: () => mock.dir, get isPackaged() { return mock.packaged }, dock: { setIcon: mock.dock }, on: (key: string, cb: any) => mock.listeners.set(key, cb), getGPUFeatureStatus: mock.gpu },
   ipcMain: { on: (key: string, cb: any) => mock.listeners.set(key, cb), handle: (key: string, cb: any) => mock.handlers.set(key, cb) },
   systemPreferences: { getAnimationSettings: mock.animation },
+  shell: { tag: 'shell' },
   BrowserWindow: { getAllWindows: () => [{ isDestroyed: () => false, setIcon: mock.windowIcon, webContents: { send: mock.send } }] },
   nativeImage: {
     createFromPath: () => ({ isEmpty: () => false, tag: 'default' }),
     createFromDataURL: (url: string) => ({ isEmpty: () => false, getSize: () => ({ width: 1, height: 1 }), tag: url, toBitmap: () => Object.assign(Buffer.from([255, 255, 255, 255]), { tag: url }) }),
-    createFromBitmap: (bitmap: Buffer & { tag: string }) => ({ isEmpty: () => false, tag: bitmap.tag }),
+    createFromBitmap: (bitmap: Buffer & { tag: string }) => ({ isEmpty: () => false, getSize: () => ({ width: 1, height: 1 }), toPNG: () => Buffer.from(bitmap.tag), tag: bitmap.tag }),
   },
 }))
+vi.mock('./systemIcon', () => ({ keepMacIcon: mock.keepMac, keepWindowsIcon: mock.keepWindows }))
 import { registerStartupAppearance } from './startupAppearance'
 // Registered when the module loads, before beforeEach clears the map.
 const gpuReports = mock.listeners.get('gpu-info-update')!
 const png = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aD1sAAAAASUVORK5CYII='
 const asset = { id: 'plugin:probe:one', label: 'Probe', pluginId: 'probe', image: png }
-const platform = process.platform
+const platform = process.platform, execPath = process.execPath
 beforeEach(async () => {
   mock.dir = await mkdtemp(join(tmpdir(), 'appearance-test-'))
-  mock.handlers.clear(); mock.listeners.clear(); vi.clearAllMocks()
+  mock.handlers.clear(); mock.listeners.clear(); vi.clearAllMocks(); mock.packaged = false
 })
-afterEach(async () => { Object.defineProperty(process, 'platform', { value: platform }); await rm(mock.dir, { recursive: true, force: true }) })
+afterEach(async () => {
+  Object.defineProperty(process, 'platform', { value: platform }); Object.defineProperty(process, 'execPath', { value: execPath })
+  await rm(mock.dir, { recursive: true, force: true })
+})
 const update = (patch: unknown, owner?: string) => mock.handlers.get('appearance:update')!({ trusted: true }, patch, owner)
 const initial = () => { const event = { returnValue: undefined }; mock.listeners.get('appearance:initial')!(event); return event.returnValue as any }
 describe('desktop appearance persistence and OS icon', () => {
@@ -85,6 +90,37 @@ describe('desktop appearance persistence and OS icon', () => {
     await update({ nativeIcon: false })
     expect(mock.windowIcon).toHaveBeenLastCalledWith(expect.objectContaining({ tag: 'default' }))
     expect(mock.dock).not.toHaveBeenCalled()
+  })
+  it('hands the icon to the system in packaged builds only: at launch, on every change, and back to default', async () => {
+    Object.defineProperty(process, 'platform', { value: 'darwin' })
+    Object.defineProperty(process, 'execPath', { value: '/Applications/Forsion.app/Contents/MacOS/Forsion' })
+    await registerStartupAppearance(() => true)
+    await update({ icon: asset })
+    expect(mock.keepMac).not.toHaveBeenCalled() // development: the bundle is Electron's own
+    mock.packaged = true
+    ;(process as any).resourcesPath = mock.dir
+    await registerStartupAppearance(() => true)
+    const last = async () => { await vi.waitFor(() => expect(mock.keepMac).toHaveBeenCalled()); const call = mock.keepMac.mock.calls.at(-1) as any[]; mock.keepMac.mockClear(); return call }
+    let [target, key, image] = await last()
+    expect(target).toEqual({ bundle: '/Applications/Forsion.app', dir: mock.dir })
+    expect(key).toBe(png)
+    expect(image().toString()).toBe(png)
+    await update({ nativeIcon: false })
+    expect((await last())[1]).toBeNull()
+    await update({ nativeIcon: true })
+    expect((await last())[1]).toBe(png)
+    await update({ icon: null })
+    expect((await last())[1]).toBeNull()
+
+    Object.defineProperty(process, 'platform', { value: 'win32' })
+    Object.defineProperty(process, 'execPath', { value: 'C:/Forsion/Forsion.exe' })
+    await update({ icon: asset })
+    await vi.waitFor(() => expect(mock.keepWindows).toHaveBeenCalled())
+    ;[target, key] = mock.keepWindows.mock.calls.at(-1) as any[]
+    expect(target).toMatchObject({ shell: { tag: 'shell' }, exe: 'C:/Forsion/Forsion.exe', dir: mock.dir })
+    expect(target.folders.length).toBeGreaterThanOrEqual(3)
+    expect(key).toBe(png)
+    expect(mock.keepMac).not.toHaveBeenCalled()
   })
   it('recovers a damaged startup file without blocking application startup', async () => {
     await writeFile(join(mock.dir, 'startup-appearance.json'), '{bad')
