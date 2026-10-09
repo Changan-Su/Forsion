@@ -237,7 +237,11 @@ async function main() {
           await center(other); await other.check()
           check('切换选项后内容跟着变', shown !== await ui.innerText())
         } else if (c.key === 'user-research') {
-          r.retrievedUrls = ev.results.filter(x => ['web_fetch', 'browser_navigate'].includes(x.name) && succeeded(x) && x.result.length > 400).map(x => {
+          // A web_fetch result ending in the engine's own "got almost none of this page's text" note is a title-only shell
+          // (tangu-agent/src/tools/builtin/webFetch.ts jsShellNote; the wording is pinned by test/webFetchShellNote.test.ts).
+          // The note alone is 250+ characters, so without this such a result passes the length line and counts as page text.
+          const shell = x => x.name === 'web_fetch' && x.result.includes("[note] web_fetch got almost none of this page's text")
+          r.retrievedUrls = ev.results.filter(x => ['web_fetch', 'browser_navigate'].includes(x.name) && succeeded(x) && !shell(x) && x.result.length > 400).map(x => {
             const call = ev.calls.find(c => c.id === x.id)
             return parse(x.result)?.url || parse(call?.arguments)?.url
           }).filter(Boolean)
