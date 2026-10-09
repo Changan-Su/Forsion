@@ -24,6 +24,15 @@ const ARTICLES_PAGE = `<html><body>
 const SPA_SHELL = `<html><head><script>window.__DATA__=${'{"k":"v"},'.repeat(1500)}</script></head>
 <body><div id="root"></div><main></main></body></html>`;
 
+// 仿 obsidian.md/help(Obsidian Publish):正文由外链 /app.js 拉,静态 HTML 里只有 <title> 和一个转圈的 svg,内联脚本才几百字符
+const titleOnlyShell = (scripts = true): string => `<!doctype html><html lang="en"><head><meta charset="utf-8"/>
+<style class="preload">html,body{margin:0;height:100%}</style>${scripts ? '<script defer="defer" src="/app.js?5e3dc6f6"></script>' : ''}
+<title>How Obsidian stores data - Obsidian Help</title>
+${scripts ? '<script type="text/javascript">window.siteInfo={"uid":"f786","status":"active"};window.preloadPage=fetch("/access/f786/x.md");</script>' : ''}
+<meta name="description" content="How Obsidian stores data - Obsidian Help"></head>
+<body class="theme-light"><div class="preload" style="text-align:center"><svg style="width:50px" viewBox="0 0 100 100"><title>spinner</title><path d="M73,50c0-12.7"/></svg></div>
+${scripts ? "<script>(function(){let t=localStorage.getItem('site-theme')})();</script>" : ''}</body></html>`;
+
 // ── convertHtml / htmlToText ─────────────────────────────────────────────────
 
 describe('extraction', () => {
@@ -125,6 +134,39 @@ describe('isLikelyJsShell', () => {
     const html = `<html><head><script>${'x'.repeat(12_000)}</script></head><body>
 <a href="/1">a</a><a href="/2">b</a><a href="/3">c</a></body></html>`;
     expect(isLikelyJsShell(convertHtml(html))).toBe(false);
+  });
+
+  // ── 正文靠外链脚本拉的壳:内联脚本很少,上面那条(内联 >10k)认不出 ──
+  it('only the <title> came back and the page loads scripts = shell', () => {
+    const c = convertHtml(titleOnlyShell());
+    expect(c.text).toBe('How Obsidian stores data - Obsidian Help'); // 模型拿到的就这一行
+    expect(c).toMatchObject({ bodyTextLen: 0, scriptTags: 3, linkCount: 0 });
+    expect(c.scriptChars).toBeLessThan(1_000);
+    expect(isLikelyJsShell(c)).toBe(true);
+  });
+  it('no <title> either: an empty page that loads a script = shell', () => {
+    expect(isLikelyJsShell(convertHtml('<html><head><script src="/app.js"></script></head><body><div id="root"></div></body></html>'))).toBe(true);
+  });
+  it('the same title-only page without any script is not a shell (nothing would render it)', () => {
+    const c = convertHtml(titleOnlyShell(false));
+    expect(c).toMatchObject({ bodyTextLen: 0, scriptTags: 0 });
+    expect(isLikelyJsShell(c)).toBe(false);
+  });
+  it.each([
+    // example.com 2026-10 的真实结构:一段话 + 一个外链脚本
+    ['short page with a script', '<!doctype html><html><head><title>Example Domain</title></head><body><p>This domain is for use in documentation examples without needing permission.</p><script src=/s.js></script></body></html>'],
+    ['one-sentence page with an analytics script', '<html><head><title>Status</title><script async src="https://stats.example/a.js"></script></head><body><p>网站建设中</p></body></html>'],
+    ['one word outside the title', '<html><head><title>T</title><script>var a=1</script></head><body>OK</body></html>'],
+    ['body is a single bare link', '<html><head><title>T</title><script src="/a.js"></script></head><body><a href="/next"></a></body></html>'],
+  ])('%s is not a shell', (_name, html) => {
+    const c = convertHtml(html);
+    expect(c.bodyTextLen).toBeGreaterThan(0);
+    expect(isLikelyJsShell(c)).toBe(false);
+  });
+  it('an unclosed <title> is not trusted as the title (the page text is not mistaken for it)', () => {
+    const c = convertHtml('<html><head><title>Broken<script src="/a.js"></script></head><body><p>Real body text here.</p></body></html>');
+    expect(c.bodyTextLen).toBe(c.docTextLen);
+    expect(isLikelyJsShell(c)).toBe(false);
   });
 });
 
