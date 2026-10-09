@@ -14,12 +14,16 @@ export interface VaultManagerHost {
   strictPaths?: boolean
 }
 
+/** 自写账本里的一笔。对象本身就是凭据:同一路径每写一次换一个。 */
+export type SelfWrite = { readonly content: string }
+
 export class VaultManager {
   constructor(private readonly host: VaultManagerHost = {}) {}
   private root: string | null = null
   private counter = 0
-  /** absolutePath -> last content WE wrote, used to suppress echo events in the watcher. */
-  private lastWritten = new Map<string, string>()
+  /** absolutePath -> last content WE wrote, used to suppress echo events in the watcher.
+   *  每次写都换一个新对象:监听器拿对象本身当「读盘前是哪一笔账」的凭据(见 wasSelfWrite)。 */
+  private lastWritten = new Map<string, SelfWrite>()
   /** 插件声明的文件类型扩展名(小写;经 listPlugins → setPluginFileExtensions 注入)。这些 .md 文件
    *  是插件的自定义类型(如 `.mindmap.md`)、不是笔记,须排出 listPages 免被 compiler 改写=毁档。 */
   private pluginExts: string[] = []
@@ -153,9 +157,21 @@ export class VaultManager {
     return this.pluginExts.some((ext) => n.endsWith(ext))
   }
 
-  /** True if `content` matches what we last wrote to `abs` (i.e. not an external edit). */
-  wasSelfWrite(abs: string, content: string): boolean {
-    return this.lastWritten.get(abs) === content
+  /** 监听器读盘**之前**取:这个路径眼下那笔自写账,读完原样传回 wasSelfWrite。 */
+  selfWriteEntry(abs: string): SelfWrite | undefined {
+    return this.lastWritten.get(abs)
+  }
+
+  /** True if `content` matches what we last wrote to `abs` (i.e. not an external edit).
+   *  对不上 = 这次读回来的不是我们写的,那笔账作废:之后别人再原样改回,照样是外部改动(还按旧账压掉,订阅方就停在中间那一版)。
+   *  只作废读盘前就在的那一笔(`seen`)—— 读盘途中我们自己新记的账不能删(删了,新写的回声就被报成外部改动)。
+   *  报不报只看对不对得上**现在**的账,不认 `seen` 的内容:读盘途中账变了、读回来的是我们早先写的那份时照报。
+   *  多报只是让订阅方多重读一遍;不报,则可能漏掉这段时间里别人那次改动的唯一通知(chokidar 会丢掉 50ms 内的后续事件)。 */
+  wasSelfWrite(abs: string, content: string, seen: SelfWrite | undefined): boolean {
+    const entry = this.lastWritten.get(abs)
+    if (entry?.content === content) return true
+    if (entry && entry === seen) this.lastWritten.delete(abs)
+    return false
   }
 
   absPath(pagePath: string): string {
@@ -171,7 +187,7 @@ export class VaultManager {
     const tmp = `${abs}.tmp-${process.pid}-${Date.now()}-${this.counter++}`
     await fs.writeFile(tmp, data, 'utf8')
     await fs.rename(tmp, abs)
-    this.lastWritten.set(abs, data)
+    this.lastWritten.set(abs, { content: data })
     if (!existed && this.root) this.host.logActivity?.('file.create', { f: path.relative(this.root, abs), b: Buffer.byteLength(data) })
     this.emitMutate(abs, 'write')
   }
@@ -183,7 +199,7 @@ export class VaultManager {
     const abs = this.resolveInVault(rel)
     await fs.mkdir(path.dirname(abs), { recursive: true })
     await fs.writeFile(abs, text, { encoding: 'utf8', flag: 'wx' })
-    this.lastWritten.set(abs, text)
+    this.lastWritten.set(abs, { content: text })
     if (this.root) this.host.logActivity?.('file.create', { f: path.relative(this.root, abs), b: Buffer.byteLength(text) })
     this.emitMutate(abs, 'write')
   }
