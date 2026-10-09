@@ -129,12 +129,27 @@ function isExternal(url: string): boolean {
  *  `图.png`、`<a.png>` 变 `%3Ca.png%3E`,都不可逆。
  *  ⚠️ 跳过只做在这一侧:toStoredMarkdown 照旧全文把协议 URL 换回相对路径 —— 它是安全网,两侧对「哪里是代码」
  *  的判断万一不一致(缩进代码块、跨行的行内代码按行认不出),协议 URL 也绝不会漏到盘上。
- *  ponytail: 按行匹配,alt 文字跨行的图片(`![a⏎b](x.png)`)不再换成协议 URL(只是显示不出,盘上逐字)。 */
+ *  ponytail: 按行匹配,alt 文字跨行的图片(`![a⏎b](x.png)`)不再换成协议 URL(只是显示不出,盘上逐字)。
+ *
+ *  盘上已经是本库显示地址的图片(被旧缺陷写坏的存量笔记)在这里按当前构建器重拼,见函数体内的注。
+ *  仪器:cloudAssetsRoundtrip.test.ts 的「已经存坏的笔记」+ mobile 图片往返台架的场景 D。 */
 export function toDisplayMarkdown(md: string, pageDir: string): string {
   const toDisplay = (seg: string): string => seg.replace(IMG_RE, (full, pre: string, url: string, rest: string) => {
     // 尖括号目标:括号是语法不是路径(`<a b.png>` = `a b.png`);落盘经 encodeDest 写成 `a%20b.png`(与 Obsidian 同口径)。
     const u = (url.startsWith('<') ? url.slice(1, -1) : url).trim()
-    if (!u || isExternal(u)) return full
+    if (!u) return full
+    if (isExternal(u)) {
+      // 盘上已经是**本库的显示地址**(2026-10-09 之前的缺陷把它写进了正文:带着过期的令牌,或者是另一端的接口源)
+      // → 按现在的构建器重拼,图当场显示得出;存盘时照常换回页相对路径。只换显示,不为此写盘(打开不算修改)。
+      // 认不认得出由装上的解析器说了算:桌面没装,盘上的云端地址在桌面上仍是一条外链。
+      // 只动「裸目标 + 解析器认得」这一种(旧缺陷写出来的就是它)。尖括号目标、默认协议的字面地址照旧逐字不动:
+      // 产品不会把它们写到盘上,存盘那一侧也不拆尖括号 —— 这里拆了,原本逐字保住的引用就会在下次存盘被改写(评审 2026-10-09)。
+      // ⚠️ 已知局限:坏了之后又被挪到别的文件夹的笔记,ref 落在页目录之外。打开时照样显示得出;但存盘写下的是
+      //   库内路径写法(relFrom 不产出 `../`),云端 / 手机的显示侧按「页目录 + 引用」拼地址,重开后找不到(桌面认)。
+      if (url.startsWith('<') || u.startsWith(`${ASSET_SCHEME}:`)) return full
+      const own = fromAssetUrl(u)
+      return own == null ? full : pre + toAssetUrl(own) + rest
+    }
     // 先解码再拼:盘上是 `%20` 编码形态,不解码的话 toAssetUrl 会二次编码 → 协议侧找不到文件。
     return pre + toAssetUrl(joinRel(pageDir, decodeSafe(u))) + rest
   })

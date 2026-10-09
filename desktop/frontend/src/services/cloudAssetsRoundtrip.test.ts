@@ -6,7 +6,7 @@
  * 负对照(实跑过):installCloudAssetUrls 里不传 parseAssetUrl → 第 1 / 2 / 5 格红。
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { resetAssetUrlBuilder, toDisplayMarkdown, toStoredMarkdown } from '@amadeus-shared/assets'
+import { resetAssetUrlBuilder, toAssetUrl, toDisplayMarkdown, toStoredMarkdown } from '@amadeus-shared/assets'
 import { installCloudAssetUrls, parseAssetUrl } from '../../../../web/src/amadeus/cloudAssets'
 
 const VID = '0b7f2c1e-6a4d-4f6e-9a57-2d1c3e4f5a6b'
@@ -47,6 +47,30 @@ describe('cloud asset URLs: display ↔ stored', () => {
     for (const u of keep) expect(parseAssetUrl(u), u).toBeNull()
     const md = keep.map((u) => `![](${u})`).join('\n') + '\n'
     expect(toStoredMarkdown(md, 'dir')).toBe(md)
+  })
+
+  it('已经存坏的笔记:显示时按当前的接口源与令牌重拼(图当场显示得出),存盘再换回页相对路径;尖括号里的、代码里的、别的库的不动', () => {
+    const old = (ref: string): string => `https://old.example/api/amadeus/vaults/${VID}/asset?ref=${encodeURIComponent(ref)}&page=dir%2Fnote.md&at=EXPIRED`
+    const md = [
+      `![](${old('dir/.amadeus/pic.png')})`,
+      `文字 ![alt](${old('dir/a b.png').replace(/&/g, '\\&')} "t") 文字`, // 图片与文字同段时盘上是 \& 的形态
+      `![](${old('dir/c.png')})`,
+      `![](<${old('dir/angle.png')}>)`, // 尖括号目标:存盘那一侧不拆,这里也不动(否则原本逐字保住的引用会被改写)
+      `\`![](${old('dir/in-code.png')})\``,
+      '![](https://api.example/api/amadeus/vaults/another-vault/asset?ref=z.png&at=T)',
+      '![](https://example.com/logo.png)',
+      '',
+    ].join('\n')
+    const shown = toDisplayMarkdown(md, 'dir').split('\n')
+    const fresh = (ref: string): string => toAssetUrl(ref)
+    expect(fresh('dir/c.png')).toContain('at=') // 防空过:当前构建器带着现在的令牌
+    expect(fresh('dir/c.png')).not.toContain('EXPIRED')
+    expect(shown[0]).toBe(`![](${fresh('dir/.amadeus/pic.png')})`)
+    expect(shown[1]).toBe(`文字 ![alt](${fresh('dir/a b.png')} "t") 文字`)
+    expect(shown[2]).toBe(`![](${fresh('dir/c.png')})`)
+    expect(shown.slice(3)).toEqual(md.split('\n').slice(3)) // 尖括号里的、代码里的、别的库的、普通外链:逐字不动
+    expect(toStoredMarkdown(shown[3], 'dir')).toBe(md.split('\n')[3]) // 尖括号那条:显示不动,存盘也逐字保住
+    expect(toStoredMarkdown(shown.slice(0, 3).join('\n'), 'dir')).toBe('![](.amadeus/pic.png)\n文字 ![alt](a%20b.png "t") 文字\n![](c.png)')
   })
 
   it('库 id 现取:换库之后,旧库的地址不再认(不把别的库的引用写成这个库的相对路径)', () => {

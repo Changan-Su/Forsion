@@ -14,16 +14,18 @@
  * 每次建桥都重装。纯函数的钉子:desktop 的 shared/amadeus/assets.test.ts、frontend/src/services/cloudAssetsRoundtrip.test.ts、
  * frontend/src/services/mobileLocalAssets.test.ts。
  *
- * 真把 mobile/dist 在手机视口的 headless Chromium 里跑,三个场景,每个都:打开一篇带 `![](.amadeus/x.png)` 的
- * 笔记 → 看编辑器里那张 <img> 的地址、加载出来没有、有没有策略违规 → 在「后文」段末敲一个字、等过自动保存 →
- * 看落盘的那一行还是不是页相对路径。
+ * 真把 mobile/dist 在手机视口的 headless Chromium 里跑,四个场景,每个都:打开一篇带图的笔记 → 看编辑器里那张
+ * <img> 的地址、加载出来没有、有没有策略违规 → 在「后文」段末敲一个字、等过自动保存 → 看落盘的那一行还是不是
+ * 页相对路径。A / B / C 的笔记里是 `![](.amadeus/x.png)`;
+ *   D. 云端库里一篇**已经被写坏**的笔记(图片行是另一端写进去的地址:接口源不同、令牌过期)。显示时按当前的
+ *      接口源与令牌重拼(toDisplayMarkdown),图当场显示得出;**只是打开不写盘**;动一个字存盘后换回页相对路径。
  *
  * ⚠️ 这是浏览器台架:证明得了页面这一层把地址指到了哪里、落盘写了什么;**证明不了安卓原生层**。本地库的图片地址
  *    在安卓上是 Capacitor 本地文件服务(`https://localhost/_capacitor_file_/<应用私有目录>/vault/…`);浏览器里
  *    文件系统是 IndexedDB,拿到的库根只是 `/DATA/vault` 这个路径、没人服务它 —— 台架 route 住它、用 readVaultBytes
  *    回填字节。原生那一层真能不能服务(路径、百分号解码、Range)要上模拟器 / 真机看。
  * 负对照(实跑过,修之前的产物):A 红 2 条(图没加载、策略违规),B 红 3 条(图没加载、去云端要了、落盘是云端地址),
- *    C 红 1 条(落盘是云端地址)。
+ *    C 红 1 条(落盘是云端地址);D 在加显示侧还原之前红 3 条(图没加载、地址没重拼、去旧源要了图)。
  */
 const http = require('http')
 const net = require('net')
@@ -94,10 +96,13 @@ async function main() {
   }
 
   /** 一个场景 = 一个全新的浏览器上下文(存储互不串)。startSide = 冷启动时的库;
-   *  stay = 留在云端库不切走(场景 C:假云端里本来就有这篇带图的笔记)。 */
-  const scenario = async (label, startSide, stay = false) => {
+   *  stay = 留在云端库不切走(场景 C / D:假云端里本来就有这篇带图的笔记);
+   *  damaged = 库里那篇笔记的图片行已经是被旧缺陷写坏的形态(场景 D)。 */
+  const scenario = async (label, startSide, stay = false, damaged = false) => {
     const REL = '.amadeus/pic-cloud.png'
-    const cloud = { note: stay ? `# 图片笔记\n\n前文\n\n![](${REL})\n\n后文\n` : null, puts: [], seq: 1 }
+    // 另一端(源不同)写进去的显示地址,令牌早已过期。
+    const OLD = `https://old-origin.e2e.test/api/amadeus/vaults/cloud-v1/asset?ref=${encodeURIComponent(REL)}&page=${encodeURIComponent(NOTE.path)}&at=EXPIRED`
+    const cloud = { note: stay ? `# 图片笔记\n\n前文\n\n![](${damaged ? OLD : REL})\n\n后文\n` : null, puts: [], seq: 1 }
     const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, locale: 'zh-CN' })
     await ctx.addInitScript((side) => {
       try {
@@ -113,6 +118,7 @@ async function main() {
     page.on('dialog', (d) => { void d.accept() })
     const cloudAssetHits = []
     const localAssetHits = []
+    const oldOriginHits = []
     // 本地库的图片地址(浏览器平台上是 `/DATA/vault/<库内路径>`,见头注):没人服务,这里用库里的真字节回填。
     await page.route('**/DATA/vault/**', async (r) => {
       const rel = decodeURIComponent(new URL(r.request().url()).pathname.split('/DATA/vault/')[1] || '')
@@ -152,6 +158,9 @@ async function main() {
       }
       return json({}, 404)
     })
+    // 坏地址指向的旧源:令牌过期,一律 401(也免得台架真去解析这个域名)。
+    // ⚠️ 必须注册在假云端之后(后注册先匹配):它的路径也是 /api/amadeus/…,排在前面会被假云端当成好请求把图送出去。
+    await page.route('**://old-origin.e2e.test/**', (r) => { oldOriginHits.push(r.request().url().slice(0, 90)); return r.fulfill({ status: 401, body: '' }) })
 
     const cdp = await ctx.newCDPSession(page)
     const tap = async (locator, what) => {
@@ -229,6 +238,13 @@ async function main() {
     check(seen.csp.length === 0, `${label}:打开笔记没有触发内容安全策略违规`, seen.csp.map((v) => `${v.d} ← ${v.uri}`).join(' ; '))
     if (!stay) check(cloudAssetHits.length === 0, `${label}:本地库的图片没有去云端要`, cloudAssetHits.slice(0, 3).join(' , '))
     if (!stay) check(localAssetHits.includes(seeded.rel), `${label}:图片是按本地库的地址取的(防空过)`, `取过: ${localAssetHits.slice(0, 3).join(' , ') || '(无)'}`)
+    if (damaged) {
+      check(!!img && img.src.startsWith(appUrl), `${label}:坏地址显示时按当前的接口源与令牌重拼了`, img ? `src = ${img.src.slice(0, 80)}` : '')
+      check(oldOriginHits.length === 0, `${label}:没有再去坏地址指的旧源要图`, oldOriginHits.slice(0, 2).join(' , '))
+      // 只是打开、一个字没动:盘上不许变(显示侧的还原不能变成「打开即改写」)。打开后已等 3s,再等过一个自动保存窗。
+      await page.waitForTimeout(3500)
+      check(cloud.puts.length === 0, `${label}:只是打开不写盘`, cloud.puts.length ? `发生了 ${cloud.puts.length} 次保存` : '')
+    }
 
     // 存盘往返:显示时图片地址被换成了能加载的形态,存回去必须还原成页相对路径。敲一个字、等过自动保存、看落盘的那一行。
     // (还原不了 = 设备上的绝对地址 / 带令牌的云端地址被写进笔记:换台设备、令牌一过期,图就永久失联。)
@@ -245,7 +261,7 @@ async function main() {
     check(focused && saved != null && /后文 x/.test(String(saved)), `${label}:字敲在「后文」后面并存盘了(防空过)`, saved == null ? '没有发生保存' : `focused=${focused}`)
     check(line === `![](${seeded.rel})`, `${label}:存回去的图片链接仍是页相对路径`, `落盘那一行: ${line.slice(0, 200) || '(没有图片行)'}`)
     if (line !== `![](${seeded.rel})`) console.log(`      落盘全文:\n${String(saved ?? '').split('\n').map((l) => `          │ ${l}`).join('\n')}`)
-    await page.screenshot({ path: path.join(root, 'outputs', 'localasset', `${stay ? 'c-cloud' : startSide === 'local' ? 'a-local' : 'b-cloud-then-local'}.png`) }).catch(() => {})
+    await page.screenshot({ path: path.join(root, 'outputs', 'localasset', `${damaged ? 'd-cloud-damaged' : stay ? 'c-cloud' : startSide === 'local' ? 'a-local' : 'b-cloud-then-local'}.png`) }).catch(() => {})
     await ctx.close()
   }
 
@@ -265,6 +281,8 @@ async function main() {
     await scenario('B', 'cloud')
     console.log('\n── C. 云端库(手机缺省就是它;网页版同一座桥) ──')
     await scenario('C', 'cloud', true)
+    console.log('\n── D. 云端库里一篇已经被写坏的笔记(图片行是另一端写进去的带过期令牌的地址) ──')
+    await scenario('D', 'cloud', true, true)
   } catch (e) {
     check(false, '台架异常', String(e && e.stack ? e.stack.split('\n').slice(0, 3).join(' / ') : e))
   } finally {

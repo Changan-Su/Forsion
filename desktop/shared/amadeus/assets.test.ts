@@ -117,12 +117,25 @@ describe('代码里的图片语法逐字(I-15)', () => {
   })
 })
 
-/** 换了显示地址的构建器之后的往返(2026-10-09 事故)。接缝此前只有去程(setAssetUrlBuilder)没有回程:
- *  云端库 / 设备网页版把显示地址换成带资源令牌的 http 地址,落盘侧的还原却只认默认的 `amadeus-asset://v/` 前缀 ——
- *  编辑器一存盘就把 `![](.amadeus/pic.png)` 写成 `![](https://…/asset?ref=…&at=<令牌>)`,令牌过期图片失联。
- *  现在是成对的「构建 + 解析」。真云桥那一对的往返在 frontend/src/services/cloudAssetsRoundtrip.test.ts;
- *  整条链(真编辑器、真存盘)在 mobile 的 `npm run e2e:localasset`。
- *  负对照(实跑过):fromAssetUrl 里去掉「问装上的解析器」那一段 → 本组前两格红。 */
+describe('toDisplayMarkdown 对盘上已经是显示地址的图片', () => {
+  afterEach(() => resetAssetUrlBuilder())
+  it('桌面(没装解析器):外链逐字不动 —— 云端 / 设备网页版写坏的地址在桌面上认不出;盘上的默认协议地址重拼后还是它自己', () => {
+    const md = '![](https://api.example/api/amadeus/vaults/v1/asset?ref=a.png&at=T)\n![](amadeus-asset://v/dir%2Fa%20b.png)\n'
+    expect(toDisplayMarkdown(md, 'dir')).toBe(md)
+  })
+  it('默认协议的字面地址一律逐字不动(带查询串的、尖括号里的、不规范编码的):重拼会把 ?v=1 编进文件名、把尖括号拆掉', () => {
+    const md = '![](amadeus-asset://v/dir%2Fx.png?v=1)\n![](<amadeus-asset://v/attachments%2Fx.png>)\n![](amadeus-asset://v/dir/x.png)\n'
+    expect(toDisplayMarkdown(md, 'notes')).toBe(md)
+    setAssetUrlBuilder((ref) => `https://h.example/f?ref=${encodeURIComponent(ref)}`, () => null)
+    expect(toDisplayMarkdown(md, 'notes')).toBe(md) // 换了构建器的宿主上也不动
+  })
+  it('装了解析器:认得出的重拼成当前的显示地址,认不出的外链不动', () => {
+    setAssetUrlBuilder((ref) => `https://h.example/f?ref=${encodeURIComponent(ref)}&at=NEW`, (url) => (url.startsWith('https://h.example/f?') ? new URLSearchParams(url.split('?')[1]).get('ref') : null))
+    expect(toDisplayMarkdown('![](https://h.example/f?ref=dir%2Fa.png&at=OLD)\n![](https://example.com/x.png)\n', 'dir'))
+      .toBe('![](https://h.example/f?ref=dir%2Fa.png&at=NEW)\n![](https://example.com/x.png)\n')
+  })
+})
+
 describe('fromDefaultAssetUrl:只认默认协议,不问装上的解析器(删文件那条路用它)', () => {
   afterEach(() => resetAssetUrlBuilder())
   it('装了解析器:解析器认得的地址 fromAssetUrl 认、fromDefaultAssetUrl 不认;默认协议两边都认', () => {
@@ -135,6 +148,12 @@ describe('fromDefaultAssetUrl:只认默认协议,不问装上的解析器(删文
   })
 })
 
+/** 换了显示地址的构建器之后的往返(2026-10-09 事故)。接缝此前只有去程(setAssetUrlBuilder)没有回程:
+ *  云端库 / 设备网页版把显示地址换成带资源令牌的 http 地址,落盘侧的还原却只认默认的 `amadeus-asset://v/` 前缀 ——
+ *  编辑器一存盘就把 `![](.amadeus/pic.png)` 写成 `![](https://…/asset?ref=…&at=<令牌>)`,令牌过期图片失联。
+ *  现在是成对的「构建 + 解析」。真云桥那一对的往返在 frontend/src/services/cloudAssetsRoundtrip.test.ts;
+ *  整条链(真编辑器、真存盘)在 mobile 的 `npm run e2e:localasset`。
+ *  负对照(实跑过):fromAssetUrl 里去掉「问装上的解析器」那一段 → 本组前两格红。 */
 describe('换了显示地址的构建器之后的往返', () => {
   const BASE = 'https://host.example/files?ref='
   const install = (): void => setAssetUrlBuilder(
