@@ -223,6 +223,7 @@ async function runOpenAiResponsesStream(opts: StreamOpts, guard: StreamIdleGuard
   const outputItems: any[] = [];
   // function_call:按 item_id 累积,order 保留输出顺序
   const fnCalls = new Map<string, { id: string; name: string; arguments: string }>();
+  const fnIndices = new Map<string, number>();
   const order: string[] = [];
 
   const reader = response.body.getReader();
@@ -256,6 +257,7 @@ async function runOpenAiResponsesStream(opts: StreamOpts, guard: StreamIdleGuard
         }
       } else if (type === 'response.output_item.added' && ev.item?.type === 'function_call') {
         const key = ev.item.id || ev.item_id || `fc_${ev.output_index ?? order.length}`;
+        if (typeof ev.output_index === 'number') fnIndices.set(key, ev.output_index);
         if (!fnCalls.has(key)) {
           if ([ev.item.id, ev.item.call_id, ev.item.name, ev.item.arguments].some((v) => typeof v === 'string' && v)) guard.progress();
           fnCalls.set(key, { id: ev.item.call_id || ev.item.id || key, name: ev.item.name || '', arguments: ev.item.arguments || '' });
@@ -281,6 +283,7 @@ async function runOpenAiResponsesStream(opts: StreamOpts, guard: StreamIdleGuard
         if (ev.item.type === 'function_call') {
           const item = ev.item;
           const key = item.id || ev.item_id || `fc_${ev.output_index ?? order.length}`;
+          if (typeof ev.output_index === 'number') fnIndices.set(key, ev.output_index);
           const previous = fnCalls.get(key);
           const complete = {
             id: item.call_id || previous?.id || item.id || key,
@@ -321,7 +324,9 @@ async function runOpenAiResponsesStream(opts: StreamOpts, guard: StreamIdleGuard
   }
 
   const toolCalls = order
-    .map((k) => fnCalls.get(k))
+    .map((key, fallbackIndex) => ({ key, index: fnIndices.get(key) ?? fallbackIndex }))
+    .sort((a, b) => a.index - b.index)
+    .map(({ key }) => fnCalls.get(key))
     .filter((c): c is { id: string; name: string; arguments: string } => !!c && !!c.name)
     .map((c) => ({ id: c.id, type: 'function' as const, function: { name: c.name, arguments: c.arguments || '{}' } }));
 

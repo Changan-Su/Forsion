@@ -228,6 +228,15 @@ describe('streamOpenAiResponses SSE parse', () => {
     expect(res.outputItems).toBeUndefined();
   });
 
+  it('done-only calls retain provider order even when completion events arrive backwards', async () => {
+    const items = ['write_file', 'read_file'].map((name, i) => ({ type: 'function_call', id: `fc_${i}`, call_id: `call_${i}`, name, arguments: i ? '{"path":"notes.md"}' : '{"path":"notes.md","content":"hello"}' }));
+    const sse = [...[1, 0].map(i => ({ type: 'response.output_item.done', output_index: i, item: items[i] })), { type: 'response.completed', response: {} }].map(e => `data: ${JSON.stringify(e)}\n`).join('');
+    vi.stubGlobal('fetch', () => Promise.resolve({ ok: true, body: new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode(sse)); c.close(); } }) }));
+    const res = await streamOpenAiResponses({ apiKey: 'x', baseUrl: 'https://example/codex', payload: { model: 'gpt-6-luna', messages: [] } } as any);
+    expect(res.toolCalls.map(c => c.function.name)).toEqual(['write_file', 'read_file']);
+    expect(res.outputItems).toEqual(items);
+  });
+
   it('Codex 逆向头只在订阅路径(accountId)发;官方 BYOK 纯 Bearer——OpenAI-Beta 头会静默压掉 reasoning summary(实测 0 vs 160 条)', async () => {
     const sse = 'data: {"type":"response.completed","response":{"usage":{"input_tokens":1,"output_tokens":1}}}\n';
     const seen: Array<Record<string, string>> = [];
