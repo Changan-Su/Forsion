@@ -26,9 +26,12 @@ import java.util.concurrent.TimeoutException;
  * registered"). So it leaves by itself when nobody asked for 30 s (a run that died does not keep the slot), and on
  * `GET /quit`.
  *
- * Same tree as the command, node for node (`scripts/uitree-compare.cjs` holds the two side by side): the active
- * window only, views not important for accessibility included, children the user cannot see left out, bounds cut to
- * the screen and empty when off it. It connects the way the command does, other accessibility services suspended
+ * The same nodes with the same attribute values as the command (`scripts/uitree-compare.cjs` holds the two side by
+ * side): the active window only, views not important for accessibility included, children the user cannot see left
+ * out, bounds cut to the screen and empty when off it, NAF on a button nothing names, the same characters replaced or
+ * written as numbers. One value is written differently and reads the same: with a double quote in it the command
+ * switches the attribute to single quotes, this writes &quot;.
+ * It connects the way the command does, other accessibility services suspended
  * meanwhile — with them left running the WebView marks its off-screen nodes invisible and the tree comes out
  * shorter (2026-10-09: 68 nodes against 90 on the session list).
  * Different on purpose: `idle` is the caller's and counts from the last thing that moved (the command insists on
@@ -145,7 +148,9 @@ public final class UiTreeServer {
         Rect bounds = new Rect();
         n.getBoundsInScreen(bounds);
         if (!bounds.intersect(0, 0, width, height)) bounds.setEmpty();
-        out.append("<node index=\"").append(index).append('"');
+        out.append("<node");
+        if (unnamedButton(n)) out.append(" NAF=\"true\"");
+        out.append(" index=\"").append(index).append('"');
         text(out, "text", n.getText());
         text(out, "resource-id", n.getViewIdResourceName());
         text(out, "class", n.getClassName());
@@ -169,6 +174,27 @@ public final class UiTreeServer {
         out.append("</node>");
     }
 
+    /** The dumper's NAF ("not accessibility friendly"): something to press that nothing names, itself or below. */
+    private static boolean unnamedButton(AccessibilityNodeInfo n) {
+        String type = n.getClassName() == null ? "" : n.getClassName().toString();
+        for (String list : new String[] {"android.widget.GridView", "android.widget.GridLayout", "android.widget.ListView", "android.widget.TableLayout"}) {
+            if (type.endsWith(list)) return false;
+        }
+        return n.isClickable() && n.isEnabled() && empty(n.getContentDescription()) && empty(n.getText()) && !namedBelow(n);
+    }
+
+    private static boolean namedBelow(AccessibilityNodeInfo n) {
+        for (int i = 0, count = n.getChildCount(); i < count; i++) {
+            AccessibilityNodeInfo child = n.getChild(i);
+            if (child != null && (!empty(child.getContentDescription()) || !empty(child.getText()) || namedBelow(child))) return true;
+        }
+        return false;
+    }
+
+    private static boolean empty(CharSequence s) {
+        return s == null || s.length() == 0;
+    }
+
     private static void flag(StringBuilder out, String name, boolean value) {
         out.append(' ').append(name).append("=\"").append(value).append('"');
     }
@@ -185,7 +211,11 @@ public final class UiTreeServer {
                 case '\n': out.append("&#10;"); break;
                 case '\r': out.append("&#13;"); break;
                 case '\t': out.append("&#9;"); break;
-                default: out.append(c < 0x20 ? '.' : c);
+                default:
+                    // the dumper's list of what XML cannot carry → "."; beyond the BMP → a number, as its serializer writes it
+                    if (c < 0x20 || (c >= 0x7F && c <= 0x84) || (c >= 0x86 && c <= 0x9F) || (c >= 0xFDD0 && c <= 0xFDDF)) out.append('.');
+                    else if (Character.isHighSurrogate(c) && i + 1 < length && Character.isLowSurrogate(value.charAt(i + 1))) out.append("&#").append(Character.toCodePoint(c, value.charAt(++i))).append(';');
+                    else out.append(c);
             }
         }
         out.append('"');

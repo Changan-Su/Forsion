@@ -187,11 +187,12 @@ OUT=/absolute/out npm run emu:nativeshell   # ONLY=tabs,prompt 只跑子集
 台架读界面树走一个常驻的读取器（`scripts/lib/UiTreeServer.java`：第一次读的时候现编、推到设备上用 `app_process` 起，
 不往 App 里装任何东西）。原来每读一次都是 `uiautomator dump` —— 起一个进程、再干等满一秒，一次 2 秒，占一场运行的五分之四；
 常驻之后界面安静时一次 0.03 秒。2026-10-09 同一个包上实测：受影响的 13 条 490 秒 → 133 秒，整套 62 条 43.6 分钟 → 12.9 分钟。
-输出与 `uiautomator dump` 逐节点一致，`npm run emu:treecompare` 把两种读法并排比（改了读取器或换了模拟器镜像之后跑）。
+读出来的节点和属性值与 `uiautomator dump` 一致，`npm run emu:treecompare` 把两种读法并排比（改了读取器或换了模拟器镜像之后跑）。
 每场运行最后的 `time:` 一行是时间花在了哪 —— 现在剩下的大头是脚本里写死的等待，不是读树。
 
 - ⚠️ 设备上**只有一个 UI 自动化的位置**：读取器连着的时候别人的 `uiautomator dump` 会失败。所以它 30 秒没人问就自己退出
-  （台架中途崩了也不会一直占着），台架结束时也会叫它退。手动清：`adb shell "pkill -f 'UiTree[S]erver'"`。
+  （台架被强杀也不会一直占着），台架结束或被 Ctrl-C 时会叫它退。手动清：`adb shell "pkill -f 'UiTree[S]erver'"`。
+  同一台设备上的两场台架本来就不能同时跑（共用 App、调试端口），共用的模拟器照旧排队。
 - ⚠️ 和 `uiautomator dump` 一样，它连着的时候**其他无障碍服务是暂停的** —— 只是从「每次读的那一下」变成了整场。
   要测无障碍服务本身的用例加 `EMU_TREE=dump`，走老办法。
 - `EMU_IDLE_MS`（默认 500）：读之前等界面安静多久，从最后一次变化算起。某条在慢机器上读到半截动画就调大。

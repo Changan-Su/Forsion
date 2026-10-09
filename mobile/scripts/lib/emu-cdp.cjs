@@ -72,6 +72,7 @@ function startReader() {
     }
     throw new Error('it did not answer within 6 s')
   } catch (e) {
+    stopReader() // one that started but cannot be reached would keep the slot the old way is about to need
     console.log(`[emu] no connected tree reader here (${String(e.stderr || e.message || e).trim().split('\n')[0]}) — reading with uiautomator dump`)
     return false
   }
@@ -83,6 +84,8 @@ function stopReader() {
   try { execFileSync(ADB, ['forward', '--remove', `tcp:${TREE_PORT}`], { stdio: 'ignore' }) } catch { /* none set up */ }
 }
 process.on('exit', () => { if (reader === 'up') stopReader() })
+// Ctrl-C and a plain kill end through that handler too: the slot is given back now, not 30 s later.
+for (const [signal, code] of [['SIGINT', 130], ['SIGTERM', 143]]) process.on(signal, () => process.exit(code))
 
 /** The active window as XML. Throws when there is none to read (between two windows): the caller's next attempt. */
 function treeXml() {
@@ -98,16 +101,27 @@ function treeXml() {
       const why = String(e.stderr || e.message).trim().split('\n')[0]
       // It left (nobody asked for 30 s — it does not outlive a dead run — or the device restarted): the next read
       // starts one. Three in a row is not that: the old way from here on (`adb logcat -s forsion-uitree` says why).
-      if (++unanswered < 3) reader = 'down'
-      else { stopReader(); reader = 'off'; console.log(`[emu] the connected tree reader keeps failing (${why}) — reading with uiautomator dump from here on`) }
-      throw new Error(`the tree reader did not answer (${why})`)
+      if (++unanswered < 3) { reader = 'down'; throw new Error(`the tree reader did not answer (${why})`) }
+      stopReader()
+      reader = 'off' // … and this very read is answered the old way, below
+      console.log(`[emu] the connected tree reader keeps failing (${why}) — reading with uiautomator dump from here on`)
     } finally { tally('read tree', Date.now() - t0) }
   }
   return adb('shell', OLD_DUMP)
 }
 
-const decode = (s) => s.replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&#10;/g, '\n').replace(/&#13;/g, '\r').replace(/&#9;/g, '\t').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
-/** The active window's tree → flat node list with parsed bounds (the XML of `uiautomator dump`, whoever read it). */
+const ENTITY = { quot: '"', apos: "'", amp: '&', lt: '<', gt: '>' }
+/** In one pass ("&amp;lt;" is the text "&lt;"); numbers too — a line break is &#10;, an emoji &#128512;. */
+const decode = (s) => s.replace(/&(?:(quot|apos|amp|lt|gt)|#(\d+));/g, (_, name, code) => (name ? ENTITY[name] : String.fromCodePoint(Number(code))))
+/** The XML of `uiautomator dump`, whoever wrote it → flat node list with parsed bounds. A value with a double quote in
+ *  it comes from the command in single quotes (the connected reader writes &quot;): both are read. */
+const parseTree = (xml) => [...xml.matchAll(/<node\s+([^>]+?)\/?>/g)].map((m) => {
+  const n = Object.fromEntries([...m[1].matchAll(/([\w-]+)=(?:"([^"]*)"|'([^']*)')/g)].map((a) => [a[1], decode(a[2] ?? a[3])]))
+  const b = (n.bounds || '').match(/\d+/g)?.map(Number) || [0, 0, 0, 0]
+  n.rect = { left: b[0], top: b[1], right: b[2], bottom: b[3], cx: Math.round((b[0] + b[2]) / 2), cy: Math.round((b[1] + b[3]) / 2) }
+  return n
+})
+/** The active window's tree as that list. */
 function nodes(out) {
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
@@ -118,12 +132,7 @@ function nodes(out) {
       const xml = treeXml()
       if (!xml.includes('<hierarchy')) throw new Error('no tree')
       if (out) fs.writeFileSync(path.join(out, 'last-ui.xml'), xml)
-      return [...xml.matchAll(/<node\s+([^>]+?)\/?>/g)].map((m) => {
-        const n = Object.fromEntries([...m[1].matchAll(/([\w-]+)="([^"]*)"/g)].map((a) => [a[1], decode(a[2])]))
-        const b = (n.bounds || '').match(/\d+/g)?.map(Number) || [0, 0, 0, 0]
-        n.rect = { left: b[0], top: b[1], right: b[2], bottom: b[3], cx: Math.round((b[0] + b[2]) / 2), cy: Math.round((b[1] + b[3]) / 2) }
-        return n
-      })
+      return parseTree(xml)
     } catch (e) {
       if (attempt === 2) throw e
       napSync(300) // the old way took two seconds to fail; between two windows that was the wait
@@ -237,5 +246,5 @@ async function waitPage(cdp, expression, timeout = 10000) {
 }
 
 /** For scripts/uitree-compare.cjs: the two readers one at a time. */
-const tree = { old: () => adb('shell', OLD_DUMP), start: startReader, stop: stopReader, ask }
+const tree = { old: () => adb('shell', OLD_DUMP), start: startReader, stop: stopReader, ask, parse: parseTree }
 module.exports = { adb, adbBuffer, nodes, byId, byIdPrefix, tapAt, tapNode, longPress, holdAt, key, screenshot, waitNodes, connect, waitPage, pause, timing, tree, Cdp }

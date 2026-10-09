@@ -6,12 +6,14 @@
  * 两者不能同时在 —— 设备只有一个界面自动化槽位 —— 所以每轮都把读树器停掉再起。
  * 什么时候跑:改了 UiTreeServer.java,或者换了模拟器的系统镜像。退出码 0 = 每一轮两边的节点逐个属性、顺序都一致
  *(画面还在动的那一屏会有真差异:两次读取之间隔着一两秒)。
+ * 比的是解析出来的属性值,不是原始字符:带双引号的文字,系统命令改用单引号包属性,读树器写成 &quot;,是同一个值。
  */
 const h = require('./lib/emu-cdp.cjs')
 
-const parse = (xml) => [...xml.matchAll(/<node\s+([^>]+?)\s*\/?>/g)].map((m) => m[1].trim())
-const attr = (node, name) => (node.match(new RegExp(` ${name}="([^"]*)"`)) || [])[1] || ''
-const brief = (node) => `${attr(node, 'class').split('.').pop()} ${JSON.stringify(attr(node, 'text') || attr(node, 'content-desc') || attr(node, 'resource-id'))} ${attr(node, 'bounds')}`
+// 一个节点 = 它全部属性的定序串(rect 是从 bounds 算出来的,不算)
+const parse = (xml) => h.tree.parse(xml).map(({ rect, ...attrs }) => JSON.stringify(Object.entries(attrs).sort(([a], [b]) => a.localeCompare(b))))
+const attr = (node, name) => (JSON.parse(node).find(([k]) => k === name) || [])[1] || ''
+const brief = (node) => `${attr(node, 'class').split('.').pop()} ${JSON.stringify(attr(node, 'text') || attr(node, 'content-desc') || attr(node, 'resource-id'))} ${attr(node, 'bounds')}${attr(node, 'NAF') ? ' NAF' : ''}`
 const rounds = Number(process.argv[2] || 3)
 let differing = 0
 for (let round = 1; round <= rounds; round++) {
