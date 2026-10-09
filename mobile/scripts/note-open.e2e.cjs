@@ -45,6 +45,7 @@ function findChromium() {
   }
   throw new Error('找不到 chromium,设 CHROMIUM_EXE')
 }
+
 async function main() {
   const root = path.resolve(__dirname, '..')
   if (!fs.existsSync(path.join(root, 'dist/index.html'))) {
