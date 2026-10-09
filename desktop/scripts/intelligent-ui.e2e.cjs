@@ -178,7 +178,8 @@ async function main() {
     await pick.getByRole('radio', { name: /岸边留白/ }).focus(); await win.keyboard.press('ArrowLeft'); await win.waitForTimeout(400)
     await win.screenshot({ path: path.join(OUT, 'pick-focus-light.png') })
     // What GPT-6 Luna really wrote on 2026-10-09: the option pictures again in a gallery and in a comparison.
-    const repeat = win.locator('.intelligent-ui[data-document-id="cover-photo-selection"]')
+    // `.first()`: replaying that day's archive with --evidence adds the same document a second time.
+    const repeat = win.locator('.intelligent-ui[data-document-id="cover-photo-selection"]').first()
     await win.evaluate(() => document.activeElement?.blur?.()); await reveal(win, repeat)
     check('a picture shown as an option is not drawn again in a gallery or comparison', await repeat.locator('.iui-pick-card').count() === 3 && await repeat.locator('img').count() === 3
       && await repeat.locator('.iui-block-gallery').count() === 0 && await repeat.locator('.iui-comparison article').count() === 3)

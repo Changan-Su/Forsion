@@ -2082,7 +2082,9 @@ try {
       }
       const blocks = documents.flatMap(d => d.blocks);
       // Pictures the user picks among are the options themselves (one row of picture cards), not a gallery beside a list.
-      const picker = documents.flatMap(d => d.inputs).find(i => i.kind === 'choice' && i.options.length === 3 && new Set(i.options.map(o => o.imageId).filter(Boolean)).size === 3);
+      // Exactly one pictured choice: a second one over the same pictures would put them on screen twice.
+      const pictured = documents.flatMap(d => d.inputs).filter(i => i.kind === 'choice' && i.options.some(o => o.imageId));
+      const picker = pictured.length === 1 && pictured[0].options.length === 3 && new Set(pictured[0].options.map(o => o.imageId)).size === 3 ? pictured[0] : undefined;
       const pickIds = new Set(picker?.options.map(o => o.imageId));
       // A model may still list those pictures again in a gallery or a comparison (GPT-6 Luna did, 1 run in 4). The renderer
       // draws each once, so a repeat is reported here to keep the rate visible and no longer fails the scene.

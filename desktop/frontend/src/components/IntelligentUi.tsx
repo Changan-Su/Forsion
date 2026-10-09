@@ -117,7 +117,7 @@ function NativeDocument({ doc, complete, live, stateKey, onAsk }: { doc: UIDocum
     const input = doc.inputs.find(i => i.id === id)
     return input?.kind === 'choice' ? input.options.flatMap(o => o.imageId ?? []) : []
   }))
-  const update =(fn: (s: UIUserState) => UIUserState): void => setState(previous => {
+  const update = (fn: (s: UIUserState) => UIUserState): void => setState(previous => {
     const next = fn(previous)
     if (stateKey) writeUIState(stateKey, next)
     return next
@@ -191,7 +191,7 @@ function NativeDocument({ doc, complete, live, stateKey, onAsk }: { doc: UIDocum
   }
   return <section className="intelligent-ui" aria-label={doc.title} data-document-id={doc.id} data-complete={complete} data-streamed={streamed || undefined}>
     <h3 className="iui-title">{doc.title}</h3>
-    {doc.blocks.filter(b => visible(b.when, values) && !(b.kind === 'gallery' && b.resourceIds.every(id => optionImages.has(id)))).map(block =><div key={block.id} className={`iui-block iui-block-${block.kind}`} data-block-id={block.id}>
+    {doc.blocks.filter(b => visible(b.when, values) && !(b.kind === 'gallery' && b.resourceIds.length && b.resourceIds.every(id => optionImages.has(id)))).map(block => <div key={block.id} className={`iui-block iui-block-${block.kind}`} data-block-id={block.id}>
       {block.title && !OWN_TITLE.has(block.kind) && <h4>{block.title}</h4>}{draw(block)}
     </div>)}
     {!complete && (live ? <Skeleton /> : <div className="iui-status" role="status">{t('iui.incomplete')}</div>)}
