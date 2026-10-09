@@ -5,7 +5,8 @@
  * 钉三件事(都是纯推演验不出来的):
  *  1. 顶栏(面包屑那行 .amx-toolbar)在移动端**整行不渲染**,而「上传」用的隐藏 <input type=file>
  *     仍在场 —— 那个 input 原本寄生在顶栏里,顶栏一藏 ref 就是 null,上传会静默失效(改版时的头号坑)。
- *  2. 底栏是悬浮胶囊,「⋯」弹出的 sheet 里能找回原顶栏那排动作(源码切换/置顶/收藏/导出/删除…)。
+ *  2. 底栏是悬浮胶囊,「⋯」弹出的 sheet 里能找回原顶栏那排动作(源码切换/置顶/收藏/删除…);
+ *     宿主做不了的两件(导出 PDF / 在文件管理器中显示)不出键。
  *  3. 「+」不再往正文里打「/」:收键盘 → 在键盘位置开双列块面板 → 点「标题 1」真把当前块转成 H1。
  *     清单取自 SLASH_ITEMS(与桌面 slash 菜单同源),这里顺带断言双列与分组标题都在。
  *
@@ -166,9 +167,14 @@ async function main() {
     await tap(page.locator('.amx-mbar button[title="更多操作"]'))
     await page.waitForTimeout(500)
     const rows = await page.$$eval('.mb-sheet .mb-sheet-row', (els) => els.map((e) => e.textContent.trim()))
-    const want = ['源码', '上传文件到本页', '置顶', '收藏', '导出为 PDF', '在文件管理器中显示', '删除笔记']
+    const want = ['源码', '上传文件到本页', '置顶', '收藏', '删除笔记']
     const missing = want.filter((w) => !rows.some((r) => r.includes(w)))
-    ok('2 「⋯」sheet 收下了原顶栏 + 原「更多操作」的全部动作', missing.length === 0, missing.length ? `缺:${missing.join('/')}(现有:${rows.join('|')})` : rows.join(' | '))
+    ok('2 「⋯」sheet 收下了原顶栏 + 原「更多操作」里手机做得了的动作', missing.length === 0, missing.length ? `缺:${missing.join('/')}(现有:${rows.join('|')})` : rows.join(' | '))
+    // 09-28(a09033c0,G2-13)起:移动本地库桥声明 hostCaps.exportPdf / revealInFileManager = false,这两件在手机上
+    // 是点了没反应的死键,不渲染(判据单源 amadeus/lib/hostCaps;组件级对照见 desktop 的 mobile-bar.check M5a/M5b)。
+    // 哪天移动桥接上了系统打印 / 分享、把声明改成 true,这条会红 —— 那时把它挪回上面的 want。
+    const dead = ['导出为 PDF', '在文件管理器中显示'].filter((w) => rows.some((r) => r.includes(w)))
+    ok('2a ⚠️ 宿主做不了的两件(导出 PDF / 在文件管理器中显示)不出键', dead.length === 0, dead.length ? `多出:${dead.join('/')}` : '都不在')
     // 一个功能一个入口:画布搬进常驻胶囊后,「⋯」里不许再留一条(用户 2026-08-20 拍板)。
     ok('2b 「⋯」里没有重复的画布条目', !rows.some((r) => r.includes('画布')), rows.join(' | '))
     await closeSheet()
