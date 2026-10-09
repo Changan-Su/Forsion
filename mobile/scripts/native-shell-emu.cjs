@@ -67,6 +67,8 @@ async function check(name, fn) {
     checks.push({ name, ok: false, error: String(e && e.message || e) })
     console.log('FAIL', name, '—', e && e.message || e)
     try { shots.push(h.screenshot(OUT, `fail-${checks.length}`)) } catch { /* no device */ }
+    // … and the tree: a label or a rectangle is not in a picture (`h.nodes(OUT)` writes last-ui.xml)
+    try { h.nodes(OUT); fs.copyFileSync(path.join(OUT, 'last-ui.xml'), path.join(OUT, `fail-${checks.length}.xml`)) } catch { /* no device */ }
     // Leave a clean stage for the next check: dismiss sheets / drawers left open by the failure.
     // (page mode — settings — keeps the bar: its back button means "still inside a page")
     for (let i = 0; i < 4; i++) {
@@ -387,10 +389,20 @@ function hapticsSince(before) {
   return now.filter((l) => !old.has(key(l))).map((l) => Number(l.match(/constant=(\d+)/)[1]))
 }
 const within = (outer, n) => n !== outer && n.rect.left >= outer.rect.left && n.rect.right <= outer.rect.right && n.rect.top >= outer.rect.top && n.rect.bottom <= outer.rect.bottom
-/** Merged Compose buttons may expose label / count on child nodes: read the node or anything inside its bounds. */
+/**
+ * A merged Compose button with content of its own (the tab count) carries its label on a child node: read the node,
+ * else its children — the untagged nodes that follow it in the dump. "Inside" is judged by the child's centre: the
+ * child has the button's layout rectangle, the button reports the part of its touch target no neighbour claimed (a
+ * 40dp button in a capsule: 48dp tall, cut at the side where the next button begins), so the child can stick out.
+ */
 const descOf = (list, id) => {
   const n = h.byId(list, id)
-  return n ? (n['content-desc'] || list.find((c) => within(n, c) && c['content-desc'])?.['content-desc'] || '') : ''
+  if (!n || n['content-desc']) return n ? n['content-desc'] : ''
+  for (const c of list.slice(list.indexOf(n) + 1)) {
+    if (c['resource-id'] || c.rect.cx < n.rect.left || c.rect.cx > n.rect.right || c.rect.cy < n.rect.top || c.rect.cy > n.rect.bottom) break
+    if (c['content-desc']) return c['content-desc']
+  }
+  return ''
 }
 const ids = (list, prefix = 'nativeSheet.item.') => h.byIdPrefix(list, prefix).map((n) => n['resource-id'].slice(prefix.length))
 const hasCjk = (list) => list.some((n) => /[一-鿿]/.test(`${n.text || ''}${n['content-desc'] || ''}`))
@@ -1389,7 +1401,7 @@ const tabCountText = (list) => {
     const select = "document.querySelector('.settings-page--mobile #startup-icon')"
     const toggle = "[...document.querySelectorAll('.settings-page--mobile .startup-appearance [role=switch]')].find((e) => e.getAttribute('aria-label') === '同步到桌面图标')"
     const saved = () => cdp.eval(`(() => { const v = JSON.parse(localStorage.getItem('${KEY}') || 'null'); return v ? { icon: v.icon && v.icon.id, native: v.nativeIcon } : null })()`)
-    const entry = () => h.adb('shell', 'cmd', 'package', 'resolve-activity', '--brief', '-c', 'android.intent.category.LAUNCHER', PKG).trim().split('\n').pop().trim().replace(`/${PKG}.`, '/.')
+    const entry = () => h.adb('shell', 'cmd', 'package', 'resolve-activity', '--brief', '-c', 'android.intent.category.LAUNCHER', PKG).trim().split('\n').pop().trim().replace('/com.forsion.tangu.', '/.') // the classes' package, whatever the application id (see ACTIVITY)
     const DEFAULT = `${PKG}/.MainActivity`, ARIOSO = `${PKG}/.IconArioso`
     const pid = () => h.adb('shell', 'pidof', PKG).trim()
     const shortcuts = () => {
@@ -1447,8 +1459,11 @@ const tabCountText = (list) => {
       assert.ok(list.length === published && !list.some((x) => x.off || !x.activity.endsWith('.IconArioso')), `Space shortcuts were not moved to the new entry (${published} before): ${JSON.stringify(list)}`)
       // What the user looks at: the launcher's own drawing of the entry.
       h.adb('shell', 'input', 'swipe', '540', '1900', '540', '500', '300')
-      const drawn = await h.waitNodes((l) => l.find((n) => n.package !== PKG && (n.text === 'Forsion' || n['content-desc'] === 'Forsion')), { timeout: 8000 })
-      assert.ok(drawn.hit, 'the launcher lists no Forsion entry')
+      // By the app's own name: the side-by-side preview build is "Forsion Preview" (android/app/build.gradle) and
+      // sits next to an installed "Forsion" on a shared emulator — that one is somebody else's app.
+      const LABEL = PKG === 'com.forsion.tangu' ? 'Forsion' : 'Forsion Preview'
+      const drawn = await h.waitNodes((l) => l.find((n) => n.package !== PKG && (n.text === LABEL || n['content-desc'] === LABEL)), { timeout: 8000 })
+      assert.ok(drawn.hit, `the launcher lists no "${LABEL}" entry`)
       shot('41-app-icon-arioso-launcher')
       h.tapNode(drawn.hit) // and it opens the app that is already running
       assert.ok((await h.waitNodes((l) => (textOf(l, 'nativeChrome.title') === '外观' ? l : null), { timeout: 8000 })).hit, 'the new entry did not bring the app back')

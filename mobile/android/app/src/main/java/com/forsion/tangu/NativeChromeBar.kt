@@ -295,6 +295,7 @@ internal fun NativeSpaceBar(state: ChromeState, insets: Insets, onPlate: PlateSi
         contentAlignment = Alignment.TopCenter,
     ) {
         val scrollState = rememberScrollState()
+        var lane by remember { mutableStateOf(0) } // the scrolling part's width, see SpaceCell
         Row(
             Modifier.padding(
                 top = DOCK_GAP,
@@ -317,10 +318,11 @@ internal fun NativeSpaceBar(state: ChromeState, insets: Insets, onPlate: PlateSi
             // Home was "Tangu" and Home itself a sliver. On top, Home keeps its whole cell — as it does for a finger.
             for (space in state.spaces.take(1)) SpaceCell(space, cell, onSpace, Modifier.zIndex(1f))
             Row(
-                Modifier.weight(1f, fill = false).fadingEdges(scrollState, with(density) { DOCK_PEEK.toPx() }).horizontalScroll(scrollState),
+                Modifier.weight(1f, fill = false).onSizeChanged { lane = it.width }
+                    .fadingEdges(scrollState, with(density) { DOCK_PEEK.toPx() }).horizontalScroll(scrollState),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                for (space in state.spaces.drop(1)) SpaceCell(space, cell, onSpace)
+                for (space in state.spaces.drop(1)) SpaceCell(space, cell, onSpace, lane = lane)
             }
         }
     } }
@@ -340,7 +342,7 @@ private class CellColors(val accent: Color, val muted: Color, val warning: Color
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun SpaceCell(space: ChromeSpace, colors: CellColors, onSpace: (id: String, long: Boolean) -> Unit, modifier: Modifier = Modifier) {
+private fun SpaceCell(space: ChromeSpace, colors: CellColors, onSpace: (id: String, long: Boolean) -> Unit, modifier: Modifier = Modifier, lane: Int = 0) {
     val accent = colors.accent
     val tint = if (space.active) accent else colors.muted
     val pill = if (space.active) accent.copy(alpha = 0.16f) else Color.Transparent
@@ -348,11 +350,12 @@ private fun SpaceCell(space: ChromeSpace, colors: CellColors, onSpace: (id: Stri
     val badgeLabel = space.badge?.label.orEmpty()
     // The dock leaves composition (page mode, a Space's detail level) and comes back unscrolled, and a Space can be
     // switched to from elsewhere: the active one is brought back into view with a bit of its neighbours, otherwise
-    // "nothing looks selected" when it sits past the last visible slot.
+    // "nothing looks selected" when it sits past the last visible slot. Again when the lane it scrolls in changes
+    // width: after a rotation the cell is the size it was, in a lane that no longer shows it.
     val requester = remember { BringIntoViewRequester() }
     var size by remember { mutableStateOf(IntSize.Zero) }
     val peek = with(LocalDensity.current) { DOCK_PEEK.toPx() }
-    LaunchedEffect(space.active, size) {
+    LaunchedEffect(space.active, size, lane) {
         if (space.active && size != IntSize.Zero) requester.bringIntoView(Rect(-peek, 0f, size.width + peek, size.height.toFloat()))
     }
     Row(

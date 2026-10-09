@@ -290,6 +290,7 @@ class NativeChromePlugin : Plugin() {
         spaceBar?.let { view -> (view.parent as? ViewGroup)?.removeView(view); view.disposeComposition() }
         spaceBar = null
         plates.clear()
+        lastLayout = "" // the next page starts from nothing: whatever is reported next must reach it, also when it equals the last report
         layout()
     }
 

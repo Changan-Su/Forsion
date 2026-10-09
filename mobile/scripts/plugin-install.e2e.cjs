@@ -350,7 +350,9 @@ async function main() {
     const flaggedState = await flagged.evaluate((b) => ({ disabled: b.disabled, state: b.dataset.installState, text: b.textContent.trim() })).catch(() => null)
     check(flaggedState && flaggedState.disabled && flaggedState.state === 'desktop-only' && flaggedState.text === '仅桌面可用', '商店标了仅桌面的插件:安装键置灰并写明', JSON.stringify(flaggedState))
     check(await page.locator(`[data-market-desktop-only="${FLAGGED_ID}"]`).first().isVisible().catch(() => false), '商店标了仅桌面的插件:卡片带「仅桌面」标记')
-    check((await page.locator('[data-market-desktop-only]').count()) === 1, '没标的插件不带这枚标记', String(await page.locator('[data-market-desktop-only]').count()))
+    // 首页会把同一项在不止一个分区里各画一张卡片:数的是「标记都在谁身上」,不是标记有几枚
+    const badged = await page.locator('[data-market-desktop-only]').evaluateAll((els) => els.map((e) => e.dataset.marketDesktopOnly))
+    check(badged.length > 0 && badged.every((id) => id === FLAGGED_ID), '没标的插件不带这枚标记', badged.join(','))
     const chips = await page.locator('.mk-card', { has: flagged }).first().locator('.mk-tags span').allInnerTexts().catch(() => null)
     check(Array.isArray(chips) && chips.includes('e2e-tag') && !chips.includes('desktop-only'), '保留标签不当普通标签再显示一遍,别的标签照常', JSON.stringify(chips))
     await flagged.click({ force: true, timeout: 3000 }).catch(() => {})

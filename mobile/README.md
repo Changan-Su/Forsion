@@ -114,7 +114,7 @@ Kotlin 在 `NativeChrome*` / `NativeSheet*`。没装宿主（桌面、Web、浏�
   **几何以原生层为准**：每颗胶囊把自己的矩形报给插件，插件发 `layout` 事件（dp：`floating` / `top` / `bottom` / `status` / `plates[]`），
   `src/nativeChrome.ts` 的 `applyChromeLayout` 把它写成 `<body>` 上的 `--nc-top` / `--nc-bottom` / `--nc-status` 和那几块板的位置；
   外壳样式（`lcl/engine/singleColumn.css` 末尾）再换算成 `--mb-top` / `--mb-bottom`（除以 `--uiz`：`body` 有 1.15 的 zoom）。
-  - **让位**：顶部沿用网页版那套（`--mb-top` + `base.css`「移动端内容顶满」名单）；底部是新的 —— 默认主区视图和抽屉**整块止于 Dock 之上**
+  - **让位**：顶部沿用网页版那套（`--mb-top` + `base.css`「移动端内容顶满」名单）；底部是新的 —— 默认主区视图、抽屉和宽屏并排的侧栏**整块止于 Dock 之上**
     （失败方向是多留一条，不是被盖住）。想让内容从 Dock 底下穿过去的视图，在**最底下那个滚动器**上标 `data-under-dock`：
     面板铺到屏幕底，让位变成该滚动器的 `padding-bottom`（原有的底部留白写进 `--under-dock-pad`）。滚动器下面还有钉底按钮 / 脚注的视图不能标
     （会话列表是先把脚注排进滚动器才标的，见 `SidebarPane` 的 `dockHost`）。主页另有一条：壁纸铺满，内容留在 Dock 之上。
@@ -170,6 +170,9 @@ OUT=/absolute/out npm run emu:nativeshell   # ONLY=tabs,prompt 只跑子集
 悬浮胶囊那几条单独跑：`ONLY='native top bar,hidden overlay,floating chrome'`（前两条给后面的量状态栏高度；约 3 分钟）。
 其中「on every Space's first level…」会把 Dock 上每个 Space 走一遍、把能滚的都滚到底，报出还压在 Dock 后面的文字和按钮，
 并打印每个面板是默认让位还是标了 `data-under-dock` —— 新加 Space 或改左栏之后先看它。
+哪条红了，产物目录里除了 `fail-<n>.png` 还有 `fail-<n>.xml`（失败那一刻的界面树：读屏标签和矩形截图里看不出来）。
+⚠️ 界面树里按钮的矩形是**触摸范围里没被邻居占走的那部分**：胶囊里 40dp 的按钮报出来高 48dp、宽度在下一颗按钮处被切掉，
+带内容的按钮（标签页计数）的读屏标签挂在子节点上、矩形却是按钮自己的 40dp —— 找子节点按中心点判，别按「整个在里面」。
 
 ### 桌面图标（应用图标的入口别名）
 
