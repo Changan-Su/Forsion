@@ -8,8 +8,11 @@
  * 同一套 id 规则(effectivePluginId)、同一个门禁(gatePluginManifest)、同一份 manifest 映射(installedPluginFields)、
  * 同口径的图标校验(isValidPluginIconPng)。差异只有三处,都是「手机上做不到」:
  *   · manifest `isDesktopOnly: true` → 列出为 blocked:'desktopOnly',代码不读不发;
- *   · 不清点 bundle(内嵌引擎插件 / Agent / 技能 / Space 在手机上没有消费者;报了 bundle,市场装完会去叫云端引擎重扫);
+ *   · 不清点 bundle(内嵌引擎插件 / Agent / 技能在手机上没有消费者;报了 bundle,市场装完会去叫云端引擎重扫);
  *   · 没有可见插件目录 → hostCaps.pluginsFolder=false(设置页不渲染「打开文件夹 / 创建示例」两个死键)。
+ * 包里带的 **Space**(`spaces/<slug>/space.json`)手机上有消费者(底部导航栏):listSpaces = 桌面 `spaces:list`
+ * 里插件那一半,同一形状,渲染层的 userSpaces.loadUserSpaces 不改一行就认。2026-10-09 之前漏了这条 ——
+ * 商店里的插件大多把 Space 写在包里,装上以后命令 / 视图都在,唯独 Space 不出现。
  *
  * 本模块不 import Capacitor(经 PluginFs 接缝),单测见 mobile/scripts/plugin-host.test.cjs。
  */
@@ -18,14 +21,19 @@ import { installedPluginFields, type InstalledPluginManifest } from '../../../de
 import { effectivePluginId } from '../../../desktop/shared/products'
 import { isSafeSlug, safeEntryPath } from '../../../desktop/shared/marketPackage'
 import { PLUGIN_ICON_MAX_BYTES, isValidPluginIconPng } from '../../../desktop/shared/pluginIcon'
+import { spaceIconFileOf, spaceIconMaxBytes, spaceIconMime } from '../../../desktop/shared/spaceIcon'
 import { bytesToBase64, readText, readTextOr, withPluginDirLock, writeText, type PluginFs } from './pluginFs'
 
 export const PLUGINS_DIR = 'plugins'
 export const PLUGIN_DATA_DIR = 'plugins-data'
 const DOC_CAP = 65536
 
+/** 一份插件 Space 配方(形状 = 桌面 preload 的 spacesList 条目;`plugin` = 所属插件的生效 id)。 */
+export interface PluginSpaceRecipe { slug: string; json: string; plugin: string; iconUrl?: string }
+
 export interface MobilePluginHost {
   listPlugins(): Promise<ExternalPluginSource[]>
+  listSpaces(): Promise<PluginSpaceRecipe[]>
   uninstallPlugin(id: string): Promise<void>
   readPluginData(pluginId: string): Promise<string | null>
   writePluginData(pluginId: string, text: string): Promise<void>
@@ -123,6 +131,27 @@ async function readIcon(fs: PluginFs, dir: string): Promise<string | undefined> 
   }
 }
 
+/** 一份 Space 配方的体积上限(真实配方几百字节)与一个插件最多带几个 Space —— 都只为挡住坏包,不是产品规格。 */
+const SPACE_RECIPE_MAX_BYTES = 64 * 1024
+const SPACES_PER_PLUGIN = 16
+
+/** space.json 的 `iconFile` → data URL。查找次序同桌面(electron/spaceIcon.ts):Space 自己的目录 → 插件包根,
+ *  所以 `"iconFile": "icon.png"` 且自己目录里没放图 = 直接用插件图标。读不到 / 不合规 → undefined(渲染层回落 `icon`)。 */
+async function readSpaceIcon(fs: PluginFs, json: string, dirs: string[]): Promise<string | undefined> {
+  const name = spaceIconFileOf(json)
+  if (!name) return undefined
+  for (const dir of dirs) {
+    try {
+      const st = await fs.stat(`${dir}/${name}`)
+      if (!st || st.type !== 'file' || st.size > spaceIconMaxBytes(name)) continue // 先看大小,超重的不读进内存
+      const bytes = await fs.readBytes(`${dir}/${name}`)
+      const mime = spaceIconMime(name, bytes)
+      if (mime) return `data:${mime};base64,${bytesToBase64(bytes)}`
+    } catch { /* 这一层没有 → 试下一层 */ }
+  }
+  return undefined
+}
+
 // ── 插件私有数据:双槽 + 序号信封 ──────────────────────────────────────────────────────────
 // 桌面是「写临时文件 → rename 覆盖」;Android 的 Filesystem.rename 不覆盖已存在的目标(且 move 的实现可能是
 // 复制 + 删除),沿用那一套要么写不进去、要么在「删旧 → 改名」之间被杀留下一个都没有的窗口。这里换成:
@@ -198,6 +227,41 @@ export function createPluginHost(fs: PluginFs, opts: { appVersion: () => string 
           out.push({ id, ...installedPluginFields(m, name, id), iconUrl, code, readme, changelog, blocked: blocked ?? undefined })
         } catch {
           /* skip malformed plugin */
+        }
+      }
+      return out
+    }),
+
+    // 各插件包里的 Space 配方。装不起来的插件(版本门禁 / 声明了仅桌面)不贡献 Space:它的视图不会注册,
+    // 一份只摆内置视图的配方却照样过得了渲染层的校验 —— 插件没在跑,它的 Space 不该单独冒出来。
+    // 「用户关掉的插件」不在这里筛:那是渲染层的偏好(readDisabledPluginIds),loadUserSpaces 自己会跳过。
+    listSpaces: () => withPluginDirLock(fs, async () => {
+      await recoverPluginDirs(fs)
+      const out: PluginSpaceRecipe[] = []
+      const seen = new Set<string>()
+      for (const name of await pluginDirNames(fs)) {
+        const dir = `${PLUGINS_DIR}/${name}`
+        const m = await readManifest(fs, dir)
+        const id = m ? effectivePluginId(name, m.id) : null
+        // 同一个 id 装了两份:只认排在前面的那一份(listPlugins 同口径);它被拦下,后一份的配方也不顶上来。
+        if (!m || !id || seen.has(id)) continue
+        seen.add(id)
+        if (gatePluginManifest(m, opts.appVersion()) || m.isDesktopOnly === true) continue
+        let slugs: string[]
+        try {
+          slugs = (await fs.list(`${dir}/spaces`)).filter((e) => e.type === 'directory' && !e.name.startsWith('.')).map((e) => e.name).sort()
+        } catch {
+          continue // 没有 spaces/ = 这个插件不带 Space
+        }
+        for (const slug of slugs.slice(0, SPACES_PER_PLUGIN)) {
+          const sdir = `${dir}/spaces/${slug}`
+          // 先看大小:配方每次启动都经 base64 桥整份读进内存,包里塞一份几十 MB 的 space.json 会把启动拖垮。
+          const st = await fs.stat(`${sdir}/space.json`).catch(() => null)
+          if (!st || st.type !== 'file' || st.size > SPACE_RECIPE_MAX_BYTES) continue
+          const json = await readTextOr(fs, `${sdir}/space.json`)
+          if (json === undefined) continue
+          const iconUrl = await readSpaceIcon(fs, json, [sdir, dir])
+          out.push({ slug, json, plugin: id, ...(iconUrl ? { iconUrl } : {}) })
         }
       }
       return out

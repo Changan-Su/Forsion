@@ -8,9 +8,10 @@
  * 流程(锚点一律 data-* / id,不按文案找元素;语言钉 zh-CN):
  *   1. 「⋯」菜单 → 市场;只列 Forsion 插件(没请求过别的类型)、显示范围说明
  *   2. 安装示例插件 → 不刷新即启用:命令进命令面板、运行 → 打开插件视图(锚点)、saveData 落盘
- *   3. 刷新 → 插件仍在、仍启用;再运行一次 → loadData 读回上次写的计数(数据跨重载)
+ *      2b. 包里带的 Space(spaces/<slug>/space.json)不刷新就进 Space 条;切过去,主区是配方点名的插件视图
+ *   3. 刷新 → 插件仍在、仍启用;再运行一次 → loadData 读回上次写的计数(数据跨重载);插件 Space 仍在 Space 条
  *   4. 第二项声明 isDesktopOnly → 安装被拒,错误提示 = 本地化原因;什么都没落盘
- *   5. 设置 → 插件:关掉 → 命令与视图消失;卸载 → 文件没了(listPlugins / marketInstalled 都看不到)
+ *   5. 设置 → 插件:关掉 → 命令、视图与它的 Space 消失;卸载 → 文件没了(listPlugins / marketInstalled 都看不到)
  *
  * 负对照:`npm run e2e:plugins -- --negative` 把页面 CSP 里的 'unsafe-eval' 去掉再跑 —— 插件代码求值被拦,
  * 第 2 步必须红(证明这台仪器真的在测「插件代码跑起来了」,不是只测到「文件写进去了」)。
@@ -35,6 +36,12 @@ const CDN = 'https://market-cdn.e2e.test'
 const PLUGIN_ID = 'e2e-hello'
 const CMD_ID = `amadeus:${PLUGIN_ID}:open-panel`
 const DESK_ID = 'e2e-desk'
+/** 示例插件包里带的 Space(配方 id;目录名故意与 id 不同:宿主认的是 space.json 里的 id)。 */
+const SPACE_ID = 'e2e-space'
+const SPACE_JSON = JSON.stringify({
+  id: SPACE_ID, name: { zh: 'E2E 空间', en: 'E2E Space' }, icon: 'boxes', version: '1.0.0',
+  layout: { main: [{ type: `plugin:${PLUGIN_ID}:panel` }], left: [], right: [] },
+})
 /** 期望的本地化拒装原因(台架钉 zh-CN;与 installMobilePlugins.ts 的 mobilemarket.desktopOnlyPlugin 同文)。 */
 const DESK_REASON_ZH = '这个插件声明了「仅支持桌面端」'
 
@@ -120,6 +127,7 @@ async function main() {
       // 包一层目录 + macOS 垃圾:顺带验重定根(真实 GitHub archive 就长这样)
       [`${PLUGIN_ID}-main/manifest.json`]: JSON.stringify({ id: PLUGIN_ID, name: 'E2E Hello', version: '1.0.0', apiVersion: 1 }),
       [`${PLUGIN_ID}-main/main.js`]: PLUGIN_MAIN,
+      [`${PLUGIN_ID}-main/spaces/desk/space.json`]: SPACE_JSON,
       '__MACOSX/._main.js': 'junk',
     }),
     [DESK_ID]: await zipOf({
@@ -160,6 +168,9 @@ async function main() {
     await ctx.addInitScript(() => { try { localStorage.setItem('forsion_token', 'e2e-plugins') } catch { /* ignore */ } })
     page = await ctx.newPage()
     page.on('pageerror', (e) => pageErrors.push(e.message))
+    // 配方被渲染层拒收时只有一行控制台警告(`[spaces] 跳过 <slug>: 原因`)—— Space 没出现时把它打出来。
+    const spaceWarnings = []
+    page.on('console', (m) => { if (/^\[spaces\]/.test(m.text())) spaceWarnings.push(m.text()) })
     page.on('dialog', (d) => { void d.accept() }) // 卸载确认
     await page.route('**/auth/me', (r) => r.fulfill({ status: 200, contentType: 'application/json', body: '{"username":"e2e"}' }))
     await page.route('**/api/**', (r) => r.abort())
@@ -243,6 +254,15 @@ async function main() {
       try { await el.waitFor({ state: 'visible', timeout: 6000 }) } catch { return null }
       return el.getAttribute('data-e2e-runs')
     }
+    /** Space 条(左抽屉底部)里有没有这个 Space。抽屉合着时 Space 条不在 DOM 里 → 先把抽屉打开
+     *  (盖在上面的设置页不碍事:抽屉在它底下照样挂着)。防空过:条上至少得有内置的那几个。 */
+    const spaceTab = page.locator(`.mb-spacebar [data-space="${SPACE_ID}"]`)
+    const spaceListed = async () => {
+      if (!(await page.locator('.mb-drawer--left.open').count())) await tap(page.locator('.mb-topbar [aria-label="left panel"]'), '左抽屉')
+      const builtin = await page.locator('.mb-spacebar [data-space]').count()
+      if (builtin < 2) throw new Error(`Space 条不在 DOM 里(只数到 ${builtin} 格),这一问答不了`)
+      return (await spaceTab.count()) > 0
+    }
     const hostState = () => page.evaluate(async (id) => ({
       listed: (await window.amadeus.listPlugins()).filter((p) => p.id === id).length,
       installed: (await window.tangu.marketInstalled())['amadeus-plugin'].map((x) => x.slug),
@@ -282,6 +302,22 @@ async function main() {
     if (!ran1) await closePalette()
     await shot('plugin-view')
 
+    // 2b. 包里带的 Space:宿主读得出配方 → 不刷新就进 Space 条 → 切过去,主区是配方点名的插件视图
+    const recipes = await page.evaluate(async () => {
+      const list = await window.tangu.spacesList?.()
+      return Array.isArray(list) ? list.map((s) => `${s.plugin}/${s.slug}`) : null
+    })
+    check(Array.isArray(recipes) && recipes.includes(`${PLUGIN_ID}/desk`), '宿主列出插件包里的 Space 配方', JSON.stringify(recipes))
+    const listed1 = await spaceListed()
+    check(listed1, '不刷新:插件带的 Space 进了 Space 条', spaceWarnings.join(' | '))
+    if (listed1) {
+      await tap(spaceTab, '插件 Space')
+      const active = await page.locator('.mb-shell').getAttribute('data-space')
+      const mainView = await page.locator('.mb-main [data-e2e-plugin-view]').count()
+      check(active === SPACE_ID && mainView > 0, '切到插件 Space:主区是配方点名的插件视图', `data-space=${active} 视图 ${mainView}`)
+      await shot('plugin-space')
+    }
+
     // 3. 刷新:插件仍启用;数据跨重载
     await page.reload({ waitUntil: 'domcontentloaded', timeout: 30_000 })
     await boot()
@@ -290,6 +326,7 @@ async function main() {
     const runs2 = ran2 ? await viewRuns() : null
     check(runs2 === '2', '刷新后 loadData 读回上次写的数据(runs=2)', `runs=${runs2}`)
     if (!ran2) await closePalette()
+    check(await spaceListed(), '刷新后插件带的 Space 仍在 Space 条')
 
     // 4. isDesktopOnly → 拒装,本地化原因,不落盘
     await openMore('rb-market')
@@ -321,11 +358,13 @@ async function main() {
     // 防空过:关之前插件视图必须在(设置盖在上面,视图仍挂在 DOM 里),否则下面的「被撤下」恒绿。
     const viewBefore = await page.locator('[data-e2e-plugin-view]').count()
     check(viewBefore > 0, '关之前插件视图仍挂着(防空过)', `有 ${viewBefore}`)
+    const spaceBefore = await spaceListed() // 防空过:关之前它得在条上
     await tap(row.locator('input[type="checkbox"]'), '插件开关')
     const offChecked = await row.locator('input[type="checkbox"]').first().isChecked().catch(() => null)
     check(offChecked === false, '设置里关掉插件')
     const stillView = await page.locator('[data-e2e-plugin-view]').count()
     check(stillView === 0, '关掉后插件视图被撤下', `剩 ${stillView}`)
+    check(spaceBefore && !(await spaceListed()), '关掉后它的 Space 从 Space 条撤下', `关之前在条上:${spaceBefore}`)
     await tap(page.locator('.settings-mobile-detail-head button').last(), '关闭设置')
     const listedOff = await commandListed()
     check(!listedOff, '关掉后命令从命令面板撤下(不刷新)')

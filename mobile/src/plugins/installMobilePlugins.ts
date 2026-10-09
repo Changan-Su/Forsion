@@ -1,9 +1,10 @@
 /**
  * Android App 插件体系的装配点(2026-10-02):插件宿主(window.amadeus 的 listPlugins / uninstallPlugin /
- * readPluginData / writePluginData)+ 应用市场数据层(window.tangu.market*)。
+ * readPluginData / writePluginData)+ 应用市场数据层(window.tangu.market*)+ 插件包里带的 Space(window.tangu.spacesList)。
  *
  * ⚠️ 只由 mobile/src/main.tsx 调用,且必须在 `import('./mobileEntry')` **之前**:
  *   · bootstrapEngine 按 `window.tangu?.marketList` 决定注册不注册 rb-market / open-market —— 晚一拍入口就没了;
+ *     `window.tangu?.spacesList` 同理(启动那一趟 loadUserSpaces 看它在不在);
  *   · 本链路引用 @capacitor/filesystem,而 web 包图(网页版手机视口也装 mobileEntry)没有它的桩 ——
  *     放进 mobileEntry / MobileRoot 的静态图会让 build-web CI 红。main.tsx 只属于 App。
  * 插件代码本身的求值(new Function)在渲染层 pluginStore;所以 mobile/index.html 的 CSP 带 'unsafe-eval'。
@@ -74,6 +75,9 @@ export function installMobilePlugins(opts: { cloudApiBase: () => string }): Mobi
     t.onMarketInstallProgress = market.onMarketInstallProgress
     t.marketInstalled = market.marketInstalled
     t.marketUninstall = market.marketUninstall
+    // 插件包里带的 Space 配方(userSpaces.loadUserSpaces 读它)。只有读:手机上没有用户自建 Space 的目录,
+    // 所以不给 spacesSave / spacesDelete —— 「另存为 Space」「新建 Space」这些入口按它们在不在门控,照旧不出现。
+    t.spacesList = host.listSpaces
   }
   return { host, market }
 }
