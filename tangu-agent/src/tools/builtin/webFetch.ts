@@ -372,21 +372,26 @@ export function readBodyCapped(page: FetchedPage, maxBytes: number): Promise<{ b
  *  「文本占 HTML 的比例」不当信号:带大量脚本的服务端渲染页比壳还低(notion.com 帮助页 2%,正文一万字;obsidian 壳 1.4%)。
  *  ponytail: ② 只认「0 字」,带占位文字的壳认不出(excalidraw 静态 HTML 里留了个 13 字的 h1、tldraw 57 字、各种 `Loading…`)。
  *  放宽到 N 字就会把「一句话 + 统计脚本」的正常页判成壳(example.com 现在就带一个外链脚本,正文 157 字);
- *  真要收这一类,加挂载点 / 占位词之类的信号,别抬这个阈值。 */
+ *  真要收这一类,加挂载点 / 占位词之类的信号,别抬这个阈值。
+ *  ponytail: 「0 字」量的是**抽出来的**文本。正文整个待在被剥掉的容器里(全页就一个 <form> / <svg>)又带脚本的静态页也进 ②,
+ *  尾注里「多半是脚本渲染的」那半句对它不准 —— 但模型手里确实一个字正文都没有,出路(用浏览器打开)照样对,所以不为它另分一支。 */
 export function isLikelyJsShell(c: HtmlConvert): boolean {
   if (c.linkCount >= 3) return false;
   return (c.scriptChars > 10_000 && c.docTextLen < 400) || (c.scriptTags > 0 && c.bodyTextLen === 0);
 }
 
 /** 模型此刻够不够得着 browser_navigate:'ready' = 定义就在工具面上;'load' = 在按需目录里(coding 预设、agent 自己收起的),
- *  得先 load_tools;null = 本会话没有(云端 / 沙箱形态、chat 预设、限定工具集的 agent …)。口径与 registry.getToolDefinitions 相同。
+ *  得先 load_tools;null = 本会话没有(云端 / 沙箱形态、chat 预设、宿主沙箱开着、限定工具集的 agent …)。
+ *  口径与 registry.getToolDefinitions 相同,test/webFetchShellNote.test.ts 拿它当准绳逐个上下文对。
  *  ponytail: TANGU_BROWSER_ENABLED=0 时工具仍在面上、调用才报错,这里不另判。 */
 export type BrowserReach = 'ready' | 'load' | null;
 export function browserReach(ctx: ToolContext): BrowserReach {
-  const t = resolveTools(ctx.profile ?? deps().profile, ctx).get('browser_navigate');
+  const tools = resolveTools(ctx.profile ?? deps().profile, ctx);
+  const t = tools.get('browser_navigate');
   if (!t) return null;
   const locked = !ctx.muse && !ctx.automationOrigin && isDeferredIn(ctx, t.name, t.deferred) && !ctx.unlockedTools?.has(t.name);
-  return !locked ? 'ready' : ctx.unlockTools ? 'load' : null;
+  // 'load' 要 load_tools 自己也够得着:限定工具集的 agent 名单里可以有浏览器却没有它
+  return !locked ? 'ready' : ctx.unlockTools && tools.has('load_tools') ? 'load' : null;
 }
 
 /** JS 壳尾注(给模型读,英文)。三件事:正文多半是脚本渲染的、直接抓拿不到;怎么读到(按本会话够得着的工具说,没有就一个字不提);

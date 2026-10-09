@@ -237,11 +237,13 @@ async function main() {
           await center(other); await other.check()
           check('切换选项后内容跟着变', shown !== await ui.innerText())
         } else if (c.key === 'user-research') {
-          // A web_fetch result ending in the engine's own "got almost none of this page's text" note is a title-only shell
-          // (tangu-agent/src/tools/builtin/webFetch.ts jsShellNote; the wording is pinned by test/webFetchShellNote.test.ts).
-          // The note alone is 250+ characters, so without this such a result passes the length line and counts as page text.
-          const shell = x => x.name === 'web_fetch' && x.result.includes("[note] web_fetch got almost none of this page's text")
-          r.retrievedUrls = ev.results.filter(x => ['web_fetch', 'browser_navigate'].includes(x.name) && succeeded(x) && !shell(x) && x.result.length > 400).map(x => {
+          // web_fetch ends a result it judges to be a script-rendered shell with a "[note] web_fetch got almost none of this
+          // page's text …" paragraph (tangu-agent/src/tools/builtin/webFetch.ts jsShellNote; test/webFetchShellNote.test.ts pins
+          // the wording). That paragraph alone is 250+ characters, so it must not count toward the length line: with it, a
+          // result that holds nothing but the page title reads as retrieved page text.
+          const NOTE = "\n\n[note] web_fetch got almost none of this page's text"
+          const textLength = x => { const i = x.name === 'web_fetch' ? x.result.lastIndexOf(NOTE) : -1; return i < 0 ? x.result.length : i }
+          r.retrievedUrls = ev.results.filter(x => ['web_fetch', 'browser_navigate'].includes(x.name) && succeeded(x) && textLength(x) > 400).map(x => {
             const call = ev.calls.find(c => c.id === x.id)
             return parse(x.result)?.url || parse(call?.arguments)?.url
           }).filter(Boolean)

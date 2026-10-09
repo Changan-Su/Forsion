@@ -14,7 +14,7 @@ vi.mock('../src/core/util/urlSafety.js', async (importOriginal) => ({
   resolvePublicHttpUrl: async (raw: string) => ({ url: new URL(raw), addresses: ['127.0.0.1'] }),
 }));
 
-import '../src/tools/registry.js'; // 副作用:注册全部内置 provider(browser_navigate 在不在场靠它)
+import { getToolDefinitions } from '../src/tools/registry.js'; // 连带副作用:注册全部内置 provider(browser_navigate 在不在场靠它)
 import { webFetchProvider, jsShellNote, browserReach } from '../src/tools/builtin/webFetch.js';
 import { configureTangu } from '../src/seams/runtime.js';
 import { createTanguProfile } from '../src/profiles/index.js';
@@ -24,14 +24,18 @@ const profile = createTanguProfile({ sandboxMode: 'none' });
 configureTangu({ host: stub, brain: stub, billing: stub, profile });
 const tool = webFetchProvider.tools()[0];
 
-// 本机桌面会话(work 预设):browser_navigate 常驻
-const host = { userId: 'u1', sessionId: 's1', appId: 'tangu', profile, execMode: 'host', cwd: '/tmp' } as any;
+// 本机桌面会话(work 预设):browser_navigate 常驻。hostSandbox 显式给「关」—— 不给的话 resolveTools 会去读开发机自己的
+// config.json,那边开着宿主沙箱时浏览器整族不在场,这个文件就跟着红。
+const host = { userId: 'u1', sessionId: 's1', appId: 'tangu', profile, execMode: 'host', cwd: '/tmp', hostSandbox: { mode: 'off', network: 'deny' } } as any;
 // coding 预设:浏览器整族在按需目录里,得先 load_tools
 const coding = { ...host, preset: 'coding', unlockTools: () => {} };
-// 没有浏览器工具的三种会话:chat 预设(host 工具整族不给)、云端沙箱形态、限定工具集的 agent(tools_strict,名单里没它)
+// 没有浏览器工具的几种会话:chat 预设(host 工具整族不给)、云端沙箱形态、宿主沙箱开着、限定工具集的 agent(tools_strict,名单里没它)
 const chat = { ...host, preset: 'chat' };
 const sandbox = { ...host, execMode: 'sandbox' };
+const boxed = { ...host, hostSandbox: { mode: 'read-only', network: 'deny' } };
 const strict = { ...host, toolsStrict: true, toolsList: ['web_fetch', 'web_search'] };
+// 名单里有浏览器、却没有 load_tools 的限定 agent:coding 预设下浏览器在按需目录里 → 取不回来,等于没有
+const strictNoLoader = { ...coding, toolsStrict: true, toolsList: ['web_fetch', 'browser_navigate'] };
 
 const TITLE = 'How Obsidian stores data - Obsidian Help';
 const PAGES: Record<string, [type: string, body: string]> = {
@@ -81,7 +85,10 @@ describe('web_fetch on a script-rendered page', () => {
     expect((await fetchAs('/shell', { ...coding, unlockedTools: new Set(['browser_navigate']) })).endsWith(jsShellNote('ready'))).toBe(true);
   });
 
-  it.each([['chat preset', chat], ['sandbox / cloud', sandbox], ['strict agent tool list without it', strict]])(
+  it.each([
+    ['chat preset', chat], ['sandbox / cloud', sandbox], ['host sandbox on', boxed],
+    ['strict agent tool list without it', strict], ['strict list has it but not load_tools (coding)', strictNoLoader],
+  ])(
     '%s: no browser tool in the session → the note never names one', async (_name, ctx) => {
       const r = await fetchAs('/shell', ctx);
       expect(r.endsWith(jsShellNote(null))).toBe(true);
@@ -101,11 +108,32 @@ describe('web_fetch on a script-rendered page', () => {
 describe('browserReach follows what the session can actually call', () => {
   it('resident / on-demand / absent', () => {
     expect(browserReach(host)).toBe('ready');
-    expect(browserReach({ ...host, planMode: true })).toBe('ready'); // 计划模式里浏览器只读入口照常可用
     expect(browserReach(coding)).toBe('load');
-    expect(browserReach({ ...coding, automationOrigin: 'rule-1' })).toBe('ready'); // 自动化 run 不吃按需装载,定义全在面上
-    expect(browserReach({ ...coding, unlockTools: undefined })).toBe(null); // 解锁不了的调用方(群聊成员)= 够不着
-    for (const ctx of [chat, sandbox, strict]) expect(browserReach(ctx)).toBe(null);
+    for (const ctx of [chat, sandbox, boxed, strict, strictNoLoader]) expect(browserReach(ctx)).toBe(null);
+  });
+
+  // 准绳 = 真正喂给模型的那份工具定义(registry.getToolDefinitions):'ready' ⇔ browser_navigate 就在里面;
+  // 'load' ⇔ 现在不在、load_tools 在、解锁后它会进来;null ⇔ 现在不在、也没有一条能把它取回来的路。
+  const defs = (ctx: any): string[] => getToolDefinitions({ ...ctx }).map((d: any) => d.function.name);
+  it.each([
+    ['work', host],
+    ['plan mode', { ...host, planMode: true }],
+    ['coding', coding],
+    ['coding, already loaded this run', { ...coding, unlockedTools: new Set(['browser_navigate']) }],
+    ['coding, caller cannot unlock (group chat member)', { ...coding, unlockTools: undefined }],
+    ['coding, automation run (no on-demand loading)', { ...coding, automationOrigin: 'rule-1' }],
+    ['work, the agent shelved it', { ...host, shelvedTools: new Set(['browser_navigate']), unlockTools: () => {} }],
+    ['chat', chat], ['sandbox', sandbox], ['host sandbox on', boxed],
+    ['strict list without it', strict],
+    ['strict list with it (work)', { ...host, toolsStrict: true, toolsList: ['web_fetch', 'browser_navigate'] }],
+    ['strict list with it but no load_tools (coding)', strictNoLoader],
+    ['strict list with it and load_tools (coding)', { ...coding, toolsStrict: true, toolsList: ['web_fetch', 'browser_navigate', 'load_tools'] }],
+  ])('%s: agrees with the tool definitions the model is given', (_name, ctx) => {
+    const reach = browserReach(ctx);
+    const now = defs(ctx);
+    const afterLoad = defs({ ...ctx, unlockedTools: new Set([...(ctx.unlockedTools ?? []), 'browser_navigate']) });
+    const loadable = !now.includes('browser_navigate') && now.includes('load_tools') && afterLoad.includes('browser_navigate');
+    expect(reach).toBe(now.includes('browser_navigate') ? 'ready' : loadable ? 'load' : null);
   });
 });
 
