@@ -65,6 +65,7 @@ import {
   dirnamePosix,
   extnamePosix,
   findByBasenameIn,
+  isCloudTextPath,
   normalizePosix,
   safeDecode,
   stripRefWrappers,
@@ -76,7 +77,11 @@ import {
 // ---------------------------------------------------------------------------
 
 interface VaultDto { id: string; name: string; lastChangeSeq: number; sizeBytes: number; createdAt: string }
-interface TreeDto { pages: string[]; files: Array<{ path: string; size: number }>; folders: string[]; seq: number; maxFileBytes?: number }
+interface TreeDto {
+  pages: string[]; files: Array<{ path: string; size: number }>; folders: string[]; seq: number; maxFileBytes?: number
+  /** 每个文件一行(含点开头的、含 binary):seq 是该文件自己的版本号,二进制比对交换写的基准取自这里。 */
+  entries?: Array<{ path: string; kind: string; seq: number }>
+}
 interface FileDto { path: string; kind: string; content: string; seq: number; hash: string; updatedAt: string }
 interface PutResultDto { seq: number; hash: string }
 interface MoveResultDto { path: string; seq: number }
@@ -582,15 +587,87 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
   }
 
   // ---- binary 上传 -------------------------------------------------------------
-  const postBinary = async (path: string, fileName: string, bytes: Uint8Array, ifAbsent: boolean, onProgress?: (sent: number, total: number) => void): Promise<{ path: string; size: number; seq: number }> => {
+  const postBinary = async (path: string, fileName: string, bytes: Uint8Array, ifAbsent: boolean, onProgress?: (sent: number, total: number) => void, baseSeq?: number): Promise<{ path: string; size: number; seq: number }> => {
     const form = new FormData()
     form.append('file', new Blob([bytes as BlobPart]), fileName)
     form.append('path', path)
     if (ifAbsent) form.append('ifAbsent', '1')
+    if (baseSeq !== undefined) form.append('baseSeq', String(baseSeq)) // 与文本 PUT 同契约:0 = 仅创建,>0 = 必须等于现 seq,不符 409
     const r = await http.postForm<{ path: string; size: number; seq: number }>(`/amadeus/vaults/${encodeURIComponent(vid())}/binary`, form, onProgress)
     noteSeq(r.path ?? path, r.seq)
     invalidateTree()
     return r
+  }
+
+  // ---- 非 .md / .db 的文本文件(插件的旁挂 .json:索引 / 缓存 / 快照;导出的 .canvas …) ----
+  // 这类文件在云端是 binary 行:桌面同步引擎(Forsion-Extend engine.ts pushBinary)就是按二进制传的,文本端点对它们
+  // 一律 400(写 BINARY_PATH / 读 BINARY)。所以文本读写落到字节通道 + UTF-8,两端看到的是同一行。
+  /** 按 vault 相对路径**精确**取这个文件的字节;没有这个文件 → null,读失败照抛(插件拿「读不到」当「没有」,下一步
+   *  就是把现有文件整份盖掉)。服务端这个端点只认 `ref`(带 `path` 是 400 ref required)。 */
+  const fetchAssetExact = async (norm: string): Promise<Response | null> => {
+    const v = await ensureVault()
+    for (let attempt = 0; ; attempt++) {
+      // ref 末尾带 '/':对不含 '/' 的 ref,服务端在精确路径找不到时会按文件名全库兜底(给 `![[pic.png]]` 用的),会把别的
+      // 目录里的同名文件读成库根这一个。带上 '/' 就只做精确匹配(server routes.ts 的 /asset:normalizePath 剥掉尾斜杠,
+      // 兜底只在原始 ref 不含 '/' 时才走)。
+      // 超时闸(同 cloudHttp,到响应头为止):无超时的 fetch 在弱网下挂死,插件的 readFile 就永不返回。
+      const ctrl = new AbortController()
+      const timer = setTimeout(() => ctrl.abort(), 30_000)
+      let r: Response
+      try {
+        r = await (cfg.request ?? fetch)(
+          `${cfg.apiBase}/amadeus/vaults/${encodeURIComponent(v)}/asset?ref=${encodeURIComponent(`${norm}/`)}`,
+          { headers: { Authorization: `Bearer ${cfg.getToken()}` }, signal: ctrl.signal }, // assetAuth 收 Bearer 主 token,无需等 asset-token
+        )
+      } catch (e) {
+        throw new HttpError(0, null, ctrl.signal.aborted
+          ? translate('amxbridge.timeout', { s: 30 })
+          : translate('amxbridge.network', { msg: e instanceof Error ? e.message : String(e) }))
+      } finally {
+        clearTimeout(timer)
+      }
+      if (r.ok) return r
+      if (r.status !== 404) throw new HttpError(r.status, null, translate('amxbridge.readFailed', { status: r.status }))
+      // 404 有两种:没有这一行;行在、对象取不到(别处正好在覆盖:查到的是旧对象,旧对象随即被删)。后一种不能当「没有」。
+      // 用文本端点按精确路径分辨:404 = 真没有;400 BINARY / 200 = 行在 → 重取一次,还取不到就抛。
+      try {
+        await http.get<FileDto>(fileUrl(), { path: norm })
+      } catch (e) {
+        if (is404(e)) return null
+        if (!(e instanceof HttpError && (e.body as { code?: unknown } | null)?.code === 'BINARY')) throw e
+      }
+      if (attempt >= 1) throw new Error(translate('amxbridge.readFailed', { status: 404 }))
+    }
+  }
+  /** UTF-8 解码并**保留 BOM**(`Response.text()` 会吞掉它):与文本端点、桌面读盘同口径,读了再写回不改字节,base 指纹也对得上。 */
+  const readBinaryText = async (norm: string): Promise<string | null> => {
+    const r = await fetchAssetExact(norm)
+    return r ? new TextDecoder('utf-8', { ignoreBOM: true }).decode(await r.arrayBuffer()) : null
+  }
+  /** 无 base = 原地覆盖、后写胜(桌面本地写盘的语义,也是下面文本分支「409 后按最新 seq 强写」的语义);别处删了就照写
+   *  重建 —— movedTo / recovered 那一套是给开着的笔记编辑器用的,旁挂文件不走。
+   *  create = 仅新建,已存在 → 不写、交回现文。base = 调用方以为盘上是什么的指纹:先取这一行的 seq、再取现文比对、
+   *  带 baseSeq 写 —— 取 seq 之后别处又写了一版,服务端 409 → 不写、交回现文,不盖掉没见过的内容。
+   *  ponytail: 文件的 seq 在「删了又新建」后从 1 重新数;取 seq 与写之间别处删掉并重建、恰好落回同一个 seq 时这层比对
+   *  挡不住(文本端点的 baseSeq 同此)。要堵死得服务端给不复用的版本号 / 行身份。今天没有调用方对非 .md / .db 路径带 base。 */
+  const writeBinaryText = (p: string, text: string, opts?: { base?: string; create?: boolean }): Promise<void | TextWriteResult> => {
+    const norm = normalizePosix(p.replace(/\\/g, '/'))?.normalize('NFC') // 服务端存的是 NFC:下面按路径对 tree 的行
+    if (!norm) return Promise.reject(new Error(translate('amxbridge.pathOutsideVault')))
+    return enqueue([norm], async (): Promise<void | TextWriteResult> => {
+      await ensureVault()
+      const bytes = new TextEncoder().encode(text)
+      const name = basenamePosix(norm)
+      const refused = async (e: unknown): Promise<TextWriteResult> => {
+        if (!is409(e)) throw e
+        return { ok: false, current: await readBinaryText(norm) }
+      }
+      if (opts?.create) return postBinary(norm, name, bytes, true).then(() => ({ ok: true }), refused)
+      if (typeof opts?.base !== 'string') { await postBinary(norm, name, bytes, false); return }
+      const seq = (await fetchTree(true)).entries?.find((e) => e.path === norm)?.seq ?? 0
+      const current = await readBinaryText(norm)
+      if (textFingerprint(current ?? '') !== opts.base) return { ok: false, current }
+      return postBinary(norm, name, bytes, false, undefined, seq).then(() => ({ ok: true }), refused)
+    })
   }
 
   // ---- 回收站(.trash/ 约定,镜像桌面 vaultManager 语义:.meta.json 记原位) --------
@@ -912,7 +989,7 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
       )
       let base = uniqueNameAmong(existing, safeName)
       // .db/.md 是文本文件:server kindForPath 按扩展名分 kind,binary 通道会被拒 → 走文本 PUT(seq 0 = 仅创建)。
-      const isText = /\.(db|md)$/i.test(safeName)
+      const isText = isCloudTextPath(safeName)
       for (let attempt = 0; attempt < 20; attempt++) {
         const { fileVaultRel, pageRel } = attachmentPaths(pagePath, base, opts)
         const clamped = normalizePosix(fileVaultRel)
@@ -1226,12 +1303,9 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
       await postBinary(norm, basenamePosix(norm), bytes, false) // 无 ifAbsent = 原地覆盖
     },
     readVaultBytes: async (vaultRel) => {
-      const v = await ensureVault()
-      const r = await (cfg.request ?? fetch)(
-        `${cfg.apiBase}/amadeus/vaults/${encodeURIComponent(v)}/asset?path=${encodeURIComponent(vaultRel)}`,
-        { headers: { Authorization: `Bearer ${cfg.getToken()}` } }, // assetAuth 收 Bearer 主 token,无需等 asset-token
-      )
-      if (!r.ok) throw new Error(translate('amxbridge.readFailed', { status: r.status }))
+      const norm = normalizePosix(vaultRel.replace(/\\/g, '/'))
+      const r = norm ? await fetchAssetExact(norm) : null
+      if (!r) throw new Error(translate('amxbridge.readFailed', { status: 404 }))
       return new Uint8Array(await r.arrayBuffer())
     },
 
@@ -1356,6 +1430,10 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
     // 不存在返回 null(桌面语义);写走同一条 enqueue 串行队列,避免与笔记保存互相踩 seq。
     readTextFile: async (p): Promise<string | null> => {
       await ensureVault()
+      if (!isCloudTextPath(p)) {
+        const norm = normalizePosix(p.replace(/\\/g, '/'))
+        return norm ? readBinaryText(norm) : null
+      }
       try {
         return (await getFile(p)).content
       } catch (e) {
@@ -1364,6 +1442,7 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
       }
     },
     writeTextFile: (p, text, opts) => {
+      if (!isCloudTextPath(p)) return writeBinaryText(p, text, opts)
       const held = keysFor(p)
       // 比对交换写(Codex g3#1,契约见 ipc.ts writeTextFile):调用方以为盘上是什么的指纹。云端的乐观并发是按 seq 的,
       // 这里把它补成与桌面主进程同形的内容 CAS —— 盘上不是基线就**不写**,回 { ok:false, current } 让 UnifiedPage

@@ -287,6 +287,14 @@ OLD_APK=/absolute/old.apk NEW_APK=android/app/build/outputs/apk/debug/app-debug.
   `window.tangu.spacesList` 交给渲染层的 `userSpaces.loadUserSpaces`(形状同桌面 `spaces:list` 里插件那一半)—— 装完 / 启停 / 卸载 / 冷启动
   之后 Space 跟着进出底部导航栏。`iconFile` 的查找次序与门禁同桌面(`desktop/shared/spaceIcon.ts`)。装不起来的插件(版本门禁 / 仅桌面)不贡献 Space。
   此前这座桥不存在:商店里的插件大多把 Space 写在包里,装上以后命令和视图都在,Space 不出现。
+- **云端库下的旁挂文件**(2026-10-09):手机缺省用云端库。插件经 `ctx.app.writeFile / readFile` 读写的索引、缓存、快照
+  (多为点开头的 `.json`)在云端是**二进制行** —— 服务端只把 `.md` / `.db` 当文本,桌面同步引擎也是按二进制把它们传上去的。
+  云端桥(`web/src/amadeus/cloudBridge.ts` 的 `writeBinaryText` / `fetchAssetExact`)因此把非 `.md` / `.db` 的文本读写落到
+  `POST /binary` 与 `GET /asset?ref=`:手机写的和桌面传的是同一行。插件直接写是原地覆盖、后写胜(与桌面写本地盘同语义);
+  桌面同步引擎推送时发现云端已被改过,云端那版留在原路径、桌面那版另存为冲突副本(引擎既有行为)。
+  读取一律按精确路径(`ref` 末尾带 `/`)—— 服务端的资源端点对不带目录的名字会按文件名全库兜底;
+  文件不存在给 null,行在而字节一时取不到(别的设备正在覆盖)重取一次、仍取不到就抛,不当成「不存在」。
+  此前文本端点对这类路径一律答 400:记忆闪卡的索引、青鸟收藏夹的旁挂 json、园丁的快照等全写不下,`readBytes` 也恒读不到。
 - **手机暂不支持**:插件状态栏项(没有状态栏)、捆绑包里的引擎插件 / Agent / 技能(没有本机引擎)、主题 / Space / 技能 / Agent 类市场条目、
   用户自建 Space(没有 `spacesSave` / `spacesDelete`)、npm 来源的条目(桌面同样不支持)。
 - **安全**:插件代码与 App 渲染层同一个 JS 作用域 —— 能调 `window.tangu` / `window.amadeus` 的一切,包括已登录账号的云端接口
@@ -294,9 +302,14 @@ OLD_APK=/absolute/old.apk NEW_APK=android/app/build/outputs/apk/debug/app-debug.
 
 ```bash
 npm run test:plugins                 # 宿主 / 市场纯逻辑单测(内存文件系统,不用 build)
-rm -rf dist && npm run build && npm run e2e:plugins   # 真浏览器:市场 → 安装 → 运行 → 包里带的 Space → 刷新 → 停用 → 卸载
+rm -rf dist && npm run build && npm run e2e:plugins   # 真浏览器:市场 → 安装 → 运行 → 包里带的 Space → 云端库下的旁挂文件 → 刷新 → 停用 → 卸载
 npm run e2e:plugins -- --negative    # 负对照:去掉 'unsafe-eval' 后必须红
+(cd ../desktop && npx vitest run frontend/src/services/cloudBridgeSidecar.test.ts)   # 云端桥:旁挂文件的仅新建 / 比对写两条分支
 ```
+
+`e2e:plugins` 里的云端库由脚本自带的假云端库扮演(`startFakeCloud`,判据镜像 server 的 amadeus 模块:只有 `.md` / `.db` 走文本端点)。
+要对着真服务端的路由跑:在 server 仓用 `microserver/amadeus/services/shareLifecycle.test.ts` 的 `mountRouter` 那套(真路由 + PGlite + 内存对象存储)
+起一个本机服务,再 `E2E_AMADEUS_API=http://127.0.0.1:<端口> npm run e2e:plugins`。
 
 ## 深链登录(需服务端确认一处)
 
