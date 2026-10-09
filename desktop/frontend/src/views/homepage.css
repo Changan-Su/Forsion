@@ -22,10 +22,10 @@
    * (病理见 scripts/shell-noscroll.check.cjs 抬头)。闸在 check:homepage 第 16 条。 */
   overflow: clip;
   display: flex;
-  /* 移动端由 base.css 注入胶囊安全间距:只让内容,壁纸仍从视图顶端开始。
-   * 断点只改原有留白,不能覆盖掉 --hp-chrome-top(含刘海安全区)。 */
+  /* 移动端由 base.css 注入胶囊安全间距:只让内容,壁纸仍从视图顶端开始、铺到视图底端。
+   * 断点只改原有留白,不能覆盖掉 --hp-chrome-top(含刘海安全区)/ --hp-chrome-bottom(Android 悬浮 Dock)。 */
   --hp-padding-block: clamp(24px, 5vh, 48px);
-  padding: calc(var(--hp-chrome-top, 0px) + var(--hp-padding-block)) 24px var(--hp-padding-block);
+  padding: calc(var(--hp-chrome-top, 0px) + var(--hp-padding-block)) 24px calc(var(--hp-chrome-bottom, 0px) + var(--hp-padding-block));
   isolation: isolate;
   background: var(--bg);
   /* 旧 Desktop 的磨砂是「底图采样 + 染色」,不能只叠一块半透明底色。
@@ -550,7 +550,7 @@ html[data-glass='off'] .hp-root .hp-composer .project-pill::before {
   inset: 0;
   display: grid;
   place-items: center;
-  padding: calc(var(--hp-chrome-top, 0px) + 24px) 24px 24px;
+  padding: calc(var(--hp-chrome-top, 0px) + 24px) 24px calc(var(--hp-chrome-bottom, 0px) + 24px);
 }
 /* opacity/filter 在祖先上会截断玻璃的 backdrop。入场只动定位容器的 transform,
  * 遮罩淡入放在独立叶子,绝不给抽屉/输入卡的祖先加透明度动画。 */
@@ -1054,7 +1054,7 @@ html[data-glass='off'] .hp-root .hp-composer .project-pill::before {
   .hp-composer .t2c-card { padding-inline: 11px; }
   .hp-folder-stage,
   .hp-organizer-stage,
-  .hp-wallpaper-stage { padding: calc(var(--hp-chrome-top, 0px) + 10px) 10px 10px; }
+  .hp-wallpaper-stage { padding: calc(var(--hp-chrome-top, 0px) + 10px) 10px calc(var(--hp-chrome-bottom, 0px) + 10px); }
   .hp-organizer-panel { width: min(390px, 100%); padding-inline: 2px; }
   .hp-organizer-grid { grid-template-columns: repeat(4, 72px); grid-auto-rows: 76px; gap: 4px 6px; }
   .hp-organizer-grid .hp-tile,

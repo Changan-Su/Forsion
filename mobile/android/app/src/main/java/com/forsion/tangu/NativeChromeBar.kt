@@ -10,17 +10,16 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.BoxWithConstraints
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -29,110 +28,173 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Text
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
-import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.compositeOver
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.selected
-import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.testTagsAsResourceId
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.unit.toSize
 import androidx.core.graphics.Insets
 
-/** Height of the bar's own row (below the status-bar inset). The plugin lays the WebView out under it. */
-internal val NATIVE_CHROME_HEIGHT = 56.dp
+/**
+ * Room the top capsules take below the status-bar inset: 6dp + the 46dp capsules + 6dp. Floating (shell pages), the
+ * page keeps that much clear at the top of what it scrolls; otherwise the plugin lays the WebView out under it.
+ */
+internal val NATIVE_CHROME_HEIGHT = 58.dp
+private val CAPSULE_HEIGHT = 46.dp
+private val CAPSULE_GAP = 6.dp
+/** Distance of a capsule from the screen's side edge (plus any cutout inset). */
+private val CAPSULE_SIDE = 12.dp
+/** The two top capsules never touch: what is left between them shows the page (and passes touches to it). */
+private val CAPSULE_BETWEEN = 8.dp
+/** Fill of a capsule the page blurs behind (2026-10-09, the "medium" glass of the mock-up the user picked from). */
+private const val FROSTED_FILL = 0.5f
 
 /**
- * Native top app bar. Shell mode: left drawer · title · right drawer · tab count · more · account avatar
- * (the avatar only when JS sends one: first-level pages). Page mode: back · title · optional close.
- * JS owns everything; buttons only report actions.
- * Test anchors: `nativeChrome.{bar,left,right,tabs,more,account,back,close,title}` (Compose testTags as resource-ids).
+ * Where a capsule ended up, in window pixels (null = it is gone). The plugin passes these on to the page, which
+ * draws the blur and the shadow there: a native view cannot blur the WebView behind it, the page can.
+ */
+internal typealias PlateSink = (id: String, bounds: Rect?) -> Unit
+
+/** A capsule's own paint: the page's card colour (thin when the page blurs behind it) and the theme's hairline. */
+private class CapsuleLook(theme: SheetTheme, frosted: Boolean) {
+    val fill = Color(theme.surface).copy(alpha = if (frosted) FROSTED_FILL else 1f)
+    val edge = Color(theme.border)
+}
+
+/**
+ * Native top chrome: two capsules. Left = where you are (back / left drawer · title), right = what you can do
+ * (right drawer · tab count · more · account avatar — the avatar only when JS sends one: first-level pages).
+ * Page mode: back · title on the left, an optional close on the right. JS owns everything; buttons only report actions.
+ * Floating (shell pages that asked for it) the view is see-through around the capsules and the WebView runs under
+ * it; otherwise the strip is painted and the WebView starts below.
+ * Test anchors: `nativeChrome.{bar,capLeft,capRight,left,right,tabs,more,account,back,close,title}` (resource-ids).
  */
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
-internal fun NativeChromeBar(state: ChromeState, insets: Insets, onAction: (String) -> Unit) {
+internal fun NativeChromeBar(state: ChromeState, insets: Insets, onPlate: PlateSink, onAction: (String) -> Unit) {
     val theme = state.theme
-    val bg = Color(theme.background)
     val fg = Color(theme.text)
     val density = LocalDensity.current
     val top: Dp = with(density) { insets.top.toDp() }
     val start: Dp = with(density) { insets.left.toDp() }
     val end: Dp = with(density) { insets.right.toDp() }
     val scheme = remember(theme) { theme.colorScheme() }
-    MaterialTheme(colorScheme = scheme) { Column(
-        Modifier.fillMaxSize().background(bg)
+    val look = remember(theme, state.frosted) { CapsuleLook(theme, state.frosted) }
+    MaterialTheme(colorScheme = scheme) { Box(
+        Modifier.fillMaxSize()
+            .then(if (state.floating) Modifier else Modifier.background(Color(theme.background)))
             .semantics { testTagsAsResourceId = true }
             .testTag("nativeChrome.bar"),
     ) {
-        Spacer(Modifier.height(top))
-        Box(Modifier.fillMaxWidth().height(NATIVE_CHROME_HEIGHT)) {
-            Row(
-                Modifier.fillMaxSize().padding(start = start + 4.dp, end = end + 4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                when (state.mode) {
-                    ChromeState.Mode.SHELL -> {
-                        if (state.left) BarIconButton("left", state.labels.getValue("left"), state.icons.left, fg) { onAction("left") }
-                        else Spacer(Modifier.width(10.dp)) // a first-level page (Space list, Home): the title starts at the edge
-                        BarTitle(state.title, fg, Modifier.weight(1f).padding(horizontal = 6.dp))
-                        if (state.right) BarIconButton("right", state.labels.getValue("right"), state.icons.right, fg) { onAction("right") }
+        Row(
+            Modifier.fillMaxWidth()
+                .padding(top = top + CAPSULE_GAP, start = start + CAPSULE_SIDE, end = end + CAPSULE_SIDE)
+                .height(CAPSULE_HEIGHT),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            when (state.mode) {
+                ChromeState.Mode.SHELL -> {
+                    // A first-level page (Space list, Home) has no left button: the capsule is just the title.
+                    if (state.left || state.title.isNotBlank()) Capsule("capLeft", look, onPlate, Modifier.weight(1f, fill = false)) {
+                        if (state.left) CapsuleIconButton("left", state.labels.getValue("left"), state.icons.left, fg) { onAction("left") }
+                        CapsuleTitle(state.title, fg, lead = !state.left)
+                    } else Spacer(Modifier.width(0.dp)) // keeps the other capsule at the trailing edge
+                    Capsule("capRight", look, onPlate, Modifier.padding(start = CAPSULE_BETWEEN)) {
+                        if (state.right) CapsuleIconButton("right", state.labels.getValue("right"), state.icons.right, fg) { onAction("right") }
                         // One tab = nothing to switch between: the count would only take a slot ("New tab" is in ⋯).
                         if (state.tabCount > 1) TabCountButton(state.tabCount, state.labels.getValue("tabs"), fg) { onAction("tabs") }
-                        BarIconButton("more", state.labels.getValue("more"), state.icons.more, fg) { onAction("more") }
+                        CapsuleIconButton("more", state.labels.getValue("more"), state.icons.more, fg) { onAction("more") }
                         state.account?.let { AvatarButton(it, Color(theme.accent)) { onAction("account") } }
                     }
-                    ChromeState.Mode.PAGE -> {
-                        BarIconButton("back", state.back, state.icons.back ?: BuiltinIcons.chevronLeft, fg) { onAction("back") }
-                        BarTitle(state.title, fg, Modifier.weight(1f).padding(start = 6.dp, end = if (state.close.isNotBlank()) 6.dp else 12.dp))
-                        if (state.close.isNotBlank()) {
-                            BarIconButton("close", state.close, state.icons.close ?: BuiltinIcons.close, fg) { onAction("close") }
-                        }
-                    }
-                    ChromeState.Mode.HIDDEN -> Unit
                 }
+                ChromeState.Mode.PAGE -> {
+                    Capsule("capLeft", look, onPlate, Modifier.weight(1f, fill = false)) {
+                        CapsuleIconButton("back", state.back, state.icons.back ?: BuiltinIcons.chevronLeft, fg) { onAction("back") }
+                        CapsuleTitle(state.title, fg, lead = false)
+                    }
+                    if (state.close.isNotBlank()) Capsule("capRight", look, onPlate, Modifier.padding(start = CAPSULE_BETWEEN)) {
+                        CapsuleIconButton("close", state.close, state.icons.close ?: BuiltinIcons.close, fg) { onAction("close") }
+                    }
+                }
+                ChromeState.Mode.HIDDEN -> Unit
             }
-            Box(Modifier.align(Alignment.BottomStart).fillMaxWidth().height(1.dp).background(Color(theme.border)))
         }
     } }
 }
 
+/** One capsule. [modifier] is laid out outside its paint (spacing, weight); its painted bounds go to [onPlate]. */
 @Composable
-private fun BarTitle(title: String, color: Color, modifier: Modifier) {
+private fun Capsule(id: String, look: CapsuleLook, onPlate: PlateSink, modifier: Modifier = Modifier, content: @Composable RowScope.() -> Unit) {
+    DisposableEffect(id) { onDispose { onPlate(id, null) } }
+    Row(
+        modifier.height(CAPSULE_HEIGHT)
+            .onGloballyPositioned { onPlate(id, Rect(it.positionInWindow(), it.size.toSize())) }
+            .clip(CircleShape).background(look.fill).border(1.dp, look.edge, CircleShape)
+            .padding(horizontal = 3.dp)
+            .testTag("nativeChrome.$id"),
+        verticalAlignment = Alignment.CenterVertically, content = content,
+    )
+}
+
+/** [lead] = nothing stands before the title in its capsule: it starts at the capsule's own text inset. */
+@Composable
+private fun RowScope.CapsuleTitle(title: String, color: Color, lead: Boolean) {
+    if (title.isBlank()) return
     Text(
-        title, modifier.testTag("nativeChrome.title"), color = color, fontSize = 17.sp,
-        fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis,
+        title, Modifier.weight(1f, fill = false).padding(start = if (lead) 14.dp else 2.dp, end = 14.dp).testTag("nativeChrome.title"),
+        color = color, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis,
     )
 }
 
 @Composable
-private fun BarIconButton(id: String, label: String, icon: NativeIconSpec?, tint: Color, onClick: () -> Unit) {
+private fun CapsuleIconButton(id: String, label: String, icon: NativeIconSpec?, tint: Color, onClick: () -> Unit) {
     Box(
-        Modifier.size(48.dp).clip(CircleShape)
+        Modifier.size(40.dp).clip(CircleShape)
             .clickable(role = Role.Button, onClick = onClick)
             .semantics { contentDescription = label }
             .testTag("nativeChrome.$id"),
@@ -156,7 +218,7 @@ private fun rememberPng(png: String): ImageBitmap? = remember(png) {
 private fun AvatarButton(account: ChromeAccount, accent: Color, onClick: () -> Unit) {
     val picture = rememberPng(account.png)
     Box(
-        Modifier.padding(end = 3.dp).size(48.dp).clip(CircleShape) // 3dp: the disc ends where a 24dp bar icon would (16dp from the edge)
+        Modifier.size(40.dp).clip(CircleShape)
             .clickable(role = Role.Button, onClick = onClick)
             .semantics { contentDescription = account.label }
             .testTag("nativeChrome.account"),
@@ -178,7 +240,7 @@ private fun AvatarButton(account: ChromeAccount, accent: Color, onClick: () -> U
 @Composable
 private fun TabCountButton(count: Int, label: String, tint: Color, onClick: () -> Unit) {
     Box(
-        Modifier.size(48.dp).clip(CircleShape)
+        Modifier.size(40.dp).clip(CircleShape)
             .clickable(role = Role.Button, onClick = onClick)
             .semantics { contentDescription = label }
             .testTag("nativeChrome.tabs"),
@@ -193,94 +255,104 @@ private fun TabCountButton(count: Int, label: String, tint: Color, onClick: () -
     }
 }
 
-/** Height of the bottom navigation row (above the system navigation inset). */
-internal val NATIVE_SPACE_BAR_HEIGHT = 64.dp
+/**
+ * Room the dock takes above the system navigation inset: 6dp + the 56dp dock + 6dp. Floating, the page keeps that
+ * much clear at the bottom of what it scrolls; otherwise the plugin ends the WebView above it.
+ */
+internal val NATIVE_SPACE_BAR_HEIGHT = 68.dp
+private val DOCK_HEIGHT = 56.dp
+private val DOCK_GAP = 6.dp
+private val DOCK_CELL_HEIGHT = 42.dp
+private val DOCK_CELL_WIDTH = 48.dp
+/** How much of a neighbour stays visible beside the active Space when the dock scrolls (also the width of its fading edges). */
+private val DOCK_PEEK = 24.dp
 
 /**
- * Bottom navigation bar: one destination per Space (icon in a pill + label). Up to five share the width. With more,
- * the first one (Home) stays put and the rest scroll beside it, the next one peeking in (1 fixed + 4.5 scrolling per
- * screen). Tap = switch (with a light tick when it really switches), long-press = pin to the launcher.
+ * Bottom dock: one capsule, centred, as wide as its Spaces (the screen's width at most). A Space is its icon; the one
+ * you are in also carries its name, on an accent-tinted pill (2026-10-09, variant B of the mock-up). The first one
+ * (Home) never scrolls; the rest scroll beside it when they do not fit, fading at the edge that has more.
+ * Tap = switch (with a light tick when it really switches), long-press = pin to the launcher.
  * A Space may carry a badge: a dot at its icon's top-right corner (see ChromeBadge).
- * Test anchors: `nativeChrome.spaces`, `nativeChrome.space.<id>`.
+ * Test anchors: `nativeChrome.spaces` (the strip), `nativeChrome.dock` (the capsule), `nativeChrome.space.<id>`.
  */
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
-internal fun NativeSpaceBar(state: ChromeState, insets: Insets, onSpace: (id: String, long: Boolean) -> Unit) {
+internal fun NativeSpaceBar(state: ChromeState, insets: Insets, onPlate: PlateSink, onSpace: (id: String, long: Boolean) -> Unit) {
     val theme = state.theme
     val density = LocalDensity.current
     val scheme = remember(theme) { theme.colorScheme() }
-    val accent = Color(theme.accent)
-    val muted = Color(theme.muted)
-    val cell = CellColors(accent, muted, Color(theme.warning), Color(theme.background))
-    MaterialTheme(colorScheme = scheme) { Column(
-        Modifier.fillMaxSize().background(Color(theme.background))
+    val look = remember(theme, state.frosted) { CapsuleLook(theme, state.frosted) }
+    val cell = CellColors(Color(theme.accent), Color(theme.muted), Color(theme.warning), Color(theme.surface))
+    DisposableEffect(Unit) { onDispose { onPlate("dock", null) } }
+    MaterialTheme(colorScheme = scheme) { Box(
+        Modifier.fillMaxSize()
+            .then(if (state.floating) Modifier else Modifier.background(Color(theme.background)))
             .semantics { testTagsAsResourceId = true }
             .testTag("nativeChrome.spaces"),
+        contentAlignment = Alignment.TopCenter,
     ) {
-        Box(Modifier.fillMaxWidth().height(1.dp).background(Color(theme.border)))
-        BoxWithConstraints(
-            Modifier.fillMaxWidth().height(NATIVE_SPACE_BAR_HEIGHT - 1.dp)
-                .padding(start = with(density) { insets.left.toDp() }, end = with(density) { insets.right.toDp() }),
+        val scrollState = rememberScrollState()
+        Row(
+            Modifier.padding(
+                top = DOCK_GAP,
+                start = with(density) { insets.left.toDp() } + CAPSULE_SIDE, end = with(density) { insets.right.toDp() } + CAPSULE_SIDE,
+            )
+                .height(DOCK_HEIGHT)
+                .onGloballyPositioned { onPlate("dock", Rect(it.positionInWindow(), it.size.toSize())) }
+                .clip(CircleShape).background(look.fill).border(1.dp, look.edge, CircleShape)
+                .padding(horizontal = 7.dp)
+                .testTag("nativeChrome.dock"),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            val scroll = state.spaces.size > 5
-            val itemWidth = if (scroll) maxWidth / 5.5f else maxWidth / state.spaces.size
-            // More than five: the first destination never scrolls. On the sixth Space or later it used to slide off the
-            // left edge — "the Home page is gone" (2026-10-04); the user asked for Home to be pinned (2026-10-05).
+            // The first destination never scrolls: on a later Space it used to slide off the left edge — "the Home page
+            // is gone" (2026-10-04); the user asked for Home to be pinned (2026-10-05).
             // ponytail: pinned by position, not by id — Home is whatever JS lists first (a Space re-enabled at runtime
             // is appended). Send a flag from JS if "first" ever stops meaning Home.
-            val pinned = if (scroll) state.spaces.take(1) else emptyList()
-            val rest = if (scroll) state.spaces.drop(1) else state.spaces
-            val scrollState = rememberScrollState()
-            // The bar leaves composition (page mode, a Space's detail level) and comes back at offset 0: bring the
-            // active Space back into view, otherwise "nothing looks selected" when it sits past the last visible slot.
-            // As little as possible from the start, not centred (the first scrolling Spaces stay where they were), plus
-            // half a cell while another one follows: the next Space keeps peeking in at the end, and the 4.5-cell
-            // viewport then starts on a cell boundary instead of cutting one in half beside the pinned cell.
-            val activeIndex = rest.indexOfFirst { it.active }
-            val itemPx = with(density) { itemWidth.toPx() }
-            val viewportPx = with(density) { (maxWidth - itemWidth * pinned.size).toPx() }
-            LaunchedEffect(activeIndex, scroll, itemPx, viewportPx, rest.size) {
-                if (scroll && activeIndex >= 0) {
-                    val peek = if (activeIndex < rest.lastIndex) itemPx / 2 else 0f
-                    // floor, not ceil: with the half-cell peek the target sits on a cell boundary, and a pixel past it
-                    // would leave a sliver of the previous cell's far edge out of view instead of the cell itself
-                    scrollState.scrollTo(((activeIndex + 1) * itemPx + peek - viewportPx).toInt().coerceAtLeast(0))
-                }
-            }
-            Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
-                for (space in pinned) SpaceCell(space, itemWidth, cell, onSpace)
-                // While the rest is scrolled, a hairline marks the edge the cells slide under (at rest the bar looks like a
-                // plain five-slot bar). Drawn over the viewport, not laid out: the scroll maths above stays exact.
-                val edge = Color(theme.border)
-                Row(
-                    if (scroll) Modifier.weight(1f).drawWithContent {
-                        drawContent()
-                        if (scrollState.value > 0) {
-                            val inset = 14.dp.toPx()
-                            drawLine(edge, Offset(0f, inset), Offset(0f, size.height - inset), strokeWidth = 1.dp.toPx())
-                        }
-                    }.horizontalScroll(scrollState) else Modifier.weight(1f),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    for (space in rest) SpaceCell(space, itemWidth, cell, onSpace)
-                }
+            for (space in state.spaces.take(1)) SpaceCell(space, cell, onSpace)
+            Row(
+                Modifier.weight(1f, fill = false).fadingEdges(scrollState, with(density) { DOCK_PEEK.toPx() }).horizontalScroll(scrollState),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                for (space in state.spaces.drop(1)) SpaceCell(space, cell, onSpace)
             }
         }
     } }
 }
 
+/** Content fades out towards an edge it can still scroll past (nothing is drawn over it: the dock's fill is see-through). */
+private fun Modifier.fadingEdges(state: ScrollState, width: Float): Modifier = this
+    .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+    .drawWithContent {
+        drawContent()
+        if (state.canScrollBackward) drawRect(Brush.horizontalGradient(listOf(Color.Transparent, Color.Black), 0f, width), blendMode = BlendMode.DstIn)
+        if (state.canScrollForward) drawRect(Brush.horizontalGradient(listOf(Color.Black, Color.Transparent), size.width - width, size.width), blendMode = BlendMode.DstIn)
+    }
+
+/** `bar` = what the dock is filled with (the ring around a badge dot is that colour). */
 private class CellColors(val accent: Color, val muted: Color, val warning: Color, val bar: Color)
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun SpaceCell(space: ChromeSpace, width: Dp, colors: CellColors, onSpace: (id: String, long: Boolean) -> Unit) {
+private fun SpaceCell(space: ChromeSpace, colors: CellColors, onSpace: (id: String, long: Boolean) -> Unit) {
     val accent = colors.accent
     val tint = if (space.active) accent else colors.muted
     val pill = if (space.active) accent.copy(alpha = 0.16f) else Color.Transparent
     val view = LocalView.current
     val badgeLabel = space.badge?.label.orEmpty()
-    Column(
-        Modifier.width(width).height(NATIVE_SPACE_BAR_HEIGHT - 1.dp)
+    // The dock leaves composition (page mode, a Space's detail level) and comes back unscrolled, and a Space can be
+    // switched to from elsewhere: the active one is brought back into view with a bit of its neighbours, otherwise
+    // "nothing looks selected" when it sits past the last visible slot.
+    val requester = remember { BringIntoViewRequester() }
+    var size by remember { mutableStateOf(IntSize.Zero) }
+    val peek = with(LocalDensity.current) { DOCK_PEEK.toPx() }
+    LaunchedEffect(space.active, size) {
+        if (space.active && size != IntSize.Zero) requester.bringIntoView(Rect(-peek, 0f, size.width + peek, size.height.toFloat()))
+    }
+    Row(
+        Modifier.height(DOCK_CELL_HEIGHT)
+            .then(if (space.active) Modifier else Modifier.width(DOCK_CELL_WIDTH))
+            .bringIntoViewRequester(requester).onSizeChanged { size = it }
+            .clip(RoundedCornerShape(21.dp)).background(pill)
             .combinedClickable(
                 role = Role.Tab,
                 onClick = {
@@ -291,18 +363,19 @@ private fun SpaceCell(space: ChromeSpace, width: Dp, colors: CellColors, onSpace
                 },
                 onLongClick = { onSpace(space.id, true) },
             )
-            .semantics { selected = space.active; if (badgeLabel.isNotBlank()) stateDescription = badgeLabel }
-            .testTag("nativeChrome.space.${space.id}"),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center,
+            .semantics {
+                selected = space.active
+                if (!space.active) contentDescription = space.label // only the active Space shows its name
+                if (badgeLabel.isNotBlank()) stateDescription = badgeLabel
+            }
+            .testTag("nativeChrome.space.${space.id}")
+            .padding(start = if (space.active) 11.dp else 0.dp, end = if (space.active) 15.dp else 0.dp),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box(
-            Modifier.width(56.dp).height(30.dp).clip(RoundedCornerShape(15.dp))
-                .background(pill),
-            contentAlignment = Alignment.Center,
-        ) {
+        Box(Modifier.size(28.dp), contentAlignment = Alignment.Center) {
             // A Space with a picture of its own (a plugin's icon) shows it, in its own colours like the desktop ribbon:
-            // the pill and the label carry the selection. Otherwise — or while the picture is not there — its line icon.
+            // the pill and the name carry the selection. Otherwise — or while the picture is not there — its line icon.
             val picture = rememberPng(space.png)
             if (picture != null) {
                 Image(
@@ -310,16 +383,17 @@ private fun SpaceCell(space: ChromeSpace, width: Dp, colors: CellColors, onSpace
                     modifier = Modifier.size(NATIVE_ICON_SIZE).clip(RoundedCornerShape(6.dp)).testTag("nativeChrome.spacePicture"),
                 )
             } else if (space.icon != null) NativeIconView(space.icon, tint, NATIVE_ICON_SIZE)
-            // The 24dp icon sits at x 16..40, y 3..27 of the pill and its strokes fill about 20dp of that: the dot's centre
-            // goes on the glyph's top-right corner. The ring is the colour under it, so the dot reads as cut out of the icon.
-            space.badge?.let { BadgeDot(it.kind, colors, pill.compositeOver(colors.bar), Modifier.align(Alignment.TopStart).offset(x = 33.dp, y = 1.dp)) }
+            // The 22dp icon sits at 3..25 of this box and its strokes fill about 20dp of that: the dot's centre goes on the
+            // glyph's top-right corner. The ring is the colour under it, so the dot reads as cut out of the icon.
+            space.badge?.let { BadgeDot(it.kind, colors, pill.compositeOver(colors.bar), Modifier.align(Alignment.TopStart).offset(x = 19.dp, y = 0.dp)) }
         }
-        Spacer(Modifier.height(3.dp))
-        Text(
-            space.label, color = tint, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
-            fontWeight = if (space.active) FontWeight.SemiBold else FontWeight.Normal,
-            modifier = Modifier.padding(horizontal = 2.dp),
-        )
+        if (space.active) {
+            Spacer(Modifier.width(6.dp))
+            Text(
+                space.label, color = accent, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, maxLines = 1,
+                overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 132.dp),
+            )
+        }
     }
 }
 

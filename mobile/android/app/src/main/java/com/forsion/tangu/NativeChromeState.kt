@@ -51,6 +51,14 @@ internal data class ChromeState(
     /** Shell mode: Spaces for the bottom navigation bar; fewer than two = no bar. */
     val spaces: List<ChromeSpace> = emptyList(),
     val account: ChromeAccount? = null,
+    /**
+     * Shell mode: the page lays its content out under the bars (edge to edge) and wants them as capsules floating
+     * over it. Absent / false = the bars keep their own strips and the WebView sits between them — pages and
+     * covering overlays (settings, market, onboarding) always do: they know nothing about the capsules' room.
+     */
+    val floating: Boolean = false,
+    /** With [floating]: the page blurs what is behind each capsule (it draws a plate where `layout` says), so the fill is thin. */
+    val frosted: Boolean = false,
 ) {
     enum class Mode { SHELL, PAGE, HIDDEN }
 
@@ -133,6 +141,8 @@ internal data class ChromeState(
                         tabCount = count.toInt(),
                         labels = listOf("left", "right", "tabs", "more").associateWith { NativeJson.str(labels, it, 128) },
                         back = "", theme = theme, icons = icons, spaces = spaces(json), account = account(json),
+                        floating = NativeJson.optBool(json, "floating"),
+                        frosted = NativeJson.optBool(json, "floating") && NativeJson.optBool(json, "frosted"),
                     )
                 }
                 Mode.PAGE -> ChromeState(

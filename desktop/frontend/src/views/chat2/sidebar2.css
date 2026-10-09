@@ -265,6 +265,8 @@
 /* 常驻底部区(sticky footer):笔记的回收站 / 会话的添加本地工作区+已归档 —— 不随列表滚走。
  * 归档展开可能很长 → 自身 max-height + 滚动,绝不无限撑高把列表挤没。 */
 .t2s-foot { flex: 0 0 auto; -webkit-app-region: no-drag; border-top: var(--border-width, 1px) solid var(--border); padding: 3px 6px 6px; max-height: 45vh; overflow-y: auto; }
+/* 排进列表末尾的那种(宿主底部浮着 Dock,见 SidebarPane 的 dockHost):跟着列表滚,不再自己限高、自己滚。 */
+.t2s-scroll > .t2s-foot { max-height: none; overflow: visible; margin-top: 6px; padding-inline: 0; }
 .t2s-hint { padding: 7.5px; font-size: var(--ui-font-meta, 12px); color: var(--text-muted); }
 
 /* 顶部入口行 */

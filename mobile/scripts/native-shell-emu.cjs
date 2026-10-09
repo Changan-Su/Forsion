@@ -623,16 +623,50 @@ const tabCountText = (list) => {
     const b = document.querySelector('.hp-organizer-new'); if (!b) throw new Error('new folder button'); b.click(); return true })()`)
 
   let statusBar = 0
-  const barPx = Math.round(56 * Number(h.adb('shell', 'wm', 'density').match(/(\d+)\s*$/)[1]) / 160)
+  let detailBottom = 0
+  const density = Number(h.adb('shell', 'wm', 'density').match(/(\d+)\s*$/)[1]) / 160
+  const barPx = Math.round(58 * density) // the capsules' room below the status bar (NATIVE_CHROME_HEIGHT)
+  const dockPx = Math.round(68 * density) // the dock's room above the navigation inset (NATIVE_SPACE_BAR_HEIGHT)
+  const screen = (() => { const m = h.adb('shell', 'wm', 'size').match(/(\d+)x(\d+)\s*$/); return { w: Number(m[1]), h: Number(m[2]) } })()
+  /** A page element's box in device pixels (see elPoint for the zoom arithmetic); null when it is not there. */
+  const elRect = async (expr) => {
+    const r = await cdp.eval(`(() => { const el = ${expr}; if (!el) return null; const r = el.getBoundingClientRect()
+      let z = 1; for (let e = el; e; e = e.parentElement) z *= parseFloat(getComputedStyle(e).zoom) || 1
+      return { left: r.left * z, top: r.top * z, right: r.right * z, bottom: r.bottom * z, dpr: devicePixelRatio } })()`)
+    if (!r) return null
+    const wv = webViewNode(ui())
+    const px = (v, o) => Math.round(o + v * r.dpr)
+    return { left: px(r.left, wv.rect.left), top: px(r.top, wv.rect.top), right: px(r.right, wv.rect.left), bottom: px(r.bottom, wv.rect.top) }
+  }
+  /** What the page was told about the floating chrome (dp) and what it made of it: the room it keeps clear (device px,
+   *  measured on a probe) and the plates it draws behind the capsules (device px). */
+  const chromeOnPage = async () => {
+    const page = await cdp.eval(`(() => { const cs = getComputedStyle(document.body), shell = document.querySelector('.mb-shell')
+      const num = (k) => Number(cs.getPropertyValue(k)) || 0
+      const probe = document.createElement('div'); probe.style.cssText = 'position:absolute;left:0;top:0;width:1px;height:var(--mb-top);padding-bottom:var(--mb-bottom);box-sizing:content-box'
+      shell.appendChild(probe); const z = parseFloat(getComputedStyle(document.body).zoom) || 1
+      const top = parseFloat(getComputedStyle(probe).height) * z, bottom = parseFloat(getComputedStyle(probe).paddingBottom) * z; probe.remove()
+      const scrim = getComputedStyle(shell, '::before')
+      return { nc: { top: num('--nc-top'), bottom: num('--nc-bottom'), status: num('--nc-status') }, clear: { top, bottom }, dpr: devicePixelRatio,
+        scrim: scrim.display === 'none' ? 0 : parseFloat(scrim.height) * z,
+        plates: [...document.querySelectorAll('#nc-plates .nc-plate')].map((e) => { const r = e.getBoundingClientRect(); const cs = getComputedStyle(e)
+          return { id: e.dataset.plate, left: r.left * z, top: r.top * z, right: r.right * z, bottom: r.bottom * z, blur: cs.backdropFilter || cs.webkitBackdropFilter || '' } }) } })()`)
+    const wv = webViewNode(ui())
+    const px = (v, o) => Math.round(o + v * page.dpr)
+    return { ...page, clearPx: { top: Math.round(page.clear.top * page.dpr), bottom: Math.round(page.clear.bottom * page.dpr) }, scrimPx: Math.round(page.scrim * page.dpr),
+      plates: page.plates.map((p) => ({ id: p.id, blur: p.blur, rect: { left: px(p.left, wv.rect.left), top: px(p.top, wv.rect.top), right: px(p.right, wv.rect.left), bottom: px(p.bottom, wv.rect.top) } })) }
+  }
+  const near = (a, b, tol = 2) => Math.abs(a - b) <= tol
+  const sameRect = (a, b, tol = 2) => near(a.left, b.left, tol) && near(a.top, b.top, tol) && near(a.right, b.right, tol) && near(a.bottom, b.bottom, tol)
+  const fmt = (r) => `[${r.left},${r.top}][${r.right},${r.bottom}]`
 
   await check('native top bar replaces the web .mb-topbar (zh, light)', async () => {
     const list = ui()
     for (const id of ['nativeChrome.bar', 'nativeChrome.more', 'nativeChrome.title']) assert.ok(h.byId(list, id), `missing ${id}`)
     // the count button is there with two or more tabs only (the tabs check below walks both states)
     if (h.byId(list, 'nativeChrome.tabs')) assert.ok(Number(tabCountText(list)) > 1, `a count button showing ${tabCountText(list)}`)
-    const web = await cdp.eval(`({ topbar: !!document.querySelector('.mb-topbar'), native: document.querySelector('.mb-shell').hasAttribute('data-native-chrome'),
-      mbTop: getComputedStyle(document.querySelector('.mb-shell')).getPropertyValue('--mb-top').trim(), lang: document.documentElement.lang })`)
-    assert.deepEqual(web, { topbar: false, native: true, mbTop: '0px', lang: 'zh-CN' })
+    const web = await cdp.eval(`({ topbar: !!document.querySelector('.mb-topbar'), native: document.querySelector('.mb-shell').hasAttribute('data-native-chrome'), lang: document.documentElement.lang })`)
+    assert.deepEqual(web, { topbar: false, native: true, lang: 'zh-CN' })
     shot('01-shell-light-zh')
   })
 
@@ -713,23 +747,151 @@ const tabCountText = (list) => {
     await closeDrawer()
   })
 
-  await check('insets: bar = status bar + 56dp, WebView directly below, no double padding', async () => {
-    await toSpace('tangu')
-    await closeDrawer() // a main view under a list Space: the bar has its left (back) button
-    await h.pause(400)
+  // 2026-10-09 (the user picked variant B of the mock-up): on the shell's own pages the WebView reaches the screen's top
+  // edge and the chrome floats over it as two capsules; a first-level page also runs under the dock, down to the
+  // screen's bottom edge. The page keeps clear of them and draws a frosted plate exactly behind each capsule.
+  await check('floating chrome (detail page): the WebView starts at the screen top; two capsules over it; the page keeps their room clear and the status bar covered', async () => {
+    await openChat('E2E Session One') // a main view under a list Space: back arrow on the left, no dock
     const list = ui()
     const bar = h.byId(list, 'nativeChrome.bar')
     const wv = webViewNode(list)
     assert.equal(bar.rect.top, 0)
-    assert.ok(Math.abs(bar.rect.bottom - (statusBar + barPx)) <= 1, `bar bottom ${bar.rect.bottom} vs ${statusBar}+${barPx}`)
-    assert.ok(Math.abs(wv.rect.top - bar.rect.bottom) <= 1, `WebView top ${wv.rect.top} vs bar bottom ${bar.rect.bottom}`)
-    const left = h.byId(list, 'nativeChrome.left')
-    assert.ok(left.rect.top >= statusBar, 'bar buttons under the status bar')
-    assert.ok(left.rect.bottom - left.rect.top >= 120 && left.rect.right - left.rect.left >= 120, 'touch target < 48dp')
-    const page = await cdp.eval(`(() => { const p = document.createElement('div'); p.style.cssText = 'position:fixed;top:0;height:env(safe-area-inset-top);width:1px'; document.body.appendChild(p)
-      const inset = p.getBoundingClientRect().height; p.remove()
-      return { inset, mainTop: document.querySelector('.mb-main').getBoundingClientRect().top, viewPad: getComputedStyle(document.querySelector('.mb-main > .mb-view')).paddingTop } })()`)
-    assert.deepEqual(page, { inset: 0, mainTop: 0, viewPad: '0px' })
+    assert.ok(near(bar.rect.bottom, statusBar + barPx, 1), `chrome strip bottom ${bar.rect.bottom} vs ${statusBar}+${barPx}`)
+    assert.equal(wv.rect.top, 0, 'the WebView does not start at the screen top')
+    assert.ok(statusBar > 0, 'status bar height unknown: run the "hidden overlay" check first (it measures it)')
+    detailBottom = wv.rect.bottom // compared with the navigation inset in the first-level check
+    assert.ok(!h.byId(list, 'nativeChrome.spaces'), 'the dock is up on a detail page')
+    const [capL, capR, left] = ['nativeChrome.capLeft', 'nativeChrome.capRight', 'nativeChrome.left'].map((id) => h.byId(list, id))
+    assert.ok(capL && capR && left, 'capsules / back button missing')
+    assert.ok(capL.rect.top >= statusBar && capR.rect.top >= statusBar, 'a capsule under the status bar')
+    assert.ok(capL.rect.right < capR.rect.left, `the capsules touch (${fmt(capL.rect)} / ${fmt(capR.rect)})`)
+    assert.ok(left.rect.bottom - left.rect.top >= 40 * density - 1 && left.rect.right - left.rect.left >= 40 * density - 1, 'touch target < 40dp')
+    const page = await chromeOnPage()
+    assert.ok(near(page.nc.status * density, statusBar, 1) && near(page.nc.top * density, statusBar + barPx, 1), `the page was told ${JSON.stringify(page.nc)} (status bar ${statusBar}px, capsules ${barPx}px)`)
+    assert.equal(page.nc.bottom, 0, 'no dock: nothing to keep clear at the bottom')
+    assert.ok(near(page.clearPx.top, statusBar + barPx, 2), `--mb-top = ${page.clearPx.top}px, the capsules end at ${statusBar + barPx}px (zoom arithmetic)`)
+    assert.ok(page.scrimPx >= statusBar, `the status bar is not covered (scrim ${page.scrimPx}px of ${statusBar}px)`)
+    // one plate per capsule, exactly behind it, and it blurs
+    assert.deepEqual(page.plates.map((p) => p.id).sort(), ['capLeft', 'capRight'])
+    for (const [id, node] of [['capLeft', capL], ['capRight', capR]]) {
+      const plate = page.plates.find((p) => p.id === id)
+      assert.ok(sameRect(plate.rect, node.rect), `${id}: plate ${fmt(plate.rect)} vs capsule ${fmt(node.rect)}`)
+      assert.match(plate.blur, /blur\(/, `${id}: the plate does not blur (${plate.blur})`)
+    }
+    // the stream starts below the capsules (its own padding), and its scroller reaches the screen top (content passes under)
+    const stream = await elRect("document.querySelector('.mb-main .t2-stream')")
+    const first = await elRect("document.querySelector('.mb-main .t2-stream > *')")
+    assert.ok(stream && stream.top <= 1, `the stream does not reach the top (${stream && fmt(stream)})`)
+    assert.ok(first && first.top >= capL.rect.bottom - 2, `the first message starts under a capsule (${first && first.top} < ${capL.rect.bottom})`)
+    shot('03-floating-detail')
+  })
+
+  await check('floating chrome (first level): the page reaches both screen edges; the dock is one centred capsule; list rows end above it; Home keeps its wallpaper to the edges', async () => {
+    await tanguDrawer()
+    let list = ui()
+    let wv = webViewNode(list)
+    assert.deepEqual([wv.rect.top, wv.rect.bottom], [0, screen.h], 'the WebView does not span the whole screen on a first-level page')
+    const strip = h.byId(list, 'nativeChrome.spaces')
+    const dock = h.byId(list, 'nativeChrome.dock')
+    assert.ok(strip && dock, 'dock missing')
+    const navInset = screen.h - strip.rect.top - dockPx
+    assert.equal(detailBottom, screen.h - navInset, `a detail page ends at the navigation inset (WebView bottom ${detailBottom}, inset ${navInset}px of ${screen.h})`)
+    assert.ok(navInset >= 0 && near(dock.rect.bottom, screen.h - navInset - Math.round(6 * density), 2), `dock ${fmt(dock.rect)} does not sit 6dp above the navigation inset (${navInset}px)`)
+    assert.ok(near((dock.rect.left + dock.rect.right) / 2, screen.w / 2, 2) && dock.rect.left >= Math.round(12 * density) - 1, `dock not centred / too wide: ${fmt(dock.rect)}`)
+    let page = await chromeOnPage()
+    assert.ok(near(page.nc.bottom * density, navInset + dockPx, 1), `the page was told bottom=${page.nc.bottom}dp (inset ${navInset}px + dock ${dockPx}px)`)
+    assert.ok(near(page.clearPx.bottom, navInset + dockPx, 2), `--mb-bottom = ${page.clearPx.bottom}px`)
+    const plate = page.plates.find((p) => p.id === 'dock')
+    assert.ok(plate && sameRect(plate.rect, dock.rect), `dock plate ${plate && fmt(plate.rect)} vs ${fmt(dock.rect)}`)
+    // the list: its scroller runs to the screen's bottom edge (rows pass under the dock), its last row can end above the dock
+    const scroller = "document.querySelector('.mb-drawer--left .t2s-scroll')"
+    await cdp.eval(`(() => { const s = ${scroller}; s.scrollTop = s.scrollHeight; return true })()`)
+    await h.pause(300)
+    const box = await elRect(scroller)
+    const last = await elRect(`[...${scroller}.querySelectorAll('.t2s-srow, .t2s-viewmore, .t2s-foot')].pop()`)
+    assert.ok(box && near(box.bottom, screen.h, 2), `the list does not reach the screen bottom (${box && fmt(box)})`)
+    assert.ok(last && last.bottom <= dock.rect.top + 1, `the last row ends under the dock (${last && last.bottom} > ${dock.rect.top})`)
+    const firstRow = await elRect(`${scroller}.firstElementChild`)
+    const capL = h.byId(list, 'nativeChrome.capLeft')
+    assert.ok(firstRow && firstRow.top >= capL.rect.bottom - 2, 'the list starts under the capsules')
+    shot('03b-floating-list')
+    // Home: wallpaper to both edges (no scrim over the status bar), its own dock of Spaces above ours
+    await goHome()
+    list = ui(); wv = webViewNode(list)
+    assert.deepEqual([wv.rect.top, wv.rect.bottom], [0, screen.h])
+    page = await chromeOnPage()
+    assert.equal(page.scrimPx, 0, 'Home covers the status bar (the wallpaper should run to the top)')
+    const root = await elRect("document.querySelector('.hp-root')")
+    const lowest = await elRect("document.querySelector('.hp-root .hp-spaces')")
+    const nativeDock = h.byId(list, 'nativeChrome.dock')
+    assert.ok(root && root.top <= 1 && near(root.bottom, screen.h, 2), `the homepage does not span the screen (${root && fmt(root)})`)
+    assert.ok(lowest && lowest.bottom <= nativeDock.rect.top + 1, `homepage content under the dock (${lowest && lowest.bottom} > ${nativeDock.rect.top})`)
+    shot('03c-floating-home')
+  })
+
+  // A ComposeView only takes the touches one of its pointer inputs is hit by: what misses a capsule must reach the page,
+  // or the strip beside the capsules is a dead zone (and the edge swipe that opens the list dies with it).
+  await check('floating chrome: touches between / beside the capsules reach the page; a capsule keeps its own', async () => {
+    await openChat('E2E Session One')
+    let list = ui()
+    const [capL, capR] = ['nativeChrome.capLeft', 'nativeChrome.capRight'].map((id) => h.byId(list, id))
+    const gap = { x: Math.round((capL.rect.right + capR.rect.left) / 2), y: capL.rect.cy }
+    assert.ok(capR.rect.left - capL.rect.right >= 8 * density - 1, `no room between the capsules (${capL.rect.right}..${capR.rect.left})`)
+    const arm = "(() => { window.__taps = []; window.__tapSpy ||= document.addEventListener('pointerdown', (e) => window.__taps.push([Math.round(e.clientX * devicePixelRatio), Math.round(e.clientY * devicePixelRatio)]), true) || 1; return true })()"
+    const taps = () => cdp.eval('window.__taps')
+    await cdp.eval(arm)
+    h.tapAt(gap.x, gap.y)
+    await h.pause(500)
+    let got = await taps()
+    assert.ok(got.length === 1 && near(got[0][0], gap.x, 3) && near(got[0][1], gap.y, 3), `a tap between the capsules (${gap.x},${gap.y}) reached the page as ${JSON.stringify(got)}`)
+    // the title's capsule takes its own touch
+    await cdp.eval(arm)
+    const title = h.byId(list, 'nativeChrome.title')
+    h.tapAt(title.rect.cx, title.rect.cy)
+    await h.pause(500)
+    assert.deepEqual(await taps(), [], 'a tap on a capsule fell through to the page')
+    // a swipe that starts between the capsules still drags the list in
+    h.adb('shell', 'input', 'swipe', String(gap.x), String(gap.y), String(Math.min(screen.w - 20, gap.x + Math.round(260 * density))), String(gap.y), '220')
+    assert.ok(await h.waitPage(cdp, `${nav} === 'list'`, 5000), 'a swipe starting between the capsules did not bring the list back')
+    await h.pause(500)
+    // beside the dock
+    list = ui()
+    const dock = h.byId(list, 'nativeChrome.dock')
+    assert.ok(dock && dock.rect.left > 30, 'no room beside the dock to test')
+    await cdp.eval(arm)
+    h.tapAt(Math.round(dock.rect.left / 2), dock.rect.cy)
+    await h.pause(500)
+    got = await taps()
+    assert.ok(got.length === 1 && near(got[0][0], Math.round(dock.rect.left / 2), 3), `a tap beside the dock reached the page as ${JSON.stringify(got)}`)
+  })
+
+  await check('floating chrome is the shell\'s only: a page (settings) and a covering overlay keep the WebView between two strips; glass off → solid capsules, no blur', async () => {
+    await accountItem('rb-settings')
+    assert.ok(await h.waitPage(cdp, settingsOpen, 5000), 'settings did not open')
+    let r = await h.waitNodes((l) => (h.byId(l, 'nativeChrome.back') ? l : null), { timeout: 6000 })
+    assert.ok(r.hit, 'no page bar')
+    await h.pause(600)
+    let list = ui()
+    const bar = h.byId(list, 'nativeChrome.bar')
+    let wv = webViewNode(list)
+    assert.ok(near(wv.rect.top, bar.rect.bottom, 1) && near(bar.rect.bottom, statusBar + barPx, 1), `settings: WebView top ${wv.rect.top}, strip bottom ${bar.rect.bottom}`)
+    assert.ok(h.byId(list, 'nativeChrome.capLeft'), 'the page bar is not a capsule')
+    let page = await chromeOnPage()
+    assert.deepEqual([page.nc, page.plates.length, page.clearPx], [{ top: 0, bottom: 0, status: 0 }, 0, { top: 0, bottom: 0 }], 'a page was given room to keep clear / plates')
+    await tapId('nativeChrome.back')
+    assert.ok(await h.waitPage(cdp, `!(${settingsOpen})`, 5000), 'settings did not close')
+    r = await h.waitNodes((l) => (h.byId(l, 'nativeChrome.more') ? l : null), { timeout: 5000 })
+    assert.ok(r.hit, 'shell chrome did not return')
+    await h.pause(600)
+    page = await chromeOnPage()
+    assert.ok(page.nc.top > 0 && page.plates.length >= 2, `back in the shell: ${JSON.stringify(page.nc)}, ${page.plates.length} plates`)
+    // glass off (Settings → Appearance writes data-glass): the plates stop blurring; the capsules stay
+    await cdp.eval("(document.documentElement.dataset.glass = 'off', true)")
+    assert.ok(await h.waitPage(cdp, "[...document.querySelectorAll('#nc-plates .nc-plate')].every((e) => getComputedStyle(e).backdropFilter === 'none')", 4000), 'plates still blur with glass off')
+    await h.pause(500)
+    shot('03d-floating-glass-off')
+    await cdp.eval("(delete document.documentElement.dataset.glass, true)")
+    assert.ok(await h.waitPage(cdp, "[...document.querySelectorAll('#nc-plates .nc-plate')].every((e) => /blur/.test(getComputedStyle(e).backdropFilter))", 4000), 'plates did not blur again')
   })
 
   // 2026-10-04 (user: "like WeChat"): a Space with a left list opens ON the list (full screen, bottom bar below);
