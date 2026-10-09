@@ -264,6 +264,9 @@ function setWindowTangu(backendUrl: string, token: string, native: boolean): voi
   ;(window as unknown as { tangu: unknown }).tangu = {
     cloudWeb: true,
     mobile: true,
+    // 这台设备上没有本机引擎(聊天接的是云端,或隧道到「我的电脑」—— 那也不是本机)。共享渲染层据此不把
+    // 只有本机引擎才有的接口挂给插件(ctx.automation:规则存在引擎的本机档案里,云端引擎答 404)。
+    executionCapabilities: { host: false },
     // 桌面图标能跟随内置应用图标(仅安卓 App;设置页据此出那一行说明,实际切换在 launcherIcon.ts)。
     launcherIcon: native || undefined,
     getConfig: async () => config(),

@@ -806,6 +806,27 @@ const test = async (name, fn) => {
     assert.match(dec(fs.files.get('plugins/same/manifest.json')), /"1\.0\.0"/)
   })
 
+  await test('requiresApp(依赖装在电脑上的应用)→ 拒装并点出是哪个应用,什么都不落盘;已在盘上的列成 blocked、代码不读;空串 / 非字符串不算声明', async () => {
+    const { mk, fs } = market({ install: {
+      aw: { type: 'amadeus-plugin', installSlug: 'aw', downloadUrl: 'https://oss.test/aw' },
+      other: { type: 'amadeus-plugin', installSlug: 'other', downloadUrl: 'https://oss.test/other' },
+      loose: { type: 'amadeus-plugin', installSlug: 'loose', downloadUrl: 'https://oss.test/loose' },
+    }, blobs: {
+      'https://oss.test/aw': await zipOf({ 'manifest.json': manifest({ id: 'aw', requiresApp: 'activitywatch' }), 'main.js': 'x' }),
+      'https://oss.test/other': await zipOf({ 'manifest.json': manifest({ id: 'other', requiresApp: 'some-app' }), 'main.js': 'x' }),
+      'https://oss.test/loose': await zipOf({ 'manifest.json': manifest({ id: 'loose', requiresApp: '  ' }), 'main.js': 'x' }),
+    } })
+    await assert.rejects(mk.marketInstall('aw'), /^Error: mobilemarket\.requiresDesktopApp:\{"app":"ActivityWatch"\}$/) // 认识的应用报它的名字
+    await assert.rejects(mk.marketInstall('other'), /^Error: mobilemarket\.requiresDesktopApp:\{"app":"some-app"\}$/)   // 不认识的原样报 id
+    assert.equal(fs.files.size, 0)
+    await mk.marketInstall('loose')
+    put(fs, 'plugins/aw/manifest.json', manifest({ id: 'aw', requiresApp: 'activitywatch' })); put(fs, 'plugins/aw/main.js', 'x')
+    put(fs, 'plugins/aw/spaces/s/space.json', '{"id":"s"}')
+    const h = host(fs)
+    assert.deepEqual((await h.listPlugins()).map((p) => [p.id, p.blocked ?? null, p.code]), [['aw', 'desktopOnly', ''], ['loose', null, 'x']])
+    assert.deepEqual(await h.listSpaces(), [])
+  })
+
   await test('manifest 缺 / 坏 / id 与 slug 皆非法 → badManifest;与内置插件同 id → builtin', async () => {
     const { mk } = market({ reserved: ['word-count'], install: {
       none: { type: 'amadeus-plugin', installSlug: 'none', downloadUrl: 'https://oss.test/none' },

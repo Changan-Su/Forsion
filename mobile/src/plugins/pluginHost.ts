@@ -45,6 +45,13 @@ export interface MobilePluginHost {
 }
 
 /** 读 manifest.json(必须是 JSON 对象);读不到 / 坏 → null。 */
+/** manifest.requiresApp:这个插件依赖一个装在**电脑**上的应用(如 ActivityWatch;桌面在插件详情页给它一键安装 / 探测)。
+ *  手机上没有这个应用可装,插件装上也只是个空壳 —— 与 isDesktopOnly 同一档处理:不给装,已在盘上的不读不跑。
+ *  返回声明的应用 id;没声明(缺 / 空串 / 非字符串)= null。
+ *  ponytail: 有声明一律算桌面专属;哪天依赖表(desktop/shared/knownApps.ts)里出现手机上也有的应用,改成查那张表。 */
+export const requiredDesktopApp = (m: { requiresApp?: unknown } | null): string | null =>
+  typeof m?.requiresApp === 'string' && m.requiresApp.trim() ? m.requiresApp.trim() : null
+
 export async function readManifest(fs: PluginFs, dir: string): Promise<InstalledPluginManifest | null> {
   try {
     const m: unknown = JSON.parse(await readText(fs, `${dir}/manifest.json`))
@@ -261,8 +268,9 @@ export function createPluginHost(fs: PluginFs, opts: { appVersion: () => string 
             continue
           }
           if (seen.has(id)) continue
-          // 门禁:apiVersion / minAppVersion 与桌面同一个函数;再加手机独有的一档 —— 声明了只能在桌面跑。
-          const blocked = gatePluginManifest(m, opts.appVersion()) ?? (m.isDesktopOnly === true ? 'desktopOnly' : null)
+          // 门禁:apiVersion / minAppVersion 与桌面同一个函数;再加手机独有的一档 —— 声明了只能在桌面跑,
+          // 或依赖一个装在电脑上的应用(requiresApp)。
+          const blocked = gatePluginManifest(m, opts.appVersion()) ?? (m.isDesktopOnly === true || requiredDesktopApp(m) ? 'desktopOnly' : null)
           let code = ''
           if (!blocked) {
             const rel = mainRelOf(m.main)
@@ -297,7 +305,7 @@ export function createPluginHost(fs: PluginFs, opts: { appVersion: () => string 
         // 同一个 id 装了两份:只认排在前面的那一份(listPlugins 同口径);它被拦下,后一份的配方也不顶上来。
         if (!m || !id || seen.has(id)) continue
         seen.add(id)
-        if (gatePluginManifest(m, opts.appVersion()) || m.isDesktopOnly === true) continue
+        if (gatePluginManifest(m, opts.appVersion()) || m.isDesktopOnly === true || requiredDesktopApp(m)) continue
         let slugs: string[]
         try {
           slugs = (await fs.list(`${dir}/spaces`)).filter((e) => e.type === 'directory' && !e.name.startsWith('.')).map((e) => e.name).sort()

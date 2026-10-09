@@ -14,6 +14,9 @@
  *   5. 设置 → 插件:关掉 → 命令、视图与它的 Space 消失;卸载 → 文件没了(listPlugins / marketInstalled 都看不到)
  *   2c. 插件以当前账号调 Forsion 云端(window.tangu.cloudFetch,桌面同一个接口):带着账号令牌打到云端 API、
  *       拿回 { status, json };给绝对地址 → 不发请求、回 bad_path(通话室 / 活动这类插件缺了它整个不能用)
+ *   2d. 手机做不了的接口不挂给插件:ctx.app.reveal(没有文件管理器可定位)、ctx.automation(云端引擎没有
+ *       自动化规则路由,答 404)。「关掉插件时不去引擎拉规则」这半在这个台架里量不出来(后端从不就绪),
+ *       钉在 desktop 的 pluginAutomationCtx.test.ts
  *
  * 负对照:`npm run e2e:plugins -- --negative` 把页面 CSP 里的 'unsafe-eval' 去掉再跑 —— 插件代码求值被拦,
  * 第 2 步必须红(证明这台仪器真的在测「插件代码跑起来了」,不是只测到「文件写进去了」)。
@@ -67,6 +70,8 @@ ctx.registerView({
       } catch (e) { probe.thrown = String(e && e.message || e) }
     }
     box.setAttribute('data-e2e-cloudfetch', JSON.stringify(probe))
+    // 宿主做不了的接口不该挂出来(2d):插件按「有没有这个方法」决定画不画按钮 / 报不报「不支持」。
+    box.setAttribute('data-e2e-seams', JSON.stringify({ reveal: typeof ctx.app.reveal, automation: typeof ctx.automation }))
     box.textContent = 'E2E plugin view, runs=' + d.runs
     el.appendChild(box)
     return () => box.remove()
@@ -335,6 +340,11 @@ async function main() {
       'cloudFetch:带账号令牌打到云端 API,拿回 { status, json }', JSON.stringify(probe.ok ?? probe.thrown ?? null))
     const absRes = probe.abs || {}
     check(absRes.status === 0 && absRes.error === 'bad_path' && evilHits.length === 0, 'cloudFetch:绝对地址不发请求,回 bad_path', `${JSON.stringify(probe.abs ?? null)},发往外站 ${evilHits.length} 次`)
+
+    // 2d. 手机做不了的两个接口不挂给插件
+    const seams = JSON.parse((await page.locator('[data-e2e-seams]').first().getAttribute('data-e2e-seams').catch(() => null)) || '{}')
+    check(seams.reveal === 'undefined', '手机上不挂 ctx.app.reveal(没有文件管理器可定位;挂个空壳 = 插件画出点了没反应的按钮)', `typeof = ${seams.reveal}`)
+    check(seams.automation === 'undefined', '手机上不挂 ctx.automation(云端引擎没有自动化规则路由)', `typeof = ${seams.automation}`)
 
     // 2b. 包里带的 Space:宿主读得出配方 → 不刷新就进 Space 条 → 切过去,主区是配方点名的插件视图
     const recipes = await page.evaluate(async () => {
