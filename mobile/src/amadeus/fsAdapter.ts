@@ -28,7 +28,8 @@ function bytesToB64(bytes: Uint8Array): string {
 export interface Dirent { name: string; isDirectory(): boolean; isFile(): boolean }
 
 export const fs = {
-  /** 'utf8' → string;否则 Uint8Array(实际 JS 侧只用 utf8,图片由原生 amadeus-asset 拦截读)。 */
+  /** 'utf8' → string;否则 Uint8Array(readVaultBytes / 读数据库走这条;
+   *  ⚠️ 图片显示不走这里,也没有原生拦截器替它读 —— 见 mobileAmadeusBridge.ts 头注)。 */
   async readFile(abs: string, encoding?: 'utf8'): Promise<any> {
     const path = cap(abs)
     if (encoding === 'utf8') {

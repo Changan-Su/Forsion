@@ -22,6 +22,7 @@
     "e2e:plugins": "node scripts/plugin-install.e2e.cjs",
     "e2e:boot": "node scripts/mobile-boot.e2e.cjs",
     "e2e:noteopen": "node scripts/note-open.e2e.cjs",
+    "e2e:localasset": "node scripts/local-asset.e2e.cjs",
     "e2e:editorbar": "node scripts/editor-capsule.e2e.cjs",
     "e2e:drawerdrag": "node scripts/drawer-drag.e2e.cjs",
     "e2e:spacetrap": "node scripts/space-trap.e2e.cjs",
