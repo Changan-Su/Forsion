@@ -197,6 +197,9 @@ OUT=/absolute/out npm run emu:nativeshell   # ONLY=tabs,prompt 只跑子集
   要测无障碍服务本身的用例加 `EMU_TREE=dump`，走老办法。
 - `EMU_IDLE_MS`（默认 500）：读之前等界面安静多久，从最后一次变化算起。某条在慢机器上读到半截动画就调大。
 - 编不出来或起不来（没有 `javac`、镜像不让）时台架说一句，然后自动退回 `uiautomator dump`，不会因此变红。
+- **给人上手看**：`HOLD=40 npm run emu:nativeshell` 不跑检查，把 App 停在演示数据状态（假账号、几条会话、带一个测试插件的商店），
+  留 40 分钟；到点或删掉产物目录里的 `holding` 文件就收尾、把设备还原。演示数据挂在这次启动上，App 被划掉重开就没了。
+  要让人自己点，模拟器得带窗口起（去掉 `-no-window`）。
 
 ### 桌面图标（应用图标的入口别名）
 
