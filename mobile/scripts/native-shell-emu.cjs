@@ -103,6 +103,38 @@ const MODELS = [
 // Debug builds allow cleartext to localhost / 10.0.2.2 (src/debug network_security_config). PLUGIN_HOST overrides.
 const PLUGIN_ID = 'e2e-native-hello'
 const PLUGIN_CMD = `amadeus:${PLUGIN_ID}:open-panel`
+// The Space the fixture plugin ships (spaces/desk/space.json — the folder name differs from the recipe id on purpose:
+// hosts go by the id). Its recipe has a left panel: on the phone a recipe Space still opens on its main view.
+// `iconFile: icon.png` with no picture of its own = the plugin's icon.png, a solid colour the bottom bar must show.
+const PLUGIN_SPACE = 'e2e-desk'
+const PLUGIN_SPACE_JSON = JSON.stringify({
+  id: PLUGIN_SPACE, name: 'E2E Desk', icon: 'boxes', iconFile: 'icon.png', version: '1.0.0',
+  layout: { main: [{ type: `plugin:${PLUGIN_ID}:panel` }], left: [{ type: 'workspace' }], right: [] },
+})
+const PLUGIN_ICON_RGB = [0, 200, 255]
+// A second Space of the same plugin with a name no bar can hold. The native side refuses a label over 128 characters —
+// and with it the whole bar state: before the page cut labels at the bridge, one such recipe took the native bars down.
+const PLUGIN_SPACE_LONG_JSON = JSON.stringify({
+  id: 'e2e-long', name: `E2E ${'long '.repeat(40)}name`, icon: 'boxes', version: '1.0.0',
+  layout: { main: [{ type: `plugin:${PLUGIN_ID}:panel` }], left: [], right: [] },
+})
+/** A real PNG, `side`×`side`, one opaque colour (zlib.crc32: Node 22.2+). */
+function solidPng(side, [r, g, b]) {
+  const zlib = require('node:zlib')
+  const row = Buffer.alloc(1 + side * 3)
+  for (let i = 0; i < side; i++) row.set([r, g, b], 1 + i * 3)
+  const chunk = (type, data) => {
+    const body = Buffer.concat([Buffer.from(type), data])
+    const len = Buffer.alloc(4); len.writeUInt32BE(data.length)
+    const crc = Buffer.alloc(4); crc.writeUInt32BE(zlib.crc32(body))
+    return Buffer.concat([len, body, crc])
+  }
+  const ihdr = Buffer.alloc(13); ihdr.writeUInt32BE(side, 0); ihdr.writeUInt32BE(side, 4); ihdr[8] = 8; ihdr[9] = 2 // 8-bit RGB
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk('IHDR', ihdr),
+    chunk('IDAT', zlib.deflateSync(Buffer.concat(Array(side).fill(row)))), chunk('IEND', Buffer.alloc(0)),
+  ])
+}
 const PLUGIN_TOGGLE = `amadeus:${PLUGIN_ID}:toggle-flag`
 const PLUGIN_PORT = Number(process.env.PLUGIN_PORT || 5317)
 const PLUGIN_HOST = process.env.PLUGIN_HOST || `http://localhost:${PLUGIN_PORT}`
@@ -413,6 +445,9 @@ const tabCountText = (list) => {
     const z = new JSZip()
     z.file(`${PLUGIN_ID}-main/manifest.json`, JSON.stringify({ id: PLUGIN_ID, name: 'E2E Native Hello', version: '1.0.0', apiVersion: 1 }))
     z.file(`${PLUGIN_ID}-main/main.js`, PLUGIN_MAIN)
+    z.file(`${PLUGIN_ID}-main/icon.png`, solidPng(64, PLUGIN_ICON_RGB))
+    z.file(`${PLUGIN_ID}-main/spaces/desk/space.json`, PLUGIN_SPACE_JSON)
+    z.file(`${PLUGIN_ID}-main/spaces/long/space.json`, PLUGIN_SPACE_LONG_JSON)
     pluginZip = Buffer.from(await z.generateAsync({ type: 'uint8array' }))
     z.file(`${PLUGIN_ID}-main/manifest.json`, JSON.stringify({ id: PLUGIN_ID, name: 'E2E Native Hello', version: '1.0.1', apiVersion: 1 }))
     pluginZipV2 = Buffer.from(await z.generateAsync({ type: 'uint8array' }))
@@ -2430,6 +2465,32 @@ const tabCountText = (list) => {
     await closeMarket()
   })
 
+  // 2026-10-09: the phone host never read the Spaces plugins ship (spaces/<slug>/space.json) — commands and views were
+  // there after an install, the Space was not. Most store plugins declare their Space this way.
+  await check('plugins: the Space a plugin ships joins the bottom bar with the plugin\'s own picture and opens on its main view', async () => {
+    assert.match(runAs('ls', `files/plugins/${PLUGIN_ID}/spaces/desk`), /space\.json/, 'the Space recipe was not written with the plugin')
+    // the plugin also ships a Space with a 200-character name: the native bars must still be there
+    assert.ok((await h.waitNodes((l) => (h.byId(l, 'nativeChrome.bar') && h.byId(l, 'nativeChrome.spaces') ? l : null), { timeout: 8000 })).hit,
+      'the native bars went away after the install (a Space label the native side refuses?)')
+    await toSpace(PLUGIN_SPACE) // fails with "is not in the native bar" when the Space was not registered
+    assert.ok(await h.waitPage(cdp, "!!document.querySelector('.mb-main [data-e2e-plugin-view]')", 8000), 'the Space did not open the plugin view its recipe names')
+    // A recipe Space is main-first on the phone even with a left panel (written for the desktop's three columns, the
+    // panel may not lead into the main view at all): no list level, the bar stays, the panel is a drawer.
+    assert.equal(await cdp.eval(nav), '', 'a recipe Space must open on its main view, not on its left panel')
+    const cellId = `nativeChrome.space.${PLUGIN_SPACE}`
+    // the picture goes out with a second push (converted off the bar's path): wait for it
+    const r = await h.waitNodes((l) => { const c = h.byId(l, cellId); return c && h.byIdPrefix(l, 'nativeChrome.spacePicture').some((n) => within(c, n)) ? l : null }, { timeout: 10000 })
+    assert.ok(h.byId(r.nodes, 'nativeChrome.spaces') && h.byId(r.nodes, cellId), 'the bottom bar must stay on a main-first Space')
+    assert.ok(h.byId(r.nodes, 'nativeChrome.left'), 'the recipe\'s left panel must be reachable (drawer button)')
+    assert.equal(h.byId(r.nodes, cellId).selected || h.byId(r.nodes, cellId).checked, 'true', 'the plugin Space is not the selected cell')
+    assert.ok(r.hit, 'the cell shows no picture (the plugin\'s icon.png)')
+    const pic = h.byIdPrefix(r.hit, 'nativeChrome.spacePicture').find((n) => within(h.byId(r.hit, cellId), n))
+    const px = pixelAt(pic.rect.cx, pic.rect.cy)
+    assert.ok(PLUGIN_ICON_RGB.every((v, i) => Math.abs(v - [px.r, px.g, px.b][i]) <= 8), `the cell's picture is not the plugin icon: ${JSON.stringify(px)}`)
+    shot('p02b-plugin-space')
+    await goHome() // where the install check left the app
+  })
+
   await check('plugins: oversized downloads (declared > 25 MB, endless stream) are refused by the native capped download; cache and files/plugins stay clean', async () => {
     const cacheLeft = () => runAs('ls', '-a', 'cache').split(/\s+/).filter((n) => n.startsWith('forsion-market-'))
     assert.deepEqual(cacheLeft(), [], 'precondition: temp files of an earlier download still in cache')
@@ -2822,6 +2883,10 @@ const tabCountText = (list) => {
     assert.ok(pluginRuns >= 1, 'precondition: the plugin ran (and saved data) before the restart')
     await runPluginCommand()
     shot('p07-plugin-view-after-restart')
+    // its Space registers only after the plugins have loaded: back on the bar, and it opens
+    await toSpace(PLUGIN_SPACE)
+    assert.ok(await h.waitPage(cdp, "!!document.querySelector('.mb-main [data-e2e-plugin-view]')", 8000), 'the plugin Space did not open after the restart')
+    await toSpace('home') // where the command above left the app: Home, the plugin view on top of the homepage
   })
 
   /** Mode + add sheets in the chat, then settings as a native page (screenshots for the given pass). */

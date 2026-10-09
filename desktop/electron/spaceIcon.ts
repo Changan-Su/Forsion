@@ -10,38 +10,25 @@
  * ponytail: SVG 不验能否解码 —— 残缺的 SVG 会画成空白图标,作者自己一眼可见;要兜底就在渲染层先 decode 再决定回落。
  */
 import path from 'node:path'
-import { PLUGIN_ICON_MAX_BYTES, pluginIconDataUrl, readSmallFile } from './pluginIcon'
+import { readSmallFile } from './pluginIcon'
+import { SPACE_ICON_SVG_MAX_BYTES, spaceIconFileOf, spaceIconMaxBytes, spaceIconMime } from '../shared/spaceIcon'
 
-export const SPACE_ICON_SVG_MAX_BYTES = 64 * 1024
-
-/** 只认裸文件名:字符集里没有路径分隔符,也就没有目录穿越可审。 */
-const ICON_FILE_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}\.(png|svg)$/i
-
-/** space.json → 合规的 `iconFile`;没写 / 不合规 / 坏 JSON → undefined。 */
-export function spaceIconFileOf(json: string): string | undefined {
-  try {
-    const f = (JSON.parse(json) as { iconFile?: unknown } | null)?.iconFile
-    return typeof f === 'string' && ICON_FILE_RE.test(f) ? f : undefined
-  } catch {
-    return undefined
-  }
-}
+// 文件名 / 体积 / 内容三道规则在 shared/spaceIcon.ts(Android App 的插件宿主共用);这里只管读盘。
+export { SPACE_ICON_SVG_MAX_BYTES, spaceIconFileOf }
 
 /** 文件内容 → renderer 可直接消费的 data URL;不合规 → undefined。 */
 export function spaceIconDataUrl(name: string, buf: Buffer): string | undefined {
-  if (/\.png$/i.test(name)) return pluginIconDataUrl(buf)
-  if (buf.length > SPACE_ICON_SVG_MAX_BYTES || !/<svg[\s>]/i.test(buf.toString('utf8', 0, 2048))) return undefined
-  return `data:image/svg+xml;base64,${buf.toString('base64')}`
+  const mime = spaceIconMime(name, buf)
+  return mime && `data:${mime};base64,${buf.toString('base64')}`
 }
 
 /** 按 `dirs` 次序找 `iconFile`,第一枚合规的胜出。 */
 export async function readSpaceIconDataUrl(json: string, dirs: string[]): Promise<string | undefined> {
   const name = spaceIconFileOf(json)
   if (!name) return undefined
-  const max = /\.png$/i.test(name) ? PLUGIN_ICON_MAX_BYTES : SPACE_ICON_SVG_MAX_BYTES
   for (const dir of dirs) {
     try {
-      const buf = await readSmallFile(path.join(dir, name), max)
+      const buf = await readSmallFile(path.join(dir, name), spaceIconMaxBytes(name))
       const url = buf && spaceIconDataUrl(name, buf)
       if (url) return url
     } catch { /* 这一层没有(或是软链)→ 试下一层 */ }

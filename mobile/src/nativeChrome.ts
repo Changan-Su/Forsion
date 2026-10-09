@@ -14,6 +14,7 @@ import { useInbox } from '@/stores/inboxStore'
  *  Pushes the effective state + live theme + serialized icons; relays bar actions back to the seam.
  *  Also draws the Space switcher as a bottom navigation bar (`spaces: true`): the shell sends the Space list,
  *  this host adds each Space's icon (serialized once per icon component) and relays taps / long-presses.
+ *  A Space whose icon is a picture (a plugin Space's `iconFile`) gets it as a small PNG beside its line icon.
  *  On the same first-level pages it adds the account avatar (trailing end of the top bar): what to show and
  *  what a tap does come from the mounted account card (services/accountChip.ts); the engine seam is not involved.
  *  And a badge per Space (a dot on its icon): which Spaces have something going on comes from the app's stores, here.
@@ -27,7 +28,7 @@ type SpaceBadgeKind = 'running' | 'attention' | 'unread'
 interface ChromeBadge { kind: SpaceBadgeKind; label: string }
 interface NativeChromePlugin {
   setState(state: Omit<NativeChromeState, 'spaces'> & {
-    theme: NativeSheetTheme; icons: ChromeIcons; spaces?: Array<NativeChromeSpace & { icon?: NativeIcon; badge?: ChromeBadge }>
+    theme: NativeSheetTheme; icons: ChromeIcons; spaces?: Array<NativeChromeSpace & { icon?: NativeIcon; png?: string; badge?: ChromeBadge }>
     account?: ChromeAccount
   }): Promise<void>
   haptic(options: { kind: NativeHaptic }): Promise<void>
@@ -38,6 +39,13 @@ const ACTIONS: readonly NativeChromeAction[] = ['left', 'right', 'tabs', 'more',
 const MAX_SPACES = 64 // = ChromeState.MAX_SPACES (Kotlin)
 const AVATAR_PX = 96 // the bar draws it at 30dp: enough for a 3x screen, a few KB on the bridge
 const MAX_AVATAR_CHARS = 131_072 // = ChromeState.MAX_AVATAR_CHARS (Kotlin); an oversized picture would reject the whole state
+const SPACE_ICON_PX = 72 // the bar draws a Space's picture at 24dp: 3x
+// Kotlin refuses a state past 512 000 characters and the page would lose the whole native bar: pictures stay well
+// inside it. One past its own cap, or past the total, is simply not sent (that Space keeps its line icon).
+// ponytail: every state carries all the pictures (a 72px PNG is a few KB); cache them natively by Space id if a bar
+// with dozens of plugin Spaces ever makes the pushes slow.
+const MAX_SPACE_PNG_CHARS = 24_000
+const MAX_SPACE_PNGS_CHARS = 240_000
 
 registerMessages({
   'nativebar.badge.running': { zh: '有会话在运行', en: 'A session is running' },
@@ -65,8 +73,8 @@ export function spaceBadges(): Record<string, SpaceBadgeKind> {
   return out
 }
 
-/** Picture → square PNG (base64). null = cannot be read (broken image, or a remote one without CORS headers taints the canvas). */
-function avatarPng(src: string): Promise<string | null> {
+/** Picture → square PNG (base64) of `px` a side. null = cannot be read (broken image, or a remote one without CORS headers taints the canvas). */
+function squarePng(src: string, px: number, maxChars: number): Promise<string | null> {
   return new Promise((resolve) => {
     const img = new Image()
     img.crossOrigin = 'anonymous'
@@ -75,10 +83,10 @@ function avatarPng(src: string): Promise<string | null> {
       try {
         const side = Math.min(img.naturalWidth, img.naturalHeight)
         const canvas = document.createElement('canvas')
-        canvas.width = canvas.height = AVATAR_PX
-        canvas.getContext('2d')!.drawImage(img, (img.naturalWidth - side) / 2, (img.naturalHeight - side) / 2, side, side, 0, 0, AVATAR_PX, AVATAR_PX)
+        canvas.width = canvas.height = px
+        canvas.getContext('2d')!.drawImage(img, (img.naturalWidth - side) / 2, (img.naturalHeight - side) / 2, side, side, 0, 0, px, px)
         const png = canvas.toDataURL('image/png').split(',')[1] ?? ''
-        resolve(png && png.length <= MAX_AVATAR_CHARS ? png : null)
+        resolve(png && png.length <= maxChars ? png : null)
       } catch { resolve(null) }
     }
     img.src = src
@@ -94,15 +102,40 @@ export function installNativeChrome(): void {
     .then(([left, right, more, back, close]) => ({ left, right, more, back, close }))
   // Space icons are React components: serialize each once (keyed by the component, so a re-registered Space re-renders).
   const spaceIcons = new Map<unknown, NativeIcon | undefined>()
-  const withIcons = async (all: NativeChromeSpace[]): Promise<Array<NativeChromeSpace & { icon?: NativeIcon }>> => {
+  // A picture icon (a plugin Space's own `iconFile`) cannot be flattened into paths. It is sent as a small PNG, converted
+  // once per source; like the avatar it never holds up a bar update: the bar goes out with the Space's line icon first
+  // (SpaceIcon.nativeFallback) and once more when the PNG is ready. An SVG picture keeps the line icon.
+  const spacePngs = new Map<string, string | null>()
+  const spacePng = (url: string | undefined): string | null => {
+    if (!url?.startsWith('data:image/png')) return null
+    if (!spacePngs.has(url)) {
+      spacePngs.set(url, null)
+      // `has`: the source may have left the bar (plugin updated / removed) while its picture was converting
+      void squarePng(url, SPACE_ICON_PX, MAX_SPACE_PNG_CHARS).then((png) => { if (png && spacePngs.has(url)) { spacePngs.set(url, png); send() } })
+    }
+    return spacePngs.get(url) ?? null
+  }
+  const withIcons = async (all: NativeChromeSpace[]): Promise<Array<NativeChromeSpace & { icon?: NativeIcon; png?: string }>> => {
     // ponytail: the bar scrolls, but a payload is still capped (Kotlin MAX_SPACES). Past it the tail is not shown —
     // far beyond any real Space count; a rejected setState would instead take the whole native chrome down.
     const list = all.slice(0, MAX_SPACES)
     const defs = useSpaceStore.getState().spaces
     const sources = list.map((sp) => defs.find((d) => d.id === sp.id)?.icon)
-    const missing = [...new Set(sources.filter((src) => src && !spaceIcons.has(src)))]
+    const drawn = sources.map((src) => (src?.imageUrl ? src.nativeFallback : src))
+    // pictures of Spaces that are gone (a plugin was updated or removed) do not stay cached for the rest of the session
+    const live = new Set(sources.map((src) => src?.imageUrl))
+    for (const url of [...spacePngs.keys()]) if (!live.has(url)) spacePngs.delete(url)
+    const missing = [...new Set(drawn.filter((src) => src && !spaceIcons.has(src)))]
     if (missing.length) (await renderNativeIcons(missing as never[])).forEach((icon, i) => spaceIcons.set(missing[i], icon))
-    return list.map((sp, i) => { const icon = sources[i] ? spaceIcons.get(sources[i]) : undefined; return icon ? { ...sp, icon } : sp })
+    let budget = MAX_SPACE_PNGS_CHARS
+    return list.map((sp, i) => {
+      const icon = drawn[i] ? spaceIcons.get(drawn[i]) : undefined
+      const png = spacePng(sources[i]?.imageUrl)
+      const fits = !!png && png.length <= budget
+      if (fits) budget -= png.length
+      // A Space's name can now come from a plugin's recipe: Kotlin refuses a label over 128 — and with it the whole bar.
+      return { ...sp, label: String(sp.label ?? '').slice(0, 120), ...(icon ? { icon } : {}), ...(fits ? { png } : {}) }
+    })
   }
   // Account avatar: the picture (converted once per source string), else the initial, else — signed out — a person glyph.
   const guest: Promise<NativeIcon | undefined> = renderNativeIcons([UserRound]).then(([icon]) => icon)
@@ -114,7 +147,7 @@ export function installNativeChrome(): void {
     if (!chip) return null
     if (chip.avatar && picture?.src !== chip.avatar) {
       const mine = picture = { src: chip.avatar, png: null as string | null }
-      void avatarPng(mine.src).then((png) => { if (png && picture === mine) { mine.png = png; send() } })
+      void squarePng(mine.src, AVATAR_PX, MAX_AVATAR_CHARS).then((png) => { if (png && picture === mine) { mine.png = png; send() } })
     }
     const png = chip.avatar && picture?.src === chip.avatar ? picture.png : null
     const icon = chip.loggedIn ? { kind: 'text' as const, text: chip.initial } : await guest

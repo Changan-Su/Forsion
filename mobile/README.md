@@ -101,12 +101,14 @@ Kotlin 在 `NativeChrome*` / `NativeSheet*`。没装宿主（桌面、Web、浏�
   WebView 由插件放在顶栏下方（自管 insets，`--mb-top` 归零）。引导、成就、互联设备、旁聊等自带头部的全屏层用 `useNativeChromeClaim({ mode: 'hidden' })` 收起顶栏；
   **设置**改用 `page` 模式（标题 + 返回，分类页再加 `close` ×），Web 头部只在 `data-native-chrome` 时隐藏。
   **底部导航栏**：Space 切换由同一插件画成原生底栏（外壳把 Space 列表随 `spaces` 推过去，图标由宿主按 Space 的图标组件序列化）。
+  图标是一张图的 Space（插件 Space 的 `iconFile`）：PNG 在页面里缩成 72px 随状态发过去、原色显示；图还没好、是 SVG 或超出体积预算时画配方 `icon` 的线条图标（`SpaceIcon.nativeFallback`）。
   点 = 切 Space；点当前那格不做事；长按 = 固定到桌面。超过 5 个时**第一格（主页）固定不动**，其余格子在它右边横向滚动（固定 1 格 + 滚动 4.5 格）：
   当前格在前五个里时不滚；再往后只滚到「当前格完整可见、下一格露半个」为止。固定按位置不按 id（JS 列出的第一个 Space）。
   只在 `shell` 模式的**第一层页面**且 Space ≥ 2 时出现，键盘弹起、`page` / `hidden` 时收起；WebView 的下边距由插件一并管理。当前 Space 镜像在 `.mb-shell[data-space]`（仪器锚点）。
 - **两级导航**（2026-10-04；只在画底栏的原生宿主下生效，Web / 桌面手机框 / 手机浏览器仍是抽屉）：有左栏的 Space 进来先看左栏 —— 全屏、标题 = Space 名、带底栏；
   点条目进主区（顶栏左侧变返回箭头、底栏收起）；系统返回 = 标签页内后退 → 回列表 → 在列表再按一次退到后台。冷启动、切 Space、重置布局都落在列表层。
-  左栏不是「点开一项进主区」的列表时，在 Space 定义里写 `listFirst: false`（日历的待办、图像工作台的对话）：主区是第一层，左栏仍是抽屉。
+  左栏不是「点开一项进主区」的列表时，在 Space 定义里写 `listFirst: false`（日历的待办）：主区是第一层，左栏仍是抽屉。
+  配方 Space（插件包里带的 `space.json`）一律主区是第一层：配方照桌面三栏写，它的左栏未必能把人带进主区。
   没有左栏的 Space（主页、Muse…）主区就是第一层。层级镜像在 `.mb-shell[data-nav]` = `list` / `detail` / 缺省（仪器锚点）。
 - **账号 / 设置 / Forsion Unit 切换**（2026-10-04，10-05 改）：原生宿主下左栏底部那一排不再渲染。账号是第一层页面顶栏最右的头像（有头像图用图，否则首字母；未登录是人形图标），
   点开是同一份账号菜单 —— 账号卡隐身挂在 `MobileRoot`，经 `@/services/accountChip` 把「显示什么 / 点了做什么」交给 `src/nativeChrome.ts`；头像图在 JS 侧裁方、缩到 96px 再过桥。
@@ -225,14 +227,18 @@ OLD_APK=/absolute/old.apk NEW_APK=android/app/build/outputs/apk/debug/app-debug.
 - **私有数据防写坏**:双槽(`.json` / `.json.alt`)+ 带序号的 JSON 信封,每次写较旧的那一槽;写到一半被杀只坏那一槽,
   读取取序号最大的有效槽 —— 不依赖 rename / 覆盖语义。
 - **CSP**:`index.html` 的 `script-src` 带 `'unsafe-eval'`,插件代码经 `new Function` 求值(同桌面)。
-- **手机暂不支持**:插件状态栏项(没有状态栏)、捆绑包里的引擎插件 / Agent / 技能 / Space、主题 / Space / 技能 / Agent 类市场条目、
-  npm 来源的条目(桌面同样不支持)。
+- **包里带的 Space**(2026-10-09):`plugins/<slug>/spaces/<目录>/space.json` 由 `pluginHost.ts` 的 `listSpaces` 读出,经
+  `window.tangu.spacesList` 交给渲染层的 `userSpaces.loadUserSpaces`(形状同桌面 `spaces:list` 里插件那一半)—— 装完 / 启停 / 卸载 / 冷启动
+  之后 Space 跟着进出底部导航栏。`iconFile` 的查找次序与门禁同桌面(`desktop/shared/spaceIcon.ts`)。装不起来的插件(版本门禁 / 仅桌面)不贡献 Space。
+  此前这座桥不存在:商店里的插件大多把 Space 写在包里,装上以后命令和视图都在,Space 不出现。
+- **手机暂不支持**:插件状态栏项(没有状态栏)、捆绑包里的引擎插件 / Agent / 技能(没有本机引擎)、主题 / Space / 技能 / Agent 类市场条目、
+  用户自建 Space(没有 `spacesSave` / `spacesDelete`)、npm 来源的条目(桌面同样不支持)。
 - **安全**:插件代码与 App 渲染层同一个 JS 作用域 —— 能调 `window.tangu` / `window.amadeus` 的一切,包括已登录账号的云端接口
   (与桌面一样:安装 = 信任)。手机上额外的约束只有市场这一个来源和上面的包体校验;没有可见的插件目录,侧载不了。
 
 ```bash
 npm run test:plugins                 # 宿主 / 市场纯逻辑单测(内存文件系统,不用 build)
-rm -rf dist && npm run build && npm run e2e:plugins   # 真浏览器:市场 → 安装 → 运行 → 刷新 → 停用 → 卸载
+rm -rf dist && npm run build && npm run e2e:plugins   # 真浏览器:市场 → 安装 → 运行 → 包里带的 Space → 刷新 → 停用 → 卸载
 npm run e2e:plugins -- --negative    # 负对照:去掉 'unsafe-eval' 后必须红
 ```
 
