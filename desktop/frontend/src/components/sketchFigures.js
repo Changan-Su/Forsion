@@ -27,11 +27,13 @@
       queueMicrotask(() => {
         if (!this.isConnected) return
         if (!this.figureData) {
+          this._fsSrc = this.innerHTML // 直播补丁(sketchRuntime morph)拿它和新来的源码比,渲染后 innerHTML 就不是源码了
           try { this.figureData = JSON.parse(this.querySelector('script[type="application/json"]')?.textContent || '{}') }
           catch { this.figureData = {} }
         }
         this.render()
         this.observer?.disconnect()
+        if (!window.ResizeObserver) return
         this.observer = new ResizeObserver(() => {
           const width = Math.round(this.clientWidth)
           if (width && width !== this.lastWidth) { this.lastWidth = width; this.render() }
@@ -228,9 +230,108 @@
     }
   }
 
+  // 10-09(对标 ChatGPT Intelligent UI「只能拼固定组件库」):统一的拼装部件,模型只给 JSON,外观由宿主定。
+  const askOf = (text) => { try { window.forsionSketch.ask(String(text)) } catch (e) { console.warn(e) } }
+  const button = (label, onClick) => { const b = node('button', 'fs-button', label); b.type = 'button'; b.addEventListener('click', onClick); return b }
+
+  /** <fs-compare>:并排选项 {title?, caption?, options:[{label, summary?, points?:string[], ask?:{label?, text}}]}(2–6 项)。 */
+  class Compare extends Figure {
+    render() {
+      const d = this.figureData
+      const ok = d && Array.isArray(d.options) && d.options.length >= 2 && d.options.length <= 6 &&
+        d.options.every((o) => o && typeof o.label === 'string' &&
+          (o.points === undefined || (Array.isArray(o.points) && o.points.length <= 8 && o.points.every((p) => typeof p === 'string'))) &&
+          (o.ask === undefined || (o.ask && typeof o.ask.text === 'string')))
+      if (!ok) { this.error(); return }
+      this.replaceChildren()
+      const root = node('div', 'fs-compare')
+      heading(root, d)
+      const grid = node('div', 'fs-grid')
+      for (const o of d.options) {
+        const card = node('section', 'fs-option')
+        card.append(node('h4', '', o.label))
+        if (typeof o.summary === 'string' && o.summary) card.append(node('p', 'fs-muted', o.summary))
+        if (Array.isArray(o.points) && o.points.length) { const ul = node('ul', 'fs-points'); for (const p of o.points) ul.append(node('li', '', p)); card.append(ul) }
+        if (o.ask) { const act = node('div', 'fs-actions'); act.append(button(o.ask.label || o.label, () => askOf(o.ask.text))); card.append(act) }
+        grid.append(card)
+      }
+      root.append(grid); caption(root, d); this.append(root)
+    }
+  }
+
+  /** <fs-choice>:追问选择题 {question, options:[{label, ask?}], multiple?, ask?("{choices}" 占位), submitLabel?, caption?}。
+   *  单选点了就把 ask(缺省 label)当用户消息发出;多选勾完按提交,把 ask 模板里的 {choices} 换成所选。 */
+  class Choice extends Figure {
+    render() {
+      const d = this.figureData
+      const ok = d && typeof d.question === 'string' && Array.isArray(d.options) && d.options.length >= 2 && d.options.length <= 8 &&
+        d.options.every((o) => o && typeof o.label === 'string' && (o.ask === undefined || typeof o.ask === 'string'))
+      if (!ok) { this.error(); return }
+      this.picked ||= new Set() // 宽度变化重绘时保住已勾的
+      for (const i of [...this.picked]) if (i >= d.options.length) this.picked.delete(i) // setData 换了更短的选项表:越界的勾作废(Codex 10-09)
+      this.replaceChildren()
+      const root = node('div', 'fs-choice')
+      root.setAttribute('role', 'group')
+      root.append(node('p', 'fs-choice-question', d.question))
+      const opts = node('div', 'fs-choice-options')
+      if (d.multiple) {
+        for (const [i, o] of d.options.entries()) {
+          const l = node('label', 'fs-check'); const c = node('input'); c.type = 'checkbox'; c.checked = this.picked.has(i)
+          c.addEventListener('change', () => { if (c.checked) this.picked.add(i); else this.picked.delete(i) })
+          l.append(c, node('span', '', o.label)); opts.append(l)
+        }
+        const act = node('div', 'fs-actions')
+        act.append(button(d.submitLabel || 'OK', () => {
+          const chosen = [...this.picked].sort((x, y) => x - y).map((i) => d.options[i]?.label).filter(Boolean)
+          if (chosen.length) askOf(String(d.ask || '{choices}').replace('{choices}', chosen.join(', ')))
+        }))
+        root.append(opts, act)
+      } else {
+        for (const o of d.options) opts.append(button(o.label, () => askOf(typeof o.ask === 'string' ? o.ask : o.label)))
+        root.append(opts)
+      }
+      caption(root, d); this.append(root)
+    }
+  }
+
+  /** <fs-checklist>:勾选清单 {title?, caption?, items:[{label, detail?}]}(1–40 项);勾选状态经 forsionSketch.setState 存在本机
+   *  (键 checklists[<元素 id 或 'checklist'>]),重开这张卡还在。 */
+  class Checklist extends Figure {
+    render() {
+      const d = this.figureData
+      const ok = d && Array.isArray(d.items) && d.items.length >= 1 && d.items.length <= 40 &&
+        d.items.every((it) => it && typeof it.label === 'string' && (it.detail === undefined || typeof it.detail === 'string'))
+      if (!ok) { this.error(); return }
+      const key = this.id || 'checklist'
+      const st = window.forsionSketch?.state
+      const saved = st && typeof st === 'object' && st.checklists ? st.checklists[key] : undefined
+      const done = new Set(Array.isArray(saved) ? saved.filter((i) => Number.isInteger(i)) : [])
+      this.replaceChildren()
+      const root = node('div', 'fs-checklist')
+      heading(root, d)
+      const ul = node('ul', 'fs-checklist-items')
+      for (const [i, it] of d.items.entries()) {
+        const li = node('li'); const l = node('label', 'fs-check'); const c = node('input'); c.type = 'checkbox'; c.checked = done.has(i)
+        c.addEventListener('change', () => {
+          if (c.checked) done.add(i); else done.delete(i)
+          const cur = window.forsionSketch.state
+          const base = cur && typeof cur === 'object' && !Array.isArray(cur) ? cur : {}
+          try { window.forsionSketch.setState({ ...base, checklists: { ...(base.checklists || {}), [key]: [...done].sort((x, y) => x - y) } }) } catch (e) { console.warn(e) }
+        })
+        const text = node('span', '', it.label)
+        if (it.detail) text.append(node('small', 'fs-muted', ' ' + it.detail))
+        l.append(c, text); li.append(l); ul.append(li)
+      }
+      root.append(ul); caption(root, d); this.append(root)
+    }
+  }
+
   function register() {
     if (!customElements.get('fs-chart')) customElements.define('fs-chart', Chart)
     if (!customElements.get('fs-flow')) customElements.define('fs-flow', Flow)
+    if (!customElements.get('fs-compare')) customElements.define('fs-compare', Compare)
+    if (!customElements.get('fs-choice')) customElements.define('fs-choice', Choice)
+    if (!customElements.get('fs-checklist')) customElements.define('fs-checklist', Checklist)
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', register)
   else register()

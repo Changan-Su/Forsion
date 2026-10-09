@@ -107,6 +107,24 @@ fs-chart + fs-flow, fs-flow + fs-chart, fs-chart + fs-chart { margin-top: 28px; 
 .fs-flow-steps--vertical .fs-flow-content { margin-top: 3px; }
 .fs-flow-steps--vertical .fs-flow-step:not(:last-child)::after { left: 15px; top: 39px; width: 1px; height: calc(100% - 23px); }
 .fs-flow-steps--vertical .fs-flow-step:not(:last-child)::before { top: calc(100% + 11px); left: 12px; transform: rotate(135deg); }
+/* 直播补丁(10-09):新来的部件淡入;文字原地续写不动画。 */
+[data-fs-new] { animation: fs-in .28s ease-out both; }
+@keyframes fs-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+/* 统一拼装部件(10-09,对标 Intelligent UI 的固定组件库):网格 / 选项 / 按钮行 / 提示块 / 对比 / 追问选择 / 勾选清单。 */
+.fs-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(150px, 100%), 1fr)); gap: 14px 16px; margin: 4px 0 12px; } /* 150:聊天栏里卡内宽 ≈510px 时并排得下三个选项 */
+.fs-option { display: grid; align-content: start; gap: 6px; min-width: 0; padding: 12px 14px; border-radius: var(--fs-radius); background: var(--fs-surface); }
+.fs-option > h4 { margin: 0; font-size: 14px; }
+.fs-points { margin: 0; padding-left: 18px; font-size: 13px; display: grid; gap: 3px; }
+.fs-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.fs-callout { padding: 10px 14px; border-left: 2px solid var(--fs-accent); background: var(--fs-surface); border-radius: 0 var(--fs-radius) var(--fs-radius) 0; font-size: 13px; }
+fs-compare, fs-choice, fs-checklist { display: block; min-width: 0; }
+fs-compare + fs-choice, fs-choice + fs-compare, fs-checklist + fs-choice, fs-chart + fs-compare, fs-compare + fs-chart, fs-flow + fs-checklist, fs-checklist + fs-flow { margin-top: 24px; }
+.fs-choice-question { margin: 0 0 10px; font-size: 14px; font-weight: 500; }
+.fs-choice-options { display: flex; flex-wrap: wrap; gap: 8px; }
+.fs-checklist-items { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.fs-checklist-items .fs-check { align-items: start; }
+.fs-checklist-items .fs-check input { margin-top: 4px; }
+.fs-checklist-items .fs-check input:checked + span { color: var(--fs-muted); text-decoration: line-through; }
 ::selection { background: var(--fs-accent-soft); }
 @media(max-width:480px) {
   body { padding: 14px 12px; }

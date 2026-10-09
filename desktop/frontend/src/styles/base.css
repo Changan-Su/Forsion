@@ -1451,6 +1451,7 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
 /* sketch 内容面:它属于消息正文,不是另一张实底浮卡。透明画布透出当前 Chat View(含 Side Panel),
  * 只留 overlay-medium 的安静轮廓；不用硬色 --border,避免自定义配色把明暗关系翻转。 */
 .sketch-card {
+  position: relative;
   border: var(--border-width, 1px) solid var(--overlay-medium, rgba(127, 127, 127, 0.12));
   background: transparent;
   border-radius: var(--radius-sm);
@@ -1466,16 +1467,15 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
 .sketch-card-head { display: flex; align-items: center; gap: 4px; padding-right: 6px; }
 .sketch-card-head > .sketch-card-title { flex: 1; min-width: 0; }
 .sketch-card-head > .t2-iconbtn { margin-left: auto; }
-.sketch-frame { display: block; width: 100%; border: 0; background: transparent; }
+.sketch-frame { display: block; width: 100%; border: 0; background: transparent; transition: height 180ms ease; }
 .sketch-card-note { padding: 12px; font-size: var(--ui-font-body, 13px); color: var(--text-muted); }
-/* 折叠夹:默认高度上限 = 右侧车道那两张卡(任务概览 / Agent Desk)的高度,用户口径「一样高」。
- * 算式来源(chat2.css):.t2-rail 铺满 .t2-chat-col 且上下各 padding 16 → 车道内容高 = 100% − 32;
- * 两卡各 calc(50% - 5px) ⇒ 50cqb − 16 − 5。cqb 解析到最近的 size 容器 = .t2-chat-col
- * (container-type: size,见 chat2.css 的头像宽高比查询)。
- * ⚠️移动壳里若这条链上没有 size 容器,cqb 回落到小视口单位 ≈ 半屏 —— 观感一致,不是 bug。
+/* 折叠夹(10-09 改):只夹**超过聊天栏 1.6 倍高**的巨卡。原来上限是右侧车道两卡的高度(≈半栏,50cqb − 21px),
+ * 一张「图 + 三栏说明」的正常卡都超,用户反馈「每张都要点展开,很难受」;ChatGPT 的卡本来也不折。
+ * cqb 解析到最近的 size 容器 = .t2-chat-col(container-type: size,见 chat2.css 的头像宽高比查询);
+ * ⚠️移动壳里若这条链上没有 size 容器,cqb 回落到小视口单位 —— 观感一致,不是 bug。
  * 溢出遮罩用 mask 而非渐变叠层:卡内是 iframe,盖不住也不该盖(会吃掉指针事件)。 */
 .sketch-clip {
-  max-height: calc(50cqb - 21px);
+  max-height: 160cqb;
   overflow: hidden;
 }
 .sketch-clip.open { max-height: none; }
@@ -1493,9 +1493,17 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
   transition: color var(--duration-fast, 0.15s), background var(--duration-fast, 0.15s);
 }
 .sketch-card-toggle:hover { color: var(--text); background: var(--overlay-light, rgba(127, 127, 127, 0.1)); }
-/* 草稿卡(参数还在流式生成,结构先于行为):淡一点示意「还在画」,且不接指针 —— 半成品不该被点;终稿到达即恢复。 */
-.sketch-card[data-sketch-draft] { opacity: .78; }
+/* 草稿卡(参数还在流式生成,结构先于行为):不压暗(压暗像禁用态),只在卡顶跑一道细线示意「还在画」;不接指针 —— 半成品不该被点;终稿到达即恢复。 */
 .sketch-card[data-sketch-draft] .sketch-frame { pointer-events: none; }
+.sketch-card[data-sketch-draft]::after {
+  content: ''; position: absolute; left: 0; top: 0; height: 2px; width: 28%; border-radius: 2px;
+  background: var(--accent-ink); opacity: .55; animation: sketch-drafting 1.4s ease-in-out infinite;
+}
+@keyframes sketch-drafting { from { transform: translateX(-100%); } to { transform: translateX(360%); } }
+@media (prefers-reduced-motion: reduce) {
+  .sketch-frame { transition: none; }
+  .sketch-card[data-sketch-draft]::after { animation: none; }
+}
 .inquiry-q {
   display: flex;
   align-items: center;

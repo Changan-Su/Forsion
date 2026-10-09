@@ -108,6 +108,12 @@ describe('sketch prompt section (trigger)', () => {
     const def = getToolDefinitions({ ...base, appId: tangu.appId, profile: tangu, execMode: 'host', client: 'desktop/2.13.0' })
       .find((t) => t.function.name === 'sketch');
     expect(def?.function.description).toContain('forsionSketch.ask(');
+    expect(def?.function.description).toContain('.copy(');
+    expect(def?.function.description).toContain('fs-compare');
+    expect(SKETCH_SECTION).toContain('fs-choice');
+    expect(SKETCH_SECTION).toContain('fs-checklist');
+    expect(SKETCH_SECTION).toContain('never add inline `style` attributes');
+    expect(SKETCH_SECTION).toContain('window.forsionSketch.copy(');
   });
 
   it('description carries the theme contract (the model can only use vars it is told about)', () => {

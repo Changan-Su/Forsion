@@ -22,11 +22,12 @@ describe('sketch draft html (structure first, behavior on completion)', () => {
     expect(draftHtml("<body onLoad='run()'><p>go online=1 now</p>")).toBe("<body><p>go online=1 now</p>")
     expect(draftHtml('<p>a</p><svg onload="ru')).toBe('<p>a</p><svg')
   })
-  it('keeps figure data scripts (application/json), closed or still streaming', () => {
+  it('keeps closed figures with their data scripts, drops a native part that is still streaming (no "—" flash)', () => {
     const closed = '<fs-chart type="bar"><script type="application/json">{"data":[{"label":"a","value":1}]}</script></fs-chart>'
     expect(draftHtml(closed)).toBe(closed)
-    const open = '<fs-flow><script type="application/json">{"steps":[{"label":"Und'
-    expect(draftHtml(open)).toBe(open)
+    const open = '<p>a</p><fs-flow><script type="application/json">{"steps":[{"label":"Und'
+    expect(draftHtml(open)).toBe('<p>a</p>')
+    expect(draftHtml(closed + '<fs-compare><script type="application/json">{"opt')).toBe(closed)
     expect(draftHtml(closed + '<script>alert(1)</script>')).toBe(closed)
   })
 })

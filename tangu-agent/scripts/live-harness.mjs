@@ -213,7 +213,8 @@ OPT_IN.add('visualfigures');
 OPT_IN.add('visualize'); // --only visualize: real model -> sketch controls/state; HTML can feed desktop check:visualize.
 OPT_IN.add('visualask'); // --only visualask:卡内按钮回头改答案(forsionSketch.ask);改 sketch.ts 的 INTERACTION / SKETCH_SECTION 那段后跑
 OPT_IN.add('visualsdial'); // --only visualsdial:可视化档位 less / off(ui_settings 快照):off 工具与段都不在、less 隐式信号不触发;两个 run
-KEYS.push('visualask', 'visualsdial');
+OPT_IN.add('visualplan'); // --only visualplan:统一部件拼一张「可用的工具卡」(滑块 + fs-checklist + copy);改 sketch.ts 的部件表 / SKILL 后跑
+KEYS.push('visualask', 'visualsdial', 'visualplan');
 OPT_IN.add('emoji'); // Three real-model rounds; run explicitly when session icons change.
 OPT_IN.add('plugin'); // 隔离 home 里放夹具插件 —— 只在显式跑它时放,别让多出来的工具改了别的场景的工具表。
 OPT_IN.add('dispatch');
@@ -2046,8 +2047,25 @@ try {
     const html = cards.map((c) => c.html || '').join('\n');
     writeFileSync(join(OUT, 'visualask.html'), html);
     const success = ev.toolResults.some((r) => r.name === 'sketch' && !r.isError);
-    const contract = /forsionSketch\.ask\(/.test(html) && /<button/i.test(html);
-    return { ok: !ev.error && ev.done && success && contract, detail: ev.error || `cards=${cards.length};ask button=${contract}`, output: ev.content, toolCalls: ev.toolCalls, ttftMs: ttft(ev), tokens: tokensOf(ev) };
+    // 10-09 二轮起首选原生 fs-compare(选项自带 ask);手写 <button onclick=ask()> 仍算数
+    const native = /<fs-compare\b/.test(html) && /"ask"\s*:/.test(html);
+    const contract = native || (/forsionSketch\.ask\(/.test(html) && /<button/i.test(html));
+    return { ok: !ev.error && ev.done && success && contract, detail: ev.error || `cards=${cards.length};ask button=${contract}(native=${native})`, output: ev.content, toolCalls: ev.toolCalls, ttftMs: ttft(ev), tokens: tokensOf(ev) };
+  });
+
+  // visualplan(10-09 二轮,对标 Intelligent UI 的「能用的工具卡」:餐单按人数缩放 + 采购清单可勾 + 一键复制):判据只看成品 html ——
+  // 有滑块 / 数字输入按人数改量、用原生 fs-checklist(勾选状态由宿主存)、有按钮调 forsionSketch.copy(;负对照 = 去掉描述 / 段 / 技能里
+  // 新部件与 copy 那几句的引擎:模型只会拼 div + 自己写 checkbox,须红。
+  await scenario('visualplan', 'visualplan 统一部件拼工具卡(人数滑块 + fs-checklist + copy)', async () => {
+    const ev = await run(`live-visualplan-${Date.now()}`, '在聊天里给我做一张四人份的周末晚餐计划卡：三道菜，用滑块调人数时食材用量跟着变；下面放一张可以勾选的采购清单，再给一个「复制采购清单」按钮。用 Forsion 自带的视觉部件。', 240_000, {}, 'desktop/2.13.0');
+    const cards = ev.toolArgs.filter((c) => c.name === 'sketch').map((c) => JSON.parse(c.arguments || '{}'));
+    const html = cards.map((c) => c.html || '').join('\n');
+    writeFileSync(join(OUT, 'visualplan.html'), html);
+    const success = ev.toolResults.some((r) => r.name === 'sketch' && !r.isError);
+    const scale = /type=["']range["']|type=["']number["']/.test(html);
+    const checklist = /<fs-checklist\b/.test(html);
+    const copy = /forsionSketch\.copy\(/.test(html);
+    return { ok: !ev.error && ev.done && success && scale && checklist && copy, detail: ev.error || `cards=${cards.length};scale=${scale};fs-checklist=${checklist};copy=${copy}`, output: ev.content, toolCalls: ev.toolCalls, ttftMs: ttft(ev), tokens: tokensOf(ev) };
   });
 
   // visualsdial(10-09):用户把可视化调到 less / off(渲染端 ui_settings 快照,键 visuals)。off → 工具与段都不在(系统提示里没有

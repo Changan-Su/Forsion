@@ -17,11 +17,14 @@ const TAG_TAIL_RE = /<script\b[^>]*$/i
  *  这层只是草稿期的「别自己乱动」稳定措施,安全边界始终是 sandbox + 内层 CSP(终稿本来就会跑这些脚本);真要严丝合缝再换 DOMParser。 */
 const OPEN_TAG_RE = /<[a-zA-Z][^>]*(?:>|$)/g
 const HANDLER_ATTR_RE = /\son[a-z]+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi
+/** 结尾还没闭合的原生部件(`<fs-chart …>{半截 JSON}`):半截 JSON 解析失败会先画出「—」占位再换成图,闪;整个部件到齐再出。 */
+const FIGURE_TAIL_RE = /<(fs-[a-z]+)\b(?![\s\S]*<\/\1\s*>)[\s\S]*$/i
 
 export function draftHtml(partial: string): string {
   return partial
     .replace(SCRIPT_BLOCK_RE, '')
     .replace(SCRIPT_TAIL_RE, '')
     .replace(TAG_TAIL_RE, '')
+    .replace(FIGURE_TAIL_RE, '')
     .replace(OPEN_TAG_RE, (tag) => tag.replace(HANDLER_ATTR_RE, ''))
 }
