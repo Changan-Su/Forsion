@@ -58,6 +58,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.layout.positionInWindow
@@ -77,6 +78,7 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.toSize
+import androidx.compose.ui.zIndex
 import androidx.core.graphics.Insets
 
 /**
@@ -174,9 +176,10 @@ private fun Capsule(id: String, look: CapsuleLook, onPlate: PlateSink, modifier:
     Row(
         modifier.height(CAPSULE_HEIGHT)
             .onGloballyPositioned { onPlate(id, Rect(it.positionInWindow(), it.size.toSize())) }
+            .testTag("nativeChrome.$id")
+            .pointerInput(Unit) {} // a touch on the capsule stays here; the strip around it is transparent and lets it through to the page
             .clip(CircleShape).background(look.fill).border(1.dp, look.edge, CircleShape)
-            .padding(horizontal = 3.dp)
-            .testTag("nativeChrome.$id"),
+            .padding(horizontal = 3.dp),
         verticalAlignment = Alignment.CenterVertically, content = content,
     )
 }
@@ -299,16 +302,20 @@ internal fun NativeSpaceBar(state: ChromeState, insets: Insets, onPlate: PlateSi
             )
                 .height(DOCK_HEIGHT)
                 .onGloballyPositioned { onPlate("dock", Rect(it.positionInWindow(), it.size.toSize())) }
+                .testTag("nativeChrome.dock")
+                .pointerInput(Unit) {} // as the top capsules: the dock keeps its touches, the strip beside it does not
                 .clip(CircleShape).background(look.fill).border(1.dp, look.edge, CircleShape)
-                .padding(horizontal = 7.dp)
-                .testTag("nativeChrome.dock"),
+                .padding(horizontal = 7.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             // The first destination never scrolls: on a later Space it used to slide off the left edge — "the Home page
             // is gone" (2026-10-04); the user asked for Home to be pinned (2026-10-05).
             // ponytail: pinned by position, not by id — Home is whatever JS lists first (a Space re-enabled at runtime
             // is appended). Send a flag from JS if "first" ever stops meaning Home.
-            for (space in state.spaces.take(1)) SpaceCell(space, cell, onSpace)
+            // … and it is the upper layer: a neighbour that slid under it still reports part of its touch target
+            // there (a scroll container's clip is relaxed for small targets), so to a screen reader the right half of
+            // Home was "Tangu" and Home itself a sliver. On top, Home keeps its whole cell — as it does for a finger.
+            for (space in state.spaces.take(1)) SpaceCell(space, cell, onSpace, Modifier.zIndex(1f))
             Row(
                 Modifier.weight(1f, fill = false).fadingEdges(scrollState, with(density) { DOCK_PEEK.toPx() }).horizontalScroll(scrollState),
                 verticalAlignment = Alignment.CenterVertically,
@@ -333,7 +340,7 @@ private class CellColors(val accent: Color, val muted: Color, val warning: Color
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun SpaceCell(space: ChromeSpace, colors: CellColors, onSpace: (id: String, long: Boolean) -> Unit) {
+private fun SpaceCell(space: ChromeSpace, colors: CellColors, onSpace: (id: String, long: Boolean) -> Unit, modifier: Modifier = Modifier) {
     val accent = colors.accent
     val tint = if (space.active) accent else colors.muted
     val pill = if (space.active) accent.copy(alpha = 0.16f) else Color.Transparent
@@ -349,7 +356,7 @@ private fun SpaceCell(space: ChromeSpace, colors: CellColors, onSpace: (id: Stri
         if (space.active && size != IntSize.Zero) requester.bringIntoView(Rect(-peek, 0f, size.width + peek, size.height.toFloat()))
     }
     Row(
-        Modifier.height(DOCK_CELL_HEIGHT)
+        modifier.height(DOCK_CELL_HEIGHT)
             .then(if (space.active) Modifier else Modifier.width(DOCK_CELL_WIDTH))
             .bringIntoViewRequester(requester).onSizeChanged { size = it }
             .clip(RoundedCornerShape(21.dp)).background(pill)

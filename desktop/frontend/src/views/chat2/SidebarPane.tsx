@@ -513,6 +513,7 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
     <aside className="t2s-side" ref={rootRef}>
       <div
         className="t2s-scroll"
+        data-under-dock={dockHost ? '' : undefined}
         // 拖组时整列表放行 drop:落在组间外边距 / 列表空白处也提交到当前落点,不再「松手什么都没发生」。
         onDragOver={(e) => { if (dragKey) { e.preventDefault(); e.dataTransfer.dropEffect = 'move' } }}
         onDrop={(e) => { if (dragKey && dragOverKey) { e.preventDefault(); dropWorkspace(dragOverKey) } }}

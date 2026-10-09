@@ -4990,17 +4990,11 @@ body[data-file-drag] .shell-work::after {
       · amadeus-plugin-file 内容整块由插件 mount() 画,宿主不知道里面是什么。 */
 
 /* ⑥ Android 悬浮 Dock 之下的底部留白(2026-10-09 用户选定「悬浮胶囊 + 毛玻璃」)—— 与上面顶部那套对称,
-      只在原生外壳下生效:`--mb-bottom` 定义在 lcl/engine/singleColumn.css 末尾,Dock 不在场(进了主区、键盘弹出、
-      设置页)时为 0。默认让位 = 主区视图 / 抽屉整块让到 Dock 之上(失败方向同样是「多留一条」,不是「被盖住」);
-      下面逐个退订,把留白还给**视图底端那个滚动器**,内容才能从 Dock 底下穿过去。
-      ⚠️ 抽屉里的长度要再除一次 1.15:`.mb-drawer-body` 自带第二档 zoom(singleColumn.css「触屏行高」那条)。
-      仪器:mobile `npm run emu:nativeshell` 的「floating chrome」几项。 */
-/* 主页:壁纸铺到屏幕底,内容留在 Dock 之上。 */
+      只在原生外壳下生效:`--mb-bottom` 与默认让位、`data-under-dock` 退订都在 lcl/engine/singleColumn.css 末尾,
+      Dock 不在场(进了主区、键盘弹出、设置页)时为 0。这里只剩主页一条:它要的不是「列表滚到 Dock 之上」,
+      而是壁纸铺到屏幕底、内容留在 Dock 之上。 */
 .mb-shell[data-native-chrome] .mb-main > .mb-view[data-view='homepage'] { padding-bottom: 0; }
 .mb-shell[data-native-chrome] .mb-view[data-view='homepage'] .hp-root { --hp-chrome-bottom: var(--mb-bottom); }
-/* 列表层的会话列表(Tangu):「已归档」那块在这类宿主下排在列表末尾(SidebarPane 的 dockHost),不再钉底。 */
-.mb-shell[data-native-chrome] .mb-drawer--left:has(.t2s-scroll) { padding-bottom: 0; }
-.mb-shell[data-native-chrome] .mb-drawer--left .t2s-scroll { padding-bottom: calc(9px + var(--mb-bottom) / 1.15); }
 
 /* chat / work 模式位:会话创建后只读(disabled),悬浮 title 解释「换模式请新建会话」。 */
 .composer-menu .menu-item:disabled { opacity: 0.55; cursor: default; }

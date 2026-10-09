@@ -440,11 +440,19 @@
    现在它们也铺到屏幕顶,内容让到胶囊之下,底色照样铺满(padding 在盒内)。 */
 .mb-shell[data-native-chrome] .mb-drawer,
 .mb-shell[data-native-chrome] .mb-sidecol { padding-top: var(--mb-top); }
-/* Dock 之下的**安全默认**:主区视图与抽屉整块让到 Dock 之上,谁都不会被它盖住。想让内容从 Dock 底下穿过去的
-   (列表、主页壁纸)逐个退订,名单在 desktop/frontend/src/styles/base.css「移动端内容顶满」那一块。
+/* Dock 之下的**安全默认**:主区视图与抽屉整块让到 Dock 之上,谁都不会被它盖住(失败方向是「多留一条」)。
    抽屉的让位加在 .mb-drawer 而不是 .mb-drawer-body:后者自带第二档 zoom,长度会再被放大一次。 */
 .mb-shell[data-native-chrome] .mb-main > .mb-view,
 .mb-shell[data-native-chrome] .mb-drawer { padding-bottom: var(--mb-bottom); }
+/* 退订 = 视图**最底下那个滚动器**标 `data-under-dock`:面板铺到屏幕底,让位变成这个滚动器自己的 padding-bottom,
+   于是内容从 Dock 底下穿过去、最后一行仍能滚到 Dock 之上。只有「滚动器下面再没有别的东西」的视图才能标 ——
+   钉在面板底部的按钮 / 脚注会被 Dock 盖住(那种视图要么不标,要么先把脚注排进滚动器,见 SidebarPane 的 dockHost)。
+   滚动器原有的底部留白写在 `--under-dock-pad` 里(这条规则会覆盖它的 padding-bottom)。
+   仪器:mobile `npm run emu:nativeshell` 的「floating chrome: on every Space's first level…」。 */
+.mb-shell[data-native-chrome] .mb-main > .mb-view:has([data-under-dock]),
+.mb-shell[data-native-chrome] .mb-drawer:has([data-under-dock]) { padding-bottom: 0; }
+.mb-shell[data-native-chrome] .mb-main [data-under-dock] { padding-bottom: calc(var(--under-dock-pad, 0px) + var(--mb-bottom)); }
+.mb-shell[data-native-chrome] .mb-drawer-body [data-under-dock] { padding-bottom: calc(var(--under-dock-pad, 0px) + var(--mb-bottom) / 1.15); }
 /* 状态栏那一条:正文可以从胶囊底下穿过去,但不该和时间、电量叠在一起 —— 盖一层壳的底色,到状态栏下缘之后淡出
    (高度取状态栏的 1.2 倍、前 1/1.2 是实色:--nc-status 为 0 时整条高度也是 0,不必另写开关)。
    主页例外(壁纸要铺到屏幕顶)。盖在抽屉(z3)与主区之上、Web 半屏(z40)之下;不吃触摸。 */
