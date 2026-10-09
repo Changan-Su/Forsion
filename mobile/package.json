@@ -25,6 +25,7 @@
     "e2e:csp": "node scripts/csp.e2e.cjs",
     "e2e:boot": "node scripts/mobile-boot.e2e.cjs",
     "e2e:noteopen": "node scripts/note-open.e2e.cjs",
+    "e2e:localasset": "node scripts/local-asset.e2e.cjs",
     "e2e:editorbar": "node scripts/editor-capsule.e2e.cjs",
     "e2e:drawerdrag": "node scripts/drawer-drag.e2e.cjs",
     "e2e:spacetrap": "node scripts/space-trap.e2e.cjs",
@@ -42,7 +43,8 @@
     "emu:treecompare": "node scripts/uitree-compare.cjs",
     "test:nativebar": "./android/gradlew -p android :app:testDebugUnitTest --tests '*NativeChromeBarLayoutTest'",
     "emu:launchericon": "node scripts/launcher-icon-upgrade-emu.cjs",
-    "emu:phone": "node scripts/phone-control-emu.cjs"
+    "emu:phone": "node scripts/phone-control-emu.cjs",
+    "emu:localasset": "node scripts/local-asset-emu.cjs"
   },
   "dependencies": {
     "@capacitor/android": "^7.6.7",

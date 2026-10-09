@@ -4,7 +4,8 @@
  * electron/amadeus/ipc.ts handler 体。桌面渲染层经 amadeus/api.ts 的 `window.amadeus` 门面零改接管。
  *
  * 落地范围:20 纯文件 I/O + 7 派生索引全实现;9 个 OS/事件方法 no-op(渲染层已 `?.` 兜底)。
- * 图片(amadeus-asset://)由原生 Android 拦截读同一 vault(见 android WebViewClient),此处不涉及。
+ * 图片 / 音视频的显示地址:本桥装自己的一对「构建 + 解析」(localAssets.ts)—— 库根经 Capacitor 的本地文件服务
+ * 变成与页面同源的地址。安卓原生层**没有** `amadeus-asset://` 的拦截器(旧注释说有,从来没有),别指望那个协议。
  */
 import path from 'path-browserify'
 import { loadPage, newPage, pageFileName, savePage } from '@amadeus-shared/compiler'
@@ -17,6 +18,7 @@ import type { DbFile } from '@amadeus-shared/db/schema'
 import type { AmadeusApi, DbReadResult, LinkMeta, PageProps, TextWriteResult, VaultInfo } from '@amadeus-shared/ipc'
 import { VaultManager } from './vaultManager'
 import { VaultIndex } from './vaultIndex'
+import { installLocalAssetUrls } from './localAssets'
 import { propagateNoteRenames, queueStructureOps } from '@amadeus-shared/propagateNoteRenames'
 import { textFingerprint } from '@amadeus-shared/writeConflict'
 import { toastRenameRewriteFailed } from '@/amadeus/lib/renameLinksToast'
@@ -35,11 +37,18 @@ export function createMobileAmadeusBridge(cfg?: { apiBase?: () => string; getTok
   const vault = new VaultManager(cfg?.pluginExts)
   const index = new VaultIndex(vault)
   let built = false
+  // 资源的显示地址(成对:构建 + 解析)。**每次建桥都重装**:它是模块级的全局状态,先开过云端库再切到本地库时,
+  // 云桥装的那一对还留着 —— 本地图片会被指到云端,存盘时云端地址被写进本地笔记(仪器:npm run e2e:localasset 场景 B)。
+  // 库根的可加载地址要到开库才拿得到;那之前构建器退回默认协议(显示不出,存盘往返是好的)。
+  let assetBase = ''
+  installLocalAssetUrls(() => assetBase)
 
   async function ensureVault(): Promise<void> {
     if (vault.getRoot()) { if (!built) { await index.build(); built = true } return }
     vault.setRoot(ROOT)
     await vault.makeDir('') // 确保 Data/vault 存在
+    // 取不到(或宿主给不出)就留空:图片显示不出,别的照常。typeof 判断是给单测里的 VaultManager 替身留的。
+    if (typeof vault.assetBase === 'function') assetBase = await vault.assetBase().catch(() => '')
     await index.build()
     built = true
   }
@@ -430,7 +439,7 @@ export function createMobileAmadeusBridge(cfg?: { apiBase?: () => string; getTok
         .filter((x) => x.thumb && x.full)
     },
 
-    // OS 集成 / 事件 —— 移动端 no-op(渲染层已 `?.` 兜底)。图片经原生 amadeus-asset 拦截,不走这里。
+    // OS 集成 / 事件 —— 移动端 no-op(渲染层已 `?.` 兜底)。
     // 这三件 no-op 的入口一律不渲染(评审 G2-13:⋯ 菜单与附件卡上的死键),判据单源 amadeus/lib/hostCaps.ts。
     hostCaps: { revealInFileManager: false, exportPdf: false, openAttachment: false },
     openAttachment: async () => { /* no-op(可后续接系统分享) */ },

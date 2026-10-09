@@ -32,15 +32,33 @@ export function relFrom(dir: string, vaultRel: string): string {
   return vaultRel.startsWith(prefix) ? vaultRel.slice(prefix.length) : vaultRel
 }
 
-/** 可替换的资源 URL 构建器(接缝):默认 = amadeus-asset:// 自定义协议(桌面主进程解析,
- *  移动端由原生 WebView 拦截)。Tangu Web 无 host 协议,启动时经 setAssetUrlBuilder 注入
- *  HTTP 版(→ /api/amadeus/vaults/:v/asset?ref=…)。桌面/移动不调用注入,零影响。 */
-let assetUrlBuilder: (ref: string) => string = (ref) =>
-  `${ASSET_SCHEME}://v/${encodeURIComponent(ref)}`
+/** 默认的显示地址:amadeus-asset:// 自定义协议(**只有桌面主进程**解析它)。 */
+const defaultAssetUrl = (ref: string): string => `${ASSET_SCHEME}://v/${encodeURIComponent(ref)}`
 
-/** Install a custom display-URL builder for vault assets (web cloud bridge). */
-export function setAssetUrlBuilder(fn: (ref: string) => string): void {
-  assetUrlBuilder = fn
+/** 可替换的资源地址接缝:**成对的「构建 + 解析」**。
+ *  没有默认协议的宿主启动时经 setAssetUrlBuilder 注入自己的一对:云端库(网页版 + 手机缺省,
+ *  → /api/amadeus/vaults/:v/asset?ref=…&at=<令牌>)、设备网页版、手机本地库(Capacitor 的本地文件地址)。
+ *  桌面不调用注入 = 默认协议,零影响。
+ *
+ *  ⚠️ **两半必须一起装**(2026-10-09 事故:此前只有构建没有解析)。显示时换出去的地址,存盘时要靠解析换回
+ *  页相对路径;只装构建的宿主上,编辑器一存盘就把注入的地址(连同资源令牌 / 设备上的绝对路径)写进笔记 ——
+ *  令牌过期图片失联,同步到别的设备是一条外链而不是附件。只读的宿主(分享页,从不存盘)可以不给解析。
+ *  解析器只许认**自己这个库**的资源地址,认不出一律回 null:它的结果会被写回用户的正文。
+ *  仪器:assets.test.ts 的「换了显示地址的构建器之后的往返」+ mobile 的 npm run e2e:localasset。 */
+let assetUrlBuilder: (ref: string) => string = defaultAssetUrl
+let assetUrlParser: ((url: string) => string | null) | null = null
+
+/** Install a custom display-URL builder for vault assets, together with its inverse.
+ *  `parse(url)` → vault-relative path, or null when the URL is not one this builder produced. */
+export function setAssetUrlBuilder(build: (ref: string) => string, parse?: (url: string) => string | null): void {
+  assetUrlBuilder = build
+  assetUrlParser = parse ?? null
+}
+
+/** 换回默认的那一对(桥被换掉 / 测试收尾)。 */
+export function resetAssetUrlBuilder(): void {
+  assetUrlBuilder = defaultAssetUrl
+  assetUrlParser = null
 }
 
 export function toAssetUrl(vaultRelPath: string): string {
@@ -52,11 +70,28 @@ export function toAssetUrl(vaultRelPath: string): string {
   return assetUrlBuilder(vaultRelPath).replace(/[()]/g, (c) => '%' + c.charCodeAt(0).toString(16).toUpperCase())
 }
 
-export function fromAssetUrl(url: string): string | null {
+/** 只认默认协议的那一半(不问装上的解析器)。
+ *  ⚠️ 「据此决定删不删文件」的调用方用这个(unified/assetDelete.ts),别用 fromAssetUrl:独占判定(主进程
+ *  exclusiveAssets)只看得见相对路径的引用,看不见别的笔记里被旧缺陷写坏的 http 资源地址 —— 设备网页版上一旦借
+ *  解析器把图片认回库内路径,「连文件一起删」的询问就会出现,而那张图可能正被一篇存量坏笔记引用着(评审 2026-10-09)。 */
+export function fromDefaultAssetUrl(url: string): string | null {
   const prefix = `${ASSET_SCHEME}://v/`
   if (!url.startsWith(prefix)) return null
   try {
     return decodeURIComponent(url.slice(prefix.length))
+  } catch {
+    return null
+  }
+}
+
+/** 显示地址 → 库内相对路径;不是资源地址 = null。
+ *  先认默认协议(桌面逐字不变;换了构建器的宿主上残留的默认协议地址也照样还原),再问装上的解析器。
+ *  编辑器序列化时会给目标里的 `&` 加反斜杠(图片与文字同段时 remark 的转义),先去掉再问。 */
+export function fromAssetUrl(url: string): string | null {
+  if (url.startsWith(`${ASSET_SCHEME}://v/`)) return fromDefaultAssetUrl(url)
+  if (!assetUrlParser) return null
+  try {
+    return assetUrlParser(url.replace(/\\&/g, '&')) || null
   } catch {
     return null
   }
@@ -94,12 +129,27 @@ function isExternal(url: string): boolean {
  *  `图.png`、`<a.png>` 变 `%3Ca.png%3E`,都不可逆。
  *  ⚠️ 跳过只做在这一侧:toStoredMarkdown 照旧全文把协议 URL 换回相对路径 —— 它是安全网,两侧对「哪里是代码」
  *  的判断万一不一致(缩进代码块、跨行的行内代码按行认不出),协议 URL 也绝不会漏到盘上。
- *  ponytail: 按行匹配,alt 文字跨行的图片(`![a⏎b](x.png)`)不再换成协议 URL(只是显示不出,盘上逐字)。 */
+ *  ponytail: 按行匹配,alt 文字跨行的图片(`![a⏎b](x.png)`)不再换成协议 URL(只是显示不出,盘上逐字)。
+ *
+ *  盘上已经是本库显示地址的图片(被旧缺陷写坏的存量笔记)在这里按当前构建器重拼,见函数体内的注。
+ *  仪器:cloudAssetsRoundtrip.test.ts 的「已经存坏的笔记」+ mobile 图片往返台架的场景 D。 */
 export function toDisplayMarkdown(md: string, pageDir: string): string {
   const toDisplay = (seg: string): string => seg.replace(IMG_RE, (full, pre: string, url: string, rest: string) => {
     // 尖括号目标:括号是语法不是路径(`<a b.png>` = `a b.png`);落盘经 encodeDest 写成 `a%20b.png`(与 Obsidian 同口径)。
     const u = (url.startsWith('<') ? url.slice(1, -1) : url).trim()
-    if (!u || isExternal(u)) return full
+    if (!u) return full
+    if (isExternal(u)) {
+      // 盘上已经是**本库的显示地址**(2026-10-09 之前的缺陷把它写进了正文:带着过期的令牌,或者是另一端的接口源)
+      // → 按现在的构建器重拼,图当场显示得出;存盘时照常换回页相对路径。只换显示,不为此写盘(打开不算修改)。
+      // 认不认得出由装上的解析器说了算:桌面没装,盘上的云端地址在桌面上仍是一条外链。
+      // 只动「裸目标 + 解析器认得」这一种(旧缺陷写出来的就是它)。尖括号目标、默认协议的字面地址照旧逐字不动:
+      // 产品不会把它们写到盘上,存盘那一侧也不拆尖括号 —— 这里拆了,原本逐字保住的引用就会在下次存盘被改写(评审 2026-10-09)。
+      // ⚠️ 已知局限:坏了之后又被挪到别的文件夹的笔记,ref 落在页目录之外。打开时照样显示得出;但存盘写下的是
+      //   库内路径写法(relFrom 不产出 `../`),云端 / 手机的显示侧按「页目录 + 引用」拼地址,重开后找不到(桌面认)。
+      if (url.startsWith('<') || u.startsWith(`${ASSET_SCHEME}:`)) return full
+      const own = fromAssetUrl(u)
+      return own == null ? full : pre + toAssetUrl(own) + rest
+    }
     // 先解码再拼:盘上是 `%20` 编码形态,不解码的话 toAssetUrl 会二次编码 → 协议侧找不到文件。
     return pre + toAssetUrl(joinRel(pageDir, decodeSafe(u))) + rest
   })
@@ -107,7 +157,10 @@ export function toDisplayMarkdown(md: string, pageDir: string): string {
   return tabsToEntities(out)
 }
 
-/** Display markdown (protocol URLs) → stored (page-relative) markdown(行首缩进实体 → 字面制表符)。 */
+/** Display markdown (protocol URLs) → stored (page-relative) markdown(行首缩进实体 → 字面制表符)。
+ *  全文替换、不跳代码(见 toDisplayMarkdown 的注:这一侧是安全网)。装了解析器的宿主上因此多一处已知代价:
+ *  代码示例里字面写着**本库**资源地址的 `![](…)` 也会被换成相对路径 —— 宁可如此,也不让带令牌的地址因为两侧对
+ *  「哪里是代码」判断不一致而漏到盘上。 */
 export function toStoredMarkdown(md: string, pageDir: string): string {
   return entitiesToTabs(md.replace(IMG_RE, (full, pre: string, url: string, rest: string) => {
     const vaultRel = fromAssetUrl(url.trim())
