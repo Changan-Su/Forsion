@@ -12,7 +12,9 @@ const NOT_JSON = '(?![^>]*\\stype\\s*=\\s*["\']?application/json\\b)'
 const SCRIPT_BLOCK_RE = new RegExp(`<script\\b${NOT_JSON}[^>]*>[\\s\\S]*?</script\\s*>`, 'gi')
 const SCRIPT_TAIL_RE = new RegExp(`<script\\b${NOT_JSON}[^>]*>[\\s\\S]*$`, 'i')
 const TAG_TAIL_RE = /<script\b[^>]*$/i
-/** 标签(含结尾没闭合的那个)里的 on* 属性;只在标签内替换,正文里的「online=」不动。 */
+/** 标签(含结尾没闭合的那个)里的 on* 属性;只在标签内替换,正文里的「online=」不动。
+ *  ponytail: 正则不是 HTML 解析器 —— 属性值里带 `>`(`title="a>b" onerror=x`)会让 OPEN_TAG_RE 提前收口、漏掉后面的处理器。
+ *  这层只是草稿期的「别自己乱动」稳定措施,安全边界始终是 sandbox + 内层 CSP(终稿本来就会跑这些脚本);真要严丝合缝再换 DOMParser。 */
 const OPEN_TAG_RE = /<[a-zA-Z][^>]*(?:>|$)/g
 const HANDLER_ATTR_RE = /\son[a-z]+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi
 
