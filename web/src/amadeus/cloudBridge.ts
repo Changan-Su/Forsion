@@ -676,28 +676,59 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
   const TRASH_META = `${TRASH_DIR}/.meta.json`
   type TrashMetaMap = Record<string, { original: string; deletedAt: number; dir: boolean }>
 
-  const readTrashMeta = async (): Promise<{ meta: TrashMetaMap; seq: number }> => {
+  // 账本是 .json = 云端的 binary 行,文本端点对它答 400。2026-10-09 之前这里走 getFile / putFile,账本**从来没写上去过**:
+  // 文件搬进 .trash/ 之后抛错、回收站恒为空、恢复不了。所以存量条目全都没有记录 —— 见 trashRecOf。
+  /** 读不到 / 坏 JSON 都当空账本:条目靠 trashRecOf 按实存兜底照样列得出、恢复得了,一份坏账本不该把回收站砸死。
+   *  网络失败照抛(readBinaryText),不会被当成空账本写回去。 */
+  const readTrashMeta = async (): Promise<TrashMetaMap> => {
+    const text = await readBinaryText(TRASH_META)
     try {
-      const f = await getFile(TRASH_META)
-      const p = JSON.parse(f.content) as unknown
-      return { meta: p && typeof p === 'object' ? (p as TrashMetaMap) : {}, seq: f.seq }
-    } catch (e) {
-      if (is404(e)) return { meta: {}, seq: 0 }
-      throw e
+      const p = text ? (JSON.parse(text) as unknown) : null
+      return p && typeof p === 'object' && !Array.isArray(p) ? (p as TrashMetaMap) : {}
+    } catch {
+      return {}
     }
   }
-  /** RMW + 409 换新基准重试一次(setPageFrontmatter 同款;meta 只是账本,后写胜)。 */
-  const updateTrashMeta = async (mut: (m: TrashMetaMap) => void): Promise<void> => {
-    const first = await readTrashMeta()
-    mut(first.meta)
-    try {
-      await putFile(TRASH_META, `${JSON.stringify(first.meta, null, 2)}\n`, first.seq)
-    } catch (e) {
-      if (!is409(e)) throw e
-      const again = await readTrashMeta()
-      mut(again.meta)
-      await putFile(TRASH_META, `${JSON.stringify(again.meta, null, 2)}\n`, again.seq, true)
+  /** 读-改-写:带 baseSeq 写一次;409(别的设备先动了账本)→ 重读、把这次改动重放上去、无条件写(账本后写胜,同原设计)。
+   *  seq 用本端上次写回来的;本会话还没写过就向 tree 学(可能是旧的 —— 旧了无非多走一次 409 重试)。seq 先取、账本后读,
+   *  所以读到的内容不会比 seq 旧。本端的多次更新走同一条队列,不互相踩。 */
+  const updateTrashMeta = (mut: (m: TrashMetaMap) => void): Promise<void> =>
+    enqueue([TRASH_META], async () => {
+      const write = async (baseSeq?: number): Promise<void> => {
+        const meta = await readTrashMeta()
+        const before = JSON.stringify(meta)
+        mut(meta)
+        if (JSON.stringify(meta) === before) return // 没改到账本(恢复 / 彻底删一条本来就没记录的):不写
+        await postBinary(TRASH_META, basenamePosix(TRASH_META), new TextEncoder().encode(`${JSON.stringify(meta, null, 2)}\n`), false, undefined, baseSeq)
+      }
+      const seq = seqMap.get(TRASH_META) ?? (await fetchTree()).entries?.find((e) => e.path === TRASH_META)?.seq ?? 0
+      try {
+        await write(seq)
+      } catch (e) {
+        if (!is409(e)) throw e
+        await write()
+      }
+    })
+  /** 这棵树里还没有账本 → 空账本,不白发请求(listTrash 每次结构变更都会被叫到)。 */
+  const trashMetaIn = async (tree: TreeDto): Promise<TrashMetaMap> => (allTreePaths(tree).includes(TRASH_META) ? readTrashMeta() : {})
+  /** .trash/ 下第一层的名字(账本自己不算条目)。 */
+  const trashNames = (tree: TreeDto): Set<string> => {
+    const names = new Set<string>()
+    for (const p of [...allTreePaths(tree), ...tree.folders]) {
+      if (p.startsWith(`${TRASH_DIR}/`)) names.add(p.slice(TRASH_DIR.length + 1).split('/')[0])
     }
+    names.delete(basenamePosix(TRASH_META))
+    return names
+  }
+  /** 回收站里这个条目的记录:以实存为准(不在 .trash/ 下 → null)。账本里有就用账本的;没有 —— 存量全是这种,
+   *  move 成了而账本没写成也是 —— 就从落进回收站时的扁平名认原位:文件 `a__b.md` 在文件夹 `a` 还在时认作 `a/b.md`
+   *  (名字里本来就带 `__` 的不会被拆开),否则原名回库根;文件夹只留了名字,回库根。删除时间不知道,记 0(排在最后)。 */
+  const trashRecOf = (tree: TreeDto, meta: TrashMetaMap, name: string): TrashMetaMap[string] | null => {
+    if (!trashNames(tree).has(name)) return null
+    const dir = tree.folders.includes(`${TRASH_DIR}/${name}`)
+    if (Object.prototype.hasOwnProperty.call(meta, name) && typeof meta[name]?.original === 'string') return { ...meta[name], dir }
+    const guess = name.split('__').join('/')
+    return { original: !dir && tree.folders.includes(dirnamePosix(guess)) ? guess : name, deletedAt: 0, dir }
   }
 
   // ---- restoreVault(openVault 同体;web 无目录对话框) ---------------------------
@@ -1204,50 +1235,47 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
       const tree = await fetchTree(true)
       const isDir = tree.folders.includes(norm)
       const stamp = Date.now().toString(36)
-      if (isDir) {
-        // folders/move 只保持 basename(server 无「移动即改名」)→ 撞名先原地改唯一名再移。
-        let src = norm
-        let base = basenamePosix(norm)
-        if (tree.folders.includes(`${TRASH_DIR}/${base}`)) {
-          const r = await http.post<{ path: string }>(`/amadeus/vaults/${encodeURIComponent(vid())}/folders/rename`, { path: norm, newName: `${base} (${stamp})` })
-          src = r.path
-          base = basenamePosix(r.path)
+      try {
+        if (isDir) {
+          // folders/move 只保持 basename(server 无「移动即改名」)→ 撞名先原地改唯一名再移。
+          let src = norm
+          let base = basenamePosix(norm)
+          if (tree.folders.includes(`${TRASH_DIR}/${base}`)) {
+            const r = await http.post<{ path: string }>(`/amadeus/vaults/${encodeURIComponent(vid())}/folders/rename`, { path: norm, newName: `${base} (${stamp})` })
+            src = r.path
+            base = basenamePosix(r.path)
+          }
+          await http.post(`/amadeus/vaults/${encodeURIComponent(vid())}/folders/move`, { path: src, dest: TRASH_DIR })
+          forgetSeqPrefix(norm)
+          await updateTrashMeta((m) => { m[base] = { original: norm, deletedAt: Date.now(), dir: true } })
+        } else {
+          // 文件一步 move(.trash 父目录由服务端物化);扁平名防嵌套路径,撞名带时间戳前缀。
+          let name = norm.replace(/\//g, '__')
+          if (allTreePaths(tree).includes(`${TRASH_DIR}/${name}`)) name = `${stamp}-${name}`
+          await http.post(`/amadeus/vaults/${encodeURIComponent(vid())}/move`, { from: norm, to: `${TRASH_DIR}/${name}` })
+          forgetSeq(norm)
+          await updateTrashMeta((m) => { m[name] = { original: norm, deletedAt: Date.now(), dir: false } })
         }
-        await http.post(`/amadeus/vaults/${encodeURIComponent(vid())}/folders/move`, { path: src, dest: TRASH_DIR })
-        forgetSeqPrefix(norm)
-        await updateTrashMeta((m) => { m[base] = { original: norm, deletedAt: Date.now(), dir: true } })
-      } else {
-        // 文件一步 move(.trash 父目录由服务端物化);扁平名防嵌套路径,撞名带时间戳前缀。
-        let name = norm.replace(/\//g, '__')
-        if (allTreePaths(tree).includes(`${TRASH_DIR}/${name}`)) name = `${stamp}-${name}`
-        await http.post(`/amadeus/vaults/${encodeURIComponent(vid())}/move`, { from: norm, to: `${TRASH_DIR}/${name}` })
-        forgetSeq(norm)
-        await updateTrashMeta((m) => { m[name] = { original: norm, deletedAt: Date.now(), dir: false } })
+      } finally {
+        invalidateTree() // 搬走之后账本没写成也要作废:调用方(pageStore.entryGone)按刷新后的树判断它是不是已经不在了
       }
-      invalidateTree()
     },
 
+    // 以 .trash/ 下的实存为准(另一端可能已恢复 / 清空;账本里没有的也列,同手机本地库 vaultManager.listTrash)。
     listTrash: async (): Promise<TrashEntry[]> => {
       await ensureVault()
-      const { meta } = await readTrashMeta()
-      // 与实存对齐(另一端可能已恢复/清空):树里 .trash 下还在的才列。
       const tree = await fetchTree()
-      const present = new Set<string>()
-      for (const p of [...allTreePaths(tree), ...tree.folders]) {
-        if (p.startsWith(`${TRASH_DIR}/`)) present.add(p.slice(TRASH_DIR.length + 1).split('/')[0])
-      }
-      return Object.entries(meta)
-        .filter(([name]) => present.has(name))
-        .map(([name, v]) => ({ name, original: v.original, deletedAt: v.deletedAt, dir: v.dir }))
+      const meta = await trashMetaIn(tree)
+      return [...trashNames(tree)]
+        .map((name) => ({ name, ...trashRecOf(tree, meta, name)! }))
         .sort((a, b) => b.deletedAt - a.deletedAt)
     },
 
     restoreTrash: async (name) => {
       await ensureVault()
-      const { meta } = await readTrashMeta()
-      const rec = meta[name]
-      if (!rec) throw new Error(translate('amxbridge.trashMissing'))
       const tree = await fetchTree(true)
+      const rec = trashRecOf(tree, await trashMetaIn(tree), name)
+      if (!rec) throw new Error(translate('amxbridge.trashMissing'))
       const taken = (p: string): boolean => allTreePaths(tree).includes(p) || tree.folders.includes(p)
       // 原位被占 → 占位加 " (N)"(桌面同款;文件夹整名加,文件在扩展名前加)。
       let target = rec.original
@@ -1277,8 +1305,7 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
 
     deleteTrashEntry: async (name) => {
       await ensureVault()
-      const { meta } = await readTrashMeta()
-      if (meta[name]?.dir) {
+      if ((await fetchTree(true)).folders.includes(`${TRASH_DIR}/${name}`)) { // 文件夹与否看实存,不看账本(账本里可能没有这条)
         await http.del(`/amadeus/vaults/${encodeURIComponent(vid())}/folders`, { path: `${TRASH_DIR}/${name}` }).catch((e) => { if (!is404(e)) throw e })
       } else {
         await http.del(fileUrl(), { path: `${TRASH_DIR}/${name}` }).catch((e) => { if (!is404(e)) throw e })

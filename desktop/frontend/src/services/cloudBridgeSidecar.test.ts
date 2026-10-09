@@ -30,9 +30,21 @@ const put = (p: string, body: string | Uint8Array, kind: Row['kind']): number =>
   return seq
 }
 const text = (p: string): string | undefined => { const r = rows.get(p); return r && dec(r.body) }
+/** 显式的文件夹行(空文件夹、被整个搬进回收站的文件夹);有文件的目录另由路径推出来。 */
+const dirs = new Set<string>()
+const folders = (): string[] => {
+  const out = new Set(dirs)
+  for (const p of rows.keys()) for (let d = p; d.includes('/');) { d = d.slice(0, d.lastIndexOf('/')); out.add(d) }
+  return [...out]
+}
+const moveTree = (from: string, to: string): void => {
+  for (const [p, r] of [...rows]) if (p.startsWith(`${from}/`)) { rows.delete(p); rows.set(`${to}${p.slice(from.length)}`, r) }
+  for (const d of [...dirs]) if (d === from || d.startsWith(`${from}/`)) dirs.delete(d)
+  dirs.add(to)
+}
 
 beforeEach(() => {
-  rows.clear(); calls.length = 0; raceWith = null; bytesMissing = 0
+  rows.clear(); dirs.clear(); calls.length = 0; raceWith = null; bytesMissing = 0
   const data = new Map<string, string>()
   vi.stubGlobal('localStorage', {
     getItem: (k: string) => data.get(k) ?? null,
@@ -45,11 +57,40 @@ beforeEach(() => {
     const url = new URL(input)
     const method = init?.method ?? 'GET'
     const end = url.pathname.split('/').pop()
+    const tail = url.pathname.split('/vaults/v1/')[1] ?? ''
     calls.push(`${method} ${end}`)
     if (end === 'vaults') return json(200, { vaults: [{ id: 'v1' }] })
     if (end === 'tree') {
       const entries = [...rows].map(([path, r]) => ({ path, kind: r.kind === 'text' ? 'page' : 'binary', seq: r.seq }))
-      return json(200, { pages: [], files: entries.map((e) => ({ path: e.path, size: 0 })), folders: [], entries, seq: 1 })
+      return json(200, { pages: [], files: entries.map((e) => ({ path: e.path, size: 0 })), folders: folders(), entries, seq: 1 })
+    }
+    // 回收站用到的结构端点(server routes.ts:POST /move、/folders/move、/folders/rename,DELETE /file、/folders)
+    if (method === 'POST' && (tail === 'move' || tail === 'folders/move' || tail === 'folders/rename')) {
+      const b = JSON.parse(String(init?.body)) as { from?: string; to?: string; path?: string; dest?: string; newName?: string }
+      if (tail === 'move') {
+        const r = rows.get(b.from!)
+        if (!r) return json(404, { detail: 'file not found' })
+        if (rows.has(b.to!) || folders().includes(b.to!)) return json(409, { code: 'EXISTS' })
+        rows.delete(b.from!); rows.set(b.to!, { ...r, seq: r.seq + 1 })
+        return json(200, { path: b.to, seq: r.seq + 1 })
+      }
+      const from = b.path!
+      if (!folders().includes(from)) return json(404, { detail: 'folder not found' })
+      const name = from.split('/').pop()!
+      const to = tail === 'folders/move' ? (b.dest ? `${b.dest}/${name}` : name) : [...from.split('/').slice(0, -1), b.newName!].join('/')
+      if (rows.has(to) || folders().includes(to)) return json(409, { code: 'EXISTS' })
+      moveTree(from, to)
+      return json(200, { path: to })
+    }
+    if (method === 'DELETE' && tail.startsWith('file')) {
+      return rows.delete(url.searchParams.get('path') ?? '') ? json(200, {}) : json(404, { detail: 'file not found' })
+    }
+    if (method === 'DELETE' && tail.startsWith('folders')) {
+      const dir = url.searchParams.get('path') ?? ''
+      if (!folders().includes(dir)) return json(404, { detail: 'folder not found' })
+      for (const k of [...rows.keys()]) if (k.startsWith(`${dir}/`)) rows.delete(k)
+      for (const d of [...dirs]) if (d === dir || d.startsWith(`${dir}/`)) dirs.delete(d)
+      return json(200, {})
     }
     if (end === 'file' && method === 'GET') {
       const r = rows.get(url.searchParams.get('path') ?? '')
@@ -176,5 +217,88 @@ describe('cloud bridge: non-.md/.db text files go through the binary endpoints',
     expect(await bridge.writeTextFile('a.txt', 'mine', { base: textFingerprint('v2') })).toEqual({ ok: false, current: 'theirs' })
     expect(text('a.txt')).toBe('theirs')
     expect(await bridge.writeTextFile('new.txt', 'x', { base: textFingerprint('') })).toEqual({ ok: true }) // 基线「没有这个文件」
+  })
+})
+
+/**
+ * 回收站账本 `.trash/.meta.json` 也是非 .md / .db 的文本 —— 同一个病:此前走文本端点,账本从来没写上去过。
+ * 修复前(实跑,假服务端与 server 的真路由各一遍):trashEntry 把文件搬进 .trash/ 之后抛 HTTP 400,listTrash 恒为空,
+ * restoreTrash 抛「回收站条目不存在」—— 所以线上存量条目全都没有记录,列出 / 恢复 / 彻底删都得以 .trash/ 下的实存为准。
+ * 负对照(实跑过):账本名不从条目里剔掉 → 列表里多出一条 .meta.json(4 条红);409 后不重读重写 → 「抢先」那条红(HTTP 409);
+ * 坏账本照抛 → 「坏账本」那条红;没记录就当不存在 → 「没记录的条目」那条红。
+ */
+describe('cloud bridge: the trash ledger (.trash/.meta.json) is a binary row', () => {
+  const LEDGER = '.trash/.meta.json'
+  const ledger = (): Record<string, { original: string; dir: boolean }> => JSON.parse(text(LEDGER) ?? '{}')
+  const listed = async (bridge: ReturnType<typeof boot>): Promise<Array<[string, string, boolean]>> =>
+    (await bridge.listTrash!()).map((e): [string, string, boolean] => [e.name, e.original, e.dir]).sort((a, b) => (a[0] < b[0] ? -1 : 1)) // 按码位排,不随 locale
+
+  it('trash, list and restore a file and a folder; the ledger is written and kept in step', async () => {
+    const bridge = boot()
+    put('Projects/Plan.md', '# plan', 'text')
+    put('Docs/a.md', 'a', 'text')
+    await bridge.trashEntry!('Projects/Plan.md')
+    expect(rows.has('.trash/Projects__Plan.md')).toBe(true)
+    expect(rows.get(LEDGER)?.kind).toBe('binary')
+    expect(ledger()['Projects__Plan.md']).toMatchObject({ original: 'Projects/Plan.md', dir: false })
+    await bridge.trashEntry!('Docs')
+    expect(await listed(bridge)).toEqual([['Docs', 'Docs', true], ['Projects__Plan.md', 'Projects/Plan.md', false]])
+    expect(await bridge.restoreTrash!('Projects__Plan.md')).toBe('Projects/Plan.md')
+    expect(await bridge.restoreTrash!('Docs')).toBe('Docs')
+    expect(text('Projects/Plan.md')).toBe('# plan')
+    expect(text('Docs/a.md')).toBe('a')
+    expect(ledger()).toEqual({})
+    expect(await bridge.listTrash!()).toEqual([])
+  })
+
+  it('entries the ledger never recorded are still listed, restorable and deletable; the ledger itself is not an entry', async () => {
+    const bridge = boot()
+    put('Projects/keep.md', 'k', 'text')
+    put('.trash/Projects__Old.md', 'old', 'text') // 「Projects」这个文件夹还在 → 认得出是 Projects/Old.md
+    put('.trash/my__note.md', 'n', 'text') // 没有叫 my 的文件夹 → 名字里本来就带 __,原样回库根
+    put('.trash/Archive/x.md', 'x', 'text')
+    put(LEDGER, '{}', 'binary')
+    expect(await listed(bridge)).toEqual([['Archive', 'Archive', true], ['Projects__Old.md', 'Projects/Old.md', false], ['my__note.md', 'my__note.md', false]])
+    expect(await bridge.restoreTrash!('Projects__Old.md')).toBe('Projects/Old.md')
+    expect(await bridge.restoreTrash!('my__note.md')).toBe('my__note.md')
+    expect(text('Projects/Old.md')).toBe('old')
+    await bridge.deleteTrashEntry!('Archive')
+    expect(rows.has('.trash/Archive/x.md')).toBe(false)
+    expect(rows.get(LEDGER)?.seq).toBe(1) // 这几条本来就不在账本里:没有为它们白写账本
+    expect(await bridge.listTrash!()).toEqual([])
+    await expect(bridge.restoreTrash!('nope.md')).rejects.toThrow()
+  })
+
+  it('a ledger update that loses the race to another device keeps both records', async () => {
+    const bridge = boot()
+    put('a.md', 'a', 'text'); put('b.md', 'b', 'text')
+    await bridge.trashEntry!('a.md')
+    // 本端读完账本之后、写之前,另一台设备把它自己的那条记了上去
+    raceWith = JSON.stringify({ ...ledger(), 'other.md': { original: 'other.md', deletedAt: 1, dir: false } })
+    await bridge.trashEntry!('b.md')
+    expect(Object.keys(ledger()).sort()).toEqual(['a.md', 'b.md', 'other.md'])
+  })
+
+  it('a corrupt ledger does not brick the trash', async () => {
+    const bridge = boot()
+    put(LEDGER, '{oops', 'binary')
+    put('a.md', 'a', 'text')
+    await bridge.trashEntry!('a.md')
+    expect(await listed(bridge)).toEqual([['a.md', 'a.md', false]])
+  })
+
+  it('delete forever and empty', async () => {
+    const bridge = boot()
+    put('a.md', 'a', 'text'); put('b.md', 'b', 'text'); put('c.md', 'c', 'text')
+    await bridge.trashEntry!('a.md'); await bridge.trashEntry!('b.md'); await bridge.trashEntry!('c.md')
+    await bridge.deleteTrashEntry!('a.md')
+    expect(await listed(bridge)).toEqual([['b.md', 'b.md', false], ['c.md', 'c.md', false]])
+    expect(Object.keys(ledger()).sort()).toEqual(['b.md', 'c.md'])
+    await bridge.emptyTrash!()
+    expect([...rows.keys()].filter((k) => k.startsWith('.trash/'))).toEqual([])
+    expect(await bridge.listTrash!()).toEqual([])
+    put('d.md', 'd', 'text')
+    await bridge.trashEntry!('d.md') // 清空连账本一起删了:下一次是新建
+    expect(Object.keys(ledger())).toEqual(['d.md'])
   })
 })
