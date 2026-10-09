@@ -260,7 +260,8 @@ OLD_APK=/absolute/old.apk NEW_APK=android/app/build/outputs/apk/debug/app-debug.
   云端桥(`web/src/amadeus/cloudBridge.ts` 的 `writeBinaryText` / `fetchAssetExact`)因此把非 `.md` / `.db` 的文本读写落到
   `POST /binary` 与 `GET /asset?ref=`:手机写的和桌面传的是同一行。插件直接写是原地覆盖、后写胜(与桌面写本地盘同语义);
   桌面同步引擎推送时发现云端已被改过,云端那版留在原路径、桌面那版另存为冲突副本(引擎既有行为)。
-  读库根下的文件名会先按精确路径探一次存在 —— 服务端的资源端点对不带目录的名字会按文件名全库兜底。
+  读取一律按精确路径(`ref` 末尾带 `/`)—— 服务端的资源端点对不带目录的名字会按文件名全库兜底;
+  文件不存在给 null,行在而字节一时取不到(别的设备正在覆盖)重取一次、仍取不到就抛,不当成「不存在」。
   此前文本端点对这类路径一律答 400:记忆闪卡的索引、青鸟收藏夹的旁挂 json、园丁的快照等全写不下,`readBytes` 也恒读不到。
 - **手机暂不支持**:插件状态栏项(没有状态栏)、捆绑包里的引擎插件 / Agent / 技能(没有本机引擎)、主题 / Space / 技能 / Agent 类市场条目、
   用户自建 Space(没有 `spacesSave` / `spacesDelete`)、npm 来源的条目(桌面同样不支持)。

@@ -606,29 +606,38 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
    *  就是把现有文件整份盖掉)。服务端这个端点只认 `ref`(带 `path` 是 400 ref required)。 */
   const fetchAssetExact = async (norm: string): Promise<Response | null> => {
     const v = await ensureVault()
-    // 不带 '/' 的 ref 精确找不到时,服务端会按文件名全库兜底(给 `![[pic.png]]` 用的)—— 直接取会把别的目录里的同名
-    // 文件读成库根这一个。先拿文本端点按精确路径探一次:404 = 没有;200 / 400 BINARY = 有这一行。
-    if (!norm.includes('/')) {
+    for (let attempt = 0; ; attempt++) {
+      // ref 末尾带 '/':对不含 '/' 的 ref,服务端在精确路径找不到时会按文件名全库兜底(给 `![[pic.png]]` 用的),会把别的
+      // 目录里的同名文件读成库根这一个。带上 '/' 就只做精确匹配(server routes.ts 的 /asset:normalizePath 剥掉尾斜杠,
+      // 兜底只在原始 ref 不含 '/' 时才走)。
+      const r = await (cfg.request ?? fetch)(
+        `${cfg.apiBase}/amadeus/vaults/${encodeURIComponent(v)}/asset?ref=${encodeURIComponent(`${norm}/`)}`,
+        { headers: { Authorization: `Bearer ${cfg.getToken()}` } }, // assetAuth 收 Bearer 主 token,无需等 asset-token
+      )
+      if (r.ok) return r
+      if (r.status !== 404) throw new HttpError(r.status, null, translate('amxbridge.readFailed', { status: r.status }))
+      // 404 有两种:没有这一行;行在、对象取不到(别处正好在覆盖:查到的是旧对象,旧对象随即被删)。后一种不能当「没有」。
+      // 用文本端点按精确路径分辨:404 = 真没有;400 BINARY / 200 = 行在 → 重取一次,还取不到就抛。
       try {
         await http.get<FileDto>(fileUrl(), { path: norm })
       } catch (e) {
         if (is404(e)) return null
         if (!(e instanceof HttpError && (e.body as { code?: unknown } | null)?.code === 'BINARY')) throw e
       }
+      if (attempt >= 1) throw new Error(translate('amxbridge.readFailed', { status: 404 }))
     }
-    const r = await (cfg.request ?? fetch)(
-      `${cfg.apiBase}/amadeus/vaults/${encodeURIComponent(v)}/asset?ref=${encodeURIComponent(norm)}`,
-      { headers: { Authorization: `Bearer ${cfg.getToken()}` } }, // assetAuth 收 Bearer 主 token,无需等 asset-token
-    )
-    if (r.status === 404) return null
-    if (!r.ok) throw new HttpError(r.status, null, translate('amxbridge.readFailed', { status: r.status }))
-    return r
   }
-  const readBinaryText = async (norm: string): Promise<string | null> => (await fetchAssetExact(norm))?.text() ?? null
+  /** UTF-8 解码并**保留 BOM**(`Response.text()` 会吞掉它):与文本端点、桌面读盘同口径,读了再写回不改字节,base 指纹也对得上。 */
+  const readBinaryText = async (norm: string): Promise<string | null> => {
+    const r = await fetchAssetExact(norm)
+    return r ? new TextDecoder('utf-8', { ignoreBOM: true }).decode(await r.arrayBuffer()) : null
+  }
   /** 无 base = 原地覆盖、后写胜(桌面本地写盘的语义,也是下面文本分支「409 后按最新 seq 强写」的语义);别处删了就照写
    *  重建 —— movedTo / recovered 那一套是给开着的笔记编辑器用的,旁挂文件不走。
    *  create = 仅新建,已存在 → 不写、交回现文。base = 调用方以为盘上是什么的指纹:先取这一行的 seq、再取现文比对、
-   *  带 baseSeq 写 —— 取 seq 之后别处又写了一版,服务端 409 → 不写、交回现文,绝不盖掉没见过的内容。 */
+   *  带 baseSeq 写 —— 取 seq 之后别处又写了一版,服务端 409 → 不写、交回现文,不盖掉没见过的内容。
+   *  ponytail: 文件的 seq 在「删了又新建」后从 1 重新数;取 seq 与写之间别处删掉并重建、恰好落回同一个 seq 时这层比对
+   *  挡不住(文本端点的 baseSeq 同此)。要堵死得服务端给不复用的版本号 / 行身份。今天没有调用方对非 .md / .db 路径带 base。 */
   const writeBinaryText = (p: string, text: string, opts?: { base?: string; create?: boolean }): Promise<void | TextWriteResult> => {
     const norm = normalizePosix(p.replace(/\\/g, '/'))?.normalize('NFC') // 服务端存的是 NFC:下面按路径对 tree 的行
     if (!norm) return Promise.reject(new Error(translate('amxbridge.pathOutsideVault')))

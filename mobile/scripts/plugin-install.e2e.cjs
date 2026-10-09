@@ -18,7 +18,7 @@
  * 负对照:`npm run e2e:plugins -- --negative` 把页面 CSP 里的 'unsafe-eval' 去掉再跑 —— 插件代码求值被拦,
  * 第 2 步必须红(证明这台仪器真的在测「插件代码跑起来了」,不是只测到「文件写进去了」)。
  * 2c 的负对照(2026-10-09 实跑):修复前的云端桥 → 写旁挂 .json 抛 HTTP 400、读别的设备传上来的也抛 HTTP 400、readBytes 恒 null;
- * 去掉云端桥对库根文件名的精确探测 → 「库根下不存在的文件」那条读成别的目录里的同名文件。
+ * 云端桥取字节时不给 ref 加尾斜杠 → 「库根下不存在的文件」那条读成别的目录里的同名文件。
  * 截图写进 mobile/outputs/native-20261002/(已 gitignore)。
  */
 const http = require('http')
@@ -33,7 +33,7 @@ const { chromium } = (() => {
   return require(path.resolve(__dirname, '../../desktop/node_modules/playwright-core'))
 })()
 
-const PORT = 5301 // 避开 dev 5274 / boot 5279 / unitsentry 5281 / settingscfg 5283 / … / runon 5299
+const PORT = Number(process.env.E2E_PORT) || 5301 // 避开 dev 5274 / boot 5279 / unitsentry 5281 / settingscfg 5283 / … / runon 5299
 const APP_URL = `http://localhost:${PORT}/`
 const NEGATIVE = process.argv.includes('--negative')
 const SHOTS = path.resolve(__dirname, '../outputs/native-20261002')
@@ -146,7 +146,8 @@ function ping() {
  *   - lib/paths.ts kindForPath:只有 .md / .db 是文本,其余一律 binary
  *   - PUT /file 写 binary 路径 → 400 BINARY_PATH;GET /file 读 binary 行 → 400 BINARY;没有这一行 → 404
  *   - POST /binary(multipart: file, path, ifAbsent?, baseSeq?)写文本路径 → 400;带 baseSeq 时不符 → 409
- *   - GET /asset 只认 ref(没带 → 400 ref required);不带 '/' 的 ref 精确找不到时按文件名全库兜底(跳过点开头的路径)
+ *   - GET /asset 只认 ref(没带 → 400 ref required);不带 '/' 的 ref 精确找不到时按文件名全库兜底(跳过点开头的路径);
+ *     尾斜杠在归一时剥掉、但算「带 '/'」—— 所以 `ref=名字/` 只做精确匹配(云端桥靠这一点避开兜底)
  * 别的端点一律 404。要对着真服务端跑:E2E_AMADEUS_API=<源,如 http://127.0.0.1:4010>(其下挂 /api/amadeus)。
  */
 function startFakeCloud() {
@@ -211,10 +212,11 @@ function startFakeCloud() {
           return json(200, { path: p, size: body.length, seq: put(p, body, 'binary') })
         }
         case 'GET asset': {
-          const ref = q('ref')
-          if (!ref) return json(400, { detail: 'ref required' })
+          const rawRef = q('ref')
+          if (!rawRef) return json(400, { detail: 'ref required' })
+          const ref = rawRef.replace(/\/+$/, '')
           let r = rows.get(ref)
-          if (!r && !ref.includes('/')) {
+          if (!r && !rawRef.includes('/')) {
             const hit = [...rows.keys()].sort().find((k) => !k.split('/').some((s) => s.startsWith('.')) && k.split('/').pop().toLowerCase() === ref.toLowerCase())
             r = hit && rows.get(hit)
           }
@@ -242,6 +244,11 @@ async function main() {
   const root = path.resolve(__dirname, '..')
   if (!fs.existsSync(path.join(root, 'dist/index.html'))) {
     console.error('✗ 没有 dist/,先跑 npm run build')
+    process.exit(1)
+  }
+  // 端口上已经有服务 = 同机另一个检出正在跑这台架:接上去测到的是那边的构建(2026-10-09 实遇:修好的桥测出一片 400)。
+  if (await ping()) {
+    console.error(`✗ ${PORT} 已有服务在听(别的会话在跑同一台架?)。换一个端口:E2E_PORT=<端口> npm run e2e:plugins`)
     process.exit(1)
   }
   fs.mkdirSync(SHOTS, { recursive: true })
