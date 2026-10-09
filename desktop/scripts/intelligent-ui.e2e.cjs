@@ -27,8 +27,13 @@ async function reveal(win, target) {
   const box = await win.locator('.t2-asst-col').first().boundingBox()
   await win.mouse.move(box.x + 40, 180)
   await win.mouse.wheel(0, -800)
-  await target.evaluate(el => el.scrollIntoView({ block: 'start' }))
+  // Wheel scrolling is asynchronous; let that gesture finish before positioning
+  // the heading, otherwise the captured viewport can show the previous answer.
+  await win.waitForTimeout(300)
+  const heading = target.locator('.iui-title')
+  await heading.evaluate(el => el.scrollIntoView({ block: 'start', behavior: 'instant' }))
   await win.waitForTimeout(250)
+  assert.ok(await heading.evaluate(el => { const r = el.getBoundingClientRect(); return r.top >= 0 && r.bottom < innerHeight }), 'screenshot shows the intended document heading')
 }
 async function main() {
   fs.mkdirSync(OUT, { recursive: true })
@@ -158,7 +163,7 @@ async function main() {
     await win.evaluate(() => { localStorage.setItem('tangu_locale', 'en'); localStorage.setItem('forsion_theme_pref', 'dark') })
     await win.reload(); await openSession(win); await media.scrollIntoViewIfNeeded()
     check('English native controls', await win.getByRole('button', { name: 'Copy list', exact: true }).count() >= 1)
-    await win.screenshot({ path: path.join(OUT, 'media-dark-en.png') })
+    await reveal(win, media); await win.screenshot({ path: path.join(OUT, 'media-dark-en.png') })
     if (evidence) check('real model documents render after history hydration', await win.locator('.intelligent-ui').count() === records.length - 1)
     await win.route('**/1-480.jpg', route => route.abort())
     await win.reload(); await openSession(win)
