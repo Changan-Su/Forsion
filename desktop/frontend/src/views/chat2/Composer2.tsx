@@ -44,7 +44,7 @@ import { mainReferenceKey } from './mainReference'
 import { ChatBoxSurface, ChatBoxInput, ChatBoxToolbar, ChatBoxSubmit } from '@lcl/components'
 import { disarmTip, tipProps } from '../../hoverTip'
 import { RefChipView } from './RefChipView'
-import { NEW_CHAT_DRAFT, clearDraft, moveDraft, useDraftField } from './composerDrafts'
+import { NEW_CHAT_DRAFT, clearDraft, moveDraft, setDraftField, useDraftField } from './composerDrafts'
 import { ContextUsagePop } from './ContextUsagePop'
 import './composer2.css'
 import { homeTarget, targetForSession, targetKeyOf, useComposerRef } from '../../services/engine/targets'
@@ -464,8 +464,14 @@ export const Composer2: React.FC<{
   const [dragOver, setDragOver] = useState(false)
   const [histPos, setHistPos] = useState(0) // 历史召回位置:0=当前草稿;1..N=第 N 条最近发送
   const histStash = useRef('') // 进入召回时暂存的草稿(↓ 回到 0 时原样取回)
+  const histPosRef = useRef(histPos)
+  histPosRef.current = histPos
   // 换了会话 = 换了一份草稿:召回位置和光标是上一份的,归零(光标不归零,新草稿在旧位置上恰好是个 / @ [[ 词就会凭空弹菜单)。
-  useLayoutEffect(() => { setHistPos(0); setCursorPos(0); setSlashSubMenu(null) }, [draftKey])
+  // 召回到一半就离开(换会话 / 输入框卸载):框里是一条历史消息,进入召回前的那份草稿只在 histStash 里 —— 放回原会话,否则就丢了。
+  useLayoutEffect(() => {
+    setHistPos(0); setCursorPos(0); setSlashSubMenu(null)
+    return () => { if (histPosRef.current > 0) setDraftField(draftKey, 'text', histStash.current) }
+  }, [draftKey])
   const taRef = useRef<HTMLTextAreaElement>(null)
   const cardRef = useRef<HTMLDivElement>(null)
   useLayoutEffect(() => {
@@ -1303,10 +1309,13 @@ export const Composer2: React.FC<{
     // 返回这次发送的 promise:实时对话据此判断「上一句还在途中」(键盘/按钮调用方忽略返回值)。
     // 清的是**发出时**那个会话的草稿:新对话的第一句发到一半会话才建出来,输入框那时已经换到新会话上了。
     const sentKey = draftKey
+    const known = sentKey === NEW_CHAT_DRAFT ? new Set(useApp.getState().sessions.map((x) => x.id)) : null
     return onSend(outgoing, attachments, wsFiles, pinnedSkills.map((s) => s.id), mentions).then((accepted) => {
       if (!accepted) {
-        // 新对话的第一句没发出去,而输入框已经换到刚建的会话上:那份输入跟过去,留在眼前可以重发(那边有草稿就不动)
-        if (sentKey === NEW_CHAT_DRAFT) moveDraft(sentKey, draftKeyRef.current)
+        // 新对话的第一句没发出去,而输入框已经换到刚建的会话上:那份输入跟过去,留在眼前可以重发(那边有草稿就不动)。
+        // 只认发送前还不存在的会话 —— 用户途中自己切去了别的会话,就不往那里塞,那份留在新对话里。
+        const shown = draftKeyRef.current
+        if (known && shown !== sentKey && !known.has(shown)) moveDraft(sentKey, shown)
         return false
       }
       clearDraft(sentKey, !!override) // 引用里自动那条不在草稿里 —— 它是 activePage 的派生量,下一条消息照旧自动挂上

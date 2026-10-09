@@ -4,7 +4,9 @@
  * 用户报的:在一个会话里打了没发的字,切到别的会话(或点「新对话」)被带了过去。钉住的契约:
  *  ① 切到别的会话 / 新对话,输入框是那边自己的(没写过就是空的);切回来,原先那份还在;
  *  ② 新对话的第一句发出去后,新对话那份清掉(会话是发送途中才建的,输入框那时已经换到新会话上);
- *  ③ 在草稿中间插字,光标不跳到末尾(草稿住在 store 里,输入框是受控的)。
+ *  ③ 在草稿中间插字,光标不跳到末尾(草稿住在 store 里,输入框是受控的);
+ *  ④ ↑ 召回历史消息到一半切走,进入召回前的那份草稿不丢;
+ *  ⑤ 新对话的第一句没发出去(起 run 被拒):那份输入留在刚建的会话里可以重发,不留在新对话里。
  *
  * 需先 npm run build。用法:npm run e2e:composerdraft
  * 负对照:FORSION_E2E_ROOT=<没有这次改动的检出>/desktop node scripts/composer-draft.e2e.cjs —— ① ② 必须转红。
@@ -30,13 +32,20 @@ const session = (id, title) => ({
   created_at: '2026-10-09 09:00:00', updated_at: '2026-10-09 09:00:00',
 })
 
+const T_MSG = Date.parse('2026-10-09T09:00:00Z')
+const msg = (id, role, content, dt) => ({
+  id, role, content, reasoning: null, tool_calls: null, tool_results: null, attachments: null, display_files: null,
+  agent_slug: null, timestamp: T_MSG + dt, model_id: 'm1', is_error: false,
+})
+
 async function main() {
   if (!fs.existsSync(path.join(ROOT, 'out/main/main.js'))) {
     console.error(`缺 ${ROOT}/out/main/main.js —— 先跑 npm run build`)
     process.exit(1)
   }
   const stub = await startStubEngine({
-    sessions: [session('draft-a', '草稿甲'), session('draft-b', '草稿乙')], messages: [],
+    sessions: [session('draft-a', '草稿甲'), session('draft-b', '草稿乙')],
+    messages: [msg('u1', 'user', '以前发过的一句', 0), msg('a1', 'model', '收到', 1000)], // 桩对每个会话都回这两条:↑ 有东西可召回
     models: [{ id: 'm1', name: 'Stub 模型', provider: 'stub', contextWindow: 128_000 }],
   })
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'forsion-composer-draft-'))
@@ -88,6 +97,13 @@ async function main() {
     check('在草稿中间插字:落在光标处', (await value()) === '写给XY甲的半句', JSON.stringify(await value()))
     await win.screenshot({ path: SHOT })
 
+    // ── ④ 召回到一半切走:进入召回前的草稿只存在组件里,得放回原会话 ──
+    await win.keyboard.press('ArrowUp')
+    check('↑ 召回了历史消息', (await value()) === '以前发过的一句', JSON.stringify(await value()))
+    await open('草稿乙')
+    await open('草稿甲')
+    check('召回到一半切走再回来:原先的草稿还在', (await value()) === '写给XY甲的半句', JSON.stringify(await value()))
+
     await open('草稿乙')
     check('切回乙:它那份还在', (await value()) === '乙的', JSON.stringify(await value()))
     await newChat()
@@ -102,6 +118,18 @@ async function main() {
     check('发完:新建的会话里输入框是空的', (await value()) === '', JSON.stringify(await value()))
     await newChat()
     check('再点「新对话」:没有把刚发的那句留在里面', (await value()) === '', JSON.stringify(await value()))
+
+    // ── ⑤ 新对话的第一句没发出去:会话已经建了、输入框也换过去了,字得跟过去 ──
+    await type('会失败的一句')
+    stub.state.failRuns = true
+    await win.keyboard.press('Enter')
+    for (let t0 = Date.now(); stub.seen.runs.length < 2 && Date.now() - t0 < 8000;) await win.waitForTimeout(150)
+    await win.waitForTimeout(800)
+    stub.state.failRuns = false
+    check('第一句被拒:字留在刚建的会话的输入框里', stub.seen.runs.length === 2 && (await value()) === '会失败的一句', JSON.stringify({ runs: stub.seen.runs.length, value: await value() }))
+    await newChat()
+    check('第一句被拒:新对话里不再留着它', (await value()) === '', JSON.stringify(await value()))
+
     await open('草稿甲')
     check('别的会话的草稿没被这次发送动到', (await value()) === '写给XY甲的半句', JSON.stringify(await value()))
   } finally {
