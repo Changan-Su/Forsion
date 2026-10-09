@@ -38,7 +38,17 @@ describe('agent_run_events 保留期 × 真 sqlite', () => {
     expect(indexes()).toContain('idx_agent_events_run');
     await runMigration();
 
+    db.prepare(`INSERT INTO chat_sessions (id, user_id, app_id, kind) VALUES ('s1', 'u', 'tangu', 'user'), ('s-team', 'u', 'tangu', 'teamwork')`).run();
     run('old-done', 'done'); run('old-running', 'running'); run('fresh-done', 'done'); run('old-failed', 'failed');
+    // old-done 的 assistant 消息里有同名图(落库副本);old-done-nocopy 的消息里没有;old-team 在团队成员会话里
+    db.prepare(`INSERT INTO chat_messages (id, session_id, role, content, display_files) VALUES ('am-done', 's1', 'model', '', ?)`).run(JSON.stringify([{ name: 'a.png', mime: 'image/png', dataUrl: 'data:image/png;base64,AAAA' }]));
+    db.prepare(`UPDATE agent_runs SET assistant_message_id = 'am-done' WHERE id = 'old-done'`).run();
+    db.prepare(`INSERT INTO chat_messages (id, session_id, role, content, display_files) VALUES ('am-nocopy', 's1', 'model', '', ?)`).run(JSON.stringify([{ name: 'other.png', dataUrl: 'data:,x' }]));
+    db.prepare(`INSERT INTO agent_runs (id, session_id, user_id, status, assistant_message_id) VALUES ('old-done-nocopy', 's1', 'u', 'done', 'am-nocopy')`).run();
+    emit('old-done-nocopy', 'display_file', { name: 'a.png', mime: 'image/png', dataUrl: 'data:image/png;base64,AAAA' }, 9);
+    db.prepare(`INSERT INTO chat_messages (id, session_id, role, content, display_files) VALUES ('am-team', 's-team', 'model', '', ?)`).run(JSON.stringify([{ name: 'a.png', dataUrl: 'data:image/png;base64,AAAA' }]));
+    db.prepare(`INSERT INTO agent_runs (id, session_id, user_id, status, assistant_message_id) VALUES ('old-team', 's-team', 'u', 'done', 'am-team')`).run();
+    emit('old-team', 'display_file', { name: 'a.png', mime: 'image/png', dataUrl: 'data:image/png;base64,AAAA' }, 9);
     for (const [rid, age] of [['old-done', 9], ['old-running', 9], ['fresh-done', 2], ['old-failed', 30]] as const) {
       emit(rid, 'status', { phase: 'start' }, age);
       for (let i = 0; i < 20; i++) emit(rid, 'token', { delta: 'x' }, age);
@@ -76,9 +86,11 @@ describe('agent_run_events 保留期 × 真 sqlite', () => {
     expect((db.prepare(`SELECT max(seq) AS m FROM agent_run_events WHERE run_id = 'old-done'`).get() as any).m).toBe(seqs.get('old-done'));
   });
 
-  it('display_file:过期且已结束的剥掉 dataUrl、留 name / mime;其余原样', async () => {
+  it('display_file:只剥「run done 且落库消息里有同名副本」的 dataUrl,留 name / mime;failed / 无副本 / 团队成员会话 / 在飞 / 7 天内一律原样', async () => {
     expect(payloadOf('old-done', 34)).toEqual({ name: 'a.png', mime: 'image/png' });
-    expect(payloadOf('old-failed', 34)).toEqual({ name: 'a.png', mime: 'image/png' });
+    expect(payloadOf('old-failed', 34).dataUrl).toBe('data:image/png;base64,AAAA'); // finalize 前崩掉的 run:事件里是唯一一份
+    expect(payloadOf('old-done-nocopy', 1).dataUrl).toBe('data:image/png;base64,AAAA');
+    expect(payloadOf('old-team', 1).dataUrl).toBe('data:image/png;base64,AAAA');
     expect(payloadOf('old-running', 34).dataUrl).toBe('data:image/png;base64,AAAA');
     expect(payloadOf('fresh-done', 34).dataUrl).toBe('data:image/png;base64,AAAA');
   });
@@ -90,7 +102,12 @@ describe('agent_run_events 保留期 × 真 sqlite', () => {
     expect(count()).toBe(before);
   });
 
-  it('VACUUM 闸:释放量够且没有 run 在飞才整理;有 run 在飞就跳过', async () => {
+  it('已中止的 signal:一条语句都不发', async () => {
+    const ac = new AbortController(); ac.abort();
+    expect(await pruneRunEvents({ signal: ac.signal })).toEqual({ framesDeleted: 0, filesStripped: 0, vacuumed: false });
+  });
+
+  it('VACUUM 闸:释放量够且没有 run 在飞才整理;有 run 在飞就跳过,下一轮即使没新删也补做', async () => {
     // 造一批过期帧再删,把 freelist 撑起来;阈值压到 1 字节
     for (let i = 0; i < 3000; i++) emit('old-done', 'token', { delta: 'y'.repeat(200) }, 9);
     let r = await pruneRunEvents({ vacuumMinFreedBytes: 1 });
@@ -99,9 +116,9 @@ describe('agent_run_events 保留期 × 真 sqlite', () => {
     expect((db.pragma('freelist_count', { simple: true }) as number) > 0).toBe(true);
 
     db.prepare(`UPDATE agent_runs SET status = 'done' WHERE id = 'old-running'`).run();
-    for (let i = 0; i < 3000; i++) emit('old-done', 'token', { delta: 'z'.repeat(200) }, 9);
+    // 没有新过期的东西要删(old-running 刚转终态的 30 帧除外),上一轮欠的 VACUUM 这轮补做
     r = await pruneRunEvents({ vacuumMinFreedBytes: 1 });
-    expect(r.framesDeleted).toBe(3000 + 30); // 刚转终态的 old-running 那 30 帧也过期了
+    expect(r.framesDeleted).toBe(30);
     expect(r.vacuumed).toBe(true);
     expect(db.pragma('freelist_count', { simple: true })).toBe(0);
   });
@@ -134,9 +151,15 @@ describe('agent_run_events 保留期 × PGlite(PG 方言)', () => {
     expect(await indexes()).toContain('idx_agent_events_run');
     await runMigration();
 
+    await q(`INSERT INTO chat_sessions (id, user_id, app_id, kind) VALUES ('s1', 'u', 'tangu', 'user'), ('s-team', 'u', 'tangu', 'teamwork')`);
     for (const [id, status] of [['old-done', 'done'], ['old-running', 'running'], ['fresh-done', 'done'], ['old-failed', 'failed']]) {
       await q(`INSERT INTO agent_runs (id, session_id, user_id, status) VALUES (?, 's1', 'u', ?)`, [id, status]);
     }
+    await q(`INSERT INTO chat_messages (id, session_id, role, content, display_files) VALUES ('am-done', 's1', 'model', '', ?)`, [JSON.stringify([{ name: 'a.png', mime: 'image/png', dataUrl: 'data:image/png;base64,AAAA' }])]);
+    await q(`UPDATE agent_runs SET assistant_message_id = 'am-done' WHERE id = 'old-done'`);
+    await q(`INSERT INTO chat_messages (id, session_id, role, content, display_files) VALUES ('am-team', 's-team', 'model', '', ?)`, [JSON.stringify([{ name: 'a.png', dataUrl: 'data:,x' }])]);
+    await q(`INSERT INTO agent_runs (id, session_id, user_id, status, assistant_message_id) VALUES ('old-team', 's-team', 'u', 'done', 'am-team')`);
+    await emit('old-team', 'display_file', { name: 'a.png', mime: 'image/png', dataUrl: 'data:image/png;base64,AAAA' }, 9);
     for (const [rid, age] of [['old-done', 9], ['old-running', 9], ['fresh-done', 2], ['old-failed', 30]] as const) {
       await emit(rid, 'status', { phase: 'start' }, age);
       for (let i = 0; i < 20; i++) await emit(rid, 'token', { delta: 'x' }, age);
@@ -162,7 +185,7 @@ describe('agent_run_events 保留期 × PGlite(PG 方言)', () => {
     expect(deps().host.getDbType()).toBe('postgres');
     const before = await count();
     const r = await pruneRunEvents();
-    expect(r).toEqual({ framesDeleted: 67, filesStripped: 2, vacuumed: false });
+    expect(r).toEqual({ framesDeleted: 67, filesStripped: 1, vacuumed: false });
     expect(await count()).toBe(before - 67);
     expect(await count(`run_id = 'old-done' AND type IN ('token','reasoning','tool_stream')`)).toBe(0);
     expect(await count(`run_id = 'old-done'`)).toBe(6);
@@ -170,7 +193,8 @@ describe('agent_run_events 保留期 × PGlite(PG 方言)', () => {
     expect(await count(`run_id = 'fresh-done' AND type IN ('token','reasoning','tool_stream')`)).toBe(30);
     expect(await count(`run_id = 'orphan'`)).toBe(1);
     expect(await payloadOf('old-done', 34)).toEqual({ name: 'a.png', mime: 'image/png' });
-    expect(await payloadOf('old-failed', 34)).toEqual({ name: 'a.png', mime: 'image/png' });
+    expect((await payloadOf('old-failed', 34)).dataUrl).toBe('data:image/png;base64,AAAA');
+    expect((await payloadOf('old-team', 1)).dataUrl).toBe('data:image/png;base64,AAAA');
     expect((await payloadOf('old-running', 34)).dataUrl).toBe('data:image/png;base64,AAAA');
     expect((await payloadOf('fresh-done', 34)).dataUrl).toBe('data:image/png;base64,AAAA');
     expect(await pruneRunEvents()).toEqual({ framesDeleted: 0, filesStripped: 0, vacuumed: false });
@@ -186,7 +210,8 @@ describe('agent_run_events 保留期 × 定时器生命周期', () => {
       getOlderThanSql: (c: string, m: number) => `${c} < datetime('now', '-${m} minutes')` } as any, brain: {} as any, billing: {} as any, profile: createTanguProfile({ sandboxMode: 'none' }) });
   };
   /** 一次成功的 pruneRunEvents 要几条 query:MIN/MAX → (空表,无 DELETE)→ UPDATE。 */
-  const okQuery = vi.fn(async (sql: string) => (sql.startsWith('SELECT MIN') ? [{ lo: null, hi: null }] : []));
+  const okQuery = vi.fn(async (sql: string) => sql.startsWith('SELECT MIN') ? [{ lo: null, hi: null }]
+    : sql.startsWith('PRAGMA freelist_count') ? [{ freelist_count: 0 }] : sql.startsWith('PRAGMA page_size') ? [{ page_size: 4096 }] : []);
 
   it('thin worker:从没成功过就失败 → 自停、只告一次', async () => {
     vi.useFakeTimers();
