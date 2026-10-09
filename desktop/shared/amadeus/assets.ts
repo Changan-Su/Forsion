@@ -32,9 +32,14 @@ export function relFrom(dir: string, vaultRel: string): string {
   return vaultRel.startsWith(prefix) ? vaultRel.slice(prefix.length) : vaultRel
 }
 
-/** 可替换的资源 URL 构建器(接缝):默认 = amadeus-asset:// 自定义协议(桌面主进程解析,
- *  移动端由原生 WebView 拦截)。Tangu Web 无 host 协议,启动时经 setAssetUrlBuilder 注入
- *  HTTP 版(→ /api/amadeus/vaults/:v/asset?ref=…)。桌面/移动不调用注入,零影响。 */
+/** 可替换的资源 URL 构建器(接缝):默认 = amadeus-asset:// 自定义协议(**只有桌面主进程**解析它)。
+ *  没有这个协议的宿主启动时经 setAssetUrlBuilder 注入 HTTP 版:云端库(网页版 + 手机缺省,
+ *  → /api/amadeus/vaults/:v/asset?ref=…&at=<令牌>)、设备网页版、分享页。桌面不调用注入,零影响。
+ *  ⚠️ 两个已知缺陷(2026-10-09 实证,未修;仪器 = mobile 的 npm run e2e:localasset + assets.test.ts 末尾那格):
+ *    · **这个接缝只有去程没有回程**:fromAssetUrl / toStoredMarkdown 只认默认前缀。换了构建器的宿主上,
+ *      编辑器一存盘就把注入的 HTTP 地址(连同资源令牌)写进笔记,不再是页相对路径;
+ *    · 手机本地库没有注入、安卓也没有接默认协议的拦截器(旧注释说有,从来没有)—— 图片显示不出来;
+ *      构建器是模块级的,云桥装上后没人撤,切到本地库后图片被指到云端。 */
 let assetUrlBuilder: (ref: string) => string = (ref) =>
   `${ASSET_SCHEME}://v/${encodeURIComponent(ref)}`
 

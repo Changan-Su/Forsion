@@ -8,7 +8,7 @@
  *  ⚠️ 方向很重要:真实链路是 display(协议 URL)→ stored,不是「盘上裸空格 → 盘上」——
  *  裸空格那种压根匹配不上 IMG_RE(见最后一格),那是**存量受损文件**,只能靠修复扫描,别指望这里自愈。 */
 import { describe, it, expect } from 'vitest'
-import { toDisplayMarkdown, toStoredMarkdown, assetRefs, toAssetUrl } from './assets'
+import { toDisplayMarkdown, toStoredMarkdown, assetRefs, toAssetUrl, setAssetUrlBuilder } from './assets'
 
 /** 编辑器序列化出来的那一行(PM 的 image 节点 src 就是协议 URL)。 */
 const disp = (ref: string): string => `![](${toAssetUrl(ref)})`
@@ -114,5 +114,23 @@ describe('代码里的图片语法逐字(I-15)', () => {
 
   it('落盘侧仍是全文安全网:代码里残留的协议 URL 也换回相对路径,绝不漏到盘上', () => {
     expect(toStoredMarkdown('```\n' + disp('a.png') + '\n```\n', '')).toBe('```\n![](a.png)\n```\n')
+  })
+})
+
+/** ⚠️ 已知缺陷的钉子(2026-10-09 实证,**尚未修**)。显示地址的构建器可以换(setAssetUrlBuilder:云端库 / 设备网页版
+ *  都换成带资源令牌的 http 地址),但落盘侧的还原(fromAssetUrl)只认默认的 `amadeus-asset://v/` 前缀 ——
+ *  换了构建器之后,编辑器一存盘就把 `![](.amadeus/pic.png)` 写成 `![](https://…/asset?ref=…&at=<令牌>)`:
+ *  令牌过期图片就失联,同步到别的设备是一条外链而不是附件。整条链(真编辑器、真存盘)在 mobile 的
+ *  `npm run e2e:localasset` 场景 B / C。
+ *  用 it.fails 钉住现状:修好之后这一格会变红 —— 那时把 .fails 去掉,它就是修法的验收。 */
+describe('换了显示地址的构建器之后的往返(已知缺陷,未修)', () => {
+  it.fails('云端形态的构建器:display → stored 必须还原成页相对路径', () => {
+    const md = '前文\n\n![](.amadeus/pic.png)\n'
+    setAssetUrlBuilder((ref) => `https://api.example/api/amadeus/vaults/v1/asset?ref=${encodeURIComponent(ref)}&at=TOKEN`)
+    try {
+      expect(toStoredMarkdown(toDisplayMarkdown(md, 'dir'), 'dir')).toBe(md)
+    } finally {
+      setAssetUrlBuilder((ref) => `amadeus-asset://v/${encodeURIComponent(ref)}`) // 还原成默认构建器,别带坏后面的用例
+    }
   })
 })

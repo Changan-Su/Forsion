@@ -4,7 +4,10 @@
  * electron/amadeus/ipc.ts handler 体。桌面渲染层经 amadeus/api.ts 的 `window.amadeus` 门面零改接管。
  *
  * 落地范围:20 纯文件 I/O + 7 派生索引全实现;9 个 OS/事件方法 no-op(渲染层已 `?.` 兜底)。
- * 图片(amadeus-asset://)由原生 Android 拦截读同一 vault(见 android WebViewClient),此处不涉及。
+ * ⚠️ 本地库里的图片 / 音视频**今天显示不出来**(2026-10-09 实证,未修):渲染层给的地址是默认的
+ *    `amadeus-asset://v/…`,安卓原生层没有接这个协议的拦截器(从来没有过),页面的内容安全策略也不放它。
+ *    这座桥也没有装自己的地址构建器 —— 先开过云端库再切过来时,图片还会被指到云端去。
+ *    仪器与修法见 mobile/scripts/local-asset.e2e.cjs 的头注。
  */
 import path from 'path-browserify'
 import { loadPage, newPage, pageFileName, savePage } from '@amadeus-shared/compiler'
@@ -430,7 +433,7 @@ export function createMobileAmadeusBridge(cfg?: { apiBase?: () => string; getTok
         .filter((x) => x.thumb && x.full)
     },
 
-    // OS 集成 / 事件 —— 移动端 no-op(渲染层已 `?.` 兜底)。图片经原生 amadeus-asset 拦截,不走这里。
+    // OS 集成 / 事件 —— 移动端 no-op(渲染层已 `?.` 兜底)。
     // 这三件 no-op 的入口一律不渲染(评审 G2-13:⋯ 菜单与附件卡上的死键),判据单源 amadeus/lib/hostCaps.ts。
     hostCaps: { revealInFileManager: false, exportPdf: false, openAttachment: false },
     openAttachment: async () => { /* no-op(可后续接系统分享) */ },
