@@ -28,7 +28,7 @@ export function ImageStudioNav() {
   const go = (act: () => void) => { act(); useWorkspace.getState().openView('image-studio', {}, 'main') }
   const newProject = () => go(() => useImageStudio.getState().create(t('imageStudio.untitled')))
   const phone = useListFirst() // 手机的整屏列表:「新建项目」是右下角的主按钮(布局「二」),这一段只剩「我的项目」
-  return <nav className="csn ims-nav pl-fab-room" aria-label={t('imageStudio.title')}>
+  return <nav className={`csn ims-nav${phone ? ' pl-fab-room' : ''}`} aria-label={t('imageStudio.title')}>
     <div className="csn-section">{!phone && <span className="csn-heading">{t('imageStudio.nav.create')}</span>}
       {!phone && <button type="button" className="csn-item" disabled={!ready} onClick={newProject}><Plus size={16} />{t('imageStudio.new')}</button>}
       <button type="button" className="csn-item" aria-current={ready && !activeId ? 'page' : undefined} onClick={() => go(() => useImageStudio.getState().close())}><LayoutGrid size={16} />{t('imageStudio.projects')}</button>

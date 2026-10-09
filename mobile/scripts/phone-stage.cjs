@@ -178,16 +178,19 @@ async function installChrome(page) {
 }
 
 // Notes are put straight into the page store (in a browser there is no vault behind it): enough to lay the lists out.
+// Drawings go in `files`, never in `pages` — both vault managers list them that way (a drawing parsed as a page
+// would be rewritten). With them under `pages` this stage once passed a whiteboards tab that was empty on a device.
 const NOTES = {
   folders: ['项目', '读书笔记'],
-  pages: ['十月计划.md', '项目/发版清单 2.13.md', '项目/会议纪要 9-30.md', '项目/信息架构草图.excalidraw.md', '读书笔记/《置身事内》第三章摘记.md', '读书笔记/《枪炮、病菌与钢铁》.md', '流程图.excalidraw.md'],
+  pages: ['十月计划.md', '项目/发版清单 2.13.md', '项目/会议纪要 9-30.md', '读书笔记/《置身事内》第三章摘记.md', '读书笔记/《枪炮、病菌与钢铁》.md'],
+  files: ['项目/信息架构草图.excalidraw.md', '流程图.excalidraw.md'],
   recents: [['项目/发版清单 2.13.md', 25 * MIN], ['读书笔记/《置身事内》第三章摘记.md', DAY + 3 * HOUR], ['十月计划.md', 3 * DAY], ['项目/信息架构草图.excalidraw.md', 4 * DAY], ['项目/会议纪要 9-30.md', 9 * DAY]],
 }
 async function seedNotes(page) {
   await page.evaluate(async ({ storeUrl, recentUrl, notes, now }) => {
     const { usePageStore } = await import(/* @vite-ignore */ storeUrl)
     const { useRecentViews } = await import(/* @vite-ignore */ recentUrl)
-    usePageStore.setState({ vaultRoot: usePageStore.getState().vaultRoot || '/stage/vault', pages: notes.pages, folders: notes.folders, files: [] })
+    usePageStore.setState({ vaultRoot: usePageStore.getState().vaultRoot || '/stage/vault', pages: notes.pages, folders: notes.folders, files: notes.files })
     useRecentViews.setState({ items: notes.recents.map(([id, ago]) => ({ key: `note:${id}`, kind: 'note', id, title: id, ts: now - ago })) })
   }, { storeUrl: moduleUrl('../desktop/frontend/src/amadeus/store/pageStore.ts'), recentUrl: moduleUrl('../desktop/frontend/src/recentViews.ts'), notes: NOTES, now: T0 })
 }
@@ -298,6 +301,29 @@ const SCENES = {
     rows.push(['closing it brings the bar back', (await stage.state(page)).mode === 'shell' && !(await rect(page, '.amx-qf')), `mode=${(await stage.state(page)).mode}`])
     return rows
   },
+  'tangu-pull': async (page) => {
+    // pulling the list down at the top = search, on release only. A pull the system takes over (touchcancel: the
+    // notification shade, a back swipe from the edge) opens nothing.
+    const pull = (last) => page.evaluate(async ([q, end]) => {
+      const el = document.querySelector(q).parentElement // the hint is the scroller's first child
+      const at = (y) => [new Touch({ identifier: 1, target: el, clientX: 200, clientY: y })]
+      const fire = (type, touches) => el.dispatchEvent(new TouchEvent(type, { touches, changedTouches: at(0), bubbles: true, cancelable: true }))
+      fire('touchstart', at(300))
+      for (const y of [340, 400, 470]) fire('touchmove', at(y))
+      const armed = el.hasAttribute('data-pull-armed')
+      fire(end, [])
+      await new Promise((r) => setTimeout(r, 400))
+      return { armed, open: !!document.querySelector('.amx-qf'), left: el.hasAttribute('data-pull-armed') || !!el.style.getPropertyValue('--pl-pull') }
+    }, [`${LIST} [data-timeline] .pl-pull`, last])
+    const cancelled = await pull('touchcancel')
+    const released = await pull('touchend')
+    await page.keyboard.press('Escape')
+    await page.waitForTimeout(400)
+    return [
+      ['a pull that is taken away opens nothing and leaves no hint behind', cancelled.armed && !cancelled.open && !cancelled.left, JSON.stringify(cancelled)],
+      ['the same pull, let go, opens search', released.armed && released.open, JSON.stringify(released)],
+    ]
+  },
   'tangu-agent': async (page) => {
     await chip(page, 'agent')
     const titles = await texts(page, `${LIST} [data-timeline] .t2s-srow-title`)
@@ -341,6 +367,22 @@ const SCENES = {
     await chip(page, 'boards')
     const titles = await texts(page, `${LIST} [data-timeline] .t2s-srow-title`)
     return [['Whiteboards: only the whiteboards', titles.join('、') === '流程图、信息架构草图', titles.join('、')]]
+  },
+  'notes-star': async (page) => {
+    await chip(page, 'recent')
+    const sw = `${LIST} [data-timeline] .pl-swipe`
+    const label = async () => {
+      await page.evaluate((q) => { const el = document.querySelector(q); el.scrollLeft = el.scrollWidth }, sw)
+      await page.waitForTimeout(350)
+      return page.evaluate((q) => document.querySelector(q).querySelector('[data-act="star"]')?.textContent.trim() ?? null, sw)
+    }
+    const use = async () => { await page.locator(`${sw} >> nth=0`).locator('[data-act="star"]').tap(); await page.waitForTimeout(400) }
+    const before = await label()
+    await use()
+    const after = await label()
+    await use() // back to how it was
+    const again = await label()
+    return [['the star action names what it will do, also right after it was used', !!before && !!after && before !== after && again === before, `${before} → ${after} → ${again}`]]
   },
   'notes-reset': async (page) => { await chip(page, 'recent'); return [] },
   // The other first-level lists keep their own rows; what they share with the two above is the one main button.

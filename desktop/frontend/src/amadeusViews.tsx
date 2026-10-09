@@ -820,12 +820,16 @@ export function AmadeusPagesView() {
   const phone = useListFirst()
   type PhoneTab = 'recent' | 'tree' | 'boards'
   const [savedTab, setSavedTab] = useState<PhoneTab | null>(() => {
-    const v = localStorage.getItem('forsion_notes_phone_tab')
-    return v === 'recent' || v === 'tree' || v === 'boards' ? v : null
+    // 这一行在每个平台上都跑:存储读不了(浏览器禁了站点数据)时不能把整块笔记面板带崩
+    try {
+      const v = localStorage.getItem('forsion_notes_phone_tab')
+      return v === 'recent' || v === 'tree' || v === 'boards' ? v : null
+    } catch { return null }
   })
   // 只有手机这种摆法用得到:桌面上别为它多订阅两份状态(每开一个视图就重画一遍整棵树)
   const recentViews = useRecentViews((s) => (phone ? s.items : NO_RECENT_VIEWS))
   const prefsRecents = useAmadeusPrefs((s) => (phone ? s.recents : NO_PATHS))
+  const starredPaths = useAmadeusPrefs((s) => (phone ? s.starred : NO_PATHS)) // 左滑里「收藏 / 取消收藏」那个字样要跟着变
   /** 「最近」= 本机最近打开过的。时刻取「最近使用」登记(recentViews:带时刻,与会话等共用 24 条),
    *  后面接上这个库自己的最近打开(amadeusPrefs.recents:只有先后,没有时刻)里还没出现的。 */
   const recentList = useMemo(() => {
@@ -836,10 +840,11 @@ export function AmadeusPagesView() {
     for (const path of prefsRecents) if (exists.has(path) && !seen.has(path)) { seen.add(path); out.push({ path, at: 0 }) }
     return out
   }, [recentViews, prefsRecents, pages, files])
-  const boards = useMemo(() => pages.filter(isDrawingPath).sort((a, b) => baseName(a).localeCompare(baseName(b))), [pages])
+  // 画板在 files 里,不在 pages 里:两个库管理器都把它挡在页面之外(当页面解析会被改写)。pages 一并看只为不依赖这条分法。
+  const boards = useMemo(() => [...new Set([...files, ...pages])].filter(isDrawingPath).sort((a, b) => baseName(a).localeCompare(baseName(b))), [pages, files])
   // 没选过档位时:有最近打开的就从「最近」起,否则直接给树(新装的手机上「最近」是空的)
   const phoneTab: PhoneTab = savedTab ?? (recentList.length ? 'recent' : 'tree')
-  const pickPhoneTab = (tab: PhoneTab): void => { setSavedTab(tab); localStorage.setItem('forsion_notes_phone_tab', tab) }
+  const pickPhoneTab = (tab: PhoneTab): void => { setSavedTab(tab); try { localStorage.setItem('forsion_notes_phone_tab', tab) } catch { /* 存不了:只管这一次 */ } }
   // 没开库时三档都无从谈起:只剩「打开智库」的提示与末尾两行(胶囊也不画)
   const flatList = phone && !!vaultRoot && phoneTab !== 'tree'
   const openSearch = (): void => useQuickFind.getState().openPalette()
@@ -1316,7 +1321,7 @@ export function AmadeusPagesView() {
     const isNote = !isDraw && !isDash && !ft && isNotePath(path)
     const isPage = isNote || isDash
     const LeadIcon = isDbPath(path) ? Database : isDraw ? PenTool : isDash ? LayoutDashboard : isNote ? FileText : isImagePath(path) ? FileImage : Paperclip
-    const starred = useAmadeusPrefs.getState().starred.includes(path)
+    const starred = starredPaths.includes(path)
     const actions: SwipeAction[] = [
       ...(isPage ? [
         { id: 'star', label: t(starred ? 'amxv.menu.unstar' : 'amxv.menu.star'), icon: <Star />, run: () => useAmadeusPrefs.getState().toggleStar(path) },

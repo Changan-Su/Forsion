@@ -115,7 +115,8 @@ export function SwipeRow({ actions, children }: { actions: SwipeAction[]; childr
 
 const PULL = 84 // 手指走过这么多(视口 px)算拉到位
 
-/** 列表已经在顶上还往下拉 = 搜索(与右上角搜索钮同一个动作)。拉到位松手才触发;滚动器的首个子节点放 <PullHint />。 */
+/** 列表已经在顶上还往下拉 = 搜索(与右上角搜索钮同一个动作)。拉到位松手才触发,手势被系统拿走(touchcancel:
+ *  下拉通知栏、边缘返回)不算松手;滚动器的首个子节点放 <PullHint />。 */
 export function usePullToSearch(ref: RefObject<HTMLElement | null>, run: (() => void) | undefined): void {
   const runRef = useRef(run)
   runRef.current = run
@@ -136,16 +137,17 @@ export function usePullToSearch(ref: RefObject<HTMLElement | null>, run: (() => 
       if (el.scrollTop > 0) { y0 = -1; set(0); return }
       set(Math.max(0, Math.min(1.25, (e.touches[0].clientY - y0) / PULL)))
     }
-    const end = (): void => { const go = pulled >= 1; y0 = -1; set(0); if (go) runRef.current?.() }
+    const cancel = (): void => { y0 = -1; set(0) }
+    const end = (): void => { const go = pulled >= 1; cancel(); if (go) runRef.current?.() }
     el.addEventListener('touchstart', start, { passive: true })
     el.addEventListener('touchmove', move, { passive: true })
     el.addEventListener('touchend', end)
-    el.addEventListener('touchcancel', end)
+    el.addEventListener('touchcancel', cancel)
     return () => {
       el.removeEventListener('touchstart', start)
       el.removeEventListener('touchmove', move)
       el.removeEventListener('touchend', end)
-      el.removeEventListener('touchcancel', end)
+      el.removeEventListener('touchcancel', cancel)
       set(0)
     }
   }, [ref, on])

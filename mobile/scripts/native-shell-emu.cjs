@@ -1946,6 +1946,28 @@ const tabCountText = (list) => {
     h.key(4)
     await waitSheet(false)
     assert.equal(await cdp.eval(nav), 'list', 'the long-press on the main button also made a note')
+    // whiteboards chip, on the real vault: a drawing is listed under `files`, never under `pages` (both vault managers
+    // keep it out of the pages: parsed as one it would be rewritten) — and the chip shows it all the same. The browser
+    // stage once passed this on a fixture that had drawings under `pages`, while the chip was empty on a device.
+    const BOARD = 'E2E board.excalidraw.md'
+    const chipOf = (id) => `document.querySelector('.mb-drawer--left .pl-chips [data-filter="${id}"]')`
+    const on0 = await cdp.eval("document.querySelector('.mb-drawer--left .pl-chips button.on').dataset.filter")
+    const saved0 = await cdp.eval("localStorage.getItem('forsion_notes_phone_tab')")
+    try {
+      await cdp.eval(`window.amadeus.writeDrawing(${JSON.stringify(BOARD)}, '---\\nexcalidraw-plugin: parsed\\n---\\n').then(() => true)`)
+      const where = await cdp.eval(`Promise.all([window.amadeus.listPages(), window.amadeus.listFiles()]).then(([p, f]) => JSON.stringify({ page: p.includes(${JSON.stringify(BOARD)}), file: f.includes(${JSON.stringify(BOARD)}) }))`)
+      assert.equal(where, '{"page":false,"file":true}', 'where the vault lists a drawing changed: the whiteboards chip reads from there')
+      await switchVault('cloud'); await switchVault('local') // reopening the vault reads its lists again
+      assert.ok(await h.waitPage(cdp, `!!${chipOf('boards')}`, 8000), 'no chips after reopening the vault')
+      await tapEl(chipOf('boards'))
+      const titles = "[...document.querySelectorAll('.mb-drawer--left [data-timeline] .t2s-srow-title')].map((el) => el.textContent.trim())"
+      assert.ok(await h.waitPage(cdp, `${chipOf('boards')}.classList.contains('on') && (${titles}).includes('E2E board')`, 8000), `the whiteboards chip does not show the vault's drawing: ${JSON.stringify(await cdp.eval(titles))}`)
+      shot('03h-notes-boards')
+    } finally {
+      await cdp.eval(`window.amadeus.deletePage?.(${JSON.stringify(BOARD)}).then(() => true, () => true)`).catch(() => {})
+      if (await cdp.eval(`!!${chipOf(on0)}`)) await tapEl(chipOf(on0))
+      if (saved0 === null) await cdp.eval("(localStorage.removeItem('forsion_notes_phone_tab'), true)")
+    }
     } finally { if (side !== 'local') await switchVault(side) }
   })
 

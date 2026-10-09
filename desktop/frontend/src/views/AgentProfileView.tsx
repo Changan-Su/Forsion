@@ -189,7 +189,7 @@ export function AgentsRosterView() {
       {/* 创建入口只留底部那一个(评审 U-25:标题行的 ＋ 与底部链接重复)。 */}
       <div className="agents-roster-heading"><span>{t('agentProfile.roster')} <small>{agents.length}</small></span></div>
       <label className="agents-search"><Search size={14} /><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t('agentProfile.search')} aria-label={t('agentProfile.search')} /></label>
-      <div className="agents-roster-list pl-fab-room">{filtered.map((a) => <div key={a.slug} className={`agents-roster-row${dragSlug === a.slug ? ' dragging' : ''}`} draggable={!rosterBusy && !query}
+      <div className={`agents-roster-list${phone ? ' pl-fab-room' : ''}`}>{filtered.map((a) => <div key={a.slug} className={`agents-roster-row${dragSlug === a.slug ? ' dragging' : ''}`} draggable={!rosterBusy && !query}
         onDragStart={(e) => { setDragSlug(a.slug); e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', a.slug) }} onDragEnd={() => setDragSlug(null)}
         onDragOver={(e) => { if (dragSlug && dragSlug !== a.slug) e.preventDefault() }} onDrop={(e) => { e.preventDefault(); if (dragSlug) void reorder(dragSlug, a.slug) }}>
         <button type="button" className={`agents-roster-item${!creating && agent?.slug === a.slug ? ' selected' : ''}`} onClick={() => selectAgent(a.slug)} aria-pressed={!creating && agent?.slug === a.slug}>
