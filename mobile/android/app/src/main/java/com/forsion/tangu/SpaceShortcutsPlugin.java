@@ -26,7 +26,7 @@ import java.util.List;
  *    点一条直接进那个 Space。顺带,安卓自己允许把列表里的一条长按拖到桌面变成固定图标。
  *  - pin:直接请求把某个 Space **固定到桌面**(系统弹自己的确认框,我们不画任何 UI)。
  *
- * 两者用的是同一个 Intent:`tangu://space?id=<id>`,显式指向 MainActivity(显式 Intent 不吃
+ * 两者用的是同一个 Intent:`tangu://space?id=<id>`,显式指向 AppActivity(显式 Intent 不吃
  * intent-filter,所以 AndroidManifest 不用动)。JS 侧冷启走 App.getLaunchUrl()、热启走 appUrlOpen,
  * 见 mobile/src/spaceShortcuts.ts。
  *
@@ -37,7 +37,7 @@ import java.util.List;
 public class SpaceShortcutsPlugin extends Plugin {
 
     private ShortcutInfoCompat build(Context ctx, String id, String shortLabel, int rank) {
-        Intent intent = new Intent(ctx, MainActivity.class);
+        Intent intent = new Intent(ctx, AppActivity.class);
         // ⚠️ 必须带 action:没有 action 的 Intent 建快捷方式会被系统直接拒(IllegalArgumentException)。
         intent.setAction(Intent.ACTION_VIEW);
         intent.setData(Uri.parse("tangu://space?id=" + Uri.encode(id)));
@@ -70,6 +70,17 @@ public class SpaceShortcutsPlugin extends Plugin {
                 out.add(build(ctx, id, lbl, out.size()));
             }
             ShortcutManagerCompat.setDynamicShortcuts(ctx, out);
+            // 固定在桌面、但没排进上面名单的那些:2.13 及以前建的 Intent 指着 `.MainActivity`,它现在只是默认的桌面入口,
+            // 应用图标一换就被关掉 → 点了打不开。同 id、同名重建一遍,Intent 改指 AppActivity(名单里的已被上一行整条替换)。
+            List<ShortcutInfoCompat> pinned = new ArrayList<>();
+            for (ShortcutInfoCompat s : ShortcutManagerCompat.getShortcuts(ctx, ShortcutManagerCompat.FLAG_MATCH_PINNED)) {
+                String sid = s.getId();
+                if (!sid.startsWith("space:")) continue;
+                boolean listed = false;
+                for (ShortcutInfoCompat d : out) if (d.getId().equals(sid)) { listed = true; break; }
+                if (!listed) pinned.add(build(ctx, sid.substring("space:".length()), String.valueOf(s.getShortLabel()), s.getRank()));
+            }
+            if (!pinned.isEmpty()) ShortcutManagerCompat.updateShortcuts(ctx, pinned);
             JSObject res = new JSObject();
             res.put("published", out.size());
             res.put("max", max);

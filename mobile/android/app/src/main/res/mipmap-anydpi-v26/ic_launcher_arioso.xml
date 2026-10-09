@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 内置图标 Arioso 的桌面入口(清单里的 .IconArioso)。与默认图标同一套几何:画面落在中间 66.6%(各家遮罩都露得全)。
+     画面 = desktop/frontend/src/assets/forsion-logo-arioso.png 的副本(drawable-nodpi/ic_launcher_arioso_art.png)。 -->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@color/ic_launcher_arioso_background" />
+    <foreground>
+        <inset android:drawable="@drawable/ic_launcher_arioso_art" android:inset="16.7%" />
+    </foreground>
+</adaptive-icon>

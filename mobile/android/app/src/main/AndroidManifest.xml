@@ -15,17 +15,15 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/AppTheme">
+        <!-- 桌面入口不在这里,在下面的 activity-alias(应用图标可换,见 LauncherIconPlugin)。深链 / 分享的过滤器留在
+             真正的 Activity 上:入口会被关掉,它不会。 -->
         <activity
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode|navigation"
-            android:name=".MainActivity"
+            android:name=".AppActivity"
             android:label="@string/title_activity_main"
             android:theme="@style/AppTheme.NoActionBarLaunch"
             android:launchMode="singleTask"
             android:exported="true">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
 
             <!-- 深链登录回跳:Forsion /auth 登录成功后 redirect 到 tangu://auth-callback?token=…,
                  由 @capacitor/app 的 appUrlOpen 接收(见 src/capacitorAuth.ts）。 -->
@@ -51,6 +49,35 @@
                 <data android:mimeType="*/*" />
             </intent-filter>
         </activity>
+
+        <!-- 桌面入口 = 应用图标。Android 只能在这里声明过的入口之间切换(LauncherIconPlugin 一次只开一个),
+             所以只有内置图标能上桌面;上传的图片 / 插件图标只在 App 内显示。
+             ⚠️ 默认入口的名字恒为 `.MainActivity`(2.13 及以前真正的 Activity 就叫这个):用户桌面上已有的图标、
+                已固定的 Space 快捷方式认的都是这个组件名,改名 = 升级后它们从桌面上消失。
+             新增内置图标 = 这里加一个 enabled="false" 的别名 + LauncherIconPlugin.ENTRIES 加一行。 -->
+        <activity-alias
+            android:name=".MainActivity"
+            android:targetActivity=".AppActivity"
+            android:label="@string/title_activity_main"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+        <activity-alias
+            android:name=".IconArioso"
+            android:targetActivity=".AppActivity"
+            android:enabled="false"
+            android:icon="@mipmap/ic_launcher_arioso"
+            android:roundIcon="@mipmap/ic_launcher_arioso"
+            android:label="@string/title_activity_main"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
 
         <provider
             android:name="androidx.core.content.FileProvider"

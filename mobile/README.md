@@ -150,6 +150,22 @@ OUT=/absolute/out npm run emu:nativeshell   # ONLY=tabs,prompt 只跑子集
 
 负对照在 `e2e:boot`：浏览器里没有原生宿主时必须仍是 `.mb-topbar` + Web 标签页底单。
 
+### 桌面图标（应用图标的入口别名）
+
+「设置 → 外观 → 应用图标」选内置图标时，桌面图标跟着换。桌面上的图标是清单里的一个入口（`activity-alias`），Android 只允许在安装包声明过的入口之间切换，所以上传的图片 / 插件图标只在应用内显示。真正的 Activity 是 `AppActivity`；默认入口沿用旧组件名 `.MainActivity`（用户桌面上已有的图标认这个名字）。原生半身 `LauncherIconPlugin.kt`，页面半身 `src/launcherIcon.ts`。
+
+两条模拟器上实测出来的规矩（都写在 `LauncherIconPlugin.kt` 顶部）：在前台不切、离开应用才切（否则系统约一秒后把正在用的任务移除）；先把快捷方式搬到新入口再关旧入口（否则桌面把已固定的 Space 快捷方式摘掉）。
+
+新增内置图标：清单加一个 `android:enabled="false"` 的别名 + 图标资源，`LauncherIconPlugin.ENTRIES` 加一行。
+
+```bash
+ONLY='app icon:' OUT=/absolute/out npm run emu:nativeshell
+# 升级验收：先装旧包固定一个 Space 快捷方式，再覆盖装新包（旧包 = 入口还是 Activity 本身的版本，≤ 2.13.x）
+OLD_APK=/absolute/old.apk NEW_APK=android/app/build/outputs/apk/debug/app-debug.apk npm run emu:launchericon
+```
+
+只在 API 35 模拟器的 Pixel 桌面上看过；各家定制桌面（MIUI / ColorOS 等）切换入口后的表现没有验证。
+
 同一台架也跑 Android 插件的真机链路：假市场（CDP 桩）+ 宿主上的真 HTTP 下载服务（`PLUGIN_PORT`，缺省 5317），
 经原生下载器（`ForsionMarketDownload`，台架核对请求 UA 不是 WebView）装进 `files/plugins/<slug>`，
 「⋯」里插件分节运行命令 → 插件视图（CSP `'unsafe-eval'` + 插件自己的 `new Function`）、冷启动（force-stop + 重开）后仍启用且数据在、
