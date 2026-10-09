@@ -6,18 +6,16 @@
  * 跑法:npm run build && npm run e2e:unitsentry。机制照抄 mobile-boot.e2e.cjs(假 token 过登录闸,
  * /api/** 全 abort —— unitsList 桥存在即可上架,名册拉不到只影响弹层内容不影响入口)。
  */
-const http = require('http')
 const os = require('os')
 const fs = require('fs')
 const path = require('path')
-const { spawn } = require('child_process')
+const { startPreview } = require('./lib/preview.cjs')
 const { chromium } = (() => {
   try { return require('playwright-core') } catch { /* 落到 desktop */ }
   return require(path.resolve(__dirname, '../../desktop/node_modules/playwright-core'))
 })()
 
-const PORT = 5281 // 与 boot(5279) 错开,免得两台仪器串行残留互踩
-const URL = `http://localhost:${PORT}/`
+let URL = '' // main() 里由 startPreview 给:系统分配的空闲端口,E2E_PORT 可指定(见 lib/preview.cjs)
 
 function findChromium() {
   if (process.env.CHROMIUM_EXE) return process.env.CHROMIUM_EXE
@@ -45,14 +43,6 @@ function findChromium() {
   throw new Error('找不到 chromium,设 CHROMIUM_EXE 环境变量')
 }
 
-function ping() {
-  return new Promise((res) => {
-    const req = http.get(URL, (r) => { res(r.statusCode === 200); r.resume() })
-    req.on('error', () => res(false))
-    req.setTimeout(1500, () => { req.destroy(); res(false) })
-  })
-}
-
 /** 入口的可见名(aria-label=label(tooltip)):i18n 两语都认,别只钉一种。 */
 const UNIT_LABELS = ['Forsion Unit 切换', 'Switch Forsion Unit']
 
@@ -62,26 +52,16 @@ async function main() {
     console.error('✗ 没有 dist/,先跑 npm run build')
     process.exit(1)
   }
-  const preview = spawn('npx', ['vite', 'preview', '--port', String(PORT), '--strictPort'], {
-    cwd: root, stdio: ['ignore', 'ignore', 'pipe'], detached: true,
-  })
-  let previewErr = ''
-  preview.stderr.on('data', (d) => { previewErr += String(d) })
-  const killPreview = () => {
-    try { process.kill(-preview.pid, 'SIGTERM') } catch { try { preview.kill() } catch { /* 已退出 */ } }
-  }
+  const preview = await startPreview(root)
+  URL = preview.url
+  const killPreview = preview.kill
 
   let browser = null
   const fails = []
   const pass = (name, extra) => console.log(`PASS  ${name}${extra ? `  | ${extra}` : ''}`)
   const fail = (name, extra) => { fails.push(name); console.log(`FAIL  ${name}${extra ? `  | ${extra}` : ''}`) }
   try {
-    let up = false
-    for (let i = 0; i < 40 && !up; i++) {
-      await new Promise((r) => setTimeout(r, 500))
-      up = await ping()
-    }
-    if (!up) throw new Error(`vite preview 没起来(${PORT} 被占?)\n${previewErr.slice(-800) || '(无 stderr)'}`)
+    await preview.ready()
 
     browser = await chromium.launch({ executablePath: findChromium(), headless: true, args: ['--no-sandbox'] })
     const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true })

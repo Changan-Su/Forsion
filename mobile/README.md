@@ -18,6 +18,11 @@ npm i
 npm run dev   # http://localhost:5274,同源经 vite proxy 到 BACKEND_URL(缺省 localhost:3001)
 ```
 
+浏览器检查(`npm run e2e:*`,先 `npm run build`)各自起一个 `vite preview`,经 `scripts/lib/preview.cjs`:端口由系统分配,
+几个会话同时跑同一条互不相干;只认答出**本检出** `dist/index.html` 的服务,自己的预览起不来就报错退出,不会接到别人的构建上。
+要固定端口(比如想自己开浏览器看)用 `E2E_PORT=<端口> npm run e2e:boot`。两条例外:`e2e:runon` 是更早的同款做法,变量名是 `PORT_RUNON`;
+`e2e:plugins` 还是写死的 5301(有两条在途分支在改它,合并后再接进来),并行跑它之前先看端口上是谁。
+
 ## 出 Android APK
 
 后端地址:**native 缺省烤入生产网关 `https://api.forsion.net`**(`src/capacitorAuth.ts` 的 `PROD_ORIGIN`),

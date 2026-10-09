@@ -15,18 +15,16 @@
  *
  * 骨架照抄 drawer-drag.e2e.cjs(同一套 vite preview + 假 token + /api abort)。
  */
-const http = require('http')
 const os = require('os')
 const fs = require('fs')
 const path = require('path')
-const { spawn } = require('child_process')
+const { startPreview } = require('./lib/preview.cjs')
 const { chromium } = (() => {
   try { return require('playwright-core') } catch { /* 借 desktop 的 */ }
   return require(path.resolve(__dirname, '../../desktop/node_modules/playwright-core'))
 })()
 
-const PORT = 5291 // 避开 dev 5274 / boot 5279 / noteopen 5283 / editorbar 5285 / drawerdrag 5289
-const URL = `http://localhost:${PORT}/`
+let URL = '' // main() 里由 startPreview 给:系统分配的空闲端口,E2E_PORT 可指定(见 lib/preview.cjs)
 
 function findChromium() {
   if (process.env.CHROMIUM_EXE) return process.env.CHROMIUM_EXE
@@ -45,21 +43,15 @@ function findChromium() {
   }
   throw new Error('找不到 chromium,设 CHROMIUM_EXE')
 }
-const ping = () => new Promise((res) => {
-  const req = http.get(URL, (r) => { res(r.statusCode === 200); r.resume() })
-  req.on('error', () => res(false)); req.setTimeout(1500, () => { req.destroy(); res(false) })
-})
-
 async function main() {
   const root = path.resolve(__dirname, '..')
   if (!fs.existsSync(path.join(root, 'dist/index.html'))) {
     console.error('✗ 没有 dist/,先跑 npm run build')
     process.exit(1)
   }
-  const preview = spawn('npx', ['vite', 'preview', '--port', String(PORT), '--strictPort'], { cwd: root, stdio: ['ignore', 'ignore', 'pipe'], detached: true })
-  let previewErr = ''
-  preview.stderr.on('data', (d) => { previewErr += String(d) })
-  const killPreview = () => { try { process.kill(-preview.pid, 'SIGTERM') } catch { try { preview.kill() } catch { /* 已退出 */ } } }
+  const preview = await startPreview(root)
+  URL = preview.url
+  const killPreview = preview.kill
 
   let browser = null
   const fails = []
@@ -68,9 +60,7 @@ async function main() {
     if (!cond) fails.push(`${name}${detail ? ' | ' + detail : ''}`)
   }
   try {
-    let up = false
-    for (let i = 0; i < 40 && !up; i++) { await new Promise((r) => setTimeout(r, 500)); up = await ping() }
-    if (!up) throw new Error(`vite preview 没起来\n${previewErr.slice(-500)}`)
+    await preview.ready()
 
     browser = await chromium.launch({ executablePath: findChromium(), headless: true, args: ['--no-sandbox'] })
     const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true })
