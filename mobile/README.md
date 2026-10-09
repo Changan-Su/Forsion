@@ -97,14 +97,31 @@ OUT=/absolute/review-output node scripts/native-picker-emu.cjs
 WebView 仍是内核，外壳换原生：两个可选宿主接缝在 `lcl/engine`，Android 宿主在 `src/nativeChrome.ts` / `src/nativeSheet.ts`，
 Kotlin 在 `NativeChrome*` / `NativeSheet*`。没装宿主（桌面、Web、浏览器调试）时一切照旧走 Web UI。
 
-- **`NativeChrome`**：原生 Material 顶栏取代 `.mb-topbar`（左抽屉 / 标题 / 右抽屉 / 标签页数 / 更多）。
-  WebView 由插件放在顶栏下方（自管 insets，`--mb-top` 归零）。引导、成就、互联设备、旁聊等自带头部的全屏层用 `useNativeChromeClaim({ mode: 'hidden' })` 收起顶栏；
+- **`NativeChrome`**：原生顶栏取代 `.mb-topbar`（左抽屉 / 标题 / 右抽屉 / 标签页数 / 更多）。
+  外壳（`shell` 模式）下它是**浮在页面上的两颗胶囊**，WebView 顶到屏幕上下缘（见下一条「悬浮胶囊 + 毛玻璃」）；
+  `page` / `hidden` 仍是老布局：WebView 夹在上下两条实底之间，`--mb-top` 为 0。引导、成就、互联设备、旁聊等自带头部的全屏层用 `useNativeChromeClaim({ mode: 'hidden' })` 收起顶栏；
   **设置**改用 `page` 模式（标题 + 返回，分类页再加 `close` ×），Web 头部只在 `data-native-chrome` 时隐藏。
   **底部导航栏**：Space 切换由同一插件画成原生底栏（外壳把 Space 列表随 `spaces` 推过去，图标由宿主按 Space 的图标组件序列化）。
   图标是一张图的 Space（插件 Space 的 `iconFile`）：PNG 在页面里缩成 72px 随状态发过去、原色显示；图还没好、是 SVG 或超出体积预算时画配方 `icon` 的线条图标（`SpaceIcon.nativeFallback`）。
-  点 = 切 Space；点当前那格不做事；长按 = 固定到桌面。超过 5 个时**第一格（主页）固定不动**，其余格子在它右边横向滚动（固定 1 格 + 滚动 4.5 格）：
-  当前格在前五个里时不滚；再往后只滚到「当前格完整可见、下一格露半个」为止。固定按位置不按 id（JS 列出的第一个 Space）。
+  点 = 切 Space；点当前那格不做事；长按 = 固定到桌面。2026-10-09 起它是一颗 **Dock 胶囊**：每格只有图标（48dp 宽），
+  **只有当前 Space 那格带名字**，其余格子的名字留作朗读标签。放不下时**第一格（主页）固定不动**，其余格子在它右边横向滚动，
+  能继续滚的那一侧渐隐；当前格只滚到「完整可见、旁边露一点」为止。固定按位置不按 id（JS 列出的第一个 Space），
+  而且画在上层 —— 滑到它下面的格子不会在无障碍树里占掉它的位置。
   只在 `shell` 模式的**第一层页面**且 Space ≥ 2 时出现，键盘弹起、`page` / `hidden` 时收起；WebView 的下边距由插件一并管理。当前 Space 镜像在 `.mb-shell[data-space]`（仪器锚点）。
+- **悬浮胶囊 + 毛玻璃**（2026-10-09，用户选定方案 B）：顶部左右两颗胶囊（左：返回 / 抽屉 + 标题；右：右栏 / 标签页数 / 更多 / 头像），
+  底部一颗 Dock，胶囊之间和两侧露出页面。**谁画什么**：胶囊的底色、细边、图标、文字和触摸在原生层（Compose）；
+  **模糊和投影在页面里** —— 原生视图糊不了 WebView 的内容，所以页面在每颗胶囊正后方垫一块 `backdrop-filter` 的板（`#nc-plates > .nc-plate`）。
+  **几何以原生层为准**：每颗胶囊把自己的矩形报给插件，插件发 `layout` 事件（dp：`floating` / `top` / `bottom` / `status` / `plates[]`），
+  `src/nativeChrome.ts` 的 `applyChromeLayout` 把它写成 `<body>` 上的 `--nc-top` / `--nc-bottom` / `--nc-status` 和那几块板的位置；
+  外壳样式（`lcl/engine/singleColumn.css` 末尾）再换算成 `--mb-top` / `--mb-bottom`（除以 `--uiz`：`body` 有 1.15 的 zoom）。
+  - **让位**：顶部沿用网页版那套（`--mb-top` + `base.css`「移动端内容顶满」名单）；底部是新的 —— 默认主区视图、抽屉和宽屏并排的侧栏**整块止于 Dock 之上**
+    （失败方向是多留一条，不是被盖住）。想让内容从 Dock 底下穿过去的视图，在**最底下那个滚动器**上标 `data-under-dock`：
+    面板铺到屏幕底，让位变成该滚动器的 `padding-bottom`（原有的底部留白写进 `--under-dock-pad`）。滚动器下面还有钉底按钮 / 脚注的视图不能标
+    （会话列表是先把脚注排进滚动器才标的，见 `SidebarPane` 的 `dockHost`）。主页另有一条：壁纸铺满，内容留在 Dock 之上。
+  - **触摸**：两条原生条是透明的，只有胶囊接触摸；胶囊之间、Dock 两侧的触摸落到页面上（从两颗胶囊中间起手的右滑照样拉出列表）。
+  - **关掉毛玻璃**（设置 → 外观，`data-glass='off'`）：板不再模糊，原生层把胶囊填成实色（状态里的 `frosted`）。
+  - **只在外壳里悬浮**：进了主区（Dock 收起）WebView 底边回到导航条之上，输入区等贴底的 Web 界面不用改；键盘弹起同理。
+  - 尺寸：胶囊区 58dp（6 + 46 + 6），Dock 区 68dp（6 + 56 + 6），两侧 12dp；填充不透明度 0.5，模糊 18px、饱和 1.8。
 - **两级导航**（2026-10-04；只在画底栏的原生宿主下生效，Web / 桌面手机框 / 手机浏览器仍是抽屉）：有左栏的 Space 进来先看左栏 —— 全屏、标题 = Space 名、带底栏；
   点条目进主区（顶栏左侧变返回箭头、底栏收起）；系统返回 = 标签页内后退 → 回列表 → 在列表再按一次退到后台。冷启动、切 Space、重置布局都落在列表层。
   左栏不是「点开一项进主区」的列表时，在 Space 定义里写 `listFirst: false`（日历的待办）：主区是第一层，左栏仍是抽屉。
@@ -149,6 +166,13 @@ OUT=/absolute/out npm run emu:nativeshell   # ONLY=tabs,prompt 只跑子集
 ```
 
 负对照在 `e2e:boot`：浏览器里没有原生宿主时必须仍是 `.mb-topbar` + Web 标签页底单。
+
+悬浮胶囊那几条单独跑：`ONLY='native top bar,hidden overlay,floating chrome'`（前两条给后面的量状态栏高度；约 3 分钟）。
+其中「on every Space's first level…」会把 Dock 上每个 Space 走一遍、把能滚的都滚到底，报出还压在 Dock 后面的文字和按钮，
+并打印每个面板是默认让位还是标了 `data-under-dock` —— 新加 Space 或改左栏之后先看它。
+哪条红了，产物目录里除了 `fail-<n>.png` 还有 `fail-<n>.xml`（失败那一刻的界面树：读屏标签和矩形截图里看不出来）。
+⚠️ 界面树里按钮的矩形是**触摸范围里没被邻居占走的那部分**：胶囊里 40dp 的按钮报出来高 48dp、宽度在下一颗按钮处被切掉，
+带内容的按钮（标签页计数）的读屏标签挂在子节点上、矩形却是按钮自己的 40dp —— 找子节点按中心点判，别按「整个在里面」。
 
 ### 桌面图标（应用图标的入口别名）
 

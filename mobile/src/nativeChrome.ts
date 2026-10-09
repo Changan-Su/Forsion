@@ -18,6 +18,10 @@ import { useInbox } from '@/stores/inboxStore'
  *  On the same first-level pages it adds the account avatar (trailing end of the top bar): what to show and
  *  what a tap does come from the mounted account card (services/accountChip.ts); the engine seam is not involved.
  *  And a badge per Space (a dot on its icon): which Spaces have something going on comes from the app's stores, here.
+ *  Shell pages ask for the chrome to float over them (`floating`, 2026-10-09): two capsules at the top and a dock at
+ *  the bottom, the page running under both. Kotlin then reports where everything is (`layout`); `applyChromeLayout`
+ *  turns that into the room the shell keeps clear (`--nc-*` on <body>, see lcl/engine/singleColumn.css) and into the
+ *  frosted plates behind the capsules — the blur is the page's to draw: a native view cannot blur the WebView.
  *  If the plugin ever rejects, the host uninstalls itself so the shell falls back to its web top bar. */
 interface ChromeIcons { left?: NativeIcon; right?: NativeIcon; more?: NativeIcon; back?: NativeIcon; close?: NativeIcon }
 /** `png` = the picture as base64, cropped square and downscaled here (Kotlin only decodes and clips it to a circle);
@@ -26,14 +30,25 @@ interface ChromeAccount { label: string; icon?: NativeIcon; png?: string }
 /** The session list's three dots (sidebar2.css `.t2s-dot`), one per Space cell. `label` is for screen readers. */
 type SpaceBadgeKind = 'running' | 'attention' | 'unread'
 interface ChromeBadge { kind: SpaceBadgeKind; label: string }
+/** Where the native chrome lies over the page, in dp (see NativeChromePlugin.reportLayout). All zero / empty unless floating. */
+export interface ChromeLayout {
+  floating: boolean
+  /** How much of the page's top / bottom edge is under the chrome; `status` = the status-bar part of `top`. */
+  top: number; bottom: number; status: number
+  /** Each capsule's rectangle, relative to the page. */
+  plates: Array<{ id: string; x: number; y: number; w: number; h: number }>
+}
 interface NativeChromePlugin {
   setState(state: Omit<NativeChromeState, 'spaces'> & {
     theme: NativeSheetTheme; icons: ChromeIcons; spaces?: Array<NativeChromeSpace & { icon?: NativeIcon; png?: string; badge?: ChromeBadge }>
     account?: ChromeAccount
+    /** Shell pages only: float the chrome over the page; `frosted` = the page blurs behind the capsules. */
+    floating?: boolean; frosted?: boolean
   }): Promise<void>
   haptic(options: { kind: NativeHaptic }): Promise<void>
   clear(): Promise<void>
   addListener(event: 'action', cb: (e: { action: string; id?: string }) => void): Promise<PluginListenerHandle>
+  addListener(event: 'layout', cb: (e: ChromeLayout) => void): Promise<PluginListenerHandle>
 }
 const ACTIONS: readonly NativeChromeAction[] = ['left', 'right', 'tabs', 'more', 'back', 'close']
 const MAX_SPACES = 64 // = ChromeState.MAX_SPACES (Kotlin)
@@ -91,6 +106,49 @@ function squarePng(src: string, px: number, maxChars: number): Promise<string | 
     }
     img.src = src
   })
+}
+
+/** The page can blur what is behind an element, and the user has not switched glass off (`data-glass`, DESIGN §1). */
+export function pageFrosts(): boolean {
+  try {
+    if (document.documentElement.dataset.glass === 'off') return false
+    return CSS.supports('backdrop-filter', 'blur(1px)') || CSS.supports('-webkit-backdrop-filter', 'blur(1px)')
+  } catch { return false }
+}
+
+const dpNumber = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) && v > 0 && v < 10_000 ? v : 0)
+/** dp → a length inside the page: the shell's px are scaled by the app's zoom (`--uiz`), the screen's dp are not. */
+const dpLength = (v: number): string => `calc(${v}px / var(--uiz, 1))`
+
+/** Applies a `layout` report: the room the shell keeps clear, and one plate per capsule (blur + shadow; the capsule's
+ *  fill, hairline and content are native). Plates sit above everything the page draws — so does the native chrome —
+ *  and take no touches. Anything unusable in the report counts as "not floating": the page then reads as before. */
+export function applyChromeLayout(e: ChromeLayout | null | undefined, doc: Document = document): void {
+  const body = doc.body
+  if (!body) return
+  const floating = !!e && e.floating === true
+  const vars: Array<[string, number]> = [['--nc-top', floating ? dpNumber(e?.top) : 0], ['--nc-bottom', floating ? dpNumber(e?.bottom) : 0], ['--nc-status', floating ? dpNumber(e?.status) : 0]]
+  for (const [name, value] of vars) { if (value) body.style.setProperty(name, String(value)); else body.style.removeProperty(name) }
+  const plates = (floating && Array.isArray(e?.plates) ? e.plates : [])
+    .filter((p) => p && /^[A-Za-z]{1,24}$/.test(String(p.id)) && dpNumber(p.w) > 0 && dpNumber(p.h) > 0)
+  let box = doc.getElementById('nc-plates')
+  if (!plates.length) { box?.remove(); return }
+  if (!box) {
+    box = doc.createElement('div')
+    box.id = 'nc-plates'
+    box.className = 'nc-plates'
+    box.setAttribute('aria-hidden', 'true')
+    body.appendChild(box)
+  }
+  const wanted = new Set(plates.map((p) => p.id))
+  for (const el of Array.from(box.children) as HTMLElement[]) if (!wanted.has(el.dataset.plate ?? '')) el.remove()
+  for (const p of plates) {
+    let el = (Array.from(box.children) as HTMLElement[]).find((x) => x.dataset.plate === p.id)
+    if (!el) { el = doc.createElement('div'); el.className = 'nc-plate'; el.dataset.plate = p.id; box.appendChild(el) }
+    const x = typeof p.x === 'number' && Number.isFinite(p.x) ? p.x : 0
+    const y = typeof p.y === 'number' && Number.isFinite(p.y) ? p.y : 0
+    el.style.cssText = `left:${dpLength(x)};top:${dpLength(y)};width:${dpLength(p.w)};height:${dpLength(p.h)}`
+  }
 }
 
 let installed = false
@@ -174,6 +232,9 @@ export function installNativeChrome(): void {
         ...current, theme: readNativeTheme(), icons: current.mode === 'shell' && current.leftBack ? { ...base, left: base.back } : base,
         ...(current.mode === 'shell' && current.spaces ? { spaces: withBadges(await withIcons(current.spaces)) } : {}),
         ...(avatar ? { account: avatar } : {}),
+        // The shell's own pages run under the chrome. A page / overlay that took the bar does not: it never learned to
+        // keep clear of the capsules, so Kotlin keeps the WebView between two strips for it.
+        ...(current.mode === 'shell' ? { floating: true, frosted: pageFrosts() } : {}),
       }
       const key = JSON.stringify(payload)
       if (key === lastSent) return
@@ -184,6 +245,7 @@ export function installNativeChrome(): void {
         // Broken native side: never leave the user without a top bar.
         console.error('[tangu-mobile] native chrome failed, falling back to web top bar:', e)
         uninstall?.(); uninstall = null
+        applyChromeLayout(null) // the web bar's shell must not keep room for capsules that are not there
         void plugin.clear().catch(() => {})
       }
     })
@@ -196,8 +258,11 @@ export function installNativeChrome(): void {
     else if (e.action === 'account') { if (state?.mode === 'shell' && state.spaces) accountChip()?.activate() }
     else if ((ACTIONS as readonly string[]).includes(e.action)) dispatchNativeChromeAction(e.action as NativeChromeAction)
   }).catch(() => {})
-  // Skin / mode / custom colour changes repaint the bar (same attributes the model picker watches + inline vars).
-  new MutationObserver(send).observe(document.documentElement, { attributes: true, attributeFilter: ['data-mode', 'data-skin', 'data-bg', 'data-theme', 'style', 'class'] })
+  // After a fallback to the web bar (uninstall === null) a late report must not bring the capsules' room back.
+  void plugin.addListener('layout', (e) => { if (uninstall) applyChromeLayout(e) }).catch(() => {})
+  // Skin / mode / custom colour changes repaint the bar (same attributes the model picker watches + inline vars);
+  // switching glass off makes the capsules solid.
+  new MutationObserver(send).observe(document.documentElement, { attributes: true, attributeFilter: ['data-mode', 'data-skin', 'data-bg', 'data-theme', 'data-glass', 'style', 'class'] })
   subscribeAccountChip(send) // sign-in / sign-out / a new picture repaints the avatar
   // Badges: the stores change far more often than the answer does (every streamed token touches useApp) → re-send only
   // when the set of dots changed.

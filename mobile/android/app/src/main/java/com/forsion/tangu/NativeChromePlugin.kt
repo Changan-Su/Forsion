@@ -8,6 +8,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.webkit.WebView
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.ViewCompositionStrategy
 import androidx.coordinatorlayout.widget.CoordinatorLayout
@@ -15,6 +16,7 @@ import androidx.core.graphics.Insets
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
+import com.getcapacitor.JSArray
 import com.getcapacitor.JSObject
 import com.getcapacitor.Plugin
 import com.getcapacitor.PluginCall
@@ -24,18 +26,25 @@ import com.getcapacitor.annotation.CapacitorPlugin
 import kotlin.math.roundToInt
 
 /**
- * Native top app bar around the Capacitor WebView (`lcl/engine/nativeChrome.ts` → `mobile/src/nativeChrome.ts`).
+ * Native top chrome and Space dock around the Capacitor WebView (`lcl/engine/nativeChrome.ts` → `mobile/src/nativeChrome.ts`).
  *
- * Layout: the bar is a ComposeView added to the WebView's parent (CoordinatorLayout, gravity TOP), painted from
- * the status bar down; the WebView is laid out BELOW it via its top margin. On Android 15 Capacitor
- * (`adjustMarginsForEdgeToEdge: 'auto'`) installs a window-insets listener on the WebView that copies the
- * system-bar insets into its margins — after plugins load. We replace that listener lazily on the first
- * `setState` with one that keeps left/right/bottom identical and sets top = status bar + bar (bar visible) or
- * status bar (hidden), so nothing is padded twice and no web content sits under the status bar.
- * Bottom navigation bar (Spaces): a second ComposeView at gravity BOTTOM, painted down to the screen edge behind
- * the system navigation inset; the WebView ends above it via its bottom margin. Shown in shell mode with two or
- * more Spaces, and never while the keyboard is up (it would sit on top of the keyboard and eat the composer's room).
- * Actions are emitted as `action` events; JS owns all state. A page reload removes the bar (the next page
+ * Layout: the top chrome is a ComposeView added to the WebView's parent (CoordinatorLayout, gravity TOP), reaching
+ * from the screen's top edge down past the status bar; the dock (Spaces) is a second one at gravity BOTTOM, reaching
+ * down to the screen edge behind the system navigation inset. It is shown in shell mode with two or more Spaces, and
+ * never while the keyboard is up (it would sit on top of the keyboard and eat the composer's room).
+ *
+ * Two arrangements (2026-10-09):
+ *  - floating — shell pages that ask for it (`floating`): the WebView runs under both (top margin 0; bottom margin 0
+ *    while the dock shows, the navigation inset otherwise), the views are see-through around their capsules, and the
+ *    page is told where everything is (`layout` event, in dp: how much to keep clear at the top / bottom, and each
+ *    capsule's rectangle, where it draws the blur a native view cannot). Touches that miss a capsule fall through to
+ *    the WebView: a ComposeView only takes what one of its pointer inputs was hit by.
+ *  - strips — pages (settings, market), covering overlays, and shells that did not ask: the WebView is laid out
+ *    between the two, which paint their strip. Nothing in such a page has to know about the capsules.
+ * On Android 15 Capacitor (`adjustMarginsForEdgeToEdge: 'auto'`) installs a window-insets listener on the WebView that
+ * copies the system-bar insets into its margins — after plugins load. We replace that listener lazily on the first
+ * `setState` with one that sets the margins described above, so nothing is padded twice.
+ * Actions are emitted as `action` events; JS owns all state. A page reload removes the chrome (the next page
  * pushes state again if it has a shell).
  */
 @CapacitorPlugin(name = "NativeChrome")
@@ -49,6 +58,10 @@ class NativeChromePlugin : Plugin() {
     private var observingPages = false
     private var insetsHooked = false
     private var adjustsMargins = false
+    /** Where the capsules are (window px), as their composables report it. Sent on with the next `layout` event. */
+    private val plates = LinkedHashMap<String, Rect>()
+    private var layoutPosted = false
+    private var lastLayout = ""
     private val pageListener = object : WebViewListener() {
         override fun onPageStarted(webView: WebView) { activity.runOnUiThread { teardown() } }
     }
@@ -126,7 +139,7 @@ class NativeChromePlugin : Plugin() {
             view.setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnDetachedFromWindow)
             view.setContent {
                 val current = state.value
-                if (current != null && current.visible) NativeChromeBar(current, insets.value) { action -> emit(action) }
+                if (current != null && current.visible) NativeChromeBar(current, insets.value, ::onPlate) { action -> emit(action) }
             }
             val params = CoordinatorLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0)
             params.gravity = Gravity.TOP
@@ -139,7 +152,7 @@ class NativeChromePlugin : Plugin() {
             view.setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnDetachedFromWindow)
             view.setContent {
                 val current = state.value
-                if (current != null && current.spaceBar) NativeSpaceBar(current, insets.value) { id, long -> emitSpace(id, long) }
+                if (current != null && current.spaceBar) NativeSpaceBar(current, insets.value, ::onPlate) { id, long -> emitSpace(id, long) }
             }
             // Own listener (the WebView's is only hooked where Capacitor adjusts margins): keyboard up → bar away,
             // and — edge-to-edge only, see layout() — the WebView ends at the keyboard's top edge.
@@ -168,17 +181,30 @@ class NativeChromePlugin : Plugin() {
     private fun barPx(): Int = (NATIVE_CHROME_HEIGHT.value * activity.resources.displayMetrics.density).roundToInt()
     private fun spaceBarPx(): Int = (NATIVE_SPACE_BAR_HEIGHT.value * activity.resources.displayMetrics.density).roundToInt()
 
+    private fun barVisible() = bar != null && state.value?.visible == true
+    private fun spacesVisible() = spaceBar != null && state.value?.spaceBar == true && !imeVisible
+    /** The page runs under the chrome (see the class comment). Only a shell state can carry `floating`. */
+    private fun floating() = barVisible() && state.value?.floating == true
+
     /** WebView margins + bar height. Deterministic (no measuring) so there is no layout feedback loop. */
     private fun layout() {
         val webView = bridge.webView ?: return
         val i = insets.value
-        val visible = bar != null && state.value?.visible == true
-        val top = i.top + if (visible) barPx() else 0
-        val spacesVisible = spaceBar != null && state.value?.spaceBar == true && !imeVisible
+        val visible = barVisible()
+        val floating = floating()
+        val top = if (floating) 0 else i.top + if (visible) barPx() else 0
+        val spacesVisible = spacesVisible()
         // Edge-to-edge (Android 15+, where we own the margins): the window is no longer resized for the keyboard and
         // Capacitor's own handler ignores it too, so the page would keep its full height with the composer underneath
         // the keyboard. Elsewhere the system still resizes the window (adjustResize) — adding the inset would pad twice.
-        val bottom = if (imeVisible && adjustsMargins) maxOf(i.bottom, imeBottom) else i.bottom + if (spacesVisible) spaceBarPx() else 0
+        // Floating: the page reaches the screen's bottom edge only where the dock is (a first-level page keeps its
+        // content clear of it anyway); one level down it ends at the navigation inset as before, so nothing that sits
+        // at the bottom of a detail page (the composer, an editor's toolbar) has to learn about the gesture bar.
+        val bottom = when {
+            imeVisible && adjustsMargins -> maxOf(i.bottom, imeBottom)
+            floating -> if (spacesVisible) 0 else i.bottom
+            else -> i.bottom + if (spacesVisible) spaceBarPx() else 0
+        }
         (webView.layoutParams as? ViewGroup.MarginLayoutParams)?.let { mlp ->
             if (mlp.leftMargin != i.left || mlp.topMargin != top || mlp.rightMargin != i.right || mlp.bottomMargin != bottom) {
                 mlp.setMargins(i.left, top, i.right, bottom)
@@ -199,6 +225,53 @@ class NativeChromePlugin : Plugin() {
                 view.layoutParams = view.layoutParams.apply { this.height = height }
             }
         }
+        scheduleLayoutReport()
+    }
+
+    private fun onPlate(id: String, bounds: Rect?) {
+        if (plates[id] == bounds) return
+        if (bounds == null) plates.remove(id) else plates[id] = bounds
+        scheduleLayoutReport()
+    }
+
+    /** One report per frame at most: a state change moves several capsules and the margins together. */
+    private fun scheduleLayoutReport() {
+        if (layoutPosted) return
+        val webView = bridge.webView ?: return
+        layoutPosted = true
+        webView.post { layoutPosted = false; reportLayout() }
+    }
+
+    /**
+     * Tells the page where the chrome is, in dp (= CSS px at the WebView's own scale; the page divides by its zoom):
+     * `top` / `bottom` = how much of its own top / bottom edge lies under the chrome, `status` = the status-bar part of
+     * `top`, `plates` = each capsule's rectangle relative to the WebView. Everything is zero / empty unless floating.
+     */
+    private fun reportLayout() {
+        val webView = bridge.webView ?: return
+        val floating = floating()
+        val density = activity.resources.displayMetrics.density
+        val i = insets.value
+        val origin = IntArray(2).also { webView.getLocationInWindow(it) }
+        fun dp(px: Float) = Math.round(px / density * 100f) / 100.0
+        val data = JSObject()
+        data.put("floating", floating)
+        data.put("status", if (floating) dp(i.top.toFloat()) else 0.0)
+        data.put("top", if (floating) dp(i.top.toFloat()) + NATIVE_CHROME_HEIGHT.value else 0.0)
+        data.put("bottom", if (floating && spacesVisible()) dp(i.bottom.toFloat()) + NATIVE_SPACE_BAR_HEIGHT.value else 0.0)
+        val list = JSArray()
+        if (floating) for ((id, r) in plates) {
+            // the dock's plate outlives the dock while the keyboard is up (the view is only hidden, not disposed)
+            if (id == "dock" && !spacesVisible()) continue
+            list.put(JSObject().apply {
+                put("id", id); put("x", dp(r.left - origin[0])); put("y", dp(r.top - origin[1])); put("w", dp(r.width)); put("h", dp(r.height))
+            })
+        }
+        data.put("plates", list)
+        val key = data.toString()
+        if (key == lastLayout) return
+        lastLayout = key
+        notifyListeners("layout", data, true)
     }
 
     private fun emit(action: String) {
@@ -216,6 +289,8 @@ class NativeChromePlugin : Plugin() {
         bar = null
         spaceBar?.let { view -> (view.parent as? ViewGroup)?.removeView(view); view.disposeComposition() }
         spaceBar = null
+        plates.clear()
+        lastLayout = "" // the next page starts from nothing: whatever is reported next must reach it, also when it equals the last report
         layout()
     }
 

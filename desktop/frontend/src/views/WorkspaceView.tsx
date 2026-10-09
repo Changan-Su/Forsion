@@ -349,7 +349,7 @@ export function PluginListBody({ src }: { src: ListSourceContribution }) {
         {activeGroup && <button type="button" className="t2sw-plug-reset" title={t('wsview.clearFilter')} aria-label={t('wsview.clearFilter')} onClick={() => setGroup(null)}><X size={12} /></button>}
         <span className="t2sw-plug-total" aria-live="polite">{t('wsview.resultCount', { count: items.length })}</span>
       </div>}
-      <div ref={listRef} className={`t2sw-plug-list${dropKey === 'list' ? ' amx-drop-into' : ''}`}
+      <div ref={listRef} className={`t2sw-plug-list${dropKey === 'list' ? ' amx-drop-into' : ''}`} data-under-dock=""
         {...dropProps('list', { group: activeGroup?.key })}
         onKeyDown={(event) => {
           if (!(event.target instanceof HTMLElement) || !event.target.matches('.t2s-srow')) return

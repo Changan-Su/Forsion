@@ -25,7 +25,7 @@ import { setChatRefDrag } from './chatDragRef'
 import { isOrbitPinned, orderOrbitEntries, type OrbitPinTimes } from './orbitPins'
 import { displaySessionTitle, workspaceGroupLabel } from '../../sessionTitle'
 import './sidebar2.css'
-import { OverlayAt, nativeSheetPresenter, presentNativePrompt, useNativeSheetMenu, type SheetMenuItem } from '@lcl/engine'
+import { OverlayAt, nativeSheetPresenter, presentNativePrompt, useNativeChromeSpaces, useNativeSheetMenu, type SheetMenuItem } from '@lcl/engine'
 import { CtxMenuButtons } from '../../components/CtxMenuButtons'
 import { AttentionDot } from './AttentionDot'
 import { homeTarget } from '../../services/engine/targets'
@@ -488,10 +488,32 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
     </SidebarRow>
   )
 
+  // 「添加本地工作区」+「已归档」常驻侧栏底部(sticky footer),不随会话列表滚走。
+  // 「添加本地工作区」是 Work 的事:Chat 模式(平铺)不露出,列表里也没有其它项目。
+  // 宿主在屏幕底部浮着一条 Dock 时(Android 原生外壳)这一块改放在列表末尾、跟着滚:钉在底部的话它要么被 Dock 盖住,
+  // 要么把列表挡在 Dock 之上,列表就没法从 Dock 底下穿过去。
+  const dockHost = useNativeChromeSpaces()
+  const foot = ((window.tangu?.pickDirectory && !p.flat) || p.archivedSessions.length > 0) && (
+    <div className="t2s-foot">
+      {window.tangu?.pickDirectory && !p.flat && <button className="t2s-add-ws" onClick={p.onAddWorkspace}><FolderPlus size={14} /> {t('sidebar.addLocalWorkspace')}</button>}
+      {p.archivedSessions.length > 0 && (
+        <>
+          <button className="t2s-srow t2s-archived-toggle" onClick={() => setShowArchived(!showArchived)}>
+            <span className="t2s-chev"><Archive size={13} /></span>
+            <span className="t2s-srow-title t2s-faint">{t('sidebar.archived')}</span>
+            <span className="t2s-count">{p.archivedSessions.length}</span>
+          </button>
+          {showArchived && p.archivedSessions.map(renderItem)}
+        </>
+      )}
+    </div>
+  )
+
   return (
     <aside className="t2s-side" ref={rootRef}>
       <div
         className="t2s-scroll"
+        data-under-dock={dockHost ? '' : undefined}
         // 拖组时整列表放行 drop:落在组间外边距 / 列表空白处也提交到当前落点,不再「松手什么都没发生」。
         onDragOver={(e) => { if (dragKey) { e.preventDefault(); e.dataTransfer.dropEffect = 'move' } }}
         onDrop={(e) => { if (dragKey && dragOverKey) { e.preventDefault(); dropWorkspace(dragOverKey) } }}
@@ -617,25 +639,10 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
               )
         })}
         {p.deviceSections}
+        {dockHost && foot}
       </div>
 
-      {/* 「添加本地工作区」+「已归档」常驻侧栏底部(sticky footer),不随会话列表滚走。 */}
-      {/* 「添加本地工作区」是 Work 的事:Chat 模式(平铺)不露出,列表里也没有其它项目。 */}
-      {((window.tangu?.pickDirectory && !p.flat) || p.archivedSessions.length > 0) && (
-        <div className="t2s-foot">
-          {window.tangu?.pickDirectory && !p.flat && <button className="t2s-add-ws" onClick={p.onAddWorkspace}><FolderPlus size={14} /> {t('sidebar.addLocalWorkspace')}</button>}
-          {p.archivedSessions.length > 0 && (
-            <>
-              <button className="t2s-srow t2s-archived-toggle" onClick={() => setShowArchived(!showArchived)}>
-                <span className="t2s-chev"><Archive size={13} /></span>
-                <span className="t2s-srow-title t2s-faint">{t('sidebar.archived')}</span>
-                <span className="t2s-count">{p.archivedSessions.length}</span>
-              </button>
-              {showArchived && p.archivedSessions.map(renderItem)}
-            </>
-          )}
-        </div>
-      )}
+      {!dockHost && foot}
 
       {/* 个人中心卡片 + 设置已移到左侧 ribbon 底部(见 bootstrapEngine rb-settings / rb-account)。 */}
 
