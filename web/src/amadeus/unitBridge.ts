@@ -193,7 +193,7 @@ export async function createUnitAmadeusBridge(cfg: UnitBridgeCfg): Promise<Amade
   const assetEndpoint = `${new URL('vault/asset', cfg.base).href}?`
   setAssetUrlBuilder(
     (ref) => assetUrl(ref),
-    (url) => (url.startsWith(assetEndpoint) ? new URLSearchParams(url.slice(assetEndpoint.length).split('#')[0]).get('ref') || null : null),
+    (url) => (url.startsWith(assetEndpoint) && !url.includes('#') ? new URLSearchParams(url.slice(assetEndpoint.length)).get('ref') || null : null),
   )
 
   // what 是 thunk:抛出那一刻才按当前界面语言取词(模块装配时求值会定格在装配那一刻的语言)。

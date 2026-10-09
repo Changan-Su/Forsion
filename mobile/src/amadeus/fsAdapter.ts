@@ -84,7 +84,7 @@ export const fs = {
     return { isDirectory: () => st.type === 'directory', isFile: () => st.type === 'file' }
   },
   /** 虚拟绝对路径 → WebView 里能直接加载的地址(无尾斜杠)。安卓:getUri 给应用私有目录下的 file:// 地址,
-   *  convertFileSrc 换成 `https://localhost/_capacitor_file_/…` —— Capacitor 自带的本地文件服务,与页面同源、支持 Range。
+   *  convertFileSrc 换成 `https://localhost/_capacitor_file_/…` —— Capacitor 自带的本地文件服务,与页面同源(原生层的实测行为见 npm run emu:localasset)。
    *  浏览器里(开发 / 台架)文件系统是 IndexedDB,拿到的只是 `/DATA/vault` 这样一个路径,没有人服务它。 */
   async webUrl(abs: string): Promise<string> {
     const r = await Filesystem.getUri({ path: cap(abs), directory: DIR })

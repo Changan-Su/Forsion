@@ -70,18 +70,25 @@ export function toAssetUrl(vaultRelPath: string): string {
   return assetUrlBuilder(vaultRelPath).replace(/[()]/g, (c) => '%' + c.charCodeAt(0).toString(16).toUpperCase())
 }
 
+/** 只认默认协议的那一半(不问装上的解析器)。
+ *  ⚠️ 「据此决定删不删文件」的调用方用这个(unified/assetDelete.ts),别用 fromAssetUrl:独占判定(主进程
+ *  exclusiveAssets)只看得见相对路径的引用,看不见别的笔记里被旧缺陷写坏的 http 资源地址 —— 设备网页版上一旦借
+ *  解析器把图片认回库内路径,「连文件一起删」的询问就会出现,而那张图可能正被一篇存量坏笔记引用着(评审 2026-10-09)。 */
+export function fromDefaultAssetUrl(url: string): string | null {
+  const prefix = `${ASSET_SCHEME}://v/`
+  if (!url.startsWith(prefix)) return null
+  try {
+    return decodeURIComponent(url.slice(prefix.length))
+  } catch {
+    return null
+  }
+}
+
 /** 显示地址 → 库内相对路径;不是资源地址 = null。
  *  先认默认协议(桌面逐字不变;换了构建器的宿主上残留的默认协议地址也照样还原),再问装上的解析器。
  *  编辑器序列化时会给目标里的 `&` 加反斜杠(图片与文字同段时 remark 的转义),先去掉再问。 */
 export function fromAssetUrl(url: string): string | null {
-  const prefix = `${ASSET_SCHEME}://v/`
-  if (url.startsWith(prefix)) {
-    try {
-      return decodeURIComponent(url.slice(prefix.length))
-    } catch {
-      return null
-    }
-  }
+  if (url.startsWith(`${ASSET_SCHEME}://v/`)) return fromDefaultAssetUrl(url)
   if (!assetUrlParser) return null
   try {
     return assetUrlParser(url.replace(/\\&/g, '&')) || null
@@ -135,7 +142,10 @@ export function toDisplayMarkdown(md: string, pageDir: string): string {
   return tabsToEntities(out)
 }
 
-/** Display markdown (protocol URLs) → stored (page-relative) markdown(行首缩进实体 → 字面制表符)。 */
+/** Display markdown (protocol URLs) → stored (page-relative) markdown(行首缩进实体 → 字面制表符)。
+ *  全文替换、不跳代码(见 toDisplayMarkdown 的注:这一侧是安全网)。装了解析器的宿主上因此多一处已知代价:
+ *  代码示例里字面写着**本库**资源地址的 `![](…)` 也会被换成相对路径 —— 宁可如此,也不让带令牌的地址因为两侧对
+ *  「哪里是代码」判断不一致而漏到盘上。 */
 export function toStoredMarkdown(md: string, pageDir: string): string {
   return entitiesToTabs(md.replace(IMG_RE, (full, pre: string, url: string, rest: string) => {
     const vaultRel = fromAssetUrl(url.trim())

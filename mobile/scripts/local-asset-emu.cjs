@@ -8,7 +8,8 @@
  * 台架是自己回填字节的。本探针补的是另一半:**安卓原生那一层真的照这个地址把文件送出来** ——
  *   · getUri + convertFileSrc 给出的库根是什么形态(与页面同源、无尾斜杠);
  *   · 名字里带空格 / 括号 / 中文 / 百分号的文件,按段编码之后取得到、字节一致;
- *   · 作为 <img> 加载得出来,不触发内容安全策略违规;带 Range 的请求回 206(音视频拖动靠它);
+ *   · 作为 <img> 加载得出来,不触发内容安全策略违规;
+ *   · 带 Range 的请求怎么回(音视频拖动靠它):状态码、正文是不是从要的起点开始、有没有按终点截断;
  *   · 地址里原样带着 `..`(指到页目录之外的引用,localAssets 逐字保留)时取到的是折叠之后的那个文件。
  * 用的全是 Capacitor 自带的接口,与装的是哪一版我们的页面代码无关 —— 所以不必为它重新出包。
  * ⚠️ 探的是原生服务层,不是整条链路:真 App 里「打开一篇带图的本地笔记」没有被点过。
@@ -41,7 +42,11 @@ const PROBE = `(async () => {
     // 与 localAssetUrl 同一种编码;括号由共享接缝的出口(toAssetUrl)补编
     const enc = (p) => p.split('/').map(encodeURIComponent).join('/').replace(/[()]/g, (c) => '%' + c.charCodeAt(0).toString(16).toUpperCase())
     const url = base + '/' + enc(rel)
-    const get = (u, headers) => fetch(u, { headers }).then(async (r) => ({ status: r.status, type: r.headers.get('content-type'), bytes: (await r.arrayBuffer()).byteLength }), (e) => ({ error: String(e) }))
+    const get = (u, headers) => fetch(u, { headers }).then(async (r) => {
+      const body = new Uint8Array(await r.arrayBuffer())
+      return { status: r.status, type: r.headers.get('content-type'), range: r.headers.get('content-range'), bytes: body.length, head: [...body.slice(0, 4)] }
+    }, (e) => ({ error: String(e) }))
+    const raw = Uint8Array.from(atob(${JSON.stringify(PNG_B64)}), (c) => c.charCodeAt(0))
     const img = await new Promise((res) => {
       const i = new Image()
       i.onload = () => res({ loaded: true, w: i.naturalWidth })
@@ -52,6 +57,8 @@ const PROBE = `(async () => {
       origin: location.origin, base, url, img,
       full: await get(url),
       range: await get(url, { Range: 'bytes=0-9' }),
+      mid: await get(url, { Range: 'bytes=40-49' }),
+      at40: [...raw.slice(40, 44)],
       dotdot: await get(base + '/' + enc(run + '/别处/../子夹/e2e probe (1) 笔记 100%.png')),
       outside: await get(base + '/../' + run + '.txt'),
       csp,
@@ -87,7 +94,12 @@ async function main() {
       assert.deepEqual(r.img, { loaded: true, w: 2 })
       assert.deepEqual(r.csp, [])
     })
-    check('Range 请求回 206、只回要的 10 字节', () => assert.deepEqual([r.range.status, r.range.bytes], [206, 10], JSON.stringify(r.range)))
+    // Range:音视频拖动靠它。量三件事 —— 状态码、正文是不是从要的起点开始、有没有按终点截断。只有前两件算通过 / 不通过。
+    check('带 Range 的请求回 206,正文从要的起点开始(音视频拖动的前提)', () => {
+      assert.equal(r.range.status, 206, JSON.stringify(r.range))
+      assert.deepEqual([r.mid.status, r.mid.head], [206, r.at40], `bytes=40-49 → ${JSON.stringify(r.mid)},文件第 40 字节起是 ${JSON.stringify(r.at40)}`)
+    })
+    console.log(`INFO  bytes=0-9 → ${r.range.bytes} 字节(Content-Range: ${r.range.range});bytes=40-49 → ${r.mid.bytes} 字节(Content-Range: ${r.mid.range})${r.range.bytes === 10 ? '' : ' —— 正文没有按终点截断'}`)
     check('地址里原样带着 `..` 时取到折叠之后的那个文件', () => assert.deepEqual([r.dotdot.status, r.dotdot.bytes], [200, 78], JSON.stringify(r.dotdot)))
     console.log(`INFO  库之外的应用私有文件按路径${r.outside.status === 200 ? '取得到(这个文件服务没有库的边界 —— 见头注)' : `取不到:${JSON.stringify(r.outside)}`}`)
   } finally {

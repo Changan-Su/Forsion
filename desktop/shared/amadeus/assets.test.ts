@@ -8,7 +8,7 @@
  *  ⚠️ 方向很重要:真实链路是 display(协议 URL)→ stored,不是「盘上裸空格 → 盘上」——
  *  裸空格那种压根匹配不上 IMG_RE(见最后一格),那是**存量受损文件**,只能靠修复扫描,别指望这里自愈。 */
 import { afterEach, describe, it, expect } from 'vitest'
-import { toDisplayMarkdown, toStoredMarkdown, assetRefs, toAssetUrl, setAssetUrlBuilder, resetAssetUrlBuilder } from './assets'
+import { toDisplayMarkdown, toStoredMarkdown, assetRefs, toAssetUrl, setAssetUrlBuilder, resetAssetUrlBuilder, fromAssetUrl, fromDefaultAssetUrl } from './assets'
 
 /** 编辑器序列化出来的那一行(PM 的 image 节点 src 就是协议 URL)。 */
 const disp = (ref: string): string => `![](${toAssetUrl(ref)})`
@@ -123,6 +123,18 @@ describe('代码里的图片语法逐字(I-15)', () => {
  *  现在是成对的「构建 + 解析」。真云桥那一对的往返在 frontend/src/services/cloudAssetsRoundtrip.test.ts;
  *  整条链(真编辑器、真存盘)在 mobile 的 `npm run e2e:localasset`。
  *  负对照(实跑过):fromAssetUrl 里去掉「问装上的解析器」那一段 → 本组前两格红。 */
+describe('fromDefaultAssetUrl:只认默认协议,不问装上的解析器(删文件那条路用它)', () => {
+  afterEach(() => resetAssetUrlBuilder())
+  it('装了解析器:解析器认得的地址 fromAssetUrl 认、fromDefaultAssetUrl 不认;默认协议两边都认', () => {
+    setAssetUrlBuilder((ref) => `https://h.example/f?ref=${encodeURIComponent(ref)}`, (url) => new URLSearchParams(url.split('?')[1] ?? '').get('ref'))
+    const url = 'https://h.example/f?ref=dir%2Fa.png'
+    expect(fromAssetUrl(url)).toBe('dir/a.png')
+    expect(fromDefaultAssetUrl(url)).toBeNull()
+    expect(fromDefaultAssetUrl('amadeus-asset://v/dir%2Fa.png')).toBe('dir/a.png')
+    expect(fromDefaultAssetUrl('amadeus-asset://v/%ZZ')).toBeNull()
+  })
+})
+
 describe('换了显示地址的构建器之后的往返', () => {
   const BASE = 'https://host.example/files?ref='
   const install = (): void => setAssetUrlBuilder(

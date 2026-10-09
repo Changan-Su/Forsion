@@ -40,6 +40,9 @@ describe('cloud asset URLs: display ↔ stored', () => {
       `https://api.example/api/xamadeus/vaults/${VID}/assetx?ref=z.png`,
       `https://api.example/api/amadeus/vaults/${VID}/asset?at=T`,
       `https://api.example/api/amadeus/vaults/${VID}/asset`,
+      // 带片段的一律不认(构建时从不带):外链的片段里写着本库端点的字样,不能被骗过去(评审 2026-10-09)
+      `https://cdn.example/logo.png#/amadeus/vaults/${VID}/asset?ref=dir%2Fwrong.png`,
+      `https://api.example/api/amadeus/vaults/${VID}/asset?ref=dir%2Fa.png#frag`,
     ]
     for (const u of keep) expect(parseAssetUrl(u), u).toBeNull()
     const md = keep.map((u) => `![](${u})`).join('\n') + '\n'

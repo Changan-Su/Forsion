@@ -61,9 +61,12 @@ describe('mobile local vault asset URLs', () => {
       'https://example.com/vault/a.png',
       `${BASE}/a%ZZ.png`,
       BASE,
+      // 带查询串 / 片段的不是我们构建的(名字里的 ? # 都编码了):认了会把 `a.png?v=1` 当文件名写回去(评审 2026-10-09)
+      `${BASE}/dir/a.png?v=1`,
+      `${BASE}/dir/a.png#preview`,
     ]) expect(localAssetRef(BASE, u), u).toBeNull()
     installLocalAssetUrls(() => BASE)
-    const ext = '![](https://example.com/a.png)\n'
+    const ext = `![](https://example.com/a.png)\n![](${BASE}/dir/a.png?v=1)\n`
     expect(toStoredMarkdown(ext, 'dir')).toBe(ext)
   })
 
