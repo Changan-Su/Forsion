@@ -134,7 +134,7 @@ async function main() {
     check('model action sends exactly one visible contextual prompt', stub.seen.runs.length === 2 && /当前选择/.test(stub.seen.runs[1].message))
     // Replay multimedia + linked research as persisted events, including a historical Sketch.
     const legacy = { id: 'legacy', role: 'model', content: '', timestamp: Date.now(), tool_calls: [{ id: 'sk-old', type: 'function', function: { name: 'sketch', arguments: JSON.stringify({ html: '<p>Legacy Sketch still renders</p>', title: 'Historical Sketch' }) } }], tool_results: [{ tool_call_id: 'sk-old', name: 'sketch', content: 'Sketch rendered.' }] }
-    const records = [record('a-r1', 'ui1', fixtures.dinner), record('media', 'ui-media', fixtures.media), record('pick', 'ui-pick', fixtures.pick), record('sources', 'ui-sources', fixtures.research), record('edge', 'ui-edge', fixtures.edge), legacy]
+    const records = [record('a-r1', 'ui1', fixtures.dinner), record('media', 'ui-media', fixtures.media), record('pick', 'ui-pick', fixtures.pick), record('sources', 'ui-sources', fixtures.research), record('edge', 'ui-edge', fixtures.edge), record('repeat', 'ui-repeat', fixtures.repeat), legacy]
     if (evidence) for (const name of ['intelligentplan', 'intelligentmedia']) {
       const payload = JSON.parse(fs.readFileSync(path.join(evidence, `${name}-evidence.json`), 'utf8'))
       payload.documents.forEach((doc, i) => records.push(record(`${name}-${i}`, `${name}-${i}`, doc)))
@@ -177,6 +177,12 @@ async function main() {
     await reveal(win, pick); await win.screenshot({ path: path.join(OUT, 'pick-light.png') })
     await pick.getByRole('radio', { name: /岸边留白/ }).focus(); await win.keyboard.press('ArrowLeft'); await win.waitForTimeout(400)
     await win.screenshot({ path: path.join(OUT, 'pick-focus-light.png') })
+    // What GPT-6 Luna really wrote on 2026-10-09: the option pictures again in a gallery and in a comparison.
+    const repeat = win.locator('.intelligent-ui[data-document-id="cover-photo-selection"]')
+    await win.evaluate(() => document.activeElement?.blur?.()); await reveal(win, repeat)
+    check('a picture shown as an option is not drawn again in a gallery or comparison', await repeat.locator('.iui-pick-card').count() === 3 && await repeat.locator('img').count() === 3
+      && await repeat.locator('.iui-block-gallery').count() === 0 && await repeat.locator('.iui-comparison article').count() === 3)
+    await win.screenshot({ path: path.join(OUT, 'repeat-light.png') })
     // Component widths within the real chat container, not a separate prototype page.
     for (const width of [320, 375, 768]) {
       await media.evaluate((el, w) => { el.style.width = `${w}px`; el.style.maxWidth = '100%' }, width)

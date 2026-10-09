@@ -541,5 +541,62 @@
       { "id": "choose", "kind": "controls", "inputIds": ["tier"] },
       { "id": "refs", "kind": "sources", "resourceIds": ["long-host"] }
     ]
+  },
+  "repeat": {
+    "version": 1,
+    "id": "cover-photo-selection",
+    "title": "摄影封面选择",
+    "inputs": [
+      {
+        "id": "cover",
+        "label": "选择一张作为封面",
+        "kind": "choice",
+        "options": [
+          { "id": "image-1", "label": "1 — 栈桥正中", "description": "栈桥从画面下方向中央远处收束，近似对称的强引导线；天空与水面倒影形成上下呼应，视觉焦点集中。", "imageId": "photo-1" },
+          { "id": "image-4", "label": "4 — 栈桥横向延伸", "description": "栈桥以斜向横贯画面，栏柱重复形成节奏；水平地平线与橙色暮光占据上部，画面更开阔、动势更强。", "imageId": "photo-4" },
+          { "id": "image-13", "label": "13 — 湖岸与前景芦苇", "description": "湖面、远岸与山体横向分层；右下芦苇构成近景框景，暖色天空倒映水面，焦点较分散、层次更自然。", "imageId": "photo-13" }
+        ],
+        "initial": "image-1"
+      }
+    ],
+    "resources": [
+      {
+        "id": "photo-1",
+        "url": "https://cdn.jsdelivr.net/gh/sachinchoolur/lightGallery@9813e97837fddca82e4734bcbf4b77b0cd227772/site/static/images/demo/1-480.jpg",
+        "kind": "image",
+        "alt": "湖面日落中，一条木栈桥从前景中央向远处延伸，水面映照天空。",
+        "sourceId": "lightgallery"
+      },
+      {
+        "id": "photo-4",
+        "url": "https://cdn.jsdelivr.net/gh/sachinchoolur/lightGallery@9813e97837fddca82e4734bcbf4b77b0cd227772/site/static/images/demo/4-480.jpg",
+        "kind": "image",
+        "alt": "暮色湖面上的栈桥斜向横贯画面，远处是山岸与橙色天空。",
+        "sourceId": "lightgallery"
+      },
+      {
+        "id": "photo-13",
+        "url": "https://cdn.jsdelivr.net/gh/sachinchoolur/lightGallery@9813e97837fddca82e4734bcbf4b77b0cd227772/site/static/images/demo/13-480.jpg",
+        "kind": "image",
+        "alt": "日落湖岸、远山及倒影，右下方有芦苇前景。",
+        "sourceId": "lightgallery"
+      },
+      { "id": "lightgallery", "url": "https://github.com/sachinchoolur/lightGallery", "kind": "source", "title": "lightGallery GitHub 仓库", "description": "图片来源：lightGallery 项目仓库中的 demo 图片。" }
+    ],
+    "blocks": [
+      { "id": "pick", "kind": "controls", "inputIds": ["cover"] },
+      { "id": "photo-options", "title": "三张候选封面（点击展开原图）", "kind": "gallery", "resourceIds": ["photo-1", "photo-4", "photo-13"] },
+      {
+        "id": "composition",
+        "title": "构图差异",
+        "kind": "comparison",
+        "items": [
+          { "id": "image-1", "title": "1 — 中心透视", "description": "栈桥居中并向远处汇聚，强引导线与倒影形成近对称结构，主体感最集中。", "facts": ["近似对称", "纵深最强", "焦点集中"], "imageId": "photo-1" },
+          { "id": "image-4", "title": "4 — 斜向节奏", "description": "栈桥斜向穿过画面，栏柱重复带来节奏；横向暮色与岸线强调开阔感。", "facts": ["斜向引导", "重复节奏", "空间开阔"], "imageId": "photo-4" },
+          { "id": "image-13", "title": "13 — 分层与前景", "description": "水面、岸线、山体横向分层，右下芦苇提供近景层次；视线更松散。", "facts": ["横向分层", "前景芦苇", "氛围自然"], "imageId": "photo-13" }
+        ]
+      },
+      { "id": "origin", "title": "图片来源", "kind": "sources", "resourceIds": ["lightgallery"] }
+    ]
   }
 }

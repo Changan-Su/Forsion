@@ -124,7 +124,8 @@ async function main() {
     for (const label of ['跳过引导', 'Skip']) { const b = win.getByText(label, { exact: true }); if (await b.count()) { await b.first().click(); break } }
     await win.waitForSelector('.dv-groupview:visible'); await enterSpace(win, 'tangu')
     async function open(c) {
-      if (!(await win.locator('.t2s-srow').first().isVisible().catch(() => false))) await win.locator('.dv-edge-left').click()
+      // The click waits for the row by itself. Probing visibility first loses a race right after a reload,
+      // and the `.dv-edge-left` strip the old probe fell back to no longer exists in the layout engine.
       await win.locator(`.t2s-srow[data-sel-id="${c.sid}"]`).first().click()
       await win.locator('.t2c-ta').first().waitFor()
     }
@@ -166,6 +167,8 @@ async function main() {
         check('原生文档完整呈现', await ui.getAttribute('data-complete') === 'true')
         await screenshot(c, 'initial', ui)
         const before = requests.length
+        // What the model looked up is judged after everything else: a model that skipped it must not hide how the answer rendered.
+        let last = () => {}
         if (c.key === 'user-dinner') {
           const number = ui.locator('.iui-number').first(), output = number.locator('output')
           const n0 = Number(await output.innerText()), quantities = await ui.locator('.iui-quantity').allTextContents()
@@ -225,9 +228,8 @@ async function main() {
           check('放大看图不改变选择', await ui.locator('.iui-pick-card[data-expanded]').count() === 1 && await radios.last().isChecked())
           await screenshot(c, 'expanded', ui)
           await center(cards.first()); await cards.first().getByRole('button', { name: '收起原图', exact: true }).click()
-          // Last on purpose: a model that skipped looking must not hide how the answer rendered.
           r.inspectedImageUrls = inspectionCoverage(ev)
-          check('每张候选图都有导航、截图及实际看图回执', expectedImages.every(url => r.inspectedImageUrls.includes(url)))
+          last = () => check('每张候选图都有导航、截图及实际看图回执', expectedImages.every(url => r.inspectedImageUrls.includes(url)))
         } else if (c.kind === 'compare' && c.pool) {
           check('有可以自己切换的选项', await ui.getByRole('radio').count() >= 2)
           // Pick an option that is not the current one: the model decides which option starts selected.
@@ -239,7 +241,7 @@ async function main() {
             const call = ev.calls.find(c => c.id === x.id)
             return parse(x.result)?.url || parse(call?.arguments)?.url
           }).filter(Boolean)
-          check('实际取得两家官方网页正文', r.retrievedUrls.some(x => official(x, 'obsidian.md')) && r.retrievedUrls.some(x => official(x, 'notion.so') || official(x, 'notion.com')))
+          last = () => check('实际取得两家官方网页正文', r.retrievedUrls.some(x => official(x, 'obsidian.md')) && r.retrievedUrls.some(x => official(x, 'notion.so') || official(x, 'notion.com')))
           const sources = ui.locator('.iui-source'), links = await sources.locator('a').evaluateAll(es => es.map(a => a.href))
           check('提供两家官方来源', links.some(x => official(x, 'obsidian.md')) && links.some(x => official(x, 'notion.so') || official(x, 'notion.com')))
           await sources.locator('summary').first().click()
@@ -279,6 +281,7 @@ async function main() {
         check('新版界面：标题与正文字号、清单标题行、对比对齐', r.look.length > 0 && r.look.every(d => d.title === '17.5px' && d.prose.every(s => s === '14px') && d.oldToolbar === 0 && d.lists === d.heads && d.misaligned === 0))
         check('可用宽度无横向溢出', await win.locator('.intelligent-ui').last().evaluate(el => el.scrollWidth <= el.clientWidth + 1))
         await screenshot(c, 'interacted')
+        last()
         r.messages = (await api(`/agent/sessions/${c.sid}/messages`)).messages
         r.ok = true
       } catch (e) { r.error = String(e.stack || e); await win.screenshot({ path: path.join(shots, `${c.key}-failure.png`) }).catch(() => {}) }

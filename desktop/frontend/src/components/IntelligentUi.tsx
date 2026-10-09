@@ -112,7 +112,12 @@ function NativeDocument({ doc, complete, live, stateKey, onAsk }: { doc: UIDocum
   const resources = new Map(doc.resources.map(r => [r.id, r]))
   // Sources a visible sources block already lists; a hidden block must not strip a picture of its attribution.
   const listed = new Set(doc.blocks.flatMap(b => b.kind === 'sources' && visible(b.when, values) ? b.resourceIds : []))
-  const update = (fn: (s: UIUserState) => UIUserState): void => setState(previous => {
+  // Pictures an option row already shows. Models sometimes list them again in a gallery or a comparison; each is drawn once.
+  const optionImages = new Set(doc.blocks.flatMap(b => b.kind === 'controls' ? b.inputIds : []).flatMap(id => {
+    const input = doc.inputs.find(i => i.id === id)
+    return input?.kind === 'choice' ? input.options.flatMap(o => o.imageId ?? []) : []
+  }))
+  const update =(fn: (s: UIUserState) => UIUserState): void => setState(previous => {
     const next = fn(previous)
     if (stateKey) writeUIState(stateKey, next)
     return next
@@ -146,7 +151,7 @@ function NativeDocument({ doc, complete, live, stateKey, onAsk }: { doc: UIDocum
           </label>
         })}</div></fieldset>
       })}</div>
-      case 'gallery': return <div className="iui-gallery">{block.resourceIds.map(id => <Picture key={id} resource={resources.get(id) as Extract<UIResource, { kind: 'image' }>} sources={resources} expanded={!!state.expanded[uiExpansionKey('image', block.id, id)]} onExpand={value => expand(uiExpansionKey('image', block.id, id), value)} />)}</div>
+      case 'gallery': return <div className="iui-gallery">{block.resourceIds.filter(id => !optionImages.has(id)).map(id => <Picture key={id} resource={resources.get(id) as Extract<UIResource, { kind: 'image' }>} sources={resources} expanded={!!state.expanded[uiExpansionKey('image', block.id, id)]} onExpand={value => expand(uiExpansionKey('image', block.id, id), value)} />)}</div>
       case 'sources': return <div className="iui-sources">{block.resourceIds.map(id => {
         const r = resources.get(id) as Extract<UIResource, { kind: 'source' }>
         // The summary itself is the two-line preview; opening it only lifts the clamp.
@@ -154,7 +159,7 @@ function NativeDocument({ doc, complete, live, stateKey, onAsk }: { doc: UIDocum
       })}</div>
       case 'app-card': return complete ? <IntelligentAppCard cardId={block.cardId} query={block.query} /> : live ? <Skeleton /> : <div className="iui-status">{t('iui.incomplete')}</div>
       case 'comparison': return <div className="iui-parallel iui-comparison" data-columns={Math.min(3, block.items.length)}>{block.items.map(item => <article key={item.id}>
-        {item.imageId && <Picture resource={resources.get(item.imageId) as Extract<UIResource, { kind: 'image' }>} sources={resources} expanded={!!state.expanded[uiExpansionKey('image', block.id, item.imageId)]} onExpand={value => expand(uiExpansionKey('image', block.id, item.imageId), value)} />}
+        {item.imageId && !optionImages.has(item.imageId) && <Picture resource={resources.get(item.imageId) as Extract<UIResource, { kind: 'image' }>} sources={resources} expanded={!!state.expanded[uiExpansionKey('image', block.id, item.imageId)]} onExpand={value => expand(uiExpansionKey('image', block.id, item.imageId), value)} />}
         <strong>{item.title}</strong><p>{item.description}</p><ul>{item.facts.map((fact, i) => <li key={i}>{fact}</li>)}</ul>
       </article>)}</div>
       case 'checklist': {
@@ -186,7 +191,7 @@ function NativeDocument({ doc, complete, live, stateKey, onAsk }: { doc: UIDocum
   }
   return <section className="intelligent-ui" aria-label={doc.title} data-document-id={doc.id} data-complete={complete} data-streamed={streamed || undefined}>
     <h3 className="iui-title">{doc.title}</h3>
-    {doc.blocks.filter(b => visible(b.when, values)).map(block => <div key={block.id} className={`iui-block iui-block-${block.kind}`} data-block-id={block.id}>
+    {doc.blocks.filter(b => visible(b.when, values) && !(b.kind === 'gallery' && b.resourceIds.every(id => optionImages.has(id)))).map(block =><div key={block.id} className={`iui-block iui-block-${block.kind}`} data-block-id={block.id}>
       {block.title && !OWN_TITLE.has(block.kind) && <h4>{block.title}</h4>}{draw(block)}
     </div>)}
     {!complete && (live ? <Skeleton /> : <div className="iui-status" role="status">{t('iui.incomplete')}</div>)}
