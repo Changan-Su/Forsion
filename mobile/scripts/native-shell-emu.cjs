@@ -52,12 +52,16 @@ const API_PATTERN = process.env.API_PATTERN || '*api.forsion.net*'
 fs.mkdirSync(OUT, { recursive: true })
 for (const f of fs.readdirSync(OUT)) if (/^fail-\d+\.png$/.test(f)) fs.rmSync(path.join(OUT, f))
 
+const STARTED = Date.now()
 const checks = []
 const shots = []
 let failed = 0
 const ONLY = (process.env.ONLY || '').split(',').map((x) => x.trim()).filter(Boolean)
+// HOLD=<minutes>: no checks. The app is left in the stubbed state (fake account, sessions, market with the fixture
+// plugin) for a person to use by hand; then the device is put back as after any run. See the wait after the first reload.
+const HOLD = Number(process.env.HOLD || 0)
 async function check(name, fn) {
-  if (ONLY.length && !ONLY.some((k) => name.includes(k))) return
+  if (HOLD || (ONLY.length && !ONLY.some((k) => name.includes(k)))) return
   try {
     await fn()
     checks.push({ name, ok: true })
@@ -502,6 +506,16 @@ const tabCountText = (list) => {
     await h.pause(600)
   }
   await reload()
+  if (HOLD) {
+    // The stubs live in this process (it answers the app's requests): it has to stay. Ended by the clock or by
+    // deleting the flag file — not by a signal, so that the restore below still runs.
+    const flag = path.join(OUT, 'holding')
+    fs.writeFileSync(flag, 'delete this file to end the hold\n')
+    console.log(`holding the stubbed app for ${HOLD} min — delete ${flag} to end it sooner`)
+    for (const end = Date.now() + HOLD * 60000; Date.now() < end && fs.existsSync(flag);) await new Promise((r) => setTimeout(r, 1000))
+    fs.rmSync(flag, { force: true })
+    console.log('hold over — putting the device back')
+  }
 
   // ── WebView helpers. Mobile CSS zooms (body 1.15, drawer body 1.15): rects × cumulative zoom × dpr = device px.
   /** Tap a page element like a finger would (real touch → real user activation), once it stops moving. */
@@ -3323,5 +3337,6 @@ const tabCountText = (list) => {
   cdp.close()
   fs.writeFileSync(path.join(OUT, 'acceptance.json'), JSON.stringify({ package: PKG, checks, screenshots: shots.map((s) => path.basename(s)), stubRequests: stubLog.length, completedAt: new Date().toISOString() }, null, 2))
   console.log(`\n${checks.length - failed}/${checks.length} passed · artifacts: ${OUT}`)
+  console.log(`time: ${Math.round((Date.now() - STARTED) / 1000)}s in all — ${h.timing()}`)
   process.exitCode = failed ? 1 : 0
 })().catch((e) => { console.error(e); pluginServer.close(); process.exit(1) }) // exit: the DevTools socket would keep a failed run alive for good

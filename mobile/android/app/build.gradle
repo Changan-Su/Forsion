@@ -7,6 +7,8 @@ android {
     compileSdk rootProject.ext.compileSdkVersion
     buildFeatures { compose true; buildConfig true }
     kotlinOptions { jvmTarget = '21' }
+    // 原生栏的布局 / 读屏语义单测(NativeChromeBarLayoutTest)让 Compose 跑在 JVM 上(Robolectric),要用到应用的资源与清单。
+    testOptions { unitTests { includeAndroidResources = true } }
     defaultConfig {
         applicationId "com.forsion.tangu"
         minSdkVersion rootProject.ext.minSdkVersion
@@ -78,6 +80,11 @@ dependencies {
     // P1-K8 原生身份 / 中继的纯逻辑单测(RelayPathsTest 等):android.jar 里的 org.json 是桩(一调就抛 / 返回缺省值),
     // JVM 上要真实现。只进测试 classpath,不进 APK。⚠️ origin/feat/phone-control-t2 同一行,后合者删重复。
     testImplementation 'org.json:json:20231013'
+    // 原生栏(顶部胶囊 / 底部 Dock)的尺寸、读屏标签、滚动:不用模拟器,几秒一遍。只进测试 classpath,不进 APK
+    // (所以不加 ui-test-manifest —— 它会往 debug 包的清单里塞一个 Activity;测试里自己向 Robolectric 登记)。
+    testImplementation 'org.robolectric:robolectric:4.14.1'
+    testImplementation platform('androidx.compose:compose-bom:2024.12.01')
+    testImplementation 'androidx.compose.ui:ui-test-junit4'
     androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
     androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
     implementation project(':capacitor-cordova-android-plugins')
