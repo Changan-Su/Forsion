@@ -81,24 +81,39 @@ async function vacuumIfWorthIt(minFreedBytes: number): Promise<boolean> {
   if (Number(freelist_count) * Number(page_size) < minFreedBytes) return false;
   const live = await query<any[]>(`SELECT 1 AS live FROM agent_runs WHERE status NOT IN ${TERMINAL} LIMIT 1`);
   if (live.length) return false;
-  await query('VACUUM');
-  return true;
+  try {
+    await query('VACUUM');
+    return true;
+  } catch (e: any) {
+    // 只读脚本(remote-world / sqlite3 CLI)正开着库时 VACUUM 会 SQLITE_BUSY:删行已经成功,整理文件下次再说,别把保留期本身带停。
+    console.warn('[tangu] run events vacuum skipped:', e?.message || e);
+    return false;
+  }
 }
 
 let timer: ReturnType<typeof setInterval> | null = null;
 let kickoff: ReturnType<typeof setTimeout> | null = null;
+/** 每次 start 一代:dispose → 再 start(热重载)后,上一代还在飞的那一轮无论成败都不许碰新一代的定时器。 */
+let generation = 0;
 
-/** 启动后 30s 跑一遍,之后每 6h。持库进程专用;thin worker 的 host.query 会抛,第一遍失败即自停,只告一次。 */
+/** 启动后 30s 跑一遍,之后每 6h。持库进程专用;thin worker 的 host.query 会抛 —— 从没成功过就失败视为「这里没库」,
+ *  自停、只告一次;成功过之后的偶发失败(锁忙 / 磁盘满)只告警,下一轮照跑。 */
 export function startRunEventRetention(): void {
   if (timer) return;
+  const gen = ++generation;
+  let everSucceeded = false;
   const tick = () => pruneRunEvents()
     .then((r) => {
+      if (gen !== generation) return;
+      everSucceeded = true;
       if (r.framesDeleted || r.filesStripped) {
         console.log(`[tangu] run events pruned: ${r.framesDeleted} stream frames, ${r.filesStripped} display_file payloads${r.vacuumed ? ', db vacuumed' : ''}`);
       }
     })
     .catch((e: any) => {
-      console.warn('[tangu] run event retention stopped:', e?.message || e);
+      if (gen !== generation) return;
+      if (everSucceeded) { console.warn('[tangu] run event retention failed this round:', e?.message || e); return; }
+      console.warn('[tangu] run event retention stopped (no database here?):', e?.message || e);
       stopRunEventRetention();
     });
   kickoff = setTimeout(tick, RUN_EVENT_RETENTION_KICKOFF_MS);
