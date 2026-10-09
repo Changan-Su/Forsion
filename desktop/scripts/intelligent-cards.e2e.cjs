@@ -42,10 +42,13 @@ async function main() {
   const date = new Date().toISOString().slice(0, 10)
   fs.mkdirSync(path.join(vault, 'videos/.bluebird'), { recursive: true })
   const dbPath = path.join(vault, 'tasks.db')
+  const notePath = path.join(vault, 'weekly.md')
+  fs.writeFileSync(notePath, `# 本周\n- [ ] 完成 Markdown 练习 @${date}\n- 物理读书会 @${date}\n`)
   fs.writeFileSync(dbPath, JSON.stringify({ version: 1, name: '本周安排', columns: [{ id: 'name', name: '名称', type: 'text' }, { id: 'date', name: '日期', type: 'calendarDate' }, { id: 'done', name: '完成', type: 'checkbox' }], rows: [
     { id: 'review', cells: { name: '检查课程报告', date } }, { id: 'reading', cells: { name: '整理物理笔记', date } }, { id: 'meeting', cells: { name: '项目讨论', date } },
   ] }))
   const entries = ['Physics revision notes', 'Design systems reading', 'Weekend walking route'].map((title, i) => ({ id: `entry-${i}`, title, kind: 'link', date, sourceUrl: `https://example.com/reference-${i}`, notePath: `videos/note-${i}.md`, meta: { title }, summaryMarkdown: `# ${title}\n\nSaved acceptance fixture.`, savedAt: new Date().toISOString() }))
+  entries[0].kind = 'video'; entries[0].segments = [{ start: 0, text: 'Saved transcript must not be sent merely by opening.' }]
   fs.writeFileSync(path.join(vault, 'videos/.bluebird-index.json'), JSON.stringify({ folders: [], items: entries }))
   for (const e of entries) { fs.writeFileSync(path.join(vault, `videos/.bluebird/${e.id}.json`), JSON.stringify(e)); fs.writeFileSync(path.join(vault, e.notePath), e.summaryMarkdown) }
   const pluginRoot = path.join(home, 'plugins/bluebird'); fs.mkdirSync(pluginRoot, { recursive: true })
@@ -56,7 +59,7 @@ async function main() {
     sid = (await api('/agent/sessions', 'POST', { title: 'ZZ-IUI 原生卡片验收', model_id: MODEL, agent_config: { preset: 'chat', execMode: 'sandbox' } })).session.id
   } else {
     const doc = { version: 1, id: 'native-cards', title: '我的日程与收藏', inputs: [], resources: [], blocks: CARD_IDS.map((cardId, i) => ({ id: `card-${i}`, kind: 'app-card', cardId })) }
-    stub = await startStubEngine({ sessions: [{ id: sid, title: '原生卡片验收', model_id: MODEL, created_at: new Date().toISOString(), updated_at: new Date().toISOString() }], messages: [{ id: 'a1', role: 'model', content: '', tool_calls: [{ id: 'c1', type: 'function', function: { name: 'intelligent_ui', arguments: JSON.stringify({ document: JSON.stringify(doc) }) }, ui_content_offset: 0 }], tool_results: [{ tool_call_id: 'c1', name: 'intelligent_ui', content: 'Intelligent UI rendered.' }] }], models: [{ id: MODEL, name: MODEL, provider: 'stub' }] })
+    stub = await startStubEngine({ override: ({ path: requestPath }) => requestPath === '/agent/special/schedule' ? { schedules: [{ slug: 'study', name: 'Study agent', db: { columns: [{ id: 'name', name: 'Name', type: 'text' }, { id: 'date', name: 'Date', type: 'calendarDate' }], rows: [{ id: 'agent-event', cells: { name: 'Agent 复习提醒', date } }] } }] } : undefined, sessions: [{ id: sid, title: '原生卡片验收', model_id: MODEL, created_at: new Date().toISOString(), updated_at: new Date().toISOString() }], messages: [{ id: 'a1', role: 'model', content: '', tool_calls: [{ id: 'c1', type: 'function', function: { name: 'intelligent_ui', arguments: JSON.stringify({ document: JSON.stringify(doc) }) }, ui_content_offset: 0 }], tool_results: [{ tool_call_id: 'c1', name: 'intelligent_ui', content: 'Intelligent UI rendered.' }] }], models: [{ id: MODEL, name: MODEL, provider: 'stub' }] })
     base = stub.url; token = 'test'
   }
   for (const dir of [path.join(home, 'userdata'), path.join(home, 'userdata-dev')]) {
@@ -96,6 +99,10 @@ async function main() {
     const todo = win.locator('[data-app-card="native:todo-list"]'), bookmarks = win.locator('[data-app-card="plugin:bluebird:library-list"]')
     await todo.getByRole('button', { name: /检查课程报告/ }).waitFor()
     await bookmarks.getByRole('button', { name: /Physics revision notes/ }).waitFor()
+    await todo.getByRole('button', { name: /完成 Markdown 练习/ }).waitFor()
+    await win.locator('[data-app-card="native:calendar"]').getByText('物理读书会', { exact: true }).waitFor()
+    check('Markdown 待办和日程与完整视图一致', true)
+    if (!LIVE) { await win.locator('[data-app-card="native:calendar"]').getByText('Agent 复习提醒', { exact: true }).waitFor(); check('未打开完整 Calendar 也加载 Agent 日程', true) }
     check('三个真实数据源均已显示', await win.locator('[data-app-card]').count() >= 3)
     const shot = async name => { const f = path.join(OUT, `${name}.png`); await win.screenshot({ path: f }); report.screenshots.push(f) }
     const localRunCount = runRequests
@@ -111,12 +118,17 @@ async function main() {
     await win.waitForFunction(() => ![...document.querySelectorAll('[data-app-card="native:todo-list"] button')].some(e => e.textContent.includes('检查课程报告')))
     for (let n = 0; n < 40 && !JSON.parse(fs.readFileSync(dbPath)).rows.find(r => r.id === 'review').cells.done; n++) await win.waitForTimeout(100)
     check('聊天勾选已写回原始多维表', JSON.parse(fs.readFileSync(dbPath)).rows.find(r => r.id === 'review').cells.done === true)
+    await todo.getByRole('button', { name: /完成 Markdown 练习/ }).click()
+    for (let n = 0; n < 40 && !fs.readFileSync(notePath, 'utf8').includes('- [x]'); n++) await win.waitForTimeout(100)
+    check('Markdown 勾选写回原笔记', fs.readFileSync(notePath, 'utf8').includes('- [x]'))
     await bookmarks.getByRole('textbox').fill('Physics')
     check('收藏搜索沿用青鸟数据源', await bookmarks.locator('.iui-app-row').count() === 1)
     await bookmarks.getByRole('textbox').fill('')
     await bookmarks.scrollIntoViewIfNeeded(); await shot('bluebird-card-light')
     await bookmarks.getByRole('button', { name: /Physics revision notes/ }).click()
     await win.locator('.bb-root').waitFor()
+    await win.waitForTimeout(700)
+    check('打开含字幕的视频收藏不调用模型', runRequests === localRunCount)
     check('点击收藏打开青鸟原生工作台', await win.locator('.bb-root').innerText().then(t => t.includes('Physics revision notes')))
     await openChat()
     await win.reload(); await openChat(); await todo.getByRole('button', { name: /整理物理笔记/ }).waitFor()

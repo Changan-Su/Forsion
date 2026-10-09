@@ -86,3 +86,10 @@ For real GPT-6 Luna discovery/rendering, use the archive wrapper with
 `--only intelligentcards --model codex/gpt-6-luna`. Data fixtures live in a temporary vault;
 the plugin, components, IPC and on-disk task writes are real. User-facing reports are HTML
 with screenshots, provenance and explicit release boundaries.
+
+The compact native surfaces also consume the full views' Markdown task/calendar projections.
+Markdown completion uses `patchMark`, with note navigation as the fallback on hosts without
+that write capability. Calendar and its compact cards share one mount-counted Agent schedule
+poller (initial fetch, 60-second refresh, config changes, cleanup at the final unmount).
+Bluebird navigation never primes a model run; saved transcript context accompanies an explicit
+question. Its list cache is vault/work-folder scoped and rejects out-of-order prior-scope reads.
