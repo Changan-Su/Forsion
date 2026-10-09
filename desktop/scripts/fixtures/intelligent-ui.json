@@ -509,5 +509,37 @@
         }
       }
     ]
+  },
+  "edge": {
+    "version": 1,
+    "id": "edge-widths",
+    "title": "Width edge cases",
+    "inputs": [
+      {
+        "id": "tier",
+        "kind": "choice",
+        "label": "Four short options with wide glyphs",
+        "initial": "a",
+        "options": [
+          { "id": "a", "label": "WWWWWWWW1" },
+          { "id": "b", "label": "WWWWWWWW2" },
+          { "id": "c", "label": "WWWWWWWW3" },
+          { "id": "d", "label": "WWWWWWWW4" }
+        ]
+      }
+    ],
+    "resources": [
+      {
+        "id": "long-host",
+        "kind": "source",
+        "url": "https://a-very-long-subdomain-label-that-keeps-going-and-going-and-go.another-long-label-that-also-keeps-going-for-a-while-longer.example.com/page",
+        "title": "A source whose host is longer than a narrow answer",
+        "description": "The host must wrap inside the answer instead of pushing the row wider than its container."
+      }
+    ],
+    "blocks": [
+      { "id": "choose", "kind": "controls", "inputIds": ["tier"] },
+      { "id": "refs", "kind": "sources", "resourceIds": ["long-host"] }
+    ]
   }
 }

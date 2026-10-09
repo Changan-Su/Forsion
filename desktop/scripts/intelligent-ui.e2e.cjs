@@ -83,11 +83,13 @@ async function main() {
     const plus = dinner.getByRole('button', { name: '用餐人数 +', exact: true })
     await plus.waitFor({ timeout: 15000 })
     check('streaming controls available before completion', await dinner.getAttribute('data-complete') === 'false')
+    check('a placeholder stands in for the part still to come', await dinner.locator('.iui-skeleton').count() === 1 && await dinner.getAttribute('data-streamed') !== null)
     await plus.click(); await plus.click()
     await plus.focus()
     await plus.evaluate(el => { el.dataset.identityProbe = 'same-node' })
     await win.waitForSelector('.intelligent-ui[data-document-id="dinner"][data-complete="true"]')
     check('user edit survives late completion', await dinner.locator('output').textContent() === '6')
+    check('placeholder leaves once the document is complete', await dinner.locator('.iui-skeleton').count() === 0)
     check('control identity and focus survive new blocks', await plus.evaluate(el => el.dataset.identityProbe === 'same-node' && document.activeElement === el))
     const chicken = dinner.locator('.iui-check-rows label').filter({ hasText: '去骨鸡腿肉' })
     check('quantity is computed locally', (await chicken.innerText()).includes('900 g'))
@@ -110,6 +112,7 @@ async function main() {
     stub.state.messages = [record('a-r1', 'ui1', fixtures.dinner)]
     await win.reload(); await openSession(win)
     await dinner.waitFor()
+    check('replayed history does not animate in', await dinner.getAttribute('data-streamed') === null)
     check('refresh restores values, checks and disclosure', await dinner.locator('output').textContent() === '6' && await chicken.getByRole('checkbox').isChecked() && await dinner.locator('[data-block-id="steps"] details').getAttribute('open') !== null)
     const radio = dinner.getByRole('radio', { name: /宫保鸡丁/ })
     await radio.focus(); await win.keyboard.press('ArrowRight')
@@ -131,7 +134,7 @@ async function main() {
     check('model action sends exactly one visible contextual prompt', stub.seen.runs.length === 2 && /当前选择/.test(stub.seen.runs[1].message))
     // Replay multimedia + linked research as persisted events, including a historical Sketch.
     const legacy = { id: 'legacy', role: 'model', content: '', timestamp: Date.now(), tool_calls: [{ id: 'sk-old', type: 'function', function: { name: 'sketch', arguments: JSON.stringify({ html: '<p>Legacy Sketch still renders</p>', title: 'Historical Sketch' }) } }], tool_results: [{ tool_call_id: 'sk-old', name: 'sketch', content: 'Sketch rendered.' }] }
-    const records = [record('a-r1', 'ui1', fixtures.dinner), record('media', 'ui-media', fixtures.media), record('pick', 'ui-pick', fixtures.pick), record('sources', 'ui-sources', fixtures.research), legacy]
+    const records = [record('a-r1', 'ui1', fixtures.dinner), record('media', 'ui-media', fixtures.media), record('pick', 'ui-pick', fixtures.pick), record('sources', 'ui-sources', fixtures.research), record('edge', 'ui-edge', fixtures.edge), legacy]
     if (evidence) for (const name of ['intelligentplan', 'intelligentmedia']) {
       const payload = JSON.parse(fs.readFileSync(path.join(evidence, `${name}-evidence.json`), 'utf8'))
       payload.documents.forEach((doc, i) => records.push(record(`${name}-${i}`, `${name}-${i}`, doc)))
@@ -181,6 +184,14 @@ async function main() {
       if (width === 320) { await reveal(win, media); await win.screenshot({ path: path.join(OUT, 'media-320.png') }) }
     }
     await media.evaluate(el => { el.style.removeProperty('width'); el.style.removeProperty('max-width') })
+    // 481px is just above the stacking breakpoint: four wide-glyph segments and a long host have the least room there.
+    const edge = win.locator('.intelligent-ui[data-document-id="edge-widths"]')
+    for (const width of [481, 320]) {
+      await edge.evaluate((el, w) => { el.style.width = `${w}px`; el.style.maxWidth = '100%' }, width)
+      const fits = await edge.evaluate(el => el.scrollWidth <= el.clientWidth + 1 && [...el.querySelectorAll('.iui-seg .iui-parallel, .iui-seg label, .iui-source > a')].every(n => n.scrollWidth <= n.clientWidth + 1))
+      check(`wide segments and a long source host stay inside a ${width}px answer`, await edge.locator('.iui-seg').count() === 1 && fits)
+    }
+    await edge.evaluate(el => { el.style.removeProperty('width'); el.style.removeProperty('max-width') })
     await win.emulateMedia({ reducedMotion: 'reduce' })
     check('reduced motion removes chevron transitions', await win.locator('[data-document-id="dinner"] [data-block-id="steps"] summary svg').evaluate(el => parseFloat(getComputedStyle(el).transitionDuration) <= 0.00001))
     await win.evaluate(() => { localStorage.setItem('tangu_locale', 'en'); localStorage.setItem('forsion_theme_pref', 'dark') })

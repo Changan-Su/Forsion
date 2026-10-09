@@ -52,7 +52,9 @@
 .iui-choice small { display: block; margin-top: 4px; text-wrap: pretty; }
 /* Short options without descriptions: one segmented control (same vocabulary as .seg). */
 .iui-seg .iui-parallel { display: inline-flex; max-width: 100%; gap: 0; border: var(--border-width, 1px) solid var(--overlay-medium); border-radius: var(--radius-md); overflow: hidden; }
-.iui-seg label { padding: 7px 16px; border: 0; border-radius: 0; color: var(--text-muted); white-space: nowrap; }
+/* Segments shrink and wrap their text before they would overflow: the short-label test in the renderer
+ * only estimates widths, and wide glyphs can exceed it. */
+.iui-seg label { flex: 0 1 auto; align-items: center; justify-content: center; padding: 7px 16px; border: 0; border-radius: 0; color: var(--text-muted); text-align: center; }
 .iui-seg label + label { border-left: var(--border-width, 1px) solid var(--overlay-medium); }
 .iui-seg label strong { padding-right: 0; font-weight: 500; }
 .iui-seg label[data-selected] { background: var(--accent-light); color: var(--accent-ink); box-shadow: none; }
@@ -142,10 +144,11 @@
 .iui-source { padding: 12px 0; border-bottom: 1px solid color-mix(in srgb, var(--border) 44%, transparent); }
 .iui-source:first-child { padding-top: 0; }
 .iui-source:last-child { padding-bottom: 0; border-bottom: 0; }
-.iui-source > a { display: flex; gap: 8px; align-items: baseline; color: var(--text); font-weight: 500; text-decoration: none; }
+/* A host that does not fit beside the title drops to its own line and may break inside (long DNS labels). */
+.iui-source > a { display: flex; flex-wrap: wrap; gap: 0 8px; align-items: baseline; color: var(--text); font-weight: 500; text-decoration: none; }
 .iui-source > a:hover { text-decoration: underline; }
 .iui-source > a > span { min-width: 0; }
-.iui-source > a > small { flex: none; font-weight: 400; }
+.iui-source > a > small { min-width: 0; font-weight: 400; }
 .iui-source > a > svg { flex: none; align-self: center; margin-left: auto; color: var(--text-faint); opacity: 0; transition: opacity var(--duration-fast); }
 .iui-source > a:is(:hover, :focus-visible) > svg { opacity: 1; }
 .iui-source summary { display: block; margin-top: 4px; padding: 0; font-weight: 400; font-size: var(--ui-font-meta); line-height: 1.6; color: var(--text-muted); }

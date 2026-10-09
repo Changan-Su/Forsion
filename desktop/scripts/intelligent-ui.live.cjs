@@ -37,7 +37,9 @@ if (process.env.TANGU_IUI_RANDOM) {
     for (let i = keys.length - 1; i > 0; i--) { const j = Math.floor(rand() * (i + 1)); [keys[i], keys[j]] = [keys[j], keys[i]] }
     return [kind, keys]
   }))
-  selectedKeys = Object.values(order).map(keys => keys[slot % keys.length])
+  // A slot past the smallest pool would wrap around and repeat a journey another slot already ran.
+  assert.ok(slot < Math.min(...Object.values(order).map(keys => keys.length)), 'Slot exceeds the smallest journey pool')
+  selectedKeys = Object.values(order).map(keys => keys[slot])
   draw = { seed, slot, order, picked: selectedKeys }
 } else if (!selectedKeys) selectedKeys = cases.filter(c => !c.pool).map(c => c.key)
 {
@@ -172,7 +174,7 @@ async function main() {
           const scaled = await ui.locator('.iui-quantity').allTextContents(), amount = s => Number(s.replace(/,/g, '').match(/[\d.]+/)?.[0])
           check('4改6人后所有食材按1.5倍缩放', Number(await output.innerText()) === 6 && scaled.length === quantities.length && scaled.every((s, i) => Math.abs(amount(s) - amount(quantities[i]) * 1.5) < 0.11))
           const rows = await ui.locator('.iui-check-rows').allTextContents()
-          await ui.getByRole('radio').last().check()
+          await ui.locator('input[type=radio]:not(:checked)').last().check()
           check('切换主菜后采购内容变化', JSON.stringify(rows) !== JSON.stringify(await ui.locator('.iui-check-rows').allTextContents()))
           await ui.getByRole('checkbox').first().check()
         } else if (c.kind === 'list' && c.key !== 'user-study') {
@@ -227,10 +229,10 @@ async function main() {
           r.inspectedImageUrls = inspectionCoverage(ev)
           check('每张候选图都有导航、截图及实际看图回执', expectedImages.every(url => r.inspectedImageUrls.includes(url)))
         } else if (c.kind === 'compare' && c.pool) {
-          const radios = ui.getByRole('radio')
-          check('有可以自己切换的选项', await radios.count() >= 2)
-          const shown = await ui.innerText()
-          await center(radios.last()); await radios.last().check()
+          check('有可以自己切换的选项', await ui.getByRole('radio').count() >= 2)
+          // Pick an option that is not the current one: the model decides which option starts selected.
+          const other = ui.locator('input[type=radio]:not(:checked)').last(), shown = await ui.innerText()
+          await center(other); await other.check()
           check('切换选项后内容跟着变', shown !== await ui.innerText())
         } else if (c.key === 'user-research') {
           r.retrievedUrls = ev.results.filter(x => ['web_fetch', 'browser_navigate'].includes(x.name) && succeeded(x) && x.result.length > 400).map(x => {
@@ -262,10 +264,15 @@ async function main() {
           prose: [...new Set([...el.querySelectorAll('.iui-prose')].map(p => getComputedStyle(p).fontSize))],
           oldToolbar: el.querySelectorAll('.iui-list-toolbar').length,
           lists: el.querySelectorAll('.iui-checklist').length, heads: el.querySelectorAll('.iui-checklist > .iui-list-head').length,
-          // Facts of the items in one visual row must start on the same line (rows are 3 wide, or the pair when there are two).
-          misaligned: innerWidth < 600 ? 0 : [...el.querySelectorAll('.iui-comparison')].filter(grid => {
-            const items = [...grid.children].slice(0, 3), tops = items.map(a => a.querySelector('ul:not(:empty)')?.getBoundingClientRect().top).filter(v => v !== undefined)
-            return tops.length > 1 && Math.max(...tops) - Math.min(...tops) > 1
+          // Facts of the items that share a visual row must start on the same line. Rows come from the
+          // actual layout, so a narrow answer whose items stack has nothing to compare.
+          misaligned: [...el.querySelectorAll('.iui-comparison')].filter(grid => {
+            const rows = new Map()
+            for (const item of grid.children) {
+              const top = Math.round(item.getBoundingClientRect().top), facts = item.querySelector('ul:not(:empty)')
+              if (facts) rows.set(top, [...(rows.get(top) || []), facts.getBoundingClientRect().top])
+            }
+            return [...rows.values()].some(tops => Math.max(...tops) - Math.min(...tops) > 1)
           }).length,
           kinds: [...el.querySelectorAll('.iui-block')].map(b => b.className.replace('iui-block iui-block-', '')), seg: el.querySelectorAll('.iui-seg').length, pick: el.querySelectorAll('.iui-pick').length,
         })))

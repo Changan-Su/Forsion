@@ -2082,8 +2082,9 @@ try {
       }
       const blocks = documents.flatMap(d => d.blocks);
       // Pictures the user picks among are the options themselves (one row of picture cards), not a gallery beside a list.
-      const pickIds = new Set(documents.flatMap(d => d.inputs).filter(i => i.kind === 'choice' && i.options.length === 3 && i.options.every(o => o.imageId)).flatMap(i => i.options.map(o => o.imageId)));
-      const pickRow = pickIds.size === 3 && !blocks.some(b => (b.kind === 'gallery' && b.resourceIds.some(id => pickIds.has(id))) || (b.kind === 'comparison' && b.items.some(i => pickIds.has(i.imageId))));
+      const picker = documents.flatMap(d => d.inputs).find(i => i.kind === 'choice' && i.options.length === 3 && new Set(i.options.map(o => o.imageId).filter(Boolean)).size === 3);
+      const pickIds = new Set(picker?.options.map(o => o.imageId));
+      const pickRow = !!picker && !blocks.some(b => (b.kind === 'gallery' && b.resourceIds.some(id => pickIds.has(id))) || (b.kind === 'comparison' && b.items.some(i => pickIds.has(i.imageId))));
       const contract = key === 'intelligentplan'
         ? blocks.some(b => b.kind === 'checklist' && b.items.some(i => i.quantity?.scaleBy)) && documents.some(d => d.inputs.some(i => i.kind === 'choice')) && blocks.some(b => b.kind === 'disclosure')
         : pickRow && blocks.some(b => b.kind === 'sources');

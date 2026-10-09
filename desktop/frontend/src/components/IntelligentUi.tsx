@@ -108,9 +108,10 @@ function NativeDocument({ doc, complete, live, stateKey, onAsk }: { doc: UIDocum
   const [notice, setNotice] = useState('')
   // Blocks fade in only for a document that was seen arriving; replayed history stays still.
   const streamed = useRef(live).current
-  const listed = new Set(doc.blocks.flatMap(b => b.kind === 'sources' ? b.resourceIds : []))
   const values = inputValues(doc, state)
   const resources = new Map(doc.resources.map(r => [r.id, r]))
+  // Sources a visible sources block already lists; a hidden block must not strip a picture of its attribution.
+  const listed = new Set(doc.blocks.flatMap(b => b.kind === 'sources' && visible(b.when, values) ? b.resourceIds : []))
   const update = (fn: (s: UIUserState) => UIUserState): void => setState(previous => {
     const next = fn(previous)
     if (stateKey) writeUIState(stateKey, next)
