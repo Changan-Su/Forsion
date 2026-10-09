@@ -17,6 +17,7 @@ import { createCloudAmadeusBridge, setCloudNotify } from '@webamadeus/cloudBridg
 import { installCloudCollab } from '@webamadeus/cloudCollab'
 import { cloudApiBaseOf } from '@/services/engine/cloudBase'
 import { installMobilePlugins } from './plugins/installMobilePlugins'
+import { isSafePluginExt } from '../../desktop/shared/amadeus/pluginFiles'
 
 const VAULT_MODE_KEY = 'amadeus_vault_mode' // 'cloud'(缺省,移动端主打云客户端) | 'local'(显式选过才本地)
 const vaultMode = (): 'local' | 'cloud' => {
@@ -44,10 +45,26 @@ void installMobileShim().then(async (ok) => {
 
   // 插件声明的文件后缀(`.deck.md` 之类:磁盘上是 .md,内容归插件管)。两座库桥都按它把这些文件排出笔记列表。
   // ⚠️ 必须在建桥**之前**清点好(桌面主进程同理,同步预扫 manifest):本地库一建桥就按 listPages 建索引,云端库
-  // 先拿上次的树快照渲染首屏 —— 名单晚到一拍,这些文件就已经当笔记进了树和索引。读不出来 = 空名单(退回原行为),不挡启动。
-  let pluginExts: string[] = await plugins.host.fileExtensions().catch(() => [])
+  // 先拿上次的树快照渲染首屏 —— 名单晚到一拍,这些文件就已经当笔记进了树和索引。
+  // 读不出来(私有目录一时 I/O 失败)不挡启动,但也不退成空名单 —— 那等于这一次启动里所有插件文件都当笔记开:
+  // 用上一次成功清点时记下的那份(localStorage),下一趟 listPlugins 再对齐。
+  const EXTS_KEY = 'forsion.mobile.pluginExts'
+  const lastKnownExts = (): string[] => {
+    try {
+      const v: unknown = JSON.parse(localStorage.getItem(EXTS_KEY) || '[]')
+      return Array.isArray(v) ? v.filter(isSafePluginExt) : []
+    } catch { return [] }
+  }
+  const scanExts = async (fallback: () => string[]): Promise<string[]> => {
+    try {
+      const exts = await plugins.host.fileExtensions()
+      try { localStorage.setItem(EXTS_KEY, JSON.stringify(exts)) } catch { /* 存不下:下次读失败时退到更旧的一份 */ }
+      return exts
+    } catch { return fallback() }
+  }
+  let pluginExts: string[] = await scanExts(lastKnownExts)
   const refreshPluginExts = async (): Promise<void> => {
-    const next = await plugins.host.fileExtensions().catch(() => pluginExts)
+    const next = await scanExts(() => pluginExts)
     if (next.join('\n') === pluginExts.join('\n')) return
     pluginExts = next
     // 装 / 卸插件改了名单:本地库的索引按新口径重建,树重列一遍(云端库的树每次现分,不用管)。

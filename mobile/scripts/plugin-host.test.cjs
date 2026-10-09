@@ -23,7 +23,8 @@ const loadAll = async (entries) => {
 
 /** 内存 PluginFs:路径 → 字节;目录由文件路径隐含(与 Capacitor 一样,列不存在的目录抛错)。
  *  failWriteAt:第 n 次写只写进一半就「被杀」(抛错),模拟写到一半进程没了。
- *  failRenameAt:第 n 次改名什么都没动就抛错。rename 的语义同 Android:目标已存在 → 抛错,绝不覆盖。 */
+ *  failRenameAt:第 n 次改名什么都没动就抛错。rename 的语义同 Android:目标已存在 → 抛错,绝不覆盖。
+ *  failReadOf:这个路径的文件在、却读不出来(EIO)。 */
 function memFs() {
   const files = new Map()
   let writes = 0
@@ -32,6 +33,7 @@ function memFs() {
     files,
     failWriteAt: -1,
     failRenameAt: -1,
+    failReadOf: null,
     renamed: [],
     async rename(from, to) {
       renames += 1
@@ -43,7 +45,11 @@ function memFs() {
       for (const k of moving) { files.set(`${to}/${k.slice(from.length + 1)}`, files.get(k)); files.delete(k) }
       api.renamed.push([from, to])
     },
-    async readBytes(p) { if (!files.has(p)) throw new Error(`File does not exist: ${p}`); return files.get(p) },
+    async readBytes(p) {
+      if (!files.has(p)) throw new Error(`File does not exist: ${p}`)
+      if (p === api.failReadOf) throw new Error('EIO')
+      return files.get(p)
+    },
     async writeBytes(p, bytes) {
       writes += 1
       if (writes === api.failWriteAt) { files.set(p, bytes.subarray(0, Math.floor(bytes.length / 2))); throw new Error('killed') }
@@ -343,6 +349,22 @@ const test = async (name, fn) => {
     // 写到一半的那一槽是坏的:下一次卸载照样记得下来(双槽,读取方跳过坏槽)
     await h.uninstallPlugin('a')
     assert.deepEqual(await h.fileExtensions(), ['.a.md'])
+  })
+
+  await test('墓碑文件在却读不出来 → 名单不缩水:卸载被拒、fileExtensions 抛(调用方留着手上的),读得出来以后旧后缀还在', async () => {
+    const fs = memFs()
+    put(fs, 'plugins/a/manifest.json', manifest({ id: 'a', fileExtensions: ['.a.md'] })); put(fs, 'plugins/a/main.js', '')
+    put(fs, 'plugins/b/manifest.json', manifest({ id: 'b', fileExtensions: ['.b.md'] })); put(fs, 'plugins/b/main.js', '')
+    const h = host(fs)
+    await h.uninstallPlugin('a')
+    fs.failReadOf = 'plugins-data/.ext-tombstones.json'
+    await assert.rejects(h.uninstallPlugin('b'), /EIO/)
+    assert.ok(fs.files.has('plugins/b/manifest.json'))
+    await assert.rejects(h.fileExtensions(), /EIO/)
+    fs.failReadOf = null
+    assert.deepEqual(await h.fileExtensions(), ['.a.md', '.b.md'])
+    await h.uninstallPlugin('b')
+    assert.deepEqual(await host(fs).fileExtensions(), ['.a.md', '.b.md'])
   })
 
   // ── 插件私有数据 ─────────────────────────────────────────────────────────

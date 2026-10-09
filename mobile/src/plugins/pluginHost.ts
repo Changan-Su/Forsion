@@ -197,23 +197,40 @@ const TOMBSTONE_SLOT = '.ext-tombstones'
 const safeExtsOf = (m: InstalledPluginManifest | null): string[] =>
   Array.isArray(m?.fileExtensions) ? m.fileExtensions.filter(isSafePluginExt).map((x) => x.trim().toLowerCase()) : []
 
-async function readTombstones(fs: PluginFs): Promise<string[]> {
+/** 墓碑的一槽。「没写过」与「写到一半的坏槽」= null(读取方落到另一槽);**文件在却读不出来** = 抛出去 ——
+ *  把读失败当成「没有墓碑」的话,下一次卸载会拿一份缩水的名单盖上去,之前记下的后缀永久丢保护(Codex 评审 P1)。
+ *  (插件私有数据的 readSlot 不这么严:那边读不到 = 这个插件回到默认设置,不牵连别的文件。) */
+async function readTombstoneSlot(fs: PluginFs, path: string): Promise<DataEnvelope | null> {
+  if (!(await fs.stat(path))) return null
+  const raw = await readText(fs, path)
   try {
-    const v: unknown = JSON.parse((await latestSlot(fs, TOMBSTONE_SLOT))?.env.text ?? '[]')
-    return Array.isArray(v) ? v.filter(isSafePluginExt) : []
-  } catch {
-    return []
-  }
+    const v = JSON.parse(raw) as Partial<DataEnvelope> | null
+    if (v && v.forsionPluginData === 1 && Number.isSafeInteger(v.seq) && typeof v.text === 'string') return v as DataEnvelope
+  } catch { /* 写到一半的槽:当它不存在 */ }
+  return null
 }
 
-/** 卸载前调用(调用方持有 withPluginDirLock,还没删目录):把这个插件声明过的后缀记进墓碑。 */
+/** 最新的有效墓碑槽 + 里面的名单。读失败抛出去(见上)。 */
+async function readTombstones(fs: PluginFs): Promise<{ slot: 0 | 1 | null; seq: number; exts: string[] }> {
+  const [a, b] = slotPaths(TOMBSTONE_SLOT)
+  const [ea, eb] = [await readTombstoneSlot(fs, a), await readTombstoneSlot(fs, b)]
+  const pick = ea && (!eb || ea.seq >= eb.seq) ? { slot: 0 as const, env: ea } : eb ? { slot: 1 as const, env: eb } : null
+  if (!pick) return { slot: null, seq: 0, exts: [] }
+  let list: unknown = []
+  try { list = JSON.parse(pick.env.text) } catch { /* 信封完好、正文不是 JSON:只可能是别人写的,当空 */ }
+  return { slot: pick.slot, seq: pick.env.seq, exts: Array.isArray(list) ? list.filter(isSafePluginExt) : [] }
+}
+
+/** 卸载前调用(调用方持有 withPluginDirLock,还没删目录):把这个插件声明过的后缀记进墓碑。
+ *  读不出现有墓碑 / 写不下去 → 抛,调用方不删目录(下次再卸):宁可卸载失败,也不让它的文件掉回笔记列表。 */
 export async function tombstoneExtensions(fs: PluginFs, dir: string): Promise<void> {
   const claimed = safeExtsOf(await readManifest(fs, dir))
   if (!claimed.length) return
-  const cur = await latestSlot(fs, TOMBSTONE_SLOT)
-  const merged = [...new Set([...(await readTombstones(fs)), ...claimed])].sort()
-  const env: DataEnvelope = { forsionPluginData: 1, seq: (cur?.env.seq ?? 0) + 1, text: JSON.stringify(merged) }
-  await writeText(fs, slotPaths(TOMBSTONE_SLOT)[cur ? (cur.slot === 0 ? 1 : 0) : 0], JSON.stringify(env))
+  const cur = await readTombstones(fs)
+  const merged = [...new Set([...cur.exts, ...claimed])].sort()
+  if (merged.length === cur.exts.length) return // 都记过了:不写
+  const env: DataEnvelope = { forsionPluginData: 1, seq: cur.seq + 1, text: JSON.stringify(merged) }
+  await writeText(fs, slotPaths(TOMBSTONE_SLOT)[cur.slot === 0 ? 1 : 0], JSON.stringify(env))
 }
 
 export function createPluginHost(fs: PluginFs, opts: { appVersion: () => string | null }): MobilePluginHost {
@@ -305,7 +322,7 @@ export function createPluginHost(fs: PluginFs, opts: { appVersion: () => string 
     // 照样不是笔记。从「正在跑的插件注册了什么」推这份名单正是原来的口子(仪器:npm run e2e:pluginfiles)。
     fileExtensions: () => withPluginDirLock(fs, async () => {
       await recoverPluginDirs(fs)
-      const exts = new Set(await readTombstones(fs))
+      const exts = new Set((await readTombstones(fs)).exts) // 读失败 → 抛:调用方保留手上的名单,不拿缩水的顶上
       for (const name of await pluginDirNames(fs)) {
         for (const x of safeExtsOf(await readManifest(fs, `${PLUGINS_DIR}/${name}`))) exts.add(x)
       }

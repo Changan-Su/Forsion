@@ -20,6 +20,7 @@ import { activePageScope, cascadeFdAfterRename, claimTitleFocus, disposePageScop
 import { retireUnifiedPath, insertFilesForPath, unifiedInsertMarkdown } from '@amadeus/unified/lifecycle'
 import { treeRefBlocks } from '@amadeus/unified/treeRefDrop'
 import { canExportPdf, canRevealInFileManager } from '@amadeus/lib/hostCaps'
+import { noteOwnership } from '@amadeus/lib/noteOwnership'
 import { canPageHistory } from '@amadeus/lib/hostCaps'
 import { PageHistoryHost } from '@amadeus/unified/pageHistory'
 import { useMobileBackClose } from '@amadeus/lib/mobileBack'
@@ -2268,15 +2269,11 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
   const routedFor = useRef<{ path: string; root: string | null } | null>(null)
   // 文件在当前库出现/消失(pages 随结构事件刷新)也要重判:missing 占位不能永远停在那里。
   const noteKnown = usePageStore((s) => (notePath ? s.pages.includes(notePath) : false))
-  // 库这一层把它列在「文件」里而不在「页面」里的 .md = 归插件管的文件,而且此刻没有插件接着它(有的话
-  // openNote 早就改道去了插件视图):对应插件没装 / 被关掉 / 被门禁拦下。**绝不进笔记读写管线** —— 编辑器一存就是
-  // 按笔记的写法重排,插件的格式当场坏(实测:敲一个字,卡组的卡片标记前后多出空行)。树上点它、[[链接]]、
-  // 搜索命中、恢复的旧标签都落到这个面板,所以闸放在这里而不是各个入口。仪器:mobile 的 npm run e2e:pluginfiles。
-  const pluginOwned = usePageStore((s) => {
-    if (!notePath || !/\.md$/i.test(notePath) || s.pages.includes(notePath)) return false
-    const n = notePath.replace(/\\/g, '/')
-    return s.files.some((f) => f.replace(/\\/g, '/') === n)
-  })
+  // 这条 .md 是笔记,还是归插件管的文件(对应插件没在跑)?后者绝不进笔记读写管线 —— 编辑器一存就把插件的格式改坏。
+  // 树上点它、[[链接]]、搜索命中、恢复的旧标签都落到这个面板,所以闸放在这里而不是各个入口。
+  // 三种结果与判据见 amadeus/lib/noteOwnership.ts;仪器:mobile 的 npm run e2e:pluginfiles。
+  const ownership = usePageStore((s) => noteOwnership(notePath, s))
+  const pluginOwned = ownership === 'plugin'
   useEffect(() => {
     if (!notePath) {
       setRoute(null)
@@ -2290,6 +2287,14 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
     }
     // 已经按**真实内容**给这篇定过案且库根未变 → 不再重读:库根回填不该把活着的编辑器重挂。
     const done = routedFor.current
+    if (ownership === 'pending') {
+      // 归属没确认:不读、不路由。手上已有的定案一并作废、实例退休(换根那条本来也要退休)—— 等文件列表到了
+      // 重读盘上现文再挂;留着旧定案 = 拿打开那一刻读到的正文当基线重挂。
+      if (done && done.path === notePath) retireUnifiedPath(notePath)
+      routedFor.current = null
+      setRoute(null)
+      return
+    }
     // 同根 / 库根回填(定案时 store 里还是 null,主进程根已就绪读到了真内容)→ 不重读、不换实例:
     // 冷启动的回填不是换根,退休会清掉用户刚敲的字(Codex 终审 P0)。
     if (done && done.path === notePath && (done.root === vaultRoot || done.root === null)) return
@@ -2335,8 +2340,8 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
     })()
     return () => { alive = false }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [notePath, vaultRoot, noteKnown, retryTick, pluginOwned])
-  const routed = !pluginOwned && route && route.forPath === notePath ? route.decision : null
+  }, [notePath, vaultRoot, noteKnown, retryTick, ownership])
+  const routed = ownership === 'note' && route && route.forPath === notePath ? route.decision : null
   const unifiedRoute = routed?.editor === 'unified' ? routed : null
   const unreadableNote = !!notePath && !!route?.unreadable && route.forPath === notePath
   const missingNote = routed?.editor === 'missing' && !!notePath && !unreadableNote
