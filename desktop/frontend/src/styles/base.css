@@ -4467,6 +4467,8 @@ html.dark .brand-logo--dark { display: inline-block; }
 .mk-card-content { min-width: 0; display: flex; flex-direction: column; }
 .mk-card-eyeline { min-height: 17px; display: flex; align-items: center; gap: 8px; color: var(--text-faint); font-size: var(--ui-font-caption, 11px); font-weight: 620; }
 .mk-installed-badge { display: inline-flex; align-items: center; gap: 3px; color: var(--accent-ink); }
+/* 「仅桌面」:信息位,不抢「已安装」的强调色。 */
+.mk-desktop-badge { display: inline-flex; align-items: center; gap: 3px; color: var(--text-light); white-space: nowrap; }
 .mk-card-title { align-self: flex-start; max-width: 100%; margin-top: 1px; overflow: hidden; color: var(--text); font-size: var(--ui-font-body, 13px); line-height: 1.35; font-weight: 600; text-align: left; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
 .mk-card-title:hover { color: var(--accent-ink); }
 .mk-card-summary { flex: 1; margin-top: 6px; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; color: var(--text-light); font-size: var(--ui-font-meta, 12px); line-height: 1.55; }

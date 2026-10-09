@@ -73,7 +73,11 @@ ctx.registerCommand({
 })
 `
 const card = (id, name) => ({ id, type: 'amadeus-plugin', source: 'zip', name, summary: `${name} (e2e)`, author: 'e2e', installSlug: id, downloads: id === PLUGIN_ID ? 10 : 1, latestVersion: '1.0.0', tags: [], createdAt: '2026-10-01T00:00:00Z', updatedAt: '2026-10-01T00:00:00Z' })
-const CARDS = [card(PLUGIN_ID, 'E2E Hello'), card(DESK_ID, 'E2E Desk')]
+// The Store says so itself (the reserved tag `desktop-only`): the phone marks the card and does not offer the install.
+// E2E Desk above is the other half — a Store item nobody tagged: the install is tried and the host refuses it, by the
+// package's own manifest.
+const FLAGGED_ID = 'e2e-flagged'
+const CARDS = [card(PLUGIN_ID, 'E2E Hello'), card(DESK_ID, 'E2E Desk'), { ...card(FLAGGED_ID, 'E2E Flagged'), tags: ['desktop-only', 'e2e-tag'] }]
 
 function findChromium() {
   if (process.env.CHROMIUM_EXE) return process.env.CHROMIUM_EXE
@@ -150,6 +154,7 @@ async function main() {
   const fails = []
   const pageErrors = []
   const marketQueries = []
+  const installAsked = []
   const pass = (name, extra) => console.log(`PASS  ${name}${extra ? `  | ${extra}` : ''}`)
   const fail = (name, extra) => { fails.push(name); console.log(`FAIL  ${name}${extra ? `  | ${extra}` : ''}`) }
   const check = (ok, name, extra) => (ok ? pass(name, extra) : fail(name, extra))
@@ -185,6 +190,7 @@ async function main() {
         return json({ items: CARDS.filter((c) => !type || c.type === type) })
       }
       if ((m = /^\/api\/market\/items\/([^/]+)\/install$/.exec(u.pathname))) {
+        installAsked.push(m[1])
         return json({ type: 'amadeus-plugin', installSlug: m[1], downloadUrl: `${CDN}/${m[1]}.zip`, source: 'zip' })
       }
       if ((m = /^\/api\/market\/items\/([^/]+)$/.exec(u.pathname))) {
@@ -338,6 +344,19 @@ async function main() {
     const deskState = await page.evaluate(async (id) => (await window.tangu.marketInstalled())['amadeus-plugin'].map((x) => x.slug).includes(id), DESK_ID)
     check(!deskState, '仅桌面插件没有落盘')
     await shot('market-desktop-only')
+    // 4b. 商店自己就标了「仅桌面」的:卡片带标记,安装键置灰并写明原因,点了也不去要下载地址
+    const flagged = page.locator(`[data-market-install="${FLAGGED_ID}"]`).first()
+    await flagged.waitFor({ state: 'visible', timeout: 10_000 }).catch(() => {})
+    const flaggedState = await flagged.evaluate((b) => ({ disabled: b.disabled, state: b.dataset.installState, text: b.textContent.trim() })).catch(() => null)
+    check(flaggedState && flaggedState.disabled && flaggedState.state === 'desktop-only' && flaggedState.text === '仅桌面可用', '商店标了仅桌面的插件:安装键置灰并写明', JSON.stringify(flaggedState))
+    check(await page.locator(`[data-market-desktop-only="${FLAGGED_ID}"]`).first().isVisible().catch(() => false), '商店标了仅桌面的插件:卡片带「仅桌面」标记')
+    check((await page.locator('[data-market-desktop-only]').count()) === 1, '没标的插件不带这枚标记', String(await page.locator('[data-market-desktop-only]').count()))
+    const chips = await page.locator('.mk-card', { has: flagged }).first().locator('.mk-tags span').allInnerTexts().catch(() => null)
+    check(Array.isArray(chips) && chips.includes('e2e-tag') && !chips.includes('desktop-only'), '保留标签不当普通标签再显示一遍,别的标签照常', JSON.stringify(chips))
+    await flagged.click({ force: true, timeout: 3000 }).catch(() => {})
+    await page.waitForTimeout(600)
+    check(!installAsked.includes(FLAGGED_ID), '置灰的安装键点了不发请求', installAsked.join(','))
+    await shot('market-desktop-only-flagged')
     await tap(page.locator('[data-mobile-market] .settings-back').first(), '关闭市场')
 
     // 5. 设置 → 插件:关掉 → 贡献撤下;卸载 → 文件没了
