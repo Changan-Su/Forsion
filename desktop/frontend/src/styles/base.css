@@ -627,9 +627,7 @@ a:hover { color: var(--accent-ink); }
 
 /* 新建标签页启动器(launcher / NewTabView):主区/侧栏两组视图卡片 */
 .newtab { flex: 1; min-height: 0; display: flex; justify-content: center; overflow: auto; }
-.newtab-inner { width: min(560px, 92%); margin: auto; padding: 28px 0; }
-.newtab-head { display: flex; align-items: center; gap: 8px; color: var(--text); font-size: var(--ui-font-heading, 14px); font-weight: 600; margin-bottom: 22px; }
-.newtab-head > svg { color: var(--accent-ink); }
+.newtab-inner { width: min(700px, 92%); margin: auto; padding: 28px 0; }
 .newtab-sec + .newtab-sec { margin-top: 22px; }
 .newtab-sec-title { color: var(--text-muted); font-size: var(--ui-font-meta, 12px); font-weight: 600; letter-spacing: .04em; margin-bottom: 10px; }
 .newtab-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 10px; }
@@ -645,6 +643,39 @@ a:hover { color: var(--accent-ink); }
 @media (prefers-reduced-motion: reduce) { .newtab-card { animation: none; } }
 .newtab-card-ic { color: var(--accent-ink); }
 .newtab-card-label { font-size: var(--ui-font-meta, 12px); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 新建标签页的四种长相:最近使用的行 / 新建的按钮 / 打开的格子 / 侧栏面板的小片。每个可点项仍是 .newtab-card
+   (十来个 e2e 按它和 .newtab-card-label 找入口),长相由 .nt-* 修饰类改 —— 都写成两类选择器,压得住上面的基础规则;
+   基础 .newtab-card / .newtab-grid 不动,造物栅格(artificial.css)也在用。 */
+.nt-search { display: flex; align-items: center; gap: 10px; width: 100%; height: 40px; padding: 0 12px; background: var(--bg-card); border: var(--border-width) solid var(--border); border-radius: var(--radius-md); color: var(--text-faint); font-size: var(--ui-font-body, 13px); text-align: left; cursor: text; transition: border-color var(--duration-fast, .15s); }
+.nt-search:hover { border-color: var(--accent-ink); }
+.nt-search > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nt-kbd { flex-shrink: 0; padding: 1px 6px; border-radius: var(--radius-sm); background: var(--overlay-light); color: var(--text-muted); font: inherit; font-size: var(--ui-font-caption, 11px); }
+.nt-search + .newtab-sec { margin-top: 22px; }
+.nt-head { display: flex; align-items: baseline; gap: 8px; }
+.nt-hint { margin-left: auto; color: var(--text-faint); font-size: var(--ui-font-caption, 11px); font-weight: 400; letter-spacing: 0; }
+.newtab-card.nt-row, .newtab-card.nt-chip, .newtab-card.nt-tilebtn, .newtab-card.nt-pchip { flex-direction: row; animation: none; }
+.newtab-card.nt-row:hover, .newtab-card.nt-chip:hover, .newtab-card.nt-tilebtn:hover, .newtab-card.nt-pchip:hover { transform: none; }
+.newtab-card.nt-row .newtab-card-ic, .newtab-card.nt-chip .newtab-card-ic, .newtab-card.nt-tilebtn .newtab-card-ic, .newtab-card.nt-pchip .newtab-card-ic { display: inline-flex; flex-shrink: 0; }
+.newtab-card.nt-row .newtab-card-label, .newtab-card.nt-chip .newtab-card-label, .newtab-card.nt-tilebtn .newtab-card-label { font-size: var(--ui-font-body, 13px); }
+.nt-rows { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 2px 16px; }
+.newtab-card.nt-row { justify-content: flex-start; gap: 9px; min-width: 0; height: 34px; padding: 0 8px; background: transparent; border-color: transparent; border-radius: var(--radius-sm); }
+.newtab-card.nt-row:hover { background: var(--overlay-light); border-color: transparent; }
+.newtab-card.nt-row .newtab-card-ic, .newtab-card.nt-chip .newtab-card-ic, .newtab-card.nt-pchip .newtab-card-ic { color: var(--text-faint); }
+.newtab-card.nt-row .newtab-card-label { min-width: 0; font-weight: 500; }
+.nt-meta { flex-shrink: 0; margin-left: auto; padding-left: 10px; color: var(--text-faint); font-size: var(--ui-font-meta, 12px); white-space: nowrap; }
+.nt-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.newtab-card.nt-chip { gap: 5px; height: 30px; padding: 0 11px 0 8px; }
+.nt-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(124px, 1fr)); gap: 6px; }
+.nt-tile { position: relative; min-width: 0; }
+.newtab-card.nt-tilebtn { justify-content: flex-start; gap: 8px; width: 100%; height: 36px; padding: 0 10px; }
+.nt-tile.has-more .newtab-card.nt-tilebtn { padding-right: 30px; }
+.nt-more { position: absolute; top: 0; right: 0; display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 36px; color: var(--text-faint); border-radius: 0 var(--radius-md) var(--radius-md) 0; }
+.nt-more:hover { color: var(--text); }
+.nt-sub { margin: 12px 0 6px; color: var(--text-faint); font-size: var(--ui-font-caption, 11px); }
+.nt-side { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-top: 22px; padding-top: 14px; border-top: var(--border-width) solid var(--border); color: var(--text-muted); font-size: var(--ui-font-meta, 12px); }
+.nt-side > span { margin-right: 4px; }
+.newtab-card.nt-pchip { gap: 5px; height: 26px; padding: 0 9px 0 7px; background: var(--overlay-light); border-color: transparent; border-radius: var(--radius-sm); }
+.newtab-card.nt-pchip:hover { background: var(--overlay-light); border-color: var(--accent-ink); }
 
 .memv-modal { position: fixed; inset: 0; z-index: 60; display: flex; align-items: center; justify-content: center; background: var(--overlay-scrim); }
 .memv-modal-box { width: min(560px, 90vw); max-height: 70vh; display: flex; flex-direction: column; background: var(--bg-card); border: var(--border-width) solid var(--border); border-radius: var(--radius-md); box-shadow: var(--card-shadow); }

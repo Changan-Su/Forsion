@@ -1,32 +1,51 @@
-/** 新建标签页(空白启动器):点主区标签栏末尾的 ＋ 打开,所有 Space 统一用它。
- *  分区:最近使用(会话/笔记/文件/视图)→ Forsion 原生 → 每个插件一组(按视图来源分类,不再按主/侧区)。
- *  卡片单击=在其默认位置打开(多数主区 Tab;侧栏类视图在侧栏);可拖入 tab bar / side bar「落点即开」。 */
-import { type ReactNode } from 'react'
-import { Plus, SquarePen, Bot, MessageCircle, FileText, CalendarDays, Mail, ListTodo, Code2, Workflow, Network, PenTool, Globe, TerminalSquare, LayoutDashboard, House, Blocks } from 'lucide-react'
+/** 新建标签页(空白启动器):点主区标签栏末尾的 ＋ 打开,所有 Space 统一用它;关掉主区最后一个标签也落到这里。
+ *  按「要干什么」分段(2026-10-09,方案图 docs/ToBeImproved/新建标签页方案_2026-10-09):
+ *    搜索(快速查找的入口)→ 最近使用 → 新建(动作,只能点)→ 打开(一个 Space 一格 + 不属于任何 Space 的视图)→ 当前 Space 的侧栏面板。
+ *  单击 = 开在这个标签里(侧栏面板开在其所属侧);视图类可拖入 tab bar / side bar「落点即开」。
+ *  ⚠️每个可点项都带 .newtab-card / .newtab-card-label:十来个 e2e 按这两个类 + 文案找入口,长相由 .nt-* 修饰类决定(base.css)。 */
+import { useEffect, useState, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
+import { Plus, Bot, FileText, Globe, TerminalSquare, Search, ChevronDown, ArrowUpRight, PanelLeft, PanelRight } from 'lucide-react'
 import { useApp } from '../stores/appStore'
-import { hasNativeFeature, amadeusAvailable, inboxAvailable } from '../features/runtime'
+import { hasNativeFeature, amadeusAvailable } from '../features/runtime'
 import { openSpecial } from './SpecialViews'
-import { useWorkspace, useSpaceStore, getActiveSpace, getView, label, startOpenDrag } from '@lcl/engine'
+import { useWorkspace, useSpaceStore, useRibbonStore, getActiveSpace, setActiveSpace, getView, label, startOpenDrag, rankIds, OverlayAt, formatHotkey, effectiveHotkey, isMacPlatform, type PersistedPanel } from '@lcl/engine'
 import { AMADEUS_ENABLED } from '../spaces'
+import { pluginOfSpace } from '../userSpaces'
 import { useRecentViews, type RecentView } from '../recentViews'
 import { usePluginStore } from '@amadeus/plugins/pluginStore'
-import { resolveIcon } from '@amadeus/components/icons'
 import { usePageStore } from '@amadeus/store/pageStore'
 import { openNote, openDb, openDrawing, openDashboard, openImage, openFile, createDrawing, createDashboard } from '../amadeusNav'
 import { openDailyNote } from '../amadeusTemplates'
 import { openNewChat, openSession } from '../sessionNav'
-import { useI18n } from '../i18n'
-import { pluginDisplayName } from '../amadeus/plugins/display'
+import { useQuickFind } from '../quickFind'
+import { useI18n, registerMessages } from '../i18n'
 import { openBrowser, openTerminal } from '../builtins'
+import { launcherTiles } from './newTabModel'
 import type { ViewProps } from '@lcl/engine/types'
 import { useShallow } from 'zustand/react/shallow'
 
-/** drag 有值 = 卡片可拖入 tab/side bar 落点即开(type/params 交给 openView);无值 = 仅单击(动作类/特殊视图)。 */
-interface Item { key: string; icon: ReactNode; label: string; run: () => void; show: boolean; drag?: { type: string; params?: Record<string, unknown> } }
+registerMessages({
+  'newtab.newDrawing': { zh: '新建白板', en: 'New whiteboard' },
+  'newtab.newDashboard': { zh: '新建仪表盘', en: 'New dashboard' },
+  'newtab.createSection': { zh: '新建', en: 'New' },
+  'newtab.openSection': { zh: '打开', en: 'Open' },
+  'newtab.openHint': { zh: '可拖到标签栏或侧栏', en: 'Drag to the tab bar or a side panel' },
+  'newtab.standalone': { zh: '不属于任何 Space', en: 'Not part of a Space' },
+  'newtab.sidePanels': { zh: '{space} 的侧栏面板', en: '{space} side panels' },
+  'newtab.enterSpace': { zh: '进入「{space}」Space', en: 'Go to the {space} Space' },
+  'newtab.moreViews': { zh: '{space} 的全部视图', en: 'All {space} views' },
+  'newtab.panel.sessions': { zh: '会话', en: 'Sessions' },
+  'newtab.panel.files': { zh: '文件', en: 'Files' },
+  'newtab.panel.notes': { zh: '笔记', en: 'Notes' },
+})
+
+/** drag 有值 = 可拖入 tab/side bar 落点即开(type/params 交给 openView);无值 = 仅单击(动作类/特殊视图)。
+ *  views = Space 格子的展开菜单(该 Space 的各个视图,末尾另有「进入 Space」)。 */
+interface Item { key: string; icon: ReactNode; label: string; run: () => void; show: boolean; drag?: { type: string; params?: Record<string, unknown> }; meta?: string; spaceId?: string; views?: Item[] }
 
 export function NewTabView({ leaf }: ViewProps) {
-  const { t, locale } = useI18n()
-  const zh = document.documentElement.lang.startsWith('zh')
+  const { t } = useI18n()
   const s = useApp(useShallow((state) => ({
     specialEnabled: state.specialEnabled,
     sessions: state.sessions,
@@ -35,16 +54,26 @@ export function NewTabView({ leaf }: ViewProps) {
     setNewChatCfg: state.setNewChatCfg,
     setNewChatModel: state.setNewChatModel,
   })))
-  useSpaceStore((state) => state.activeSpaceId) // 换 Space 重渲(原生段的侧栏项取自当前 Space 的 defaults)
+  const spaces = useSpaceStore((state) => state.spaces) // 插件 / 用户 Space 是异步注册的,订阅着才会补出格子
+  useSpaceStore((state) => state.activeSpaceId) // 换 Space 重渲(侧栏面板取自当前 Space 的 defaults)
+  const ribbonOrder = useRibbonStore((state) => state.order)
   const recents = useRecentViews((state) => state.items)
   const pluginViews = usePluginStore((state) => state.views)
   const pluginCreators = usePluginStore((state) => state.fileCreators)
-  const plugins = usePluginStore((state) => state.plugins)
   const vaultRoot = usePageStore((state) => state.vaultRoot)
   const pages = usePageStore((state) => state.pages)
   const hasBackend = !!window.tangu?.backendStatus
   const amadeusOn = amadeusAvailable() && AMADEUS_ENABLED // 笔记/文件项跟随 Amadeus 门控(与 Space 注册同纪律)
   const ws = () => useWorkspace.getState()
+  const [menu, setMenu] = useState<{ x: number; y: number; item: Item } | null>(null)
+  // 关菜单走 window 监听(与 homeSlot / amadeusViews 的 ctx-menu 同款),不铺 scrim。
+  useEffect(() => {
+    if (!menu) return
+    const close = (): void => setMenu(null)
+    window.addEventListener('click', close)
+    window.addEventListener('contextmenu', close)
+    return () => { window.removeEventListener('click', close); window.removeEventListener('contextmenu', close) }
+  }, [menu])
 
   // 门面统一在 sessionNav:站在这张空白页里点「新对话」就该开在**这个**标签,不是跳回老聊天把它清空。
   const newChat = (): void => { openNewChat() }
@@ -54,89 +83,86 @@ export function NewTabView({ leaf }: ViewProps) {
     if (vaultRoot) void usePageStore.getState().createPage()
   }
 
-  // Forsion 原生 —— 主区入口(跨 Space 全量列出)。动作类(新建笔记/今日)不带 drag;视图类带 drag 可拖入侧栏。
-  const nativeMain: Item[] = [
-    // 主页来自「主页」内置插件:插件页关掉即反注册 → getView 落空 → 这张卡自动消失(同下面的日历/浏览器/终端)。
-    { key: 'homepage', icon: <House size={20} />, label: t('space.home'), run: () => ws().openView('homepage', {}, 'main'), show: !!getView('homepage'), drag: { type: 'homepage' } },
-    // 「新对话」「新建笔记」「今日日记」是动作(清 activeId/草稿、创建文件)→ 只单击、不带 drag:
-    // 拖拽走 openView 会绕过动作,chat 又是 singleton(reuseKey:'primary')→ 只会聚焦旧对话而非新建。
-    { key: 'chat', icon: <MessageCircle size={20} />, label: t('sidebar.newChat'), run: newChat, show: hasNativeFeature('tangu') },
-    { key: 'new-note', icon: <SquarePen size={20} />, label: t('newtab.newNote'), run: newNote, show: amadeusOn },
-    { key: 'daily', icon: <CalendarDays size={20} />, label: t('newtab.today'), run: () => { void openDailyNote() }, show: amadeusOn && !!vaultRoot },
-    // 内置文件类型的「新建」入口:与文件树右键、命令面板、笔记里的斜杠项并列的第四条主路径 ——
-    // 这些视图都靠 params 认领具体文件,没有「裸开一个空视图」的形态,所以只能以动作卡出现、
-    // 不带 drag(拖进去会开出一个没有文件的空视图)。插件声明的创建器同理,见下面 pluginGroups。
-    { key: 'new-drawing', icon: <PenTool size={20} />, label: zh ? '新建白板' : 'New whiteboard', run: () => { void createDrawing('') }, show: amadeusOn && !!vaultRoot },
-    { key: 'new-dashboard', icon: <LayoutDashboard size={20} />, label: zh ? '新建仪表盘' : 'New dashboard', run: () => { void createDashboard('') }, show: amadeusOn && !!vaultRoot },
-    // 日历/待办来自「日历」内置插件:在插件页关掉即反注册 → getView 落空 → 这两块自动消失(同下面的浏览器/终端)。
-    { key: 'calendar', icon: <CalendarDays size={20} />, label: t('view.calendar'), run: () => ws().openView('calendar', {}, 'main'), show: !!getView('calendar'), drag: { type: 'calendar' } },
-    { key: 'todo-list', icon: <ListTodo size={20} />, label: t('view.todo'), run: () => ws().openView('todo-list', {}, 'main'), show: !!getView('todo-list'), drag: { type: 'todo-list' } },
-    { key: 'inbox', icon: <Mail size={20} />, label: t('inbox.reader'), run: () => ws().openView('inbox-reader', {}, 'main'), show: inboxAvailable(), drag: { type: 'inbox-reader' } }, // 与 Inbox 视图注册同判定:无引擎/无 tangu 包的本地 Unit、不点名 inbox 的单品档案都有 backendStatus 却没注册视图 → 卡片不能只看 hasBackend
-    { key: 'agents', icon: <Bot size={20} />, label: t('special.agents.title'), run: () => openSpecial('agents'), show: hasBackend && (s.specialEnabled.historian || s.specialEnabled.muse) },
-    // Coding / Automation Space 的主视图(单例);仅其注册(产品档案 + 能力门控)后出现,drag 可拖入任意区。
-    { key: 'code-studio', icon: <Code2 size={20} />, label: t('view.codeStudio'), run: () => ws().openView('code-studio', {}, 'main'), show: !!getView('code-studio'), drag: { type: 'code-studio' } },
-    { key: 'automation-detail', icon: <Workflow size={20} />, label: t('view.automationDetail'), run: () => ws().openView('automation-detail', {}, 'main'), show: !!getView('automation-detail'), drag: { type: 'automation-detail' } },
-    // 造物栅格来自「造物」内置插件:插件页关掉即反注册 → getView 落空 → 这张卡自动消失(同上面的主页/日历)。
-    { key: 'artificial', icon: <Blocks size={20} />, label: t('view.artificial'), run: () => ws().openView('artificial', {}, 'main'), show: !!getView('artificial'), drag: { type: 'artificial' } },
-    // 内置插件的两个视图:在插件页关掉即反注册 → getView 落空 → 这两块自动消失。
-    { key: 'browser', icon: <Globe size={20} />, label: t('browser.title'), run: () => openBrowser(), show: !!getView('browser'), drag: { type: 'browser' } },
-    { key: 'terminal', icon: <TerminalSquare size={20} />, label: t('terminal.title'), run: () => openTerminal(), show: !!getView('terminal'), drag: { type: 'terminal' } },
-  ]
-
-  // Forsion 原生 —— 侧栏视图 = 当前 Space 的 sidebarDefaults(名称/图标查注册表)。单击开在其所属侧;
-  // 收起态先 toggleSidebar 展开(还原 stash 全部视图——直接 openView 会覆盖成单视图),再 openView 激活/补开。
-  const space = getActiveSpace()
-  const nativeSide: Item[] = (['left', 'right'] as const).flatMap((loc) =>
-    (space?.sidebarDefaults[loc] ?? []).map((p) => {
-      const def = getView(p.type)
-      const Icon = def?.icon
-      return {
-        key: `${loc}:${p.type}`,
-        icon: Icon ? <Icon size={20} /> : <FileText size={20} />,
-        label: def ? label(def.displayName) : p.type,
-        run: () => {
-          const w = useWorkspace.getState()
-          const visible = loc === 'left' ? w.leftVisible : w.rightVisible
-          if (!visible) w.toggleSidebar(loc)
-          ws().openView(p.type, p.params, loc) // 带上该 Space 声明的默认 params(如 Coding 侧栏 chat 的 followActive/reuseKey)
-        },
-        show: !!def,
-        drag: { type: p.type, params: p.params }, // 拖入 tab bar → 主区;拖入另一侧 → 该侧;params 随行
-      }
-    }),
-  )
-
-  // 每个插件一组:插件视图(plugin:<id>:<viewId>)按 pluginId 分组,组标题 = 插件名。
-  const pluginGroups: { pluginId: string; name: string; items: Item[] }[] = []
-  const groupFor = (pluginId: string): { pluginId: string; name: string; items: Item[] } => {
-    let g = pluginGroups.find((x) => x.pluginId === pluginId)
-    if (!g) { g = { pluginId, name: (() => { const pp = plugins.find((p) => p.id === pluginId); return pp ? pluginDisplayName(pp, locale) : pluginId })(), items: [] }; pluginGroups.push(g) }
-    return g
-  }
-  for (const o of pluginViews) {
-    const type = `plugin:${o.pluginId}:${o.item.id}`
-    const Icon = getView(type)?.icon
-    groupFor(o.pluginId).items.push({
-      key: type,
-      icon: Icon ? <Icon size={20} /> : <FileText size={20} />,
-      label: o.item.title,
-      run: () => ws().openView(type, {}, 'main'),
-      show: true,
-      drag: { type },
-    })
-  }
-  // 插件声明的「新建 …」(registerFileCreator)同样进新建标签页 —— 内置的「新建白板」在这儿,
-  // 插件的就也该在这儿:两者的差别只应该是「谁提前装好了」。没有库就没处新建,故跟着 vaultRoot 显示。
-  // 是动作不是视图 → 不带 drag(同上面的内置创建器)。
-  for (const o of pluginCreators) {
-    groupFor(o.pluginId).items.push({
+  // 新建 —— 都是动作(清 activeId/草稿、创建文件),只单击、不带 drag:拖拽走 openView 会绕过动作,
+  // chat 又是 singleton(reuseKey:'primary')→ 只会聚焦旧对话而非新建;文件类视图靠 params 认领具体文件,
+  // 没有「裸开一个空视图」的形态。插件声明的创建器(registerFileCreator)同理 —— 内置的和插件的差别只应该是
+  // 「谁提前装好了」;没有库就没处新建,故跟着 vaultRoot 显示。
+  const plus = <Plus size={14} />
+  const createItems: Item[] = [
+    { key: 'chat', icon: plus, label: t('sidebar.newChat'), run: newChat, show: hasNativeFeature('tangu') },
+    { key: 'new-note', icon: plus, label: t('newtab.newNote'), run: newNote, show: amadeusOn },
+    { key: 'daily', icon: plus, label: t('newtab.today'), run: () => { void openDailyNote() }, show: amadeusOn && !!vaultRoot },
+    { key: 'new-drawing', icon: plus, label: t('newtab.newDrawing'), run: () => { void createDrawing('') }, show: amadeusOn && !!vaultRoot },
+    { key: 'new-dashboard', icon: plus, label: t('newtab.newDashboard'), run: () => { void createDashboard('') }, show: amadeusOn && !!vaultRoot },
+    ...pluginCreators.map((o): Item => ({
       key: `creator:${o.pluginId}:${o.item.id}`,
-      icon: <span style={{ fontSize: 20, lineHeight: '20px', display: 'inline-flex' }}>{resolveIcon(o.item.icon, '＋')}</span>,
+      icon: plus,
       label: o.item.label,
       run: () => { void Promise.resolve(o.item.run('')).catch((e) => console.error('[amadeus] 插件新建失败', e)) },
       show: amadeusOn && !!vaultRoot,
-    })
+    })),
+  ]
+
+  /** 一个视图项:entity 视图(配方里钉死的那份文件)用文件名当名字,其余用注册表里的视图名。 */
+  const viewItem = (p: PersistedPanel, key: string): Item => {
+    const def = getView(p.type)
+    const Icon = def?.icon
+    const id = def?.kind === 'entity' && def.idParam ? p.params?.[def.idParam] : undefined
+    return {
+      key,
+      icon: Icon ? <Icon size={16} /> : <FileText size={16} />,
+      label: typeof id === 'string' ? (id.split('/').pop() || id) : def ? label(def.displayName) : p.type,
+      run: () => ws().openView(p.type, p.params, 'main'),
+      show: !!def,
+      drag: { type: p.type, params: p.params },
+    }
   }
+
+  // 打开 —— 一个 Space 一格,顺序跟 Ribbon 一致(归属规则见 newTabModel)。内置的和插件带来的不再区分;
+  // 名字、图标用 Space 自己的。单击 = 开它的第一个视图(开在这个标签里);多视图的在展开菜单里选。
+  const ordered = rankIds(spaces.map((sp) => `space:${sp.id}`), ribbonOrder).flatMap((id) => spaces.find((sp) => `space:${sp.id}` === id) ?? [])
+  const { tiles, free } = launcherTiles(ordered, getView, pluginOfSpace, pluginViews.map((o) => `plugin:${o.pluginId}:${o.item.id}`))
+  const spaceItems: Item[] = tiles.map(({ space, views }) => {
+    const vs = views.map((p, i) => viewItem(p, `view:${space.id}:${i}`))
+    const SpIcon = space.icon
+    return { ...vs[0], key: `space:${space.id}`, icon: SpIcon ? <SpIcon size={16} /> : vs[0].icon, label: label(space.name), spaceId: space.id, views: vs }
+  })
+  // 不属于任何 Space:浏览器 / 终端(内置插件的两个视图,插件页关掉即反注册 → getView 落空 → 自动消失)、
+  // 后台 Agent 详情(特殊视图,不带 drag),以及没带 Space 的插件视图。
+  const freeItems: Item[] = [
+    { key: 'browser', icon: <Globe size={16} />, label: t('browser.title'), run: () => openBrowser(), show: !!getView('browser'), drag: { type: 'browser' } },
+    { key: 'terminal', icon: <TerminalSquare size={16} />, label: t('terminal.title'), run: () => openTerminal(), show: !!getView('terminal'), drag: { type: 'terminal' } },
+    { key: 'agents', icon: <Bot size={16} />, label: t('special.agents.title'), run: () => openSpecial('agents'), show: hasBackend && (s.specialEnabled.historian || s.specialEnabled.muse) },
+    ...free.map((type) => viewItem({ type, params: {} }, type)),
+  ]
+
+  // 当前 Space 的侧栏面板 = 它的 sidebarDefaults(名称查注册表)。单击开在其所属侧;
+  // 收起态先 toggleSidebar 展开(还原 stash 全部视图——直接 openView 会覆盖成单视图),再 openView 激活/补开。
+  // 「工作区」视图的档位由 Space 写死在条目上(spaces.tsx),同一个 Space 里可以有两张 → 按档位叫名字,不然两张都叫「工作区」。
+  const space = getActiveSpace()
+  const panelName = (p: PersistedPanel): string | undefined => {
+    const mode = p.type === 'workspace' ? p.params?.mode : undefined
+    if (mode === 'orbits' || mode === 'sessions') return t('newtab.panel.sessions')
+    if (mode === 'files') return t('newtab.panel.files')
+    if (mode === 'notes') return t('newtab.panel.notes')
+    const def = getView(p.type)
+    return def ? label(def.displayName) : undefined
+  }
+  const sideItems: Item[] = (['left', 'right'] as const).flatMap((loc) =>
+    (space?.sidebarDefaults[loc] ?? []).map((p): Item => ({
+      key: `${loc}:${p.type}:${String(p.params?.mode ?? '')}`,
+      icon: loc === 'left' ? <PanelLeft size={14} /> : <PanelRight size={14} />,
+      label: panelName(p) ?? p.type,
+      run: () => {
+        const w = useWorkspace.getState()
+        const visible = loc === 'left' ? w.leftVisible : w.rightVisible
+        if (!visible) w.toggleSidebar(loc)
+        ws().openView(p.type, p.params, loc) // 带上该 Space 声明的默认 params(如 Coding 侧栏 chat 的 followActive/reuseKey)
+      },
+      show: !!getView(p.type),
+      drag: { type: p.type, params: p.params }, // 拖入 tab bar → 主区;拖入另一侧 → 该侧;params 随行
+    })),
+  )
 
   /** 重开一条「最近使用」:按 kind 分派到专属门面 / openView。 */
   const openRecent = (r: RecentView): void => {
@@ -165,6 +191,10 @@ export function NewTabView({ leaf }: ViewProps) {
   // 最近使用:会话/笔记/文件/视图,跨 Space。只显示仍有效的目标:
   // - 笔记须仍在 pages(避免 loadPage「缺文件即新建」把删掉的复活成空文件);会话须仍存在;
   // - 文件/视图按注册表存在性 + Amadeus 门控过滤(文件路径存活由门面自兜底,不在此硬校验)。
+  // 每行右侧的灰字 = 它是什么 · 属于哪个 Space(和标题重复的那半不写;笔记只写 Space —— 它的视图名是「编辑器」)。
+  const spaceName = (id: string): string | undefined => { const sp = spaces.find((x) => x.id === id); return sp ? label(sp.name) : undefined }
+  const spaceOfView = new Map<string, string>()
+  for (const { space: sp, views } of tiles) for (const v of views) if (!spaceOfView.has(v.type)) spaceOfView.set(v.type, label(sp.name))
   const recentItems: Item[] = recents
     .filter((r) => {
       if (r.kind === 'note') return amadeusOn && pages.includes(r.id)
@@ -173,19 +203,24 @@ export function NewTabView({ leaf }: ViewProps) {
       if (r.kind === 'view') return !!r.viewType && !!getView(r.viewType)
       return false
     })
-    .slice(0, 8)
+    .slice(0, 6)
     .map((r) => {
       const vt = r.viewType || (r.kind === 'note' ? 'amadeus-editor' : 'chat')
-      const Icon = getView(vt)?.icon
+      const def = getView(vt)
+      const Icon = def?.icon
+      // kind='view' 的标题**按注册表实时求值**,不用快照:`record` 存的是当时的 `label(displayName)`,
+      // 而冷启动恢复布局那一下跑在 LocaleProvider 挂载**之前** —— 那时 appStore.tr 还是缺省的
+      // `(k) => k`,存进去的就是裸 i18n 键(实测:退出时停在日历 → 下次启动这里显示「view.calendar」)。
+      // 文件/笔记/会话的标题是真名字不是译文,照旧用快照。
+      const title = (r.kind === 'chat' && s.sessions.find((x) => x.id === r.id)?.title)
+        || (r.kind === 'view' ? label(def?.displayName ?? r.title) : r.title)
+      const what = (r.kind === 'chat' || r.kind === 'file') && def ? label(def.displayName) : undefined
+      const where = r.kind === 'chat' ? spaceName('tangu') : r.kind === 'view' ? spaceOfView.get(vt) : vt === 'wsfile' ? undefined : spaceName('amadeus')
       return {
         key: r.key,
-        icon: Icon ? <Icon size={20} /> : <FileText size={20} />,
-        // kind='view' 的标题**按注册表实时求值**,不用快照:`record` 存的是当时的 `label(displayName)`,
-        // 而冷启动恢复布局那一下跑在 LocaleProvider 挂载**之前** —— 那时 appStore.tr 还是缺省的
-        // `(k) => k`,存进去的就是裸 i18n 键(实测:退出时停在日历 → 下次启动这里显示「view.calendar」)。
-        // 文件/笔记/会话的标题是真名字不是译文,照旧用快照。
-        label: (r.kind === 'chat' && s.sessions.find((x) => x.id === r.id)?.title)
-          || (r.kind === 'view' ? label(getView(vt)?.displayName ?? r.title) : r.title),
+        icon: Icon ? <Icon size={16} /> : <FileText size={16} />,
+        label: title,
+        meta: [...new Set([what, where])].filter((x) => x && x !== title).join(' · '),
         run: () => openRecent(r),
         show: true,
       }
@@ -200,40 +235,96 @@ export function NewTabView({ leaf }: ViewProps) {
     if (p && ((p.params ?? {}) as { __type?: string }).__type === 'launcher') useWorkspace.getState().closeLeaf(leaf.id)
   }
 
-  const section = (title: string, items: Item[], key: string = title): ReactNode => {
-    const shown = items.filter((i) => i.show)
-    if (!shown.length) return null
+  const card = (it: Item, cls: string): ReactNode => (
+    <button
+      key={it.key}
+      className={`newtab-card ${cls}`}
+      title={it.label}
+      draggable={!!it.drag}
+      style={it.drag ? { cursor: 'grab' } : undefined}
+      onDragStart={it.drag ? (e) => startOpenDrag(e.dataTransfer, it.drag!) : undefined}
+      onClick={() => pick(it)}
+    >
+      <span className="newtab-card-ic">{it.icon}</span>
+      <span className="newtab-card-label">{it.label}</span>
+      {it.meta && <span className="nt-meta">{it.meta}</span>}
+    </button>
+  )
+  /** Space 格子:右键、或(多视图时)点右边的箭头,出展开菜单。事件不让冒到 window —— 那边的监听会把刚开的菜单关掉。 */
+  const tile = (it: Item): ReactNode => {
+    if (!it.views) return <div className="nt-tile" key={it.key}>{card(it, 'nt-tilebtn')}</div>
+    const more = it.views.length > 1
     return (
-      <div className="newtab-sec" key={key}>
-        <div className="newtab-sec-title">{title}</div>
-        <div className="newtab-grid">
-          {shown.map((it) => (
-            <button
-              key={it.key}
-              className="newtab-card"
-              title={it.label}
-              draggable={!!it.drag}
-              style={it.drag ? { cursor: 'grab' } : undefined}
-              onDragStart={it.drag ? (e) => startOpenDrag(e.dataTransfer, it.drag!) : undefined}
-              onClick={() => pick(it)}
-            >
-              <span className="newtab-card-ic">{it.icon}</span>
-              <span className="newtab-card-label">{it.label}</span>
-            </button>
-          ))}
-        </div>
+      <div
+        key={it.key}
+        className={`nt-tile${more ? ' has-more' : ''}`}
+        onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setMenu({ x: e.clientX, y: e.clientY, item: it }) }}
+      >
+        {card(it, 'nt-tilebtn')}
+        {more && (
+          <button
+            className="nt-more"
+            title={t('newtab.moreViews', { space: it.label })}
+            aria-label={t('newtab.moreViews', { space: it.label })}
+            onClick={(e) => {
+              e.stopPropagation()
+              const r = e.currentTarget.parentElement!.getBoundingClientRect()
+              setMenu({ x: r.left, y: r.bottom + 4, item: it })
+            }}
+          >
+            <ChevronDown size={14} />
+          </button>
+        )}
       </div>
     )
   }
+  const shown = (items: Item[]): Item[] => items.filter((i) => i.show)
+  const section = (title: string, body: ReactNode, hint?: string): ReactNode => (
+    <div className="newtab-sec">
+      <div className="newtab-sec-title nt-head">{title}{hint && <span className="nt-hint">{hint}</span>}</div>
+      {body}
+    </div>
+  )
+  const recent = shown(recentItems), create = shown(createItems), spaceTiles = shown(spaceItems), freeTiles = shown(freeItems), side = shown(sideItems)
+  // 手机上没有键盘,不标快捷键;桌面读用户改过的那一份。
+  const hotkey = window.tangu?.mobile ? '' : formatHotkey(effectiveHotkey({ id: 'quick-find', hotkey: 'mod+p' }), isMacPlatform())
 
   return (
     <div className="newtab">
-      <div className="newtab-inner">
-        <div className="newtab-head"><Plus size={18} /> <span>{t('newtab.title')}</span></div>
-        {section(t('newtab.recentSection'), recentItems)}
-        {section(zh ? 'Forsion 原生' : 'Forsion', [...nativeMain, ...nativeSide])}
-        {pluginGroups.map((g) => section(g.name, g.items, `plugin:${g.pluginId}`))}
+      <div className="newtab-inner nt">
+        <button className="nt-search" onClick={() => useQuickFind.getState().openPalette()}>
+          <Search size={16} />
+          <span>{t('quickfind.placeholder')}</span>
+          {hotkey && <kbd className="nt-kbd">{hotkey}</kbd>}
+        </button>
+        {recent.length > 0 && section(t('newtab.recentSection'), <div className="nt-rows">{recent.map((it) => card(it, 'nt-row'))}</div>)}
+        {create.length > 0 && section(t('newtab.createSection'), <div className="nt-chips">{create.map((it) => card(it, 'nt-chip'))}</div>)}
+        {spaceTiles.length + freeTiles.length > 0 && section(t('newtab.openSection'), (
+          <>
+            {spaceTiles.length > 0 && <div className="nt-tiles">{spaceTiles.map(tile)}</div>}
+            {freeTiles.length > 0 && spaceTiles.length > 0 && <div className="nt-sub">{t('newtab.standalone')}</div>}
+            {freeTiles.length > 0 && <div className="nt-tiles">{freeTiles.map(tile)}</div>}
+          </>
+        ), t('newtab.openHint'))}
+        {side.length > 0 && space && (
+          <div className="nt-side">
+            <span>{t('newtab.sidePanels', { space: label(space.name) })}</span>
+            {side.map((it) => card(it, 'nt-pchip'))}
+          </div>
+        )}
       </div>
+      {menu && menu.item.views && createPortal(
+        <OverlayAt className="ctx-menu" x={menu.x} y={menu.y} onClick={(e) => e.stopPropagation()}>
+          {menu.item.views.map((v) => (
+            <button key={v.key} onClick={() => { setMenu(null); pick(v) }}>{v.icon}{v.label}</button>
+          ))}
+          <div className="ctx-separator" />
+          <button onClick={() => { const id = menu.item.spaceId; setMenu(null); if (id) setActiveSpace(id) }}>
+            <ArrowUpRight size={16} />{t('newtab.enterSpace', { space: menu.item.label })}
+          </button>
+        </OverlayAt>,
+        document.body,
+      )}
     </div>
   )
 }
