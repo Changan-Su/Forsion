@@ -40,7 +40,8 @@
     "emu:treecompare": "node scripts/uitree-compare.cjs",
     "test:nativebar": "./android/gradlew -p android :app:testDebugUnitTest --tests '*NativeChromeBarLayoutTest'",
     "emu:launchericon": "node scripts/launcher-icon-upgrade-emu.cjs",
-    "emu:phone": "node scripts/phone-control-emu.cjs"
+    "emu:phone": "node scripts/phone-control-emu.cjs",
+    "emu:localasset": "node scripts/local-asset-emu.cjs"
   },
   "dependencies": {
     "@capacitor/android": "^7.6.7",

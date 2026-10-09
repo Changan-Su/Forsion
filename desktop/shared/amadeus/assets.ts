@@ -32,20 +32,33 @@ export function relFrom(dir: string, vaultRel: string): string {
   return vaultRel.startsWith(prefix) ? vaultRel.slice(prefix.length) : vaultRel
 }
 
-/** 可替换的资源 URL 构建器(接缝):默认 = amadeus-asset:// 自定义协议(**只有桌面主进程**解析它)。
- *  没有这个协议的宿主启动时经 setAssetUrlBuilder 注入 HTTP 版:云端库(网页版 + 手机缺省,
- *  → /api/amadeus/vaults/:v/asset?ref=…&at=<令牌>)、设备网页版、分享页。桌面不调用注入,零影响。
- *  ⚠️ 两个已知缺陷(2026-10-09 实证,未修;仪器 = mobile 的 npm run e2e:localasset + assets.test.ts 末尾那格):
- *    · **这个接缝只有去程没有回程**:fromAssetUrl / toStoredMarkdown 只认默认前缀。换了构建器的宿主上,
- *      编辑器一存盘就把注入的 HTTP 地址(连同资源令牌)写进笔记,不再是页相对路径;
- *    · 手机本地库没有注入、安卓也没有接默认协议的拦截器(旧注释说有,从来没有)—— 图片显示不出来;
- *      构建器是模块级的,云桥装上后没人撤,切到本地库后图片被指到云端。 */
-let assetUrlBuilder: (ref: string) => string = (ref) =>
-  `${ASSET_SCHEME}://v/${encodeURIComponent(ref)}`
+/** 默认的显示地址:amadeus-asset:// 自定义协议(**只有桌面主进程**解析它)。 */
+const defaultAssetUrl = (ref: string): string => `${ASSET_SCHEME}://v/${encodeURIComponent(ref)}`
 
-/** Install a custom display-URL builder for vault assets (web cloud bridge). */
-export function setAssetUrlBuilder(fn: (ref: string) => string): void {
-  assetUrlBuilder = fn
+/** 可替换的资源地址接缝:**成对的「构建 + 解析」**。
+ *  没有默认协议的宿主启动时经 setAssetUrlBuilder 注入自己的一对:云端库(网页版 + 手机缺省,
+ *  → /api/amadeus/vaults/:v/asset?ref=…&at=<令牌>)、设备网页版、手机本地库(Capacitor 的本地文件地址)。
+ *  桌面不调用注入 = 默认协议,零影响。
+ *
+ *  ⚠️ **两半必须一起装**(2026-10-09 事故:此前只有构建没有解析)。显示时换出去的地址,存盘时要靠解析换回
+ *  页相对路径;只装构建的宿主上,编辑器一存盘就把注入的地址(连同资源令牌 / 设备上的绝对路径)写进笔记 ——
+ *  令牌过期图片失联,同步到别的设备是一条外链而不是附件。只读的宿主(分享页,从不存盘)可以不给解析。
+ *  解析器只许认**自己这个库**的资源地址,认不出一律回 null:它的结果会被写回用户的正文。
+ *  仪器:assets.test.ts 的「换了显示地址的构建器之后的往返」+ mobile 的 npm run e2e:localasset。 */
+let assetUrlBuilder: (ref: string) => string = defaultAssetUrl
+let assetUrlParser: ((url: string) => string | null) | null = null
+
+/** Install a custom display-URL builder for vault assets, together with its inverse.
+ *  `parse(url)` → vault-relative path, or null when the URL is not one this builder produced. */
+export function setAssetUrlBuilder(build: (ref: string) => string, parse?: (url: string) => string | null): void {
+  assetUrlBuilder = build
+  assetUrlParser = parse ?? null
+}
+
+/** 换回默认的那一对(桥被换掉 / 测试收尾)。 */
+export function resetAssetUrlBuilder(): void {
+  assetUrlBuilder = defaultAssetUrl
+  assetUrlParser = null
 }
 
 export function toAssetUrl(vaultRelPath: string): string {
@@ -57,11 +70,21 @@ export function toAssetUrl(vaultRelPath: string): string {
   return assetUrlBuilder(vaultRelPath).replace(/[()]/g, (c) => '%' + c.charCodeAt(0).toString(16).toUpperCase())
 }
 
+/** 显示地址 → 库内相对路径;不是资源地址 = null。
+ *  先认默认协议(桌面逐字不变;换了构建器的宿主上残留的默认协议地址也照样还原),再问装上的解析器。
+ *  编辑器序列化时会给目标里的 `&` 加反斜杠(图片与文字同段时 remark 的转义),先去掉再问。 */
 export function fromAssetUrl(url: string): string | null {
   const prefix = `${ASSET_SCHEME}://v/`
-  if (!url.startsWith(prefix)) return null
+  if (url.startsWith(prefix)) {
+    try {
+      return decodeURIComponent(url.slice(prefix.length))
+    } catch {
+      return null
+    }
+  }
+  if (!assetUrlParser) return null
   try {
-    return decodeURIComponent(url.slice(prefix.length))
+    return assetUrlParser(url.replace(/\\&/g, '&')) || null
   } catch {
     return null
   }

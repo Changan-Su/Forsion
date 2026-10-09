@@ -1,34 +1,29 @@
 /**
  * 笔记内嵌图片「显示 + 存盘往返」台架 —— `npm run build && npm run e2e:localasset`(mobile 目录)。
- * ⚠️ **当前是红的(6 条),红得对**:它钉的三个缺陷 2026-10-09 实证之后还没修。修法见本注末尾。
  *
- * 起因:代码里三处注释说「图片(amadeus-asset://)由原生 Android 拦截读同一 vault」,但安卓原生代码里没有任何
- * 请求拦截器(android/app/src/main 下没有 shouldInterceptRequest,git 历史上也从没有过),页面的内容安全策略
- * 也不放这个协议。顺着查下去,问题不止本地库。
+ * 起因(2026-10-09):代码里三处注释说「图片(amadeus-asset://)由原生 Android 拦截读同一 vault」,但安卓原生代码里
+ * 没有任何请求拦截器(android/app/src/main 下没有 shouldInterceptRequest,git 历史上也从没有过),页面的内容安全
+ * 策略也不放这个协议。顺着查下去,问题不止本地库 —— 三个缺陷,同日修掉,本台架留作回归:
+ *   A. 冷启动就在本地库:地址是 `amadeus-asset://v/…`,被 img-src 拦下,编辑器显示「图片无法加载」。
+ *   B. 先在云端库启动,再切到本地库:资源地址的构建器是模块级的,云桥装上之后没人撤 —— 本地库的图片被指到云端库的
+ *      资源端点,并且存盘时这条带令牌的云端地址被写进了本地笔记。
+ *   C. 云端库(手机缺省;网页版是同一座桥):一存盘,`![](.amadeus/x.png)` 就被写成
+ *      `![](https://…/asset?ref=…&page=…&at=<令牌>)` —— 令牌 24 小时过期后图片失联。根因:共享接缝
+ *      desktop/shared/amadeus/assets.ts 只有去程(构建)没有回程(解析)。
+ * 修法:接缝改成成对的「构建 + 解析」(云桥 / 设备网页桥各补解析);手机本地桥装自己的一对(src/amadeus/localAssets.ts),
+ * 每次建桥都重装。纯函数的钉子:desktop 的 shared/amadeus/assets.test.ts、frontend/src/services/cloudAssetsRoundtrip.test.ts、
+ * frontend/src/services/mobileLocalAssets.test.ts。
  *
  * 真把 mobile/dist 在手机视口的 headless Chromium 里跑,三个场景,每个都:打开一篇带 `![](.amadeus/x.png)` 的
  * 笔记 → 看编辑器里那张 <img> 的地址、加载出来没有、有没有策略违规 → 在「后文」段末敲一个字、等过自动保存 →
  * 看落盘的那一行还是不是页相对路径。
- *   A. 冷启动就在本地库。现状:地址是 `amadeus-asset://v/…`,被 img-src 拦下,编辑器显示「图片无法加载」。
- *      存盘往返是好的(默认前缀认得回来)—— 只是显示不出。
- *   B. 先在云端库启动,再切到本地库。现状:资源地址的构建器是模块级的,云桥装上之后没人撤 —— 本地库的图片被
- *      指到云端库的资源端点(本地文件名发给了服务器;服务端会按文件名全库兜底,可能显示成云端库里另一张图),
- *      并且**存盘时这条带令牌的云端地址被写进了本地笔记**。
- *   C. 云端库(手机缺省;网页版是同一座桥)。现状:图片显示正常,但**一存盘,`![](.amadeus/x.png)` 就被写成
- *      `![](https://…/asset?ref=…&page=…&at=<令牌>)`** —— 资源令牌 24 小时过期后图片失联,同步到别的设备
- *      是一条外链不是附件。根因:desktop/shared/amadeus/assets.ts 的接缝只有去程(setAssetUrlBuilder)
- *      没有回程(fromAssetUrl 只认默认前缀)。纯函数的钉子在 desktop/shared/amadeus/assets.test.ts 末尾。
  *
- * ⚠️ 这是浏览器台架:证明得了页面这一层把地址指到了哪里、落盘写了什么;证明不了安卓原生层的行为。
- *
- * 修法(未做,等拍板;**顺序是硬约束**):
- *   1. 先补共享接缝的回程:assets.ts 把单向的构建器换成成对的「构建 + 解析」,fromAssetUrl 先问装上的解析器
- *      再退回默认前缀(桌面不装 = 行为不变);云桥 / 设备网页桥 / 分享桥各补解析。场景 C 变绿。
- *   2. 再给手机本地桥装自己的那一对:地址 = Capacitor.convertFileSrc(<应用私有目录>/vault/<库内路径>)
- *      (安卓上是同源的 https://localhost/_capacitor_file_/…,不用动内容安全策略,自带 Range),自己拒 `..`;
- *      每次建桥都重装(切库不再串)。场景 A / B 变绿 —— 浏览器里没人服务那个地址,届时台架要 route 住它、
- *      用 readVaultBytes 回填字节,原生层真能不能服务得上模拟器验。
- *   ⚠️ 先做 2 不做 1 = 把「图不显示」换成「存盘写进设备上的绝对路径」,更坏。
+ * ⚠️ 这是浏览器台架:证明得了页面这一层把地址指到了哪里、落盘写了什么;**证明不了安卓原生层**。本地库的图片地址
+ *    在安卓上是 Capacitor 本地文件服务(`https://localhost/_capacitor_file_/<应用私有目录>/vault/…`);浏览器里
+ *    文件系统是 IndexedDB,拿到的库根只是 `/DATA/vault` 这个路径、没人服务它 —— 台架 route 住它、用 readVaultBytes
+ *    回填字节。原生那一层真能不能服务(路径、百分号解码、Range)要上模拟器 / 真机看。
+ * 负对照(实跑过,修之前的产物):A 红 2 条(图没加载、策略违规),B 红 3 条(图没加载、去云端要了、落盘是云端地址),
+ *    C 红 1 条(落盘是云端地址)。
  */
 const http = require('http')
 const net = require('net')
@@ -117,6 +112,17 @@ async function main() {
     const page = await ctx.newPage()
     page.on('dialog', (d) => { void d.accept() })
     const cloudAssetHits = []
+    const localAssetHits = []
+    // 本地库的图片地址(浏览器平台上是 `/DATA/vault/<库内路径>`,见头注):没人服务,这里用库里的真字节回填。
+    await page.route('**/DATA/vault/**', async (r) => {
+      const rel = decodeURIComponent(new URL(r.request().url()).pathname.split('/DATA/vault/')[1] || '')
+      localAssetHits.push(rel)
+      const b64 = await page.evaluate(async (p) => {
+        const bytes = await window.amadeus.readVaultBytes(p).catch(() => null)
+        return bytes ? btoa(String.fromCharCode(...bytes)) : null
+      }, rel).catch(() => null)
+      return b64 ? r.fulfill({ status: 200, contentType: 'image/png', body: Buffer.from(b64, 'base64') }) : r.fulfill({ status: 404, body: '' })
+    })
     await page.route('**/auth/me', (r) => r.fulfill({ status: 200, contentType: 'application/json', body: '{"username":"e2e"}' }))
     await page.route('**/api/**', (r) => r.abort())
     // 假云端(场景 B 用;⚠️ 后注册先匹配,必须写在 abort 之后):一个空的云端库,资源端点记下谁来要过什么。
@@ -222,6 +228,7 @@ async function main() {
     check(!!img && img.complete && img.w === 2, `${label}:图片加载出来了(naturalWidth = 2)`, img ? `complete=${img.complete} naturalWidth=${img.w}` : '')
     check(seen.csp.length === 0, `${label}:打开笔记没有触发内容安全策略违规`, seen.csp.map((v) => `${v.d} ← ${v.uri}`).join(' ; '))
     if (!stay) check(cloudAssetHits.length === 0, `${label}:本地库的图片没有去云端要`, cloudAssetHits.slice(0, 3).join(' , '))
+    if (!stay) check(localAssetHits.includes(seeded.rel), `${label}:图片是按本地库的地址取的(防空过)`, `取过: ${localAssetHits.slice(0, 3).join(' , ') || '(无)'}`)
 
     // 存盘往返:显示时图片地址被换成了能加载的形态,存回去必须还原成页相对路径。敲一个字、等过自动保存、看落盘的那一行。
     // (还原不了 = 设备上的绝对地址 / 带令牌的云端地址被写进笔记:换台设备、令牌一过期,图就永久失联。)

@@ -203,6 +203,11 @@ export class VaultManager {
     return fs.readFile(this.resolveInVault(rel)) // 无 encoding = Uint8Array
   }
 
+  /** 库根在 WebView 里可直接加载的地址(图片 / 音视频的显示地址以它为前缀,见 localAssets.ts)。 */
+  assetBase(): Promise<string> {
+    return fs.webUrl(this.requireRoot())
+  }
+
   // ── 回收站(.trash):desktop vaultManager 同款(扁平存放,撞名加 " (N)",.meta.json 记原位;
   //    点开头目录被扫描/索引天然跳过 → 树/搜索/链接全免疫)。差异:无 watcher → 无 emitMutate。 ──
 

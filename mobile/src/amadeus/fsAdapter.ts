@@ -5,6 +5,7 @@
  * 路径约定:VaultManager 用**虚拟绝对路径** `/vault/...` 做根(path-browserify 的 resolve/relative 照常算),
  * 本壳把绝对路径去前导 `/` 得 Capacitor Data 相对路径(vault 落 Data/vault/...)。
  */
+import { Capacitor } from '@capacitor/core'
 import { Filesystem, Directory, Encoding } from '@capacitor/filesystem'
 
 const DIR = Directory.Data
@@ -28,8 +29,8 @@ function bytesToB64(bytes: Uint8Array): string {
 export interface Dirent { name: string; isDirectory(): boolean; isFile(): boolean }
 
 export const fs = {
-  /** 'utf8' → string;否则 Uint8Array(readVaultBytes / 读数据库走这条;
-   *  ⚠️ 图片显示不走这里,也没有原生拦截器替它读 —— 见 mobileAmadeusBridge.ts 头注)。 */
+  /** 'utf8' → string;否则 Uint8Array(readVaultBytes / 读数据库走这条)。
+   *  图片 / 音视频的显示不走这里:WebView 直接按 webUrl 给的地址去取(见 localAssets.ts)。 */
   async readFile(abs: string, encoding?: 'utf8'): Promise<any> {
     const path = cap(abs)
     if (encoding === 'utf8') {
@@ -81,5 +82,12 @@ export const fs = {
   async stat(abs: string): Promise<{ isDirectory(): boolean; isFile(): boolean }> {
     const st = await Filesystem.stat({ path: cap(abs), directory: DIR })
     return { isDirectory: () => st.type === 'directory', isFile: () => st.type === 'file' }
+  },
+  /** 虚拟绝对路径 → WebView 里能直接加载的地址(无尾斜杠)。安卓:getUri 给应用私有目录下的 file:// 地址,
+   *  convertFileSrc 换成 `https://localhost/_capacitor_file_/…` —— Capacitor 自带的本地文件服务,与页面同源、支持 Range。
+   *  浏览器里(开发 / 台架)文件系统是 IndexedDB,拿到的只是 `/DATA/vault` 这样一个路径,没有人服务它。 */
+  async webUrl(abs: string): Promise<string> {
+    const r = await Filesystem.getUri({ path: cap(abs), directory: DIR })
+    return Capacitor.convertFileSrc(r.uri).replace(/\/+$/, '')
   },
 }
