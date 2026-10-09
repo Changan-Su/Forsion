@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -10,6 +10,7 @@ import { IPC, type DbReadResult } from '@amadeus-shared/ipc'
 import type { LoadedPage } from '@amadeus-shared/compiler'
 import { createLocalVault, type LocalVault } from '../../unit/localVault'
 import { createRuntime } from '../../unit/plugins/amadeus/runtime'
+import { VaultWatcher } from './amadeus/fs/watcher'
 
 const execute = promisify(execFile)
 let scratch: string
@@ -155,9 +156,12 @@ describe('standalone local Amadeus capability', () => {
     // 笔记经 writeTextFile(v4 唯一落盘通道)写 → externalChange:开着的编辑器只听这一条(评审 G1-04,原为 fileChange)。
     expect(events).toContainEqual({ channel: IPC.externalChange, payload: 'Observed.md', origin: 'tab-a' })
     // 带 base 的 writeTextFile 也是 CAS:被拒 = 没写,不许叫别的编辑器回灌(同下面 Calendar 的 dbWriteCas)。
-    const beforeTextConflict = events.length
+    // 只数这次写会发的那一类(同下面按 dbChange 数):新建 Observed.md 的 structureChange 由监听器防抖 80ms 后才到,
+    // 这一步慢过 80ms 它就落进来(塞 150ms 延时实测必红)—— 数事件总数等于赌它还没到。
+    const reloads = (): number => events.filter((e) => e.channel === IPC.externalChange).length
+    const beforeTextConflict = reloads()
     expect(await vault.call(IPC.writeTextFile, ['Observed.md', 'stale', { base: 'not-the-current-fingerprint' }], 'stale-tab')).toMatchObject({ ok: false, current: 'initial' })
-    expect(events).toHaveLength(beforeTextConflict)
+    expect(reloads()).toBe(beforeTextConflict)
     const saved = await vault.call(IPC.dbRead, ['', 'Calendar.db']) as Extract<DbReadResult, { status: 'ok' }>
     const data = { ...saved.data, name: 'Changed calendar' }
     expect(await vault.call(IPC.dbWriteCas, ['Calendar.db', data, saved.version], 'tab-a')).toMatchObject({ ok: true })
@@ -180,6 +184,27 @@ describe('standalone local Amadeus capability', () => {
     await close(vault)
     expect(vault.root()).toBeNull()
     await expect(vault.call(IPC.writeTextFile, ['AfterClose.md', 'bad'])).rejects.toThrow('closed')
+  })
+
+  it('treats a late file event for the Calendar it seeded as its own write, not an external change', async () => {
+    // 要钉的是「收到一次文件事件时怎么判」,不是事件什么时候到:真监听根本不启动(否则它自己在途的处理会掺进来),
+    // 事件由这里一次次递给监听器并等它处理完。
+    const start = vi.spyOn(VaultWatcher.prototype, 'start').mockImplementation(() => {})
+    const vault = await open()
+    const watcher = start.mock.contexts[0] as VaultWatcher
+    const root = start.mock.calls[0][0]
+    start.mockRestore()
+    const dbChanges: unknown[] = []
+    vault.onEvent((channel, payload) => { if (channel === IPC.dbChange) dbChanges.push(payload) })
+    const file = join(root, 'Calendar.db')
+    const fileEvent = (): Promise<void> => watcher['handle'](file, root)
+    // 迟到的事件 = 字节没变、监听器却被叫起来一次(开库后几毫秒内,负载下偶发:2026-10-09 加压 10 次里 5 次)。
+    await fileEvent()
+    expect(dbChanges).toEqual([])
+    // 别人真改了照报 —— 上面那条不是因为事件没递到才空的。
+    await writeFile(file, `${await readFile(file, 'utf8')}\n`)
+    await fileEvent()
+    expect(dbChanges).toEqual(['Calendar.db'])
   })
 
   it('bundles and starts in a fresh Node process without Electron, Server or runtime node_modules', async () => {
