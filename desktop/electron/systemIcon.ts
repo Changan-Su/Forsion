@@ -10,9 +10,10 @@
 import { execFile } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { existsSync } from 'node:fs'
-import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import { promisify } from 'node:util'
+import { writePrivateJson } from './configWrite'
 
 const digest = (key: string): string => createHash('sha256').update(key).digest('hex').slice(0, 16)
 
@@ -29,39 +30,55 @@ export function icoFromPng(png: Buffer, size: number): Buffer {
   return Buffer.concat([head, png])
 }
 
-const SET_ICON = "ObjC.import('AppKit');function run(a){return $.NSWorkspace.sharedWorkspace.setIconForFileOptions(a[1]?$.NSImage.alloc.initWithContentsOfFile(a[1]):$(),a[0],0)?'ok':'failed'}"
-const setFinderIcon = async (bundle: string, image?: string): Promise<boolean> =>
+// After the icon, LaunchServices is asked to read the bundle again: the usual remedy for a Dock that keeps drawing a
+// pinned app's old icon. (That the Dock tile follows was not observed when this was written — reading it needs screen recording.)
+const SET_ICON = "ObjC.import('AppKit');ObjC.import('CoreServices');function run(a){var ok=$.NSWorkspace.sharedWorkspace.setIconForFileOptions(a[1]?$.NSImage.alloc.initWithContentsOfFile(a[1]):$(),a[0],0);$.LSRegisterURL($.NSURL.fileURLWithPath(a[0]),true);return ok?'ok':'failed'}"
+export const setFinderIcon = async (bundle: string, image?: string): Promise<boolean> =>
   (await promisify(execFile)('/usr/bin/osascript', ['-l', 'JavaScript', '-e', SET_ICON, bundle, ...(image ? [image] : [])], { timeout: 20_000 })).stdout.trim() === 'ok'
+
+/** Identifies the custom icon now on the bundle ('' = none), so this app only ever takes back the one it put there. */
+async function finderIconMark(bundle: string): Promise<string> {
+  const icon = join(bundle, 'Icon\r')
+  try {
+    const { mtimeMs } = await stat(icon)
+    // The picture itself is the file's resource fork (macOS only; elsewhere the timestamp alone).
+    const fork = await stat(join(icon, '..namedfork', 'rsrc')).then((s) => s.size, () => 0)
+    return `${mtimeMs}:${fork}`
+  } catch { return '' }
+}
 
 export interface MacIconTarget {
   /** The .app directory. */
   bundle: string
   /** Where the picture and the record of what was applied live (userData). */
   dir: string
-  version: string
   set?: typeof setFinderIcon
 }
-interface Applied { key: string; version: string; ok: boolean }
+/** What this app last put on the bundle. A write that failed never replaces it. */
+interface Applied { key: string; mark: string }
 
 export async function keepMacIcon(target: MacIconTarget, key: string | null, png: () => Buffer): Promise<void> {
-  const { bundle, dir, version, set = setFinderIcon } = target
+  const { bundle, dir, set = setFinderIcon } = target
   const record = join(dir, 'system-icon.json'), image = join(dir, 'system-icon.png')
   let last: Applied | null = null
   try { last = JSON.parse(await readFile(record, 'utf8')) as Applied } catch { /* nothing applied yet */ }
-  const present = existsSync(join(bundle, 'Icon\r'))
+  const now = await finderIconMark(bundle)
   if (!key) {
-    // Only what this app put there is taken back: an icon the user pasted in Finder's Get Info stays.
-    if (last?.ok && present) await set(bundle).catch(() => false)
+    // Only this app's own icon is taken back: one pasted in Finder's Get Info since then (another mark) stays.
+    // Not taken back this time → the record stays, and the next launch tries again.
+    if (last && now && now === last.mark && !(await set(bundle).catch(() => false))) return
     await Promise.all([rm(record, { force: true }), rm(image, { force: true })])
     return
   }
   const id = digest(key)
-  // A refused write (read-only volume, another user's install) is not retried until the picture or the app changes.
-  if (last?.key === id && (last.ok ? present : last.version === version)) return
+  // Already there — or the user pasted an icon of their own over it, which stays until another one is picked here.
+  // No custom icon at all means an update replaced the bundle: written again.
+  if (last?.key === id && now) return
   await mkdir(dir, { recursive: true })
   await writeFile(image, png())
-  const ok = await set(bundle, image).catch(() => false)
-  await writeFile(record, JSON.stringify({ key: id, version, ok } satisfies Applied))
+  // Refused (read-only volume, another user's install): the record keeps describing what is still there; tried again at the next launch.
+  if (!(await set(bundle, image).catch(() => false))) return
+  await writePrivateJson(record, { key: id, mark: await finderIconMark(bundle) } satisfies Applied)
 }
 
 export interface WindowsIconTarget {
@@ -76,6 +93,8 @@ export interface WindowsIconTarget {
   dir: string
 }
 const ICO = /^app-icon-[0-9a-f]+\.ico$/
+/** Older pictures kept on disk: a shortcut this app cannot see or rewrite (moved elsewhere, all-users) may still use one. */
+const KEPT_ICONS = 8
 const same = (a: string, b: string): boolean => a.toLowerCase() === b.toLowerCase()
 
 export async function keepWindowsIcon(target: WindowsIconTarget, key: string | null, png: () => Buffer, size: number): Promise<void> {
@@ -84,25 +103,27 @@ export async function keepWindowsIcon(target: WindowsIconTarget, key: string | n
   const file = key ? join(dir, `app-icon-${digest(key)}.ico`) : null
   if (file && !existsSync(file)) {
     await mkdir(dir, { recursive: true })
-    await writeFile(file, icoFromPng(png(), size))
+    // Whole or not at all: a truncated file under the final name would be handed to every shortcut from then on.
+    await writeFile(`${file}.tmp`, icoFromPng(png(), size))
+    await rename(`${file}.tmp`, file)
   }
-  let left = false
   for (const folder of folders) for (const name of await readdir(folder).catch(() => [] as string[])) {
     if (!/\.lnk$/i.test(name)) continue
     const link = join(folder, name)
-    let now: { target: string; icon?: string }
-    try { now = shell.readShortcutLink(link) } catch { continue }
-    if (!same(now.target, exe)) continue
-    const ours = !!now.icon && same(dirname(now.icon), dir) && ICO.test(basename(now.icon).toLowerCase())
-    // Without a picture only our own icon is taken back: one the user set on a shortcut stays.
-    if (file ? same(now.icon ?? '', file) : !ours) continue
-    let written = false
-    try { written = shell.writeShortcutLink(link, 'update', { target: now.target, icon: file ?? exe, iconIndex: 0 }) } catch { /* an all-users shortcut this account cannot write */ }
-    left ||= !written
+    try {
+      const now = shell.readShortcutLink(link)
+      if (!same(now.target, exe)) continue
+      const ours = !!now.icon && same(dirname(now.icon), dir) && ICO.test(basename(now.icon).toLowerCase())
+      // Without a picture only our own icon is taken back: one the user set on a shortcut stays.
+      if (file ? same(now.icon ?? '', file) : !ours) continue
+      shell.writeShortcutLink(link, 'update', { target: now.target, icon: file ?? exe, iconIndex: 0 })
+    } catch { /* unreadable, or an all-users shortcut this account cannot write: left as it is */ }
   }
-  // A shortcut that could not be rewritten may still point at an older file.
-  if (left) return
+  const old: { path: string; at: number }[] = []
   for (const name of await readdir(dir).catch(() => [] as string[])) {
-    if (ICO.test(name) && (!file || !same(join(dir, name), file))) await rm(join(dir, name), { force: true })
+    const path = join(dir, name)
+    if (ICO.test(name) && !(file && same(path, file))) old.push({ path, at: await stat(path).then((s) => s.mtimeMs, () => 0) })
   }
+  old.sort((a, b) => b.at - a.at)
+  for (const { path } of old.slice(KEPT_ICONS - 1)) await rm(path, { force: true })
 }

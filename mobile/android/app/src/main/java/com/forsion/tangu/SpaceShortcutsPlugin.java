@@ -70,6 +70,17 @@ public class SpaceShortcutsPlugin extends Plugin {
                 out.add(build(ctx, id, lbl, out.size()));
             }
             ShortcutManagerCompat.setDynamicShortcuts(ctx, out);
+            // 固定在桌面、但没排进上面名单的那些:2.13 及以前建的 Intent 指着 `.MainActivity`,它现在只是默认的桌面入口,
+            // 应用图标一换就被关掉 → 点了打不开。同 id、同名重建一遍,Intent 改指 AppActivity(名单里的已被上一行整条替换)。
+            List<ShortcutInfoCompat> pinned = new ArrayList<>();
+            for (ShortcutInfoCompat s : ShortcutManagerCompat.getShortcuts(ctx, ShortcutManagerCompat.FLAG_MATCH_PINNED)) {
+                String sid = s.getId();
+                if (!sid.startsWith("space:")) continue;
+                boolean listed = false;
+                for (ShortcutInfoCompat d : out) if (d.getId().equals(sid)) { listed = true; break; }
+                if (!listed) pinned.add(build(ctx, sid.substring("space:".length()), String.valueOf(s.getShortLabel()), s.getRank()));
+            }
+            if (!pinned.isEmpty()) ShortcutManagerCompat.updateShortcuts(ctx, pinned);
             JSObject res = new JSObject();
             res.put("published", out.size());
             res.put("max", max);

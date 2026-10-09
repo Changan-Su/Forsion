@@ -70,7 +70,7 @@ try {
   // 安卓 Space 快捷方式(长按 app 图标出 Space 列表 / 固定某个 Space 到桌面 / 接住点击)。
   // 必须排在 installEngine 之后:Space 是在那里面注册的,早了发布出去是空名单。
   installSpaceShortcuts()
-  // 桌面图标跟随设置里选的内置应用图标(排在上一行之后:换入口要重发 Space 快捷方式)。
+  // 桌面图标跟随设置里选的内置应用图标。
   installLauncherIcon()
   // 分享到 Forsion(系统分享面板送来的文字 / 文件 → 先出半屏挑去处:会话的输入框或一篇笔记)。同样排在 installEngine 之后:要用到 Space 与聊天视图。
   installShareInbox()

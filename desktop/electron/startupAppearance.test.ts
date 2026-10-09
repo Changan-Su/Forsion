@@ -9,7 +9,7 @@ const mock = vi.hoisted(() => ({
   gpu: vi.fn(() => ({ gpu_compositing: 'disabled_software' })),
 }))
 vi.mock('electron', () => ({
-  app: { getPath: () => mock.dir, get isPackaged() { return mock.packaged }, getVersion: () => '9.9.9', dock: { setIcon: mock.dock }, on: (key: string, cb: any) => mock.listeners.set(key, cb), getGPUFeatureStatus: mock.gpu },
+  app: { getPath: () => mock.dir, get isPackaged() { return mock.packaged }, dock: { setIcon: mock.dock }, on: (key: string, cb: any) => mock.listeners.set(key, cb), getGPUFeatureStatus: mock.gpu },
   ipcMain: { on: (key: string, cb: any) => mock.listeners.set(key, cb), handle: (key: string, cb: any) => mock.handlers.set(key, cb) },
   systemPreferences: { getAnimationSettings: mock.animation },
   shell: { tag: 'shell' },
@@ -102,7 +102,7 @@ describe('desktop appearance persistence and OS icon', () => {
     await registerStartupAppearance(() => true)
     const last = async () => { await vi.waitFor(() => expect(mock.keepMac).toHaveBeenCalled()); const call = mock.keepMac.mock.calls.at(-1) as any[]; mock.keepMac.mockClear(); return call }
     let [target, key, image] = await last()
-    expect(target).toEqual({ bundle: '/Applications/Forsion.app', dir: mock.dir, version: '9.9.9' })
+    expect(target).toEqual({ bundle: '/Applications/Forsion.app', dir: mock.dir })
     expect(key).toBe(png)
     expect(image().toString()).toBe(png)
     await update({ nativeIcon: false })

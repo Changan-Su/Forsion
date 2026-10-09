@@ -52,7 +52,7 @@ export async function registerStartupAppearance(isTrusted: (e: Electron.IpcMainI
     keeping = keeping.then(async () => {
       if (process.platform === 'darwin') {
         const bundle = resolve(process.execPath, '../../..')
-        if (bundle.endsWith('.app')) await keepMacIcon({ bundle, dir, version: app.getVersion() }, key, () => icon!.toPNG())
+        if (bundle.endsWith('.app')) await keepMacIcon({ bundle, dir }, key, () => icon!.toPNG())
       } else if (process.platform === 'win32') {
         const roaming = app.getPath('appData'), programs = 'Microsoft/Windows/Start Menu/Programs'
         const size = Math.min(256, icon?.getSize().width ?? 256)
