@@ -52,6 +52,7 @@ const API_PATTERN = process.env.API_PATTERN || '*api.forsion.net*'
 fs.mkdirSync(OUT, { recursive: true })
 for (const f of fs.readdirSync(OUT)) if (/^fail-\d+\.png$/.test(f)) fs.rmSync(path.join(OUT, f))
 
+const STARTED = Date.now()
 const checks = []
 const shots = []
 let failed = 0
@@ -3323,5 +3324,6 @@ const tabCountText = (list) => {
   cdp.close()
   fs.writeFileSync(path.join(OUT, 'acceptance.json'), JSON.stringify({ package: PKG, checks, screenshots: shots.map((s) => path.basename(s)), stubRequests: stubLog.length, completedAt: new Date().toISOString() }, null, 2))
   console.log(`\n${checks.length - failed}/${checks.length} passed · artifacts: ${OUT}`)
+  console.log(`time: ${Math.round((Date.now() - STARTED) / 1000)}s in all — ${h.timing()}`)
   process.exitCode = failed ? 1 : 0
 })().catch((e) => { console.error(e); pluginServer.close(); process.exit(1) }) // exit: the DevTools socket would keep a failed run alive for good

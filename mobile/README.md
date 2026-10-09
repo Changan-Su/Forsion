@@ -174,6 +174,29 @@ OUT=/absolute/out npm run emu:nativeshell   # ONLY=tabs,prompt 只跑子集
 ⚠️ 界面树里按钮的矩形是**触摸范围里没被邻居占走的那部分**：胶囊里 40dp 的按钮报出来高 48dp、宽度在下一颗按钮处被切掉，
 带内容的按钮（标签页计数）的读屏标签挂在子节点上、矩形却是按钮自己的 40dp —— 找子节点按中心点判，别按「整个在里面」。
 
+### 先跑快的，整套只在合并前跑（2026-10-09）
+
+改原生栏或台架时按这个顺序，别每改一下就把整套跑一遍：
+
+1. **不用模拟器的布局测试**（几秒）：`npm run test:nativebar`。两颗胶囊和 Dock 单独拿出来在 JVM 上排版（Robolectric，
+   `NativeChromeBarLayoutTest.kt`）：尺寸与触摸范围、读屏标签、Dock 把当前 Space 滚进可视区（含转屏之后那一次）、
+   钉住的「主页」那格报给读屏的矩形。改 `NativeChromeBar.kt` 先跑它。推送动到 `mobile/android/` 时 CI 的 `android-unit` 跑全部 Kotlin 单测。
+2. **受影响的那一组**（一两分钟到几分钟）：`ONLY='…' npm run emu:nativeshell`，写法见上。
+3. **整套**（62 条，约 13 分钟）：只在合并前跑一遍。
+
+台架读界面树走一个常驻的读取器（`scripts/lib/UiTreeServer.java`：第一次读的时候现编、推到设备上用 `app_process` 起，
+不往 App 里装任何东西）。原来每读一次都是 `uiautomator dump` —— 起一个进程、再干等满一秒，一次 2 秒，占一场运行的五分之四；
+常驻之后界面安静时一次 0.03 秒。2026-10-09 同一个包上实测：受影响的 13 条 490 秒 → 133 秒，整套 62 条 43.6 分钟 → 12.9 分钟。
+输出与 `uiautomator dump` 逐节点一致，`npm run emu:treecompare` 把两种读法并排比（改了读取器或换了模拟器镜像之后跑）。
+每场运行最后的 `time:` 一行是时间花在了哪 —— 现在剩下的大头是脚本里写死的等待，不是读树。
+
+- ⚠️ 设备上**只有一个 UI 自动化的位置**：读取器连着的时候别人的 `uiautomator dump` 会失败。所以它 30 秒没人问就自己退出
+  （台架中途崩了也不会一直占着），台架结束时也会叫它退。手动清：`adb shell "pkill -f 'UiTree[S]erver'"`。
+- ⚠️ 和 `uiautomator dump` 一样，它连着的时候**其他无障碍服务是暂停的** —— 只是从「每次读的那一下」变成了整场。
+  要测无障碍服务本身的用例加 `EMU_TREE=dump`，走老办法。
+- `EMU_IDLE_MS`（默认 500）：读之前等界面安静多久，从最后一次变化算起。某条在慢机器上读到半截动画就调大。
+- 编不出来或起不来（没有 `javac`、镜像不让）时台架说一句，然后自动退回 `uiautomator dump`，不会因此变红。
+
 ### 桌面图标（应用图标的入口别名）
 
 「设置 → 外观 → 应用图标」选内置图标时，桌面图标跟着换。桌面上的图标是清单里的一个入口（`activity-alias`），Android 只允许在安装包声明过的入口之间切换，所以上传的图片 / 插件图标只在应用内显示。真正的 Activity 是 `AppActivity`；默认入口沿用旧组件名 `.MainActivity`（用户桌面上已有的图标认这个名字）。原生半身 `LauncherIconPlugin.kt`，页面半身 `src/launcherIcon.ts`。
