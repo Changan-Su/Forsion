@@ -96,6 +96,9 @@ async function main() {
 
     const cdp = await ctx.newCDPSession(page)
     const tap = async (locator) => {
+      // ⚠️ 先滚进可视区再量:Space 条横滚、且总把当前 Space 居中(SingleColumnHost 的 scrollIntoView),
+      //    目标 tab 可能整颗在条外 —— boundingBox 照样给坐标(负的),CDP 那一下就点在空处,什么都不报。
+      await locator.scrollIntoViewIfNeeded()
       const b = await locator.boundingBox()
       if (!b) throw new Error('目标不可见')
       await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: b.x + b.width / 2, y: b.y + b.height / 2 }] })
@@ -203,7 +206,17 @@ async function main() {
       if (!all.includes(id)) throw new Error(`左抽屉底部没有 ${id} space tab(现有: ${all.join(',')})`)
       await tap(page.locator(`.mb-drawer-foot .mb-tab >> nth=${all.indexOf(id)}`))
       await page.waitForTimeout(1200)
+      // 没切成就别往下走:Space 没换 = 历史没经过清栈那条路,4a 照样绿(PDF 本来就在前台)、4d 红成「串栈」。
+      // 09-21(c8f3adcd,图像工作室进 Space 条,第 7 颗)到 10-09(f6f2e3e9 改默认序,碰巧又点得中)这条就这样
+      // 假红着:Note 居中时 Tangu 那颗滚出条外,点在空处。红的是台架不是产品。
+      const on = await page.$eval('.mb-drawer-foot .mb-tab.on', (e) => e.dataset.space || '').catch(() => '')
+      if (on !== id) throw new Error(`点了 ${id} 的 Space tab 但没切过去(当前 ${on || '?'}),第 4 段测的就不是「切 Space 往返」`)
     }
+    // 先空跑一趟往返,让 Tangu 也有存下来的布局:头一次进没去过的 Space 走 resetLayout(它自己清历史),
+    // 两头都走 applyNamed(applySCBlob)时 applySCBlob 里那次清栈才是唯一的一道 —— 不垫这一趟,把它删了 4d 照样绿
+    // (2026-10-09 负对照实跑)。
+    await switchSpace('tangu')
+    await switchSpace('amadeus')
     await openRow(PDF) // 栈:[笔记, PDF]
     await switchSpace('tangu')
     await switchSpace('amadeus')
