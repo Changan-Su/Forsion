@@ -1394,7 +1394,8 @@ function ensureBackend(): Promise<void> {
 /** 所有窗口(主窗 + 独立窗 + mini + floating)共用的 webPreferences:同一份 preload → 同一 window.tangu 暴露面。 */
 /** 台架静默:Playwright 起的实例(或 TANGU_HARNESS_QUIET=1)窗口一律 showInactive —— 不激活 App、不抢用户前台焦点。
  *  TANGU_HARNESS_QUIET=0 强制关(测聚焦语义的台架 / 负对照用);人起的 dev / 安装版不受影响。
- *  ponytail: 只管「弹出时不抢焦点」,窗口仍可见;要全隐藏得先证实隐藏窗 page.screenshot 不挂。 */
+ *  主窗 / 独立窗另外压到普通窗口之下(见 sinkForHarness),不盖住用户正在用的 App。
+ *  ponytail: 不做全隐藏 —— 隐藏窗的截图 / 点击实测不挂,但几十个台架断言 isVisible(),藏起来就得伪造可见性。 */
 const QUIET_WINDOWS = process.env.TANGU_HARNESS_QUIET
   ? process.env.TANGU_HARNESS_QUIET === '1'
   : typeof (globalThis as { __playwright_run?: unknown }).__playwright_run === 'function'
@@ -1407,6 +1408,14 @@ if (QUIET_WINDOWS && process.platform === 'darwin') systemPreferences.registerDe
 function present(win: BrowserWindow): void {
   if (QUIET_WINDOWS) win.showInactive()
   else { win.show(); win.focus() }
+}
+
+/** 台架的大窗(主窗 / 独立窗)压到所有普通窗口之下(macOS 窗口层级 -1)。showInactive 只是不抢键盘焦点,
+ *  窗口照样盖在用户正在用的 App 上面;压下去之后它仍然可见,isVisible / 截图 / 点击 / 动画帧照常
+ *  (仪器 npm run check:quietfocus 读系统窗口列表里的层级)。子窗(浮动面板)跟随父窗;Mini / App Dock /
+ *  权限引导这些本来就要浮在别的 App 上的小窗不压。层级名只在 macOS 有意义,Windows 上传 true 就是置顶,所以只管 darwin。 */
+function sinkForHarness(win: BrowserWindow): void {
+  if (QUIET_WINDOWS && process.platform === 'darwin') win.setAlwaysOnTop(true, 'normal', -1)
 }
 
 function satelliteWebPreferences(): Electron.WebPreferences {
@@ -1537,6 +1546,7 @@ function createWindow(): void {
     show: false,
     webPreferences: satelliteWebPreferences(),
   })
+  sinkForHarness(mainWindow)
   mainWindow.once('ready-to-show', () => { if (mainWindow && !mainWindow.isDestroyed()) present(mainWindow) })
 
   mainWindow.webContents.setWindowOpenHandler(openUrlHandler(mainWindow.webContents))
@@ -1674,6 +1684,7 @@ function createDetachedWindow(opts: { id?: string; views?: ViewDesc[]; bounds?: 
     show: false,
     webPreferences: satelliteWebPreferences(),
   })
+  sinkForHarness(win)
   win.once('ready-to-show', () => {
     if (win.isDestroyed()) return
     if (process.platform === 'win32' && opts.bounds) {
