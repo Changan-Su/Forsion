@@ -431,6 +431,8 @@ async function main() {
       const d = document.querySelector('.sketch-card[data-sketch-draft][data-sketch-call-id="sk1"]')
       return { present: !!d, frameEvents: d ? getComputedStyle(d.querySelector('.sketch-frame')).pointerEvents : '' }
     })
+    // 观感自查:草稿态留一张实景(SKETCH_DRAFT_SHOT),和终稿那张对照看
+    await win.locator('.t2-asst:has([data-sketch-draft])').last().screenshot({ path: process.env.SKETCH_DRAFT_SHOT || '/tmp/sketch-draft.png' }).catch(() => {})
     let draftInner = ''
     for (const fr of win.frames()) {
       try { if (await fr.locator('#skp').count()) { draftInner = (await fr.locator('#skp').textContent().catch(() => '')) || ''; break } } catch { /* frame 可能已卸载 */ }

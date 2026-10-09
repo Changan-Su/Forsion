@@ -11,6 +11,7 @@
     "predev": "node scripts/dev-version.check.cjs",
     "dev": "electron-vite dev --noSandbox",
     "check:visualize": "node scripts/visualize.check.cjs",
+    "demo:sketch": "node scripts/sketch-demo.record.cjs",
     "check:version": "node scripts/dev-version.check.cjs",
     "build": "electron-vite build",
     "preview": "electron-vite preview",
