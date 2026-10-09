@@ -64,3 +64,25 @@ Chat 模式不开放技能工具，必需格式也包含在 `INTELLIGENT_UI_SECT
 
 2026-10-09 独立评审的 8 项 P2 已补回归：损坏/禁用存储、状态截断、错误后有效前缀、
 小数默认与条件、带结尾点的本地域名、来源与折叠键冲突。未发现需变更旧历史格式的迁移需求。
+
+## Live application cards
+
+`app-card` blocks reference client-advertised IDs, with an optional bounded `query` only for
+searchable sources. `list_intelligent_cards` discovers metadata; the engine checks IDs and
+query support before accepting a document. Only complete successful documents mount live
+cards (a streaming prefix cannot trigger plugin subscriptions or native writes).
+
+Native Calendar and Todo reuse their existing compact Dashboard components and stores.
+Installed plugins opt existing `registerListSource` contributions in with
+`intelligent: { description, viewId }`; full contract: `docs/customization/plugins.md`.
+Catalogs are normalized at ingress and run assembly, limited to 64 entries, with no user
+records. The renderer resolves current availability again and tears down on disable.
+Displaying a card is not model access to records, nor a save operation. Completed tasks
+use the existing domain write path; newly generated checklists remain message-local.
+
+Acceptance: build engine and desktop, set `TANGU_IUI_BLUEBIRD` to the adapted Bluebird
+checkout, then run `desktop/scripts/intelligent-cards.e2e.cjs` through the e2e devlock.
+For real GPT-6 Luna discovery/rendering, use the archive wrapper with
+`--only intelligentcards --model codex/gpt-6-luna`. Data fixtures live in a temporary vault;
+the plugin, components, IPC and on-disk task writes are real. User-facing reports are HTML
+with screenshots, provenance and explicit release boundaries.

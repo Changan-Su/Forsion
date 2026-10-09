@@ -4,10 +4,10 @@
 .intelligent-ui .iui-title { font-size: var(--ui-font-title); line-height: var(--ui-line-title); font-weight: 600; margin: 0 0 20px; }
 .intelligent-ui h4 { font-size: var(--ui-font-heading); line-height: var(--ui-line-heading); font-weight: 600; margin: 0 0 12px; }
 .iui-block + .iui-block { margin-top: 24px; }
-.intelligent-ui button, .intelligent-ui input, .intelligent-ui summary { font: inherit; }
-.intelligent-ui button, .intelligent-ui .iui-actions a { cursor: pointer; border: 1px solid var(--border); border-radius: var(--radius-md); background: transparent; color: var(--text); padding: 8px 12px; min-height: 36px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; text-decoration: none; }
-.intelligent-ui button:hover, .intelligent-ui .iui-actions a:hover { background: var(--bg-hover); }
-.intelligent-ui button:disabled { opacity: .4; cursor: default; }
+.intelligent-ui button:where(:not(.iui-app-card *)), .intelligent-ui input, .intelligent-ui summary { font: inherit; }
+.intelligent-ui button:where(:not(.iui-app-card *)), .intelligent-ui .iui-actions a { cursor: pointer; border: 1px solid var(--border); border-radius: var(--radius-md); background: transparent; color: var(--text); padding: 8px 12px; min-height: 36px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; text-decoration: none; }
+.intelligent-ui button:where(:not(.iui-app-card *)):hover, .intelligent-ui .iui-actions a:hover { background: var(--bg-hover); }
+.intelligent-ui button:where(:not(.iui-app-card *)):disabled { opacity: .4; cursor: default; }
 .intelligent-ui :is(button, input, summary, a):focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 .intelligent-ui p { margin: 8px 0; }
 .intelligent-ui small, .iui-status { color: var(--text-muted); font-size: var(--ui-font-meta); line-height: var(--ui-line-meta); }

@@ -212,6 +212,7 @@ OPT_IN.add('projcompact'); // --only projcompact:项目记忆写满时的压缩(
 OPT_IN.add('visualfigures');
 for (const key of ['intelligentplan', 'intelligentmedia', 'intelligentplain']) { OPT_IN.add(key); KEYS.push(key); }
 OPT_IN.add('intelligentusers'); KEYS.push('intelligentusers');
+OPT_IN.add('intelligentcards'); KEYS.push('intelligentcards');
 OPT_IN.add('visualize'); // --only visualize: real model -> sketch controls/state; HTML can feed desktop check:visualize.
 OPT_IN.add('visualask'); // --only visualask:卡内按钮回头改答案(forsionSketch.ask);改 sketch.ts 的 INTERACTION / SKETCH_SECTION 那段后跑
 OPT_IN.add('visualsdial'); // --only visualsdial:可视化档位 less / off(ui_settings 快照):off 工具与段都不在、less 隐式信号不触发;两个 run
@@ -1481,6 +1482,20 @@ try {
       if (rows.length !== expected || failure) record('intelligentusers-incomplete', '用户场景执行完整性', { ok: false, detail: String(failure?.message || `Expected ${expected}, got ${rows.length}`) }, 0);
     }
     else record('intelligentusers', '真实用户 Electron 测试启动', { ok: false, detail: String(failure?.message || 'Missing evidence') }, 0);
+  }
+
+  if (ONLY.has('intelligentcards')) {
+    let failure;
+    try {
+      const ui = await promisify(execFile)(process.execPath, [join(root, '../desktop/scripts/intelligent-cards.e2e.cjs')], {
+        cwd: join(root, '../desktop'), timeout: 8 * 60_000, maxBuffer: 4 * 1024 * 1024,
+        env: { ...process.env, TANGU_BACKEND_URL: base, TANGU_IUI_TOKEN: TOKEN, TANGU_IUI_OUT: OUT, TANGU_IUI_MODEL: MODEL, TANGU_IUI_WORKSPACE: workspace },
+      });
+      writeFileSync(join(OUT, 'intelligent-cards-ui.log'), ui.stdout + ui.stderr);
+    } catch (e) { failure = e; writeFileSync(join(OUT, 'intelligent-cards-ui.log'), String(e.stdout || '') + String(e.stderr || '') + String(e.message)); }
+    const path = join(OUT, 'intelligent-cards-evidence.json');
+    const row = existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : { ok: false, detail: String(failure?.message || 'Missing evidence') };
+    record('intelligentcards', '原生与插件卡片真实用户验收', { ...row, ...(failure ? { ok: false } : {}) }, row.ms || 0);
   }
 
   await scenario('dispatch', 'Dispatch Chief and native task lifecycle', async () => {

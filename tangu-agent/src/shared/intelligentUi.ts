@@ -1,5 +1,6 @@
 /** Forsion Intelligent UI v1. Pure data contract shared by the engine and native renderer.
  * No executable expressions, HTML, styles, network actions or arbitrary component names. */
+import { validAppCardId } from './intelligentCards.js'
 export type UICondition = { input: string; equals: string | number }
 export type UIInput =
   | { id: string; kind: 'number'; label: string; initial: number; min: number; max: number; step: number }
@@ -12,6 +13,7 @@ export type UICheckItem = { id: string; label: string; itemKey?: string; quantit
 type BlockBase = { id: string; title?: string; when?: UICondition }
 export type UIBlock = BlockBase & (
   | { kind: 'text'; markdown: string }
+  | { kind: 'app-card'; cardId: string; query?: string }
   | { kind: 'controls'; inputIds: string[] }
   | { kind: 'gallery'; resourceIds: string[] }
   | { kind: 'sources'; resourceIds: string[] }
@@ -113,6 +115,9 @@ export function validateUIDocument(raw: unknown, options: { draft?: boolean } = 
   const blocks = unique(list(d.blocks, 'blocks', 40, (v, p): UIBlock => {
     const o = obj(v, p), common: BlockBase = { id: id(o.id, `${p}.id`), ...(o.title === undefined ? {} : { title: str(o.title, `${p}.title`, 200) }), when: condition(o.when, `${p}.when`) }
     switch (o.kind) {
+      case 'app-card':
+        if (!validAppCardId(o.cardId)) fail(p, 'invalid registered card ID')
+        return { ...common, kind: 'app-card', cardId: o.cardId as string, ...(o.query === undefined ? {} : { query: str(o.query, `${p}.query`, 200) }) }
       case 'text': case 'disclosure':
         if (o.kind === 'disclosure' && !common.title) fail(p, 'disclosure requires title')
         return { ...common, kind: o.kind, markdown: str(o.markdown, `${p}.markdown`, 10000) }

@@ -658,6 +658,19 @@ refresh = (rows) => h.update({ ...spec, rows })   // 数据刷新走 update:排�
 - `drop` 不声明就完全没有拖放;声明了也是宿主判形点亮、插件决定接不接。
 - 细节与全部字段语义见正典文档同名小节 + `amadeus/plugins/types.ts` 的 `ListSourceContribution`。
 
+### Intelligent UI list cards (2026-10-09+)
+
+Opt an existing `registerListSource` into chat with
+`intelligent: { description: 'Live saved bookmarks; optional title search.', viewId: 'folder' }`.
+Use English discovery metadata (max 400 characters); localize the source title. The host owns
+rendering and assigns `plugin:<manifestId>:<sourceId>`. Reuse `items/subscribe/open`, including
+reload on subscription and unsubscribe on disposal; do not build another chat UI or data store.
+`search: true` permits a bounded initial query. The card displays up to six live items and a
+button to the same plugin's registered full view. Disable revokes discovery and unmounts cards.
+Agents use `list_intelligent_cards` then an `app-card` block in `intelligent_ui`. Rendering does
+not read records into model context, save links, analyze videos, or create tasks. Keep those
+operations in existing domain tools/skills. Old hosts ignore the optional declaration.
+
 ### 前置条件:onboarding.requires(2026-09-21 起)
 
 1. **只为「不做就不工作」的东西写 `requires`**:没填的地址 / 令牌、没给的系统授权、服务端没配的依赖。

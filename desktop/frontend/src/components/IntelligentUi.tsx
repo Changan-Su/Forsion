@@ -9,6 +9,7 @@ import { registerMessages, useI18n } from '../i18n'
 import { ChatWebLink } from './ChatWikiLink'
 import { deriveChecklist, emptyUIState, formatUIQuantity, inputValues, readUIState, uiExpansionKey, uiStateKey, visible, writeUIState, type UIUserState } from './intelligentUiState'
 import './IntelligentUi.css'
+import { IntelligentAppCard } from './IntelligentAppCard'
 
 registerMessages({
   'iui.loading': { zh: '正在组织内容…', en: 'Composing…' },
@@ -109,6 +110,7 @@ function NativeDocument({ doc, complete, live, stateKey, onAsk }: { doc: UIDocum
         const r = resources.get(id) as Extract<UIResource, { kind: 'source' }>
         return <div key={id} className="iui-source"><ChatWebLink href={r.url} quote=""><span>{r.title}</span><ExternalLink size={14} /></ChatWebLink><small>{new URL(r.url).hostname}</small>{r.description && <details open={!!state.expanded[uiExpansionKey('source', block.id, id)]} onToggle={e => expand(uiExpansionKey('source', block.id, id), e.currentTarget.open)}><summary>{t('iui.summary')}<ChevronDown size={14} /></summary><p>{r.description}</p></details>}</div>
       })}</div>
+      case 'app-card': return complete ? <IntelligentAppCard cardId={block.cardId} query={block.query} /> : <div className="iui-status">{t(live ? 'iui.loading' : 'iui.incomplete')}</div>
       case 'comparison': return <div className="iui-parallel iui-comparison" data-columns={Math.min(3, block.items.length)}>{block.items.map(item => <article key={item.id}>
         {item.imageId && <Picture resource={resources.get(item.imageId) as Extract<UIResource, { kind: 'image' }>} sources={resources} expanded={!!state.expanded[uiExpansionKey('image', block.id, item.imageId)]} onExpand={value => expand(uiExpansionKey('image', block.id, item.imageId), value)} />}
         <strong>{item.title}</strong><p>{item.description}</p><ul>{item.facts.map((fact, i) => <li key={i}>{fact}</li>)}</ul>

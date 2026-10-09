@@ -2,6 +2,7 @@
  *
  * 完整 Todo / Calendar / Inbox / Activity 都是为整页操作设计的；直接缩进卡片会同时保留工具栏、
  * 多层滚动与侧栏密度。这里保留同一数据源和关键动作，只把信息层级收敛成一眼能扫完的摘要。 */
+import './DashboardCompactViews.css'
 import { useEffect, useMemo, useState } from 'react'
 import { CalendarDays, CheckCircle2, Circle, Inbox, Pause, Play } from 'lucide-react'
 import type { DashboardCardSize } from '@lcl/engine'

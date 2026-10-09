@@ -95,3 +95,42 @@ View 内需要一个完整的常驻对话时（例如创作类 Space 的右栏�
 Settings → Appearance → Startup and icons accepts custom brand icons and animated startup artwork, includes preview/reset, and offers built-in loading motion. Desktop also saves the static icon to the system so it stays after quitting (the Finder / Dock / Launchpad icon on macOS, the Start menu, desktop and taskbar shortcuts on Windows; on Linux only while running). Web and Mobile share the in-app appearance; on Android the home screen icon follows built-in icons only (the system switches between icons shipped in the app, and the switch happens after the app is left), uploads and plugin icons stay inside the app, and the native launch screen is separate. Plugins contribute choices through `ctx.registerAppearance`; selection stays with the user. Cached artwork works offline, and disabling or removing its plugin restores the default. The default startup screen is the built-in Tree shadow (window light and branch shadows on a wall, with one classical verse). It does not follow the app icon and yields only to selected startup artwork. The original animated logo remains under Startup artwork → Built-in → Classic logo, which still follows the app icon.
 
 插件任务、只读外部引擎、隔离 Git 工作区、原生定时与 Desktop MCP 接缝见 [任务 SDK / Task SDK](./plugin-tasks.md)。
+
+## Intelligent UI cards (2026-10-09, development branch)
+
+A plugin can opt an existing list source into native chat cards. The host renders the list;
+`items`, `subscribe`, and `open` remain the single data and navigation implementation.
+
+```js
+ctx.registerListSource({
+  id: 'library-list',
+  title: t('viewLibrary'),
+  search: true,
+  intelligent: {
+    description: 'Live saved bookmarks. Optional title/author search. Opens existing entries; does not save or analyze links.',
+    viewId: 'folder',
+  },
+  items: ({ query } = {}) => cachedItems.filter(item => matches(item, query)),
+  subscribe: listener => subscribeAndReload(listener),
+  open: item => openExistingEntry(item.key),
+})
+```
+
+The host assigns `plugin:<manifestId>:<sourceId>`; `viewId` resolves only inside the same
+plugin. Keep the English discovery description under 400 characters. Older hosts ignore
+`intelligent`. `search: true` allows an optional `query` (up to 200 characters); no arbitrary
+props, HTML, CSS, handlers or component names are accepted from the model. The first six
+items appear in the compact list; the full-view button opens the existing registered view.
+
+Agents discover the current catalog with `list_intelligent_cards`, then use an
+`intelligent_ui` block such as `{id:'bookmarks',kind:'app-card',cardId:'plugin:bluebird:library-list'}`.
+The run request carries metadata only. Rendering a live card does not send its records to
+the model and does not save generated plans. Analysis or writes still use authorized domain
+tools and skills. Native plan approvals keep their existing tool/session lifecycle.
+
+Subscribe on mount and reload after the vault is available; notify on data changes and return
+an unsubscribe. Cards resubscribe on vault changes. Disable removes the source from discovery,
+unmounts existing cards, and shows an unavailable message. Unknown/disabled cards are never
+substituted with generated content. Plugin exceptions stay inside the individual card.
+These are live views of the current vault, including when an old conversation is reopened;
+they are not immutable historical snapshots or cross-device data replicas.

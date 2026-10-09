@@ -1,3 +1,4 @@
+import { normalizeUIAppCards } from '../shared/intelligentCards.js';
 import { intelligentUiEnabledFor, INTELLIGENT_UI_SECTION } from '../tools/builtin/intelligentUi.js';
 import { withTaskProjectQueue } from './taskProjectQueue.js';
 import { HUMAN_GUIDANCE, readHuman, renderHumanContext } from '../agents/humanStore.js';
@@ -931,6 +932,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
   // 界面面(set_ui_setting / run_ui_command / list_ui_commands)的能力握手 + 目录快照。
   // 与 clientTag 同源同链;run 内冻结(prompt 缓存纪律,同 mcpTools)。
   const uiCommands = Array.isArray(input.uiCommands) ? input.uiCommands : undefined;
+  const uiCards = normalizeUIAppCards(input.uiCards);
   // 有能力握手就物化成 {}:回执刷新(updateUiSettings)要有落点;list_ui_commands 对空对象与 undefined 输出一样。
   const uiSettings: ToolContext['uiSettings'] = input.uiSettings && typeof input.uiSettings === 'object'
     ? input.uiSettings : (uiCommands ? {} : undefined);
@@ -1655,7 +1657,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // 会话属于一个本机项目 → remember 露出「项目级」(定义多一段说明和一个参数);别的会话拿到的是精简定义。
     const projectScoped = profile.capabilities.hostExec ? !!(await resolveProjectMemory(userId, sessionId)) || undefined : undefined;
     const toolGateCtx = {
-      userId, sessionId, appId, runId, client: clientTag, channelSession, preset, uiCommands, uiSettings, clientCapabilities, projectScoped,
+      userId, sessionId, appId, runId, client: clientTag, channelSession, preset, uiCommands, uiSettings, uiCards, clientCapabilities, projectScoped,
       visuals: visualsPref, // run 冻结的可视化档位:与上面拼提示用的同一个值,set_ui_setting 中途改了也到下一次 run 才生效
       runOrigin: runCategory(input), // P1-K2:后台进程来源标签取这条 run 自己的来源(channelSession 是会话级旗标)
       dispatchTargets,
