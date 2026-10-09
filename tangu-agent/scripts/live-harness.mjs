@@ -211,6 +211,7 @@ OPT_IN.add('projteam'); // --only projteam:项目记忆在团队会话里(三个
 OPT_IN.add('projcompact'); // --only projcompact:项目记忆写满时的压缩(4 个 run + 判官 + 2 次压缩,约 10 次调用);只在动 projectMemoryCompact.ts / remember 写满那条路时才有信息量
 OPT_IN.add('visualfigures');
 for (const key of ['intelligentplan', 'intelligentmedia', 'intelligentplain']) { OPT_IN.add(key); KEYS.push(key); }
+OPT_IN.add('intelligentusers'); KEYS.push('intelligentusers');
 OPT_IN.add('visualize'); // --only visualize: real model -> sketch controls/state; HTML can feed desktop check:visualize.
 OPT_IN.add('visualask'); // --only visualask:卡内按钮回头改答案(forsionSketch.ask);改 sketch.ts 的 INTERACTION / SKETCH_SECTION 那段后跑
 OPT_IN.add('visualsdial'); // --only visualsdial:可视化档位 less / off(ui_settings 快照):off 工具与段都不在、less 隐式信号不触发;两个 run
@@ -1460,6 +1461,27 @@ try {
   const models = asList(await api('/agent/models'), 'models');
   if (!models.some((m) => m.id === MODEL)) throw new Error(`模型目录无 ${MODEL};直连可用:${models.filter((m) => m.source === 'direct').map((m) => m.id).join(', ') || '(无 —— 凭证未装载或已失效)'}`);
   rmSync(authLink, { force: true }); // 凭证只在引擎启动时装载一次,之后不再读文件 → 立刻拆掉软链
+
+  // Warm real engine first, then use the isolated compiled Electron path also used by HUMAN.md.
+  // Prompts are typed into the composer; this never fabricates model events or replays documents.
+  if (ONLY.has('intelligentusers')) {
+    let failure;
+    try {
+      const ui = await promisify(execFile)(process.execPath, [join(root, '../desktop/scripts/intelligent-ui.live.cjs')], {
+        cwd: join(root, '../desktop'), timeout: 25 * 60_000, maxBuffer: 4 * 1024 * 1024,
+        env: { ...process.env, TANGU_BACKEND_URL: base, TANGU_IUI_TOKEN: TOKEN, TANGU_IUI_OUT: OUT, TANGU_IUI_MODEL: MODEL, TANGU_IUI_WORKSPACE: workspace, TANGU_IUI_CASES: opt('intelligent-cases', '') },
+      });
+      writeFileSync(join(OUT, 'intelligent-users-ui.log'), ui.stdout + ui.stderr);
+    } catch (e) { failure = e; writeFileSync(join(OUT, 'intelligent-users-ui.log'), String(e.stdout || '') + String(e.stderr || '') + String(e.message)); }
+    const path = join(OUT, 'intelligent-users-evidence.json');
+    if (existsSync(path)) {
+      const rows = JSON.parse(readFileSync(path, 'utf8')).results;
+      for (const row of rows) record(row.key, row.name, row, row.ms);
+      const expected = opt('intelligent-cases', '').split(',').filter(Boolean).length || 5;
+      if (rows.length !== expected || failure) record('intelligentusers-incomplete', '用户场景执行完整性', { ok: false, detail: String(failure?.message || `Expected ${expected}, got ${rows.length}`) }, 0);
+    }
+    else record('intelligentusers', '真实用户 Electron 测试启动', { ok: false, detail: String(failure?.message || 'Missing evidence') }, 0);
+  }
 
   await scenario('dispatch', 'Dispatch Chief and native task lifecycle', async () => {
     const { dispatchLive } = await import('./lib/dispatch-live.mjs');

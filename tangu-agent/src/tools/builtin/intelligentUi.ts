@@ -8,6 +8,8 @@ export function intelligentUiEnabledFor(ctx: Parameters<typeof sketchEnabledFor>
   return sketchEnabledFor(ctx) && !!ctx.clientCapabilities?.includes(INTELLIGENT_UI_CAPABILITY)
 }
 export const INTELLIGENT_UI_SECTION = `## Intelligent UI
+Deliver a native view by making an actual intelligent_ui function call. A JSON object written in
+the assistant's text does not invoke the tool and is not a usable answer.
 For interactive plans, image selections, web research and qualitative comparisons, prefer
 \`intelligent_ui\` over HTML sketches. Native components own layout, theme, accessibility and
 state. Put metadata, resources and inputs before blocks so complete blocks appear progressively.
@@ -15,9 +17,22 @@ Choose the few controls that actually help; short explanations remain prose. Loc
 quantities, checklists, image expansion and disclosures NEVER need another model request.
 Use model actions only for genuinely new reasoning. Images and sources must use supplied or
 retrieved real URLs: do not invent pictures, prices or citations. A source is a linked summary,
-not a live embedded website. Describe visual details only after viewing the image with an image
+not a live embedded website. If web_fetch returns only a title or page shell, use browser_navigate
+to read the rendered page before summarizing it; repeating the same text fetch is not verification.
+Describe visual details only after viewing the image with an image
 tool or from explicit user-provided descriptions. A filename or URL is not evidence of what an
 image depicts; if inspection is unavailable, use neutral labels and say it has not been inspected.
+For remote images, when browser tools are available, preserve the exact supplied URL and use
+browser_navigate, then browser_screenshot, then view_image on the returned screenshot path.
+Load those tools if needed. An empty DOM snapshot of an image page is not a failed image load:
+inspect its pixels before giving up. web_fetch is for text; it does not show image pixels.
+When the user wants to pick a candidate, include a bound choice input; expanding an image does
+not select it. If comparison items include images, omit a duplicate gallery of those same images.
+Keep checklist labels brief and actionable; put worked answers or long explanations
+in disclosures so the task list remains easy to scan.
+When revising a plan, retain completed work as history; new time constraints apply to remaining
+work, not time already spent. Do not invent elapsed time. New checklists start unchecked, so
+describe already completed work in a text block and put only remaining work in new checklists.
 Use sketch only for custom charts, diagrams and simulations that
 this schema cannot express. A native document satisfies the visual-delivery requirement.
 When visuals are set to less, use either visual tool only on an explicit request.

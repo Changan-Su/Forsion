@@ -20,7 +20,9 @@
 .iui-stepper output { text-align: center; min-width: 28px; font-variant-numeric: tabular-nums; font-weight: 600; }
 .iui-choice { min-width: 0; margin: 0; padding: 0; border: 0; }
 .iui-choice legend { margin-bottom: 12px; padding: 0; font-weight: 600; }
-.iui-parallel { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.iui-parallel { display: grid; grid-template-columns: repeat(var(--iui-columns, 3), minmax(0, 1fr)); gap: 12px; }
+.iui-parallel[data-columns="1"] { --iui-columns: 1; }
+.iui-parallel[data-columns="2"] { --iui-columns: 2; }
 .iui-choice label { display: flex; gap: 10px; padding: 14px 12px; border: 1px solid var(--border); border-radius: var(--radius-md); align-items: flex-start; cursor: pointer; min-width: 0; }
 .iui-choice label[data-selected] { border-color: var(--text-muted); background: var(--bg-hover); }
 .iui-choice small { display: block; margin-top: 6px; }
@@ -39,6 +41,8 @@
 .iui-check-rows { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 28px; }
 .iui-check-rows label { min-height: 44px; display: flex; align-items: center; gap: 10px; cursor: pointer; padding: 8px 0; min-width: 0; }
 .iui-check-rows label > span { min-width: 0; }
+.iui-check-rows[data-prose] { grid-template-columns: 1fr; }
+.iui-check-rows[data-prose] label { align-items: flex-start; }
 .iui-check-rows label[data-checked] > span { color: var(--text-muted); }
 .iui-check-rows small { display: block; }
 .iui-quantity { white-space: nowrap; margin-left: auto; color: var(--text-muted); font-variant-numeric: tabular-nums; }

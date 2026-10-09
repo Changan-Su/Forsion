@@ -56,6 +56,11 @@ Chat 模式不开放技能工具，必需格式也包含在 `INTELLIGENT_UI_SECT
    `--evidence=<raw 目录>` 可回放真模型结果。脚本覆盖流式焦点、数量与采购差额、复制、刷新、键盘、来源、
    图片展开/失败重试、320/375/768 容器、减少动态、英文深色和历史 Sketch；结果在 `desktop/outputs/intelligent-ui`。
 5. `npm run demo:intelligent-ui` 打开已验证样本的隔离窗口（`--evidence` 可加真模型记录），关闭后删除临时数据。`--demo` 则先验收再保留窗口。演示不更新安装版、不上线。
+6. 普通用户端到端：通过归档工具运行 `--only intelligentusers --timeout 1800000`（或 desktop 的 `npm run e2e:intelligent-live` 后补归档）。
+   五个独立会话覆盖聚餐、搬家、学习、相册与网页比较；提示不指定 UI 工具或 schema。真实引擎先完成启动，隔离编译版
+   Electron 再连入；提示从实际输入框发出，卡内追问也真实调用 GPT-6 Luna。没有假后端或结果注入。
+   `--intelligent-cases user-dinner,user-moving` 可只重跑失败场景。证据在 `intelligent-users-evidence.json`，截图在
+   `intelligent-ui-shots/`；需人工复核语义和截图，自动断言不能单独证明推荐质量。
 
 2026-10-09 独立评审的 8 项 P2 已补回归：损坏/禁用存储、状态截断、错误后有效前缀、
 小数默认与条件、带结尾点的本地域名、来源与折叠键冲突。未发现需变更旧历史格式的迁移需求。

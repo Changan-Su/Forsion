@@ -9,6 +9,23 @@ Call `intelligent_ui` with `document`, a JSON-encoded object using the schema be
 JavaScript, CSS, arbitrary expressions or OpenAI directives. The host supplies a quiet parallel
 layout, local state, light/dark themes, keyboard controls and responsive stacking. Localize content
 to the user's language. Keep prose concise; do not repeat the whole document in your final answer.
+Make an actual `intelligent_ui` function call; writing its JSON arguments in chat text does not
+invoke the tool. When revising a plan, keep completed work as history and apply new constraints
+only to remaining work. Do not invent elapsed time. New checklists start unchecked: describe
+already completed work in text and reserve new checklists for work still to do.
+Source summaries must reflect retrieved content. If `web_fetch` returns only a title or page shell,
+use `browser_navigate` to read the rendered page; repeated empty fetches do not verify a claim.
+
+For image comparison, inspect actual pixels before describing visual details. For supplied remote
+images, preserve the URL exactly; when browser tools are available, use `browser_navigate`, then
+`browser_screenshot`, then `view_image` with the screenshot path. Load these tools if needed.
+An image page can have an empty DOM snapshot while displaying a valid picture. `web_fetch` does
+not provide image pixels. Do not claim inspection is impossible just because the DOM is empty.
+If actual inspection fails, retain neutral labels and clearly explain the limitation.
+When a user wants to choose a candidate, add a bound choice input; expanding an image is not a
+selection. When comparison items contain images, omit a duplicate gallery of the same candidates.
+Keep checklist labels short and actionable. Put explanations, exercises and worked
+answers in disclosure blocks instead of crowding the checklist with paragraphs.
 
 ## Document v1
 

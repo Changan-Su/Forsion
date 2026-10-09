@@ -276,6 +276,28 @@ async function runOpenAiResponsesStream(opts: StreamOpts, guard: StreamIdleGuard
           onReasoning?.(ev.delta);
         }
       } else if (type === 'response.output_item.done' && ev.item && typeof ev.item === 'object') {
+        // Some Codex batches deliver complete arguments only in the final item. Treat it as
+        // authoritative; otherwise real parallel calls execute as {} despite correct history.
+        if (ev.item.type === 'function_call') {
+          const item = ev.item;
+          const key = item.id || ev.item_id || `fc_${ev.output_index ?? order.length}`;
+          const previous = fnCalls.get(key);
+          const complete = {
+            id: item.call_id || previous?.id || item.id || key,
+            name: item.name || previous?.name || '',
+            arguments: typeof item.arguments === 'string' ? item.arguments : previous?.arguments || '',
+          };
+          if (!previous) order.push(key);
+          fnCalls.set(key, complete);
+          if (complete.arguments !== previous?.arguments) {
+            guard.progress();
+            const prefix = previous?.arguments || '';
+            // Append only a missing suffix to live previews. A corrected non-prefix value is
+            // delivered by the final tool_call event, never appended to stale preview JSON.
+            const argsDelta = complete.arguments.startsWith(prefix) ? complete.arguments.slice(prefix.length) : '';
+            onToolCallDelta?.({ id: complete.id, name: complete.name, argsLen: complete.arguments.length, args: complete.arguments, argsDelta });
+          }
+        }
         // 记 output_index 供收尾排序:正常 SSE 有序,但代理重排/实现差异下按 index 恢复原始输出序(防御)。
         outputItems.push({ __idx: typeof ev.output_index === 'number' ? ev.output_index : outputItems.length, item: ev.item });
       } else if (type === 'response.completed' || type === 'response.incomplete') {

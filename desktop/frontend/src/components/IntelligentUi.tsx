@@ -99,7 +99,7 @@ function NativeDocument({ doc, complete, live, stateKey, onAsk }: { doc: UIDocum
             <button type="button" aria-label={`${input.label} +`} disabled={Number(values[id]) >= input.max} onClick={() => setValue(snapUIValue(Number(values[id]) + input.step, input))}><Plus size={16} /></button>
           </div>
         </div>
-        return <fieldset key={id} className="iui-choice"><legend>{input.label}</legend><div className="iui-parallel">{input.options.map(option => <label key={option.id} data-selected={values[id] === option.id || undefined}>
+        return <fieldset key={id} className="iui-choice"><legend>{input.label}</legend><div className="iui-parallel" data-columns={Math.min(3, input.options.length)}>{input.options.map(option => <label key={option.id} data-selected={values[id] === option.id || undefined}>
           <input type="radio" name={`${stateKey || doc.id}:${id}`} value={option.id} checked={values[id] === option.id} onChange={() => setValue(option.id)} />
           <span><strong>{option.label}</strong>{option.description && <small>{option.description}</small>}</span>
         </label>)}</div></fieldset>
@@ -109,7 +109,7 @@ function NativeDocument({ doc, complete, live, stateKey, onAsk }: { doc: UIDocum
         const r = resources.get(id) as Extract<UIResource, { kind: 'source' }>
         return <div key={id} className="iui-source"><ChatWebLink href={r.url} quote=""><span>{r.title}</span><ExternalLink size={14} /></ChatWebLink><small>{new URL(r.url).hostname}</small>{r.description && <details open={!!state.expanded[uiExpansionKey('source', block.id, id)]} onToggle={e => expand(uiExpansionKey('source', block.id, id), e.currentTarget.open)}><summary>{t('iui.summary')}<ChevronDown size={14} /></summary><p>{r.description}</p></details>}</div>
       })}</div>
-      case 'comparison': return <div className="iui-parallel iui-comparison">{block.items.map(item => <article key={item.id}>
+      case 'comparison': return <div className="iui-parallel iui-comparison" data-columns={Math.min(3, block.items.length)}>{block.items.map(item => <article key={item.id}>
         {item.imageId && <Picture resource={resources.get(item.imageId) as Extract<UIResource, { kind: 'image' }>} sources={resources} expanded={!!state.expanded[uiExpansionKey('image', block.id, item.imageId)]} onExpand={value => expand(uiExpansionKey('image', block.id, item.imageId), value)} />}
         <strong>{item.title}</strong><p>{item.description}</p><ul>{item.facts.map((fact, i) => <li key={i}>{fact}</li>)}</ul>
       </article>)}</div>
@@ -119,7 +119,7 @@ function NativeDocument({ doc, complete, live, stateKey, onAsk }: { doc: UIDocum
           <button type="button" onClick={() => void copy(rows.map(r => `${r.checked ? '☑' : '☐'} ${r.label}${r.amount === undefined ? '' : ` ${formatUIQuantity(r.amount)} ${r.unit}`}`).join('\n'))}><Copy size={14} />{t('iui.copy')}</button>
           <button type="button" aria-label={t('iui.reset')} title={t('iui.reset')} disabled={!rows.some(r => state.purchased[r.key] !== undefined)} onClick={() => update(s => ({ ...s, purchased: Object.fromEntries(Object.entries(s.purchased).filter(([key]) => !rows.some(r => r.key === key))) }))}><RotateCcw size={14} /></button>
         </div></div><progress value={done} max={Math.max(1, rows.length)} aria-label={t('iui.progress', { done, total: rows.length })} />
-        <div className="iui-check-rows">{rows.map(row => <label key={row.key} data-checked={row.checked || undefined}>
+        <div className="iui-check-rows" data-prose={rows.some(row => row.amount === undefined || row.label.length > 80) || undefined}>{rows.map(row => <label key={row.key} data-checked={row.checked || undefined}>
           <input type="checkbox" checked={row.checked} ref={el => { if (el) el.indeterminate = !!row.shortfall }} onChange={() => update(s => {
             const purchased = { ...s.purchased }
             if (row.checked) delete purchased[row.key]; else purchased[row.key] = row.amount ?? true
