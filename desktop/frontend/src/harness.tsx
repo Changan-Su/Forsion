@@ -2254,6 +2254,42 @@ if (new URLSearchParams(location.search).has('dock')) {
     SRC.itemMenu = (item) => [{ id: 'inspect', label: '查看属性', run: () => { probe.actions.push(item.key) } }]
     SRC.drop = { accepts: ['paths'], onDrop: (payload, target) => { probe.drops.push({ payload, target }) } }
   }
+  // 层级 / 开合记忆 / 行在列表里拖动 / 就地改名(2026-10-10):文件夹行与笔记树同一套画法;
+  // 落点与新名字只回报给插件,移动与改名由插件自己做(这里的替身只改名,不挪行)。
+  if (new URLSearchParams(location.search).has('tree')) {
+    const listeners = new Set<() => void>()
+    const emit = (): void => listeners.forEach((fn) => fn())
+    const page = { icon: 'page', draggable: true, renamable: true }
+    let rows: ListItem[] = [
+      { key: 'top', title: '不在分组里的行', icon: 'page' },
+      { key: 'home', title: '首页', icon: 'page', group: '文档', hint: '首页' },
+      { key: 'fa', title: '入门', kind: 'folder', group: '文档', draggable: true, renamable: true },
+      { key: 'a1', title: '快速上手', parent: 'fa', ...page },
+      { key: 'a2', title: '核心概念', parent: 'fa', ...page },
+      { key: 'fb', title: '对话', kind: 'folder', group: '文档', draggable: true, renamable: true },
+      { key: 'b1', title: '对话基础', parent: 'fb', ...page },
+      { key: 'loose', title: '未进目录', kind: 'folder', group: '文档' },
+      { key: 'r1', title: '版本 2.12', icon: 'bookmark', group: '更新动态' },
+    ]
+    // 当前行藏在收起的文件夹里:宿主要自己把它上面的文件夹展开
+    let active = 'a1'
+    const probe = { opened: [] as string[], drops: [] as unknown[], renames: [] as unknown[], adds: [] as string[], refuse: '' }
+    ;(window as any).__treeProbe = probe
+    SRC.subscribe = (cb) => { listeners.add(cb); return () => { listeners.delete(cb) } }
+    SRC.items = (f) => rows.filter((item) => !f?.query || item.title.includes(f.query))
+    SRC.activeKey = () => active
+    SRC.open = (item) => { active = item.key; probe.opened.push(item.key); emit() }
+    SRC.itemMenu = (item) => item.kind === 'folder' && item.key !== 'loose'
+      ? [{ id: 'add', label: '在这里新建', primary: true, run: () => { probe.adds.push(item.key) } }, { id: 'del', label: '删除文件夹', danger: true, run: () => {} }]
+      : []
+    SRC.rename = (item, title) => { probe.renames.push({ key: item.key, title }); rows = rows.map((r) => (r.key === item.key ? { ...r, title } : r)); emit() }
+    SRC.drop = {
+      accepts: ['items'],
+      // 文件夹不能放进文件夹(宿主被拒后改问「排在前 / 后」);probe.refuse 那一行什么都不收
+      canDrop: (payload, target) => !(rows.find((r) => r.key === payload.items[0])?.kind === 'folder' && target.position === 'into') && target.item?.key !== probe.refuse,
+      onDrop: (payload, target) => { probe.drops.push({ items: payload.items, to: target.item?.key, position: target.position }) },
+    }
+  }
   createRoot(document.getElementById('root')!).render(
     <div className="amadeus-root am-app" style={{ position: 'fixed', inset: 0, background: 'var(--bg)', display: 'flex' }}>
       {/* ⚠️ 层级照生产**逐层**摆:WorkspaceView 是 dockview 面板,**外面没有 `.t2s-side`**

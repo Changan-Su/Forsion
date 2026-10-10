@@ -530,7 +530,8 @@ export interface PluginMiniPanelOptions {
   mainViewParams?: Record<string, unknown>
 }
 
-/** One row in a plugin list source (kept deliberately flat — no tree). */
+/** One row in a plugin list source. The list stays a flat array; hierarchy is optional and expressed
+ *  with `parent` (2026-10-10+, feature-detect with `ctx.listCapabilities?.includes('tree')`). */
 export interface ListItem {
   /** Stable key within the source (dedupe / React key). */
   key: string
@@ -551,6 +552,23 @@ export interface ListItem {
   /** Show the shared unread dot on the leading icon — the same marker unread chat sessions get
    *  (2026-09-11+, added when the built-in inbox moved into the workspace sidebar). Older hosts ignore it. */
   unread?: boolean
+  /** Key of the row this one sits under (2026-10-10+). The host nests it, in array order, beneath that
+   *  row and draws the same folder tree as the notes sidebar. A parent that is missing, points at itself
+   *  or forms a cycle puts the row back at the top level. Search results are shown flat. Older hosts
+   *  ignore the field and render every row at one level, folders included — only emit `parent` and
+   *  folder rows when `ctx.listCapabilities?.includes('tree')`. */
+  parent?: string
+  /** 'folder' = a container row (2026-10-10+): clicking it folds or unfolds its children instead of
+   *  calling `open()`, and it may be empty. The host remembers which folders are open; folders start
+   *  closed and the one holding `activeKey()` is opened for you. `icon` overrides the folder glyph.
+   *  A `primary` action from `itemMenu(folder)` is drawn as the `+` button on the row. */
+  kind?: 'folder'
+  /** Let the user drag this row onto other rows of the same list (2026-10-10+). Needs
+   *  `drop.accepts` to include 'items'; the drop arrives in `drop.onDrop` as `{ items }`. */
+  draggable?: boolean
+  /** Let the user rename this row in place (2026-10-10+). Needs the source to declare `rename`; the
+   *  host adds the menu entry, draws the input and hands the new title to `rename()`. */
+  renamable?: boolean
 }
 
 /** A selectable filter row (≈ a folder). The host owns which one is active and passes the
@@ -613,11 +631,32 @@ export interface ListSourceContribution {
    *  behaviour). The host owns hit-testing and the highlight, and hands over the resolved target —
    *  a group row, an item row, or the list background (neither field set = the selected group).
    *  `accepts` gates which payloads light up: 'files' = OS files (given as File[]), 'paths' = in-app
-   *  path drags such as rows from the file tree (given as absolute host paths). */
+   *  path drags such as rows from the file tree (given as absolute host paths).
+   *
+   *  'items' (2026-10-10+, feature-detect with `ctx.listCapabilities?.includes('items')`) = rows of
+   *  this same list marked `draggable`, given as their keys. Such a drop always lands on a row and
+   *  carries `target.position`: 'before' / 'after' that row (reordering) or 'into' a folder. The host
+   *  never moves anything itself — apply the move and notify the subscriber. `canDrop` is asked while
+   *  the pointer moves (keep it synchronous and cheap); return false to refuse a spot, and the host
+   *  tries the next sensible one (e.g. 'before' when 'into' is refused) before showing no target.
+   *  A row is never offered itself or its own descendants. */
   drop?: {
-    accepts: Array<'files' | 'paths'>
-    onDrop(payload: { files?: File[]; paths?: string[] }, target: { group?: string; item?: ListItem }): void | Promise<void>
+    accepts: Array<'files' | 'paths' | 'items'>
+    onDrop(payload: { files?: File[]; paths?: string[]; items?: string[] }, target: ListDropTarget): void | Promise<void>
+    canDrop?(payload: { items: string[] }, target: ListDropTarget): boolean
   }
+  /** Rename a row marked `renamable` (2026-10-10+, feature-detect with
+   *  `ctx.listCapabilities?.includes('rename')`). The host owns the menu entry, the input and the
+   *  keys (Enter commits, Escape cancels, F2 starts); you get the trimmed, changed, non-empty title.
+   *  Apply it and notify the subscriber — the row keeps its old title until `items()` says otherwise. */
+  rename?(item: ListItem, title: string): void | Promise<void>
+}
+
+/** Where a drop landed in a plugin list. `position` is set for 'items' drops only. */
+export interface ListDropTarget {
+  group?: string
+  item?: ListItem
+  position?: 'before' | 'after' | 'into'
 }
 
 /** A custom file type a plugin owns end-to-end (like the built-in Excalidraw whiteboard): its own tree
@@ -942,6 +981,10 @@ export interface PluginContext {
   /** Contribute a list source to the unified workspace sidebar (2026-08-25+). Old hosts lack it:
    *  always call as `ctx.registerListSource?.(…)`. See ListSourceContribution. */
   registerListSource?(src: ListSourceContribution): void
+  /** What this host's list can do beyond flat rows (2026-10-10+): 'tree' = `ListItem.parent` and
+   *  folder rows, 'items' = dragging rows onto rows, 'rename' = in-place rename. Older hosts lack the
+   *  field — treat a missing entry as "not supported" and keep emitting flat rows there. */
+  readonly listCapabilities?: readonly ('tree' | 'items' | 'rename')[]
   /** Show a top-right notification card (2026-07-23+). Source is auto-labelled with the plugin
    *  name and users can mute per plugin in 设置 → 通知与状态栏 — treat it as a mutable hint, not a
    *  data channel. error level is sticky (manual close) by default. Old hosts lack this API:
