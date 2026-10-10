@@ -111,6 +111,7 @@ import { TagSuggest, tagSuggestPlugin } from './TagSuggest'
 import { EmojiSuggest, emojiSuggestPlugin } from './EmojiSuggest'
 import { footnoteInputRules, footnotePlugin } from './footnote'
 import { tagPillPlugin } from './tagPill'
+import { editorFocusPlugin, editorFocused } from './editorFocus'
 import { retargetWikiInner } from './wikiRetarget'
 import { BLANK_BUTTON_BLOCK } from '../button/format'
 import { newDocAgentSpec, serializeDocAgentSpec } from '../documentAgent/format'
@@ -303,45 +304,17 @@ export interface SlashOps {
 }
 
 /** 占位提示只在「聚焦中的空块」显示(Notion 同款;此前所有空块齐刷刷提示,实报扰视)。
- *  焦点态经 focus/blur 事务写进插件 state —— decorations(state) 拿不到 view,不能直接问 hasFocus。 */
+ *  焦点态读 editorFocus(经 focus/blur 事务写进 state)—— decorations(state) 拿不到 view,不能直接问 hasFocus。 */
 // text 取**函数**而非字符串:编辑器只建一次,字面量会把占位文案冻在建实例那一刻,
 // 切语言后空块仍显示旧语言(装饰是每次 state 变化现算的,现取即可跟上)。
 function placeholderPlugin(text: () => string) {
-  const key = new PluginKey<boolean>('amx-placeholder-focus')
   return $prose(
     () =>
       new Plugin({
-        key,
-        state: {
-          init: () => false,
-          apply: (tr, v) => {
-            const m = tr.getMeta(key) as boolean | undefined
-            return m === undefined ? v : m
-          },
-        },
-        view: (view) => {
-          const onFocus = (): void => {
-            if (!key.getState(view.state)) view.dispatch(view.state.tr.setMeta(key, true))
-          }
-          const onBlur = (): void => {
-            if (key.getState(view.state)) view.dispatch(view.state.tr.setMeta(key, false))
-          }
-          view.dom.addEventListener('focus', onFocus)
-          view.dom.addEventListener('blur', onBlur)
-          // 新建块 autoFocus 可能先于本插件视图挂载:补一拍初始态
-          queueMicrotask(() => {
-            if (!view.isDestroyed && view.hasFocus()) onFocus()
-          })
-          return {
-            destroy() {
-              view.dom.removeEventListener('focus', onFocus)
-              view.dom.removeEventListener('blur', onBlur)
-            },
-          }
-        },
+        key: new PluginKey('amx-placeholder'),
         props: {
           decorations(state) {
-            if (!key.getState(state)) return null // 未聚焦:空块保持全空白
+            if (!editorFocused(state)) return null // 未聚焦:空块保持全空白
             const { doc } = state
             const empty =
               doc.childCount === 1 && !!doc.firstChild?.isTextblock && doc.firstChild.content.size === 0
@@ -1116,6 +1089,7 @@ export function MilkdownInner({
       .use(toggleUnderlineCommand)
       .use(applyColorCommand)
       .use(applyBgCommand)
+      .use(editorFocusPlugin()) // 焦点态进 state:下面几个「光标行露源码」的实况预览和占位提示共用这一份
       .use(mathLivePreviewPlugin()) // 公式=纯文本+装饰渲染(不再用 plugin-math 原子节点),离行才渲染、在行可编辑
       .use(obsidianInlinePlugin()) // `==高亮==` / `%%注释%%`:同上口径的零 schema 实况预览(I-17,拍板 #11)
       .use(history)

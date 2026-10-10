@@ -13,6 +13,7 @@ import { WIKILINK_RE, linkTarget } from '@amadeus-shared/links'
 import { isPdfLinkInner, parseBlockSubpath, parseMediaLinkInner, splitLinkInner } from '@amadeus-shared/pdfLink'
 import { toAssetUrl } from '@amadeus-shared/assets'
 import { buildBlockString } from './mathLivePreview'
+import { editorFocused } from './editorFocus'
 import { attachSourceButton } from './sourceToggle'
 import { attachResizeHandle } from '../../lib/imageResize'
 import { armImageDrag } from './imageDrag'
@@ -63,7 +64,7 @@ export function wikiOpenArgAt(block: ProseNode, offset: number): string | null {
   return edge
 }
 
-interface WikiState { focus: boolean; sourceFrom: number | null }
+interface WikiState { sourceFrom: number | null }
 const wikiKey = new PluginKey<WikiState>('amadeus-wikilink-live')
 
 /** [[Name|alias]] → 显示 alias;[[Name]] → 原样内文(仅去两端 [[ ]])。
@@ -90,7 +91,7 @@ function buildDecorations(
   isResolved: (name: string) => boolean,
   iconOf?: (name: string) => string | undefined,
 ): DecorationSet {
-  const focus = wikiKey.getState(state)?.focus ?? false
+  const focus = editorFocused(state)
   const sourceFrom = wikiKey.getState(state)?.sourceFrom ?? null
   const decos: Decoration[] = []
   const selFrom = state.selection.from
@@ -276,7 +277,7 @@ function stampSrc(el: HTMLElement, getPos: () => number | undefined, len: number
 }
 function syncPicked(view: EditorView): void {
   const { from, to } = view.state.selection
-  const focus = wikiKey.getState(view.state)?.focus ?? false
+  const focus = editorFocused(view.state)
   for (const el of view.dom.querySelectorAll<HTMLElement>('.wikilink[data-src-from], .wiki-inline-img-wrap[data-src-from]')) {
     const s = srcOf.get(el)
     if (s) stampSrc(el, s.getPos, s.len)
@@ -367,9 +368,9 @@ export function wikilinkPlugin(
         // 只能在这里按当前选区打/摘。位置从 dataset 读 —— key 不带位置,DOM 跨位置复用,dataset 由 syncPicked 先刷新。
         view: () => ({ update: syncPicked }),
         state: {
-          init: () => ({ focus: false, sourceFrom: null }),
+          init: () => ({ sourceFrom: null }),
           apply: (tr, value) => {
-            const m = tr.getMeta(wikiKey) as { focus?: boolean; sourceFrom?: number } | undefined
+            const m = tr.getMeta(wikiKey) as { sourceFrom?: number } | undefined
             let sourceFrom = value.sourceFrom
             if (sourceFrom != null && tr.docChanged) sourceFrom = tr.mapping.map(sourceFrom)
             if (m && typeof m.sourceFrom === 'number') sourceFrom = m.sourceFrom
@@ -378,18 +379,11 @@ export function wikilinkPlugin(
               const nodeFrom = Math.max(0, sourceFrom - 1)
               if (!node || tr.selection.to <= nodeFrom || tr.selection.from >= nodeFrom + node.nodeSize) sourceFrom = null
             }
-            return {
-              focus: m && typeof m.focus === 'boolean' ? m.focus : value.focus,
-              sourceFrom,
-            }
+            return sourceFrom === value.sourceFrom ? value : { sourceFrom }
           },
         },
         props: {
-          // 失焦 → 全部渲染成链接;聚焦 → 仅光标所在行露源码(每个 Amadeus 块是独立编辑器)。
-          handleDOMEvents: {
-            focus: (view) => { if (!wikiKey.getState(view.state)?.focus) view.dispatch(view.state.tr.setMeta(wikiKey, { focus: true })); return false },
-            blur: (view) => { if (wikiKey.getState(view.state)?.focus) view.dispatch(view.state.tr.setMeta(wikiKey, { focus: false })); return false },
-          },
+          // 失焦 → 全部渲染成链接;聚焦 → 仅光标所在行露源码(每个 Amadeus 块是独立编辑器)。焦点态读 editorFocus。
           handleKeyDown: (view, event) => {
             if ((event.key !== 'ArrowUp' && event.key !== 'ArrowDown') || event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return false
             const pos = adjacentPlainWiki(view, event.key === 'ArrowUp' ? 'up' : 'down')

@@ -11,6 +11,7 @@ import type { Node as PMNode } from '@milkdown/kit/prose/model'
 import katex from 'katex'
 import 'katex/dist/katex.min.css'
 import { attachSourceButton, revealSource } from './sourceToggle'
+import { editorFocusKey, editorFocused } from './editorFocus'
 import { registerMessages, translate } from '../../../i18n'
 
 registerMessages({
@@ -135,7 +136,7 @@ function renderMath(view: EditorView, latex: string, display: boolean, srcFrom: 
     const at = srcFrom()
     if (at == null) return
     const pos = Math.min(at + 1, view.state.doc.content.size)
-    view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, pos)).setMeta(mathKey, { focus: true }))
+    view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, pos)).setMeta(editorFocusKey, true))
     view.focus()
   })
   return el
@@ -290,10 +291,10 @@ export function remarkMathEscapes(this: any): (tree: MdNode, file: any) => void 
 export const mathEscapeRemark = $remark('amadeusMathEscapes', () => remarkMathEscapes)
 /* eslint-enable @typescript-eslint/no-explicit-any */
 
-const mathKey = new PluginKey<{ focus: boolean }>('amadeus-math-live-preview')
+const mathKey = new PluginKey('amadeus-math-live-preview')
 
 function buildDecorations(state: EditorState): DecorationSet {
-  const focus = mathKey.getState(state)?.focus ?? false
+  const focus = editorFocused(state)
   const decos: Decoration[] = []
   const selFrom = state.selection.from
   const selTo = state.selection.to
@@ -347,21 +348,10 @@ function buildDecorations(state: EditorState): DecorationSet {
 export function mathLivePreviewPlugin() {
   return $prose(
     () =>
-      new Plugin<{ focus: boolean }>({
+      new Plugin({
         key: mathKey,
-        state: {
-          init: () => ({ focus: false }),
-          apply: (tr, value) => {
-            const m = tr.getMeta(mathKey) as { focus?: boolean } | undefined
-            return m && typeof m.focus === 'boolean' ? { focus: m.focus } : value
-          },
-        },
         props: {
-          // 失焦 → 全部渲染(每个 Amadeus 块独立编辑器:点别的块 = 本块失焦,公式即渲染)。
-          handleDOMEvents: {
-            focus: (view) => { if (!mathKey.getState(view.state)?.focus) view.dispatch(view.state.tr.setMeta(mathKey, { focus: true })); return false },
-            blur: (view) => { if (mathKey.getState(view.state)?.focus) view.dispatch(view.state.tr.setMeta(mathKey, { focus: false })); return false },
-          },
+          // 失焦 → 全部渲染(每个 Amadeus 块独立编辑器:点别的块 = 本块失焦,公式即渲染)。焦点态读 editorFocus。
           decorations: (state) => buildDecorations(state),
         },
       }),
