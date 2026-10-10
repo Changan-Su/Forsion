@@ -1,0 +1,58 @@
+/* Agent 自己写了东西之后,对话里的三种反馈(10-10 用户定「分级 + 留痕」):
+ *   回执行  记忆 / 进化记录 —— 它自己的事,一条回复一行,点开才是明细和撤销;
+ *   请求卡  协作说明 —— 是说给用户听的,所以单独一张卡(样式在 humanCollaboration.css 的 .human-update-card 上加);
+ *   留痕    后台复盘写下的东西,钉在触发它的那条回复后面。
+ * DESIGN §5:内容卡不描边不投影;这里的行连底色都没有,靠细线和间距分层。 */
+.self-receipt, .self-trace, .human-acked { max-width: 700px; width: 100%; box-sizing: border-box; font-family: var(--font-ui); font-size: var(--ui-font-meta); line-height: var(--ui-line-meta); color: var(--text-muted); }
+.self-receipt > summary, .human-acked { display: inline-flex; align-items: center; gap: 6px; padding: 3px 0; cursor: pointer; border-radius: var(--radius-sm); }
+.self-receipt > summary { list-style: none; }
+.self-receipt > summary::-webkit-details-marker { display: none; }
+.self-receipt > summary:focus-visible, .human-acked:focus-visible, .self-act:focus-visible { outline: var(--focus-ring, 2px) solid var(--accent-ink); outline-offset: 2px; }
+.self-receipt-ic { flex: none; color: var(--green); }
+.self-receipt-first { color: var(--text); font-weight: 600; }
+.self-receipt-chev { flex: none; transition: transform var(--duration-fast, .15s); }
+.self-receipt[open] .self-receipt-chev { transform: rotate(90deg); }
+
+.self-rows { margin-top: 4px; }
+/* 一行两层:上面是「哪一类 · 状态」和动作,下面是内容。类别那句长短不一(Agent 名、已撤销),并排成列会对不齐。 */
+.self-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 2px 10px; align-items: start; padding: 7px 0; border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent); }
+.self-row-ic { grid-area: 1 / 1; margin-top: 2px; }
+.self-row-kind { grid-area: 1 / 2; font-size: var(--ui-font-caption); line-height: var(--ui-line-meta); overflow-wrap: anywhere; }
+.self-row-ops { grid-area: 1 / 3; display: inline-flex; align-items: center; gap: 10px; }
+.self-row-main { grid-column: 2 / 4; min-width: 0; color: var(--text); font-size: var(--ui-font-body); line-height: var(--ui-line-body); overflow-wrap: anywhere; }
+.self-row-main p { margin: 0; }
+.self-row-main p + p, .self-row-main details { margin-top: 4px; color: var(--text-muted); font-size: var(--ui-font-meta); }
+.self-row-main summary { cursor: pointer; }
+.self-row-note { grid-column: 2 / 4; margin: 0; font-size: var(--ui-font-meta); }
+
+/* 文字动作:与详情页的 .profile-text-action 同一副样子,但不依赖那份样式是否已经加载 */
+.self-act { display: inline-flex; align-items: center; gap: 5px; padding: 2px 0; border: 0; background: transparent; color: var(--text-muted); font: inherit; font-size: var(--ui-font-caption); cursor: pointer; }
+.self-act:hover:not(:disabled) { color: var(--accent-ink); }
+.self-act:disabled { opacity: .5; cursor: default; }
+
+.self-trace { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px; }
+.self-trace + .self-trace { margin-top: -2px; }
+.self-trace::after { content: ''; flex: 1 1 0; min-width: 0; height: 1px; background: var(--border); }
+.self-trace-ic { flex: none; }
+.self-trace-text { min-width: 0; overflow-wrap: anywhere; }
+.self-trace-text b { margin-left: 4px; color: var(--text); font-weight: 600; }
+.self-trace-ops { flex: none; display: inline-flex; align-items: center; gap: 10px; }
+
+/* 请求卡:在 .human-update-card 上加的几样 */
+.human-ask-saved { margin-left: auto; font-size: var(--ui-font-caption); color: var(--text-faint, var(--text-muted)); }
+.human-update-card .human-say { margin: 6px 0 4px; font-size: var(--ui-font-heading); line-height: var(--chat-line-height, 1.72); overflow-wrap: anywhere; }
+.human-update-card .human-why { margin: 0; font-size: var(--ui-font-meta); color: var(--text-muted); overflow-wrap: anywhere; }
+.human-ask-foot { margin-top: 12px; }
+.human-acked { border: 0; background: transparent; }
+.human-acked:hover { color: var(--text); }
+
+/* 开场:新对话输入卡上方的一行,和项目选择条一样在 .composer-anchor 里、与输入卡同宽对齐 */
+.self-opening { padding: 0 24px 6px; }
+.self-opening-inner { max-width: 760px; margin: 0 auto; display: flex; align-items: center; gap: 6px 8px; flex-wrap: wrap; font-family: var(--font-ui); font-size: var(--ui-font-meta); line-height: var(--ui-line-meta); color: var(--text-muted); }
+.self-opening-text { min-width: 0; overflow-wrap: anywhere; }
+
+/* 留痕下面的待确认候选:一条一行,点的就是这一行 */
+.self-trace-rows { max-width: 700px; width: 100%; box-sizing: border-box; margin: 2px 0 4px; padding-left: 25px; font-family: var(--font-ui); }
+.self-trace-row { display: flex; align-items: flex-start; gap: 4px 12px; padding: 5px 0; border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent); }
+.self-trace-row-text { flex: 1 1 0; min-width: 0; color: var(--text); font-size: var(--ui-font-meta); line-height: var(--ui-line-body); overflow-wrap: anywhere; }
+.self-trace-note { margin: 2px 0 0; padding-left: 25px; font-family: var(--font-ui); font-size: var(--ui-font-caption); color: var(--text-muted); }
