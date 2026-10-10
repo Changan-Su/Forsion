@@ -492,7 +492,8 @@ export function PluginListBody({ src, stateKey }: { src: ListSourceContribution;
               <span className="t2s-group-label">{it.title}</span>
               {it.hint && <span className="t2s-count">{it.hint}</span>}
             </button>}
-        {!!actions.length && <CapabilityMenu label={t('wsview.itemActions', { title: it.title })} className="t2s-group-add"
+        {/* 只有「+」那一项时不再画「更多」(右键菜单里照样有) */}
+        {actions.some((action) => !action.primary) && <CapabilityMenu label={t('wsview.itemActions', { title: it.title })} className="t2s-group-add"
           items={menuItems(actions)}><MoreHorizontal size={14} /></CapabilityMenu>}
         {add && <button type="button" className="t2s-group-add" title={add.label} aria-label={add.label}
           onClick={() => { open.setOpen('f:' + it.key, true); add.run() }}><Plus size={14} /></button>}
