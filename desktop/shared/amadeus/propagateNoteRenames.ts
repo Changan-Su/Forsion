@@ -10,9 +10,12 @@ import { rewriteNoteRefs, type NoteRenamePlan } from './rewriteNoteRefs'
 import { textFingerprint } from './writeConflict'
 import type { TextWriteResult } from './ipc'
 
-/** 挪 / 改名文件夹时,库内路径的新旧换算:`[旧文件夹, 新文件夹]` 之下的整棵树跟着走;没给 = 没有文件换位置。 */
-export const movedUnder = (folder?: readonly [string, string]) => (f: string): string =>
-  folder && (f === folder[0] || f.startsWith(`${folder[0]}/`)) ? folder[1] + f.slice(folder[0].length) : f
+/** 挪 / 改名文件夹时,库内路径的新旧换算:`[旧文件夹, 新文件夹]` 之下的整棵树跟着走;没给 = 没有文件换位置。
+ *  进出都是 `/` 分隔的库内路径(Windows 上宿主给的文件夹路径可能带 `\`,先换掉)。 */
+export const movedUnder = (folder?: readonly [string, string]) => {
+  const [from, to] = (folder ?? []).map((p) => p.replace(/\\/g, '/').replace(/\/+$/, ''))
+  return (f: string): string => (from && (f === from || f.startsWith(`${from}/`)) ? to + f.slice(from.length) : f)
+}
 
 export interface RenamePropagationIO {
   /** 这条库内路径眼下有没有文件(点目录里的也算)。给了才重算正文里的图片 / 附件相对引用(assets.rebaseFileRefs)。 */
@@ -48,7 +51,7 @@ export async function propagateNoteRenames(
   const after = before.map((p) => pairs.get(p) ?? p).sort()
   const plan: NoteRenamePlan = { pairs, pagesBefore: before, pagesAfter: after }
   const attempts = Math.max(1, opts.attempts ?? 3)
-  const moved = movedUnder(opts.folder)
+  const moved = opts.folder ? movedUnder(opts.folder) : null
   const exists = io.exists?.bind(io)
 
   const one = async (p: string): Promise<void> => {
@@ -58,11 +61,12 @@ export async function propagateNoteRenames(
         out.failed.push({ path: p, error: 'gone' })
         return
       }
+      const seen = new Set<string>() // 首读时正文里就有的图片 / 附件地址
       for (let i = 0; i < attempts; i++) {
         const src = backMap.get(p) ?? p
         const links = rewriteNoteRefs(raw, src, p, plan)
-        // 重试时的现文可能是别的写者按新位置存下的(引用已经指对了):只修还断着的,不拿旧目录再解释一遍(trustWorking)。
-        const next = exists ? await rebaseFileRefs(links, src, p, moved, exists, { trustWorking: i > 0 }) : links
+        // 重试时的现文里可能有别的写者按新位置写的引用:只改首读时就有的那些,不拿旧目录去解释别人写的。
+        const next = exists ? await rebaseFileRefs(links, src, p, moved, exists, i ? { only: seen } : { seen }) : links
         if (next === raw) return
         const r = await io.write(p, next, textFingerprint(raw))
         if (r === 'gone') {

@@ -208,9 +208,13 @@ export function toStoredMarkdown(md: string, pageDir: string): string {
 
 // `](` 之后的地址与收尾:裸目标 + 可选的 "标题" + `)`。长度封顶 —— 没有收尾的超长串不许拖成平方级回溯。
 const LINK_DEST_RE = /([^)\s]{1,2048})((?:\s+"[^"]{0,2048}")?\))/y
-/** 链接(非图片)地址里「形似域名」的写法:点击时会被补成 https://(linkHref.normalizeHref 同一判据),单段文件名则按
- *  文件名全库找(resolveAttachment)。两者都不是页相对路径。 */
+/** 链接(非图片)地址里「形似域名」的写法:点击时会被补成 https://(linkHref.normalizeHref 同一判据)。 */
 const DOMAINISH_RE = /^[^\s/]+\.[^\s/]/
+/** 地址原文里出现就不接手的字符:实体、表格、转义、标题、行内代码、强调、查询串、协议、括号 —— 在 markdown 与各读取方
+ *  那里各有各的含义,拆开重拼容易拼出另一个意思。产品自己写出来的引用里没有它们。 */
+const DEST_UNSAFE_RE = /[&|\\"'`[\]*?:<>()]/
+/** 新拼进地址的目录名里出现就整条不改的字符(空格、括号、尖括号、`%`、`#` 可以编码,不在此列)。 */
+const SEG_UNSAFE_RE = /[&|\\"'`[\]*?:\u0000-\u001f]/
 const escapedAt = (s: string, i: number): boolean => {
   let n = 0
   while (s[i - 1 - n] === '\\') n++
@@ -225,11 +229,14 @@ const encodeSeg = (seg: string): string => encodeDest(seg.replace(/%/g, '%25')).
  *  图片留在原处,引用一个字不改就指向新文件夹下不存在的路径 —— 三端取图都只做精确匹配,图当场裂;那里恰好有
  *  同路径的文件时显示的是另一张(2026-10-10 实测)。挪文件夹、给附件文件夹改名时指向夹外 / 夹外指进来的同理。
  *
- *  规则:引用原先(按 srcBefore 的目录)指着的那个文件,经 `moved` 换算出它现在的位置。**字面写法从 srcAfter 的
- *  目录看过去已经不指着它了**,才换成指过去的相对路径。
- *    · 字面写法仍指着它 → 一个字节不动(没挪的笔记;整个文件夹一起走的夹内互引,含手写的 `./x.png`)。唯一的例外:
- *      它绕出页目录再回来(`../notes/x.png` 写在 notes/ 下的笔记里)而规范写法不必绕 —— 换回规范写法,
- *      所以「挪走再挪回来」正文回到原样。
+ *  `moved` = 文件夹操作时库内路径的新旧换算(propagateNoteRenames.movedUnder);挪 / 改名单篇笔记时没有文件换位置,给 null ——
+ *  这时只有换了目录的那篇笔记会被看,别的笔记原样返回。
+ *
+ *  规则:引用原先(按 srcBefore 的目录)指着的那个文件,换算出它现在的位置。**字面写法从 srcAfter 的目录看过去
+ *  已经不指着它了**,才换成指过去的相对路径。
+ *    · 字面写法仍指着它 → 一个字节不动(整个文件夹一起走的夹内互引,含手写的 `./x.png`)。唯一的例外:它绕出页目录
+ *      再回来(`../notes/x.png` 写在 notes/ 下的笔记里)而规范写法不必绕 —— 换回规范写法,所以「挪走再挪回来」
+ *      正文回到原样。
  *    · **文件确实在才改**(`exists` 问的是操作之后的位置)。本来就指不到文件的引用保持原样 —— 包括存量的库内路径
  *      写法(`notes/` 下的笔记写着 `![](attachments/x.png)`、文件其实在库根):它靠 resolveAttachment 的
  *      「退回库根」还打得开,按页相对改写反而把这条退路也改没了。
@@ -237,101 +244,120 @@ const encodeSeg = (seg: string): string => encodeDest(seg.replace(/%/g, '%25')).
  *      (rewriteNoteRefs 头注的已知缺口);`![[…]]` 按文件名全库找,本来就不受位置影响。
  *    · 不是页相对路径的不碰:外链 / 协议 / 绝对路径 / 纯锚点;**链接**里的单段文件名(`[doc](d.pdf)` 按文件名
  *      全库找)和形似域名的写法(`a.b/c.pdf` 会被当成外链)。图片的单段文件名是页相对的(<img> 按页目录拼)。
- *    · 认不准的不碰(宁可漏改,不许改错):围栏代码块、行内代码;一段里有没配上对的反引号(可能是跨行的行内代码)
- *      → 到下一个空行为止整段跳过;尖括号目标;地址里有裸括号(CommonMark 允许配平的括号,这里不解析,截断了会
- *      认成另一个文件);解码后带 `\` 或 `/` 的段;转义的 `\[`。
+ *    · ⚠️ **认不准的一律不碰 —— 宁可漏改(引用保持原样,和这次改动之前一样),不许改错**。两轮评审(2026-10-10)报的
+ *      十几种改指另一个文件 / 写坏正文,都出在「硬解一个有歧义的写法」上:
+ *        - 代码:围栏代码块(没收尾的围栏一直算到文末)、行内代码;一段里有没配上对的反引号(可能是跨行的行内代码)
+ *          → 到下一个空行为止整段跳过。frontmatter 整块跳过。
+ *        - 地址原文里有 DEST_UNSAFE_RE 的字符(`&` 实体、`|` 表格、`\` 转义、引号、括号、`:` 协议、`?` 查询串……)、
+ *          尖括号目标、解不开的百分号编码、解码后带 `\` 或 `/` 的段、转义的 `\[`、`[^脚注]`。
+ *        - 要新拼进去的目录名里有 SEG_UNSAFE_RE 的字符(目录叫 `a|b`、`a&amp;b`、`foo:bar` 的)。
+ *      往这里加「再多认一种写法」之前先想清楚各读取方(toDisplayMarkdown、linkHref.normalizeHref、主进程
+ *      resolveAttachment、remark)是不是都按同一个意思读它。
  *    · 改写时**原样留下引用里没变的那几段**(文件名连同它原来的编码:`%2520`、`%23`、`%E5%9B%BE` 都不动),
- *      只有新拼上去的目录名才编码。链接的结果不许形似域名 / 单段文件名 → 前面补 `./`。链接的 `#锚` 原样接回;
+ *      只有新拼上去的目录名才编码。链接的结果不许是单段文件名 / 形似域名 → 前面补 `./`。链接的 `#锚` 原样接回;
  *      图片的地址整段当路径(toDisplayMarkdown 同口径),不拆 `#`。
- *    · `trustWorking`(比对交换写冲突后的重试用):现文可能是别的写者按**新位置**存下的,已经指对了 —— 字面写法在
- *      新位置指着一个存在的文件就不动,不拿旧目录再解释它一遍。
+ *    · `opts.seen` / `opts.only`(比对交换写冲突后的重试用):现文里可能有别的写者按**新位置**写的引用,不能拿旧
+ *      目录再解释一遍。第一遍把看过的地址记进 `seen`,重试时 `only` = 那个集合 —— 只改首读时就有的引用。
  *  仪器:assets.test.ts 的「挪了位置之后的引用」、electron/amadeus/ipc.moveFileRefs.test.ts(真 IPC + 真协议处理器)、
  *  desktop 的 npm run e2e:notemove(真 Electron)。 */
 export async function rebaseFileRefs(
   md: string,
   srcBefore: string,
   srcAfter: string,
-  moved: (vaultRel: string) => string,
+  moved: ((vaultRel: string) => string) | null,
   exists: (vaultRel: string) => boolean | Promise<boolean>,
-  opts: { trustWorking?: boolean } = {},
+  opts: { seen?: Set<string>; only?: ReadonlySet<string> } = {},
 ): Promise<string> {
-  if (!md.includes('](')) return md
   const dirOf = (p: string): string => normPath(p.replace(/\\/g, '/')).split('/').slice(0, -1).join('/')
   const from = dirOf(srcBefore)
   const to = dirOf(srcAfter)
+  if ((from === to && !moved) || !md.includes('](')) return md
   const under = (dir: string, rel: string): string => normPath(dir ? `${dir}/${rel}` : rel)
   const climbs = (segs: string[]): number => segs.filter((x) => x === '..').length
   const there = new Map<string, boolean>() // 要问宿主的库内路径(操作后)→ 在不在
 
   /** 一条地址该换成什么;不该动 = null。collect = 只登记要问宿主的路径,不改。 */
   const rebase = (dest: string, image: boolean, collect: boolean): string | null => {
-    if (dest.startsWith('<') || dest.includes('(') || /^(?:[a-z][a-z0-9+.-]*:|\/|#)/i.test(dest)) return null
+    opts.seen?.add(dest)
+    if (opts.only && !opts.only.has(dest)) return null
+    if (/^[/#]/.test(dest)) return null
     const cut = image ? -1 : dest.indexOf('#')
     const rawPath = cut < 0 ? dest : dest.slice(0, cut)
-    if (!image && DOMAINISH_RE.test(rawPath)) return null
+    if (DEST_UNSAFE_RE.test(rawPath)) return null
     const raw = rawPath.split('/')
-    const segs = raw.map(decodeSafe)
+    if (!image && (raw.length === 1 || DOMAINISH_RE.test(rawPath))) return null
+    let segs: string[]
+    try {
+      segs = raw.map((x) => decodeURIComponent(x))
+    } catch {
+      return null // 解不开的编码:各读取方的退路不一样(整段原样 / 逐段原样),不接手
+    }
     if (segs.some((x) => /[\\/]/.test(x))) return null
     const u = segs.join('/')
     if (!/\.[a-z0-9]{1,12}$/i.test(u) || /\.md$/i.test(u)) return null
     const was = under(from, u)
     if (!was || was === '..' || was.startsWith('../')) return null // 指到库外:不接手
-    const now = moved(was)
+    const now = moved ? moved(was) : was
     if (from === to && now === was) return null
-    const lit = under(to, u)
     const canon = relPath(to, now).split('/')
-    if (lit === now && climbs(segs) <= climbs(canon)) return null
-    if (collect) {
-      there.set(now, false)
-      if (opts.trustWorking && lit !== now) there.set(lit, false)
-      return null
-    }
-    if (!there.get(now) || (opts.trustWorking && lit !== now && there.get(lit))) return null
+    if (under(to, u) === now && climbs(segs) <= climbs(canon)) return null
     let keep = 0 // 引用末尾有几段原样留下(与规范写法的末尾逐段相同)
     while (keep < segs.length && keep < canon.length && segs[segs.length - 1 - keep] === canon[canon.length - 1 - keep] && !/^\.{0,2}$/.test(segs[segs.length - 1 - keep])) keep++
-    const out = [...canon.slice(0, canon.length - keep).map(encodeSeg), ...raw.slice(raw.length - keep)].join('/')
-    return (!image && DOMAINISH_RE.test(out) ? `./${out}` : out) + (cut < 0 ? '' : dest.slice(cut))
+    const fresh = canon.slice(0, canon.length - keep)
+    if (fresh.some((x) => SEG_UNSAFE_RE.test(x))) return null
+    if (collect) { there.set(now, false); return null }
+    if (!there.get(now)) return null
+    const out = [...fresh.map(encodeSeg), ...raw.slice(raw.length - keep)].join('/')
+    return (!image && (!out.includes('/') || DOMAINISH_RE.test(out)) ? `./${out}` : out) + (cut < 0 ? '' : dest.slice(cut))
   }
 
-  /** 一段行内代码之外的文字:逐个 `](` 往回找它的 `[`(线性;从 `[` 起正则扫会在失配的长行上退化成平方级)。
+  /** 一段行内代码之外的文字:逐个 `](` 往回找最近的 `[`(线性;从 `[` 起正则扫会在失配的长行上退化成平方级)。
    *  ponytail: 链接文字里带 `]` 的(`[a [b] c](x.pdf)`、图片外面套的那层链接)认不出、不改 —— 漏改,不会改错。 */
   const links = (collect: boolean) => (seg: string): string => {
     let out = ''
-    let last = 0
-    for (let c = seg.indexOf(']('); c >= 0; c = seg.indexOf('](', c + 2)) {
-      const start = Math.max(seg.lastIndexOf(']', c - 1) + 1, last)
-      const open = start + seg.substring(start, c).lastIndexOf('[') // 最近的那个 `[`:`[![图](a.png)](b.pdf)` 里先认里面的图
-      if (open < start || escapedAt(seg, open) || escapedAt(seg, c)) continue
+    let last = 0 // 已经输出到哪(上一条改写的末尾)
+    let floor = 0 // 上一条认出来的链接的末尾:只往后看 —— 它的 "标题" 里形似链接的文字不是链接
+    for (let c = seg.indexOf(']('); c >= 0; c = seg.indexOf('](', Math.max(c + 2, floor))) {
+      const start = Math.max(seg.lastIndexOf(']', c - 1) + 1, floor)
+      const open = start + seg.substring(start, c).lastIndexOf('[')
+      if (open < start || open >= c || escapedAt(seg, open) || escapedAt(seg, c) || seg[open + 1] === '^') continue
       LINK_DEST_RE.lastIndex = c + 2
       const m = LINK_DEST_RE.exec(seg)
       if (!m) continue
+      floor = LINK_DEST_RE.lastIndex
       const next = rebase(m[1], seg[open - 1] === '!' && !escapedAt(seg, open - 1), collect)
       if (next == null) continue
       out += seg.slice(last, c + 2) + next + m[2]
-      last = LINK_DEST_RE.lastIndex
+      last = floor
     }
     return last ? out + seg.slice(last) : seg
   }
+  const looseTick = (seg: string): boolean => {
+    for (let i = seg.indexOf('`'); i >= 0; i = seg.indexOf('`', i + 1)) if (!escapedAt(seg, i)) return true
+    return false
+  }
+  const fm = /^---\r?\n[\s\S]*?\r?\n---[ \t]*(?:\r?\n|$)/.exec(md)?.[0] ?? ''
+  const body = md.slice(fm.length)
   // 同一遍扫描跑两次:第一次只收集「要改的话得先确认在不在」的路径,问完宿主再真改。
   const pass = (collect: boolean): string => {
     let skip = false // 这一段里有没配上对的反引号:到下一个空行为止不碰
-    return mapOutsideFences(md, (line) => {
+    return mapOutsideFences(body, (line) => {
       if (!line.trim()) { skip = false; return line }
       if (skip) return line
       let loose = false
       const next = outsideCodeSpans(line, (seg) => {
-        if (/(?:^|[^\\])`/.test(seg)) loose = true
+        if (looseTick(seg)) loose = true
         return seg.includes('](') ? links(collect)(seg) : seg
       })
       if (!loose) return next
       skip = true
       return line
-    })
+    }, true)
   }
   pass(true)
   if (!there.size) return md
   await Promise.all([...there.keys()].map(async (p) => { there.set(p, await exists(p)) }))
-  return pass(false)
+  return fm + pass(false)
 }
 
 /** `![[x|200]]` / `[[x#锚]]` / `![](x)` / `[名](x)` 里的**附件**引用(非 .md、非外链、带扩展名)。

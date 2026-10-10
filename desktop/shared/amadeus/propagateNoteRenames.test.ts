@@ -1,6 +1,6 @@
 // 评审 G2-04:web / 移动端改名 / 移动之后重写全库 [[链接]] 的宿主无关半边(读 → 重写 → 比对交换写 → 冲突重算)。
 import { describe, expect, it } from 'vitest'
-import { propagateNoteRenames, queueStructureOps, type RenamePropagationIO } from './propagateNoteRenames'
+import { movedUnder, propagateNoteRenames, queueStructureOps, type RenamePropagationIO } from './propagateNoteRenames'
 import { textFingerprint } from './writeConflict'
 
 function memIO(files: Map<string, string>, hooks: { beforeWrite?: (p: string) => void; failWrite?: (p: string) => boolean } = {}): RenamePropagationIO & { writes: string[] } {
@@ -21,6 +21,12 @@ function memIO(files: Map<string, string>, hooks: { beforeWrite?: (p: string) =>
 }
 
 describe('propagateNoteRenames', () => {
+  it('movedUnder:文件夹之下的整棵树跟着走,同前缀的别的文件夹不动;宿主给的反斜杠路径照样认', () => {
+    const m = movedUnder(['a/notes', 'b/notes'])
+    expect([m('a/notes/x.png'), m('a/notes'), m('a/notes2/x.png'), m('c/x.png')]).toEqual(['b/notes/x.png', 'b/notes', 'a/notes2/x.png', 'c/x.png'])
+    expect(movedUnder(['a\\notes', 'b\\notes'])('a/notes/x.png')).toBe('b/notes/x.png')
+    expect(movedUnder()('a/x.png')).toBe('a/x.png')
+  })
   // 图片 / 附件的相对引用(assets.rebaseFileRefs)跟 [[链接]] 走同一趟读写。负对照(实跑过):one() 里不调 rebaseFileRefs → 前 3 条红;
   // 提前返回改回只看 pairs → 第 3 条红。
   it('移动:挪走的笔记里按相对路径写的图片 / 附件引用按新位置重算;没给 exists 的宿主不做这件事', async () => {
@@ -36,7 +42,7 @@ describe('propagateNoteRenames', () => {
     expect(plain.get('other/a.md')).toBe('![](.amadeus/p.png) [[b]]\n')
   })
   it('写前被别的写者按新位置存过(引用已经指对)→ 重试时不拿旧目录再解释一遍,对方写的引用和字都留着', async () => {
-    // 负对照(实跑过):重试不带 trustWorking → 红(改成 ../../.amadeus/p.png,指向库根的另一张图)
+    // 负对照(实跑过):重试不带 only → 红(改成 ../../.amadeus/p.png,指向库根的另一张图)
     const theirs = '![](../.amadeus/p.png)\nnew text\n'
     const files = new Map([['notes/deep/a.md', '![](.amadeus/p.png)\n']])
     let hit = 0

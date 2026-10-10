@@ -183,7 +183,7 @@ export function registerVaultHandlers(deps: VaultHandlerDependencies): void {
     const backMap = new Map([...pairs].map(([o, n]) => [n, o]))
     const before = [...pagesBefore].sort()
     const after = before.map((p) => pairs.get(p) ?? p).sort()
-    const moved = movedUnder(folder)
+    const moved = folder ? movedUnder(folder) : null
     for (const p of after) {
       const changed = await withPathLock(p, async () => {
         let raw: string

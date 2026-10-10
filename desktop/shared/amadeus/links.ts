@@ -174,7 +174,7 @@ const fenceCloses = (line: string, open: { ch: string; n: number }): boolean => 
  * 新打的 `[[链接]]` 按 `\[\[` 落盘成死链、URL 转义留着、改名不跟、搜索不解(09-18 评审实测)。
  * ponytail: 一堆没收尾的开围栏各扫到文末是 O(行²),真实笔记碰不到。
  */
-export function mapOutsideFences(md: string, fn: (line: string) => string): string {
+export function mapOutsideFences(md: string, fn: (line: string) => string, unclosedIsCode = false): string {
   const lines = md.split('\n')
   for (let i = 0; i < lines.length; i++) {
     const open = fenceOpen(lines[i])
@@ -182,6 +182,9 @@ export function mapOutsideFences(md: string, fn: (line: string) => string): stri
       let j = i + 1
       while (j < lines.length && !fenceCloses(lines[j], open)) j++
       if (j < lines.length) { i = j; continue }
+      // unclosedIsCode:按 CommonMark,没收尾的围栏一直开到文末 —— 后面的都当代码留着(也免了逐个开围栏各扫到文末)。
+      // 给「宁可漏改、不许改到代码」的调用方用(assets.rebaseFileRefs);缺省仍当普通行(见上)。
+      if (unclosedIsCode) break
     }
     lines[i] = fn(lines[i])
   }
