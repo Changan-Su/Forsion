@@ -254,9 +254,9 @@ describe('思考块绑定失配(Fable 5.1 / Opus 5.5 / Sonnet 5.5 / Haiku 5.5 �
     return seen;
   };
   // 每条用例用自己的 key:「记住」是进程内的,不同用例之间不许串。
-  const call = (apiKey: string, model = 'claude-opus-5-5', thinking: any = ADAPTIVE) =>
+  const call = (apiKey: string, model = 'claude-opus-5-5', thinking: any = ADAPTIVE, baseUrl = 'https://api.anthropic.com') =>
     streamAnthropicMessages({
-      apiKey, baseUrl: 'https://api.anthropic.com',
+      apiKey, baseUrl,
       payload: { model, thinking, output_config: { effort: 'high' }, messages: [{ role: 'user', content: 'hi' }] },
     } as any);
 
@@ -272,16 +272,17 @@ describe('思考块绑定失配(Fable 5.1 / Opus 5.5 / Sonnet 5.5 / Haiku 5.5 �
     expect(seen[1].body.output_config).toEqual({ effort: 'high' }); // 其余请求体原样
   });
 
-  it('记住这对 key + 模型,下一次直接带;换模型 / 换 key / 关思考都不带', async () => {
+  it('记住这组端点 + key + 模型,下一次直接带;换模型 / 换 key / 关思考 / 换端点都不带', async () => {
     record([bad(BOUND), ok()]);
     await call('key-b');
-    const seen = record([ok(), ok(), ok(), ok()]);
+    const seen = record([ok(), ok(), ok(), ok(), ok()]);
     await call('key-b'); // 同 key 同模型:不再白挨一次 400
     await call('key-b', 'claude-opus-5'); // 换模型
     await call('key-other'); // 换 key
     await call('key-b', 'claude-opus-5-5', { type: 'disabled' }); // disabled 上带 block_binding 本身就是 400
-    expect(seen.map((s) => !!s.body.thinking?.block_binding)).toEqual([true, false, false, false]);
-    expect(seen.map((s) => s.headers['anthropic-beta'])).toEqual([BETA, undefined, undefined, undefined]);
+    await call('key-b', 'claude-opus-5-5', ADAPTIVE, 'https://proxy.example'); // 同 key 换到代理:那边没点名要过,不认就是 400
+    expect(seen.map((s) => !!s.body.thinking?.block_binding)).toEqual([true, false, false, false, false]);
+    expect(seen.map((s) => s.headers['anthropic-beta'])).toEqual([BETA, undefined, undefined, undefined, undefined]);
   });
 
   it('别的 400(签名被改坏,报文里没有点名这个字段)不重发,原样抛', async () => {

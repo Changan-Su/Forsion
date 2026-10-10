@@ -236,11 +236,11 @@ export async function streamAnthropicMessages(opts: StreamOpts): Promise<StreamR
  * system、tools 和此前的全部消息;这些只要变过(run 末轮不发 tools、旧截图被替换、run 内压缩),
  * 2026-08-31 之后注册的账号就收到 400,报文里点名要设 `thinking.block_binding.prefix_mismatch_behavior`。
  * 做法:**收到这条 400 才**带上 drop_block(失配的思考块由服务端丢掉,请求照常成功)重发一次,并记住
- * 这对 key + 模型,之后直接带。不预先发,有两个原因:
+ * 这组端点 + key + 模型,之后直接带。不预先发,有两个原因:
  *   ① 老账号不设这个字段时,失配的块照样送到模型;一设就改成丢弃,模型要重推一遍被丢的思考
  *      (官方实测输出 token 多 2.5%~67%,档位越高越多)。只对已经撞上校验的账号开,老账号零变化。
  *   ② 字段和 beta 头只发给点名要它的端点 —— 未知端点绝不发未知字段(第三方 Anthropic 兼容代理同理)。
- * ponytail: 只记在进程内存里;重启后每对 key + 模型要再白挨一次立刻返回的 400。
+ * ponytail: 只记在进程内存里;重启后每组端点 + key + 模型要再白挨一次立刻返回的 400。
  */
 const THINKING_BINDING_BETA = 'thinking-binding-controls-2026-08-01';
 const bindingEnforced = new Set<string>();
@@ -260,9 +260,10 @@ async function runAnthropicStream(opts: StreamOpts, guard: StreamIdleGuard): Pro
 
   // block_binding 只能配 adaptive / enabled:disabled 上带它本身就是 400(那时也没有思考块回传)。
   const canBind = body.thinking?.type === 'adaptive' || body.thinking?.type === 'enabled';
-  const bindKey = `${apiKey}\n${body.model}`;
+  const url = anthropicMessagesUrl(baseUrl);
+  const bindKey = `${url}\n${apiKey}\n${body.model}`; // 带上端点:同一个 key 换到别的代理,那边没点名要过
   const send = (bind: boolean): Promise<Response> =>
-    fetch(anthropicMessagesUrl(baseUrl), {
+    fetch(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
