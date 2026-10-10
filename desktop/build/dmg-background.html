@@ -1,0 +1,31 @@
+<!doctype html>
+<meta charset="utf-8">
+<!-- macOS 安装窗口(DMG)的背景图源文件。改完跑 `node build/gen-dmg-background.cjs` 重新生成
+     background.png / background@2x.png(两张都要提交)。尺寸 = 窗口尺寸;图标与文件名由 Finder 画在上面,
+     位置在 build/dmg-layout.cjs —— 这里的留白要和那边的坐标对得上。
+     文字只能画死在图里(DMG 不跟随系统语言),所以中英文并排。
+     ⚠️用户在 Finder 里开了「显示路径栏 / 状态栏」时,窗口底部会被这两条吃掉约 56px(标题栏另占 32px):
+     要紧的内容(两步说明、说明文件)一律放在 y ≤ 372 以内,只有最底下那行补充说明允许被盖住。 -->
+<style>
+  html, body { margin: 0; }
+  body { position: relative; width: 600px; height: 460px; overflow: hidden; background: #f6f6f7; font: 13px/1.5 -apple-system, "PingFang SC", sans-serif; color: #1d1d1f; -webkit-font-smoothing: antialiased; }
+  .step { position: absolute; left: 36px; display: flex; align-items: baseline; gap: 9px; font-size: 14px; font-weight: 600; }
+  .step em { font-style: normal; font-weight: 400; color: #6e6e73; font-size: 12.5px; }
+  .n { flex: none; width: 19px; height: 19px; border-radius: 50%; background: #1d1d1f; color: #fff; font-size: 12px; font-weight: 600; text-align: center; line-height: 19px; transform: translateY(-1px); }
+  .arrow { position: absolute; left: 232px; top: 104px; }
+  .rule { position: absolute; left: 36px; right: 36px; top: 190px; border-top: 1px solid #dcdce0; }
+  .how { position: absolute; left: 64px; top: 236px; width: 372px; }
+  .how p { margin: 0 0 7px; }
+  .how .en { color: #6e6e73; font-size: 12.5px; }
+  .how k { font-style: normal; font-weight: 600; white-space: nowrap; }
+  .note { position: absolute; left: 64px; top: 394px; margin: 0; color: #8e8e93; font-size: 11.5px; white-space: nowrap; }
+</style>
+<div class="step" style="top:22px"><span class="n">1</span>把 Forsion 拖进「应用程序」<em>Drag Forsion into Applications</em></div>
+<svg class="arrow" width="136" height="20" viewBox="0 0 136 20" fill="none" stroke="#a1a1a6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 10h128M122 3l9 7-9 7"/></svg>
+<div class="rule"></div>
+<div class="step" style="top:204px"><span class="n">2</span>第一次打开被拦下？<em>Blocked on first launch?</em></div>
+<div class="how">
+  <p>先双击打开一次（会被拦下）。<br>再到 <k>系统设置 › 隐私与安全性</k>，滑到最下方点 <k>仍要打开</k>。</p>
+  <p class="en">Open it once (it will be blocked). Then go to <k>System Settings › Privacy &amp; Security</k>, scroll down and click <k>Open Anyway</k>.</p>
+</div>
+<p class="note">没有损坏，只是还没做 Apple 公证 · Not damaged, just not notarized yet</p>
