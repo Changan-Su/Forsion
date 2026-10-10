@@ -60,6 +60,8 @@ export const calendarSpace: SpaceDefinition = {
   sidebarDefaults: CALENDAR_SIDE_VIEWS,
   listFirst: false, // 手机上先看日历:左栏是待办,不是「点开一项进主区」的列表
   pinned: { main: [{ type: 'calendar', params: {} }], left: [{ type: 'todo-list', params: {} }] },
+  // 待办在本 Space 里住左栏,但单独开成一个标签同样成立(原先启动器里就有这张卡)。
+  launcherViews: [{ type: 'calendar', params: {} }, { type: 'todo-list', params: {} }],
   build() {
     ws().setSidebarDefaults(CALENDAR_SIDE_VIEWS)
     ws().openView('calendar', {}, 'main')

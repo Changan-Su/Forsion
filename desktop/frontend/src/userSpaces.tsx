@@ -88,6 +88,8 @@ let asyncStartupSpaceResolved = false
 let parkedOnFallback = false
 
 export const isUserSpace = (id: string): boolean => userIds.has(id)
+/** 插件带来的 Space 属于哪个插件(不是插件 Space 时 undefined)。新建标签页据此把该插件的视图归到它的 Space 那一格。 */
+export const pluginOfSpace = (id: string): string | undefined => pluginSpaceOwner.get(id)
 
 /** bootstrapEngine 把人落在回落 Space 上之后调:此后活动 Space 一变 —— 用户自己切(哪怕又切了回来)、宿主把他带去别处 ——
  *  就算他接管了导航,补定位结案,点名的那个到了也不拽他。从落位那一刻就记,不等第一趟补定位(配方装载慢的时候,那之前的
@@ -150,6 +152,7 @@ function specToDefinition(spec: SpaceSpec, iconUrl?: string): SpaceDefinition {
     sidebarDefaults: sides,
     // 配方条目上的 pinned:true → 固定 View(引擎按 Space 声明现判,不进布局存档)
     pinned: { main: toPanels(spec.layout.main.filter((p) => p.pinned)), left: toPanels(spec.layout.left.filter((p) => p.pinned)), right: toPanels(spec.layout.right.filter((p) => p.pinned)) },
+    launcherViews: toPanels(spec.layout.main),
     bottomSpan: spec.layout.bottomSpan,
     build() {
       ws().setSidebarDefaults(sides)

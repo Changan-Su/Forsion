@@ -235,6 +235,10 @@ export interface SpaceDefinition {
    *  同类照旧就地换),进入 Space 时缺了就补。params = 补回时的重建参数。判定见 pinnedViews.ts。
    *  只管主区与左右栏;固定不等于常显,侧栏照常可以收起。 */
   pinned?: import('./pinnedViews').PinnedViews
+  /** 新建标签页(启动器)里这个 Space 那一格能开的视图:第一项 = 点格子开的,其余进展开菜单。**缺省 = pinned.main**。
+   *  只有「主区默认视图不等于固定视图」的 Space 才写(配方 Space 的 layout.main;日历多带一个待办)。
+   *  没带身份参数的 entity 视图(聊天 / 编辑器)和 aux 视图由启动器滤掉 —— 滤完没剩的 Space 不出格子。 */
+  launcherViews?: PersistedPanel[]
 }
 
 /** 插件契约 —— Amadeus PluginContext 的超集(加了 registerView / registerRibbonIcon)。 */
