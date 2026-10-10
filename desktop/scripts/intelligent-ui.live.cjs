@@ -6,6 +6,7 @@
 const fs = require('node:fs'), path = require('node:path'), assert = require('node:assert/strict')
 const electron = require('./lib/launch-electron.cjs')
 const { enterSpace } = require('./lib/uiux-electron.cjs')
+const openedPage = require('./lib/opened-page.cjs')
 const ROOT = path.resolve(__dirname, '..')
 const OUT = process.env.TANGU_IUI_OUT, base = process.env.TANGU_BACKEND_URL, token = process.env.TANGU_IUI_TOKEN
 const MODEL = process.env.TANGU_IUI_MODEL, workspace = process.env.TANGU_IUI_WORKSPACE
@@ -253,16 +254,17 @@ async function main() {
           await sources.locator('summary').first().click()
           check('网页摘要可展开', await sources.locator('details[open]').count() > 0)
           r.sourceUrls = links
+          // The page this click opened = the one whose document was loaded from the link's address after the click.
+          // Its current address proves nothing: obsidian.md/help rewrites the address bar once loaded. npm run check:sourceopen
+          const since = await app.evaluate(openedPage.watch)
           await sources.locator('a').first().click()
           for (let i = 0; i < 40; i++) {
-            r.openedSource = await app.evaluate(({ webContents }, href) => {
-              const page = webContents.getAllWebContents().find(c => c.getURL().split('#')[0] === href.split('#')[0])
-              return page && !page.isLoading() ? { url: page.getURL(), title: page.getTitle() } : null
-            }, links[0])
+            r.openedSource = await app.evaluate(openedPage.find, { href: links[0], since })
             if (r.openedSource?.title) break
             await sleep(500)
           }
-          check('点击来源实际打开官方网页', !!r.openedSource?.title && !/404|not found|error/i.test(r.openedSource.title))
+          if (!r.openedSource) r.loadedAfterClick = await app.evaluate(openedPage.loadedSince, since)
+          check('点击来源实际打开官方网页', openedPage.ok(r.openedSource))
           await open(c)
         }
         if (c.key !== 'user-study') check('本地操作没有触发模型请求', requests.length === before)

@@ -71,6 +71,9 @@ Chat 模式不开放技能工具，必需格式也包含在 `INTELLIGENT_UI_SECT
    Electron 再连入；提示从实际输入框发出，卡内追问也真实调用 GPT-6 Luna。没有假后端或结果注入。
    `--intelligent-cases user-dinner,user-moving` 可只重跑失败场景。证据在 `intelligent-users-evidence.json`，截图在
    `intelligent-ui-shots/`；需人工复核语义和截图，自动断言不能单独证明推荐质量。
+   「点击来源实际打开官方网页」认的是「点击之后、从链接地址加载出来的那张页」（`desktop/scripts/lib/opened-page.cjs`），
+   不比地址栏当前的地址：站点加载完可以自己改写它。这条判定不靠模型的验证是 `desktop` 的 `npm run check:sourceopen`
+   （`-- --real` 另外真开一次 Obsidian 帮助站）；链接被服务器跳转走的照旧判红。
 
 2026-10-09 独立评审的 8 项 P2 已补回归：损坏/禁用存储、状态截断、错误后有效前缀、
 小数默认与条件、带结尾点的本地域名、来源与折叠键冲突。未发现需变更旧历史格式的迁移需求。
