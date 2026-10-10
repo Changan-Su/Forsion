@@ -7,7 +7,7 @@
 // 块先删、再问文件(不拿弹窗卡住删除)。撤销能把块拿回来,拿不回文件 —— 与删笔记那条流程
 // 同一个可恢复性故事(有回收站就进回收站)。
 import type { Fragment, Node as ProseNode } from '@milkdown/kit/prose/model'
-import { assetKey, assetRefs, fromAssetUrl } from '@amadeus-shared/assets'
+import { assetKey, assetRefs, fromDefaultAssetUrl } from '@amadeus-shared/assets'
 import { amadeus } from '../api'
 import { askDeleteAssets } from '../components/askDeleteAssets'
 import { trashVaultFiles } from '../store/pageStore'
@@ -56,12 +56,12 @@ export function refTextOf(content: Fragment): string {
       parts.push(n.text ?? '')
       for (const m of n.marks) {
         const href = String(m.attrs?.href ?? '')
-        if (m.type.name === 'link' && href) parts.push(`[](${fromAssetUrl(href) ?? href})`)
+        if (m.type.name === 'link' && href) parts.push(`[](${fromDefaultAssetUrl(href) ?? href})`)
       }
       return
     }
     const src = String(n.attrs?.src ?? '')
-    if (src) parts.push(`![](${fromAssetUrl(src) ?? src})`)
+    if (src) parts.push(`![](${fromDefaultAssetUrl(src) ?? src})`)
     n.forEach(walk)
   }
   content.forEach(walk)

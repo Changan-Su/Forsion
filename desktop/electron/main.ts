@@ -58,7 +58,7 @@ import { BUILTIN_BUNDLES } from './builtinPlugins'
 import { checkBuiltinUpdates, NPM_OFFICIAL, registryOrder } from './builtinUpdates'
 import { loadBuiltinDesktopEntries, type CloudHost } from './cloudHost'
 import { npmDownloadCandidates, npmTarballToZip, type NpmInstallSnapshot } from './npmMarketInstall'
-import { extractZipToDir, detectMarketType, MARKET_SUBDIR, MARKET_MANIFEST, isSafeSlug, readInstalledVersion, readUserPluginDirs, marketItemDir, downloadCandidates, downloadZip, GZIP_MAGIC, ZIP_MAGIC, type DownloadProgress } from './marketInstall'
+import { extractZipToDir, detectMarketType, MARKET_SUBDIR, MARKET_MANIFEST, isSafeSlug, readInstalledVersion, readInstalledPluginId, readUserPluginDirs, marketItemDir, downloadCandidates, downloadZip, GZIP_MAGIC, ZIP_MAGIC, type DownloadProgress } from './marketInstall'
 import { servePathRoot, serveInlineHtml, stopCodePreview, setForsionPreviewHooks, transpileForServe, MIME } from './codePreview'
 import { createCodeStudioProjectWatcher, createCodeStudioSnapshot, listCodeStudioSnapshots, restoreCodeStudioSnapshot } from './codeStudioProjects'
 import { installPreviewPersistence, previewOriginFor, registerProductsIpc } from './productsIpc'
@@ -670,7 +670,7 @@ remoteSafety.onChange((st) => {
 /** 托盘「更改快捷键…」:主窗前置 + 打开设置浮窗的「远程会话」页(K2 面板经 K4 的扩展槽挂在那页末尾)。 */
 function openRemoteSafetySettings(): void {
   showMainWindow()
-  openFloatingPanel({ id: 'settings', title: mt('main.remoteSafety.settingsTitle'), builtin: 'settings', params: { tab: 'remote-sessions', skillKey: null } })
+  openFloatingPanel({ id: 'settings', title: mt('main.remoteSafety.settingsTitle'), builtin: 'settings', params: { tab: 'remote-sessions', skillKey: null, nonce: Date.now() } }) // nonce:设置窗口开着、停在别的页时也落得回来(同渲染层 openSettings)
 }
 
 async function readShellConfig(): Promise<Partial<TanguStoredConfig>> {
@@ -1394,7 +1394,8 @@ function ensureBackend(): Promise<void> {
 /** 所有窗口(主窗 + 独立窗 + mini + floating)共用的 webPreferences:同一份 preload → 同一 window.tangu 暴露面。 */
 /** 台架静默:Playwright 起的实例(或 TANGU_HARNESS_QUIET=1)窗口一律 showInactive —— 不激活 App、不抢用户前台焦点。
  *  TANGU_HARNESS_QUIET=0 强制关(测聚焦语义的台架 / 负对照用);人起的 dev / 安装版不受影响。
- *  ponytail: 只管「弹出时不抢焦点」,窗口仍可见;要全隐藏得先证实隐藏窗 page.screenshot 不挂。 */
+ *  主窗 / 独立窗另外压到普通窗口之下(见 sinkForHarness),不盖住用户正在用的 App。
+ *  ponytail: 不做全隐藏 —— 隐藏窗的截图 / 点击实测不挂,但几十个台架断言 isVisible(),藏起来就得伪造可见性。 */
 const QUIET_WINDOWS = process.env.TANGU_HARNESS_QUIET
   ? process.env.TANGU_HARNESS_QUIET === '1'
   : typeof (globalThis as { __playwright_run?: unknown }).__playwright_run === 'function'
@@ -1407,6 +1408,14 @@ if (QUIET_WINDOWS && process.platform === 'darwin') systemPreferences.registerDe
 function present(win: BrowserWindow): void {
   if (QUIET_WINDOWS) win.showInactive()
   else { win.show(); win.focus() }
+}
+
+/** 台架的大窗(主窗 / 独立窗)压到所有普通窗口之下(macOS 窗口层级 -1)。showInactive 只是不抢键盘焦点,
+ *  窗口照样盖在用户正在用的 App 上面;压下去之后它仍然可见,isVisible / 截图 / 点击 / 动画帧照常
+ *  (仪器 npm run check:quietfocus 读系统窗口列表里的层级)。子窗(浮动面板)跟随父窗;Mini / App Dock /
+ *  权限引导这些本来就要浮在别的 App 上的小窗不压。层级名只在 macOS 有意义,Windows 上传 true 就是置顶,所以只管 darwin。 */
+function sinkForHarness(win: BrowserWindow): void {
+  if (QUIET_WINDOWS && process.platform === 'darwin') win.setAlwaysOnTop(true, 'normal', -1)
 }
 
 function satelliteWebPreferences(): Electron.WebPreferences {
@@ -1537,6 +1546,7 @@ function createWindow(): void {
     show: false,
     webPreferences: satelliteWebPreferences(),
   })
+  sinkForHarness(mainWindow)
   mainWindow.once('ready-to-show', () => { if (mainWindow && !mainWindow.isDestroyed()) present(mainWindow) })
 
   mainWindow.webContents.setWindowOpenHandler(openUrlHandler(mainWindow.webContents))
@@ -1674,6 +1684,7 @@ function createDetachedWindow(opts: { id?: string; views?: ViewDesc[]; bounds?: 
     show: false,
     webPreferences: satelliteWebPreferences(),
   })
+  sinkForHarness(win)
   win.once('ready-to-show', () => {
     if (win.isDestroyed()) return
     if (process.platform === 'win32' && opts.bounds) {
@@ -1761,7 +1772,7 @@ function openFloatingPanel(raw: unknown): { id: string } | undefined {
     existing.setMinimizable(!target.sessionId) // 先以普通面板开过、后被主窗绑上会话的,也收回最小化
     if (existing.isMinimized()) existing.restore()
     present(existing)
-    // 还在载入:渲染层可能已经 floatingReady 拿走了上一份 target,这份得等载入完补发(发最新的;重复到达由面板按 nonce 去重)
+    // 还在载入:渲染层可能已经 floatingReady 拿走了上一份 target,这份得等载入完补发(发最新的;同一份重复到达不会重挂 —— 面板按 params 做 key,设置的带落点请求靠 params.nonce 区分先后)
     const deliver = (): void => { if (!existing.isDestroyed()) existing.webContents.send('window:floatingTarget', floatingTargets.get(target.id) ?? target) }
     if (existing.webContents.isLoadingMainFrame()) existing.webContents.once('did-finish-load', deliver)
     else deliver()
@@ -3490,14 +3501,17 @@ app.whenReady().then(async () => {
   }, 60_000).unref()
 
   ipcMain.handle('market:installed', async () => {
-    // 每个已装项带版本号(读其 manifest),供市场「可更新」检查。
-    const out: Record<string, Array<{ slug: string; version: string | null }>> = { skill: [], agent: [], plugin: [], space: [], theme: [], 'amadeus-plugin': [] }
+    // 每个已装项带版本号(读其 manifest),供市场「可更新」检查;插件另带装载 id(目录名可 ≠ id),供「打开设置」直达。
+    const out: Record<string, Array<{ slug: string; version: string | null; id?: string }>> = { skill: [], agent: [], plugin: [], space: [], theme: [], 'amadeus-plugin': [] }
     for (const [type, sub] of Object.entries(MARKET_SUBDIR)) {
       try {
         const base = join(tanguHomeDir(), sub)
         const ents = await readdir(base, { withFileTypes: true })
         out[type] = await Promise.all(
-          ents.filter((e) => e.isDirectory()).map(async (e) => ({ slug: e.name, version: await readInstalledVersion(type, join(base, e.name)) })),
+          ents.filter((e) => e.isDirectory()).map(async (e) => {
+            const id = await readInstalledPluginId(type, join(base, e.name))
+            return { slug: e.name, version: await readInstalledVersion(type, join(base, e.name)), ...(id ? { id } : {}) }
+          }),
         )
       } catch {
         /* 目录不存在 = 空 */

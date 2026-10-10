@@ -17,6 +17,7 @@ import { createCloudAmadeusBridge, setCloudNotify } from '@webamadeus/cloudBridg
 import { installCloudCollab } from '@webamadeus/cloudCollab'
 import { cloudApiBaseOf } from '@/services/engine/cloudBase'
 import { installMobilePlugins } from './plugins/installMobilePlugins'
+import { isSafePluginExt } from '../../desktop/shared/amadeus/pluginFiles'
 
 const VAULT_MODE_KEY = 'amadeus_vault_mode' // 'cloud'(缺省,移动端主打云客户端) | 'local'(显式选过才本地)
 const vaultMode = (): 'local' | 'cloud' => {
@@ -37,6 +38,43 @@ void installMobileShim().then(async (ok) => {
   // 手机把引擎切到「我的电脑」后 backendUrl 就变成隧道地址了,云桥不能跟着走。
   const cloudApi = cloudApiBaseOf(cfg)
 
+  // Forsion 插件宿主 + 应用市场(2026-10-02):插件住在应用私有目录、不属于任何库 —— 叠在下面的转发壳上,
+  // 云端库 / 本地库两种模式(以及切库之后)同一份,不往两座库桥里各抄一遍。市场桥挂到 window.tangu,
+  // 必须早于 import('./mobileEntry')(bootstrapEngine 按 window.tangu?.marketList 注册入口)。
+  const plugins = installMobilePlugins({ cloudApiBase: () => cloudApi })
+
+  // 插件声明的文件后缀(`.deck.md` 之类:磁盘上是 .md,内容归插件管)。两座库桥都按它把这些文件排出笔记列表。
+  // ⚠️ 必须在建桥**之前**清点好(桌面主进程同理,同步预扫 manifest):本地库一建桥就按 listPages 建索引,云端库
+  // 先拿上次的树快照渲染首屏 —— 名单晚到一拍,这些文件就已经当笔记进了树和索引。
+  // 读不出来(私有目录一时 I/O 失败)不挡启动,但也不退成空名单 —— 那等于这一次启动里所有插件文件都当笔记开:
+  // 用上一次成功清点时记下的那份(localStorage),下一趟 listPlugins 再对齐。
+  // 名单**只增不减**:每次清点的结果与记下的那份取并集。墓碑文件本来就只增不减,这里是它的第二份底 —— 原生层的
+  // stat 把「一时读不到」也报成「不存在」,墓碑槽因此被缩水的名单盖掉时(Codex 二轮评审 P1),这台设备上的保护不跟着缩。
+  // (代价:插件更新后不再声明的后缀也留着 —— 与「卸载后留着」同一个取向:宁可多拦,不让文件掉回笔记编辑器。)
+  const EXTS_KEY = 'forsion.mobile.pluginExts'
+  const lastKnownExts = (): string[] => {
+    try {
+      const v: unknown = JSON.parse(localStorage.getItem(EXTS_KEY) || '[]')
+      return Array.isArray(v) ? v.filter(isSafePluginExt) : []
+    } catch { return [] }
+  }
+  const scanExts = async (fallback: () => string[]): Promise<string[]> => {
+    try {
+      const exts = [...new Set([...lastKnownExts(), ...(await plugins.host.fileExtensions())])].sort()
+      try { localStorage.setItem(EXTS_KEY, JSON.stringify(exts)) } catch { /* 存不下:下次读失败时退到更旧的一份 */ }
+      return exts
+    } catch { return fallback() }
+  }
+  let pluginExts: string[] = await scanExts(lastKnownExts)
+  const refreshPluginExts = async (): Promise<void> => {
+    const next = await scanExts(() => pluginExts)
+    if (next.join('\n') === pluginExts.join('\n')) return
+    pluginExts = next
+    // 装 / 卸插件改了名单:本地库的索引按新口径重建,树重列一遍(云端库的树每次现分,不用管)。
+    if (side === 'local') await (impl.reindex as (() => Promise<void>) | undefined)?.().catch(() => {})
+    void import('@/amadeus/store/pageStore').then((ps) => ps.usePageStore.getState().refreshStructure()).catch(() => {})
+  }
+
   type Bridge = Record<string, unknown>
   const makeBridge = (side: 'local' | 'cloud'): Bridge =>
     side === 'cloud'
@@ -46,16 +84,17 @@ void installMobileShim().then(async (ok) => {
           onAuthError: () => {
             void (window as unknown as { tangu?: { forsionLogout?: () => Promise<void> } }).tangu?.forsionLogout?.()
           },
+          pluginExts: () => pluginExts,
         }) as unknown as Bridge)
       : // 本地 Capacitor vault;cfg 供 fetchLinkMeta(书签卡 server 代理)/searchImages。
-        (createMobileAmadeusBridge({ apiBase: () => cloudApi, getToken }) as unknown as Bridge)
+        (createMobileAmadeusBridge({ apiBase: () => cloudApi, getToken, pluginExts: () => pluginExts }) as unknown as Bridge)
 
-  // Forsion 插件宿主 + 应用市场(2026-10-02):插件住在应用私有目录、不属于任何库 —— 叠在下面的转发壳上,
-  // 云端库 / 本地库两种模式(以及切库之后)同一份,不往两座库桥里各抄一遍。市场桥挂到 window.tangu,
-  // 必须早于 import('./mobileEntry')(bootstrapEngine 按 window.tangu?.marketList 注册入口)。
-  const plugins = installMobilePlugins({ cloudApiBase: () => cloudApi })
   const pluginHost: Record<string, unknown> = {
-    listPlugins: plugins.host.listPlugins,
+    // 渲染层装 / 卸 / 更新插件之后都会重新 listPlugins(pluginStore.reloadExternal)—— 借这一趟把后缀名单对齐。
+    listPlugins: async () => {
+      await refreshPluginExts()
+      return plugins.host.listPlugins()
+    },
     uninstallPlugin: plugins.host.uninstallPlugin,
     readPluginData: plugins.host.readPluginData,
     writePluginData: plugins.host.writePluginData,

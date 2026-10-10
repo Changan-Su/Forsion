@@ -1601,7 +1601,7 @@ declare global {
       marketInstall?(id: string): Promise<{ ok: boolean; path: string; files: number; type: string; slug: string; id?: string }>
       /** 安装进度订阅(主进程只推给发起窗口);返回退订函数。 */
       onMarketInstallProgress?(cb: (ev: MarketInstallProgress) => void): () => void
-      marketInstalled?(): Promise<Record<string, Array<{ slug: string; version: string | null }>>>
+      marketInstalled?(): Promise<Record<string, Array<{ slug: string; version: string | null; id?: string }>>>
       marketUninstall?(type: string, slug: string): Promise<{ ok: boolean; path: string; type: string; id?: string }>
       /** 本宿主能装的市场类型(缺省 = 全部)。Android App 没有本机引擎 / 主题目录 / Space 目录,只声明 ['amadeus-plugin'];
        *  MarketModal 只列这些类型,其余在发现页一句话说明去桌面端装。 */
@@ -1874,7 +1874,8 @@ export interface MarketCard {
   latestTag?: string | null
   /** 可比较的最新版本(github=release tag,zip=manifest/手填 version);null=不参与「可更新」判断。 */
   latestVersion?: string | null
-  /** 投稿标签。旧服务端未返回时按空数组处理。 */
+  /** 投稿标签。旧服务端未返回时按空数组处理。保留标签 `desktop-only` = 这个包只能在电脑上用
+   *  (services/marketService 的 `isDesktopOnlyItem`):卡片上画成「仅桌面」标记而不是普通标签,Android App 上不给装。 */
   tags?: string[]
   /** 用于商店「最近上架」和详情元信息；兼容旧服务端，均可缺省。 */
   createdAt?: string | null

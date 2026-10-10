@@ -25,6 +25,10 @@ registerMessages({
     zh: '这个插件声明了「仅支持桌面端」，无法安装到手机上',
     en: 'This plugin is marked "Desktop only" and can’t be installed on a phone',
   },
+  'mobilemarket.requiresDesktopApp': {
+    zh: '这个插件要配合电脑上的应用「{app}」使用，无法安装到手机上',
+    en: 'This plugin works with the desktop app "{app}" and can’t be installed on a phone',
+  },
   'mobilemarket.badArchive': { zh: '安装包已损坏，无法解压', en: 'The package is damaged and can’t be unpacked' },
   'mobilemarket.emptyArchive': { zh: '安装包是空的，没有可安装的文件', en: 'The package is empty' },
   'mobilemarket.unsafePath': { zh: '安装包里有越界路径（{path}），已拒绝安装', en: 'The package contains an unsafe path ({path}), so it was rejected' },

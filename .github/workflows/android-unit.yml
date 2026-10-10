@@ -1,0 +1,49 @@
+name: android-unit
+
+# Kotlin 侧的 JVM 单测(原生栏的状态与布局、中继路径、插件下载…)。不起模拟器、不出包。
+# 此前它们只在发版流水线里跑(build-desktop 的 build-android,推 tag 才触发):平时改坏了要到发版那一刻才知道,
+# 而且红了会卡住出包。这里在动到 mobile/android 的推送上就跑。
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths: &android_paths
+      - 'mobile/android/**'
+      - 'mobile/package.json'
+      - 'mobile/package-lock.json'
+      - '.github/workflows/android-unit.yml'
+  push:
+    paths: *android_paths
+
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+          cache: gradle
+
+      # Gradle 工程引用 node_modules 里各 Capacitor 插件的 android 模块,以及 cap 生成的 capacitor-cordova-android-plugins
+      # (不入库),所以要先 `cap sync`。单测用不到网页产物,cap 却要求 dist/index.html 在:放一个空壳,省掉整套前端构建
+      # (那要先装 desktop 的依赖)。出包的流水线照旧用真产物。
+      - name: Capacitor's Gradle modules
+        working-directory: mobile
+        run: |
+          npm install --no-audit --no-fund
+          mkdir -p dist && echo '<!doctype html>' > dist/index.html
+          npx cap sync android
+
+      - name: Android JVM unit tests
+        working-directory: mobile/android
+        run: |
+          chmod +x gradlew
+          ./gradlew testDebugUnitTest --no-daemon

@@ -18,6 +18,12 @@ npm i
 npm run dev   # http://localhost:5274,同源经 vite proxy 到 BACKEND_URL(缺省 localhost:3001)
 ```
 
+浏览器检查(`npm run e2e:*`,先 `npm run build`)各自起一个 `vite preview`,经 `scripts/lib/preview.cjs`:端口由系统分配,
+几个会话同时跑同一条互不相干;只认答出**本检出** `dist/index.html` 的服务,自己的预览起不来就报错退出,不会接到别人的构建上。
+要固定端口(比如想自己开浏览器看)用 `E2E_PORT=<端口> npm run e2e:boot`(`e2e:runon` 原先单独的 `PORT_RUNON` 不再认,一样用 `E2E_PORT`)。
+一条例外:`e2e:localasset` 还没走这个库,内联着更早的同款做法(端口同样由系统分配、自己的预览一退出就报错,
+但不核对端口上答的是不是本检出的构建,也不能固定端口)。
+
 ## 出 Android APK
 
 后端地址:**native 缺省烤入生产网关 `https://api.forsion.net`**(`src/capacitorAuth.ts` 的 `PROD_ORIGIN`),
@@ -97,14 +103,31 @@ OUT=/absolute/review-output node scripts/native-picker-emu.cjs
 WebView 仍是内核，外壳换原生：两个可选宿主接缝在 `lcl/engine`，Android 宿主在 `src/nativeChrome.ts` / `src/nativeSheet.ts`，
 Kotlin 在 `NativeChrome*` / `NativeSheet*`。没装宿主（桌面、Web、浏览器调试）时一切照旧走 Web UI。
 
-- **`NativeChrome`**：原生 Material 顶栏取代 `.mb-topbar`（左抽屉 / 标题 / 右抽屉 / 标签页数 / 更多）。
-  WebView 由插件放在顶栏下方（自管 insets，`--mb-top` 归零）。引导、成就、互联设备、旁聊等自带头部的全屏层用 `useNativeChromeClaim({ mode: 'hidden' })` 收起顶栏；
+- **`NativeChrome`**：原生顶栏取代 `.mb-topbar`（左抽屉 / 标题 / 右抽屉 / 标签页数 / 更多）。
+  外壳（`shell` 模式）下它是**浮在页面上的两颗胶囊**，WebView 顶到屏幕上下缘（见下一条「悬浮胶囊 + 毛玻璃」）；
+  `page` / `hidden` 仍是老布局：WebView 夹在上下两条实底之间，`--mb-top` 为 0。引导、成就、互联设备、旁聊等自带头部的全屏层用 `useNativeChromeClaim({ mode: 'hidden' })` 收起顶栏；
   **设置**改用 `page` 模式（标题 + 返回，分类页再加 `close` ×），Web 头部只在 `data-native-chrome` 时隐藏。
   **底部导航栏**：Space 切换由同一插件画成原生底栏（外壳把 Space 列表随 `spaces` 推过去，图标由宿主按 Space 的图标组件序列化）。
   图标是一张图的 Space（插件 Space 的 `iconFile`）：PNG 在页面里缩成 72px 随状态发过去、原色显示；图还没好、是 SVG 或超出体积预算时画配方 `icon` 的线条图标（`SpaceIcon.nativeFallback`）。
-  点 = 切 Space；点当前那格不做事；长按 = 固定到桌面。超过 5 个时**第一格（主页）固定不动**，其余格子在它右边横向滚动（固定 1 格 + 滚动 4.5 格）：
-  当前格在前五个里时不滚；再往后只滚到「当前格完整可见、下一格露半个」为止。固定按位置不按 id（JS 列出的第一个 Space）。
+  点 = 切 Space；点当前那格不做事；长按 = 固定到桌面。2026-10-09 起它是一颗 **Dock 胶囊**：每格只有图标（48dp 宽），
+  **只有当前 Space 那格带名字**，其余格子的名字留作朗读标签。放不下时**第一格（主页）固定不动**，其余格子在它右边横向滚动，
+  能继续滚的那一侧渐隐；当前格只滚到「完整可见、旁边露一点」为止。固定按位置不按 id（JS 列出的第一个 Space），
+  而且画在上层 —— 滑到它下面的格子不会在无障碍树里占掉它的位置。
   只在 `shell` 模式的**第一层页面**且 Space ≥ 2 时出现，键盘弹起、`page` / `hidden` 时收起；WebView 的下边距由插件一并管理。当前 Space 镜像在 `.mb-shell[data-space]`（仪器锚点）。
+- **悬浮胶囊 + 毛玻璃**（2026-10-09，用户选定方案 B）：顶部左右两颗胶囊（左：返回 / 抽屉 + 标题；右：右栏 / 标签页数 / 更多 / 头像），
+  底部一颗 Dock，胶囊之间和两侧露出页面。**谁画什么**：胶囊的底色、细边、图标、文字和触摸在原生层（Compose）；
+  **模糊和投影在页面里** —— 原生视图糊不了 WebView 的内容，所以页面在每颗胶囊正后方垫一块 `backdrop-filter` 的板（`#nc-plates > .nc-plate`）。
+  **几何以原生层为准**：每颗胶囊把自己的矩形报给插件，插件发 `layout` 事件（dp：`floating` / `top` / `bottom` / `status` / `plates[]`），
+  `src/nativeChrome.ts` 的 `applyChromeLayout` 把它写成 `<body>` 上的 `--nc-top` / `--nc-bottom` / `--nc-status` 和那几块板的位置；
+  外壳样式（`lcl/engine/singleColumn.css` 末尾）再换算成 `--mb-top` / `--mb-bottom`（除以 `--uiz`：`body` 有 1.15 的 zoom）。
+  - **让位**：顶部沿用网页版那套（`--mb-top` + `base.css`「移动端内容顶满」名单）；底部是新的 —— 默认主区视图、抽屉和宽屏并排的侧栏**整块止于 Dock 之上**
+    （失败方向是多留一条，不是被盖住）。想让内容从 Dock 底下穿过去的视图，在**最底下那个滚动器**上标 `data-under-dock`：
+    面板铺到屏幕底，让位变成该滚动器的 `padding-bottom`（原有的底部留白写进 `--under-dock-pad`）。滚动器下面还有钉底按钮 / 脚注的视图不能标
+    （会话列表是先把脚注排进滚动器才标的，见 `SidebarPane` 的 `dockHost`）。主页另有一条：壁纸铺满，内容留在 Dock 之上。
+  - **触摸**：两条原生条是透明的，只有胶囊接触摸；胶囊之间、Dock 两侧的触摸落到页面上（从两颗胶囊中间起手的右滑照样拉出列表）。
+  - **关掉毛玻璃**（设置 → 外观，`data-glass='off'`）：板不再模糊，原生层把胶囊填成实色（状态里的 `frosted`）。
+  - **只在外壳里悬浮**：进了主区（Dock 收起）WebView 底边回到导航条之上，输入区等贴底的 Web 界面不用改；键盘弹起同理。
+  - 尺寸：胶囊区 58dp（6 + 46 + 6），Dock 区 68dp（6 + 56 + 6），两侧 12dp；填充不透明度 0.5，模糊 18px、饱和 1.8。
 - **两级导航**（2026-10-04；只在画底栏的原生宿主下生效，Web / 桌面手机框 / 手机浏览器仍是抽屉）：有左栏的 Space 进来先看左栏 —— 全屏、标题 = Space 名、带底栏；
   点条目进主区（顶栏左侧变返回箭头、底栏收起）；系统返回 = 标签页内后退 → 回列表 → 在列表再按一次退到后台。冷启动、切 Space、重置布局都落在列表层。
   左栏不是「点开一项进主区」的列表时，在 Space 定义里写 `listFirst: false`（日历的待办）：主区是第一层，左栏仍是抽屉。
@@ -149,6 +172,40 @@ OUT=/absolute/out npm run emu:nativeshell   # ONLY=tabs,prompt 只跑子集
 ```
 
 负对照在 `e2e:boot`：浏览器里没有原生宿主时必须仍是 `.mb-topbar` + Web 标签页底单。
+
+悬浮胶囊那几条单独跑：`ONLY='native top bar,hidden overlay,floating chrome'`（前两条给后面的量状态栏高度；约 3 分钟）。
+其中「on every Space's first level…」会把 Dock 上每个 Space 走一遍、把能滚的都滚到底，报出还压在 Dock 后面的文字和按钮，
+并打印每个面板是默认让位还是标了 `data-under-dock` —— 新加 Space 或改左栏之后先看它。
+哪条红了，产物目录里除了 `fail-<n>.png` 还有 `fail-<n>.xml`（失败那一刻的界面树：读屏标签和矩形截图里看不出来）。
+⚠️ 界面树里按钮的矩形是**触摸范围里没被邻居占走的那部分**：胶囊里 40dp 的按钮报出来高 48dp、宽度在下一颗按钮处被切掉，
+带内容的按钮（标签页计数）的读屏标签挂在子节点上、矩形却是按钮自己的 40dp —— 找子节点按中心点判，别按「整个在里面」。
+
+### 先跑快的，整套只在合并前跑（2026-10-09）
+
+改原生栏或台架时按这个顺序，别每改一下就把整套跑一遍：
+
+1. **不用模拟器的布局测试**（几秒）：`npm run test:nativebar`。两颗胶囊和 Dock 单独拿出来在 JVM 上排版（Robolectric，
+   `NativeChromeBarLayoutTest.kt`）：尺寸与触摸范围、读屏标签、Dock 把当前 Space 滚进可视区（含转屏之后那一次）、
+   钉住的「主页」那格报给读屏的矩形。改 `NativeChromeBar.kt` 先跑它。推送动到 `mobile/android/` 时 CI 的 `android-unit` 跑全部 Kotlin 单测。
+2. **受影响的那一组**（一两分钟到几分钟）：`ONLY='…' npm run emu:nativeshell`，写法见上。
+3. **整套**（62 条，约 13 分钟）：只在合并前跑一遍。
+
+台架读界面树走一个常驻的读取器（`scripts/lib/UiTreeServer.java`：第一次读的时候现编、推到设备上用 `app_process` 起，
+不往 App 里装任何东西）。原来每读一次都是 `uiautomator dump` —— 起一个进程、再干等满一秒，一次 2 秒，占一场运行的五分之四；
+常驻之后界面安静时一次 0.03 秒。2026-10-09 同一个包上实测：受影响的 13 条 490 秒 → 133 秒，整套 62 条 43.6 分钟 → 12.9 分钟。
+读出来的节点和属性值与 `uiautomator dump` 一致，`npm run emu:treecompare` 把两种读法并排比（改了读取器或换了模拟器镜像之后跑）。
+每场运行最后的 `time:` 一行是时间花在了哪 —— 现在剩下的大头是脚本里写死的等待，不是读树。
+
+- ⚠️ 设备上**只有一个 UI 自动化的位置**：读取器连着的时候别人的 `uiautomator dump` 会失败。所以它 30 秒没人问就自己退出
+  （台架被强杀也不会一直占着），台架结束或被 Ctrl-C 时会叫它退。手动清：`adb shell "pkill -f 'UiTree[S]erver'"`。
+  同一台设备上的两场台架本来就不能同时跑（共用 App、调试端口），共用的模拟器照旧排队。
+- ⚠️ 和 `uiautomator dump` 一样，它连着的时候**其他无障碍服务是暂停的** —— 只是从「每次读的那一下」变成了整场。
+  要测无障碍服务本身的用例加 `EMU_TREE=dump`，走老办法。
+- `EMU_IDLE_MS`（默认 500）：读之前等界面安静多久，从最后一次变化算起。某条在慢机器上读到半截动画就调大。
+- 编不出来或起不来（没有 `javac`、镜像不让）时台架说一句，然后自动退回 `uiautomator dump`，不会因此变红。
+- **给人上手看**：`HOLD=40 npm run emu:nativeshell` 不跑检查，把 App 停在演示数据状态（假账号、几条会话、带一个测试插件的商店），
+  留 40 分钟；到点或删掉产物目录里的 `holding` 文件就收尾、把设备还原。演示数据挂在这次启动上，App 被划掉重开就没了。
+  要让人自己点，模拟器得带窗口起（去掉 `-no-window`）。
 
 ### 桌面图标（应用图标的入口别名）
 
@@ -231,6 +288,14 @@ OLD_APK=/absolute/old.apk NEW_APK=android/app/build/outputs/apk/debug/app-debug.
   `window.tangu.spacesList` 交给渲染层的 `userSpaces.loadUserSpaces`(形状同桌面 `spaces:list` 里插件那一半)—— 装完 / 启停 / 卸载 / 冷启动
   之后 Space 跟着进出底部导航栏。`iconFile` 的查找次序与门禁同桌面(`desktop/shared/spaceIcon.ts`)。装不起来的插件(版本门禁 / 仅桌面)不贡献 Space。
   此前这座桥不存在:商店里的插件大多把 Space 写在包里,装上以后命令和视图都在,Space 不出现。
+- **云端库下的旁挂文件**(2026-10-09):手机缺省用云端库。插件经 `ctx.app.writeFile / readFile` 读写的索引、缓存、快照
+  (多为点开头的 `.json`)在云端是**二进制行** —— 服务端只把 `.md` / `.db` 当文本,桌面同步引擎也是按二进制把它们传上去的。
+  云端桥(`web/src/amadeus/cloudBridge.ts` 的 `writeBinaryText` / `fetchAssetExact`)因此把非 `.md` / `.db` 的文本读写落到
+  `POST /binary` 与 `GET /asset?ref=`:手机写的和桌面传的是同一行。插件直接写是原地覆盖、后写胜(与桌面写本地盘同语义);
+  桌面同步引擎推送时发现云端已被改过,云端那版留在原路径、桌面那版另存为冲突副本(引擎既有行为)。
+  读取一律按精确路径(`ref` 末尾带 `/`)—— 服务端的资源端点对不带目录的名字会按文件名全库兜底;
+  文件不存在给 null,行在而字节一时取不到(别的设备正在覆盖)重取一次、仍取不到就抛,不当成「不存在」。
+  此前文本端点对这类路径一律答 400:记忆闪卡的索引、青鸟收藏夹的旁挂 json、园丁的快照等全写不下,`readBytes` 也恒读不到。
 - **手机暂不支持**:插件状态栏项(没有状态栏)、捆绑包里的引擎插件 / Agent / 技能(没有本机引擎)、主题 / Space / 技能 / Agent 类市场条目、
   用户自建 Space(没有 `spacesSave` / `spacesDelete`)、npm 来源的条目(桌面同样不支持)。
 - **安全**:插件代码与 App 渲染层同一个 JS 作用域 —— 能调 `window.tangu` / `window.amadeus` 的一切,包括已登录账号的云端接口
@@ -238,9 +303,14 @@ OLD_APK=/absolute/old.apk NEW_APK=android/app/build/outputs/apk/debug/app-debug.
 
 ```bash
 npm run test:plugins                 # 宿主 / 市场纯逻辑单测(内存文件系统,不用 build)
-rm -rf dist && npm run build && npm run e2e:plugins   # 真浏览器:市场 → 安装 → 运行 → 包里带的 Space → 刷新 → 停用 → 卸载
+rm -rf dist && npm run build && npm run e2e:plugins   # 真浏览器:市场 → 安装 → 运行 → 包里带的 Space → 云端库下的旁挂文件 → 刷新 → 停用 → 卸载
 npm run e2e:plugins -- --negative    # 负对照:去掉 'unsafe-eval' 后必须红
+(cd ../desktop && npx vitest run frontend/src/services/cloudBridgeSidecar.test.ts)   # 云端桥:旁挂文件的仅新建 / 比对写两条分支
 ```
+
+`e2e:plugins` 里的云端库由脚本自带的假云端库扮演(`startFakeCloud`,判据镜像 server 的 amadeus 模块:只有 `.md` / `.db` 走文本端点)。
+要对着真服务端的路由跑:在 server 仓用 `microserver/amadeus/services/shareLifecycle.test.ts` 的 `mountRouter` 那套(真路由 + PGlite + 内存对象存储)
+起一个本机服务,再 `E2E_AMADEUS_API=http://127.0.0.1:<端口> npm run e2e:plugins`。
 
 ## 深链登录(需服务端确认一处)
 

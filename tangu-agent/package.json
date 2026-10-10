@@ -41,6 +41,7 @@
     "smoke:projectctx": "node scripts/project-context.smoke.mjs",
     "stall:timeline": "node scripts/stall-timeline.mjs",
     "cache:report": "node scripts/cache-hit-report.mjs",
+    "bench:search": "node scripts/session-search-bench.mjs",
     "check:skilldesc": "node scripts/check-skill-descriptions.mjs",
     "tui": "node dist/tui/main.js",
     "worker": "node dist/tui/main.js worker",

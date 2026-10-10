@@ -3,6 +3,7 @@
  *
  *   <Data>/plugins/<slug>/{manifest.json, main.js, README.md, CHANGELOG.md, icon.png}   ← 市场装进来(mobileMarket.ts)
  *   <Data>/plugins-data/<id>.json + <id>.json.alt                                        ← ctx.loadData / ctx.saveData
+ *   <Data>/plugins-data/.ext-tombstones.json + .alt                                      ← 已卸载插件声明过的文件后缀(见 fileExtensions)
  *
  * 契约 = 桌面主进程 electron/amadeus/ipc.ts 的 listPlugins / uninstallPlugin / readPluginData / writePluginData:
  * 同一套 id 规则(effectivePluginId)、同一个门禁(gatePluginManifest)、同一份 manifest 映射(installedPluginFields)、
@@ -20,6 +21,7 @@ import { gatePluginManifest, type ExternalPluginSource } from '../../../desktop/
 import { installedPluginFields, type InstalledPluginManifest } from '../../../desktop/shared/amadeus/pluginSource'
 import { effectivePluginId } from '../../../desktop/shared/products'
 import { isSafeSlug, safeEntryPath } from '../../../desktop/shared/marketPackage'
+import { isSafePluginExt } from '../../../desktop/shared/amadeus/pluginFiles'
 import { PLUGIN_ICON_MAX_BYTES, isValidPluginIconPng } from '../../../desktop/shared/pluginIcon'
 import { spaceIconFileOf, spaceIconMaxBytes, spaceIconMime } from '../../../desktop/shared/spaceIcon'
 import { bytesToBase64, readText, readTextOr, withPluginDirLock, writeText, type PluginFs } from './pluginFs'
@@ -34,12 +36,22 @@ export interface PluginSpaceRecipe { slug: string; json: string; plugin: string;
 export interface MobilePluginHost {
   listPlugins(): Promise<ExternalPluginSource[]>
   listSpaces(): Promise<PluginSpaceRecipe[]>
+  /** 「磁盘上是 .md、内容归插件管」的文件后缀(小写、排好序):库这一层据此把它们排出笔记列表。
+   *  来源 = 每个已安装插件 manifest 的 fileExtensions(**不看**门禁 / 仅桌面 / 用户关没关)+ 已卸载插件留下的墓碑。 */
+  fileExtensions(): Promise<string[]>
   uninstallPlugin(id: string): Promise<void>
   readPluginData(pluginId: string): Promise<string | null>
   writePluginData(pluginId: string, text: string): Promise<void>
 }
 
 /** 读 manifest.json(必须是 JSON 对象);读不到 / 坏 → null。 */
+/** manifest.requiresApp:这个插件依赖一个装在**电脑**上的应用(如 ActivityWatch;桌面在插件详情页给它一键安装 / 探测)。
+ *  手机上没有这个应用可装,插件装上也只是个空壳 —— 与 isDesktopOnly 同一档处理:不给装,已在盘上的不读不跑。
+ *  返回声明的应用 id;没声明(缺 / 空串 / 非字符串)= null。
+ *  ponytail: 有声明一律算桌面专属;哪天依赖表(desktop/shared/knownApps.ts)里出现手机上也有的应用,改成查那张表。 */
+export const requiredDesktopApp = (m: { requiresApp?: unknown } | null): string | null =>
+  typeof m?.requiresApp === 'string' && m.requiresApp.trim() ? m.requiresApp.trim() : null
+
 export async function readManifest(fs: PluginFs, dir: string): Promise<InstalledPluginManifest | null> {
   try {
     const m: unknown = JSON.parse(await readText(fs, `${dir}/manifest.json`))
@@ -182,6 +194,52 @@ async function latestSlot(fs: PluginFs, id: string): Promise<{ slot: 0 | 1; env:
   return null
 }
 
+// ── 文件后缀的墓碑 ────────────────────────────────────────────────────────────────────────
+// 插件卸载以后,它建过的 `.deck.md` 之类还留在库里。后缀豁免跟着 manifest 一起消失的话,这些文件就掉回笔记列表,
+// 被索引 / 改名重写 / 笔记编辑器按笔记的写法改写(桌面同一件事:electron/amadeus/ipc.ts 的 plugins-ext-tombstones.json)。
+// 存法沿用上面的双槽信封;槽名以点开头,不是合法的插件 id,撞不上任何插件的私有数据。只增不减。
+const TOMBSTONE_SLOT = '.ext-tombstones'
+
+/** manifest 声明的后缀里合规的那些(小写)。宿主只认专属后缀:裸 `.md` / `.txt` 这类一律不认(isSafePluginExt)。 */
+const safeExtsOf = (m: InstalledPluginManifest | null): string[] =>
+  Array.isArray(m?.fileExtensions) ? m.fileExtensions.filter(isSafePluginExt).map((x) => x.trim().toLowerCase()) : []
+
+/** 墓碑的一槽。「没写过」与「写到一半的坏槽」= null(读取方落到另一槽);**文件在却读不出来** = 抛出去 ——
+ *  把读失败当成「没有墓碑」的话,下一次卸载会拿一份缩水的名单盖上去,之前记下的后缀永久丢保护(Codex 评审 P1)。
+ *  (插件私有数据的 readSlot 不这么严:那边读不到 = 这个插件回到默认设置,不牵连别的文件。) */
+async function readTombstoneSlot(fs: PluginFs, path: string): Promise<DataEnvelope | null> {
+  if (!(await fs.stat(path))) return null
+  const raw = await readText(fs, path)
+  try {
+    const v = JSON.parse(raw) as Partial<DataEnvelope> | null
+    if (v && v.forsionPluginData === 1 && Number.isSafeInteger(v.seq) && typeof v.text === 'string') return v as DataEnvelope
+  } catch { /* 写到一半的槽:当它不存在 */ }
+  return null
+}
+
+/** 最新的有效墓碑槽 + 里面的名单。读失败抛出去(见上)。 */
+async function readTombstones(fs: PluginFs): Promise<{ slot: 0 | 1 | null; seq: number; exts: string[] }> {
+  const [a, b] = slotPaths(TOMBSTONE_SLOT)
+  const [ea, eb] = [await readTombstoneSlot(fs, a), await readTombstoneSlot(fs, b)]
+  const pick = ea && (!eb || ea.seq >= eb.seq) ? { slot: 0 as const, env: ea } : eb ? { slot: 1 as const, env: eb } : null
+  if (!pick) return { slot: null, seq: 0, exts: [] }
+  let list: unknown = []
+  try { list = JSON.parse(pick.env.text) } catch { /* 信封完好、正文不是 JSON:只可能是别人写的,当空 */ }
+  return { slot: pick.slot, seq: pick.env.seq, exts: Array.isArray(list) ? list.filter(isSafePluginExt) : [] }
+}
+
+/** 卸载前调用(调用方持有 withPluginDirLock,还没删目录):把这个插件声明过的后缀记进墓碑。
+ *  读不出现有墓碑 / 写不下去 → 抛,调用方不删目录(下次再卸):宁可卸载失败,也不让它的文件掉回笔记列表。 */
+export async function tombstoneExtensions(fs: PluginFs, dir: string): Promise<void> {
+  const claimed = safeExtsOf(await readManifest(fs, dir))
+  if (!claimed.length) return
+  const cur = await readTombstones(fs)
+  const merged = [...new Set([...cur.exts, ...claimed])].sort()
+  if (merged.length === cur.exts.length) return // 都记过了:不写
+  const env: DataEnvelope = { forsionPluginData: 1, seq: cur.seq + 1, text: JSON.stringify(merged) }
+  await writeText(fs, slotPaths(TOMBSTONE_SLOT)[cur.slot === 0 ? 1 : 0], JSON.stringify(env))
+}
+
 export function createPluginHost(fs: PluginFs, opts: { appVersion: () => string | null }): MobilePluginHost {
   // 同一个插件的写串行化:两次 saveData 交错时,都读到同一个「最新槽」再各写各的,后写的会盖掉先写的那槽里更新的数据。
   const chains = new Map<string, Promise<unknown>>()
@@ -210,8 +268,9 @@ export function createPluginHost(fs: PluginFs, opts: { appVersion: () => string 
             continue
           }
           if (seen.has(id)) continue
-          // 门禁:apiVersion / minAppVersion 与桌面同一个函数;再加手机独有的一档 —— 声明了只能在桌面跑。
-          const blocked = gatePluginManifest(m, opts.appVersion()) ?? (m.isDesktopOnly === true ? 'desktopOnly' : null)
+          // 门禁:apiVersion / minAppVersion 与桌面同一个函数;再加手机独有的一档 —— 声明了只能在桌面跑,
+          // 或依赖一个装在电脑上的应用(requiresApp)。
+          const blocked = gatePluginManifest(m, opts.appVersion()) ?? (m.isDesktopOnly === true || requiredDesktopApp(m) ? 'desktopOnly' : null)
           let code = ''
           if (!blocked) {
             const rel = mainRelOf(m.main)
@@ -246,7 +305,7 @@ export function createPluginHost(fs: PluginFs, opts: { appVersion: () => string 
         // 同一个 id 装了两份:只认排在前面的那一份(listPlugins 同口径);它被拦下,后一份的配方也不顶上来。
         if (!m || !id || seen.has(id)) continue
         seen.add(id)
-        if (gatePluginManifest(m, opts.appVersion()) || m.isDesktopOnly === true) continue
+        if (gatePluginManifest(m, opts.appVersion()) || m.isDesktopOnly === true || requiredDesktopApp(m)) continue
         let slugs: string[]
         try {
           slugs = (await fs.list(`${dir}/spaces`)).filter((e) => e.type === 'directory' && !e.name.startsWith('.')).map((e) => e.name).sort()
@@ -267,6 +326,17 @@ export function createPluginHost(fs: PluginFs, opts: { appVersion: () => string 
       return out
     }),
 
+    // 只读 manifest、不过任何闸:被门禁拦下的、声明了仅桌面的、main.js 读不出来的、用户关掉的插件,它们的文件
+    // 照样不是笔记。从「正在跑的插件注册了什么」推这份名单正是原来的口子(仪器:npm run e2e:pluginfiles)。
+    fileExtensions: () => withPluginDirLock(fs, async () => {
+      await recoverPluginDirs(fs)
+      const exts = new Set((await readTombstones(fs)).exts) // 读失败 → 抛:调用方保留手上的名单,不拿缩水的顶上
+      for (const name of await pluginDirNames(fs)) {
+        for (const x of safeExtsOf(await readManifest(fs, `${PLUGINS_DIR}/${name}`))) exts.add(x)
+      }
+      return [...exts].sort()
+    }),
+
     // 按**生效 id** 定位目录(市场的 installSlug 可以 ≠ manifest id,与桌面 uninstallPlugin 同一条扫描规则)。
     // 插件私有数据(plugins-data)刻意保留:与桌面一致,重装后设置还在。原因码由渲染层 ipcErrorText 译。
     async uninstallPlugin(id) {
@@ -276,6 +346,7 @@ export function createPluginHost(fs: PluginFs, opts: { appVersion: () => string 
         for (const name of await pluginDirNames(fs)) {
           const m = await readManifest(fs, `${PLUGINS_DIR}/${name}`)
           if (effectivePluginId(name, m?.id) === id) {
+            await tombstoneExtensions(fs, `${PLUGINS_DIR}/${name}`) // 先记墓碑再删:记不下来就不删(抛出去)
             await fs.removeDir(`${PLUGINS_DIR}/${name}`)
             return
           }

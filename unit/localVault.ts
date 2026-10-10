@@ -96,7 +96,9 @@ export async function createLocalVault(options: LocalVaultOptions): Promise<Loca
     calendar.columns.forEach((column, i) => { column.name = labels[i + 1] })
     calendar.rows = []
     // Exclusive create leaves an existing calendar intact even during simultaneous starts.
-    await fs.writeFile(vault.absPath('Calendar.db'), serializeDb(calendar), { flag: 'wx' }).catch((error: any) => {
+    // Through the vault, not raw fs: the seed has to be in the self-write ledger, or the watcher started
+    // below reports a late file event for it as an external edit (a `dbChange` nobody made).
+    await vault.createTextFile('Calendar.db', serializeDb(calendar)).catch((error: any) => {
       if (error?.code !== 'EEXIST') throw error
     })
   }

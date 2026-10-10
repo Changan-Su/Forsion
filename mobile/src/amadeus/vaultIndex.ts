@@ -69,6 +69,9 @@ export class VaultIndex {
   }
 
   async update(pagePath: string): Promise<void> {
+    // 不是笔记(白板 / 插件文件类型)就不进索引 —— 与 build() 走的 listPages 同一个判据。桥里的 loadPage / savePage /
+    // 移动改名都会来更新单篇,插件经页表面读写自己的 `.mindmap.md` 也走那几条。
+    if (!this.vault.isPagePath(pagePath)) { this.entries.delete(pagePath); return }
     const e = await this.readEntry(pagePath)
     if (e) this.entries.set(pagePath, e)
     else this.entries.delete(pagePath)

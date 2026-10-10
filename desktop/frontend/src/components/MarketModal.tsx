@@ -6,7 +6,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   AlertCircle, ArrowLeft, ArrowRight, Bot, Check, Clock, Coins, Compass, Crown, Download, ExternalLink,
-  GitBranch, Globe, LayoutGrid, Library, Loader2, Package, PackageOpen, Palette, Puzzle,
+  GitBranch, Globe, LayoutGrid, Library, Loader2, Monitor, Package, PackageOpen, Palette, Puzzle,
   RefreshCw, Search, Send, Settings, ShieldCheck, Sparkles, Trash2, Wrench, X,
 } from 'lucide-react'
 import { Skeleton, useNativeChromeClaim, useNativeChromeInstalled } from '@lcl/engine'
@@ -14,7 +14,7 @@ import { registerMessages, useI18n } from '../i18n'
 import { formatDate as formatDateLabel } from '../format/time'
 import { useApp } from '../stores/appStore'
 import { Markdown } from './Markdown'
-import { listMarket, getMarketDetail, installMarket, listInstalled, onInstallProgress, type InstalledItem } from '../services/marketService'
+import { listMarket, getMarketDetail, installMarket, listInstalled, onInstallProgress, isDesktopOnlyItem, DESKTOP_ONLY_TAG, type InstalledItem } from '../services/marketService'
 import { forgetUserSpace, loadUserSpaces } from '../userSpaces'
 import { useTheme } from '../stores/themeStore'
 import { unmetPluginDeps, usePluginStore } from '@amadeus/plugins/pluginStore'
@@ -249,9 +249,12 @@ export function MarketModal({ onClose, initialQuery }: { onClose?: () => void; i
   }
 
   const openPluginSettings = (c: MarketCard): void => {
-    if (!installedInfo(c) || !canOpenSettings(c)) return
+    const info = installedInfo(c)
+    if (!info || !canOpenSettings(c)) return
     close()
-    useApp.getState().openSettings('amadeus-plugins')
+    // 直达那个插件自己的页,不停在插件页首屏。id = 装载 id(目录名可以与它不同;老宿主不给时按目录名)。
+    // 落不到的(id 对不上 / 引擎插件没启用、没设置项)由设置页自己落回对应的列表。
+    useApp.getState().openSettings(`${info.realType === 'amadeus-plugin' ? 'fplugin' : 'plugin'}:${info.entry.id ?? c.installSlug}`)
   }
 
   const onInstall = async (c: MarketCard): Promise<void> => {
@@ -372,7 +375,17 @@ export function MarketModal({ onClose, initialQuery }: { onClose?: () => void; i
     return (p.attempts ?? 1) > 1 ? t('market.phase.connectN', { n: p.attempt ?? 1, m: p.attempts ?? 1 }) : t('market.phase.connect')
   }
 
+  // 「仅桌面」的包(商店的保留标签):桌面端只多一枚标记;手机上按钮直接说装不了,不让人下载完再看报错。
+  const desktopOnlyHere = (c: MarketCard): boolean => isDesktopOnlyItem(c) && !!window.tangu?.mobile
+  const desktopBadge = (c: MarketCard) => isDesktopOnlyItem(c)
+    ? <span className="mk-desktop-badge" data-market-desktop-only={c.id} title={t('market.desktopOnlyHint')}><Monitor size={11} />{t('market.desktopOnly')}</span> : null
+  /** 给人看的标签:保留标签已经画成标记了,不再当普通标签重复一遍。 */
+  const shownTags = (c: MarketCard): string[] => (c.tags || []).filter((tag) => tag !== DESKTOP_ONLY_TAG)
+
   const installBtn = (c: MarketCard, extraClass = '') => {
+    if (desktopOnlyHere(c)) {
+      return <button className={`btn sm ${extraClass}`.trim()} disabled data-market-install={c.id} data-install-state="desktop-only" title={t('market.desktopOnlyHint')}><Monitor size={13} />{t('market.desktopOnlyInstall')}</button>
+    }
     const state = pluginUpdates.items.find((x) => x.id === c.id)
     const busy = !!installing[c.id] || state?.phase === 'downloading'
     const pending = !!state?.pendingVersion
@@ -477,10 +490,11 @@ export function MarketModal({ onClose, initialQuery }: { onClose?: () => void; i
         <div className="mk-card-eyeline">
           <span>{navLabel[c.type]}</span>
           {isInstalled(c) && <span className="mk-installed-badge"><Check size={11} />{t('market.installed')}</span>}
+          {desktopBadge(c)}
         </div>
         <button className="mk-card-title" onClick={(e) => { e.stopPropagation(); openDetail(c) }}>{c.name}</button>
         <div className="mk-card-summary">{c.summary || t('market.summaryFallback')}</div>
-        {!!c.tags?.length && <div className="mk-tags">{c.tags.slice(0, compact ? 2 : 3).map((tag) => <span key={tag}>{tag}</span>)}</div>}
+        {!!shownTags(c).length && <div className="mk-tags">{shownTags(c).slice(0, compact ? 2 : 3).map((tag) => <span key={tag}>{tag}</span>)}</div>}
         <div className="mk-card-foot">
           <span className="mk-card-meta">{c.author}<span aria-hidden="true"> · </span>{t('market.downloadsShort', { n: c.downloads })}</span>
           {installBtn(c)}
@@ -570,11 +584,11 @@ export function MarketModal({ onClose, initialQuery }: { onClose?: () => void; i
               <button className="settings-back mk-detail-back" onClick={() => setDetail(null)}><ArrowLeft size={14} />{t('market.detailBack')}</button>
               <div className="mk-detail-hero"><div className="mk-detail-icon"><ItemIcon url={detail.iconUrl} type={detail.type} size={36} /></div><div className="mk-detail-intro"><span className="mk-detail-kind">{navLabel[detail.type]}</span><h2>{detail.name}</h2><p>{detail.summary || t('market.summaryFallback')}</p><div className="mk-detail-byline">{t('market.author')} {detail.author}<span aria-hidden="true"> · </span>{t('market.downloads', { n: detail.downloads })}</div></div></div>
               <div className="mk-detail-layout">
-                <main className="mk-detail-main"><div className="mk-detail-section-title">{t('market.overview')}</div>{!!detail.tags?.length && <div className="mk-tags">{detail.tags.map((tag) => <span key={tag}>{tag}</span>)}</div>}<div className="mk-readme">{detail.readme ? <Markdown content={detail.readme} /> : <span className="mk-muted">{t('market.readmeEmpty')}</span>}</div></main>
+                <main className="mk-detail-main"><div className="mk-detail-section-title">{t('market.overview')}</div>{!!shownTags(detail).length && <div className="mk-tags">{shownTags(detail).map((tag) => <span key={tag}>{tag}</span>)}</div>}<div className="mk-readme">{detail.readme ? <Markdown content={detail.readme} /> : <span className="mk-muted">{t('market.readmeEmpty')}</span>}</div></main>
                 <aside className="mk-detail-sidebar">
                   <div className="mk-detail-actions">{installBtn(detail, 'mk-wide-btn')}{uninstallBtn(detail)}{canOpenSettings(detail) && <button className="btn sm mk-wide-btn" onClick={() => openPluginSettings(detail)}><Settings size={13} />{t('market.openSettings')}</button>}{autoUpdate(detail)}</div>
                   <div className="mk-trust-row"><ShieldCheck size={17} /><div><strong>{t('market.reviewed')}</strong><span>{t('market.reviewedHint')}</span></div></div>
-                  <dl className="mk-facts"><div><dt>{t('market.type')}</dt><dd>{navLabel[detail.type]}</dd></div><div><dt>{t('market.version')}</dt><dd>{detail.latestVersion ? `v${detail.latestVersion}` : t('market.unknown')}</dd></div><div><dt>{t('market.source')}</dt><dd>{detail.source === 'github' ? 'GitHub' : detail.source === 'npm' ? 'npm' : t('market.sourceUpload')}</dd></div>{!!formatDate(detail.updatedAt || detail.createdAt) && <div><dt>{t('market.updated')}</dt><dd>{formatDate(detail.updatedAt || detail.createdAt)}</dd></div>}</dl>
+                  <dl className="mk-facts"><div><dt>{t('market.type')}</dt><dd>{navLabel[detail.type]}</dd></div><div><dt>{t('market.version')}</dt><dd>{detail.latestVersion ? `v${detail.latestVersion}` : t('market.unknown')}</dd></div>{isDesktopOnlyItem(detail) && <div><dt>{t('market.platform')}</dt><dd>{t('market.desktopOnly')}</dd></div>}<div><dt>{t('market.source')}</dt><dd>{detail.source === 'github' ? 'GitHub' : detail.source === 'npm' ? 'npm' : t('market.sourceUpload')}</dd></div>{!!formatDate(detail.updatedAt || detail.createdAt) && <div><dt>{t('market.updated')}</dt><dd>{formatDate(detail.updatedAt || detail.createdAt)}</dd></div>}</dl>
                   {detail.npmPackage && <a className="mk-repo-link" href={`https://www.npmjs.com/package/${encodeURIComponent(detail.npmPackage)}`} target="_blank" rel="noreferrer"><Package size={14} />{detail.npmPackage}<ExternalLink size={12} /></a>}
                   {detail.githubRepoUrl && <a className="mk-repo-link" href={detail.githubRepoUrl} target="_blank" rel="noreferrer"><GitBranch size={14} />{t('market.openRepo')}<ExternalLink size={12} /></a>}
                 </aside>

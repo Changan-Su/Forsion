@@ -7,8 +7,8 @@
  *
  *  ⚠️ 方向很重要:真实链路是 display(协议 URL)→ stored,不是「盘上裸空格 → 盘上」——
  *  裸空格那种压根匹配不上 IMG_RE(见最后一格),那是**存量受损文件**,只能靠修复扫描,别指望这里自愈。 */
-import { describe, it, expect } from 'vitest'
-import { toDisplayMarkdown, toStoredMarkdown, assetRefs, toAssetUrl } from './assets'
+import { afterEach, describe, it, expect } from 'vitest'
+import { toDisplayMarkdown, toStoredMarkdown, assetRefs, toAssetUrl, setAssetUrlBuilder, resetAssetUrlBuilder, fromAssetUrl, fromDefaultAssetUrl } from './assets'
 
 /** 编辑器序列化出来的那一行(PM 的 image 节点 src 就是协议 URL)。 */
 const disp = (ref: string): string => `![](${toAssetUrl(ref)})`
@@ -114,5 +114,87 @@ describe('代码里的图片语法逐字(I-15)', () => {
 
   it('落盘侧仍是全文安全网:代码里残留的协议 URL 也换回相对路径,绝不漏到盘上', () => {
     expect(toStoredMarkdown('```\n' + disp('a.png') + '\n```\n', '')).toBe('```\n![](a.png)\n```\n')
+  })
+})
+
+describe('toDisplayMarkdown 对盘上已经是显示地址的图片', () => {
+  afterEach(() => resetAssetUrlBuilder())
+  it('桌面(没装解析器):外链逐字不动 —— 云端 / 设备网页版写坏的地址在桌面上认不出;盘上的默认协议地址重拼后还是它自己', () => {
+    const md = '![](https://api.example/api/amadeus/vaults/v1/asset?ref=a.png&at=T)\n![](amadeus-asset://v/dir%2Fa%20b.png)\n'
+    expect(toDisplayMarkdown(md, 'dir')).toBe(md)
+  })
+  it('默认协议的字面地址一律逐字不动(带查询串的、尖括号里的、不规范编码的):重拼会把 ?v=1 编进文件名、把尖括号拆掉', () => {
+    const md = '![](amadeus-asset://v/dir%2Fx.png?v=1)\n![](<amadeus-asset://v/attachments%2Fx.png>)\n![](amadeus-asset://v/dir/x.png)\n'
+    expect(toDisplayMarkdown(md, 'notes')).toBe(md)
+    setAssetUrlBuilder((ref) => `https://h.example/f?ref=${encodeURIComponent(ref)}`, () => null)
+    expect(toDisplayMarkdown(md, 'notes')).toBe(md) // 换了构建器的宿主上也不动
+  })
+  it('装了解析器:认得出的重拼成当前的显示地址,认不出的外链不动', () => {
+    setAssetUrlBuilder((ref) => `https://h.example/f?ref=${encodeURIComponent(ref)}&at=NEW`, (url) => (url.startsWith('https://h.example/f?') ? new URLSearchParams(url.split('?')[1]).get('ref') : null))
+    expect(toDisplayMarkdown('![](https://h.example/f?ref=dir%2Fa.png&at=OLD)\n![](https://example.com/x.png)\n', 'dir'))
+      .toBe('![](https://h.example/f?ref=dir%2Fa.png&at=NEW)\n![](https://example.com/x.png)\n')
+  })
+})
+
+describe('fromDefaultAssetUrl:只认默认协议,不问装上的解析器(删文件那条路用它)', () => {
+  afterEach(() => resetAssetUrlBuilder())
+  it('装了解析器:解析器认得的地址 fromAssetUrl 认、fromDefaultAssetUrl 不认;默认协议两边都认', () => {
+    setAssetUrlBuilder((ref) => `https://h.example/f?ref=${encodeURIComponent(ref)}`, (url) => new URLSearchParams(url.split('?')[1] ?? '').get('ref'))
+    const url = 'https://h.example/f?ref=dir%2Fa.png'
+    expect(fromAssetUrl(url)).toBe('dir/a.png')
+    expect(fromDefaultAssetUrl(url)).toBeNull()
+    expect(fromDefaultAssetUrl('amadeus-asset://v/dir%2Fa.png')).toBe('dir/a.png')
+    expect(fromDefaultAssetUrl('amadeus-asset://v/%ZZ')).toBeNull()
+  })
+})
+
+/** 换了显示地址的构建器之后的往返(2026-10-09 事故)。接缝此前只有去程(setAssetUrlBuilder)没有回程:
+ *  云端库 / 设备网页版把显示地址换成带资源令牌的 http 地址,落盘侧的还原却只认默认的 `amadeus-asset://v/` 前缀 ——
+ *  编辑器一存盘就把 `![](.amadeus/pic.png)` 写成 `![](https://…/asset?ref=…&at=<令牌>)`,令牌过期图片失联。
+ *  现在是成对的「构建 + 解析」。真云桥那一对的往返在 frontend/src/services/cloudAssetsRoundtrip.test.ts;
+ *  整条链(真编辑器、真存盘)在 mobile 的 `npm run e2e:localasset`。
+ *  负对照(实跑过):fromAssetUrl 里去掉「问装上的解析器」那一段 → 本组前两格红。 */
+describe('换了显示地址的构建器之后的往返', () => {
+  const BASE = 'https://host.example/files?ref='
+  const install = (): void => setAssetUrlBuilder(
+    (ref) => `${BASE}${encodeURIComponent(ref)}&at=TOKEN`,
+    (url) => (url.startsWith(BASE) ? new URLSearchParams(url.slice(url.indexOf('?') + 1)).get('ref') : null),
+  )
+  afterEach(() => resetAssetUrlBuilder())
+
+  it('display → stored 还原成页相对路径,三种文件名逐字稳定(普通 / 空格 / 括号)', () => {
+    install()
+    for (const md of ['前文\n\n![](.amadeus/pic.png)\n', '![alt](a%20b.png "t")\n', '![](export%20%281%29.png)\n']) {
+      const shown = toDisplayMarkdown(md, 'dir')
+      expect(shown).toContain(BASE) // 防空过:显示形确实换成了注入的地址
+      expect(toStoredMarkdown(shown, 'dir')).toBe(md)
+    }
+  })
+
+  it('图片与文字同段时编辑器会把目标里的 & 写成 \\&:照样认得回来', () => {
+    install()
+    const shown = `![](${BASE}dir%2F.amadeus%2Fpic.png\\&at=TOKEN) 后面有字\n`
+    expect(toStoredMarkdown(shown, 'dir')).toBe('![](.amadeus/pic.png) 后面有字\n')
+  })
+
+  it('换了构建器的宿主上,残留的默认协议地址照样还原(先认默认前缀,再问解析器)', () => {
+    install()
+    expect(toStoredMarkdown('![](amadeus-asset://v/dir%2Fa.png)\n', 'dir')).toBe('![](a.png)\n')
+  })
+
+  it('解析器不认的地址逐字不动(真正的外链不许被「还原」成库内路径);解析器抛错 = 不认', () => {
+    install()
+    const ext = '![](https://evil.example/files?ref=z.png)\n![](https://host.example/other?ref=z.png)\n'
+    expect(toStoredMarkdown(ext, 'dir')).toBe(ext)
+    setAssetUrlBuilder((ref) => `${BASE}${ref}`, () => { throw new Error('boom') })
+    expect(toStoredMarkdown(`![](${BASE}x.png)\n`, 'dir')).toBe(`![](${BASE}x.png)\n`)
+  })
+
+  it('只装构建不给解析(只读宿主)= 旧行为:地址原样留着;resetAssetUrlBuilder 换回默认的那一对', () => {
+    setAssetUrlBuilder((ref) => `${BASE}${encodeURIComponent(ref)}`)
+    const shown = toDisplayMarkdown('![](a.png)\n', '')
+    expect(toStoredMarkdown(shown, '')).toBe(shown)
+    resetAssetUrlBuilder()
+    expect(toDisplayMarkdown('![](a.png)\n', '')).toBe('![](amadeus-asset://v/a.png)\n')
   })
 })

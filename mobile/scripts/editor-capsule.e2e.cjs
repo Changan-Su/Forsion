@@ -5,24 +5,23 @@
  * 钉三件事(都是纯推演验不出来的):
  *  1. 顶栏(面包屑那行 .amx-toolbar)在移动端**整行不渲染**,而「上传」用的隐藏 <input type=file>
  *     仍在场 —— 那个 input 原本寄生在顶栏里,顶栏一藏 ref 就是 null,上传会静默失效(改版时的头号坑)。
- *  2. 底栏是悬浮胶囊,「⋯」弹出的 sheet 里能找回原顶栏那排动作(源码切换/置顶/收藏/导出/删除…)。
+ *  2. 底栏是悬浮胶囊,「⋯」弹出的 sheet 里能找回原顶栏那排动作(源码切换/置顶/收藏/删除…);
+ *     宿主做不了的两件(导出 PDF / 在文件管理器中显示)不出键。
  *  3. 「+」不再往正文里打「/」:收键盘 → 在键盘位置开双列块面板 → 点「标题 1」真把当前块转成 H1。
  *     清单取自 SLASH_ITEMS(与桌面 slash 菜单同源),这里顺带断言双列与分组标题都在。
  *
  * 骨架照抄 note-open.e2e.cjs(同一套 vite preview + 假 token + CDP 真 touch)。
  */
-const http = require('http')
 const os = require('os')
 const fs = require('fs')
 const path = require('path')
-const { spawn } = require('child_process')
+const { startPreview } = require('./lib/preview.cjs')
 const { chromium } = (() => {
   try { return require('playwright-core') } catch { /* 借 desktop 的 */ }
   return require(path.resolve(__dirname, '../../desktop/node_modules/playwright-core'))
 })()
 
-const PORT = 5285 // 避开 dev 5274 / boot 5279 / noteopen 5283
-const URL = `http://localhost:${PORT}/`
+let URL = '' // main() 里由 startPreview 给:系统分配的空闲端口,E2E_PORT 可指定(见 lib/preview.cjs)
 
 function findChromium() {
   if (process.env.CHROMIUM_EXE) return process.env.CHROMIUM_EXE
@@ -41,10 +40,6 @@ function findChromium() {
   }
   throw new Error('找不到 chromium,设 CHROMIUM_EXE')
 }
-const ping = () => new Promise((res) => {
-  const req = http.get(URL, (r) => { res(r.statusCode === 200); r.resume() })
-  req.on('error', () => res(false)); req.setTimeout(1500, () => { req.destroy(); res(false) })
-})
 
 async function main() {
   const root = path.resolve(__dirname, '..')
@@ -52,10 +47,9 @@ async function main() {
     console.error('✗ 没有 dist/,先跑 npm run build')
     process.exit(1)
   }
-  const preview = spawn('npx', ['vite', 'preview', '--port', String(PORT), '--strictPort'], { cwd: root, stdio: ['ignore', 'ignore', 'pipe'], detached: true })
-  let previewErr = ''
-  preview.stderr.on('data', (d) => { previewErr += String(d) })
-  const killPreview = () => { try { process.kill(-preview.pid, 'SIGTERM') } catch { try { preview.kill() } catch { /* 已退出 */ } } }
+  const preview = await startPreview(root)
+  URL = preview.url
+  const killPreview = preview.kill
 
   let browser = null
   const fails = []
@@ -64,9 +58,7 @@ async function main() {
     if (!cond) fails.push(`${name}${detail ? ' | ' + detail : ''}`)
   }
   try {
-    let up = false
-    for (let i = 0; i < 40 && !up; i++) { await new Promise((r) => setTimeout(r, 500)); up = await ping() }
-    if (!up) throw new Error(`vite preview 没起来\n${previewErr.slice(-500)}`)
+    await preview.ready()
 
     browser = await chromium.launch({ executablePath: findChromium(), headless: true, args: ['--no-sandbox'] })
     // ⚠️ 钉住 zh-CN:本脚本按中文文案找元素(「新建笔记」等),而 2.9.3 起首屏语言随系统/地区判定,
@@ -78,7 +70,15 @@ async function main() {
     await ctx.addInitScript(() => {
       try { localStorage.setItem('forsion_token', 'e2e-capsule'); localStorage.setItem('amadeus_vault_mode', 'local') } catch { /* ignore */ }
     })
-    const page = await ctx.newPage()
+    // ⚠️ context 的第一张页有时拿不到触屏模拟(maxTouchPoints=0、pointer 不是 coarse,从 about:blank 起就没有、刷新也回不来;
+    //    同一 context 再开一张恒有 —— 2026-10-09 晚实测约六成概率中招,与端口、与被测构建无关)。没有它编辑器照桌面渲染
+    //    (顶栏在、胶囊不在),1a / 1c 红的是台架。换一张;还没有就明说,别让它红成产品问题。
+    let page = await ctx.newPage()
+    if (!(await page.evaluate(() => navigator.maxTouchPoints))) {
+      console.log('  (第一张页没有触屏模拟,换一张)')
+      const first = page; page = await ctx.newPage(); await first.close()
+    }
+    if (!(await page.evaluate(() => navigator.maxTouchPoints))) throw new Error('台架:浏览器没给这张页触屏模拟(maxTouchPoints=0),下面的断言没法信')
     await page.route('**/auth/me', (r) => r.fulfill({ status: 200, contentType: 'application/json', body: '{"username":"e2e"}' }))
     await page.route('**/api/**', (r) => r.abort())
     page.on('pageerror', (e) => fails.push(`未捕获异常: ${e.message}`))
@@ -166,9 +166,14 @@ async function main() {
     await tap(page.locator('.amx-mbar button[title="更多操作"]'))
     await page.waitForTimeout(500)
     const rows = await page.$$eval('.mb-sheet .mb-sheet-row', (els) => els.map((e) => e.textContent.trim()))
-    const want = ['源码', '上传文件到本页', '置顶', '收藏', '导出为 PDF', '在文件管理器中显示', '删除笔记']
+    const want = ['源码', '上传文件到本页', '置顶', '收藏', '删除笔记']
     const missing = want.filter((w) => !rows.some((r) => r.includes(w)))
-    ok('2 「⋯」sheet 收下了原顶栏 + 原「更多操作」的全部动作', missing.length === 0, missing.length ? `缺:${missing.join('/')}(现有:${rows.join('|')})` : rows.join(' | '))
+    ok('2 「⋯」sheet 收下了原顶栏 + 原「更多操作」里手机做得了的动作', missing.length === 0, missing.length ? `缺:${missing.join('/')}(现有:${rows.join('|')})` : rows.join(' | '))
+    // 09-28(a09033c0,G2-13)起:移动本地库桥声明 hostCaps.exportPdf / revealInFileManager = false,这两件在手机上
+    // 是点了没反应的死键,不渲染(判据单源 amadeus/lib/hostCaps;组件级对照见 desktop 的 mobile-bar.check M5a/M5b)。
+    // 哪天移动桥接上了系统打印 / 分享、把声明改成 true,这条会红 —— 那时把它挪回上面的 want。
+    const dead = ['导出为 PDF', '在文件管理器中显示'].filter((w) => rows.some((r) => r.includes(w)))
+    ok('2a ⚠️ 宿主做不了的两件(导出 PDF / 在文件管理器中显示)不出键', dead.length === 0, dead.length ? `多出:${dead.join('/')}` : '都不在')
     // 一个功能一个入口:画布搬进常驻胶囊后,「⋯」里不许再留一条(用户 2026-08-20 拍板)。
     ok('2b 「⋯」里没有重复的画布条目', !rows.some((r) => r.includes('画布')), rows.join(' | '))
     await closeSheet()

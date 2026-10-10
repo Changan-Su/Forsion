@@ -30,6 +30,7 @@ vi.mock('../../../../mobile/src/amadeus/vaultManager', () => {
     getRoot(): string | null { return this.root }
     setRoot(p: string): void { this.root = p }
     async makeDir(): Promise<void> { /* 内存库不需要目录 */ }
+    isPagePath(rel: string): boolean { return rel.endsWith('.md') } // 索引的单篇更新问它(同 listPages 的判据)
     async listPages(): Promise<string[]> { return [...disk.keys()].filter((k) => k.endsWith('.md')).sort() }
     async listFolders(): Promise<string[]> { return [] }
     absPath(p: string): string { return ROOT + p }

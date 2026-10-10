@@ -12,6 +12,18 @@
  *   2 在里面点「新对话」→ 启动器不再占着一个标签(它自己变成了聊天)
  *   3 聊天在场且可见,且主区标签没有净增(不留一个没人用的空白标签)
  *
+ * 启动器的分段(2026-10-09 起:搜索 / 最近使用 / 新建 / 打开 / 侧栏面板,一个 Space 一格):
+ *   A 四段都在;「新建」里的项不可拖,「打开」里的格子可拖;Tangu 自己不出格子
+ *   B 侧栏面板那一行没有重名(原先两张都叫「工作区」)
+ *   C 搜索行点开的是快速查找
+ *   D 日历那一格的箭头展开出「日历 / 待办清单 / 进入 Space」;选「待办清单」→ 这个标签自己变成待办。
+ *     先多开一张空白页、回到前一张里操作:就地打开时待办落在前一张的位置;另开标签会跑到末尾(空白页随后自己关掉,
+ *     只开一张时这两种结果长得一样,分不出来)
+ *   E 启动器整页不出横向滚动,格子里的字没有被截断
+ *   F 「打开」里每一格点下去,这个标签都就地变成那个视图(不留空白启动器、不出错误面板)—— 格子是按 Space 定义
+ *     推出来的,新加一个 Space 就会多一格,这里替它把关
+ * SHOT_DIR=<目录> 时顺带存亮 / 暗两张整窗截图(观感自查用)。
+ *
  * ⚠️ 量的是 out/ 里的产物,源码改了没 `npm run build` 就是白测(同 check:chatside)。
  * ⚠️ 入口按 `[data-act="new-chat"]` 找,别按文案:09-17 侧栏换成 OrbitsView 后按钮字变「新会话」,
  *    按「新对话」找的旧写法在第 2 项之前就超时(假红)。
@@ -78,6 +90,72 @@ async function main() {
       JSON.stringify(blank),
     )
 
+    // ── 启动器的分段 ──────────────────────────────────────────────────────
+    const LAYOUT = `(() => {
+      const root = [...document.querySelectorAll('.newtab')].find((e) => e.getBoundingClientRect().width > 0)
+      const labels = (sel) => [...root.querySelectorAll(sel + ' .newtab-card-label')].map((e) => (e.textContent || '').trim())
+      const cut = [...root.querySelectorAll('.nt-tilebtn .newtab-card-label, .nt-chip .newtab-card-label')].filter((e) => e.scrollWidth > e.clientWidth + 1).map((e) => e.textContent)
+      return {
+        search: !!root.querySelector('.nt-search'),
+        sections: [...root.querySelectorAll('.newtab-sec-title')].map((e) => e.firstChild?.textContent || ''),
+        create: labels('.nt-chips'), createDraggable: [...root.querySelectorAll('.nt-chip')].filter((b) => b.draggable).length,
+        tiles: labels('.nt-tiles'), tilesNotDraggable: [...root.querySelectorAll('.nt-tilebtn')].filter((b) => !b.draggable).map((b) => b.textContent),
+        side: labels('.nt-side'), cut, overflowX: root.scrollWidth > root.clientWidth + 1,
+      }
+    })()`
+    const lay = await win.evaluate(LAYOUT)
+    const hasCal = lay.tiles.some((x) => /^(日历|Calendar)$/.test(x))
+    check(
+      'A 搜索行、「新建」「打开」两段都在;新建项不可拖、视图格子可拖;Tangu 自己不出格子',
+      lay.search && lay.sections.length >= 2 && lay.create.length >= 1 && lay.createDraggable === 0
+        && lay.tiles.length >= 2 && hasCal && !lay.tiles.includes('Tangu') && lay.tilesNotDraggable.every((x) => /后台 Agent|Background agents/.test(x)),
+      JSON.stringify(lay),
+    )
+    check('B 侧栏面板那一行没有重名', lay.side.length >= 2 && new Set(lay.side).size === lay.side.length, JSON.stringify(lay.side))
+    check('E 启动器不出横向滚动,格子 / 按钮里的字没有被截断', !lay.overflowX && lay.cut.length === 0, JSON.stringify({ overflowX: lay.overflowX, cut: lay.cut }))
+
+    if (process.env.SHOT_DIR) {
+      fs.mkdirSync(process.env.SHOT_DIR, { recursive: true })
+      for (const mode of ['light', 'dark']) {
+        await win.evaluate((m) => { const r = document.documentElement; r.dataset.mode = m; r.classList.toggle('dark', m === 'dark') }, mode)
+        await win.waitForTimeout(300)
+        await win.screenshot({ path: path.join(process.env.SHOT_DIR, `launcher-${mode}.png`) })
+      }
+      await win.evaluate(() => { const r = document.documentElement; r.dataset.mode = 'light'; r.classList.remove('dark') })
+    }
+
+    await win.click('.newtab .nt-search')
+    await win.waitForTimeout(500)
+    const palette = await win.evaluate(`!!document.querySelector('.amx-qf-input')`)
+    await win.keyboard.press('Escape')
+    await win.waitForTimeout(300)
+    check('C 搜索行点开的是快速查找', palette && (await win.evaluate(SNAP)).launcherVisible === 1, `palette=${palette}`)
+
+    const LAUNCHER_TAB = /新建标签页|New tab/
+    await win.click('.dv-new-tab')
+    await win.waitForTimeout(700)
+    await win.locator('.wb-tab', { hasText: LAUNCHER_TAB }).first().click()
+    await win.waitForTimeout(500)
+    const slot = (await win.evaluate(SNAP)).tabs.findIndex((n) => LAUNCHER_TAB.test(n))
+    const calTile = win.locator('.newtab .nt-tile:visible', { hasText: /^(日历|Calendar)$/ }).first()
+    await calTile.locator('.nt-more').click()
+    await win.waitForTimeout(400)
+    const menuItems = await win.evaluate(`[...document.querySelectorAll('.ctx-menu button')].map((b) => (b.textContent || '').trim())`)
+    if (process.env.SHOT_DIR) await win.screenshot({ path: path.join(process.env.SHOT_DIR, 'launcher-menu.png') })
+    const todo = menuItems.find((x) => /^(待办清单|To-?do list|Todo|To-dos)$/i.test(x)) || menuItems[1]
+    const tabsBefore = (await win.evaluate(SNAP)).tabs.length
+    await win.locator('.ctx-menu button', { hasText: todo }).first().click()
+    await win.waitForTimeout(1200)
+    const afterTodo = await win.evaluate(SNAP)
+    check(
+      'D 日历那一格展开出「日历 / 待办 / 进入 Space」;选待办 → 这个标签自己变成待办',
+      menuItems.length === 3 && /Space/.test(menuItems[2]) && afterTodo.launcherVisible === 0 && afterTodo.launcherTabs === 1 && afterTodo.tabs.length === tabsBefore && afterTodo.tabs[slot] === todo,
+      JSON.stringify({ menuItems, slot, afterTodo }),
+    )
+    // 回到「主区里有一张空白启动器」的起点(D 多开的那张还在),接着走原来的 2 / 3
+    await win.locator('.wb-tab', { hasText: LAUNCHER_TAB }).first().click()
+    await win.waitForTimeout(900)
+
     // 侧栏新建入口(OrbitsView 顶行,走 openNewChat);左栏折叠时先展开(折叠态可能还挂在 DOM 里,故看可见而非 count)。
     const newChat = win.locator('[data-act="new-chat"]').first()
     if (!(await newChat.isVisible().catch(() => false))) {
@@ -95,9 +173,21 @@ async function main() {
     )
     check(
       '3 聊天可见,且主区标签没有净增(没留下没人用的空白标签)',
-      after.chatVisible === 1 && after.tabs.length <= before.tabs.length + 1,
+      after.chatVisible === 1 && after.tabs.length <= before.tabs.length + 2, // +1 = D 留下的待办标签
       `标签 ${before.tabs.length} → ${blank.tabs.length} → ${after.tabs.length};可见聊天 ${after.chatVisible}`,
     )
+
+    // ── F 每一格都开得出来 ────────────────────────────────────────────────
+    const broken = []
+    for (const name of lay.tiles) {
+      await win.click('.dv-new-tab')
+      await win.waitForSelector('.newtab .nt-tilebtn', { state: 'visible', timeout: 10_000 })
+      await win.locator('.newtab .nt-tilebtn', { hasText: name }).first().click()
+      await win.waitForTimeout(1300)
+      const st = await win.evaluate(`({ ...${SNAP}, err: [...document.querySelectorAll('.sk-error, [data-error-boundary]')].map((e) => (e.textContent || '').slice(0, 160)) })`)
+      if (st.launcherVisible !== 0 || st.launcherTabs !== 0 || st.err.length) broken.push({ name, launcher: st.launcherVisible, err: st.err })
+    }
+    check(`F 「打开」里 ${lay.tiles.length} 格逐个点开,都就地变成视图、不出错误面板`, lay.tiles.length >= 2 && broken.length === 0, JSON.stringify(broken))
 
     const bad = results.filter((r) => !r.ok)
     console.log(bad.length ? `\n${bad.length} 项失败` : `\n${results.length}/${results.length} 通过`)

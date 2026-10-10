@@ -690,6 +690,13 @@ export const SettingsModal: React.FC<{
     reloadPlugins()
     void listAgents(homeTarget()).then(setPluginAgents).catch(() => { /* ignore */ })
   }, [p.open, isDesktop, reloadPlugins, p.cfg])
+  // `plugin:<id>` 只有「启用且声明了设置项」的引擎插件才有页(与引擎插件列表里那颗「打开设置」同一道闸)。
+  // 商店的「打开设置」、agent 的 open-settings 都可能带来别的 id:清单到了再判,落到引擎插件列表(那一行上有它的开关)。
+  useEffect(() => {
+    if (!rawTab.startsWith('plugin:') || !plugins) return
+    const pl = plugins.find((x) => x.id === rawTab.slice('plugin:'.length))
+    if (!(pl?.enabled && pl.settings)) { goTab('amadeus-plugins'); setSub('pl-engine') }
+  }, [rawTab, plugins])
 
   // 本地联网搜索配置:进模型 tab 拉取;云端/旧后端 404 → wsRed=null 整段隐藏。
   useEffect(() => {
@@ -2939,9 +2946,10 @@ export const SettingsModal: React.FC<{
                 {tab.startsWith('plugin:') && (() => {
                   const pid = tab.slice('plugin:'.length)
                   const pl = (plugins || []).find((x) => x.id === pid)
-                  return pl
+                  // 桌面上落不到的 id 由上面那个 effect 转去引擎插件列表:清单没到 / 转之前的那一帧都只显示「加载中」。
+                  return pl?.enabled && pl.settings
                     ? <PluginSettingsPage cfg={p.cfg} plugin={pl} agents={pluginAgents} />
-                    : <div className="hint">{t('settings.plugins.empty')}</div>
+                    : <div className="hint">{t(isDesktop ? 'common.loading' : 'settings.plugins.empty')}</div>
                 })()}
                 {tab === 'agents' && activeSub === 'ag-clis' && <AgentClisTab cfg={p.cfg} />}
 

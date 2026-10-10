@@ -9,6 +9,13 @@ registerMessages({
   'marketsvc.resolveFailed': { zh: '没能从 Forsion 服务器拿到下载地址（{detail}）', en: 'Couldn’t get the download link from the Forsion server ({detail})' },
 })
 
+/** 商店的保留标签:这个包要用到电脑上才有的东西(本机程序、本机引擎、桌面浮窗…),手机上装了也用不了。
+ *  走标签而不是新字段:线上条目有锁版本的、跟着仓库最新提交的、直接上传的三种,服务端并不是每种都读得到包里的
+ *  manifest;标签是投稿时就能写、后台随时能改的现成元数据,老客户端把它当普通标签显示也说得通。
+ *  包自己的 manifest `isDesktopOnly` 仍是手机端安装时的硬闸(mobileMarket),这枚标签只是让人在下载之前就知道。 */
+export const DESKTOP_ONLY_TAG = 'desktop-only'
+export const isDesktopOnlyItem = (item: Pick<MarketCard, 'tags'>): boolean => !!item.tags?.includes(DESKTOP_ONLY_TAG)
+
 function bridge(): NonNullable<typeof window.tangu> {
   const t = window.tangu
   if (!t?.marketList) throw new Error(translate('marketsvc.desktopOnly'))
@@ -36,6 +43,7 @@ export const installMarket = (id: string): Promise<{ ok: boolean; path: string; 
 export const onInstallProgress = (cb: (p: MarketInstallProgress) => void): (() => void) =>
   window.tangu?.onMarketInstallProgress?.(cb) ?? (() => {})
 
-export type InstalledItem = { slug: string; version: string | null }
+/** `id` = 插件的装载 id(目录名 slug 可以与它不同);只有插件两类给,老宿主不给。 */
+export type InstalledItem = { slug: string; version: string | null; id?: string }
 export const listInstalled = (): Promise<Record<string, InstalledItem[]>> =>
   window.tangu?.marketInstalled?.() ?? Promise.resolve({})

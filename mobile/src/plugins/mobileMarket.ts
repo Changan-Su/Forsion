@@ -10,7 +10,8 @@
  *    且每个字节都要以 base64 过一遍 Capacitor 桥)+ 解压总量与条目数上限(防 zip 炸弹;三道闸见 zipUnpack.ts:
  *    解析前看条目数、解压前看声明大小、解压时按实际字节流式封顶)。
  *  · 下载地址只认 `https:`(file: / content: / 明文 http 一律不下载);allowLoopbackHttp 只给 debug 包的台架开回环明文。
- *  · manifest `isDesktopOnly: true`、入口文件(manifest.main,缺省 main.js)不在包里 → 拒装,且在**写下第一个字节之前**判。
+ *  · manifest `isDesktopOnly: true`、声明了 `requiresApp`(依赖装在电脑上的应用)、入口文件(manifest.main,缺省 main.js)不在包里
+ *    → 拒装,且在**写下第一个字节之前**判。
  *  · 落盘不碰正在用的那一版:新版先完整写进暂存目录,再「旧 → 备份、暂存 → 正式、删备份」;写到一半失败 / 被杀,
  *    旧版原样可用,残留由 pluginHost.recoverPluginDirs 在下次清点 / 安装时收拾。
  *  · 服务端回了 `integrity`(SRI,npm 源会带)→ 校验字节;对不上换下一个候选,全不对 = 拒装。桌面目前不校验。
@@ -25,7 +26,8 @@ import {
   isSafeSlug, planZipFiles,
 } from '../../../desktop/shared/marketPackage'
 import { effectivePluginId } from '../../../desktop/shared/products'
-import { PLUGINS_DIR, backupDirOf, mainRelOf, pluginDirNames, readManifest, recoverPluginDirs, stagingDirOf } from './pluginHost'
+import { KNOWN_APPS } from '../../../desktop/shared/knownApps'
+import { PLUGINS_DIR, backupDirOf, mainRelOf, pluginDirNames, readManifest, recoverPluginDirs, requiredDesktopApp, stagingDirOf, tombstoneExtensions } from './pluginHost'
 import { withPluginDirLock, type PluginFs } from './pluginFs'
 import { UnpackLimitError, countCentralHeaders, unpackCapped } from './zipUnpack'
 
@@ -77,7 +79,7 @@ export interface MobileMarket {
   marketDetail(id: string): Promise<Record<string, unknown>>
   marketInstall(id: string): Promise<{ ok: boolean; path: string; files: number; type: string; slug: string; id?: string }>
   onMarketInstallProgress(cb: (ev: MarketInstallProgress) => void): () => void
-  marketInstalled(): Promise<Record<string, Array<{ slug: string; version: string | null }>>>
+  marketInstalled(): Promise<Record<string, Array<{ slug: string; version: string | null; id?: string }>>>
   marketUninstall(type: string, slug: string): Promise<{ ok: boolean; path: string; type: string; id?: string }>
 }
 
@@ -355,6 +357,8 @@ export function createMobileMarket(deps: MobileMarketDeps): MobileMarket {
       } catch { /* 下面统一报 manifest 无效 */ }
       if (!manifest || !manifestFile) throw new MarketUserError(deps.t('mobilemarket.badManifest'))
       if (manifest.isDesktopOnly === true) throw new MarketUserError(deps.t('mobilemarket.desktopOnlyPlugin'))
+      const needsApp = requiredDesktopApp(manifest)
+      if (needsApp) throw new MarketUserError(deps.t('mobilemarket.requiresDesktopApp', { app: KNOWN_APPS[needsApp]?.name ?? needsApp }))
       const pluginId = effectivePluginId(slug, manifest.id)
       if (!pluginId) throw new MarketUserError(deps.t('mobilemarket.badManifest'))
       const reserved = new Set([...(await deps.reservedIds?.() ?? [])])
@@ -397,12 +401,14 @@ export function createMobileMarket(deps: MobileMarketDeps): MobileMarket {
 
     // 形状同桌面 market:installed:六类都给键,手机只有 amadeus-plugin 有内容(每个已装目录 + manifest 版本)。
     async marketInstalled() {
-      const out: Record<string, Array<{ slug: string; version: string | null }>> = { skill: [], agent: [], plugin: [], space: [], theme: [], 'amadeus-plugin': [] }
+      const out: Record<string, Array<{ slug: string; version: string | null; id?: string }>> = { skill: [], agent: [], plugin: [], space: [], theme: [], 'amadeus-plugin': [] }
       out['amadeus-plugin'] = await withPluginDirLock(deps.fs, async () => {
         await recoverPluginDirs(deps.fs)
-        return Promise.all((await pluginDirNames(deps.fs)).map(async (slug) => ({
-          slug, version: normVer((await readManifest(deps.fs, `${PLUGINS_DIR}/${slug}`))?.version),
-        })))
+        return Promise.all((await pluginDirNames(deps.fs)).map(async (slug) => {
+          const manifest = await readManifest(deps.fs, `${PLUGINS_DIR}/${slug}`)
+          const id = manifest ? effectivePluginId(slug, manifest.id) : null // 装载 id(目录名可 ≠ id):市场「打开设置」按它直达
+          return { slug, version: normVer(manifest?.version), ...(id ? { id } : {}) }
+        }))
       })
       return out
     },
@@ -415,6 +421,7 @@ export function createMobileMarket(deps: MobileMarketDeps): MobileMarket {
         await recoverPluginDirs(deps.fs) // 先恢复:否则备份里的旧版会在下次启动时又被挪回来
         const st = await deps.fs.stat(dir)
         if (!st || st.type !== 'directory') throw new MarketUserError(deps.t('mobilemarket.notInstalled'))
+        await tombstoneExtensions(deps.fs, dir) // 它声明过的文件后缀留下来(同 pluginHost.uninstallPlugin)
         await deps.fs.removeDir(dir)
       })
       return { ok: true, path: dir, type }

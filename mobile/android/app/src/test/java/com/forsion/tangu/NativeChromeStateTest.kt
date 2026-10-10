@@ -124,4 +124,18 @@ class NativeChromeStateTest {
         val many = (0..ChromeState.MAX_SPACES).joinToString(",", "[", "]") { """{"id":"s$it","label":"S"}""" }
         assertThrows(IllegalArgumentException::class.java) { ChromeState.parse(shell(many)) }
     }
+
+    /** Floating capsules are the shell's: a page (settings) keeps the WebView between two strips. And the thin fill
+     *  needs the page to blur behind it — "frosted" without "floating" would be a see-through bar over nothing. */
+    @Test fun floatingIsTheShellsAndFrostedNeedsIt() {
+        assertFalse(ChromeState.parse(shell(null)).floating)
+        val floating = ChromeState.parse(shell(null).put("floating", true))
+        assertTrue(floating.floating)
+        assertFalse(floating.frosted)
+        assertTrue(ChromeState.parse(shell(null).put("floating", true).put("frosted", true)).frosted)
+        assertFalse(ChromeState.parse(shell(null).put("frosted", true)).frosted)
+        val page = ChromeState.parse(JSONObject("""{"mode":"page","title":"Settings","back":"Back","theme":$theme,"floating":true,"frosted":true}"""))
+        assertFalse(page.floating)
+        assertFalse(page.frosted)
+    }
 }
