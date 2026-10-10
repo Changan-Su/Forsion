@@ -9,7 +9,7 @@ import type { EditorView } from '@milkdown/kit/prose/view'
 import { fuzzyRank } from '@lcl/engine/fuzzy'
 import { mapOutsideFences, pageKey, resolvePageName } from '@amadeus-shared/links'
 import { trailingBlockId } from '@amadeus-shared/pdfLink'
-import { joinRel, toStoredMarkdown } from '@amadeus-shared/assets'
+import { joinRel, normPath, relPath, toStoredMarkdown } from '@amadeus-shared/assets'
 import { rewriteNoteRefs } from '@amadeus-shared/rewriteNoteRefs'
 import { textFingerprint } from '@amadeus-shared/writeConflict'
 import { anchorSafe } from '../blocks/markdown/wikiSubpath'
@@ -39,26 +39,6 @@ const toast = (text: string): void => { window.dispatchEvent(new CustomEvent('am
 const baseOf = (p: string): string => (p.split('/').pop() ?? p).replace(/\.md$/i, '')
 
 const dirOf = (p: string): string => p.split('/').slice(0, -1).join('/')
-
-/** vault 相对路径规范化(折叠 `.` / `..`;越出库根的 `..` 保留在头上)。 */
-function normPath(p: string): string {
-  const out: string[] = []
-  for (const seg of p.split('/')) {
-    if (!seg || seg === '.') continue
-    if (seg === '..' && out.length && out[out.length - 1] !== '..') out.pop()
-    else out.push(seg)
-  }
-  return out.join('/')
-}
-
-/** 从 fromDir 指向 vaultRel 的相对路径。 */
-function relPath(fromDir: string, vaultRel: string): string {
-  const a = fromDir ? fromDir.split('/') : []
-  const b = vaultRel.split('/')
-  let i = 0
-  while (i < a.length && i < b.length - 1 && a[i] === b[i]) i++
-  return [...a.slice(i).map(() => '..'), ...b.slice(i)].join('/')
-}
 
 /** 跨目录搬块:`[文字](相对地址)` 按源 → 目标目录重算(Codex 复核 B-15 P1)。图片已由 toStoredMarkdown 按目标目录落好,
  *  外链 / 协议 / 绝对路径 / 纯锚点不动;围栏代码里的不动。

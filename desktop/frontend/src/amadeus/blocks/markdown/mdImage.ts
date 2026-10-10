@@ -158,7 +158,9 @@ class MdImageView implements NodeView {
     if (!m || pos == null) return
     const p = m[2].trim()
     if (!p) return
-    const src = /^(https?:|data:|blob:)/i.test(p) ? p : toAssetUrl(p)
+    // exact:框里填的是库内路径(openSource 给出去的就是它)。不带的话云端先按当前页的目录找,显示的和存下去的
+    // (存盘按库内路径换成页相对 / `../`)可能不是同一张图(Codex 评审 2026-10-10)。
+    const src = /^(https?:|data:|blob:)/i.test(p) ? p : toAssetUrl(p, true)
     this.view.dispatch(this.view.state.tr.setNodeMarkup(pos, undefined, { ...this.node.attrs, alt: m[1], src }))
   }
 

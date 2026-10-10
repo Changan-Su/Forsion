@@ -1916,7 +1916,7 @@ export function MarkdownBlock({
       // 粘贴图片同样遵循 设置→笔记 的附件存放位置(旧 saveAsset 恒写 .amadeus/)。
       const { opts } = await getAttachmentPrefs()
       const { pageRel } = await amadeus.saveAttachment(pagePath, file.name || 'pasted.png', bytes, opts)
-      return toAssetUrl(joinRel(pageDir, pageRel))
+      return toAssetUrl(joinRel(pageDir, pageRel), true)
     } catch {
       return null
     }
