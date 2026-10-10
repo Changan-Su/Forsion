@@ -109,7 +109,8 @@ async function run() {
     const savedDoc = fs.readFileSync(original.path, 'utf8'), savedHistory = fs.readFileSync(historyFile, 'utf8')
     const legacyDoc = '# 协作约定\n\n## 需要你做的\n\n- 给出两种方案时，你先选定方向再让我动手。\n\n## 我这边会做\n\n改完实际运行，并把验证结果贴出来。\n\n每次交结果前，我会先把改动列成三条以内的摘要。\n'
     await api(`/agent/agents/${slug}/human`, 'PUT', { expectedVersion: (await api(`/agent/agents/${slug}/human`)).version, content: legacyDoc, summary: 'Legacy fixture' })
-    fs.writeFileSync(historyFile, JSON.stringify(JSON.parse(fs.readFileSync(historyFile, 'utf8')).filter(r => r.actor === 'agent').map(({ rules, ...r }) => r)))
+    // 每一条都改成没盖章的 Agent 写入(刚才那次 PUT 也算):提示还要求「现在这份就是最后一条记录写成的那份」,所以最后一条不能删
+    fs.writeFileSync(historyFile, JSON.stringify(JSON.parse(fs.readFileSync(historyFile, 'utf8')).map(({ rules, ...r }) => ({ ...r, actor: 'agent' }))))
     await win.evaluate(() => window.dispatchEvent(new CustomEvent('forsion:human-changed')))
     const legacyHint = agent.locator('[data-human-legacy]')
     await legacyHint.waitFor()
@@ -125,10 +126,16 @@ async function run() {
     const rewritten = fs.readFileSync(original.path, 'utf8')
     assert.notEqual(rewritten, legacyDoc, 'The real model rewrote the handbook on disk')
     await shot('human-legacy-rewritten')
+    // 按结果判,不只看「改了」(10-10 这一步曾在两边认反的情况下照样打出 PASS:用户那条被挪走,自己的两条承诺改成「请你……」留下)。
+    // 这是真模型的行为,红了先看截图和这次的工具调用,别当成界面坏了。
+    assert.match(rewritten, /你[^。\n]{0,12}(选|定)[^。\n]{0,8}方向/, `The human's own line (pick a direction first) must stay in the handbook:\n${rewritten}`)
+    assert.doesNotMatch(rewritten, /实际运行|验证结果|三条以内/, `The agent's own promises must leave the handbook, in either voice:\n${rewritten}`)
+    // 挪进记忆的句子在回复下面出一行回执(条目折叠在里面,数那一行)
+    const memoryRows = await win.locator(`[data-chat-surface="chat"][data-session-id="${sid}"] [data-self-receipt]`).count()
     fs.writeFileSync(original.path, savedDoc); fs.writeFileSync(historyFile, savedHistory)
     await win.evaluate(() => window.dispatchEvent(new CustomEvent('forsion:human-changed')))
     await agent.getByText('先展示可运行的例子', { exact: false }).first().waitFor()
-    console.log(`PASS legacy hint from history, rewrite sent to the chat, real model rewrote it, hint cleared (old promise section ${rewritten.includes('我这边会做') ? 'STILL THERE' : 'gone'})`)
+    console.log(`PASS legacy hint from history, rewrite sent to the chat, real model rewrote it, hint cleared (old promise section ${rewritten.includes('我这边会做') ? 'STILL THERE' : 'gone'}; self-update receipts in the chat: ${memoryRows})`)
     await win.evaluate(() => { document.documentElement.setAttribute('data-mode', 'dark'); document.documentElement.classList.add('dark') })
     await shot('human-agent-dark')
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(900, 900))

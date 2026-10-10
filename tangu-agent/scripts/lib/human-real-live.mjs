@@ -95,7 +95,10 @@ const promiseFate = (remembered, doc) => (remembered.some((a) => /方案/.test(a
 /** 自己的承诺被改写成了让用户去做的事(「你实际运行一下,把结果贴给我」「告诉我需要你决定什么」)。引号 / 引用块里的不算:那是教用户怎么对它说。
  *  ponytail: 只认这几份旧文档里那两类承诺的样子,不是通用判据。 */
 const flippedPromise = (doc) => (doc.split('\n').filter((l) => !/^\s*>/.test(l)).join('\n').replace(/“[^”]*”|"[^"]*"|「[^」]*」/g, '')
-  .match(/(运行|跑一遍|跑一下)[^。\n]{0,30}(贴|发)给我|告诉我[^。\n]{0,8}(需要你决定|你需要我决定)/) || [null])[0];
+  .match(/(运行|跑一遍|跑一下)[^。\n]{0,30}(贴|发)给我|你[^。\n]{0,6}(实际运行|运行一下|跑一遍|跑一下)[^。\n]{0,30}贴|告诉我[^。\n]{0,8}(需要你决定|你需要我决定)/) || [null])[0];
+/** 旧说明里本来就是用户该做的那一条(只有手写的第四份有:「给出两种方案时,你先选定方向再让我动手」)整理之后还在不在。
+ *  10-10 读原文才发现的:两轮里它把这一条当成自己的事挪进了记忆(其中一轮记成「我先选定推荐方向」,意思反了),判官和别的门都看不出来。没有这一条的旧说明返回 null(不判)。 */
+const humanPartKept = (seed, doc) => (seed.includes('你先选定方向') ? /你[^。\n]{0,12}(选|定)[^。\n]{0,8}方向/.test(doc) : null);
 const FATE = { memory: '进了记忆', note: '还在协作说明里', lost: '⚠ 两边都没有了' };
 
 const cjkRatio = (s) => { const c = (s.match(/[一-鿿]/g) || []).length, a = (s.match(/[A-Za-z]/g) || []).length; return c + a ? c / (c + a) : 0; };
@@ -219,7 +222,7 @@ export async function humanRealLive(h) {
     const slug = `humanreal-${randomUUID().slice(0, 6)}`;
     await api('/agent/agents', { method: 'POST', body: JSON.stringify({ slug, name: AGENT_NAME, systemPrompt: `You are ${AGENT_NAME}, a hands-on assistant. Reply in the user's language.` }) });
     const dir = join(workspace, slug); mkProject(dir);
-    const seed = h.legacy ? LEGACY_DOCS[(r - 1) % LEGACY_DOCS.length] : '';
+    const seed = h.legacy ? LEGACY_DOCS[(h.seed ? h.seed - 1 : r - 1) % LEGACY_DOCS.length] : ''; // --humanreal-seed n:每一轮都用第 n 份(盯着某一份反复测)
     if (seed) { mkdirSync(join(h.home, 'agents', slug), { recursive: true }); writeFileSync(join(h.home, 'agents', slug, 'HUMAN.md'), seed); }
     // 思考档用引擎缺省的 medium(桌面端不改设置时的档),基线与改后两臂一致
     const cfg = { ...AGENT_CONFIG, agentSlug: slug, cwd: dir, approvalMode: 'auto-edit', thinkingLevel: 'medium' };
@@ -245,12 +248,12 @@ export async function humanRealLive(h) {
       const fate = promiseFate(remembered, after);
       const scopes = [...new Set(w.changes.map((c) => c.scope))];
       const handedBack = [...new Set(w.handed)];
-      const flipped = flippedPromise(after);
-      legacy = { ask: h.legacy, scopes, handedBack, moved: w.moved, dropped: w.dropped, flipped, seed, afterAsk: agentDoc, leftAfterAsk: marksLeft(agentDoc), askChanged: agentDoc !== seed, after, leftAfter: marksLeft(after), applied: w.changes.length, changes: w.changes, remembered, fate,
+      const flipped = flippedPromise(after), humanKept = humanPartKept(seed, after);
+      legacy = { ask: h.legacy, scopes, handedBack, moved: w.moved, dropped: w.dropped, flipped, humanKept, seed, afterAsk: agentDoc, leftAfterAsk: marksLeft(agentDoc), askChanged: agentDoc !== seed, after, leftAfter: marksLeft(after), applied: w.changes.length, changes: w.changes, remembered, fate,
         judge, judgeError, tally: judge ? tallyOf(judge) : null, office: (after.match(/口径|维度|交付|验收/g) || []).length, tools: ev.toolCalls, reply: String(ev.content || ''), error: ev.error || null };
       // 这一档的门:请它整理之后,文档确实改了、没有 agent 自己要做的事、那条承诺没丢。六条消息那一段的门照常算、照常报,但不决定这一档过没过。
-      legacy.ok = !ev.error && after !== agentDoc && judge?.verdict.noAgentItems === true && fate !== 'lost' && !scopes.includes('project') && !flipped;
-      x.line += `\n    旧文档:⑥ 之后${legacy.askChanged ? '改过' : '没动'},旧承诺还剩 ${legacy.leftAfterAsk.length}/${marksLeft(seed).length} 处;请它整理之后:${legacy.tally ? `${legacy.tally.items} 条里 agent 自己要做的 ${legacy.tally.agentItems}(三次判 ${judge.votes.map((v) => v.agentItems).join('/')})` : `判官没判成(${judgeError || '文档为空'})`}、旧承诺还剩 ${legacy.leftAfter.length} 处、「口径 / 维度 / 交付 / 验收」${legacy.office} 处、「选方案」那条承诺${FATE[fate]}${scopes.includes('project') ? ';⚠ 另给项目写了一份' : ''};交回 ${handedBack.length} 行、由工具记进记忆 ${w.moved.length} 句、标成不再保留 ${w.dropped.length} 行${flipped ? `;⚠ 自己的承诺被改成了让用户做的事(${flipped})` : ''}`;
+      legacy.ok = !ev.error && after !== agentDoc && judge?.verdict.noAgentItems === true && fate !== 'lost' && !scopes.includes('project') && !flipped && humanKept !== false;
+      x.line += `\n    旧文档:⑥ 之后${legacy.askChanged ? '改过' : '没动'},旧承诺还剩 ${legacy.leftAfterAsk.length}/${marksLeft(seed).length} 处;请它整理之后:${legacy.tally ? `${legacy.tally.items} 条里 agent 自己要做的 ${legacy.tally.agentItems}(三次判 ${judge.votes.map((v) => v.agentItems).join('/')})` : `判官没判成(${judgeError || '文档为空'})`}、旧承诺还剩 ${legacy.leftAfter.length} 处、「口径 / 维度 / 交付 / 验收」${legacy.office} 处、「选方案」那条承诺${FATE[fate]}${scopes.includes('project') ? ';⚠ 另给项目写了一份' : ''}${flipped ? `;⚠ 承诺被改成了用户的事(${flipped})` : ''}${humanKept === false ? ';⚠ 用户自己的那条被拿掉了' : ''};交回 ${handedBack.length} 行、由工具记进记忆 ${w.moved.length} 句、标成不再保留 ${w.dropped.length} 行${flipped ? `;⚠ 自己的承诺被改成了让用户做的事(${flipped})` : ''}`;
       x.ok = legacy.ok;
     }
     console.log(`  第 ${r}/${rounds} 轮(${slug}):${x.ok ? '✓' : '✗'} ${x.line}`);
@@ -261,7 +264,7 @@ export async function humanRealLive(h) {
   }
   const passed = graded.filter((x) => x.ok).length;
   const tidied = evidence.filter((e) => e.legacy);
-  const legacyNote = h.legacy ? `旧文档 ${tidied.filter((e) => e.legacy.ok).length}/${rounds} 轮整理对了(整理后没有 agent 自己要做的事 ${tidied.filter((e) => e.legacy.judge?.verdict.noAgentItems).length}/${tidied.length}、那条承诺进了记忆 ${tidied.filter((e) => e.legacy.fate === 'memory').length}/${tidied.length}、还在说明里 ${tidied.filter((e) => e.legacy.fate === 'note').length}/${tidied.length}、只改了 agent 那一份 ${tidied.filter((e) => e.legacy.scopes.join() === 'agent').length}/${tidied.length}、承诺没被改成用户的事 ${tidied.filter((e) => !e.legacy.flipped).length}/${tidied.length}、⑥ 那一轮自己就清掉旧承诺 ${tidied.filter((e) => !e.legacy.leftAfterAsk.length).length}/${tidied.length});六条消息那一段:` : '';
+  const legacyNote = h.legacy ? `旧文档 ${tidied.filter((e) => e.legacy.ok).length}/${rounds} 轮整理对了(整理后没有 agent 自己要做的事 ${tidied.filter((e) => e.legacy.judge?.verdict.noAgentItems).length}/${tidied.length}、那条承诺进了记忆 ${tidied.filter((e) => e.legacy.fate === 'memory').length}/${tidied.length}、还在说明里 ${tidied.filter((e) => e.legacy.fate === 'note').length}/${tidied.length}、只改了 agent 那一份 ${tidied.filter((e) => e.legacy.scopes.join() === 'agent').length}/${tidied.length}、承诺没被改成用户的事 ${tidied.filter((e) => !e.legacy.flipped).length}/${tidied.length}、用户自己的那条还在 ${tidied.filter((e) => e.legacy.humanKept === true).length}/${tidied.filter((e) => e.legacy.humanKept !== null).length}、⑥ 那一轮自己就清掉旧承诺 ${tidied.filter((e) => !e.legacy.leftAfterAsk.length).length}/${tidied.length});六条消息那一段:` : '';
   return { ok: passed === rounds, detail: `${h.legacy ? legacyNote : `${passed}/${rounds} 轮全过;`}${sumUp(graded)}(判官 ${JUDGE_MODEL})`, output: outs.join('\n\n'), toolCalls: tools, humanRealPassed: passed };
 }
 
@@ -293,6 +296,11 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   assert.match(TIDY_TURNS.button, /重写一遍.*挪到你的记忆里.*只改你自己这一份/); // 「让 Agent 重写」发出去的那句读得到
   assert.deepEqual(LEGACY_DOCS.map((d) => marksLeft(d).length), [2, 2, 2, 2]);
   assert.equal(flippedPromise('- 改完后，你实际运行一下，并把验证结果贴给我。'), '运行一下，并把验证结果贴给我');
+  assert.ok(flippedPromise('改完后请你实际运行，并把验证结果贴出来。')); // 真 Electron 验收里的那种说法(「贴出来」,不是「贴给我」)
+  assert.equal(flippedPromise('改完我会实际运行，并把验证结果贴出来。'), null); // Agent 自己的承诺原样留着不算这一类(那归判官的「agent 自己要做的事」)
+  assert.equal(humanPartKept(LEGACY_DOCS[3], '- 有两种方案时，请你先选一个方向。'), true);
+  assert.equal(humanPartKept(LEGACY_DOCS[3], '- 要我改报表时，先告诉我给谁看。'), false);
+  assert.equal(humanPartKept(LEGACY_DOCS[0], '随便什么'), null);
   assert.equal(flippedPromise('这次可以这样说：“改完运行脚本，把实际输出贴给我。”\n> 改完跑一遍，把结果贴给我'), null); // 教用户怎么对它说的例句不算 // 每份旧文档里都有它自己的那句承诺 + 另加的那条
   console.log('human-real-live 自检通过');
 }

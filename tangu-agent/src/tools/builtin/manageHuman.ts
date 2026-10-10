@@ -23,8 +23,12 @@ const SHORT_VERSION = 12;
 // 分不出的那部分仍靠它判断(把自己的承诺标成 reworded / dropped,或者留在说明里改成让用户去做):台架 `--only humanreal --humanreal-legacy` 量的就是这个。
 // 同一轮实测里它犯过的两样都写进了下面那段话:随口一句「只留我这边该做的」被它当成「可以忘掉」(标 dropped);
 // 没有主语的一句承诺(看不到它原来在「我这边会做」下面)被它当成用户的事留下(标 reworded)—— 所以交回的每一行带上原来的小节标题,dropped 要写理由。
+// 第三样(真 Electron 验收时看到的,两边整个认反):用户那句「只留我这边该做的事」里的「我」是用户,旧说明里「我这边会做」的「我」是 Agent,
+// 它按字面把两个「我」对上了 —— 用户的那条被当成自己的事挪进记忆,自己的承诺改成「请你……」留下。所以开头先点明这份说明是谁的口吻,核出内容错了的先改内容再交。
 type Disposition = { to: 'memory' | 'reworded' | 'dropped'; text?: string };
-const PENDING = 'Nothing was saved yet. This update takes the numbered lines in `removed` out of the note (`under` is the heading each line sat under). Resend the same update (same content, summary, evidence and expectedVersion) with `removed`: one string per line number. '
+const PENDING = 'Nothing was saved yet. This update takes the numbered lines in `removed` out of the note (`under` is the heading each line sat under). '
+  + 'The note is in your voice, written to the human: in it "I" (我) is you, the agent, and "you" (你) is the human, whichever words the human\'s latest message uses for each side. A line under a heading about what "I" do is your promise, also when the line itself has no subject; a line that tells "you" to do something is the human\'s part and belongs in the note. '
+  + 'If this shows the new content is wrong (a promise of yours now reads as a task for the human, or the human\'s part was taken out), correct the content first. Then resend the update (same summary, evidence and expectedVersion) with `removed`: one string per line number. '
   + '"<n> memory: <one sentence>" for a line that says what you will do or how the human wants you to work. It may be the only record of something they asked of you, so it must be kept, whether or not it relates to the current task; being asked to keep only the human\'s side in the note is not being asked to forget it. The sentence (at most 300 characters, in the human\'s language) is saved to your memory by this tool; do not also call remember for it. Check that the new note does not still carry that line as something the human should do: your promise must not become their task. '
   + '"<n> reworded" only for a line that already asked something of the human and whose point is still in the note. '
   + '"<n> dropped: <reason>" when the human no longer needs it. Never for a line about what you will do, unless the human told you to forget that very thing.';
