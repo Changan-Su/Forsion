@@ -11,7 +11,7 @@
  *   npm run live:harness -- --only humanreal --rounds 3 [--timeout 2400000]   # 协作说明写成什么样(10-10;慢的模型每轮 3–4 分钟,轮数多了带 --timeout):一段六条消息的真实任务(不点名任何库 / 工具)之后,写进去的是不是「用户这边怎么做」、普通人读不读得懂;
  *                                                           #   判官固定 codex/gpt-6-luna;改 HUMAN_GUIDANCE / manage_human 的说明与返回后跑(设计见 lib/human-real-live.mjs);
  *                                                           #   `--humanreal-rejudge <evidence.json,…>` 不跑任务,只把旧证据里的文档按现在的判据重判一遍
- *                                                           #   `--humanreal-legacy [strict]` 每轮开头先放一份旧版本写成的协作说明(2.13.1 的原文),六条消息之后再请它整理:看旧承诺清没清、清的时候丢没丢、改的是不是原来那一份;strict = 请求里把「先记下再拿掉、就改这一份」也说了
+ *                                                           #   `--humanreal-legacy [strict|button]` 每轮开头先放一份旧版本写成的协作说明(2.13.1 的原文),六条消息之后再请它整理:看旧承诺清没清、清的时候丢没丢、改的是不是原来那一份;strict = 请求里把「先记下再拿掉、就改这一份」也说了;button = 协作说明面板「让 Agent 重写」发出去的原话(从界面文案里读)
  *   npm run live:harness -- --only musereview [--hand]   # Muse 每周装备巡检:巡检完当场替各 agent 收起(只认巡检名单里的、不出卡片)→ 它下一次 run 就生效;--hand 再在对话里让 Muse 看一遍(改 LOADOUT_REVIEW_PROMPT / review_loadout 报告 / propose 代收那一支后跑)
  *   npm run live:harness -- --only harnessopen --harness-ui   # 工作笔记放开写入 + 真 Electron 里的更新卡与撤销(卡片从真模型的回执还原);先构建 desktop
  *   npm run live:harness -- --only projmem                  # 记忆分项目级 / 全局级(10-04):落点、同项目不同 agent 共用、跨项目隔离(改 services/projectMemory.ts / remember 的 scope 后跑)
@@ -1696,7 +1696,7 @@ try {
 
   // ── 协作说明在一段真实任务之后写成什么样(10-10):消息不点名任何库 / 工具;判据与设计见 lib/human-real-live.mjs ──
   await scenario('humanreal', `humanreal 协作说明:写的是用户这边怎么做、读得懂 ×${SELF_ROUNDS} 轮`, () =>
-    humanRealLive({ run, api, workspace, OUT, MODEL, AGENT_CONFIG, home, legacy: argv.includes('--humanreal-legacy') ? (opt('humanreal-legacy', '') === 'strict' ? 'strict' : 'plain') : '', rounds: SELF_ROUNDS, rejudge: opt('humanreal-rejudge', '').split(',').map((x) => x.trim()).filter(Boolean) }));
+    humanRealLive({ run, api, workspace, OUT, MODEL, AGENT_CONFIG, home, legacy: argv.includes('--humanreal-legacy') ? (['strict', 'button'].includes(opt('humanreal-legacy', '')) ? opt('humanreal-legacy', '') : 'plain') : '', rounds: SELF_ROUNDS, rejudge: opt('humanreal-rejudge', '').split(',').map((x) => x.trim()).filter(Boolean) }));
 
   // ── 记忆分项目级 / 全局级(10-04 用户第二次裁决「还要区分 Project 级别还是全局级别」)──
   //  ① 在项目一的会话里告诉 agent A 两件事(不提工具、不提「级别」):一件只在这个项目成立,一件不分项目

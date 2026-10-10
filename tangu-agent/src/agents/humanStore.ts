@@ -14,7 +14,11 @@ export type HumanScope = { kind: 'agent'; slug: string } | { kind: 'project'; cw
 export interface HumanChange {
   id: string; scope: HumanScope; summary: string; evidence: string; at: string;
   actor: 'agent' | 'user'; beforeVersion: string; afterVersion: string; undoOf?: string;
+  /** Agent 写入时引擎盖的章:它是按哪一版写法写的。没有这个字段的 agent 写入 = 2.13.1 及更早的引擎写的(那时的指引让它把自己的承诺也写进来)。
+   *  界面靠它判断「这份是旧版本写的」。不用日期判:已发出去的旧版本在修复之后照样在写旧样子的文档。 */
+  rules?: number;
 }
+export const HUMAN_RULES = 2;
 interface Revision extends HumanChange { before: string | null; after: string; committed: boolean }
 export interface HumanDocument {
   scope: HumanScope; path: string; content: string; version: string; exists: boolean; updatedAt: string | null;
@@ -106,7 +110,7 @@ export async function writeHuman(scope: HumanScope, input: {
     if (after === (before ?? '')) return { document: snapshot(loc), change: null };
     const revision: Revision = { id: randomUUID(), scope: loc.scope, summary: redactSecrets(summary.trim()), evidence: redactSecrets(String(evidence || '')),
       at: new Date().toISOString(), actor, beforeVersion, afterVersion: version(after), before, after, committed: false,
-      ...(input.undoId ? { undoOf: String(input.undoId) } : {}) };
+      ...(input.undoId ? { undoOf: String(input.undoId) } : {}), ...(actor === 'agent' ? { rules: HUMAN_RULES } : {}) };
     const next = [...records.slice(-39), revision];
     // Write-ahead history, then the atomic Markdown replacement. A pending entry is only
     // visible if its after-version actually reached disk (including recovery after a crash).
@@ -119,6 +123,14 @@ export async function writeHuman(scope: HumanScope, input: {
   };
   // Agent 级的 HUMAN.md 参与云同步:同步落盘拿的是 agent 目录锁,这里一并拿上,另一个进程里的同步才插不进「核版本 → 写」之间。
   return withMemoryDirectoryLock(loc.historyDir, () => loc.scope.kind === 'agent' ? withMemoryDirectoryLock(loc.base, commit) : commit());
+}
+
+/** 改之前有、改之后没有了的那些行(原样;标题、分隔线、空行不算;去重)。改写过的行也在里面 —— 程序分不出「换了说法」和「拿掉了」,交回去由模型自己看。
+ *  ponytail: 按整行比,最多回 40 行;一次拿掉更多的文档少见,到时再分批。 */
+export function removedLines(before: string, after: string): string[] {
+  const lines = (s: string) => s.split('\n').map((l) => l.trim()).filter((l) => l && !/^#{1,6}\s/.test(l) && !/^[-*_]{3,}$/.test(l));
+  const kept = new Set(lines(after));
+  return [...new Set(lines(before).filter((l) => !kept.has(l)))].slice(0, 40);
 }
 
 /** Even an emptied/removed handbook must be represented: an undo in the UI is a

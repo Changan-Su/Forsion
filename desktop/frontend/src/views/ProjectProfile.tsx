@@ -406,6 +406,12 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
     applyContext(r.context)
     setNotice(t('projectProfile.git.pushed', { target: r.target }))
   })
+  // 项目这一份的「重写」发给这个项目的载体会话(和「生成」同一条路);本机直连、非计划模式才有 manage_human
+  const carrierCfg = s.configBySession[session.id] || session.agent_config
+  const rewriteHuman = carrierCfg?.execMode === 'host' && !carrierCfg.planMode ? () => {
+    if (current !== session.id) useApp.getState().setActiveId(session.id)
+    void useApp.getState().send(t('human.rewrite.projectPrompt'), [], undefined, undefined, undefined, session.id)
+  } : null
   const generate = () => {
     if (!ctx || sessionRunning) return
     clear()
@@ -522,7 +528,7 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
       <fieldset disabled={!!busy} className="team-profile-fields" key={tab}>
         {loadError && <p className="agent-profile-error" role="alert" style={{ paddingTop: 16 }}>{loadError} <button className="profile-text-action" onClick={() => setReloadAt((n) => n + 1)}>{t('projectProfile.retry')}</button></p>}
         {tab === 'human' && <>
-          <HumanCollaborationPanel engine={homeTarget()} cfg={s.cfg} target={{ kind: 'project', sessionId: session.id }} name={workspace.name} running={running} jump={humanJump} />
+          <HumanCollaborationPanel engine={homeTarget()} cfg={s.cfg} target={{ kind: 'project', sessionId: session.id }} name={workspace.name} running={running} jump={humanJump} onRewrite={rewriteHuman} />
           {collaborationSlugs.map(slug => <details className="human-inherited" key={slug}><summary>{t('human.inherited', { name: agentOf(slug)?.name || slug })}</summary>
             <HumanCollaborationPanel engine={homeTarget()} cfg={s.cfg} target={{ kind: 'agent', slug }} name={agentOf(slug)?.name || slug} running={running} />
           </details>)}

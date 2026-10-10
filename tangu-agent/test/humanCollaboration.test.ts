@@ -16,7 +16,7 @@ import { query } from '../src/core/db.js';
 import { runMigration } from '../src/db/migrate.js';
 import { toSqliteDDL } from '../src/core/dialectDDL.js';
 import { STANDALONE_SCHEMA } from '../src/db/schemaStandalone.js';
-import { readHuman, writeHuman, renderHumanContext } from '../src/agents/humanStore.js';
+import { readHuman, writeHuman, renderHumanContext, removedLines, HUMAN_RULES } from '../src/agents/humanStore.js';
 import { manageHumanProvider } from '../src/tools/builtin/manageHuman.js';
 import { getToolDefinitions, listDeferredTools } from '../src/tools/registry.js';
 import { humanProjectScope } from '../src/services/humanContext.js';
@@ -162,12 +162,29 @@ describe('HUMAN.md collaboration lifecycle', () => {
       // 只认恰好 12 位的短版本号:后面多带了东西、或完整版本号抄错了尾巴,都不放行
       const now = JSON.parse(await tool.execute({ action: 'read', scope: 'agent' }, ctx)).version;
       for (const bad of [`${now}-garbage`, `${now}${'0'.repeat(52)}`]) expect(await tool.execute({ action: 'update', scope: 'agent', expectedVersion: bad, content: '# Bad', summary: 'Bad', evidence: 'Bad' }, ctx)).toContain('changed elsewhere');
+      expect(saved.removed).toBeUndefined(); // 从空文档写起:没有拿掉任何一行,回执里不带那一段
+      // 只加不删:同样不带。改写时被拿掉的行原样交回(标题不算),并带上「先记下再回复」那句
+      const added = JSON.parse(await tool.execute({ action: 'update', scope: 'agent', expectedVersion: now, content: '# Shared\nUse sketches.\nI will run the script first.', summary: 'More', evidence: 'More' }, ctx));
+      expect(added.removed).toBeUndefined();
+      const rewritten = JSON.parse(await tool.execute({ action: 'update', scope: 'agent', expectedVersion: added.version, content: '# Working with me\nUse sketches.', summary: 'Tidy', evidence: 'Asked to tidy' }, ctx));
+      expect(rewritten.removed).toEqual(['I will run the script first.']);
+      expect(rewritten.next).toContain('remember');
       return saved;
     }, 'shared');
     expect(result.kind).toBe('human_update'); expect(result.change.scope).toEqual({ kind: 'agent', slug: 'shared' });
-    expect(sync.mock.calls).toEqual([['owner', 'shared']]); // 归属(显示)agent,不是记忆桶 'first';只读那次不排同步
+    expect(sync.mock.calls).toEqual([['owner', 'shared'], ['owner', 'shared'], ['owner', 'shared']]); // 存上的三次各排一次;归属(显示)agent,不是记忆桶 'first';只读和被挡下的不排同步
     expect((await readHuman(scope)).content).not.toContain('Use sketches');
     expect((await readHuman({ kind: 'agent', slug: 'shared' })).content).toContain('Use sketches');
+    // agent 的写入盖上写法版本的章;用户自己改的不盖(界面靠这个认「旧版本写的」)
+    const after = await writeHuman({ kind: 'agent', slug: 'shared' }, { expectedVersion: (await readHuman({ kind: 'agent', slug: 'shared' })).version, content: '# Mine', summary: 'Hand edit' }, 'user');
+    expect(after.document.history.map((h) => [h.actor, h.rules])).toEqual([['user', undefined], ['agent', HUMAN_RULES], ['agent', HUMAN_RULES], ['agent', HUMAN_RULES]]);
+  });
+  it('lists the lines an update took out: whole lines, headings and blanks ignored, reworded lines included', () => {
+    const before = '# 协作约定\n\n- 先说给谁看。\n- 先说给谁看。\n\n## 我这边会做\n\n改完实际运行,并把结果贴出来。\n---\n';
+    expect(removedLines(before, '# 怎么配合\n\n- 先说给谁看。\n')).toEqual(['改完实际运行,并把结果贴出来。']);
+    expect(removedLines(before, '- 你先说给谁看。')).toEqual(['- 先说给谁看。', '改完实际运行,并把结果贴出来。']);
+    expect(removedLines('', '- x')).toEqual([]);
+    expect(removedLines(before, before)).toEqual([]);
   });
   it('keeps collaboration available on a fresh chat or work turn without loading it again', () => {
     for (const preset of ['chat', 'work'] as const) {

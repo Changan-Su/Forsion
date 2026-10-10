@@ -74,11 +74,18 @@ const LEGACY_DOCS = [
   "# 协作约定\n\n## 做报表/脚本时，先给最小口径\n\n为减少来回修改，描述需求时尽量带上：\n- **老板要回答的问题/汇总维度**：例如“各地区卖了多少”。\n- **统计范围与排除项**：日期范围，以及退款、取消、未付款是否排除。\n- **单位与展示习惯**：例如元、千分位，是否需要笔数/对比。\n- **输出形式**：要表格、摘要，或需要保留现有栏目。\n\n不必每次都写完整；一句话也可以，没确定的部分标“待定”。\n\n## 我这边会做\n\n动脚本前先复述关键统计口径，遇到会改变数字或报告重点的歧义先问；改完实际运行，并把验证结果贴出来。",
 ].map((d) => `${d}\n\n## 选方案时\n\n${LEGACY_PROMISE}\n`);
 const LEGACY_MARKS = ['Mika 会先检查', 'Mika 的配合方式', '我这边会做', '我会先说明你需要做的决定'];
-// 两种说法:plain 是用户随口会说的;strict 把用户想不到要说的两件事也说了(自己要做的先记下再拿掉、就改这一份)。
+// 三种说法:plain 是用户随口会说的;strict 把用户想不到要说的两件事也说了(自己要做的先记下再拿掉、就改这一份);
+// button 是协作说明面板里「让 Agent 重写」发出去的那一句,直接从界面文案里读,测的就是发出去的原话。
 // 10-10 实测 plain(gpt-6-luna 3 轮):2 轮把文档改干净了,但那条承诺删了没记;1 轮另给项目写了一份、原来那份没动。
 const TIDY_TURNS = {
   plain: '协作说明我看了一下,里面有些是你自己要做的事,还有些词我看不太懂。帮我重新整理一遍:只留我这边该做的,用平常话写。',
   strict: '协作说明我看了一下,里面有些是你自己要做的事,还有些词我看不太懂。帮我重新整理一遍:你自己要做的那些,先记到你的记忆里,再从说明里拿掉;说明里只留我这边该做的,用平常话写。就改你自己这一份,不用另外给这个项目写一份。',
+  get button() {
+    const src = readFileSync(fileURLToPath(new URL('../../../desktop/frontend/src/components/humanMessages.ts', import.meta.url)), 'utf8');
+    const m = src.match(/'human\.rewrite\.agentPrompt': \{ zh: '([^']+)'/);
+    if (!m) throw new Error('界面文案里找不到 human.rewrite.agentPrompt 的中文');
+    return m[1];
+  },
 };
 const marksLeft = (doc) => LEGACY_MARKS.filter((m) => doc.includes(m));
 /** 那条只存在旧文档里的承诺最后去了哪:记忆(任何一轮的 remember 提到它)/ 还在协作说明里 / 两边都没有。 */
@@ -229,11 +236,12 @@ export async function humanRealLive(h) {
       const { judge, judgeError } = after.trim() ? await judgeDoc(after, `Human legacy judge ${r}`) : { judge: null, judgeError: null };
       const fate = promiseFate(remembered, after);
       const scopes = [...new Set(w.changes.map((c) => c.scope))];
-      legacy = { ask: h.legacy, scopes, seed, afterAsk: agentDoc, leftAfterAsk: marksLeft(agentDoc), askChanged: agentDoc !== seed, after, leftAfter: marksLeft(after), applied: w.changes.length, changes: w.changes, remembered, fate,
+      const handedBack = ev.toolResults.map((r) => parse(r.full || r.result || '')).filter((v) => v?.kind === 'human_update' && Array.isArray(v.removed)).flatMap((v) => v.removed);
+      legacy = { ask: h.legacy, scopes, handedBack, seed, afterAsk: agentDoc, leftAfterAsk: marksLeft(agentDoc), askChanged: agentDoc !== seed, after, leftAfter: marksLeft(after), applied: w.changes.length, changes: w.changes, remembered, fate,
         judge, judgeError, tally: judge ? tallyOf(judge) : null, office: (after.match(/口径|维度|交付|验收/g) || []).length, tools: ev.toolCalls, reply: String(ev.content || ''), error: ev.error || null };
       // 这一档的门:请它整理之后,文档确实改了、没有 agent 自己要做的事、那条承诺没丢。六条消息那一段的门照常算、照常报,但不决定这一档过没过。
       legacy.ok = !ev.error && after !== agentDoc && judge?.verdict.noAgentItems === true && fate !== 'lost' && !scopes.includes('project');
-      x.line += `\n    旧文档:⑥ 之后${legacy.askChanged ? '改过' : '没动'},旧承诺还剩 ${legacy.leftAfterAsk.length}/${marksLeft(seed).length} 处;请它整理之后:${legacy.tally ? `${legacy.tally.items} 条里 agent 自己要做的 ${legacy.tally.agentItems}(三次判 ${judge.votes.map((v) => v.agentItems).join('/')})` : `判官没判成(${judgeError || '文档为空'})`}、旧承诺还剩 ${legacy.leftAfter.length} 处、「口径 / 维度 / 交付 / 验收」${legacy.office} 处、「选方案」那条承诺${FATE[fate]}${scopes.includes('project') ? ';⚠ 另给项目写了一份' : ''}`;
+      x.line += `\n    旧文档:⑥ 之后${legacy.askChanged ? '改过' : '没动'},旧承诺还剩 ${legacy.leftAfterAsk.length}/${marksLeft(seed).length} 处;请它整理之后:${legacy.tally ? `${legacy.tally.items} 条里 agent 自己要做的 ${legacy.tally.agentItems}(三次判 ${judge.votes.map((v) => v.agentItems).join('/')})` : `判官没判成(${judgeError || '文档为空'})`}、旧承诺还剩 ${legacy.leftAfter.length} 处、「口径 / 维度 / 交付 / 验收」${legacy.office} 处、「选方案」那条承诺${FATE[fate]}${scopes.includes('project') ? ';⚠ 另给项目写了一份' : ''};回执交回 ${handedBack.length} 行`;
       x.ok = legacy.ok;
     }
     console.log(`  第 ${r}/${rounds} 轮(${slug}):${x.ok ? '✓' : '✗'} ${x.line}`);
@@ -273,6 +281,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   assert.equal(promiseFate(['{"content":"给用户选方案时先说要做的决定和投入时间"}'], ''), 'memory');
   assert.equal(promiseFate(['{"content":"改完先跑一遍"}'], '选方案前,你先告诉我你想做哪个决定。'), 'note');
   assert.equal(promiseFate([], '开始前先告诉我给谁看。'), 'lost'); // 整理时删了、又没记进记忆
+  assert.match(TIDY_TURNS.button, /重写一遍.*记到你的记忆里.*只改你自己这一份/); // 「让 Agent 重写」发出去的那句读得到
   assert.deepEqual(LEGACY_DOCS.map((d) => marksLeft(d).length), [2, 2, 2]); // 每份旧文档里都有它自己的那句承诺 + 另加的那条
   console.log('human-real-live 自检通过');
 }

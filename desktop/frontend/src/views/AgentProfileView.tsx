@@ -531,7 +531,10 @@ function AgentProfile({ agent, compact = false, sessionId, evolutionJumpAt = 0, 
       </>}
       {section === 'skills' && <AgentSkillsPanel cfg={s.cfg} agentSlug={agent.slug} surface={compact ? 'details' : 'space'} selectedIds={draft.enabledSkillIds} onSelectedIds={(enabledSkillIds) => patch({ enabledSkillIds })} extendView={extendView} />}
       {section === 'mcp' && equipment('mcp')}
-      {section === 'human' && <HumanCollaborationPanel engine={homeTarget()} cfg={s.cfg} target={{ kind: 'agent', slug: agent.slug }} name={agent.name} running={s.running} jump={humanJump} />}
+      {/* 「重写」和 /refine 同一道门(manage_human 只在本机直连、非计划模式的会话里有),另加一条:这个会话的 Agent 就是这一页的 Agent,否则它改的是别人的那份 */}
+      {section === 'human' && <HumanCollaborationPanel engine={homeTarget()} cfg={s.cfg} target={{ kind: 'agent', slug: agent.slug }} name={agent.name} running={s.running} jump={humanJump}
+        onRewrite={sessionId && s.config?.execMode === 'host' && !s.config?.planMode && (s.config.agentSlug || s.config.soloAgentSlug || useApp.getState().defaultAgentSlug) === agent.slug
+          ? () => { void useApp.getState().send(t('human.rewrite.agentPrompt'), [], undefined, undefined, undefined, sessionId) } : null} />}
       {section === 'growth' && <>
         {/* 两层各一张分段卡:标题 + 一句话说清它是什么。待复盘候选的角标跟着「进化」走。 */}
         <div className="profile-segment" role="group" aria-label={t('agentProfile.growth')}>{(['memory', 'evolution'] as const).map((g) =>

@@ -1,7 +1,7 @@
 import type { ToolProvider } from '../toolRegistry.js';
 import { currentDisplayAgentSlug } from '../../seams/runContext.js';
 import { DEFAULT_AGENT_SLUG } from '../../core/tanguHome.js';
-import { HUMAN_WRITING, readHuman, writeHuman, type HumanScope } from '../../agents/humanStore.js';
+import { HUMAN_WRITING, readHuman, removedLines, writeHuman, type HumanScope } from '../../agents/humanStore.js';
 import { humanProjectScope } from '../../services/humanContext.js';
 import { effectiveRemote } from '../../services/remoteOrigin.js';
 import { scheduleAgentFilesSync } from '../../services/agentFileSync.js';
@@ -11,6 +11,11 @@ import { deps } from '../../seams/runtime.js';
 // 交给它的只有前 12 位;回来的恰好是这 12 位十六进制、又对得上当前版本时才换成完整版本,别的写法(含完整版本号)原样交下去逐字比对。
 // 落盘那道比对(writeHuman 的 expectedVersion)照旧用完整版本。
 const SHORT_VERSION = 12;
+
+// 改写时被拿掉的行原样交回(10-10 实测 gpt-6-luna:请它「整理一下」,它把自己的承诺从说明里删了却不记,6 轮里 4 轮
+// 那条只存在说明里的用户要求两边都没有了;把「先记下再拿掉」说进请求里也只有 3 轮里 1 轮记全 —— 它记的是和眼前的事有关的几条)。
+// 放在回执里而不是工具说明里:这是它刚做完、马上要接着处理的地方,也不让系统提示再变长。交回去的是原话,它不用自己回想删了什么。
+const REMOVED_NEXT = 'These lines are no longer in the note. A line that says what you will do, or how the human wants you to work, may be the only record of something they asked of you: save every such line with remember now, before you reply, whether or not it relates to the current task. A line whose point is still in the note in other words needs nothing. Then tell the human which you moved to memory and which you dropped.';
 
 export const manageHumanProvider: ToolProvider = {
   id: 'builtin:manage_human', tools: () => [{
@@ -46,8 +51,10 @@ export const manageHumanProvider: ToolProvider = {
         const result = await writeHuman(scope, { content: args.content, summary: args.summary, evidence: args.evidence, expectedVersion }, 'agent');
         // 不带 slug 是空操作;带的是归属(显示)agent —— HUMAN.md 跟着它的定义文件一起同步,不进记忆桶。
         if (scope.kind === 'agent' && result.change) scheduleAgentFilesSync(ctx.userId, scope.slug);
+        const removed = result.change ? removedLines(current.content, result.document.content) : [];
         return JSON.stringify({ kind: 'human_update', change: result.change, version: result.document.version.slice(0, SHORT_VERSION),
-          message: result.change ? 'Applied immediately. The next run will read this version. The user can edit or undo from the update card.' : 'No change; the content is already current.' });
+          message: result.change ? 'Applied immediately. The next run will read this version. The user can edit or undo from the update card.' : 'No change; the content is already current.',
+          ...(removed.length ? { removed, next: REMOVED_NEXT } : {}) });
       } catch (e) { return `Error: ${e instanceof Error ? e.message : String(e)}`; }
     },
   }],

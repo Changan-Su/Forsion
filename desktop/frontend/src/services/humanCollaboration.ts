@@ -6,11 +6,17 @@ export type HumanTarget = { kind: 'agent'; slug: string } | { kind: 'project'; s
 export interface HumanChange {
   id: string; scope: HumanScope; summary: string; evidence: string; at: string; actor: 'agent' | 'user';
   beforeVersion: string; afterVersion: string; undoOf?: string
+  /** 引擎给 Agent 的写入盖的章:按哪一版写法写的。没有 = 修复之前的引擎写的(那时它会把自己的承诺也写进来)。 */
+  rules?: number
 }
 export interface HumanDocument {
   scope: HumanScope; path: string; content: string; version: string; exists: boolean; updatedAt: string | null;
   history: Array<HumanChange & { canUndo: boolean }>; maxLength: number
 }
+/** 「这份是旧版本写的」:只在更新记录证明得了的时候才说 —— 记录里全是 Agent 的写入、每一条都没有写法版本的章、用户没有手改过(撤销也算手改)。
+ *  没有记录的(别的设备同步过来的、直接放在磁盘上的)不判:更新记录只存在本机,认不准的不提示。 */
+export const humanLegacy = (doc: Pick<HumanDocument, 'content' | 'history'>): boolean =>
+  !!doc.content.trim() && doc.history.length > 0 && doc.history.every(h => h.actor === 'agent' && !h.rules)
 export interface HumanJump { at: number; edit?: boolean; changeId?: string }
 export const HUMAN_CHANGED_EVENT = 'forsion:human-changed'
 export const humanTargetKey = (target: HumanTarget) => target.kind === 'agent' ? `agent:${target.slug}` : `project:${target.sessionId}`
