@@ -8,14 +8,16 @@
  * 请求自己的新令牌从没用上。
  *
  * 现在:handler 期(应答还没发完、且不在 run 上下文里)只用请求自己的令牌;loop 期照旧先用绑定的(它在续期);
- * 建 run 被拒 / 失败不留绑定。每条用例的负对照(改 httpStateStore.ts 后实跑,共 6 种改法):
+ * 建 run 被拒 / 失败不留绑定。每条用例的负对照(改 httpStateStore.ts 后实跑,共 7 种改法):
  *   - tokenForSession 改回「先绑定的」                    → ①②⑥ 红(⑥:别人的建 run 带着会话主人的令牌出去,被收下了)
  *   - 改成任何时候都先用请求的                            → ③④⑤ 红
  *   - 去掉「应答还没发完」这个条件(只看 run 上下文)      → ④ 红
  *   - 去掉「不在 run 上下文里」这个条件(只看应答)        → ⑤ 红
  *   - createRun 改回先绑再发                              → ⑥ 红
  *   - run 终态时把会话上的绑定一并删掉(没有别的 run 在飞时) → ⑦ 红
- * 续期在这里用 refreshRunToken 直接换(定时器到点后调的就是它),不等真的定时器。
+ *   - 交还会话绑定时不跳过续期已断的 run                    → ⑧ 红
+ * 续期在这里用 refreshRunToken 直接换、续期失败用 markRunTokenStale 直接标(定时器到点后调的就是这两个),不等真的定时器;
+ * 定时器里「没续成就调 markRunTokenStale」那一行因此只靠读代码,没有用例钉着。
  */
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import express from 'express';
@@ -31,7 +33,7 @@ import { enterRunContext } from '../seams/runContext.js';
 import type { StateStore } from '../seams/stateStore.js';
 import { createTanguProfile } from '../profiles/index.js';
 import { createHttpWorkerHost } from '../adapters/httpWorkerHost.js';
-import { createHttpStateStore, refreshRunToken } from '../services/stateStore/httpStateStore.js';
+import { createHttpStateStore, markRunTokenStale, refreshRunToken } from '../services/stateStore/httpStateStore.js';
 import { enqueueRun } from '../services/agentLoop.js';
 import runsRouter from './runs.js';
 
@@ -233,5 +235,18 @@ describe('云端 worker 按会话取令牌', () => {
     seen.length = 0;
     await state.getAgentConfig('s-tail');
     expect(tokens()).toEqual(['config:u1.a']);
+  });
+
+  it('⑧ 续期已经断了的 run 不接手会话绑定:排队的消息被取消时,交还给还在正常续期的那条', async () => {
+    const first = await send('u1.a', 's-stale'); // 在跑的那条
+    const second = await send('u1.b', 's-stale'); // 排队的第二条
+    markRunTokenStale(second.body.runId); // 它的续期请求失败了(不重试):令牌到期即废
+    const third = await send('u1.c', 's-stale'); // 第三条排队后被取消
+    await state.updateRunStatus(third.body.runId, 'aborted');
+    refreshRunToken(first.body.runId, 'u1.a2'); // 在跑的那条照常续期
+    seen.length = 0;
+
+    await state.getAgentConfig('s-stale');
+    expect(tokens()).toEqual(['config:u1.a2']);
   });
 });

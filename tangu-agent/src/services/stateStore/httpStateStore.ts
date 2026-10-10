@@ -28,7 +28,8 @@ import type {
 import type { SessionHit, SessionTranscript } from '../sessionSearch.js';
 
 // ── per-dispatch token 登记表(runId/sessionId → token) + 请求期作用域 ──
-interface TokenEntry { token: string; sessionId: string; }
+/** stale = 续期链断了(续期请求失败不重试 / 链到顶):这枚到期即废,不会再换新。 */
+interface TokenEntry { token: string; sessionId: string; stale?: boolean; }
 /** 一次入站请求的作用域。handler = 应答还没发完;由这次请求起的 loop / 定时器沿用同一个对象,应答结束后读到的就是 false。 */
 interface RequestScope { token: string | undefined; handler: boolean; }
 const byRun = new Map<string, TokenEntry>();
@@ -57,10 +58,16 @@ export function refreshRunToken(runId: string, token: string): void {
   const e = byRun.get(runId);
   if (e) e.token = token;
 }
+/** token 续期没成(失败不重试 / 链到顶):这个 run 的令牌到期即废,别的 run 结束时不把会话绑定交给它(见 dropRunToken)。 */
+export function markRunTokenStale(runId: string): void {
+  const e = byRun.get(runId);
+  if (e) e.stale = true;
+}
 /**
  * run 终态:撤掉它按 run 登记的那份。会话上的绑定不删 —— 这个 run 收尾时还要按会话写(落助手消息、补打断标记)。
  * 例外:会话上指着的正是它(从此不再续期),而同会话还有别的 run 在飞(排在后面的那条被取消了,前面那条还在跑)→
- * 交还给还在续期的那个,否则前面那条跑过这枚令牌的有效期后,按会话的读写全是 401(钉在 routes/runs.queuedAbortToken.worker.test.ts)。
+ * 交还给还在续期的那个(续期已经断了的不算),否则前面那条跑过这枚令牌的有效期后,按会话的读写全是 401
+ * (钉在 routes/runs.queuedAbortToken.worker.test.ts 与 runs.sessionToken.worker.test.ts ⑧)。
  */
 export function dropRunToken(runId: string): void {
   const e = byRun.get(runId);
@@ -68,7 +75,7 @@ export function dropRunToken(runId: string): void {
   if (!e || bySession.get(e.sessionId) !== e) return;
   // ponytail: 扫一遍在飞的 run(同一 worker 上是个位数到几十);量大了再按会话记一张在飞表。取最后建的那个。
   let live: TokenEntry | undefined;
-  for (const other of byRun.values()) if (other.sessionId === e.sessionId) live = other;
+  for (const other of byRun.values()) if (other.sessionId === e.sessionId && !other.stale) live = other;
   if (live) bySession.set(e.sessionId, live);
 }
 function tokenForRun(runId?: string): string | undefined {
@@ -236,10 +243,12 @@ export function createHttpStateStore(cfg: HttpStateStoreConfig): StateStore {
         if (r?.token) {
           refreshRunToken(runId, r.token);
           scheduleRefresh(runId, sessionId); // 链式续期
+          return;
         }
       } catch (err: any) {
         console.warn(`[tangu-worker] token refresh failed run=${runId}:`, err?.message || err);
       }
+      markRunTokenStale(runId); // 续期链到此为止
     }, delay);
     if (typeof timer.unref === 'function') timer.unref();
     refreshTimers.set(runId, timer);
