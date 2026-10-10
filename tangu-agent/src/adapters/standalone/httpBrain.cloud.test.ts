@@ -79,6 +79,17 @@ describe('brain.cloud.request', () => {
     expect(seen).toEqual([])
   })
 
+  it('不跟重定向:合法路径回 307 指向 /api/auth/refresh → 3xx 原样交回,第二个请求不发', async () => {
+    const base = await start()
+    respond = (req, res) => {
+      if (req.url === '/api/token-quota/my') { res.writeHead(307, { Location: '/api/auth/refresh' }); res.end(); return }
+      res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ token: 'tok-leaked' }))
+    }
+    const r = await createHttpBrain({ cloudUrl: base, token: 't' }).cloud!.request({ path: '/api/token-quota/my', method: 'POST', body: {} })
+    expect(r).toEqual({ status: 307, json: null })
+    expect(seen.map((s) => s.url)).toEqual(['/api/token-quota/my'])
+  })
+
   it('没有云端凭据(桌面没登录)→ 不发请求,回 401 + not_signed_in;没配云端地址 → no_cloud_url', async () => {
     const base = await start()
     for (const token of ['', '   ', () => '']) {

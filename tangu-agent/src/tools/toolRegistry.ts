@@ -418,11 +418,12 @@ export function listLoadoutTools(): { name: string; description: string }[] {
  * 工具自声明的审批档（capabilities.approval）。approvals.toolNeedsApproval 据此把插件工具并入
  * 「跑命令」档——核心不硬编码插件工具名，插件在 capabilities 里声明 `approval:'command'` 即可。
  * 与 resolveTools 同序遍历全局 provider，同名后注册者覆盖（取最后一个匹配）。
- * gateToolCall 每次调用都读一次(判 'always':那一档不看档位也不看执行形态)。
+ * gateToolCall 每次调用都读一次(判 'always':那一档不看档位也不看执行形态),并传本 run 的 profile ——
+ * 应用自带工具(profile.toolLoadout.providers)执行侧找得到,声明不一起看的话它的 'always' 等于没写(Codex 10-10 #1)。
  */
-export function declaredApproval(name: string): 'command' | 'always' | undefined {
+export function declaredApproval(name: string, profile?: Pick<AppProfile, 'toolLoadout'>): 'command' | 'always' | undefined {
   let found: 'command' | 'always' | undefined;
-  for (const p of providers) {
+  for (const p of [...providers, ...(profile?.toolLoadout?.providers ?? [])]) {
     for (const t of providerTools(p)) {
       if (t.name === name && t.capabilities?.approval) found = t.capabilities.approval;
     }

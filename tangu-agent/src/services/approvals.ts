@@ -1104,7 +1104,7 @@ export async function gateToolCall(
   // 每次都问(capabilities.approval:'always'):花掉用户账号里的东西这类动作。不看执行形态(云端 / sandbox 会话照样过闸 ——
   // 网页与手机的 run 全是非 host)、不看档位(云端的空档、完全通行都问),下面的 custom allow / hook allow / 总允许一律不放行。
   // 必须是发起对话的人当场点头:没人能答的 run(自动化 / Muse 排队与代批)和远程污点 run(按 D1 远端能批自己的卡)直接拒。
-  const alwaysAsk = declaredApproval(name) === 'always';
+  const alwaysAsk = declaredApproval(name, ctx.profile) === 'always';
   if (alwaysAsk && (ctx.unattended || ctx.approvalDeferral)) {
     return { action: 'reject', rejectReason: 'This action needs the user to confirm it in the conversation, so it cannot run unattended.' };
   }
@@ -1149,7 +1149,7 @@ export async function gateToolCall(
 
   if (allowRule && !protectedAsk && !alwaysAsk && !(cap && remote && (await capWouldAsk(call, cap, ctx, remote))) && (!escalate || allowRuleCoversWrites(allowRule, call, ctx.cwd))) return { action: 'approve' };
   // known-safe 只读 bash:免审批(碰凭据文件的不算 known-safe,见 isKnownSafeBash)。
-  if (!forceAsk && name === 'run_bash' && isKnownSafeBash(bashCommandOf(call), ctx.cwd)) {
+  if (!forceAsk && !alwaysAsk && name === 'run_bash' && isKnownSafeBash(bashCommandOf(call), ctx.cwd)) {
     // known-safe git 读的是仓库里可被改写的配置:没人看过卡,就在写拒绝 profile 里跑(G5 方案 B;其余 known-safe 程序不读仓库配置,不包)。
     return /^git( |$)/.test(bashCommandOf(call).trim()) ? { action: 'approve', writeProtect: true } : { action: 'approve' };
   }

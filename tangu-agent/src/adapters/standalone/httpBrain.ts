@@ -618,6 +618,8 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
           method,
           headers: authHeaders(),
           ...(req.body === undefined || method === 'GET' ? {} : { body: JSON.stringify(req.body) }),
+          // 不跟重定向:同源的 3xx 会带着身份落到路径闸没看过的地址(比如 /api/auth/refresh),3xx 原样交回(Codex 10-10 #4)。
+          redirect: 'manual',
           signal: req.signal ? AbortSignal.any([req.signal, timeout]) : timeout,
         });
         return { status: r.status, json: await r.json().catch(() => null) };

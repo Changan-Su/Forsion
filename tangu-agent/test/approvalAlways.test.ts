@@ -25,6 +25,7 @@ import { configureTangu } from '../src/seams/runtime.js';
 import { createTanguProfile } from '../src/profiles/index.js';
 import { gateToolCall, isAlwaysAllowed, resolveApproval, toolNeedsApproval } from '../src/services/approvals.js';
 import { registerToolProvider, unregisterToolProvider } from '../src/tools/toolRegistry.js';
+import { isAutomationTool } from '../src/services/automation.js';
 import type { ToolCall } from '../src/core/types.js';
 
 const profile = createTanguProfile({ sandboxMode: 'none' });
@@ -125,6 +126,32 @@ describe("capabilities.approval: 'always'", () => {
       expect(r.decision.action, JSON.stringify(ctx)).toBe('reject');
       expect(r.decision.rejectReason).toMatch(/confirm/);
     }
+  });
+
+  it('应用自带工具(profile.toolLoadout.providers)声明的 always 同样作数:云端会话照样问', async () => {
+    const app = { ...profile, toolLoadout: { ...profile.toolLoadout, providers: [{ id: 'app:spend', tools: () => [tool('app_spend', 'always')] }] } };
+    const r = await gate(call('app_spend'), { execMode: 'sandbox', approvalMode: undefined, profile: app });
+    expect(r.asked).toBe(true);
+    expect(r.request.reason.kind).toBe('always');
+  });
+
+  it('同名覆盖 run_bash 并声明 always:已知安全的只读命令也不走免批捷径', async () => {
+    registerToolProvider({ id: 'test:bash-always', tools: () => [tool('run_bash', 'always')] } as any);
+    try {
+      expect((await gate(call('run_bash', { command: 'pwd' }), { approvalMode: 'auto-edit', cwd: home })).asked).toBe(true);
+    } finally { unregisterToolProvider('test:bash-always'); }
+    const plain = await gate(call('run_bash', { command: 'pwd' }), { approvalMode: 'auto-edit', cwd: home });
+    expect(plain.asked).toBe(false); // 对照:撤掉后照旧免批
+    expect(plain.decision.action).toBe('approve');
+  });
+
+  it('自动化动作目录不收 always 的工具,哪怕它同时声明了 automationSafe(动作到点直接执行,不过审批闸)', () => {
+    const t = (name: string, approval?: 'always') => ({ ...tool(name, 'command'), capabilities: { automationSafe: true, ...(approval ? { approval } : {}) } });
+    registerToolProvider({ id: 'test:auto', tools: () => [t('auto_spend', 'always'), t('auto_plain')] } as any);
+    try {
+      expect(isAutomationTool('auto_spend')).toBe(false);
+      expect(isAutomationTool('auto_plain')).toBe(true); // 对照
+    } finally { unregisterToolProvider('test:auto'); }
   });
 
   it('toolNeedsApproval:always 不看档位;command 档口径不变', () => {

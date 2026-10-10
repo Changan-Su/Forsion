@@ -2229,7 +2229,6 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         },
       };
     };
-    registerLiveRun(runId, sessionId, getRunStatus);
     const toolCtx: ToolContext = {
       // 门禁字段单源:与上面 listDeferredTools 拿到的是同一份,目录与工具面不会分叉。
       ...toolGateCtx,
@@ -2611,6 +2610,9 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     let hookVetoedCompaction = false; // PreCompact hook 否决过 → 不再按估算拦请求,交给 provider 裁决
     let overflowRecovered = false; // 上游报「输入超窗口」后压缩重试:每 run 一次
     let toolsOverhead = 0; // 本轮工具定义头的粗估 token(只在没有实测基准时计入,见 ContextUsageTracker.estimate)
+    // 登记给 GET /agent/sessions/:id/status:必须在 contextUsage / compactAt / toolsOverhead 都初始化之后 —— getRunStatus 读它们,
+    // 登记早了,run 还在等记忆 / 计费预检的那段时间里来一次请求就是 ReferenceError(Codex 10-10 #6)。
+    registerLiveRun(runId, sessionId, getRunStatus);
     /**
      * 一次 LLM 摘要压缩(threshold=估算越线 / overflow=上游拒收后)。PreCompact hook 只在真要摘要时问一次;
      * 摘要失败退机械折叠(compactContext,如实标 fallback);成功即按边界落检查点(已落库部分立刻落,

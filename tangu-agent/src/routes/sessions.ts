@@ -517,8 +517,8 @@ router.get('/agent/sessions/:id/usage', authMiddleware, async (req: AuthRequest,
 // (services/runStatus.ts:数只活在主循环里,run 中途库里读不到)。没有 run 在跑 → { active:false },累计数照旧看 /usage。
 router.get('/agent/sessions/:id/status', authMiddleware, async (req: AuthRequest, res) => {
   try {
-    const s = await getOwnSession(req.params.id, req.user!.userId);
-    if (!s) return res.status(404).json({ detail: 'Session not found' });
+    // 归属经状态接缝查,不直接读库:云端的 run 跑在执行节点上(网关按会话把这条请求转过去),那里没有本地库。
+    if ((await deps().state.getSessionOwner(req.params.id)) !== req.user!.userId) return res.status(404).json({ detail: 'Session not found' });
     const run = liveRunStatus(req.params.id);
     res.json(run ? { active: true, run: { ...run, elapsedMs: Math.max(0, Date.now() - run.startedAt) } } : { active: false });
   } catch (e: any) {

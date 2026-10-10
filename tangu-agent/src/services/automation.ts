@@ -36,7 +36,7 @@ import { expandTemplate } from './automationTemplate.js';
 import { applyDbAction, emptyTouch, mergeTouch, type DbTouch } from './automationDbAction.js';
 import { loadSchedule, entriesOf, dueEntries, markEntryFired, type ScheduleEntry } from './agentSchedule.js';
 import { executeTool } from '../tools/registry.js';
-import { declaredAutomationSafe } from '../tools/toolRegistry.js';
+import { declaredApproval, declaredAutomationSafe } from '../tools/toolRegistry.js';
 import { sendInboxMessage } from '../tools/builtin/inboxSend.js';
 import { backgroundClientTag } from '../core/version.js';
 import type { ToolContext } from '../tools/toolTypes.js';
@@ -176,6 +176,8 @@ const AUTOMATION_TOOL_ALLOWLIST = new Set(['run_bash', 'write_file', 'web_fetch'
 
 /** 工具是否可作 tool_call 动作(动作目录端点与执行前校验共用)。 */
 export function isAutomationTool(name: string): boolean {
+  // 「每次都问用户本人」的工具进不了动作链:动作到点直接执行、不过审批闸,同时声明 automationSafe 也不作数(Codex 10-10 #3)。
+  if (declaredApproval(name) === 'always') return false;
   return AUTOMATION_TOOL_ALLOWLIST.has(name) || declaredAutomationSafe(name);
 }
 

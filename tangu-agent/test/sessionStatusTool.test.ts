@@ -123,6 +123,10 @@ let home: string | null = null;
 let calls = 0;
 type Script = (call: number) => { content: string; toolCalls: any[]; finishReason: string };
 let script: Script = () => ({ content: 'ok', toolCalls: [], finishReason: 'stop' });
+// run 还在做起步的等待(查用户 / 计费预检)时就来读状态:不许抛(登记早于它要读的变量 = ReferenceError,Codex 10-10 #6)
+let earlyProbes = 0;
+let earlyThrow: unknown;
+const probeEarly = (): void => { earlyProbes++; try { liveRunStatus('L'); } catch (e) { earlyThrow = e; } };
 
 async function setupReal(): Promise<void> {
   const { host, db } = createSqliteHost({ dataDir: 'memory', localToken: 'x', userId: 'u1' });
@@ -137,11 +141,11 @@ async function setupReal(): Promise<void> {
         return { content: s.content, reasoning: '', toolCalls: s.toolCalls, usage: { prompt_tokens: 10_000 + calls * 1_000, completion_tokens: 50, cached_tokens: 4_000 }, finishReason: s.finishReason };
       },
     },
-    users: { getUserById: async () => ({ id: 'u1', username: 'u' }) },
+    users: { getUserById: async () => { probeEarly(); return { id: 'u1', username: 'u' }; } },
     memory: { getMemory: async () => ({ content: '' }) },
     models: { hasDirectModel: () => false, listModelsForProject: async () => ({ models: [{ id: 'm1', name: 'M1', provider: 'p' }], defaultModelId: 'm1' }) },
   };
-  const billing: any = { canConsumeTokenPoints: async () => ({ ok: true }), consumeTokenPoints: async () => ({ ok: true }), calculateCost: async () => 0, logApiUsage: async () => {} };
+  const billing: any = { canConsumeTokenPoints: async () => { probeEarly(); return { ok: true }; }, consumeTokenPoints: async () => ({ ok: true }), calculateCost: async () => 0, logApiUsage: async () => {} };
   configureTangu({ host, brain, billing, profile });
   await runMigration();
 }
@@ -196,5 +200,7 @@ describe('真 loop', () => {
     expect(text).toMatch(/This conversation: 1 earlier run used 5,000 tokens; it started 2h 0m ago\./);
     expect(seenLive).toBe(true);
     expect(liveRunStatus('L')).toBeUndefined();
+    expect(earlyProbes).toBeGreaterThan(0);
+    expect(earlyThrow).toBeUndefined();
   });
 });
