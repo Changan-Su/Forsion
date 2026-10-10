@@ -481,7 +481,7 @@ const test = async (name, fn) => {
     assert.deepEqual([...new Set(progress.map((p) => p.phase))], ['resolve', 'download', 'install'])
     const [p] = await host(fs).listPlugins()
     assert.deepEqual([p.id, p.version, p.code], ['hello-mobile', '1.2.0', 'ctx'])
-    assert.deepEqual((await mk.marketInstalled())['amadeus-plugin'], [{ slug: 'hello-slug', version: '1.2.0' }])
+    assert.deepEqual((await mk.marketInstalled())['amadeus-plugin'], [{ slug: 'hello-slug', version: '1.2.0', id: 'hello-mobile' }]) // id = 装载 id(目录名可 ≠ id):商店「打开设置」按它直达
   })
 
   await test('覆盖安装 / 更新:旧 → 备份、暂存 → 正式、删备份;旧版多出来的文件不残留,暂存 / 备份目录不留', async () => {
@@ -521,7 +521,7 @@ const test = async (name, fn) => {
     await mk.marketInstall('v1')
     put(fs, 'plugins/.staging-keep/main.js', 'v2-half') // 被杀时暂存目录里只有半截(manifest 还没写)
     put(fs, 'plugins/.staging-keep/lib/a.js', 'a2')
-    assert.deepEqual((await mk.marketInstalled())['amadeus-plugin'], [{ slug: 'keep', version: '1.0.0' }])
+    assert.deepEqual((await mk.marketInstalled())['amadeus-plugin'], [{ slug: 'keep', version: '1.0.0', id: 'keep' }])
     assert.deepEqual(await loaded(fs), [['keep', '1.0.0', 'v1']])
     assert.deepEqual(strays(fs), [])
   })
@@ -869,7 +869,7 @@ const test = async (name, fn) => {
     put(fs, 'plugins/x/manifest.json', manifest({ id: 'x', version: 'v3.1.0' })); put(fs, 'plugins/x/main.js', '')
     const inst = await mk.marketInstalled()
     assert.deepEqual(Object.keys(inst).sort(), ['agent', 'amadeus-plugin', 'plugin', 'skill', 'space', 'theme'])
-    assert.deepEqual(inst['amadeus-plugin'], [{ slug: 'x', version: '3.1.0' }])
+    assert.deepEqual(inst['amadeus-plugin'], [{ slug: 'x', version: '3.1.0', id: 'x' }])
     await assert.rejects(mk.marketUninstall('skill', 'x'), /mobilemarket\.invalidTarget/)
     await assert.rejects(mk.marketUninstall('amadeus-plugin', '../x'), /mobilemarket\.invalidTarget/)
     await assert.rejects(mk.marketUninstall('amadeus-plugin', 'y'), /mobilemarket\.notInstalled/)

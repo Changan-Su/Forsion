@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import JSZip from 'jszip'
 import { planZipFiles, planZipEntries, ZipPlanError } from '../shared/marketPackage'
-import { isSafeSlug, isJunkPath, computeStripPrefix, safeEntryPath, extractZipToDir, readInstalledVersion, readUserPluginDirs, detectMarketType, marketItemDir, toArchiveUrl, downloadCandidates, downloadZip, DownloadFailed, type DownloadProgress } from './marketInstall'
+import { isSafeSlug, isJunkPath, computeStripPrefix, safeEntryPath, extractZipToDir, readInstalledVersion, readInstalledPluginId, readUserPluginDirs, detectMarketType, marketItemDir, toArchiveUrl, downloadCandidates, downloadZip, DownloadFailed, type DownloadProgress } from './marketInstall'
 
 async function zipOf(names: string[]): Promise<Buffer> {
   const z = new JSZip()
@@ -101,6 +101,25 @@ describe('readInstalledVersion(theme/amadeus-plugin)', () => {
     writeFileSync(join(dir, 'manifest.json'), JSON.stringify({ id: 'hello', version: '0.3.1' }))
     expect(await readInstalledVersion('amadeus-plugin', dir)).toBe('0.3.1')
     expect(await readInstalledVersion('amadeus-plugin', join(dir, 'nope'))).toBeNull()
+  })
+})
+
+describe('readInstalledPluginId(目录名可 ≠ 装载 id)', () => {
+  const dirWith = (name: string, file: string, manifest: unknown): string => {
+    const dir = join(mkdtempSync(join(tmpdir(), 'mk-id-')), name)
+    mkdirSync(dir)
+    writeFileSync(join(dir, file), JSON.stringify(manifest))
+    return dir
+  }
+  it('Forsion 插件:manifest id 优先,不合法回落目录名', async () => {
+    expect(await readInstalledPluginId('amadeus-plugin', dirWith('my-dir', 'manifest.json', { id: 'real-id' }))).toBe('real-id')
+    expect(await readInstalledPluginId('amadeus-plugin', dirWith('my-dir', 'manifest.json', { id: 'com.demo.Plugin' }))).toBe('my-dir')
+  })
+  it('引擎插件:只认 kebab id;非插件类型 / 没有 manifest → null', async () => {
+    expect(await readInstalledPluginId('plugin', dirWith('my-dir', 'tangu-plugin.json', { id: 'real-id' }))).toBe('real-id')
+    expect(await readInstalledPluginId('plugin', dirWith('my-dir', 'tangu-plugin.json', { id: 'Bad Id' }))).toBeNull()
+    expect(await readInstalledPluginId('theme', dirWith('kami', 'theme.json', { id: 'kami' }))).toBeNull()
+    expect(await readInstalledPluginId('amadeus-plugin', join(tmpdir(), 'mk-id-nope'))).toBeNull()
   })
 })
 

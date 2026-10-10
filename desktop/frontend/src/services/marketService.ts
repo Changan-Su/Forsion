@@ -43,6 +43,7 @@ export const installMarket = (id: string): Promise<{ ok: boolean; path: string; 
 export const onInstallProgress = (cb: (p: MarketInstallProgress) => void): (() => void) =>
   window.tangu?.onMarketInstallProgress?.(cb) ?? (() => {})
 
-export type InstalledItem = { slug: string; version: string | null }
+/** `id` = 插件的装载 id(目录名 slug 可以与它不同);只有插件两类给,老宿主不给。 */
+export type InstalledItem = { slug: string; version: string | null; id?: string }
 export const listInstalled = (): Promise<Record<string, InstalledItem[]>> =>
   window.tangu?.marketInstalled?.() ?? Promise.resolve({})
