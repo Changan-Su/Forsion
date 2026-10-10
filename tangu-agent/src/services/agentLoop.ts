@@ -3358,6 +3358,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       thinkingLevel,
       modelId,
       contextWindow: ctxWindowTokens,
+      agentId: activeAgentSlug,
+      verbosity: ps.verbosity,
     };
     // 输入建议(services/promptSuggestion.ts):快照要在 done 发出**之前**就位 —— 客户端收到 done 立刻来拉,晚一步就是空。
     // 只存引用、不发请求;团队成员的会话没有人在里面打字,不存。

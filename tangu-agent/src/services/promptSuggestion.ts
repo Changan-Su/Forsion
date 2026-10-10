@@ -4,7 +4,7 @@
  *
  * 成本只有「多读一次缓存」的前提是**请求前缀与主循环逐字节相同**,所以走 Historian 分身判官那条管线
  * (localHistorian.ts forkJudge),不走旁聊那条(aside.ts 把转写塞进系统提示,与主循环零共享):
- *   run 收尾时的 workingMessages 快照 + 收尾正文 + 一条尾部指令,同工具面、同思考档、cacheKey = sessionId。
+ *   run 收尾时的 workingMessages 快照 + 收尾正文 + 一条尾部指令,同工具面、同思考档、同一个缓存路由键(cacheKey + agentId)。
  *
  * 拉而不推:run 事件流在 done 就关了,收尾后没有通道可推;把 done 往后拖一次模型往返又是肉眼可见的回归。
  * 所以引擎只在收尾时**存一份快照的引用**(不发请求,客户端没开就是零 token),客户端收到 done 后
@@ -35,14 +35,18 @@ const SUGGEST_TIMEOUT_MS = 20_000;
 
 export const SUGGEST_INSTRUCTION = [
   '[SUGGESTION MODE: this message comes from the app, not from the user. Do not continue the conversation.]',
-  'Predict the single message the user is most likely to send next. The app shows it as greyed-out text in the empty input box, and the user can press Tab to use it.',
+  'Predict the single message the user is most likely to send next. The app shows it as greyed-out text in the empty input box, and the user can press Tab to use it. The test: would the user think "I was just about to type that"?',
+  '',
+  'What to predict:',
+  '- You just asked them a question: their most plausible answer.',
+  '- They laid out several steps and only some are done: the next step, e.g. "now do step 2".',
+  '- You offered a next action, or the work has an obvious follow-up: that action, e.g. "run the tests", "commit it".',
+  '- None of these apply and the next message is not obvious from what the user said: output exactly NONE',
   '',
   'Output rules:',
   '- Output only the predicted message on one line. No quotes, no label, no explanation.',
   "- Write it in the user's voice and language, the way they have been writing in this conversation. Keep it short: about 2 to 12 words.",
-  '- Good predictions: the answer to a question you just asked them (pick the option they most plausibly want), the obvious next step you offered or that their plan implies, or the follow-up they have been building toward.',
   '- Never predict praise, thanks or filler ("looks good", "thanks", "ok"). Never write something only the assistant would say. Never start a new topic.',
-  '- If you cannot predict it with reasonable confidence, output exactly: NONE',
   '- Do not call tools. Any tool call is discarded.',
 ].join('\n');
 
@@ -132,7 +136,11 @@ export async function suggestNextPrompt(opts: {
       stream: true,
       maxTokens,
       signal,
-      cacheKey: opts.sessionId, // 与主循环同键:同前缀必须同键
+      // 缓存路由键要和主循环算出同一个:它缺省按「agent + 模型」取,只给会话键会落到另一个桶,
+      // 前缀再一致也读不到缓存(首跑实测 3 次里 2 次缓存 0)。所以 cacheKey 与 agentId 两个都照主循环给。
+      cacheKey: opts.sessionId,
+      agentId: seed.agentId,
+      ...(seed.verbosity ? { verbosity: seed.verbosity } : {}),
     } as any);
     signal.throwIfAborted();
     const res = await llm.streamProviderCompletion({ apiKey, baseUrl, payload, provider: (model as any)?.provider, signal });

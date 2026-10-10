@@ -294,6 +294,10 @@ export interface HistorianForkSeed {
   modelId: string;
   /** 本 run 实际用的窗口(Ultra 不封顶):超窗护栏与主 loop 同一分母。缺省按模型现算(封顶 272k)。 */
   contextWindow?: number;
+  /** 主循环构建请求时带的 agent 身份与正文详略。缓存路由键缺省按「agent + 模型」取(openaiCompat resolveCacheKey),
+   *  分叉请求不带同一个 agentId 就落到另一个桶,前缀再一致也读不到主循环写下的缓存(10-10 输入建议首跑实测:3 次里 2 次缓存 0)。 */
+  agentId?: string;
+  verbosity?: 'low' | 'medium' | 'high';
 }
 
 /** 一次 fork 判官补全。超窗/失败/空产出/截断 → 返回 ''(调用方回落 independent 判断)。 */

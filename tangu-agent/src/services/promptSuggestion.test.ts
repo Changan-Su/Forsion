@@ -1,6 +1,6 @@
 /**
  * 输入建议(promptSuggestion.ts)。这功能的成本靠「请求前缀与主循环相同 → 命中前缀缓存」,
- * 能机械守住的就是这里:发出去的请求 = 快照 + 一条尾部指令,同一份工具头、同思考档、cacheKey = sessionId。
+ * 能机械守住的就是这里:发出去的请求 = 快照 + 一条尾部指令,同一份工具头、同思考档、同一个缓存路由键(cacheKey + agentId)。
  * 另外钉:快照取走即删 / 过期 / run 对不上 / 云端不存;模型原话不合规就是空串。
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -29,7 +29,7 @@ function configure(hostExec = true, canConsume = true): void {
 }
 
 const seedOf = (messages: any[], over: Record<string, unknown> = {}): any => ({
-  getMessages: () => messages.map((m) => ({ ...m })), tools: TOOLS, thinkingLevel: 'high', modelId: 'm1', contextWindow: 100_000, ...over,
+  getMessages: () => messages.map((m) => ({ ...m })), tools: TOOLS, thinkingLevel: 'high', modelId: 'm1', contextWindow: 100_000, agentId: 'tangu', verbosity: 'low', ...over,
 });
 const CHAT = [
   { role: 'system', content: 'sys' },
@@ -52,7 +52,7 @@ describe('suggestNextPrompt', () => {
     expect(payloads).toHaveLength(0);
   });
 
-  it('请求 = 快照 + 尾部指令,工具头 / 思考档 / cacheKey 与主循环对齐', async () => {
+  it('请求 = 快照 + 尾部指令,工具头 / 思考档 / 缓存路由键与主循环对齐', async () => {
     stashSuggestionSeed('S', 'R1', seedOf(CHAT));
     const out = await ask();
     expect(out).toEqual({ suggestion: '跑吧', usage: { prompt: 900, cached: 850, completion: 4 } });
@@ -62,6 +62,8 @@ describe('suggestNextPrompt', () => {
     expect(p.tools).toBe(TOOLS); // 同一份引用
     expect(p.thinkingLevel).toBe('high');
     expect(p.cacheKey).toBe('S');
+    expect(p.agentId).toBe('tangu'); // 路由键缺省按 agent + 模型取:少了它就落到另一个缓存桶
+    expect(p.verbosity).toBe('low');
   });
 
   it('取走即删:同一轮再问拿空,不再调模型', async () => {
