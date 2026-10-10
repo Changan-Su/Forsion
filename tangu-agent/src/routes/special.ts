@@ -534,7 +534,7 @@ router.get('/agent/special/automation/actions', authMiddleware, async (_req: Aut
         name,
         description: String(t.definition?.function?.description || '').split('\n')[0].slice(0, 200),
         parameters: t.definition?.function?.parameters || { type: 'object', properties: {} },
-        dangerous: name === 'run_bash' || declaredApproval(name) === 'command',
+        dangerous: name === 'run_bash' || declaredApproval(name) !== undefined,
       });
     }
     res.json({ tools });

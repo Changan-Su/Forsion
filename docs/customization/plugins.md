@@ -75,6 +75,10 @@ The left-sidebar list (`registerListSource`) can be hierarchical, drawn like the
 
 When a plugin's bundled Space is missing from the ribbon, check the plugin's card in Settings first: a **Space hidden** badge opens to the Space's name and what it is waiting for — a view that was never registered, or a newer Forsion version. The most common cause is a plugin that loads without an error yet registers no views: an unclosed function in `main.js` swallowed the `ctx.registerView` calls after it. For a development copy, the Sandbox panel in Coding Studio lists the views the current load registered. You can also ask the agent: the built-in Forsion extension development skill ships a plugin checker (`tools/check-plugin.mjs`) that runs `main.js` the way the host does, reconciles the views each Space needs, and points to the lines of registration code that never ran. The checker executes the plugin's code, so use it only on plugins you trust.
 
+引擎插件的工具用 `capabilities.approval` 声明动手前要不要问用户。不写 = 只读,不问;`'command'` = 与跑命令同一档,「询问我批准」时每次问,用户点过「总允许」或开了完全通行就不再问;`'always'` = 每次调用都由用户本人在卡上确认 —— 完全通行、「总允许」、用户写的放行规则都跳不过,聊天会话与云端会话照样弹卡,自动化、Muse 后台和远程会话里直接被拒。花掉用户的东西、替用户对外发出内容这类动作用 `'always'`;读和写拆成两个工具名,只给写的那个声明。卡上显示的是这次调用的参数,所以一次调用只做一件事。
+
+An engine plugin tool declares whether the user is asked first with `capabilities.approval`. Leave it out for read-only tools (never asked). `'command'` puts the tool in the same class as running a command: asked every time in "ask me" mode, and no longer asked once the user picks "always allow" or turns on full access. `'always'` means the user confirms every single call on the approval card: full access, "always allow" and the user's own allow rules do not skip it, chat and cloud sessions ask as well, and automations, Muse background runs and remote sessions are refused outright. Use `'always'` for actions that spend something the user owns or send something out on their behalf. Split reading and writing into two tool names and declare it only on the writing one. The card shows the arguments of that call, so keep one call to one action.
+
 ## 下一步
 
 - [商店](market.md) — 找现成的插件

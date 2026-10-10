@@ -38,6 +38,7 @@ import { MUSE_AGENT_SLUG, AGENT_MAX_ITERATIONS_MIN, buildAgentDef, getAgent, isV
 import { validateEntryInput } from './agentSchedule.js';
 import { validateTriggerInput } from './museTriggers.js';
 import { describeAppSettingsChange, touchesWorkspaceSetting } from './appSettings.js';
+import { accountActionPreview } from '../tools/builtin/forsionAccount.js';
 
 export type ApprovalMode = 'readonly' | 'auto-edit' | 'full-auto' | 'custom';
 
@@ -110,6 +111,8 @@ function nextApprovalId(): string {
 // 写动作在 gateToolCall 入口按 remoteManagementDenied 硬拒(按 D1 远端能批自己的卡,「要审批」挡不住),list 与本机同档。
 
 export function toolNeedsApproval(name: string, rawMode: ApprovalMode | undefined, opts?: { userBrowser?: boolean }): boolean {
+  const declared = declaredApproval(name);
+  if (declared === 'always') return true; // 每次都问那一档:不看档位(空档 / 完全通行也问)
   let mode = normalizeApprovalMode(rawMode, 'toolNeedsApproval');
   if (mode === 'custom') mode = customRules().base;
   if (!mode || mode === 'full-auto') return false;
@@ -124,7 +127,7 @@ export function toolNeedsApproval(name: string, rawMode: ApprovalMode | undefine
     // 操作已登录网站,与 browser_task 同档;没接管时它们只动 Tangu 自己的后台浏览器,照旧免批。由调用方判定后传入。
     (opts?.userBrowser === true && USER_BROWSER_ACTIONS.has(name)) ||
     // 插件工具经 capabilities.approval:'command' 自声明并入本档(核心不硬编码插件工具名;如 computer-use 的 act_ui)。
-    declaredApproval(name) === 'command';
+    declared === 'command';
   if (mode === 'auto-edit') return runsCommands;
   // readonly(归一后已不可能再有别的值;即便有,也按最严的一档兜 —— 旧代码这里 return false = 未知档全放行)
   return writesFiles || runsCommands;
@@ -402,6 +405,7 @@ function rawPreview(call: ToolCall, opts: { keptActions?: unknown[] | null } = {
     const parts = [args.model ? `model → ${args.model}` : '', args.thinking_level ? `thinking → ${args.thinking_level}` : ''].filter(Boolean);
     return `session settings: ${parts.join(' · ') || '(nothing)'}${args.reason ? ` — ${String(args.reason).slice(0, 200)}` : ''}`;
   }
+  if (name === 'forsion_account_action') return accountActionPreview(args);
   if (name === 'update_app_settings') {
     const v = args.values && typeof args.values === 'object' && !Array.isArray(args.values) ? (args.values as Record<string, unknown>) : {};
     const parts = Object.entries(v).map(([k, x]) => `${String(args.section ?? '')}.${k} → ${JSON.stringify(x)}`);
@@ -859,8 +863,10 @@ function parseCallArgs(call: ToolCall): any {
  */
 export interface ApprovalReason {
   /** custom-ask=用户规则要求问 · escalate=工作区外写入升级 · mode=该档位本就需要审批 ·
-   *  protected=写凭据 / ~/.forsion(-dev) 本机配置(契约 C4 / C6:完全通行也问、总允许不作数)。老客户端不认 protected → 按无理由渲染。 */
-  kind: 'custom-ask' | 'escalate' | 'mode' | 'protected' | 'control';
+   *  protected=写凭据 / ~/.forsion(-dev) 本机配置(契约 C4 / C6:完全通行也问、总允许不作数)。老客户端不认 protected → 按无理由渲染。
+   *  always=工具自己声明每次都问(capabilities.approval:'always';完全通行也问、总允许不作数)。与 protected 的差别:
+   *  不限「只在执行设备本机批」—— 云端 run 没有本机,答的人就是发起对话的那一端。老客户端不认 → 按无理由渲染。 */
+  kind: 'custom-ask' | 'escalate' | 'mode' | 'protected' | 'control' | 'always';
   /** 命中的规则串(仅 custom-ask) */
   rule?: string;
   /** 引擎侧**生效**的档位(custom 未命中时是降解后的 base;客户端算不出来) */
@@ -1097,7 +1103,17 @@ export async function gateToolCall(
   // 云端(profile 无 hostExec)这几个工具本就不可见,且照旧零影响:不进闸、不发事件。
   const nonHost = ctx.execMode !== 'host';
   const nonHostControl = nonHost && isControl && profileHasHostExec(ctx.profile);
-  if (nonHost && !name.startsWith('mcp__') && !nonHostControl) return { action: 'approve' };
+  // 每次都问(capabilities.approval:'always'):花掉用户账号里的东西这类动作。不看执行形态(云端 / sandbox 会话照样过闸 ——
+  // 网页与手机的 run 全是非 host)、不看档位(云端的空档、完全通行都问),下面的 custom allow / hook allow / 总允许一律不放行。
+  // 必须是发起对话的人当场点头:没人能答的 run(自动化 / Muse 排队与代批)和远程污点 run(按 D1 远端能批自己的卡)直接拒。
+  const alwaysAsk = declaredApproval(name, ctx.profile) === 'always';
+  if (alwaysAsk && (ctx.unattended || ctx.approvalDeferral)) {
+    return { action: 'reject', rejectReason: 'This action needs the user to confirm it in the conversation, so it cannot run unattended.' };
+  }
+  if (alwaysAsk && remote) {
+    return { action: 'reject', rejectReason: 'This action needs the user to confirm it on the device where this conversation runs; it is not available from a remote session.' };
+  }
+  if (nonHost && !name.startsWith('mcp__') && !nonHostControl && !alwaysAsk) return { action: 'approve' };
 
   // custom 档先裁决:用户写下的规则**压过**下面的 known-safe 捷径(把 `run_bash:ls` 放进 ask
   // 就该真弹审批,否则规则形同虚设);未命中则降解成 base 档,后续逻辑与三档完全一致。
@@ -1133,9 +1149,9 @@ export async function gateToolCall(
   const escalate = ctx.execMode === 'host' && mode !== 'full-auto' && writeEscalationNeeded(call, escCtx);
   if (escalate) logEscalation(runId, call, escCtx);
 
-  if (allowRule && !protectedAsk && !(cap && remote && (await capWouldAsk(call, cap, ctx, remote))) && (!escalate || allowRuleCoversWrites(allowRule, call, ctx.cwd))) return { action: 'approve' };
+  if (allowRule && !protectedAsk && !alwaysAsk && !(cap && remote && (await capWouldAsk(call, cap, ctx, remote))) && (!escalate || allowRuleCoversWrites(allowRule, call, ctx.cwd))) return { action: 'approve' };
   // known-safe 只读 bash:免审批(碰凭据文件的不算 known-safe,见 isKnownSafeBash)。
-  if (!forceAsk && name === 'run_bash' && isKnownSafeBash(bashCommandOf(call), ctx.cwd)) {
+  if (!forceAsk && !alwaysAsk && name === 'run_bash' && isKnownSafeBash(bashCommandOf(call), ctx.cwd)) {
     // known-safe git 读的是仓库里可被改写的配置:没人看过卡,就在写拒绝 profile 里跑(G5 方案 B;其余 known-safe 程序不读仓库配置,不包)。
     return /^git( |$)/.test(bashCommandOf(call).trim()) ? { action: 'approve', writeProtect: true } : { action: 'approve' };
   }
@@ -1144,7 +1160,7 @@ export async function gateToolCall(
   // 非 host 会话不看档位(见入口处的例外)。
   const control = nonHost ? nonHostControl : isControl && !!mode && mode !== 'full-auto';
 
-  if (!escalate && !forceAsk && !control && !protectedAsk) {
+  if (!escalate && !forceAsk && !control && !protectedAsk && !alwaysAsk) {
     // 接管态的点按类工具只能作用在绑定过的用户标签上 → 「有活绑定」即要批(与执行侧同一真源,不另探端口);
     // 无人值守 run 本就不接管,也就不因此排队审批
     // 扩展那一路:动的是 Tangu 标签组里它自己开的页 → 不批;动用户自己的标签 → 批
@@ -1170,7 +1186,7 @@ export async function gateToolCall(
   // 诚实性:这是 hook 挡的,不是用户拒的 —— 不写清楚,模型和用户都会以为「用户拒绝了该操作」
   if (permV.block) return { action: 'reject', rejectReason: 'Denied by a PermissionRequest hook.' };
   // hook 的 allow 对远程污点 run 同样不越过上限档(C3):上限档本身要问的,hook 也不代答;block 照常生效。
-  if (permV.allow && !protectedAsk && !(cap && remote && (await capWouldAsk(call, cap, escCtx, remote)))) return { action: 'approve' };
+  if (permV.allow && !protectedAsk && !alwaysAsk && !(cap && remote && (await capWouldAsk(call, cap, escCtx, remote)))) return { action: 'approve' };
   // 改参重闸:「这个档位下这个工具要不要问」刚在审批卡上被答过(批准者就是在那张卡上改的参数),不问第二遍 ——
   // 否则桌面 / TUI 改完 bash 命令还得再批一次。越界写与 custom ask 规则看的是**参数**,照新参数重问(上面的 deny 规则与 hook 也已按新参数判过)。
   if (editedOnCard && !escalate && !forceAsk && !protectedAsk) return { action: 'approve' };
@@ -1184,11 +1200,13 @@ export async function gateToolCall(
   // 保护路径排最前:它是「总允许在这里不作数、完全通行也要问」的那个理由,卡片据此说清(契约 C6,桌面映射 zh/en 文案)。
   const reason: ApprovalReason = protectedAsk
     ? { kind: 'protected', mode }
-    : forceAsk
-      ? { kind: 'custom-ask', rule: askRule, mode }
-      : escalate
-        ? { kind: 'escalate', mode }
-        : control ? { kind: 'control', mode } : { kind: 'mode', mode };
+    : alwaysAsk
+      ? { kind: 'always', mode }
+      : forceAsk
+        ? { kind: 'custom-ask', rule: askRule, mode }
+        : escalate
+          ? { kind: 'escalate', mode }
+          : control ? { kind: 'control', mode } : { kind: 'mode', mode };
   // 无人值守且没有异步审批通道(自动化 / Muse 完全通行档,被远端 steer 染色后才会走到这里):没人答,await 就是永久挂起 → 直接拒。
   if (ctx.unattended && !ctx.approvalDeferral) {
     return { action: 'reject', rejectReason: UNATTENDED_REJECT_REASON };
@@ -1216,7 +1234,7 @@ export async function gateToolCall(
     // 「总允许」在重闸**之后**才记:先记的话,重闸那一趟被 isAlwaysAllowed 提前放行,改后的参数就绕过了 PermissionRequest hook(Codex 09-27)。
     // 越界写、custom 的 ask 规则都不进「总允许」:前者每次都确认,后者是用户写死的「永远问我」。
     // 远程污点 run 的「总允许」按单次批准算:记下来就等于远端改了本机会话的审批面(本机 run 随后也吃它)。
-    if (d.action === 'approve_always' && !escalate && !forceAsk && !protectedAsk && !control && !remote) allowAlways(ctx.sessionId, name);
+    if (d.action === 'approve_always' && !escalate && !forceAsk && !protectedAsk && !control && !remote && !alwaysAsk) allowAlways(ctx.sessionId, name);
     return out;
   });
   if (ctx.park) return { action: 'park', decided, preview };

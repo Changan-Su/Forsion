@@ -857,3 +857,11 @@ html[data-dv-dragging] .t2s-side { -webkit-app-region: no-drag; }
   .dockview-theme-lcl .dv-single-tab:hover .wb-tab--icon,
   .dockview-theme-lcl .dv-single-tab:focus-within .wb-tab--icon { opacity: 1; }
 }
+
+/* 独立窗 / Space 窗口(Shell noRibbon,mac):没有 ribbon 垫在交通灯下面,标签栏又顶到了窗口最上(同主窗,不另留标题带)→
+ * 压在交通灯下面的那条标签头(WorkspaceHost 按几何打 .dv-under-lights)自己让出整段宽度:主窗是 ribbon 44px + 26px,这里 70px 全由它出。
+ * 交通灯是原生的、不跟界面缩放走,所以除以 --uiz:放大时不多留白,缩小时不压到灯。让出来的这段仍是拖窗区。
+ * 第二条:主窗那份「越过 ribbon 的 26px」在这里不再叠加。放文件末尾:第一条与上面左栏那条 26px 同特异性(DESIGN §7)。
+ * 空左栏不画标签条(见「空侧栏占位」),那时交通灯浮在空白侧栏的左上角。 */
+[data-platform='mac'] .shell--noribbon .dockview-theme-lcl .dv-tabs-and-actions-container.dv-under-lights { padding-left: calc(70px / var(--uiz, 1)); }
+[data-platform='mac'] .shell--noribbon .dv-prefix--edge { padding-left: 4px; }

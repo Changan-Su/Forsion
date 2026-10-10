@@ -81,8 +81,11 @@ export interface ToolCapabilities {
   concurrencyKey?: string;
   defaultTimeoutMs?: number;
   /** 声明本工具的审批档:'command' = 与 run_bash 同档(readonly/auto-edit 下需用户批准)。
-   *  缺省=只读语义,不触发审批。核心据此把插件工具并入审批,无需硬编码工具名。 */
-  approval?: 'command';
+   *  缺省=只读语义,不触发审批。核心据此把插件工具并入审批,无需硬编码工具名。
+   *  'always' = 每次都问用户本人:任何档位(含完全通行)、任何执行形态都弹审批,不进「总允许」,
+   *  用户写的 allow 规则与 PermissionRequest hook 的 allow 也不放行;自动化 / Muse / 远程会话里直接拒。
+   *  给花掉用户资产、对外发出内容这类「每次都该本人点头」的动作用;读写要拆成两个工具名。 */
+  approval?: 'command' | 'always';
   /** 正向声明:允许作为自动化 tool_call 动作(不经 LLM、参数在规则里冻结、full-auto 直执行)。
    *  缺省 false——不声明就不进桌面自动化构建器的动作目录。只给参数可完整预填、
    *  无会话交互依赖、副作用可控的工具声明。 */

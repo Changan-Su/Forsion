@@ -205,6 +205,9 @@ export interface ToolContext {
   getImageInputs?: () => ReadonlyArray<{ url: string }>;
   /** 本 run 实际用的上下文窗口(token;Ultra 不封顶)。self_brainstorm 的超窗护栏与主 loop 同一分母;只有主 agentLoop 装配。 */
   contextWindow?: number;
+  /** 本 run 此刻的进度(上下文占用 / 压缩线 / 已花 token / 步数 / 起始时刻),session_status 工具读它。
+   *  数只活在主循环里(见 services/runStatus.ts),只有主 agentLoop 装配;子代理拿到的是父 run 的那份,消费方按 subAgentDepth 自己收口。 */
+  getRunStatus?: () => import('../services/runStatus.js').RunStatus;
 }
 
 /** Agent Desk 演出请求:views=从上到下的展示项(file=本地文件;view=已注册的桌面视图,含插件注册);
@@ -247,8 +250,11 @@ export interface ToolCapabilities {
   /** 默认超时；executeTool 会把它并入 ctx.signal。 */
   defaultTimeoutMs?: number;
   /** 审批档：'command' = 与 run_bash 同档(readonly/auto-edit 下需批准）。缺省=只读语义、不触发审批。
-   *  approvals.toolNeedsApproval 经 declaredApproval(name) 读此，插件工具无需核心硬编码工具名。 */
-  approval?: 'command';
+   *  approvals.toolNeedsApproval 经 declaredApproval(name) 读此，插件工具无需核心硬编码工具名。
+   *  'always' = 每次都问用户本人:任何档位(含完全通行与云端的空档)、任何执行形态(host / sandbox / 云端)都弹审批,
+   *  不进「总允许」,custom 的 allow 规则与 PermissionRequest hook 的 allow 也不放行;没人能当场答的 run
+   *  (自动化 / Muse / 远程污点)直接拒。给「花掉用户账号里的东西」这类动作用(approvals.gateToolCall)。 */
+  approval?: 'command' | 'always';
   /** 正向声明:允许作为自动化 tool_call 动作(不经 LLM 定参直执行)。缺省 false——
    *  插件工具不声明就不进动作目录(declaredAutomationSafe;内置另有 curated 白名单)。 */
   automationSafe?: boolean;

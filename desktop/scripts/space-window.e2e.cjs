@@ -184,6 +184,14 @@ async function main() {
     check('W2b 窗口摆的是这个 Space 存着的布局(含多开的那张),不是默认布局', !!slotA && !!ownA && ownA.join() === slotA.join() && ownA.includes('launcher'), { slot: slotA, own: ownA })
     check('W2c Space 窗口里记的活动 Space = 它自己', (await wA.evaluate(() => document.title)).length > 0 && spaceOf(wA) === sid(A))
     check('W2d 开窗没动共用的活动键', (await activeKey(wA)) === activeBefore, await activeKey(wA))
+    // 标签栏顶到窗口最上(不另留一条空标题带,同主窗);mac 上压在交通灯下面的那条标签头把最左的按钮让到灯的右边。
+    // 交通灯是原生的,这里量不到它,钉的是「左上角 70×28 之内没有可点的东西」(读数是缩放后的,与灯同一把尺)。
+    const topLeft = await wA.evaluate(() => {
+      const bars = Array.from(document.querySelectorAll('.dv-tabs-and-actions-container')).map((b) => ({ b, r: b.getBoundingClientRect() })).filter((x) => x.r.width > 0)
+      const hit = bars.filter((x) => x.r.left < 70 && x.r.top < 28).flatMap((x) => Array.from(x.b.querySelectorAll('.dv-nav-btn, .dv-edge-toggle, .dv-tab')).map((e) => e.getBoundingClientRect()).filter((r) => r.width > 0 && r.left < 70).map((r) => Math.round(r.left)))
+      return { top: Math.min(...bars.map((x) => x.r.top)), hit, mac: document.documentElement.dataset.platform === 'mac' }
+    })
+    check('W2e Space 窗口的标签栏顶到窗口最上' + (topLeft.mac ? ',交通灯那块没有压着可点的东西' : ''), topLeft.top === 0 && (!topLeft.mac || topLeft.hit.length === 0), topLeft)
     if (SHOTS) await wA.screenshot({ path: path.join(SHOTS, 'space-window.png') })
 
     // 右键菜单

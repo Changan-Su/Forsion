@@ -34,6 +34,18 @@ describe('审批理由 protected(C6)', () => {
     expect(alwaysAllowWorks({ kind: 'mode', mode: 'auto-edit' })).toBe(true)
     expect(alwaysAllowWorks(undefined)).toBe(true)
   })
+
+  // 引擎 capabilities.approval:'always'(花掉账号里的东西这类动作):每次都问,完全通行与「总允许」都不跳过
+  it('always:清洗认它、有自己的中英文案、不给「总允许」', () => {
+    expect(sanitizeApprovalReason({ kind: 'always' })).toEqual({ kind: 'always' }) // 云端会话没有档位,mode 缺席
+    expect(approvalReasonText({ kind: 'always' }, t)).toBe('approval.why.always')
+    expect(alwaysAllowWorks({ kind: 'always' })).toBe(false)
+    const zh = translateFor('zh', 'approval.why.always')
+    const en = translateFor('en', 'approval.why.always')
+    expect(zh).not.toBe('approval.why.always')
+    expect(en).not.toBe(zh)
+    expect(en).not.toMatch(/[\u4e00-\u9fff]/)
+  })
 })
 
 // P1-K1

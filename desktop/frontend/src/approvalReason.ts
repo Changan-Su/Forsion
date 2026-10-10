@@ -5,7 +5,7 @@
  */
 import type { AnswerBy, ApprovalReason, ApprovalRemote } from './types'
 
-const KINDS: ReadonlySet<string> = new Set<ApprovalReason['kind']>(['custom-ask', 'escalate', 'mode', 'protected', 'control'])
+const KINDS: ReadonlySet<string> = new Set<ApprovalReason['kind']>(['custom-ask', 'escalate', 'mode', 'protected', 'control', 'always'])
 const MODES: ReadonlySet<string> = new Set(['readonly', 'auto-edit', 'full-auto'])
 
 export function sanitizeApprovalReason(raw: unknown): ApprovalReason | undefined {
@@ -22,7 +22,7 @@ export function sanitizeApprovalReason(raw: unknown): ApprovalReason | undefined
 /** 引擎在这些情形下**不会**把工具记进「总允许」(approvals.ts:越界写 / 受保护路径每次都确认,custom 的 ask 是
  *  用户写死的「永远问我」)。按钮却照常显示 = 又一处「界面说一套引擎做一套」。 */
 export const alwaysAllowWorks = (r: ApprovalReason | undefined): boolean =>
-  r?.kind !== 'escalate' && r?.kind !== 'custom-ask' && r?.kind !== 'protected' && r?.kind !== 'control'
+  r?.kind !== 'escalate' && r?.kind !== 'custom-ask' && r?.kind !== 'protected' && r?.kind !== 'control' && r?.kind !== 'always'
 
 /** 档位 id 是连字符(引擎口径),i18n 键是驼峰(既有) —— 映射写一处,别两边各拼各的。 */
 export const MODE_KEY: Record<string, string> = {
@@ -37,6 +37,7 @@ export function approvalReasonText(r: ApprovalReason | undefined, t: (k: string,
   if (r.kind === 'escalate') return t('approval.why.escalate')
   if (r.kind === 'control') return t('approval.why.control')
   if (r.kind === 'protected') return t('approval.why.protected')
+  if (r.kind === 'always') return t('approval.why.always')
   const m = r.mode && MODE_KEY[r.mode] ? t(MODE_KEY[r.mode]) : ''
   return m ? t('approval.why.mode', { mode: m }) : ''
 }

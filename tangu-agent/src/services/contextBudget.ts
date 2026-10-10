@@ -96,9 +96,10 @@ const FAMILY_WINDOWS: Array<[RegExp, number]> = [
   [/(^|\/)gpt-(6-(astra|sol|luna)|6\.1-sol)$/i, 272_000], // Codex 目录的默认输入预算(10-01 新增 6.1 Sol,仍同值);长上下文仍由显式覆盖启用
   [/gpt-5|codex/i, 272_000], // GPT-5 家族 400k 总窗,input 上限 272k(codex 模型目录同值)
   [/gpt-4\.1/i, 1_000_000],
-  // Claude 5 家族(Sonnet/Opus/Fable)与 Opus 4.7 起是 1M(官方模型表);必须排在下面那条
+  // Claude 5 家族(Sonnet/Opus/Fable)、Haiku 5.5 起与 Opus 4.7 起是 1M(官方模型表);必须排在下面那条
   // claude 泛规则**之前**(数组首命中)。4.6 及更早、Haiku 4.5 仍是 200k,继续走泛规则。
-  [/(sonnet|opus|fable|mythos)-([5-9]|\d\d)|opus-4[-.]([7-9]|\d\d)/i, 1_000_000],
+  // `(?!\d)`:族名后直接跟八位日期的老 id(`claude-3-5-sonnet-20241022`)不算两位版本号。
+  [/(sonnet|opus|haiku|fable|mythos)-([5-9]|\d\d)(?!\d)|opus-4[-.]([7-9]|\d\d)/i, 1_000_000],
   [/claude|sonnet|opus|haiku/i, 200_000],
   [/gemini-[23]/i, 1_000_000], // 只认主线 2.x/3 聊天族;其余 gemini 变体窗口不一,留 128k 保守值
   [/deepseek-v4/i, 1_000_000], // V4 flash/pro 都是 1M;老 chat/reasoner 线窗口小得多,不收

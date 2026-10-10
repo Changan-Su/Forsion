@@ -589,6 +589,45 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
       },
     },
   };
+  // 账号面的通用出口(forsion_account 两个工具用)。与上面的 postJson / getJson 分开写:那几个按 brain 口径抛 LlmError,
+  // 这里要的是「永不抛、状态码原样交回」—— 调用方要分得清没登录、令牌失效、接口没开(404)和网络断。
+  const CLOUD_REQUEST_TIMEOUT_MS = 15_000;
+  const tokenNow = (): string => String((typeof cfg.token === 'function' ? cfg.token() : cfg.token) || '').trim();
+  brain.cloud = {
+    async request(req) {
+      if (!base) return { status: 0, error: 'no_cloud_url' };
+      const method = req.method ?? 'GET';
+      if (!['GET', 'POST', 'PUT', 'DELETE'].includes(method)) return { status: 0, error: 'invalid_method' };
+      // 路径闸:只许本云端 /api/ 之下的**规整形态**路径 —— 每段只含字母数字与 . _ ~ -,没有空段(//)、编码(%2e / %2f)、
+      // 反斜杠;再交给 URL 规整一遍,规整前后必须逐字相同(点段在这一步现形)。不收「规整后才合法」的写法:
+      // 前面的反代会合并斜杠、解码,引擎这边看着不是 /api/auth/ 的路径到 server 那里可以就是它。
+      // /api/auth/ 整段不许:那里有把当前令牌原样换出来的接口(handoff / refresh),这个出口的约定是调用方只拿结果、拿不到令牌。
+      const rawPath = typeof req.path === 'string' ? req.path.split('?')[0] : '';
+      const lower = rawPath.toLowerCase();
+      let url: URL;
+      try { url = new URL(`${base}${req.path}`); } catch { return { status: 0, error: 'path_not_allowed' }; }
+      if (!/^\/api\/[A-Za-z0-9._~-]+(?:\/[A-Za-z0-9._~-]+)*$/.test(rawPath)
+        || url.pathname !== `${new URL(base).pathname.replace(/\/+$/, '')}${rawPath}`
+        || lower === '/api/auth' || lower.startsWith('/api/auth/')) {
+        return { status: 0, error: 'path_not_allowed' };
+      }
+      if (!tokenNow()) return { status: 401, json: null, error: 'not_signed_in' };
+      const timeout = AbortSignal.timeout(Math.max(1_000, Number(req.timeoutMs) || CLOUD_REQUEST_TIMEOUT_MS));
+      try {
+        const r = await fetch(url, {
+          method,
+          headers: authHeaders(),
+          ...(req.body === undefined || method === 'GET' ? {} : { body: JSON.stringify(req.body) }),
+          // 不跟重定向:同源的 3xx 会带着身份落到路径闸没看过的地址(比如 /api/auth/refresh),3xx 原样交回(Codex 10-10 #4)。
+          redirect: 'manual',
+          signal: req.signal ? AbortSignal.any([req.signal, timeout]) : timeout,
+        });
+        return { status: r.status, json: await r.json().catch(() => null) };
+      } catch (e: any) {
+        return { status: 0, error: e?.name === 'TimeoutError' ? 'timeout' : e?.name === 'AbortError' ? 'aborted' : String(e?.message || e) };
+      }
+    },
+  };
   // Optional capabilities describe configured services. Local Inbox storage uses
   // the host database independently; advertising this cloud-only seam starts the
   // broadcast poller even on an offline Unit with no Server or cloud credential.

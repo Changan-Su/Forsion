@@ -148,6 +148,8 @@ describe('modelContextWindow', () => {
     expect(modelContextWindowInfo('claude-opus-5-5')).toEqual({ tokens: 1_000_000, source: 'family' }); // 官方 1M,无需 beta 头
     expect(modelContextWindow('claude-opus-4-6')).toBe(200_000);
     expect(modelContextWindow('claude-haiku-4-5-20251001')).toBe(200_000);
+    expect(modelContextWindow('claude-haiku-5-5')).toBe(1_000_000); // Haiku 5.5 起也是 1M
+    expect(modelContextWindow('claude-3-5-sonnet-20241022')).toBe(200_000); // 族名后直接跟日期的老 id 不许被当成 1M 族
     expect(modelContextWindow('kimi-k3')).toBe(1_000_000);
     expect(modelContextWindow('kimi-k2-thinking')).toBe(CONTEXT_WINDOW_TOKENS);
     expect(modelContextWindow('gemini-2.5-pro')).toBe(1_000_000);
