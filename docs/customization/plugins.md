@@ -96,7 +96,15 @@ Settings → Appearance → Startup and icons accepts custom brand icons and ani
 
 插件任务、只读外部引擎、隔离 Git 工作区、原生定时与 Desktop MCP 接缝见 [任务 SDK / Task SDK](./plugin-tasks.md)。
 
-## Intelligent UI cards (2026-10-09, development branch)
+## Intelligent UI 卡片 / Intelligent UI cards
+
+插件可以把已有的列表源开放成对话里的原生卡片：在 `registerListSource` 上加一个 `intelligent` 声明即可。列表由宿主渲染，数据与跳转仍只有 `items` / `subscribe` / `open` 这一份实现（示例见下方代码）。
+
+- 宿主分配卡片 ID `plugin:<manifestId>:<sourceId>`；`viewId` 只在同一个插件内解析。`description` 写英文（供模型发现用），不超过 400 个字符；旧宿主忽略 `intelligent`。
+- 声明了 `search: true` 的列表，卡片可以带一个可选的 `query`（最多 200 个字符）。模型传不进任意属性、HTML、CSS、回调或组件名。紧凑列表显示前六项，其余在完整视图里看。
+- 卡片外框由宿主画，插件不用写样式。卡头是插件图标、「插件名 · 列表名」（英文界面用 manifest 的 `nameEn`；其中一个已经包含另一个时只显示长的那个）、一个「实时」点和打开完整视图的按钮；模型给这个块写的标题不显示。每一行显示条目的 `title` 与 `hint`，行首图标用条目自己的 `iconUrl`，取不到时退到 `icon`，再退到通用链接图标，与左栏列表一致 —— 两个都给，行才认得出来。
+- Agent 用 `list_intelligent_cards` 发现当前可用的卡片，再在 `intelligent_ui` 里写 `app-card` 块引用。请求里只带元数据：显示卡片不会把记录交给模型，也不会保存生成的计划；分析与写入仍走已授权的领域工具和技能，原生的计划审批流程不变。
+- 挂载时订阅，并在库可用后重读一次；数据变了要通知，返回取消订阅的函数。切换库时卡片会重新订阅。禁用插件会把这个来源撤出目录、卸下已有卡片并显示「暂不可用」；未知或已禁用的卡片不会用生成内容顶替，插件抛错只影响那一张卡。卡片是当前库的实时视图（重新打开旧对话时也是），不是历史快照，也不是跨设备的数据副本。
 
 A plugin can opt an existing list source into native chat cards. The host renders the list;
 `items`, `subscribe`, and `open` remain the single data and navigation implementation.
@@ -123,8 +131,9 @@ props, HTML, CSS, handlers or component names are accepted from the model. The f
 items appear in the compact list; the full-view button opens the existing registered view.
 
 The host draws the card frame, so there is nothing to style: the header shows your plugin's
-icon and `name · source title` (manifest `nameEn` in English), a “Live” dot, and the full-view
-button; a title the model writes for the block is not shown. Each row uses the item's own
+icon and `name · source title` (manifest `nameEn` in English; when one name already contains the
+other, only the longer one is shown), a “Live” dot, and the full-view button; a title the model
+writes for the block is not shown. Each row shows the item's `title` and `hint` and uses its own
 `iconUrl`, falling back to `icon` and then a generic link icon, exactly as in the sidebar list —
 set both so rows stay recognisable.
 
