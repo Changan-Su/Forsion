@@ -50,17 +50,25 @@ export const SUGGEST_INSTRUCTION = [
   '- Do not call tools. Any tool call is discarded.',
 ].join('\n');
 
-interface Stashed { runId: string; seed: HistorianForkSeed; at: number }
+interface Stashed { runId: string; seed: HistorianForkSeed; at: number; timer: ReturnType<typeof setTimeout> }
 const seeds = new Map<string, Stashed>();
+
+function drop(sessionId: string): void {
+  const s = seeds.get(sessionId);
+  if (!s) return;
+  clearTimeout(s.timer);
+  seeds.delete(sessionId);
+}
 
 /** agentLoop 主路径收尾时调(发 done 之前):只存引用,不发请求。 */
 export function stashSuggestionSeed(sessionId: string, runId: string, seed: HistorianForkSeed): void {
   if (!deps().profile.capabilities.hostExec) return;
-  const now = Date.now();
-  for (const [sid, s] of seeds) if (now - s.at >= SEED_TTL_MS) seeds.delete(sid);
-  seeds.delete(sessionId); // 重新插到队尾:Map 的迭代序就是新旧序
-  seeds.set(sessionId, { runId, seed, at: now });
-  while (seeds.size > SEED_MAX) seeds.delete(seeds.keys().next().value as string);
+  drop(sessionId); // 重新插到队尾:Map 的迭代序就是新旧序
+  // 到点自己放手:没人来拉的那份(开关关着就是每一份)不该把 workingMessages 一直攥到下一个 run 收尾。
+  const timer = setTimeout(() => { if (seeds.get(sessionId)?.timer === timer) seeds.delete(sessionId); }, SEED_TTL_MS);
+  timer.unref?.();
+  seeds.set(sessionId, { runId, seed, at: Date.now(), timer });
+  while (seeds.size > SEED_MAX) drop(seeds.keys().next().value as string);
 }
 
 /** 取走即删:一轮最多问一次(同一个 done 被两个窗口各拉一次,第二个拿空)。 */
@@ -68,7 +76,7 @@ function takeSeed(sessionId: string, runId?: string): HistorianForkSeed | null {
   const s = seeds.get(sessionId);
   if (!s) return null;
   if (runId && s.runId !== runId) return null; // 客户端问的是更早那一轮:留着这份给对的人
-  seeds.delete(sessionId);
+  drop(sessionId);
   return Date.now() - s.at < SEED_TTL_MS ? s.seed : null;
 }
 
@@ -164,4 +172,4 @@ export async function suggestNextPrompt(opts: {
 }
 
 /** 测试用:清空快照。 */
-export function __resetSuggestionSeedsForTests(): void { seeds.clear(); }
+export function __resetSuggestionSeedsForTests(): void { for (const sid of [...seeds.keys()]) drop(sid); }

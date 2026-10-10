@@ -80,12 +80,15 @@ describe('suggestNextPrompt', () => {
     expect((await ask({ runId: 'R2' })).suggestion).toBe('跑吧');
   });
 
-  it('过期 → 空', async () => {
-    vi.useFakeTimers({ toFake: ['Date'] });
-    stashSuggestionSeed('S', 'R1', seedOf(CHAT));
-    vi.setSystemTime(Date.now() + 91_000);
+  it('过期 → 空;到点自己放手(没人来拉也不一直攥着快照)', async () => {
+    vi.useFakeTimers();
+    let alive = 0;
+    const seed = seedOf(CHAT);
+    stashSuggestionSeed('S', 'R1', { ...seed, getMessages: () => { alive++; return seed.getMessages(); } });
+    vi.advanceTimersByTime(91_000);
     expect((await ask()).suggestion).toBe('');
     expect(payloads).toHaveLength(0);
+    expect(alive).toBe(0); // 快照已经放掉,连读都没读
   });
 
   it('只留最近 4 个会话的快照', async () => {
