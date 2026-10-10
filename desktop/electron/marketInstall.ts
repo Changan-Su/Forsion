@@ -4,7 +4,8 @@
  */
 import JSZip from 'jszip'
 import { mkdir, writeFile, readFile, readdir, chmod } from 'fs/promises'
-import { join, dirname } from 'path'
+import { join, dirname, basename } from 'path'
+import { effectivePluginId } from '../shared/products'
 import {
   MARKET_SUBDIR, MARKET_MANIFEST, isSafeSlug, isJunkPath, computeStripPrefix, safeEntryPath, planZipFiles,
   detectMarketTypeFromNames, toArchiveUrl, downloadCandidates, ZIP_MAGIC, GZIP_MAGIC, hasMagic, ZipPlanError,
@@ -48,6 +49,22 @@ export async function readInstalledVersion(type: string, dir: string): Promise<s
       return m ? normVer(m[1]) : null
     }
   } catch { /* manifest 缺失/损坏 → 无版本 */ }
+  return null
+}
+
+/**
+ * 读已安装插件的装载 id(目录名可 ≠ id),供市场「打开设置」直达那个插件自己的设置页。
+ * 与两侧装载器同一条规则:Forsion 插件 = effectivePluginId(manifest id 不合法回落目录名);
+ * 引擎插件 = tangu-plugin.json 的 kebab id(同 readUserPluginDirs)。非插件类型 / 读不到 → null。
+ */
+export async function readInstalledPluginId(type: string, dir: string): Promise<string | null> {
+  try {
+    if (type === 'amadeus-plugin') return effectivePluginId(basename(dir), JSON.parse(await readFile(join(dir, 'manifest.json'), 'utf8'))?.id)
+    if (type === 'plugin') {
+      const id = JSON.parse(await readFile(join(dir, 'tangu-plugin.json'), 'utf8'))?.id
+      return isSafeSlug(id) ? id : null
+    }
+  } catch { /* manifest 缺失/损坏 → 装载器也不认它 */ }
   return null
 }
 

@@ -79,7 +79,7 @@ export interface MobileMarket {
   marketDetail(id: string): Promise<Record<string, unknown>>
   marketInstall(id: string): Promise<{ ok: boolean; path: string; files: number; type: string; slug: string; id?: string }>
   onMarketInstallProgress(cb: (ev: MarketInstallProgress) => void): () => void
-  marketInstalled(): Promise<Record<string, Array<{ slug: string; version: string | null }>>>
+  marketInstalled(): Promise<Record<string, Array<{ slug: string; version: string | null; id?: string }>>>
   marketUninstall(type: string, slug: string): Promise<{ ok: boolean; path: string; type: string; id?: string }>
 }
 
@@ -401,12 +401,14 @@ export function createMobileMarket(deps: MobileMarketDeps): MobileMarket {
 
     // 形状同桌面 market:installed:六类都给键,手机只有 amadeus-plugin 有内容(每个已装目录 + manifest 版本)。
     async marketInstalled() {
-      const out: Record<string, Array<{ slug: string; version: string | null }>> = { skill: [], agent: [], plugin: [], space: [], theme: [], 'amadeus-plugin': [] }
+      const out: Record<string, Array<{ slug: string; version: string | null; id?: string }>> = { skill: [], agent: [], plugin: [], space: [], theme: [], 'amadeus-plugin': [] }
       out['amadeus-plugin'] = await withPluginDirLock(deps.fs, async () => {
         await recoverPluginDirs(deps.fs)
-        return Promise.all((await pluginDirNames(deps.fs)).map(async (slug) => ({
-          slug, version: normVer((await readManifest(deps.fs, `${PLUGINS_DIR}/${slug}`))?.version),
-        })))
+        return Promise.all((await pluginDirNames(deps.fs)).map(async (slug) => {
+          const manifest = await readManifest(deps.fs, `${PLUGINS_DIR}/${slug}`)
+          const id = manifest ? effectivePluginId(slug, manifest.id) : null // 装载 id(目录名可 ≠ id):市场「打开设置」按它直达
+          return { slug, version: normVer(manifest?.version), ...(id ? { id } : {}) }
+        }))
       })
       return out
     },

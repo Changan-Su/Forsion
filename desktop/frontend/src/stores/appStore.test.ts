@@ -1135,6 +1135,35 @@ describe('openFeedback 带上当前会话', () => {
     expect(openFloatingPanel.mock.calls[0][0].params).toMatchObject({ tab: 'advanced' })
     expect(openFloatingPanel.mock.calls[0][0].params.session.id).toBe('s2')
   })
+
+  // 落点只在设置页挂载时读一次,浮窗按 params 做 key:两次请求的 params 逐字相同就不重挂,
+  // 用户中间翻到别的页的话窗口只被带到前台。不带落点的(齿轮)刻意不换 —— 留在原来那一页。
+  it('带落点的设置请求每次换一个 nonce;不带落点的不带', () => {
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1001) // 同一毫秒里连着两次也不许撞号
+    useApp.getState().openSettings('advanced')
+    useApp.getState().openSettings('advanced')
+    useApp.getState().openSettings()
+    now.mockRestore()
+    const [a, b, plain] = openFloatingPanel.mock.calls.map((call) => call[0].params)
+    expect(typeof a.nonce).toBe('number')
+    expect(a.nonce).not.toBe(b.nonce)
+    expect({ ...a, nonce: 0 }).toEqual({ ...b, nonce: 0 })
+    expect('nonce' in plain).toBe(false)
+  })
+
+  it('窗内设置页(没有浮窗的宿主)同一条规矩:带落点换 settingsNonce,不带不换', () => {
+    vi.stubGlobal('window', { tangu: {} })
+    useApp.setState({ settingsNonce: 0, settingsOpen: false })
+    useApp.getState().openSettings('theme')
+    const first = useApp.getState().settingsNonce
+    expect(useApp.getState()).toMatchObject({ settingsOpen: true, settingsTab: 'theme' })
+    expect(first).not.toBe(0)
+    useApp.getState().openSettings('theme')
+    const second = useApp.getState().settingsNonce
+    expect(second).not.toBe(first)
+    useApp.getState().openSettings()
+    expect(useApp.getState()).toMatchObject({ settingsTab: null, settingsNonce: second })
+  })
 })
 
 // 「进造物」挪会话:会话的 project_path 与会话配置的 cwd 两处都落盘才算挪过去;跑着的不挪;配置没存上整体回滚。

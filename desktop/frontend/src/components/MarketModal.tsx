@@ -249,9 +249,12 @@ export function MarketModal({ onClose, initialQuery }: { onClose?: () => void; i
   }
 
   const openPluginSettings = (c: MarketCard): void => {
-    if (!installedInfo(c) || !canOpenSettings(c)) return
+    const info = installedInfo(c)
+    if (!info || !canOpenSettings(c)) return
     close()
-    useApp.getState().openSettings('amadeus-plugins')
+    // 直达那个插件自己的页,不停在插件页首屏。id = 装载 id(目录名可以与它不同;老宿主不给时按目录名)。
+    // 落不到的(id 对不上 / 引擎插件没启用、没设置项)由设置页自己落回对应的列表。
+    useApp.getState().openSettings(`${info.realType === 'amadeus-plugin' ? 'fplugin' : 'plugin'}:${info.entry.id ?? c.installSlug}`)
   }
 
   const onInstall = async (c: MarketCard): Promise<void> => {

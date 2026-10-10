@@ -100,6 +100,7 @@ export function Root() {
     settingsOpen: s.settingsOpen,
     settingsTab: s.settingsTab,
     settingsSkillKey: s.settingsSkillKey,
+    settingsNonce: s.settingsNonce,
     onboarding: s.onboarding,
     feedbackOpen: s.feedbackOpen,
     marketOpen: s.marketOpen,
@@ -159,6 +160,7 @@ export function Root() {
         {a.settingsOpen && (
         <FloatingPanelFrame key="settings" title={a.tr('settings.title')} onClose={() => a.closeSettings()}>
           <SettingsModal
+            key={a.settingsNonce}
             open
             initialTab={a.settingsTab ?? undefined}
             initialSkillKey={a.settingsSkillKey ?? undefined}
