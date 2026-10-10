@@ -21,8 +21,8 @@ function memIO(files: Map<string, string>, hooks: { beforeWrite?: (p: string) =>
 }
 
 describe('propagateNoteRenames', () => {
-  // 图片 / 附件的相对引用(assets.rebaseFileRefs)跟 [[链接]] 走同一趟读写。负对照(实跑过):one() 里不调 rebaseFileRefs → 前两条红;
-  // 提前返回改回只看 pairs → 第 2 条红。
+  // 图片 / 附件的相对引用(assets.rebaseFileRefs)跟 [[链接]] 走同一趟读写。负对照(实跑过):one() 里不调 rebaseFileRefs → 前 3 条红;
+  // 提前返回改回只看 pairs → 第 3 条红。
   it('移动:挪走的笔记里按相对路径写的图片 / 附件引用按新位置重算;没给 exists 的宿主不做这件事', async () => {
     const seed = (): Map<string, string> => new Map([['other/a.md', '![](.amadeus/p.png) [[b]]\n'], ['notes/b.md', '![](.amadeus/p.png)\n']])
     const files = seed()
@@ -34,6 +34,16 @@ describe('propagateNoteRenames', () => {
     const plain = seed()
     expect((await propagateNoteRenames(memIO(plain), { 'notes/a.md': 'other/a.md' }, ['notes/a.md', 'notes/b.md'])).rewritten).toEqual([])
     expect(plain.get('other/a.md')).toBe('![](.amadeus/p.png) [[b]]\n')
+  })
+  it('写前被别的写者按新位置存过(引用已经指对)→ 重试时不拿旧目录再解释一遍,对方写的引用和字都留着', async () => {
+    // 负对照(实跑过):重试不带 trustWorking → 红(改成 ../../.amadeus/p.png,指向库根的另一张图)
+    const theirs = '![](../.amadeus/p.png)\nnew text\n'
+    const files = new Map([['notes/deep/a.md', '![](.amadeus/p.png)\n']])
+    let hit = 0
+    const io = { ...memIO(files, { beforeWrite: () => { if (!hit++) files.set('notes/deep/a.md', theirs) } }), exists: (f: string) => f === 'notes/.amadeus/p.png' || f === '.amadeus/p.png' }
+    const r = await propagateNoteRenames(io, { 'notes/a.md': 'notes/deep/a.md' }, ['notes/a.md'])
+    expect(files.get('notes/deep/a.md')).toBe(theirs)
+    expect(r.failed).toEqual([])
   })
   it('只装附件的文件夹改名(一对笔记都没有):别的笔记里指向它的引用照样跟上', async () => {
     const files = new Map([['notes/a.md', '![](../assets/x.png)\n']])

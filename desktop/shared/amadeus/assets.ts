@@ -206,8 +206,18 @@ export function toStoredMarkdown(md: string, pageDir: string): string {
   }))
 }
 
-// `![alt](地址)` 与 `[文字](地址)`:只认裸目标(尖括号目标产品自己不写,逐字留着)。
-const FILE_LINK_RE = /(!?)(\[[^\]\n]*\]\()(?!<)([^)\s]+)((?:\s+"[^"]*")?\))/g
+// `](` 之后的地址与收尾:裸目标 + 可选的 "标题" + `)`。长度封顶 —— 没有收尾的超长串不许拖成平方级回溯。
+const LINK_DEST_RE = /([^)\s]{1,2048})((?:\s+"[^"]{0,2048}")?\))/y
+/** 链接(非图片)地址里「形似域名」的写法:点击时会被补成 https://(linkHref.normalizeHref 同一判据),单段文件名则按
+ *  文件名全库找(resolveAttachment)。两者都不是页相对路径。 */
+const DOMAINISH_RE = /^[^\s/]+\.[^\s/]/
+const escapedAt = (s: string, i: number): boolean => {
+  let n = 0
+  while (s[i - 1 - n] === '\\') n++
+  return n % 2 === 1
+}
+/** 新写进地址里的目录名:读的一侧会解码,`%`、`#` 得先转义才还原得回来(encodeDest 只管空格和括号)。 */
+const encodeSeg = (seg: string): string => encodeDest(seg.replace(/%/g, '%25')).replace(/#/g, '%23')
 
 /** 笔记换了目录、或它引用的文件换了位置之后,正文里**按相对路径写的图片 / 附件引用**照新位置重算
  *  (改名 / 移动的全库重写调它:主进程 vaultHandlers.propagateRenames、云端与手机本地桥的 propagateNoteRenames)。
@@ -215,50 +225,109 @@ const FILE_LINK_RE = /(!?)(\[[^\]\n]*\]\()(?!<)([^)\s]+)((?:\s+"[^"]*")?\))/g
  *  图片留在原处,引用一个字不改就指向新文件夹下不存在的路径 —— 三端取图都只做精确匹配,图当场裂;那里恰好有
  *  同路径的文件时显示的是另一张(2026-10-10 实测)。挪文件夹、给附件文件夹改名时指向夹外 / 夹外指进来的同理。
  *
- *  规则:引用原先(按 srcBefore 的目录)指着的那个文件,经 `moved` 换算出它现在的位置;这篇笔记或那个文件
- *  动过位置,就把写法换成从 srcAfter 的目录指过去的规范相对路径。
- *    · 笔记没挪、文件也没挪 → 永远不碰(别的笔记一个字节不变)。
+ *  规则:引用原先(按 srcBefore 的目录)指着的那个文件,经 `moved` 换算出它现在的位置。**字面写法从 srcAfter 的
+ *  目录看过去已经不指着它了**,才换成指过去的相对路径。
+ *    · 字面写法仍指着它 → 一个字节不动(没挪的笔记;整个文件夹一起走的夹内互引,含手写的 `./x.png`)。唯一的例外:
+ *      它绕出页目录再回来(`../notes/x.png` 写在 notes/ 下的笔记里)而规范写法不必绕 —— 换回规范写法,
+ *      所以「挪走再挪回来」正文回到原样。
  *    · **文件确实在才改**(`exists` 问的是操作之后的位置)。本来就指不到文件的引用保持原样 —— 包括存量的库内路径
  *      写法(`notes/` 下的笔记写着 `![](attachments/x.png)`、文件其实在库根):它靠 resolveAttachment 的
  *      「退回库根」还打得开,按页相对改写反而把这条退路也改没了。
  *    · 只管**附件**(带扩展名、非 .md,与 assetRefs 同一判据)。指向笔记的 `[名](x.md)` 不归这里
  *      (rewriteNoteRefs 头注的已知缺口);`![[…]]` 按文件名全库找,本来就不受位置影响。
- *    · 围栏代码块、行内代码、外链 / 协议 / 绝对路径 / 纯锚点、尖括号目标逐字不动。
- *    · 改写出来的地址用存盘的那套编码(encodeDest,编辑器存这篇时写的就是它);链接的 `#锚` 原样接回。
+ *    · 不是页相对路径的不碰:外链 / 协议 / 绝对路径 / 纯锚点;**链接**里的单段文件名(`[doc](d.pdf)` 按文件名
+ *      全库找)和形似域名的写法(`a.b/c.pdf` 会被当成外链)。图片的单段文件名是页相对的(<img> 按页目录拼)。
+ *    · 认不准的不碰(宁可漏改,不许改错):围栏代码块、行内代码;一段里有没配上对的反引号(可能是跨行的行内代码)
+ *      → 到下一个空行为止整段跳过;尖括号目标;地址里有裸括号(CommonMark 允许配平的括号,这里不解析,截断了会
+ *      认成另一个文件);解码后带 `\` 或 `/` 的段;转义的 `\[`。
+ *    · 改写时**原样留下引用里没变的那几段**(文件名连同它原来的编码:`%2520`、`%23`、`%E5%9B%BE` 都不动),
+ *      只有新拼上去的目录名才编码。链接的结果不许形似域名 / 单段文件名 → 前面补 `./`。链接的 `#锚` 原样接回;
  *      图片的地址整段当路径(toDisplayMarkdown 同口径),不拆 `#`。
- *  ponytail: 被改写的引用一律写成规范形态 —— 挪动的笔记里手写的 `./x.png`、`a/../x.png` 会变成 `x.png`
- *  (指向不变)。没挪的笔记不受影响。
- *  仪器:assets.test.ts 的「挪了位置之后的引用」、electron/amadeus/ipc.moveFileRefs.test.ts(真 IPC + 真协议处理器)。 */
+ *    · `trustWorking`(比对交换写冲突后的重试用):现文可能是别的写者按**新位置**存下的,已经指对了 —— 字面写法在
+ *      新位置指着一个存在的文件就不动,不拿旧目录再解释它一遍。
+ *  仪器:assets.test.ts 的「挪了位置之后的引用」、electron/amadeus/ipc.moveFileRefs.test.ts(真 IPC + 真协议处理器)、
+ *  desktop 的 npm run e2e:notemove(真 Electron)。 */
 export async function rebaseFileRefs(
   md: string,
   srcBefore: string,
   srcAfter: string,
   moved: (vaultRel: string) => string,
   exists: (vaultRel: string) => boolean | Promise<boolean>,
+  opts: { trustWorking?: boolean } = {},
 ): Promise<string> {
   if (!md.includes('](')) return md
   const dirOf = (p: string): string => normPath(p.replace(/\\/g, '/')).split('/').slice(0, -1).join('/')
   const from = dirOf(srcBefore)
   const to = dirOf(srcAfter)
-  const there = new Map<string, boolean>() // 候选目标(操作后的库内路径)→ 在不在
-  // 同一遍扫描跑两次:第一次只收集「要改的话得先确认在不在」的目标,问完宿主再真改(replace 的回调不能等)。
-  const links = (collect: boolean) => (seg: string): string =>
-    seg.replace(FILE_LINK_RE, (m, bang: string, pre: string, dest: string, rest: string) => {
-      if (/^(?:[a-z][a-z0-9+.-]*:|\/|#)/i.test(dest)) return m
-      const cut = bang ? -1 : dest.indexOf('#')
-      const u = decodeSafe(cut < 0 ? dest : dest.slice(0, cut))
-      if (!/\.[a-z0-9]{1,12}$/i.test(u) || /\.md$/i.test(u)) return m
-      const was = normPath(joinRel(from, u))
-      if (!was || was === '..' || was.startsWith('../')) return m // 指到库外:不接手
-      const now = moved(was)
-      if (from === to && now === was) return m
-      const canon = relPath(to, now)
-      if (canon === u) return m
-      if (collect) { there.set(now, false); return m }
-      return there.get(now) ? bang + pre + encodeDest(canon) + (cut < 0 ? '' : dest.slice(cut)) + rest : m
+  const under = (dir: string, rel: string): string => normPath(dir ? `${dir}/${rel}` : rel)
+  const climbs = (segs: string[]): number => segs.filter((x) => x === '..').length
+  const there = new Map<string, boolean>() // 要问宿主的库内路径(操作后)→ 在不在
+
+  /** 一条地址该换成什么;不该动 = null。collect = 只登记要问宿主的路径,不改。 */
+  const rebase = (dest: string, image: boolean, collect: boolean): string | null => {
+    if (dest.startsWith('<') || dest.includes('(') || /^(?:[a-z][a-z0-9+.-]*:|\/|#)/i.test(dest)) return null
+    const cut = image ? -1 : dest.indexOf('#')
+    const rawPath = cut < 0 ? dest : dest.slice(0, cut)
+    if (!image && DOMAINISH_RE.test(rawPath)) return null
+    const raw = rawPath.split('/')
+    const segs = raw.map(decodeSafe)
+    if (segs.some((x) => /[\\/]/.test(x))) return null
+    const u = segs.join('/')
+    if (!/\.[a-z0-9]{1,12}$/i.test(u) || /\.md$/i.test(u)) return null
+    const was = under(from, u)
+    if (!was || was === '..' || was.startsWith('../')) return null // 指到库外:不接手
+    const now = moved(was)
+    if (from === to && now === was) return null
+    const lit = under(to, u)
+    const canon = relPath(to, now).split('/')
+    if (lit === now && climbs(segs) <= climbs(canon)) return null
+    if (collect) {
+      there.set(now, false)
+      if (opts.trustWorking && lit !== now) there.set(lit, false)
+      return null
+    }
+    if (!there.get(now) || (opts.trustWorking && lit !== now && there.get(lit))) return null
+    let keep = 0 // 引用末尾有几段原样留下(与规范写法的末尾逐段相同)
+    while (keep < segs.length && keep < canon.length && segs[segs.length - 1 - keep] === canon[canon.length - 1 - keep] && !/^\.{0,2}$/.test(segs[segs.length - 1 - keep])) keep++
+    const out = [...canon.slice(0, canon.length - keep).map(encodeSeg), ...raw.slice(raw.length - keep)].join('/')
+    return (!image && DOMAINISH_RE.test(out) ? `./${out}` : out) + (cut < 0 ? '' : dest.slice(cut))
+  }
+
+  /** 一段行内代码之外的文字:逐个 `](` 往回找它的 `[`(线性;从 `[` 起正则扫会在失配的长行上退化成平方级)。
+   *  ponytail: 链接文字里带 `]` 的(`[a [b] c](x.pdf)`、图片外面套的那层链接)认不出、不改 —— 漏改,不会改错。 */
+  const links = (collect: boolean) => (seg: string): string => {
+    let out = ''
+    let last = 0
+    for (let c = seg.indexOf(']('); c >= 0; c = seg.indexOf('](', c + 2)) {
+      const start = Math.max(seg.lastIndexOf(']', c - 1) + 1, last)
+      const open = start + seg.substring(start, c).lastIndexOf('[') // 最近的那个 `[`:`[![图](a.png)](b.pdf)` 里先认里面的图
+      if (open < start || escapedAt(seg, open) || escapedAt(seg, c)) continue
+      LINK_DEST_RE.lastIndex = c + 2
+      const m = LINK_DEST_RE.exec(seg)
+      if (!m) continue
+      const next = rebase(m[1], seg[open - 1] === '!' && !escapedAt(seg, open - 1), collect)
+      if (next == null) continue
+      out += seg.slice(last, c + 2) + next + m[2]
+      last = LINK_DEST_RE.lastIndex
+    }
+    return last ? out + seg.slice(last) : seg
+  }
+  // 同一遍扫描跑两次:第一次只收集「要改的话得先确认在不在」的路径,问完宿主再真改。
+  const pass = (collect: boolean): string => {
+    let skip = false // 这一段里有没配上对的反引号:到下一个空行为止不碰
+    return mapOutsideFences(md, (line) => {
+      if (!line.trim()) { skip = false; return line }
+      if (skip) return line
+      let loose = false
+      const next = outsideCodeSpans(line, (seg) => {
+        if (/(?:^|[^\\])`/.test(seg)) loose = true
+        return seg.includes('](') ? links(collect)(seg) : seg
+      })
+      if (!loose) return next
+      skip = true
+      return line
     })
-  const pass = (collect: boolean): string =>
-    mapOutsideFences(md, (line) => (line.includes('](') ? outsideCodeSpans(line, links(collect)) : line))
+  }
   pass(true)
   if (!there.size) return md
   await Promise.all([...there.keys()].map(async (p) => { there.set(p, await exists(p)) }))

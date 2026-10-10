@@ -259,54 +259,47 @@ describe('页目录之外的引用:存盘写成 ../,重开指回同一个文件'
 })
 
 /** 挪笔记 / 挪文件夹之后的引用重算(rebaseFileRefs,2026-10-10)。宿主接线后的真链路在
- *  electron/amadeus/ipc.moveFileRefs.test.ts;这里钉纯函数的规则。
- *  负对照(实跑过,格号 = 本组内的次序):
- *    · 去掉「文件确实在才改」(exists 恒真)→ 第 3 格红;
- *    · 去掉围栏 / 行内代码的跳过 → 第 4 格红;
- *    · 去掉「笔记没挪、文件也没挪就不碰」→ 第 5 格红;
- *    · `.md` 目标不跳过 → 第 6 格红;链接的 `#锚` 不拆 → 第 2 格红。 */
+ *  electron/amadeus/ipc.moveFileRefs.test.ts 与 desktop 的 npm run e2e:notemove;这里钉纯函数的规则。
+ *  「评审」那几格是 Codex 聚焦评审(2026-10-10)逐条复现过的输入,第一版在这些输入上会把引用改指另一个文件。
+ *  负对照(实跑过)写在各格的注里。 */
 describe('挪了位置之后的引用(rebaseFileRefs)', () => {
   const still = (f: string): string => f // 没有文件换位置
   const disk = (...paths: string[]) => (f: string): boolean => paths.includes(f)
   const under = (from: string, to: string) => (f: string): string => (f.startsWith(`${from}/`) ? to + f.slice(from.length) : f)
 
-  it('挪单篇笔记:页目录下的、页目录外的都改成从新位置指过去;同深度的 ../ 写法本来就对,不动', async () => {
+  it('挪单篇笔记:页目录下的、页目录外的都改成从新位置指过去;同深度的 ../ 写法本来就对,不动;挪回去正文回到原样', async () => {
     const md = '![](.amadeus/p.png)\n![x](../assets/x%20y.png "t")\n[doc](attachments/d.pdf)\n'
     const has = disk('notes/.amadeus/p.png', 'assets/x y.png', 'notes/attachments/d.pdf')
-    expect(await rebaseFileRefs(md, 'notes/a.md', 'other/a.md', still, has))
-      .toBe('![](../notes/.amadeus/p.png)\n![x](../assets/x%20y.png "t")\n[doc](../notes/attachments/d.pdf)\n')
+    const moved = '![](../notes/.amadeus/p.png)\n![x](../assets/x%20y.png "t")\n[doc](../notes/attachments/d.pdf)\n'
+    expect(await rebaseFileRefs(md, 'notes/a.md', 'other/a.md', still, has)).toBe(moved)
     expect(await rebaseFileRefs(md, 'notes/a.md', 'a.md', still, has))
       .toBe('![](notes/.amadeus/p.png)\n![x](assets/x%20y.png "t")\n[doc](notes/attachments/d.pdf)\n')
     expect(await rebaseFileRefs(md, 'notes/a.md', 'deep/er/a.md', still, has))
       .toBe('![](../../notes/.amadeus/p.png)\n![x](../../assets/x%20y.png "t")\n[doc](../../notes/attachments/d.pdf)\n')
-    // 挪回去:写法回到原样
-    const moved = await rebaseFileRefs(md, 'notes/a.md', 'other/a.md', still, has)
+    // 负对照:去掉「绕出页目录再回来的换回规范写法」→ 下面这句红(留着 ../notes/.amadeus/p.png)
     expect(await rebaseFileRefs(moved, 'other/a.md', 'notes/a.md', still, has)).toBe(md)
   })
 
-  it('编码与锚:改写出来的地址按存盘那套编码(空格 / 括号);链接的 #锚 原样接回;图片地址里的 # 是文件名的一部分', async () => {
-    const has = disk('notes/a b (1).png', 'notes/d.pdf', 'notes/c#1.png')
-    expect(await rebaseFileRefs('![](a%20b%20%281%29.png)', 'notes/n.md', 'x/n.md', still, has)).toBe('![](../notes/a%20b%20%281%29.png)')
-    expect(await rebaseFileRefs('[p3](d.pdf#page=3)', 'notes/n.md', 'x/n.md', still, has)).toBe('[p3](../notes/d.pdf#page=3)')
-    expect(await rebaseFileRefs('![](c#1.png)', 'notes/n.md', 'x/n.md', still, has)).toBe('![](../notes/c#1.png)')
-  })
-
   it('断的保持断:原先就指不到文件的引用不改(存量的库内路径写法靠「退回库根」还打得开,改了反而打不开)', async () => {
-    const md = '![](attachments/x.png) [gone](nope.pdf)\n'
+    // 负对照:exists 恒真 → 红
+    const md = '![](attachments/x.png) [gone](sub/nope.pdf)\n'
     expect(await rebaseFileRefs(md, 'notes/a.md', 'other/a.md', still, disk('attachments/x.png'))).toBe(md)
   })
 
-  it('不碰的:围栏代码块、行内代码、外链 / 协议 / 绝对路径 / 纯锚点、尖括号目标、指到库外的、`![[…]]`', async () => {
+  it('不碰的:围栏代码块、行内代码、外链 / 协议 / 绝对路径 / 纯锚点、尖括号目标、指到库外的、转义的 \\[、`![[…]]`', async () => {
+    // 负对照:去掉围栏的跳过 → 红(~~~ 那一块;``` 那块还有「没配上对的反引号」兜着);不查 `[` 前的反斜杠 → 红
     const md = [
       '```md', '![](p.png)', '```',
+      '~~~', '', '![](p.png)', '~~~',
       '行内 `![](p.png)` 是代码',
       '![](https://e.com/p.png) ![](data:image/png;base64,AA) ![](/p.png) [t](#p.png) [m](mailto:a@p.png)',
-      '![](<p.png>) ![](../../p.png) ![[p.png]]',
+      '![](<p.png>) ![](../../p.png) ![[p.png]] \\[不是链接](./p.png) !\\[不是图](p.png)',
     ].join('\n')
     expect(await rebaseFileRefs(md, 'notes/a.md', 'other/a.md', still, () => true)).toBe(md)
   })
 
   it('笔记没挪、它引用的文件也没挪:一个字节不变(手写的 ./、多余的 .. 都留着),连问都不问宿主', async () => {
+    // 负对照:去掉「没挪就不碰」→ 红
     const md = '![](./p.png) ![](sub/../p.png) ![](p.png)\n'
     let asked = 0
     expect(await rebaseFileRefs(md, 'notes/a.md', 'notes/a2.md', still, () => { asked++; return true })).toBe(md)
@@ -314,15 +307,17 @@ describe('挪了位置之后的引用(rebaseFileRefs)', () => {
   })
 
   it('只管附件:指向笔记的 `[名](x.md)`、没有扩展名的不归这里', async () => {
-    const md = '[n](x.md) [n](x) [w](draw.excalidraw.md)\n'
+    // 负对照:`.md` 目标不跳过 → 红
+    const md = '[n](sub/x.md) [n](sub/x) [w](sub/draw.excalidraw.md)\n'
     expect(await rebaseFileRefs(md, 'notes/a.md', 'other/a.md', still, () => true)).toBe(md)
   })
 
-  it('挪文件夹:夹内互相引用的不变;指向夹外的按新深度重算;夹外的笔记指进来的跟着走', async () => {
+  it('挪文件夹:夹内互相引用的不变(手写的 ./ 也不变);指向夹外的按新深度重算;夹外的笔记指进来的跟着走', async () => {
     const moved = under('notes', 'archive/notes')
-    const has = disk('archive/notes/.amadeus/p.png', 'assets/x.png')
-    expect(await rebaseFileRefs('![](.amadeus/p.png) ![](../assets/x.png)', 'notes/a.md', 'archive/notes/a.md', moved, has))
-      .toBe('![](.amadeus/p.png) ![](../../assets/x.png)')
+    // 负对照:改回「挪动的笔记里一律写成规范形态」→ 红(./q.png 被改成 q.png)
+    const has = disk('archive/notes/.amadeus/p.png', 'archive/notes/d.pdf', 'archive/notes/q.png', 'assets/x.png')
+    expect(await rebaseFileRefs('![](.amadeus/p.png) [d](./d.pdf) ![](./q.png) ![](../assets/x.png)', 'notes/a.md', 'archive/notes/a.md', moved, has))
+      .toBe('![](.amadeus/p.png) [d](./d.pdf) ![](./q.png) ![](../../assets/x.png)')
     expect(await rebaseFileRefs('![](notes/.amadeus/p.png)', 'root.md', 'root.md', moved, has)).toBe('![](archive/notes/.amadeus/p.png)')
     // 上一次挪单篇留下的 ../notes/… 写法,文件夹改名时照样跟上
     expect(await rebaseFileRefs('![](../notes/.amadeus/p.png)', 'other/a.md', 'other/a.md', under('notes', 'old'), disk('old/.amadeus/p.png')))
@@ -331,5 +326,78 @@ describe('挪了位置之后的引用(rebaseFileRefs)', () => {
 
   it('CRLF 的行尾、Windows 分隔符的笔记路径', async () => {
     expect(await rebaseFileRefs('![](p.png)\r\n后文\r\n', 'notes\\a.md', 'other\\a.md', still, disk('notes/p.png'))).toBe('![](../notes/p.png)\r\n后文\r\n')
+  })
+
+  it('评审 1:链接里的单段文件名按文件名全库找,不是页相对 —— 不碰;改写结果也不许变成单段文件名 / 形似域名', async () => {
+    // 负对照:去掉对链接的「形似域名」两处判断 → 红
+    const has = disk('notes/d.pdf', 'a/d.pdf', 'archive/d.pdf', 'my.dir/d.pdf', 'notes/p.png')
+    // 文件夹改名:`./d.pdf` 仍指着夹里那份 —— 不动(改成 d.pdf 会按文件名全库找,先命中 a/d.pdf)
+    expect(await rebaseFileRefs('[doc](./d.pdf)', 'notes/n.md', 'archive/n.md', under('notes', 'archive'), has)).toBe('[doc](./d.pdf)')
+    // 挪单篇:原来就是单段文件名的链接不动(它本来就不看位置);图片的单段文件名是页相对的,要改
+    expect(await rebaseFileRefs('[doc](d.pdf) ![](p.png)', 'notes/n.md', 'other/n.md', still, has)).toBe('[doc](d.pdf) ![](../notes/p.png)')
+    // 挪进文件所在的文件夹:规范写法是单段文件名 → 链接补 ./,图片不用
+    expect(await rebaseFileRefs('[doc](../a/d.pdf) ![](../a/d.pdf)', 'notes/n.md', 'a/n.md', still, has)).toBe('[doc](./d.pdf) ![](d.pdf)')
+    // 挪到库根,第一段带点:不补 ./ 会被当成域名补上 https://
+    expect(await rebaseFileRefs('[doc](../my.dir/d.pdf)', 'notes/n.md', 'n.md', still, has)).toBe('[doc](./my.dir/d.pdf)')
+    // 原文就形似域名的链接(点击时走外链):不接手
+    expect(await rebaseFileRefs('[x](my.dir/d.pdf)', 'n.md', 'notes/n.md', still, has)).toBe('[x](my.dir/d.pdf)')
+  })
+
+  it('评审 2:没变的那几段连同原来的编码原样留下(%2520、%23、%E5…);新拼上去的目录名编码得还原得回来', async () => {
+    // 负对照:改回「整条解码再 encodeDest」→ 红
+    const has = disk('notes/p%20.png', 'notes/d#v.pdf', 'notes/图.png', 'a%20b #c/x.png')
+    expect(await rebaseFileRefs('![](p%2520.png)', 'notes/n.md', 'other/n.md', still, has)).toBe('![](../notes/p%2520.png)')
+    expect(await rebaseFileRefs('[doc](./d%23v.pdf)', 'notes/n.md', 'other/n.md', still, has)).toBe('[doc](../notes/d%23v.pdf)')
+    expect(await rebaseFileRefs('![](%E5%9B%BE.png)', 'notes/n.md', 'other/n.md', still, has)).toBe('![](../notes/%E5%9B%BE.png)')
+    // 目录名里有 % # 空格:写出去的地址解码回来必须还是它(图片从 a%20b #c/ 下的笔记挪到库根)
+    const out = await rebaseFileRefs('![](x.png)', 'a%20b #c/n.md', 'n.md', still, has)
+    expect(out).toBe('![](a%2520b%20%23c/x.png)')
+    expect(decodeURIComponent(/\]\(([^)]+)\)/.exec(out)![1])).toBe('a%20b #c/x.png')
+  })
+
+  it('评审 3 / 5:认不准的地址不碰 —— 裸括号(截断了会认成另一个文件)、解码后带反斜杠的段', async () => {
+    // 负对照:去掉 `dest.includes("(")` → 第一句红;去掉「解码后带 \\ 或 / 的段」→ 第二句红
+    const moved = under('notes', 'archive')
+    expect(await rebaseFileRefs('[doc](../x/a(b.pdf).pdf)', 'notes/n.md', 'archive/sub/n.md', still, () => true)).toBe('[doc](../x/a(b.pdf).pdf)')
+    expect(await rebaseFileRefs('[doc](../x/a%5Cb.pdf)', 'notes/n.md', 'deep/er/n.md', moved, () => true)).toBe('[doc](../x/a%5Cb.pdf)')
+  })
+
+  it('评审 4:比对交换写冲突后的重试(trustWorking)—— 现文里已经按新位置写对的引用不再拿旧目录解释一遍;还断着的照修', async () => {
+    // 负对照:重试时不带 trustWorking → 第一句红(改指库根的另一张图)
+    const has = disk('notes/.amadeus/p.png', '.amadeus/p.png', 'notes/q.png')
+    const written = '![](../.amadeus/p.png)\nnew text\n![](q.png)\n' // 别的写者按 notes/deep/ 存的:第一张已经指对,第三行还是老写法
+    expect(await rebaseFileRefs(written, 'notes/a.md', 'notes/deep/a.md', still, has, { trustWorking: true }))
+      .toBe('![](../.amadeus/p.png)\nnew text\n![](../q.png)\n')
+    // 第一遍(知道正文是按旧目录写的)照规矩来:同一行会被改
+    expect(await rebaseFileRefs('![](../.amadeus/p.png)', 'notes/a.md', 'notes/deep/a.md', still, has)).toBe('![](../../.amadeus/p.png)')
+  })
+
+  it('评审 6:跨行的行内代码 —— 一段里有没配上对的反引号,到下一个空行为止整段不碰;空行之后照常', async () => {
+    // 负对照:去掉这条「整段跳过」→ 红
+    const md = '`example\n[doc](../assets/d.pdf)\nend`\n\n[doc](../assets/d.pdf)\n'
+    expect(await rebaseFileRefs(md, 'notes/n.md', 'deep/er/n.md', still, disk('assets/d.pdf')))
+      .toBe('`example\n[doc](../assets/d.pdf)\nend`\n\n[doc](../../assets/d.pdf)\n')
+  })
+
+  it('评审 7:失配的超长行不拖成平方级(30 万字的一行,第一版 12 秒)', async () => {
+    // 负对照:地址长度不封顶 → 第二条输入超时
+    for (const line of ['[a '.repeat(100000) + '](<x.png>)', '[](a'.repeat(80000), '](x.png) '.repeat(60000) + '[']) {
+      const t0 = Date.now()
+      expect(await rebaseFileRefs(line, 'notes/n.md', 'other/n.md', still, () => true)).toBe(line)
+      expect(Date.now() - t0).toBeLessThan(1500)
+    }
+  })
+
+  it('链接的 #锚 原样接回;图片地址里的 # 是文件名的一部分', async () => {
+    // 负对照:链接不拆 # → 第一句红
+    const has = disk('notes/sub/d.pdf', 'notes/c#1.png')
+    expect(await rebaseFileRefs('[p3](sub/d.pdf#page=3)', 'notes/n.md', 'x/n.md', still, has)).toBe('[p3](../notes/sub/d.pdf#page=3)')
+    expect(await rebaseFileRefs('![](c#1.png)', 'notes/n.md', 'x/n.md', still, has)).toBe('![](../notes/c#1.png)')
+  })
+
+  it('一行多条、图片套在链接里:各改各的', async () => {
+    const has = disk('notes/a.png', 'notes/sub/b.pdf')
+    expect(await rebaseFileRefs('前 ![a](a.png) 中 [b](sub/b.pdf "标题") 后 [![a](a.png)](sub/b.pdf)', 'notes/n.md', 'other/n.md', still, has))
+      .toBe('前 ![a](../notes/a.png) 中 [b](../notes/sub/b.pdf "标题") 后 [![a](../notes/a.png)](sub/b.pdf)')
   })
 })

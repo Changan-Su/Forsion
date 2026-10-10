@@ -30,6 +30,7 @@ vi.mock('electron', () => ({
 }))
 vi.mock('../forsionHome', () => ({
   isDevMode: () => false, forsionHomeDir: () => path.join(env.root, 'app-data'), defaultWorkspaceDir: () => path.join(env.root, 'workspace'),
+  tanguDataDir: () => path.join(env.root, 'tangu-data'),
 }))
 vi.mock('../forsionAuth', () => ({ loadTanguCreds: () => ({}) }))
 vi.mock('../activityLog', () => ({ logActivity: vi.fn(), logNoteEdit: vi.fn() }))

@@ -61,7 +61,8 @@ export async function propagateNoteRenames(
       for (let i = 0; i < attempts; i++) {
         const src = backMap.get(p) ?? p
         const links = rewriteNoteRefs(raw, src, p, plan)
-        const next = exists ? await rebaseFileRefs(links, src, p, moved, exists) : links
+        // 重试时的现文可能是别的写者按新位置存下的(引用已经指对了):只修还断着的,不拿旧目录再解释一遍(trustWorking)。
+        const next = exists ? await rebaseFileRefs(links, src, p, moved, exists, { trustWorking: i > 0 }) : links
         if (next === raw) return
         const r = await io.write(p, next, textFingerprint(raw))
         if (r === 'gone') {

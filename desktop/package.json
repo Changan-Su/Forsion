@@ -26,6 +26,7 @@
     "e2e:editor": "node scripts/e2e-editor.cjs",
     "e2e:dnd": "node scripts/block-dnd.e2e.cjs",
     "e2e:sidebardrop": "node scripts/sidebar-drop.e2e.cjs",
+    "e2e:notemove": "node scripts/note-move-assets.e2e.cjs",
     "e2e:ribbon": "node scripts/ribbon-dnd.e2e.cjs",
     "e2e:spacewindow": "node scripts/space-window.e2e.cjs",
     "e2e:spacewindow-input": "node scripts/space-window-input.e2e.cjs",
