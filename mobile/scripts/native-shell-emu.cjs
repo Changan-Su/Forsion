@@ -2544,6 +2544,25 @@ const tabCountText = (list) => {
         `the call was not told about the new model (run frames: ${JSON.stringify(await call("c.frames.filter((f) => f.type === 'run').map((f) => f.run && f.run.model_id)"))}; pill «${await cdp.eval("document.querySelector('.model-pill-btn')?.textContent || ''")}»; bar ${await cdp.eval(phase)}; requests since the pick: ${stubLog.slice(picked).join(' | ') || 'none'})`)
       assert.ok((await h.waitNodes((l) => (!l.some((n) => n.text === 'E2E Model Beta') ? l : null), { timeout: 5000 })).hit, 'the model sheet stayed open')
 
+      // back on the Space's list in the middle of the call (two-level navigation: the list is a full-screen level of its
+      // own and the bar belongs to the app, not to the chat): the call goes on, and its session still opens from its row.
+      // The bar floats over the top of the list there — where exactly is printed and shot, for a person to judge.
+      const live = { closed: await call('c.closed'), binary: await call('c.binary') }
+      await openDrawer()
+      const onList = { nav: await cdp.eval(nav), bar: await elRect(bar), chips: await elRect("[...document.querySelectorAll('.mb-drawer--left .pl-chips')].find((e) => e.offsetParent)"), row: await elRect(rowExpr('E2E Session One')) }
+      console.log(`  on the list during the call: bar ${onList.bar ? fmt(onList.bar) : 'gone'}; category chips ${onList.chips ? fmt(onList.chips) : 'none'}; the call's own row ${onList.row ? fmt(onList.row) : 'not listed'}`)
+      shot('24d-voice-call-list')
+      assert.ok(onList.nav === 'list' && onList.bar, `on the list during a call: level «${onList.nav}», bar ${onList.bar ? 'shown' : 'gone'}`)
+      assert.ok(await h.waitPage(cdp, `window.__call.binary > ${live.binary + 3} && window.__call.closed === ${live.closed} && ${phase} !== 'error'`, 6000),
+        `the call did not go on over the list (closed ${await call('c.closed')} from ${live.closed}, microphone frames ${await call('c.binary')} from ${live.binary}, bar ${await cdp.eval(phase)})`)
+      // back into the session by its row: at a point of the row the bar does not cover (a tap on the bar would mute or hang up)
+      const rowY = onList.row ? Math.max(Math.round((onList.row.top + onList.row.bottom) / 2), onList.bar.bottom + Math.round(8 * density)) : 0
+      assert.ok(onList.row && rowY < onList.row.bottom - 4, `the call's own row ${onList.row ? fmt(onList.row) : '(not listed)'} is wholly under the bar ${fmt(onList.bar)}: it cannot be tapped while the call is on`)
+      h.tapAt(Math.round(onList.row.left + (onList.row.right - onList.row.left) / 3), rowY)
+      assert.ok(await h.waitPage(cdp, `${nav} === 'detail' && window.__call.opened === 1 && window.__call.closed === ${live.closed} && !!${bar}`, 6000),
+        `the row did not lead back into the same call (level «${await cdp.eval(nav)}», opened ${await call('c.opened')}, closed ${await call('c.closed')})`)
+      await h.pause(600)
+
       // leaving the app hangs up (a backgrounded app's microphone is muted by the system while the call keeps billing)
       h.key(3)
       await h.pause(1500)
