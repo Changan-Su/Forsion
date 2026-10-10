@@ -4,6 +4,7 @@
  * 中转(key 与计费在云端,帧协议不变,云端拒绝 / 挂断的原因以 `<4xx> …` 回来)。
  *
  *   ws://<engine>/agent/realtime?token=<本机 token>
+ *   (令牌也可以放在子协议里:Sec-WebSocket-Protocol: forsion.bearer, <token> —— 走公网的那一段用这个,登录令牌不进 URL、不进反代日志)
  *   客户端 → 引擎:首帧 JSON {type:'start', session_id, model, voice?, title?, run:{model_id, app_id?, agent_config?}};
  *                  之后二进制帧 = 16kHz mono s16le PCM(麦克风);通话中 JSON {type:'run', run}(换委派参数,如 Effort)、
  *                  {type:'text', text}(打的字送进电话)。
@@ -17,22 +18,30 @@
  *
  * 密钥只住引擎(brain.realtime 给地址 + 头);鉴权走 query token(浏览器 WebSocket 设不了 Authorization 头);
  * 远程来源(x-forsion-remote)一律拒 —— 通话会以本机身份起 run,远程设备另起一题。
+ *
+ * 两种宿主(RealtimeVoiceHost):本机引擎(attachRealtimeVoice,上面说的就是它);Forsion 服务端网关(手机 / 网页版连的那一头,
+ * 自己不跑 loop)—— 它经 handleRealtimeUpgrade 接手 Upgrade,把「连哪个上游」「委派的 run 交给谁跑」换成自己的,其余(人设、
+ * 转写落库、改正、重连)是同一份代码。网关上人设从云端取(cloudAgentStore / brain.memory),不读本机文件。
  */
-import type { Server } from 'node:http';
+import type { IncomingMessage, Server } from 'node:http';
 import type { Duplex } from 'node:stream';
 import path from 'node:path';
 import WebSocket, { WebSocketServer } from 'ws';
 import { v4 as uuidv4 } from 'uuid';
 import { deps } from '../seams/runtime.js';
 import { resolveProfile } from '../seams/appProfile.js';
-import { createRun } from './runStore.js';
+import { createRun, getRunForUser } from './runStore.js';
 import { enqueueRun } from './agentLoop.js';
 import { subscribe } from './eventBus.js';
 import { getAgent, readAgentsMeta, resolveMemorySlug } from '../agents/agentRegistry.js';
+import { cloudAgentsEnabled, cloudGetAgent, cloudReadAgentsMeta } from '../agents/cloudAgentStore.js';
 import { agentsDir, readUserMd } from '../core/tanguHome.js';
 import { createMemoryRepository } from './memoryRepository.js';
+import { runWithUserAgentScope } from '../seams/runContext.js';
 
 export const REALTIME_PATH = '/agent/realtime';
+/** 子协议鉴权:客户端 new WebSocket(url, [REALTIME_BEARER_PROTOCOL, token]);握手里必须把这个名字回给它,否则浏览器当握手失败。 */
+export const REALTIME_BEARER_PROTOCOL = 'forsion.bearer';
 const HISTORY_TURNS = 12;
 /**
  * 没给音色时用的缺省,按模型家族分:Qwen-Audio 那一族没有 Tina 这类 Omni 音色。
@@ -57,13 +66,20 @@ const ASK_TANGU = {
 
 const clip = (s: string, n: number): string => (s.length > n ? s.slice(0, n) + '…' : s);
 
-/** 通话人设:身份 + 说话方式 + 委派规则 + 人格 / 用户画像 / 记忆 / 本会话最近几轮。每次回应都会重计上下文,各段都封顶。 */
-export async function buildVoiceInstructions(sessionId: string, agentSlug: string | undefined): Promise<string> {
-  const slug = agentSlug || readAgentsMeta().defaultSlug;
-  const def = await getAgent(slug).catch(() => null);
+/**
+ * 通话人设:身份 + 说话方式 + 委派规则 + 人格 / 用户画像 / 记忆 / 本会话最近几轮。每次回应都会重计上下文,各段都封顶。
+ * userId 只在云端多租户用得上(按它取这个人自己的 Agent 与记忆);那里没有「用户画像」那一段 —— 云端的 run 也没有,
+ * 而本进程的 USER.md 是服务器自己的文件,不属于任何一个用户。
+ */
+export async function buildVoiceInstructions(sessionId: string, agentSlug: string | undefined, userId = ''): Promise<string> {
+  const cloud = cloudAgentsEnabled();
+  const slug = agentSlug || (cloud ? (await cloudReadAgentsMeta(userId).catch(() => null))?.defaultSlug || '' : readAgentsMeta().defaultSlug);
+  const def = await (cloud ? cloudGetAgent(userId, slug) : getAgent(slug)).catch(() => null);
   const name = def?.name || 'Tangu';
   let memory = '';
-  if (def) {
+  if (def && cloud) {
+    try { memory = String((await runWithUserAgentScope(userId, resolveMemorySlug(def), () => deps().brain.memory.getMemory(userId)))?.content || ''); } catch { /* 没有记忆 */ }
+  } else if (def) {
     try { memory = createMemoryRepository(path.join(agentsDir(), resolveMemorySlug(def))).snapshot().content; } catch { /* 没有记忆文件 */ }
   }
   let history = '';
@@ -84,7 +100,7 @@ export async function buildVoiceInstructions(sessionId: string, agentSlug: strin
     `The user may also type messages during the call; answer those by voice in the same way.`,
   ];
   if (def?.soul?.trim()) sections.push(`## Your persona\n${clip(def.soul.trim(), 2000)}`);
-  const user = readUserMd().trim();
+  const user = cloud ? '' : readUserMd().trim();
   if (user) sections.push(`## About the user\n${clip(user, 2000)}`);
   if (memory.trim()) sections.push(`## Your memory\n${clip(memory.trim(), 3000)}`);
   if (history) sections.push(`## Recent messages in this chat\n${history}`);
@@ -113,13 +129,55 @@ function parseStart(raw: string): StartMsg | null {
   return validRun(m.run) ? m as StartMsg : null;
 }
 
-/** 用宿主的 authMiddleware 判 upgrade 请求(它只读 authorization 头,桩一个 res 就够)。 */
+/** 委派给 Tangu 的一个 run(ask_tangu):与输入框发出的同一条路 —— 同会话、同 agent_config、审批照常。 */
+export interface DelegatedRun {
+  sessionId: string;
+  appId: string;
+  modelId: string;
+  task: string;
+  /** 触发这次委派的那段话在库里的行 id:run 复用它当本轮用户消息(不另写一条「模型转述的任务」)。 */
+  userMessageId?: string;
+  agentConfig: Record<string, unknown>;
+  ephemeralHint?: string;
+}
+export interface RealtimeCaller { userId: string; token: string }
+/** 一通电话往外的两条腿由宿主定。缺省 = 本机引擎(brain.realtime + 本进程的 run 队列)。 */
+export interface RealtimeVoiceHost {
+  /** 这通电话连哪个上游。 */
+  endpoint(model: string, caller: RealtimeCaller): { url: string; headers: Record<string, string> };
+  /** 把委派的 run 起起来,回它的 id(之后通话按这个 id 等结果)。 */
+  startRun(run: DelegatedRun, caller: RealtimeCaller): Promise<string>;
+}
+
+const localHost: RealtimeVoiceHost = {
+  endpoint: (model) => deps().brain.realtime!.endpoint(model),
+  startRun: async (r, { userId }) => {
+    const runId = uuidv4();
+    await createRun({
+      id: runId, sessionId: r.sessionId, userId, appId: r.appId, modelId: r.modelId, assistantMessageId: uuidv4(),
+      // 等同用户在输入框发出:origin=client(审批档现读会话设置)、审批托盘握手(待批卡出在输入框上方)。
+      // 复用语音那行时 insertUserMessage 是 ON CONFLICT DO NOTHING:库里留用户原话,模型按原话 + 前文接活。
+      input: {
+        message: r.task, userMessageId: r.userMessageId || uuidv4(), attachments: [], agentConfig: r.agentConfig, origin: 'client', approvalTray: true,
+        ...(r.ephemeralHint ? { ephemeralHint: r.ephemeralHint } : {}),
+      },
+    });
+    enqueueRun(r.sessionId, runId);
+    return runId;
+  },
+};
+
+/**
+ * 用宿主的 authMiddleware 判 upgrade 请求:桩一个只带 authorization 头的请求。只适合「只看这个头」的宿主(引擎自带的那个);
+ * 还要看方法 / 路径的宿主(Forsion 服务端:作用域令牌按路由判)得自己给 authenticate —— 那边的中间件一读 req.originalUrl 就抛。
+ * 宿主的校验同步抛错 / 异步 reject 一律当没通过:悬着不答 = 握手永不结束,外加一个未处理的 rejection(Codex 10-10)。
+ */
 function authenticate(token: string): Promise<string | null> {
   return new Promise((resolve) => {
     const fakeReq: any = { headers: { authorization: `Bearer ${token}` } };
     const fakeRes: any = { status: () => fakeRes, json: () => resolve(null), sendStatus: () => resolve(null) };
     try {
-      deps().host.authMiddleware(fakeReq, fakeRes, () => resolve(fakeReq.user?.userId ?? null));
+      Promise.resolve(deps().host.authMiddleware(fakeReq, fakeRes, () => resolve(fakeReq.user?.userId ?? null))).catch(() => resolve(null));
     } catch { resolve(null); }
   });
 }
@@ -131,19 +189,42 @@ function reject(socket: Duplex, code: number, text: string): void {
   socket.destroy();
 }
 
+let wss: WebSocketServer | null = null;
+/** 子协议里的令牌(`forsion.bearer, <token>`);没带就是空串。 */
+function bearerFromProtocols(req: IncomingMessage): string {
+  const offered = String(req.headers['sec-websocket-protocol'] || '').split(',').map((x) => x.trim()).filter(Boolean);
+  const at = offered.indexOf(REALTIME_BEARER_PROTOCOL);
+  return at >= 0 ? offered[at + 1] || '' : '';
+}
+
+/**
+ * 接手一条通话的 Upgrade。不是这条路(o.path,缺省 REALTIME_PATH)就返回 false、不碰 socket —— 宿主还有别的 Upgrade 消费者时留给它们;
+ * 是就返回 true(之后 socket 归这里管,包括拒绝)。谁能连(回环 / 公网)由调用方先判;这里只验令牌。
+ * o.authenticate:令牌 → 用户 id(不认就 null)。缺省走宿主的 authMiddleware(见 authenticate 的说明)。
+ */
+export function handleRealtimeUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer,
+  o: { path?: string; host?: RealtimeVoiceHost; authenticate?: (token: string) => Promise<string | null> } = {}): boolean {
+  const url = new URL(req.url || '/', 'http://local');
+  if (url.pathname !== (o.path ?? REALTIME_PATH)) return false;
+  const token = url.searchParams.get('token') || bearerFromProtocols(req);
+  if (!token) { reject(socket, 401, 'Unauthorized'); return true; } // 没带令牌不必去问宿主
+  wss ??= new WebSocketServer({ noServer: true, maxPayload: 1 << 20, handleProtocols: (offered) => (offered.has(REALTIME_BEARER_PROTOCOL) ? REALTIME_BEARER_PROTOCOL : false) });
+  const server = wss;
+  void Promise.resolve().then(() => (o.authenticate ?? authenticate)(token)).catch(() => null).then((userId) => {
+    if (!userId) return reject(socket, 401, 'Unauthorized');
+    server.handleUpgrade(req, socket, head, (client) => handleCall(client, { userId, token }, o.host ?? localHost));
+  });
+  return true;
+}
+
 export function attachRealtimeVoice(server: Server): void {
-  const wss = new WebSocketServer({ noServer: true, maxPayload: 1 << 20 });
   server.on('upgrade', (req, socket, head) => {
-    const url = new URL(req.url || '/', 'http://local');
-    if (url.pathname !== REALTIME_PATH) return reject(socket, 404, 'Not Found'); // 本进程没有别的 upgrade 消费者
+    if (new URL(req.url || '/', 'http://local').pathname !== REALTIME_PATH) return reject(socket, 404, 'Not Found'); // 本进程没有别的 upgrade 消费者
     // 只收本机回环:通话以本机身份起 run(origin=client),远程来源另起一题。光看 x-forsion-remote 头不够 ——
     // 引擎经 TANGU_HOST 监听非回环时,远端持 token 省掉这个头就冒充本机了(Codex 10-01)。
     if (req.headers['x-forsion-remote'] || !isLoopback(req.socket.remoteAddress)) return reject(socket, 403, 'Forbidden');
     if (!deps().brain.realtime) return reject(socket, 501, 'Not Implemented');
-    void authenticate(url.searchParams.get('token') || '').then((userId) => {
-      if (!userId) return reject(socket, 401, 'Unauthorized');
-      wss.handleUpgrade(req, socket, head, (client) => handleCall(client, userId));
-    });
+    handleRealtimeUpgrade(req, socket, head);
   });
 }
 
@@ -152,6 +233,8 @@ const RETRYABLE_UPSTREAM = /^<5\d{4}>|InternalError|ModelServingError/;
 /** `<400> InternalError.Algo.InvalidParameter: Voice … is not supported` 这类请求本身不对的,名字里带 InternalError 也不重连(重连一百次也是同一个错)。 */
 export const retryableUpstream = (code: number, why: string): boolean => !/^<4\d\d>/.test(why) && (code === 1011 || RETRYABLE_UPSTREAM.test(why));
 const MAX_RECONNECTS = 2;
+/** 多久 ping 一次客户端(上一个没回就收线)。台架经 TANGU_REALTIME_PING_MS 调短。 */
+const CLIENT_PING_MS = Number(process.env.TANGU_REALTIME_PING_MS) || 20_000;
 /** 上游握手被拒时给客户端的原因:正文带 { detail } 就写成 `<状态码> detail`(与云端中转接通后挂断的 reason 同一个写法),否则只报状态码。 */
 export function handshakeRefusal(status: number, body: string): string {
   let detail = '';
@@ -159,7 +242,8 @@ export function handshakeRefusal(status: number, body: string): string {
   return detail ? `<${status}> ${clip(detail, 200)}` : `upstream HTTP ${status}`;
 }
 
-function handleCall(client: WebSocket, userId: string): void {
+function handleCall(client: WebSocket, caller: RealtimeCaller, host: RealtimeVoiceHost): void {
+  const { userId } = caller;
   let upstream: WebSocket | null = null;
   let start: StartMsg | null = null;
   let closed = false;
@@ -252,31 +336,35 @@ function handleCall(client: WebSocket, userId: string): void {
     }
     const profile = resolveProfile(s.run.app_id);
     if (!profile) throw new Error(`unknown app_id: ${s.run.app_id}`);
-    const runId = uuidv4();
-    let off: () => void = () => {};
+    const runId = await host.startRun({
+      sessionId: s.session_id, appId: profile.appId, modelId: s.run.model_id, task, userMessageId: reuse || undefined, agentConfig: s.run.agent_config || {},
+      // 只进本 run 的模型上下文、不进聊天记录(agent_runs.input 里随 run 留一份):改正没成(没交原话 / 存储不支持)时,Tangu 也拿得到实时模型的理解。
+      ...(voiced ? { ephemeralHint: `This request came from a voice call. The user's message above is a speech-recognition transcript and may contain mishearings. The voice assistant understood the request as: "${clip(task, 1000)}". If they differ, follow the voice assistant's understanding.` } : {}),
+    }, caller);
+    if (closed) return;
+    // 等它的结果:听事件,同时看库里的终态 —— run 可能在我们订阅之前就结束了(网关上 run 由 worker 建,id 回来才订阅得上;
+    // 网关多实例时事件还可能落在别的实例),只听事件会一直等下去。
+    // ponytail: 5 秒查一次库;要更快就给 stateStore 加终态通知。
     const done = new Promise<string>((resolve, rejectRun) => {
-      off = subscribe(runId, (ev) => {
-        if (ev.type === 'done') { off(); unsubs.delete(off); resolve(String(ev.payload?.content ?? '')); }
-        else if (ev.type === 'error') { off(); unsubs.delete(off); rejectRun(new Error(String(ev.payload?.message || ev.payload?.error || 'run failed'))); }
+      let settled = false;
+      const stop = (): void => { settled = true; off(); clearInterval(poll); unsubs.delete(stop); };
+      const off = subscribe(runId, (ev) => {
+        if (ev.type === 'done') { stop(); resolve(String(ev.payload?.content ?? '')); }
+        else if (ev.type === 'error') { stop(); rejectRun(new Error(String(ev.payload?.message || ev.payload?.error || 'run failed'))); }
       });
-      unsubs.add(off);
+      const look = async (): Promise<void> => {
+        const run = await getRunForUser(runId, userId).catch(() => null);
+        if (settled || !run) return;
+        if (run.status === 'done') {
+          let result = run.result;
+          if (typeof result === 'string') try { result = JSON.parse(result); } catch { result = null; }
+          stop(); resolve(String(result?.content ?? ''));
+        } else if (run.status === 'failed' || run.status === 'aborted') { stop(); rejectRun(new Error(String(run.error || run.status))); }
+      };
+      const poll = setInterval(() => void look(), 5000);
+      unsubs.add(stop);
+      void look();
     });
-    try {
-      await createRun({
-        id: runId, sessionId: s.session_id, userId, appId: profile.appId, modelId: s.run.model_id, assistantMessageId: uuidv4(),
-        // 等同用户在输入框发出:origin=client(审批档现读会话设置)、审批托盘握手(待批卡出在输入框上方)。
-        // 复用语音那行时 insertUserMessage 是 ON CONFLICT DO NOTHING:库里留用户原话,模型按原话 + 前文接活。
-        input: {
-          message: task, userMessageId: reuse || uuidv4(), attachments: [], agentConfig: s.run.agent_config || {}, origin: 'client', approvalTray: true,
-          // 只进本 run 的模型上下文、不进聊天记录(agent_runs.input 里随 run 留一份):改正没成(没交原话 / 存储不支持)时,Tangu 也拿得到实时模型的理解。
-          ...(voiced ? { ephemeralHint: `This request came from a voice call. The user's message above is a speech-recognition transcript and may contain mishearings. The voice assistant understood the request as: "${clip(task, 1000)}". If they differ, follow the voice assistant's understanding.` } : {}),
-        },
-      });
-      enqueueRun(s.session_id, runId);
-    } catch (e) {
-      off(); unsubs.delete(off);
-      throw e;
-    }
     toClient({ type: 'tangu.run', status: 'started', run_id: runId, task });
     try {
       const result = (await done).trim() || '(no output)';
@@ -369,9 +457,13 @@ function handleCall(client: WebSocket, userId: string): void {
     if (owner && owner !== userId) return end('session not found');
     const profile = resolveProfile(s.run.app_id);
     if (!profile) return end(`unknown app_id: ${s.run.app_id}`);
-    if (!owner) await st.autoCreateSession({ id: s.session_id, userId, appId: profile.appId, title: s.title || 'Voice call', modelId: s.run.model_id });
+    if (!owner) {
+      await st.autoCreateSession({ id: s.session_id, userId, appId: profile.appId, title: s.title || 'Voice call', modelId: s.run.model_id });
+      // 建会话是「已存在就不动」:两个账号同时拿同一个还不存在的 id 来拨,输的那个不复核就进了赢家的会话(读历史、写转写都只按会话 id)。Codex 10-10
+      if ((await st.getSessionOwner(s.session_id)) !== userId) return end('session not found');
+    }
     let ep: { url: string; headers: Record<string, string> };
-    try { ep = deps().brain.realtime!.endpoint(s.model); } catch (e: any) { return end(e?.message || String(e)); }
+    try { ep = host.endpoint(s.model, caller); } catch (e: any) { return end(e?.message || String(e)); }
     await connect(s, ep);
   };
 
@@ -380,7 +472,7 @@ function handleCall(client: WebSocket, userId: string): void {
   // ponytail: 断在结果播报中途的那条 [Tangu result] 不重放;真有人报「办完了没念」再补。
   const connect = async (s: StartMsg, ep: { url: string; headers: Record<string, string> }, replay?: string): Promise<void> => {
     const agentSlug = typeof s.run.agent_config?.agentSlug === 'string' ? s.run.agent_config.agentSlug : undefined;
-    const instructions = await buildVoiceInstructions(s.session_id, agentSlug);
+    const instructions = await buildVoiceInstructions(s.session_id, agentSlug, userId);
     if (closed) return;
     const up = new WebSocket(ep.url, { headers: ep.headers });
     upstream = up;
@@ -428,6 +520,17 @@ function handleCall(client: WebSocket, userId: string): void {
       void connect(s, ep, unanswered).catch((e) => end(e?.message || String(e)));
     });
   };
+
+  // 客户端这一段可能走公网、过反代(手机 → 网关):只听不说的那一阵两头都没有帧,反代的读超时(约 60s)会把通话掐掉;
+  // 对端断网、连关闭帧都发不出来时,这边也得自己发现 —— 上游按通话时长计费,没人听的电话不能一直挂着。
+  let alive = true;
+  const ping = setInterval(() => {
+    if (!alive) return end('client timed out');
+    alive = false;
+    try { client.ping(); } catch { /* 正在关 */ }
+  }, CLIENT_PING_MS);
+  unsubs.add(() => clearInterval(ping));
+  client.on('pong', () => { alive = true; });
 
   client.on('message', (data, isBinary) => {
     if (isBinary) {

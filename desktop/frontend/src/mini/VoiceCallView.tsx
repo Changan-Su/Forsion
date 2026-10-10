@@ -12,7 +12,7 @@ import { THINKING_LEVELS, type AgentConfig, type ThinkingLevel } from '../types'
 import { thinkingLabel } from '../components/thinkingLabel'
 import { AgentAvatar } from '../components/AgentAvatar'
 import { homeTarget } from '../services/engine/targets'
-import { CALL_TEXT_FRESH_MS, endCall, getCall, getCallError, getCallPresence, onCallEvent, postCallEvent, sendCallText, setCallMic, setCallPresence, setCallSpeaker, startCall, subscribeCall, toggleMute, updateCallRun, type StartCallOptions } from '../services/realtimeCall'
+import { CALL_ENDED_BACKGROUND, CALL_TEXT_FRESH_MS, endCall, getCall, getCallError, getCallPresence, onCallEvent, postCallEvent, sendCallText, setCallMic, setCallPresence, setCallSpeaker, startCall, subscribeCall, toggleMute, updateCallRun, type StartCallOptions } from '../services/realtimeCall'
 import './voiceCall.css'
 
 registerMessages({
@@ -37,10 +37,12 @@ registerMessages({
   'livecall.speaker': { zh: '扬声器', en: 'Speaker' },
   'livecall.effort': { zh: 'Effort（Tangu 办事时的思考档位）', en: 'Effort (thinking level when Tangu works)' },
   'livecall.systemDefault': { zh: '系统默认', en: 'System default' },
+  'livecall.endedBackground': { zh: '离开 Forsion 后通话已挂断', en: 'it hung up when you left Forsion' },
 })
 
 /** 通话为什么结束:常见的几种说人话(Forsion 云端中转的拒绝 / 挂断以 `<4xx> …` 回来),其余原样给。 */
 export function callEndText(error: string, t: (key: string) => string): string {
+  if (error === CALL_ENDED_BACKGROUND) return t('livecall.endedBackground')
   if (/token_quota_exceeded/.test(error)) return t('livecall.quotaExhausted')
   if (/^<401>/.test(error)) return t('livecall.signInExpired')
   if (/^<409>/.test(error)) return t('livecall.replaced')
@@ -68,7 +70,21 @@ export function VoiceCallView(props: ViewProps) {
   return <CallCard key={sessionId} sessionId={sessionId} params={props.params} />
 }
 
-function CallCard({ sessionId, params }: { sessionId: string; params: ViewProps['params'] }) {
+/**
+ * 手机:没有 Mini 窗,同一张通话卡压成页面顶上的一条(MobileRoot 挂载,参数来自 services/realtimeCall 的 openCallLayer)。
+ * 不做成整屏:聊天区要照常可用 —— 看得到双方的话、批得了 Tangu 要做的操作(待批卡出在输入框上方)、打的字照样进电话。
+ * 条上没有设备与 Effort 三行:走哪个听筒 / 扬声器归系统管,档位跟输入框里这个会话的设置走。
+ */
+export function VoiceCallBar({ params, onClose }: { params: ViewProps['params']; onClose: () => void }) {
+  const sessionId = typeof params.sessionId === 'string' ? params.sessionId : ''
+  // dial:见 openCallLayer —— 上一通收线之后再按电话键要重拨,光按会话 id 认会停在那条报错上。
+  return <CallCard key={`${sessionId}:${params.dial}`} sessionId={sessionId} params={params} onClose={onClose} />
+}
+
+/** onClose 给了 = 页面里的那一条(手机);没给 = Mini 窗里的整张卡,关闭即关窗。 */
+function CallCard({ sessionId, params, onClose }: { sessionId: string; params: ViewProps['params']; onClose?: () => void }) {
+  const bar = !!onClose
+  const close = onClose ?? ((): void => window.tangu?.closeSelf?.())
   const { t } = useI18n()
   const call = useSyncExternalStore(subscribeCall, getCall)
   const error = useSyncExternalStore(subscribeCall, getCallError)
@@ -98,8 +114,19 @@ function CallCard({ sessionId, params }: { sessionId: string; params: ViewProps[
   const hadCall = useRef(false)
   useEffect(() => {
     if (call) hadCall.current = true
-    else if (hadCall.current && !error) window.tangu?.closeSelf?.()
-  }, [call, error])
+    else if (hadCall.current && !error) close()
+  }, [call, error]) // eslint-disable-line react-hooks/exhaustive-deps -- close 每次渲染都是新函数,指的是同一件事
+
+  // 条上没有 Effort 那一行:输入框里改了这个会话的设置(档位、审批档、模型…),之后委派的 run 跟着走。
+  // 模型不在会话配置里 —— 药丸上换模型改的是会话行的 model_id,得另订一份(Codex 10-10:只订配置时,通话中换了模型,委派出去的还是旧的)。
+  const sessionCfg = useApp((s) => (bar ? s.configBySession[sessionId] : undefined))
+  const sessionModel = useApp((s) => (bar ? s.sessions.find((x) => x.id === sessionId)?.model_id : undefined))
+  useEffect(() => {
+    if (!bar) return
+    const p = useApp.getState().voiceRunParams(sessionId)
+    runRef.current = { model_id: p.modelId, agent_config: p.agentConfig }
+    updateCallRun(runRef.current)
+  }, [bar, sessionCfg, sessionModel, sessionId])
 
   // 接通后登记「这个会话在通话」,主窗输入框据此把打的字送进来;收线 / 关窗撤销(崩了没撤,主窗等不到确认会自己清)。
   // 重连中收不下打的字:撤掉登记让主窗直接发 Tangu(不用等 2s 超时),接回来再登记 —— 超时那条路会把登记清掉且再也不补(Codex 10-02)。
@@ -180,7 +207,7 @@ function CallCard({ sessionId, params }: { sessionId: string; params: ViewProps[
 
   const hangUp = (): void => {
     endCall()
-    window.tangu?.closeSelf?.()
+    close()
   }
 
   // 百炼服务端错误(<50002> InternalError…)原文太长也看不懂:说人话,原文放悬停里。
@@ -195,18 +222,51 @@ function CallCard({ sessionId, params }: { sessionId: string; params: ViewProps[
   const live = !!call && !error
   const activity = !call ? 'idle' : call.muted ? 'muted' : call.working && call.phase !== 'speaking' ? 'working' : call.phase
 
+  const portrait = (
+    <div className="vc-portrait" ref={ringRef}>
+      <span className="vc-halo" aria-hidden="true" />
+      <AgentAvatar name={name} url={avatar} fill className="vc-avatar" />
+    </div>
+  )
+  const statusLine = (
+    <div className={`vc-status${error ? ' is-error' : ''}`} title={error || call?.working || undefined} role="status">
+      <span className="vc-status-text">{status}</span>
+      {live && connectedAt ? <span className="vc-timer">{fmtDuration(now - connectedAt)}</span> : null}
+    </div>
+  )
+  const muteButton = (
+    <button className="vc-btn vc-mute" aria-pressed={!!call?.muted} disabled={!live}
+      title={call?.muted ? t('livecall.unmute') : t('livecall.mute')} aria-label={call?.muted ? t('livecall.unmute') : t('livecall.mute')}
+      onClick={toggleMute}>
+      {call?.muted ? <MicOff size={18} /> : <Mic size={18} />}
+    </button>
+  )
+  const hangUpButton = (
+    <button className="vc-btn vc-hangup" title={live ? t('livecall.end') : t('livecall.close')} aria-label={live ? t('livecall.end') : t('livecall.close')} onClick={hangUp}>
+      <PhoneOff size={18} />
+    </button>
+  )
+
+  if (bar) {
+    return (
+      <div className="voice-call vc-bar" data-phase={activity} role="group" aria-label={t('livecall.title')}>
+        {portrait}
+        <div className="vc-bar-text">
+          <div className="vc-name">{name}</div>
+          {statusLine}
+        </div>
+        {muteButton}
+        {hangUpButton}
+      </div>
+    )
+  }
+
   return (
     <div className="mini-native voice-call" data-phase={activity}>
       <div className="vc-stage">
-        <div className="vc-portrait" ref={ringRef}>
-          <span className="vc-halo" aria-hidden="true" />
-          <AgentAvatar name={name} url={avatar} fill className="vc-avatar" />
-        </div>
+        {portrait}
         <div className="vc-name">{name}</div>
-        <div className={`vc-status${error ? ' is-error' : ''}`} title={error || call?.working || undefined} role="status">
-          <span className="vc-status-text">{status}</span>
-          {live && connectedAt ? <span className="vc-timer">{fmtDuration(now - connectedAt)}</span> : null}
-        </div>
+        {statusLine}
       </div>
       <div className="vc-settings">
         <label className="mini-native-bar vc-row" title={t('livecall.mic')}>
@@ -231,14 +291,8 @@ function CallCard({ sessionId, params }: { sessionId: string; params: ViewProps[
         </label>
       </div>
       <div className="vc-controls">
-        <button className="vc-btn vc-mute" aria-pressed={!!call?.muted} disabled={!live}
-          title={call?.muted ? t('livecall.unmute') : t('livecall.mute')} aria-label={call?.muted ? t('livecall.unmute') : t('livecall.mute')}
-          onClick={toggleMute}>
-          {call?.muted ? <MicOff size={18} /> : <Mic size={18} />}
-        </button>
-        <button className="vc-btn vc-hangup" title={live ? t('livecall.end') : t('livecall.close')} aria-label={live ? t('livecall.end') : t('livecall.close')} onClick={hangUp}>
-          <PhoneOff size={18} />
-        </button>
+        {muteButton}
+        {hangUpButton}
       </div>
     </div>
   )

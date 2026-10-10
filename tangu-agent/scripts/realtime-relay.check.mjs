@@ -12,6 +12,8 @@
  *   F 上游报 <50002> 断开:通话不挂、换一条上游重连(指令带上文);断在没答完的那句上就重喂那句;空闲时断不重喂;超过 2 次才挂断。
  *   H 通话模型不带提供方前缀 = Forsion 云端的实时模型:引擎改连云端中转(ws <cloud>/api/brain/realtime,带 Forsion token,不碰直连上游);
  *     云端握手拒绝(402 + detail)/ 接通后以 <402> 挂断 → 原因原样到客户端且不重连;云端转来的 <50002> 照旧重连。
+ *   I 客户端那一段走公网时要用的三样(Forsion 服务端网关托管通话 —— 手机 / 网页版连的那一头;本机引擎上同样成立):
+ *     令牌放子协议(不进 URL)、POST /agent/runs 认 user_message_id / ephemeral_hint(网关替通话委派 run)、对端不回 pong 就收线(上游按时长计费)。
  * 不花额度、不需要模型。用法:npm run build && npm run check:realtime
  */
 import { spawn } from 'node:child_process';
@@ -93,7 +95,7 @@ writeFileSync(join(shared, 'config.json'), JSON.stringify({ providers: [{ provid
 const TOKEN = randomUUID(), port = await freePort(), engineLog = join(OUT, 'engine.log');
 const child = spawn(process.execPath, [join(root, 'dist', 'standalone', 'main.js'), '--port', String(port), '--host', '127.0.0.1',
   '--data-dir', join(home, 'state.db'), '--sandbox', 'none', '--cloud-url', cloudUrl, '--token', TOKEN], {
-  env: { ...process.env, TANGU_HOME: home, TANGU_DEFAULT_WORKSPACE: workspace, TANGU_REALTIME_UPSTREAM: fakeUrl, TANGU_BROWSER_CDP: 'off', TANGU_BROWSER_EXTENSION: '0',
+  env: { ...process.env, TANGU_HOME: home, TANGU_DEFAULT_WORKSPACE: workspace, TANGU_REALTIME_UPSTREAM: fakeUrl, TANGU_REALTIME_PING_MS: '1000', TANGU_BROWSER_CDP: 'off', TANGU_BROWSER_EXTENSION: '0',
     FORSION_DESKTOP_CONFIG: join(OUT, 'desktop-config.json') },
   stdio: ['ignore', 'pipe', 'pipe'],
 });
@@ -295,6 +297,45 @@ try {
   check('H5 云端握手拒绝后正文迟迟不来:几秒内照样收场,原因带状态码', stalledH?.reason === 'upstream HTTP 503' && Date.now() - t5 < 6000, JSON.stringify({ reason: stalledH?.reason, ms: Date.now() - t5 }));
   cloud.refuse = null;
   try { h.c.close(); } catch { /* ignore */ }
+
+  // ── I1:令牌放在子协议里(URL 里没有令牌)。握手必须把同名子协议回来 —— 不回,浏览器当握手失败。
+  const handshake = (protocols) => new Promise((r) => {
+    const c = new WebSocket(`ws://127.0.0.1:${port}/agent/realtime`, protocols);
+    c.once('open', () => { r(`open:${c.protocol}`); c.close(); });
+    c.once('unexpected-response', (_q, res) => r(`http:${res.statusCode}`));
+    c.once('error', () => r('error'));
+  });
+  const viaProto = await handshake(['forsion.bearer', TOKEN]);
+  const badProto = await handshake(['forsion.bearer', 'not-the-token']);
+  check('I1 令牌放子协议:接得通且握手回同名子协议;令牌不对是 401', viaProto === 'open:forsion.bearer' && badProto === 'http:401', JSON.stringify({ viaProto, badProto }));
+
+  // ── I2:POST /agent/runs 带 user_message_id(通话里已落库的那行)+ ephemeral_hint → run 复用这行、提示进 input;库里那行不被 task 盖掉、也不多写一行
+  const postRun = (body) => fetch(`http://127.0.0.1:${port}/agent/runs`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${TOKEN}` }, body: JSON.stringify(body) }).then((r) => r.json());
+  const reused = await postRun({ session_id: sid, model_id: 'none/none', message: '算一下一加一', agent_config: {}, user_message_id: typedRow.id, ephemeral_hint: `  ${'提示'.repeat(1500)}  ` });
+  const inI = JSON.parse(rows(`SELECT input FROM agent_runs WHERE id = ?`, reused.runId)[0]?.input || '{}');
+  await until(() => rows(`SELECT status FROM agent_runs WHERE id = ?`, reused.runId)[0]?.status !== 'queued', 5000);
+  await sleep(500); // run 起来时才插本轮用户消息(ON CONFLICT DO NOTHING)
+  const keptRow = rows(`SELECT content FROM chat_messages WHERE id = ?`, typedRow.id)[0]?.content;
+  const extraRow = rows(`SELECT count(*) n FROM chat_messages WHERE session_id = ? AND content = ?`, sid, '算一下一加一')[0].n;
+  check('I2 run 复用通话里那行(原话不动、不另写一行),提示进 input 且封顶 2000 字',
+    reused.userMessageId === typedRow.id && inI.userMessageId === typedRow.id && inI.ephemeralHint?.length === 2000 && keptRow === '一加一等于几？' && extraRow === 0,
+    JSON.stringify({ same: reused.userMessageId === typedRow.id, hintLen: inI.ephemeralHint?.length, keptRow, extraRow }));
+  const odd = await postRun({ session_id: sid, model_id: 'none/none', message: '随便', agent_config: {}, user_message_id: 'not-a-row-id', ephemeral_hint: 42 });
+  const inOdd = JSON.parse(rows(`SELECT input FROM agent_runs WHERE id = ?`, odd.runId)[0]?.input || '{}');
+  check('I3 形状不对的两项不认:id 另发一个,没有提示', /^[0-9a-f-]{36}$/.test(odd.userMessageId || '') && !('ephemeralHint' in inOdd), JSON.stringify({ id: odd.userMessageId, hint: inOdd.ephemeralHint ?? null }));
+
+  // ── I4:对端不回 pong(断网、连关闭帧都发不出来)→ 收线,上游那条也关掉(上游按时长计费,没人听的电话不能一直挂着)
+  const upstreamBefore = fake.conns;
+  const mute = await dial('bailian/qwen3.8-omni-flash-realtime');
+  mute.c.pong = () => {}; // 这个客户端从此不回 pong
+  const readyI = await until(() => mute.evs.some((m) => m.type === 'ready'), 10_000);
+  const upSock = fake.sock;
+  let upClosed = false;
+  upSock.once('close', () => { upClosed = true; });
+  const hungUp = await until(() => mute.evs.find((m) => m.type === 'end'), 6000);
+  await until(() => upClosed, 3000);
+  check('I4 对端不回 pong:几秒内收线(client timed out),上游那条也关了', !!readyI && fake.conns === upstreamBefore + 1 && hungUp?.reason === 'client timed out' && upClosed,
+    JSON.stringify({ ready: !!readyI, reason: hungUp?.reason, upClosed }));
 } catch (e) {
   check('台架异常', false, String(e?.stack || e));
 } finally {

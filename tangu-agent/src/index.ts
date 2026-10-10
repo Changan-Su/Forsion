@@ -206,6 +206,9 @@ export type {
 export { parseAgentConfig, serializeAgentConfig, resolveMemorySlug } from './agents/agentRegistry.js';
 export type { NormalAgentDef } from './agents/agentRegistry.js';
 export { currentAgentSlug, currentRunClientTag } from './seams/runContext.js';
+// 实时语音通话:服务端网关经 handleRealtimeUpgrade 接手 Upgrade,并换上自己的宿主(上游走自己的中转、委派的 run 派给 worker)。
+export { handleRealtimeUpgrade, REALTIME_PATH, REALTIME_BEARER_PROTOCOL } from './services/realtimeVoice.js';
+export type { RealtimeVoiceHost, RealtimeCaller, DelegatedRun } from './services/realtimeVoice.js';
 export { DEFAULT_AGENT_SLUG } from './core/tanguHome.js';
 export type { BillingServices } from './seams/billing.js';
 export type { AppProfile, AppProfileOverride, PromptSectionCtx, PromptSections } from './seams/appProfile.js';
