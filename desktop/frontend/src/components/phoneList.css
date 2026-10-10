@@ -74,8 +74,8 @@
   width: calc(58 * var(--pl-dp)); height: calc(58 * var(--pl-dp));
   border: 0; border-radius: var(--radius-lg, 16px);
   background: var(--accent); color: var(--on-accent, #fff);
-  /* 投影收在 14dp 以内:抽屉止于 Dock 之上的列表里,再大就被 .mb-drawer-body 的裁剪切出一条直边 */
-  box-shadow: 0 2px 8px color-mix(in srgb, var(--accent) 30%, transparent), 0 1px 3px var(--shadow, rgba(0, 0, 0, 0.12));
+  /* 高程走统一 token(DESIGN §7:空间阴影不写死;扁平模式由根节点清零),和顶上的胶囊、通话条同一层淡阴影 */
+  box-shadow: var(--card-shadow);
   -webkit-touch-callout: none; user-select: none;
 }
 .mb-shell[data-nav] .pl-fab:active { transform: scale(0.95); }
