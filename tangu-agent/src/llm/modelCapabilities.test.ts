@@ -52,8 +52,19 @@ describe('resolveModelCapability — 路由矩阵', () => {
     ['Claude Opus 5.5(思考常开)', { baseUrl: 'https://api.anthropic.com', modelId: 'claude-opus-5-5' }, 'anthropic-always-on'],
     ['Anthropic API key(Opus 5.5)', { protocol: 'anthropic-messages', modelId: 'claude-opus-5-5' }, 'anthropic-messages-always-on'],
     ['Claude 托管 provider(Opus 5.5)', { provider: 'anthropic', modelId: 'claude-opus-5-5' }, 'anthropic-provider-always-on'],
+    // ⚠️ 判别式:Sonnet 5.5 同样不收 disabled(官方 thinking 表;它的最低档是 between_tools);改前落 anthropic-adaptive(可关)
+    ['Claude Sonnet 5.5(思考关不掉)', { baseUrl: 'https://api.anthropic.com', modelId: 'claude-sonnet-5-5' }, 'anthropic-always-on'],
+    ['Anthropic API key(Sonnet 5.5)', { protocol: 'anthropic-messages', modelId: 'claude-sonnet-5-5' }, 'anthropic-messages-always-on'],
+    ['Claude 托管 provider(Sonnet 5.5)', { provider: 'anthropic', modelId: 'claude-sonnet-5-5' }, 'anthropic-provider-always-on'],
+    // ⚠️ 判别式:Haiku 5.5 只收自适应思考(enabled + budget_tokens 是 400);改前三个入口分别落 legacy / budget / budget
+    ['Claude Haiku 5.5', { baseUrl: 'https://api.anthropic.com', modelId: 'claude-haiku-5-5' }, 'anthropic-adaptive'],
+    ['Anthropic API key(Haiku 5.5)', { protocol: 'anthropic-messages', modelId: 'claude-haiku-5-5' }, 'anthropic-messages-adaptive'],
+    ['Claude 托管 provider(Haiku 5.5)', { provider: 'anthropic', modelId: 'claude-haiku-5-5' }, 'anthropic-provider-adaptive'],
     // 反例:Opus 5 仍能关;它的日期快照不许被常开规则的两位小版本口子吞掉
     ['Claude Opus 5 日期快照', { baseUrl: 'https://api.anthropic.com', modelId: 'claude-opus-5-20260601' }, 'anthropic-adaptive'],
+    // 反例:老款带日期的 id 在族名后直接跟八位日期,不许被两位小版本口子当成自适应族
+    ['Claude 3.5 Haiku 带日期', { baseUrl: 'https://api.anthropic.com', modelId: 'claude-3-5-haiku-20241022' }, 'anthropic-legacy'],
+    ['Claude 3.7 Sonnet 带日期', { baseUrl: 'https://api.anthropic.com', modelId: 'claude-3-7-sonnet-20250219' }, 'anthropic-budget'],
     // 4.6 及更早仍是手动扩展思考,不许被自适应族吞掉
     ['Claude Sonnet 4.6', { baseUrl: 'https://api.anthropic.com', modelId: 'claude-sonnet-4-6' }, 'anthropic-budget'],
     ['Claude Opus 4.5 快照', { baseUrl: 'https://api.anthropic.com', modelId: 'claude-opus-4-5-20251101' }, 'anthropic-budget'],
@@ -223,6 +234,8 @@ describe('applyThinking — 各家线上形态', () => {
       { protocol: 'anthropic-messages', modelId: 'claude-sonnet-5' },
       { provider: 'anthropic', modelId: 'claude-opus-5' },
       { provider: 'claude-proxy', modelId: 'claude-fable-5' },
+      { baseUrl: 'https://api.anthropic.com', modelId: 'claude-haiku-5-5' },
+      { protocol: 'anthropic-messages', modelId: 'claude-haiku-5-5' },
     ]) {
       const { payload } = apply(q, 'high', { temperature: 0.7 });
       expect(payload.thinking).toEqual({ type: 'adaptive', display: 'summarized' });
@@ -232,15 +245,20 @@ describe('applyThinking — 各家线上形态', () => {
     }
   });
 
-  it('Claude 自适应:能关思考;Fable 5 / Opus 5.5 常开只能夹到最弱档', () => {
-    const off = apply({ baseUrl: 'https://api.anthropic.com', modelId: 'claude-opus-5' }, 'off');
-    expect(off.payload).toEqual({ thinking: { type: 'disabled' } }); // 不带 effort / display:disabled+xhigh/max 与 disabled+display 都是 400
-    expect(off.effective).toBe('off');
+  it('Claude 自适应:能关思考;Fable 5 / Opus 5.5 / Sonnet 5.5 关不掉只能夹到最弱档', () => {
+    // Opus 5 与 Haiku 5.5 的 disabled 只在 high 及以下合法:关的时候不带 effort(走模型缺省档),temperature 也得丢
+    for (const modelId of ['claude-opus-5', 'claude-haiku-5-5']) {
+      const off = apply({ baseUrl: 'https://api.anthropic.com', modelId }, 'off', { temperature: 0.7 });
+      expect(off.payload).toEqual({ thinking: { type: 'disabled' } }); // 不带 effort / display:disabled+xhigh/max 与 disabled+display 都是 400
+      expect(off.effective).toBe('off');
+    }
     for (const q of [
       { baseUrl: 'https://api.anthropic.com', modelId: 'claude-fable-5' },
       { baseUrl: 'https://api.anthropic.com', modelId: 'claude-opus-5-5' },
       { protocol: 'anthropic-messages', modelId: 'claude-opus-5-5' },
       { provider: 'anthropic', modelId: 'claude-opus-5-5' },
+      { baseUrl: 'https://api.anthropic.com', modelId: 'claude-sonnet-5-5' },
+      { protocol: 'anthropic-messages', modelId: 'claude-sonnet-5-5' },
     ]) {
       const on = apply(q, 'off');
       expect(on.payload.thinking).toEqual({ type: 'adaptive', display: 'summarized' });

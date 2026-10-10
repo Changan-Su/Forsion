@@ -161,14 +161,16 @@ const CLAUDE_BUDGETS: LevelMap = {
 /**
  * Claude 自适应思考的 effort 档。官方五档 low < medium < high(缺省)< xhigh < max
  * —— `max` 是真档不是 xhigh 的别名(官方 effort 文档),旧表把 max 折成 xhigh 是白丢一档。
- * `off: false` → 发 `thinking:{type:'disabled'}`:Opus 4.7/4.8、Opus 5、Sonnet 5 都支持关思考
+ * `off: false` → 发 `thinking:{type:'disabled'}`:Opus 4.7/4.8、Opus 5、Sonnet 5、Haiku 5.5 都支持关思考
  * (旧表写 off:null,导致「关闭思考」这一档在 Claude 上根本点不到)。
+ * ⚠️ Opus 5 与 Haiku 5.5 的 disabled 只在 effort ≤ high 时合法(xhigh / max 是 400)—— 现在关的时候不发
+ * output_config,走模型缺省档(Haiku 5.5 是 medium),所以成立;谁给 off 分支补 effort 谁负责夹到 high。
  */
 const CLAUDE_EFFORT: LevelMap = {
   off: false, minimal: 'low', low: 'low', medium: 'medium', high: 'high', xhigh: 'xhigh', max: 'max',
 };
 
-/** Fable 5 / Mythos / Opus 5.5:官方模型表标的是 Adaptive **(always on)** —— 思考关不掉,off 只能夹到 low。 */
+/** Fable 5 / Mythos / Opus 5.5 / Sonnet 5.5:不收 `thinking:{type:'disabled'}` —— 思考关不掉,off 只能夹到 low。 */
 const CLAUDE_EFFORT_ALWAYS_ON: LevelMap = { ...CLAUDE_EFFORT, off: null };
 
 /** Gemini thinkingBudget。-1 = 动态(模型自己决定深度),0 = 关。 */
@@ -269,22 +271,24 @@ const DEFAULT_CAP: Omit<ModelCapability, 'rule'> = {
 };
 
 /**
- * Claude「自适应思考」族 = Opus 4.7 起 + Claude 5 家族(Sonnet/Opus/Fable/Mythos 5)。
+ * Claude「自适应思考」族 = Opus 4.7 起 + Claude 5 家族(Sonnet/Opus/Fable/Mythos 5)+ Haiku 5.5 起。
  * 这些模型上手动扩展思考 `thinking:{type:'enabled',budget_tokens}` **返回 400**(官方迁移指南),
  * 不是降级——所以命中就必须走 anthropic-effort,不能退到 budget。
  *
  * ⚠️ 版本段要同时认 `-` 与 `.`:官方模型 id 是**连字符**形态(`claude-opus-4-7`),旧规则只写了
  * `opus-4\.[7-9]`(点),真 id 一个都不命中 → 静默落到 budget 规则 → 整条链路 400。
  * `([5-9]|\d\d)` 是给两位小版本留的口子(4.10 / sonnet-10 之类),别再按单个数字钉。
+ * `(?!\d)`:老款带日期的 id 在族名后直接跟八位日期(`claude-3-5-haiku-20241022`),不拦会被 `\d\d` 当成两位版本号。
  */
-const CLAUDE_ADAPTIVE = /(sonnet|opus|fable|mythos)-([5-9]|\d\d)|opus-4[-.]([7-9]|\d\d)|mythos-preview/i;
+const CLAUDE_ADAPTIVE = /(sonnet|opus|haiku|fable|mythos)-([5-9]|\d\d)(?!\d)|opus-4[-.]([7-9]|\d\d)|mythos-preview/i;
 
 /**
- * 其中思考常开、关不掉的那几支(官方模型表 Thinking = Adaptive (always on))。
- * Opus 5.5 起也在此列:`thinking:{type:'disabled'}` 返回 400(Opus 5 还能关)。`(?!\d)` 防 Opus 5 的
- * 日期快照(`opus-5-2026…`)被 `\d\d` 误吞。往后的 Opus 5.x 先按常开算:判错只是「关」夹到最弱档,反之是 400。
+ * 其中思考关不掉的那几支:`thinking:{type:'disabled'}` 返回 400(官方 thinking 页的逐模型表)。
+ * Opus 5.5 起在此列(Opus 5 还能关);Sonnet 5.5 也在 —— 它的最低档是 `between_tools`(只关开头那段思考),
+ * 这里不发那个形态,关一律夹到最弱档(Sonnet 5 还能关)。`(?!\d)` 防 Opus 5 / Sonnet 5 的日期快照
+ * (`opus-5-2026…`)被 `\d\d` 误吞。往后的 Opus / Sonnet 5.x 先按关不掉算:判错只是「关」夹到最弱档,反之是 400。
  */
-const CLAUDE_ALWAYS_ON = /(fable|mythos)-([5-9]|\d\d)|mythos-preview|opus-5[-.]([5-9]|\d\d)(?!\d)/i;
+const CLAUDE_ALWAYS_ON = /(fable|mythos)-([5-9]|\d\d)|mythos-preview|(opus|sonnet)-5[-.]([5-9]|\d\d)(?!\d)/i;
 
 /**
  * 自适应族的能力(三个入口——自有 key 的 host / 订阅协议 / 托管 provider——共用同一份,
