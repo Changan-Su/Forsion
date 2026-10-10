@@ -231,28 +231,63 @@ export async function streamAnthropicMessages(opts: StreamOpts): Promise<StreamR
   return withStreamIdle(opts.signal, (guard) => runAnthropicStream(opts, guard));
 }
 
+/**
+ * 思考块绑定失配的兜底。Fable 5.1 / Opus 5.5 / Sonnet 5.5 / Haiku 5.5 起,回传的思考块绑定着产生它时的
+ * system、tools 和此前的全部消息;这些只要变过(run 末轮不发 tools、旧截图被替换、run 内压缩),
+ * 2026-08-31 之后注册的账号就收到 400,报文里点名要设 `thinking.block_binding.prefix_mismatch_behavior`。
+ * 做法:**收到这条 400 才**带上 drop_block(失配的思考块由服务端丢掉,请求照常成功)重发一次,并记住
+ * 这对 key + 模型,之后直接带。不预先发,有两个原因:
+ *   ① 老账号不设这个字段时,失配的块照样送到模型;一设就改成丢弃,模型要重推一遍被丢的思考
+ *      (官方实测输出 token 多 2.5%~67%,档位越高越多)。只对已经撞上校验的账号开,老账号零变化。
+ *   ② 字段和 beta 头只发给点名要它的端点 —— 未知端点绝不发未知字段(第三方 Anthropic 兼容代理同理)。
+ * ponytail: 只记在进程内存里;重启后每对 key + 模型要再白挨一次立刻返回的 400。
+ */
+const THINKING_BINDING_BETA = 'thinking-binding-controls-2026-08-01';
+const bindingEnforced = new Set<string>();
+
+async function upstreamErrorDetail(response: Response): Promise<string> {
+  try {
+    const j: any = await response.json();
+    return j?.error?.message || JSON.stringify(j).slice(0, 300);
+  } catch {
+    return '';
+  }
+}
+
 async function runAnthropicStream(opts: StreamOpts, guard: StreamIdleGuard): Promise<StreamResult> {
   const { apiKey, baseUrl, payload, onToken, onReasoning, onToolCallDelta } = opts;
   const body = openaiToAnthropicBody(payload);
 
-  const response = await fetch(anthropicMessagesUrl(baseUrl), {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'anthropic-version': ANTHROPIC_VERSION,
-      'x-api-key': apiKey,
-    },
-    body: JSON.stringify(body),
-    signal: guard.signal,
-  });
-  opts.onResponseStart?.();
+  // block_binding 只能配 adaptive / enabled:disabled 上带它本身就是 400(那时也没有思考块回传)。
+  const canBind = body.thinking?.type === 'adaptive' || body.thinking?.type === 'enabled';
+  const bindKey = `${apiKey}\n${body.model}`;
+  const send = (bind: boolean): Promise<Response> =>
+    fetch(anthropicMessagesUrl(baseUrl), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'anthropic-version': ANTHROPIC_VERSION,
+        'x-api-key': apiKey,
+        ...(bind ? { 'anthropic-beta': THINKING_BINDING_BETA } : {}),
+      },
+      body: JSON.stringify(
+        bind ? { ...body, thinking: { ...body.thinking, block_binding: { prefix_mismatch_behavior: 'drop_block' } } } : body,
+      ),
+      signal: guard.signal,
+    });
+
+  const bound = canBind && bindingEnforced.has(bindKey);
+  let response = await send(bound);
+  let detail = response.ok && response.body ? '' : await upstreamErrorDetail(response);
+  if (!bound && canBind && response.status === 400 && /prefix_mismatch_behavior/.test(detail)) {
+    response = await send(true);
+    detail = response.ok && response.body ? '' : await upstreamErrorDetail(response);
+    // 重发成了才记:中间的代理要是不认这个字段 / 吞了 beta 头,记下来会让之后本来能成的请求全部 400。
+    if (response.ok) bindingEnforced.add(bindKey);
+  }
+  opts.onResponseStart?.(); // 放在重发之后:白挨的那次 400 不算「已受理」
 
   if (!response.ok || !response.body) {
-    let detail = '';
-    try {
-      const j: any = await response.json();
-      detail = j?.error?.message || JSON.stringify(j).slice(0, 300);
-    } catch { /* keep empty */ }
     const status = response.status === 401 || response.status === 403 ? 502 : response.status || 502;
     throw new LlmError(status, detail || `Anthropic upstream error ${response.status}`);
   }
