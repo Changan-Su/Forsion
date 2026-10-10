@@ -2,6 +2,49 @@
 
 <!-- English edition of CHANGELOG.md: same "## <version> (<date>)" headings, one bullet per Chinese bullet. Add both when releasing. -->
 
+## 2.13.2 (2026-10-11)
+
+- **The new tab page is organized by what you want to do**: search, recently used, new, open (one tile per Space) and the sidebar panels of the current Space. Clicking another Space's tile opens its view in the current tab; the browser and the terminal open in place too.
+- **Visuals in chat**: charts and small tool cards in a reply render while they are being generated, and buttons inside a card can go back and change the answer. The agent can also return native document cards, calendar and to-do cards, and app cards. Choose how many cards you get in Settings.
+- **Voice calls can go through Forsion cloud**: once you sign in to your Forsion account, you can make voice calls without configuring a call model yourself; calls are charged by duration against your membership quota. The mobile app can make calls too, with the call shown as a bar at the top of the page while chat keeps working. Requires a call model enabled on the server.
+- **Prompt suggestions** (off by default): after a turn ends, the empty input box shows a likely next message in gray; press Tab to accept it. Turn it on in Settings → Appearance. Desktop only.
+- **The agent can tell how much is left**: ask it how much room this conversation has left, or about your Forsion account's quota, membership and points. Anything that acts on your account asks for your confirmation every time.
+- **The agent tells you what it noted, right away**: when the agent writes a memory or an evolution record, a receipt line appears under the reply; changes to the collaboration notes come as a separate request card. What the background review writes is attached after the reply it belongs to, and items left for you to confirm can be accepted or discarded in place. A new chat mentions above the input box what was noted in the background since last time.
+- **Collaboration notes are now written for you to read**: each item is something you do, in words you have used. Notes written by an older version show “Have the agent rewrite it” next to them; your corrections go to memory and no longer change the notes.
+- **Project details have a new Pull action.** Once Forsion Git is enabled on the server, you can also publish a project to it in one step; the app fetches the push and pull credentials for you.
+- **Support for the Claude 5.5 generation**: Haiku 5.5 is recognized; Sonnet 5.5 cannot turn thinking off, so choosing Off falls back to the lowest level.
+- **Screenshots and images**:
+  - Computer Use no longer resends every old screenshot each turn and keeps only the latest 3; large images are downscaled before they enter the conversation. Long tasks run faster and are interrupted less often.
+  - When the main model has no image input, the interface says so while a screenshot is being transcribed; Computer Use is unavailable in that case and explains why.
+- **macOS**: detached windows and Space windows no longer have the empty title strip above the tab bar. The installer window's background shows what to do if the app will not open. An app icon you chose stays after you quit.
+- **Windows**: the default splash no longer flashes by. An app icon you chose stays on the shortcut after you quit.
+- **Android**:
+  - The top bar and the Dock are now floating glass capsules. The Dock has five slots with the icon above the name; full-screen lists and the home page use a one-handed layout: one main button plus gestures, and swipe actions show icons only.
+  - Chat page: the page no longer jumps when the keyboard opens; the send button moved to the right of the input box and modes moved into the model menu; wide tables scroll sideways inside their own frame.
+  - Spaces bundled with a plugin now appear; a plugin's own files read and write correctly in a cloud vault; plugins that only support desktop are marked Desktop only in the Store.
+  - The home screen icon follows the icon chosen in the app.
+- **Plugins**:
+  - When an installed plugin's Space does not appear, the plugin card and the Sandbox panel say why.
+  - Open settings on an installed plugin in the Store goes straight to that plugin's own settings page.
+  - For authors: `ctx.ui.mountBoard` / `boardToSvg` add a whiteboard handwriting layer over a plugin's own content; list sources support hierarchy, dragging and renaming.
+- **Notes**:
+  - After you move a note or a folder elsewhere, or move blocks across folders, the image and attachment references inside are recalculated and no longer break.
+  - The trash of a cloud vault now lists deleted files and can restore them.
+  - Saving in a cloud vault no longer corrupts image addresses; notes already saved that way display correctly when opened.
+  - Database column widths fit their content more accurately; the first click into a long note no longer stutters.
+- **Fixes**:
+  - An unsent draft in the input box is kept per conversation and no longer carries over when you switch conversations or start a new chat.
+  - In the Inbox, a reply that arrived after an approval only lit the red dot and did not appear in the list.
+  - With Settings open on another page, jumping to the same location again from elsewhere did nothing.
+  - In dark mode, the input card of the sidebar chat did not read as a card.
+  - With interface zoom other than 100%, the whiteboard layer did not line up with the content under it.
+  - Icon buttons on the Inbox reading page and the Button block in notes never had their styles applied.
+  - On the web and mobile, sending a message more than 30 minutes after a conversation started failed. Takes effect after the server is updated.
+  - When a web fetch only gets a page title, the agent says so and switches to the browser.
+  - Feedback attachments include the whole conversation instead of only the latest 500 messages.
+- The default Ribbon order is now Tangu → Notes → Calendar → Inbox → Agents → Coding → Images.
+- Smaller local conversation database: intermediate streaming data of finished conversations is kept for 7 days only.
+
 ## 2.13.1 (2026-10-06)
 
 - **The Market is now the Store.** Agents and Spaces are listed under Plugins. A new Membership & points section in the sidebar works once you sign in to your Forsion account: it shows your current plan and points balance, and lets you pick a plan and pay, buy point packs and redeem items with points.
