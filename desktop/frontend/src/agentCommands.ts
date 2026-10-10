@@ -23,6 +23,7 @@ import { readFont, writeFont, applyUiFonts, type FontSlot } from './uiFont'
 import { listFonts } from './fontPresets'
 import { getUiZoom, setUiZoom, resetUiZoom } from './uiZoom'
 import { isSmoothCaretOn, setSmoothCaret } from './smoothCaret'
+import { getVisualsPref, setVisualsPref, VISUALS_VALUES, type VisualsPref } from './visualsPref'
 import { useCommandStore } from '@lcl/engine/commandRegistry'
 
 export interface UiActionResult {
@@ -131,6 +132,12 @@ export const UI_SETTINGS: Record<string, SettingSpec> = {
     // 只动模块态与 DOM,不落盘 → 视觉上开了、state() 读盘仍报 off、重启又变回去,Codex 评审 P2-8)。
     apply: (v) => setSmoothCaret(v === 'on'),
     state: () => (isSmoothCaretOn() ? 'on' : 'off'),
+  },
+  // 对话里的可视化卡多少(auto / less / off):随 ui_settings 快照进引擎,sketch 工具与提示段按它开关(下一次 run 生效)。
+  visuals: {
+    values: () => [...VISUALS_VALUES],
+    apply: (v) => setVisualsPref(v as VisualsPref),
+    state: () => getVisualsPref(),
   },
 }
 

@@ -20,12 +20,41 @@
  *   D. 云端库里一篇**已经被写坏**的笔记(图片行是另一端写进去的地址:接口源不同、令牌过期)。显示时按当前的
  *      接口源与令牌重拼(toDisplayMarkdown),图当场显示得出;**只是打开不写盘**;动一个字存盘后换回页相对路径。
  *
+ * 2026-10-10 加的三个场景 —— 引用指到**页目录之外**(笔记在 `子夹/`,图片在库根的 `attachments/`):
+ *   E. 本地库:从库根的笔记复制一张图(图片节点的显示地址)贴进 `子夹/` 下的笔记 → 落盘那一行必须是 `../attachments/…`;
+ *      冷启动重开,图还得加载得出来;再动一个字,那一行不变。
+ *   F. 云端库:同 E。
+ *   G. 云端库里本来就是 `../` 写法的笔记(附件放固定文件夹时产品自己写的),并且 `子夹/attachments/` 下有一张同名的
+ *      另一张图(1×1):显示的必须是库根那张(2×2);动一个字,那一行不变。
+ *   此前:存盘写成库内路径写法 `![](attachments/pic.png)`(共享接缝的 relFrom 不产出 `../`),重开一律按页相对拼成
+ *   `子夹/attachments/pic.png` —— 本地文件服务没有兜底、云端服务端找不到;云端对带 `..` 的 ref 还一律拒收,`../` 写法本身也显示不出;
+ *   地址带着 page 时服务端先按页目录再拼一遍,同路径的另一张图会顶替正主。
+ *   ⚠️ 假云端的 /asset 照服务端的顺序对着文件表找(cloudResolve)。别改回「有笔记就对任何 ref 送图」:指错了文件的地址也会是绿的。
+ *
  * ⚠️ 这是浏览器台架:证明得了页面这一层把地址指到了哪里、落盘写了什么;**证明不了安卓原生层**。本地库的图片地址
  *    在安卓上是 Capacitor 本地文件服务(`https://localhost/_capacitor_file_/<应用私有目录>/vault/…`);浏览器里
  *    文件系统是 IndexedDB,拿到的库根只是 `/DATA/vault` 这个路径、没人服务它 —— 台架 route 住它、用 readVaultBytes
  *    回填字节。原生那一层真能不能服务(路径、百分号解码、Range)要上模拟器 / 真机看。
  * 负对照(实跑过,修之前的产物):A 红 2 条(图没加载、策略违规),B 红 3 条(图没加载、去云端要了、落盘是云端地址),
  *    C 红 1 条(落盘是云端地址);D 在加显示侧还原之前红 3 条(图没加载、地址没重拼、去旧源要了图)。
+ *    E / F / G(2026-10-10,修之前的产物实跑):E 红 3 条、F 红 3 条(落盘是库内路径写法、重开图没加载、再存一遍仍是它),G 红 1 条(图没加载)。
+ *
+ * 光标探针(2026-10-10;环境变量 E2E_CARET_PROBE=1,配 E2E_ONLY=E,F;只换掉 E / F 里「点『后文』之后」那一段)
+ *   起因:E / F 连跑时「点『后文』→ End → 回车」起的空段偶尔落在文首(整套 3 遍里 2 次)。
+ *   查到的:没有谁把选区改回去。浏览器把光标落进点的那一段之后,selectionchange 是**异步**派发的;ProseMirror 收到它才把
+ *     DOM 选区读进自己的状态,而回车 / 退格 / Tab 这类由编辑器自己办的键读的是状态。台架点完不到 1ms 就按键,抢在
+ *     selectionchange 前面 → 回车按旧光标(从没聚焦过 = 文首)办。敲字不受影响(字由浏览器写进 DOM,编辑器按 DOM 的改动读回),
+ *     所以 A–D 的「点 → End → 敲字」从来不红。和「打开第二篇」无关:只开一篇、鼠标点在字上同样必现。
+ *   产品那一半(同日修):「点完即落定」(desktop/frontend/src/amadeus/unified/blockLayer.ts 的 syncNativeClick)原来只对
+ *     「鼠标点在块内留白」成立,触摸点按、点在字上的不补。长笔记上聚焦那一拍主线程要忙(1500 段实测 ≈ 250ms),人在这段时间里
+ *     按下回车就落在旧光标处。钉子:desktop 的 check:taskbox(②c 点在字上 / 触屏点正文)。
+ *   台架这一半:E / F 的正常流程照旧「点完等选区站稳、核过再按键」—— End 之后立刻回车同样抢得过 selectionchange(连按两键,
+ *     机器手速),这一拍产品没补。
+ *   探针判的是「click 事件那一刻,编辑器状态里的光标已在点的那一段」,不看时序;按键最后落在哪只记不判。时间线(谁调了
+ *     Selection 的哪个方法 / focus、每个事务的来路,带调用栈)落在 outputs/localasset/caret-*.json。开关见下方 CARET。
+ *     状态那一栏要产物里有 caretMemory.ts 的把手(本机存储 amx_probe 才露出视图);看调用栈用 `npx vite build --minify false` 的产物。
+ *   负对照(修之前的产物实跑):点按 E / F 红(click 时状态还在文首);鼠标点在字上红 3/3、回车落在文首(只开一篇同样);
+ *     鼠标点留白绿(原有的同步);敲字的落点对。1500 段 + 点在字上 + 150ms 后回车:回车落在文首。
  */
 const http = require('http')
 const net = require('net')
@@ -41,6 +70,54 @@ const { chromium } = (() => {
 const NOTE = { path: 'E2E图片笔记.md', stem: 'E2E图片笔记' }
 // 2×2 的红色 PNG(naturalWidth 判加载用;1×1 也行,2×2 免得和占位图混)
 const PNG_B64 = 'iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAFElEQVR42mP8z8Dwn4EIwDiqEF8hAN5vBf0dRNNOAAAAAElFTkSuQmCC'
+
+// 1×1 的 PNG:「同路径的另一个文件」。显示成它 naturalWidth = 1,显示成库根那张 = 2。
+const PNG1_B64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=='
+const ROOTNOTE = { path: 'E2E根笔记.md', stem: 'E2E根笔记' }
+// 光标探针的开关(用法见头注「光标探针」):E2E_CARET_PROBE=1 开;_DELAY = 打开第二篇之后等多少毫秒再点(缺省 3000);
+// _GAP = 点完等多少毫秒再按键(缺省 0);_CPU = CPU 节流倍数;_SINGLE=1 = 不先开库根那篇(对照);_N = 每个场景连跑几次;
+// _JANK = 点进编辑器那一拍主线程多卡多少毫秒(按键排在它后面,必现);_KEYS=type = 不按回车、改敲一个字;_POINTER=mouse = 鼠标点在段落右侧的留白上,glyph = 鼠标点在字上(两者都把按键紧跟着排进去);_BIG = 垫多少段。
+const CARET = {
+  on: process.env.E2E_CARET_PROBE === '1',
+  delay: Number(process.env.E2E_CARET_DELAY || 3000),
+  gap: Number(process.env.E2E_CARET_GAP || 0),
+  cpu: Number(process.env.E2E_CARET_CPU || 1),
+  single: process.env.E2E_CARET_SINGLE === '1',
+  n: Number(process.env.E2E_CARET_N || 1),
+  jank: Number(process.env.E2E_CARET_JANK || 0),
+  keys: process.env.E2E_CARET_KEYS === 'type' ? 'type' : 'enter',
+  pointer: ['mouse', 'glyph'].includes(process.env.E2E_CARET_POINTER) ? process.env.E2E_CARET_POINTER : 'tap',
+  big: Number(process.env.E2E_CARET_BIG || 0),
+}
+CARET.tag = `d${CARET.delay}g${CARET.gap}c${CARET.cpu}j${CARET.jank}${CARET.keys === 'type' ? 't' : ''}${CARET.pointer === 'tap' ? '' : CARET.pointer[0]}${CARET.single ? 's' : ''}${CARET.big ? `b${CARET.big}` : ''}`
+// 子文件夹那篇的正文;_BIG=N 时在「前文」「后文」之间垫 N 段(量大笔记上点进去那一拍有多长)。
+const SUBBODY = `# 图片笔记\n\n前文\n\n${Array.from({ length: CARET.on ? CARET.big : 0 }, (_, i) => `第 ${i + 1} 段 **粗体** [[某页]] #标签 $x^2$\n\n`).join('')}后文\n`
+const SUB = { dir: '子夹', path: '子夹/E2E图片笔记.md', stem: 'E2E图片笔记' }
+const ROOTPIC = 'attachments/pic.png'
+
+/** 假云端的 GET /asset 怎么找文件 —— 镜像服务端(server 仓 microserver/amadeus/routes.ts 与 lib/paths.ts 的 normalizePath;
+ *  2026-10-10 对着真路由 + PGlite 逐条核过):先「page 的目录 + ref」,再把 ref 当库内路径精确找,ref 不含 `/` 时才全库按文件名找;
+ *  路径里有 `.` / `..` 段一律拒收(不是折叠)。 */
+function cloudResolve(u, paths) {
+  const norm = (p) => {
+    const t = String(p ?? '').normalize('NFC').trim().replace(/\/+$/, '')
+    if (!t || t.startsWith('/') || t.includes('\\') || t.split('/').some((seg) => !seg || seg === '.' || seg === '..')) return null
+    return t
+  }
+  const ref = u.searchParams.get('ref') ?? ''
+  const cands = []
+  const page = norm(u.searchParams.get('page'))
+  if (page) {
+    const dir = page.includes('/') ? page.slice(0, page.lastIndexOf('/')) : ''
+    const c = norm(dir ? `${dir}/${ref}` : ref)
+    if (c) cands.push(c)
+  }
+  const exact = norm(ref)
+  if (exact && !cands.includes(exact)) cands.push(exact)
+  for (const c of cands) if (paths.includes(c)) return c
+  if (ref.includes('/')) return null
+  return [...paths].sort().find((p) => !p.split('/').some((seg) => seg.startsWith('.')) && p.split('/').pop().toLowerCase() === ref.toLowerCase()) ?? null
+}
 
 function findChromium() {
   if (process.env.CHROMIUM_EXE) return process.env.CHROMIUM_EXE
@@ -69,6 +146,66 @@ const pickPort = () => new Promise((res, rej) => {
   srv.listen(0, () => { const { port } = srv.address(); srv.close(() => res(port)) })
 })
 
+/** 光标探针(E2E_CARET_PROBE=1 时装进页面):一条时间线,记下谁动了选区 / 焦点、编辑器发了什么事务。
+ *  要产物里露出编辑器视图(window.__amxView)才有 pm / dispatch 两栏;没露出时只有 DOM 这一半。 */
+function caretProbeInit(jank) {
+  try { localStorage.setItem('amx_probe', '1') } catch { /* ignore */ }
+  const t0 = performance.now()
+  const log = (window.__caretLog = [])
+  let view = null
+  const stack = () => (new Error().stack || '').split('\n').slice(3, 15).map((l) => l.trim().replace(/^at /, '').replace(/\(?https?:\/\/[^/]+\/(assets\/)?/, '(')).join(' < ')
+  const where = () => {
+    const sel = window.getSelection()
+    const ed = document.querySelector('.ProseMirror[contenteditable="true"]')
+    const n = sel && sel.anchorNode
+    const active = document.activeElement ? String(document.activeElement.className || document.activeElement.tagName).slice(0, 48) : null
+    if (!ed) return { dom: '(没有编辑器)', active }
+    const focused = ed.classList.contains('ProseMirror-focused')
+    if (!n) return { dom: '(没有选区)', focused, active }
+    if (n === ed) return { dom: `编辑器根@${sel.anchorOffset}`, focused, active }
+    if (!ed.contains(n)) return { dom: `编辑器外:${n.nodeName}`, focused, active }
+    const blocks = [...ed.children]
+    const i = blocks.findIndex((c) => c.contains(n))
+    return { dom: `${i}:${blocks[i].tagName}:${(blocks[i].textContent || '').slice(0, 4)}@${sel.anchorOffset}`, focused, active }
+  }
+  const pm = () => { try { return view ? `${view.state.selection.from}/${view.state.doc.content.size}` : null } catch { return '?' } }
+  const push = (kind, extra) => { log.push({ t: Math.round((performance.now() - t0) * 10) / 10, kind, ...where(), pm: pm(), ...extra }) }
+  window.__mark = (name) => push(`MARK ${name}`)
+  for (const m of ['collapse', 'setBaseAndExtent', 'extend', 'addRange', 'removeAllRanges', 'setPosition', 'collapseToStart', 'collapseToEnd', 'selectAllChildren', 'empty']) {
+    const orig = Selection.prototype[m]
+    if (orig) Selection.prototype[m] = function (...a) { const r = orig.apply(this, a); push(`sel.${m}`, { stack: stack() }); return r }
+  }
+  for (const m of ['focus', 'blur']) {
+    const orig = HTMLElement.prototype[m]
+    HTMLElement.prototype[m] = function (...a) { push(`el.${m}`, { on: String(this.className || this.tagName).slice(0, 48), stack: stack() }); return orig.apply(this, a) }
+  }
+  document.addEventListener('selectionchange', () => push('selectionchange'))
+  if (jank) window.addEventListener('mousedown', (e) => { if (e.target.closest && e.target.closest('.ProseMirror')) { const t = performance.now(); while (performance.now() - t < jank) { /* 占住主线程 */ } } }, true)
+  for (const ev of ['touchstart', 'touchend', 'mousedown', 'mouseup', 'click', 'focusin', 'focusout', 'keydown', 'keyup', 'beforeinput', 'input']) {
+    window.addEventListener(ev, (e) => push(`ev.${ev}`, { key: e.key, target: String((e.target && (e.target.className || e.target.nodeName)) || '').slice(0, 48) }), true)
+  }
+  Object.defineProperty(window, '__amxView', {
+    configurable: true,
+    get: () => view,
+    set: (v) => {
+      view = v
+      push('view.new')
+      const orig = v.dispatch
+      v.dispatch = (tr) => {
+        const before = v.state.selection.from
+        const r = orig(tr)
+        push('dispatch', { selectionSet: tr.selectionSet, docChanged: tr.docChanged, steps: tr.steps.length, meta: Object.keys(tr.meta || {}), before, want: tr.selection.from, stack: stack() })
+        return r
+      }
+    },
+  })
+  let el = null
+  new MutationObserver(() => {
+    const ed = document.querySelector('.ProseMirror[contenteditable="true"]')
+    if (ed !== el) { el = ed; push(`editor.el ${ed ? '挂上' : '没了'}`) }
+  }).observe(document, { childList: true, subtree: true })
+}
+
 async function main() {
   const root = path.resolve(__dirname, '..')
   if (!fs.existsSync(path.join(root, 'dist/index.html'))) {
@@ -95,14 +232,8 @@ async function main() {
     console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${extra ? `  | ${extra}` : ''}`)
   }
 
-  /** 一个场景 = 一个全新的浏览器上下文(存储互不串)。startSide = 冷启动时的库;
-   *  stay = 留在云端库不切走(场景 C / D:假云端里本来就有这篇带图的笔记);
-   *  damaged = 库里那篇笔记的图片行已经是被旧缺陷写坏的形态(场景 D)。 */
-  const scenario = async (label, startSide, stay = false, damaged = false) => {
-    const REL = '.amadeus/pic-cloud.png'
-    // 另一端(源不同)写进去的显示地址,令牌早已过期。
-    const OLD = `https://old-origin.e2e.test/api/amadeus/vaults/cloud-v1/asset?ref=${encodeURIComponent(REL)}&page=${encodeURIComponent(NOTE.path)}&at=EXPIRED`
-    const cloud = { note: stay ? `# 图片笔记\n\n前文\n\n![](${damaged ? OLD : REL})\n\n后文\n` : null, puts: [], seq: 1 }
+  /** 一个全新的浏览器上下文(存储互不串)+ 假云端 + 手势。cloud = { files: { 库内路径: 正文字符串 | 图片 Buffer }, puts: [{ path, content }], seq }。 */
+  const openCtx = async (startSide, cloud) => {
     const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, locale: 'zh-CN' })
     await ctx.addInitScript((side) => {
       try {
@@ -136,22 +267,28 @@ async function main() {
       const u = new URL(r.request().url())
       const json = (body, status = 200) => r.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) })
       if (u.pathname.endsWith('/amadeus/vaults')) return json({ vaults: [{ id: 'cloud-v1' }] })
-      if (u.pathname.endsWith('/tree')) return json(cloud.note ? { pages: [NOTE.path], files: [{ path: REL, size: 78 }], folders: [], seq: cloud.seq } : { pages: [], files: [], folders: [], seq: 1 })
+      const paths = Object.keys(cloud.files)
+      if (u.pathname.endsWith('/tree')) {
+        const folders = [...new Set(paths.flatMap((p) => p.split('/').slice(0, -1).map((_, i, a) => a.slice(0, i + 1).join('/'))))]
+        return json({ pages: paths.filter((p) => p.endsWith('.md')), files: paths.filter((p) => !p.endsWith('.md')).map((p) => ({ path: p, size: cloud.files[p].length })), folders, seq: cloud.seq })
+      }
       if (u.pathname.endsWith('/asset-token')) return json({ token: 'at-e2e', ttlSec: 600 })
       if (u.pathname.endsWith('/link-base')) return json({ webOrigin: 'https://cloud.e2e.test' })
       if (u.pathname.endsWith('/asset')) {
-        cloudAssetHits.push(`${u.pathname}?ref=${u.searchParams.get('ref')}`)
-        return cloud.note ? r.fulfill({ status: 200, contentType: 'image/png', body: Buffer.from(PNG_B64, 'base64') }) : r.fulfill({ status: 404, body: '' })
+        const hit = cloudResolve(u, paths.filter((p) => Buffer.isBuffer(cloud.files[p])))
+        cloudAssetHits.push(`${u.pathname}?ref=${u.searchParams.get('ref')}${u.searchParams.has('page') ? '' : '(不带 page)'} → ${hit ?? '404'}`)
+        return hit ? r.fulfill({ status: 200, contentType: 'image/png', body: cloud.files[hit] }) : r.fulfill({ status: 404, body: '' })
       }
-      if (u.pathname.endsWith('/file') && cloud.note) {
+      if (u.pathname.endsWith('/file') && paths.length) {
         if (r.request().method() === 'GET') {
-          return u.searchParams.get('path') === NOTE.path
-            ? json({ path: NOTE.path, kind: 'page', content: cloud.note, seq: cloud.seq, hash: `h${cloud.seq}`, updatedAt: new Date().toISOString() })
+          const p = u.searchParams.get('path')
+          return typeof cloud.files[p] === 'string'
+            ? json({ path: p, kind: 'page', content: cloud.files[p], seq: cloud.seq, hash: `h${cloud.seq}`, updatedAt: new Date().toISOString() })
             : json({}, 404)
         }
         if (r.request().method() === 'PUT') {
           const body = JSON.parse(r.request().postData() || '{}')
-          if (body.path === NOTE.path) { cloud.puts.push(String(body.content)); cloud.note = String(body.content) }
+          if (typeof cloud.files[body.path] === 'string') { cloud.puts.push({ path: body.path, content: String(body.content) }); cloud.files[body.path] = String(body.content) }
           cloud.seq += 1
           return json({ seq: cloud.seq, hash: `h${cloud.seq}` })
         }
@@ -178,6 +315,48 @@ async function main() {
       await page.waitForSelector('.mb-topbar [aria-label="more"]', { timeout: 30_000 })
       await page.waitForTimeout(3500) // 工作区预热(启动后 ~1.2s 读库)
     }
+    /** 从左抽屉的树上点开一篇笔记(子文件夹里的先把文件夹点开);树上没有 = false。 */
+    const openNote = async (note, settle = 3000) => {
+      const drawer = async () => { if (!(await page.locator('.mb-drawer--left.open').count())) await tap(page.locator('.mb-topbar [aria-label="left panel"]'), '左抽屉') }
+      await drawer()
+      const amx = page.locator('.mb-drawer--left [data-space="amadeus"]')
+      if (await amx.count()) { await tap(amx, 'Amadeus space'); await page.waitForTimeout(900) }
+      await drawer()
+      const row = page.locator('.mb-drawer--left .t2s-srow', { hasText: note.stem }).first()
+      if (note.dir && !(await row.isVisible().catch(() => false))) {
+        await tap(page.locator('.mb-drawer--left .t2s-folder-row', { hasText: note.dir }).first(), `${note.dir} 文件夹`)
+      }
+      if (!(await row.waitFor({ state: 'visible', timeout: 6000 }).then(() => true, () => false))) return false
+      await tap(row, `${note.stem} 行`)
+      await page.waitForTimeout(settle)
+      return true
+    }
+    /** 编辑器里的图(占位的内联 svg 不算)。src 给全,粘贴要用。 */
+    const editorImgs = () => page.evaluate(() => [...document.querySelectorAll('.ProseMirror img, .amx-doc img')]
+      .map((i) => ({ src: i.getAttribute('src') || '', complete: i.complete, w: i.naturalWidth }))
+      .filter((i) => i.src && !i.src.startsWith('data:image/svg')))
+    /** 点「后文」那一段、按 End、敲 text、等过自动保存。返回焦点在不在编辑器里。 */
+    const typeAfter = async (text) => {
+      await page.locator('.ProseMirror[contenteditable="true"] p', { hasText: '后文' }).last().tap({ timeout: 4000 }).catch(() => {})
+      await page.keyboard.press('End').catch(() => {})
+      await page.keyboard.type(text).catch(() => {})
+      await page.waitForTimeout(600)
+      const focused = await page.evaluate(() => !!document.activeElement?.classList.contains('ProseMirror'))
+      await page.waitForTimeout(3500)
+      return focused
+    }
+    return { ctx, page, tap, boot, openNote, editorImgs, typeAfter, cloudAssetHits, localAssetHits, oldOriginHits }
+  }
+
+  /** 场景 A–D。startSide = 冷启动时的库;
+   *  stay = 留在云端库不切走(场景 C / D:假云端里本来就有这篇带图的笔记);
+   *  damaged = 库里那篇笔记的图片行已经是被旧缺陷写坏的形态(场景 D)。 */
+  const scenario = async (label, startSide, stay = false, damaged = false) => {
+    const REL = '.amadeus/pic-cloud.png'
+    // 另一端(源不同)写进去的显示地址,令牌早已过期。
+    const OLD = `https://old-origin.e2e.test/api/amadeus/vaults/cloud-v1/asset?ref=${encodeURIComponent(REL)}&page=${encodeURIComponent(NOTE.path)}&at=EXPIRED`
+    const cloud = { files: stay ? { [NOTE.path]: `# 图片笔记\n\n前文\n\n![](${damaged ? OLD : REL})\n\n后文\n`, [REL]: Buffer.from(PNG_B64, 'base64') } : {}, puts: [], seq: 1 }
+    const { ctx, page, tap, boot, cloudAssetHits, localAssetHits, oldOriginHits } = await openCtx(startSide, cloud)
 
     await page.goto(appUrl, { waitUntil: 'domcontentloaded', timeout: 30_000 })
     await boot()
@@ -256,13 +435,183 @@ async function main() {
     await page.waitForTimeout(600)
     const focused = await page.evaluate(() => !!document.activeElement?.classList.contains('ProseMirror'))
     await page.waitForTimeout(3500)
-    const saved = stay ? (cloud.puts[cloud.puts.length - 1] ?? null) : await page.evaluate((p) => window.amadeus.readTextFile(p), NOTE.path)
+    const saved = stay ? (cloud.puts[cloud.puts.length - 1]?.content ?? null) : await page.evaluate((p) => window.amadeus.readTextFile(p), NOTE.path)
     const line = String(saved ?? '').split('\n').find((l) => l.includes('![')) ?? ''
     check(focused && saved != null && /后文 x/.test(String(saved)), `${label}:字敲在「后文」后面并存盘了(防空过)`, saved == null ? '没有发生保存' : `focused=${focused}`)
     check(line === `![](${seeded.rel})`, `${label}:存回去的图片链接仍是页相对路径`, `落盘那一行: ${line.slice(0, 200) || '(没有图片行)'}`)
     if (line !== `![](${seeded.rel})`) console.log(`      落盘全文:\n${String(saved ?? '').split('\n').map((l) => `          │ ${l}`).join('\n')}`)
     await page.screenshot({ path: path.join(root, 'outputs', 'localasset', `${damaged ? 'd-cloud-damaged' : stay ? 'c-cloud' : startSide === 'local' ? 'a-local' : 'b-cloud-then-local'}.png`) }).catch(() => {})
     await ctx.close()
+  }
+
+  const lineOf = (text) => String(text ?? '').split('\n').find((l) => l.includes('![')) ?? ''
+  /** 重开(冷启动)子文件夹那篇笔记:图加载出来的必须是库根那张(2×2);动一个字,图片那一行还是 want。 */
+  const reopenCheck = async (label, h, side, cloud, want) => {
+    const { page } = h
+    await page.reload({ waitUntil: 'domcontentloaded', timeout: 30_000 })
+    await h.boot()
+    h.cloudAssetHits.length = 0
+    h.localAssetHits.length = 0
+    const opened = await h.openNote(SUB)
+    check(opened, `${label}:重开后树上有子文件夹里那篇笔记(防空过)`)
+    if (!opened) return
+    const img = (await h.editorImgs())[0]
+    console.log(`      重开后的 <img>: ${JSON.stringify(img ? { ...img, src: img.src.slice(0, 200) } : null)}`)
+    console.log(`      资源请求: ${[...h.cloudAssetHits, ...h.localAssetHits.map((p) => `本地 ${p}`)].slice(0, 4).join(' , ') || '(无)'}`)
+    check(!!img && img.complete && img.w === 2, `${label}:重开后图片加载出来了,是库根那张(naturalWidth = 2)`, img ? `complete=${img.complete} naturalWidth=${img.w}` : '编辑器里没有图')
+    const before = cloud.puts.length
+    const focused = await h.typeAfter(' y')
+    const saved = side === 'cloud' ? (cloud.puts.length > before ? cloud.puts[cloud.puts.length - 1].content : null) : await page.evaluate((p) => window.amadeus.readTextFile(p), SUB.path)
+    check(focused && /后文.* y/.test(String(saved)), `${label}:重开后又敲了一个字并存盘了(防空过)`, saved == null ? '没有发生保存' : `focused=${focused}`)
+    check(lineOf(saved) === want, `${label}:再存一遍,图片那一行不变`, `落盘那一行: ${lineOf(saved).slice(0, 200) || '(没有图片行)'}`)
+  }
+
+  /** E / F:从库根的笔记复制一张图,贴进 `子夹/` 下的笔记。被复制的是图片节点的显示地址(剪贴板 text/html 里的 <img src>):
+   *  先打开库根那篇读出它的 src,再对着子文件夹那篇的编辑器派发一次带这段 html 的粘贴。 */
+  const crossFolder = async (label, side) => {
+    const WANT = `![](../${ROOTPIC})`
+    const cloud = { files: side === 'cloud' ? { [ROOTNOTE.path]: `# 根笔记\n\n![](${ROOTPIC})\n`, [SUB.path]: SUBBODY, [ROOTPIC]: Buffer.from(PNG_B64, 'base64') } : {}, puts: [], seq: 1 }
+    const h = await openCtx(side, cloud)
+    const { ctx, page } = h
+    try {
+      if (CARET.on) {
+        await ctx.addInitScript(caretProbeInit, CARET.jank)
+        if (CARET.cpu > 1) await (await ctx.newCDPSession(page)).send('Emulation.setCPUThrottlingRate', { rate: CARET.cpu })
+      }
+      await page.goto(appUrl, { waitUntil: 'domcontentloaded', timeout: 30_000 })
+      await h.boot()
+      const side0 = await page.evaluate(() => window.amadeusVaultMode?.side)
+      check(side0 === side, `${label}:冷启动在${side === 'local' ? '本地' : '云端'}库(防空过)`, `side = ${side0}`)
+      if (side === 'local') {
+        // 图存进库根的 attachments/(「附件放固定文件夹」那条真路径),两篇笔记直接写盘;种完重开让工作区读到。
+        const seeded = await page.evaluate(async ([rootNote, subNote, b64, subBody]) => {
+          const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0))
+          const { pageRel } = await window.amadeus.saveAttachment(rootNote, 'pic.png', bytes, { mode: 'vault', folder: 'attachments' })
+          await window.amadeus.writeTextFile(rootNote, `# 根笔记\n\n![](${pageRel})\n`)
+          await window.amadeus.writeTextFile(subNote, subBody)
+          const back = await window.amadeus.readVaultBytes(pageRel)
+          return { pageRel, onDisk: back ? back.length : 0, sub: await window.amadeus.readTextFile(subNote) }
+        }, [ROOTNOTE.path, SUB.path, PNG_B64, SUBBODY])
+        check(seeded.pageRel === ROOTPIC && seeded.onDisk > 0 && /后文/.test(String(seeded.sub)), `${label}:图在库根的 ${ROOTPIC}、两篇笔记都在盘上(防空过)`, JSON.stringify({ ...seeded, sub: undefined }))
+        await page.reload({ waitUntil: 'domcontentloaded', timeout: 30_000 })
+        await h.boot()
+      }
+      if (!CARET.single) check(await h.openNote(ROOTNOTE), `${label}:打开了库根那篇笔记(防空过)`)
+      const rootImg = CARET.single ? null : (await h.editorImgs())[0]
+      if (!CARET.single) check(!!rootImg && rootImg.complete && rootImg.w === 2, `${label}:库根那篇里的图加载得出(防空过:要复制的就是它)`, rootImg ? `src = ${rootImg.src.slice(0, 160)}` : '编辑器里没有图')
+      if (!rootImg && !CARET.single) return
+      check(await h.openNote(SUB, CARET.on ? CARET.delay : 3000), `${label}:打开了子文件夹里那篇笔记(防空过)`)
+      // 光标落到「后文」段末、另起一段,再粘贴 —— 贴在段中间会和文字同段,落盘那一行就不止图片了。
+      // ⚠️ 落点要核、不到位就重来。点完 1ms 内就按键会抢在浏览器异步派发的 selectionchange 前面,回车按编辑器状态里的
+      //    旧光标(文首)办(机理与实测见头注「光标探针」;不是谁把选区改回去了,也和「第二篇」无关)—— 而落盘那一行的
+      //    断言不看位置,照样全过。点按那一拍产品已补同步;End 之后立刻回车这一拍还在(机器手速),所以照旧:
+      //    点完等选区站稳、确认还在「后文」那一段里才按键;每一步之后再核一次。
+      const inAfterPara = () => page.evaluate(() => {
+        const sel = window.getSelection()
+        const p = [...document.querySelectorAll('.ProseMirror[contenteditable="true"] p')].filter((e) => /后文/.test(e.textContent || '')).pop()
+        return !!p && p.contains(sel?.anchorNode ?? null)
+      })
+      const caretInfo = () => page.evaluate(() => {
+        const sel = window.getSelection()
+        const ed = [...document.querySelectorAll('.ProseMirror[contenteditable="true"]')].find((e) => e.contains(sel?.anchorNode ?? null))
+        if (!ed) return { ok: false, why: '选区不在编辑器里' }
+        const blocks = [...ed.children]
+        const at = blocks.findIndex((c) => c.contains(sel.anchorNode))
+        const cur = blocks[at]
+        const prev = blocks[at - 1]
+        return { ok: !!cur && cur.tagName === 'P' && !(cur.textContent || '').trim() && /后文/.test(prev?.textContent || ''), at, blocks: blocks.map((c) => `${c.tagName}:${(c.textContent || '').slice(0, 6)}`) }
+      })
+      if (CARET.on) {
+        // 会出事的那个形状:点、End、回车,中间不等、不核、不重来。时间线落盘,回车起的空段在哪由 caretInfo 说。
+        const para = page.locator('.ProseMirror[contenteditable="true"] p', { hasText: '后文' }).last()
+        await para.waitFor({ state: 'visible', timeout: 8000 })
+        await para.scrollIntoViewIfNeeded({ timeout: 4000 }).catch(() => {})
+        await page.waitForTimeout(300)
+        await page.evaluate(() => window.__mark('点之前'))
+        const last = CARET.keys === 'type' ? 'Z' : 'Enter'
+        if (CARET.pointer !== 'tap') {
+          // 鼠标:几条指令不等回执连着发 —— 人在主线程卡着的时候按键,事件就是这样排着队进来的。
+          // mouse = 段落盒的正中(短行上是字右边的留白);glyph = 落在字上。
+          const b = CARET.pointer === 'glyph'
+            ? await para.evaluate((el) => { const r = document.createRange(); r.selectNodeContents(el); const q = r.getClientRects()[0]; return { x: q.left, y: q.top, width: q.width, height: q.height } })
+            : await para.boundingBox()
+          await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2)
+          const sent = [page.mouse.down(), page.mouse.up()]
+          if (CARET.gap) await new Promise((r) => setTimeout(r, CARET.gap)) // 台架这边计时:点下去之后隔这么久按键,不管页面忙不忙
+          sent.push(page.keyboard.down('End'), page.keyboard.down(last))
+          await Promise.all(sent)
+          await page.keyboard.up('End'); await page.keyboard.up(last)
+        } else {
+          await para.tap({ timeout: 4000 })
+          if (CARET.gap) await page.waitForTimeout(CARET.gap)
+          await page.keyboard.press('End')
+          await page.keyboard.press(last)
+        }
+        await page.waitForTimeout(1200)
+        const info = await caretInfo()
+        const tail = (info.blocks || []).slice(-4)
+        const landed = CARET.keys === 'type' ? { ok: tail.includes('P:后文Z'), head: (info.blocks || []).slice(0, 2), tail } : { ok: !!info.ok, why: info.why, at: info.at, head: (info.blocks || []).slice(0, 2), tail }
+        const log = await page.evaluate(() => { const l = window.__caretLog; const k = l.map((e) => e.kind).lastIndexOf('MARK 点之前'); return { exposed: !!window.__amxView, lines: l.slice(Math.max(0, k - 40)) } })
+        // 作数的是这一条:松手之后(click 事件那一刻)编辑器状态里的光标已经在点的那一段 —— 不看时序。
+        // 按键最后落在哪(landed)要看按键和 selectionchange 谁先到,只记不判。
+        const from = log.lines.map((e) => e.kind).lastIndexOf('MARK 点之前')
+        const click = log.lines.slice(from).find((e) => e.kind === 'ev.click')
+        const synced = !!click && click.pm != null && click.pm !== log.lines[from].pm && /后文/.test(click.dom)
+        const file = path.join(root, 'outputs', 'localasset', `caret-${label}-${CARET.tag}-${Date.now()}.json`)
+        fs.writeFileSync(file, JSON.stringify({ label, caret: CARET, synced, landed, exposed: log.exposed, lines: log.lines }, null, 1))
+        check(synced, `${label}:[探针] 点完即落定:松手那一刻编辑器状态里的光标已在「后文」`, `点之前 pm=${log.lines[from].pm} → click 时 pm=${click ? click.pm : '(没有 click)'} dom=${click ? click.dom : ''};按键落点(看时序,不作数)${landed.ok ? '对' : '不对'} ${JSON.stringify(landed.ok ? landed.tail : landed)}  时间线: ${path.relative(root, file)}${log.exposed ? '' : '(产物没露出编辑器视图:没有 pm 栏,这条判不了)'}`)
+        return
+      }
+      let caret = { ok: false }
+      for (let i = 0; i < 5 && !caret.ok; i++) {
+        await page.locator('.ProseMirror[contenteditable="true"] p', { hasText: '后文' }).last().tap({ timeout: 4000 }).catch(() => {})
+        await page.waitForTimeout(400)
+        if (!(await inAfterPara())) { console.log(`      第 ${i + 1} 次点「后文」:选区没留在这一段里,重来`); await page.waitForTimeout(800); continue }
+        await page.keyboard.press('End').catch(() => {})
+        await page.waitForTimeout(150)
+        if (!(await inAfterPara())) { console.log(`      第 ${i + 1} 次:按 End 之后选区跑了,重来`); await page.waitForTimeout(800); continue }
+        // 上一轮已经起过空段就下移进去,别再多起一段
+        const hasEmptyAfter = await page.evaluate(() => { const ps = [...document.querySelectorAll('.ProseMirror[contenteditable="true"] > p')]; const k = ps.findIndex((e) => /后文/.test(e.textContent || '')); return k >= 0 && !!ps[k + 1] && !(ps[k + 1].textContent || '').trim() })
+        await page.keyboard.press(hasEmptyAfter ? 'ArrowDown' : 'Enter').catch(() => {})
+        await page.waitForTimeout(500)
+        caret = await caretInfo()
+        if (!caret.ok) console.log(`      第 ${i + 1} 次:另起一段之后光标不在那一段里 ${JSON.stringify(caret)},重来`)
+      }
+      check(caret.ok, `${label}:光标在「后文」之后新起的空段里(防空过:粘贴的落点)`, JSON.stringify(caret))
+      const handled = await page.evaluate((src) => {
+        const el = document.querySelector('.ProseMirror[contenteditable="true"]')
+        const img = document.createElement('img')
+        img.setAttribute('src', src)
+        const dt = new DataTransfer()
+        dt.setData('text/html', img.outerHTML)
+        return !el.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }))
+      }, rootImg.src)
+      await page.waitForTimeout(4000) // 过自动保存
+      const pasted = (await h.editorImgs())[0]
+      check(handled && !!pasted && pasted.complete && pasted.w === 2, `${label}:图贴进了子文件夹的笔记,当场显示得出(防空过)`, `编辑器接了粘贴=${handled} ${pasted ? `naturalWidth=${pasted.w}` : '编辑器里没有图'}`)
+      const saved = side === 'cloud' ? (cloud.puts[cloud.puts.length - 1]?.content ?? null) : await page.evaluate((p) => window.amadeus.readTextFile(p), SUB.path)
+      check(lineOf(saved) === WANT, `${label}:落盘的图片链接是指回库根的 ../ 写法`, `落盘那一行: ${lineOf(saved).slice(0, 200) || (saved == null ? '(没有发生保存)' : '(没有图片行)')}`)
+      check(/后文\n+!\[\]\(/.test(String(saved ?? '')), `${label}:图落在「后文」之后(防空过:贴到了要贴的地方)`, `落盘全文: ${JSON.stringify(String(saved ?? '')).slice(0, 200)}`)
+      await reopenCheck(label, h, side, cloud, WANT)
+      await page.screenshot({ path: path.join(root, 'outputs', 'localasset', `${side === 'local' ? 'e-local' : 'f-cloud'}-cross-folder.png`) }).catch(() => {})
+    } finally {
+      await ctx.close()
+    }
+  }
+
+  /** G:云端库里本来就是 `../` 写法的笔记,且页目录下有一张同路径的另一张图(1×1)。 */
+  const dotdotCloud = async (label) => {
+    const WANT = `![](../${ROOTPIC})`
+    const cloud = { files: { [SUB.path]: `# 图片笔记\n\n前文\n\n${WANT}\n\n后文\n`, [ROOTPIC]: Buffer.from(PNG_B64, 'base64'), [`${SUB.dir}/${ROOTPIC}`]: Buffer.from(PNG1_B64, 'base64') }, puts: [], seq: 1 }
+    const h = await openCtx('cloud', cloud)
+    try {
+      await h.page.goto(appUrl, { waitUntil: 'domcontentloaded', timeout: 30_000 })
+      await h.boot()
+      await reopenCheck(label, h, 'cloud', cloud, WANT)
+      await h.page.screenshot({ path: path.join(root, 'outputs', 'localasset', 'g-cloud-dotdot.png') }).catch(() => {})
+    } finally {
+      await h.ctx.close()
+    }
   }
 
   try {
@@ -275,14 +624,22 @@ async function main() {
     if (!up) throw new Error(`vite preview 没起来\n${previewErr.slice(-800) || '(无 stderr)'}`)
     fs.mkdirSync(path.join(root, 'outputs', 'localasset'), { recursive: true })
     browser = await chromium.launch({ executablePath: findChromium(), headless: true, args: ['--no-sandbox'] })
-    console.log('── A. 冷启动就在本地库 ──')
-    await scenario('A', 'local')
-    console.log('\n── B. 先在云端库启动,再切到本地库 ──')
-    await scenario('B', 'cloud')
-    console.log('\n── C. 云端库(手机缺省就是它;网页版同一座桥) ──')
-    await scenario('C', 'cloud', true)
-    console.log('\n── D. 云端库里一篇已经被写坏的笔记(图片行是另一端写进去的带过期令牌的地址) ──')
-    await scenario('D', 'cloud', true, true)
+    // E2E_ONLY=F(或 E,G)只跑点名的场景;缺省全跑。
+    const only = (process.env.E2E_ONLY || '').toUpperCase().split(',').filter(Boolean)
+    const run = async (label, title, fn) => {
+      if (only.length && !only.includes(label)) return
+      console.log(`\n── ${label}. ${title} ──`)
+      await fn()
+    }
+    await run('A', '冷启动就在本地库', () => scenario('A', 'local'))
+    await run('B', '先在云端库启动,再切到本地库', () => scenario('B', 'cloud'))
+    await run('C', '云端库(手机缺省就是它;网页版同一座桥)', () => scenario('C', 'cloud', true))
+    await run('D', '云端库里一篇已经被写坏的笔记(图片行是另一端写进去的带过期令牌的地址)', () => scenario('D', 'cloud', true, true))
+    for (let i = 0; i < (CARET.on ? CARET.n : 1); i++) {
+      await run('E', '本地库:从库根的笔记复制一张图,贴进子文件夹里的笔记', () => crossFolder('E', 'local'))
+      await run('F', '云端库:同上', () => crossFolder('F', 'cloud'))
+    }
+    await run('G', '云端库里本来就是 ../ 写法的笔记,页目录下还有一张同路径的另一张图', () => dotdotCloud('G'))
   } catch (e) {
     check(false, '台架异常', String(e && e.stack ? e.stack.split('\n').slice(0, 3).join(' / ') : e))
   } finally {

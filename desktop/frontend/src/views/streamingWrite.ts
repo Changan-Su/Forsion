@@ -51,6 +51,11 @@ function findKeyString(s: string, keys: string[]): string | undefined {
 const PATH_KEYS = ['path', 'file_path', 'filename']
 const CONTENT_KEYS = ['content', 'file_text', 'text', 'new_str', 'new_string']
 
+/** 任一工具的流式参数里取一个字符串字段:截断即返回已解码的那部分;字段还没流到 → undefined。sketch 草稿卡取 html / title 用。 */
+export function streamingArgString(args: string, key: string): string | undefined {
+  return args ? findKeyString(args, [key]) : undefined
+}
+
 /** 容错解析写文件工具的流式参数 → { path?, content? }(任一缺失即未出现在已到达的片段里)。 */
 export function parseStreamingWrite(args: string): { path?: string; content?: string } {
   if (!args) return {}

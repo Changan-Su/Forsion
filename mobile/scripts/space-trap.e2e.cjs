@@ -77,6 +77,10 @@ async function main() {
         localStorage.setItem('forsion_token', 'e2e-spacetrap')
         localStorage.setItem('forsion_tangu_active_space', 'public')
         localStorage.setItem('forsion_home_slot_space', 'public') // HOME_SLOT_KEY,缺省 'home'
+        // 「外壳随内容取色」2026-10-05 起缺省关;开着时 spaceAmbient.css 给胶囊上染色磨砂,那条规则与
+        // 幽灵胶囊的 `background: none` 同权重、靠源码顺序压过它(10-04 第 5 条因此红过)。
+        // 所以整台仪器跑在取色开着的路径上 —— 关着时只剩 singleColumn.css 一条规则,是它的子集。
+        localStorage.setItem('forsion_theme_ambient', 'on')
       } catch { /* ignore */ }
     })
     const page = await ctx.newPage()
@@ -92,8 +96,11 @@ async function main() {
       const cs = cap ? getComputedStyle(cap) : null
       const dr = document.querySelector('.mb-drawer--left')
       const b = dr ? dr.getBoundingClientRect() : null
+      const root = document.documentElement.dataset
       return {
         space: localStorage.getItem('forsion_tangu_active_space'),
+        env: { theme: root.theme, glass: root.glass, ambient: root.ambient },
+        capBackdrop: cs ? cs.backdropFilter : null,
         ghost: !btn || btn.classList.contains('mb-icon-btn--ghost'),
         aria: btn ? btn.getAttribute('aria-label') : null,
         // 胶囊「看不见」的判据 = 底与描边都被抹平(见 singleColumn.css 的 :has 规则)。
@@ -107,6 +114,8 @@ async function main() {
     })
 
     const boot = await shell()
+    const shotDir = fs.mkdtempSync(path.join(os.tmpdir(), 'forsion-spacetrap-'))
+    await page.screenshot({ path: path.join(shotDir, 'public-space-topbar.png') })
     ok('1 冷启动落在「发布」Space(左右侧栏配方皆空)', boot.space === 'public', JSON.stringify({ space: boot.space }))
     ok('2 ⚠️ 左抽屉钮仍是真按钮、胶囊看得见(退路的入口不许塌成幽灵)',
       !boot.ghost && boot.aria === 'left panel' && !boot.capInvisible,
@@ -131,19 +140,23 @@ async function main() {
       clone.className = 'mb-icon-btn mb-icon-btn--ghost'
       cap.replaceChildren(clone)
       const cs = getComputedStyle(cap)
-      return { bg: cs.backgroundColor, shadow: cs.boxShadow }
+      return { bg: cs.backgroundColor, shadow: cs.boxShadow, backdrop: cs.backdropFilter }
     })
+    // backdrop 也要是 none:看不见的元素带着 blur 照样会把身后的内容糊成一块药丸形。
     ok('5 负对照:退回幽灵占位后胶囊确实整块消失(证明第 2 条不是假绿)',
-      !!ghosted && ghosted.bg === 'rgba(0, 0, 0, 0)' && ghosted.shadow === 'none',
+      !!ghosted && ghosted.bg === 'rgba(0, 0, 0, 0)' && ghosted.shadow === 'none' && ghosted.backdrop === 'none',
       JSON.stringify(ghosted))
+    // 第 5 条只在「染色规则真的在场」时才有分量 —— 取色开关的键改了名 / 缺省主题换了,它会悄悄退回恒真命题。
+    ok('6 取色开着:真胶囊带染色磨砂(证明第 5 条跑在两条规则会打架的那条路径上)',
+      boot.env.ambient === 'on' && /blur\(/.test(boot.capBackdrop || ''),
+      JSON.stringify({ env: boot.env, backdrop: boot.capBackdrop }))
 
-    const shotDir = fs.mkdtempSync(path.join(os.tmpdir(), 'forsion-spacetrap-'))
     await page.reload({ waitUntil: 'domcontentloaded' })
     await page.waitForTimeout(4000)
     await page.locator('.mb-topbar .mb-icon-btn').first().click({ force: true })
     await page.waitForTimeout(900)
     await page.screenshot({ path: path.join(shotDir, 'public-space-drawer.png') })
-    console.log('screenshot →', path.join(shotDir, 'public-space-drawer.png'))
+    console.log('screenshot →', shotDir, '(public-space-topbar.png / public-space-drawer.png)')
   } catch (e) {
     fails.push(String((e && e.message) || e))
   } finally {

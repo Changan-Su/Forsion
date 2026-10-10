@@ -219,7 +219,14 @@ OPT_IN.add('projdedupe'); // --only projdedupe:项目记忆换了说法的重复
 OPT_IN.add('projteam'); // --only projteam:项目记忆在团队会话里(三个两人团队各一轮)
 OPT_IN.add('projcompact'); // --only projcompact:项目记忆写满时的压缩(4 个 run + 判官 + 2 次压缩,约 10 次调用);只在动 projectMemoryCompact.ts / remember 写满那条路时才有信息量
 OPT_IN.add('visualfigures');
+for (const key of ['intelligentplan', 'intelligentmedia', 'intelligentplain']) { OPT_IN.add(key); KEYS.push(key); }
+OPT_IN.add('intelligentusers'); KEYS.push('intelligentusers');
+OPT_IN.add('intelligentcards'); KEYS.push('intelligentcards');
 OPT_IN.add('visualize'); // --only visualize: real model -> sketch controls/state; HTML can feed desktop check:visualize.
+OPT_IN.add('visualask'); // --only visualask:卡内按钮回头改答案(forsionSketch.ask);改 sketch.ts 的 INTERACTION / SKETCH_SECTION 那段后跑
+OPT_IN.add('visualsdial'); // --only visualsdial:可视化档位 less / off(ui_settings 快照):off 工具与段都不在、less 隐式信号不触发;两个 run
+OPT_IN.add('visualplan'); // --only visualplan:统一部件拼一张「可用的工具卡」(滑块 + fs-checklist + copy);改 sketch.ts 的部件表 / SKILL 后跑
+KEYS.push('visualask', 'visualsdial', 'visualplan');
 OPT_IN.add('emoji'); // Three real-model rounds; run explicitly when session icons change.
 OPT_IN.add('plugin'); // 隔离 home 里放夹具插件 —— 只在显式跑它时放,别让多出来的工具改了别的场景的工具表。
 OPT_IN.add('dispatch');
@@ -1485,6 +1492,42 @@ try {
   if (!models.some((m) => m.id === MODEL)) throw new Error(`模型目录无 ${MODEL};直连可用:${models.filter((m) => m.source === 'direct').map((m) => m.id).join(', ') || '(无 —— 凭证未装载或已失效)'}`);
   rmSync(authLink, { force: true }); // 凭证只在引擎启动时装载一次,之后不再读文件 → 立刻拆掉软链
 
+  // Warm real engine first, then use the isolated compiled Electron path also used by HUMAN.md.
+  // Prompts are typed into the composer; this never fabricates model events or replays documents.
+  if (ONLY.has('intelligentusers')) {
+    let failure;
+    try {
+      const ui = await promisify(execFile)(process.execPath, [join(root, '../desktop/scripts/intelligent-ui.live.cjs')], {
+        cwd: join(root, '../desktop'), timeout: 25 * 60_000, maxBuffer: 4 * 1024 * 1024,
+        env: { ...process.env, TANGU_BACKEND_URL: base, TANGU_IUI_TOKEN: TOKEN, TANGU_IUI_OUT: OUT, TANGU_IUI_MODEL: MODEL, TANGU_IUI_WORKSPACE: workspace, TANGU_IUI_CASES: opt('intelligent-cases', ''), TANGU_IUI_RANDOM: opt('intelligent-random', '') },
+      });
+      writeFileSync(join(OUT, 'intelligent-users-ui.log'), ui.stdout + ui.stderr);
+    } catch (e) { failure = e; writeFileSync(join(OUT, 'intelligent-users-ui.log'), String(e.stdout || '') + String(e.stderr || '') + String(e.message)); }
+    const path = join(OUT, 'intelligent-users-evidence.json');
+    if (existsSync(path)) {
+      const rows = JSON.parse(readFileSync(path, 'utf8')).results;
+      for (const row of rows) record(row.key, row.name, row, row.ms);
+      // --intelligent-random <seed>:<slot> draws one journey per kind (pick / list / compare) from the pool.
+      const expected = opt('intelligent-random', '') ? 3 : opt('intelligent-cases', '').split(',').filter(Boolean).length || 5;
+      if (rows.length !== expected || failure) record('intelligentusers-incomplete', '用户场景执行完整性', { ok: false, detail: String(failure?.message || `Expected ${expected}, got ${rows.length}`) }, 0);
+    }
+    else record('intelligentusers', '真实用户 Electron 测试启动', { ok: false, detail: String(failure?.message || 'Missing evidence') }, 0);
+  }
+
+  if (ONLY.has('intelligentcards')) {
+    let failure;
+    try {
+      const ui = await promisify(execFile)(process.execPath, [join(root, '../desktop/scripts/intelligent-cards.e2e.cjs')], {
+        cwd: join(root, '../desktop'), timeout: 8 * 60_000, maxBuffer: 4 * 1024 * 1024,
+        env: { ...process.env, TANGU_BACKEND_URL: base, TANGU_IUI_TOKEN: TOKEN, TANGU_IUI_OUT: OUT, TANGU_IUI_MODEL: MODEL, TANGU_IUI_WORKSPACE: workspace },
+      });
+      writeFileSync(join(OUT, 'intelligent-cards-ui.log'), ui.stdout + ui.stderr);
+    } catch (e) { failure = e; writeFileSync(join(OUT, 'intelligent-cards-ui.log'), String(e.stdout || '') + String(e.stderr || '') + String(e.message)); }
+    const path = join(OUT, 'intelligent-cards-evidence.json');
+    const row = existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : { ok: false, detail: String(failure?.message || 'Missing evidence') };
+    record('intelligentcards', '原生与插件卡片真实用户验收', { ...row, ...(failure ? { ok: false } : {}) }, row.ms || 0);
+  }
+
   await scenario('dispatch', 'Dispatch Chief and native task lifecycle', async () => {
     const { dispatchLive } = await import('./lib/dispatch-live.mjs');
     return dispatchLive({api, run, until, workspace, model:MODEL, home});
@@ -2061,6 +2104,44 @@ try {
     return { ok: !ev.error && ev.done && success && contract, detail: ev.error || `cards=${cards.length};native figures=${contract}`, output: ev.content, toolCalls: ev.toolCalls, ttftMs: ttft(ev), tokens: tokensOf(ev) };
   });
 
+  // Real documents also feed the desktop Electron acceptance script.
+  for (const [key, prompt] of [
+    ['intelligentplan', '在聊天里安排周末晚餐，默认4人，人数可在2–8调整。并排给宫保鸡丁、番茄炖牛腩、香菇烧豆腐三个主菜选项，配菜和凉菜固定。人数和主菜改变时采购清单本地联动，可勾选、复制，步骤可以折叠。再放一个按钮让我要求全素方案。用原生 Intelligent UI，数量标为食谱估算，不写项目文件。'],
+    ['intelligentmedia', '用原生 Intelligent UI 做摄影封面选择：三张图并列、可展开原图，给出构图差异、本地单选控件和图片来源。只使用给定图片：https://cdn.jsdelivr.net/gh/sachinchoolur/lightGallery@9813e97837fddca82e4734bcbf4b77b0cd227772/site/static/images/demo/1-480.jpg 、同目录 4-480.jpg 和 13-480.jpg。来源：https://github.com/sachinchoolur/lightGallery 。必须先实际查看三张图片再比较构图；若无法查看就明确说明，不猜图中主体或拍摄地点。'],
+  ]) {
+    await scenario(key, key, async () => {
+      const ev = await run(`live-${key}-${Date.now()}`, prompt, 300_000, key === 'intelligentplan' ? { preset: 'chat' } : {}, 'desktop/2.13.1', undefined, undefined, undefined, { clientCapabilities: ['intelligent-ui.v1'] });
+      const { validateUIDocument } = await import('../dist/shared/intelligentUi.js');
+      const documents = [], errors = [];
+      for (const c of ev.toolArgs.filter(c => c.name === 'intelligent_ui')) {
+        try { documents.push(validateUIDocument(JSON.parse(JSON.parse(c.arguments).document))); } catch (e) { errors.push(String(e.message)); }
+      }
+      const blocks = documents.flatMap(d => d.blocks);
+      // Pictures the user picks among are the options themselves (one row of picture cards), not a gallery beside a list.
+      // Exactly one pictured choice: a second one over the same pictures would put them on screen twice.
+      const pictured = documents.flatMap(d => d.inputs).filter(i => i.kind === 'choice' && i.options.some(o => o.imageId));
+      const picker = pictured.length === 1 && pictured[0].options.length === 3 && new Set(pictured[0].options.map(o => o.imageId)).size === 3 ? pictured[0] : undefined;
+      const pickIds = new Set(picker?.options.map(o => o.imageId));
+      // A model may still list those pictures again in a gallery or a comparison (GPT-6 Luna did, 1 run in 4). The renderer
+      // draws each once, so a repeat is reported here to keep the rate visible and no longer fails the scene.
+      const repeats = blocks.filter(b => (b.kind === 'gallery' && b.resourceIds.some(id => pickIds.has(id))) || (b.kind === 'comparison' && b.items.some(i => pickIds.has(i.imageId)))).length;
+      const pickRow = !!picker;
+      const contract = key === 'intelligentplan'
+        ? blocks.some(b => b.kind === 'checklist' && b.items.some(i => i.quantity?.scaleBy)) && documents.some(d => d.inputs.some(i => i.kind === 'choice')) && blocks.some(b => b.kind === 'disclosure')
+        : pickRow && blocks.some(b => b.kind === 'sources');
+      const groundedImages = key !== 'intelligentmedia' || (ev.toolArgs.some(c => c.name === 'view_image') && !/人像|人脸|面部|portrait/i.test(JSON.stringify(documents)));
+      const noPayloadEcho = !ev.content.includes('\"document\":') && !ev.content.includes('\"blocks\":');
+      const success = ev.toolResults.some(r => r.name === 'intelligent_ui' && !r.isError && !/^Error:/i.test(r.result || ''));
+      writeFileSync(join(OUT, `${key}-evidence.json`), JSON.stringify({ documents, errors, toolArgs: ev.toolArgs, toolResults: ev.toolResults }, null, 2));
+      return { ok: !ev.error && ev.done && success && contract && noPayloadEcho && groundedImages, detail: ev.error || `groundedImages=${groundedImages}; noPayloadEcho=${noPayloadEcho}; documents=${documents.length}; contract=${contract}; pickRow=${key === 'intelligentmedia' ? `${pickRow}; repeats=${repeats}` : 'n/a'}; correctedErrors=${errors.length}`, output: ev.content, toolCalls: ev.toolCalls, ttftMs: ttft(ev), tokens: tokensOf(ev) };
+    });
+  }
+  await scenario('intelligentplain', 'Intelligent UI 关闭偏好', async () => {
+    const ev = await run(`live-intelligentplain-${Date.now()}`, '给我一个四人晚餐建议，三道菜，保持简短。', 150_000, {}, 'desktop/2.13.1', undefined, undefined, undefined, { clientCapabilities: ['intelligent-ui.v1'], ui: { visuals: { value: 'off' } } });
+    const noVisuals = !ev.toolArgs.some(c => ['intelligent_ui', 'sketch'].includes(c.name)) && !String(ev.systemPrompt).includes('## Intelligent UI');
+    return { ok: !ev.error && ev.done && noVisuals && ev.content.length > 0, detail: ev.error || `noVisuals=${noVisuals}`, output: ev.content, toolCalls: ev.toolCalls, ttftMs: ttft(ev), tokens: tokensOf(ev) };
+  });
+
   await scenario('visualize', 'visualize 交互图与本地状态', async () => {
     const ev = await run(`live-visualize-${Date.now()}`, '在聊天里给我一个可交互的正弦波示意图，用滑块调节振幅，立即改变波形。切换会话再回来要记住振幅。用 Forsion 自带的视觉控件和状态接口，不写项目文件。', 240_000, {}, 'desktop/2.12.0');
     const cards = ev.toolArgs.filter((c) => c.name === 'sketch').map((c) => JSON.parse(c.arguments || '{}'));
@@ -2069,6 +2150,51 @@ try {
     const success = ev.toolResults.some((r) => r.name === 'sketch' && !r.isError);
     const contract = /type=["']range["']/.test(html) && html.includes('forsionSketch') && html.includes('setState') && /<svg|<canvas/.test(html);
     return { ok: !ev.error && ev.done && success && contract, detail: ev.error || `cards=${cards.length};interactive/state=${contract}`, output: ev.content, toolCalls: ev.toolCalls, ttftMs: ttft(ev), tokens: tokensOf(ev) };
+  });
+
+  // visualask(10-09,对标 ChatGPT Intelligent UI「控件回头改答案」):卡里的按钮经 window.forsionSketch.ask(text) 把一句话当用户的
+  // 下一条消息发出去。判据只看成品 html:真有 <button> 且点击处调了 ask(;负对照 = 去掉 SKETCH_SECTION 里 ask 那段的引擎,模型不知道有这条路。
+  await scenario('visualask', 'visualask 卡内按钮回头改答案(forsionSketch.ask)', async () => {
+    const ev = await run(`live-visualask-${Date.now()}`, '在聊天里画一张卡，并排比较三种部署方式：本地部署、云托管、混合。每种下面放一个按钮，点了就让你详细展开那一种的取舍。用 Forsion 自带的视觉控件，数据标明是演示。', 240_000, {}, 'desktop/2.13.0');
+    const cards = ev.toolArgs.filter((c) => c.name === 'sketch').map((c) => JSON.parse(c.arguments || '{}'));
+    const html = cards.map((c) => c.html || '').join('\n');
+    writeFileSync(join(OUT, 'visualask.html'), html);
+    const success = ev.toolResults.some((r) => r.name === 'sketch' && !r.isError);
+    // 10-09 二轮起首选原生 fs-compare(选项自带 ask);手写 <button onclick=ask()> 仍算数
+    const native = /<fs-compare\b/.test(html) && /"ask"\s*:/.test(html);
+    const contract = native || (/forsionSketch\.ask\(/.test(html) && /<button/i.test(html));
+    return { ok: !ev.error && ev.done && success && contract, detail: ev.error || `cards=${cards.length};ask button=${contract}(native=${native})`, output: ev.content, toolCalls: ev.toolCalls, ttftMs: ttft(ev), tokens: tokensOf(ev) };
+  });
+
+  // visualplan(10-09 二轮,对标 Intelligent UI 的「能用的工具卡」:餐单按人数缩放 + 采购清单可勾 + 一键复制):判据只看成品 html ——
+  // 有滑块 / 数字输入按人数改量、用原生 fs-checklist(勾选状态由宿主存)、有按钮调 forsionSketch.copy(;负对照 = 去掉描述 / 段 / 技能里
+  // 新部件与 copy 那几句的引擎:模型只会拼 div + 自己写 checkbox,须红。
+  await scenario('visualplan', 'visualplan 统一部件拼工具卡(人数滑块 + fs-checklist + copy)', async () => {
+    const ev = await run(`live-visualplan-${Date.now()}`, '在聊天里给我做一张四人份的周末晚餐计划卡：三道菜，用滑块调人数时食材用量跟着变；下面放一张可以勾选的采购清单，再给一个「复制采购清单」按钮。用 Forsion 自带的视觉部件。', 240_000, {}, 'desktop/2.13.0');
+    const cards = ev.toolArgs.filter((c) => c.name === 'sketch').map((c) => JSON.parse(c.arguments || '{}'));
+    const html = cards.map((c) => c.html || '').join('\n');
+    writeFileSync(join(OUT, 'visualplan.html'), html);
+    const success = ev.toolResults.some((r) => r.name === 'sketch' && !r.isError);
+    const scale = /type=["']range["']|type=["']number["']/.test(html);
+    const checklist = /<fs-checklist\b/.test(html);
+    const copy = /forsionSketch\.copy\(/.test(html);
+    return { ok: !ev.error && ev.done && success && scale && checklist && copy, detail: ev.error || `cards=${cards.length};scale=${scale};fs-checklist=${checklist};copy=${copy}`, output: ev.content, toolCalls: ev.toolCalls, ttftMs: ttft(ev), tokens: tokensOf(ev) };
+  });
+
+  // visualsdial(10-09):用户把可视化调到 less / off(渲染端 ui_settings 快照,键 visuals)。off → 工具与段都不在(系统提示里没有
+  // 「## Visual cards」、模型调不到 sketch);less → 段还在、另注一句「只认明确要求」,一道「比较」题(隐式信号)模型不该画。
+  // 负对照 = 引擎不看 visuals 的旧代码:off 下照样出卡、段照样在,须红。debugSystemPrompt 让引擎回传本 run 的系统提示。
+  await scenario('visualsdial', 'visualsdial 可视化档位 less / off', async () => {
+    const ui = (value) => ({ ui: { visuals: { value, allowed: ['auto', 'less', 'off'] } } });
+    const q = '比较 SQLite、PostgreSQL 和 MySQL 在小团队项目里的取舍，给出各自的优缺点和适用场景。';
+    const off = await run(`live-visualsoff-${Date.now()}`, q, 240_000, { debugSystemPrompt: true }, 'desktop/2.13.0', undefined, undefined, undefined, ui('off'));
+    const less = await run(`live-visualsless-${Date.now()}`, q, 240_000, { debugSystemPrompt: true }, 'desktop/2.13.0', undefined, undefined, undefined, ui('less'));
+    const offPrompt = String(off.systemPrompt || ''); const lessPrompt = String(less.systemPrompt || '');
+    const offOk = !off.error && off.done && !off.toolCalls.includes('sketch') && !offPrompt.includes('## Visual cards');
+    const lessOk = !less.error && less.done && !less.toolCalls.includes('sketch') && lessPrompt.includes('## Visual cards') && lessPrompt.includes('visuals to "less"');
+    return { ok: offOk && lessOk,
+      detail: `off: 工具=${off.toolCalls.join(',') || '无'};段在场=${offPrompt.includes('## Visual cards')} | less: 工具=${less.toolCalls.join(',') || '无'};段在场=${lessPrompt.includes('## Visual cards')};less 注在场=${lessPrompt.includes('visuals to "less"')}`,
+      output: `【off】\n${off.content}\n【less】\n${less.content}`, ttftMs: ttft(off), tokens: tokensOf(off) + tokensOf(less), toolCalls: [...off.toolCalls, ...less.toolCalls] };
   });
 
   await scenario('tool', 'tool 工具回合', async () => {
@@ -3008,7 +3134,7 @@ Then reply with only the command output.`,
   // ⚠️ ENTRY 与 desktop/frontend/src/bootstrapEngine.tsx 的 open-settings 目录项同文(description + params);TARGETS 那一行由
   //    desktop 的 settingsTarget.test.ts 逐字钉住(设置页 / 搜索索引一改,那条单测就红,照它的输出改这里)。
   await scenario('settingsnav', 'settingsnav 「语音在哪设置」:界面命令直达设置页,不用电脑操控', async () => {
-    const TARGETS = 'Pages: general, forsion, model, mcp, hooks, skills, agents, amadeus-plugins, browser, channels, notes, sync, spaces, theme, shortcuts, notifications, statusbar, permissions, remote-sessions, computer-history, advanced, developer, about. Settings: workspace-dir, keep-awake, backend-mode, sandbox, python, mirror, external-backend, forsion-account, forsion-submissions, cloud-url, memory-sync, inbox-notify, default-models, model-providers, web-search, voice, theme-language, startup-appearance, palette, color-mode, ui-zoom, glass, ambient, smooth-caret, chat-avatars, calm-dim, calm-reading, calm-motion, ribbon-auto-home, fonts, notes-attachments, daily-notes, agent-browser, remote-sessions-switch, remote-approval-cap, remote-trusted-devices, remote-safety, computer-history, mcp-server, reset-layout, clear-data, language.';
+    const TARGETS = 'Pages: general, forsion, model, mcp, hooks, skills, agents, amadeus-plugins, browser, channels, notes, sync, spaces, theme, shortcuts, notifications, statusbar, permissions, remote-sessions, computer-history, advanced, developer, about. Settings: workspace-dir, keep-awake, backend-mode, sandbox, python, mirror, external-backend, forsion-account, forsion-submissions, cloud-url, memory-sync, inbox-notify, default-models, model-providers, web-search, voice, theme-language, startup-appearance, palette, color-mode, ui-zoom, glass, ambient, visuals, smooth-caret, chat-avatars, calm-dim, calm-reading, calm-motion, ribbon-auto-home, fonts, notes-attachments, daily-notes, agent-browser, remote-sessions-switch, remote-approval-cap, remote-trusted-devices, remote-safety, computer-history, mcp-server, reset-layout, clear-data, language.';
     const ENTRY = { id: 'open-settings',
       description: "Open Forsion's settings window, optionally at one page or at the page holding one specific setting. To answer 'where/how do I set X', open that page and say which page you opened; these settings are not documented on the web, so do not search for them. Unknown targets are rejected.",
       params: { type: 'object', properties: { tab: { type: 'string', description: `A page id or a setting id. Omit for the default page. ${TARGETS}` } } } };

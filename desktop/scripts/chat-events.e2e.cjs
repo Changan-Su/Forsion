@@ -359,21 +359,28 @@ async function main() {
     // ── 场景 F:sketch 卡(agent 在对话流里画可交互 HTML 卡片)
     // 钉四件:直播上卡(挂 tool_result 非 tool_call)/ 被引擎拒的不画 / 沙箱铁律(仅 allow-scripts
     // + 内层 CSP 真断网,在**真 Electron** 里实证而非单测纸面)/ 历史水合 back-fill 卡不丢。
+    // sk1 的参数先以 tool_stream 流半截(到 `<scr` 为止,真引擎就是按模型输出切片发的),再隔 3s 才来完整 tool_call:
+    // 这 3s 是草稿卡的探针窗(F0a 在 send 返回后立刻量)。半截里 `#skp` 还没被脚本改,所以草稿里应读到 SKETCH-LIVE 而非 -JS。
+    const sk1Args = JSON.stringify({
+      title: '柱状图',
+      html: '<div id="skp">SKETCH-LIVE</div><div id="net">NET-?</div>' +
+        '<script>document.getElementById("skp").textContent+="-JS";' +
+        'fetch("https://example.com").then(function(){document.getElementById("net").textContent="NET-OPEN"})' +
+        '.catch(function(){document.getElementById("net").textContent="NET-BLOCKED"})</script>',
+    })
+    const sk1Partial = sk1Args.slice(0, sk1Args.indexOf('<script>') + 4)
     stub.script([
       { type: 'token', payload: { delta: '先看第一张。' } },
-      { type: 'tool_call', payload: { id: 'sk1', name: 'sketch', arguments: JSON.stringify({
-        title: '柱状图',
-        html: '<div id="skp">SKETCH-LIVE</div><div id="net">NET-?</div>' +
-          '<script>document.getElementById("skp").textContent+="-JS";' +
-          'fetch("https://example.com").then(function(){document.getElementById("net").textContent="NET-OPEN"})' +
-          '.catch(function(){document.getElementById("net").textContent="NET-BLOCKED"})</script>',
-      }) } },
+      { type: 'tool_stream', payload: { id: 'sk1', name: 'sketch', delta: sk1Partial } },
+      { type: 'tool_call', payload: { id: 'sk1', name: 'sketch', arguments: sk1Args }, delay: 3000 },
       { type: 'tool_result', payload: { id: 'sk1', result: 'Sketch card rendered in the conversation.' } },
       { type: 'token', payload: { delta: '第一张说明完成，接着看第二张。' } },
-      { type: 'tool_call', payload: { id: 'sk2', name: 'sketch', arguments: JSON.stringify({ html: '<p>SECOND-CARD</p>' }) } },
+      // sk2 带一个原生部件 fs-compare(10-09 二轮:统一拼装部件,模型只给 JSON);F12 在真 Electron 里数它画出来的选项。
+      { type: 'tool_call', payload: { id: 'sk2', name: 'sketch', arguments: JSON.stringify({ html: '<p>SECOND-CARD</p>' +
+        '<fs-compare><script type="application/json">{"title":"COMPARE-DEMO","options":[{"label":"Alpha","points":["a1","a2"],"ask":{"text":"ASK-ALPHA"}},{"label":"Beta","summary":"b"}]}</script></fs-compare>' }) } },
       { type: 'tool_result', payload: { id: 'sk2', result: 'Sketch card rendered in the conversation.' } },
       { type: 'token', payload: { delta: '第二张之后是完整数据图。' } },
-      // 超高卡:钉折叠闸(默认高度上限 = 右侧车道两卡的高度,超了才露展开钮)。
+      // 超高卡:钉折叠闸(10-09 起上限 = 聊天栏 1.6 倍高 ≈ 1100px@820,超了才露展开钮;撑 1400px 留足余量)。
       // ⚠️故意写成**一张像样的真卡**而不是空白占位:观感自查那两张截图(明/暗)要能看出
       // 主题桥 + 基础排版对不对 —— 空 div 什么都验不出来。只用 --fs-* 变量,一个色值都不硬编码。
       { type: 'tool_call', payload: { id: 'sk4', name: 'sketch', arguments: JSON.stringify({
@@ -402,15 +409,53 @@ async function main() {
           '</tbody></table></div>' +
           '<footer class="fs-source">来源 · api_usage_logs · 失败请求已排除</footer>' +
           // 撑高到必然超过折叠上限(折叠闸要可测),同时不影响上面那段的观感
-          '<div style="height:900px"></div></div>',
+          '<div style="height:1400px"></div></div>',
       }) } },
       { type: 'tool_result', payload: { id: 'sk4', result: 'Sketch card rendered in the conversation.' } },
       // 引擎尺寸闸拒掉的调用:isError=true → 不许画卡(渲染挂 tool_result 的原因)
       { type: 'tool_call', payload: { id: 'sk3', name: 'sketch', arguments: JSON.stringify({ html: '<p>REJECTED-CARD</p>' }) } },
       { type: 'tool_result', payload: { id: 'sk3', result: 'Error: html too large', isError: true } },
       { type: 'token', payload: { delta: '三张草图都画好了。' } },
+      // 卡内按钮回头改答案(10-09):点了经 forsionSketch.ask 把这句话当用户消息发出去(F11 在场景末尾点它)。
+      { type: 'tool_call', payload: { id: 'sk5', name: 'sketch', arguments: JSON.stringify({
+        html: '<button id="askbtn" class="fs-button" type="button" onclick="window.forsionSketch.ask(\'ASK-FOLLOWUP 请展开第二项\')">展开第二项</button>' +
+          '<button id="copybtn" class="fs-button" type="button" onclick="window.forsionSketch.copy(\'COPIED-LIST\')">复制</button>' +
+          '<script>try{window.forsionSketch.ask("AUTO-ASK")}catch(e){document.body.setAttribute("data-autoask",e.message)}' +
+          // 绕过卡内运行时直接 postMessage(Codex 10-09 指出的口子):宿主侧必须按「焦点 + 瞬时激活」拒掉
+          'parent.postMessage({type:"sketch-ask",text:"RAW-ASK"},"*");' +
+          // F11c 的「抢焦点冒充点击」要由卡自己的定时器发起:Playwright 的 frame.evaluate 自带 userGesture(会给子帧 5s 瞬时激活),
+          // 找 nonce 的正则拆开拼("NON"+"CE"),否则这段脚本自己的源码就会被 outerHTML 匹配到(第一次跑就是这么假红的)。
+          // 直接在 evaluate 里发等于替攻击者按了一下。台架只经 evaluate 预约时刻(data-steal-at),7s 后由这段代码自己动手。
+          'setInterval(function(){var at=Number(document.body.dataset.stealAt||0);if(!at||Date.now()<at||document.body.dataset.steal)return;' +
+          'var i=document.createElement("input");document.body.appendChild(i);i.focus();parent.postMessage({type:"sketch-ask",text:"STEAL-ASK"},"*");' +
+          'var r="sent";try{window.forsionSketch.ask("STEAL-ASK")}catch(e){r=e.message}' +
+          'document.body.dataset.steal=JSON.stringify({viaRuntime:r,nonceVisible:new RegExp("NON"+"CE = \'").test(document.documentElement.outerHTML),scripts:document.head.querySelectorAll("script").length})},100)</script>',
+      }) } },
+      { type: 'tool_result', payload: { id: 'sk5', result: 'Sketch card rendered in the conversation.' } },
+      { type: 'token', payload: { delta: '按钮卡在最后。' } },
     ])
     await send(win, '画两张卡')
+    // F0 草稿卡(对标 ChatGPT Intelligent UI 边生成边渲染):send 返回时(≈1.8s)只到了 tool_stream 半截,完整调用要到 3s —— 此刻必须已有草稿卡,
+    // 卡内是半截的结构(SKETCH-LIVE),脚本没跑(没有 -JS);终稿一到草稿标记消失,同一个 callId 原地换成正式卡。
+    const draftProbe = await win.evaluate(() => {
+      const d = document.querySelector('.sketch-card[data-sketch-draft][data-sketch-call-id="sk1"]')
+      return { present: !!d, frameEvents: d ? getComputedStyle(d.querySelector('.sketch-frame')).pointerEvents : '' }
+    })
+    // 观感自查:草稿态留一张实景(SKETCH_DRAFT_SHOT),和终稿那张对照看
+    await win.locator('.t2-asst:has([data-sketch-draft])').last().screenshot({ path: process.env.SKETCH_DRAFT_SHOT || '/tmp/sketch-draft.png' }).catch(() => {})
+    let draftInner = ''
+    let draftLoadedAt = 0 // 卡内运行时 ready 时打的时间戳:草稿 → 终稿必须是同一次加载(单 iframe 原地补丁,不重载)
+    for (const fr of win.frames()) {
+      try { if (await fr.locator('#skp').count()) { draftInner = (await fr.locator('#skp').textContent().catch(() => '')) || ''; draftLoadedAt = await fr.evaluate(() => window.__fsLoadedAt || 0).catch(() => 0); break } } catch { /* frame 可能已卸载 */ }
+    }
+    check('F0a 草稿卡:参数还在流式生成时就画出已到达的结构(脚本不跑、不接指针)',
+      draftProbe.present && draftProbe.frameEvents === 'none' && draftInner === 'SKETCH-LIVE', JSON.stringify({ ...draftProbe, draftInner }))
+    let draftGone = false
+    for (let i = 0; i < 16; i++) {
+      await win.waitForTimeout(500)
+      if (await win.evaluate(() => !document.querySelector('.sketch-card[data-sketch-draft]'))) { draftGone = true; break }
+    }
+    check('F0b 终稿到达 → 草稿标记消失(原地换成正式卡)', draftGone, `draftGone=${draftGone}`)
     await win.waitForTimeout(1500)
 
     // 沙箱无 allow-same-origin ⇒ 页面侧 contentDocument 拿不到,卡内探针统一走 Playwright CDP frame。
@@ -430,7 +475,7 @@ async function main() {
         sandboxes: cards.map((c) => c.querySelector('iframe')?.getAttribute('sandbox')),
       }
     })
-    check('F1 sketch 直播上卡:本轮三张 + 历史一张,标题可选', skProbe.count === 4 && skProbe.titles.includes('柱状图'), JSON.stringify(skProbe))
+    check('F1 sketch 直播上卡:本轮四张 + 历史一张,标题可选', skProbe.count === 5 && skProbe.titles.includes('柱状图'), JSON.stringify(skProbe))
     const liveOrder = await win.evaluate(() => {
       const msg = [...document.querySelectorAll('.t2-asst')].findLast((el) => el.querySelector('[data-sketch-call-id="sk1"]'))
       if (!msg) return []
@@ -471,8 +516,8 @@ async function main() {
     await inlineMessage.scrollIntoViewIfNeeded().catch(() => {})
     await win.waitForTimeout(300)
     await inlineMessage.screenshot({ path: process.env.SKETCH_INLINE_SHOT || '/tmp/sketch-inline-order.png' }).catch(() => {})
-    check('F2 ⚠️沙箱铁律:每张卡 sandbox 恒为仅 allow-scripts', skProbe.sandboxes.length === 4 && skProbe.sandboxes.every((s) => s === 'allow-scripts'), JSON.stringify(skProbe.sandboxes))
-    check('F3 被引擎拒掉的 sketch(isError)不画卡', skProbe.count === 4, `count=${skProbe.count}`)
+    check('F2 ⚠️沙箱铁律:每张卡 sandbox 恒为仅 allow-scripts', skProbe.sandboxes.length === 5 && skProbe.sandboxes.every((s) => s === 'allow-scripts'), JSON.stringify(skProbe.sandboxes))
+    check('F3 被引擎拒掉的 sketch(isError)不画卡', skProbe.count === 5, `count=${skProbe.count}`)
 
     // 卡内探针:JS 真跑 + 网络真断(内层 CSP 收口;裸 sandbox 是挡不住 fetch 的,此断言在真 Electron 里钉死)。
     let inFrame = { js: '', net: '' }
@@ -486,6 +531,16 @@ async function main() {
       await win.waitForTimeout(500)
     }
     check('F4 卡内 JS 可跑(交互能力在)', inFrame.js === 'SKETCH-LIVE-JS', JSON.stringify(inFrame))
+    // 10-09 二轮「灵动」的实证:终稿的脚本是在**草稿那次加载**的文档里原地接上跑的(时间戳没变),不是换 srcdoc 重载出来的。
+    const finalLoadedAt = await (await probeFrames('skp'))?.evaluate(() => window.__fsLoadedAt || 0).catch(() => 0)
+    check('F0c ⚠️草稿 → 终稿不重载:同一次加载的文档里脚本原地接上(__fsLoadedAt 不变)',
+      draftLoadedAt > 0 && finalLoadedAt === draftLoadedAt && inFrame.js === 'SKETCH-LIVE-JS', JSON.stringify({ draftLoadedAt, finalLoadedAt }))
+    // 原生部件 fs-compare 在真 Electron 里画出来(两个选项、一个 ask 按钮)
+    let compareProbe = { options: 0, buttons: 0 }
+    for (const fr of win.frames()) {
+      try { if (await fr.locator('fs-compare').count()) { compareProbe = await fr.evaluate(() => ({ options: document.querySelectorAll('.fs-option').length, buttons: document.querySelectorAll('.fs-option .fs-button').length })); break } } catch { /* ignore */ }
+    }
+    check('F12 原生部件 fs-compare:JSON → 并排选项 + 自带 ask 按钮', compareProbe.options === 2 && compareProbe.buttons === 1, JSON.stringify(compareProbe))
     check('F4b ⚠️卡内 fetch 被内层 CSP 掐死(无网络)', inFrame.net === 'NET-BLOCKED', JSON.stringify(inFrame))
 
     // 高度自适应:小卡应收到内容高(≈几十px),还停在 220 初始占位=postMessage 通道断了
@@ -588,6 +643,48 @@ async function main() {
     await visualCard.scrollIntoViewIfNeeded().catch(() => {})
     await win.waitForTimeout(500)
     await visualCard.screenshot({ path: process.env.SKETCH_SHOT || '/tmp/sketch-cards.png' }).catch(() => {})
+
+    // F11 卡内按钮回头改答案:加载时的 ask("AUTO-ASK") 必须被卡内运行时拒掉(没有用户手势),点按钮才把那句话当用户消息发出去
+    // (走 onSuggest 同一条路 → 真起一个 run,stub 记下 message)。⚠️放在场景末尾:它会起一个新 run,别让它吃掉下一幕排队的脚本。
+    const askFr = await probeFrames('askbtn')
+    const autoAsk = askFr ? await askFr.evaluate(() => document.body.getAttribute('data-autoask') || '').catch(() => '') : ''
+    const runsBefore = stub.seen.runs.length
+    if (askFr) await askFr.locator('#askbtn').click().catch(() => {})
+    let asked = null
+    for (let i = 0; i < 12 && !asked; i++) {
+      await win.waitForTimeout(500)
+      const r = stub.seen.runs[runsBefore]
+      if (r) asked = r.message
+    }
+    const rawAsked = stub.seen.runs.some((r) => r.message === 'RAW-ASK')
+    check('F11 ⚠️卡内 ask():加载时无手势的调用被拒(卡内运行时拒、绕过运行时直接 postMessage 的也被宿主拒),点按钮才把那句话当用户消息发出去',
+      /user gesture/.test(autoAsk) && !rawAsked && asked === 'ASK-FOLLOWUP 请展开第二项', JSON.stringify({ autoAsk, rawAsked, asked, runsBefore }))
+    await win.waitForTimeout(800)
+    // F11b 卡内 copy():宿主代写系统剪贴板(同一道手势闸)
+    await app.evaluate(({ clipboard }) => clipboard.writeText('CLIP-BEFORE'))
+    if (askFr) await askFr.locator('#copybtn').click().catch(() => {})
+    let copied = ''
+    for (let i = 0; i < 10 && copied !== 'COPIED-LIST'; i++) { await win.waitForTimeout(300); copied = await app.evaluate(({ clipboard }) => clipboard.readText()) }
+    check('F11b 卡内 copy():点按钮后系统剪贴板里是卡给的文本', copied === 'COPIED-LIST', JSON.stringify({ copied }))
+    // F11c(Codex 10-09 二轮 P1)抢焦点冒充点击:用户刚在 composer 里敲了键(父文档有 5s 瞬时激活),卡内脚本 focus() 自己的控件把焦点抢到
+    // 这张 iframe 上,再①绕过运行时直接 postMessage ②经运行时 ask() ③从 outerHTML 里找 nonce —— 三条路都必须发不出去:
+    // ①没有 nonce,②子帧自己没有激活(父文档的输入传不进来),③运行时跑完已把自己的 script 删了。
+    // 预约 7s 后动手(evaluate 给子帧的那次激活 5s 内过期),6.2s 时在 composer 里敲一个键制造父文档激活。
+    const stealBefore = stub.seen.runs.length
+    if (askFr) await askFr.evaluate(() => { document.body.dataset.stealAt = String(Date.now() + 7000) }).catch(() => {})
+    await win.waitForTimeout(6200)
+    await win.locator('.t2c-ta').first().click().catch(() => {})
+    await win.keyboard.type('x')
+    await win.waitForTimeout(1800)
+    let steal = null
+    if (askFr) { const raw = await askFr.evaluate(() => document.body.dataset.steal || '').catch(() => ''); try { steal = raw ? JSON.parse(raw) : null } catch { steal = null } }
+    await win.waitForTimeout(800)
+    const stolen = stub.seen.runs.some((r) => r.message === 'STEAL-ASK')
+    await win.locator('.t2c-ta').first().click().catch(() => {})
+    await win.keyboard.press('Meta+A').catch(() => {}); await win.keyboard.press('Backspace').catch(() => {})
+    check('F11c ⚠️卡内抢焦点冒充点击(父文档 5s 内刚有输入):裸 postMessage 没 nonce、经运行时子帧没激活、outerHTML 里找不到 nonce → 都发不出去',
+      !stolen && stub.seen.runs.length === stealBefore && !!steal && /user gesture/.test(steal.viaRuntime) && steal.nonceVisible === false && steal.scripts === 0,
+      JSON.stringify({ stolen, runs: stub.seen.runs.length - stealBefore, steal }))
 
 
     // ── 场景 D:审批卡的「为什么问你」(B3)+ 工作区外写入警示仍在(台账里挂着的那条未验)

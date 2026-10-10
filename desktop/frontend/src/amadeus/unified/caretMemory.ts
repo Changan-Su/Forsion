@@ -25,6 +25,8 @@ export function createCaretMemory(opts: {
   return [
     $prose(() => new Plugin({
       view: (view) => {
+        // 台架探针的把手:本机存储里有 amx_probe 才露出编辑器视图(mobile 的 e2e:localasset 光标探针读状态里的选区用)。
+        try { if (localStorage.getItem('amx_probe')) (window as unknown as { __amxView: unknown }).__amxView = view } catch { /* 存储不可用:不露 */ }
         let alive = true
         let timer: ReturnType<typeof setTimeout> | null = null
         const save = (): void => {

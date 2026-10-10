@@ -35,11 +35,10 @@ import {
 import { useCalendarMembers } from '../amadeus/store/calendarMembers'
 import { useCalendarConfig, colorForDb, isHidden, defaultDbPath } from '../amadeus/store/calendarConfigStore'
 import { HOUR_PX_DEFAULT, useCalendarNav } from '../amadeus/store/calendarNavStore'
-import { useAgentSchedules, useAgentCalDbs } from '../stores/agentScheduleStore'
+import { useAgentSchedulePolling, useAgentCalDbs } from '../stores/agentScheduleStore'
 import { useOtherVaultCalDbs } from '../stores/otherVaultCalStore'
 import { useIcsCalDbs } from '../stores/icsCalendarStore'
 import { useMdCalDbs } from '../amadeus/store/mdMarkStore'
-import { useApp } from '../stores/appStore'
 import { registerMessages, useI18n } from '../i18n'
 import { EventCard, type Anchor } from './calendar/EventCard'
 import { MODE_ITEMS, classifyCalKey } from './calendar/calKeys'
@@ -185,7 +184,6 @@ export function CalendarView() {
   const otherDbs = useOtherVaultCalDbs() // 非活动侧(Local↔Cloud 另一侧)只读日历,汇总两侧(任务1)
   const icsDbs = useIcsCalDbs() // 外部日历订阅(.ics):同为只读叠加源
   const mdDbs = useMdCalDbs() // 笔记正文 `@2026-09-01T14:30` 标记(无勾选框的那些):同为只读叠加源
-  const cfg = useApp((s) => s.cfg)
   const vault = usePageStore((s) => s.vaultRoot) ?? ''
   const byVault = useCalendarConfig((s) => s.byVault)
   const mode = useCalendarNav((s) => s.mode)
@@ -210,13 +208,7 @@ export function CalendarView() {
     if (d) api.current?.goto(toLocalDate(d))
   }, [jumpNonce])
 
-  // agent 日程只读源:打开即拉 + 60s 轮询(引擎侧 SCHEDULE.db 由工具/自动化写,无推送通道)。
-  useEffect(() => {
-    const pull = (): void => void useAgentSchedules.getState().refresh(cfg)
-    pull()
-    const timer = window.setInterval(pull, 60_000)
-    return () => window.clearInterval(timer)
-  }, [cfg])
+  useAgentSchedulePolling()
 
   // 成员库 + agent 只读源汇入事件流;resolveDefaultDb 只吃成员库(双击新建绝不落到 agent:// 假路径)。
   const entries = useMemo<CalEntry[]>(

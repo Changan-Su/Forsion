@@ -10,6 +10,7 @@ import type { ChatBoxSelection } from '../components/chatbox'
 import { useCodeStudio, type StudioMode } from '../stores/codeStudioStore'
 import { translate, useI18n } from '../i18n'
 import { parseStreamingWrite } from './streamingWrite'
+import { useThrottled } from '../hooks/useThrottled'
 import { ProjectLaunchpad } from './coding/ProjectLaunchpad'
 import { useLaunchNavigation } from './coding/launchpadNavigation'
 import { buildStudioDraft, type StudioBrief } from './coding/projectBrief'
@@ -49,16 +50,6 @@ async function scanFiles(root: string): Promise<string[]> {
   }
   await walk(root, '', 0)
   return files.sort((a, b) => a.localeCompare(b))
-}
-function useThrottled<T>(value: T): T {
-  const [display, setDisplay] = useState(value)
-  const last = useRef(0)
-  useEffect(() => {
-    const wait = Math.max(0, 80 - (Date.now() - last.current))
-    const timer = setTimeout(() => { last.current = Date.now(); setDisplay(value) }, wait)
-    return () => clearTimeout(timer)
-  }, [value])
-  return display
 }
 export function CodeStudioView({ extendView, leaf }: ViewProps) {
   const { t } = useI18n()

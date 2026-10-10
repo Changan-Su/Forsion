@@ -8,6 +8,9 @@
  *    不会「报成功、字却被重写的旧快照盖掉」。负对照(实跑过):withPathLock 改成直接调用 → 这条红。
  *  - (复核 P1)连续改名 B→C→D 不等前一次:库级有序队列,引用最终指向 D。负对照(实跑过):去掉 queueStructureOps → 红。
  * 负对照(实跑过):摘掉 renamePageFile 里的 propagateRenames → 第 1 条红。
+ *
+ * 2026-10-10 加「图片 / 附件的相对引用」一组(assets.rebaseFileRefs 接进本地库桥)。
+ * 负对照(实跑过):桥的 propagateRenames 不给 exists → 该组两条都红;renameFolder / moveFolder 不带 [旧, 新] → 第 2 条红。
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AmadeusApi } from '@amadeus-shared/ipc'
@@ -44,6 +47,7 @@ vi.mock('../../../../mobile/src/amadeus/vaultManager', () => {
     }
     async writeTextFile(p: string, text: string): Promise<void> { if (writeGate) await writeGate(p); disk.set(p, text) }
     async pathExists(p: string): Promise<boolean> { return disk.has(p) || [...disk.keys()].some((k) => k.startsWith(`${p}/`)) }
+    async listChildren(dir: string): Promise<string[]> { return [...new Set([...disk.keys()].filter((k) => k.startsWith(`${dir}/`)).map((k) => k.slice(dir.length + 1).split('/')[0]))] }
     async moveEntry(src: string, dst: string): Promise<void> {
       for (const [k, v] of [...disk]) {
         if (k === src) { disk.delete(k); disk.set(dst, v) }
@@ -153,5 +157,22 @@ describe('mobile bridge: writeTextFile create / base 契约(同桌面)', () => {
     const { bridge } = await boot({})
     expect(await bridge.writeTextFile('Gone.md', 'x', { base: textFingerprint('old') })).toEqual({ ok: false, current: null })
     expect(disk.has('Gone.md')).toBe(false)
+  })
+})
+
+describe('mobile bridge: 挪笔记 / 文件夹之后图片与附件的相对引用', () => {
+  it('movePage:图片留在原处,引用改成从新位置指过去;没挪的笔记不动', async () => {
+    const { bridge, external } = await boot({ 'notes/a.md': '![](.amadeus/p.png)\n[doc](attachments/d.pdf)\n', 'notes/c.md': '![](.amadeus/p.png)\n', 'notes/.amadeus/p.png': 'P', 'notes/attachments/d.pdf': 'D' })
+    expect(await bridge.movePage('notes/a.md', 'other')).toBe('other/a.md')
+    expect(disk.get('other/a.md')).toBe('![](../notes/.amadeus/p.png)\n[doc](../notes/attachments/d.pdf)\n')
+    expect(disk.get('notes/c.md')).toBe('![](.amadeus/p.png)\n')
+    expect(external).toEqual(['other/a.md'])
+  })
+  it('moveFolder / renameFolder:夹内互引不变,指向夹外的重算;只装附件的文件夹改名,指向它的引用跟上', async () => {
+    const { bridge } = await boot({ 'notes/a.md': '![](.amadeus/p.png) ![](../assets/x.png)\n', 'notes/.amadeus/p.png': 'P', 'assets/x.png': 'X' })
+    expect(await bridge.moveFolder('notes', 'archive')).toBe('archive/notes')
+    expect(disk.get('archive/notes/a.md')).toBe('![](.amadeus/p.png) ![](../../assets/x.png)\n')
+    expect(await bridge.renameFolder('assets', 'media')).toBe('media')
+    expect(disk.get('archive/notes/a.md')).toBe('![](.amadeus/p.png) ![](../../media/x.png)\n')
   })
 })

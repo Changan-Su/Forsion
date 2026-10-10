@@ -86,6 +86,8 @@ export function describeTool(ev: ToolEvent): Desc {
       return { kind: 'run', verbKey: 'tool.verb.ran', target: 'python: ' + String(a.code ?? '').split('\n')[0], isFile: false }
     case 'read_file': case 'read_document': case 'read_log': case 'view_image': case 'display_file':
       return { kind: 'read', verbKey: 'tool.verb.read', target: baseName(path || String(a.name ?? a.file ?? '')), isFile: true }
+    case 'intelligent_ui':
+      return { kind: 'other', verbKey: 'tool.verb.sketched', target: 'Intelligent UI', isFile: false }
     case 'sketch':
       return { kind: 'other', verbKey: 'tool.verb.sketched', target: String(a.title ?? '') || 'sketch', isFile: false }
     case 'desk_present': {

@@ -32,10 +32,10 @@ export function createHttpWorkerHost(opts?: { fleetSecret?: string }): { host: H
     const role = (req.headers['x-forsion-role'] as string) || 'USER';
     const username = (req.headers['x-forsion-username'] as string) || 'tangu-user';
     (req as any).user = { userId, username, role };
-    // 网关注入的 per-dispatch token(出站凭证)→ 请求 ALS 作用域,供 handler 期 state 调用回退取用。
+    // 网关注入的 per-dispatch token(出站凭证)→ 请求 ALS 作用域,供 handler 期 state 调用取用;res 交过去是为了让它知道应答何时结束。
     // 无 Authorization 也要显式 undefined 作用域(不串上一个请求的,见 runWithRequestToken)。
     const auth = req.headers.authorization;
-    runWithRequestToken(auth?.startsWith('Bearer ') ? auth.slice(7) : undefined, next);
+    runWithRequestToken(auth?.startsWith('Bearer ') ? auth.slice(7) : undefined, next, res);
   };
 
   const adminMiddleware: RequestHandler = (req, res, next) => {
