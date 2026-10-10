@@ -12,7 +12,8 @@
  *  (这两条是 Finder 的全局偏好,安装包管不了)。挪图标 / 换背景后跑 electron/installerPackaging.test.ts
  *  (钉「每个图标连文件名在最矮的可视区里也看得全」),再跑 node scripts/dmg-layout-preview.cjs 打一个空壳包在 Finder 里看一眼。 */
 module.exports = {
-  background: 'background.png',
+  // 文件名故意不叫 background.png:那个名字会被 dmg-builder 自动拾取,连没配 dmg 段的单品变体也会套上这张图。
+  background: 'dmg-background.png',
   iconSize: 80,
   contents: [
     { x: 170, y: 114 },

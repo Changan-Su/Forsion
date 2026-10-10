@@ -151,7 +151,8 @@ module.exports = {
     },
   },
   // 安装窗口的背景图与图标位置(含「窗口大小跟着背景图走」那条坑)见 build/dmg-layout.cjs。
-  dmg: require('./build/dmg-layout.cjs'),
+  // 背景图和说明文件里写的是「Forsion」:单品变体(目前都不出 mac 安装包)用 dmg-builder 的缺省窗口,要发时各配一套。
+  ...(product.id === 'forsion' ? { dmg: require('./build/dmg-layout.cjs') } : {}),
   win: { target: 'nsis', icon: 'build/icon.ico' },
   // 卸载时询问是否清除用户数据(~/.forsion、~/Forsion、%APPDATA%\Forsion);见 build/installer.nsh。
   nsis: {
