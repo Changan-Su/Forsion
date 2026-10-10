@@ -3,7 +3,8 @@
  * 断言交给子进程的环境与命令行。连真 Gitea 的端到端见 scripts/git-credentials.gitea.mjs。
  *   - https 远端 + 有提供方认领:子进程环境里有那三项,命令行参数里没有凭据;进程环境里已有 GIT_CONFIG_COUNT 时接着编号
  *   - 没有提供方 / 提供方不认领 / 远端 URL 自带凭据:子进程环境与现在逐字一致(没有那三项,跟踪开关也不动)
- *   - 带凭据的子进程摘掉 GIT_TRACE* / GIT_CURL_VERBOSE,对这个站点清空凭据助手、关掉 askpass、消息固定成英文
+ *   - 带凭据的子进程摘掉 GIT_TRACE* / GIT_CURL_VERBOSE、把 Trace2 显式关掉,对这个站点清空凭据助手、关掉 askpass、消息固定成英文,
+ *     不递归进子模块(子模块是另一份没过信任闸的仓库配置)
  *   - 认证失败 → 作废重取 → 带新凭据再来一次;一直失败只重试这一次;403 不重试
  *   - 失败原文里的凭据被遮掉(连同任何 Authorization 头)
  *   - 提供方说「暂时取不到」→ 不带凭据照跑:成功就成功,认证失败才报它的 code;说「到此为止」→ 一次 git 都不起,直接报
@@ -26,6 +27,9 @@
  *   - runRemoteAction 里「到此为止」的失败也当成没有凭据继续 → 「到此为止 → 一次 git 都不起」红
  *   - runRemoteAction 去掉 `requireTransportTrust` 那一句 → 「仓库自带传输配置时未经信任不带凭据」红
  *   - gitPull / gitPush 去掉以 - 开头的远端名那一句 → 「以 - 开头的远端名」红
+ *   - runRemoteAction 带凭据时不插 `--no-recurse-submodules` → 「子进程环境里有那三项」红(命令行对不上)
+ *   - stripGitTraceEnv 不把 GIT_TRACE2* 置 0 → 「带凭据的子进程摘掉 GIT_TRACE*」红
+ *   - runRemoteAction 不带凭据时也插 → 「没有提供方 / 不认领…与现在一致」红
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { execFileSync } from 'node:child_process';
@@ -48,6 +52,11 @@ vi.mock('../utils/boundedProcess.js', async (importOriginal) => {
       const call = { verb, args: args.slice(args.indexOf('-C') + 2), argv: args, env: { ...options.env } };
       remoteCalls.push(call);
       const r = answer(call, remoteCalls.length);
+      // 假的 fetch 成功 = 「取回来的就是跟踪引用上那个提交」:真 fetch 会写的 FETCH_HEAD 由这里写
+      if (verb === 'fetch' && r.code === 0) {
+        const cwd = args[args.indexOf('-C') + 1];
+        writeFileSync(path.join(cwd, '.git', 'FETCH_HEAD'), `${git(cwd, 'rev-parse', 'refs/remotes/origin/main')}\t\tbranch 'main' of example\n`);
+      }
       return Promise.resolve({ code: r.code, stdout: r.stdout ?? '', stderr: r.stderr ?? '', cleanupTimedOut: false });
     },
   };
@@ -114,7 +123,7 @@ describe('带凭据的推送', () => {
     expect(asked).toEqual([ORIGIN]);
     expect(remoteCalls).toHaveLength(1);
     const [call] = remoteCalls;
-    expect(call.args).toEqual(['push', 'origin', 'HEAD:refs/heads/main']);
+    expect(call.args).toEqual(['push', '--no-recurse-submodules', 'origin', 'HEAD:refs/heads/main']); // 带着凭据不递归进子模块
     expect({ count: call.env.GIT_CONFIG_COUNT, key: call.env.GIT_CONFIG_KEY_0, value: call.env.GIT_CONFIG_VALUE_0 }).toEqual({
       count: '1', key: 'http.https://git.example.test/.extraheader', value: `Authorization: Basic ${b64('tok-1')}`,
     });
@@ -170,6 +179,8 @@ describe('带凭据的推送', () => {
     for (const call of remoteCalls) {
       expect(credentialKeys(call.env)).toEqual([]);
       expect(call.env.GIT_TRACE).toBe('1');
+      expect(call.env.GIT_TRACE2_EVENT).toBeUndefined();
+      expect(call.args).toEqual(['push', 'origin', 'HEAD:refs/heads/main']); // 命令行也一字不差(子模块照用户自己的配置)
     }
   });
 
@@ -180,6 +191,8 @@ describe('带凭据的推送', () => {
     await gitPush(cwd);
     const { env } = remoteCalls[0];
     expect([env.GIT_TRACE, env.GIT_TRACE_CURL, env.GIT_CURL_VERBOSE]).toEqual([undefined, undefined, undefined]);
+    // Trace2 的去向还能写在全局配置里:显式置 0 才压得住(真 git 的那一条在 gitActions.test.ts「带凭据的子进程不留痕」)
+    expect([env.GIT_TRACE2, env.GIT_TRACE2_EVENT, env.GIT_TRACE2_PERF]).toEqual(['0', '0', '0']);
     expect(env.GIT_CONFIG_COUNT).toBe('1');
   });
 
@@ -299,8 +312,8 @@ describe('带凭据的拉取', () => {
     answer = (call) => (call.env.GIT_CONFIG_VALUE_0 === `Authorization: Basic ${b64('tok-fresh')}` ? { code: 0 } : { code: 128, stderr: AUTH_FAILED });
     expect(await gitPull(cwd)).toMatchObject({ remote: 'origin', upstream: 'origin/main', updated: false });
     expect(remoteCalls.map((c) => [c.args, c.env.GIT_CONFIG_KEY_0])).toEqual([
-      [['fetch', 'origin'], 'http.https://git.example.test/.extraheader'],
-      [['fetch', 'origin'], 'http.https://git.example.test/.extraheader'],
+      [['fetch', '--no-recurse-submodules', 'origin', 'refs/heads/main'], 'http.https://git.example.test/.extraheader'],
+      [['fetch', '--no-recurse-submodules', 'origin', 'refs/heads/main'], 'http.https://git.example.test/.extraheader'],
     ]);
   });
 

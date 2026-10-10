@@ -17,6 +17,7 @@
  *   - refreshGitCredential 去掉「拿回同一枚 → 空」→ 「拿回同一枚就停手」红
  *   - isGitAuthFailure 的正则加上 403 → 「403 不算」红
  *   - scrubGitSecrets 去掉按字面遮的那个循环 → 「回显前遮密文」红
+ *   - stripGitTraceEnv 不把 GIT_TRACE2* 置 0 → 「摘掉 GIT_TRACE*…把 Trace2 显式关掉」红
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
@@ -171,10 +172,10 @@ describe('回显与跟踪', () => {
     ]) expect(isGitAuthFailure(text), text).toBe(false);
   });
 
-  it('带凭据的子进程摘掉 GIT_TRACE* / GIT_CURL_VERBOSE,别的不动', () => {
-    const env: NodeJS.ProcessEnv = { GIT_TRACE: '1', GIT_TRACE_CURL: '/tmp/x', GIT_TRACE2_EVENT: '1', GIT_CURL_VERBOSE: '1', GIT_TERMINAL_PROMPT: '0', GIT_SSH_COMMAND: 'ssh', PATH: '/bin' };
+  it('带凭据的子进程摘掉 GIT_TRACE* / GIT_CURL_VERBOSE、把 Trace2 显式关掉(它的去向还能写在全局配置里),别的不动', () => {
+    const env: NodeJS.ProcessEnv = { GIT_TRACE: '1', GIT_TRACE_CURL: '/tmp/x', GIT_TRACE2_EVENT: '/tmp/events', GIT_TRACE2_BRIEF: '1', GIT_CURL_VERBOSE: '1', GIT_TERMINAL_PROMPT: '0', GIT_SSH_COMMAND: 'ssh', PATH: '/bin' };
     stripGitTraceEnv(env);
-    expect(env).toEqual({ GIT_TERMINAL_PROMPT: '0', GIT_SSH_COMMAND: 'ssh', PATH: '/bin' });
+    expect(env).toEqual({ GIT_TRACE2: '0', GIT_TRACE2_EVENT: '0', GIT_TRACE2_PERF: '0', GIT_TERMINAL_PROMPT: '0', GIT_SSH_COMMAND: 'ssh', PATH: '/bin' });
   });
 
   it('回显前遮密文:按字面遮这次用过的,再遮任何 Authorization 头的值', () => {

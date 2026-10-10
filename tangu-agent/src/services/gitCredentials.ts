@@ -20,6 +20,10 @@
  * ⚠️ 给了凭据的那个子进程,环境里的 `GIT_TRACE*` / `GIT_CURL_VERBOSE` 必须先摘掉(stripGitTraceEnv):
  * 开着它们时 git 会把请求头打进 stderr,而 stderr 会作为失败原文回到界面。回显前还要再按字面遮一遍(scrubGitSecrets)。
  * 已信任仓库的钩子(pre-push 之类)继承同一份环境,读得到这枚凭据 —— 与用户自己在终端里配了凭据时一样,信任闸管的就是这件事。
+ * 子模块是另一个仓库、另一份没过信任闸的配置:带凭据的动作一律不递归进子模块(gitActions 里加 --no-recurse-submodules)。
+ *
+ * 信任边界 = 认领的那个 origin 自己:它把 git 重定向到哪里,头就跟到哪里(git 只跟初始请求的重定向,之后的请求发往新地址)。
+ * 不关重定向 —— 站内改名(用户名 / 仓库名)靠的就是它;能发出这种重定向的只有已经拿到这枚凭据的那台服务器。
  */
 
 export interface GitCredential { username: string; password: string }
@@ -126,9 +130,12 @@ export function isGitAuthFailure(stderr: string): boolean {
   return /Authentication failed|could not read Username|could not read Password|terminal prompts disabled|returned error: 401/i.test(stderr);
 }
 
-/** 带着凭据跑的子进程不许开跟踪:`GIT_TRACE*` / `GIT_CURL_VERBOSE` 会把请求头(连同 Authorization)打进 stderr。原地删。 */
+/** 带着凭据跑的子进程不许开跟踪:`GIT_TRACE*` / `GIT_CURL_VERBOSE` 会把请求头(连同 Authorization)打进 stderr。原地删。
+ *  Trace2 还得**显式关**:它的去向也能写在全局配置里(trace2.eventTarget 之类),再配上 trace2.envVars / trace2.configParams
+ *  就会把注入的那一项原样记进文件 —— 环境变量压得过配置,置 0 = 这个子进程不记。 */
 export function stripGitTraceEnv(env: NodeJS.ProcessEnv): void {
   for (const key of Object.keys(env)) if (/^GIT_TRACE/i.test(key) || /^GIT_CURL_VERBOSE$/i.test(key)) delete env[key];
+  for (const key of ['GIT_TRACE2', 'GIT_TRACE2_EVENT', 'GIT_TRACE2_PERF']) env[key] = '0';
 }
 
 /** git 的输出回显 / 进错误 detail 之前:按字面遮掉这次用过的密文,再把任何 `Authorization: <方案> <值>` 的值遮掉。 */

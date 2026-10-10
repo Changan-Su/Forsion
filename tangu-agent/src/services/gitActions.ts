@@ -34,6 +34,8 @@ import { GitCredentialError, gitCredentialEnv, isGitAuthFailure, refreshGitCrede
 
 const ACTION_TIMEOUT_MS = 60_000;
 const PUSH_TIMEOUT_MS = 120_000;
+/** 快进的检出 + post-merge 钩子(常见的是装依赖)。放宽:中途被杀会留下检出到一半的工作区。 */
+const MERGE_TIMEOUT_MS = 5 * 60_000;
 /** 一次提交最多新增这么多个文件;再多几乎一定是漏了 .gitignore(node_modules、构建产物、整个笔记库)。 */
 export const MAX_NEW_FILES = 1000;
 /** 单个文件的上限:GitHub 拒收 100MB 以上的文件,50MB 起就会告警。 */
@@ -85,7 +87,7 @@ export async function readGit(cwd: string, args: string[], opts: { input?: strin
 /** 用户的写动作:照用户自己的 git 配置跑(仓库级的可执行配置须先经 requireTrust),只关终端交互。
  *  credentials = 凭据接缝给这一次的东西(runRemoteAction 传进来):那三项环境变量只进这一个子进程;
  *  带了凭据就先摘掉跟踪开关,输出在离开这个函数之前遮掉密文 —— 之后无论进错误 detail 还是回给界面都是遮过的。 */
-export async function runAction(cwd: string, args: string[], opts: { timeoutMs?: number; input?: string; credentials?: GitCredentialGrant } = {}): Promise<RunResult> {
+export async function runAction(cwd: string, args: string[], opts: { timeoutMs?: number; input?: string; credentials?: GitCredentialGrant; /** 要认 git 的原文时固定成英文。 */ english?: boolean } = {}): Promise<RunResult> {
   const env = baseEnv();
   // 口令短语 / 首次连接确认都会让 ssh 等一个不存在的终端;ssh-agent / 钥匙串里的钥匙照常可用。用户自己设了就不动。
   if (!env.GIT_SSH_COMMAND && !env.GIT_SSH) env.GIT_SSH_COMMAND = 'ssh -o BatchMode=yes';
@@ -105,7 +107,7 @@ export async function runAction(cwd: string, args: string[], opts: { timeoutMs?:
   }
   // 提供方参与的这一次(带了凭据,或者它说暂时取不到)要认 git 的原文来判「是不是认证失败」:消息固定成英文
   // (LANGUAGE 只管 gettext 取哪种语言,不动字符集;没有本地化的 git 不受影响)。别的远端不碰,原文照用户的语言。
-  if (secrets.length || grant?.unavailable) env.LANGUAGE = 'en';
+  if (secrets.length || grant?.unavailable || opts.english) env.LANGUAGE = 'en';
   const raw = await runBoundedProcess(gitExecutable(), ['--no-pager', '-c', 'core.quotepath=false', ...scoped, '-C', cwd, ...args], {
     cwd, env, input: opts.input, timeoutMs: opts.timeoutMs ?? ACTION_TIMEOUT_MS, maxOutputBytes: 1024 * 1024,
   });
@@ -134,7 +136,9 @@ async function requireTransportTrust(cwd: string, trust: boolean | undefined): P
  *    extraheader 按 URL 前缀生效,别的主机拿不到这个头)。
  *  - git 报认证失败、而这次带的是提供方的凭据 → 让提供方作废重取,**只重试一次**(别的进程用同一个设备名重发会让手里这枚失效)。
  *  - 提供方说这次暂时取不到(限次 / 够不着)→ 先照没有凭据跑;git 也因为认证失败时,报提供方给的 code(否则用户只看到
- *    「could not read Username」)。用户自己配过凭据的照常成功。 */
+ *    「could not read Username」)。用户自己配过凭据的照常成功。
+ *  args[0] 必须是子命令(push / fetch):带凭据时紧跟着它插 `--no-recurse-submodules`。
+ *  fetch(= 拉取,新动作)的消息固定成英文,好认「远端没有这条分支」;push 不带凭据时原文照用户的语言(现状)。 */
 async function runRemoteAction(cwd: string, remote: string, direction: 'push' | 'fetch', args: string[], timeoutMs: number, trust: boolean | undefined): Promise<RunResult> {
   // 远端名来自仓库配置(branch.<分支>.remote):以 - 开头的当不成远端名,只会被 git 当成选项 —— 不拿它去问地址
   const located = remote.startsWith('-') ? null : await readGit(cwd, ['remote', 'get-url', ...(direction === 'push' ? ['--push'] : []), remote], { timeoutMs: 5000 });
@@ -147,10 +151,15 @@ async function runRemoteAction(cwd: string, remote: string, direction: 'push' | 
   };
   let grant = url ? await ask() : { env: {}, secrets: [] } as GitCredentialGrant;
   if (grant.credential) await requireTransportTrust(cwd, trust);
-  let r = await runAction(cwd, args, { timeoutMs, credentials: grant });
+  // 带着凭据就不递归进子模块:子模块是另一个仓库,它自带的配置(凭据助手、sshCommand、钩子)没过信任闸,
+  // 而递归起的 git 继承同一份环境 —— 那些程序读得到这枚凭据。不带凭据时照用户自己的配置(现状)。
+  const bare = (g: GitCredentialGrant): boolean => !!g.credential && !args.includes('--no-recurse-submodules');
+  const run = (g: GitCredentialGrant): Promise<RunResult> =>
+    runAction(cwd, bare(g) ? [args[0], '--no-recurse-submodules', ...args.slice(1)] : args, { timeoutMs, credentials: g, english: direction === 'fetch' });
+  let r = await run(grant);
   if (r.code !== 0 && grant.credential && isGitAuthFailure(r.stderr)) {
     grant = await ask(grant);
-    if (grant.credential) r = await runAction(cwd, args, { timeoutMs, credentials: grant });
+    if (grant.credential) r = await run(grant);
   }
   if (r.code !== 0 && grant.unavailable && isGitAuthFailure(r.stderr)) throw credentialFailure(grant.unavailable);
   return r;
@@ -550,12 +559,18 @@ export interface PullResult {
   updated: boolean; /** 快进了多少个提交。 */ commits: number; /** 本地领先上游多少个(没推的)。 */ ahead: number;
 }
 
-/** 拉当前分支的上游:fetch 上游所在的远端,然后**只做快进**(`merge --ff-only`)。
+/** 拉当前分支的上游:从上游所在的远端**只取那一条分支**,然后**只做快进**(`merge --ff-only`)。
  *  - 没有上游(没设过 / 远端那条分支已经没了)→ no_upstream。
  *  - 本地和上游各有新提交 → diverged,只报告两边各几个;不合并、不变基 —— 那是要用户自己拿主意的事。
- *  - 快进会改到的文件上有没提交的改动 → dirty_worktree(git 自己拒的,什么都没动);不相干的本地改动留着不碰。
+ *  - 快进会改到的文件上有没提交的改动 / 会盖掉一个没进仓的本地文件(含被忽略的,如 .env)→ dirty_worktree
+ *    (git 自己拒的,什么都没动);不相干的本地改动留着不碰。
  *  不用 `git pull`:它吃 pull.rebase / pull.ff 配置,同一个按钮在两台机器上能做出两件事。
- *  快进会跑 post-merge 钩子、检出时跑 smudge 过滤器,fetch 会用仓库配的凭据助手 → 与别的写动作同一道信任闸。 */
+ *  不用 `git fetch <远端>`(取全部):那会照远端配置的 refspec 更新一切,配了 `+refs/heads/x:refs/heads/x` 这类映射的仓库里,
+ *    别的本地分支会被强行改写。只取上游这一条;远端跟踪分支由 git 按配置的映射顺带更新(面板的领先 / 落后才对得上)。
+ *  不递归子模块(fetch 不进、快进时也不动它们的工作区):子模块是另一份没过信任闸的仓库配置。
+ *  快进会跑 post-merge 钩子、检出时跑 smudge 过滤器,fetch 会用仓库配的凭据助手 → 与别的写动作同一道信任闸。
+ *  ponytail: 检出到一半失败(过滤器报错 / 超时被杀)时已经写出去的文件不回滚 —— 与终端里的 git 一样,HEAD 没动,
+ *    `git status` 看得到;要做成原子的得自己备份工作区,不值。超时放宽到几分钟,别在大仓库的检出中途动手。 */
 export async function gitPull(cwd: string, trust?: boolean): Promise<PullResult> {
   await requireRepoRoot(cwd);
   const head = must(await readGit(cwd, ['rev-parse', '--abbrev-ref', 'HEAD']), 'rev-parse').stdout.trim();
@@ -568,10 +583,13 @@ export async function gitPull(cwd: string, trust?: boolean): Promise<PullResult>
   const upstream = `${remote}/${merge.replace(/^refs\/heads\//, '')}`;
   // 远端名来自仓库配置:以 - 开头的会被 git 当成选项(--upload-pack=… 就是一条本机命令)
   if (remote.startsWith('-')) throw new GitActionError('no_upstream', 'The upstream remote of this branch is not a valid remote name', remote);
-  must(await runRemoteAction(cwd, remote, 'fetch', ['fetch', remote], PUSH_TIMEOUT_MS, trust), 'fetch');
-  const tip = await readGit(cwd, ['rev-parse', '--verify', '--quiet', '@{upstream}^{commit}'], { timeoutMs: 5000 });
+  const fetched = await runRemoteAction(cwd, remote, 'fetch', ['fetch', '--no-recurse-submodules', remote, merge], PUSH_TIMEOUT_MS, trust);
+  if (fetched.code !== 0 && /couldn't find remote ref/i.test(fetched.stderr)) throw new GitActionError('no_upstream', 'The upstream branch no longer exists on the remote', upstream);
+  must(fetched, 'fetch');
+  // 刚取回来的那个提交(FETCH_HEAD 的第一行就是点名要的这条分支);不靠远端跟踪分支 —— 映射不到它的仓库里它不存在
+  const tip = await readGit(cwd, ['rev-parse', '--verify', '--quiet', 'FETCH_HEAD^{commit}'], { timeoutMs: 5000 });
   const target = tip.code === 0 ? tip.stdout.trim() : '';
-  if (!target) throw new GitActionError('no_upstream', 'The upstream branch no longer exists on the remote', upstream);
+  if (!target) throw new GitActionError('git_failed', 'git fetch did not report what it fetched', tail(fetched.stderr || fetched.stdout));
   /** 本地 / 上游各自独有的提交数(对刚才解析出来的那个上游提交量,不是「此刻的上游」)。 */
   const measure = async (): Promise<{ ahead: number; behind: number }> => {
     const m = /^(\d+)\s+(\d+)/.exec(must(await readGit(cwd, ['rev-list', '--left-right', '--count', `HEAD...${target}`]), 'rev-list').stdout.trim());
@@ -584,12 +602,13 @@ export async function gitPull(cwd: string, trust?: boolean): Promise<PullResult>
   // 按量过的那个提交快进:量完之后别的进程又 fetch 了一次,也不会把没量过的东西合进来。
   // merge.autoStash 关掉:开着它时 git 会先把没提交的改动收进 stash、快进完再放回来 —— 放不回来就在工作区留下冲突标记,
   // 与「挡住了就什么都不动」的承诺相反(用配置而不是 --no-autostash:老 git 不认这个选项,不认识的配置项它只是忽略)。
-  const merged = await runAction(cwd, ['-c', 'merge.autoStash=false', 'merge', '--ff-only', target]);
+  // --no-overwrite-ignore:上游开始跟踪一个本地被忽略的文件(典型是 .env)时,git 缺省**悄悄盖掉**本地那份;改成拒绝。
+  // submodule.recurse 关掉:快进时不去动子模块的工作区(那会在子模块里跑它自己的配置)。
+  const merged = await runAction(cwd, ['-c', 'merge.autoStash=false', '-c', 'submodule.recurse=false', 'merge', '--ff-only', '--no-overwrite-ignore', target], { timeoutMs: MERGE_TIMEOUT_MS, english: true });
   if (merged.code !== 0 && /would be overwritten by merge/i.test(merged.stderr)) {
     throw new GitActionError('dirty_worktree', 'Uncommitted changes are in the way of the update; nothing was changed', tail(merged.stderr));
   }
   // 量完之后本地又多了提交(别的窗口 / 终端里刚提交):快进不了,同样只报告
-  // (这两处认的是 git 的英文原文;本地化的 git 上认不出来时落到下面的 git_failed,原文照样给用户,只是少一句专门的说明)
   if (merged.code !== 0 && /not possible to fast-forward/i.test(merged.stderr)) throw diverged(await measure());
   must(merged, 'merge');
   return { remote, branch: head, upstream, updated: true, commits: before.behind, ahead: 0 };

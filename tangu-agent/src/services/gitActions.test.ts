@@ -18,6 +18,10 @@
  *   - gitPull 去掉 requireRepoRoot 和游离 HEAD 的判断 → 「游离 HEAD / 子目录」红
  *   - gitPull 不 fetch 就量 → 「快进拿到」等五条红
  *   - gitCredentialEnv(services/gitCredentials.ts)里解析不出 origin 也照问提供方 → 「远端不是 https 时提供方不被问到」红
+ *   - fetch 改回 `git fetch <远端>`(取全部)→ 「只取上游那一条」红(本地 topic 被远端的强行改写)
+ *   - 快进去掉 `--no-overwrite-ignore` → 「本地被忽略的文件」红(.env 成了远端那份)
+ *   - 去掉 `couldn't find remote ref` → no_upstream 的映射 → 「上游那条分支在远端已经没了」红(成了 git_failed)
+ *   - stripGitTraceEnv 不把 GIT_TRACE2* 置 0 → 「Trace2」红(跟踪文件里有 Authorization: Basic …)
  *   - 提交信息:现场里有最近提交的风格与 diff;模型包的代码块 / 引号剥掉;用户的提交说明进系统提示
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
@@ -598,6 +602,51 @@ describe('gitPull', () => {
     expect(existsSync(marker)).toBe(true);
   });
 
+  it('只取上游那一条:远端配的别的映射不生效(别的本地分支不被改写),远端跟踪分支照常更新', async () => {
+    const { cwd, other } = setup('pull-onebranch');
+    git(other, 'switch', '-q', '-c', 'topic');
+    writeFileSync(path.join(other, 't.txt'), 'remote topic\n');
+    git(other, 'add', '.'); git(other, 'commit', '-qm', 'remote topic'); git(other, 'push', '-q', 'origin', 'topic');
+    git(other, 'switch', '-q', 'main');
+    pushFromElsewhere(other, 'b.txt', 'b\n', 'from elsewhere');
+    // 本地也有一条 topic,上面是没推过的提交;远端配置里有一条会强行改写它的映射
+    git(cwd, 'switch', '-q', '-c', 'topic');
+    writeFileSync(path.join(cwd, 'mine.txt'), 'unpushed work\n');
+    git(cwd, 'add', '.'); git(cwd, 'commit', '-qm', 'unpushed work');
+    const mine = git(cwd, 'rev-parse', 'topic');
+    git(cwd, 'switch', '-q', 'main');
+    git(cwd, 'config', '--add', 'remote.origin.fetch', '+refs/heads/topic:refs/heads/topic');
+    expect(await gitPull(cwd)).toMatchObject({ updated: true, commits: 1 });
+    expect(git(cwd, 'rev-parse', 'topic')).toBe(mine);
+    expect(git(cwd, 'rev-parse', 'refs/remotes/origin/main')).toBe(git(cwd, 'rev-parse', 'HEAD'));
+  });
+
+  it('上游开始跟踪一个本地被忽略的文件(.env)→ dirty_worktree,本地那份不被盖掉', async () => {
+    const { cwd, other } = setup('pull-ignored');
+    writeFileSync(path.join(cwd, '.gitignore'), '.env\n');
+    git(cwd, 'add', '.'); git(cwd, 'commit', '-qm', 'ignore env'); git(cwd, 'push', '-q', 'origin', 'main');
+    writeFileSync(path.join(cwd, '.env'), 'SECRET=mine\n');
+    git(other, 'pull', '-q', 'origin', 'main');
+    writeFileSync(path.join(other, '.env'), 'SECRET=theirs\n');
+    git(other, 'add', '-f', '.env'); git(other, 'commit', '-qm', 'track env'); git(other, 'push', '-q', 'origin', 'HEAD:main');
+    const before = git(cwd, 'rev-parse', 'HEAD');
+    const err = await gitPull(cwd).catch((e) => e as GitActionError);
+    expect(err.code).toBe('dirty_worktree');
+    expect(err.detail).toContain('.env');
+    expect(readFileSync(path.join(cwd, '.env'), 'utf8')).toBe('SECRET=mine\n');
+    expect(git(cwd, 'rev-parse', 'HEAD')).toBe(before);
+  });
+
+  it('上游那条分支在远端已经没了 → no_upstream', async () => {
+    const { cwd, other } = setup('pull-gone');
+    git(cwd, 'switch', '-q', '-c', 'topic');
+    git(cwd, 'push', '-q', '-u', 'origin', 'topic');
+    git(other, 'push', '-q', 'origin', '--delete', 'topic');
+    const err = await gitPull(cwd).catch((e) => e as GitActionError);
+    expect(err.code).toBe('no_upstream');
+    expect(err.detail).toBe('origin/topic');
+  });
+
   it('远端不是 https(本地路径)时凭据提供方根本不被问到', async () => {
     const { cwd, other } = setup('pull-noprovider');
     pushFromElsewhere(other, 'b.txt', 'b\n', 'from elsewhere');
@@ -609,6 +658,25 @@ describe('gitPull', () => {
       git(cwd, 'add', '.'); git(cwd, 'commit', '-qm', 'local');
       expect(await gitPush(cwd)).toMatchObject({ remote: 'origin', branch: 'main' });
       expect(asked).toBe(0);
+    } finally { resetGitCredentialProvidersForTest(); }
+  });
+});
+
+describe('带凭据的子进程不留痕', () => {
+  it('用户全局配了 Trace2(事件写文件 + 记环境变量 / 配置项)→ 注入的那一项不进跟踪文件', async () => {
+    const cwd = repo('trace2');
+    writeFileSync(path.join(cwd, 'a.txt'), 'a\n');
+    git(cwd, 'add', '.'); git(cwd, 'commit', '-qm', 'base');
+    git(cwd, 'remote', 'add', 'origin', 'https://127.0.0.1:1/dave/hello.git'); // 没人听的端口:连不上,马上失败
+    const trace = path.join(root, 'trace2-events.json');
+    writeFileSync(globalConfig, `[trace2]\n\teventTarget = ${trace}\n\tenvVars = GIT_CONFIG_VALUE_0,GIT_CONFIG_KEY_0\n\tconfigParams = http.*\n`);
+    registerGitCredentialProvider('spy', async () => ({ username: 'dave', password: 'tok-secret-1' }));
+    try {
+      expect(await codeOf(gitPush(cwd))).toBe('git_failed');
+      const logged = existsSync(trace) ? readFileSync(trace, 'utf8') : '';
+      expect(logged).toContain('get-url'); // 跟踪确实开着(不带凭据的只读命令照记,那是用户自己的配置)
+      expect(logged).not.toContain(Buffer.from('dave:tok-secret-1').toString('base64'));
+      expect(logged).not.toMatch(/extraheader|Authorization/i);
     } finally { resetGitCredentialProvidersForTest(); }
   });
 });
