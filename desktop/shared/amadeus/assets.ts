@@ -212,9 +212,11 @@ const LINK_DEST_RE = /([^)\s]{1,2048})((?:\s+"[^"]{0,2048}")?\))/y
 const DOMAINISH_RE = /^[^\s/]+\.[^\s/]/
 /** 地址原文里出现就不接手的字符:实体、表格、转义、标题、行内代码、强调、查询串、协议、括号 —— 在 markdown 与各读取方
  *  那里各有各的含义,拆开重拼容易拼出另一个意思。产品自己写出来的引用里没有它们。 */
-const DEST_UNSAFE_RE = /[&|\\"'`[\]*?:<>()]/
-/** 新拼进地址的目录名里出现就整条不改的字符(空格、括号、尖括号、`%`、`#` 可以编码,不在此列)。 */
-const SEG_UNSAFE_RE = /[&|\\"'`[\]*?:\u0000-\u001f]/
+const DEST_UNSAFE_RE = /[&|\\"'`[\]*?:<>()\u0000-\u001f\u007f]/
+/** 新拼进地址的目录名里出现就整条不改的字符(空格、括号、尖括号、`%`、`#` 可以编码,不在此列)。
+ *  控制字符(含 DEL)让 remark 不再把它认成链接;普通空格之外的空白(全角空格、不换行空格、BOM……)会被
+ *  toDisplayMarkdown 的 `\s` 截断、地址进不了库资源协议 —— 都不接手。 */
+const SEG_UNSAFE_RE = /[&|\\"'`[\]*?:\u0000-\u001f\u007f-\u009f]|[^\S ]/
 const escapedAt = (s: string, i: number): boolean => {
   let n = 0
   while (s[i - 1 - n] === '\\') n++
@@ -253,6 +255,10 @@ const encodeSeg = (seg: string): string => encodeDest(seg.replace(/%/g, '%25')).
  *        - 要新拼进去的目录名里有 SEG_UNSAFE_RE 的字符(目录叫 `a|b`、`a&amp;b`、`foo:bar` 的)。
  *      往这里加「再多认一种写法」之前先想清楚各读取方(toDisplayMarkdown、linkHref.normalizeHref、主进程
  *      resolveAttachment、remark)是不是都按同一个意思读它。
+ *    · ponytail(已知会被当成正文改到的,第三轮评审报过、有意没堵;和 `[[链接]]` 的重写同一套按行处理的天花板):
+ *      缩进代码块(分不清它和嵌套列表里的缩进行,而列表里的图必须改)、多行 HTML 块里的文字、围栏里带引用前缀的
+ *      围栏记号(`> ~~~` 被当成收尾)、单引号标题 / 带反引号的标题里形似链接的文字、引用式定义与尖括号地址里形似
+ *      链接的文字。都要那段文字按页相对解析后恰好指着一个真实存在的文件才会被动;要堵得上真解析器。
  *    · 改写时**原样留下引用里没变的那几段**(文件名连同它原来的编码:`%2520`、`%23`、`%E5%9B%BE` 都不动),
  *      只有新拼上去的目录名才编码。链接的结果不许是单段文件名 / 形似域名 → 前面补 `./`。链接的 `#锚` 原样接回;
  *      图片的地址整段当路径(toDisplayMarkdown 同口径),不拆 `#`。
@@ -277,10 +283,11 @@ export async function rebaseFileRefs(
   const under = (dir: string, rel: string): string => normPath(dir ? `${dir}/${rel}` : rel)
   const climbs = (segs: string[]): number => segs.filter((x) => x === '..').length
   const there = new Map<string, boolean>() // 要问宿主的库内路径(操作后)→ 在不在
+  let noted: string[] = [] // 这一行里看过的地址;这一行算数(不是跨行代码)才记进 opts.seen
 
   /** 一条地址该换成什么;不该动 = null。collect = 只登记要问宿主的路径,不改。 */
   const rebase = (dest: string, image: boolean, collect: boolean): string | null => {
-    opts.seen?.add(dest)
+    noted.push(dest)
     if (opts.only && !opts.only.has(dest)) return null
     if (/^[/#]/.test(dest)) return null
     const cut = image ? -1 : dest.indexOf('#')
@@ -338,7 +345,7 @@ export async function rebaseFileRefs(
     for (let i = seg.indexOf('`'); i >= 0; i = seg.indexOf('`', i + 1)) if (!escapedAt(seg, i)) return true
     return false
   }
-  const fm = /^---\r?\n[\s\S]*?\r?\n---[ \t]*(?:\r?\n|$)/.exec(md)?.[0] ?? ''
+  const fm = /^\uFEFF?---\r?\n[\s\S]*?\r?\n---[ \t]*(?:\r?\n|$)/.exec(md)?.[0] ?? ''
   const body = md.slice(fm.length)
   // 同一遍扫描跑两次:第一次只收集「要改的话得先确认在不在」的路径,问完宿主再真改。
   const pass = (collect: boolean): string => {
@@ -347,11 +354,15 @@ export async function rebaseFileRefs(
       if (!line.trim()) { skip = false; return line }
       if (skip) return line
       let loose = false
+      noted = []
       const next = outsideCodeSpans(line, (seg) => {
         if (looseTick(seg)) loose = true
         return seg.includes('](') ? links(collect)(seg) : seg
       })
-      if (!loose) return next
+      if (!loose) {
+        for (const d of noted) opts.seen?.add(d) // 被跳过的那几行里的地址不算「首读时就有的引用」
+        return next
+      }
       skip = true
       return line
     }, true)

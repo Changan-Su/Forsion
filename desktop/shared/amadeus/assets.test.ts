@@ -458,4 +458,42 @@ describe('挪了位置之后的引用(rebaseFileRefs)', () => {
     expect(await rebaseFileRefs('![](../notes/p.png)', 'notes/a.md', 'notes/b.md', null, () => { asked++; return true })).toBe('![](../notes/p.png)')
     expect(asked).toBe(0)
   })
+
+  it('三审 1:被跳过的跨行代码里的地址不记进 seen —— 重试时别人按新位置新写的同字面引用不拿旧目录去改', async () => {
+    // 负对照:地址一看到就记进 seen(不等这一行算不算数)→ 两句都红
+    const has = disk('notes/sub/d.pdf', 'notes/deep/sub/d.pdf', 'notes/q.png')
+    const first = '`example [fake](sub/d.pdf)\nend`\n\n![](q.png)\n'
+    const seen = new Set<string>()
+    await rebaseFileRefs(first, 'notes/a.md', 'notes/deep/a.md', null, has, { seen })
+    expect([...seen]).toEqual(['q.png'])
+    expect(await rebaseFileRefs(`${first}[new](sub/d.pdf)\n`, 'notes/a.md', 'notes/deep/a.md', null, has, { only: seen }))
+      .toBe('`example [fake](sub/d.pdf)\nend`\n\n![](../q.png)\n[new](sub/d.pdf)\n')
+  })
+
+  it('三审 2 / 3:目录名里有全角空格、不换行空格、DEL 这类字符 → 整条不改(写出去的地址读的一侧认不全)', async () => {
+    // 负对照:SEG_UNSAFE_RE 去掉「普通空格之外的空白」→ 前两句红;去掉 DEL → 第三句红
+    const all = (): boolean => true
+    expect(await rebaseFileRefs('![](p.png)', '读书\u3000笔记/n.md', 'n.md', null, all)).toBe('![](p.png)')
+    expect(await rebaseFileRefs('![](p.png)', 'a\u00a0b/n.md', 'n.md', null, all)).toBe('![](p.png)')
+    expect(await rebaseFileRefs('[d](./sub/d.pdf)', 'a\u007fb/n.md', 'n.md', null, all)).toBe('[d](./sub/d.pdf)')
+    expect(await rebaseFileRefs('![](p.png)', '读书 笔记/n.md', 'n.md', null, all)).toBe('![](读书%20笔记/p.png)') // 普通空格照常编码
+  })
+
+  it('三审 6:带 BOM 的 frontmatter 照样整块跳过', async () => {
+    // 负对照:frontmatter 的正则不认开头的 BOM → 红(cover 那一行被改)
+    const md = '\uFEFF---\ncover: "[d](sub/d.pdf)"\n---\n[d](sub/d.pdf)\n'
+    expect(await rebaseFileRefs(md, 'notes/n.md', 'other/n.md', null, () => true))
+      .toBe('\uFEFF---\ncover: "[d](sub/d.pdf)"\n---\n[d](../notes/sub/d.pdf)\n')
+  })
+
+  it('三审 9:一行里叠很多层引用 / 列表前缀不把围栏行的正则拖进回溯(63 个字符曾经要 3 秒多)', async () => {
+    // 负对照:links.ts 的 FENCE_LINE 改回原先的写法 → 红(这两行要跑十几秒;层数别再加,旧写法每多一层翻一倍)
+    const t0 = Date.now()
+    expect(await rebaseFileRefs(`${'> '.repeat(26)} [d](sub/d.pdf)`, 'notes/n.md', 'other/n.md', null, () => true)).toBe(`${'> '.repeat(26)} [d](../notes/sub/d.pdf)`)
+    expect(await rebaseFileRefs(`${'-     '.repeat(11)} [d](sub/d.pdf)`, 'notes/n.md', 'other/n.md', null, () => true)).toBe(`${'-     '.repeat(11)} [d](../notes/sub/d.pdf)`)
+    expect(Date.now() - t0).toBeLessThan(500)
+    // 带前缀的围栏照旧认得:里面的不改
+    const fenced = '> - ```md\n> - [d](sub/d.pdf)\n> - ```\n1. ~~~\n   [d](sub/d.pdf)\n   ~~~\n'
+    expect(await rebaseFileRefs(fenced, 'notes/n.md', 'other/n.md', null, () => true)).toBe(fenced)
+  })
 })
