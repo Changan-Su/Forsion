@@ -8,6 +8,8 @@
  *  - 界面缩放(body 上的 CSS zoom,用户按 ⌘+ 调的那个):和白板视图同一个办法 —— 引擎拿 getBoundingClientRect 的值当
  *    CSS 像素用,祖先带 zoom 时落点整体偏(110% 下实测偏 10%)。这里在自己的容器上反向抵消,让引擎永远跑在 zoom=1 里,
  *    再把调用方给的缩放乘回去。所以对调用方,视口始终是「el 自己的 CSS 像素」。
+ *    ponytail: 引擎的缩放范围是 0.1–30,乘过界面缩放之后才钳,所以调用方能用的范围是 0.1/界面缩放 – 30/界面缩放;
+ *    贴着两头用的调用方真出现了再把钳制挪到调用方的口径上。
  *  笔还是白板那七支(pens.ts),套笔用的是白板笔排的同一个函数。
  */
 import { useEffect, useRef } from 'react'
@@ -54,7 +56,8 @@ function Board({ o, initial, uiz, bind, onElements, onDrift }: BoardProps) {
   }, [o])
   const tool = TOOLS.includes(o.tool as PluginBoardTool) ? o.tool! : 'freedraw'
   return (
-    <div ref={box} className="am-plugin-board" style={{ width: `${uiz * 100}%`, height: `${uiz * 100}%`, zoom: uiz === 1 ? undefined : 1 / uiz }}>
+    // 宽高就是 100%:百分比按包含块的实际大小算,不再吃自己的 zoom(实测 Chrome 144:写成 uiz×100% 会多盖 / 少盖出 (uiz−1) 那一圈)。
+    <div ref={box} className="am-plugin-board" style={{ width: '100%', height: '100%', zoom: uiz === 1 ? undefined : 1 / uiz }}>
       <Excalidraw
         // 不用 onExcalidrawAPI:它在引擎装载初始内容**之前**就来,那时推进去的内容 / 笔会被随后的装载冲掉(Codex 评审)。
         onInitialize={bind}

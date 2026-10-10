@@ -185,13 +185,14 @@ describe('ctx.ui.mountBoard 的那一层', () => {
     expect(eng.appState.zoom).toEqual({ value: 1.5 })
   })
 
-  it('界面缩放(祖先的 CSS zoom):容器反向抵消、铺满原来的大小,引擎的缩放乘回去;改了界面缩放跟着重算', async () => {
+  it('界面缩放(祖先的 CSS zoom):容器反向抵消、宽高不动,引擎的缩放乘回去;改了界面缩放跟着重算', async () => {
     let uiz = 1.1
     Object.defineProperty(el, 'currentCSSZoom', { configurable: true, get: () => uiz })
     const h = await mount()
     const box = el.querySelector('.am-plugin-board') as HTMLElement
-    expect(parseFloat(box.style.width)).toBeCloseTo(110)
-    expect(parseFloat(box.style.height)).toBeCloseTo(110)
+    // 宽高保持 100%:百分比不吃自己的 zoom,放大成 110% 会比插件的元素多盖出一圈(真应用里量过)
+    expect(box.style.width).toBe('100%')
+    expect(box.style.height).toBe('100%')
     expect(Number(box.style.zoom)).toBeCloseTo(1 / 1.1)
     expect(engineZoom()).toBeCloseTo(1.5 * 1.1) // 调用方给的 1.5 是 el 自己的 CSS 像素口径
     h.update({ viewport: { scrollX: 0, scrollY: 0, zoom: 2 } })
@@ -199,7 +200,7 @@ describe('ctx.ui.mountBoard 的那一层', () => {
     uiz = 1.25
     await act(async () => { window.dispatchEvent(new Event('forsion:uizoom')) })
     expect(engineZoom()).toBeCloseTo(2 * 1.25)
-    expect(parseFloat(box.style.width)).toBeCloseTo(125)
+    expect(Number(box.style.zoom)).toBeCloseTo(1 / 1.25)
     // 引擎报回来的就是乘过的值:不许被当成「引擎自己动了视口」再推一遍
     const n = appPatches().length
     await act(async () => { eng.props.onScrollChange(0, 0, { value: 2.5 }); await Promise.resolve() })
