@@ -1494,6 +1494,8 @@ export const Composer2: React.FC<{
   // 模式不再单独占一颗药丸:点模型药丸出一张原生菜单,模型 / 思考档位 / 模式各一行,点进去是各自的选项页(ModelPill 的 hub)。
   // ⚠️ 不能有「模式点不到」的状态:原生菜单出不来(没有宿主、宿主拒了、目录太大放不下)、或模型药丸点不开
   // (输入区停用、外部引擎没有可选模型)时,模式药丸照旧在,两颗药丸各走各的老路。
+  // ponytail: 原生菜单失败过一次,这张输入卡就一直留着模式药丸(不自动再试,重新挂载才恢复)—— 目录太大那种会一直失败,
+  // 自动再试只会让药丸每换一次会话闪一回;真有「偶发失败后想恢复」的报告,再按会话重置 hubFailed。
   const phoneCard = useNativeChromeInstalled()
   const [hubFailed, setHubFailed] = useState(false)
   const hubOn = phoneCard && !!nativeSheetPresenter() && !hubFailed
