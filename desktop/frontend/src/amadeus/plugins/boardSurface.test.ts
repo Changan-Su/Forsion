@@ -5,7 +5,7 @@
  * (插件仓 forsion-plugin-pdf-reader 的 verify/smoke.cjs ⑧)。
  * 负对照(2026-10-10 实跑):去掉滚轮的 stopPropagation → 「滚轮」那条红;去掉 onChange 的版本比对 → 「只在元素变了」那条红;
  * 去掉引擎漂移后的回推 → 「拉回」那条红。
- * 负对照(2026-10-11 实跑):改回在 onExcalidrawAPI 里绑定 → 「装完初始内容之后」两条红;收尾回调里不记最后的样子 → 「被后来的挂载收掉」那条红。
+ * 负对照(2026-10-10 评审返修时实跑):改回在 onExcalidrawAPI 里绑定 → 「装完初始内容之后」两条红;收尾回调里不记最后的样子 → 「被后来的挂载收掉」那条红。
  */
 import { act } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
