@@ -64,6 +64,27 @@ const TURNS = [
   ['ask', '今天来回改了四趟,主要是我一开始没说清楚。你觉得以后我这边怎么做,咱们能少返工?你有什么希望我配合的也一起说,整理下来,我之后照着做。'],
 ];
 
+// ── 旧文档(10-10 用户追问:旧版本写成的协作说明会不会继续误导)。`--humanreal-legacy`:每轮开头先放一份旧文档,六条消息之后再加一条请它整理 ──
+// 三份都是 2.13.1 的提示词下 gpt-6-luna 在这个场景里真写出来的原文(harness-runs/2026-10-10/161829-humanreal-base)。
+// 末尾另加的一节是用户的纠正被写成「我会先……」那条来路的原话(同日 human 场景的改前对照):它只存在协作说明里、记忆里没有,整理时丢了就是把用户提过的要求弄丢了。
+const LEGACY_PROMISE = '以后给你选方案时，我会先说明你需要做的决定和各选项所需投入的时间；信息不足时会明确列出假设。';
+const LEGACY_DOCS = [
+  "# 一起减少脚本返工\n\n改报表或脚本时，开头尽量给我一份“验收口径”：\n- **谁看、要回答什么：** 例如老板要看“每个地区卖了多少”。\n- **统计维度与范围：** 按地区/产品/时间等；哪些状态要纳入或排除（例如退款单不计销售额）。\n- **数字呈现：** 单位、币种、精度与格式（例如元、千分位）。\n- **交付形式：** 输出文件/表格结构，以及是否保留辅助明细。\n\n不确定的项目可以写“按现有数据推断”或“先问我”，不用为了补齐清单而卡住。Mika 会先检查样例数据和现有口径；遇到会改变结论的歧义，先集中确认再改。改完先实际运行，并贴关键结果供你核对。",
+  "## 给 Mika 的任务简报（需要改脚本/报表时）\n\n尽量一次说清下面几项；不确定的可以写“不确定”，我会先查看现有文件，并把关键假设问清楚再改：\n\n- **目的和读者：** 给谁看、希望对方看完做什么决定？\n- **要看的维度：** 例如按地区、产品、时间；哪些是重点，哪些不要展示？\n- **统计口径：** 哪些记录计入/排除（如退款、取消、未付款），时间范围如何界定？\n- **格式偏好：** 单位、精度、千分位、排序，以及要不要订单数/占比/对比。\n- **交付与验收：** 生成什么文件；给一个示例或说“结果里必须能看出……”。\n\n可直接复制：\n> 给【读者】看的【产物】，用于【目的】。按【维度】汇总；【计入】；【排除】。金额用【单位/格式】，按【排序】。交付【文件/形式】；验收看【关键结果】。\n\nMika 的配合方式：需求不完整时，我先读现有脚本、数据和说明，区分事实与假设；若关键口径会改变结果，先集中问一轮再动手。修改脚本后先实际运行，并在回复中贴出验证结果。",
+  "# 协作约定\n\n## 做报表/脚本时，先给最小口径\n\n为减少来回修改，描述需求时尽量带上：\n- **老板要回答的问题/汇总维度**：例如“各地区卖了多少”。\n- **统计范围与排除项**：日期范围，以及退款、取消、未付款是否排除。\n- **单位与展示习惯**：例如元、千分位，是否需要笔数/对比。\n- **输出形式**：要表格、摘要，或需要保留现有栏目。\n\n不必每次都写完整；一句话也可以，没确定的部分标“待定”。\n\n## 我这边会做\n\n动脚本前先复述关键统计口径，遇到会改变数字或报告重点的歧义先问；改完实际运行，并把验证结果贴出来。",
+].map((d) => `${d}\n\n## 选方案时\n\n${LEGACY_PROMISE}\n`);
+const LEGACY_MARKS = ['Mika 会先检查', 'Mika 的配合方式', '我这边会做', '我会先说明你需要做的决定'];
+// 两种说法:plain 是用户随口会说的;strict 把用户想不到要说的两件事也说了(自己要做的先记下再拿掉、就改这一份)。
+// 10-10 实测 plain(gpt-6-luna 3 轮):2 轮把文档改干净了,但那条承诺删了没记;1 轮另给项目写了一份、原来那份没动。
+const TIDY_TURNS = {
+  plain: '协作说明我看了一下,里面有些是你自己要做的事,还有些词我看不太懂。帮我重新整理一遍:只留我这边该做的,用平常话写。',
+  strict: '协作说明我看了一下,里面有些是你自己要做的事,还有些词我看不太懂。帮我重新整理一遍:你自己要做的那些,先记到你的记忆里,再从说明里拿掉;说明里只留我这边该做的,用平常话写。就改你自己这一份,不用另外给这个项目写一份。',
+};
+const marksLeft = (doc) => LEGACY_MARKS.filter((m) => doc.includes(m));
+/** 那条只存在旧文档里的承诺最后去了哪:记忆(任何一轮的 remember 提到它)/ 还在协作说明里 / 两边都没有。 */
+const promiseFate = (remembered, doc) => (remembered.some((a) => /方案/.test(a) && /决定|时间/.test(a)) ? 'memory' : /方案/.test(doc) && /决定/.test(doc) ? 'note' : 'lost');
+const FATE = { memory: '进了记忆', note: '还在协作说明里', lost: '⚠ 两边都没有了' };
+
 const cjkRatio = (s) => { const c = (s.match(/[一-鿿]/g) || []).length, a = (s.match(/[A-Za-z]/g) || []).length; return c + a ? c / (c + a) : 0; };
 const itemsOf = (md) => md.split('\n').map((l) => l.trim()).filter((l) => l && !/^#{1,6}\s/.test(l) && !/^[-*_]{3,}$/.test(l));
 const parse = (s) => { try { return JSON.parse(s); } catch { return null; } };
@@ -183,6 +204,8 @@ export async function humanRealLive(h) {
     const slug = `humanreal-${randomUUID().slice(0, 6)}`;
     await api('/agent/agents', { method: 'POST', body: JSON.stringify({ slug, name: AGENT_NAME, systemPrompt: `You are ${AGENT_NAME}, a hands-on assistant. Reply in the user's language.` }) });
     const dir = join(workspace, slug); mkProject(dir);
+    const seed = h.legacy ? LEGACY_DOCS[(r - 1) % LEGACY_DOCS.length] : '';
+    if (seed) { mkdirSync(join(h.home, 'agents', slug), { recursive: true }); writeFileSync(join(h.home, 'agents', slug, 'HUMAN.md'), seed); }
     // 思考档用引擎缺省的 medium(桌面端不改设置时的档),基线与改后两臂一致
     const cfg = { ...AGENT_CONFIG, agentSlug: slug, cwd: dir, approvalMode: 'auto-edit', thinkingLevel: 'medium' };
     const sid = (await api('/agent/sessions', { method: 'POST', body: JSON.stringify({ title: `Human real ${r}`, model_id: MODEL, project_path: dir, agent_config: cfg }) })).session.id;
@@ -190,21 +213,39 @@ export async function humanRealLive(h) {
     for (const [key, msg] of TURNS) {
       const ev = await run(sid, msg, 300_000, cfg);
       const w = humanWrites(ev);
-      turns.push({ key, tools: ev.toolCalls, humanApplied: w.changes.length, humanChanges: w.changes, humanArgs: w.args, otherStores: otherStores(ev), approvals: ev.approvals, error: ev.error || null, reply: String(ev.content || '') });
+      turns.push({ key, tools: ev.toolCalls, humanApplied: w.changes.length, humanChanges: w.changes, humanArgs: w.args, otherStores: otherStores(ev), remembered: ev.toolArgs.filter((t) => t.name === 'remember').map((t) => String(t.arguments || '')), approvals: ev.approvals, error: ev.error || null, reply: String(ev.content || '') });
       tools.push(`${key}${r}:${ev.toolCalls.join('/') || '-'}`);
       if (ev.error) { error = `${key}: ${ev.error}`; break; }
     }
     const agentDoc = (await api(`/agent/agents/${slug}/human`).catch(() => ({ content: '' }))).content || '';
     const projectDoc = (await api(`/agent/project-context/human?sessionId=${sid}`).catch(() => ({ content: '' }))).content || '';
     const x = await grade({ turns, agentDoc, projectDoc, error }, judgeDoc, `Human real judge ${r}`); graded.push(x);
+    let legacy = null;
+    if (seed && !error) {
+      const ev = await run(sid, TIDY_TURNS[h.legacy], 300_000, cfg);
+      const w = humanWrites(ev);
+      const after = (await api(`/agent/agents/${slug}/human`).catch(() => ({ content: '' }))).content || '';
+      const remembered = [...turns.flatMap((t) => t.remembered), ...ev.toolArgs.filter((t) => t.name === 'remember').map((t) => String(t.arguments || ''))];
+      const { judge, judgeError } = after.trim() ? await judgeDoc(after, `Human legacy judge ${r}`) : { judge: null, judgeError: null };
+      const fate = promiseFate(remembered, after);
+      const scopes = [...new Set(w.changes.map((c) => c.scope))];
+      legacy = { ask: h.legacy, scopes, seed, afterAsk: agentDoc, leftAfterAsk: marksLeft(agentDoc), askChanged: agentDoc !== seed, after, leftAfter: marksLeft(after), applied: w.changes.length, changes: w.changes, remembered, fate,
+        judge, judgeError, tally: judge ? tallyOf(judge) : null, office: (after.match(/口径|维度|交付|验收/g) || []).length, tools: ev.toolCalls, reply: String(ev.content || ''), error: ev.error || null };
+      // 这一档的门:请它整理之后,文档确实改了、没有 agent 自己要做的事、那条承诺没丢。六条消息那一段的门照常算、照常报,但不决定这一档过没过。
+      legacy.ok = !ev.error && after !== agentDoc && judge?.verdict.noAgentItems === true && fate !== 'lost' && !scopes.includes('project');
+      x.line += `\n    旧文档:⑥ 之后${legacy.askChanged ? '改过' : '没动'},旧承诺还剩 ${legacy.leftAfterAsk.length}/${marksLeft(seed).length} 处;请它整理之后:${legacy.tally ? `${legacy.tally.items} 条里 agent 自己要做的 ${legacy.tally.agentItems}(三次判 ${judge.votes.map((v) => v.agentItems).join('/')})` : `判官没判成(${judgeError || '文档为空'})`}、旧承诺还剩 ${legacy.leftAfter.length} 处、「口径 / 维度 / 交付 / 验收」${legacy.office} 处、「选方案」那条承诺${FATE[fate]}${scopes.includes('project') ? ';⚠ 另给项目写了一份' : ''}`;
+      x.ok = legacy.ok;
+    }
     console.log(`  第 ${r}/${rounds} 轮(${slug}):${x.ok ? '✓' : '✗'} ${x.line}`);
-    outs.push(`【第 ${r} 轮${x.ok ? ' ✓' : ' ✗'}】${x.line}\n${x.doc || '(协作说明为空)'}${x.judge ? `\n— 判官逐条 —\n${judgeLines(x.judge)}` : ''}`);
-    evidence.push({ round: r, slug, ok: x.ok, gates: x.gates, error, jargon: x.jargon, midTask: x.midTask, saveFailed: x.saveFailed, addressed: x.addressed, office: x.office, agentDoc, projectDoc, writes: turns.flatMap((t) => t.humanArgs), judge: x.judge, judgeError: x.judgeError, turns });
+    outs.push(`【第 ${r} 轮${x.ok ? ' ✓' : ' ✗'}】${x.line}\n${x.doc || '(协作说明为空)'}${x.judge ? `\n— 判官逐条 —\n${judgeLines(x.judge)}` : ''}${legacy ? `\n— 请它整理之后 —\n${legacy.after || '(协作说明为空)'}${legacy.judge ? `\n— 判官逐条 —\n${judgeLines(legacy.judge)}` : ''}` : ''}`);
+    evidence.push({ round: r, slug, ok: x.ok, gates: x.gates, error, jargon: x.jargon, midTask: x.midTask, saveFailed: x.saveFailed, addressed: x.addressed, office: x.office, agentDoc, projectDoc, writes: turns.flatMap((t) => t.humanArgs), judge: x.judge, judgeError: x.judgeError, turns, ...(legacy ? { legacy } : {}) });
     // 每轮落一次盘:台架整体超时(缺省 15 分钟;慢的模型 4 轮就会撞上,跑时带 --timeout)也留得下已经跑完的几轮
     writeFileSync(join(OUT, 'humanreal-evidence.json'), JSON.stringify({ model: MODEL, judgeModel: JUDGE_MODEL, turns: TURNS, rounds: evidence }, null, 2));
   }
   const passed = graded.filter((x) => x.ok).length;
-  return { ok: passed === rounds, detail: `${passed}/${rounds} 轮全过;${sumUp(graded)}(判官 ${JUDGE_MODEL})`, output: outs.join('\n\n'), toolCalls: tools, humanRealPassed: passed };
+  const tidied = evidence.filter((e) => e.legacy);
+  const legacyNote = h.legacy ? `旧文档 ${tidied.filter((e) => e.legacy.ok).length}/${rounds} 轮整理对了(整理后没有 agent 自己要做的事 ${tidied.filter((e) => e.legacy.judge?.verdict.noAgentItems).length}/${tidied.length}、那条承诺进了记忆 ${tidied.filter((e) => e.legacy.fate === 'memory').length}/${tidied.length}、还在说明里 ${tidied.filter((e) => e.legacy.fate === 'note').length}/${tidied.length}、只改了 agent 那一份 ${tidied.filter((e) => e.legacy.scopes.join() === 'agent').length}/${tidied.length}、⑥ 那一轮自己就清掉旧承诺 ${tidied.filter((e) => !e.legacy.leftAfterAsk.length).length}/${tidied.length});六条消息那一段:` : '';
+  return { ok: passed === rounds, detail: `${h.legacy ? legacyNote : `${passed}/${rounds} 轮全过;`}${sumUp(graded)}(判官 ${JUDGE_MODEL})`, output: outs.join('\n\n'), toolCalls: tools, humanRealPassed: passed };
 }
 
 // 自检:判官交回来格式不对的结论不能被当成干净;⑥ 那一轮没存上、早先存过也不算写了。
@@ -229,5 +270,9 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   assert.deepEqual(pickJudge([J('agent'), J('agent', ['口径']), J('human', ['口径'])]).judge.verdict, { noAgentItems: false, noHardTerms: false });
   assert.equal(pickJudge([J('human')]).judge, null); // 只判成一次不算数
   assert.equal((await grade({ ...doc, turns: turns(1) }, async () => pickJudge([J('agent'), J('agent'), J('human')]))).ok, false);
+  assert.equal(promiseFate(['{"content":"给用户选方案时先说要做的决定和投入时间"}'], ''), 'memory');
+  assert.equal(promiseFate(['{"content":"改完先跑一遍"}'], '选方案前,你先告诉我你想做哪个决定。'), 'note');
+  assert.equal(promiseFate([], '开始前先告诉我给谁看。'), 'lost'); // 整理时删了、又没记进记忆
+  assert.deepEqual(LEGACY_DOCS.map((d) => marksLeft(d).length), [2, 2, 2]); // 每份旧文档里都有它自己的那句承诺 + 另加的那条
   console.log('human-real-live 自检通过');
 }
