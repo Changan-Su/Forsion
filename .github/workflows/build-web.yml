@@ -78,12 +78,25 @@ jobs:
       - name: Image name (ghcr 要求全小写)
         id: img
         run: echo "name=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/forsion-web" >> "$GITHUB_OUTPUT"
+      # 仪器:Dockerfile 里每个 FROM 都得走 BASE_REGISTRY(见下面 build-args 的注释)。漏写一个不会立刻红 ——
+      # 只在 Docker Hub 限流的那几个小时红,所以在这里直接拦。以后有 FROM <前面的阶段名> 时在这里加例外。
+      - name: Base images go through BASE_REGISTRY
+        run: |
+          if grep -nE '^FROM ' web/Dockerfile | grep -vF '${BASE_REGISTRY}/'; then
+            echo '::error file=web/Dockerfile::上面这些 FROM 没走 ${BASE_REGISTRY},会回到 Docker Hub(公共 runner 上会被限流)'
+            exit 1
+          fi
       # context 必须是仓根:web 复用 desktop/frontend + desktop/shared + lcl 源码(同 web/README 的坑 1)。
       - uses: docker/build-push-action@v6
         with:
           context: .
           file: web/Dockerfile
           platforms: linux/amd64 # ponytail: 服务器是 x86;要 arm 部署再加 linux/arm64(QEMU 构建时间翻倍)
+          # 基础镜像不从 Docker Hub 拉:公共 runner 匿名要清单会被限流(429 Too Many Requests),与代码无关却让镜像出不来
+          # (2026-10-09 实翻,重跑五次都红)。ECR Public 上是 Docker 官方镜像的同一份。⚠️ Dockerfile 里新增 FROM 时
+          # 必须写成 ${BASE_REGISTRY}/<名字>,否则那一张又回到 Docker Hub。
+          build-args: |
+            BASE_REGISTRY=public.ecr.aws/docker/library
           push: true
           tags: |
             ${{ steps.img.outputs.name }}:latest

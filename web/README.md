@@ -59,6 +59,8 @@ BACKEND_URL=... docker compose -f web/docker-compose.yml up -d --no-build
 ```bash
 cd Forsion-Genesis
 docker build -f web/Dockerfile -t tangu-web .
+# 基础镜像缺省从 Docker Hub 拉;拉不动 / 被限流时换来源(CI 用的就是这个):
+#   docker build --build-arg BASE_REGISTRY=public.ecr.aws/docker/library -f web/Dockerfile -t tangu-web .
 docker run -d --name tangu_web -p 8090:80 \
   --add-host=host.docker.internal:host-gateway \
   -e BACKEND_URL=http://host.docker.internal:3001 \
