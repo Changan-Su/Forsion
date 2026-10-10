@@ -21,7 +21,7 @@ import { THINKING_LEVELS } from '../../types'
 
 // context 视图已知注入段 key(与引擎 agentLoop ctxMark 调用一一对应);未知 key 显示原样
 import type { AgentConfig, Attachment, CtxInfo, DefaultModelSlot, MessageRecord, ModelInfo, ModelsResponse, NormalAgentDef, SkillInfo } from '../../types'
-import { nativeHaptic, openNativeSheetMenu, useEdgeNudge, useWorkspace, type SheetMenuItem, type SheetMenuSection } from '@lcl/engine'
+import { nativeHaptic, nativeSheetPresenter, openNativeSheetMenu, useEdgeNudge, useNativeChromeInstalled, useWorkspace, type SheetMenuItem, type SheetMenuSection } from '@lcl/engine'
 import { ModelPill, contextRingWindow, type ModelPillGroup } from '../../components/ModelPill'
 import { UltraConfirmDialog, ultraConfirmSkipped } from './UltraConfirmDialog'
 import { registerMessages, useI18n } from '../../i18n'
@@ -59,6 +59,7 @@ registerMessages({
 })
 registerMessages({
   'input.modeSheetTitle': { zh: '模式', en: 'Mode' },
+  'input.hubSheetTitle': { zh: '模型与模式', en: 'Model and mode' },
   'input.agentSwitch.section': { zh: '切换 Agent', en: 'Switch agent' },
   'input.mention.projectNote': { zh: '派往项目 · 在该项目新建会话开工', en: 'Dispatch to project · starts a new session there' },
   // Chat / Work 是会话事实;可见切换统一放在侧栏胶囊。
@@ -1489,6 +1490,14 @@ export const Composer2: React.FC<{
         options: g.models.map((m) => ({ ...m, description: `${m.provider} · ${m.id}` })),
       }))
   const showModelPill = isEngine || !!onModelChange || !!onThinkingChange
+  // ── 手机(原生外壳)的输入卡(2026-10-10 用户定):发送键在输入框右边,底排只剩 + / 模型 / 麦克风;模型药丸不带图标。
+  // 模式不再单独占一颗药丸:点模型药丸出一张原生菜单,模型 / 思考档位 / 模式各一行,点进去是各自的选项页(ModelPill 的 hub)。
+  // ⚠️ 不能有「模式点不到」的状态:原生菜单出不来(没有宿主、宿主拒了、目录太大放不下)、或模型药丸点不开
+  // (输入区停用、外部引擎没有可选模型)时,模式药丸照旧在,两颗药丸各走各的老路。
+  const phoneCard = useNativeChromeInstalled()
+  const [hubFailed, setHubFailed] = useState(false)
+  const hubOn = phoneCard && !!nativeSheetPresenter() && !hubFailed
+  const modeMerged = hubOn && showModeChip && showModelPill && !disabled && !(isEngine && !engineModels?.length)
   // ── 模式菜单条目的唯一一份:Web 菜单(下方 JSX)与 Android 原生半屏(lcl nativeSheet 可选宿主)都从这里渲染。
   // ⚠️ 审批档是安全相关设置:两种呈现走同一个 setApproval、同一份 APPROVALS(原生答回的只是条目 id,
   // 由 runNativeSheetMenu 在这份快照里找回条目再调它自己的 run;从不把原生字符串当档位值用)。
@@ -1539,6 +1548,30 @@ export const Composer2: React.FC<{
     }
   }
 
+  // 发送 / 停止 / 通话键:桌面在底排末尾,手机在输入框右边(见上)。录音时两处都不出(录音条自带停止和发送)。
+  const submitKeys = running ? (
+    <>
+      {(!!draft.trim() || allRefChips.length > 0) && (
+        <ChatBoxSubmit onClick={send} disabled={disabled} title={t('input.send')} aria-label={t('input.send')} />
+      )}
+      <button className="t2c-stop" onClick={onStop} title={t('input.stop')} aria-label={t('input.stop')}><Square size={10} /><span className="t2c-stop-label">{t('input.stop')}</span></button>
+    </>
+  ) : callable && !draft.trim() && !allRefChips.length && !attachments.length && !wsFiles.length && !quotedText && !pinnedSkills.length ? (
+    // 照 ChatGPT:输入框空着时发送键就是通话键,打了字变回发送。通话中再按 = 叫回 Mini 卡片(不重拨)。
+    <ChatBoxSubmit
+      className="t2c-live-control"
+      onClick={() => { void startVoiceCall() }}
+      disabled={!!disabled || callStarting}
+      title={t(inCall ? 'livecall.return' : 'livecall.start')}
+      aria-label={t(inCall ? 'livecall.return' : 'livecall.start')}
+    >
+      {callStarting ? <Loader2 size={16} className="spin" /> : <AudioLines size={16} />}
+    </ChatBoxSubmit>
+  ) : (
+    // 只挂了引用、一个字没写也可发(与 send() 的放行条件同源;不同步的话按钮灰着 = 哑火)
+    <ChatBoxSubmit onClick={send} disabled={disabled || (!draft.trim() && !allRefChips.length)} title={t('input.send')} aria-label={t('input.send')} />
+  )
+
   return (
     <div className="t2c">
       {groupSetupOpen && (
@@ -1575,7 +1608,7 @@ export const Composer2: React.FC<{
           </div>
         )}
         {approvalTray}
-        <ChatBoxSurface ref={cardRef} className={dragOver ? 'dragover' : undefined}>
+        <ChatBoxSurface ref={cardRef} className={`${phoneCard ? 't2c-card--phone' : ''}${dragOver ? ' dragover' : ''}`}>
           {advisory}
           {hint && <div className="t2c-hint">{hint}</div>}
           {quotedText && (
@@ -1637,6 +1670,7 @@ export const Composer2: React.FC<{
               ))}
             </div>
           )}
+          {((field: React.ReactNode) => phoneCard ? <div className="t2c-field">{field}{!voiceActive && submitKeys}</div> : field)(
           <ChatBoxInput
             autoSize={false}
             ref={taRef}
@@ -1734,7 +1768,7 @@ export const Composer2: React.FC<{
               }
               if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); send() }
             }}
-          />
+          />)}
           {slashOpen && (
             <div className="t2c-menu">
               {slashMatches.map((it, i) => (
@@ -1808,7 +1842,7 @@ export const Composer2: React.FC<{
             {voiceActive ? (
               <VoiceRecordingBar analyser={voice.analyser} recording={voice.recording} busy={voice.busy} onStop={voice.toggle} onSend={voiceSend} t={t} />
             ) : (<>
-            {showModeChip && (
+            {showModeChip && !modeMerged && (
               <span className={`mode-pill-wrap t2c-capsule-peer${openMenu === 'mode' ? ' is-open' : ''}`} data-cmenu>
                 <button
                   className={`t2c-pill mode-pill-btn${openMenu === 'mode' ? ' is-open' : ''}${planMode && !isChat ? ' active' : ''}`}
@@ -1916,7 +1950,14 @@ export const Composer2: React.FC<{
             {showModelPill && (
               <ModelPill
                 scopeKey={`${activeSessionId ?? 'draft'}:${targetKeyOf(composerRef)}:${isEngine ? 'engine' : 'tangu'}`}
-                className="t2c-capsule-peer"
+                // 模式药丸并进来之后,它原来用颜色报的两种状态(计划模式 / 完全放行)改由这颗药丸报
+                className={`t2c-capsule-peer${modeMerged && dangerPill ? ' is-danger' : ''}${modeMerged && planMode ? ' is-plan' : ''}`}
+                icon={phoneCard ? null : undefined}
+                hub={hubOn ? {
+                  title: t(modeMerged ? 'input.hubSheetTitle' : 'input.selectModel'), back: t('common.back'),
+                  extra: () => modeMerged ? [{ id: 'mode', label: t('input.modeSheetTitle'), detail: modeLabel, danger: dangerPill, children: modeSheet().sections }] : [],
+                  onUnavailable: () => setHubFailed(true),
+                } : undefined}
                 open={openMenu === 'model'}
                 onOpenChange={(next) => setOpenMenu(next ? 'model' : null)}
                 disabled={disabled}
@@ -1949,28 +1990,7 @@ export const Composer2: React.FC<{
             >
               {voice.busy ? <Loader2 size={14} className="spin" /> : <Mic size={14} />}
             </button>
-            {running ? (
-              <>
-                {(!!draft.trim() || allRefChips.length > 0) && (
-                  <ChatBoxSubmit onClick={send} disabled={disabled} title={t('input.send')} aria-label={t('input.send')} />
-                )}
-                <button className="t2c-stop" onClick={onStop} title={t('input.stop')} aria-label={t('input.stop')}><Square size={10} /><span className="t2c-stop-label">{t('input.stop')}</span></button>
-              </>
-            ) : callable && !draft.trim() && !allRefChips.length && !attachments.length && !wsFiles.length && !quotedText && !pinnedSkills.length ? (
-              // 照 ChatGPT:输入框空着时发送键就是通话键,打了字变回发送。通话中再按 = 叫回 Mini 卡片(不重拨)。
-              <ChatBoxSubmit
-                className="t2c-live-control"
-                onClick={() => { void startVoiceCall() }}
-                disabled={!!disabled || callStarting}
-                title={t(inCall ? 'livecall.return' : 'livecall.start')}
-                aria-label={t(inCall ? 'livecall.return' : 'livecall.start')}
-              >
-                {callStarting ? <Loader2 size={16} className="spin" /> : <AudioLines size={16} />}
-              </ChatBoxSubmit>
-            ) : (
-              // 只挂了引用、一个字没写也可发(与 send() 的放行条件同源;不同步的话按钮灰着 = 哑火)
-              <ChatBoxSubmit onClick={send} disabled={disabled || (!draft.trim() && !allRefChips.length)} title={t('input.send')} aria-label={t('input.send')} />
-            )}
+            {!phoneCard && submitKeys}
             </>)}
           </ChatBoxToolbar>
           {voice.error && !voice.recording && !voice.busy && (

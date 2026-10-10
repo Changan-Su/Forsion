@@ -1080,3 +1080,31 @@ html[data-chat-avatars='off'] .t2-username { display: none; }
   .mb-shell[data-native-chrome] .t2-stream-inner:has(> .t2-asst, > .t2-userwrap) > :first-child { margin-top: auto; }
   .mb-shell[data-native-chrome] .t2-content :is(ul, ol) { padding-inline-start: 18px; }
 }
+
+/* ── 手机(Android 原生外壳):宽表格在自己的框里横向滑;两处小键把触摸范围补到 48dp ──
+   表格(2026-10-10 用户选的「表格 1」):前面那条 .t2-content table 写了 overflow-x: auto,但格子可以无限折行,
+   表永远不会溢出 —— 五列的表在手机上被挤成每格两三行。这里让一行放得下的格子不折行,列按内容自己的宽度;
+   放不下的格子(Markdown.tsx 给超过约 13 个汉字宽的格子标 data-long)照常折,最窄 13em。列少的表照旧不滑。
+   两侧的渐隐表示那一边还有内容:滚动驱动的动画,表不溢出时时间线不活动 = 没有渐隐;WebView 不支持就没有渐隐。
+   「思考过程」那一行看上去 22dp 高、代码块的复制键 28dp:外观不变,只撑开触摸范围(同上面回复下的三颗键)。
+   仪器:mobile `npm run stage:phone` 的 chat-table / chat-touch。 */
+.mb-shell[data-native-chrome] .t2-content :is(th, td) { white-space: nowrap; }
+.mb-shell[data-native-chrome] .t2-content :is(th, td)[data-long] { white-space: normal; min-width: 13em; }
+@property --t2-table-fade-l { syntax: '<length>'; inherits: false; initial-value: 0px; }
+@property --t2-table-fade-r { syntax: '<length>'; inherits: false; initial-value: 0px; }
+@keyframes t2-table-edges {
+  0% { --t2-table-fade-l: 0px; --t2-table-fade-r: 28px; }
+  8%, 92% { --t2-table-fade-l: 28px; --t2-table-fade-r: 28px; }
+  100% { --t2-table-fade-l: 28px; --t2-table-fade-r: 0px; }
+}
+@supports (animation-timeline: scroll()) {
+  .mb-shell[data-native-chrome] .t2-content table {
+    -webkit-mask-image: linear-gradient(to right, transparent, #000 var(--t2-table-fade-l), #000 calc(100% - var(--t2-table-fade-r)), transparent);
+    mask-image: linear-gradient(to right, transparent, #000 var(--t2-table-fade-l), #000 calc(100% - var(--t2-table-fade-r)), transparent);
+    animation: t2-table-edges linear both;
+    animation-timeline: scroll(self inline);
+  }
+}
+.mb-shell[data-native-chrome] .t2-think-head { position: relative; }
+.mb-shell[data-native-chrome] .t2-think-head::after { content: ''; position: absolute; inset: -11px 0; }
+.mb-shell[data-native-chrome] .t2-content pre ~ .icon-btn::after { content: ''; position: absolute; inset: -9px; }

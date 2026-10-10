@@ -104,6 +104,13 @@ const MESSAGES = [
 const CHAT_MESSAGES = [
   { ...MESSAGES[0], id: 'st-c1', content: '登录页的验证码图片不显示了，帮我查一下原因。' },
   { ...MESSAGES[1], id: 'st-c2', content: ['先说结论：验证码不显示是因为图片地址被拼了两次前缀。', '', '- 开发环境走代理，前缀由 `BACKEND_URL` 决定', '  - 本机 dev', '  - 预览包', '- 生产环境同源，所以线上一直没事', '', '改法两步：', '', '9. 改 `shared/assetUrl.ts`', '10. 补一条测试'].join('\n') },
+  { ...MESSAGES[0], id: 'st-c3', content: '把改了的三处列成表。', timestamp: T0 - 3 * MIN },
+  // a table wider than the screen (five columns, one cell a sentence), one that fits (two columns), a code block,
+  // and a reply that thought first: the "thinking" row
+  { ...MESSAGES[1], id: 'st-c4', timestamp: T0 - 2 * MIN, reasoning: '用户要一张表。三处改动各一行：文件、改动、行数、风险、测试。',
+    content: ['| 文件 | 改动 | 行数 | 风险 | 测试 |', '|---|---|---|---|---|', '| `auth/captcha.ts` | 返回相对路径，不带前缀 | +3 −5 | 低 | 新增 1 条 |', '| `shared/assetUrl.ts` | 已带前缀的地址不再重复拼，其余地址照旧按环境加前缀 | +6 −1 | 中，全站在用 | 已有 14 条全过 |', '| `auth/login.html` | 图片加载失败时给出「点击重试」 | +11 −0 | 低 | 手动点过 |', '',
+      '两个环境的差别：', '', '| 环境 | 前缀 |', '|---|---|', '| 开发 | `/api` |', '| 生产 | 空 |', '',
+      '```ts', "export const buildAssetUrl = (path: string, base = ''): string => path.startsWith(`${base}/api/`) ? path : `${base}/api/${path}`", '```'].join('\n') },
 ]
 const AGENTS = [
   { slug: 'researcher', name: '研究员', description: '查资料、读长文、列出处' },
@@ -142,7 +149,11 @@ async function stubApi(page, unknown) {
     if (/\/market\/items$/.test(p)) return json({ items: [] })
     if (/\/agent\/sessions\/[^/]+\/checkpoints$/.test(p)) return json({ checkpoints: [] })
     const cfg = p.match(/\/agent\/sessions\/([^/]+)\/config$/)
-    if (cfg) return json({ agent_config: configs[decodeURIComponent(cfg[1])] || {} })
+    if (cfg) {
+      const id = decodeURIComponent(cfg[1])
+      if (m === 'PATCH' || m === 'PUT') configs[id] = { ...(m === 'PATCH' ? configs[id] : {}), ...JSON.parse(req.postData() || '{}') }
+      return json({ agent_config: configs[id] || {} })
+    }
     if (/\/agent\/sessions\/[^/]+\/messages$/.test(p)) return json({ messages: p.includes('/st-1/') ? MESSAGES : p.includes('/st-3/') ? CHAT_MESSAGES : [] })
     const one = p.match(/\/agent\/sessions\/([^/]+)$/)
     if (one && m === 'PATCH') {
@@ -397,6 +408,141 @@ const SCENES = {
       ['at rest the narrow column draws no avatars', rest.avatars === 0, detail],
       ['keyboard up: still none, and the reply\'s text has not moved sideways', up.height === SCREEN.height - 300 && up.avatars === 0 && near(up.textLeft, rest.textLeft, 0.5), detail],
       ['keyboard up: a short conversation still ends at the input, as at rest', near(up.gap, rest.gap, 2), detail],
+    ]
+  },
+  // The input card on a phone: the send key sits beside the text; the row below holds + / model / microphone. The mode
+  // key is gone — the model key opens ONE native menu where model, thinking effort and mode each have a page of their
+  // own. The menu is native; a stand-in presenter takes its place here, for this scene only (with one installed every
+  // other menu of the app goes native too). The composer reads "is there a presenter" when it draws, so the chat is
+  // opened after the stand-in is in.
+  'chat-card': async (page) => {
+    if ((await stage.nav(page)) === 'detail') await stage.action(page, 'left')
+    await page.evaluate(async (url) => {
+      const st = window.__stage; st.menus = []; st.answer = null
+      st.offSheet = (await import(/* @vite-ignore */ url)).installNativeSheetPresenter(async (payload) => {
+        st.menus.push(payload)
+        const a = st.answer; st.answer = null
+        if (a === 'refuse') throw new Error('stage: the host cannot present')
+        return a
+      })
+    }, moduleUrl('../lcl/engine/nativeSheet.ts'))
+    await openChat(page, '发版说明草稿')
+    await page.waitForSelector(`${CHAT} .t2c-field`, { timeout: 10_000 })
+    const look = () => page.evaluate((q) => {
+      const root = document.querySelector(q)
+      const r = (sel) => { const b = root.querySelector(sel)?.getBoundingClientRect(); return b ? { x: b.left, y: b.top, w: b.width, h: b.height, right: b.right, bottom: b.bottom } : null }
+      // does a touch `dy` dp above / below the key's middle still land on the key
+      const takes = (sel, dy) => { const el = root.querySelector(sel); const b = el.getBoundingClientRect(); const at = document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2 + dy); return !!at && el.contains(at) }
+      const chip = root.querySelector('.model-pill-btn'); const wrap = chip.closest('.model-pill-wrap')
+      return {
+        modeKey: !!root.querySelector('.mode-pill-btn'), icon: !!chip.querySelector('svg.lucide-bot'), name: chip.querySelector('.pill-marquee')?.textContent || '',
+        nameCut: chip.querySelector('.pill-marquee').scrollWidth > chip.querySelector('.pill-marquee').clientWidth + 1,
+        danger: wrap.classList.contains('is-danger'), plan: wrap.classList.contains('is-plan'),
+        ta: r('.t2c-ta'), send: r('.t2c-field > .t2c-send'), sendInRow: !!root.querySelector('.t2c-row .t2c-send'), row: r('.t2c-row'),
+        add: r('.add-pill-btn'), chip: r('.model-pill-btn'), mic: r('.t2c-mic-control'), card: r('.t2c-card'),
+        touch: { add: takes('.add-pill-btn', 23) && takes('.add-pill-btn', -23), chip: takes('.model-pill-btn', 23) && takes('.model-pill-btn', -23), mic: takes('.t2c-mic-control', 23) && takes('.t2c-mic-control', -23) },
+      }
+    }, CHAT)
+    const pick = async (answer) => {
+      await page.evaluate((a) => { window.__stage.answer = a }, answer)
+      const before = await page.evaluate(() => window.__stage.menus.length)
+      await page.locator(`${CHAT} .model-pill-btn`).tap()
+      await page.waitForFunction((n) => window.__stage.menus.length > n, before, { timeout: 5000 }).catch(() => {})
+      await page.waitForTimeout(500)
+      return page.evaluate((n) => window.__stage.menus[n] || null, before)
+    }
+    const shoot = (name) => page.screenshot({ path: path.join(OUT, `${name}${DARK ? '-dark' : ''}.png`) })
+    const rest = await look()
+    await shoot('chat-card-empty')
+    await page.locator(`${CHAT} .t2c-ta`).fill('好，那就今天合。合之前再跑一遍登录相关的测试，把结果贴给我')
+    await page.waitForTimeout(300)
+    const typed = await look()
+    await shoot('chat-card-typed')
+    await page.locator(`${CHAT} .t2c-ta`).fill('')
+    // the menu the model key opens
+    const menu = await pick(null) // null = the user closed it
+    const root = (menu?.sections || []).flatMap((x) => x.items)
+    const page2 = (id) => (root.find((i) => i.id === id)?.children || []).flatMap((x) => x.items)
+    const ids = (items) => items.map((i) => i.id)
+    const modeRow = root.find((i) => i.id === 'mode')
+    // picks go through the app's own setters: full access turns the model key red, plan mode tints it, a model renames it
+    await pick({ id: 'approval:full-auto' }); const full = await look()
+    await pick({ id: 'approval:auto-edit' })
+    await pick({ id: 'plan-mode' }); const plan = await look()
+    await pick({ id: 'plan-mode' })
+    await pick({ id: 'model:0:1' }); const other = await look()
+    await pick({ id: 'model:0:0' }); const back = await look()
+    // a host that cannot present: the mode key comes back (the mode is never out of reach) and the same touch goes on
+    // to the model menu the app had before
+    await pick('refuse'); await page.waitForTimeout(300)
+    const refused = { ...(await look()), modelMenu: await page.evaluate((q) => !!document.querySelector(`${q} .composer-menu--model`), CHAT) }
+    await page.keyboard.press('Escape')
+    await page.evaluate(() => { window.__stage.offSheet(); delete window.__stage.offSheet })
+    const d = (o) => JSON.stringify(o, (k, v) => (typeof v === 'number' ? Math.round(v * 10) / 10 : v))
+    return [
+      ['no mode key; the model key has no icon and shows the name in full', !rest.modeKey && !rest.icon && rest.name.includes('Stage Model A') && !rest.nameCut, d({ modeKey: rest.modeKey, icon: rest.icon, name: rest.name, nameCut: rest.nameCut })],
+      ['the send key sits beside the text, not in the row below; 48 dp', !!rest.send && !rest.sendInRow && rest.send.x >= rest.ta.right && rest.send.bottom <= rest.row.y + 0.5 && rest.send.w >= 47.5 && rest.send.h >= 47.5, d({ ta: rest.ta, send: rest.send, row: rest.row })],
+      ['a draft of two lines: the send key stays at the text\'s last line', typed.ta.h > rest.ta.h + 10 && near(typed.send.bottom, typed.ta.bottom, 4), d({ ta: typed.ta, send: typed.send })],
+      ['the row below is + · model · microphone: keys 44 dp, the model key 40 dp to the eye in a 48 dp box', rest.add.x < rest.chip.x && rest.chip.right <= rest.mic.x && rest.add.w >= 43.5 && rest.add.h >= 43.5 && rest.mic.w >= 43.5 && rest.mic.h >= 43.5 && rest.chip.h >= 47.5, d({ add: rest.add, chip: rest.chip, mic: rest.mic })],
+      ['each key of the row takes a touch 23 dp above and below its middle', rest.touch.add && rest.touch.chip && rest.touch.mic, d(rest.touch)],
+      ['the model key opens one menu: model, thinking effort, mode — each a row with its current value', menu?.kind === 'menu' && ids(root).slice(0, 3).join() === 'field:model,field:thinking,mode' && root[0].detail === 'Stage Model A' && !!root[1].detail && modeRow?.detail === '替我批准', d({ title: menu?.title, rows: root.map((i) => [i.id, i.label, i.detail]) })],
+      ['the model page lists the catalog with a search field; the mode page holds plan mode and the approval tiers', page2('field:model').map((i) => i.label).join() === 'Stage Model A,Stage Model B' && !!root[0].search && ['plan-mode', 'approval:readonly', 'approval:auto-edit', 'approval:full-auto'].every((id) => ids(page2('mode')).includes(id)), d({ model: page2('field:model').map((i) => [i.id, i.label, !!i.checked]), mode: ids(page2('mode')) })],
+      ['full access picked there turns the model key red; plan mode tints it; both go back', full.danger && !full.plan && plan.plan && !plan.danger && !back.danger && !back.plan, d({ full: [full.danger, full.plan], plan: [plan.danger, plan.plan], back: [back.danger, back.plan] })],
+      ['a model picked there is the one in use', other.name.includes('Stage Model B') && back.name.includes('Stage Model A'), d({ other: other.name, back: back.name })],
+      ['a host that cannot present the menu: the mode key is back, and that touch opened the model menu instead', refused.modeKey && refused.modelMenu, d({ modeKey: refused.modeKey, modelMenu: refused.modelMenu })],
+    ]
+  },
+  // A table wider than the screen scrolls sideways in its own box (cells that fit on a line are not broken; a cell that
+  // is a sentence still wraps); a table that fits stays as it was. Before, five columns were squeezed into the width.
+  'chat-table': async (page) => {
+    await openChat(page, '登录页验证码不显示')
+    await page.waitForSelector(`${CHAT} .t2-asst .t2-content table`, { timeout: 10_000 })
+    const m = await page.evaluate((q) => {
+      const root = document.querySelector(q)
+      const [wide, small] = [...root.querySelectorAll('.t2-asst .t2-content table')]
+      wide.scrollIntoView({ block: 'center' })
+      // lines of text in a cell (its box is as tall as the row, so the text itself is measured): tops more than 8 dp apart
+      const lines = (el) => { const r = document.createRange(); r.selectNodeContents(el); const tops = [...r.getClientRects()].map((b) => b.top).sort((a, b) => a - b); return tops.filter((t, i) => !i || t - tops[i - 1] > 8).length }
+      const cells = [...wide.querySelectorAll('td')]
+      const col = root.querySelector('.t2-asst .t2-content').getBoundingClientRect()
+      const mask = getComputedStyle(wide).maskImage || getComputedStyle(wide).webkitMaskImage
+      return {
+        wide: { scrollW: wide.scrollWidth, clientW: wide.clientWidth, h: wide.getBoundingClientRect().height, right: wide.getBoundingClientRect().right, colRight: col.right,
+          short: cells.filter((c) => !c.hasAttribute('data-long')).map(lines), long: cells.filter((c) => c.hasAttribute('data-long')).map((c) => ({ lines: lines(c), text: c.textContent.length })) },
+        small: { scrollW: small.scrollWidth, clientW: small.clientWidth }, timelines: CSS.supports('animation-timeline', 'scroll()'), fade: getComputedStyle(wide).getPropertyValue('--t2-table-fade-r').trim(), smallFade: getComputedStyle(small).getPropertyValue('--t2-table-fade-r').trim(), mask: (mask || '').slice(0, 24),
+      }
+    }, CHAT)
+    await page.waitForTimeout(300)
+    await page.screenshot({ path: path.join(OUT, `chat-table-start${DARK ? '-dark' : ''}.png`) })
+    const end = await page.evaluate(async (q) => {
+      const wide = document.querySelector(`${q} .t2-asst .t2-content table`)
+      wide.scrollLeft = wide.scrollWidth; await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))
+      return { left: wide.scrollLeft, l: getComputedStyle(wide).getPropertyValue('--t2-table-fade-l').trim(), r: getComputedStyle(wide).getPropertyValue('--t2-table-fade-r').trim() }
+    }, CHAT)
+    const d = JSON.stringify(m)
+    return [
+      ['the wide table scrolls sideways inside the column instead of being squeezed', m.wide.scrollW > m.wide.clientW + 40 && m.wide.right <= m.wide.colRight + 0.5, d],
+      ['its short cells each stay on one line; the cell that is a sentence wraps', m.wide.short.length >= 12 && m.wide.short.every((n) => n === 1) && m.wide.long.length >= 1 && m.wide.long.every((c) => c.lines >= 2), d],
+      ['the table that fits does not scroll', m.small.scrollW <= m.small.clientW + 1, d],
+      // an engine without scroll-driven animations has no fade at all (nothing to check then); one that has them must show it
+      ['where the engine has scroll-driven animations: the side with more to see fades, the other does not', !m.timelines || (m.mask.includes('gradient') && m.fade === '28px' && end.left > 0 && end.l === '28px' && end.r === '0px' && m.smallFade === '0px'), JSON.stringify({ timelines: m.timelines, mask: m.mask, start: m.fade, end, small: m.smallFade })],
+    ]
+  },
+  // Two small keys a finger has to find: the "thinking" row (22 dp tall) and a code block's copy key (28 dp). They look
+  // the same; a touch a little outside them still lands.
+  'chat-touch': async (page) => {
+    await openChat(page, '登录页验证码不显示')
+    await page.waitForSelector(`${CHAT} .t2-asst .t2-content pre`, { timeout: 10_000 })
+    const m = await page.evaluate((q) => {
+      const root = document.querySelector(q)
+      const takes = (el, dx, dy) => { el.scrollIntoView({ block: 'center' }); const b = el.getBoundingClientRect(); const at = document.elementFromPoint(b.left + b.width / 2 + dx, b.top + b.height / 2 + dy); return { ok: !!at && el.contains(at), h: b.height, w: b.width } }
+      const think = root.querySelector('.t2-think-head'); const copy = root.querySelector('.t2-asst .t2-content pre ~ .icon-btn')
+      return { think: think && [takes(think, 0, -22), takes(think, 0, 22)], copy: copy && [takes(copy, 0, 23), takes(copy, -23, 0)] }
+    }, CHAT)
+    const d = JSON.stringify(m)
+    return [
+      ['the thinking row takes a touch 22 dp above and below its middle', !!m.think && m.think.every((x) => x.ok), d],
+      ['the copy key of a code block takes a touch 23 dp below and beside its middle', !!m.copy && m.copy.every((x) => x.ok), d],
     ]
   },
   'chat-leave': async (page) => {
