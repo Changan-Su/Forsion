@@ -87,6 +87,7 @@ export const CHAT_PRESET_DEFERRED: ReadonlySet<string> = new Set([
   'amadeus_list_notes', 'amadeus_read_note', 'amadeus_list_calendars', 'amadeus_list_events',
   'calculator', 'generate_image', 'edit_image', 'read_log', 'log_event',
   'session_status', // 只读:本会话的上下文占用 / 已花 token / 用时(「上下文还剩多少」多半就是在聊天里问的)
+  'forsion_account', 'forsion_account_action', // Forsion 账号:读额度 / 积分 / 套餐;动作每次由用户在卡上确认(approval:'always',聊天会话照样问)
   // 手机操控 T1(clientCapability 中央闸另管可见性;带能力的工具在 chat 面按能力放行,这里列名是让内置五件按需装载)
   'phone_open', 'phone_navigate', 'phone_compose', 'phone_system', 'phone_control',
 ]);

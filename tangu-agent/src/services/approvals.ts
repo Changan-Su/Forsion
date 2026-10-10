@@ -38,6 +38,7 @@ import { MUSE_AGENT_SLUG, AGENT_MAX_ITERATIONS_MIN, buildAgentDef, getAgent, isV
 import { validateEntryInput } from './agentSchedule.js';
 import { validateTriggerInput } from './museTriggers.js';
 import { describeAppSettingsChange, touchesWorkspaceSetting } from './appSettings.js';
+import { accountActionPreview } from '../tools/builtin/forsionAccount.js';
 
 export type ApprovalMode = 'readonly' | 'auto-edit' | 'full-auto' | 'custom';
 
@@ -404,6 +405,7 @@ function rawPreview(call: ToolCall, opts: { keptActions?: unknown[] | null } = {
     const parts = [args.model ? `model → ${args.model}` : '', args.thinking_level ? `thinking → ${args.thinking_level}` : ''].filter(Boolean);
     return `session settings: ${parts.join(' · ') || '(nothing)'}${args.reason ? ` — ${String(args.reason).slice(0, 200)}` : ''}`;
   }
+  if (name === 'forsion_account_action') return accountActionPreview(args);
   if (name === 'update_app_settings') {
     const v = args.values && typeof args.values === 'object' && !Array.isArray(args.values) ? (args.values as Record<string, unknown>) : {};
     const parts = Object.entries(v).map(([k, x]) => `${String(args.section ?? '')}.${k} → ${JSON.stringify(x)}`);

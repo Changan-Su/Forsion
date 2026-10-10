@@ -26,6 +26,8 @@ const COVERED_TOOLS = new Set([
   'read_computer_history',
   // 只读本 run 的循环状态(上下文占用 / 已花 token / 步数)与一条固定的会话汇总查询;不收路径、不执行任何东西。
   'session_status',
+  // 只经 brain 请求 Forsion 云端的几条固定接口(账号额度 / 积分 / 反馈);不收路径、不碰本机文件。
+  'forsion_account', 'forsion_account_action',
   'load_tools', 'ask_user', 'exit_plan_mode', 'todo_read', 'todo_write', 'get_datetime',
 ]);
 

@@ -26,6 +26,7 @@ import { createTanguProfile } from '../src/profiles/index.js';
 import { gateToolCall, isAlwaysAllowed, resolveApproval, toolNeedsApproval } from '../src/services/approvals.js';
 import { registerToolProvider, unregisterToolProvider } from '../src/tools/toolRegistry.js';
 import { isAutomationTool } from '../src/services/automation.js';
+import '../src/tools/registry.js'; // 内置工具登记(forsion_account_action 是头一个用 'always' 的)
 import type { ToolCall } from '../src/core/types.js';
 
 const profile = createTanguProfile({ sandboxMode: 'none' });
@@ -126,6 +127,13 @@ describe("capabilities.approval: 'always'", () => {
       expect(r.decision.action, JSON.stringify(ctx)).toBe('reject');
       expect(r.decision.rejectReason).toMatch(/confirm/);
     }
+  });
+
+  it('头一个用它的内置工具 forsion_account_action:云端 / 聊天会话(非 host、没有档位)照样弹卡,卡上是人话', async () => {
+    const r = await gate(call('forsion_account_action', { action: 'move_quota_to_background', percent: 25 }), { execMode: 'sandbox', approvalMode: undefined });
+    expect(r.asked).toBe(true);
+    expect(r.request.reason.kind).toBe('always');
+    expect(r.request.preview).toMatch(/^Forsion account: move 25% of the AI quota limit to the background quota/);
   });
 
   it('应用自带工具(profile.toolLoadout.providers)声明的 always 同样作数:云端会话照样问', async () => {
