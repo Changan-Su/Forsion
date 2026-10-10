@@ -45,8 +45,12 @@ export function bindDevTanguHome(): void {
   if (devMode && !process.env.TANGU_HOME) process.env.TANGU_HOME = tanguDataDir()
 }
 
-/** 默认本机工作区(会话 host 执行 cwd 兜底)。 */
-export const defaultWorkspaceDir = (): string => join(homedir(), devMode ? 'Forsion-Dev' : 'Forsion')
+/** 默认本机工作区(会话 host 执行 cwd 兜底;默认笔记库 Amadeus/、Coding / 造物的 Project/ 都在它下面)。
+ *  FORSION_WORKSPACE_DIR 只在 dev 态认,给台架用(scripts/lib/launch-electron.cjs 自动补):临时 TANGU_HOME 管不到这里,
+ *  不挪的话没预置库配置的台架一恢复库,打开的就是开发者真实的 ~/Forsion-Dev/Amadeus。
+ *  刻意不做成「跟着 TANGU_HOME 走」:bindDevTanguHome 会给平时的 dev 实例也设上 TANGU_HOME,那样真实工作区就被挪走了。 */
+export const defaultWorkspaceDir = (): string =>
+  (devMode && process.env.FORSION_WORKSPACE_DIR?.trim()) || join(homedir(), devMode ? 'Forsion-Dev' : 'Forsion')
 
 const lstatOrNull = (p: string): ReturnType<typeof lstatSync> | null => {
   try { return lstatSync(p) } catch { return null }
