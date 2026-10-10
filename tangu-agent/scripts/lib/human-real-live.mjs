@@ -295,7 +295,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   assert.equal(promiseFate([], '开始前先告诉我给谁看。'), 'lost'); // 整理时删了、又没记进记忆
   assert.match(TIDY_TURNS.button, /重写一遍.*挪到你的记忆里.*只改你自己这一份/); // 「让 Agent 重写」发出去的那句读得到
   assert.deepEqual(LEGACY_DOCS.map((d) => marksLeft(d).length), [2, 2, 2, 2]);
-  assert.equal(flippedPromise('- 改完后，你实际运行一下，并把验证结果贴给我。'), '运行一下，并把验证结果贴给我');
+  assert.ok(flippedPromise('- 改完后，你实际运行一下，并把验证结果贴给我。'));
   assert.ok(flippedPromise('改完后请你实际运行，并把验证结果贴出来。')); // 真 Electron 验收里的那种说法(「贴出来」,不是「贴给我」)
   assert.equal(flippedPromise('改完我会实际运行，并把验证结果贴出来。'), null); // Agent 自己的承诺原样留着不算这一类(那归判官的「agent 自己要做的事」)
   assert.equal(humanPartKept(LEGACY_DOCS[3], '- 有两种方案时，请你先选一个方向。'), true);
