@@ -125,12 +125,12 @@ export async function writeHuman(scope: HumanScope, input: {
   return withMemoryDirectoryLock(loc.historyDir, () => loc.scope.kind === 'agent' ? withMemoryDirectoryLock(loc.base, commit) : commit());
 }
 
-/** 改之前有、改之后没有了的那些行(原样;标题、分隔线、空行不算;去重)。改写过的行也在里面 —— 程序分不出「换了说法」和「拿掉了」,交回去由模型自己看。
- *  ponytail: 按整行比,最多回 40 行;一次拿掉更多的文档少见,到时再分批。 */
-export function removedLines(before: string, after: string): string[] {
-  const lines = (s: string) => s.split('\n').map((l) => l.trim()).filter((l) => l && !/^#{1,6}\s/.test(l) && !/^[-*_]{3,}$/.test(l));
+/** 改之前有、改之后没有了的那些行(原样;标题、分隔线、空行不算;重复的行算一行)。改写过的行也在里面 —— 程序分不出「换了说法」和「拿掉了」。
+ *  行号按改之前那份文档里的顺序编,不随新内容变:模型第二次交上来的内容和第一次略有出入时,同一个号仍指同一行。 */
+export function removedLines(before: string, after: string): Array<{ line: number; text: string }> {
+  const lines = (s: string) => [...new Set(s.split('\n').map((l) => l.trim()).filter((l) => l && !/^#{1,6}\s/.test(l) && !/^[-*_]{3,}$/.test(l)))];
   const kept = new Set(lines(after));
-  return [...new Set(lines(before).filter((l) => !kept.has(l)))].slice(0, 40);
+  return lines(before).map((text, i) => ({ line: i + 1, text })).filter((x) => !kept.has(x.text));
 }
 
 /** Even an emptied/removed handbook must be represented: an undo in the UI is a

@@ -81,7 +81,7 @@ export function TanguDetailsView({ extendView }: Pick<ViewProps, 'extendView'>) 
       {viewing && <button type="button" className="profile-text-action" data-act="details-back" onClick={() => useDetailsSubject.setState({ subject: null })}>{t('agentProfile.backToCurrent')}</button>}</div>
     {viewing === 'project' && subjectProject && carrier ? <ProjectProfile key={`subject:${subjectProject.workspace.path}`} session={carrier} config={carrierConfig || carrier.agent_config || EMPTY_CONFIG}
         workspace={subjectProject.workspace} humanJump={subject?.human} currentSessionId={sessionId} renderAgent={renderMember} renderTeam={renderTeam} />
-      : viewing === 'agent' && subjectAgent ? <AgentProfile key={`subject:${subjectAgent.slug}`} agent={subjectAgent} compact extendView={extendView} humanJump={subject?.human} evolutionJumpAt={subject?.evolution || 0} />
+      : viewing === 'agent' && subjectAgent ? <AgentProfile key={`subject:${subjectAgent.slug}`} agent={subjectAgent} compact extendView={extendView} humanJump={subject?.human} evolutionJumpAt={subject?.evolution || 0} rewriteSessionId={sessionId} />
       : project && s.session ? <ProjectProfile key={project.path} session={s.session} config={config} workspace={project} renderAgent={renderMember} renderTeam={renderTeam} />
       : config.groupChat || config.teamSlug ? <TeamProfile key={`${sessionId}:${config.teamSlug || ''}`} session={s.session} config={config} renderMember={renderMember} /> : config.engineId || config.soloEngineId ? <section className="agent-profile-team"><h3>{s.engines.find((e) => e.id === (config.engineId || config.soloEngineId))?.name || config.engineId || config.soloEngineId}</h3><div className="agent-current-session"><strong>{s.session?.title}</strong><span>{s.session?.project_name || config.cwd}</span></div></section> : agent ? <AgentProfile key={agent.slug} agent={agent} compact sessionId={sessionId} extendView={extendView} /> : <p className="agent-profile-muted">{t('agentProfile.noAgent')}</p>}
   </div>
@@ -222,7 +222,8 @@ function EquipmentRow({ name, description, checked, onChange, chip, tinted }: { 
 }
 
 /** evolutionJumpAt:一次性跳到「成长 › 进化」的令牌(提名提醒点开要落在工作笔记上)。令牌变了才跳;首挂时也按它初始化,免得先闪一下「配置」。 */
-function AgentProfile({ agent, compact = false, sessionId, evolutionJumpAt = 0, humanJump, extendView }: { agent: NormalAgentDef; compact?: boolean; sessionId?: string | null; evolutionJumpAt?: number; humanJump?: HumanJump; extendView?: ViewProps['extendView'] }) {
+/** rewriteSessionId:这一页不属于某个会话(从更新卡 / 侧栏「查看详情」进来)时,协作说明的「重写」发给哪个会话。只管这一件事,别的照旧按没有会话处理。 */
+function AgentProfile({ agent, compact = false, sessionId, rewriteSessionId, evolutionJumpAt = 0, humanJump, extendView }: { agent: NormalAgentDef; compact?: boolean; sessionId?: string | null; rewriteSessionId?: string | null; evolutionJumpAt?: number; humanJump?: HumanJump; extendView?: ViewProps['extendView'] }) {
   const { t } = useI18n()
   const id = useId()
   const draftKey = `${compact ? 'details' : 'space'}:${agent.slug}`
@@ -231,7 +232,12 @@ function AgentProfile({ agent, compact = false, sessionId, evolutionJumpAt = 0, 
     config: sessionId ? a.configBySession[sessionId] : undefined, session: a.sessions.find((x) => x.id === sessionId),
     running: sessionId ? !!a.runningBySession[sessionId] : Object.entries(a.runningBySession).some(([id, run]) => !!run && a.configBySession[id]?.agentSlug === agent.slug),
     connected: a.connState === 'ok', usage: sessionId ? a.usageBySession[sessionId] : undefined,
+    rewriteConfig: (sessionId || rewriteSessionId) ? a.configBySession[(sessionId || rewriteSessionId)!] : undefined, rewriteRunning: !!(rewriteSessionId && a.runningBySession[rewriteSessionId]), defaultSlug: a.defaultAgentSlug,
   })))
+  // 「重写」和 /refine 同一道门(manage_human 只在本机直连、非计划模式的会话里有),另加一条:那个会话的 Agent 就是这一页的 Agent,否则它改的是别人的那份
+  const rewriteSid = sessionId || rewriteSessionId
+  const rewriteHuman = rewriteSid && s.rewriteConfig?.execMode === 'host' && !s.rewriteConfig.planMode && (s.rewriteConfig.agentSlug || s.rewriteConfig.soloAgentSlug || s.defaultSlug) === agent.slug
+    ? () => { void useApp.getState().send(t('human.rewrite.agentPrompt'), [], undefined, undefined, undefined, rewriteSid) } : null
   const [section, setSection] = useState<Section>(humanJump ? 'human' : evolutionJumpAt ? 'growth' : 'config')
   const [growth, setGrowth] = useState<Growth>(evolutionJumpAt ? 'evolution' : 'memory')
   const [visitedMemory, setVisitedMemory] = useState(false)
@@ -531,10 +537,7 @@ function AgentProfile({ agent, compact = false, sessionId, evolutionJumpAt = 0, 
       </>}
       {section === 'skills' && <AgentSkillsPanel cfg={s.cfg} agentSlug={agent.slug} surface={compact ? 'details' : 'space'} selectedIds={draft.enabledSkillIds} onSelectedIds={(enabledSkillIds) => patch({ enabledSkillIds })} extendView={extendView} />}
       {section === 'mcp' && equipment('mcp')}
-      {/* 「重写」和 /refine 同一道门(manage_human 只在本机直连、非计划模式的会话里有),另加一条:这个会话的 Agent 就是这一页的 Agent,否则它改的是别人的那份 */}
-      {section === 'human' && <HumanCollaborationPanel engine={homeTarget()} cfg={s.cfg} target={{ kind: 'agent', slug: agent.slug }} name={agent.name} running={s.running} jump={humanJump}
-        onRewrite={sessionId && s.config?.execMode === 'host' && !s.config?.planMode && (s.config.agentSlug || s.config.soloAgentSlug || useApp.getState().defaultAgentSlug) === agent.slug
-          ? () => { void useApp.getState().send(t('human.rewrite.agentPrompt'), [], undefined, undefined, undefined, sessionId) } : null} />}
+      {section === 'human' && <HumanCollaborationPanel engine={homeTarget()} cfg={s.cfg} target={{ kind: 'agent', slug: agent.slug }} name={agent.name} running={s.running || s.rewriteRunning} jump={humanJump} onRewrite={rewriteHuman} />}
       {section === 'growth' && <>
         {/* 两层各一张分段卡:标题 + 一句话说清它是什么。待复盘候选的角标跟着「进化」走。 */}
         <div className="profile-segment" role="group" aria-label={t('agentProfile.growth')}>{(['memory', 'evolution'] as const).map((g) =>
