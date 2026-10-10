@@ -2989,7 +2989,9 @@ Then reply with only the command output.`,
     let landed = false;
     if (message) {
       try {
-        const r = await api('/agent/project-context/git/commit', { method: 'POST', body: JSON.stringify({ sessionId: session.id, message }) });
+        // 面板提交必须带它给用户看过的那份清单的指纹(09-27 起;不带 = 400 changes_changed),和界面一样先取清单
+        const pending = await api('/agent/project-context/git/pending', { method: 'POST', body: JSON.stringify({ sessionId: session.id }) });
+        const r = await api('/agent/project-context/git/commit', { method: 'POST', body: JSON.stringify({ sessionId: session.id, message, expect: pending.token }) });
         landed = r?.commit?.subject === message.split('\n')[0] && g('log', '-1', '--format=%s') === message.split('\n')[0] && g('status', '--porcelain') === '';
       } catch (e) { apiErr ||= String(e?.message || e); }
     }
