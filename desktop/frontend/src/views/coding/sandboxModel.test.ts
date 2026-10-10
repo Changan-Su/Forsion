@@ -35,7 +35,9 @@ describe('sandbox evidence prompt', () => {
   it('states what the host recorded: registered views, and why a bundled Space is hidden', () => {
     const none = sandboxPrompt({ ...evidence, setupError: null, views: [] })
     expect(none).toContain('Views registered by this load (host record): none.')
+    expect(none).toContain('If this plugin is meant to register a view: setup(ctx) did not throw')
     expect(none).toContain('missing its closing brace')
+    expect(sandboxPrompt({ ...evidence, views: [] })).not.toContain('did not throw') // 这份夹具的 setup 抛了错:不许说它没抛
     const some = sandboxPrompt({ ...evidence, views: ['desk', 'bin'], hiddenSpaces: ['hidden Space demo: needs view mesh, which this plugin did not register'] })
     expect(some).toContain('Views registered by this load (host record): desk, bin')
     expect(some).toContain('Host record: hidden Space demo: needs view mesh')

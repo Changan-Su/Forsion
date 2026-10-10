@@ -5,6 +5,9 @@
  *
  * 这里钉的是结论对不对,和「正常写法不误报」(有条件才注册、等宿主能力的插件在 28 个已装插件上扫出过误报)。
  * 脚本当独立进程跑:它本来就是给 agent 用 `node …` 调的。
+ *
+ * 它要**执行**别人写的 main.js(agent 在用户机器上跑),所以还钉:插件代码够不着本进程(替身对象全在隔离上下文里造)、
+ * 卡死的会被杀掉;以及拿不准的(注册代码在条件后面 —— 体检时没有插件存的数据)报「未定」,不报成插件的错。
  */
 import { describe, it, expect, afterAll } from 'vitest';
 import { spawnSync } from 'node:child_process';
@@ -35,7 +38,7 @@ function check(dir: string | null, ...args: string[]) {
   return run(dir ? [dir, ...args] : args);
 }
 function run(args: string[], env: NodeJS.ProcessEnv = process.env) {
-  const r = spawnSync(process.execPath, [SCRIPT, ...args], { encoding: 'utf8', timeout: 60_000, env });
+  const r = spawnSync(process.execPath, [SCRIPT, ...args], { encoding: 'utf8', timeout: 90_000, env });
   return { code: r.status, out: r.stdout + r.stderr };
 }
 
@@ -76,8 +79,82 @@ describe('forsion-plugin 技能的 check-plugin.mjs', () => {
 
   it('什么都没注册、注册代码在假条件后面(等宿主能力的插件)→ 只提示,不判错', () => {
     const r = check(plugin(`if (ctx.getLocale() === 'never') { ${VIEW} }`, { space: null }));
-    expect(r.out).toContain('sits behind a condition that was false here');
+    expect(r.out).toContain('did not run in this dry run: it sits behind a condition');
     expect(r.code).toBe(0);
+  });
+
+  it('Space 要的视图只在条件成立时注册(体检时没有插件存的数据)→ 报「未定」(退出码 3),不报成插件的错', () => {
+    const gated = check(plugin(`return (async () => { const cfg = await ctx.loadData(); if (cfg && cfg.enabled) { ${VIEW} } })()`));
+    expect(gated.out).toContain('Not decided: registration code exists in main.js but did not run in this dry run');
+    expect(gated.out).toContain('? Space "demo-space" may be hidden');
+    expect(gated.out).toContain('RESULT: undecided.');
+    expect(gated.out).not.toContain("a bug in this plugin's own main.js");
+    expect(gated.code).toBe(3);
+    // 没被调用的函数同理:别处有人引用它(可能有条件地调),就不是铁证
+    const called = check(plugin(`function addViews() { ${VIEW} }\nctx.app.onReady(addViews)`));
+    expect(called.out).toContain('inside function addViews');
+    expect(called.out).toContain('Something else in the file refers to that function');
+    expect(called.code).toBe(3);
+  });
+
+  it('插件代码够不着本进程:console / this / URL / ctx / 定时器 / 返回的 thenable 各条路拿到的都不是 process', () => {
+    const grab = (label: string, expr: string) => `try { t.push('${label}=' + String(${expr})) } catch (e) { t.push('${label}=threw') }`;
+    const src = [
+      'const t = []',
+      grab('console', "console.log.constructor('return typeof process')()"),
+      grab('this', "(function () { return this })().constructor.constructor('return typeof process')()"),
+      grab('URL', "URL.constructor('return typeof process')()"),
+      grab('ctx', "ctx.registerView.constructor('return typeof process')()"),
+      grab('promise', "ctx.loadData().constructor.constructor('return typeof process')()"),
+      grab('timer', "setTimeout.constructor('return typeof process')()"),
+      "ctx.registerCommand({ id: t.join(',') })",
+      "return { then(resolve) { let got = 'threw'; try { got = resolve.constructor('return typeof process')() } catch (e) {} ctx.registerCommand({ id: 'thenable=' + got }); resolve() } }",
+    ].join('\n');
+    const r = check(plugin(src, { space: null }));
+    expect(r.out).toContain('console=undefined,this=undefined,URL=,ctx=,promise=undefined,timer=undefined');
+    expect(r.out).toContain('thenable=undefined');
+    expect(r.out).not.toContain('=object');
+  });
+
+  it('加载时卡死(含 promise 回调里的死循环)→ 探针被杀掉,报告卡死而不是跟着挂住', () => {
+    const env = { ...process.env, FORSION_PLUGIN_CHECK_TIMEOUT_MS: '9000' };
+    const sync = run([plugin('for (;;) {}', { space: null })], env);
+    expect(sync.out).toContain('did not finish its synchronous part within 5 s');
+    expect(sync.code).toBe(1);
+    const micro = run([plugin('Promise.resolve().then(() => { for (;;) {} })', { space: null })], env);
+    expect(micro.out).toContain('did not finish loading within 9 s and was stopped');
+    expect(micro.code).toBe(1);
+  }, 60_000);
+
+  it('插件自带 sourceURL 不影响定位;帮助文案里以 import 开头的一行不算语法错;真的顶层 import 报语法错', () => {
+    const filler = Array.from({ length: 60 }, (_, i) => `  const x${i} = ${i}`).join('\n');
+    const named = check(plugin(`function render(el) {\n${filler}\n${VIEW}\n}\n//# sourceURL=probe.js`));
+    expect(named.out).toMatch(/sits inside function render, lines 1–\d+, which never ran/);
+    const help = check(plugin(`const HELP = \`\nimport a mesh from the menu\nexport it when done\n\`\n${VIEW}`));
+    expect(help.out).toContain('registerView × 1: desk');
+    expect(help.code).toBe(0);
+    const esm = check(plugin(`import x from 'y'\n${VIEW}`));
+    expect(esm.out).toContain('a top-level import / export is a syntax error for the host');
+    expect(esm.code).toBe(1);
+  });
+
+  it('很大的插件(几千个没跑到的函数)照样出结论 —— 探针的结果一次写不完管道,曾经被截断成「没有结果」', () => {
+    const many = Array.from({ length: 6000 }, (_, i) => `function unused${i}(a) { if (a) { return a + ${i} } return null }`).join('\n');
+    const r = check(plugin(`${many}\n${VIEW}`));
+    expect(r.out).toContain('registerView × 1: desk');
+    expect(r.code).toBe(0);
+  });
+
+  it('只带捆绑内容、没有 main.js 的包(宿主允许)不算缺入口;声明了 main 却没有那个文件才算', () => {
+    const dir = plugin('', { space: null });
+    rmSync(join(dir, 'main.js'));
+    writeFileSync(join(dir, 'manifest.json'), JSON.stringify({ id: 'demo', name: 'Demo', version: '1.0.0', apiVersion: 1 }));
+    mkdirSync(join(dir, 'skills', 'helper'), { recursive: true });
+    const bundle = check(dir);
+    expect(bundle.out).toContain('a bundle-only plugin');
+    expect(bundle.code).toBe(0);
+    writeFileSync(join(dir, 'manifest.json'), JSON.stringify({ id: 'demo', name: 'Demo', version: '1.0.0', apiVersion: 1, main: 'main.js' }));
+    expect(check(dir).out).toContain('"main" points at main.js, which does not exist');
   });
 
   it('求值抛错 → 报行号', () => {
@@ -93,10 +170,15 @@ describe('forsion-plugin 技能的 check-plugin.mjs', () => {
     expect(r.code).toBe(0);
   });
 
-  it('Space 写错了插件 id / 视图 id / JSON 坏了 → 各自说清', () => {
-    const wrongOwner = check(plugin(VIEW, { space: { id: 'demo-space', name: 'D', layout: { main: [{ type: 'plugin:other:desk' }] } } }));
-    expect(wrongOwner.out).toContain('the view type must be plugin:demo:desk');
-    expect(wrongOwner.code).toBe(1);
+  it('Space 用了别的插件的同名视图(可以是有意的组合)→ 只提示;视图 id 写错 / JSON 坏了 / 配方缺 name → 各自说清', () => {
+    const other = check(plugin(VIEW, { space: { id: 'demo-space', name: 'D', layout: { main: [{ type: 'plugin:other:desk' }] } } }));
+    expect(other.out).toContain('if you meant your own view, the type is plugin:demo:desk');
+    expect(other.out).not.toContain('will be HIDDEN');
+    expect(other.code).toBe(0);
+    const noName = check(plugin(VIEW, { space: { id: 'demo-space', layout: { main: [{ type: 'plugin:demo:desk', params: 42 }] } } }));
+    expect(noName.out).toContain('"name" must be a non-empty string or { zh?, en? }');
+    expect(noName.out).toContain('"params" of plugin:demo:desk must be an object');
+    expect(noName.code).toBe(1);
     const wrongView = check(plugin(VIEW, { space: { id: 'demo-space', name: 'D', layout: { main: [{ type: 'plugin:demo:desc' }] } } }));
     expect(wrongView.out).toContain('No ctx.registerView call in main.js uses the id desc (registered: desk)');
     expect(wrongView.code).toBe(1);

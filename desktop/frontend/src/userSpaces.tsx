@@ -351,7 +351,7 @@ async function loadUserSpacesOnce(): Promise<void> {
     }
     if (!wanted.has(r.spec.id)) wanted.set(r.spec.id, { spec: r.spec, dirSlug: slug, plugin, raw: json, iconUrl })
   }
-  setHiddenPluginSpaces(hidden)
+  setHiddenPluginSpaces(hidden) // 非主窗是空操作:它们跟主窗的记录(见 pluginSpaceHealth)
 
   // 先注销:此前注册的插件 Space,如今主人被禁用/卸载、文件消失,或**配方内容变了**(插件更新,
   // codex P1-7)→ 撤下;内容不变则不动。用户 Space 不在此列(删除走 deleteUserSpace)。

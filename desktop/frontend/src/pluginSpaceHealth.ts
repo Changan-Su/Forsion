@@ -21,8 +21,8 @@ registerMessages({
     en: 'The view it needs ({views}) was never registered. The plugin loaded without an error, but its code did not register this view, so the problem is most likely in the plugin’s own main.js.',
   },
   'plugins.spaceHidden.otherViews': {
-    zh: '它需要的视图 {views} 这台设备上没有（来自别的插件，或更新版本的 Forsion）。',
-    en: 'The view it needs ({views}) is not available on this device. It comes from another plugin or from a newer version of Forsion.',
+    zh: '它需要的视图 {views} 在这台设备上没有注册。可能是提供它的插件没装或没开、需要更新版本的 Forsion，或者 space.json 里的类型写错了。',
+    en: 'The view it needs ({views}) is not registered on this device. The plugin that provides it may be missing or switched off, it may need a newer version of Forsion, or the type in space.json may be misspelled.',
   },
   'plugins.spaceHidden.minApp': { zh: '需要 Forsion {need} 或更高版本（当前 {have}）。', en: 'Needs Forsion {need} or later (this is {have}).' },
   'plugins.spaceHidden.invalid': { zh: '它的 space.json 没有通过校验。', en: 'Its space.json did not pass validation.' },
@@ -46,9 +46,40 @@ export interface HiddenSpace {
 
 export const useHiddenPluginSpaces = create<{ byPlugin: Record<string, HiddenSpace[]> }>(() => ({ byPlugin: {} }))
 
-/** 每跑完一遍配方装载整份换掉;内容没变就保持原引用(订阅者不白白重渲)。 */
-export function setHiddenPluginSpaces(byPlugin: Record<string, HiddenSpace[]>): void {
+/** 内容没变就保持原引用(订阅者不白白重渲)。 */
+function apply(byPlugin: Record<string, HiddenSpace[]>): void {
   if (JSON.stringify(byPlugin) !== JSON.stringify(useHiddenPluginSpaces.getState().byPlugin)) useHiddenPluginSpaces.setState({ byPlugin })
+}
+
+/** Space 出没出现以**主窗**为准(只有它有功能条)。设置浮窗 / mini / 独立窗各有自己的插件宿主,能注册的视图可以和主窗不同
+ *  (ctx.viewLocations 按窗口给,插件可以据此决定注册什么)—— 拿自己那份算,会把主窗里好好的 Space 报成「未显示」。
+ *  所以主窗把结果写进 localStorage,别的窗口只读它(followMainWindowSpaceHealth)。 */
+const SHARED_KEY = 'forsion_plugin_space_health'
+let follower = false
+
+/** 主窗每跑完一遍配方装载整份换掉。别的窗口调它是空操作(它们跟主窗的)。 */
+export function setHiddenPluginSpaces(byPlugin: Record<string, HiddenSpace[]>): void {
+  if (follower) return
+  apply(byPlugin)
+  try { localStorage.setItem(SHARED_KEY, JSON.stringify(byPlugin)) } catch { /* 没有 localStorage(单测 / 存储满):本窗照常 */ }
+}
+
+/** 非主窗装插件宿主时调一次:此后本窗的「没出现的 Space」跟主窗的记录走。 */
+export function followMainWindowSpaceHealth(): void {
+  follower = true
+  const read = (): void => {
+    let raw: unknown = null
+    try { raw = JSON.parse(localStorage.getItem(SHARED_KEY) || '{}') } catch { /* 写坏了当作没有 */ }
+    const out: Record<string, HiddenSpace[]> = {}
+    if (raw && typeof raw === 'object') {
+      for (const [id, list] of Object.entries(raw as Record<string, unknown>)) {
+        if (Array.isArray(list)) out[id] = list.filter((h): h is HiddenSpace => !!h && typeof h === 'object' && typeof (h as HiddenSpace).slug === 'string')
+      }
+    }
+    apply(out)
+  }
+  read()
+  window.addEventListener('storage', (event) => { if (event.key === SHARED_KEY || event.key === null) read() })
 }
 
 type Translate = (key: string, vars?: Record<string, string | number>) => string
@@ -58,8 +89,10 @@ const short = (view: string): string => view.replace(/^plugin:[^:]+:/, '')
 const ownMissing = (pluginId: string, h: HiddenSpace): string[] => (h.views ?? []).filter((v) => v.startsWith(`plugin:${pluginId}:`))
 
 export function hiddenSpaceName(h: HiddenSpace, locale: string): string {
+  // 配方校验只要求 zh / en 里有一个是字符串,另一个可以是任何东西:只认字符串,别把对象交给 React 去渲染。
   const n = h.name
-  return (typeof n === 'string' ? n : locale === 'zh' ? n?.zh ?? n?.en : n?.en ?? n?.zh) || h.id || h.slug
+  const pick = typeof n === 'string' ? [n] : locale === 'zh' ? [n?.zh, n?.en] : [n?.en, n?.zh]
+  return pick.find((x): x is string => typeof x === 'string' && !!x.trim()) || h.id || h.slug
 }
 
 export function hiddenSpaceReason(t: Translate, pluginId: string, h: HiddenSpace): string {
@@ -71,13 +104,32 @@ export function hiddenSpaceReason(t: Translate, pluginId: string, h: HiddenSpace
     : t('plugins.spaceHidden.otherViews', { views: (h.views ?? []).join(t('common.listSep')) })
 }
 
+/** 记录是上一遍配方装载时留的;插件之后可能被热重载修好了(开发副本保存即重载,不重扫配方)。
+ *  缺的全是它自己的视图、而且现在都注册上了的那几条不再算数 —— 否则会一边列着这个视图、一边说它没注册。
+ *  ponytail: 这时 Space 本身要到下一遍配方装载才回到功能条上(重载路径不重扫是原有行为,这里不改)。 */
+function stillHidden(pluginId: string, hidden: HiddenSpace[], registered: readonly string[]): HiddenSpace[] {
+  if (follower) return hidden // 别的窗口注册的视图和主窗不是一回事,照主窗的记录原样给
+  const out = hidden.filter((h) => {
+    const own = ownMissing(pluginId, h)
+    return h.code !== 'missing-views' || own.length !== (h.views ?? []).length || own.some((v) => !registered.includes(short(v)))
+  })
+  return out.length === hidden.length ? hidden : out
+}
+const viewsOf = (pluginId: string): string[] => usePluginStore.getState().views.filter((v) => v.pluginId === pluginId).map((v) => v.item.id)
+
 /** 这个插件此刻有没有「开着却没出现」的 Space。没在跑的插件不算:那是另一种状态,徽标已经在说了。 */
 export function useHiddenSpacesOf(pluginId: string | null | undefined): HiddenSpace[] {
   const hidden = useHiddenPluginSpaces((s) => (pluginId ? s.byPlugin[pluginId] : undefined))
   const active = usePluginStore((s) => (pluginId ? s.activeIds.includes(pluginId) : false))
-  return active && hidden ? hidden : NONE
+  const registered = useRegisteredViews(pluginId)
+  return useMemo(() => (pluginId && active && hidden ? stillHidden(pluginId, hidden, registered) : NONE), [pluginId, active, hidden, registered])
 }
 const NONE: HiddenSpace[] = []
+/** 非 React 读(agent 命令)。 */
+function hiddenSpacesOf(pluginId: string): HiddenSpace[] {
+  const hidden = useHiddenPluginSpaces.getState().byPlugin[pluginId]
+  return hidden && usePluginStore.getState().activeIds.includes(pluginId) ? stillHidden(pluginId, hidden, viewsOf(pluginId)) : NONE
+}
 
 /** 这个插件此刻注册着的视图 id。「加载没报错、视图一个没有」是开头那类故障最直接的信号,Sandbox 面板把它摆出来。 */
 export function useRegisteredViews(pluginId: string | null | undefined): string[] {
@@ -95,7 +147,7 @@ export function hiddenSpaceForAgent(pluginId: string, h: HiddenSpace): string {
   const why = h.code === 'min-app-version' ? `needs app >= ${h.need}`
     : h.code !== 'missing-views' ? 'its space.json is invalid'
       : own.length ? `needs view ${own.map(short).join(', ')}, which this plugin did not register`
-        : `needs view ${(h.views ?? []).join(', ')} from another plugin or a newer app`
+        : `needs view ${(h.views ?? []).join(', ')}, not registered here (its plugin missing or off, newer app needed, or a typo)`
   return `hidden Space ${h.id ?? h.slug}: ${why}`
 }
 
@@ -111,13 +163,19 @@ function runState(p: AmadeusPlugin, hidden: HiddenSpace[]): { text: string; prob
   return { text: error ? `failed to load: ${clip(error, 110)}` : 'not running', problem: true }
 }
 
-/** `plugin-status` 带 id 的回执:一个插件在**这个窗口的宿主**里的实况。 */
-export function pluginStatusForAgent(id: string): string {
+const loose = (text: string): string => text.toLowerCase().replace(/[^a-z0-9]/g, '')
+
+/** `plugin-status` 带 id 的回执:一个插件在**这个窗口的宿主**里的实况。
+ *  模型手里常常只有安装目录名(真模型三次里三次先拿目录名来问,目录名可以和 manifest id 不同,渲染端又不知道目录名):
+ *  对不上 id 时按 id / 名字去掉标点大小写再对一次。回执以真 id 开头,它自己看得出对上的是谁。 */
+export function pluginStatusForAgent(query: string): string {
   const s = usePluginStore.getState()
-  const p = s.plugins.find((x) => x.id === id)
-  if (!p) return clip(`no plugin "${id}" in this window; ids: ${s.plugins.filter((x) => !x.builtin).map((x) => x.id).join(', ') || '(none)'}`, 200)
-  const hidden = s.activeIds.includes(id) ? useHiddenPluginSpaces.getState().byPlugin[id] ?? [] : []
-  const views = s.views.filter((v) => v.pluginId === id).map((v) => v.item.id)
+  const key = loose(query)
+  const p = s.plugins.find((x) => x.id === query) ?? (key ? s.plugins.find((x) => loose(x.id) === key || loose(x.name) === key) : undefined)
+  if (!p) return clip(`no plugin "${query}" in this window (ask by the id in manifest.json); ids: ${s.plugins.filter((x) => !x.builtin).map((x) => x.id).join(', ') || '(none)'}`, 200)
+  const id = p.id
+  const hidden = hiddenSpacesOf(id)
+  const views = viewsOf(id)
   return clip([
     `${p.id} ${p.version}: ${runState(p, hidden).text}`,
     ...hidden.map((h) => hiddenSpaceForAgent(id, h)),
@@ -125,14 +183,24 @@ export function pluginStatusForAgent(id: string): string {
   ].join('; '), 200)
 }
 
-/** 有问题的插件一览(目录的 state / 不带 id 的回执)。一切正常返回空串 —— 目录里就不带这一项,不给每次 run 添噪音。 */
-export function pluginProblemsForAgent(): string {
-  const s = usePluginStore.getState()
-  const hidden = useHiddenPluginSpaces.getState().byPlugin
-  const bad = s.plugins.flatMap((p) => {
-    const mine = s.activeIds.includes(p.id) ? hidden[p.id] ?? [] : []
+function problems(): Array<{ id: string; what: string }> {
+  return usePluginStore.getState().plugins.flatMap((p) => {
+    const mine = hiddenSpacesOf(p.id)
     const state = runState(p, mine)
-    return state.problem ? [`${p.id} (${mine.length ? `${mine.length} Space hidden` : state.text.split(/[:(]/)[0].trim()})`] : []
+    return state.problem ? [{ id: p.id, what: mine.length ? `${mine.length} Space hidden` : state.text.split(/[:(]/)[0].trim() }] : []
   })
-  return bad.length ? clip(`${bad.length} plugin(s) with problems: ${bad.join(', ')}`, 200) : ''
+}
+
+/** 有问题的插件一览(命令目录里的 state)。一切正常返回空串 —— 目录里就不带这一项,不给每次 run 添噪音。 */
+export function pluginProblemsForAgent(): string {
+  const bad = problems()
+  return bad.length ? clip(`${bad.length} plugin(s) with problems: ${bad.map((b) => `${b.id} (${b.what})`).join(', ')}`, 200) : ''
+}
+
+/** `plugin-status` 的回执。不带 id:只有一个插件出问题就直接给它的详情(一览里放不下错误原文,
+ *  真模型拿到「failed to load」四个字就停下来问用户要报错了),多个才给一览。 */
+export function pluginReportForAgent(query: string): string {
+  if (query) return pluginStatusForAgent(query)
+  const bad = problems()
+  return bad.length === 1 ? pluginStatusForAgent(bad[0].id) : pluginProblemsForAgent() || 'no plugin problems recorded by this window'
 }

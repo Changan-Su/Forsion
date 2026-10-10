@@ -13,7 +13,8 @@ import { useQuickFind } from './quickFind'
 import { addCommand, removeCommand } from '@lcl/engine'
 import { pluginDisplayName } from '@amadeus/plugins/display'
 import { currentLocale, translate } from './i18n'
-import { pluginProblemsForAgent, pluginStatusForAgent } from './pluginSpaceHealth'
+import { followMainWindowSpaceHealth, pluginProblemsForAgent, pluginReportForAgent } from './pluginSpaceHealth'
+import { windowKind } from './windowKind'
 import { openSearchView } from './amadeusCommands'
 import { syncPluginViews } from './pluginViews'
 import { installPluginStatusBridge } from './pluginStatusBridge'
@@ -59,6 +60,7 @@ export function installAmadeusPlugins(): void {
   // 市场 / 设置住在独立浮窗(09-20 起):那边装、卸、更新只重载得动它自己,主窗要等刷新或重启才看得见。
   // 发方广播 extensions-changed(announceExtensionsChanged),这里各窗自己对账。
   window.tangu?.onMainAction?.((action, payload) => { if (action === 'extensions-changed') applyExtensionsChanged(payload) })
+  if (windowKind() !== 'main') followMainWindowSpaceHealth() // Space 出没出现以主窗为准;必须早于本窗第一遍配方装载
   // agent 面的只读命令:本窗宿主此刻对插件的记录(在不在跑 / 为什么没在跑 / 注册了哪些视图 / 哪个随包 Space 没出现及原因)。
   // 在它之前这些只进渲染端控制台,agent 只能请用户去翻。人从命令面板点它 = 打开插件设置页(同一份信息在卡片上)。
   // ⚠️ description 引擎截在 300 字符,回执截在 200:别往里加长文。
@@ -71,11 +73,8 @@ export function installAmadeusPlugins(): void {
       description:
         "Read-only: what this window's plugin host recorded about installed plugins — running or not and why, the views each registered, "
         + 'and bundled Spaces that are hidden with the reason. Call it first when a plugin, its Space or its view is missing, before asking the user for logs.',
-      params: { type: 'object', properties: { id: { type: 'string', description: 'Plugin id (the id in its manifest.json). Omit to list the plugins that have a problem.' } } },
-      run: (a) => {
-        const id = typeof a.id === 'string' ? a.id.trim() : ''
-        return id ? pluginStatusForAgent(id) : pluginProblemsForAgent() || 'no plugin problems recorded by this window'
-      },
+      params: { type: 'object', properties: { id: { type: 'string', description: 'Plugin id from its manifest.json (its name or install folder name usually resolves too). Omit to get whatever is wrong right now.' } } },
+      run: (a) => pluginReportForAgent(typeof a.id === 'string' ? a.id.trim() : ''),
       state: pluginProblemsForAgent,
     },
   })

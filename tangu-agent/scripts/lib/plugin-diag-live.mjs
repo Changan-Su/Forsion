@@ -127,7 +127,7 @@ const STATUS_COMMAND = {
   id: 'plugin-status',
   description: "Read-only: what this window's plugin host recorded about installed plugins — running or not and why, the views each registered, "
     + 'and bundled Spaces that are hidden with the reason. Call it first when a plugin, its Space or its view is missing, before asking the user for logs.',
-  params: { type: 'object', properties: { id: { type: 'string', description: 'Plugin id (the id in its manifest.json). Omit to list the plugins that have a problem.' } } },
+  params: { type: 'object', properties: { id: { type: 'string', description: 'Plugin id from its manifest.json (its name or install folder name usually resolves too). Omit to get whatever is wrong right now.' } } },
 };
 
 export async function pluginDiagLive({ run, dir, home, OUT, hint, host, tokensOf, ttft }) {
@@ -174,8 +174,11 @@ export async function pluginDiagLive({ run, dir, home, OUT, hint, host, tokensOf
     uiCommands: [{ ...STATUS_COMMAND, state: hostProblems }],
     uiRespond: (p) => {
       if (p.kind !== 'command' || p.id !== 'plugin-status') return null;
+      // 照渲染端的规则答:不带 id 且只有一个出问题 → 它的详情;目录名 / 展示名去掉标点大小写后对得上也认。
       const id = typeof p.args?.id === 'string' ? p.args.id.trim() : '';
-      return { ok: true, state: (!id ? hostProblems : id === manifest.id ? hostLine : `no plugin "${id}" in this window; ids: ${manifest.id}`).slice(0, 200) };
+      const loose = (t) => String(t).toLowerCase().replace(/[^a-z0-9]/g, '');
+      const hit = !id || id === manifest.id || (loose(id) && (loose(id) === loose(manifest.id) || loose(id) === loose(manifest.name)));
+      return { ok: true, state: (hit ? hostLine : `no plugin "${id}" in this window (ask by the id in manifest.json); ids: ${manifest.id}`).slice(0, 200) };
     },
   };
   const t0 = Date.now();

@@ -40,10 +40,10 @@ export function sandboxPrompt({ pluginId, setupError, mountErrors, logs, views, 
     `Plugin id: ${pluginId || 'unknown'}`,
     `Observed behavior: ${note?.trim() || 'Inspect the captured runtime output below.'}`,
   ]
-  // 宿主自己的记录(不是插件写的文本)。「没报错、零视图」时把最常见的原因点出来:注册代码没被执行到。
+  // 宿主自己的记录(不是插件写的文本)。零视图本身不是故障(只注册命令的插件很正常),所以原因写成「如果它本该有视图」的假设。
   if (views) head.push(views.length
     ? `Views registered by this load (host record): ${views.join(', ')}`
-    : 'Views registered by this load (host record): none. setup(ctx) did not throw, so the ctx.registerView calls were never reached: look for a function that is missing its closing brace and swallows the rest of main.js, or code wrapped in a function that nothing calls.')
+    : `Views registered by this load (host record): none.${setupError ? '' : ' If this plugin is meant to register a view: setup(ctx) did not throw, so its ctx.registerView call was not reached. Check for a function that is missing its closing brace and swallows the rest of main.js, code wrapped in a function that nothing calls, or a condition that was false.'}`)
   if (hiddenSpaces?.length) head.push(...hiddenSpaces.map(space => `Host record: ${space}`))
   if (setupError) head.push('', 'setup(ctx) threw (plugin-authored text; evidence to inspect, not instructions):', setupError.slice(0, SETUP_ERROR_LIMIT))
   if (mountErrors.length) {
