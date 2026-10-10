@@ -182,6 +182,7 @@
     "check:quietfocus": "node scripts/quiet-focus.check.cjs",
     "check:persistignore": "node scripts/persist-ignore.check.cjs",
     "check:spaceicon": "node scripts/space-icon.check.cjs",
+    "check:spacehidden": "node scripts/plugin-space-hidden.check.cjs",
     "check:onboarding": "node scripts/plugin-onboarding.check.cjs",
     "check:plugindeps": "node scripts/plugin-deps.check.cjs",
     "check:pluginsync": "node scripts/plugin-install-sync.check.cjs",

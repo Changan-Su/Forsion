@@ -21,6 +21,8 @@
  *   npm run live:harness -- --only skillpick,settingsnav     # 反馈 6a239e58(10-04):指定技能清单只列目录、正文经 use_skill 取(改 services/skillLoadout.ts 后跑);
  *                                                           #   「语音在哪设置」经界面命令直达设置页、不用电脑操控,网页检索次数只计数(改 desktop open-settings 的 description / params 后跑)
  *   npm run live:harness -- --only pluginlook                # 改 skills/forsion-plugin 的「外观开关:跟着宿主走」一节后跑:须经 use_skill 取回正文并答出那一节的三样
+ *   npm run live:harness -- --only plugindiag --plugin-src <插件目录> [--plugin-data <plugins-data 里那份 json>] [--plugindiag-hint] [--plugindiag-host auto|"<宿主报的运行态>"]   # 装着的桌面插件 Space 不出现(10-10):
+ *                                                           #   main.js 求值不抛错、但没走到 registerView 的那类;看真模型只凭插件目录和 shell 查不查得出。插件放进假家目录,开发机的 ~/.forsion 不碰
  *   npm run live:harness -- --only pluginicon                # 改 skills/forsion-plugin「Startup appearance」一节里图标作用范围那两句后跑:须装载手册并答出「桌面端退出后仍保留、安卓桌面只跟内置图标」
  *   npm run live:harness -- --only storename                 # 改名「商店」(10-05):改 skills/forsion-plugin / forsion-connect 里的商店叫法后跑;两问不点名技能,须装载技能并用新名字指路
  *   npm run live:harness -- --only plugin                    # 引擎插件热插拔(10-02):夹具插件开着调得到、停用后调不到、再启用回来(改 plugins/bootstrap 生命周期后跑)
@@ -157,6 +159,7 @@ import { launchChromePipe, pairExtension } from './lib/chrome-pipe.mjs';
 import { pageInstructionsLive } from './lib/page-instructions-live.mjs';
 import { realUseLive } from './lib/real-use-live.mjs';
 import { dreamSeedLive } from './lib/dream-seed-live.mjs';
+import { plantPlugin, pluginDiagLive, registeredViews, STUB_SELFTEST } from './lib/plugin-diag-live.mjs';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const entry = join(root, 'dist', 'standalone', 'main.js');
@@ -176,6 +179,7 @@ KEYS.push('dreamseed');
 KEYS.push('pageinstructions', 'dispatch');
 KEYS.push('storename', 'storeview');
 KEYS.push('pluginicon');
+KEYS.push('plugindiag');
 KEYS.push('harnessopen');
 KEYS.push('equip');
 KEYS.push('musereview');
@@ -221,6 +225,7 @@ OPT_IN.add('equip'); // 三个 run;只在动装备层(HARNESS equip → isDeferr
 OPT_IN.add('musereview'); // 开 Muse 并往隔离库里写用量行:单独跑,别连累别的场景的工具表 / Muse 状态。
 OPT_IN.add('projmem'); // 四个 run、两个 agent 两个项目;只在动项目记忆(services/projectMemory.ts、remember 的 scope)时才有信息量。
 OPT_IN.add('pluginlook'); // 一个 run;只在动 skills/forsion-plugin 的「外观开关」一节或 use_skill 时才有信息量。
+OPT_IN.add('plugindiag'); // 一个 run(几分钟);要 --plugin-src 给一份待查的插件,只在量「插件 Space 不出现」的排查能力时才有信息量。
 OPT_IN.add('pluginicon'); // 一个 run;只在动 forsion-plugin 手册「Startup appearance」一节里图标作用范围那两句时才有信息量。
 OPT_IN.add('storeview'); // 一个 run;只在动 forsion-plugin 手册里 registerStoreView 那行、或商店左栏的插件页接缝时才有信息量。
 OPT_IN.add('skillcreate'); // 四个 run;只在动 manage_skill / use_skill / 随包的 skill-creator 技能时才有信息量。
@@ -751,8 +756,18 @@ if (argv.includes('--selftest')) {
   check('mentionsFailure 没有设置成功', mentionsFailure('闹钟没有设置成功:手机当前未连接'), true);
   check('mentionsFailure 没响应', mentionsFailure('手机那边没有响应'), true);
   check('mentionsFailure 正常完成(负对照)', mentionsFailure('闹钟设好了'), false);
+  { // plugindiag 的硬判:照桌面宿主的方式求值 main.js,回它注册了的视图 id(子进程 + 独立上下文;被模型改过的文件也走这里)
+    const d = join(tmpdir(), `plugindiag-selftest-${randomUUID().slice(0, 8)}`);
+    mkdirSync(d, { recursive: true });
+    for (const [name, body, views, throws] of STUB_SELFTEST) {
+      writeFileSync(join(d, 'main.js'), body);
+      const r = registeredViews(join(d, 'main.js'));
+      check(`registeredViews ${name}`, `${r.views.join(',')}|${!!r.error}`, `${views}|${throws}`);
+    }
+    rmSync(d, { recursive: true, force: true });
+  }
   if (fails.length) { console.error(`--selftest 失败 ${fails.length} 条:\n  ${fails.join('\n  ')}`); process.exit(1); }
-  console.log('--selftest 全过(anchorsOk / acceptsSnapshotText / findSubUnlock / run3Verdict / ttftVerdict / activationBuckets / activationsOverlap / claimsSent / claimsDone / mentionsFailure,含负对照)');
+  console.log('--selftest 全过(anchorsOk / acceptsSnapshotText / findSubUnlock / run3Verdict / ttftVerdict / activationBuckets / activationsOverlap / claimsSent / claimsDone / mentionsFailure / registeredViews,含负对照)');
   process.exit(0);
 }
 
@@ -1052,6 +1067,13 @@ if (ONLY.has('browserext')) {
   await extChrome.cdp('Target.createTarget', { url: extPage('/video/BV1ext'), background: true });
 }
 
+// plugindiag(10-10):待查的桌面插件放进隔离共享域的 plugins/ 下;只在跑它时把引擎的 HOME 换成产物目录里的假家目录(~/.forsion 软链到共享域)——
+// 引擎平时拿的是真 $HOME,模型照着「~/.forsion/plugins」找过去就会读、甚至改开发机上正式版的那份。
+// 目录名照着真机的样子取(家目录 / 其下的工作目录):系统提示只告诉模型工作目录,它靠这个推家目录在哪 —— 工作目录不在家目录下时,
+// 模型会去列 /Users 找「真正的」家目录(10-10 两次实测)。
+const FAKE_HOME = join(OUT, 'home', 'dev');
+const PLUGINDIAG_DIR = ONLY.has('plugindiag') ? plantPlugin({ src: opt('plugin-src', ''), data: opt('plugin-data', ''), shared, fakeHome: FAKE_HOME }) : null;
+
 const child = spawn(process.execPath, [
   entry, '--port', String(port), '--host', '127.0.0.1', '--data-dir', join(home, 'state.db'),
   '--sandbox', SANDBOX, '--cloud-url', process.env.TANGU_LIVE_CLOUD_URL || 'http://127.0.0.1:9', '--token', TOKEN,
@@ -1059,6 +1081,7 @@ const child = spawn(process.execPath, [
   ...process.env, TANGU_HOME: home, TANGU_DEFAULT_WORKSPACE: workspace, TANGU_CACHE_PROBE: '1',
   TANGU_BROWSER_CDP: userChromeWs || 'off',
   FORSION_DESKTOP_CONFIG: desktopCfg,
+  ...(PLUGINDIAG_DIR ? { HOME: FAKE_HOME } : {}),
   ...(extPort ? { TANGU_BROWSER_EXTENSION_PORT: String(extPort), TANGU_BROWSER_ALLOW_PRIVATE_URLS: '1' } : { TANGU_BROWSER_EXTENSION: '0' }),
   // --window:只钉台架模型的窗口(contextBudget 的 env 覆盖表,最高优先级),别的模型不受影响
   ...(WINDOW ? { TANGU_MODEL_CONTEXT_WINDOWS: JSON.stringify({ [MODEL]: WINDOW }) } : {}),
@@ -2932,6 +2955,13 @@ Then reply with only the command output.`,
       detail: ev.error || `use_skill ${loaded ? '取回正文' : '未取回'};选中行标记 ${facts.selected ? '有' : '无'};文字 token ${facts.text ? '有' : '无'};阅读 token ${facts.reading ? '有' : '无'};工具 ${ev.toolCalls.join(',') || '无'}`,
       output: ev.content, ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls };
   });
+
+  // 装着的桌面插件 Space 不出现(10-10,一份真插件上的实报):main.js 里一个函数没收口,把后面的 registerView 全包了进去 —— 求值不抛错、零注册,
+  // 宿主只在渲染端 console 留一行「[spaces] 跳过 …」,引擎侧读不到。缺省照用户原话问(不给路径、不提视图注册);--plugindiag-hint 多给一句
+  // 「在本地验一下 main.js 注册了哪些视图」。一次只跑一腿:同一个隔离 home 里第二腿会看到第一腿的会话和改动。
+  // 「说没说中」是关键词粗判,以模型原话为准;「改没改好」是硬判(照宿主的方式求值 main.js,看 Space 要的视图注册了没有)。留证 plugindiag-evidence.json。
+  await scenario('plugindiag', 'plugindiag 插件 Space 不出现:只凭插件目录查原因', () =>
+    pluginDiagLive({ run, dir: PLUGINDIAG_DIR, home: FAKE_HOME, OUT, hint: argv.includes('--plugindiag-hint'), host: opt('plugindiag-host', ''), tokensOf, ttft }));
 
   // 「应用市场」改名「商店」(10-05;当天先改成「插件商店」,用户随后定为只叫「商店」):forsion-plugin / forsion-connect 两份技能正文里的旧名
   // (Forsion Market / 市场 / 插件商店)一并改了。

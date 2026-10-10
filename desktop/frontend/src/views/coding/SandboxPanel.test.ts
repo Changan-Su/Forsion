@@ -24,6 +24,8 @@ vi.mock('@amadeus/plugins/devSandbox', () => ({
 }))
 vi.mock('../../stores/codeStudioStore', () => ({ useCodeStudio: Object.assign(() => undefined, { getState: () => studio }) }))
 import { SandboxPanel } from './SandboxPanel'
+import { usePluginStore } from '@amadeus/plugins/pluginStore'
+import { setHiddenPluginSpaces } from '../../pluginSpaceHealth'
 
 const globals = globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean; React: typeof React }
 globals.IS_REACT_ACT_ENVIRONMENT = true; globals.React = React
@@ -62,6 +64,32 @@ beforeEach(() => {
 afterEach(async () => {
   await act(async () => { root.unmount() })
   host.remove(); delete window.tangu
+})
+
+describe('what the host recorded for this load', () => {
+  // 2026-10-10 那类故障在开发态的样子:加载没报错、控制台是空的,唯一的线索是「一个视图都没注册」。
+  afterEach(async () => { await act(async () => { usePluginStore.setState({ activeIds: [], views: [] }); setHiddenPluginSpaces({}) }) })
+  it('shows that a running plugin registered no views, and carries it into the evidence sent to chat', async () => {
+    Object.assign(devState, { loaded: true, active: true })
+    await mount(product({ devLoad: true }))
+    expect(host.querySelector('[data-sandbox-views]')!.textContent).toBe('这次加载没有注册任何视图。')
+    await click('sandbox-send')
+    expect(onPrompt.mock.calls[0][0]).toContain('Views registered by this load (host record): none.')
+  })
+  it('lists registered views, and says why a bundled Space is hidden', async () => {
+    Object.assign(devState, { loaded: true, active: true })
+    usePluginStore.setState({ activeIds: ['my-plugin'], views: [{ pluginId: 'my-plugin', item: { id: 'desk', title: 'Desk' } }, { pluginId: 'other', item: { id: 'x', title: 'X' } }] } as never)
+    setHiddenPluginSpaces({ 'my-plugin': [{ slug: 'my-space', id: 'my-space', name: { zh: '我的空间' }, code: 'missing-views', views: ['plugin:my-plugin:mesh'], detail: 'raw' }] })
+    await mount(product({ devLoad: true }))
+    expect(host.querySelector('[data-sandbox-views]')!.textContent).toBe('这次加载注册的视图：desk')
+    expect(host.querySelector('[data-sandbox-space-hidden]')!.textContent).toContain('我的空间: 它需要的视图 mesh 没有注册')
+    await click('sandbox-send')
+    expect(onPrompt.mock.calls[0][0]).toContain('Host record: hidden Space my-space: needs view mesh, which this plugin did not register')
+  })
+  it('says nothing about views while the plugin is not running', async () => {
+    await mount()
+    expect(host.querySelector('[data-sandbox-views]')).toBeNull()
+  })
 })
 
 describe('sandbox states', () => {

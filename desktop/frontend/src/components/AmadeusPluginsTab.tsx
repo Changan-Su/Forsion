@@ -22,6 +22,7 @@ import { Markdown } from './Markdown'
 import { KNOWN_APPS } from '../../../shared/knownApps'
 import { rescanPlugins, setPluginEnabled, type PluginInfo } from '../services/backendService'
 import { loadUserSpaces } from '../userSpaces'
+import { hiddenSpaceName, hiddenSpaceReason, useHiddenSpacesOf } from '../pluginSpaceHealth'
 import { BuiltinPluginsSection } from '../builtins'
 import { useApp } from '../stores/appStore'
 import { panelToast } from './PanelNotice'
@@ -172,19 +173,41 @@ const PluginSwitch: React.FC<{ p: AmadeusPlugin; onFlip: () => void }> = ({ p, o
   )
 }
 
-/** 运行态徽标:想开却没在跑 —— 在等前置,或加载失败(错因放悬停)。 */
+/** 运行态徽标:想开却没在跑 —— 在等前置,或加载失败(错因放悬停);在跑、但它带的 Space 没出现也算(原因放悬停,详情页逐条列)。 */
 const RunBadge: React.FC<{ p: AmadeusPlugin }> = ({ p }) => {
   const { t, locale } = useI18n()
   const plugins = usePluginStore((s) => s.plugins)
   const activeIds = usePluginStore((s) => s.activeIds)
   const disabledIds = usePluginStore((s) => s.disabledIds)
   const error = usePluginStore((s) => s.lastSetupError[p.id])
+  const hidden = useHiddenSpacesOf(p.id)
+  const warn = { ...badge, color: 'var(--warn, #b8860b)', borderColor: 'var(--warn, #b8860b)' }
+  if (hidden.length) return <span data-plugin-space-hidden style={warn} title={hidden.map((h) => `${hiddenSpaceName(h, locale)}: ${hiddenSpaceReason(t, p.id, h)}`).join('\n')}>{t('plugins.spaceHidden.badge')}</span>
   if (p.blocked || activeIds.includes(p.id) || !pluginWanted(p, disabledIds)) return null
   const unmet = unmetPluginDeps(p, { plugins, activeIds, disabledIds })
-  const warn = { ...badge, color: 'var(--warn, #b8860b)', borderColor: 'var(--warn, #b8860b)' }
   if (unmet.length) return <span data-plugin-waiting style={warn} title={unmet.map((u) => depName(u.dep, plugins, locale)).join(t('common.listSep'))}>{t('settings.amadeusPlugins.waitingDeps')}</span>
   if (error) return <span data-plugin-failed style={{ ...badge, color: 'var(--danger, #c0392b)', borderColor: 'var(--danger, #c0392b)' }} title={error}>{t('settings.amadeusPlugins.loadFailed')}</span>
   return null
+}
+
+/** 开着、却没出现在功能条上的随包 Space:逐个说清原因。配方的原始校验信息是开发日志串,只放悬停。 */
+const HiddenSpaces: React.FC<{ p: AmadeusPlugin }> = ({ p }) => {
+  const { t, locale } = useI18n()
+  const hidden = useHiddenSpacesOf(p.id)
+  if (!hidden.length) return null
+  return (
+    <>
+      <div className="hint">{t('plugins.spaceHidden.title')}</div>
+      <div className="plugin-card" data-plugin-space-hidden-list style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 'var(--ui-font-meta, 12px)' }}>
+        {hidden.map((h) => (
+          <div key={h.slug} title={h.detail}>
+            <b>{hiddenSpaceName(h, locale)}</b>
+            <div style={{ color: 'var(--text-faint)', marginTop: 2 }}>{hiddenSpaceReason(t, p.id, h)}</div>
+          </div>
+        ))}
+      </div>
+    </>
+  )
 }
 
 /** 前置插件:逐条说清楚状态,给能做的那一步(去市场找 / 打开它)。 */
@@ -692,6 +715,7 @@ const PluginDetail: React.FC<{
           </div>
         </>
       )}
+      <HiddenSpaces p={p} />
       <RequiredPlugins p={p} />
       {dep && (
         <>

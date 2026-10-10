@@ -1,8 +1,8 @@
 ---
 name: forsion-extension-development
-description: 当用户要给 Forsion / Tangu 做插件、主题、Space、智能体(agent)或捆绑包(bundle)——或要把某个能力做成可分发/可上架商店的扩展——时使用。内置五类官方模板(samples/),讲清各自的格式基线与硬约束(尤其两种"插件"是完全不同的系统),照抄模板改比从零写靠谱。
+description: 当用户要给 Forsion / Tangu 做插件、主题、Space、智能体(agent)或捆绑包(bundle)——或要把某个能力做成可分发/可上架商店的扩展——时使用;已装的插件 / Space / 视图不出现、加载失败、更新后不工作要排查时也用(带一份插件体检脚本 tools/check-plugin.mjs)。内置五类官方模板(samples/),讲清各自的格式基线与硬约束(尤其两种"插件"是完全不同的系统),照抄模板改比从零写靠谱。
 metadata:
-  version: 1.25.0
+  version: 1.26.0
   author: Forsion
   category: Forsion
 ---
@@ -23,6 +23,30 @@ Forsion / Tangu 的扩展**默认按捆绑包(bundle)形态发行**(2026-07-25 �
 > - **引擎插件**(本技能 `samples/forsion-sample-plugin`):后端/Agent 层,`tangu-plugin.json` + `activate(ctx)`,给模型加工具。
 > - **Amadeus/Forsion 桌面插件**:UI 层,`manifest.json` + 裸 `main.js`(宿主 `new Function('ctx', code)` 跑 —— **文件本身就是 `setup(ctx)` 的函数体**,顶层直接 `ctx.registerView(…)`;别包成 `function setup(ctx) { … }`,没人调用它 = 零注册、零报错),加命令/斜杠项/视图/文件类型。桌面端 设置 → 插件 有一键脚手架(hello-amadeus);捆绑包模板的根即这一形态。
 > 要"一套功能跨两层发行"(UI+工具+Agent+Space)时,用**捆绑包**把它们装进一个目录。
+
+## Troubleshooting an installed plugin: Space missing, view blank, "stopped working after an update" (2026-10-10)
+
+When a user says a plugin's Space / view / command is gone, or that a plugin broke after updating the app or the plugin, **run the checker first** — before reading the code, and before asking the user for logs:
+
+```bash
+node "<Skill folder>/tools/check-plugin.mjs"                      # every plugin installed in ~/.forsion/plugins
+node "<Skill folder>/tools/check-plugin.mjs" <plugin folder>      # one plugin, e.g. the project you are developing
+```
+
+- `<Skill folder>` is printed at the top of this manual. With no argument it finds the install folder itself, so you do not need to locate the plugin first (installed desktop plugins live in `~/.forsion/plugins/<folder>/`; the folder name can differ from the manifest `id`). Add `--app-version <x.y.z>` if you know the app version.
+- No `node` on PATH (the packaged app on macOS / Linux ships none)? The app binary runs it: `ELECTRON_RUN_AS_NODE=1 "/Applications/Forsion.app/Contents/MacOS/Forsion" "<Skill folder>/tools/check-plugin.mjs"`.
+- It loads `main.js` the way the desktop host does (`new Function('ctx', source)(ctx)`), lists what got registered, checks every bundled Space against that, and names the lines that never ran. Read each line by its mark. **`✗` is proven from the files**: for example a `ctx.registerView` that sits inside a function nothing calls. The host has no extra step that would run that code either, so do not discount it as "only a stub" — that part is the host's result too. **`?` is undecided**: the registration sits behind a condition, or in a function something calls conditionally, and this is a dry run with stand-in host APIs and no saved plugin data or settings. Do not call a `?` a plugin bug and do not guess: settle it with the app's own record (`plugin-status`, below). `✓` means fine as far as the files go.
+- To do this it executes each plugin's `main.js`, in a separate confined process (isolated context, no file writes or child processes where the runtime supports it, killed if it hangs). Plugins that are installed already run inside the user's app, so checking them is fine. For a plugin from an unknown source that is not installed yet, read its code instead of running the checker on it.
+
+How the host behaves, so you can read the result and explain it:
+
+- A bundled Space (`spaces/<slug>/space.json`) is shown only if **every view it names is registered once the plugin has loaded**. Otherwise the host skips it without an error: the Space is simply not on the Ribbon.
+- `main.js` that throws → the plugin card in Settings → Plugins shows "failed to load". `main.js` that loads **without an error but registers nothing** → the plugin looks healthy and switched on; apps up to 2.13.1 show no badge and no message at all, later builds put a "Space hidden" badge with the reason on the card. When the checker marks that `✗`, it is a bug in the plugin's own `main.js`, not an app / plugin-API incompatibility: the registration code is not on any path that runs at load. Usual shapes: the file is wrapped in `function setup(ctx) { … }`; an earlier function lost its closing brace and swallowed the rest of the file (a stray `}` at the very end keeps it parseable). The checker names the function and its line range — read those lines next.
+- **The running app's own record.** If `list_ui_commands` lists a `plugin-status` command (desktop builds after 2.13.1), also call `run_ui_command` with `{"id":"plugin-status","args":{"id":"<manifest id>"}}` (omit `args` to get whatever is wrong right now). It answers in one line what the checker cannot see from the files: whether the plugin is turned off, blocked by the host, failed to load in the real app (with the error), or waiting for a required plugin, which views it registered, and which bundled Space is hidden and why. When it and the checker disagree, the app's record is what actually happened; the checker only says what the files on disk would do. Not listed (older app, or a session without the desktop window)? Then a `✗` from the checker still stands on its own; for a `?`, say what is undecided and ask the user to look at the plugin's card in Settings → Plugins.
+- Do not send the user to the developer console or ask for "host logs" first. End users cannot easily get them, and for a `✗` they hold nothing the checker does not print. Ask only after the checker and `plugin-status` have both come back without an answer.
+- A diagnostic file a plugin writes for itself under `~/.forsion/plugins-data/` is a hint, not proof of where loading stopped.
+
+Plugin authors: run the same checker before every release. It is the generic half of 通用纪律 4; your own `check.mjs` covers your plugin's logic.
 
 ## 通用纪律
 
