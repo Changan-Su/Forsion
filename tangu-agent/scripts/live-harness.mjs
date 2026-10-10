@@ -159,7 +159,7 @@ import { launchChromePipe, pairExtension } from './lib/chrome-pipe.mjs';
 import { pageInstructionsLive } from './lib/page-instructions-live.mjs';
 import { realUseLive } from './lib/real-use-live.mjs';
 import { dreamSeedLive } from './lib/dream-seed-live.mjs';
-import { plantPlugin, pluginDiagLive } from './lib/plugin-diag-live.mjs';
+import { plantPlugin, pluginDiagLive, registeredViews, STUB_SELFTEST } from './lib/plugin-diag-live.mjs';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const entry = join(root, 'dist', 'standalone', 'main.js');
@@ -756,8 +756,18 @@ if (argv.includes('--selftest')) {
   check('mentionsFailure 没有设置成功', mentionsFailure('闹钟没有设置成功:手机当前未连接'), true);
   check('mentionsFailure 没响应', mentionsFailure('手机那边没有响应'), true);
   check('mentionsFailure 正常完成(负对照)', mentionsFailure('闹钟设好了'), false);
+  { // plugindiag 的硬判:照桌面宿主的方式求值 main.js,回它注册了的视图 id(子进程 + 独立上下文;被模型改过的文件也走这里)
+    const d = join(tmpdir(), `plugindiag-selftest-${randomUUID().slice(0, 8)}`);
+    mkdirSync(d, { recursive: true });
+    for (const [name, body, views, throws] of STUB_SELFTEST) {
+      writeFileSync(join(d, 'main.js'), body);
+      const r = registeredViews(join(d, 'main.js'));
+      check(`registeredViews ${name}`, `${r.views.join(',')}|${!!r.error}`, `${views}|${throws}`);
+    }
+    rmSync(d, { recursive: true, force: true });
+  }
   if (fails.length) { console.error(`--selftest 失败 ${fails.length} 条:\n  ${fails.join('\n  ')}`); process.exit(1); }
-  console.log('--selftest 全过(anchorsOk / acceptsSnapshotText / findSubUnlock / run3Verdict / ttftVerdict / activationBuckets / activationsOverlap / claimsSent / claimsDone / mentionsFailure,含负对照)');
+  console.log('--selftest 全过(anchorsOk / acceptsSnapshotText / findSubUnlock / run3Verdict / ttftVerdict / activationBuckets / activationsOverlap / claimsSent / claimsDone / mentionsFailure / registeredViews,含负对照)');
   process.exit(0);
 }
 
