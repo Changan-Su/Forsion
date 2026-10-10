@@ -76,6 +76,7 @@ const mount = async (opts: object = {}) => {
   return handle
 }
 const appPatches = () => eng.api.updateScene.mock.calls.map((c: any[]) => c[0]).filter((p: any) => p.appState)
+const engineZoom = (): number => (eng.appState.zoom as { value: number }).value
 
 describe('ctx.ui.mountBoard 的那一层', () => {
   it('没有界面、背景透明、工具受控;视口照调用方给的写进引擎,且不进撤销栈', async () => {
@@ -192,12 +193,12 @@ describe('ctx.ui.mountBoard 的那一层', () => {
     expect(parseFloat(box.style.width)).toBeCloseTo(110)
     expect(parseFloat(box.style.height)).toBeCloseTo(110)
     expect(Number(box.style.zoom)).toBeCloseTo(1 / 1.1)
-    expect(eng.appState.zoom.value).toBeCloseTo(1.5 * 1.1) // 调用方给的 1.5 是 el 自己的 CSS 像素口径
+    expect(engineZoom()).toBeCloseTo(1.5 * 1.1) // 调用方给的 1.5 是 el 自己的 CSS 像素口径
     h.update({ viewport: { scrollX: 0, scrollY: 0, zoom: 2 } })
-    expect(eng.appState.zoom.value).toBeCloseTo(2 * 1.1)
+    expect(engineZoom()).toBeCloseTo(2 * 1.1)
     uiz = 1.25
     await act(async () => { window.dispatchEvent(new Event('forsion:uizoom')) })
-    expect(eng.appState.zoom.value).toBeCloseTo(2 * 1.25)
+    expect(engineZoom()).toBeCloseTo(2 * 1.25)
     expect(parseFloat(box.style.width)).toBeCloseTo(125)
     // 引擎报回来的就是乘过的值:不许被当成「引擎自己动了视口」再推一遍
     const n = appPatches().length
