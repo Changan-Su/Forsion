@@ -6,10 +6,9 @@ import { showDetails } from '../stores/detailsSubject'
 import { getAgentHarness, rollbackHarnessEntry, type HarnessJournalLine } from '../services/backendService'
 import { harnessChangeState, HARNESS_CHANGED_EVENT, type HarnessChange } from '../services/harnessUpdates'
 import { targetForSession } from '../services/engine/targets'
-import './humanCollaboration.css'
+import './selfUpdates.css'
 
 registerMessages({
-  'harness.updated': { zh: '进化记录已更新', en: 'Evolution record updated' },
   'harness.act.create': { zh: '新增', en: 'Added' },
   'harness.act.revise': { zh: '修订', en: 'Revised' },
   'harness.act.delete': { zh: '删除', en: 'Removed' },
@@ -19,12 +18,14 @@ registerMessages({
   'harness.evidence': { zh: '更新依据', en: 'Reason for this update' },
   'harness.view': { zh: '查看进化记录', en: 'View evolution record' },
   'harness.undo': { zh: '撤销本次更新', en: 'Undo this update' },
+  'harness.viewShort': { zh: '查看', en: 'View' },
+  'harness.undoShort': { zh: '撤销', en: 'Undo' },
   'harness.undoConflict': { zh: '这条记录后来又改过。请打开进化记录调整，避免覆盖新的内容。', en: 'This entry changed again later. Open the evolution record to revise it without overwriting newer changes.' },
 })
 
-/** Agent 自己改了工作笔记(manage_harness 立即生效、不逐笔审批)→ 这条回复下出一张卡:改了什么、依据、可撤销。
- *  与协作说明的更新卡同一副样式(humanCollaboration.css 的 .human-update-card)。 */
-export function HarnessUpdateCard({ changes, sessionId }: { changes: HarnessChange[]; sessionId: string }) {
+/** Agent 自己改了进化记录(manage_harness 立即生效、不逐笔审批)→ 这条回复的回执行里各占一行:改了什么、依据、可撤销。
+ *  只在回执行点开时才挂(SelfUpdateReceipt),所以编辑史也是点开才读。按钮上的字是短的,可访问名仍是完整的那一句(台架按它找)。 */
+export function HarnessUpdateRows({ changes, sessionId }: { changes: HarnessChange[]; sessionId: string }) {
   const { t, locale } = useI18n()
   const listSep = locale === 'zh' ? '、' : ', '
   const engine = targetForSession(sessionId)
@@ -42,8 +43,6 @@ export function HarnessUpdateCard({ changes, sessionId }: { changes: HarnessChan
     refresh(); window.addEventListener(HARNESS_CHANGED_EVENT, refresh)
     return () => { alive = false; window.removeEventListener(HARNESS_CHANGED_EVENT, refresh) }
   }, [engine.key, engine.base, slugs, revs]) // eslint-disable-line react-hooks/exhaustive-deps
-  // 回复还在流式时新回执到了:详情页开着的「进化」面板跟着重读
-  useEffect(() => { if (revs) window.dispatchEvent(new CustomEvent(HARNESS_CHANGED_EVENT)) }, [revs])
   if (!changes.length) return null
   const undo = async (change: HarnessChange) => {
     if (busy) return
@@ -52,24 +51,26 @@ export function HarnessUpdateCard({ changes, sessionId }: { changes: HarnessChan
     catch (e: any) { setErrors((x) => ({ ...x, [change.rev]: e?.status === 409 ? t('harness.undoConflict') : String(e?.message || e) })) }
     finally { setBusy(''); window.dispatchEvent(new CustomEvent(HARNESS_CHANGED_EVENT)) }
   }
-  return <section className="human-update-card" data-harness-updates>
-    <div className="human-update-head"><NotebookPen size={15} /><strong>{t('harness.updated')}</strong></div>
+  return <div data-harness-updates>
     {changes.map((change) => {
       const journal = journals[change.agent]
       const state = journal ? harnessChangeState(journal, change) : null
-      return <article key={change.rev} data-harness-update={change.rev} data-harness-state={state || undefined}>
-        <div className="human-scope">{names.find((a) => a.slug === change.agent)?.name || change.agent} · {t(`harness.act.${change.action}`)} · <span className="human-applied">{t(state === 'undone' ? 'harness.undone' : 'harness.applied')}</span></div>
-        <p><strong>{change.title}</strong></p>
-        <p>{change.body}</p>
-        {!!change.tools?.length && <p className="human-scope">{t('settings.agents.harnessShelvedTools', { names: change.tools.join(listSep) })}</p>}
-        {!!change.skills?.length && <p className="human-scope">{t('settings.agents.harnessShelvedSkills', { names: change.skills.join(listSep) })}</p>}
-        {change.evidence && <details><summary>{t('harness.evidence')}</summary><p>{change.evidence}</p></details>}
-        <div className="human-actions">
-          <button type="button" className="profile-text-action" onClick={() => showDetails({ kind: 'agent', slug: change.agent, evolution: Date.now() })}>{t('harness.view')}</button>
-          {state !== 'undone' && <button type="button" className="profile-text-action" disabled={!!busy || state !== 'current'} title={state === 'superseded' ? t('harness.undoConflict') : undefined} onClick={() => void undo(change)}><Undo2 size={12} />{t('harness.undo')}</button>}
+      return <article className="self-row" key={change.rev} data-harness-update={change.rev} data-harness-state={state || undefined}>
+        <NotebookPen size={15} className="self-row-ic" />
+        <div className="self-row-kind human-scope">{names.find((a) => a.slug === change.agent)?.name || change.agent} · {t(`harness.act.${change.action}`)} · {t(state === 'undone' ? 'harness.undone' : 'harness.applied')}</div>
+        <div className="self-row-main">
+          <p><strong>{change.title}</strong></p>
+          <p>{change.body}</p>
+          {!!change.tools?.length && <p>{t('settings.agents.harnessShelvedTools', { names: change.tools.join(listSep) })}</p>}
+          {!!change.skills?.length && <p>{t('settings.agents.harnessShelvedSkills', { names: change.skills.join(listSep) })}</p>}
+          {change.evidence && <details><summary>{t('harness.evidence')}</summary><p>{change.evidence}</p></details>}
         </div>
-        {errors[change.rev] && <p className="agent-profile-error" role="alert">{errors[change.rev]}</p>}
+        <div className="self-row-ops">
+          <button type="button" className="self-act" aria-label={t('harness.view')} onClick={() => showDetails({ kind: 'agent', slug: change.agent, evolution: Date.now() })}>{t('harness.viewShort')}</button>
+          {state !== 'undone' && <button type="button" className="self-act" aria-label={t('harness.undo')} disabled={!!busy || state !== 'current'} title={state === 'superseded' ? t('harness.undoConflict') : undefined} onClick={() => void undo(change)}><Undo2 size={12} />{t('harness.undoShort')}</button>}
+        </div>
+        {errors[change.rev] && <p className="self-row-note agent-profile-error" role="alert">{errors[change.rev]}</p>}
       </article>
     })}
-  </section>
+  </div>
 }

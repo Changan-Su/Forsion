@@ -1,7 +1,6 @@
 import { HumanUpdateCard } from '../../components/HumanUpdateCard'
 import { humanChanges } from '../../services/humanCollaboration'
-import { HarnessUpdateCard } from '../../components/HarnessUpdateCard'
-import { harnessChanges } from '../../services/harnessUpdates'
+import { SelfUpdateReceipt } from '../../components/SelfUpdateReceipt'
 /**
  * 编辑式消息渲染(新视觉):助手在纸面流动(头像 + 安静署名 + 内容 + 悬浮动作),
  * 用户为暖色带尾气泡。子件(思考/工具/待办/审批/反问)以新 t2 风格内联呈现。
@@ -594,8 +593,9 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
         {/* 作品卡:把这条对话里做的东西变成「造物」(点了宿主才建文件夹 / 复制)。同样只在 done 上渲染。 */}
         {!!creations.length && msg.status === 'done' && <CreationCards cards={creations} sessionId={runSid} />}
 
-        {fileCtx && <HumanUpdateCard changes={humanChanges(msg.toolEvents)} cfg={fileCtx.cfg} sessionId={fileCtx.sessionId} />}
-        {fileCtx && <HarnessUpdateCard changes={harnessChanges(msg.toolEvents)} sessionId={fileCtx.sessionId} />}
+        {/* Agent 自己写了东西:记忆 / 进化记录并成一行回执;协作说明是说给用户听的,单独一张请求卡。 */}
+        {fileCtx && <SelfUpdateReceipt events={msg.toolEvents} sessionId={fileCtx.sessionId} agentSlug={msg.agentId} />}
+        {fileCtx && <HumanUpdateCard changes={humanChanges(msg.toolEvents)} cfg={fileCtx.cfg} sessionId={fileCtx.sessionId} agentName={msg.agentName || agentNameFallback} />}
 
         {msg.planProposal && (
 

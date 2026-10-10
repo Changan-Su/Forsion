@@ -21,14 +21,25 @@ const solo = { ...base, id: 'profile-solo', title: 'Research notes', agent_confi
 const harnessEntries = [{ id: 'h-cite', kind: 'recipe', title: 'Cite before concluding', body: 'Quote the primary source before concluding.', evidence: 'corrected twice', createdAt: '2026-09-10', updatedAt: '2026-09-16', version: 2 }, { id: 'h-scope', kind: 'note', title: 'Confirm scope first', body: 'Ask for time range and region.', createdAt: '2026-09-12', updatedAt: 'last week', version: 1 },
   // 装备(10-04):Agent 自己收起的工具 / 技能 —— 面板要给出本地化的类型芯片,并列出收起了什么
   { id: 'h-shelf', kind: 'equip', title: 'Shelve drawing tools', body: 'Not used in the last month.', evidence: 'usage review', tools: ['sketch', 'display_file'], skills: ['local:pptx'], createdAt: '2026-10-01', updatedAt: '2026-10-01', version: 1 }]
+const SCOPE_REV = '11111111-2222-4333-8444-555555555555'
 const harnessOld = { id: 'h-old', kind: 'note', title: 'Prefer PDF over HTML', body: 'Superseded.', createdAt: '2026-09-01', updatedAt: '2026-09-01', version: 1 }
-const harnessJournal = [{ ts: '2026-09-01T10:00:00Z', action: 'upsert', entryId: 'h-old', before: null, after: harnessOld }, { ts: '2026-09-10T08:00:00Z', action: 'upsert', entryId: 'h-cite', before: null, after: { ...harnessEntries[0], version: 1 } }, { ts: '2026-09-12T08:00:00Z', action: 'upsert', entryId: 'h-scope', before: null, after: harnessEntries[1], by: 'historian' }, { ts: '2026-09-14T15:00:00Z', action: 'delete', entryId: 'h-old', before: harnessOld, after: null }, { ts: '2026-09-16T09:30:00Z', action: 'upsert', entryId: 'h-cite', before: { ...harnessEntries[0], version: 1 }, after: harnessEntries[0], rev: '7c1d2f3a-9b4e-4c6d-8a1f-2b3c4d5e6f70' },
+const harnessJournal = [{ ts: '2026-09-01T10:00:00Z', action: 'upsert', entryId: 'h-old', before: null, after: harnessOld }, { ts: '2026-09-10T08:00:00Z', action: 'upsert', entryId: 'h-cite', before: null, after: { ...harnessEntries[0], version: 1 } }, { ts: '2026-09-12T08:00:00Z', rev: SCOPE_REV, action: 'upsert', entryId: 'h-scope', before: null, after: harnessEntries[1], by: 'historian', sessionId: solo.id }, { ts: '2026-09-14T15:00:00Z', action: 'delete', entryId: 'h-old', before: harnessOld, after: null }, { ts: '2026-09-16T09:30:00Z', action: 'upsert', entryId: 'h-cite', before: { ...harnessEntries[0], version: 1 }, after: harnessEntries[0], rev: '7c1d2f3a-9b4e-4c6d-8a1f-2b3c4d5e6f70' },
   // 来源标注(10-04):后台复盘直接采纳的记 by: historian(上面 h-scope 那行),Muse 巡检后代收的记 by: muse
   { ts: '2026-10-01T08:00:00Z', action: 'upsert', entryId: 'h-shelf', before: null, after: harnessEntries[2], by: 'muse' }]
 // 对话里的工作笔记更新卡(10-04 放开写入):Research notes 的历史里有一条 manage_harness 回执 → 回复下出卡。
 // 回执的 rev 就是上面编辑史的最后一行(h-cite v1→v2)→ 可撤;撤销请求必须原样带回 expectRev;撤完卡片变「已撤销」、不再给撤销键。
 const harnessChange = { rev: '7c1d2f3a-9b4e-4c6d-8a1f-2b3c4d5e6f70', at: '2026-09-16T09:30:00Z', agent: 'research', entryId: 'h-cite', action: 'revise', kind: 'recipe', title: 'Cite before concluding', body: 'Quote the primary source before concluding.', evidence: 'corrected twice', version: 2 }
-const soloMessages = [{ id: 'solo-user', session_id: solo.id, role: 'user', content: 'Quote sources before you conclude', timestamp: 1 }, { id: 'solo-answer', session_id: solo.id, role: 'model', content: 'Noted in my working notes.', agent_slug: 'research', timestamp: 2, tool_calls: [{ id: 'harness-1', type: 'function', function: { name: 'manage_harness', arguments: '{"action":"upsert","id":"h-cite"}' } }], tool_results: [{ tool_call_id: 'harness-1', content: JSON.stringify({ kind: 'harness_update', change: harnessChange, message: 'Applied' }), isError: false }] }]
+// 回执行与请求卡(10-10「分级」):同一条回复里 Agent 还记了一条记忆、往协作说明里写了一条对用户的请求。
+// 记忆回执的条目就是下面 /memory 里的 memory-1 → 行上给撤销;撤销 = 带着刚读到的版本号去 forget。
+const humanChange = { id: '9a1b2c3d-4e5f-4a6b-8c7d-0e1f2a3b4c5d', scope: { kind: 'agent', slug: 'research' }, summary: 'Tell me the acceptance criteria when you hand me a task.', evidence: 'Three of the last five tasks needed a second round.', at: '2026-09-16T09:31:00Z', actor: 'agent', beforeVersion: 'a'.repeat(64), afterVersion: 'b'.repeat(64) }
+const memoryEntries = [{ id: 'memory-1', content: 'Cite primary sources.', source: { kind: 'manual' }, evidenceIds: [], createdAt: 1, updatedAt: 1 }]
+const memoryPosts = []
+const soloMessages = [{ id: 'solo-user', session_id: solo.id, role: 'user', content: 'Quote sources before you conclude', timestamp: 1 }, { id: 'solo-answer', session_id: solo.id, role: 'model', content: 'Noted in my working notes.', agent_slug: 'research', timestamp: 2, tool_calls: [{ id: 'harness-1', type: 'function', function: { name: 'manage_harness', arguments: '{"action":"upsert","id":"h-cite"}' } },
+  { id: 'remember-1', type: 'function', function: { name: 'remember', arguments: '{"action":"add","fact":"Cite primary sources."}' } },
+  { id: 'human-1', type: 'function', function: { name: 'manage_human', arguments: '{"action":"update"}' } }],
+tool_results: [{ tool_call_id: 'harness-1', content: JSON.stringify({ kind: 'harness_update', change: harnessChange, message: 'Applied' }), isError: false },
+  { tool_call_id: 'remember-1', content: JSON.stringify({ ok: true, action: 'add', scope: 'agent', version: 'version-1', entry: { id: 'memory-1', content: 'Cite primary sources.' }, count: 1, chars: 21, limit: 4000 }), isError: false },
+  { tool_call_id: 'human-1', content: JSON.stringify({ kind: 'human_update', change: humanChange }), isError: false }] }]
 const harnessUndoRevs = []
 // Historian 自动档的提名(收件箱原始行):面板要显示「1 条候选」且不许把 `[日期 s:会话]` 内部记号渲出来;「进化」标签带角标。
 const harnessCandidates = ['- [2026-09-17 s:abcd1234] Check the marker file before answering']
@@ -116,7 +127,9 @@ async function run() {
     if (p === `/agent/sessions/${solo.id}` && method === 'PATCH') { const patch = await body(); sessionModelSaved = patch.model_id; Object.assign(solo, patch); return { session: solo } }
     if (p.endsWith('/memory/dream')) return { config: { enabled: true, modelId: '', timeoutMs: 60000, maxOutputTokens: 4096, intervalHours: 6 }, status: { state: 'idle', running: false }, candidates: 0 }
     if (p.endsWith('/memory/revisions')) return { revisions: [] }
-    if (p.endsWith('/memory') && method === 'GET') return { version: 'version-1', content: 'Cite primary sources.', entries: [{ id: 'memory-1', content: 'Cite primary sources.', source: { kind: 'manual' }, evidenceIds: [], createdAt: 1, updatedAt: 1 }], tombstones: [], updatedAt: 1 }
+    if (p.endsWith('/memory') && method === 'GET') return { version: 'version-1', content: memoryEntries.map((e) => e.content).join('\n'), entries: memoryEntries, tombstones: [], updatedAt: 1 }
+    if (p.endsWith('/memory/entries') && method === 'POST') { const b = await body(); memoryPosts.push(b); const i = memoryEntries.findIndex((e) => e.id === b.id); if (i >= 0) memoryEntries.splice(i, 1); return { version: 'version-2', content: '', entries: memoryEntries, tombstones: [], updatedAt: 2 } }
+    if (p === '/agent/agents/research/human' && method === 'GET') return { scope: humanChange.scope, path: path.join(home, 'research', 'HUMAN.md'), content: humanChange.summary, version: humanChange.afterVersion, exists: true, updatedAt: humanChange.at, history: [{ ...humanChange, canUndo: true }], maxLength: 8000 }
     if (p === '/agent/runs' && method === 'GET') return { runs: [] }
     if (p === '/agent/agents/research/harness' && method === 'GET') {
       harnessReads++
@@ -141,7 +154,8 @@ async function run() {
       if (sid === main.id) { historianPolls.main++; return { running: false, records: [], activity: [nomination('act-hc-main', main.id)] } }
       if (sid === solo.id) {
         historianPolls.solo++
-        return { running: false, records: [], activity: [...(nominate ? [nomination('act-hc-solo', solo.id)] : []), ...(confirmNominate ? [{ ...nomination('act-confirm-solo', solo.id), action: 'harness_confirm', detail: 'Fetch setup first: …' }] : [])] }
+        // 这条「后台采纳」从第一次轮询起就在:不许弹提醒(是历史),但对话里要留痕
+        return { running: false, records: [], activity: [{ id: 'act-adopted-solo', action: 'harness_adopted', detail: 'Confirm scope first', session_ref: solo.id, created_at: '2026-09-12 08:00:05' }, ...(nominate ? [nomination('act-hc-solo', solo.id)] : []), ...(confirmNominate ? [{ ...nomination('act-confirm-solo', solo.id), action: 'harness_confirm', detail: 'Fetch setup first: …' }] : [])] }
       }
       return { running: false, records: [], activity: [] }
     }
@@ -458,15 +472,42 @@ async function run() {
     await win.waitForTimeout(220)
     await win.locator('[data-tangu-details]').screenshot({ path: path.join(home, 'compact-evolution.png') })
     console.log('PASS evolution tab: localized notes, restore, in-place /refine and reload after the run')
-    // 对话里的更新卡:回执还原出卡片(Agent 名 · 修订 · 已生效 + 标题 / 正文 / 依据)→ 撤销带上回执的 rev → 变「已撤销」且撤销键消失;进化面板跟着重读。
+    // 对话里的回执行(10-10「分级」):这条回复的记忆 + 进化记录并成一行,点开才是明细;工具组里不再重复列这三次调用。
+    const reply = win.locator('.t2-asst').filter({ hasText: 'Noted in my working notes.' })
+    const receipt = reply.locator('[data-self-receipt]')
+    await receipt.waitFor()
+    assert.equal((await receipt.locator('summary').innerText()).replace(/\s+/g, ' ').trim(), '记住了 1 件事 · 进化记录更新 1 处', 'One line names what the agent wrote this turn')
+    assert.equal(await reply.locator('.tool-group').count(), 0, 'Calls shown as a receipt are not listed again as tool rows')
+    assert.equal(await win.locator(`[data-harness-update="${harnessChange.rev}"]`).count(), 0, 'Details are not mounted (nor fetched) until the line is opened')
+    // 请求卡:协作说明是说给用户听的,不进那一行 —— Agent 的口吻、依据直接摆出来;「知道了」只是收成一行,不是审批
+    const ask = reply.locator(`[data-human-update="${humanChange.id}"]`)
+    await ask.waitFor()
+    assert.ok(/想请你配合 1 件事/.test(await reply.locator('[data-human-updates] .human-update-head').innerText()))
+    assert.ok((await ask.innerText()).includes(humanChange.summary) && (await ask.innerText()).includes(`为什么：${humanChange.evidence}`), 'The request and its reason are both on the card')
+    // 留痕:后台复盘采纳的那条(活动流 harness_adopted)钉在这条回复后面;本机编辑史里对得上 → 给撤销
+    const trace = reply.locator('[data-self-trace="harness_adopted"]')
+    await trace.waitFor()
+    assert.ok((await trace.innerText()).includes('复盘时学到一个做法：') && (await trace.innerText()).includes('Confirm scope first'))
+    await reply.locator('[data-self-trace="harness_adopted"][data-trace-state="current"]').waitFor()
+    assert.equal(await win.locator('.ntf').filter({ hasText: 'Confirm scope first' }).count(), 0, 'An adoption already in the history raises no toast')
+    await reply.scrollIntoViewIfNeeded()
+    await reply.screenshot({ path: path.join(home, 'self-update-feedback.png') })
+    await receipt.locator('summary').click()
     const noteCard = win.locator(`[data-harness-update="${harnessChange.rev}"]`)
     await noteCard.waitFor()
-    await win.locator('[data-harness-updates]').getByText('进化记录已更新', { exact: true }).waitFor()
     await win.locator(`[data-harness-update="${harnessChange.rev}"][data-harness-state="current"]`).waitFor()
-    assert.ok(/Research Lead · 修订 · 已生效/.test(await noteCard.locator('.human-scope').textContent()), `The card names the agent, the action and that it is live: ${await noteCard.locator('.human-scope').textContent()}`)
+    assert.ok(/Research Lead · 修订 · 已生效/.test(await noteCard.locator('.human-scope').textContent()), `The row names the agent, the action and that it is live: ${await noteCard.locator('.human-scope').textContent()}`)
     assert.ok((await noteCard.textContent()).includes('Cite before concluding') && (await noteCard.textContent()).includes('Quote the primary source before concluding.'))
-    await win.locator('[data-harness-updates]').scrollIntoViewIfNeeded()
+    const memRow = reply.locator('[data-memory-update="memory-1"]')
+    await reply.locator('[data-memory-update="memory-1"][data-memory-state="current"]').waitFor()
+    assert.ok((await memRow.innerText()).includes('Cite primary sources.'))
+    await reply.scrollIntoViewIfNeeded()
+    await reply.screenshot({ path: path.join(home, 'self-update-feedback-open.png') })
     await win.locator('[data-harness-updates]').screenshot({ path: path.join(home, 'harness-update-card.png') })
+    await win.evaluate(() => { document.documentElement.setAttribute('data-mode', 'dark'); document.documentElement.classList.add('dark') })
+    await win.waitForTimeout(200)
+    await reply.screenshot({ path: path.join(home, 'self-update-feedback-open-dark.png') })
+    await win.evaluate(() => { document.documentElement.removeAttribute('data-mode'); document.documentElement.classList.remove('dark') })
     const readsBeforeUndo = harnessReads
     await noteCard.getByRole('button', { name: '撤销本次更新' }).click()
     await win.locator(`[data-harness-update="${harnessChange.rev}"][data-harness-state="undone"]`).waitFor()
@@ -474,9 +515,29 @@ async function run() {
     assert.deepEqual(harnessRollbacks, ['h-old'], 'The card undo is not the unconditional panel rollback')
     assert.ok((await noteCard.locator('.human-scope').textContent()).includes('本次更新已撤销'))
     assert.equal(await noteCard.getByRole('button', { name: '撤销本次更新' }).count(), 0, 'An undone update offers no second undo')
-    assert.ok(harnessReads > readsBeforeUndo + 1, `The card and the open Evolution panel both reload after an undo (reads ${readsBeforeUndo} → ${harnessReads})`)
+    assert.ok(harnessReads > readsBeforeUndo + 1, `The row and the open Evolution panel both reload after an undo (reads ${readsBeforeUndo} → ${harnessReads})`)
     await win.locator('[data-harness-updates]').screenshot({ path: path.join(home, 'harness-update-card-undone.png') })
-    console.log('PASS working-note update card: restored from the receipt, undo carries its rev, undone state')
+    console.log('PASS receipt line: restored from the receipts, opens to rows, undo carries its rev, undone state')
+    // 记忆行的撤销:点的那一刻重读,带着读到的版本号去 forget;撤完这一行不再给撤销
+    await memRow.getByRole('button', { name: '撤销', exact: true }).click()
+    await reply.locator('[data-memory-update="memory-1"][data-memory-state="undone"]').waitFor()
+    assert.deepEqual(memoryPosts, [{ action: 'forget', id: 'memory-1', expectedVersion: 'version-1' }], 'Undo forgets exactly the entry the receipt named, against the version just read')
+    assert.equal(await memRow.getByRole('button', { name: '撤销', exact: true }).count(), 0)
+    // 留痕上的撤销:与回执行同一条回滚接口,带的是编辑史里后台那一笔的 rev
+    await trace.getByRole('button', { name: '撤销', exact: true }).click()
+    await reply.locator('[data-self-trace="harness_adopted"][data-trace-state="undone"]').waitFor()
+    assert.deepEqual(harnessUndoRevs, [harnessChange.rev, SCOPE_REV], 'The trace undo carries the background write’s own rev')
+    assert.ok((await trace.innerText()).includes('本次更新已撤销'))
+    // 「知道了」:请求卡收成一行;再点展开
+    await reply.locator('[data-human-updates]').getByRole('button', { name: '知道了', exact: true }).click()
+    const acked = reply.locator('[data-human-acked]')
+    await acked.waitFor()
+    assert.equal((await acked.innerText()).replace(/\s+/g, ' ').trim(), '协作请求 1 条 · 已知道')
+    assert.equal(await ask.count(), 0)
+    await reply.screenshot({ path: path.join(home, 'self-update-feedback-acked.png') })
+    await acked.click()
+    await ask.waitFor()
+    console.log('PASS memory undo, background trace with undo, request card and its acknowledged line')
     // 提名提醒:活动流第 3 次轮询才出现那条 harness_candidates → 弹一张卡(带会话名);点「复盘」发 /refine 到该会话;同一条不再弹第二张。
     assert.ok(historianPolls.solo >= 1, `HistorianStatus already polled this session before the nomination lands (polls=${historianPolls.solo})`)
     nominate = true
