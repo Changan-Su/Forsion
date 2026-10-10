@@ -12,47 +12,22 @@
  *    不转圈、不切位置;denied(用户点了「不允许」)才说 10 分钟;轮询中才知道的名册缺失 / 弹框收了立刻停。另出几张拒绝态截图。
  *    矩阵在同一页面上顺序跑(行上的表不清):先留下一条「连不上」(网络错 / 发起确认 500),下一例那台电脑的真回答
  *    (reason / 轮询中的「请允许」)必须照出 —— 评审 P2:旧探针曾盖住后来的一切拒绝。
- *  - 端口:缺省系统分配空闲端口;PORT_RUNON 指定时先核实没人占(别的会话常驻 5301–5307 / 5173 / 5199)。
+ *  - 端口:经 lib/preview.cjs —— 缺省系统分配空闲端口,E2E_PORT 可指定;只认本检出的 dist,端口被占就报错退出。
  *
  * 跑法:npm run build && npm run e2e:runon。SHOT_DIR 指定截图目录(缺省系统临时目录)。
  * 机制照抄 units-entry.e2e.cjs(假 token 过登录闸,/api/** 缺省 abort,名册由 page.route 供给)。
  * ⚠️ 浏览器台架钉语言必须用 newContext({ locale })(chromium 的 --lang 无效,CLAUDE.md)。
  */
-const http = require('http')
-const net = require('net')
 const os = require('os')
 const fs = require('fs')
 const path = require('path')
-const { spawn } = require('child_process')
+const { startPreview } = require('./lib/preview.cjs')
 const { chromium } = (() => {
   try { return require('playwright-core') } catch { /* 落到 desktop */ }
   return require(path.resolve(__dirname, '../../desktop/node_modules/playwright-core'))
 })()
 
-// 端口(P1-KF):别的会话的 vite 常驻 5301–5307 / 5173 / 5199 —— 缺省取系统分配的空闲端口;PORT_RUNON 指定时先核实没人占,
-// 占了就起跑前报错(原先 vite --strictPort 起不来而 ping 打到别人的服务上照样 200 = 在别人的页面上跑出假结果)。
-let PORT = 0
-let URL = ''
-function portFree(port) {
-  return new Promise((res) => {
-    const srv = net.createServer()
-    srv.once('error', () => res(false))
-    srv.listen(port, () => srv.close(() => res(true)))
-  })
-}
-async function pickPort() {
-  if (process.env.PORT_RUNON) {
-    const p = Number(process.env.PORT_RUNON)
-    URL = `http://localhost:${p}/`
-    if (!(await portFree(p)) || (await ping())) throw new Error(`PORT_RUNON=${p} 已被占用(多半是别的会话的 vite)—— 换一个空闲端口,或不设 PORT_RUNON 让系统分配`)
-    return p
-  }
-  return new Promise((res, rej) => {
-    const srv = net.createServer()
-    srv.once('error', rej)
-    srv.listen(0, () => { const { port } = srv.address(); srv.close(() => res(port)) })
-  })
-}
+let URL = '' // main() 里由 startPreview 给:系统分配的空闲端口,E2E_PORT 可指定(见 lib/preview.cjs)
 const SHOT_DIR = process.env.SHOT_DIR || os.tmpdir()
 const UNIT_LABELS = ['Forsion Unit 切换', 'Switch Forsion Unit']
 
@@ -95,14 +70,6 @@ function findChromium() {
     if (fs.existsSync(exe)) return exe
   }
   throw new Error('找不到 chromium,设 CHROMIUM_EXE 环境变量')
-}
-
-function ping() {
-  return new Promise((res) => {
-    const req = http.get(URL, (r) => { res(r.statusCode === 200); r.resume() })
-    req.on('error', () => res(false))
-    req.setTimeout(1500, () => { req.destroy(); res(false) })
-  })
 }
 
 const fails = []
@@ -521,24 +488,11 @@ async function main() {
     console.error('✗ 没有 dist/,先跑 npm run build')
     process.exit(1)
   }
-  PORT = await pickPort()
-  URL = `http://localhost:${PORT}/`
-  console.log(`vite preview → ${URL}`)
-  const preview = spawn('npx', ['vite', 'preview', '--port', String(PORT), '--strictPort'], { cwd: root, stdio: ['ignore', 'ignore', 'pipe'], detached: true })
-  let previewErr = ''
-  preview.stderr.on('data', (d) => { previewErr += String(d) })
-  const killPreview = () => { try { process.kill(-preview.pid, 'SIGTERM') } catch { try { preview.kill() } catch { /* 已退出 */ } } }
+  const preview = await startPreview(root)
+  URL = preview.url
   let browser = null
   try {
-    let up = false
-    let exited = null
-    preview.on('exit', (code) => { exited = code })
-    for (let i = 0; i < 40 && !up; i++) {
-      await new Promise((r) => setTimeout(r, 500))
-      if (exited !== null) throw new Error(`vite preview 退出了(code=${exited},端口 ${PORT} 被占?)\n${previewErr.slice(-800)}`) // 别让 ping 打到别人的服务上
-      up = await ping()
-    }
-    if (!up) throw new Error(`vite preview 没起来(${PORT} 被占?)\n${previewErr.slice(-800) || '(无 stderr)'}`)
+    await preview.ready()
     browser = await chromium.launch({ executablePath: findChromium(), headless: true, args: ['--no-sandbox'] })
     await scenario(browser, { lang: 'zh', mode: 'light', shot: 'units-runon-zh-light.png', full: true })
     await scenario(browser, { lang: 'zh', mode: 'dark', shot: 'units-runon-zh-dark.png', full: false })
@@ -550,7 +504,7 @@ async function main() {
     fail('harness', e.message)
   } finally {
     if (browser) await browser.close().catch(() => {})
-    killPreview()
+    preview.kill()
   }
   console.log(fails.length ? `\n${fails.length} failed` : '\nall passed')
   process.exit(fails.length ? 1 : 0)

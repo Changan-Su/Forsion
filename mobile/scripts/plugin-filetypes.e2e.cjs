@@ -28,28 +28,17 @@
  *   · 只关掉编辑器面板那道闸(amadeusViews 的 pluginOwned 恒 false)、库这一层照修:列表几条全绿,
  *     S2 / S3 的「点开」「一个字节没变」照红(6 条)—— 光把文件挪出页面列表不够,树上点一下照样进编辑器。
  */
-const http = require('http')
-const net = require('net')
 const os = require('os')
 const fs = require('fs')
 const path = require('path')
-const { spawn } = require('child_process')
 const JSZip = require('jszip')
+const { startPreview } = require('./lib/preview.cjs')
 const { chromium } = (() => {
   try { return require('playwright-core') } catch { /* 落到 desktop */ }
   return require(path.resolve(__dirname, '../../desktop/node_modules/playwright-core'))
 })()
 
-// ⚠️ 端口由系统现分,不写死:这台机器上常有几个会话同时跑手机台架,写死的端口撞上别人的 vite preview 时,
-// 自己这份 --strictPort 起不来,而探活却打得通 —— 整轮测的是**别人那份产物**(2026-10-09 负对照时撞过:
-// 结果和没修之前一模一样)。下面还会盯着 preview 进程,它一退出就报错,不等探活。
-let PORT = 0
-let APP_URL = ''
-const pickPort = () => new Promise((res, rej) => {
-  const srv = net.createServer()
-  srv.once('error', rej)
-  srv.listen(0, () => { const { port } = srv.address(); srv.close(() => res(port)) })
-})
+let APP_URL = '' // main() 里由 startPreview 给:系统分配的空闲端口,E2E_PORT 可指定(见 lib/preview.cjs)
 const CDN = 'https://market-cdn.e2e.test'
 const SHOTS = path.resolve(__dirname, '../outputs/pluginfiles') // 已 gitignore
 const DECK_ID = 'e2e-deck'
@@ -100,10 +89,6 @@ function findChromium() {
   }
   throw new Error('找不到 chromium,设 CHROMIUM_EXE 环境变量')
 }
-const ping = () => new Promise((res) => {
-  const req = http.get(APP_URL, (r) => { res(r.statusCode === 200); r.resume() })
-  req.on('error', () => res(false)); req.setTimeout(1500, () => { req.destroy(); res(false) })
-})
 async function zipOf(entries) {
   const z = new JSZip()
   for (const [n, c] of Object.entries(entries)) z.file(n, c)
@@ -128,14 +113,8 @@ async function main() {
     }),
   }
 
-  PORT = await pickPort()
-  APP_URL = `http://localhost:${PORT}/`
-  const preview = spawn('npx', ['vite', 'preview', '--port', String(PORT), '--strictPort'], { cwd: root, stdio: ['ignore', 'ignore', 'pipe'], detached: true })
-  let previewErr = ''
-  let previewExit = null
-  preview.stderr.on('data', (d) => { previewErr += String(d) })
-  preview.on('exit', (code) => { previewExit = code })
-  const killPreview = () => { try { process.kill(-preview.pid, 'SIGTERM') } catch { try { preview.kill() } catch { /* 已退出 */ } } }
+  const preview = await startPreview(root)
+  APP_URL = preview.url
 
   let browser = null
   const fails = []
@@ -145,13 +124,7 @@ async function main() {
     console.log(`${ok ? 'PASS' : gapMode ? 'GAP ' : 'FAIL'}  ${name}${extra ? `  | ${extra}` : ''}`)
   }
   try {
-    let up = false
-    for (let i = 0; i < 40 && !up; i++) {
-      await new Promise((r) => setTimeout(r, 500))
-      if (previewExit !== null) throw new Error(`vite preview 退出了(code=${previewExit})\n${previewErr.slice(-800) || '(无 stderr)'}`)
-      up = await ping()
-    }
-    if (!up) throw new Error(`vite preview 没起来\n${previewErr.slice(-800) || '(无 stderr)'}`)
+    await preview.ready()
 
     browser = await chromium.launch({ executablePath: findChromium(), headless: true, args: ['--no-sandbox'] })
     // ⚠️ 语言钉 zh-CN 必须走 context 的 locale(chromium --lang 对浏览器台架无效)
@@ -330,7 +303,7 @@ async function main() {
     check(false, '台架异常', String(e && e.stack ? e.stack.split('\n').slice(0, 3).join(' / ') : e))
   } finally {
     if (browser) await browser.close().catch(() => {})
-    killPreview()
+    preview.kill()
   }
   console.log(`\n${fails.length ? `✗ ${fails.length} 项失败` : '✓ 全部通过'}`)
   process.exit(fails.length ? 1 : 0)

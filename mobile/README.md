@@ -20,9 +20,9 @@ npm run dev   # http://localhost:5274,同源经 vite proxy 到 BACKEND_URL(缺�
 
 浏览器检查(`npm run e2e:*`,先 `npm run build`)各自起一个 `vite preview`,经 `scripts/lib/preview.cjs`:端口由系统分配,
 几个会话同时跑同一条互不相干;只认答出**本检出** `dist/index.html` 的服务,自己的预览起不来就报错退出,不会接到别人的构建上。
-要固定端口(比如想自己开浏览器看)用 `E2E_PORT=<端口> npm run e2e:boot`。四条例外还没走这个库,各自内联着更早的同款做法
-(端口同样由系统分配、自己的预览一退出就报错,但不核对端口上答的是不是本检出的构建):`e2e:runon`(固定端口的变量名是 `PORT_RUNON`)、
-`e2e:pluginfiles`、`e2e:csp`、`e2e:localasset`(这三条不能固定端口)。
+要固定端口(比如想自己开浏览器看)用 `E2E_PORT=<端口> npm run e2e:boot`(`e2e:runon` 原先单独的 `PORT_RUNON` 不再认,一样用 `E2E_PORT`)。
+一条例外:`e2e:localasset` 还没走这个库,内联着更早的同款做法(端口同样由系统分配、自己的预览一退出就报错,
+但不核对端口上答的是不是本检出的构建,也不能固定端口)。
 
 ## 出 Android APK
 
