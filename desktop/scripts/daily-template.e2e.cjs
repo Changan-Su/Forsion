@@ -8,6 +8,8 @@
  * 判据(2026-08-21 修复前实测:只有 D1 过 —— 日记建出来了、模板一个字没进去(D2/D3/D5 红),
  * 而且落盘是 v3(amadeus_page + 块标记,D4 红);S1 红 —— 「模板」项那时被 UNIFIED_HIDDEN_SLASH
  * 从 v4 菜单里整条藏掉):
+ *   N1 冷启动停在主页 Space(没人唤醒库),点 ＋ →「新建笔记」出现、点下去库里多出一篇(2026-10-10 补:
+ *      08-29 起这一下是白点的 —— 库惰性恢复、启动器不唤醒它,「今天」也因此不出现,本脚本一直红在找卡片那步)
  *   D1 点「今天」→ 库根出现 YYYY-MM-DD.md
  *   D2 templates/daily.md 的正文套上了
  *   D3 {{date}} 等变量被替换(文件里不许留 `{{`)
@@ -93,20 +95,30 @@ async function main() {
     await win.waitForSelector('.dv-groupview', { timeout: 40_000 })
     await win.waitForTimeout(1500)
 
-    // ⚠️ vaultRoot 要等笔记面首次挂载才落地(只预置 amadeus-config.dev.json 不够),而「今天」
-    //    这张卡的门是 `amadeusOn && !!vaultRoot` —— 不先开一次笔记面,它根本不出现。
+    // ⚠️ 库是惰性恢复的,启动缺省的主页 Space 没人唤醒它 —— 启动器挂载时自己唤醒(NewTabView),「新建」那一段的卡片
+    //    (门是 `amadeusOn && !!vaultRoot`)随库落地才出现,所以下面等的都是卡片本身。别改回「先点一下新建笔记再等
+    //    几秒」:库没落地时那一下不算唤醒(08-29 ~ 10-10 红在这儿)。
+    // N1 从主页点 ＋ →「新建笔记」出得来、点下去真建出一篇。
+    const mdCount = () => fs.readdirSync(vaultDir).filter((n) => n.endsWith('.md')).length
+    const md0 = mdCount()
     await win.click('.dv-new-tab')
     await win.waitForSelector('.newtab', { timeout: 15_000 })
-    await win.waitForTimeout(600)
-    await win.locator('.newtab-card', { hasText: /^新建笔记$|^New note$/ }).first().click()
-    await win.waitForTimeout(2500)
+    const noteCard = win.locator('.newtab-card', { hasText: /^新建笔记$|^New note$/ }).first()
+    const noteCardUp = await noteCard.waitFor({ state: 'visible', timeout: 15_000 }).then(() => true, () => false)
+    if (noteCardUp) {
+      await noteCard.click()
+      for (const end = Date.now() + 15_000; mdCount() === md0 && Date.now() < end;) await win.waitForTimeout(250)
+      // 等这篇落进编辑器再往下:它的导航晚到的话,会把下面新开的启动器就地换成编辑器(「今天」卡片就没了)。
+      await win.waitForSelector('.unified-body .ProseMirror', { timeout: 15_000 }).catch(() => {})
+    }
+    check('N1 冷启动停在主页,点 ＋ →「新建笔记」出现,点下去库里多出一篇', noteCardUp && mdCount() === md0 + 1,
+      `卡片=${noteCardUp} 库根 .md ${md0} → ${mdCount()} 标签=${JSON.stringify(await win.evaluate(() => [...document.querySelectorAll('.wb-tab-name')].map((e) => e.textContent)))}`)
 
-    // 「今天」住在 ＋ 新标签页的启动器里(NewTabView 的动作卡)。
+    // 「今天」住在同一个启动器里(NewTabView 的动作卡)。
     await win.click('.dv-new-tab')
     await win.waitForSelector('.newtab', { timeout: 15_000 })
-    await win.waitForTimeout(600)
     const card = win.locator('.newtab-card', { hasText: /^今天$|^Today$/ }).first()
-    if (!(await card.count().catch(() => 0))) {
+    if (!(await card.waitFor({ state: 'visible', timeout: 15_000 }).then(() => true, () => false))) {
       const labels = await win.evaluate(
         () => [...document.querySelectorAll('.newtab-card-label')].map((e) => e.textContent),
       )
@@ -135,10 +147,13 @@ async function main() {
 
     // ── S:斜杠「模板」在 v4 笔记上的整条链(菜单露出 → 选择器 → 插回本篇)
     const notePath = path.join(vaultDir, '随手.md')
+    // 笔记树在笔记 Space 的左栏;启动缺省的主页 Space 没有侧栏,先进去(vault-pathgone 同款)。
+    await win.locator('.rb-space[aria-label="笔记"], .rb-space[aria-label="Note"]').first().click({ timeout: 15_000 })
     await win.locator('.t2s-srow', { hasText: '随手' }).first().click()
     await win.waitForSelector('.unified-body .ProseMirror', { timeout: 20_000 })
     await win.waitForTimeout(1200)
-    await win.click('.unified-body .ProseMirror')
+    // 点段落本身(维护中的 unified 台架同款):点容器正中会落在标题和段落之间的空隙上,那里拿不到焦点,后面的键全打在左栏树上。
+    await win.locator('.unified-body .ProseMirror > p').last().click()
     await win.keyboard.press('Control+End')
     await win.keyboard.press('Enter')
     await win.keyboard.type('/')
