@@ -678,6 +678,24 @@ async function main() {
         const target = await page.evaluate(() => window.__upage.vault.get('搬家目标.md'))
         check('B15c 移动到:目标末尾多了这块、本篇删掉了', ok && picker && target === '# 目标\n\n已有内容。\n\n搬走我。\n' && (md || '') === '留下。\n\n也留下。\n', JSON.stringify({ target, md }))
       }
+      // B15c2 跨目录搬块(2026-10-10):源笔记在名字带空格和括号的文件夹里 —— 落到目标里的链接要先把目录名编码,
+      //       否则 `[文档](my notes (1)/x.pdf)` 遇空格即止,不是链接,是一行死字。纯函数的钉子在 blockLinks.move.test.ts。
+      {
+        await page.evaluate(() => {
+          window.__upage.vault.set('跨目录目标.md', '# 去处\n')
+          const st = window.__upage.pageStore.getState()
+          window.__upage.pageStore.setState({ pages: [...new Set([...(st.pages || []), '跨目录目标.md'])] })
+        })
+        const nm = await load(page, '留下。\n\n见 [文档](x.pdf) 与 [笔记](y.md#节)。\n', 'my notes (1)/搬家源.md')
+        const open = await openHandleMenu(page, '见 文档')
+        const ok = open && await clickItem(page, '移动到')
+        const picker = await waitSel(page, '[data-testid=note-picker]')
+        await page.keyboard.type('跨目录目标')
+        await page.keyboard.press('Enter')
+        const md = await mdOf(page, nm)
+        const target = await page.evaluate(() => window.__upage.vault.get('跨目录目标.md'))
+        check('B15c2 跨目录移动到:源目录名带空格 / 括号,落盘的链接把目录名编码了、仍指着原来的文件', ok && picker && target === '# 去处\n\n见 [文档](my%20notes%20%281%29/x.pdf) 与 [笔记](my%20notes%20%281%29/y.md#节)。\n' && (md || '') === '留下。\n', JSON.stringify({ target, md }))
+      }
       // B15d /embed 的说明指向 v4 真有的菜单项。
       {
         await load(page, '段\n')
