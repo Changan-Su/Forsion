@@ -36,7 +36,7 @@ export const Shell: React.FC<{
     )
   }
   return (
-    <div className="shell">
+    <div className={`shell${noRibbon ? ' shell--noribbon' : ''}`}>
       {header}
       <div className="shell-top">
         {!noRibbon && <Ribbon />}
