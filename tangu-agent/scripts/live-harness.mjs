@@ -3259,15 +3259,14 @@ Then reply with only the command output.`,
       once: rows.every((r) => !r.again.error && r.again.suggestion === '' && !r.again.usage),
       runBound: rows.every((r) => !r.wrongRun.error && r.wrongRun.suggestion === '' && !r.wrongRun.usage),
       called: rows.every((r) => !!r.first.usage), // 三条都真的问了模型(快照在、对得上)
-      // 缓存:每一条的建议调用都要读到一半以上的缓存。主循环自己那次都没命中的(供应方没给缓存)不算数,整条标成「判不出」。
+      // 缓存:每一条的建议调用都要读到一半以上的缓存。读不到(含供应方压根不报缓存的模型)一律算不过 ——
+      // 「全是 0」正是缓存路由整体接错时的样子,不能当成「判不出」放行(换不报缓存的模型跑这条,红是如实的)。
       cached: rows.every((r) => (ratio(r.first.usage) ?? 0) >= 0.5),
     };
-    const providerCaches = rows.some((r) => (r.main ?? 0) > 0) || rows.some((r) => (ratio(r.first.usage) ?? 0) > 0);
-    const ok = checks.shape && checks.once && checks.runBound && checks.called && (checks.cached || !providerCaches);
+    const ok = Object.values(checks).every(Boolean);
     return {
       ok,
-      inconclusive: ok && !checks.cached,
-      detail: `${Object.entries(checks).map(([k, v]) => `${k}${v ? '✓' : '✗'}`).join(' ')};${rows.map((r) => `${r.key}:「${r.first.suggestion || '(无)'}」 输入 ${r.first.usage?.prompt ?? '-'} / 缓存 ${r.first.usage?.cached ?? '-'}(${hitPct(ratio(r.first.usage))},主循环末次 ${hitPct(r.main)})/ 输出 ${r.first.usage?.completion ?? '-'} / ${sec(r.first.ms)}`).join(';')}${providerCaches ? '' : ';供应方没有报缓存命中,缓存这条判不出'}`,
+      detail: `${Object.entries(checks).map(([k, v]) => `${k}${v ? '✓' : '✗'}`).join(' ')};${rows.map((r) => `${r.key}:「${r.first.suggestion || '(无)'}」 输入 ${r.first.usage?.prompt ?? '-'} / 缓存 ${r.first.usage?.cached ?? '-'}(${hitPct(ratio(r.first.usage))},主循环末次 ${hitPct(r.main)})/ 输出 ${r.first.usage?.completion ?? '-'} / ${sec(r.first.ms)}`).join(';')}`,
       output: rows.map((r) => `[${r.key}] 用户:${r.msg}\n助手:${String(r.ev.content || '').slice(0, 600)}\n建议:${r.first.error ? `ERROR ${r.first.error}` : r.first.suggestion || '(无)'}`).join('\n\n'),
     };
   });

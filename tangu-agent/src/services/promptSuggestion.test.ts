@@ -122,10 +122,13 @@ describe('suggestNextPrompt', () => {
     expect(payloads[0].messages.slice(0, -1)).toEqual(withTools); // 以正文收尾的整段都在
   });
 
-  it('模型调用失败 / 被截断 → 空,不抛', async () => {
+  it('模型调用失败 / 被截断 / 带着工具调用回来 → 空,不抛', async () => {
     stashSuggestionSeed('S', 'R1', seedOf(CHAT));
     reply = { content: '跑', usage: {}, finishReason: 'length' };
     expect((await ask()).suggestion).toBe('');
+    stashSuggestionSeed('S', 'R1', seedOf(CHAT));
+    reply = { content: '我来跑测试', toolCalls: [{ id: 't', function: { name: 'run_bash', arguments: '{}' } }], usage: { prompt_tokens: 9 }, finishReason: 'tool_calls' };
+    expect(await ask()).toEqual({ suggestion: '', usage: { prompt: 9, cached: 0, completion: 0 } }); // 用量照记
     stashSuggestionSeed('S', 'R1', seedOf(CHAT));
     reply = Promise.reject(new Error('boom'));
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});

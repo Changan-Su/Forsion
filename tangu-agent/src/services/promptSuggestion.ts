@@ -162,8 +162,10 @@ export async function suggestNextPrompt(opts: {
         usage.prompt, usage.completion, true, undefined, 'tangu-suggest', cost, usage.cached, opts.client,
       );
     } catch { /* 记账失败不该把已经拿到的建议丢掉 */ }
-    // 截断的半句不给:用户按 Tab 拿到的得是一句完整的话
-    const suggestion = (res as any)?.finishReason === 'length' ? '' : cleanSuggestion(res?.content);
+    // 截断的半句不给:用户按 Tab 拿到的得是一句完整的话。带着工具调用回来的也不给:那是它把对话接着做了下去
+    // (「我来跑测试」+ run_bash),正文是助手的话,不是用户的下一句;工具调用本身一律丢弃、不执行。
+    const off = (res as any)?.finishReason === 'length' || (res?.toolCalls?.length ?? 0) > 0;
+    const suggestion = off ? '' : cleanSuggestion(res?.content);
     return { suggestion, usage };
   } catch (e: any) {
     if (!signal.aborted) console.warn(`[agent-core] session=${opts.sessionId} 输入建议失败(按没有建议处理):`, e?.message || e);

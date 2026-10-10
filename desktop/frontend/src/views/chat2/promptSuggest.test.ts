@@ -72,6 +72,22 @@ describe('输入建议', () => {
     expect(shown()).toBeUndefined()
   })
 
+  it('请求在路上时用户打了字 / 关了开关:回来的那句不落地', async () => {
+    setPromptSuggest(true)
+    for (const interrupt of [() => setDraftField('s1', 'text', '我自己写'), () => localStorage.removeItem(PROMPT_SUGGEST_KEY)]) {
+      let release: (r: Response) => void = () => {}
+      fetchMock.mockImplementationOnce(() => new Promise<Response>((resolve) => { release = resolve }))
+      const pending = requestSuggestion('s1', 'r1')
+      await vi.waitFor(() => expect(fetchMock).toHaveBeenCalled())
+      interrupt()
+      release(json({ suggestion: '迟到的' }))
+      await pending
+      expect(shown()).toBeUndefined()
+      fetchMock.mockClear()
+      useComposerDrafts.setState({}, true)
+    }
+  })
+
   it('关掉开关:已有的建议一并清空', async () => {
     setPromptSuggest(true)
     fetchMock.mockResolvedValueOnce(json({ suggestion: '跑吧' }))

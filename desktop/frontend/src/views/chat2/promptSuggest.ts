@@ -24,11 +24,18 @@ export function setPromptSuggest(on: boolean): void {
     if (on) localStorage.setItem(PROMPT_SUGGEST_KEY, '1')
     else localStorage.removeItem(PROMPT_SUGGEST_KEY)
   } catch { /* 隐私模式 / 配额:偏好丢了也不该影响对话 */ }
-  if (!on) {
-    for (const ac of inflight.values()) ac.abort()
-    inflight.clear()
-    usePromptSuggest.setState({ bySession: {} })
-  }
+  if (!on) clearAll()
+}
+
+function clearAll(): void {
+  for (const ac of inflight.values()) ac.abort()
+  inflight.clear()
+  usePromptSuggest.setState({ bySession: {} })
+}
+
+// 设置开在另一扇窗(另一个渲染进程)里:那边关掉开关,这边已经显示着的灰字也跟着撤掉。
+if (typeof window !== 'undefined') {
+  window.addEventListener?.('storage', (e) => { if (e.key === PROMPT_SUGGEST_KEY && e.newValue !== '1') clearAll() })
 }
 
 /** 没有 Tab 键的设备上不拉(拉了也没法采用,白花一次请求)。 */
@@ -66,8 +73,9 @@ export async function requestSuggestion(sessionId: string, runId: string): Promi
     if (!r.ok) return // 老引擎 / 假引擎没有这条路由(404)= 没有建议
     const j = await r.json().catch(() => null) as { suggestion?: unknown } | null
     const text = typeof j?.suggestion === 'string' ? j.suggestion.trim() : ''
-    // 期间被作废过(新一轮起跑、用户已经在打字)→ 这句不要了
-    if (text && inflight.get(sessionId) === ac) usePromptSuggest.setState((s) => ({ bySession: { ...s.bySession, [sessionId]: text } }))
+    // 期间被作废过(新一轮起跑、用户已经在打字、开关被关掉)→ 这句不要了
+    if (!text || inflight.get(sessionId) !== ac || !isPromptSuggestOn() || useComposerDrafts.getState()[sessionId]?.text) return
+    usePromptSuggest.setState((s) => ({ bySession: { ...s.bySession, [sessionId]: text } }))
   } catch { /* 没有建议 */ } finally {
     if (inflight.get(sessionId) === ac) inflight.delete(sessionId)
   }

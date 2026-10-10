@@ -1662,7 +1662,8 @@ export const Composer2: React.FC<{
               setMentionDismissed(false)
               setRefDismissed(false)
               if (histPos) setHistPos(0) // 用户实际打字 → 退出历史召回态
-              if (suggestion && sessionId && e.target.value) clearSuggestion(sessionId) // 动手打字 = 不要这句建议了
+              // 动手打字 = 不要这一轮的建议了。不看眼下有没有灰字:请求可能还在路上,不掐掉的话它回来后、用户把字删空时会冒出来。
+              if (sessionId && e.target.value) clearSuggestion(sessionId)
               if (!e.target.value.includes('@')) { setMentionedSlug(''); setMentionAgents([]) }
               autoGrow()
             }}
@@ -1713,8 +1714,8 @@ export const Composer2: React.FC<{
                 if ((e.key === 'Enter' || e.key === 'Tab') && !e.nativeEvent.isComposing) { e.preventDefault(); slashMatches[Math.min(slashIndex, slashMatches.length - 1)]?.run(); return }
                 if (e.key === 'Escape') { e.preventDefault(); setSlashDismissed(true); setSlashSubMenu(null); return }
               }
-              // 输入建议:空输入框里显示着灰字时,Tab 把它填进来(不发送)。别的时候 Tab 照常移焦点。
-              if (e.key === 'Tab' && !e.shiftKey && showSuggestion && !e.nativeEvent.isComposing) {
+              // 输入建议:空输入框里显示着灰字时,Tab 把它填进来(不发送)。别的时候(含模式 / 模型等菜单开着时)Tab 照常移焦点。
+              if (e.key === 'Tab' && !e.shiftKey && showSuggestion && !openMenu && !e.nativeEvent.isComposing) {
                 e.preventDefault()
                 const text = suggestion
                 setDraft(text)

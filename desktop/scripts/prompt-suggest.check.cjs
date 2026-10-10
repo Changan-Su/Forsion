@@ -24,6 +24,7 @@ const NEGATIVE_CONTROL = process.argv.includes('--nc')
 const SHOTS = {
   light: path.join(os.tmpdir(), 'forsion-promptsuggest-light.png'),
   dark: path.join(os.tmpdir(), 'forsion-promptsuggest-dark.png'),
+  setting: path.join(os.tmpdir(), 'forsion-promptsuggest-setting.png'),
 }
 const SUGGESTION = '跑一下测试看看'
 const results = []
@@ -126,20 +127,21 @@ async function main() {
 
     // ── ② 在设置里真点开关 ──
     if (!NEGATIVE_CONTROL) {
-      await win.keyboard.press('Meta+,')
-      const sw = win.locator('[data-setting-anchor="prompt-suggest"] button[role="switch"]').first()
-      if (!(await waitFor(() => sw.count().then((n) => n > 0), 4000))) {
-        // 设置开在别的页:走搜索直达(与用户找这个开关的路一样)
-        const search = win.locator('.settings-nav input, .settings-search input').first()
-        await search.fill('输入建议').catch(() => {})
-        await win.locator('text=输入建议').first().click().catch(() => {})
-      }
-      const found = await waitFor(() => sw.count().then((n) => n > 0), 4000)
+      // 设置是一扇单独的浮窗(另一个渲染进程):开关写的是共用的 localStorage,主窗每次现读。
+      await win.evaluate(() => window.tangu.openFloatingPanel({ id: 'settings', title: 'Settings', builtin: 'settings', params: { tab: 'theme' } }))
+      let fl
+      await waitFor(async () => { fl = app.windows().find((w) => w.url().includes('window=floating')); return !!fl }, 15000)
+      const sw = fl ? fl.locator('[data-setting-anchor="prompt-suggest"] [role="switch"]').first() : null
+      const found = !!sw && await sw.waitFor({ timeout: 30000 }).then(() => true, () => false)
       check('设置 → 外观里有「输入建议」开关,缺省是关', found && (await sw.getAttribute('aria-checked')) === 'false')
       if (found) { await sw.scrollIntoViewIfNeeded(); await sw.click() }
       check('点一下 → 开', found && (await sw.getAttribute('aria-checked')) === 'true')
-      await win.keyboard.press('Escape')
-      await win.waitForTimeout(400)
+      if (found) {
+        await fl.locator('[data-setting-anchor="prompt-suggest"]').screenshot({ path: SHOTS.setting }).catch(() => {})
+      }
+      await fl?.close().catch(() => {})
+      await win.bringToFront().catch(() => {})
+      await win.waitForTimeout(500)
     }
 
     await turn('那 a.ts 里有什么', 'a.ts 导出了一个 add 函数。要我跑一下测试吗?')
