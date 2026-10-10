@@ -31,15 +31,14 @@ const crypto = require('crypto')
 const os = require('os')
 const fs = require('fs')
 const path = require('path')
-const { spawn } = require('child_process')
 const JSZip = require('jszip')
+const { startPreview } = require('./lib/preview.cjs')
 const { chromium } = (() => {
   try { return require('playwright-core') } catch { /* 落到 desktop */ }
   return require(path.resolve(__dirname, '../../desktop/node_modules/playwright-core'))
 })()
 
-const PORT = Number(process.env.E2E_PORT) || 5301 // 避开 dev 5274 / boot 5279 / unitsentry 5281 / settingscfg 5283 / … / runon 5299
-const APP_URL = `http://localhost:${PORT}/`
+let APP_URL = '' // main() 里由 startPreview 给:系统分配的空闲端口,E2E_PORT 可指定(见 lib/preview.cjs)
 const NEGATIVE = process.argv.includes('--negative')
 const SHOTS = path.resolve(__dirname, '../outputs/native-20261002')
 const CDN = 'https://market-cdn.e2e.test'
@@ -149,14 +148,6 @@ function findChromium() {
   throw new Error('找不到 chromium,设 CHROMIUM_EXE 环境变量')
 }
 
-function ping() {
-  return new Promise((res) => {
-    const req = http.get(APP_URL, (r) => { res(r.statusCode === 200); r.resume() })
-    req.on('error', () => res(false))
-    req.setTimeout(1500, () => { req.destroy(); res(false) })
-  })
-}
-
 /**
  * 假云端库(内存,本机 http)。判据逐条镜像 server/microserver/amadeus(改那边要改这里;2026-10-09 用那边的
  * 真路由 + PGlite 逐条对过):
@@ -263,11 +254,6 @@ async function main() {
     console.error('✗ 没有 dist/,先跑 npm run build')
     process.exit(1)
   }
-  // 端口上已经有服务 = 同机另一个检出正在跑这台架:接上去测到的是那边的构建(2026-10-09 实遇:修好的桥测出一片 400)。
-  if (await ping()) {
-    console.error(`✗ ${PORT} 已有服务在听(别的会话在跑同一台架?)。换一个端口:E2E_PORT=<端口> npm run e2e:plugins`)
-    process.exit(1)
-  }
   fs.mkdirSync(SHOTS, { recursive: true })
   const zips = {
     [PLUGIN_ID]: await zipOf({
@@ -283,14 +269,8 @@ async function main() {
     }),
   }
 
-  const preview = spawn('npx', ['vite', 'preview', '--port', String(PORT), '--strictPort'], {
-    cwd: root, stdio: ['ignore', 'ignore', 'pipe'], detached: true,
-  })
-  let previewErr = ''
-  preview.stderr.on('data', (d) => { previewErr += String(d) })
-  const killPreview = () => {
-    try { process.kill(-preview.pid, 'SIGTERM') } catch { try { preview.kill() } catch { /* 已退出 */ } }
-  }
+  const preview = await startPreview(root)
+  APP_URL = preview.url
 
   // 云端库:缺省 = 本脚本的假云端库;E2E_AMADEUS_API 指到真服务端时不起假的(那边的库 id 现问)。
   const fake = process.env.E2E_AMADEUS_API ? null : await startFakeCloud()
@@ -316,12 +296,7 @@ async function main() {
   const fail = (name, extra) => { fails.push(name); console.log(`FAIL  ${name}${extra ? `  | ${extra}` : ''}`) }
   const check = (ok, name, extra) => (ok ? pass(name, extra) : fail(name, extra))
   try {
-    let up = false
-    for (let i = 0; i < 40 && !up; i++) {
-      await new Promise((r) => setTimeout(r, 500))
-      up = await ping()
-    }
-    if (!up) throw new Error(`vite preview 没起来(${PORT} 被占?)\n${previewErr.slice(-800) || '(无 stderr)'}`)
+    await preview.ready()
 
     browser = await chromium.launch({ executablePath: findChromium(), headless: true, args: ['--no-sandbox'] })
     // ⚠️ 语言钉 zh-CN 必须走 context/page 的 locale(chromium --lang 对浏览器台架无效)
@@ -617,7 +592,7 @@ async function main() {
     if (page) await page.screenshot({ path: path.join(SHOTS, 'exception.png') }).catch(() => {}) // 抛错那一刻页面长什么样
   } finally {
     if (browser) await browser.close().catch(() => {})
-    killPreview()
+    preview.kill()
     if (fake) fake.close()
   }
   console.log(`\n${fails.length ? `✗ ${fails.length} 项失败` : '✓ 全部通过'}${NEGATIVE ? '(负对照模式:期望红)' : ''}`)
