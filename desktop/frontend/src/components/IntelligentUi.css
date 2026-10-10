@@ -1,0 +1,185 @@
+/* Native answer surface: content establishes hierarchy; controls use Genesis tokens.
+ * Model-written content stays flat on the answer (no card faces); only live app cards are objects.
+ * Reading text (.iui-title, .iui-prose) follows the chat body; everything else uses the six UI roles. */
+.intelligent-ui { --iui-check: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 6 9 17l-5-5'/%3E%3C/svg%3E"); container-type: inline-size; width: 100%; max-width: 700px; color: var(--text); font-family: var(--font-ui); font-size: var(--ui-font-body); line-height: var(--ui-line-body); margin: 12px 0 20px; min-width: 0; overflow-wrap: anywhere; }
+.intelligent-ui * { box-sizing: border-box; }
+/* Same size as an h2 inside an answer (.t2-content h2 = 1.25em of 14px). */
+.intelligent-ui .iui-title { font-family: var(--font-body); font-size: 17.5px; line-height: 1.35; font-weight: 600; margin: 0 0 10px; }
+.iui-block > h4, .iui-list-head h4 { font-size: var(--ui-font-heading); line-height: var(--ui-line-heading); font-weight: 600; margin: 0 0 10px; }
+/* A titled block or a control group starts a section; an untitled block right after a titled text
+ * block belongs to that section (the usual shape: a short explanation, then its list). */
+.iui-block + .iui-block { margin-top: 20px; }
+.iui-block + .iui-block:has(> h4), .iui-block + .iui-block:has(.iui-list-head h4), .iui-block + .iui-block-controls { margin-top: 28px; }
+.iui-title + .iui-block-controls { margin-top: 18px; }
+.iui-block-text:has(> h4) + .iui-block:not(:has(> h4)):not(:has(.iui-list-head h4)):not(.iui-block-controls) { margin-top: 12px; }
+.iui-block-disclosure + .iui-block-disclosure { margin-top: 2px; }
+.iui-block-app-card + .iui-block-app-card { margin-top: 12px; }
+.intelligent-ui button:where(:not(.iui-app-card *, .t2-suggest-chip)), .intelligent-ui input, .intelligent-ui summary { font: inherit; }
+.intelligent-ui button:where(:not(.iui-app-card *, .t2-suggest-chip)), .intelligent-ui .iui-actions a { cursor: pointer; border: var(--border-width, 1px) solid var(--border); border-radius: var(--radius-md); background: transparent; color: var(--text); padding: 8px 12px; min-height: 36px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; text-decoration: none; }
+.intelligent-ui button:where(:not(.iui-app-card *, .t2-suggest-chip)):hover, .intelligent-ui .iui-actions a:hover { background: var(--bg-hover); }
+.intelligent-ui button:where(:not(.iui-app-card *)):disabled { opacity: .4; cursor: default; }
+.intelligent-ui :is(button, input, summary, a):focus-visible { outline: var(--focus-ring) solid var(--accent-ink); outline-offset: 2px; }
+.intelligent-ui p { margin: 8px 0; }
+.intelligent-ui small, .iui-status { color: var(--text-muted); font-size: var(--ui-font-meta); line-height: var(--ui-line-meta); }
+.intelligent-ui strong { font-weight: 600; }
+.iui-status { padding: 12px 0; }
+.intelligent-ui .iui-prose { font-family: var(--font-body); font-size: 14px; line-height: var(--chat-line-height, 1.72); }
+.iui-prose p, .iui-prose :is(ul, ol) { margin: 0 0 var(--chat-paragraph-gap, .7em); }
+.iui-prose :is(ul, ol) { padding-left: 1.5em; }
+.iui-prose :is(h1, h2, h3, h4, h5, h6) { font-size: 1.1em; line-height: 1.35; font-weight: 600; margin: 1.1em 0 .4em; }
+.iui-prose > :first-child { margin-top: 0; }
+.iui-prose > :last-child { margin-bottom: 0; }
+.iui-controls { display: grid; gap: 20px; }
+.iui-number { display: flex; gap: 16px; align-items: center; justify-content: space-between; }
+.iui-stepper { display: flex; align-items: center; padding: 2px; border: var(--border-width, 1px) solid var(--border); border-radius: var(--radius-pill); }
+.intelligent-ui .iui-stepper button { width: 28px; height: 28px; min-height: 0; padding: 0; border: 0; border-radius: 50%; color: var(--text-muted); }
+.intelligent-ui .iui-stepper button:hover:not(:disabled) { background: var(--bg-hover); color: var(--text); }
+.iui-stepper output { text-align: center; min-width: 34px; font-variant-numeric: tabular-nums; font-weight: 600; }
+/* Choices keep their native radios in the tree (arrow keys, space, screen readers) but draw themselves:
+ * the selected one carries the accent band (DESIGN §5) and a check. */
+.iui-choice { min-width: 0; margin: 0; padding: 0; border: 0; }
+.iui-choice legend { margin-bottom: 10px; padding: 0; font-size: var(--ui-font-heading); line-height: var(--ui-line-heading); font-weight: 600; }
+.iui-parallel { display: grid; grid-template-columns: repeat(var(--iui-columns, 3), minmax(0, 1fr)); gap: 12px; }
+.iui-parallel[data-columns="1"] { --iui-columns: 1; }
+.iui-parallel[data-columns="2"] { --iui-columns: 2; }
+.iui-choice label { position: relative; display: flex; gap: 10px; padding: 12px 14px; border: var(--border-width, 1px) solid var(--border); border-radius: var(--radius-md); align-items: flex-start; cursor: pointer; min-width: 0; transition: background var(--duration-fast), border-color var(--duration-fast), box-shadow var(--duration-fast); }
+.iui-choice label:hover { background: var(--bg-hover); }
+.iui-choice input { appearance: none; position: absolute; inset: 0; width: auto; height: auto; margin: 0; opacity: 0; cursor: pointer; }
+.iui-choice label[data-selected], .iui-pick-card[data-selected] { border-color: var(--accent); box-shadow: 0 0 0 .5px var(--accent); }
+.iui-choice label[data-selected]::after { content: ''; position: absolute; top: 13px; right: 12px; width: 14px; height: 14px; background: var(--accent-ink); -webkit-mask: var(--iui-check) center / contain no-repeat; mask: var(--iui-check) center / contain no-repeat; }
+.iui-choice label:has(:focus-visible), .iui-pick-card:has(input:focus-visible) { outline: var(--focus-ring) solid var(--accent-ink); outline-offset: 2px; }
+.iui-choice label strong { display: block; padding-right: 22px; }
+.iui-choice small { display: block; margin-top: 4px; text-wrap: pretty; }
+/* Short options without descriptions: one segmented control (same vocabulary as .seg). */
+.iui-seg .iui-parallel { display: inline-flex; max-width: 100%; gap: 0; border: var(--border-width, 1px) solid var(--overlay-medium); border-radius: var(--radius-md); overflow: hidden; }
+/* Segments shrink and wrap their text before they would overflow: the short-label test in the renderer
+ * only estimates widths, and wide glyphs can exceed it. */
+.iui-seg label { flex: 0 1 auto; align-items: center; justify-content: center; padding: 7px 16px; border: 0; border-radius: 0; color: var(--text-muted); text-align: center; }
+.iui-seg label + label { border-left: var(--border-width, 1px) solid var(--overlay-medium); }
+.iui-seg label strong { padding-right: 0; font-weight: 500; }
+.iui-seg label[data-selected] { background: var(--accent-light); color: var(--accent-ink); box-shadow: none; }
+.iui-seg label[data-selected]::after { content: none; }
+.iui-seg label:has(:focus-visible) { outline-offset: -2px; }
+/* Options that carry a picture: one row of selectable picture cards. */
+.iui-pick-card { position: relative; min-width: 0; display: flex; flex-direction: column; border: var(--border-width, 1px) solid var(--border); border-radius: var(--radius-md); overflow: hidden; transition: background var(--duration-fast), border-color var(--duration-fast), box-shadow var(--duration-fast); }
+/* Hover belongs to the whole card: the label ends above the source line. */
+.iui-pick-card:hover { background: var(--bg-hover); }
+.iui-pick-card[data-expanded] { grid-column: 1 / -1; }
+.iui-pick label, .iui-pick label:hover { flex: 1; flex-direction: column; gap: 0; padding: 0; border: 0; border-radius: 0; background: none; }
+/* The card carries the focus ring; a second one on the label would cut through the source line. */
+.iui-pick label:has(:focus-visible) { outline: none; }
+.iui-pick label > img { display: block; width: 100%; aspect-ratio: 4 / 3; object-fit: cover; background: var(--bg-hover); }
+.iui-pick-card[data-expanded] label > img { aspect-ratio: auto; object-fit: contain; max-height: 640px; }
+.iui-pick .iui-image-error { aspect-ratio: 4 / 3; min-height: 0; border-radius: 0; }
+.iui-pick-text { padding: 10px 12px 12px; }
+.iui-pick label strong { padding-right: 0; }
+.iui-pick small { line-height: 1.6; }
+.iui-pick-card > a { align-self: flex-start; margin-top: -6px; padding: 0 12px 10px; font-size: var(--ui-font-caption); color: var(--text-faint); text-decoration: none; }
+.iui-pick-card > a:hover { text-decoration: underline; }
+.iui-pick-card[data-selected]::before, .iui-pick-card[data-selected]::after { content: ''; position: absolute; z-index: 1; pointer-events: none; }
+.iui-pick-card[data-selected]::before { top: 8px; right: 8px; width: 22px; height: 22px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 1.5px var(--bg); }
+.iui-pick-card[data-selected]::after { top: 12px; right: 12px; width: 14px; height: 14px; background: var(--on-accent, var(--bg)); -webkit-mask: var(--iui-check) center / contain no-repeat; mask: var(--iui-check) center / contain no-repeat; }
+/* Looking closer is a separate corner control: it never changes the choice. Retry stays visible. */
+.intelligent-ui .iui-pick-tool { position: absolute; z-index: 1; top: 8px; left: 8px; min-height: 0; height: 24px; padding: 0 6px; border: 0; border-radius: var(--radius-sm); background: color-mix(in srgb, var(--bg) 84%, transparent); font-size: var(--ui-font-caption); transition: opacity var(--duration-fast); }
+.intelligent-ui .iui-pick-tool[aria-expanded="false"] { opacity: 0; }
+.intelligent-ui .iui-pick-card:hover .iui-pick-tool, .intelligent-ui .iui-pick-tool:focus-visible { opacity: 1; }
+/* Comparison reads as a spec sheet: name, one-liner and facts sit on shared rows (subgrid).
+ * Rows are placed explicitly so items with and without pictures still line up; a second row of
+ * items (4–6) is spaced by padding because a subgrid would inherit row-gap into every item. */
+.iui-comparison { column-gap: 20px; row-gap: 0; }
+.iui-comparison article { min-width: 0; display: grid; grid-template-rows: subgrid; grid-row: span 4; align-content: start; }
+.iui-comparison article:nth-child(n+4) { padding-top: 22px; }
+.iui-comparison article > .iui-picture { grid-row: 1; margin-bottom: 10px; }
+.iui-comparison article > strong { grid-row: 2; }
+.iui-comparison article > p { grid-row: 3; margin: 2px 0 0; }
+.iui-comparison p, .iui-comparison li { color: var(--text-muted); }
+.iui-comparison ul { grid-row: 4; list-style: none; margin: 10px 0 0; padding: 0; border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent); }
+.iui-comparison ul:empty { display: none; }
+.iui-comparison li { padding: 6px 0; border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent); }
+.iui-comparison li:last-child { border-bottom-color: transparent; }
+.iui-list-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.iui-list-head h4 { margin: 0; }
+.iui-count { color: var(--text-muted); font-size: var(--ui-font-meta); font-variant-numeric: tabular-nums; }
+.iui-list-head > div { margin-left: auto; display: flex; gap: 2px; }
+.intelligent-ui .iui-list-head button { width: 26px; height: 26px; min-height: 0; padding: 0; border: 0; border-radius: var(--radius-sm); color: var(--text-muted); }
+.intelligent-ui .iui-list-head button:hover:not(:disabled) { background: var(--bg-hover); color: var(--text); }
+.iui-checklist progress { display: block; appearance: none; width: 100%; height: 2px; border: 0; border-radius: 1px; overflow: hidden; margin-bottom: 6px; background: color-mix(in srgb, var(--border) 70%, transparent); }
+.iui-checklist progress::-webkit-progress-bar { background: color-mix(in srgb, var(--border) 70%, transparent); }
+.iui-checklist progress::-webkit-progress-value { background: var(--text-muted); }
+.iui-check-rows { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 28px; }
+.iui-check-rows label { min-height: 36px; display: flex; align-items: center; gap: 10px; cursor: pointer; padding: 6px 0; min-width: 0; }
+.iui-check-rows label > span { min-width: 0; }
+/* One sentence per row is reading text: single column, chat body size. Quantity lists stay compact. */
+.intelligent-ui .iui-check-rows.iui-prose { grid-template-columns: 1fr; line-height: 1.55; }
+.iui-check-rows.iui-prose label { align-items: flex-start; }
+.iui-check-rows input { appearance: none; flex: none; display: grid; place-content: center; width: 16px; height: 16px; margin: 0; border: 1.5px solid color-mix(in srgb, var(--text-muted) 60%, transparent); border-radius: calc(var(--radius-sm) - 1px); background: transparent; cursor: pointer; transition: background var(--duration-fast), border-color var(--duration-fast); }
+.iui-check-rows.iui-prose input { margin-top: 3px; }
+.iui-check-rows label:hover input { border-color: var(--text-muted); }
+.iui-check-rows input:checked, .iui-check-rows input:indeterminate { border-color: var(--accent); }
+.iui-check-rows input:checked { background: var(--accent); }
+.iui-check-rows input:checked::after { content: ''; width: 11px; height: 11px; background: var(--on-accent, var(--bg)); -webkit-mask: var(--iui-check) center / contain no-repeat; mask: var(--iui-check) center / contain no-repeat; }
+.iui-check-rows input:indeterminate::after { content: ''; width: 8px; height: 1.5px; border-radius: 1px; background: var(--accent); }
+.iui-check-rows label[data-checked] > span { color: var(--text-muted); }
+.iui-check-rows label[data-checked] > span:not(.iui-quantity) { text-decoration: line-through; text-decoration-color: color-mix(in srgb, currentColor 45%, transparent); }
+.iui-check-rows small { display: block; }
+.iui-quantity { white-space: nowrap; margin-left: auto; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+/* Disclosure matches the fold block in notes: chevron first, no full-width rule. */
+.intelligent-ui summary { cursor: pointer; padding: 6px 0; display: flex; align-items: center; gap: 6px; font-weight: 500; list-style: none; }
+.intelligent-ui summary::-webkit-details-marker { display: none; }
+.intelligent-ui summary svg { order: -1; flex: none; width: 14px; height: 14px; color: var(--text-muted); transform: rotate(-90deg); transition: transform var(--duration-fast) ease-out; }
+.intelligent-ui details[open] > summary svg { transform: none; }
+.iui-detail-content { padding: 2px 0 6px 20px; }
+.iui-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.iui-gallery { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.iui-picture { min-width: 0; margin: 0; }
+.iui-picture[data-expanded] { grid-column: 1 / -1; }
+.intelligent-ui .iui-image-toggle { display: block; width: 100%; padding: 0; border: 0; overflow: hidden; background: var(--bg-hover); }
+.iui-picture img { display: block; width: 100%; height: auto; aspect-ratio: 4 / 3; object-fit: cover; }
+.iui-picture[data-expanded] img { aspect-ratio: auto; object-fit: contain; max-height: 640px; }
+.iui-picture figcaption { font-size: var(--ui-font-meta); line-height: var(--ui-line-meta); color: var(--text-muted); margin-top: 8px; }
+.iui-picture figcaption a { display: block; margin-top: 2px; color: var(--text-faint); text-decoration: none; }
+.iui-picture figcaption a:hover { text-decoration: underline; }
+.iui-image-error { min-height: 150px; display: flex; flex-direction: column; justify-content: center; gap: 8px; padding: 12px; background: var(--bg-hover); border-radius: var(--radius-md); }
+/* Sources: title and host on one line; the summary shows two lines and opens in place. */
+.iui-source { padding: 12px 0; border-bottom: 1px solid color-mix(in srgb, var(--border) 44%, transparent); }
+.iui-source:first-child { padding-top: 0; }
+.iui-source:last-child { padding-bottom: 0; border-bottom: 0; }
+/* A host that does not fit beside the title drops to its own line and may break inside (long DNS labels). */
+.iui-source > a { display: flex; flex-wrap: wrap; gap: 0 8px; align-items: baseline; color: var(--text); font-weight: 500; text-decoration: none; }
+.iui-source > a:hover { text-decoration: underline; }
+.iui-source > a > span { min-width: 0; }
+.iui-source > a > small { min-width: 0; font-weight: 400; }
+.iui-source > a > svg { flex: none; align-self: center; margin-left: auto; color: var(--text-faint); opacity: 0; transition: opacity var(--duration-fast); }
+.iui-source > a:is(:hover, :focus-visible) > svg { opacity: 1; }
+.iui-source summary { display: block; margin-top: 4px; padding: 0; font-weight: 400; font-size: var(--ui-font-meta); line-height: 1.6; color: var(--text-muted); }
+.iui-source summary > span { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+.iui-source details[open] > summary > span { display: block; }
+.iui-notice { display: flex; align-items: center; gap: 6px; margin-top: 12px; color: var(--text-muted); font-size: var(--ui-font-meta); }
+.intelligent-ui pre, .intelligent-ui table { display: block; max-width: 100%; overflow-x: auto; }
+/* While the answer is arriving: a placeholder for what is still to come, and arriving blocks fade in. */
+.iui-skeleton { display: grid; gap: 10px; margin-top: 26px; }
+.iui-skeleton:first-child { margin-top: 0; }
+.iui-skeleton > i { display: block; height: 12px; border-radius: var(--radius-sm); background: linear-gradient(90deg, var(--overlay-light) 25%, var(--overlay-medium) 37%, var(--overlay-light) 63%) 0 0 / 400% 100%; animation: iui-shimmer 1.6s ease infinite; }
+.iui-skeleton > i:nth-child(1) { width: 96px; height: 14px; margin-bottom: 4px; }
+.iui-skeleton > i:nth-child(3) { width: 72%; }
+.intelligent-ui[data-streamed] .iui-block { animation: iui-in var(--view-enter-duration, .22s) ease both; }
+@keyframes iui-shimmer { from { background-position: 100% 0; } to { background-position: 0 0; } }
+@keyframes iui-in { from { opacity: 0; translate: 0 4px; } }
+@container (max-width: 480px) {
+  .iui-parallel, .iui-gallery { grid-template-columns: 1fr; }
+  .iui-comparison { row-gap: 18px; }
+  .iui-comparison article, .iui-comparison article:nth-child(n+4) { display: block; grid-row: auto; padding-top: 0; }
+  .iui-seg .iui-parallel { display: grid; }
+  .iui-seg label + label { border-left-width: 0; border-top: var(--border-width, 1px) solid var(--overlay-medium); }
+}
+@container (max-width: 400px) { .iui-check-rows { grid-template-columns: 1fr; } }
+/* Fingers need the larger targets the compact pointer layout gives up; the corner tool cannot rely on hover. */
+@media (pointer: coarse) {
+  .intelligent-ui .iui-stepper button, .intelligent-ui .iui-list-head button { width: 36px; height: 36px; }
+  .iui-check-rows label { min-height: 44px; }
+  .intelligent-ui .iui-pick-tool[aria-expanded="false"] { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .intelligent-ui summary svg, .iui-choice label, .iui-pick-card, .intelligent-ui .iui-pick-tool, .iui-check-rows input, .iui-source > a > svg { transition: none; }
+  .iui-skeleton > i, .intelligent-ui[data-streamed] .iui-block { animation: none; }
+}

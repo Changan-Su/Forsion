@@ -125,6 +125,8 @@ Kotlin 在 `NativeChrome*` / `NativeSheet*`。没装宿主（桌面、Web、浏�
     （失败方向是多留一条，不是被盖住）。想让内容从 Dock 底下穿过去的视图，在**最底下那个滚动器**上标 `data-under-dock`：
     面板铺到屏幕底，让位变成该滚动器的 `padding-bottom`（原有的底部留白写进 `--under-dock-pad`）。滚动器下面还有钉底按钮 / 脚注的视图不能标
     （会话列表是先把脚注排进滚动器才标的，见 `SidebarPane` 的 `dockHost`）。主页另有一条：壁纸铺满，内容留在 Dock 之上。
+  - **胶囊下面再钉一条**（通话条）：不逐页让位。应用在壳上设 `--mb-top-extra`（那一条占的高度），它并进 `--mb-top`，
+    凡是给胶囊让位的页面一起让。通话条的那一份在 `desktop/frontend/src/mini/voiceCall.css` 末尾；`npm run stage:phone` 的 `call-bar` 逐页核对。
   - **触摸**：两条原生条是透明的，只有胶囊接触摸；胶囊之间、Dock 两侧的触摸落到页面上（从两颗胶囊中间起手的右滑照样拉出列表）。
   - **关掉毛玻璃**（设置 → 外观，`data-glass='off'`）：板不再模糊，原生层把胶囊填成实色（状态里的 `frosted`）。
   - **只在外壳里悬浮**：进了主区（Dock 收起）WebView 底边回到导航条之上，输入区等贴底的 Web 界面不用改；键盘弹起同理。

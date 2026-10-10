@@ -164,8 +164,14 @@ export interface ToolContext {
    * ⚠️ 绝不注入 system prompt —— 只作 list_ui_commands 的返回值(前缀缓存纪律)。
    */
   uiCommands?: UiCommandEntry[];
+  /** Presentation catalog only; records stay in the initiating client. */
+  uiCards?: import('../shared/intelligentCards.js').UIAppCardDescriptor[];
   /** 同上,发起端自报的界面设置当前值快照(run 开始那一刻;之后由 updateUiSettings 就地刷新)。 */
   uiSettings?: Record<string, UiSettingEntry>;
+  /** 本 run 冻结的「对话里的可视化」档位(agentLoop 拼提示时从 uiSettings.visuals 取一次)。⚠️ 工具门必须读这个而不是
+   *  uiSettings:set_ui_setting 的回执会就地刷新 uiSettings,run 中途改成 off 会让「提示段还在催、工具已拒绝」(Codex 10-09)。
+   *  缺省(老调用方 / 子代理展开)回落到 uiSettings 现算。 */
+  visuals?: 'auto' | 'less' | 'off';
   /**
    * 就地刷新 uiSettings 的值(界面动作回执带来的新值)。
    * ⚠️ registry 给每次工具调用一份 ctx **浅拷贝**(withTimeoutSignal),工具里写 `ctx.uiSettings = …`

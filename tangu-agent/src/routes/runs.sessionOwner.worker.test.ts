@@ -2,12 +2,16 @@
  * POST /agent/runs 的会话归属 —— 云端 worker 这条路(真 httpWorkerHost + 真 HttpStateStore,对面是照 server
  * microserver/agent-core/stateApi.ts 的三条路由写的替身:读归属如实返回、建会话已存在就什么都不做、建 run 按令牌的用户验归属)。
  *
- * 为什么 server 那道「建 run 验归属」在这里兜不住:HttpStateStore 给会话选令牌时先用「这个会话绑定的令牌」
- * (createRun 时绑),再才是本次请求自己的。两个账号抢同一个新会话 id、都读到「还没有」之后:
+ * 加这道复核时(2026-10-10 上午)server 那道「建 run 验归属」在这里兜不住:HttpStateStore 给会话选令牌时先用「这个会话
+ * 绑定的令牌」(createRun 时绑),再才是本次请求自己的。两个账号抢同一个新会话 id、都读到「还没有」之后:
  *   - 先到的那个 run 已建(它的令牌已绑到会话)→ 后到的那个 createRun 拿到的是**对方的令牌**,server 验归属通过,
  *     后到者写的话就以对方的身份、在对方的会话里起了 run;
  *   - 后到的那个先 createRun → 被 server 拒,但它的令牌已经绑到会话 → 先到者自己的 run 反而被拒。
  * 路由建完会话后再读一次归属(读归属不看令牌是谁的),后到者在 createRun 之前就被挡下,两种次序都不再发生。
+ *
+ * 当天下午 HttpStateStore 改成 handler 期只用请求自己的令牌、建成了才绑(见 runs.sessionToken.worker.test.ts),server 那道检查
+ * 在这里也生效了。实跑:去掉路由的复核,后两条仍红,但红成 500 Forbidden(走到建 run 被 server 拒),不再是以对方的身份起 run、
+ * 也不再连累先到者。复核照旧留着:走到建 run 之前就给出 404。
  */
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import express from 'express';

@@ -24,16 +24,27 @@ const GUI_CLIENT_RE = /^(desktop|web)\//;
 /** ponytail: 256K 字符上限(参数进上下文,模型自会节制;超了让它精简)。真需要大卡再谈外置存储。 */
 const MAX_SKETCH_HTML_CHARS = 262_144;
 
+/** 用户的「可视化多少」档位(对标 ChatGPT「Layout and visuals」):渲染端 UI_SETTINGS.visuals 随每次 run 的
+ *  ui_settings 快照上送,模型也能经 set_ui_setting 改。auto=缺省;less=只在用户明确要图时画(本轮隐式信号与收尾
+ *  补催都不触发,另注一句提示);off=工具与提示段一起撤下。未知值一律按 auto —— 老客户端不送这项不该少功能。 */
+export type VisualsPref = 'auto' | 'less' | 'off';
+export function visualsPrefOf(uiSettings?: Record<string, { value: string }> | null): VisualsPref {
+  const v = uiSettings?.visuals?.value;
+  return v === 'less' || v === 'off' ? v : 'auto';
+}
+
 /** 单一判定源:isEnabledFor 与 agentLoop 的 SKETCH_SECTION 注入共用,免两处条件漂移。
  *  结构化入参而非 ToolContext:agentLoop 拼系统提示时(第 3b 段)toolCtx 还没造出来。
  *  ⚠️planMode:计划模式有一道**集中的只读工具过滤**,sketch 本来就不在其白名单里 —— 这里跟着
  *  排除,是为了让「提示段在场 ⟺ 工具在场」这条不变式在计划模式下也成立(否则模型照着提示段
  *  去调一个不存在的工具,白烧一轮)。单测钉住两边配对。 */
-export function sketchEnabledFor(ctx: Pick<ToolContext, 'client' | 'subAgentDepth' | 'planMode' | 'channelSession' | 'preset'>): boolean {
+export function sketchEnabledFor(ctx: Pick<ToolContext, 'client' | 'subAgentDepth' | 'planMode' | 'channelSession' | 'preset' | 'uiSettings' | 'visuals'>): boolean {
   // preset 位(PRESET_TABLE.sketch):chat 今天保留 sketch(D15),TTFT 验收线不达标时第一刀就是翻这一位——
-  // 段与工具经同一判定一起关,不许只裁一头。
+  // 段与工具经同一判定一起关,不许只裁一头。visuals=off 同理:用户关了可视化,工具与段一起缺席。
+  // ⚠️ 档位读 run 冻结的 ctx.visuals(agentLoop 拼提示时取一次),不读会被 set_ui_setting 回执就地改掉的 uiSettings:
+  //    否则 run 中途 auto→off 会变成「提示段还在催画、工具执行却拒绝」。没冻结的调用方(子代理展开 / 老路径)才现算。
   return GUI_CLIENT_RE.test(ctx.client || '') && !((ctx.subAgentDepth ?? 0) >= 1) && !ctx.planMode && !ctx.channelSession
-    && presetOf(ctx.preset).sketch;
+    && presetOf(ctx.preset).sketch && (ctx.visuals ?? visualsPrefOf(ctx.uiSettings)) !== 'off';
 }
 
 /**
@@ -66,10 +77,14 @@ into a title/subtitle/metrics/source template. Put sources and assumptions in a 
 when needed. Keep the outer surface transparent; do not wrap plots in panels or add decorative KPI
 rows. Use one accent for one measure, neutral guides and meaningful labels. Never invent data.
 
-For common charts and processes, prefer the built-in \`fs-chart\` (bar or line) and \`fs-flow\`
-elements over hand-built shapes. Load the bundled \`visualize\` skill for their JSON schemas and
-examples. They provide direct labels, responsive layout, keyboard/hover inspection and restrained
-connectors without external libraries. Use custom SVG for multi-series plots or arbitrary graphs.
+Compose from the built-in parts so every card looks like one family: \`fs-chart\` (bar or line),
+\`fs-flow\` (process), \`fs-compare\` (options side by side, each with an optional follow-up button),
+\`fs-choice\` (a question with answer buttons or checkboxes that send the pick as the user's next
+message) and \`fs-checklist\` (tickable list, ticks persist on this device). Each takes one JSON
+script; load the bundled \`visualize\` skill for the schemas. Prefer them over hand-built markup,
+and never add inline \`style\` attributes, custom colors or your own button/checkbox styling: the host
+owns typography, spacing, theme and responsive layout. Use custom SVG only for multi-series plots or
+arbitrary graphs. When the content is a short list or one sentence, answer in prose instead.
 
 Use the supplied \`.fs-*\` styles and \`--fs-*\` variables. Shared controls: \`fs-controls\`,
 \`fs-field\` (wrapping label), \`fs-input\`, \`fs-select\`, \`fs-range\`, \`fs-check\` (wrapping label)
@@ -88,9 +103,22 @@ a snapshot up to 16 KiB. Store only choices needed to restore the view, not secr
 This state is local to this card on this device; it does not reach the model or start a conversation.
 Listen for \`forsion:themechange\` when canvas needs repainting; SVG CSS updates automatically.
 
+The card renders progressively while you write it: put the headline and the markup first and every
+\`<script>\` block last, so the structure is visible before the behavior arrives.
+
+Buttons that change the answer: in a click handler call \`window.forsionSketch.ask("...")\` with the
+follow-up the user would type ("explain the second stage", "show the pessimistic case"). It is sent as
+the user's next visible message in this conversation, one per click; never call it on load or from a
+timer. Use it for choices that need a new answer; keep recomputation that needs no new answer inside
+the card. \`window.forsionSketch.copy(text)\` (also click-only) copies text such as a shopping list.
+
 Before calling \`sketch\`, check that every control works, all queried elements exist, labels fit,
 light/dark themes work, and the first render is useful. Afterwards give only the takeaway or caveat
 not already visible. For complex charts or interactions, use the bundled \`visualize\` skill.`;
+
+/** visuals=less 时追加在 SKETCH_SECTION 之后:常驻段仍在(用户点名要图时成品下限不变),但「不等用户说画」那条让位。 */
+export const SKETCH_LESS_NOTE = `The user has set interface visuals to "less": call \`sketch\` only when they explicitly ask for a
+chart, diagram, card, or interactive view in this turn; otherwise answer in prose.`;
 
 export type SketchTurnSignal = {
   kind: 'explicit' | 'implicit';
@@ -108,7 +136,7 @@ const SKETCH_CODE_FOCUS_RE = /(?:修复|改代码|重构|实现|写代码|编译
  * 本轮视觉信号:常驻段负责通识,这里用很窄的语义启发式给当前请求一次额外提醒。
  * 不返回用户原文,不做 LLM 分类器,不因文中单个数字或代码里的 compare 误触发。
  */
-export function sketchTurnSignalFor(message: string): SketchTurnSignal | undefined {
+export function sketchTurnSignalFor(message: string, visuals: VisualsPref = 'auto'): SketchTurnSignal | undefined {
   const text = String(message || '')
     .replace(/```[\s\S]*?```/g, ' ')
     .replace(/`[^`\n]+`/g, ' ')
@@ -124,6 +152,8 @@ export function sketchTurnSignalFor(message: string): SketchTurnSignal | undefin
         'The user explicitly asked for a visual deliverable. Call `sketch` before finishing; do not substitute an ASCII diagram, a Markdown table, or a prose description unless the user also explicitly requested that format.',
     };
   }
+  // less:只认明确要求;隐式信号(比较 / 流程 / 数据形状)不再提醒,收尾补催也随之缺席(它只看这个信号)。
+  if (visuals === 'less') return undefined;
 
   const relation = SKETCH_RELATION_RE.test(text);
   const interactive = SKETCH_INTERACTIVE_RE.test(text);
@@ -154,27 +184,27 @@ export const sketchProvider: ToolProvider = {
           name: 'sketch',
           // E1 三段式(§五):何时用 → 策略 → 何时别用。构图/视觉语法**不重复**在这里 ——
           // 它们是 SKETCH_SECTION 的正文,而段与工具同门禁(sketchEnabledFor),工具在场 ⟺ 段在场。
-          // ponytail: 上限=1.5KB。`--fs-*` 变量表与 `fs-*` 类名表留全(§六 P08:SKETCH_SECTION 里
-          //           没有这两张表,SKETCH_SECTION 反过来让模型「从工具描述取 .fs-* 类」)。
+          // ponytail: 上限≈1.6KB(10-09 二轮加 PARTS / copy 后靠删 fs-eyebrow / fs-chip / fs-panel / 折叠那句抵回来)。`--fs-*` 变量表与
+          //           `fs-*` 类名表留全(§六 P08:SKETCH_SECTION 里没有这两张表,SKETCH_SECTION 反过来让模型「从工具描述取 .fs-* 类」)。
           description:
             'Draw a visual card inline in the chat from self-contained HTML: charts, diagrams, comparisons, ' +
             'timelines, layouts, small interactive widgets. The "Visual cards" section of your instructions ' +
             'covers when to draw and how to compose.\n' +
             'SANDBOX: JavaScript runs, but there is NO network, host API or navigation. Inline all CSS/JS, ' +
-            'embed images as data: URIs, never reference external scripts/styles/fonts (no charting ' +
-            'libraries or web fonts — draw with inline SVG or divs), no eval/new Function. Links and form ' +
-            'submits do nothing; interaction must be inline JS.\n' +
+            'embed images as data: URIs, no external scripts/styles/fonts or charting libraries (draw with ' +
+            'inline SVG or divs), no eval/new Function. Links and form submits do nothing.\n' +
             'THEME: use the injected CSS variables, never hardcode colors — they track the live theme: ' +
             '--fs-bg (transparent card canvas), --fs-surface, --fs-text, --fs-muted, --fs-faint, --fs-border, ' +
             '--fs-rule (hairline for gridlines/axes), --fs-accent, --fs-accent-soft, --fs-green, --fs-danger, ' +
             '--fs-radius, --fs-font, --fs-mono, and the series ramp --fs-s1..--fs-s5 (s1 = accent for the focus ' +
             'value; s2..s5 fade for context). body inherits background/color/font.\n' +
-            'CLASSES: fs-header, fs-eyebrow, fs-title, fs-subtitle, ' +
-            'fs-plot, fs-caption/fs-source, fs-stat-grid, fs-stat, fs-value, fs-label, fs-panel, fs-row, ' +
-            'fs-chip, fs-bar-track, fs-bar-fill.\n' +
-            'SIZE: ~700px wide, auto height; past ~half the chat area it folds behind an expand toggle, so ' +
-            'put the headline first. Each call appends a NEW card (no in-place updates); the result is ' +
-            'only a confirmation, the user sees the card.\n' +
+            'PARTS: fs-chart, fs-flow, fs-compare, fs-choice, fs-checklist (JSON-driven, see the visualize ' +
+            'skill); classes fs-header, fs-title, fs-subtitle, fs-plot, fs-source, fs-stat-grid, fs-stat, fs-value, ' +
+            'fs-label, fs-row, fs-grid, fs-actions, fs-callout, fs-bar-track; no inline style attributes.\n' +
+            'SIZE: ~700px wide, auto height. It streams in while you write (markup first, scripts last). ' +
+            'Each call appends a NEW card; the result is only a confirmation, the user sees the card.\n' +
+            'INTERACTION: click handlers may call window.forsionSketch.ask(text) (sends that follow-up as ' +
+            'the user\'s next message) or .copy(text).\n' +
             'Not for source code, files, or one-number answers — those stay in prose.',
           parameters: {
             type: 'object',

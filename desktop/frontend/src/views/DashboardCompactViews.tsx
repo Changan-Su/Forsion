@@ -2,18 +2,21 @@
  *
  * 完整 Todo / Calendar / Inbox / Activity 都是为整页操作设计的；直接缩进卡片会同时保留工具栏、
  * 多层滚动与侧栏密度。这里保留同一数据源和关键动作，只把信息层级收敛成一眼能扫完的摘要。 */
+import './DashboardCompactViews.css'
 import { useEffect, useMemo, useState } from 'react'
-import { CalendarDays, CheckCircle2, Circle, Inbox, Pause, Play } from 'lucide-react'
+import { CalendarDays, Circle, Inbox, Pause, Play } from 'lucide-react'
 import type { DashboardCardSize } from '@lcl/engine'
 import { useWorkspace } from '@lcl/engine'
 import { parseCalDate } from '@amadeus-shared/db/calDate'
-import { setAggCell, firstDateCol, type AggRow } from '../amadeus/store/dbAggregateStore'
+import { setAggCell, firstDateCol } from '../amadeus/store/dbAggregateStore'
 import { useCalendarMembers } from '../amadeus/store/calendarMembers'
 import { useCalendarConfig, colorForDb, isHidden } from '../amadeus/store/calendarConfigStore'
 import { usePageStore } from '../amadeus/store/pageStore'
 import { startOfDay, toLocalDate } from './calendar/dateUtils'
 import { todoDueMeta } from './calendar/todoMeta'
-import { useAgentCalDbs } from '../stores/agentScheduleStore'
+import { useMdMarks, useMdCalDbs, patchMark } from '../amadeus/store/mdMarkStore'
+import { openNoteAtHeading } from '../amadeusNav'
+import { useAgentCalDbs, useAgentSchedulePolling } from '../stores/agentScheduleStore'
 import { useOtherVaultCalDbs } from '../stores/otherVaultCalStore'
 import { useIcsCalDbs } from '../stores/icsCalendarStore'
 import { useInbox, senderOf, parseUtc, type InboxMessage } from '../stores/inboxStore'
@@ -43,37 +46,36 @@ const limitFor = (size: DashboardCardSize, compact = 4): number =>
 export function TodoDashboardCard({ size }: { size: DashboardCardSize }) {
   const { t } = useI18n()
   const members = useCalendarMembers()
+  const marks = useMdMarks()
   const today = useMemo(() => startOfDay(new Date()), [])
   // 摘要卡不认时间窗偏好(todoPrefs 已随待办视图重构下线):列出全部未完成,按到期排序。
   const rows = useMemo(() => {
-    const out: Array<{ db: (typeof members)[number]['db']; row: AggRow; checkCol: string; due: ReturnType<typeof todoDueMeta> }> = []
+    const out: Array<{ key: string; name: string; complete: () => void; due: ReturnType<typeof todoDueMeta> }> = []
     for (const member of members) {
       if (!member.checkboxCol) continue
       const checkCol = member.checkboxCol
       for (const row of member.db.rows) {
         if (row.cells[checkCol] === true) continue
         const raw = typeof row.cells[member.dateCol] === 'string' ? String(row.cells[member.dateCol]) : ''
-        out.push({ db: member.db, row, checkCol, due: todoDueMeta(raw, today) })
+        out.push({ key: `db:${member.db.path}:${row.rowId}`, name: row.name, complete: () => setAggCell(member.db, row.rowId, checkCol, true), due: todoDueMeta(raw, today) })
       }
     }
-    return out.sort((a, b) => a.due.sortTime - b.due.sortTime || a.row.name.localeCompare(b.row.name, 'zh'))
-  }, [members, today])
+    for (const mark of marks) if (mark.isTask && !mark.checked) {
+      out.push({ key: `md:${mark.path}:${mark.line}`, name: mark.text, due: todoDueMeta(mark.due, today), complete: () => {
+        if (!patchMark(mark, { checked: true })) void openNoteAtHeading(mark.path, mark.heading)
+      } })
+    }
+    return out.sort((a, b) => a.due.sortTime - b.due.sortTime || a.name.localeCompare(b.name, 'zh'))
+  }, [members, marks, today])
   const undone = rows.length
   const shown = rows.slice(0, limitFor(size, 4))
   return (
     <div className="dash-compact dash-compact-list">
       <div className="dash-compact-kpi"><strong>{undone}</strong><span>{t('dashcompact.todoKpi')}</span></div>
       <div className="dash-compact-rows">
-        {shown.map(({ db, row, checkCol, due }) => {
-          const checked = row.cells[checkCol] === true
-          return (
-            <button key={`${db.path}:${row.rowId}`} className="dash-compact-row" onClick={() => void setAggCell(db, row.rowId, checkCol, checked ? undefined : true)}>
-              {checked ? <CheckCircle2 size={14} /> : <Circle size={14} />}
-              <span className={checked ? 'is-done' : undefined}>{row.name || t('dashcompact.untitled')}</span>
-              <em className={due.tone}>{due.label}</em>
-            </button>
-          )
-        })}
+        {shown.map(row => <button key={row.key} className="dash-compact-row" onClick={row.complete}>
+          <Circle size={14} /><span>{row.name || t('dashcompact.untitled')}</span><em className={row.due.tone}>{row.due.label}</em>
+        </button>)}
         {!shown.length && <div className="dash-compact-empty">{t('dashcompact.todoEmpty')}</div>}
       </div>
       {rows.length > shown.length && <div className="dash-compact-more">{t('dashcompact.moreTodos', { n: rows.length - shown.length })}</div>}
@@ -88,13 +90,15 @@ export function CalendarDashboardCard({ size }: { size: DashboardCardSize }) {
   const vault = usePageStore((s) => s.vaultRoot) ?? ''
   const members = useCalendarMembers()
   const agent = useAgentCalDbs()
+  useAgentSchedulePolling()
+  const md = useMdCalDbs()
   const other = useOtherVaultCalDbs()
   const ics = useIcsCalDbs()
   const byVault = useCalendarConfig((s) => s.byVault)
   const items = useMemo(() => {
     const sources = [
       ...members.map((member) => ({ db: member.db, dateCol: member.dateCol })),
-      ...[...agent, ...other, ...ics]
+      ...[...agent, ...other, ...ics, ...md]
         .map((db) => ({ db, dateCol: firstDateCol(db)?.id ?? '' }))
         .filter((source) => source.dateCol),
     ]
@@ -115,7 +119,7 @@ export function CalendarDashboardCard({ size }: { size: DashboardCardSize }) {
       }
     })
     return out.sort((a, b) => a.start.getTime() - b.start.getTime())
-  }, [members, agent, other, ics, vault, byVault])
+  }, [members, agent, other, ics, md, vault, byVault])
   const shown = items.slice(0, limitFor(size, 4))
   return (
     <div className="dash-compact dash-agenda">

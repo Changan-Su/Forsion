@@ -9,6 +9,7 @@ import { Loader2, NotebookPen, Sprout, Undo2 } from 'lucide-react'
 import { getAgentHarness, resolveHarnessCandidate, rollbackHarnessEntry, type HarnessCandidate, type HarnessEntry, type HarnessJournalLine } from '../services/backendService'
 import type { TanguDesktopConfig } from '../types'
 import { useI18n } from '../i18n'
+import { parseCandidateLine } from '../services/selfUpdates'
 import { formatDate, formatDateTime, formatRelative } from '../format/time'
 import '../views/agentProfile.css'
 import { homeTarget, connectionKey } from '../services/engine/targets'
@@ -112,11 +113,8 @@ const AgentHarnessBody: React.FC<Props> = ({ cfg, slug, running, onRefine, onCan
   // HARNESS.md 允许手改,解析不了的原样显示,绝不渲出「Invalid Date」。
   const day = (d: string): string => formatDate(d, { locale }) || d
   const stamp = (iso: string): string => formatDateTime(iso, { locale }) || iso
-  // 收件箱原始行 `- [YYYY-MM-DD s:xxxxxxxx] 正文`(harnessStore.appendHarnessCandidates 的形状):日期留下,会话标签是内部记号,不上屏。
-  const candidate = (line: string): { date: string; text: string } => {
-    const m = line.match(/^-\s*\[(\d{4}-\d{2}-\d{2})(?:\s+s:[A-Za-z0-9-]*)?\]\s*(.*)$/)
-    return m ? { date: m[1], text: m[2] } : { date: '', text: line.replace(/^-\s*/, '') }
-  }
+  // 收件箱原始行的日期留下,会话标签是内部记号,不上屏。
+  const candidate = parseCandidateLine
   const refineButton = (primary: boolean) => onRefine && <button type="button" className={primary ? 'btn primary sm' : 'profile-text-action'} disabled={busy || running} onClick={() => void refine()}>
     {busy ? <Loader2 size={12} className="spin" /> : <NotebookPen size={12} />}{t('settings.agents.harnessRefine')}</button>
 

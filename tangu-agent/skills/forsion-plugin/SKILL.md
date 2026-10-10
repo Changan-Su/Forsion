@@ -2,7 +2,7 @@
 name: forsion-extension-development
 description: 当用户要给 Forsion / Tangu 做插件、主题、Space、智能体(agent)或捆绑包(bundle)——或要把某个能力做成可分发/可上架商店的扩展——时使用;已装的插件 / Space / 视图不出现、加载失败、更新后不工作要排查时也用(带一份插件体检脚本 tools/check-plugin.mjs)。内置五类官方模板(samples/),讲清各自的格式基线与硬约束(尤其两种"插件"是完全不同的系统),照抄模板改比从零写靠谱。
 metadata:
-  version: 1.28.0
+  version: 1.29.0
   author: Forsion
   category: Forsion
 ---
@@ -736,6 +736,24 @@ refresh = (rows) => h.update({ ...spec, rows })   // 数据刷新走 update:排�
     行上的字要等你的 `items()` 给出新标题才变。
   - 参考实现 = server-admin 插件的「官网」Space(文件夹 = 官网侧栏的分区,拖动 = 改目录页)。
 - 细节与全部字段语义见正典文档同名小节 + `amadeus/plugins/types.ts` 的 `ListSourceContribution`。
+
+### Intelligent UI list cards (2026-10-09+)
+
+Opt an existing `registerListSource` into chat with
+`intelligent: { description: 'Live saved bookmarks; optional title search.', viewId: 'folder' }`.
+Use English discovery metadata (max 400 characters); localize the source title. The host owns
+rendering and assigns `plugin:<manifestId>:<sourceId>`. Reuse `items/subscribe/open`, including
+reload on subscription and unsubscribe on disposal; do not build another chat UI or data store.
+`search: true` permits a bounded initial query. The card displays up to six live items and a
+button to the same plugin's registered full view. Disable revokes discovery and unmounts cards.
+The host draws the frame, so write no card styles: the header shows the plugin icon and
+`name · source title` (manifest `nameEn` in English; when one name already contains the other,
+only the longer one is shown), a Live dot and the full-view button. A block title written by the
+model is not shown. Rows show each item's `title` and `hint` with its `iconUrl`, falling back to
+`icon` and then a generic link icon: set both, as for the sidebar list.
+Agents use `list_intelligent_cards` then an `app-card` block in `intelligent_ui`. Rendering does
+not read records into model context, save links, analyze videos, or create tasks. Keep those
+operations in existing domain tools/skills. Old hosts ignore the optional declaration.
 
 ### 前置条件:onboarding.requires(2026-09-21 起)
 

@@ -29,7 +29,16 @@ export interface AutoWidthSample {
 
 const clamp = (width: number): number => Math.min(AUTO_COLUMN_MAX, Math.max(AUTO_COLUMN_MIN, Math.ceil(width)))
 
-/** 13px 界面字号下的保守字宽；按字符类别估算比用字符数能更好覆盖中英混排。 */
+/**
+ * 13px 界面字号下的保守字宽；按字符类别估算比用字符数能更好覆盖中英混排。
+ *
+ * 类别与系数是量出来的(2026-10-10，13px / 400 字重，默认界面字体 Hanken Grotesk 与系统字体各一遍):
+ * 取让实测样本在两套字体下都不被截、同时列宽放大最少的一组。实测真值钉在 autoColumnWidth.test.ts。
+ * - 数字一律按同一个宽度算，`1` 不算窄字符:默认字体的数字等宽，手机号、时间戳里的 `1` 一多就会裁掉末尾。
+ * - `m` 并入 `M W @ # % &` 这最宽一档；`w` 与大写字母同档。
+ * - 每个字符都不比校准前估得窄，所以这次调整只会让列变宽，不会新截断任何内容。
+ * - 全角标点(，（）：等)与汉字同宽。
+ */
 export function estimatedTextWidth(value: string, mono = false): number {
   let width = 0
   const chars = Array.from(value)
@@ -38,12 +47,12 @@ export function estimatedTextWidth(value: string, mono = false): number {
     const char = chars[i]
     const cp = char.codePointAt(0) ?? 0
     if (mono) width += cp > 0x7f ? 14 : 8.5
-    else if (cp > 0xffff || (cp >= 0x2e80 && cp <= 0x9fff) || (cp >= 0xac00 && cp <= 0xd7af)) width += 14
+    else if (cp > 0xffff || (cp >= 0x2e80 && cp <= 0x9fff) || (cp >= 0xac00 && cp <= 0xd7af) || (cp >= 0xff01 && cp <= 0xff60)) width += 14
     else if (/\s/.test(char)) width += 4
-    else if (/[ilI1.,:;|'`]/.test(char)) width += 4.5
-    else if (/[MW@#%&]/.test(char)) width += 10
-    else if (/[A-Z]/.test(char)) width += 8.2
-    else if (/[0-9]/.test(char)) width += 7.5
+    else if (/[ilI.,:;|']/.test(char)) width += 4.5
+    else if (/[MWm@#%&]/.test(char)) width += 12.5
+    else if (/[A-Zw]/.test(char)) width += 9.25
+    else if (/[0-9]/.test(char)) width += 8.5
     else width += 7.2
   }
   // 极长主内容不逐字遍历；宽度最终也会被 AUTO_COLUMN_MAX 截住。

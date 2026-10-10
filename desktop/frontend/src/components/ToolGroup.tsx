@@ -12,6 +12,7 @@ import { toolDiffText } from './toolDiff'
 import { registerMessages, useI18n } from '../i18n'
 import type { ApprovalRequest, ToolEvent } from '../types'
 import { ImageGenerationLoader } from '../views/chat2/ImageGenerationLoader'
+import { isSelfWriteReceipt } from '../services/selfUpdates'
 
 registerMessages({
   'tool.parked.waiting': { zh: '已挂起，等你在输入框上方批准。Agent 先做别的，拍板后结果会补在这里。', en: 'Parked until you approve it above the input box. The agent carries on meanwhile; the result lands here once you decide.' },
@@ -85,6 +86,8 @@ export function describeTool(ev: ToolEvent): Desc {
       return { kind: 'run', verbKey: 'tool.verb.ran', target: 'python: ' + String(a.code ?? '').split('\n')[0], isFile: false }
     case 'read_file': case 'read_document': case 'read_log': case 'view_image': case 'display_file':
       return { kind: 'read', verbKey: 'tool.verb.read', target: baseName(path || String(a.name ?? a.file ?? '')), isFile: true }
+    case 'intelligent_ui':
+      return { kind: 'other', verbKey: 'tool.verb.sketched', target: 'Intelligent UI', isFile: false }
     case 'sketch':
       return { kind: 'other', verbKey: 'tool.verb.sketched', target: String(a.title ?? '') || 'sketch', isFile: false }
     case 'desk_present': {
@@ -172,9 +175,12 @@ export const ToolGroup: React.FC<{
   approvals?: ApprovalRequest[]
   /** 这条消息有待答的提问 / 计划拍板(托盘里):挂着的 ask_user / exit_plan_mode 显示「等你回复」而不是在跑。 */
   awaitingAnswer?: boolean
-}> = ({ events, running, approvals, awaitingAnswer }) => {
+}> = ({ events: allEvents, running, approvals, awaitingAnswer }) => {
   const { t } = useI18n()
   const [open, setOpen] = useState(false)
+  // Agent 自己写成了的记忆 / 进化记录 / 协作说明,由回复下面的回执行和请求卡呈现,这里不再重复列一行(没写成的照旧留着)。
+  // 唯一不带回执行的调用方是外观预览(ChatPreview),它的样例消息里没有这三种调用。
+  const events = allEvents.filter((ev) => !isSelfWriteReceipt(ev))
   if (!events.length) return null
 
   // generate_image gets a full-size dot field while the request is in flight. Completed calls return

@@ -1,5 +1,5 @@
-/** Real Electron against the live-harness engine: the「进化记录已更新」card is rebuilt from a real model's persisted
- * manage_harness receipt, and its Undo reaches the real rollback API.
+/** Real Electron against the live-harness engine: the evolution-record row in the reply's receipt line is rebuilt from a
+ * real model's persisted manage_harness receipt, and its Undo reaches the real rollback API.
  * Invoked by live-harness --only harnessopen --harness-ui (which supplies the environment below); build desktop first.
  * The engine-side contract (409 on a second undo, notes gone from the next system prompt) stays in the live scenario. */
 const fs = require('fs')
@@ -49,6 +49,9 @@ async function run() {
     await win.waitForTimeout(1200)
     await app.evaluate(({ BrowserWindow }, sessionId) => BrowserWindow.getAllWindows()[0].webContents.send('approval:open', { sessionId }), sid)
     await win.locator(`[data-chat-surface="chat"][data-session-id="${sid}"]`).waitFor()
+    // 进化记录的更新自 10-10 起并进回复下面的回执行(一条回复一行),明细点开才挂:先把每条回执行点开。
+    await win.locator('[data-self-receipt] > summary').first().waitFor()
+    for (const line of await win.locator('[data-self-receipt] > summary').all()) await line.click()
     const card = win.locator(`[data-harness-update="${rev}"]`)
     await card.waitFor()
     await win.locator(`[data-harness-update="${rev}"][data-harness-state="current"]`).waitFor() // 状态从真引擎的编辑史推出

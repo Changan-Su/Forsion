@@ -191,8 +191,11 @@ export async function createUnitAmadeusBridge(cfg: UnitBridgeCfg): Promise<Amade
   // 成对装(构建 + 解析):存盘时要靠解析把显示地址换回页相对路径,否则带令牌的地址会被写进设备上的笔记
   // (见 shared/amadeus/assets.ts 接缝的说明)。只认本设备这一个资源端点,逐字前缀比对。
   const assetEndpoint = `${new URL('vault/asset', cfg.base).href}?`
+  // exact(笔记正文里的 `![](…)`:ref 已经是完整的库内路径)不带 page —— 带着的话设备先按「页目录 + ref」再拼一遍,
+  // notes/ 下的笔记引用库根的 `../attachments/x.png` 会取到 notes/attachments/x.png(同路径的另一个文件)。
+  // `..` 不用在这里折叠:设备端是词法解析(resolveAttachment),地址里原样带着,存盘才能逐字换回。
   setAssetUrlBuilder(
-    (ref) => assetUrl(ref),
+    (ref, exact) => assetUrl(ref, exact ? null : undefined),
     (url) => (url.startsWith(assetEndpoint) && !url.includes('#') ? new URLSearchParams(url.slice(assetEndpoint.length)).get('ref') || null : null),
   )
 

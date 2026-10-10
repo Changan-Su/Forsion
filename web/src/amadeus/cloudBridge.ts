@@ -852,9 +852,13 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
       }
       throw new Error('conflict')
     })
-  const propagateRenames = async (pairs: Record<string, string>, pagesBefore: string[]): Promise<void> => {
+  // 同一趟里重算正文的图片 / 附件相对引用(assets.rebaseFileRefs):「文件在不在」问操作之后那棵树的原始文件表
+  // (点目录里的 .amadeus/ 也在里面;visiblePath 滤掉的那份不能用)。只在真有引用要改时才取一次。
+  const propagateRenames = async (pairs: Record<string, string>, pagesBefore: string[], folder?: readonly [string, string]): Promise<void> => {
+    let paths: Promise<Set<string>> | null = null
     const res = await propagateNoteRenames(
       {
+        exists: async (f) => (await (paths ??= fetchTree(true).then((t) => new Set(t.files.map((x) => x.path))))).has(f),
         read: async (p) => {
           try {
             return (await getFile(p)).content
@@ -867,10 +871,14 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
       },
       pairs,
       pagesBefore,
+      { folder },
     )
     for (const p of res.rewritten) fireExternal(p)
     toastRenameRewriteFailed(res.failed.map((f) => f.path))
   }
+  /** 这个文件夹下有没有文件(笔记或附件,点目录里的也算):有才值得为「指向它的引用」扫全库。 */
+  const holdsFiles = (tree: TreeDto, folder: string): boolean =>
+    tree.pages.some((p) => p.startsWith(`${folder}/`)) || tree.files.some((f) => f.path.startsWith(`${folder}/`))
   /** 文件夹改名 / 移动 → 树下每一页一对 old→new(引用重写按页粒度进行,同桌面 folderPairs)。 */
   const folderPairs = (pages: string[], oldFolder: string, newFolder: string): Record<string, string> => {
     const pre = `${oldFolder}/`
@@ -1208,7 +1216,9 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
       const parent = dirnamePosix(folderPath)
       const newPath = parent ? `${parent}/${clean}` : clean
       if (newPath === folderPath) return folderPath
-      const pagesBefore = (await fetchTree(true)).pages.filter(visiblePage) // G2-04 引用重写的「操作前」页表(点目录不算)
+      const tree = await fetchTree(true)
+      const pagesBefore = tree.pages.filter(visiblePage) // G2-04 引用重写的「操作前」页表(点目录不算)
+      const hasFiles = holdsFiles(tree, folderPath)
       let r: { path: string }
       try {
         r = await http.post<{ path: string }>(`/amadeus/vaults/${encodeURIComponent(vid())}/folders/rename`, { path: folderPath, newName: clean })
@@ -1221,7 +1231,7 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
         rememberPage(`${r.path}${lastLoadedPage.slice(folderPath.length)}`)
       }
       invalidateTree()
-      await propagateRenames(folderPairs(pagesBefore, folderPath, r.path), pagesBefore)
+      await propagateRenames(folderPairs(pagesBefore, folderPath, r.path), pagesBefore, hasFiles ? [folderPath, r.path] : undefined)
       return r.path
     },
 
@@ -1241,7 +1251,9 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
       const newPath = dst ? `${dst}/${name}` : name
       if (newPath === src) return src
       if (dst === src || dst.startsWith(`${src}/`)) throw new Error(translate('amxbridge.moveIntoSelf'))
-      const pagesBefore = (await fetchTree(true)).pages.filter(visiblePage) // G2-04 引用重写的「操作前」页表(点目录不算)
+      const tree = await fetchTree(true)
+      const pagesBefore = tree.pages.filter(visiblePage) // G2-04 引用重写的「操作前」页表(点目录不算)
+      const hasFiles = holdsFiles(tree, src)
       let r: { path: string }
       try {
         r = await http.post<{ path: string }>(`/amadeus/vaults/${encodeURIComponent(vid())}/folders/move`, { path: src, dest: dst })
@@ -1254,7 +1266,7 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
         rememberPage(`${r.path}${lastLoadedPage.slice(src.length)}`)
       }
       invalidateTree()
-      await propagateRenames(folderPairs(pagesBefore, src, r.path), pagesBefore)
+      await propagateRenames(folderPairs(pagesBefore, src, r.path), pagesBefore, hasFiles ? [src, r.path] : undefined)
       return r.path
     },
 

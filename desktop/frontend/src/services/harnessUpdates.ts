@@ -34,7 +34,7 @@ export function harnessChanges(events: ToolEvent[] = []): HarnessChange[] {
 export type HarnessChangeState = 'current' | 'undone' | 'superseded'
 /** 卡片状态从本机编辑史推出:这条改动仍是该条目的最后一笔 → 可撤;它后面紧跟的唯一一笔是恢复 → 已撤销;
  *  其余(又改过、编辑史里找不到这一行 —— 换了设备或被截断)→ 不能从卡片撤,去笔记里改。 */
-export function harnessChangeState(journal: Array<{ entryId: string; action: string; rev?: string }>, change: HarnessChange): HarnessChangeState {
+export function harnessChangeState(journal: Array<{ entryId: string; action: string; rev?: string }>, change: Pick<HarnessChange, 'entryId' | 'rev'>): HarnessChangeState {
   const lines = journal.filter((l) => l.entryId === change.entryId)
   const i = lines.findIndex((l) => l.rev === change.rev)
   if (i < 0) return 'superseded'

@@ -7,7 +7,8 @@
  *  文件靠「同文件夹优先」抢走了别人的裸名链接 —— 此时被抢的链接补路径限定)。
  *
  *  已知缺口(v1,如实记录):md 风格 `[名](x.md)` 链接、`[[x.excalidraw]]`/`[[x.pdf]]` 等
- *  文件引用(走 resolveFileName,不在 pages 表)不重写;行内代码里的 `[[..]]` 会被误改
+ *  文件引用(走 resolveFileName,不在 pages 表)不重写(按相对路径写的图片 / 附件 `![](x.png)`、`[名](x.pdf)`
+ *  另有 assets.rebaseFileRefs,同一趟传播里跑);行内代码里的 `[[..]]` 会被误改
  *  (围栏代码块已跳过,与 unescapeWikiOutsideFences 同款取舍)。
  */
 import { mapOutsideFences, resolvePageName } from './links'

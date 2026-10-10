@@ -255,6 +255,22 @@ async function main() {
     const switched = await until(() => seen.frames.filter((f) => f.type === 'run').find((f) => f.run && f.run.model_id === OTHER_MODEL.id), 4000)
     ok('F 通话中换模型 → 之后交办的任务用新模型', !!switched, JSON.stringify(seen.frames.filter((f) => f.type === 'run').map((f) => f.run && f.run.model_id)))
 
+    // F2. 通话中拉开左栏。这个台架是网页顶栏形态:抽屉平时不给胶囊让位(它把主区连同胶囊一起推走),通话条却照样浮在它上面
+    await tap(page.locator('.mb-topbar [aria-label="left panel"]'), '左栏钮')
+    await until(async () => (await page.locator('.mb-drawer--left.open').count()) === 1)
+    await page.waitForTimeout(450) // 抽屉滑入
+    const drawerTop = await page.evaluate(() => {
+      const d = document.querySelector('.mb-drawer--left.open'), b = document.querySelector('.vc-bar')
+      const z = Number(getComputedStyle(document.body).zoom) || 1
+      return d && b ? { content: Math.round(d.getBoundingClientRect().top + parseFloat(getComputedStyle(d).paddingTop) * z), barBottom: Math.round(b.getBoundingClientRect().bottom) } : null
+    })
+    ok('F 通话中拉开左栏:左栏的内容从通话条下面起', !!drawerTop && drawerTop.content >= drawerTop.barBottom, JSON.stringify(drawerTop))
+    const size = page.viewportSize()
+    await page.touchscreen.tap(size.width - 16, Math.round(size.height / 2)) // 点露在右边的那一条主区 = 收起左栏
+    if (!(await until(async () => (await page.locator('.mb-drawer--left.open').count()) === 0, 2500))) await page.evaluate(() => document.querySelector('.mb-push-dim')?.click())
+    await until(async () => (await page.locator('.mb-drawer--left.open').count()) === 0)
+    await page.waitForTimeout(450)
+
     // G. 挂断
     await tap(page.locator('.vc-bar .vc-hangup'), '挂断键')
     await until(async () => (await bar(page).count()) === 0)

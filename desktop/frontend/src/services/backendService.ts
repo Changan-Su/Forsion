@@ -805,7 +805,7 @@ export const deleteAgentLibraryFile = (t: EngineTarget, slug: string, name: stri
 // 某 agent 的进化记录(HARNESS.md 条目 + 本机编辑史;journal 不跨设备同步)。
 export type HarnessEntry = { id: string; kind: string; title: string; body: string; evidence?: string; createdAt: string; updatedAt: string; version: number; /** kind 'equip':收起的工具 / 技能 */ tools?: string[]; skills?: string[] }
 /** by = 不是 agent 自己在对话里写的改动:'historian' 后台复盘的提名直接采纳,'muse' 用量巡检后代为收起,'user' 用户在面板上采纳的候选;缺省 = agent 自己(或面板 / 撤销卡)。 */
-export type HarnessJournalLine = { ts: string; rev?: string; action: 'upsert' | 'delete' | 'rollback'; entryId: string; before: HarnessEntry | null; after: HarnessEntry | null; by?: string }
+export type HarnessJournalLine = { ts: string; rev?: string; action: 'upsert' | 'delete' | 'rollback'; entryId: string; before: HarnessEntry | null; after: HarnessEntry | null; by?: string; /** 写下这一笔的会话(对话里的留痕按它认「这段对话之后后台写的」)。 */ sessionId?: string }
 /** 一条候选的去处:needsUser = 带网址、命令或权限字眼,只等用户点头(/refine 不取);adoptable = 面板能不能直接采纳(装备建议不能)。 */
 export type HarnessCandidate = { line: string; needsUser: boolean; adoptable: boolean }
 /** candidates = 候选收件箱的原始行 `- [YYYY-MM-DD s:xxxx] 正文`(只读);candidateItems = 同一批行逐条带上去处。旧引擎两个键都可能没有。 */
@@ -898,6 +898,10 @@ export interface SessionHistorianStatus {
 }
 export const getSessionHistorian = (t: EngineTarget, sessionId: string, detail = false) =>
   request<SessionHistorianStatus>(t, `/agent/special/historian/activity?limit=8&sessionId=${encodeURIComponent(sessionId)}${detail ? '&detail=1' : ''}`)
+
+/** 一个会话的整段活动流(引擎上限 200 条):对话里的留痕用。右栏 Historian 行那份只取最近 8 条。 */
+export const getSessionActivity = (t: EngineTarget, sessionId: string) =>
+  request<{ activity: HistorianActivityItem[] }>(t, `/agent/special/historian/activity?limit=200&sessionId=${encodeURIComponent(sessionId)}`).then((r) => r.activity || [])
 
 export const getHistorianActivity = (t: EngineTarget, limit = 50) =>
   request<{ activity: HistorianActivityItem[] }>(t, `/agent/special/historian/activity?limit=${limit}`).then((r) => r.activity)
