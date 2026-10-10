@@ -58,7 +58,7 @@
 
 /* ── 手机:同一张卡压成页面顶上的一条(VoiceCallBar,MobileRoot 挂在壳外)。悬浮胶囊 + 毛玻璃,和壳的顶栏胶囊同一种说法。
    位置:壳顶那一条(Web 胶囊顶栏 58px + 刘海;装了原生外壳时 = 原生层报来的 --nc-top,屏幕 dp,要除以端级缩放)之下再让 6px。
-   盖在聊天内容上(z 40),整屏二级页(设置 / 商店,z 50)之下。滤镜加在画卡片的这个元素上,它没有 fixed 后代(DESIGN §4)。
+   浮在页面之上(z 40;页面给它让位,见文件末尾),整屏二级页(设置 / 商店,z 50)之下。滤镜加在画卡片的这个元素上,它没有 fixed 后代(DESIGN §4)。
    同特异性的覆盖放文件末尾(DESIGN §7.2):.vc-bar 里的头像 / 按钮尺寸压过上面整张卡的那几条。 */
 .vc-bar {
   position: fixed;
@@ -92,6 +92,9 @@ body:has(.mb-shell[data-native-chrome]) .vc-bar { top: calc(var(--nc-top, 0) * 1
 .vc-bar .vc-status { justify-content: flex-start; }
 .vc-bar .vc-status.is-error .vc-status-text { text-align: left; }
 .vc-bar .vc-btn { flex: 0 0 auto; width: 40px; height: 40px; }
-/* 聊天流让出通话条那一段(条高 58px,上下各留 6px):新会话的头几句转写就出在流的最顶上,不让就被条压住。
-   只让聊天这一个视图 —— 通话的内容在这儿;切去别的视图时条照旧浮在内容上。 */
-body:has(.vc-bar) .mb-shell:not(.mini-shell) .mb-view[data-view='chat'] .t2-stream { padding-top: calc(var(--mb-top) + 70px); }
+/* 通话期间每一页都给通话条让出一段(条高 58px,上下各留 6px;用户 2026-10-10 选的「每一页都往下让」):条属于整个
+   App,打着电话回到任何一页,它都落在那一页最上面一排东西上(列表的分类胶囊、主页的问候语、日历的工具条…)。
+   不逐页写:把这段加进壳的「胶囊之下的起始留白」(--mb-top,见 lcl/engine/singleColumn.css 的 --mb-top-extra),
+   凡是给胶囊让位的页面一起让 —— 聊天流也在其中(新会话的头几句转写就出在流的最顶上)。
+   仪器:mobile `npm run stage:phone` 的 call-bar;模拟器 `emu:nativeshell` 的 voice call。 */
+body:has(.vc-bar) .mb-shell:not(.mini-shell) { --mb-top-extra: 70px; }

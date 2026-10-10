@@ -403,7 +403,85 @@ const SCENES = {
     const heads = await texts(page, `${LIST} .ims-nav .csn-heading`)
     return [['Image studio: "new project" is the main button; the list starts with "my projects"', (await stage.nav(page)) === 'list' && items[0] === '我的项目' && !heads.includes('创建') && !!fab && fab.bottom <= DOCK_TOP - 6, JSON.stringify({ items, heads, fab })]]
   },
+  // A call is on. Its bar belongs to the app, not to the chat: it stays up on every page, right under the capsules, so
+  // every page starts below it (the shell's top room grows by the bar, see voiceCall.css). Checked page by page.
+  'call-bar': async (page) => {
+    await stage.space(page, 'tangu'); await chip(page, 'all')
+    await callBar(page, true)
+    const rows = []
+    const look = async (name, what) => {
+      await page.waitForTimeout(500)
+      const hit = await underCallBar(page)
+      rows.push([`${what}: nothing to tap or to read lies under the call bar`, !!hit.bar && near(hit.bar.y, LAYOUT.top + 6 * hit.zoom, 2) && !hit.covered.length, JSON.stringify(hit)])
+      await page.screenshot({ path: path.join(OUT, `call-${name}${DARK ? '-dark' : ''}.png`) })
+    }
+    await look('tangu-list', 'the session list')
+    // and a finger gets through: the chips are the row the bar used to lie on
+    const tapped = await page.locator(`${LIST} .pl-chips [data-filter="agent"]`).tap({ timeout: 3000 }).then(() => '', (e) => String(e.message).split('\n').find((l) => l.includes('intercepts')) || String(e.message).split('\n')[0])
+    await page.waitForTimeout(300)
+    const on = (await texts(page, `${LIST} .pl-chips .on`)).join()
+    rows.push(['the session list: a category chip takes a tap during the call', !tapped && on === 'Agent', tapped.trim() || `on=${on}`])
+    if (!tapped) await chip(page, 'all')
+    await stage.space(page, 'home')
+    await look('home', 'Home')
+    await stage.space(page, 'amadeus'); await seedNotes(page)
+    await look('notes-list', 'the notes list')
+    await stage.space(page, 'calendar')
+    await look('calendar', 'the calendar')
+    await stage.space(page, 'agents')
+    await look('agents-list', 'the agents roster')
+    // one level down, the chat: its first message starts below the bar, as it did when only the chat made room
+    await stage.space(page, 'tangu')
+    await page.locator(`${LIST} [data-timeline] .t2s-srow`, { hasText: '发版说明草稿' }).first().tap() // the session with messages; not always the first row (an earlier scene pins another)
+    await page.waitForFunction(() => document.querySelector('.mb-shell')?.getAttribute('data-nav') === 'detail', null, { timeout: 6000 }).catch(() => {})
+    await look('chat', 'the chat')
+    const first = await rect(page, '.mb-view[data-view="chat"] .t2-stream [id^="tocmsg-"]')
+    const bar = await rect(page, '.vc-bar')
+    rows.push(['the chat: the first message is below the bar', (await stage.nav(page)) === 'detail' && !!first && !!bar && first.y >= bar.bottom, JSON.stringify({ nav: await stage.nav(page), first: first && Math.round(first.y), barBottom: bar && Math.round(bar.bottom) })])
+    await callBar(page, false)
+    await page.waitForTimeout(300)
+    const back = await page.evaluate(() => getComputedStyle(document.querySelector('.mb-shell')).getPropertyValue('--mb-top-extra').trim())
+    rows.push(['the call over: the pages take the room back', !(await rect(page, '.vc-bar')) && (back === '' || back === '0px'), `--mb-top-extra «${back}»`])
+    return rows
+  },
 }
+
+/** Puts the app's own call bar up (or takes it down) through the store the composer's call key writes to. No call is
+ *  placed — there are no run parameters — so the bar stands idle: same box, no status line. The call itself (socket,
+ *  microphone, typed text) is `npm run e2e:voicecall` and the emulator's "voice call" check. */
+async function callBar(page, on) {
+  await page.evaluate(async ([url, show]) => {
+    const { openCallLayer } = await import(/* @vite-ignore */ url)
+    openCallLayer(show ? { sessionId: 'st-1', agentSlug: '' } : null)
+  }, [moduleUrl('../desktop/frontend/src/services/realtimeCall.ts'), on])
+  await page.waitForFunction((show) => !!document.querySelector('.vc-bar') === show, on, { timeout: 5000 })
+  await page.waitForTimeout(400) // the bar's enter animation; the pages' new top room
+}
+
+/** What the page has under the call bar: controls a finger could no longer reach and text nobody could read. The bar is
+ *  sampled on a grid; at each point the hit is whatever would take the touch if the bar were not there. */
+const underCallBar = (page) => page.evaluate(() => {
+  const bar = document.querySelector('.vc-bar')
+  if (!bar) return { bar: null, covered: ['no call bar'] }
+  const b = bar.getBoundingClientRect()
+  const covered = new Set()
+  const name = (el) => `${el.tagName.toLowerCase()}${el.classList.length ? '.' + [...el.classList].slice(0, 2).join('.') : ''}`
+  for (let y = b.top + 3; y < b.bottom; y += 6) {
+    for (let x = b.left + 6; x < b.right; x += 10) {
+      const el = document.elementsFromPoint(x, y).find((e) => !bar.contains(e))
+      if (!el) continue
+      const control = el.closest('button, a[href], input, select, textarea, [role="tab"], [role="button"], [contenteditable="true"]')
+      if (control) { covered.add(`control ${name(control)} «${(control.getAttribute('aria-label') || control.textContent || '').trim().slice(0, 16)}»`); continue }
+      for (const n of el.childNodes) {
+        if (n.nodeType !== 3 || !n.textContent.trim()) continue
+        const range = document.createRange()
+        range.selectNodeContents(n)
+        if ([...range.getClientRects()].some((r) => r.bottom > b.top + 1 && r.top < b.bottom - 1 && r.right > b.left && r.left < b.right)) covered.add(`text ${name(el)} «${n.textContent.trim().slice(0, 16)}»`)
+      }
+    }
+  }
+  return { bar: { y: Math.round(b.top), bottom: Math.round(b.bottom) }, zoom: Number(getComputedStyle(document.body).zoom) || 1, covered: [...covered] }
+})
 
 async function main() {
   fs.mkdirSync(OUT, { recursive: true })
@@ -427,7 +505,14 @@ async function main() {
         if (dark) localStorage.setItem('forsion_theme', 'dark')
       } catch { /* private mode */ }
     }, DARK)
-    const page = await ctx.newPage()
+    // A context's first page sometimes comes up without touch emulation (see editor-capsule.e2e.cjs): the app then lays
+    // itself out as on a desktop — no phone zoom — and every size below is off. A second page of the same context has it.
+    let page = await ctx.newPage()
+    if (!(await page.evaluate(() => navigator.maxTouchPoints))) {
+      console.log('(the first page has no touch emulation: opening another)')
+      const first = page; page = await ctx.newPage(); await first.close()
+    }
+    if (!(await page.evaluate(() => navigator.maxTouchPoints))) throw new Error('stage: the browser gave this page no touch emulation (maxTouchPoints=0); the sizes below cannot be trusted')
     const unknown = new Set()
     await stubApi(page, unknown)
     page.on('pageerror', (e) => fails.push(`uncaught: ${e.message}`))
