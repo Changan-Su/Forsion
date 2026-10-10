@@ -384,7 +384,8 @@ export function PluginListBody({ src, stateKey }: { src: ListSourceContribution;
    *  不落在自己身上,也不落进自己下面。 */
   const landing = (e: React.DragEvent<HTMLElement>, it: ListItem): ListDropTarget | null => {
     const keys = dragKeys.current
-    if (!keys || !src.drop) return null
+    // 拖到一半列表源换了(换成不收行的那种):不把上一个源的行交给它
+    if (!keys || !src.drop?.accepts.includes('items')) return null
     if (keys.includes(it.key) || ancestorsOf(items, it.key).some((key) => keys.includes(key))) return null
     const r = e.currentTarget.getBoundingClientRect()
     for (const position of dropCandidates(r.height ? (e.clientY - r.top) / r.height : 0.5, isFolder(it))) {
