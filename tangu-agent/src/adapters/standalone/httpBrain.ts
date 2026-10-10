@@ -16,6 +16,7 @@ import {
   AmadeusConflictError,
   AmadeusNotFoundError,
   AmadeusTooLargeError,
+  GitHostingError,
 } from '../../seams/cloudBrain.js';
 import { LlmError } from '../../core/types.js';
 import { streamIdleGuard, mapStreamAbort } from '../../llm/streamIdle.js';
@@ -78,6 +79,8 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
   // 无限 await;且 worker 按 session 串行 → 该 session 后续 run 全被堵死。默认 60s,env 可调。
   const REQ_TIMEOUT_MS = Number(process.env.TANGU_BRAIN_HTTP_TIMEOUT_MS) || 60_000;
   const IMG_TIMEOUT_MS = Number(process.env.TANGU_IMAGE_HTTP_TIMEOUT_MS) || 180_000; // 生图比 LLM 慢,单独放宽
+  const GIT_INFO_TIMEOUT_MS = 4_000; // Forsion Git 的两个请求挡在用户点的推拉前面,见下面 git 段
+  const GIT_CREDENTIAL_TIMEOUT_MS = 10_000;
   // 托管流的传输与语义兜底窗口。服务端 upstreamIdleGuard 默认 300s,
   // 这里多留 60s 余量让服务端先响,否则用户看到的是本地 504 而非上游真实错因。
   const BRAIN_STREAM_IDLE_MS = Number(process.env.TANGU_BRAIN_STREAM_IDLE_MS) || 360_000;
@@ -579,6 +582,35 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
         return { seq: Number(j?.seq) || 0 };
       },
     },
+    // ── Forsion Git:站点信息 + 当前用户的推拉凭据(对端 server microserver/git/routes/user.ts)。
+    //    两个请求都自带短超时:它们挡在用户点的「推送 / 拉取」前面,云端慢 / 够不着时不能把通用的 60s 等满。
+    //    失败一律抛 GitHostingError(status, code, webUrl),**不带响应体原文** —— 成功的响应体里就是令牌。──
+    git: {
+      info: async (opts?: { signal?: AbortSignal }) => {
+        const timeout = AbortSignal.timeout(GIT_INFO_TIMEOUT_MS);
+        const r = await fetch(`${base}/api/git/info`, { signal: opts?.signal ? AbortSignal.any([opts.signal, timeout]) : timeout })
+          .catch(() => { throw new GitHostingError(0, 'NETWORK'); });
+        if (r.status === 404) return { configured: false as const }; // 旧云端没有这个模块
+        if (!r.ok) throw new GitHostingError(r.status, '');
+        const j: any = await r.json().catch(() => null);
+        return j?.configured === true && typeof j.webUrl === 'string' && j.webUrl
+          ? { configured: true as const, webUrl: j.webUrl, credentials: j.credentials === true }
+          : { configured: false as const };
+      },
+      credential: async (device: string, opts?: { signal?: AbortSignal }) => {
+        const timeout = AbortSignal.timeout(GIT_CREDENTIAL_TIMEOUT_MS);
+        const r = await fetch(`${base}/api/git/credential`, {
+          method: 'POST',
+          headers: authHeaders(),
+          body: JSON.stringify({ device }),
+          signal: opts?.signal ? AbortSignal.any([opts.signal, timeout]) : timeout,
+        }).catch(() => { throw new GitHostingError(0, 'NETWORK'); });
+        const j: any = await r.json().catch(() => null);
+        if (!r.ok) throw new GitHostingError(r.status, typeof j?.code === 'string' ? j.code : '', typeof j?.webUrl === 'string' ? j.webUrl : undefined);
+        if (typeof j?.username !== 'string' || !j.username || typeof j?.password !== 'string' || !j.password) throw new GitHostingError(502, 'BAD_RESPONSE');
+        return { webUrl: String(j.webUrl || ''), username: j.username, password: j.password };
+      },
+    },
     // 云端运行水合(B):worker 本地 FS 无 agents → 从云读 config.toml+SOUL.md 组装人格。软失败 → null。
     agents: {
       getAgent: async (_userId: string, slug: string) => {
@@ -631,7 +663,7 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
   // Optional capabilities describe configured services. Local Inbox storage uses
   // the host database independently; advertising this cloud-only seam starts the
   // broadcast poller even on an offline Unit with no Server or cloud credential.
-  if (!base || (typeof cfg.token === 'string' && !cfg.token.trim())) delete brain.inbox;
+  if (!base || (typeof cfg.token === 'string' && !cfg.token.trim())) { delete brain.inbox; delete brain.git; }
   if (brain.agentFiles) registerAgentSyncIdentity(brain.agentFiles, base, cfg.token);
   return brain;
 }

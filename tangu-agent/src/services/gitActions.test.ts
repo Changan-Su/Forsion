@@ -4,6 +4,26 @@
  *   - 提交:信息走 stdin;空信息 / 没改动 / 夹着别的仓 / 新文件太多 / 新文件太大 → 带 code 拒绝;没配身份 → no_identity
  *   - 新建分支:合法名切过去;非法名 / 以 - 开头 → invalid_branch
  *   - 推送:首推设上游;无远端 / 游离 HEAD 拒绝;改写历史后不开 forceWithLease 推不上,开了能推
+ *   - 拉取:别处推上来的提交快进拿到;两边各有新提交 → diverged(只报告,不合并);没有上游 → no_upstream;
+ *     只是本地领先 / 已经一致 → 没有要拉的;快进会改到的文件上有没提交的改动 → dirty_worktree(什么都没动),不相干的改动留着;
+ *     仓库自带钩子未经信任不跑;远端不是 https 时凭据提供方根本不被问到
+ *     (带凭据的那一半:gitActions.credentials.test.ts;连真 Gitea:scripts/git-credentials.gitea.mjs)
+ *
+ * 拉取那组的负对照(2026-10-10 各改一处实跑,对应的用例红):
+ *   - gitPull 去掉 `if (before.ahead) throw diverged(before)` 并把 `merge --ff-only` 换成 `merge --no-edit` → 「两边各有新提交」红(本地被合并了)
+ *   - 去掉 no_upstream 的那个判断 → 「没有上游」红
+ *   - 去掉 dirty_worktree 的映射 → 「本地改动挡住快进」红(成了 git_failed)
+ *   - 快进时不关 merge.autoStash → 同一条红(用户的改动被收进 stash 再放回来,a.txt 里是冲突标记)
+ *   - gitPull 去掉 requireTrust → 「仓库自带钩子未经信任不跑」红(钩子跑了)
+ *   - gitPull 去掉 requireRepoRoot 和游离 HEAD 的判断 → 「游离 HEAD / 子目录」红
+ *   - gitPull 不 fetch 就量 → 「快进拿到」等五条红
+ *   - gitCredentialEnv(services/gitCredentials.ts)里解析不出 origin 也照问提供方 → 「远端不是 https 时提供方不被问到」红
+ *   - fetch 改回 `git fetch <远端>`(取全部)→ 「只取上游那一条」红(本地 topic 被远端的强行改写)
+ *   - fetch 去掉 `--refmap=`(点名取一条、但让配置的映射顺带生效)→ 同一条红(本地 topic 成了远端的 main)
+ *   - 跟踪引用不在 refs/remotes/ 下也照写(去掉 startsWith 判断)→ 同一条红(第二段:本地 topic 被改写)
+ *   - 快进去掉 `--no-overwrite-ignore` → 「本地被忽略的文件」红(.env 成了远端那份)
+ *   - 去掉 `couldn't find remote ref` → no_upstream 的映射 → 「上游那条分支在远端已经没了」红(成了 git_failed)
+ *   - stripGitTraceEnv 不把 GIT_TRACE2* 置 0 → 「Trace2」红(跟踪文件里有 Authorization: Basic …)
  *   - 提交信息:现场里有最近提交的风格与 diff;模型包的代码块 / 引号剥掉;用户的提交说明进系统提示
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
@@ -13,9 +33,10 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
   DEFAULT_GITIGNORE, GitActionError, assertCommittable, assertStagedSafe, assertWithinReviewed, changesToken, cleanCommitMessage, commitMessageContext, commitMessagePrompt, reviewedStatuses,
-  gitCommit, gitCreateBranch, gitInit, gitPending, gitPush, isCredentialPath, postCommitFailure, serialized,
+  gitCommit, gitCreateBranch, gitInit, gitPending, gitPull, gitPush, isCredentialPath, postCommitFailure, serialized,
 } from './gitActions.js';
 import { resetGitSettingsForTest } from './gitSettings.js';
+import { registerGitCredentialProvider, resetGitCredentialProvidersForTest } from './gitCredentials.js';
 
 let root: string;
 let globalConfig: string;
@@ -468,6 +489,212 @@ describe('gitPush', () => {
     expect(await codeOf(gitPush(cwd))).toBe('no_remote');
     git(cwd, 'checkout', '-q', '--detach');
     expect(await codeOf(gitPush(cwd))).toBe('detached');
+  });
+});
+
+describe('gitPull', () => {
+  /** 一个裸远端 + 已推过并设了上游的本地仓 + 「别处」的另一个克隆(用它往远端加提交)。 */
+  const setup = (name: string): { cwd: string; remote: string; other: string } => {
+    const remote = path.join(root, `${name}-remote.git`);
+    execFileSync('git', ['init', '-q', '--bare', '-b', 'main', remote]);
+    const cwd = repo(name);
+    writeFileSync(path.join(cwd, 'a.txt'), 'a\n');
+    git(cwd, 'add', '.'); git(cwd, 'commit', '-qm', 'base');
+    git(cwd, 'remote', 'add', 'origin', remote);
+    git(cwd, 'push', '-q', '-u', 'origin', 'main');
+    const other = path.join(root, `${name}-other`);
+    execFileSync('git', ['clone', '-q', remote, other]);
+    return { cwd, remote, other };
+  };
+  const pushFromElsewhere = (other: string, file: string, content: string, subject: string): void => {
+    writeFileSync(path.join(other, file), content);
+    git(other, 'add', '.'); git(other, 'commit', '-qm', subject); git(other, 'push', '-q', 'origin', 'HEAD:main');
+  };
+
+  it('别处推上来的提交:快进拿到;再拉一次 = 没有要拉的', async () => {
+    const { cwd, other } = setup('pull-ff');
+    pushFromElsewhere(other, 'b.txt', 'b\n', 'from elsewhere');
+    pushFromElsewhere(other, 'c.txt', 'c\n', 'and another');
+    expect(await gitPull(cwd)).toEqual({ remote: 'origin', branch: 'main', upstream: 'origin/main', updated: true, commits: 2, ahead: 0 });
+    expect(readFileSync(path.join(cwd, 'c.txt'), 'utf8')).toBe('c\n');
+    expect(git(cwd, 'log', '-1', '--format=%s')).toBe('and another');
+    expect(await gitPull(cwd)).toEqual({ remote: 'origin', branch: 'main', upstream: 'origin/main', updated: false, commits: 0, ahead: 0 });
+  });
+
+  it('两边各有新提交 → diverged:只报告两边各几个,本地一个字节不动(不合并、不变基)', async () => {
+    const { cwd, other } = setup('pull-diverged');
+    pushFromElsewhere(other, 'b.txt', 'b\n', 'from elsewhere');
+    writeFileSync(path.join(cwd, 'local.txt'), 'local\n');
+    git(cwd, 'add', '.'); git(cwd, 'commit', '-qm', 'local only');
+    const before = git(cwd, 'rev-parse', 'HEAD');
+    const err = await gitPull(cwd).catch((e) => e as GitActionError);
+    expect(err.code).toBe('diverged');
+    expect(err.detail).toBe('main: 1\norigin/main: 1');
+    expect(git(cwd, 'rev-parse', 'HEAD')).toBe(before);
+    expect(git(cwd, 'status', '--porcelain')).toBe('');
+    expect(existsSync(path.join(cwd, 'b.txt'))).toBe(false);
+    expect(existsSync(path.join(cwd, '.git', 'MERGE_HEAD'))).toBe(false);
+  });
+
+  it('没有上游 → no_upstream(有远端但没设上游 / 根本没有远端都是)', async () => {
+    const { cwd } = setup('pull-noupstream');
+    git(cwd, 'switch', '-q', '-c', 'topic');
+    expect(await codeOf(gitPull(cwd))).toBe('no_upstream');
+    const lonely = repo('pull-noremote');
+    writeFileSync(path.join(lonely, 'a.txt'), 'a');
+    git(lonely, 'add', '.'); git(lonely, 'commit', '-qm', 'base');
+    expect(await codeOf(gitPull(lonely))).toBe('no_upstream');
+  });
+
+  it('只是本地领先 → 没有要拉的,报出领先几个', async () => {
+    const { cwd } = setup('pull-ahead');
+    writeFileSync(path.join(cwd, 'local.txt'), 'local\n');
+    git(cwd, 'add', '.'); git(cwd, 'commit', '-qm', 'local only');
+    expect(await gitPull(cwd)).toMatchObject({ updated: false, commits: 0, ahead: 1 });
+  });
+
+  it('本地改动挡住快进 → dirty_worktree,什么都没动;不相干的本地改动留着照样拉', async () => {
+    const { cwd, other } = setup('pull-dirty');
+    pushFromElsewhere(other, 'a.txt', 'changed elsewhere\n', 'touch a');
+    writeFileSync(path.join(cwd, 'a.txt'), 'my unsaved edit\n');
+    const before = git(cwd, 'rev-parse', 'HEAD');
+    const err = await gitPull(cwd).catch((e) => e as GitActionError);
+    expect(err.code).toBe('dirty_worktree');
+    expect(err.detail).toContain('a.txt');
+    expect(git(cwd, 'rev-parse', 'HEAD')).toBe(before);
+    expect(readFileSync(path.join(cwd, 'a.txt'), 'utf8')).toBe('my unsaved edit\n');
+
+    // 用户开着 merge.autoStash 也一样:不替他收进 stash 再放回来(放不回来就是一工作区的冲突标记)
+    const stashy = setup('pull-dirty-autostash');
+    pushFromElsewhere(stashy.other, 'a.txt', 'changed elsewhere\n', 'touch a');
+    writeFileSync(path.join(stashy.cwd, 'a.txt'), 'my unsaved edit\n');
+    git(stashy.cwd, 'config', 'merge.autoStash', 'true');
+    expect(await codeOf(gitPull(stashy.cwd))).toBe('dirty_worktree');
+    expect(readFileSync(path.join(stashy.cwd, 'a.txt'), 'utf8')).toBe('my unsaved edit\n');
+    expect(git(stashy.cwd, 'stash', 'list')).toBe('');
+
+    const clean = setup('pull-dirty-unrelated');
+    pushFromElsewhere(clean.other, 'b.txt', 'b\n', 'add b');
+    writeFileSync(path.join(clean.cwd, 'a.txt'), 'my unsaved edit\n');
+    expect(await gitPull(clean.cwd)).toMatchObject({ updated: true, commits: 1 });
+    expect(readFileSync(path.join(clean.cwd, 'a.txt'), 'utf8')).toBe('my unsaved edit\n');
+    expect(readFileSync(path.join(clean.cwd, 'b.txt'), 'utf8')).toBe('b\n');
+  });
+
+  it('游离 HEAD → detached;项目是大仓的子目录 → nested_repo', async () => {
+    const { cwd } = setup('pull-detached');
+    mkdirSync(path.join(cwd, 'sub'));
+    expect(await codeOf(gitPull(path.join(cwd, 'sub')))).toBe('nested_repo');
+    git(cwd, 'checkout', '-q', '--detach');
+    expect(await codeOf(gitPull(cwd))).toBe('detached');
+  });
+
+  it('仓库自带钩子未经信任不跑(untrusted_config,也不 fetch);信任后快进并照跑 post-merge', async () => {
+    const { cwd, other } = setup('pull-trust');
+    pushFromElsewhere(other, 'b.txt', 'b\n', 'from elsewhere');
+    const hooks = dir('pull-trust/.githooks');
+    const marker = path.join(root, 'pull-trust-ran');
+    writeFileSync(path.join(hooks, 'post-merge'), `#!/bin/sh\ntouch "${marker}"\n`, { mode: 0o755 });
+    git(cwd, 'config', 'core.hooksPath', '.githooks');
+    const tracking = git(cwd, 'rev-parse', 'refs/remotes/origin/main');
+    expect(await codeOf(gitPull(cwd))).toBe('untrusted_config');
+    expect(existsSync(marker)).toBe(false);
+    expect(git(cwd, 'rev-parse', 'refs/remotes/origin/main')).toBe(tracking); // 没信任之前连 fetch 都没做
+    expect(await gitPull(cwd, true)).toMatchObject({ updated: true, commits: 1 });
+    expect(existsSync(marker)).toBe(true);
+  });
+
+  it('只取上游那一条:远端配的别的映射不生效(别的本地分支不被改写),远端跟踪分支照常更新', async () => {
+    const { cwd, other } = setup('pull-onebranch');
+    git(other, 'switch', '-q', '-c', 'topic');
+    writeFileSync(path.join(other, 't.txt'), 'remote topic\n');
+    git(other, 'add', '.'); git(other, 'commit', '-qm', 'remote topic'); git(other, 'push', '-q', 'origin', 'topic');
+    git(other, 'switch', '-q', 'main');
+    pushFromElsewhere(other, 'b.txt', 'b\n', 'from elsewhere');
+    // 本地也有一条 topic,上面是没推过的提交;远端配置里有一条会强行改写它的映射
+    git(cwd, 'switch', '-q', '-c', 'topic');
+    writeFileSync(path.join(cwd, 'mine.txt'), 'unpushed work\n');
+    git(cwd, 'add', '.'); git(cwd, 'commit', '-qm', 'unpushed work');
+    const mine = git(cwd, 'rev-parse', 'topic');
+    git(cwd, 'switch', '-q', 'main');
+    git(cwd, 'config', '--add', 'remote.origin.fetch', '+refs/heads/topic:refs/heads/topic');
+    // 这一条的来源就是上游分支本身:点名只取 main 时,git 照样会按它把本地 topic 改成远端的 main
+    git(cwd, 'config', '--add', 'remote.origin.fetch', '+refs/heads/main:refs/heads/topic');
+    expect(await gitPull(cwd)).toMatchObject({ updated: true, commits: 1 });
+    expect(git(cwd, 'rev-parse', 'topic')).toBe(mine);
+    expect(git(cwd, 'rev-parse', 'refs/remotes/origin/main')).toBe(git(cwd, 'rev-parse', 'HEAD'));
+
+    // 上游的「跟踪引用」被配置映射到一条本地分支上(不在 refs/remotes/ 下):一处都不写,照样快进
+    const odd = setup('pull-onebranch-odd');
+    git(odd.cwd, 'switch', '-q', '-c', 'topic');
+    writeFileSync(path.join(odd.cwd, 'mine.txt'), 'unpushed work\n');
+    git(odd.cwd, 'add', '.'); git(odd.cwd, 'commit', '-qm', 'unpushed work');
+    const kept = git(odd.cwd, 'rev-parse', 'topic');
+    git(odd.cwd, 'switch', '-q', 'main');
+    git(odd.cwd, 'config', 'remote.origin.fetch', '+refs/heads/main:refs/heads/topic');
+    pushFromElsewhere(odd.other, 'b.txt', 'b\n', 'from elsewhere');
+    expect(await gitPull(odd.cwd)).toMatchObject({ updated: true, commits: 1 });
+    expect(git(odd.cwd, 'rev-parse', 'topic')).toBe(kept);
+    expect(readFileSync(path.join(odd.cwd, 'b.txt'), 'utf8')).toBe('b\n');
+  });
+
+  it('上游开始跟踪一个本地被忽略的文件(.env)→ dirty_worktree,本地那份不被盖掉', async () => {
+    const { cwd, other } = setup('pull-ignored');
+    writeFileSync(path.join(cwd, '.gitignore'), '.env\n');
+    git(cwd, 'add', '.'); git(cwd, 'commit', '-qm', 'ignore env'); git(cwd, 'push', '-q', 'origin', 'main');
+    writeFileSync(path.join(cwd, '.env'), 'SECRET=mine\n');
+    git(other, 'pull', '-q', 'origin', 'main');
+    writeFileSync(path.join(other, '.env'), 'SECRET=theirs\n');
+    git(other, 'add', '-f', '.env'); git(other, 'commit', '-qm', 'track env'); git(other, 'push', '-q', 'origin', 'HEAD:main');
+    const before = git(cwd, 'rev-parse', 'HEAD');
+    const err = await gitPull(cwd).catch((e) => e as GitActionError);
+    expect(err.code).toBe('dirty_worktree');
+    expect(err.detail).toContain('.env');
+    expect(readFileSync(path.join(cwd, '.env'), 'utf8')).toBe('SECRET=mine\n');
+    expect(git(cwd, 'rev-parse', 'HEAD')).toBe(before);
+  });
+
+  it('上游那条分支在远端已经没了 → no_upstream', async () => {
+    const { cwd, other } = setup('pull-gone');
+    git(cwd, 'switch', '-q', '-c', 'topic');
+    git(cwd, 'push', '-q', '-u', 'origin', 'topic');
+    git(other, 'push', '-q', 'origin', '--delete', 'topic');
+    const err = await gitPull(cwd).catch((e) => e as GitActionError);
+    expect(err.code).toBe('no_upstream');
+    expect(err.detail).toBe('origin/topic');
+  });
+
+  it('远端不是 https(本地路径)时凭据提供方根本不被问到', async () => {
+    const { cwd, other } = setup('pull-noprovider');
+    pushFromElsewhere(other, 'b.txt', 'b\n', 'from elsewhere');
+    let asked = 0;
+    registerGitCredentialProvider('spy', async () => { asked++; return { username: 'u', password: 'p' }; });
+    try {
+      expect(await gitPull(cwd)).toMatchObject({ updated: true });
+      writeFileSync(path.join(cwd, 'c.txt'), 'c\n');
+      git(cwd, 'add', '.'); git(cwd, 'commit', '-qm', 'local');
+      expect(await gitPush(cwd)).toMatchObject({ remote: 'origin', branch: 'main' });
+      expect(asked).toBe(0);
+    } finally { resetGitCredentialProvidersForTest(); }
+  });
+});
+
+describe('带凭据的子进程不留痕', () => {
+  it('用户全局配了 Trace2(事件写文件 + 记环境变量 / 配置项)→ 注入的那一项不进跟踪文件', async () => {
+    const cwd = repo('trace2');
+    writeFileSync(path.join(cwd, 'a.txt'), 'a\n');
+    git(cwd, 'add', '.'); git(cwd, 'commit', '-qm', 'base');
+    git(cwd, 'remote', 'add', 'origin', 'https://127.0.0.1:1/dave/hello.git'); // 没人听的端口:连不上,马上失败
+    const trace = path.join(root, 'trace2-events.json');
+    writeFileSync(globalConfig, `[trace2]\n\teventTarget = ${trace}\n\tenvVars = GIT_CONFIG_VALUE_0,GIT_CONFIG_KEY_0\n\tconfigParams = http.*\n`);
+    registerGitCredentialProvider('spy', async () => ({ username: 'dave', password: 'tok-secret-1' }));
+    try {
+      expect(await codeOf(gitPush(cwd))).toBe('git_failed');
+      const logged = existsSync(trace) ? readFileSync(trace, 'utf8') : '';
+      expect(logged).toContain('get-url'); // 跟踪确实开着(不带凭据的只读命令照记,那是用户自己的配置)
+      expect(logged).not.toContain(Buffer.from('dave:tok-secret-1').toString('base64'));
+      expect(logged).not.toMatch(/extraheader|Authorization/i);
+    } finally { resetGitCredentialProvidersForTest(); }
   });
 });
 

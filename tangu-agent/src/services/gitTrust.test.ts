@@ -3,6 +3,8 @@
  *   - 识别:过滤器 / include → read + write;hooksPath / sshCommand / 凭据助手 / 有执行位的钩子 → write;.sample 与没执行位的钩子不算
  *   - 信任记在宿主家目录,按 git common dir 的 dev/ino + 创建时间绑定:删了重建的同名仓 = 不再信任(Linux 会复用 inode,只比 dev/ino 不够)
  *   - **零点击路径**:打开项目详情就跑的摘要、每个 run 开头的 [Git state],未信任时都不读改动 —— clean 过滤器一次都不跑
+ *   - 传输配置(http.* / 远端代理)单列一类:不算 read / write(平时不拦),宿主替用户带凭据时才看(gitActions.credentials.test.ts)
+ *     负对照(2026-10-10 实跑):repoConfigRisks 不收集 transport(恒空)→ 「传输配置单列」红
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { execFileSync } from 'node:child_process';
@@ -43,6 +45,19 @@ describe('repoConfigRisks', () => {
     expect(await repoConfigRisks(cwd)).toMatchObject({ read: [], write: [] });
     const plain = path.join(root, 'plain'); mkdirSync(plain);
     expect(await repoConfigRisks(plain)).toBeNull();
+  });
+
+  it('传输配置单列:http.* / 远端代理进 transport,不进 read / write(平时的提交 / 推送不因它多问一次)', async () => {
+    const cwd = repo('transport-keys');
+    git(cwd, 'config', 'http.proxy', 'http://127.0.0.1:7890');
+    git(cwd, 'config', 'http.https://git.example.test/.sslVerify', 'false');
+    git(cwd, 'config', 'remote.origin.proxy', 'http://127.0.0.1:7890');
+    git(cwd, 'config', 'user.name', 'Someone');
+    const risk = (await repoConfigRisks(cwd))!;
+    expect(risk.transport.sort()).toEqual(['http.https://git.example.test/.sslverify', 'http.proxy', 'remote.origin.proxy']);
+    expect({ read: risk.read, write: risk.write }).toEqual({ read: [], write: [] });
+    expect(await untrustedRisks(cwd, 'write')).toBeNull();
+    expect((await repoConfigRisks(repo('transport-clean')))!.transport).toEqual([]);
   });
 
   it('过滤器 / include 是 read 级(也算 write);hooksPath / sshCommand / 凭据助手只算 write', async () => {

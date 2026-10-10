@@ -17,6 +17,7 @@ import { createMultiBrain } from '../adapters/standalone/multiBrain.js';
 import { createLocalAssets } from '../adapters/standalone/localAssetsBrain.js';
 import { createLocalMemoryBrain } from '../adapters/standalone/localMemoryBrain.js';
 import { setSyncSources } from '../services/memorySyncService.js';
+import { installForsionGit } from '../services/forsionGit.js';
 import { createProviderRegistry, type DirectProvider } from '../llm/providerRegistry.js';
 import { STANDALONE_SCHEMA } from '../db/schemaStandalone.js';
 import { getRawSection } from '../core/config.js';
@@ -128,6 +129,9 @@ export function buildBrain(cfg: StandaloneConfig): { brain: CloudBrainServices; 
   // 同步源:云端 httpBrain(有 agentFiles 每-agent 镜像 + memory 旧全局端点)。每-agent 桶在 syncNow 内
   // 按 cloudSync + 固定 baseDir 解析,不再依赖单 store/ALS(根治「只同步 xyra」bug)。
   setSyncSources({ brain: httpBrain });
+  // Forsion Git 的推拉凭据提供方(登记在 services/gitCredentials 的接缝上)。没配云端地址 / 没登录 → httpBrain 不挂 git 服务 →
+  // 这里是卸掉:项目的推送 / 拉取照用户自己的 git 配置跑,与没有这项功能时一样。
+  installForsionGit(httpBrain.git);
   return { brain, providers };
 }
 
