@@ -2,7 +2,7 @@
  * POST /agent/runs 的会话归属。真 express + fetch 直打;state 是内存替身,建会话照真库的写法(已存在就什么都不做)。
  * 要钉的是「建完再读一次归属」:两个账号用同一个新会话 id 同时发第一条消息时,两边第一次都读到「还没有这个会话」,
  * 后插入的那次是空操作 —— 不复核,它的 run 就建在了先到那个人的会话上。
- * (云端 worker 走 /agent-state/runs 时网关还有一道 ownSession,那里是 403;直接接 SQL 库的宿主只有这一道。)
+ * 这份的替身相当于直接接 SQL 库的宿主;云端 worker 那条路(server 的「建 run 验归属」为什么兜不住)在 runs.sessionOwner.worker.test.ts。
  */
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import express from 'express';
