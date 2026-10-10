@@ -59,19 +59,11 @@ async function main() {
     await win.waitForSelector('.dv-groupview', { timeout: 40_000 })
     await win.waitForTimeout(1500)
 
-    // vaultRoot 要等笔记面首次挂载才落地(daily-template 同款)
+    // 新建仪表盘(真实用户路径)。库由启动器挂载时唤醒,卡片随库落地才出现 → 等卡片本身(daily-template 同款)
     await win.click('.dv-new-tab')
     await win.waitForSelector('.newtab', { timeout: 15_000 })
-    await win.waitForTimeout(600)
-    await win.locator('.newtab-card', { hasText: /^新建笔记$|^New note$/ }).first().click()
-    await win.waitForTimeout(2500)
-
-    // 新建仪表盘(真实用户路径)
-    await win.click('.dv-new-tab')
-    await win.waitForSelector('.newtab', { timeout: 15_000 })
-    await win.waitForTimeout(600)
     const card = win.locator('.newtab-card', { hasText: /^新建仪表盘$|^New dashboard$/ }).first()
-    if (!(await card.count().catch(() => 0))) {
+    if (!(await card.waitFor({ state: 'visible', timeout: 15_000 }).then(() => true, () => false))) {
       const labels = await win.evaluate(() => [...document.querySelectorAll('.newtab-card-label')].map((e) => e.textContent))
       throw new Error(`启动器里找不到「新建仪表盘」(vaultRoot 没落地?),现有:${JSON.stringify(labels)}`)
     }
