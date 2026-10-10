@@ -45,8 +45,11 @@ function readDispositions(given: unknown, lines: number[]): { byLine: Map<number
   for (const n of lines) if (!byLine.has(n) && !bad.has(n)) problems.push(`Line ${n}: not accounted for.`);
   return { byLine, problems };
 }
-const rememberFact = async (fact: string, scope: HumanScope, ctx: ToolContext): Promise<string> =>
-  memoryLogProvider.tools().find((x) => x.name === 'remember')!.execute({ action: 'add', fact, scope: scope.kind }, ctx);
+// 抛出来的(别处正占着记忆的锁之类)也收成一句 Error 回执:前面几句已经记了的要能照实说出来,不能让异常直接冒到外层
+const rememberFact = async (fact: string, scope: HumanScope, ctx: ToolContext): Promise<string> => {
+  try { return await memoryLogProvider.tools().find((x) => x.name === 'remember')!.execute({ action: 'add', fact, scope: scope.kind }, ctx); }
+  catch (e) { return `Error: ${e instanceof Error ? e.message : String(e)}`; }
+};
 
 export const manageHumanProvider: ToolProvider = {
   id: 'builtin:manage_human', tools: () => [{

@@ -182,7 +182,7 @@ describe('HUMAN.md collaboration lifecycle', () => {
       expect(tooLong.problems).toEqual(['Line 2: the sentence is 301 characters; at most 300.']);
       // 两句要记、第二句没记上:文档不动,照实说第一句已经在记忆里
       const real = memoryLogProvider.tools().find((x) => x.name === 'remember')!; let calls = 0;
-      const spy = vi.spyOn(memoryLogProvider, 'tools').mockReturnValue([{ ...real, execute: async (a, c) => (++calls === 1 ? real.execute(a, c) : 'Error: memory is unavailable.') }]);
+      const spy = vi.spyOn(memoryLogProvider, 'tools').mockReturnValue([{ ...real, execute: async (a, c) => { if (++calls === 1) return real.execute(a, c); throw new Error('MEMORY_BUSY'); } }]); // 第二句是抛出来的(别处占着锁),不是一句 Error 回执
       const half = JSON.parse(await tool.execute({ ...tidy, removed: ['1 memory: The human likes sketches.', '2 memory: Run the script before saying it is done.', '3 reworded'] }, ctx));
       spy.mockRestore();
       expect(half).toMatchObject({ kind: 'human_pending', saved: false, alreadySaved: ['The human likes sketches.'], problems: [expect.stringContaining('Line 2: could not be saved to memory')] });
