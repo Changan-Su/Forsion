@@ -143,6 +143,17 @@ describe('dev 态目录隔离', () => {
     expect(defaultWorkspaceDir().endsWith('Forsion')).toBe(true)
   })
 
+  it('FORSION_WORKSPACE_DIR 只在 dev 态挪默认工作区(台架用);正式版不认,空值不算', () => {
+    vi.stubEnv('FORSION_WORKSPACE_DIR', '/tmp/bench-workspace')
+    setDevMode(true)
+    expect(defaultWorkspaceDir()).toBe('/tmp/bench-workspace')
+    setDevMode(false)
+    expect(defaultWorkspaceDir().endsWith('Forsion')).toBe(true)
+    vi.stubEnv('FORSION_WORKSPACE_DIR', '  ')
+    setDevMode(true)
+    expect(defaultWorkspaceDir().endsWith('Forsion-Dev')).toBe(true)
+  })
+
   it('OAuth 动态模块在 dev 中绑定同一个引擎 home，不再写进正式目录', () => {
     vi.stubEnv('TANGU_HOME', '')
     setDevMode(true)
