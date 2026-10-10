@@ -1186,8 +1186,20 @@ const tabCountText = (list) => {
   })
 
   await check('keyboard: the focused composer stays visible above the keyboard', async () => {
-    await toSpace('tangu'); await closeDrawer()
+    await openChat('E2E Session One') // a conversation with a reply in it: the column's layout is measured with and without the keyboard
     const field = "document.querySelector('.composer textarea, .composer [contenteditable], textarea')"
+    // The chat column is laid out by its width alone: the keyboard takes a third of the page's height, and the column's
+    // tall-and-narrow rules used to let go at that moment — avatars back, the reply pushed right and re-wrapped, a short
+    // conversation jumping from the input up to the top (and all of it back when the keyboard left).
+    const column = `(() => {
+      const root = document.querySelector('.mb-view[data-view="chat"]')
+      const text = root && root.querySelector('.t2-asst .t2-content')
+      const last = root && [...root.querySelectorAll('.t2-stream-inner > .t2-asst, .t2-stream-inner > .t2-userwrap')].pop()
+      const box = root && root.querySelector('.t2c')
+      if (!text || !last || !box) return null
+      return { avatars: [...root.querySelectorAll('.t2-avatar')].filter((e) => e.getClientRects().length).length, textLeft: text.getBoundingClientRect().left, gap: box.getBoundingClientRect().top - last.getBoundingClientRect().bottom }
+    })()`
+    const rest = await h.waitPage(cdp, column, 8000)
     await tapEl(field)
     const shown = () => /mInputShown=true/.test(h.adb('shell', 'dumpsys', 'input_method'))
     for (let i = 0; i < 20 && !shown(); i++) await h.pause(300)
@@ -1201,6 +1213,10 @@ const tabCountText = (list) => {
     assert.ok(p.y < wv.rect.bottom, `composer at y=${p.y}, below the WebView's visible bottom ${wv.rect.bottom}`)
     assert.ok(await cdp.eval(`document.activeElement === ${field}`), 'the composer lost focus')
     shot('03f-keyboard-composer')
+    const up = await cdp.eval(column)
+    assert.ok(rest && up, 'no chat with a reply on screen to measure')
+    assert.ok(rest.avatars === 0 && up.avatars === 0 && Math.abs(up.textLeft - rest.textLeft) < 1, `the chat column changed its layout with the keyboard: avatars ${rest.avatars} → ${up.avatars}, the reply's left edge ${rest.textLeft} → ${up.textLeft}`)
+    assert.ok(Math.abs(up.gap - rest.gap) < 3, `with the keyboard up the conversation no longer ends at the input: ${Math.round(rest.gap)} px between them at rest, ${Math.round(up.gap)} now`)
     h.key(4); await h.pause(800)
     await cdp.eval('(document.activeElement && document.activeElement.blur(), true)')
   })

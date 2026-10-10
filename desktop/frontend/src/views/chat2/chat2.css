@@ -1065,3 +1065,18 @@ html[data-chat-avatars='off'] .t2-username { display: none; }
 .mb-shell[data-native-chrome] .t2-userwrap:not(.t2-userwrap--inline) .t2-user { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
 .mb-shell[data-native-chrome] .t2-asst .t2-actions .t2-iconbtn { position: relative; }
 .mb-shell[data-native-chrome] .t2-asst .t2-actions .t2-iconbtn::after { content: ''; position: absolute; inset: -8px 0; }
+
+/* ── 手机(Android 原生外壳):键盘弹出时聊天列不换版式;列表给圆点 / 序号留位 ──
+   聊天列在手机上吃的是前面两条「细长列」规则(@container aspect-ratio < 9/16:不画头像、短对话贴着输入区)。
+   它们按**宽高比**判,而原生层在键盘弹出时把 WebView 截到键盘上沿 —— 列一下子矮掉三分之一,比例越过 9:16:
+   头像冒出来、正文右移重新折行、短对话从输入区跳到顶上;收起键盘又跳回去(2026-10-10 模拟器截图)。
+   所以窄列(≤520px,与前面窄栏规则同一条线)在原生外壳里固定用「细长列」那一套,不再看高度;横屏 / 平板的
+   宽列照旧按比例。
+   头像那一列不在时,列表的圆点和序号没有地方挂:全局 reset 把 ul / ol 的内距清成 0,它们原本挂在头像与正文
+   之间那 12px 里 —— 现在挂到屏幕外被切掉,列表里的列表也不缩进。18px 与笔记正文(.md-body)同一个数。
+   仪器:mobile `npm run stage:phone` 的 chat-lists / chat-keyboard;模拟器 `ONLY='keyboard:' npm run emu:nativeshell`(带冒号:不带会连别的几条一起选上)。 */
+@container (max-width: 520px) {
+  .mb-shell[data-native-chrome] .t2-avatar { display: none; }
+  .mb-shell[data-native-chrome] .t2-stream-inner:has(> .t2-asst, > .t2-userwrap) > :first-child { margin-top: auto; }
+  .mb-shell[data-native-chrome] .t2-content :is(ul, ol) { padding-inline-start: 18px; }
+}

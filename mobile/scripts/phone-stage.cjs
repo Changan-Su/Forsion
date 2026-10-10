@@ -99,6 +99,12 @@ const MESSAGES = [
   { id: 'st-m1', role: 'user', content: '把这次的改动整理成发版说明。', reasoning: null, tool_calls: null, tool_results: null, attachments: null, timestamp: T0 - 6 * MIN, model_id: null, is_error: false },
   { id: 'st-m2', role: 'model', content: '好的。按「新功能」和「修复」分成两段，先给你一版草稿。', reasoning: null, tool_calls: null, tool_results: null, attachments: null, timestamp: T0 - 5 * MIN, model_id: null, is_error: false },
 ]
+// A reply the way an agent writes one — a list inside a list, a numbered list that reaches two digits. The chat page is
+// judged on it (st-3); st-1 keeps its two short lines for the scenes that need a conversation shorter than the screen.
+const CHAT_MESSAGES = [
+  { ...MESSAGES[0], id: 'st-c1', content: '登录页的验证码图片不显示了，帮我查一下原因。' },
+  { ...MESSAGES[1], id: 'st-c2', content: ['先说结论：验证码不显示是因为图片地址被拼了两次前缀。', '', '- 开发环境走代理，前缀由 `BACKEND_URL` 决定', '  - 本机 dev', '  - 预览包', '- 生产环境同源，所以线上一直没事', '', '改法两步：', '', '9. 改 `shared/assetUrl.ts`', '10. 补一条测试'].join('\n') },
+]
 const AGENTS = [
   { slug: 'researcher', name: '研究员', description: '查资料、读长文、列出处' },
   { slug: 'editor', name: '编辑', description: '改稿、压字数、统一口吻' },
@@ -137,7 +143,7 @@ async function stubApi(page, unknown) {
     if (/\/agent\/sessions\/[^/]+\/checkpoints$/.test(p)) return json({ checkpoints: [] })
     const cfg = p.match(/\/agent\/sessions\/([^/]+)\/config$/)
     if (cfg) return json({ agent_config: configs[decodeURIComponent(cfg[1])] || {} })
-    if (/\/agent\/sessions\/[^/]+\/messages$/.test(p)) return json({ messages: p.includes('/st-1/') ? MESSAGES : [] })
+    if (/\/agent\/sessions\/[^/]+\/messages$/.test(p)) return json({ messages: p.includes('/st-1/') ? MESSAGES : p.includes('/st-3/') ? CHAT_MESSAGES : [] })
     const one = p.match(/\/agent\/sessions\/([^/]+)$/)
     if (one && m === 'PATCH') {
       const row = SESSIONS.find((x) => x.id === decodeURIComponent(one[1]))
@@ -168,7 +174,10 @@ async function installChrome(page) {
     // like the plugin: the capsules float (and report where they are) only while the shell's own bar is up — a layer that
     // hides the bar (search, onboarding …) gets the plain layout: nothing over the page, nothing to keep clear of
     const plain = { floating: false, status: layout.status, top: 0, bottom: 0, plates: [] }
-    engine.installNativeChromeHost({ spaces: true, render(state) { stage.state = state; stage.renders++; host.applyChromeLayout(state.mode === 'shell' ? layout : plain) } })
+    // one level down (an item is open: the capsule's left button is "back") the dock is away, as on the device —
+    // the plugin then reports no room at the bottom and the page runs to the screen's end
+    const detail = { ...layout, bottom: 0, plates: layout.plates.filter((p) => p.id !== 'dock') }
+    engine.installNativeChromeHost({ spaces: true, render(state) { stage.state = state; stage.renders++; host.applyChromeLayout(state.mode !== 'shell' ? plain : state.leftBack ? detail : layout) } })
     host.applyChromeLayout(layout)
   }, { engineUrl: moduleUrl('../lcl/engine/nativeChrome.ts'), hostUrl: moduleUrl('src/nativeChrome.ts'), layout: LAYOUT })
   await page.waitForFunction(() => document.querySelector('.mb-shell')?.hasAttribute('data-native-chrome') && !!window.__stage?.state, null, { timeout: 10_000 })
@@ -216,6 +225,15 @@ const rect = (page, sel, nth = 0) => page.evaluate(([q, i]) => {
 const texts = (page, sel) => page.evaluate((q) => [...document.querySelectorAll(q)].map((el) => el.textContent.trim()), sel)
 const near = (a, b, tol = 1.5) => Math.abs(a - b) <= tol
 const LIST = '.mb-drawer--left'
+const CHAT = '.mb-view[data-view="chat"]'
+/** From wherever the stage is: Tangu's list, then into the session with that title (rows move: an earlier scene pins one). */
+const openChat = async (page, title) => {
+  if ((await stage.nav(page)) === 'detail') await stage.action(page, 'left')
+  await stage.space(page, 'tangu'); await chip(page, 'all')
+  await page.locator(`${LIST} [data-timeline] .t2s-srow`, { hasText: title }).first().tap()
+  await page.waitForFunction(() => document.querySelector('.mb-shell')?.getAttribute('data-nav') === 'detail', null, { timeout: 6000 })
+  await page.waitForTimeout(600)
+}
 const chip = async (page, id) => { await page.locator(`${LIST} .pl-chips [data-filter="${id}"]`).tap(); await page.waitForTimeout(400) }
 
 const SCENES = {
@@ -336,6 +354,55 @@ const SCENES = {
     const flat = await page.evaluate((q) => !!document.querySelector(q), `${LIST} [data-timeline]`)
     return [['Projects chip: grouped by project as before', !flat && groups.includes('Forsion-Genesis'), groups.join('、')]]
   },
+  // The chat page (detail level). Two things a phone does to it that a desktop column never meets. The column is so
+  // narrow that the avatars are left out, and a list's bullets and numbers used to hang where the avatars stood — now off
+  // the screen. And the keyboard makes the page a third shorter, which used to flip the column's layout: avatars back,
+  // the text pushed right and re-wrapped, a short conversation jumping from the input up to the top.
+  'chat-lists': async (page) => {
+    await openChat(page, '登录页验证码不显示')
+    await page.waitForSelector(`${CHAT} .t2-asst .t2-content li`, { timeout: 10_000 })
+    const m = await page.evaluate((q) => {
+      const root = document.querySelector(q)
+      const em = parseFloat(getComputedStyle(root.querySelector('.t2-asst .t2-content')).fontSize) * (Number(getComputedStyle(document.body).zoom) || 1)
+      const depth = (el) => { const up = el.parentElement.closest('li'); return up ? depth(up) + 1 : 0 }
+      return { em, items: [...root.querySelectorAll('.t2-asst .t2-content li')].map((li) => ({ text: li.textContent.trim().slice(0, 6), left: li.getBoundingClientRect().left, depth: depth(li) })) }
+    }, CHAT)
+    const top = m.items.filter((i) => !i.depth), inner = m.items.filter((i) => i.depth)
+    const brief = JSON.stringify({ em: m.em, items: m.items.map((i) => [i.text, Math.round(i.left * 10) / 10, i.depth]) })
+    return [
+      // a bullet takes about 1 em before the text, "10." about 1.6 em
+      ['every list item leaves its bullet or number room on the screen (text starts 1.7 em in or more)', m.items.length === 6 && m.items.every((i) => i.left >= 1.7 * m.em), brief],
+      ['a list inside a list is set further in', inner.length === 2 && inner.every((i) => i.left >= top[0].left + m.em), brief],
+    ]
+  },
+  'chat-keyboard': async (page) => {
+    await openChat(page, '发版说明草稿')
+    await page.waitForSelector(`${CHAT} .t2-asst .t2-content`, { timeout: 10_000 })
+    const look = () => page.evaluate((q) => {
+      const root = document.querySelector(q)
+      const shown = (el) => el.getClientRects().length > 0
+      const last = [...root.querySelectorAll('.t2-stream-inner > .t2-asst, .t2-stream-inner > .t2-userwrap')].pop().getBoundingClientRect()
+      return { avatars: [...root.querySelectorAll('.t2-avatar')].filter(shown).length, textLeft: root.querySelector('.t2-asst .t2-content').getBoundingClientRect().left, gap: root.querySelector('.t2c').getBoundingClientRect().top - last.bottom, height: innerHeight }
+    }, CHAT)
+    const rest = await look()
+    // the keyboard: on the device the WebView ends at its top edge, so the page gets that much shorter
+    await page.setViewportSize({ width: SCREEN.width, height: SCREEN.height - 300 })
+    await page.waitForTimeout(500)
+    const up = await look()
+    await page.screenshot({ path: path.join(OUT, `chat-keyboard-up${DARK ? '-dark' : ''}.png`) })
+    await page.setViewportSize(SCREEN)
+    await page.waitForTimeout(400)
+    const detail = JSON.stringify({ rest, up })
+    return [
+      ['at rest the narrow column draws no avatars', rest.avatars === 0, detail],
+      ['keyboard up: still none, and the reply\'s text has not moved sideways', up.height === SCREEN.height - 300 && up.avatars === 0 && near(up.textLeft, rest.textLeft, 0.5), detail],
+      ['keyboard up: a short conversation still ends at the input, as at rest', near(up.gap, rest.gap, 2), detail],
+    ]
+  },
+  'chat-leave': async (page) => {
+    await stage.action(page, 'left')
+    return [['back on the list', (await stage.nav(page)) === 'list', await stage.nav(page)]]
+  },
   'notes-list': async (page) => {
     await stage.space(page, 'tangu'); await chip(page, 'all')
     await stage.space(page, 'amadeus')
@@ -427,7 +494,14 @@ async function main() {
         if (dark) localStorage.setItem('forsion_theme', 'dark')
       } catch { /* private mode */ }
     }, DARK)
-    const page = await ctx.newPage()
+    // A context's first page sometimes comes up without touch emulation (see editor-capsule.e2e.cjs): the app then lays
+    // itself out as on a desktop — no phone zoom — and every size below is off. A second page of the same context has it.
+    let page = await ctx.newPage()
+    if (!(await page.evaluate(() => navigator.maxTouchPoints))) {
+      console.log('(the first page has no touch emulation: opening another)')
+      const first = page; page = await ctx.newPage(); await first.close()
+    }
+    if (!(await page.evaluate(() => navigator.maxTouchPoints))) throw new Error('stage: the browser gave this page no touch emulation (maxTouchPoints=0); the sizes below cannot be trusted')
     const unknown = new Set()
     await stubApi(page, unknown)
     page.on('pageerror', (e) => fails.push(`uncaught: ${e.message}`))
