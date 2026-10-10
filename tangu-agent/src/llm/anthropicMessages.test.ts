@@ -225,3 +225,78 @@ describe('Anthropic 直连的缓存断点与思考延续性', () => {
     expect(res.usage.prompt_tokens).toBe(5);
   });
 });
+
+// ── 思考块前缀校验的兜底:接口点名要 block_binding 才带上重发 ─────────────────
+describe('思考块绑定失配(Fable 5.1 / Opus 5.5 / Sonnet 5.5 / Haiku 5.5 的 prefix check)', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  // 官方 400 原文(preserved-thinking 文档):点名要设的字段和 beta 头都在报文里。
+  const BOUND =
+    'messages.1.content.0: Invalid `signature` in `thinking` block. The block is bound to a different conversation. ' +
+    'Remove the block, or set `thinking.block_binding.prefix_mismatch_behavior` to "drop_block". ' +
+    'That setting requires the `thinking-binding-controls-2026-08-01` value in the `anthropic-beta` header.';
+  const BETA = 'thinking-binding-controls-2026-08-01';
+  const ADAPTIVE = { type: 'adaptive', display: 'summarized' };
+  const sse =
+    `data: ${JSON.stringify({ type: 'message_start', message: { usage: { input_tokens: 5 } } })}\n` +
+    `data: ${JSON.stringify({ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } })}\n` +
+    `data: ${JSON.stringify({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'done' } })}\n` +
+    `data: ${JSON.stringify({ type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 2 } })}\n`;
+  const ok = (): any => ({ ok: true, status: 200, body: new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode(sse)); c.close(); } }) });
+  const bad = (message: string): any => ({ ok: false, status: 400, body: null, json: () => Promise.resolve({ error: { message } }) });
+  /** 按顺序吐预设响应,记下每次请求的头和请求体。 */
+  const record = (responses: any[]): Array<{ headers: any; body: any }> => {
+    const seen: Array<{ headers: any; body: any }> = [];
+    vi.stubGlobal('fetch', (_u: string, init: any) => {
+      seen.push({ headers: init.headers, body: JSON.parse(init.body) });
+      return Promise.resolve(responses.shift());
+    });
+    return seen;
+  };
+  // 每条用例用自己的 key:「记住」是进程内的,不同用例之间不许串。
+  const call = (apiKey: string, model = 'claude-opus-5-5', thinking: any = ADAPTIVE, baseUrl = 'https://api.anthropic.com') =>
+    streamAnthropicMessages({
+      apiKey, baseUrl,
+      payload: { model, thinking, output_config: { effort: 'high' }, messages: [{ role: 'user', content: 'hi' }] },
+    } as any);
+
+  it('平时不带字段和 beta 头;收到绑定失配的 400 → 带 drop_block 重发一次并成功', async () => {
+    const seen = record([bad(BOUND), ok()]);
+    const res = await call('key-a');
+    expect(res.content).toBe('done');
+    expect(seen).toHaveLength(2);
+    expect(seen[0].headers['anthropic-beta']).toBeUndefined();
+    expect(seen[0].body.thinking).toEqual(ADAPTIVE);
+    expect(seen[1].headers['anthropic-beta']).toBe(BETA);
+    expect(seen[1].body.thinking).toEqual({ ...ADAPTIVE, block_binding: { prefix_mismatch_behavior: 'drop_block' } });
+    expect(seen[1].body.output_config).toEqual({ effort: 'high' }); // 其余请求体原样
+  });
+
+  it('记住这组端点 + key + 模型,下一次直接带;换模型 / 换 key / 关思考 / 换端点都不带', async () => {
+    record([bad(BOUND), ok()]);
+    await call('key-b');
+    const seen = record([ok(), ok(), ok(), ok(), ok()]);
+    await call('key-b'); // 同 key 同模型:不再白挨一次 400
+    await call('key-b', 'claude-opus-5'); // 换模型
+    await call('key-other'); // 换 key
+    await call('key-b', 'claude-opus-5-5', { type: 'disabled' }); // disabled 上带 block_binding 本身就是 400
+    await call('key-b', 'claude-opus-5-5', ADAPTIVE, 'https://proxy.example'); // 同 key 换到代理:那边没点名要过,不认就是 400
+    expect(seen.map((s) => !!s.body.thinking?.block_binding)).toEqual([true, false, false, false, false]);
+    expect(seen.map((s) => s.headers['anthropic-beta'])).toEqual([BETA, undefined, undefined, undefined, undefined]);
+  });
+
+  it('别的 400(签名被改坏,报文里没有点名这个字段)不重发,原样抛', async () => {
+    const seen = record([bad('messages.1.content.0: Invalid `signature` in `thinking` block.')]);
+    await expect(call('key-c')).rejects.toMatchObject({ status: 400 });
+    expect(seen).toHaveLength(1);
+  });
+
+  it('重发仍失败 → 抛重发那次的错,不发第三次,也不记住(代理不认这个字段时,之后的请求不许被带坏)', async () => {
+    const seen = record([bad(BOUND), bad('thinking.adaptive.block_binding: Extra inputs are not permitted'), ok()]);
+    await expect(call('key-d')).rejects.toThrow('Extra inputs are not permitted');
+    expect(seen).toHaveLength(2);
+    await call('key-d'); // 下一次照旧不带
+    expect(seen[2].headers['anthropic-beta']).toBeUndefined();
+    expect(seen[2].body.thinking).toEqual(ADAPTIVE);
+  });
+});
