@@ -144,7 +144,7 @@ describe('forsion_account_action(代办)', () => {
 
   it('审批卡上是人话;不合法的参数在卡上就写明', () => {
     expect(accountActionPreview({ action: 'use_reset_card' })).toMatch(/use 1 quota reset card .* The card is spent\./);
-    expect(accountActionPreview({ action: 'move_quota_to_background', percent: 25 })).toMatch(/move 25% of the AI quota limit to the background quota .* cannot be moved back/);
+    expect(accountActionPreview({ action: 'move_quota_to_background', percent: 25 })).toMatch(/move 25% of the AI quota limit \(or as much as is left\) to the background quota .* cannot be moved back/);
     expect(accountActionPreview({ action: 'send_feedback', message: '  侧栏拖不动  ' })).toBe('Forsion account: send this feedback to the Forsion team:\n侧栏拖不动');
     expect(accountActionPreview({ action: 'buy' })).toMatch(/invalid request/);
     expect(accountActionPreview({ action: 'move_quota_to_background', percent: 0 })).toMatch(/invalid request \(percent must be/);
@@ -161,9 +161,12 @@ describe('forsion_account_action(代办)', () => {
   });
 
   it('挪额度 / 发反馈:参数原样发出;参数不合法 → 不发请求', async () => {
-    routes['POST /api/token-quota/background/convert'] = { status: 200, json: { success: true, converted: { daily: 1, weekly: 1 }, quota: QUOTA } };
+    // 请求 25%,但今天只剩得出 10%:回执按实际转入量写(占限额的百分比),不照请求的数报,也不出点数
+    routes['POST /api/token-quota/background/convert'] = { status: 200, json: { success: true, converted: { daily: 8_134, weekly: 101_671 }, quota: QUOTA } };
     routes['POST /api/feedback'] = { status: 201, json: { id: 'f1', success: true } };
-    expect(await call('forsion_account_action', { action: 'move_quota_to_background', percent: 25 })).toMatch(/^Moved 25% of the AI quota limit to the background quota\.\nAI quota:/);
+    const moved = await call('forsion_account_action', { action: 'move_quota_to_background', percent: 25 });
+    expect(moved).toMatch(/^Moved AI quota to the background quota: 10% of the daily limit and 25% of the weekly limit \(asked for 25%; the server moves at most what is left\)\.\nAI quota:/);
+    for (const raw of ['8134', '8,134', '101671', '101,671']) expect(moved).not.toContain(raw);
     expect(await call('forsion_account_action', { action: 'send_feedback', message: ' 侧栏拖不动 ' })).toBe('Feedback sent to the Forsion team.');
     expect(seen.map((r) => [r.path, r.body])).toEqual([
       ['/api/token-quota/background/convert', { percent: 25 }],
@@ -177,11 +180,19 @@ describe('forsion_account_action(代办)', () => {
     expect(seen).toEqual([]);
   });
 
-  it('发出去了没应答 → 说不知道成没成、先查再试;服务端明确拒绝 → 说什么都没变', async () => {
-    routes['POST /api/token-quota/reset-card/use'] = { status: 0, error: 'timeout' };
-    expect(await call('forsion_account_action', { action: 'use_reset_card' })).toMatch(/not known whether this went through\. Call forsion_account to check/);
+  it('没应答 / 5xx / 3xx → 说不知道成没成、先查再试(服务端是先扣再读,后一步失败就是 500);点名的拒绝、4xx、没发出去 → 说什么都没变', async () => {
+    for (const r of [{ status: 0, error: 'timeout' }, { status: 500, json: { detail: 'Failed to use reset card' } }, { status: 502, json: null }, { status: 307, json: null }] as CloudResponse[]) {
+      routes['POST /api/token-quota/reset-card/use'] = r;
+      const text = await call('forsion_account_action', { action: 'use_reset_card' });
+      expect(text, String(r.status)).toMatch(/not known whether it went through\. Call forsion_account to check before trying again\.$/);
+      expect(text, String(r.status)).not.toMatch(/Nothing was changed/);
+    }
     routes['POST /api/token-quota/background/convert'] = { status: 400, json: { error: 'insufficient_main_quota' } };
-    expect(await call('forsion_account_action', { action: 'move_quota_to_background', percent: 50 })).toMatch(/not enough AI quota left .* Nothing was changed\./);
+    expect(await call('forsion_account_action', { action: 'move_quota_to_background', percent: 50 })).toMatch(/no AI quota left to move\. Nothing was changed\./);
+    routes['POST /api/token-quota/background/convert'] = { status: 503, json: { error: 'background_unavailable' } };
+    expect(await call('forsion_account_action', { action: 'move_quota_to_background', percent: 50 })).toMatch(/not available on this server\. Nothing was changed\./);
+    routes['POST /api/token-quota/reset-card/use'] = { status: 403, json: { error: 'scope' } };
+    expect(await call('forsion_account_action', { action: 'use_reset_card' })).toMatch(/Nothing was changed\.$/);
     routes['POST /api/feedback'] = { status: 401, json: null, error: 'not_signed_in' };
     expect(await call('forsion_account_action', { action: 'send_feedback', message: 'hi' })).toMatch(/^Error: The user is not signed in .* Nothing was changed\.$/);
   });

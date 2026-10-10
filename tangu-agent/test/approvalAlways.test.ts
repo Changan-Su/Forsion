@@ -133,7 +133,7 @@ describe("capabilities.approval: 'always'", () => {
     const r = await gate(call('forsion_account_action', { action: 'move_quota_to_background', percent: 25 }), { execMode: 'sandbox', approvalMode: undefined });
     expect(r.asked).toBe(true);
     expect(r.request.reason.kind).toBe('always');
-    expect(r.request.preview).toMatch(/^Forsion account: move 25% of the AI quota limit to the background quota/);
+    expect(r.request.preview).toMatch(/^Forsion account: move 25% of the AI quota limit /);
   });
 
   it('应用自带工具(profile.toolLoadout.providers)声明的 always 同样作数:云端会话照样问', async () => {

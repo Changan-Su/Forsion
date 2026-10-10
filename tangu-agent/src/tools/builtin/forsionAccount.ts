@@ -183,7 +183,7 @@ export function accountActionPreview(args: any): string {
   const a = parseAccountAction(args);
   if (!a.ok) return `Forsion account: invalid request (${a.error})`;
   if (a.action === 'use_reset_card') return "Forsion account: use 1 quota reset card — restores today's and this week's AI quota to 100%. The card is spent.";
-  if (a.action === 'move_quota_to_background') return `Forsion account: move ${a.percent}% of the AI quota limit to the background quota (Muse and automations) for the current period. It cannot be moved back.`;
+  if (a.action === 'move_quota_to_background') return `Forsion account: move ${a.percent}% of the AI quota limit (or as much as is left) to the background quota (Muse and automations) for the current period. It cannot be moved back.`;
   return `Forsion account: send this feedback to the Forsion team:\n${a.message}`;
 }
 
@@ -195,17 +195,27 @@ async function act(c: CloudAccountBrain, ctx: ToolContext, args: any): Promise<s
     : a.action === 'move_quota_to_background' ? await post('/api/token-quota/background/convert', { percent: a.percent })
     : await post('/api/feedback', { description: a.message });
   if (!ok(r)) {
-    // 发出去了但没收到应答:不知道成没成,别让模型说「没用掉」然后再来一次。
-    if (r.status === 0 && r.error !== 'no_cloud_url') return `Error: no answer from Forsion Cloud (${r.error || 'network error'}), so it is not known whether this went through. Call forsion_account to check before trying again.`;
     const code = errCode(r);
+    // 服务端点名的拒绝:事务没做。
     if (code === 'no_reset_card') return 'Error: the user has no quota reset card. Nothing was changed.';
-    if (code === 'insufficient_main_quota') return 'Error: there is not enough AI quota left to move that share. Nothing was changed.';
+    if (code === 'insufficient_main_quota') return 'Error: there is no AI quota left to move. Nothing was changed.';
     if (code === 'background_unavailable') return 'Error: the background quota is not available on this server. Nothing was changed.';
+    // 没应答(超时 / 断线)、3xx、5xx:请求可能已经做完 —— 服务端是先扣卡 / 转额度、再读一遍额度回给我们,后一步失败就是 500。
+    // 这时说「什么都没变」会让模型再来一次,多扣一张卡(Codex 10-10 #5)。只有没发出去(未登录 / 没配云端)和 4xx 才是确定没做。
+    const notSent = r.error === 'not_signed_in' || r.error === 'no_cloud_url' || r.error === 'path_not_allowed' || r.error === 'invalid_method';
+    if (!notSent && (r.status < 400 || r.status >= 500)) {
+      return `Error: Forsion Cloud did not confirm this (${r.status === 0 ? r.error || 'no answer' : `status ${r.status}`}), so it is not known whether it went through. Call forsion_account to check before trying again.`;
+    }
     return `Error: ${failure(r)} Nothing was changed.`;
   }
   if (a.action === 'send_feedback') return 'Feedback sent to the Forsion team.';
-  const after = r.json?.quota ? `\n${quotaLines({ ...r.json.quota, ...(a.action === 'use_reset_card' && toNum(r.json.resetCards) !== null ? { resetCards: r.json.resetCards } : {}) }).join('\n')}` : '';
-  return (a.action === 'use_reset_card' ? 'Used one quota reset card.' : `Moved ${a.percent}% of the AI quota limit to the background quota.`) + after;
+  const q = r.json?.quota;
+  const after = q ? `\n${quotaLines({ ...q, ...(a.action === 'use_reset_card' && toNum(r.json.resetCards) !== null ? { resetCards: r.json.resetCards } : {}) }).join('\n')}` : '';
+  if (a.action === 'use_reset_card') return `Used one quota reset card.${after}`;
+  // 服务端按「限额 × percent%」转,但钳到主额度的余量 —— 回执写实际转了多少(占限额的百分比,不出点数),别照请求的数报(Codex 10-10 #8)。
+  const moved = [['daily', q?.dailyLimit], ['weekly', q?.weeklyLimit]]
+    .map(([axis, limit]) => { const t = shareOfDaily(r.json?.converted?.[axis as string], limit); return t ? `${t} of the ${axis} limit` : ''; }).filter(Boolean);
+  return `Moved AI quota to the background quota${moved.length ? `: ${moved.join(' and ')}` : ''} (asked for ${a.percent}%; the server moves at most what is left).${after}`;
 }
 
 export const forsionAccountProvider: ToolProvider = {
@@ -258,7 +268,7 @@ export const forsionAccountProvider: ToolProvider = {
           description:
             "Act on the user's Forsion account. Only when the user asked for it in this conversation; the user confirms every call on an approval prompt. " +
             "`use_reset_card`: spend one quota reset card to restore today's and this week's AI quota to 100% (check forsion_account first that they have one and that the quota is actually low). " +
-            '`move_quota_to_background`: move `percent` of the AI quota limit to the background quota used by Muse and automations, for the current period; it cannot be moved back. ' +
+            '`move_quota_to_background`: move `percent` of the AI quota limit (capped by what is left) to the background quota used by Muse and automations, for the current period; it cannot be moved back. ' +
             '`send_feedback`: send `message` to the Forsion team as the user — write it in their words and include what they were doing. ' +
             'Buying, redeeming and plan changes cannot be done with this tool; tell the user to do those in Settings → Forsion Cloud.',
           parameters: {
