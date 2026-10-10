@@ -56,23 +56,6 @@ export function resolveSettingsTarget(target: string | null | undefined): Resolv
 }
 
 /**
- * 市场里已装插件的「打开设置」落点:直达那个插件自己的页,不停在插件页首屏。
- * `id` = 装载 id(已装清单给的;目录名可以与它不同)。
- *  - Forsion 插件 → `fplugin:<id>`(设置页的受控详情面;id 解析不到时它自己落回卡片列表);
- *  - 引擎插件只有设置表单这一种详情,而且要启用且声明了设置项才有(与引擎插件列表里那颗「打开设置」同一道闸),
- *    否则落到引擎插件列表(那一行上有它的开关)。
- */
-export function marketPluginSettingsTarget(
-  realType: 'plugin' | 'amadeus-plugin',
-  id: string,
-  enginePlugins: ReadonlyArray<{ id: string; enabled: boolean; settings: unknown }>,
-): `fplugin:${string}` | `plugin:${string}` | 'amadeus-plugins/pl-engine' {
-  if (realType === 'amadeus-plugin') return `fplugin:${id}`
-  const plugin = enginePlugins.find((p) => p.id === id)
-  return plugin?.enabled && plugin.settings ? `plugin:${id}` : 'amadeus-plugins/pl-engine'
-}
-
-/**
  * agent 的落点解析(run_ui_command `open-settings`)。比深链多认一层:设置搜索索引里的条目 id
  * (`voice`、`fonts`、`mirror`…)直接落到那项设置所在的子页。
  * 认不出的返回 null —— 此前未知名字静默落到第一页还回报成功,agent 以为自己打开了语音设置(反馈 6a239e58)。

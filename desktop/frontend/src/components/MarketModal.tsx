@@ -13,9 +13,6 @@ import { Skeleton, useNativeChromeClaim, useNativeChromeInstalled } from '@lcl/e
 import { registerMessages, useI18n } from '../i18n'
 import { formatDate as formatDateLabel } from '../format/time'
 import { useApp } from '../stores/appStore'
-import { listPlugins } from '../services/backendService'
-import { homeTarget } from '../services/engine/targets'
-import { marketPluginSettingsTarget } from './settingsTarget'
 import { Markdown } from './Markdown'
 import { listMarket, getMarketDetail, installMarket, listInstalled, onInstallProgress, isDesktopOnlyItem, DESKTOP_ONLY_TAG, type InstalledItem } from '../services/marketService'
 import { forgetUserSpace, loadUserSpaces } from '../userSpaces'
@@ -251,14 +248,13 @@ export function MarketModal({ onClose, initialQuery }: { onClose?: () => void; i
     return realType === 'plugin'
   }
 
-  const openPluginSettings = async (c: MarketCard): Promise<void> => {
+  const openPluginSettings = (c: MarketCard): void => {
     const info = installedInfo(c)
     if (!info || !canOpenSettings(c)) return
-    const realType = info.realType as 'plugin' | 'amadeus-plugin'
-    // 引擎插件有没有设置页只有引擎知道(读不到 → 空表 → 落到引擎插件列表)。
-    const enginePlugins = realType === 'plugin' ? await listPlugins(homeTarget()) : []
     close()
-    useApp.getState().openSettings(marketPluginSettingsTarget(realType, info.entry.id ?? c.installSlug, enginePlugins))
+    // 直达那个插件自己的页,不停在插件页首屏。id = 装载 id(目录名可以与它不同;老宿主不给时按目录名)。
+    // 落不到的(id 对不上 / 引擎插件没启用、没设置项)由设置页自己落回对应的列表。
+    useApp.getState().openSettings(`${info.realType === 'amadeus-plugin' ? 'fplugin' : 'plugin'}:${info.entry.id ?? c.installSlug}`)
   }
 
   const onInstall = async (c: MarketCard): Promise<void> => {
@@ -590,7 +586,7 @@ export function MarketModal({ onClose, initialQuery }: { onClose?: () => void; i
               <div className="mk-detail-layout">
                 <main className="mk-detail-main"><div className="mk-detail-section-title">{t('market.overview')}</div>{!!shownTags(detail).length && <div className="mk-tags">{shownTags(detail).map((tag) => <span key={tag}>{tag}</span>)}</div>}<div className="mk-readme">{detail.readme ? <Markdown content={detail.readme} /> : <span className="mk-muted">{t('market.readmeEmpty')}</span>}</div></main>
                 <aside className="mk-detail-sidebar">
-                  <div className="mk-detail-actions">{installBtn(detail, 'mk-wide-btn')}{uninstallBtn(detail)}{canOpenSettings(detail) && <button className="btn sm mk-wide-btn" onClick={() => void openPluginSettings(detail)}><Settings size={13} />{t('market.openSettings')}</button>}{autoUpdate(detail)}</div>
+                  <div className="mk-detail-actions">{installBtn(detail, 'mk-wide-btn')}{uninstallBtn(detail)}{canOpenSettings(detail) && <button className="btn sm mk-wide-btn" onClick={() => openPluginSettings(detail)}><Settings size={13} />{t('market.openSettings')}</button>}{autoUpdate(detail)}</div>
                   <div className="mk-trust-row"><ShieldCheck size={17} /><div><strong>{t('market.reviewed')}</strong><span>{t('market.reviewedHint')}</span></div></div>
                   <dl className="mk-facts"><div><dt>{t('market.type')}</dt><dd>{navLabel[detail.type]}</dd></div><div><dt>{t('market.version')}</dt><dd>{detail.latestVersion ? `v${detail.latestVersion}` : t('market.unknown')}</dd></div>{isDesktopOnlyItem(detail) && <div><dt>{t('market.platform')}</dt><dd>{t('market.desktopOnly')}</dd></div>}<div><dt>{t('market.source')}</dt><dd>{detail.source === 'github' ? 'GitHub' : detail.source === 'npm' ? 'npm' : t('market.sourceUpload')}</dd></div>{!!formatDate(detail.updatedAt || detail.createdAt) && <div><dt>{t('market.updated')}</dt><dd>{formatDate(detail.updatedAt || detail.createdAt)}</dd></div>}</dl>
                   {detail.npmPackage && <a className="mk-repo-link" href={`https://www.npmjs.com/package/${encodeURIComponent(detail.npmPackage)}`} target="_blank" rel="noreferrer"><Package size={14} />{detail.npmPackage}<ExternalLink size={12} /></a>}

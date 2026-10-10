@@ -61,7 +61,7 @@ async function main() {
     }
     // 1. Forsion 插件:直达它自己的详情面(不是卡片列表)
     let settings = await openSettingsFromMarket('UI Plugin', '[data-plugin-detail="ui-real"]')
-    assert.equal(await settings.locator('.plugin-card').count(), 0, 'plugin card list must not be showing')
+    assert.equal(await settings.locator('.plugin-card--link').count(), 0, 'plugin card list must not be showing') // 详情面里的设置块也叫 .plugin-card,列表卡才带 --link
     // 2. 引擎插件(启用且有设置项):它的设置表单。设置窗口此时开着
     settings = await openSettingsFromMarket('Engine Plugin', 'text=Fixture greeting')
     assert.equal(await settings.locator('[data-engine-plugin]').count(), 0, 'engine plugin list must not be showing')

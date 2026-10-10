@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
-import { LEGACY_TARGETS, SETTINGS_TABS, agentSettingsTargets, marketPluginSettingsTarget, resolveAgentSettingsTarget, resolveSettingsTarget, suggestSettingsTargets } from './settingsTarget'
+import { LEGACY_TARGETS, SETTINGS_TABS, agentSettingsTargets, resolveAgentSettingsTarget, resolveSettingsTarget, suggestSettingsTargets } from './settingsTarget'
 import { SETTINGS_SEARCH_INDEX } from './settingsSearchIndex'
 
 // U-02:登录失效 / 订阅过期 / `/login` 三条入口必须落到按钮所在的子页,不许再被归一到第一项「连接」。
@@ -76,21 +76,6 @@ it('落点清单:列出的每个名字都解析得出来;真页不漏、旧别�
     expect(suggestSettingsTargets('语音')).toEqual(['voice'])
     expect(suggestSettingsTargets('zzz')).toEqual([])
     expect(suggestSettingsTargets('')).toEqual([])
-  })
-
-  it('市场「打开设置」直达那个插件自己的页;引擎插件没启用 / 没设置项时落到引擎插件列表', () => {
-    const engine = [
-      { id: 'web-tools', enabled: true, settings: { fields: [] } },
-      { id: 'off-tools', enabled: false, settings: { fields: [] } },
-      { id: 'bare-tools', enabled: true, settings: null },
-    ]
-    // Forsion 插件:不看引擎清单;落点原样过深链解析(前缀不被拆成 tab/sub)
-    expect(marketPluginSettingsTarget('amadeus-plugin', 'video-studio', [])).toBe('fplugin:video-studio')
-    expect(resolveSettingsTarget(marketPluginSettingsTarget('amadeus-plugin', 'video-studio', []))).toEqual({ tab: 'fplugin:video-studio' })
-    expect(marketPluginSettingsTarget('plugin', 'web-tools', engine)).toBe('plugin:web-tools')
-    for (const id of ['off-tools', 'bare-tools', 'not-loaded']) {
-      expect(resolveSettingsTarget(marketPluginSettingsTarget('plugin', id, engine)), id).toEqual({ tab: 'amadeus-plugins', sub: 'pl-engine' })
-    }
   })
 
   it('搜索索引里的页都是真实存在的一级页', () => {
