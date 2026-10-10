@@ -118,6 +118,18 @@ async function main() {
         await page.evaluate(() => window.removeEventListener('selectionchange', window.__holdSC, true))
         check(`[${shell}] 行尾留白点按:松手即同步进 PM,不等迟到的 selectionchange`, s.type === 'text' && s.from === a.to && s.to === a.to, `${JSON.stringify(s)} 期望 ${a.to}`)
       }
+      // ②c 同一条契约,点在**字上**(2026-10-10):按下处认出是字就整个放给原生,以前这一支没有补同步。长笔记上
+      //    聚焦那一下主线程要忙几百毫秒(实测 1500 段 ≈ 250ms),这段时间里按下的回车 / 退格排在迟到的
+      //    selectionchange 前面,按旧光标办 —— 人按得出来。
+      {
+        await reset(page)
+        const a = await para(page, 0)
+        await page.evaluate(() => window.addEventListener('selectionchange', window.__holdSC, true))
+        await page.mouse.click(a.x0 + 30, a.y)
+        const s = await sel(page)
+        await page.evaluate(() => window.removeEventListener('selectionchange', window.__holdSC, true))
+        check(`[${shell}] 点在字上:松手即同步进 PM,不等迟到的 selectionchange`, s.type === 'text' && s.from === s.to && s.from > a.from && s.from < a.to, `${JSON.stringify(s)} 段落 ${a.from}-${a.to}`)
+      }
       // ③ Shift+点击另一段右侧留白 → 从原光标扩选到那一行尾。
       {
         await reset(page)
@@ -347,6 +359,24 @@ async function main() {
       await pg.waitForTimeout(300)
       const s3 = await st()
       check('G2-15 对照:触屏点正文照常聚焦(编辑意图)', s3.focused && s3.checked === 'true,true', JSON.stringify(s3))
+      // 触屏点正文同样「点完即落定」(②b / ②c 的触摸版;触摸以前整个绕开那一支)。光标先挪回文首,挡住 selectionchange 再点。
+      await pg.waitForTimeout(600) // 和上一次点在同一处:隔开,免得算成双击选中一个词
+      await pg.evaluate(() => {
+        const v = window.__upage.probe.view()
+        v.dispatch(v.state.tr.setSelection(v.state.selection.constructor.atStart(v.state.doc)))
+        window.__holdSC = (e) => e.stopImmediatePropagation()
+        window.addEventListener('selectionchange', window.__holdSC, true)
+      })
+      await pg.touchscreen.tap(pp.x, pp.y)
+      await pg.waitForTimeout(150) // 触摸合成的 mouseup 比 tap 的回执晚到;selectionchange 一直挡着,等不等都验的是同步那一拍
+      const s4 = await pg.evaluate((PM) => {
+        const v = window.__upage.probe.view()
+        const p = [...document.querySelectorAll(PM + ' > p')].find((x) => x.textContent.includes('正文段'))
+        const at = v.posAtDOM(p, 0)
+        return { from: v.state.selection.from, to: v.state.selection.to, para: [at, at + p.textContent.length] }
+      }, PM)
+      await pg.evaluate(() => window.removeEventListener('selectionchange', window.__holdSC, true))
+      check('触屏点正文:松手即同步进 PM,不等迟到的 selectionchange', s4.from === s4.to && s4.from >= s4.para[0] && s4.from <= s4.para[1], JSON.stringify(s4))
       await ctx.close()
     }
     // R-22:父待办勾选后,完成样式(删除线 / 变灰)只落在它自己的那段上,不传染给没勾的子项。
