@@ -285,7 +285,7 @@ npm test            # vitest
 
 会话搜索快不快：`npm run bench:search`（只读打开真库，量 `sessionSearchSql.ts` 管理路径那条 LIKE + EXISTS；`npm run bench:search -- --synthetic` 造数对照 sqlite FTS5 trigram）。2026-10-09 实测不换索引，数字与重看阈值见脚本头注。
 
-项目推送 / 拉取带凭据（`services/gitCredentials.ts` 的接缝；Forsion Git 的提供方在 `services/forsionGit.ts`）：`npm run build && npm run check:gitcreds`。在临时目录起一台真 Gitea（需要 PATH 上有 `gitea`，macOS `brew install gitea`；https + 自签证书），命令行建用户和令牌，调真正的 `gitPush` / `gitPull`：推送即建、别处提交后这边拉到、坏令牌只重取一次、没有提供方时推送立刻失败不卡住、令牌不进任何错误原文。绝不对着线上站点跑；不带凭据的那一半与各种失败由 `src/services/gitActions*.test.ts`、`gitCredentials.test.ts`、`forsionGit.test.ts` 钉。
+项目推送 / 拉取带凭据（`services/gitCredentials.ts` 的接缝；Forsion Git 的提供方在 `services/forsionGit.ts`）：`npm run build && npm run check:gitcreds`。在临时目录起一台真 Gitea（需要 PATH 上有 `gitea`，macOS `brew install gitea`；https + 自签证书），命令行建用户和令牌，调真正的 `gitPush` / `gitPull`：推送即建、别处提交后这边拉到、坏令牌只重取一次、没有提供方时推送立刻失败不卡住、令牌不进任何错误原文。绝不对着线上站点跑；不带凭据的那一半与各种失败由 `src/services/gitActions*.test.ts`、`gitCredentials.test.ts`、`forsionGit.test.ts` 钉。 「发布到 Forsion Git」（`services/forsionGitPublish.ts`：没有远端的项目设 origin 并推送）的真站场景也在这条脚本里。
 
 停止/重启与图片上下文回归：在 `../desktop` 运行 `npm run check:run-lifecycle`。离线使用合成截图、真实 agent loop + 内存 SQLite、前端 store 和 HTTP 故障桩；覆盖图片编码误计、实测用量与新增工具结果、无进展重复压缩、压缩/首帧阶段取消、迟到结果、停止确认与继续运行。用例同时纳入两端既有的 `npm test` 发布门禁，不需要模型密钥或真实用户数据。
 

@@ -231,6 +231,8 @@ export const CLASSIFICATION = {
   'POST /agent/project-context/git/branch': [D, 'git repository write'],
   'POST /agent/project-context/git/push': [D, 'git push with local credentials'],
   'POST /agent/project-context/git/pull': [D, 'git fetch + fast-forward with local credentials (runs repository hooks)'],
+  'POST /agent/project-context/git/publish': [D, 'adds a remote and pushes with the signed-in account credentials'],
+  'GET /agent/project-context/git/hosting': [D, 'host-only: whether this project can be published to Forsion Git (the publish action is host-only)'],
   'POST /agent/project-context/git/pending': [D, 'may run trusted repo filters (trust=true)'],
   'POST /agent/project-context/git/message': [D, 'spends model quota; may run trusted repo filters'],
   'GET /agent/git-settings': [A, 'read Settings → Git'],

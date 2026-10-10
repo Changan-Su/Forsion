@@ -6,7 +6,7 @@ import { AppWindow, ArrowLeft, Check, ChevronRight, Copy, Download, ExternalLink
 import { useShallow } from 'zustand/react/shallow'
 import { useApp } from '../stores/appStore'
 import { useI18n } from '../i18n'
-import { createProjectSkill, deleteProjectIcon, forgetProjectMemory, generateGitCommitMessage, getGitSettings, getProjectContext, gitCommitProject, gitCreateProjectBranch, gitInitProject, gitPendingProject, gitPullProject, gitPushProject, gitTrustProject, initProjectContext, putProjectDoc, putProjectSettings, setProjectIconEmoji, uploadProjectIcon, resolveProjectCandidate, restoreProjectMemoryFact } from '../services/backendService'
+import { createProjectSkill, deleteProjectIcon, forgetProjectMemory, generateGitCommitMessage, getGitHosting, getGitSettings, getProjectContext, gitCommitProject, gitCreateProjectBranch, gitInitProject, gitPendingProject, gitPublishProject, gitPullProject, gitPushProject, gitTrustProject, initProjectContext, putProjectDoc, putProjectSettings, setProjectIconEmoji, uploadProjectIcon, resolveProjectCandidate, restoreProjectMemoryFact } from '../services/backendService'
 import { askString } from '../amadeus/components/askString'
 import { normPath } from './coding/studioModel'
 import { addToCreations } from './chat2/CreationCards'
@@ -78,6 +78,7 @@ const GIT_ERROR_CODES = new Set([
   'embedded_repo', 'too_many_files', 'large_files', 'no_identity', 'invalid_branch', 'detached', 'no_remote', 'ambiguous_remote', 'no_model', 'quota_exceeded',
   'shared_workspace', 'nested_repo', 'untrusted_config', 'credential_files', 'git_too_old', 'changes_changed', 'hook_changed_commit',
   'no_upstream', 'diverged', 'dirty_worktree', 'untrusted_transport', 'forsion_git_needs_setup', 'forsion_git_rate_limited', 'forsion_git_unavailable',
+  'has_remote', 'invalid_repo_name', 'no_commits',
 ])
 /** link = 这条失败要用户去的网页(Forsion Git 还没开通 → 站点地址);只收 https,交给统一的外链出口。 */
 type GitErr = { message: string; info?: string; retry?: () => void; link?: string }
@@ -172,6 +173,16 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
   const wasRunning = useRef(running)
   useEffect(() => { if (wasRunning.current && !running) setReloadAt((n) => n + 1); wasRunning.current = running }, [running])
   useEffect(() => { if (!docDirty) setDocDraft(ctx?.doc.content ?? '') }, [ctx?.doc.content, docDirty])
+  // 「发布到 Forsion Git」的入口:仓库一个远端都没有时才问引擎(登录了 Forsion、站上给人发凭据 → 站点地址 + 预填的仓库名);
+  // 问不到 / 没登录 / 老引擎 = null,入口不出现,也不报错。
+  const [publishTo, setPublishTo] = useState<{ webUrl: string; name: string } | null>(null)
+  const noRemote = !!ctx?.git?.repo && !ctx.git.remote && !ctx.git.remotes && !ctx.git.upstream
+  useEffect(() => {
+    if (tab !== 'git' || !noRemote) { setPublishTo(null); return }
+    let alive = true
+    void getGitHosting(homeTarget(), session.id).then((value) => { if (alive) setPublishTo(value) })
+    return () => { alive = false }
+  }, [tab, noRemote, session.id, reloadAt])
   useEffect(() => { if (!settingsDirty) setSettingsDraft(ctx?.settings ?? {}) }, [ctx?.settings, settingsDirty])
 
   const dirty = docDirty || settingsDirty
@@ -417,6 +428,16 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
     applyContext(r.context)
     setNotice(r.pull.updated ? t('projectProfile.git.pulled', { count: r.pull.commits, upstream: r.pull.upstream }) : t('projectProfile.git.pullNothing', { upstream: r.pull.upstream }))
   })
+  /** 发布到 Forsion Git:仓库名让用户过目(预填由文件夹名整理出来的;中文文件夹名整理不出来,留空让他填)。 */
+  const publish = async () => {
+    if (busy || !publishTo) return
+    const name = (await askString(t('projectProfile.git.publishTitle'), publishTo.name, { label: t('projectProfile.git.publishLabel', { site: publishTo.webUrl.replace(/^https:\/\//i, '') }), confirmLabel: t('projectProfile.git.publishConfirm') }))?.trim()
+    if (!name) return
+    await gitRun('git-publish', (trust) => gitPublishProject(homeTarget(), session.id, name, trust), (r) => {
+      applyContext(r.context)
+      setNotice(t('projectProfile.git.published', { url: r.publish.url }))
+    })
+  }
   const generate = () => {
     if (!ctx || sessionRunning) return
     clear()
@@ -668,6 +689,7 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
               <button className="btn sm" data-git-action="branch" disabled={!!busy} onClick={() => void newBranch()}>{busy === 'git-branch' ? <Loader2 size={13} className="spin" /> : <GitBranchPlus size={13} />}{t('projectProfile.git.newBranch')}</button>
               {git.upstream && <button className="btn sm" data-git-action="pull" disabled={!!busy || !!git.detached} title={git.detached ? t('projectProfile.git.err.detached') : undefined} onClick={() => void pull()}>{busy === 'git-pull' ? <Loader2 size={13} className="spin" /> : <Download size={13} />}{git.behind ? t('projectProfile.git.pullCount', { count: git.behind }) : t('projectProfile.git.pull')}</button>}
               {(git.upstream || git.remote || !!git.remotes) && <button className="btn sm" data-git-action="push" disabled={!!busy || !!git.detached} title={git.detached ? t('projectProfile.git.err.detached') : undefined} onClick={() => void push()}>{busy === 'git-push' ? <Loader2 size={13} className="spin" /> : <Upload size={13} />}{git.ahead ? t('projectProfile.git.pushCount', { count: git.ahead }) : t('projectProfile.git.push')}</button>}
+              {publishTo && noRemote && <button className="btn sm" data-git-action="publish" disabled={!!busy || !!git.detached} title={git.detached ? t('projectProfile.git.err.detached') : undefined} onClick={() => void publish()}>{busy === 'git-publish' ? <Loader2 size={13} className="spin" /> : <Upload size={13} />}{t('projectProfile.git.publish')}</button>}
             </div>}
             {gitErr && <div className="project-git-error" role="alert" data-project-git-error><p>{gitErr.message}</p>{gitErr.info && <pre>{gitErr.info}</pre>}
               {gitErr.retry && <div className="project-card-actions"><button className="btn sm" data-git-action="trust-retry" onClick={() => { const retry = gitErr.retry!; setGitErr(null); retry() }}>{t('projectProfile.git.trustRetry')}</button></div>}

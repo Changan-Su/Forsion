@@ -15,6 +15,8 @@
  *   DELETE /agent/project-context/icon?sessionId=                                         → 移除图标(emoji 或图片),返回 { settings }
  *   POST   /agent/project-context/git/{init,trust,commit,branch,push,pull}  { sessionId, message?, name?, trust? } → 写动作 + 新的 context
  *          (push / pull 的远端有凭据提供方认领时带凭据,见 services/gitCredentials.ts;pull = fetch + 只快进)
+ *   GET    /agent/project-context/git/hosting?sessionId=              → { forsionGit: { webUrl, name } | null }(这里能不能「发布到 Forsion Git」)
+ *   POST   /agent/project-context/git/publish  { sessionId, name, trust? } → 没有远端的仓库:origin 设到 Forsion Git 并推送(services/forsionGitPublish.ts)
  *   POST   /agent/project-context/git/{pending,message}                { sessionId, trust? } → 待提交清单 / 生成的提交信息(只读)
  *          → 用户点的 git 动作(services/gitActions.ts);失败回 400 { detail, error: <code>, info },桌面按 error 出文案。
  *          trust=true = 用户在面板上点了「信任并继续」(仓库自带会执行程序的配置,见 services/gitTrust.ts)
@@ -35,6 +37,7 @@ import { forgetProjectMemory, projectMemoryView, resolveProjectCandidate, restor
 import { parseRemoteOrigin } from '../services/remoteOrigin.js';
 import { GitActionError, generateCommitMessage, gitCommit, gitCreateBranch, gitInit, gitPending, gitPull, gitPush, gitTrustRepo, serialized } from '../services/gitActions.js';
 import { DEFAULT_GIT_SETTINGS, gitSettings, updateGitSettings } from '../services/gitSettings.js';
+import { forsionPublishInfo, publishToForsionGit } from '../services/forsionGitPublish.js';
 
 const router = Router();
 
@@ -252,6 +255,19 @@ router.post('/agent/project-context/git/commit', authMiddleware, gitWrite('commi
 router.post('/agent/project-context/git/branch', authMiddleware, gitWrite('branch', (cwd, body) => gitCreateBranch(cwd, body.name, trusted(body))));
 router.post('/agent/project-context/git/push', authMiddleware, gitWrite('push', (cwd, body) => gitPush(cwd, trusted(body))));
 router.post('/agent/project-context/git/pull', authMiddleware, gitWrite('pull', async (cwd, body) => ({ pull: await gitPull(cwd, trusted(body)) })));
+
+router.post('/agent/project-context/git/publish', authMiddleware, gitWrite('publish', async (cwd, body) => ({ publish: await publishToForsionGit(cwd, body.name, trusted(body)) })));
+
+/** 这里能不能「发布到 Forsion Git」(登录了 Forsion、云端有 Forsion Git 且发凭据)。只读站点信息,不取凭据;读不到就是 null。 */
+router.get('/agent/project-context/git/hosting', authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const cwd = await projectDirOf(req, res, req.query.sessionId);
+    if (!cwd) return;
+    res.json({ forsionGit: await forsionPublishInfo(cwd).catch(() => null) });
+  } catch (e: any) {
+    res.status(500).json({ detail: e?.message || 'git hosting lookup failed' });
+  }
+});
 
 /** 待提交清单(提交框完整列出;有已暂存的只列已暂存的)。只读,不排队。 */
 router.post('/agent/project-context/git/pending', authMiddleware, async (req: AuthRequest, res) => {

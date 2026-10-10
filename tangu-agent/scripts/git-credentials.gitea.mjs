@@ -13,6 +13,9 @@
  *      时,失败原文里一行跟踪都没有(带凭据的子进程摘掉了跟踪开关;开着的话请求头会连同 Authorization 一起进 stderr)。
  *      用户自己的凭据助手里存着这个站的旧凭据时,一次也不去问它(问了的话,git 会带着它重试、失败,再叫助手把它删掉)。
  *   ⑥ 提供方说「这次暂时取不到」(fallback)→ 照没有凭据跑,git 认证失败时报提供方给的 code;说「到此为止」→ 直接按它的 code 报。
+ *   ⑦ 发布到 Forsion Git(services/forsionGitPublish × Forsion Git 提供方,云端接缝是假的、站是真的):没有远端的项目 →
+ *      入口给出由文件夹名整理出来的仓库名(「我的 Demo 站点 (v2)」→ Demo-v2)→ origin 设好并推上去,站上建出私有仓库、上游设好;
+ *      名字撞了站上另一个历史不同的仓库 → 推不上去,刚加的 origin 撤掉。
  *   全程:任何一条错误的 message / detail、任何一次返回的 output 里都没有令牌原文或它的 Basic 编码。
  *
  * 负对照(2026-10-10 实跑,各自改一处再跑,下面对应的那条红):
@@ -20,6 +23,7 @@
  *   - runRemoteAction 去掉「认证失败 → 重取一次」→ ② 红(第一枚坏令牌就收场)。
  *   - runAction 里不调 stripGitTraceEnv → ⑤ 红(失败原文里是一屏 `<= Recv header: …` 的跟踪)。
  *   - runAction 里不加 `-c credential.<origin>.helper=` → ⑤ 红(助手被依次叫了 get → erase:用户存的那份凭据被删)。
+ *   - publishToForsionGit 失败时不撤 origin → ⑦ 红(撞名之后仓库里留着指向别人仓库的 origin)。
  *
  * 前置:PATH 上有 gitea(macOS:brew install gitea)与 git ≥ 2.31;先 `npm run build`(本脚本引 dist/)。
  * 用法:node scripts/git-credentials.gitea.mjs      (KEEP=1 保留临时目录并打印 Gitea 日志尾部)
@@ -56,6 +60,8 @@ mkdirSync(process.env.TANGU_HOME, { recursive: true });
 
 const { GitActionError, gitPull, gitPush } = await import('../dist/services/gitActions.js');
 const { GitCredentialError, isGitAuthFailure, registerGitCredentialProvider, resetGitCredentialProvidersForTest } = await import('../dist/services/gitCredentials.js');
+const { installForsionGit } = await import('../dist/services/forsionGit.js');
+const { forsionPublishInfo, publishToForsionGit } = await import('../dist/services/forsionGitPublish.js');
 
 const cli = async (...args) => (await run('gitea', [...args, '--work-path', work, '--config', ini], { timeout: 60_000 })).stdout;
 const git = async (cwd, ...args) => (await run('git', args, { cwd, timeout: 30_000 })).stdout.trim();
@@ -219,6 +225,41 @@ ROOT_PATH = ${join(work, 'log')}
   registerGitCredentialProvider('e2e', async () => { throw new GitCredentialError('e2e_needs_setup', 'no account yet', gitea); });
   assert.deepEqual((({ code, detail }) => ({ code, detail }))(note(await outcome(gitPull(src)))), { code: 'e2e_needs_setup', detail: gitea });
   console.log('⑥ 提供方的两种带话都按它给的 code 报出来');
+
+  // ⑦ 发布到 Forsion Git:云端接缝是假的(站点信息 + 凭据由本地这台 Gitea 的令牌充当),站和推送是真的
+  resetGitCredentialProvidersForTest();
+  installForsionGit({
+    info: async () => ({ configured: true, webUrl: `${gitea}/`, credentials: true }),
+    credential: async () => ({ webUrl: gitea, username: 'dave', password: token }),
+  }, { device: 'e2e' });
+  const fresh = join(work, '我的 Demo 站点 (v2)');
+  mkdirSync(fresh);
+  writeFileSync(join(fresh, 'index.html'), '<h1>demo</h1>\n');
+  await git(fresh, 'init', '-q', '-b', 'main');
+  await git(fresh, 'add', '-A');
+  await git(fresh, 'commit', '-q', '-m', 'first');
+  const offer = await forsionPublishInfo(fresh);
+  assert.deepEqual(offer, { webUrl: gitea, name: 'Demo-v2' });
+  const published = note(await outcome(publishToForsionGit(fresh, offer.name)));
+  assert.ok(published.ok, `发布应当成功:${JSON.stringify(published)}`);
+  assert.equal(published.value.url, `${gitea}/dave/Demo-v2`);
+  const created = await api('/api/v1/repos/dave/Demo-v2', token);
+  assert.equal(created.status, 200);
+  assert.equal(JSON.parse(created.body).private, true);
+  assert.equal(await git(fresh, 'rev-parse', '--abbrev-ref', '@{upstream}'), 'origin/main');
+  assert.equal(await git(fresh, 'remote', 'get-url', 'origin'), `${gitea}/dave/Demo-v2.git`); // 地址里没有凭据
+  // 名字撞了站上另一个历史不同的仓库(② 建的 hello):推不上去 → 刚加的 origin 撤掉,仓库回到点之前的样子
+  const clash = join(work, 'clash');
+  mkdirSync(clash);
+  writeFileSync(join(clash, 'other.txt'), 'unrelated history\n');
+  await git(clash, 'init', '-q', '-b', 'main');
+  await git(clash, 'add', '-A');
+  await git(clash, 'commit', '-q', '-m', 'unrelated');
+  const rejected = note(await outcome(publishToForsionGit(clash, 'hello')));
+  assert.equal(rejected.code, 'git_failed', JSON.stringify(rejected));
+  assert.equal(await git(clash, 'remote'), '');
+  installForsionGit(undefined);
+  console.log('⑦ 发布到 Forsion Git:文件夹名整理成 Demo-v2 → 推送即建(私有)、上游设好;撞名推不上去 → origin 撤掉');
 
   // 全程:令牌原文 / Basic 编码不出现在引擎交出来的任何文字里
   const everything = shown.join('\n');

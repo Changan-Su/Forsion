@@ -1,7 +1,7 @@
 /** PROJECT 详情(Tangu Space 右栏,项目会话时顶替 Agent 详情)的真 Electron 仪器:
  *  入口闸(项目会话 → 项目页;无根会话 → 仍是 Agent 详情)、Agents 页(按会话推导的执行者、当前会话置顶、点开成员详情、
  *  用它开新会话、设为项目默认)、配置页(指令文件空态 → 创建 → 编辑 → 保存的 wire 约定、项目技能与旧位置标记、已批准计划、
- *  本机默认项)、项目图标(emoji 选择器 / 导入图片 / 移除,头部与侧栏组头同步)、Git 页(分支 / 上游 / 改动 / 提交 / 远端 + 动作行;拉取的四种结局)、中英 × 亮暗不横向溢出 + 截图(观感自查,DESIGN §8)。
+ *  本机默认项)、项目图标(emoji 选择器 / 导入图片 / 移除,头部与侧栏组头同步)、Git 页(分支 / 上游 / 改动 / 提交 / 远端 + 动作行;拉取的四种结局;没有远端时发布到 Forsion Git)、中英 × 亮暗不横向溢出 + 截图(观感自查,DESIGN §8)。
  *  引擎那半(project-context 的读写与安全边界)由 tangu-agent 的 projectContext.test.ts 覆盖;这里的假引擎只回放形状、记录请求。
  *  先 npm run build,再 npm run check:projectdetails(隔离 user data,不碰 ~/.forsion-dev)。 */
 const fs = require('fs')
@@ -522,6 +522,29 @@ async function run(app, win, stub, seen, home, ctx) {
   await form.locator('[data-git-action="commit-confirm"]').click()
   const timeoutClosed = await until(async () => (await form.count()) === 0)
   check('6l3 提交超时 → 「没能确认」+ 提交框收起', timeoutClosed && /没能确认/.test((await gitError.textContent().catch(() => '')) || ''), (await gitError.textContent().catch(() => '')) || '')
+  // ── 6q 发布到 Forsion Git:仓库没有远端 + 引擎说这里发凭据 → 出现入口;仓库名让用户过目;发布后变成普通的有远端仓库 ──
+  const publishBtn = writeRow.locator('[data-git-action="publish"]')
+  check('6q 没有远端但引擎说这里没有 Forsion Git(没登录 / 没配)→ 问过引擎、不出现发布入口', seen.hostingGets.length > 0 && await publishBtn.count() === 0, JSON.stringify({ gets: seen.hostingGets.length, labels: await writeRow.locator('button').allTextContents() }))
+  seen.hosting = { webUrl: 'https://git.forsion.example', name: 'Demo-Project' }
+  await gitCard.locator('[data-project-git-actions] button').nth(3).click()
+  await publishBtn.waitFor()
+  check('6q2 引擎说这里发凭据 → 写动作行多出「发布到 Forsion Git…」(仍没有推送 / 拉取)', /发布到 Forsion Git/.test(await publishBtn.textContent()) && await writeRow.locator('[data-git-action="push"]').count() === 0 && await writeRow.locator('[data-git-action="pull"]').count() === 0, JSON.stringify(await writeRow.locator('button').allTextContents()))
+  await details.screenshot({ path: shots.gitPublish = shot('project-git-publish-zh-light') })
+  await publishBtn.click()
+  await promptInput.waitFor()
+  check('6q3 对话框预填由文件夹名整理出来的仓库名(Demo Project → Demo-Project),并说明会建私有仓库、推到哪个站', (await promptInput.inputValue()) === 'Demo-Project' && /私有仓库/.test(await win.locator('.dialog').textContent()) && /git\.forsion\.example/.test(await win.locator('.dialog').textContent()), await win.locator('.dialog').textContent())
+  await promptInput.fill('我的项目')
+  await promptInput.press('Enter')
+  await until(async () => /仓库名/.test((await gitError.textContent().catch(() => '')) || '')) // 错误条上可能还留着上一条(6l3),等到是这一条
+  check('6q4 名字不合规 → POST git/publish 被引擎拒:本地化说明,入口还在(可以换个名字再来)', seen.gitPublishes.length === 1 && seen.gitPublishes[0].name === '我的项目' && /仓库名只能用英文字母/.test(await gitError.textContent()) && await publishBtn.count() === 1, JSON.stringify({ publishes: seen.gitPublishes, err: await gitError.textContent() }))
+  await publishBtn.click()
+  await promptInput.waitFor()
+  await promptInput.fill('demo-site')
+  await promptInput.press('Enter')
+  await until(async () => seen.gitPublishes.length === 2)
+  await until(async () => (await publishBtn.count()) === 0)
+  check('6q5 发布 → POST git/publish { sessionId, name };提示发布到的网页地址;入口收起,换成推送 / 拉取,摘要里有远端和上游', seen.gitPublishes[1]?.sessionId === 'pd-main' && seen.gitPublishes[1]?.name === 'demo-site' && /已发布到 https:\/\/git\.forsion\.example\/dave\/demo-site/.test(await saveNotice.textContent())
+    && await publishBtn.count() === 0 && await writeRow.locator('[data-git-action="push"]').count() === 1 && await writeRow.locator('[data-git-action="pull"]').count() === 1 && /git\.forsion\.example\/dave\/demo-site/.test(await gitCard.textContent()) && await gitError.count() === 0, JSON.stringify({ publishes: seen.gitPublishes, notice: await saveNotice.textContent().catch(() => null), labels: await writeRow.locator('button').allTextContents() }))
   check('6m Git 写动作之后仍不横向溢出', await noOverflow(profile), await overflowReport(profile))
 
   // ── 6n 设置 → Git:三项都落到 PUT /agent/git-settings(文本框失焦才写,开关立即写)──
@@ -766,7 +789,7 @@ async function main() {
   for (const dir of [userData, `${userData}-dev`, vault, projectDir]) fs.mkdirSync(dir, { recursive: true })
   const ctx = contextFixture(projectDir)
   const seen = { memoryForgets: [], memoryConflictOnce: false, memoryCandidates: [], memoryCandidateGoneOnce: false, memoryCandidateBusyOnce: false, memoryRestores: [], memoryRestoreGoneOnce: false, compactedActivity: false, ctxGets: [], init: 0, docPuts: [], settingsPuts: [], skills: [], sessionsCreated: 0, iconPosts: [], iconGets: 0, iconDeletes: [], sessionDeletes: [], agentDeletes: [],
-    gitMessages: [], gitCommits: [], gitBranches: [], gitPushes: [], gitPulls: [], gitInits: [], gitSettingsPuts: [], gitPendings: [], gitTrusts: [], pushGate: false }
+    gitMessages: [], gitCommits: [], gitBranches: [], gitPushes: [], gitPulls: [], gitInits: [], gitSettingsPuts: [], gitPendings: [], gitTrusts: [], pushGate: false, hostingGets: [], hosting: null, gitPublishes: [] }
   let gitSettings = { branchPrefix: 'tangu/', commitInstructions: '', forceWithLease: false }
   const demoIds = new Set(['pd-main', 'pd-coder', 'pd-team']) // 默认项 / 图标只属于 Demo Project;别的项目组读到的是空
   // 真实磁盘上的项目 .tangu(移除工作区勾「删除相关文件」时要进废纸篓)
@@ -786,6 +809,8 @@ async function main() {
       const sid = method === 'GET' ? url.searchParams.get('sessionId') : (await body()).sessionId
       if (!projectIds.has(sid)) return { __code: 400, body: { detail: 'stub: not a project session' } }
       if (route === '/agent/project-context' && method === 'GET') { seen.ctxGets.push(sid); return ctx }
+      // 这里能不能「发布到 Forsion Git」(引擎 forsionPublishInfo):缺省 null = 没登录 Forsion / 站上不发凭据
+      if (route === '/agent/project-context/git/hosting' && method === 'GET') { seen.hostingGets.push(sid); return { forsionGit: seen.hosting } }
       if (route === '/agent/project-context/settings' && method === 'GET') return { settings: demoIds.has(sid) ? ctx.settings : null }
       if (route === '/agent/project-context/init' && method === 'POST') { seen.init += 1; ctx.doc = { ...ctx.doc, exists: true, content: TEMPLATE, mtimeMs: 1000, bytes: TEMPLATE.length, sources: [ctx.doc.path] }; return { createdDir: true, createdDoc: true, context: ctx } }
     }
@@ -837,6 +862,13 @@ async function main() {
       const commits = ctx.git.behind || 0
       ctx.git = { ...ctx.git, behind: 0 }
       return { pull: { remote: 'origin', branch: ctx.git.branch, upstream: ctx.git.upstream, updated: commits > 0, commits, ahead: ctx.git.ahead || 0 }, context: ctx }
+    }
+    // 发布到 Forsion Git(引擎 publishToForsionGit):名字不合规回 invalid_repo_name;成功 = origin 设好并推上去了
+    if (route === '/agent/project-context/git/publish' && method === 'POST') {
+      const b = await body(); seen.gitPublishes.push(b)
+      if (!/^[A-Za-z0-9._-]+$/.test(String(b.name || ''))) return { __code: 400, body: { detail: 'That is not a valid repository name', error: 'invalid_repo_name', info: String(b.name || '') } }
+      ctx.git = { ...ctx.git, remote: `git.forsion.example/dave/${b.name}`, remotes: 1, upstream: `origin/${ctx.git.branch}`, ahead: 0, behind: 0 }
+      return { publish: { url: `https://git.forsion.example/dave/${b.name}`, name: b.name, remote: 'origin', branch: ctx.git.branch, target: `origin/${ctx.git.branch}`, output: '' }, context: ctx }
     }
     if (route === '/agent/project-context/git/init' && method === 'POST') {
       const b = await body(); seen.gitInits.push(b)

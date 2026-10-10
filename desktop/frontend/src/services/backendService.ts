@@ -1292,7 +1292,16 @@ export const gitPushProject = (t: EngineTarget, sessionId: string, trust = false
  *  两边各有新提交 → err.code 'diverged'(只报告,不合并、不变基);没有上游 → 'no_upstream';没提交的改动挡住 → 'dirty_worktree'。
  *  远端是 Forsion Git 且登录了 Forsion 时,引擎自己带凭据(推送同理),这里不用管。 */
 export const gitPullProject = (t: EngineTarget, sessionId: string, trust = false) =>
-  gitPost<{ pull: { remote: string; branch: string; upstream: string; updated: boolean; commits: number; ahead: number }; context: ProjectContext | null }>(t, 'pull', { sessionId, trust }, 180_000).then(withContext)
+  gitPost<{ pull: { remote: string; branch: string; upstream: string; updated: boolean; commits: number; ahead: number }; context: ProjectContext | null }>(t, 'pull', { sessionId, trust }, 450_000).then(withContext)
+/** 这里能不能「发布到 Forsion Git」:登录了 Forsion、云端有 Forsion Git 且给人发推拉凭据 → 站点地址 + 由文件夹名整理出来的仓库名
+ *  (整理不出来是空串,让用户自己填)。老引擎(404)/ 读不到 → null = 不出现入口,不报错。 */
+export const getGitHosting = (t: EngineTarget, sessionId: string) =>
+  request<{ forsionGit: { webUrl: string; name: string } | null }>(t, `/agent/project-context/git/hosting?sessionId=${encodeURIComponent(sessionId)}`, undefined, { timeoutMs: 8000 })
+    .then((r) => (r.forsionGit && typeof r.forsionGit.webUrl === 'string' ? r.forsionGit : null)).catch(() => null)
+/** 发布到 Forsion Git:仓库还没有远端时,把 origin 设到 `<站点>/<自己的用户名>/<name>.git` 并推送当前分支(站上自动建成私有仓库)。
+ *  没推上去引擎会把 origin 撤掉(可以换个名字再来);err.code:has_remote / invalid_repo_name / no_commits / forsion_git_*。 */
+export const gitPublishProject = (t: EngineTarget, sessionId: string, name: string, trust = false) =>
+  gitPost<{ publish: { url: string; name: string; remote: string; branch: string; target: string }; context: ProjectContext | null }>(t, 'publish', { sessionId, name, trust }, 180_000).then(withContext)
 /** 「设置 → Git」。writable=false(云端 worker 的 config.json 是所有用户共用的)时设置页只读说明、不给改。 */
 export const getGitSettings = (t: EngineTarget) =>
   request<{ settings: GitSettings; defaults: GitSettings; writable: boolean }>(t, '/agent/git-settings')
