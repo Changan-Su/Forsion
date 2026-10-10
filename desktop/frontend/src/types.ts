@@ -998,8 +998,9 @@ export interface ApprovalRemote {
 /** 引擎给出的审批判定理由。kind 由 reducer 白名单清洗,渲染层可以信任。 */
 export interface ApprovalReason {
   /** custom-ask=你写的规则要求问 · escalate=工作区外写入升级 · mode=该档位本就需要审批 ·
-   *  protected=写凭据 / Forsion 本机配置(契约 C4 / C6:每次都问,完全通行与「总允许」都不跳过) */
-  kind: 'custom-ask' | 'escalate' | 'mode' | 'protected' | 'control'
+   *  protected=写凭据 / Forsion 本机配置(契约 C4 / C6:每次都问,完全通行与「总允许」都不跳过) ·
+   *  always=工具自己声明每次都问(花掉账号里的东西这类动作;完全通行与「总允许」都不跳过,云端会话里也问) */
+  kind: 'custom-ask' | 'escalate' | 'mode' | 'protected' | 'control' | 'always'
   /** 命中的规则串(仅 custom-ask) */
   rule?: string
   /** 引擎侧**生效**的档位(custom 未命中时是降解后的 base) */

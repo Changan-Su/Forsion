@@ -108,6 +108,7 @@ export const CLASSIFICATION = {
   'PATCH /agent/sessions/:id/config': [A, 'session config patch (field subset + approval ceiling enforced engine-side, P0 ④ / C3)'],
   'PUT /agent/sessions/:id/config': [D, 'whole-config replace; remote uses PATCH'],
   'GET /agent/sessions/:id/usage': [A, 'session usage'],
+  'GET /agent/sessions/:id/status': [A, 'live run status (context / tokens / steps)'],
   'GET /agent/sessions/:id/timeline': [A, 'session timeline'],
   'POST /agent/sessions/:id/compact': [A, 'compact a session'],
   'POST /agent/sessions/:id/aside': [A, 'btw aside (taint propagates, C5)'],

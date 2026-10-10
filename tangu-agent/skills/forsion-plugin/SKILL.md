@@ -2,7 +2,7 @@
 name: forsion-extension-development
 description: 当用户要给 Forsion / Tangu 做插件、主题、Space、智能体(agent)或捆绑包(bundle)——或要把某个能力做成可分发/可上架商店的扩展——时使用;已装的插件 / Space / 视图不出现、加载失败、更新后不工作要排查时也用(带一份插件体检脚本 tools/check-plugin.mjs)。内置五类官方模板(samples/),讲清各自的格式基线与硬约束(尤其两种"插件"是完全不同的系统),照抄模板改比从零写靠谱。
 metadata:
-  version: 1.29.0
+  version: 1.30.0
   author: Forsion
   category: Forsion
 ---
@@ -63,6 +63,7 @@ Plugin authors: run the same checker before every release. It is the generic hal
 - **绝不运行时 import 核心包**。对 `@forsion/tangu-agent` 只允许 `import type`(模板 tsconfig 开了 `verbatimModuleSyntax`,值导入直接编译错误)。运行时能力全走 `activate(ctx)` 的 **`ctx.sdk`** —— 否则核心的模块级单例被复制成第二份,行为诡异。
 - **`dist/` 必须提交**。商店安装 = 解压源码到 `~/.forsion/plugins/<id>/`,全程不构建;改 `src/` 后必须 `npm run build`(tsc→dist/)再提交。
 - **工具门禁**:`isEnabledFor` 返回 `store.isPluginEnabledSync(id)`,插件启用才对模型可见。
+- **动手前问不问用户**:工具的 `capabilities.approval`。不写 = 只读,不问。`'command'` = 与 `run_bash` 同档(「询问我批准」时每次问;用户点了「总允许」或开了完全通行就不问;聊天 / 云端会话不问)。`'always'` = **每次调用都由用户本人在卡上确认**:完全通行、「总允许」、用户的 allow 规则、hook 的 allow 都跳不过,聊天 / 云端会话照样弹卡;自动化、Muse 后台、远程会话里直接被拒(工具收不到调用)。花掉用户的东西、替用户对外发内容的动作用 `'always'`。读和写拆成两个工具名,只给写的那个声明;卡上显示的是这次调用的参数原文,所以一次调用只做一件事,参数写成人看得懂的字段。
 - **生命周期**:关掉插件时宿主调 `deactivate()`(限时 5s)并撤掉它注册的工具 / 命令 / 路由(meta 留着,设置页照样列出);再打开会在**同一个模块对象**上再调一次 `activate(ctx)`。所以 activate 可能跑多次 —— 别依赖模块级「只做一次」的状态,activate 里起的定时器 / 子进程 / 监听(含 `process.once`)一律在 deactivate 里收掉。
 - **限时**:import + `activate` 合计限时 30s,超时按激活失败处理(设置页显示错因);超时的 `activate` / `deactivate` 宿主不会再等,但在它真正结束前**不会**再激活同一个插件(防止迟到的收尾清掉新实例),结束后自动补上。activate 里别等永远不回的连接 —— 连不上就先返回、后台重试。
 - **工具 provider id 用自己的命名空间**(`plugin:<你的 id>`):两个插件撞了同一个 id,后注册的覆盖前者。

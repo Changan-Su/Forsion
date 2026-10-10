@@ -354,6 +354,26 @@ export interface AmadeusBrain {
   write(path: string, content: string, opts?: { baseSeq?: number; force?: boolean }): Promise<{ seq: number }>;
 }
 
+/** cloud.request 的一次请求。path 以 /api/ 开头(可带查询串);body 按 JSON 发。 */
+export interface CloudRequest {
+  path: string;
+  method?: 'GET' | 'POST' | 'PUT' | 'DELETE';
+  body?: unknown;
+  /** 缺省 15s。 */
+  timeoutMs?: number;
+  signal?: AbortSignal;
+}
+/** status 0 = 没发出去或没收到(error 写原因);401 + error:'not_signed_in' = 本机没有云端凭据,请求根本没发。json 解不出给 null。 */
+export interface CloudResponse { status: number; json?: any; error?: string }
+/**
+ * 以当前调用方的身份请求 Forsion 云端(账号面:额度 / 会员 / 积分这类不属于 brain 命名空间的接口)。
+ * 身份由 brain 自己带:桌面本机引擎 = 登录的那枚令牌;云端 worker = 这条 run 的派发票(server 只放行登记过的路由)。
+ * 调用方拿不到令牌,只拿结果;**永不抛**。
+ */
+export interface CloudAccountBrain {
+  request(req: CloudRequest): Promise<CloudResponse>;
+}
+
 export interface CloudBrainServices {
   llm: LlmBrain;
   users: UsersBrain;
@@ -376,6 +396,8 @@ export interface CloudBrainServices {
   inbox?: InboxBrain;
   /** Amadeus 云笔记库(v1);可选:仅 httpBrain(thin worker / standalone 云连)实现 → 非 host 环境的 amadeus_* 工具经此读写云 vault;未注入 → 工具在非 host 环境隐藏。 */
   amadeus?: AmadeusBrain;
+  /** 以当前身份请求 Forsion 云端的账号面;可选:仅 httpBrain(standalone 云连 / thin worker)实现,server 内嵌的 brain 与纯本地没有 → 账号工具隐藏。 */
+  cloud?: CloudAccountBrain;
 }
 
 /** 服务端收件箱广播(对端 GET /api/brain/inbox/broadcasts;created_at 为服务端微秒原文,原样回传做游标)。

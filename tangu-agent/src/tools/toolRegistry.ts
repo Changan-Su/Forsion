@@ -277,6 +277,8 @@ const PLAN_MODE_TOOLS = new Set([
   'search_files', 'glob_files', 'list_files', 'read_file', 'list_dir', 'view_image', 'view_video',
   'read_log', 'use_skill', 'todo_write', 'todo_read',
   'read_session', 'search_sessions', // 只读回看过去会话;规划「继续上次讨论」类任务离不开
+  'session_status', // 只读:上下文占用 / 已花 token / 步数;规划长任务前估预算
+  'forsion_account', // 只读:账号额度 / 积分 / 套餐(动作那件不进计划模式)
 
   'list_processes', 'read_process_output',
   'delegate', 'ask_user', 'exit_plan_mode',
@@ -417,11 +419,12 @@ export function listLoadoutTools(): { name: string; description: string }[] {
  * 工具自声明的审批档（capabilities.approval）。approvals.toolNeedsApproval 据此把插件工具并入
  * 「跑命令」档——核心不硬编码插件工具名，插件在 capabilities 里声明 `approval:'command'` 即可。
  * 与 resolveTools 同序遍历全局 provider，同名后注册者覆盖（取最后一个匹配）。
- * 只在 readonly/auto-edit 档需要判定时被调用（full-auto 直接放行，零开销）。
+ * gateToolCall 每次调用都读一次(判 'always':那一档不看档位也不看执行形态),并传本 run 的 profile ——
+ * 应用自带工具(profile.toolLoadout.providers)执行侧找得到,声明不一起看的话它的 'always' 等于没写(Codex 10-10 #1)。
  */
-export function declaredApproval(name: string): 'command' | undefined {
-  let found: 'command' | undefined;
-  for (const p of providers) {
+export function declaredApproval(name: string, profile?: Pick<AppProfile, 'toolLoadout'>): 'command' | 'always' | undefined {
+  let found: 'command' | 'always' | undefined;
+  for (const p of [...providers, ...(profile?.toolLoadout?.providers ?? [])]) {
     for (const t of providerTools(p)) {
       if (t.name === name && t.capabilities?.approval) found = t.capabilities.approval;
     }

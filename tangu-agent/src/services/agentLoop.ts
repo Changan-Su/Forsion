@@ -20,6 +20,7 @@ import { publish, drain, cleanup } from './eventBus.js';
 import { makeUiSettingsUpdater } from './uiAck.js';
 import { gateToolCall, requestApproval, normalizeApprovalMode, USER_REJECT_REASON, setApprovalTray, type ApprovalDecision, type ApprovalMode } from './approvals.js';
 import { takeRunThinking } from './sessionSettings.js';
+import { registerLiveRun, unregisterLiveRun, type RunStatus } from './runStatus.js';
 import { makeClientActionRequester } from './clientAck.js';
 import { runHooks, type HookRunContext, type HookVerdict } from '../hooks/index.js';
 import { enterRunContext, currentDisplayAgentSlug, setRunClientTag, setRunCwd } from '../seams/runContext.js';
@@ -888,6 +889,7 @@ export async function hydrateHistory(
 }
 
 async function runLoop(runId: string, ac: AbortController): Promise<void> {
+  const runStartedAt = Date.now(); // session_status 的「本 run 已用时」从这里起算(库里的 created_at 是建行时间,含排队)
   const run = await getRun(runId);
   if (!run) {
     // run 行不存在（被删/异常）：仍要推进队列，否则该 session 永久卡住（这条早返回不走 finally）。
@@ -2213,6 +2215,29 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // 子代理(delegate)的计价累计:它们走 noopBilling,不记这里的话 TANGU_MAX_RUN_COST 恰好看不见 Ultra 放大的那部分
     // (并行 × 24 轮 × 继承的 max 档)。与 costTotal 分开记,只在越限判定与对外展示的 costTotal 处相加。
     let delegatedCost = 0;
+    // session_status 工具与 GET /agent/sessions/:id/status 的真源(为什么不读库见 services/runStatus.ts 头注)。
+    // 循环里逐步更新;闭包在工具执行期 / 路由被调时才读,那时下面的 contextUsage / compactAt / toolsOverhead 早已初始化。
+    const runStat = { iteration: 0, llmCalls: 0, prompt: 0, completion: 0, cached: 0, firstPrompt: 0, lastPrompt: 0 };
+    const getRunStatus = (): RunStatus => {
+      const measured = contextUsage.measured(workingMessages);
+      return {
+        runId, sessionId, modelId, thinkingLevel,
+        startedAt: runStartedAt,
+        iteration: runStat.iteration,
+        maxIterations,
+        llmCalls: runStat.llmCalls,
+        tokens: { prompt: runStat.prompt, completion: runStat.completion, cached: runStat.cached, total: runStat.prompt + runStat.completion },
+        context: {
+          window: ctxWindowTokens,
+          used: measured ?? contextUsage.estimate(workingMessages, toolsOverhead),
+          measured: measured !== undefined,
+          compactAt,
+          compactionEnabled: compactionCfg.enabled,
+          firstPrompt: runStat.firstPrompt,
+          lastPrompt: runStat.lastPrompt,
+        },
+      };
+    };
     const toolCtx: ToolContext = {
       // 门禁字段单源:与上面 listDeferredTools 拿到的是同一份,目录与工具面不会分叉。
       ...toolGateCtx,
@@ -2268,6 +2293,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       getImageInputs: () => imageInputs,
       thinkingLevel,
       contextWindow: ctxWindowTokens,
+      getRunStatus,
     };
     let toolDefs = getToolDefinitions(toolCtx);
     // A4:工具头字节量(load_tools 解锁后重算)随 usage 事件出账。**按本轮真实发出去的那份算**,
@@ -2351,6 +2377,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       const preCtxText = hookContextText(preV); // PreToolUse 注入的上下文 → 拼进本工具结果尾部（保序）
 
       // host-exec 审批闸门：execMode!=='host' 时立即放行（无 await、无事件）→ server/worker 零影响。
+      // 例外只有自己声明 capabilities.approval:'always' 的工具(花掉账号里的东西这类):那一档在云端 / sandbox 会话里也问。
       // 托盘 run:要问用户的调用挂起(park)——审批请求照发、不等,先给模型占位结果,拍板后在迭代边界兑现。
       const decision = await gateToolCall(runId, effCall, {
         sessionId, execMode, approvalMode, modeSessionId, cwd, extraRoots, profile,
@@ -2592,6 +2619,9 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     let hookVetoedCompaction = false; // PreCompact hook 否决过 → 不再按估算拦请求,交给 provider 裁决
     let overflowRecovered = false; // 上游报「输入超窗口」后压缩重试:每 run 一次
     let toolsOverhead = 0; // 本轮工具定义头的粗估 token(只在没有实测基准时计入,见 ContextUsageTracker.estimate)
+    // 登记给 GET /agent/sessions/:id/status:必须在 contextUsage / compactAt / toolsOverhead 都初始化之后 —— getRunStatus 读它们,
+    // 登记早了,run 还在等记忆 / 计费预检的那段时间里来一次请求就是 ReferenceError(Codex 10-10 #6)。
+    registerLiveRun(runId, sessionId, getRunStatus);
     /**
      * 一次 LLM 摘要压缩(threshold=估算越线 / overflow=上游拒收后)。PreCompact hook 只在真要摘要时问一次;
      * 摘要失败退机械折叠(compactContext,如实标 fallback);成功即按边界落检查点(已落库部分立刻落,
@@ -2638,6 +2668,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     };
     for (let iteration = 0; iteration < maxIterations; iteration++) {
       if (ac.signal.aborted) throw new AbortLikeError();
+      runStat.iteration = iteration + 1;
       // 子代理(delegate)的花销在工具批里记进来:它们把 run 推过上限时,别再先发一次模型请求才收尾(creview 09-27 P1)。
       // 主循环自己的越限仍在下方记账处判(那一刻才知道本轮的价)。
       if (delegatedCost > 0 && isOverRunCost(costTotal + delegatedCost, runCostLimit)) {
@@ -2929,6 +2960,12 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       }
       const cost = await calculateCost(modelId, res.usage.prompt_tokens, res.usage.completion_tokens, undefined, cachedTokens);
       tokensTotal += (res.usage.prompt_tokens || 0) + (res.usage.completion_tokens || 0);
+      runStat.llmCalls += 1;
+      runStat.prompt += res.usage.prompt_tokens || 0;
+      runStat.completion += res.usage.completion_tokens || 0;
+      runStat.cached += cachedTokens;
+      runStat.lastPrompt = res.usage.prompt_tokens || 0;
+      if (runStat.llmCalls === 1) runStat.firstPrompt = runStat.lastPrompt;
       // 把本轮 usage 播给订阅者（TUI 状态栏的实时 token / 预算用;cached=缓存命中量,命中率=cached/prompt）。
       void publish(runId, 'usage', {
         prompt: res.usage.prompt_tokens || 0,
@@ -3385,6 +3422,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     await flush();
     parkAc.abort(); // 没等到拍板的挂起审批一并撤掉(登记表清空 → 事后点批准回 410)
     setApprovalTray(runId, false);
+    unregisterLiveRun(runId);
     abortControllers.delete(runId);
     steerQueue.delete(runId); // 丢弃尚未注入的转向消息(run 已终结)
     immediateSteers.delete(runId);
