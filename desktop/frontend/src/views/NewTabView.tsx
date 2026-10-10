@@ -18,6 +18,7 @@ import { usePluginStore } from '@amadeus/plugins/pluginStore'
 import { usePageStore } from '@amadeus/store/pageStore'
 import { openNote, openDb, openDrawing, openDashboard, openImage, openFile, createDrawing, createDashboard } from '../amadeusNav'
 import { openDailyNote } from '../amadeusTemplates'
+import { ensureAmadeusReady } from '../amadeusPlugins'
 import { openNewChat, openSession } from '../sessionNav'
 import { useQuickFind } from '../quickFind'
 import { useI18n, registerMessages } from '../i18n'
@@ -65,6 +66,10 @@ export function NewTabView({ leaf }: ViewProps) {
   const pages = usePageStore((state) => state.pages)
   const hasBackend = !!window.tangu?.backendStatus
   const amadeusOn = amadeusAvailable() && AMADEUS_ENABLED // 笔记/文件项跟随 Amadeus 门控(与 Space 注册同纪律)
+  // 库是惰性恢复的,而「新建」那一段全看 vaultRoot:启动缺省的主页 Space 没有侧栏、没人唤醒它 → 从主页点 ＋,
+  // 「新建笔记」点了没反应、「今天 / 新建白板 / 新建仪表盘」不出现(08-29 起,e2e:daily / e2e:dashdrag 红在这一步)。
+  // 与 WorkspaceView / pluginViews / AgentDesk 同一处方:用得着库的宿主自己唤醒(幂等)。
+  useEffect(() => { if (amadeusOn) ensureAmadeusReady() }, [amadeusOn])
   const ws = () => useWorkspace.getState()
   const [menu, setMenu] = useState<{ x: number; y: number; item: Item } | null>(null)
   // 关菜单走 window 监听(与 homeSlot / amadeusViews 的 ctx-menu 同款),不铺 scrim。
@@ -80,18 +85,17 @@ export function NewTabView({ leaf }: ViewProps) {
   const newChat = (): void => { openNewChat() }
   // 落点面板一律由 openNote 门面现算(createPage / openDailyNote 内部都走它):它会把**当前这个新标签**
   // 就地切成编辑器。这里别再预开一个空编辑器 tab —— 已有编辑器时那份是白开的,新建仍落在别处。
-  const newNote = (): void => {
-    if (vaultRoot) void usePageStore.getState().createPage()
-  }
+  const newNote = (): void => { void usePageStore.getState().createPage() }
 
   // 新建 —— 都是动作(清 activeId/草稿、创建文件),只单击、不带 drag:拖拽走 openView 会绕过动作,
   // chat 又是 singleton(reuseKey:'primary')→ 只会聚焦旧对话而非新建;文件类视图靠 params 认领具体文件,
   // 没有「裸开一个空视图」的形态。插件声明的创建器(registerFileCreator)同理 —— 内置的和插件的差别只应该是
-  // 「谁提前装好了」;没有库就没处新建,故跟着 vaultRoot 显示。
+  // 「谁提前装好了」;没有库就没处新建,故跟着 vaultRoot 显示(「新建笔记」也是:原先它恒显示、库没落地时点了没反应)。
+  // vaultRoot 为空也可能只是还没恢复 —— 上面挂载时唤醒过,落地后这几项自己补出来。
   const plus = <Plus size={14} />
   const createItems: Item[] = [
     { key: 'chat', icon: plus, label: t('sidebar.newChat'), run: newChat, show: hasNativeFeature('tangu') },
-    { key: 'new-note', icon: plus, label: t('newtab.newNote'), run: newNote, show: amadeusOn },
+    { key: 'new-note', icon: plus, label: t('newtab.newNote'), run: newNote, show: amadeusOn && !!vaultRoot },
     { key: 'daily', icon: plus, label: t('newtab.today'), run: () => { void openDailyNote() }, show: amadeusOn && !!vaultRoot },
     { key: 'new-drawing', icon: plus, label: t('newtab.newDrawing'), run: () => { void createDrawing('') }, show: amadeusOn && !!vaultRoot },
     { key: 'new-dashboard', icon: plus, label: t('newtab.newDashboard'), run: () => { void createDashboard('') }, show: amadeusOn && !!vaultRoot },
