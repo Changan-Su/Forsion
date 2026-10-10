@@ -127,8 +127,7 @@ export function DetachedRoot() {
           soft={!!getLanguage(theme.lang)?.manifest.panelGap}
           // Space 窗口没有存过布局(且没播种到)时,摆这个 Space 自己的默认布局。
           buildDefault={spaceState === 'ready' ? buildDefaultLayout : buildDetachedDefault}
-          // mac hiddenInset:留一条可拖拽标题带给交通灯(win/linux 有原生标题栏,不需要)。
-          header={isMac ? <div style={{ height: 38, flex: '0 0 auto', WebkitAppRegion: 'drag' } as React.CSSProperties} /> : undefined}
+          // mac hiddenInset:不另留标题带 —— 标签栏顶到窗口最上(同主窗),交通灯由 engine.css 的 .shell--noribbon 让位;拖窗靠标签栏空白处。
         />
       </div>
       {window.amadeus && <AmadeusOverlays />}
