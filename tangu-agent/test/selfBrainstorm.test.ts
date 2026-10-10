@@ -24,7 +24,7 @@ import type { ChatMessage } from '../src/core/types.js';
 const profile = createTanguProfile({ sandboxMode: 'none' });
 const hostStub: any = new Proxy({}, { get: () => () => { throw new Error('host stub'); } });
 
-interface Captured { messages: any[]; cacheKey?: string; temperature?: number; tools?: any; thinkingLevel?: string; maxTokens?: number; toolChoice?: string }
+interface Captured { messages: any[]; cacheKey?: string; agentId?: string; temperature?: number; tools?: any; thinkingLevel?: string; maxTokens?: number; toolChoice?: string }
 let captured: Captured[] = [];
 let failSeatRe: RegExp | null = null; // 匹配席位名 → 第 1 轮补全抛错
 let fail2SeatRe: RegExp | null = null; // 匹配席位名 → 第 2 轮补全抛错
@@ -45,7 +45,7 @@ const fakeLlm: any = {
     // 先深拷贝捕获,再模拟真实构建器的**原地变异**(openaiCompat prefix-thinking 注 system):
     // 若服务侧没做逐请求深拷贝,这个变异会串进其它分身/后续轮次的捕获里。
     captured.push(JSON.parse(JSON.stringify({
-      messages: opts.messages, cacheKey: opts.cacheKey, temperature: opts.temperature,
+      messages: opts.messages, cacheKey: opts.cacheKey, agentId: opts.agentId, temperature: opts.temperature,
       tools: opts.tools, thinkingLevel: opts.thinkingLevel, maxTokens: opts.maxTokens, toolChoice: opts.toolChoice,
     })));
     if (opts.messages[0]) opts.messages[0].content = String(opts.messages[0].content) + '!MUTATED';
@@ -71,7 +71,7 @@ const snapshot: ChatMessage[] = [
 
 function mkCtx(snap: ChatMessage[] = snapshot): any {
   return {
-    userId: 'u', sessionId: 'sess-1', appId: 'tangu', modelId: 'm1', profile, execMode: 'host', thinkingLevel: 'high',
+    userId: 'u', sessionId: 'sess-1', appId: 'tangu', modelId: 'm1', profile, execMode: 'host', thinkingLevel: 'high', agentSlug: 'coder',
     // E2 起 self_brainstorm 是 deferred:真实执行时父 ctx 必然已带它的解锁态(模型得先 load_tools
     // 才调得到本工具),forkTools = getToolDefinitions(ctx) 才和父面逐字节一致。夹具照此还原。
     unlockedTools: new Set(['self_brainstorm']),
@@ -131,6 +131,7 @@ describe('runSelfBrainstorm — 缓存守门 + 两阶段 + 机械汇编', () => 
       expect(c.messages[0].content).toBe('SYS');
       expect(JSON.stringify(c.messages.slice(0, prefix.length))).toBe(JSON.stringify(prefix));
       expect(c.cacheKey).toBe('sess-1');
+      expect(c.agentId).toBe('coder'); // 路由键缺省按「agent + 模型」取:不带主 loop 的 agentId 就落在另一个桶里
       expect(c.temperature).toBe(0.9);
       expect(c.thinkingLevel).toBe('high'); // 随父档,不许写死 medium
       expect(c.maxTokens).toBe(2000);

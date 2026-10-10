@@ -45,6 +45,7 @@ function makeSeed(over: Partial<HistorianForkSeed> = {}): { seed: HistorianForkS
       tools: seedTools(),
       thinkingLevel: 'high',
       modelId: 'm-sess',
+      agentId: 'coder',
       ...over,
     },
   };
@@ -138,6 +139,7 @@ describe('Historian fork 判官', () => {
     expect(builds.length).toBe(1); // fork 一次成功,不再走 independent
     const b = builds[0];
     expect(b.cacheKey).toBe('S'); // 同前缀必须同键(与 delegate 分键方向相反)
+    expect(b.agentId).toBe('coder'); // 路由键缺省按「agent + 模型」取:不带主 loop 的 agentId 就落在另一个桶里
     expect(b.tools).toEqual(seedTools()); // 工具 schema 参与前缀缓存,必须与父一致
     expect(b.thinkingLevel).toBe('high'); // 思考档随父(无原生思考的模型档位=system 文本)
     expect(b.toolChoice).toBe('auto'); // 禁执行靠指令+结果侧丢弃,不用 toolChoice:'none'

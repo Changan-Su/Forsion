@@ -42,6 +42,7 @@
  *   npm run live:harness -- --only autocompact --window 32000  # 自动压缩持久化(09-15):把该模型窗口钉到 32k 灌满 → run 内自动压缩落检查点 → 下个 run 从摘要接着答;改 compaction / hydrate 后跑
  *   npm run live:harness -- --only autocompact --window 100000 --compaction '{"thresholdPercent":25,"keepRecentTokens":500}'  # 百分比旋钮(09-20):大窗口下按 X% 压;负对照 = 同窗口 + --filler <正例灌的段数>、不带 --compaction(须红)
  *   npm run live:harness -- --only cache                     # 前缀缓存命中(A/B/B′/C/D + head hash 探针);token 节省看 scripts/cache-hit-report.mjs
+ *   npm run live:harness -- --only forkcache                 # 尾部分叉调用读没读到主循环的前缀缓存(10-10):Historian 分身判官(fork 模式)与 self_brainstorm 第一轮的分身,逐次列 输入 / 缓存;改 localHistorian.ts 的 forkJudge、selfBrainstorm.ts 或 llm/openaiCompat.ts 的 resolveCacheKey 后跑
  *   npm run live:harness -- --only recall-unprompted --ab-memory   # B1 行为闸:记忆易变段走 tail vs system 各跑一遍(两次引擎启动,顺序)
  *   npm run live:harness -- --only deferred                  # E2 按需装载:load_tools 先于 read_document + 子代理 read_document 直通 + 子代理自己 load_tools 解锁 browser_snapshot
  *   npm run live:harness -- --only grant                     # 改 delegate.grantTools / 子代理管理面闸后跑:授予时子代理用得上 manage_schedule,不授予时照旧被拒(正负两跑,均 action=list 无副作用)
@@ -198,6 +199,7 @@ KEYS.push('skillcreate');
 KEYS.push('projdedupe');
 KEYS.push('projteam');
 KEYS.push('projcompact');
+KEYS.push('forkcache');
 // autocompact 要把模型窗口钉小(--window)才灌得满;窗口小了别的场景会被连累(系统提示+工具头就 13k+),所以它只能单独跑。
 const WINDOW = Number(opt('window', process.env.TANGU_LIVE_WINDOW || 0)) || 0;
 // P1-K9 · C3:--remote-cap <档> = 起引擎前经 K4 的新写入口写 remote.maxApprovalMode(缺省不写 = 引擎按 auto-edit)
@@ -222,6 +224,7 @@ OPT_IN.add('dreamseed');
 OPT_IN.add('projdedupe'); // --only projdedupe:项目记忆换了说法的重复(真模型 + 后台判官,约 20 次调用)
 OPT_IN.add('projteam'); // --only projteam:项目记忆在团队会话里(三个两人团队各一轮)
 OPT_IN.add('projcompact'); // --only projcompact:项目记忆写满时的压缩(4 个 run + 判官 + 2 次压缩,约 10 次调用);只在动 projectMemoryCompact.ts / remember 写满那条路时才有信息量
+OPT_IN.add('forkcache'); // --only forkcache:尾部分叉调用读没读到主循环的缓存(4 个 run + 4 次判官 + 2 个脑暴 run 共 6 席);只在动 forkJudge / selfBrainstorm / 缓存路由键(resolveCacheKey)时才有信息量
 OPT_IN.add('visualfigures');
 for (const key of ['intelligentplan', 'intelligentmedia', 'intelligentplain']) { OPT_IN.add(key); KEYS.push(key); }
 OPT_IN.add('intelligentusers'); KEYS.push('intelligentusers');
@@ -4182,6 +4185,71 @@ Then reply with only the command output.`,
   // ── 真实使用模拟(10-04):消息不点名任何存储库 / 工具 / 动作;判据与设计见 lib/real-use-live.mjs ──
   await scenario('realuse', `realuse 真实使用模拟 ×${SELF_ROUNDS} 轮${opt('usage-db', '') ? ' + 真实用量巡检' : ''}`, () =>
     realUseLive({ run, api, until, asList, home, workspace, OUT, MODEL, AGENT_CONFIG, MUSE_MODE, rounds: SELF_ROUNDS, usageDb: opt('usage-db', ''), legs: opt('real-legs', 'q,i,c,e'), museLogTail }));
+  // ── 尾部分叉调用读没读到主循环的缓存(10-10):Historian 分身判官(fork 模式)/ self_brainstorm 的分身 ──
+  // 两处都是「在主循环的上下文后面接一句、再问一次模型」,值不值全看那一次读没读到主循环刚写下的前缀缓存。
+  // 缓存路由键和主循环对不上时前缀再一致也读不到(落在另一个桶里),单测和假引擎都看不出来,只有真模型的 cached 量得出。
+  // ①判官:开 fork 模式,三个新会话各聊一轮(第一个会话再多聊一轮),从引擎日志读每次判官调用的用量;没发出调用就回落的那一轮不算量到。
+  //   新会话的第一轮最说明问题:那个会话自己还没写过任何缓存,读到的只能是主循环写下的。
+  // ②分身:两个新会话各点名让模型用一次 self_brainstorm、只做第一轮(第二轮各席接着自己第一轮往下,读的是自己写下的缓存,证不了这件事),读带 phase=brainstorm 的 usage 事件。
+  // 判据:每条腿最多一次没读到一半(上游偶尔不把请求送到同一台机器:路由键对的时候 82 次里也有 6 次只读到四成,见 docs/direct-model-calls.md),量到的不足一半也算没过。
+  //   路由键不对时的样子(10-10 六次基线 + 一次负对照):新会话第一轮的判官 3 次里至少 2 次读不到(21 次里只有 1 次读到);分身每回 3 席里至少 1 席读不到(先到的那席按原价写,后两席读它的)。
+  //   所以分身要量两回 6 席 —— 只量 3 席的话,「固定有 1 席读不到」和「偶发 1 次」分不开。上游不报缓存量的模型跑这条,红是如实的。
+  await scenario('forkcache', 'forkcache 尾部分叉调用读到主循环的前缀缓存(Historian 分身判官 / self_brainstorm 分身)', async () => {
+    // 只认两类行:这一次调用的用量,或没发出调用就回落(超窗 / 失败)。用量之后才打的回落行(空产出 / 截断 / 解析不出)不认 ——
+    // 它们晚到的话会被当成下一轮的信号,下一轮的用量再顺延记到后一轮头上(Codex 评审 10-10)。
+    const forkLines = () => (existsSync(engineLog) ? readFileSync(engineLog, 'utf8') : '').split('\n').filter((l) => /\[historian\] fork 判官(用量|:上下文超窗|失败)/.test(l));
+    const mainLast = (ev) => { const u = [...(ev.usages || [])].reverse().find((x) => !x.phase); return u && Number(u.prompt) ? (Number(u.cached) || 0) / Number(u.prompt) : null; };
+    const hit = (u) => u.cached != null && u.prompt > 0 && u.cached / u.prompt >= 0.5;
+    const show = (u) => `输入 ${u.prompt} / 缓存 ${u.cached ?? '没报'}(${hitPct(u.cached != null && u.prompt ? u.cached / u.prompt : null)})`;
+    const t = Date.now();
+    const prior = (await api('/agent/special/config')).config?.historian;
+    await api('/agent/special/config', { method: 'POST', body: JSON.stringify({ historian: { enabled: true, modelId: MODEL, everyRounds: 1, firstRoundTrigger: true, mode: 'fork' } }) });
+    // 每轮的对话要有点分量:新增内容不足 120 字的琐碎轮,判官整轮跳过。
+    const turns = [
+      { key: 'a#1', sid: `live-forkcache-a-${t}`, msg: '我在给一个五人小团队定代码评审的规矩。用三四句话说说,评审里最值得坚持的两条是什么、为什么。' },
+      { key: 'a#2', sid: `live-forkcache-a-${t}`, msg: '要是团队里有人总拖着不看别人的改动,这两条里哪一条先撑不住?也用三四句话。' },
+      { key: 'b#1', sid: `live-forkcache-b-${t}`, msg: 'Explain in about four sentences why database indexes speed up reads but slow down writes.' },
+      { key: 'c#1', sid: `live-forkcache-c-${t}`, msg: '用三四句话解释一下,为什么长途飞行往东飞比往西飞更难倒时差。' },
+    ];
+    const judge = [], storms = [];
+    try {
+      for (const x of turns) {
+        const before = forkLines().length;
+        const ev = await run(x.sid, x.msg);
+        if (ev.error || !ev.done) { judge.push({ key: x.key, missed: `主对话失败:${ev.error || '没跑完'}` }); continue; }
+        const fresh = await until(() => { const l = forkLines(); return l.length > before ? l.slice(before) : null; }, 120_000, 1500);
+        const m = /fork 判官用量 prompt=(\d+) cached=(\d+|-) completion=(\d+)/.exec((fresh || []).join('\n'));
+        judge.push({ key: x.key, main: mainLast(ev), ...(m
+          ? { prompt: Number(m[1]), cached: m[2] === '-' ? null : Number(m[2]), completion: Number(m[3]) }
+          : { missed: fresh ? fresh.at(-1).replace(/^.*\[historian\] /, '').slice(0, 120) : '120 秒内判官没起(没到点 / 没有快照 / 上一轮的复盘还占着)' }) });
+        await sleep(1500); // 让这一轮复盘的落库收尾,别占着下一轮
+      }
+      const how = 'Before you answer, stress-test the choice with the self_brainstorm tool: load it with load_tools if it is not available yet, then call it once, on its own, with rounds set to 1 and no custom perspectives. After the digest comes back, give me your recommendation in two sentences.';
+      for (const [i, q] of ['I am choosing how to store user settings for a small desktop app: one JSON file, or SQLite.', 'I am choosing how a two-person team should ship a small web app: deploy on every merge, or one release a week.'].entries()) {
+        storms.push(await run(`live-forkcache-s${i + 1}-${t}`, `${q} ${how}`, 420_000));
+      }
+    } finally {
+      if (prior) await api('/agent/special/config', { method: 'POST', body: JSON.stringify({ historian: prior }) }).catch(() => {});
+    }
+    const seats = storms.flatMap((ev, i) => (ev.usages || []).filter((u) => u.phase === 'brainstorm')
+      .map((u) => ({ run: i + 1, round: (Number(u.iteration) || 0) + 1, prompt: Number(u.prompt) || 0, cached: u.cacheReported === false ? null : Number(u.cached) || 0, completion: Number(u.completion) || 0 })));
+    const judged = judge.filter((j) => j.prompt != null), first = seats.filter((s) => s.round === 1);
+    // 每条腿容一次偶发;量到的不足一半 = 这条腿没量成(判官回落 / 模型没调工具),不许靠「没量到的不算」过关。
+    const leg = (got, want) => got.length * 2 > want && got.filter((u) => !hit(u)).length <= 1;
+    // 分身按会话各自核:每回正好 3 席(缺省三席、只做第一轮、只调一次)才算量到。合起来数的话,一个会话调了两次(第二次读的是第一次写下的)、
+    // 另一个会话没调,也能凑出「6 席里只有 1 席没读到」(Codex 评审 10-10)。
+    const okJudge = leg(judged, turns.length), okSeats = storms.every((_, i) => first.filter((x) => x.run === i + 1).length === 3) && leg(first, storms.length * 3);
+    return {
+      ok: okJudge && okSeats,
+      detail: [
+        `判官${okJudge ? '✓' : '✗'} 量到 ${judged.length}/${turns.length}、没读到一半 ${judged.filter((u) => !hit(u)).length} 次:${judge.map((j) => `${j.key} ${j.prompt != null ? `${show(j)},主循环末次 ${hitPct(j.main)}` : `没量到(${j.missed})`}`).join(';')}`,
+        `分身${okSeats ? '✓' : '✗'} 第一轮量到 ${first.length} 席、没读到一半 ${first.filter((u) => !hit(u)).length} 席:${storms.map((ev, i) => `第 ${i + 1} 回 ${first.filter((s) => s.run === i + 1).map(show).join(';') || `没量到(${ev.error || `工具 ${ev.toolCalls.join('→') || '无'}`})`},主循环末次 ${hitPct(mainLast(ev))}`).join(' / ')}`,
+      ].join(' | '),
+      output: storms.map((ev, i) => `[脑暴第 ${i + 1} 回] 工具 ${ev.toolCalls.join('→') || '无'}\n助手:${String(ev.content || '').slice(0, 600)}`).join('\n\n'),
+      forkSamples: { judge, seats },
+      toolCalls: storms.flatMap((ev) => ev.toolCalls),
+    };
+  });
   // ── 缓存结构:A(新会话) / B(新会话·同文) / B′(新会话·异文) / C(S2 后续) / D(S1 后续)──
   // 台架**证不了 token 省了多少**(样本太小、上游路由不可控),它证的是「结构没塌」:同会话后续调用还命中得了吗?
   // 跨会话那半(A vs B 的 headHash 相不相等)只**记录**不设门 —— 它受上游副本路由影响,红了也未必是引擎的锅(§2.4)。

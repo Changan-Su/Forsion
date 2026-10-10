@@ -5,8 +5,8 @@
  * 关键取舍(2026-07-30 设计评审定稿):
  *   - 分身**不是子代理**:无工具、无循环,每席每阶段 = 一次 LLM 补全。审批/写竞态/深度/超时全不沾。
  *   - 共享前缀 = 主 loop workingMessages 冻结快照(经 ctx.getWorkingMessages,绝不从 DB 重建——
- *     字节不一致则 provider 前缀缓存全 miss);cacheKey 沿用主会话 sessionId 路由(与 delegate 的
- *     per-subId 分键**方向相反**:这里同前缀,必须同键)。
+ *     字节不一致则 provider 前缀缓存全 miss);缓存路由键照主 loop 给(cacheKey=主会话 sessionId + agentId=本 run 的
+ *     agent;与 delegate 的 per-subId 分键**方向相反**:这里同前缀,必须同键)。
  *   - 多样性两层分工:内容层归主人格(perspectives 现场写,任务契约不是性格);结构层归引擎且
  *     不可让渡——强制对抗席(缺则自动补)/首轮独立(互不可见)/两轮封顶/温度上浮。
  *   - 收敛 = 机械汇编(不引入第三方总结模型;投票=同权重自我的假民主,亦不做)。
@@ -198,7 +198,7 @@ export async function runSelfBrainstorm(p: BrainstormParams): Promise<string> {
     });
   }
 
-  // 每席每阶段一次补全:同 provider 通道、cacheKey=主会话 sessionId(同前缀必须同键),流式回灌各自子聊天。
+  // 每席每阶段一次补全:同 provider 通道、缓存路由键照主 loop 给(同前缀必须同键),流式回灌各自子聊天。
   const complete = async (messages: ChatMessage[], subId: string, round: number): Promise<string> => {
     if (ctx.signal?.aborted) throw new Error('aborted');
     const payload = await llm.buildProviderPayload({
@@ -216,7 +216,11 @@ export async function runSelfBrainstorm(p: BrainstormParams): Promise<string> {
       attachments: [],
       stream: true,
       maxTokens: FORK_MAX_TOKENS,
+      // 路由键缺省按「agent + 模型」取(openaiCompat resolveCacheKey):只给会话键落在另一个桶里,前缀再一致也常读不到
+      // 主 loop 刚写下的缓存(10-10 真模型,第一轮 9 席里 3 席没读全)。ctx.agentSlug 就是主 loop 发请求时带的那个身份。
+      // 改后跑 live `--only forkcache`。
       cacheKey: ctx.sessionId,
+      agentId: ctx.agentSlug,
     });
     const res = await llm.streamProviderCompletion({
       apiKey,

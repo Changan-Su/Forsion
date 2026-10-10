@@ -3369,6 +3369,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       thinkingLevel,
       modelId,
       contextWindow: ctxWindowTokens,
+      agentId: activeAgentSlug,
+      verbosity: ps.verbosity,
     };
     // 上一轮被用户按停留下的信号排最前(那句写的是「上一轮」,其余写的是「这一轮」)。
     if (pendingStop) judgeSignals.unshift(pendingStop);

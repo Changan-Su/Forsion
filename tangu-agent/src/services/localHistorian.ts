@@ -18,7 +18,7 @@
  *     （remember），候选整理由每 Agent 的 Dream 设置控制。
  *   - fork（分身判官）：judge 原文改由「尾部分叉补全」产出——agentLoop 主路径 run done 时传入
  *     workingMessages 快照(HistorianForkSeed),用**会话模型**在全量在存上下文尾部追加一条判官指令做
- *     一次补全(cacheKey=sessionId + 同工具面 + 同思考档 → provider 前缀缓存可命中;借 self_brainstorm
+ *     一次补全(缓存路由键照主 loop 给:cacheKey=sessionId + agentId;同工具面 + 同思考档 → provider 前缀缓存可命中;借 self_brainstorm
  *     的缓存对齐管线,禁工具靠指令+结果侧丢弃)。相比 independent 的「DB 最近 30 条/8000 字」,判断者
  *     看到完整上下文;解析/落地与 independent 完全同路,快照缺席/超窗/失败自动回落 independent。
  * 配置见 special-agents.json（enabled 默认关、需选 modelId）。活动写 special_agent_log（隔离记录，
@@ -294,6 +294,10 @@ export interface HistorianForkSeed {
   modelId: string;
   /** 本 run 实际用的窗口(Ultra 不封顶):超窗护栏与主 loop 同一分母。缺省按模型现算(封顶 272k)。 */
   contextWindow?: number;
+  /** 主循环构建请求时带的 agent 身份与正文详略。缓存路由键缺省按「agent + 模型」取(openaiCompat resolveCacheKey),
+   *  分叉请求不带同一个 agentId 就落到另一个桶,前缀再一致也读不到主循环写下的缓存(10-10 输入建议首跑实测:3 次里 2 次缓存 0)。 */
+  agentId?: string;
+  verbosity?: 'low' | 'medium' | 'high';
 }
 
 /** 一次 fork 判官补全。超窗/失败/空产出/截断 → 返回 ''(调用方回落 independent 判断)。 */
@@ -326,11 +330,18 @@ async function forkJudge(
       stream: true,
       maxTokens: FORK_JUDGE_MAX_TOKENS,
       signal: historianSignal.getStore(),
-      cacheKey: sessionId, // 与主 loop 同键:同前缀必须同键(delegate 的 per-subId 分键方向相反)
+      // 缓存路由键要和主循环算出同一个(同前缀必须同键;delegate 的 per-subId 分键方向相反)。它缺省按「agent + 模型」取
+      // (openaiCompat resolveCacheKey),所以 cacheKey 与 agentId 两个都照主循环给 —— 只给会话键落在另一个桶里:
+      // 10-10 真模型,新会话第一轮的判官 9 次里 5 次缓存 0、4 次只读到 43%。改后跑 live `--only forkcache`。
+      cacheKey: sessionId,
+      agentId: seed.agentId,
     } as any);
     historianSignal.getStore()?.throwIfAborted();
     const res = await deps().brain.llm.streamProviderCompletion({ apiKey, baseUrl, payload, provider: (model as any)?.provider, signal: historianSignal.getStore() });
     historianSignal.getStore()?.throwIfAborted();
+    // 这一路值不值,只看它读没读到主循环写下的前缀缓存(cached 与 prompt 同量级才算读到)。上游没报缓存量时记 -,不当 0。
+    // live 台架 `--only forkcache` 认这一行,改措辞要一起改。
+    log(`fork 判官用量 prompt=${res?.usage?.prompt_tokens ?? 0} cached=${res?.usage?.cached_tokens ?? '-'} completion=${res?.usage?.completion_tokens ?? 0}`);
     await recordJudgeUsage(userId, seed.modelId, model, res);
     historianSignal.getStore()?.throwIfAborted();
     const out = String(res?.content || '').trim();
