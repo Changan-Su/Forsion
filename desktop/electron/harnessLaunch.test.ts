@@ -5,7 +5,7 @@
  */
 import { readdirSync, readFileSync, realpathSync } from 'fs'
 import { tmpdir } from 'os'
-import { join, sep } from 'path'
+import { join, parse, sep } from 'path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { defaultWorkspaceDir, setDevMode } from './forsionHome'
 const { workspaceEnv } = require('../scripts/lib/launch-electron.cjs') as { workspaceEnv: (env?: NodeJS.ProcessEnv) => NodeJS.ProcessEnv | undefined }
@@ -50,7 +50,7 @@ describe('台架的默认工作区隔离', () => {
   it('调用方自己安排了的不动:显式给了工作区 / 覆写了 HOME / TANGU_HOME 不在临时目录下 / 没给 env', () => {
     expect(workspaceEnv({ ...base, TANGU_HOME: home, FORSION_WORKSPACE_DIR: '/x' })!.FORSION_WORKSPACE_DIR).toBe('/x')
     expect(workspaceEnv({ ...base, TANGU_HOME: home, HOME: home })!.FORSION_WORKSPACE_DIR).toBeUndefined()
-    expect(workspaceEnv({ ...base, TANGU_HOME: join(__dirname, 'not-tmp') })!.FORSION_WORKSPACE_DIR).toBeUndefined()
+    expect(workspaceEnv({ ...base, TANGU_HOME: join(parse(tmpdir()).root, 'forsion-not-tmp') })!.FORSION_WORKSPACE_DIR).toBeUndefined()
     expect(workspaceEnv({ ...base, TANGU_HOME: join(tmpdir(), 'tangu') })!.FORSION_WORKSPACE_DIR).toBeUndefined() // 根 = 临时目录本身
     expect(workspaceEnv({ ...base })!.FORSION_WORKSPACE_DIR).toBeUndefined()
     expect(workspaceEnv(undefined)).toBeUndefined()
