@@ -17,13 +17,22 @@ export interface MemoryChange {
 }
 const MEMORY_ACTIONS = new Set(['add', 'update', 'forget'])
 
-/** 只认 remember 自己落库的成功回执(重开历史会话照样还原);list、没写进去的重复、报错、老后端的纯文本回执都不算。 */
+/** 只认 remember 自己落库的成功回执(重开历史会话照样还原);list、没写进去的重复、报错、老后端的纯文本回执都不算。
+ *  另认一种:重写协作说明时 manage_human 替 Agent 挪进记忆的句子(回执 moved[].memory,引擎 `tools/builtin/manageHuman.ts`)—— 同样是记忆里多了一条,同样上屏、能撤销。 */
 export function memoryChanges(events: ToolEvent[] = []): MemoryChange[] {
   const changes = new Map<string, MemoryChange>()
   for (const ev of events) {
-    if (ev.name !== 'remember' || !ev.done || ev.isError || !ev.result) continue
+    if ((ev.name !== 'remember' && ev.name !== 'manage_human') || !ev.done || ev.isError || !ev.result) continue
     try {
       const r = JSON.parse(ev.result)
+      if (ev.name === 'manage_human') {
+        (r?.kind === 'human_update' && Array.isArray(r.moved) ? r.moved : []).forEach((x: any, i: number) => {
+          const m = x?.memory
+          if ((m?.scope !== 'agent' && m?.scope !== 'project') || typeof m.entryId !== 'string' || !m.entryId || typeof m.content !== 'string' || !m.content) return
+          changes.set(`${ev.id}:${i}`, { callId: `${ev.id}:${i}`, action: 'add', scope: m.scope, ...(typeof m.project === 'string' ? { project: m.project } : {}), entryId: m.entryId, content: m.content })
+        })
+        continue
+      }
       if (r?.ok !== true || !MEMORY_ACTIONS.has(r.action) || (r.scope !== 'agent' && r.scope !== 'project') || r.duplicate) continue
       const entryId = typeof r.entry?.id === 'string' ? r.entry.id : typeof r.id === 'string' ? r.id : undefined
       const content = typeof r.entry?.content === 'string' ? r.entry.content : ''

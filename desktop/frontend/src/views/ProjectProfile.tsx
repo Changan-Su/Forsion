@@ -1,5 +1,5 @@
 import { HumanCollaborationPanel } from '../components/HumanCollaborationPanel'
-import type { HumanJump } from '../services/humanCollaboration'
+import { humanRewritable, type HumanJump } from '../services/humanCollaboration'
 import { useEffect, useMemo, useRef, useState, type ChangeEvent, type CSSProperties, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { AppWindow, ArrowLeft, Check, ChevronRight, Copy, ExternalLink, FileText, Folder, FolderGit2, FolderInput, FolderOpen, GitBranch, GitBranchPlus, GitCommitHorizontal, ImageUp, Loader2, MessageSquarePlus, Plus, RefreshCw, Search, Settings2, Smile, Sparkles, Star, TerminalSquare, Upload, Users, X } from 'lucide-react'
@@ -406,6 +406,14 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
     applyContext(r.context)
     setNotice(t('projectProfile.git.pushed', { target: r.target }))
   })
+  // 项目这一份的「重写」发给这个项目的载体会话(和「生成」同一条路);本机直连、非计划模式才有 manage_human
+  const carrierCfg = s.configBySession[session.id] || session.agent_config
+  const rewriteHuman = (key: 'projectPrompt' | 'agentPrompt') => humanRewritable(carrierCfg) ? () => {
+    if (current !== session.id) useApp.getState().setActiveId(session.id)
+    void useApp.getState().send(t(`human.rewrite.${key}`), [], undefined, undefined, undefined, session.id)
+  } : null
+  // 「同时适用」的那几份长期说明:只有载体会话的 Agent 自己那份能从这里重写(别的 Agent 的那份它不该改),其余不出这一项
+  const carrierSlug = carrierCfg?.agentSlug || carrierCfg?.soloAgentSlug || s.defaultSlug
   const generate = () => {
     if (!ctx || sessionRunning) return
     clear()
@@ -522,9 +530,9 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
       <fieldset disabled={!!busy} className="team-profile-fields" key={tab}>
         {loadError && <p className="agent-profile-error" role="alert" style={{ paddingTop: 16 }}>{loadError} <button className="profile-text-action" onClick={() => setReloadAt((n) => n + 1)}>{t('projectProfile.retry')}</button></p>}
         {tab === 'human' && <>
-          <HumanCollaborationPanel engine={homeTarget()} cfg={s.cfg} target={{ kind: 'project', sessionId: session.id }} name={workspace.name} running={running} jump={humanJump} />
+          <HumanCollaborationPanel engine={homeTarget()} cfg={s.cfg} target={{ kind: 'project', sessionId: session.id }} name={workspace.name} running={running} jump={humanJump} onRewrite={rewriteHuman('projectPrompt')} />
           {collaborationSlugs.map(slug => <details className="human-inherited" key={slug}><summary>{t('human.inherited', { name: agentOf(slug)?.name || slug })}</summary>
-            <HumanCollaborationPanel engine={homeTarget()} cfg={s.cfg} target={{ kind: 'agent', slug }} name={agentOf(slug)?.name || slug} running={running} />
+            <HumanCollaborationPanel engine={homeTarget()} cfg={s.cfg} target={{ kind: 'agent', slug }} name={agentOf(slug)?.name || slug} running={running} onRewrite={slug === carrierSlug ? rewriteHuman('agentPrompt') : undefined} />
           </details>)}
         </>}
         {tab === 'agents' && <>
