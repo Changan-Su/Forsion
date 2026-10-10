@@ -18,6 +18,7 @@ import { toSqliteDDL } from '../src/core/dialectDDL.js';
 import { STANDALONE_SCHEMA } from '../src/db/schemaStandalone.js';
 import { readHuman, writeHuman, renderHumanContext, removedLines, HUMAN_RULES } from '../src/agents/humanStore.js';
 import { manageHumanProvider } from '../src/tools/builtin/manageHuman.js';
+import { memoryLogProvider } from '../src/tools/builtin/memoryLog.js';
 import { getToolDefinitions, listDeferredTools } from '../src/tools/registry.js';
 import { humanProjectScope } from '../src/services/humanContext.js';
 import { checkWritePath } from '../src/tools/fsPolicy.js';
@@ -168,33 +169,58 @@ describe('HUMAN.md collaboration lifecycle', () => {
       expect(added.kind).toBe('human_update');
       const tidy = { action: 'update', scope: 'agent', expectedVersion: added.version, content: '# Working with me\nTell me who will read it.', summary: 'Tidy', evidence: 'Asked to tidy' };
       const pending = JSON.parse(await tool.execute(tidy, ctx));
-      expect(pending).toMatchObject({ kind: 'human_pending', saved: false, removed: [{ line: 1, text: 'Use sketches.' }, { line: 2, text: 'I will run the script first.' }, { line: 3, text: 'Tell me who reads it.' }] });
+      expect(pending).toMatchObject({ kind: 'human_pending', saved: false, removed: [{ line: 1, text: 'Use sketches.', under: 'Shared' }, { line: 2, text: 'I will run the script first.', under: 'Shared' }, { line: 3, text: 'Tell me who reads it.', under: 'Shared' }] });
       expect(pending.problems).toBeUndefined(); // 第一次只是没交代,不算出错
       expect((await readHuman({ kind: 'agent', slug: 'shared' })).content).toContain('I will run the script first.'); // 什么都没存
-      const partial = JSON.parse(await tool.execute({ ...tidy, removed: ['1 dropped', '2 memory', '9 reworded', 'nonsense'] }, ctx));
+      // 三种写法各自整句匹配:dropped 不写理由、memory 不带句子、「reworded into memory: …」这种混写都不认(混写原先被当成 reworded,那一句就没记);
+      // 同一行说了两次的作废重来;不在名单里的行号(9)多说了不算错
+      const partial = JSON.parse(await tool.execute({ ...tidy, removed: ['1 dropped', '2 reworded into memory: Run it.', '3 reworded', '3 dropped: twice', '9 reworded', 'nonsense'] }, ctx));
       expect(partial.kind).toBe('human_pending');
-      expect(partial.problems).toEqual(['Line 2: "memory" needs the sentence to save.', 'Not understood: "nonsense"', 'Line 3: not accounted for.']);
-      const done = JSON.parse(await tool.execute({ ...tidy, removed: ['1 dropped', '2 memory: Run the script before saying it is done.', '3: reworded'] }, ctx));
-      expect(done).toMatchObject({ kind: 'human_update', moved: [{ line: 'I will run the script first.', fact: 'Run the script before saying it is done.' }], dropped: ['Use sketches.'] });
+      expect(partial.problems).toEqual([expect.stringContaining('Not understood: "1 dropped"'), expect.stringContaining('Not understood: "2 reworded into memory: Run it."'), 'Line 3: given more than once; say where it went once.', expect.stringContaining('Not understood: "nonsense"'), 'Line 1: not accounted for.', 'Line 2: not accounted for.']);
+      expect((await deps().brain.memory.getMemorySnapshot!('owner')).entries.map((e) => e.content)).not.toContain('Run it.');
+      const tooLong = JSON.parse(await tool.execute({ ...tidy, removed: ['1 dropped: unused', `2 memory: ${'x'.repeat(301)}`, '3 reworded'] }, ctx));
+      expect(tooLong.problems).toEqual(['Line 2: the sentence is 301 characters; at most 300.']);
+      // 两句要记、第二句没记上:文档不动,照实说第一句已经在记忆里
+      const real = memoryLogProvider.tools().find((x) => x.name === 'remember')!; let calls = 0;
+      const spy = vi.spyOn(memoryLogProvider, 'tools').mockReturnValue([{ ...real, execute: async (a, c) => (++calls === 1 ? real.execute(a, c) : 'Error: memory is unavailable.') }]);
+      const half = JSON.parse(await tool.execute({ ...tidy, removed: ['1 memory: The human likes sketches.', '2 memory: Run the script before saying it is done.', '3 reworded'] }, ctx));
+      spy.mockRestore();
+      expect(half).toMatchObject({ kind: 'human_pending', saved: false, alreadySaved: ['The human likes sketches.'], problems: [expect.stringContaining('Line 2: could not be saved to memory')] });
+      expect((await readHuman({ kind: 'agent', slug: 'shared' })).content).toContain('I will run the script first.');
+      const done = JSON.parse(await tool.execute({ ...tidy, removed: ['1 dropped: The human stopped using sketches.', '2 memory: Run the script before saying it is done.', '3 reworded'] }, ctx));
+      expect(done).toMatchObject({ kind: 'human_update', moved: [{ line: 'I will run the script first.', fact: 'Run the script before saying it is done.' }], dropped: [{ line: 'Use sketches.', reason: 'The human stopped using sketches.' }] });
       expect(done.change.summary).toBe('Tidy');
       expect((await deps().brain.memory.getMemorySnapshot!('owner')).entries.map((e) => e.content)).toContain('Run the script before saying it is done.');
-      // 缺依据的照旧由落盘那一步拒,不会先把记忆记了
-      expect(await tool.execute({ action: 'update', scope: 'agent', expectedVersion: done.version, content: '# Empty', summary: 'x', removed: ['1 memory: Should not be saved.'] }, ctx)).toMatch(/^Error: Say what happened/);
+      // 会让落盘失败的(缺依据、摘要太长、版本不是现在这一版)都在记记忆之前挡下
+      const gone = { action: 'update', scope: 'agent', content: '# Empty', removed: ['1 memory: Should not be saved.'] };
+      expect(await tool.execute({ ...gone, expectedVersion: done.version, summary: 'x' }, ctx)).toMatch(/^Error: Say what happened/);
+      expect(await tool.execute({ ...gone, expectedVersion: done.version, summary: 'x'.repeat(241), evidence: 'e' }, ctx)).toMatch(/^Error: A short change summary/);
+      expect(await tool.execute({ ...gone, expectedVersion: added.version, summary: 'x', evidence: 'e' }, ctx)).toContain('changed elsewhere');
       expect((await deps().brain.memory.getMemorySnapshot!('owner')).entries.map((e) => e.content)).not.toContain('Should not be saved.');
+      // 比的是落盘后的样子:密钥那一行落盘时会被抹掉,所以它算被拿掉的行(原先按抹之前的内容比,它悄悄没了)
+      // 比的是落盘后的样子:新内容里带密钥的那一行落盘时会被抹成 [REDACTED],和磁盘上原有的那一行是同一行,不算拿掉
+      // (原先按抹之前的内容比,会把它当成被拿掉的行交回去)
+      const key = `sk-${'a1'.repeat(12)}`;
+      const kept = JSON.parse(await tool.execute({ action: 'update', scope: 'agent', expectedVersion: done.version, content: `# Working with me\nTell me who will read it.\nThe demo key is ${key}.`, summary: 'Key', evidence: 'Asked' }, ctx));
+      expect(kept.kind).toBe('human_update');
+      const again = JSON.parse(await tool.execute({ action: 'update', scope: 'agent', expectedVersion: kept.version, content: `# Working with me\nTell me who will read it.\nThe demo key is ${key}.\nSay when it is due.`, summary: 'Due', evidence: 'Asked' }, ctx));
+      expect(again.kind).toBe('human_update');
       return saved;
     }, 'shared');
     expect(result.kind).toBe('human_update'); expect(result.change.scope).toEqual({ kind: 'agent', slug: 'shared' });
-    expect(sync.mock.calls).toEqual([['owner', 'shared'], ['owner', 'shared'], ['owner', 'shared']]); // 存上的三次各排一次;归属(显示)agent,不是记忆桶 'first';只读、被挡下的、等交代的都不排同步
+    expect(sync.mock.calls).toEqual(Array(5).fill(['owner', 'shared'])); // 存上的五次各排一次;归属(显示)agent,不是记忆桶 'first';只读、被挡下的、等交代的都不排同步
     expect((await readHuman(scope)).content).not.toContain('Use sketches');
-    expect((await readHuman({ kind: 'agent', slug: 'shared' })).content).toBe('# Working with me\nTell me who will read it.');
+    expect((await readHuman({ kind: 'agent', slug: 'shared' })).content).toBe('# Working with me\nTell me who will read it.\nThe demo key is [REDACTED].\nSay when it is due.');
     // agent 的写入盖上写法版本的章;用户自己改的不盖(界面靠这个认「旧版本写的」)
     const after = await writeHuman({ kind: 'agent', slug: 'shared' }, { expectedVersion: (await readHuman({ kind: 'agent', slug: 'shared' })).version, content: '# Mine', summary: 'Hand edit' }, 'user');
-    expect(after.document.history.map((h) => [h.actor, h.rules])).toEqual([['user', undefined], ['agent', HUMAN_RULES], ['agent', HUMAN_RULES], ['agent', HUMAN_RULES]]);
+    expect(after.document.history.map((h) => [h.actor, h.rules])).toEqual([['user', undefined], ...Array(5).fill(['agent', HUMAN_RULES])]);
   });
   it('lists the lines an update took out: whole lines, numbered by the old note, headings and blanks ignored, reworded lines included', () => {
     const before = '# 协作约定\n\n- 先说给谁看。\n- 先说给谁看。\n\n## 我这边会做\n\n改完实际运行,并把结果贴出来。\n---\n';
-    expect(removedLines(before, '# 怎么配合\n\n- 先说给谁看。\n')).toEqual([{ line: 2, text: '改完实际运行,并把结果贴出来。' }]);
-    expect(removedLines(before, '- 你先说给谁看。')).toEqual([{ line: 1, text: '- 先说给谁看。' }, { line: 2, text: '改完实际运行,并把结果贴出来。' }]);
+    // under = 原来所在的小节:没有主语的那一句是谁的事,看它在哪个标题下面
+    expect(removedLines(before, '# 怎么配合\n\n- 先说给谁看。\n')).toEqual([{ line: 2, text: '改完实际运行,并把结果贴出来。', under: '我这边会做' }]);
+    expect(removedLines(before, '- 你先说给谁看。')).toEqual([{ line: 1, text: '- 先说给谁看。', under: '协作约定' }, { line: 2, text: '改完实际运行,并把结果贴出来。', under: '我这边会做' }]);
+    expect(removedLines('没有标题的一行', '')).toEqual([{ line: 1, text: '没有标题的一行' }]);
     expect(removedLines('', '- x')).toEqual([]);
     expect(removedLines(before, before)).toEqual([]);
   });

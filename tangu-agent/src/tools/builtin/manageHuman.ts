@@ -1,7 +1,8 @@
 import type { ToolProvider } from '../toolRegistry.js';
 import { currentDisplayAgentSlug } from '../../seams/runContext.js';
 import { DEFAULT_AGENT_SLUG } from '../../core/tanguHome.js';
-import { HUMAN_WRITING, readHuman, removedLines, writeHuman, type HumanScope } from '../../agents/humanStore.js';
+import { HUMAN_WRITING, assertHumanInput, readHuman, removedLines, writeHuman, type HumanScope } from '../../agents/humanStore.js';
+import { redactSecrets } from '../../core/redact.js';
 import { humanProjectScope } from '../../services/humanContext.js';
 import { effectiveRemote } from '../../services/remoteOrigin.js';
 import { scheduleAgentFilesSync } from '../../services/agentFileSync.js';
@@ -19,22 +20,29 @@ const SHORT_VERSION = 12;
 // 把「先记下再拿掉」说进请求里:两种说法合计 6 轮里 4 轮记全(它记的是和眼前的事有关的几条);把拿掉的行放进回执里请它补记:它补了相关的,无关的那条照样漏。
 // 所以改成结构上不靠它自觉:拿掉了行的写入先不存,把这些行编号交回;它得逐行说去向(memory / reworded / dropped),说全了才存,
 // 归 memory 的那句由这里直接记进记忆(走 remember 的同一条路:长度、去重、写满的处理都一样),不指望它自己另调一次。
-// 分不出的那部分仍靠它判断(把自己的承诺标成 reworded / dropped):台架 `--only humanreal --humanreal-legacy` 量的就是这个。
-type Disposition = { to: 'memory' | 'reworded' | 'dropped'; fact?: string };
-const PENDING = 'Nothing was saved yet. This update takes the numbered lines in `removed` out of the note. Resend the same update (same content, summary, evidence and expectedVersion) with `removed`: one string per line number, saying where the line went. "<n> memory: <one sentence>" when the line says what you will do or how the human wants you to work: it may be the only record of something they asked of you, so it must not be lost, whether or not it relates to the current task. The sentence (at most 300 characters, in the human\'s language) is saved to your memory by this tool; do not also call remember for it. "<n> reworded" when its point is still in the note in other words. "<n> dropped" when the human no longer needs it; for a line about what you will do, only if the human told you to forget it.';
+// 分不出的那部分仍靠它判断(把自己的承诺标成 reworded / dropped,或者留在说明里改成让用户去做):台架 `--only humanreal --humanreal-legacy` 量的就是这个。
+// 同一轮实测里它犯过的两样都写进了下面那段话:随口一句「只留我这边该做的」被它当成「可以忘掉」(标 dropped);
+// 没有主语的一句承诺(看不到它原来在「我这边会做」下面)被它当成用户的事留下(标 reworded)—— 所以交回的每一行带上原来的小节标题,dropped 要写理由。
+type Disposition = { to: 'memory' | 'reworded' | 'dropped'; text?: string };
+const PENDING = 'Nothing was saved yet. This update takes the numbered lines in `removed` out of the note (`under` is the heading each line sat under). Resend the same update (same content, summary, evidence and expectedVersion) with `removed`: one string per line number. '
+  + '"<n> memory: <one sentence>" for a line that says what you will do or how the human wants you to work. It may be the only record of something they asked of you, so it must be kept, whether or not it relates to the current task; being asked to keep only the human\'s side in the note is not being asked to forget it. The sentence (at most 300 characters, in the human\'s language) is saved to your memory by this tool; do not also call remember for it. Check that the new note does not still carry that line as something the human should do: your promise must not become their task. '
+  + '"<n> reworded" only for a line that already asked something of the human and whose point is still in the note. '
+  + '"<n> dropped: <reason>" when the human no longer needs it. Never for a line about what you will do, unless the human told you to forget that very thing.';
 function readDispositions(given: unknown, lines: number[]): { byLine: Map<number, Disposition>; problems: string[] } {
-  const byLine = new Map<number, Disposition>(); const problems: string[] = [];
+  const byLine = new Map<number, Disposition>(); const problems: string[] = []; const bad = new Set<number>();
   for (const raw of Array.isArray(given) ? given : []) {
-    const m = typeof raw === 'string' ? raw.trim().match(/^(\d+)\s*[:.)]?\s*(memory|reworded|dropped)\b\s*[:：-]?\s*([\s\S]*)$/i) : null;
-    const n = m ? Number(m[1]) : 0;
-    if (!m) { problems.push(`Not understood: ${JSON.stringify(raw).slice(0, 80)}`); continue; }
+    // 三种写法各自整句匹配:「1 reworded into memory: …」这种不认(原先宽松地当成 reworded,尾巴被吞掉,那一句就没记)
+    const s = typeof raw === 'string' ? raw.trim() : '';
+    const m = s.match(/^(\d+)\s+(memory|dropped)\s*[:：]\s*([\s\S]+)$/i) || s.match(/^(\d+)\s+(reworded)\.?$/i);
+    if (!m) { problems.push(`Not understood: ${JSON.stringify(raw).slice(0, 80)}. Use "<n> memory: <sentence>", "<n> reworded" or "<n> dropped: <reason>".`); continue; }
+    const n = Number(m[1]);
     if (!lines.includes(n)) continue; // 这一行这次没被拿掉(第二次交上来的内容把它留下了):多说的不算错
-    const to = m[2].toLowerCase() as Disposition['to']; const fact = m[3].trim();
-    if (to === 'memory' && !fact) problems.push(`Line ${n}: "memory" needs the sentence to save.`);
-    else if (to === 'memory' && fact.length > REMEMBER_FACT_MAX_CHARS) problems.push(`Line ${n}: the sentence is ${fact.length} characters; at most ${REMEMBER_FACT_MAX_CHARS}.`);
-    else byLine.set(n, to === 'memory' ? { to, fact } : { to });
+    const to = m[2].toLowerCase() as Disposition['to']; const text = (m[3] || '').trim();
+    if (byLine.has(n) || bad.has(n)) { byLine.delete(n); bad.add(n); problems.push(`Line ${n}: given more than once; say where it went once.`); continue; }
+    if (to === 'memory' && text.length > REMEMBER_FACT_MAX_CHARS) { bad.add(n); problems.push(`Line ${n}: the sentence is ${text.length} characters; at most ${REMEMBER_FACT_MAX_CHARS}.`); continue; }
+    byLine.set(n, to === 'reworded' ? { to } : { to, text });
   }
-  for (const n of lines) if (!byLine.has(n) && !problems.some((p) => p.startsWith(`Line ${n}:`))) problems.push(`Line ${n}: not accounted for.`);
+  for (const n of lines) if (!byLine.has(n) && !bad.has(n)) problems.push(`Line ${n}: not accounted for.`);
   return { byLine, problems };
 }
 const rememberFact = async (fact: string, scope: HumanScope, ctx: ToolContext): Promise<string> =>
@@ -57,7 +65,7 @@ export const manageHumanProvider: ToolProvider = {
         expectedVersion: { type: 'string', description: 'Exact version from the most recent read.' },
         summary: { type: 'string', description: 'Shown to the user on the change card: what changed, in their language and everyday words (at most 240 characters).' },
         evidence: { type: 'string', description: 'Shown to the user as the reason: what happened in your work together that shows this would help them, in their language and everyday words (at most 600 characters).' },
-        removed: { type: 'array', items: { type: 'string' }, description: 'Only after the tool listed lines your update takes out: one string per line number, "<n> memory: <sentence to save>", "<n> reworded" or "<n> dropped".' },
+        removed: { type: 'array', items: { type: 'string' }, description: 'Only after the tool listed lines your update takes out: one string per line number, "<n> memory: <sentence to save>", "<n> reworded" or "<n> dropped: <reason>".' },
       }, required: ['action', 'scope'] },
     } },
     execute: async (args, ctx) => {
@@ -72,28 +80,37 @@ export const manageHumanProvider: ToolProvider = {
         ctx.signal?.throwIfAborted();
         const given: unknown = args.expectedVersion;
         const expectedVersion = typeof given === 'string' && given.length === SHORT_VERSION && /^[a-f0-9]+$/.test(given) && current.version.startsWith(given) ? current.version : given;
-        // 版本对不上、或缺摘要 / 依据的,交给下面的落盘去拒(它给的报错更对路,也免得先记了记忆后面又存不上);其余的拿掉了行就先过交代这一关
-        const complete = [args.content, args.summary, args.evidence].every((v) => typeof v === 'string') && !!args.summary.trim() && !!args.evidence.trim();
-        const taken = complete && expectedVersion === current.version ? removedLines(current.content, args.content) : [];
+        // 先把会让落盘失败的都挡在前面(版本、内容 / 摘要 / 依据):后面要先记记忆再存文档,不能记了一半才发现存不上。
+        // 版本在这里就比:拿「核过拿掉了哪些行」的那个版本去落盘,中间文档被别处改回去也钻不过去。
+        if (typeof expectedVersion === 'string' && expectedVersion !== current.version) return 'Error: The collaboration document changed elsewhere. Reload it before applying your edit.';
+        if (typeof expectedVersion === 'string') assertHumanInput(args.content, args.summary, args.evidence, 'agent');
+        const next = typeof args.content === 'string' ? redactSecrets(args.content) : args.content; // 和落盘的是同一份:比「拿掉了哪些行」要按磁盘上实际会变成的样子
+        const taken = typeof expectedVersion === 'string' ? removedLines(current.content, next) : [];
         const text = new Map(taken.map((x) => [x.line, x.text]));
         const { byLine, problems } = readDispositions(args.removed, taken.map((x) => x.line));
-        const pending = (extra: string[] = []) => JSON.stringify({ kind: 'human_pending', saved: false, removed: taken,
-          ...(args.removed !== undefined || extra.length ? { problems: [...problems, ...extra] } : {}), message: PENDING });
-        if (taken.length && problems.length) return pending();
         const moved: Array<{ line: string; fact: string }> = [];
+        const saved = () => (moved.length ? { alreadySaved: moved.map((m) => m.fact), note: 'The sentences in alreadySaved are in your memory now and stay there; resending them will not duplicate them.' } : {});
+        const pending = (extra: string[] = []) => JSON.stringify({ kind: 'human_pending', saved: false, removed: taken,
+          ...(args.removed !== undefined || extra.length ? { problems: [...problems, ...extra] } : {}), ...saved(), message: PENDING });
+        if (taken.length && problems.length) return pending();
         for (const [n, d] of byLine) {
           if (d.to !== 'memory') continue;
-          const receipt = await rememberFact(d.fact!, scope, ctx);
-          if (/^Error\b/.test(receipt) || receipt.includes('未写入')) return pending([`Line ${n}: could not be saved to memory (${receipt.slice(0, 300)}). Nothing was changed in the note.`]);
-          moved.push({ line: text.get(n)!, fact: d.fact! });
+          const receipt = await rememberFact(d.text!, scope, ctx);
+          if (/^Error\b/.test(receipt) || receipt.includes('未写入')) return pending([`Line ${n}: could not be saved to memory (${receipt.slice(0, 300)}). The note was not changed.`]);
+          moved.push({ line: text.get(n)!, fact: d.text! });
         }
-        const dropped = [...byLine].filter(([, d]) => d.to === 'dropped').map(([n]) => text.get(n)!);
-        const result = await writeHuman(scope, { content: args.content, summary: args.summary, evidence: args.evidence, expectedVersion }, 'agent');
+        const dropped = [...byLine].filter(([, d]) => d.to === 'dropped').map(([n, d]) => ({ line: text.get(n)!, reason: d.text! }));
+        let result: Awaited<ReturnType<typeof writeHuman>>;
+        try { result = await writeHuman(scope, { content: next, summary: args.summary, evidence: args.evidence, expectedVersion }, 'agent'); }
+        catch (e) { // 记忆已经记了、文档没存上(别处刚好改了它):照实说哪几句已经在记忆里
+          if (!moved.length) throw e;
+          return `Error: ${e instanceof Error ? e.message : String(e)} The note was not changed. ${JSON.stringify(saved())}`;
+        }
         // 不带 slug 是空操作;带的是归属(显示)agent —— HUMAN.md 跟着它的定义文件一起同步,不进记忆桶。
         if (scope.kind === 'agent' && result.change) scheduleAgentFilesSync(ctx.userId, scope.slug);
         return JSON.stringify({ kind: 'human_update', change: result.change, version: result.document.version.slice(0, SHORT_VERSION),
           message: result.change ? 'Applied immediately. The next run will read this version. The user can edit or undo from the update card.' : 'No change; the content is already current.',
-          ...(moved.length || dropped.length ? { moved, dropped, next: 'Tell the human, in their own words, which lines you moved to your memory and which you dropped.' } : {}) });
+          ...(moved.length || dropped.length ? { moved, dropped, next: 'Tell the human, in their own words, which lines you moved to your memory and which you dropped and why.' } : {}) });
       } catch (e) { return `Error: ${e instanceof Error ? e.message : String(e)}`; }
     },
   }],

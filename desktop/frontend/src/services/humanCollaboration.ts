@@ -14,9 +14,14 @@ export interface HumanDocument {
   history: Array<HumanChange & { canUndo: boolean }>; maxLength: number
 }
 /** 「这份是旧版本写的」:只在更新记录证明得了的时候才说 —— 记录里全是 Agent 的写入、每一条都没有写法版本的章、用户没有手改过(撤销也算手改)。
- *  没有记录的(别的设备同步过来的、直接放在磁盘上的)不判:更新记录只存在本机,认不准的不提示。 */
-export const humanLegacy = (doc: Pick<HumanDocument, 'content' | 'history'>): boolean =>
-  !!doc.content.trim() && doc.history.length > 0 && doc.history.every(h => h.actor === 'agent' && !h.rules)
+ *  没有记录的(别的设备同步过来的、直接放在磁盘上的)不判:更新记录只存在本机,认不准的不提示。
+ *  现在这份必须就是最后一条记录写成的那份(history 新的在前):之后在磁盘上改过、或从别的设备同步来了新内容,记录没跟上,也不判。 */
+export const humanLegacy = (doc: Pick<HumanDocument, 'content' | 'history' | 'version'>): boolean =>
+  !!doc.content.trim() && doc.history.length > 0 && doc.history[0].afterVersion === doc.version && doc.history.every(h => h.actor === 'agent' && !h.rules)
+/** 「让 Agent 重写」能不能从这个会话发:manage_human 只在本机直连、非计划模式的单个 Agent 会话里有。
+ *  团队 / 群聊不发 —— 那一句会被每个成员收到,各改各的;外部引擎的会话里没有这个工具。 */
+export const humanRewritable = (c?: { execMode?: string; planMode?: boolean; groupChat?: boolean; teamSlug?: string; engineId?: string; soloEngineId?: string } | null): boolean =>
+  !!c && c.execMode === 'host' && !c.planMode && !c.groupChat && !c.teamSlug && !c.engineId && !c.soloEngineId
 export interface HumanJump { at: number; edit?: boolean; changeId?: string }
 export const HUMAN_CHANGED_EVENT = 'forsion:human-changed'
 export const humanTargetKey = (target: HumanTarget) => target.kind === 'agent' ? `agent:${target.slug}` : `project:${target.sessionId}`

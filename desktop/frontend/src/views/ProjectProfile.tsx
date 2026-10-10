@@ -1,5 +1,5 @@
 import { HumanCollaborationPanel } from '../components/HumanCollaborationPanel'
-import type { HumanJump } from '../services/humanCollaboration'
+import { humanRewritable, type HumanJump } from '../services/humanCollaboration'
 import { useEffect, useMemo, useRef, useState, type ChangeEvent, type CSSProperties, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { AppWindow, ArrowLeft, Check, ChevronRight, Copy, ExternalLink, FileText, Folder, FolderGit2, FolderInput, FolderOpen, GitBranch, GitBranchPlus, GitCommitHorizontal, ImageUp, Loader2, MessageSquarePlus, Plus, RefreshCw, Search, Settings2, Smile, Sparkles, Star, TerminalSquare, Upload, Users, X } from 'lucide-react'
@@ -408,7 +408,7 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
   })
   // 项目这一份的「重写」发给这个项目的载体会话(和「生成」同一条路);本机直连、非计划模式才有 manage_human
   const carrierCfg = s.configBySession[session.id] || session.agent_config
-  const rewriteHuman = (key: 'projectPrompt' | 'agentPrompt') => carrierCfg?.execMode === 'host' && !carrierCfg.planMode ? () => {
+  const rewriteHuman = (key: 'projectPrompt' | 'agentPrompt') => humanRewritable(carrierCfg) ? () => {
     if (current !== session.id) useApp.getState().setActiveId(session.id)
     void useApp.getState().send(t(`human.rewrite.${key}`), [], undefined, undefined, undefined, session.id)
   } : null

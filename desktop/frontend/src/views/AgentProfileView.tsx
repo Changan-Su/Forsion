@@ -12,7 +12,7 @@ import { openAgentProfile } from './agentProfileNav'
 import { AgentMemoryPanel } from '../components/AgentMemoryPanel'
 import { AgentMemoryModal } from '../components/AgentMemoryModal'
 import { HumanCollaborationPanel } from '../components/HumanCollaborationPanel'
-import type { HumanJump } from '../services/humanCollaboration'
+import { humanRewritable, type HumanJump } from '../services/humanCollaboration'
 import { AgentHarnessPanel } from '../components/AgentHarnessPanel'
 import { AgentSchedulePanel } from '../components/AgentSchedulePanel'
 import type { AgentConfig, NormalAgentDef, SessionRecord, SkillInfo, ToolsResponse } from '../types'
@@ -236,7 +236,7 @@ function AgentProfile({ agent, compact = false, sessionId, rewriteSessionId, evo
   })))
   // 「重写」和 /refine 同一道门(manage_human 只在本机直连、非计划模式的会话里有),另加一条:那个会话的 Agent 就是这一页的 Agent,否则它改的是别人的那份
   const rewriteSid = sessionId || rewriteSessionId
-  const rewriteHuman = rewriteSid && s.rewriteConfig?.execMode === 'host' && !s.rewriteConfig.planMode && (s.rewriteConfig.agentSlug || s.rewriteConfig.soloAgentSlug || s.defaultSlug) === agent.slug
+  const rewriteHuman = rewriteSid && humanRewritable(s.rewriteConfig) && (s.rewriteConfig!.agentSlug || s.rewriteConfig!.soloAgentSlug || s.defaultSlug) === agent.slug
     ? () => { void useApp.getState().send(t('human.rewrite.agentPrompt'), [], undefined, undefined, undefined, rewriteSid) } : null
   const [section, setSection] = useState<Section>(humanJump ? 'human' : evolutionJumpAt ? 'growth' : 'config')
   const [growth, setGrowth] = useState<Growth>(evolutionJumpAt ? 'evolution' : 'memory')

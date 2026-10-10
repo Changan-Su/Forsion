@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { humanChanges, humanLegacy } from './humanCollaboration'
+import { humanChanges, humanLegacy, humanRewritable } from './humanCollaboration'
 import type { ToolEvent } from '../types'
 const change = { id: 'f579dfd5-ff45-4d89-8a73-2c2b6b4db1cd', scope: { kind: 'agent', slug: 'xyra' }, summary: 'Use sketches', evidence: 'User feedback', at: '2026-09-29T00:00:00Z', actor: 'agent', beforeVersion: 'a'.repeat(64), afterVersion: 'b'.repeat(64) }
 const event: ToolEvent = { id: 'call-1', name: 'manage_human', done: true, result: JSON.stringify({ kind: 'human_update', change }) }
@@ -15,11 +15,20 @@ describe('collaboration update receipts', () => {
 
 describe('humanLegacy(这份是不是旧版本写的)', () => {
   const entry = (actor: 'agent' | 'user', rules?: number) => ({ id: `${actor}${rules ?? ''}`, scope: { kind: 'agent' as const, slug: 'a' }, summary: 's', evidence: '', at: '2026-10-01T00:00:00Z', actor, beforeVersion: 'x', afterVersion: 'y', canUndo: false, ...(rules ? { rules } : {}) })
-  it('记录里全是没盖章的 Agent 写入才算', () => { expect(humanLegacy({ content: '我会先……', history: [entry('agent'), entry('agent')] })).toBe(true) })
-  it('新版本写过一次(盖了章)就不算', () => { expect(humanLegacy({ content: '你先告诉我……', history: [entry('agent', 2), entry('agent')] })).toBe(false) })
-  it('用户手改过(撤销也是用户的一条记录)不算', () => { expect(humanLegacy({ content: '我会先……', history: [entry('user'), entry('agent')] })).toBe(false) })
+  it('记录里全是没盖章的 Agent 写入才算', () => { expect(humanLegacy({ content: '我会先……', version: 'y', history: [entry('agent'), entry('agent')] })).toBe(true) })
+  it('新版本写过一次(盖了章)就不算', () => { expect(humanLegacy({ content: '你先告诉我……', version: 'y', history: [entry('agent', 2), entry('agent')] })).toBe(false) })
+  it('用户手改过(撤销也是用户的一条记录)不算', () => { expect(humanLegacy({ content: '我会先……', version: 'y', history: [entry('user'), entry('agent')] })).toBe(false) })
   it('没有记录的不判(别的设备同步过来的、直接放在磁盘上的);空文档也不提示', () => {
-    expect(humanLegacy({ content: '我会先……', history: [] })).toBe(false)
-    expect(humanLegacy({ content: '  ', history: [entry('agent')] })).toBe(false)
+    expect(humanLegacy({ content: '我会先……', version: 'y', history: [] })).toBe(false)
+    expect(humanLegacy({ content: '  ', version: 'y', history: [entry('agent')] })).toBe(false)
+  })
+  it('现在这份不是最后一条记录写成的(磁盘上改过 / 别的设备同步来了新内容)也不判', () => { expect(humanLegacy({ content: '你先告诉我……', version: 'z', history: [entry('agent')] })).toBe(false) })
+})
+
+describe('humanRewritable(这个会话能不能发「重写」)', () => {
+  const host = { execMode: 'host' }
+  it('本机直连的单个 Agent 会话可以', () => { expect(humanRewritable(host)).toBe(true) })
+  it('计划模式、云端、团队 / 群聊、外部引擎的会话都不行;没有会话也不行', () => {
+    for (const c of [{ ...host, planMode: true }, { execMode: 'cloud' }, { ...host, groupChat: true }, { ...host, teamSlug: 'crew' }, { ...host, engineId: 'codex' }, { ...host, soloEngineId: 'codex' }, undefined, null]) expect(humanRewritable(c)).toBe(false)
   })
 })
