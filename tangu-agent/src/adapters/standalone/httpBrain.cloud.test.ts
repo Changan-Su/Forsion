@@ -71,6 +71,7 @@ describe('brain.cloud.request', () => {
       '/api/token-quota/../auth/handoff', '/api/token-quota/%2e%2e/auth/handoff', '/api//auth/handoff/../handoff',
       '/v1/images/generations', '/apix/thing', 'api/token-quota/my', '//evil.example/api/token-quota/my',
       'https://evil.example/api/token-quota/my', '/api/../admin/users',
+      '/api/git/credential', '/api/Git/Credential', '/api/github/credential',
     ]) {
       const r = await brain.cloud!.request({ path, method: 'POST', body: {} })
       expect(r, path).toEqual({ status: 0, error: 'path_not_allowed' })

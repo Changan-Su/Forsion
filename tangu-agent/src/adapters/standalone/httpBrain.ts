@@ -634,13 +634,15 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
       // 反斜杠;再交给 URL 规整一遍,规整前后必须逐字相同(点段在这一步现形)。不收「规整后才合法」的写法:
       // 前面的反代会合并斜杠、解码,引擎这边看着不是 /api/auth/ 的路径到 server 那里可以就是它。
       // /api/auth/ 整段不许:那里有把当前令牌原样换出来的接口(handoff / refresh),这个出口的约定是调用方只拿结果、拿不到令牌。
+      // 发推拉凭据的两个接口同理(响应体里就是令牌):Forsion Git 的那个只由上面的 brain.git 取,GitHub 的那个留给它自己的接缝。
       const rawPath = typeof req.path === 'string' ? req.path.split('?')[0] : '';
       const lower = rawPath.toLowerCase();
       let url: URL;
       try { url = new URL(`${base}${req.path}`); } catch { return { status: 0, error: 'path_not_allowed' }; }
       if (!/^\/api\/[A-Za-z0-9._~-]+(?:\/[A-Za-z0-9._~-]+)*$/.test(rawPath)
         || url.pathname !== `${new URL(base).pathname.replace(/\/+$/, '')}${rawPath}`
-        || lower === '/api/auth' || lower.startsWith('/api/auth/')) {
+        || lower === '/api/auth' || lower.startsWith('/api/auth/')
+        || lower === '/api/git/credential' || lower === '/api/github/credential') {
         return { status: 0, error: 'path_not_allowed' };
       }
       if (!tokenNow()) return { status: 401, json: null, error: 'not_signed_in' };
