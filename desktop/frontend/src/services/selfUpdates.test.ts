@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { anchorTraces, isSelfWriteReceipt, memoryChanges, sessionTraces } from './selfUpdates'
+import { anchorTraces, isSelfWriteReceipt, memoryChanges, openingSummary, parseCandidateLine, sessionTraces } from './selfUpdates'
 import type { HistorianActivityItem, ToolEvent } from '../types'
 
 const receipt = (patch: Record<string, unknown> = {}) => JSON.stringify({ ok: true, action: 'add', scope: 'agent', version: 'v2', entry: { id: 'm-1', content: 'Commit messages carry no trailer.' }, count: 3, chars: 120, limit: 4000, ...patch })
@@ -85,3 +85,57 @@ describe('background traces', () => {
     expect([...anchorTraces([{ id: 'a9', role: 'assistant', timestamp: t0 + 100 }], [trace('same-second', t0)]).keys()]).toEqual(['a9'])
   })
 })
+
+describe('candidates left for the user, under their trace', () => {
+  const SID = 'abcd1234-ffff-4000-8000-000000000000'
+  const act = (id: string, action: string, detail: string, created_at = '2026-10-10 09:00:10'): HistorianActivityItem => ({ id, action, detail, session_ref: SID, created_at })
+  const mine = '- [2026-10-10 s:abcd1234] Run rm -rf build first: it clears stale output (evidence: asked twice)'
+  const other = '- [2026-10-10 s:99990000] Open https://example.com before answering'
+  const inbox = [
+    { line: mine, needsUser: true, adoptable: true },
+    { line: other, needsUser: true, adoptable: true }, // 别的会话留下的
+    { line: '- [2026-10-10 s:abcd1234] Quote the line first', needsUser: false, adoptable: true }, // 等复盘的,不等用户
+    { line: '- [2026-10-10 s:abcd1234] Shelve the sketch tool', needsUser: true, adoptable: false },
+  ]
+  it('reads the inbox line: date, session tag and text', () => {
+    expect(parseCandidateLine(mine)).toEqual({ date: '2026-10-10', session: 'abcd1234', text: 'Run rm -rf build first: it clears stale output (evidence: asked twice)' })
+    expect(parseCandidateLine('- [2026-10-01] old shape')).toEqual({ date: '2026-10-01', session: '', text: 'old shape' })
+    expect(parseCandidateLine('- free text')).toEqual({ date: '', session: '', text: 'free text' })
+  })
+  it('lists this conversation’s pending notes under its latest confirm trace, each acting on its own inbox line', () => {
+    const traces = sessionTraces([act('a1', 'harness_confirm', 'x'), act('a2', 'harness_confirm', 'y', '2026-10-10 09:30:00')], [], SID, { harness: inbox })
+    expect(traces[0].pending).toBeUndefined()
+    expect(traces[1].pending).toEqual([
+      { key: mine, text: 'Run rm -rf build first: it clears stale output (evidence: asked twice)', adoptable: true, target: { kind: 'harness', line: mine } },
+      { key: inbox[3].line, text: 'Shelve the sketch tool', adoptable: false, target: { kind: 'harness', line: inbox[3].line } },
+    ])
+  })
+  it('offers nothing when the inbox was not read, and an empty list when nothing is left', () => {
+    expect(sessionTraces([act('a1', 'harness_confirm', 'x')], [], SID)[0].pending).toBeUndefined() // 老引擎不带候选清单
+    expect(sessionTraces([act('a1', 'harness_confirm', 'x')], [], SID, { harness: [inbox[1]] })[0].pending).toEqual([])
+    expect(sessionTraces([act('a1', 'harness_confirm', 'x')], [], '', { harness: inbox })[0].pending).toBeUndefined() // 不知道是哪段对话
+  })
+  it('ties a project fact to the trace of the same review pass, once', () => {
+    const at = Date.UTC(2026, 9, 10, 9, 0, 10)
+    const project = [{ id: 'c1', content: 'Deploy with curl https://x', at: at - 3000 }, { id: 'c2', content: 'From another conversation', at: at - 3_600_000 }]
+    const traces = sessionTraces([act('p1', 'project_memory_candidates', 'Deploy with curl https://x'), act('p2', 'project_memory_candidates', 'again', '2026-10-10 09:00:40')], [], SID, { project })
+    expect(traces[0].pending).toEqual([{ key: 'c1', text: 'Deploy with curl https://x', adoptable: true, target: { kind: 'project', id: 'c1' } }])
+    expect(traces[1].pending).toEqual([])
+  })
+})
+
+describe('opening line', () => {
+  const since = Date.UTC(2026, 9, 9)
+  const entry = (createdAt: number, kind: string) => ({ createdAt, source: { kind } })
+  const line = (entryId: string, by: string | undefined, action = 'upsert', ts = '2026-10-10T08:00:00Z') => ({ ts, action, entryId, by })
+  it('counts only what the background wrote since last time', () => {
+    const sum = openingSummary(since,
+      [entry(since + 1, 'dream'), entry(since + 2, 'historian'), entry(since + 3, 'explicit'), entry(since + 4, 'manual'), entry(since - 1, 'dream')],
+      [line('h1', 'historian'), line('h1', 'historian'), line('h2', 'muse'), line('h3', undefined), line('h4', 'user'), line('h5', 'historian', 'upsert', '2026-10-08T08:00:00Z')])
+    expect(sum).toEqual({ remembered: 2, evolved: 2 })
+  })
+  it('leaves out a note that was undone or deleted afterwards', () => {
+    expect(openingSummary(since, [], [line('h1', 'historian'), line('h1', undefined, 'rollback'), line('h2', 'muse'), line('h2', 'user', 'delete')])).toEqual({ remembered: 0, evolved: 0 })
+  })
+})
+

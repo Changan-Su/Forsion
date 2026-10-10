@@ -26,6 +26,7 @@ import { ApprovalTray } from './chat2/ApprovalTray'
 import { APPROVAL_UPDATE_OPEN, pendingPromptsOf } from './chat2/approvalQueue'
 import { RunStatsLine } from './chat2/RunStatsLine'
 import { SessionTraceLines, useSessionTraces } from '../components/SessionTraces'
+import { SessionOpening } from '../components/SessionOpening'
 import { inRunWindow } from '../stores/runStats'
 import { EmptyState2 } from './chat2/EmptyState2'
 import { FloatingToc } from './chat2/FloatingToc'
@@ -678,6 +679,9 @@ export function ChatView({ leaf, params }: ViewProps) {
             </div>
           </div>
         )}
+
+        {/* 开场:新对话(还没有消息)时说一句上次之后后台替这个 Agent 写下了什么。团队 / 外部引擎 / 小窗 / 成员会话不出。 */}
+        {!hasMessages && !historyLoading && !params.miniSurface && !params.childSurface && !mvCfg.teamSlug && !mvCfg.soloEngineId && s.connState === 'ok' && <SessionOpening slug={chatAgentSlug} />}
 
         <AnimatePresence>
           {s.filePreview && (

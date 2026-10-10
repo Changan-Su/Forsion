@@ -45,3 +45,14 @@
 .human-ask-foot { margin-top: 12px; }
 .human-acked { border: 0; background: transparent; }
 .human-acked:hover { color: var(--text); }
+
+/* 开场:新对话输入卡上方的一行,和项目选择条一样在 .composer-anchor 里、与输入卡同宽对齐 */
+.self-opening { padding: 0 24px 6px; }
+.self-opening-inner { max-width: 760px; margin: 0 auto; display: flex; align-items: center; gap: 6px 8px; flex-wrap: wrap; font-family: var(--font-ui); font-size: var(--ui-font-meta); line-height: var(--ui-line-meta); color: var(--text-muted); }
+.self-opening-text { min-width: 0; overflow-wrap: anywhere; }
+
+/* 留痕下面的待确认候选:一条一行,点的就是这一行 */
+.self-trace-rows { max-width: 700px; width: 100%; box-sizing: border-box; margin: 2px 0 4px; padding-left: 25px; font-family: var(--font-ui); }
+.self-trace-row { display: flex; align-items: flex-start; gap: 4px 12px; padding: 5px 0; border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent); }
+.self-trace-row-text { flex: 1 1 0; min-width: 0; color: var(--text); font-size: var(--ui-font-meta); line-height: var(--ui-line-body); overflow-wrap: anywhere; }
+.self-trace-note { margin: 2px 0 0; padding-left: 25px; font-family: var(--font-ui); font-size: var(--ui-font-caption); color: var(--text-muted); }
