@@ -2,7 +2,7 @@
 name: forsion-extension-development
 description: 当用户要给 Forsion / Tangu 做插件、主题、Space、智能体(agent)或捆绑包(bundle)——或要把某个能力做成可分发/可上架商店的扩展——时使用;已装的插件 / Space / 视图不出现、加载失败、更新后不工作要排查时也用(带一份插件体检脚本 tools/check-plugin.mjs)。内置五类官方模板(samples/),讲清各自的格式基线与硬约束(尤其两种"插件"是完全不同的系统),照抄模板改比从零写靠谱。
 metadata:
-  version: 1.26.0
+  version: 1.27.0
   author: Forsion
   category: Forsion
 ---
@@ -664,7 +664,7 @@ refresh = (rows) => h.update({ ...spec, rows })   // 数据刷新走 update:排�
 
 ### 统一左栏列表源(2026-08-25 起)
 
-`ctx.registerListSource?.({ id, title, items, subscribe, open, search?, groups?, actions?, itemMenu?, drop? })` ——
+`ctx.registerListSource?.({ id, title, items, subscribe, open, search?, groups?, actions?, itemMenu?, drop?, rename? })` ——
 插件只出数据,搜索词与选中分组**由宿主持有**并经 `items({query, group})` 回传(插件对 UI 无状态);
 `items()` 每次渲染都被调,自己缓存别读盘。露出左栏两条路:space.json 写
 `{"type":"workspace","params":{"mode":"plugin:<插件id>:<源id>"}}`,或给 `registerView` 加 `workspaceSource`。
@@ -680,6 +680,22 @@ refresh = (rows) => h.update({ ...spec, rows })   // 数据刷新走 update:排�
 - 行可带 `unread: true`(2026-09-11 起):宿主在行首图标角上画与未读会话同一个点;老宿主忽略。
   宿主自己的收件箱就是这么接进统一左栏的(`plugin:inbox:messages`,分组 = 未读 / 发信人 / 已归档),可当参考实现。
 - `drop` 不声明就完全没有拖放;声明了也是宿主判形点亮、插件决定接不接。
+- **层级 / 行内拖动 / 就地改名(2026-10-10 起;写本条时桌面尚未发版)**:三样都先探测
+  `ctx.listCapabilities?.includes('tree' | 'items' | 'rename')`,探测不到就照旧输出平铺的行 ——
+  旧宿主不认 `parent`,会把文件夹画成一条普通的行,点它还会调到你的 `open()`。
+  - 层级:行仍是一张平铺数组,子行写 `parent: '<上一级的 key>'`,上一级写 `kind: 'folder'`(可以是空的)。
+    数组顺序就是显示顺序。文件夹点一下开合、不调 `open()`;开合由宿主记(文件夹缺省收起,`activeKey()` 那一行
+    所在的文件夹自动展开);搜索时宿主不画层级,只平铺匹配的行 —— 所以子行最好也写上 `group`。
+    静态分组头(`group`)同样可以点开合,缺省展开。`itemMenu(文件夹)` 里带 `primary` 的那一项画成行尾的「+」。
+  - 行内拖动:能拖的行写 `draggable: true`,`drop.accepts` 加 `'items'`。落下时收到
+    `onDrop({ items: [key] }, { item, position })`,`position` = `'before'` / `'after'`(排在那一行前 / 后)或
+    `'into'`(放进文件夹)。`drop.canDrop({ items }, target)` 在指针移动时被问(同步、要快),返回 false =
+    这个落点不收,宿主会改问下一个合理的落点(如「放进去」被拒就问「排在前 / 后」)。行不会被提议落在自己身上
+    或自己下面。**宿主只画提示,不移动任何东西**:改完自己的数据再通知订阅者。
+  - 就地改名:行写 `renamable: true`,源上声明 `rename(item, title)`。菜单里的「重命名」、输入框、按键
+    (回车提交 / Esc 取消 / F2 开始 / 失焦提交)都是宿主的;你收到的是去掉首尾空格、非空且确实变了的新名字。
+    行上的字要等你的 `items()` 给出新标题才变。
+  - 参考实现 = server-admin 插件的「官网」Space(文件夹 = 官网侧栏的分区,拖动 = 改目录页)。
 - 细节与全部字段语义见正典文档同名小节 + `amadeus/plugins/types.ts` 的 `ListSourceContribution`。
 
 ### 前置条件:onboarding.requires(2026-09-21 起)

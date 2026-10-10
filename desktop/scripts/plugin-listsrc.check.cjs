@@ -7,6 +7,11 @@
  * 自带 24px —— 类型、单测、tsc 全绿,只有眼睛看得见。这支就钉这一条,外加 iconUrl 取不到时
  * 必须退回词表图标(老宿主/断网/CDN 404 的兜底路径)。
  *
+ * 2026-10-10 起还钉层级那一半(`?listsrc&tree`):文件夹行与同级行对齐、开合记得住、行在列表里拖动的
+ * 落点(前 / 后 / 放进去,插件拒了有退路,不落进自己下面)、就地改名(回车 / Esc / 失焦 / F2)、
+ * 搜索时平铺,以及没有层级的老列表不变样。负对照实跑过:把「文件夹中间 = 放进去」和「不落进自己下面」
+ * 改坏,对应两条变红。
+ *
  * 用法:npm run check:listsrc   (截图落 /tmp/listsrc-shots)
  */
 const fs = require('fs')
@@ -145,6 +150,113 @@ async function main() {
     check('分类消失后解除过期筛选，不留空列表', true)
     await page.screenshot({ path: path.join(SHOTS, 'listsrc-controls.png') })
     await page.close()
+
+    // ── 层级 / 开合记忆 / 行在列表里拖动 / 就地改名(2026-10-10)──
+    //    同一个浏览器上下文里重载,localStorage 留着 → 能验「记住开合」。
+    const ctx = await browser.newContext({ locale: 'zh-CN', viewport: { width: 520, height: 560 } })
+    const tree = await ctx.newPage()
+    tree.on('pageerror', (error) => console.error('Renderer:', error.message))
+    const list = tree.locator('.t2sw-plug-list')
+    const load = async () => { await tree.goto(`${BASE}?listsrc&tree`, { waitUntil: 'load' }); await list.locator('.t2s-folder-row').first().waitFor() }
+    const titles = () => list.locator('.t2s-srow-title').allInnerTexts()
+    const folderBtn = (name) => list.locator('.t2s-folder-row', { hasText: name })
+    const leaf = (name) => list.locator('.t2s-srow', { hasText: name })
+    const sec = (name) => list.locator('.t2sw-plug-sec', { hasText: name })
+    const probe = () => tree.evaluate(() => window.__treeProbe)
+    await load()
+    let seen = await titles()
+    check('当前行所在的文件夹自动展开,别的文件夹收着', seen.includes('快速上手') && seen.includes('核心概念') && !seen.includes('对话基础')
+      && await folderBtn('入门').getAttribute('aria-expanded') === 'true' && await folderBtn('对话').getAttribute('aria-expanded') === 'false', seen.join(','))
+    const lefts = await tree.evaluate(() => {
+      const x = (sel, text) => { const el = Array.from(document.querySelectorAll(sel)).find((n) => (n.textContent || '').includes(text)); return el ? Math.round(el.querySelector('.t2s-lead').getBoundingClientRect().left * 10) / 10 : null }
+      const icon = document.querySelector('.t2sw-plug-list .t2s-folder-row .t2s-lead svg').getBoundingClientRect()
+      const rowIcon = document.querySelector('.t2sw-plug-list .t2s-srow .t2s-lead svg').getBoundingClientRect()
+      return { row: x('.t2sw-plug-list .t2s-srow', '首页'), folder: x('.t2sw-plug-list .t2s-folder-row', '入门'), child: x('.t2sw-plug-list .t2s-srow', '快速上手'), icon: Math.round(icon.width * 10) / 10, rowIcon: Math.round(rowIcon.width * 10) / 10 }
+    })
+    check('文件夹的图标与同级行的图标左对齐、同大,子行缩进一档(10.5px)', Math.abs(lefts.row - lefts.folder) <= 0.5 && Math.abs(lefts.child - lefts.row - 10.5) <= 0.5 && Math.abs(lefts.icon - lefts.rowIcon) <= 0.5, JSON.stringify(lefts))
+    await tree.screenshot({ path: path.join(SHOTS, 'listsrc-tree.png') })
+    console.log(`      截图 ${path.join(SHOTS, 'listsrc-tree.png')}`)
+
+    await folderBtn('对话').click()
+    check('点文件夹展开(不调 open)', (await titles()).includes('对话基础') && (await probe()).opened.length === 0)
+    await sec('更新动态').click()
+    check('点分组头收起,数量还在', !(await titles()).includes('版本 2.12') && await sec('更新动态').getAttribute('aria-expanded') === 'false' && (await sec('更新动态').innerText()).includes('1'))
+    check('分组数的是行,不含文件夹', (await sec('文档').innerText()).replace(/\s+/g, '') === '文档4', await sec('文档').innerText())
+    await load()
+    seen = await titles()
+    check('重载后开合还在(文件夹开着、分组收着)', seen.includes('对话基础') && !seen.includes('版本 2.12'), seen.join(','))
+    await sec('更新动态').click()
+
+    // 行在列表里拖动:落点 = 行内位置给出的候选里第一个被插件接受的
+    const drag = async (from, to, y) => { const box = await to.boundingBox(); await from.dragTo(to, { targetPosition: { x: 60, y: Math.round(box.height * y) } }); return (await probe()).drops }
+    let drops = await drag(leaf('核心概念'), leaf('快速上手'), 0.2)
+    check('拖到一行的上半 → 排在它前面', JSON.stringify(drops.at(-1)) === JSON.stringify({ items: ['a2'], to: 'a1', position: 'before' }), JSON.stringify(drops.at(-1)))
+    drops = await drag(leaf('快速上手'), leaf('核心概念'), 0.8)
+    check('拖到一行的下半 → 排在它后面', JSON.stringify(drops.at(-1)) === JSON.stringify({ items: ['a1'], to: 'a2', position: 'after' }), JSON.stringify(drops.at(-1)))
+    drops = await drag(leaf('快速上手'), folderBtn('对话'), 0.5)
+    check('拖到文件夹中间 → 放进去', JSON.stringify(drops.at(-1)) === JSON.stringify({ items: ['a1'], to: 'fb', position: 'into' }), JSON.stringify(drops.at(-1)))
+    drops = await drag(folderBtn('对话'), folderBtn('入门'), 0.4)
+    check('插件不收「放进去」→ 宿主改问「排在前面」', JSON.stringify(drops.at(-1)) === JSON.stringify({ items: ['fb'], to: 'fa', position: 'before' }), JSON.stringify(drops.at(-1)))
+    let n = drops.length
+    drops = await drag(folderBtn('入门'), leaf('快速上手'), 0.5)
+    check('文件夹不落进自己下面', drops.length === n, JSON.stringify(drops.at(-1)))
+    await tree.evaluate(() => { window.__treeProbe.refuse = 'a2' })
+    n = drops.length // 每条各取各的基数:上一条红了不连带这一条
+    drops = await drag(leaf('快速上手'), leaf('核心概念'), 0.2)
+    check('插件拒收的行没有落点', drops.length === n, JSON.stringify(drops.at(-1)))
+    n = drops.length
+    drops = await drag(leaf('版本 2.12'), leaf('快速上手'), 0.2)
+    check('没标 draggable 的行拖不动', drops.length === n, JSON.stringify(drops.at(-1)))
+    check('拖完不留落点提示', await list.locator('.drop-before, .drop-after, .amx-drop-into, .drag-over, .dragging').count() === 0)
+
+    // 就地改名:菜单项由宿主加;回车提交、Esc 取消、失焦提交;没改或改成空不回报
+    await leaf('快速上手').click({ button: 'right' })
+    await tree.getByRole('menuitem', { name: '重命名', exact: true }).click()
+    const box = list.locator('input.t2s-rename')
+    check('右键 → 重命名:输入框拿到焦点、带着原名', await box.evaluate((el) => document.activeElement === el && el.value === '快速上手'))
+    await box.fill('  三分钟上手  '); await box.press('Enter')
+    check('回车提交:去掉首尾空格后交给插件,行跟着插件的数据变', JSON.stringify((await probe()).renames.at(-1)) === JSON.stringify({ key: 'a1', title: '三分钟上手' }) && (await titles()).includes('三分钟上手'))
+    await tree.getByRole('button', { name: '核心概念的操作', exact: true }).click()
+    await tree.getByRole('menuitem', { name: '重命名', exact: true }).click()
+    await box.fill('不要这个名字'); await box.press('Escape')
+    check('行尾「更多」→ 重命名 → Esc:不回报', (await probe()).renames.length === 1 && await box.count() === 0 && (await titles()).includes('核心概念'))
+    await folderBtn('入门').focus(); await tree.keyboard.press('F2')
+    await box.fill('上手'); await tree.locator('.t2s-search input').click()
+    check('F2 给文件夹改名,失焦提交', JSON.stringify((await probe()).renames.at(-1)) === JSON.stringify({ key: 'fa', title: '上手' }) && await folderBtn('上手').count() === 1)
+    await folderBtn('上手').focus(); await tree.keyboard.press('F2'); await box.fill('   '); await box.press('Enter')
+    check('改成空的不回报', (await probe()).renames.length === 2)
+    await folderBtn('未进目录').click({ button: 'right' })
+    check('没标 renamable、插件也没给动作的行没有菜单', await tree.locator('.ctx-menu').count() === 0)
+
+    // 文件夹行尾:primary 动作画成「+」,菜单里「重命名」排在危险动作前面
+    await folderBtn('对话').hover()
+    await list.locator('.t2s-group', { hasText: '对话' }).getByRole('button', { name: '在这里新建', exact: true }).click()
+    check('文件夹上的「+」= 它菜单里的 primary 动作', JSON.stringify((await probe()).adds) === JSON.stringify(['fb']))
+    await folderBtn('对话').click({ button: 'right' })
+    const order = await tree.locator('.ctx-menu .ctx-item').allInnerTexts()
+    check('文件夹菜单:插件的动作 + 重命名,危险的排最后', JSON.stringify(order) === JSON.stringify(['在这里新建', '重命名', '删除文件夹']), order.join(','))
+    await tree.keyboard.press('Escape')
+
+    // 键盘:方向键走得到文件夹行与分组头,左右键开合文件夹
+    await leaf('首页').focus(); await tree.keyboard.press('ArrowDown')
+    check('方向键从行走到文件夹行', await tree.evaluate(() => document.activeElement.classList.contains('t2s-folder-row')))
+    await tree.keyboard.press('ArrowLeft')
+    const closed = await tree.evaluate(() => document.activeElement.getAttribute('aria-expanded'))
+    await tree.keyboard.press('ArrowRight')
+    check('左键收起、右键展开文件夹', closed === 'false' && await tree.evaluate(() => document.activeElement.getAttribute('aria-expanded')) === 'true')
+
+    // 搜索:不画层级,去掉文件夹,按行平铺;这时不让拖
+    await tree.locator('.t2s-search input').fill('基础')
+    check('搜索时平铺:只有匹配的行,没有文件夹', JSON.stringify(await titles()) === JSON.stringify(['对话基础']) && await list.locator('.t2s-folder-row').count() === 0
+      && await leaf('对话基础').getAttribute('draggable') !== 'true')
+    await tree.screenshot({ path: path.join(SHOTS, 'listsrc-tree-search.png') })
+    await ctx.close()
+    // 老列表(没有 parent / 文件夹)不变样:分组头照旧展开,行还是那一层
+    const old = await browser.newPage({ locale: 'zh-CN', viewport: { width: 460, height: 320 } })
+    await old.goto(`${BASE}?listsrc`, { waitUntil: 'load' })
+    await old.locator('.t2sw-plug-list .t2s-srow').first().waitFor()
+    check('没有层级的老列表:没有文件夹行,六行都在', await old.locator('.t2sw-plug-list .t2s-folder-row').count() === 0 && await old.locator('.t2sw-plug-list .t2s-srow').count() === 6)
+    await old.close()
     // ── 数据接线的源码闸(几何管不着,但正是 2026-08-28 「明明有记录列表却是空」的那半)──
     //    插件在**启动期**激活,那时 vault 根还没恢复(宿主 vault 引导是懒的),列表源启动时那次
     //    读索引拿到的是 readTextFile 的**静默 null**;库落地后没人再喊它一声,列表就恒空。

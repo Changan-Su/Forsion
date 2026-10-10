@@ -81,6 +81,7 @@ import { clearDevRecords, devConsoleFor, dropDevRecords } from './devRecords'
 import { gatePluginManifest, type ExternalPluginSource } from '@amadeus-shared/ipc'
 import { createEffectScope, type EffectRecord, type EffectScope } from './effectScope'
 import { dependentsOf, topoOrder, unmetDependencies, type UnmetDependency } from './pluginDeps'
+import { LIST_CAPABILITIES } from './listTree'
 import { windowKind } from '../../windowKind'
 import { compileDashboardRecipe } from '@amadeus-shared/dashboardRecipe'
 import { openWebFloatingPanel } from '../../pluginPanelSeam'
@@ -1239,6 +1240,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
     // 打开自己的视图:类型名由宿主统一命名空间(plugin:<id>:<viewId>),防跨插件顶替。
     openView: (viewId, opts) => { if (ctxAlive()) get().viewOpener?.(`plugin:${pluginId}:${viewId}`, opts?.location) },
     get viewLocations() { return get().viewLocations ?? undefined },
+    listCapabilities: LIST_CAPABILITIES,
     // 关 / 换同样按这一代判活:视图类型名按插件 id 命名空间、新旧两代共用,旧一代迟到的回调会关掉 / 换掉新一代开着的视图。
     closeView: (viewId) => { if (ctxAlive()) get().viewControls?.close(`plugin:${pluginId}:${viewId}`) },
     replaceView: (fromViewId, toViewId, opts) =>

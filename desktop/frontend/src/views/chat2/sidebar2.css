@@ -83,7 +83,7 @@
 :is(.t2s-side, .t2sw-plug) .t2s-lead .t2s-lead-icon { width: 1em; height: 1em; }
 /* Project 导入的图片图标(emoji 走 .amx-page-emoji,见 amadeus-host.css):与兜底图标同为 1em 见方。 */
 .t2s-lead img.t2s-project-icon { display: block; width: 1em; height: 1em; object-fit: cover; border-radius: 3px; }
-.t2s-side .t2s-lead .t2s-lead-chev {
+:is(.t2s-side, .t2sw-plug) .t2s-lead .t2s-lead-chev {
   position: absolute; inset: 0; margin: 0;
   align-items: center; justify-content: center;
   transition: opacity var(--duration-fast, 0.15s), transform var(--duration-fast, 0.15s) var(--ease-out, ease);
@@ -93,20 +93,21 @@
  * ⚠️ 交换规则必须锁在 (hover: hover) 里:触屏没有真悬停,tap 之后 :hover 会**驻留**在那一行,
  *    图标被永久 opacity:0 —— 即「移动端文件夹/带子笔记的 md 行,点过之后图标莫名消失,刷新才回来」
  *    (2026-08-05 用户实报)。触屏上箭头恒不现、图标恒亮,展开照旧靠点击。 */
-.t2s-side .t2s-lead .t2s-lead-chev { opacity: 0; }
+:is(.t2s-side, .t2sw-plug) .t2s-lead .t2s-lead-chev { opacity: 0; }
 @media (hover: hover) {
-  .t2s-side .t2s-srow:hover .t2s-lead-chev,
-  .t2s-side .t2s-folder-row:hover .t2s-lead-chev { opacity: 0.7; }
-  .t2s-side .t2s-srow:hover .t2s-lead:has(.t2s-lead-chev) > :not(.t2s-lead-chev),
-  .t2s-side .t2s-folder-row:hover .t2s-lead:has(.t2s-lead-chev) > :not(.t2s-lead-chev) { opacity: 0; }
+  :is(.t2s-side, .t2sw-plug) .t2s-srow:hover .t2s-lead-chev,
+  :is(.t2s-side, .t2sw-plug) .t2s-folder-row:hover .t2s-lead-chev { opacity: 0.7; }
+  :is(.t2s-side, .t2sw-plug) .t2s-srow:hover .t2s-lead:has(.t2s-lead-chev) > :not(.t2s-lead-chev),
+  :is(.t2s-side, .t2sw-plug) .t2s-folder-row:hover .t2s-lead:has(.t2s-lead-chev) > :not(.t2s-lead-chev) { opacity: 0; }
 }
-.t2s-side .t2s-chev { transition: transform var(--duration-fast, 0.15s) var(--ease-out, ease); }
-.t2s-side .t2s-chev.open { transform: rotate(90deg); }
+:is(.t2s-side, .t2sw-plug) .t2s-chev { transition: transform var(--duration-fast, 0.15s) var(--ease-out, ease); }
+:is(.t2s-side, .t2sw-plug) .t2s-chev.open { transform: rotate(90deg); }
 /* 树的「文件夹/工作区」组头:去掉 .t2s-group-toggle 那套「分区标题」装(11.5px/全大写/字间距)——
  * 它是给**真**分区头(收藏/最近/集合)用的,树的组头应与行同档 13px(用户拍板)。
  * gap 对齐 .t2s-srow 的 5.5px、padding 对齐 4.5px,否则图标齐了名字仍差 1.5px、行高还矮 1px。
- * ⚠️只挂 .t2s-folder-row —— 真分区头不能跟着变。 */
-.t2s-side .t2s-folder-row {
+ * ⚠️只挂 .t2s-folder-row —— 真分区头不能跟着变。
+ * 插件列表源(.t2sw-plug)的文件夹行用的是同一套,一并列在这儿(2026-10-10)。 */
+:is(.t2s-side, .t2sw-plug) .t2s-folder-row {
   gap: 5.5px;
   padding: 4.5px;
   font-size: var(--ui-font-body, 13px);
@@ -116,7 +117,7 @@
 }
 /* .t2s-group 的 margin-top:4.5px 是用来分隔会话侧栏「工作区组」的;树的组头复用了这个类,
  * 结果组头上方凭空多 4.5px(行之间只有 .t2s-group-sessions 的 1px gap)= 用户报的「间距不统一」。 */
-.t2s-side .t2s-group:has(.t2s-folder-row) { margin-top: 0; }
+:is(.t2s-side, .t2sw-plug) .t2s-group:has(.t2s-folder-row) { margin-top: 0; }
 
 /* Local|Cloud 胶囊滑块(VaultSideSwitch):等宽双选项,滑块弹性平移 + 文字颜色过渡。
  * 常驻 Amadeus 工作区各子 view 开头(笔记树/全文搜索/标签)。整体 no-drag(Electron 拖窗区兜底)。 */
@@ -538,7 +539,25 @@
 .t2sw-plug-sec {
   display: flex; align-items: center; gap: 6px;
   margin: 10px 9.5px 2px; font-size: var(--ui-font-caption, 11px); color: var(--text-faint, var(--text-muted));
+  /* 是个 button(点一下开合):归零它自带的边框、底色与字体 */
+  width: calc(100% - 19px); padding: 0; border: 0; background: transparent;
+  font-family: var(--font-ui); text-align: left; cursor: pointer; border-radius: var(--radius-sm, 6px);
 }
+.t2sw-plug-sec:hover { color: var(--text-muted); }
+.t2sw-plug-sec-name { display: inline-flex; align-items: center; gap: 4px; flex: 1; min-width: 0; }
+/* 箭头紧跟名字(.t2s-group-label 自己是 flex:1,会把箭头推到最右) */
+.t2sw-plug-sec-name .t2s-group-label { flex: 0 1 auto; }
+/* 行在列表里拖动时的插入线:与工作区组头那条(.t2s-group.drag-over)同款,画在行的上 / 下缘。 */
+.t2sw-plug-item.drop-before::before,
+.t2sw-plug-item.drop-after::after {
+  content: ''; position: absolute; left: 4px; right: 4px; height: 3px;
+  border-radius: var(--radius-pill, 999px); background: var(--accent-ink); z-index: 3; pointer-events: none;
+}
+.t2sw-plug-item.drop-before::before { top: -2px; }
+.t2sw-plug-item.drop-after::after { bottom: -2px; }
+.t2sw-plug-item.dragging { opacity: 0.4; }
+/* 文件夹行行尾的「更多」是 CapabilityMenu 的触发钮(.t2s-group-add):菜单开着时保持可见 */
+.t2sw-plug .t2s-group-add[aria-expanded=true] { opacity: 1; }
 .t2sw-plug-mini {
   margin-left: auto; border: none; background: transparent; cursor: pointer;
   color: inherit; padding: 0 4px; border-radius: var(--radius-sm, 6px); font-size: var(--ui-font-meta, 12px);
