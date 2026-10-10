@@ -60,8 +60,8 @@ GPT 6 Luna 中档实测：判官一次调用的输出（含推理）最多 344 t
 |---|---|---|---|---|
 | 主循环 | `services/agentLoop.ts` | 会话 / agent 的档位（缺省 medium） | 不设 | 参照行 |
 | 子代理 | `services/subAgent.ts` | agent 定义的档 → 父 run 的档 → medium | 不设 | 同上 |
-| 自我脑暴的分身 | `services/selfBrainstorm.ts` | 跟父 run 同档（缺省 medium）。档位不同前缀缓存就对不上 | 固定值 | 只是给主循环的参考意见 |
-| Historian 分身判官（`fork` 模式） | `services/localHistorian.ts` `forkJudge` | 跟父 run 同档（缺省 medium），理由同上 | 1600 | 同下一行；失败时回落到独立判官 |
+| 自我脑暴的分身 | `services/selfBrainstorm.ts` | 跟父 run 同档（缺省 medium）。档位不同前缀缓存就对不上。缓存路由键也照主循环给（`cacheKey` 会话 + `agentId` 本 run 的 agent），见表后「接在主循环上下文后面的调用」 | 固定值 | 只是给主循环的参考意见 |
+| Historian 分身判官（`fork` 模式） | `services/localHistorian.ts` `forkJudge` | 跟父 run 同档（缺省 medium），理由同上；缓存路由键同上（`agentId` 由主循环收尾时放进快照） | 1600 | 同下一行；失败时回落到独立判官 |
 | **Historian 独立判官**（缺省模式；辅助模式下也由它出标题 / 摘要 / 进化记录提名） | `services/historianSession.ts` ← `localHistorian.ts` `runHistorianForSession` | **medium**（2026-10-06 起；此前没传 = 关） | 1600，原生思考的模型另加 4096 | 记忆候选进收件箱（Dream 还要对来源）；**项目级候选和进化记录提名里不带风险字眼的直接写进长期内容**；日志、摘要、标题 |
 | 团队讨论的收尾总结 | 同一个函数，`task: 'team-summary'` ← `services/groupChat.ts` | 关（没传） | 1200 | 只是给用户看的一段总结，失败不影响团队那一轮 |
 | 首帧标题 | `localHistorian.ts` `onUserRunStart` | low | 600 | 标题不贴切 |
