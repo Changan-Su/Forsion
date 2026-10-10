@@ -225,7 +225,7 @@ export const forsionAccountProvider: ToolProvider = {
       name: 'forsion_account',
       deferred: true,
       deferGroup: 'forsion_account',
-      deferHint: "The user's Forsion account: plan, AI quota left today / this week, background quota, quota reset cards, points, backpack, recent usage. Check it when the user asks how much quota or how many points they have left, or what their plan is.",
+      deferHint: "The user's Forsion account: plan, AI quota left today / this week, background quota, quota reset cards, points, backpack, recent usage. Check it when the user asks how much quota, how many tokens or how many points they have left, or what their plan is. A bare \"how many tokens do I have left\" can mean this or the conversation's context window (session_status): read both and answer both.",
       isEnabledFor: readable,
       definition: {
         type: 'function',

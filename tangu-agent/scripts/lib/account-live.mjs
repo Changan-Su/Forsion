@@ -50,13 +50,14 @@ export async function accountLive({ run, api, sleep, cloud }) {
   const leg = (name, ok, why, ev) => { legs.push({ name, ok, why, ev }); return ok; };
   const sid = (k) => `live-account-${k}-${Date.now()}`;
 
-  // 1. The utterance from the bug report, in a chat session: it must look something up, not say it cannot see it.
+  // 1. The utterance from the bug report, in a chat session. It was about the account, so the account answer is required;
+  //    also answering for the conversation's context is welcome (the question is ambiguous) and noted, not required.
   {
     const ev = await run(sid('orig'), '我还剩多少token', 180_000, CHAT);
     const acct = called(ev, 'forsion_account'); const sess = called(ev, 'session_status');
-    const grounded = (acct && /37\s*%/.test(ev.content)) || (sess && /\d[\d,.]*\s*(k|K|万|tokens?|%)/.test(ev.content));
-    leg('原话「我还剩多少token」(聊天会话)', !ev.error && (acct || sess) && grounded && !leaked(ev.content).length,
-      ev.error || `查了 ${[acct && '账号', sess && '本对话'].filter(Boolean).join(' + ') || '✗ 什么都没查'};${grounded ? '答的是查到的数' : '✗ 回复里没有查到的数'}${leaked(ev.content).length ? `;✗ 出现点数 ${leaked(ev.content)}` : ''}`, ev);
+    const grounded = acct && /37\s*%/.test(ev.content);
+    leg('原话「我还剩多少token」(聊天会话)', !ev.error && grounded && !leaked(ev.content).length,
+      ev.error || `查了 ${[acct && '账号', sess && '本对话'].filter(Boolean).join(' + ') || '✗ 什么都没查'};${grounded ? '答出账号今日还剩 37%' : '✗ 没答出账号额度'}${leaked(ev.content).length ? `;✗ 出现点数 ${leaked(ev.content)}` : ''}`, ev);
   }
   // 2. Account allowance: percentages only, plus cards and points.
   {
