@@ -241,8 +241,11 @@ export interface ToolCapabilities {
   /** 默认超时；executeTool 会把它并入 ctx.signal。 */
   defaultTimeoutMs?: number;
   /** 审批档：'command' = 与 run_bash 同档(readonly/auto-edit 下需批准）。缺省=只读语义、不触发审批。
-   *  approvals.toolNeedsApproval 经 declaredApproval(name) 读此，插件工具无需核心硬编码工具名。 */
-  approval?: 'command';
+   *  approvals.toolNeedsApproval 经 declaredApproval(name) 读此，插件工具无需核心硬编码工具名。
+   *  'always' = 每次都问用户本人:任何档位(含完全通行与云端的空档)、任何执行形态(host / sandbox / 云端)都弹审批,
+   *  不进「总允许」,custom 的 allow 规则与 PermissionRequest hook 的 allow 也不放行;没人能当场答的 run
+   *  (自动化 / Muse / 远程污点)直接拒。给「花掉用户账号里的东西」这类动作用(approvals.gateToolCall)。 */
+  approval?: 'command' | 'always';
   /** 正向声明:允许作为自动化 tool_call 动作(不经 LLM 定参直执行)。缺省 false——
    *  插件工具不声明就不进动作目录(declaredAutomationSafe;内置另有 curated 白名单)。 */
   automationSafe?: boolean;
