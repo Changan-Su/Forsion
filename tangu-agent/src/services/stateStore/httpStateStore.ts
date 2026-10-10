@@ -28,7 +28,7 @@ import type {
 import type { SessionHit, SessionTranscript } from '../sessionSearch.js';
 
 // ── per-dispatch token 登记表(runId/sessionId → token) + 请求期作用域 ──
-interface TokenEntry { token: string; }
+interface TokenEntry { token: string; sessionId: string; }
 /** 一次入站请求的作用域。handler = 应答还没发完;由这次请求起的 loop / 定时器沿用同一个对象,应答结束后读到的就是 false。 */
 interface RequestScope { token: string | undefined; handler: boolean; }
 const byRun = new Map<string, TokenEntry>();
@@ -48,7 +48,7 @@ export function runWithRequestToken<T>(token: string | undefined, fn: () => T, r
 }
 /** createRun 建成后把 token 绑到 runId + sessionId(异步 loop 期据此取)。 */
 export function bindRunToken(runId: string, sessionId: string, token: string): void {
-  const e: TokenEntry = { token };
+  const e: TokenEntry = { token, sessionId };
   byRun.set(runId, e);
   if (sessionId) bySession.set(sessionId, e);
 }
@@ -57,9 +57,19 @@ export function refreshRunToken(runId: string, token: string): void {
   const e = byRun.get(runId);
   if (e) e.token = token;
 }
-export function dropRunToken(runId: string, sessionId?: string): void {
+/**
+ * run 终态:撤掉它按 run 登记的那份。会话上的绑定不删 —— 这个 run 收尾时还要按会话写(落助手消息、补打断标记)。
+ * 例外:会话上指着的正是它(从此不再续期),而同会话还有别的 run 在飞(排在后面的那条被取消了,前面那条还在跑)→
+ * 交还给还在续期的那个,否则前面那条跑过这枚令牌的有效期后,按会话的读写全是 401(钉在 routes/runs.queuedAbortToken.worker.test.ts)。
+ */
+export function dropRunToken(runId: string): void {
+  const e = byRun.get(runId);
   byRun.delete(runId);
-  if (sessionId) bySession.delete(sessionId);
+  if (!e || bySession.get(e.sessionId) !== e) return;
+  // ponytail: 扫一遍在飞的 run(同一 worker 上是个位数到几十);量大了再按会话记一张在飞表。取最后建的那个。
+  let live: TokenEntry | undefined;
+  for (const other of byRun.values()) if (other.sessionId === e.sessionId) live = other;
+  if (live) bySession.set(e.sessionId, live);
 }
 function tokenForRun(runId?: string): string | undefined {
   return (runId ? byRun.get(runId)?.token : undefined) || requestScope.getStore()?.token;
@@ -72,6 +82,9 @@ function tokenForRun(runId?: string): string | undefined {
  * 两个条件都要:只看 run 上下文不够 —— 排队的 run 进自己的上下文之前就按会话读配置(dispatchRun),那时没有上下文、
  * 请求作用域却是上一次请求的;只看应答不够 —— 应答发出之前就在 run 上下文里干活的 handler 要的是那个 run 的令牌。
  * 钉在 routes/runs.sessionToken.worker.test.ts。
+ * ponytail: loop 期遇到没绑定的会话(在 loop 里给别的会话建 run / 读写)回退到请求作用域那枚,它不续期,run 跑过 30 分钟就是废的。
+ * thin worker 上现在没有调用点走得到这里:团队成员、讨论、项目会话都先经 host.query 建会话(thin worker 上直接抛),
+ * 且云端 profile 没有 hostExec / groupChat。哪天把它们接到状态接缝上,这里要改成先取当前 run 的令牌(currentToken())。
  */
 function tokenForSession(sessionId?: string): string | undefined {
   const scope = requestScope.getStore();

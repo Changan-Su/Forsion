@@ -8,12 +8,13 @@
  * 请求自己的新令牌从没用上。
  *
  * 现在:handler 期(应答还没发完、且不在 run 上下文里)只用请求自己的令牌;loop 期照旧先用绑定的(它在续期);
- * 建 run 被拒 / 失败不留绑定。每条用例的负对照(改 httpStateStore.ts 后实跑,共 5 种改法):
+ * 建 run 被拒 / 失败不留绑定。每条用例的负对照(改 httpStateStore.ts 后实跑,共 6 种改法):
  *   - tokenForSession 改回「先绑定的」                    → ①②⑥ 红(⑥:别人的建 run 带着会话主人的令牌出去,被收下了)
  *   - 改成任何时候都先用请求的                            → ③④⑤ 红
  *   - 去掉「应答还没发完」这个条件(只看 run 上下文)      → ④ 红
  *   - 去掉「不在 run 上下文里」这个条件(只看应答)        → ⑤ 红
  *   - createRun 改回先绑再发                              → ⑥ 红
+ *   - run 终态时把会话上的绑定一并删掉(没有别的 run 在飞时) → ⑦ 红
  * 续期在这里用 refreshRunToken 直接换(定时器到点后调的就是它),不等真的定时器。
  */
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
@@ -114,7 +115,8 @@ beforeAll(async () => {
   });
   worker = app.listen(0);
   base = `http://127.0.0.1:${(worker.address() as any).port}`;
-});
+  await import('../services/delegateTranscript.js'); // 发消息的路由里现加载的那个模块:先在这里加载,不占第一条用例的时限
+}, 30_000);
 afterAll(() => { worker?.close(); gateway?.close(); });
 beforeEach(() => { sessions.clear(); expired.clear(); seen.length = 0; responseClosed = deferred(); vi.mocked(enqueueRun).mockReset(); });
 
@@ -222,6 +224,14 @@ describe('云端 worker 按会话取令牌', () => {
     expect(tokens()).toEqual(['run:u2.a']); // 带的是它自己的令牌,所以 server 那道「建 run 验归属」拒得掉
     seen.length = 0;
     await state.getAgentConfig('s-refused'); // 在飞的 run 在 loop 里按会话读
+    expect(tokens()).toEqual(['config:u1.a']);
+  });
+
+  it('⑦ 会话里最后一条 run 结束后绑定原样留着:它收尾时还要按会话写', async () => {
+    const only = await send('u1.a', 's-tail');
+    await state.updateRunStatus(only.body.runId, 'done');
+    seen.length = 0;
+    await state.getAgentConfig('s-tail');
     expect(tokens()).toEqual(['config:u1.a']);
   });
 });
