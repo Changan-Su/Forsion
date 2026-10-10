@@ -8,6 +8,8 @@ import { IPC, type DbReadResult, type DrawingReadResult, type PageProps } from '
 import { dbFileSchema, parseDb, serializeDb } from '@amadeus-shared/db/schema'
 import { rewriteDbRefs } from '@amadeus-shared/db/rewriteDbRefs'
 import { rewriteNoteRefs } from '@amadeus-shared/rewriteNoteRefs'
+import { rebaseFileRefs } from '@amadeus-shared/assets'
+import { movedUnder } from '@amadeus-shared/propagateNoteRenames'
 import { parseFmObject, setFmExtraOnSource } from '@amadeus-shared/db/pageFrontmatter'
 import { extractFrontmatterExtra } from '@amadeus-shared/compiler/split'
 import { loadPage, newPage, pageFileName, savePage, type PageManifest } from '@amadeus-shared/compiler'
@@ -169,14 +171,19 @@ export function registerVaultHandlers(deps: VaultHandlerDependencies): void {
   /** 改名/移动后的全库引用重写(renameDbFile 同款先例):快照「操作前」页面表,物理移动完成后
    *  逐页跑纯函数 rewriteNoteRefs,判定「解析目标变了」才动笔;改动页原子写 + 更索引 +
    *  externalChange 回灌(打开着的编辑器由既有回灌机制接住)。
+   *  同一趟里把正文按相对路径写的图片 / 附件引用也照新位置重算(assets.rebaseFileRefs):挪单篇笔记时图片留在原处,
+   *  引用不改就指向新文件夹下不存在的路径。`folder` = 挪 / 改名的是文件夹时的 `[旧, 新]`(夹里的附件跟着换了位置);
+   *  夹里没有笔记(只装附件)也照样扫 —— 别的笔记里指向它的引用要跟着改;空文件夹不扫。
+   *  仪器:electron/amadeus/ipc.moveFileRefs.test.ts。
    *  ponytail: 朴素全库读扫,与 backlinks 同一量级,个人 vault 规模足够。 */
-  const propagateRenames = async (pairsIn: Record<string, string>, pagesBefore: string[]): Promise<void> => {
+  const propagateRenames = async (pairsIn: Record<string, string>, pagesBefore: string[], folder?: readonly [string, string]): Promise<void> => {
     const pairs = new Map(Object.entries(pairsIn))
-    if (!pairs.size) return
-    void deps.pageHistory?.move(vault.getRoot(), pairsIn) // 版本历史跟着改名 / 移动走(C-20;五条改名路径都汇到这里)
+    if (!pairs.size && !(folder && (await fs.readdir(vault.absPath(folder[1])).catch(() => [])).length)) return
+    if (pairs.size) void deps.pageHistory?.move(vault.getRoot(), pairsIn) // 版本历史跟着改名 / 移动走(C-20;五条改名路径都汇到这里)
     const backMap = new Map([...pairs].map(([o, n]) => [n, o]))
     const before = [...pagesBefore].sort()
     const after = before.map((p) => pairs.get(p) ?? p).sort()
+    const moved = movedUnder(folder)
     for (const p of after) {
       const changed = await withPathLock(p, async () => {
         let raw: string
@@ -185,7 +192,9 @@ export function registerVaultHandlers(deps: VaultHandlerDependencies): void {
         } catch {
           return false
         }
-        const next = rewriteNoteRefs(raw, backMap.get(p) ?? p, p, { pairs, pagesBefore: before, pagesAfter: after })
+        const src = backMap.get(p) ?? p
+        const links = rewriteNoteRefs(raw, src, p, { pairs, pagesBefore: before, pagesAfter: after })
+        const next = await rebaseFileRefs(links, src, p, moved, (f) => vault.pathExists(f))
         if (next === raw) return false
         await vault.writeTextFile(p, next)
         await index.update(p)
@@ -604,7 +613,7 @@ export function registerVaultHandlers(deps: VaultHandlerDependencies): void {
     const pagesBefore = await vault.listPages()
     await vault.moveEntry(folderPath, newPath)
     await index.build()
-    await propagateRenames(folderPairs(pagesBefore, folderPath, newPath), pagesBefore)
+    await propagateRenames(folderPairs(pagesBefore, folderPath, newPath), pagesBefore, [folderPath, newPath])
     return newPath
   })
 
@@ -625,7 +634,7 @@ export function registerVaultHandlers(deps: VaultHandlerDependencies): void {
     const pagesBefore = await vault.listPages()
     await vault.moveEntry(src, newPath)
     await index.build()
-    await propagateRenames(folderPairs(pagesBefore, src, newPath), pagesBefore)
+    await propagateRenames(folderPairs(pagesBefore, src, newPath), pagesBefore, [src, newPath])
     return newPath
   })
 

@@ -21,6 +21,27 @@ function memIO(files: Map<string, string>, hooks: { beforeWrite?: (p: string) =>
 }
 
 describe('propagateNoteRenames', () => {
+  // 图片 / 附件的相对引用(assets.rebaseFileRefs)跟 [[链接]] 走同一趟读写。负对照(实跑过):one() 里不调 rebaseFileRefs → 前两条红;
+  // 提前返回改回只看 pairs → 第 2 条红。
+  it('移动:挪走的笔记里按相对路径写的图片 / 附件引用按新位置重算;没给 exists 的宿主不做这件事', async () => {
+    const seed = (): Map<string, string> => new Map([['other/a.md', '![](.amadeus/p.png) [[b]]\n'], ['notes/b.md', '![](.amadeus/p.png)\n']])
+    const files = seed()
+    const io = { ...memIO(files), exists: (f: string) => f === 'notes/.amadeus/p.png' }
+    const r = await propagateNoteRenames(io, { 'notes/a.md': 'other/a.md' }, ['notes/a.md', 'notes/b.md'])
+    expect(files.get('other/a.md')).toBe('![](../notes/.amadeus/p.png) [[b]]\n')
+    expect(files.get('notes/b.md')).toBe('![](.amadeus/p.png)\n')
+    expect(r).toEqual({ rewritten: ['other/a.md'], failed: [] })
+    const plain = seed()
+    expect((await propagateNoteRenames(memIO(plain), { 'notes/a.md': 'other/a.md' }, ['notes/a.md', 'notes/b.md'])).rewritten).toEqual([])
+    expect(plain.get('other/a.md')).toBe('![](.amadeus/p.png) [[b]]\n')
+  })
+  it('只装附件的文件夹改名(一对笔记都没有):别的笔记里指向它的引用照样跟上', async () => {
+    const files = new Map([['notes/a.md', '![](../assets/x.png)\n']])
+    const io = { ...memIO(files), exists: (f: string) => f === 'media/x.png' }
+    const r = await propagateNoteRenames(io, {}, ['notes/a.md'], { folder: ['assets', 'media'] })
+    expect(files.get('notes/a.md')).toBe('![](../media/x.png)\n')
+    expect(r.rewritten).toEqual(['notes/a.md'])
+  })
   it('改名:别的笔记里的 [[B]] / [[B#H]] / [[B|别名]] / ![[B]] 跟到新名;没提到的不写', async () => {
     const files = new Map([
       ['A.md', 'see [[B]] and [[B#H]] and [[B|alias]] and ![[B]]\n'],

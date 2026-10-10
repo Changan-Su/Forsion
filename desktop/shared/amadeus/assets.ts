@@ -206,6 +206,65 @@ export function toStoredMarkdown(md: string, pageDir: string): string {
   }))
 }
 
+// `![alt](地址)` 与 `[文字](地址)`:只认裸目标(尖括号目标产品自己不写,逐字留着)。
+const FILE_LINK_RE = /(!?)(\[[^\]\n]*\]\()(?!<)([^)\s]+)((?:\s+"[^"]*")?\))/g
+
+/** 笔记换了目录、或它引用的文件换了位置之后,正文里**按相对路径写的图片 / 附件引用**照新位置重算
+ *  (改名 / 移动的全库重写调它:主进程 vaultHandlers.propagateRenames、云端与手机本地桥的 propagateNoteRenames)。
+ *  `![](.amadeus/p.png)`、`[doc](attachments/d.pdf)`、`![](../assets/x.png)` 都是页相对的:笔记挪到别的文件夹而
+ *  图片留在原处,引用一个字不改就指向新文件夹下不存在的路径 —— 三端取图都只做精确匹配,图当场裂;那里恰好有
+ *  同路径的文件时显示的是另一张(2026-10-10 实测)。挪文件夹、给附件文件夹改名时指向夹外 / 夹外指进来的同理。
+ *
+ *  规则:引用原先(按 srcBefore 的目录)指着的那个文件,经 `moved` 换算出它现在的位置;这篇笔记或那个文件
+ *  动过位置,就把写法换成从 srcAfter 的目录指过去的规范相对路径。
+ *    · 笔记没挪、文件也没挪 → 永远不碰(别的笔记一个字节不变)。
+ *    · **文件确实在才改**(`exists` 问的是操作之后的位置)。本来就指不到文件的引用保持原样 —— 包括存量的库内路径
+ *      写法(`notes/` 下的笔记写着 `![](attachments/x.png)`、文件其实在库根):它靠 resolveAttachment 的
+ *      「退回库根」还打得开,按页相对改写反而把这条退路也改没了。
+ *    · 只管**附件**(带扩展名、非 .md,与 assetRefs 同一判据)。指向笔记的 `[名](x.md)` 不归这里
+ *      (rewriteNoteRefs 头注的已知缺口);`![[…]]` 按文件名全库找,本来就不受位置影响。
+ *    · 围栏代码块、行内代码、外链 / 协议 / 绝对路径 / 纯锚点、尖括号目标逐字不动。
+ *    · 改写出来的地址用存盘的那套编码(encodeDest,编辑器存这篇时写的就是它);链接的 `#锚` 原样接回。
+ *      图片的地址整段当路径(toDisplayMarkdown 同口径),不拆 `#`。
+ *  ponytail: 被改写的引用一律写成规范形态 —— 挪动的笔记里手写的 `./x.png`、`a/../x.png` 会变成 `x.png`
+ *  (指向不变)。没挪的笔记不受影响。
+ *  仪器:assets.test.ts 的「挪了位置之后的引用」、electron/amadeus/ipc.moveFileRefs.test.ts(真 IPC + 真协议处理器)。 */
+export async function rebaseFileRefs(
+  md: string,
+  srcBefore: string,
+  srcAfter: string,
+  moved: (vaultRel: string) => string,
+  exists: (vaultRel: string) => boolean | Promise<boolean>,
+): Promise<string> {
+  if (!md.includes('](')) return md
+  const dirOf = (p: string): string => normPath(p.replace(/\\/g, '/')).split('/').slice(0, -1).join('/')
+  const from = dirOf(srcBefore)
+  const to = dirOf(srcAfter)
+  const there = new Map<string, boolean>() // 候选目标(操作后的库内路径)→ 在不在
+  // 同一遍扫描跑两次:第一次只收集「要改的话得先确认在不在」的目标,问完宿主再真改(replace 的回调不能等)。
+  const links = (collect: boolean) => (seg: string): string =>
+    seg.replace(FILE_LINK_RE, (m, bang: string, pre: string, dest: string, rest: string) => {
+      if (/^(?:[a-z][a-z0-9+.-]*:|\/|#)/i.test(dest)) return m
+      const cut = bang ? -1 : dest.indexOf('#')
+      const u = decodeSafe(cut < 0 ? dest : dest.slice(0, cut))
+      if (!/\.[a-z0-9]{1,12}$/i.test(u) || /\.md$/i.test(u)) return m
+      const was = normPath(joinRel(from, u))
+      if (!was || was === '..' || was.startsWith('../')) return m // 指到库外:不接手
+      const now = moved(was)
+      if (from === to && now === was) return m
+      const canon = relPath(to, now)
+      if (canon === u) return m
+      if (collect) { there.set(now, false); return m }
+      return there.get(now) ? bang + pre + encodeDest(canon) + (cut < 0 ? '' : dest.slice(cut)) + rest : m
+    })
+  const pass = (collect: boolean): string =>
+    mapOutsideFences(md, (line) => (line.includes('](') ? outsideCodeSpans(line, links(collect)) : line))
+  pass(true)
+  if (!there.size) return md
+  await Promise.all([...there.keys()].map(async (p) => { there.set(p, await exists(p)) }))
+  return pass(false)
+}
+
 /** `![[x|200]]` / `[[x#锚]]` / `![](x)` / `[名](x)` 里的**附件**引用(非 .md、非外链、带扩展名)。
  *  主进程用它算「删笔记时哪些附件是独占的」,渲染层用它算「整块删掉的引用块牵着哪个文件」——
  *  同一套判据,别再抄第二份。 */

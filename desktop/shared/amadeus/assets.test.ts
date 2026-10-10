@@ -8,7 +8,7 @@
  *  ⚠️ 方向很重要:真实链路是 display(协议 URL)→ stored,不是「盘上裸空格 → 盘上」——
  *  裸空格那种压根匹配不上 IMG_RE(见最后一格),那是**存量受损文件**,只能靠修复扫描,别指望这里自愈。 */
 import { afterEach, describe, it, expect } from 'vitest'
-import { toDisplayMarkdown, toStoredMarkdown, assetRefs, toAssetUrl, setAssetUrlBuilder, resetAssetUrlBuilder, fromAssetUrl, fromDefaultAssetUrl, joinRel, relFrom, normPath } from './assets'
+import { toDisplayMarkdown, toStoredMarkdown, assetRefs, toAssetUrl, setAssetUrlBuilder, resetAssetUrlBuilder, fromAssetUrl, fromDefaultAssetUrl, joinRel, relFrom, normPath, rebaseFileRefs } from './assets'
 
 /** 编辑器序列化出来的那一行(PM 的 image 节点 src 就是协议 URL)。 */
 const disp = (ref: string): string => `![](${toAssetUrl(ref)})`
@@ -255,5 +255,81 @@ describe('页目录之外的引用:存盘写成 ../,重开指回同一个文件'
     const md = '![](attachments/x.png)\n'
     expect(reopened(md, 'notes')).toBe('notes/attachments/x.png')
     expect(toStoredMarkdown(toDisplayMarkdown(md, 'notes'), 'notes')).toBe(md)
+  })
+})
+
+/** 挪笔记 / 挪文件夹之后的引用重算(rebaseFileRefs,2026-10-10)。宿主接线后的真链路在
+ *  electron/amadeus/ipc.moveFileRefs.test.ts;这里钉纯函数的规则。
+ *  负对照(实跑过,格号 = 本组内的次序):
+ *    · 去掉「文件确实在才改」(exists 恒真)→ 第 3 格红;
+ *    · 去掉围栏 / 行内代码的跳过 → 第 4 格红;
+ *    · 去掉「笔记没挪、文件也没挪就不碰」→ 第 5 格红;
+ *    · `.md` 目标不跳过 → 第 6 格红;链接的 `#锚` 不拆 → 第 2 格红。 */
+describe('挪了位置之后的引用(rebaseFileRefs)', () => {
+  const still = (f: string): string => f // 没有文件换位置
+  const disk = (...paths: string[]) => (f: string): boolean => paths.includes(f)
+  const under = (from: string, to: string) => (f: string): string => (f.startsWith(`${from}/`) ? to + f.slice(from.length) : f)
+
+  it('挪单篇笔记:页目录下的、页目录外的都改成从新位置指过去;同深度的 ../ 写法本来就对,不动', async () => {
+    const md = '![](.amadeus/p.png)\n![x](../assets/x%20y.png "t")\n[doc](attachments/d.pdf)\n'
+    const has = disk('notes/.amadeus/p.png', 'assets/x y.png', 'notes/attachments/d.pdf')
+    expect(await rebaseFileRefs(md, 'notes/a.md', 'other/a.md', still, has))
+      .toBe('![](../notes/.amadeus/p.png)\n![x](../assets/x%20y.png "t")\n[doc](../notes/attachments/d.pdf)\n')
+    expect(await rebaseFileRefs(md, 'notes/a.md', 'a.md', still, has))
+      .toBe('![](notes/.amadeus/p.png)\n![x](assets/x%20y.png "t")\n[doc](notes/attachments/d.pdf)\n')
+    expect(await rebaseFileRefs(md, 'notes/a.md', 'deep/er/a.md', still, has))
+      .toBe('![](../../notes/.amadeus/p.png)\n![x](../../assets/x%20y.png "t")\n[doc](../../notes/attachments/d.pdf)\n')
+    // 挪回去:写法回到原样
+    const moved = await rebaseFileRefs(md, 'notes/a.md', 'other/a.md', still, has)
+    expect(await rebaseFileRefs(moved, 'other/a.md', 'notes/a.md', still, has)).toBe(md)
+  })
+
+  it('编码与锚:改写出来的地址按存盘那套编码(空格 / 括号);链接的 #锚 原样接回;图片地址里的 # 是文件名的一部分', async () => {
+    const has = disk('notes/a b (1).png', 'notes/d.pdf', 'notes/c#1.png')
+    expect(await rebaseFileRefs('![](a%20b%20%281%29.png)', 'notes/n.md', 'x/n.md', still, has)).toBe('![](../notes/a%20b%20%281%29.png)')
+    expect(await rebaseFileRefs('[p3](d.pdf#page=3)', 'notes/n.md', 'x/n.md', still, has)).toBe('[p3](../notes/d.pdf#page=3)')
+    expect(await rebaseFileRefs('![](c#1.png)', 'notes/n.md', 'x/n.md', still, has)).toBe('![](../notes/c#1.png)')
+  })
+
+  it('断的保持断:原先就指不到文件的引用不改(存量的库内路径写法靠「退回库根」还打得开,改了反而打不开)', async () => {
+    const md = '![](attachments/x.png) [gone](nope.pdf)\n'
+    expect(await rebaseFileRefs(md, 'notes/a.md', 'other/a.md', still, disk('attachments/x.png'))).toBe(md)
+  })
+
+  it('不碰的:围栏代码块、行内代码、外链 / 协议 / 绝对路径 / 纯锚点、尖括号目标、指到库外的、`![[…]]`', async () => {
+    const md = [
+      '```md', '![](p.png)', '```',
+      '行内 `![](p.png)` 是代码',
+      '![](https://e.com/p.png) ![](data:image/png;base64,AA) ![](/p.png) [t](#p.png) [m](mailto:a@p.png)',
+      '![](<p.png>) ![](../../p.png) ![[p.png]]',
+    ].join('\n')
+    expect(await rebaseFileRefs(md, 'notes/a.md', 'other/a.md', still, () => true)).toBe(md)
+  })
+
+  it('笔记没挪、它引用的文件也没挪:一个字节不变(手写的 ./、多余的 .. 都留着),连问都不问宿主', async () => {
+    const md = '![](./p.png) ![](sub/../p.png) ![](p.png)\n'
+    let asked = 0
+    expect(await rebaseFileRefs(md, 'notes/a.md', 'notes/a2.md', still, () => { asked++; return true })).toBe(md)
+    expect(asked).toBe(0)
+  })
+
+  it('只管附件:指向笔记的 `[名](x.md)`、没有扩展名的不归这里', async () => {
+    const md = '[n](x.md) [n](x) [w](draw.excalidraw.md)\n'
+    expect(await rebaseFileRefs(md, 'notes/a.md', 'other/a.md', still, () => true)).toBe(md)
+  })
+
+  it('挪文件夹:夹内互相引用的不变;指向夹外的按新深度重算;夹外的笔记指进来的跟着走', async () => {
+    const moved = under('notes', 'archive/notes')
+    const has = disk('archive/notes/.amadeus/p.png', 'assets/x.png')
+    expect(await rebaseFileRefs('![](.amadeus/p.png) ![](../assets/x.png)', 'notes/a.md', 'archive/notes/a.md', moved, has))
+      .toBe('![](.amadeus/p.png) ![](../../assets/x.png)')
+    expect(await rebaseFileRefs('![](notes/.amadeus/p.png)', 'root.md', 'root.md', moved, has)).toBe('![](archive/notes/.amadeus/p.png)')
+    // 上一次挪单篇留下的 ../notes/… 写法,文件夹改名时照样跟上
+    expect(await rebaseFileRefs('![](../notes/.amadeus/p.png)', 'other/a.md', 'other/a.md', under('notes', 'old'), disk('old/.amadeus/p.png')))
+      .toBe('![](../old/.amadeus/p.png)')
+  })
+
+  it('CRLF 的行尾、Windows 分隔符的笔记路径', async () => {
+    expect(await rebaseFileRefs('![](p.png)\r\n后文\r\n', 'notes\\a.md', 'other\\a.md', still, disk('notes/p.png'))).toBe('![](../notes/p.png)\r\n后文\r\n')
   })
 })

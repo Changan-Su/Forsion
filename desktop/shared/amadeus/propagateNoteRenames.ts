@@ -5,11 +5,18 @@
  *  textFingerprint」交给宿主,宿主发现盘上已不是它(编辑器刚存过 / 别的设备刚改过)就不写、交回现文,这里拿现文
  *  重算再试,有限次仍冲突 → 记入 failed。**失败必须交回调用方去提示**,不许静默吞(被重写的笔记里链接断着,用户
  *  却以为改名一切正常)。 */
+import { rebaseFileRefs } from './assets'
 import { rewriteNoteRefs, type NoteRenamePlan } from './rewriteNoteRefs'
 import { textFingerprint } from './writeConflict'
 import type { TextWriteResult } from './ipc'
 
+/** 挪 / 改名文件夹时,库内路径的新旧换算:`[旧文件夹, 新文件夹]` 之下的整棵树跟着走;没给 = 没有文件换位置。 */
+export const movedUnder = (folder?: readonly [string, string]) => (f: string): string =>
+  folder && (f === folder[0] || f.startsWith(`${folder[0]}/`)) ? folder[1] + f.slice(folder[0].length) : f
+
 export interface RenamePropagationIO {
+  /** 这条库内路径眼下有没有文件(点目录里的也算)。给了才重算正文里的图片 / 附件相对引用(assets.rebaseFileRefs)。 */
+  exists?(path: string): boolean | Promise<boolean>
   /** 读一篇的原文;不存在 → null(快照之后被删 / 挪走:它里面的链接没改成,记入 failed,不静默跳过)。 */
   read(path: string): Promise<string | null>
   /** 比对交换写:base = 读到那版的 textFingerprint。`{ ok:false, current }` = 盘上已变、本次没写;void / ok:true = 写成。
@@ -24,21 +31,25 @@ export interface RenamePropagationResult {
   failed: Array<{ path: string; error: string }>
 }
 
-/** 旧 → 新(vault 相对、含 .md;文件夹操作 = 树下每页一对)+ 操作前页表 → 逐页重写。 */
+/** 旧 → 新(vault 相对、含 .md;文件夹操作 = 树下每页一对)+ 操作前页表 → 逐页重写。
+ *  `opts.folder` = 挪 / 改名的是文件夹时的 `[旧, 新]`:夹里的附件跟着换了位置,图片 / 附件引用据此重算;
+ *  夹里一篇笔记都没有(只装附件)也照样扫 —— 别的笔记里指向它的引用要跟着改。 */
 export async function propagateNoteRenames(
   io: RenamePropagationIO,
   pairsIn: Record<string, string>,
   pagesBefore: readonly string[],
-  opts: { concurrency?: number; attempts?: number } = {},
+  opts: { concurrency?: number; attempts?: number; folder?: readonly [string, string] } = {},
 ): Promise<RenamePropagationResult> {
   const out: RenamePropagationResult = { rewritten: [], failed: [] }
   const pairs = new Map(Object.entries(pairsIn).filter(([o, n]) => o !== n))
-  if (!pairs.size) return out
+  if (!pairs.size && !opts.folder) return out
   const backMap = new Map([...pairs].map(([o, n]) => [n, o]))
   const before = [...pagesBefore].sort()
   const after = before.map((p) => pairs.get(p) ?? p).sort()
   const plan: NoteRenamePlan = { pairs, pagesBefore: before, pagesAfter: after }
   const attempts = Math.max(1, opts.attempts ?? 3)
+  const moved = movedUnder(opts.folder)
+  const exists = io.exists?.bind(io)
 
   const one = async (p: string): Promise<void> => {
     try {
@@ -48,7 +59,9 @@ export async function propagateNoteRenames(
         return
       }
       for (let i = 0; i < attempts; i++) {
-        const next = rewriteNoteRefs(raw, backMap.get(p) ?? p, p, plan)
+        const src = backMap.get(p) ?? p
+        const links = rewriteNoteRefs(raw, src, p, plan)
+        const next = exists ? await rebaseFileRefs(links, src, p, moved, exists) : links
         if (next === raw) return
         const r = await io.write(p, next, textFingerprint(raw))
         if (r === 'gone') {

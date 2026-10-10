@@ -8,9 +8,15 @@
  *  - (复核 P1)连续改名 B→C→D 不等前一次:结构变更 + 其重写走库级有序队列,引用最终指向 D,不留 [[C]] 断链
  * 假服务端按 server/microserver/amadeus 的契约建模:文件 seq 逐文件自增、baseSeq 不符 409 带现文;move 保 seq。
  * 负对照(实跑过):摘掉 renamePageFile 的 `.then(propagateRenames)` → 第 1 条红(A.md 原样、零重写 PUT)。
+ *
+ * 2026-10-10 加「图片 / 附件的相对引用」一组:挪单篇笔记、挪 / 改名文件夹之后,正文里 `![](.amadeus/p.png)` 这类页相对
+ * 引用按新位置重算(assets.rebaseFileRefs,和 [[链接]] 同一趟读写)。取图地址由桥装上的那对接缝现拼,断言它指着的
+ * 库内路径就是原来那个文件。负对照(实跑过):桥的 propagateRenames 不给 exists → 该组前 3 条红;
+ * 传播时不带 folder → 第 2、3 条红;exists 改问 visiblePath 滤过的文件表 → 第 1、2 条红(.amadeus/ 被滤掉)。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createCloudAmadeusBridge } from '../../../../web/src/amadeus/cloudBridge'
+import { resetAssetUrlBuilder, toDisplayMarkdown } from '@amadeus-shared/assets'
 
 class FakeES {
   onopen: (() => void) | null = null
@@ -21,6 +27,7 @@ class FakeES {
 const jwt = `header.${btoa(JSON.stringify({ userId: 'u' }))}.signature`
 const files = new Map<string, { content: string; seq: number }>()
 const puts: string[] = []
+let trees = 0
 const toasts: Array<{ text: string; level?: string }> = []
 let beforePut: (path: string) => void = () => {}
 let failPut: (path: string) => boolean = () => false
@@ -45,7 +52,7 @@ const movePrefix = (from: string, to: string): void => {
 }
 
 beforeEach(() => {
-  files.clear(); puts.length = 0; toasts.length = 0
+  files.clear(); puts.length = 0; toasts.length = 0; trees = 0
   beforePut = () => {}
   failPut = () => false
   afterGet = () => {}
@@ -71,7 +78,12 @@ beforeEach(() => {
     const method = init?.method ?? 'GET'
     const body = init?.body ? JSON.parse(String(init.body)) : {}
     if (p.endsWith('/vaults')) return json({ vaults: [{ id: 'v1' }] })
-    if (p.endsWith('/tree')) return json({ pages: [...files.keys()].filter((k) => k.endsWith('.md')).sort(), files: [], folders: folders(), seq: 1 })
+    if (p.endsWith('/tree')) {
+      trees++
+      const all = [...files.keys()].sort()
+      // 同服务端:不滤点目录(.amadeus/ 里的附件也在 files 里)
+      return json({ pages: all.filter((k) => k.endsWith('.md')), files: all.filter((k) => !k.endsWith('.md')).map((path) => ({ path, size: 1 })), folders: folders(), seq: 1 })
+    }
     if (p.endsWith('/file') && method === 'PUT') {
       beforePut(body.path)
       if (failPut(body.path)) return json({ detail: 'boom' }, 500)
@@ -90,7 +102,7 @@ beforeEach(() => {
       afterGet(path)
       return f ? json({ path, kind: 'page', content: f.content, seq: f.seq, hash: 'h', updatedAt: '' }) : json({ detail: 'not found' }, 404)
     }
-    if (p.endsWith('/move')) {
+    if (p.endsWith('/move') && !p.endsWith('/folders/move')) {
       const f = files.get(body.from)!
       files.delete(body.from)
       files.set(body.to, f)
@@ -111,7 +123,7 @@ beforeEach(() => {
     return json({})
   }))
 })
-afterEach(() => { vi.unstubAllGlobals() })
+afterEach(() => { vi.unstubAllGlobals(); resetAssetUrlBuilder() })
 
 const seed = (entries: Record<string, string>): void => { for (const [p, c] of Object.entries(entries)) files.set(p, { content: c, seq: 1 }) }
 const boot = async () => {
@@ -229,5 +241,57 @@ describe('cloud bridge: resolveEmbed(L-15 客户端就近解析 + 切片)', () =
     expect(await bridge.resolveEmbed('Foo#Sec', 'notes/Host.md')).toEqual({ owner: 'notes/Foo.md', content: '## Sec\n\n小节正文。\n\n一段话 ^abc', type: 'markdown' })
     expect((await bridge.resolveEmbed('Foo#^abc', 'notes/Host.md'))?.content).toBe('一段话')
     expect(await bridge.resolveEmbed('Bar', 'notes/Host.md')).toEqual({ owner: 'docs/Bar.md', content: 'live bar\n', type: 'markdown' })
+  })
+})
+
+describe('cloud bridge: 挪笔记 / 文件夹之后图片与附件的相对引用', () => {
+  /** 这篇笔记显示时每张图去服务端取的库内路径(正文里的图是 exact:不带 page,服务端按 ref 精确取)。 */
+  const fetched = (note: string): string[] =>
+    [...toDisplayMarkdown(files.get(note)!.content, note.split('/').slice(0, -1).join('/')).matchAll(/\]\((https:[^)\s]+)/g)].map((m) => {
+      const q = new URL(m[1].replace(/&amp;/g, '&')).searchParams
+      expect(q.get('page')).toBeNull()
+      return q.get('ref')!
+    })
+
+  it('movePage:图片留在原处,引用改成从新位置指过去;没挪的笔记零 PUT;开着它的编辑器收到回灌', async () => {
+    seed({ 'notes/a.md': '![](.amadeus/p.png)\n[doc](attachments/d.pdf)\n', 'notes/c.md': '![](.amadeus/p.png)\n', 'notes/.amadeus/p.png': 'P', 'notes/attachments/d.pdf': 'D' })
+    const { bridge, external } = await boot()
+    expect(fetched('notes/a.md')).toEqual(['notes/.amadeus/p.png']) // 防空过
+    expect(await bridge.movePage('notes/a.md', 'other')).toBe('other/a.md')
+    expect(files.get('other/a.md')!.content).toBe('![](../notes/.amadeus/p.png)\n[doc](../notes/attachments/d.pdf)\n')
+    expect(fetched('other/a.md')).toEqual(['notes/.amadeus/p.png'])
+    expect(puts).toEqual(['other/a.md'])
+    expect(external).toContain('other/a.md')
+    expect(toasts).toEqual([])
+  })
+
+  it('moveFolder:夹内互引不变,指向夹外的按新深度重算,夹外指进来的跟着走', async () => {
+    seed({ 'notes/a.md': '![](.amadeus/p.png) ![](../assets/x.png)\n', 'root.md': '![](notes/.amadeus/p.png)\n', 'notes/.amadeus/p.png': 'P', 'assets/x.png': 'X' })
+    const { bridge } = await boot()
+    expect(await bridge.moveFolder('notes', 'archive')).toBe('archive/notes')
+    expect(files.get('archive/notes/a.md')!.content).toBe('![](.amadeus/p.png) ![](../../assets/x.png)\n')
+    expect(fetched('archive/notes/a.md')).toEqual(['archive/notes/.amadeus/p.png', 'assets/x.png'])
+    expect(files.get('root.md')!.content).toBe('![](archive/notes/.amadeus/p.png)\n')
+  })
+
+  it('renameFolder:只装附件的文件夹(一篇笔记都没有)改名,指向它的引用照样跟上', async () => {
+    seed({ 'notes/a.md': '![](../assets/x.png)\n', 'assets/x.png': 'X' })
+    const { bridge } = await boot()
+    expect(await bridge.renameFolder('assets', 'media')).toBe('media')
+    expect(files.get('notes/a.md')!.content).toBe('![](../media/x.png)\n')
+    expect(fetched('notes/a.md')).toEqual(['media/x.png'])
+  })
+
+  it('空文件夹改名:不为它全库逐篇读;没有要改的引用时不多取一次文件表', async () => {
+    seed({ 'A.md': 'a\n', 'B.md': '[[A]]\n' })
+    const { bridge } = await boot()
+    const gets = (): number => (fetch as unknown as { mock: { calls: Array<[string, RequestInit?]> } }).mock.calls.filter(([u, i]) => u.includes('/file?') && !i?.method).length
+    const g0 = gets()
+    await bridge.renameFolder('empty', 'blank').catch(() => {})
+    expect(gets()).toBe(g0)
+    const t0 = trees
+    expect(await bridge.renamePageFile('A.md', 'A2')).toBe('A2.md') // 有 [[链接]] 要改,但没有图片 / 附件引用
+    expect(files.get('B.md')!.content).toBe('[[A2]]\n')
+    expect(trees - t0).toBeLessThanOrEqual(1) // 只有改名前取页表的那一次
   })
 })
