@@ -21,7 +21,7 @@ export { label } from './types'
 export { Shell } from './Shell'
 export { startOpenDrag } from './WorkspaceHost'
 export { SingleColumnHost, accountMenuRows } from './SingleColumnHost'
-export { listFirstNow } from './listFirst'
+export { listFirstNow, useListFirst } from './listFirst'
 export { MiniColumnHost } from './MiniColumnHost'
 export { supportsMiniPanel, setMiniMainHandler, showInMainPanel, setMiniViewRouter } from './miniPanel'
 export type { MiniPanelDefinition, MiniViewTarget, MainPanelTarget } from './miniPanel'
@@ -101,6 +101,7 @@ export {
   installNativeChromeHost, nativeChromeInstalled, useNativeChromeInstalled, setNativeChromeShell,
   claimNativeChrome, useNativeChromeClaim, dispatchNativeChromeAction, nativeChromeState,
   nativeChromeDrawsSpaces, useNativeChromeSpaces, dispatchNativeChromeSpace, nativeHaptic,
+  useNativeChromeExtras, nativeChromeExtras, subscribeNativeChromeExtras,
 } from './nativeChrome'
 export type {
   NativeChromeAction, NativeChromeState, NativeChromeShellState, NativeChromePageState, NativeChromeHiddenState,

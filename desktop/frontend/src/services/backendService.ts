@@ -113,10 +113,21 @@ export const designTtsVoice = (t: EngineTarget, body: { baseUrl: string; apiKey:
   request<{ voice: string; targetModel: string; previewAudio?: { data: string; sampleRate: number; format: string } }>(t, '/agent/tts/voices/design', { method: 'POST', body: JSON.stringify(body) })
 export const deleteTtsVoice = (t: EngineTarget, body: { baseUrl: string; apiKey: string; voice: string; kind: TtsVoiceKind }) =>
   request<{ ok: boolean }>(t, '/agent/tts/voices/delete', { method: 'POST', body: JSON.stringify(body) })
-/** 实时语音通话的 WebSocket 地址(引擎 ws /agent/realtime;浏览器 WebSocket 设不了头,本机 token 只能走 query)。 */
-export async function realtimeSocketUrl(t: EngineTarget): Promise<string> {
-  const auth = (await t.headers()).Authorization || ''
-  return `${t.base.replace(/^http/, 'ws')}/agent/realtime?token=${encodeURIComponent(auth.replace(/^Bearer\s+/i, ''))}`
+/** 引擎握手时认的子协议名(tangu-agent services/realtimeVoice.ts 的 REALTIME_BEARER_PROTOCOL)。 */
+export const REALTIME_BEARER_PROTOCOL = 'forsion.bearer'
+/**
+ * 实时语音通话的 WebSocket(引擎 ws /agent/realtime)。浏览器的 WebSocket 设不了 Authorization 头,令牌有两种带法:
+ *   - 本机引擎(桌面):放 query —— 只在回环上走;
+ *   - 云网关(手机 / 网页版,连的是 Forsion 服务端的同名端点):放子协议 —— 这是登录令牌,不进 URL、不落进反代的访问日志。
+ * 基址可能是相对的(同源部署),按当前页面解析成绝对地址再换协议。
+ */
+export async function realtimeSocket(t: EngineTarget): Promise<{ url: string; protocols?: string[] }> {
+  const token = ((await t.headers()).Authorization || '').replace(/^Bearer\s+/i, '')
+  const u = new URL(`${t.base}/agent/realtime`, location.href)
+  u.protocol = u.protocol === 'https:' ? 'wss:' : 'ws:'
+  if (t.via === 'cloud') return { url: u.href, protocols: [REALTIME_BEARER_PROTOCOL, token] }
+  u.searchParams.set('token', token)
+  return { url: u.href }
 }
 
 /** 语音合成(POST /agent/tts → 音频字节;home 类:朗读 / 语音条 / 设置页试听)。以前 ttsService 自拼 URL(K6 §3.3「直连三处」之一),

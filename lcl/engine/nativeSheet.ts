@@ -43,8 +43,9 @@ export interface NativeMenuItem<I = NativeIconSource> {
   /** A secondary action button at the end of the row (e.g. close ×). */
   trailing?: NativeMenuTrailing<I>
 }
-/** `footer` = a short muted note under the section's rows (e.g. what a rewind keeps / cannot restore). */
-export interface NativeMenuSection<I = NativeIconSource> { title?: string; items: NativeMenuItem<I>[]; footer?: string }
+/** `footer` = a short muted note under the section's rows (e.g. what a rewind keeps / cannot restore).
+ *  `grid` = the items are places to go, drawn as tiles (icon over name) four to a row instead of rows. */
+export interface NativeMenuSection<I = NativeIconSource> { title?: string; items: NativeMenuItem<I>[]; footer?: string; grid?: boolean }
 export interface NativeMenuRequest<I = NativeIconSource> {
   kind: 'menu'
   title?: string
@@ -279,6 +280,7 @@ async function serializeMenu(req: NativeMenuRequest): Promise<NativeMenuRequest<
   const map = (sections: NativeMenuSection[]): NativeMenuSection<NativeIcon>[] => sections.map((s) => ({
     ...(s.title ? { title: clipNativeText(s.title, MAX_TEXT) } : {}),
     ...(s.footer ? { footer: clipNativeText(s.footer, MAX_DETAIL) } : {}),
+    ...(s.grid ? { grid: true } : {}),
     items: s.items.map((it) => {
       const icon = icons[i++]
       const trailingIcon = icons[i++]

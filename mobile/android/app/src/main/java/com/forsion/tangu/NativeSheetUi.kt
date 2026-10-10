@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -175,7 +176,12 @@ private fun MenuContent(p: SheetPayload.Menu, sheet: SheetState, onPick: (String
                 if (section.title.isNotBlank()) item(key = "section-$index") {
                     Text(section.title, Modifier.padding(start = 12.dp, top = 10.dp, bottom = 6.dp), color = colors.onSurfaceVariant, fontSize = 13.sp, fontWeight = FontWeight.Medium)
                 }
-                items(section.items, key = { "item-${it.id}" }) { item ->
+                if (section.grid) items(section.items.chunked(GRID_COLUMNS), key = { "tiles-${it.first().id}" }) { tiles ->
+                    Row(Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
+                        for (tile in tiles) MenuTile(tile) { onPick(tile.id, false) }
+                        repeat(GRID_COLUMNS - tiles.size) { Spacer(Modifier.weight(1f)) } // a short last row keeps its columns
+                    }
+                } else items(section.items, key = { "item-${it.id}" }) { item ->
                     MenuRow(item, onClick = {
                         if (item.children.isNotEmpty()) stack = stack + item else onPick(item.id, false)
                     }, onTrailing = { onPick(item.id, true) })
@@ -188,6 +194,35 @@ private fun MenuContent(p: SheetPayload.Menu, sheet: SheetState, onPick: (String
                 }
             }
         }
+    }
+}
+
+private const val GRID_COLUMNS = 4
+
+/** One tile of a grid section: the icon on a rounded square, the name under it; the checked one is where you are. */
+@Composable
+private fun RowScope.MenuTile(item: MenuItemSpec, onClick: () -> Unit) {
+    val colors = MaterialTheme.colorScheme
+    val enabled = !item.disabled
+    val tint = (if (item.checked) colors.primary else colors.onSurfaceVariant).copy(alpha = if (enabled) 1f else .38f)
+    Column(
+        Modifier.weight(1f).clip(RoundedCornerShape(18.dp))
+            .semantics { selected = item.checked }
+            .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
+            .testTag("nativeSheet.item.${item.id}")
+            .padding(vertical = 8.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Box(
+            Modifier.size(56.dp).clip(RoundedCornerShape(18.dp))
+                .background(if (item.checked) colors.primary.copy(alpha = .16f) else colors.onSurface.copy(alpha = .06f)),
+            contentAlignment = Alignment.Center,
+        ) { if (item.icon != null) NativeIconView(item.icon, tint, 26.dp) }
+        Text(
+            item.label, Modifier.padding(top = 6.dp, start = 2.dp, end = 2.dp),
+            color = (if (item.checked) colors.primary else colors.onSurface).copy(alpha = if (enabled) 1f else .38f),
+            fontSize = 12.5.sp, fontWeight = if (item.checked) FontWeight.SemiBold else FontWeight.Normal, maxLines = 1, overflow = TextOverflow.Ellipsis,
+        )
     }
 }
 

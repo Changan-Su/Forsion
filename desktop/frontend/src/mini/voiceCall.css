@@ -55,3 +55,43 @@
 .vc-hangup { background: var(--danger); color: var(--on-danger); }
 .vc-hangup:hover { filter: brightness(1.08); }
 .vc-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* ── 手机:同一张卡压成页面顶上的一条(VoiceCallBar,MobileRoot 挂在壳外)。悬浮胶囊 + 毛玻璃,和壳的顶栏胶囊同一种说法。
+   位置:壳顶那一条(Web 胶囊顶栏 58px + 刘海;装了原生外壳时 = 原生层报来的 --nc-top,屏幕 dp,要除以端级缩放)之下再让 6px。
+   盖在聊天内容上(z 40),整屏二级页(设置 / 商店,z 50)之下。滤镜加在画卡片的这个元素上,它没有 fixed 后代(DESIGN §4)。
+   同特异性的覆盖放文件末尾(DESIGN §7.2):.vc-bar 里的头像 / 按钮尺寸压过上面整张卡的那几条。 */
+.vc-bar {
+  position: fixed;
+  z-index: 40;
+  top: calc(64px + env(safe-area-inset-top));
+  left: 12px;
+  right: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 10px;
+  max-width: 460px;
+  margin: 0 auto;
+  padding: 8px 10px 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill, 999px);
+  background: color-mix(in srgb, var(--bg-card, var(--bg)) 74%, transparent);
+  box-shadow: var(--card-shadow);
+  -webkit-backdrop-filter: blur(calc(18px / var(--uiz, 1))) saturate(1.8);
+  backdrop-filter: blur(calc(18px / var(--uiz, 1))) saturate(1.8);
+  animation: vc-bar-in var(--menu-enter-duration, 140ms) var(--menu-enter-ease, ease-out) both;
+}
+body:has(.mb-shell[data-native-chrome]) .vc-bar { top: calc(var(--nc-top, 0) * 1px / var(--uiz, 1) + 6px); }
+:root[data-glass='off'] .vc-bar { background: var(--bg-card, var(--bg)); -webkit-backdrop-filter: none; backdrop-filter: none; }
+@keyframes vc-bar-in { from { opacity: 0; scale: 0.96; } }
+@media (prefers-reduced-motion: reduce) { .vc-bar { animation: none; } }
+.vc-bar .vc-portrait { flex: 0 0 auto; width: 36px; height: 36px; margin-bottom: 0; }
+.vc-bar .vc-halo { inset: -6px; }
+.vc-bar-text { flex: 1 1 auto; min-width: 0; }
+.vc-bar .vc-name { font-size: var(--ui-font-body, 14px); line-height: var(--ui-line-body, 1.45); }
+.vc-bar .vc-status { justify-content: flex-start; }
+.vc-bar .vc-status.is-error .vc-status-text { text-align: left; }
+.vc-bar .vc-btn { flex: 0 0 auto; width: 40px; height: 40px; }
+/* 聊天流让出通话条那一段(条高 58px,上下各留 6px):新会话的头几句转写就出在流的最顶上,不让就被条压住。
+   只让聊天这一个视图 —— 通话的内容在这儿;切去别的视图时条照旧浮在内容上。 */
+body:has(.vc-bar) .mb-shell:not(.mini-shell) .mb-view[data-view='chat'] .t2-stream { padding-top: calc(var(--mb-top) + 70px); }

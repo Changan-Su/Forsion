@@ -37,11 +37,13 @@
     "e2e:update": "node scripts/update-remind.e2e.cjs",
     "e2e:attachsave": "node scripts/attachment-save.e2e.cjs",
     "e2e:runon": "node scripts/units-runon.e2e.cjs",
+    "e2e:voicecall": "node scripts/voice-call.e2e.cjs",
     "emu:unitrelay": "node scripts/unit-relay-emu.cjs",
     "emu:savedl": "node scripts/save-download-emu.cjs",
     "emu:nativeshell": "node scripts/native-shell-emu.cjs",
     "emu:treecompare": "node scripts/uitree-compare.cjs",
     "test:nativebar": "./android/gradlew -p android :app:testDebugUnitTest --tests '*NativeChromeBarLayoutTest'",
+    "stage:phone": "node scripts/phone-stage.cjs",
     "emu:launchericon": "node scripts/launcher-icon-upgrade-emu.cjs",
     "emu:phone": "node scripts/phone-control-emu.cjs",
     "emu:localasset": "node scripts/local-asset-emu.cjs"

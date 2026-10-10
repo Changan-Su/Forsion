@@ -11,16 +11,20 @@
  *  A host may also draw the Space switcher as a bottom navigation bar (`spaces: true`): the shell then sends
  *  the Space list with its state and drops the web Space row from the drawer foot; taps come back through
  *  `dispatchNativeChromeSpace`. With such a host the shell navigates in two levels (SingleColumnHost,
- *  `listFirstNow`): the Space list is sent only on a Space's first level, so the bar is gone one level down. */
+ *  `listFirstNow`): the Space list is sent only on a Space's first level, so the bar is gone one level down.
+ *  The bar holds a handful of Spaces (`pinned`, see spaceDock.ts); the rest are behind its "all" cell (`spacesAll`).
+ *  A view on screen may add to the shell's bar (`useNativeChromeExtras`): a search button, a second title part. */
 import { useEffect, useRef, useSyncExternalStore } from 'react'
 
-export type NativeChromeAction = 'left' | 'right' | 'tabs' | 'more' | 'back' | 'close'
+export type NativeChromeAction = 'left' | 'right' | 'tabs' | 'more' | 'back' | 'close' | 'search' | 'title' | 'spacesAll'
 export interface NativeChromeShellLabels { left: string; right: string; tabs: string; more: string }
 /** One destination of the bottom navigation bar. Data only: the host resolves the icon from the Space registry. */
 export interface NativeChromeSpace {
   id: string; label: string; active: boolean
   /** Opaque identity of the Space's icon component: changes when only the icon was replaced, so the state is re-sent. */
   iconRev?: number
+  /** The user keeps it in the bar; the others are reached through the bar's "all" cell. */
+  pinned?: boolean
 }
 export interface NativeChromeShellState {
   mode: 'shell'
@@ -34,6 +38,13 @@ export interface NativeChromeShellState {
   labels: NativeChromeShellLabels
   /** Sent only to hosts that draw the Space switcher (see `NativeChromeHost.spaces`); fewer than two = no bar. */
   spaces?: NativeChromeSpace[]
+  /** With `spaces`: what the bar's "all Spaces" cell is called. */
+  allLabel?: string
+  /** Label of a search button (the view on screen has something to search); absent = no button. */
+  search?: string
+  /** A second, quieter part of the title (which vault); `titleTap` = the title is a button. */
+  titleSub?: string
+  titleTap?: boolean
 }
 /** `close` = label of an optional trailing × (e.g. a settings sub-page: back = settings home, × = leave settings). */
 export interface NativeChromePageState { mode: 'page'; title: string; back: string; close?: string }
@@ -185,3 +196,46 @@ export function dispatchNativeChromeSpace(id: string, long = false): boolean {
 
 /** Current effective state (tests / diagnostics). */
 export function nativeChromeState(): NativeChromeState { return effective() }
+
+// ── what a view adds to the shell's bar ────────────────────────────────────────
+
+/** `where` = the level the view lives on in two-level navigation: a Space's list (the left panel) or its main area.
+ *  The shell shows the additions of the level that is on screen; the last view to ask wins. */
+export interface NativeChromeExtras {
+  where: 'list' | 'main'
+  search?: { label: string; run: () => void }
+  /** `sub` = second part of the title; `run` = the title is a button. */
+  title?: { sub: string; run?: () => void }
+}
+const extras: Array<{ value: NativeChromeExtras }> = []
+const extrasSubscribers = new Set<() => void>()
+export function nativeChromeExtras(where: NativeChromeExtras['where']): NativeChromeExtras | undefined {
+  for (let i = extras.length - 1; i >= 0; i--) if (extras[i].value.where === where) return extras[i].value
+  return undefined
+}
+export function subscribeNativeChromeExtras(fn: () => void): () => void {
+  extrasSubscribers.add(fn)
+  return () => { extrasSubscribers.delete(fn) }
+}
+/** Hold additions while `value` is non-null. Handlers may change between renders without the bar being re-sent. */
+export function useNativeChromeExtras(value: NativeChromeExtras | null): void {
+  const latest = useRef(value)
+  latest.current = value
+  const key = value ? JSON.stringify({ w: value.where, s: value.search?.label ?? null, t: value.title?.sub ?? null, r: !!value.title?.run }) : ''
+  useEffect(() => {
+    if (!key) return
+    const parsed = JSON.parse(key) as { w: NativeChromeExtras['where']; s: string | null; t: string | null; r: boolean }
+    const entry = { value: {
+      where: parsed.w,
+      ...(parsed.s !== null ? { search: { label: parsed.s, run: () => latest.current?.search?.run() } } : {}),
+      ...(parsed.t !== null ? { title: { sub: parsed.t, ...(parsed.r ? { run: () => latest.current?.title?.run?.() } : {}) } } : {}),
+    } satisfies NativeChromeExtras }
+    extras.push(entry)
+    extrasSubscribers.forEach((fn) => fn())
+    return () => {
+      const i = extras.indexOf(entry)
+      if (i >= 0) extras.splice(i, 1)
+      extrasSubscribers.forEach((fn) => fn())
+    }
+  }, [key])
+}

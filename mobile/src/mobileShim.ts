@@ -256,10 +256,15 @@ function setWindowTangu(backendUrl: string, token: string, native: boolean): voi
   }
 
   // 身份字段压在最后:落盘偏好(可能是旧号 / 被人改过的 localStorage)绝不该盖掉连接与鉴权。
-  const config = (): Record<string, unknown> => ({
-    modelId: '', ...readPrefs(),
-    mode: 'external', backendUrl, token, cloudUrl: cloudApiBase, cloudApiBase, sandbox: 'none',
-  })
+  // realtimeModelUnset = 从没动过语音通话那个开关(键不在落盘偏好里;与桌面 main.ts 同一个判法)→ 已登录就默认用云端的通话模型
+  // (口径在共享渲染层的 services/realtimeModel.ts)。写过(选了模型,或关掉 = 存了 '')就听他的。
+  const config = (): Record<string, unknown> => {
+    const prefs = readPrefs()
+    return {
+      modelId: '', ...prefs, realtimeModelUnset: !('realtimeModelId' in prefs),
+      mode: 'external', backendUrl, token, cloudUrl: cloudApiBase, cloudApiBase, sandbox: 'none',
+    }
+  }
 
   ;(window as unknown as { tangu: unknown }).tangu = {
     cloudWeb: true,

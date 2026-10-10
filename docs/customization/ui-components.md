@@ -61,6 +61,8 @@ Android 的共享 `ModelPill` 可通过 `modelPickerHost` 接口使用 Kotlin / 
 自带返回语义的页面（如设置）用 `{ mode: 'page', title, back, onBack, close?, onClose? }`。
 Space 切换在 Android 上是原生底部导航栏（宿主声明 `spaces: true`）：插件注册的 Space 自动出现在里面，图标取 `SpaceDefinition.icon`，不需要额外接线。
 有左栏的 Space 在 Android 上是两级导航：进来先看左栏（全屏列表），点条目进主区，返回回到列表。左栏不是这种列表的 Space 在定义里写 `listFirst: false`，主区就是第一层、左栏仍是抽屉。
+视图可以往这条原生顶栏上加两样东西：`useNativeChromeExtras({ where: 'list' | 'main', search?: { label, run }, title?: { sub, run? } })` —— 右胶囊里的搜索钮、标题的第二段（给了 `run` 就可点）；不声明就没有，只有当前这一层的声明生效。
+视图要知道自己是不是正作为「列表层」整屏显示（好换成手机的摆法：一颗主按钮、左滑操作），用 `useListFirst()`；没有原生宿主时恒为 `false`。内置的那套手机列表件（分类胶囊、左滑一行、主按钮、下拉搜索）在应用层的 `components/phoneList`，目前不对插件开放。
 自绘菜单想同时支持原生底单时，把条目写成一份 `SheetMenu`（文案 + `run` 回调），Web 渲染与原生底单共用：
 点击触发用 `openNativeSheetMenu(build, { onFallback })`，状态驱动（右键 / 长按）用 `useNativeSheetMenu(open, build, onClose)`。
 手机「⋯」菜单除 ribbon 底部项外，还列出声明了 `Command.moreGroup = { id, title }` 的命令（同组一节、节标题 = `title`）；

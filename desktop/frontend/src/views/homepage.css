@@ -1147,3 +1147,62 @@ html[data-glass='off'] .hp-root .hp-composer .project-pill::before {
 .hp-still .hp-tile,
 .hp-still .hp-tile-icon,
 .hp-still .hp-folder-app { transition-duration: 0.01ms !important; }
+
+/* ── 手机(Android 原生外壳画 Dock;HomepageView 在根上挂 .hp-phone)。布局「二」,2026-10-09 用户选定:
+ *    问候在上(小字标语 + 一行大字问候 + 日期 · 时刻),四张带一行近况的大卡片与收起的输入条沉到下半屏 —— 拇指够得到的地方。
+ *    点输入条展开成完整的输入区(模型、模式、附件都在里面),卡片让位。
+ *    尺寸按屏幕 dp 写:--hp-dp = 1dp 折合的 CSS px(壳里的 px 被 body zoom 放大过)。字号只用六档界面角色。
+ *    每条都带 .hp-phone,比它覆盖的基础规则和上面几档媒体查询都多一段;放文件末尾(DESIGN §7.2)。 ── */
+.hp-root.hp-phone { --hp-dp: calc(1px / var(--uiz, 1)); --hp-padding-block: calc(18 * var(--hp-dp)); padding-inline: calc(18 * var(--hp-dp)); }
+.hp-phone .hp-stack { align-items: stretch; height: 100%; margin: 0; gap: calc(14 * var(--hp-dp)); }
+.hp-phone .hp-title { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: calc(6 * var(--hp-dp)); text-align: left; margin-bottom: auto; }
+.hp-phone .hp-brand { flex: 0 0 100%; order: 1; margin: 0 0 calc(4 * var(--hp-dp)); font-size: var(--ui-font-title, 16px); }
+.hp-phone .hp-greet { flex: 0 0 100%; order: 2; margin: 0; color: var(--text); font-size: var(--ui-font-display, 20px); font-weight: 600; line-height: 1.25; }
+.hp-phone .hp-date { order: 3; margin-top: calc(6 * var(--hp-dp)); font-size: var(--ui-font-body, 13px); }
+.hp-phone .hp-clock { order: 4; font-size: var(--ui-font-body, 13px); font-weight: 400; letter-spacing: 0; line-height: inherit; color: var(--text-muted); }
+.hp-phone .hp-clock::before { content: '·'; margin-right: calc(6 * var(--hp-dp)); }
+.hp-root.hp-phone[data-wallpaper='true'] .hp-greet { opacity: 1; }
+.hp-root.hp-phone[data-wallpaper='true'] .hp-clock { color: var(--text); opacity: 0.7; }
+
+.hp-phone .hp-cards { order: 2; display: grid; grid-template-columns: 1fr 1fr; gap: calc(12 * var(--hp-dp)); }
+.hp-phone .hp-card {
+  display: grid; grid-template-columns: auto 1fr; grid-template-rows: auto auto; align-content: space-between;
+  column-gap: calc(10 * var(--hp-dp)); row-gap: calc(8 * var(--hp-dp));
+  min-height: calc(104 * var(--hp-dp)); padding: calc(16 * var(--hp-dp));
+  border: 0; border-radius: var(--radius-lg, 16px);
+  background: var(--hp-glass-sheen), var(--hp-glass-tint);
+  backdrop-filter: var(--hp-glass-filter); -webkit-backdrop-filter: var(--hp-glass-filter);
+  box-shadow: var(--card-shadow);
+  color: var(--text); font-family: var(--font-ui); text-align: left;
+}
+.hp-phone .hp-card:active { transform: scale(0.98); }
+.hp-phone .hp-card-icon { display: inline-flex; align-self: center; color: var(--text-muted); }
+.hp-phone .hp-card-icon > svg { width: calc(24 * var(--hp-dp)); height: calc(24 * var(--hp-dp)); }
+.hp-phone .hp-card-name { align-self: center; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--ui-font-heading, 14px); font-weight: 600; }
+.hp-phone .hp-card-status { grid-column: 1 / -1; min-width: 0; min-height: 1.3em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--ui-font-caption, 11px); line-height: 1.3; color: var(--text-muted); }
+
+.hp-phone .hp-pill {
+  order: 3; display: flex; align-items: center; gap: calc(12 * var(--hp-dp));
+  height: calc(54 * var(--hp-dp)); padding: 0 calc(8 * var(--hp-dp)) 0 calc(20 * var(--hp-dp));
+  border: 0; border-radius: var(--radius-pill, 999px);
+  background: var(--hp-glass-sheen), var(--hp-glass-tint);
+  backdrop-filter: var(--hp-glass-filter); -webkit-backdrop-filter: var(--hp-glass-filter);
+  box-shadow: var(--card-shadow);
+  color: var(--text-muted); font-family: var(--font-ui); font-size: var(--ui-font-body, 13px); text-align: left;
+}
+.hp-phone .hp-pill-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hp-phone .hp-pill-text[data-draft] { color: var(--text); }
+.hp-phone .hp-pill-mic { align-self: stretch; display: grid; place-items: center; width: calc(44 * var(--hp-dp)); margin-inline: calc(-8 * var(--hp-dp)); }
+.hp-phone .hp-pill-mic > svg { width: calc(20 * var(--hp-dp)); height: calc(20 * var(--hp-dp)); }
+.hp-phone .hp-pill-send {
+  display: grid; place-items: center; width: calc(38 * var(--hp-dp)); height: calc(38 * var(--hp-dp));
+  border-radius: 50%; background: var(--accent); color: var(--on-accent, #fff);
+}
+.hp-phone .hp-pill-send > svg { width: calc(18 * var(--hp-dp)); height: calc(18 * var(--hp-dp)); }
+/* 收起 ↔ 展开:完整的输入区一直在页面里(草稿不丢),平时不显示;展开时它顶替输入条,卡片让位。 */
+.hp-phone .hp-composer { order: 3; }
+.hp-root.hp-phone:not(.hp-composer-focused) .hp-composer { display: none; }
+.hp-root.hp-phone.hp-composer-focused .hp-pill,
+.hp-root.hp-phone.hp-composer-focused .hp-cards { display: none; }
+.hp-root.hp-phone.hp-composer-focused .hp-composer { transform: none; }
+.hp-root.hp-phone.hp-composer-focused .hp-title { opacity: 1; transform: none; }
