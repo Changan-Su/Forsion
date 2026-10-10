@@ -331,6 +331,9 @@ async function forkJudge(
     historianSignal.getStore()?.throwIfAborted();
     const res = await deps().brain.llm.streamProviderCompletion({ apiKey, baseUrl, payload, provider: (model as any)?.provider, signal: historianSignal.getStore() });
     historianSignal.getStore()?.throwIfAborted();
+    // 这一路值不值,只看它读没读到主循环写下的前缀缓存(cached 与 prompt 同量级才算读到)。上游没报缓存量时记 -,不当 0。
+    // live 台架 `--only forkcache` 认这一行,改措辞要一起改。
+    log(`fork 判官用量 prompt=${res?.usage?.prompt_tokens ?? 0} cached=${res?.usage?.cached_tokens ?? '-'} completion=${res?.usage?.completion_tokens ?? 0}`);
     await recordJudgeUsage(userId, seed.modelId, model, res);
     historianSignal.getStore()?.throwIfAborted();
     const out = String(res?.content || '').trim();
