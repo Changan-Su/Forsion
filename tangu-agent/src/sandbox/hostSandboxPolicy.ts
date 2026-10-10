@@ -24,6 +24,8 @@ const COVERED_TOOLS = new Set([
   'remember', 'manage_human', 'manage_harness', 'log_event', 'read_log', 'search_sessions', 'read_session',
   // 只读固定路径 <共享域>/computer-history/(不收模型给的路径);Muse 周期跑 execMode:host,开了宿主沙箱不列就整个没了。
   'read_computer_history',
+  // 只读本 run 的循环状态(上下文占用 / 已花 token / 步数)与一条固定的会话汇总查询;不收路径、不执行任何东西。
+  'session_status',
   'load_tools', 'ask_user', 'exit_plan_mode', 'todo_read', 'todo_write', 'get_datetime',
 ]);
 

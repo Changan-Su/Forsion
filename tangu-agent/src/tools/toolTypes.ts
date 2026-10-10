@@ -199,6 +199,9 @@ export interface ToolContext {
   getImageInputs?: () => ReadonlyArray<{ url: string }>;
   /** 本 run 实际用的上下文窗口(token;Ultra 不封顶)。self_brainstorm 的超窗护栏与主 loop 同一分母;只有主 agentLoop 装配。 */
   contextWindow?: number;
+  /** 本 run 此刻的进度(上下文占用 / 压缩线 / 已花 token / 步数 / 起始时刻),session_status 工具读它。
+   *  数只活在主循环里(见 services/runStatus.ts),只有主 agentLoop 装配;子代理拿到的是父 run 的那份,消费方按 subAgentDepth 自己收口。 */
+  getRunStatus?: () => import('../services/runStatus.js').RunStatus;
 }
 
 /** Agent Desk 演出请求:views=从上到下的展示项(file=本地文件;view=已注册的桌面视图,含插件注册);

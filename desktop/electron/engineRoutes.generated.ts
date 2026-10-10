@@ -171,6 +171,7 @@ export const ENGINE_ROUTES: readonly EngineRoute[] = [
   { method: 'GET', path: '/agent/sessions/:id/detail', access: 'allow', src: 'routes/sessions.ts', why: 'session detail' },
   { method: 'GET', path: '/agent/sessions/:id/messages', access: 'allow', src: 'routes/sessions.ts', why: 'session messages' },
   { method: 'POST', path: '/agent/sessions/:id/messages/delete', access: 'deny-remote', src: 'routes/sessions.ts', why: 'irreversible deletion of local conversation history' },
+  { method: 'GET', path: '/agent/sessions/:id/status', access: 'allow', src: 'routes/sessions.ts', why: 'live run status (context / tokens / steps)' },
   { method: 'POST', path: '/agent/sessions/:id/team-members/:slug', access: 'allow', src: 'routes/sessions.ts', why: 'open a team member child session (taint propagates, C5)' },
   { method: 'GET', path: '/agent/sessions/:id/timeline', access: 'allow', src: 'routes/sessions.ts', why: 'session timeline' },
   { method: 'GET', path: '/agent/sessions/:id/usage', access: 'allow', src: 'routes/sessions.ts', why: 'session usage' },

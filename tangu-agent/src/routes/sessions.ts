@@ -14,6 +14,7 @@ import { Router, type Response } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { authMiddleware, AuthRequest } from '../core/http.js';
 import { query } from '../core/db.js';
+import { liveRunStatus } from '../services/runStatus.js';
 import { normalizeSessionEmoji } from '../core/sessionEmoji.js';
 import { resolveProfile } from '../seams/appProfile.js';
 import { compactSession, getLatestSummary, rowCoverage, type Checkpoint } from '../services/compaction.js';
@@ -509,6 +510,19 @@ router.get('/agent/sessions/:id/usage', authMiddleware, async (req: AuthRequest,
     res.json({ tokensTotal: Number(rows[0]?.total) || 0, contextTokens: sessionContextTokens(last, await getLatestSummary(req.params.id), lastRow) });
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'usage failed' });
+  }
+});
+
+// 本会话此刻在跑的那一轮「跑到哪了」:窗口 / 占用 / 压缩线 / 已花 token / 步数 / 用时 —— 与 session_status 工具同一份
+// (services/runStatus.ts:数只活在主循环里,run 中途库里读不到)。没有 run 在跑 → { active:false },累计数照旧看 /usage。
+router.get('/agent/sessions/:id/status', authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const s = await getOwnSession(req.params.id, req.user!.userId);
+    if (!s) return res.status(404).json({ detail: 'Session not found' });
+    const run = liveRunStatus(req.params.id);
+    res.json(run ? { active: true, run: { ...run, elapsedMs: Math.max(0, Date.now() - run.startedAt) } } : { active: false });
+  } catch (e: any) {
+    res.status(500).json({ detail: e?.message || 'status failed' });
   }
 });
 
