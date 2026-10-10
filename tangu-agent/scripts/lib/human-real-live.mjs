@@ -13,7 +13,8 @@
  *     (只说「偏抽象」不算,必须点得出具体的词 —— 头一版让它直接判「读不读得懂」,把「按什么分」「定死」这种大白话也判了进去)。
  *     它点出来的词里,用户自己在六条消息里说过的(实测点过「千分位」)和 agent 的名字由代码去掉,不算数。
  *     判官自己也有起伏,每份文档判三次,两道门各按多数算。
- *     【门:没有一条是 agent 自己要做的事;没有一条带这样的词】;「双方各做一半」的条目与逐条带不带「你」只记数。
+ *     【门:没有一条是 agent 自己要做的事;没有一条带这样的词】;「双方各做一半」的条目、逐条带不带「你」、
+ *     以及程序直接数的「口径 / 维度 / 交付 / 验收」出现几处(判官对夹在口语里的单个词会漏)只记数。
  * 判官那次调用也经引擎走(系统提示里带着被测版本的协作说明指引),所以判据全写在判官消息里、不指望它读指引。
  * 全部原文(文档、写入参数、判官逐条结论)存 `humanreal-evidence.json`。
  * `--humanreal-rejudge <evidence.json,…>`:不跑任务,只把旧证据里的文档按现在的判据重判一遍(改了判据之后,改前改后才是同一把尺子),
@@ -135,11 +136,13 @@ async function grade(round, judgeDoc, title) {
   const votes = judge?.votes ? `;三次判:agent 自己要做的 ${judge.votes.map((v) => v.agentItems).join('/')} 条、带用户不会说的词 ${judge.votes.map((v) => v.hardItems).join('/')} 条` : '';
   const ok = !error && g.wrote && g.correctionClean && g.noJargon && g.userLanguage && g.noAgentItems === true && g.noHardTerms === true;
   const addressed = items.filter((l) => /[你您]/.test(l)).length;
+  // 程序直接数的几个办公行话:整份很口语、只夹了一个「口径」时,判官三次里常常只点出一次,过了多数那道门。只记数。
+  const office = (doc.match(/口径|维度|交付|验收/g) || []).length;
   const midTask = turns.slice(0, 5).reduce((n, x) => n + x.humanApplied, 0); // ⑥ 之前自己写的次数:只记数
   const saveFailed = turns.reduce((n, x) => n + Math.max(0, x.humanArgs.length - x.humanApplied), 0); // 发了写入但没存上的次数(版本号抄错之类):只记数
   const line = error ? `出错 ${error}`
-    : `${g.wrote ? '' : `⚠ ⑥ 那一轮没存进协作说明(去了:${byKey.ask?.otherStores.join(',') || '只在回复里说'});`}${!doc.trim() ? '协作说明为空' : t ? `${t.items} 条:agent 自己要做的 ${t.agentItems}、双方各一半 ${t.bothItems}、带用户不会说的词 ${t.hardItems}(${t.terms.join('、') || '无'})${votes}` : `判官没判成(${judgeError})`};带「你」${addressed}/${items.length} 行;内部用词 ${jargon.join(',') || '无'};⑤ 纠正${g.correctionClean ? '没动协作说明' : '⚠ 被写进了协作说明'}(记忆 ${byKey.correction?.otherStores.includes('remember') ? '记了' : '没记'});⑥ 之前自发写 ${midTask} 次${saveFailed ? `;没存上 ${saveFailed} 次` : ''}`;
-  return { ok, gates: g, judge, judgeError, tally: t, jargon, addressed: `${addressed}/${items.length}`, midTask, saveFailed, line, doc };
+    : `${g.wrote ? '' : `⚠ ⑥ 那一轮没存进协作说明(去了:${byKey.ask?.otherStores.join(',') || '只在回复里说'});`}${!doc.trim() ? '协作说明为空' : t ? `${t.items} 条:agent 自己要做的 ${t.agentItems}、双方各一半 ${t.bothItems}、带用户不会说的词 ${t.hardItems}(${t.terms.join('、') || '无'})${votes}` : `判官没判成(${judgeError})`};带「你」${addressed}/${items.length} 行;「口径 / 维度 / 交付 / 验收」${office} 处;内部用词 ${jargon.join(',') || '无'};⑤ 纠正${g.correctionClean ? '没动协作说明' : '⚠ 被写进了协作说明'}(记忆 ${byKey.correction?.otherStores.includes('remember') ? '记了' : '没记'});⑥ 之前自发写 ${midTask} 次${saveFailed ? `;没存上 ${saveFailed} 次` : ''}`;
+  return { ok, gates: g, judge, judgeError, tally: t, jargon, addressed: `${addressed}/${items.length}`, office, midTask, saveFailed, line, doc };
 }
 const KEYS = ['wrote', 'correctionClean', 'noJargon', 'userLanguage', 'noAgentItems', 'noHardTerms'];
 const sumUp = (graded) => { const n = Object.fromEntries(KEYS.map((k) => [k, graded.filter((x) => x.gates[k]).length])); const judged = graded.filter((x) => x.tally).length;
@@ -164,7 +167,7 @@ export async function humanRealLive(h) {
       const ev = JSON.parse(readFileSync(file, 'utf8')); const name = file.split('/').slice(-3, -2)[0]; const graded = [];
       for (const r of ev.rounds) {
         const x = await grade(r, judgeDoc, `Human real rejudge ${r.round}`); graded.push(x);
-        rows.push({ file, model: ev.model, round: r.round, ok: x.ok, gates: x.gates, tally: x.tally, jargon: x.jargon, addressed: x.addressed, midTask: x.midTask, saveFailed: x.saveFailed, error: r.error || null, judge: x.judge, judgeError: x.judgeError });
+        rows.push({ file, model: ev.model, round: r.round, ok: x.ok, gates: x.gates, tally: x.tally, jargon: x.jargon, addressed: x.addressed, office: x.office, midTask: x.midTask, saveFailed: x.saveFailed, error: r.error || null, judge: x.judge, judgeError: x.judgeError });
         console.log(`  ${ev.model} ${name} 第 ${r.round} 轮:${x.ok ? '✓' : '✗'} ${x.line}`);
       }
       const ran = graded.filter((_, n) => !ev.rounds[n].error);
@@ -196,7 +199,7 @@ export async function humanRealLive(h) {
     const x = await grade({ turns, agentDoc, projectDoc, error }, judgeDoc, `Human real judge ${r}`); graded.push(x);
     console.log(`  第 ${r}/${rounds} 轮(${slug}):${x.ok ? '✓' : '✗'} ${x.line}`);
     outs.push(`【第 ${r} 轮${x.ok ? ' ✓' : ' ✗'}】${x.line}\n${x.doc || '(协作说明为空)'}${x.judge ? `\n— 判官逐条 —\n${judgeLines(x.judge)}` : ''}`);
-    evidence.push({ round: r, slug, ok: x.ok, gates: x.gates, error, jargon: x.jargon, midTask: x.midTask, saveFailed: x.saveFailed, addressed: x.addressed, agentDoc, projectDoc, writes: turns.flatMap((t) => t.humanArgs), judge: x.judge, judgeError: x.judgeError, turns });
+    evidence.push({ round: r, slug, ok: x.ok, gates: x.gates, error, jargon: x.jargon, midTask: x.midTask, saveFailed: x.saveFailed, addressed: x.addressed, office: x.office, agentDoc, projectDoc, writes: turns.flatMap((t) => t.humanArgs), judge: x.judge, judgeError: x.judgeError, turns });
     // 每轮落一次盘:台架整体超时(缺省 15 分钟;慢的模型 4 轮就会撞上,跑时带 --timeout)也留得下已经跑完的几轮
     writeFileSync(join(OUT, 'humanreal-evidence.json'), JSON.stringify({ model: MODEL, judgeModel: JUDGE_MODEL, turns: TURNS, rounds: evidence }, null, 2));
   }
