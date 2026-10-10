@@ -1312,8 +1312,26 @@ if (new URLSearchParams(location.search).has('dock')) {
     onSort: (sv) => { w.__tableMount.sorts.push(sv) },
   })
   const foldMode = new URLSearchParams(location.search).has('tablefold')
+  // ?tablemount&tablewidth:自适应列宽对着真字体复核 —— 主内容就是 autoColumnWidth.test.ts 里那份实测样本
+  // (数字多 / 全大写 / 全角标点 / m、w 多),第一格带头像。加 &sysfont 把界面字体换成系统字体
+  // (genesis-glass 主题的那一套)。两套字体下都不许有主内容被截。
+  // ⚠️ 一个样本一列:列宽取同列各行的最大值,样本竖着排在一列里,最长的那条会把别的全盖住 ——
+  //    负对照实跑过,估算退回旧版照样全绿。
+  const widthMode = new URLSearchParams(location.search).has('tablewidth')
+  const WIDTH_SAMPLES = ['phone_13900000001_1791006181995', 'xuanxichen636@gmail.com', 'FORSION_OFFICIAL_ACCOUNT', '2026-10-10 14:03',
+    '4000 8888 2345 6789', 'Research database interactions · 交互调研', '项目记录（第二版），已完成', 'www.communications-management.com',
+    'Windows Media Manager', 'suspended', '11111111111']
+  const widthSpec: TableSpec = {
+    id: 'widths',
+    columns: WIDTH_SAMPLES.map((_, i) => ({ key: `s${i}`, label: `S${i + 1}`, kind: 'text' as const })),
+    rows: [{ id: 'w', cells: Object.fromEntries(WIDTH_SAMPLES.map((text, i) => [`s${i}`, i === 0 ? { text, sub: 'avatar + sub', avatar: { letter: 'P' } } : text])) }],
+  }
+  if (widthMode) {
+    skin.style.maxHeight = 'none'
+    if (new URLSearchParams(location.search).has('sysfont')) document.documentElement.style.setProperty('--font-ui', '-apple-system, BlinkMacSystemFont, system-ui')
+  }
   void import('./amadeus/plugins/tableSurface').then((m) => {
-    const handle = m.mountPluginTable('harness-plugin', host, foldMode ? foldSpecOf(30) : specOf(5))
+    const handle = m.mountPluginTable('harness-plugin', host, widthMode ? widthSpec : foldMode ? foldSpecOf(30) : specOf(5))
     ;(w.__tableMount as unknown as { fold(minutes: number): void }).fold = (minutes) => handle.update(foldSpecOf(minutes))
     w.__tableMount.update = (n) => handle.update(specOf(n))
     w.__tableMount.dispose = () => handle.dispose()
