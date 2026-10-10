@@ -18,6 +18,8 @@
 //   T13 无未捕获页面错误
 //   T18 用户在视图条「行折叠」弹层里自己配折叠键 / 时间窗
 //   T17 规则行折叠(TableSpec.fold):折叠单元数 / 汇总口径 / 展开 / 按汇总值排序 / 宿主换时间窗
+//   T19 自适应列宽对着真字体复核(?tablewidth):数字多 / 全大写 / 全角标点 / m、w 多的主内容,
+//       默认界面字体与系统字体(&sysfont)下都没有一格被截。样本与实测真值在 autoColumnWidth.test.ts
 // ⚠️ 交互口径跟着 DatabaseEmbed 的只读分支走(readOnly 下表头**左键就地排序**、右键才开列菜单)。
 //    那边若改成「左键开菜单、菜单里排序」,T7/T8 这两处的动作要跟着改,别改断言。
 // 用法:npm run check:tablemount(经 e2e-editor.cjs 起停 vite;worktree 里设 HARNESS_URL 指独立端口);--shot 存截图
@@ -340,6 +342,32 @@ async function shot(page, name) {
     const clipped = await page.evaluate(({ foldSel }) => [...document.querySelectorAll(foldSel + ' .amx-db-roprimary')].filter((el) => el.scrollWidth > el.clientWidth + 1).length, { foldSel: FOLD })
     check('T17g 自适应列宽把汇总行算进去:汇总行没有一格被截成省略号(折叠态下它是唯一上屏的行)', clipped === 0, `clipped=${clipped}`)
     await shot(page, 'tablemount-9-fold-dark')
+
+    // T19:估宽是按字符类别算的,对不对只有真字体说了算 —— 两套界面字体各渲一遍,主内容一格都不许截。
+    // 夹具是一行 11 列(一个样本一列,各列宽互不遮盖);视口放宽到整行都在屏上,截图才看得全。
+    await page.setViewportSize({ width: 2400, height: 420 })
+    for (const [label, query, family] of [['默认界面字体', '', /Hanken Grotesk/], ['系统字体', '&sysfont', /^-apple-system/]]) {
+      await page.goto(`${BASE}?tablemount&tablewidth${query}`)
+      await page.waitForSelector(ROWS)
+      await page.evaluate(() => document.fonts.ready)
+      await page.waitForTimeout(200)
+      const s19 = await page.evaluate((sel) => {
+        const prims = [...document.querySelectorAll(`${sel} .amx-db-roprimary`)]
+        return {
+          cells: prims.length,
+          family: getComputedStyle(prims[0]).fontFamily,
+          // 别用 document.fonts.check():字体根本没声明时它也返回 true(样式表没载到 = 守卫空过)
+          hankenLoaded: [...document.fonts].some((face) => /Hanken Grotesk/.test(face.family) && face.status === 'loaded'),
+          widths: prims.map((el) => Math.round(el.closest('.amx-db-cell').getBoundingClientRect().width)).join(),
+          clipped: prims.filter((el) => el.scrollWidth > el.clientWidth + 1).map((el) => `${el.textContent}(${el.scrollWidth}>${el.clientWidth})`),
+        }
+      }, ROWS)
+      check(`T19 自适应列宽 · ${label}:11 条实测样本各占一列,主内容没有一格被截`,
+        // 字体守卫:默认那一遍 Hanken 必须真加载到了(没加载 = 在用回落字体量,绿了也不算数);系统字体那一遍看 font-family 换没换成
+        s19.cells === 11 && family.test(s19.family) && (query || s19.hankenLoaded) && s19.clipped.length === 0,
+        `cells=${s19.cells} widths=${s19.widths} font=${s19.family.slice(0, 28)} clipped=${JSON.stringify(s19.clipped)}`)
+      await shot(page, `tablemount-11-width-${query ? 'sysfont' : 'default'}`)
+    }
 
     check('T13 无未捕获页面错误', errors.length === 0, errors.slice(0, 2).join(' | '))
   } catch (e) {
