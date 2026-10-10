@@ -23,10 +23,14 @@ An image page can have an empty DOM snapshot while displaying a valid picture. `
 not provide image pixels. Do not claim inspection is impossible just because the DOM is empty.
 If actual inspection fails, retain neutral labels and clearly explain the limitation.
 When a user wants to choose a candidate, add a bound choice input; expanding an image is not a
-selection. When the candidates are pictures, put `imageId` on every option of that choice and the
-one-line reason to pick it in `description`: the options render as one row of selectable picture
-cards, so do not repeat those pictures in a gallery or comparison. Use a gallery only for pictures
-that are not options. When comparison items contain images, omit a duplicate gallery.
+selection. Picking among pictures is ONE choice input whose options each carry `imageId`, with the
+one-line reason to pick it in `description`. Those picture cards already are the side-by-side
+view, the expandable originals and the radio selection, so a request worded as "show them side by
+side, expandable, with a radio control" is still that single choice. Never write a choice without
+`imageId` next to a gallery of the same pictures, and never repeat an option picture in a gallery
+or as a comparison `imageId`. Put composition or other differences in the option descriptions, a
+text block, or a comparison without `imageId`. Use a gallery only for pictures that are not
+options. When comparison items contain images, omit a duplicate gallery.
 Keep checklist labels short and actionable. Put explanations, exercises and worked
 answers in disclosure blocks instead of crowding the checklist with paragraphs.
 
@@ -50,8 +54,9 @@ empty collections. Do not add extra styling fields. Document IDs are scoped to t
 - `{id,kind:"choice",label,initial:optionId,options:[{id,label,description?:string,imageId?:imageId}]}`
   — up to 8 mutually exclusive options. Changing a choice is local, not a prompt submission.
   `imageId` goes on all options or none. With it the options are one row of picture cards (click
-  selects, a corner control expands); without it, short options without descriptions become one
-  segmented control and the rest are option cards.
+  selects, a corner control expands; four pictures sit two by two); without it, short options
+  without descriptions become one segmented control and the rest are option cards. Options that
+  stand for pictures must carry `imageId`.
 
 **Resource** (public HTTPS URLs, no credentials, local addresses, arbitrary ports or data URLs):
 
@@ -70,7 +75,7 @@ empty collections. Do not add extra styling fields. Document IDs are scoped to t
 | controls | `inputIds:string[]` | Stepper and local radio choices (picture cards when options carry `imageId`) |
 | gallery | `resourceIds:imageId[]` | Pictures that are not options: expand/collapse, source caption |
 | sources | `resourceIds:sourceId[]` | Linked titles and domains; each summary shows two lines and opens in place |
-| comparison | `items:[{id,title,description,imageId?:imageId,facts:string[]}]` | 2–6 options side by side; factual differences, no decoration |
+| comparison | `items:[{id,title,description,imageId?:imageId,facts:string[]}]` | 2–6 options side by side; factual differences, no decoration; no `imageId` for a picture that is a choice option |
 | checklist | `items:[{id,label,itemKey?:string,quantity?:Quantity,when?:Condition}]` | Local progress, copy, reset; up to 100 items |
 | disclosure | `title:string,markdown:string` | Independent expand/collapse |
 | actions | `items:Action[]` | Explicit copy, open source or new model turn |

@@ -134,7 +134,7 @@ async function main() {
     check('model action sends exactly one visible contextual prompt', stub.seen.runs.length === 2 && /当前选择/.test(stub.seen.runs[1].message))
     // Replay multimedia + linked research as persisted events, including a historical Sketch.
     const legacy = { id: 'legacy', role: 'model', content: '', timestamp: Date.now(), tool_calls: [{ id: 'sk-old', type: 'function', function: { name: 'sketch', arguments: JSON.stringify({ html: '<p>Legacy Sketch still renders</p>', title: 'Historical Sketch' }) } }], tool_results: [{ tool_call_id: 'sk-old', name: 'sketch', content: 'Sketch rendered.' }] }
-    const records = [record('a-r1', 'ui1', fixtures.dinner), record('media', 'ui-media', fixtures.media), record('pick', 'ui-pick', fixtures.pick), record('sources', 'ui-sources', fixtures.research), record('edge', 'ui-edge', fixtures.edge), record('repeat', 'ui-repeat', fixtures.repeat), legacy]
+    const records = [record('a-r1', 'ui1', fixtures.dinner), record('media', 'ui-media', fixtures.media), record('pick', 'ui-pick', fixtures.pick), record('sources', 'ui-sources', fixtures.research), record('edge', 'ui-edge', fixtures.edge), record('repeat', 'ui-repeat', fixtures.repeat), record('four', 'ui-four', fixtures.four), legacy]
     if (evidence) for (const name of ['intelligentplan', 'intelligentmedia']) {
       const payload = JSON.parse(fs.readFileSync(path.join(evidence, `${name}-evidence.json`), 'utf8'))
       payload.documents.forEach((doc, i) => records.push(record(`${name}-${i}`, `${name}-${i}`, doc)))
@@ -184,6 +184,13 @@ async function main() {
     check('a picture shown as an option is not drawn again in a gallery or comparison', await repeat.locator('.iui-pick-card').count() === 3 && await repeat.locator('img').count() === 3
       && await repeat.locator('.iui-block-gallery').count() === 0 && await repeat.locator('.iui-comparison article').count() === 3)
     await win.screenshot({ path: path.join(OUT, 'repeat-light.png') })
+    // What Grok 4.7 really wrote for a four-wallpaper pick. Four cards sit two by two, not three and one.
+    const four = win.locator('.intelligent-ui[data-document-id="wallpaper-left-icons"]').first()
+    await reveal(win, four)
+    const perRow = await four.locator('.iui-pick-card').evaluateAll(es => Object.values(es.reduce((rows, e) => { const top = Math.round(e.getBoundingClientRect().top); rows[top] = (rows[top] || 0) + 1; return rows }, {})))
+    check('four picture options sit two by two', perRow.length === 2 && perRow.every(n => n === 2))
+    await win.waitForFunction(() => [...document.querySelectorAll('[data-document-id="wallpaper-left-icons"] img')].every(i => i.complete && i.naturalWidth > 0), null, { timeout: 20000 }).catch(() => {})
+    await win.mouse.move(5, 5); await win.waitForTimeout(300); await win.screenshot({ path: path.join(OUT, 'four-light.png') })
     // Component widths within the real chat container, not a separate prototype page.
     for (const width of [320, 375, 768]) {
       await media.evaluate((el, w) => { el.style.width = `${w}px`; el.style.maxWidth = '100%' }, width)

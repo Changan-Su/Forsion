@@ -140,7 +140,9 @@ function NativeDocument({ doc, complete, live, stateKey, onAsk }: { doc: UIDocum
           </div>
         </div>
         const name = `${stateKey || doc.id}:${id}`, pictured = !!input.options[0]?.imageId
-        return <fieldset key={id} className={`iui-choice${pictured ? ' iui-pick' : segmented(input) ? ' iui-seg' : ''}`}><legend>{input.label}</legend><div className="iui-parallel" data-columns={Math.min(3, input.options.length)}>{input.options.map(option => {
+        // Four pictures sit two by two: three in a row would leave the fourth alone on the next line.
+        const columns = pictured && input.options.length === 4 ? 2 : Math.min(3, input.options.length)
+        return <fieldset key={id} className={`iui-choice${pictured ? ' iui-pick' : segmented(input) ? ' iui-seg' : ''}`}><legend>{input.label}</legend><div className="iui-parallel" data-columns={columns}>{input.options.map(option => {
           const selected = values[id] === option.id, image = option.imageId && resources.get(option.imageId) as ImageResource
           // The source host stays on the card only when no sources block already lists that source.
           if (image) return <PickCard key={option.id} name={name} option={option} resource={image} source={image.sourceId && !listed.has(image.sourceId) ? resources.get(image.sourceId) : undefined} selected={selected} onSelect={() => setValue(option.id)}

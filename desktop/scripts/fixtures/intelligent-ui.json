@@ -598,5 +598,64 @@
       },
       { "id": "origin", "title": "图片来源", "kind": "sources", "resourceIds": ["lightgallery"] }
     ]
+  },
+  "four": {
+    "version": 1,
+    "id": "wallpaper-left-icons",
+    "title": "四张壁纸：左边两列图标",
+    "inputs": [
+      {
+        "id": "pick",
+        "kind": "choice",
+        "label": "选一张",
+        "initial": "dock",
+        "options": [
+          { "id": "dock", "label": "栈桥", "description": "左边最干净，浅色图标最清楚", "imageId": "img-dock" },
+          { "id": "lake", "label": "芦苇湖", "description": "左上干净，左下芦苇会压图标", "imageId": "img-lake" },
+          { "id": "sunset", "label": "日落木桩", "description": "左边有木桩和倒影，图标容易糊", "imageId": "img-sunset" },
+          { "id": "boats", "label": "停船", "description": "左边全是船和碎石，最不适合", "imageId": "img-boats" }
+        ]
+      }
+    ],
+    "resources": [
+      { "id": "src", "kind": "source", "url": "https://github.com/sachinchoolur/lightGallery", "title": "sachinchoolur/lightGallery", "description": "演示图来自该仓库 site/static/images/demo" },
+      {
+        "id": "img-dock",
+        "kind": "image",
+        "url": "https://cdn.jsdelivr.net/gh/sachinchoolur/lightGallery@9813e97837fddca82e4734bcbf4b77b0cd227772/site/static/images/demo/4-480.jpg",
+        "alt": "湖面栈桥日落，左边是平滑雾面湖水",
+        "sourceId": "src"
+      },
+      {
+        "id": "img-lake",
+        "kind": "image",
+        "url": "https://cdn.jsdelivr.net/gh/sachinchoolur/lightGallery@9813e97837fddca82e4734bcbf4b77b0cd227772/site/static/images/demo/13-480.jpg",
+        "alt": "湖面倒映橙红天空，右下有芦苇",
+        "sourceId": "src"
+      },
+      {
+        "id": "img-sunset",
+        "kind": "image",
+        "url": "https://cdn.jsdelivr.net/gh/sachinchoolur/lightGallery@9813e97837fddca82e4734bcbf4b77b0cd227772/site/static/images/demo/1-480.jpg",
+        "alt": "日落水面木桩，左边有倒影",
+        "sourceId": "src"
+      },
+      {
+        "id": "img-boats",
+        "kind": "image",
+        "url": "https://cdn.jsdelivr.net/gh/sachinchoolur/lightGallery@9813e97837fddca82e4734bcbf4b77b0cd227772/site/static/images/demo/2-480.jpg",
+        "alt": "碎石岸边停着一排小船",
+        "sourceId": "src"
+      }
+    ],
+    "blocks": [
+      { "id": "pick-controls", "kind": "controls", "inputIds": ["pick"] },
+      { "id": "why", "kind": "text", "markdown": "按桌面**左侧两列图标**来看：栈桥左边是一整块平滑雾面湖水，浅色图标对比最稳。芦苇湖左上也可以，但左下芦苇会挡住下面几行。后两张左边都是高对比细节。点图可放大。" },
+      { "id": "dock-note", "kind": "text", "title": "栈桥", "when": {"input": "pick", "equals": "dock"}, "markdown": "左三分之一几乎没有木桩，只有缓慢变暗的雾面湖水。浅色图标从顶到底都清楚。木栈桥主体在右下，不会被两列图标挡住。" },
+      { "id": "lake-note", "kind": "text", "title": "芦苇湖", "when": {"input": "pick", "equals": "lake"}, "markdown": "左上半是干净的橙色倒影，上排图标没问题。左下有深色芦苇和碎枝，下面几行图标会叠在细线条上，深色图标尤其容易糊。" },
+      { "id": "sunset-note", "kind": "text", "title": "日落木桩", "when": {"input": "pick", "equals": "sunset"}, "markdown": "左边有竖向木桩、亮橙倒影和暗水面交替，纹理跨过整列图标的高度。浅色和深色图标都会有一段看不清。" },
+      { "id": "boats-note", "kind": "text", "title": "停船", "when": {"input": "pick", "equals": "boats"}, "markdown": "左边从中部到底全是船舷、缆绳和碎石，几乎没有一块平的底。两列图标都会和这些线条抢对比，最不适合。" },
+      { "id": "credit", "kind": "sources", "resourceIds": ["src"] }
+    ]
   }
 }
