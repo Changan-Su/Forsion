@@ -244,8 +244,9 @@ router.post('/agent/runs', authMiddleware, async (req: AuthRequest, res) => {
       await deps().state.autoCreateSession({ id: session_id, userId, appId: profile.appId, title, modelId });
       // 建会话是「已存在就什么都不做」:别的账号若抢在上面那次读和这次插入之间用同一个 id 建了会话,这次插入是空操作。
       // 建完再读一次归属(只在新会话的第一条消息上多这一次读),不是自己的就照「属他人」处理,否则这条 run 会建在别人的会话上。
-      // 云端 worker 上别指望 server 的「建 run 验归属」来兜:HttpStateStore 给会话选的是会话上已绑定的令牌(那时是对方的),
-      // 那道检查会放行 —— 两种先后次序钉在 runs.sessionOwner.worker.test.ts。
+      // 云端 worker 上 server 的「建 run 验归属」现在也拒得掉(HttpStateStore 在 handler 期带的是请求自己的令牌;2026-10-10 之前带的是
+      // 会话上绑的那枚、那时是对方的,那道检查会放行),但那是走到建 run 之后的 500。这一读留着:在前面就给出 404。
+      // 两种先后次序钉在 runs.sessionOwner.worker.test.ts。
       if ((await deps().state.getSessionOwner(session_id)) !== userId) {
         return res.status(404).json({ detail: 'Session not found' });
       }

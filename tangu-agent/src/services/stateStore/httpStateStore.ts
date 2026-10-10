@@ -2,8 +2,9 @@
  * HttpStateStore —— StateStore 的 HTTP 实现(thin worker 专用)。
  *
  * worker 不持 DB:run/session/event 状态全经 server `/api/agent-state/*`。鉴权用 **per-dispatch token**
- * (网关派发时铸,按 userId scope);worker 不持 JWT_SECRET。token 按 runId/sessionId 登记(createRun 时
- * 绑定;handler 期回退到请求 ALS token),由 currentToken() 供 httpBrain 取当前 run 的 token。
+ * (网关派发时铸,按 userId scope);worker 不持 JWT_SECRET。token 按 runId/sessionId 登记(createRun 建成后
+ * 绑定,供 loop 期取、随 run 续期);handler 期按会话取时用请求自己的那枚(见 tokenForSession),
+ * 由 currentToken() 供 httpBrain 取当前 run 的 token。
  *
  * 设计要点:
  *   - 同步方法(gate 正确性:createRun/getRun/hydrate/finalize/终态 status/session 读写)= 直接请求响应。
@@ -26,19 +27,26 @@ import type {
 } from '../../seams/stateStore.js';
 import type { SessionHit, SessionTranscript } from '../sessionSearch.js';
 
-// ── per-dispatch token 登记表(runId/sessionId → token) + 请求期回退 ALS ──
+// ── per-dispatch token 登记表(runId/sessionId → token) + 请求期作用域 ──
 interface TokenEntry { token: string; }
+/** 一次入站请求的作用域。handler = 应答还没发完;由这次请求起的 loop / 定时器沿用同一个对象,应答结束后读到的就是 false。 */
+interface RequestScope { token: string | undefined; handler: boolean; }
 const byRun = new Map<string, TokenEntry>();
 const bySession = new Map<string, TokenEntry>();
-const requestToken = new AsyncLocalStorage<string | undefined>();
+const requestScope = new AsyncLocalStorage<RequestScope>();
 
 /**
- * 网关派发的请求期:在 token 作用域内跑 fn(handler 期 state 调用回退取它);无 Authorization 传 undefined。
+ * 网关派发的请求期:在 token 作用域内跑 fn;无 Authorization 传 undefined。res 关闭(应答发完 / 连接断开)= handler 期结束;
+ * 不给 res 就无从知道应答何时结束,这个作用域不算 handler 期(按会话取时照旧先用绑定的)。
  * ⚠️ 不能用 enterWith:请求中间件的同步帧跑在按连接复用的 HTTP parser 资源上,Node < 24 会把 token 留在
  * 连接上,同一条 keep-alive 连接的下一个请求(可能是别的用户)不带 Authorization 时就读到它。
  */
-export function runWithRequestToken<T>(token: string | undefined, fn: () => T): T { return requestToken.run(token, fn); }
-/** createRun 时把 token 绑到 runId + sessionId(异步 loop 期据此取)。 */
+export function runWithRequestToken<T>(token: string | undefined, fn: () => T, res?: { once(event: 'close', cb: () => void): unknown }): T {
+  const scope: RequestScope = { token, handler: !!res };
+  res?.once('close', () => { scope.handler = false; });
+  return requestScope.run(scope, fn);
+}
+/** createRun 建成后把 token 绑到 runId + sessionId(异步 loop 期据此取)。 */
 export function bindRunToken(runId: string, sessionId: string, token: string): void {
   const e: TokenEntry = { token };
   byRun.set(runId, e);
@@ -54,10 +62,21 @@ export function dropRunToken(runId: string, sessionId?: string): void {
   if (sessionId) bySession.delete(sessionId);
 }
 function tokenForRun(runId?: string): string | undefined {
-  return (runId ? byRun.get(runId)?.token : undefined) || requestToken.getStore();
+  return (runId ? byRun.get(runId)?.token : undefined) || requestScope.getStore()?.token;
 }
+/**
+ * 按会话取 token。handler 期(本次请求的应答还没发完,且不在任何 run 的上下文里)只用请求自己的:网关刚给调用者本人铸的。
+ * 会话上绑的那枚属于之前某个 run —— run 结束后不再续期、也不解绑,过了有效期就一直是废的;以前这里先用它,
+ * 建 run 时又把同一枚绑回去,会话在本进程的第一条消息过去一个有效期(缺省 30 分钟)后再发消息一律 500(线上 7–9 月实有)。
+ * loop 期照旧先用绑定的:它在续期;请求作用域里那枚不续期,排队的 run 沿用的还是更早那次请求的。
+ * 两个条件都要:只看 run 上下文不够 —— 排队的 run 进自己的上下文之前就按会话读配置(dispatchRun),那时没有上下文、
+ * 请求作用域却是上一次请求的;只看应答不够 —— 应答发出之前就在 run 上下文里干活的 handler 要的是那个 run 的令牌。
+ * 钉在 routes/runs.sessionToken.worker.test.ts。
+ */
 function tokenForSession(sessionId?: string): string | undefined {
-  return (sessionId ? bySession.get(sessionId)?.token : undefined) || requestToken.getStore();
+  const scope = requestScope.getStore();
+  if (scope?.handler && !currentRunId()) return scope.token;
+  return (sessionId ? bySession.get(sessionId)?.token : undefined) || scope?.token;
 }
 /** 当前 run(ALS runId)的 token —— 供 worker 的 httpBrain.token 取。 */
 export function currentToken(): string | undefined { return tokenForRun(currentRunId()); }
@@ -217,11 +236,12 @@ export function createHttpStateStore(cfg: HttpStateStoreConfig): StateStore {
     // ── runs ──
     async createRun(run) {
       const token = tokenForSession(run.sessionId);
-      if (token) bindRunToken(run.id, run.sessionId, token);
       await reqJson('POST', '/runs', token, {
         id: run.id, sessionId: run.sessionId, appId: run.appId, modelId: run.modelId,
         assistantMessageId: run.assistantMessageId, input: run.input,
       });
+      // 建成了才绑:被拒 / 失败的那次不能把自己的令牌留在会话上(同会话在飞的 run 之后按会话取到的就是它)。
+      if (token) bindRunToken(run.id, run.sessionId, token);
       scheduleRefresh(run.id, run.sessionId); // 长 run 跨 TTL 自动续期
     },
     async getRun(id): Promise<AgentRun | null> {
