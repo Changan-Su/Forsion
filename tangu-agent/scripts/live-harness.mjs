@@ -4195,7 +4195,9 @@ Then reply with only the command output.`,
   //   路由键不对时的样子(10-10 六次基线 + 一次负对照):新会话第一轮的判官 3 次里至少 2 次读不到(21 次里只有 1 次读到);分身每回 3 席里至少 1 席读不到(先到的那席按原价写,后两席读它的)。
   //   所以分身要量两回 6 席 —— 只量 3 席的话,「固定有 1 席读不到」和「偶发 1 次」分不开。上游不报缓存量的模型跑这条,红是如实的。
   await scenario('forkcache', 'forkcache 尾部分叉调用读到主循环的前缀缓存(Historian 分身判官 / self_brainstorm 分身)', async () => {
-    const forkLines = () => (existsSync(engineLog) ? readFileSync(engineLog, 'utf8') : '').split('\n').filter((l) => /\[historian\] fork 判官/.test(l));
+    // 只认两类行:这一次调用的用量,或没发出调用就回落(超窗 / 失败)。用量之后才打的回落行(空产出 / 截断 / 解析不出)不认 ——
+    // 它们晚到的话会被当成下一轮的信号,下一轮的用量再顺延记到后一轮头上(Codex 评审 10-10)。
+    const forkLines = () => (existsSync(engineLog) ? readFileSync(engineLog, 'utf8') : '').split('\n').filter((l) => /\[historian\] fork 判官(用量|:上下文超窗|失败)/.test(l));
     const mainLast = (ev) => { const u = [...(ev.usages || [])].reverse().find((x) => !x.phase); return u && Number(u.prompt) ? (Number(u.cached) || 0) / Number(u.prompt) : null; };
     const hit = (u) => u.cached != null && u.prompt > 0 && u.cached / u.prompt >= 0.5;
     const show = (u) => `输入 ${u.prompt} / 缓存 ${u.cached ?? '没报'}(${hitPct(u.cached != null && u.prompt ? u.cached / u.prompt : null)})`;
@@ -4234,7 +4236,9 @@ Then reply with only the command output.`,
     const judged = judge.filter((j) => j.prompt != null), first = seats.filter((s) => s.round === 1);
     // 每条腿容一次偶发;量到的不足一半 = 这条腿没量成(判官回落 / 模型没调工具),不许靠「没量到的不算」过关。
     const leg = (got, want) => got.length * 2 > want && got.filter((u) => !hit(u)).length <= 1;
-    const okJudge = leg(judged, turns.length), okSeats = leg(first, storms.length * 3);
+    // 分身按会话各自核:每回正好 3 席(缺省三席、只做第一轮、只调一次)才算量到。合起来数的话,一个会话调了两次(第二次读的是第一次写下的)、
+    // 另一个会话没调,也能凑出「6 席里只有 1 席没读到」(Codex 评审 10-10)。
+    const okJudge = leg(judged, turns.length), okSeats = storms.every((_, i) => first.filter((x) => x.run === i + 1).length === 3) && leg(first, storms.length * 3);
     return {
       ok: okJudge && okSeats,
       detail: [
