@@ -11,7 +11,7 @@ mkdirSync(join(app, 'build'), { recursive: true })
 mkdirSync(join(app, 'electron'))
 mkdirSync(join(app, 'unit-web-dist'))
 mkdirSync(join(fixture, 'tangu-agent'))
-for (const file of ['electron-builder.config.cjs', 'build/distribution.cjs', 'build/backend-dependencies.cjs', 'electron/builtinBundles.json']) {
+for (const file of ['electron-builder.config.cjs', 'build/distribution.cjs', 'build/backend-dependencies.cjs', 'build/dmg-layout.cjs', 'electron/builtinBundles.json']) {
   cpSync(join(desktop, file), join(app, file))
 }
 cpSync(join(desktop, 'products'), join(app, 'products'), { recursive: true })
