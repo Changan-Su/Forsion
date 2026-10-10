@@ -52,7 +52,20 @@ export interface ParseOpts {
   reservedIds: readonly string[]
 }
 
-export type ParseResult = { ok: true; spec: SpaceSpec } | { ok: false; error: string }
+/** 失败分支:`error` 是给开发者看的中文日志串(控制台用,**不直接上界面**)。两种最常见、用户自己改不了配方的原因
+ *  另给机器可读的 `code`,宿主据此在插件卡片上说清「这个 Space 为什么没出现」(其余一律当配方写坏了)。 */
+export type ParseResult =
+  | { ok: true; spec: SpaceSpec }
+  | {
+    ok: false; error: string
+    code?: 'missing-views' | 'min-app-version'
+    /** 两种带 code 的失败都发生在 id / name 校验之后,带出来给界面当称呼。 */
+    id?: string; name?: SpaceSpec['name']
+    /** missing-views:没注册的视图类型。 */
+    views?: string[]
+    /** min-app-version:配方要求的最低应用版本。 */
+    need?: string
+  }
 
 const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,63}$/
 
@@ -133,7 +146,7 @@ export function parseSpaceJson(raw: string, opts: ParseOpts): ParseResult {
   if (d.icon !== undefined && typeof d.icon !== 'string') return { ok: false, error: 'icon 必须是字符串' }
   if (d.minAppVersion !== undefined && typeof d.minAppVersion !== 'string') return { ok: false, error: 'minAppVersion 必须是字符串' }
   if (typeof d.minAppVersion === 'string' && opts.appVersion && cmpVersion(opts.appVersion, d.minAppVersion) < 0) {
-    return { ok: false, error: `需要应用版本 ≥ ${d.minAppVersion}(当前 ${opts.appVersion})` }
+    return { ok: false, error: `需要应用版本 ≥ ${d.minAppVersion}(当前 ${opts.appVersion})`, code: 'min-app-version', id, name: name as SpaceSpec['name'], need: d.minAppVersion }
   }
 
   if (!d.layout || typeof d.layout !== 'object') return { ok: false, error: '缺少 layout' }
@@ -172,7 +185,7 @@ export function parseSpaceJson(raw: string, opts: ParseOpts): ParseResult {
   const reqViews = Array.isArray(req?.views) ? (req!.views as unknown[]).filter((v): v is string => typeof v === 'string') : []
   const allTypes = [main, left, right, bottom].flatMap((side) => side as SpacePanelSpec[]).map((p) => p.type).concat(reqViews)
   const missing = [...new Set(allTypes.filter((t) => !opts.isViewRegistered(t)))]
-  if (missing.length) return { ok: false, error: `引用了未注册的视图: ${missing.join(', ')}(可能需要升级应用或安装对应 Space App)` }
+  if (missing.length) return { ok: false, error: `引用了未注册的视图: ${missing.join(', ')}(可能需要升级应用或安装对应 Space App)`, code: 'missing-views', id, name: name as SpaceSpec['name'], views: missing }
 
   return {
     ok: true,

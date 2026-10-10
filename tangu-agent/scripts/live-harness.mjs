@@ -21,7 +21,7 @@
  *   npm run live:harness -- --only skillpick,settingsnav     # 反馈 6a239e58(10-04):指定技能清单只列目录、正文经 use_skill 取(改 services/skillLoadout.ts 后跑);
  *                                                           #   「语音在哪设置」经界面命令直达设置页、不用电脑操控,网页检索次数只计数(改 desktop open-settings 的 description / params 后跑)
  *   npm run live:harness -- --only pluginlook                # 改 skills/forsion-plugin 的「外观开关:跟着宿主走」一节后跑:须经 use_skill 取回正文并答出那一节的三样
- *   npm run live:harness -- --only plugindiag --plugin-src <插件目录> [--plugin-data <plugins-data 里那份 json>] [--plugindiag-hint]   # 装着的桌面插件 Space 不出现(10-10):
+ *   npm run live:harness -- --only plugindiag --plugin-src <插件目录> [--plugin-data <plugins-data 里那份 json>] [--plugindiag-hint] [--plugindiag-host auto|"<宿主报的运行态>"]   # 装着的桌面插件 Space 不出现(10-10):
  *                                                           #   main.js 求值不抛错、但没走到 registerView 的那类;看真模型只凭插件目录和 shell 查不查得出。插件放进假家目录,开发机的 ~/.forsion 不碰
  *   npm run live:harness -- --only pluginicon                # 改 skills/forsion-plugin「Startup appearance」一节里图标作用范围那两句后跑:须装载手册并答出「桌面端退出后仍保留、安卓桌面只跟内置图标」
  *   npm run live:harness -- --only storename                 # 改名「商店」(10-05):改 skills/forsion-plugin / forsion-connect 里的商店叫法后跑;两问不点名技能,须装载技能并用新名字指路
@@ -2961,7 +2961,7 @@ Then reply with only the command output.`,
   // 「在本地验一下 main.js 注册了哪些视图」。一次只跑一腿:同一个隔离 home 里第二腿会看到第一腿的会话和改动。
   // 「说没说中」是关键词粗判,以模型原话为准;「改没改好」是硬判(照宿主的方式求值 main.js,看 Space 要的视图注册了没有)。留证 plugindiag-evidence.json。
   await scenario('plugindiag', 'plugindiag 插件 Space 不出现:只凭插件目录查原因', () =>
-    pluginDiagLive({ run, dir: PLUGINDIAG_DIR, home: FAKE_HOME, OUT, hint: argv.includes('--plugindiag-hint'), tokensOf, ttft }));
+    pluginDiagLive({ run, dir: PLUGINDIAG_DIR, home: FAKE_HOME, OUT, hint: argv.includes('--plugindiag-hint'), host: opt('plugindiag-host', ''), tokensOf, ttft }));
 
   // 「应用市场」改名「商店」(10-05;当天先改成「插件商店」,用户随后定为只叫「商店」):forsion-plugin / forsion-connect 两份技能正文里的旧名
   // (Forsion Market / 市场 / 插件商店)一并改了。

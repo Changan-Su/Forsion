@@ -106,22 +106,43 @@ function neededViews(dir) {
   const manifest = JSON.parse(readFileSync(join(dir, 'manifest.json'), 'utf8'));
   const prefix = `plugin:${manifest.id}:`;
   const out = new Set();
+  const bySpace = [];
   const spaces = join(dir, 'spaces');
   for (const slug of existsSync(spaces) ? readdirSync(spaces) : []) {
     const file = join(spaces, slug, 'space.json');
     if (!existsSync(file)) continue;
-    for (const m of readFileSync(file, 'utf8').matchAll(/"(plugin:[^"]+)"/g)) if (m[1].startsWith(prefix)) out.add(m[1].slice(prefix.length));
+    const text = readFileSync(file, 'utf8');
+    const own = [...new Set([...text.matchAll(/"(plugin:[^"]+)"/g)].filter((m) => m[1].startsWith(prefix)).map((m) => m[1].slice(prefix.length)))];
+    for (const v of own) out.add(v);
+    let id = slug; try { id = JSON.parse(text).id || slug; } catch { /* 写坏的配方按目录名称呼 */ }
+    bySpace.push({ id, views: own });
   }
-  return { manifest, views: [...out] };
+  return { manifest, views: [...out], spaces: bySpace };
 }
 
-export async function pluginDiagLive({ run, dir, home, OUT, hint, tokensOf, ttft }) {
-  const { manifest, views: needed } = neededViews(dir);
+/** The desktop's agent-facing `plugin-status` command, as the renderer declares it (desktop/frontend/src/amadeusPlugins.ts).
+ *  The standalone engine has no renderer, so the scenario plays that half: same description, same one-line receipts
+ *  (format pinned by desktop's pluginSpaceHealth.test.ts — change both together). */
+const STATUS_COMMAND = {
+  id: 'plugin-status',
+  description: "Read-only: what this window's plugin host recorded about installed plugins — running or not and why, the views each registered, "
+    + 'and bundled Spaces that are hidden with the reason. Call it first when a plugin, its Space or its view is missing, before asking the user for logs.',
+  params: { type: 'object', properties: { id: { type: 'string', description: 'Plugin id (the id in its manifest.json). Omit to list the plugins that have a problem.' } } },
+};
+
+export async function pluginDiagLive({ run, dir, home, OUT, hint, host, tokensOf, ttft }) {
+  const { manifest, views: needed, spaces } = neededViews(dir);
   const mainFile = join(dir, manifest.main || 'main.js');
   const before = { sha: sha(mainFile), ...registeredViews(mainFile) };
+  // host 腿(--plugindiag-host):带上桌面的界面命令面,由场景扮渲染端回 plugin-status。
+  //  'auto' = 宿主照实报这份坏插件(在跑、没报错、零视图、Space 缺它自己的视图);
+  //  其它文字 = 宿主报的运行态(如 "failed to load: TypeError: …"),配一份**好**插件用:原因只有宿主知道,文件上查不出来。
+  const hostOnly = !!host && host !== 'auto';
   // 本场景量的是「求值不抛错、但没注册」那一类;抛错的插件宿主自己会报「加载失败」,是另一回事。
   if (before.error) return { ok: false, detail: `夹具不成立:这份插件照宿主的方式求值就抛错(${before.error}),不是「不报错、零注册」那一类` };
-  if (needed.every((v) => before.views.includes(v))) return { ok: false, detail: `夹具不成立:这份插件在顶层已经注册了 Space 需要的视图(${needed.join(', ')}),没有可排查的问题` };
+  const healthy = needed.every((v) => before.views.includes(v));
+  if (!hostOnly && healthy) return { ok: false, detail: `夹具不成立:这份插件在顶层已经注册了 Space 需要的视图(${needed.join(', ')}),没有可排查的问题` };
+  if (hostOnly && !healthy) return { ok: false, detail: '夹具不成立:宿主独知腿要一份文件上没毛病的插件(否则分不清模型是从文件还是从宿主的记录得出的结论)' };
 
   // 照用户的原话问:把原因归到应用升级上,不给路径,不提视图注册 / 括号 / 自检脚本。
   const ask = `我把 Forsion 升到 2.13.1 之后,${manifest.name} 这个插件的 Space 在功能条上不见了,插件明明还装着、也是开着的。是不是插件系统更新了导致不兼容?帮我排查一下原因。`;
@@ -141,8 +162,24 @@ export async function pluginDiagLive({ run, dir, home, OUT, hint, tokensOf, ttft
     if (outside(args) || /\b(npm|pnpm|yarn)\s+(i|install|add)\b|\bpip3?\s+install\b|\bbrew\s+install\b/.test(args)) { rejected.push(`${p.name}: ${args.split(OUT).join('').slice(0, 160)}`); return 'reject'; }
     return undefined;
   };
+  // 宿主那一行:照 desktop 的 pluginStatusForAgent 的格式(引擎把回执截在 200 字符)。
+  const hostLine = !host ? null : hostOnly
+    ? `${manifest.id} ${manifest.version}: ${host}; views registered: none`
+    : [`${manifest.id} ${manifest.version}: running, no load error`,
+      ...spaces.filter((sp) => sp.views.some((v) => !before.views.includes(v))).map((sp) => `hidden Space ${sp.id}: needs view ${sp.views.filter((v) => !before.views.includes(v)).join(', ')}, which this plugin did not register`),
+      `views registered: ${before.views.join(', ') || 'none'}`].join('; ');
+  const hostProblems = !host ? null : `1 plugin(s) with problems: ${manifest.id} (${hostOnly ? host.split(/[:(]/)[0].trim() : `${spaces.filter((sp) => sp.views.some((v) => !before.views.includes(v))).length} Space hidden`})`;
+  const uiOpts = !host ? {} : {
+    ui: { locale: { value: 'zh', allowed: ['zh', 'en'] } },
+    uiCommands: [{ ...STATUS_COMMAND, state: hostProblems }],
+    uiRespond: (p) => {
+      if (p.kind !== 'command' || p.id !== 'plugin-status') return null;
+      const id = typeof p.args?.id === 'string' ? p.args.id.trim() : '';
+      return { ok: true, state: (!id ? hostProblems : id === manifest.id ? hostLine : `no plugin "${id}" in this window; ids: ${manifest.id}`).slice(0, 200) };
+    },
+  };
   const t0 = Date.now();
-  const ev = await run(`live-plugindiag-${Date.now()}`, message, 900_000, { approvalMode: 'auto-edit', debugSystemPrompt: true, cwd: join(home, 'Forsion') }, undefined, onApproval);
+  const ev = await run(`live-plugindiag-${Date.now()}`, message, 900_000, { approvalMode: 'auto-edit', debugSystemPrompt: true, cwd: join(home, 'Forsion') }, host ? 'desktop/live-harness' : undefined, onApproval, undefined, undefined, uiOpts);
   const wallMs = Date.now() - t0;
 
   const after = { sha: sha(mainFile), ...registeredViews(mainFile) };
@@ -158,9 +195,13 @@ export async function pluginDiagLive({ run, dir, home, OUT, hint, tokensOf, ttft
   const named = /registerView|视图.{0,12}(没有|没|未|不会|从未).{0,6}注册|(没有|没|未|从未).{0,6}注册.{0,12}视图/.test(c)
     && /花括号|大括号|括号|brace|闭合|收口|嵌套|nested|unclosed|unbalanced|吞|包进|包在|包住|函数体|函数内部|函数里|函数作用域/i.test(c);
   const fixed = needed.every((v) => after.views.includes(v)) && !after.error;
+  // host 腿:模型问没问宿主;宿主独知腿的粗判 = 回答里带上了宿主那句里最长的标识符(如 openSplit)。
+  const askedHost = ev.uiCmds.filter((u) => u.kind === 'command' && u.id === 'plugin-status').map((u) => JSON.stringify(u.args || {}));
+  const hostKey = hostOnly ? ((host.match(/[A-Za-z_$][\w$.]{4,}/g) || []).sort((a, b) => b.length - a.length)[0] || '').split('.').pop() : '';
+  const citedHost = hostOnly && !!hostKey && c.includes(hostKey);
 
   writeFileSync(join(OUT, 'plugindiag-evidence.json'), JSON.stringify({
-    leg: hint ? 'hinted' : 'plain', message, plugin: { id: manifest.id, version: manifest.version, dir: basename(dir) }, needed, before, after,
+    leg: host ? (hostOnly ? 'host-only' : 'host') : hint ? 'hinted' : 'plain', message, host: host ? { says: host, line: hostLine, problems: hostProblems, asked: askedHost, key: hostKey, cited: citedHost } : null, plugin: { id: manifest.id, version: manifest.version, dir: basename(dir) }, needed, before, after,
     named, fixed, skillLoaded: skill, ranNode, wallMs, done: ev.done, error: ev.error, approvals: ev.approvalList, rejected, escaped, realTouched,
     skillCatalogLines: String(ev.systemPrompt || '').split('\n').filter((l) => /forsion-plugin/.test(l)).map((l) => l.slice(0, 400)),
     // 两张表各按到达顺序排;并行调用时下标不一定对得上,所以不配对。
@@ -172,10 +213,11 @@ export async function pluginDiagLive({ run, dir, home, OUT, hint, tokensOf, ttft
   if (realTouched) return { ok: false, detail: `⚠️ 开发机上的 ${realCopy} 在这次运行期间变了。台架不自动还原:先核对是不是别的进程改的,再从备份或重装恢复`, output: c, toolCalls: ev.toolCalls };
   if (escaped.length) return { ok: false, detail: `作废:模型查的是开发机真实家目录里的东西,不是隔离目录里那份(${escaped.length} 次,首条 ${escaped[0]});这次不计数`, output: c, toolCalls: ev.toolCalls };
   return {
-    ok: !ev.error && ev.done && named,
+    ok: !ev.error && ev.done && (hostOnly ? citedHost && after.sha === before.sha : named),
     detail: ev.error || [
-      `${hint ? '点名腿' : '原话腿'}`,
-      `说中原因(粗判)${named ? '是' : '否'}`,
+      `${host ? (hostOnly ? '宿主独知腿' : '宿主命令腿') : hint ? '点名腿' : '原话腿'}`,
+      ...(host ? [`问宿主 ${askedHost.length} 次${askedHost.length ? `(${askedHost.join(' ')})` : ''}`] : []),
+      hostOnly ? `引用了宿主报的原因(粗判,找「${hostKey}」)${citedHost ? '是' : '否'}` : `说中原因(粗判)${named ? '是' : '否'}`,
       `main.js ${after.sha === before.sha ? '没改' : '改了'}`, `改后视图注册 ${fixed ? '齐了' : `缺(${after.error || after.views.join(',') || '0 个'})`}`,
       `装载手册 ${skill ? '是' : '否'}`, `跑过 node ${ranNode ? '是' : '否'}`, `审批 ${ev.approvals} 张(拒 ${rejected.length})`,
       `工具 ${ev.toolCalls.length} 次:${[...new Set(ev.toolCalls)].join(',') || '无'}`, `${Math.round(wallMs / 1000)}s`,

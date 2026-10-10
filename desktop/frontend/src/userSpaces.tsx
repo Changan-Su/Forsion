@@ -31,7 +31,8 @@ registerMessages({
 })
 import { track } from './achievements/store'
 import { act } from './activity/log'
-import { readDisabledPluginIds } from '@amadeus/plugins/pluginStore'
+import { readDisabledPluginIds, usePluginStore } from '@amadeus/plugins/pluginStore'
+import { setHiddenPluginSpaces, type HiddenSpace } from './pluginSpaceHealth'
 import { hasBottomPanel } from './pluginViews'
 import { PRODUCT } from './product'
 import { LAST_EXIT_SPACE, awaitedStartupSpace, resolveStartupTarget, startupSpacePref } from './spaces'
@@ -333,13 +334,24 @@ async function loadUserSpacesOnce(): Promise<void> {
 
   // 想要的最终集合:解析全部配方,禁用插件的条目排除;同 spec id 先到先得(用户目录在前)。
   const wanted = new Map<string, { spec: SpaceSpec; dirSlug: string; plugin?: string; raw: string; iconUrl?: string }>()
+  // 被跳过的随包 Space 连同原因留一份(插件卡片 / Sandbox / agent 的 plugin-status 命令读它)。只记**主人正在跑**的:
+  // 启动时第一遍装载跑在插件之前,那一遍里每个随包 Space 都「缺视图」,那不是故障。
+  const hidden: Record<string, HiddenSpace[]> = {}
+  const running = new Set(usePluginStore.getState().activeIds)
   for (const { slug, json, plugin, iconUrl: rawIcon } of list) {
     const iconUrl = typeof rawIcon === 'string' && ICON_URL_RE.test(rawIcon) ? rawIcon : undefined
     if (plugin && disabled.has(plugin)) continue
     const r = parseSpaceJson(json, { isViewRegistered: (t) => !!getView(t), appVersion, reservedIds: BUILTIN_IDS })
-    if (!r.ok) { console.warn(`[spaces] 跳过 ${slug}: ${r.error}`); continue }
+    if (!r.ok) {
+      console.warn(`[spaces] 跳过 ${slug}: ${r.error}`)
+      if (plugin && running.has(plugin)) {
+        (hidden[plugin] ??= []).push({ slug, id: r.id, name: r.name, code: r.code ?? 'invalid', views: r.views, need: r.need, ...(r.code === 'min-app-version' ? { have: appVersion } : {}), detail: r.error })
+      }
+      continue
+    }
     if (!wanted.has(r.spec.id)) wanted.set(r.spec.id, { spec: r.spec, dirSlug: slug, plugin, raw: json, iconUrl })
   }
+  setHiddenPluginSpaces(hidden)
 
   // 先注销:此前注册的插件 Space,如今主人被禁用/卸载、文件消失,或**配方内容变了**(插件更新,
   // codex P1-7)→ 撤下;内容不变则不动。用户 Space 不在此列(删除走 deleteUserSpace)。

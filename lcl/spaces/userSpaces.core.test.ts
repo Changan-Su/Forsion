@@ -51,6 +51,14 @@ describe('parseSpaceJson', () => {
     expect(parseSpaceJson(JSON.stringify({ ...VALID, minAppVersion: '99.0.0' }), opts({ appVersion: null })).ok).toBe(true)
     expect(parseSpaceJson(JSON.stringify({ ...VALID, layout: { main: [] } }), opts()).ok).toBe(false)
   })
+  it('两种用户改不了配方的失败带机器可读的原因码(宿主靠它在插件卡片上说清 Space 为什么没出现);写坏的配方不带', () => {
+    const missing = parseSpaceJson(JSON.stringify({ ...VALID, layout: { main: [{ type: 'plugin:demo:desk' }] }, requires: { views: ['plugin:demo:desk', 'plugin:other:x'] } }), opts())
+    expect(missing).toMatchObject({ ok: false, code: 'missing-views', id: 'focus', name: VALID.name, views: ['plugin:demo:desk', 'plugin:other:x'] })
+    const old = parseSpaceJson(JSON.stringify({ ...VALID, minAppVersion: '99.0.0' }), opts())
+    expect(old).toMatchObject({ ok: false, code: 'min-app-version', id: 'focus', need: '99.0.0' })
+    const broken = parseSpaceJson(JSON.stringify({ ...VALID, layout: { main: [] } }), opts())
+    expect(broken.ok === false && broken.code).toBeUndefined()
+  })
   it('main 的 split 透传为原生分栏计划;旧多项配方仍是同组标签', () => {
     const split = parseSpaceJson(JSON.stringify({
       ...VALID,

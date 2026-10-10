@@ -32,6 +32,15 @@ describe('sandbox evidence prompt', () => {
     expect(sandboxPrompt({ ...evidence, note: `  ${note}  ` })).toContain(`Observed behavior: ${note}`)
     expect(sandboxPrompt(evidence)).toContain('Observed behavior: Inspect the captured runtime output below.')
   })
+  it('states what the host recorded: registered views, and why a bundled Space is hidden', () => {
+    const none = sandboxPrompt({ ...evidence, setupError: null, views: [] })
+    expect(none).toContain('Views registered by this load (host record): none.')
+    expect(none).toContain('missing its closing brace')
+    const some = sandboxPrompt({ ...evidence, views: ['desk', 'bin'], hiddenSpaces: ['hidden Space demo: needs view mesh, which this plugin did not register'] })
+    expect(some).toContain('Views registered by this load (host record): desk, bin')
+    expect(some).toContain('Host record: hidden Space demo: needs view mesh')
+    expect(sandboxPrompt(evidence)).not.toContain('host record') // 没在跑就不给,不编空段
+  })
   it('omits absent evidence instead of inventing empty sections', () => {
     const prompt = sandboxPrompt({ pluginId: 'my-plugin', setupError: null, mountErrors: [], logs: [] })
     expect(prompt).not.toContain('setup(ctx) threw')

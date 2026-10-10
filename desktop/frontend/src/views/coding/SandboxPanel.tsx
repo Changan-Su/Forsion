@@ -6,6 +6,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { AlertCircle, Loader2, Play, RotateCw, ShieldAlert, Square, Trash2 } from 'lucide-react'
 import { clearDevPluginLogs, reloadDevPlugin, useDevPluginState } from '@amadeus/plugins/devSandbox'
 import { useI18n } from '../../i18n'
+import { hiddenSpaceForAgent, hiddenSpaceName, hiddenSpaceReason, useHiddenSpacesOf, useRegisteredViews } from '../../pluginSpaceHealth'
 import { useCodeStudio } from '../../stores/codeStudioStore'
 import { isNearBottom, sandboxPrompt } from './sandboxModel'
 import { normPath } from './studioModel'
@@ -24,12 +25,14 @@ export interface SandboxPanelProps {
 }
 
 export function SandboxPanel({ root, product, onPrompt, onProductChanged }: SandboxPanelProps) {
-  const { t } = useI18n()
+  const { t, locale } = useI18n()
   const devLoad = product?.devLoad === true
   // 清单被写坏(kind 退成 unknown)而授权还在:照样要看得到报错、卸得掉 —— pluginId 取宿主随授权存下的那个。
   // **开启**仍只认真插件项目:devLoad 为 false 时这里只剩 kind === 'plugin' 一条路(主进程也再拒一次)。
   const pluginId = product && (product.kind === 'plugin' || devLoad) ? product.pluginId ?? null : null
   const dev = useDevPluginState(pluginId)
+  const views = useRegisteredViews(pluginId)
+  const hidden = useHiddenSpacesOf(pluginId)
   const [busy, setBusy] = useState<Busy>(null)
   const [error, setError] = useState('')
   /** 标志位已经写进去了、但那次重载没成功:重试只重跑重载,绝不再写一次标志。 */
@@ -105,12 +108,22 @@ export function SandboxPanel({ root, product, onPrompt, onProductChanged }: Sand
         : dev.blocked === 'minApp' ? t('studio.sandbox.blockedMinApp')
           : t('studio.sandbox.blockedOther', { reason: dev.blockedReason || dev.blocked || '' }))
       : state === 'failed' ? t('studio.sandbox.failedHint') : t('studio.sandbox.unloadedHint')
-  const evidence = { pluginId: pluginId, setupError: dev.setupError, mountErrors: dev.mountErrors, logs: dev.logs }
+  const evidence = {
+    pluginId: pluginId, setupError: dev.setupError, mountErrors: dev.mountErrors, logs: dev.logs,
+    ...(state === 'active' ? { views, hiddenSpaces: hidden.map(h => hiddenSpaceForAgent(pluginId, h)) } : {}),
+  }
   const empty = !dev.setupError && !dev.mountErrors.length && !dev.logs.length
 
   return <div className="csu-panel-body csu-sandbox" data-sandbox-state={state} data-plugin-id={pluginId}>
     <section className="csu-sandbox-head">
       <p className="csu-sandbox-status" role="status"><strong data-sandbox-state-label>{stateLabel}</strong><span>{stateHint}</span></p>
+      {/* 宿主自己的记录:这次加载注册了哪些视图。「没报错、一个视图都没有」= 注册代码没被执行到,光看控制台看不出来。 */}
+      {state === 'active' && <p className="csu-hint" role="status" data-sandbox-views={views.length}>
+        {views.length ? t('plugins.registeredViews', { list: views.join(t('common.listSep')) }) : t('plugins.registeredViewsNone')}
+      </p>}
+      {hidden.map(h => <p key={h.slug} className="csu-hint" role="status" data-sandbox-space-hidden title={h.detail}>
+        {t('plugins.spaceHidden.badge')} · {hiddenSpaceName(h, locale)}: {hiddenSpaceReason(t, pluginId, h)}
+      </p>)}
       {!devLoad && product?.devLoadStale && <p className="csu-hint" role="status" data-sandbox-stale>{t('studio.sandbox.staleGrant')}</p>}
       {dev.shadowsInstalled && <p className="csu-hint" data-sandbox-shadow>{t('studio.sandbox.shadow')}</p>}
       {/* 不可关闭、不可折叠:这是按下「加载」之前必须读到的那一段。 */}
