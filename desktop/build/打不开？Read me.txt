@@ -1,0 +1,66 @@
+Forsion · macOS 首次打开说明
+(English below)
+============================
+
+首次打开时如果提示「Apple 无法验证“Forsion”是否包含恶意软件」、
+「无法验证开发者」或「“Forsion”已损坏，无法打开」——
+
+App 没有损坏。Forsion 暂未做 Apple 付费公证（notarization），
+macOS 会拦下从网上下载的未公证 App。按下面任一方法打开即可。
+
+
+方法一（推荐，macOS 15 及更新）
+------------------------------
+1. 把「Forsion」拖进「应用程序」文件夹。
+2. 到「应用程序」里双击打开一次。会被拦下，点「完成」
+   （不要点「移到废纸篓」）。
+3. 打开「系统设置」→「隐私与安全性」，滑到最下方的「安全性」一栏，
+   在关于 Forsion 的提示旁点「仍要打开」，再按提示确认
+   （可能要输入开机密码或按指纹）。
+之后就能像平常一样双击打开了（首次打开成功后 App 会自动完成剩余清理）。
+
+
+方法二（macOS 14 及更早）
+------------------------
+1. 把「Forsion」拖进「应用程序」文件夹。
+2. 到「应用程序」里【右键】（或按住 Control 点）App 图标 →「打开」。
+3. 弹窗里再点一次「打开」。
+macOS 15 起系统取消了这个入口，请用方法一。
+
+
+方法三（前两种都不行时，用终端）
+--------------------------------
+打开「终端」(Terminal)，粘贴这一行回车：
+
+    xattr -dr com.apple.quarantine /Applications/Forsion.app
+
+然后正常双击打开即可。
+（旧版本 2.6.8 及更早如果打开就报 "A JavaScript error occurred"，
+也是用这一行解决，或直接升级到最新版。）
+
+
+--------------------------------------------------------------------
+English
+
+If macOS says Apple could not verify "Forsion" is free of malware,
+that it is from an "unidentified developer", or that it is "damaged"
+on first launch: the app is not damaged. Forsion isn't Apple-notarized
+yet, so macOS blocks it after download. Any one of these opens it:
+
+  1) macOS 15 and later (recommended)
+     Drag Forsion into Applications and open it once. It will be
+     blocked: click Done (not Move to Trash). Then go to
+     System Settings → Privacy & Security, scroll to the bottom,
+     click "Open Anyway" next to the Forsion notice and confirm
+     (you may be asked for your password or Touch ID).
+     After the first successful launch the app cleans up the rest
+     automatically.
+
+  2) macOS 14 and earlier
+     Drag Forsion into Applications, then RIGHT-CLICK it → Open → Open.
+     macOS 15 removed this shortcut; use 1) there.
+
+  3) If neither works, run this in Terminal:
+     xattr -dr com.apple.quarantine /Applications/Forsion.app
+
+— Forsion
