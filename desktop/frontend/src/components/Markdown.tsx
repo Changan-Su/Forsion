@@ -106,13 +106,22 @@ const CodeBlock: React.FC<React.HTMLAttributes<HTMLPreElement> & { node?: unknow
   )
 }
 
+/** 手机上宽表格在自己的框里横向滑(chat2.css 末尾):一行放得下的格子不折行,放不下的照常折 ——
+ *  CSS 数不了字,这里把后一种标出来(约 13 个汉字宽:汉字算 1,其余算半个多一点)。别处没有样式认这个标记。 */
+const cellEm = (n: any): number => n?.type === 'text'
+  ? [...String(n.value)].reduce((w, c) => w + (c > '\u2e7f' ? 1 : 0.55), 0)
+  : (n?.children || []).reduce((w: number, c: any) => w + cellEm(c), 0)
+const tableCell = (Tag: 'td' | 'th') => ({ node, ...rest }: any) => <Tag data-long={cellEm(node) > 13 || undefined} {...rest} />
+const Td = tableCell('td')
+const Th = tableCell('th')
+
 /**
  * anchorPrefix:传入时给 h1/h2/h3 渲染稳定 id(`${anchorPrefix}-${第n个标题}`)+ data-toc-level,
  * 供右侧「目录」扫描跳转。不传则零影响(记忆/日志面板等普通渲染)。
  */
 export const Markdown: React.FC<{ content: string; anchorPrefix?: string; /** shell 代码块「运行」的回传与工作目录(聊天消息给;缺省=只跑不回传)。 */ run?: { onRun?: (r: RunResult) => void; cwd?: string }; /** 只读文档可隐藏运行入口，仍保留复制代码。 */ allowRun?: boolean; /** 开内联嵌入(独占一段的 `![[…]]`);缺省关,见 EmbedContext。 */ embeds?: EmbedCtx }> = React.memo(
   ({ content, anchorPrefix, run, allowRun = true, embeds }) => {
-    const components: Record<string, any> = { pre: CodeBlock, a: WikiAnchor, p: Para }
+    const components: Record<string, any> = { pre: CodeBlock, a: WikiAnchor, p: Para, td: Td, th: Th }
     if (anchorPrefix) {
       const counter = { i: 0 }
       const heading = (level: 1 | 2 | 3) => {

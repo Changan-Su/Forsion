@@ -715,9 +715,23 @@ const tabCountText = (list) => {
   async function openChat(title) {
     await tanguDrawer()
     await tapEl(rowExpr(title))
-    assert.ok(await h.waitPage(cdp, `!(${drawerOpen}) && !!document.querySelector('.mode-pill-btn')`, 8000), `chat "${title}" did not open`)
+    assert.ok(await h.waitPage(cdp, `!(${drawerOpen}) && !!document.querySelector('.model-pill-btn')`, 8000), `chat "${title}" did not open`)
     await h.pause(800)
   }
+  /** The model key's menu (rows: model / thinking effort / mode, each a page of its own): opens it, enters `row`'s
+   *  page and waits for `landmark` there. The mode has no key of its own on the phone's input card. */
+  async function hubPage(row, landmark) {
+    await tapEl("document.querySelector('.model-pill-btn')")
+    const root = await waitSheet(true)
+    assert.ok(h.byId(root, `nativeSheet.item.${row}`), `the model key's menu has no "${row}" row: ${ids(root)}`)
+    await tapId(`nativeSheet.item.${row}`, root)
+    const page = await h.waitNodes((l) => (landmark(l) ? l : null), { timeout: 5000 })
+    assert.ok(page.hit, `the "${row}" page did not open: ${ids(page.nodes)}`)
+    await h.pause(400) // it slides in: a tap aimed at where a row was a moment ago lands on nothing
+    return { root, page: ui() }
+  }
+  const sheetItem = (id) => (l) => h.byId(l, `nativeSheet.item.${id}`)
+  const dangerKey = "document.querySelector('.model-pill-wrap').classList.contains('is-danger')"
   const homeShown = "!!document.querySelector('.hp-root .hp-cards')"
   async function goHome() {
     if (await cdp.eval(homeShown)) return
@@ -1093,7 +1107,7 @@ const tabCountText = (list) => {
     assert.equal(await cdp.eval(nav), 'list', 're-tapping the active Space left the list')
     // item → main view
     await tapEl(rowExpr('E2E Session One'))
-    assert.ok(await h.waitPage(cdp, `(${nav}) === 'detail' && !!document.querySelector('.mode-pill-btn')`, 8000), 'the session did not open')
+    assert.ok(await h.waitPage(cdp, `(${nav}) === 'detail' && !!document.querySelector('.model-pill-btn')`, 8000), 'the session did not open')
     const gone = await h.waitNodes((l) => (!h.byId(l, 'nativeChrome.spaces') && h.byId(l, 'nativeChrome.left') ? l : null), { timeout: 8000 })
     assert.ok(gone.hit, 'the bottom bar stayed on the detail level, or there is no back button')
     assert.equal(descOf(gone.nodes, 'nativeChrome.left'), '返回')
@@ -1186,8 +1200,20 @@ const tabCountText = (list) => {
   })
 
   await check('keyboard: the focused composer stays visible above the keyboard', async () => {
-    await toSpace('tangu'); await closeDrawer()
+    await openChat('E2E Session One') // a conversation with a reply in it: the column's layout is measured with and without the keyboard
     const field = "document.querySelector('.composer textarea, .composer [contenteditable], textarea')"
+    // The chat column is laid out by its width alone: the keyboard takes a third of the page's height, and the column's
+    // tall-and-narrow rules used to let go at that moment — avatars back, the reply pushed right and re-wrapped, a short
+    // conversation jumping from the input up to the top (and all of it back when the keyboard left).
+    const column = `(() => {
+      const root = document.querySelector('.mb-view[data-view="chat"]')
+      const text = root && root.querySelector('.t2-asst .t2-content')
+      const last = root && [...root.querySelectorAll('.t2-stream-inner > .t2-asst, .t2-stream-inner > .t2-userwrap')].pop()
+      const box = root && root.querySelector('.t2c')
+      if (!text || !last || !box) return null
+      return { avatars: [...root.querySelectorAll('.t2-avatar')].filter((e) => e.getClientRects().length).length, textLeft: text.getBoundingClientRect().left, gap: box.getBoundingClientRect().top - last.getBoundingClientRect().bottom }
+    })()`
+    const rest = await h.waitPage(cdp, column, 8000)
     await tapEl(field)
     const shown = () => /mInputShown=true/.test(h.adb('shell', 'dumpsys', 'input_method'))
     for (let i = 0; i < 20 && !shown(); i++) await h.pause(300)
@@ -1201,6 +1227,10 @@ const tabCountText = (list) => {
     assert.ok(p.y < wv.rect.bottom, `composer at y=${p.y}, below the WebView's visible bottom ${wv.rect.bottom}`)
     assert.ok(await cdp.eval(`document.activeElement === ${field}`), 'the composer lost focus')
     shot('03f-keyboard-composer')
+    const up = await cdp.eval(column)
+    assert.ok(rest && up, 'no chat with a reply on screen to measure')
+    assert.ok(rest.avatars === 0 && up.avatars === 0 && Math.abs(up.textLeft - rest.textLeft) < 1, `the chat column changed its layout with the keyboard: avatars ${rest.avatars} → ${up.avatars}, the reply's left edge ${rest.textLeft} → ${up.textLeft}`)
+    assert.ok(Math.abs(up.gap - rest.gap) < 3, `with the keyboard up the conversation no longer ends at the input: ${Math.round(rest.gap)} px between them at rest, ${Math.round(up.gap)} now`)
     h.key(4); await h.pause(800)
     await cdp.eval('(document.activeElement && document.activeElement.blur(), true)')
   })
@@ -2014,26 +2044,56 @@ const tabCountText = (list) => {
     } finally { if (side !== 'local') await switchVault(side) }
   })
 
-  await check('mode menu: approval tier switches through the same setter (pill + session config), nested agent page', async () => {
+  // The phone's input card (2026-10-10): the send key beside the text; below it + / model / microphone. The mode key is
+  // gone from the card and the model key has no icon. Sizes are read in the page and turned into dp: this WebView
+  // reports rectangles without the page's own 1.15 zoom (the desktop Chromium of the phone stage reports them with
+  // it), so the factor is measured — the screen's width over the shell's.
+  await check('input card: the send key beside the text, + / model / microphone below, no mode key, no icon on the model key', async () => {
     await openChat('E2E Session One')
-    assert.equal(await cdp.eval("document.querySelector('.mode-pill-btn').hasAttribute('data-danger')"), false, 'fixture starts in auto-edit')
-    await tapEl("document.querySelector('.mode-pill-btn')")
+    const m = await cdp.eval(`(() => {
+      const k = innerWidth / document.querySelector('.mb-shell').getBoundingClientRect().width
+      const r = (sel) => { const b = document.querySelector(sel)?.getBoundingClientRect(); return b ? { x: b.left * k, y: b.top * k, w: b.width * k, h: b.height * k, right: b.right * k, bottom: b.bottom * k } : null }
+      const chip = document.querySelector('.model-pill-btn'); const name = chip.querySelector('.pill-marquee')
+      return { k, zoom: getComputedStyle(document.body).zoom, modeKey: !!document.querySelector('.mode-pill-btn'), icon: !!chip.querySelector('svg.lucide-bot'), name: name.textContent, nameCut: name.scrollWidth > name.clientWidth + 1,
+        ta: r('.t2c-ta'), send: r('.t2c-field > .t2c-send'), sendInRow: !!document.querySelector('.t2c-row .t2c-send'), row: r('.t2c-row'), add: r('.add-pill-btn'), chip: r('.model-pill-btn'), mic: r('.t2c-mic-control') }
+    })()`)
+    const d = JSON.stringify(m, (k, v) => (typeof v === 'number' ? Math.round(v * 10) / 10 : v))
+    assert.equal(m.zoom, '1.15', `the page is not at the phone's zoom: ${d}`)
+    assert.ok(!m.modeKey && !m.icon, `a mode key, or an icon on the model key: ${d}`)
+    assert.ok(m.name.includes('E2E Model') && !m.nameCut, `the model's name is not shown in full: ${d}`)
+    assert.ok(m.send && !m.sendInRow && m.send.x >= m.ta.right && m.send.bottom <= m.row.y + 0.5 && m.send.w >= 47.5 && m.send.h >= 47.5, `the send key is not beside the text at 48 dp: ${d}`)
+    assert.ok(m.add.x < m.chip.x && m.chip.right <= m.mic.x && m.add.w >= 43.5 && m.mic.w >= 43.5 && m.chip.h >= 47.5, `the row below is not + / model / microphone at 44 dp: ${d}`)
+    shot('17-input-card-light')
+  })
+
+  await check('mode menu: inside the model key\'s menu; approval tier switches through the same setter (model key + session config), nested agent page', async () => {
+    await openChat('E2E Session One')
+    assert.equal(await cdp.eval(dangerKey), false, 'fixture starts in auto-edit')
+    await tapEl("document.querySelector('.model-pill-btn')")
     let list = await waitSheet(true)
+    for (const id of ['field:model', 'field:thinking', 'mode']) assert.ok(ids(list).includes(id), `missing ${id} in ${ids(list)}`)
+    assert.equal(await cdp.eval("!!document.querySelector('.model-pill-btn.is-open') || !!document.querySelector('.cm-advanced-reveal')"), false, 'web model menu opened as well')
+    await h.pause(400)
+    shot('18-hub-sheet-light')
+    await tapId('nativeSheet.item.mode', list)
+    const modePage = await h.waitNodes((l) => (h.byId(l, 'nativeSheet.item.approval:auto-edit') ? l : null), { timeout: 5000 })
+    assert.ok(modePage.hit, `mode page: ${ids(modePage.nodes)}`)
+    await h.pause(400)
+    list = ui()
     const got = ids(list)
     for (const id of ['normal-work', 'agent-switch', 'plan-mode', 'approval:auto-edit', 'approval:full-auto']) assert.ok(got.includes(id), `missing ${id} in ${got}`)
     assert.equal(h.byId(list, 'nativeSheet.item.approval:auto-edit').checked, 'true', 'current tier not checked')
-    assert.equal(await cdp.eval("!!document.querySelector('.mode-pill-btn.is-open')"), false, 'web mode menu opened as well')
     shot('18-mode-sheet-light')
     const sent = stubLog.length
     await tapId('nativeSheet.item.approval:full-auto', list)
     await waitSheet(false)
-    assert.ok(await h.waitPage(cdp, "document.querySelector('.mode-pill-btn').hasAttribute('data-danger')", 5000), 'pill did not turn into full-auto (data-danger)')
+    assert.ok(await h.waitPage(cdp, dangerKey, 5000), 'the model key did not turn red for full-auto (.is-danger)')
     const patch = await waitLog(sent, (l) => /^(PATCH|PUT) \S+\/agent\/sessions\/e2e-s1\/config /.test(l))
     assert.ok(patch && JSON.parse(patch.slice(patch.indexOf('{'))).approvalMode === 'full-auto', `config write: ${patch}`)
     assert.equal(configs['e2e-s1'].approvalMode, 'full-auto')
-    // nested page: agents, then back to the root page, then system back cancels
-    await tapEl("document.querySelector('.mode-pill-btn')")
-    list = await waitSheet(true)
+    shot('18b-input-card-full-access')
+    // nested pages: mode → agents (the third level), back to mode, back to the menu, then system back closes it
+    list = (await hubPage('mode', sheetItem('approval:full-auto'))).page
     assert.equal(h.byId(list, 'nativeSheet.item.approval:full-auto').checked, 'true', 'sheet does not reflect the new tier')
     await tapId('nativeSheet.item.agent-switch', list)
     const page = await h.waitNodes((l) => (h.byId(l, 'nativeSheet.item.agent:e2e-helper') ? l : null), { timeout: 4000 })
@@ -2041,15 +2101,18 @@ const tabCountText = (list) => {
     assert.ok(h.byId(page.nodes, 'nativeSheet.item.agent:e2e-agent') && h.byId(page.nodes, 'nativeSheet.back'), 'agent page incomplete')
     shot('19-mode-agents-page')
     await tapId('nativeSheet.back', page.nodes)
-    assert.ok((await h.waitNodes((l) => (h.byId(l, 'nativeSheet.item.approval:full-auto') ? l : null), { timeout: 3000 })).hit, 'back did not return to the root page')
+    const up = await h.waitNodes((l) => (h.byId(l, 'nativeSheet.item.approval:full-auto') ? l : null), { timeout: 3000 })
+    assert.ok(up.hit, 'back did not return to the mode page')
+    await h.pause(400)
+    await tapId('nativeSheet.back', ui())
+    assert.ok((await h.waitNodes((l) => (h.byId(l, 'nativeSheet.item.field:model') ? l : null), { timeout: 3000 })).hit, 'back did not return to the menu')
     h.key(4)
     await waitSheet(false)
     // restore the fixture tier natively too (exercises the setter once more)
-    await tapEl("document.querySelector('.mode-pill-btn')")
-    list = await waitSheet(true)
+    list = (await hubPage('mode', sheetItem('approval:auto-edit'))).page
     await tapId('nativeSheet.item.approval:auto-edit', list)
     await waitSheet(false)
-    assert.ok(await h.waitPage(cdp, "!document.querySelector('.mode-pill-btn').hasAttribute('data-danger')", 5000), 'tier did not switch back')
+    assert.ok(await h.waitPage(cdp, `!(${dangerKey})`, 5000), 'tier did not switch back')
   })
 
   // A user message has no inline buttons under the native host (2026-10-05): a long-press on the bubble opens the same
@@ -2534,15 +2597,11 @@ const tabCountText = (list) => {
       assert.ok(!stubLog.slice(sent).some((l) => l.startsWith('POST ') && /\/agent\/runs( |$)/.test(l)), `a Tangu run was started as well: ${stubLog.slice(sent).join(' | ')}`)
 
       // a model picked on the pill during the call is what delegated work uses from then on (the bar has no model row of its own)
-      await tapEl("document.querySelector('.model-pill-btn')")
       const picked = stubLog.length
-      // the model sheet is its own native page (search, effort, a Done button) — not the generic list sheet
-      assert.ok((await h.waitNodes((l) => l.find((n) => n.text === 'E2E Model Beta'), { timeout: 6000 })).hit, 'the native model sheet did not list the catalog')
-      await h.pause(600) // it slides in: a tap aimed at where the row was a moment ago lands on nothing
+      // the model key opens its menu; the catalog is the "model" page there, and a pick applies at once
+      await hubPage('field:model', (l) => l.find((n) => n.text === 'E2E Model Beta'))
       h.tapNode(ui().find((n) => n.text === 'E2E Model Beta'))
-      await h.pause(500)
-      const done = ui().find((n) => n.text === '完成')
-      if (done) h.tapNode(done) // the pick is applied when the sheet is confirmed
+      await waitSheet(false)
       assert.ok(await h.waitPage(cdp, "window.__call.frames.some((f) => f.type === 'run' && f.run && f.run.model_id === 'e2e-model-beta')", 5000),
         `the call was not told about the new model (run frames: ${JSON.stringify(await call("c.frames.filter((f) => f.type === 'run').map((f) => f.run && f.run.model_id)"))}; pill «${await cdp.eval("document.querySelector('.model-pill-btn')?.textContent || ''")}»; bar ${await cdp.eval(phase)}; requests since the pick: ${stubLog.slice(picked).join(' | ') || 'none'})`)
       assert.ok((await h.waitNodes((l) => (!l.some((n) => n.text === 'E2E Model Beta') ? l : null), { timeout: 5000 })).hit, 'the model sheet stayed open')
@@ -3028,14 +3087,13 @@ const tabCountText = (list) => {
   /** Composer model pill → the Compose model sheet lists the stubbed catalog; the web menu stays closed. */
   async function modelSheet(name) {
     await openChat('E2E Session One')
-    await tapEl("document.querySelector('.model-pill-btn')")
-    const r = await h.waitNodes((l) => (l.some((n) => n.text === 'E2E Model Beta') ? l : null), { timeout: 6000 })
-    assert.ok(r.hit, 'native model sheet did not list the catalog')
+    const { page } = await hubPage('field:model', (l) => l.some((n) => n.text === 'E2E Model Beta'))
     assert.equal(await cdp.eval("!!document.querySelector('.cm-advanced-reveal')"), false, 'web model menu rendered as well')
-    await h.pause(400)
     shot(name)
+    await tapId('nativeSheet.back', page)
+    assert.ok((await h.waitNodes((l) => (h.byId(l, 'nativeSheet.item.field:model') ? l : null), { timeout: 3000 })).hit, 'back did not return to the menu')
     h.key(4)
-    assert.ok((await h.waitNodes((l) => (!l.some((n) => n.text === 'E2E Model Beta') ? l : null), { timeout: 5000 })).hit, 'model sheet did not close on back')
+    await waitSheet(false)
   }
 
   await check('plugins: ⋯ → market is a native page; install downloads natively from the host; detail adds ×', async () => {
@@ -3502,11 +3560,20 @@ const tabCountText = (list) => {
   /** Mode + add sheets in the chat, then settings as a native page (screenshots for the given pass). */
   async function chatSheetsPass(tag, lang) {
     await openChat('E2E Session One')
-    await tapEl("document.querySelector('.mode-pill-btn')")
+    await tapEl("document.querySelector('.model-pill-btn')")
     let list = await waitSheet(true)
-    assert.ok(h.byId(list, 'nativeSheet.item.approval:auto-edit'), `mode sheet: ${ids(list)}`)
-    if (lang === 'en') assert.ok(!hasCjk(list), 'Chinese text in the English mode sheet')
+    assert.ok(h.byId(list, 'nativeSheet.item.mode'), `the model key's menu: ${ids(list)}`)
+    if (lang === 'en') assert.ok(!hasCjk(list), 'Chinese text in the English model-and-mode menu')
+    await h.pause(400)
+    shot(`${tag}-hub-sheet`)
+    await tapId('nativeSheet.item.mode', list)
+    assert.ok((await h.waitNodes((l) => (h.byId(l, 'nativeSheet.item.approval:auto-edit') ? l : null), { timeout: 5000 })).hit, 'the mode page did not open')
+    await h.pause(400)
+    list = ui()
+    if (lang === 'en') assert.ok(!hasCjk(list), 'Chinese text in the English mode page')
     shot(`${tag}-mode-sheet`)
+    await tapId('nativeSheet.back', list)
+    await h.pause(400)
     h.key(4)
     await waitSheet(false)
     await tapEl("document.querySelector('.add-pill-btn')")

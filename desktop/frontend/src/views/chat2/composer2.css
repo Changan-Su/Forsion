@@ -442,3 +442,43 @@
 .t2c-apv-row-preview { flex: 1; min-width: 0; font-family: var(--font-mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .t2c-apv-row-ic { flex-shrink: 0; color: var(--accent-ink); }
 .t2c-apv-row-text { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* ── 手机(Android 原生外壳)的输入卡:发送键在输入框右边,底排是 + / 模型 / 麦克风 ──
+   2026-10-10 用户选的版式。.t2c-card--phone / .t2c-field 只有 Composer2 在原生外壳里才挂(与 chat2.css 末尾那组
+   [data-native-chrome] 同一个信号):桌面 / 网页 / 手机浏览器、插件自己的输入框都不吃这一段。
+   尺寸按手机上那层 1.15 倍页面缩放折算:38px ≈ 44dp,42px ≈ 48dp,35px ≈ 40dp;看得见的部分不到 48dp 的,
+   触摸范围补到 48dp(图标键用 ::after;药丸用透明的上下边 —— Ultra 药丸的 ::before / ::after 已经占用,且它裁切溢出)。
+   模式药丸在这张卡上并进了模型药丸点开的菜单(Composer2 的 modeMerged),它原来用颜色报的两种状态
+   (计划模式 / 完全放行)改由模型药丸报。原生菜单出不来时模式药丸会回来,所以它的尺寸也在这里。
+   仪器:mobile `npm run stage:phone` 的 chat-card;模拟器 `ONLY='input card' npm run emu:nativeshell`。
+   必须留在文件末尾(同特异性的基础规则在上面,DESIGN §7.2)。 */
+.t2c-field { display: flex; align-items: flex-end; gap: 8px; }
+.t2c-field > .t2c-ta { flex: 1 1 auto; min-width: 0; align-self: center; }
+.t2c-card--phone .t2c-row { margin-top: 6px; }
+.t2c-card--phone .t2c-send { width: 42px; height: 42px; }
+.t2c-card--phone .t2c-send svg { width: 21px; height: 21px; }
+.t2c-card--phone .t2c-stop { width: 42px; height: 42px; padding-inline: 0; justify-content: center; }
+.t2c-card--phone .t2c-stop svg { width: 14px; height: 14px; }
+.t2c-card--phone .t2c-stop-label { display: none; }
+.t2c-card--phone .t2c-iconbtn { position: relative; width: 38px; height: 38px; }
+.t2c-card--phone .t2c-iconbtn svg { width: 19px; height: 19px; }
+.t2c-card--phone .add-pill-wrap { flex: 0 0 auto; }
+/* 加号在手机上走原生半屏,不会展开成胶囊;宿主呈现失败回落 Web 菜单时(.is-open)照旧展开 */
+.t2c-card--phone .t2c-pill.add-pill-btn:not(.is-open) {
+  position: relative; display: inline-flex; align-items: center; justify-content: center;
+  width: 38px; height: 38px; overflow: visible;
+}
+.t2c-card--phone .add-pill-btn:not(.is-open) .add-pill-plus { width: 20px; height: 20px; }
+.t2c-card--phone .add-pill-btn:not(.is-open) :is(.add-pill-label, .add-pill-chevron) { display: none; }
+.t2c-card--phone :is(.t2c-iconbtn, .add-pill-btn:not(.is-open))::after { content: ''; position: absolute; inset: -2px; }
+.t2c-card--phone .t2c-ctxring-btn::after { content: ''; position: absolute; inset: -9px -3px; }
+.t2c-card--phone .model-pill-wrap { flex: 0 1 auto; min-width: 0; }
+.t2c-card--phone .t2c-row .model-pill-wrap .composer-chip.model-pill-btn,
+.t2c-card--phone .t2c-pill.mode-pill-btn {
+  box-sizing: border-box; height: 42px; margin-block: -2px; max-width: 100%; padding-inline: 11px;
+  border-block: 3.5px solid transparent; background-clip: padding-box;
+}
+.t2c-card--phone .t2c-row .composer-chip.model-pill-btn .pill-marquee { display: inline-block; max-width: none; text-overflow: ellipsis; }
+.t2c-card--phone .t2c-row .composer-chip.model-pill-btn .pill-ultra-tag { display: inline; }
+.t2c-card--phone .model-pill-wrap.is-plan .composer-chip.model-pill-btn:not(.is-max) { color: var(--accent-ink); background-color: color-mix(in srgb, var(--accent-ink) 16%, transparent); }
+.t2c-card--phone .model-pill-wrap.is-danger .composer-chip.model-pill-btn { color: var(--danger); background-color: var(--danger-light); }

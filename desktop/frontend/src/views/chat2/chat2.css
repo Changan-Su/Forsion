@@ -1065,3 +1065,46 @@ html[data-chat-avatars='off'] .t2-username { display: none; }
 .mb-shell[data-native-chrome] .t2-userwrap:not(.t2-userwrap--inline) .t2-user { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
 .mb-shell[data-native-chrome] .t2-asst .t2-actions .t2-iconbtn { position: relative; }
 .mb-shell[data-native-chrome] .t2-asst .t2-actions .t2-iconbtn::after { content: ''; position: absolute; inset: -8px 0; }
+
+/* ── 手机(Android 原生外壳):键盘弹出时聊天列不换版式;列表给圆点 / 序号留位 ──
+   聊天列在手机上吃的是前面两条「细长列」规则(@container aspect-ratio < 9/16:不画头像、短对话贴着输入区)。
+   它们按**宽高比**判,而原生层在键盘弹出时把 WebView 截到键盘上沿 —— 列一下子矮掉三分之一,比例越过 9:16:
+   头像冒出来、正文右移重新折行、短对话从输入区跳到顶上;收起键盘又跳回去(2026-10-10 模拟器截图)。
+   所以窄列(≤520px,与前面窄栏规则同一条线)在原生外壳里固定用「细长列」那一套,不再看高度;横屏 / 平板的
+   宽列照旧按比例。
+   头像那一列不在时,列表的圆点和序号没有地方挂:全局 reset 把 ul / ol 的内距清成 0,它们原本挂在头像与正文
+   之间那 12px 里 —— 现在挂到屏幕外被切掉,列表里的列表也不缩进。18px 与笔记正文(.md-body)同一个数。
+   仪器:mobile `npm run stage:phone` 的 chat-lists / chat-keyboard;模拟器 `ONLY='keyboard:' npm run emu:nativeshell`(带冒号:不带会连别的几条一起选上)。 */
+@container (max-width: 520px) {
+  .mb-shell[data-native-chrome] .t2-avatar { display: none; }
+  .mb-shell[data-native-chrome] .t2-stream-inner:has(> .t2-asst, > .t2-userwrap) > :first-child { margin-top: auto; }
+  .mb-shell[data-native-chrome] .t2-content :is(ul, ol) { padding-inline-start: 18px; }
+}
+
+/* ── 手机(Android 原生外壳):宽表格在自己的框里横向滑;两处小键把触摸范围补到 48dp ──
+   表格(2026-10-10 用户选的「表格 1」):前面那条 .t2-content table 写了 overflow-x: auto,但格子可以无限折行,
+   表永远不会溢出 —— 五列的表在手机上被挤成每格两三行。这里让一行放得下的格子不折行,列按内容自己的宽度;
+   放不下的格子(Markdown.tsx 给超过约 13 个汉字宽的格子标 data-long)照常折,最窄 13em。列少的表照旧不滑。
+   两侧的渐隐表示那一边还有内容:滚动驱动的动画,表不溢出时时间线不活动 = 没有渐隐;WebView 不支持就没有渐隐。
+   「思考过程」那一行看上去 22dp 高、代码块的复制键 28dp:外观不变,只撑开触摸范围(同上面回复下的三颗键)。
+   仪器:mobile `npm run stage:phone` 的 chat-table / chat-touch。 */
+.mb-shell[data-native-chrome] .t2-content :is(th, td) { white-space: nowrap; }
+.mb-shell[data-native-chrome] .t2-content :is(th, td)[data-long] { white-space: normal; min-width: 13em; }
+@property --t2-table-fade-l { syntax: '<length>'; inherits: false; initial-value: 0px; }
+@property --t2-table-fade-r { syntax: '<length>'; inherits: false; initial-value: 0px; }
+@keyframes t2-table-edges {
+  0% { --t2-table-fade-l: 0px; --t2-table-fade-r: 28px; }
+  8%, 92% { --t2-table-fade-l: 28px; --t2-table-fade-r: 28px; }
+  100% { --t2-table-fade-l: 28px; --t2-table-fade-r: 0px; }
+}
+@supports (animation-timeline: scroll()) {
+  .mb-shell[data-native-chrome] .t2-content table {
+    -webkit-mask-image: linear-gradient(to right, transparent, #000 var(--t2-table-fade-l), #000 calc(100% - var(--t2-table-fade-r)), transparent);
+    mask-image: linear-gradient(to right, transparent, #000 var(--t2-table-fade-l), #000 calc(100% - var(--t2-table-fade-r)), transparent);
+    animation: t2-table-edges linear both;
+    animation-timeline: scroll(self inline);
+  }
+}
+.mb-shell[data-native-chrome] .t2-think-head { position: relative; }
+.mb-shell[data-native-chrome] .t2-think-head::after { content: ''; position: absolute; inset: -11px 0; }
+.mb-shell[data-native-chrome] .t2-content pre ~ .icon-btn::after { content: ''; position: absolute; inset: -9px; }

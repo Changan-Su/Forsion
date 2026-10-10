@@ -84,7 +84,7 @@ export { contentStorageKey } from './contentStorageScope'
 /** Optional native presentation hosts (Android Compose). Absent host ⇒ callers keep their web UI. */
 export {
   installNativeSheetPresenter, nativeSheetPresenter, presentNativeMenu, presentNativePrompt, presentNativeConfirm,
-  pickNativeCtxItem, runNativeCtxMenu, readNativeTheme, menuResult, promptResult, confirmResult, clipNativeText,
+  pickNativeCtxItem, runNativeCtxMenu, readNativeTheme, menuResult, promptResult, confirmResult, clipNativeText, NATIVE_MENU_MAX_ITEMS,
 } from './nativeSheet'
 export type {
   NativeSheetTheme, NativeSheetRequest, NativeSheetPayload, NativeSheetPresenter, NativeSheetOutcome,

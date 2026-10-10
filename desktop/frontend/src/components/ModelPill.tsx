@@ -1,6 +1,6 @@
 import { groupPickerModels, useModelPickerPreferences } from '../modelPickerPreferences'
 import { ModelMetadata } from './ModelMetadata'
-import { modelPickerPresenter, pickerChanges, type ModelPickerRequest, type PickerGroup } from './modelPickerHost'
+import { modelPickerPresenter, pickerChanges, type ModelPickerRequest, type ModelPickerValues, type PickerField, type PickerGroup } from './modelPickerHost'
 /**
  * Chat View 模型 / Effort 控制器。
  *
@@ -12,8 +12,8 @@ import { modelPickerPresenter, pickerChanges, type ModelPickerRequest, type Pick
 import React, { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { ChevronDown, ChevronRight, Bot, Search } from 'lucide-react'
-import { nestedPanelPlacement, nestedPanelTop, UI_ZOOM_EVENT, zoomOf, useEdgeNudge, OverlayAt } from '@lcl/engine'
-import type { NestedPanelPlacement } from '@lcl/engine'
+import { nestedPanelPlacement, nestedPanelTop, UI_ZOOM_EVENT, zoomOf, useEdgeNudge, OverlayAt, NATIVE_MENU_MAX_ITEMS, nativeSheetPresenter, runNativeSheetMenu } from '@lcl/engine'
+import type { NestedPanelPlacement, SheetMenu, SheetMenuItem } from '@lcl/engine'
 import { registerMessages, useI18n } from '../i18n'
 import { THINKING_LEVELS } from '../types'
 import { thinkingLabel } from './thinkingLabel'
@@ -250,10 +250,16 @@ export const ModelPill: React.FC<{
   emptyLabel?: string
   footnote?: string
   title?: string
+  /** 药丸最前面的图标:不传 = 机器人;null = 不要图标。 */
+  icon?: React.ReactNode
+  /** 手机(有原生半屏时):点药丸出的是一张合并菜单 —— 模型 / 思考档位各一行(当前值写在行上,点进去是选项页),
+   *  后面接 `extra` 给的行(Composer2 给「模式」),再往下是高级。原生呈现不了、或目录太大放不下时调
+   *  `onUnavailable`,并照旧走模型选择器。不传 = 模型选择器(插件的输入框等)。 */
+  hub?: { title: string; back: string; extra: () => SheetMenuItem[]; onUnavailable?: () => void }
 }> = ({
   className, scopeKey, onSelectionChange, menuPortal = false, open: controlledOpen, onOpenChange,
   disabled, modelId, groups, onSelect, thinkingLevel, onThinkingChange, allowUltra = false, ultra, running = false, supportedThinking, effectiveThinking,
-  modelsResponse, defaultModelIds, onDefaultModelChange, onContextWindowChange, emptyLabel, footnote, title,
+  modelsResponse, defaultModelIds, onDefaultModelChange, onContextWindowChange, emptyLabel, footnote, title, icon, hub,
 }) => {
   const { t } = useI18n()
   const pickerPrefs = useModelPickerPreferences()
@@ -415,14 +421,13 @@ export const ModelPill: React.FC<{
   // 划得比这还慢仍会误切;真有人报,再上「朝面板方向移动时不切」的安全三角。聚焦 / 点击照旧立即。
   const hoverPane = (p: Pane) => (): void => { cancelHover(); hoverTimer.current = window.setTimeout(showPane(p), PANE_HOVER_MS) }
 
-  const openPicker = async (): Promise<void> => {
-    const present = modelPickerPresenter()
-    if (!present || open) { setPillOpen(!open); return }
+  /** 原生呈现的两种形态(模型选择器 / 合并菜单)共用的一份字段:目录、当前值、可选项。 */
+  const pickerFields = (): PickerField[] => {
     const toGroups = (input: ModelPillGroup[]): PickerGroup[] => input.map(g => ({ label: g.label, options: g.options.map(m => ({
       value: m.id, label: m.name, detail: m.tags?.map(tag => tag.text).join(' · ') || m.description,
       ...(m.source === 'forsion' && m.multiplier != null ? { badge: `${m.multiplier.toFixed(2)}x` } : {}),
     })) }))
-    const fields: ModelPickerRequest['fields'] = [{ id: 'model', label: t('pill.rowModel'), value: modelId || '', groups: toGroups(groups) }]
+    const fields: PickerField[] = [{ id: 'model', label: t('pill.rowModel'), value: modelId || '', groups: toGroups(groups) }]
     if (onThinkingChange) fields.push({ id: 'thinking', label: t('pill.rowEffort'), value: isUltra ? 'ultra' : effLevel, groups: [{ label: '', options: [
       ...THINKING_LEVELS.map(lv => ({ value: lv, label: effortDisplay(lv, t) })),
       ...(allowUltra ? [{ value: 'ultra', label: t('pill.ultra'), detail: t('pill.ultraTitle') }] : []),
@@ -434,6 +439,70 @@ export const ModelPill: React.FC<{
       { value: 'default', label: t('pill.ctxDefault', { n: fmtWindow(ctx.defaultTokens) }), detail: t('pill.ctxHint', { n: fmtWindow(ctx.defaultTokens) }) },
       ...(ctx.maxTokens ? [{ value: 'max', label: t('pill.ctxMax', { n: fmtWindow(ctx.maxTokens) }) }] : []),
     ] }] })
+    return fields
+  }
+  /** 把原生答回的改动落到调用方(两种形态同一条路)。 */
+  const applyChanges = (changes: ModelPickerValues): void => {
+    const patch: { modelId?: string; thinkingLevel?: Thinking; ultra?: boolean } = {}
+    if ('model' in changes) patch.modelId = changes.model
+    if ('thinking' in changes) {
+      patch.thinkingLevel = changes.thinking === 'ultra' ? 'max' : changes.thinking as Thinking
+      if (allowUltra) patch.ultra = changes.thinking === 'ultra'
+    }
+    if (Object.keys(patch).length) {
+      if (onSelectionChange) onSelectionChange(patch)
+      else { if (patch.modelId !== undefined) onSelect(patch.modelId); if (patch.thinkingLevel) onThinkingChange?.(patch.thinkingLevel, patch.ultra) }
+    }
+    for (const { slot } of slotRows) if (slot in changes) onDefaultModelChange?.(slot, changes[slot])
+    if ('context' in changes && !('model' in changes) && modelId) onContextWindowChange?.(modelId, changes.context === 'max' ? ctx?.maxTokens ?? null : null)
+  }
+  /** 合并菜单;条目数超过原生上限时先去掉高级,还放不下返回 null。 */
+  const hubMenu = (extra: SheetMenuItem[]): SheetMenu | null => {
+    const page = (f: PickerField): SheetMenuItem => {
+      const kids = f.groups.map((g, gi) => ({
+        ...(g.label ? { title: g.label } : {}),
+        // 条目 id 用序号:原生那边 id 最长 160 字符,模型 id 不保证;答回的 id 只在这份快照里找回条目
+        items: g.options.map((o, oi): SheetMenuItem => ({
+          id: `${f.id}:${gi}:${oi}`, label: o.label, detail: [o.detail, o.badge].filter(Boolean).join(' · ') || undefined,
+          checked: o.value === f.value, run: () => applyChanges({ [f.id]: o.value }),
+        })),
+      })).filter((s) => s.items.length)
+      const last = kids.length - 1
+      return {
+        id: `field:${f.id}`, label: f.label, detail: f.id === 'model' ? label : f.groups.flatMap((g) => g.options).find((o) => o.value === f.value)?.label,
+        children: f.id === 'model' && footnote && last >= 0 ? [...kids.slice(0, last), { ...kids[last], footer: footnote }] : kids,
+        ...(f.id === 'model' ? { search: { placeholder: t('pill.nativeSearch'), empty: t('pill.noModels') } } : {}),
+      }
+    }
+    const count = (items: SheetMenuItem[]): number => items.reduce((n, it) => n + 1 + (it.children || []).reduce((m, s) => m + count(s.items), 0), 0)
+    const fields = pickerFields().filter((f) => f.groups.some((g) => g.options.length))
+    const main = [...fields.filter((f) => f.id === 'model' || f.id === 'thinking').map(page), ...extra]
+    const advanced = fields.filter((f) => f.id !== 'model' && f.id !== 'thinking').map(page)
+    if (!main.length || count(main) > NATIVE_MENU_MAX_ITEMS) return null
+    return { title: hub!.title, back: hub!.back, sections: [
+      { items: main },
+      ...(advanced.length && count(main) + count(advanced) <= NATIVE_MENU_MAX_ITEMS ? [{ title: t('pill.rowAdvanced'), items: advanced }] : []),
+    ] }
+  }
+
+  const openPicker = async (): Promise<void> => {
+    if (hub && !open && nativeSheetPresenter()) {
+      const menu = hubMenu(hub.extra())
+      if (menu) {
+        // 上一次还没答回就又点了一下:先撤掉它 —— 否则换会话时只撤得到后一次,前一次的菜单还会出来、选中后落到旧会话的回调上
+        nativeCall.current?.abort()
+        const call = new AbortController()
+        nativeCall.current = call
+        const handled = await runNativeSheetMenu(menu, { signal: call.signal })
+        if (nativeCall.current === call) nativeCall.current = null
+        if (handled) return // 选了、取消了、或被撤回(撤回的那次到此为止)
+      }
+      // 原生菜单出不来:告诉调用方(模式药丸回来),这一下接着走下面的模型选择器,不让这次点击落空
+      hub.onUnavailable?.()
+    }
+    const present = modelPickerPresenter()
+    if (!present || open) { setPillOpen(!open); return }
+    const fields = pickerFields()
     const request: ModelPickerRequest = { title: t('input.selectModel'), fields, footnote,
       labels: { done: t('pill.nativeDone'), search: t('pill.nativeSearch'), empty: t('pill.noModels'), back: t('pill.nativeBack'), advanced: t('pill.rowAdvanced') },
       theme: { dark: document.documentElement.dataset.mode === 'dark', accent: getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() },
@@ -445,19 +514,7 @@ export const ModelPill: React.FC<{
       if (call.signal.aborted || nativeCall.current !== call) return
       const changes = pickerChanges(request, result)
       nativeCall.current = null; setNativeOpen(false); setPillOpen(false)
-      if (!changes) return
-      const patch: { modelId?: string; thinkingLevel?: Thinking; ultra?: boolean } = {}
-      if ('model' in changes) patch.modelId = changes.model
-      if ('thinking' in changes) {
-        patch.thinkingLevel = changes.thinking === 'ultra' ? 'max' : changes.thinking as Thinking
-        if (allowUltra) patch.ultra = changes.thinking === 'ultra'
-      }
-      if (Object.keys(patch).length) {
-        if (onSelectionChange) onSelectionChange(patch)
-        else { if (patch.modelId !== undefined) onSelect(patch.modelId); if (patch.thinkingLevel) onThinkingChange?.(patch.thinkingLevel, patch.ultra) }
-      }
-      for (const { slot } of slotRows) if (slot in changes) onDefaultModelChange?.(slot, changes[slot])
-      if ('context' in changes && !('model' in changes) && modelId) onContextWindowChange?.(modelId, changes.context === 'max' ? ctx?.maxTokens ?? null : null)
+      if (changes) applyChanges(changes)
     } catch {
       // Older/broken native hosts retain the existing fully functional Web picker.
       if (!call.signal.aborted && nativeCall.current === call) { nativeCall.current = null; setNativeOpen(false) }
@@ -467,7 +524,7 @@ export const ModelPill: React.FC<{
   if (readonly) {
     return (
       <span className={`composer-chip composer-chip--readonly${className ? ` ${className}` : ''}`} title={title}>
-        <Bot size={13} />
+        {icon === undefined ? <Bot size={13} /> : icon}
         <MarqueeLabel text={label} />
       </span>
     )
@@ -483,7 +540,7 @@ export const ModelPill: React.FC<{
         onClick={() => { void openPicker() }}
       >
         {isUltra && <span ref={streaksRef} className="pill-ultra-streaks" aria-hidden="true">{[0, 1, 2, 3].map((i) => <i key={i} />)}</span>}
-        <Bot size={13} />
+        {icon === undefined ? <Bot size={13} /> : icon}
         {/* Ultra:模型名照常字色,「Ultra」单独成渐变字标签(主次分明);包一层,展开态的三列网格(图标 | 标签 | 箭头)不被挤出第四列 */}
         {isUltra
           ? <span className="pill-ultra-label"><MarqueeLabel text={label} /><span className="pill-ultra-tag">{effortText}</span></span>
