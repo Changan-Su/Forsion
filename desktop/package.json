@@ -155,6 +155,7 @@
     "e2e:ftoverride": "node scripts/filetype-override.e2e.cjs",
     "e2e:pathgoneunmounted": "node scripts/vault-pathgone-unmounted.e2e.cjs",
     "check:textfrag": "electron scripts/text-fragment.check.cjs",
+    "check:sourceopen": "electron scripts/source-open.check.cjs -ApplePersistenceIgnoreState YES",
     "check:assetfetch": "electron scripts/asset-fetch.check.cjs",
     "check:rtc": "electron scripts/rtc-capability.check.cjs",
     "check:rtcsdk": "electron scripts/rtc-sdk.check.cjs",
