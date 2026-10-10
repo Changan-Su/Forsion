@@ -50,7 +50,8 @@ function Board({ o, initial, bind, onElements, onDrift }: BoardProps) {
   return (
     <div ref={box} className="am-plugin-board" style={{ width: '100%', height: '100%' }}>
       <Excalidraw
-        onExcalidrawAPI={bind}
+        // 不用 onExcalidrawAPI:它在引擎装载初始内容**之前**就来,那时推进去的内容 / 笔会被随后的装载冲掉(Codex 评审)。
+        onInitialize={bind}
         ui={false}
         activeTool={{ type: tool }}
         theme={o.theme ?? hostTheme()}
@@ -101,7 +102,7 @@ export function mountPluginBoard(el: HTMLElement, initial: PluginBoardOptions): 
   /** 调用方换了一份内容。自己推进去的不回调 onChange(先记下它的版本)。 */
   let sceneStale = false
   const pushScene = (): void => {
-    if (!api) { sceneStale = true; return } // 引擎还没好:它起来用的是挂载时那份,好了再补推
+    if (!api) { sceneStale = true; return } // 引擎还没装完初始内容:它起来用的是挂载时那份,装完再补推(见 bind)
     sceneStale = false
     const elements = restoreElements(live(o.scene.elements) as SceneElements, null)
     seen = versionOf(elements)
@@ -125,7 +126,12 @@ export function mountPluginBoard(el: HTMLElement, initial: PluginBoardOptions): 
     o.onChange?.({ elements: live(elements), files: api.getFiles() })
   }
   const tree = () => <Board o={o} initial={initialElements} bind={bind} onElements={onElements} onDrift={() => { if (alive) pushViewport() }} />
-  const mount = mountHostReact(el, tree(), () => { alive = false; api = null })
+  // 收尾走同一处(自己 dispose、被同一个 el 上后来的挂载收掉、插件停用):先记下最后的样子,卸掉之后 getScene 还答得出。
+  const mount = mountHostReact(el, tree(), () => {
+    if (api) o.scene = { elements: api.getSceneElements(), files: api.getFiles() }
+    alive = false
+    api = null
+  })
 
   return {
     update(patch) {
@@ -140,11 +146,7 @@ export function mountPluginBoard(el: HTMLElement, initial: PluginBoardOptions): 
     getScene: () => (api ? { elements: api.getSceneElements(), files: api.getFiles() } : o.scene),
     undo() { api?.history.undo() },
     redo() { api?.history.redo() },
-    dispose() {
-      if (!alive) return
-      if (api) o.scene = { elements: api.getSceneElements(), files: api.getFiles() } // 卸掉之后 getScene 还答最后的样子
-      mount.dispose()
-    },
+    dispose() { if (alive) mount.dispose() },
   }
 }
 

@@ -5,6 +5,7 @@
  * (插件仓 forsion-plugin-pdf-reader 的 verify/smoke.cjs ⑧)。
  * 负对照(2026-10-10 实跑):去掉滚轮的 stopPropagation → 「滚轮」那条红;去掉 onChange 的版本比对 → 「只在元素变了」那条红;
  * 去掉引擎漂移后的回推 → 「拉回」那条红。
+ * 负对照(2026-10-11 实跑):改回在 onExcalidrawAPI 里绑定 → 「装完初始内容之后」两条红;收尾回调里不记最后的样子 → 「被后来的挂载收掉」那条红。
  */
 import { act } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -15,6 +16,13 @@ const eng = vi.hoisted(() => ({
   elements: [] as any[],
   appState: {} as Record<string, unknown>,
   engineWheel: null as any,
+  boot(props: any) {
+    props.onExcalidrawAPI?.(eng.api)
+    eng.elements = props.initialData.elements
+    for (const k of Object.keys(eng.appState)) delete eng.appState[k]
+    Object.assign(eng.appState, props.initialData.appState)
+    props.onInitialize?.(eng.api)
+  },
 }))
 vi.mock('../blocks/excalidraw/forkRuntime', async () => {
   const { useEffect, createElement } = await import('react')
@@ -28,7 +36,8 @@ vi.mock('../blocks/excalidraw/forkRuntime', async () => {
     exportToSvg: vi.fn(async () => document.createElementNS('http://www.w3.org/2000/svg', 'svg')),
     Excalidraw: (props: any) => {
       eng.props = props
-      useEffect(() => { props.onExcalidrawAPI(eng.api); return () => props.onExcalidrawAPI(null) }, []) // eslint-disable-line react-hooks/exhaustive-deps
+      // 和真引擎同一个顺序:先交出 API,再装初始内容(此前推进去的内容 / 笔全被冲掉),装完才报 onInitialize。
+      useEffect(() => { if (eng.api) eng.boot(props) }, []) // eslint-disable-line react-hooks/exhaustive-deps
       // 引擎的滚轮监听是挂在它自己容器上的原生监听
       return createElement('div', { 'data-stub': 'engine', ref: (n: HTMLElement | null) => n?.addEventListener('wheel', eng.engineWheel) })
     },
@@ -163,8 +172,22 @@ describe('ctx.ui.mountBoard 的那一层', () => {
     await act(async () => { h1 = mountPluginBoard(el, { scene: { elements: [el0('a')] }, viewport: VP }) })
     h1.update({ scene: { elements: [el0('late', 2)] } })
     eng.api = api
-    await act(async () => { eng.props.onExcalidrawAPI(api) })
+    await act(async () => { eng.boot(eng.props) })
     expect(eng.elements.map((e) => e.id)).toEqual(['late'])
+    expect(h1.getScene().elements.map((e: any) => e.id)).toEqual(['late'])
+  })
+
+  it('笔和颜色是在引擎装完初始内容之后套的(早了会被装载冲掉)', async () => {
+    await mount({ pen: 'marker', strokeColor: '#e03131' })
+    expect(eng.appState.currentItemStrokeColor).toBe('#e03131')
+    expect(eng.appState.zoom).toEqual({ value: 1.5 })
+  })
+
+  it('被同一个元素上后来的挂载收掉时,旧句柄的 getScene 还答最后的样子', async () => {
+    const h1 = await mount()
+    eng.elements = [el0('a'), el0('b', 2)]
+    await act(async () => { mountPluginBoard(el, { scene: { elements: [] }, viewport: VP }) })
+    expect(h1.getScene().elements.map((e: any) => e.id)).toEqual(['a', 'b'])
   })
 })
 
