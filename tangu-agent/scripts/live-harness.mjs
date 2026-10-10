@@ -224,7 +224,7 @@ OPT_IN.add('dreamseed');
 OPT_IN.add('projdedupe'); // --only projdedupe:项目记忆换了说法的重复(真模型 + 后台判官,约 20 次调用)
 OPT_IN.add('projteam'); // --only projteam:项目记忆在团队会话里(三个两人团队各一轮)
 OPT_IN.add('projcompact'); // --only projcompact:项目记忆写满时的压缩(4 个 run + 判官 + 2 次压缩,约 10 次调用);只在动 projectMemoryCompact.ts / remember 写满那条路时才有信息量
-OPT_IN.add('forkcache'); // --only forkcache:尾部分叉调用读没读到主循环的缓存(4 个 run + 4 次判官 + 1 个脑暴 run、3 席);只在动 forkJudge / selfBrainstorm / 缓存路由键(resolveCacheKey)时才有信息量
+OPT_IN.add('forkcache'); // --only forkcache:尾部分叉调用读没读到主循环的缓存(4 个 run + 4 次判官 + 2 个脑暴 run 共 6 席);只在动 forkJudge / selfBrainstorm / 缓存路由键(resolveCacheKey)时才有信息量
 OPT_IN.add('visualfigures');
 for (const key of ['intelligentplan', 'intelligentmedia', 'intelligentplain']) { OPT_IN.add(key); KEYS.push(key); }
 OPT_IN.add('intelligentusers'); KEYS.push('intelligentusers');
@@ -4190,8 +4190,10 @@ Then reply with only the command output.`,
   // 缓存路由键和主循环对不上时前缀再一致也读不到(落在另一个桶里),单测和假引擎都看不出来,只有真模型的 cached 量得出。
   // ①判官:开 fork 模式,三个新会话各聊一轮(第一个会话再多聊一轮),从引擎日志读每次判官调用的用量;没发出调用就回落的那一轮不算量到。
   //   新会话的第一轮最说明问题:那个会话自己还没写过任何缓存,读到的只能是主循环写下的。
-  // ②分身:点名让模型用 self_brainstorm、只做第一轮(第二轮各席接着自己第一轮往下,读的是自己写下的缓存,证不了这件事),读带 phase=brainstorm 的 usage 事件。
-  // 判据:量到的每一次都读到一半以上;哪条腿一次都没量到也算没过(量不到就证不了)。上游不报缓存量的模型跑这条,红是如实的。
+  // ②分身:两个新会话各点名让模型用一次 self_brainstorm、只做第一轮(第二轮各席接着自己第一轮往下,读的是自己写下的缓存,证不了这件事),读带 phase=brainstorm 的 usage 事件。
+  // 判据:每条腿最多一次没读到一半(上游偶尔不把请求送到同一台机器:路由键对的时候也偶有一次只读到四成,数字见 docs/direct-model-calls.md),量到的不足一半也算没过。
+  //   路由键不对时的样子(10-10 六次基线,每次都这样):新会话第一轮的判官 3 次全读不到;分身每 3 席有 1 席读不到(先到的那席按原价写,后两席读它的)。
+  //   所以分身要量两回 6 席 —— 只量 3 席的话,「固定有 1 席读不到」和「偶发 1 次」分不开。上游不报缓存量的模型跑这条,红是如实的。
   await scenario('forkcache', 'forkcache 尾部分叉调用读到主循环的前缀缓存(Historian 分身判官 / self_brainstorm 分身)', async () => {
     const forkLines = () => (existsSync(engineLog) ? readFileSync(engineLog, 'utf8') : '').split('\n').filter((l) => /\[historian\] fork 判官/.test(l));
     const mainLast = (ev) => { const u = [...(ev.usages || [])].reverse().find((x) => !x.phase); return u && Number(u.prompt) ? (Number(u.cached) || 0) / Number(u.prompt) : null; };
@@ -4207,8 +4209,7 @@ Then reply with only the command output.`,
       { key: 'b#1', sid: `live-forkcache-b-${t}`, msg: 'Explain in about four sentences why database indexes speed up reads but slow down writes.' },
       { key: 'c#1', sid: `live-forkcache-c-${t}`, msg: '用三四句话解释一下,为什么长途飞行往东飞比往西飞更难倒时差。' },
     ];
-    const judge = [];
-    let evB;
+    const judge = [], storms = [];
     try {
       for (const x of turns) {
         const before = forkLines().length;
@@ -4221,23 +4222,28 @@ Then reply with only the command output.`,
           : { missed: fresh ? fresh.at(-1).replace(/^.*\[historian\] /, '').slice(0, 120) : '120 秒内判官没起(没到点 / 没有快照 / 上一轮的复盘还占着)' }) });
         await sleep(1500); // 让这一轮复盘的落库收尾,别占着下一轮
       }
-      evB = await run(`live-forkcache-s-${t}`, 'I am choosing how to store user settings for a small desktop app: one JSON file, or SQLite. Before you answer, stress-test the choice with the self_brainstorm tool: load it with load_tools if it is not available yet, then call it once, on its own, with rounds set to 1 and no custom perspectives. After the digest comes back, give me your recommendation in two sentences.', 420_000);
+      const how = 'Before you answer, stress-test the choice with the self_brainstorm tool: load it with load_tools if it is not available yet, then call it once, on its own, with rounds set to 1 and no custom perspectives. After the digest comes back, give me your recommendation in two sentences.';
+      for (const [i, q] of ['I am choosing how to store user settings for a small desktop app: one JSON file, or SQLite.', 'I am choosing how a two-person team should ship a small web app: deploy on every merge, or one release a week.'].entries()) {
+        storms.push(await run(`live-forkcache-s${i + 1}-${t}`, `${q} ${how}`, 420_000));
+      }
     } finally {
       if (prior) await api('/agent/special/config', { method: 'POST', body: JSON.stringify({ historian: prior }) }).catch(() => {});
     }
-    const seats = (evB.usages || []).filter((u) => u.phase === 'brainstorm')
-      .map((u) => ({ round: (Number(u.iteration) || 0) + 1, prompt: Number(u.prompt) || 0, cached: u.cacheReported === false ? null : Number(u.cached) || 0, completion: Number(u.completion) || 0 }));
+    const seats = storms.flatMap((ev, i) => (ev.usages || []).filter((u) => u.phase === 'brainstorm')
+      .map((u) => ({ run: i + 1, round: (Number(u.iteration) || 0) + 1, prompt: Number(u.prompt) || 0, cached: u.cacheReported === false ? null : Number(u.cached) || 0, completion: Number(u.completion) || 0 })));
     const judged = judge.filter((j) => j.prompt != null), first = seats.filter((s) => s.round === 1);
-    const okJudge = judged.length > 0 && judged.every(hit), okSeats = first.length > 0 && first.every(hit);
+    // 每条腿容一次偶发;量到的不足一半 = 这条腿没量成(判官回落 / 模型没调工具),不许靠「没量到的不算」过关。
+    const leg = (got, want) => got.length * 2 > want && got.filter((u) => !hit(u)).length <= 1;
+    const okJudge = leg(judged, turns.length), okSeats = leg(first, storms.length * 3);
     return {
       ok: okJudge && okSeats,
       detail: [
-        `判官${okJudge ? '✓' : '✗'} 量到 ${judged.length}/${turns.length}:${judge.map((j) => `${j.key} ${j.prompt != null ? `${show(j)},主循环末次 ${hitPct(j.main)}` : `没量到(${j.missed})`}`).join(';')}`,
-        `分身${okSeats ? '✓' : '✗'} 第一轮量到 ${first.length} 席${first.length ? `:${first.map(show).join(';')},主循环末次 ${hitPct(mainLast(evB))}` : `(${evB.error || `模型没调 self_brainstorm,工具 ${evB.toolCalls.join('→') || '无'}`})`}`,
+        `判官${okJudge ? '✓' : '✗'} 量到 ${judged.length}/${turns.length}、没读到一半 ${judged.filter((u) => !hit(u)).length} 次:${judge.map((j) => `${j.key} ${j.prompt != null ? `${show(j)},主循环末次 ${hitPct(j.main)}` : `没量到(${j.missed})`}`).join(';')}`,
+        `分身${okSeats ? '✓' : '✗'} 第一轮量到 ${first.length} 席、没读到一半 ${first.filter((u) => !hit(u)).length} 席:${storms.map((ev, i) => `第 ${i + 1} 回 ${first.filter((s) => s.run === i + 1).map(show).join(';') || `没量到(${ev.error || `工具 ${ev.toolCalls.join('→') || '无'}`})`},主循环末次 ${hitPct(mainLast(ev))}`).join(' / ')}`,
       ].join(' | '),
-      output: `[脑暴那一轮] 工具 ${evB.toolCalls.join('→') || '无'}\n助手:${String(evB.content || '').slice(0, 800)}`,
+      output: storms.map((ev, i) => `[脑暴第 ${i + 1} 回] 工具 ${ev.toolCalls.join('→') || '无'}\n助手:${String(ev.content || '').slice(0, 600)}`).join('\n\n'),
       forkSamples: { judge, seats },
-      toolCalls: evB.toolCalls,
+      toolCalls: storms.flatMap((ev) => ev.toolCalls),
     };
   });
   // ── 缓存结构:A(新会话) / B(新会话·同文) / B′(新会话·异文) / C(S2 后续) / D(S1 后续)──
