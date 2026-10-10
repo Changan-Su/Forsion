@@ -1683,13 +1683,16 @@ try {
     // of the agent belongs in memory (10-04 ruling), so HUMAN.md must stay as it is. (Before the ruling this leg expected
     // a human_update; the original regression it guarded, a deferred schema disappearing on grok, is still covered:
     // the model has to reach a real storage tool rather than an unrelated plugin tool.)
+    // 基线取在这句纠正之前:带 --human-ui 时,上面那一步已经在真界面里改过 Agent 这份说明(保存 / 冲突合并),
+    // 拿场景开头读的那份来比,模型做对了也恒红(10-10 两次都红在这里,第二次模型其实只记了记忆、没碰说明)。
+    const beforeFeedback = await api(`/agent/agents/${slug}/human`);
     const feedback = await run(session.id, '你刚才给方案的方式我不太习惯。以后给我选方案，别只列技术优缺点，先说我必须做哪个决定、各需要投入多少时间；信息不足就明确写假设。', 120_000, cfg);
     const revised = await api(`/agent/agents/${slug}/human`);
     const memoryAfter = await api(`/agent/memory?slug=${slug}`);
     const remembered = feedback.toolResults.some(r => r.name === 'remember' && !r.isError && /"ok":true/.test(r.full || ''));
     const humanTouched = feedback.toolResults.some(r => { try { return JSON.parse(r.full).kind === 'human_update'; } catch { return false; } });
-    const feedbackApplied = !feedback.error && feedback.done && remembered && !humanTouched && revised.content === agent.content;
-    writeFileSync(join(OUT, 'human-feedback-evidence.json'), JSON.stringify({ feedbackApplied, remembered, humanTouched, humanUnchanged: revised.content === agent.content, output: feedback.content, memory: memoryAfter, toolCalls: feedback.toolCalls }, null, 2));
+    const feedbackApplied = !feedback.error && feedback.done && remembered && !humanTouched && revised.content === beforeFeedback.content;
+    writeFileSync(join(OUT, 'human-feedback-evidence.json'), JSON.stringify({ feedbackApplied, remembered, humanTouched, humanUnchanged: revised.content === beforeFeedback.content, output: feedback.content, memory: memoryAfter, toolCalls: feedback.toolCalls }, null, 2));
     return { ok: recalled && isolated && reverted && feedbackApplied && !removed.error, detail: JSON.stringify({ scoped, disk, receiptOk, durable, approvals: ev.approvals, recalled, isolated, reverted, feedbackApplied, electron: argv.includes('--human-ui') }), output: `初次：${ev.content}\n新会话：${recall.content}\n异项目：${negative.content}\n撤销后：${removed.content}\n自然反馈：${feedback.content}`, toolCalls: [...ev.toolCalls, ...feedback.toolCalls], tokens: [ev, recall, negative, removed, feedback].reduce((n, e) => n + (tokensOf(e) || 0), 0) };
   });
 
