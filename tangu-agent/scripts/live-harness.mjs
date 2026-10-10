@@ -8,6 +8,9 @@
  *   npm run build && npm run live:harness                    # 全部场景(约 5-10 分钟,真烧订阅额度)
  *   npm run live:harness -- --only personas                 # 三位音乐人格的同题实测(身份自动验,表达读原话)
  *   npm run live:harness -- --only human --human-ui        # HUMAN.md 双作用域、真模型写入/读取/撤销 + 真 Electron 卡片与编辑;先构建 desktop
+ *   npm run live:harness -- --only humanreal --rounds 3 [--timeout 2400000]   # 协作说明写成什么样(10-10;慢的模型每轮 3–4 分钟,轮数多了带 --timeout):一段六条消息的真实任务(不点名任何库 / 工具)之后,写进去的是不是「用户这边怎么做」、普通人读不读得懂;
+ *                                                           #   判官固定 codex/gpt-6-luna;改 HUMAN_GUIDANCE / manage_human 的说明与返回后跑(设计见 lib/human-real-live.mjs);
+ *                                                           #   `--humanreal-rejudge <evidence.json,…>` 不跑任务,只把旧证据里的文档按现在的判据重判一遍
  *   npm run live:harness -- --only musereview [--hand]   # Muse 每周装备巡检:巡检完当场替各 agent 收起(只认巡检名单里的、不出卡片)→ 它下一次 run 就生效;--hand 再在对话里让 Muse 看一遍(改 LOADOUT_REVIEW_PROMPT / review_loadout 报告 / propose 代收那一支后跑)
  *   npm run live:harness -- --only harnessopen --harness-ui   # 工作笔记放开写入 + 真 Electron 里的更新卡与撤销(卡片从真模型的回执还原);先构建 desktop
  *   npm run live:harness -- --only projmem                  # 记忆分项目级 / 全局级(10-04):落点、同项目不同 agent 共用、跨项目隔离(改 services/projectMemory.ts / remember 的 scope 后跑)
@@ -158,6 +161,7 @@ import { fromDb, report as timelineReport } from './stall-timeline.mjs';
 import { launchChromePipe, pairExtension } from './lib/chrome-pipe.mjs';
 import { pageInstructionsLive } from './lib/page-instructions-live.mjs';
 import { realUseLive } from './lib/real-use-live.mjs';
+import { humanRealLive } from './lib/human-real-live.mjs';
 import { dreamSeedLive } from './lib/dream-seed-live.mjs';
 import { plantPlugin, pluginDiagLive, registeredViews, STUB_SELFTEST } from './lib/plugin-diag-live.mjs';
 
@@ -184,6 +188,7 @@ KEYS.push('harnessopen');
 KEYS.push('equip');
 KEYS.push('musereview');
 KEYS.push('realuse');
+KEYS.push('humanreal');
 KEYS.push('projmem');
 KEYS.push('skillcreate');
 KEYS.push('projdedupe');
@@ -230,6 +235,7 @@ OPT_IN.add('pluginicon'); // 一个 run;只在动 forsion-plugin 手册「Startu
 OPT_IN.add('storeview'); // 一个 run;只在动 forsion-plugin 手册里 registerStoreView 那行、或商店左栏的插件页接缝时才有信息量。
 OPT_IN.add('skillcreate'); // 四个 run;只在动 manage_skill / use_skill / 随包的 skill-creator 技能时才有信息量。
 OPT_IN.add('realuse'); // 真实使用模拟:每轮 12 个 run(--rounds),--usage-db 再加一个 Muse 周期;单独跑。
+OPT_IN.add('humanreal'); // 协作说明写成什么样:每轮 6 个 run + 1 次判官(--rounds);只在动 HUMAN_GUIDANCE / manage_human 时才有信息量。
 const NEEDS = { dream: ['historian'], recall: ['historian', 'dream'] }; // 记忆链三连有先后依赖;其余场景自包含
 const ONLY = new Set(opt('only', process.env.TANGU_LIVE_ONLY || KEYS.filter((k) => !OPT_IN.has(k)).join(',')).split(',').map((s) => s.trim()).filter(Boolean));
 const TTFT_ROUNDS = Number(opt('ttft-rounds', process.env.TANGU_LIVE_TTFT_ROUNDS || 5));
@@ -1249,7 +1255,7 @@ async function phoneResponder(runId, p, phone) {
 async function run(sessionId, message, timeoutMs = 240_000, extraAgentConfig = {}, client, onApproval, headers, approveHeaders, opts = {}) {
   const t0 = Date.now();
   // headers:只加在起 run 这一跳(remoteclamp 用它模拟 unitWeb 盖的 x-forsion-remote);事件流 / 审批兑现照旧本机直连。
-  const { runId } = await api('/agent/runs', { method: 'POST', headers, body: JSON.stringify({ session_id: sessionId, model_id: MODEL, message, client, ...(opts.clientCapabilities ? { client_capabilities: opts.clientCapabilities } : {}), ...(opts.ui ? { ui_commands: opts.uiCommands || [], ui_settings: opts.ui } : {}), agent_config: { ...AGENT_CONFIG, ...extraAgentConfig } }) });
+  const { runId } = await api('/agent/runs', { method: 'POST', headers, body: JSON.stringify({ session_id: sessionId, model_id: opts.model || MODEL, message, client, ...(opts.clientCapabilities ? { client_capabilities: opts.clientCapabilities } : {}), ...(opts.ui ? { ui_commands: opts.uiCommands || [], ui_settings: opts.ui } : {}), agent_config: { ...AGENT_CONFIG, ...extraAgentConfig } }) });
   const ev = { runId, tokens: 0, toolCalls: [], toolCallIds: [], toolArgs: [], clientCmds: [], uiCmds: [], toolOffsets: null, toolResults: [], subTools: [], subStarts: [], subDones: [], systemPrompt: null, approvals: 0, approvalList: [], approvalResults: [], usages: [], probes: [], statuses: [], content: '', error: null, done: false, group: { speakers: [], ended: null, starts: [], ends: [], summary: null, remarks: [], outputs: [] }, ttftMs: null, firstTokenMs: null, wallMs: 0 };
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), timeoutMs);
@@ -1686,6 +1692,10 @@ try {
     writeFileSync(join(OUT, 'human-feedback-evidence.json'), JSON.stringify({ feedbackApplied, remembered, humanTouched, humanUnchanged: revised.content === agent.content, output: feedback.content, memory: memoryAfter, toolCalls: feedback.toolCalls }, null, 2));
     return { ok: recalled && isolated && reverted && feedbackApplied && !removed.error, detail: JSON.stringify({ scoped, disk, receiptOk, durable, approvals: ev.approvals, recalled, isolated, reverted, feedbackApplied, electron: argv.includes('--human-ui') }), output: `初次：${ev.content}\n新会话：${recall.content}\n异项目：${negative.content}\n撤销后：${removed.content}\n自然反馈：${feedback.content}`, toolCalls: [...ev.toolCalls, ...feedback.toolCalls], tokens: [ev, recall, negative, removed, feedback].reduce((n, e) => n + (tokensOf(e) || 0), 0) };
   });
+
+  // ── 协作说明在一段真实任务之后写成什么样(10-10):消息不点名任何库 / 工具;判据与设计见 lib/human-real-live.mjs ──
+  await scenario('humanreal', `humanreal 协作说明:写的是用户这边怎么做、读得懂 ×${SELF_ROUNDS} 轮`, () =>
+    humanRealLive({ run, api, workspace, OUT, MODEL, AGENT_CONFIG, rounds: SELF_ROUNDS, rejudge: opt('humanreal-rejudge', '').split(',').map((x) => x.trim()).filter(Boolean) }));
 
   // ── 记忆分项目级 / 全局级(10-04 用户第二次裁决「还要区分 Project 级别还是全局级别」)──
   //  ① 在项目一的会话里告诉 agent A 两件事(不提工具、不提「级别」):一件只在这个项目成立,一件不分项目

@@ -23,6 +23,11 @@ vi.mock('../../views/DashboardGridView', () => ({ DashboardGridView: () => h('di
 vi.mock('../blocks', () => ({}))
 vi.mock('../blocks/database/DatabaseEmbed', () => ({ DatabaseEmbed: () => null }))
 vi.mock('../blocks/markdown/MarkdownBlock', () => ({ PlainMarkdownEditor: () => null }))
+// 白板引擎是运行时用 <script> 装的 6 MB 单文件,这里换成桩(ctx.ui.mountBoard,2026-10-10)
+vi.mock('../blocks/excalidraw/forkRuntime', () => ({
+  Excalidraw: () => h('div', { 'data-stub': 'board' }), MainMenu: () => null, CaptureUpdateAction: { NEVER: 'never' },
+  restoreElements: (e: unknown[]) => e, newElementWith: (e: unknown) => e, serializeAsJSON: () => '', exportToSvg: async () => null, getCommonBounds: () => [0, 0, 0, 0],
+}))
 
 const { createPluginViewSurface } = await import('./viewSurface')
 const { mountPluginChatBox } = await import('./chatBoxSurface')
@@ -30,6 +35,7 @@ const { mountPluginMarkdownEditor } = await import('./markdownEditorSurface')
 const { mountPluginTable } = await import('./tableSurface')
 const { mountPluginDashboard } = await import('./dashboardSurface')
 const { mountPluginFloatingToc } = await import('./floatingTocSurface')
+const { mountPluginBoard } = await import('./boardSurface')
 const { useApp } = await import('../../stores/appStore')
 const { hasPageScope } = await import('../store/pageStore')
 
@@ -46,6 +52,7 @@ const cases: Array<[name: string, mount: Mount, selector: string]> = [
   ['ctx.table.mount', (el) => mountPluginTable('contract', el, { id: 't', columns: [{ key: 'name', label: 'Name', kind: 'text' }], rows: [{ id: 'r1', cells: { name: 'x' } }] }).dispose, '.amx-plugtable'],
   ['ctx.dashboard.mount', (el) => mountPluginDashboard('contract', el, { recipe: { cards: [{ kind: 'stat', id: 'k', label: 'L', value: '1', w: 4, h: 2 }] } }).dispose, '[data-stub="dashboard"]'],
   ['ctx.ui.mountFloatingToc', (el) => mountPluginFloatingToc(el, { scrollContainer: el }).dispose, '.lcl-ftoc-mount-layer'],
+  ['ctx.ui.mountBoard', (el) => mountPluginBoard(el, { scene: { elements: [] }, viewport: { scrollX: 0, scrollY: 0, zoom: 1 } }).dispose, '[data-stub="board"]'],
 ]
 
 let el: HTMLDivElement

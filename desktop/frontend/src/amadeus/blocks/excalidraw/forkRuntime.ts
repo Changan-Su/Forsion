@@ -130,4 +130,4 @@ await Promise.all([load(css, css.href), load(js, js.src)])
 const lib = g.ExcalidrawLib as typeof ExcalidrawLib | undefined
 if (!lib) throw new Error(translate('boardengine.libMissing'))
 
-export const { Excalidraw, MainMenu, serializeAsJSON, restoreElements, newElementWith, CaptureUpdateAction } = lib
+export const { Excalidraw, MainMenu, serializeAsJSON, restoreElements, newElementWith, CaptureUpdateAction, exportToSvg, getCommonBounds } = lib

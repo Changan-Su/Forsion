@@ -863,6 +863,65 @@ export interface PluginFloatingTocOptions extends FloatingTocOptions {
   contentRoot?: HTMLElement
 }
 
+/** Tools of the host whiteboard a board layer can be put in. */
+export type PluginBoardTool = 'selection' | 'freedraw' | 'eraser' | 'text' | 'rectangle' | 'ellipse' | 'arrow' | 'line'
+/** The whiteboard's seven pen presets, by the ids its own pen row uses. Only meaningful with `tool: 'freedraw'`. */
+export type PluginBoardPen = 'default' | 'finetip' | 'fountain' | 'marker' | 'highlighter' | 'thick-thin' | 'thin-thick-thin'
+/** Whiteboard content. `elements` are the engine's own element objects: store them verbatim (JSON) and
+ *  hand them back unchanged — the same objects paste into a `.excalidraw.md` board and back. */
+export interface PluginBoardScene {
+  elements: readonly unknown[]
+  files?: Record<string, unknown>
+}
+/** Where the scene sits under the layer: a scene point lands at `(point + scroll) * zoom` CSS pixels
+ *  from the top-left corner of `el`. */
+export interface PluginBoardViewport {
+  scrollX: number
+  scrollY: number
+  zoom: number
+}
+export interface PluginBoardOptions {
+  /** Initial content. Later external changes go through `handle.update({ scene })`. */
+  scene: PluginBoardScene
+  /** The layer never pans or zooms by itself — you own the viewport and push it in (here and through
+   *  `handle.update({ viewport })`), typically from your own scroll container and zoom control. */
+  viewport: PluginBoardViewport
+  /** Defaults to 'freedraw'. The layer has no toolbar: switch tools through `handle.update({ tool })`. */
+  tool?: PluginBoardTool
+  /** Defaults to the board's 'default' pen. */
+  pen?: PluginBoardPen
+  /** Overrides the pen's own colour / width (the engine's stroke width, e.g. 0.5, 1, 2, 4). */
+  strokeColor?: string
+  strokeWidth?: number
+  /** Which theme the strokes are drawn for. Defaults to the host's current mode; pass 'light' when the
+   *  surface underneath stays light in dark mode (a PDF page), or the engine recolours the ink. */
+  theme?: 'light' | 'dark'
+  /** Elements changed (a stroke finished, something erased, an undo). Not called for viewport changes
+   *  or for what you pushed in yourself. Debounce your own saving. */
+  onChange?(scene: PluginBoardScene): void
+  /** The layer takes pointer input but leaves the wheel to you: every wheel / pinch event over it is
+   *  handed here untouched (scroll your container, apply your zoom). Without it they are dropped. */
+  onWheel?(event: WheelEvent): void
+  /** The engine finished loading and the layer accepts input. */
+  onReady?(): void
+}
+export interface PluginBoardHandle {
+  /** `scene` replaces the content without going through undo (a reload from disk); the rest are live settings. */
+  update(patch: Partial<Pick<PluginBoardOptions, 'scene' | 'viewport' | 'tool' | 'pen' | 'strokeColor' | 'strokeWidth' | 'theme'>>): void
+  /** The current content (deleted elements left out). Before the engine is ready: what you last passed in. */
+  getScene(): PluginBoardScene
+  undo(): void
+  redo(): void
+  dispose(): void
+}
+export interface PluginBoardSvg {
+  svg: SVGSVGElement
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
 export interface PluginFloatingTocHandle {
   /** Force a rescan after a DOM change that MutationObserver cannot see. */
   refresh(): void
@@ -1056,6 +1115,15 @@ export interface PluginContext {
       shell: HTMLElement,
       opts: PluginFloatingTocOptions,
     ): PluginFloatingTocHandle
+    /** A transparent layer of the host whiteboard over your own content (2026-10-10+): the same engine,
+     *  pens and stroke feel as a `.excalidraw.md` board, without its chrome. See PluginBoardOptions.
+     *  Feature-detect on older hosts: `ctx.ui?.mountBoard`. */
+    mountBoard?(el: HTMLElement, opts: PluginBoardOptions): PluginBoardHandle
+    /** Render whiteboard elements to a static SVG (2026-10-10+) — for showing ink where no live layer
+     *  is mounted. Resolves `null` for an empty scene. `x` / `y` / `width` / `height` are the drawing's
+     *  bounds in scene units, padding included: place the SVG at `(x + scrollX) * zoom`, sized
+     *  `width * zoom`. Feature-detect: `ctx.ui?.boardToSvg`. */
+    boardToSvg?(scene: PluginBoardScene, opts?: { theme?: 'light' | 'dark'; padding?: number }): Promise<PluginBoardSvg | null>
   }
   /** Dashboard 配方编译(2026-09-01+):声明式配方 → 一份真 `.dashboard.md` 字节。
    *  插件自己经 `ctx.app.writeFile` 落进 workFolder、`ctx.app.openFile` 打开 —— 宿主的
