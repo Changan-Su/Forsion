@@ -16,6 +16,7 @@ const page = (title, script = '') => `<!doctype html><meta charset=utf-8><title>
 const srv = http.createServer((req, res) => {
   const p = req.url.split('?')[0]
   if (p === '/moved') { res.writeHead(302, { location: `/plain?from=moved` }); return res.end() }
+  if (p === '/slow') return setTimeout(() => { res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }); res.end(page('Plain')) }, 1500)
   res.writeHead(p === '/missing' ? 404 : 200, { 'content-type': 'text/html; charset=utf-8' })
   res.end(p === '/host' ? '<!doctype html><meta charset=utf-8><body>'
     : p === '/Files+and+folders/How+it+stores+data' ? page('How it stores data', `history.replaceState(null, '', '/data-storage')`)
@@ -82,12 +83,20 @@ app.whenReady().then(() => srv.listen(0, '127.0.0.1', async () => {
     check('T6 负对照:点击之前就开着的同地址页面不算这次点击打开的 → 红', first && !opened.ok(opened.find(electron, { href, since })))
     check('T6 对照:改之前的认法会把它算成打开了', !!oldLookup(href))
 
+    href = `${base}/slow`
+    const pending = open(href) // 不等它:服务器压着 1.5 秒不回
+    for (let i = 0; i < 100 && !guest?.isLoadingMainFrame(); i++) await sleep(10)
+    await sleep(100)
+    since = opened.watch(electron)
+    await pending
+    check('T7 负对照:点击之前就在加载、点击之后才加载完的页面不算这次点击打开的 → 红(那张页确实加载出来了)', guest.getTitle() === 'Plain' && guest.getURL() === href && !opened.ok(opened.find(electron, { href, since })))
+
     if (process.argv.includes('--real')) {
       href = 'https://obsidian.md/help/Files+and+folders/How+Obsidian+stores+data'; since = opened.watch(electron)
       await open(href, (g) => g.getURL() !== href) // 等站点把地址改写完,否则对照那条没有意义
       found = opened.find(electron, { href, since })
-      check('T7 真站:Obsidian 帮助站的长地址 → 认得出、绿', opened.ok(found) && found.loadedFrom === href, JSON.stringify(found))
-      check('T7 对照:地址栏已被站点改写,改之前的认法落空', found?.url !== href && !oldLookup(href))
+      check('T8 真站:Obsidian 帮助站的长地址 → 认得出、绿', opened.ok(found) && found.loadedFrom === href, JSON.stringify(found))
+      check('T8 对照:地址栏已被站点改写,改之前的认法落空', found?.url !== href && !oldLookup(href))
     }
   } catch (e) { check(`脚本自己出错:${e.message}`, false) }
   console.log(`\n${results.filter(Boolean).length}/${results.length} 通过`)
