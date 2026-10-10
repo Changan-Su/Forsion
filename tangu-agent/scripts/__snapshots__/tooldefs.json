@@ -2508,7 +2508,7 @@
               "items": {
                 "type": "string"
               },
-              "description": "Only after the tool listed lines your update takes out: one string per line number, \"<n> memory: <sentence to save>\", \"<n> reworded\" or \"<n> dropped\"."
+              "description": "Only after the tool listed lines your update takes out: one string per line number, \"<n> memory: <sentence to save>\", \"<n> reworded\" or \"<n> dropped: <reason>\"."
             }
           },
           "required": [
@@ -3215,7 +3215,7 @@
               "items": {
                 "type": "string"
               },
-              "description": "Only after the tool listed lines your update takes out: one string per line number, \"<n> memory: <sentence to save>\", \"<n> reworded\" or \"<n> dropped\"."
+              "description": "Only after the tool listed lines your update takes out: one string per line number, \"<n> memory: <sentence to save>\", \"<n> reworded\" or \"<n> dropped: <reason>\"."
             }
           },
           "required": [
@@ -4146,7 +4146,7 @@
               "items": {
                 "type": "string"
               },
-              "description": "Only after the tool listed lines your update takes out: one string per line number, \"<n> memory: <sentence to save>\", \"<n> reworded\" or \"<n> dropped\"."
+              "description": "Only after the tool listed lines your update takes out: one string per line number, \"<n> memory: <sentence to save>\", \"<n> reworded\" or \"<n> dropped: <reason>\"."
             }
           },
           "required": [
@@ -5216,7 +5216,7 @@
               "items": {
                 "type": "string"
               },
-              "description": "Only after the tool listed lines your update takes out: one string per line number, \"<n> memory: <sentence to save>\", \"<n> reworded\" or \"<n> dropped\"."
+              "description": "Only after the tool listed lines your update takes out: one string per line number, \"<n> memory: <sentence to save>\", \"<n> reworded\" or \"<n> dropped: <reason>\"."
             }
           },
           "required": [
@@ -5983,7 +5983,7 @@
               "items": {
                 "type": "string"
               },
-              "description": "Only after the tool listed lines your update takes out: one string per line number, \"<n> memory: <sentence to save>\", \"<n> reworded\" or \"<n> dropped\"."
+              "description": "Only after the tool listed lines your update takes out: one string per line number, \"<n> memory: <sentence to save>\", \"<n> reworded\" or \"<n> dropped: <reason>\"."
             }
           },
           "required": [
@@ -6649,7 +6649,7 @@
               "items": {
                 "type": "string"
               },
-              "description": "Only after the tool listed lines your update takes out: one string per line number, \"<n> memory: <sentence to save>\", \"<n> reworded\" or \"<n> dropped\"."
+              "description": "Only after the tool listed lines your update takes out: one string per line number, \"<n> memory: <sentence to save>\", \"<n> reworded\" or \"<n> dropped: <reason>\"."
             }
           },
           "required": [
@@ -7580,7 +7580,7 @@
               "items": {
                 "type": "string"
               },
-              "description": "Only after the tool listed lines your update takes out: one string per line number, \"<n> memory: <sentence to save>\", \"<n> reworded\" or \"<n> dropped\"."
+              "description": "Only after the tool listed lines your update takes out: one string per line number, \"<n> memory: <sentence to save>\", \"<n> reworded\" or \"<n> dropped: <reason>\"."
             }
           },
           "required": [
@@ -8650,7 +8650,7 @@
               "items": {
                 "type": "string"
               },
-              "description": "Only after the tool listed lines your update takes out: one string per line number, \"<n> memory: <sentence to save>\", \"<n> reworded\" or \"<n> dropped\"."
+              "description": "Only after the tool listed lines your update takes out: one string per line number, \"<n> memory: <sentence to save>\", \"<n> reworded\" or \"<n> dropped: <reason>\"."
             }
           },
           "required": [
@@ -9701,7 +9701,7 @@
               "items": {
                 "type": "string"
               },
-              "description": "Only after the tool listed lines your update takes out: one string per line number, \"<n> memory: <sentence to save>\", \"<n> reworded\" or \"<n> dropped\"."
+              "description": "Only after the tool listed lines your update takes out: one string per line number, \"<n> memory: <sentence to save>\", \"<n> reworded\" or \"<n> dropped: <reason>\"."
             }
           },
           "required": [

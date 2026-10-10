@@ -188,7 +188,7 @@ describe('HUMAN.md collaboration lifecycle', () => {
       expect(half).toMatchObject({ kind: 'human_pending', saved: false, alreadySaved: ['The human likes sketches.'], problems: [expect.stringContaining('Line 2: could not be saved to memory')] });
       expect((await readHuman({ kind: 'agent', slug: 'shared' })).content).toContain('I will run the script first.');
       const done = JSON.parse(await tool.execute({ ...tidy, removed: ['1 dropped: The human stopped using sketches.', '2 memory: Run the script before saying it is done.', '3 reworded'] }, ctx));
-      expect(done).toMatchObject({ kind: 'human_update', moved: [{ line: 'I will run the script first.', fact: 'Run the script before saying it is done.' }], dropped: [{ line: 'Use sketches.', reason: 'The human stopped using sketches.' }] });
+      expect(done).toMatchObject({ kind: 'human_update', moved: [{ line: 'I will run the script first.', fact: 'Run the script before saying it is done.', memory: { scope: 'agent', entryId: expect.any(String), content: 'Run the script before saying it is done.' } }], dropped: [{ line: 'Use sketches.', reason: 'The human stopped using sketches.' }] });
       expect(done.change.summary).toBe('Tidy');
       expect((await deps().brain.memory.getMemorySnapshot!('owner')).entries.map((e) => e.content)).toContain('Run the script before saying it is done.');
       // 会让落盘失败的(缺依据、摘要太长、版本不是现在这一版)都在记记忆之前挡下

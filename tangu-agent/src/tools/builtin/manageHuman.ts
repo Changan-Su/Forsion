@@ -91,7 +91,8 @@ export const manageHumanProvider: ToolProvider = {
         const taken = typeof expectedVersion === 'string' ? removedLines(current.content, next) : [];
         const text = new Map(taken.map((x) => [x.line, x.text]));
         const { byLine, problems } = readDispositions(args.removed, taken.map((x) => x.line));
-        const moved: Array<{ line: string; fact: string }> = [];
+        // memory = 这一句在记忆里的落点(remember 回执里的那一条):界面拿它在回复下面出一行「记住了」、能就地撤销。本来就有的重复句不带(不是这次记的,不该从这里撤)
+        const moved: Array<{ line: string; fact: string; memory?: { scope: string; project?: string; entryId: string; content: string } }> = [];
         const saved = () => (moved.length ? { alreadySaved: moved.map((m) => m.fact), note: 'The sentences in alreadySaved are in your memory now and stay there; resending them will not duplicate them.' } : {});
         const pending = (extra: string[] = []) => JSON.stringify({ kind: 'human_pending', saved: false, removed: taken,
           ...(args.removed !== undefined || extra.length ? { problems: [...problems, ...extra] } : {}), ...saved(), message: PENDING });
@@ -100,7 +101,9 @@ export const manageHumanProvider: ToolProvider = {
           if (d.to !== 'memory') continue;
           const receipt = await rememberFact(d.text!, scope, ctx);
           if (/^Error\b/.test(receipt) || receipt.includes('未写入')) return pending([`Line ${n}: could not be saved to memory (${receipt.slice(0, 300)}). The note was not changed.`]);
-          moved.push({ line: text.get(n)!, fact: d.text! });
+          let r: any = null; try { r = JSON.parse(receipt); } catch { /* 纯文本回执(老后端):只是界面上不出那一行 */ }
+          moved.push({ line: text.get(n)!, fact: d.text!, ...(r?.ok === true && !r.duplicate && typeof r.entry?.id === 'string'
+            ? { memory: { scope: r.scope, ...(typeof r.project === 'string' ? { project: r.project } : {}), entryId: r.entry.id, content: String(r.entry.content ?? d.text) } } : {}) });
         }
         const dropped = [...byLine].filter(([, d]) => d.to === 'dropped').map(([n, d]) => ({ line: text.get(n)!, reason: d.text! }));
         let result: Awaited<ReturnType<typeof writeHuman>>;

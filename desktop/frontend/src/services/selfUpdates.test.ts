@@ -10,6 +10,15 @@ describe('memory receipts', () => {
     expect(memoryChanges([event(receipt()), event(receipt())])).toEqual([{ callId: 'call-1', action: 'add', scope: 'agent', entryId: 'm-1', content: 'Commit messages carry no trailer.' }])
     expect(memoryChanges([event(receipt({ scope: 'project', project: 'Forsion' }))])[0]).toMatchObject({ scope: 'project', project: 'Forsion' })
   })
+  it('also shows the sentences manage_human moved into memory while rewriting the handbook, one row each', () => {
+    const moved = [{ line: 'I will run it first.', fact: 'Run it first.', memory: { scope: 'agent', entryId: 'm-7', content: 'Run it first.' } }, { line: 'Old line', fact: 'Already known.' }, { line: 'x', fact: 'y', memory: { scope: 'project', project: 'Forsion', entryId: 'm-8', content: 'y' } }]
+    const rewrite = event(JSON.stringify({ kind: 'human_update', change: { id: 'c' }, moved }), { name: 'manage_human' })
+    expect(memoryChanges([rewrite, rewrite])).toEqual([
+      { callId: 'call-1:0', action: 'add', scope: 'agent', entryId: 'm-7', content: 'Run it first.' }, // 第二句本来就在记忆里(回执不带 memory):不出行,免得从这里把它撤掉
+      { callId: 'call-1:2', action: 'add', scope: 'project', project: 'Forsion', entryId: 'm-8', content: 'y' },
+    ])
+    expect(memoryChanges([event(JSON.stringify({ kind: 'human_pending', removed: [], alreadySaved: ['Run it first.'] }), { name: 'manage_human' })])).toEqual([]) // 还没存上的那一步不出行
+  })
   it('keeps an update and a forget apart from an add', () => {
     expect(memoryChanges([event(receipt({ action: 'update' }))])[0].action).toBe('update')
     expect(memoryChanges([event(receipt({ action: 'forget', entry: undefined, id: 'm-9' }))])).toEqual([{ callId: 'call-1', action: 'forget', scope: 'agent', entryId: 'm-9', content: '' }])
