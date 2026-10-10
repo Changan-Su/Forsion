@@ -3,11 +3,15 @@
  * 悬浮圆角卡(发送在卡内)+ 卡下药丸 chips 行。slash/@ 菜单与附件 chip 沿用 base.css 的 .composer-menu/.attach-chip。
  */
 .t2c { position: relative; width: 100%; }
-/* 主区纸面与侧栏面是两种不同底层：主区继续用标准卡面；侧栏 Chatbox 反向借用主区纸面色
-   --bg，在亮色下比 --sidebar-bg 亮、暗色下比它暗，避免同向提亮后发灰。
+/* 主区纸面与侧栏面是两种不同底层：主区继续用标准卡面；侧栏 Chatbox 缺省反向借用主区纸面色
+   --bg：亮色下比 --sidebar-bg 亮；侧栏比主区亮的暗色（珊瑚 / 柔青 / 薰衣草 / 知 / 自定义）下比它暗，
+   避免同向提亮后发灰。
+   侧栏比主区还暗的暗色（经典 d3、墨色，2026-10-03 起）里纸面色只比侧栏亮一小档、读不出是一张卡，
+   由 skins.css 在那两块声明 --sidebar-card-bg（= 卡片色）接管；新增「侧栏最深」的暗色时同样要声明，
+   check:chatside 31b 逐套背景色量这一档。
    genesis-glass 仍由主题自己的 ::before 材质分档接管，不消费这个实色。 */
 .dv-groupview:has(.wb-tab--icon) .t2-chat-view {
-  --t2c-card-surface: var(--bg);
+  --t2c-card-surface: var(--sidebar-card-bg, var(--bg));
 }
 .t2c-inner { max-width: 880px; margin: 0 auto; width: 100%; box-sizing: border-box; padding: 8px 28px 16px; display: flex; flex-direction: column; gap: 8px; }
 

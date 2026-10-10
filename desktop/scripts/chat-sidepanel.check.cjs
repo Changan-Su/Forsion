@@ -18,7 +18,8 @@
  *       曾把 calc 抹掉,末条被卡压住 178px
  *  27   16 的推广:用户原话是「不管宽度多少,一行内容过长就超出」——长单词/URL/行内 code/宽表/
  *       思考块/工具卡/用户气泡逐个量,都不许顶出横滚(只钉代码块会漏掉表格那类另有溢出路子的)
- *  31   非玻璃主题的侧栏 Chatbox 借用主区纸面色，不再与主区 Chatbox 共用同一底色（亮/暗）
+ *  31   非玻璃主题的侧栏 Chatbox 与侧栏底、主区 Chatbox 都分得开:亮色借用主区纸面色;暗色(31b)逐套背景色量,
+ *       侧栏最深的两套(经典 / 墨色)取卡片色,其余取纸面色
  * (15-17、27 在流程里跑在 3 之后、Amadeus 那段之前;编号按加入顺序,不按执行顺序)
  *
  * 为什么必须打真 Electron:Amadeus Space 只在有 window.amadeus(文件系统桥)时注册,浏览器里根本
@@ -442,35 +443,59 @@ async function main() {
   await win.screenshot({ path: sideShot })
   await win.evaluate(`(() => { document.documentElement.classList.add('dark'); document.documentElement.dataset.mode = 'dark' })()`)
   await win.waitForTimeout(500)
-  const darkSideTone = await win.evaluate(`(() => {
-    const root = getComputedStyle(document.documentElement)
-    const view = [...document.querySelectorAll('.t2-chat-view')].find((e) => e.getBoundingClientRect().width > 0)
-    const card = view && view.querySelector('.t2c-card')
-    const group = view && view.closest('.dv-groupview')
-    if (!card || !group) return null
-    const rgb = (color) => {
-      const canvas = document.createElement('canvas'); canvas.width = canvas.height = 1
-      const ctx = canvas.getContext('2d', { willReadFrequently: true })
-      ctx.fillStyle = color; ctx.fillRect(0, 0, 1, 1)
-      return [...ctx.getImageData(0, 0, 1, 1).data.slice(0, 3)]
+  // ── 31b 暗色:逐套背景色量侧栏输入卡与侧栏底 ────────────────────────────────────
+  // 09-21 的写法是「暗色同样取纸面色」且与侧栏底 ≥ 10:当时暗色侧栏(#323235)比主区(#2a292b)亮,取纸面色 = 压暗一档,实测 15.65。
+  // 10-03 用户定的暗色台阶(af6f93f9,DESIGN「暗色的层次」)把经典暗色的侧栏压到主区之下(#262528),纸面色从此只比侧栏亮 4 级
+  // (6.40),卡的边界读不出来;那次合并没跑这条台架,所以一直红着没人看见。同一天加的墨色同构(8.06)。
+  // 修法(10-10):侧栏最深的暗色在 skins.css 声明 --sidebar-card-bg 取卡片色(经典 20.78),其余暗色照旧取纸面色(12–14)。
+  // 所以这条不钉「取的是哪个 token」,钉结果:每套背景色下都与侧栏底 ≥ 10,且取的是纸面色 / 卡片色这两个已定表面之一
+  // (侧栏比主区亮的那几套若误取卡片色只有 7.5–8.7,同样会红)。
+  // 背景色清单从样式表现读(:root[data-bg=…]),新增配色自动进来;自定义背景色走内联变量,不在这里(它的侧栏比主区亮,取纸面色)。
+  const bgIds = await win.evaluate(`(() => {
+    const ids = new Set()
+    const walk = (rules) => {
+      for (const rule of rules) {
+        for (const m of (rule.selectorText || '').matchAll(/:root(?:\\.dark)?\\[data-bg=["']?([a-z0-9-]+)["']?\\]/g)) ids.add(m[1])
+        if (rule.cssRules) walk(rule.cssRules)
+      }
     }
-    const mainPaperColor = root.getPropertyValue('--bg').trim()
-    const mainChatboxColor = root.getPropertyValue('--bg-card').trim()
-    const sideColor = getComputedStyle(card).backgroundColor
-    const paneColor = getComputedStyle(group).backgroundColor
-    const distance = (a, b) => Math.hypot(...a.map((v, i) => v - b[i]))
-    return {
-      mainPaperColor, mainChatboxColor, sideColor, paneColor,
-      sideVsMainPaper: distance(rgb(mainPaperColor), rgb(sideColor)),
-      sideVsMainChatbox: distance(rgb(mainChatboxColor), rgb(sideColor)),
-      sideVsPane: distance(rgb(sideColor), rgb(paneColor)),
-    }
+    for (const sheet of document.styleSheets) { try { walk(sheet.cssRules) } catch { /* 跨源样式表读不了,跳过 */ } }
+    return { ids: [...ids], original: document.documentElement.dataset.bg || '' }
   })()`)
+  const darkSideTones = []
+  for (const bg of bgIds.ids) {
+    await win.evaluate((id) => { document.documentElement.dataset.bg = id }, bg)
+    await win.waitForTimeout(300)
+    darkSideTones.push(await win.evaluate(`((bg) => {
+      const root = getComputedStyle(document.documentElement)
+      const view = [...document.querySelectorAll('.t2-chat-view')].find((e) => e.getBoundingClientRect().width > 0)
+      const card = view && view.querySelector('.t2c-card')
+      const group = view && view.closest('.dv-groupview')
+      if (!card || !group) return { bg, missing: true }
+      const rgb = (color) => {
+        const canvas = document.createElement('canvas'); canvas.width = canvas.height = 1
+        const ctx = canvas.getContext('2d', { willReadFrequently: true })
+        ctx.clearRect(0, 0, 1, 1); ctx.fillStyle = color; ctx.fillRect(0, 0, 1, 1)
+        return [...ctx.getImageData(0, 0, 1, 1).data.slice(0, 3)]
+      }
+      const distance = (a, b) => +Math.hypot(...a.map((v, i) => v - b[i])).toFixed(2)
+      const side = rgb(getComputedStyle(card).backgroundColor), pane = rgb(getComputedStyle(group).backgroundColor)
+      return {
+        bg, side: side.join(','), pane: pane.join(','),
+        sideVsPane: distance(side, pane),
+        sideVsPaper: distance(side, rgb(root.getPropertyValue('--bg').trim())),
+        sideVsCard: distance(side, rgb(root.getPropertyValue('--bg-card').trim())),
+      }
+    })(${JSON.stringify(bg)})`))
+  }
+  await win.evaluate((id) => { document.documentElement.dataset.bg = id }, bgIds.original)
+  await win.waitForTimeout(300)
   check(
-    '31b 暗色侧栏 Chatbox 同样反向取主区纸面色,不再额外提亮',
-    !!darkSideTone && darkSideTone.sideVsMainPaper <= 1
-      && darkSideTone.sideVsMainChatbox >= 10 && darkSideTone.sideVsPane >= 10,
-    JSON.stringify(darkSideTone),
+    '31b 暗色:每套背景色下侧栏 Chatbox 都与侧栏底拉得开,取的是纸面色或卡片色',
+    // 现有六套背景色;数不够 = 没枚举到(选择器写法变了),不许空过。
+    darkSideTones.length >= 6
+      && darkSideTones.every((t) => !t.missing && t.sideVsPane >= 10 && Math.min(t.sideVsPaper, t.sideVsCard) <= 1),
+    JSON.stringify(darkSideTones),
   )
   await win.screenshot({ path: sideDarkShot })
 
