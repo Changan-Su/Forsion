@@ -25,6 +25,8 @@ import { EditorialMessage } from './chat2/EditorialMessage'
 import { ApprovalTray } from './chat2/ApprovalTray'
 import { APPROVAL_UPDATE_OPEN, pendingPromptsOf } from './chat2/approvalQueue'
 import { RunStatsLine } from './chat2/RunStatsLine'
+import { SessionTraceLines, useSessionTraces } from '../components/SessionTraces'
+import { SessionOpening } from '../components/SessionOpening'
 import { inRunWindow } from '../stores/runStats'
 import { EmptyState2 } from './chat2/EmptyState2'
 import { FloatingToc } from './chat2/FloatingToc'
@@ -255,6 +257,8 @@ export function ChatView({ leaf, params }: ViewProps) {
     }
     return null
   }, [activeMessages, runStats])
+  // 留痕:后台复盘在这段对话之后写下的东西,钉在触发它的那条回复后面(子会话面是别人的工作记录,不留)。
+  const traces = useSessionTraces(activeId, useMemo(() => activeMessages.filter((m) => m.role === 'assistant' && !isHiddenInList(m)), [activeMessages]), !params.childSurface)
   // composer ↑↓ 历史召回:本会话已发送的用户消息(旧→新)+ steer 入队即记的补充池(被删/撤回的插话
   // 仍可从 ↑ 找回;已注入的会同时出现在消息里,按文本去重)。打断标记是机器行,不进历史。
   const sentHistory = useMemo(() => {
@@ -535,7 +539,10 @@ export function ChatView({ leaf, params }: ViewProps) {
                     msg={m}
                     showWaitDetails={showWaitDetails}
                     rootRef={m.id === streamingId ? streamingNodeRef : undefined}
-                    footer={m.id === runStatsMsgId && runStats ? <RunStatsLine stats={runStats} /> : undefined}
+                    footer={(m.id === runStatsMsgId && runStats) || traces.has(m.id) ? <>
+                      {m.id === runStatsMsgId && runStats && <RunStatsLine stats={runStats} />}
+                      {traces.has(m.id) && <SessionTraceLines traces={traces.get(m.id)!} sessionId={activeId || ''} />}
+                    </> : undefined}
                     avatarUrl={m.role !== 'assistant' ? undefined : (() => {
                       // 群聊发言人:优先 agentId,缺失时按名反查 slug(agentDefs 晚到时自动纠正);仍无则不回退会话默认头像。
                       const aid = m.agentId || (m.agentName ? s.agentDefs.find((a) => a.name === m.agentName)?.slug : undefined)
@@ -672,6 +679,9 @@ export function ChatView({ leaf, params }: ViewProps) {
             </div>
           </div>
         )}
+
+        {/* 开场:新对话(还没有消息)时说一句上次之后后台替这个 Agent 写下了什么。团队 / 群聊 / 成员会话 / 外部引擎 / 小窗不出(那里没有「这一个 Agent」)。 */}
+        {!hasMessages && !historyLoading && !params.miniSurface && !params.childSurface && !mvCfg.teamSlug && !mvCfg.groupChat && !mvCfg.teamMember && !mvCfg.soloEngineId && !mvCfg.engineId && s.connState === 'ok' && <SessionOpening slug={chatAgentSlug} />}
 
         <AnimatePresence>
           {s.filePreview && (

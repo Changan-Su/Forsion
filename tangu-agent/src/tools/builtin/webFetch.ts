@@ -4,7 +4,8 @@
  * lookup 钩子 —— 同时关死「公网 302→内网」与 DNS rebinding 两条通路);大小/时间双上限;
  * HTML→文本是**单遍线性 tokenizer**(convertHtml:indexOf 推进、不用正则解析结构 ——
  * 恶意页面塞几万个不闭合标签也不会把事件循环打成 O(n²));剥噪声区 + main/article 优先;
- * JS 壳页(脚本重、静态正文空)在输出尾注提示 browser_navigate;大输出经 outputPersist 落盘。
+ * JS 壳页(正文由脚本渲染,静态 HTML 里几乎没字)在输出尾注里直说:正文没拿到、怎么读到(本会话够得着浏览器工具才提它)、
+ * 重抓没用;大输出经 outputPersist 落盘。
  */
 import { request as httpRequest, Agent as HttpAgent, type IncomingMessage } from 'node:http';
 import { request as httpsRequest, Agent as HttpsAgent } from 'node:https';
@@ -12,7 +13,9 @@ import { createUnzip, createBrotliDecompress } from 'node:zlib';
 import net from 'node:net';
 import { resolvePublicHttpUrl } from '../../core/util/urlSafety.js';
 import { formatToolOutput } from '../outputPersist.js';
-import type { ToolProvider } from '../toolRegistry.js';
+import { resolveTools, isDeferredIn, type ToolProvider } from '../toolRegistry.js';
+import type { ToolContext } from '../toolTypes.js';
+import { deps } from '../../seams/runtime.js';
 
 const FETCH_TIMEOUT_MS = 20_000;
 const MAX_BODY_BYTES = 2 * 1024 * 1024;
@@ -158,6 +161,10 @@ export interface HtmlConvert {
   docTextLen: number;
   /** 内联 <script> 字符总量 —— JS 壳判定用。 */
   scriptChars: number;
+  /** <script> 标签个数(内联 + 外链;外链的不占 scriptChars)—— JS 壳判定用。 */
+  scriptTags: number;
+  /** 整页除 <title> 之外的文本长度(只抓回标题 = 0)—— JS 壳判定用。 */
+  bodyTextLen: number;
   /** 成功闭合的链接数。 */
   linkCount: number;
 }
@@ -205,9 +212,11 @@ export function convertHtml(html: string): HtmlConvert {
   let i = 0;
   let noiseDepth = 0;
   let scriptChars = 0;
+  let scriptTags = 0;
   let linkCount = 0;
   let linkOpen = false;
   let mainSpan: { start: number; end: number } | null = null;
+  let titleSpan: { start: number; end: number } | null = null; // 文档标题(只认第一个;svg 里的 <title> 在噪声区,到不了这)
   let mainDepth = 0;
   let articleDepth = 0;
   let articleStart = 0;
@@ -237,7 +246,7 @@ export function convertHtml(html: string): HtmlConvert {
     if (!closing && RAWTEXT_TAGS.has(name)) {
       const close = indexOfCI(html, `</${name}`, i);
       const contentEnd = close === -1 ? html.length : close;
-      if (name === 'script') scriptChars += contentEnd - i;
+      if (name === 'script') { scriptChars += contentEnd - i; scriptTags++; }
       if (close === -1) { i = html.length; continue; }
       const closeGt = html.indexOf('>', close);
       i = closeGt === -1 ? html.length : closeGt + 1;
@@ -250,6 +259,11 @@ export function convertHtml(html: string): HtmlConvert {
     }
     if (noiseDepth) continue;
 
+    if (name === 'title') {
+      if (!closing) titleSpan ??= { start: out.length, end: -1 };
+      else if (titleSpan && titleSpan.end < 0) titleSpan.end = out.length;
+      continue;
+    }
     if (name === 'main') {
       if (!closing) {
         if (mainDepth === 0 && !mainSpan) mainSpan = { start: out.length, end: -1 };
@@ -306,10 +320,15 @@ export function convertHtml(html: string): HtmlConvert {
     if (t && (!biggestText || t.length > biggestText.length)) biggestText = t;
   }
 
+  // 没闭合的 <title>(截断 / 坏结构)不算数:宁可把标题当正文,也不把正文当标题
+  const titleLen = titleSpan && titleSpan.end >= 0 ? finalize(out.slice(titleSpan.start, titleSpan.end).join('')).length : 0;
+
   return {
     text: regionText(mainSpan) ?? biggestText ?? wholeText,
     docTextLen: wholeText.length,
     scriptChars,
+    scriptTags,
+    bodyTextLen: Math.max(0, wholeText.length - titleLen),
     linkCount,
   };
 }
@@ -345,10 +364,47 @@ export function readBodyCapped(page: FetchedPage, maxBytes: number): Promise<{ b
   });
 }
 
-/** JS 壳启发:脚本很重、整页静态正文却极小且几乎没有链接。**脚本量**是关键信号 ——
- *  大段内联 CSS 的短静态页不会误报(style 不计入)。纯函数供测试。 */
+/** JS 壳启发(纯函数供测试)。两条任一成立,且都要求几乎没有链接:
+ *  ① 内联脚本很重、整页静态文字极少。**脚本量**是关键信号 —— 大段内联 CSS 的短静态页不会误报(style 不计入)。
+ *  ② 页面在加载脚本(内联或外链都算),而 <title> 之外**一个字都没有**。正文靠外链脚本拉的壳内联脚本只有几百字符,① 认不出:
+ *     2026-10-09 实抓 12 张这类页(obsidian.md/help ×3、publish.obsidian.md、Apple DocC ×2、docsify、diagrams.net、Element、
+ *     Hoppscotch、Telegram Web、Bluesky)全是「标题之外 0 字 + 2–15 个 script」,① 只认出 1 张(Bluesky,内联 31k)。
+ *  「文本占 HTML 的比例」不当信号:带大量脚本的服务端渲染页比壳还低(notion.com 帮助页 2%,正文一万字;obsidian 壳 1.4%)。
+ *  ponytail: ② 只认「0 字」,带占位文字的壳认不出(excalidraw 静态 HTML 里留了个 13 字的 h1、tldraw 57 字、各种 `Loading…`)。
+ *  放宽到 N 字就会把「一句话 + 统计脚本」的正常页判成壳(example.com 现在就带一个外链脚本,正文 157 字);
+ *  真要收这一类,加挂载点 / 占位词之类的信号,别抬这个阈值。
+ *  ponytail: 「0 字」量的是**抽出来的**文本。正文整个待在被剥掉的容器里(全页就一个 <form> / <svg>)又带脚本的静态页也进 ②,
+ *  尾注里「多半是脚本渲染的」那半句对它不准 —— 但模型手里确实一个字正文都没有,出路(用浏览器打开)照样对,所以不为它另分一支。 */
 export function isLikelyJsShell(c: HtmlConvert): boolean {
-  return c.scriptChars > 10_000 && c.docTextLen < 400 && c.linkCount < 3;
+  if (c.linkCount >= 3) return false;
+  return (c.scriptChars > 10_000 && c.docTextLen < 400) || (c.scriptTags > 0 && c.bodyTextLen === 0);
+}
+
+/** 模型此刻够不够得着 browser_navigate:'ready' = 定义就在工具面上;'load' = 在按需目录里(coding 预设、agent 自己收起的),
+ *  得先 load_tools;null = 本会话没有(云端 / 沙箱形态、chat 预设、宿主沙箱开着、限定工具集的 agent …)。
+ *  口径与 registry.getToolDefinitions 相同,test/webFetchShellNote.test.ts 拿它当准绳逐个上下文对。
+ *  ponytail: TANGU_BROWSER_ENABLED=0 时工具仍在面上、调用才报错,这里不另判。 */
+export type BrowserReach = 'ready' | 'load' | null;
+export function browserReach(ctx: ToolContext): BrowserReach {
+  const tools = resolveTools(ctx.profile ?? deps().profile, ctx);
+  const t = tools.get('browser_navigate');
+  if (!t) return null;
+  const locked = !ctx.muse && !ctx.automationOrigin && isDeferredIn(ctx, t.name, t.deferred) && !ctx.unlockedTools?.has(t.name);
+  // 'load' 要 load_tools 自己也够得着:限定工具集的 agent 名单里可以有浏览器却没有它
+  return !locked ? 'ready' : ctx.unlockTools && tools.has('load_tools') ? 'load' : null;
+}
+
+/** JS 壳尾注(给模型读,英文)。三件事:正文多半是脚本渲染的、直接抓拿不到;怎么读到(按本会话够得着的工具说,没有就一个字不提);
+ *  重抓没用。措辞是直说,不留「也许」:提示词里早有一句「只拿到标题就改用 browser_navigate」,模型不照做(真模型台架
+ *  user-research,10-09 六次里四次拿着只有标题的结果反复重抓),所以要在出事的这条结果里说,而且说死 —— 靠判定保守来防带偏。
+ *  ⚠️ 开头那半句是 desktop/scripts/intelligent-ui.live.cjs 认「这条结果没拿到正文」的标记:尾注本身两百多字符,不排除的话
+ *  只有标题的结果也会被台架按长度算成「取到了正文」。改措辞时两边一起改(test/webFetchShellNote.test.ts 钉着它)。 */
+export function jsShellNote(reach: BrowserReach): string {
+  const how = reach === 'ready' ? 'To read the page, open this URL with browser_navigate.'
+    : reach === 'load' ? 'To read the page, load browser_navigate with load_tools, then open this URL with it.'
+    : 'This session has no browser tool that could render it: look for the content at another URL, or tell the user this page could not be read.';
+  return "[note] web_fetch got almost none of this page's text: the content is most likely rendered by JavaScript, which web_fetch does not run. "
+    + `${how} Fetching this URL again with web_fetch will return the same thing.`;
 }
 
 export const webFetchProvider: ToolProvider = {
@@ -414,10 +470,7 @@ export const webFetchProvider: ToolProvider = {
             // 教格式,模型会把 URL 缩写掉。引语放**链接文字**位,那里天生能有空格(URL 里得 %20,模型必忘)。
             + `Cite for the user: [<a short phrase copied verbatim from the text below>](${finalUrl.href}) — the link text is the exact sentence the reader gets scrolled to.\n`;
           let clipped = text.length > maxChars ? text.slice(0, maxChars) + `\n…[truncated at ${maxChars} chars,需更多内容可调大 max_chars 或分段抓取]` : text;
-          // JS 壳提示:脚本重、静态正文空 → 提示模型可换 browser_navigate(措辞留余地,误报时不至于带偏)
-          if (conv && isLikelyJsShell(conv)) {
-            clipped += '\n\n[note] This page is script-heavy with almost no static text — it may be rendered by JavaScript. If the content above is insufficient, browser_navigate (if available) may reveal the rendered page.';
-          }
+          if (conv && isLikelyJsShell(conv)) clipped += `\n\n${jsShellNote(browserReach(ctx))}`;
           // 大输出落盘工作区(模型拿摘要 + 文件路径),小输出原样返回
           const label = `web_fetch-${finalUrl.hostname.replace(/[^a-zA-Z0-9.-]/g, '_')}`;
           return await formatToolOutput(ctx, label, header + clipped);

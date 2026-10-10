@@ -10,14 +10,15 @@ import { Plugin, PluginKey, type EditorState } from '@milkdown/kit/prose/state'
 import { Decoration, DecorationSet } from '@milkdown/kit/prose/view'
 import { TAG_RE } from '@amadeus-shared/links'
 import { buildBlockString } from './mathLivePreview'
+import { editorFocused } from './editorFocus'
 
 /** 点击胶囊时派发到 window 的事件(detail = { tag });由应用层(amadeusOverlays)打开标签视图。 */
 export const OPEN_TAG_EVENT = 'amadeus:open-tag'
 
-const key = new PluginKey<{ focus: boolean }>('amadeus-tag-pill')
+const key = new PluginKey('amadeus-tag-pill')
 
 function buildDecorations(state: EditorState): DecorationSet {
-  const focus = key.getState(state)?.focus ?? false
+  const focus = editorFocused(state)
   const { from: selFrom, to: selTo } = state.selection
   const decos: Decoration[] = []
   state.doc.descendants((node, pos) => {
@@ -54,20 +55,11 @@ function buildDecorations(state: EditorState): DecorationSet {
 export function tagPillPlugin() {
   return $prose(
     () =>
-      new Plugin<{ focus: boolean }>({
+      new Plugin({
         key,
-        state: {
-          init: () => ({ focus: false }),
-          apply: (tr, v) => {
-            const m = tr.getMeta(key) as { focus?: boolean } | undefined
-            return m && typeof m.focus === 'boolean' ? { focus: m.focus } : v
-          },
-        },
         props: {
           decorations: (state) => buildDecorations(state),
           handleDOMEvents: {
-            focus: (view) => { if (!key.getState(view.state)?.focus) view.dispatch(view.state.tr.setMeta(key, { focus: true })); return false },
-            blur: (view) => { if (key.getState(view.state)?.focus) view.dispatch(view.state.tr.setMeta(key, { focus: false })); return false },
             // 只有「成了胶囊」的标签可点(光标行上的是源码,点了照常落光标)。左键、无修饰键;按下即拦,不落光标。
             mousedown: (_view, e) => {
               const el = e.button === 0 && !e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey

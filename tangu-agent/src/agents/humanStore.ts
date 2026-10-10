@@ -14,7 +14,11 @@ export type HumanScope = { kind: 'agent'; slug: string } | { kind: 'project'; cw
 export interface HumanChange {
   id: string; scope: HumanScope; summary: string; evidence: string; at: string;
   actor: 'agent' | 'user'; beforeVersion: string; afterVersion: string; undoOf?: string;
+  /** Agent 写入时引擎盖的章:它是按哪一版写法写的。没有这个字段的 agent 写入 = 2.13.1 及更早的引擎写的(那时的指引让它把自己的承诺也写进来)。
+   *  界面靠它判断「这份是旧版本写的」。不用日期判:已发出去的旧版本在修复之后照样在写旧样子的文档。 */
+  rules?: number;
 }
+export const HUMAN_RULES = 2;
 interface Revision extends HumanChange { before: string | null; after: string; committed: boolean }
 export interface HumanDocument {
   scope: HumanScope; path: string; content: string; version: string; exists: boolean; updatedAt: string | null;
@@ -83,6 +87,13 @@ function snapshot(loc: Location): HumanDocument {
 }
 export async function readHuman(scope: HumanScope): Promise<HumanDocument> { return snapshot(await location(scope)); }
 
+/** 落盘前对内容 / 摘要 / 依据的校验。单独拿出来:manage_human 在把句子记进记忆之前先过这一遍,免得记忆记了、文档却因为摘要太长之类没存上。 */
+export function assertHumanInput(content: unknown, summary: unknown, evidence: unknown, actor: 'agent' | 'user'): asserts content is string {
+  if (typeof content !== 'string' || content.length > HUMAN_MAX_LENGTH) throw new HumanError('HUMAN_INVALID_CONTENT', `Content must be Markdown of at most ${HUMAN_MAX_LENGTH} characters.`);
+  if (typeof summary !== 'string' || !summary.trim() || summary.length > 240) throw new HumanError('HUMAN_INVALID_SUMMARY', 'A short change summary (1–240 characters) is required.');
+  if (actor === 'agent' && (typeof evidence !== 'string' || !evidence.trim())) throw new HumanError('HUMAN_EVIDENCE_REQUIRED', 'Say what happened in your work together that shows this update would help the human.');
+  if (evidence !== undefined && (typeof evidence !== 'string' || evidence.length > 600)) throw new HumanError('HUMAN_INVALID_EVIDENCE', 'Evidence must be at most 600 characters.');
+}
 export async function writeHuman(scope: HumanScope, input: {
   content?: unknown; expectedVersion: unknown; summary?: unknown; evidence?: unknown; undoId?: unknown;
 }, actor: 'agent' | 'user'): Promise<{ document: HumanDocument; change: HumanChange | null }> {
@@ -98,15 +109,12 @@ export async function writeHuman(scope: HumanScope, input: {
       if (!last || last.id !== input.undoId || last.afterVersion !== beforeVersion || last.undoOf) throw new HumanError('HUMAN_CONFLICT', 'A later change exists. Open the current document to revise it without losing newer work.');
       content = last.before ?? ''; summary = `Undo: ${last.summary}`.slice(0, 240); evidence = '';
     }
-    if (typeof content !== 'string' || content.length > HUMAN_MAX_LENGTH) throw new HumanError('HUMAN_INVALID_CONTENT', `Content must be Markdown of at most ${HUMAN_MAX_LENGTH} characters.`);
-    if (typeof summary !== 'string' || !summary.trim() || summary.length > 240) throw new HumanError('HUMAN_INVALID_SUMMARY', 'A short change summary (1–240 characters) is required.');
-    if (actor === 'agent' && (typeof evidence !== 'string' || !evidence.trim())) throw new HumanError('HUMAN_EVIDENCE_REQUIRED', 'Say what happened in your work together that shows this update would help the human.');
-    if (evidence !== undefined && (typeof evidence !== 'string' || evidence.length > 600)) throw new HumanError('HUMAN_INVALID_EVIDENCE', 'Evidence must be at most 600 characters.');
+    assertHumanInput(content, summary, evidence, actor);
     const after = redactSecrets(content);
     if (after === (before ?? '')) return { document: snapshot(loc), change: null };
-    const revision: Revision = { id: randomUUID(), scope: loc.scope, summary: redactSecrets(summary.trim()), evidence: redactSecrets(String(evidence || '')),
+    const revision: Revision = { id: randomUUID(), scope: loc.scope, summary: redactSecrets(String(summary).trim()), evidence: redactSecrets(String(evidence || '')),
       at: new Date().toISOString(), actor, beforeVersion, afterVersion: version(after), before, after, committed: false,
-      ...(input.undoId ? { undoOf: String(input.undoId) } : {}) };
+      ...(input.undoId ? { undoOf: String(input.undoId) } : {}), ...(actor === 'agent' ? { rules: HUMAN_RULES } : {}) };
     const next = [...records.slice(-39), revision];
     // Write-ahead history, then the atomic Markdown replacement. A pending entry is only
     // visible if its after-version actually reached disk (including recovery after a crash).
@@ -119,6 +127,25 @@ export async function writeHuman(scope: HumanScope, input: {
   };
   // Agent 级的 HUMAN.md 参与云同步:同步落盘拿的是 agent 目录锁,这里一并拿上,另一个进程里的同步才插不进「核版本 → 写」之间。
   return withMemoryDirectoryLock(loc.historyDir, () => loc.scope.kind === 'agent' ? withMemoryDirectoryLock(loc.base, commit) : commit());
+}
+
+/** 改之前有、改之后没有了的那些行(原样;标题、分隔线、空行不算;重复的行算一行)。改写过的行也在里面 —— 程序分不出「换了说法」和「拿掉了」。
+ *  行号按改之前那份文档里的顺序编,不随新内容变:模型第二次交上来的内容和第一次略有出入时,同一个号仍指同一行。
+ *  under = 这一行原来所在小节的标题:没有主语的一句(「改完实际运行,并把结果贴出来」)是谁的事,得看它在「我这边会做」还是「需要你做的」下面。
+ *  after 传落盘时的样子(已经过 redactSecrets):比的是磁盘上实际会变成什么。 */
+export function removedLines(before: string, after: string): Array<{ line: number; text: string; under?: string }> {
+  const skip = (l: string) => !l || /^[-*_]{3,}$/.test(l);
+  const kept = new Set(after.split('\n').map((l) => l.trim()));
+  const seen = new Set<string>(); const out: Array<{ line: number; text: string; under?: string }> = [];
+  let under: string | undefined, n = 0;
+  for (const text of before.split('\n').map((l) => l.trim())) {
+    const heading = text.match(/^#{1,6}\s+(.*)$/);
+    if (heading) { under = heading[1].trim(); continue; }
+    if (skip(text) || seen.has(text)) continue;
+    seen.add(text); n++;
+    if (!kept.has(text)) out.push({ line: n, text, ...(under ? { under } : {}) });
+  }
+  return out;
 }
 
 /** Even an emptied/removed handbook must be represented: an undo in the UI is a

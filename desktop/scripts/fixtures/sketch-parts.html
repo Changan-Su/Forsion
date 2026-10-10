@@ -1,0 +1,44 @@
+<header class="fs-header">
+  <h1 class="fs-title">周末晚餐计划 · 4 人</h1>
+  <p class="fs-subtitle">三道菜，拖动人数食材用量跟着变</p>
+</header>
+<div class="fs-controls">
+  <label class="fs-field" for="parts-people"><span>人数 <output id="parts-people-value" for="parts-people">4</output></span>
+    <input class="fs-range" id="parts-people" type="range" min="2" max="10" value="4"></label>
+</div>
+<fs-compare>
+  <script type="application/json">
+    {"title":"主菜怎么选","options":[{"label":"香煎三文鱼","summary":"25 分钟 · 清爽","points":["提前 10 分钟腌","配柠檬黄油汁"],"ask":{"label":"展开做法","text":"详细讲香煎三文鱼的做法"}},{"label":"红烧牛腩","summary":"90 分钟 · 浓郁","points":["可提前一天做","隔夜更入味"],"ask":{"label":"展开做法","text":"详细讲红烧牛腩的做法"}},{"label":"蘑菇意面","summary":"20 分钟 · 素食","points":["一锅出","配帕玛森"],"ask":{"text":"详细讲蘑菇意面的做法"}}],"caption":"演示数据"}
+  </script>
+</fs-compare>
+<p class="fs-callout">牛腩要提前一天炖好，周六只需要回热。</p>
+<fs-checklist id="parts-shopping">
+  <script type="application/json">
+    {"title":"采购清单","items":[{"label":"三文鱼","detail":"600 g"},{"label":"牛腩","detail":"800 g"},{"label":"蘑菇","detail":"300 g"},{"label":"意面","detail":"400 g"},{"label":"柠檬","detail":"2 个"}]}
+  </script>
+</fs-checklist>
+<div class="fs-actions"><button class="fs-button" type="button" id="parts-copy" onclick="window.forsionSketch.copy('三文鱼 600 g\n牛腩 800 g\n蘑菇 300 g\n意面 400 g\n柠檬 2 个')">复制采购清单</button></div>
+<fs-choice>
+  <script type="application/json">
+    {"question":"还要我展开哪一部分？","options":[{"label":"甜点","ask":"再加一道甜点"},{"label":"酒水搭配"},{"label":"备菜时间表","ask":"给一张周六的备菜时间表"}]}
+  </script>
+</fs-choice>
+<script>
+  (function () {
+    var base = { '三文鱼': 150, '牛腩': 200, '蘑菇': 75, '意面': 100 }
+    var range = document.getElementById('parts-people')
+    var out = document.getElementById('parts-people-value')
+    function draw() {
+      var n = Number(range.value)
+      out.textContent = String(n)
+      customElements.whenDefined('fs-checklist').then(function () {
+        document.getElementById('parts-shopping').setData({ title: '采购清单', items: [
+          { label: '三文鱼', detail: base['三文鱼'] * n + ' g' }, { label: '牛腩', detail: base['牛腩'] * n + ' g' },
+          { label: '蘑菇', detail: base['蘑菇'] * n + ' g' }, { label: '意面', detail: base['意面'] * n + ' g' }, { label: '柠檬', detail: Math.ceil(n / 2) + ' 个' },
+        ] })
+      })
+    }
+    range.addEventListener('input', draw)
+    draw()
+  })()
+</script>

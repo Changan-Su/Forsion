@@ -1,23 +1,25 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { FileCode2, History, Loader2, MoreHorizontal, Pencil, Undo2 } from 'lucide-react'
+import { FileCode2, History, Loader2, MoreHorizontal, Pencil, RefreshCw, Undo2 } from 'lucide-react'
 import { Markdown } from './Markdown'
 import { CapabilityMenu } from './CapabilityMenu'
 import { useI18n } from '../i18n'
 import { formatRelative, formatDateTime } from '../format/time'
 import type { TanguDesktopConfig } from '../types'
 import type { EngineTarget } from '../services/engine/targets'
-import { getHumanDocument, saveHumanDocument, undoHumanChange, humanTargetKey, HUMAN_CHANGED_EVENT, type HumanChange, type HumanDocument, type HumanTarget, type HumanJump } from '../services/humanCollaboration'
+import { getHumanDocument, saveHumanDocument, undoHumanChange, humanTargetKey, humanLegacy, HUMAN_CHANGED_EVENT, type HumanChange, type HumanDocument, type HumanTarget, type HumanJump } from '../services/humanCollaboration'
 import './humanMessages'
 import './humanCollaboration.css'
 
 type Draft = { content: string; version: string }
 const drafts = new Map<string, Draft>()
-type Props = { engine: EngineTarget; cfg: TanguDesktopConfig; target: HumanTarget; name: string; running?: boolean; jump?: HumanJump }
+/** onRewrite:把「重写」那句话发进对话(由挂载处决定发给哪个会话)。null = 这里现在发不了(没有本机会话 / 计划模式),菜单项置灰并写明原因;
+ *  不传 = 这一份不归当前会话的 Agent 写(项目页里「同时适用」的那几份),不出这一项。 */
+type Props = { engine: EngineTarget; cfg: TanguDesktopConfig; target: HumanTarget; name: string; running?: boolean; jump?: HumanJump; onRewrite?: (() => void) | null }
 export function HumanCollaborationPanel(props: Props) {
   const key = JSON.stringify([props.engine.key, props.engine.base, props.cfg.token, humanTargetKey(props.target)])
   return <HumanBody key={key} {...props} draftKey={key} />
 }
-function HumanBody({ engine, target, name, running, jump, draftKey }: Props & { draftKey: string }) {
+function HumanBody({ engine, target, name, running, jump, onRewrite, draftKey }: Props & { draftKey: string }) {
   const { t, locale } = useI18n()
   const [doc, setDoc] = useState<HumanDocument | null>(null)
   const [draft, setDraft] = useState<Draft | null>(() => drafts.get(draftKey) || null)
@@ -56,6 +58,7 @@ function HumanBody({ engine, target, name, running, jump, draftKey }: Props & { 
     catch (e: any) { if (alive.current) setError(e?.status === 409 ? t('human.undoConflict') : errorText(e)) }
     finally { if (alive.current) setBusy(false) }
   }
+  const rewrite = () => { if (!onRewrite || running || draft) return; setError(''); onRewrite(); setNotice(t('human.rewrite.sent')) }
   const reviewLatest = async () => { try { const d = await getHumanDocument(engine, target); if (alive.current) setLatest(d) } catch (e) { if (alive.current) setError(errorText(e)) } }
   return <section className="human-panel" data-human-scope={target.kind} onKeyDown={e => { if ((e.metaKey || e.ctrlKey) && e.key === 's' && draft) { e.preventDefault(); e.stopPropagation(); void save() } }}>
     <header className="human-heading"><div><h3>{t('human.title')}</h3><p>{target.kind === 'agent' ? t('human.agentScope', { name }) : t('human.projectScope')}</p></div><div className="human-actions">
@@ -63,10 +66,12 @@ function HumanBody({ engine, target, name, running, jump, draftKey }: Props & { 
       <CapabilityMenu className="profile-text-action human-more" label={t('human.more')} disabled={!doc} items={[
         { id: 'source', label: t(source ? 'human.preview' : 'human.source'), icon: <FileCode2 size={14} />, onSelect: () => setSource(!source) },
         { id: 'history', label: t('human.history'), icon: <History size={14} />, onSelect: () => setHistory(!history) },
+        ...(onRewrite !== undefined ? [{ id: 'rewrite', label: t('human.rewrite'), icon: <RefreshCw size={14} />, hint: onRewrite ? undefined : t('human.rewrite.unavailable'), disabled: !onRewrite || !!running || !!draft || !doc?.content.trim(), onSelect: rewrite }] : []),
       ]}><MoreHorizontal size={16} /></CapabilityMenu>
     </div></header>
     {error && <p className="agent-profile-error" role="alert">{error} {!doc && <button type="button" className="profile-text-action" onClick={() => void load()}>{t('human.retry')}</button>}</p>}
     {notice && <p className="human-notice" role="status">{notice}</p>}
+    {doc && !draft && humanLegacy(doc) && <p className="human-notice" data-human-legacy>{t('human.legacy')} {onRewrite && <button type="button" className="profile-text-action" disabled={!!running} onClick={rewrite}><RefreshCw size={12} />{t('human.rewrite')}</button>}</p>}
     {!doc && !error && <p className="agent-profile-muted" role="status"><Loader2 size={14} className="spin" /> {t('human.loading')}</p>}
     {doc?.updatedAt && <p className="human-date">{t('human.updatedAt', { time: formatRelative(doc.updatedAt, { locale }) })}</p>}
     {draft ? <div className="human-editor"><textarea aria-label={t('human.editLabel')} value={draft.content} maxLength={doc?.maxLength || 12000} rows={15} onChange={e => changeDraft({ ...draft, content: e.target.value })} disabled={busy} />

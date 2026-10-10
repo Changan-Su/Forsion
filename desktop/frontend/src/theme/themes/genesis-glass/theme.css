@@ -288,10 +288,10 @@
   isolation: isolate;
 }
 [data-theme='genesis-glass'] .amx-db-pop:not(.amx-coverpick) { border-color: transparent; }
-/* 文档里的「对象」卡(看板 / 画廊卡、文件卡、书签卡、媒体、仪表盘卡、Coding 模板卡)与 Chat 浮卡同一配方:
+/* 文档里的「对象」卡(看板 / 画廊卡、文件卡、书签卡、媒体、仪表盘卡、Coding 模板卡、回答里的实时应用卡)与 Chat 浮卡同一配方:
  * 统一淡阴影 + 浮层圆角,本主题照 08-14 去轮廓线(c3)。其他主题保留细描边。 */
 [data-theme='genesis-glass'] .am-app :is(.amx-db-card:not(.amx-db-card-add), .embed-file, .amx-bm, .embed-media),
-[data-theme='genesis-glass'] :is(.dash-card:not([data-bad]), .csl-gallery-card:not(:hover, :focus-visible)) {
+[data-theme='genesis-glass'] :is(.dash-card:not([data-bad]), .csl-gallery-card:not(:hover, :focus-visible), .iui-app-card) {
   border-color: transparent;
 }
 

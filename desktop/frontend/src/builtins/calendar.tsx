@@ -88,12 +88,14 @@ export function installCalendarViews(): void {
   // dashboard: 仪表盘嵌卡契约(尺寸档 + 紧凑卡面)跟着注册点走 —— 视图注册在哪,契约就声明在哪。
   registerView({
     type: 'todo-list', kind: 'collection', embeddable: true,
+    intelligent: { description: 'Live saved Forsion tasks, ordered by due date. Users can mark tasks complete. Does not create tasks.', render: () => <TodoDashboardCard size="lg" /> },
     displayName: () => app().tr('view.todo'), icon: ListTodo,
     factory: ({ params }) => <Suspense fallback={<Skeleton variant="list" />}><TodoListView params={params} /></Suspense>,
     dashboard: { sizes: ['wide', 'lg', 'full'], defaultSize: 'lg', surface: 'summary', factory: (_props, ctx) => <TodoDashboardCard size={ctx.size} /> },
   })
   registerView({
     type: 'calendar', kind: 'collection', embeddable: true,
+    intelligent: { description: 'Live Forsion calendar agenda for the next 31 days, including configured calendars. Does not create events.', render: () => <CalendarDashboardCard size="lg" /> },
     displayName: () => app().tr('view.calendar'), icon: CalendarDays,
     factory: () => <Suspense fallback={<Skeleton variant="document" />}><CalendarView /></Suspense>, singleton: true,
     dashboard: { sizes: ['wide', 'lg', 'full'], defaultSize: 'lg', surface: 'summary', factory: (_props, ctx) => <CalendarDashboardCard size={ctx.size} /> },

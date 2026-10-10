@@ -105,11 +105,12 @@ function varsBlock(vars: Record<string, string>): string {
 }
 
 /** 模型 HTML → 完整 srcdoc 文档:CSP 置顶 + 主题变量 + 基础排版 + 高度上报 + 锚点导航拦截。 */
-export function buildSketchDoc(html: string, vars: Record<string, string> = {}, state: unknown = null): string {
+export function buildSketchDoc(html: string, vars: Record<string, string> = {}, state: unknown = null, nonce = ''): string {
   // State is data, including when it contains HTML or a closing script tag.
   const initial = (serializeSketchState(state) ?? 'null')
     .replace(/</g, '\\u003c').replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029')
-  const runtime = sketchRuntime.replace('__SKETCH_INITIAL_STATE__', () => initial)
+  // nonce 是宿主生成的随机串(ask / copy 的授权令牌,见 sketchRuntime.js 头注);只允许 [A-Za-z0-9-],拼不出提前闭合的引号
+  const runtime = sketchRuntime.replace('__SKETCH_INITIAL_STATE__', () => initial).replace('__SKETCH_NONCE__', () => nonce.replace(/[^A-Za-z0-9-]/g, ''))
   return '<!doctype html><html><head>' +
     `<meta http-equiv="Content-Security-Policy" content="${SKETCH_CSP}">` +
     '<meta name="viewport" content="width=device-width, initial-scale=1">' +

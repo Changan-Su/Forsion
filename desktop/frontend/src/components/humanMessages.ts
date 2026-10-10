@@ -39,5 +39,13 @@ registerMessages({
   'human.remoteDenied': { zh: '请在宿主设备上查看和修改协作说明。', en: 'View and edit collaboration handbooks on the host device.' },
   // 这份说明写的是「用户这边怎么做」(Agent 对用户的建议和请求),起手模板里不放 Agent 自己怎么做的那一节
   'human.template': { zh: '# 怎么和我配合\n\n## 开始前请先告诉我\n\n## 需要你来定的事\n\n## 做完后请你看一眼\n', en: '# Working with me\n\n## Tell me before I start\n\n## Decisions I need from you\n\n## What to check when I am done\n' },
+  // 旧版本(2.13.1 及更早)写成的说明里混着 Agent 自己的承诺。提示只在更新记录证明得了时出现;「重写」发出去的是下面这句(在对话里显示为用户的话)。
+  // ⚠ 改 agentPrompt 的中文要同时重跑 live `--only humanreal --humanreal-legacy button`:台架读的就是这一句。
+  'human.legacy': { zh: '这份说明是旧版本写的，里面可能混着 Agent 自己要做的事，也可能有不好懂的词。', en: 'This handbook was written by an earlier version. It may mix in things the agent itself should do, or wording that is hard to follow.' },
+  'human.rewrite': { zh: '让 Agent 重写', en: 'Ask the agent to rewrite' },
+  'human.rewrite.unavailable': { zh: '在和它的本机对话里打开这一页才能用（计划模式下不行）', en: 'Open this page from a local chat with it to use this (not in plan mode)' },
+  'human.rewrite.sent': { zh: '已发到对话里。改完会出一张更新卡，不满意可以撤销。', en: 'Sent to the chat. A change card appears when it is done, and you can undo it.' },
+  'human.rewrite.agentPrompt': { zh: '请把协作说明按现在的写法重写一遍。这份说明是你写给我看的：里面的「我」指你（Agent），「你」指我（用户）。重写后只留需要我做的事，用平常话写；原来写的那些你自己要做的事不要丢，挪到你的记忆里，也不要改成让我去做的事。只改你自己这一份，不要另外给这个项目写一份。', en: 'Please rewrite the collaboration handbook the way it should be written now. You wrote it for me: in it, "I" means you (the agent) and "you" means me (the user). Keep only what I need to do, in plain words. Do not lose the things it says you will do: move them to your memory, and do not turn them into tasks for me. Change only your own handbook and do not write a separate one for this project.' },
+  'human.rewrite.projectPrompt': { zh: '请把这个项目的协作说明按现在的写法重写一遍。这份说明是你写给我看的：里面的「我」指你（Agent），「你」指我（用户）。重写后只留需要我做的事，用平常话写；原来写的那些你自己要做的事不要丢，挪到记忆里，也不要改成让我去做的事。只改这个项目的这一份，不要动你自己的那份。', en: 'Please rewrite the collaboration handbook of this project the way it should be written now. You wrote it for me: in it, "I" means you (the agent) and "you" means me (the user). Keep only what I need to do, in plain words. Do not lose the things it says you will do: move them to memory, and do not turn them into tasks for me. Change only the handbook of this project and leave your own untouched.' },
   'human.changed': { zh: '有新的协作说明，打开后可查看。', en: 'The collaboration handbook has changed. Open it to see the latest version.' },
 })

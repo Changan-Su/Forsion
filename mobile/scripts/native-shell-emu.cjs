@@ -2523,8 +2523,11 @@ const tabCountText = (list) => {
       const b = await elRect(bar)
       const page = await chromeOnPage()
       const first = await elRect("[...document.querySelectorAll('.mb-view[data-view=\"chat\"] .t2-stream *')].find((e) => !e.children.length && e.textContent.includes('Hello fixture'))")
-      console.log(`  bar ${fmt(b)}; room kept for the capsules ${page.clearPx.top}px; first message ${first ? fmt(first) : 'missing'}; screen ${screen.w}×${screen.h}`)
-      assert.ok(b.top >= page.clearPx.top && b.top <= page.clearPx.top + Math.round(16 * density), `bar top ${b.top} vs capsules' room ${page.clearPx.top}`)
+      // the capsules' room is what the native layer reported; the room every page keeps at its top (--mb-top) is that plus the bar
+      const capsules = Math.round(page.nc.top * density)
+      console.log(`  bar ${fmt(b)}; the capsules end at ${capsules}px; the pages keep ${page.clearPx.top}px clear at the top; first message ${first ? fmt(first) : 'missing'}; screen ${screen.w}×${screen.h}`)
+      assert.ok(b.top >= capsules && b.top <= capsules + Math.round(16 * density), `bar top ${b.top} vs capsules' room ${capsules}`)
+      assert.ok(page.clearPx.top >= b.bottom, `during a call the pages keep ${page.clearPx.top}px clear at the top, but the call bar ends at ${b.bottom}: whatever a page starts with lies under it`)
       assert.ok(b.left >= Math.round(8 * density) && b.right <= screen.w - Math.round(8 * density), `bar ${fmt(b)} leaves no side margin on a ${screen.w}px screen`)
       assert.ok(first && first.top >= b.bottom, `the first message ${first ? fmt(first) : 'missing'} sits under the bar ${fmt(b)}`)
       shot('24b-voice-call')
@@ -2562,13 +2565,14 @@ const tabCountText = (list) => {
 
       // back on the Space's list in the middle of the call (two-level navigation: the list is a full-screen level of its
       // own and the bar belongs to the app, not to the chat): the call goes on, and its session still opens from its row.
-      // The bar floats over the top of the list there — where exactly is printed and shot, for a person to judge.
+      // The list starts below the bar — every page keeps clear of it (voiceCall.css) — so its category chips stay in reach.
       const live = { closed: await call('c.closed'), binary: await call('c.binary') }
       await openDrawer()
       const onList = { nav: await cdp.eval(nav), bar: await elRect(bar), chips: await elRect("[...document.querySelectorAll('.mb-drawer--left .pl-chips')].find((e) => e.offsetParent)"), row: await elRect(rowExpr('E2E Session One')) }
       console.log(`  on the list during the call: bar ${onList.bar ? fmt(onList.bar) : 'gone'}; category chips ${onList.chips ? fmt(onList.chips) : 'none'}; the call's own row ${onList.row ? fmt(onList.row) : 'not listed'}`)
       shot('24d-voice-call-list')
       assert.ok(onList.nav === 'list' && onList.bar, `on the list during a call: level «${onList.nav}», bar ${onList.bar ? 'shown' : 'gone'}`)
+      assert.ok(onList.chips && onList.chips.top >= onList.bar.bottom, `on the list during a call the category chips ${onList.chips ? fmt(onList.chips) : '(none)'} lie under the call bar ${fmt(onList.bar)}: they cannot be tapped`)
       assert.ok(await h.waitPage(cdp, `window.__call.binary > ${live.binary + 3} && window.__call.closed === ${live.closed} && ${phase} !== 'error'`, 6000),
         `the call did not go on over the list (closed ${await call('c.closed')} from ${live.closed}, microphone frames ${await call('c.binary')} from ${live.binary}, bar ${await cdp.eval(phase)})`)
       // back into the session by its row: at a point of the row the bar does not cover (a tap on the bar would mute or hang up)
