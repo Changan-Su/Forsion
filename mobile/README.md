@@ -286,6 +286,30 @@ OLD_APK=/absolute/old.apk NEW_APK=android/app/build/outputs/apk/debug/app-debug.
 通知权限回执的两条路（第一发 `show` 弹权限框，答之前 run 已结束 → 不把旧岛贴回来；没结束 → 岛出现）：`node scripts/live-island-emu.cjs perm`
 （会撤掉本包的通知权限并冷启两次，不在上面那套里：那套要先把权限给上）。
 
+## 语音通话（2026-10-10）
+
+和桌面是同一套通话：输入框空着时发送键就是通话键，接通后双方的话写进这个会话，要动手的事交给 Tangu 办。手机上不一样的只有三处：
+
+- **连的是云网关**：`wss://<云端>/api/agent/realtime`（Forsion 服务端 `microserver/agent-core/realtime.ts`，通话服务就是引擎里那一份）。
+  登录令牌放在 WebSocket 子协议里（`forsion.bearer, <令牌>`），不进 URL。会话在「我的电脑」上时不能打（没有 WebSocket 转发），按了会说明。
+- **没有 Mini 窗**：通话卡是页面顶上的一条（`VoiceCallBar`，`MobileRoot` 挂，开关在 `services/realtimeCall.ts` 的 `openCallLayer`）。
+  聊天区照常用：看得到双方的话、批得了 Tangu 要做的操作、打的字直接进电话。条上没有设备与思考档位那几行（听筒 / 扬声器归系统管，档位跟这个会话的设置走）。
+- **离开 App 就挂断**：切到别的 App 或锁屏时系统会把麦克风静音，而通话还在按时长计费。通话期间请系统别熄屏（Screen Wake Lock，API 35 模拟器的系统 WebView 支持）。
+  要在后台接着打得加麦克风类型的前台服务，没做。
+
+默认开：登录着、云端目录里有通话模型（`GET /api/agent/models` 的 `realtimeModel`）、用户从没动过那个开关（`mobileShim` 的 `realtimeModelUnset`）。
+手机上还没有「语音通话」设置页（那一页按桌面主进程的能力门控），要关只能等这一页补上。
+
+台架：
+
+```bash
+npm run build && npm run e2e:voicecall                 # 浏览器：假通话端点 + 假麦克风，29 条；SHOT_DIR 指定截图目录
+ONLY='voice call:' OUT=/absolute/out npm run emu:nativeshell   # 模拟器：原生外壳下条的位置、麦克风、出声、切后台挂断、重拨
+```
+
+两条都不连真模型。引擎那一半（真百炼 × 委派 × 落库）在 `tangu-agent` 的 `npm run check:realtime` 与 live 台架 `--only realtime`，
+网关那一半在 server 的 `microserver/agent-core/realtime.test.ts`。
+
 ## Android 插件(2026-10-02)
 
 外部 Forsion 插件(`amadeus-plugin`)可从应用市场装进 App 并直接运行,与桌面同一份 `pluginStore` / `ctx`。

@@ -193,7 +193,7 @@ export function normalizeUiValues(v: unknown): Record<string, string> | undefine
 router.post('/agent/runs', authMiddleware, async (req: AuthRequest, res) => {
   try {
     const userId = req.user!.userId;
-    const { session_id, model_id, app_id, message, attachments, agent_config, client, ui_commands, ui_settings, approval_tray, client_capabilities } = req.body || {};
+    const { session_id, model_id, app_id, message, attachments, agent_config, client, ui_commands, ui_settings, approval_tray, client_capabilities, user_message_id, ephemeral_hint } = req.body || {};
     if (agent_config != null && (typeof agent_config !== 'object' || Array.isArray(agent_config))) {
       return res.status(400).json({ detail: 'agent_config must be an object' });
     }
@@ -253,7 +253,12 @@ router.post('/agent/runs', authMiddleware, async (req: AuthRequest, res) => {
 
     // user 消息不在此落库，改由 runLoop 在 run 真正开始时插入（见 agentLoop），
     // 以保证排队 run 的消息时间戳排在上一个 run 的 assistant 之后、会话顺序正确。
-    const userMessageId = uuidv4();
+    // 语音通话在网关上委派 run 时(server agent-core 的 realtime):本轮用户消息就是通话里已经落库的那行转写,复用它的 id ——
+    // 那次插入是 ON CONFLICT DO NOTHING,库里留用户原话,不另写一条「模型转述的任务」。别人的行 id 传进来也只是这次不插入,读不到也改不了别人的内容。
+    // ephemeral_hint 只进本 run 的模型上下文(实时模型对这句话的理解)。两项都不收远程来源的。
+    const voiceRow = !remote && typeof user_message_id === 'string' && /^[0-9a-f-]{36}$/i.test(user_message_id) ? user_message_id : null;
+    const voiceHint = !remote && typeof ephemeral_hint === 'string' ? ephemeral_hint.trim().slice(0, 2000) : '';
+    const userMessageId = voiceRow || uuidv4();
 
     const runId = uuidv4();
     const assistantMessageId = uuidv4();
@@ -279,6 +284,7 @@ router.post('/agent/runs', authMiddleware, async (req: AuthRequest, res) => {
         ...(approval_tray === true ? { approvalTray: true } : {}),
         // 客户端原生能力(phone.intents 等):只从本路由进 —— 派生 run(团队 / 讨论 / 子代理)自建 input,不继承。
         ...(clientCapsNorm ? { clientCapabilities: clientCapsNorm } : {}),
+        ...(voiceHint ? { ephemeralHint: voiceHint } : {}),
       },
     });
 

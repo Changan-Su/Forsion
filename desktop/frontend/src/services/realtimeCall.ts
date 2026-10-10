@@ -9,7 +9,8 @@
 import { useSyncExternalStore } from 'react'
 import type { EngineTarget } from './engine/target'
 import type { StoredDesktopConfig } from '../types'
-import { realtimeSocketUrl } from './backendService'
+import { realtimeSocket } from './backendService'
+import { AGENT_APP_ID } from './agentRunService'
 import { CALL_VOICE_BEAT_MS, CALL_VOICE_TICK_MS, postCallVoice } from './callVoice'
 
 /** 设置浮窗(另一个 renderer)存完实时通话配置后 bump 这个 key:storage 事件跨 renderer 送达,主窗当场重读。 */
@@ -79,8 +80,29 @@ export type CallEvent = { kind: 'activity'; sessionId: string } | { kind: 'effor
   | { kind: 'text'; sessionId: string; text: string; id: string; at: number } | { kind: 'text-ack'; id: string }
   /** Mini → 主窗:引擎用实时模型听到的原话改正了一行语音转写(轮询不刷已显示的消息,得点名替换)。 */
   | { kind: 'transcript'; sessionId: string; messageId: string; text: string }
+const callEventListeners = new Set<(e: CallEvent) => void>()
 export function postCallEvent(e: CallEvent): void {
   try { localStorage.setItem(CALL_EVENT_KEY, JSON.stringify({ ...e, n: `${Date.now()}-${Math.random()}` })) } catch { /* ignore */ }
+  // storage 事件到不了发它的那个窗口。手机上通话条与聊天区在同一个页面里,本窗的监听当场直送;
+  // 桌面上直送到的是发件窗口自己的监听 —— 它们各按 kind 只认对面发来的那几种,多听到一份自己发的不碍事。
+  callEventListeners.forEach((l) => { try { l(e) } catch { /* 一个监听坏了不拖累别的 */ } })
+}
+/** 手机上没有 Mini 窗:通话卡是页面顶上的一条(mini/VoiceCallView 的 VoiceCallBar,由 MobileRoot 挂)。
+ *  这里放它该显示的那通电话的参数(同桌面交给 openMini 的 view.params);null = 没有。 */
+let callLayer: Record<string, unknown> | null = null
+let callLayerDial = 0
+const callLayerListeners = new Set<() => void>()
+export function openCallLayer(params: Record<string, unknown> | null): void {
+  // 没有在打的电话时再按电话键 = 拨一通新的(dial 换号,通话条整条重挂):上一通报错 / 切到后台被挂断后,那一条还留着说明原因。
+  // 正在打时再按 = 不动(dial 不变,不重挂、不重拨)。
+  if (params && !state) callLayerDial++
+  callLayer = params ? { ...params, dial: callLayerDial } : null
+  callLayerListeners.forEach((l) => l())
+}
+export const getCallLayer = (): Record<string, unknown> | null => callLayer
+export function subscribeCallLayer(fn: () => void): () => void {
+  callLayerListeners.add(fn)
+  return () => { callLayerListeners.delete(fn) }
 }
 /** 正在通话的会话(Mini 接通时写、收线时删)。主窗据此把打的字送进电话;跨窗靠 storage 事件,本窗改动直接通知。 */
 const ACTIVE_KEY = 'forsion_voice_call_active'
@@ -128,13 +150,16 @@ export function onCallEvent(fn: (e: CallEvent) => void): () => void {
     try { fn(JSON.parse(ev.newValue)) } catch { /* ignore */ }
   }
   window.addEventListener('storage', h)
-  return () => window.removeEventListener('storage', h)
+  callEventListeners.add(fn)
+  return () => { window.removeEventListener('storage', h); callEventListeners.delete(fn) }
 }
 
 /** 半双工兜底:放音期间,低于这个 RMS 的麦克风帧换成静音再上传。
  *  Chromium 回声消除对 WebAudio 外放不一定兜得住;回声漏进去会被服务端 VAD 当成插话,模型就自己掐断自己。
  *  ponytail: 固定阈值,外放环境吵 / 麦克风灵敏度差得多时要调(真人外放实测后定)。 */
 export const BARGE_IN_RMS = 0.04
+/** 通话因为离开前台被挂断时的结束原因(界面按它说人话,见 mini/VoiceCallView 的 callEndText)。 */
+export const CALL_ENDED_BACKGROUND = 'backgrounded'
 const OUT_RATE = 24000
 
 let state: CallState | null = null
@@ -256,6 +281,15 @@ export async function startCall(o: StartCallOptions): Promise<void> {
   // 关窗即挂断:渲染进程直接没了,finish 不一定跑得到 —— 走之前撤掉,主窗的形象当场收声(没撤也有心跳超时兜底)。
   const voiceBye = (): void => postCallVoice(null)
   window.addEventListener('pagehide', voiceBye)
+  // 手机:离开前台(切到别的 App / 锁屏)就挂断 —— 系统会把后台应用的麦克风静音,电话却还按时长计费;通话期间请系统别熄屏。
+  // ponytail: 想让它在后台接着打,得给安卓加一个麦克风类型的前台服务;熄屏靠 Screen Wake Lock,系统 WebView 不支持时照旧会熄。
+  const phone = !!window.tangu?.mobile
+  const onHidden = (): void => { if (document.hidden) finish(CALL_ENDED_BACKGROUND) }
+  let wake: WakeLockSentinel | null = null
+  if (phone) {
+    document.addEventListener('visibilitychange', onHidden)
+    void navigator.wakeLock?.request('screen').then((w) => { if (ended) void w.release().catch(() => {}); else wake = w }).catch(() => { /* 不支持 / 被拒:照旧 */ })
+  }
 
   const finish = (error?: string): void => {
     if (ended) return
@@ -264,6 +298,8 @@ export async function startCall(o: StartCallOptions): Promise<void> {
     if (current) teardown = null
     window.clearInterval(voiceTimer)
     window.removeEventListener('pagehide', voiceBye)
+    document.removeEventListener('visibilitychange', onHidden)
+    void wake?.release().catch(() => {})
     if (current) voiceBye() // 被新通话顶掉的旧通话不许撤:那个 key 已经归新通话
     flush()
     try { ws?.close() } catch { /* ignore */ }
@@ -302,9 +338,9 @@ export async function startCall(o: StartCallOptions): Promise<void> {
     stream = await navigator.mediaDevices.getUserMedia({ audio: micConstraints(o.micId) })
     if (ended) { stream.getTracks().forEach((t) => t.stop()); return }
     if (o.speakerId) await setSink(o.speakerId)
-    const url = await realtimeSocketUrl(o.target)
+    const to = await realtimeSocket(o.target)
     if (ended) return // 等鉴权头期间被挂断 / 被新通话顶掉
-    ws = new WebSocket(url)
+    ws = to.protocols ? new WebSocket(to.url, to.protocols) : new WebSocket(to.url)
     ws.binaryType = 'arraybuffer'
   } catch (e: any) {
     finish(e?.message || String(e))
@@ -312,7 +348,8 @@ export async function startCall(o: StartCallOptions): Promise<void> {
   }
 
   const sock = ws
-  sock.onopen = () => sock.send(JSON.stringify({ type: 'start', session_id: o.sessionId, model: o.model, voice: o.voice || undefined, title: o.title, run: o.run }))
+  // app_id 与输入框发出的 run 同源、显式带:云网关的缺省应用不是 tangu(本机引擎本来就是,带上不变);通话中换参数时引擎沿用这一个。
+  sock.onopen = () => sock.send(JSON.stringify({ type: 'start', session_id: o.sessionId, model: o.model, voice: o.voice || undefined, title: o.title, run: { ...o.run, app_id: AGENT_APP_ID } }))
   sock.onclose = (ev) => finish(ev.reason || (ev.code === 1000 ? undefined : `connection closed (${ev.code})`))
   sock.onmessage = (ev) => {
     if (ended) return

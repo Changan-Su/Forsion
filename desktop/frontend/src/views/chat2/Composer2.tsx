@@ -10,7 +10,7 @@ import {
   ArrowUp, Square, Mic, X, ClipboardList, Check, ChevronDown, FileText, Users, Sparkles,
   Hand, ShieldCheck, ShieldAlert, Settings2, SlidersHorizontal, MessageSquare, Loader2, Clock, Zap, AudioLines, type LucideIcon } from 'lucide-react'
 import { useVoiceInput } from '../../hooks/useVoiceInput'
-import { CALL_TEXT_MAX, getCallPresence, onCallEvent, sendTextToCall, subscribeCallPresence, useRealtimeConfig } from '../../services/realtimeCall'
+import { CALL_TEXT_MAX, getCallPresence, onCallEvent, openCallLayer, sendTextToCall, subscribeCallPresence, useRealtimeConfig } from '../../services/realtimeCall'
 import { resolveRealtimeCall } from '../../services/realtimeModel'
 import { useCodeStudio } from '../../stores/codeStudioStore'
 import { useImageStudio } from '../../stores/imageStudioStore'
@@ -52,6 +52,7 @@ registerMessages({
   'livecall.start': { zh: '语音通话', en: 'Voice call' },
   'livecall.return': { zh: '回到通话', en: 'Back to the call' },
   'livecall.localOnly': { zh: '语音通话只能在本机的会话里用', en: 'Voice calls only work in sessions on this computer' },
+  'livecall.cloudOnly': { zh: '这个会话在你的电脑上，语音通话暂时只能在云端的会话里用', en: 'This session lives on your computer. For now, voice calls only work in cloud sessions' },
   'livecall.typeHint': { zh: '通话中：打的字会直接送进电话', en: 'In a call: typed messages go straight into the call' },
   'livecall.textFallback': { zh: '通话没接上，这条改发给 Tangu 了', en: 'The call did not pick this up, so it was sent to Tangu instead' },
 })
@@ -588,6 +589,7 @@ export const Composer2: React.FC<{
     [realtimeStored, cloudCallModel, forsionSignedIn])
   const [callStarting, setCallStarting] = useState(false)
   const [callError, setCallError] = useState('')
+  const phoneCall = !!window.tangu?.mobile // 手机:通话走云网关,通话卡是页面顶上的一条(mini/VoiceCallView 的 VoiceCallBar)
   // 这个会话正在 Mini 里通话 → 纯文字送进电话(见 sendMessage)
   const callSessionId = useSyncExternalStore(subscribeCallPresence, getCallPresence)
   const inCall = !!activeSessionId && callSessionId === activeSessionId
@@ -630,13 +632,15 @@ export const Composer2: React.FC<{
       }
       if (!sid) return
       const target = targetForSession(sid)
-      // 通话只走本机引擎(引擎端也只收回环);绑在别的电脑上的会话没有 WebSocket 转发,别把令牌塞进 URL 白连一趟
-      if (target.key !== 'home') { setCallError(t('livecall.localOnly')); return }
+      // 通话只走本端的引擎(桌面 = 本机引擎,只收回环;手机 = 云网关);绑在别的电脑上的会话没有 WebSocket 转发,别带着令牌白连一趟
+      if (target.key !== 'home') { setCallError(t(phoneCall ? 'livecall.cloudOnly' : 'livecall.localOnly')); return }
       const { modelId, agentConfig } = useApp.getState().voiceRunParams(sid)
       const view = { type: 'voice-call', params: { sessionId: sid, model: realtimeModel, voice: realtimeVoice, title: t('livecall.title'),
         agentSlug: agentConfig.agentSlug, run: { model_id: modelId, agent_config: agentConfig } } }
       // 同一会话再按一次 = 把(可能被 ⌘⇧M 藏起来的)通话卡叫回来:Mini 只更新同一 leaf 的参数,不重挂、不重拨(e2e R14)。
-      window.tangu?.openMini?.({ view, mainView: { type: 'chat', params: { sessionId: sid } }, title: t('livecall.title') })
+      // 手机没有 Mini 窗:同一组参数交给页面顶上的通话条(正在打时再按同样不重拨;上一通已经收线则拨新的,见 openCallLayer)。
+      if (window.tangu?.openMini) window.tangu.openMini({ view, mainView: { type: 'chat', params: { sessionId: sid } }, title: t('livecall.title') })
+      else openCallLayer(view.params)
     } finally { setCallStarting(false) }
   }
 
@@ -1439,8 +1443,9 @@ export const Composer2: React.FC<{
   const pickerPrefs = useModelPickerPreferences()
   const modelGroups = useMemo(() => groupModelsByProvider(models || [], pickerPrefs), [models, pickerPrefs])
   const groupActive = !!groupChat && (groupAgents?.length || 0) >= 2
-  // 能打电话:选了实时模型、桌面有 Mini,且暂时只在普通模式(10-02 用户定:计划 / 团队 / Chat 预设 / 外部引擎会话都不给,与 modeLabel 同源判定)
-  const callable = !!realtimeModel && liveOwnerResolved && !!window.tangu?.openMini && !(planMode && !isChat) && !groupActive && !isChat && !engineId
+  // 能打电话:选了实时模型、有地方放通话卡(桌面 = Mini 窗;手机 = 页面顶上那一条),且暂时只在普通模式
+  // (10-02 用户定:计划 / 团队 / Chat 预设 / 外部引擎会话都不给,与 modeLabel 同源判定)
+  const callable = !!realtimeModel && liveOwnerResolved && (!!window.tangu?.openMini || phoneCall) && !(planMode && !isChat) && !groupActive && !isChat && !engineId
   const curApproval = APPROVALS.find((a) => a.id === approval) || APPROVALS[1]
   const modeLabel = groupActive
     ? t('group.modeLabel', { n: groupAgents!.length })

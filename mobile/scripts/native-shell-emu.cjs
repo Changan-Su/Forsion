@@ -224,6 +224,45 @@ const hold = { checkpoints: false, release: [] }
 const pending = { rev: 'e2e-0', sessions: [] }
 // Cloud speech-to-text (POST …/brain/transcribe): answers a transcript, or the status a check sets.
 const transcribe = { status: 200 }
+// Voice calls: the catalog offers a call model only while the voice-call check runs (with one, an empty composer shows
+// the call key in place of Send — the other checks were written against Send).
+const callModel = { on: false }
+const CALL_MODEL = { id: 'pr-e2e-voice', name: 'E2E Voice', apiModelId: 'qwen3.5-omni-flash-realtime' }
+// The call's WebSocket (wss …/agent/realtime) cannot be answered by Fetch interception, so the page gets a stand-in for
+// that one address: it opens, answers `start` with `ready`, counts what the page sends, and lets the check push frames
+// (`__call.push`). Everything else keeps the real WebSocket. It also notes what the system said to the screen wake
+// lock and keeps the AudioContexts the call makes, so the check can read their state.
+const FAKE_CALL_SOCKET = `(() => {
+  const Native = window.WebSocket
+  const call = (window.__call = { opened: 0, closed: 0, frames: [], binary: 0, sockets: [], audio: [], wake: 'not asked' })
+  class FakeCall {
+    constructor(url, protocols) {
+      call.opened++
+      call.sockets.push({ url: String(url), protocols: protocols === undefined ? null : [].concat(protocols) })
+      this.readyState = 0; this.binaryType = 'blob'; this.onopen = this.onclose = this.onmessage = this.onerror = null
+      call.push = (data) => { if (this.readyState === 1 && this.onmessage) this.onmessage({ data }) }
+      setTimeout(() => { if (this.readyState !== 0) return; this.readyState = 1; if (this.onopen) this.onopen({}) }, 50)
+    }
+    send(d) {
+      if (typeof d !== 'string') { call.binary++; return }
+      const f = JSON.parse(d)
+      call.frames.push(f)
+      if (f.type === 'start') setTimeout(() => call.push(JSON.stringify({ type: 'ready' })), 50)
+    }
+    close() {
+      if (this.readyState === 3) return
+      this.readyState = 3; call.closed++
+      setTimeout(() => { if (this.onclose) this.onclose({ code: 1000, reason: '' }) }, 0)
+    }
+  }
+  window.WebSocket = new Proxy(Native, { construct: (T, args) => (/\\/agent\\/realtime/.test(String(args[0])) ? new FakeCall(...args) : new T(...args)) })
+  const Ctx = window.AudioContext
+  window.AudioContext = new Proxy(Ctx, { construct: (T, args) => { const c = new T(...args); call.audio.push(c); return c } })
+  if (navigator.wakeLock) {
+    const ask = navigator.wakeLock.request.bind(navigator.wakeLock)
+    navigator.wakeLock.request = (type) => { const p = ask(type); p.then(() => { call.wake = 'held' }, (e) => { call.wake = 'refused: ' + e.name }); return p }
+  } else call.wake = 'no api'
+})()`
 // A run in flight, off unless a check names its session: the session then lists the run as running (GET …/agent/runs
 // ?session_id=), its event stream (GET …/agent/runs/<id>/events?fromSeq=N) hands out `events` past N and ends — the
 // client asks again 0.8 s later, like after any dropped stream — and answers to its approvals (POST …/approvals/<id>)
@@ -281,7 +320,7 @@ function installStub(cdp) {
       }).catch(() => {})
     }
     if (p.endsWith('/agent/approvals/pending')) return json(url.searchParams.get('rev') === pending.rev ? { rev: pending.rev, unchanged: true } : pending)
-    if (p.endsWith('/agent/models') && m === 'GET') return json({ models: MODELS, directProviders: [], defaultModelId: MODELS[0].id })
+    if (p.endsWith('/agent/models') && m === 'GET') return json({ models: MODELS, directProviders: [], defaultModelId: MODELS[0].id, ...(callModel.on ? { realtimeModel: CALL_MODEL } : {}) })
     // fake market (only Forsion plugins are requested on the phone); install hands out the host download URL
     const mk = p.match(/\/market\/items(?:\/([^/]+))?(\/install)?$/)
     if (mk) {
@@ -2433,6 +2472,99 @@ const tabCountText = (list) => {
     assert.ok(end.includes('e2e transcript') || end.includes('没录到声音'), `neither a transcript nor the silence hint: ${end}`)
     assert.ok(!imeShown(), 'the microphone on the pill also raised the keyboard')
     await cdp.eval("(() => { const ta = document.querySelector('.t2c-ta'); if (ta && ta.value) { const set = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set; set.call(ta, ''); ta.dispatchEvent(new Event('input', { bubbles: true })) } return true })()")
+  })
+
+  await check('voice call: the call key opens the call bar under the top capsules with the chat still readable; microphone, playback and typed text go through; leaving the app hangs up and the key redials', async () => {
+    const TOKEN = 'e2e-native-shell.fake.token'
+    const key = "[...document.querySelectorAll('.t2c-send.t2c-live-control')].find((e) => e.offsetParent)"
+    const bar = "document.querySelector('.vc-bar')"
+    const phase = `${bar}?.dataset.phase`
+    const status = `(${bar}?.querySelector('.vc-status-text')?.textContent || '')`
+    const call = (expr) => cdp.eval(`(() => { const c = window.__call; return ${expr} })()`)
+    callModel.on = true
+    const { identifier } = await cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: FAKE_CALL_SOCKET })
+    const modelBefore = await cdp.eval("window.tangu.getConfig().then((c) => c.modelId || '')") // the pick below is remembered as the default model: put back at the end
+    try {
+      await reload()
+      await openChat('E2E Session One')
+      assert.ok(await h.waitPage(cdp, `!!${key}`, 8000), `no call key on an empty composer (signed in + the catalog has a call model + the switch was never touched: ${await cdp.eval("window.tangu.getConfig().then((c) => JSON.stringify({ unset: c.realtimeModelUnset, id: c.realtimeModelId ?? null }))")})`)
+      await tapEl(key)
+      // the WebView asks for the microphone → Capacitor asks the system once (already allowed when the voice input check ran first)
+      const asked = await h.waitNodes((l) => l.find((n) => /permission_allow_foreground_only_button$/.test(n['resource-id'] || '')), { timeout: 4000 })
+      if (asked.hit) { console.log('  microphone permission asked: allowing while in use'); h.tapNode(asked.hit) }
+      assert.ok(await h.waitPage(cdp, `${phase} === 'listening'`, 15000), `the call did not connect (bar: ${await cdp.eval(`${bar} ? ${phase} + ' / ' + ${status} : 'none'`)})`)
+
+      // who it calls and how the login travels
+      const sock = (await call('c.sockets'))[0]
+      const u = new URL(sock.url)
+      assert.ok(u.protocol === 'wss:' && u.pathname.endsWith('/agent/realtime') && !u.search && !sock.url.includes(TOKEN), `call address: ${sock.url}`)
+      assert.deepEqual(sock.protocols, ['forsion.bearer', TOKEN], 'the login token travels as a subprotocol')
+      const start = (await call('c.frames')).find((f) => f.type === 'start')
+      assert.deepEqual({ session: start.session_id, model: start.model, voice: start.voice, app: start.run?.app_id }, { session: 'e2e-s1', model: CALL_MODEL.id, voice: 'Tina', app: 'tangu' })
+
+      // the bar: below the capsules, inside the screen, and the first message is not under it
+      await h.pause(600) // the bar's enter animation
+      const b = await elRect(bar)
+      const page = await chromeOnPage()
+      const first = await elRect("[...document.querySelectorAll('.mb-view[data-view=\"chat\"] .t2-stream *')].find((e) => !e.children.length && e.textContent.includes('Hello fixture'))")
+      console.log(`  bar ${fmt(b)}; room kept for the capsules ${page.clearPx.top}px; first message ${first ? fmt(first) : 'missing'}; screen ${screen.w}×${screen.h}`)
+      assert.ok(b.top >= page.clearPx.top && b.top <= page.clearPx.top + Math.round(16 * density), `bar top ${b.top} vs capsules' room ${page.clearPx.top}`)
+      assert.ok(b.left >= Math.round(8 * density) && b.right <= screen.w - Math.round(8 * density), `bar ${fmt(b)} leaves no side margin on a ${screen.w}px screen`)
+      assert.ok(first && first.top >= b.bottom, `the first message ${first ? fmt(first) : 'missing'} sits under the bar ${fmt(b)}`)
+      shot('24b-voice-call')
+
+      // microphone frames flow (silence on an emulator without host audio is still frames)
+      assert.ok(await h.waitPage(cdp, 'window.__call.binary > 3', 8000), `no microphone frames (${await call('c.binary')})`)
+      // playback: 0.4 s of a 440 Hz tone at 24 kHz → "speaking" → back to "listening" once the buffer has actually played
+      await cdp.eval("(() => { const n = 9600, pcm = new Int16Array(n); for (let i = 0; i < n; i++) pcm[i] = Math.round(Math.sin(i / 24000 * 2 * Math.PI * 440) * 3000); window.__call.push(pcm.buffer); return true })()")
+      assert.ok(await h.waitPage(cdp, `${phase} === 'speaking'`, 3000), 'the reply did not start playing')
+      assert.ok(await h.waitPage(cdp, `${phase} === 'listening'`, 6000), `the reply never finished playing (audio contexts: ${await call("c.audio.map((a) => a.sampleRate + ':' + a.state).join(', ')")})`)
+      console.log(`  audio contexts: ${await call("c.audio.map((a) => a.sampleRate + ':' + a.state).join(', ')")}; screen wake lock: ${await call('c.wake')}`)
+
+      // typed text goes into the call (same page: no second window to hand it over), not into a Tangu run
+      const sent = stubLog.length
+      await cdp.eval("(() => { const ta = [...document.querySelectorAll('.t2c-ta')].find((e) => e.offsetParent); const set = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set; set.call(ta, 'e2e typed line'); ta.dispatchEvent(new Event('input', { bubbles: true })); return true })()")
+      await h.pause(400)
+      await tapEl("[...document.querySelectorAll('.t2c-send')].find((e) => e.offsetParent && !e.disabled)")
+      assert.ok(await h.waitPage(cdp, "window.__call.frames.some((f) => f.type === 'text' && f.text === 'e2e typed line')", 4000), `typed text did not reach the call (${JSON.stringify(await call('c.frames.map((f) => f.type)'))})`)
+      await h.pause(2300) // past the 2 s "the call did not confirm → send to Tangu instead"
+      assert.ok(!stubLog.slice(sent).some((l) => l.startsWith('POST ') && /\/agent\/runs( |$)/.test(l)), `a Tangu run was started as well: ${stubLog.slice(sent).join(' | ')}`)
+
+      // a model picked on the pill during the call is what delegated work uses from then on (the bar has no model row of its own)
+      await tapEl("document.querySelector('.model-pill-btn')")
+      const picked = stubLog.length
+      // the model sheet is its own native page (search, effort, a Done button) — not the generic list sheet
+      assert.ok((await h.waitNodes((l) => l.find((n) => n.text === 'E2E Model Beta'), { timeout: 6000 })).hit, 'the native model sheet did not list the catalog')
+      await h.pause(600) // it slides in: a tap aimed at where the row was a moment ago lands on nothing
+      h.tapNode(ui().find((n) => n.text === 'E2E Model Beta'))
+      await h.pause(500)
+      const done = ui().find((n) => n.text === '完成')
+      if (done) h.tapNode(done) // the pick is applied when the sheet is confirmed
+      assert.ok(await h.waitPage(cdp, "window.__call.frames.some((f) => f.type === 'run' && f.run && f.run.model_id === 'e2e-model-beta')", 5000),
+        `the call was not told about the new model (run frames: ${JSON.stringify(await call("c.frames.filter((f) => f.type === 'run').map((f) => f.run && f.run.model_id)"))}; pill «${await cdp.eval("document.querySelector('.model-pill-btn')?.textContent || ''")}»; bar ${await cdp.eval(phase)}; requests since the pick: ${stubLog.slice(picked).join(' | ') || 'none'})`)
+      assert.ok((await h.waitNodes((l) => (!l.some((n) => n.text === 'E2E Model Beta') ? l : null), { timeout: 5000 })).hit, 'the model sheet stayed open')
+
+      // leaving the app hangs up (a backgrounded app's microphone is muted by the system while the call keeps billing)
+      h.key(3)
+      await h.pause(1500)
+      h.adb('shell', 'am', 'start', '-n', ACTIVITY)
+      assert.ok(await h.waitPage(cdp, 'window.__call.closed === 1', 6000), `leaving the app did not end the call (closed ${await call('c.closed')}, phase ${await cdp.eval(phase)})`)
+      assert.ok(await h.waitPage(cdp, `/离开 Forsion/.test(${status})`, 4000), `the bar does not say why: ${await cdp.eval(status)}`)
+      assert.ok((await h.waitNodes((l) => h.byId(l, 'nativeChrome.bar'), { timeout: 8000 })).hit, 'the app did not come back to the front')
+      await h.pause(1200) // the return animation shows the app's last frame from before it left
+      shot('24c-voice-call-left')
+      // … and the call key dials again from there (the bar with the reason is replaced by a new call)
+      await tapEl(key)
+      assert.ok(await h.waitPage(cdp, `window.__call.opened === 2 && ${phase} === 'listening'`, 15000), `the call key did not redial (opened ${await call('c.opened')}, bar ${await cdp.eval(`${bar} ? ${phase} + ' / ' + ${status} : 'none'`)})`)
+      await tapEl(`${bar}.querySelector('.vc-hangup')`)
+      assert.ok(await h.waitPage(cdp, `!${bar} && window.__call.closed === 2`, 6000), 'hanging up did not close the call and the bar')
+    } finally {
+      callModel.on = false
+      sessions.find((x) => x.id === 'e2e-s1').model_id = null
+      await cdp.eval(`window.tangu.setConfig({ modelId: ${JSON.stringify(modelBefore)} }).then(() => true)`).catch(() => {})
+      await cdp.send('Page.removeScriptToEvaluateOnNewDocument', { identifier }).catch(() => {})
+      await reload()
+    }
   })
 
   await check('share → Forsion: a share asks where it goes; a chat gets it in the message box (after what is typed, unsent), a document is attached, a note is written; a file path and our own provider are refused', async () => {

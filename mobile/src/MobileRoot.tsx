@@ -10,7 +10,7 @@ import { amadeusAvailable } from '@/features/runtime'
  * 或给组件加个必填 prop,这里不会报错,直接在真机上崩(2026-07-27 的 `a.toasts.map` 就是这么
  * 把 v2.7.1 的安卓包整个打不开的)。**改 desktop 渲染层后请跑 `npm run typecheck`**(mobile 目录下)。
  */
-import { useEffect } from 'react'
+import { useEffect, useSyncExternalStore } from 'react'
 import { App as CapApp } from '@capacitor/app'
 import { useApp } from '@/stores/appStore'
 import { useTheme, useVisualTheme } from '@/stores/themeStore'
@@ -26,6 +26,8 @@ import { AmadeusOverlays } from '@/amadeusOverlays'
 import { AchievementToast } from '@/achievements/AchievementToast'
 import { AchievementsModal } from '@/achievements/AchievementsModal'
 import { BtwHost } from '@/views/chat2/BtwPanel'
+import { VoiceCallBar } from '@/mini/VoiceCallView'
+import { getCallLayer, openCallLayer, subscribeCallLayer } from '@/services/realtimeCall'
 import { btwWebVisible, useBtw } from '@/views/chat2/btwStore'
 import { QuickFind, useQuickFind } from '@/quickFind'
 import { FindBar } from '@/findInPage'
@@ -159,6 +161,7 @@ export function MobileRoot() {
   })))
   const activeSession = a.sessions.find((s) => s.id === a.activeId) || a.archivedSessions.find((s) => s.id === a.activeId) || null
   const unitsOpen = useUnitsSheet((s) => s.open)
+  const callLayer = useSyncExternalStore(subscribeCallLayer, getCallLayer)
   const btwPage = useBtw((s) => btwWebVisible(s.webOpen, a.activeId))
   useNativeChromeClaim(a.onboarding || a.achievementsOpen || unitsOpen || btwPage ? CHROME_HIDDEN : null)
   // 原生外壳(Android)把账号入口画成顶栏右侧的头像,左栏底部那一排不再渲染 —— 账号卡在这儿隐身挂着:
@@ -192,6 +195,9 @@ export function MobileRoot() {
       <CommandPalette />
       {/* 互联设备弹层(Forsion Unit):入口由 mobileEntry 的 installUnitsEntry 按桥上架(左栏底部;原生外壳下在「⋯」最前)。 */}
       <MobileUnitsSheet />
+      {/* 语音通话:手机没有 Mini 窗,通话卡是页面顶上的一条(输入框的通话键 → openCallLayer)。不是浮层:聊天区照常可用,
+          返回键也不归它管 —— 挂断只走条上的按钮。设置 / 商店这类整屏页(z 50)盖在它上面,电话不断。 */}
+      {callLayer && <VoiceCallBar params={callLayer} onClose={() => openCallLayer(null)} />}
 
       <AnimatePresence>
         {a.achievementsOpen && (
