@@ -98,3 +98,7 @@ body:has(.mb-shell[data-native-chrome]) .vc-bar { top: calc(var(--nc-top, 0) * 1
    凡是给胶囊让位的页面一起让 —— 聊天流也在其中(新会话的头几句转写就出在流的最顶上)。
    仪器:mobile `npm run stage:phone` 的 call-bar;模拟器 `emu:nativeshell` 的 voice call。 */
 body:has(.vc-bar) .mb-shell:not(.mini-shell) { --mb-top-extra: 70px; }
+/* 没有原生外壳时(Web 顶栏形态;安卓上是原生栏退回 Web 顶栏的兜底路),抽屉和并排侧栏平时不给胶囊让位:抽屉把主区
+   连同胶囊一起推走,自己从屏幕顶起。通话条不跟着走,照样浮在它们上面 —— 所以通话中它们也从通话条下面起。
+   (原生外壳下它们本来就吃 --mb-top,见 singleColumn.css 末尾。) 仪器:mobile `npm run e2e:voicecall` 的 F「拉开左栏」。 */
+body:has(.vc-bar) .mb-shell:not(.mini-shell):not([data-native-chrome]) :is(.mb-drawer, .mb-sidecol) { padding-top: var(--mb-top); }

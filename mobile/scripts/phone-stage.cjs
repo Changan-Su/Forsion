@@ -458,27 +458,42 @@ async function callBar(page, on) {
   await page.waitForTimeout(400) // the bar's enter animation; the pages' new top room
 }
 
-/** What the page has under the call bar: controls a finger could no longer reach and text nobody could read. The bar is
- *  sampled on a grid; at each point the hit is whatever would take the touch if the bar were not there. */
+/** What the page has under the call bar: controls a finger could no longer reach and text nobody could read.
+ *  Controls: the bar is sampled on a grid; at each point the hit is whatever would take the touch if the bar were not
+ *  there. Text: every shown text node of the shell whose box reaches under the bar — not by hit test, text that takes no
+ *  touches (`pointer-events: none`, an empty state's title) is read all the same. A box cut off by a scroller is not there. */
 const underCallBar = (page) => page.evaluate(() => {
   const bar = document.querySelector('.vc-bar')
   if (!bar) return { bar: null, covered: ['no call bar'] }
   const b = bar.getBoundingClientRect()
   const covered = new Set()
   const name = (el) => `${el.tagName.toLowerCase()}${el.classList.length ? '.' + [...el.classList].slice(0, 2).join('.') : ''}`
+  const under = (r) => r.bottom > b.top + 1 && r.top < b.bottom - 1 && r.right > b.left + 1 && r.left < b.right - 1
   for (let y = b.top + 3; y < b.bottom; y += 6) {
     for (let x = b.left + 6; x < b.right; x += 10) {
-      const el = document.elementsFromPoint(x, y).find((e) => !bar.contains(e))
-      if (!el) continue
-      const control = el.closest('button, a[href], input, select, textarea, [role="tab"], [role="button"], [contenteditable="true"]')
-      if (control) { covered.add(`control ${name(control)} «${(control.getAttribute('aria-label') || control.textContent || '').trim().slice(0, 16)}»`); continue }
-      for (const n of el.childNodes) {
-        if (n.nodeType !== 3 || !n.textContent.trim()) continue
-        const range = document.createRange()
-        range.selectNodeContents(n)
-        if ([...range.getClientRects()].some((r) => r.bottom > b.top + 1 && r.top < b.bottom - 1 && r.right > b.left && r.left < b.right)) covered.add(`text ${name(el)} «${n.textContent.trim().slice(0, 16)}»`)
-      }
+      const control = document.elementsFromPoint(x, y).find((e) => !bar.contains(e))?.closest('button, a[href], input, select, textarea, [role="tab"], [role="button"], [contenteditable="true"]')
+      if (control) covered.add(`control ${name(control)} «${(control.getAttribute('aria-label') || control.textContent || '').trim().slice(0, 16)}»`)
     }
+  }
+  /** The part of `r` its scrolling / clipping ancestors leave in sight still reaches under the bar. */
+  const inSight = (el, r) => {
+    let box = { top: r.top, bottom: r.bottom, left: r.left, right: r.right }
+    for (let a = el; a && a !== document.documentElement; a = a.parentElement) {
+      const cs = getComputedStyle(a)
+      if (cs.overflowX === 'visible' && cs.overflowY === 'visible') continue
+      const c = a.getBoundingClientRect()
+      box = { top: Math.max(box.top, c.top), bottom: Math.min(box.bottom, c.bottom), left: Math.max(box.left, c.left), right: Math.min(box.right, c.right) }
+      if (box.bottom <= box.top || box.right <= box.left) return false
+    }
+    return under(box)
+  }
+  const walker = document.createTreeWalker(document.querySelector('.mb-shell') || document.body, NodeFilter.SHOW_TEXT)
+  for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+    const el = n.parentElement
+    if (!n.textContent.trim() || !el || !el.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })) continue
+    const range = document.createRange()
+    range.selectNodeContents(n)
+    if ([...range.getClientRects()].some((r) => under(r) && inSight(el, r))) covered.add(`text ${name(el)} «${n.textContent.trim().slice(0, 16)}»`)
   }
   return { bar: { y: Math.round(b.top), bottom: Math.round(b.bottom) }, zoom: Number(getComputedStyle(document.body).zoom) || 1, covered: [...covered] }
 })
