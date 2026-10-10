@@ -34,7 +34,7 @@ export const PEN_ICONS: Record<PenType, typeof Brush> = {
 
 /** 线宽:0.25/0.5/1/2/4 走引擎的 5 档键,其它值落 currentItemStrokeWidth 这个自由数(fork 保留的旧字段)。 */
 const WIDTH_KEYS: Record<number, string> = { 0.25: 'extraThin', 0.5: 'thin', 1: 'medium', 2: 'bold', 4: 'extraBold' }
-const widthPatch = (w: number): Partial<AppState> => {
+export const widthPatch = (w: number): Partial<AppState> => {
   const key = WIDTH_KEYS[w]
   // ⚠️ 没用上的那个必须显式写 null 把它清掉,否则和上一支笔的设定混在一起。
   return key
@@ -58,7 +58,7 @@ const HL_COLOR_PALETTE = {
   topPicks: { elementStroke: ['#1e1e1e', '#e03131', '#2f9e44', '#1971c2', '#ffd43b'] },
 } as unknown as AppState['colorPalette']
 
-function applyPen(pen: PenStyle, api: ExcalidrawImperativeAPI): void {
+export function applyPen(pen: PenStyle, api: ExcalidrawImperativeAPI): void {
   const st = api.getAppState()
   api.updateScene({
     appState: {

@@ -250,6 +250,12 @@ function listCached(kind: 'pages' | 'files'): Promise<string[]> {
   listCache[kind] = { at: Date.now(), root, p }
   return p
 }
+/** ctx.ui.mountBoard 的视口:三个有限数,zoom 为正。 */
+const isBoardViewport = (v: unknown): v is import('./types').PluginBoardViewport => {
+  const o = v as { scrollX?: unknown; scrollY?: unknown; zoom?: unknown } | null
+  return !!o && Number.isFinite(o.scrollX) && Number.isFinite(o.scrollY) && Number.isFinite(o.zoom) && (o.zoom as number) > 0
+}
+
 /** 插件经 ctx.app 写盘**落定之后**作废清单缓存(两种都清:writeFile / writeBytes 也能写 .md)。
  *  必须在写完之后清:写之前清的话,写的途中进来的 listFiles 会把写前清单再缓存 1.5s ——
  *  Live3D 导入完立刻重扫,拿到的正是拷贝前的清单,新模型不显示(2026-09-19 评审)。 */
@@ -1402,6 +1408,44 @@ export const usePluginStore = create<PluginState>((set, get) => {
           },
           dispose,
         }
+      },
+      // 白板层:宿主的白板引擎当成一张透明、无界面的层挂进插件的元素(见 boardSurface.tsx)。视口归调用方,所以这里
+      // 只校验它的形状;引擎(6 MB)在第一次用到时才装。句柄同步可用:装载期间的 update 攒着,装好一起生效。
+      mountBoard: (el, opts) => {
+        if (!(el instanceof HTMLElement)) throw new TypeError('mountBoard needs an HTMLElement')
+        if (!opts || !Array.isArray(opts.scene?.elements)) throw new TypeError('mountBoard needs scene.elements (an array)')
+        if (!isBoardViewport(opts.viewport)) throw new TypeError('mountBoard needs viewport { scrollX, scrollY, zoom } (finite numbers, zoom > 0)')
+        const pending = { ...opts }
+        let mounted: import('./types').PluginBoardHandle | null = null
+        let cancelled = false
+        const dispose = scope.own('mount', () => { cancelled = true; if (mounted) pending.scene = mounted.getScene(); mounted?.dispose(); mounted = null }, 'board')
+        if (!cancelled) {
+          const mine = claimHostMount(el)
+          void import('./boardSurface').then((m) => {
+            if (cancelled) return
+            if (!mine()) { dispose(); return }
+            mounted = m.mountPluginBoard(el, pending)
+          }).catch((e) => { console.error(`[amadeus] plugin "${pluginId}" board mount failed`, e) })
+        }
+        return {
+          update(patch) {
+            if (cancelled) return
+            if (patch.scene && !Array.isArray(patch.scene.elements)) throw new TypeError('mountBoard update: scene.elements must be an array')
+            if (patch.viewport && !isBoardViewport(patch.viewport)) throw new TypeError('mountBoard update: viewport needs finite scrollX / scrollY and zoom > 0')
+            Object.assign(pending, patch)
+            mounted?.update(patch)
+          },
+          getScene: () => mounted?.getScene() ?? pending.scene,
+          undo() { mounted?.undo() },
+          redo() { mounted?.redo() },
+          dispose,
+        }
+      },
+      boardToSvg: async (scene, o) => {
+        if (!scene || !Array.isArray(scene.elements)) throw new TypeError('boardToSvg needs scene.elements (an array)')
+        if (!ctxAlive() || !scene.elements.length) return null
+        const m = await import('./boardSurface')
+        return ctxAlive() ? m.pluginBoardToSvg(scene, o) : null
       },
     } } : {}),
     // Dashboard 配方编译:纯函数,格式(围栏/frontmatter 词表)留在宿主 —— 插件手抄格式
