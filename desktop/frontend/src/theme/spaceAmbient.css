@@ -57,8 +57,10 @@
   :root[data-theme='lovable']:where([data-ambient='on']):not([data-glass='off']) { transition: none; }
 }
 
-/* The single-column host has floating capsules instead of a surrounding frame. */
-[data-theme='lovable']:where([data-ambient='on']):not([data-glass='off']) .mb-shell:not(.mini-shell) .mb-cap {
+/* The single-column host has floating capsules instead of a surrounding frame.
+   An empty capsule (ghost placeholder only) stays unpainted: singleColumn.css clears it with a
+   selector of the same specificity that loads earlier, so it is excluded here rather than re-cleared. */
+[data-theme='lovable']:where([data-ambient='on']):not([data-glass='off']) .mb-shell:not(.mini-shell) .mb-cap:not(:has(> .mb-icon-btn--ghost:only-child)) {
   background: color-mix(in srgb, var(--space-ambient-tint-top) 22%, var(--bg-card));
   backdrop-filter: blur(28px) saturate(125%);
 }
