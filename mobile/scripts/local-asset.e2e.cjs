@@ -403,10 +403,40 @@ async function main() {
       if (!rootImg) return
       check(await h.openNote(SUB), `${label}:打开了子文件夹里那篇笔记(防空过)`)
       // 光标落到「后文」段末、另起一段,再粘贴 —— 贴在段中间会和文字同段,落盘那一行就不止图片了。
-      await page.locator('.ProseMirror[contenteditable="true"] p', { hasText: '后文' }).last().tap({ timeout: 4000 }).catch(() => {})
-      await page.keyboard.press('End').catch(() => {})
-      await page.keyboard.press('Enter').catch(() => {})
-      await page.waitForTimeout(300)
+      // ⚠️ 落点要核、不到位就重来。刚打开第二篇笔记时,点进段落之后选区偶尔会被编辑器改回文首(整套连跑 5 次里见过 3 次;
+      //    是台架的合成触摸还是产品本身没查清),紧接着的回车就落在文首 —— 而落盘那一行的断言不看位置,照样全过。
+      //    所以:点完等选区站稳、确认还在「后文」那一段里才按键;每一步之后再核一次。
+      const inAfterPara = () => page.evaluate(() => {
+        const sel = window.getSelection()
+        const p = [...document.querySelectorAll('.ProseMirror[contenteditable="true"] p')].filter((e) => /后文/.test(e.textContent || '')).pop()
+        return !!p && p.contains(sel?.anchorNode ?? null)
+      })
+      const caretInfo = () => page.evaluate(() => {
+        const sel = window.getSelection()
+        const ed = [...document.querySelectorAll('.ProseMirror[contenteditable="true"]')].find((e) => e.contains(sel?.anchorNode ?? null))
+        if (!ed) return { ok: false, why: '选区不在编辑器里' }
+        const blocks = [...ed.children]
+        const at = blocks.findIndex((c) => c.contains(sel.anchorNode))
+        const cur = blocks[at]
+        const prev = blocks[at - 1]
+        return { ok: !!cur && cur.tagName === 'P' && !(cur.textContent || '').trim() && /后文/.test(prev?.textContent || ''), at, blocks: blocks.map((c) => `${c.tagName}:${(c.textContent || '').slice(0, 6)}`) }
+      })
+      let caret = { ok: false }
+      for (let i = 0; i < 5 && !caret.ok; i++) {
+        await page.locator('.ProseMirror[contenteditable="true"] p', { hasText: '后文' }).last().tap({ timeout: 4000 }).catch(() => {})
+        await page.waitForTimeout(400)
+        if (!(await inAfterPara())) { console.log(`      第 ${i + 1} 次点「后文」:选区没留在这一段里,重来`); await page.waitForTimeout(800); continue }
+        await page.keyboard.press('End').catch(() => {})
+        await page.waitForTimeout(150)
+        if (!(await inAfterPara())) { console.log(`      第 ${i + 1} 次:按 End 之后选区跑了,重来`); await page.waitForTimeout(800); continue }
+        // 上一轮已经起过空段就下移进去,别再多起一段
+        const hasEmptyAfter = await page.evaluate(() => { const ps = [...document.querySelectorAll('.ProseMirror[contenteditable="true"] > p')]; const k = ps.findIndex((e) => /后文/.test(e.textContent || '')); return k >= 0 && !!ps[k + 1] && !(ps[k + 1].textContent || '').trim() })
+        await page.keyboard.press(hasEmptyAfter ? 'ArrowDown' : 'Enter').catch(() => {})
+        await page.waitForTimeout(500)
+        caret = await caretInfo()
+        if (!caret.ok) console.log(`      第 ${i + 1} 次:另起一段之后光标不在那一段里 ${JSON.stringify(caret)},重来`)
+      }
+      check(caret.ok, `${label}:光标在「后文」之后新起的空段里(防空过:粘贴的落点)`, JSON.stringify(caret))
       const handled = await page.evaluate((src) => {
         const el = document.querySelector('.ProseMirror[contenteditable="true"]')
         const img = document.createElement('img')
@@ -420,6 +450,7 @@ async function main() {
       check(handled && !!pasted && pasted.complete && pasted.w === 2, `${label}:图贴进了子文件夹的笔记,当场显示得出(防空过)`, `编辑器接了粘贴=${handled} ${pasted ? `naturalWidth=${pasted.w}` : '编辑器里没有图'}`)
       const saved = side === 'cloud' ? (cloud.puts[cloud.puts.length - 1]?.content ?? null) : await page.evaluate((p) => window.amadeus.readTextFile(p), SUB.path)
       check(lineOf(saved) === WANT, `${label}:落盘的图片链接是指回库根的 ../ 写法`, `落盘那一行: ${lineOf(saved).slice(0, 200) || (saved == null ? '(没有发生保存)' : '(没有图片行)')}`)
+      check(/后文\n+!\[\]\(/.test(String(saved ?? '')), `${label}:图落在「后文」之后(防空过:贴到了要贴的地方)`, `落盘全文: ${JSON.stringify(String(saved ?? '')).slice(0, 200)}`)
       await reopenCheck(label, h, side, cloud, WANT)
       await page.screenshot({ path: path.join(root, 'outputs', 'localasset', `${side === 'local' ? 'e-local' : 'f-cloud'}-cross-folder.png`) }).catch(() => {})
     } finally {
@@ -452,20 +483,20 @@ async function main() {
     if (!up) throw new Error(`vite preview 没起来\n${previewErr.slice(-800) || '(无 stderr)'}`)
     fs.mkdirSync(path.join(root, 'outputs', 'localasset'), { recursive: true })
     browser = await chromium.launch({ executablePath: findChromium(), headless: true, args: ['--no-sandbox'] })
-    console.log('── A. 冷启动就在本地库 ──')
-    await scenario('A', 'local')
-    console.log('\n── B. 先在云端库启动,再切到本地库 ──')
-    await scenario('B', 'cloud')
-    console.log('\n── C. 云端库(手机缺省就是它;网页版同一座桥) ──')
-    await scenario('C', 'cloud', true)
-    console.log('\n── D. 云端库里一篇已经被写坏的笔记(图片行是另一端写进去的带过期令牌的地址) ──')
-    await scenario('D', 'cloud', true, true)
-    console.log('\n── E. 本地库:从库根的笔记复制一张图,贴进子文件夹里的笔记 ──')
-    await crossFolder('E', 'local')
-    console.log('\n── F. 云端库:同上 ──')
-    await crossFolder('F', 'cloud')
-    console.log('\n── G. 云端库里本来就是 ../ 写法的笔记,页目录下还有一张同路径的另一张图 ──')
-    await dotdotCloud('G')
+    // E2E_ONLY=F(或 E,G)只跑点名的场景;缺省全跑。
+    const only = (process.env.E2E_ONLY || '').toUpperCase().split(',').filter(Boolean)
+    const run = async (label, title, fn) => {
+      if (only.length && !only.includes(label)) return
+      console.log(`\n── ${label}. ${title} ──`)
+      await fn()
+    }
+    await run('A', '冷启动就在本地库', () => scenario('A', 'local'))
+    await run('B', '先在云端库启动,再切到本地库', () => scenario('B', 'cloud'))
+    await run('C', '云端库(手机缺省就是它;网页版同一座桥)', () => scenario('C', 'cloud', true))
+    await run('D', '云端库里一篇已经被写坏的笔记(图片行是另一端写进去的带过期令牌的地址)', () => scenario('D', 'cloud', true, true))
+    await run('E', '本地库:从库根的笔记复制一张图,贴进子文件夹里的笔记', () => crossFolder('E', 'local'))
+    await run('F', '云端库:同上', () => crossFolder('F', 'cloud'))
+    await run('G', '云端库里本来就是 ../ 写法的笔记,页目录下还有一张同路径的另一张图', () => dotdotCloud('G'))
   } catch (e) {
     check(false, '台架异常', String(e && e.stack ? e.stack.split('\n').slice(0, 3).join(' / ') : e))
   } finally {
