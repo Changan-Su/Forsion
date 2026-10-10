@@ -1,8 +1,8 @@
 ---
 name: forsion-extension-development
-description: 当用户要给 Forsion / Tangu 做插件、主题、Space、智能体(agent)或捆绑包(bundle)——或要把某个能力做成可分发/可上架商店的扩展——时使用。内置五类官方模板(samples/),讲清各自的格式基线与硬约束(尤其两种"插件"是完全不同的系统),照抄模板改比从零写靠谱。
+description: 当用户要给 Forsion / Tangu 做插件、主题、Space、智能体(agent)或捆绑包(bundle)——或要把某个能力做成可分发/可上架商店的扩展——时使用;已装的插件 / Space / 视图不出现、加载失败、更新后不工作要排查时也用(带一份插件体检脚本 tools/check-plugin.mjs)。内置五类官方模板(samples/),讲清各自的格式基线与硬约束(尤其两种"插件"是完全不同的系统),照抄模板改比从零写靠谱。
 metadata:
-  version: 1.25.0
+  version: 1.26.0
   author: Forsion
   category: Forsion
 ---
@@ -23,6 +23,28 @@ Forsion / Tangu 的扩展**默认按捆绑包(bundle)形态发行**(2026-07-25 �
 > - **引擎插件**(本技能 `samples/forsion-sample-plugin`):后端/Agent 层,`tangu-plugin.json` + `activate(ctx)`,给模型加工具。
 > - **Amadeus/Forsion 桌面插件**:UI 层,`manifest.json` + 裸 `main.js`(宿主 `new Function('ctx', code)` 跑 —— **文件本身就是 `setup(ctx)` 的函数体**,顶层直接 `ctx.registerView(…)`;别包成 `function setup(ctx) { … }`,没人调用它 = 零注册、零报错),加命令/斜杠项/视图/文件类型。桌面端 设置 → 插件 有一键脚手架(hello-amadeus);捆绑包模板的根即这一形态。
 > 要"一套功能跨两层发行"(UI+工具+Agent+Space)时,用**捆绑包**把它们装进一个目录。
+
+## Troubleshooting an installed plugin: Space missing, view blank, "stopped working after an update" (2026-10-10)
+
+When a user says a plugin's Space / view / command is gone, or that a plugin broke after updating the app or the plugin, **run the checker first** — before reading the code, and before asking the user for logs:
+
+```bash
+node "<Skill folder>/tools/check-plugin.mjs"                      # every plugin installed in ~/.forsion/plugins
+node "<Skill folder>/tools/check-plugin.mjs" <plugin folder>      # one plugin, e.g. the project you are developing
+```
+
+- `<Skill folder>` is printed at the top of this manual. With no argument it finds the install folder itself, so you do not need to locate the plugin first (installed desktop plugins live in `~/.forsion/plugins/<folder>/`; the folder name can differ from the manifest `id`). Add `--app-version <x.y.z>` if you know the app version.
+- No `node` on PATH (the packaged app on macOS / Linux ships none)? The app binary runs it: `ELECTRON_RUN_AS_NODE=1 "/Applications/Forsion.app/Contents/MacOS/Forsion" "<Skill folder>/tools/check-plugin.mjs"`.
+- It loads `main.js` exactly the way the desktop host does (`new Function('ctx', source)(ctx)`), lists what got registered, checks every bundled Space against that, and names the lines that never ran. **Its result is the host's result.** Do not discount it as "only a stub": the host has no extra step that would make an unreached `ctx.registerView` run, so "0 views registered" there means 0 views in the app.
+
+How the host behaves, so you can read the result and explain it:
+
+- A bundled Space (`spaces/<slug>/space.json`) is shown only if **every view it names is registered once the plugin has loaded**. Otherwise the host skips it without an error: the Space is simply not on the Ribbon.
+- `main.js` that throws → the plugin card in Settings → Plugins shows "failed to load". `main.js` that loads **without an error but registers nothing** → no badge and no message; the plugin looks healthy and switched on. That second case is always a bug in the plugin's own `main.js`, never an app / plugin-API incompatibility: the registration code is not on the path that runs at load. Usual shapes: the file is wrapped in `function setup(ctx) { … }`; an earlier function lost its closing brace and swallowed the rest of the file (a stray `}` at the very end keeps it parseable); the call sits behind a condition. The checker names the function and its line range — read those lines next.
+- Do not send the user to the developer console or ask for "host logs" first. End users cannot easily get them, and for the zero-registration case they hold nothing the checker does not print. Ask only after the checker comes back clean.
+- A diagnostic file a plugin writes for itself under `~/.forsion/plugins-data/` is a hint, not proof of where loading stopped.
+
+Plugin authors: run the same checker before every release. It is the generic half of 通用纪律 4; your own `check.mjs` covers your plugin's logic.
 
 ## 通用纪律
 

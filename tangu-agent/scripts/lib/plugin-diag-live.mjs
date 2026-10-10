@@ -93,7 +93,7 @@ function treeHash(dir) {
  *  Symlinks are resolved while copying: a link kept as a link would still point at the developer's original files. */
 export function plantPlugin({ src, data, shared, fakeHome }) {
   if (!src || !existsSync(join(src, 'manifest.json'))) throw new Error('plugindiag: --plugin-src <desktop plugin folder> is required (it must contain manifest.json)');
-  mkdirSync(fakeHome, { recursive: true });
+  mkdirSync(join(fakeHome, 'Forsion'), { recursive: true }); // 工作目录放在家目录下,和真机一样
   symlinkSync(shared, join(fakeHome, '.forsion'));
   const dir = join(shared, 'plugins', basename(src));
   cpSync(src, dir, { recursive: true, dereference: true });
@@ -115,7 +115,7 @@ function neededViews(dir) {
   return { manifest, views: [...out] };
 }
 
-export async function pluginDiagLive({ run, dir, OUT, hint, tokensOf, ttft }) {
+export async function pluginDiagLive({ run, dir, home, OUT, hint, tokensOf, ttft }) {
   const { manifest, views: needed } = neededViews(dir);
   const mainFile = join(dir, manifest.main || 'main.js');
   const before = { sha: sha(mainFile), ...registeredViews(mainFile) };
@@ -126,7 +126,7 @@ export async function pluginDiagLive({ run, dir, OUT, hint, tokensOf, ttft }) {
   // 照用户的原话问:把原因归到应用升级上,不给路径,不提视图注册 / 括号 / 自检脚本。
   const ask = `我把 Forsion 升到 2.13.1 之后,${manifest.name} 这个插件的 Space 在功能条上不见了,插件明明还装着、也是开着的。是不是插件系统更新了导致不兼容?帮我排查一下原因。`;
   // 点名腿:分清「不会查」和「没想到要查」。路径给隔离目录的绝对路径 —— 写成 ~/.forsion/… 时模型会去列 /Users 拼出开发机的真家目录(10-10 实测)。
-  const hinted = `${ask}插件装在 ${dir} 。请在本地实际验证一下它的 main.js 被宿主加载后注册了哪些视图。`;
+  const hinted = `${ask}插件装在 ${join(home, '.forsion', 'plugins', basename(dir))} 。请在本地实际验证一下它的 main.js 被宿主加载后注册了哪些视图。`;
   const message = hint ? hinted : ask;
 
   // 开发机的真家目录不许碰。模型拿到的 HOME 是假的,这里兜的是它自己拼出真路径的几条明路(字面路径、/Users、os.userInfo);也不许往机器上装东西。
@@ -142,7 +142,7 @@ export async function pluginDiagLive({ run, dir, OUT, hint, tokensOf, ttft }) {
     return undefined;
   };
   const t0 = Date.now();
-  const ev = await run(`live-plugindiag-${Date.now()}`, message, 900_000, { approvalMode: 'auto-edit', debugSystemPrompt: true }, undefined, onApproval);
+  const ev = await run(`live-plugindiag-${Date.now()}`, message, 900_000, { approvalMode: 'auto-edit', debugSystemPrompt: true, cwd: join(home, 'Forsion') }, undefined, onApproval);
   const wallMs = Date.now() - t0;
 
   const after = { sha: sha(mainFile), ...registeredViews(mainFile) };
@@ -156,7 +156,7 @@ export async function pluginDiagLive({ run, dir, OUT, hint, tokensOf, ttft }) {
   // 粗判:回答里同时说到「视图没注册」和「被包进 / 没收口的函数」。只当索引用,结论以原话为准。
   // 「有没有把原因算到应用升级头上」不自动判:试过按关键词判,六次里两次判反(否定句、让步句),读原话。
   const named = /registerView|视图.{0,12}(没有|没|未|不会|从未).{0,6}注册|(没有|没|未|从未).{0,6}注册.{0,12}视图/.test(c)
-    && /花括号|大括号|括号|brace|闭合|收口|嵌套|nested|unclosed|unbalanced|吞|包进|包在|函数体/i.test(c);
+    && /花括号|大括号|括号|brace|闭合|收口|嵌套|nested|unclosed|unbalanced|吞|包进|包在|包住|函数体|函数内部|函数里|函数作用域/i.test(c);
   const fixed = needed.every((v) => after.views.includes(v)) && !after.error;
 
   writeFileSync(join(OUT, 'plugindiag-evidence.json'), JSON.stringify({

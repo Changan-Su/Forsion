@@ -1069,7 +1069,9 @@ if (ONLY.has('browserext')) {
 
 // plugindiag(10-10):待查的桌面插件放进隔离共享域的 plugins/ 下;只在跑它时把引擎的 HOME 换成产物目录里的假家目录(~/.forsion 软链到共享域)——
 // 引擎平时拿的是真 $HOME,模型照着「~/.forsion/plugins」找过去就会读、甚至改开发机上正式版的那份。
-const FAKE_HOME = join(OUT, 'fakehome');
+// 目录名照着真机的样子取(家目录 / 其下的工作目录):系统提示只告诉模型工作目录,它靠这个推家目录在哪 —— 工作目录不在家目录下时,
+// 模型会去列 /Users 找「真正的」家目录(10-10 两次实测)。
+const FAKE_HOME = join(OUT, 'home', 'dev');
 const PLUGINDIAG_DIR = ONLY.has('plugindiag') ? plantPlugin({ src: opt('plugin-src', ''), data: opt('plugin-data', ''), shared, fakeHome: FAKE_HOME }) : null;
 
 const child = spawn(process.execPath, [
@@ -2959,7 +2961,7 @@ Then reply with only the command output.`,
   // 「在本地验一下 main.js 注册了哪些视图」。一次只跑一腿:同一个隔离 home 里第二腿会看到第一腿的会话和改动。
   // 「说没说中」是关键词粗判,以模型原话为准;「改没改好」是硬判(照宿主的方式求值 main.js,看 Space 要的视图注册了没有)。留证 plugindiag-evidence.json。
   await scenario('plugindiag', 'plugindiag 插件 Space 不出现:只凭插件目录查原因', () =>
-    pluginDiagLive({ run, dir: PLUGINDIAG_DIR, OUT, hint: argv.includes('--plugindiag-hint'), tokensOf, ttft }));
+    pluginDiagLive({ run, dir: PLUGINDIAG_DIR, home: FAKE_HOME, OUT, hint: argv.includes('--plugindiag-hint'), tokensOf, ttft }));
 
   // 「应用市场」改名「商店」(10-05;当天先改成「插件商店」,用户随后定为只叫「商店」):forsion-plugin / forsion-connect 两份技能正文里的旧名
   // (Forsion Market / 市场 / 插件商店)一并改了。
