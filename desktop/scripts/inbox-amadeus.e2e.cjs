@@ -21,7 +21,7 @@
  *     window.tangu.cloudFetch 从(假)云端现拉(票 + 回复 + 各自附件,图片 data: 内联),打开即 POST …/read;回复框发 POST …/replies
  *     后线程重拉。token 只在主进程盖上(假云端断言 Authorization 头)。同形 thread 落在 agent 信上 → 不出面板(信任闸)。
  * 负对照 --nc:假引擎按 id 读审批回 404(列表也没有 apv-1),且广播消息伪装成 agent 发信 → ② ⑤ 必红(≥3 条);⑥ 的 403 不带错误码 → 本地化那条也红。
- * 先 `npm run build`;跑法 `npm run e2e:inboxamadeus`;截图 $TMPDIR/forsion-inbox-amadeus.png、forsion-inbox-claimreq.png、forsion-inbox-musetodo.png、forsion-inbox-feedback.png。
+ * 先 `npm run build`;跑法 `npm run e2e:inboxamadeus`;截图 $TMPDIR/forsion-inbox-amadeus.png、forsion-inbox-buttonblock.png(图标钮 + 按钮块)、forsion-inbox-claimreq.png、forsion-inbox-musetodo.png、forsion-inbox-feedback.png。
  */
 const fs = require('fs')
 const os = require('os')
@@ -36,6 +36,7 @@ const SHOT_REQ = path.join(process.env.SHOT_DIR || os.tmpdir(), 'forsion-inbox-c
 const SHOT_TODO = path.join(process.env.SHOT_DIR || os.tmpdir(), 'forsion-inbox-musetodo.png')
 const SHOT_BC = path.join(process.env.SHOT_DIR || os.tmpdir(), 'forsion-inbox-broadcast.png')
 const SHOT_FB = path.join(process.env.SHOT_DIR || os.tmpdir(), 'forsion-inbox-feedback.png')
+const SHOT_BTN = path.join(process.env.SHOT_DIR || os.tmpdir(), 'forsion-inbox-buttonblock.png')
 const http = require('http')
 const results = []
 const check = (name, ok, detail) => { results.push({ name, ok }); console.log(`${ok ? '✅' : '❌'} ${name}${ok ? '' : ` — ${detail || ''}`}`) }
@@ -339,6 +340,16 @@ async function main() {
       return { n: all.length, label: b?.querySelector('.amx-btnblock-btn')?.textContent, gears: b?.querySelectorAll('.amx-btnblock-gear').length ?? -1, status: b?.querySelector('.amx-btnblock-status')?.textContent || '', blankDisabled: !!blank?.disabled, blankAttr: blank?.hasAttribute('data-blank') }
     })
     check('forsion-button 渲染成按钮(桥在场:提示规则不存在,而非「不支持」),只读态无齿轮', btn.n === 2 && (btn.label || '').includes('整理今天的笔记') && btn.gears === 0 && /不存在/.test(btn.status) && !/不支持/.test(btn.status), JSON.stringify(btn))
+    // 这两条规则从写下那天起就没生效过:各自前面的注释被正文里的 `*/` 提前闭合,剩下的半截和选择器读成一条非法选择器,
+    // 整条被浏览器丢掉(2026-10-10;源码那半由 frontend/src/cssCommentGuard.test.ts 守,这里钉真应用里它们是活的)。
+    const live = await win.evaluate(() => {
+      const cs = (sel) => { const el = document.querySelector(sel); return el ? getComputedStyle(el) : null }
+      // 图标钮是 flex 容器(.ibx-reader-actions)的子项,写的 inline-flex 算出来是 flex
+      const icon = cs('.ibx-reader-actions .ibx-iconbtn:not([style])'), block = cs('.ibx-reader-body .amx-btnblock')
+      return { icon: icon && [icon.display, icon.width, icon.height].join(' '), block: block && [block.display, block.flexDirection, block.rowGap].join(' ') }
+    })
+    check('阅读面板的图标钮 24×24、按钮块是带行距的一列(规则没被前面的注释吃掉)', /^(inline-)?flex 24px 24px$/.test(live.icon || '') && live.block === 'flex column 4px', JSON.stringify(live))
+    if (!NEGATIVE_CONTROL) await win.locator('.ibx-reader-wrap').first().screenshot({ path: SHOT_BTN }).catch(() => {})
     // 未配置的按钮:只读态 disabled;硬点一下也不许开自动化构建器
     await win.locator('.ibx-reader-body .amx-btnblock').nth(1).locator('.amx-btnblock-btn').click({ force: true }).catch(() => {})
     await win.waitForTimeout(600)

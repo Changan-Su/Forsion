@@ -1,5 +1,5 @@
 /* 收件箱(Inbox Space):左栏 = 统一工作区的列表源(行 / 搜索 / 未读点全是 sidebar2.css 的 t2s-*);此处只剩阅读面板的 ibx- 专有件。
-   全 token 驱动(--sidebar-bg/--text*/--accent/--border),四主题 × 明暗自动成立。 */
+   全 token 驱动(--sidebar-bg / --text-* / --accent / --border),四主题 × 明暗自动成立。 */
 
 /* ── 发信人头像 / 图标按钮(阅读面板头部在用;左栏列表 2026-09-11 起并入统一工作区)── */
 .ibx-iconbtn {
