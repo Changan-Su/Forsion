@@ -2469,7 +2469,7 @@
       "type": "function",
       "function": {
         "name": "manage_human",
-        "description": "Read or update the human collaboration document HUMAN.md. First read to obtain content and version, then update with the full revised Markdown and expectedVersion. Changes are applied immediately; the user receives a card and may edit or undo. Scope project is only for this project; scope agent is for collaboration that remains useful outside it. Preserve user edits. It holds YOUR advice and requests to the human: concrete input, context or decisions they can contribute, habits on their side that would help, and optional learning tied to a goal. What the human tells or requires of you (their corrections and preferences) does not belong here; save that with remember. Use specific evidence; avoid personality judgments, permissions, transient tool failures and unsolicited homework. Keep it concise; batch related changes. Never write this file using generic file or shell tools.",
+        "description": "Read or update HUMAN.md, the note you write to the human about what THEY can do so that working with you goes better (they see it as the collaboration handbook). First read to obtain content and version, then update with the full revised Markdown and expectedVersion. Changes are applied immediately; the user receives a card and may edit or undo. Scope project is only for this project; scope agent is for advice that remains useful outside it. Preserve user edits. The human is the reader. Each item is one thing THEY can do, never something you will do. When what prompts you is the human correcting you or telling you how they want you to work, that is about what you do: save it with remember and leave this note as it is, even when the note already covers a related point. Say each item to them as \"you\", in their language, in plain sentences rather than a form of labelled fields, with an example from your work together and what it saves them. Use the words they used themselves; where you need a word they did not say, describe the thing in a few plain words instead of naming it with a category or specialist term: write \"which orders do not count\", not \"exclusion criteria\"; \"who will read it\", not \"target audience\". Leave out your own commitments, even as a closing reassurance (say those in your reply), and tool names, file names and labels the human did not give you. Before saving, reread the draft as they would and replace every word they would not say themselves. Use specific evidence; avoid personality judgments, permissions, transient tool failures and unsolicited homework. Keep it concise; batch related changes. Never write this file using generic file or shell tools.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -2489,7 +2489,7 @@
             },
             "content": {
               "type": "string",
-              "description": "The complete updated Markdown; at most 12000 characters. Preserve unrelated sections."
+              "description": "The complete updated Markdown, written to the human in their language; at most 12000 characters. Preserve unrelated sections."
             },
             "expectedVersion": {
               "type": "string",
@@ -2497,11 +2497,11 @@
             },
             "summary": {
               "type": "string",
-              "description": "User-facing description of what changed, in the user language (at most 240 characters)."
+              "description": "Shown to the user on the change card: what changed, in their language and everyday words (at most 240 characters)."
             },
             "evidence": {
               "type": "string",
-              "description": "Specific feedback or observed friction supporting the change (at most 600 characters)."
+              "description": "Shown to the user as the reason: what happened in your work together that shows this would help them, in their language and everyday words (at most 600 characters)."
             }
           },
           "required": [
@@ -3169,7 +3169,7 @@
       "type": "function",
       "function": {
         "name": "manage_human",
-        "description": "Read or update the human collaboration document HUMAN.md. First read to obtain content and version, then update with the full revised Markdown and expectedVersion. Changes are applied immediately; the user receives a card and may edit or undo. Scope project is only for this project; scope agent is for collaboration that remains useful outside it. Preserve user edits. It holds YOUR advice and requests to the human: concrete input, context or decisions they can contribute, habits on their side that would help, and optional learning tied to a goal. What the human tells or requires of you (their corrections and preferences) does not belong here; save that with remember. Use specific evidence; avoid personality judgments, permissions, transient tool failures and unsolicited homework. Keep it concise; batch related changes. Never write this file using generic file or shell tools.",
+        "description": "Read or update HUMAN.md, the note you write to the human about what THEY can do so that working with you goes better (they see it as the collaboration handbook). First read to obtain content and version, then update with the full revised Markdown and expectedVersion. Changes are applied immediately; the user receives a card and may edit or undo. Scope project is only for this project; scope agent is for advice that remains useful outside it. Preserve user edits. The human is the reader. Each item is one thing THEY can do, never something you will do. When what prompts you is the human correcting you or telling you how they want you to work, that is about what you do: save it with remember and leave this note as it is, even when the note already covers a related point. Say each item to them as \"you\", in their language, in plain sentences rather than a form of labelled fields, with an example from your work together and what it saves them. Use the words they used themselves; where you need a word they did not say, describe the thing in a few plain words instead of naming it with a category or specialist term: write \"which orders do not count\", not \"exclusion criteria\"; \"who will read it\", not \"target audience\". Leave out your own commitments, even as a closing reassurance (say those in your reply), and tool names, file names and labels the human did not give you. Before saving, reread the draft as they would and replace every word they would not say themselves. Use specific evidence; avoid personality judgments, permissions, transient tool failures and unsolicited homework. Keep it concise; batch related changes. Never write this file using generic file or shell tools.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -3189,7 +3189,7 @@
             },
             "content": {
               "type": "string",
-              "description": "The complete updated Markdown; at most 12000 characters. Preserve unrelated sections."
+              "description": "The complete updated Markdown, written to the human in their language; at most 12000 characters. Preserve unrelated sections."
             },
             "expectedVersion": {
               "type": "string",
@@ -3197,11 +3197,11 @@
             },
             "summary": {
               "type": "string",
-              "description": "User-facing description of what changed, in the user language (at most 240 characters)."
+              "description": "Shown to the user on the change card: what changed, in their language and everyday words (at most 240 characters)."
             },
             "evidence": {
               "type": "string",
-              "description": "Specific feedback or observed friction supporting the change (at most 600 characters)."
+              "description": "Shown to the user as the reason: what happened in your work together that shows this would help them, in their language and everyday words (at most 600 characters)."
             }
           },
           "required": [
@@ -4093,7 +4093,7 @@
       "type": "function",
       "function": {
         "name": "manage_human",
-        "description": "Read or update the human collaboration document HUMAN.md. First read to obtain content and version, then update with the full revised Markdown and expectedVersion. Changes are applied immediately; the user receives a card and may edit or undo. Scope project is only for this project; scope agent is for collaboration that remains useful outside it. Preserve user edits. It holds YOUR advice and requests to the human: concrete input, context or decisions they can contribute, habits on their side that would help, and optional learning tied to a goal. What the human tells or requires of you (their corrections and preferences) does not belong here; save that with remember. Use specific evidence; avoid personality judgments, permissions, transient tool failures and unsolicited homework. Keep it concise; batch related changes. Never write this file using generic file or shell tools.",
+        "description": "Read or update HUMAN.md, the note you write to the human about what THEY can do so that working with you goes better (they see it as the collaboration handbook). First read to obtain content and version, then update with the full revised Markdown and expectedVersion. Changes are applied immediately; the user receives a card and may edit or undo. Scope project is only for this project; scope agent is for advice that remains useful outside it. Preserve user edits. The human is the reader. Each item is one thing THEY can do, never something you will do. When what prompts you is the human correcting you or telling you how they want you to work, that is about what you do: save it with remember and leave this note as it is, even when the note already covers a related point. Say each item to them as \"you\", in their language, in plain sentences rather than a form of labelled fields, with an example from your work together and what it saves them. Use the words they used themselves; where you need a word they did not say, describe the thing in a few plain words instead of naming it with a category or specialist term: write \"which orders do not count\", not \"exclusion criteria\"; \"who will read it\", not \"target audience\". Leave out your own commitments, even as a closing reassurance (say those in your reply), and tool names, file names and labels the human did not give you. Before saving, reread the draft as they would and replace every word they would not say themselves. Use specific evidence; avoid personality judgments, permissions, transient tool failures and unsolicited homework. Keep it concise; batch related changes. Never write this file using generic file or shell tools.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -4113,7 +4113,7 @@
             },
             "content": {
               "type": "string",
-              "description": "The complete updated Markdown; at most 12000 characters. Preserve unrelated sections."
+              "description": "The complete updated Markdown, written to the human in their language; at most 12000 characters. Preserve unrelated sections."
             },
             "expectedVersion": {
               "type": "string",
@@ -4121,11 +4121,11 @@
             },
             "summary": {
               "type": "string",
-              "description": "User-facing description of what changed, in the user language (at most 240 characters)."
+              "description": "Shown to the user on the change card: what changed, in their language and everyday words (at most 240 characters)."
             },
             "evidence": {
               "type": "string",
-              "description": "Specific feedback or observed friction supporting the change (at most 600 characters)."
+              "description": "Shown to the user as the reason: what happened in your work together that shows this would help them, in their language and everyday words (at most 600 characters)."
             }
           },
           "required": [
@@ -5156,7 +5156,7 @@
       "type": "function",
       "function": {
         "name": "manage_human",
-        "description": "Read or update the human collaboration document HUMAN.md. First read to obtain content and version, then update with the full revised Markdown and expectedVersion. Changes are applied immediately; the user receives a card and may edit or undo. Scope project is only for this project; scope agent is for collaboration that remains useful outside it. Preserve user edits. It holds YOUR advice and requests to the human: concrete input, context or decisions they can contribute, habits on their side that would help, and optional learning tied to a goal. What the human tells or requires of you (their corrections and preferences) does not belong here; save that with remember. Use specific evidence; avoid personality judgments, permissions, transient tool failures and unsolicited homework. Keep it concise; batch related changes. Never write this file using generic file or shell tools.",
+        "description": "Read or update HUMAN.md, the note you write to the human about what THEY can do so that working with you goes better (they see it as the collaboration handbook). First read to obtain content and version, then update with the full revised Markdown and expectedVersion. Changes are applied immediately; the user receives a card and may edit or undo. Scope project is only for this project; scope agent is for advice that remains useful outside it. Preserve user edits. The human is the reader. Each item is one thing THEY can do, never something you will do. When what prompts you is the human correcting you or telling you how they want you to work, that is about what you do: save it with remember and leave this note as it is, even when the note already covers a related point. Say each item to them as \"you\", in their language, in plain sentences rather than a form of labelled fields, with an example from your work together and what it saves them. Use the words they used themselves; where you need a word they did not say, describe the thing in a few plain words instead of naming it with a category or specialist term: write \"which orders do not count\", not \"exclusion criteria\"; \"who will read it\", not \"target audience\". Leave out your own commitments, even as a closing reassurance (say those in your reply), and tool names, file names and labels the human did not give you. Before saving, reread the draft as they would and replace every word they would not say themselves. Use specific evidence; avoid personality judgments, permissions, transient tool failures and unsolicited homework. Keep it concise; batch related changes. Never write this file using generic file or shell tools.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -5176,7 +5176,7 @@
             },
             "content": {
               "type": "string",
-              "description": "The complete updated Markdown; at most 12000 characters. Preserve unrelated sections."
+              "description": "The complete updated Markdown, written to the human in their language; at most 12000 characters. Preserve unrelated sections."
             },
             "expectedVersion": {
               "type": "string",
@@ -5184,11 +5184,11 @@
             },
             "summary": {
               "type": "string",
-              "description": "User-facing description of what changed, in the user language (at most 240 characters)."
+              "description": "Shown to the user on the change card: what changed, in their language and everyday words (at most 240 characters)."
             },
             "evidence": {
               "type": "string",
-              "description": "Specific feedback or observed friction supporting the change (at most 600 characters)."
+              "description": "Shown to the user as the reason: what happened in your work together that shows this would help them, in their language and everyday words (at most 600 characters)."
             }
           },
           "required": [
@@ -5916,7 +5916,7 @@
       "type": "function",
       "function": {
         "name": "manage_human",
-        "description": "Read or update the human collaboration document HUMAN.md. First read to obtain content and version, then update with the full revised Markdown and expectedVersion. Changes are applied immediately; the user receives a card and may edit or undo. Scope project is only for this project; scope agent is for collaboration that remains useful outside it. Preserve user edits. It holds YOUR advice and requests to the human: concrete input, context or decisions they can contribute, habits on their side that would help, and optional learning tied to a goal. What the human tells or requires of you (their corrections and preferences) does not belong here; save that with remember. Use specific evidence; avoid personality judgments, permissions, transient tool failures and unsolicited homework. Keep it concise; batch related changes. Never write this file using generic file or shell tools.",
+        "description": "Read or update HUMAN.md, the note you write to the human about what THEY can do so that working with you goes better (they see it as the collaboration handbook). First read to obtain content and version, then update with the full revised Markdown and expectedVersion. Changes are applied immediately; the user receives a card and may edit or undo. Scope project is only for this project; scope agent is for advice that remains useful outside it. Preserve user edits. The human is the reader. Each item is one thing THEY can do, never something you will do. When what prompts you is the human correcting you or telling you how they want you to work, that is about what you do: save it with remember and leave this note as it is, even when the note already covers a related point. Say each item to them as \"you\", in their language, in plain sentences rather than a form of labelled fields, with an example from your work together and what it saves them. Use the words they used themselves; where you need a word they did not say, describe the thing in a few plain words instead of naming it with a category or specialist term: write \"which orders do not count\", not \"exclusion criteria\"; \"who will read it\", not \"target audience\". Leave out your own commitments, even as a closing reassurance (say those in your reply), and tool names, file names and labels the human did not give you. Before saving, reread the draft as they would and replace every word they would not say themselves. Use specific evidence; avoid personality judgments, permissions, transient tool failures and unsolicited homework. Keep it concise; batch related changes. Never write this file using generic file or shell tools.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -5936,7 +5936,7 @@
             },
             "content": {
               "type": "string",
-              "description": "The complete updated Markdown; at most 12000 characters. Preserve unrelated sections."
+              "description": "The complete updated Markdown, written to the human in their language; at most 12000 characters. Preserve unrelated sections."
             },
             "expectedVersion": {
               "type": "string",
@@ -5944,11 +5944,11 @@
             },
             "summary": {
               "type": "string",
-              "description": "User-facing description of what changed, in the user language (at most 240 characters)."
+              "description": "Shown to the user on the change card: what changed, in their language and everyday words (at most 240 characters)."
             },
             "evidence": {
               "type": "string",
-              "description": "Specific feedback or observed friction supporting the change (at most 600 characters)."
+              "description": "Shown to the user as the reason: what happened in your work together that shows this would help them, in their language and everyday words (at most 600 characters)."
             }
           },
           "required": [
@@ -6575,7 +6575,7 @@
       "type": "function",
       "function": {
         "name": "manage_human",
-        "description": "Read or update the human collaboration document HUMAN.md. First read to obtain content and version, then update with the full revised Markdown and expectedVersion. Changes are applied immediately; the user receives a card and may edit or undo. Scope project is only for this project; scope agent is for collaboration that remains useful outside it. Preserve user edits. It holds YOUR advice and requests to the human: concrete input, context or decisions they can contribute, habits on their side that would help, and optional learning tied to a goal. What the human tells or requires of you (their corrections and preferences) does not belong here; save that with remember. Use specific evidence; avoid personality judgments, permissions, transient tool failures and unsolicited homework. Keep it concise; batch related changes. Never write this file using generic file or shell tools.",
+        "description": "Read or update HUMAN.md, the note you write to the human about what THEY can do so that working with you goes better (they see it as the collaboration handbook). First read to obtain content and version, then update with the full revised Markdown and expectedVersion. Changes are applied immediately; the user receives a card and may edit or undo. Scope project is only for this project; scope agent is for advice that remains useful outside it. Preserve user edits. The human is the reader. Each item is one thing THEY can do, never something you will do. When what prompts you is the human correcting you or telling you how they want you to work, that is about what you do: save it with remember and leave this note as it is, even when the note already covers a related point. Say each item to them as \"you\", in their language, in plain sentences rather than a form of labelled fields, with an example from your work together and what it saves them. Use the words they used themselves; where you need a word they did not say, describe the thing in a few plain words instead of naming it with a category or specialist term: write \"which orders do not count\", not \"exclusion criteria\"; \"who will read it\", not \"target audience\". Leave out your own commitments, even as a closing reassurance (say those in your reply), and tool names, file names and labels the human did not give you. Before saving, reread the draft as they would and replace every word they would not say themselves. Use specific evidence; avoid personality judgments, permissions, transient tool failures and unsolicited homework. Keep it concise; batch related changes. Never write this file using generic file or shell tools.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -6595,7 +6595,7 @@
             },
             "content": {
               "type": "string",
-              "description": "The complete updated Markdown; at most 12000 characters. Preserve unrelated sections."
+              "description": "The complete updated Markdown, written to the human in their language; at most 12000 characters. Preserve unrelated sections."
             },
             "expectedVersion": {
               "type": "string",
@@ -6603,11 +6603,11 @@
             },
             "summary": {
               "type": "string",
-              "description": "User-facing description of what changed, in the user language (at most 240 characters)."
+              "description": "Shown to the user on the change card: what changed, in their language and everyday words (at most 240 characters)."
             },
             "evidence": {
               "type": "string",
-              "description": "Specific feedback or observed friction supporting the change (at most 600 characters)."
+              "description": "Shown to the user as the reason: what happened in your work together that shows this would help them, in their language and everyday words (at most 600 characters)."
             }
           },
           "required": [
@@ -7499,7 +7499,7 @@
       "type": "function",
       "function": {
         "name": "manage_human",
-        "description": "Read or update the human collaboration document HUMAN.md. First read to obtain content and version, then update with the full revised Markdown and expectedVersion. Changes are applied immediately; the user receives a card and may edit or undo. Scope project is only for this project; scope agent is for collaboration that remains useful outside it. Preserve user edits. It holds YOUR advice and requests to the human: concrete input, context or decisions they can contribute, habits on their side that would help, and optional learning tied to a goal. What the human tells or requires of you (their corrections and preferences) does not belong here; save that with remember. Use specific evidence; avoid personality judgments, permissions, transient tool failures and unsolicited homework. Keep it concise; batch related changes. Never write this file using generic file or shell tools.",
+        "description": "Read or update HUMAN.md, the note you write to the human about what THEY can do so that working with you goes better (they see it as the collaboration handbook). First read to obtain content and version, then update with the full revised Markdown and expectedVersion. Changes are applied immediately; the user receives a card and may edit or undo. Scope project is only for this project; scope agent is for advice that remains useful outside it. Preserve user edits. The human is the reader. Each item is one thing THEY can do, never something you will do. When what prompts you is the human correcting you or telling you how they want you to work, that is about what you do: save it with remember and leave this note as it is, even when the note already covers a related point. Say each item to them as \"you\", in their language, in plain sentences rather than a form of labelled fields, with an example from your work together and what it saves them. Use the words they used themselves; where you need a word they did not say, describe the thing in a few plain words instead of naming it with a category or specialist term: write \"which orders do not count\", not \"exclusion criteria\"; \"who will read it\", not \"target audience\". Leave out your own commitments, even as a closing reassurance (say those in your reply), and tool names, file names and labels the human did not give you. Before saving, reread the draft as they would and replace every word they would not say themselves. Use specific evidence; avoid personality judgments, permissions, transient tool failures and unsolicited homework. Keep it concise; batch related changes. Never write this file using generic file or shell tools.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -7519,7 +7519,7 @@
             },
             "content": {
               "type": "string",
-              "description": "The complete updated Markdown; at most 12000 characters. Preserve unrelated sections."
+              "description": "The complete updated Markdown, written to the human in their language; at most 12000 characters. Preserve unrelated sections."
             },
             "expectedVersion": {
               "type": "string",
@@ -7527,11 +7527,11 @@
             },
             "summary": {
               "type": "string",
-              "description": "User-facing description of what changed, in the user language (at most 240 characters)."
+              "description": "Shown to the user on the change card: what changed, in their language and everyday words (at most 240 characters)."
             },
             "evidence": {
               "type": "string",
-              "description": "Specific feedback or observed friction supporting the change (at most 600 characters)."
+              "description": "Shown to the user as the reason: what happened in your work together that shows this would help them, in their language and everyday words (at most 600 characters)."
             }
           },
           "required": [
@@ -8562,7 +8562,7 @@
       "type": "function",
       "function": {
         "name": "manage_human",
-        "description": "Read or update the human collaboration document HUMAN.md. First read to obtain content and version, then update with the full revised Markdown and expectedVersion. Changes are applied immediately; the user receives a card and may edit or undo. Scope project is only for this project; scope agent is for collaboration that remains useful outside it. Preserve user edits. It holds YOUR advice and requests to the human: concrete input, context or decisions they can contribute, habits on their side that would help, and optional learning tied to a goal. What the human tells or requires of you (their corrections and preferences) does not belong here; save that with remember. Use specific evidence; avoid personality judgments, permissions, transient tool failures and unsolicited homework. Keep it concise; batch related changes. Never write this file using generic file or shell tools.",
+        "description": "Read or update HUMAN.md, the note you write to the human about what THEY can do so that working with you goes better (they see it as the collaboration handbook). First read to obtain content and version, then update with the full revised Markdown and expectedVersion. Changes are applied immediately; the user receives a card and may edit or undo. Scope project is only for this project; scope agent is for advice that remains useful outside it. Preserve user edits. The human is the reader. Each item is one thing THEY can do, never something you will do. When what prompts you is the human correcting you or telling you how they want you to work, that is about what you do: save it with remember and leave this note as it is, even when the note already covers a related point. Say each item to them as \"you\", in their language, in plain sentences rather than a form of labelled fields, with an example from your work together and what it saves them. Use the words they used themselves; where you need a word they did not say, describe the thing in a few plain words instead of naming it with a category or specialist term: write \"which orders do not count\", not \"exclusion criteria\"; \"who will read it\", not \"target audience\". Leave out your own commitments, even as a closing reassurance (say those in your reply), and tool names, file names and labels the human did not give you. Before saving, reread the draft as they would and replace every word they would not say themselves. Use specific evidence; avoid personality judgments, permissions, transient tool failures and unsolicited homework. Keep it concise; batch related changes. Never write this file using generic file or shell tools.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -8582,7 +8582,7 @@
             },
             "content": {
               "type": "string",
-              "description": "The complete updated Markdown; at most 12000 characters. Preserve unrelated sections."
+              "description": "The complete updated Markdown, written to the human in their language; at most 12000 characters. Preserve unrelated sections."
             },
             "expectedVersion": {
               "type": "string",
@@ -8590,11 +8590,11 @@
             },
             "summary": {
               "type": "string",
-              "description": "User-facing description of what changed, in the user language (at most 240 characters)."
+              "description": "Shown to the user on the change card: what changed, in their language and everyday words (at most 240 characters)."
             },
             "evidence": {
               "type": "string",
-              "description": "Specific feedback or observed friction supporting the change (at most 600 characters)."
+              "description": "Shown to the user as the reason: what happened in your work together that shows this would help them, in their language and everyday words (at most 600 characters)."
             }
           },
           "required": [
@@ -9606,7 +9606,7 @@
       "type": "function",
       "function": {
         "name": "manage_human",
-        "description": "Read or update the human collaboration document HUMAN.md. First read to obtain content and version, then update with the full revised Markdown and expectedVersion. Changes are applied immediately; the user receives a card and may edit or undo. Scope project is only for this project; scope agent is for collaboration that remains useful outside it. Preserve user edits. It holds YOUR advice and requests to the human: concrete input, context or decisions they can contribute, habits on their side that would help, and optional learning tied to a goal. What the human tells or requires of you (their corrections and preferences) does not belong here; save that with remember. Use specific evidence; avoid personality judgments, permissions, transient tool failures and unsolicited homework. Keep it concise; batch related changes. Never write this file using generic file or shell tools.",
+        "description": "Read or update HUMAN.md, the note you write to the human about what THEY can do so that working with you goes better (they see it as the collaboration handbook). First read to obtain content and version, then update with the full revised Markdown and expectedVersion. Changes are applied immediately; the user receives a card and may edit or undo. Scope project is only for this project; scope agent is for advice that remains useful outside it. Preserve user edits. The human is the reader. Each item is one thing THEY can do, never something you will do. When what prompts you is the human correcting you or telling you how they want you to work, that is about what you do: save it with remember and leave this note as it is, even when the note already covers a related point. Say each item to them as \"you\", in their language, in plain sentences rather than a form of labelled fields, with an example from your work together and what it saves them. Use the words they used themselves; where you need a word they did not say, describe the thing in a few plain words instead of naming it with a category or specialist term: write \"which orders do not count\", not \"exclusion criteria\"; \"who will read it\", not \"target audience\". Leave out your own commitments, even as a closing reassurance (say those in your reply), and tool names, file names and labels the human did not give you. Before saving, reread the draft as they would and replace every word they would not say themselves. Use specific evidence; avoid personality judgments, permissions, transient tool failures and unsolicited homework. Keep it concise; batch related changes. Never write this file using generic file or shell tools.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -9626,7 +9626,7 @@
             },
             "content": {
               "type": "string",
-              "description": "The complete updated Markdown; at most 12000 characters. Preserve unrelated sections."
+              "description": "The complete updated Markdown, written to the human in their language; at most 12000 characters. Preserve unrelated sections."
             },
             "expectedVersion": {
               "type": "string",
@@ -9634,11 +9634,11 @@
             },
             "summary": {
               "type": "string",
-              "description": "User-facing description of what changed, in the user language (at most 240 characters)."
+              "description": "Shown to the user on the change card: what changed, in their language and everyday words (at most 240 characters)."
             },
             "evidence": {
               "type": "string",
-              "description": "Specific feedback or observed friction supporting the change (at most 600 characters)."
+              "description": "Shown to the user as the reason: what happened in your work together that shows this would help them, in their language and everyday words (at most 600 characters)."
             }
           },
           "required": [
