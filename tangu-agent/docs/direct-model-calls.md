@@ -7,7 +7,7 @@
 `buildProviderPayload` 的 `thinkingLevel` 不传时，直连面（`llm/openaiCompat.ts` 的 `tuneOpenAiDirectPayload`）和托管面（server 的 `llmService`）都按 `'off'` 处理：
 
 - 能关思考的模型，发出去的是明确的「不思考」（OpenAI 系是 `reasoning_effort: none`，Claude 是 `thinking: {type: 'disabled'}`，Qwen 是 `enable_thinking: false`）。不报错，用量里推理 token 是 0。
-- 关不掉思考的模型（GPT-6 Astra、GPT-6.1 Sol、Opus 5.5 等，能力表里 `off: null`），落到它支持的最低一档。
+- 关不掉思考的模型（GPT-6 Astra、GPT-6.1 Sol、Opus 5.5、Sonnet 5.5 等，能力表里 `off: null`），落到它支持的最低一档。
 - 能力表里没有登记的端点，什么字段都不发。
 
 所以**新写一处直接调用时，要逐条判断、分类、合并、改写的，必须自己给档位**。档位一律走 `llm/modelCapabilities.ts` 的能力表夹到模型真支持的档上，调用方不用管各家的字段。
