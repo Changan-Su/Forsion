@@ -2,7 +2,7 @@
 name: forsion-extension-development
 description: 当用户要给 Forsion / Tangu 做插件、主题、Space、智能体(agent)或捆绑包(bundle)——或要把某个能力做成可分发/可上架商店的扩展——时使用;已装的插件 / Space / 视图不出现、加载失败、更新后不工作要排查时也用(带一份插件体检脚本 tools/check-plugin.mjs)。内置五类官方模板(samples/),讲清各自的格式基线与硬约束(尤其两种"插件"是完全不同的系统),照抄模板改比从零写靠谱。
 metadata:
-  version: 1.27.0
+  version: 1.28.0
   author: Forsion
   category: Forsion
 ---
@@ -286,6 +286,7 @@ ctx.registerView({ id: 'home', title: 'Muse', mount(el) {
 | `registerSetting` | 详情页声明式表单(number/boolean/text) | 每键一个字符串,**没有原子性**;同 key 重注册即覆盖 |
 | `ctx.ui.mountMarkdownEditor` | 视图内原生 Amadeus Markdown 编辑器 | 正文归调用方(API 草稿等),**不碰笔记库**;保存前 `getValue()`;老宿主没有 → 可选链 |
 | `ctx.ui.mountFloatingToc` | 视图内原生悬浮目录 | 插件保有正文 DOM,宿主负责扫描 / 滚动高亮 / 跳转 / 主题;老宿主没有 → 可选链 |
+| `ctx.ui.mountBoard` / `ctx.ui.boardToSvg` | 盖在自己内容上的透明白板层(手写 / 圈画) | 和 `.excalidraw.md` 白板同一个引擎、同样的七支笔;**视口归调用方**(自己推 `viewport`、自己接滚轮);元素原样存取;不在手写时用 `boardToSvg` 出静态图;老宿主没有 → 不出手写入口 |
 | `ctx.table.mount` | 面板里的原生多维表(只读) | 一份规格 → 真 DbTable(筛选/搜索/隐藏列/排序/统计全套),**不依赖笔记库**;老宿主没有 → 可选链 + 自己的表格降级(见下) |
 
 #### Extend View:随主视图挂载的临时扩展(2026-09-05)
@@ -550,6 +551,43 @@ ctx.registerView({ id: 'manual', title: 'Manual', mount(el) {
 - DOM 的增删和文字变化会自动重扫;只有 Shadow DOM / 第三方画布等观察不到的变化才调返回句柄的 `refresh()`。
   `dispose()` 幂等,同步摘掉宿主加在 `shell` 里的那层(你的正文不动);插件禁用 / 重载时宿主也会统一卸载。
 - 旧宿主整个 `ctx.ui` 不存在,一律 `ctx.ui?.mountFloatingToc(...)`;缺席时可继续显示正文,不必仿一份目录。
+
+### 白板层 ctx.ui.mountBoard / ctx.ui.boardToSvg(2026-10-10 起)
+
+要在自己的内容上**手写 / 圈画**(PDF 页、图片、时间轴)时,不要自己做笔迹:`ctx.ui.mountBoard(el, opts)` 把宿主的白板引擎
+(和 `.excalidraw.md` 白板同一个,同样的七支笔与笔触)挂成一块**透明、没有工具栏**的层,盖在你的内容上。
+画出来的就是白板元素 —— 原样(JSON)存、原样交回,能和真白板互相粘贴。
+
+```js
+if (ctx.ui?.mountBoard) {                                  // 老宿主没有:不出「手写」入口,别仿一个
+  const board = ctx.ui.mountBoard(layerEl, {
+    scene: { elements: saved },                            // 上次存的元素,原样交回
+    viewport: { scrollX, scrollY, zoom },                  // 画布上的点落在 (点 + scroll) × zoom 处(相对 layerEl 左上角,CSS 像素)
+    tool: 'freedraw', pen: 'fountain', theme: 'light',     // 底下的内容深色模式也是浅色的(PDF 页)就钉 'light',否则引擎会给笔迹反色
+    onChange: (scene) => saveSoon(scene.elements),         // 落笔途中每帧都来 → 自己攒一下再存
+    onWheel: (ev) => scroller.scrollBy(ev.deltaX, ev.deltaY), // 这层吃指针、不吃滚轮:滚轮 / 捏合原样交给你
+  })
+  scroller.addEventListener('scroll', () => board.update({ viewport: currentViewport() }))
+  // board.update({ tool: 'eraser' }) / board.update({ pen, strokeColor, strokeWidth }) / board.undo() / board.redo()
+  // 视图卸载、或退出手写:board.dispose()
+}
+```
+
+- **视口归你。** 这层自己不滚不缩:你的滚动容器、缩放控件变了就 `update({ viewport })`;引擎自己挪了视口会被拉回你给的值。
+- **坐标系归你。** 元素的 `x` / `y` 是画布坐标。想让笔迹跟着内容走(换缩放、换窗口宽度都不偏),存之前换成你内容自己的坐标(PDF 用页内 pt),挂载时再换回来;只平移 `x` / `y` 即可,别动 `points`。
+- `tool`:`selection` `freedraw` `eraser` `text` `rectangle` `ellipse` `arrow` `line`;`pen`(仅 `freedraw`):`default` `finetip` `fountain` `marker` `highlighter` `thick-thin` `thin-thick-thin`。`strokeColor` / `strokeWidth`(引擎线宽 0.5 / 1 / 2 / 4)覆盖这支笔自带的。
+- `onChange` 只在**元素**变了时来(画完一笔、擦掉、撤销),视口变化和你自己 `update({ scene })` 推进去的不算。`getScene()` 不含已删除的元素。
+- `update({ scene })` 是「从盘上重载」:整份替换、不进撤销栈。
+- 不接管全局快捷键:撤销 / 重做由你接按键(或放按钮)再调 `undo()` / `redo()`。
+- `dispose()` 幂等,之后 `el` 立刻归还(见上「dispose 契约」);插件禁用 / 重载时宿主统一卸载。**退出手写前先 `getScene()` 存一次。**
+- 参数不对(没给 `scene.elements` / `viewport` 不是三个有限数且 `zoom > 0`)同步抛 `TypeError`。
+
+**不在手写时怎么显示笔迹**:`await ctx.ui.boardToSvg({ elements }, { theme: 'light', padding: 4 })` → `{ svg, x, y, width, height } | null`(空场景是 `null`)。
+`x` / `y` / `width` / `height` 是这幅画在画布坐标里的包围盒(含 `padding`):把 `svg` 放在 `(x + scrollX) × zoom`、宽 `width × zoom`,就和白板层里的位置重合。
+荧光笔要和底下的内容「正片叠底」才不盖字:给白板层的容器和静态 SVG 都加 `mix-blend-mode: multiply`,并保证它们到内容之间没有新的层叠上下文。
+
+参考实现:`forsion-plugin-pdf-reader` 的 `src/ink.ts`(整份文档一张连续画布、按页拆存、静态图与导出)。
+仪器:宿主 `frontend/src/amadeus/plugins/boardSurface.test.ts` / `boardCtx.test.ts`;真 Electron 见 PDF 阅读器插件仓的 `npm run verify`。
 
 ### 仪表盘 ctx.dashboard(2026-09-01 起)
 
@@ -1296,6 +1334,10 @@ Forsion Android App 也跑 Forsion 插件(同一份 `pluginStore`、同一个 `c
 
 `ctx.ui?.mountMarkdownEditor(el, { value, label, readOnly, onChange })` mounts native Amadeus without using the active vault. The caller owns save/publish. It offers visual/source/publishing preview modes. `getValue()` reads the latest synchronous editor transaction; `update`, `insertMarkdown`, `focus`, and idempotent `dispose` are available; after `dispose` the element is yours again at once. The host revokes it on plugin unload. Feature-detect; absent hosts should ask for an upgrade.
 
+
+### Whiteboard layer (2026-10-10)
+
+`ctx.ui?.mountBoard?.(el, { scene, viewport, tool, pen, strokeColor, strokeWidth, theme, onChange, onWheel, onReady })` mounts the host whiteboard engine as a transparent, chrome-less layer over the plugin's own content (PDF pages, images, timelines). Strokes are real whiteboard elements: store `scene.elements` verbatim and hand them back unchanged. The caller owns the viewport — a scene point lands at `(point + scroll) * zoom` CSS pixels from the top-left of `el` — and pushes it with `handle.update({ viewport })`; the layer never pans or zooms by itself and forwards every wheel / pinch event to `onWheel`. `onChange` fires for element changes only. The handle exposes `update`, `getScene`, `undo`, `redo` and an idempotent `dispose`; invalid options throw `TypeError` synchronously. `await ctx.ui.boardToSvg({ elements }, { theme, padding })` renders a static SVG plus its scene-space bounds (`null` for an empty scene) for showing ink while no live layer is mounted. Feature-detect both on older hosts and hide the handwriting entry instead of imitating it.
 
 ### Plugin Chat Box selection and Director hand-off (2026-09-30)
 

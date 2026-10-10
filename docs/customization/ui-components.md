@@ -122,3 +122,38 @@ Settings → Appearance has three switches the user turns on or off one by one (
 - For long-form reading text, use `line-height: var(--reading-line-height, 1.6)` and a paragraph gap of `var(--reading-paragraph-gap, 0.3em)`; the fallbacks are the values with the switch off. Lists, forms, cards and tables are interface text and do not use these tokens. Content mounted through `ctx.ui.mountMarkdownEditor`, `ctx.app.mountBlocks` or `ctx.tangu.mountChat` follows automatically.
 - Do not add an entrance animation on the view root (the host already fades the main view in once). Use `--duration-fast`, `--duration-slow` and `--ease-out` for transitions inside the view, and disable them under `prefers-reduced-motion`.
 - The switches belong to the user: do not read or write `forsion_calm_*` or `<html data-calm-*>`, and do not ship a private switch of the same kind. Pages inside an iframe or webview cannot see host variables and will not fade.
+
+### 盖在自己内容上的白板层 / A whiteboard layer over your own content (2026-10-10)
+
+`ctx.ui?.mountBoard?.(el, opts)` 把宿主的白板引擎（和 `.excalidraw.md` 白板同一个，同样的七支笔）挂成一块透明、没有工具栏的层，盖在插件自己的内容上（PDF 页、图片、时间轴），用来手写和圈画。画出来的是白板元素：`scene.elements` 原样（JSON）保存、原样交回，能和真白板互相粘贴。
+
+```js
+const board = ctx.ui?.mountBoard?.(layerEl, {
+  scene: { elements: saved },
+  viewport: { scrollX, scrollY, zoom },   // 画布上的点落在 (点 + scroll) × zoom 处，相对 layerEl 左上角，CSS 像素
+  tool: 'freedraw', pen: 'fountain', theme: 'light',
+  onChange: (scene) => saveSoon(scene.elements),
+  onWheel: (ev) => scroller.scrollBy(ev.deltaX, ev.deltaY),
+})
+scroller.addEventListener('scroll', () => board?.update({ viewport: currentViewport() }))
+```
+
+- 视口归调用方：这层自己不滚不缩，滚动容器或缩放变了就 `update({ viewport })`；滚轮和捏合事件原样交给 `onWheel`，不传就丢弃。
+- `tool` 取 `selection`、`freedraw`、`eraser`、`text`、`rectangle`、`ellipse`、`arrow`、`line`；`pen`（只对 `freedraw` 有意义）取 `default`、`finetip`、`fountain`、`marker`、`highlighter`、`thick-thin`、`thin-thick-thin`；`strokeColor`、`strokeWidth` 覆盖这支笔自带的颜色和粗细。
+- `theme` 缺省跟随宿主明暗。底下的内容在深色模式下仍是浅色（PDF 页）时传 `'light'`，否则引擎会给笔迹反色。
+- `onChange` 只在元素变了时触发（画完一笔、擦除、撤销），视口变化和调用方自己推进去的 `scene` 不触发；落笔途中每帧都会来，保存要自己攒。
+- 句柄：`update(patch)`、`getScene()`（不含已删除的元素）、`undo()`、`redo()`、`dispose()`。`update({ scene })` 整份替换且不进撤销栈。这层不接管全局快捷键。
+- 参数不对（缺 `scene.elements`，或 `viewport` 不是三个有限数且 `zoom > 0`）同步抛 `TypeError`。`dispose()` 幂等，之后 `el` 归还；插件禁用或重载时宿主统一卸载。
+- 不在手写时用 `await ctx.ui.boardToSvg({ elements }, { theme, padding })` 出静态图，得到 `{ svg, x, y, width, height }`（空场景是 `null`）；`x`、`y`、`width`、`height` 是画布坐标里的包围盒，把 `svg` 放在 `(x + scrollX) × zoom`、宽 `width × zoom` 处即与白板层里的位置重合。
+- 旧宿主没有这两个方法：先特性探测，没有就不出手写入口，不要仿一个。
+
+`ctx.ui?.mountBoard?.(el, opts)` mounts the host whiteboard engine (the one behind `.excalidraw.md` boards, with the same seven pens) as a transparent layer without a toolbar over the plugin's own content, such as PDF pages, images or a timeline. Strokes are whiteboard elements: store `scene.elements` verbatim as JSON and hand them back unchanged; they paste into a real board and back.
+
+- The caller owns the viewport. A scene point lands at `(point + scroll) * zoom` CSS pixels from the top-left corner of `el`. The layer never pans or zooms by itself: call `update({ viewport })` when your scroll container or zoom changes. Wheel and pinch events are handed to `onWheel` untouched and dropped without it.
+- `tool` is one of `selection`, `freedraw`, `eraser`, `text`, `rectangle`, `ellipse`, `arrow`, `line`. `pen` (only with `freedraw`) is one of `default`, `finetip`, `fountain`, `marker`, `highlighter`, `thick-thin`, `thin-thick-thin`. `strokeColor` and `strokeWidth` override the pen's own.
+- `theme` defaults to the host's mode. Pass `'light'` when the surface underneath stays light in dark mode (a PDF page), otherwise the engine recolours the ink.
+- `onChange` fires when elements change (a stroke ends, an erase, an undo), not for viewport changes or a `scene` you pushed in. It fires on every frame while drawing, so debounce your saving.
+- The handle has `update(patch)`, `getScene()` (deleted elements left out), `undo()`, `redo()` and `dispose()`. `update({ scene })` replaces the content without an undo entry. The layer does not handle global shortcuts.
+- Invalid options (no `scene.elements`, or a `viewport` that is not three finite numbers with `zoom > 0`) throw `TypeError` synchronously. `dispose()` is idempotent and returns `el` to you; the host also unmounts on plugin disable or reload.
+- While no live layer is mounted, `await ctx.ui.boardToSvg({ elements }, { theme, padding })` returns `{ svg, x, y, width, height }` (`null` for an empty scene). The bounds are in scene units: place `svg` at `(x + scrollX) * zoom` with a width of `width * zoom` to match the live layer.
+- Older hosts lack both methods. Feature-detect and hide the handwriting entry instead of imitating it.
