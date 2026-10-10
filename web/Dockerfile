@@ -8,8 +8,13 @@
 # (.dockerignore 用同目录 web/Dockerfile.dockerignore:放行 desktop/frontend、排除 node_modules/dist)
 # =====================================================
 
+# 基础镜像从哪个仓库拉。缺省 Docker Hub:本地 / 服务器现场 build 照旧,daemon 里配的 registry-mirrors 继续生效。
+# CI(build-web.yml)传 public.ecr.aws/docker/library —— Docker 官方镜像在 ECR Public 上的同一份(清单摘要逐字相同):
+# GitHub 公共 runner 匿名向 Docker Hub 要清单会被限流(429),2026-10-09 连着红了六次。
+ARG BASE_REGISTRY=docker.io/library
+
 # ---- Build stage ----
-FROM node:22-alpine AS builder
+FROM ${BASE_REGISTRY}/node:22-alpine AS builder
 WORKDIR /app
 # 依赖装在公共祖先 /app(web/ 与 desktop/frontend/ 都在其下):node 解析裸 import 向上找 node_modules,
 # 故被别名复用的 desktop 源里的 react/lucide-react/… 也能从 /app/node_modules 解析。
@@ -43,7 +48,7 @@ COPY web ./web
 RUN cd web && npm run build   # vite 经 /app/node_modules 解析全部依赖 → /app/web/dist(base '/')
 
 # ---- Production stage (Nginx) ----
-FROM nginx:alpine AS production
+FROM ${BASE_REGISTRY}/nginx:alpine AS production
 RUN apk add --no-cache gettext
 COPY web/nginx.conf.template /etc/nginx/templates/default.conf.template
 COPY web/docker-entrypoint.sh /docker-entrypoint.sh
