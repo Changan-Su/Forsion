@@ -25,6 +25,48 @@ class NativeChromeStateTest {
         assertTrue(s.spaces[0].icon is NativeIconSpec.Vector)
     }
 
+    private fun nine(mark: (Int) -> String) = (0 until 9).joinToString(",", "[", "]") { """{"id":"s$it","label":"S$it","active":${it == 8}${mark(it)}}""" }
+
+    @Test fun dockHoldsEverySpaceWhileTheyFitAndThePinnedFourBeyondThat() {
+        // five fit as they are — whatever is pinned
+        val five = ChromeState.parse(shell("""[{"id":"a","label":"A"},{"id":"b","label":"B","pinned":true},{"id":"c","label":"C"},{"id":"d","label":"D"},{"id":"e","label":"E"}]"""))
+        assertEquals(listOf("a", "b", "c", "d", "e"), five.dock.map { it.id })
+        assertTrue(five.more.isEmpty())
+        // nine: the pinned ones in list order, four at most; the rest behind "all"
+        val nine = ChromeState.parse(shell(nine { if (it in setOf(0, 2, 3, 5, 8)) ""","pinned":true""" else "" }))
+        assertEquals(listOf("s0", "s2", "s3", "s5"), nine.dock.map { it.id })
+        assertEquals(listOf("s1", "s4", "s6", "s7", "s8"), nine.more.map { it.id })
+        assertTrue(nine.more.any { it.active })
+        // a page that marks none (an older bundle) still gets a dock: the first four
+        val unmarked = ChromeState.parse(shell(nine { "" }))
+        assertEquals(listOf("s0", "s1", "s2", "s3"), unmarked.dock.map { it.id })
+        assertEquals(5, unmarked.more.size)
+        // fewer pinned than cells: only those — the dock never fills itself up with Spaces the user did not choose
+        assertEquals(listOf("s0", "s6"), ChromeState.parse(shell(nine { if (it == 0 || it == 6) ""","pinned":true""" else "" })).dock.map { it.id })
+    }
+
+    @Test fun allCellsDotIsTheMostPressingOneBehindIt() {
+        fun badge(kind: String) = ""","badge":{"kind":"$kind","label":"$kind"}"""
+        val s = ChromeState.parse(shell(nine { when (it) { 1 -> badge("attention"); 5 -> badge("unread"); 6 -> badge("running"); else -> "" } }))
+        assertEquals(ChromeBadge.Kind.RUNNING, s.moreBadge!!.kind) // s1's (waiting) is in the dock: it shows its own
+        assertNull(ChromeState.parse(shell(nine { "" })).moreBadge)
+        assertEquals(ChromeBadge.Kind.ATTENTION, ChromeState.parse(shell(nine { when (it) { 4 -> badge("unread"); 7 -> badge("attention"); else -> "" } })).moreBadge!!.kind)
+    }
+
+    @Test fun shellMayNameTheAllCellASearchButtonAndASecondTitlePart() {
+        val plain = ChromeState.parse(shell(null))
+        assertEquals(listOf("", "", ""), listOf(plain.allLabel, plain.search, plain.titleSub))
+        assertFalse(plain.titleTap)
+        val s = ChromeState.parse(shell(null).put("allLabel", "All").put("search", "Search").put("titleSub", "Cloud").put("titleTap", true)
+            .put("icons", JSONObject("""{"all":$icon,"search":$icon,"titleMore":$icon}""")))
+        assertEquals(listOf("All", "Search", "Cloud"), listOf(s.allLabel, s.search, s.titleSub))
+        assertTrue(s.titleTap)
+        assertTrue(s.icons.all is NativeIconSpec.Vector && s.icons.search is NativeIconSpec.Vector && s.icons.titleMore is NativeIconSpec.Vector)
+        for (action in listOf("search", "title", "spacesAll")) assertTrue(action in ChromeState.ACTIONS)
+        assertThrows(IllegalArgumentException::class.java) { ChromeState.parse(shell(null).put("titleTap", "yes")) }
+        assertThrows(IllegalArgumentException::class.java) { ChromeState.parse(shell(null).put("allLabel", "x".repeat(129))) }
+    }
+
     @Test fun noBarWithoutAChoiceOrOutsideTheShell() {
         assertFalse(ChromeState.parse(shell(null)).spaceBar)
         assertFalse(ChromeState.parse(shell("""[{"id":"only","label":"Only","active":true}]""")).spaceBar)

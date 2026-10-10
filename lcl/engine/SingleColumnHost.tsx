@@ -11,16 +11,17 @@
  */
 import { Suspense, createElement, useEffect, useRef, useState, type RefObject } from 'react'
 import { flushSync } from 'react-dom'
-import { PanelLeft, PanelRight, X, MoreHorizontal, Plus, Zap } from 'lucide-react'
+import { PanelLeft, PanelRight, X, MoreHorizontal, Plus, Zap, SlidersHorizontal, Check } from 'lucide-react'
 import { useSpaceStore, setActiveSpace, getActiveSpace, pinSpaceToHome } from './spaceRegistry'
 import { useRibbonStore } from './ribbonRegistry'
 import { useCommandStore } from './commandRegistry'
 import { accountMenuItems, moreCommandGroups, moreCommandOn, moreCommandTitle, moreItems, moreRowLabel, presentedCommand } from './moreSheet'
 import { getView } from './viewRegistry'
-import { label, identitySig, type RibbonItem } from './types'
+import { label, identitySig, type RibbonItem, type SpaceIcon } from './types'
 import { nativeSheetPresenter, presentNativeMenu, type NativeMenuItem } from './nativeSheet'
 import type { SheetMenuItem } from './nativeSheetMenu'
-import { setNativeChromeShell, useNativeChromeInstalled, useNativeChromeSpaces, nativeChromeDrawsSpaces, type NativeChromeShellLabels, type NativeChromeSpace } from './nativeChrome'
+import { setNativeChromeShell, useNativeChromeInstalled, useNativeChromeSpaces, nativeChromeDrawsSpaces, nativeChromeExtras, subscribeNativeChromeExtras, type NativeChromeShellLabels, type NativeChromeSpace } from './nativeChrome'
+import { DOCK_PICKS, dockSpaceIds, subscribeDockPicks, toggleDockPick } from './spaceDock'
 import { ExtendViewHost } from './ExtendViewHost'
 import { presentInlineExtension } from './extendView'
 import { NativeExtendView } from './nativeExtendView'
@@ -350,7 +351,11 @@ function switchSpaceKeepDrawer(id: string): void {
 function nativeSpaceList(): NativeChromeSpace[] {
   const { spaces, activeSpaceId } = useSpaceStore.getState()
   const known = spaces.some((x) => x.id === activeSpaceId)
-  return spaces.map((sp, i) => ({ id: sp.id, label: label(sp.name), active: known ? sp.id === activeSpaceId : i === 0, iconRev: iconRev(sp.icon) }))
+  const inDock = dockSpaceIds(spaces.map((x) => x.id))
+  return spaces.map((sp, i) => ({
+    id: sp.id, label: label(sp.name), active: known ? sp.id === activeSpaceId : i === 0, iconRev: iconRev(sp.icon),
+    ...(inDock.has(sp.id) ? { pinned: true } : {}),
+  }))
 }
 // 图标组件的身份号:Space 同 id 同名只换了图标(插件热重载)时,状态的 JSON 得跟着变,否则被接缝的去重吞掉、原生栏留着旧图标。
 const iconRevs = new WeakMap<object, number>()
@@ -496,6 +501,54 @@ async function presentNativeTabs(tr: Tr): Promise<boolean> {
  *  行 id 加 `cmd:` 前缀与 ribbon id 分开,选中走命令表 run(同命令面板),但只在注册表里那条仍是呈现时的对象时才跑。 */
 /** 「⋯」里「新建标签页」那一行的 id(带冒号,撞不上 ribbon 项的 id)。 */
 const NEW_TAB = 'tab:new'
+
+/** Dock 放不下所有 Space 时,「全部」格点开的半屏:所有 Space 排成格子(在 Dock 里的一组、其余一组),点一个就去;
+ *  末尾一行进「选哪几个固定在 Dock」。只有原生宿主画 Dock 时才有这个入口,所以没有 Web 版。 */
+const spaceTileIcon = (sp: { icon?: SpaceIcon }): NativeMenuItem['icon'] =>
+  (sp.icon?.imageUrl ? sp.icon.nativeFallback : sp.icon) // 图片图标半屏里画不了,退回它的线条图标
+async function presentAllSpaces(tr: Tr): Promise<void> {
+  const { spaces, activeSpaceId } = useSpaceStore.getState()
+  const inDock = dockSpaceIds(spaces.map((x) => x.id))
+  const tile = (sp: (typeof spaces)[number]): NativeMenuItem => ({
+    id: `space:${sp.id}`, label: label(sp.name), icon: spaceTileIcon(sp), ...(sp.id === activeSpaceId ? { checked: true } : {}),
+  })
+  const out = await presentNativeMenu({
+    title: tr('lcl.mobile.allSpacesTitle'),
+    sections: [
+      { title: tr('lcl.mobile.dock.inDock'), grid: true, items: spaces.filter((x) => inDock.has(x.id)).map(tile) },
+      { title: tr('lcl.mobile.dock.others'), grid: true, items: spaces.filter((x) => !inDock.has(x.id)).map(tile) },
+      { items: [{ id: 'dock:edit', label: tr('lcl.mobile.dock.edit'), icon: SlidersHorizontal }] },
+    ].filter((s) => s.items.length),
+  })
+  const id = out.handled ? out.value?.id : undefined
+  if (!id) return
+  if (id === 'dock:edit') { void presentDockPicks(tr); return }
+  setActiveSpace(id.slice('space:'.length))
+}
+/** 选哪几个 Space 固定在 Dock:勾选即生效。原生答复是一次性的,所以每点一下按新状态重弹一次(同标签页那张)。 */
+async function presentDockPicks(tr: Tr): Promise<void> {
+  const spaces = useSpaceStore.getState().spaces
+  const ids = spaces.map((x) => x.id)
+  const inDock = dockSpaceIds(ids)
+  const full = ids.slice(1).filter((x) => inDock.has(x)).length >= DOCK_PICKS
+  const out = await presentNativeMenu({
+    title: tr('lcl.mobile.dock.editTitle'),
+    sections: [
+      {
+        items: spaces.slice(1).map((sp) => ({
+          id: `pick:${sp.id}`, label: label(sp.name), icon: spaceTileIcon(sp),
+          ...(inDock.has(sp.id) ? { checked: true } : full ? { disabled: true } : {}),
+        })),
+        footer: tr('lcl.mobile.dock.editHint', { first: label(spaces[0]?.name ?? ''), max: DOCK_PICKS }),
+      },
+      { items: [{ id: 'dock:done', label: tr('lcl.mobile.dock.done'), icon: Check }] },
+    ],
+  })
+  const id = out.handled ? out.value?.id : undefined
+  if (!id?.startsWith('pick:')) return
+  toggleDockPick(ids, id.slice('pick:'.length))
+  void presentDockPicks(tr)
+}
 
 async function presentNativeMore(tr: Tr): Promise<boolean> {
   const items = moreItems(useRibbonStore.getState().items, nativeChromeDrawsSpaces())
@@ -715,6 +768,7 @@ export const SingleColumnHost: React.FC<{ dark?: boolean; soft?: boolean; buildD
       const listFirst = listFirstNow()
       const atList = listFirst && ws.leftVisible
       const toList = listFirst && !atList
+      const extras = nativeChromeExtras(atList ? 'list' : 'main')
       setNativeChromeShell({
         title: atList ? label(getActiveSpace()?.name ?? '') : ws.mainTabs.find((t) => t.active)?.title ?? '',
         left: listFirst ? toList : ws.leftLeaves.length > 0 || ws.sidebarDefaults.left.length > 0 || (!drawsSpaces && footAliveNow()),
@@ -723,19 +777,25 @@ export const SingleColumnHost: React.FC<{ dark?: boolean; soft?: boolean; buildD
         tabCount: ws.mainTabs.length || 1,
         labels: toList ? { ...labels, left: back } : labels,
         // 底栏只在每个 Space 的第一层:列表层,或没有列表层的 Space(主页 / 日历…)的主区。
-        ...(drawsSpaces && !toList ? { spaces: nativeSpaceList() } : {}),
+        ...(drawsSpaces && !toList ? { spaces: nativeSpaceList(), allLabel: trRef.current('lcl.mobile.allSpaces') } : {}),
+        // 当前这一层的视图给顶栏加的东西(搜索钮、标题的第二段),见 useNativeChromeExtras。
+        ...(extras?.search ? { search: extras.search.label } : {}),
+        ...(extras?.title ? { titleSub: extras.title.sub, ...(extras.title.run ? { titleTap: true } : {}) } : {}),
       }, {
         left: () => useWorkspace.getState().toggleSidebar('left'),
         right: () => useWorkspace.getState().toggleSidebar('right'),
         tabs: () => chromeActions.current.tabs(),
         more: () => chromeActions.current.more(),
+        search: () => extras?.search?.run(),
+        title: () => extras?.title?.run?.(),
+        spacesAll: () => { void presentAllSpaces(trRef.current) },
         // 点当前那格是空操作(setActiveSpace 同 id 即返回);换 Space 后有列表层的由 afterLayout 钩子落过去。
         space: setActiveSpace,
         spaceLong: (id) => { const sp = useSpaceStore.getState().spaces.find((x) => x.id === id); if (sp) pinSpaceToHome(sp.id, label(sp.name)) },
       })
     }
     push()
-    const offs = [useWorkspace.subscribe(push), useSpaceStore.subscribe(push), useRibbonStore.subscribe(push)]
+    const offs = [useWorkspace.subscribe(push), useSpaceStore.subscribe(push), useRibbonStore.subscribe(push), subscribeNativeChromeExtras(push), subscribeDockPicks(push)]
     // 只退订,不清状态:换语言重跑本 effect 时若先清成 null,原生栏会先收起再弹出(WebView 高度跳两下)。
     return () => { offs.forEach((off) => off()) }
   }, [nativeChrome, chromeLabelsKey])

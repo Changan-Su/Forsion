@@ -16,9 +16,12 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { Info, MoreHorizontal, Pencil, Pin, PinOff, Plus, SquarePen, Trash2, UserPlus, Users, UsersRound, FolderPlus, MessageSquarePlus } from 'lucide-react'
 import { useShallow } from 'zustand/react/shallow'
-import { OverlayAt, setActiveSpace, useNativeSheetMenu, useSpaceStore, type SheetMenuItem } from '@lcl/engine'
+import { OverlayAt, setActiveSpace, useListFirst, useNativeChromeExtras, useNativeSheetMenu, useSpaceStore, type SheetMenuItem } from '@lcl/engine'
 import { CtxMenuButtons } from '../components/CtxMenuButtons'
 import { SidebarPane, sessionActivityAt } from './chat2/SidebarPane'
+import { SidebarRow } from '../components/SidebarRow'
+import { ListChips, ListFab, ListHint } from '../components/phoneList'
+import { useQuickFind } from '../quickFind'
 import { EngineIcon } from '../components/EngineIcon'
 import { useApp } from '../stores/appStore'
 import { useSessionAttention } from '../stores/attentionStore' // P1-K3
@@ -27,7 +30,7 @@ import { openNewChat, openSession, openSolo, openTeam, rotateSolo } from '../ses
 import { AvatarStack } from '../components/AvatarStack'
 import { AgentAvatar } from '../components/AgentAvatar'
 import { tipProps, tipT } from '../hoverTip'
-import { formatRelative } from '../format/time'
+import { formatRelative, formatRowTime } from '../format/time'
 import { TeamEditor } from '../components/TeamEditor'
 import { AgentRemoveDialog } from '../components/RemoveDialog'
 import { showDetails } from '../stores/detailsSubject'
@@ -79,6 +82,9 @@ registerMessages({
   // 一级行悬停提示的类型词(评审 U-19 轻量版:不改 40px 单行,只在 hoverTip 里补「类型 · 相对时间」)。
   'orbits.tip.team': { zh: '团队', en: 'Team' },
   'orbits.tip.line': { zh: '{kind} · {when}', en: '{kind} · {when}' },
+  // 手机的整屏列表(布局「二」)
+  'orbits.phone.search': { zh: '搜索', en: 'Search' },
+  'orbits.phone.hint': { zh: '向左滑动一行：置顶、重命名、归档。长按右下角的按钮：新建 Agent、团队或项目。', en: 'Swipe a row left to pin, rename or archive it. Press and hold the button at the bottom right for a new agent, team or project.' },
 })
 
 interface MenuAt { x: number; y: number }
@@ -94,6 +100,10 @@ function anchorOf(e: React.MouseEvent | React.KeyboardEvent): MenuAt {
  *  undefined=不过滤。Agent 轨道是 host-only,cloud 侧整块不列。 */
 export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = {}) {
   const { t, locale } = useI18n()
+  // 手机的整屏列表(两级导航的列表层):一颗悬浮主按钮 + 分类胶囊 + 按时间排的两行列表,搜索在原生顶栏上。
+  const phone = useListFirst()
+  const openSearch = (): void => useQuickFind.getState().openPalette()
+  useNativeChromeExtras(phone ? { where: 'list', search: { label: t('orbits.phone.search'), run: openSearch } } : null)
   // ⚠️ 这段 store 映射照抄 SessionsView(同一批 props 要原样喂给 SidebarPane);只多取 Agent 轨道那几项。
   const s0 = useApp(useShallow((state) => ({
     runningBySession: state.runningBySession,
@@ -280,49 +290,82 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
   const teamIcon = (x: SessionRecord): React.ReactNode =>
     (s.configBySession[x.id]?.groupChat ? <Users className="t2s-lead-icon t2s-dim" /> : null)
 
-  const agentRow = (slug: string, name: string): React.ReactElement => {
-    const entryKey = `row:agent:${slug}`
-    const url = s.agentAvatars[slug]
-    const isMuse = slug === 'muse'
-    const cloud = !isMuse && cloudAgent(slug)
-    const active = isMuse ? activeSpaceId === 'muse' : cloud ? false : activeCfg?.soloAgentSlug === slug
+  /** 头像边长:桌面 30px(仓内既有的头像档);手机列表层的 px 被放大过,33px ≈ 44dp 的图标块。 */
+  const avatarSize = phone ? 33 : 30
+  /** 一级行(私聊 / 引擎 / 团队 / 墓碑)的唯一一份结构。桌面 = 40px 单行;手机列表层 = 与会话行同一种两行的行
+   *  (名字 + 类型,最近活动的时间在行尾;「⋯」让给长按)。两种形状共用同一套点击与菜单。 */
+  const orbitRow = (o: {
+    rowKey: string; entryKey: string; kind: RowMenu['kind']; slug: string; active: boolean; gone?: boolean
+    tip: Record<string, unknown>; leadClass?: string; lead: React.ReactNode; name: string; badge?: string; sub: string; at: number; onOpen: () => void
+  }): React.ReactElement => {
+    const pinned = isOrbitPinned(pinnedEntries, o.entryKey)
+    const open = (): void => { activatePinned(o.entryKey); o.onOpen() }
+    if (phone) {
+      return (
+        <SidebarRow
+          key={o.rowKey} as="button" className={o.active ? 'active' : undefined} style={{ paddingLeft: undefined }}
+          lead={o.lead} trailing={o.at ? <span className="t2s-srow-time">{formatRowTime(o.at)}</span> : undefined}
+          onClick={open} onContextMenu={(e) => openRowMenuAtPointer(e, o.kind, o.slug, o.entryKey)}
+        >
+          <span className="t2s-srow-text">
+            <span className="t2s-srow-title">{o.name}</span>
+            <span className="t2s-srow-sub">{o.badge ? `${o.sub} · ${o.badge}` : o.sub}</span>
+          </span>
+        </SidebarRow>
+      )
+    }
     return (
       <button
-        key={`agent:${slug}`}
+        key={o.rowKey}
         type="button"
-        className={`t2o-row${active ? ' active' : ''}`}
-        data-pinned={isOrbitPinned(pinnedEntries, entryKey) ? 'true' : undefined}
-        {...rowTip(name || slug, isMuse ? 'orbits.badge.proactive' : 'agentSelect.direct', `agent:${slug}`)}
-        onClick={() => {
-          activatePinned(entryKey)
-          if (isMuse) openMuse()
-          else if (cloud) { openNewChat(); useApp.getState().selectNewChatAgent(slug) }
-          else openSolo('agent', slug)
-        }}
-        onContextMenu={(e) => openRowMenuAtPointer(e, 'agent', slug, entryKey)}
+        className={`t2o-row${o.gone ? ' t2o-row-gone' : ''}${o.active ? ' active' : ''}`}
+        data-pinned={pinned ? 'true' : undefined}
+        {...o.tip}
+        onClick={open}
+        onContextMenu={(e) => openRowMenuAtPointer(e, o.kind, o.slug, o.entryKey)}
       >
-        <span className="t2o-lead">
-          {/* 首字一律中性底色(09-25 用户拍板,不按 slug 上彩色);同姓撞字靠 initialFor 取不同的字。 */}
-          <AgentAvatar name={name || slug} url={url} siblings={agentNames} size={30} className="t2o-avatar" initialClassName="t2o-avatar-text" />
-          {runningSolo.has(slug) && <span className="t2s-dot running" title={t('orbits.badge.running')} />}
-          {isMuse && <span className="t2s-dot proactive" title={t('orbits.badge.proactive')} />}
-        </span>
-        <span className="t2o-name">{name || slug}</span>
-        {isOrbitPinned(pinnedEntries, entryKey) && <Pin className="t2o-pin-mark" aria-hidden="true" />}
+        <span className={`t2o-lead${o.leadClass ? ` ${o.leadClass}` : ''}`}>{o.lead}</span>
+        <span className="t2o-name">{o.name}</span>
+        {o.badge && <span className="t2o-badge">{o.badge}</span>}
+        {pinned && <Pin className="t2o-pin-mark" aria-hidden="true" />}
         <span
           className="t2o-tail"
           role="button"
           tabIndex={0}
           aria-label={t('orbits.row.menu')}
           title={t('orbits.row.menu')}
-          onClick={(e) => openRowMenuAtAnchor(e, 'agent', slug, entryKey)}
+          onClick={(e) => openRowMenuAtAnchor(e, o.kind, o.slug, o.entryKey)}
           onKeyDown={(e) => {
             if (e.key !== 'Enter' && e.key !== ' ') return
-            openRowMenuAtAnchor(e, 'agent', slug, entryKey)
+            openRowMenuAtAnchor(e, o.kind, o.slug, o.entryKey)
           }}
         ><MoreHorizontal size={14} /></span>
       </button>
     )
+  }
+
+  const agentRow = (slug: string, name: string): React.ReactElement => {
+    const entryKey = `row:agent:${slug}`
+    const url = s.agentAvatars[slug]
+    const isMuse = slug === 'muse'
+    const cloud = !isMuse && cloudAgent(slug)
+    const active = isMuse ? activeSpaceId === 'muse' : cloud ? false : activeCfg?.soloAgentSlug === slug
+    return orbitRow({
+      rowKey: `agent:${slug}`, entryKey, kind: 'agent', slug, active,
+      tip: rowTip(name || slug, isMuse ? 'orbits.badge.proactive' : 'agentSelect.direct', `agent:${slug}`),
+      name: name || slug, sub: t(isMuse ? 'orbits.badge.proactive' : 'agentSelect.direct'), at: activityByIdent.get(`agent:${slug}`) || 0,
+      onOpen: () => {
+        if (isMuse) openMuse()
+        else if (cloud) { openNewChat(); useApp.getState().selectNewChatAgent(slug) }
+        else openSolo('agent', slug)
+      },
+      lead: <>
+        {/* 首字一律中性底色(09-25 用户拍板,不按 slug 上彩色);同姓撞字靠 initialFor 取不同的字。 */}
+        <AgentAvatar name={name || slug} url={url} siblings={agentNames} size={avatarSize} className="t2o-avatar" initialClassName="t2o-avatar-text" />
+        {runningSolo.has(slug) && <span className="t2s-dot running" title={t('orbits.badge.running')} />}
+        {isMuse && <span className="t2s-dot proactive" title={t('orbits.badge.proactive')} />}
+      </>,
+    })
   }
 
   // 一级列表的轨道行(私聊 / 引擎 / 团队 / 墓碑):交给 SidebarPane 与项目组按最近活动混排;云端侧整批不列(§3.5)。
@@ -331,105 +374,41 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
     const at = (key: string): number => activityByIdent.get(key) || 0
     for (const a of agents) orbitRows.push({ key: `agent:${a.slug}`, at: at(`agent:${a.slug}`), node: agentRow(a.slug, a.name) })
     for (const e of installedEngines) {
-      const entryKey = `row:engine:${e.id}`
-      orbitRows.push({ key: `engine:${e.id}`, at: at(`engine:${e.id}`), node: (
-        <button
-          key={`engine:${e.id}`}
-          type="button"
-          className={`t2o-row${activeCfg?.soloEngineId === e.id ? ' active' : ''}`}
-          data-pinned={isOrbitPinned(pinnedEntries, entryKey) ? 'true' : undefined}
-          {...rowTip(e.name || e.id, 'agentSelect.direct', `engine:${e.id}`)}
-          onClick={() => { activatePinned(entryKey); openSolo('engine', e.id) }}
-          onContextMenu={(ev) => openRowMenuAtPointer(ev, 'engine', e.id, entryKey)}
-        >
-          <span className="t2o-lead t2o-lead-box"><EngineIcon engineId={e.id} size={16} />{runningSolo.has(`engine:${e.id}`) && <span className="t2s-dot running" title={t('orbits.badge.running')} />}</span>
-          <span className="t2o-name">{e.name || e.id}</span>
-          {e.status === 'needs-signin' && <span className="t2o-badge">{t('orbits.engine.needsSignin')}</span>}
-          {isOrbitPinned(pinnedEntries, entryKey) && <Pin className="t2o-pin-mark" aria-hidden="true" />}
-          <span
-            className="t2o-tail"
-            role="button"
-            tabIndex={0}
-            aria-label={t('orbits.row.menu')}
-            title={t('orbits.row.menu')}
-            onClick={(ev) => openRowMenuAtAnchor(ev, 'engine', e.id, entryKey)}
-            onKeyDown={(ev) => {
-              if (ev.key !== 'Enter' && ev.key !== ' ') return
-              openRowMenuAtAnchor(ev, 'engine', e.id, entryKey)
-            }}
-          ><MoreHorizontal size={14} /></span>
-        </button>
-    ) })
+      orbitRows.push({ key: `engine:${e.id}`, at: at(`engine:${e.id}`), node: orbitRow({
+        rowKey: `engine:${e.id}`, entryKey: `row:engine:${e.id}`, kind: 'engine', slug: e.id, active: activeCfg?.soloEngineId === e.id,
+        tip: rowTip(e.name || e.id, 'agentSelect.direct', `engine:${e.id}`),
+        name: e.name || e.id, badge: e.status === 'needs-signin' ? t('orbits.engine.needsSignin') : undefined,
+        sub: t('agentSelect.direct'), at: at(`engine:${e.id}`), onOpen: () => openSolo('engine', e.id),
+        leadClass: 't2o-lead-box',
+        lead: <><EngineIcon engineId={e.id} size={16} />{runningSolo.has(`engine:${e.id}`) && <span className="t2s-dot running" title={t('orbits.badge.running')} />}</>,
+      }) })
     }
     // 团队行(Agent 轨道的持久团队):组合头像;点击直入该团队最新会话,不内联展开(§3.4)。
     for (const tm of teams) {
-      const entryKey = `row:team:${tm.slug}`
-      orbitRows.push({ key: `team:${tm.slug}`, at: at(`team:${tm.slug}`), node: (
-        <button
-          key={`team:${tm.slug}`}
-          type="button"
-          className={`t2o-row${activeCfg?.teamSlug === tm.slug ? ' active' : ''}`}
-          data-pinned={isOrbitPinned(pinnedEntries, entryKey) ? 'true' : undefined}
-          {...rowTip(tm.name, 'orbits.tip.team', `team:${tm.slug}`)}
-          onClick={() => { activatePinned(entryKey); openTeam(tm.slug) }}
-          onContextMenu={(ev) => openRowMenuAtPointer(ev, 'team', tm.slug, entryKey)}
-        >
-          <span className="t2o-lead">
-            <AvatarStack
-              items={tm.members.map((m) => ({ slug: m.slug, name: s.agentDefs.find((a) => a.slug === m.slug)?.name || m.slug, avatarUrl: s.agentAvatars[m.slug] }))}
-              emoji={isTeamImageAvatar(tm.avatar) ? undefined : tm.avatar || undefined}
-              imageUrl={s.teamAvatars[tm.slug]}
-              size={30}
-            />
-          </span>
-          <span className="t2o-name">{tm.name}</span>
-          {isOrbitPinned(pinnedEntries, entryKey) && <Pin className="t2o-pin-mark" aria-hidden="true" />}
-          <span
-            className="t2o-tail"
-            role="button"
-            tabIndex={0}
-            aria-label={t('orbits.row.menu')}
-            title={t('orbits.row.menu')}
-            onClick={(ev) => openRowMenuAtAnchor(ev, 'team', tm.slug, entryKey)}
-            onKeyDown={(ev) => {
-              if (ev.key !== 'Enter' && ev.key !== ' ') return
-              openRowMenuAtAnchor(ev, 'team', tm.slug, entryKey)
-            }}
-          ><MoreHorizontal size={14} /></span>
-        </button>
-    ) })
+      orbitRows.push({ key: `team:${tm.slug}`, at: at(`team:${tm.slug}`), node: orbitRow({
+        rowKey: `team:${tm.slug}`, entryKey: `row:team:${tm.slug}`, kind: 'team', slug: tm.slug, active: activeCfg?.teamSlug === tm.slug,
+        tip: rowTip(tm.name, 'orbits.tip.team', `team:${tm.slug}`),
+        name: tm.name, sub: t('orbits.tip.team'), at: at(`team:${tm.slug}`), onOpen: () => openTeam(tm.slug),
+        lead: (
+          <AvatarStack
+            items={tm.members.map((m) => ({ slug: m.slug, name: s.agentDefs.find((a) => a.slug === m.slug)?.name || m.slug, avatarUrl: s.agentAvatars[m.slug] }))}
+            emoji={isTeamImageAvatar(tm.avatar) ? undefined : tm.avatar || undefined}
+            imageUrl={s.teamAvatars[tm.slug]}
+            size={avatarSize}
+          />
+        ),
+      }) })
     }
     for (const g of tombstones) {
       const rowKey = `gone:${g.kind}:${g.id}`
-      const entryKey = `row:${rowKey}`
-      orbitRows.push({ key: rowKey, at: at(`${g.kind}:${g.id}`), node: (
-        <button
-          key={`gone:${g.kind}:${g.id}`}
-          type="button"
-          className={`t2o-row t2o-row-gone${s.activeId === g.sessionId || (activeCfg && (activeCfg.soloAgentSlug === g.id || activeCfg.soloEngineId === g.id || activeCfg.teamSlug === g.id)) ? ' active' : ''}`}
-          data-pinned={isOrbitPinned(pinnedEntries, entryKey) ? 'true' : undefined}
-          title={t(g.kind === 'engine' ? 'orbits.gone.engine' : g.kind === 'team' ? 'orbits.gone.team' : 'orbits.gone.agent')}
-          onClick={() => { activatePinned(entryKey); openSession(g.sessionId) }}
-          onContextMenu={(ev) => openRowMenuAtPointer(ev, 'gone', g.id, entryKey)}
-        >
-          <span className="t2o-lead"><AgentAvatar name={g.id} className="t2o-avatar" initialClassName="t2o-avatar-text t2o-avatar-gone" /></span>
-          <span className="t2o-name">{g.id}</span>
-          <span className="t2o-badge">{t(g.kind === 'engine' ? 'orbits.gone.engineBadge' : g.kind === 'team' ? 'orbits.gone.teamBadge' : 'orbits.gone.agentBadge')}</span>
-          {isOrbitPinned(pinnedEntries, entryKey) && <Pin className="t2o-pin-mark" aria-hidden="true" />}
-          <span
-            className="t2o-tail"
-            role="button"
-            tabIndex={0}
-            aria-label={t('orbits.row.menu')}
-            title={t('orbits.row.menu')}
-            onClick={(ev) => openRowMenuAtAnchor(ev, 'gone', g.id, entryKey)}
-            onKeyDown={(ev) => {
-              if (ev.key !== 'Enter' && ev.key !== ' ') return
-              openRowMenuAtAnchor(ev, 'gone', g.id, entryKey)
-            }}
-          ><MoreHorizontal size={14} /></span>
-        </button>
-    ) })
+      orbitRows.push({ key: rowKey, at: at(`${g.kind}:${g.id}`), node: orbitRow({
+        rowKey, entryKey: `row:${rowKey}`, kind: 'gone', slug: g.id, gone: true,
+        active: !!(s.activeId === g.sessionId || (activeCfg && (activeCfg.soloAgentSlug === g.id || activeCfg.soloEngineId === g.id || activeCfg.teamSlug === g.id))),
+        tip: { title: t(g.kind === 'engine' ? 'orbits.gone.engine' : g.kind === 'team' ? 'orbits.gone.team' : 'orbits.gone.agent') },
+        name: g.id, badge: t(g.kind === 'engine' ? 'orbits.gone.engineBadge' : g.kind === 'team' ? 'orbits.gone.teamBadge' : 'orbits.gone.agentBadge'), sub: t(g.kind === 'team' ? 'orbits.tip.team' : 'agentSelect.direct'), at: at(`${g.kind}:${g.id}`),
+        onOpen: () => openSession(g.sessionId),
+        lead: <AgentAvatar name={g.id} size={phone ? avatarSize : undefined} className="t2o-avatar" initialClassName="t2o-avatar-text t2o-avatar-gone" />,
+      }) })
     }
   }
 
@@ -488,15 +467,21 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
   const webPlusMenu = useNativeSheetMenu(plusMenu, () => plusMenu && { title: t('orbits.plus.tip'), sections: [{ items: plusMenuItems() }] }, () => setPlusMenu(null))
   const webRowMenu = useNativeSheetMenu(rowMenu, () => rowMenu && { sections: [{ items: rowMenuItems(rowMenu) }] }, () => setRowMenu(null))
 
+  const FILTERS = ['all', 'agent', 'team', 'project'] as const
+  const pickFilter = (kind: typeof filter): void => { setFilter(kind); localStorage.setItem('forsion_orbits_filter', kind) }
+  const newSession = (): void => { s.setSessionMode('work'); openNewChat() }
+
   return (
     <div className="t2o">
+      {/* 手机的整屏列表:新建在悬浮主按钮上(见文末),这里只留分类胶囊。 */}
+      {phone && <ListChips label={t('orbits.filter.label')} items={FILTERS.map((id) => ({ id, label: t(`orbits.filter.${id}`) }))} value={filter} onChange={pickFilter} />}
       {/* New session and creation menu; the four-way filter occupies its own row below. */}
-      <div className="t2o-head">
+      {!phone && <div className="t2o-head">
         <div className="t2s-special-group">
           <div className="t2s-special-row">
             {/* 尺寸由 `.t2o .t2s-special-ic > svg` 的 --t2s-icon 接管,故不传 size(传了也无效)。
                 data-act = 台架锚(check:newtab):文案随语言与改版变,台架别按文字找它。 */}
-            <button type="button" className="t2s-special" data-act="new-chat" onClick={() => { s.setSessionMode('work'); openNewChat() }}>
+            <button type="button" className="t2s-special" data-act="new-chat" onClick={newSession}>
               <span className="t2s-special-ic"><SquarePen /></span>
               <span className="t2s-special-title">{t('orbits.row.newSession')}</span>
             </button>
@@ -509,19 +494,23 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
             ><Plus size={14} /></button>
           </div>
         </div>
-      </div>
+      </div>}
 
-      <div className="t2o-filters t2s-vaultseg" role="tablist" aria-label={t('orbits.filter.label')}>
-        <div className="t2s-vaultseg-thumb" style={{ transform: `translateX(${['all', 'agent', 'team', 'project'].indexOf(filter) * 100}%)` }} />
-        {(['all', 'agent', 'team', 'project'] as const).map((kind) => <button key={kind} role="tab" type="button"
+      {!phone && <div className="t2o-filters t2s-vaultseg" role="tablist" aria-label={t('orbits.filter.label')}>
+        <div className="t2s-vaultseg-thumb" style={{ transform: `translateX(${FILTERS.indexOf(filter) * 100}%)` }} />
+        {FILTERS.map((kind) => <button key={kind} role="tab" type="button"
           data-filter={kind} aria-selected={filter === kind} className={filter === kind ? 'on' : undefined}
-          onClick={() => { setFilter(kind); localStorage.setItem('forsion_orbits_filter', kind) }}>{t(`orbits.filter.${kind}`)}</button>)}
-      </div>
+          onClick={() => pickFilter(kind)}>{t(`orbits.filter.${kind}`)}</button>)}
+      </div>}
 
       {/* 项目轨道 + 上面的轨道行:整段复用 SidebarPane(折叠持久化 / 多选 / 右键菜单全白拿;activity 排序下组拖拽禁用)。 */}
       <div className="t2o-projects">
         <SidebarPane
           collapsed={false}
+          // 手机:「项目」之外的三档都是一条按时间排的两行列表;「项目」照旧按项目分组(项目级的操作都在组头上)。
+          timeline={phone && filter !== 'project'}
+          timelineHead={<ListHint id="tangu">{t('orbits.phone.hint')}</ListHint>}
+          onSearch={openSearch}
           orderBy="activity"
           pinnedEntries={pinnedEntries}
           onTogglePinned={togglePinned}
@@ -563,6 +552,8 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
           deviceSections={runLocationsAvailable() && (filter === 'all' || filter === 'project') ? <DeviceSessionSections activeId={s.activeId} runningIds={runningIds} unreadIds={s.unread} rowBadge={(x) => attentionBadge(attentionIds, x.id)} /> : undefined}
         />
       </div>
+
+      {phone && <ListFab label={t('orbits.row.newSession')} icon={<SquarePen />} onClick={newSession} onMenu={(at) => { setRowMenu(null); setPlusMenu(at) }} />}
 
       {plusMenu && webPlusMenu && (
         <OverlayAt className="ctx-menu" x={plusMenu.x} y={plusMenu.y} onClick={(e) => e.stopPropagation()}>

@@ -21,6 +21,7 @@
  * 旧版窗口管理器与账号角仍不搬;浏览器搜索也不再回来。
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { flushSync } from 'react-dom'
 import {
   DndContext, DragOverlay, KeyboardSensor, PointerSensor, closestCenter, pointerWithin,
   useDraggable, useDroppable, useSensor, useSensors,
@@ -30,10 +31,10 @@ import {
 import { SortableContext, rectSortingStrategy, sortableKeyboardCoordinates, useSortable } from '@dnd-kit/sortable'
 import { CSS as DndCSS } from '@dnd-kit/utilities'
 import {
-  Check, FolderMinus, FolderOpen, FolderPlus, Grid2X2, Image, LogOut,
-  Pencil, RefreshCw, Upload, X,
+  ArrowUp, Check, FolderMinus, FolderOpen, FolderPlus, Grid2X2, Image, LogOut,
+  Mic, Pencil, RefreshCw, Upload, X,
 } from 'lucide-react'
-import { setActiveSpace, useSpaceStore, useRibbonStore, useWorkspace, label, moveTo, OverlayAt, useNativeSheetMenu, getDetachApi, WINDOW_SPACE_ID, type SheetMenuItem } from '@lcl/engine'
+import { setActiveSpace, useSpaceStore, useRibbonStore, useWorkspace, label, moveTo, OverlayAt, useNativeChromeSpaces, useNativeSheetMenu, getDetachApi, WINDOW_SPACE_ID, type SheetMenuItem } from '@lcl/engine'
 import { CtxMenuButtons } from '../components/CtxMenuButtons'
 import { rankIds, reorderBase, unionOrder } from '@lcl/engine/ribbonRegistry'
 import type { SpaceDefinition, RibbonFolder, RibbonItem, ViewProps } from '@lcl/engine'
@@ -43,6 +44,10 @@ import { settleModes } from '../stores/projectSettings'
 import { currentPlatform } from '../services/agentRunService'
 import type { Attachment } from '../types'
 import { usePageStore } from '../amadeus/store/pageStore'
+import { useAmadeusPrefs } from '../amadeusPrefs'
+import { usePluginStore } from '../amadeus/plugins/pluginStore'
+import { allSeries, useAchievements } from '../achievements/store'
+import { displaySessionTitle } from '../sessionTitle'
 import { ProjectSelector } from '../components/ProjectSelector'
 import { RunLocationPicker } from '../components/RunLocationPicker' // P1-K7a
 import { AgentSelectStrip } from '../components/AgentSelectStrip'
@@ -494,13 +499,66 @@ registerMessages({
   'home.folderMenu.rename': { zh: '重命名', en: 'Rename' },
   'home.folderMenu.dissolve': { zh: '解散收纳夹', en: 'Dissolve folder' },
   'home.folderMenu.moveOut': { zh: '移出收纳夹', en: 'Move out' },
+  // 手机(布局「二」):收起的输入条 + 带一行近况的大卡片
+  'home.pill': { zh: '问点什么…', en: 'Ask anything…' },
+  'home.card.continue': { zh: '继续：{title}', en: 'Continue: {title}' },
+  'home.card.claimable': { zh: '{n} 项可领取', en: '{n} to claim' },
+  'home.card.earned': { zh: '已得 {n} 项', en: '{n} earned' },
+  'home.card.installed': { zh: '已装 {n} 个插件', en: '{n} plugins installed' },
 })
+
+/** 手机主页的四张大卡片。单独成组件:近况要订阅会话 / 笔记 / 成就 / 插件四份状态,桌面的主页不该为它们多重画。 */
+function HomeCards({ tiles, actions, onLaunch }: { tiles: Tile[]; actions: RibbonItem[]; onLaunch: (spaceId: string) => void }) {
+  const status = useCardStatus()
+  return (
+    <section className="hp-cards">
+      {tiles.filter((tile): tile is Extract<Tile, { kind: 'space' }> => tile.kind === 'space').slice(0, 2).map((tile) => (
+        <button key={tile.id} type="button" className="hp-card" data-space-id={tile.space.id} onClick={(event) => { event.stopPropagation(); onLaunch(tile.space.id) }}>
+          <span className="hp-card-icon">{tile.space.icon && <tile.space.icon />}</span>
+          <span className="hp-card-name">{label(tile.space.name)}</span>
+          <span className="hp-card-status">{status(tile.space.id)}</span>
+        </button>
+      ))}
+      {actions.map((item) => (
+        <button key={item.id} type="button" className="hp-card" data-fixed-id={item.id} onClick={(event) => { event.stopPropagation(); item.onClick?.() }}>
+          <span className="hp-card-icon">{item.icon && <item.icon />}</span>
+          <span className="hp-card-name">{item.tooltip ? label(item.tooltip) : ''}</span>
+          <span className="hp-card-status">{status(item.id)}</span>
+        </button>
+      ))}
+    </section>
+  )
+}
+
+/** 卡片上那一行近况:只说手头就有的事实(最近的会话 / 最近打开的笔记 / 成就 / 已装插件),拿不到就不写。 */
+function useCardStatus(): (id: string) => string {
+  const { t } = useI18n()
+  const session = useApp((s) => s.sessions[0])
+  const note = useAmadeusPrefs((s) => s.recents[0])
+  // 随 App 自带的不算「装了的」
+  const plugins = usePluginStore((s) => s.plugins.filter((x) => !x.builtin && !x.preinstalled).length)
+  const ach = useAchievements(useShallow((s) => ({ counters: s.counters, claimed: s.claimed, pluginSeries: s.pluginSeries })))
+  return (id) => {
+    if (id === 'tangu') return session ? t('home.card.continue', { title: displaySessionTitle(session.title, t) }) : ''
+    if (id === 'amadeus') return note ? (note.split('/').pop() ?? note).replace(/\.md$/i, '') : ''
+    if (id === 'rb-market') return plugins ? t('home.card.installed', { n: String(plugins) }) : ''
+    if (id === 'rb-achievements') {
+      const all = allSeries(ach).flatMap((x) => x.achievements)
+      const open = all.filter((a) => !ach.claimed[a.id] && (ach.counters[a.event] || 0) >= a.goal).length
+      const got = all.filter((a) => ach.claimed[a.id]).length
+      return open ? t('home.card.claimable', { n: String(open) }) : got ? t('home.card.earned', { n: String(got) }) : ''
+    }
+    return ''
+  }
+}
 
 export function HomepageView(_props: ViewProps) {
   const { t, locale } = useI18n()
   const zh = locale === 'zh'
   const clock = useClock(locale)
   const name = useAccountName()
+  // 手机(原生外壳画 Dock):布局「二」—— 问候在上、四张带近况的大卡片在下、输入区收成一条(homepage.css 文末 .hp-phone)。
+  const phone = useNativeChromeSpaces()
   const spaces = useSpaceStore((s) => s.spaces)
   const ribbonItems = useRibbonStore((s) => s.items)
   const { tiles, topIds, order } = useDockTiles()
@@ -796,6 +854,20 @@ export function HomepageView(_props: ViewProps) {
     setComposerFocused(false)
   }
 
+  /** 手机:点收起的输入条 = 展开成完整的输入区并把光标放进去;点条上的话筒 = 展开并直接开始录音(按的就是输入区里那颗话筒)。
+   *  同一次点击里同步做完:键盘、麦克风权限都只认用户的这一下。 */
+  const openComposer = (voice = false): void => {
+    flushSync(() => setComposerFocused(true))
+    const box = rootRef.current?.querySelector('.hp-composer')
+    if (voice) box?.querySelector<HTMLButtonElement>('.t2c-mic-control')?.click()
+    else box?.querySelector<HTMLTextAreaElement>('.t2c-ta')?.focus()
+  }
+  // 收起时条上写着已经打的那句话(草稿在 Composer2 自己手里,这里只在收起的那一刻读一次输入框):不然打了一半的字就看不见了。
+  const [pillDraft, setPillDraft] = useState('')
+  useEffect(() => {
+    if (phone && !composerFocused) setPillDraft(rootRef.current?.querySelector<HTMLTextAreaElement>('.hp-composer .t2c-ta')?.value.trim() ?? '')
+  }, [phone, composerFocused])
+
   const showOrganizer = (): void => {
     exitComposerInputMode()
     setWallpaperOpen(false)
@@ -854,7 +926,7 @@ export function HomepageView(_props: ViewProps) {
   return (
     <div
       ref={rootRef}
-      className={`hp-root${reduceMotion ? ' hp-still' : ''}${composerFocused ? ' hp-composer-focused' : ''}${wallpaperOpen ? ' hp-layer-focused' : ''}${openFolder || organizerOpen ? ' hp-secondary-open' : ''}`}
+      className={`hp-root${phone ? ' hp-phone' : ''}${reduceMotion ? ' hp-still' : ''}${composerFocused ? ' hp-composer-focused' : ''}${wallpaperOpen ? ' hp-layer-focused' : ''}${openFolder || organizerOpen ? ' hp-secondary-open' : ''}`}
       // hack2gate 是随包位图,与 Bing/自定义同走照片管线;真有图片 URL 时内联 style 仍压过它。
       data-wallpaper={wallpaperUrl || wallpaperPrefs.themePreset === 'hack2gate' ? 'true' : undefined}
       data-theme-preset={wallpaperPrefs.themePreset}
@@ -896,9 +968,20 @@ export function HomepageView(_props: ViewProps) {
         </div>
 
         {hasTangu && <HomepageChatbox onDispatch={dispatchChat} onStartCall={startCallSession} onInputModeChange={setComposerFocused} />}
+        {/* 手机:输入区平时收成这一条(完整的那块留在页面里、只是不显示,草稿不丢),点一下展开。 */}
+        {phone && hasTangu && (
+          <button type="button" className="hp-pill" data-act="home-pill" onClick={(event) => { event.stopPropagation(); openComposer(!!(event.target as Element).closest('.hp-pill-mic')) }}>
+            <span className="hp-pill-text" data-draft={pillDraft ? '' : undefined}>{pillDraft || t('home.pill')}</span>
+            <span className="hp-pill-mic" aria-hidden><Mic /></span>
+            <span className="hp-pill-send" aria-hidden><ArrowUp /></span>
+          </button>
+        )}
+
+        {/* 手机:四张大卡片 = 架子上的头两个 Space + 商店、成就,各带一行近况;其余 Space 在 Dock 上,收纳层照旧长按空白处进。 */}
+        {phone && <HomeCards tiles={tiles} actions={fixedHomeActions} onLaunch={launchSpace} />}
 
         {/* 收纳架只保留一排摘要;“全部”与空白右键都进入独立二级收纳层。 */}
-        <section className="hp-spaces" data-total={tiles.length}>
+        {!phone && <section className="hp-spaces" data-total={tiles.length}>
           {/* 不再有标题行(「Spaces · N 个 Space」「新建收纳夹」):新建收纳夹在「全部 Spaces」里(10-02 用户拍板 v8)。 */}
 
           <DndContext
@@ -964,7 +1047,7 @@ export function HomepageView(_props: ViewProps) {
               )}
             </DragOverlay>
           </DndContext>
-        </section>
+        </section>}
       </div>
 
       <input

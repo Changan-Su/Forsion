@@ -67,4 +67,13 @@ export const LCL_MESSAGES: Record<string, { zh: string; en: string }> = {
   'lcl.mobile.tabs': { zh: '标签页', en: 'Tabs' },
   'lcl.mobile.more': { zh: '更多', en: 'More' },
   'lcl.mobile.back': { zh: '返回', en: 'Back' },
+  // 底部 Dock 放不下所有 Space 时的「全部」格与它打开的面板
+  'lcl.mobile.allSpaces': { zh: '全部', en: 'All' },
+  'lcl.mobile.allSpacesTitle': { zh: '全部 Space', en: 'All Spaces' },
+  'lcl.mobile.dock.inDock': { zh: '固定在 Dock', en: 'In the dock' },
+  'lcl.mobile.dock.others': { zh: '其他', en: 'Others' },
+  'lcl.mobile.dock.edit': { zh: '选择固定在 Dock 的 Space', en: 'Choose the Spaces in the dock' },
+  'lcl.mobile.dock.editTitle': { zh: '固定在 Dock', en: 'Spaces in the dock' },
+  'lcl.mobile.dock.editHint': { zh: '{first}常驻，另外最多固定 {max} 个。满了先取消一个再选。', en: '{first} is always there; pick up to {max} more. When the dock is full, take one out first.' },
+  'lcl.mobile.dock.done': { zh: '完成', en: 'Done' },
 }

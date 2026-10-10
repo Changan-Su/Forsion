@@ -32,6 +32,7 @@ import kotlin.math.roundToInt
  * from the screen's top edge down past the status bar; the dock (Spaces) is a second one at gravity BOTTOM, reaching
  * down to the screen edge behind the system navigation inset. It is shown in shell mode with two or more Spaces, and
  * never while the keyboard is up (it would sit on top of the keyboard and eat the composer's room).
+ * The dock holds a handful of Spaces; with more than fit, its last cell reports `spacesAll` and JS shows the rest.
  *
  * Two arrangements (2026-10-09):
  *  - floating — shell pages that ask for it (`floating`): the WebView runs under both (top margin 0; bottom margin 0
@@ -152,7 +153,7 @@ class NativeChromePlugin : Plugin() {
             view.setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnDetachedFromWindow)
             view.setContent {
                 val current = state.value
-                if (current != null && current.spaceBar) NativeSpaceBar(current, insets.value, ::onPlate) { id, long -> emitSpace(id, long) }
+                if (current != null && current.spaceBar) NativeSpaceBar(current, insets.value, ::onPlate, onAll = { emit("spacesAll") }) { id, long -> emitSpace(id, long) }
             }
             // Own listener (the WebView's is only hooked where Capacitor adjusts margins): keyboard up → bar away,
             // and — edge-to-edge only, see layout() — the WebView ends at the keyboard's top edge.

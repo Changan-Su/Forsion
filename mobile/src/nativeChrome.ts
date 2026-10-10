@@ -1,5 +1,5 @@
 import { Capacitor, registerPlugin, type PluginListenerHandle } from '@capacitor/core'
-import { ArrowLeft, MoreHorizontal, PanelLeft, PanelRight, UserRound, X } from 'lucide-react'
+import { ArrowLeft, ChevronDown, LayoutGrid, MoreHorizontal, PanelLeft, PanelRight, Search, UserRound, X } from 'lucide-react'
 import {
   dispatchNativeChromeAction, dispatchNativeChromeSpace, installNativeChromeHost, readNativeTheme, renderNativeIcons, useSpaceStore,
   type NativeChromeAction, type NativeChromeSpace, type NativeChromeState, type NativeHaptic, type NativeIcon, type NativeSheetTheme,
@@ -14,6 +14,8 @@ import { useInbox } from '@/stores/inboxStore'
  *  Pushes the effective state + live theme + serialized icons; relays bar actions back to the seam.
  *  Also draws the Space switcher as a bottom navigation bar (`spaces: true`): the shell sends the Space list,
  *  this host adds each Space's icon (serialized once per icon component) and relays taps / long-presses.
+ *  The dock holds the Spaces the shell marks `pinned` (five cells; lcl/engine/spaceDock.ts) and an "all" cell for
+ *  the rest: its tap comes back as `spacesAll` and the shell shows them in a sheet.
  *  A Space whose icon is a picture (a plugin Space's `iconFile`) gets it as a small PNG beside its line icon.
  *  On the same first-level pages it adds the account avatar (trailing end of the top bar): what to show and
  *  what a tap does come from the mounted account card (services/accountChip.ts); the engine seam is not involved.
@@ -23,7 +25,7 @@ import { useInbox } from '@/stores/inboxStore'
  *  turns that into the room the shell keeps clear (`--nc-*` on <body>, see lcl/engine/singleColumn.css) and into the
  *  frosted plates behind the capsules — the blur is the page's to draw: a native view cannot blur the WebView.
  *  If the plugin ever rejects, the host uninstalls itself so the shell falls back to its web top bar. */
-interface ChromeIcons { left?: NativeIcon; right?: NativeIcon; more?: NativeIcon; back?: NativeIcon; close?: NativeIcon }
+interface ChromeIcons { left?: NativeIcon; right?: NativeIcon; more?: NativeIcon; back?: NativeIcon; close?: NativeIcon; all?: NativeIcon; search?: NativeIcon; titleMore?: NativeIcon }
 /** `png` = the picture as base64, cropped square and downscaled here (Kotlin only decodes and clips it to a circle);
  *  `icon` = what the bar draws without one: the initial, or a person glyph when signed out. */
 interface ChromeAccount { label: string; icon?: NativeIcon; png?: string }
@@ -50,7 +52,7 @@ interface NativeChromePlugin {
   addListener(event: 'action', cb: (e: { action: string; id?: string }) => void): Promise<PluginListenerHandle>
   addListener(event: 'layout', cb: (e: ChromeLayout) => void): Promise<PluginListenerHandle>
 }
-const ACTIONS: readonly NativeChromeAction[] = ['left', 'right', 'tabs', 'more', 'back', 'close']
+const ACTIONS: readonly NativeChromeAction[] = ['left', 'right', 'tabs', 'more', 'back', 'close', 'search', 'title', 'spacesAll']
 const MAX_SPACES = 64 // = ChromeState.MAX_SPACES (Kotlin)
 const AVATAR_PX = 96 // the bar draws it at 30dp: enough for a 3x screen, a few KB on the bridge
 const MAX_AVATAR_CHARS = 131_072 // = ChromeState.MAX_AVATAR_CHARS (Kotlin); an oversized picture would reject the whole state
@@ -156,8 +158,8 @@ export function installNativeChrome(): void {
   if (installed || Capacitor.getPlatform() !== 'android' || !Capacitor.isPluginAvailable('NativeChrome')) return
   installed = true
   const plugin = registerPlugin<NativeChromePlugin>('NativeChrome')
-  const icons: Promise<ChromeIcons> = renderNativeIcons([PanelLeft, PanelRight, MoreHorizontal, ArrowLeft, X])
-    .then(([left, right, more, back, close]) => ({ left, right, more, back, close }))
+  const icons: Promise<ChromeIcons> = renderNativeIcons([PanelLeft, PanelRight, MoreHorizontal, ArrowLeft, X, LayoutGrid, Search, ChevronDown])
+    .then(([left, right, more, back, close, all, search, titleMore]) => ({ left, right, more, back, close, all, search, titleMore }))
   // Space icons are React components: serialize each once (keyed by the component, so a re-registered Space re-renders).
   const spaceIcons = new Map<unknown, NativeIcon | undefined>()
   // A picture icon (a plugin Space's own `iconFile`) cannot be flattened into paths. It is sent as a small PNG, converted

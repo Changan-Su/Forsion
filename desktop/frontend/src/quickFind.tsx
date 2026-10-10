@@ -22,7 +22,7 @@ import { useApp } from './stores/appStore'
 import { openNote, openDb, openFile } from './amadeusNav'
 import { registerMessages, useI18n } from './i18n'
 import { pageKey } from '@amadeus-shared/links'
-import { isImeKeyEvent, isMacPlatform } from '@lcl/engine'
+import { isImeKeyEvent, isMacPlatform, useNativeChromeClaim, useNativeChromeInstalled, type NativeChromeClaim } from '@lcl/engine'
 
 registerMessages({
   'quickfind.catAll': { zh: '全部', en: 'All' },
@@ -133,8 +133,14 @@ export function QuickFind() {
   return <QuickFindInner />
 }
 
+const CHROME_HIDDEN: NativeChromeClaim = { mode: 'hidden' }
+
 function QuickFindInner() {
   const { t } = useI18n()
+  // 原生外壳(Android):面板是盖住整页的一层,开着时把浮在页面上的胶囊和 Dock 收起来 —— 不收的话两颗胶囊正压在
+  // 输入框上(它们是原生视图,永远在页面之上)。面板改成贴顶、通栏,键盘提示那一行不画(手机没有那些键)。
+  const phone = useNativeChromeInstalled()
+  useNativeChromeClaim(phone ? CHROME_HIDDEN : null)
   const close = useQuickFind((s) => s.close)
   const pick = useQuickFind((s) => s.pick)
   const pages = usePageStore((s) => s.pages)
@@ -252,7 +258,7 @@ function QuickFindInner() {
             : <FileText size={15} />
 
   return (
-    <div className="amx-qf-scrim" onMouseDown={close}>
+    <div className={`amx-qf-scrim${phone ? ' amx-qf-phone' : ''}`} onMouseDown={close}>
       <div className="amx-qf" onMouseDown={(e) => e.stopPropagation()} onKeyDown={onKey}>
         <div className="amx-qf-head">
           <Search size={16} className="amx-qf-searchicon" />
@@ -317,9 +323,9 @@ function QuickFindInner() {
           )}
           {results.length === 0 && !showCreate && <div className="amx-qf-empty">{t(q.trim() ? 'quickfind.emptyNoMatch' : pick ? 'quickfind.emptyNoPickable' : 'quickfind.emptyNoRecent')}</div>}
         </div>
-        <div className="amx-qf-foot">{pick
+        {!phone && <div className="amx-qf-foot">{pick
           ? <><kbd>↑↓</kbd> {t('quickfind.footSelect')} · <kbd>↵</kbd> {t('quickfind.footChoose')} · <kbd>esc</kbd> {t('quickfind.footCancel')}</>
-          : <><kbd>↑↓</kbd> {t('quickfind.footSelect')} · <kbd>←→</kbd> {t('quickfind.footScope')} · <kbd>↵</kbd> {t('quickfind.footOpen')} · <kbd>{isMacPlatform() ? '⌘↵' : 'Ctrl+↵'}</kbd> {t('quickfind.footNewTab')} · <kbd>esc</kbd> {t('quickfind.footClose')}</>}</div>
+          : <><kbd>↑↓</kbd> {t('quickfind.footSelect')} · <kbd>←→</kbd> {t('quickfind.footScope')} · <kbd>↵</kbd> {t('quickfind.footOpen')} · <kbd>{isMacPlatform() ? '⌘↵' : 'Ctrl+↵'}</kbd> {t('quickfind.footNewTab')} · <kbd>esc</kbd> {t('quickfind.footClose')}</>}</div>}
       </div>
     </div>
   )

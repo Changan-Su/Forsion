@@ -27,7 +27,7 @@ import { AchievementToast } from '@/achievements/AchievementToast'
 import { AchievementsModal } from '@/achievements/AchievementsModal'
 import { BtwHost } from '@/views/chat2/BtwPanel'
 import { btwWebVisible, useBtw } from '@/views/chat2/btwStore'
-import { QuickFind } from '@/quickFind'
+import { QuickFind, useQuickFind } from '@/quickFind'
 import { FindBar } from '@/findInPage'
 import { installNotificationWiring } from '@/stores/notificationWiring'
 import { ensureAmadeusReady } from '@/amadeusPlugins'
@@ -71,7 +71,10 @@ function useAndroidBack(): void {
   useEffect(() => {
     if (!window.tangu?.mobile) return // 仅原生壳;浏览器无此事件
     const sub = CapApp.addListener('backButton', () => {
-      // 最上层先问壳:标签页 sheet /「⋯」菜单开着 → 由 SingleColumnHost 接管关闭(可取消事件)。
+      // 搜索面板开着时永远在最上面(下拉搜索 / 顶栏搜索钮 / 外接键盘的快捷键打开;z-index 高过设置、商店、旁聊那几张整页):
+      // 返回先关它。排在后面的话,它盖着的那一层会先被关掉;不排的话,列表层上按返回直接把 app 退到后台。
+      if (useQuickFind.getState().open) { useQuickFind.getState().close(); return }
+      // 再问壳:标签页 sheet /「⋯」菜单开着 → 由 SingleColumnHost 接管关闭(可取消事件)。
       const shellEv = new Event('forsion:mobile-back', { cancelable: true })
       window.dispatchEvent(shellEv)
       if (shellEv.defaultPrevented) return
