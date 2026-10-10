@@ -8,7 +8,7 @@
  *  ⚠️ 方向很重要:真实链路是 display(协议 URL)→ stored,不是「盘上裸空格 → 盘上」——
  *  裸空格那种压根匹配不上 IMG_RE(见最后一格),那是**存量受损文件**,只能靠修复扫描,别指望这里自愈。 */
 import { afterEach, describe, it, expect } from 'vitest'
-import { toDisplayMarkdown, toStoredMarkdown, assetRefs, toAssetUrl, setAssetUrlBuilder, resetAssetUrlBuilder, fromAssetUrl, fromDefaultAssetUrl } from './assets'
+import { toDisplayMarkdown, toStoredMarkdown, assetRefs, toAssetUrl, setAssetUrlBuilder, resetAssetUrlBuilder, fromAssetUrl, fromDefaultAssetUrl, joinRel, relFrom, normPath } from './assets'
 
 /** 编辑器序列化出来的那一行(PM 的 image 节点 src 就是协议 URL)。 */
 const disp = (ref: string): string => `![](${toAssetUrl(ref)})`
@@ -196,5 +196,64 @@ describe('换了显示地址的构建器之后的往返', () => {
     expect(toStoredMarkdown(shown, '')).toBe(shown)
     resetAssetUrlBuilder()
     expect(toDisplayMarkdown('![](a.png)\n', '')).toBe('![](amadeus-asset://v/a.png)\n')
+  })
+})
+
+/** 页目录之外的引用(2026-10-10)。此前 relFrom 只会去掉「页目录/」前缀,引用不在页目录之下时原样返回库内路径 ——
+ *  笔记在 notes/、图片在库根 attachments/(从别的文件夹复制 / 搬块过来的图就是这样)存成 `![](attachments/x.png)`,
+ *  而重开时一律按页相对拼成 notes/attachments/x.png:三端都取不到(桌面的协议处理器对带路径的地址没有兜底,
+ *  electron/amadeus/assetProtocol.test.ts 钉着),那里恰好有同路径的文件时显示的还是另一张图。
+ *  现在 relFrom 是 joinRel 的真逆:页目录之外写成 `../…`(附件放固定文件夹时产品本来就这么写,attachmentPaths 的 pageRel)。
+ *  负对照(实跑过):relFrom 改回只去前缀 → 本组第 1 / 3 / 4 / 5 格红。 */
+describe('页目录之外的引用:存盘写成 ../,重开指回同一个文件', () => {
+  /** 落盘的那一行在 pageDir 这篇笔记里重开后指向的库内路径(`.` / `..` 按词法折叠,各宿主取文件时都是这么折的)。 */
+  const reopened = (stored: string, pageDir: string): string =>
+    normPath(fromAssetUrl(/\]\(([^)\s]+)/.exec(toDisplayMarkdown(stored, pageDir))![1])!)
+
+  it('relFrom 是 joinRel 的逆;库根的笔记(页目录为空)照旧原样', () => {
+    expect(relFrom('notes', 'attachments/x.png')).toBe('../attachments/x.png')
+    expect(relFrom('notes/sub', 'notes/x.png')).toBe('../x.png')
+    expect(relFrom('a/b/c', 'x.png')).toBe('../../../x.png')
+    expect(relFrom('notes', 'notes2/x.png')).toBe('../notes2/x.png') // 只是名字有相同前缀,不算在页目录之下
+    expect(relFrom('', 'attachments/x.png')).toBe('attachments/x.png')
+    expect(relFrom('notes', 'notes/.amadeus/x.png')).toBe('.amadeus/x.png')
+    for (const [dir, ref] of [['notes', 'attachments/x.png'], ['notes/sub', 'notes/x.png'], ['a/b', 'a/c/d/x.png'], ['a/b/c', 'x.png'], ['笔记 夹', '附件/a b.png']]) {
+      expect(normPath(joinRel(dir, relFrom(dir, ref))), `${dir} ← ${ref}`).toBe(ref)
+    }
+  })
+
+  it('页目录之下的逐字不动:盘上本来的 ./ 、../ 、中途的 .. 不被改写', () => {
+    for (const md of ['![](./x.png)\n', '![](../x.png)\n', '![](sub/../x.png)\n', '![](../notes/x.png)\n', '![](../../out.png)\n', '![](../assets/a%20b.png "t")\n']) {
+      expect(toStoredMarkdown(toDisplayMarkdown(md, 'notes'), 'notes'), md).toBe(md)
+    }
+  })
+
+  it('⚠️从别的文件夹贴 / 搬进来的图:写成 ../,重开指回同一个文件;再存一遍字节稳定', () => {
+    const stored = toStoredMarkdown(disp('attachments/a b.png'), 'notes')
+    expect(stored).toBe('![](../attachments/a%20b.png)')
+    expect(reopened(stored, 'notes')).toBe('attachments/a b.png')
+    expect(toStoredMarkdown(toDisplayMarkdown(stored, 'notes'), 'notes')).toBe(stored)
+    // 更深一层、兄弟目录
+    expect(toStoredMarkdown(disp('a/c/x.png'), 'a/b/n')).toBe('![](../../c/x.png)')
+    expect(reopened('![](../../c/x.png)', 'a/b/n')).toBe('a/c/x.png')
+  })
+
+  it('显示地址里带着没折叠的 ..(原笔记里就是 ../ 写法)贴到别的文件夹:先折叠再算,不写出 ../other/../ 这种', () => {
+    const src = /\]\(([^)\s]+)/.exec(toDisplayMarkdown('![](../assets/x.png)', 'other'))![1] // 在 other/ 下的笔记里它的显示地址
+    const stored = toStoredMarkdown(`![](${src})`, 'notes/sub')
+    expect(stored).toBe('![](../../assets/x.png)')
+    expect(reopened(stored, 'notes/sub')).toBe('assets/x.png')
+  })
+
+  it('折叠后逃出库根的地址:照算相对路径,不会变成指向库内的另一个文件', () => {
+    const stored = toStoredMarkdown(disp('../x.png'), 'notes') // 手写的默认协议地址才会有这种
+    expect(stored).toBe('![](../../x.png)')
+    expect(reopened(stored, 'notes')).toBe('../x.png')
+  })
+
+  it('已经存成库内路径写法的存量笔记不自愈:重开仍按页相对拼,存回去字节不变(修不了,也不改写)', () => {
+    const md = '![](attachments/x.png)\n'
+    expect(reopened(md, 'notes')).toBe('notes/attachments/x.png')
+    expect(toStoredMarkdown(toDisplayMarkdown(md, 'notes'), 'notes')).toBe(md)
   })
 })

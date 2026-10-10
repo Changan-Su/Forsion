@@ -128,6 +128,10 @@ describe('installShareBridge', () => {
     installShareBridge({ apiBase: 'https://cloud.test/api', token: 'to/k', tree: () => tree, currentPage: () => cur, fetch: fakeFetch })
     expect(typeof (globalThis as unknown as { window: { amadeus?: unknown } }).window.amadeus).toBe('object')
     expect(toAssetUrl('Docs/.amadeus/pic.png')).toBe('https://cloud.test/api/amadeus/public/shares/to%2Fk/asset?ref=Docs%2F.amadeus%2Fpic.png&page=Docs%2FNote.md')
+    // ref 里的 `.` / `..` 先折叠再送(服务端见到这种段一律拒收;2026-10-10 对着真路由核过:带 `..` 404,折叠后 200)。
+    // 折叠后逃出库根的原样送。负对照(实跑过):shareBridge 里去掉 normalizePosix → 下面第一条红。
+    expect(toAssetUrl('Docs/sub/../attachments/x.png', true)).toBe('https://cloud.test/api/amadeus/public/shares/to%2Fk/asset?ref=Docs%2Fattachments%2Fx.png&page=Docs%2FNote.md')
+    expect(toAssetUrl('../out.png')).toBe('https://cloud.test/api/amadeus/public/shares/to%2Fk/asset?ref=..%2Fout.png&page=Docs%2FNote.md')
     cur = null
     expect(toAssetUrl('x.png')).toBe('https://cloud.test/api/amadeus/public/shares/to%2Fk/asset?ref=x.png')
     vi.unstubAllGlobals()

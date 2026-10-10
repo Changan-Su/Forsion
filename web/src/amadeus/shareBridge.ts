@@ -21,6 +21,7 @@ import { stripPageBasename } from '@amadeus-shared/compiler/names'
 import { parseDb } from '@amadeus-shared/db/schema'
 import { pageKey } from '@amadeus-shared/links'
 import { setAssetUrlBuilder } from '@amadeus-shared/assets'
+import { normalizePosix } from './cloudPaths'
 
 export interface ShareTree { root: string; pages: string[]; folders: string[] }
 
@@ -286,8 +287,9 @@ export function createShareBridge(cfg: ShareBridgeCfg): AmadeusApi {
 export function installShareBridge(cfg: ShareBridgeCfg): AmadeusApi {
   const api = createShareBridge(cfg)
   // 只装构建、不给解析:分享页只读、从不存盘,没有「换回页相对路径」这一步(接缝说明见 shared/amadeus/assets.ts)。
+  // ref 先折叠 `.` / `..`:服务端见到这种段一律拒收,`![](../attachments/x.png)` 这类引用此前在分享页显示不出。
   setAssetUrlBuilder((ref) => {
-    const q = new URLSearchParams({ ref })
+    const q = new URLSearchParams({ ref: normalizePosix(ref) || ref })
     const page = cfg.currentPage()
     if (page) q.set('page', page)
     return `${cfg.apiBase}/amadeus/public/shares/${encodeURIComponent(cfg.token)}/asset?${q.toString()}`

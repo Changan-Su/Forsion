@@ -576,7 +576,7 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
       const bytes = new Uint8Array(await file.arrayBuffer())
       const { opts } = await getAttachmentPrefs()
       const { pageRel } = await amadeus.saveAttachment(path, file.name || 'pasted.png', bytes, opts)
-      return toAssetUrl(joinRel(pageDir, pageRel))
+      return toAssetUrl(joinRel(pageDir, pageRel), true)
     } catch {
       return null
     }

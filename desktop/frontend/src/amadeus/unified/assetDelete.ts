@@ -7,7 +7,7 @@
 // 块先删、再问文件(不拿弹窗卡住删除)。撤销能把块拿回来,拿不回文件 —— 与删笔记那条流程
 // 同一个可恢复性故事(有回收站就进回收站)。
 import type { Fragment, Node as ProseNode } from '@milkdown/kit/prose/model'
-import { assetKey, assetRefs, fromDefaultAssetUrl } from '@amadeus-shared/assets'
+import { assetKey, assetRefs, fromDefaultAssetUrl, joinRel, normPath } from '@amadeus-shared/assets'
 import { amadeus } from '../api'
 import { askDeleteAssets } from '../components/askDeleteAssets'
 import { trashVaultFiles } from '../store/pageStore'
@@ -30,20 +30,24 @@ export async function askDeleteRemovedAssets(page: string, removed: string, text
   //   只有裸文件名引用(Obsidian 惯例,本来就是全库按名找)才按文件名认。要彻底消除这个窗口,
   //   得让主进程按「这次删掉的 ref」现场解析并回一个规范路径(新 IPC),现在不值当。
   const exclusive = await amadeus.exclusiveAssets?.(page).catch(() => [] as string[])
-  const targets = (exclusive ?? []).filter((rel) => gone.some((r) => matches(r, rel)))
+  const pageDir = page.replace(/\\/g, '/').split('/').slice(0, -1).join('/')
+  const targets = (exclusive ?? []).filter((rel) => gone.some((r) => matches(r, rel, pageDir)))
   if (!targets.length) return
   if ((await askDeleteAssets(page, targets, { block: true })) !== 'with') return
   await trashVaultFiles(targets)
 }
 
 /** 这次删掉的引用 `ref` 指的是不是 vault 里的 `rel` 这个文件。
- *  带路径的引用(`子夹/x.png`、`./x.png`)必须路径相符;裸文件名才按文件名认 —— 后者本来就是
- *  「全库按名找」的语义(与主进程 assetKey 的保守口径同源)。 */
-function matches(ref: string, rel: string): boolean {
-  const r = ref.replace(/\\/g, '/').replace(/^\.\//, '').toLowerCase()
-  const target = rel.replace(/\\/g, '/').toLowerCase()
+ *  带路径的引用(`子夹/x.png`、`./x.png`、`../attachments/x.png`)必须路径相符:和主进程 resolveAttachment 同一个顺序,
+ *  先按页目录解析(`.` / `..` 按词法折叠),再当库内路径。裸文件名才按文件名认 —— 后者本来就是
+ *  「全库按名找」的语义(与主进程 assetKey 的保守口径同源)。
+ *  2026-10-10 之前带路径的只做「相等 / 后缀」比对:`../` 开头的引用(页目录之外的图片现在都这么写)永远对不上,
+ *  删块时就不问文件了(不问 = 不删,没有丢东西,但文件成了孤儿)。 */
+function matches(ref: string, rel: string, pageDir: string): boolean {
+  const r = ref.replace(/\\/g, '/')
   if (!r.includes('/')) return assetKey(ref) === assetKey(rel)
-  return target === r || target.endsWith(`/${r}`)
+  const target = rel.replace(/\\/g, '/').toLowerCase()
+  return [joinRel(pageDir, r), r].some((p) => normPath(p).toLowerCase() === target)
 }
 
 /** 一段文档内容里的「文本 + 链接/图片目标」,拼成够 assetRefs 认的形态(不做完整 md 序列化)。

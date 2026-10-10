@@ -13,7 +13,10 @@ vi.mock('../api', () => ({ amadeus: {} }))
 vi.mock('../components/askDeleteAssets', () => ({ askDeleteAssets: vi.fn() }))
 vi.mock('../store/pageStore', () => ({ trashVaultFiles: vi.fn() }))
 
-import { refTextOf } from './assetDelete'
+import { amadeus } from '../api'
+import { askDeleteAssets } from '../components/askDeleteAssets'
+import { trashVaultFiles } from '../store/pageStore'
+import { askDeleteRemovedAssets, refTextOf } from './assetDelete'
 
 const schema = new Schema({
   nodes: {
@@ -42,5 +45,35 @@ describe('refTextOf: which file a removed block points at', () => {
     const text = refTextOf(imageBlock(toAssetUrl('dir/pic.png')))
     expect(text).toBe('![](dir/pic.png)')
     expect(assetRefs(text)).toEqual(['dir/pic.png'])
+  })
+})
+
+/** 删掉的引用牵着独占表里的哪个文件(2026-10-10)。页目录之外的图片现在落盘成 `../…`;此前带路径的引用只做
+ *  「相等 / 后缀」比对,`../attachments/x.png` 对不上主进程给的 `attachments/x.png`,删块时就不问文件了。
+ *  负对照(实跑过):matches 改回「target === r || target.endsWith('/' + r)」→ 第 1 / 3 格红。 */
+describe('askDeleteRemovedAssets: path refs resolve like resolveAttachment', () => {
+  const run = async (page: string, removed: string, exclusive: string[]): Promise<string[] | null> => {
+    vi.mocked(trashVaultFiles).mockClear()
+    vi.mocked(askDeleteAssets).mockResolvedValue('with' as never)
+    ;(amadeus as { exclusiveAssets?: unknown }).exclusiveAssets = vi.fn(async () => exclusive)
+    await askDeleteRemovedAssets(page, removed, '')
+    return vi.mocked(trashVaultFiles).mock.calls[0]?.[0] as string[] ?? null
+  }
+
+  it('`../` 引用:按页目录折叠后对上库根的文件', async () => {
+    expect(await run('notes/note.md', '![](../attachments/x.png)', ['attachments/x.png'])).toEqual(['attachments/x.png'])
+    expect(await run('a/b/note.md', '![](../../img/y%20z.png)', ['img/y z.png'])).toEqual(['img/y z.png'])
+  })
+
+  it('页相对、库内路径、`./` 三种带路径的写法照旧认;裸文件名按文件名认', async () => {
+    expect(await run('notes/note.md', '![](.amadeus/p.png)', ['notes/.amadeus/p.png'])).toEqual(['notes/.amadeus/p.png'])
+    expect(await run('notes/note.md', '![[attachments/x.png]]', ['attachments/x.png'])).toEqual(['attachments/x.png'])
+    expect(await run('notes/note.md', '![](./p.png)', ['notes/p.png'])).toEqual(['notes/p.png'])
+    expect(await run('notes/note.md', '![[p.png]]', ['elsewhere/P.png'])).toEqual(['elsewhere/P.png'])
+  })
+
+  it('路径对不上的不牵连:同名但在别处的文件、只是后缀相同的路径', async () => {
+    expect(await run('notes/note.md', '![](../attachments/x.png)', ['notes/attachments/x.png'])).toBeNull()
+    expect(await run('notes/note.md', '![](sub/x.png)', ['other/sub/x.png'])).toBeNull()
   })
 })

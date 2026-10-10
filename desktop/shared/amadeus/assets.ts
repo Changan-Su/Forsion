@@ -2,6 +2,7 @@
 //
 // On disk a block stores PORTABLE, page-folder-relative image links, e.g.
 //   ![](.amadeus/img-xyz.png)
+// 图片在页目录之外时写成 `../…`(`![](../attachments/x.png)`),不写库内路径 —— 见 relFrom。
 // The renderer can't load those directly (its base URL isn't the vault), so for DISPLAY
 // we rewrite them to a custom protocol URL that the main process resolves against the vault:
 //   ![](amadeus-asset://v/<encoded vault-relative path>)
@@ -24,12 +25,44 @@ export function joinRel(dir: string, rel: string): string {
   return !d || d === '.' ? r : `${d}/${r}`.replace(/\/{2,}/g, '/')
 }
 
-/** Make `vaultRel` relative to a vault-relative dir (inverse of joinRel). */
+/** 库内相对路径规范化:折叠 `.` / `..` 与多余的斜杠;越出库根的 `..` 保留在头上(越没越界由调用方判)。 */
+export function normPath(p: string): string {
+  const out: string[] = []
+  for (const seg of p.split('/')) {
+    if (!seg || seg === '.') continue
+    if (seg === '..' && out.length && out[out.length - 1] !== '..') out.pop()
+    else out.push(seg)
+  }
+  return out.join('/')
+}
+
+/** 从 fromDir 指向 vaultRel 的相对路径(两者都已规范化;结果可以 `../` 开头)。 */
+export function relPath(fromDir: string, vaultRel: string): string {
+  const a = fromDir ? fromDir.split('/') : []
+  const b = vaultRel.split('/')
+  let i = 0
+  while (i < a.length && i < b.length - 1 && a[i] === b[i]) i++
+  return [...a.slice(i).map(() => '..'), ...b.slice(i)].join('/')
+}
+
+/** Make `vaultRel` relative to a vault-relative dir —— joinRel 的逆:`joinRel(dir, relFrom(dir, x))` 折叠后就是 x。
+ *    · 在页目录之下:去掉「页目录/」前缀,其余**逐字**(显示地址里带着没折叠的 `..` 时原样换回 —— 盘上本来的
+ *      `../x.png`、`./x.png` 存回去一个字节不变)。
+ *    · 在页目录之外:先折叠,再写成 `../…`。
+ *  ⚠️ 2026-10-10 之前第二种情况原样返回库内路径:笔记在 notes/、图片在库根的 attachments/(从别的文件夹复制 / 搬块
+ *  过来的图片节点就是这样)存成 `![](attachments/x.png)`,而重开一律按页相对拼成 notes/attachments/x.png ——
+ *  三端都取不到(桌面的协议处理器对带路径的地址只做精确匹配;云端服务端、手机本地文件服务同样),那里恰好有
+ *  同路径的文件时显示的还是另一张图。`../` 不是新写法:附件放固定文件夹时 attachmentPaths 的 pageRel 一直这么写。
+ *  已经存成库内路径写法的存量笔记这里不自愈(重开时已经分不清它指的是页目录还是库根)。
+ *  仪器:assets.test.ts 的「页目录之外的引用」、electron/amadeus/assetProtocol.test.ts、
+ *  frontend/src/services/cloudAssetsRoundtrip.test.ts 同名一组、mobile 的 npm run e2e:localasset 场景 E / F / G。 */
 export function relFrom(dir: string, vaultRel: string): string {
   const d = dir.replace(/\\/g, '/').replace(/\/+$/, '')
   if (!d || d === '.') return vaultRel
   const prefix = `${d}/`
-  return vaultRel.startsWith(prefix) ? vaultRel.slice(prefix.length) : vaultRel
+  if (vaultRel.startsWith(prefix)) return vaultRel.slice(prefix.length)
+  const to = normPath(vaultRel)
+  return to ? relPath(normPath(d), to) : vaultRel
 }
 
 /** 默认的显示地址:amadeus-asset:// 自定义协议(**只有桌面主进程**解析它)。 */
@@ -44,13 +77,17 @@ const defaultAssetUrl = (ref: string): string => `${ASSET_SCHEME}://v/${encodeUR
  *  页相对路径;只装构建的宿主上,编辑器一存盘就把注入的地址(连同资源令牌 / 设备上的绝对路径)写进笔记 ——
  *  令牌过期图片失联,同步到别的设备是一条外链而不是附件。只读的宿主(分享页,从不存盘)可以不给解析。
  *  解析器只许认**自己这个库**的资源地址,认不出一律回 null:它的结果会被写回用户的正文。
- *  仪器:assets.test.ts 的「换了显示地址的构建器之后的往返」+ mobile 的 npm run e2e:localasset。 */
-let assetUrlBuilder: (ref: string) => string = defaultAssetUrl
+ *  仪器:assets.test.ts 的「换了显示地址的构建器之后的往返」+ mobile 的 npm run e2e:localasset。
+ *
+ *  构建器的第二个参数 `exact`:ref 已经是**完整的库内路径**(笔记正文里的 `![](…)`,toDisplayMarkdown 拼好页目录
+ *  之后的结果),宿主照这个路径取、别再按「当前页的目录」解析一遍。`![[裸文件名]]` 这类嵌入不带它。只有
+ *  服务端会按页目录解析的宿主(云端库)用得上,别的宿主忽略即可。 */
+let assetUrlBuilder: (ref: string, exact?: boolean) => string = defaultAssetUrl
 let assetUrlParser: ((url: string) => string | null) | null = null
 
 /** Install a custom display-URL builder for vault assets, together with its inverse.
  *  `parse(url)` → vault-relative path, or null when the URL is not one this builder produced. */
-export function setAssetUrlBuilder(build: (ref: string) => string, parse?: (url: string) => string | null): void {
+export function setAssetUrlBuilder(build: (ref: string, exact?: boolean) => string, parse?: (url: string) => string | null): void {
   assetUrlBuilder = build
   assetUrlParser = parse ?? null
 }
@@ -61,13 +98,13 @@ export function resetAssetUrlBuilder(): void {
   assetUrlParser = null
 }
 
-export function toAssetUrl(vaultRelPath: string): string {
+export function toAssetUrl(vaultRelPath: string, exact = false): string {
   // ⚠️ 结果要塞进 markdown 的链接目标(`![](…)`),那里**不许有裸括号** —— IMG_RE 和 CommonMark
   // 都在第一个 `)` 处截断,而 `encodeURIComponent` 偏偏不编码 `()`(实测:`export (1).png` →
   // `export%20(1).png`)。截断的后果是落盘写出 `![](…%281).png)` 这种半截路径,图片当场失联。
   // 统一在**唯一出口**兜住:桌面协议版、云端 HTTP 版(setAssetUrlBuilder 注入)都不必各自记得。
   // 解析侧 decodeURIComponent 认 `%28`/`%29`,对称。
-  return assetUrlBuilder(vaultRelPath).replace(/[()]/g, (c) => '%' + c.charCodeAt(0).toString(16).toUpperCase())
+  return assetUrlBuilder(vaultRelPath, exact).replace(/[()]/g, (c) => '%' + c.charCodeAt(0).toString(16).toUpperCase())
 }
 
 /** 只认默认协议的那一半(不问装上的解析器)。
@@ -144,14 +181,14 @@ export function toDisplayMarkdown(md: string, pageDir: string): string {
       // 认不认得出由装上的解析器说了算:桌面没装,盘上的云端地址在桌面上仍是一条外链。
       // 只动「裸目标 + 解析器认得」这一种(旧缺陷写出来的就是它)。尖括号目标、默认协议的字面地址照旧逐字不动:
       // 产品不会把它们写到盘上,存盘那一侧也不拆尖括号 —— 这里拆了,原本逐字保住的引用就会在下次存盘被改写(评审 2026-10-09)。
-      // ⚠️ 已知局限:坏了之后又被挪到别的文件夹的笔记,ref 落在页目录之外。打开时照样显示得出;但存盘写下的是
-      //   库内路径写法(relFrom 不产出 `../`),云端 / 手机的显示侧按「页目录 + 引用」拼地址,重开后找不到(桌面认)。
+      // 坏了之后又被挪到别的文件夹的笔记,ref 落在页目录之外:存盘时 relFrom 写成 `../…`,重开照样找得到。
       if (url.startsWith('<') || u.startsWith(`${ASSET_SCHEME}:`)) return full
       const own = fromAssetUrl(u)
-      return own == null ? full : pre + toAssetUrl(own) + rest
+      return own == null ? full : pre + toAssetUrl(own, true) + rest
     }
     // 先解码再拼:盘上是 `%20` 编码形态,不解码的话 toAssetUrl 会二次编码 → 协议侧找不到文件。
-    return pre + toAssetUrl(joinRel(pageDir, decodeSafe(u))) + rest
+    // joinRel 不折叠 `..`:显示地址里原样带着,存盘时 relFrom 才能逐字换回(各宿主取文件时自己折叠)。
+    return pre + toAssetUrl(joinRel(pageDir, decodeSafe(u)), true) + rest
   })
   const out = md.includes('![') ? mapOutsideFences(md, (line) => (line.includes('![') ? outsideCodeSpans(line, toDisplay) : line)) : md
   return tabsToEntities(out)
