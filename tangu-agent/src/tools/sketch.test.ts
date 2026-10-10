@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { createTanguProfile, createAiStudioProfile } from '../profiles/index.js';
 import { getToolDefinitions, getToolCapabilities, executeTool } from './registry.js';
 import type { ToolContext } from './toolTypes.js';
-import { SKETCH_SECTION, sketchEnabledFor, sketchTurnSignalFor } from './builtin/sketch.js';
+import { SKETCH_LESS_NOTE, SKETCH_SECTION, sketchEnabledFor, sketchTurnSignalFor, visualsPrefOf } from './builtin/sketch.js';
 
 const toolNames = (ctx: ToolContext): string[] => getToolDefinitions(ctx).map((t) => t.function.name);
 
@@ -41,6 +41,28 @@ describe('sketch visibility gating (GUI client tag)', () => {
     expect(toolNames({ ...base, appId: tangu.appId, profile: tangu, execMode: 'host', client: 'desktop/2.8.0', subAgentDepth: 1 })).not.toContain('sketch');
   });
 
+  it('is hidden when the user set interface visuals to off (ui_settings snapshot), visible for less/auto/unknown', () => {
+    const gui = { client: 'desktop/2.13.0' };
+    expect(sketchEnabledFor({ ...gui, uiSettings: { visuals: { value: 'off' } } })).toBe(false);
+    expect(sketchEnabledFor({ ...gui, uiSettings: { visuals: { value: 'less' } } })).toBe(true);
+    expect(sketchEnabledFor({ ...gui, uiSettings: { visuals: { value: 'auto' } } })).toBe(true);
+    expect(sketchEnabledFor({ ...gui, uiSettings: { visuals: { value: 'garbage' } } })).toBe(true);
+    expect(sketchEnabledFor(gui)).toBe(true);
+    // 同一判定也管工具表:off 的 run 里模型拿不到 sketch。
+    const ctx = { ...base, appId: tangu.appId, profile: tangu, execMode: 'host' as const, client: 'desktop/2.13.0', uiSettings: { visuals: { value: 'off' } } };
+    expect(toolNames(ctx)).not.toContain('sketch');
+    expect(visualsPrefOf({ visuals: { value: 'off' } })).toBe('off');
+    expect(visualsPrefOf(undefined)).toBe('auto');
+  });
+
+  it('the run-frozen ctx.visuals wins over uiSettings refreshed mid-run by set_ui_setting (prompt and gate stay consistent)', () => {
+    const gui = { client: 'desktop/2.13.0' };
+    // run 开始时 auto(提示段已催画),中途回执把 uiSettings 改成 off → 工具仍在,与提示一致;下一次 run 才按 off 走
+    expect(sketchEnabledFor({ ...gui, visuals: 'auto', uiSettings: { visuals: { value: 'off' } } })).toBe(true);
+    expect(sketchEnabledFor({ ...gui, visuals: 'off', uiSettings: { visuals: { value: 'auto' } } })).toBe(false);
+    expect(sketchEnabledFor({ ...gui, visuals: 'less' })).toBe(true);
+  });
+
   it('is appended after existing tools (append-only prefix discipline)', () => {
     const names = toolNames({ ...base, appId: tangu.appId, profile: tangu, execMode: 'host', client: 'desktop/2.8.0' });
     expect(names.indexOf('sketch')).toBeGreaterThan(names.indexOf('search_sessions'));
@@ -76,6 +98,22 @@ describe('sketch prompt section (trigger)', () => {
     expect(SKETCH_SECTION).toContain('320px');
     expect(SKETCH_SECTION).toContain('comparison/ranking');
     expect(SKETCH_SECTION).toContain('hierarchy/architecture');
+  });
+
+  it('teaches progressive ordering and the ask() channel (card -> next user message), with a less-visuals note', () => {
+    expect(SKETCH_SECTION).toContain('renders progressively');
+    expect(SKETCH_SECTION).toContain('window.forsionSketch.ask(');
+    expect(SKETCH_SECTION).toContain('never call it on load');
+    expect(SKETCH_LESS_NOTE).toContain('only when they explicitly ask');
+    const def = getToolDefinitions({ ...base, appId: tangu.appId, profile: tangu, execMode: 'host', client: 'desktop/2.13.0' })
+      .find((t) => t.function.name === 'sketch');
+    expect(def?.function.description).toContain('forsionSketch.ask(');
+    expect(def?.function.description).toContain('.copy(');
+    expect(def?.function.description).toContain('fs-compare');
+    expect(SKETCH_SECTION).toContain('fs-choice');
+    expect(SKETCH_SECTION).toContain('fs-checklist');
+    expect(SKETCH_SECTION).toContain('never add inline `style` attributes');
+    expect(SKETCH_SECTION).toContain('window.forsionSketch.copy(');
   });
 
   it('description carries the theme contract (the model can only use vars it is told about)', () => {
@@ -117,6 +155,12 @@ describe('sketch proactive turn signal', () => {
     '修复图表数据 18、25、42 渲染错误并补单测',
   ])('does not turn prose/code/single facts into visual noise: %s', (message) => {
     expect(sketchTurnSignalFor(message)).toBeUndefined();
+  });
+
+  it('visuals=less keeps an explicit request mandatory but drops the implicit signal', () => {
+    expect(sketchTurnSignalFor('请画一张从注册到支付的用户旅程图', 'less')?.kind).toBe('explicit');
+    expect(sketchTurnSignalFor('比较 Notion、Obsidian 和 Logseq 的定位、优缺点和价格', 'less')).toBeUndefined();
+    expect(sketchTurnSignalFor('比较 Notion、Obsidian 和 Logseq 的定位、优缺点和价格', 'auto')?.kind).toBe('implicit');
   });
 
   it('ignores visual words that only occur inside a code fence', () => {

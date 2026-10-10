@@ -20,8 +20,10 @@ import { ChatWikiLink, WikiText } from '../../components/ChatWikiLink'
 import { RefChipView, splitLeadingRefs } from './RefChipView'
 import { VoiceBubble } from '../../components/VoiceBubble'
 import { InlineFiles } from '../../components/InlineFiles'
+import { IntelligentUi } from '../../components/IntelligentUi'
 import { SketchCards } from '../../components/SketchCard'
 import { sketchFence } from '../../amadeus/blocks/sketch/format'
+import { streamingArgString } from '../streamingWrite'
 import { SystemPromptBlock } from '../../components/SystemPromptBlock'
 import './chatAvatars' // 「聊天头像」开关落 <html data-chat-avatars>,见该文件
 
@@ -70,12 +72,24 @@ import './chat2.css'
 export type OrderedToolPart =
   | { t: 'tools'; events: ToolEvent[] }
   | { t: 'sketch'; item: SketchItem }
+  | { t: 'intelligent'; event: ToolEvent }
+
+/** 直播中还没收口的 sketch 调用 → 草稿卡(10-09,对标 ChatGPT Intelligent UI 边生成边渲染):tool_stream 已把参数增量
+ *  累进 ev.arguments,这里从半截 JSON 里把 html 解出来。只在**直播**里算(live):历史 / 中断的未完成调用照旧不画幻影卡。 */
+function draftSketchOf(ev: ToolEvent): SketchItem | undefined {
+  if (ev.name !== 'sketch' || ev.done || !ev.arguments) return undefined
+  const html = streamingArgString(ev.arguments, 'html')
+  if (!html || !html.trim()) return undefined
+  const title = streamingArgString(ev.arguments, 'title')
+  return { callId: ev.id, html, ...(title ? { title } : {}), draft: true }
+}
 
 /**
  * 把一个连续工具段按 Sketch 完成点切开。Sketch 的工具行仍留在前一组中,卡片紧跟其后；
  * 后续工具另起一组,于是多个草图与正文都不会再被批量挪到消息末尾。
+ * live=消息还在直播:没收口的 sketch 调用也出一张草稿卡(同 callId,终稿到达原地换成正式卡)。
  */
-export function partitionToolSegment(events: ToolEvent[], sketches?: SketchItem[]): OrderedToolPart[] {
+export function partitionToolSegment(events: ToolEvent[], sketches?: SketchItem[], live = false): OrderedToolPart[] {
   const sketchByCall = new Map((sketches || []).map((item) => [item.callId, item]))
   const parts: OrderedToolPart[] = []
   let tools: ToolEvent[] = []
@@ -85,7 +99,12 @@ export function partitionToolSegment(events: ToolEvent[], sketches?: SketchItem[
   }
   for (const ev of events) {
     tools.push(ev)
-    const sketch = sketchByCall.get(ev.id)
+    if (ev.name === 'intelligent_ui') {
+      flushTools()
+      parts.push({ t: 'intelligent', event: ev })
+      continue
+    }
+    const sketch = sketchByCall.get(ev.id) ?? (live ? draftSketchOf(ev) : undefined)
     if (!sketch) continue
     flushTools()
     parts.push({ t: 'sketch', item: sketch })
@@ -522,6 +541,8 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
       if (seg.t === 'tools') for (const id of seg.ids) if (availableSketchIds.has(id)) inlineSketchIds.add(id)
     }
   }
+  const inlineToolIds = new Set(!voiceMode ? (msg.segments || []).flatMap(seg => seg.t === 'tools' ? seg.ids : []) : [])
+  const trailingIntelligent = (msg.toolEvents || []).filter(ev => ev.name === 'intelligent_ui' && !inlineToolIds.has(ev.id))
   const trailingSketches = (msg.sketches || []).filter((item) => !inlineSketchIds.has(item.callId))
 
   return (
@@ -551,12 +572,14 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
                   : null
               }
               const evs = seg.ids.map((id) => msg.toolEvents?.find((e) => e.id === id)).filter(Boolean) as ToolEvent[]
-              const parts = partitionToolSegment(evs, msg.sketches)
+              const parts = partitionToolSegment(evs, msg.sketches, streaming)
               return parts.length ? (
                 <Fragment key={i}>
                   {parts.map((part, j) => part.t === 'tools'
                     ? <ToolGroup key={`tools-${part.events.map((ev) => ev.id).join('-')}-${j}`} events={part.events} running={msg.status === 'streaming'} approvals={msg.approvals} awaitingAnswer={awaitingAnswer} />
-                    : <SketchCards key={`sketch-${part.item.callId}`} items={[part.item]} actions={sketchActions} stateScope={runSid ? `${runSid}:${msg.id}` : undefined} />)}
+                    : part.t === 'intelligent'
+                      ? <IntelligentUi key={`intelligent-${part.event.id}`} event={part.event} live={streaming} stateScope={runSid ? `${runSid}:${msg.id}` : undefined} onAsk={handlers?.onSuggest} />
+                    : <SketchCards key={`sketch-${part.item.callId}`} items={[part.item]} actions={sketchActions} stateScope={runSid ? `${runSid}:${msg.id}` : undefined} onAsk={handlers?.onSuggest} />)}
                 </Fragment>
               ) : null
             })
@@ -633,7 +656,8 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
         {!!msg.displayFiles?.length && fileCtx && (
           <InlineFiles files={msg.displayFiles} cfg={fileCtx.cfg} sessionId={fileCtx.sessionId} execMode={fileCtx.execMode} onOpenPreview={fileCtx.onOpenPreview} />
         )}
-        {!!trailingSketches.length && <SketchCards items={trailingSketches} actions={sketchActions} stateScope={runSid ? `${runSid}:${msg.id}` : undefined} />}
+        {trailingIntelligent.map(ev => <IntelligentUi key={ev.id} event={ev} live={streaming} stateScope={runSid ? `${runSid}:${msg.id}` : undefined} onAsk={handlers?.onSuggest} />)}
+        {!!trailingSketches.length && <SketchCards items={trailingSketches} actions={sketchActions} stateScope={runSid ? `${runSid}:${msg.id}` : undefined} onAsk={handlers?.onSuggest} />}
         {/* 审批卡在输入框上方的托盘里批(ApprovalTray);流里只留一行指路,已兑现的不留痕 —— 结局看工具卡。
             团队成员的占位气泡已有「等待你的审批」那行,不重复。 */}
         {!msg.work && pendingApv.length > 0 && (

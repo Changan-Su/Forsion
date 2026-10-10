@@ -12,7 +12,7 @@ if (values.size !== roles.length || roles.some((r) => !/^\d+px$/.test(values.get
 const ordered = roles.map((r) => parseFloat(values.get(r)))
 if (!ordered.every((n, i) => Number.isFinite(n) && (!i || n > ordered[i - 1]))) failures.push('UI font roles must increase in size')
 // These selectors represent editable/rendered documents, scale-compensated canvases, or graphic marks, not chrome text.
-const content = /ProseMirror|milkdown|md-body|msg-content|thinking-content|t2-content|t2-user(?:[\s.:,>]|$)|t2-think-body|amx-title-input|page-title(?:-edit)?(?:[\s.:,>]|$)|amx-db-peek-(?:title|body)|amx-db-form-title|amx-title-(?:bigicon|icon)|amx-iconpick-item|amx-tab-emoji|amx-bm-gen-letter|(?:-emoji|-avatar|-emblem)|\.hp-clock|\.hp-brand|\.am-words-n|\.cm-|\.pdfViewer|\.textLayer|\.amx-overview|\.amx-canvas/
+const content = /ProseMirror|milkdown|md-body|msg-content|thinking-content|t2-content|iui-title|iui-prose|t2-user(?:[\s.:,>]|$)|t2-think-body|amx-title-input|page-title(?:-edit)?(?:[\s.:,>]|$)|amx-db-peek-(?:title|body)|amx-db-form-title|amx-title-(?:bigicon|icon)|amx-iconpick-item|amx-tab-emoji|amx-bm-gen-letter|(?:-emoji|-avatar|-emblem)|\.hp-clock|\.hp-brand|\.am-words-n|\.cm-|\.pdfViewer|\.textLayer|\.amx-overview|\.amx-canvas/
 // Standalone legacy themes and third-party document renderers are not Genesis chrome.
 // sketch.css is injected as text into an isolated visualization document, never into application chrome.
 const skipFile = /\/amadeus\/theme\/|\/theme\/|\/amadeus\/pdf\/|\/blocks\/excalidraw\/|\/views\/coding\/editor\.css$|\/components\/sketch\.css$|Harness\.css$/

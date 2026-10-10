@@ -1028,6 +1028,8 @@ export interface SketchItem {
   callId: string
   html: string
   title?: string
+  /** 草稿:参数还在流式生成,html 是已到达的半截(只在直播中由渲染层现算,不落库);终稿到达即换成同 callId 的正式卡。 */
+  draft?: boolean
 }
 
 /** 任务清单一项(todo_write/todo_read 工具 + `todo` 事件;对齐 Claude TodoWrite)。 */

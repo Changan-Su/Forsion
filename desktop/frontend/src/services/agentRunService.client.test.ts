@@ -36,17 +36,22 @@ describe('startRun client tag', () => {
     expect(body.client).toMatch(new RegExp(`^${prefix.replace('/', '\\/')}`))
   })
 
-  it('没有注册能力面(desktop/web)时照样送空的 client_capabilities', async () => {
+  it('desktop/web 声明原生 Intelligent UI 渲染能力', async () => {
     const body = await sentBody()
-    expect(body.client_capabilities).toEqual([])
+    expect(body.client_capabilities).toEqual(['intelligent-ui.v1'])
+  })
+
+  it('移动端保持独立能力门禁', async () => {
+    vi.stubGlobal('window', { tangu: { mobile: true } })
+    expect((await sentBody()).client_capabilities).toEqual([])
   })
 
   it('client_capabilities 取请求时已注册能力面的并集', async () => {
     let on = false
     registerClientSurface('phone', { capabilities: () => (on ? ['phone.intents'] : []), exec: () => {} })
-    expect((await sentBody()).client_capabilities).toEqual([])
+    expect((await sentBody()).client_capabilities).toEqual(['intelligent-ui.v1'])
     on = true // 移动端开关随时会变:不能在注册时冻结
     vi.mocked(fetch).mockClear()
-    expect((await sentBody()).client_capabilities).toEqual(['phone.intents'])
+    expect((await sentBody()).client_capabilities).toEqual(['phone.intents', 'intelligent-ui.v1'])
   })
 })

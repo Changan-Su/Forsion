@@ -602,6 +602,11 @@ export interface ListAction {
  *  makes the sidebar switch to this list whenever that view is the active main view.
  *  Registered as `plugin:<pluginId>:<sourceId>`; disappears when the plugin is disabled. */
 export interface ListSourceContribution {
+  /** Opt in to Intelligent UI (2026-10-09+). Host renders items/subscribe/open using
+   * its native list surface; no model-generated DOM or actions. Relative viewId opens
+   * this plugin's full view. English description is discovery metadata, max 400 chars.
+   * Data stays live in the client; no records are sent to the model by this declaration. */
+  intelligent?: { description: string; viewId: string }
   /** Source id, unique within the plugin (kebab-case recommended). */
   id: string
   /** Source name shown in the workspace selector and search label. */

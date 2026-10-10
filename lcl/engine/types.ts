@@ -97,6 +97,9 @@ export interface ViewDefinition {
   embeddable?: boolean
   /** Dashboard 的尺寸/表面/紧凑渲染契约。 */
   dashboard?: DashboardCardDefinition
+  /** Explicit opt-in for live inline answers. English metadata for model discovery;
+   * render owns a compact surface without a leaf, toolbar or independent workspace. */
+  intelligent?: { description: string; render: () => ReactNode }
   /** 该 view 做活动主视图时,左栏统一工作区应自动切到的模式(如 'notes' 或 'plugin:<pid>:<srcId>')。
    *  autoWorkspaceMode 的声明式扩展位;内置硬规则仍在 workspaceMode.ts。 */
   workspaceSource?: string

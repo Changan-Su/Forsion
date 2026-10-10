@@ -5,6 +5,7 @@
  *   GET  /agent/runs?session_id=     列出该 session 的在飞/最近 run（刷新恢复用）
  *   POST /agent/runs/:id/abort       中止
  */
+import { normalizeUIAppCards } from '../shared/intelligentCards.js';
 import { Router } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { authMiddleware, AuthRequest } from '../core/http.js';
@@ -193,7 +194,7 @@ export function normalizeUiValues(v: unknown): Record<string, string> | undefine
 router.post('/agent/runs', authMiddleware, async (req: AuthRequest, res) => {
   try {
     const userId = req.user!.userId;
-    const { session_id, model_id, app_id, message, attachments, agent_config, client, ui_commands, ui_settings, approval_tray, client_capabilities, user_message_id, ephemeral_hint } = req.body || {};
+    const { session_id, model_id, app_id, message, attachments, agent_config, client, ui_commands, ui_settings, approval_tray, client_capabilities, user_message_id, ephemeral_hint, ui_cards } = req.body || {};
     if (agent_config != null && (typeof agent_config !== 'object' || Array.isArray(agent_config))) {
       return res.status(400).json({ detail: 'agent_config must be an object' });
     }
@@ -285,6 +286,7 @@ router.post('/agent/runs', authMiddleware, async (req: AuthRequest, res) => {
         // 客户端原生能力(phone.intents 等):只从本路由进 —— 派生 run(团队 / 讨论 / 子代理)自建 input,不继承。
         ...(clientCapsNorm ? { clientCapabilities: clientCapsNorm } : {}),
         ...(voiceHint ? { ephemeralHint: voiceHint } : {}),
+        ...(clientCapsNorm?.includes('intelligent-ui.v1') ? { uiCards: normalizeUIAppCards(ui_cards) } : {}),
       },
     });
 

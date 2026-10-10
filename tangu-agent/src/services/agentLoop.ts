@@ -1,3 +1,5 @@
+import { normalizeUIAppCards } from '../shared/intelligentCards.js';
+import { intelligentUiEnabledFor, INTELLIGENT_UI_SECTION } from '../tools/builtin/intelligentUi.js';
 import { withTaskProjectQueue } from './taskProjectQueue.js';
 import { HUMAN_GUIDANCE, readHuman, renderHumanContext } from '../agents/humanStore.js';
 import { humanProjectScope } from './humanContext.js';
@@ -33,7 +35,7 @@ import { buildAgentRoster } from './agentRoster.js';
 import { AUTONOMY_SECTION, PERSISTENCE_SECTION, TOOL_FAILURE_SECTION, ULTRA_SECTION, presetContractSection, responseStyleSection } from '../profiles/promptSections.js';
 import { resolveTools, isComputerUseTool, computerUseHiddenNames, computerUseUnavailableReason } from '../tools/toolRegistry.js';
 import { parsePreset, presetOf, type Preset } from '../core/presetTable.js';
-import { SKETCH_SECTION, sketchEnabledFor, sketchTurnSignalFor } from '../tools/builtin/sketch.js';
+import { SKETCH_LESS_NOTE, SKETCH_SECTION, sketchEnabledFor, sketchTurnSignalFor, visualsPrefOf } from '../tools/builtin/sketch.js';
 import { loadTodos as loadSessionTodos, renderTodos, type TodoItem } from '../tools/builtin/todo.js';
 import { collectGitState, formatRuntimeContext, renderTodoState, runVerifyCommand } from './runtimeContext.js';
 import { loadCustomTools, type LoadedCustomTool } from '../tools/customTools.js';
@@ -930,6 +932,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
   // 界面面(set_ui_setting / run_ui_command / list_ui_commands)的能力握手 + 目录快照。
   // 与 clientTag 同源同链;run 内冻结(prompt 缓存纪律,同 mcpTools)。
   const uiCommands = Array.isArray(input.uiCommands) ? input.uiCommands : undefined;
+  const uiCards = normalizeUIAppCards(input.uiCards);
   // 有能力握手就物化成 {}:回执刷新(updateUiSettings)要有落点;list_ui_commands 对空对象与 undefined 输出一样。
   const uiSettings: ToolContext['uiSettings'] = input.uiSettings && typeof input.uiSettings === 'object'
     ? input.uiSettings : (uiCommands ? {} : undefined);
@@ -1507,12 +1510,17 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // 3c) 可视化卡片段:与 sketch 工具**同一个判定源**(sketchEnabledFor),CLI/TUI run 两者一起缺席。
     //     常驻段管「什么时候该画 + 怎么画到下限之上」;本轮信号对比较/流程/数据形状再加一次定向提醒,
     //     不等用户必须说「画」。子代理走 subAgent.ts 自己的提示装配,天然不经过这里。
-    const sketchEnabled = sketchEnabledFor({ client: clientTag, planMode, channelSession, preset });
-    const sketchTurnSignal = sketchEnabled ? sketchTurnSignalFor(String(input.message || '')) : undefined;
+    //     visuals(渲染端 ui_settings 快照):off → 段与工具一起缺席;less → 段还在但只认明确要求(隐式信号与收尾补催不触发)。
+    const sketchEnabled = sketchEnabledFor({ client: clientTag, planMode, channelSession, preset, uiSettings });
+    const visualsPref = visualsPrefOf(uiSettings);
+    const nativeUiEnabled = intelligentUiEnabledFor({ client: clientTag, planMode, channelSession, preset, uiSettings, clientCapabilities });
+    const sketchTurnSignal = sketchEnabled ? sketchTurnSignalFor(String(input.message || ''), visualsPref) : undefined;
     if (sketchEnabled) {
       systemParts.push(SKETCH_SECTION);
+      if (nativeUiEnabled) systemParts.push(INTELLIGENT_UI_SECTION);
+      if (visualsPref === 'less') systemParts.push(SKETCH_LESS_NOTE);
       // 常驻段稳定,但本轮信号按消息正则取 3 种值 → 跟记忆易变段同一落点(B1),别留在稳定前缀里。
-      if (sketchTurnSignal && volatilePlacement === 'system') systemParts.push(sketchTurnSignal.section);
+      if (sketchTurnSignal && volatilePlacement === 'system') systemParts.push(nativeUiEnabled ? sketchTurnSignal.section.replaceAll('`sketch`', '`intelligent_ui` or `sketch`') : sketchTurnSignal.section);
     }
     ctxMark('guidance');
     // 4) USER.md 全局用户画像(所有 agent 可见,用户维护,半稳定)。读失败不阻断。
@@ -1649,7 +1657,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // 会话属于一个本机项目 → remember 露出「项目级」(定义多一段说明和一个参数);别的会话拿到的是精简定义。
     const projectScoped = profile.capabilities.hostExec ? !!(await resolveProjectMemory(userId, sessionId)) || undefined : undefined;
     const toolGateCtx = {
-      userId, sessionId, appId, runId, client: clientTag, channelSession, preset, uiCommands, uiSettings, clientCapabilities, projectScoped,
+      userId, sessionId, appId, runId, client: clientTag, channelSession, preset, uiCommands, uiSettings, uiCards, clientCapabilities, projectScoped,
+      visuals: visualsPref, // run 冻结的可视化档位:与上面拼提示用的同一个值,set_ui_setting 中途改了也到下一次 run 才生效
       runOrigin: runCategory(input), // P1-K2:后台进程来源标签取这条 run 自己的来源(channelSession 是会话级旗标)
       dispatchTargets,
       hostSandbox: runHostSandbox,
@@ -1808,7 +1817,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     if (volatilePlacement === 'system-end' && (volatileMemory || sketchTurnSignal)) {
       segAt('system:memoryVolatile');
       if (volatileMemory) systemParts.push(RECALLED_MEMORY_HEADER + volatileMemory);
-      if (sketchTurnSignal) systemParts.push(sketchTurnSignal.section);
+      if (sketchTurnSignal) systemParts.push(nativeUiEnabled ? sketchTurnSignal.section.replaceAll('`sketch`', '`intelligent_ui` or `sketch`') : sketchTurnSignal.section);
       ctxMark('memory'); // ponytail:ctx 视图里这一档会出现第二条 memory —— 只为变体 S,不新增 key
     }
     // A4:系统块字节量随 usage 事件出账 ——「固定头到底多大」以后不用再估。
@@ -1961,7 +1970,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     if (humanCorrections.length) appendToLastUserMessage('[Collaboration settings updated outside this chat. The following are separate scopes: an empty project handbook does not cancel the Agent handbook. Current saved context, not tool authorization.]\n' + humanCurrentBlocks.join('\n\n'));
     if (volatilePlacement === 'tail') {
       if (volatileMemory) appendToLastUserMessage(RECALLED_MEMORY_HEADER + volatileMemory);
-      if (sketchTurnSignal) appendToLastUserMessage(sketchTurnSignal.section);
+      if (sketchTurnSignal) appendToLastUserMessage(nativeUiEnabled ? sketchTurnSignal.section.replaceAll('`sketch`', '`intelligent_ui` or `sketch`') : sketchTurnSignal.section);
     }
 
     // /skill 点名技能(参考 Hermes 的「指针+按需加载」):强指令拼到**尾部 user 消息**,正文由模型
@@ -3092,13 +3101,13 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         // —— Sketch 交付兜底:常驻提示不足以对抗部分模型「直接写完文字就收尾」的惯性。
         //    本轮启发式命中、工具确实在场、且整 run 没调过 sketch 时,在收尾前补催一次。
         //    只催一次:模型二次检查仍认为图是噪声时允许收尾;用户的「纯文字/不要画」在信号层已排除。——
-        if (sketchTurnSignal && !sketchNudged && !lastIter && !allToolCalls.some((c) => c.function.name === 'sketch')) {
+        if (sketchTurnSignal && !sketchNudged && !lastIter && !allToolCalls.some((c) => ['sketch', 'intelligent_ui'].includes(c.function.name))) {
           sketchNudged = true;
           if (res.content || res.outputItems?.length) workingMessages.push(assistantTurnOf(res, res.content || ''));
           workingMessages.push({
             role: 'user',
             content:
-              '<visual_delivery_check>\nYou are about to finish a turn that was identified as strongly visual, but you did not call `sketch`. Re-check the actual user goal now. If a comparison, sequence, structure, data shape, or interaction would be clearer as a card, call `sketch` and make that card before the final reply; do not merely promise it. If closer inspection shows a card would genuinely add noise, finish normally and briefly preserve that judgment.\n</visual_delivery_check>',
+              '<visual_delivery_check>\nYou are about to finish a turn that was identified as strongly visual, but you did not call a visual tool. Re-check the actual user goal now. If a comparison, sequence, structure, data shape, or interaction would be clearer as a card, call an available visual tool and make that card before the final reply; do not merely promise it. If closer inspection shows a card would genuinely add noise, finish normally and briefly preserve that judgment.\n</visual_delivery_check>',
           } as ChatMessage); // 不落库不上屏:harness 脚手架
           void publish(runId, 'status', { phase: 'sketch_delivery_nudge', iteration, signal: sketchTurnSignal.kind });
           continue;

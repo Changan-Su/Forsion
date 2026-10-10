@@ -47,7 +47,7 @@ describe('sketch 包装器安全不变式', () => {
     })
     expect(ready).toHaveLength(2)
     ready[1]()
-    expect(register.mock.calls.map(([name]) => name)).toEqual(['fs-chart', 'fs-flow'])
+    expect(register.mock.calls.map(([name]) => name)).toEqual(['fs-chart', 'fs-flow', 'fs-compare', 'fs-choice', 'fs-checklist'])
   })
 })
 
@@ -101,6 +101,12 @@ describe('sketch 主题桥', () => {
     expect(doc).toContain('setProperty')
   })
 
+  it('embeds the host nonce (sanitized) and removes its own script after running', () => {
+    const doc = buildSketchDoc('<p>x</p>', {}, null, 'abc-123"<>\'')
+    expect(doc).toContain("NONCE = 'abc-123'")
+    expect(doc).not.toContain('__SKETCH_NONCE__')
+    expect(doc).toContain('document.currentScript?.remove()')
+  })
   it('escapes persisted state as script data, never markup or replacement syntax', () => {
     const value = '</script><script>alert(1)</script>$&\u2028'
     const doc = buildSketchDoc('<p>body</p>', {}, { value })
