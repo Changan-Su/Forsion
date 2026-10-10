@@ -14,6 +14,7 @@ import { Plugin, PluginKey, TextSelection, type Command, type EditorState } from
 import { Decoration, DecorationSet, type EditorView } from '@milkdown/kit/prose/view'
 import type { Node as PMNode } from '@milkdown/kit/prose/model'
 import { buildBlockString, scanMath } from './mathLivePreview'
+import { editorFocusKey, editorFocused } from './editorFocus'
 import { registerMessages, translate } from '../../../i18n'
 
 registerMessages({
@@ -52,7 +53,7 @@ export function scanObsidian(s: string): ObsSpan[] {
   return out.sort((a, b) => a.from - b.from)
 }
 
-const key = new PluginKey<{ focus: boolean }>('amadeus-obsidian-inline')
+const key = new PluginKey('amadeus-obsidian-inline')
 
 function commentBadge(view: EditorView, caretAt: number): HTMLElement {
   const el = document.createElement('span')
@@ -64,14 +65,14 @@ function commentBadge(view: EditorView, caretAt: number): HTMLElement {
     if (!view.editable) return // 只读实例:注释不展开(分享页 / 收件箱)
     e.preventDefault()
     const pos = Math.min(caretAt, view.state.doc.content.size)
-    view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, pos)).setMeta(key, { focus: true }))
+    view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, pos)).setMeta(editorFocusKey, true))
     view.focus()
   })
   return el
 }
 
 function buildDecorations(state: EditorState): DecorationSet {
-  const focus = key.getState(state)?.focus ?? false
+  const focus = editorFocused(state)
   const { from: selFrom, to: selTo } = state.selection
   const decos: Decoration[] = []
   state.doc.descendants((node: PMNode, pos: number) => {
@@ -103,21 +104,10 @@ function buildDecorations(state: EditorState): DecorationSet {
 export function obsidianInlinePlugin() {
   return $prose(
     () =>
-      new Plugin<{ focus: boolean }>({
+      new Plugin({
         key,
-        state: {
-          init: () => ({ focus: false }),
-          apply: (tr, value) => {
-            const m = tr.getMeta(key) as { focus?: boolean } | undefined
-            return m && typeof m.focus === 'boolean' ? { focus: m.focus } : value
-          },
-        },
         props: {
-          // 失焦 → 全部渲染(同 mathLivePreview:点到编辑器外,光标所在那处也收起)。
-          handleDOMEvents: {
-            focus: (view) => { if (!key.getState(view.state)?.focus) view.dispatch(view.state.tr.setMeta(key, { focus: true })); return false },
-            blur: (view) => { if (key.getState(view.state)?.focus) view.dispatch(view.state.tr.setMeta(key, { focus: false })); return false },
-          },
+          // 失焦 → 全部渲染(同 mathLivePreview:点到编辑器外,光标所在那处也收起)。焦点态读 editorFocus。
           decorations: (state) => buildDecorations(state),
         },
       }),
