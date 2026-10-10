@@ -24,6 +24,8 @@ on:
       - 'desktop/build/gen-fonts.cjs'              # web 的 prepare-fonts 调它
       - 'unit/releasePolicy.mjs'    # web/vite.config.ts 顶层 import
       - 'tangu-agent/src/core/sessionEmoji.ts' # desktop 渲染层直接 import
+      - 'tangu-agent/src/shared/intelligentUi.ts'    # 同上(Intelligent UI 文档格式)
+      - 'tangu-agent/src/shared/intelligentCards.ts' # 同上(应用卡片 id 校验)
       - 'lcl/**'                    # @lcl(Space-View 框架)
       - 'mobile/src/**'             # @mobile(手机端壳,web 按 UA 装载)
       - '.github/workflows/build-web.yml'

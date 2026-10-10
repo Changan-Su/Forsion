@@ -152,7 +152,9 @@ export function resolvePageName(name: string, pages: string[], sourcePath?: stri
 
 // ── 围栏代码块(存盘还原 / 改名重写 / 搜索解码共用一套配对)───────────────────────────────
 // 围栏行:可带列表 / 引用前缀(`* ```js`、`> ```` —— 编辑器把列表项首个代码块写成前一种);容 CRLF。
-const FENCE_LINE = /^(?:[ \t]*(?:[-*+]|\d{1,9}[.)])[ \t]+|[ \t]*>[ \t]?)*[ \t]*(`{3,}|~{3,})([^\r\n]*)\r?$/
+// ⚠️ 每一段空白只许有一处能吃:原先「前缀后面的空白」和「下一个前缀前面的空白」两处都能吃,24 层 `> ` 的一行
+//    (63 个字符)就回溯 3 秒多。现在前缀自己带走后面的空白,认的行和原先一样(随机串对拍过)。
+const FENCE_LINE = /^[ \t]*(?:(?:[-*+]|\d{1,9}[.)])[ \t]+|>[ \t]*)*(`{3,}|~{3,})([^\r\n]*)\r?$/
 
 /** 开围栏:反引号围栏的信息串里不许再有反引号(否则是行内代码,如 ```` ```a``` 前 ````)。 */
 function fenceOpen(line: string): { ch: string; n: number } | null {
@@ -174,7 +176,7 @@ const fenceCloses = (line: string, open: { ch: string; n: number }): boolean => 
  * 新打的 `[[链接]]` 按 `\[\[` 落盘成死链、URL 转义留着、改名不跟、搜索不解(09-18 评审实测)。
  * ponytail: 一堆没收尾的开围栏各扫到文末是 O(行²),真实笔记碰不到。
  */
-export function mapOutsideFences(md: string, fn: (line: string) => string): string {
+export function mapOutsideFences(md: string, fn: (line: string) => string, unclosedIsCode = false): string {
   const lines = md.split('\n')
   for (let i = 0; i < lines.length; i++) {
     const open = fenceOpen(lines[i])
@@ -182,6 +184,9 @@ export function mapOutsideFences(md: string, fn: (line: string) => string): stri
       let j = i + 1
       while (j < lines.length && !fenceCloses(lines[j], open)) j++
       if (j < lines.length) { i = j; continue }
+      // unclosedIsCode:按 CommonMark,没收尾的围栏一直开到文末 —— 后面的都当代码留着(也免了逐个开围栏各扫到文末)。
+      // 给「宁可漏改、不许改到代码」的调用方用(assets.rebaseFileRefs);缺省仍当普通行(见上)。
+      if (unclosedIsCode) break
     }
     lines[i] = fn(lines[i])
   }

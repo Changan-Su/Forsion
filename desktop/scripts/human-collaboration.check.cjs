@@ -98,6 +98,45 @@ async function run() {
     await agent.getByRole('button', { name: '更多操作', exact: true }).click()
     await win.getByRole('menuitem', { name: '阅读视图', exact: true }).click()
     console.log('PASS real save/CAS conflict/merge, draft preservation, stale-card protection, source and history')
+    // ── 旧版本写的说明(10-10):更新记录里全是没盖章的 Agent 写入 → 面板提示一句;点「让 Agent 重写」发进当前对话,真模型改完出更新卡,提示自己消失 ──
+    const historyRoot = path.join(path.dirname(original.path), '..', '..', 'human-history')
+    const historyFile = fs.readdirSync(historyRoot).map(d => path.join(historyRoot, d, 'history.json')).find(f => { try { return JSON.parse(fs.readFileSync(f, 'utf8')).some(r => r.scope?.kind === 'agent' && r.scope.slug === slug) } catch { return false } })
+    assert.ok(historyFile, 'Agent handbook history is on disk')
+    assert.ok(JSON.parse(fs.readFileSync(historyFile, 'utf8')).some(r => r.actor === 'agent' && r.rules >= 2), 'The engine stamps agent writes with the writing-rules version')
+    assert.equal(await agent.locator('[data-human-legacy]').count(), 0, 'A handbook written under the current rules shows no hint')
+    // 装成旧引擎留下的样子:内容里混着 Agent 自己的承诺,记录里只有没盖章的 Agent 写入(用户没手改过)。这一段用完把文档和记录放回原样 ——
+    // 台架在界面验收之后还有两步(撤销后列约定、自然反馈),它们认的是这之前的那份文档。那条承诺特意不提「选方案」,免得和自然反馈那一步撞题。
+    const savedDoc = fs.readFileSync(original.path, 'utf8'), savedHistory = fs.readFileSync(historyFile, 'utf8')
+    const legacyDoc = '# 协作约定\n\n## 需要你做的\n\n- 给出两种方案时，你先选定方向再让我动手。\n\n## 我这边会做\n\n改完实际运行，并把验证结果贴出来。\n\n每次交结果前，我会先把改动列成三条以内的摘要。\n'
+    await api(`/agent/agents/${slug}/human`, 'PUT', { expectedVersion: (await api(`/agent/agents/${slug}/human`)).version, content: legacyDoc, summary: 'Legacy fixture' })
+    // 每一条都改成没盖章的 Agent 写入(刚才那次 PUT 也算):提示还要求「现在这份就是最后一条记录写成的那份」,所以最后一条不能删
+    fs.writeFileSync(historyFile, JSON.stringify(JSON.parse(fs.readFileSync(historyFile, 'utf8')).map(({ rules, ...r }) => ({ ...r, actor: 'agent' }))))
+    await win.evaluate(() => window.dispatchEvent(new CustomEvent('forsion:human-changed')))
+    const legacyHint = agent.locator('[data-human-legacy]')
+    await legacyHint.waitFor()
+    assert.ok((await legacyHint.innerText()).includes('这份说明是旧版本写的'))
+    await shot('human-legacy-hint')
+    await agent.getByRole('button', { name: '更多操作', exact: true }).click()
+    assert.equal(await win.getByRole('menuitem', { name: '让 Agent 重写', exact: true }).isDisabled(), false, 'Rewrite is available on the card-opened Agent page of a local, non-plan chat with that Agent')
+    await win.keyboard.press('Escape')
+    await legacyHint.getByRole('button', { name: '让 Agent 重写', exact: true }).click()
+    await agent.getByText('已发到对话里', { exact: false }).waitFor()
+    await win.locator(`[data-chat-surface="chat"][data-session-id="${sid}"]`).getByText('请把协作说明按现在的写法重写一遍', { exact: false }).first().waitFor()
+    await legacyHint.waitFor({ state: 'detached', timeout: 240000 }) // 真模型改完:新的一条 Agent 写入带章,提示自己消失
+    const rewritten = fs.readFileSync(original.path, 'utf8')
+    assert.notEqual(rewritten, legacyDoc, 'The real model rewrote the handbook on disk')
+    await shot('human-legacy-rewritten')
+    // 按结果判,不只看「改了」(10-10 这一步曾在两边认反的情况下照样打出 PASS:用户那条被挪走,自己的两条承诺改成「请你……」留下)。
+    // 这是真模型的行为,红了先看截图和这次的工具调用,别当成界面坏了。
+    // 按意思认(和 tangu-agent/scripts/lib/human-real-live.mjs 的 keepsHumanChoice 同一个判法):换了说法的「你告诉我选哪一种」也算还在
+    assert.ok(rewritten.split('\n').some(l => /方案|做法|选项|方向/.test(l) && /你[^。\n]{0,16}(选|倾向|定)|告诉我[^。\n]{0,10}(选|倾向)/.test(l)), `The human's own line (pick a direction first) must stay in the handbook:\n${rewritten}`)
+    assert.doesNotMatch(rewritten, /实际运行|验证结果|三条以内/, `The agent's own promises must leave the handbook, in either voice:\n${rewritten}`)
+    // 挪进记忆的句子在回复下面出一行回执(条目折叠在里面,数那一行)
+    const memoryRows = await win.locator(`[data-chat-surface="chat"][data-session-id="${sid}"] [data-self-receipt]`).count()
+    fs.writeFileSync(original.path, savedDoc); fs.writeFileSync(historyFile, savedHistory)
+    await win.evaluate(() => window.dispatchEvent(new CustomEvent('forsion:human-changed')))
+    await agent.getByText('先展示可运行的例子', { exact: false }).first().waitFor()
+    console.log(`PASS legacy hint from history, rewrite sent to the chat, real model rewrote it, hint cleared (old promise section ${rewritten.includes('我这边会做') ? 'STILL THERE' : 'gone'}; self-update receipts in the chat: ${memoryRows})`)
     await win.evaluate(() => { document.documentElement.setAttribute('data-mode', 'dark'); document.documentElement.classList.add('dark') })
     await shot('human-agent-dark')
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(900, 900))

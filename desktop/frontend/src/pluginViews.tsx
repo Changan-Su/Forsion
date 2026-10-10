@@ -1,3 +1,4 @@
+import { syncIntelligentSources } from './services/intelligentCardCatalog'
 import { windowKind } from './windowKind'
 import { amadeusAvailable } from './features/runtime'
 /**
@@ -231,5 +232,9 @@ export function syncPluginViews(): void {
     }
   }
   sync()
-  usePluginStore.subscribe((s, p) => { if (s.views !== p.views) sync() })
+  syncIntelligentSources(usePluginStore.getState().listSources)
+  usePluginStore.subscribe((s, p) => {
+    if (s.views !== p.views) sync()
+    if (s.listSources !== p.listSources) syncIntelligentSources(s.listSources)
+  })
 }

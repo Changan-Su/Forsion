@@ -99,9 +99,12 @@ export function createMobileAmadeusBridge(cfg?: { apiBase?: () => string; getTok
   // 本地库没有 watcher:改写过的笔记由这里通知开着它们的编辑器回灌(onExternalChange 原本是空实现)。
   // 没能改写的 → 提示,绝不静默吞。
   const extCbs = new Set<(p: string) => void>()
-  const propagateRenames = async (pairs: Record<string, string>, pagesBefore: string[]): Promise<void> => {
+  // 同一趟里重算正文的图片 / 附件相对引用(assets.rebaseFileRefs)。folder = 挪 / 改名文件夹时的 [旧, 新];空文件夹不扫。
+  const propagateRenames = async (pairs: Record<string, string>, pagesBefore: string[], moved?: readonly [string, string]): Promise<void> => {
+    const folder = moved && (await vault.listChildren(moved[1])).length ? moved : undefined
     const res = await propagateNoteRenames(
       {
+        exists: (f) => vault.pathExists(f),
         read: async (p) => ((await vault.pathExists(p)) ? vault.readTextAbs(vault.absPath(p)) : null),
         write: async (p, text, base) => {
           const r = await writeText(p, text, { base, existingOnly: true })
@@ -111,6 +114,7 @@ export function createMobileAmadeusBridge(cfg?: { apiBase?: () => string; getTok
       },
       pairs,
       pagesBefore,
+      { folder },
     )
     for (const p of res.rewritten) for (const cb of [...extCbs]) { try { cb(p) } catch { /* 单回调失败不断链 */ } }
     toastRenameRewriteFailed(res.failed.map((f) => f.path))
@@ -233,7 +237,7 @@ export function createMobileAmadeusBridge(cfg?: { apiBase?: () => string; getTok
       const pagesBefore = await vault.listPages()
       await vault.moveEntry(folderPath, newPath)
       await index.build()
-      await propagateRenames(folderPairs(pagesBefore, folderPath, newPath), pagesBefore)
+      await propagateRenames(folderPairs(pagesBefore, folderPath, newPath), pagesBefore, [folderPath, newPath])
       return newPath
     },
     deleteFolder: async (folderPath) => { await ensureVault(); await vault.removeEntry(folderPath); await index.build() },
@@ -250,7 +254,7 @@ export function createMobileAmadeusBridge(cfg?: { apiBase?: () => string; getTok
       const pagesBefore = await vault.listPages()
       await vault.moveEntry(src, newPath)
       await index.build()
-      await propagateRenames(folderPairs(pagesBefore, src, newPath), pagesBefore)
+      await propagateRenames(folderPairs(pagesBefore, src, newPath), pagesBefore, [src, newPath])
       return newPath
     },
 

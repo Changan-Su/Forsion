@@ -52,6 +52,7 @@ import { sessionSettingsProvider } from './builtin/sessionSettings.js';
 import { appSettingsProvider } from './builtin/appSettings.js';
 import { sessionStatusProvider } from './builtin/sessionStatus.js';
 import { forsionAccountProvider } from './builtin/forsionAccount.js';
+import { intelligentUiProvider } from './builtin/intelligentUi.js';
 import { sketchProvider } from './builtin/sketch.js';
 import { manageAutomationProvider } from './builtin/manageAutomation.js';
 import { transcribeAudioProvider } from './builtin/transcribeAudio.js';
@@ -501,3 +502,5 @@ function editDistance(a: string, b: string): number {
   }
   return prev[b.length];
 }
+
+registerToolProvider(intelligentUiProvider); // Native document renderer, explicit client capability.

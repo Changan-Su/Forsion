@@ -1,0 +1,661 @@
+{
+  "dinner": {
+    "version": 1,
+    "id": "dinner",
+    "title": "周末晚餐计划",
+    "inputs": [
+      {
+        "id": "people",
+        "kind": "number",
+        "label": "用餐人数",
+        "initial": 4,
+        "min": 2,
+        "max": 8,
+        "step": 1
+      },
+      {
+        "id": "main",
+        "kind": "choice",
+        "label": "选择主菜",
+        "initial": "chicken",
+        "options": [
+          {
+            "id": "chicken",
+            "label": "宫保鸡丁",
+            "description": "约 25 分钟 · 微辣酸甜"
+          },
+          {
+            "id": "beef",
+            "label": "番茄炖牛腩",
+            "description": "约 100 分钟 · 浓郁软烂"
+          },
+          {
+            "id": "tofu",
+            "label": "香菇烧豆腐",
+            "description": "约 20 分钟 · 鲜香清淡"
+          }
+        ]
+      }
+    ],
+    "resources": [],
+    "blocks": [
+      {
+        "id": "intro",
+        "kind": "text",
+        "markdown": "三道家常菜，按人数调整采购量。以下为示例食谱估算，可按口味调整。"
+      },
+      {
+        "id": "controls",
+        "kind": "controls",
+        "inputIds": [
+          "people",
+          "main"
+        ]
+      },
+      {
+        "id": "menu",
+        "kind": "comparison",
+        "title": "本次菜单",
+        "items": [
+          {
+            "id": "side",
+            "title": "蒜蓉西兰花",
+            "description": "清爽配菜",
+            "facts": [
+              "约 10 分钟",
+              "临开饭前炒制"
+            ]
+          },
+          {
+            "id": "cold",
+            "title": "拍黄瓜",
+            "description": "开胃凉菜",
+            "facts": [
+              "约 10 分钟",
+              "可提前准备"
+            ]
+          },
+          {
+            "id": "rice",
+            "title": "米饭",
+            "description": "按胃口准备主食",
+            "facts": [
+              "电饭煲先煮",
+              "和主菜同时上桌"
+            ]
+          }
+        ]
+      },
+      {
+        "id": "shopping",
+        "kind": "checklist",
+        "title": "采购清单",
+        "items": [
+          {
+            "id": "chicken",
+            "label": "去骨鸡腿肉",
+            "quantity": {
+              "value": 600,
+              "unit": "g",
+              "scaleBy": "people",
+              "base": 4
+            },
+            "when": {
+              "input": "main",
+              "equals": "chicken"
+            }
+          },
+          {
+            "id": "peanut",
+            "label": "熟花生米",
+            "quantity": {
+              "value": 100,
+              "unit": "g",
+              "scaleBy": "people",
+              "base": 4
+            },
+            "when": {
+              "input": "main",
+              "equals": "chicken"
+            }
+          },
+          {
+            "id": "beef",
+            "label": "牛腩",
+            "quantity": {
+              "value": 800,
+              "unit": "g",
+              "scaleBy": "people",
+              "base": 4
+            },
+            "when": {
+              "input": "main",
+              "equals": "beef"
+            }
+          },
+          {
+            "id": "tomato",
+            "label": "番茄",
+            "quantity": {
+              "value": 500,
+              "unit": "g",
+              "scaleBy": "people",
+              "base": 4
+            },
+            "when": {
+              "input": "main",
+              "equals": "beef"
+            }
+          },
+          {
+            "id": "tofu",
+            "label": "豆腐",
+            "quantity": {
+              "value": 600,
+              "unit": "g",
+              "scaleBy": "people",
+              "base": 4
+            },
+            "when": {
+              "input": "main",
+              "equals": "tofu"
+            }
+          },
+          {
+            "id": "mushroom",
+            "label": "香菇",
+            "quantity": {
+              "value": 200,
+              "unit": "g",
+              "scaleBy": "people",
+              "base": 4
+            },
+            "when": {
+              "input": "main",
+              "equals": "tofu"
+            }
+          },
+          {
+            "id": "broccoli",
+            "label": "西兰花",
+            "quantity": {
+              "value": 500,
+              "unit": "g",
+              "scaleBy": "people",
+              "base": 4
+            }
+          },
+          {
+            "id": "cucumber",
+            "label": "黄瓜",
+            "quantity": {
+              "value": 500,
+              "unit": "g",
+              "scaleBy": "people",
+              "base": 4
+            }
+          },
+          {
+            "id": "garlic-side",
+            "label": "大蒜",
+            "quantity": {
+              "value": 30,
+              "unit": "g",
+              "scaleBy": "people",
+              "base": 4
+            },
+            "itemKey": "garlic"
+          },
+          {
+            "id": "garlic-main",
+            "label": "大蒜",
+            "quantity": {
+              "value": 5,
+              "unit": "g",
+              "scaleBy": "people",
+              "base": 4
+            },
+            "when": {
+              "input": "main",
+              "equals": "chicken"
+            },
+            "itemKey": "garlic"
+          },
+          {
+            "id": "ginger",
+            "label": "生姜",
+            "quantity": {
+              "value": 20,
+              "unit": "g",
+              "scaleBy": "people",
+              "base": 4
+            }
+          }
+        ]
+      },
+      {
+        "id": "steps",
+        "kind": "disclosure",
+        "title": "准备顺序",
+        "markdown": "1. 先准备凉菜并冷藏。\n2. 洗切西兰花，备好调料。\n3. 烹饪主菜，最后炒配菜。"
+      },
+      {
+        "id": "note",
+        "kind": "text",
+        "markdown": "选择牛腩时，建议提前约两小时开始准备。复制清单会使用当前人数和主菜。"
+      },
+      {
+        "id": "followup",
+        "kind": "actions",
+        "items": [
+          {
+            "id": "vegetarian",
+            "kind": "model",
+            "label": "改成全素菜单",
+            "prompt": "根据这份计划和我的当前选择，重新设计全素菜单。"
+          }
+        ]
+      }
+    ]
+  },
+  "media": {
+    "version": 1,
+    "id": "images",
+    "title": "把图片放进回答里",
+    "inputs": [
+      {
+        "id": "cover",
+        "kind": "choice",
+        "label": "选择封面方向",
+        "initial": "jetty",
+        "options": [
+          {
+            "id": "jetty",
+            "label": "中心构图"
+          },
+          {
+            "id": "diagonal",
+            "label": "斜线构图"
+          },
+          {
+            "id": "shore",
+            "label": "岸边留白"
+          }
+        ]
+      }
+    ],
+    "resources": [
+      {
+        "id": "origin",
+        "kind": "source",
+        "url": "https://github.com/sachinchoolur/lightGallery",
+        "title": "lightGallery 示例图库",
+        "description": "演示图片的来源。此处只比较构图，不对拍摄地点作判断。"
+      },
+      {
+        "id": "jetty",
+        "kind": "image",
+        "url": "https://cdn.jsdelivr.net/gh/sachinchoolur/lightGallery@9813e97837fddca82e4734bcbf4b77b0cd227772/site/static/images/demo/1-480.jpg",
+        "alt": "湖面与栈桥，中心引导线",
+        "sourceId": "origin"
+      },
+      {
+        "id": "diagonal",
+        "kind": "image",
+        "url": "https://cdn.jsdelivr.net/gh/sachinchoolur/lightGallery@9813e97837fddca82e4734bcbf4b77b0cd227772/site/static/images/demo/4-480.jpg",
+        "alt": "斜向延伸的栈桥",
+        "sourceId": "origin"
+      },
+      {
+        "id": "shore",
+        "kind": "image",
+        "url": "https://cdn.jsdelivr.net/gh/sachinchoolur/lightGallery@9813e97837fddca82e4734bcbf4b77b0cd227772/site/static/images/demo/13-480.jpg",
+        "alt": "安静的岸边与留白",
+        "sourceId": "origin"
+      }
+    ],
+    "blocks": [
+      {
+        "id": "intro",
+        "kind": "text",
+        "markdown": "图片、说明与来源留在同一条回答里。点击图片可按原始比例展开。"
+      },
+      {
+        "id": "pictures",
+        "kind": "gallery",
+        "resourceIds": [
+          "jetty",
+          "diagonal",
+          "shore"
+        ]
+      },
+      {
+        "id": "choose",
+        "kind": "controls",
+        "inputIds": [
+          "cover"
+        ]
+      },
+      {
+        "id": "comparison",
+        "kind": "comparison",
+        "title": "不同画面的用途",
+        "items": [
+          {
+            "id": "a",
+            "title": "中心构图",
+            "description": "视线集中",
+            "facts": [
+              "适合标题居中",
+              "纵深感较强"
+            ]
+          },
+          {
+            "id": "b",
+            "title": "斜线构图",
+            "description": "视线流动",
+            "facts": [
+              "适合内容导读",
+              "保留图像边缘"
+            ]
+          },
+          {
+            "id": "c",
+            "title": "岸边留白",
+            "description": "气氛平静",
+            "facts": [
+              "适合短文封面",
+              "注意文字对比度"
+            ]
+          }
+        ]
+      },
+      {
+        "id": "sources",
+        "kind": "sources",
+        "title": "图片来源",
+        "resourceIds": [
+          "origin"
+        ]
+      }
+    ]
+  },
+  "research": {
+    "version": 1,
+    "id": "research",
+    "title": "网页信息，变成可读的答案",
+    "inputs": [],
+    "resources": [
+      {
+        "id": "react",
+        "kind": "source",
+        "url": "https://react.dev/learn/preserving-and-resetting-state",
+        "title": "React：保留与重置状态",
+        "description": "组件类型、位置与 key 影响状态是否保留。长久的用户选择需要独立存储。"
+      },
+      {
+        "id": "streams",
+        "kind": "source",
+        "url": "https://platform.openai.com/docs/guides/streaming-responses",
+        "title": "OpenAI：流式响应",
+        "description": "传输层逐步接收事件。界面应以已经验证的完整内容单元提交。"
+      }
+    ],
+    "blocks": [
+      {
+        "id": "summary",
+        "kind": "text",
+        "markdown": "两条工程原则：**用户状态独立保存**；**完整区块验证后显示**。下面的来源可以展开摘要，也可打开原文。"
+      },
+      {
+        "id": "sources",
+        "kind": "sources",
+        "resourceIds": [
+          "react",
+          "streams"
+        ]
+      },
+      {
+        "id": "more",
+        "kind": "disclosure",
+        "title": "如何用在 Forsion",
+        "markdown": "人数与选项在本地更新。模型内容更新时保留用户已操作的值，历史记录继续使用原有工具事件恢复。"
+      }
+    ]
+  },
+  "pick": {
+    "version": 1,
+    "id": "cover-pick",
+    "title": "选一张做封面",
+    "inputs": [
+      {
+        "id": "cover",
+        "kind": "choice",
+        "label": "封面图",
+        "initial": "jetty",
+        "options": [
+          {
+            "id": "jetty",
+            "label": "中心构图",
+            "description": "视线集中，适合标题居中",
+            "imageId": "jetty"
+          },
+          {
+            "id": "diagonal",
+            "label": "斜线构图",
+            "description": "视线流动，适合内容导读",
+            "imageId": "diagonal"
+          },
+          {
+            "id": "shore",
+            "label": "岸边留白",
+            "description": "气氛平静，适合短文封面",
+            "imageId": "shore"
+          }
+        ]
+      }
+    ],
+    "resources": [
+      {
+        "id": "origin",
+        "kind": "source",
+        "url": "https://github.com/sachinchoolur/lightGallery",
+        "title": "lightGallery 示例图库",
+        "description": "演示图片的来源。此处只比较构图，不对拍摄地点作判断。"
+      },
+      {
+        "id": "jetty",
+        "kind": "image",
+        "url": "https://cdn.jsdelivr.net/gh/sachinchoolur/lightGallery@9813e97837fddca82e4734bcbf4b77b0cd227772/site/static/images/demo/1-480.jpg",
+        "alt": "湖面与栈桥，中心引导线",
+        "sourceId": "origin"
+      },
+      {
+        "id": "diagonal",
+        "kind": "image",
+        "url": "https://cdn.jsdelivr.net/gh/sachinchoolur/lightGallery@9813e97837fddca82e4734bcbf4b77b0cd227772/site/static/images/demo/4-480.jpg",
+        "alt": "斜向延伸的栈桥",
+        "sourceId": "origin"
+      },
+      {
+        "id": "shore",
+        "kind": "image",
+        "url": "https://cdn.jsdelivr.net/gh/sachinchoolur/lightGallery@9813e97837fddca82e4734bcbf4b77b0cd227772/site/static/images/demo/13-480.jpg",
+        "alt": "安静的岸边与留白",
+        "sourceId": "origin"
+      }
+    ],
+    "blocks": [
+      {
+        "id": "intro",
+        "kind": "text",
+        "markdown": "三张候选图各有用途。点卡片就是选它；左上角的按钮只用来放大看。"
+      },
+      {
+        "id": "choose",
+        "kind": "controls",
+        "inputIds": [
+          "cover"
+        ]
+      },
+      {
+        "id": "shore-note",
+        "kind": "text",
+        "title": "用这张时注意",
+        "markdown": "画面上半部分很亮，标题用深色字，别压在水面反光上。",
+        "when": {
+          "input": "cover",
+          "equals": "shore"
+        }
+      }
+    ]
+  },
+  "edge": {
+    "version": 1,
+    "id": "edge-widths",
+    "title": "Width edge cases",
+    "inputs": [
+      {
+        "id": "tier",
+        "kind": "choice",
+        "label": "Four short options with wide glyphs",
+        "initial": "a",
+        "options": [
+          { "id": "a", "label": "WWWWWWWW1" },
+          { "id": "b", "label": "WWWWWWWW2" },
+          { "id": "c", "label": "WWWWWWWW3" },
+          { "id": "d", "label": "WWWWWWWW4" }
+        ]
+      }
+    ],
+    "resources": [
+      {
+        "id": "long-host",
+        "kind": "source",
+        "url": "https://a-very-long-subdomain-label-that-keeps-going-and-going-and-go.another-long-label-that-also-keeps-going-for-a-while-longer.example.com/page",
+        "title": "A source whose host is longer than a narrow answer",
+        "description": "The host must wrap inside the answer instead of pushing the row wider than its container."
+      }
+    ],
+    "blocks": [
+      { "id": "choose", "kind": "controls", "inputIds": ["tier"] },
+      { "id": "refs", "kind": "sources", "resourceIds": ["long-host"] }
+    ]
+  },
+  "repeat": {
+    "version": 1,
+    "id": "cover-photo-selection",
+    "title": "摄影封面选择",
+    "inputs": [
+      {
+        "id": "cover",
+        "label": "选择一张作为封面",
+        "kind": "choice",
+        "options": [
+          { "id": "image-1", "label": "1 — 栈桥正中", "description": "栈桥从画面下方向中央远处收束，近似对称的强引导线；天空与水面倒影形成上下呼应，视觉焦点集中。", "imageId": "photo-1" },
+          { "id": "image-4", "label": "4 — 栈桥横向延伸", "description": "栈桥以斜向横贯画面，栏柱重复形成节奏；水平地平线与橙色暮光占据上部，画面更开阔、动势更强。", "imageId": "photo-4" },
+          { "id": "image-13", "label": "13 — 湖岸与前景芦苇", "description": "湖面、远岸与山体横向分层；右下芦苇构成近景框景，暖色天空倒映水面，焦点较分散、层次更自然。", "imageId": "photo-13" }
+        ],
+        "initial": "image-1"
+      }
+    ],
+    "resources": [
+      {
+        "id": "photo-1",
+        "url": "https://cdn.jsdelivr.net/gh/sachinchoolur/lightGallery@9813e97837fddca82e4734bcbf4b77b0cd227772/site/static/images/demo/1-480.jpg",
+        "kind": "image",
+        "alt": "湖面日落中，一条木栈桥从前景中央向远处延伸，水面映照天空。",
+        "sourceId": "lightgallery"
+      },
+      {
+        "id": "photo-4",
+        "url": "https://cdn.jsdelivr.net/gh/sachinchoolur/lightGallery@9813e97837fddca82e4734bcbf4b77b0cd227772/site/static/images/demo/4-480.jpg",
+        "kind": "image",
+        "alt": "暮色湖面上的栈桥斜向横贯画面，远处是山岸与橙色天空。",
+        "sourceId": "lightgallery"
+      },
+      {
+        "id": "photo-13",
+        "url": "https://cdn.jsdelivr.net/gh/sachinchoolur/lightGallery@9813e97837fddca82e4734bcbf4b77b0cd227772/site/static/images/demo/13-480.jpg",
+        "kind": "image",
+        "alt": "日落湖岸、远山及倒影，右下方有芦苇前景。",
+        "sourceId": "lightgallery"
+      },
+      { "id": "lightgallery", "url": "https://github.com/sachinchoolur/lightGallery", "kind": "source", "title": "lightGallery GitHub 仓库", "description": "图片来源：lightGallery 项目仓库中的 demo 图片。" }
+    ],
+    "blocks": [
+      { "id": "pick", "kind": "controls", "inputIds": ["cover"] },
+      { "id": "photo-options", "title": "三张候选封面（点击展开原图）", "kind": "gallery", "resourceIds": ["photo-1", "photo-4", "photo-13"] },
+      {
+        "id": "composition",
+        "title": "构图差异",
+        "kind": "comparison",
+        "items": [
+          { "id": "image-1", "title": "1 — 中心透视", "description": "栈桥居中并向远处汇聚，强引导线与倒影形成近对称结构，主体感最集中。", "facts": ["近似对称", "纵深最强", "焦点集中"], "imageId": "photo-1" },
+          { "id": "image-4", "title": "4 — 斜向节奏", "description": "栈桥斜向穿过画面，栏柱重复带来节奏；横向暮色与岸线强调开阔感。", "facts": ["斜向引导", "重复节奏", "空间开阔"], "imageId": "photo-4" },
+          { "id": "image-13", "title": "13 — 分层与前景", "description": "水面、岸线、山体横向分层，右下芦苇提供近景层次；视线更松散。", "facts": ["横向分层", "前景芦苇", "氛围自然"], "imageId": "photo-13" }
+        ]
+      },
+      { "id": "origin", "title": "图片来源", "kind": "sources", "resourceIds": ["lightgallery"] }
+    ]
+  },
+  "four": {
+    "version": 1,
+    "id": "wallpaper-left-icons",
+    "title": "四张壁纸：左边两列图标",
+    "inputs": [
+      {
+        "id": "pick",
+        "kind": "choice",
+        "label": "选一张",
+        "initial": "dock",
+        "options": [
+          { "id": "dock", "label": "栈桥", "description": "左边最干净，浅色图标最清楚", "imageId": "img-dock" },
+          { "id": "lake", "label": "芦苇湖", "description": "左上干净，左下芦苇会压图标", "imageId": "img-lake" },
+          { "id": "sunset", "label": "日落木桩", "description": "左边有木桩和倒影，图标容易糊", "imageId": "img-sunset" },
+          { "id": "boats", "label": "停船", "description": "左边全是船和碎石，最不适合", "imageId": "img-boats" }
+        ]
+      }
+    ],
+    "resources": [
+      { "id": "src", "kind": "source", "url": "https://github.com/sachinchoolur/lightGallery", "title": "sachinchoolur/lightGallery", "description": "演示图来自该仓库 site/static/images/demo" },
+      {
+        "id": "img-dock",
+        "kind": "image",
+        "url": "https://cdn.jsdelivr.net/gh/sachinchoolur/lightGallery@9813e97837fddca82e4734bcbf4b77b0cd227772/site/static/images/demo/4-480.jpg",
+        "alt": "湖面栈桥日落，左边是平滑雾面湖水",
+        "sourceId": "src"
+      },
+      {
+        "id": "img-lake",
+        "kind": "image",
+        "url": "https://cdn.jsdelivr.net/gh/sachinchoolur/lightGallery@9813e97837fddca82e4734bcbf4b77b0cd227772/site/static/images/demo/13-480.jpg",
+        "alt": "湖面倒映橙红天空，右下有芦苇",
+        "sourceId": "src"
+      },
+      {
+        "id": "img-sunset",
+        "kind": "image",
+        "url": "https://cdn.jsdelivr.net/gh/sachinchoolur/lightGallery@9813e97837fddca82e4734bcbf4b77b0cd227772/site/static/images/demo/1-480.jpg",
+        "alt": "日落水面木桩，左边有倒影",
+        "sourceId": "src"
+      },
+      {
+        "id": "img-boats",
+        "kind": "image",
+        "url": "https://cdn.jsdelivr.net/gh/sachinchoolur/lightGallery@9813e97837fddca82e4734bcbf4b77b0cd227772/site/static/images/demo/2-480.jpg",
+        "alt": "碎石岸边停着一排小船",
+        "sourceId": "src"
+      }
+    ],
+    "blocks": [
+      { "id": "pick-controls", "kind": "controls", "inputIds": ["pick"] },
+      { "id": "why", "kind": "text", "markdown": "按桌面**左侧两列图标**来看：栈桥左边是一整块平滑雾面湖水，浅色图标对比最稳。芦苇湖左上也可以，但左下芦苇会挡住下面几行。后两张左边都是高对比细节。点图可放大。" },
+      { "id": "dock-note", "kind": "text", "title": "栈桥", "when": {"input": "pick", "equals": "dock"}, "markdown": "左三分之一几乎没有木桩，只有缓慢变暗的雾面湖水。浅色图标从顶到底都清楚。木栈桥主体在右下，不会被两列图标挡住。" },
+      { "id": "lake-note", "kind": "text", "title": "芦苇湖", "when": {"input": "pick", "equals": "lake"}, "markdown": "左上半是干净的橙色倒影，上排图标没问题。左下有深色芦苇和碎枝，下面几行图标会叠在细线条上，深色图标尤其容易糊。" },
+      { "id": "sunset-note", "kind": "text", "title": "日落木桩", "when": {"input": "pick", "equals": "sunset"}, "markdown": "左边有竖向木桩、亮橙倒影和暗水面交替，纹理跨过整列图标的高度。浅色和深色图标都会有一段看不清。" },
+      { "id": "boats-note", "kind": "text", "title": "停船", "when": {"input": "pick", "equals": "boats"}, "markdown": "左边从中部到底全是船舷、缆绳和碎石，几乎没有一块平的底。两列图标都会和这些线条抢对比，最不适合。" },
+      { "id": "credit", "kind": "sources", "resourceIds": ["src"] }
+    ]
+  }
+}

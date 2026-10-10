@@ -342,8 +342,9 @@ describe('装配行(源码文本钉)', () => {
   it('agentLoop 只在能力非空时装配 requestClientAction,闭包绑定 runId / sessionId / 能力 / run 信号', () => {
     const src = readFileSync(new URL('../../services/agentLoop.ts', import.meta.url), 'utf-8');
     expect(src).toContain('...(clientCapabilities?.length ? { requestClientAction: makeClientActionRequester({ runId, sessionId, caps: clientCapabilities, runSignal: ac.signal }) } : {}),');
-    // 门禁字段单源:目录与工具面同一份 caps
-    expect(src).toMatch(/const toolGateCtx = \{\s*userId, sessionId, appId, runId, client: clientTag, channelSession, preset, uiCommands, uiSettings, clientCapabilities,/);
+    // 门禁字段单源:目录与工具面同一份 caps。钉的是「clientCapabilities 以同名简写出现在 toolGateCtx 开头那串字段里」,
+    // 不钉它的邻居 —— 前面多一个字段(uiCards)就红过一次;写成 `caps: clientCapabilities` 或挪出去照样红。
+    expect(src).toMatch(/const toolGateCtx = \{\s*(?:\w+(?:: \w+)?,\s*)*clientCapabilities,/);
   });
   it('子代理不继承 requestClientAction / clientCapabilities', () => {
     const src = readFileSync(new URL('../../services/subAgent.ts', import.meta.url), 'utf-8');

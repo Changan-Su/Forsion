@@ -5,7 +5,7 @@ import { useModelPickerPreferences } from '../../modelPickerPreferences'
  * /skill chip / 引用 / 模型·Agent·引擎·思考·loop·计划·群聊 / 上下文占比·压缩 / 发送·停止。
  * props 与旧 MessageInput 完全一致 → ChatView 直接换组件即可。
  */
-import React, { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import React, { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import {
   ArrowUp, Square, Mic, X, ClipboardList, Check, ChevronDown, FileText, Users, Sparkles,
   Hand, ShieldCheck, ShieldAlert, Settings2, SlidersHorizontal, MessageSquare, Loader2, Clock, Zap, AudioLines, type LucideIcon } from 'lucide-react'
@@ -44,6 +44,7 @@ import { mainReferenceKey } from './mainReference'
 import { ChatBoxSurface, ChatBoxInput, ChatBoxToolbar, ChatBoxSubmit } from '@lcl/components'
 import { disarmTip, tipProps } from '../../hoverTip'
 import { RefChipView } from './RefChipView'
+import { NEW_CHAT_DRAFT, clearDraft, moveDraft, setDraftField, useDraftField } from './composerDrafts'
 import { ContextUsagePop } from './ContextUsagePop'
 import './composer2.css'
 import { homeTarget, targetForSession, targetKeyOf, useComposerRef } from '../../services/engine/targets'
@@ -396,7 +397,15 @@ export const Composer2: React.FC<{
   pendingSteer, onCancelSteer, onWithdrawSteer, onSteerNow,
 }) => {
   const { t, locale } = useI18n()
-  const [draft, setDraft] = useState('')
+  const storeActiveSessionId = useApp((s) => s.activeId)
+  const activeSessionId = sessionId === undefined ? storeActiveSessionId : sessionId
+  // 没发出去的输入按会话存(composerDrafts),切会话 = 换一份,不把上一个会话打了一半的字带过来。
+  // 没给 sessionId 的(设置里的预览)用自己的私有一份,不碰真会话的草稿。
+  const previewKey = useId()
+  const draftKey = sessionId === undefined ? `preview:${previewKey}` : sessionId ?? NEW_CHAT_DRAFT
+  const draftKeyRef = useRef(draftKey)
+  draftKeyRef.current = draftKey
+  const [draft, setDraft] = useDraftField(draftKey, 'text')
   // 等待期间宽卡轮播小贴士；窄卡固定短提示，避免文案闪烁与输入区高度跳动。
   const [tipIdx, setTipIdx] = useState(0)
   // 触屏(Android 壳 / 手机浏览器)没有 ⌘、悬停和拖拽,只留与指针无关的几条。
@@ -418,10 +427,10 @@ export const Composer2: React.FC<{
   }, [running, compactCard])
   /** 自定义命令(~/.tangu/commands/*.md);拉不到就是空表,输入框照常可用。 */
   const [customCommands, setCustomCommands] = useState<CustomCommandInfo[]>([])
-  const [attachments, setAttachments] = useState<Attachment[]>([])
-  const [wsFiles, setWsFiles] = useState<Attachment[]>([])
+  const [attachments, setAttachments] = useDraftField(draftKey, 'attachments')
+  const [wsFiles, setWsFiles] = useDraftField(draftKey, 'wsFiles')
   /** 「已选择」引用条(显式加的:[[ 选择器 / 拖进来 / 粘贴本机文件)。自动那条不进这里,见 autoChip。 */
-  const [refChips, setRefChips] = useState<RefChip[]>([])
+  const [refChips, setRefChips] = useDraftField(draftKey, 'refChips')
   /** 被 × 掉的自动引用(值 = 那条引用的 token):主区换一个文件即复活,不是永久关闭。 */
   const [autoRefOff, setAutoRefOff] = useState<string | null>(null)
   /** 加引用:按 token 去重 —— 既比已有的,也比**这一批内部**的(多选拖拽可能带重复行:
@@ -433,7 +442,7 @@ export const Composer2: React.FC<{
       for (const c of next) if (!seen.has(c.token)) { seen.add(c.token); add.push(c) }
       return add.length ? [...prev, ...add] : prev
     })
-  const [pinnedSkills, setPinnedSkills] = useState<SkillInfo[]>([])
+  const [pinnedSkills, setPinnedSkills] = useDraftField(draftKey, 'pinnedSkills')
   const [hint, setHint] = useState<string | null>(null)
   const [slashIndex, setSlashIndex] = useState(0)
   /** /model 子菜单(模型清单)。存锚点是因为它的「词」里有空格,slashTokenAt 那条正则跟不到。 */
@@ -447,8 +456,8 @@ export const Composer2: React.FC<{
   const [cursorPos, setCursorPos] = useState(0)
   const [mentionIndex, setMentionIndex] = useState(0)
   const [mentionDismissed, setMentionDismissed] = useState(false)
-  const [mentionedSlug, setMentionedSlug] = useState('')
-  const [mentionAgents, setMentionAgents] = useState<string[]>([])
+  const [mentionedSlug, setMentionedSlug] = useDraftField(draftKey, 'mentionedSlug')
+  const [mentionAgents, setMentionAgents] = useDraftField(draftKey, 'mentionAgents')
   const [refIndex, setRefIndex] = useState(0)
   const [refDismissed, setRefDismissed] = useState(false)
   const [refFiles, setRefFiles] = useState<string[] | null>(null) // [[ 文件引用候选(工作区相对路径);null=未构建
@@ -456,6 +465,14 @@ export const Composer2: React.FC<{
   const [dragOver, setDragOver] = useState(false)
   const [histPos, setHistPos] = useState(0) // 历史召回位置:0=当前草稿;1..N=第 N 条最近发送
   const histStash = useRef('') // 进入召回时暂存的草稿(↓ 回到 0 时原样取回)
+  const histPosRef = useRef(histPos)
+  histPosRef.current = histPos
+  // 换了会话 = 换了一份草稿:召回位置和光标是上一份的,归零(光标不归零,新草稿在旧位置上恰好是个 / @ [[ 词就会凭空弹菜单)。
+  // 召回到一半就离开(换会话 / 输入框卸载):框里是一条历史消息,进入召回前的那份草稿只在 histStash 里 —— 放回原会话,否则就丢了。
+  useLayoutEffect(() => {
+    setHistPos(0); setCursorPos(0); setSlashSubMenu(null)
+    return () => { if (histPosRef.current > 0) setDraftField(draftKey, 'text', histStash.current) }
+  }, [draftKey])
   const taRef = useRef<HTMLTextAreaElement>(null)
   const cardRef = useRef<HTMLDivElement>(null)
   useLayoutEffect(() => {
@@ -574,8 +591,6 @@ export const Composer2: React.FC<{
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [voice.recording, voice.busy])
 
-  const storeActiveSessionId = useApp((s) => s.activeId)
-  const activeSessionId = sessionId === undefined ? storeActiveSessionId : sessionId
   const composerRef = useComposerRef(activeSessionId)
   // 语音通话(对标 GPT Live):电话键只把会话与委派参数算好,通话本体跑在 Mini 卡片里(mini/VoiceCallView)。
   // 双方的话与代跑的 Tangu run 由引擎写进会话,聊天区照常显示。设置 → 语音 → 语音通话 开着才出按钮。
@@ -983,7 +998,7 @@ export const Composer2: React.FC<{
   useEffect(() => { setSlashIndex(0) }, [slash?.start, slash?.token])
 
   const inGroup = !!groupChat && (groupAgents?.length || 0) >= 2
-  const [mentionedProjects, setMentionedProjects] = useState<Array<{ name: string; path: string }>>([])
+  const [mentionedProjects, setMentionedProjects] = useDraftField(draftKey, 'mentionedProjects')
   const projectMode = !!mentionProjects?.length
   const mentionPool = useMemo<NormalAgentDef[]>(() => {
     // 私聊:候选 = 项目(借 NormalAgentDef 的 slug/name/description 三个字段承载,slug = 路径;不进 delegate 池)。
@@ -1296,16 +1311,19 @@ export const Composer2: React.FC<{
         ? { priorityAgent: mentionedSlug || undefined }
         : { mentionAgents: mentionAgents.length ? mentionAgents : undefined }
     // 返回这次发送的 promise:实时对话据此判断「上一句还在途中」(键盘/按钮调用方忽略返回值)。
+    // 清的是**发出时**那个会话的草稿:新对话的第一句发到一半会话才建出来,输入框那时已经换到新会话上了。
+    const sentKey = draftKey
+    const known = sentKey === NEW_CHAT_DRAFT ? new Set(useApp.getState().sessions.map((x) => x.id)) : null
     return onSend(outgoing, attachments, wsFiles, pinnedSkills.map((s) => s.id), mentions).then((accepted) => {
-      if (!accepted) return false
-      if (!override) { setDraft(''); setHistPos(0); nativeHaptic('tick') } // 手机:自己发出去的那一下给个轻震(桌面 / 网页无宿主,空操作)
-      setAttachments([])
-      setWsFiles([])
-      setRefChips([]) // 自动那条不在这里面 —— 它是 activePage 的派生量,下一条消息照旧自动挂上
-      setPinnedSkills([])
-      setMentionedSlug('')
-      setMentionAgents([])
-      setMentionedProjects([])
+      if (!accepted) {
+        // 新对话的第一句没发出去,而输入框已经换到刚建的会话上:那份输入跟过去,留在眼前可以重发(那边有草稿就不动)。
+        // 只认发送前还不存在的会话 —— 用户途中自己切去了别的会话,就不往那里塞,那份留在新对话里。
+        const shown = draftKeyRef.current
+        if (known && shown !== sentKey && !known.has(shown)) moveDraft(sentKey, shown)
+        return false
+      }
+      clearDraft(sentKey, !!override) // 引用里自动那条不在草稿里 —— 它是 activePage 的派生量,下一条消息照旧自动挂上
+      if (!override) { setHistPos(0); nativeHaptic('tick') } // 手机:自己发出去的那一下给个轻震(桌面 / 网页无宿主,空操作)
       onClearQuote?.()
       requestAnimationFrame(autoGrow)
       return true

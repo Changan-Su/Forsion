@@ -4,12 +4,13 @@
  * hook:那是纯 vault 聚合层,Todo 视图第三方消费,HTTP 轮询不该塞进去)+ 自动化 Space「Agent 日程」组。
  * 旧引擎无此端点 → refresh 单源 catch 保旧值,两处视图无感。
  */
-import { useMemo } from 'react'
+import { useEffect, useMemo } from 'react'
 import { create } from 'zustand'
 import { getAgentSchedules } from '../services/backendService'
 import type { AgentScheduleInfo, TanguDesktopConfig } from '../types'
 import { cellText, type AggDb } from '../amadeus/store/dbAggregateStore'
 import type { CellValue, DbColumn } from '@amadeus-shared/db/schema'
+import { useApp } from './appStore'
 import { homeTarget } from '../services/engine/targets'
 
 interface AgentScheduleState {
@@ -46,4 +47,22 @@ export function useAgentCalDbs(): AggDb[] {
       }),
     }
   }), [schedules])
+}
+
+/** Shared mount/poll lifecycle: multiple cards and the full Calendar share one timer. */
+let pollingUsers = 0
+let pollingTimer: ReturnType<typeof setInterval> | undefined
+let stopConfig: (() => void) | undefined
+export function useAgentSchedulePolling(): void {
+  useEffect(() => {
+    if (++pollingUsers === 1) {
+      const pull = (): void => { void useAgentSchedules.getState().refresh(useApp.getState().cfg) }
+      pull()
+      pollingTimer = setInterval(pull, 60_000)
+      stopConfig = useApp.subscribe((s, p) => { if (s.cfg !== p.cfg) pull() })
+    }
+    return () => {
+      if (--pollingUsers === 0) { clearInterval(pollingTimer); pollingTimer = undefined; stopConfig?.(); stopConfig = undefined }
+    }
+  }, [])
 }

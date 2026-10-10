@@ -7,7 +7,7 @@
 // 块先删、再问文件(不拿弹窗卡住删除)。撤销能把块拿回来,拿不回文件 —— 与删笔记那条流程
 // 同一个可恢复性故事(有回收站就进回收站)。
 import type { Fragment, Node as ProseNode } from '@milkdown/kit/prose/model'
-import { assetKey, assetRefs, fromDefaultAssetUrl } from '@amadeus-shared/assets'
+import { assetKey, assetRefs, fromDefaultAssetUrl, normPath } from '@amadeus-shared/assets'
 import { amadeus } from '../api'
 import { askDeleteAssets } from '../components/askDeleteAssets'
 import { trashVaultFiles } from '../store/pageStore'
@@ -38,12 +38,16 @@ export async function askDeleteRemovedAssets(page: string, removed: string, text
 
 /** 这次删掉的引用 `ref` 指的是不是 vault 里的 `rel` 这个文件。
  *  带路径的引用(`子夹/x.png`、`./x.png`)必须路径相符;裸文件名才按文件名认 —— 后者本来就是
- *  「全库按名找」的语义(与主进程 assetKey 的保守口径同源)。 */
+ *  「全库按名找」的语义(与主进程 assetKey 的保守口径同源)。
+ *  图片节点的引用到这里已经是**库内路径**(refTextOf 从显示地址换回来的),页目录之外的图带着没折叠的 `..`
+ *  (`notes/../attachments/x.png`)—— 折叠后相等也算(2026-10-10 之前这种永远对不上,删块时不问文件,文件成了孤儿)。
+ *  ⚠️ 别在这里「按页目录再拼一遍」:库内路径再拼页目录会折到页目录下同路径的另一个文件上,索引落后的那一瞬
+ *  (独占表里还是旧引用)就会问着去删它(Codex 评审 2026-10-10 P0)。 */
 function matches(ref: string, rel: string): boolean {
   const r = ref.replace(/\\/g, '/').replace(/^\.\//, '').toLowerCase()
   const target = rel.replace(/\\/g, '/').toLowerCase()
   if (!r.includes('/')) return assetKey(ref) === assetKey(rel)
-  return target === r || target.endsWith(`/${r}`)
+  return target === r || target.endsWith(`/${r}`) || target === normPath(r)
 }
 
 /** 一段文档内容里的「文本 + 链接/图片目标」,拼成够 assetRefs 认的形态(不做完整 md 序列化)。

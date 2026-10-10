@@ -19,8 +19,11 @@
   --mb-panelw: calc(min(78vw, 380px) / var(--uiz, 1));
   /* 浮动胶囊顶栏之下的「起始留白」:6 上留白 + 46 胶囊 + 6 下留白,再加刘海。
      ⚠️ 必须含 safe-area:壳顶部已不再留安全区(内容 edge-to-edge),所以躲刘海这件事全落在
-     消费 --mb-top 的那一侧 —— 视图把它当**滚动容器内部**的 padding-top 用,面顶满、字不被压。 */
-  --mb-top: calc(58px + env(safe-area-inset-top));
+     消费 --mb-top 的那一侧 —— 视图把它当**滚动容器内部**的 padding-top 用,面顶满、字不被压。
+     --mb-top-extra:应用钉在胶囊下面、跟着整个 App 走的一条(手机的通话条)要占的高度,缺省 0。加在这里而不是
+     逐页去让:凡是已经给胶囊让位的(主区视图、抽屉、并排侧栏、以后新加的和插件带来的页)一起给它让位。
+     由应用在壳上设(引擎不认识是哪一条);下面原生外壳那一份 --mb-top 同样带上它。 */
+  --mb-top: calc(58px + env(safe-area-inset-top) + var(--mb-top-extra, 0px));
 }
 
 .mb-topbar {
@@ -433,7 +436,7 @@
    ⚠️ 一律除以 --uiz:这三个量是屏幕上的 dp,而壳里的 px 被 body zoom 放大过(DESIGN §6「缩放与固定定位」)。
    只在装了原生宿主时命中;web / 桌面手机框 / 手机浏览器没有这个属性,行为与之前逐像素相同。放文件末尾(DESIGN §7.2)。 */
 .mb-shell[data-native-chrome] {
-  --mb-top: calc(var(--nc-top, 0) * 1px / var(--uiz, 1));
+  --mb-top: calc(var(--nc-top, 0) * 1px / var(--uiz, 1) + var(--mb-top-extra, 0px));
   --mb-bottom: calc(var(--nc-bottom, 0) * 1px / var(--uiz, 1));
 }
 /* 抽屉 / 并排侧栏原来靠 env(safe-area-inset-top) 躲刘海(App 里恒为 0:窗口 inset 被原生层消费掉了);

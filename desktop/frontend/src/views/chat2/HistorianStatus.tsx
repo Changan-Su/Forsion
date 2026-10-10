@@ -3,6 +3,7 @@ import { ChevronRight, History } from 'lucide-react'
 import { useApp } from '../../stores/appStore'
 import { notifyApp } from '../../stores/notificationStore'
 import { takeFreshNominations } from '../../stores/notificationWiring'
+import { SESSION_TRACES_EVENT } from '../../components/SessionTraces'
 import { getBackgroundSessions, getSessionDetail, getSessionHistorian, type SessionHistorianStatus } from '../../services/backendService'
 import { useChildChat } from '../../stores/childChatStore'
 import { currentLocale, registerMessages, useI18n } from '../../i18n'
@@ -107,11 +108,12 @@ export function HistorianStatus({ sessionId }: { sessionId: string }) {
   const [data, setData] = useState<SessionHistorianStatus | null>(null)
   const [failed, setFailed] = useState(false)
   const seen = useRef<Set<string> | null>(null) // 本会话已见过的活动 id;null = 还没成功轮询过(首轮不提醒)
+  const newestActivity = useRef('') // 上一轮轮询看到的活动 id 串;换了就让对话里的留痕重读
   const iconActivity = useRef<string | null>(null)
   // Historian 的子会话(引擎每个父会话最多一条,kind='historian')。SubChatStatus 不再单列它(U-04 去重),
   // 完整记录的入口改在这里:展开时现取,取不到(老引擎 / 还没跑过)就不露按钮。
   const [transcriptId, setTranscriptId] = useState<string | null>(null)
-  useEffect(() => { setOpen(false); setData(null); setFailed(false); setTranscriptId(null); seen.current = null; iconActivity.current = null }, [sessionId])
+  useEffect(() => { setOpen(false); setData(null); setFailed(false); setTranscriptId(null); seen.current = null; newestActivity.current = ''; iconActivity.current = null }, [sessionId])
   // 展开期间首次生成子会话也要冒出入口:没找到(或一次查询失败)就定时再取,找到即停;收起 / 卸载时清掉定时器。
   // 不再只挂在「记录数 / 运行态变化」上重试 —— 那几个值不变时一次瞬时失败就让入口一直缺席(Codex 第一轮 B1-3)。
   useEffect(() => {
@@ -141,6 +143,9 @@ export function HistorianStatus({ sessionId }: { sessionId: string }) {
           setData(result); setFailed(false)
           const { fresh, seen: next } = takeFreshNominations(result.activity || [], seen.current)
           seen.current = next
+          // 对话里的留痕跟着重读:看活动流变没变,不看提名(只记进项目记忆的那种不是提名,也要留痕)
+          const newest = (result.activity || []).map((x) => x.id).join(',')
+          if (newest !== newestActivity.current) { newestActivity.current = newest; window.dispatchEvent(new CustomEvent(SESSION_TRACES_EVENT)) }
           for (const item of fresh) {
             if (item.action === 'harness_adopted') notifyAdopted(sessionId, item.id, item.detail || '')
             else if (item.action === 'harness_confirm') notifyConfirm(sessionId, item.id)

@@ -1,0 +1,31 @@
+<div id="dinner-plan">
+  <div class="fs-header">
+    <div class="fs-title">周末晚餐 · 三道菜</div>
+    <div class="fs-subtitle">滑动调整人数，食材用量按份数换算</div>
+  </div>
+  <div class="fs-controls">
+    <label class="fs-field" for="dinner-people"><span>用餐人数 <output id="dinner-count" for="dinner-people">4 人</output></span>
+      <input class="fs-range" id="dinner-people" type="range" min="1" max="8" step="1" value="4">
+    </label>
+  </div>
+  <div id="dinner-menu" aria-live="polite"></div>
+  <fs-checklist id="dinner-shopping">
+    <script type="application/json">{"title":"采购清单 · 4 人份","items":[{"label":"鸡腿肉","detail":"600 g"},{"label":"土豆","detail":"500 g"},{"label":"西兰花","detail":"400 g"},{"label":"米饭","detail":"300 g（生米）"},{"label":"蒜","detail":"4 瓣"},{"label":"柠檬","detail":"1 个"},{"label":"橄榄油","detail":"适量"},{"label":"酸奶","detail":"200 g"},{"label":"黄瓜","detail":"1 根"},{"label":"小番茄","detail":"250 g"}]}</script>
+  </fs-checklist>
+  <div class="fs-actions"><button class="fs-button" id="dinner-copy" type="button">复制采购清单</button></div>
+  <script>
+  (() => {
+    const slider=document.getElementById('dinner-people'), count=document.getElementById('dinner-count'), menu=document.getElementById('dinner-menu'), list=document.getElementById('dinner-shopping'), copy=document.getElementById('dinner-copy');
+    const recipes=[['主菜｜柠檬蒜香烤鸡腿','鸡腿肉',600,'g','蒜',4,'瓣','柠檬',1,'个'],['配菜｜烤土豆与西兰花','土豆',500,'g','西兰花',400,'g','橄榄油',1,'汤匙'],['凉菜｜黄瓜番茄酸奶沙拉','黄瓜',1,'根','小番茄',250,'g','酸奶',200,'g']];
+    const state=window.forsionSketch.state; let n=state&&Number.isInteger(state.people)&&state.people>=1&&state.people<=8?state.people:4; slider.value=n;
+    const amount=(v,unit)=>unit==='个'||unit==='根'||unit==='瓣'?String(Math.max(1,Math.round(v*n/4))):String(Math.round(v*n/4));
+    const render=()=>{n=Number(slider.value);count.value=n+' 人';count.textContent=n+' 人';menu.innerHTML=recipes.map(r=>`<p><strong>${r[0]}</strong><br>${r[1]} ${amount(r[2],r[3])} ${r[3]} · ${r[4]} ${amount(r[5],r[6])} ${r[6]} · ${r[7]} ${amount(r[8],r[9])} ${r[9]}</p>`).join('');
+      const items=[['鸡腿肉',600,'g'],['土豆',500,'g'],['西兰花',400,'g'],['米饭',300,'g（生米）'],['蒜',4,'瓣'],['柠檬',1,'个'],['橄榄油',1,'适量'],['酸奶',200,'g'],['黄瓜',1,'根'],['小番茄',250,'g']].map(([label,v,u])=>({label,detail:u==='适量'?'适量':amount(v,u)+' '+u}));
+      const cfg={title:`采购清单 · ${n} 人份`,items}; if(customElements.get('fs-checklist')) list.setData(cfg); else list.querySelector('script').textContent=JSON.stringify(cfg);
+    };
+    slider.addEventListener('input',()=>{render();window.forsionSketch.setState({people:Number(slider.value)});});
+    copy.addEventListener('click',()=>{const rows=[['鸡腿肉',600,'g'],['土豆',500,'g'],['西兰花',400,'g'],['米饭',300,'g（生米）'],['蒜',4,'瓣'],['柠檬',1,'个'],['橄榄油',1,'适量'],['酸奶',200,'g'],['黄瓜',1,'根'],['小番茄',250,'g']];window.forsionSketch.copy(`采购清单（${n} 人份）\n`+rows.map(([x,v,u])=>`□ ${x}：${u==='适量'?'适量':amount(v,u)+' '+u}`).join('\n'));});
+    render();
+  })();
+  </script>
+</div>

@@ -14,13 +14,14 @@ const home = fs.mkdtempSync(path.join(os.tmpdir(), 'forsion-visualize-'))
 const sid = 'visualize-acceptance'
 const html = fs.readFileSync(path.join(__dirname, 'fixtures/sketch-wave.html'), 'utf8')
 const figuresHtml = fs.readFileSync(path.join(__dirname, 'fixtures/sketch-figures.html'), 'utf8')
+const partsHtml = fs.readFileSync(path.join(__dirname, 'fixtures/sketch-parts.html'), 'utf8') // 10-09 二轮:统一拼装部件 compare / checklist / choice
 const config = { execMode: 'host', cwd: home }
 const session = { id: sid, title: 'Visualize acceptance', archived: false, model_id: 'm1', agent_config: config, projectless: false, project_path: home, project_name: 'Visualize', created_at: '2026-10-01 00:00:00', updated_at: '2026-10-01 00:00:00' }
 const message = (id, content) => ({ id: `message-${id}`, role: 'model', content: '', timestamp: 2, tool_calls: [{ id, function: { name: 'sketch', arguments: JSON.stringify({ html: content }) }, ui_content_offset: 0 }], tool_results: [{ tool_call_id: id, content: 'Sketch card rendered in the conversation.' }] })
 let app, win
 async function main() {
   fs.mkdirSync(out, { recursive: true })
-  const messages = [message('wave', html), message('wave-other', html), message('figures', figuresHtml)]
+  const messages = [message('wave', html), message('wave-other', html), message('figures', figuresHtml), message('parts', partsHtml)]
   if (process.env.LIVE_SKETCH_HTML) messages.push(message('live', fs.readFileSync(process.env.LIVE_SKETCH_HTML, 'utf8')))
   if (process.env.LIVE_FIGURES_HTML) messages.push(message('live-figures', fs.readFileSync(process.env.LIVE_FIGURES_HTML, 'utf8')))
   const stub = await startStubEngine({ sessions: [session], messages, override: async ({ path: p, method }) => {
@@ -177,6 +178,30 @@ async function main() {
       await open()
       assert.equal(await slider.inputValue(), next)
       console.log('PASS real-model generated fragment renders, responds and restores its value')
+    }
+    // 统一部件:compare 画出 3 个选项 + 3 个追问钮;人数滑块经 setData 改 checklist 用量;勾选经 setState 存本机(重开会话还在);choice 3 个按钮
+    {
+      const pc = win.locator('[data-sketch-call-id="parts"]')
+      await pc.scrollIntoViewIfNeeded()
+      const pf = pc.frameLocator('iframe')
+      await pf.locator('.fs-option').first().waitFor()
+      assert.equal(await pf.locator('.fs-option').count(), 3)
+      assert.equal(await pf.locator('.fs-option .fs-button').count(), 3)
+      assert.equal(await pf.locator('.fs-choice-options .fs-button').count(), 3)
+      assert.match(await pf.locator('.fs-checklist-items li').first().textContent(), /600 g/)
+      await pf.locator('#parts-people').fill('8')
+      assert.match(await pf.locator('.fs-checklist-items li').first().textContent(), /1200 g/)
+      await pf.locator('.fs-checklist-items input').nth(1).check()
+      await win.waitForFunction(() => JSON.parse(localStorage.getItem('forsion_sketch_state_v1') || '[]').some((e) => Array.isArray(e.state?.checklists?.['parts-shopping'])))
+      await win.screenshot({ path: path.join(out, 'parts-page.png') }).catch(() => {})
+      await pc.screenshot({ path: path.join(out, 'parts-card.png') })
+      await win.reload()
+      await open()
+      await pc.scrollIntoViewIfNeeded()
+      await pf.locator('.fs-option').first().waitFor()
+      assert.equal(await pf.locator('.fs-checklist-items input').nth(1).isChecked(), true)
+      assert.equal(await pf.locator('.fs-checklist-items input').nth(0).isChecked(), false)
+      console.log('PASS unified parts: compare/choice render, slider rescales checklist via setData, ticks persist across reopen')
     }
     if (process.env.LIVE_FIGURES_HTML) {
       const live = win.locator('[data-sketch-call-id="live-figures"]')

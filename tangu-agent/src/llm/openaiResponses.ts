@@ -223,6 +223,7 @@ async function runOpenAiResponsesStream(opts: StreamOpts, guard: StreamIdleGuard
   const outputItems: any[] = [];
   // function_call:按 item_id 累积,order 保留输出顺序
   const fnCalls = new Map<string, { id: string; name: string; arguments: string }>();
+  const fnIndices = new Map<string, number>();
   const order: string[] = [];
 
   const reader = response.body.getReader();
@@ -256,6 +257,7 @@ async function runOpenAiResponsesStream(opts: StreamOpts, guard: StreamIdleGuard
         }
       } else if (type === 'response.output_item.added' && ev.item?.type === 'function_call') {
         const key = ev.item.id || ev.item_id || `fc_${ev.output_index ?? order.length}`;
+        if (typeof ev.output_index === 'number') fnIndices.set(key, ev.output_index);
         if (!fnCalls.has(key)) {
           if ([ev.item.id, ev.item.call_id, ev.item.name, ev.item.arguments].some((v) => typeof v === 'string' && v)) guard.progress();
           fnCalls.set(key, { id: ev.item.call_id || ev.item.id || key, name: ev.item.name || '', arguments: ev.item.arguments || '' });
@@ -276,6 +278,29 @@ async function runOpenAiResponsesStream(opts: StreamOpts, guard: StreamIdleGuard
           onReasoning?.(ev.delta);
         }
       } else if (type === 'response.output_item.done' && ev.item && typeof ev.item === 'object') {
+        // Some Codex batches deliver complete arguments only in the final item. Treat it as
+        // authoritative; otherwise real parallel calls execute as {} despite correct history.
+        if (ev.item.type === 'function_call') {
+          const item = ev.item;
+          const key = item.id || ev.item_id || `fc_${ev.output_index ?? order.length}`;
+          if (typeof ev.output_index === 'number') fnIndices.set(key, ev.output_index);
+          const previous = fnCalls.get(key);
+          const complete = {
+            id: item.call_id || previous?.id || item.id || key,
+            name: item.name || previous?.name || '',
+            arguments: typeof item.arguments === 'string' ? item.arguments : previous?.arguments || '',
+          };
+          if (!previous) order.push(key);
+          fnCalls.set(key, complete);
+          if (complete.arguments !== previous?.arguments) {
+            guard.progress();
+            const prefix = previous?.arguments || '';
+            // Append only a missing suffix to live previews. A corrected non-prefix value is
+            // delivered by the final tool_call event, never appended to stale preview JSON.
+            const argsDelta = complete.arguments.startsWith(prefix) ? complete.arguments.slice(prefix.length) : '';
+            onToolCallDelta?.({ id: complete.id, name: complete.name, argsLen: complete.arguments.length, args: complete.arguments, argsDelta });
+          }
+        }
         // 记 output_index 供收尾排序:正常 SSE 有序,但代理重排/实现差异下按 index 恢复原始输出序(防御)。
         outputItems.push({ __idx: typeof ev.output_index === 'number' ? ev.output_index : outputItems.length, item: ev.item });
       } else if (type === 'response.completed' || type === 'response.incomplete') {
@@ -299,7 +324,9 @@ async function runOpenAiResponsesStream(opts: StreamOpts, guard: StreamIdleGuard
   }
 
   const toolCalls = order
-    .map((k) => fnCalls.get(k))
+    .map((key, fallbackIndex) => ({ key, index: fnIndices.get(key) ?? fallbackIndex }))
+    .sort((a, b) => a.index - b.index)
+    .map(({ key }) => fnCalls.get(key))
     .filter((c): c is { id: string; name: string; arguments: string } => !!c && !!c.name)
     .map((c) => ({ id: c.id, type: 'function' as const, function: { name: c.name, arguments: c.arguments || '{}' } }));
 

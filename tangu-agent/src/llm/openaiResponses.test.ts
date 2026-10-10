@@ -197,6 +197,46 @@ describe('streamOpenAiResponses SSE parse', () => {
     expect(res.outputItems?.[0].encrypted_content).toBe('ENC');
   });
 
+  it('executes final arguments from parallel calls even when deltas are absent or incomplete', async () => {
+    const items = ['https://help.obsidian.md/data-storage', 'https://www.notion.com/help/export-your-content']
+      .map((url, i) => ({ type: 'function_call', id: `fc_${i}`, call_id: `call_${i}`, name: 'web_fetch', arguments: JSON.stringify({ url }) }));
+    const events = [
+      ...items.map((item, i) => ({ type: 'response.output_item.added', output_index: i, item: { ...item, arguments: '' } })),
+      { type: 'response.function_call_arguments.delta', item_id: 'fc_1', delta: '{"url":' },
+      // Completion order can differ from creation order; replacing never concatenates a partial prefix.
+      ...[1, 0].map(i => ({ type: 'response.output_item.done', output_index: i, item: items[i] })),
+      { type: 'response.completed', response: {} },
+    ];
+    const sse = events.map(e => `data: ${JSON.stringify(e)}\n`).join('');
+    vi.stubGlobal('fetch', () => Promise.resolve({ ok: true, body: new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode(sse)); c.close(); } }) }));
+    const delta = vi.fn();
+    const res = await streamOpenAiResponses({ apiKey: 'x', baseUrl: 'https://example/codex', payload: { model: 'gpt-6-luna', messages: [] }, onToolCallDelta: delta } as any);
+    expect(res.toolCalls.map(c => c.function.arguments)).toEqual(items.map(i => i.arguments));
+    expect(res.toolCalls.map(c => c.id)).toEqual(['call_0', 'call_1']);
+    expect(res.outputItems).toEqual(items);
+    expect(delta).toHaveBeenCalledWith({ id: 'call_0', name: 'web_fetch', argsLen: items[0].arguments.length, args: items[0].arguments, argsDelta: items[0].arguments });
+    expect(delta).toHaveBeenCalledWith({ id: 'call_1', name: 'web_fetch', argsLen: items[1].arguments.length, args: items[1].arguments, argsDelta: items[1].arguments.slice('{"url":'.length) });
+  });
+
+  it('a final function item without an added event is retained, but incomplete responses stay non-executable', async () => {
+    const item = { type: 'function_call', id: 'fc_final', call_id: 'call_final', name: 'read_file', arguments: '{"path":"notes.md"}' };
+    const sse = [{ type: 'response.output_item.done', output_index: 0, item }, { type: 'response.incomplete', response: {} }].map(e => `data: ${JSON.stringify(e)}\n`).join('');
+    vi.stubGlobal('fetch', () => Promise.resolve({ ok: true, body: new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode(sse)); c.close(); } }) }));
+    const res = await streamOpenAiResponses({ apiKey: 'x', baseUrl: 'https://example/codex', payload: { model: 'gpt-6-luna', messages: [] } } as any);
+    expect(res.toolCalls).toEqual([{ id: item.call_id, type: 'function', function: { name: item.name, arguments: item.arguments } }]);
+    expect(res.finishReason).toBe('length');
+    expect(res.outputItems).toBeUndefined();
+  });
+
+  it('done-only calls retain provider order even when completion events arrive backwards', async () => {
+    const items = ['write_file', 'read_file'].map((name, i) => ({ type: 'function_call', id: `fc_${i}`, call_id: `call_${i}`, name, arguments: i ? '{"path":"notes.md"}' : '{"path":"notes.md","content":"hello"}' }));
+    const sse = [...[1, 0].map(i => ({ type: 'response.output_item.done', output_index: i, item: items[i] })), { type: 'response.completed', response: {} }].map(e => `data: ${JSON.stringify(e)}\n`).join('');
+    vi.stubGlobal('fetch', () => Promise.resolve({ ok: true, body: new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode(sse)); c.close(); } }) }));
+    const res = await streamOpenAiResponses({ apiKey: 'x', baseUrl: 'https://example/codex', payload: { model: 'gpt-6-luna', messages: [] } } as any);
+    expect(res.toolCalls.map(c => c.function.name)).toEqual(['write_file', 'read_file']);
+    expect(res.outputItems).toEqual(items);
+  });
+
   it('Codex 逆向头只在订阅路径(accountId)发;官方 BYOK 纯 Bearer——OpenAI-Beta 头会静默压掉 reasoning summary(实测 0 vs 160 条)', async () => {
     const sse = 'data: {"type":"response.completed","response":{"usage":{"input_tokens":1,"output_tokens":1}}}\n';
     const seen: Array<Record<string, string>> = [];

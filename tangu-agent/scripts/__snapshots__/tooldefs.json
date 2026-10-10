@@ -2469,7 +2469,7 @@
       "type": "function",
       "function": {
         "name": "manage_human",
-        "description": "Read or update the human collaboration document HUMAN.md. First read to obtain content and version, then update with the full revised Markdown and expectedVersion. Changes are applied immediately; the user receives a card and may edit or undo. Scope project is only for this project; scope agent is for collaboration that remains useful outside it. Preserve user edits. It holds YOUR advice and requests to the human: concrete input, context or decisions they can contribute, habits on their side that would help, and optional learning tied to a goal. What the human tells or requires of you (their corrections and preferences) does not belong here; save that with remember. Use specific evidence; avoid personality judgments, permissions, transient tool failures and unsolicited homework. Keep it concise; batch related changes. Never write this file using generic file or shell tools.",
+        "description": "Read or update HUMAN.md, the note you write to the human about what THEY can do so that working with you goes better (they see it as the collaboration handbook). First read to obtain content and version, then update with the full revised Markdown and expectedVersion. Changes are applied immediately; the user receives a card and may edit or undo. Scope project is only for this project; scope agent is for advice that remains useful outside it. Preserve user edits. If an update takes existing lines out, the tool first lists them and saves nothing: resend with removed saying where each went. The human is the reader. Each item is one thing THEY can do, never something you will do. When what prompts you is the human correcting you or telling you how they want you to work, that is about what you do: save it with remember and leave this note as it is, even when the note already covers a related point. Say each item to them as \"you\", in their language, in plain sentences rather than a form of labelled fields, with an example from your work together and what it saves them. Use the words they used themselves and do not bring in category or specialist terms of your own: write \"which orders do not count\", not \"exclusion criteria\"; \"who will read it\", not \"target audience\". Keep word for word anything the human asked you to keep, such as a name they gave an item. Leave out your own commitments, even as a closing reassurance (say those in your reply), and tool names, file names and labels the human did not give you. Use specific evidence; avoid personality judgments, permissions, transient tool failures and unsolicited homework. Keep it concise; batch related changes. Never write this file using generic file or shell tools.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -2489,7 +2489,7 @@
             },
             "content": {
               "type": "string",
-              "description": "The complete updated Markdown; at most 12000 characters. Preserve unrelated sections."
+              "description": "The complete updated Markdown, written to the human in their language; at most 12000 characters. Preserve unrelated sections."
             },
             "expectedVersion": {
               "type": "string",
@@ -2497,11 +2497,18 @@
             },
             "summary": {
               "type": "string",
-              "description": "User-facing description of what changed, in the user language (at most 240 characters)."
+              "description": "Shown to the user on the change card: what changed, in their language and everyday words (at most 240 characters)."
             },
             "evidence": {
               "type": "string",
-              "description": "Specific feedback or observed friction supporting the change (at most 600 characters)."
+              "description": "Shown to the user as the reason: what happened in your work together that shows this would help them, in their language and everyday words (at most 600 characters)."
+            },
+            "removed": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Only after the tool listed lines your update takes out: one string per line number, \"<n> memory: <sentence to save>\", \"<n> reworded\" or \"<n> dropped: <reason>\"."
             }
           },
           "required": [
@@ -3169,7 +3176,7 @@
       "type": "function",
       "function": {
         "name": "manage_human",
-        "description": "Read or update the human collaboration document HUMAN.md. First read to obtain content and version, then update with the full revised Markdown and expectedVersion. Changes are applied immediately; the user receives a card and may edit or undo. Scope project is only for this project; scope agent is for collaboration that remains useful outside it. Preserve user edits. It holds YOUR advice and requests to the human: concrete input, context or decisions they can contribute, habits on their side that would help, and optional learning tied to a goal. What the human tells or requires of you (their corrections and preferences) does not belong here; save that with remember. Use specific evidence; avoid personality judgments, permissions, transient tool failures and unsolicited homework. Keep it concise; batch related changes. Never write this file using generic file or shell tools.",
+        "description": "Read or update HUMAN.md, the note you write to the human about what THEY can do so that working with you goes better (they see it as the collaboration handbook). First read to obtain content and version, then update with the full revised Markdown and expectedVersion. Changes are applied immediately; the user receives a card and may edit or undo. Scope project is only for this project; scope agent is for advice that remains useful outside it. Preserve user edits. If an update takes existing lines out, the tool first lists them and saves nothing: resend with removed saying where each went. The human is the reader. Each item is one thing THEY can do, never something you will do. When what prompts you is the human correcting you or telling you how they want you to work, that is about what you do: save it with remember and leave this note as it is, even when the note already covers a related point. Say each item to them as \"you\", in their language, in plain sentences rather than a form of labelled fields, with an example from your work together and what it saves them. Use the words they used themselves and do not bring in category or specialist terms of your own: write \"which orders do not count\", not \"exclusion criteria\"; \"who will read it\", not \"target audience\". Keep word for word anything the human asked you to keep, such as a name they gave an item. Leave out your own commitments, even as a closing reassurance (say those in your reply), and tool names, file names and labels the human did not give you. Use specific evidence; avoid personality judgments, permissions, transient tool failures and unsolicited homework. Keep it concise; batch related changes. Never write this file using generic file or shell tools.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -3189,7 +3196,7 @@
             },
             "content": {
               "type": "string",
-              "description": "The complete updated Markdown; at most 12000 characters. Preserve unrelated sections."
+              "description": "The complete updated Markdown, written to the human in their language; at most 12000 characters. Preserve unrelated sections."
             },
             "expectedVersion": {
               "type": "string",
@@ -3197,11 +3204,18 @@
             },
             "summary": {
               "type": "string",
-              "description": "User-facing description of what changed, in the user language (at most 240 characters)."
+              "description": "Shown to the user on the change card: what changed, in their language and everyday words (at most 240 characters)."
             },
             "evidence": {
               "type": "string",
-              "description": "Specific feedback or observed friction supporting the change (at most 600 characters)."
+              "description": "Shown to the user as the reason: what happened in your work together that shows this would help them, in their language and everyday words (at most 600 characters)."
+            },
+            "removed": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Only after the tool listed lines your update takes out: one string per line number, \"<n> memory: <sentence to save>\", \"<n> reworded\" or \"<n> dropped: <reason>\"."
             }
           },
           "required": [
@@ -4093,7 +4107,7 @@
       "type": "function",
       "function": {
         "name": "manage_human",
-        "description": "Read or update the human collaboration document HUMAN.md. First read to obtain content and version, then update with the full revised Markdown and expectedVersion. Changes are applied immediately; the user receives a card and may edit or undo. Scope project is only for this project; scope agent is for collaboration that remains useful outside it. Preserve user edits. It holds YOUR advice and requests to the human: concrete input, context or decisions they can contribute, habits on their side that would help, and optional learning tied to a goal. What the human tells or requires of you (their corrections and preferences) does not belong here; save that with remember. Use specific evidence; avoid personality judgments, permissions, transient tool failures and unsolicited homework. Keep it concise; batch related changes. Never write this file using generic file or shell tools.",
+        "description": "Read or update HUMAN.md, the note you write to the human about what THEY can do so that working with you goes better (they see it as the collaboration handbook). First read to obtain content and version, then update with the full revised Markdown and expectedVersion. Changes are applied immediately; the user receives a card and may edit or undo. Scope project is only for this project; scope agent is for advice that remains useful outside it. Preserve user edits. If an update takes existing lines out, the tool first lists them and saves nothing: resend with removed saying where each went. The human is the reader. Each item is one thing THEY can do, never something you will do. When what prompts you is the human correcting you or telling you how they want you to work, that is about what you do: save it with remember and leave this note as it is, even when the note already covers a related point. Say each item to them as \"you\", in their language, in plain sentences rather than a form of labelled fields, with an example from your work together and what it saves them. Use the words they used themselves and do not bring in category or specialist terms of your own: write \"which orders do not count\", not \"exclusion criteria\"; \"who will read it\", not \"target audience\". Keep word for word anything the human asked you to keep, such as a name they gave an item. Leave out your own commitments, even as a closing reassurance (say those in your reply), and tool names, file names and labels the human did not give you. Use specific evidence; avoid personality judgments, permissions, transient tool failures and unsolicited homework. Keep it concise; batch related changes. Never write this file using generic file or shell tools.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -4113,7 +4127,7 @@
             },
             "content": {
               "type": "string",
-              "description": "The complete updated Markdown; at most 12000 characters. Preserve unrelated sections."
+              "description": "The complete updated Markdown, written to the human in their language; at most 12000 characters. Preserve unrelated sections."
             },
             "expectedVersion": {
               "type": "string",
@@ -4121,11 +4135,18 @@
             },
             "summary": {
               "type": "string",
-              "description": "User-facing description of what changed, in the user language (at most 240 characters)."
+              "description": "Shown to the user on the change card: what changed, in their language and everyday words (at most 240 characters)."
             },
             "evidence": {
               "type": "string",
-              "description": "Specific feedback or observed friction supporting the change (at most 600 characters)."
+              "description": "Shown to the user as the reason: what happened in your work together that shows this would help them, in their language and everyday words (at most 600 characters)."
+            },
+            "removed": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Only after the tool listed lines your update takes out: one string per line number, \"<n> memory: <sentence to save>\", \"<n> reworded\" or \"<n> dropped: <reason>\"."
             }
           },
           "required": [
@@ -5156,7 +5177,7 @@
       "type": "function",
       "function": {
         "name": "manage_human",
-        "description": "Read or update the human collaboration document HUMAN.md. First read to obtain content and version, then update with the full revised Markdown and expectedVersion. Changes are applied immediately; the user receives a card and may edit or undo. Scope project is only for this project; scope agent is for collaboration that remains useful outside it. Preserve user edits. It holds YOUR advice and requests to the human: concrete input, context or decisions they can contribute, habits on their side that would help, and optional learning tied to a goal. What the human tells or requires of you (their corrections and preferences) does not belong here; save that with remember. Use specific evidence; avoid personality judgments, permissions, transient tool failures and unsolicited homework. Keep it concise; batch related changes. Never write this file using generic file or shell tools.",
+        "description": "Read or update HUMAN.md, the note you write to the human about what THEY can do so that working with you goes better (they see it as the collaboration handbook). First read to obtain content and version, then update with the full revised Markdown and expectedVersion. Changes are applied immediately; the user receives a card and may edit or undo. Scope project is only for this project; scope agent is for advice that remains useful outside it. Preserve user edits. If an update takes existing lines out, the tool first lists them and saves nothing: resend with removed saying where each went. The human is the reader. Each item is one thing THEY can do, never something you will do. When what prompts you is the human correcting you or telling you how they want you to work, that is about what you do: save it with remember and leave this note as it is, even when the note already covers a related point. Say each item to them as \"you\", in their language, in plain sentences rather than a form of labelled fields, with an example from your work together and what it saves them. Use the words they used themselves and do not bring in category or specialist terms of your own: write \"which orders do not count\", not \"exclusion criteria\"; \"who will read it\", not \"target audience\". Keep word for word anything the human asked you to keep, such as a name they gave an item. Leave out your own commitments, even as a closing reassurance (say those in your reply), and tool names, file names and labels the human did not give you. Use specific evidence; avoid personality judgments, permissions, transient tool failures and unsolicited homework. Keep it concise; batch related changes. Never write this file using generic file or shell tools.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -5176,7 +5197,7 @@
             },
             "content": {
               "type": "string",
-              "description": "The complete updated Markdown; at most 12000 characters. Preserve unrelated sections."
+              "description": "The complete updated Markdown, written to the human in their language; at most 12000 characters. Preserve unrelated sections."
             },
             "expectedVersion": {
               "type": "string",
@@ -5184,11 +5205,18 @@
             },
             "summary": {
               "type": "string",
-              "description": "User-facing description of what changed, in the user language (at most 240 characters)."
+              "description": "Shown to the user on the change card: what changed, in their language and everyday words (at most 240 characters)."
             },
             "evidence": {
               "type": "string",
-              "description": "Specific feedback or observed friction supporting the change (at most 600 characters)."
+              "description": "Shown to the user as the reason: what happened in your work together that shows this would help them, in their language and everyday words (at most 600 characters)."
+            },
+            "removed": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Only after the tool listed lines your update takes out: one string per line number, \"<n> memory: <sentence to save>\", \"<n> reworded\" or \"<n> dropped: <reason>\"."
             }
           },
           "required": [
@@ -5916,7 +5944,7 @@
       "type": "function",
       "function": {
         "name": "manage_human",
-        "description": "Read or update the human collaboration document HUMAN.md. First read to obtain content and version, then update with the full revised Markdown and expectedVersion. Changes are applied immediately; the user receives a card and may edit or undo. Scope project is only for this project; scope agent is for collaboration that remains useful outside it. Preserve user edits. It holds YOUR advice and requests to the human: concrete input, context or decisions they can contribute, habits on their side that would help, and optional learning tied to a goal. What the human tells or requires of you (their corrections and preferences) does not belong here; save that with remember. Use specific evidence; avoid personality judgments, permissions, transient tool failures and unsolicited homework. Keep it concise; batch related changes. Never write this file using generic file or shell tools.",
+        "description": "Read or update HUMAN.md, the note you write to the human about what THEY can do so that working with you goes better (they see it as the collaboration handbook). First read to obtain content and version, then update with the full revised Markdown and expectedVersion. Changes are applied immediately; the user receives a card and may edit or undo. Scope project is only for this project; scope agent is for advice that remains useful outside it. Preserve user edits. If an update takes existing lines out, the tool first lists them and saves nothing: resend with removed saying where each went. The human is the reader. Each item is one thing THEY can do, never something you will do. When what prompts you is the human correcting you or telling you how they want you to work, that is about what you do: save it with remember and leave this note as it is, even when the note already covers a related point. Say each item to them as \"you\", in their language, in plain sentences rather than a form of labelled fields, with an example from your work together and what it saves them. Use the words they used themselves and do not bring in category or specialist terms of your own: write \"which orders do not count\", not \"exclusion criteria\"; \"who will read it\", not \"target audience\". Keep word for word anything the human asked you to keep, such as a name they gave an item. Leave out your own commitments, even as a closing reassurance (say those in your reply), and tool names, file names and labels the human did not give you. Use specific evidence; avoid personality judgments, permissions, transient tool failures and unsolicited homework. Keep it concise; batch related changes. Never write this file using generic file or shell tools.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -5936,7 +5964,7 @@
             },
             "content": {
               "type": "string",
-              "description": "The complete updated Markdown; at most 12000 characters. Preserve unrelated sections."
+              "description": "The complete updated Markdown, written to the human in their language; at most 12000 characters. Preserve unrelated sections."
             },
             "expectedVersion": {
               "type": "string",
@@ -5944,11 +5972,18 @@
             },
             "summary": {
               "type": "string",
-              "description": "User-facing description of what changed, in the user language (at most 240 characters)."
+              "description": "Shown to the user on the change card: what changed, in their language and everyday words (at most 240 characters)."
             },
             "evidence": {
               "type": "string",
-              "description": "Specific feedback or observed friction supporting the change (at most 600 characters)."
+              "description": "Shown to the user as the reason: what happened in your work together that shows this would help them, in their language and everyday words (at most 600 characters)."
+            },
+            "removed": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Only after the tool listed lines your update takes out: one string per line number, \"<n> memory: <sentence to save>\", \"<n> reworded\" or \"<n> dropped: <reason>\"."
             }
           },
           "required": [
@@ -6575,7 +6610,7 @@
       "type": "function",
       "function": {
         "name": "manage_human",
-        "description": "Read or update the human collaboration document HUMAN.md. First read to obtain content and version, then update with the full revised Markdown and expectedVersion. Changes are applied immediately; the user receives a card and may edit or undo. Scope project is only for this project; scope agent is for collaboration that remains useful outside it. Preserve user edits. It holds YOUR advice and requests to the human: concrete input, context or decisions they can contribute, habits on their side that would help, and optional learning tied to a goal. What the human tells or requires of you (their corrections and preferences) does not belong here; save that with remember. Use specific evidence; avoid personality judgments, permissions, transient tool failures and unsolicited homework. Keep it concise; batch related changes. Never write this file using generic file or shell tools.",
+        "description": "Read or update HUMAN.md, the note you write to the human about what THEY can do so that working with you goes better (they see it as the collaboration handbook). First read to obtain content and version, then update with the full revised Markdown and expectedVersion. Changes are applied immediately; the user receives a card and may edit or undo. Scope project is only for this project; scope agent is for advice that remains useful outside it. Preserve user edits. If an update takes existing lines out, the tool first lists them and saves nothing: resend with removed saying where each went. The human is the reader. Each item is one thing THEY can do, never something you will do. When what prompts you is the human correcting you or telling you how they want you to work, that is about what you do: save it with remember and leave this note as it is, even when the note already covers a related point. Say each item to them as \"you\", in their language, in plain sentences rather than a form of labelled fields, with an example from your work together and what it saves them. Use the words they used themselves and do not bring in category or specialist terms of your own: write \"which orders do not count\", not \"exclusion criteria\"; \"who will read it\", not \"target audience\". Keep word for word anything the human asked you to keep, such as a name they gave an item. Leave out your own commitments, even as a closing reassurance (say those in your reply), and tool names, file names and labels the human did not give you. Use specific evidence; avoid personality judgments, permissions, transient tool failures and unsolicited homework. Keep it concise; batch related changes. Never write this file using generic file or shell tools.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -6595,7 +6630,7 @@
             },
             "content": {
               "type": "string",
-              "description": "The complete updated Markdown; at most 12000 characters. Preserve unrelated sections."
+              "description": "The complete updated Markdown, written to the human in their language; at most 12000 characters. Preserve unrelated sections."
             },
             "expectedVersion": {
               "type": "string",
@@ -6603,11 +6638,18 @@
             },
             "summary": {
               "type": "string",
-              "description": "User-facing description of what changed, in the user language (at most 240 characters)."
+              "description": "Shown to the user on the change card: what changed, in their language and everyday words (at most 240 characters)."
             },
             "evidence": {
               "type": "string",
-              "description": "Specific feedback or observed friction supporting the change (at most 600 characters)."
+              "description": "Shown to the user as the reason: what happened in your work together that shows this would help them, in their language and everyday words (at most 600 characters)."
+            },
+            "removed": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Only after the tool listed lines your update takes out: one string per line number, \"<n> memory: <sentence to save>\", \"<n> reworded\" or \"<n> dropped: <reason>\"."
             }
           },
           "required": [
@@ -7499,7 +7541,7 @@
       "type": "function",
       "function": {
         "name": "manage_human",
-        "description": "Read or update the human collaboration document HUMAN.md. First read to obtain content and version, then update with the full revised Markdown and expectedVersion. Changes are applied immediately; the user receives a card and may edit or undo. Scope project is only for this project; scope agent is for collaboration that remains useful outside it. Preserve user edits. It holds YOUR advice and requests to the human: concrete input, context or decisions they can contribute, habits on their side that would help, and optional learning tied to a goal. What the human tells or requires of you (their corrections and preferences) does not belong here; save that with remember. Use specific evidence; avoid personality judgments, permissions, transient tool failures and unsolicited homework. Keep it concise; batch related changes. Never write this file using generic file or shell tools.",
+        "description": "Read or update HUMAN.md, the note you write to the human about what THEY can do so that working with you goes better (they see it as the collaboration handbook). First read to obtain content and version, then update with the full revised Markdown and expectedVersion. Changes are applied immediately; the user receives a card and may edit or undo. Scope project is only for this project; scope agent is for advice that remains useful outside it. Preserve user edits. If an update takes existing lines out, the tool first lists them and saves nothing: resend with removed saying where each went. The human is the reader. Each item is one thing THEY can do, never something you will do. When what prompts you is the human correcting you or telling you how they want you to work, that is about what you do: save it with remember and leave this note as it is, even when the note already covers a related point. Say each item to them as \"you\", in their language, in plain sentences rather than a form of labelled fields, with an example from your work together and what it saves them. Use the words they used themselves and do not bring in category or specialist terms of your own: write \"which orders do not count\", not \"exclusion criteria\"; \"who will read it\", not \"target audience\". Keep word for word anything the human asked you to keep, such as a name they gave an item. Leave out your own commitments, even as a closing reassurance (say those in your reply), and tool names, file names and labels the human did not give you. Use specific evidence; avoid personality judgments, permissions, transient tool failures and unsolicited homework. Keep it concise; batch related changes. Never write this file using generic file or shell tools.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -7519,7 +7561,7 @@
             },
             "content": {
               "type": "string",
-              "description": "The complete updated Markdown; at most 12000 characters. Preserve unrelated sections."
+              "description": "The complete updated Markdown, written to the human in their language; at most 12000 characters. Preserve unrelated sections."
             },
             "expectedVersion": {
               "type": "string",
@@ -7527,11 +7569,18 @@
             },
             "summary": {
               "type": "string",
-              "description": "User-facing description of what changed, in the user language (at most 240 characters)."
+              "description": "Shown to the user on the change card: what changed, in their language and everyday words (at most 240 characters)."
             },
             "evidence": {
               "type": "string",
-              "description": "Specific feedback or observed friction supporting the change (at most 600 characters)."
+              "description": "Shown to the user as the reason: what happened in your work together that shows this would help them, in their language and everyday words (at most 600 characters)."
+            },
+            "removed": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Only after the tool listed lines your update takes out: one string per line number, \"<n> memory: <sentence to save>\", \"<n> reworded\" or \"<n> dropped: <reason>\"."
             }
           },
           "required": [
@@ -8562,7 +8611,7 @@
       "type": "function",
       "function": {
         "name": "manage_human",
-        "description": "Read or update the human collaboration document HUMAN.md. First read to obtain content and version, then update with the full revised Markdown and expectedVersion. Changes are applied immediately; the user receives a card and may edit or undo. Scope project is only for this project; scope agent is for collaboration that remains useful outside it. Preserve user edits. It holds YOUR advice and requests to the human: concrete input, context or decisions they can contribute, habits on their side that would help, and optional learning tied to a goal. What the human tells or requires of you (their corrections and preferences) does not belong here; save that with remember. Use specific evidence; avoid personality judgments, permissions, transient tool failures and unsolicited homework. Keep it concise; batch related changes. Never write this file using generic file or shell tools.",
+        "description": "Read or update HUMAN.md, the note you write to the human about what THEY can do so that working with you goes better (they see it as the collaboration handbook). First read to obtain content and version, then update with the full revised Markdown and expectedVersion. Changes are applied immediately; the user receives a card and may edit or undo. Scope project is only for this project; scope agent is for advice that remains useful outside it. Preserve user edits. If an update takes existing lines out, the tool first lists them and saves nothing: resend with removed saying where each went. The human is the reader. Each item is one thing THEY can do, never something you will do. When what prompts you is the human correcting you or telling you how they want you to work, that is about what you do: save it with remember and leave this note as it is, even when the note already covers a related point. Say each item to them as \"you\", in their language, in plain sentences rather than a form of labelled fields, with an example from your work together and what it saves them. Use the words they used themselves and do not bring in category or specialist terms of your own: write \"which orders do not count\", not \"exclusion criteria\"; \"who will read it\", not \"target audience\". Keep word for word anything the human asked you to keep, such as a name they gave an item. Leave out your own commitments, even as a closing reassurance (say those in your reply), and tool names, file names and labels the human did not give you. Use specific evidence; avoid personality judgments, permissions, transient tool failures and unsolicited homework. Keep it concise; batch related changes. Never write this file using generic file or shell tools.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -8582,7 +8631,7 @@
             },
             "content": {
               "type": "string",
-              "description": "The complete updated Markdown; at most 12000 characters. Preserve unrelated sections."
+              "description": "The complete updated Markdown, written to the human in their language; at most 12000 characters. Preserve unrelated sections."
             },
             "expectedVersion": {
               "type": "string",
@@ -8590,11 +8639,18 @@
             },
             "summary": {
               "type": "string",
-              "description": "User-facing description of what changed, in the user language (at most 240 characters)."
+              "description": "Shown to the user on the change card: what changed, in their language and everyday words (at most 240 characters)."
             },
             "evidence": {
               "type": "string",
-              "description": "Specific feedback or observed friction supporting the change (at most 600 characters)."
+              "description": "Shown to the user as the reason: what happened in your work together that shows this would help them, in their language and everyday words (at most 600 characters)."
+            },
+            "removed": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Only after the tool listed lines your update takes out: one string per line number, \"<n> memory: <sentence to save>\", \"<n> reworded\" or \"<n> dropped: <reason>\"."
             }
           },
           "required": [
@@ -9606,7 +9662,7 @@
       "type": "function",
       "function": {
         "name": "manage_human",
-        "description": "Read or update the human collaboration document HUMAN.md. First read to obtain content and version, then update with the full revised Markdown and expectedVersion. Changes are applied immediately; the user receives a card and may edit or undo. Scope project is only for this project; scope agent is for collaboration that remains useful outside it. Preserve user edits. It holds YOUR advice and requests to the human: concrete input, context or decisions they can contribute, habits on their side that would help, and optional learning tied to a goal. What the human tells or requires of you (their corrections and preferences) does not belong here; save that with remember. Use specific evidence; avoid personality judgments, permissions, transient tool failures and unsolicited homework. Keep it concise; batch related changes. Never write this file using generic file or shell tools.",
+        "description": "Read or update HUMAN.md, the note you write to the human about what THEY can do so that working with you goes better (they see it as the collaboration handbook). First read to obtain content and version, then update with the full revised Markdown and expectedVersion. Changes are applied immediately; the user receives a card and may edit or undo. Scope project is only for this project; scope agent is for advice that remains useful outside it. Preserve user edits. If an update takes existing lines out, the tool first lists them and saves nothing: resend with removed saying where each went. The human is the reader. Each item is one thing THEY can do, never something you will do. When what prompts you is the human correcting you or telling you how they want you to work, that is about what you do: save it with remember and leave this note as it is, even when the note already covers a related point. Say each item to them as \"you\", in their language, in plain sentences rather than a form of labelled fields, with an example from your work together and what it saves them. Use the words they used themselves and do not bring in category or specialist terms of your own: write \"which orders do not count\", not \"exclusion criteria\"; \"who will read it\", not \"target audience\". Keep word for word anything the human asked you to keep, such as a name they gave an item. Leave out your own commitments, even as a closing reassurance (say those in your reply), and tool names, file names and labels the human did not give you. Use specific evidence; avoid personality judgments, permissions, transient tool failures and unsolicited homework. Keep it concise; batch related changes. Never write this file using generic file or shell tools.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -9626,7 +9682,7 @@
             },
             "content": {
               "type": "string",
-              "description": "The complete updated Markdown; at most 12000 characters. Preserve unrelated sections."
+              "description": "The complete updated Markdown, written to the human in their language; at most 12000 characters. Preserve unrelated sections."
             },
             "expectedVersion": {
               "type": "string",
@@ -9634,11 +9690,18 @@
             },
             "summary": {
               "type": "string",
-              "description": "User-facing description of what changed, in the user language (at most 240 characters)."
+              "description": "Shown to the user on the change card: what changed, in their language and everyday words (at most 240 characters)."
             },
             "evidence": {
               "type": "string",
-              "description": "Specific feedback or observed friction supporting the change (at most 600 characters)."
+              "description": "Shown to the user as the reason: what happened in your work together that shows this would help them, in their language and everyday words (at most 600 characters)."
+            },
+            "removed": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Only after the tool listed lines your update takes out: one string per line number, \"<n> memory: <sentence to save>\", \"<n> reworded\" or \"<n> dropped: <reason>\"."
             }
           },
           "required": [
@@ -9728,7 +9791,7 @@
       "type": "function",
       "function": {
         "name": "sketch",
-        "description": "Draw a visual card inline in the chat from self-contained HTML: charts, diagrams, comparisons, timelines, layouts, small interactive widgets. The \"Visual cards\" section of your instructions covers when to draw and how to compose.\nSANDBOX: JavaScript runs, but there is NO network, host API or navigation. Inline all CSS/JS, embed images as data: URIs, never reference external scripts/styles/fonts (no charting libraries or web fonts — draw with inline SVG or divs), no eval/new Function. Links and form submits do nothing; interaction must be inline JS.\nTHEME: use the injected CSS variables, never hardcode colors — they track the live theme: --fs-bg (transparent card canvas), --fs-surface, --fs-text, --fs-muted, --fs-faint, --fs-border, --fs-rule (hairline for gridlines/axes), --fs-accent, --fs-accent-soft, --fs-green, --fs-danger, --fs-radius, --fs-font, --fs-mono, and the series ramp --fs-s1..--fs-s5 (s1 = accent for the focus value; s2..s5 fade for context). body inherits background/color/font.\nCLASSES: fs-header, fs-eyebrow, fs-title, fs-subtitle, fs-plot, fs-caption/fs-source, fs-stat-grid, fs-stat, fs-value, fs-label, fs-panel, fs-row, fs-chip, fs-bar-track, fs-bar-fill.\nSIZE: ~700px wide, auto height; past ~half the chat area it folds behind an expand toggle, so put the headline first. Each call appends a NEW card (no in-place updates); the result is only a confirmation, the user sees the card.\nNot for source code, files, or one-number answers — those stay in prose.",
+        "description": "Draw a visual card inline in the chat from self-contained HTML: charts, diagrams, comparisons, timelines, layouts, small interactive widgets. The \"Visual cards\" section of your instructions covers when to draw and how to compose.\nSANDBOX: JavaScript runs, but there is NO network, host API or navigation. Inline all CSS/JS, embed images as data: URIs, no external scripts/styles/fonts or charting libraries (draw with inline SVG or divs), no eval/new Function. Links and form submits do nothing.\nTHEME: use the injected CSS variables, never hardcode colors — they track the live theme: --fs-bg (transparent card canvas), --fs-surface, --fs-text, --fs-muted, --fs-faint, --fs-border, --fs-rule (hairline for gridlines/axes), --fs-accent, --fs-accent-soft, --fs-green, --fs-danger, --fs-radius, --fs-font, --fs-mono, and the series ramp --fs-s1..--fs-s5 (s1 = accent for the focus value; s2..s5 fade for context). body inherits background/color/font.\nPARTS: fs-chart, fs-flow, fs-compare, fs-choice, fs-checklist (JSON-driven, see the visualize skill); classes fs-header, fs-title, fs-subtitle, fs-plot, fs-source, fs-stat-grid, fs-stat, fs-value, fs-label, fs-row, fs-grid, fs-actions, fs-callout, fs-bar-track; no inline style attributes.\nSIZE: ~700px wide, auto height. It streams in while you write (markup first, scripts last). Each call appends a NEW card; the result is only a confirmation, the user sees the card.\nINTERACTION: click handlers may call window.forsionSketch.ask(text) (sends that follow-up as the user's next message) or .copy(text).\nNot for source code, files, or one-number answers — those stay in prose.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -10614,7 +10677,7 @@
       "type": "function",
       "function": {
         "name": "sketch",
-        "description": "Draw a visual card inline in the chat from self-contained HTML: charts, diagrams, comparisons, timelines, layouts, small interactive widgets. The \"Visual cards\" section of your instructions covers when to draw and how to compose.\nSANDBOX: JavaScript runs, but there is NO network, host API or navigation. Inline all CSS/JS, embed images as data: URIs, never reference external scripts/styles/fonts (no charting libraries or web fonts — draw with inline SVG or divs), no eval/new Function. Links and form submits do nothing; interaction must be inline JS.\nTHEME: use the injected CSS variables, never hardcode colors — they track the live theme: --fs-bg (transparent card canvas), --fs-surface, --fs-text, --fs-muted, --fs-faint, --fs-border, --fs-rule (hairline for gridlines/axes), --fs-accent, --fs-accent-soft, --fs-green, --fs-danger, --fs-radius, --fs-font, --fs-mono, and the series ramp --fs-s1..--fs-s5 (s1 = accent for the focus value; s2..s5 fade for context). body inherits background/color/font.\nCLASSES: fs-header, fs-eyebrow, fs-title, fs-subtitle, fs-plot, fs-caption/fs-source, fs-stat-grid, fs-stat, fs-value, fs-label, fs-panel, fs-row, fs-chip, fs-bar-track, fs-bar-fill.\nSIZE: ~700px wide, auto height; past ~half the chat area it folds behind an expand toggle, so put the headline first. Each call appends a NEW card (no in-place updates); the result is only a confirmation, the user sees the card.\nNot for source code, files, or one-number answers — those stay in prose.",
+        "description": "Draw a visual card inline in the chat from self-contained HTML: charts, diagrams, comparisons, timelines, layouts, small interactive widgets. The \"Visual cards\" section of your instructions covers when to draw and how to compose.\nSANDBOX: JavaScript runs, but there is NO network, host API or navigation. Inline all CSS/JS, embed images as data: URIs, no external scripts/styles/fonts or charting libraries (draw with inline SVG or divs), no eval/new Function. Links and form submits do nothing.\nTHEME: use the injected CSS variables, never hardcode colors — they track the live theme: --fs-bg (transparent card canvas), --fs-surface, --fs-text, --fs-muted, --fs-faint, --fs-border, --fs-rule (hairline for gridlines/axes), --fs-accent, --fs-accent-soft, --fs-green, --fs-danger, --fs-radius, --fs-font, --fs-mono, and the series ramp --fs-s1..--fs-s5 (s1 = accent for the focus value; s2..s5 fade for context). body inherits background/color/font.\nPARTS: fs-chart, fs-flow, fs-compare, fs-choice, fs-checklist (JSON-driven, see the visualize skill); classes fs-header, fs-title, fs-subtitle, fs-plot, fs-source, fs-stat-grid, fs-stat, fs-value, fs-label, fs-row, fs-grid, fs-actions, fs-callout, fs-bar-track; no inline style attributes.\nSIZE: ~700px wide, auto height. It streams in while you write (markup first, scripts last). Each call appends a NEW card; the result is only a confirmation, the user sees the card.\nINTERACTION: click handlers may call window.forsionSketch.ask(text) (sends that follow-up as the user's next message) or .copy(text).\nNot for source code, files, or one-number answers — those stay in prose.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -10888,7 +10951,7 @@
       "type": "function",
       "function": {
         "name": "sketch",
-        "description": "Draw a visual card inline in the chat from self-contained HTML: charts, diagrams, comparisons, timelines, layouts, small interactive widgets. The \"Visual cards\" section of your instructions covers when to draw and how to compose.\nSANDBOX: JavaScript runs, but there is NO network, host API or navigation. Inline all CSS/JS, embed images as data: URIs, never reference external scripts/styles/fonts (no charting libraries or web fonts — draw with inline SVG or divs), no eval/new Function. Links and form submits do nothing; interaction must be inline JS.\nTHEME: use the injected CSS variables, never hardcode colors — they track the live theme: --fs-bg (transparent card canvas), --fs-surface, --fs-text, --fs-muted, --fs-faint, --fs-border, --fs-rule (hairline for gridlines/axes), --fs-accent, --fs-accent-soft, --fs-green, --fs-danger, --fs-radius, --fs-font, --fs-mono, and the series ramp --fs-s1..--fs-s5 (s1 = accent for the focus value; s2..s5 fade for context). body inherits background/color/font.\nCLASSES: fs-header, fs-eyebrow, fs-title, fs-subtitle, fs-plot, fs-caption/fs-source, fs-stat-grid, fs-stat, fs-value, fs-label, fs-panel, fs-row, fs-chip, fs-bar-track, fs-bar-fill.\nSIZE: ~700px wide, auto height; past ~half the chat area it folds behind an expand toggle, so put the headline first. Each call appends a NEW card (no in-place updates); the result is only a confirmation, the user sees the card.\nNot for source code, files, or one-number answers — those stay in prose.",
+        "description": "Draw a visual card inline in the chat from self-contained HTML: charts, diagrams, comparisons, timelines, layouts, small interactive widgets. The \"Visual cards\" section of your instructions covers when to draw and how to compose.\nSANDBOX: JavaScript runs, but there is NO network, host API or navigation. Inline all CSS/JS, embed images as data: URIs, no external scripts/styles/fonts or charting libraries (draw with inline SVG or divs), no eval/new Function. Links and form submits do nothing.\nTHEME: use the injected CSS variables, never hardcode colors — they track the live theme: --fs-bg (transparent card canvas), --fs-surface, --fs-text, --fs-muted, --fs-faint, --fs-border, --fs-rule (hairline for gridlines/axes), --fs-accent, --fs-accent-soft, --fs-green, --fs-danger, --fs-radius, --fs-font, --fs-mono, and the series ramp --fs-s1..--fs-s5 (s1 = accent for the focus value; s2..s5 fade for context). body inherits background/color/font.\nPARTS: fs-chart, fs-flow, fs-compare, fs-choice, fs-checklist (JSON-driven, see the visualize skill); classes fs-header, fs-title, fs-subtitle, fs-plot, fs-source, fs-stat-grid, fs-stat, fs-value, fs-label, fs-row, fs-grid, fs-actions, fs-callout, fs-bar-track; no inline style attributes.\nSIZE: ~700px wide, auto height. It streams in while you write (markup first, scripts last). Each call appends a NEW card; the result is only a confirmation, the user sees the card.\nINTERACTION: click handlers may call window.forsionSketch.ask(text) (sends that follow-up as the user's next message) or .copy(text).\nNot for source code, files, or one-number answers — those stay in prose.",
         "parameters": {
           "type": "object",
           "properties": {

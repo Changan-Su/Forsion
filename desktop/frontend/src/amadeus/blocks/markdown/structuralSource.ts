@@ -424,12 +424,9 @@ export function structuralSourcePlugin() {
         props: {
           decorations: (state) => viewRef ? build(state, viewRef) : DecorationSet.empty,
           handleDOMEvents: {
-            // 焦点状态不是 EditorState 的一部分；补一笔无文档事务让 decorations 在进入/离开
-            // 编辑器时重新求值。blur 延后一微任务，才能区分“去前缀 input”与“真的离开本行”。
-            focus: (view) => {
-              queueMicrotask(() => refreshDecorations(view))
-              return false
-            },
+            // build 读的是 DOM 焦点，不是 EditorState 的一部分：进入编辑器那一下由 editorFocus 的事务带着重新
+            // 求值（它每次 focus 事件必发一笔，这里不再另发）；离开时补一笔无文档事务，延后一微任务，
+            // 才能区分“去前缀 input”与“真的离开本行”。
             blur: (view) => {
               queueMicrotask(() => refreshDecorations(view))
               return false

@@ -5,6 +5,7 @@
  *   GET  /agent/runs?session_id=     列出该 session 的在飞/最近 run（刷新恢复用）
  *   POST /agent/runs/:id/abort       中止
  */
+import { normalizeUIAppCards } from '../shared/intelligentCards.js';
 import { Router } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { authMiddleware, AuthRequest } from '../core/http.js';
@@ -193,7 +194,7 @@ export function normalizeUiValues(v: unknown): Record<string, string> | undefine
 router.post('/agent/runs', authMiddleware, async (req: AuthRequest, res) => {
   try {
     const userId = req.user!.userId;
-    const { session_id, model_id, app_id, message, attachments, agent_config, client, ui_commands, ui_settings, approval_tray, client_capabilities, user_message_id, ephemeral_hint } = req.body || {};
+    const { session_id, model_id, app_id, message, attachments, agent_config, client, ui_commands, ui_settings, approval_tray, client_capabilities, user_message_id, ephemeral_hint, ui_cards } = req.body || {};
     if (agent_config != null && (typeof agent_config !== 'object' || Array.isArray(agent_config))) {
       return res.status(400).json({ detail: 'agent_config must be an object' });
     }
@@ -244,8 +245,9 @@ router.post('/agent/runs', authMiddleware, async (req: AuthRequest, res) => {
       await deps().state.autoCreateSession({ id: session_id, userId, appId: profile.appId, title, modelId });
       // 建会话是「已存在就什么都不做」:别的账号若抢在上面那次读和这次插入之间用同一个 id 建了会话,这次插入是空操作。
       // 建完再读一次归属(只在新会话的第一条消息上多这一次读),不是自己的就照「属他人」处理,否则这条 run 会建在别人的会话上。
-      // 云端 worker 上别指望 server 的「建 run 验归属」来兜:HttpStateStore 给会话选的是会话上已绑定的令牌(那时是对方的),
-      // 那道检查会放行 —— 两种先后次序钉在 runs.sessionOwner.worker.test.ts。
+      // 云端 worker 上 server 的「建 run 验归属」现在也拒得掉(HttpStateStore 在 handler 期带的是请求自己的令牌;2026-10-10 之前带的是
+      // 会话上绑的那枚、那时是对方的,那道检查会放行),但那是走到建 run 之后的 500。这一读留着:在前面就给出 404。
+      // 两种先后次序钉在 runs.sessionOwner.worker.test.ts。
       if ((await deps().state.getSessionOwner(session_id)) !== userId) {
         return res.status(404).json({ detail: 'Session not found' });
       }
@@ -285,6 +287,7 @@ router.post('/agent/runs', authMiddleware, async (req: AuthRequest, res) => {
         // 客户端原生能力(phone.intents 等):只从本路由进 —— 派生 run(团队 / 讨论 / 子代理)自建 input,不继承。
         ...(clientCapsNorm ? { clientCapabilities: clientCapsNorm } : {}),
         ...(voiceHint ? { ephemeralHint: voiceHint } : {}),
+        ...(clientCapsNorm?.includes('intelligent-ui.v1') ? { uiCards: normalizeUIAppCards(ui_cards) } : {}),
       },
     });
 

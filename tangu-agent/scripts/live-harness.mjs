@@ -8,6 +8,10 @@
  *   npm run build && npm run live:harness                    # 全部场景(约 5-10 分钟,真烧订阅额度)
  *   npm run live:harness -- --only personas                 # 三位音乐人格的同题实测(身份自动验,表达读原话)
  *   npm run live:harness -- --only human --human-ui        # HUMAN.md 双作用域、真模型写入/读取/撤销 + 真 Electron 卡片与编辑;先构建 desktop
+ *   npm run live:harness -- --only humanreal --rounds 3 [--timeout 2400000]   # 协作说明写成什么样(10-10;慢的模型每轮 3–4 分钟,轮数多了带 --timeout):一段六条消息的真实任务(不点名任何库 / 工具)之后,写进去的是不是「用户这边怎么做」、普通人读不读得懂;
+ *                                                           #   判官固定 codex/gpt-6-luna;改 HUMAN_GUIDANCE / manage_human 的说明与返回后跑(设计见 lib/human-real-live.mjs);
+ *                                                           #   `--humanreal-rejudge <evidence.json,…>` 不跑任务,只把旧证据里的文档按现在的判据重判一遍
+ *                                                           #   `--humanreal-legacy [strict|button] [--humanreal-seed n]` 每轮开头先放一份旧版本写成的协作说明(2.13.1 的原文;--humanreal-seed n = 每轮都用第 n 份,第 4 份是手写的小样),六条消息之后再请它整理:看旧承诺清没清、清的时候丢没丢、改的是不是原来那一份;strict = 请求里把「先记下再拿掉、就改这一份」也说了;button = 协作说明面板「让 Agent 重写」发出去的原话(从界面文案里读)
  *   npm run live:harness -- --only musereview [--hand]   # Muse 每周装备巡检:巡检完当场替各 agent 收起(只认巡检名单里的、不出卡片)→ 它下一次 run 就生效;--hand 再在对话里让 Muse 看一遍(改 LOADOUT_REVIEW_PROMPT / review_loadout 报告 / propose 代收那一支后跑)
  *   npm run live:harness -- --only harnessopen --harness-ui   # 工作笔记放开写入 + 真 Electron 里的更新卡与撤销(卡片从真模型的回执还原);先构建 desktop
  *   npm run live:harness -- --only projmem                  # 记忆分项目级 / 全局级(10-04):落点、同项目不同 agent 共用、跨项目隔离(改 services/projectMemory.ts / remember 的 scope 后跑)
@@ -160,6 +164,7 @@ import { fromDb, report as timelineReport } from './stall-timeline.mjs';
 import { launchChromePipe, pairExtension } from './lib/chrome-pipe.mjs';
 import { pageInstructionsLive } from './lib/page-instructions-live.mjs';
 import { realUseLive } from './lib/real-use-live.mjs';
+import { humanRealLive } from './lib/human-real-live.mjs';
 import { dreamSeedLive } from './lib/dream-seed-live.mjs';
 import { accountLive, startFakeCloud } from './lib/account-live.mjs';
 import { plantPlugin, pluginDiagLive, registeredViews, STUB_SELFTEST } from './lib/plugin-diag-live.mjs';
@@ -187,6 +192,7 @@ KEYS.push('harnessopen');
 KEYS.push('equip');
 KEYS.push('musereview');
 KEYS.push('realuse');
+KEYS.push('humanreal');
 KEYS.push('projmem');
 KEYS.push('skillcreate');
 KEYS.push('projdedupe');
@@ -217,7 +223,14 @@ OPT_IN.add('projdedupe'); // --only projdedupe:项目记忆换了说法的重复
 OPT_IN.add('projteam'); // --only projteam:项目记忆在团队会话里(三个两人团队各一轮)
 OPT_IN.add('projcompact'); // --only projcompact:项目记忆写满时的压缩(4 个 run + 判官 + 2 次压缩,约 10 次调用);只在动 projectMemoryCompact.ts / remember 写满那条路时才有信息量
 OPT_IN.add('visualfigures');
+for (const key of ['intelligentplan', 'intelligentmedia', 'intelligentplain']) { OPT_IN.add(key); KEYS.push(key); }
+OPT_IN.add('intelligentusers'); KEYS.push('intelligentusers');
+OPT_IN.add('intelligentcards'); KEYS.push('intelligentcards');
 OPT_IN.add('visualize'); // --only visualize: real model -> sketch controls/state; HTML can feed desktop check:visualize.
+OPT_IN.add('visualask'); // --only visualask:卡内按钮回头改答案(forsionSketch.ask);改 sketch.ts 的 INTERACTION / SKETCH_SECTION 那段后跑
+OPT_IN.add('visualsdial'); // --only visualsdial:可视化档位 less / off(ui_settings 快照):off 工具与段都不在、less 隐式信号不触发;两个 run
+OPT_IN.add('visualplan'); // --only visualplan:统一部件拼一张「可用的工具卡」(滑块 + fs-checklist + copy);改 sketch.ts 的部件表 / SKILL 后跑
+KEYS.push('visualask', 'visualsdial', 'visualplan');
 OPT_IN.add('emoji'); // Three real-model rounds; run explicitly when session icons change.
 OPT_IN.add('plugin'); // 隔离 home 里放夹具插件 —— 只在显式跑它时放,别让多出来的工具改了别的场景的工具表。
 OPT_IN.add('dispatch');
@@ -234,6 +247,7 @@ OPT_IN.add('storeview'); // 一个 run;只在动 forsion-plugin 手册里 regist
 OPT_IN.add('skillcreate'); // 四个 run;只在动 manage_skill / use_skill / 随包的 skill-creator 技能时才有信息量。
 OPT_IN.add('account'); // --only account:五个 run;引擎的云端地址指向台架里的假 Forsion 云端 —— 只在显式跑它时才指,别的场景照旧连不上云端。
 OPT_IN.add('realuse'); // 真实使用模拟:每轮 12 个 run(--rounds),--usage-db 再加一个 Muse 周期;单独跑。
+OPT_IN.add('humanreal'); // 协作说明写成什么样:每轮 6 个 run + 1 次判官(--rounds);只在动 HUMAN_GUIDANCE / manage_human 时才有信息量。
 const NEEDS = { dream: ['historian'], recall: ['historian', 'dream'] }; // 记忆链三连有先后依赖;其余场景自包含
 const ONLY = new Set(opt('only', process.env.TANGU_LIVE_ONLY || KEYS.filter((k) => !OPT_IN.has(k)).join(',')).split(',').map((s) => s.trim()).filter(Boolean));
 const TTFT_ROUNDS = Number(opt('ttft-rounds', process.env.TANGU_LIVE_TTFT_ROUNDS || 5));
@@ -1256,7 +1270,7 @@ async function phoneResponder(runId, p, phone) {
 async function run(sessionId, message, timeoutMs = 240_000, extraAgentConfig = {}, client, onApproval, headers, approveHeaders, opts = {}) {
   const t0 = Date.now();
   // headers:只加在起 run 这一跳(remoteclamp 用它模拟 unitWeb 盖的 x-forsion-remote);事件流 / 审批兑现照旧本机直连。
-  const { runId } = await api('/agent/runs', { method: 'POST', headers, body: JSON.stringify({ session_id: sessionId, model_id: MODEL, message, client, ...(opts.clientCapabilities ? { client_capabilities: opts.clientCapabilities } : {}), ...(opts.ui ? { ui_commands: opts.uiCommands || [], ui_settings: opts.ui } : {}), agent_config: { ...AGENT_CONFIG, ...extraAgentConfig } }) });
+  const { runId } = await api('/agent/runs', { method: 'POST', headers, body: JSON.stringify({ session_id: sessionId, model_id: opts.model || MODEL, message, client, ...(opts.clientCapabilities ? { client_capabilities: opts.clientCapabilities } : {}), ...(opts.ui ? { ui_commands: opts.uiCommands || [], ui_settings: opts.ui } : {}), agent_config: { ...AGENT_CONFIG, ...extraAgentConfig } }) });
   const ev = { runId, tokens: 0, toolCalls: [], toolCallIds: [], toolArgs: [], clientCmds: [], uiCmds: [], toolOffsets: null, toolResults: [], subTools: [], subStarts: [], subDones: [], systemPrompt: null, approvals: 0, approvalList: [], approvalResults: [], usages: [], probes: [], statuses: [], content: '', error: null, done: false, group: { speakers: [], ended: null, starts: [], ends: [], summary: null, remarks: [], outputs: [] }, ttftMs: null, firstTokenMs: null, wallMs: 0 };
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), timeoutMs);
@@ -1486,6 +1500,42 @@ try {
   if (!models.some((m) => m.id === MODEL)) throw new Error(`模型目录无 ${MODEL};直连可用:${models.filter((m) => m.source === 'direct').map((m) => m.id).join(', ') || '(无 —— 凭证未装载或已失效)'}`);
   rmSync(authLink, { force: true }); // 凭证只在引擎启动时装载一次,之后不再读文件 → 立刻拆掉软链
 
+  // Warm real engine first, then use the isolated compiled Electron path also used by HUMAN.md.
+  // Prompts are typed into the composer; this never fabricates model events or replays documents.
+  if (ONLY.has('intelligentusers')) {
+    let failure;
+    try {
+      const ui = await promisify(execFile)(process.execPath, [join(root, '../desktop/scripts/intelligent-ui.live.cjs')], {
+        cwd: join(root, '../desktop'), timeout: 25 * 60_000, maxBuffer: 4 * 1024 * 1024,
+        env: { ...process.env, TANGU_BACKEND_URL: base, TANGU_IUI_TOKEN: TOKEN, TANGU_IUI_OUT: OUT, TANGU_IUI_MODEL: MODEL, TANGU_IUI_WORKSPACE: workspace, TANGU_IUI_CASES: opt('intelligent-cases', ''), TANGU_IUI_RANDOM: opt('intelligent-random', '') },
+      });
+      writeFileSync(join(OUT, 'intelligent-users-ui.log'), ui.stdout + ui.stderr);
+    } catch (e) { failure = e; writeFileSync(join(OUT, 'intelligent-users-ui.log'), String(e.stdout || '') + String(e.stderr || '') + String(e.message)); }
+    const path = join(OUT, 'intelligent-users-evidence.json');
+    if (existsSync(path)) {
+      const rows = JSON.parse(readFileSync(path, 'utf8')).results;
+      for (const row of rows) record(row.key, row.name, row, row.ms);
+      // --intelligent-random <seed>:<slot> draws one journey per kind (pick / list / compare) from the pool.
+      const expected = opt('intelligent-random', '') ? 3 : opt('intelligent-cases', '').split(',').filter(Boolean).length || 5;
+      if (rows.length !== expected || failure) record('intelligentusers-incomplete', '用户场景执行完整性', { ok: false, detail: String(failure?.message || `Expected ${expected}, got ${rows.length}`) }, 0);
+    }
+    else record('intelligentusers', '真实用户 Electron 测试启动', { ok: false, detail: String(failure?.message || 'Missing evidence') }, 0);
+  }
+
+  if (ONLY.has('intelligentcards')) {
+    let failure;
+    try {
+      const ui = await promisify(execFile)(process.execPath, [join(root, '../desktop/scripts/intelligent-cards.e2e.cjs')], {
+        cwd: join(root, '../desktop'), timeout: 8 * 60_000, maxBuffer: 4 * 1024 * 1024,
+        env: { ...process.env, TANGU_BACKEND_URL: base, TANGU_IUI_TOKEN: TOKEN, TANGU_IUI_OUT: OUT, TANGU_IUI_MODEL: MODEL, TANGU_IUI_WORKSPACE: workspace },
+      });
+      writeFileSync(join(OUT, 'intelligent-cards-ui.log'), ui.stdout + ui.stderr);
+    } catch (e) { failure = e; writeFileSync(join(OUT, 'intelligent-cards-ui.log'), String(e.stdout || '') + String(e.stderr || '') + String(e.message)); }
+    const path = join(OUT, 'intelligent-cards-evidence.json');
+    const row = existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : { ok: false, detail: String(failure?.message || 'Missing evidence') };
+    record('intelligentcards', '原生与插件卡片真实用户验收', { ...row, ...(failure ? { ok: false } : {}) }, row.ms || 0);
+  }
+
   await scenario('dispatch', 'Dispatch Chief and native task lifecycle', async () => {
     const { dispatchLive } = await import('./lib/dispatch-live.mjs');
     return dispatchLive({api, run, until, workspace, model:MODEL, home});
@@ -1684,15 +1734,22 @@ try {
     // of the agent belongs in memory (10-04 ruling), so HUMAN.md must stay as it is. (Before the ruling this leg expected
     // a human_update; the original regression it guarded, a deferred schema disappearing on grok, is still covered:
     // the model has to reach a real storage tool rather than an unrelated plugin tool.)
+    // 基线取在这句纠正之前:带 --human-ui 时,上面那一步已经在真界面里改过 Agent 这份说明(保存 / 冲突合并),
+    // 拿场景开头读的那份来比,模型做对了也恒红(10-10 两次都红在这里,第二次模型其实只记了记忆、没碰说明)。
+    const beforeFeedback = await api(`/agent/agents/${slug}/human`);
     const feedback = await run(session.id, '你刚才给方案的方式我不太习惯。以后给我选方案，别只列技术优缺点，先说我必须做哪个决定、各需要投入多少时间；信息不足就明确写假设。', 120_000, cfg);
     const revised = await api(`/agent/agents/${slug}/human`);
     const memoryAfter = await api(`/agent/memory?slug=${slug}`);
     const remembered = feedback.toolResults.some(r => r.name === 'remember' && !r.isError && /"ok":true/.test(r.full || ''));
     const humanTouched = feedback.toolResults.some(r => { try { return JSON.parse(r.full).kind === 'human_update'; } catch { return false; } });
-    const feedbackApplied = !feedback.error && feedback.done && remembered && !humanTouched && revised.content === agent.content;
-    writeFileSync(join(OUT, 'human-feedback-evidence.json'), JSON.stringify({ feedbackApplied, remembered, humanTouched, humanUnchanged: revised.content === agent.content, output: feedback.content, memory: memoryAfter, toolCalls: feedback.toolCalls }, null, 2));
+    const feedbackApplied = !feedback.error && feedback.done && remembered && !humanTouched && revised.content === beforeFeedback.content;
+    writeFileSync(join(OUT, 'human-feedback-evidence.json'), JSON.stringify({ feedbackApplied, remembered, humanTouched, humanUnchanged: revised.content === beforeFeedback.content, output: feedback.content, memory: memoryAfter, toolCalls: feedback.toolCalls }, null, 2));
     return { ok: recalled && isolated && reverted && feedbackApplied && !removed.error, detail: JSON.stringify({ scoped, disk, receiptOk, durable, approvals: ev.approvals, recalled, isolated, reverted, feedbackApplied, electron: argv.includes('--human-ui') }), output: `初次：${ev.content}\n新会话：${recall.content}\n异项目：${negative.content}\n撤销后：${removed.content}\n自然反馈：${feedback.content}`, toolCalls: [...ev.toolCalls, ...feedback.toolCalls], tokens: [ev, recall, negative, removed, feedback].reduce((n, e) => n + (tokensOf(e) || 0), 0) };
   });
+
+  // ── 协作说明在一段真实任务之后写成什么样(10-10):消息不点名任何库 / 工具;判据与设计见 lib/human-real-live.mjs ──
+  await scenario('humanreal', `humanreal 协作说明:写的是用户这边怎么做、读得懂 ×${SELF_ROUNDS} 轮`, () =>
+    humanRealLive({ run, api, workspace, OUT, MODEL, AGENT_CONFIG, home, seed: Number(opt('humanreal-seed', 0)) || 0, legacy: argv.includes('--humanreal-legacy') ? (['strict', 'button'].includes(opt('humanreal-legacy', '')) ? opt('humanreal-legacy', '') : 'plain') : '', rounds: SELF_ROUNDS, rejudge: opt('humanreal-rejudge', '').split(',').map((x) => x.trim()).filter(Boolean) }));
 
   // ── 记忆分项目级 / 全局级(10-04 用户第二次裁决「还要区分 Project 级别还是全局级别」)──
   //  ① 在项目一的会话里告诉 agent A 两件事(不提工具、不提「级别」):一件只在这个项目成立,一件不分项目
@@ -2055,6 +2112,44 @@ try {
     return { ok: !ev.error && ev.done && success && contract, detail: ev.error || `cards=${cards.length};native figures=${contract}`, output: ev.content, toolCalls: ev.toolCalls, ttftMs: ttft(ev), tokens: tokensOf(ev) };
   });
 
+  // Real documents also feed the desktop Electron acceptance script.
+  for (const [key, prompt] of [
+    ['intelligentplan', '在聊天里安排周末晚餐，默认4人，人数可在2–8调整。并排给宫保鸡丁、番茄炖牛腩、香菇烧豆腐三个主菜选项，配菜和凉菜固定。人数和主菜改变时采购清单本地联动，可勾选、复制，步骤可以折叠。再放一个按钮让我要求全素方案。用原生 Intelligent UI，数量标为食谱估算，不写项目文件。'],
+    ['intelligentmedia', '用原生 Intelligent UI 做摄影封面选择：三张图并列、可展开原图，给出构图差异、本地单选控件和图片来源。只使用给定图片：https://cdn.jsdelivr.net/gh/sachinchoolur/lightGallery@9813e97837fddca82e4734bcbf4b77b0cd227772/site/static/images/demo/1-480.jpg 、同目录 4-480.jpg 和 13-480.jpg。来源：https://github.com/sachinchoolur/lightGallery 。必须先实际查看三张图片再比较构图；若无法查看就明确说明，不猜图中主体或拍摄地点。'],
+  ]) {
+    await scenario(key, key, async () => {
+      const ev = await run(`live-${key}-${Date.now()}`, prompt, 300_000, key === 'intelligentplan' ? { preset: 'chat' } : {}, 'desktop/2.13.1', undefined, undefined, undefined, { clientCapabilities: ['intelligent-ui.v1'] });
+      const { validateUIDocument } = await import('../dist/shared/intelligentUi.js');
+      const documents = [], errors = [];
+      for (const c of ev.toolArgs.filter(c => c.name === 'intelligent_ui')) {
+        try { documents.push(validateUIDocument(JSON.parse(JSON.parse(c.arguments).document))); } catch (e) { errors.push(String(e.message)); }
+      }
+      const blocks = documents.flatMap(d => d.blocks);
+      // Pictures the user picks among are the options themselves (one row of picture cards), not a gallery beside a list.
+      // Exactly one pictured choice: a second one over the same pictures would put them on screen twice.
+      const pictured = documents.flatMap(d => d.inputs).filter(i => i.kind === 'choice' && i.options.some(o => o.imageId));
+      const picker = pictured.length === 1 && pictured[0].options.length === 3 && new Set(pictured[0].options.map(o => o.imageId)).size === 3 ? pictured[0] : undefined;
+      const pickIds = new Set(picker?.options.map(o => o.imageId));
+      // A model may still list those pictures again in a gallery or a comparison (GPT-6 Luna did, 1 run in 4). The renderer
+      // draws each once, so a repeat is reported here to keep the rate visible and no longer fails the scene.
+      const repeats = blocks.filter(b => (b.kind === 'gallery' && b.resourceIds.some(id => pickIds.has(id))) || (b.kind === 'comparison' && b.items.some(i => pickIds.has(i.imageId)))).length;
+      const pickRow = !!picker;
+      const contract = key === 'intelligentplan'
+        ? blocks.some(b => b.kind === 'checklist' && b.items.some(i => i.quantity?.scaleBy)) && documents.some(d => d.inputs.some(i => i.kind === 'choice')) && blocks.some(b => b.kind === 'disclosure')
+        : pickRow && blocks.some(b => b.kind === 'sources');
+      const groundedImages = key !== 'intelligentmedia' || (ev.toolArgs.some(c => c.name === 'view_image') && !/人像|人脸|面部|portrait/i.test(JSON.stringify(documents)));
+      const noPayloadEcho = !ev.content.includes('\"document\":') && !ev.content.includes('\"blocks\":');
+      const success = ev.toolResults.some(r => r.name === 'intelligent_ui' && !r.isError && !/^Error:/i.test(r.result || ''));
+      writeFileSync(join(OUT, `${key}-evidence.json`), JSON.stringify({ documents, errors, toolArgs: ev.toolArgs, toolResults: ev.toolResults }, null, 2));
+      return { ok: !ev.error && ev.done && success && contract && noPayloadEcho && groundedImages, detail: ev.error || `groundedImages=${groundedImages}; noPayloadEcho=${noPayloadEcho}; documents=${documents.length}; contract=${contract}; pickRow=${key === 'intelligentmedia' ? `${pickRow}; repeats=${repeats}` : 'n/a'}; correctedErrors=${errors.length}`, output: ev.content, toolCalls: ev.toolCalls, ttftMs: ttft(ev), tokens: tokensOf(ev) };
+    });
+  }
+  await scenario('intelligentplain', 'Intelligent UI 关闭偏好', async () => {
+    const ev = await run(`live-intelligentplain-${Date.now()}`, '给我一个四人晚餐建议，三道菜，保持简短。', 150_000, {}, 'desktop/2.13.1', undefined, undefined, undefined, { clientCapabilities: ['intelligent-ui.v1'], ui: { visuals: { value: 'off' } } });
+    const noVisuals = !ev.toolArgs.some(c => ['intelligent_ui', 'sketch'].includes(c.name)) && !String(ev.systemPrompt).includes('## Intelligent UI');
+    return { ok: !ev.error && ev.done && noVisuals && ev.content.length > 0, detail: ev.error || `noVisuals=${noVisuals}`, output: ev.content, toolCalls: ev.toolCalls, ttftMs: ttft(ev), tokens: tokensOf(ev) };
+  });
+
   await scenario('visualize', 'visualize 交互图与本地状态', async () => {
     const ev = await run(`live-visualize-${Date.now()}`, '在聊天里给我一个可交互的正弦波示意图，用滑块调节振幅，立即改变波形。切换会话再回来要记住振幅。用 Forsion 自带的视觉控件和状态接口，不写项目文件。', 240_000, {}, 'desktop/2.12.0');
     const cards = ev.toolArgs.filter((c) => c.name === 'sketch').map((c) => JSON.parse(c.arguments || '{}'));
@@ -2063,6 +2158,51 @@ try {
     const success = ev.toolResults.some((r) => r.name === 'sketch' && !r.isError);
     const contract = /type=["']range["']/.test(html) && html.includes('forsionSketch') && html.includes('setState') && /<svg|<canvas/.test(html);
     return { ok: !ev.error && ev.done && success && contract, detail: ev.error || `cards=${cards.length};interactive/state=${contract}`, output: ev.content, toolCalls: ev.toolCalls, ttftMs: ttft(ev), tokens: tokensOf(ev) };
+  });
+
+  // visualask(10-09,对标 ChatGPT Intelligent UI「控件回头改答案」):卡里的按钮经 window.forsionSketch.ask(text) 把一句话当用户的
+  // 下一条消息发出去。判据只看成品 html:真有 <button> 且点击处调了 ask(;负对照 = 去掉 SKETCH_SECTION 里 ask 那段的引擎,模型不知道有这条路。
+  await scenario('visualask', 'visualask 卡内按钮回头改答案(forsionSketch.ask)', async () => {
+    const ev = await run(`live-visualask-${Date.now()}`, '在聊天里画一张卡，并排比较三种部署方式：本地部署、云托管、混合。每种下面放一个按钮，点了就让你详细展开那一种的取舍。用 Forsion 自带的视觉控件，数据标明是演示。', 240_000, {}, 'desktop/2.13.0');
+    const cards = ev.toolArgs.filter((c) => c.name === 'sketch').map((c) => JSON.parse(c.arguments || '{}'));
+    const html = cards.map((c) => c.html || '').join('\n');
+    writeFileSync(join(OUT, 'visualask.html'), html);
+    const success = ev.toolResults.some((r) => r.name === 'sketch' && !r.isError);
+    // 10-09 二轮起首选原生 fs-compare(选项自带 ask);手写 <button onclick=ask()> 仍算数
+    const native = /<fs-compare\b/.test(html) && /"ask"\s*:/.test(html);
+    const contract = native || (/forsionSketch\.ask\(/.test(html) && /<button/i.test(html));
+    return { ok: !ev.error && ev.done && success && contract, detail: ev.error || `cards=${cards.length};ask button=${contract}(native=${native})`, output: ev.content, toolCalls: ev.toolCalls, ttftMs: ttft(ev), tokens: tokensOf(ev) };
+  });
+
+  // visualplan(10-09 二轮,对标 Intelligent UI 的「能用的工具卡」:餐单按人数缩放 + 采购清单可勾 + 一键复制):判据只看成品 html ——
+  // 有滑块 / 数字输入按人数改量、用原生 fs-checklist(勾选状态由宿主存)、有按钮调 forsionSketch.copy(;负对照 = 去掉描述 / 段 / 技能里
+  // 新部件与 copy 那几句的引擎:模型只会拼 div + 自己写 checkbox,须红。
+  await scenario('visualplan', 'visualplan 统一部件拼工具卡(人数滑块 + fs-checklist + copy)', async () => {
+    const ev = await run(`live-visualplan-${Date.now()}`, '在聊天里给我做一张四人份的周末晚餐计划卡：三道菜，用滑块调人数时食材用量跟着变；下面放一张可以勾选的采购清单，再给一个「复制采购清单」按钮。用 Forsion 自带的视觉部件。', 240_000, {}, 'desktop/2.13.0');
+    const cards = ev.toolArgs.filter((c) => c.name === 'sketch').map((c) => JSON.parse(c.arguments || '{}'));
+    const html = cards.map((c) => c.html || '').join('\n');
+    writeFileSync(join(OUT, 'visualplan.html'), html);
+    const success = ev.toolResults.some((r) => r.name === 'sketch' && !r.isError);
+    const scale = /type=["']range["']|type=["']number["']/.test(html);
+    const checklist = /<fs-checklist\b/.test(html);
+    const copy = /forsionSketch\.copy\(/.test(html);
+    return { ok: !ev.error && ev.done && success && scale && checklist && copy, detail: ev.error || `cards=${cards.length};scale=${scale};fs-checklist=${checklist};copy=${copy}`, output: ev.content, toolCalls: ev.toolCalls, ttftMs: ttft(ev), tokens: tokensOf(ev) };
+  });
+
+  // visualsdial(10-09):用户把可视化调到 less / off(渲染端 ui_settings 快照,键 visuals)。off → 工具与段都不在(系统提示里没有
+  // 「## Visual cards」、模型调不到 sketch);less → 段还在、另注一句「只认明确要求」,一道「比较」题(隐式信号)模型不该画。
+  // 负对照 = 引擎不看 visuals 的旧代码:off 下照样出卡、段照样在,须红。debugSystemPrompt 让引擎回传本 run 的系统提示。
+  await scenario('visualsdial', 'visualsdial 可视化档位 less / off', async () => {
+    const ui = (value) => ({ ui: { visuals: { value, allowed: ['auto', 'less', 'off'] } } });
+    const q = '比较 SQLite、PostgreSQL 和 MySQL 在小团队项目里的取舍，给出各自的优缺点和适用场景。';
+    const off = await run(`live-visualsoff-${Date.now()}`, q, 240_000, { debugSystemPrompt: true }, 'desktop/2.13.0', undefined, undefined, undefined, ui('off'));
+    const less = await run(`live-visualsless-${Date.now()}`, q, 240_000, { debugSystemPrompt: true }, 'desktop/2.13.0', undefined, undefined, undefined, ui('less'));
+    const offPrompt = String(off.systemPrompt || ''); const lessPrompt = String(less.systemPrompt || '');
+    const offOk = !off.error && off.done && !off.toolCalls.includes('sketch') && !offPrompt.includes('## Visual cards');
+    const lessOk = !less.error && less.done && !less.toolCalls.includes('sketch') && lessPrompt.includes('## Visual cards') && lessPrompt.includes('visuals to "less"');
+    return { ok: offOk && lessOk,
+      detail: `off: 工具=${off.toolCalls.join(',') || '无'};段在场=${offPrompt.includes('## Visual cards')} | less: 工具=${less.toolCalls.join(',') || '无'};段在场=${lessPrompt.includes('## Visual cards')};less 注在场=${lessPrompt.includes('visuals to "less"')}`,
+      output: `【off】\n${off.content}\n【less】\n${less.content}`, ttftMs: ttft(off), tokens: tokensOf(off) + tokensOf(less), toolCalls: [...off.toolCalls, ...less.toolCalls] };
   });
 
   await scenario('tool', 'tool 工具回合', async () => {
@@ -3002,7 +3142,7 @@ Then reply with only the command output.`,
   // ⚠️ ENTRY 与 desktop/frontend/src/bootstrapEngine.tsx 的 open-settings 目录项同文(description + params);TARGETS 那一行由
   //    desktop 的 settingsTarget.test.ts 逐字钉住(设置页 / 搜索索引一改,那条单测就红,照它的输出改这里)。
   await scenario('settingsnav', 'settingsnav 「语音在哪设置」:界面命令直达设置页,不用电脑操控', async () => {
-    const TARGETS = 'Pages: general, forsion, model, mcp, hooks, skills, agents, amadeus-plugins, browser, channels, notes, sync, spaces, theme, shortcuts, notifications, statusbar, permissions, remote-sessions, computer-history, advanced, developer, about. Settings: workspace-dir, keep-awake, backend-mode, sandbox, python, mirror, external-backend, forsion-account, forsion-submissions, cloud-url, memory-sync, inbox-notify, default-models, model-providers, web-search, voice, theme-language, startup-appearance, palette, color-mode, ui-zoom, glass, ambient, smooth-caret, chat-avatars, calm-dim, calm-reading, calm-motion, ribbon-auto-home, fonts, notes-attachments, daily-notes, agent-browser, remote-sessions-switch, remote-approval-cap, remote-trusted-devices, remote-safety, computer-history, mcp-server, reset-layout, clear-data, language.';
+    const TARGETS = 'Pages: general, forsion, model, mcp, hooks, skills, agents, amadeus-plugins, browser, channels, notes, sync, spaces, theme, shortcuts, notifications, statusbar, permissions, remote-sessions, computer-history, advanced, developer, about. Settings: workspace-dir, keep-awake, backend-mode, sandbox, python, mirror, external-backend, forsion-account, forsion-submissions, cloud-url, memory-sync, inbox-notify, default-models, model-providers, web-search, voice, theme-language, startup-appearance, palette, color-mode, ui-zoom, glass, ambient, visuals, smooth-caret, chat-avatars, calm-dim, calm-reading, calm-motion, ribbon-auto-home, fonts, notes-attachments, daily-notes, agent-browser, remote-sessions-switch, remote-approval-cap, remote-trusted-devices, remote-safety, computer-history, mcp-server, reset-layout, clear-data, language.';
     const ENTRY = { id: 'open-settings',
       description: "Open Forsion's settings window, optionally at one page or at the page holding one specific setting. To answer 'where/how do I set X', open that page and say which page you opened; these settings are not documented on the web, so do not search for them. Unknown targets are rejected.",
       params: { type: 'object', properties: { tab: { type: 'string', description: `A page id or a setting id. Omit for the default page. ${TARGETS}` } } } };

@@ -43,6 +43,17 @@ describe('mobile local vault asset URLs', () => {
     expect(toStoredMarkdown(shown, '笔记夹')).toBe(md)
   })
 
+  it('⚠️从别的文件夹贴进来的图(显示地址指着库根的 附件/x.png):存成 ../,重开后 WebView 取的还是同一个文件', () => {
+    // 2026-10-10 之前 relFrom 不产出 `../`:存成 `![](附件/x.png)`,重开拼成 笔记夹/附件/x.png —— 本地文件服务没有任何兜底,取不到。
+    // 负对照(实跑过):shared/amadeus/assets.ts 的 relFrom 改回只去前缀 → 本格红。
+    installLocalAssetUrls(() => BASE)
+    const stored = toStoredMarkdown(`![](${localAssetUrl(BASE, '附件/x.png')})`, '笔记夹')
+    expect(stored).toBe('![](../附件/x.png)')
+    const src = /\]\(([^)\s]+)/.exec(toDisplayMarkdown(stored, '笔记夹'))![1]
+    // 浏览器发请求之前自己折叠 `..`:最终取的路径 = 库根 + 附件/x.png
+    expect(decodeURIComponent(new URL(src).pathname)).toBe(`${new URL(BASE).pathname}/附件/x.png`)
+  })
+
   it('逃出库根的引用不给可加载地址(退回默认协议:加载不出,往返照样是好的);解析也不认逃出去的地址', () => {
     expect(localAssetUrl(BASE, '../secret.png')).toBeNull()
     expect(localAssetUrl(BASE, 'a/../../secret.png')).toBeNull()
