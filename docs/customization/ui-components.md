@@ -141,6 +141,7 @@ scroller.addEventListener('scroll', () => board?.update({ viewport: currentViewp
 ```
 
 - 视口归调用方：这层自己不滚不缩，滚动容器或缩放变了就 `update({ viewport })`；滚轮和捏合事件原样交给 `onWheel`，不传就丢弃。
+- 界面缩放（用户把界面调到 110% 之类）由宿主抵消：`viewport` 仍按 `el` 自己的 CSS 像素给；从 `getBoundingClientRect()` 换算时除以 `el.currentCSSZoom`。
 - `tool` 取 `selection`、`freedraw`、`eraser`、`text`、`rectangle`、`ellipse`、`arrow`、`line`；`pen`（只对 `freedraw` 有意义）取 `default`、`finetip`、`fountain`、`marker`、`highlighter`、`thick-thin`、`thin-thick-thin`；`strokeColor`、`strokeWidth` 覆盖这支笔自带的颜色和粗细。
 - `theme` 缺省跟随宿主明暗。底下的内容在深色模式下仍是浅色（PDF 页）时传 `'light'`，否则引擎会给笔迹反色。
 - `onChange` 只在元素变了时触发（画完一笔、擦除、撤销），视口变化和调用方自己推进去的 `scene` 不触发；落笔途中每帧都会来，保存要自己攒。
@@ -152,6 +153,7 @@ scroller.addEventListener('scroll', () => board?.update({ viewport: currentViewp
 `ctx.ui?.mountBoard?.(el, opts)` mounts the host whiteboard engine (the one behind `.excalidraw.md` boards, with the same seven pens) as a transparent layer without a toolbar over the plugin's own content, such as PDF pages, images or a timeline. Strokes are whiteboard elements: store `scene.elements` verbatim as JSON and hand them back unchanged; they paste into a real board and back.
 
 - The caller owns the viewport. A scene point lands at `(point + scroll) * zoom` CSS pixels from the top-left corner of `el`. The layer never pans or zooms by itself: call `update({ viewport })` when your scroll container or zoom changes. Wheel and pinch events are handed to `onWheel` untouched and dropped without it.
+- The host cancels the app's interface zoom (a user at 110%, for example): keep giving `viewport` in the element's own CSS pixels, and divide `getBoundingClientRect()` distances by `el.currentCSSZoom` when you derive it.
 - `tool` is one of `selection`, `freedraw`, `eraser`, `text`, `rectangle`, `ellipse`, `arrow`, `line`. `pen` (only with `freedraw`) is one of `default`, `finetip`, `fountain`, `marker`, `highlighter`, `thick-thin`, `thin-thick-thin`. `strokeColor` and `strokeWidth` override the pen's own.
 - `theme` defaults to the host's mode. Pass `'light'` when the surface underneath stays light in dark mode (a PDF page), otherwise the engine recolours the ink.
 - `onChange` fires when elements change (a stroke ends, an erase, an undo), not for viewport changes or a `scene` you pushed in. It fires on every frame while drawing, so debounce your saving.

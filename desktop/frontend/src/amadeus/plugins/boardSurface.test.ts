@@ -5,6 +5,7 @@
  * (插件仓 forsion-plugin-pdf-reader 的 verify/smoke.cjs ⑧)。
  * 负对照(2026-10-10 实跑):去掉滚轮的 stopPropagation → 「滚轮」那条红;去掉 onChange 的版本比对 → 「只在元素变了」那条红;
  * 去掉引擎漂移后的回推 → 「拉回」那条红。
+ * 负对照(2026-10-10 实跑):推给引擎的缩放不乘界面缩放 → 「界面缩放」那条红。
  * 负对照(2026-10-10 评审返修时实跑):改回在 onExcalidrawAPI 里绑定 → 「装完初始内容之后」两条红;收尾回调里不记最后的样子 → 「被后来的挂载收掉」那条红。
  */
 import { act } from 'react'
@@ -181,6 +182,27 @@ describe('ctx.ui.mountBoard 的那一层', () => {
     await mount({ pen: 'marker', strokeColor: '#e03131' })
     expect(eng.appState.currentItemStrokeColor).toBe('#e03131')
     expect(eng.appState.zoom).toEqual({ value: 1.5 })
+  })
+
+  it('界面缩放(祖先的 CSS zoom):容器反向抵消、铺满原来的大小,引擎的缩放乘回去;改了界面缩放跟着重算', async () => {
+    let uiz = 1.1
+    Object.defineProperty(el, 'currentCSSZoom', { configurable: true, get: () => uiz })
+    const h = await mount()
+    const box = el.querySelector('.am-plugin-board') as HTMLElement
+    expect(parseFloat(box.style.width)).toBeCloseTo(110)
+    expect(parseFloat(box.style.height)).toBeCloseTo(110)
+    expect(Number(box.style.zoom)).toBeCloseTo(1 / 1.1)
+    expect(eng.appState.zoom.value).toBeCloseTo(1.5 * 1.1) // 调用方给的 1.5 是 el 自己的 CSS 像素口径
+    h.update({ viewport: { scrollX: 0, scrollY: 0, zoom: 2 } })
+    expect(eng.appState.zoom.value).toBeCloseTo(2 * 1.1)
+    uiz = 1.25
+    await act(async () => { window.dispatchEvent(new Event('forsion:uizoom')) })
+    expect(eng.appState.zoom.value).toBeCloseTo(2 * 1.25)
+    expect(parseFloat(box.style.width)).toBeCloseTo(125)
+    // 引擎报回来的就是乘过的值:不许被当成「引擎自己动了视口」再推一遍
+    const n = appPatches().length
+    await act(async () => { eng.props.onScrollChange(0, 0, { value: 2.5 }); await Promise.resolve() })
+    expect(appPatches().length).toBe(n)
   })
 
   it('被同一个元素上后来的挂载收掉时,旧句柄的 getScene 还答最后的样子', async () => {

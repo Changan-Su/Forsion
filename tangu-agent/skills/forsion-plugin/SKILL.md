@@ -574,6 +574,7 @@ if (ctx.ui?.mountBoard) {                                  // 老宿主没有:�
 ```
 
 - **视口归你。** 这层自己不滚不缩:你的滚动容器、缩放控件变了就 `update({ viewport })`;引擎自己挪了视口会被拉回你给的值。
+- **界面缩放宿主替你抵消了。** 用户把界面调到 110% 之类(⌘+)时,`viewport` 仍按 `el` 自己的 CSS 像素给;你自己从 `getBoundingClientRect()` 换算视口时要除以 `el.currentCSSZoom`(矩形是缩放后的,`offsetWidth` 这类不是)。
 - **坐标系归你。** 元素的 `x` / `y` 是画布坐标。想让笔迹跟着内容走(换缩放、换窗口宽度都不偏),存之前换成你内容自己的坐标(PDF 用页内 pt),挂载时再换回来;只平移 `x` / `y` 即可,别动 `points`。
 - `tool`:`selection` `freedraw` `eraser` `text` `rectangle` `ellipse` `arrow` `line`;`pen`(仅 `freedraw`):`default` `finetip` `fountain` `marker` `highlighter` `thick-thin` `thin-thick-thin`。`strokeColor` / `strokeWidth`(引擎线宽 0.5 / 1 / 2 / 4)覆盖这支笔自带的。
 - `onChange` 只在**元素**变了时来(画完一笔、擦掉、撤销),视口变化和你自己 `update({ scene })` 推进去的不算。`getScene()` 不含已删除的元素。
@@ -1337,7 +1338,7 @@ Forsion Android App 也跑 Forsion 插件(同一份 `pluginStore`、同一个 `c
 
 ### Whiteboard layer (2026-10-10)
 
-`ctx.ui?.mountBoard?.(el, { scene, viewport, tool, pen, strokeColor, strokeWidth, theme, onChange, onWheel, onReady })` mounts the host whiteboard engine as a transparent, chrome-less layer over the plugin's own content (PDF pages, images, timelines). Strokes are real whiteboard elements: store `scene.elements` verbatim and hand them back unchanged. The caller owns the viewport — a scene point lands at `(point + scroll) * zoom` CSS pixels from the top-left of `el` — and pushes it with `handle.update({ viewport })`; the layer never pans or zooms by itself and forwards every wheel / pinch event to `onWheel`. `onChange` fires for element changes only. The handle exposes `update`, `getScene`, `undo`, `redo` and an idempotent `dispose`; invalid options throw `TypeError` synchronously. `await ctx.ui.boardToSvg({ elements }, { theme, padding })` renders a static SVG plus its scene-space bounds (`null` for an empty scene) for showing ink while no live layer is mounted. Feature-detect both on older hosts and hide the handwriting entry instead of imitating it.
+`ctx.ui?.mountBoard?.(el, { scene, viewport, tool, pen, strokeColor, strokeWidth, theme, onChange, onWheel, onReady })` mounts the host whiteboard engine as a transparent, chrome-less layer over the plugin's own content (PDF pages, images, timelines). Strokes are real whiteboard elements: store `scene.elements` verbatim and hand them back unchanged. The caller owns the viewport — a scene point lands at `(point + scroll) * zoom` CSS pixels from the top-left of `el` — and pushes it with `handle.update({ viewport })`; the layer never pans or zooms by itself and forwards every wheel / pinch event to `onWheel`. The host cancels the app's interface zoom for you: keep giving the viewport in the element's own CSS pixels, and divide `getBoundingClientRect()` distances by `el.currentCSSZoom` when you derive it. `onChange` fires for element changes only. The handle exposes `update`, `getScene`, `undo`, `redo` and an idempotent `dispose`; invalid options throw `TypeError` synchronously. `await ctx.ui.boardToSvg({ elements }, { theme, padding })` renders a static SVG plus its scene-space bounds (`null` for an empty scene) for showing ink while no live layer is mounted. Feature-detect both on older hosts and hide the handwriting entry instead of imitating it.
 
 ### Plugin Chat Box selection and Director hand-off (2026-09-30)
 
