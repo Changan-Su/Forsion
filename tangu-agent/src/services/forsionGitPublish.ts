@@ -67,8 +67,10 @@ export async function publishToForsionGit(cwd: string, name: unknown, trust?: bo
     const pushed = await gitPush(cwd, trust);
     return { url: page, name: repo, ...pushed };
   } catch (e) {
-    // 超时 = 推送可能已经做完:origin 留着。其余都是确定没推上去:撤掉刚加的 origin,回到点之前的样子
-    if (!(e instanceof GitActionError && e.code === 'git_timeout')) await runAction(cwd, ['remote', 'remove', 'origin']).catch(() => {});
+    // 超时 = 推送可能已经做完:origin 留着。其余都是确定没推上去:撤掉刚加的 origin,回到点之前的样子。
+    // 只删刚写的那一节配置,不用 `git remote remove`:它还会顺手清掉所有指着 origin 的分支上游设置和 refs/remotes/origin/*
+    // —— 以前有过一个叫 origin 的远端、只删了配置节的仓库里,那些是发布之前就在的东西。
+    if (!(e instanceof GitActionError && e.code === 'git_timeout')) await runAction(cwd, ['config', '--remove-section', 'remote.origin']).catch(() => {});
     throw e;
   }
 }

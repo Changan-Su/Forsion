@@ -15,6 +15,7 @@
  *   - 去掉 requireTrust → 「未信任的钩子」红(推送那一步照样会拦、origin 也会撤掉,但凭据已经先取了)
  *   - 去掉「还没有提交」的判断 → 「名字不合规…」那条红
  *   - 失败时不撤 origin → 「没推上去 → origin 撤掉」红
+ *   - 撤销改回 `git remote remove origin` → 同一条红(发布之前就在的 branch.topic.remote 和 refs/remotes/origin/topic 被一起清掉)
  *   - 超时也撤 origin → 「超时 → origin 留着」红
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -171,10 +172,17 @@ describe('publishToForsionGit', () => {
   it('没推上去 → 刚加的 origin 撤掉,可以换个名字再来;超时(可能已经推上去)→ origin 留着', async () => {
     const cwd = project('publish-rollback');
     signedIn();
+    // 以前有过一个叫 origin 的远端、只删了配置节:别的分支的上游设置和那条跟踪引用还在 —— 撤销不该碰它们
+    git(cwd, 'branch', 'topic');
+    git(cwd, 'config', 'branch.topic.remote', 'origin');
+    git(cwd, 'config', 'branch.topic.merge', 'refs/heads/topic');
+    git(cwd, 'update-ref', 'refs/remotes/origin/topic', 'HEAD');
     answer = () => ({ code: 1, stderr: ' ! [rejected]        HEAD -> main (fetch first)\nerror: failed to push some refs' });
     const err = await failure(publishToForsionGit(cwd, 'taken'));
     expect(err.code).toBe('git_failed');
     expect(git(cwd, 'remote')).toBe('');
+    expect(git(cwd, 'config', '--get', 'branch.topic.remote')).toBe('origin');
+    expect(git(cwd, 'rev-parse', 'refs/remotes/origin/topic')).toBe(git(cwd, 'rev-parse', 'HEAD'));
     answer = () => ({ code: 0 });
     expect(await publishToForsionGit(cwd, 'another')).toMatchObject({ url: `${WEB}/dave/another` });
 

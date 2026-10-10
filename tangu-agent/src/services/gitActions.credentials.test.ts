@@ -312,8 +312,8 @@ describe('带凭据的拉取', () => {
     answer = (call) => (call.env.GIT_CONFIG_VALUE_0 === `Authorization: Basic ${b64('tok-fresh')}` ? { code: 0 } : { code: 128, stderr: AUTH_FAILED });
     expect(await gitPull(cwd)).toMatchObject({ remote: 'origin', upstream: 'origin/main', updated: false });
     expect(remoteCalls.map((c) => [c.args, c.env.GIT_CONFIG_KEY_0])).toEqual([
-      [['fetch', '--no-recurse-submodules', 'origin', 'refs/heads/main'], 'http.https://git.example.test/.extraheader'],
-      [['fetch', '--no-recurse-submodules', 'origin', 'refs/heads/main'], 'http.https://git.example.test/.extraheader'],
+      [['fetch', '--no-recurse-submodules', '--refmap=', 'origin', '+refs/heads/main:refs/remotes/origin/main'], 'http.https://git.example.test/.extraheader'],
+      [['fetch', '--no-recurse-submodules', '--refmap=', 'origin', '+refs/heads/main:refs/remotes/origin/main'], 'http.https://git.example.test/.extraheader'],
     ]);
   });
 

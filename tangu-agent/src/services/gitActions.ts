@@ -565,8 +565,10 @@ export interface PullResult {
  *  - 快进会改到的文件上有没提交的改动 / 会盖掉一个没进仓的本地文件(含被忽略的,如 .env)→ dirty_worktree
  *    (git 自己拒的,什么都没动);不相干的本地改动留着不碰。
  *  不用 `git pull`:它吃 pull.rebase / pull.ff 配置,同一个按钮在两台机器上能做出两件事。
- *  不用 `git fetch <远端>`(取全部):那会照远端配置的 refspec 更新一切,配了 `+refs/heads/x:refs/heads/x` 这类映射的仓库里,
- *    别的本地分支会被强行改写。只取上游这一条;远端跟踪分支由 git 按配置的映射顺带更新(面板的领先 / 落后才对得上)。
+ *  不用 `git fetch <远端>`(取全部),也不让 git 照远端配置的映射「顺带更新」:配了 `+refs/heads/x:refs/heads/y` 这类映射的
+ *    仓库里,那会把别的本地分支强行改写(点名取一条分支时,凡是来源对得上的映射照样生效)。所以 `--refmap=` 关掉配置的映射,
+ *    只取上游这一条,并且只写一处:上游的远端跟踪引用(面板的领先 / 落后靠它)—— 它不在 refs/remotes/ 下就一处都不写,
+ *    快进目标读 FETCH_HEAD。
  *  不递归子模块(fetch 不进、快进时也不动它们的工作区):子模块是另一份没过信任闸的仓库配置。
  *  快进会跑 post-merge 钩子、检出时跑 smudge 过滤器,fetch 会用仓库配的凭据助手 → 与别的写动作同一道信任闸。
  *  ponytail: 检出到一半失败(过滤器报错 / 超时被杀)时已经写出去的文件不回滚 —— 与终端里的 git 一样,HEAD 没动,
@@ -583,7 +585,10 @@ export async function gitPull(cwd: string, trust?: boolean): Promise<PullResult>
   const upstream = `${remote}/${merge.replace(/^refs\/heads\//, '')}`;
   // 远端名来自仓库配置:以 - 开头的会被 git 当成选项(--upload-pack=… 就是一条本机命令)
   if (remote.startsWith('-')) throw new GitActionError('no_upstream', 'The upstream remote of this branch is not a valid remote name', remote);
-  const fetched = await runRemoteAction(cwd, remote, 'fetch', ['fetch', '--no-recurse-submodules', remote, merge], PUSH_TIMEOUT_MS, trust);
+  // 上游的远端跟踪引用叫什么(git 按配置的映射算出来的名字;引用还不存在也给)。只认 refs/remotes/ 下的 —— 别的地方不替它写
+  const tracking = (await readGit(cwd, ['for-each-ref', '--format=%(upstream)', `refs/heads/${head}`], { timeoutMs: 5000 })).stdout.trim();
+  const refspec = tracking.startsWith('refs/remotes/') ? `+${merge}:${tracking}` : merge;
+  const fetched = await runRemoteAction(cwd, remote, 'fetch', ['fetch', '--no-recurse-submodules', '--refmap=', remote, refspec], PUSH_TIMEOUT_MS, trust);
   if (fetched.code !== 0 && /couldn't find remote ref/i.test(fetched.stderr)) throw new GitActionError('no_upstream', 'The upstream branch no longer exists on the remote', upstream);
   must(fetched, 'fetch');
   // 刚取回来的那个提交(FETCH_HEAD 的第一行就是点名要的这条分支);不靠远端跟踪分支 —— 映射不到它的仓库里它不存在

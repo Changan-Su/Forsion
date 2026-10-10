@@ -19,6 +19,8 @@
  *   - gitPull 不 fetch 就量 → 「快进拿到」等五条红
  *   - gitCredentialEnv(services/gitCredentials.ts)里解析不出 origin 也照问提供方 → 「远端不是 https 时提供方不被问到」红
  *   - fetch 改回 `git fetch <远端>`(取全部)→ 「只取上游那一条」红(本地 topic 被远端的强行改写)
+ *   - fetch 去掉 `--refmap=`(点名取一条、但让配置的映射顺带生效)→ 同一条红(本地 topic 成了远端的 main)
+ *   - 跟踪引用不在 refs/remotes/ 下也照写(去掉 startsWith 判断)→ 同一条红(第二段:本地 topic 被改写)
  *   - 快进去掉 `--no-overwrite-ignore` → 「本地被忽略的文件」红(.env 成了远端那份)
  *   - 去掉 `couldn't find remote ref` → no_upstream 的映射 → 「上游那条分支在远端已经没了」红(成了 git_failed)
  *   - stripGitTraceEnv 不把 GIT_TRACE2* 置 0 → 「Trace2」红(跟踪文件里有 Authorization: Basic …)
@@ -616,9 +618,24 @@ describe('gitPull', () => {
     const mine = git(cwd, 'rev-parse', 'topic');
     git(cwd, 'switch', '-q', 'main');
     git(cwd, 'config', '--add', 'remote.origin.fetch', '+refs/heads/topic:refs/heads/topic');
+    // 这一条的来源就是上游分支本身:点名只取 main 时,git 照样会按它把本地 topic 改成远端的 main
+    git(cwd, 'config', '--add', 'remote.origin.fetch', '+refs/heads/main:refs/heads/topic');
     expect(await gitPull(cwd)).toMatchObject({ updated: true, commits: 1 });
     expect(git(cwd, 'rev-parse', 'topic')).toBe(mine);
     expect(git(cwd, 'rev-parse', 'refs/remotes/origin/main')).toBe(git(cwd, 'rev-parse', 'HEAD'));
+
+    // 上游的「跟踪引用」被配置映射到一条本地分支上(不在 refs/remotes/ 下):一处都不写,照样快进
+    const odd = setup('pull-onebranch-odd');
+    git(odd.cwd, 'switch', '-q', '-c', 'topic');
+    writeFileSync(path.join(odd.cwd, 'mine.txt'), 'unpushed work\n');
+    git(odd.cwd, 'add', '.'); git(odd.cwd, 'commit', '-qm', 'unpushed work');
+    const kept = git(odd.cwd, 'rev-parse', 'topic');
+    git(odd.cwd, 'switch', '-q', 'main');
+    git(odd.cwd, 'config', 'remote.origin.fetch', '+refs/heads/main:refs/heads/topic');
+    pushFromElsewhere(odd.other, 'b.txt', 'b\n', 'from elsewhere');
+    expect(await gitPull(odd.cwd)).toMatchObject({ updated: true, commits: 1 });
+    expect(git(odd.cwd, 'rev-parse', 'topic')).toBe(kept);
+    expect(readFileSync(path.join(odd.cwd, 'b.txt'), 'utf8')).toBe('b\n');
   });
 
   it('上游开始跟踪一个本地被忽略的文件(.env)→ dirty_worktree,本地那份不被盖掉', async () => {
