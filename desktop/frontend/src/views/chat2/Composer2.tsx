@@ -46,6 +46,7 @@ import { disarmTip, tipProps } from '../../hoverTip'
 import { RefChipView } from './RefChipView'
 import { NEW_CHAT_DRAFT, clearDraft, moveDraft, setDraftField, useDraftField } from './composerDrafts'
 import { ContextUsagePop } from './ContextUsagePop'
+import { clearSuggestion, usePromptSuggest } from './promptSuggest'
 import './composer2.css'
 import { homeTarget, targetForSession, targetKeyOf, useComposerRef } from '../../services/engine/targets'
 
@@ -608,6 +609,11 @@ export const Composer2: React.FC<{
   // 这个会话正在 Mini 里通话 → 纯文字送进电话(见 sendMessage)
   const callSessionId = useSyncExternalStore(subscribeCallPresence, getCallPresence)
   const inCall = !!activeSessionId && callSessionId === activeSessionId
+  // 输入建议(promptSuggest.ts,默认关):一轮结束后猜的下一句,当占位文字显示在空输入框里,Tab 采用。
+  // 只认明确给了 sessionId 的输入框(聊天视图);新一轮一起跑就作废。
+  const suggestion = usePromptSuggest((st) => (sessionId ? st.bySession[sessionId] : undefined) || '')
+  const showSuggestion = !!suggestion && !draft && !running && !disabled && !inCall && !touchUi
+  useEffect(() => { if (running && sessionId) clearSuggestion(sessionId) }, [running, sessionId])
   // Mini 那边:有新话 / 代跑 run → 拉一次本会话;改了 Effort → 同步本窗缓存(否则下一条打字消息还按旧档跑)。
   useEffect(() => {
     if (!liveOwnerResolved) return
@@ -1644,7 +1650,8 @@ export const Composer2: React.FC<{
             rows={1}
             autoFocus={autoFocus}
             value={draft}
-            placeholder={disabled ? disabledPlaceholder || t('input.placeholderDisabled') : inCall ? t('livecall.typeHint') : running ? compactCard ? t('input.runningPlaceholder') : t('input.tip', { tip: t(waitTips[tipIdx % waitTips.length]) }) : t(touchUi ? 'input.placeholderTouch' : 'input.placeholder')}
+            placeholder={showSuggestion ? suggestion : disabled ? disabledPlaceholder || t('input.placeholderDisabled') : inCall ? t('livecall.typeHint') : running ? compactCard ? t('input.runningPlaceholder') : t('input.tip', { tip: t(waitTips[tipIdx % waitTips.length]) }) : t(touchUi ? 'input.placeholderTouch' : 'input.placeholder')}
+            data-suggestion={showSuggestion || undefined}
             data-tip-fade={(running && !compactCard && tipFade) || undefined}
             data-tip-tall={(running && !compactCard && tipTall) || undefined}
             disabled={disabled}
@@ -1655,6 +1662,7 @@ export const Composer2: React.FC<{
               setMentionDismissed(false)
               setRefDismissed(false)
               if (histPos) setHistPos(0) // 用户实际打字 → 退出历史召回态
+              if (suggestion && sessionId && e.target.value) clearSuggestion(sessionId) // 动手打字 = 不要这句建议了
               if (!e.target.value.includes('@')) { setMentionedSlug(''); setMentionAgents([]) }
               autoGrow()
             }}
@@ -1704,6 +1712,19 @@ export const Composer2: React.FC<{
                 if (e.key === 'ArrowUp') { e.preventDefault(); setSlashIndex((i) => (i - 1 + slashMatches.length) % slashMatches.length); return }
                 if ((e.key === 'Enter' || e.key === 'Tab') && !e.nativeEvent.isComposing) { e.preventDefault(); slashMatches[Math.min(slashIndex, slashMatches.length - 1)]?.run(); return }
                 if (e.key === 'Escape') { e.preventDefault(); setSlashDismissed(true); setSlashSubMenu(null); return }
+              }
+              // 输入建议:空输入框里显示着灰字时,Tab 把它填进来(不发送)。别的时候 Tab 照常移焦点。
+              if (e.key === 'Tab' && !e.shiftKey && showSuggestion && !e.nativeEvent.isComposing) {
+                e.preventDefault()
+                const text = suggestion
+                setDraft(text)
+                if (sessionId) clearSuggestion(sessionId)
+                requestAnimationFrame(() => {
+                  const ta = taRef.current
+                  if (ta) { ta.selectionStart = ta.selectionEnd = text.length; setCursorPos(text.length) }
+                  autoGrow()
+                })
+                return
               }
               // steer 撤回优先于历史召回:等待区有货且未进召回态,空/首行 ↑ 先取回最新一条插话
               // (prepend 进草稿,类 pi 的 Alt+Up;再按 ↑ 继续取更早的,取完自然落回历史召回)。

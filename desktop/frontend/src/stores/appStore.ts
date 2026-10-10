@@ -30,6 +30,7 @@ import { recordUiAction } from '../diag'
 import { getClientSurface, notifyClientSurfaces } from '../services/clientSurfaces'
 import { windowKind } from '../windowKind'
 import { splitSuggestions } from '../views/chat2/suggest'
+import { clearSuggestion, requestSuggestion } from '../views/chat2/promptSuggest'
 import type { ChatRef } from '../views/chat2/chatDragRef'
 import type { PreviewTarget } from '../components/WorkspaceFilePreview'
 import { openWsFile } from '../views/wsFileNav'
@@ -1901,6 +1902,9 @@ export const useApp = create<AppState>((set, get) => ({
         }
         checkQuotaExhausted(get().toast, get().tr)
         setTimeout(() => { void get().refreshSessions(get().cfg).catch(() => {}) }, 6000)
+        // 输入建议(默认关):只给眼前这个会话拉;后台会话收尾、或后面还排着要接着跑的,只作废旧的那句。
+        if (sessionId === get().activeId && !get().runningBySession[sessionId] && !queueBusy(get(), sessionId)) void requestSuggestion(sessionId, runId)
+        else clearSuggestion(sessionId)
         break
       case 'error':
         patchMessage(sessionId, assistantId, (m) => ({
@@ -1912,6 +1916,7 @@ export const useApp = create<AppState>((set, get) => ({
         }))
         expireRunPrompts(set, sessionId, runId)
         endRun(set, get, sessionId, runId) // planAutoStart 的作废清理在 endRun 里统一做(含 stop/看门狗路径)
+        clearSuggestion(sessionId)
         // 托管模式下 token 过期不会让本地端点 401,而是表现为 run 出错(后端→云端 401)。做一次真实 whoami 复检,
         // 仅确认凭证已失效才提示重登录(避免把模型/网络错误误判为过期)。
         if (!pl.aborted && get().authInfo?.loggedIn) {
