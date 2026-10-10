@@ -1404,7 +1404,9 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
           return false
         }
         const onMqDown = (e: PointerEvent): void => {
-          if (e.button !== 0 || e.pointerType === 'touch') return
+          // 上一次按下没等到 mouseup(触摸滚走了 / 起了拖放):别把它的那次同步留到这一次的松手上。
+          window.removeEventListener('mouseup', syncNativeClick)
+          if (e.button !== 0) return
           // ⚠️ 画布模式整片让路给舞台自己的框选(canvasStage)。root 是 `.unified-body` —— 舞台是它的
           //    后代,所以这个处理器会**吃到画布上的每一次按下**:两个框选同时起(屏幕上真的两个框),
           //    而且 onMqUp 收尾时会 `editorView.focus()` 把焦点从舞台抢走 —— 现象是画布上选中形状后
@@ -1413,8 +1415,10 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
           const t = e.target as HTMLElement | null
           if (!t || t.closest('.unified-gutter') || t.closest('.amx-embed') || t.closest('button, input, textarea, a')) return
           if (!editorView.editable) return
+          // 触摸点按、点在字上:手势整个归原生(没有框选的事),但「点完即落定」照样要补,见 syncNativeClick。
+          if (e.pointerType === 'touch') return armNativeClickSync()
           const blocks = topBlockEls()
-          if (blocks.some((el) => contentAt(el, e.clientX, e.clientY))) return
+          if (blocks.some((el) => contentAt(el, e.clientX, e.clientY))) return armNativeClickSync()
           // 待办方框是 li 的 ::before(左侧槽),按事件 target 认:整段交给原生点按(taskList 的 handleClick
           // 挂在 PM 的 mouseup 上,吞掉 mousedown 它就是哑巴 —— P-01)。
           const task = t.closest('li[data-item-type="task"]')
@@ -1453,10 +1457,14 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
          *  点完立刻 Tab 缩进到了首块、立刻回车在文首连插空段、源码态判定读到旧块。P-01 之前这里由 onMqUp
          *  同步 dispatch,放行原生按下后这个「点完即落定」的契约要补回来:等 PM 的 mouseup(挂在 document、
          *  冒泡期)处理完,在 window 冒泡期让 PM 当场把 DOM 选区读进来。⚠️ 不能用捕获期/微任务(先于 PM 的
-         *  mouseup)也不能用 setTimeout(赌不过下一个输入事件);拖起来的那支归 holdNativeDrag,不走这里。 */
+         *  mouseup)也不能用 setTimeout(赌不过下一个输入事件);拖起来的那支归 holdNativeDrag,不走这里。
+         *  触摸点按与点在字上的也走这里(2026-10-10 补:这两支以前按下就返回,契约只对「鼠标点在块内留白」成立。
+         *  聚焦那一拍主线程要忙 —— 1500 段的笔记实测 ≈ 250ms —— 这段时间里按下的回车 / 退格排在迟到的
+         *  selectionchange 前面,落在旧光标处)。钉子:taskbox.check ②b / ②c / 触屏点正文。 */
+        const armNativeClickSync = (): void => window.addEventListener('mouseup', syncNativeClick, { once: true })
         const onPendingUp = (): void => {
           endPending()
-          window.addEventListener('mouseup', syncNativeClick, { once: true })
+          armNativeClickSync()
         }
         const syncNativeClick = (): void => {
           if (editorView.isDestroyed) return
