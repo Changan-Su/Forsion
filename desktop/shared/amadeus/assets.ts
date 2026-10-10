@@ -258,6 +258,8 @@ const encodeSeg = (seg: string): string => encodeDest(seg.replace(/%/g, '%25')).
  *      图片的地址整段当路径(toDisplayMarkdown 同口径),不拆 `#`。
  *    · `opts.seen` / `opts.only`(比对交换写冲突后的重试用):现文里可能有别的写者按**新位置**写的引用,不能拿旧
  *      目录再解释一遍。第一遍把看过的地址记进 `seen`,重试时 `only` = 那个集合 —— 只改首读时就有的引用。
+ *      ponytail: 按地址的字面认。别的写者恰好在这一瞬加了一条字面相同、却按新位置写的引用,会被一起按旧目录改;
+ *      要堵得按出现位置对,碰上了再说。
  *  仪器:assets.test.ts 的「挪了位置之后的引用」、electron/amadeus/ipc.moveFileRefs.test.ts(真 IPC + 真协议处理器)、
  *  desktop 的 npm run e2e:notemove(真 Electron)。 */
 export async function rebaseFileRefs(
