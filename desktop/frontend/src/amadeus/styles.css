@@ -2911,7 +2911,7 @@ body.amx-marquee-active * {
 
 
 /* ── 「按钮」块(```forsion-button):点一下跑一条 manual 自动化 ────────────────────
- * ⚠️ 配色只准用 **Amadeus 自己那套 token**(theme/themes/*/theme.css 里成对定义、明暗两套都有):
+ * ⚠️ 配色只准用 **Amadeus 自己那套 token**(theme/themes/<主题>/theme.css 里成对定义、明暗两套都有):
  *   --primary / --primary-2(hover)/ --on-primary / --primary-soft / --surface-2
  *   --text / --text-sec / --text-muted / --border / --border-strong / --radius-sm
  * 别用 --accent / --on-accent / --text-faint / --overlay-* —— 那是 Tangu 外壳的词汇表,
