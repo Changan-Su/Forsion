@@ -64,6 +64,9 @@
   --bg-card: #323134;
   --bg-glass: rgba(28, 26, 22, 0.9);
   --sidebar-bg: #262528;
+  /* 侧栏是这套暗色里最深的一层:浮在侧栏上的卡(侧栏对话输入卡,composer2.css 消费)取纸面色只比底亮 4 级、
+   * 读不出是一张卡,改取卡片色。侧栏比主区亮的暗色(珊瑚 / 柔青 / 薰衣草 / 知 / 自定义)不声明它,照旧取纸面色。 */
+  --sidebar-card-bg: var(--bg-card);
   --text: #f2efe8;
   --text-light: rgba(242, 239, 232, 0.82);
   --text-muted: #aca59b;
@@ -412,6 +415,7 @@
   --bg-card: #282624;
   --bg-glass: rgba(27, 26, 25, 0.9);
   --sidebar-bg: #1b1a19;
+  --sidebar-card-bg: var(--bg-card); /* 同经典暗色:侧栏最深,浮在侧栏上的卡取卡片色 */
   --text: #ecebe7;
   --text-light: rgba(236, 235, 231, 0.84);
   --text-muted: #a19d96;

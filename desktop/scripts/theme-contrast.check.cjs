@@ -33,7 +33,7 @@ const hasZhiCandidate = fs.existsSync(zhiCandidate)
 const LANGS = ['lovable', 'genesis-glass', 'soft', ...(hasZhiCandidate ? ['zhi'] : [])]
 const SKINS = ['cream', 'coral', 'teal', 'lavender', 'zhi', 'ink']
 const COLOR_TOKENS = [
-  'bg', 'bg-card', 'bg-glass', 'sidebar-bg', 'text', 'text-light', 'text-muted', 'text-faint', 'text-ghost',
+  'bg', 'bg-card', 'bg-glass', 'sidebar-bg', 'sidebar-card-bg', 'text', 'text-light', 'text-muted', 'text-faint', 'text-ghost',
   'border', 'shadow', 'accent', 'accent-ink', 'accent-hover', 'accent-light', 'accent-rgb', 'on-accent',
   'on-accent-ink', 'action-fill', 'action-fill-hover', 'on-action', 'green', 'danger', 'on-danger', 'danger-light', 'warning', 'warning-light', 'overlay-subtle', 'overlay-light', 'overlay-medium',
   'overlay-strong', 'overlay-scrim', 'user-bg', 'tool-bg', 'tool-text', 'glow',
