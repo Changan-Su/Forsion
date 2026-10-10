@@ -1,7 +1,8 @@
 /** 商店里已装插件的「打开设置」落点:真 Electron / IPC / 磁盘 / 内置引擎,商店清单是本地夹具。
  * 三个插件的**目录名都与装载 id 不同** —— 落点只能靠 market:installed 带回的 id 对上:
  *   Forsion 插件 → 设置窗口直达它的详情面;引擎插件(有设置项)→ 它的设置表单;引擎插件(没设置项)→ 引擎插件列表。
- * 第二、三步时设置窗口已经开着,一并验「开着也跳得过去」。先 npm run build。截图落 outputs/market-open-settings/。
+ * 第二、三步时设置窗口已经开着,一并验「开着也跳得过去」;1b 验「开着、翻到了别的页,再请求同一个落点也落得回去」。
+ * 先 npm run build。截图落 outputs/market-open-settings/。
  */
 const fs = require('fs'), os = require('os'), path = require('path'), http = require('http'), assert = require('assert/strict')
 const electron = require('./lib/launch-electron.cjs')
@@ -62,12 +63,16 @@ async function main() {
     // 1. Forsion 插件:直达它自己的详情面(不是卡片列表)
     let settings = await openSettingsFromMarket('UI Plugin', '[data-plugin-detail="ui-real"]')
     assert.equal(await settings.locator('.plugin-card--link').count(), 0, 'plugin card list must not be showing') // 详情面里的设置块也叫 .plugin-card,列表卡才带 --link
+    // 1b. 设置窗口开着、用户翻到了别的页,再对同一个插件点「打开设置」:两次请求的落点逐字相同,也要落回它的详情面
+    await settings.locator('[data-plugin-back]').click()
+    await until(async () => !(await settings.locator('[data-plugin-detail]').count()), 'left the plugin detail')
+    settings = await openSettingsFromMarket('UI Plugin', '[data-plugin-detail="ui-real"]')
     // 2. 引擎插件(启用且有设置项):它的设置表单。设置窗口此时开着
     settings = await openSettingsFromMarket('Engine Plugin', 'text=Fixture greeting')
     assert.equal(await settings.locator('[data-engine-plugin]').count(), 0, 'engine plugin list must not be showing')
     // 3. 引擎插件(没设置项):引擎插件列表,那一行在
     settings = await openSettingsFromMarket('Bare Plugin', '.settings-sub[data-settings-sub="pl-engine"] [data-engine-plugin="bare-real"]')
-    console.log(`PASS market open-settings: Forsion detail / engine settings form / engine list — screenshots in ${OUT}`)
+    console.log(`PASS market open-settings: Forsion detail / same target again after navigating away / engine settings form / engine list — screenshots in ${OUT}`)
   } finally {
     await app?.close().catch(() => {}); server.close(); fs.rmSync(home, { recursive: true, force: true })
   }

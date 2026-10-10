@@ -670,7 +670,7 @@ remoteSafety.onChange((st) => {
 /** 托盘「更改快捷键…」:主窗前置 + 打开设置浮窗的「远程会话」页(K2 面板经 K4 的扩展槽挂在那页末尾)。 */
 function openRemoteSafetySettings(): void {
   showMainWindow()
-  openFloatingPanel({ id: 'settings', title: mt('main.remoteSafety.settingsTitle'), builtin: 'settings', params: { tab: 'remote-sessions', skillKey: null } })
+  openFloatingPanel({ id: 'settings', title: mt('main.remoteSafety.settingsTitle'), builtin: 'settings', params: { tab: 'remote-sessions', skillKey: null, nonce: Date.now() } }) // nonce:设置窗口开着、停在别的页时也落得回来(同渲染层 openSettings)
 }
 
 async function readShellConfig(): Promise<Partial<TanguStoredConfig>> {
@@ -1772,7 +1772,7 @@ function openFloatingPanel(raw: unknown): { id: string } | undefined {
     existing.setMinimizable(!target.sessionId) // 先以普通面板开过、后被主窗绑上会话的,也收回最小化
     if (existing.isMinimized()) existing.restore()
     present(existing)
-    // 还在载入:渲染层可能已经 floatingReady 拿走了上一份 target,这份得等载入完补发(发最新的;重复到达由面板按 nonce 去重)
+    // 还在载入:渲染层可能已经 floatingReady 拿走了上一份 target,这份得等载入完补发(发最新的;同一份重复到达不会重挂 —— 面板按 params 做 key,设置的带落点请求靠 params.nonce 区分先后)
     const deliver = (): void => { if (!existing.isDestroyed()) existing.webContents.send('window:floatingTarget', floatingTargets.get(target.id) ?? target) }
     if (existing.webContents.isLoadingMainFrame()) existing.webContents.once('did-finish-load', deliver)
     else deliver()

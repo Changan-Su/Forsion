@@ -998,6 +998,8 @@ export interface AppState {
   settingsOpen: boolean
   settingsTab: SettingsTab | null
   settingsSkillKey: string | null
+  /** 窗内设置页的重挂 key:每个带落点的 openSettings 请求换一个(见 openSettings)。 */
+  settingsNonce: number
   feedbackOpen: boolean
   feedbackDraft: string
   marketOpen: boolean
@@ -1295,6 +1297,7 @@ export const useApp = create<AppState>((set, get) => ({
   settingsOpen: false,
   settingsTab: null,
   settingsSkillKey: null,
+  settingsNonce: 0,
   feedbackOpen: false,
   feedbackDraft: '',
   marketOpen: false,
@@ -3864,11 +3867,17 @@ export const useApp = create<AppState>((set, get) => ({
   },
 
   openSettings: (tab, skillKey) => {
+    // 带落点的请求每次换一个 nonce,设置页按它重挂(浮窗:FloatingRoot 拿 params 做 key;窗内:Root 拿 settingsNonce 做 key)。
+    // 落点只在挂载时读一次 —— 没有它,设置开着、用户又翻到了别的页时再请求同一个落点,只会把窗口带到前台。
+    // 不带落点的(齿轮、命令)不换:窗内设置页开着就留在用户原来那一页。(浮窗那边上一次请求若带落点,
+    // params 仍然变了、照旧回到首页 —— 那是这次改动之前就有的行为,没有动。)
+    // 加随机小数:同一毫秒里的两次请求、不同窗口各自的 store 都不会撞出同一个号。
+    const nonce = tab ? Date.now() + Math.random() : null
     if (window.tangu?.openFloatingPanel) {
-      void window.tangu.openFloatingPanel({ id: 'settings', title: get().tr('settings.title'), builtin: 'settings', params: { tab: tab ?? null, skillKey: skillKey ?? null, ...openerSession(get()) } })
+      void window.tangu.openFloatingPanel({ id: 'settings', title: get().tr('settings.title'), builtin: 'settings', params: { tab: tab ?? null, skillKey: skillKey ?? null, ...(nonce ? { nonce } : {}), ...openerSession(get()) } })
       return
     }
-    set({ settingsTab: tab ?? null, settingsSkillKey: skillKey ?? null, settingsOpen: true })
+    set((s) => ({ settingsTab: tab ?? null, settingsSkillKey: skillKey ?? null, settingsOpen: true, settingsNonce: nonce ?? s.settingsNonce }))
   },
 
   openMarket: (query) => {

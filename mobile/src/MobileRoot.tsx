@@ -144,6 +144,7 @@ export function MobileRoot() {
     activeId: s.activeId,
     settingsOpen: s.settingsOpen,
     settingsTab: s.settingsTab,
+    settingsNonce: s.settingsNonce,
     marketOpen: s.marketOpen,
     onboarding: s.onboarding,
     setOnboarding: s.setOnboarding,
@@ -233,6 +234,7 @@ export function MobileRoot() {
             transition={{ duration: 0.22, ease: [0.2, 0.8, 0.2, 1] }}
           >
             <SettingsModal
+              key={a.settingsNonce}
               open
               initialTab={a.settingsTab ?? undefined}
               cfg={a.cfg}

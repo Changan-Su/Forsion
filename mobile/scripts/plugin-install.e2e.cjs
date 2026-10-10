@@ -14,6 +14,7 @@
  *   3. 刷新 → 插件仍在、仍启用;再运行一次 → loadData 读回上次写的计数(数据跨重载);插件 Space 仍在 Space 条
  *   4. 第二项声明 isDesktopOnly → 安装被拒,错误提示 = 本地化原因;什么都没落盘
  *   5. 设置 → 插件:关掉 → 命令、视图与它的 Space 消失;卸载 → 文件没了(listPlugins / marketInstalled 都看不到)
+ *      5a. 设置开着时请求落点(插件的 ctx.app.openSettings):落到那个插件的详情面;用户翻走后再请求同一个落点也落得回去
  *   2c. 插件以当前账号调 Forsion 云端(window.tangu.cloudFetch,桌面同一个接口):带着账号令牌打到云端 API、
  *       拿回 { status, json };给绝对地址 → 不发请求、回 bad_path(通话室 / 活动这类插件缺了它整个不能用)
  *   2d. 手机做不了的接口不挂给插件:ctx.app.reveal(没有文件管理器可定位)、ctx.automation(云端引擎没有
@@ -558,6 +559,22 @@ async function main() {
     }
     await openPluginSettings()
     await shot('settings-plugins')
+
+    // 5a. 设置开着时的落点请求(窗内设置页:手机 / 网页版没有设置浮窗)。入口 = 插件的 ctx.app.openSettings 走的那条窗口事件。
+    //     落点只在设置页挂载时读一次,所以每个带落点的请求都得让它重挂 —— 包括「同一个落点再请求一次」。
+    const requestSettings = (target) => page.evaluate((t) => { window.dispatchEvent(new CustomEvent('forsion:open-settings', { detail: t })) }, target)
+    const detail = page.locator(`[data-plugin-detail="${PLUGIN_ID}"]`)
+    const shown = (locator) => locator.first().waitFor({ state: 'visible', timeout: 5000 }).then(() => true, () => false)
+    await requestSettings(`fplugin:${PLUGIN_ID}`)
+    check(await shown(detail), '设置开着时请求某个插件的落点 → 落到它的详情面')
+    await shot('settings-plugin-detail')
+    await tap(page.locator('[data-plugin-back]'), '返回列表')
+    check(await detail.count() === 0, '用户自己翻走了(防空过:详情面不在)')
+    await requestSettings(`fplugin:${PLUGIN_ID}`)
+    check(await shown(detail), '翻走之后再请求同一个落点 → 又落回它的详情面')
+    await requestSettings('amadeus-plugins/pl-forsion')
+    check(await shown(row) && await detail.count() === 0, '再请求插件列表这一页 → 回到列表')
+
     // 防空过:关之前插件视图必须在(设置盖在上面,视图仍挂在 DOM 里),否则下面的「被撤下」恒绿。
     const viewBefore = await page.locator('[data-e2e-plugin-view]').count()
     check(viewBefore > 0, '关之前插件视图仍挂着(防空过)', `有 ${viewBefore}`)
