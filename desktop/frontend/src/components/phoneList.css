@@ -30,26 +30,40 @@
   font-size: var(--ui-font-caption, 11px); font-weight: 600; color: var(--text-faint, var(--text-muted));
 }
 
-/* ── 左滑一行出操作:横向滚动 + 吸附 ── */
+/* ── 左滑一行出操作:横向滚动 + 吸附。露出来的是一排只有图标的圆钮(用户 2026-10-10:不带文字;名字在读屏标签上,
+ *    首次提示按顺序说过一遍)。圆钮与行首那块 44dp 的图标块同高,底色同一档淡灰;最靠右那颗带一层主题色 / 警示色的淡底,
+ *    不用实心色块 —— 和选中的分类胶囊是同一种说法。 ── */
 .mb-shell[data-nav] .pl-swipe {
   display: flex; overflow-x: auto; overflow-y: hidden;
   scroll-snap-type: x mandatory; scrollbar-width: none; overscroll-behavior-x: contain;
 }
 .mb-shell[data-nav] .pl-swipe > :first-child { flex: 0 0 100%; min-width: 0; scroll-snap-align: start; }
 .mb-shell[data-nav] .pl-swipe-acts {
-  display: flex; flex: 0 0 auto; align-items: center; gap: calc(6 * var(--pl-dp));
-  padding: 0 calc(12 * var(--pl-dp)) 0 calc(2 * var(--pl-dp)); scroll-snap-align: end;
+  display: flex; flex: 0 0 auto; align-items: center; gap: calc(10 * var(--pl-dp));
+  padding: 0 calc(16 * var(--pl-dp)) 0 calc(4 * var(--pl-dp)); scroll-snap-align: end;
 }
 .mb-shell[data-nav] .pl-swipe-act {
-  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: calc(3 * var(--pl-dp));
-  width: calc(60 * var(--pl-dp)); height: calc(56 * var(--pl-dp));
-  border: 0; border-radius: var(--radius-md, 12px);
-  background: var(--overlay-strong, rgba(127, 127, 127, 0.24)); color: var(--text);
-  font-family: var(--font-ui); font-size: var(--ui-font-caption, 11px);
+  display: grid; place-items: center; flex: 0 0 auto; padding: 0;
+  width: calc(44 * var(--pl-dp)); height: calc(44 * var(--pl-dp));
+  border: 0; border-radius: var(--radius-pill, 999px);
+  background: var(--overlay-light, rgba(127, 127, 127, 0.08)); color: var(--text);
 }
 .mb-shell[data-nav] .pl-swipe-act > svg { width: calc(20 * var(--pl-dp)); height: calc(20 * var(--pl-dp)); }
-.mb-shell[data-nav] .pl-swipe-act.accent { background: var(--accent); color: var(--on-accent, #fff); }
-.mb-shell[data-nav] .pl-swipe-act.danger { background: var(--danger); color: var(--on-accent, #fff); }
+.mb-shell[data-nav] .pl-swipe-act.accent { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent-ink, var(--accent)); }
+.mb-shell[data-nav] .pl-swipe-act.danger { background: color-mix(in srgb, var(--danger) 14%, transparent); color: var(--danger); }
+.mb-shell[data-nav] .pl-swipe-act:active { transform: scale(0.92); }
+/* 圆钮跟着手指一颗颗长出来:进度就是横向滚动本身(滚动驱动),停下时一定是终态。不认这个特性的内核、
+ * 以及系统开了「减少动态效果」时,直接是终态。用独立的 scale 属性,不占按下反馈用的 transform。 */
+@supports (animation-timeline: view()) {
+  @media (prefers-reduced-motion: no-preference) {
+    .mb-shell[data-nav] .pl-swipe-act {
+      animation: pl-swipe-in linear both;
+      animation-timeline: view(inline);
+      animation-range: entry 0% entry 100%;
+    }
+  }
+}
+@keyframes pl-swipe-in { from { opacity: 0; scale: 0.6; } }
 
 /* ── 悬浮主按钮:锚在 .mb-drawer-body(position: relative)。列表从 Dock 底下穿过去时(滚动器标了 data-under-dock)
  *    抽屉铺到屏幕底,按钮要自己让到 Dock 之上;否则抽屉本来就止于 Dock 上沿。 ── */

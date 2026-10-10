@@ -78,6 +78,8 @@ export function ListFab({ label, icon, onClick, onMenu }: { label: string; icon:
   )
 }
 
+/** `label` 不画出来(用户 2026-10-10:滑出来的图标不要带文字):它是读屏标签。所以图标自己要说得清 ——
+ *  成对的动作(置顶 / 取消置顶、收藏 / 取消收藏)各用各的图标。 */
 export interface SwipeAction { id: string; label: string; icon: ReactNode; tone?: 'accent' | 'danger'; run(): void }
 
 /** 手指落在别处时把开着的那一行收回。挂在列表滚动器的 onTouchStart 上(一处,不是每行一个监听)。 */
@@ -104,8 +106,8 @@ export function SwipeRow({ actions, children }: { actions: SwipeAction[]; childr
       {children}
       <div className="pl-swipe-acts">
         {actions.map((a) => (
-          <button key={a.id} type="button" className={`pl-swipe-act${a.tone ? ` ${a.tone}` : ''}`} data-act={a.id} onClick={(e) => { e.stopPropagation(); close(); a.run() }}>
-            {a.icon}<span>{a.label}</span>
+          <button key={a.id} type="button" className={`pl-swipe-act${a.tone ? ` ${a.tone}` : ''}`} data-act={a.id} aria-label={a.label} title={a.label} onClick={(e) => { e.stopPropagation(); close(); a.run() }}>
+            {a.icon}
           </button>
         ))}
       </div>

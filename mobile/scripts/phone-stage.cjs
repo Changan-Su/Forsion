@@ -274,7 +274,7 @@ const SCENES = {
     const sw = `${LIST} [data-timeline] .pl-swipe`
     await page.evaluate((q) => { const el = document.querySelectorAll(q)[1]; el.scrollLeft = el.scrollWidth }, sw)
     await page.waitForTimeout(350)
-    const acts = await page.evaluate((q) => [...document.querySelectorAll(q)[1].querySelectorAll('.pl-swipe-act')].map((b) => { const r = b.getBoundingClientRect(); return { id: b.dataset.act, x: r.left, right: r.right, w: r.width } }), sw)
+    const acts = await page.evaluate((q) => [...document.querySelectorAll(q)[1].querySelectorAll('.pl-swipe-act')].map((b) => { const r = b.getBoundingClientRect(); const cs = getComputedStyle(b); return { id: b.dataset.act, x: r.left, right: r.right, w: r.width, h: r.height, text: b.textContent.trim(), name: b.getAttribute('aria-label') || '', round: parseFloat(cs.borderRadius) >= r.width / 2 - 1, shown: cs.opacity === '1' && (cs.scale === 'none' || cs.scale === '1') } }), sw)
     const shot = await page.screenshot()
     fs.writeFileSync(path.join(OUT, `tangu-swipe-open${DARK ? '-dark' : ''}.png`), shot)
     await page.locator(`${sw} >> nth=1`).locator('[data-act="pin"]').tap()
@@ -283,7 +283,8 @@ const SCENES = {
     const first = (await texts(page, `${LIST} [data-timeline] .t2s-srow-title`))[0]
     const closed = await page.evaluate((q) => [...document.querySelectorAll(q)].every((el) => el.scrollLeft < 2), sw)
     return [
-      ['a row slides left onto pin / rename / archive, all on screen', acts.map((a) => a.id).join(',') === 'pin,rename,archive' && acts.every((a) => a.x >= 0 && a.right <= SCREEN.width && near(a.w, 60)), JSON.stringify(acts)],
+      ['a row slides left onto pin / rename / archive, all on screen', acts.map((a) => a.id).join(',') === 'pin,rename,archive' && acts.every((a) => a.x >= 0 && a.right <= SCREEN.width), JSON.stringify(acts)],
+      ['the actions are round 44 dp buttons with an icon only; each has a name for a screen reader; all fully shown once the row rests', acts.every((a) => near(a.w, 44) && near(a.h, 44) && a.round && !a.text && !!a.name && a.shown) && near(SCREEN.width - acts[2].right, 16), JSON.stringify(acts)],
       ['pin: the row moves to a pinned section on top, the tray closes', secs[0] === '置顶' && first === '周末去哪儿' && closed, `${secs[0]} / ${first} / closed=${closed}`],
     ]
   },
@@ -374,7 +375,7 @@ const SCENES = {
     const label = async () => {
       await page.evaluate((q) => { const el = document.querySelector(q); el.scrollLeft = el.scrollWidth }, sw)
       await page.waitForTimeout(350)
-      return page.evaluate((q) => document.querySelector(q).querySelector('[data-act="star"]')?.textContent.trim() ?? null, sw)
+      return page.evaluate((q) => document.querySelector(q).querySelector('[data-act="star"]')?.getAttribute('aria-label') ?? null, sw) // no text on the button: the name is its label
     }
     const use = async () => { await page.locator(`${sw} >> nth=0`).locator('[data-act="star"]').tap(); await page.waitForTimeout(400) }
     const before = await label()

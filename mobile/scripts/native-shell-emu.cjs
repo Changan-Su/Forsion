@@ -1848,6 +1848,10 @@ const tabCountText = (list) => {
       assert.equal(await cdp.eval(nav), 'list', 'the swipe was taken as a tap')
       const got = await cdp.eval(`[...${tray}.querySelectorAll('.pl-swipe-act')].map((b) => b.dataset.act)`)
       assert.deepEqual(got, [step, 'rename', 'archive'], 'delete is only offered for archived sessions')
+      // icons only (no text under them); each still has a name; and once the row rests every button is fully shown
+      // (they grow in with the swipe — a scroll-driven animation must end on its last frame on this WebView)
+      const looks = JSON.parse(await cdp.eval(`JSON.stringify([...${tray}.querySelectorAll('.pl-swipe-act')].map((b) => ({ text: b.textContent.trim(), name: b.getAttribute('aria-label') || '', opacity: getComputedStyle(b).opacity, scale: getComputedStyle(b).scale })))`))
+      assert.ok(looks.every((b) => !b.text && b.name && b.opacity === '1' && (b.scale === 'none' || b.scale === '1')), `tray buttons: ${JSON.stringify(looks)}`)
       const last = await elRect(act('archive'))
       assert.ok(last && last.right <= screen.w + 1, `the tray is not fully on screen (${last && fmt(last)})`)
       if (step === 'pin') shot('17d-row-swipe-tray')

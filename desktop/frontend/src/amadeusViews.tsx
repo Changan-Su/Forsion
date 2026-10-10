@@ -10,7 +10,7 @@ import { Fragment, type ReactNode, type CSSProperties, type RefObject, type Drag
 import { create } from 'zustand'
 import {
   SquarePen, FolderOpen, Folder, FolderPlus, Plus, MoreHorizontal, Pencil, Trash2, BookOpen, BookMarked,
-  ChevronRight, Search, Code2, Eye, Star, Paperclip, FileDown, FileImage,
+  ChevronRight, Search, Code2, Eye, Star, StarOff, Paperclip, FileDown, FileImage,
   Database, ExternalLink, FileText, Share2, Cloud, CloudOff, Pin, PenTool, Upload, LayoutDashboard,
   Undo2, Redo2, ChevronsDown, Frame, ListIndentDecrease, ListIndentIncrease, Copy,
 } from 'lucide-react'
@@ -1324,7 +1324,7 @@ export function AmadeusPagesView() {
     const starred = starredPaths.includes(path)
     const actions: SwipeAction[] = [
       ...(isPage ? [
-        { id: 'star', label: t(starred ? 'amxv.menu.unstar' : 'amxv.menu.star'), icon: <Star />, run: () => useAmadeusPrefs.getState().toggleStar(path) },
+        { id: 'star', label: t(starred ? 'amxv.menu.unstar' : 'amxv.menu.star'), icon: starred ? <StarOff /> : <Star />, run: () => useAmadeusPrefs.getState().toggleStar(path) },
         { id: 'rename', label: t('amxv.menu.rename'), icon: <Pencil />, run: () => startRename(path) },
       ] : []),
       // 删除照旧:笔记走 deleteNoteFlow(确认 + 独占附件),其余文件确认后直接删
