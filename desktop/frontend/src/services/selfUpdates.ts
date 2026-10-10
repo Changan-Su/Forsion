@@ -1,7 +1,6 @@
 import type { HistorianActivityItem, ToolEvent } from '../types'
 import { harnessChanges, harnessChangeState, type HarnessChangeState } from './harnessUpdates'
 import { humanChanges } from './humanCollaboration'
-import { parseUtc } from '../stores/inboxStore'
 
 /** 引擎 remember 回执里的一次改动(tangu-agent `tools/builtin/memoryLog.ts`;字段只增不改)。
  *  回执里没有 Agent 的 slug:撤销时由调用方按「这条发言是谁说的 / 会话的 Agent」给,引擎那头自己折叠共用记忆。 */
@@ -41,6 +40,10 @@ export function isSelfWriteReceipt(ev: ToolEvent): boolean {
   if (ev.name !== 'remember' && ev.name !== 'manage_harness' && ev.name !== 'manage_human') return false
   return memoryChanges([ev]).length + harnessChanges([ev]).length + humanChanges([ev]).length > 0
 }
+
+/** 活动流的时刻:引擎给的是 UTC 的 'YYYY-MM-DD HH:MM:SS'(没有时区后缀);已经是 ISO 的原样解析。
+ *  与 inboxStore.parseUtc 同一个口径,这里不引 store —— 本文件只做换算,进化面板这类轻组件也要能引它。 */
+const utcMs = (s: string): number => Date.parse(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(s) ? `${s.replace(' ', 'T')}Z` : s)
 
 // ── 留痕:后台复盘(Historian)在这段对话之后写下的东西,钉回触发它的那条回复后面 ──
 export type TraceKind = 'harness_adopted' | 'harness_confirm' | 'project_memory_added' | 'project_memory_candidates' | 'project_memory_compacted'
@@ -90,7 +93,7 @@ export function sessionTraces(activity: HistorianActivityItem[], journal: Journa
   const mine = journal.filter((l) => l.by === 'historian' && l.action === 'upsert' && !!l.rev && !!sessionId && l.sessionId === sessionId)
   for (const a of activity) {
     if (!TRACE_KINDS.has(a.action)) continue
-    const at = (parseUtc(a.created_at) ?? new Date(a.created_at)).getTime()
+    const at = utcMs(a.created_at)
     if (!Number.isFinite(at)) continue
     const kind = a.action as TraceKind
     const items = kind === 'project_memory_compacted' ? [] : (a.detail || '').split(' | ').map((x) => x.trim()).filter(Boolean)
@@ -143,14 +146,17 @@ export function anchorTraces(messages: Array<{ id: string; role: string; timesta
 const BACKGROUND_MEMORY = new Set(['historian', 'dream'])
 const BACKGROUND_NOTES = new Set(['historian', 'muse'])
 /** 只数后台写的(复盘、记忆整理、Muse 代收):它当面记的那些在对话里已经有回执行,用户手改的更不用说。
- *  进化记录按条目数(同一条改两次算一处),写了又被撤掉 / 删掉的不算。 */
+ *  进化记录按条目数(同一条改两次算一处);只算「后台写下的那一版现在还是这一条的内容」的 —— 被撤掉、删掉、之后又被改写的不算,
+ *  用户改完又撤回、于是回到后台那一版的算。
+ *  ponytail: 编辑史只有最近 200 行,隔了更多笔编辑的旧条目数不到;要准得让引擎按时刻给。 */
 export function openingSummary(
   since: number,
   entries: Array<{ createdAt: number; source?: { kind?: string } }>,
-  journal: Array<{ ts: string; action: string; entryId: string; by?: string }>,
+  journal: Array<{ ts: string; action: string; entryId: string; by?: string; after?: { title: string; body?: string } | null }>,
 ): { remembered: number; evolved: number } {
-  const last = new Map<string, string>()
-  for (const l of journal) last.set(l.entryId, l.action)
-  const notes = new Set(journal.filter((l) => l.action === 'upsert' && BACKGROUND_NOTES.has(l.by || '') && Date.parse(l.ts) > since && last.get(l.entryId) === 'upsert').map((l) => l.entryId))
+  const same = (a?: { title: string; body?: string } | null, b?: { title: string; body?: string } | null): boolean => !!a && !!b && a.title === b.title && (a.body || '') === (b.body || '')
+  const now = new Map<string, { title: string; body?: string } | null | undefined>()
+  for (const l of journal) now.set(l.entryId, l.after)
+  const notes = new Set(journal.filter((l) => l.action === 'upsert' && BACKGROUND_NOTES.has(l.by || '') && Date.parse(l.ts) > since && same(l.after, now.get(l.entryId))).map((l) => l.entryId))
   return { remembered: entries.filter((e) => e.createdAt > since && BACKGROUND_MEMORY.has(e.source?.kind || '')).length, evolved: notes.size }
 }

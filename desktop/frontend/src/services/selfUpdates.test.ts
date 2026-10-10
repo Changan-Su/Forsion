@@ -127,15 +127,22 @@ describe('candidates left for the user, under their trace', () => {
 describe('opening line', () => {
   const since = Date.UTC(2026, 9, 9)
   const entry = (createdAt: number, kind: string) => ({ createdAt, source: { kind } })
-  const line = (entryId: string, by: string | undefined, action = 'upsert', ts = '2026-10-10T08:00:00Z') => ({ ts, action, entryId, by })
+  const note = (title: string) => ({ title, body: `${title}.` })
+  const line = (entryId: string, by: string | undefined, action = 'upsert', ts = '2026-10-10T08:00:00Z', after: { title: string; body?: string } | null = note(entryId)) => ({ ts, action, entryId, by, after })
   it('counts only what the background wrote since last time', () => {
     const sum = openingSummary(since,
       [entry(since + 1, 'dream'), entry(since + 2, 'historian'), entry(since + 3, 'explicit'), entry(since + 4, 'manual'), entry(since - 1, 'dream')],
       [line('h1', 'historian'), line('h1', 'historian'), line('h2', 'muse'), line('h3', undefined), line('h4', 'user'), line('h5', 'historian', 'upsert', '2026-10-08T08:00:00Z')])
     expect(sum).toEqual({ remembered: 2, evolved: 2 })
   })
-  it('leaves out a note that was undone or deleted afterwards', () => {
-    expect(openingSummary(since, [], [line('h1', 'historian'), line('h1', undefined, 'rollback'), line('h2', 'muse'), line('h2', 'user', 'delete')])).toEqual({ remembered: 0, evolved: 0 })
+  it('counts a note only while the background’s version is what the record holds', () => {
+    const t = '2026-10-10T08:00:00Z'
+    // 写了又被撤掉(新建的 → 没了;改写的 → 回到原来那版)、被删掉、之后被用户改写:都不算
+    expect(openingSummary(since, [], [line('h1', 'historian'), line('h1', undefined, 'rollback', t, null)]).evolved).toBe(0)
+    expect(openingSummary(since, [], [line('h2', 'user', 'upsert', '2026-10-01T00:00:00Z', note('old')), line('h2', 'muse', 'upsert', t, note('new')), line('h2', undefined, 'rollback', t, note('old'))]).evolved).toBe(0)
+    expect(openingSummary(since, [], [line('h3', 'muse'), line('h3', 'user', 'delete', t, null)]).evolved).toBe(0)
+    expect(openingSummary(since, [], [line('h4', 'historian'), line('h4', 'user', 'upsert', t, note('mine'))]).evolved).toBe(0)
+    // 用户改完又撤回,回到后台写的那一版:算
+    expect(openingSummary(since, [], [line('h5', 'historian'), line('h5', 'user', 'upsert', t, note('mine')), line('h5', undefined, 'rollback', t, note('h5'))]).evolved).toBe(1)
   })
 })
-

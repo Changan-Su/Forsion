@@ -29,7 +29,7 @@ export const SESSION_TRACES_EVENT = 'forsion:session-traces-changed'
 /** 后台复盘在这段对话之后写下的东西 → 按「它发生时最后一条回复」分好组(消息 id → 留痕)。
  *  活动流只在本机引擎上有(云端 / 老引擎读不到 → 没有留痕,不报错)。复盘比回复晚几秒到十几秒,所以 run 一结束先后再读三次。 */
 export function useSessionTraces(sessionId: string | null | undefined, messages: Array<{ id: string; role: string; timestamp: number }>, enabled = true): Map<string, SessionTrace[]> {
-  const [data, setData] = useState<{ sid: string; activity: HistorianActivityItem[]; journal: HarnessJournalLine[]; pending: PendingSources } | null>(null)
+  const [data, setData] = useState<{ sid: string; slug: string; activity: HistorianActivityItem[]; journal: HarnessJournalLine[]; pending: PendingSources } | null>(null)
   const slug = useApp((s) => (sessionId ? s.configBySession[sessionId]?.agentSlug || s.defaultAgentSlug : ''))
   const running = useApp((s) => !!(sessionId && s.runningBySession[sessionId]))
   const connected = useApp((s) => s.connState === 'ok')
@@ -51,7 +51,7 @@ export function useSessionTraces(sessionId: string | null | undefined, messages:
           slug && (has('harness_adopted') || has('harness_confirm')) ? getAgentHarness(engine, slug).catch(() => null) : null,
           has('project_memory_candidates') ? getProjectContext(engine, sessionId).then((c) => c.memory?.candidates, () => undefined) : undefined,
         ])
-        if (alive && mine === seq) setData({ sid: sessionId, activity, journal: harness?.journal || [], pending: { harness: harness?.candidateItems, project } }) // 先发的慢请求不许盖掉后发的结果
+        if (alive && mine === seq) setData({ sid: sessionId, slug, activity, journal: harness?.journal || [], pending: { harness: harness?.candidateItems, project } }) // 先发的慢请求不许盖掉后发的结果
       } catch { /* 没有活动流的后端:不留痕 */ }
     }
     // 打开一段长对话时,每条带回执的消息都会喊一次「进化记录变了」:并成一次读
@@ -68,8 +68,9 @@ export function useSessionTraces(sessionId: string | null | undefined, messages:
   // 流式时消息数组每个 token 都换:按「哪些回复、各自的时刻」记,不跟着重算
   const sig = messages.map((m) => (m.role === 'user' ? '' : `${m.id}:${m.timestamp}`)).join('|')
   return useMemo(
-    () => (data && data.sid === sessionId ? anchorTraces(messages, sessionTraces(data.activity, data.journal, data.sid, data.pending)) : new Map<string, SessionTrace[]>()),
-    [data, sessionId, sig], // eslint-disable-line react-hooks/exhaustive-deps
+    // 会话换了 Agent:手里的编辑史和候选是上一位的,撤销 / 采纳却会打到现在这位头上 —— 重读回来之前只留痕、不给动作
+    () => (data && data.sid === sessionId ? anchorTraces(messages, data.slug === slug ? sessionTraces(data.activity, data.journal, data.sid, data.pending) : sessionTraces(data.activity)) : new Map<string, SessionTrace[]>()),
+    [data, sessionId, slug, sig], // eslint-disable-line react-hooks/exhaustive-deps
   )
 }
 
@@ -103,8 +104,8 @@ export function SessionTraceLines({ traces, sessionId }: { traces: SessionTrace[
       setErrors((x) => ({ ...x, [trace.id]: key ? t(key, { max: 30 }) : String(e?.message || e) })) // 30 = 引擎 harnessStore.MAX_ENTRIES
     } finally {
       setBusy('')
-      // 采纳的那条进了进化记录:详情页的「进化」面板和这里的留痕都重读(这个事件两边都听)
-      window.dispatchEvent(new CustomEvent(c.target.kind === 'harness' && action === 'adopt' ? HARNESS_CHANGED_EVENT : SESSION_TRACES_EVENT))
+      // 进化记录的候选少了一条:详情页开着的「进化」面板和这里的留痕都要重读(这个事件两边都听);项目记忆的只有这里读
+      window.dispatchEvent(new CustomEvent(c.target.kind === 'harness' ? HARNESS_CHANGED_EVENT : SESSION_TRACES_EVENT))
     }
   }
   const openAgent = () => showDetails({ kind: 'agent', slug, evolution: Date.now() })

@@ -680,8 +680,8 @@ export function ChatView({ leaf, params }: ViewProps) {
           </div>
         )}
 
-        {/* 开场:新对话(还没有消息)时说一句上次之后后台替这个 Agent 写下了什么。团队 / 外部引擎 / 小窗 / 成员会话不出。 */}
-        {!hasMessages && !historyLoading && !params.miniSurface && !params.childSurface && !mvCfg.teamSlug && !mvCfg.soloEngineId && s.connState === 'ok' && <SessionOpening slug={chatAgentSlug} />}
+        {/* 开场:新对话(还没有消息)时说一句上次之后后台替这个 Agent 写下了什么。团队 / 群聊 / 成员会话 / 外部引擎 / 小窗不出(那里没有「这一个 Agent」)。 */}
+        {!hasMessages && !historyLoading && !params.miniSurface && !params.childSurface && !mvCfg.teamSlug && !mvCfg.groupChat && !mvCfg.teamMember && !mvCfg.soloEngineId && !mvCfg.engineId && s.connState === 'ok' && <SessionOpening slug={chatAgentSlug} />}
 
         <AnimatePresence>
           {s.filePreview && (
