@@ -9,15 +9,25 @@
  *   1. 「⋯」菜单 → 市场;只列 Forsion 插件(没请求过别的类型)、显示范围说明
  *   2. 安装示例插件 → 不刷新即启用:命令进命令面板、运行 → 打开插件视图(锚点)、saveData 落盘
  *      2b. 包里带的 Space(spaces/<slug>/space.json)不刷新就进 Space 条;切过去,主区是配方点名的插件视图
+ *      2c. 云端库(手机的缺省库)下插件的旁挂文件:ctx.app.writeFile / readFile 读写点开头的 .json(索引 / 缓存 / 快照),
+ *          读得到别的设备传上去的那份;云端由本脚本起的假云端库扮演(startFakeCloud,判据镜像 server 的 amadeus 模块)
  *   3. 刷新 → 插件仍在、仍启用;再运行一次 → loadData 读回上次写的计数(数据跨重载);插件 Space 仍在 Space 条
  *   4. 第二项声明 isDesktopOnly → 安装被拒,错误提示 = 本地化原因;什么都没落盘
  *   5. 设置 → 插件:关掉 → 命令、视图与它的 Space 消失;卸载 → 文件没了(listPlugins / marketInstalled 都看不到)
+ *   2c. 插件以当前账号调 Forsion 云端(window.tangu.cloudFetch,桌面同一个接口):带着账号令牌打到云端 API、
+ *       拿回 { status, json };给绝对地址 → 不发请求、回 bad_path(通话室 / 活动这类插件缺了它整个不能用)
+ *   2d. 手机做不了的接口不挂给插件:ctx.app.reveal(没有文件管理器可定位)、ctx.automation(云端引擎没有
+ *       自动化规则路由,答 404)。「关掉插件时不去引擎拉规则」这半在这个台架里量不出来(后端从不就绪),
+ *       钉在 desktop 的 pluginAutomationCtx.test.ts
  *
  * 负对照:`npm run e2e:plugins -- --negative` 把页面 CSP 里的 'unsafe-eval' 去掉再跑 —— 插件代码求值被拦,
  * 第 2 步必须红(证明这台仪器真的在测「插件代码跑起来了」,不是只测到「文件写进去了」)。
+ * 2c 的负对照(2026-10-09 实跑):修复前的云端桥 → 写旁挂 .json 抛 HTTP 400、读别的设备传上来的也抛 HTTP 400、readBytes 恒 null;
+ * 云端桥取字节时不给 ref 加尾斜杠 → 「库根下不存在的文件」那条读成别的目录里的同名文件。
  * 截图写进 mobile/outputs/native-20261002/(已 gitignore)。
  */
 const http = require('http')
+const crypto = require('crypto')
 const os = require('os')
 const fs = require('fs')
 const path = require('path')
@@ -28,7 +38,7 @@ const { chromium } = (() => {
   return require(path.resolve(__dirname, '../../desktop/node_modules/playwright-core'))
 })()
 
-const PORT = 5301 // 避开 dev 5274 / boot 5279 / unitsentry 5281 / settingscfg 5283 / … / runon 5299
+const PORT = Number(process.env.E2E_PORT) || 5301 // 避开 dev 5274 / boot 5279 / unitsentry 5281 / settingscfg 5283 / … / runon 5299
 const APP_URL = `http://localhost:${PORT}/`
 const NEGATIVE = process.argv.includes('--negative')
 const SHOTS = path.resolve(__dirname, '../outputs/native-20261002')
@@ -45,6 +55,12 @@ const SPACE_JSON = JSON.stringify({
 /** 期望的本地化拒装原因(台架钉 zh-CN;与 installMobilePlugins.ts 的 mobilemarket.desktopOnlyPlugin 同文)。 */
 const DESK_REASON_ZH = '这个插件声明了「仅支持桌面端」'
 
+/** 「别的设备已经传上云」的旁挂文件(桌面同步引擎把这类文件按二进制传)。 */
+const SEEDED_PATH = 'e2e-seeded/.from-desktop.json'
+const SEEDED_TEXT = '{"from":"desktop"}'
+/** 只在子目录里有的文件名:插件按库根去读它,必须读不到(服务端的资源端点会按文件名全库兜底)。 */
+const BARE_NAME = 'e2e-bare.json'
+
 // 示例插件:一条命令(计数 +1 → saveData → 打开视图)+ 一个视图(把 loadData 读到的计数挂在 data-* 锚点上)。
 const PLUGIN_MAIN = `
 ctx.registerView({
@@ -55,6 +71,18 @@ ctx.registerView({
     const box = document.createElement('div')
     box.setAttribute('data-e2e-plugin-view', '')
     box.setAttribute('data-e2e-runs', String(d.runs))
+    // 云端接口探针(2c):插件眼里有没有这个接口、打得通吗、绝对地址拦不拦。
+    const tg = window.tangu
+    const probe = { seam: typeof (tg && tg.cloudFetch) }
+    if (probe.seam === 'function') {
+      try {
+        probe.ok = await tg.cloudFetch({ path: '/e2e/ping', method: 'POST', body: { n: 7 } })
+        probe.abs = await tg.cloudFetch({ path: 'https://evil.e2e.test/steal' })
+      } catch (e) { probe.thrown = String(e && e.message || e) }
+    }
+    box.setAttribute('data-e2e-cloudfetch', JSON.stringify(probe))
+    // 宿主做不了的接口不该挂出来(2d):插件按「有没有这个方法」决定画不画按钮 / 报不报「不支持」。
+    box.setAttribute('data-e2e-seams', JSON.stringify({ reveal: typeof ctx.app.reveal, automation: typeof ctx.automation }))
     box.textContent = 'E2E plugin view, runs=' + d.runs
     el.appendChild(box)
     return () => box.remove()
@@ -71,6 +99,22 @@ ctx.registerCommand({
     ctx.openView('panel')
   },
 })
+// 旁挂文件探针(第 2c 步由台架 page.evaluate 调用,结果原样带回):插件的索引 / 缓存就是这种点开头的 .json。
+window.__e2eSidecar = async () => {
+  const dir = ctx.app.workFolder()
+  const idx = dir + '/.e2e-index.json'
+  const got = async (fn) => { try { return { ok: true, v: await fn() } } catch (e) { return { ok: false, err: String((e && e.message) || e) } } }
+  return {
+    write: await got(() => ctx.app.writeFile(idx, '{"n":1}')),
+    rewrite: await got(() => ctx.app.writeFile(idx, '{"n":2}')),
+    read: await got(() => ctx.app.readFile(idx)),
+    seeded: await got(() => ctx.app.readFile('${SEEDED_PATH}')),
+    missing: await got(() => ctx.app.readFile(dir + '/.nope.json')),
+    bare: await got(() => ctx.app.readFile('${BARE_NAME}')),
+    bytes: await got(async () => { const b = await ctx.app.readBytes('${SEEDED_PATH}'); return b ? new TextDecoder().decode(b) : null }),
+    note: await got(async () => { await ctx.app.writeFile(dir + '/e2e-note.md', '# e2e'); return ctx.app.readFile(dir + '/e2e-note.md') }),
+  }
+}
 `
 const card = (id, name) => ({ id, type: 'amadeus-plugin', source: 'zip', name, summary: `${name} (e2e)`, author: 'e2e', installSlug: id, downloads: id === PLUGIN_ID ? 10 : 1, latestVersion: '1.0.0', tags: [], createdAt: '2026-10-01T00:00:00Z', updatedAt: '2026-10-01T00:00:00Z' })
 // The Store says so itself (the reserved tag `desktop-only`): the phone marks the card and does not offer the install.
@@ -113,6 +157,100 @@ function ping() {
   })
 }
 
+/**
+ * 假云端库(内存,本机 http)。判据逐条镜像 server/microserver/amadeus(改那边要改这里;2026-10-09 用那边的
+ * 真路由 + PGlite 逐条对过):
+ *   - lib/paths.ts kindForPath:只有 .md / .db 是文本,其余一律 binary
+ *   - PUT /file 写 binary 路径 → 400 BINARY_PATH;GET /file 读 binary 行 → 400 BINARY;没有这一行 → 404
+ *   - POST /binary(multipart: file, path, ifAbsent?, baseSeq?)写文本路径 → 400;带 baseSeq 时不符 → 409
+ *   - GET /asset 只认 ref(没带 → 400 ref required);不带 '/' 的 ref 精确找不到时按文件名全库兜底(跳过点开头的路径);
+ *     尾斜杠在归一时剥掉、但算「带 '/'」—— 所以 `ref=名字/` 只做精确匹配(云端桥靠这一点避开兜底)
+ * 别的端点一律 404。要对着真服务端跑:E2E_AMADEUS_API=<源,如 http://127.0.0.1:4010>(其下挂 /api/amadeus)。
+ */
+function startFakeCloud() {
+  const rows = new Map() // path → { kind, body: Buffer, seq }
+  let changeSeq = 0
+  const kindOf = (p) => (/\.md$/i.test(p) ? 'page' : /\.db$/i.test(p) ? 'db' : 'binary')
+  const sha = (b) => crypto.createHash('sha256').update(b).digest('hex')
+  const put = (p, body, kind) => { const seq = (rows.get(p)?.seq ?? 0) + 1; rows.set(p, { kind, body, seq }); changeSeq++; return seq }
+  /** 与服务端 CAS 同契约:0 = 仅创建,>0 = 必须等于现 seq;不符回 409 的 body,符合回 null。 */
+  const casFail = (cur, baseSeq, extra) => {
+    if (baseSeq === 0 && cur) return { code: 'EXISTS', seq: cur.seq, ...extra(cur) }
+    if (baseSeq > 0 && (!cur || cur.seq !== baseSeq)) return { code: 'CONFLICT', seq: cur ? cur.seq : 0, ...(cur ? extra(cur) : {}) }
+    return null
+  }
+  const srv = http.createServer(async (req, res) => {
+    const json = (status, body) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(body)) }
+    try {
+      const chunks = []
+      for await (const c of req) chunks.push(c)
+      const raw = Buffer.concat(chunks)
+      const u = new URL(req.url, 'http://fake')
+      if (u.pathname === '/api/amadeus/vaults') return json(200, { vaults: [{ id: 'default', name: 'default', lastChangeSeq: changeSeq, sizeBytes: 0, createdAt: '2026-10-01T00:00:00Z' }] })
+      const m = /^\/api\/amadeus\/vaults\/default\/([a-z-]+)$/.exec(u.pathname)
+      const q = (k) => u.searchParams.get(k) || ''
+      switch (m ? `${req.method} ${m[1]}` : '') {
+        case 'GET tree': {
+          const entries = [...rows].map(([path, r]) => ({ path, kind: r.kind, seq: r.seq, hash: sha(r.body), size: r.body.length }))
+          const folders = new Set()
+          for (const e of entries) for (let d = path.posix.dirname(e.path); d !== '.'; d = path.posix.dirname(d)) folders.add(d)
+          return json(200, {
+            pages: entries.filter((e) => e.kind === 'page').map((e) => e.path),
+            files: entries.filter((e) => e.kind !== 'page').map((e) => ({ path: e.path, size: e.size })),
+            folders: [...folders], entries, seq: changeSeq, maxFileBytes: 5 * 1024 * 1024,
+          })
+        }
+        case 'GET file': {
+          const r = rows.get(q('path'))
+          if (!r) return json(404, { detail: 'file not found' })
+          if (r.kind === 'binary') return json(400, { code: 'BINARY', detail: 'binary file: use GET /vaults/:v/asset' })
+          return json(200, { path: q('path'), kind: r.kind, content: r.body.toString('utf8'), seq: r.seq, hash: sha(r.body), updatedAt: '2026-10-01T00:00:00Z' })
+        }
+        case 'PUT file': {
+          const b = JSON.parse(raw.toString('utf8') || '{}')
+          if (kindOf(String(b.path)) === 'binary') return json(400, { code: 'BINARY_PATH', detail: 'binary path: use POST /vaults/:v/binary' })
+          const bad = b.force === true ? null : casFail(rows.get(b.path), Number(b.baseSeq), (cur) => ({ content: cur.body.toString('utf8') }))
+          if (bad) return json(409, bad)
+          const body = Buffer.from(String(b.content ?? ''), 'utf8')
+          return json(200, { seq: put(b.path, body, kindOf(b.path)), hash: sha(body) })
+        }
+        case 'POST binary': {
+          const form = await new Response(raw, { headers: { 'content-type': req.headers['content-type'] } }).formData()
+          const p = String(form.get('path') ?? '')
+          const file = form.get('file')
+          if (!file || typeof file === 'string') return json(400, { detail: 'no file uploaded' })
+          if (kindOf(p) !== 'binary') return json(400, { detail: 'text path (.md/.db): use PUT /vaults/:v/file' })
+          const cur = rows.get(p)
+          if (cur && !['', '0', 'false'].includes(String(form.get('ifAbsent') ?? '').toLowerCase())) return json(409, { code: 'EXISTS' })
+          const base = String(form.get('baseSeq') ?? '').trim()
+          const bad = base === '' ? null : casFail(cur, Number(base), (c) => ({ hash: sha(c.body) }))
+          if (bad) return json(409, bad)
+          const body = Buffer.from(await file.arrayBuffer())
+          return json(200, { path: p, size: body.length, seq: put(p, body, 'binary') })
+        }
+        case 'GET asset': {
+          const rawRef = q('ref')
+          if (!rawRef) return json(400, { detail: 'ref required' })
+          const ref = rawRef.replace(/\/+$/, '')
+          let r = rows.get(ref)
+          if (!r && !rawRef.includes('/')) {
+            const hit = [...rows.keys()].sort().find((k) => !k.split('/').some((s) => s.startsWith('.')) && k.split('/').pop().toLowerCase() === ref.toLowerCase())
+            r = hit && rows.get(hit)
+          }
+          if (!r) return json(404, { detail: 'asset not found' })
+          res.writeHead(200, { 'content-type': 'application/octet-stream', 'content-length': String(r.body.length) })
+          return res.end(r.body)
+        }
+        default:
+          return json(404, { detail: 'not found' })
+      }
+    } catch (e) {
+      json(500, { detail: String(e && e.message ? e.message : e) })
+    }
+  })
+  return new Promise((resolve) => srv.listen(0, '127.0.0.1', () => resolve({ origin: `http://127.0.0.1:${srv.address().port}`, close: () => { srv.closeAllConnections(); srv.close() } })))
+}
+
 async function zipOf(entries) {
   const z = new JSZip()
   for (const [n, c] of Object.entries(entries)) z.file(n, c)
@@ -123,6 +261,11 @@ async function main() {
   const root = path.resolve(__dirname, '..')
   if (!fs.existsSync(path.join(root, 'dist/index.html'))) {
     console.error('✗ 没有 dist/,先跑 npm run build')
+    process.exit(1)
+  }
+  // 端口上已经有服务 = 同机另一个检出正在跑这台架:接上去测到的是那边的构建(2026-10-09 实遇:修好的桥测出一片 400)。
+  if (await ping()) {
+    console.error(`✗ ${PORT} 已有服务在听(别的会话在跑同一台架?)。换一个端口:E2E_PORT=<端口> npm run e2e:plugins`)
     process.exit(1)
   }
   fs.mkdirSync(SHOTS, { recursive: true })
@@ -147,6 +290,20 @@ async function main() {
   preview.stderr.on('data', (d) => { previewErr += String(d) })
   const killPreview = () => {
     try { process.kill(-preview.pid, 'SIGTERM') } catch { try { preview.kill() } catch { /* 已退出 */ } }
+  }
+
+  // 云端库:缺省 = 本脚本的假云端库;E2E_AMADEUS_API 指到真服务端时不起假的(那边的库 id 现问)。
+  const fake = process.env.E2E_AMADEUS_API ? null : await startFakeCloud()
+  const cloudApi = `${(process.env.E2E_AMADEUS_API || fake.origin).replace(/\/+$/, '')}/api/amadeus`
+  let cloudVault = 'default'
+  const cloudTree = async () => (await fetch(`${cloudApi}/vaults/${cloudVault}/tree`)).json()
+  /** 「别的设备传上来的」文件:走二进制端点(桌面同步引擎对非 .md / .db 就是这么传的)。 */
+  const cloudSeed = async (p, text) => {
+    const form = new FormData()
+    form.set('path', p)
+    form.set('file', new Blob([Buffer.from(text)]), path.basename(p))
+    const r = await fetch(`${cloudApi}/vaults/${cloudVault}/binary`, { method: 'POST', body: form })
+    if (!r.ok) throw new Error(`种子文件没写进云端库: ${p} → ${r.status} ${await r.text()}`)
   }
 
   let browser = null
@@ -199,6 +356,22 @@ async function main() {
       }
       return json({}, 404)
     })
+    // 云端库:/api/amadeus/** 原样转给假云端库(或 E2E_AMADEUS_API)。用 continue 改地址而不是在这里应答 ——
+    // 二进制上传是带 Blob 的 multipart,Playwright 的路由回调拿不到那种请求体。
+    cloudVault = (await (await fetch(`${cloudApi}/vaults`)).json()).vaults[0].id
+    await cloudSeed(SEEDED_PATH, SEEDED_TEXT)
+    await cloudSeed(`e2e-seeded/${BARE_NAME}`, 'OTHER')
+    await page.route('**/api/amadeus/**', (r) => {
+      const u = new URL(r.request().url())
+      return r.continue({ url: `${cloudApi}${u.pathname.replace(/^.*?\/api\/amadeus/, '')}${u.search}` })
+    })
+    // 2c 的假云端接口:把收到的令牌与请求体原样回显。绝对地址那一发要是真发出去了,记下来。
+    const evilHits = []
+    await page.route('**/api/e2e/ping', (r) => r.fulfill({
+      status: 200, contentType: 'application/json',
+      body: JSON.stringify({ pong: true, auth: r.request().headers().authorization || null, body: r.request().postData() }),
+    }))
+    await page.route('https://evil.e2e.test/**', (r) => { evilHits.push(r.request().url()); return r.fulfill({ status: 200, body: '{}' }) })
     await page.route(`${CDN}/**`, (r) => {
       const id = path.basename(new URL(r.request().url()).pathname, '.zip')
       const body = zips[id]
@@ -308,6 +481,20 @@ async function main() {
     if (!ran1) await closePalette()
     await shot('plugin-view')
 
+    // 2c. 插件调云端
+    const probe = JSON.parse((await page.locator('[data-e2e-cloudfetch]').first().getAttribute('data-e2e-cloudfetch').catch(() => null)) || '{}')
+    check(probe.seam === 'function', '插件拿得到 window.tangu.cloudFetch', `typeof = ${probe.seam}`)
+    const okRes = probe.ok || {}
+    check(okRes.status === 200 && okRes.json && okRes.json.pong === true && okRes.json.auth === 'Bearer e2e-plugins' && okRes.json.body === '{"n":7}',
+      'cloudFetch:带账号令牌打到云端 API,拿回 { status, json }', JSON.stringify(probe.ok ?? probe.thrown ?? null))
+    const absRes = probe.abs || {}
+    check(absRes.status === 0 && absRes.error === 'bad_path' && evilHits.length === 0, 'cloudFetch:绝对地址不发请求,回 bad_path', `${JSON.stringify(probe.abs ?? null)},发往外站 ${evilHits.length} 次`)
+
+    // 2d. 手机做不了的两个接口不挂给插件
+    const seams = JSON.parse((await page.locator('[data-e2e-seams]').first().getAttribute('data-e2e-seams').catch(() => null)) || '{}')
+    check(seams.reveal === 'undefined', '手机上不挂 ctx.app.reveal(没有文件管理器可定位;挂个空壳 = 插件画出点了没反应的按钮)', `typeof = ${seams.reveal}`)
+    check(seams.automation === 'undefined', '手机上不挂 ctx.automation(云端引擎没有自动化规则路由)', `typeof = ${seams.automation}`)
+
     // 2b. 包里带的 Space:宿主读得出配方 → 不刷新就进 Space 条 → 切过去,主区是配方点名的插件视图
     const recipes = await page.evaluate(async () => {
       const list = await window.tangu.spacesList?.()
@@ -322,6 +509,26 @@ async function main() {
       const mainView = await page.locator('.mb-main [data-e2e-plugin-view]').count()
       check(active === SPACE_ID && mainView > 0, '切到插件 Space:主区是配方点名的插件视图', `data-space=${active} 视图 ${mainView}`)
       await shot('plugin-space')
+    }
+
+    // 2c. 云端库下的旁挂文件(插件的索引 / 缓存 / 快照:点开头的 .json)。防空过:探针是插件代码自己挂的,没跑就没有。
+    const vaultSide = await page.evaluate(() => window.amadeusVaultMode && window.amadeusVaultMode.side)
+    check(vaultSide === 'cloud', '手机缺省用的是云端库', String(vaultSide))
+    const sc = await page.evaluate(() => (window.__e2eSidecar ? window.__e2eSidecar() : null))
+    if (!sc) fail('旁挂文件探针没挂上(插件代码没跑起来)')
+    else {
+      const J = JSON.stringify
+      const entries = (await cloudTree()).entries
+      const idxRow = entries.find((e) => e.path.endsWith('/.e2e-index.json'))
+      const noteRow = entries.find((e) => e.path.endsWith('/e2e-note.md'))
+      check(sc.write.ok && sc.rewrite.ok, '云端库:插件 writeFile 写旁挂 .json(新建 + 覆盖)', J([sc.write, sc.rewrite]))
+      check(sc.read.v === '{"n":2}', '云端库:readFile 读回最后一次写的内容', J(sc.read))
+      check(!!idxRow && idxRow.kind === 'binary' && idxRow.seq === 2, '云端那一行是二进制行、写了两版(桌面同步引擎传上去的也是这种行)', J(idxRow))
+      check(sc.seeded.v === SEEDED_TEXT, '云端库:读得到别的设备传上去的旁挂文件', J(sc.seeded))
+      check(sc.missing.ok && sc.missing.v === null, '云端库:文件不存在 → readFile 给 null(不抛)', J(sc.missing))
+      check(sc.bare.ok && sc.bare.v === null, '云端库:库根下不存在的文件,不会读成别的目录里的同名文件', J(sc.bare))
+      check(sc.bytes.v === SEEDED_TEXT, '云端库:readBytes 读得到字节', J(sc.bytes))
+      check(sc.note.v === '# e2e' && !!noteRow && noteRow.kind === 'page', '云端库:.md 照旧走文本端点(文本行)', J([sc.note, noteRow]))
     }
 
     // 3. 刷新:插件仍启用;数据跨重载
@@ -411,6 +618,7 @@ async function main() {
   } finally {
     if (browser) await browser.close().catch(() => {})
     killPreview()
+    if (fake) fake.close()
   }
   console.log(`\n${fails.length ? `✗ ${fails.length} 项失败` : '✓ 全部通过'}${NEGATIVE ? '(负对照模式:期望红)' : ''}`)
   process.exit(fails.length ? 1 : 0)

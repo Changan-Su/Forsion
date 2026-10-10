@@ -13,18 +13,16 @@
  *
  * 跑法:npm run build && npm run e2e:update。机制照抄 settings-config.e2e.cjs。
  */
-const http = require('http')
 const os = require('os')
 const fs = require('fs')
 const path = require('path')
-const { spawn } = require('child_process')
+const { startPreview } = require('./lib/preview.cjs')
 const { chromium } = (() => {
   try { return require('playwright-core') } catch { /* 落到 desktop */ }
   return require(path.resolve(__dirname, '../../desktop/node_modules/playwright-core'))
 })()
 
-const PORT = 5285 // 与 boot(5279)/unitsentry(5281)/settingscfg(5283) 错开
-const URL = `http://localhost:${PORT}/`
+let URL = '' // main() 里由 startPreview 给:系统分配的空闲端口,E2E_PORT 可指定(见 lib/preview.cjs)
 const NEWER = '99.0.0'
 const OLDER = '0.0.1'
 
@@ -54,40 +52,22 @@ function findChromium() {
   throw new Error('找不到 chromium,设 CHROMIUM_EXE 环境变量')
 }
 
-function ping() {
-  return new Promise((res) => {
-    const req = http.get(URL, (r) => { res(r.statusCode === 200); r.resume() })
-    req.on('error', () => res(false))
-    req.setTimeout(1500, () => { req.destroy(); res(false) })
-  })
-}
-
 async function main() {
   const root = path.resolve(__dirname, '..')
   if (!fs.existsSync(path.join(root, 'dist/index.html'))) {
     console.error('✗ 没有 dist/,先跑 npm run build')
     process.exit(1)
   }
-  const preview = spawn('npx', ['vite', 'preview', '--port', String(PORT), '--strictPort'], {
-    cwd: root, stdio: ['ignore', 'ignore', 'pipe'], detached: true,
-  })
-  let previewErr = ''
-  preview.stderr.on('data', (d) => { previewErr += String(d) })
-  const killPreview = () => {
-    try { process.kill(-preview.pid, 'SIGTERM') } catch { try { preview.kill() } catch { /* 已退出 */ } }
-  }
+  const preview = await startPreview(root)
+  URL = preview.url
+  const killPreview = preview.kill
 
   let browser = null
   const fails = []
   const pass = (name, extra) => console.log(`PASS  ${name}${extra ? `  | ${extra}` : ''}`)
   const fail = (name, extra) => { fails.push(name); console.log(`FAIL  ${name}${extra ? `  | ${extra}` : ''}`) }
   try {
-    let up = false
-    for (let i = 0; i < 40 && !up; i++) {
-      await new Promise((r) => setTimeout(r, 500))
-      up = await ping()
-    }
-    if (!up) throw new Error(`vite preview 没起来(${PORT} 被占?)\n${previewErr.slice(-800) || '(无 stderr)'}`)
+    await preview.ready()
 
     browser = await chromium.launch({ executablePath: findChromium(), headless: true, args: ['--no-sandbox'] })
 

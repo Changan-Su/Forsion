@@ -4,7 +4,7 @@
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import chokidar, { type FSWatcher } from 'chokidar'
-import type { VaultManager } from './vaultManager'
+import type { SelfWrite, VaultManager } from './vaultManager'
 import { isOverridableBuiltinType } from '@amadeus-shared/builtinTypes'
 
 /** `ctx.app.watchFile` 能监听的文件类型白名单:只有文本配置类。见 handle() 里的说明。 */
@@ -67,17 +67,20 @@ export class VaultWatcher {
     const isWatchable = !isMd && !isDb && !!this.onExternalFileChange && WATCHABLE_TEXT.test(abs)
     if (!isMd && !isDb && !isWatchable) return
     let content = ''
+    let seen: SelfWrite | undefined
     try {
       if (isWatchable) {
         const st = await fs.stat(abs)
         if (st.size > WATCHABLE_MAX_BYTES) return
       }
+      // 读盘前先记下眼下那笔自写账:读到别人的内容时要作废的是它,不是读盘途中我们自己新记的那笔。
+      seen = this.vault.selfWriteEntry(abs)
       content = await fs.readFile(abs, 'utf8')
     } catch {
       return
     }
     // Ignore the echo of our own atomic writes.
-    if (this.vault.wasSelfWrite(abs, content)) return
+    if (this.vault.wasSelfWrite(abs, content, seen)) return
     if (isDb) this.onExternalDbChange?.(path.relative(root, abs))
     else if (isMd) this.onExternalPageChange(path.relative(root, abs))
     else this.onExternalFileChange?.(path.relative(root, abs))

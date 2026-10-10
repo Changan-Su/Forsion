@@ -15,19 +15,17 @@
  *
  * 骨架照抄 home-back.e2e.cjs(返回键)+ note-open.e2e.cjs(种库 / 抽屉点行)。
  */
-const http = require('http')
 const os = require('os')
 const fs = require('fs')
 const path = require('path')
-const { spawn } = require('child_process')
+const { startPreview } = require('./lib/preview.cjs')
 const { chromium } = (() => {
   try { return require('playwright-core') } catch { /* 借 desktop 的 */ }
   return require(path.resolve(__dirname, '../../desktop/node_modules/playwright-core'))
 })()
 const { tinyPdf } = require('../../desktop/scripts/lib/tiny-pdf.cjs')
 
-const PORT = 5293 // 避开 dev 5274 / boot 5279 / unitsentry 5281 / noteopen 5283 / editorbar 5285 / drawerdrag 5289 / spacetrap 5291 / homeback 5297
-const URL = `http://localhost:${PORT}/`
+let URL = '' // main() 里由 startPreview 给:系统分配的空闲端口,E2E_PORT 可指定(见 lib/preview.cjs)
 const NOTE = 'e2e笔记', PDF = 'e2e文档.pdf', DASH = 'e2e看板'
 
 function findChromium() {
@@ -47,10 +45,6 @@ function findChromium() {
   }
   throw new Error('找不到 chromium,设 CHROMIUM_EXE')
 }
-const ping = () => new Promise((res) => {
-  const req = http.get(URL, (r) => { res(r.statusCode === 200); r.resume() })
-  req.on('error', () => res(false)); req.setTimeout(1500, () => { req.destroy(); res(false) })
-})
 
 async function main() {
   const root = path.resolve(__dirname, '..')
@@ -58,10 +52,9 @@ async function main() {
     console.error('✗ 没有 dist/,先跑 npm run build')
     process.exit(1)
   }
-  const preview = spawn('npx', ['vite', 'preview', '--port', String(PORT), '--strictPort'], { cwd: root, stdio: ['ignore', 'ignore', 'pipe'], detached: true })
-  let previewErr = ''
-  preview.stderr.on('data', (d) => { previewErr += String(d) })
-  const killPreview = () => { try { process.kill(-preview.pid, 'SIGTERM') } catch { try { preview.kill() } catch { /* 已退出 */ } } }
+  const preview = await startPreview(root)
+  URL = preview.url
+  const killPreview = preview.kill
 
   let browser = null
   const fails = []
@@ -71,9 +64,7 @@ async function main() {
   }
 
   try {
-    let up = false
-    for (let i = 0; i < 40 && !up; i++) { await new Promise((r) => setTimeout(r, 500)); up = await ping() }
-    if (!up) throw new Error(`vite preview 没起来\n${previewErr.slice(-500)}`)
+    await preview.ready()
     browser = await chromium.launch({ executablePath: findChromium(), headless: true, args: ['--no-sandbox'] })
 
     const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true })
@@ -96,6 +87,9 @@ async function main() {
 
     const cdp = await ctx.newCDPSession(page)
     const tap = async (locator) => {
+      // ⚠️ 先滚进可视区再量:Space 条横滚、且总把当前 Space 居中(SingleColumnHost 的 scrollIntoView),
+      //    目标 tab 可能整颗在条外 —— boundingBox 照样给坐标(负的),CDP 那一下就点在空处,什么都不报。
+      await locator.scrollIntoViewIfNeeded()
       const b = await locator.boundingBox()
       if (!b) throw new Error('目标不可见')
       await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: b.x + b.width / 2, y: b.y + b.height / 2 }] })
@@ -203,7 +197,17 @@ async function main() {
       if (!all.includes(id)) throw new Error(`左抽屉底部没有 ${id} space tab(现有: ${all.join(',')})`)
       await tap(page.locator(`.mb-drawer-foot .mb-tab >> nth=${all.indexOf(id)}`))
       await page.waitForTimeout(1200)
+      // 没切成就别往下走:Space 没换 = 历史没经过清栈那条路,4a 照样绿(PDF 本来就在前台)、4d 红成「串栈」。
+      // 09-21(c8f3adcd,图像工作室进 Space 条,第 7 颗)到 10-09(f6f2e3e9 改默认序,碰巧又点得中)这条就这样
+      // 假红着:Note 居中时 Tangu 那颗滚出条外,点在空处。红的是台架不是产品。
+      const on = await page.$eval('.mb-drawer-foot .mb-tab.on', (e) => e.dataset.space || '').catch(() => '')
+      if (on !== id) throw new Error(`点了 ${id} 的 Space tab 但没切过去(当前 ${on || '?'}),第 4 段测的就不是「切 Space 往返」`)
     }
+    // 先空跑一趟往返,让 Tangu 也有存下来的布局:头一次进没去过的 Space 走 resetLayout(它自己清历史),
+    // 两头都走 applyNamed(applySCBlob)时 applySCBlob 里那次清栈才是唯一的一道 —— 不垫这一趟,把它删了 4d 照样绿
+    // (2026-10-09 负对照实跑)。
+    await switchSpace('tangu')
+    await switchSpace('amadeus')
     await openRow(PDF) // 栈:[笔记, PDF]
     await switchSpace('tangu')
     await switchSpace('amadeus')

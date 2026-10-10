@@ -285,6 +285,7 @@ export function createShareBridge(cfg: ShareBridgeCfg): AmadeusApi {
 /** 装成 window.amadeus + 把渲染层 toAssetUrl 接到公开资产端点(ref = vault 相对路径,带上当前页做范围与兜底解析)。 */
 export function installShareBridge(cfg: ShareBridgeCfg): AmadeusApi {
   const api = createShareBridge(cfg)
+  // 只装构建、不给解析:分享页只读、从不存盘,没有「换回页相对路径」这一步(接缝说明见 shared/amadeus/assets.ts)。
   setAssetUrlBuilder((ref) => {
     const q = new URLSearchParams({ ref })
     const page = cfg.currentPage()

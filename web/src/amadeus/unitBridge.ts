@@ -188,7 +188,13 @@ export async function createUnitAmadeusBridge(cfg: UnitBridgeCfg): Promise<Amade
   window.addEventListener('beforeunload', () => { es?.close(); if (assetTimer) clearTimeout(assetTimer) })
 
   if (!cfg.browserStorage) await refreshAssetToken() // Published shells have no shared vault or event stream.
-  setAssetUrlBuilder((ref) => assetUrl(ref))
+  // 成对装(构建 + 解析):存盘时要靠解析把显示地址换回页相对路径,否则带令牌的地址会被写进设备上的笔记
+  // (见 shared/amadeus/assets.ts 接缝的说明)。只认本设备这一个资源端点,逐字前缀比对。
+  const assetEndpoint = `${new URL('vault/asset', cfg.base).href}?`
+  setAssetUrlBuilder(
+    (ref) => assetUrl(ref),
+    (url) => (url.startsWith(assetEndpoint) && !url.includes('#') ? new URLSearchParams(url.slice(assetEndpoint.length)).get('ref') || null : null),
+  )
 
   // what 是 thunk:抛出那一刻才按当前界面语言取词(模块装配时求值会定格在装配那一刻的语言)。
   const notSupported = (what: () => string) => (): never => { throw new Error(translate('amxbridge.remoteOnly', { what: what() })) }

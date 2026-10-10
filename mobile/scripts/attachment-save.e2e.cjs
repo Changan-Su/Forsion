@@ -14,19 +14,17 @@
  *  B. 左抽屉文件树空白处长按(contextmenu)→「新建白板」「新建仪表盘」→ 命名确定 → 不弹失败框、文件进库、视图打开。
  *  C. 编辑器里粘贴 PNG → 落进 attachments/ 且插入图片;粘贴 PDF → 落盘且插入 ![[…]] 嵌入。
  */
-const http = require('http')
 const os = require('os')
 const fs = require('fs')
 const path = require('path')
-const { spawn } = require('child_process')
+const { startPreview } = require('./lib/preview.cjs')
 const { chromium } = (() => {
   try { return require('playwright-core') } catch { /* 借 desktop 的 */ }
   return require(path.resolve(__dirname, '../../desktop/node_modules/playwright-core'))
 })()
 const { tinyPdf } = require('../../desktop/scripts/lib/tiny-pdf.cjs')
 
-const PORT = 5299 // 避开 dev 5274 / boot 5279 / unitsentry 5281 / noteopen 5283 / editorbar 5285 / drawerdrag 5289 / spacetrap 5291 / fileback 5293 / homeback 5297
-const URL = `http://localhost:${PORT}/`
+let URL = '' // main() 里由 startPreview 给:系统分配的空闲端口,E2E_PORT 可指定(见 lib/preview.cjs)
 const NOTE = 'e2e附件'
 const PNG_B64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
 
@@ -47,10 +45,6 @@ function findChromium() {
   }
   throw new Error('找不到 chromium,设 CHROMIUM_EXE')
 }
-const ping = () => new Promise((res) => {
-  const req = http.get(URL, (r) => { res(r.statusCode === 200); r.resume() })
-  req.on('error', () => res(false)); req.setTimeout(1500, () => { req.destroy(); res(false) })
-})
 
 async function main() {
   const root = path.resolve(__dirname, '..')
@@ -58,10 +52,9 @@ async function main() {
     console.error('✗ 没有 dist/,先跑 npm run build')
     process.exit(1)
   }
-  const preview = spawn('npx', ['vite', 'preview', '--port', String(PORT), '--strictPort'], { cwd: root, stdio: ['ignore', 'ignore', 'pipe'], detached: true })
-  let previewErr = ''
-  preview.stderr.on('data', (d) => { previewErr += String(d) })
-  const killPreview = () => { try { process.kill(-preview.pid, 'SIGTERM') } catch { try { preview.kill() } catch { /* 已退出 */ } } }
+  const preview = await startPreview(root)
+  URL = preview.url
+  const killPreview = preview.kill
 
   let browser = null
   const fails = []
@@ -70,9 +63,7 @@ async function main() {
     if (!cond) fails.push(`${name}${detail ? ' | ' + detail : ''}`)
   }
   try {
-    let up = false
-    for (let i = 0; i < 40 && !up; i++) { await new Promise((r) => setTimeout(r, 500)); up = await ping() }
-    if (!up) throw new Error(`vite preview 没起来\n${previewErr.slice(-500)}`)
+    await preview.ready()
 
     browser = await chromium.launch({ executablePath: findChromium(), headless: true, args: ['--no-sandbox'] })
     // 按中文文案点菜单 → 钉 zh(浏览器台架 `--lang` 无效,只认 newContext 的 locale)。

@@ -80,6 +80,19 @@ describe('ctx.automation 的闸', () => {
   it('探针带 waitBackend → 注入', () => {
     expect(typeof ctxOf('p-new').automation?.ensure).toBe('function')
   })
+  it('宿主声明没有本机引擎(手机:executionCapabilities.host === false)→ 不注入,禁用时也不去拉规则', async () => {
+    vi.stubGlobal('window', { tangu: { executionCapabilities: { host: false } } })
+    try {
+      calls.list = [tr('plugin:p-mobile:a', true)]
+      expect(ctxOf('p-mobile').automation).toBeUndefined()
+      usePluginStore.getState().disable('p-mobile')
+      await new Promise((r) => setTimeout(r, 10))
+      expect(calls.save).toHaveLength(0)
+      expect(getPluginDisableState('p-mobile')).toBeNull()
+    } finally { vi.unstubAllGlobals() }
+    // 防空过:同一个探针,宿主没有这条声明(桌面)→ 照旧注入
+    expect(typeof ctxOf('p-desk').automation?.ensure).toBe('function')
+  })
 })
 
 describe('ctx.automation.ensure', () => {

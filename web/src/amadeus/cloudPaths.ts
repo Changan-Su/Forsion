@@ -8,6 +8,12 @@
  */
 import type { AttachmentOpts } from '@amadeus-shared/ipc'
 
+/** 服务端按扩展名给文件分 kind(镜像 server/microserver/amadeus/lib/paths.ts 的 kindForPath;改那边要改这里):
+ *  只有 .md / .db 是文本行,走 GET / PUT /file;其余一律 binary 行 —— 文本端点对它们答 400,只能走 POST /binary 与 GET /asset。 */
+export function isCloudTextPath(p: string): boolean {
+  return /\.(md|db)$/i.test(p)
+}
+
 /** 目录部分('' = vault 根;不返回 '.',与 node 的 dirname 不同)。 */
 export function dirnamePosix(p: string): string {
   const s = p.replace(/\\/g, '/')

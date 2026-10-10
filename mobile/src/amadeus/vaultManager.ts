@@ -9,6 +9,10 @@ import { isDrawingPath } from '@amadeus-shared/excalidraw/format'
 import { attachmentPaths } from './attachmentPaths'
 
 export class VaultManager {
+  /** pluginExts:插件声明的文件后缀(小写),由 mobile/src/main.tsx 在建桥**之前**从各插件 manifest 清点好
+   *  (pluginHost.fileExtensions)。给的是取值函数:装 / 卸插件后名单会变,这里每次现取。 */
+  constructor(private readonly pluginExts: () => string[] = () => []) {}
+
   private root: string | null = null
   private counter = 0
   private lastWritten = new Map<string, string>()
@@ -48,9 +52,17 @@ export class VaultManager {
     return out.sort()
   }
 
-  // 白板(.excalidraw.md)绝不进 pages:进了会被 compiler 当页面解析改写=毁档(desktop vaultManager 同款)。
-  async listPages(): Promise<string[]> { return this.collectFiles((n) => n.endsWith('.md') && !isDrawingPath(n)) }
-  async listFiles(): Promise<string[]> { return this.collectFiles((n) => !n.endsWith('.md') || isDrawingPath(n)) }
+  /** 「这条路径算不算一篇笔记」的单一判据(desktop vaultManager.isPagePath 同款):白板(.excalidraw.md)与插件声明的
+   *  文件类型(`.deck.md` 等)磁盘上是 .md,却绝不是笔记 —— 进了 pages 就被索引 / 改名重写 / 笔记编辑器按笔记的写法
+   *  改写 = 毁档。页面侧的消费方(树 / 索引 / 搜索 / 反链)全从 listPages 取,索引的单篇更新也问这里(VaultIndex.update)。 */
+  isPagePath(rel: string): boolean {
+    const n = rel.replace(/\\/g, '/')
+    const lower = n.toLowerCase()
+    return n.endsWith('.md') && !isDrawingPath(n) && !this.pluginExts().some((ext) => lower.endsWith(ext))
+  }
+  async listPages(): Promise<string[]> { return this.collectFiles((n) => this.isPagePath(n)) }
+  /** 笔记以外的全部文件(附件 / .db / 白板 / 插件文件类型),给文件树用:插件文件挪出 pages 之后还得在树上看得见。 */
+  async listFiles(): Promise<string[]> { return this.collectFiles((n) => !this.isPagePath(n)) }
 
   wasSelfWrite(abs: string, content: string): boolean { return this.lastWritten.get(abs) === content }
 
@@ -201,6 +213,11 @@ export class VaultManager {
 
   async readVaultBytes(rel: string): Promise<Uint8Array> {
     return fs.readFile(this.resolveInVault(rel)) // 无 encoding = Uint8Array
+  }
+
+  /** 库根在 WebView 里可直接加载的地址(图片 / 音视频的显示地址以它为前缀,见 localAssets.ts)。 */
+  assetBase(): Promise<string> {
+    return fs.webUrl(this.requireRoot())
   }
 
   // ── 回收站(.trash):desktop vaultManager 同款(扁平存放,撞名加 " (N)",.meta.json 记原位;

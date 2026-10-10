@@ -25,6 +25,7 @@ import { isNative, apiBase, forsionWebOrigin, getStoredToken, clearStoredToken, 
 import { createUnitBridge, type ForsionUnitPlugin } from './unitBridge'
 import { NATIVE_DOWNLOAD_MAX_BYTES } from '@/services/nativeDownload'
 import { createSaveDownload, type ForsionDownloadsPlugin } from './saveDownload'
+import { createCloudFetch } from './cloudFetch'
 
 // 语音转写失败时给用户看的话。服务端的 detail 只有中文(brain-api/routes.ts),不原样透出,按状态码换成这几句。
 registerMessages({
@@ -263,6 +264,9 @@ function setWindowTangu(backendUrl: string, token: string, native: boolean): voi
   ;(window as unknown as { tangu: unknown }).tangu = {
     cloudWeb: true,
     mobile: true,
+    // 这台设备上没有本机引擎(聊天接的是云端,或隧道到「我的电脑」—— 那也不是本机)。共享渲染层据此不把
+    // 只有本机引擎才有的接口挂给插件(ctx.automation:规则存在引擎的本机档案里,云端引擎答 404)。
+    executionCapabilities: { host: false },
     // 桌面图标能跟随内置应用图标(仅安卓 App;设置页据此出那一行说明,实际切换在 launcherIcon.ts)。
     launcherIcon: native || undefined,
     getConfig: async () => config(),
@@ -279,6 +283,9 @@ function setWindowTangu(backendUrl: string, token: string, native: boolean): voi
     forsionLogin: login,
     forsionLogout: logout,
     accountQuota: () => cloudJson('GET', '/token-quota/my'),
+    // 插件以当前账号调 Forsion 云端 API 的通用接口(契约同桌面的 cloud:fetch,见 cloudFetch.ts)。此前手机上没有:
+    // 通话室一调就抛 no_seam,活动停在「不支持」。走 origFetch:不经下面的中继前置 / 401 登出兜底(那是给引擎请求的)。
+    cloudFetch: createCloudFetch({ cloudApiBase: () => cloudApiBase, token: () => token, fetch: (input, init) => origFetch(input, init) }),
     openExternal,
     openUnitPage,
     checkForUpdates,
