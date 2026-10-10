@@ -13,6 +13,7 @@ import { joinRel, toStoredMarkdown } from '@amadeus-shared/assets'
 import { rewriteNoteRefs } from '@amadeus-shared/rewriteNoteRefs'
 import { textFingerprint } from '@amadeus-shared/writeConflict'
 import { anchorSafe } from '../blocks/markdown/wikiSubpath'
+import { hrefKind } from '../blocks/markdown/linkHref'
 import { amadeus } from '../api'
 import { flushUnifiedPath, hasUnifiedInstance, unifiedInsertMarkdown } from './lifecycle'
 import { fromDisk, toDisk } from './eol'
@@ -62,15 +63,46 @@ function relPath(fromDir: string, vaultRel: string): string {
 
 /** 跨目录搬块:`[文字](相对地址)` 按源 → 目标目录重算(Codex 复核 B-15 P1)。图片已由 toStoredMarkdown 按目标目录落好,
  *  外链 / 协议 / 绝对路径 / 纯锚点不动;围栏代码里的不动。
- *  ponytail: 行内代码 span 里的 `[x](y)` 也会被改 —— 罕见,真碰上再按 outsideCodeSpans 细分。 */
+ *  ponytail: 行内代码 span 里的 `[x](y)` 也会被改 —— 罕见,真碰上再按 outsideCodeSpans 细分。
+ *  「是不是页相对路径」以读的一侧为准(linkHref.hrefKind):它当成外链的(含没写协议、形似域名的 `a.com/x`)、
+ *  锚点、不放行的协议都不动。新拼进地址的**源目录名**先编码(encodeDirSeg);链接里原有的段一个字节不碰,
+ *  第一个 `#` 起的尾巴原样接回。结果要是会被读成别的东西(单段文件名 = 附件按文件名全库找;形似域名 = 外链)→ 前面补 `./`。
+ *  读的一侧有两档:地址整段解得开就解码后读,解不开(链接自己带着落单的 `%`)就整段按字面读 —— 这里跟着分两档:
+ *  解得开的,目录名编码后比、编码后写;解不开的,目录名里的 `%` 按字面比、按字面写,只有非编码不可的源目录名
+ *  (带空格、括号、`#` `?` 之类)得写进结果时才整条留着不改。目录名用不着编码时,结果和原先的算法逐字相同。
+ *  ponytail: 链接里解不开的那一段要是被后面的 `..` 抵掉(`50%/../x.pdf`),改完的地址换了一档,原先就这样、没管。
+ *  钉子:blockLinks.move.test.ts(含与原算法的随机对拍、按读的一侧读回原文件的随机核对)。 */
 export function rebaseRelativeLinks(md: string, fromDir: string, toDir: string): string {
   if (fromDir === toDir) return md
+  // [解得开那一档, 按字面读那一档] 各一对 [源目录, 目标目录];目标目录只拿来比公共前缀,不会写进结果
+  const dirs = [false, true].map((literal) => [markDir(fromDir, literal), markDir(toDir, literal)])
   return mapOutsideFences(md, (line) => line.replace(/(^|[^!])\[([^\]\n]*)\]\(([^)\s]+)((?:\s+"[^"]*")?)\)/g, (m, pre: string, text: string, href: string, title: string) => {
-    if (/^(?:[a-z][a-z0-9+.-]*:|\/|#|<)/i.test(href)) return m
-    const [raw, hash = ''] = href.split(/(?=#)/)
-    return `${pre}[${text}](${relPath(toDir, normPath(joinRel(fromDir, raw)))}${hash}${title})`
+    if (/^[/<]/.test(href) || !isLocal(href)) return m
+    const cut = href.indexOf('#')
+    const raw = cut < 0 ? href : href.slice(0, cut)
+    let literal = false
+    try { decodeURIComponent(raw) } catch { literal = true }
+    const [from, to] = dirs[+literal]
+    const marked = relPath(to, normPath(joinRel(from, raw)))
+    if (literal && marked.includes(' ')) return m // 非编码不可的源目录名得写进去,而读的一侧这回不解码
+    const out = marked.replace(/ /g, '')
+    return `${pre}[${text}](${!out.includes('/') || !isLocal(out) ? './' : ''}${out}${cut < 0 ? '' : href.slice(cut)}${title})`
   }))
 }
+const isLocal = (href: string): boolean => /^(?:note|file)$/.test(hrefKind(href))
+/** 目录名逐段备好:要编码才写得进地址的段,编码后前面垫一个空格当记号。链接自己的段里没有空格(正则不收),
+ *  所以带记号的段只和另一个带记号的同名目录相等 —— 不会把链接里字面的 `my%20notes` 当成目录 `my notes`;
+ *  算出来的结果里有没有空格 = 有没有这种目录名被写进去。literal(读的一侧按字面读):`%` 原样就是它自己,不算要编码。 */
+const markDir = (dir: string, literal: boolean): string =>
+  dir.split('/').map((seg) => {
+    const probe = literal ? seg.replace(/%/g, '') : seg
+    return encodeDirSeg(probe) === probe ? seg : ` ${encodeDirSeg(seg)}`
+  }).join('/')
+/** 新拼进链接地址的目录名:在 markdown 或地址里另有含义的字符(空白、括号、`%` `#` `?` `&` `|`、引号、方括号、
+ *  `*` `:` `<` `>`、控制字符)一律写成 UTF-8 的 %XX —— 读的一侧(linkHref.noteLinkTarget、主进程 resolveAttachment
+ *  带 `/` 的那一支)都是整段 decodeURIComponent。其余字符(中文、emoji……)原样,和图片地址的 encodeDest 同口径。 */
+const encodeDirSeg = (seg: string): string =>
+  seg.replace(/[\s%#?&|"'`[\]*:<>()\u0000-\u001f\u007f-\u009f]/g, (c) => Array.from(new TextEncoder().encode(c), (b) => `%${b.toString(16).toUpperCase().padStart(2, '0')}`).join(''))
 
 /** 目标原文末尾停在没收尾的围栏代码块 / HTML 注释里:追加的内容会被吞进去(Codex 复核 B-15 P0)。
  *  ponytail: 只认顶格(≤3 空格)的围栏,列表 / 引用里的围栏不认 —— 那种末尾没收尾的极少见。 */
