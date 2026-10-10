@@ -238,6 +238,7 @@ Common commands:
 | `desktop/` | `npm test` | Run desktop unit tests. |
 | `desktop/` | `npm run build` | Build the Electron main process, preload and renderer. |
 | `desktop/` | `npm run dist` | Produce an installer for the current platform. |
+| `desktop/` | `node scripts/dmg-layout-preview.cjs` | macOS only. Build a tiny DMG around an empty app shell to check the installer window (background, icon positions) in Finder without a full build. |
 | `desktop/` | `npm run e2e:editor` | Run the Amadeus editor end-to-end tests. |
 
 If an Electron harness hangs at launch with no output and no renderer process, run `sample <electron-pid> 1`. A main thread stuck in `NSAlert runModal` under `promptToIgnorePersistentStateWithCrashHistory:` is macOS asking to reopen windows after the shared dev `Electron.app` crashed. Playwright-launched instances skip that prompt: `electron/main.ts` registers `ApplePersistenceIgnoreState` in memory only. Harnesses spawned without Playwright must set `TANGU_HARNESS_QUIET=1`. `npm run check:persistignore` (add `-- --control` for the negative control) verifies that AppKit reads the key.

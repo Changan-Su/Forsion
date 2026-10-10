@@ -150,14 +150,9 @@ module.exports = {
       NSScreenCaptureUsageDescription: 'Forsion 需要录制屏幕,用于在通话中共享屏幕。',
     },
   },
-  dmg: {
-    window: { width: 560, height: 440 },
-    contents: [
-      { x: 150, y: 200 },
-      { x: 410, y: 200, type: 'link', path: '/Applications' },
-      { x: 280, y: 372, type: 'file', path: 'build/打不开请先读我.txt' },
-    ],
-  },
+  // 安装窗口的背景图与图标位置(含「窗口大小跟着背景图走」那条坑)见 build/dmg-layout.cjs。
+  // 背景图和说明文件里写的是「Forsion」:单品变体(目前都不出 mac 安装包)用 dmg-builder 的缺省窗口,要发时各配一套。
+  ...(product.id === 'forsion' ? { dmg: require('./build/dmg-layout.cjs') } : {}),
   win: { target: 'nsis', icon: 'build/icon.ico' },
   // 卸载时询问是否清除用户数据(~/.forsion、~/Forsion、%APPDATA%\Forsion);见 build/installer.nsh。
   nsis: {
