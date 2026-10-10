@@ -53,7 +53,7 @@ export function parseAssetUrl(url: string): string | null {
   const params = new URLSearchParams(url.slice(q + 1))
   const ref = params.get('ref') || null
   const lit = params.get('lit')
-  return ref && lit && normalizePosix(lit) === ref ? lit : ref
+  return ref && lit && normalizePosix(lit) === normalizePosix(ref) ? lit : ref
 }
 
 /** 接缝的构建器(渲染层的 toAssetUrl 走这里)。和直接调 buildAssetUrl 有两处不同(2026-10-10,页目录之外的引用):
@@ -63,10 +63,14 @@ export function parseAssetUrl(url: string): string | null {
  *    · exact(笔记正文里的 `![](…)`:ref 已经是完整的库内路径)不带 page。带着的话服务端先按「页目录 + ref」再拼一遍,
  *      那里恰好有同路径的文件就显示成它(子夹/attachments/x.png 顶替库根的 attachments/x.png)。
  *      `![[裸文件名]]` 这类嵌入照旧带 page:同文件夹的那张优先。
+ *    · 带路径的引用折叠后成了裸文件名(`notes/../x.png` → `x.png`)时末尾补一个 `/`:服务端对不含 `/` 的 ref 找不到就
+ *      全库按文件名找,库根那个文件不在了会显示成别处的同名文件;带着尾斜杠它只做精确匹配(归一时剥掉,兜底看的是
+ *      原始 ref)—— 与桌面一致:带路径的地址不做全库按名找(Codex 评审 2026-10-10)。
  *  仪器:desktop 的 frontend/src/services/cloudAssetsRoundtrip.test.ts「页目录之外的引用」(服务端的找法在那里有一份镜像)。 */
 function seamAssetUrl(ref: string, exact?: boolean): string {
   const folded = normalizePosix(ref)
-  return buildAssetUrl(folded || ref, exact ? null : undefined, folded && folded !== ref ? ref : undefined)
+  if (!folded || folded === ref) return buildAssetUrl(ref, exact ? null : undefined)
+  return buildAssetUrl(folded.includes('/') ? folded : `${folded}/`, exact ? null : undefined, ref)
 }
 
 /** 装进共享 assets.ts 的接缝(成对:构建 + 解析):此后渲染层所有 toAssetUrl 都产出云端 HTTP URL,

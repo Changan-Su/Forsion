@@ -121,9 +121,10 @@ function serverResolve(url: string, files: string[]): string | null {
  *  加上第三处:ref 已经是完整的库内路径,却还带着 page → 服务端先按页目录再拼一遍,那里恰好有同路径的文件就显示成它。
  *  修法:落盘写 `../`(shared/amadeus/assets.ts 的 relFrom);接缝构建的地址先折叠 `.` / `..` 再送,原样写法另带在 lit 里
  *  供存盘逐字换回;笔记正文里的图(toDisplayMarkdown)不带 page。真编辑器、真存盘在 mobile 的 `npm run e2e:localasset` 场景 E / F。
- *  负对照(都实跑过):接缝构建器改回 `(ref) => buildAssetUrl(ref)` → 本组第 1 / 2 / 3 格红;只把 exact 时不带 page 那一处去掉
- *  (或 toDisplayMarkdown 不传 exact)→ 第 1 / 3 格红(取到的是页目录下同路径的那个文件);parseAssetUrl 不认 lit → 第 3 / 5 格红,
- *  不核对就认 lit → 第 5 格红;shared/amadeus/assets.ts 的 relFrom 改回只去前缀 → 第 1 格红。 */
+ *  负对照(都实跑过,格号按本组顺序):接缝构建器改回 `(ref) => buildAssetUrl(ref)` → 第 1–5 格红;只去掉 exact 时不带 page
+ *  (或 toDisplayMarkdown 不传 exact)→ 第 1 / 3 / 5 格红(取到的是页目录下同路径的那个文件);不补尾斜杠 → 第 4 格红;
+ *  parseAssetUrl 不认 lit → 第 3 / 7 格红,不核对就认 lit → 第 7 格红;shared/amadeus/assets.ts 的 relFrom 改回只去前缀 → 第 1 / 5 格红。
+ *  ref 末尾带 `/` 时服务端只做精确匹配这一条,2026-10-10 也对着真路由核过(不带 → 取到别处的同名文件;带 → 404)。 */
 describe('cloud asset URLs: 页目录之外的引用', () => {
   const FILES = ['notes/note.md', 'attachments/x.png', 'assets/y.png', 'notes/pic.png', 'pic.png']
   // 当前页就是 notes/ 下那篇:服务端「先按页目录拼」的那一步才踩得到 notes/attachments/x.png(同路径的另一个文件)。
@@ -155,6 +156,27 @@ describe('cloud asset URLs: 页目录之外的引用', () => {
     }
   })
 
+  it('⚠️带路径的引用折叠后成了裸文件名(../pic.png → pic.png):库根那个文件不在了就是取不到,不许全库按名找到别处的同名文件', () => {
+    // 评审 2026-10-10:服务端对不含 `/` 的 ref 找不到就全库按文件名找;桌面对带路径的地址只做精确匹配。ref 末尾补 `/` 对齐。
+    // 负对照(实跑过):seamAssetUrl 不补尾斜杠 → 本格红(取到 other/pic.png)。
+    const md = '![](../pic.png)\n'
+    const shown = toDisplayMarkdown(md, 'notes')
+    expect(serverResolve(srcOf(shown), ['notes/note.md', 'other/pic.png'])).toBeNull()
+    expect(serverResolve(srcOf(shown), ['notes/note.md', 'other/pic.png', 'pic.png'])).toBe('pic.png')
+    expect(toStoredMarkdown(shown, 'notes')).toBe(md)
+    // 库根笔记里的裸文件名(盘上本来就不带路径)照旧可以全库按名找 —— 桌面也是这样
+    expect(serverResolve(srcOf(toDisplayMarkdown('![](pic.png)\n', '')), ['other/pic.png'])).toBe('other/pic.png')
+  })
+
+  it('图片源码行里填的库内路径(mdImage.commitSource → toAssetUrl(p, true)):显示的和存下去的是同一张', () => {
+    // 评审 2026-10-10:不按 exact 取的话,云端先按当前页的目录找(显示 notes/pic.png),存盘却按库内路径写成 ../pic.png(库根那张)。
+    const src = toAssetUrl('pic.png', true)
+    expect(serverResolve(src, FILES)).toBe('pic.png')
+    const stored = toStoredMarkdown(`![](${src})`, 'notes')
+    expect(stored).toBe('![](../pic.png)')
+    expect(served(stored)).toBe('pic.png')
+  })
+
   it('折叠后逃出库根的引用:原样送(服务端拒收,显示不出),存回去逐字不变', () => {
     const md = '![](../../secret.png)\n'
     const shown = toDisplayMarkdown(md, 'notes')
@@ -168,6 +190,7 @@ describe('cloud asset URLs: 页目录之外的引用', () => {
     expect(parseAssetUrl(`${base}?ref=assets%2Fy.png&lit=other%2Fz.png&at=T`)).toBe('assets/y.png')
     expect(parseAssetUrl(`${base}?ref=assets%2Fy.png&lit=..%2F..%2Fetc&at=T`)).toBe('assets/y.png')
     expect(parseAssetUrl(`${base}?ref=assets%2Fy.png&page=notes%2Fnote.md&at=T`)).toBe('assets/y.png')
+    expect(parseAssetUrl(`${base}?ref=pic.png%2F&lit=notes%2F..%2Fpic.png&at=T`)).toBe('notes/../pic.png') // 补了尾斜杠的那种
   })
 
   it('`![[裸文件名]]` 这类嵌入(不经 toDisplayMarkdown)照旧带 page:同文件夹的那张优先', () => {
