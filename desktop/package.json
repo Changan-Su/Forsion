@@ -81,6 +81,7 @@
     "check:feedback": "node scripts/feedback.check.cjs",
     "check:floatingsession": "node scripts/floating-session.check.cjs",
     "check:btw": "node scripts/btw.check.cjs",
+    "check:promptsuggest": "node scripts/prompt-suggest.check.cjs",
     "check:chatlayout": "node scripts/chat-layout.check.cjs",
     "check:sessionemoji": "node scripts/session-emoji.check.cjs",
     "check:messageactions": "node scripts/chat-message-actions.check.cjs",

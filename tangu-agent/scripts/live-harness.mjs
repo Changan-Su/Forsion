@@ -31,6 +31,7 @@
  *   npm run live:harness -- --only storename                 # 改名「商店」(10-05):改 skills/forsion-plugin / forsion-connect 里的商店叫法后跑;两问不点名技能,须装载技能并用新名字指路
  *   npm run live:harness -- --only plugin                    # 引擎插件热插拔(10-02):夹具插件开着调得到、停用后调不到、再启用回来(改 plugins/bootstrap 生命周期后跑)
  *   npm run live:harness -- --only btw                       # 旁聊 /btw(09-22):带主会话上下文答题外话、追问带前轮、不写回、主 run 在飞也能问;改 services/aside.ts 提示词后跑
+ *   npm run live:harness -- --only suggest                   # 输入建议(10-10):一轮结束后猜用户下一句。须是一句短话、跟用户的语言、一轮只调一次,且那次调用吃到主循环的前缀缓存;改 services/promptSuggestion.ts 或主循环收尾处的快照后跑
  *   npm run live:harness -- --only realuse --rounds 2 --model xai/grok-4.7   # 真实使用模拟(10-04):消息不点名任何库 / 工具;改 manage_harness / 装备层 / 工作笔记注入 / Muse 巡检后跑。
  *                                                           #   --usage-db <抽取库>:再用真实用量跑一遍 Muse 巡检 → 当场替默认 agent 收起(抽取库先用 scripts/usage-extract.mjs 生成)
  *   TANGU_LIVE_MODEL=codex/gpt-5.6-sol npm run live:harness  # 换模型
@@ -180,7 +181,7 @@ const opt = (name, def) => { const i = argv.indexOf(`--${name}`); return i >= 0 
 const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
 const MODEL = opt('model', process.env.TANGU_LIVE_MODEL || 'codex/gpt-5.6-luna');
 const AUTH = resolve(opt('auth', process.env.TANGU_LIVE_AUTH || join(homedir(), '.forsion-dev', 'provider-auth.json')));
-const KEYS = ['realtime', 'voiceclone', 'personas', 'rename', 'selfschedule', 'selfmodel', 'chat', 'tool', 'remember', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'parked', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human', 'emoji', 'visualize', 'visualfigures', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'control', 'phone', 'unattendedask', 'plugin', 'skillpick', 'pluginlook', 'settingsnav', 'appsettings', 'imgwindow', 'viewimage', 'account'];
+const KEYS = ['realtime', 'voiceclone', 'personas', 'rename', 'selfschedule', 'selfmodel', 'chat', 'tool', 'remember', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'parked', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'suggest', 'browsertabs', 'officedoc', 'ultra', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human', 'emoji', 'visualize', 'visualfigures', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'control', 'phone', 'unattendedask', 'plugin', 'skillpick', 'pluginlook', 'settingsnav', 'appsettings', 'imgwindow', 'viewimage', 'account'];
 KEYS.push('signals');
 KEYS.push('novision');
 KEYS.push('cuoff');
@@ -250,6 +251,7 @@ OPT_IN.add('storeview'); // 一个 run;只在动 forsion-plugin 手册里 regist
 OPT_IN.add('skillcreate'); // 四个 run;只在动 manage_skill / use_skill / 随包的 skill-creator 技能时才有信息量。
 OPT_IN.add('account'); // --only account:五个 run;引擎的云端地址指向台架里的假 Forsion 云端 —— 只在显式跑它时才指,别的场景照旧连不上云端。
 OPT_IN.add('realuse'); // 真实使用模拟:每轮 12 个 run(--rounds),--usage-db 再加一个 Muse 周期;单独跑。
+OPT_IN.add('suggest'); // 三个 run + 三次建议调用;只在动 services/promptSuggestion.ts(提示词 / 前缀对齐)或主循环收尾处的快照时才有信息量。
 OPT_IN.add('humanreal'); // 协作说明写成什么样:每轮 6 个 run + 1 次判官(--rounds);只在动 HUMAN_GUIDANCE / manage_human 时才有信息量。
 const NEEDS = { dream: ['historian'], recall: ['historian', 'dream'] }; // 记忆链三连有先后依赖;其余场景自包含
 const ONLY = new Set(opt('only', process.env.TANGU_LIVE_ONLY || KEYS.filter((k) => !OPT_IN.has(k)).join(',')).split(',').map((s) => s.trim()).filter(Boolean));
@@ -3218,6 +3220,57 @@ Then reply with only the command output.`,
       detail: `${Object.entries(checks).map(([k, v]) => `${k}${v ? '✓' : '✗'}`).join(' ')};主会话 ${before}→${after} 行;发问时主 run ${mainBusy ? '在跑' : '已结束(未判到并发)'};流式 ${a1.deltas} 帧;首帧/总 ${[a1, a2, a3, a4].map((a) => `${a.firstMs == null ? '-' : (a.firstMs / 1000).toFixed(1)}/${(a.ms / 1000).toFixed(1)}s`).join(' ')}${a1.error ? `;a1 错:${a1.error}` : ''}`,
       inconclusive: ok && !mainBusy,
       output: [a1, a2, a3, a4].map((a, i) => `[${i + 1}] ${a.error ? `ERROR ${a.error}` : a.content}`).join('\n\n'),
+    };
+  });
+
+  // 输入建议(services/promptSuggestion.ts):一轮结束后猜用户下一句,客户端当灰字放进空输入框。真模型才证得了两件事:
+  // ①提示词让它只吐「用户会说的一句短话」(跟用户的语言,不是把对话接着答下去)②这次调用吃到主循环的前缀缓存 ——
+  //   这功能对用户的承诺就是「只多读一次缓存」,cached 对不上 = 管线接错(整份上下文按原价重进了一遍)。
+  // 三条都不点名这个功能:助手刚问了一个问题(中文)/ 用户说了分步计划、只让做第一步(英文,带工具调用)/ 没什么可猜的一轮(只看不报错)。
+  // 链路:同一轮再拉一次必须拿空(快照取走即删,不会重复花钱);拿别的 run id 拉也拿空。
+  await scenario('suggest', 'suggest 输入建议:一句短话、跟用户的语言、一轮一次、吃到前缀缓存', async () => {
+    const suggest = async (sid, runId) => {
+      const t0 = Date.now();
+      const r = await fetch(`${base}/agent/sessions/${sid}/suggest`, { method: 'POST', headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ run_id: runId }), signal: AbortSignal.timeout(60_000) });
+      if (!r.ok) return { error: `HTTP ${r.status} ${(await r.text()).slice(0, 200)}`, suggestion: '', ms: Date.now() - t0 };
+      const j = await r.json();
+      return { suggestion: String(j.suggestion || ''), usage: j.usage || null, ms: Date.now() - t0 };
+    };
+    const cjk = (x) => /[一-鿿]/.test(x);
+    const oneLine = (x) => !!x && !/[\r\n]/.test(x) && [...x].length <= 100;
+    const ratio = (u) => (u && u.prompt ? u.cached / u.prompt : null);
+    const lastMain = (ev) => { const u = ev.usages?.at(-1); return u && u.prompt ? (Number(u.cached) || 0) / u.prompt : null; };
+    const stamp = Date.now();
+    const cases = [
+      { key: 'question', sid: `live-suggest-q-${stamp}`, msg: '我想给这个项目写一份 README。先别动手，先问我一个你最需要知道的问题，只问一个。', want: (x) => oneLine(x) && cjk(x) },
+      { key: 'plan', sid: `live-suggest-p-${stamp}`, msg: 'I want to do three things in order: 1) list the files in the working directory, 2) tell me how many there are, 3) tell me which one was modified most recently. Do only step 1 now and stop.', want: (x) => oneLine(x) && !cjk(x) },
+      { key: 'quiet', sid: `live-suggest-n-${stamp}`, msg: 'Reply with just the word: noted', want: () => true },
+    ];
+    const rows = [];
+    for (const c of cases) {
+      const ev = await run(c.sid, c.msg);
+      if (ev.error || !ev.done) { rows.push({ ...c, runError: ev.error || '没跑完' }); continue; }
+      const wrongRun = await suggest(c.sid, 'not-this-run'); // 对不上 run:拿空,且不该把快照消耗掉
+      const first = await suggest(c.sid, ev.runId);
+      const again = await suggest(c.sid, ev.runId);
+      rows.push({ ...c, ev, wrongRun, first, again, main: lastMain(ev) });
+    }
+    const bad = rows.find((r) => r.runError);
+    if (bad) return { ok: false, detail: `${bad.key} 那一轮主对话失败:${bad.runError}` };
+    const checks = {
+      shape: rows.every((r) => !r.first.error && r.want(r.first.suggestion)),
+      once: rows.every((r) => !r.again.error && r.again.suggestion === '' && !r.again.usage),
+      runBound: rows.every((r) => !r.wrongRun.error && r.wrongRun.suggestion === '' && !r.wrongRun.usage),
+      called: rows.every((r) => !!r.first.usage), // 三条都真的问了模型(快照在、对得上)
+      // 缓存:每一条的建议调用都要读到一半以上的缓存。读不到(含供应方压根不报缓存的模型)一律算不过 ——
+      // 「全是 0」正是缓存路由整体接错时的样子,不能当成「判不出」放行(换不报缓存的模型跑这条,红是如实的)。
+      cached: rows.every((r) => (ratio(r.first.usage) ?? 0) >= 0.5),
+    };
+    const ok = Object.values(checks).every(Boolean);
+    return {
+      ok,
+      detail: `${Object.entries(checks).map(([k, v]) => `${k}${v ? '✓' : '✗'}`).join(' ')};${rows.map((r) => `${r.key}:「${r.first.suggestion || '(无)'}」 输入 ${r.first.usage?.prompt ?? '-'} / 缓存 ${r.first.usage?.cached ?? '-'}(${hitPct(ratio(r.first.usage))},主循环末次 ${hitPct(r.main)})/ 输出 ${r.first.usage?.completion ?? '-'} / ${sec(r.first.ms)}`).join(';')}`,
+      output: rows.map((r) => `[${r.key}] 用户:${r.msg}\n助手:${String(r.ev.content || '').slice(0, 600)}\n建议:${r.first.error ? `ERROR ${r.first.error}` : r.first.suggestion || '(无)'}`).join('\n\n'),
     };
   });
 

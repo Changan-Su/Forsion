@@ -64,6 +64,7 @@ import { remoteLocked, remoteLockedBody } from './remoteLock.js'; // P1-K2
 import { registerRun, runCategory, unregisterRun, type RunCategory } from './remoteActivity.js'; // P1-K2
 import { loadProjectDocSafe, wrapProjectDoc } from './projectDoc.js';
 import { onUserRunDone, onUserRunStart, type HistorianForkSeed } from './localHistorian.js';
+import { stashSuggestionSeed } from './promptSuggestion.js';
 import { fitUserImages, normalizeImageAttachments, toImageParts } from './imageAttachments.js';
 import { describeImages, NO_VISION_NOTE, resolveVisionModelId, shouldDescribeImages, whyNoImages, type NoImagesReason } from './visionService.js';
 import { toolImageMessages, type ToolImage } from './toolImages.js';
@@ -1207,6 +1208,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
   // 收尾那一轮的正文(不含中间 preamble——那些已作为 assistant 轮进了 workingMessages;而收尾轮
   // 正文只进 finalContent 不进数组)。Historian fork 判官快照靠它补上「最后的回答」,不重复 preamble。
   let finalTurnText = '';
+  let finalTurnNoTools = false; // 收尾那一发请求没带工具头(步数用尽 / 重复工具失败的强制收尾)
   let finalReasoning = '';
   /** 把一段正文追加进终稿(空段 no-op)。finalize 只写 finalContent —— 中间迭代的 preamble
    *  正文(模型「先说话、再调工具」)必须经此累积,否则落库时只剩末轮收尾词,已流式给用户
@@ -3199,6 +3201,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         // 绝不能在闸门之前赋值:续跑路径会把本轮正文 push 进 workingMessages,提前赋值会让
         // Historian fork 快照在配额/截断等异常出口重复追加同一段(Codex 评审 08-03 Major)。
         finalTurnText = leakedText ? '' : String(res.content || '');
+        finalTurnNoTools = lastIter;
         if (leakedText || droppedCalls) {
           const stop = '(模型把工具调用写成了正文、未被执行,该段已丢弃。发送「继续」可让我接着操作。)';
           finalContent = finalContent.trim() ? `${finalContent.trimEnd()}\n\n${stop}` : stop;
@@ -3342,18 +3345,6 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     await settleCheckpointAfterFinalize(currentAssistantId); // 本 run 压缩覆盖到的助手段刚落库 → 检查点补落
     await flush(); // 先把会话工作区改动回写 Penzor，再发 done，保证客户端收到 done 时云端文件已就绪
     await drain(runId); // 确保 token 等事件全部落库后再发 done
-    // toolOffsets = 本条落库消息的工具锚点(同 ui_content_offset)。客户端在 done 时据此按终稿重排直播段,
-    // 与重开会话一致:否则引擎丢掉的流式正文(末轮手写成 DSML 的工具调用)一直挂在屏上,
-    // 收尾才追加的停止说明/耗尽提示反而看不见(09-15 用户截图)。
-    await publish(runId, 'done', {
-      content: finalContent,
-      toolOffsets: allToolCalls.map((c) => ({ id: c.id, offset: c.ui_content_offset })),
-    });
-    await updateRunStatus(runId, 'done', { result: { content: finalContent }, tokensTotal });
-    // 本地 Historian（Special Agent）：本「轮」完成 → 按 X/Y 轮触发标题/记忆维护。
-    // fire-and-forget，绝不阻断/影响 run；非本地形态或未启用时内部 no-op。
-    // 传 memScopeSlug(记忆域,shareDefaultMemory 已折叠)而非 activeAgentSlug:Historian 读写的
-    // MEMORY/LOG 必须与 run 内 remember/log_event 落同一文件夹,否则共用默认记忆的 agent 会被写歪。
     // forkSeed:fork 判官模式的快照接缝(惰性 getter,非 fork 模式零拷贝)。收尾轮正文不在
     // workingMessages 里(只进 finalContent),用 finalTurnText 补上——纯聊天 run 整条回复都靠它;
     // 配额/截断等异常出口 finalTurnText 为空,快照就不补尾(那些收尾语不是模型正文)。
@@ -3372,6 +3363,22 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       agentId: activeAgentSlug,
       verbosity: ps.verbosity,
     };
+    // 输入建议(services/promptSuggestion.ts):快照要在 done 发出**之前**就位 —— 客户端收到 done 立刻来拉,晚一步就是空。
+    // 只存引用、不发请求;团队成员的会话没有人在里面打字,不存。强制收尾的那一轮也不存:那一发请求没带工具头、
+    // 多了一条收尾说明,而快照恒带工具头 —— 前缀对不上那一发写下的缓存,这句建议就不止「多读一次缓存」的价了。
+    if (!isTeamMember && !finalTurnNoTools) stashSuggestionSeed(sessionId, runId, historianSeed);
+    // toolOffsets = 本条落库消息的工具锚点(同 ui_content_offset)。客户端在 done 时据此按终稿重排直播段,
+    // 与重开会话一致:否则引擎丢掉的流式正文(末轮手写成 DSML 的工具调用)一直挂在屏上,
+    // 收尾才追加的停止说明/耗尽提示反而看不见(09-15 用户截图)。
+    await publish(runId, 'done', {
+      content: finalContent,
+      toolOffsets: allToolCalls.map((c) => ({ id: c.id, offset: c.ui_content_offset })),
+    });
+    await updateRunStatus(runId, 'done', { result: { content: finalContent }, tokensTotal });
+    // 本地 Historian（Special Agent）：本「轮」完成 → 按 X/Y 轮触发标题/记忆维护。
+    // fire-and-forget，绝不阻断/影响 run；非本地形态或未启用时内部 no-op。
+    // 传 memScopeSlug(记忆域,shareDefaultMemory 已折叠)而非 activeAgentSlug:Historian 读写的
+    // MEMORY/LOG 必须与 run 内 remember/log_event 落同一文件夹,否则共用默认记忆的 agent 会被写歪。
     // 上一轮被用户按停留下的信号排最前(那句写的是「上一轮」,其余写的是「这一轮」)。
     if (pendingStop) judgeSignals.unshift(pendingStop);
     void onUserRunDone(sessionId, userId, memScopeSlug, historianSeed, !!(remote || effectiveRemote({ runId })), judgeSignals).finally(() => { if (!inlineMemberDef) scheduleAgentFilesSync(userId, activeAgentSlug); });

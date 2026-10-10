@@ -9,6 +9,7 @@
  *   GET    /agent/sessions/:id/config              读 agent_config(enabledSkillIds/execMode/approvalMode/…)
  *   PUT    /agent/sessions/:id/config              整体替换 agent_config
  *   POST   /agent/sessions/:id/aside { question, quote?, thread?, model_id? }  旁聊 /btw(SSE,不落库)
+ *   POST   /agent/sessions/:id/suggest { run_id? }  输入建议(JSON { suggestion };空串 = 没有)
  */
 import { Router, type Response } from 'express';
 import { v4 as uuidv4 } from 'uuid';
@@ -34,6 +35,7 @@ import { recoverTeamOutputs } from '../services/teamOutputs.js';
 import { withKeyLock } from '../core/keyLock.js';
 import { settleTeamPlanMode } from '../services/sessionSettings.js';
 import { answerAside, normalizeAsideInput } from '../services/aside.js';
+import { suggestNextPrompt } from '../services/promptSuggestion.js';
 import { normalizeClientTag } from './runs.js';
 import { parseRemoteOrigin, applyRemoteConfigWrite, remoteCwdViolation, remoteCwdErrorBody, remoteOriginMarker } from '../services/remoteOrigin.js';
 
@@ -689,6 +691,23 @@ router.post('/agent/sessions/:id/aside', authMiddleware, async (req: AuthRequest
     if (left > 0) asideInFlight.set(userId, left); else asideInFlight.delete(userId);
     res.end();
   }
+});
+
+// 输入建议(services/promptSuggestion.ts):客户端收到 done 后来拉「用户下一句最可能发什么」,显示成输入框里的灰字。
+// JSON { suggestion, usage? };suggestion 为空串 = 没有(没开过快照 / 过期 / 模型说猜不准 / 出错,一律这个形状,不报错)。
+// 不落库、不进 run 队列。每个 run 的快照取走即删,所以一轮最多真调一次模型,不用另设并发闸。
+router.post('/agent/sessions/:id/suggest', authMiddleware, async (req: AuthRequest, res) => {
+  const userId = req.user!.userId;
+  const s = await getOwnSession(req.params.id, userId).catch(() => null);
+  if (!s) return res.status(404).json({ detail: 'Session not found' });
+  const ac = new AbortController();
+  res.on('close', () => { if (!res.writableEnded) ac.abort(); });
+  const out = await suggestNextPrompt({
+    sessionId: s.id, userId, appId: s.app_id,
+    runId: typeof req.body?.run_id === 'string' ? req.body.run_id : undefined,
+    client: normalizeClientTag(req.body?.client), signal: ac.signal,
+  });
+  if (!res.writableEnded) res.json(out);
 });
 
 /**
