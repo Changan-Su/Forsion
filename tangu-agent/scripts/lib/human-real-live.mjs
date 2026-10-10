@@ -97,8 +97,10 @@ const promiseFate = (remembered, doc) => (remembered.some((a) => /方案/.test(a
 const flippedPromise = (doc) => (doc.split('\n').filter((l) => !/^\s*>/.test(l)).join('\n').replace(/“[^”]*”|"[^"]*"|「[^」]*」/g, '')
   .match(/(运行|跑一遍|跑一下)[^。\n]{0,30}(贴|发)给我|你[^。\n]{0,6}(实际运行|运行一下|跑一遍|跑一下)[^。\n]{0,30}贴|告诉我[^。\n]{0,8}(需要你决定|你需要我决定)/) || [null])[0];
 /** 旧说明里本来就是用户该做的那一条(只有手写的第四份有:「给出两种方案时,你先选定方向再让我动手」)整理之后还在不在。
- *  10-10 读原文才发现的:两轮里它把这一条当成自己的事挪进了记忆(其中一轮记成「我先选定推荐方向」,意思反了),判官和别的门都看不出来。没有这一条的旧说明返回 null(不判)。 */
-const humanPartKept = (seed, doc) => (seed.includes('你先选定方向') ? /你[^。\n]{0,12}(选|定)[^。\n]{0,8}方向/.test(doc) : null);
+ *  10-10 读原文才发现的:两轮里它把这一条当成自己的事挪进了记忆(其中一轮记成「我先选定推荐方向」,意思反了),判官和别的门都看不出来。没有这一条的旧说明返回 null(不判)。
+ *  按意思认,不按原话:某一行在说方案 / 做法,并且是「你……选 / 定 / 倾向」或「告诉我选哪个」(「你告诉我选哪一种」「告诉我你倾向哪种」都算;「我先选定方向再让你动手」不算)。 */
+const humanPartKept = (seed, doc) => (seed.includes('你先选定方向') ? keepsHumanChoice(doc) : null);
+export const keepsHumanChoice = (doc) => doc.split('\n').some((l) => /方案|做法|选项|方向/.test(l) && /你[^。\n]{0,16}(选|倾向|定)|告诉我[^。\n]{0,10}(选|倾向)/.test(l));
 const FATE = { memory: '进了记忆', note: '还在协作说明里', lost: '⚠ 两边都没有了' };
 
 const cjkRatio = (s) => { const c = (s.match(/[一-鿿]/g) || []).length, a = (s.match(/[A-Za-z]/g) || []).length; return c + a ? c / (c + a) : 0; };
@@ -299,6 +301,8 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   assert.ok(flippedPromise('改完后请你实际运行，并把验证结果贴出来。')); // 真 Electron 验收里的那种说法(「贴出来」,不是「贴给我」)
   assert.equal(flippedPromise('改完我会实际运行，并把验证结果贴出来。'), null); // Agent 自己的承诺原样留着不算这一类(那归判官的「agent 自己要做的事」)
   assert.equal(humanPartKept(LEGACY_DOCS[3], '- 有两种方案时，请你先选一个方向。'), true);
+  for (const ok of ['- 有两种做法时，你告诉我选哪一种，我再按那个方向继续。', '- 需要在两种方案中选一个时，告诉我你倾向哪种；如果还没想好，也可以让我先比较后推荐。']) assert.equal(keepsHumanChoice(ok), true, ok);
+  for (const bad of ['- 给出两种方案时，我先选定方向再让你动手。', '- 开始一项工作时，你可以先告诉我希望解决什么、结果给谁看，以及哪些条件不能变。']) assert.equal(keepsHumanChoice(bad), false, bad);
   assert.equal(humanPartKept(LEGACY_DOCS[3], '- 要我改报表时，先告诉我给谁看。'), false);
   assert.equal(humanPartKept(LEGACY_DOCS[0], '随便什么'), null);
   assert.equal(flippedPromise('这次可以这样说：“改完运行脚本，把实际输出贴给我。”\n> 改完跑一遍，把结果贴给我'), null); // 教用户怎么对它说的例句不算 // 每份旧文档里都有它自己的那句承诺 + 另加的那条

@@ -128,7 +128,8 @@ async function run() {
     await shot('human-legacy-rewritten')
     // 按结果判,不只看「改了」(10-10 这一步曾在两边认反的情况下照样打出 PASS:用户那条被挪走,自己的两条承诺改成「请你……」留下)。
     // 这是真模型的行为,红了先看截图和这次的工具调用,别当成界面坏了。
-    assert.match(rewritten, /你[^。\n]{0,12}(选|定)[^。\n]{0,8}方向/, `The human's own line (pick a direction first) must stay in the handbook:\n${rewritten}`)
+    // 按意思认(和 tangu-agent/scripts/lib/human-real-live.mjs 的 keepsHumanChoice 同一个判法):换了说法的「你告诉我选哪一种」也算还在
+    assert.ok(rewritten.split('\n').some(l => /方案|做法|选项|方向/.test(l) && /你[^。\n]{0,16}(选|倾向|定)|告诉我[^。\n]{0,10}(选|倾向)/.test(l)), `The human's own line (pick a direction first) must stay in the handbook:\n${rewritten}`)
     assert.doesNotMatch(rewritten, /实际运行|验证结果|三条以内/, `The agent's own promises must leave the handbook, in either voice:\n${rewritten}`)
     // 挪进记忆的句子在回复下面出一行回执(条目折叠在里面,数那一行)
     const memoryRows = await win.locator(`[data-chat-surface="chat"][data-session-id="${sid}"] [data-self-receipt]`).count()
