@@ -37,6 +37,7 @@ registerMessages({
   'human.merge': { zh: '已合并，使用最新版本保存', en: 'Merged; save against the latest version' },
   'human.localOnly': { zh: '协作说明需要连接本地引擎。', en: 'Connect to a local engine to use collaboration handbooks.' },
   'human.remoteDenied': { zh: '请在宿主设备上查看和修改协作说明。', en: 'View and edit collaboration handbooks on the host device.' },
-  'human.template': { zh: '# 我们怎么配合\n\n## 我会怎么配合你\n\n## 需要你参与的部分\n\n## 可能帮助我们提高效率的事情\n', en: '# How we work together\n\n## How I will help\n\n## Where I need your input\n\n## What could help us work better\n' },
+  // 这份说明写的是「用户这边怎么做」(Agent 对用户的建议和请求),起手模板里不放 Agent 自己怎么做的那一节
+  'human.template': { zh: '# 怎么和我配合\n\n## 开始前请先告诉我\n\n## 需要你来定的事\n\n## 做完后请你看一眼\n', en: '# Working with me\n\n## Tell me before I start\n\n## Decisions I need from you\n\n## What to check when I am done\n' },
   'human.changed': { zh: '有新的协作说明，打开后可查看。', en: 'The collaboration handbook has changed. Open it to see the latest version.' },
 })

@@ -154,7 +154,15 @@ describe('HUMAN.md collaboration lifecycle', () => {
     const sync = vi.mocked(scheduleAgentFilesSync); sync.mockClear();
     const result = await runWithAgentSlug('first', async () => {
       const before = JSON.parse(await tool.execute({ action: 'read', scope: 'agent' }, ctx));
-      return JSON.parse(await tool.execute({ action: 'update', scope: 'agent', expectedVersion: before.version, content: '# Shared\nUse sketches.', summary: 'Sketches', evidence: 'Explicit request' }, ctx));
+      expect(before.howToWrite).toContain('The human is the reader'); // 写法跟着读取结果回来:模型动笔前刚读到的地方
+      expect(before.version).toHaveLength(12); // 交给模型抄回来的是短版本号
+      const saved = JSON.parse(await tool.execute({ action: 'update', scope: 'agent', expectedVersion: before.version, content: '# Shared\nUse sketches.', summary: 'Sketches', evidence: 'Explicit request' }, ctx));
+      // 旧版本号(文档已经变了)照样被挡下,不因为只比前 12 位而放过去
+      expect(await tool.execute({ action: 'update', scope: 'agent', expectedVersion: before.version, content: '# Stale', summary: 'Stale', evidence: 'Stale' }, ctx)).toContain('changed elsewhere');
+      // 只认恰好 12 位的短版本号:后面多带了东西、或完整版本号抄错了尾巴,都不放行
+      const now = JSON.parse(await tool.execute({ action: 'read', scope: 'agent' }, ctx)).version;
+      for (const bad of [`${now}-garbage`, `${now}${'0'.repeat(52)}`]) expect(await tool.execute({ action: 'update', scope: 'agent', expectedVersion: bad, content: '# Bad', summary: 'Bad', evidence: 'Bad' }, ctx)).toContain('changed elsewhere');
+      return saved;
     }, 'shared');
     expect(result.kind).toBe('human_update'); expect(result.change.scope).toEqual({ kind: 'agent', slug: 'shared' });
     expect(sync.mock.calls).toEqual([['owner', 'shared']]); // 归属(显示)agent,不是记忆桶 'first';只读那次不排同步
