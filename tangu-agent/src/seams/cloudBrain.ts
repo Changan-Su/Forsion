@@ -354,6 +354,26 @@ export interface AmadeusBrain {
   write(path: string, content: string, opts?: { baseSeq?: number; force?: boolean }): Promise<{ seq: number }>;
 }
 
+// ── Forsion Git(云端的 Git 托管;对端 server microserver/git 的 /api/git/*)──────────────
+/** 这里有没有 Git 托管、站点地址、发不发推拉凭据。不用登录、没有副作用。 */
+export type GitHostingInfo = { configured: false } | { configured: true; webUrl: string; credentials: boolean };
+
+/** 取推拉凭据失败。status / code 照对端原样:409 GIT_NEEDS_SETUP(这个人在站上还没有账号,webUrl = 去哪里开)、
+ *  429 GIT_CREDENTIAL_RATE_LIMITED、503 GIT_NOT_CONFIGURED | GIT_CREDENTIALS_NOT_CONFIGURED、502 GIT_UNAVAILABLE;
+ *  连不上 / 超时 → status 0。**不带响应体原文**(成功的响应体里是令牌,别让任何一条路把它带进错误里)。 */
+export class GitHostingError extends Error {
+  constructor(readonly status: number, readonly code: string, readonly webUrl?: string) {
+    super(`git hosting request failed (${status}${code ? ` ${code}` : ''})`);
+    this.name = 'GitHostingError';
+  }
+}
+
+export interface GitHostingBrain {
+  info(opts?: { signal?: AbortSignal }): Promise<GitHostingInfo>;
+  /** 给当前用户发一枚这台设备专用的访问令牌(password)。同一个设备名再要一次,旧的那枚作废;服务端对同一用户限次。 */
+  credential(device: string, opts?: { signal?: AbortSignal }): Promise<{ webUrl: string; username: string; password: string }>;
+}
+
 export interface CloudBrainServices {
   llm: LlmBrain;
   users: UsersBrain;
@@ -376,6 +396,8 @@ export interface CloudBrainServices {
   inbox?: InboxBrain;
   /** Amadeus 云笔记库(v1);可选:仅 httpBrain(thin worker / standalone 云连)实现 → 非 host 环境的 amadeus_* 工具经此读写云 vault;未注入 → 工具在非 host 环境隐藏。 */
   amadeus?: AmadeusBrain;
+  /** Forsion Git 的站点信息与推拉凭据;可选:仅 httpBrain 实现,没配云端地址 / 没登录时不挂 → 推拉照用户自己的 git 配置跑。 */
+  git?: GitHostingBrain;
 }
 
 /** 服务端收件箱广播(对端 GET /api/brain/inbox/broadcasts;created_at 为服务端微秒原文,原样回传做游标)。

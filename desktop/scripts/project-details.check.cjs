@@ -1,7 +1,7 @@
 /** PROJECT 详情(Tangu Space 右栏,项目会话时顶替 Agent 详情)的真 Electron 仪器:
  *  入口闸(项目会话 → 项目页;无根会话 → 仍是 Agent 详情)、Agents 页(按会话推导的执行者、当前会话置顶、点开成员详情、
  *  用它开新会话、设为项目默认)、配置页(指令文件空态 → 创建 → 编辑 → 保存的 wire 约定、项目技能与旧位置标记、已批准计划、
- *  本机默认项)、项目图标(emoji 选择器 / 导入图片 / 移除,头部与侧栏组头同步)、Git 页(分支 / 上游 / 改动 / 提交 / 远端 + 动作行)、中英 × 亮暗不横向溢出 + 截图(观感自查,DESIGN §8)。
+ *  本机默认项)、项目图标(emoji 选择器 / 导入图片 / 移除,头部与侧栏组头同步)、Git 页(分支 / 上游 / 改动 / 提交 / 远端 + 动作行;拉取的四种结局)、中英 × 亮暗不横向溢出 + 截图(观感自查,DESIGN §8)。
  *  引擎那半(project-context 的读写与安全边界)由 tangu-agent 的 projectContext.test.ts 覆盖;这里的假引擎只回放形状、记录请求。
  *  先 npm run build,再 npm run check:projectdetails(隔离 user data,不碰 ~/.forsion-dev)。 */
 const fs = require('fs')
@@ -355,7 +355,7 @@ async function run(app, win, stub, seen, home, ctx) {
   const until = async (fn, ms = 8000) => { const end = Date.now() + ms; while (Date.now() < end) { if (await fn()) return true; await sleep(120) } return false }
   const writeRow = gitCard.locator('[data-project-git-write]')
   const writeLabels = await writeRow.locator('button').allTextContents()
-  check('6e 写动作行:提交… / 新建分支… / 推送（2）(领先 2 → 按钮带数)', writeLabels.length === 3 && /提交/.test(writeLabels[0]) && /新建分支/.test(writeLabels[1]) && /推送（2）/.test(writeLabels[2]), JSON.stringify(writeLabels))
+  check('6e 写动作行:提交… / 新建分支… / 拉取 / 推送（2）(有上游才有拉取;领先 2 → 推送带数,不落后 → 拉取不带数)', writeLabels.length === 4 && /提交/.test(writeLabels[0]) && /新建分支/.test(writeLabels[1]) && writeLabels[2].trim() === '拉取' && /推送（2）/.test(writeLabels[3]), JSON.stringify(writeLabels))
   await writeRow.locator('[data-git-action="commit"]').click()
   const form = profile.locator('[data-project-git-commit-form]')
   const gitError = profile.locator('[data-project-git-error]')
@@ -402,6 +402,59 @@ async function run(app, win, stub, seen, home, ctx) {
   await until(async () => /origin\/tangu\/demo-x/.test(await gitCard.textContent())) // 请求到了桩 ≠ 响应已渲染
   await until(async () => (await gitError.count()) === 0)
   check('6j 推送 → POST git/push;上游变成 origin/tangu/demo-x,上一次的错误条收起', seen.gitPushes.length === 1 && /origin\/tangu\/demo-x/.test(await gitCard.textContent()) && await gitError.count() === 0, await gitCard.textContent())
+  // 6p 拉取(只快进):落后 3 → 按钮带数 → POST git/pull → 提示拉到几个、按钮上的数没了;已经没有要拉的 → 如实说;
+  //    两边各有新提交 → 本地化说明 + 两边各几个 + 自己重读状态;Forsion Git 还没开通 → 说明 + 「打开 Forsion Git」(走统一的外链出口)
+  const pullBtn = writeRow.locator('[data-git-action="pull"]')
+  const saveNotice = profile.locator('.profile-save-notice')
+  ctx.git = { ...ctx.git, behind: 3 }
+  await gitCard.locator('[data-project-git-actions] button').nth(3).click()
+  await until(async () => /拉取（3）/.test(await pullBtn.textContent().catch(() => '')))
+  const pullLabel = await pullBtn.textContent()
+  await dismissToasts(win)
+  await details.screenshot({ path: shots.gitPull = shot('project-git-pull-zh-light') })
+  await pullBtn.click()
+  await until(async () => /拉取 3 个提交/.test(await saveNotice.textContent().catch(() => '')))
+  check('6p 拉取:落后 3 → 「拉取（3）」;点了 → POST git/pull { sessionId };提示从上游拉到 3 个提交,按钮上的数收起', /拉取（3）/.test(pullLabel) && seen.gitPulls.length === 1 && seen.gitPulls[0].sessionId === 'pd-main' && seen.gitPulls[0].trust === false
+    && /已从 origin\/tangu\/demo-x 拉取 3 个提交/.test(await saveNotice.textContent()) && (await pullBtn.textContent()).trim() === '拉取', JSON.stringify({ pullLabel, pulls: seen.gitPulls, notice: await saveNotice.textContent().catch(() => null) }))
+  await pullBtn.click()
+  await until(async () => /没有新的提交/.test(await saveNotice.textContent().catch(() => '')))
+  check('6p2 没有要拉的 → 如实说「上游没有新的提交」,不报错', seen.gitPulls.length === 2 && /origin\/tangu\/demo-x 上没有新的提交/.test(await saveNotice.textContent()) && await gitError.count() === 0, await saveNotice.textContent().catch(() => null))
+  seen.pullNext = 'diverged'
+  const getsBeforeDiverged = seen.ctxGets.length
+  await pullBtn.click()
+  await gitError.waitFor()
+  await until(async () => seen.ctxGets.length > getsBeforeDiverged)
+  await until(async () => /落后 2/.test(await gitCard.textContent()))
+  const divergedText = await gitError.textContent()
+  check('6p3 两边各有新提交 → 本地化说明(只做快进、没有合并)+ 两边各几个 + 重读状态(领先 1 · 落后 2)', /只做快进/.test(divergedText) && /origin\/tangu\/demo-x: 2/.test(await gitError.locator('pre').textContent()) && !/both moved/.test(divergedText) && /领先 1/.test(await gitCard.textContent()) && /落后 2/.test(await gitCard.textContent()), divergedText)
+  await dismissToasts(win)
+  await details.screenshot({ path: shots.gitDiverged = shot('project-git-diverged-zh-light') })
+  seen.pullNext = 'needs_setup'
+  await pullBtn.click()
+  const openSite = gitError.locator('[data-git-action="open-forsion-git"]')
+  await openSite.waitFor()
+  const setupText = await gitError.textContent()
+  // 「应用内链接」缺省关 → 外链交给系统浏览器(主进程 shell.openExternal):换成记录,台架里不许真开浏览器
+  await app.evaluate(({ shell }) => { globalThis.__pdOpened = []; shell.openExternal = async (url) => { globalThis.__pdOpened.push(String(url)) } })
+  await openSite.click()
+  await until(async () => (await app.evaluate(() => globalThis.__pdOpened.length)) > 0, 3000)
+  const openedUrls = await app.evaluate(() => globalThis.__pdOpened)
+  check('6p4 Forsion Git 还没开通 → 本地化说明(不贴网址原文)+ 「打开 Forsion Git」→ 站点地址交给外链出口', /还没有开通 Forsion Git/.test(setupText) && await gitError.locator('pre').count() === 0 && openedUrls.length === 1 && openedUrls[0].replace(/\/$/, '') === 'https://git.forsion.example', JSON.stringify({ setupText, openedUrls }))
+  await dismissToasts(win)
+  await details.screenshot({ path: shots.gitNeedsSetup = shot('project-git-needs-setup-zh-light') })
+  // 6p5 仓库自带网络配置 → 说明 + 点名那几项 + 「信任这个仓库并继续」→ 同一个拉取带 trust:true 重发并成功
+  seen.pullTransportGate = true
+  const pullsBeforeGate = seen.gitPulls.length
+  await pullBtn.click()
+  const pullTrustRetry = gitError.locator('[data-git-action="trust-retry"]')
+  await pullTrustRetry.waitFor()
+  const transportText = await gitError.textContent()
+  await pullTrustRetry.click()
+  await until(async () => seen.gitPulls.length === pullsBeforeGate + 2)
+  await until(async () => (await gitError.count()) === 0)
+  check('6p5 仓库自带网络配置 → 本地化说明 + 点名配置项 + 「信任并继续」;点了 → 同一个拉取带 trust:true 重发并成功', /自带网络配置/.test(transportText) && /http\.proxy/.test(transportText) && seen.gitPulls.at(-2)?.trust === false && seen.gitPulls.at(-1)?.trust === true && await gitError.count() === 0, JSON.stringify({ transportText, pulls: seen.gitPulls.slice(-2) }))
+  seen.pullTransportGate = false
+  ctx.git = { ...ctx.git, ahead: 0, behind: 0 }
   // 6j2 推送被信任闸拦下 → 错误条给「信任这个仓库并继续」→ 带 trust:true 重发同一个推送
   seen.pushGate = true
   await writeRow.locator('[data-git-action="push"]').click()
@@ -713,7 +766,7 @@ async function main() {
   for (const dir of [userData, `${userData}-dev`, vault, projectDir]) fs.mkdirSync(dir, { recursive: true })
   const ctx = contextFixture(projectDir)
   const seen = { memoryForgets: [], memoryConflictOnce: false, memoryCandidates: [], memoryCandidateGoneOnce: false, memoryCandidateBusyOnce: false, memoryRestores: [], memoryRestoreGoneOnce: false, compactedActivity: false, ctxGets: [], init: 0, docPuts: [], settingsPuts: [], skills: [], sessionsCreated: 0, iconPosts: [], iconGets: 0, iconDeletes: [], sessionDeletes: [], agentDeletes: [],
-    gitMessages: [], gitCommits: [], gitBranches: [], gitPushes: [], gitInits: [], gitSettingsPuts: [], gitPendings: [], gitTrusts: [], pushGate: false }
+    gitMessages: [], gitCommits: [], gitBranches: [], gitPushes: [], gitPulls: [], gitInits: [], gitSettingsPuts: [], gitPendings: [], gitTrusts: [], pushGate: false }
   let gitSettings = { branchPrefix: 'tangu/', commitInstructions: '', forceWithLease: false }
   const demoIds = new Set(['pd-main', 'pd-coder', 'pd-team']) // 默认项 / 图标只属于 Demo Project;别的项目组读到的是空
   // 真实磁盘上的项目 .tangu(移除工作区勾「删除相关文件」时要进废纸篓)
@@ -772,6 +825,18 @@ async function main() {
       if (seen.pushTimeoutOnce) { seen.pushTimeoutOnce = false; return { __code: 400, body: { detail: 'git push timed out', error: 'git_timeout', info: 'timed out' } } }
       ctx.git = { ...ctx.git, upstream: `origin/${ctx.git.branch}`, ahead: 0 }
       return { remote: 'origin', branch: ctx.git.branch, target: `origin/${ctx.git.branch}`, output: '', context: ctx }
+    }
+    // 拉取(引擎 gitPull:fetch + 只快进)。pullNext 指定下一次的结局:分叉 / Forsion Git 还没开通;缺省 = 快进拿到落后的那几个
+    if (route === '/agent/project-context/git/pull' && method === 'POST') {
+      const b = await body(); seen.gitPulls.push(b)
+      const next = seen.pullNext; seen.pullNext = null
+      if (next === 'diverged') { ctx.git = { ...ctx.git, ahead: 1, behind: 2 }; return { __code: 400, body: { detail: 'The branch and its upstream have both moved; nothing was merged', error: 'diverged', info: `${ctx.git.branch}: 1\n${ctx.git.upstream}: 2` } } }
+      // 仓库自带网络配置:引擎不肯经它带凭据,没带 trust 的那一次回 untrusted_transport
+      if (seen.pullTransportGate && !b.trust) return { __code: 400, body: { detail: 'untrusted network configuration', error: 'untrusted_transport', info: 'http.proxy\nhttp.sslverify' } }
+      if (next === 'needs_setup') return { __code: 400, body: { detail: 'This Forsion account has no Forsion Git account yet', error: 'forsion_git_needs_setup', info: 'https://git.forsion.example' } }
+      const commits = ctx.git.behind || 0
+      ctx.git = { ...ctx.git, behind: 0 }
+      return { pull: { remote: 'origin', branch: ctx.git.branch, upstream: ctx.git.upstream, updated: commits > 0, commits, ahead: ctx.git.ahead || 0 }, context: ctx }
     }
     if (route === '/agent/project-context/git/init' && method === 'POST') {
       const b = await body(); seen.gitInits.push(b)

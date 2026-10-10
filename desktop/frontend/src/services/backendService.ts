@@ -1263,7 +1263,8 @@ export const getProjectContext = (t: EngineTarget, sessionId: string) =>
 export const getProjectSettings = (t: EngineTarget, ref: { sessionId: string } | { cwd: string }, opts?: { timeoutMs?: number }) =>
   request<{ settings: ProjectSettings | null }>(t, `/agent/project-context/settings?${'sessionId' in ref ? `sessionId=${encodeURIComponent(ref.sessionId)}` : `cwd=${encodeURIComponent(ref.cwd)}`}`, undefined, opts).then((r) => r.settings ?? null)
 // ── 项目的 git 动作(PROJECT 详情「Git」页;用户点了才做)。失败带机器码 code(not_repo / nothing_to_commit / embedded_repo /
-//    too_many_files / large_files / no_identity / invalid_branch / no_remote / git_failed …)+ info(git 原文 / 点名的文件)。
+//    too_many_files / large_files / no_identity / invalid_branch / no_remote / no_upstream / diverged / dirty_worktree /
+//    forsion_git_needs_setup / git_failed …)+ info(git 原文 / 点名的文件 / 要去的网址)。
 //    成功一律带回新的项目上下文,面板一次刷新。
 //    context 为 null = 动作做完了、只是随后读上下文失败:调用方照「成功」处理并自己重读,别报成失败(用户会重试 → 重复提交)。
 //    trust=true = 用户刚点了「信任并继续」(仓库自带会执行程序的配置)。
@@ -1287,6 +1288,11 @@ export const gitCreateProjectBranch = (t: EngineTarget, sessionId: string, name:
   gitPost<{ branch: string; context: ProjectContext | null }>(t, 'branch', { sessionId, name, trust }).then(withContext)
 export const gitPushProject = (t: EngineTarget, sessionId: string, trust = false) =>
   gitPost<{ remote: string; branch: string; target: string; output: string; context: ProjectContext | null }>(t, 'push', { sessionId, trust }, 180_000).then(withContext)
+/** 拉取:fetch 当前分支上游所在的远端,然后只做快进。updated=false = 没有要拉的(已经一致,或只是本地领先 ahead 个)。
+ *  两边各有新提交 → err.code 'diverged'(只报告,不合并、不变基);没有上游 → 'no_upstream';没提交的改动挡住 → 'dirty_worktree'。
+ *  远端是 Forsion Git 且登录了 Forsion 时,引擎自己带凭据(推送同理),这里不用管。 */
+export const gitPullProject = (t: EngineTarget, sessionId: string, trust = false) =>
+  gitPost<{ pull: { remote: string; branch: string; upstream: string; updated: boolean; commits: number; ahead: number }; context: ProjectContext | null }>(t, 'pull', { sessionId, trust }, 180_000).then(withContext)
 /** 「设置 → Git」。writable=false(云端 worker 的 config.json 是所有用户共用的)时设置页只读说明、不给改。 */
 export const getGitSettings = (t: EngineTarget) =>
   request<{ settings: GitSettings; defaults: GitSettings; writable: boolean }>(t, '/agent/git-settings')

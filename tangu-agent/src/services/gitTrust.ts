@@ -32,6 +32,10 @@ const WRITE_KEYS = [
   // 推送的传输:放开 ext:: 之类的协议、改写 URL,都能让一次推送去执行仓库指定的程序
   /^protocol\.(.+\.)?allow$/i, /^url\..+\.(insteadof|pushinsteadof)$/i,
 ];
+/** 仓库级的**传输**配置(代理、证书校验、CA、客户端证书、cookie…):单看不执行程序,但「代理 + 关证书校验」就能把一次
+ *  https 连接连同请求头交给中间人。平时不拦 —— 那是用户自己的连接,和他在终端里敲的一样。只有宿主要**替用户带上取来的凭据**
+ *  (services/gitCredentials 的接缝认领了这个远端)时才算数:未经信任不带,见 gitActions.requireTransportTrust。 */
+const TRANSPORT_KEYS = [/^http\./i, /^remote\..+\.proxy(authmethod)?$/i];
 /** 远端地址用了 `<transport>::<address>` 写法(ext:: 直接是一条命令,其余会调 git-remote-<transport> 助手)。 */
 const HELPER_URL_KEY = /^remote\..+\.(url|pushurl)$/i;
 const HELPER_URL = /^[a-z][a-z0-9+.-]*::/i;
@@ -43,6 +47,8 @@ export interface RepoRisk {
   read: string[];
   /** 提交 / 建分支 / 推送会执行的配置项与钩子(含 read 那些)。 */
   write: string[];
+  /** 仓库级的传输配置(http.* / 远端代理):只在宿主替用户带凭据时才拦,见 TRANSPORT_KEYS。 */
+  transport: string[];
 }
 
 async function git(cwd: string, args: string[]): Promise<{ code: number; stdout: string; reason?: string }> {
@@ -59,13 +65,14 @@ export async function repoConfigRisks(cwd: string): Promise<RepoRisk | null> {
   const commonDir = path.resolve(cwd, dirs.stdout.trim());
   const listed = await git(cwd, ['config', '--local', '--list', '-z']);
   // 读不出来(配置写坏了 / 超时)按有风险算:fail closed,别把一份看不懂的配置当成干净的
-  if (listed.code !== 0 || listed.reason) return { commonDir, read: ['config (unreadable)'], write: ['config (unreadable)'] };
+  if (listed.code !== 0 || listed.reason) return { commonDir, read: ['config (unreadable)'], write: ['config (unreadable)'], transport: ['config (unreadable)'] };
   const pairs = listed.stdout.split('\0').filter(Boolean).map((entry) => {
     const cut = entry.indexOf('\n');
     return cut < 0 ? { key: entry, value: '' } : { key: entry.slice(0, cut), value: entry.slice(cut + 1) };
   });
   const read = [...new Set(pairs.map((p) => p.key).filter((k) => READ_KEYS.some((re) => re.test(k))))];
   const write = [...new Set(pairs.map((p) => p.key).filter((k) => WRITE_KEYS.some((re) => re.test(k))))];
+  const transport = [...new Set(pairs.map((p) => p.key).filter((k) => TRANSPORT_KEYS.some((re) => re.test(k))))];
   for (const { key, value } of pairs) if (HELPER_URL_KEY.test(key) && HELPER_URL.test(value.trim())) write.push(`${key}=${value.trim().slice(0, 60)}`);
   // 钩子目录里会被执行的:软链一律算(git 跟着它执行,指向哪里都一样);.sample 不算;POSIX 上的真文件还得有执行位
   const hooksDir = path.join(commonDir, 'hooks');
@@ -79,7 +86,7 @@ export async function repoConfigRisks(cwd: string): Promise<RepoRisk | null> {
     }
     write.push(`hooks/${entry.name}`);
   }
-  return { commonDir, read, write };
+  return { commonDir, read, write, transport };
 }
 
 // ── 信任记录 ──────────────────────────────────────────────────────────────

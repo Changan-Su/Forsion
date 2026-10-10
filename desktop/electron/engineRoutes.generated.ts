@@ -124,6 +124,7 @@ export const ENGINE_ROUTES: readonly EngineRoute[] = [
   { method: 'POST', path: '/agent/project-context/git/init', access: 'deny-remote', src: 'routes/projectContext.ts', why: 'git repository write' },
   { method: 'POST', path: '/agent/project-context/git/message', access: 'deny-remote', src: 'routes/projectContext.ts', why: 'spends model quota; may run trusted repo filters' },
   { method: 'POST', path: '/agent/project-context/git/pending', access: 'deny-remote', src: 'routes/projectContext.ts', why: 'may run trusted repo filters (trust=true)' },
+  { method: 'POST', path: '/agent/project-context/git/pull', access: 'deny-remote', src: 'routes/projectContext.ts', why: 'git fetch + fast-forward with local credentials (runs repository hooks)' },
   { method: 'POST', path: '/agent/project-context/git/push', access: 'deny-remote', src: 'routes/projectContext.ts', why: 'git push with local credentials' },
   { method: 'POST', path: '/agent/project-context/git/trust', access: 'deny-remote', src: 'routes/projectContext.ts', why: 'trusts repo-provided executable git config' },
   { method: 'DELETE', path: '/agent/project-context/icon', access: 'deny-remote', src: 'routes/projectContext.ts', why: 'project icon write' },

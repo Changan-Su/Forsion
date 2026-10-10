@@ -13,7 +13,8 @@
  *          (图标只经这组端点改;PUT settings 保留 icon 现值)
  *   GET    /agent/project-context/icon?sessionId=|cwd=                                    → 图标图片二进制(settings.icon 是 emoji / 空 → 404)
  *   DELETE /agent/project-context/icon?sessionId=                                         → 移除图标(emoji 或图片),返回 { settings }
- *   POST   /agent/project-context/git/{init,trust,commit,branch,push}  { sessionId, message?, name?, trust? } → 写动作 + 新的 context
+ *   POST   /agent/project-context/git/{init,trust,commit,branch,push,pull}  { sessionId, message?, name?, trust? } → 写动作 + 新的 context
+ *          (push / pull 的远端有凭据提供方认领时带凭据,见 services/gitCredentials.ts;pull = fetch + 只快进)
  *   POST   /agent/project-context/git/{pending,message}                { sessionId, trust? } → 待提交清单 / 生成的提交信息(只读)
  *          → 用户点的 git 动作(services/gitActions.ts);失败回 400 { detail, error: <code>, info },桌面按 error 出文案。
  *          trust=true = 用户在面板上点了「信任并继续」(仓库自带会执行程序的配置,见 services/gitTrust.ts)
@@ -32,7 +33,7 @@ import {
 } from '../services/projectContext.js';
 import { forgetProjectMemory, projectMemoryView, resolveProjectCandidate, restoreCompactedFact } from '../services/projectMemory.js';
 import { parseRemoteOrigin } from '../services/remoteOrigin.js';
-import { GitActionError, generateCommitMessage, gitCommit, gitCreateBranch, gitInit, gitPending, gitPush, gitTrustRepo, serialized } from '../services/gitActions.js';
+import { GitActionError, generateCommitMessage, gitCommit, gitCreateBranch, gitInit, gitPending, gitPull, gitPush, gitTrustRepo, serialized } from '../services/gitActions.js';
 import { DEFAULT_GIT_SETTINGS, gitSettings, updateGitSettings } from '../services/gitSettings.js';
 
 const router = Router();
@@ -250,6 +251,7 @@ router.post('/agent/project-context/git/commit', authMiddleware, gitWrite('commi
 }));
 router.post('/agent/project-context/git/branch', authMiddleware, gitWrite('branch', (cwd, body) => gitCreateBranch(cwd, body.name, trusted(body))));
 router.post('/agent/project-context/git/push', authMiddleware, gitWrite('push', (cwd, body) => gitPush(cwd, trusted(body))));
+router.post('/agent/project-context/git/pull', authMiddleware, gitWrite('pull', async (cwd, body) => ({ pull: await gitPull(cwd, trusted(body)) })));
 
 /** 待提交清单(提交框完整列出;有已暂存的只列已暂存的)。只读,不排队。 */
 router.post('/agent/project-context/git/pending', authMiddleware, async (req: AuthRequest, res) => {
