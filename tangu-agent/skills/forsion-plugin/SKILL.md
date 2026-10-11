@@ -2,7 +2,7 @@
 name: forsion-extension-development
 description: 当用户要给 Forsion / Tangu 做插件、主题、Space、智能体(agent)或捆绑包(bundle)——或要把某个能力做成可分发/可上架商店的扩展——时使用;已装的插件 / Space / 视图不出现、加载失败、更新后不工作要排查时也用(带一份插件体检脚本 tools/check-plugin.mjs)。内置五类官方模板(samples/),讲清各自的格式基线与硬约束(尤其两种"插件"是完全不同的系统),照抄模板改比从零写靠谱。
 metadata:
-  version: 1.31.0
+  version: 1.32.0
   author: Forsion
   category: Forsion
 ---
@@ -1251,7 +1251,8 @@ const dispose = ctx.app.mountBlocks(el, {
 - **忘记清理宿主也会兜**:插件被禁用/重载/`setup` 抛错时,你开的 `subscribePage` 与 `mountBlocks` 由宿主统一收掉,之后整份 `ctx.app` 块表面变哑(在飞的异步任务改不动用户文件)。但这是安全网不是设计:该 dispose 还是要 dispose。`mountBlocks` 返回的 dispose 调用之后 `el` 立刻归还(见「dispose 契约」);dispose 再挂是一个新的编辑器,用户正在输入时别这么做(焦点和选区会丢)。
 - **内置类型优先是硬规则**:`registerFileType` 的后缀若已被内置认领(`.excalidraw.md`/`.db`/`.pdf`/图片),又没有按下一条显式覆盖,宿主**拒绝注册并返回 `false`** —— 拿到 `false` 就整体退让,连创建器/斜杠项/命令一起别注册(那几个宿主拦不住,不退让用户会看到两份「新建 X」)。旧宿主返回 `undefined`,所以判定写 `=== false`。
 - **接管内置的 PDF(2026-10-05 起)**:`.pdf` 是唯一可覆盖的内置后缀。`registerFileType({ id, extensions: ['.pdf'], override: true, mount })` 注册成功后,文件树点击、`ctx.app.openFile`、最近使用都进你的视图;内置阅读器退为兜底 —— 插件停用 / 卸载即回到内置,文件树右键始终有「用内置阅读器打开」。由谁打开归用户定:设置 → 插件 → 已安装 →「默认打开方式」(自动 / 内置阅读器 / 指定插件);「自动」= 归第一个启用中的接管插件,所以别假设注册成功就一定轮到你。不写 `override: true` 照旧返回 `false`;`.excalidraw.md` / `.db` / 图片写了也不行。旧宿主不认这个字段、返回 `false`,照上一条整体退让。要点:
-  - **不接管的**:带页码 / 引语的跳转(聊天引用、`[[x.pdf#page=3]]`)和 `![[x.pdf]]` 嵌入仍进内置阅读器;`registerEmbedRenderer` 对 `.pdf` 不会被问到。
+  - **带落点的打开也归你(2.13.2 之后的桌面版本)**:笔记里的 `[[x.pdf#page=3]]`、聊天里的引用(带页码,常常还带一段引语)同样进你的视图,落点经 `mount(el, file)` 的 `file.onGoto?.(cb)` 交给你:`cb({ page, quote? })`,`page` 从 1 起,`quote` 是要在那一页标出来的原文。订阅之后,如果这次打开本身带落点,回调会马上来一次(异步,不在 `onGoto()` 调用里面);视图已经开着时再点别的链接,回调再来,视图不重挂。返回值是退订函数,视图关掉时宿主也会替你收掉。**回调到的时候你多半还没准备好**:文件可能还在加载,或者你的标签刚从后台切回来、还没按新尺寸排过版(这时滚动不生效)—— 把落点记下,等能滚了再跳。不订阅也不报错,只是文件开在你自己的默认位置。2.13.2 及更早没有 `onGoto`:这类跳转(以及笔记里不带页码的 `[[x.pdf]]`)进的是内置阅读器,所以一律 `file.onGoto?.(…)` 探测着用。
+  - **不接管的**:`![[x.pdf]]` 嵌入仍由内置阅读器画(`registerEmbedRenderer` 对 `.pdf` 不会被问到);文件树右键「用内置阅读器打开」是用户点名要内置。
   - **读写走字节**:`ctx.app.readBytes?.(file.filePath)` 读、`ctx.app.writeBytes?.(…)` 存。`file.surface.loadPage` 和 `ctx.app.loadPage` 都只收 `.md` 笔记,对 PDF(以及白板)调用会被拒并打告警(那是笔记管线,放行就把文件写成 markdown);`ctx.app.openNote` 收到非笔记路径会改走 `openFile` 开对的视图。
   - **manifest 不要写 `fileExtensions: ['.pdf']`**:那个字段只保护 `.md` 类文件不被当笔记改写,PDF 用不着;写了反而让开发副本被判 `dev-fileext` 拒载。不写的话可以直接从 Sandbox 加载着测(开发副本只是不能注册 `.md` 类后缀)。
   - **内置阅读器只读(2026-10-05 起不再批注)**,文件一变就原地重载:你 `writeBytes` 之后,已经开着的内置标签页和 `![[x.pdf]]` 嵌入会跟上,不用你通知。`ctx.app.watchFile?.()` 对 `.pdf` 也会回调(外部工具改了文件、另一个插件写了它),但事件不比内容 —— 你自己写的那次也会来,回调里先比一下字节再决定要不要重载。
