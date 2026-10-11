@@ -3063,9 +3063,11 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         // 同一张网的另一种漏法:模型把 intelligent_ui 的文档 JSON 当正文写了出来(10-11 live:luna 42 条里 1 条),用户看到的是
         // 回答里夹一大段 JSON、没有卡。这条正文不进终稿,回灌一次让它真的调用工具。iteration < maxIterations - 2:下一轮不能是
         // 不带工具的收尾轮。只纠正一次 —— 用户就是要看 JSON 的话,提示里让它放进代码块重答,那一次不再拦。
+        // 这一轮已经调过 intelligent_ui 的不拦:卡已经有了,再纠正只会多出一张重复的。
         if (
           nativeUiEnabled && !uiDocumentRecovered && !lastIter && iteration < maxIterations - 2 &&
           (!res.toolCalls || res.toolCalls.length === 0) &&
+          !allToolCalls.some((c) => c.function.name === 'intelligent_ui') &&
           !(consumed && consumed.ok === false) &&
           looksLikeLeakedUiDocument(res.content || '')
         ) {
