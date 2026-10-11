@@ -15,8 +15,10 @@
    transparent as the pane. opacity keeps the whole subtree unpainted: a descendant that sets `visibility: visible`
    itself (e.g. an open reveal row) would otherwise show through. Kept at the end of the file: it overrides
    .wb-extend-target's 100% size. */
-.wb-extend-owner:has(> .wb-extend-inline) { position: relative; }
-.wb-extend-owner:has(> .wb-extend-inline) > :not(.wb-extend-inline) { visibility: hidden; opacity: 0; }
+/* data-extend-inline is set by presentInlineExtension while a cover is up. Not `:has(> .wb-extend-inline)`: followed by
+   `> :not(…)` it made every element added or removed anywhere restyle the whole page (cssHasGuard.test.ts). */
+.wb-extend-owner[data-extend-inline] { position: relative; }
+.wb-extend-owner[data-extend-inline] > :not(.wb-extend-inline) { visibility: hidden; opacity: 0; }
 .wb-extend-inline { position: absolute; inset: 0; z-index: 1; width: auto; height: auto; animation: wb-extend-push var(--menu-enter-duration, 180ms) var(--menu-enter-ease, ease-out); }
 .wb-extend-owner:has(> .wb-view--right) > .wb-extend-inline { bottom: var(--sb-h, 0px); }
 .wb-extend-head--back { gap: 4px; padding: 0 14px 0 6px; }

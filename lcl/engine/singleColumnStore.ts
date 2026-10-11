@@ -126,6 +126,11 @@ let autoSaveArmed = false
 let afterLayout: (() => void) | null = null
 export function setAfterLayoutHook(fn: (() => void) | null): void { afterLayout = fn }
 
+/** 宿主钩子:主区要开一个视图**之前**调。SingleColumnHost 用它把「一页式 Space(主页)里开别的 Space 的视图」先带到
+ *  那个 Space 去(同步切 Space),本次 openView 接着在新布局上照常开。同上,本文件 import spaceRegistry 会成环。 */
+let beforeMainOpen: ((type: string) => boolean) | null = null
+export function setBeforeMainOpenHook(fn: ((type: string) => boolean) | null): void { beforeMainOpen = fn }
+
 /** 冷启动还原上次的三桶 leaf + 各自激活项。成功 true;首启/整份不可用返回 false,调用方 build 默认布局。
  *  同时是自动存盘的**发令枪** —— 还原之前 bootstrap 的那些 setSidebarDefaults 之类的 set() 不该
  *  把一份空布局先写回去,把真正要还原的东西冲掉。 */
@@ -430,6 +435,8 @@ export const useWorkspace = create<WS>((set, get) => {
         loc = 'main'
         opts = undefined // Mini has one content surface, never tabs or drawers.
       }
+      // 可能同步换了 Space(moved):下面一律现读 get()
+      const moved = loc === 'main' && !IS_MINI_PANEL && beforeMainOpen?.(type) === true
       const def = getView(type)
       // singleton 复用(跨桶;reuseKey 语义对齐桌面)
       if (def?.singleton) {
@@ -440,6 +447,10 @@ export const useWorkspace = create<WS>((set, get) => {
           return r.params.reuseKey === reuseKey || (reuseKey === 'primary' && r.params.reuseKey === undefined && r.params.followActive !== false)
         })
         if (existing) {
+          // 被带到这个 Space 来开的(moved),而这里现成的那个钉着另一份(聊天钉住了别的会话):就地换成要开的这份。
+          // 只切过去的话显示的还是原来那份。跟随档的不动 —— 它本来就随「当前会话」显示要开的那条。
+          const idp = def.idParam
+          if (moved && idp && params[idp] != null && existing.params.followActive === false && existing.params[idp] !== params[idp]) { setActive(existing.loc, existing.id); return swapRec(existing, type, params) }
           if (IS_MINI_PANEL || reuseKey === 'primary') { set((s) => ({ [bucketOf(existing.loc)]: s[bucketOf(existing.loc)].map((r) => r.id === existing.id ? { ...r, params: { ...r.params, ...params } } : r) } as Partial<WS>)) }
           setActive(existing.loc, existing.id)
           if (existing.loc === 'main') autoCloseDrawers()
@@ -549,6 +560,7 @@ export const useWorkspace = create<WS>((set, get) => {
       const bkey = bucketOf(rec.loc)
       const rest = get()[bkey].filter((r) => r.id !== id)
       set({ [bkey]: rest } as Partial<WS>)
+      useNav.getState().drop(id) // 同桌面版:导航历史随标签销毁(leaf id 会被下一个同类标签复用,留着的话返回键会翻出旧页)
       // 重挑该桶 active
       const akey = activeKeyOf(rec.loc)
       if (get()[akey] === id) set({ [akey]: rest[rest.length - 1]?.id ?? null } as Partial<WS>)

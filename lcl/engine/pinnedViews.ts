@@ -38,3 +38,31 @@ export function missingPinned(pins: PinnedViews, panels: PanelRef[], known: (typ
   }
   return out
 }
+
+/** 一页式 Space(types.ts 的 onePage)进来时的落点:该到前台的那个主区 leaf 的 id(已经在前台是 null),和该关掉的
+ *  多余标签。没声明、或区里没有它的那一页时什么都不动(两项都空)—— 没有那一页就没有东西可落,别把别的标签关光。 */
+export function onePageLanding(
+  space: { onePage?: boolean; pinned?: PinnedViews } | undefined,
+  mainLeaves: Array<{ id: string; type: string }>,
+  activeMainId: string | null,
+): { activate: string | null; close: string[] } {
+  const type = space?.onePage ? space.pinned?.main?.[0]?.type : undefined
+  const rec = type ? mainLeaves.find((r) => r.type === type) : undefined
+  if (!rec) return { activate: null, close: [] }
+  return { activate: rec.id !== activeMainId ? rec.id : null, close: mainLeaves.filter((r) => r.id !== rec.id).map((r) => r.id) }
+}
+
+/** 引擎自己的占位视图:不是内容,哪个 Space 都不算它的主人。 */
+const PLACEHOLDER_VIEWS = new Set(['launcher', 'home', 'sidebar-empty'])
+
+/** 一页式 Space 里要开 `type` 这种视图:该带去哪个 Space 开。不用带(当前不是一页式、开的就是它自己那一页、占位视图、
+ *  认不出主人)返回 undefined。主人 = 注册顺序里第一个把它固定在主区、或列在 launcherViews 里的别的 Space。 */
+export function onePageRedirect(
+  spaces: Array<{ id: string; onePage?: boolean; pinned?: PinnedViews; launcherViews?: PersistedPanel[] }>,
+  activeId: string,
+  type: string,
+): string | undefined {
+  const from = spaces.find((s) => s.id === activeId)
+  if (!from?.onePage || PLACEHOLDER_VIEWS.has(type) || from.pinned?.main?.some((p) => p.type === type)) return undefined
+  return spaces.find((s) => s.id !== activeId && [...(s.pinned?.main ?? []), ...(s.launcherViews ?? [])].some((p) => p.type === type))?.id
+}

@@ -132,7 +132,8 @@ async function main() {
       else {
         // dispatchEvent 而非 click():这里没种引导完成标记,引导层盖在外壳上;要证的是回落链路,不是命中测试。
         await page.locator('.mb-topbar .mb-tabsbtn').dispatchEvent('click')
-        const sheet = await page.locator('.mb-sheet .mb-tabrow-new').waitFor({ state: 'visible', timeout: 3000 })
+        // 认标签行,不认「新建标签页」那一行:开机落在主页,主页是一页式 Space,底单里没有那一行(2026-10-11)。
+        const sheet = await page.locator('.mb-sheet .mb-tabrow').first().waitFor({ state: 'visible', timeout: 3000 })
           .then(() => true).catch(() => false)
         if (!sheet) fails.push('无原生宿主时点标签页钮没出 web 底单(.mb-sheet)')
       }

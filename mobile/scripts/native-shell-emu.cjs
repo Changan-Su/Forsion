@@ -1682,7 +1682,12 @@ const tabCountText = (list) => {
   /** The tabs sheet, opened for a look (screenshots in another theme / language). With one tab there is no count button
    *  to open it with: a second tab is made through ⋯ first and closed again by the returned function, which also
    *  dismisses the sheet (and first hands the sheet's nodes to `look`, if given). */
+  /** Home is one page (2026-10-11: no tabs, no "New tab" in it) — what is checked about tabs is checked on a Space that has them. */
+  async function offHome() {
+    if ((await cdp.eval("document.querySelector('.mb-shell')?.dataset.space")) === 'home') await toSpace('calendar')
+  }
   async function tabsSheet() {
+    await offHome()
     const extra = !h.byId(ui(), 'nativeChrome.tabs')
     if (extra) {
       await tapId('nativeChrome.more')
@@ -1707,6 +1712,7 @@ const tabCountText = (list) => {
 
   let firstView = ''
   await check('tabs: no count button for a single tab and "New tab" in ⋯; the sheet lists tabs, + new tab, switch, close (re-presents), back cancels', async () => {
+    await offHome()
     firstView = await cdp.eval(dom.view)
     const before = Number(tabCountText(ui()) || '1')
     // One tab: no count button (nothing to switch between). "New tab" is in ⋯, and the button comes with the second tab.
@@ -1756,6 +1762,7 @@ const tabCountText = (list) => {
   // The native ⋯ sheet cannot always be presented (a ribbon item drawn by a React component, a host that fails): the web
   // sheet takes over. With one tab the bar has no count button, so "New tab" has to be on that sheet as well.
   await check('more sheet fallback: when the host cannot present, the web sheet opens and carries "New tab", which opens one', async () => {
+    await offHome()
     assert.equal(Number(tabCountText(ui()) || '1'), 1, 'control: this check starts from a single tab')
     const row = `document.querySelector('.mb-sheet [data-act="new-tab"]')`
     // the presenter's own bridge call fails → the sheet seam reports "not handled"
@@ -1989,6 +1996,80 @@ const tabCountText = (list) => {
     assert.ok(!(await cdp.eval(hidden)), 'hiding the keyboard folded the composer (what was typed would be out of sight)')
     await foldHomeComposer() // a touch on the page folds it back into the pill
     assert.ok(resumed(), 'back left the app')
+  })
+
+  // Home is Home (2026-10-11, reported on a phone: "I enter Home and it shows another workspace", then decided: Home
+  // has no tabs). A view opened while standing on Home used to become a second tab of the Home Space; its saved layout
+  // brought that tab back as the one in front on every entry, and a tap on Home's own dock cell did nothing. Now:
+  //   1. no "New tab" in Home's ⋯;
+  //   2. a layout saved by an older build with such a tab in front → entering Home shows the homepage and the tab is
+  //      gone (the layout is written into the Space's saved slot here, the way that build left it);
+  //   3. a conversation opened from Home (⋯ → Search → quick find) opens in Tangu — the one that was picked, not the one Tangu had
+  //      open before — and Home keeps its one page.
+  // Every point is looked at before the first failure is reported.
+  // Not here: a restart. The saved layout is kept per account, and this harness's account has no identity, so every
+  // boot starts from an empty layout (cloudAccountCache.syncCloudAccountCache). A restart lands through the same hook
+  // as a Space switch (singleColumnStore.applySCBlob → afterLayout).
+  await check('home stays home: no "New tab" in its ⋯; a stray tab left by an older build is gone on entry; a conversation opened from Home opens in Tangu', async () => {
+    const bad = []
+    const st = async () => JSON.parse(await cdp.eval(`JSON.stringify({ space: document.querySelector('.mb-shell')?.dataset.space, view: ${dom.view} })`))
+    const tabs = () => Number(tabCountText(ui()) || '1')
+    const named = "Object.fromEntries(Object.keys(localStorage).filter((k) => k.startsWith('lcl_sc_named_layouts_v1')).map((k) => [k, localStorage.getItem(k)]))"
+    // 1
+    await goHome()
+    await tapId('nativeChrome.more')
+    let list = await waitSheet(true)
+    if (ids(list).includes('tab:new')) bad.push(`Home's ⋯ offers "New tab": ${JSON.stringify(ids(list))}`)
+    assert.ok(h.byId(list, 'nativeSheet.item.rb-cmd'), `control: search is in Home's ⋯ (${JSON.stringify(ids(list))})`)
+    h.key(4); await waitSheet(false)
+    // 2: leaving Home saves its layout; the slot that changed is this account's. Put a second tab in it, in front.
+    const before = await cdp.eval(named)
+    await tapSpace('tangu'); await h.pause(1300)
+    const after = await cdp.eval(named)
+    const key = Object.keys(after).find((k) => after[k] !== before[k]) || Object.keys(after).find((k) => JSON.parse(after[k])['space:home'])
+    assert.ok(key && JSON.parse(after[key])['space:home'], `control: no saved layout for Home to edit (${JSON.stringify(Object.keys(after))})`)
+    await cdp.eval(`(() => { const all = JSON.parse(localStorage.getItem(${JSON.stringify(key)})); const b = all['space:home']
+      b.main = [...b.main.filter((r) => r.type === 'homepage'), { id: 'calendar', type: 'calendar', loc: 'main', params: {}, title: 'Calendar' }]; b.activeMainId = 'calendar'
+      localStorage.setItem(${JSON.stringify(key)}, JSON.stringify(all)); return true })()`)
+    await tapSpace('home'); await h.pause(1300)
+    const landed = await st()
+    if (landed.space !== 'home' || landed.view !== 'homepage') bad.push(`entering Home with a stray tab in front: ${JSON.stringify(landed)}`)
+    if (tabs() !== 1) bad.push(`the stray tab is still there after entering Home (tabs ${tabs()})`)
+    // 3
+    const before3 = await cdp.eval("document.querySelector('.mb-shell')?.dataset.space")
+    assert.equal(before3, 'home')
+    if ((await st()).view !== 'homepage') { h.key(4); await h.pause(900) } // the build without the fix: get the stray tab out of the way
+    await tapId('nativeChrome.more')
+    await tapId('nativeSheet.item.rb-cmd', await waitSheet(true))
+    await waitSheet(false)
+    // "Search" in ⋯ is the command panel; quick find (conversations, notes) is one of its commands
+    assert.ok(await h.waitPage(cdp, "!!document.querySelector('.cmd-input')", 5000), 'control: the command panel did not open')
+    await tapEl("document.querySelector('.cmd-input')"); await h.pause(500)
+    h.adb('shell', 'input', 'text', 'quick')
+    const quick = "[...document.querySelectorAll('.cmd-item')].find((r) => r.textContent.includes('快速查找'))"
+    assert.ok(await h.waitPage(cdp, `!!${quick}`, 5000), 'control: the command panel does not list quick find')
+    if (imeShown()) { h.key(4); await h.pause(600) }
+    await tapEl(quick)
+    assert.ok(await h.waitPage(cdp, "!!document.querySelector('.amx-qf-input')", 5000), 'control: quick find did not open')
+    await tapEl("document.querySelector('.amx-qf-input')"); await h.pause(500)
+    const TWO = sessions.find((x) => x.id === 'e2e-s2').title // as listed now: the session-row check renames it
+    h.adb('shell', 'input', 'text', 'Two')
+    const hit = `[...document.querySelectorAll('.amx-qf-row')].find((r) => r.querySelector('.amx-qf-title')?.textContent.trim() === ${JSON.stringify(TWO)})`
+    assert.ok(await h.waitPage(cdp, `!!${hit}`, 6000), `control: search does not list the conversation (${await cdp.eval("JSON.stringify([...document.querySelectorAll('.amx-qf-title')].map((e) => e.textContent))")})`)
+    if (imeShown()) { h.key(4); await h.pause(600) }
+    await tapEl(hit)
+    await h.waitPage(cdp, `(${dom.view}) === 'chat'`, 6000)
+    await h.pause(1200)
+    const opened = await st()
+    const title = textOf(ui(), 'nativeChrome.title')
+    if (opened.space !== 'tangu' || opened.view !== 'chat') bad.push(`a conversation opened from Home: ${JSON.stringify(opened)}`)
+    if (title !== TWO) bad.push(`the conversation that opened is "${title}", the one picked was "${TWO}"`)
+    shot('05-home-opened-conversation')
+    await toSpace('home'); await h.pause(900)
+    const home = await st()
+    if (home.view !== 'homepage' || tabs() !== 1) bad.push(`Home after a conversation was opened from it: ${JSON.stringify(home)} tabs ${tabs()}`)
+    for (let i = 0; i < 4 && tabs() > 1; i++) { if ((await st()).view === 'homepage') break; h.key(4); await h.pause(1000) } // the build without the fix leaves its tab
+    assert.deepEqual(bad, [], 'Home is not just Home')
   })
 
   await check('phone notes list: category chips instead of a search box, the vault under the title, search on the capsule, one main button above the dock', async () => {
@@ -2855,6 +2936,7 @@ const tabCountText = (list) => {
   })
 
   await check('more sheet runs a command (theme mode) — dark renders', async () => {
+    await offHome()
     const mode = await cdp.eval(dom.mode)
     await tapId('nativeChrome.more')
     const list = await waitSheet(true)
@@ -3554,7 +3636,7 @@ const tabCountText = (list) => {
     // its Space registers only after the plugins have loaded: back on the bar, and it opens
     await toSpace(PLUGIN_SPACE)
     assert.ok(await h.waitPage(cdp, "!!document.querySelector('.mb-main [data-e2e-plugin-view]')", 8000), 'the plugin Space did not open after the restart')
-    await toSpace('home') // where the command above left the app: Home, the plugin view on top of the homepage
+    await toSpace('home') // back where the command above was run from (Home is one page: the plugin view opened in the plugin's own Space)
   })
 
   /** Mode + add sheets in the chat, then settings as a native page (screenshots for the given pass). */

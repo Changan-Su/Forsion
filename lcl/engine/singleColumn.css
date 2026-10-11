@@ -199,24 +199,24 @@
 }
 .mb-push-dim.on { opacity: 1; pointer-events: auto; }
 
-/* ── 跟手拖拽中(2026-08-20)。手指在屏上时由 JS 逐帧写 `--mb-p`(0=关 1=全开,**比例**不是像素:
-   .mb-drawer-body 上挂着 zoom:1.15,像素在视口/局部两个坐标系里对不上,比例天生免疫)。
-   `data-drag` 的三条选择器都比 `.open` / `.push-*` / `.on` 高一级特异性 —— 松手时先 toggleSidebar
-   (React 打上 .open),下一帧才摘 data-drag:中间这一帧拖拽位仍然赢,所以不会先跳回原位再动画;
-   摘掉的那一刻 transition 从 .open 那条恢复,浏览器按「变化后样式」从当前位置接着补间。
+/* ── 跟手拖拽中(2026-08-20)。手指在屏上时由 JS(SingleColumnHost 的 useDrawerDrag)逐帧把进度写成
+   面板 / 主区 / 遮罩三个元素自己的**内联** transform / opacity;这里只管拖拽期间的开关量。
+   ⚠️ 进度不走自定义属性(2026-10-11 之前是 .mb-body 上的 `--mb-p`):它会继承,每帧整棵子树重算样式,
+      长对话里拖一下只剩个位数帧率。位移写成百分比 / `var(--mb-panelw)` 的倍数,不受 .mb-drawer-body 那档 zoom 影响。
+   松手时先 toggleSidebar(React 打上 .open),下一帧才摘 data-drag 并清内联样式:中间这一帧内联样式仍然赢,
+   所以不会先跳回原位再动画;摘掉的那一刻 transition 从 .open 那条恢复,浏览器从当前位置接着补间。
    ⚠️ 拖拽期必须关掉 transition,否则每帧都在追一个 0.34s 的补间 = 手指和面板差半拍。 */
 .mb-body[data-drag] .mb-drawer,
 .mb-body[data-drag] .mb-main,
 .mb-body[data-drag] .mb-push-dim { transition: none; }
 .mb-body[data-drag='left'] .mb-drawer--left,
 .mb-body[data-drag='right'] .mb-drawer--right { visibility: visible; pointer-events: none; }
-.mb-body[data-drag='left'] .mb-drawer--left { transform: translateX(calc((var(--mb-p) - 1) * var(--mb-panelw))); }
-.mb-body[data-drag='right'] .mb-drawer--right { transform: translateX(calc((1 - var(--mb-p)) * var(--mb-panelw))); }
-/* main 跟着一起被推:宽屏 docked 形态右抽屉**不推** main(与 .push-right 只在窄屏挂的口径一致),
-   靠 JS 只在该推时才加 .mb-drag-push 这个类来区分。 */
-.mb-body.mb-drag-push[data-drag='left'] .mb-main { transform: translateX(calc(var(--mb-p) * var(--mb-panelw))); }
-.mb-body.mb-drag-push[data-drag='right'] .mb-main { transform: translateX(calc(var(--mb-p) * var(--mb-panelw) * -1)); }
-.mb-body[data-drag] .mb-push-dim { opacity: var(--mb-p); pointer-events: none; }
+.mb-body[data-drag] .mb-push-dim { pointer-events: none; }
+/* 拖拽期间三个被拖的元素各占一个合成层:每帧只改它们的 transform / opacity,浏览器可以直接改层的位置,
+   不必把整页重新分层(不提升时每帧约 20ms 花在重新分层上 —— 2026-10-11 降速 4 倍实测)。只在拖拽期间提升,松手即还。 */
+.mb-body[data-drag] > .mb-drawer,
+.mb-body[data-drag] > .mb-main { will-change: transform; }
+.mb-body[data-drag] > .mb-push-dim { will-change: opacity; }
 .mb-drawer-bar { height: 48px; display: flex; align-items: center; gap: 8px; padding: 0 6px; border-bottom: 1px solid var(--border, rgba(0, 0, 0, 0.08)); }
 .mb-drawer-select {
   flex: 1 1 auto;
@@ -489,12 +489,10 @@
 
 /* ── 两级导航(2026-10-04 用户拍板「和微信那样」;判据见 SingleColumnHost 的 listFirstNow):左栏整屏是 Space 的
    第一层,主区是点进去的第二层。**沿用同一套 push 抽屉机制**,只把左面板拉到整屏 —— 进 / 出主区就是一次整屏平移,
-   .open / .push-left / 跟手拖拽(--mb-p)全部照旧,不另写一套过渡。右抽屉不受影响(仍是 --mb-panelw 的侧滑面板)。
-   只在壳上有 data-nav 时命中(原生底栏 × 竖屏 × 该 Space 有列表层);没有这个属性的宿主逐像素不变。
-   放文件末尾(DESIGN §7.2):每条都比它覆盖的那条多一段 .mb-shell[data-nav] 前缀。 */
-.mb-shell[data-nav] .mb-drawer--left { width: 100%; border-radius: 0; box-shadow: none; }
-.mb-shell[data-nav] .mb-body.push-left .mb-main { transform: translateX(100%); }
-.mb-shell[data-nav] .mb-body[data-drag='left'] .mb-drawer--left { transform: translateX(calc((var(--mb-p) - 1) * 100%)); }
-.mb-shell[data-nav] .mb-body.mb-drag-push[data-drag='left'] .mb-main { transform: translateX(calc(var(--mb-p) * 100%)); }
-/* 往回拖(主区 → 列表)时不压暗:两页是平级的整屏页,不是「面板盖在内容上」。 */
-.mb-shell[data-nav] .mb-body[data-drag='left'] .mb-push-dim { opacity: 0; }
+   .open / .push-left / 跟手拖拽全部照旧,不另写一套过渡。右抽屉不受影响(仍是 --mb-panelw 的侧滑面板)。
+   只在壳上有 data-list-first 时命中(原生底栏 × 竖屏 × 该 Space 有列表层;与 data-nav 同时在场,但它的值不随进出主区变,
+   所以进出时这些规则不必重新匹配 —— 样式别挂 [data-nav]);没有这个属性的宿主逐像素不变。
+   放文件末尾(DESIGN §7.2):每条都比它覆盖的那条多一段 .mb-shell[data-list-first] 前缀。 */
+.mb-shell[data-list-first] .mb-drawer--left { width: 100%; border-radius: 0; box-shadow: none; }
+.mb-shell[data-list-first] .mb-body.push-left .mb-main { transform: translateX(100%); }
+/* 跟手拖拽的位移与「往回拖时不压暗」(两页是平级的整屏页,不是「面板盖在内容上」)都由 useDrawerDrag 内联写。 */

@@ -420,9 +420,12 @@
 }
 
 /* 细长 Chat View 的短会话从输入区上方开始阅读，避免最后一条回复悬在视图中段。
-   flex 的 auto margin 只消费剩余空间；消息超过一屏时归零，保留原来的顶部滚动行为。 */
+   flex 的 auto margin 只消费剩余空间；消息超过一屏时归零，保留原来的顶部滚动行为。
+   ⚠️「流里有消息」认 ChatView 写的 data-has-messages，不写 `:has(> .t2-asst, > .t2-userwrap)`：`X:has(…) > :first-child`
+      这种「:has 后面接一个没有类名可认的结尾」的选择器，会让页面上任何地方插入 / 移除一个元素都把整页样式重算一遍
+      （2026-10-11 实测一次 50ms，中端手机约 200ms；流式输出、弹菜单、挂一个按钮都算）。守卫：cssHasGuard.test.ts。 */
 @container (max-width: 520px) and (aspect-ratio < 9 / 16) {
-  .t2-stream-inner:has(> .t2-asst, > .t2-userwrap) > :first-child { margin-top: auto; }
+  .t2-stream-inner[data-has-messages] > :first-child { margin-top: auto; }
 }
 
 /* ====== 合成器(悬浮圆角卡) ====== */
@@ -1077,7 +1080,7 @@ html[data-chat-avatars='off'] .t2-username { display: none; }
    仪器:mobile `npm run stage:phone` 的 chat-lists / chat-keyboard;模拟器 `ONLY='keyboard:' npm run emu:nativeshell`(带冒号:不带会连别的几条一起选上)。 */
 @container (max-width: 520px) {
   .mb-shell[data-native-chrome] .t2-avatar { display: none; }
-  .mb-shell[data-native-chrome] .t2-stream-inner:has(> .t2-asst, > .t2-userwrap) > :first-child { margin-top: auto; }
+  .mb-shell[data-native-chrome] .t2-stream-inner[data-has-messages] > :first-child { margin-top: auto; }
   .mb-shell[data-native-chrome] .t2-content :is(ul, ol) { padding-inline-start: 18px; }
 }
 

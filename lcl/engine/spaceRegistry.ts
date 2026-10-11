@@ -9,6 +9,7 @@ import type { SpaceDefinition } from './types'
 import { useWorkspace, liveLayoutOwner } from './workspaceStore'
 import { loadLayout, saveLayout, clearLayout, loadNamedLayout, saveNamedLayout, listNamedLayouts, deleteNamedLayout } from './layoutPersist'
 import { clearSingleColumnLayouts } from './singleColumnStore'
+import { onePageRedirect } from './pinnedViews'
 
 const ACTIVE_KEY = IS_MINI_PANEL ? 'forsion_mini_active_space' : 'forsion_tangu_active_space'
 /** 每个 Space 的布局存进既有命名布局表,用此前缀的保留名。 */
@@ -102,6 +103,23 @@ export const useSpaceStore = create<SpaceState>((set, get) => ({
     else ws.resetLayout()
   },
 }))
+
+let openRedirect: string | null = null
+/** 正在进行的这次切 Space 是不是「把一个正要开的视图带去它自己的 Space」(redirectOpenFromOnePage):是则返回那个视图的类型。
+ *  订阅 activeSpaceId 的人据此区分「人换了个 Space」和「东西被带过去开」—— 后者不该把目标 Space 上次的现场套回来
+ *  (bootstrapEngine 的「当前会话按 Space 分账」:带过去的那条会话不能被换成 Tangu 上次那条)。 */
+export const openRedirectType = (): string | null => openRedirect
+
+/** 人在一页式 Space(主页,types.ts 的 onePage)里、主区要开 `type`:它有主人就先切过去(同步),调用方接着照常开。
+ *  只由手机单列壳接上(SingleColumnHost → singleColumnStore.setBeforeMainOpenHook)。判定见 pinnedViews.onePageRedirect。 */
+export function redirectOpenFromOnePage(type: string): boolean {
+  const { spaces, activeSpaceId } = useSpaceStore.getState()
+  const owner = onePageRedirect(spaces, activeSpaceId, type)
+  if (!owner) return false
+  openRedirect = type
+  try { useSpaceStore.getState().setActiveSpace(owner) } finally { openRedirect = null }
+  return useSpaceStore.getState().activeSpaceId === owner
+}
 
 /** 当前活动 Space(找不到回退首个;无 Space 时 undefined)。 */
 export const getActiveSpace = (): SpaceDefinition | undefined => {

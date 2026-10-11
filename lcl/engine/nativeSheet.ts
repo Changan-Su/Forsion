@@ -232,7 +232,11 @@ export function readNativeTheme(): NativeSheetTheme {
     const probe = document.createElement('span')
     probe.setAttribute('aria-hidden', 'true')
     probe.style.cssText = 'position:absolute;width:0;height:0;overflow:hidden;visibility:hidden;pointer-events:none'
-    document.body.appendChild(probe)
+    // Under <html>, not <body>: an element added to (or taken from) <body> makes the browser restyle the whole page
+    // — twice per read — and the phone's native bar asks for the theme at every step of a navigation (2026-10-11:
+    // 196 ms of a Space switch on a long chat; under <html> the same read is 0.4 ms. `npm run emu:perf` in mobile).
+    // The tokens are declared on <html> (the check below reads them there), so they resolve the same.
+    document.documentElement.appendChild(probe)
     try {
       const declared = getComputedStyle(document.documentElement)
       for (const key of Object.keys(TOKENS) as Array<keyof typeof LIGHT>) {

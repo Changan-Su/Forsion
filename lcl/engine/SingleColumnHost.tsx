@@ -12,7 +12,7 @@
 import { Suspense, createElement, useEffect, useRef, useState, type RefObject } from 'react'
 import { flushSync } from 'react-dom'
 import { PanelLeft, PanelRight, X, MoreHorizontal, Plus, Zap, SlidersHorizontal, Check } from 'lucide-react'
-import { useSpaceStore, setActiveSpace, getActiveSpace, pinSpaceToHome } from './spaceRegistry'
+import { useSpaceStore, setActiveSpace, getActiveSpace, pinSpaceToHome, redirectOpenFromOnePage } from './spaceRegistry'
 import { useRibbonStore } from './ribbonRegistry'
 import { useCommandStore } from './commandRegistry'
 import { accountMenuItems, moreCommandGroups, moreCommandOn, moreCommandTitle, moreItems, moreRowLabel, presentedCommand } from './moreSheet'
@@ -25,8 +25,9 @@ import { DOCK_PICKS, dockSpaceIds, subscribeDockPicks, toggleDockPick } from './
 import { ExtendViewHost } from './ExtendViewHost'
 import { presentInlineExtension } from './extendView'
 import { NativeExtendView } from './nativeExtendView'
-import { useWorkspace, restoreSingleColumnLayout, presentDrawerExtension, setAfterLayoutHook } from './singleColumnStore'
+import { useWorkspace, restoreSingleColumnLayout, presentDrawerExtension, setAfterLayoutHook, setBeforeMainOpenHook } from './singleColumnStore'
 import { listFirstNow } from './listFirst'
+import { onePageLanding } from './pinnedViews'
 import { Skeleton, ViewErrorBoundary, skeletonVariantOf } from './Skeleton'
 import './singleColumn.css'
 import { useEngineI18n } from './i18nSeam'
@@ -211,17 +212,23 @@ function Drawer({ side, docked, showFoot, page }: { side: 'left' | 'right'; dock
  *  改之前是三处各管一段的 fling 判定 —— main 上横滑呼出 / 抽屉内反向滑关 / dim 上滑关 ——
  *  三处都只看 touchstart→touchend 的净位移,中间一帧位移都不产生:面板要么在这头要么在那头。
  *  它们本来就是同一件事的三个入口,合成一个挂在 `.mb-body` 上的控制器才可能有中间态。
- *  touchmove 逐帧写 `--mb-p`(0=关 1=全开的**比例**),松手按位置 + 甩动速度吸附。
+ *  touchmove 逐帧把进度 p(0=关 1=全开的**比例**)写成面板 / 主区 / 遮罩三个元素自己的内联
+ *  transform / opacity,松手按位置 + 甩动速度吸附。
  *
+ *  ⚠️ 进度**不许**写成 `.mb-body` 上的自定义属性(2026-10-11 之前是 `--mb-p`):自定义属性会继承,
+ *     每写一次整棵子树(一段长对话 ≈ 4800 个元素)的样式全部重算 —— 实测每帧 15ms(这台 Mac)/
+ *     降速 4 倍后拖动只剩 9 帧每秒。内联 transform 只重算被写的那个元素。仪器:mobile `npm run emu:perf`。
  *  ⚠️ 用比例不用像素:`.mb-drawer-body` 上挂着 `zoom: 1.15`,像素在视口坐标与局部坐标里对不上
- *     (栽过一次,见 desktop 的 zoomOf 补偿);比例是两个视口量相除,天生免疫。
+ *     (栽过一次,见 desktop 的 zoomOf 补偿);比例是两个视口量相除,天生免疫。位移因此写成元素自身
+ *     宽度的百分比(面板)或 `var(--mb-panelw)` 的倍数(主区),不拿量出来的像素去乘。
  *  ⚠️ 必须原生 addEventListener + `passive: false`:React 在根上是被动注册 touchmove 的,
  *     它的 onTouchMove 里 preventDefault() 不生效,横滑会被浏览器同时当成滚动。
  *  ⚠️ 方向锁定判在第一次 preventDefault **之前**:纵向滚动一帧都不能被影响。
  *  ⚠️ 松手顺序:`flushSync` 里先 toggleSidebar(React 当场把 .open/.push-* 打上),**下一帧**才摘
  *     data-drag。同帧摘 = 面板先跳回未拖前的位置再动画(经典 snap-back);flushSync 是为了让
  *     「React 已提交」这件事确定发生在 rAF 之前 —— 本控制器是原生监听,普通更新不保证这个先后。
- *     CSS 那边 data-drag 的特异性高于 .open 与 push 那几条,所以中间这一帧看到的仍是手指停下的位置。
+ *     中间这一帧内联样式仍在(它压过 .open 与 push 那几条),所以看到的仍是手指停下的位置;
+ *     摘 data-drag 的同时清掉内联样式,过渡从 .open 那条恢复,从当前位置接着补间。
  */
 function useDrawerDrag(
   bodyRef: RefObject<HTMLDivElement | null>,
@@ -243,14 +250,28 @@ function useDrawerDrag(
       side: 'left' | 'right' | null
       opening: boolean
       w: number
+      /** 当前进度(0=关 1=全开)与被拖的三个元素;主区只在窄屏被推(宽屏右抽屉不推 main)。 */
+      p: number
+      panel: HTMLElement | null; main: HTMLElement | null; dim: HTMLElement | null
+      /** 两级导航的整屏列表:主区平移自身整宽,且往回拖时不压暗(两页平级)。 */
+      nav: boolean
       lastX: number; lastT: number; vx: number
     }
     let d: Drag | null = null
     const clamp = (n: number): number => (n < 0 ? 0 : n > 1 ? 1 : n)
+    let painted: HTMLElement[] = []
     const clearDrag = (): void => {
       body.removeAttribute('data-drag')
-      body.classList.remove('mb-drag-push')
-      body.style.removeProperty('--mb-p')
+      for (const el of painted) { el.style.transform = ''; el.style.opacity = '' }
+      painted = []
+    }
+    /** 把进度画到三个元素上。与 singleColumn.css 里 .open / .push-* / .on 的终态是同一组算式的 p=0 / p=1。 */
+    const paint = (dr: Drag): void => {
+      const left = dr.side === 'left'
+      const pct = (n: number): string => `${(n * 100).toFixed(2)}%`
+      if (dr.panel) dr.panel.style.transform = `translateX(${pct(left ? dr.p - 1 : 1 - dr.p)})`
+      if (dr.main) dr.main.style.transform = dr.nav && left ? `translateX(${pct(dr.p)})` : `translateX(calc(${(left ? dr.p : -dr.p).toFixed(4)} * var(--mb-panelw)))`
+      if (dr.dim) dr.dim.style.opacity = dr.nav && left ? '0' : dr.p.toFixed(4)
     }
 
     const onStart = (e: TouchEvent): void => {
@@ -270,7 +291,7 @@ function useDrawerDrag(
       }
       const EDGE = 24
       const edgeStart = t.clientX < EDGE || t.clientX > window.innerWidth - EDGE
-      d = { x0: t.clientX, y0: t.clientY, ok: !exempt || edgeStart, side: null, opening: false, w: 0, lastX: t.clientX, lastT: Date.now(), vx: 0 }
+      d = { x0: t.clientX, y0: t.clientY, ok: !exempt || edgeStart, side: null, opening: false, w: 0, p: 0, panel: null, main: null, dim: null, nav: false, lastX: t.clientX, lastT: Date.now(), vx: 0 }
     }
 
     const onMove = (e: TouchEvent): void => {
@@ -295,15 +316,21 @@ function useDrawerDrag(
         const panel = body.querySelector<HTMLElement>(`.mb-drawer--${d.side}`)
         d.w = panel?.getBoundingClientRect().width ?? 0
         if (!d.w) { d = null; return } // 面板还没挂上(该侧没有内容)→ 不拖
+        clearDrag() // 上一次松手留给下一帧清的内联样式:现在就清,别和这一次的叠在一起
+        d.panel = panel
+        d.main = envRef.current.wide ? null : body.querySelector<HTMLElement>(':scope > .mb-main') // 宽屏右抽屉不推 main
+        d.dim = body.querySelector<HTMLElement>(':scope > .mb-push-dim')
+        d.nav = !!body.closest('.mb-shell')?.hasAttribute('data-list-first')
+        painted = [d.panel, d.main, d.dim].filter((el): el is HTMLElement => !!el)
         body.dataset.drag = d.side
-        if (!envRef.current.wide) body.classList.add('mb-drag-push') // 宽屏右抽屉不推 main
       }
       const now = Date.now()
       if (now > d.lastT) d.vx = (t.clientX - d.lastX) / (now - d.lastT)
       d.lastX = t.clientX
       d.lastT = now
       const sign = d.side === 'left' ? 1 : -1
-      body.style.setProperty('--mb-p', clamp((d.opening ? 0 : 1) + (sign * dx) / d.w).toFixed(4))
+      d.p = clamp((d.opening ? 0 : 1) + (sign * dx) / d.w)
+      paint(d)
       e.preventDefault()
     }
 
@@ -312,7 +339,7 @@ function useDrawerDrag(
       d = null
       if (!cur || !cur.side) return
       const sign = cur.side === 'left' ? 1 : -1
-      const p = Number(body.style.getPropertyValue('--mb-p')) || 0
+      const p = cur.p
       const v = sign * cur.vx // 正 = 朝「开」的方向甩
       const wantOpen = v > FLING ? true : v < -FLING ? false : p > 0.5
       const ws = useWorkspace.getState()
@@ -340,6 +367,8 @@ function useDrawerDrag(
  *  setActiveSpace 会走 applyNamed / resetLayout 整体重建布局,leftVisible 跟着复位 → 抽屉自动收回;
  *  它是同步的,所以重建之后再开一次即可。新 Space 压根没有左栏内容时不开(免得弹出个空抽屉)。 */
 function switchSpaceKeepDrawer(id: string): void {
+  // 点的就是当前这个:不换 Space(抽屉本来就开着),只让一页式 Space 落回它那一页(同 enterSpace)。
+  if (id === useSpaceStore.getState().activeSpaceId) { landOnOnePage(); return }
   setActiveSpace(id)
   const ws = useWorkspace.getState()
   if (ws.leftVisible) return
@@ -370,7 +399,32 @@ function iconRev(icon: object | undefined): number {
 function landOnList(): void {
   if (listFirstNow() && !useWorkspace.getState().leftVisible) useWorkspace.getState().toggleSidebar('left')
 }
-setAfterLayoutHook(landOnList)
+/** 一页式 Space(types.ts 的 onePage,主页)的落点:它那一页到前台,多出来的标签关掉(旧布局里留下的、认不出主人
+ *  而开在这儿的)。别的 Space 是空操作。 */
+function landOnOnePage(): void {
+  const sp = getActiveSpace()
+  if (!sp?.onePage) return
+  // 先补再落:存下来的布局里可能压根没有那一页(整份都是别的视图)。调用方随后也会补(spaceRegistry.setActiveSpace),
+  // 但那时补回来的排在后台,前台还是别的视图。
+  useWorkspace.getState().ensurePinned()
+  const ws = useWorkspace.getState()
+  const { activate, close } = onePageLanding(sp, ws.mainLeaves, ws.activeMainId)
+  if (activate) ws.activateLeaf(activate)
+  for (const id of close) ws.closeLeaf(id, true)
+}
+/** 进 Space(冷启动还原 / 切进来 / 布局重置)之后的落点。 */
+function landOnEntry(): void { landOnOnePage(); landOnList() }
+/** 底栏 / 「全部 Space」面板上点一个 Space。点的就是当前这个:setActiveSpace 同 id 即返回,这里只让一页式 Space(主页)
+ *  落回它那一页 —— 人在主页里、前台却是别的东西时,点「主页」就该回到主页。 */
+function enterSpace(id: string): void {
+  if (id === useSpaceStore.getState().activeSpaceId) landOnOnePage()
+  else setActiveSpace(id)
+}
+// 人在一页式 Space 里开别的 Space 的视图:先带到那个 Space 去(见 spaceRegistry.redirectOpenFromOnePage)。
+setBeforeMainOpenHook(redirectOpenFromOnePage)
+/** 这个 Space 里有没有「新建标签页」:一页式 Space 没有(「⋯」、标签页面板两处的那一行都看它)。 */
+const tabsAllowed = (): boolean => !getActiveSpace()?.onePage
+setAfterLayoutHook(landOnEntry)
 
 /** 左抽屉底部常驻区:Space 切换条(原全局底栏移入)+ 账号卡与设置钮。
  *  账号/设置是 feature 层的 ribbon 注册项(rb-account / rb-settings),引擎按 id 取用不 import feature;
@@ -480,7 +534,7 @@ async function presentNativeTabs(tr: Tr): Promise<boolean> {
   })
   const out = await presentNativeMenu({
     title: tr('lcl.mobile.tabs'),
-    sections: [{ items }, { items: [{ id: 'new', label: tr('lcl.tab.new'), icon: Plus }] }],
+    sections: [{ items }, ...(tabsAllowed() ? [{ items: [{ id: 'new', label: tr('lcl.tab.new'), icon: Plus }] }] : [])],
   })
   if (!out.handled) return false
   const v = out.value
@@ -523,7 +577,7 @@ async function presentAllSpaces(tr: Tr): Promise<void> {
   const id = out.handled ? out.value?.id : undefined
   if (!id) return
   if (id === 'dock:edit') { void presentDockPicks(tr); return }
-  setActiveSpace(id.slice('space:'.length))
+  enterSpace(id.slice('space:'.length))
 }
 /** 选哪几个 Space 固定在 Dock:勾选即生效。原生答复是一次性的,所以每点一下按新状态重弹一次(同标签页那张)。 */
 async function presentDockPicks(tr: Tr): Promise<void> {
@@ -557,8 +611,8 @@ async function presentNativeMore(tr: Tr): Promise<boolean> {
   const out = await presentNativeMenu({
     title: tr('lcl.mobile.more'),
     sections: [
-      // 「新建标签页」:原生顶栏在只有一个标签页时不画计数钮(它本是这个动作的入口),所以这里常驻一行。
-      { items: [{ id: NEW_TAB, label: tr('lcl.tab.new'), icon: Plus }] },
+      // 「新建标签页」:原生顶栏在只有一个标签页时不画计数钮(它本是这个动作的入口),所以这里常驻一行。一页式 Space(主页)没有。
+      ...(tabsAllowed() ? [{ items: [{ id: NEW_TAB, label: tr('lcl.tab.new'), icon: Plus }] }] : []),
       ...(items.length ? [{ items: items.map((it) => ({ id: it.id, label: it.tooltip ? moreRowLabel(label(it.tooltip)) : it.id, icon: it.icon })) }] : []),
       ...groups.map((g) => ({
         ...(g.title ? { title: g.title } : {}),
@@ -595,7 +649,7 @@ function MoreSheet({ onClose }: { onClose: () => void }) {
         <div className="mb-sheet-grip" />
         {/* 原生顶栏只有一个标签页时不画计数钮(它本是「新建标签页」的入口)。原生「⋯」呈现不了(有带 component 的项 /
             宿主失败)才落到这张 Web 版,所以这里同样要有这一行;Web 顶栏自己的计数钮常在,不重复给。 */}
-        {nativeChrome && (
+        {nativeChrome && tabsAllowed() && (
           <button className="mb-sheet-row" data-act="new-tab" onClick={() => { onClose(); newMainTab() }}>
             <Plus size={20} />
             <span>{tr('lcl.tab.new')}</span>
@@ -676,9 +730,11 @@ function TabSheet({ onClose }: { onClose: () => void }) {
             </div>
           )
         })}
-        <button className="mb-sheet-row mb-tabrow-new" onClick={newTab}>
-          <Plus size={18} /> <span>{tr('lcl.tab.new')}</span>
-        </button>
+        {tabsAllowed() && (
+          <button className="mb-sheet-row mb-tabrow-new" onClick={newTab}>
+            <Plus size={18} /> <span>{tr('lcl.tab.new')}</span>
+          </button>
+        )}
       </div>
     </div>
   )
@@ -709,7 +765,7 @@ export const SingleColumnHost: React.FC<{ dark?: boolean; soft?: boolean; buildD
     // 冷启动先还原上次的标签 + 激活项(桌面是 WorkspaceHost.onReady 的 tryRestoreLayout,单列这边
     // 是三桶 leaf 的序列化);首启 / 整份不可用才构建当前 Space 的默认布局。
     if (ws.mainLeaves.length === 0 && !restoreSingleColumnLayout()) buildDefault?.()
-    landOnList() // 两级导航:冷启动落在列表层(还原成功那条路已由钩子落过,这里幂等)
+    landOnEntry() // 冷启动的落点(固定主视图 / 两级导航的列表层);还原成功那条路已由钩子落过,这里幂等
     ws.refreshTabs()
   }, [])
 
@@ -789,8 +845,8 @@ export const SingleColumnHost: React.FC<{ dark?: boolean; soft?: boolean; buildD
         search: () => extras?.search?.run(),
         title: () => extras?.title?.run?.(),
         spacesAll: () => { void presentAllSpaces(trRef.current) },
-        // 点当前那格是空操作(setActiveSpace 同 id 即返回);换 Space 后有列表层的由 afterLayout 钩子落过去。
-        space: setActiveSpace,
+        // 点当前那格不换 Space,只落回它的固定主视图(见 enterSpace);换 Space 后的落点由 afterLayout 钩子负责。
+        space: enterSpace,
         spaceLong: (id) => { const sp = useSpaceStore.getState().spaces.find((x) => x.id === id); if (sp) pinSpaceToHome(sp.id, label(sp.name)) },
       })
     }
@@ -867,8 +923,12 @@ export const SingleColumnHost: React.FC<{ dark?: boolean; soft?: boolean; buildD
     //    躲刘海是浮动胶囊自己的事(.mb-topbar 的 top、抽屉的 padding-top,见 singleColumn.css)。
     //    底部仍留 —— 底部 chrome 分散在各视图里,没法逐个保证自理,收窄爆炸半径。
     // data-native-chrome:原生顶栏在 WebView 之外占位,视图不再给胶囊让 --mb-top(见 singleColumn.css 末尾)。
-    // data-nav:两级导航生效时的当前层(list / detail),样式(singleColumn.css 末尾)与仪器都认它。
-    <div className="mb-shell" data-chrome={chromeOff ? 'off' : undefined} data-native-chrome={nativeChrome ? '' : undefined} data-space={activeSpaceId} data-nav={listFirst ? (leftVisible ? 'list' : 'detail') : undefined} style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}>
+    // data-nav:两级导航生效时的当前层(list / detail),代码与仪器认它。
+    // data-list-first:两级导航生效(不分哪一层)。**样式一律挂在它下面,别挂 [data-nav]**:浏览器按属性名失效,
+    //   data-nav 的值每次进出主区都在变,挂在它下面的规则(哪怕只写 [data-nav] 不看值)每次都要重新匹配 ——
+    //   其中带 `> :first-child` / `> svg` / `> button` 这类结尾的会把整页样式重算一遍(2026-10-11 实测 28–47ms,
+    //   手机上再乘几倍)。只有真要看层级的规则才写 [data-nav='list']。仪器:mobile `npm run emu:perf`。
+    <div className="mb-shell" data-chrome={chromeOff ? 'off' : undefined} data-native-chrome={nativeChrome ? '' : undefined} data-space={activeSpaceId} data-nav={listFirst ? (leftVisible ? 'list' : 'detail') : undefined} data-list-first={listFirst ? '' : undefined} style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}>
       {/* push 连贯式:左右抽屉都是 .mb-body 内的绝对定位面板,开侧把 main **原尺寸**推向另一边
           (translate 同一宽度,main 不缩放);dim 层盖在被推开的 main 上,点击/反向横滑收回。
           宽屏:左栏 docked 并排(sidecol),右栏滑入但不推 main。 */}

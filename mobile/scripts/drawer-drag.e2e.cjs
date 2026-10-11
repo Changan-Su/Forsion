@@ -95,10 +95,13 @@ async function main() {
       }
       const body = document.querySelector('.mb-body')
       const drawer = document.querySelector('.mb-drawer--left')
+      const w = drawer ? Math.round(drawer.getBoundingClientRect().width) : 0
       return {
         drag: body?.getAttribute('data-drag') ?? null,
-        p: body ? getComputedStyle(body).getPropertyValue('--mb-p').trim() : '',
-        w: drawer ? Math.round(drawer.getBoundingClientRect().width) : 0,
+        // 进度从面板的位移反推(0=关 1=全开)。2026-10-11 之前读的是 .mb-body 上的 --mb-p;进度现在直接写成
+        // 面板 / 主区 / 遮罩的内联样式(那个会继承的自定义属性每帧让整棵子树重算样式)。
+        p: w ? String(Math.round((1 + tx(drawer) / w) * 1000) / 1000) : '',
+        w,
         drawerTx: tx(drawer),
         mainTx: tx(document.querySelector('.mb-main')),
         dim: Number(getComputedStyle(document.querySelector('.mb-push-dim')).opacity),
@@ -125,7 +128,7 @@ async function main() {
     await move(30, Y)               // 先越过方向锁定阈值
     await move(Math.round(W * 0.5), Y)
     const mid = await probe()
-    ok('1a 拖到一半时 data-drag 已挂上且 --mb-p 落在 (0,1) 之间',
+    ok('1a 拖到一半时 data-drag 已挂上且进度落在 (0,1) 之间',
       mid.drag === 'left' && Number(mid.p) > 0.2 && Number(mid.p) < 0.9, JSON.stringify({ drag: mid.drag, p: mid.p }))
     ok('1b ⚠️ 真有中间态:抽屉既不在关位(-W)也不在开位(0)',
       mid.drawerTx < -8 && mid.drawerTx > -(W - 8), `drawerTx=${mid.drawerTx} W=${W}`)

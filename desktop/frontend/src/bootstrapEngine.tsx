@@ -7,7 +7,7 @@ import { registerMiniViews } from './mini/miniViews'
 /** 真实引擎装配:注册视图(会话/对话)+ ribbon + 命令 + 默认布局。替代 demoBootstrap。 */
 import { MessageCircle, Folder, Plus, Command as CommandIcon, Moon, Languages, MessageSquare, Store, Settings, FileText, ListTree, Search, Inbox, Mail, PanelLeft, PanelRight, PanelBottom, Code2, Trophy, Activity, AppWindow, Sun, TextCursorInput } from 'lucide-react'
 import type { LucideIcon, LucideProps } from 'lucide-react'
-import { registerView, addCommand, addRibbonIcon, useRibbonStore, moveTo, openCommandPalette, useWorkspace, useSpaceStore, getActiveSpace, setActiveSpaceCold, setActiveSpace, adoptSpaceLayoutCold, seedSpaceWindowLayout, BOOT_ACTIVE_SPACE_ID, getView, label, recordNav, useNav, activeMainPanel, setEngineI18n, setRibbonActions, UI_MODE, WINDOW_SPACE_ID, supportsMiniPanel, LCL_MESSAGES } from '@lcl/engine'
+import { registerView, addCommand, addRibbonIcon, useRibbonStore, moveTo, openCommandPalette, useWorkspace, useSpaceStore, getActiveSpace, setActiveSpaceCold, setActiveSpace, openRedirectType, adoptSpaceLayoutCold, seedSpaceWindowLayout, BOOT_ACTIVE_SPACE_ID, getView, label, recordNav, useNav, activeMainPanel, setEngineI18n, setRibbonActions, UI_MODE, WINDOW_SPACE_ID, supportsMiniPanel, LCL_MESSAGES } from '@lcl/engine'
 import type { ViewProps } from '@lcl/engine'
 import { useEffect } from 'react'
 import { windowKind } from './windowKind'
@@ -249,6 +249,9 @@ export function installEngine(): void {
   const spaceSessions = new Map<string, string | null>()
   useSpaceStore.subscribe((s, p) => {
     if (s.activeSpaceId === p.activeSpaceId) return
+    // 手机主页(一页式 Space)里点开的会话是被带到 Tangu 去开的(引擎的 redirectOpenFromOnePage):此刻的 activeId 就是正要开的
+    // 那条(「新对话」则是 null),不能换成 Tangu 上次那条。主页自己没有会话,这一下不进账本。
+    if (openRedirectType() === 'chat') return
     const a = app()
     const alive = (id: string): boolean => a.sessions.some((x) => x.id === id) || a.archivedSessions.some((x) => x.id === id)
     // Space 账本只是恢复该 Space 上次的聊天焦点,不是一次用户「进入 Project」动作。
