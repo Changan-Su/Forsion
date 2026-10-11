@@ -523,10 +523,10 @@ export function ChatView({ leaf, params }: ViewProps) {
         <div className="t2-chat-body" ref={chatAreaRef}>
           {hasMessages && <FloatingToc scrollContainerRef={chatScrollRef} scanTrigger={shownMessages.length} />}
           <div className="t2-stream" ref={registerChatScroll}>
-            {/* data-has-messages:样式靠它认「流里画着消息」(短会话贴着输入区排,见 chat2.css)。只有总结卡、其余都不进列表的
-                会话不算 —— 与原来的 `:has(> .t2-asst, > .t2-userwrap)` 同一个口径。
+            {/* data-has-messages:样式靠它认「流里画着消息气泡」(短会话贴着输入区排,见 chat2.css)。只有总结卡 / 系统行、其余都不进列表的
+                会话不算 —— 对齐原来的 `:has(> .t2-asst, > .t2-userwrap)`。
                 别改回 `:has(…)` 再接 `> :first-child`:那种写法让页面上**任何地方**插入 / 移除一个元素都把整段对话的样式重算一遍。 */}
-            <div className="t2-stream-inner" data-has-messages={hasMessages && shownMessages.some((m) => !isHiddenInList(m)) ? '' : undefined}>
+            <div className="t2-stream-inner" data-has-messages={hasMessages && shownMessages.some((m) => m.role !== 'system' && !isHiddenInList(m)) ? '' : undefined}>
             {!hasMessages ? (
               // 空状态本身不在流里(见下面 .t2-chat-col 直属的那份):流只占输入框以上,
               // 在里面居中 = 视觉上偏高。骨架屏留在流里 —— 它替代的是消息,本就该从顶部排。

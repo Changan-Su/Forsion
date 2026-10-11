@@ -22,6 +22,7 @@
  * Finding a cause (each prints to the console, artefacts under OUT):
  *   MODE=trace [RATE=4] [ROW=2]   devtools.timeline trace → what every long task after the input was made of
  *   MODE=profile                  CPU profiles of the slow gestures + the restyle cost of single mutations
+ *   MODE=land [MSGS=short]        does the view stay at the bottom while a long chat mounts in batches? (frame by frame)
  *   MODE=exp EXP=<file.cjs>       your own measurements: a module exporting [{ label, js, n?, noForce?, poll? }]; each
  *                                 `js` is a function body run in the page with the chat open, style / layout time reported
  *   INJECT_CSS=<file.css>         try a stylesheet change on the installed build without rebuilding
@@ -42,7 +43,8 @@ const iso = (ago) => new Date(T0 - ago).toISOString()
 const sessions = Array.from({ length: 60 }, (_, i) => ({ id: `perf-s${i}`, title: `Perf session ${i} — a title long enough to wrap or clip`, summary: 'Last line of the conversation shown under the title', model_id: null, archived: false, emoji: null,
   agent_config: { execMode: 'host', approvalMode: 'auto-edit' }, project_path: null, project_name: null, projectless: true, created_at: iso(i * 3600e3 + 6e4), updated_at: iso(i * 3600e3 + 6e4) }))
 const REPLY = (i) => `## Section ${i}\n\nA paragraph of ordinary prose with **bold**, *emphasis*, \`inline code\` and a [link](https://example.com). It runs long enough to wrap over several lines on a phone, the way a real answer does when the model explains what it did and why.\n\n- first point with some detail\n- second point, a little longer than the first one\n  - a nested point\n- third point\n\n\`\`\`ts\nexport function sum(xs: number[]): number {\n  let total = 0\n  for (const x of xs) total += x\n  return total\n}\n\`\`\`\n\n| Name | Value | Note |\n|---|---|---|\n| alpha | 1 | first row |\n| beta | 2 | second row |\n| gamma | 3 | third row |\n\n1. step one\n2. step two\n3. step three\n\n> A quoted remark to close section ${i}.`
-const messages = Array.from({ length: 60 }, (_, i) => ({ id: `perf-m${i}`, role: i % 2 ? 'model' : 'user', content: i % 2 ? REPLY(i) : `Question ${i}: please explain the thing in some detail, with an example.`, reasoning: null, tool_calls: null, tool_results: null, attachments: null, timestamp: T0 - (60 - i) * 6e4, model_id: null, is_error: false }))
+const SHORT = process.env.MSGS === 'short'
+const messages = Array.from({ length: 60 }, (_, i) => ({ id: `perf-m${i}`, role: i % 2 ? 'model' : 'user', content: SHORT ? (i % 2 ? `ok ${i}` : `q ${i}`) : i % 2 ? REPLY(i) : `Question ${i}: please explain the thing in some detail, with an example.`, reasoning: null, tool_calls: null, tool_results: null, attachments: null, timestamp: T0 - (60 - i) * 6e4, model_id: null, is_error: false }))
 const MODELS = [{ id: 'perf-model', name: 'Perf Model', provider: 'E2E', source: 'forsion', modelType: 'llm' }]
 
 function installStub(cdp) {
@@ -197,6 +199,28 @@ function gfx() {
       }
     }
   }
+  if (process.env.MODE === 'land') {
+    // Where the view sits while a long chat mounts in batches (the last messages first, earlier ones above them when the
+    // browser is idle). Sampled every frame from the first message on: the distance to the bottom must stay ~0 — a frame
+    // away from it is a visible jump. MSGS=short is the case scroll anchoring cannot cover (nothing is scrolled yet).
+    for (const rate of RATES) {
+      if (!(await setRate(rate)) && rate !== 1) continue
+      await ensureList()
+      await cdp.eval(`(() => { const L = (window.__land = { on: true, s: [] }); const tick = (t) => { if (!L.on) return
+        const sc = [...document.querySelectorAll('.t2-stream')].find((e) => e.offsetParent)
+        const n = sc ? sc.querySelectorAll('.t2-stream-inner > .t2-asst, .t2-stream-inner > .t2-userwrap').length : 0
+        if (n) L.s.push([Math.round(t), n, Math.round(sc.scrollHeight - sc.scrollTop - sc.clientHeight), sc.scrollHeight > sc.clientHeight + 1 ? 1 : 0])
+        requestAnimationFrame(tick) }; requestAnimationFrame(tick); return true })()`)
+      await openChat(RATES.indexOf(rate)); await inDetail(); await h.pause(rate > 1 ? 5000 : 2500) // a row not opened yet: reopening the same chat mounts nothing
+      const smp = await cdp.eval('(() => { __land.on = false; return __land.s })()')
+      const steps = smp.filter((x, i) => !i || x[1] !== smp[i - 1][1]).map((x) => `${x[1]}@${x[0] - smp[0][0]}`)
+      const off = smp.filter((x) => x[2] > 8)
+      console.log(`${rate}x land${SHORT ? ' (short messages)' : ''}: ${smp.length} frames · messages on the page ${steps.join(' → ')} · frames away from the bottom ${off.length}${off.length ? ` (worst ${Math.max(...off.map((x) => x[2]))}px, first at +${off[0][0] - smp[0][0]}ms with ${off[0][1]} messages)` : ''} · ends ${smp.length ? smp[smp.length - 1][2] : '?'}px from the bottom, ${smp.length && smp[smp.length - 1][3] ? 'scrollable' : 'not scrollable'}`)
+      results.push({ name: 'land', rate, short: SHORT, steps, offFrames: off.length, worst: off.length ? Math.max(...off.map((x) => x[2])) : 0 })
+      h.screenshot(OUT, `land-${rate}x${SHORT ? '-short' : ''}`)
+      h.key(4); await h.pause(1200)
+    }
+  }
   if (process.env.MODE === 'trace') {
     // devtools.timeline trace of one gesture → what each long main-thread task was made of
     const rate = Number(process.env.RATE || 4)
@@ -292,7 +316,7 @@ function gfx() {
     // (3) is the Tracing domain reachable here (for style invalidation attribution)?
     try { await cdp.send('Tracing.start', { categories: 'devtools.timeline', transferMode: 'ReportEvents' }); await h.pause(300); await cdp.send('Tracing.end'); console.log('\nTracing: available on the page target') } catch (e) { console.log('\nTracing: not on the page target —', e.message) }
   }
-  for (const rate of (['profile', 'exp', 'trace'].includes(process.env.MODE) ? [] : RATES)) {
+  for (const rate of (['profile', 'exp', 'trace', 'land'].includes(process.env.MODE) ? [] : RATES)) {
     const throttled = await setRate(rate)
     if (!throttled && rate !== 1) continue
     await h.pause(400)
