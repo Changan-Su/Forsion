@@ -492,6 +492,8 @@ const api = {
   // P1-KF:本窗**生效**界面语言(i18n.tsx 四级链的结论)→ 主进程文案(托盘 / 系统通知 / 对话框)。单向,主进程只认 zh/en。
   reportUiLocale: (locale: 'zh' | 'en'): void => ipcRenderer.send(UI_LOCALE_CHANNEL, locale),
   closeSelf: (): void => ipcRenderer.send('window:closeSelf'),
+  /** Mini 卡片自绘缩放边:edge = n / s / e / w 的组合;start = 起手;null = 松手。位移由主进程读光标算。 */
+  miniResize: (edge: string | null, start?: boolean): void => ipcRenderer.send('window:miniResize', edge, start === true),
   cursorScreenPoint: (): { screenX: number; screenY: number } => ipcRenderer.sendSync('window:cursorScreenPoint'),
   // 跨窗撕拽:实时坐标(节流 send)+ 最终落点路由(invoke)+ 目标窗接收订阅(on)。
   dragUpdate: (screenX: number, screenY: number, view: { type: string; params?: Record<string, unknown> }): void =>

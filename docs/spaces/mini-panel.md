@@ -13,6 +13,8 @@ Mini Panel 是 Space 的扩展面板。通过 `⌘/Ctrl+Shift+M` 或命令面板
 - **Amadeus**：选择或新建笔记，就地编辑。
 - **ToDo List**：日历 Space 的待办适配，勾选任务、在有可写待办表时快速添加。任务数据仍在原笔记或多维表中。
 
+卡片默认 320×420。把鼠标移到卡片的任意一条边或一个角上，指针变成双向箭头后按住拖动即可改大小（最小 260×160，最大 640×900）；待办只有几条时可以把卡片收矮，不留大片空白。关掉再开会沿用上次的大小，退出应用后回到默认。
+
 只有提供专用适配的 Space 才出现在这里。插件也可提供适配，随父插件启停；插件还能直接打开自己的紧凑视图，不必创建完整 Space。Mini 有独立的 Space 状态，不改主窗口的启动空间，也不恢复旧版 Mini 的完整工作区布局。
 
 在 macOS 上，当前会话运行中的 Computer Use 开始操作外部应用、焦点离开 Forsion 时，会自动临时打开 Mini 显示同一会话，**无需事先开启 Mini Mode**。面板停在屏幕右上角、不跟随鼠标，也不抢焦点；Computer Use 的点击会穿过它落到被操控的应用上。觉得挡路时，把鼠标移到卡片上按住顶栏即可拖到别处。
@@ -24,6 +26,8 @@ Mini Panel 是 Space 的扩展面板。通过 `⌘/Ctrl+Shift+M` 或命令面板
 ## English
 
 Mini Panel is a compact extension of a Space. Open it with `Cmd/Ctrl+Shift+M` or the command palette. Switch between adapted Spaces in the header, and use **Show in main panel** to continue with the same conversation, note, or plugin item.
+
+The card opens at 320×420. Drag any edge or corner to resize it (260×160 to 640×900); the size is kept until you quit the app.
 
 Built-in adapters cover **Tangu**, **Amadeus**, and **ToDo List** (Calendar's compact surface). Plugins must explicitly supply a dedicated Mini view. Mini's Space selection is independent of the main window.
 

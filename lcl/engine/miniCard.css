@@ -98,6 +98,24 @@
   background: var(--bg, #fff);
 }
 
+/* 自绘缩放边:八个热区贴在卡片四周,压在顶栏拖拽区之上。角 8px 见方,边 4px 厚。 */
+.mini-card-edge {
+  position: absolute;
+  z-index: 50;
+  width: 8px;
+  height: 8px;
+  -webkit-app-region: no-drag;
+  touch-action: none;
+}
+.mini-card-edge[data-edge*='n'] { top: 0; }
+.mini-card-edge[data-edge*='s'] { bottom: 0; }
+.mini-card-edge[data-edge*='e'] { right: 0; }
+.mini-card-edge[data-edge*='w'] { left: 0; }
+.mini-card-edge[data-edge='n'], .mini-card-edge[data-edge='s'] { left: 8px; right: 8px; width: auto; height: 4px; cursor: ns-resize; }
+.mini-card-edge[data-edge='e'], .mini-card-edge[data-edge='w'] { top: 8px; bottom: 8px; width: 4px; height: auto; cursor: ew-resize; }
+.mini-card-edge[data-edge='ne'], .mini-card-edge[data-edge='sw'] { cursor: nesw-resize; }
+.mini-card-edge[data-edge='nw'], .mini-card-edge[data-edge='se'] { cursor: nwse-resize; }
+
 /* 点击内容空白关闭菜单。透明层只住在 chrome 下方,不会阻断顶部按钮之间的切换。 */
 .mini-card-dismiss {
   position: absolute;

@@ -99,7 +99,8 @@ function MiniPanelRoot() {
   }, [])
   useEffect(() => { if (window.amadeus) ensureAmadeusReady() }, [])
   useEffect(() => installFileDropGuard(), [])
-  return <MiniColumnHost buildDefault={buildMiniPanel} direct={direct?.view ? {
+  // 自动 Mini(?transient=1,Computer Use 的临时观察窗)大小固定;用户自己开的这张可以拖边改大小
+  return <MiniColumnHost buildDefault={buildMiniPanel} resizable={!new URLSearchParams(location.search).has('transient')} direct={direct?.view ? {
     title: direct.title,
     view: direct.view,
     mainView: direct.mainView ?? direct.view,

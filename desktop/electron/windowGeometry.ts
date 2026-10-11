@@ -2,6 +2,7 @@
  * 多窗口纯几何(无 electron 依赖 → node vitest 可测)。
  * - rectUnderPoint:跨窗拖拽落点命中测试(哪个窗口在屏幕点下)。
  * - nearestEdge / collapsedBounds / expandedBounds:mini 卡片贴边吸附折叠 ↔ 展开。
+ * - resizeFromEdge:mini 卡片自绘缩放边(透明无边框窗在 Windows 上没有系统缩放边)。
  * 折叠策略 = 不改尺寸,把窗口滑出工作区、只露 peek px 的把手(mouseenter 该把手即展开;
  * 保尺寸不 reflow → Mini Card 内容不抖)。expandedBounds 是 collapsedBounds 的逆(尺寸不变故可逆推)。
  */
@@ -61,4 +62,17 @@ export function pointInRect(x: number, y: number, r: Rect): boolean {
 /** 四周外扩 m px(迟滞/触发容差用)。 */
 export function growRect(r: Rect, m: number): Rect {
   return { x: r.x - m, y: r.y - m, width: r.width + 2 * m, height: r.height + 2 * m }
+}
+
+/** 拖 edge(n / s 与 e / w 的组合,如 'se')把 start 拉伸 (dx, dy):对边不动,尺寸夹在 [min, max]。 */
+export function resizeFromEdge(start: Rect, edge: string, dx: number, dy: number,
+  min: { width: number; height: number }, max: { width: number; height: number }): Rect {
+  const clamp = (v: number, lo: number, hi: number): number => Math.round(Math.min(hi, Math.max(lo, v)))
+  const width = clamp(start.width + (edge.includes('e') ? dx : edge.includes('w') ? -dx : 0), min.width, max.width)
+  const height = clamp(start.height + (edge.includes('s') ? dy : edge.includes('n') ? -dy : 0), min.height, max.height)
+  return {
+    x: edge.includes('w') ? start.x + start.width - width : start.x,
+    y: edge.includes('n') ? start.y + start.height - height : start.y,
+    width, height,
+  }
 }

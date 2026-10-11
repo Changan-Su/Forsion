@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { rectUnderPoint, nearestEdge, collapsedBounds, expandedBounds, visibleRect, pointInRect, growRect, type Rect, type Edge } from './windowGeometry'
+import { rectUnderPoint, nearestEdge, collapsedBounds, expandedBounds, visibleRect, pointInRect, growRect, resizeFromEdge, type Rect, type Edge } from './windowGeometry'
 
 const WA: Rect = { x: 0, y: 0, width: 1440, height: 900 }
 
@@ -97,5 +97,27 @@ describe('visibleRect / pointInRect / growRect (mini 悬停触发+迟滞)', () =
     const grown = growRect(card, 24)
     expect(pointInRect(card.x + card.width + 10, card.y + 10, grown)).toBe(true) // 出界 10<24 仍算在内
     expect(pointInRect(card.x + card.width + 40, card.y + 10, grown)).toBe(false) // 出界 40>24 才算离开
+  })
+})
+
+describe('resizeFromEdge (mini card resize edges)', () => {
+  const start: Rect = { x: 500, y: 100, width: 320, height: 420 }
+  const MIN = { width: 260, height: 160 }, MAX = { width: 640, height: 900 }
+  it('se: top-left stays, size follows the pointer', () => {
+    expect(resizeFromEdge(start, 'se', 40, -200, MIN, MAX)).toEqual({ x: 500, y: 100, width: 360, height: 220 })
+  })
+  it('nw: bottom-right stays', () => {
+    const r = resizeFromEdge(start, 'nw', -80, 60, MIN, MAX)
+    expect(r).toEqual({ x: 420, y: 160, width: 400, height: 360 })
+    expect([r.x + r.width, r.y + r.height]).toEqual([start.x + start.width, start.y + start.height])
+  })
+  it('a single edge moves one axis only', () => {
+    expect(resizeFromEdge(start, 's', 999, -100, MIN, MAX)).toEqual({ ...start, height: 320 })
+    expect(resizeFromEdge(start, 'w', 30, 999, MIN, MAX)).toEqual({ ...start, x: 530, width: 290 })
+  })
+  it('clamps to min / max and keeps the opposite edge anchored', () => {
+    expect(resizeFromEdge(start, 'se', -9999, -9999, MIN, MAX)).toEqual({ x: 500, y: 100, ...MIN })
+    const r = resizeFromEdge(start, 'nw', -9999, -9999, MIN, MAX)
+    expect(r).toEqual({ x: 820 - 640, y: 520 - 900, ...MAX })
   })
 })

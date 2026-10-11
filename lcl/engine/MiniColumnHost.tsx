@@ -12,10 +12,26 @@ import { useEngineI18n } from './i18nSeam'
 
 interface DirectMiniViewTarget { type: string; params?: Record<string, unknown> }
 
+/** 自绘缩放边:四条边 + 四个角。宿主窗口是透明无边框的,系统不给缩放边(Windows)。 */
+const EDGES = ['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw']
+/** 只报「哪条边、起手 / 拖动 / 松手」;位移由宿主(主进程)自己读光标算。 */
+const dragEdge = (e: React.PointerEvent<HTMLDivElement>): void => {
+  const el = e.currentTarget, edge = el.dataset.edge!
+  if (e.type === 'pointerdown') {
+    if (e.button !== 0) return
+    el.setPointerCapture(e.pointerId)
+    window.tangu?.miniResize?.(edge, true)
+  } else if (e.type === 'pointermove') {
+    if (el.hasPointerCapture(e.pointerId)) window.tangu?.miniResize?.(edge)
+  } else window.tangu?.miniResize?.(null)
+}
+
 export const MiniColumnHost: React.FC<{
   buildDefault: () => void
   direct?: { title?: string; view: DirectMiniViewTarget; mainView: DirectMiniViewTarget } | null
-}> = ({ buildDefault, direct }) => {
+  /** 用户可拖边改卡片大小(只有宿主认这扇窗时才真的动)。 */
+  resizable?: boolean
+}> = ({ buildDefault, direct, resizable }) => {
   const registered = useSpaceStore((s) => s.spaces)
   const activeId = useSpaceStore((s) => s.activeSpaceId)
   const [, refreshViews] = useReducer((n) => n + 1, 0)
@@ -93,6 +109,8 @@ export const MiniColumnHost: React.FC<{
           })}</div>
         </section>
       </>}
+      {resizable && EDGES.map((edge) => <div key={edge} className="mini-card-edge" data-edge={edge}
+        onPointerDown={dragEdge} onPointerMove={dragEdge} onLostPointerCapture={dragEdge} />)}
     </div>
   )
 }

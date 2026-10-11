@@ -142,7 +142,7 @@ async function main() {
       BrowserWindow.getFocusedWindow = () => null
       const w = BrowserWindow.getAllWindows().find((w) => w.webContents.getURL().includes('window=mini')), area = screen.getPrimaryDisplay().workArea
       w.setPosition(area.x + 40, area.y + 40)
-      globalThis.__miniCursor = { x: area.x + 430, y: area.y + 220 }; screen.getCursorScreenPoint = () => globalThis.__miniCursor
+      globalThis.__miniCursor = { x: area.x + 430, y: area.y + 220 }; screen.getCursorScreenPoint = () => ({ ...globalThis.__miniCursor }) // 同真接口:每次一个新对象
       globalThis.__miniIgnore = []; const set = w.setIgnoreMouseEvents.bind(w)
       w.setIgnoreMouseEvents = (v) => { globalThis.__miniIgnore.push(v); set(v) }
     })
@@ -163,6 +163,44 @@ async function main() {
     await pause(500)
     check('hit testing restored after Computer Use, still in place', await lastIgnore() === false && JSON.stringify(parked) === JSON.stringify(await bounds()))
     await app.evaluate(({ BrowserWindow }) => { BrowserWindow.getFocusedWindow = globalThis.__miniOriginalFocusedWindow })
+
+    // 拖边改大小:渲染层只报哪条边,位移由主进程读光标算(光标在上面已换成 __miniCursor)。
+    await switchTo('ToDo List'); await mini.waitForSelector('.mini-todo .amx-todo')
+    const dragEdge = async (edge, dx, dy) => {
+      const box = await mini.locator(`.mini-card-edge[data-edge="${edge}"]`).boundingBox()
+      await mini.mouse.move(box.x + box.width / 2, box.y + box.height / 2); await mini.mouse.down()
+      await app.evaluate((_, d) => { globalThis.__miniCursor.x += d.dx; globalThis.__miniCursor.y += d.dy }, { dx, dy })
+      await mini.mouse.move(box.x + box.width / 2 + 1, box.y + box.height / 2 + 1); await pause(150)
+    }
+    const fills = () => mini.evaluate(() => { const r = document.querySelector('.mini-card-shell').getBoundingClientRect(); return Math.abs(r.width - innerWidth) < 1 && Math.abs(r.height - innerHeight) < 1 })
+    const before = await bounds()
+    await win.evaluate(() => window.tangu.miniResize('se', true)); await pause(100)
+    check('only the Mini window itself can resize the card', JSON.stringify(before) === JSON.stringify(await bounds()))
+    await dragEdge('s', 0, -200)
+    const shorter = await bounds()
+    check('dragging the bottom edge shrinks the card in place', shorter.height === before.height - 200 && shorter.width === before.width && shorter.x === before.x && shorter.y === before.y, JSON.stringify(shorter))
+    check('content follows the new size', await fills())
+    await mini.screenshot({ path: path.join(shots, 'todo-resized.png') })
+    await mini.mouse.up(); await pause(100)
+    await app.evaluate(() => { globalThis.__miniCursor.y -= 100 }); await mini.mouse.move(60, 60); await pause(150)
+    check('releasing ends the resize', JSON.stringify(shorter) === JSON.stringify(await bounds()))
+    await dragEdge('nw', 9999, 9999); await mini.mouse.up()
+    const smallest = await bounds()
+    check('clamped to the minimum, opposite corner anchored', smallest.width === 260 && smallest.height === 160 && smallest.x + smallest.width === shorter.x + shorter.width && smallest.y + smallest.height === shorter.y + shorter.height, JSON.stringify(smallest))
+    await switchTo('Tangu'); await mini.waitForSelector('.mini-tangu .t2c-ta'); await pause(300)
+    check('no overflow at the minimum size', await fills() && await mini.evaluate(() => { const root = document.querySelector('.mini-card-shell'); return root.scrollWidth === root.clientWidth }))
+    await mini.screenshot({ path: path.join(shots, 'tangu-min.png') })
+    await dragEdge('e', 120, 0); await mini.mouse.up(); await dragEdge('s', 0, 140); await mini.mouse.up()
+    const kept = await bounds()
+    await mini.getByRole('button', { name: '关闭 Mini Panel', exact: true }).click()
+    for (let i = 0; i < 100 && app.windows().some((w) => w.url().includes('window=mini')); i++) await pause(50)
+    await win.evaluate(() => window.tangu.openMini({ spaceId: 'calendar' }))
+    for (let i = 0; i < 200; i++) { mini = app.windows().find((w) => w.url().includes('window=mini')); if (mini) break; await pause(50) }
+    mini.on('pageerror', (e) => errors.push(`mini: ${e.message}`))
+    await mini.waitForSelector('.mini-todo .amx-todo', { timeout: 30000 })
+    const reopened = await bounds()
+    check('reopened card keeps the size the user chose', reopened.width === kept.width && reopened.height === kept.height && kept.width === 380 && kept.height === 300, JSON.stringify(reopened))
+    await mini.screenshot({ path: path.join(shots, 'todo-reopened.png') })
     await mini.getByRole('button', { name: '关闭 Mini Panel', exact: true }).click()
     check('no renderer errors', errors.length === 0, JSON.stringify(errors))
     console.log(`SCREENSHOTS ${shots}`)
