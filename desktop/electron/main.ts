@@ -1914,6 +1914,7 @@ function createMiniWindow(opts?: MiniOpenOptions): void {
   miniWindow.webContents.setWindowOpenHandler(openUrlHandler(miniWindow.webContents))
   hardenNav(miniWindow.webContents)
   miniWindow.webContents.on('did-finish-load', () => {
+    miniResizeFrom = null // 拖到一半页面重载:收不到松手,这里收场
     if (miniTarget && miniWindow && !miniWindow.isDestroyed()) miniWindow.webContents.send('window:miniTarget', miniTarget)
   })
   stopMiniPassThrough = startMiniPassThrough(miniWindow, {
@@ -2042,7 +2043,7 @@ function setMiniBounds(r: Rect, animate = true): void {
 
 // moved 连发 = 用户在拖窗;只在**停稳 200ms 后**才判贴边(拖拽过程中绝不折叠 → 能自由拖出)。
 function onMiniMoved(): void {
-  if (!miniWindow || suppressMiniMoved) return // 程序化移动不算用户拖拽
+  if (!miniWindow || suppressMiniMoved || miniResizeFrom) return // 程序化移动 / 拖缩放边不算用户拖窗
   miniDragging = true
   if (miniSettleTimer) clearTimeout(miniSettleTimer)
   miniSettleTimer = setTimeout(onMiniSettled, 200)
@@ -3682,8 +3683,14 @@ app.whenReady().then(async () => {
       if (process.platform === 'darwin') miniWindow.invalidateShadow() // 透明窗的投影按新轮廓重算(长大时新露出的那块在重绘前是透明的)
       return
     }
+    if (miniDock && !miniDock.expanded) return // 折叠在屏幕边上时不改大小:缩窄会把露在屏内的那条把手也带出去
     const cursor = screen.getCursorScreenPoint()
-    if (start === true || !miniResizeFrom) miniResizeFrom = { bounds: miniWindow.getBounds(), cursor }
+    if (start === true || !miniResizeFrom) {
+      // 刚拖到边上、还没判贴边就开始拉:那次判定作废,免得拉到一半被折叠
+      if (miniSettleTimer) { clearTimeout(miniSettleTimer); miniSettleTimer = null }
+      miniDragging = false
+      miniResizeFrom = { bounds: miniWindow.getBounds(), cursor }
+    }
     const from = miniResizeFrom
     const next = resizeFromEdge(from.bounds, edge, cursor.x - from.cursor.x, cursor.y - from.cursor.y, MINI_MIN, MINI_MAX)
     miniSize = { width: next.width, height: next.height }
