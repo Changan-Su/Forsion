@@ -125,6 +125,15 @@
  *                                                           #   改 toolRegistry 的收起 / COMPUTER_USE_UNAVAILABLE_REASON / agentLoop 起点判定后跑;负对照 = 引擎不收(须红)。
  *                                                           #   单独跑(与 novision / mcp / imgwindow 同跑时引擎里还有它们的假截图工具,主模型会去调,判不了)。
  *                                                           #   加 --cu-skill <真插件的 skills/computer-use/SKILL.md> 连配套技能一起带上并点名先读(那份技能写着「看不到观察工具就报告缺能力」)
+ *   npm run live:harness -- --only cuvision --cu-plugin <捆绑包目录>   # 只能看图的 App(10-11,反馈 55b984eb:微信朋友圈 25 轮没做成):真的 Computer Use 插件 × 真 helper ×
+ *                                                           #   一个无障碍树是空的自绘替身 App。任务只能靠看截图、按坐标点和滚来做;判据看替身 App 自己记的状态
+ *                                                           #   (点到橙色那个色块、列表真的滚到 row 30),再拿模型报的可见行号对实际可见的行。
+ *                                                           #   ⚠️会真的动鼠标、把替身 App 拿到前台几分钟,走 devlock、别碰键盘鼠标。
+ *                                                           #   ⚠️--cu-plugin 必须以装着的那份插件为底(只覆盖 tangu-plugins/computer-use/dist 与 skills/),
+ *                                                           #   否则引擎会把装着的 helper 换掉、系统授权作废;场景自己会核,不一致拒跑。
+ *                                                           #   替身 App 由插件仓的 npm run check:vision 编出来(缺省 $TMPDIR/cu-vision-fixture/CUFixture.app,--cu-fixture 可改);
+ *                                                           #   --cu-timeout <秒>(缺省 420);--cu-ask ordinal|fourth 改成按序号说要点哪个色块(缺省按颜色说;按序号时模型常少数一个,见 lib 里的注释)。改 Computer Use 的工具描述 / 结果文字 / 技能后跑;
+ *                                                           #   对照 = --cu-plugin 指向已发布的旧包(0.6.2 须红:按坐标的滚动到不了 App)。
  *   npm run live:harness -- --only inline                    # 正文生成式 AI(09-28,G3-07):POST /agent/inline 润色保事实 / 翻译 / 续写 / 选区里的注入不照做 / 缺字段 400 / 不落会话;改 services/inlineAi.ts 提示词后跑
  *   npm run live:harness -- --only pageinstructions         # 页级 Instructions:分页读带本页约束、下一页不继承、inline 约束与用户当前要求优先
  *   npm run live:harness -- --only tool,stalewrite           # G3-02(09-28):读后被用户改过的文件,write_file 须拒写 → 模型重读 → 终稿留着用户那行;改 write_file / read_file / 读后指纹(readState)后跑
@@ -170,6 +179,7 @@ import { humanRealLive } from './lib/human-real-live.mjs';
 import { dreamSeedLive } from './lib/dream-seed-live.mjs';
 import { accountLive, startFakeCloud } from './lib/account-live.mjs';
 import { plantPlugin, pluginDiagLive, registeredViews, STUB_SELFTEST } from './lib/plugin-diag-live.mjs';
+import { cuVisionSetup, cuVisionLive, defaultFixture as cuDefaultFixture } from './lib/cu-vision-live.mjs';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const entry = join(root, 'dist', 'standalone', 'main.js');
@@ -185,6 +195,7 @@ const KEYS = ['realtime', 'voiceclone', 'personas', 'rename', 'selfschedule', 's
 KEYS.push('signals');
 KEYS.push('novision');
 KEYS.push('cuoff');
+KEYS.push('cuvision');
 KEYS.push('dreamseed');
 KEYS.push('pageinstructions', 'dispatch');
 KEYS.push('storename', 'storeview');
@@ -221,6 +232,7 @@ OPT_IN.add('imgwindow');
 OPT_IN.add('viewimage');
 OPT_IN.add('novision'); // --only novision:主模型没有图像输入时的转写状态与送达(一个 run + 一次转写)
 OPT_IN.add('cuoff'); // --only cuoff:主模型看不到图 → Computer Use 不可用并告诉用户(一个 run)
+OPT_IN.add('cuvision'); // --only cuvision:只能看图的 App,真插件 + 真 helper + 替身 App(一个 run,会动真鼠标;要 --cu-plugin)
 OPT_IN.add('dreamseed');
 OPT_IN.add('projdedupe'); // --only projdedupe:项目记忆换了说法的重复(真模型 + 后台判官,约 20 次调用)
 OPT_IN.add('projteam'); // --only projteam:项目记忆在团队会话里(三个两人团队各一轮)
@@ -854,6 +866,8 @@ if (ONLY.has('dispatch')) {
   if (!bundle || !existsSync(join(bundle, 'tangu-plugins/dispatch-core/dist/index.mjs'))) throw new Error('--dispatch-plugin must point to a built Dispatch bundle');
   cpSync(bundle, join(shared, 'plugins/forsion-plugin-dispatch'), {recursive:true, filter: p => !p.split('/').some(x=>['.git','node_modules','artifacts'].includes(x))});
 }
+const CU_FIXTURE = opt('cu-fixture', cuDefaultFixture());
+if (ONLY.has('cuvision')) cuVisionSetup({ bundle: opt('cu-plugin', ''), fixture: CU_FIXTURE, shared });
 
 // selfschedule:隔离的 Amadeus 笔记库(一个带 calendarDate 列的日历,一行既有事件)。不设 FORSION_AMADEUS_VAULT 引擎会落到
 // 开发机真实的 ~/Forsion/Amadeus —— 负对照那一腿真会往里写事件,所以只在跑这个场景时注入,且一定指进产物目录。
@@ -2539,6 +2553,10 @@ try {
         `${withSkill ? `;带了配套技能,主模型读技能 ${ev.toolCalls.filter((n) => n === 'use_skill').length} 次` : ''}${ev.approvals ? `;代批 ${ev.approvals}` : ''}`,
       output: ev.content, ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls };
   });
+
+  // cuvision(10-11):只能看图的 App。说明、判据和那条「别把装着的 helper 换掉」的前置检查都在 lib/cu-vision-live.mjs。
+  await scenario('cuvision', 'cuvision 只能看图的 App:看截图、按坐标点和滚', () =>
+    cuVisionLive({ api, run, OUT, fixture: CU_FIXTURE, timeoutMs: Number(opt('cu-timeout', '420')) * 1000, ask: opt('cu-ask', 'color'), tokensOf, ttft }));
 
   // 审批档只归用户(09-27,设备能力 MCP 方案 P0 ②):旧版 manage_agent 收 approval_mode,模型一句话就能把 agent(含自己)调成
   // 完全放行,下次激活填进 run = 免审批。判据:用户预设的 readonly 原样保留;模型没调 manage_agent 记 inconclusive(没试 ≠ 挡住了)。
