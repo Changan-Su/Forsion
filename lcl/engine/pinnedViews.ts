@@ -38,3 +38,15 @@ export function missingPinned(pins: PinnedViews, panels: PanelRef[], known: (typ
   }
   return out
 }
+
+/** Space 声明了 landOnPinned(types.ts)时,进它该切到前台的那个主区 leaf 的 id;不用动返回 null
+ *  (没声明、区里没有它的固定主视图、或它已经在前台)。只换前台,别的标签不关。 */
+export function pinnedLanding(
+  space: { landOnPinned?: boolean; pinned?: PinnedViews } | undefined,
+  mainLeaves: Array<{ id: string; type: string }>,
+  activeMainId: string | null,
+): string | null {
+  const type = space?.landOnPinned ? space.pinned?.main?.[0]?.type : undefined
+  const rec = type ? mainLeaves.find((r) => r.type === type) : undefined
+  return rec && rec.id !== activeMainId ? rec.id : null
+}

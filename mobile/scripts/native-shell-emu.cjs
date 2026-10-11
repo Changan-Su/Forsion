@@ -1991,6 +1991,52 @@ const tabCountText = (list) => {
     assert.ok(resumed(), 'back left the app')
   })
 
+  // Home is Home (2026-10-11, reported on a phone: "I enter Home and it shows another workspace"). A view opened while
+  // standing on Home becomes a second tab of the Home Space; the Space's saved layout used to bring that tab back as the
+  // one in front on every entry, and a tap on Home's own dock cell did nothing. Now: entering Home and tapping its cell
+  // while in it put the homepage in front; the other tab stays in the tabs sheet. Both landings are looked at before the
+  // first failure is reported.
+  // Not here: a restart. The saved layout is kept per account, and this harness's account has no identity, so every
+  // boot starts from an empty layout (cloudAccountCache.syncCloudAccountCache) — a restart restores nothing to land on.
+  // A restart lands through the same hook as a Space switch (singleColumnStore.applySCBlob → afterLayout).
+  await check('home stays home: a tap on its own dock cell and coming back from another Space both show the homepage', async () => {
+    const bad = []
+    const st = async () => JSON.parse(await cdp.eval(`JSON.stringify({ space: document.querySelector('.mb-shell')?.dataset.space, view: ${dom.view} })`))
+    const tabs = () => Number(tabCountText(ui()) || '1')
+    const expectHome = async (when) => { const v = await st(); if (v.space !== 'home' || v.view !== 'homepage') bad.push(`${when}: ${JSON.stringify(v)}`) }
+    const otherTab = async () => { // put Home's other tab in front (through the tabs sheet), unless it already is
+      if ((await st()).view !== 'homepage') return
+      await tapId('nativeChrome.tabs')
+      const rows = await waitSheet(true)
+      h.tapNode(h.byIdPrefix(rows, 'nativeSheet.item.tab:').find((n) => n.checked !== 'true'))
+      await waitSheet(false); await h.pause(800)
+    }
+    const onlyHome = async () => { // system back closes the tab in front; the homepage itself cannot be closed
+      await toSpace('home')
+      for (let i = 0; i < 4 && tabs() > 1; i++) { await otherTab(); h.key(4); await h.pause(1000) }
+      assert.equal(tabs(), 1, 'could not bring Home down to its one tab')
+    }
+    await onlyHome() // a run that failed half-way leaves its tab behind
+    await goHome()
+    await tapId('nativeChrome.more')
+    await tapId('nativeSheet.item.tab:new', await waitSheet(true))
+    await waitSheet(false); await h.pause(1000)
+    assert.deepEqual(await st(), { space: 'home', view: 'launcher' }, 'control: the new tab page opens inside Home')
+    await tapSpace('home'); await h.pause(900)
+    await expectHome('a tap on Home\'s dock cell while its other tab is in front')
+    assert.equal(tabs(), 2, 'the other tab was closed, not just put behind')
+    // a conversation in that tab: a view that belongs to another Space
+    await otherTab()
+    await tapEl(`[...document.querySelectorAll('.mb-main .nt-chip')].find((b) => b.textContent.includes('新会话'))`)
+    assert.ok(await h.waitPage(cdp, `(${dom.view}) === 'chat'`, 6000), 'control: the new tab page did not open a conversation')
+    assert.equal((await st()).space, 'home', 'control: the conversation opened inside Home')
+    await tapSpace('tangu'); await h.pause(1300)
+    await tapSpace('home'); await h.pause(1300)
+    await expectHome('back from another Space')
+    await onlyHome()
+    assert.deepEqual(bad, [], 'Home showed something else')
+  })
+
   await check('phone notes list: category chips instead of a search box, the vault under the title, search on the capsule, one main button above the dock', async () => {
     await toSpace('amadeus')
     const side = await cdp.eval('window.amadeusVaultMode.side')

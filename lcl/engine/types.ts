@@ -238,6 +238,11 @@ export interface SpaceDefinition {
    *  同类照旧就地换),进入 Space 时缺了就补。params = 补回时的重建参数。判定见 pinnedViews.ts。
    *  只管主区与左右栏;固定不等于常显,侧栏照常可以收起。 */
   pinned?: import('./pinnedViews').PinnedViews
+  /** 进这个 Space 先看到的永远是它的固定主视图(`pinned.main` 第一项):切进来、冷启动、人已经在里面时再点一次底栏上
+   *  它自己那格,都把固定主视图切到前面。开在它里面的别的标签留着(标签页面板里还在),只是不再当「上次停在这儿」。
+   *  只有手机的单列壳认(SingleColumnHost):那边没有一直看得见的标签栏,停在别的标签上再回来,看到的就是
+   *  「进了主页,里面却是别的 Space 的内容」,而且点主页那格没有反应(2026-10-11 用户实报)。桌面有标签栏,不认。 */
+  landOnPinned?: boolean
   /** 新建标签页(启动器)里这个 Space 那一格能开的视图:第一项 = 点格子开的,其余进展开菜单。**缺省 = pinned.main**。
    *  只有「主区默认视图不等于固定视图」的 Space 才写(配方 Space 的 layout.main;日历多带一个待办)。
    *  没带身份参数的 entity 视图(聊天 / 编辑器)和 aux 视图由启动器滤掉 —— 滤完没剩的 Space 不出格子。 */

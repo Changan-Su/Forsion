@@ -6,7 +6,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { useWorkspace, dropAllowed } from './dockviewStore'
 import { useWorkspace as useSingle } from './singleColumnStore'
-import { isPinned, isLastPinned, missingPinned, type PinnedViews } from './pinnedViews'
+import { isPinned, isLastPinned, missingPinned, pinnedLanding, type PinnedViews } from './pinnedViews'
 import { registerView, unregisterView } from './viewRegistry'
 import type { DropTarget } from './dropModel'
 import { resetSpaceLayouts, spaceLayoutsWereReset, useSpaceStore } from './spaceRegistry'
@@ -500,5 +500,59 @@ describe('固定 View:单列 store(移动端是独立重写的一份,漏接 = �
       expect(useSingle.getState().leftLeaves.map((r) => r.type)).toEqual(['listv'])
       expect(useSingle.getState().mainLeaves.some((r) => r.type === 'singlev')).toBe(true)
     } finally { unregisterView('singlev') }
+  })
+})
+
+// 「进主页看到的永远是主页」(2026-10-11 用户实报:手机上进主页,里面是别的 Space 的内容)。判定是 pinnedLanding;
+// 接线在 SingleColumnHost(进 Space 的落点钩子、底栏上点它自己那格),真机链路由 mobile 的 emu:nativeshell「home stays home」看。
+describe('pinnedLanding:声明了 landOnPinned 的 Space,进去先看到固定主视图', () => {
+  const home = { landOnPinned: true, pinned: { main: [{ type: 'homev', params: {} }] } as PinnedViews }
+  const leaves = [{ id: 'homev', type: 'homev' }, { id: 'chat#1', type: 'chat' }]
+
+  it('前台是别的标签 → 切回固定主视图;已经在前台、没声明、区里没有它 → 不动', () => {
+    expect(pinnedLanding(home, leaves, 'chat#1')).toBe('homev')
+    expect(pinnedLanding(home, leaves, 'homev')).toBeNull()
+    expect(pinnedLanding({ pinned: home.pinned }, leaves, 'chat#1')).toBeNull()
+    expect(pinnedLanding(home, [{ id: 'chat#1', type: 'chat' }], 'chat#1')).toBeNull()
+    expect(pinnedLanding(undefined, leaves, 'chat#1')).toBeNull()
+  })
+
+  it('真的单列 store:在固定主视图上开别的类型 → 多一个标签并到了前台;照判定切回去,那个标签还在', () => {
+    registerView({ type: 'homev', kind: 'page', displayName: 'Home', factory: () => null, singleton: true })
+    registerView({ type: 'otherv', kind: 'page', displayName: 'Other', factory: () => null })
+    try {
+      const ws = useSingle.getState()
+      ws.resetLayout()
+      ws.setPinned(home.pinned)
+      ws.openView('homev', {}, 'main')
+      ws.openView('otherv', {}, 'main')
+      const before = useSingle.getState()
+      expect(before.mainLeaves.map((r) => r.type)).toEqual(['homev', 'otherv'])
+      expect(before.mainLeaves.find((r) => r.id === before.activeMainId)?.type).toBe('otherv') // 这就是「主页里是别的内容」
+      const id = pinnedLanding(home, before.mainLeaves, before.activeMainId)
+      expect(id).toBe(before.mainLeaves[0].id)
+      ws.activateLeaf(id!)
+      const after = useSingle.getState()
+      expect(after.mainLeaves.find((r) => r.id === after.activeMainId)?.type).toBe('homev')
+      expect(after.mainLeaves.map((r) => r.type)).toEqual(['homev', 'otherv'])
+      expect(pinnedLanding(home, after.mainLeaves, after.activeMainId)).toBeNull()
+    } finally { useSingle.getState().setPinned(undefined); useSingle.getState().resetLayout(); unregisterView('homev'); unregisterView('otherv') }
+  })
+
+  it('布局里压根没有固定主视图(整份是别的视图):先补回来才有得切 —— 补回来的排在后台,不补就判不出落点', () => {
+    registerView({ type: 'homev', kind: 'page', displayName: 'Home', factory: () => null, singleton: true })
+    registerView({ type: 'otherv', kind: 'page', displayName: 'Other', factory: () => null })
+    try {
+      const ws = useSingle.getState()
+      ws.resetLayout()
+      ws.setPinned(undefined)
+      ws.openView('otherv', {}, 'main')
+      ws.setPinned(home.pinned)
+      expect(pinnedLanding(home, useSingle.getState().mainLeaves, useSingle.getState().activeMainId)).toBeNull() // 没有它:判不出
+      ws.ensurePinned()
+      const now = useSingle.getState()
+      expect(now.mainLeaves.find((r) => r.id === now.activeMainId)?.type).toBe('otherv') // 补回来了,但在后台
+      expect(pinnedLanding(home, now.mainLeaves, now.activeMainId)).toBe(now.mainLeaves.find((r) => r.type === 'homev')!.id)
+    } finally { useSingle.getState().setPinned(undefined); useSingle.getState().resetLayout(); unregisterView('homev'); unregisterView('otherv') }
   })
 })

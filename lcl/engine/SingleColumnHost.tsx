@@ -27,6 +27,7 @@ import { presentInlineExtension } from './extendView'
 import { NativeExtendView } from './nativeExtendView'
 import { useWorkspace, restoreSingleColumnLayout, presentDrawerExtension, setAfterLayoutHook } from './singleColumnStore'
 import { listFirstNow } from './listFirst'
+import { pinnedLanding } from './pinnedViews'
 import { Skeleton, ViewErrorBoundary, skeletonVariantOf } from './Skeleton'
 import './singleColumn.css'
 import { useEngineI18n } from './i18nSeam'
@@ -366,6 +367,8 @@ function useDrawerDrag(
  *  setActiveSpace 会走 applyNamed / resetLayout 整体重建布局,leftVisible 跟着复位 → 抽屉自动收回;
  *  它是同步的,所以重建之后再开一次即可。新 Space 压根没有左栏内容时不开(免得弹出个空抽屉)。 */
 function switchSpaceKeepDrawer(id: string): void {
+  // 点的就是当前这个:不换 Space(抽屉本来就开着),只落回它的固定主视图(同 enterSpace)。
+  if (id === useSpaceStore.getState().activeSpaceId) { landOnPinned(); return }
   setActiveSpace(id)
   const ws = useWorkspace.getState()
   if (ws.leftVisible) return
@@ -396,7 +399,27 @@ function iconRev(icon: object | undefined): number {
 function landOnList(): void {
   if (listFirstNow() && !useWorkspace.getState().leftVisible) useWorkspace.getState().toggleSidebar('left')
 }
-setAfterLayoutHook(landOnList)
+/** 落到固定主视图(Space 声明了 landOnPinned 才做,见 types.ts):存下来的布局里上次停在别的标签上也不认。
+ *  只换前台,不关标签;已经在前台是空操作。 */
+function landOnPinned(): void {
+  const sp = getActiveSpace()
+  if (!sp?.landOnPinned) return
+  // 先补再切:存下来的布局里可能压根没有它(整份都是别的视图)。调用方随后也会补(spaceRegistry.setActiveSpace),
+  // 但那时补回来的排在后台,前台还是别的视图。
+  useWorkspace.getState().ensurePinned()
+  const ws = useWorkspace.getState()
+  const id = pinnedLanding(sp, ws.mainLeaves, ws.activeMainId)
+  if (id) ws.activateLeaf(id)
+}
+/** 进 Space(冷启动还原 / 切进来 / 布局重置)之后的落点。 */
+function landOnEntry(): void { landOnPinned(); landOnList() }
+/** 底栏 / 「全部 Space」面板上点一个 Space。点的就是当前这个:setActiveSpace 同 id 即返回,这里只把声明了 landOnPinned 的
+ *  Space(主页)切回它的固定主视图 —— 人在主页里、前台却是别的标签时,点「主页」就该回到主页。 */
+function enterSpace(id: string): void {
+  if (id === useSpaceStore.getState().activeSpaceId) landOnPinned()
+  else setActiveSpace(id)
+}
+setAfterLayoutHook(landOnEntry)
 
 /** 左抽屉底部常驻区:Space 切换条(原全局底栏移入)+ 账号卡与设置钮。
  *  账号/设置是 feature 层的 ribbon 注册项(rb-account / rb-settings),引擎按 id 取用不 import feature;
@@ -549,7 +572,7 @@ async function presentAllSpaces(tr: Tr): Promise<void> {
   const id = out.handled ? out.value?.id : undefined
   if (!id) return
   if (id === 'dock:edit') { void presentDockPicks(tr); return }
-  setActiveSpace(id.slice('space:'.length))
+  enterSpace(id.slice('space:'.length))
 }
 /** 选哪几个 Space 固定在 Dock:勾选即生效。原生答复是一次性的,所以每点一下按新状态重弹一次(同标签页那张)。 */
 async function presentDockPicks(tr: Tr): Promise<void> {
@@ -735,7 +758,7 @@ export const SingleColumnHost: React.FC<{ dark?: boolean; soft?: boolean; buildD
     // 冷启动先还原上次的标签 + 激活项(桌面是 WorkspaceHost.onReady 的 tryRestoreLayout,单列这边
     // 是三桶 leaf 的序列化);首启 / 整份不可用才构建当前 Space 的默认布局。
     if (ws.mainLeaves.length === 0 && !restoreSingleColumnLayout()) buildDefault?.()
-    landOnList() // 两级导航:冷启动落在列表层(还原成功那条路已由钩子落过,这里幂等)
+    landOnEntry() // 冷启动的落点(固定主视图 / 两级导航的列表层);还原成功那条路已由钩子落过,这里幂等
     ws.refreshTabs()
   }, [])
 
@@ -815,8 +838,8 @@ export const SingleColumnHost: React.FC<{ dark?: boolean; soft?: boolean; buildD
         search: () => extras?.search?.run(),
         title: () => extras?.title?.run?.(),
         spacesAll: () => { void presentAllSpaces(trRef.current) },
-        // 点当前那格是空操作(setActiveSpace 同 id 即返回);换 Space 后有列表层的由 afterLayout 钩子落过去。
-        space: setActiveSpace,
+        // 点当前那格不换 Space,只落回它的固定主视图(见 enterSpace);换 Space 后的落点由 afterLayout 钩子负责。
+        space: enterSpace,
         spaceLong: (id) => { const sp = useSpaceStore.getState().spaces.find((x) => x.id === id); if (sp) pinSpaceToHome(sp.id, label(sp.name)) },
       })
     }
