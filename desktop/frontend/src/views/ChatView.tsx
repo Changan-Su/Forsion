@@ -15,7 +15,7 @@ import { openNewChat, openSession, rotateSolo } from '../sessionNav'
 import { TeamEditor } from '../components/TeamEditor'
 import { postMuseFeedback, saveAgentScheduleEntry } from '../services/backendService'
 import { runTaskCard } from './chat2/taskLanding'
-import { quoteInChatPanel } from './chat2/chatPanelQuote'
+import { NO_QUOTE_DRAFT, quoteAdded, quotesFor } from './chat2/quotes'
 import { askOriginOf, insertReplyToNote } from './chat2/insertToNote'
 import { amadeusAvailable } from '../features/runtime'
 import { resolveDeskPath } from '../stores/deskPlan'
@@ -41,7 +41,7 @@ import { AgentDesk, DeskCard } from './chat2/AgentDesk'
 import { HistorianStatus } from './chat2/HistorianStatus'
 import { TeamStatus } from './chat2/TeamDesk'
 import { ChildChatPanel, SubChatStatus } from './chat2/ChildChatPanel'
-import { openBtw } from './chat2/btwStore'
+import { openBtw, openBtwInSidebar } from './chat2/btwStore'
 import { useChildChat } from '../stores/childChatStore'
 import { TeamSummary } from './chat2/TeamSummary'
 import { useI18n } from '../i18n'
@@ -195,7 +195,10 @@ export function ChatView({ leaf, params }: ViewProps) {
   const jumpSetter = useRef<(show: boolean) => void>(() => {})
   const setShowJump = useCallback((show: boolean): void => jumpSetter.current(show), [])
   const [quoteButton, setQuoteButton] = useState<{ x: number; y: number; text: string } | null>(null)
-  const [quotedText, setQuotedText] = useState('')
+  // 输入框上方的引用卡,可挂多段;只在挂它们的那个会话里显示、发送(归属见 quotes.ts 的 QuoteDraft)
+  const [quoteDraft, setQuoteDraft] = useState(NO_QUOTE_DRAFT)
+  const quoteSid = activeId ?? null
+  const quotes = quotesFor(quoteDraft, quoteSid)
   const [refDrop, setRefDrop] = useState(false) // 工作区条目拖到聊天区上方(整块高亮)
   const childSession = useChildChat((state) => activeId ? state.sessions[activeId] : undefined)
   const activeSession = s.activeSession || childSession
@@ -219,9 +222,9 @@ export function ChatView({ leaf, params }: ViewProps) {
   useEffect(() => {
     const pending = s.pendingChatQuote
     if (!pending || pending.targetType !== leaf.type) return
-    setQuotedText(pending.text)
+    setQuoteDraft((prev) => quoteAdded(prev, quoteSid, pending.text))
     s.clearPendingChatQuote(pending.seq)
-  }, [leaf.type, s.pendingChatQuote, s.clearPendingChatQuote])
+  }, [leaf.type, quoteSid, s.pendingChatQuote, s.clearPendingChatQuote])
 
   const mvCfg: AgentConfig = withAmadeusWorkspace(activeId
     // 已有会话:配置未加载完(execMode 缺失)时按 project_path 兜底判 host/sandbox,避免加载窗口内
@@ -624,19 +627,20 @@ export function ChatView({ leaf, params }: ViewProps) {
                 className="t2-quote-action"
                 data-testid="selection-quote"
                 onClick={() => {
-                  setQuotedText(quoteButton.text)
+                  setQuoteDraft((prev) => quoteAdded(prev, quoteSid, quoteButton.text))
                   setQuoteButton(null)
                   window.getSelection()?.removeAllRanges()
                 }}
               >
                 <Quote size={13} /> {t('chat.action.quote')}
               </button>
-              {leaf.type !== 'chat-panel' && (
+              {/* 在侧栏提问 = 旁聊开在右侧栏:带着本会话上下文问,主对话里什么都不发(2026-10-11 起;此前是把引用丢给侧栏那个独立对话) */}
+              {leaf.type !== 'chat-panel' && activeId && (
                 <button
                   className="t2-quote-action"
                   data-testid="selection-ask-in-panel"
                   onClick={() => {
-                    quoteInChatPanel(quoteButton.text) // 与编辑器「问 Tangu」同一份交接(reveal 语义见该模块)
+                    openBtwInSidebar({ sessionId: activeId, title: activeSession?.title, quote: quoteButton.text, modelId: mvModelId || undefined })
                     setQuoteButton(null)
                     window.getSelection()?.removeAllRanges()
                   }}
@@ -810,8 +814,9 @@ export function ChatView({ leaf, params }: ViewProps) {
             return s.send(text, attachments, workspaceFiles, skillIds, mentions, activeId)
           }}
           onStop={() => s.stop(activeId)}
-          quotedText={quotedText}
-          onClearQuote={() => setQuotedText('')}
+          quotes={quotes}
+          onRemoveQuote={(index) => setQuoteDraft((prev) => ({ sid: quoteSid, list: quotesFor(prev, quoteSid).filter((_, i) => i !== index) }))}
+          onClearQuote={() => setQuoteDraft({ sid: quoteSid, list: [] })}
           // /btw [问题]:带本会话上下文旁聊(会话级浮窗);输入框挂着的引用一并带过去
           onBtw={activeId ? (question, quote) => openBtw({ sessionId: activeId, title: activeSession?.title, question, quote, modelId: mvModelId || undefined }) : undefined}
           // 引擎 context_info 报的窗口是真实预算口径(覆盖表/族兜底),优先于模型列表值——两边可能不一致

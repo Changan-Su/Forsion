@@ -29,10 +29,13 @@
 }
 .t2c-stop:hover { background: color-mix(in srgb, var(--danger, #e0564b) 22%, transparent); }
 
-/* 引用卡 */
-.t2c-quote { display: flex; gap: 8px; align-items: flex-start; margin-bottom: 8px; padding: 6px 10px; background: var(--overlay-light, rgba(127, 127, 127, 0.08)); border-left: 3px solid var(--accent-ink); border-radius: var(--radius-sm, 8px); }
-.t2c-quote-text { flex: 1; min-width: 0; font-size: var(--ui-font-caption, 11px); color: var(--text-muted); white-space: pre-wrap; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; }
-.t2c-quote-x { flex-shrink: 0; background: none; border: none; cursor: pointer; color: var(--text-faint, var(--text-muted)); padding: 2px; line-height: 0; }
+/* 引用卡:可以挂多段,每段一张;多了在这一格里滚,不把输入卡一路顶高 */
+.t2c-quotes { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; max-height: 172px; overflow-y: auto; }
+.t2c-quote { display: flex; gap: 8px; align-items: flex-start; flex: none; padding: 8px 8px 8px 10px; background: var(--overlay-light, rgba(127, 127, 127, 0.08)); border-radius: var(--radius-md, 10px); }
+.t2c-quote-mark { flex: none; margin-top: 2px; color: var(--accent-ink); }
+.t2c-quote-text { flex: 1; min-width: 0; font-size: var(--ui-font-meta, 12px); line-height: var(--ui-line-meta, 1.5); color: var(--text-muted); white-space: pre-wrap; overflow-wrap: anywhere; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; }
+.t2c-quote-x { flex: none; display: grid; place-items: center; width: 20px; height: 20px; background: none; border: none; border-radius: var(--radius-sm, 6px); cursor: pointer; color: var(--text-faint, var(--text-muted)); padding: 0; transition: background var(--duration-fast), color var(--duration-fast); }
+.t2c-quote-x:hover { background: var(--overlay-medium, rgba(127, 127, 127, 0.16)); color: var(--text); }
 
 .t2c-hint { font-size: var(--ui-font-caption, 11px); color: var(--danger, #e0564b); margin-bottom: 6px; }
 .t2c-chiprow { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }

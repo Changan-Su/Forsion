@@ -657,5 +657,6 @@
       { "id": "boats-note", "kind": "text", "title": "停船", "when": {"input": "pick", "equals": "boats"}, "markdown": "左边从中部到底全是船舷、缆绳和碎石，几乎没有一块平的底。两列图标都会和这些线条抢对比，最不适合。" },
       { "id": "credit", "kind": "sources", "resourceIds": ["src"] }
     ]
-  }
+  },
+  "nested": {"version": 1, "id": "nested-move", "title": "带图的区块整体下移", "inputs": [{"id": "note", "kind": "choice", "label": "说明", "initial": "off", "options": [{"id": "off", "label": "不显示"}, {"id": "on", "label": "显示"}]}], "resources": [{"id": "origin", "kind": "source", "url": "https://github.com/sachinchoolur/lightGallery", "title": "lightGallery 示例图库", "description": "演示图片的来源。此处只比较构图，不对拍摄地点作判断。"}, {"id": "jetty", "kind": "image", "url": "https://cdn.jsdelivr.net/gh/sachinchoolur/lightGallery@9813e97837fddca82e4734bcbf4b77b0cd227772/site/static/images/demo/1-480.jpg", "alt": "湖面与栈桥，中心引导线", "sourceId": "origin"}, {"id": "diagonal", "kind": "image", "url": "https://cdn.jsdelivr.net/gh/sachinchoolur/lightGallery@9813e97837fddca82e4734bcbf4b77b0cd227772/site/static/images/demo/4-480.jpg", "alt": "斜向延伸的栈桥", "sourceId": "origin"}], "blocks": [{"id": "pick-note", "kind": "controls", "inputIds": ["note"]}, {"id": "why", "kind": "text", "when": {"input": "note", "equals": "on"}, "markdown": "这一段出现时，下面那一排图整体往下让位。\n\n图跟着它所在的区块走，自己不另外挪。"}, {"id": "shots", "kind": "gallery", "title": "两张图", "resourceIds": ["jetty", "diagonal"]}]}
 }

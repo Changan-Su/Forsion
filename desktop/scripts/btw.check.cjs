@@ -1,6 +1,8 @@
 /** Real Electron:旁聊(/btw)= 会话级原生 Floating Panel。
  * 钉住:/btw 开浮窗且主对话里什么都不发;回答来自引擎旁聊端点、追问带上前一轮;切会话浮窗隐藏、切回再现(线程还在);
  * 划线「顺便问」复用同一扇窗并挂上引用;「引用到对话」把回答挂进主窗输入框;⌘; 快捷键;Esc 关窗。
+ * 划线「在侧栏提问」= 同一种旁聊开在右侧栏(不弹窗、不进主对话、跟着当前会话走);引用是卡片,可以挂多段、逐张移除,
+ * 已发消息开头的引用块还原成卡片(2026-10-11)。
  * npm run build && npm run check:btw
  * 全程打隔离 loopback stub(引擎旁聊端点按剧本回 SSE),不碰真账号、不烧模型额度。真模型那半 = tangu-agent `live:harness -- --only btw`。
  */
@@ -20,6 +22,8 @@ const SESSIONS = [
   { id: 'sess-main', title: 'Parser 重构', model_id: 'm1', created_at: now, updated_at: now, projectless: true },
 ]
 const MESSAGES = [
+  { id: 'u0', role: 'user', content: '> 第一段引用\n\n> 第二段引用\n> 还有第二行\n\n这两段是什么关系?', timestamp: now - 700 },
+  { id: 'a0', role: 'model', content: '它们说的是同一件事。', timestamp: now - 600 },
   { id: 'u1', role: 'user', content: '记住:项目代号是 AZURE-FALCON。', timestamp: now - 500 },
   { id: 'a1', role: 'model', content: '好的,代号 AZURE-FALCON 已记下。接下来重构解析器的词法阶段。', timestamp: now - 400 },
 ]
@@ -85,7 +89,9 @@ async function main() {
     await btw.locator('.btw-turn-a', { hasText: 'AZURE-FALCON' }).waitFor({ timeout: 15000 })
     check('回答来自引擎旁聊端点,问的是本会话', asides.length === 1 && asides[0].sessionId === 'sess-main' && asides[0].question === '代号是什么?' && asides[0].thread.length === 0)
     check('主对话里什么都没发(没有起 run,输入框已清空)', stub.seen.runs.length === 0 && (await input.inputValue()) === '')
-    check('浮窗保留完整会话名供标题提示', (await panel.locator('.floating-native-chrome > span').getAttribute('title')).includes('Parser 重构'))
+    // 78e57675 起内置浮窗的标题按界面语言现译成功能名(DESIGN「悬浮输入区」:标题栏只放简短功能名,会话名在内容头部,见下面 .btw-context 那条)。
+    // 原来这条断言等的是标题提示里带会话名,从那次起在 main 上一直是红的。
+    if (process.platform === 'darwin') check('浮窗标题栏只放功能名', (await panel.locator('.floating-native-chrome > span').getAttribute('title')) === '顺便问')
     const chrome = await panel.evaluate(() => {
       const header = document.querySelector('.floating-native-chrome')
       const title = header?.querySelector('span')
@@ -150,6 +156,68 @@ async function main() {
     await btw.locator('.btw-turn').nth(1).locator('[data-testid="btw-quote-to-chat"]').click()
     await win.locator('.t2c-quote-text', { hasText: 'NOCLAF-ERUZA' }).first().waitFor({ timeout: 10000 })
     check('「引用到对话」挂成主窗引用且草稿没被覆盖', (await input.inputValue()) === '我的草稿')
+
+    // ── 引用卡:再划一段点「引用」→ 两张卡并排挂着(不顶掉上一段),可以单独移除 ──
+    const pickReply = () => win.evaluate(() => {
+      const p = [...document.querySelectorAll('[data-chat-surface="chat"] .t2-content')].find((el) => el.textContent.includes('AZURE-FALCON 已记下'))
+      const stream = p?.closest('.t2-stream')
+      if (!p || !stream) return ''
+      const range = document.createRange()
+      range.selectNodeContents(p)
+      const sel = window.getSelection()
+      sel.removeAllRanges()
+      sel.addRange(range)
+      stream.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }))
+      return sel.toString().trim()
+    })
+    const mainQuotes = win.locator('[data-chat-surface="chat"] .t2c-quote')
+    await pickReply()
+    await win.locator('[data-testid="selection-quote"]').first().click()
+    await until(async () => (await mainQuotes.count()) === 2, 5000)
+    const cardTexts = await mainQuotes.locator('.t2c-quote-text').allTextContents()
+    check('再引用一段 → 输入框上方两张引用卡,先挂的那张还在', cardTexts.length === 2 && cardTexts[0].includes('NOCLAF-ERUZA') && cardTexts[1].includes('AZURE-FALCON'), JSON.stringify(cardTexts))
+    await win.screenshot({ path: path.join(shots, 'quote-cards.png') })
+    await mainQuotes.first().locator('.t2c-quote-x').click()
+    await until(async () => (await mainQuotes.count()) === 1, 5000)
+    check('单独移除一张,另一张留着', (await mainQuotes.locator('.t2c-quote-text').allTextContents()).join('|').includes('AZURE-FALCON') && (await mainQuotes.count()) === 1)
+    const bubble = await win.evaluate(() => {
+      const wrap = [...document.querySelectorAll('[data-chat-surface="chat"] .t2-user')].find((el) => el.textContent.includes('这两段是什么关系'))
+      const cards = [...(wrap?.querySelectorAll('.t2-user-quote') || [])].map((el) => el.textContent)
+      return { cards, body: [...(wrap?.childNodes || [])].filter((n) => n.nodeType === 3).map((n) => n.textContent).join('').trim(), raw: wrap?.textContent.includes('> ') }
+    })
+    check('已发消息开头的两段引用是两张卡,正文不再带「> 」', bubble.cards.length === 2 && bubble.cards[1].includes('还有第二行') && bubble.body === '这两段是什么关系?' && !bubble.raw, JSON.stringify(bubble))
+
+    // ── 划线「在侧栏提问」:旁聊开在右侧栏 —— 不新开窗、不进主对话,问的仍是本会话 ──
+    const winsBeforeSide = app.windows().length
+    const runsBeforeSide = stub.seen.runs.length
+    await pickReply()
+    await win.locator('[data-testid="selection-ask-in-panel"]').first().click()
+    const side = win.locator('.btw-panel[data-btw-session="sess-main"]')
+    await side.waitFor({ timeout: 10000 })
+    await side.locator('.btw-quote-chip').waitFor({ timeout: 5000 })
+    check('「在侧栏提问」在主窗右侧栏开出旁聊,没有新开窗', app.windows().length === winsBeforeSide && (await side.locator('.btw-quote-chip').textContent()).includes('AZURE-FALCON'))
+    check('选中的那段只进了侧栏旁聊,主对话的引用卡没变', (await mainQuotes.count()) === 1)
+    const sideBox = side.locator('.btw-input textarea')
+    const asidesBefore = asides.length
+    await sideBox.fill('这句是谁说的?')
+    await sideBox.press('Enter')
+    await side.locator('.btw-turn-a').first().waitFor({ timeout: 15000 })
+    const sideAsk = asides[asidesBefore]
+    check('侧栏里问的走旁聊端点、带着引用,主对话没有起 run', sideAsk?.sessionId === 'sess-main' && sideAsk.question === '这句是谁说的?' && sideAsk.quote?.includes('AZURE-FALCON') && stub.seen.runs.length === runsBeforeSide, JSON.stringify(sideAsk))
+    await win.screenshot({ path: path.join(shots, 'btw-sidebar.png') })
+    await sideBox.fill('还没发出去的一句')
+    await win.locator('text=另一条会话').first().click()
+    await win.locator('.btw-panel[data-btw-session="sess-other"]').waitFor({ timeout: 10000 })
+    check('切到别的会话 → 侧栏旁聊换成那个会话的(空的)', (await win.locator('.btw-panel[data-btw-session="sess-other"] .btw-turn').count()) === 0
+      && (await win.locator('.btw-panel[data-btw-session="sess-other"] .btw-input textarea').inputValue()) === '')
+    // 引用只属于挂它的那个会话:A 会话里挂着的那张卡,在 B 会话的输入框上方不显示(也就不会跟着 B 的消息发出去)
+    check('切到别的会话 → 主对话输入框上方没有上一个会话的引用卡', (await mainQuotes.count()) === 0)
+    await win.locator('text=Parser 重构').first().click()
+    await side.waitFor({ timeout: 10000 })
+    check('切回来 → 侧栏旁聊的线程和没发出去的草稿都还在', (await side.locator('.btw-turn').count()) === 1 && (await sideBox.inputValue()) === '还没发出去的一句')
+    check('切回来 → 这个会话的引用卡还在', (await mainQuotes.count()) === 1)
+    await sideBox.fill('')
+    await until(async () => (await btwVisible(app, 'btw:sess-main')) === true)
 
     // ── 上一问还在流时主窗又来一条 /btw:不能被吞(主窗输入框已清空),进旁聊输入框等着 ──
     await input.fill('/btw 慢一点的问题')

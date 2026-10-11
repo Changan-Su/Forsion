@@ -1027,6 +1027,16 @@
 .t2-user-refs:last-child { margin-bottom: 0; }
 .t2-user-refs .attach-chip { max-width: 240px; }
 
+/* 用户气泡开头的引用卡:输入框上方挂的那几段,发出后原样留在气泡里。只有 summary 的 details —— 平时收成四行,点开看全 */
+.t2-user-quotes { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; white-space: normal; }
+.t2-user-quotes:last-child { margin-bottom: 0; }
+.t2-user-quote { border-radius: var(--radius-md, 10px); background: color-mix(in srgb, var(--bg) 62%, transparent); }
+.t2-user-quote > summary { display: flex; gap: 8px; align-items: flex-start; padding: 8px 10px; list-style: none; cursor: pointer; border-radius: inherit; color: var(--text-muted); font-size: var(--ui-font-body, 13px); line-height: var(--ui-line-body, 1.55); }
+.t2-user-quote > summary::-webkit-details-marker { display: none; }
+.t2-user-quote > summary > svg { flex: none; margin-top: 3px; color: var(--accent-ink); }
+.t2-user-quote > summary > span { min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; }
+.t2-user-quote[open] > summary > span { display: block; }
+
 /* 流里给待批审批留的一行指路(卡本身在输入框上方的托盘里) */
 .t2-apv-pointer { display: flex; align-items: center; gap: 6px; font-size: var(--ui-font-meta, 12px); margin: 4px 0; }
 /* 挂起审批的结局(<approval_update> 落库行):每张一行。和打断标记一样是给模型的机器行,对人只是一行说明;输出在原工具卡里。 */

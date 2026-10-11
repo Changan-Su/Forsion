@@ -8,7 +8,7 @@ import { SelfUpdateReceipt } from '../../components/SelfUpdateReceipt'
  */
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type Ref } from 'react'
 import { Copy, RotateCcw, GitBranch, Pencil, ChevronRight, ChevronDown, Volume2, Square, Loader2, LogIn, Zap, History as HistoryIcon, FileCode2, MessageSquare, ShieldQuestion, CircleCheck, CircleX, CircleHelp } from 'lucide-react'
-import { FileInput } from 'lucide-react'
+import { FileInput, Quote } from 'lucide-react'
 import { useNoteInsertState } from './insertToNote'
 import * as api from '../../services/backendService'
 import type { UiMessage, TanguDesktopConfig, AgentConfig, StoredDesktopConfig, ToolEvent, InquiryRequest, SketchItem, LiveWait } from '../../types'
@@ -17,6 +17,7 @@ import { AnimatedCollapse } from '../../components/AnimatedUI'
 import { Markdown } from '../../components/Markdown'
 import { ChatWikiLink, WikiText } from '../../components/ChatWikiLink'
 import { RefChipView, splitLeadingRefs } from './RefChipView'
+import { splitLeadingQuotes } from './quotes'
 import { VoiceBubble } from '../../components/VoiceBubble'
 import { InlineFiles } from '../../components/InlineFiles'
 import { IntelligentUi } from '../../components/IntelligentUi'
@@ -440,8 +441,11 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
     const name = userName || t('chat.you')
     // 输入框「已选择」芯片发送时拼成正文第一行;气泡里还原成同一套芯片(U-11)。
     // 目录标题用剥掉引用后的正文;复制 / 编辑仍拿原始 msg.content(发的是什么就是什么)。
+    // 引用卡同理:紧跟在芯片行后面的那几段引用块还原成卡片(quotes.ts),正文从它们之后开始。
     const lead = splitLeadingRefs(msg.content)
-    const tocTitle = lead ? (lead.body.trim() || lead.refs.map((r) => r.name).join(' ')) : msg.content
+    const quoted = splitLeadingQuotes(lead ? lead.body : msg.content)
+    const body = quoted ? quoted.body : lead ? lead.body : msg.content
+    const tocTitle = lead || quoted ? (body.trim() || lead?.refs.map((r) => r.name).join(' ') || quoted?.quotes[0] || '') : msg.content
     const toggleRewind = (): void => {
       // Android:三档改由原生半屏呈现;没有原生宿主时照旧切换 Web 菜单。
       if (!rewindOpen) {
@@ -494,7 +498,17 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
                 ))}
               </div>
             )}
-            {lead ? (lead.body && <WikiText text={lead.body} />) : <WikiText text={msg.content} />}
+            {quoted && (
+              <div className="t2-user-quotes">
+                {quoted.quotes.map((quote, i) => (
+                  // 只有 summary 的 details:平时收成几行,点一下看全(与 Intelligent UI 的来源摘要同一做法)
+                  <details key={i} className="t2-user-quote">
+                    <summary><Quote size={13} aria-hidden /><span><WikiText text={quote} /></span></summary>
+                  </details>
+                ))}
+              </div>
+            )}
+            {lead || quoted ? (body && <WikiText text={body} />) : <WikiText text={msg.content} />}
           </div>
           <div className="t2-actions">
             <MsgTime at={msg.timestamp} />
