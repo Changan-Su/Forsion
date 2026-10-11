@@ -205,12 +205,18 @@ async function main() {
     const sideAsk = asides[asidesBefore]
     check('侧栏里问的走旁聊端点、带着引用,主对话没有起 run', sideAsk?.sessionId === 'sess-main' && sideAsk.question === '这句是谁说的?' && sideAsk.quote?.includes('AZURE-FALCON') && stub.seen.runs.length === runsBeforeSide, JSON.stringify(sideAsk))
     await win.screenshot({ path: path.join(shots, 'btw-sidebar.png') })
+    await sideBox.fill('还没发出去的一句')
     await win.locator('text=另一条会话').first().click()
     await win.locator('.btw-panel[data-btw-session="sess-other"]').waitFor({ timeout: 10000 })
-    check('切到别的会话 → 侧栏旁聊换成那个会话的(空的)', (await win.locator('.btw-panel[data-btw-session="sess-other"] .btw-turn').count()) === 0)
+    check('切到别的会话 → 侧栏旁聊换成那个会话的(空的)', (await win.locator('.btw-panel[data-btw-session="sess-other"] .btw-turn').count()) === 0
+      && (await win.locator('.btw-panel[data-btw-session="sess-other"] .btw-input textarea').inputValue()) === '')
+    // 引用只属于挂它的那个会话:A 会话里挂着的那张卡,在 B 会话的输入框上方不显示(也就不会跟着 B 的消息发出去)
+    check('切到别的会话 → 主对话输入框上方没有上一个会话的引用卡', (await mainQuotes.count()) === 0)
     await win.locator('text=Parser 重构').first().click()
     await side.waitFor({ timeout: 10000 })
-    check('切回来 → 侧栏旁聊的线程还在', (await side.locator('.btw-turn').count()) === 1)
+    check('切回来 → 侧栏旁聊的线程和没发出去的草稿都还在', (await side.locator('.btw-turn').count()) === 1 && (await sideBox.inputValue()) === '还没发出去的一句')
+    check('切回来 → 这个会话的引用卡还在', (await mainQuotes.count()) === 1)
+    await sideBox.fill('')
     await until(async () => (await btwVisible(app, 'btw:sess-main')) === true)
 
     // ── 上一问还在流时主窗又来一条 /btw:不能被吞(主窗输入框已清空),进旁聊输入框等着 ──

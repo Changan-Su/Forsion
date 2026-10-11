@@ -240,6 +240,13 @@ async function main() {
   // 没有后端消息，插一条生产类名的助手文本，再用真实 Selection + mouseup 走 ChatView 的选区逻辑。
   // 「在侧栏提问」2026-10-11 起是右侧栏的旁聊，需要一个会话 —— 这里没有后端也就没有会话，菜单里不给它；
   // 它的行为钉在 check:btw。这里钉的是：引用只落进划线的那个输入框，不被同时挂载的侧栏 ChatView 抢走。
+  // 先把侧栏对话开出来(Tangu 右栏的缺省配方里没有它,走产品自己的入口:命令面板「显示对话面板」),
+  // 两个输入框同时挂着,「不串」才有得验;下面第 28 条接着用这扇面板。
+  await win.keyboard.press(process.platform === 'darwin' ? 'Meta+k' : 'Control+k')
+  await win.locator('.cmd-input:visible').fill('显示对话面板')
+  await win.locator('.cmd-item', { hasText: '显示对话面板' }).first().click()
+  await win.locator('[data-chat-surface="chat-panel"] .t2c-ta').first().waitFor({ timeout: 10_000 }).catch(() => {})
+  await win.waitForTimeout(800)
   const selectedText = '现有其他未提交改动均保持未动。'
   const picked = await win.evaluate((text) => {
     const surface = document.querySelector('[data-chat-surface="chat"]')
@@ -292,25 +299,20 @@ async function main() {
     }
   })()`)
   check(
-    '30 「引用」挂成主对话输入框上方的一张引用卡，不串到侧栏对话，可用时聚焦输入框',
-    !!selectionHandoff && selectionHandoff.mainQuote === selectedText && selectionHandoff.mainCards === 1
+    '30 两个输入框都挂着时，「引用」只挂成主对话输入框上方的一张引用卡，不串到侧栏对话，可用时聚焦输入框',
+    !!selectionHandoff && selectionHandoff.panelMounted && selectionHandoff.mainQuote === selectedText && selectionHandoff.mainCards === 1
       && selectionHandoff.panelQuote === '' && (selectionHandoff.disabled || selectionHandoff.focused),
     JSON.stringify(selectionHandoff) + (selectionHandoff?.disabled ? '(无后端，textarea 按产品规则 disabled，无法获取焦点)' : ''),
   )
   await win.screenshot({ path: selectionPanelShot })
   await win.evaluate("document.querySelector('[data-selection-probe]')?.remove()")
-  // 引用卡摘掉再往下量:后面几条量的是输入卡的常态高度。(右栏这一步没有被打开,不用再收。)
+  // 引用卡摘掉再往下量:后面几条量的是输入卡的常态高度。
   await win.locator('[data-chat-surface="chat"] .t2c-quote-x').first().click().catch(() => {})
   await win.waitForTimeout(300)
 
   // ── 28 Tangu 右栏 = 同一正式会话的 ChatView 承载形态 ────────────────────────
   // 独立 type 只为绕开主区 `chat` singleton 冲突;DOM 身份钉成 chat-panel,业务内容仍由 ChatView 渲染。
-  // Tangu 右栏的缺省配方里没有对话面板,走产品自己的入口(命令面板「显示对话面板」)把它开出来。
-  // (2026-10-11 之前这一步靠上面「在侧栏提问」顺手开出来的面板,那个按钮现在开的是旁聊。)
-  await win.keyboard.press(process.platform === 'darwin' ? 'Meta+k' : 'Control+k')
-  await win.locator('.cmd-input:visible').fill('显示对话面板')
-  await win.locator('.cmd-item', { hasText: '显示对话面板' }).first().click()
-  await win.waitForTimeout(1600)
+  // 面板是上面 29-30 之前经命令面板开出来的(2026-10-11 之前靠「在侧栏提问」顺手开出来,那个按钮现在开的是旁聊)。
   const panelReuse = await win.evaluate(`(() => {
     const main = document.querySelector('[data-chat-surface="chat"]')
     const panel = document.querySelector('[data-chat-surface="chat-panel"]')

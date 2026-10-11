@@ -15,7 +15,7 @@ import { openNewChat, openSession, rotateSolo } from '../sessionNav'
 import { TeamEditor } from '../components/TeamEditor'
 import { postMuseFeedback, saveAgentScheduleEntry } from '../services/backendService'
 import { runTaskCard } from './chat2/taskLanding'
-import { addQuote } from './chat2/quotes'
+import { NO_QUOTE_DRAFT, quoteAdded, quotesFor } from './chat2/quotes'
 import { askOriginOf, insertReplyToNote } from './chat2/insertToNote'
 import { amadeusAvailable } from '../features/runtime'
 import { resolveDeskPath } from '../stores/deskPlan'
@@ -195,7 +195,10 @@ export function ChatView({ leaf, params }: ViewProps) {
   const jumpSetter = useRef<(show: boolean) => void>(() => {})
   const setShowJump = useCallback((show: boolean): void => jumpSetter.current(show), [])
   const [quoteButton, setQuoteButton] = useState<{ x: number; y: number; text: string } | null>(null)
-  const [quotes, setQuotes] = useState<string[]>([]) // 输入框上方的引用卡,可挂多段
+  // 输入框上方的引用卡,可挂多段;只在挂它们的那个会话里显示、发送(归属见 quotes.ts 的 QuoteDraft)
+  const [quoteDraft, setQuoteDraft] = useState(NO_QUOTE_DRAFT)
+  const quoteSid = activeId ?? null
+  const quotes = quotesFor(quoteDraft, quoteSid)
   const [refDrop, setRefDrop] = useState(false) // 工作区条目拖到聊天区上方(整块高亮)
   const childSession = useChildChat((state) => activeId ? state.sessions[activeId] : undefined)
   const activeSession = s.activeSession || childSession
@@ -219,9 +222,9 @@ export function ChatView({ leaf, params }: ViewProps) {
   useEffect(() => {
     const pending = s.pendingChatQuote
     if (!pending || pending.targetType !== leaf.type) return
-    setQuotes((prev) => addQuote(prev, pending.text))
+    setQuoteDraft((prev) => quoteAdded(prev, quoteSid, pending.text))
     s.clearPendingChatQuote(pending.seq)
-  }, [leaf.type, s.pendingChatQuote, s.clearPendingChatQuote])
+  }, [leaf.type, quoteSid, s.pendingChatQuote, s.clearPendingChatQuote])
 
   const mvCfg: AgentConfig = withAmadeusWorkspace(activeId
     // 已有会话:配置未加载完(execMode 缺失)时按 project_path 兜底判 host/sandbox,避免加载窗口内
@@ -624,7 +627,7 @@ export function ChatView({ leaf, params }: ViewProps) {
                 className="t2-quote-action"
                 data-testid="selection-quote"
                 onClick={() => {
-                  setQuotes((prev) => addQuote(prev, quoteButton.text))
+                  setQuoteDraft((prev) => quoteAdded(prev, quoteSid, quoteButton.text))
                   setQuoteButton(null)
                   window.getSelection()?.removeAllRanges()
                 }}
@@ -812,8 +815,8 @@ export function ChatView({ leaf, params }: ViewProps) {
           }}
           onStop={() => s.stop(activeId)}
           quotes={quotes}
-          onRemoveQuote={(index) => setQuotes((prev) => prev.filter((_, i) => i !== index))}
-          onClearQuote={() => setQuotes([])}
+          onRemoveQuote={(index) => setQuoteDraft((prev) => ({ sid: quoteSid, list: quotesFor(prev, quoteSid).filter((_, i) => i !== index) }))}
+          onClearQuote={() => setQuoteDraft({ sid: quoteSid, list: [] })}
           // /btw [问题]:带本会话上下文旁聊(会话级浮窗);输入框挂着的引用一并带过去
           onBtw={activeId ? (question, quote) => openBtw({ sessionId: activeId, title: activeSession?.title, question, quote, modelId: mvModelId || undefined }) : undefined}
           // 引擎 context_info 报的窗口是真实预算口径(覆盖表/族兜底),优先于模型列表值——两边可能不一致

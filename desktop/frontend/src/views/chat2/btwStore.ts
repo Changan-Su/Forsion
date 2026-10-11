@@ -93,6 +93,9 @@ interface BtwState {
   webOpen: BtwSeed | null
   /** 右侧栏那扇旁聊收到的最近一次指令(「在侧栏提问」带来的引用);面板按 nonce 只消费一次,也可能先于面板挂载。 */
   sideSeed: BtwSeed | null
+  /** 各会话旁聊输入区里还没发出去的东西(草稿 + 挂着的引用)。放 store 不放组件:侧栏 / Web 的面板随会话切换重挂,放组件里切走就丢。 */
+  compose: Record<string, { draft: string; quote?: string }>
+  setCompose(sessionId: string, patch: { draft?: string; quote?: string | undefined }): void
   ask(sessionId: string, question: string, quote?: string, modelId?: string): Promise<void>
   stop(sessionId: string): void
   clear(sessionId: string): void
@@ -103,6 +106,8 @@ export const useBtw = create<BtwState>((set, get) => ({
   threads: {},
   webOpen: null,
   sideSeed: null,
+  compose: {},
+  setCompose: (sessionId, patch) => set((s) => ({ compose: { ...s.compose, [sessionId]: { ...(s.compose[sessionId] ?? { draft: '' }), ...patch } } })),
 
   ask: async (sessionId, question, quote, modelId) => {
     if (!question.trim() || controllers.has(sessionId)) return // 一次一问:上一问还在流

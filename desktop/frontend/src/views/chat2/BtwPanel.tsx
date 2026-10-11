@@ -51,8 +51,10 @@ export function BtwPanel({ seed, onClose, onQuoted }: { seed: BtwSeed; onClose?:
   const sessionId = seed.sessionId
   const turns = useBtw((s) => s.threads[sessionId] || EMPTY)
   const busy = turns.some((turn) => turn.status === 'streaming')
-  const [draft, setDraft] = useState('')
-  const [quote, setQuote] = useState<string | undefined>()
+  const compose = useBtw((s) => s.compose[sessionId])
+  const draft = compose?.draft ?? '', quote = compose?.quote
+  const setDraft = (text: string): void => useBtw.getState().setCompose(sessionId, { draft: text })
+  const setQuote = (text: string | undefined): void => useBtw.getState().setCompose(sessionId, { quote: text })
   const taRef = useRef<HTMLTextAreaElement>(null)
   const bodyRef = useRef<HTMLDivElement>(null)
   const ask = (question: string, excerpt?: string): void => { void useBtw.getState().ask(sessionId, question, excerpt, seed.modelId) }

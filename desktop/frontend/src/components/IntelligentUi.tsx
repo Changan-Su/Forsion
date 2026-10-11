@@ -106,16 +106,23 @@ const segmented = (input: ChoiceInput): boolean => input.options.length <= 4 && 
  * instead of jumping: FLIP over the document's own blocks and pictures. What only moved slides from
  * where it was; what is new or changed width fades in. Rects are viewport pixels, transforms are not,
  * hence the CSS zoom divisor (the interface zoom setting). */
+const FLIP = 'iui-flip'
 function reflow(root: HTMLElement | null, apply: () => void): void {
   if (!root || typeof root.animate !== 'function' || window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return apply()
   const parts = (): HTMLElement[] => [...root.querySelectorAll<HTMLElement>('[data-flip]')]
+  // Where things are on screen now: mid-glide positions included, so a second click continues from there.
   const before = new Map(parts().map(el => [el.dataset.flip, el.getBoundingClientRect()]))
   flushSync(apply)
+  const after = parts()
+  // Final rects for everything before anything starts moving: a glide still running, or one just started on a
+  // block, would shift what the pictures inside it measure.
+  for (const el of after) for (const running of el.getAnimations()) if (running.id === FLIP) running.cancel()
+  const rects = new Map(after.map(el => [el, el.getBoundingClientRect()]))
   const tokens = getComputedStyle(root), zoom = (root as HTMLElement & { currentCSSZoom?: number }).currentCSSZoom || 1
-  const timing = { duration: parseFloat(tokens.getPropertyValue('--duration-slow')) * 1000 || 250, easing: tokens.getPropertyValue('--ease-out').trim() || 'ease-out' }
+  const timing = { id: FLIP, duration: parseFloat(tokens.getPropertyValue('--duration-slow')) * 1000 || 250, easing: tokens.getPropertyValue('--ease-out').trim() || 'ease-out' }
   const moved = new Map<HTMLElement, { x: number; y: number }>()
-  for (const el of parts()) {
-    const was = before.get(el.dataset.flip), now = el.getBoundingClientRect()
+  for (const el of after) {
+    const was = before.get(el.dataset.flip), now = rects.get(el)!
     if (!was || Math.abs(was.width - now.width) > 1) { el.animate([{ opacity: 0, transform: 'scale(.98)' }, { opacity: 1, transform: 'none' }], timing); continue }
     // A picture inside a block that is itself sliding already travels with it.
     const host = el.parentElement?.closest<HTMLElement>('[data-flip]'), carried = host && moved.get(host)

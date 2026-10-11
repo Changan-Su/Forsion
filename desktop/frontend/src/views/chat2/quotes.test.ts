@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { addQuote, composeQuotes, splitLeadingQuotes } from './quotes'
+import { NO_QUOTE_DRAFT, addQuote, composeQuotes, quoteAdded, quotesFor, splitLeadingQuotes } from './quotes'
 import { composeOutgoing } from './Composer2'
 import { parseAskOrigin } from './insertToNote'
 
@@ -19,6 +19,22 @@ describe('引用卡', () => {
   it('开头不是引用就不拆', () => {
     expect(splitLeadingQuotes('普通消息\n> 后面才引用')).toBeNull()
     expect(splitLeadingQuotes('')).toBeNull()
+  })
+
+  it('以大于号开头的正文不是引用', () => {
+    expect(splitLeadingQuotes('>= 10\n用这个比较')).toBeNull()
+    expect(splitLeadingQuotes('>> output.log')).toBeNull()
+    expect(splitLeadingQuotes('> 真引用\n\n>= 10 才算')).toEqual({ quotes: ['真引用'], body: '>= 10 才算' })
+  })
+
+  it('引用只属于挂它的那个会话:换了会话不显示、不跟着发,在新会话里再挂就只有新的', () => {
+    const inA = quoteAdded(quoteAdded(NO_QUOTE_DRAFT, 'A', '甲一'), 'A', '甲二')
+    expect(quotesFor(inA, 'A')).toEqual(['甲一', '甲二'])
+    expect(quotesFor(inA, 'B')).toEqual([])
+    expect(quotesFor(inA, null)).toEqual([])
+    const inB = quoteAdded(inA, 'B', '乙一')
+    expect(quotesFor(inB, 'B')).toEqual(['乙一'])
+    expect(quotesFor(inB, 'A')).toEqual([])
   })
 
   it('追加:空的不加,同一段不重复挂', () => {

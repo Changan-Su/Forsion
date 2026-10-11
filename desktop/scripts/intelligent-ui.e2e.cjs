@@ -134,7 +134,7 @@ async function main() {
     check('model action sends exactly one visible contextual prompt', stub.seen.runs.length === 2 && /当前选择/.test(stub.seen.runs[1].message))
     // Replay multimedia + linked research as persisted events, including a historical Sketch.
     const legacy = { id: 'legacy', role: 'model', content: '', timestamp: Date.now(), tool_calls: [{ id: 'sk-old', type: 'function', function: { name: 'sketch', arguments: JSON.stringify({ html: '<p>Legacy Sketch still renders</p>', title: 'Historical Sketch' }) } }], tool_results: [{ tool_call_id: 'sk-old', name: 'sketch', content: 'Sketch rendered.' }] }
-    const records = [record('a-r1', 'ui1', fixtures.dinner), record('media', 'ui-media', fixtures.media), record('pick', 'ui-pick', fixtures.pick), record('sources', 'ui-sources', fixtures.research), record('edge', 'ui-edge', fixtures.edge), record('repeat', 'ui-repeat', fixtures.repeat), record('four', 'ui-four', fixtures.four), legacy]
+    const records = [record('a-r1', 'ui1', fixtures.dinner), record('media', 'ui-media', fixtures.media), record('pick', 'ui-pick', fixtures.pick), record('sources', 'ui-sources', fixtures.research), record('edge', 'ui-edge', fixtures.edge), record('repeat', 'ui-repeat', fixtures.repeat), record('four', 'ui-four', fixtures.four), record('nested', 'ui-nested', fixtures.nested), legacy]
     if (evidence) for (const name of ['intelligentplan', 'intelligentmedia']) {
       const payload = JSON.parse(fs.readFileSync(path.join(evidence, `${name}-evidence.json`), 'utf8'))
       payload.documents.forEach((doc, i) => records.push(record(`${name}-${i}`, `${name}-${i}`, doc)))
@@ -185,6 +185,23 @@ async function main() {
     await reveal(win, pick); await win.screenshot({ path: path.join(OUT, 'pick-light.png') })
     await pick.getByRole('radio', { name: /岸边留白/ }).focus(); await win.keyboard.press('ArrowLeft'); await win.waitForTimeout(400)
     await win.screenshot({ path: path.join(OUT, 'pick-focus-light.png') })
+    // A block that moves down takes its pictures with it. Frozen at the first frame of the glide, every part that was
+    // already there must still sit exactly where it was: a picture measured after its block had started moving would
+    // be thrown off by the block's own shift (Codex review, 2026-10-11).
+    const nested = win.locator('.intelligent-ui[data-document-id="nested-move"]')
+    await reveal(win, nested)
+    await win.waitForFunction(() => { const imgs = [...document.querySelectorAll('[data-document-id="nested-move"] img')]; return imgs.length === 2 && imgs.every(i => i.complete && i.naturalWidth > 0) }, null, { timeout: 20000 })
+    // Positions relative to the first block: the chat may scroll as the answer grows, which moves everything alike.
+    const placed = el => { const o = el.querySelector('[data-flip]').getBoundingClientRect(); return Object.fromEntries([...el.querySelectorAll('[data-flip]')].map(p => { const r = p.getBoundingClientRect(); return [p.dataset.flip, [Math.round(r.left - o.left), Math.round(r.top - o.top)]] })) }
+    const beforeMove = await nested.evaluate(placed)
+    await nested.evaluate(el => el.style.setProperty('--duration-slow', '5s'))
+    await nested.getByRole('radio', { name: '显示', exact: true }).check()
+    await nested.evaluate(el => el.getAnimations({ subtree: true }).forEach(a => { if (a.id === 'iui-flip') { a.pause(); a.currentTime = 0 } }))
+    const atStart = await nested.evaluate(placed)
+    const drift = Object.keys(beforeMove).filter(k => !atStart[k] || Math.abs(beforeMove[k][0] - atStart[k][0]) > 1 || Math.abs(beforeMove[k][1] - atStart[k][1]) > 1)
+    if (drift.length) console.log('nested glide drift', JSON.stringify({ beforeMove, atStart }))
+    check('a block that moves down carries its pictures: the glide starts from where everything was', Object.keys(beforeMove).length === 4 && !!atStart['b:why'] && drift.length === 0)
+    await nested.evaluate(el => { el.getAnimations({ subtree: true }).forEach(a => { if (a.id === 'iui-flip') a.finish() }); el.style.removeProperty('--duration-slow') })
     // What GPT-6 Luna really wrote on 2026-10-09: the option pictures again in a gallery and in a comparison.
     // `.first()`: replaying that day's archive with --evidence adds the same document a second time.
     const repeat = win.locator('.intelligent-ui[data-document-id="cover-photo-selection"]').first()

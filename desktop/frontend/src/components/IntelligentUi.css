@@ -190,7 +190,12 @@
   .iui-check-rows label { min-height: 44px; }
   .intelligent-ui .iui-pick-tool[aria-expanded="false"] { opacity: 1; }
 }
+/* Forced colours repaint a transparent strike in the text colour: unticked rows must not look struck. */
+@media (forced-colors: active) { .iui-check-rows label:not([data-checked]) > span:not(.iui-quantity) { text-decoration: none; } }
 @media (prefers-reduced-motion: reduce) {
-  .intelligent-ui summary svg, .iui-choice label, .iui-choice label::after, .iui-pick-card, .iui-pick-card::before, .iui-pick-card::after, .intelligent-ui .iui-pick-tool, .iui-check-rows input, .iui-check-rows input::after, .iui-check-rows label > span, .iui-checklist progress::-webkit-progress-value, .intelligent-ui details::details-content, .iui-source > a > svg { transition: none; }
+  .intelligent-ui summary svg, .iui-choice label, .iui-choice label::after, .iui-pick-card, .iui-pick-card::before, .iui-pick-card::after, .intelligent-ui .iui-pick-tool, .iui-check-rows input, .iui-check-rows input::after, .iui-check-rows label > span, .iui-source > a > svg { transition: none; }
+  /* Each on its own: an engine that does not know one of these pseudo-elements drops the whole selector list it sits in. */
+  .iui-checklist progress::-webkit-progress-value { transition: none; }
+  .intelligent-ui details::details-content { transition: none; }
   .iui-skeleton > i, .intelligent-ui[data-streamed] .iui-block { animation: none; }
 }
