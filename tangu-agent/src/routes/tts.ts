@@ -20,6 +20,7 @@ import { Router } from 'express';
 import { authMiddleware, AuthRequest } from '../core/http.js';
 import { deps } from '../seams/runtime.js';
 import { dashScopeApiBase } from '../adapters/standalone/multiBrain.js';
+import { wellFormed } from '../llm/wellFormedJson.js';
 
 const MAX_TEXT = 8000; // provider 普遍 4k-10k 字符上限;超长静默截断(朗读场景够用)
 
@@ -49,7 +50,7 @@ router.post('/agent/tts', authMiddleware, async (req: AuthRequest, res) => {
   try {
     const out = await tts.synthesize({
       model,
-      text: text.slice(0, MAX_TEXT),
+      text: wellFormed(text.slice(0, MAX_TEXT)),
       voice: voice || undefined,
       speed: typeof speed === 'number' && speed > 0 ? Math.min(Math.max(speed, 0.5), 2) : undefined,
       signal: ac.signal,

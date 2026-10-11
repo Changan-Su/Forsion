@@ -15,6 +15,7 @@ import type { StreamOpts, StreamResult } from '../seams/cloudBrain.js';
 import { LlmError } from '../core/types.js';
 import { ACCOUNT_MARK, RUN_MARK } from './openaiCompat.js';
 import { withStreamIdle, type StreamIdleGuard } from './streamIdle.js';
+import { stringifyWellFormed } from './wellFormedJson.js';
 
 // —— 逆向所得常量(易碎,集中于此)——
 const BETA_HEADER = 'responses=experimental';
@@ -175,7 +176,7 @@ async function runOpenAiResponsesStream(opts: StreamOpts, guard: StreamIdleGuard
   const response = await fetch(`${baseUrl}/responses`, {
     method: 'POST',
     headers,
-    body: JSON.stringify(body),
+    body: stringifyWellFormed(body),
     signal: guard.signal,
   });
   // 取证:这个头**在不在**永远记一行(不记取值——它是路由凭据)。否则「上游根本没这个头」与

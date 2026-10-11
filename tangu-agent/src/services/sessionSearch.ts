@@ -17,6 +17,7 @@
 import { deps } from '../seams/runtime.js';
 import { DEFAULT_AGENT_SLUG } from '../core/tanguHome.js';
 import { currentDisplayAgentSlug } from '../seams/runContext.js';
+import { wellFormed } from '../llm/wellFormedJson.js';
 
 /** Runtime-only scope. Management routes omit it; model arguments must never supply it. */
 export interface SessionToolScope { agentSlug: string; }
@@ -63,7 +64,7 @@ export function likePattern(term: string): string {
 /** 空白折叠 + 超长截断(截断处补省略号)。 */
 export function clip(s: string, n: number): string {
   const flat = s.replace(/\s+/g, ' ').trim();
-  return flat.length > n ? flat.slice(0, n) + '…' : flat;
+  return flat.length > n ? wellFormed(flat.slice(0, n)) + '…' : flat;
 }
 
 /** updated_at 归一成 YYYY-MM-DD:sqlite 给 'YYYY-MM-DD HH:MM:SS' 字符串,PG 驱动给 Date。 */
@@ -103,7 +104,7 @@ export function snippetAround(content: string, term: string, span = 120): string
   const lead = Math.floor(span / 4);
   const start = Math.max(0, idx - lead);
   const end = Math.min(flat.length, idx + term.length + (span - lead));
-  return (start > 0 ? '…' : '') + flat.slice(start, end) + (end < flat.length ? '…' : '');
+  return (start > 0 ? '…' : '') + wellFormed(flat.slice(start, end)) + (end < flat.length ? '…' : '');
 }
 
 /** 命中的那条消息(桌面搜索面据此跳到消息;工具只用 snippet)。 */
