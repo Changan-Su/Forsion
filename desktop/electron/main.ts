@@ -1891,8 +1891,9 @@ function openAutoMini(sessionId: string): void {
 
 function createMiniWindow(opts?: MiniOpenOptions): void {
   miniTarget = opts
-  const { width, height } = miniSize
   const wa = screen.getPrimaryDisplay().workArea
+  // 记住的大小也要放得进这块屏(四周留 24px):伸出工作区的卡片一挪就会被判成贴边、折起来
+  const width = Math.min(miniSize.width, wa.width - 48), height = Math.min(miniSize.height, wa.height - 48)
   miniWindow = new BrowserWindow({
     width, height,
     x: wa.x + wa.width - width - 24,
@@ -3692,7 +3693,8 @@ app.whenReady().then(async () => {
       miniResizeFrom = { bounds: miniWindow.getBounds(), cursor }
     }
     const from = miniResizeFrom
-    const next = resizeFromEdge(from.bounds, edge, cursor.x - from.cursor.x, cursor.y - from.cursor.y, MINI_MIN, MINI_MAX)
+    const next = resizeFromEdge(from.bounds, edge, cursor.x - from.cursor.x, cursor.y - from.cursor.y, MINI_MIN, MINI_MAX,
+      screen.getDisplayMatching(from.bounds).workArea)
     miniSize = { width: next.width, height: next.height }
     setMiniBounds(next, false)
   })

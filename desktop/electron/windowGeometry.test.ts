@@ -120,4 +120,12 @@ describe('resizeFromEdge (mini card resize edges)', () => {
     const r = resizeFromEdge(start, 'nw', -9999, -9999, MIN, MAX)
     expect(r).toEqual({ x: 820 - 640, y: 520 - 900, ...MAX })
   })
+  it('within: the dragged edge stops at the work area, the other axis is untouched', () => {
+    const wa: Rect = { x: 0, y: 25, width: 1440, height: 800 } // 底边 825
+    expect(resizeFromEdge(start, 's', 0, 9999, MIN, MAX, wa)).toEqual({ ...start, height: 825 - 100 })
+    expect(resizeFromEdge(start, 'nw', -9999, -9999, MIN, MAX, wa)).toEqual({ x: 820 - 640, y: 25, width: 640, height: 520 - 25 })
+    const far: Rect = { ...start, x: 1300 } // 右边已经伸出工作区:只拖下边不动宽度
+    expect(resizeFromEdge(far, 's', 0, 50, MIN, MAX, wa).width).toBe(320)
+    expect(resizeFromEdge(far, 'e', 500, 0, MIN, MAX, wa).width).toBe(260) // 没有余地时也不小于最小值
+  })
 })

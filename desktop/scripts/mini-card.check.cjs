@@ -209,6 +209,12 @@ async function main() {
     await switchTo('Tangu'); await mini.waitForSelector('.mini-tangu .t2c-ta'); await pause(300)
     check('no overflow at the minimum size', await fills() && await mini.evaluate(() => { const root = document.querySelector('.mini-card-shell'); return root.scrollWidth === root.clientWidth }))
     await mini.screenshot({ path: path.join(shots, 'tangu-min.png') })
+    // 拉到头也不出工作区:伸到屏幕外的卡片一挪就会被判成贴边、折成一条
+    const area = await app.evaluate(({ screen }) => screen.getPrimaryDisplay().workArea)
+    await dragEdge('s', 0, 9999); await mini.mouse.up()
+    const tallest = await bounds()
+    check('the bottom edge cannot be dragged off the screen', tallest.height > 160 && tallest.y + tallest.height <= area.y + area.height, JSON.stringify({ area, tallest }))
+    await dragEdge('s', 0, -9999); await mini.mouse.up()
     await dragEdge('e', 120, 0); await mini.mouse.up(); await dragEdge('s', 0, 140); await mini.mouse.up()
     const kept = await bounds()
     await mini.getByRole('button', { name: '关闭 Mini Panel', exact: true }).click()

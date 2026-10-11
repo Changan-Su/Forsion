@@ -64,12 +64,16 @@ export function growRect(r: Rect, m: number): Rect {
   return { x: r.x - m, y: r.y - m, width: r.width + 2 * m, height: r.height + 2 * m }
 }
 
-/** 拖 edge(n / s 与 e / w 的组合,如 'se')把 start 拉伸 (dx, dy):对边不动,尺寸夹在 [min, max]。 */
+/** 拖 edge(n / s 与 e / w 的组合,如 'se')把 start 拉伸 (dx, dy):对边不动,只动被拖的那个轴,尺寸夹在 [min, max];
+ *  给了 within(工作区)时被拖的边不拉出它 —— 伸到屏幕外的卡片一挪就会被 nearestEdge 判成贴边、折起来。 */
 export function resizeFromEdge(start: Rect, edge: string, dx: number, dy: number,
-  min: { width: number; height: number }, max: { width: number; height: number }): Rect {
-  const clamp = (v: number, lo: number, hi: number): number => Math.round(Math.min(hi, Math.max(lo, v)))
-  const width = clamp(start.width + (edge.includes('e') ? dx : edge.includes('w') ? -dx : 0), min.width, max.width)
-  const height = clamp(start.height + (edge.includes('s') ? dy : edge.includes('n') ? -dy : 0), min.height, max.height)
+  min: { width: number; height: number }, max: { width: number; height: number }, within?: Rect): Rect {
+  const axis = (size: number, d: number, lo: number, hi: number, room: number): number =>
+    Math.round(Math.min(Math.max(lo, Math.min(hi, room)), Math.max(lo, size + d)))
+  const width = edge.includes('e') ? axis(start.width, dx, min.width, max.width, within ? within.x + within.width - start.x : Infinity)
+    : edge.includes('w') ? axis(start.width, -dx, min.width, max.width, within ? start.x + start.width - within.x : Infinity) : start.width
+  const height = edge.includes('s') ? axis(start.height, dy, min.height, max.height, within ? within.y + within.height - start.y : Infinity)
+    : edge.includes('n') ? axis(start.height, -dy, min.height, max.height, within ? start.y + start.height - within.y : Infinity) : start.height
   return {
     x: edge.includes('w') ? start.x + start.width - width : start.x,
     y: edge.includes('n') ? start.y + start.height - height : start.y,
