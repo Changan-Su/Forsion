@@ -236,9 +236,10 @@ async function main() {
     shapes ? `流宽 ${shapes.width}px;顶宽的形态:${shapes.bad.length ? shapes.bad.join('、') : '无'}` : 'no probe',
   )
 
-  // ── 29-30 主对话划线 → 在侧栏提问 ─────────────────────────────────────────
+  // ── 29-30 主对话划线 → 引用 ───────────────────────────────────────────────
   // 没有后端消息，插一条生产类名的助手文本，再用真实 Selection + mouseup 走 ChatView 的选区逻辑。
-  // 关键不只是「面板打开」：同一份引用只能落进 chat-panel，不能被同时挂载的主 ChatView 抢走。
+  // 「在侧栏提问」2026-10-11 起是右侧栏的旁聊，需要一个会话 —— 这里没有后端也就没有会话，菜单里不给它；
+  // 它的行为钉在 check:btw。这里钉的是：引用只落进划线的那个输入框，不被同时挂载的侧栏 ChatView 抢走。
   const selectedText = '现有其他未提交改动均保持未动。'
   const picked = await win.evaluate((text) => {
     const surface = document.querySelector('[data-chat-surface="chat"]')
@@ -260,7 +261,7 @@ async function main() {
     stream.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }))
     return selection.toString()
   }, selectedText)
-  const askButton = win.locator('[data-chat-surface="chat"] [data-testid="selection-ask-in-panel"]')
+  const askButton = win.locator('[data-chat-surface="chat"] [data-testid="selection-quote"]')
   await askButton.waitFor({ state: 'visible', timeout: 5000 }).catch(() => {})
   const selectionMenu = await win.evaluate(`(() => {
     const menu = document.querySelector('[data-chat-surface="chat"] .t2-quote-menu')
@@ -269,8 +270,8 @@ async function main() {
     return { text: menu.textContent.trim(), left: b.left, right: b.right, top: b.top, width: b.width }
   })()`)
   check(
-    '29 主对话划线后出现「引用 / 在侧栏提问」分段菜单',
-    picked === selectedText && !!selectionMenu && selectionMenu.text.includes('引用') && selectionMenu.text.includes('在侧栏提问')
+    '29 主对话划线后出现「引用」菜单；没有会话时不给「在侧栏提问」',
+    picked === selectedText && !!selectionMenu && selectionMenu.text.includes('引用') && !selectionMenu.text.includes('在侧栏提问')
       && selectionMenu.left >= 0 && selectionMenu.right <= (await win.evaluate('window.innerWidth')),
     JSON.stringify({ picked, selectionMenu }),
   )
@@ -281,29 +282,34 @@ async function main() {
     const main = document.querySelector('[data-chat-surface="chat"]')
     const panel = document.querySelector('[data-chat-surface="chat-panel"]')
     const quote = (root) => root?.querySelector('.t2c-quote-text')?.textContent?.trim() || ''
-    const textarea = panel?.querySelector('.t2c-ta')
     return {
-      panelWidth: panel?.getBoundingClientRect().width || 0,
+      panelMounted: !!panel,
       panelQuote: quote(panel),
       mainQuote: quote(main),
-      focused: textarea === document.activeElement,
-      disabled: !!textarea?.disabled,
+      mainCards: main?.querySelectorAll('.t2c-quote').length || 0,
+      focused: main?.querySelector('.t2c-ta') === document.activeElement,
+      disabled: !!main?.querySelector('.t2c-ta')?.disabled,
     }
   })()`)
   check(
-    '30 「在侧栏提问」展开 chat-panel，选中文字只进侧栏引用，可用时聚焦输入框',
-    !!selectionHandoff && selectionHandoff.panelWidth > 0 && selectionHandoff.panelQuote === selectedText
-      && selectionHandoff.mainQuote === '' && (selectionHandoff.disabled || selectionHandoff.focused),
+    '30 「引用」挂成主对话输入框上方的一张引用卡，不串到侧栏对话，可用时聚焦输入框',
+    !!selectionHandoff && selectionHandoff.mainQuote === selectedText && selectionHandoff.mainCards === 1
+      && selectionHandoff.panelQuote === '' && (selectionHandoff.disabled || selectionHandoff.focused),
     JSON.stringify(selectionHandoff) + (selectionHandoff?.disabled ? '(无后端，textarea 按产品规则 disabled，无法获取焦点)' : ''),
   )
   await win.screenshot({ path: selectionPanelShot })
   await win.evaluate("document.querySelector('[data-selection-probe]')?.remove()")
-  await win.click('.dv-edge-right')
-  await win.waitForTimeout(1200)
+  // 引用卡摘掉再往下量:后面几条量的是输入卡的常态高度。(右栏这一步没有被打开,不用再收。)
+  await win.locator('[data-chat-surface="chat"] .t2c-quote-x').first().click().catch(() => {})
+  await win.waitForTimeout(300)
 
   // ── 28 Tangu 右栏 = 同一正式会话的 ChatView 承载形态 ────────────────────────
   // 独立 type 只为绕开主区 `chat` singleton 冲突;DOM 身份钉成 chat-panel,业务内容仍由 ChatView 渲染。
-  await win.click('.dv-edge-right', { timeout: 10_000 })
+  // Tangu 右栏的缺省配方里没有对话面板,走产品自己的入口(命令面板「显示对话面板」)把它开出来。
+  // (2026-10-11 之前这一步靠上面「在侧栏提问」顺手开出来的面板,那个按钮现在开的是旁聊。)
+  await win.keyboard.press(process.platform === 'darwin' ? 'Meta+k' : 'Control+k')
+  await win.locator('.cmd-input:visible').fill('显示对话面板')
+  await win.locator('.cmd-item', { hasText: '显示对话面板' }).first().click()
   await win.waitForTimeout(1600)
   const panelReuse = await win.evaluate(`(() => {
     const main = document.querySelector('[data-chat-surface="chat"]')

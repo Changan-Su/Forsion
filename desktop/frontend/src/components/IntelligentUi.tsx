@@ -1,4 +1,5 @@
 import { useMemo, useRef, useState } from 'react'
+import { flushSync } from 'react-dom'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { Check, ChevronDown, Copy, ExternalLink, Maximize2, Minimize2, Minus, Plus, RotateCcw, Zap } from 'lucide-react'
@@ -56,12 +57,12 @@ function RichText({ text }: { text: string }): React.JSX.Element {
   }}>{text}</ReactMarkdown>
 }
 
-function Picture({ resource, sources, expanded, onExpand }: { resource: Extract<UIResource, { kind: 'image' }>; sources: Map<string, UIResource>; expanded: boolean; onExpand: (expanded: boolean) => void }): React.JSX.Element {
+function Picture({ resource, sources, expanded, onExpand, flip }: { resource: Extract<UIResource, { kind: 'image' }>; sources: Map<string, UIResource>; expanded: boolean; onExpand: (expanded: boolean) => void; flip: string }): React.JSX.Element {
   const { t } = useI18n()
   const [failed, setFailed] = useState(false)
   const [attempt, setAttempt] = useState(0)
   const source = resource.sourceId ? sources.get(resource.sourceId) : undefined
-  return <figure className="iui-picture" data-expanded={expanded || undefined}>
+  return <figure className="iui-picture" data-expanded={expanded || undefined} data-flip={flip}>
     {failed ? <div className="iui-image-error"><span>{resource.alt}</span><small>{t('iui.failedImage')}</small><button type="button" onClick={() => { setFailed(false); setAttempt(v => v + 1) }}>{t('iui.retry')}</button></div>
       : <button type="button" className="iui-image-toggle" aria-label={t(expanded ? 'iui.collapse' : 'iui.expand')} aria-expanded={expanded} onClick={() => onExpand(!expanded)}>
         <img key={`${resource.url}:${attempt}`} src={resource.url} alt={resource.alt} loading="lazy" referrerPolicy="no-referrer" onError={() => setFailed(true)} />
@@ -80,11 +81,11 @@ function Skeleton(): React.JSX.Element {
 }
 /** One selectable picture card. The radio owns selection and arrow keys; expanding the picture is a
  * separate corner button so looking closer never changes the choice. */
-function PickCard({ name, option, resource, source, selected, onSelect, expanded, onExpand }: { name: string; option: ChoiceInput['options'][number]; resource: ImageResource; source?: UIResource; selected: boolean; onSelect: () => void; expanded: boolean; onExpand: (expanded: boolean) => void }): React.JSX.Element {
+function PickCard({ name, option, resource, source, selected, onSelect, expanded, onExpand, flip }: { name: string; option: ChoiceInput['options'][number]; resource: ImageResource; source?: UIResource; selected: boolean; onSelect: () => void; expanded: boolean; onExpand: (expanded: boolean) => void; flip: string }): React.JSX.Element {
   const { t } = useI18n()
   const [failed, setFailed] = useState(false)
   const [attempt, setAttempt] = useState(0)
-  return <div className="iui-pick-card" data-selected={selected || undefined} data-expanded={expanded || undefined}>
+  return <div className="iui-pick-card" data-selected={selected || undefined} data-expanded={expanded || undefined} data-flip={flip}>
     <label>
       <input type="radio" name={name} value={option.id} checked={selected} onChange={onSelect} />
       {failed ? <span className="iui-image-error"><span>{resource.alt}</span><small>{t('iui.failedImage')}</small></span>
@@ -101,11 +102,36 @@ function PickCard({ name, option, resource, source, selected, onSelect, expanded
 const segmented = (input: ChoiceInput): boolean => input.options.length <= 4 && input.options.every(o => !o.description)
   && input.options.reduce((n, o) => n + [...o.label].reduce((w, ch) => w + (ch > '\u2e7f' ? 2 : 1), 0), 0) <= 36
 
+/** A change that moves things (a picture growing to full width, blocks appearing or leaving) glides
+ * instead of jumping: FLIP over the document's own blocks and pictures. What only moved slides from
+ * where it was; what is new or changed width fades in. Rects are viewport pixels, transforms are not,
+ * hence the CSS zoom divisor (the interface zoom setting). */
+function reflow(root: HTMLElement | null, apply: () => void): void {
+  if (!root || typeof root.animate !== 'function' || window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return apply()
+  const parts = (): HTMLElement[] => [...root.querySelectorAll<HTMLElement>('[data-flip]')]
+  const before = new Map(parts().map(el => [el.dataset.flip, el.getBoundingClientRect()]))
+  flushSync(apply)
+  const tokens = getComputedStyle(root), zoom = (root as HTMLElement & { currentCSSZoom?: number }).currentCSSZoom || 1
+  const timing = { duration: parseFloat(tokens.getPropertyValue('--duration-slow')) * 1000 || 250, easing: tokens.getPropertyValue('--ease-out').trim() || 'ease-out' }
+  const moved = new Map<HTMLElement, { x: number; y: number }>()
+  for (const el of parts()) {
+    const was = before.get(el.dataset.flip), now = el.getBoundingClientRect()
+    if (!was || Math.abs(was.width - now.width) > 1) { el.animate([{ opacity: 0, transform: 'scale(.98)' }, { opacity: 1, transform: 'none' }], timing); continue }
+    // A picture inside a block that is itself sliding already travels with it.
+    const host = el.parentElement?.closest<HTMLElement>('[data-flip]'), carried = host && moved.get(host)
+    const shift = { x: (was.left - now.left) / zoom, y: (was.top - now.top) / zoom }
+    moved.set(el, shift)
+    const x = shift.x - (carried?.x ?? 0), y = shift.y - (carried?.y ?? 0)
+    if (Math.abs(x) > .5 || Math.abs(y) > .5) el.animate([{ transform: `translate(${x}px, ${y}px)` }, { transform: 'none' }], timing)
+  }
+}
+
 function NativeDocument({ doc, complete, live, stateKey, onAsk }: { doc: UIDocument; complete: boolean; live: boolean; stateKey?: string; onAsk?: (text: string) => void }): React.JSX.Element {
   const { t } = useI18n()
   // Hydrate before the first paint. Model defaults are never written over the user's state.
   const [state, setState] = useState<UIUserState>(() => stateKey ? readUIState(stateKey) : emptyUIState())
   const [notice, setNotice] = useState('')
+  const root = useRef<HTMLElement>(null)
   // Blocks fade in only for a document that was seen arriving; replayed history stays still.
   const streamed = useRef(live).current
   const values = inputValues(doc, state)
@@ -126,12 +152,20 @@ function NativeDocument({ doc, complete, live, stateKey, onAsk }: { doc: UIDocum
     try { await navigator.clipboard.writeText(text); setNotice(t('iui.copied')) } catch { setNotice(t('iui.copyFailed')) }
   }
   const expand = (id: string, expanded: boolean): void => update(s => s.expanded[id] === expanded ? s : ({ ...s, expanded: { ...s.expanded, [id]: expanded } }))
+  // A picture changing size reflows its row and everything below it. Folds animate in CSS and keep using expand().
+  const zoom = (id: string, expanded: boolean): void => live ? expand(id, expanded) : reflow(root.current, () => expand(id, expanded))
   const draw = (block: UIBlock): React.ReactNode => {
     switch (block.kind) {
       case 'text': return <div className="iui-prose"><RichText text={block.markdown} /></div>
       case 'controls': return <div className="iui-controls">{block.inputIds.map(id => {
         const input = doc.inputs.find(i => i.id === id)!
-        const setValue = (value: string | number): void => update(s => ({ ...s, values: { ...s.values, [id]: value } }))
+        const setValue = (value: string | number): void => {
+          const apply = (): void => update(s => ({ ...s, values: { ...s.values, [id]: value } }))
+          // Only a pick that shows or hides blocks or list rows is a reflow; a plain selection stays a plain update.
+          const next = { ...values, [id]: value }
+          const reflows = !live && doc.blocks.some(b => visible(b.when, values) !== visible(b.when, next) || (b.kind === 'checklist' && b.items.some(i => visible(i.when, values) !== visible(i.when, next))))
+          if (reflows) reflow(root.current, apply); else apply()
+        }
         if (input.kind === 'number') return <div key={id} className="iui-number" role="group" aria-label={input.label}>
           <span>{input.label}</span><div className="iui-stepper">
             <button type="button" aria-label={`${input.label} −`} disabled={Number(values[id]) <= input.min} onClick={() => setValue(snapUIValue(Number(values[id]) - input.step, input))}><Minus size={16} /></button>
@@ -146,14 +180,14 @@ function NativeDocument({ doc, complete, live, stateKey, onAsk }: { doc: UIDocum
           const selected = values[id] === option.id, image = option.imageId && resources.get(option.imageId) as ImageResource
           // The source host stays on the card only when no sources block already lists that source.
           if (image) return <PickCard key={option.id} name={name} option={option} resource={image} source={image.sourceId && !listed.has(image.sourceId) ? resources.get(image.sourceId) : undefined} selected={selected} onSelect={() => setValue(option.id)}
-            expanded={!!state.expanded[uiExpansionKey('image', block.id, option.imageId)]} onExpand={value => expand(uiExpansionKey('image', block.id, option.imageId), value)} />
+            expanded={!!state.expanded[uiExpansionKey('image', block.id, option.imageId)]} onExpand={value => zoom(uiExpansionKey('image', block.id, option.imageId), value)} flip={`p:${block.id}:${option.imageId}`} />
           return <label key={option.id} data-selected={selected || undefined}>
             <input type="radio" name={name} value={option.id} checked={selected} onChange={() => setValue(option.id)} />
             <span><strong>{option.label}</strong>{option.description && <small>{option.description}</small>}</span>
           </label>
         })}</div></fieldset>
       })}</div>
-      case 'gallery': return <div className="iui-gallery">{block.resourceIds.filter(id => !optionImages.has(id)).map(id => <Picture key={id} resource={resources.get(id) as Extract<UIResource, { kind: 'image' }>} sources={resources} expanded={!!state.expanded[uiExpansionKey('image', block.id, id)]} onExpand={value => expand(uiExpansionKey('image', block.id, id), value)} />)}</div>
+      case 'gallery': return <div className="iui-gallery">{block.resourceIds.filter(id => !optionImages.has(id)).map(id => <Picture key={id} resource={resources.get(id) as Extract<UIResource, { kind: 'image' }>} sources={resources} expanded={!!state.expanded[uiExpansionKey('image', block.id, id)]} onExpand={value => zoom(uiExpansionKey('image', block.id, id), value)} flip={`p:${block.id}:${id}`} />)}</div>
       case 'sources': return <div className="iui-sources">{block.resourceIds.map(id => {
         const r = resources.get(id) as Extract<UIResource, { kind: 'source' }>
         // The summary itself is the two-line preview; opening it only lifts the clamp.
@@ -161,7 +195,7 @@ function NativeDocument({ doc, complete, live, stateKey, onAsk }: { doc: UIDocum
       })}</div>
       case 'app-card': return complete ? <IntelligentAppCard cardId={block.cardId} query={block.query} /> : live ? <Skeleton /> : <div className="iui-status">{t('iui.incomplete')}</div>
       case 'comparison': return <div className="iui-parallel iui-comparison" data-columns={Math.min(3, block.items.length)}>{block.items.map(item => <article key={item.id}>
-        {item.imageId && !optionImages.has(item.imageId) && <Picture resource={resources.get(item.imageId) as Extract<UIResource, { kind: 'image' }>} sources={resources} expanded={!!state.expanded[uiExpansionKey('image', block.id, item.imageId)]} onExpand={value => expand(uiExpansionKey('image', block.id, item.imageId), value)} />}
+        {item.imageId && !optionImages.has(item.imageId) && <Picture resource={resources.get(item.imageId) as Extract<UIResource, { kind: 'image' }>} sources={resources} expanded={!!state.expanded[uiExpansionKey('image', block.id, item.imageId)]} onExpand={value => zoom(uiExpansionKey('image', block.id, item.imageId), value)} flip={`p:${block.id}:${item.imageId}`} />}
         <strong>{item.title}</strong><p>{item.description}</p><ul>{item.facts.map((fact, i) => <li key={i}>{fact}</li>)}</ul>
       </article>)}</div>
       case 'checklist': {
@@ -191,9 +225,9 @@ function NativeDocument({ doc, complete, live, stateKey, onAsk }: { doc: UIDocum
         }}><Zap size={13} />{action.label}</button>)}</div>
     }
   }
-  return <section className="intelligent-ui" aria-label={doc.title} data-document-id={doc.id} data-complete={complete} data-streamed={streamed || undefined}>
+  return <section ref={root} className="intelligent-ui" aria-label={doc.title} data-document-id={doc.id} data-complete={complete} data-streamed={streamed || undefined}>
     <h3 className="iui-title">{doc.title}</h3>
-    {doc.blocks.filter(b => visible(b.when, values) && !(b.kind === 'gallery' && b.resourceIds.length && b.resourceIds.every(id => optionImages.has(id)))).map(block => <div key={block.id} className={`iui-block iui-block-${block.kind}`} data-block-id={block.id}>
+    {doc.blocks.filter(b => visible(b.when, values) && !(b.kind === 'gallery' && b.resourceIds.length && b.resourceIds.every(id => optionImages.has(id)))).map(block => <div key={block.id} className={`iui-block iui-block-${block.kind}`} data-block-id={block.id} data-flip={`b:${block.id}`}>
       {block.title && !OWN_TITLE.has(block.kind) && <h4>{block.title}</h4>}{draw(block)}
     </div>)}
     {!complete && (live ? <Skeleton /> : <div className="iui-status" role="status">{t('iui.incomplete')}</div>)}

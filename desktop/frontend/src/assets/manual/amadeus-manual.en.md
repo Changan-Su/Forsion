@@ -2689,7 +2689,7 @@ The first tab in the Amadeus Space's right sidebar is Tangu's "Chat panel". The 
 - **`@` delegates to an agent, it does not pick notes**: the menu header reads "Delegate to agent · runs as subagent". Notes always go through `[[`.
 - **Drag notes into the chat**: drag one row or a multi-selection from the note tree onto the chat area and it becomes a reference chip; the same drag onto the editor becomes a `[[wikilink]]` instead.
 - **Citations in the answer are clickable**: `[[…]]` in an assistant message renders as a citation chip covering notes, headings, block anchors, a PDF page, a moment in audio or video, a range of source lines, and past sessions. Hovering a note citation shows the preview card. Anything that cannot be resolved renders as grey unclickable text rather than erroring, and a bare filename matching more than one file deliberately refuses to guess.
-- **Select text inside a message**: two buttons float up, "Quote" and "Ask in side panel"; the second sends the selection to the docked chat panel.
+- **Select text inside a message**: three buttons float up, "Quote", "Ask in side panel" and "Ask aside". "Quote" adds a quote card above the input box; you can quote several passages, remove any one of them, and they stay cards in the message you send. "Ask in side panel" and "Ask aside" both ask a side question with this conversation as context, without adding to it or interrupting a running task: the first opens in the right sidebar and follows the current conversation, the second opens a floating window.
 
 | Boundary | Detail |
 |---|---|

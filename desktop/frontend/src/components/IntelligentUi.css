@@ -46,7 +46,9 @@
 .iui-choice label:hover { background: var(--bg-hover); }
 .iui-choice input { appearance: none; position: absolute; inset: 0; width: auto; height: auto; margin: 0; opacity: 0; cursor: pointer; }
 .iui-choice label[data-selected], .iui-pick-card[data-selected] { border-color: var(--accent); box-shadow: 0 0 0 .5px var(--accent); }
-.iui-choice label[data-selected]::after { content: ''; position: absolute; top: 13px; right: 12px; width: 14px; height: 14px; background: var(--accent-ink); -webkit-mask: var(--iui-check) center / contain no-repeat; mask: var(--iui-check) center / contain no-repeat; }
+/* The tick is always in the box model and only fades and settles in, so picking and unpicking both animate. */
+.iui-choice label::after { content: ''; position: absolute; top: 13px; right: 12px; width: 14px; height: 14px; background: var(--accent-ink); -webkit-mask: var(--iui-check) center / contain no-repeat; mask: var(--iui-check) center / contain no-repeat; opacity: 0; scale: .6; transition: opacity var(--duration-fast), scale var(--duration-fast) var(--ease-spring); }
+.iui-choice label[data-selected]::after { opacity: 1; scale: 1; }
 .iui-choice label:has(:focus-visible), .iui-pick-card:has(input:focus-visible) { outline: var(--focus-ring) solid var(--accent-ink); outline-offset: 2px; }
 .iui-choice label strong { display: block; padding-right: 22px; }
 .iui-choice small { display: block; margin-top: 4px; text-wrap: pretty; }
@@ -54,17 +56,18 @@
 .iui-seg .iui-parallel { display: inline-flex; max-width: 100%; gap: 0; border: var(--border-width, 1px) solid var(--overlay-medium); border-radius: var(--radius-md); overflow: hidden; }
 /* Segments shrink and wrap their text before they would overflow: the short-label test in the renderer
  * only estimates widths, and wide glyphs can exceed it. */
-.iui-seg label { flex: 0 1 auto; align-items: center; justify-content: center; padding: 7px 16px; border: 0; border-radius: 0; color: var(--text-muted); text-align: center; }
+.iui-seg label { flex: 0 1 auto; align-items: center; justify-content: center; padding: 7px 16px; border: 0; border-radius: 0; color: var(--text-muted); text-align: center; transition: background var(--duration-fast), color var(--duration-fast); }
 .iui-seg label + label { border-left: var(--border-width, 1px) solid var(--overlay-medium); }
 .iui-seg label strong { padding-right: 0; font-weight: 500; }
 .iui-seg label[data-selected] { background: var(--accent-light); color: var(--accent-ink); box-shadow: none; }
-.iui-seg label[data-selected]::after { content: none; }
+.iui-seg label::after { content: none; }
 .iui-seg label:has(:focus-visible) { outline-offset: -2px; }
 /* Options that carry a picture: one row of selectable picture cards. */
 .iui-pick-card { position: relative; min-width: 0; display: flex; flex-direction: column; border: var(--border-width, 1px) solid var(--border); border-radius: var(--radius-md); overflow: hidden; transition: background var(--duration-fast), border-color var(--duration-fast), box-shadow var(--duration-fast); }
 /* Hover belongs to the whole card: the label ends above the source line. */
 .iui-pick-card:hover { background: var(--bg-hover); }
 .iui-pick-card[data-expanded] { grid-column: 1 / -1; }
+.iui-pick label::after { content: none; }
 .iui-pick label, .iui-pick label:hover { flex: 1; flex-direction: column; gap: 0; padding: 0; border: 0; border-radius: 0; background: none; }
 /* The card carries the focus ring; a second one on the label would cut through the source line. */
 .iui-pick label:has(:focus-visible) { outline: none; }
@@ -76,9 +79,10 @@
 .iui-pick small { line-height: 1.6; }
 .iui-pick-card > a { align-self: flex-start; margin-top: -6px; padding: 0 12px 10px; font-size: var(--ui-font-caption); color: var(--text-faint); text-decoration: none; }
 .iui-pick-card > a:hover { text-decoration: underline; }
-.iui-pick-card[data-selected]::before, .iui-pick-card[data-selected]::after { content: ''; position: absolute; z-index: 1; pointer-events: none; }
-.iui-pick-card[data-selected]::before { top: 8px; right: 8px; width: 22px; height: 22px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 1.5px var(--bg); }
-.iui-pick-card[data-selected]::after { top: 12px; right: 12px; width: 14px; height: 14px; background: var(--on-accent, var(--bg)); -webkit-mask: var(--iui-check) center / contain no-repeat; mask: var(--iui-check) center / contain no-repeat; }
+.iui-pick-card::before, .iui-pick-card::after { content: ''; position: absolute; z-index: 1; pointer-events: none; opacity: 0; scale: .6; transition: opacity var(--duration-fast), scale var(--duration-fast) var(--ease-spring); }
+.iui-pick-card[data-selected]::before, .iui-pick-card[data-selected]::after { opacity: 1; scale: 1; }
+.iui-pick-card::before { top: 8px; right: 8px; width: 22px; height: 22px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 1.5px var(--bg); }
+.iui-pick-card::after { top: 12px; right: 12px; width: 14px; height: 14px; background: var(--on-accent, var(--bg)); -webkit-mask: var(--iui-check) center / contain no-repeat; mask: var(--iui-check) center / contain no-repeat; }
 /* Looking closer is a separate corner control: it never changes the choice. Retry stays visible. */
 .intelligent-ui .iui-pick-tool { position: absolute; z-index: 1; top: 8px; left: 8px; min-height: 0; height: 24px; padding: 0 6px; border: 0; border-radius: var(--radius-sm); background: color-mix(in srgb, var(--bg) 84%, transparent); font-size: var(--ui-font-caption); transition: opacity var(--duration-fast); }
 .intelligent-ui .iui-pick-tool[aria-expanded="false"] { opacity: 0; }
@@ -105,10 +109,12 @@
 .intelligent-ui .iui-list-head button:hover:not(:disabled) { background: var(--bg-hover); color: var(--text); }
 .iui-checklist progress { display: block; appearance: none; width: 100%; height: 2px; border: 0; border-radius: 1px; overflow: hidden; margin-bottom: 6px; background: color-mix(in srgb, var(--border) 70%, transparent); }
 .iui-checklist progress::-webkit-progress-bar { background: color-mix(in srgb, var(--border) 70%, transparent); }
-.iui-checklist progress::-webkit-progress-value { background: var(--text-muted); }
+.iui-checklist progress::-webkit-progress-value { background: var(--text-muted); transition: width var(--duration-slow) var(--ease-out); }
 .iui-check-rows { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 28px; }
 .iui-check-rows label { min-height: 36px; display: flex; align-items: center; gap: 10px; cursor: pointer; padding: 6px 0; min-width: 0; }
-.iui-check-rows label > span { min-width: 0; }
+.iui-check-rows label > span { min-width: 0; transition: color var(--duration-fast); }
+/* The strike is always there and only its colour changes, so it can fade. */
+.iui-check-rows label > span:not(.iui-quantity) { text-decoration: line-through; text-decoration-color: transparent; transition: color var(--duration-fast), text-decoration-color var(--duration-fast); }
 /* One sentence per row is reading text: single column, chat body size. Quantity lists stay compact. */
 .intelligent-ui .iui-check-rows.iui-prose { grid-template-columns: 1fr; line-height: 1.55; }
 .iui-check-rows.iui-prose label { align-items: flex-start; }
@@ -117,8 +123,9 @@
 .iui-check-rows label:hover input { border-color: var(--text-muted); }
 .iui-check-rows input:checked, .iui-check-rows input:indeterminate { border-color: var(--accent); }
 .iui-check-rows input:checked { background: var(--accent); }
-.iui-check-rows input:checked::after { content: ''; width: 11px; height: 11px; background: var(--on-accent, var(--bg)); -webkit-mask: var(--iui-check) center / contain no-repeat; mask: var(--iui-check) center / contain no-repeat; }
-.iui-check-rows input:indeterminate::after { content: ''; width: 8px; height: 1.5px; border-radius: 1px; background: var(--accent); }
+.iui-check-rows input::after { content: ''; width: 11px; height: 11px; background: var(--on-accent, var(--bg)); -webkit-mask: var(--iui-check) center / contain no-repeat; mask: var(--iui-check) center / contain no-repeat; scale: 0; transition: scale var(--duration-fast) var(--ease-spring); }
+.iui-check-rows input:checked::after { scale: 1; }
+.iui-check-rows input:indeterminate::after { width: 8px; height: 1.5px; border-radius: 1px; background: var(--accent); -webkit-mask: none; mask: none; scale: 1; }
 .iui-check-rows label[data-checked] > span { color: var(--text-muted); }
 .iui-check-rows label[data-checked] > span:not(.iui-quantity) { text-decoration: line-through; text-decoration-color: color-mix(in srgb, currentColor 45%, transparent); }
 .iui-check-rows small { display: block; }
@@ -129,6 +136,10 @@
 .intelligent-ui summary svg { order: -1; flex: none; width: 14px; height: 14px; color: var(--text-muted); transform: rotate(-90deg); transition: transform var(--duration-fast) ease-out; }
 .intelligent-ui details[open] > summary svg { transform: none; }
 .iui-detail-content { padding: 2px 0 6px 20px; }
+/* A fold opens and closes by height (native details content, no script); browsers without it just toggle. */
+.intelligent-ui details { interpolate-size: allow-keywords; }
+.intelligent-ui details::details-content { block-size: 0; overflow: clip; opacity: 0; transition: block-size var(--duration-slow) var(--ease-out), opacity var(--duration-slow), content-visibility var(--duration-slow) allow-discrete; }
+.intelligent-ui details[open]::details-content { block-size: auto; opacity: 1; }
 .iui-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .iui-gallery { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
 .iui-picture { min-width: 0; margin: 0; }
@@ -180,6 +191,6 @@
   .intelligent-ui .iui-pick-tool[aria-expanded="false"] { opacity: 1; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .intelligent-ui summary svg, .iui-choice label, .iui-pick-card, .intelligent-ui .iui-pick-tool, .iui-check-rows input, .iui-source > a > svg { transition: none; }
+  .intelligent-ui summary svg, .iui-choice label, .iui-choice label::after, .iui-pick-card, .iui-pick-card::before, .iui-pick-card::after, .intelligent-ui .iui-pick-tool, .iui-check-rows input, .iui-check-rows input::after, .iui-check-rows label > span, .iui-checklist progress::-webkit-progress-value, .intelligent-ui details::details-content, .iui-source > a > svg { transition: none; }
   .iui-skeleton > i, .intelligent-ui[data-streamed] .iui-block { animation: none; }
 }

@@ -15,7 +15,7 @@ import { openNewChat, openSession, rotateSolo } from '../sessionNav'
 import { TeamEditor } from '../components/TeamEditor'
 import { postMuseFeedback, saveAgentScheduleEntry } from '../services/backendService'
 import { runTaskCard } from './chat2/taskLanding'
-import { quoteInChatPanel } from './chat2/chatPanelQuote'
+import { addQuote } from './chat2/quotes'
 import { askOriginOf, insertReplyToNote } from './chat2/insertToNote'
 import { amadeusAvailable } from '../features/runtime'
 import { resolveDeskPath } from '../stores/deskPlan'
@@ -41,7 +41,7 @@ import { AgentDesk, DeskCard } from './chat2/AgentDesk'
 import { HistorianStatus } from './chat2/HistorianStatus'
 import { TeamStatus } from './chat2/TeamDesk'
 import { ChildChatPanel, SubChatStatus } from './chat2/ChildChatPanel'
-import { openBtw } from './chat2/btwStore'
+import { openBtw, openBtwInSidebar } from './chat2/btwStore'
 import { useChildChat } from '../stores/childChatStore'
 import { TeamSummary } from './chat2/TeamSummary'
 import { useI18n } from '../i18n'
@@ -195,7 +195,7 @@ export function ChatView({ leaf, params }: ViewProps) {
   const jumpSetter = useRef<(show: boolean) => void>(() => {})
   const setShowJump = useCallback((show: boolean): void => jumpSetter.current(show), [])
   const [quoteButton, setQuoteButton] = useState<{ x: number; y: number; text: string } | null>(null)
-  const [quotedText, setQuotedText] = useState('')
+  const [quotes, setQuotes] = useState<string[]>([]) // 输入框上方的引用卡,可挂多段
   const [refDrop, setRefDrop] = useState(false) // 工作区条目拖到聊天区上方(整块高亮)
   const childSession = useChildChat((state) => activeId ? state.sessions[activeId] : undefined)
   const activeSession = s.activeSession || childSession
@@ -219,7 +219,7 @@ export function ChatView({ leaf, params }: ViewProps) {
   useEffect(() => {
     const pending = s.pendingChatQuote
     if (!pending || pending.targetType !== leaf.type) return
-    setQuotedText(pending.text)
+    setQuotes((prev) => addQuote(prev, pending.text))
     s.clearPendingChatQuote(pending.seq)
   }, [leaf.type, s.pendingChatQuote, s.clearPendingChatQuote])
 
@@ -624,19 +624,20 @@ export function ChatView({ leaf, params }: ViewProps) {
                 className="t2-quote-action"
                 data-testid="selection-quote"
                 onClick={() => {
-                  setQuotedText(quoteButton.text)
+                  setQuotes((prev) => addQuote(prev, quoteButton.text))
                   setQuoteButton(null)
                   window.getSelection()?.removeAllRanges()
                 }}
               >
                 <Quote size={13} /> {t('chat.action.quote')}
               </button>
-              {leaf.type !== 'chat-panel' && (
+              {/* 在侧栏提问 = 旁聊开在右侧栏:带着本会话上下文问,主对话里什么都不发(2026-10-11 起;此前是把引用丢给侧栏那个独立对话) */}
+              {leaf.type !== 'chat-panel' && activeId && (
                 <button
                   className="t2-quote-action"
                   data-testid="selection-ask-in-panel"
                   onClick={() => {
-                    quoteInChatPanel(quoteButton.text) // 与编辑器「问 Tangu」同一份交接(reveal 语义见该模块)
+                    openBtwInSidebar({ sessionId: activeId, title: activeSession?.title, quote: quoteButton.text, modelId: mvModelId || undefined })
                     setQuoteButton(null)
                     window.getSelection()?.removeAllRanges()
                   }}
@@ -810,8 +811,9 @@ export function ChatView({ leaf, params }: ViewProps) {
             return s.send(text, attachments, workspaceFiles, skillIds, mentions, activeId)
           }}
           onStop={() => s.stop(activeId)}
-          quotedText={quotedText}
-          onClearQuote={() => setQuotedText('')}
+          quotes={quotes}
+          onRemoveQuote={(index) => setQuotes((prev) => prev.filter((_, i) => i !== index))}
+          onClearQuote={() => setQuotes([])}
           // /btw [问题]:带本会话上下文旁聊(会话级浮窗);输入框挂着的引用一并带过去
           onBtw={activeId ? (question, quote) => openBtw({ sessionId: activeId, title: activeSession?.title, question, quote, modelId: mvModelId || undefined }) : undefined}
           // 引擎 context_info 报的窗口是真实预算口径(覆盖表/族兜底),优先于模型列表值——两边可能不一致

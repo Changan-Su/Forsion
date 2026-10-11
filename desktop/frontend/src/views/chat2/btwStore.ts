@@ -6,6 +6,7 @@
  *  - 桌面 = 原生 Floating Panel,一个会话一扇(id `btw:<会话>`)。**会话级**:主窗切走就隐藏、切回再现
  *    (主进程 syncSessionPanels);线程住在那扇浮窗自己的渲染进程里,关窗即丢 —— 与 Claude 一样只在内存。
  *  - Web = 居中浮层(FloatingPanelFrame),手机 = 全屏二级页;线程按会话留在本页内存,关了再开还在。
+ *  - 右侧栏 = 视图 `btw-panel`(划线「在侧栏提问」开的就是它,2026-10-11):跟着主窗当前会话走,线程同样按会话留在本页内存。
  *  - 不写回主对话。要带回去由用户点「引用到对话」:主窗输入框挂成引用,不动草稿(MainAction 'chat-quote')。
  */
 import { create } from 'zustand'
@@ -22,6 +23,7 @@ registerMessages({
   'btw.windowTitle': { zh: '顺便问 · {title}', en: 'By the way · {title}' },
   'btw.context': { zh: '当前对话', en: 'Conversation' },
   'btw.hint': { zh: '带着本会话上下文提问，不会加入对话，也不打断正在跑的任务', en: 'Uses this conversation as context. Not added to it, and never interrupts a running task.' },
+  'btw.sideEmpty': { zh: '打开一个对话后，可以在这里顺便问', en: 'Open a conversation to ask side questions here' },
   'btw.empty': { zh: '问点与当前对话有关的事：概念、代码、刚才那步为什么这么做……', en: 'Ask about anything in this conversation: a concept, some code, why a step was taken…' },
   'btw.placeholder': { zh: '顺便问点什么…', en: 'Ask a side question…' },
   'btw.defaultQuestion': { zh: '解释一下这段', en: 'Explain this' },
@@ -89,6 +91,8 @@ interface BtwState {
   threads: Record<string, BtwTurn[]>
   /** Web / 手机当前开着的旁聊(桌面走原生浮窗,不用它)。只在它的会话仍是当前会话时显示。 */
   webOpen: BtwSeed | null
+  /** 右侧栏那扇旁聊收到的最近一次指令(「在侧栏提问」带来的引用);面板按 nonce 只消费一次,也可能先于面板挂载。 */
+  sideSeed: BtwSeed | null
   ask(sessionId: string, question: string, quote?: string, modelId?: string): Promise<void>
   stop(sessionId: string): void
   clear(sessionId: string): void
@@ -98,6 +102,7 @@ interface BtwState {
 export const useBtw = create<BtwState>((set, get) => ({
   threads: {},
   webOpen: null,
+  sideSeed: null,
 
   ask: async (sessionId, question, quote, modelId) => {
     if (!question.trim() || controllers.has(sessionId)) return // 一次一问:上一问还在流
@@ -211,6 +216,14 @@ export function openBtw(opts: { sessionId: string; title?: string | null; quote?
     return
   }
   useBtw.setState({ webOpen: seed })
+}
+
+/** 「在侧栏提问」:同一种旁聊,开在右侧栏的 `btw-panel` 视图里(不弹浮窗)。侧栏已经停在它上面时不反向收起。 */
+export function openBtwInSidebar(opts: { sessionId: string; title?: string | null; quote?: string; question?: string; modelId?: string }): void {
+  useBtw.setState({ sideSeed: { ...opts, title: opts.title || undefined, scope: useApp.getState().activeId, nonce: `${Date.now().toString(36)}-${++seedSeq}` } })
+  const ws = useWorkspace.getState()
+  const front = ws.rightVisible && ws.rightTabs.some((tab) => tab.type === 'btw-panel' && tab.active)
+  if (!front) ws.showSideView('right', 'btw-panel') // showSideView 对当前活动项是 toggle,这里只要 reveal
 }
 
 /** 把旁聊的回答带回主对话:挂成主窗聊天输入框的引用,不覆盖草稿。浮窗里调 = 请主窗代办(各窗一份 store)。

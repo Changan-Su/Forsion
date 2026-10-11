@@ -8,7 +8,7 @@ import { useModelPickerPreferences } from '../../modelPickerPreferences'
 import React, { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import {
   ArrowUp, Square, Mic, X, ClipboardList, Check, ChevronDown, FileText, Users, Sparkles,
-  Hand, ShieldCheck, ShieldAlert, Settings2, SlidersHorizontal, MessageSquare, Loader2, Clock, Zap, AudioLines, type LucideIcon } from 'lucide-react'
+  Hand, ShieldCheck, ShieldAlert, Settings2, SlidersHorizontal, MessageSquare, Loader2, Clock, Zap, AudioLines, Quote, type LucideIcon } from 'lucide-react'
 import { useVoiceInput } from '../../hooks/useVoiceInput'
 import { CALL_TEXT_MAX, getCallPresence, onCallEvent, openCallLayer, sendTextToCall, subscribeCallPresence, useRealtimeConfig } from '../../services/realtimeCall'
 import { resolveRealtimeCall } from '../../services/realtimeModel'
@@ -44,6 +44,7 @@ import { mainReferenceKey } from './mainReference'
 import { ChatBoxSurface, ChatBoxInput, ChatBoxToolbar, ChatBoxSubmit } from '@lcl/components'
 import { disarmTip, tipProps } from '../../hoverTip'
 import { RefChipView } from './RefChipView'
+import { composeQuotes } from './quotes'
 import { NEW_CHAT_DRAFT, clearDraft, moveDraft, setDraftField, useDraftField } from './composerDrafts'
 import { ContextUsagePop } from './ContextUsagePop'
 import { clearSuggestion, usePromptSuggest } from './promptSuggest'
@@ -81,6 +82,7 @@ registerMessages({
 // 等待期间输入框占位轮播的 Forsion 使用小贴士。每条都对过源码(09-16 核验 workflow);只收桌面与 Web 都成立的,
 // 仅桌面有的(设置里导入技能 / 另存 Space / 智能体页)不进。新增一条 = 这里加 key + 下面补 zh/en。
 const WAIT_TIP_MS = 8000
+const NO_QUOTES: string[] = []
 const STEER_TIP = 'input.tip.steer' // 外部引擎(ACP)不接 steer,那种会话里不显示
 const WAIT_TIP_KEYS = [
   STEER_TIP, 'input.tip.switchChat', 'input.tip.quote', 'input.tip.dropFiles', 'input.tip.wikiRef', 'input.tip.dragSession',
@@ -89,12 +91,13 @@ const WAIT_TIP_KEYS = [
 // 触屏端(Android 壳复用本组件)只留与键盘 / 悬停 / 拖拽 / 侧栏无关的
 const TOUCH_TIP_KEYS = [STEER_TIP, 'input.tip.wikiRef']
 registerMessages({
+  'input.quote.group': { zh: '引用', en: 'Quotes' },
   'input.tip': { zh: '小贴士：{tip}', en: 'Tip: {tip}' },
   'input.runningPlaceholder': { zh: '运行中，可继续输入…', en: 'Working… You can keep typing' },
   'input.steer.queuedHint': { zh: '排队项在本轮结束后依次执行 · ↑ 取回编辑', en: 'Queued items run in order after this turn · ↑ to recall' },
   'input.tip.steer': { zh: '运行中也能继续发消息，会在下一步交给 Agent', en: 'You can send while it runs: the agent reads it at the next step' },
   'input.tip.switchChat': { zh: '可以先切去别的会话，运行不会中断，侧栏圆点标出运行中', en: 'Switch chats meanwhile; this run keeps going, marked by a sidebar dot' },
-  'input.tip.quote': { zh: '划选回复里的文字，点「引用」即可带进下一条消息', en: 'Select text in a reply and click Quote to cite it in your next message' },
+  'input.tip.quote': { zh: '划选回复里的文字，点「引用」即可带进下一条消息，可以连着引用好几段', en: 'Select text in a reply and click Quote to cite it in your next message. You can quote several passages' },
   'input.tip.dropFiles': { zh: '文件可拖到聊天区任意位置，截图可直接粘贴进输入框', en: 'Drop files anywhere in the chat, or paste a screenshot into the box' },
   'input.tip.wikiRef': { zh: '输入 [[ 可引用历史会话，本机项目里还能引用笔记和文件', en: 'Type [[ to reference past chats, or notes and files in local projects' },
   'input.tip.dragSession': { zh: '把侧栏的会话拖进对话区，即可挂为引用随消息发送', en: 'Drag a chat from the sidebar into the conversation to cite it' },
@@ -339,7 +342,9 @@ export const Composer2: React.FC<{
   /** 私聊会话(Agent 轨道):@ 候选池换成本机项目(派遣,方案 §5.4);给了非空数组即视为私聊。 */
   mentionProjects?: Array<{ name: string; path: string }>
   onStop: () => void
-  quotedText?: string
+  /** 输入框上方的引用卡(可多段);发送时拼成正文前的引用块,见 quotes.ts。 */
+  quotes?: string[]
+  onRemoveQuote?: (index: number) => void
   onClearQuote?: () => void
   /** /btw [问题]:旁聊(会话级浮窗,主对话里什么都不发);quote = 输入框此刻挂着的引用。无会话时不给 = 命令不露出。 */
   onBtw?: (question?: string, quote?: string) => void
@@ -393,7 +398,7 @@ export const Composer2: React.FC<{
   groupChat, groupAgents, groupTempAgents, onGroupChange, onAddAgent, onNormalWork,
   agents, onAgentSwitch, currentAgentSlug, mentionProjects, onNewSession, onBranch, onOpenSettings,
   onExecConfigChange, onSend, onStop,
-  quotedText, onClearQuote, onBtw,
+  quotes = NO_QUOTES, onRemoveQuote, onClearQuote, onBtw,
   contextWindow, ctxTokens, sessionTokens, runCost, costLimit, ctxInfo, onCompact,
   seedText, onSeedConsumed, seedShare, takeSeedShare, appendRefs, onAppendRefsConsumed, autoRefFromMain, appRef, sentHistory,
   pendingSteer, onCancelSteer, onWithdrawSteer, onSteerNow,
@@ -780,9 +785,9 @@ export const Composer2: React.FC<{
 
   // 划线引用落入当前承载后，光标直接交给输入框：侧栏展开即可继续输入问题。
   useEffect(() => {
-    if (!quotedText) return
+    if (!quotes.length) return
     requestAnimationFrame(() => taRef.current?.focus())
-  }, [quotedText])
+  }, [quotes.length])
 
   // 从工作区/笔记树/会话列表拖进来的引用 → 上方「已选择」芯片(2026-08-14 起;此前是往草稿里塞
   // 一长串 [[路径]] 文本)。消费后回调清空。
@@ -1205,8 +1210,8 @@ export const Composer2: React.FC<{
     // /btw [问题](别名 /side):旁聊。运行中也走这里,不会变成 steer;输入框挂着的引用一并交给旁聊并摘掉。
     const btwMatch = /^\/(?:btw|side)(?:\s+([\s\S]*))?$/i.exec(cmd)
     if (btwMatch && onBtw) {
-      onBtw(btwMatch[1]?.trim() || undefined, quotedText || undefined)
-      if (quotedText) onClearQuote?.()
+      onBtw(btwMatch[1]?.trim() || undefined, quotes.join('\n\n') || undefined)
+      if (quotes.length) onClearQuote?.()
       setDraft('')
       requestAnimationFrame(autoGrow)
       return
@@ -1292,7 +1297,7 @@ export const Composer2: React.FC<{
     if (disabled) return
     // 通话中:纯文字送进电话(实时模型听到、用语音回);带附件 / 引用 / 技能的照常交给 Tangu。
     // Mini 没确认(崩了 / 刚挂)就改走普通发送并提示 —— 打的字不能丢。override(兜底重发、听写)不再进这条。
-    if (inCall && !override && text && text.length <= CALL_TEXT_MAX && !attachments.length && !wsFiles.length && !allRefChips.length && !quotedText && !pinnedSkills.length) {
+    if (inCall && !override && text && text.length <= CALL_TEXT_MAX && !attachments.length && !wsFiles.length && !allRefChips.length && !quotes.length && !pinnedSkills.length) {
       setDraft(''); setHistPos(0); setHint(null)
       requestAnimationFrame(autoGrow)
       return sendTextToCall(activeSessionId!, text).then(async (ok) => {
@@ -1303,7 +1308,7 @@ export const Composer2: React.FC<{
         return sent
       })
     }
-    const quoted = quotedText ? `${quotedText.split('\n').map((l) => `> ${l}`).join('\n')}\n\n` : ''
+    const quoted = composeQuotes(quotes)
     // 「已选择」芯片 → 正文最前面的一行引用 token。行内位置在芯片化之后不再存在,统一前置(= 上下文在前)。
     const refs = allRefChips.length ? allRefChips.map((c) => c.token).join(' ') + '\n' : ''
     const outgoing = composeOutgoing(refs, quoted, text)
@@ -1564,7 +1569,7 @@ export const Composer2: React.FC<{
       )}
       <button className="t2c-stop" onClick={onStop} title={t('input.stop')} aria-label={t('input.stop')}><Square size={10} /><span className="t2c-stop-label">{t('input.stop')}</span></button>
     </>
-  ) : callable && !draft.trim() && !allRefChips.length && !attachments.length && !wsFiles.length && !quotedText && !pinnedSkills.length ? (
+  ) : callable && !draft.trim() && !allRefChips.length && !attachments.length && !wsFiles.length && !quotes.length && !pinnedSkills.length ? (
     // 照 ChatGPT:输入框空着时发送键就是通话键,打了字变回发送。通话中再按 = 叫回 Mini 卡片(不重拨)。
     <ChatBoxSubmit
       className="t2c-live-control"
@@ -1619,10 +1624,15 @@ export const Composer2: React.FC<{
         <ChatBoxSurface ref={cardRef} className={`${phoneCard ? 't2c-card--phone' : ''}${dragOver ? ' dragover' : ''}`}>
           {advisory}
           {hint && <div className="t2c-hint">{hint}</div>}
-          {quotedText && (
-            <div className="t2c-quote">
-              <span className="t2c-quote-text">{quotedText.length > 280 ? `${quotedText.slice(0, 280)}…` : quotedText}</span>
-              <button title={t('input.remove')} onClick={() => onClearQuote?.()} className="t2c-quote-x"><X size={12} /></button>
+          {quotes.length > 0 && (
+            <div className="t2c-quotes" role="group" aria-label={t('input.quote.group')}>
+              {quotes.map((quote, index) => (
+                <div className="t2c-quote" key={quote}>
+                  <Quote size={13} className="t2c-quote-mark" aria-hidden />
+                  <span className="t2c-quote-text">{quote.length > 280 ? `${quote.slice(0, 280)}…` : quote}</span>
+                  <button title={t('input.remove')} aria-label={t('input.remove')} onClick={() => (onRemoveQuote ? onRemoveQuote(index) : onClearQuote?.())} className="t2c-quote-x"><X size={12} /></button>
+                </div>
+              ))}
             </div>
           )}
           {allRefChips.length > 0 && (

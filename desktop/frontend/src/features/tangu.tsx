@@ -1,8 +1,9 @@
-import { MessageCircle, BookOpen, FolderOpen, Bot, Users } from 'lucide-react'
+import { MessageCircle, MessageCircleQuestion, BookOpen, FolderOpen, Bot, Users } from 'lucide-react'
 import { registerView } from '@lcl/engine'
 import { useApp } from '../stores/appStore'
 import { translate } from '../i18n'
 import { ChatView } from '../views/ChatView'
+import { BtwSideView } from '../views/chat2/BtwPanel'
 import { MemoryPanelView, SubchatsView, SessionFilesView } from '../views/RightViews'
 import { AgentsDetailSpecialView, WorkspaceDetailSpecialView } from '../views/SpecialViews'
 import { AgentsSpaceView, AgentsRosterView, TanguDetailsView } from '../views/AgentProfileView'
@@ -20,6 +21,8 @@ export function registerTanguViews(): void {
   // 侧栏对话只是 ChatView 的另一个停靠身份:绕开 `chat` singleton 与主区实例冲突,但仍跟随同一
   // activeId / messagesBySession / runningBySession,不创建所谓「Side Chat」会话或第二套 runtime。
   registerView({ type: 'chat-panel', kind: 'aux', displayName: () => translate('bootengine.view.chatPanel'), icon: MessageCircle, TabIcon: SessionTabIcon, factory: (props) => <ChatView {...props} />, singleton: true })
+  // 旁聊的侧栏形态(划线「在侧栏提问」):带着主区当前会话的上下文问,不进主对话;浮窗版 /btw 照旧。
+  registerView({ type: 'btw-panel', kind: 'aux', displayName: () => translate('btw.title'), icon: MessageCircleQuestion, factory: () => <BtwSideView />, singleton: true })
   registerView({ type: 'tangu-details', kind: 'aux', displayName: () => translate('agentProfile.title'), icon: Bot, factory: (props) => <TanguDetailsView {...props} />, singleton: true })
   // Bot 专属 Tangu 本体(tangu-details / agents-detail);Agent 名册与 Agents 页用 Users,与 Agents Space 的图标一致(评审 U-22)。
   registerView({ type: 'agents-roster', kind: 'aux', displayName: () => translate('agentProfile.roster'), icon: Users, factory: () => <AgentsRosterView />, singleton: true })

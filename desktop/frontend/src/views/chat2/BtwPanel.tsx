@@ -3,7 +3,7 @@ import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { ArrowUp, Check, Copy, Eraser, Loader2, MessageSquareQuote, Quote, Square, X } from 'lucide-react'
 import { useI18n } from '../../i18n'
-import { useApp } from '../../stores/appStore'
+import { activeChatModelId, useApp } from '../../stores/appStore'
 import { Markdown } from '../../components/Markdown'
 import { FloatingPanelFrame } from '../../components/FloatingPanelFrame'
 import { btwWebVisible, consumeSeed, quoteInMainChat, useBtw, type BtwSeed, type BtwTurn } from './btwStore'
@@ -143,6 +143,19 @@ export function BtwPanel({ seed, onClose, onQuoted }: { seed: BtwSeed; onClose?:
       </div>
     </div>
   )
+}
+
+/** 右侧栏里的旁聊(视图 `btw-panel`):跟着主窗当前会话走 —— 线程按会话存,切会话就切到那个会话的旁聊。
+ *  「在侧栏提问」带来的引用经 sideSeed 递进来;它属于当前会话时用它(团队成员子聊天里问的,上下文是子会话),否则按当前会话开一扇空的。 */
+export function BtwSideView() {
+  const { t } = useI18n()
+  const activeId = useApp((s) => s.activeId)
+  const session = useApp((s) => s.sessions.find((x) => x.id === s.activeId) || s.archivedSessions.find((x) => x.id === s.activeId) || null)
+  const modelId = useApp((s) => activeChatModelId({ ...s, activeSession: session }))
+  const seed = useBtw((s) => s.sideSeed)
+  if (!activeId) return <div className="btw-panel"><div className="btw-body"><div className="btw-empty">{t('btw.sideEmpty')}</div></div></div>
+  const shown: BtwSeed = seed && seed.scope === activeId ? seed : { sessionId: activeId, scope: activeId, title: session?.title || undefined, modelId: modelId || undefined, nonce: `side:${activeId}` }
+  return <BtwPanel key={shown.sessionId} seed={shown} />
 }
 
 /** Web / 手机:没有原生浮窗,旁聊挂在本页。只在它归属的会话仍是当前会话时显示 —— 切走即隐、切回再现(线程在 store 里)。

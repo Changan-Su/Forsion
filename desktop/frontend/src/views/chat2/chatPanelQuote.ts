@@ -1,8 +1,8 @@
 /**
- * 把一段引用交给**侧栏对话**(`chat-panel`)并把它揭到前台 —— 主区划线「在侧栏问」(ChatView)与编辑器
- * 「问 Tangu」(评审 G3-04,经 tanguProbe.askInChat)共用这一份,别各抄一遍。
+ * 把一段引用交给**侧栏对话**(`chat-panel`)并把它揭到前台 —— 编辑器「问 Tangu」(评审 G3-04,经 tanguProbe.askInChat)走这里。
+ * 聊天里划线的「在侧栏提问」2026-10-11 起不走这条:它开的是右侧栏的旁聊(btwStore.openBtwInSidebar)。
  *
- * 引用挂成输入框上方的引用条(setPendingChatQuote,侧栏还没挂载也行:ChatView 一挂上就消费),不发送、不动草稿。
+ * 引用挂成输入框上方的一张引用卡(setPendingChatQuote,侧栏还没挂载也行:ChatView 一挂上就消费),不发送、不动草稿。
  */
 import { useWorkspace } from '@lcl/engine'
 import { useApp } from '../../stores/appStore'
