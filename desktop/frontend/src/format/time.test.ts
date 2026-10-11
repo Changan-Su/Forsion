@@ -106,3 +106,19 @@ describe('formatMessageTime:聊天消息末尾的时刻', () => {
     expect(formatMessageTime(0 / 0, { now })).toBe('')
   })
 })
+
+describe('格式器缓存', () => {
+  it('系统时区变了(人带着设备换了时区,App 没重启):出的字跟着变,不沿用缓存里旧时区的格式器', () => {
+    const tz = process.env.TZ
+    const noonUtc = Date.UTC(2026, 0, 15, 12, 0)
+    try {
+      process.env.TZ = 'Asia/Shanghai'
+      expect(formatDateTime(noonUtc)).toContain('20:00')
+      process.env.TZ = 'America/New_York'
+      expect(formatDateTime(noonUtc)).toContain('07:00')
+    } finally {
+      if (tz === undefined) delete process.env.TZ
+      else process.env.TZ = tz
+    }
+  })
+})

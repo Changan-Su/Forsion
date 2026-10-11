@@ -188,10 +188,14 @@ describe('extend view DOM lifecycle', () => {
     const cover = container.querySelector('.wb-extend-owner > .wb-extend-inline')!
     expect(cover.querySelector('.wb-extend-body p')!.textContent).toBe('Body')
     expect(trigger.hasAttribute('inert')).toBe(true)
+    // the stylesheet hides the owner's own content by this mark (extendView.css), not by finding the cover with :has()
+    const owner = container.querySelector<HTMLElement>('.wb-extend-owner')!
+    expect(owner.hasAttribute('data-extend-inline')).toBe(true)
     const back = cover.querySelector<HTMLButtonElement>('.wb-extend-head--back button')!
     await act(async () => { back.click() })
     await act(async () => {})
     expect(container.querySelector('.wb-extend-inline')).toBeNull()
+    expect(owner.hasAttribute('data-extend-inline')).toBe(false)
     expect(trigger.hasAttribute('inert')).toBe(false)
     expect(document.activeElement).toBe(trigger)
   })

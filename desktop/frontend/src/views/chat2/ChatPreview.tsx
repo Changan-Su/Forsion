@@ -124,7 +124,7 @@ export function ChatPreview() {
           <EmptyState2 />
         ) : (
           <div className="t2-stream" ref={streamRef}>
-            <div className="t2-stream-inner">
+            <div className="t2-stream-inner" data-has-messages="">
               {sample.map((m) => (
                 <EditorialMessage
                   key={m.id}

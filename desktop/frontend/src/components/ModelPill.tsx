@@ -161,8 +161,10 @@ const MarqueeLabel: React.FC<{ text: string }> = ({ text }) => {
     const el = ref.current
     if (!el) return
     const measure = (): void => setShift(Math.max(0, el.scrollWidth - el.clientWidth))
-    measure()
-    if (typeof ResizeObserver === 'undefined') return
+    // 不在这里同步量:挂载那一帧 React 还在往页面上放东西,读 scrollWidth 会逼浏览器当场把整页排一遍
+    // (2026-10-11 实测:切回 Tangu 那一下 53ms 花在这一行)。ResizeObserver 开始观察后必定先回调一次,
+    // 而且是在这一帧排版完成之后 —— 那时再读不花钱。没有 ResizeObserver 的环境才同步量。
+    if (typeof ResizeObserver === 'undefined') { measure(); return }
     const ro = new ResizeObserver(measure)
     ro.observe(el)
     return () => ro.disconnect()

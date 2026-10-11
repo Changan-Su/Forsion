@@ -1,5 +1,5 @@
 /** 主区聊天 leaf：followActive 跟随侧栏；分屏 leaf 用 sessionId 固定会话。 */
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MutableRefObject } from 'react'
 import { AnimatePresence } from 'framer-motion'
 import { ArrowDown, Folder, MessageCircleQuestion, MessageSquarePlus, Quote } from 'lucide-react'
 import type { AgentConfig, UiMessage } from '../types'
@@ -35,7 +35,8 @@ import { useApp, stickyDefaults, activeChatModelId, withAmadeusWorkspace, applyP
 import { settleModes } from '../stores/projectSettings'
 import { currentPlatform } from '../services/agentRunService'
 import { hasChatRef, readChatRefs } from './chat2/chatDragRef'
-import { useWorkspace, useSpaceStore, UI_MODE, Skeleton } from '@lcl/engine'
+import { useWorkspace, useSpaceStore, UI_MODE, Skeleton, useNativeChromeInstalled } from '@lcl/engine'
+import { useTailFirst } from './chat2/useTailFirst'
 import { AgentDesk, DeskCard } from './chat2/AgentDesk'
 import { HistorianStatus } from './chat2/HistorianStatus'
 import { TeamStatus } from './chat2/TeamDesk'
@@ -73,6 +74,14 @@ function appRefOf(raw: unknown): { app: string; bundleId?: string; pid: number; 
   const r = raw && typeof raw === 'object' ? raw as Record<string, unknown> : null
   if (!r || typeof r.pid !== 'number' || typeof r.windowId !== 'number') return null
   return { app: String(r.app ?? ''), bundleId: typeof r.bundleId === 'string' ? r.bundleId : undefined, pid: r.pid, windowId: r.windowId, title: String(r.title ?? '') }
+}
+
+/** 「回到底部」键自己管显隐。它在滚动起手的那一下翻转;原来是 ChatView 的 state,翻一次就把整段对话的每条消息
+ *  重渲一遍(2026-10-11 实测:中端手机速度下每次滑动起手顿约 150ms)。ChatView 只握一个写入口(`setter`),不随它重渲。 */
+function JumpToBottom({ setter, title, onClick }: { setter: MutableRefObject<(show: boolean) => void>; title: string; onClick: () => void }) {
+  const [show, setShow] = useState(false)
+  setter.current = setShow
+  return show ? <button className="jump-bottom t2-jump" title={title} onClick={onClick}><ArrowDown size={16} /></button> : null
 }
 
 export function ChatView({ leaf, params }: ViewProps) {
@@ -183,7 +192,8 @@ export function ChatView({ leaf, params }: ViewProps) {
   })))
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editText, setEditText] = useState('')
-  const [showJump, setShowJump] = useState(false)
+  const jumpSetter = useRef<(show: boolean) => void>(() => {})
+  const setShowJump = useCallback((show: boolean): void => jumpSetter.current(show), [])
   const [quoteButton, setQuoteButton] = useState<{ x: number; y: number; text: string } | null>(null)
   const [quotedText, setQuotedText] = useState('')
   const [refDrop, setRefDrop] = useState(false) // 工作区条目拖到聊天区上方(整块高亮)
@@ -195,6 +205,9 @@ export function ChatView({ leaf, params }: ViewProps) {
   const activeCtxInfo = s.activeCtxInfo && (!s.activeCtxInfo.modelId || !activeModel || s.activeCtxInfo.modelId === activeModel.id) ? s.activeCtxInfo : null
   const activeUsage = s.activeUsage
   const activeMessages = s.activeMessages
+  // 画到流里的那一段(手机上先是末尾几条,见 useTailFirst);数据层的判断一律仍看 activeMessages。
+  const phoneShell = useNativeChromeInstalled()
+  const shownMessages = useTailFirst(activeMessages, activeId || null, phoneShell && s.jumpTarget?.sessionId !== activeId)
   const pendingApprovals = useMemo(() => pendingPromptsOf(activeMessages), [activeMessages])
   const running = s.running
   const execConfig = s.execConfig
@@ -508,15 +521,18 @@ export function ChatView({ leaf, params }: ViewProps) {
       <div className="t2-chat-col">
       <ErrorBoundary key={activeId || 'none'}>
         <div className="t2-chat-body" ref={chatAreaRef}>
-          {hasMessages && <FloatingToc scrollContainerRef={chatScrollRef} scanTrigger={activeMessages.length} />}
+          {hasMessages && <FloatingToc scrollContainerRef={chatScrollRef} scanTrigger={shownMessages.length} />}
           <div className="t2-stream" ref={registerChatScroll}>
-            <div className="t2-stream-inner">
+            {/* data-has-messages:样式靠它认「流里画着消息」(短会话贴着输入区排,见 chat2.css)。只有总结卡、其余都不进列表的
+                会话不算 —— 与原来的 `:has(> .t2-asst, > .t2-userwrap)` 同一个口径。
+                别改回 `:has(…)` 再接 `> :first-child`:那种写法让页面上**任何地方**插入 / 移除一个元素都把整段对话的样式重算一遍。 */}
+            <div className="t2-stream-inner" data-has-messages={hasMessages && shownMessages.some((m) => !isHiddenInList(m)) ? '' : undefined}>
             {!hasMessages ? (
               // 空状态本身不在流里(见下面 .t2-chat-col 直属的那份):流只占输入框以上,
               // 在里面居中 = 视觉上偏高。骨架屏留在流里 —— 它替代的是消息,本就该从顶部排。
               historyLoading ? <Skeleton variant="chat" /> : null
             ) : (
-              activeMessages.map((m) => {
+              shownMessages.map((m) => {
                 if (isHiddenInList(m)) return null
                 if (m.role === 'user' && m.id === editingId) {
                   return (
@@ -595,7 +611,7 @@ export function ChatView({ leaf, params }: ViewProps) {
             )}
             </div>
           </div>
-          {showJump && <button className="jump-bottom t2-jump" title={t('chat.jumpToBottom')} onClick={() => scrollToBottom(true)}><ArrowDown size={16} /></button>}
+          <JumpToBottom setter={jumpSetter} title={t('chat.jumpToBottom')} onClick={() => scrollToBottom(true)} />
           {quoteButton && (
             <div
               className="quote-float t2-quote-menu"

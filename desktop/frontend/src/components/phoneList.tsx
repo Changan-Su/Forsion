@@ -3,7 +3,7 @@
  * 下拉搜索、首次提示。会话列表(SidebarPane 的 timeline)与笔记列表共用。
  *
  * 只在「两级导航的列表层」用 —— 调用方拿 lcl 的 `useListFirst()` 当闸(原生底栏 × 竖屏 × 该 Space 有列表);
- * 桌面 / 网页 / 手机浏览器一行都不渲染,样式也全部挂在 `.mb-shell[data-nav]` 之下(phoneList.css)。
+ * 桌面 / 网页 / 手机浏览器一行都不渲染,样式也全部挂在 `.mb-shell[data-list-first]` 之下(phoneList.css)。
  */
 import { useEffect, useRef, useState, type ReactNode, type RefObject } from 'react'
 import { Search } from 'lucide-react'

@@ -102,16 +102,21 @@ export type ExtendViewPresenter = (options: ExtendViewOptions, dismiss: (reason?
  *  and Back returns to it. The owner stays mounted underneath (hidden + inert), so its scroll and drafts survive. */
 export const presentInlineExtension: ExtendViewPresenter = (_options, _dismiss, host) => {
   if (!host) throw new Error('Inline extend view requires its owner frame')
-  const covered = [...host.children] // hidden by CSS (:has); inert keeps focus and screen readers out
+  const covered = [...host.children] // hidden by CSS ([data-extend-inline]); inert keeps focus and screen readers out
   for (const el of covered) el.toggleAttribute('inert', true)
   const element = document.createElement('div')
   element.className = 'wb-extend-target wb-extend-inline'
   host.appendChild(element)
+  // The owner is marked here rather than found by CSS with `:has(> .wb-extend-inline)`: that selector, followed by
+  // `> :not(…)`, made the browser restyle the whole page whenever any element anywhere was added or removed.
+  host.dataset.extendInline = ''
   return {
     element, back: true,
     dispose() { // ponytail: instant, no close tween; the owner reappears exactly as it was left
       for (const el of covered) el.removeAttribute('inert')
       element.remove()
+      // a swap presents the next cover before this one is disposed: the mark goes with the last cover
+      if (!host.querySelector(':scope > .wb-extend-inline')) delete host.dataset.extendInline
     },
   }
 }

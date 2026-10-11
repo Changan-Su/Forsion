@@ -30,6 +30,22 @@ export interface TimeOpts {
   now?: number
 }
 
+/** 同一组(语言标签, 选项)只造一次格式器。`new Intl.DateTimeFormat` 很贵,而列表每行、对话每条消息都要格式化
+ *  一次时间:60 行就是 60 次构造(2026-10-11 实测占「进对话」那一下的 8–14ms,手机上再乘几倍)。
+ *  选项组合是有限的几种,不设上限;时区写错时构造照旧抛 RangeError(抛了就没存进来)。
+ *  ⚠️ 没写 timeZone 的格式器在**构造时**记下系统时区:人带着手机换了时区(App 没重启),存着的那批还按旧时区出字。
+ *     所以系统时区的偏移一变就整批作废。只看偏移:两个偏移相同的时区之间切换认不出来,此刻格式化出来的字也相同。 */
+const formatters = new Map<string, Intl.DateTimeFormat>()
+let formattersOffset = NaN
+function dtf(tag: string, opts: Intl.DateTimeFormatOptions): Intl.DateTimeFormat {
+  const offset = new Date().getTimezoneOffset()
+  if (offset !== formattersOffset) { formatters.clear(); formattersOffset = offset }
+  const key = `${tag}|${JSON.stringify(opts)}`
+  let f = formatters.get(key)
+  if (!f) formatters.set(key, (f = new Intl.DateTimeFormat(tag, opts)))
+  return f
+}
+
 /** 界面语言 → BCP 47 标签。 */
 export function intlLocale(locale: Locale = currentLocale()): string {
   return locale === 'zh' ? 'zh-CN' : 'en'
@@ -98,7 +114,7 @@ export function formatDate(at: TimeInput, opts: DateOpts = {}): string {
   const d = toDate(at)
   if (!d) return ''
   const locale = opts.locale ?? currentLocale()
-  return new Intl.DateTimeFormat(intlLocale(locale), {
+  return dtf(intlLocale(locale), {
     month: 'short', day: 'numeric', ...(withYear(d, opts) ? { year: 'numeric' } : {}),
   }).format(d)
 }
@@ -108,7 +124,7 @@ export function formatDateTime(at: TimeInput, opts: DateOpts = {}): string {
   const d = toDate(at)
   if (!d) return ''
   const locale = opts.locale ?? currentLocale()
-  return new Intl.DateTimeFormat(intlLocale(locale), {
+  return dtf(intlLocale(locale), {
     month: 'short', day: 'numeric', ...(withYear(d, opts) ? { year: 'numeric' } : {}),
     hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
   }).format(d)
@@ -171,8 +187,8 @@ export function formatLongDate(at: TimeInput, opts: TimeOpts = {}): string {
   if (!d) return ''
   const locale = opts.locale ?? currentLocale()
   const tag = intlLocale(locale)
-  if (locale !== 'zh') return new Intl.DateTimeFormat(tag, { weekday: 'long', month: 'long', day: 'numeric' }).format(d)
-  return `${new Intl.DateTimeFormat(tag, { month: 'long', day: 'numeric' }).format(d)} ${new Intl.DateTimeFormat(tag, { weekday: 'long' }).format(d)}`
+  if (locale !== 'zh') return dtf(tag, { weekday: 'long', month: 'long', day: 'numeric' }).format(d)
+  return `${dtf(tag, { month: 'long', day: 'numeric' }).format(d)} ${dtf(tag, { weekday: 'long' }).format(d)}`
 }
 
 /** 月 / 星期的名字(模板变量 `{{date:MMMM dddd}}` 这类 moment 名字令牌,评审 G4-10):口径同本文件其余函数,走界面语言。
@@ -180,7 +196,7 @@ export function formatLongDate(at: TimeInput, opts: TimeOpts = {}): string {
 export function formatDateName(at: Date, part: 'month' | 'monthShort' | 'weekday' | 'weekdayShort' | 'weekdayNarrow', locale: Locale = currentLocale()): string {
   const opt: Intl.DateTimeFormatOptions = part === 'month' ? { month: 'long' } : part === 'monthShort' ? { month: 'short' }
     : part === 'weekday' ? { weekday: 'long' } : part === 'weekdayShort' ? { weekday: 'short' } : { weekday: 'narrow' }
-  return new Intl.DateTimeFormat(intlLocale(locale), opt).format(at)
+  return dtf(intlLocale(locale), opt).format(at)
 }
 
 /** 仪表盘时钟卡片:指定时区的「14:05:09」与「9月17日周三」。时区写错时 Intl 抛 RangeError,由调用方兜底。 */
@@ -188,7 +204,7 @@ export function formatZonedClock(at: Date, opts: { locale?: Locale; timeZone?: s
   const tag = intlLocale(opts.locale ?? currentLocale())
   const tz = opts.timeZone ? { timeZone: opts.timeZone } : {}
   return {
-    time: new Intl.DateTimeFormat(tag, { ...tz, hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' }).format(at),
-    date: new Intl.DateTimeFormat(tag, { ...tz, month: 'long', day: 'numeric', weekday: 'short' }).format(at),
+    time: dtf(tag, { ...tz, hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' }).format(at),
+    date: dtf(tag, { ...tz, month: 'long', day: 'numeric', weekday: 'short' }).format(at),
   }
 }
