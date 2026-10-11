@@ -12,6 +12,8 @@
  *   落点(页码 / 引语)经 file.onGoto 交给它;库外的 PDF 插件读不到,照旧内置阅读器。断言 P1–P5,不跑 C 系列
  *   (C 系列盯的是内置阅读器自己的行为)。负对照(同日实跑):对着 v2.13.2 的构建跑 `--plugin` → P1 / P2 / P3 / P5 红
  *   (引用进了内置阅读器,探针一个落点都没收到),P4 绿。
+ *   `PDFCITE_PLUGIN_DIR=<插件目录> … --plugin`:不用探针,装那份真插件(目前认 Better PDF 的界面:.pr-root / .pr-pageinput)
+ *   走 R1–R3 —— 真阅读器在对话旁那格里开得出来、跳得到页、引语标得出来。截图落 /tmp/pdfcite-realplugin.png。
  *
  * 需先 npm run build。用法:npm run e2e:pdfcite            (插件模式:node scripts/pdf-citation.e2e.cjs --plugin)
  * 报「启动失败」= 有 dev 版 Electron 占着单实例锁,先 pkill -f "node_modules/electron/dist/Electron.app"。
@@ -25,6 +27,7 @@ const { tinyPdf } = require('./lib/tiny-pdf.cjs')
 
 const ROOT = path.join(__dirname, '..')
 const PLUGIN = process.argv.includes('--plugin')
+const REAL = PLUGIN ? process.env.PDFCITE_PLUGIN_DIR || '' : ''
 /** 探针插件(--plugin):接管 .pdf,把每次挂载和每个落点记在 window.__pdfprobe 上(落点记成「文件|页|引语」)。 */
 const PROBE_MAIN = `
 var st = (window.__pdfprobe = window.__pdfprobe || { mounts: 0, gotos: [] })
@@ -92,8 +95,11 @@ async function main() {
   if (PLUGIN) {
     const probeDir = path.join(home, 'plugins', 'pdfprobe')
     fs.mkdirSync(probeDir, { recursive: true })
-    fs.writeFileSync(path.join(probeDir, 'main.js'), PROBE_MAIN)
-    fs.writeFileSync(path.join(probeDir, 'manifest.json'), JSON.stringify({ id: 'pdfprobe', name: 'PDF Probe', version: '1.0.0', minAppVersion: '0.0.1', description: 'e2e 用的 PDF 覆盖探针,不是产品插件' }))
+    if (REAL) for (const f of ['main.js', 'manifest.json']) fs.copyFileSync(path.join(REAL, f), path.join(probeDir, f))
+    else {
+      fs.writeFileSync(path.join(probeDir, 'main.js'), PROBE_MAIN)
+      fs.writeFileSync(path.join(probeDir, 'manifest.json'), JSON.stringify({ id: 'pdfprobe', name: 'PDF Probe', version: '1.0.0', minAppVersion: '0.0.1', description: 'e2e 用的 PDF 覆盖探针,不是产品插件' }))
+    }
   }
   const udDev = path.join(home, 'userdata-dev')
   fs.mkdirSync(udDev, { recursive: true })
@@ -157,6 +163,31 @@ async function main() {
     check('C4 同名歧义的裸文件名引用判未解析,不字典序猜一份', gray.length === 1 && gray[0].includes('研究.pdf#page=5'),
       `gray=${JSON.stringify(gray)}`)
 
+    if (REAL) {
+      const desk = () => win.evaluate(() => {
+        const r = [...document.querySelectorAll('.agent-desk .pr-root')].find((e) => e.offsetParent !== null)
+        return r ? { page: r.querySelector('.pr-pageinput')?.value || '', mark: r.dataset.bench || '', hits: r.querySelectorAll('.textLayer .highlight').length, builtin: document.querySelectorAll('.agent-desk .amx-pdfview').length } : null
+      })
+      const until = async (fn, ms = 30_000) => { const end = Date.now() + ms; for (;;) { const v = await fn().catch(() => null); if (v || Date.now() > end) return v; await win.waitForTimeout(200) } }
+      await chips.first().click()
+      await until(async () => (await desk())?.page === '8')
+      const r1 = await desk()
+      check('R1 真插件:点引用条 → 对话旁那格里是插件的阅读器,停在第 8 页', r1?.page === '8' && !r1.builtin, JSON.stringify(r1))
+      await win.evaluate(() => { const r = [...document.querySelectorAll('.agent-desk .pr-root')].find((e) => e.offsetParent !== null); if (r) r.dataset.bench = 'kept' })
+      await chips.nth(1).click()
+      await until(async () => (await desk())?.page === '3')
+      const r2 = await desk()
+      check('R2 真插件:同一份的第二条引用原地跳到第 3 页(阅读器没重建)', r2?.page === '3' && r2.mark === 'kept', JSON.stringify(r2))
+      await chips.nth(5).click()
+      await until(async () => ((await desk())?.hits || 0) > 0)
+      const r3 = await desk()
+      check('R3 真插件:带引语的引用把那句话标出来了(阅读器没重建)', (r3?.hits || 0) > 0 && r3.mark === 'kept', JSON.stringify(r3))
+      await win.screenshot({ path: '/tmp/pdfcite-realplugin.png' })
+      const badR = results.filter((r) => !r.ok)
+      console.log(`\n${results.length - badR.length}/${results.length} 通过`)
+      process.exitCode = badR.length ? 1 : 0
+      return
+    }
     if (PLUGIN) {
       const REL = '资料/研究.pdf'
       const gotos = () => win.evaluate(() => (window.__pdfprobe?.gotos || []).join(' ; '))
