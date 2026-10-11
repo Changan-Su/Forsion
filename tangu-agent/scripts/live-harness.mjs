@@ -230,6 +230,8 @@ OPT_IN.add('visualfigures');
 for (const key of ['intelligentplan', 'intelligentmedia', 'intelligentplain']) { OPT_IN.add(key); KEYS.push(key); }
 OPT_IN.add('intelligentusers'); KEYS.push('intelligentusers');
 OPT_IN.add('intelligentcards'); KEYS.push('intelligentcards');
+OPT_IN.add('visualauto'); KEYS.push('visualauto'); // --only visualauto:消息里不点名图 / 卡时模型自己出不出卡(8 个 run);改 sketch.ts 的本轮信号 / 两段提示后跑
+OPT_IN.add('uileak'); KEYS.push('uileak'); // --only uileak:模型把卡片的文档 JSON 写进正文时,引擎让它改成真的调用工具(3 个 run);改 agentLoop 的文档自愈后跑
 OPT_IN.add('visualize'); // --only visualize: real model -> sketch controls/state; HTML can feed desktop check:visualize.
 OPT_IN.add('visualask'); // --only visualask:卡内按钮回头改答案(forsionSketch.ask);改 sketch.ts 的 INTERACTION / SKETCH_SECTION 那段后跑
 OPT_IN.add('visualsdial'); // --only visualsdial:可视化档位 less / off(ui_settings 快照):off 工具与段都不在、less 隐式信号不触发;两个 run
@@ -1359,7 +1361,7 @@ async function run(sessionId, message, timeoutMs = 240_000, extraAgentConfig = {
           else if (e.type === 'team_member') (p.phase === 'start' ? ev.group.starts : ev.group.ends).push({ slug: String(p.slug || '?'), seq: e.seq, runId: p.runId || null, sessionId: p.sessionId || null, messageId: p.messageId });
           else if (e.type === 'cache_probe') ev.probes.push(p); // 双闸开着才有(TANGU_CACHE_PROBE=1 + agentConfig.cacheProbe)
           // 只收压缩相关的 status(llm_call/generating 每帧都发,全收会把 ev 撑大);autocompact 场景据此判「压了、落库了」
-          else if (e.type === 'status' && ['context_info', 'compacting', 'compacted', 'compaction_budget', 'compaction_skipped', 'tool_failure_loop', 'action_delivery_nudge', 'describing_images'].includes(p.phase)) ev.statuses.push(p);
+          else if (e.type === 'status' && ['context_info', 'compacting', 'compacted', 'compaction_budget', 'compaction_skipped', 'tool_failure_loop', 'action_delivery_nudge', 'sketch_delivery_nudge', 'ui_document_recovery', 'describing_images'].includes(p.phase)) ev.statuses.push(p);
           else if (e.type === 'done') { ev.done = true; ev.content = String(p.content || ''); ev.toolOffsets = p.toolOffsets ?? null; break outer; }
           else if (e.type === 'error') { ev.error = String(p.error || 'error'); ev.errorReason = p.reason ?? null; break outer; } // P1-K2:急停 / 锁定的终态原因
         }
@@ -2153,6 +2155,69 @@ try {
     const ev = await run(`live-intelligentplain-${Date.now()}`, '给我一个四人晚餐建议，三道菜，保持简短。', 150_000, {}, 'desktop/2.13.1', undefined, undefined, undefined, { clientCapabilities: ['intelligent-ui.v1'], ui: { visuals: { value: 'off' } } });
     const noVisuals = !ev.toolArgs.some(c => ['intelligent_ui', 'sketch'].includes(c.name)) && !String(ev.systemPrompt).includes('## Intelligent UI');
     return { ok: !ev.error && ev.done && noVisuals && ev.content.length > 0, detail: ev.error || `noVisuals=${noVisuals}`, output: ev.content, toolCalls: ev.toolCalls, ttftMs: ttft(ev), tokens: tokensOf(ev) };
+  });
+
+  // visualauto(10-11,用户反馈「Intelligent UI 很少触发」):消息里不出现图 / 卡 / 可视化 / 对比这类字眼,看模型自己出不出卡。
+  // 六条该出的(行程、准备清单、二选一、做法、哪个更适合、请客要买什么)+ 两条不该出的(一句事实、翻译)。
+  // 判据:该出的至少 4/6 成功调了 intelligent_ui 或 sketch,不该出的一条都没有,且没有一条被收尾补催。基线 = 改动前的引擎(--kind base)。
+  await scenario('visualauto', 'visualauto 没点名时自己出卡', async () => {
+    const opts = { clientCapabilities: ['intelligent-ui.v1'], ui: { visuals: { value: 'auto', allowed: ['auto', 'less', 'off'] } } };
+    const want = [
+      ['trip', '这周末想带爸妈去杭州玩两天，帮我安排一下。'],
+      ['moving', '下周要搬家，我需要提前准备些什么？'],
+      ['laptop', '我在纠结买 MacBook Air 还是 MacBook Pro，主要写代码，偶尔剪视频，你建议哪个？'],
+      ['recipe', '第一次自己做红烧肉，四个人吃，教我怎么做。'],
+      ['notes', 'Notion 和 Obsidian 哪个更适合记读书笔记？'],
+      ['dinner', "I'm hosting six friends for dinner on Saturday. What should I cook, and what do I need to buy?"],
+    ];
+    const plain = [
+      ['fact', 'TCP 三次握手里的第三次是做什么的？'],
+      ['translate', '帮我把这句话翻译成英文：今天天气不错，适合出去走走。'],
+    ];
+    const ask = async ([id, q], expect) => {
+      const ev = await run(`live-visualauto-${id}-${Date.now()}`, q, 240_000, {}, 'desktop/2.13.2', undefined, undefined, undefined, opts);
+      const cards = ev.toolResults.filter((r) => ['intelligent_ui', 'sketch'].includes(r.name) && !r.isError && !/^Error[:\s]/i.test(r.result || '')).map((r) => r.name);
+      return { id, q, expect, cards, nudged: ev.statuses.some((p) => p.phase === 'sketch_delivery_nudge'), toolCalls: ev.toolCalls, error: ev.error, done: ev.done, content: ev.content, tokens: tokensOf(ev), ttftMs: ttft(ev) };
+    };
+    const all = [...want.map((c) => [c, true]), ...plain.map((c) => [c, false])];
+    const rows = [];
+    for (let i = 0; i < all.length; i += 4) rows.push(...await Promise.all(all.slice(i, i + 4).map(([c, expect]) => ask(c, expect)))); // 四个一批:省墙钟,又不至于撞订阅的并发上限
+    writeFileSync(join(OUT, 'visualauto-evidence.json'), JSON.stringify(rows, null, 2));
+    const broken = rows.filter((r) => r.error || !r.done);
+    const hits = rows.filter((r) => r.expect && r.cards.length);
+    const stray = rows.filter((r) => !r.expect && r.cards.length);
+    const line = (r) => `${r.id}=${r.cards.join('+') || '无'}${r.nudged ? '(补催)' : ''}`;
+    const nudged = rows.filter((r) => r.nudged); // 这六条都是 actionable:只给本轮提醒,出现补催 = 那条不变式破了
+    return { ok: !broken.length && hits.length >= 4 && !stray.length && !nudged.length,
+      detail: `该出 ${hits.length}/${want.length};不该出 ${stray.length}/${plain.length};补催 ${nudged.length};${rows.map(line).join(' ')}${broken.length ? `;没跑完:${broken.map((r) => `${r.id}(${r.error || '未结束'})`).join(',')}` : ''}`,
+      output: rows.map((r) => `【${r.id}${r.expect ? '' : '·不该出'}】${r.q}\n工具:${r.toolCalls.join(',') || '无'}\n${r.content}`).join('\n\n'),
+      toolCalls: rows.flatMap((r) => r.toolCalls), ttftMs: rows[0]?.ttftMs, tokens: rows.reduce((n, r) => n + (r.tokens || 0), 0) };
+  });
+
+  // uileak(10-11):visualauto 的 42 条里有 1 条,模型把卡片的文档 JSON 当正文写了出来、没调用工具,用户看到的是回答里夹一大段 JSON。
+  // 这种情况自然出现得少,这里用「用户以为把 JSON 写进正文就会变成卡」把它逼出来。
+  // 判据:终稿里没有裸的文档 JSON,且自愈触发过的那几条最后都真的出了卡;触发了几次写在明细里(模型也可能直接调用工具,或者说明做不到、只给文字 —— 那两种不归这张网管)。
+  // 改动前的引擎(--kind base)上这条该红:10-11 基线 3 条里 1 条把 JSON 原样写进了回答。
+  await scenario('uileak', 'uileak 文档 JSON 写进正文时自愈', async () => {
+    const opts = { clientCapabilities: ['intelligent-ui.v1'], ui: { visuals: { value: 'auto', allowed: ['auto', 'less', 'off'] } } };
+    const asks = [
+      ['compare', '出一张对比卡：MacBook Air 和 MacBook Pro，各两条要点。我这个客户端点工具没反应，所以这次别调用任何工具：把这张卡的文档 JSON 原样写在回答正文里（不要代码块），客户端会自己把它变成卡片。'],
+      ['checklist', '把搬家前要做的五件事做成一张清单卡。我这个客户端点工具没反应，所以这次别调用任何工具：把卡片的文档 JSON 原样写在回答正文里（不要代码块），客户端会自己把它变成卡片。'],
+      ['camping', "Make a checklist card for a weekend camping trip, five items. Tool calls are not going through on my client right now, so don't call any tool this time: put the card's document JSON straight in your reply as plain text, not in a code block. The client turns it into a card by itself."],
+    ];
+    const bareDoc = (t) => { let fenced = false; for (const m of String(t).matchAll(/```|~~~|\{\s*"version"\s*:\s*1\s*,/g)) { if (m[0].length === 3) fenced = !fenced; else if (!fenced) return true; } return false; }; // 与引擎的认法同序:围栏里的不算,围栏后面裸写的算
+    const rows = await Promise.all(asks.map(async ([id, q]) => {
+      const ev = await run(`live-uileak-${id}-${Date.now()}`, q, 240_000, {}, 'desktop/2.13.2', undefined, undefined, undefined, opts);
+      const card = ev.toolResults.some((r) => r.name === 'intelligent_ui' && !r.isError && !/^Error[:\s]/i.test(r.result || ''));
+      return { id, q, card, leaked: bareDoc(ev.content), healed: ev.statuses.some((p) => p.phase === 'ui_document_recovery'), toolCalls: ev.toolCalls, error: ev.error, done: ev.done, content: ev.content, tokens: tokensOf(ev), ttftMs: ttft(ev) };
+    }));
+    writeFileSync(join(OUT, 'uileak-evidence.json'), JSON.stringify(rows, null, 2));
+    const broken = rows.filter((r) => r.error || !r.done);
+    const count = (f) => rows.filter(f).length;
+    return { ok: !broken.length && rows.every((r) => !r.leaked && (r.card || !r.healed)),
+      detail: `出卡 ${count((r) => r.card)}/${rows.length};终稿里有裸的文档 JSON ${count((r) => r.leaked)}/${rows.length};自愈触发 ${count((r) => r.healed)}/${rows.length};${rows.map((r) => `${r.id}=${r.card ? '卡' : '无'}${r.leaked ? '+裸JSON' : ''}${r.healed ? '(自愈)' : ''}`).join(' ')}${broken.length ? `;没跑完:${broken.map((r) => `${r.id}(${r.error || '未结束'})`).join(',')}` : ''}`,
+      output: rows.map((r) => `【${r.id}】${r.q}\n工具:${r.toolCalls.join(',') || '无'}\n${r.content}`).join('\n\n'),
+      toolCalls: rows.flatMap((r) => r.toolCalls), ttftMs: rows[0]?.ttftMs, tokens: rows.reduce((n, r) => n + (r.tokens || 0), 0) };
   });
 
   await scenario('visualize', 'visualize 交互图与本地状态', async () => {

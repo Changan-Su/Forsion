@@ -7,6 +7,27 @@ export const INTELLIGENT_UI_CAPABILITY = 'intelligent-ui.v1'
 export function intelligentUiEnabledFor(ctx: Parameters<typeof sketchEnabledFor>[0] & Pick<ToolContext, 'clientCapabilities'>): boolean {
   return sketchEnabledFor(ctx) && !!ctx.clientCapabilities?.includes(INTELLIGENT_UI_CAPABILITY)
 }
+/** 模型把文档 JSON 当正文写了出来、没调用工具(真模型 visualauto 的 42 条里见过 1 次):正文里有一段不在代码围栏里的
+ *  `{"version":1,…"blocks":[…`。围栏里的不算 —— 用户要看 JSON 时模型会放进代码块。只做识别,不解析。 */
+export function looksLikeLeakedUiDocument(content: string): boolean {
+  if (!content || content.length > 200_000) return false;
+  let lastBlocks = -1;
+  for (const m of content.matchAll(/"blocks"\s*:\s*\[/g)) lastBlocks = m.index;
+  let fenced = false; // 一遍扫完:围栏开合与文档开头按出现顺序看,前面有一份放在围栏里的不挡后面裸写的
+  for (const m of content.matchAll(/```|~~~|\{\s*"version"\s*:\s*1\s*,/g)) {
+    if (m[0].length === 3) fenced = !fenced;
+    else if (!fenced && m.index < lastBlocks) return true;
+  }
+  return false;
+}
+
+/** 上面那种情况的回灌(不落库不上屏):让模型真的调用工具,重答到了就把那条正文从终稿里拿掉。用户就是要看 JSON 时给了出路(放进代码块重答)。 */
+export const UI_DOCUMENT_LEAK_CHECK = `<ui_document_check>
+Your last message printed an Intelligent UI document as chat text instead of calling \`intelligent_ui\`, so no view was rendered. That message has been discarded and will not be kept. Answer again now:
+- If you meant to show the view, call \`intelligent_ui\` with that document, then write the short prose that goes with it. Do not print the document JSON in your message.
+- If the user asked to read the raw JSON itself, write your answer again with the JSON inside a fenced code block.
+</ui_document_check>`;
+
 export const INTELLIGENT_UI_SECTION = `## Intelligent UI
 Deliver a native view by making an actual intelligent_ui function call. A JSON object written in
 the assistant's text does not invoke the tool and is not a usable answer.

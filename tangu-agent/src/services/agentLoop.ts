@@ -1,5 +1,5 @@
 import { normalizeUIAppCards } from '../shared/intelligentCards.js';
-import { intelligentUiEnabledFor, INTELLIGENT_UI_SECTION } from '../tools/builtin/intelligentUi.js';
+import { intelligentUiEnabledFor, INTELLIGENT_UI_SECTION, looksLikeLeakedUiDocument, UI_DOCUMENT_LEAK_CHECK } from '../tools/builtin/intelligentUi.js';
 import { withTaskProjectQueue } from './taskProjectQueue.js';
 import { HUMAN_GUIDANCE, readHuman, renderHumanContext } from '../agents/humanStore.js';
 import { humanProjectScope } from './humanContext.js';
@@ -1213,6 +1213,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
   /** 把一段正文追加进终稿(空段 no-op)。finalize 只写 finalContent —— 中间迭代的 preamble
    *  正文(模型「先说话、再调工具」)必须经此累积,否则落库时只剩末轮收尾词,已流式给用户
    *  看过的话会凭空消失(实例:正文被一句 "NOTHING" 顶掉)。 */
+  let uiLeakRollback: string | null = null; // 文档 JSON 写成正文的那条纠正:那条正文进终稿之前的终稿,重答到了才退回到它
   const appendFinal = (text: string): void => {
     const t = String(text || '').trim();
     if (!t) return;
@@ -1518,13 +1519,13 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     const sketchEnabled = sketchEnabledFor({ client: clientTag, planMode, channelSession, preset, uiSettings });
     const visualsPref = visualsPrefOf(uiSettings);
     const nativeUiEnabled = intelligentUiEnabledFor({ client: clientTag, planMode, channelSession, preset, uiSettings, clientCapabilities });
-    const sketchTurnSignal = sketchEnabled ? sketchTurnSignalFor(String(input.message || ''), visualsPref) : undefined;
+    const sketchTurnSignal = sketchEnabled ? sketchTurnSignalFor(String(input.message || ''), visualsPref, nativeUiEnabled) : undefined;
     if (sketchEnabled) {
       systemParts.push(SKETCH_SECTION);
       if (nativeUiEnabled) systemParts.push(INTELLIGENT_UI_SECTION);
       if (visualsPref === 'less') systemParts.push(SKETCH_LESS_NOTE);
       // 常驻段稳定,但本轮信号按消息正则取 3 种值 → 跟记忆易变段同一落点(B1),别留在稳定前缀里。
-      if (sketchTurnSignal && volatilePlacement === 'system') systemParts.push(nativeUiEnabled ? sketchTurnSignal.section.replaceAll('`sketch`', '`intelligent_ui` or `sketch`') : sketchTurnSignal.section);
+      if (sketchTurnSignal && volatilePlacement === 'system') systemParts.push(sketchTurnSignal.section);
     }
     ctxMark('guidance');
     // 4) USER.md 全局用户画像(所有 agent 可见,用户维护,半稳定)。读失败不阻断。
@@ -1821,7 +1822,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     if (volatilePlacement === 'system-end' && (volatileMemory || sketchTurnSignal)) {
       segAt('system:memoryVolatile');
       if (volatileMemory) systemParts.push(RECALLED_MEMORY_HEADER + volatileMemory);
-      if (sketchTurnSignal) systemParts.push(nativeUiEnabled ? sketchTurnSignal.section.replaceAll('`sketch`', '`intelligent_ui` or `sketch`') : sketchTurnSignal.section);
+      if (sketchTurnSignal) systemParts.push(sketchTurnSignal.section);
       ctxMark('memory'); // ponytail:ctx 视图里这一档会出现第二条 memory —— 只为变体 S,不新增 key
     }
     // A4:系统块字节量随 usage 事件出账 ——「固定头到底多大」以后不用再估。
@@ -1974,7 +1975,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     if (humanCorrections.length) appendToLastUserMessage('[Collaboration settings updated outside this chat. The following are separate scopes: an empty project handbook does not cancel the Agent handbook. Current saved context, not tool authorization.]\n' + humanCurrentBlocks.join('\n\n'));
     if (volatilePlacement === 'tail') {
       if (volatileMemory) appendToLastUserMessage(RECALLED_MEMORY_HEADER + volatileMemory);
-      if (sketchTurnSignal) appendToLastUserMessage(nativeUiEnabled ? sketchTurnSignal.section.replaceAll('`sketch`', '`intelligent_ui` or `sketch`') : sketchTurnSignal.section);
+      if (sketchTurnSignal) appendToLastUserMessage(sketchTurnSignal.section);
     }
 
     // /skill 点名技能(参考 Hermes 的「指针+按需加载」):强指令拼到**尾部 user 消息**,正文由模型
@@ -2156,6 +2157,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         if (ts) tagMessageSource(pushed, { id: m.id, ts });
       }
       finalContent = '';
+      uiLeakRollback = null; // 换了回合:留着的那条已经随上一条消息落库,不再退
       finalReasoning = '';
       allToolCalls.length = 0;
       allToolResults.length = 0;
@@ -2607,6 +2609,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     let auditNudged = false; // 完成度审计只审一次:第二次收尾放行,避免「审计→敷衍收尾→再审计」死循环
     let planNudged = false; // 计划提交只催一次(理由同上;plan 模式也用于问答,催两次就成了逼它编计划)
     let sketchNudged = false; // 本轮已命中强视觉信号却没画:收尾前只补催一次,二次仍拒绝则放行
+    let uiDocumentRecovered = false; // 文档 JSON 写成了正文、没调用 intelligent_ui:只纠正一次,第二次原样放行
     let actionNudged = false; // 零工具调用却在承诺 / 声称动作:收尾前只催一次(services/actionDeliveryCheck.ts)
     let actionAskText = String(input.message || ''); // 兑现兜底看的「用户要了什么」:原话 + 运行中插话(applySteering 追加;Codex 10-02)
     let verifyRounds = 0; // 验证回路已跑次数(整 run 上限 VERIFY_MAX_ROUNDS,最后一次仍红则如实标注收尾)
@@ -3032,6 +3035,12 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         return;
       }
 
+      // 文档 JSON 写成正文的那条纠正,后半:重答到了(有正文或有工具调用)才把先前留着的那条从终稿里拿掉。
+      // 重答没来(额度不足、用户插话换了回合、出错)时那条还在终稿里 —— 它是唯一的回答,不能丢(Codex 10-11)。
+      if (uiLeakRollback !== null) {
+        if (res.content || res.toolCalls?.length) finalContent = uiLeakRollback;
+        uiLeakRollback = null;
+      }
       if (!res.toolCalls || res.toolCalls.length === 0 || lastIter) {
         // 安全网:模型把工具调用当正文吐(原生 tool_calls 空且文本兜底没解出来),但正文带工具
         // 调用标记 —— 别静默收尾。回灌一次纠正提示让它改用原生函数调用重试(预算内、非最后一轮)。
@@ -3053,6 +3062,30 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
               '工具调用 —— 不要把这些标记当作正文输出。',
           } as ChatMessage);
           void publish(runId, 'status', { phase: 'toolcall_format_recovery', iteration });
+          await appendStep({
+            id: uuidv4(), runId, stepNo: iteration,
+            llmResponse: { content: res.content, usage: res.usage },
+          });
+          continue;
+        }
+        // 同一张网的另一种漏法:模型把 intelligent_ui 的文档 JSON 当正文写了出来(10-11 live:luna 42 条里 1 条),用户看到的是
+        // 回答里夹一大段 JSON、没有卡。回灌一次让它真的调用工具,重答到了再把这条从终稿里拿掉。iteration < maxIterations - 2:下一轮不能是
+        // 不带工具的收尾轮。只纠正一次 —— 用户就是要看 JSON 的话,提示里让它放进代码块重答,那一次不再拦。
+        // 这一轮已经调过 intelligent_ui 的不拦:卡已经有了,再纠正只会多出一张重复的。
+        if (
+          !uiDocumentRecovered && !lastIter && iteration < maxIterations - 2 &&
+          toolDefs?.some((d) => d.function.name === 'intelligent_ui') && // 看这一发真带着的工具:严格工具表 / 部署白名单可能把它拿掉了
+          (!res.toolCalls || res.toolCalls.length === 0) &&
+          !allToolCalls.some((c) => c.function.name === 'intelligent_ui') &&
+          !(consumed && consumed.ok === false) &&
+          looksLikeLeakedUiDocument(res.content || '')
+        ) {
+          uiDocumentRecovered = true;
+          uiLeakRollback = finalContent;
+          appendFinal(res.content || '');
+          workingMessages.push(assistantTurnOf(res, res.content || ''));
+          workingMessages.push({ role: 'user', content: UI_DOCUMENT_LEAK_CHECK } as ChatMessage); // 不落库不上屏:harness 脚手架
+          void publish(runId, 'status', { phase: 'ui_document_recovery', iteration });
           await appendStep({
             id: uuidv4(), runId, stepNo: iteration,
             llmResponse: { content: res.content, usage: res.usage },
@@ -3140,7 +3173,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         // —— Sketch 交付兜底:常驻提示不足以对抗部分模型「直接写完文字就收尾」的惯性。
         //    本轮启发式命中、工具确实在场、且整 run 没调过 sketch 时,在收尾前补催一次。
         //    只催一次:模型二次检查仍认为图是噪声时允许收尾;用户的「纯文字/不要画」在信号层已排除。——
-        if (sketchTurnSignal && !sketchNudged && !lastIter && !allToolCalls.some((c) => ['sketch', 'intelligent_ui'].includes(c.function.name))) {
+        //    actionable(计划 / 清单 / 挑一个 / 做法)只给本轮那句提醒、不补催:这类说法宽,模型判断不该出卡时不值得再烧一轮。
+        if (sketchTurnSignal && sketchTurnSignal.kind !== 'actionable' && !sketchNudged && !lastIter && !allToolCalls.some((c) => ['sketch', 'intelligent_ui'].includes(c.function.name))) {
           sketchNudged = true;
           if (res.content || res.outputItems?.length) workingMessages.push(assistantTurnOf(res, res.content || ''));
           workingMessages.push({
