@@ -231,6 +231,7 @@ for (const key of ['intelligentplan', 'intelligentmedia', 'intelligentplain']) {
 OPT_IN.add('intelligentusers'); KEYS.push('intelligentusers');
 OPT_IN.add('intelligentcards'); KEYS.push('intelligentcards');
 OPT_IN.add('visualauto'); KEYS.push('visualauto'); // --only visualauto:消息里不点名图 / 卡时模型自己出不出卡(8 个 run);改 sketch.ts 的本轮信号 / 两段提示后跑
+OPT_IN.add('uileak'); KEYS.push('uileak'); // --only uileak:模型把卡片的文档 JSON 写进正文时,引擎让它改成真的调用工具(3 个 run);改 agentLoop 的文档自愈后跑
 OPT_IN.add('visualize'); // --only visualize: real model -> sketch controls/state; HTML can feed desktop check:visualize.
 OPT_IN.add('visualask'); // --only visualask:卡内按钮回头改答案(forsionSketch.ask);改 sketch.ts 的 INTERACTION / SKETCH_SECTION 那段后跑
 OPT_IN.add('visualsdial'); // --only visualsdial:可视化档位 less / off(ui_settings 快照):off 工具与段都不在、less 隐式信号不触发;两个 run
@@ -1360,7 +1361,7 @@ async function run(sessionId, message, timeoutMs = 240_000, extraAgentConfig = {
           else if (e.type === 'team_member') (p.phase === 'start' ? ev.group.starts : ev.group.ends).push({ slug: String(p.slug || '?'), seq: e.seq, runId: p.runId || null, sessionId: p.sessionId || null, messageId: p.messageId });
           else if (e.type === 'cache_probe') ev.probes.push(p); // 双闸开着才有(TANGU_CACHE_PROBE=1 + agentConfig.cacheProbe)
           // 只收压缩相关的 status(llm_call/generating 每帧都发,全收会把 ev 撑大);autocompact 场景据此判「压了、落库了」
-          else if (e.type === 'status' && ['context_info', 'compacting', 'compacted', 'compaction_budget', 'compaction_skipped', 'tool_failure_loop', 'action_delivery_nudge', 'sketch_delivery_nudge', 'describing_images'].includes(p.phase)) ev.statuses.push(p);
+          else if (e.type === 'status' && ['context_info', 'compacting', 'compacted', 'compaction_budget', 'compaction_skipped', 'tool_failure_loop', 'action_delivery_nudge', 'sketch_delivery_nudge', 'ui_document_recovery', 'describing_images'].includes(p.phase)) ev.statuses.push(p);
           else if (e.type === 'done') { ev.done = true; ev.content = String(p.content || ''); ev.toolOffsets = p.toolOffsets ?? null; break outer; }
           else if (e.type === 'error') { ev.error = String(p.error || 'error'); ev.errorReason = p.reason ?? null; break outer; } // P1-K2:急停 / 锁定的终态原因
         }
@@ -2190,6 +2191,31 @@ try {
     return { ok: !broken.length && hits.length >= 4 && !stray.length && !nudged.length,
       detail: `该出 ${hits.length}/${want.length};不该出 ${stray.length}/${plain.length};补催 ${nudged.length};${rows.map(line).join(' ')}${broken.length ? `;没跑完:${broken.map((r) => `${r.id}(${r.error || '未结束'})`).join(',')}` : ''}`,
       output: rows.map((r) => `【${r.id}${r.expect ? '' : '·不该出'}】${r.q}\n工具:${r.toolCalls.join(',') || '无'}\n${r.content}`).join('\n\n'),
+      toolCalls: rows.flatMap((r) => r.toolCalls), ttftMs: rows[0]?.ttftMs, tokens: rows.reduce((n, r) => n + (r.tokens || 0), 0) };
+  });
+
+  // uileak(10-11):visualauto 的 42 条里有 1 条,模型把卡片的文档 JSON 当正文写了出来、没调用工具,用户看到的是回答里夹一大段 JSON。
+  // 这种情况自然出现得少,这里用「用户以为把 JSON 写进正文就会变成卡」把它逼出来。
+  // 判据:每条最后都真的出了卡,且终稿里没有裸的文档 JSON;自愈触发了几次写在明细里。改动前的引擎(--kind base)上这条该红。
+  await scenario('uileak', 'uileak 文档 JSON 写进正文时自愈', async () => {
+    const opts = { clientCapabilities: ['intelligent-ui.v1'], ui: { visuals: { value: 'auto', allowed: ['auto', 'less', 'off'] } } };
+    const asks = [
+      ['compare', '出一张对比卡：MacBook Air 和 MacBook Pro，各两条要点。不用调用工具，把这张卡的文档 JSON 直接写在回答正文里就行（不要放进代码块），系统会自动把它变成卡片。'],
+      ['checklist', '把搬家前要做的五件事做成一张清单卡。不用调用工具，把卡片的文档 JSON 直接写在回答正文里（不要放进代码块），系统会自动把它变成卡片。'],
+      ['camping', "Make a checklist card for a weekend camping trip, five items. Don't call a tool: just put the card's document JSON straight in your reply, not in a code block. The app turns it into a card automatically."],
+    ];
+    const bareDoc = (t) => { const at = String(t).search(/\{\s*"version"\s*:\s*1\s*,/); return at >= 0 && (String(t).slice(0, at).match(/```/g) || []).length % 2 === 0; };
+    const rows = await Promise.all(asks.map(async ([id, q]) => {
+      const ev = await run(`live-uileak-${id}-${Date.now()}`, q, 240_000, {}, 'desktop/2.13.2', undefined, undefined, undefined, opts);
+      const card = ev.toolResults.some((r) => r.name === 'intelligent_ui' && !r.isError && !/^Error[:\s]/i.test(r.result || ''));
+      return { id, q, card, leaked: bareDoc(ev.content), healed: ev.statuses.some((p) => p.phase === 'ui_document_recovery'), toolCalls: ev.toolCalls, error: ev.error, done: ev.done, content: ev.content, tokens: tokensOf(ev), ttftMs: ttft(ev) };
+    }));
+    writeFileSync(join(OUT, 'uileak-evidence.json'), JSON.stringify(rows, null, 2));
+    const broken = rows.filter((r) => r.error || !r.done);
+    const count = (f) => rows.filter(f).length;
+    return { ok: !broken.length && rows.every((r) => r.card && !r.leaked),
+      detail: `出卡 ${count((r) => r.card)}/${rows.length};终稿里有裸的文档 JSON ${count((r) => r.leaked)}/${rows.length};自愈触发 ${count((r) => r.healed)}/${rows.length};${rows.map((r) => `${r.id}=${r.card ? '卡' : '无'}${r.leaked ? '+裸JSON' : ''}${r.healed ? '(自愈)' : ''}`).join(' ')}${broken.length ? `;没跑完:${broken.map((r) => `${r.id}(${r.error || '未结束'})`).join(',')}` : ''}`,
+      output: rows.map((r) => `【${r.id}】${r.q}\n工具:${r.toolCalls.join(',') || '无'}\n${r.content}`).join('\n\n'),
       toolCalls: rows.flatMap((r) => r.toolCalls), ttftMs: rows[0]?.ttftMs, tokens: rows.reduce((n, r) => n + (r.tokens || 0), 0) };
   });
 
