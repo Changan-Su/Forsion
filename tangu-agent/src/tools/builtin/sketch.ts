@@ -121,7 +121,8 @@ export const SKETCH_LESS_NOTE = `The user has set interface visuals to "less": c
 chart, diagram, card, or interactive view in this turn; otherwise answer in prose.`;
 
 export type SketchTurnSignal = {
-  kind: 'explicit' | 'implicit';
+  /** explicit = 用户点名要图;implicit = 比较 / 流程 / 数据形状;actionable = 要照着做、逐项勾、从里面挑的回答(计划、清单、几样里选一个、做法)。 */
+  kind: 'explicit' | 'implicit' | 'actionable';
   section: string;
 };
 
@@ -130,13 +131,19 @@ const SKETCH_EXPLICIT_RE = /(?:画|绘制|生成|做|给我|用)[^。！？\n]{0
 const SKETCH_RELATION_RE = /(?:比较|对比|排名|趋势|变化|演变|分布|构成|前后|步骤|流程|架构|结构|层级|关系|状态机|生命周期|用户旅程|路线图|时间线|决策矩阵|布局|版式|配色)|\b(?:compare|comparison|versus|vs\.?|rank|ranking|trend|distribution|composition|before and after|steps?|flow|process|architecture|hierarchy|relationship|state machine|lifecycle|journey|roadmap|timeline|decision matrix|layout|palette)\b/i;
 const SKETCH_INTERACTIVE_RE = /(?:计算器|滑块|筛选|过滤器|切换器|交互式)|\b(?:calculator|slider|filter|toggle|interactive)\b/i;
 const SKETCH_ANALYZE_RE = /(?:分析|对比|比较|趋势|增长|下降|变化|数据|指标)|\b(?:analy[sz]e|compare|trend|growth|decline|change|data|metric)\b/i;
+// 没有「图」的字眼、但答案是一份要照着做 / 逐项勾 / 从里面挑的东西(2026-10-11 用户反馈:没明说就不出卡)。
+// 只收指向明确的说法:「怎么做」「计划」这类在 agent 对话里天天出现的词不收(「接下来怎么做」「按计划继续」不是要一张卡)。
+const SKETCH_ACTIONABLE_RE = /(?:行程|攻略|日程|安排|清单|采购|准备(?:些|点|哪些)?(?:什么|啥)|[带买](?:些|点|哪些)?(?:什么|啥)|哪(?:个|款|种|家|台|部|本)(?:更|好|比较|最|合适|值得|划算)|(?:选|买|用|换|去|学|订|建议|推荐)哪(?:个|款|种|家|台|部|本)|怎么选|如何选|纠结|还是[^。！？\n]{1,24}[好呢?？]|值不值|要不要(?:买|换|选)|推荐|教我|做法|教程|食谱|菜谱)|\b(?:itinerary|checklist|packing list|shopping list|to-?do list|(?:meal|study|workout|travel|trip) plan|plan (?:a|an|my|our|the)|recipe|step[- ]by[- ]step|walk me through|pros and cons|which (?:one|should|is better|would you)|should i (?:buy|get|choose|pick|go)|recommend|what (?:do|should|will) (?:i|we) (?:need|bring|buy|pack|cook|make|prepare))\b/i;
+// actionable 只避开「这是在让我改 / 查代码」的消息。比下面那条窄:「主要写代码,买哪台笔记本」里的「写代码」不该把卡挡掉。
+const SKETCH_CODE_TASK_RE = /(?:修复|改代码|重构|编译|报错|调试)|\b(?:fix|refactor|compile|typecheck|unit test|bug|debug)\b|\.(?:[cm]?[jt]sx?|py|rs|go|java|swift)\b/i;
 const SKETCH_CODE_FOCUS_RE = /(?:修复|改代码|重构|实现|写代码|编译|测试|报错)|\b(?:fix|refactor|implement|code|function|class|compile|typecheck|unit test|bug)\b|\.(?:[cm]?[jt]sx?|py|rs|go|java|swift)\b/i;
 
 /**
  * 本轮视觉信号:常驻段负责通识,这里用很窄的语义启发式给当前请求一次额外提醒。
  * 不返回用户原文,不做 LLM 分类器,不因文中单个数字或代码里的 compare 误触发。
  */
-export function sketchTurnSignalFor(message: string, visuals: VisualsPref = 'auto'): SketchTurnSignal | undefined {
+export function sketchTurnSignalFor(message: string, visuals: VisualsPref = 'auto', nativeUi = false): SketchTurnSignal | undefined {
+  const tool = nativeUi ? '`intelligent_ui` or `sketch`' : '`sketch`';
   const text = String(message || '')
     .replace(/```[\s\S]*?```/g, ' ')
     .replace(/`[^`\n]+`/g, ' ')
@@ -149,7 +156,7 @@ export function sketchTurnSignalFor(message: string, visuals: VisualsPref = 'aut
       kind: 'explicit',
       section:
         '## Visual-first note for this turn\n' +
-        'The user explicitly asked for a visual deliverable. Call `sketch` before finishing; do not substitute an ASCII diagram, a Markdown table, or a prose description unless the user also explicitly requested that format.',
+        `The user explicitly asked for a visual deliverable. Call ${tool} before finishing; do not substitute an ASCII diagram, a Markdown table, or a prose description unless the user also explicitly requested that format.`,
     };
   }
   // less:只认明确要求;隐式信号(比较 / 流程 / 数据形状)不再提醒,收尾补催也随之缺席(它只看这个信号)。
@@ -159,14 +166,24 @@ export function sketchTurnSignalFor(message: string, visuals: VisualsPref = 'aut
   const interactive = SKETCH_INTERACTIVE_RE.test(text);
   const numbers = text.match(/(?:^|[^\p{L}\p{N}])[-+]?(?:\d{1,3}(?:[,_ ]\d{3})+|\d+)(?:\.\d+)?%?/gu)?.length ?? 0;
   const dataShape = numbers >= 3 && SKETCH_ANALYZE_RE.test(text);
-  if (!(relation || interactive || dataShape)) return undefined;
-  if (SKETCH_CODE_FOCUS_RE.test(text) && !interactive) return undefined;
-
+  if ((relation || interactive || dataShape) && !(SKETCH_CODE_FOCUS_RE.test(text) && !interactive)) {
+    return {
+      kind: 'implicit',
+      section:
+        '## Visual-first note for this turn\n' +
+        `This request contains a comparison, sequence, structure, data shape, or interaction that is faster to understand visually even though the user may not have said "draw". Default to calling ${tool} as part of the answer. Skip only if closer inspection shows that the relationship is trivial or the actual deliverable is code/a file rather than an explanation.`,
+    };
+  }
+  if (!SKETCH_ACTIONABLE_RE.test(text) || SKETCH_CODE_TASK_RE.test(text)) return undefined;
   return {
-    kind: 'implicit',
+    kind: 'actionable',
     section:
       '## Visual-first note for this turn\n' +
-      'This request contains a comparison, sequence, structure, data shape, or interaction that is faster to understand visually even though the user may not have said "draw". Default to calling `sketch` as part of the answer. Skip only if closer inspection shows that the relationship is trivial or the actual deliverable is code/a file rather than an explanation.',
+      'The answer to this request is something the user will follow, tick off or choose from (a plan or itinerary, things to prepare or buy, a pick among options, a procedure), even though they did not ask for a card. ' +
+      (nativeUi
+        ? 'Default to answering with `intelligent_ui`: inputs for what they can adjust (people, days, the option picked), a checklist for things to do, bring or buy, a comparison for the options, disclosures for longer explanations.'
+        : 'Default to answering with a `sketch` card built from `fs-checklist`, `fs-compare` or `fs-choice`.') +
+      ' Keep the prose around it to a short takeaway. Skip the card only if the complete answer is a sentence or two, or the request is about changing code or files in a project.',
   };
 }
 

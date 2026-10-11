@@ -1518,13 +1518,13 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     const sketchEnabled = sketchEnabledFor({ client: clientTag, planMode, channelSession, preset, uiSettings });
     const visualsPref = visualsPrefOf(uiSettings);
     const nativeUiEnabled = intelligentUiEnabledFor({ client: clientTag, planMode, channelSession, preset, uiSettings, clientCapabilities });
-    const sketchTurnSignal = sketchEnabled ? sketchTurnSignalFor(String(input.message || ''), visualsPref) : undefined;
+    const sketchTurnSignal = sketchEnabled ? sketchTurnSignalFor(String(input.message || ''), visualsPref, nativeUiEnabled) : undefined;
     if (sketchEnabled) {
       systemParts.push(SKETCH_SECTION);
       if (nativeUiEnabled) systemParts.push(INTELLIGENT_UI_SECTION);
       if (visualsPref === 'less') systemParts.push(SKETCH_LESS_NOTE);
       // 常驻段稳定,但本轮信号按消息正则取 3 种值 → 跟记忆易变段同一落点(B1),别留在稳定前缀里。
-      if (sketchTurnSignal && volatilePlacement === 'system') systemParts.push(nativeUiEnabled ? sketchTurnSignal.section.replaceAll('`sketch`', '`intelligent_ui` or `sketch`') : sketchTurnSignal.section);
+      if (sketchTurnSignal && volatilePlacement === 'system') systemParts.push(sketchTurnSignal.section);
     }
     ctxMark('guidance');
     // 4) USER.md 全局用户画像(所有 agent 可见,用户维护,半稳定)。读失败不阻断。
@@ -1821,7 +1821,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     if (volatilePlacement === 'system-end' && (volatileMemory || sketchTurnSignal)) {
       segAt('system:memoryVolatile');
       if (volatileMemory) systemParts.push(RECALLED_MEMORY_HEADER + volatileMemory);
-      if (sketchTurnSignal) systemParts.push(nativeUiEnabled ? sketchTurnSignal.section.replaceAll('`sketch`', '`intelligent_ui` or `sketch`') : sketchTurnSignal.section);
+      if (sketchTurnSignal) systemParts.push(sketchTurnSignal.section);
       ctxMark('memory'); // ponytail:ctx 视图里这一档会出现第二条 memory —— 只为变体 S,不新增 key
     }
     // A4:系统块字节量随 usage 事件出账 ——「固定头到底多大」以后不用再估。
@@ -1974,7 +1974,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     if (humanCorrections.length) appendToLastUserMessage('[Collaboration settings updated outside this chat. The following are separate scopes: an empty project handbook does not cancel the Agent handbook. Current saved context, not tool authorization.]\n' + humanCurrentBlocks.join('\n\n'));
     if (volatilePlacement === 'tail') {
       if (volatileMemory) appendToLastUserMessage(RECALLED_MEMORY_HEADER + volatileMemory);
-      if (sketchTurnSignal) appendToLastUserMessage(nativeUiEnabled ? sketchTurnSignal.section.replaceAll('`sketch`', '`intelligent_ui` or `sketch`') : sketchTurnSignal.section);
+      if (sketchTurnSignal) appendToLastUserMessage(sketchTurnSignal.section);
     }
 
     // /skill 点名技能(参考 Hermes 的「指针+按需加载」):强指令拼到**尾部 user 消息**,正文由模型
@@ -3140,7 +3140,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         // —— Sketch 交付兜底:常驻提示不足以对抗部分模型「直接写完文字就收尾」的惯性。
         //    本轮启发式命中、工具确实在场、且整 run 没调过 sketch 时,在收尾前补催一次。
         //    只催一次:模型二次检查仍认为图是噪声时允许收尾;用户的「纯文字/不要画」在信号层已排除。——
-        if (sketchTurnSignal && !sketchNudged && !lastIter && !allToolCalls.some((c) => ['sketch', 'intelligent_ui'].includes(c.function.name))) {
+        //    actionable(计划 / 清单 / 挑一个 / 做法)只给本轮那句提醒、不补催:这类说法宽,模型判断不该出卡时不值得再烧一轮。
+        if (sketchTurnSignal && sketchTurnSignal.kind !== 'actionable' && !sketchNudged && !lastIter && !allToolCalls.some((c) => ['sketch', 'intelligent_ui'].includes(c.function.name))) {
           sketchNudged = true;
           if (res.content || res.outputItems?.length) workingMessages.push(assistantTurnOf(res, res.content || ''));
           workingMessages.push({

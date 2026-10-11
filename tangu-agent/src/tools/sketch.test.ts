@@ -163,6 +163,36 @@ describe('sketch proactive turn signal', () => {
     expect(sketchTurnSignalFor('比较 Notion、Obsidian 和 Logseq 的定位、优缺点和价格', 'auto')?.kind).toBe('implicit');
   });
 
+  it.each([
+    '这周末想带爸妈去杭州玩两天，帮我安排一下。',
+    '下周要搬家，我需要提前准备些什么？',
+    '我在纠结买 MacBook Air 还是 MacBook Pro，主要写代码，偶尔剪视频，你建议哪个？',
+    '第一次自己做红烧肉，四个人吃，教我怎么做。',
+    'Notion 和 Obsidian 哪个更适合记读书笔记？',
+    "I'm hosting six friends for dinner on Saturday. What should I cook, and what do I need to buy?",
+  ])('flags an answer the user will follow, tick off or choose from: %s', (message) => {
+    expect(sketchTurnSignalFor(message)?.kind).toBe('actionable');
+    expect(sketchTurnSignalFor(message, 'less')).toBeUndefined();
+  });
+
+  it.each([
+    'TCP 三次握手里的第三次是做什么的？',
+    '帮我把这句话翻译成英文：今天天气不错，适合出去走走。',
+    '接下来怎么做？',
+    '按计划继续',
+    '修复 checklist.ts 的报错，推荐的写法是什么',
+    '只用文字推荐三本书，不要画图',
+  ])('leaves everyday agent talk and code tasks alone: %s', (message) => {
+    expect(sketchTurnSignalFor(message)).toBeUndefined();
+  });
+
+  it('names the native tool only when the client can render it', () => {
+    const q = '下周要搬家，我需要提前准备些什么？';
+    expect(sketchTurnSignalFor(q, 'auto', true)?.section).toContain('`intelligent_ui`');
+    expect(sketchTurnSignalFor(q, 'auto', false)?.section).not.toContain('intelligent_ui');
+    expect(sketchTurnSignalFor('请画一张从注册到支付的用户旅程图', 'auto', true)?.section).toContain('Call `intelligent_ui` or `sketch` before finishing');
+  });
+
   it('ignores visual words that only occur inside a code fence', () => {
     expect(sketchTurnSignalFor('fix this:\n```ts\nconst chart = compare(a, b)\n```')).toBeUndefined();
   });
