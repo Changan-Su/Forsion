@@ -374,29 +374,21 @@ function blankDashboard(title: string): string {
   return compile(manifest, {})
 }
 
-/** 「打开这份 PDF」:笔记里的 `[[x.pdf]]` 链接、嵌入上的打开键。不是「用内置阅读器打开」——
- *  不带页码时听「默认打开方式」(启用的插件以 override 认领了 .pdf 就进它的视图,走 openFile 的同一道判定);
- *  带页码的照旧进内置阅读器:插件的文件视图只收得到路径,跳不到那一页。
- *  在这之前两条链接入口直调 openPdf,装了接管 PDF 的插件,从笔记里点开的仍是内置阅读器。 */
-export function openPdfLink(pdfPath: string, page?: number, opts?: { newTab?: boolean }): void {
-  if (page == null) openFile(pdfPath, opts)
-  else openPdf(pdfPath, page, opts)
-}
-
 /** 打开一个「插件文件类型」文件到通用 amadeus-plugin-file 视图:已有认领该文件的 tab
- *  → 激活;否则主区打开。新建后打开时该文件可能还没进结构 → 先刷新树再开。非插件文件类型回落系统默认程序。 */
-export function openFile(path: string, opts?: { newTab?: boolean }): void {
+ *  → 激活;否则主区打开。新建后打开时该文件可能还没进结构 → 先刷新树再开。非插件文件类型回落系统默认程序。
+ *  page / quote = 带落点的打开(笔记里的 `[[x.pdf#page=3]]`、聊天引用;目前只有 PDF 有落点):跟着「默认打开方式」
+ *  走到底 —— 内置阅读器照旧跳页,接管了 PDF 的插件视图经 `file.onGoto` 收到同一个落点。「打开这份 PDF」的入口
+ *  一律走这里,别直调 openPdf(那是「用内置阅读器打开」):直调的两回都让装了插件的人落进内置阅读器。 */
+export function openFile(path: string, opts?: { newTab?: boolean; page?: number; quote?: string }): void {
   // 内置文件类型先接管:插件的 ctx.app.openFile('x.excalidraw.md') 也落在这里,而 matchFileType 已经
   // 拒绝内置后缀(内置优先),不特判的话它会掉到下面的「非插件文件类型 → 交给系统默认程序」。
   if (isDrawingPath(path)) { openDrawing(path, opts); return }
   if (isDashboardPath(path)) { openDashboard(path, opts); return }
   // 单后缀分派查声明单源表(viewFileMatch;复合后缀在上面两行走 shared 判定函数=毁档防线,次序不动)。
   // 可覆盖的内置类型(目前只有 .pdf)被启用的插件以 override 认领了 → 不走内置分派,落到下面的插件文件视图。
-  // 带页码 / 引语的跳转(openPdf 的直接调用方:聊天引用、带 #page 的 PDF 链接)不经这里,照旧进内置阅读器;
-  // 笔记里不带页码的 PDF 链接经 openPdfLink 落到这里。
   if (!(isOverridableBuiltinType(path) && matchFileType(path))) {
     if (extHit(path, 'amadeus-db')) { openDb(path, opts); return }
-    if (extHit(path, 'amadeus-pdf')) { openPdf(path, undefined, opts); return }
+    if (extHit(path, 'amadeus-pdf')) { openPdf(path, opts?.page, opts); return }
     if (extHit(path, 'amadeus-image')) { openImage(path, opts); return }
   }
   if (isMediaPath(path)) { openMedia(path, undefined, opts); return }
@@ -419,11 +411,15 @@ export function openFile(path: string, opts?: { newTab?: boolean }): void {
     const ws = useWorkspace.getState()
     const api = (ws as unknown as { api?: { panels: PanelLike[] } }).api
     const hit = api?.panels.find((p) => p.params?.__type === 'amadeus-plugin-file' && p.params?.filePath === path)
+    // 落点同内置阅读器的走法:冷挂载放进视图参数,已开着的标签不重挂、广播 amadeus:pdf-goto(同一个事件,
+    // AmadeusPluginFileView 把两路合成 file.onGoto 交给插件)。
+    const loc = opts?.page ? { page: opts.page, ...(opts.quote ? { q: opts.quote } : {}) } : null
     if (hit && !opts?.newTab) {
       ws.activateLeaf(hit.id)
+      if (loc) window.dispatchEvent(new CustomEvent('amadeus:pdf-goto', { detail: { pdfPath: path, ...loc } }))
       return
     }
-    ws.openView('amadeus-plugin-file', { filePath: path }, 'main', opts?.newTab ? { newTab: true } : undefined)
+    ws.openView('amadeus-plugin-file', { filePath: path, ...loc }, 'main', opts?.newTab ? { newTab: true } : undefined)
   }
   // 先跳转后加载:面板立即开(视图按 filePath 自行拉内容),树刷新在后台补 ——
   // 弱网下不再让 GET /tree 挡住跳转(此前「文件还没进缓存清单」要先等整棵树才开面板)。

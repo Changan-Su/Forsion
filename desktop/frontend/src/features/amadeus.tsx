@@ -51,7 +51,7 @@ export function registerAmadeusViews(): void {
     // 旧网格版 view **已移除**(用户拍板:旧 UI 不能留着让人看到)。已存布局里的 amadeus-dashboard
     // panel 由 layoutViewsAllRegistered 整份回退 → 该 Space 按新配方重建,文件本身不受影响
     // (.dashboard.md 照旧被新画布版认领,旧布局键 dashboard: 也原样留在文件里当回滚保险)。
-    // 独立 PDF 视图(多实例,params.pdfPath 认领文件;树上点 .pdf / 笔记里点 [[x.pdf#page=N]] 打开,见 amadeusNav.openPdf)。
+    // 独立 PDF 视图(多实例,params.pdfPath 认领文件;树上点 .pdf / 笔记里点 [[x.pdf#page=N]] 打开,见 amadeusNav.openPdf;「由谁打开」在 openFile 里判,插件接管了 PDF 就不进这个视图)。
     registerView({
       type: 'amadeus-pdf', kind: 'entity', embeddable: true, idParam: 'pdfPath', fileMatch: VIEW_FILE_MATCH['amadeus-pdf'],
       displayName: () => 'PDF', icon: FileText, factory: (props) => <AmadeusPdfView {...props} />,

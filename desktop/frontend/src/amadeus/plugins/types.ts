@@ -696,8 +696,11 @@ export interface FileTypeContribution {
    *  reader / a specific plugin); Automatic gives it to the first enabled plugin that overrides it.
    *  The built-in reader is read-only and reloads when the file changes, so what you write with
    *  `ctx.app.writeBytes` shows up in an already-open built-in tab.
-   *  Not taken over: jumps that carry a page or quote (chat citations, `[[x.pdf#page=3]]`) and
-   *  `![[x.pdf]]` embeds — those keep using the built-in reader.
+   *  Jumps that carry a page or quote (`[[x.pdf#page=3]]`, chat citations) open your view too and hand
+   *  you the location through `file.onGoto` (see `mount`) — subscribe, or the file just opens where your
+   *  view opens it. Hosts up to 2.13.2 sent such jumps (and plain `[[x.pdf]]` note links) to the built-in
+   *  reader instead. Not taken over: `![[x.pdf]]` embeds, and the explicit "Open with the built-in
+   *  reader" entries.
    *  ⚠️ Binary types get no page surface: `file.surface.loadPage` refuses non-`.md` paths. Read the
    *  file with `ctx.app.readBytes?.()` and save with `ctx.app.writeBytes?.()`.
    *  Other built-in suffixes (`.excalidraw.md`, `.db`, images) cannot be overridden. Older hosts
@@ -706,8 +709,25 @@ export interface FileTypeContribution {
   /** Build the editor for one file into the host element; called once per opened instance. Return a
    *  cleanup (flush/save-on-close, clear timers here). Read/write the file via ctx.app.readFile/writeFile.
    *  `file.surface` (2026-08-14, when present): a per-view page surface scoped to this tab — prefer it
-   *  over ctx.app's active-page model so the view coexists with the note editor. */
-  mount(el: HTMLElement, file: { filePath: string; surface?: PluginPageSurface }): (() => void) | void
+   *  over ctx.app's active-page model so the view coexists with the note editor.
+   *  `file.onGoto` (2026-10-11, when present): subscribe to "land here" requests — a link or chat
+   *  citation that points at a place inside the file. If the open that created this view carried a
+   *  location, the callback gets it once right after you subscribe (asynchronously, never inside the
+   *  `onGoto()` call); later requests for the already-open view arrive the same way, without a remount.
+   *  The file may still be loading when it fires — hold the target until you can scroll. Returns an
+   *  unsubscribe; the host also drops the subscription when the view closes. */
+  mount(
+    el: HTMLElement,
+    file: { filePath: string; surface?: PluginPageSurface; onGoto?: (cb: (target: FileGotoTarget) => void) => () => void },
+  ): (() => void) | void
+}
+
+/** A place inside a file that a link or citation points at (`[[x.pdf#page=3]]`). Only PDFs carry one today. */
+export interface FileGotoTarget {
+  /** 1-based page number. */
+  page: number
+  /** Text to find and highlight on that page (chat citations quote the passage they cite). */
+  quote?: string
 }
 
 /** A "New …" file-creation entry a plugin contributes to the file tree's right-click menu (root + folder

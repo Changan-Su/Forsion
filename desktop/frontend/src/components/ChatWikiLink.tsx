@@ -197,21 +197,24 @@ async function openPdfCitation(path: string, page?: number, quote?: string): Pro
   // 只按 agentDeskEnabled 判会把状态写进一个不存在的面板 = 点了没反应。
   // deskAcceptsFiles:always 伴随面把 Desk 整体替换了,文件不进 Desk,照 Desk 关闭时走主区 tab。
   if (UI_MODE !== 'mobile' && deskAcceptsFiles(!!desktopConfig?.agentDeskEnabled) && activeId) {
+    // 由谁打开听「默认打开方式」:插件接管了 PDF,引用也进它的视图(落点经 file.onGoto 交给它),否则内置阅读器。
+    const { matchFileType } = await import('../amadeus/plugins/pluginStore')
+    const [type, idParam] = matchFileType(path) ? ['amadeus-plugin-file', 'filePath'] : ['amadeus-pdf', 'pdfPath']
     const top = useApp.getState().deskBySession[activeId]?.items?.[0]
-    const same = top?.view?.type === 'amadeus-pdf' && top.view.params?.pdfPath === path
+    const same = top?.view?.type === type && top.view.params?.[idParam] === path
     // 落状态:deskShowFile 对同一份 PDF 复用原 key(不 remount 重下),params 的新页码供**下次冷挂载**
     // (刷新后从快照恢复)用;DeskShimView 的 leaf 只按 key 记忆,params 变化不会灌进已挂载的视图。
-    const params: Record<string, unknown> = { pdfPath: path }
+    const params: Record<string, unknown> = { [idParam]: path }
     if (page) params.page = page
     if (quote) params.q = quote
-    useApp.getState().deskShowFile(activeId, path, { type: 'amadeus-pdf', params })
+    useApp.getState().deskShowFile(activeId, path, { type, params })
     // 已挂载(或正在装载)的阅读器由它自己听的 amadeus:pdf-goto 跳 —— 装载中到的事件被 PdfAnnotator
-    // 的 pendingGoto 记着,pagesinit 时补跳(openPdf 激活既有 tab 走的也是这条通路)。
+    // 的 pendingGoto 记着,pagesinit 时补跳(openFile 激活既有 tab 走的也是这条通路);插件视图听的是同一个事件。
     if (same && page) window.dispatchEvent(new CustomEvent('amadeus:pdf-goto', { detail: { pdfPath: path, page, q: quote } }))
     return
   }
-  const { openPdf } = await import('../amadeusNav')
-  openPdf(path, page, quote ? { quote } : undefined)
+  const { openFile } = await import('../amadeusNav')
+  openFile(path, { page, quote })
 }
 
 /** 行号/文件引用点击:同 PDF —— Desk 开着就在演出区开 WsFileView,否则退主区 tab。
