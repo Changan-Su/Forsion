@@ -230,6 +230,7 @@ OPT_IN.add('visualfigures');
 for (const key of ['intelligentplan', 'intelligentmedia', 'intelligentplain']) { OPT_IN.add(key); KEYS.push(key); }
 OPT_IN.add('intelligentusers'); KEYS.push('intelligentusers');
 OPT_IN.add('intelligentcards'); KEYS.push('intelligentcards');
+OPT_IN.add('visualauto'); KEYS.push('visualauto'); // --only visualauto:消息里不点名图 / 卡时模型自己出不出卡(8 个 run);改 sketch.ts 的本轮信号 / 两段提示后跑
 OPT_IN.add('visualize'); // --only visualize: real model -> sketch controls/state; HTML can feed desktop check:visualize.
 OPT_IN.add('visualask'); // --only visualask:卡内按钮回头改答案(forsionSketch.ask);改 sketch.ts 的 INTERACTION / SKETCH_SECTION 那段后跑
 OPT_IN.add('visualsdial'); // --only visualsdial:可视化档位 less / off(ui_settings 快照):off 工具与段都不在、less 隐式信号不触发;两个 run
@@ -1359,7 +1360,7 @@ async function run(sessionId, message, timeoutMs = 240_000, extraAgentConfig = {
           else if (e.type === 'team_member') (p.phase === 'start' ? ev.group.starts : ev.group.ends).push({ slug: String(p.slug || '?'), seq: e.seq, runId: p.runId || null, sessionId: p.sessionId || null, messageId: p.messageId });
           else if (e.type === 'cache_probe') ev.probes.push(p); // 双闸开着才有(TANGU_CACHE_PROBE=1 + agentConfig.cacheProbe)
           // 只收压缩相关的 status(llm_call/generating 每帧都发,全收会把 ev 撑大);autocompact 场景据此判「压了、落库了」
-          else if (e.type === 'status' && ['context_info', 'compacting', 'compacted', 'compaction_budget', 'compaction_skipped', 'tool_failure_loop', 'action_delivery_nudge', 'describing_images'].includes(p.phase)) ev.statuses.push(p);
+          else if (e.type === 'status' && ['context_info', 'compacting', 'compacted', 'compaction_budget', 'compaction_skipped', 'tool_failure_loop', 'action_delivery_nudge', 'sketch_delivery_nudge', 'describing_images'].includes(p.phase)) ev.statuses.push(p);
           else if (e.type === 'done') { ev.done = true; ev.content = String(p.content || ''); ev.toolOffsets = p.toolOffsets ?? null; break outer; }
           else if (e.type === 'error') { ev.error = String(p.error || 'error'); ev.errorReason = p.reason ?? null; break outer; } // P1-K2:急停 / 锁定的终态原因
         }
@@ -2153,6 +2154,42 @@ try {
     const ev = await run(`live-intelligentplain-${Date.now()}`, '给我一个四人晚餐建议，三道菜，保持简短。', 150_000, {}, 'desktop/2.13.1', undefined, undefined, undefined, { clientCapabilities: ['intelligent-ui.v1'], ui: { visuals: { value: 'off' } } });
     const noVisuals = !ev.toolArgs.some(c => ['intelligent_ui', 'sketch'].includes(c.name)) && !String(ev.systemPrompt).includes('## Intelligent UI');
     return { ok: !ev.error && ev.done && noVisuals && ev.content.length > 0, detail: ev.error || `noVisuals=${noVisuals}`, output: ev.content, toolCalls: ev.toolCalls, ttftMs: ttft(ev), tokens: tokensOf(ev) };
+  });
+
+  // visualauto(10-11,用户反馈「Intelligent UI 很少触发」):消息里不出现图 / 卡 / 可视化 / 对比这类字眼,看模型自己出不出卡。
+  // 六条该出的(行程、准备清单、二选一、做法、哪个更适合、请客要买什么)+ 两条不该出的(一句事实、翻译)。
+  // 判据:该出的至少 4/6 成功调了 intelligent_ui 或 sketch,不该出的一条都没有。基线 = 改动前的引擎(--kind base)。
+  await scenario('visualauto', 'visualauto 没点名时自己出卡', async () => {
+    const opts = { clientCapabilities: ['intelligent-ui.v1'], ui: { visuals: { value: 'auto', allowed: ['auto', 'less', 'off'] } } };
+    const want = [
+      ['trip', '这周末想带爸妈去杭州玩两天，帮我安排一下。'],
+      ['moving', '下周要搬家，我需要提前准备些什么？'],
+      ['laptop', '我在纠结买 MacBook Air 还是 MacBook Pro，主要写代码，偶尔剪视频，你建议哪个？'],
+      ['recipe', '第一次自己做红烧肉，四个人吃，教我怎么做。'],
+      ['notes', 'Notion 和 Obsidian 哪个更适合记读书笔记？'],
+      ['dinner', "I'm hosting six friends for dinner on Saturday. What should I cook, and what do I need to buy?"],
+    ];
+    const plain = [
+      ['fact', 'TCP 三次握手里的第三次是做什么的？'],
+      ['translate', '帮我把这句话翻译成英文：今天天气不错，适合出去走走。'],
+    ];
+    const ask = async ([id, q], expect) => {
+      const ev = await run(`live-visualauto-${id}-${Date.now()}`, q, 240_000, {}, 'desktop/2.13.2', undefined, undefined, undefined, opts);
+      const cards = ev.toolResults.filter((r) => ['intelligent_ui', 'sketch'].includes(r.name) && !r.isError && !/^Error[:\s]/i.test(r.result || '')).map((r) => r.name);
+      return { id, q, expect, cards, nudged: ev.statuses.some((p) => p.phase === 'sketch_delivery_nudge'), toolCalls: ev.toolCalls, error: ev.error, done: ev.done, content: ev.content, tokens: tokensOf(ev), ttftMs: ttft(ev) };
+    };
+    const all = [...want.map((c) => [c, true]), ...plain.map((c) => [c, false])];
+    const rows = [];
+    for (let i = 0; i < all.length; i += 4) rows.push(...await Promise.all(all.slice(i, i + 4).map(([c, expect]) => ask(c, expect)))); // 四个一批:省墙钟,又不至于撞订阅的并发上限
+    writeFileSync(join(OUT, 'visualauto-evidence.json'), JSON.stringify(rows, null, 2));
+    const broken = rows.filter((r) => r.error || !r.done);
+    const hits = rows.filter((r) => r.expect && r.cards.length);
+    const stray = rows.filter((r) => !r.expect && r.cards.length);
+    const line = (r) => `${r.id}=${r.cards.join('+') || '无'}${r.nudged ? '(补催)' : ''}`;
+    return { ok: !broken.length && hits.length >= 4 && !stray.length,
+      detail: `该出 ${hits.length}/${want.length};不该出 ${stray.length}/${plain.length};${rows.map(line).join(' ')}${broken.length ? `;没跑完:${broken.map((r) => `${r.id}(${r.error || '未结束'})`).join(',')}` : ''}`,
+      output: rows.map((r) => `【${r.id}${r.expect ? '' : '·不该出'}】${r.q}\n工具:${r.toolCalls.join(',') || '无'}\n${r.content}`).join('\n\n'),
+      toolCalls: rows.flatMap((r) => r.toolCalls), ttftMs: rows[0]?.ttftMs, tokens: rows.reduce((n, r) => n + (r.tokens || 0), 0) };
   });
 
   await scenario('visualize', 'visualize 交互图与本地状态', async () => {
