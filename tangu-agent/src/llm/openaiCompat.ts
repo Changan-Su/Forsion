@@ -18,6 +18,7 @@ import { applyThinking, clampThinkingLevel, normalizeThinkingLevel, resolveModel
 import { buildGrokBuildHeaders } from './grokBuildCompat.js';
 import { withStreamIdle, type StreamIdleGuard } from './streamIdle.js';
 import { assertToolDefinitions } from '../tools/toolDefinitionValidation.js';
+import { stringifyWellFormed } from './wellFormedJson.js';
 
 /** 直连 payload 的私有标记:multiBrain 据此把 stream 分发到本实现而非 httpBrain。 */
 export const DIRECT_MARK = '__tangu_direct';
@@ -291,7 +292,7 @@ async function runOpenAiCompatStream(opts: StreamOpts, guard: StreamIdleGuard): 
   const response = await fetch(`${baseUrl}/chat/completions`, {
     method: 'POST',
     headers,
-    body: JSON.stringify(streamPayload),
+    body: stringifyWellFormed(streamPayload),
     signal: guard.signal,
   });
   opts.onResponseStart?.();

@@ -26,6 +26,7 @@ import { currentAgentSlug } from '../../seams/runContext.js';
 import { DEFAULT_AGENT_SLUG } from '../../core/tanguHome.js';
 import { registerAgentSyncIdentity } from '../../services/cloudSyncAccount.js';
 import { assertToolDefinitions } from '../../tools/toolDefinitionValidation.js';
+import { stringifyWellFormed } from '../../llm/wellFormedJson.js';
 
 export interface HttpBrainConfig {
   cloudUrl: string; // 形如 https://host(无尾斜杠)
@@ -120,7 +121,7 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
   const scopedSlug = (): string => { const s = currentAgentSlug(); return s && s !== DEFAULT_AGENT_SLUG ? s : ''; };
 
   async function postJson<T>(path: string, body: any, signal?: AbortSignal, floorMs = 0): Promise<T> {
-    const raw = JSON.stringify(body);
+    const raw = stringifyWellFormed(body);
     const bytes = Buffer.byteLength(raw, 'utf-8'); // 不是 raw.length:JSON 不转义非 ASCII,中文按 UTF-16 数会低估 3 倍
     const r = await fetch(`${base}${path}`, {
       method: 'POST',
@@ -213,7 +214,7 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
     // 不再是 build-payload,那道闸必须跟着搬过来 —— 否则带图的慢上行要一路吊到 360s 的流看门狗
     // 才收场(2026-08-27 实证:两个 run 都死在 view_image 之后那一 leg)。响应头一到即作废,
     // 绝不能让它在长流中途开火。
-    const raw = JSON.stringify(body);
+    const raw = stringifyWellFormed(body);
     const bytes = Buffer.byteLength(raw, 'utf-8');
     const upload = new AbortController();
     const uploadTimer = setTimeout(

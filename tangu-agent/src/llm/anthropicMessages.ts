@@ -21,6 +21,7 @@ import type { StreamOpts, StreamResult } from '../seams/cloudBrain.js';
 import { LlmError } from '../core/types.js';
 import { PROTOCOL_MARK } from './openaiCompat.js';
 import { withStreamIdle, type StreamIdleGuard } from './streamIdle.js';
+import { stringifyWellFormed } from './wellFormedJson.js';
 
 const ANTHROPIC_VERSION = '2023-06-01';
 const DEFAULT_MAX_TOKENS = 8192;
@@ -271,7 +272,7 @@ async function runAnthropicStream(opts: StreamOpts, guard: StreamIdleGuard): Pro
         'x-api-key': apiKey,
         ...(bind ? { 'anthropic-beta': THINKING_BINDING_BETA } : {}),
       },
-      body: JSON.stringify(
+      body: stringifyWellFormed(
         bind ? { ...body, thinking: { ...body.thinking, block_binding: { prefix_mismatch_behavior: 'drop_block' } } } : body,
       ),
       signal: guard.signal,
