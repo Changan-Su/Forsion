@@ -38,6 +38,7 @@ import { cloudAgentsEnabled, cloudGetAgent, cloudReadAgentsMeta } from '../agent
 import { agentsDir, readUserMd } from '../core/tanguHome.js';
 import { createMemoryRepository } from './memoryRepository.js';
 import { runWithUserAgentScope } from '../seams/runContext.js';
+import { wellFormed } from '../llm/wellFormedJson.js';
 
 export const REALTIME_PATH = '/agent/realtime';
 /** 子协议鉴权:客户端 new WebSocket(url, [REALTIME_BEARER_PROTOCOL, token]);握手里必须把这个名字回给它,否则浏览器当握手失败。 */
@@ -64,7 +65,7 @@ const ASK_TANGU = {
   },
 };
 
-const clip = (s: string, n: number): string => (s.length > n ? s.slice(0, n) + '…' : s);
+const clip = (s: string, n: number): string => (s.length > n ? wellFormed(s.slice(0, n)) + '…' : s);
 
 /**
  * 通话人设:身份 + 说话方式 + 委派规则 + 人格 / 用户画像 / 记忆 / 本会话最近几轮。每次回应都会重计上下文,各段都封顶。
