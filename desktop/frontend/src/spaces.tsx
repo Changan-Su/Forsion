@@ -8,6 +8,7 @@ import { INBOX_WORKSPACE_MODE } from './views/workspaceMode'
 import { registerSpace, addRibbonIcon, useSpaceStore, useWorkspace, deleteNamedLayout, clearLayout, resetSpaceLayouts, WINDOW_SPACE_ID } from '@lcl/engine'
 import type { SpaceDefinition, PersistedPanel, SidebarDefaults } from '@lcl/engine'
 import { useApp } from './stores/appStore'
+import { VIEW_FILE_MATCH } from './viewFileMatch'
 import { PRODUCT } from './product'
 import { installAmadeusCommands } from './amadeusCommands'
 import { migrateTanguDetailsLayouts } from './tanguDetailsLayout'
@@ -178,6 +179,9 @@ const amadeusSpace: SpaceDefinition = {
   // 固定:只固定左栏笔记树。主区编辑器**刻意不固定** —— 笔记 / PDF / 多维表 / 白板是不同的视图类型,
   // 固定编辑器之后点一个 PDF 就会另开标签,「点文件就地换」的手感没了;而笔记树在,点任何一篇都回得到编辑器。
   pinned: { left: [AMADEUS_LEFT] },
+  // 主区的文件视图都算这个 Space 的:主区不固定(见上),「这种视图归哪个 Space」就靠这份清单认 —— 手机主页里点开一篇
+  // 笔记 / PDF 会被带到这里来开(引擎的 onePageRedirect)。全是没带身份参数的 entity 视图,启动器按 launchable 滤掉,不多出格子。
+  launcherViews: [...Object.keys(VIEW_FILE_MATCH), 'amadeus-media', 'amadeus-plugin-file'].map((type) => ({ type, params: {} })),
   // 左栏(笔记/搜索/标签)= 可自由拖宽 + 记住宽度(否则每次钉回黄金分割默认,折叠再开也丢用户调节的宽度)。
   resizableSides: { left: true },
   // 主区没有硬规则时(启动器/搜索/图谱/日历…)左栏回笔记树,而不是全局默认的会话。

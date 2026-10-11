@@ -6,7 +6,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { useWorkspace, dropAllowed } from './dockviewStore'
 import { useWorkspace as useSingle } from './singleColumnStore'
-import { isPinned, isLastPinned, missingPinned, pinnedLanding, type PinnedViews } from './pinnedViews'
+import { isPinned, isLastPinned, missingPinned, onePageLanding, onePageRedirect, type PinnedViews } from './pinnedViews'
 import { registerView, unregisterView } from './viewRegistry'
 import type { DropTarget } from './dropModel'
 import { resetSpaceLayouts, spaceLayoutsWereReset, useSpaceStore } from './spaceRegistry'
@@ -503,21 +503,36 @@ describe('固定 View:单列 store(移动端是独立重写的一份,漏接 = �
   })
 })
 
-// 「进主页看到的永远是主页」(2026-10-11 用户实报:手机上进主页,里面是别的 Space 的内容)。判定是 pinnedLanding;
-// 接线在 SingleColumnHost(进 Space 的落点钩子、底栏上点它自己那格),真机链路由 mobile 的 emu:nativeshell「home stays home」看。
-describe('pinnedLanding:声明了 landOnPinned 的 Space,进去先看到固定主视图', () => {
-  const home = { landOnPinned: true, pinned: { main: [{ type: 'homev', params: {} }] } as PinnedViews }
+// 主页就是主页(2026-10-11 用户实报:手机上进主页,里面是别的 Space 的内容;随后定「主页不让开标签」)。判定是这两个纯函数;
+// 接线在 SingleColumnHost(进 Space 的落点钩子、底栏上点它自己那格、主区开视图之前的钩子)与 spaceRegistry.redirectOpenFromOnePage,
+// 真机链路由 mobile 的 emu:nativeshell「home stays home」看。
+describe('一页式 Space(onePage):落点与转开', () => {
+  const home = { id: 'home', onePage: true, pinned: { main: [{ type: 'homev', params: {} }] } as PinnedViews }
+  const tangu = { id: 'tangu', pinned: { main: [{ type: 'chat', params: {} }] } as PinnedViews }
+  const notes = { id: 'notes', launcherViews: [{ type: 'notev', params: {} }] }
+  const spaces = [home, tangu, notes]
   const leaves = [{ id: 'homev', type: 'homev' }, { id: 'chat#1', type: 'chat' }]
 
-  it('前台是别的标签 → 切回固定主视图;已经在前台、没声明、区里没有它 → 不动', () => {
-    expect(pinnedLanding(home, leaves, 'chat#1')).toBe('homev')
-    expect(pinnedLanding(home, leaves, 'homev')).toBeNull()
-    expect(pinnedLanding({ pinned: home.pinned }, leaves, 'chat#1')).toBeNull()
-    expect(pinnedLanding(home, [{ id: 'chat#1', type: 'chat' }], 'chat#1')).toBeNull()
-    expect(pinnedLanding(undefined, leaves, 'chat#1')).toBeNull()
+  it('落点:它那一页到前台,多出来的标签关掉;没声明、或区里没有那一页 → 什么都不动', () => {
+    expect(onePageLanding(home, leaves, 'chat#1')).toEqual({ activate: 'homev', close: ['chat#1'] })
+    expect(onePageLanding(home, leaves, 'homev')).toEqual({ activate: null, close: ['chat#1'] })
+    expect(onePageLanding(home, [leaves[0]], 'homev')).toEqual({ activate: null, close: [] })
+    expect(onePageLanding({ pinned: home.pinned }, leaves, 'chat#1')).toEqual({ activate: null, close: [] })
+    expect(onePageLanding(home, [leaves[1]], 'chat#1')).toEqual({ activate: null, close: [] }) // 没有那一页:别把别的关光
+    expect(onePageLanding(undefined, leaves, 'chat#1')).toEqual({ activate: null, close: [] })
   })
 
-  it('真的单列 store:在固定主视图上开别的类型 → 多一个标签并到了前台;照判定切回去,那个标签还在', () => {
+  it('转开:固定在主区的、列在 launcherViews 里的,去它的主人那儿;自己那一页、占位视图、认不出主人的、不在一页式 Space 里 → 不带', () => {
+    expect(onePageRedirect(spaces, 'home', 'chat')).toBe('tangu')
+    expect(onePageRedirect(spaces, 'home', 'notev')).toBe('notes')
+    expect(onePageRedirect(spaces, 'home', 'homev')).toBeUndefined()
+    expect(onePageRedirect(spaces, 'home', 'launcher')).toBeUndefined()
+    expect(onePageRedirect(spaces, 'home', 'browser')).toBeUndefined()
+    expect(onePageRedirect(spaces, 'tangu', 'notev')).toBeUndefined() // Tangu 不是一页式:照旧开在它里面
+    expect(onePageRedirect(spaces, 'gone', 'chat')).toBeUndefined()
+  })
+
+  it('真的单列 store:旧布局里主页多着一个标签并在前台 → 照落点处理后只剩主页那一页', () => {
     registerView({ type: 'homev', kind: 'page', displayName: 'Home', factory: () => null, singleton: true })
     registerView({ type: 'otherv', kind: 'page', displayName: 'Other', factory: () => null })
     try {
@@ -525,21 +540,21 @@ describe('pinnedLanding:声明了 landOnPinned 的 Space,进去先看到固定�
       ws.resetLayout()
       ws.setPinned(home.pinned)
       ws.openView('homev', {}, 'main')
-      ws.openView('otherv', {}, 'main')
+      ws.openView('otherv', {}, 'main') // 没接转开钩子时:在固定视图上开别的类型 = 多一个标签并到前台(这就是「主页里是别的内容」)
       const before = useSingle.getState()
       expect(before.mainLeaves.map((r) => r.type)).toEqual(['homev', 'otherv'])
-      expect(before.mainLeaves.find((r) => r.id === before.activeMainId)?.type).toBe('otherv') // 这就是「主页里是别的内容」
-      const id = pinnedLanding(home, before.mainLeaves, before.activeMainId)
-      expect(id).toBe(before.mainLeaves[0].id)
-      ws.activateLeaf(id!)
+      expect(before.mainLeaves.find((r) => r.id === before.activeMainId)?.type).toBe('otherv')
+      const { activate, close } = onePageLanding(home, before.mainLeaves, before.activeMainId)
+      if (activate) ws.activateLeaf(activate)
+      for (const id of close) ws.closeLeaf(id, true)
       const after = useSingle.getState()
-      expect(after.mainLeaves.find((r) => r.id === after.activeMainId)?.type).toBe('homev')
-      expect(after.mainLeaves.map((r) => r.type)).toEqual(['homev', 'otherv'])
-      expect(pinnedLanding(home, after.mainLeaves, after.activeMainId)).toBeNull()
+      expect(after.mainLeaves.map((r) => r.type)).toEqual(['homev'])
+      expect(after.activeMainId).toBe(after.mainLeaves[0].id)
+      expect(onePageLanding(home, after.mainLeaves, after.activeMainId)).toEqual({ activate: null, close: [] })
     } finally { useSingle.getState().setPinned(undefined); useSingle.getState().resetLayout(); unregisterView('homev'); unregisterView('otherv') }
   })
 
-  it('布局里压根没有固定主视图(整份是别的视图):先补回来才有得切 —— 补回来的排在后台,不补就判不出落点', () => {
+  it('真的单列 store:布局里压根没有那一页(整份是别的视图)→ 先补回来才有得落', () => {
     registerView({ type: 'homev', kind: 'page', displayName: 'Home', factory: () => null, singleton: true })
     registerView({ type: 'otherv', kind: 'page', displayName: 'Other', factory: () => null })
     try {
@@ -548,11 +563,80 @@ describe('pinnedLanding:声明了 landOnPinned 的 Space,进去先看到固定�
       ws.setPinned(undefined)
       ws.openView('otherv', {}, 'main')
       ws.setPinned(home.pinned)
-      expect(pinnedLanding(home, useSingle.getState().mainLeaves, useSingle.getState().activeMainId)).toBeNull() // 没有它:判不出
+      expect(onePageLanding(home, useSingle.getState().mainLeaves, useSingle.getState().activeMainId)).toEqual({ activate: null, close: [] })
       ws.ensurePinned()
       const now = useSingle.getState()
       expect(now.mainLeaves.find((r) => r.id === now.activeMainId)?.type).toBe('otherv') // 补回来了,但在后台
-      expect(pinnedLanding(home, now.mainLeaves, now.activeMainId)).toBe(now.mainLeaves.find((r) => r.type === 'homev')!.id)
+      const homeId = now.mainLeaves.find((r) => r.type === 'homev')!.id
+      expect(onePageLanding(home, now.mainLeaves, now.activeMainId)).toEqual({ activate: homeId, close: [now.activeMainId] })
     } finally { useSingle.getState().setPinned(undefined); useSingle.getState().resetLayout(); unregisterView('homev'); unregisterView('otherv') }
+  })
+
+  it('真的单列 store:被带过来开(钩子说换了 Space)时,现成的那个钉着别的会话 → 换成要开的这条;跟随档的、没换 Space 的照旧', async () => {
+    const { setBeforeMainOpenHook } = await import('./singleColumnStore')
+    registerView({ type: 'chatv', kind: 'entity', idParam: 'sessionId', displayName: 'Chat', factory: () => null, singleton: true })
+    const shown = (): Record<string, unknown> => useSingle.getState().mainLeaves.find((r) => r.type === 'chatv')!.params
+    const want = { sessionId: 'B', followActive: false }
+    try {
+      const ws = useSingle.getState()
+      ws.resetLayout(); ws.setPinned(undefined)
+      ws.openView('chatv', { sessionId: 'A', followActive: false }, 'main')
+      // 没换 Space:只切过去、不动它。这是单列壳一直以来的行为(聊天是单例,手机上「在新标签页打开」开不出第二个聊天),
+      // 不是这次要的效果,也不在这次的范围里 —— 这里只钉「转开这条规则没有波及它」。
+      ws.openView('chatv', want, 'main', { newTab: true })
+      expect(shown()).toEqual({ sessionId: 'A', followActive: false })
+      setBeforeMainOpenHook(() => true)
+      ws.openView('chatv', want, 'main', { newTab: true })
+      expect(shown()).toEqual(want)
+      expect(useSingle.getState().mainLeaves.filter((r) => r.type === 'chatv')).toHaveLength(1)
+      // 跟随档:它随「当前会话」显示要开的那条,不该被钉死
+      ws.navigateLeaf(useSingle.getState().activeMainId!, 'chatv', { followActive: true, reuseKey: 'primary' })
+      ws.openView('chatv', want, 'main', { newTab: true })
+      expect(shown()).toEqual({ followActive: true, reuseKey: 'primary' })
+    } finally { setBeforeMainOpenHook(null); useSingle.getState().resetLayout(); unregisterView('chatv') }
+  })
+
+  it('真的单列 store:标签关掉,它的导航历史一并销毁(leaf id 会被下一个同类标签复用)', async () => {
+    const { useNav } = await import('./navStore')
+    registerView({ type: 'homev', kind: 'page', displayName: 'Home', factory: () => null, singleton: true })
+    registerView({ type: 'otherv', kind: 'page', displayName: 'Other', factory: () => null })
+    try {
+      const ws = useSingle.getState()
+      ws.resetLayout(); ws.setPinned(home.pinned)
+      ws.openView('homev', {}, 'main')
+      ws.openView('otherv', {}, 'main')
+      const id = useSingle.getState().activeMainId!
+      useNav.getState().record(id, { key: 'k1' } as never)
+      expect(id in useNav.getState().stacks).toBe(true)
+      ws.closeLeaf(id, true)
+      expect(id in useNav.getState().stacks).toBe(false)
+    } finally { useSingle.getState().setPinned(undefined); useSingle.getState().resetLayout(); unregisterView('homev'); unregisterView('otherv') }
+  })
+
+  it('真的 Space 表:带过去开的那一下,订阅 activeSpaceId 的人读得到带的是什么视图;切完即清;自己那一页不带', async () => {
+    const { redirectOpenFromOnePage, openRedirectType, registerSpace, unregisterSpace } = await import('./spaceRegistry')
+    const side = { left: [], right: [] }
+    const seen: Array<string | null> = []
+    const prev = useSpaceStore.getState().activeSpaceId
+    const realSwitch = useSpaceStore.getState().setActiveSpace
+    registerSpace({ id: 't-home', name: 'Home', sidebarDefaults: side, onePage: true, pinned: { main: [{ type: 'homev', params: {} }] }, build() {} })
+    registerSpace({ id: 't-chat', name: 'Chat', sidebarDefaults: side, pinned: { main: [{ type: 'chatv', params: {} }] }, build() {} })
+    // 这里只看判定与标记,不摆真布局(那半由模拟器台架看):切 Space 换成只改活动 id
+    useSpaceStore.setState({ activeSpaceId: 't-home', setActiveSpace: (id: string) => useSpaceStore.setState({ activeSpaceId: id }) })
+    const off = useSpaceStore.subscribe((st, p) => { if (st.activeSpaceId !== p.activeSpaceId) seen.push(openRedirectType()) })
+    try {
+      expect(redirectOpenFromOnePage('homev')).toBe(false)
+      expect(useSpaceStore.getState().activeSpaceId).toBe('t-home')
+      expect(redirectOpenFromOnePage('chatv')).toBe(true)
+      expect(useSpaceStore.getState().activeSpaceId).toBe('t-chat')
+      expect(seen).toEqual(['chatv'])
+      expect(openRedirectType()).toBeNull()
+      redirectOpenFromOnePage('homev') // 已经不在一页式 Space 里:不带
+      expect(useSpaceStore.getState().activeSpaceId).toBe('t-chat')
+    } finally {
+      off()
+      useSpaceStore.setState({ activeSpaceId: prev, setActiveSpace: realSwitch })
+      unregisterSpace('t-home'); unregisterSpace('t-chat')
+    }
   })
 })

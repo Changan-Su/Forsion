@@ -12,7 +12,7 @@
 import { Suspense, createElement, useEffect, useRef, useState, type RefObject } from 'react'
 import { flushSync } from 'react-dom'
 import { PanelLeft, PanelRight, X, MoreHorizontal, Plus, Zap, SlidersHorizontal, Check } from 'lucide-react'
-import { useSpaceStore, setActiveSpace, getActiveSpace, pinSpaceToHome } from './spaceRegistry'
+import { useSpaceStore, setActiveSpace, getActiveSpace, pinSpaceToHome, redirectOpenFromOnePage } from './spaceRegistry'
 import { useRibbonStore } from './ribbonRegistry'
 import { useCommandStore } from './commandRegistry'
 import { accountMenuItems, moreCommandGroups, moreCommandOn, moreCommandTitle, moreItems, moreRowLabel, presentedCommand } from './moreSheet'
@@ -25,9 +25,9 @@ import { DOCK_PICKS, dockSpaceIds, subscribeDockPicks, toggleDockPick } from './
 import { ExtendViewHost } from './ExtendViewHost'
 import { presentInlineExtension } from './extendView'
 import { NativeExtendView } from './nativeExtendView'
-import { useWorkspace, restoreSingleColumnLayout, presentDrawerExtension, setAfterLayoutHook } from './singleColumnStore'
+import { useWorkspace, restoreSingleColumnLayout, presentDrawerExtension, setAfterLayoutHook, setBeforeMainOpenHook } from './singleColumnStore'
 import { listFirstNow } from './listFirst'
-import { pinnedLanding } from './pinnedViews'
+import { onePageLanding } from './pinnedViews'
 import { Skeleton, ViewErrorBoundary, skeletonVariantOf } from './Skeleton'
 import './singleColumn.css'
 import { useEngineI18n } from './i18nSeam'
@@ -367,8 +367,8 @@ function useDrawerDrag(
  *  setActiveSpace 会走 applyNamed / resetLayout 整体重建布局,leftVisible 跟着复位 → 抽屉自动收回;
  *  它是同步的,所以重建之后再开一次即可。新 Space 压根没有左栏内容时不开(免得弹出个空抽屉)。 */
 function switchSpaceKeepDrawer(id: string): void {
-  // 点的就是当前这个:不换 Space(抽屉本来就开着),只落回它的固定主视图(同 enterSpace)。
-  if (id === useSpaceStore.getState().activeSpaceId) { landOnPinned(); return }
+  // 点的就是当前这个:不换 Space(抽屉本来就开着),只让一页式 Space 落回它那一页(同 enterSpace)。
+  if (id === useSpaceStore.getState().activeSpaceId) { landOnOnePage(); return }
   setActiveSpace(id)
   const ws = useWorkspace.getState()
   if (ws.leftVisible) return
@@ -399,26 +399,31 @@ function iconRev(icon: object | undefined): number {
 function landOnList(): void {
   if (listFirstNow() && !useWorkspace.getState().leftVisible) useWorkspace.getState().toggleSidebar('left')
 }
-/** 落到固定主视图(Space 声明了 landOnPinned 才做,见 types.ts):存下来的布局里上次停在别的标签上也不认。
- *  只换前台,不关标签;已经在前台是空操作。 */
-function landOnPinned(): void {
+/** 一页式 Space(types.ts 的 onePage,主页)的落点:它那一页到前台,多出来的标签关掉(旧布局里留下的、认不出主人
+ *  而开在这儿的)。别的 Space 是空操作。 */
+function landOnOnePage(): void {
   const sp = getActiveSpace()
-  if (!sp?.landOnPinned) return
-  // 先补再切:存下来的布局里可能压根没有它(整份都是别的视图)。调用方随后也会补(spaceRegistry.setActiveSpace),
+  if (!sp?.onePage) return
+  // 先补再落:存下来的布局里可能压根没有那一页(整份都是别的视图)。调用方随后也会补(spaceRegistry.setActiveSpace),
   // 但那时补回来的排在后台,前台还是别的视图。
   useWorkspace.getState().ensurePinned()
   const ws = useWorkspace.getState()
-  const id = pinnedLanding(sp, ws.mainLeaves, ws.activeMainId)
-  if (id) ws.activateLeaf(id)
+  const { activate, close } = onePageLanding(sp, ws.mainLeaves, ws.activeMainId)
+  if (activate) ws.activateLeaf(activate)
+  for (const id of close) ws.closeLeaf(id, true)
 }
 /** 进 Space(冷启动还原 / 切进来 / 布局重置)之后的落点。 */
-function landOnEntry(): void { landOnPinned(); landOnList() }
-/** 底栏 / 「全部 Space」面板上点一个 Space。点的就是当前这个:setActiveSpace 同 id 即返回,这里只把声明了 landOnPinned 的
- *  Space(主页)切回它的固定主视图 —— 人在主页里、前台却是别的标签时,点「主页」就该回到主页。 */
+function landOnEntry(): void { landOnOnePage(); landOnList() }
+/** 底栏 / 「全部 Space」面板上点一个 Space。点的就是当前这个:setActiveSpace 同 id 即返回,这里只让一页式 Space(主页)
+ *  落回它那一页 —— 人在主页里、前台却是别的东西时,点「主页」就该回到主页。 */
 function enterSpace(id: string): void {
-  if (id === useSpaceStore.getState().activeSpaceId) landOnPinned()
+  if (id === useSpaceStore.getState().activeSpaceId) landOnOnePage()
   else setActiveSpace(id)
 }
+// 人在一页式 Space 里开别的 Space 的视图:先带到那个 Space 去(见 spaceRegistry.redirectOpenFromOnePage)。
+setBeforeMainOpenHook(redirectOpenFromOnePage)
+/** 这个 Space 里有没有「新建标签页」:一页式 Space 没有(「⋯」、标签页面板两处的那一行都看它)。 */
+const tabsAllowed = (): boolean => !getActiveSpace()?.onePage
 setAfterLayoutHook(landOnEntry)
 
 /** 左抽屉底部常驻区:Space 切换条(原全局底栏移入)+ 账号卡与设置钮。
@@ -529,7 +534,7 @@ async function presentNativeTabs(tr: Tr): Promise<boolean> {
   })
   const out = await presentNativeMenu({
     title: tr('lcl.mobile.tabs'),
-    sections: [{ items }, { items: [{ id: 'new', label: tr('lcl.tab.new'), icon: Plus }] }],
+    sections: [{ items }, ...(tabsAllowed() ? [{ items: [{ id: 'new', label: tr('lcl.tab.new'), icon: Plus }] }] : [])],
   })
   if (!out.handled) return false
   const v = out.value
@@ -606,8 +611,8 @@ async function presentNativeMore(tr: Tr): Promise<boolean> {
   const out = await presentNativeMenu({
     title: tr('lcl.mobile.more'),
     sections: [
-      // 「新建标签页」:原生顶栏在只有一个标签页时不画计数钮(它本是这个动作的入口),所以这里常驻一行。
-      { items: [{ id: NEW_TAB, label: tr('lcl.tab.new'), icon: Plus }] },
+      // 「新建标签页」:原生顶栏在只有一个标签页时不画计数钮(它本是这个动作的入口),所以这里常驻一行。一页式 Space(主页)没有。
+      ...(tabsAllowed() ? [{ items: [{ id: NEW_TAB, label: tr('lcl.tab.new'), icon: Plus }] }] : []),
       ...(items.length ? [{ items: items.map((it) => ({ id: it.id, label: it.tooltip ? moreRowLabel(label(it.tooltip)) : it.id, icon: it.icon })) }] : []),
       ...groups.map((g) => ({
         ...(g.title ? { title: g.title } : {}),
@@ -644,7 +649,7 @@ function MoreSheet({ onClose }: { onClose: () => void }) {
         <div className="mb-sheet-grip" />
         {/* 原生顶栏只有一个标签页时不画计数钮(它本是「新建标签页」的入口)。原生「⋯」呈现不了(有带 component 的项 /
             宿主失败)才落到这张 Web 版,所以这里同样要有这一行;Web 顶栏自己的计数钮常在,不重复给。 */}
-        {nativeChrome && (
+        {nativeChrome && tabsAllowed() && (
           <button className="mb-sheet-row" data-act="new-tab" onClick={() => { onClose(); newMainTab() }}>
             <Plus size={20} />
             <span>{tr('lcl.tab.new')}</span>
@@ -725,9 +730,11 @@ function TabSheet({ onClose }: { onClose: () => void }) {
             </div>
           )
         })}
-        <button className="mb-sheet-row mb-tabrow-new" onClick={newTab}>
-          <Plus size={18} /> <span>{tr('lcl.tab.new')}</span>
-        </button>
+        {tabsAllowed() && (
+          <button className="mb-sheet-row mb-tabrow-new" onClick={newTab}>
+            <Plus size={18} /> <span>{tr('lcl.tab.new')}</span>
+          </button>
+        )}
       </div>
     </div>
   )

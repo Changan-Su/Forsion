@@ -96,8 +96,9 @@ export const homepageSpace: SpaceDefinition = {
   icon: House,
   sidebarDefaults: HOME_SIDE_VIEWS,
   pinned: { main: [{ type: 'homepage', params: {} }] },
-  // 手机上进主页永远先看到主页本体,不是上次在它里面开的别的标签(2026-10-11 用户定:「主页就主页维持的好好地」)。别去掉。
-  landOnPinned: true,
+  // 手机上主页就是主页这一页:不开标签,在它里面点开的对话 / 笔记去它们自己的 Space 开(2026-10-11 用户定:
+  // 「主页就主页维持的好好地」「主页不让开标签」)。别去掉。
+  onePage: true,
   build() {
     ws().setSidebarDefaults(HOME_SIDE_VIEWS)
     ws().openView('homepage', {}, 'main')
