@@ -126,16 +126,17 @@ export type SketchTurnSignal = {
   section: string;
 };
 
-const SKETCH_OPTOUT_RE = /(?:不要|不用|无需|别)(?:画|绘制|图表|可视化|\s*sketch)|(?:只要|仅)(?:用)?(?:文字|纯文字|代码)|\b(?:text[ -]?only|no (?:chart|diagram|visuals?|sketch))\b/i;
+const SKETCH_OPTOUT_RE = /(?:不要|不用|无需|别)(?:画|绘制|图表|可视化|\s*sketch)|(?:只要?|仅)(?:用)?(?:文字|纯文字|代码)|\b(?:text[ -]?only|no (?:chart|diagram|visuals?|sketch))\b/i;
 const SKETCH_EXPLICIT_RE = /(?:画|绘制|生成|做|给我|用)[^。！？\n]{0,48}(?:图|图表|示意图|架构图|流程图|时序图|关系图|时间线|看板|可视化|sketch)|(?:请|帮我)?可视化|\b(?:draw|visuali[sz]e|make|create|render|show)\b.{0,32}\b(?:chart|diagram|flowchart|timeline|wireframe|mockup|visual|sketch)\b|\b(?:diagram|flowchart|wireframe)\s+(?:this|it|the)\b/i;
 const SKETCH_RELATION_RE = /(?:比较|对比|排名|趋势|变化|演变|分布|构成|前后|步骤|流程|架构|结构|层级|关系|状态机|生命周期|用户旅程|路线图|时间线|决策矩阵|布局|版式|配色)|\b(?:compare|comparison|versus|vs\.?|rank|ranking|trend|distribution|composition|before and after|steps?|flow|process|architecture|hierarchy|relationship|state machine|lifecycle|journey|roadmap|timeline|decision matrix|layout|palette)\b/i;
 const SKETCH_INTERACTIVE_RE = /(?:计算器|滑块|筛选|过滤器|切换器|交互式)|\b(?:calculator|slider|filter|toggle|interactive)\b/i;
 const SKETCH_ANALYZE_RE = /(?:分析|对比|比较|趋势|增长|下降|变化|数据|指标)|\b(?:analy[sz]e|compare|trend|growth|decline|change|data|metric)\b/i;
 // 没有「图」的字眼、但答案是一份要照着做 / 逐项勾 / 从里面挑的东西(2026-10-11 用户反馈:没明说就不出卡)。
 // 只收指向明确的说法:「怎么做」「计划」这类在 agent 对话里天天出现的词不收(「接下来怎么做」「按计划继续」不是要一张卡)。
-const SKETCH_ACTIONABLE_RE = /(?:行程|攻略|日程|安排|清单|采购|准备(?:些|点|哪些)?(?:什么|啥)|[带买](?:些|点|哪些)?(?:什么|啥)|哪(?:个|款|种|家|台|部|本)(?:更|好|比较|最|合适|值得|划算)|(?:选|买|用|换|去|学|订|建议|推荐)哪(?:个|款|种|家|台|部|本)|怎么选|如何选|纠结|还是[^。！？\n]{1,24}[好呢?？]|值不值|要不要(?:买|换|选)|推荐|教我|做法|教程|食谱|菜谱)|\b(?:itinerary|checklist|packing list|shopping list|to-?do list|(?:meal|study|workout|travel|trip) plan|plan (?:a|an|my|our|the)|recipe|step[- ]by[- ]step|walk me through|pros and cons|which (?:one|should|is better|would you)|should i (?:buy|get|choose|pick|go)|recommend|what (?:do|should|will) (?:i|we) (?:need|bring|buy|pack|cook|make|prepare))\b/i;
-// actionable 只避开「这是在让我改 / 查代码」的消息。比下面那条窄:「主要写代码,买哪台笔记本」里的「写代码」不该把卡挡掉。
-const SKETCH_CODE_TASK_RE = /(?:修复|改代码|重构|编译|报错|调试)|\b(?:fix|refactor|compile|typecheck|unit test|bug|debug)\b|\.(?:[cm]?[jt]sx?|py|rs|go|java|swift)\b/i;
+const SKETCH_ACTIONABLE_RE = /(?:行程|攻略|日程|安排|清单|采购|准备(?:些|点|哪些)?(?:什么|啥)|[带买](?:些|点|哪些)?(?:什么|啥)|哪(?:个|款|种|家|台|部|本)(?:更|好|比较|最|合适|值得|划算)|(?:选|买|用|换|去|学|订|建议|推荐)哪(?:个|款|种|家|台|部|本)|怎么选|如何选|纠结|值不值|要不要(?:买|换|选)|推荐|教我|做法|教程|食谱|菜谱)|\b(?:itinerary|checklist|packing list|shopping list|to-?do list|(?:meal|study|workout|travel|trip) plan|plan (?:a|an|my|our|the)|recipe|step[- ]by[- ]step|walk me through|pros and cons|which (?:one|should|is better|would you)|should i (?:buy|get|choose|pick|go)|recommend|what (?:do|should|will) (?:i|we) (?:need|bring|buy|pack|cook|make|prepare))\b/i;
+// 两种消息不发 actionable:让我改 / 查 / 讲代码的(比下面那条窄 ——「主要写代码,买哪台笔记本」里的「写代码」不该把卡挡掉),
+// 和让我处理一段现成文字的(翻译、润色、总结:命中的词多半在那段文字里,不是用户的请求)。「还是」不进词表:它多半是「仍然」的意思。
+const SKETCH_ACTIONABLE_SKIP_RE = /(?:修复|改代码|重构|编译|报错|调试|翻译|译成|润色|改写|校对|总结|概括|摘要)|(?:解释|讲解|分析|看看|读)[^。！？\n]{0,12}(?:代码|函数|脚本)|\b(?:fix|refactor|compile|typecheck|unit test|bug|debug|translate|proofread|rewrite|rephrase|paraphrase|summari[sz]e)\b|\b(?:explain|review|walk me through|go through)\b[^.?!\n]{0,40}\b(?:code|function|class|script|diff|commit)\b|\.(?:[cm]?[jt]sx?|py|rs|go|java|swift)\b/i;
 const SKETCH_CODE_FOCUS_RE = /(?:修复|改代码|重构|实现|写代码|编译|测试|报错)|\b(?:fix|refactor|implement|code|function|class|compile|typecheck|unit test|bug)\b|\.(?:[cm]?[jt]sx?|py|rs|go|java|swift)\b/i;
 
 /**
@@ -174,7 +175,7 @@ export function sketchTurnSignalFor(message: string, visuals: VisualsPref = 'aut
         `This request contains a comparison, sequence, structure, data shape, or interaction that is faster to understand visually even though the user may not have said "draw". Default to calling ${tool} as part of the answer. Skip only if closer inspection shows that the relationship is trivial or the actual deliverable is code/a file rather than an explanation.`,
     };
   }
-  if (!SKETCH_ACTIONABLE_RE.test(text) || SKETCH_CODE_TASK_RE.test(text)) return undefined;
+  if (!SKETCH_ACTIONABLE_RE.test(text) || SKETCH_ACTIONABLE_SKIP_RE.test(text)) return undefined;
   return {
     kind: 'actionable',
     section:
@@ -183,7 +184,7 @@ export function sketchTurnSignalFor(message: string, visuals: VisualsPref = 'aut
       (nativeUi
         ? 'Default to answering with `intelligent_ui`: inputs for what they can adjust (people, days, the option picked), a checklist for things to do, bring or buy, a comparison for the options, disclosures for longer explanations.'
         : 'Default to answering with a `sketch` card built from `fs-checklist`, `fs-compare` or `fs-choice`.') +
-      ' Keep the prose around it to a short takeaway. Skip the card only if the complete answer is a sentence or two, or the request is about changing code or files in a project.',
+      ' Keep the prose around it to a short takeaway. Skip the card only if the complete answer is a sentence or two, or the user wants something carried out (code or files changed, a task or calendar entry created) rather than an answer to read.',
   };
 }
 

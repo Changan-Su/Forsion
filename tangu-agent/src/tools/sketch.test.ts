@@ -181,8 +181,12 @@ describe('sketch proactive turn signal', () => {
     '接下来怎么做？',
     '按计划继续',
     '修复 checklist.ts 的报错，推荐的写法是什么',
-    '只用文字推荐三本书，不要画图',
-  ])('leaves everyday agent talk and code tasks alone: %s', (message) => {
+    '请只用文字推荐十本书，逐本解释适合谁及理由。',
+    'Please explain the code step-by-step.',
+    '这个还是失败了，你再试一次好吗？',
+    'Translate this paragraph into Chinese: I recommend packing early. Make a checklist. Bring warm clothes.',
+    '帮我把这段翻译成英文：推荐提前准备一份清单。',
+  ])('leaves everyday agent talk, code tasks and text to be processed alone: %s', (message) => {
     expect(sketchTurnSignalFor(message)).toBeUndefined();
   });
 

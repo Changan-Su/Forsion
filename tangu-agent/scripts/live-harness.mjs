@@ -2158,7 +2158,7 @@ try {
 
   // visualauto(10-11,用户反馈「Intelligent UI 很少触发」):消息里不出现图 / 卡 / 可视化 / 对比这类字眼,看模型自己出不出卡。
   // 六条该出的(行程、准备清单、二选一、做法、哪个更适合、请客要买什么)+ 两条不该出的(一句事实、翻译)。
-  // 判据:该出的至少 4/6 成功调了 intelligent_ui 或 sketch,不该出的一条都没有。基线 = 改动前的引擎(--kind base)。
+  // 判据:该出的至少 4/6 成功调了 intelligent_ui 或 sketch,不该出的一条都没有,且没有一条被收尾补催。基线 = 改动前的引擎(--kind base)。
   await scenario('visualauto', 'visualauto 没点名时自己出卡', async () => {
     const opts = { clientCapabilities: ['intelligent-ui.v1'], ui: { visuals: { value: 'auto', allowed: ['auto', 'less', 'off'] } } };
     const want = [
@@ -2186,8 +2186,9 @@ try {
     const hits = rows.filter((r) => r.expect && r.cards.length);
     const stray = rows.filter((r) => !r.expect && r.cards.length);
     const line = (r) => `${r.id}=${r.cards.join('+') || '无'}${r.nudged ? '(补催)' : ''}`;
-    return { ok: !broken.length && hits.length >= 4 && !stray.length,
-      detail: `该出 ${hits.length}/${want.length};不该出 ${stray.length}/${plain.length};${rows.map(line).join(' ')}${broken.length ? `;没跑完:${broken.map((r) => `${r.id}(${r.error || '未结束'})`).join(',')}` : ''}`,
+    const nudged = rows.filter((r) => r.nudged); // 这六条都是 actionable:只给本轮提醒,出现补催 = 那条不变式破了
+    return { ok: !broken.length && hits.length >= 4 && !stray.length && !nudged.length,
+      detail: `该出 ${hits.length}/${want.length};不该出 ${stray.length}/${plain.length};补催 ${nudged.length};${rows.map(line).join(' ')}${broken.length ? `;没跑完:${broken.map((r) => `${r.id}(${r.error || '未结束'})`).join(',')}` : ''}`,
       output: rows.map((r) => `【${r.id}${r.expect ? '' : '·不该出'}】${r.q}\n工具:${r.toolCalls.join(',') || '无'}\n${r.content}`).join('\n\n'),
       toolCalls: rows.flatMap((r) => r.toolCalls), ttftMs: rows[0]?.ttftMs, tokens: rows.reduce((n, r) => n + (r.tokens || 0), 0) };
   });
