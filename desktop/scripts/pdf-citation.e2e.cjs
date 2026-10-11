@@ -8,7 +8,12 @@
  *   C2 linkTarget 砍掉 `#page=` → 引用条能点但永远停在第 1 页
  *   C3 同一份 PDF 连点第二条引用 → 必须原地跳页(amadeus:pdf-goto),不是 remount 重下
  *
- * 需先 npm run build。用法:npm run e2e:pdfcite
+ * `--plugin`(2026-10-11):装一个以 override: true 接管 .pdf 的探针插件再走一遍 —— 引用也该进插件视图,
+ *   落点(页码 / 引语)经 file.onGoto 交给它;库外的 PDF 插件读不到,照旧内置阅读器。断言 P1–P5,不跑 C 系列
+ *   (C 系列盯的是内置阅读器自己的行为)。负对照(同日实跑):对着 v2.13.2 的构建跑 `--plugin` → P1 / P2 / P3 / P5 红
+ *   (引用进了内置阅读器,探针一个落点都没收到),P4 绿。
+ *
+ * 需先 npm run build。用法:npm run e2e:pdfcite            (插件模式:node scripts/pdf-citation.e2e.cjs --plugin)
  * 报「启动失败」= 有 dev 版 Electron 占着单实例锁,先 pkill -f "node_modules/electron/dist/Electron.app"。
  */
 const fs = require('fs')
@@ -19,6 +24,24 @@ const { startStubEngine } = require('./lib/stub-engine.cjs')
 const { tinyPdf } = require('./lib/tiny-pdf.cjs')
 
 const ROOT = path.join(__dirname, '..')
+const PLUGIN = process.argv.includes('--plugin')
+/** 探针插件(--plugin):接管 .pdf,把每次挂载和每个落点记在 window.__pdfprobe 上(落点记成「文件|页|引语」)。 */
+const PROBE_MAIN = `
+var st = (window.__pdfprobe = window.__pdfprobe || { mounts: 0, gotos: [] })
+ctx.registerFileType({
+  id: 'pdfprobe', extensions: ['.pdf'], override: true, title: 'PDF Probe',
+  mount: function (el, file) {
+    st.mounts++
+    var d = document.createElement('div')
+    d.className = 'pdfprobe-view'
+    d.setAttribute('data-file', file.filePath)
+    d.textContent = 'pdfprobe: ' + file.filePath
+    el.appendChild(d)
+    var off = file.onGoto ? file.onGoto(function (t) { st.gotos.push(file.filePath + '|' + t.page + '|' + (t.quote || '')) }) : null
+    return function () { if (off) off(); d.remove() }
+  },
+})
+`
 const results = []
 function check(name, ok, detail) {
   results.push({ name, ok })
@@ -66,6 +89,12 @@ async function main() {
   fs.mkdirSync(path.dirname(hostPdf), { recursive: true })
   fs.writeFileSync(hostPdf, tinyPdf(Array.from({ length: 20 }, (_, i) => `HOST PAGE ${i + 1}`)))
   fs.writeFileSync(path.join(vaultDir, '随手.md'), '# 随手\n\n一段。\n')
+  if (PLUGIN) {
+    const probeDir = path.join(home, 'plugins', 'pdfprobe')
+    fs.mkdirSync(probeDir, { recursive: true })
+    fs.writeFileSync(path.join(probeDir, 'main.js'), PROBE_MAIN)
+    fs.writeFileSync(path.join(probeDir, 'manifest.json'), JSON.stringify({ id: 'pdfprobe', name: 'PDF Probe', version: '1.0.0', minAppVersion: '0.0.1', description: 'e2e 用的 PDF 覆盖探针,不是产品插件' }))
+  }
   const udDev = path.join(home, 'userdata-dev')
   fs.mkdirSync(udDev, { recursive: true })
   fs.writeFileSync(path.join(udDev, 'amadeus-config.dev.json'), JSON.stringify({ lastVault: vaultDir, localVault: vaultDir }))
@@ -127,6 +156,43 @@ async function main() {
     const gray = await win.locator('.t2-content .wikilink-unresolved').allInnerTexts().catch(() => [])
     check('C4 同名歧义的裸文件名引用判未解析,不字典序猜一份', gray.length === 1 && gray[0].includes('研究.pdf#page=5'),
       `gray=${JSON.stringify(gray)}`)
+
+    if (PLUGIN) {
+      const REL = '资料/研究.pdf'
+      const gotos = () => win.evaluate(() => (window.__pdfprobe?.gotos || []).join(' ; '))
+      const lastFor = async (rel) => (await gotos()).split(' ; ').filter((g) => g.startsWith(`${rel}|`)).pop() || ''
+      const until = async (fn, ms = 15_000) => { const end = Date.now() + ms; for (;;) { const v = await fn().catch(() => null); if (v || Date.now() > end) return v; await win.waitForTimeout(150) } }
+      const inDesk = (q) => win.evaluate((x) => [...document.querySelectorAll(`.agent-desk ${x}`)].some((e) => e.offsetParent !== null), q)
+      // P1 点第一条 → Desk 里是插件视图,落点第 8 页
+      await chips.first().click()
+      const p1 = await until(async () => (await lastFor(REL)) === `${REL}|8|`)
+      check('P1 插件接管了 PDF:点引用条 → Desk 里开的是插件视图,插件收到第 8 页', !!p1 && (await inDesk(`.pdfprobe-view[data-file="${REL}"]`)) && !(await inDesk('.amx-pdfview')), `gotos=${await gotos()}`)
+      // P2 同一份的第二条 → 原地送新落点,不重挂
+      const m0 = await win.evaluate(() => window.__pdfprobe?.mounts || 0)
+      await chips.nth(1).click()
+      const p2 = await until(async () => (await lastFor(REL)) === `${REL}|3|`)
+      const m1 = await win.evaluate(() => window.__pdfprobe?.mounts || 0)
+      check('P2 同一份 PDF 的第二条引用:插件收到第 3 页,视图没有重挂', !!p2 && m1 === m0, `gotos=${await gotos()} mounts ${m0} → ${m1}`)
+      // P3 带引语的 → 页码和引语一起到
+      await chips.nth(5).click()
+      const p3 = await until(async () => (await lastFor(REL)) === `${REL}|40|quicksilver phrase 40`)
+      check('P3 带引语的引用:插件收到第 40 页和那句引语', !!p3, `gotos=${await gotos()}`)
+      // P4 库外的 PDF(绝对路径):插件只读得到库内文件 → 照旧内置阅读器
+      await chips.nth(3).click()
+      await win.waitForSelector('.agent-desk.open .amx-pdfview', { timeout: 20_000 }).catch(() => {})
+      const hostPage = await waitPage(win, 12)
+      check('P4 库外 PDF 的引用照旧进内置阅读器并到第 12 页', hostPage === '12' && !(await inDesk('.pdfprobe-view')), `pageinput=${hostPage}`)
+      // P5 全新挂载时连点两条:后点的那条不能丢(同 C5)
+      await chips.first().click()
+      await chips.nth(1).click()
+      const p5 = await until(async () => (await lastFor(REL)) === `${REL}|3|`)
+      await win.waitForTimeout(600)
+      check('P5 全新挂载时连点两条引用:插件最后收到的是后点的第 3 页', !!p5 && (await lastFor(REL)) === `${REL}|3|` && (await inDesk(`.pdfprobe-view[data-file="${REL}"]`)), `gotos=${await gotos()}`)
+      const badP = results.filter((r) => !r.ok)
+      console.log(`\n${results.length - badP.length}/${results.length} 通过`)
+      process.exitCode = badP.length ? 1 : 0
+      return
+    }
 
     // C2 点第一条 → Desk 里就地开在第 3 页
     await chips.first().click()

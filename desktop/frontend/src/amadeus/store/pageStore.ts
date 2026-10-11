@@ -867,7 +867,7 @@ function makePageStore(opts: PageStoreOptions = {}) {
       const pdf = parsePdfLinkInner(raw)
       if (pdf) {
         const pdfFile = resolveFileName(pdf.target, get().files, src)
-        if (pdfFile) window.dispatchEvent(new CustomEvent('amadeus:open-pdf', { detail: { path: pdfFile, page: pdf.loc?.page } }))
+        if (pdfFile) window.dispatchEvent(new CustomEvent('amadeus:open-pdf', { detail: { path: pdfFile, page: pdf.loc?.page, q: pdf.loc?.q } }))
         return // 是 PDF 链接:命中即开;未命中也不落「创建笔记」兜底(带 # 的名字无意义)
       }
       // 媒体时刻锚 [[lecture.mp4#t=95]] → 先问本页有没有这个播放器(就地 seek,不重建元素);

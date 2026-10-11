@@ -7,12 +7,16 @@ import { useWorkspace, type ViewProps } from '@lcl/engine'
 import { useVisualTheme as useTheme } from '../stores/themeStore'
 import { usePageStore, pageStoreFor } from '../amadeus/store/pageStore'
 import { usePluginStore, findFileType, fileTypeBaseName, addPluginViewTeardown } from '../amadeus/plugins/pluginStore'
-import type { FileTypeContribution } from '../amadeus/plugins/types'
+import type { FileGotoTarget, FileTypeContribution } from '../amadeus/plugins/types'
 import { createPluginViewSurface } from '../amadeus/plugins/viewSurface'
 import { isBuiltinFileType, isOverridableBuiltinType } from '@amadeus-shared/builtinTypes'
 import { openFile } from '../amadeusNav'
 import { FILE_VIEW_PARAM, fileMatchViewType } from '../viewFileMatch'
 import { registerMessages, useI18n } from '../i18n'
+
+/** 视图参数 / amadeus:pdf-goto 事件里的落点 → 交给插件的形状(没有合法页码 = 没有落点)。 */
+const gotoTarget = (page: unknown, q: unknown): FileGotoTarget | null =>
+  typeof page === 'number' && page >= 1 ? { page, ...(typeof q === 'string' && q ? { quote: q } : {}) } : null
 
 registerMessages({
   'pluginfile.noFile': { zh: '未指定文件。', en: 'No file specified.' },
@@ -79,9 +83,35 @@ export function AmadeusPluginFileView({ leaf }: ViewProps) {
         leaf.setParams({ ...leaf.params, filePath: s.activePage })
       }
     })
+    // 带落点的打开(`[[x.pdf#page=3]]`、聊天引用,见 amadeusNav.openFile):冷挂载的落点在视图参数里,已开着时
+    // 由 amadeus:pdf-goto 送到 —— 两路合成一个 file.onGoto。参数不进本 effect 的依赖:跳一页不该重挂阅读器。
+    // 事件从挂载起就听着:插件还没订阅时到的落点先存着(只留最后一个),订阅时补发 —— 阅读器加载中连点两条引用,
+    // 后点的那条不能丢(内置阅读器的 pendingGoto 同理,e2e:pdfcite 的 C5)。补发放到微任务里:插件多半在 mount
+    // 里先订阅、后建阅读器,当场回调会打在还没建好的东西上。
+    let pendingGoto = gotoTarget(leaf.params.page, leaf.params.q)
+    const gotoSubs = new Set<(target: FileGotoTarget) => void>()
+    const deliverGoto = (): void => {
+      const target = pendingGoto
+      if (!target || !gotoSubs.size) return
+      pendingGoto = null
+      for (const cb of [...gotoSubs]) {
+        try { cb(target) } catch (e) { console.error('[amadeus] 插件 onGoto 回调抛错', e) }
+      }
+    }
+    const onGotoEvent = (e: Event): void => {
+      const d = (e as CustomEvent<{ pdfPath?: string; page?: number; q?: string }>).detail
+      const target = d?.pdfPath === filePath ? gotoTarget(d.page, d.q) : null
+      if (target) { pendingGoto = target; deliverGoto() }
+    }
+    window.addEventListener('amadeus:pdf-goto', onGotoEvent)
+    const onGoto = (cb: (target: FileGotoTarget) => void): (() => void) => {
+      gotoSubs.add(cb)
+      queueMicrotask(deliverGoto)
+      return () => { gotoSubs.delete(cb) }
+    }
     let cleanup: (() => void) | void
     try {
-      cleanup = ft.mount(el, { filePath, surface: vs.surface })
+      cleanup = ft.mount(el, { filePath, surface: vs.surface, onGoto })
     } catch (e) {
       console.error('[amadeus] 插件文件视图挂载失败', e)
     }
@@ -91,6 +121,8 @@ export function AmadeusPluginFileView({ leaf }: ViewProps) {
       } catch {
         /* ignore */
       }
+      window.removeEventListener('amadeus:pdf-goto', onGotoEvent)
+      gotoSubs.clear()
       unsub()
       dereg()
       vs.dispose()

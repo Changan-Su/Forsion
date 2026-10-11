@@ -3043,10 +3043,11 @@ export const useApp = create<AppState>((set, get) => ({
       const top = c.items[0]
       // 顶格已经是同一份文件的同类视图(点第二条引用)→ 复用原 key:key 一变整个视图重挂
       // (PDF 重下一次、代码重建 CodeMirror)。只换 view.params(新页码/行号),没挂载完的视图
-      // 据此以正确位置开场。文件身份键 = pdfPath(PDF 阅读器)/ path(WsFileView),
+      // 据此以正确位置开场。文件身份键 = pdfPath(PDF 阅读器)/ path(WsFileView)/ filePath(插件文件视图:
+      // 接管了 PDF 的插件,同一份的第二条引用也要原地收落点,e2e:pdfcite --plugin 的 P2),
       // **必须非空才算同一份** —— 两个都没带路径参数的视图不能被判成同一个。
       const fileKeyOf = (v?: { type: string; params?: Record<string, unknown> } | null): unknown =>
-        v?.params?.pdfPath ?? v?.params?.path
+        v?.params?.pdfPath ?? v?.params?.path ?? v?.params?.filePath
       const sameFile = !!view && top?.view?.type === view.type
         && fileKeyOf(view) != null && fileKeyOf(top.view) === fileKeyOf(view)
       // 顶格正是这个文件的直播格 → 别打断直播,解除静音即可

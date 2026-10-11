@@ -20,7 +20,9 @@
  *       T9d 改偏好不卸载已经开着的插件视图(它可能有没存的改动)
  *   T10 笔记里点 `[[书.pdf]]`(不带页码)→ 也归插件。把 PDF 拖进笔记得到的就是这种链接;2.13.2 及更早两条链接入口
  *       (amadeus:open-note / amadeus:open-pdf)直调 openPdf,装了接管 PDF 的插件,从笔记里点开的仍是内置阅读器。
- *       T10a 带页码的 `[[长.pdf#page=3]]` 照旧进内置阅读器(插件的文件视图收不到页码)
+ *       T10a 带页码的 `[[长.pdf#page=3]]` → 也归插件,落点经 file.onGoto 交给它(冷挂载:落点在视图参数里)
+ *       T10b 那份 PDF 已经开着时再点一条带页码 + 引语的链接 → 插件收到新落点,视图没有重挂
+ *       T10c 「默认打开方式」选了内置阅读器 → 带页码的链接进内置阅读器并到第 3 页(内置这条路没被改坏)
  *
  * 负对照(2026-10-05 实跑):`--nc=nooverride` 探针不写 override: true → T1 / T2 / T2a / T2b / T2c / T2d / T3 / T4 / T5a / T7 红
  *   (宿主照旧拒掉它,PDF 全程归内置阅读器,探针视图没挂所以 T2* 也读不到)。
@@ -31,6 +33,8 @@
  *   T8e / T8f / T9d 是 Codex 评审指出问题后先写的断言:在修之前的构建上实跑三条都红(滚动 6587 → 10、
  *   编辑层 0 → 2、插件视图被卸掉),修完重建后转绿 —— 那次红就是它们的负对照。
  *   T10 的负对照(2026-10-11 实跑):同一份台架脚本对着 v2.13.2 的构建跑 → 只有 T10 红(点链接进了内置阅读器)。
+ *   T10a / T10b 的负对照(同日实跑):对着 v2.13.2 的构建跑 → T10 / T10a / T10b 红(带页码的链接进了内置阅读器,
+ *   探针一个落点都没收到),T10c 绿。
  * 用法:npm run build && npm run e2e:ftoverride   (--shot 存截图到 /tmp/forsion-ftoverride-*.png)
  */
 const fs = require('fs')
@@ -60,6 +64,9 @@ st.registered = ctx.registerFileType({
   title: 'PDF Probe',
   mount: function (el, file) {
     st.mounts++
+    // 落点(带页码 / 引语的链接、聊天引用):记下每一次,台架按「文件|页|引语」认。
+    st.gotos = st.gotos || []
+    if (file.onGoto) file.onGoto(function (t) { st.gotos.push(file.filePath + '|' + t.page + '|' + (t.quote || '')) })
     if (ctx.app.watchFile && !st.watching) {
       st.watching = true
       ctx.app.watchFile(file.filePath, function () { st.watchHits = (st.watchHits || 0) + 1 })
@@ -130,7 +137,7 @@ async function main() {
   const dir = path.join(vault, '资料')
   fs.mkdirSync(dir, { recursive: true })
   fs.writeFileSync(path.join(vault, '1.md'), '# 1\n', 'utf8')
-  fs.writeFileSync(path.join(vault, '链接.md'), '# 链接\n\n[[书.pdf]]\n\n[[长.pdf#page=3]]\n', 'utf8') // T10
+  fs.writeFileSync(path.join(vault, '链接.md'), '# 链接\n\n[[书.pdf]]\n\n[[长.pdf#page=3]]\n\n[[长.pdf#page=5&q=hello|第五页]]\n', 'utf8') // T10
   const pdfBytes = Buffer.from(tinyPdf(['OVERRIDE']))
   const pdfAbs = path.join(dir, '书.pdf')
   fs.writeFileSync(pdfAbs, pdfBytes)
@@ -378,11 +385,35 @@ async function main() {
     await clickLink('书.pdf')
     check('T10 笔记里点 [[书.pdf]] → 归插件(不是内置阅读器)', !!(await frontIs('plugin')) && (await probeFile()) === PDF_REL, `data-file=${await probeFile()} types=${await typesFor()}`)
     await shot('7-note-link')
+    /** 前台(看得见的)那个视图是谁的:几份 PDF 各有标签页,不能只看第一个。 */
+    const seen = (q) => win.evaluate((x) => [...document.querySelectorAll(x)].some((e) => e.offsetParent !== null), q)
+    const gotos = () => win.evaluate(() => (window.__pdfprobe?.gotos || []).join(' ; '))
+    const longRel = PDF_REL.replace('书.pdf', '长.pdf')
     await clickLink('长.pdf')
-    // 长.pdf 在 T8e 里被改写过,不认页面上的字,认前台那个内置阅读器的页码框。
+    const g3 = await until(async () => (await gotos()).includes(`${longRel}|3|`), 12_000)
+    check('T10a 带页码的 [[长.pdf#page=3]] → 归插件,插件经 file.onGoto 收到第 3 页', !!g3 && (await seen(`.pdfprobe-view[data-file="${longRel}"]`)) && !(await seen('.amx-pdfview')),
+      `gotos=${await gotos()} panels=${JSON.stringify((await mainPanels()).filter((p) => p.path === longRel).map((p) => p.type))}`)
+    // 已经开着:把笔记开到旁边的新标签里再点,PDF 那个标签原地收落点(不重挂)。
+    const mountsA = await win.evaluate(() => window.__pdfprobe?.mounts || 0)
+    await row('链接').click({ modifiers: ['ControlOrMeta'] })
+    const link5 = win.locator('.dv-groupview .wikilink', { hasText: '第五页' }).first()
+    await link5.waitFor({ timeout: 10_000 })
+    await win.waitForTimeout(400)
+    await link5.click()
+    // 单击只落了光标时再按住 ⌘/Ctrl 点一次;链接已经不在了(旧宿主把笔记这个标签就地换成了内置阅读器)就算了,下面照实判红。
+    if (!(await until(async () => (await gotos()).includes(`${longRel}|5|`), 4000))) await link5.click({ modifiers: ['ControlOrMeta'], timeout: 3000 }).catch(() => {})
+    const g5 = await until(async () => (await gotos()).includes(`${longRel}|5|hello`), 12_000)
+    const mountsB = await win.evaluate(() => window.__pdfprobe?.mounts || 0)
+    check('T10b 已开着时再点带页码 + 引语的链接 → 插件收到新落点,视图没有重挂', !!g5 && mountsB === mountsA && (await seen(`.pdfprobe-view[data-file="${longRel}"]`)),
+      `gotos=${await gotos()} mounts ${mountsA} → ${mountsB}`)
+    // 选了内置阅读器:带页码的链接照旧进内置并到那一页。长.pdf 在 T8e 里被改写过,不认页面上的字,认页码框。
+    await sel.selectOption('builtin').catch(() => {})
+    await until(async () => !(await menuOnce()).includes('用内置阅读器打开'))
+    await clickLink('长.pdf')
     const pageNow = () => win.evaluate(() => { const v = [...document.querySelectorAll('.amx-pdfview')].find((e) => e.offsetParent !== null); return (v && v.querySelector('.pdfa-pageinput') || {}).value || '' })
     const p3 = await until(async () => (await pageNow()) === '3', 12_000)
-    check('T10a 带页码的 [[长.pdf#page=3]] → 照旧进内置阅读器并到第 3 页', !!(await frontIs('builtin')) && !!p3, `页码框=${await pageNow()}`)
+    check('T10c 选了内置阅读器 → 带页码的链接进内置阅读器并到第 3 页', !!p3 && !(await seen('.pdfprobe-view')), `页码框=${await pageNow()}`)
+    await sel.selectOption('').catch(() => {})
 
     if (logs.length) console.log(`\n页面异常:\n${logs.join('\n')}`)
     check('全程无页面异常', logs.length === 0, logs[0])

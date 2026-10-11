@@ -18,7 +18,7 @@ import { useUiOverlay, type TemplateCtx } from './amadeusOverlayStore'
 import { linkTarget, pageKey, resolvePageName } from '@amadeus-shared/links'
 import { fuzzyRank } from '@lcl/engine/fuzzy'
 import { isImeKeyEvent } from '@lcl/engine/ime'
-import { openDb, openDrawing, openFile, openNote, openPdfLink } from './amadeusNav'
+import { openDb, openDrawing, openFile, openNote } from './amadeusNav'
 import { insertTemplate, listTemplates } from './amadeusTemplates'
 import { openTagView } from './amadeusPanels'
 import { registerMessages, useI18n } from './i18n'
@@ -122,7 +122,11 @@ export function AmadeusOverlays() {
       if (page) { void openNote(page, { newTab }); return }
       const file = resolveFileName(raw, st.files, src)
       if (file && /\.db$/i.test(file)) { openDb(file, { newTab }); return }
-      if (file && /\.pdf$/i.test(file)) { openPdfLink(file, parsePdfLinkInner(inner)?.loc?.page, { newTab }); return }
+      if (file && /\.pdf$/i.test(file)) {
+        const loc = parsePdfLinkInner(inner)?.loc
+        openFile(file, { newTab, page: loc?.page, quote: loc?.q })
+        return
+      }
       // 画板 / 插件文件类型 / 其余附件:openNote 内部按扩展名改道对应视图(不支持 newTab 的那几种就地开)。
       if (file) { void openNote(file, { newTab }); return }
       st.openWikiLink(inner, d?.sourcePath) // 完全解析不到 → 老路径(含「要不要创建」确认)
@@ -144,11 +148,11 @@ export function AmadeusOverlays() {
     window.addEventListener('amadeus:navigate-note', onNav)
     return () => window.removeEventListener('amadeus:navigate-note', onNav)
   }, [])
-  // [[xxx.pdf]] / [[xxx.pdf#page=N]] 点击应用内打开(pageStore 发事件解耦,同 open-db 模式);不带页码的听「默认打开方式」。
+  // [[xxx.pdf]] / [[xxx.pdf#page=N]] 点击应用内打开(pageStore 发事件解耦,同 open-db 模式);由谁打开听「默认打开方式」,落点跟着走。
   useEffect(() => {
     const onOpenPdf = (e: Event): void => {
-      const d = (e as CustomEvent<{ path?: string; page?: number }>).detail
-      if (typeof d?.path === 'string' && d.path) openPdfLink(d.path, d.page)
+      const d = (e as CustomEvent<{ path?: string; page?: number; q?: string }>).detail
+      if (typeof d?.path === 'string' && d.path) openFile(d.path, { page: d.page, quote: d.q })
     }
     window.addEventListener('amadeus:open-pdf', onOpenPdf)
     return () => window.removeEventListener('amadeus:open-pdf', onOpenPdf)
