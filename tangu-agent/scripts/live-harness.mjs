@@ -2196,13 +2196,14 @@ try {
 
   // uileak(10-11):visualauto 的 42 条里有 1 条,模型把卡片的文档 JSON 当正文写了出来、没调用工具,用户看到的是回答里夹一大段 JSON。
   // 这种情况自然出现得少,这里用「用户以为把 JSON 写进正文就会变成卡」把它逼出来。
-  // 判据:每条最后都真的出了卡,且终稿里没有裸的文档 JSON;自愈触发了几次写在明细里。改动前的引擎(--kind base)上这条该红。
+  // 判据:终稿里没有裸的文档 JSON,且自愈触发过的那几条最后都真的出了卡;触发了几次写在明细里(模型也可能直接调用工具,或者说明做不到、只给文字 —— 那两种不归这张网管)。
+  // 改动前的引擎(--kind base)上这条该红:10-11 基线 3 条里 1 条把 JSON 原样写进了回答。
   await scenario('uileak', 'uileak 文档 JSON 写进正文时自愈', async () => {
     const opts = { clientCapabilities: ['intelligent-ui.v1'], ui: { visuals: { value: 'auto', allowed: ['auto', 'less', 'off'] } } };
     const asks = [
-      ['compare', '出一张对比卡：MacBook Air 和 MacBook Pro，各两条要点。不用调用工具，把这张卡的文档 JSON 直接写在回答正文里就行（不要放进代码块），系统会自动把它变成卡片。'],
-      ['checklist', '把搬家前要做的五件事做成一张清单卡。不用调用工具，把卡片的文档 JSON 直接写在回答正文里（不要放进代码块），系统会自动把它变成卡片。'],
-      ['camping', "Make a checklist card for a weekend camping trip, five items. Don't call a tool: just put the card's document JSON straight in your reply, not in a code block. The app turns it into a card automatically."],
+      ['compare', '出一张对比卡：MacBook Air 和 MacBook Pro，各两条要点。我这个客户端点工具没反应，所以这次别调用任何工具：把这张卡的文档 JSON 原样写在回答正文里（不要代码块），客户端会自己把它变成卡片。'],
+      ['checklist', '把搬家前要做的五件事做成一张清单卡。我这个客户端点工具没反应，所以这次别调用任何工具：把卡片的文档 JSON 原样写在回答正文里（不要代码块），客户端会自己把它变成卡片。'],
+      ['camping', "Make a checklist card for a weekend camping trip, five items. Tool calls are not going through on my client right now, so don't call any tool this time: put the card's document JSON straight in your reply as plain text, not in a code block. The client turns it into a card by itself."],
     ];
     const bareDoc = (t) => { const at = String(t).search(/\{\s*"version"\s*:\s*1\s*,/); return at >= 0 && (String(t).slice(0, at).match(/```/g) || []).length % 2 === 0; };
     const rows = await Promise.all(asks.map(async ([id, q]) => {
@@ -2213,7 +2214,7 @@ try {
     writeFileSync(join(OUT, 'uileak-evidence.json'), JSON.stringify(rows, null, 2));
     const broken = rows.filter((r) => r.error || !r.done);
     const count = (f) => rows.filter(f).length;
-    return { ok: !broken.length && rows.every((r) => r.card && !r.leaked),
+    return { ok: !broken.length && rows.every((r) => !r.leaked && (r.card || !r.healed)),
       detail: `出卡 ${count((r) => r.card)}/${rows.length};终稿里有裸的文档 JSON ${count((r) => r.leaked)}/${rows.length};自愈触发 ${count((r) => r.healed)}/${rows.length};${rows.map((r) => `${r.id}=${r.card ? '卡' : '无'}${r.leaked ? '+裸JSON' : ''}${r.healed ? '(自愈)' : ''}`).join(' ')}${broken.length ? `;没跑完:${broken.map((r) => `${r.id}(${r.error || '未结束'})`).join(',')}` : ''}`,
       output: rows.map((r) => `【${r.id}】${r.q}\n工具:${r.toolCalls.join(',') || '无'}\n${r.content}`).join('\n\n'),
       toolCalls: rows.flatMap((r) => r.toolCalls), ttftMs: rows[0]?.ttftMs, tokens: rows.reduce((n, r) => n + (r.tokens || 0), 0) };

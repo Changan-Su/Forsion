@@ -1,5 +1,5 @@
 import { normalizeUIAppCards } from '../shared/intelligentCards.js';
-import { intelligentUiEnabledFor, INTELLIGENT_UI_SECTION } from '../tools/builtin/intelligentUi.js';
+import { intelligentUiEnabledFor, INTELLIGENT_UI_SECTION, looksLikeLeakedUiDocument, UI_DOCUMENT_LEAK_CHECK } from '../tools/builtin/intelligentUi.js';
 import { withTaskProjectQueue } from './taskProjectQueue.js';
 import { HUMAN_GUIDANCE, readHuman, renderHumanContext } from '../agents/humanStore.js';
 import { humanProjectScope } from './humanContext.js';
@@ -2607,6 +2607,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     let auditNudged = false; // 完成度审计只审一次:第二次收尾放行,避免「审计→敷衍收尾→再审计」死循环
     let planNudged = false; // 计划提交只催一次(理由同上;plan 模式也用于问答,催两次就成了逼它编计划)
     let sketchNudged = false; // 本轮已命中强视觉信号却没画:收尾前只补催一次,二次仍拒绝则放行
+    let uiDocumentRecovered = false; // 文档 JSON 写成了正文、没调用 intelligent_ui:只纠正一次,第二次原样放行
     let actionNudged = false; // 零工具调用却在承诺 / 声称动作:收尾前只催一次(services/actionDeliveryCheck.ts)
     let actionAskText = String(input.message || ''); // 兑现兜底看的「用户要了什么」:原话 + 运行中插话(applySteering 追加;Codex 10-02)
     let verifyRounds = 0; // 验证回路已跑次数(整 run 上限 VERIFY_MAX_ROUNDS,最后一次仍红则如实标注收尾)
@@ -3053,6 +3054,25 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
               '工具调用 —— 不要把这些标记当作正文输出。',
           } as ChatMessage);
           void publish(runId, 'status', { phase: 'toolcall_format_recovery', iteration });
+          await appendStep({
+            id: uuidv4(), runId, stepNo: iteration,
+            llmResponse: { content: res.content, usage: res.usage },
+          });
+          continue;
+        }
+        // 同一张网的另一种漏法:模型把 intelligent_ui 的文档 JSON 当正文写了出来(10-11 live:luna 42 条里 1 条),用户看到的是
+        // 回答里夹一大段 JSON、没有卡。这条正文不进终稿,回灌一次让它真的调用工具。iteration < maxIterations - 2:下一轮不能是
+        // 不带工具的收尾轮。只纠正一次 —— 用户就是要看 JSON 的话,提示里让它放进代码块重答,那一次不再拦。
+        if (
+          nativeUiEnabled && !uiDocumentRecovered && !lastIter && iteration < maxIterations - 2 &&
+          (!res.toolCalls || res.toolCalls.length === 0) &&
+          !(consumed && consumed.ok === false) &&
+          looksLikeLeakedUiDocument(res.content || '')
+        ) {
+          uiDocumentRecovered = true;
+          workingMessages.push(assistantTurnOf(res, res.content || ''));
+          workingMessages.push({ role: 'user', content: UI_DOCUMENT_LEAK_CHECK } as ChatMessage); // 不落库不上屏:harness 脚手架
+          void publish(runId, 'status', { phase: 'ui_document_recovery', iteration });
           await appendStep({
             id: uuidv4(), runId, stepNo: iteration,
             llmResponse: { content: res.content, usage: res.usage },

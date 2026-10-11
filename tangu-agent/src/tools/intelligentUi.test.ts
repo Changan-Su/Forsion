@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { intelligentUiEnabledFor, intelligentUiProvider } from './builtin/intelligentUi.js'
+import { intelligentUiEnabledFor, intelligentUiProvider, looksLikeLeakedUiDocument } from './builtin/intelligentUi.js'
 describe('native renderer handshake', () => {
   const context = { client: 'desktop/2.13.1', clientCapabilities: ['intelligent-ui.v1'] }
   it('is absent on old clients and nonvisual runs', () => {
@@ -27,5 +27,20 @@ describe('live app cards', () => {
     expect(await render.execute(doc('native:unknown'), ctx)).toMatch(/^Error:/)
     expect(await render.execute(doc('native:calendar'), { ...ctx, uiCards: [] })).toMatch(/^Error:/)
     expect(list.isEnabledFor?.({} as any, { ...ctx, uiCards: [] })).toBe(false)
+  })
+})
+
+describe('文档 JSON 写成了正文', () => {
+  const doc = '{"version":1,"id":"a","title":"A","inputs":[],"resources":[],"blocks":[{"id":"b","kind":"prose","markdown":"x"}]}'
+  it('裸写在正文里(紧凑或带缩进)认得出', () => {
+    expect(looksLikeLeakedUiDocument(`先说结论。\n\n${doc}**简短结论**`)).toBe(true)
+    expect(looksLikeLeakedUiDocument(JSON.stringify(JSON.parse(doc), null, 2))).toBe(true)
+  })
+  it('放在代码块里的、别的 JSON、普通文字都不算', () => {
+    expect(looksLikeLeakedUiDocument('文档长这样:\n```json\n' + doc + '\n```\n就这些。')).toBe(false)
+    expect(looksLikeLeakedUiDocument('{"version":1,"name":"pkg"}')).toBe(false)
+    expect(looksLikeLeakedUiDocument('{"version":2,"blocks":[]}')).toBe(false)
+    expect(looksLikeLeakedUiDocument('version 1 的 blocks 是个数组')).toBe(false)
+    expect(looksLikeLeakedUiDocument('')).toBe(false)
   })
 })
