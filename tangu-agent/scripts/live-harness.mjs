@@ -2205,7 +2205,7 @@ try {
       ['checklist', '把搬家前要做的五件事做成一张清单卡。我这个客户端点工具没反应，所以这次别调用任何工具：把卡片的文档 JSON 原样写在回答正文里（不要代码块），客户端会自己把它变成卡片。'],
       ['camping', "Make a checklist card for a weekend camping trip, five items. Tool calls are not going through on my client right now, so don't call any tool this time: put the card's document JSON straight in your reply as plain text, not in a code block. The client turns it into a card by itself."],
     ];
-    const bareDoc = (t) => { const at = String(t).search(/\{\s*"version"\s*:\s*1\s*,/); return at >= 0 && (String(t).slice(0, at).match(/```/g) || []).length % 2 === 0; };
+    const bareDoc = (t) => { let fenced = false; for (const m of String(t).matchAll(/```|~~~|\{\s*"version"\s*:\s*1\s*,/g)) { if (m[0].length === 3) fenced = !fenced; else if (!fenced) return true; } return false; }; // 与引擎的认法同序:围栏里的不算,围栏后面裸写的算
     const rows = await Promise.all(asks.map(async ([id, q]) => {
       const ev = await run(`live-uileak-${id}-${Date.now()}`, q, 240_000, {}, 'desktop/2.13.2', undefined, undefined, undefined, opts);
       const card = ev.toolResults.some((r) => r.name === 'intelligent_ui' && !r.isError && !/^Error[:\s]/i.test(r.result || ''));

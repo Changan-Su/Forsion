@@ -36,8 +36,12 @@ describe('文档 JSON 写成了正文', () => {
     expect(looksLikeLeakedUiDocument(`先说结论。\n\n${doc}**简短结论**`)).toBe(true)
     expect(looksLikeLeakedUiDocument(JSON.stringify(JSON.parse(doc), null, 2))).toBe(true)
   })
+  it('前面有一份放在代码块里的,后面裸写的那份照样认得出', () => {
+    expect(looksLikeLeakedUiDocument('```json\n' + doc + '\n```\n然后:\n' + doc)).toBe(true)
+  })
   it('放在代码块里的、别的 JSON、普通文字都不算', () => {
     expect(looksLikeLeakedUiDocument('文档长这样:\n```json\n' + doc + '\n```\n就这些。')).toBe(false)
+    expect(looksLikeLeakedUiDocument('~~~json\n' + doc + '\n~~~')).toBe(false)
     expect(looksLikeLeakedUiDocument('{"version":1,"name":"pkg"}')).toBe(false)
     expect(looksLikeLeakedUiDocument('{"version":2,"blocks":[]}')).toBe(false)
     expect(looksLikeLeakedUiDocument('version 1 的 blocks 是个数组')).toBe(false)

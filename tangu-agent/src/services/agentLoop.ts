@@ -1213,6 +1213,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
   /** 把一段正文追加进终稿(空段 no-op)。finalize 只写 finalContent —— 中间迭代的 preamble
    *  正文(模型「先说话、再调工具」)必须经此累积,否则落库时只剩末轮收尾词,已流式给用户
    *  看过的话会凭空消失(实例:正文被一句 "NOTHING" 顶掉)。 */
+  let uiLeakRollback: string | null = null; // 文档 JSON 写成正文的那条纠正:那条正文进终稿之前的终稿,重答到了才退回到它
   const appendFinal = (text: string): void => {
     const t = String(text || '').trim();
     if (!t) return;
@@ -2156,6 +2157,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         if (ts) tagMessageSource(pushed, { id: m.id, ts });
       }
       finalContent = '';
+      uiLeakRollback = null; // 换了回合:留着的那条已经随上一条消息落库,不再退
       finalReasoning = '';
       allToolCalls.length = 0;
       allToolResults.length = 0;
@@ -3033,6 +3035,12 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         return;
       }
 
+      // 文档 JSON 写成正文的那条纠正,后半:重答到了(有正文或有工具调用)才把先前留着的那条从终稿里拿掉。
+      // 重答没来(额度不足、用户插话换了回合、出错)时那条还在终稿里 —— 它是唯一的回答,不能丢(Codex 10-11)。
+      if (uiLeakRollback !== null) {
+        if (res.content || res.toolCalls?.length) finalContent = uiLeakRollback;
+        uiLeakRollback = null;
+      }
       if (!res.toolCalls || res.toolCalls.length === 0 || lastIter) {
         // 安全网:模型把工具调用当正文吐(原生 tool_calls 空且文本兜底没解出来),但正文带工具
         // 调用标记 —— 别静默收尾。回灌一次纠正提示让它改用原生函数调用重试(预算内、非最后一轮)。
@@ -3061,17 +3069,20 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
           continue;
         }
         // 同一张网的另一种漏法:模型把 intelligent_ui 的文档 JSON 当正文写了出来(10-11 live:luna 42 条里 1 条),用户看到的是
-        // 回答里夹一大段 JSON、没有卡。这条正文不进终稿,回灌一次让它真的调用工具。iteration < maxIterations - 2:下一轮不能是
+        // 回答里夹一大段 JSON、没有卡。回灌一次让它真的调用工具,重答到了再把这条从终稿里拿掉。iteration < maxIterations - 2:下一轮不能是
         // 不带工具的收尾轮。只纠正一次 —— 用户就是要看 JSON 的话,提示里让它放进代码块重答,那一次不再拦。
         // 这一轮已经调过 intelligent_ui 的不拦:卡已经有了,再纠正只会多出一张重复的。
         if (
-          nativeUiEnabled && !uiDocumentRecovered && !lastIter && iteration < maxIterations - 2 &&
+          !uiDocumentRecovered && !lastIter && iteration < maxIterations - 2 &&
+          toolDefs?.some((d) => d.function.name === 'intelligent_ui') && // 看这一发真带着的工具:严格工具表 / 部署白名单可能把它拿掉了
           (!res.toolCalls || res.toolCalls.length === 0) &&
           !allToolCalls.some((c) => c.function.name === 'intelligent_ui') &&
           !(consumed && consumed.ok === false) &&
           looksLikeLeakedUiDocument(res.content || '')
         ) {
           uiDocumentRecovered = true;
+          uiLeakRollback = finalContent;
+          appendFinal(res.content || '');
           workingMessages.push(assistantTurnOf(res, res.content || ''));
           workingMessages.push({ role: 'user', content: UI_DOCUMENT_LEAK_CHECK } as ChatMessage); // 不落库不上屏:harness 脚手架
           void publish(runId, 'status', { phase: 'ui_document_recovery', iteration });
