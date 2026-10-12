@@ -8,7 +8,7 @@
  * 现在 getToken() 与 auth.json 无关,续期怎么改都不漂。
  */
 import { describe, it, expect, vi } from 'vitest'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -201,5 +201,82 @@ describe('BackendManager startup exits', () => {
     expect(() => process.kill(pid, 0)).toThrow() // 放行时引擎必须已经退了
     await first
     expect(m.getStatus().state).toBe('stopped')
+  }, 15_000)
+})
+
+describe('BackendManager 引擎热更新起不来时退回', () => {
+  /** 假启动器:flag 文件不在 = 跑的是热更新的那一版(按 mode 起不来 / 起来就崩);在 = 已退回,正常答 /health。 */
+  function fakeLauncher(mode: 'never-ready' | 'crash-after-ready'): { launch: string[]; control: { active: () => string | null; demote: (v: string, reason: string) => void }; demoted: Array<[string, string]> } {
+    const dir = mkdtempSync(join(tmpdir(), 'forsion-bm-overlay-'))
+    const flag = join(dir, 'demoted')
+    const launcher = join(dir, 'launch.cjs')
+    writeFileSync(launcher, [
+      "const fs = require('node:fs')",
+      `const overlay = !fs.existsSync(${JSON.stringify(flag)})`,
+      mode === 'never-ready' ? "if (overlay) { process.stderr.write('overlay-boot\\n'); process.exit(1) }" : '',
+      "const port = Number(process.argv[process.argv.indexOf('--port') + 1])",
+      "require('node:http').createServer((_q, s) => s.end('{}')).listen(port, '127.0.0.1')",
+      mode === 'crash-after-ready' ? "if (overlay) setTimeout(() => process.exit(1), 600)" : '',
+    ].join('\n'), 'utf8')
+    const demoted: Array<[string, string]> = []
+    return {
+      launch: [launcher, 'standalone'],
+      demoted,
+      control: {
+        active: () => (existsSync(flag) ? null : '9.9.9'),
+        demote: (v, reason) => { demoted.push([v, reason]); writeFileSync(flag, '') },
+      },
+    }
+  }
+
+  it('热更新的那一版连续 3 次起不来:停用它,同一次启动里退回自带的并就绪', async () => {
+    const f = fakeLauncher('never-ready')
+    vi.spyOn(BackendManager, 'resolveEntry').mockReturnValue(f.launch[0]) // 不依赖 CI 上并不存在的引擎 dist
+    vi.spyOn(BackendManager, 'resolveLaunch').mockReturnValue(f.launch)
+    process.env.TANGU_NODE_BIN = process.execPath
+    const m = new BackendManager()
+    m.setEngineOverlay(f.control)
+    try {
+      await m.start({ cloudUrl: '', sandbox: 'none' })
+      expect(m.getStatus().state).toBe('ready')
+      expect(f.demoted).toHaveLength(1)
+      expect(f.demoted[0][0]).toBe('9.9.9')
+      expect(m.engineOverlayVersion()).toBeNull()
+      expect(m.getLogs().filter((l) => l === 'overlay-boot')).toHaveLength(3)
+      expect(m.getLogs().some((l) => l.includes('引擎更新 9.9.9 起不来,已停用并退回'))).toBe(true)
+    } finally { await m.stop() }
+  }, 30_000)
+
+  it('热更新的那一版能就绪、但之后一再意外退出:第 3 次停用它,重启后跑自带的', async () => {
+    const f = fakeLauncher('crash-after-ready')
+    vi.spyOn(BackendManager, 'resolveEntry').mockReturnValue(f.launch[0]) // 不依赖 CI 上并不存在的引擎 dist
+    vi.spyOn(BackendManager, 'resolveLaunch').mockReturnValue(f.launch)
+    process.env.TANGU_NODE_BIN = process.execPath
+    const m = new BackendManager()
+    m.setEngineOverlay(f.control)
+    try {
+      await m.start({ cloudUrl: '', sandbox: 'none' })
+      expect(m.engineOverlayVersion()).toBe('9.9.9')
+      const deadline = Date.now() + 20_000
+      while (Date.now() < deadline && !(f.demoted.length && m.getStatus().state === 'ready')) await new Promise((r) => setTimeout(r, 100))
+      expect(f.demoted.map(([v]) => v)).toEqual(['9.9.9'])
+      expect(m.getStatus().state).toBe('ready')
+      expect(m.engineOverlayVersion()).toBeNull()
+      expect(m.getLogs().filter((l) => l.startsWith('[manager] 后端退出(code=1'))).toHaveLength(3)
+    } finally { await m.stop() }
+  }, 40_000)
+
+  it('没在跑热更新的版本时起不来:不动任何版本,照旧判 crashed', async () => {
+    const entry = join(H.dir, 'silent-exit-2.js')
+    writeFileSync(entry, "process.exit(1)", 'utf8')
+    vi.spyOn(BackendManager, 'resolveEntry').mockReturnValue(entry)
+    vi.spyOn(BackendManager, 'resolveLaunch').mockReturnValue([entry, 'standalone'])
+    process.env.TANGU_NODE_BIN = process.execPath
+    const demote = vi.fn()
+    const m = new BackendManager()
+    m.setEngineOverlay({ active: () => null, demote })
+    await m.start({ cloudUrl: '', sandbox: 'none' })
+    expect(m.getStatus().state).toBe('crashed')
+    expect(demote).not.toHaveBeenCalled()
   }, 15_000)
 })

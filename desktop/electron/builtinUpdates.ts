@@ -39,7 +39,7 @@ export const tarballUrl = (registry: string, pkg: string, version: string): stri
   `${registry}/${pkg}/-/${pkg.replace(/^@[^/]+\//, '')}-${version}.tgz`
 
 /** latest 的版本与 integrity;先答上的 registry 排在下载候选首位。 */
-async function resolveLatest(pkg: string, registries: string[], fetchFn: RegistryFetch): Promise<{ version: string; integrity: string; tarballs: string[] }> {
+export async function resolveLatest(pkg: string, registries: string[], fetchFn: RegistryFetch): Promise<{ version: string; integrity: string; tarballs: string[] }> {
   const failed: string[] = []
   for (const [i, registry] of registries.entries()) {
     try {
@@ -62,7 +62,7 @@ async function resolveLatest(pkg: string, registries: string[], fetchFn: Registr
 }
 
 /** 落盘防穿越:rel 归一后必须仍在 root 之内(同引擎 npmInstall.safeJoin)。 */
-function safeJoin(root: string, rel: string): string {
+export function safeJoin(root: string, rel: string): string {
   const out = path.join(root, rel.replace(/\\/g, '/').replace(/^\/+/, ''))
   const back = path.relative(root, out)
   if (!back || back.startsWith('..') || path.isAbsolute(back)) throw new Error(`unsafe path in package: ${rel}`)

@@ -56,6 +56,7 @@ import { createCorePluginUpdater } from './corePluginUpdates'
 import { createMarketPluginUpdater, type MarketUpdateItem } from './marketPluginUpdates'
 import { BUILTIN_BUNDLES } from './builtinPlugins'
 import { checkBuiltinUpdates, NPM_OFFICIAL, registryOrder } from './builtinUpdates'
+import { checkEngineUpdate, setupEngineOverlay, ENGINE_PACKAGE, ENGINE_UPDATE_ID, type EngineOverlayHandle } from './engineUpdates'
 import { loadBuiltinDesktopEntries, type CloudHost } from './cloudHost'
 import { npmDownloadCandidates, npmTarballToZip, type NpmInstallSnapshot } from './npmMarketInstall'
 import { extractZipToDir, detectMarketType, MARKET_SUBDIR, MARKET_MANIFEST, isSafeSlug, readInstalledVersion, readInstalledPluginId, readUserPluginDirs, marketItemDir, downloadCandidates, downloadZip, GZIP_MAGIC, ZIP_MAGIC, type DownloadProgress } from './marketInstall'
@@ -1355,6 +1356,18 @@ async function effectiveConfig(): Promise<
   return { ...stored, backendState: st, homeDir, defaultWorkspaceDir, forsionMcp, externalConnection }
 }
 
+// 引擎的 npm 热更新(engineUpdates.ts):第一次拉起引擎之前收拾一遍 engine 目录,并把「下次会跑哪一版 / 停用哪一版」
+// 交给 backend。只在打包版做 —— dev 跑的是包根现编的 dist,不经启动器。
+let engineOverlay: EngineOverlayHandle | null = null
+let engineOverlayInit: Promise<void> | null = null
+function initEngineOverlay(): Promise<void> {
+  return (engineOverlayInit ??= (async () => {
+    if (!app.isPackaged || !PRODUCT.agentBackend) return
+    engineOverlay = await setupEngineOverlay({ bundledRoot: join(process.resourcesPath, 'tangu-server'), forsionHome: forsionHomeDir(), log: (m) => console.log(m) })
+    if (engineOverlay) backend.setEngineOverlay(engineOverlay.control)
+  })().catch((e) => console.warn('[engine-updates] 初始化失败(忽略,引擎照常跑自带的):', (e as Error)?.message)))
+}
+
 // 串行化:连续 config:set(如先改 cloudUrl 再改 sandbox)触发的多次 ensureBackend
 // 排队执行,避免并发 start() 双 spawn/端口竞争。
 let ensureChain: Promise<void> = Promise.resolve()
@@ -1372,6 +1385,7 @@ function ensureBackend(): Promise<void> {
     // 退出 / 清数据已开始(那边刚 stop 过):排在队里的这次若照常拉起,App 一退引擎就成了孤儿。
     // backend.stop() 的代号只作废已进 start() 的链,拦不住还在上面两个 await 里的这一次。
     if (isQuitting) return
+    await initEngineOverlay()
     await backend.start({
       cloudUrl: stored.cloudUrl,
       modelId: stored.modelId || undefined,
@@ -2504,18 +2518,35 @@ app.whenReady().then(async () => {
   })
   // Manual checks and background checks share state and a single in-flight run.
   const corePluginUpdater = createCorePluginUpdater({
-    items: bundleSources.map((s) => ({ id: s.id, packageName: s.pkg, phase: 'idle' })),
+    items: [
+      ...(PRODUCT.agentBackend ? [{ id: ENGINE_UPDATE_ID, packageName: ENGINE_PACKAGE, phase: 'idle' as const }] : []),
+      ...bundleSources.map((s) => ({ id: s.id, packageName: s.pkg, phase: 'idle' as const })),
+    ],
     enabled: app.isPackaged,
     broadcast: (status) => {
       for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed()) w.webContents.send('updater:core-status', status)
     },
     run: async (onStatus) => {
       const stored = await loadConfig()
-      return checkBuiltinUpdates({
-        pluginsRoot: join(forsionHomeDir(), 'plugins'), sources: bundleSources,
-        appVersion: app.getVersion(), registries: registryOrder(stored.mirror), onStatus,
-        fetch: (url, init) => url.startsWith(NPM_OFFICIAL) ? net.fetch(url, init) : fetch(url, init),
-      })
+      const registries = registryOrder(stored.mirror)
+      const registryFetch = (url: string, init: { signal: AbortSignal; headers?: Record<string, string> }): Promise<Response> =>
+        url.startsWith(NPM_OFFICIAL) ? net.fetch(url, init) : fetch(url, init)
+      await initEngineOverlay()
+      const engine = engineOverlay
+      // 两条通道各查各的、各报各的状态,谁也不等谁;两边内部都吞错。
+      await Promise.all([
+        checkBuiltinUpdates({
+          pluginsRoot: join(forsionHomeDir(), 'plugins'), sources: bundleSources,
+          appVersion: app.getVersion(), registries, onStatus, fetch: registryFetch,
+        }),
+        !PRODUCT.agentBackend ? undefined
+          : engine
+            ? checkEngineUpdate({
+                engineRoot: engine.root, bundledRoot: engine.bundledRoot, api: engine.api, registries, fetch: registryFetch,
+                runningVersion: backend.engineOverlayVersion(), onStatus,
+              })
+            : onStatus({ id: ENGINE_UPDATE_ID, packageName: ENGINE_PACKAGE, phase: 'current' }),
+      ])
     },
   })
   const checkAllUpdates = () => {

@@ -71,7 +71,7 @@ export function CorePluginUpdates({ controls = false }: { controls?: boolean }) 
     </div>
     <div className="hint">{t('plugins.core.updateHint')}</div>
     {state.items.map((item) => <div className="core-plugin-update-row" key={item.id}>
-      <span>{item.id === 'forsion-extend' ? 'Forsion Extend' : item.id === 'tangu-computer-use' ? 'Computer Use' : item.packageName}</span>
+      <span>{item.id === 'forsion-extend' ? 'Forsion Extend' : item.id === 'tangu-computer-use' ? 'Computer Use' : item.id === 'tangu-engine' ? 'Tangu' : item.packageName}</span>
       <CorePluginUpdateStatus item={item} />
     </div>)}
     {error && <div role="alert" className="hint">{error}</div>}

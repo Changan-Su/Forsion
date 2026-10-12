@@ -37,6 +37,8 @@
     "probe:hotswap": "node scripts/hotswap-probe.mjs",
     "check:realtime": "node scripts/realtime-relay.check.mjs",
     "smoke:tuiqueue": "bash scripts/tui-queue.smoke.sh",
+    "pack:engine": "node scripts/pack-engine.mjs",
+    "e2e:overlay": "node scripts/engine-overlay.e2e.mjs",
     "smoke:tooldefs": "node scripts/tool-definition-validation.smoke.mjs",
     "smoke:projectctx": "node scripts/project-context.smoke.mjs",
     "check:gitcreds": "node scripts/git-credentials.gitea.mjs",

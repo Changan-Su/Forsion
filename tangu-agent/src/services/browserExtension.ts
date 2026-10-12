@@ -83,9 +83,12 @@ function proofOk(got: unknown, message: string): boolean {
   return have.length === want.length && timingSafeEqual(have, want);
 }
 
-/** 随包的扩展目录(用户「加载已解压的扩展程序」时选它):dist/services → ../../browser-extension。 */
+/** 随包的扩展目录(用户「加载已解压的扩展程序」时选它):dist/services → ../../browser-extension。
+ *  跑的是热更新下来的引擎时(启动器设了 TANGU_BUNDLED_ROOT)仍指安装包那份:用户在 Chrome 里加载的是一个固定路径,
+ *  跟着引擎版本目录走的话,旧版本目录一清,装好的扩展就没了。 */
 export function extensionDir(): string {
-  return path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'browser-extension');
+  const root = process.env.TANGU_BUNDLED_ROOT || path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+  return path.resolve(root, 'browser-extension');
 }
 
 function engineLabel(): string {

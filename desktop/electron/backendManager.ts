@@ -11,6 +11,8 @@
  *   - 意外退出指数退避自动重启(≤3 次),before-quit SIGTERM→3s→SIGKILL
  * dev:包根 dist/ 缺失 → 报错引导先 `npm run build`(回落 external 模式)。
  * 打包:extraResources 的 resources/tangu-server/(dist + node_modules 同级,Node 解析自然命中)。
+ *   打包版不直接跑 standalone 入口,而是经引擎自己的启动器 dist/boot/launch.js:它决定跑安装包自带的 dist,
+ *   还是 npm 热更新下来的那份(engineUpdates.ts);热更新的那份起不来时,这里把它停用并退回自带的。
  */
 import { app } from 'electron'
 import { spawn, type ChildProcess } from 'node:child_process'
@@ -25,6 +27,13 @@ import { REMOTE_LOCK_FILE, REMOTE_LOCK_FILE_ENV } from '../shared/remoteSafety' 
 import { composeEnginePath, pathKeyOf, withBundledGit } from './envPath'
 
 export type BackendState = 'stopped' | 'starting' | 'ready' | 'crashed'
+
+export interface EngineOverlayControl {
+  /** 下一次拉起引擎,启动器会挑中的热更新版本;没有合格的 = null。 */
+  active(): string | null
+  /** 把一个版本记成坏的:启动器从此跳过它,更新器不再下它。 */
+  demote(version: string, reason: string): void
+}
 
 export interface ManagedBackendSettings {
   cloudUrl: string
@@ -151,6 +160,12 @@ export class BackendManager {
   private listeners = new Set<(st: BackendStatus) => void>()
   private spawnedEntry: string | null = null
   private spawnedAt = 0
+  /** 引擎热更新的两个动作,由 main 注入(判定的实现在引擎包里,这里不直接碰):下一次拉起会用哪一版、把某一版停用。 */
+  private overlay: EngineOverlayControl | null = null
+  /** 这次拉起用的热更新版本;跑的是自带引擎 = null。 */
+  private overlayVersion: string | null = null
+  /** 当前这一版热更新就绪之后意外退出的次数。 */
+  private overlayExits = 0
   /** 本机引擎令牌(TANGU_LOCAL_TOKEN):每个 App 进程(= 每次启动)一枚,引擎重启沿用 —— 渲染层缓存的
    *  cfg.token 跨 ensureBackend 重启照样有效。与 forsion_token 无关,auth.json 续期 / 换号都不动它。 */
   private readonly localEngineToken = randomBytes(32).toString('hex')
@@ -241,6 +256,35 @@ export class BackendManager {
     return null
   }
 
+  /** 拉起引擎的脚本与它前面的参数:打包版经启动器(由它在自带的与热更新下来的之间挑),dev 直接跑包根 dist。 */
+  static resolveLaunch(): string[] | null {
+    const entry = BackendManager.resolveEntry()
+    if (!entry) return null
+    if (!app.isPackaged) return [entry]
+    const launcher = join(dirname(dirname(entry)), 'boot', 'launch.js')
+    return existsSync(launcher) ? [launcher, 'standalone'] : [entry]
+  }
+
+  setEngineOverlay(control: EngineOverlayControl | null): void {
+    this.overlay = control
+  }
+
+  /** 正在跑(或最近一次拉起)的引擎是哪一版热更新;自带引擎 = null。 */
+  engineOverlayVersion(): string | null {
+    return this.overlayVersion
+  }
+
+  /** 热更新的那一版起不来:停用它,调用方随后重新拉起(启动器会退到下一份合格的,没有就是自带的)。 */
+  private demoteOverlay(reason: string): boolean {
+    const version = this.overlayVersion
+    if (!version || !this.overlay) return false
+    try { this.overlay.demote(version, reason) } catch { return false }
+    this.overlayVersion = null
+    this.overlayExits = 0
+    this.pushLog(`[manager] 引擎更新 ${version} 起不来,已停用并退回:${reason}`)
+    return true
+  }
+
   async start(settings: ManagedBackendSettings): Promise<BackendStatus> {
     const stopped = this.stop()
     const gen = this.gen // stop() 同步 +1 之后取;同一 tick 里紧跟的 stop() 会再 +1,作废本次拉起
@@ -255,18 +299,21 @@ export class BackendManager {
 
   private async spawnOnce(gen: number): Promise<void> {
     const entry = BackendManager.resolveEntry()
-    if (!entry) {
+    const launch = BackendManager.resolveLaunch()
+    if (!entry || !launch) {
       this.setState('crashed', '找不到 tangu-server(dev 下请先在包根执行 npm run build)')
       return
     }
     const s = this.settings!
     this.setState('starting', null)
+    // 经启动器拉起时记下它会挑中哪一版(同一个判定函数),起不来好知道该停用谁。
+    try { this.overlayVersion = launch.length > 1 ? this.overlay?.active() ?? null : null } catch { this.overlayVersion = null }
 
     for (let attempt = 0; attempt < 3; attempt++) {
       this.port = await freePort()
       if (gen !== this.gen) return
       const args = [
-        entry,
+        ...launch,
         '--port', String(this.port),
         '--host', '127.0.0.1',
         // 与 TUI/standalone 同指引擎数据目录 tangu/state.db(~/.tangu 软链也指 tangu/),
@@ -386,7 +433,9 @@ export class BackendManager {
       try { child.kill('SIGKILL') } catch { /* ignore */ }
       if (this.child === child) this.child = null
     }
-    // 三次都没起来:这轮若是就绪后崩溃引出的重启,退避额度还在就接着排;否则判 crashed
+    // 三次都没起来。跑的若是热更新的那一版,先把它停用、用退回去的那份再起一轮(每停用一版少一个候选,到自带的为止)。
+    if (this.demoteOverlay(this.lastError || '后端启动失败(连续 3 次)')) return this.spawnOnce(gen)
+    // 这轮若是就绪后崩溃引出的重启,退避额度还在就接着排;否则判 crashed
     if (this.restartCount > 0) this.scheduleRestart()
     else this.setState('crashed', this.lastError || '后端启动失败(连续 3 次)')
   }
@@ -417,6 +466,9 @@ export class BackendManager {
     // 还在 spawnOnce 的就绪等待里:它自己会换端口重试。这里再排一次重启 = 两条 spawn 链并行,
     // 后起的顶掉 this.child,先起的那个成了没人管的孤儿引擎(2.11.2 反馈日志里 5 行启动对 1 行退出就是它)。
     if (this.state === 'starting') return
+    // 就绪之后又意外退出(每次就绪都会把重启额度清零,所以「能起来、一用就崩」的引擎会一直重启下去):
+    // 跑的若是热更新的那一版,同一次 App 运行里第 3 次就停用它,下面这次重启退回去。
+    if (this.overlayVersion && ++this.overlayExits >= 3) this.demoteOverlay(this.lastError)
     this.scheduleRestart()
   }
 

@@ -1,0 +1,75 @@
+name: publish-engine
+
+# Tangu 引擎的 npm 热更新包(@forsion/tangu-agent)。桌面端后台从 npm 拉它,验签后在下次启动换上(desktop/electron/engineUpdates.ts)。
+#
+# 触发:
+#   - 推送 tangu-v* tag:构建 → 门禁 → 签名打包 → 端到端核对 → 发 npm。
+#   - 手动(Actions 页 Run workflow):同样的步骤但不发布,产物在 Artifacts 里。包的版本号恒取它所基于的桌面版本 ——
+#     一个没有任何桌面会装的号,只用来给 npm 上的包名占位(首发那一次:npm 规定包先存在才能登记自动发布)。
+#
+# 一次引擎热更新 = 从它所针对的那个桌面正式版(v* tag)拉出来的修复分支:只改引擎、不带迁移、不动依赖。
+# 这三条下面都是机器判定,不满足就不发 —— 发出去也没有一台桌面会收,而 npm 版本号用掉就收不回来。
+#
+# 版本号与桌面共用一条线:热更新取「下一个补丁号」,下一个桌面正式版再往后取(build-desktop 的门禁看有没有同号的 tangu-v* tag)。
+#
+# 签名私钥 = 仓库 secret TANGU_ENGINE_SIGNING_KEY(ed25519,PEM 文本)。⚠️ 永不轮换:公钥编在每一份已发出去的安装包里。
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'tangu-v*'
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # npm trusted publishing(OIDC)
+    defaults:
+      run:
+        working-directory: tangu-agent
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # 要找到它所基于的那个桌面 tag
+      # ⚠️ 这里刻意不设 registry-url:setup-node 会往 .npmrc 写占位令牌,npm 见到「已配令牌」就不走 OIDC(同 check-unit.yml)。
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24 # 与桌面安装包自带的 Node 同一大版本;trusted publishing 要 npm ≥ 11.5.1 + Node ≥ 22.14
+
+      - name: Release gate
+        id: gate
+        run: node scripts/engine-release-gate.mjs "$GITHUB_REF_NAME" "$GITHUB_EVENT_NAME"
+
+      - run: npm ci --no-audit --no-fund
+      - run: npm run build
+
+      - name: Sign and pack
+        env:
+          TANGU_ENGINE_SIGNING_KEY: ${{ secrets.TANGU_ENGINE_SIGNING_KEY }}
+        run: |
+          if [ -z "$TANGU_ENGINE_SIGNING_KEY" ]; then
+            echo "::error::Missing TANGU_ENGINE_SIGNING_KEY. Forsion Desktop refuses an unsigned engine, so there is nothing worth publishing."
+            exit 1
+          fi
+          node scripts/pack-engine.mjs --version "${{ steps.gate.outputs.pack_version }}" --min-desktop "${{ steps.gate.outputs.base }}"
+
+      # 真启动器 + 真引擎:把刚打的这种包放进一个临时家目录,看启动器选不选它、改一个字节后退不退回。
+      - name: End-to-end check
+        env:
+          TANGU_ENGINE_SIGNING_KEY: ${{ secrets.TANGU_ENGINE_SIGNING_KEY }}
+        run: node scripts/engine-overlay.e2e.mjs
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: forsion-tangu-agent-npm
+          path: tangu-agent/.engine-pack/forsion-tangu-agent-*.tgz
+          if-no-files-found: error
+
+      - name: Publish to npm
+        if: steps.gate.outputs.publish == 'true'
+        run: npm publish ./.engine-pack/forsion-tangu-agent-*.tgz --access public

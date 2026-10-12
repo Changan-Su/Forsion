@@ -42,6 +42,12 @@ jobs:
             console.log(`version parity OK: ${d}`);
           '
 
+      # 引擎的 npm 热更新(publish-engine.yml)与桌面共用一条版本线:这个版本号若已被一次引擎热更新用掉
+      # (= 有同号的 tangu-v* tag),安装包自带的引擎就会和 npm 上同号的那份内容不同。只在真发版(推 tag)时查。
+      - name: Version not taken by an engine hot update
+        if: github.event_name == 'push'
+        run: node scripts/engine-release-gate.mjs --desktop-release
+
       - run: npm install --no-audit --no-fund
       - run: npm run typecheck
       - run: npm test
@@ -134,6 +140,7 @@ jobs:
             src/services/memorySyncService.test.ts src/services/memorySync.test.ts \
             src/services/projectDoc.test.ts src/services/contextWindowStore.test.ts \
             src/plugins/npmInstall.test.ts src/sandbox/hostSandbox.winconsole.test.ts \
+            src/boot/overlay.test.ts \
             test/windowsProcess.test.ts test/acpEngineSpawn.test.ts \
             test/agentFileSync.test.ts test/localMemoryBrain.test.ts test/memoryManagementRoutes.test.ts \
             test/memoryDream.test.ts test/memorySync.test.ts test/agentFolder.test.ts
@@ -142,7 +149,7 @@ jobs:
             electron/hostTextWrite.test.ts electron/forsionHome.test.ts electron/accountCore.test.ts \
             electron/amadeus/settings.account.test.ts electron/amadeus/ipc.account.test.ts \
             electron/codeStudioProjects.test.ts electron/lclLink.test.ts \
-            electron/backendManager.test.ts electron/cliInstall.test.ts
+            electron/backendManager.test.ts electron/cliInstall.test.ts electron/engineUpdates.test.ts
 
       # Verify the distributed tool/prompt contract on every native runner, without operating its GUI.
       - name: Check bundled Computer Use platform contract
@@ -173,6 +180,15 @@ jobs:
       - name: Verify permission and Computer Use delivery
         working-directory: desktop
         run: node scripts/release-content.check.cjs
+
+      # 引擎的 npm 热更新在各平台的真实运行时上走一遍:用刚打出来的安装包里的 Electron(ELECTRON_RUN_AS_NODE)经启动器
+      # 拉起引擎,放一份签好名的新版,看它被选中、原生依赖(Electron ABI 的 better-sqlite3)从安装包那份解析、改一个字节后退回。
+      # 本机只验得了 macOS + 系统 Node;Windows 的盘符路径 / file URL 只有这里测得出。没配签名私钥时脚本自己跳过并给警告。
+      - name: Engine hot-update end-to-end on the packaged runtime
+        working-directory: desktop
+        env:
+          TANGU_ENGINE_SIGNING_KEY: ${{ secrets.TANGU_ENGINE_SIGNING_KEY }}
+        run: node scripts/engine-overlay-packaged.check.cjs
 
       # 防回归:v2.3.3~v2.6.0 曾因 beforeBuild 钩子返回 undefined(electron-builder 语义=「node_modules
       # 外部处理」)打出零依赖的空 asar——安装版启动即 ERR_MODULE_NOT_FOUND,且三平台静默过 CI。
