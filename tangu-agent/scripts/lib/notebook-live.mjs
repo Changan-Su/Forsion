@@ -17,8 +17,8 @@ import { join, resolve } from 'node:path';
 export const NOTEBOOK_TOOLS = ['notebook_read', 'notebook_edit', 'notebook_run'];
 const PREFIX = '/extensions/notebook/notebook-kernel'; // 捆绑包目录名 / 引擎插件 id
 const FILE = 'analysis.ipynb';
-const MSG_FIX = `${FILE} 第三格报错了,帮我看看是什么问题,改好之后把整本重新跑一遍,告诉我均价和总额各是多少。`;
-const MSG_ADD = '在最后加一格,算均价的平方,跑出来告诉我结果。';
+const MSG_FIX = `${FILE} 第三格报错了,帮我看看是什么问题,改好之后把整本重新跑一遍,告诉我平均分和最高分各是多少。`;
+const MSG_ADD = '在最后加一格,算平均分的平方,跑出来告诉我结果。';
 /** 格子的源码能不能放行去跑。这个场景里合理的代码只有算术和 print,所以见到下面这些就拒:引入模块(math / statistics 除外)、
  *  碰文件 / 进程 / 网络 / 反射的名字、行首的 `!` 和 `%`。宁可错拒(那次运行记成没过、原因写在详情里),不放过。 */
 const RISKY = /\b(open|exec|eval|compile|input|breakpoint|globals|locals|vars|getattr|setattr|delattr|__\w+__|os|sys|subprocess|shutil|pathlib|Path|socket|requests|urllib|http|pip|conda)\b|^\s*[!%]/m;
@@ -44,14 +44,16 @@ export function plantNotebookPlugin({ src, shared }) {
   return dest;
 }
 
-/** 四格的小笔记本,Jupyter 自己写出来的样子(缩进 1 格、一行一个元素)。第三格是坏的,带着上次存下的 NameError。 */
+/** 四格的小笔记本,Jupyter 自己写出来的样子(缩进 1 格、一行一个元素)。第三格是坏的,带着上次存下的 NameError。
+ *  数据故意只有一列分数:起初用的是「单价 + 数量」,有一次模型修变量名时顺手把均价改成了按数量加权(12.43 而不是 14.63)——
+ *  两种算法都讲得通,判据里的数就对不上了。这个场景量的是工具用得对不对,不是口径怎么取,所以换成只有一种算法的数据。 */
 export function notebookFixture() {
   const nb = {
     cells: [
-      { cell_type: 'markdown', id: 'intro', metadata: {}, source: ['# 销量\n', '\n', '先算均价,再算总额。'] },
-      { cell_type: 'code', execution_count: 1, id: 'data', metadata: { tags: ['data'], weight: '@@WEIGHT@@' }, outputs: [], source: ['prices = [12.5, 8.0, 23.4]\n', 'qty = [3, 5, 2]'] },
-      { cell_type: 'code', execution_count: 2, id: 'avg', metadata: {}, outputs: [{ ename: 'NameError', evalue: "name 'price' is not defined", output_type: 'error', traceback: ['Traceback (most recent call last):\n', 'Cell In[2], line 1\n', "NameError: name 'price' is not defined"] }], source: ['avg = sum(prices) / len(price)\n', 'print("avg", round(avg, 2))'] },
-      { cell_type: 'code', execution_count: null, id: 'total', metadata: {}, outputs: [], source: ['total = sum(p * q for p, q in zip(prices, qty))\n', 'total'] },
+      { cell_type: 'markdown', id: 'intro', metadata: {}, source: ['# 成绩\n', '\n', '先算平均分,再看最高分。'] },
+      { cell_type: 'code', execution_count: 1, id: 'data', metadata: { tags: ['data'], weight: '@@WEIGHT@@' }, outputs: [], source: ['scores = [82, 91, 77, 95]'] },
+      { cell_type: 'code', execution_count: 2, id: 'avg', metadata: {}, outputs: [{ ename: 'NameError', evalue: "name 'score' is not defined", output_type: 'error', traceback: ['Traceback (most recent call last):\n', 'Cell In[2], line 1\n', "NameError: name 'score' is not defined"] }], source: ['avg = sum(scores) / len(score)\n', 'print("avg", round(avg, 2))'] },
+      { cell_type: 'code', execution_count: null, id: 'best', metadata: {}, outputs: [], source: ['best = max(scores)\n', 'best'] },
     ],
     metadata: { forsion_live: { keep: '@@KEEP@@', note: '别的工具写的' }, kernelspec: { display_name: 'Python 3', language: 'python', name: 'python3' }, language_info: { name: 'python' } },
     nbformat: 4,
@@ -110,14 +112,14 @@ export function notebookSelftest() {
   const before = notebookFixture();
   // 经 JSON.parse 再写出来数字的写法会被整理掉,这里补回去 —— 判据要看的是「别人没动它」。
   const edit = (fn, base = before) => { const nb = JSON.parse(base); fn(nb); return JSON.stringify(nb, null, 1).replace('"keep": 1,', '"keep": 1.0,').replace('"weight": 2.5\n', '"weight": 2.50\n') + '\n'; };
-  const fixed = edit((nb) => { nb.cells[2].source = ['avg = sum(prices) / len(prices)\n', 'print("avg", round(avg, 2))']; nb.cells[2].outputs = [{ name: 'stdout', output_type: 'stream', text: ['avg 14.63\n'] }]; nb.cells[1].execution_count = 5; });
+  const fixed = edit((nb) => { nb.cells[2].source = ['avg = sum(scores) / len(scores)\n', 'print("avg", round(avg, 2))']; nb.cells[2].outputs = [{ name: 'stdout', output_type: 'stream', text: ['avg 86.25\n'] }]; nb.cells[1].execution_count = 5; });
   const cell = (id) => ({ cell_type: 'code', execution_count: null, id, metadata: {}, outputs: [], source: ['avg ** 2'] });
   const n = (after, opts, base = before) => judgeNotebook(base, after, opts).problems.length;
   const arg = (name, args) => [{ name, arguments: JSON.stringify(args) }];
   return [
     ['judgeNotebook 改好第三格、整本重跑', n(fixed, { changed: ['avg'] }), 0],
     ['judgeNotebook 什么都没改(负对照)', n(before, { changed: ['avg'] }), 1],
-    ['judgeNotebook 动了别的格子(负对照)', n(edit((nb) => { nb.cells[2].source = ['x']; nb.cells[3].source = ['total = 0']; }), { changed: ['avg'] }), 1],
+    ['judgeNotebook 动了别的格子(负对照)', n(edit((nb) => { nb.cells[2].source = ['x']; nb.cells[3].source = ['best = 0']; }), { changed: ['avg'] }), 1],
     ['judgeNotebook 数字写法被整理掉(负对照)', n(fixed.replace('"keep": 1.0', '"keep": 1'), { changed: ['avg'] }), 1],
     ['judgeNotebook 少了一格(负对照)', n(edit((nb) => { nb.cells[2].source = ['x']; nb.cells.splice(0, 1); }), { changed: ['avg'] }), 1],
     ['judgeNotebook 不是 JSON(负对照)', n('{', {}), 1],
@@ -128,7 +130,7 @@ export function notebookSelftest() {
     ['judgeNotebook 序号不是数字(负对照)', n(edit((nb) => { nb.cells[1].execution_count = 'bad'; }, fixed), { changed: ['avg'] }), 1],
     ['sourceAllowed 夹具自己的三格代码', JSON.parse(before).cells.filter((c) => c.cell_type === 'code').every((c) => sourceAllowed(joined(c.source))), true],
     ['sourceAllowed 算式和 print', sourceAllowed('sq = avg ** 2\nprint("%.1f" % sq)'), true],
-    ['sourceAllowed 用 statistics 求均值', sourceAllowed('import statistics\navg = statistics.mean(prices)'), true],
+    ['sourceAllowed 用 statistics 求均值', sourceAllowed('import statistics\navg = statistics.mean(scores)'), true],
     ['sourceAllowed 行首的 !(负对照)', sourceAllowed('x = 1\n!pip list'), false],
     ['sourceAllowed 装包(负对照)', sourceAllowed('%pip install numpy'), false],
     ['sourceAllowed 删文件(负对照)', sourceAllowed('from pathlib import Path\nPath("/x").unlink()'), false],
@@ -145,7 +147,7 @@ export function notebookSelftest() {
 export async function notebookLive({ api, run, workspace, OUT, neg, tokensOf, ttft }) {
   // 自己一个空文件夹当工作目录。台架共用的工作区里有别的场景的夹具(marker.txt、marker-doc.csv):10-12 实测模型装载了数据分析技能后
   // 会去 shell 里用 Python 看那份 CSV,和笔记本无关,却会被「shell 里跑 Python」这条判成绕开。文件夹里只有这一本,这条判据才成立。
-  const dir = join(workspace, 'sales');
+  const dir = join(workspace, 'grades');
   mkdirSync(dir, { recursive: true });
   const nbPath = join(dir, FILE);
   const before = notebookFixture();
@@ -204,20 +206,20 @@ export async function notebookLive({ api, run, workspace, OUT, neg, tokensOf, tt
   const j1 = judgeNotebook(before, mid, { changed: ['avg'] });
   const j2 = judgeNotebook(mid, after, { appended: true });
   const c = (id) => j1.nb?.cells?.find((x) => x.id === id);
-  // 怎么改的不管(len(prices)、statistics.mean 都行),看跑出来的结果:第三格不再报错、均价和总额存进了各自的输出。
-  const fixedOut = !hasError(c('avg')) && /14\.63/.test(outputText(c('avg'))) && /124\.3/.test(outputText(c('total')));
+  // 怎么改的不管(len(scores)、statistics.mean 都行),看跑出来的结果:第三格不再报错、平均分和最高分存进了各自的输出。
+  const fixedOut = !hasError(c('avg')) && /86\.25/.test(outputText(c('avg'))) && /\b95\b/.test(outputText(c('best')));
   const added = j2.added.filter((x) => x.cell_type === 'code');
-  const SQUARE = /214\.1/; // (43.9 / 3)² = 214.134…;取整到一位、两位都认,别的数(比如用四舍五入后的均价算出的 214.04)不认
+  const SQUARE = /7439\.(06|1)/; // 86.25² = 7439.0625;取到两位(7439.06)、一位(7439.1)都认
   const addedOut = added.some((x) => !hasError(x) && SQUARE.test(outputText(x)));
   const checks = [
     ['① 用了 notebook_edit 和 notebook_run', used(ev1, 'notebook_edit') && used(ev1, 'notebook_run')],
-    ['① 运行成功、结果里有 14.63', ranOk(ev1, /14\.63/)],
+    ['① 运行成功、结果里有 86.25', ranOk(ev1, /86\.25/)],
     ['① 没绕开工具', by1.length === 0],
     ['① 改和跑都弹了审批、读没弹', asked(ev1, 'notebook_edit') && asked(ev1, 'notebook_run') && !asked(ev1, 'notebook_read')],
     ['① 文件:合法、别的格子没动', j1.problems.length === 0],
-    ['① 文件:第三格改对了,均价和总额存进了输出', fixedOut],
+    ['① 文件:第三格改对了,平均分和最高分存进了输出', fixedOut],
     ['② 用了 notebook_edit 和 notebook_run', used(ev2, 'notebook_edit') && used(ev2, 'notebook_run')],
-    ['② 运行成功、结果里有 214.1x', ranOk(ev2, SQUARE)],
+    ['② 运行成功、结果里有 7439.06', ranOk(ev2, SQUARE)],
     ['② 没绕开工具', !!ev2 && by2.length === 0],
     ['② 改和跑都弹了审批、读没弹', asked(ev2, 'notebook_edit') && asked(ev2, 'notebook_run') && !asked(ev2, 'notebook_read')],
     ['② 文件:合法、原有的格子没动、新格子在最后', !!ev2 && j2.problems.length === 0],
@@ -226,7 +228,7 @@ export async function notebookLive({ api, run, workspace, OUT, neg, tokensOf, tt
   const failed = checks.filter(([, ok]) => !ok).map(([name]) => name);
   const err = ev1.error || ev2?.error || null;
   // 只记不判:答没答出数字(措辞会变)、第二问是不是只跑了新格子(只跑新格子还算得出来 = 变量跨 run 还在)。
-  const said1 = /14\.63/.test(ev1.content || '') && /124\.3/.test(ev1.content || '');
+  const said1 = /86\.25/.test(ev1.content || '') && /\b95\b/.test(ev1.content || '');
   const said2 = SQUARE.test(ev2?.content || '');
   const runArgs2 = (ev2?.toolArgs || []).filter((a) => a.name === 'notebook_run').map((a) => { try { return String(JSON.parse(a.arguments).cell); } catch { return '?'; } });
   const tools = (ev) => (ev ? [...new Set(ev.toolCalls)].join(',') || '无' : '没跑');

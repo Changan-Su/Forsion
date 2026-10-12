@@ -28,7 +28,7 @@
  *   npm run live:harness -- --only plugindiag --plugin-src <插件目录> [--plugin-data <plugins-data 里那份 json>] [--plugindiag-hint] [--plugindiag-host auto|"<宿主报的运行态>"]   # 装着的桌面插件 Space 不出现(10-10):
  *                                                           #   main.js 求值不抛错、但没走到 registerView 的那类;看真模型只凭插件目录和 shell 查不查得出。插件放进假家目录,开发机的 ~/.forsion 不碰
  *   npm run live:harness -- --only notebook --plugin-src <forsion-plugin-notebook 目录> --python-bin <内置 Python 的 python3> [--notebook-neg]   # Jupyter 笔记本插件给 Tangu 的三件工具(10-12):
- *                                                           #   两句不点名工具的话(「第三格报错了,改好重跑」「最后加一格算均价的平方」)→ 须用 notebook_read / notebook_edit / notebook_run,
+ *                                                           #   两句不点名工具的话(「第三格报错了,改好重跑」「最后加一格算平均分的平方」)→ 须用 notebook_read / notebook_edit / notebook_run,
  *                                                           #   不把 .ipynb 当原始 JSON 读写、不在 shell 里跑 Python;改和跑各弹一张审批;文件仍是合法的 nbformat 4、别的格子没动、输出存进了文件。
  *                                                           #   格子里的代码在本机真跑(审批守门只放笔记本工具)。负对照 --notebook-neg = 不摆插件、同样两句(须红)。改插件 tools.ts 的工具说明后跑
  *   npm run live:harness -- --only pluginicon                # 改 skills/forsion-plugin「Startup appearance」一节里图标作用范围那两句后跑:须装载手册并答出「桌面端退出后仍保留、安卓桌面只跟内置图标」
