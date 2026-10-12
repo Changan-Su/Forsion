@@ -128,7 +128,11 @@ export function notebookSelftest() {
 }
 
 export async function notebookLive({ api, run, workspace, OUT, neg, tokensOf, ttft }) {
-  const nbPath = join(workspace, FILE);
+  // 自己一个空文件夹当工作目录。台架共用的工作区里有别的场景的夹具(marker.txt、marker-doc.csv):10-12 实测模型装载了数据分析技能后
+  // 会去 shell 里用 Python 看那份 CSV,和笔记本无关,却会被「shell 里跑 Python」这条判成绕开。文件夹里只有这一本,这条判据才成立。
+  const dir = join(workspace, 'sales');
+  mkdirSync(dir, { recursive: true });
+  const nbPath = join(dir, FILE);
   const before = notebookFixture();
   writeFileSync(nbPath, before);
   const kernel = (path) => api(`${PREFIX}${path}`, { method: 'POST', body: JSON.stringify({ nb: nbPath }) });
@@ -151,7 +155,7 @@ export async function notebookLive({ api, run, workspace, OUT, neg, tokensOf, tt
     return 'reject';
   };
   const sid = `live-notebook-${Date.now()}`;
-  const cfg = { approvalMode: 'auto-edit' }; // 文件修改免批、命令要批:notebook_edit / notebook_run 声明的是命令那一档
+  const cfg = { approvalMode: 'auto-edit', cwd: dir }; // 文件修改免批、命令要批:notebook_edit / notebook_run 声明的是命令那一档
   let ev1; let ev2 = null; let mid = before; let after = before; let status = null;
   try {
     ev1 = await run(sid, MSG_FIX, 420_000, cfg, undefined, onApproval);
