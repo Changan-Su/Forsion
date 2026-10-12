@@ -27,6 +27,10 @@
  *   npm run live:harness -- --only pluginlook                # 改 skills/forsion-plugin 的「外观开关:跟着宿主走」一节后跑:须经 use_skill 取回正文并答出那一节的三样
  *   npm run live:harness -- --only plugindiag --plugin-src <插件目录> [--plugin-data <plugins-data 里那份 json>] [--plugindiag-hint] [--plugindiag-host auto|"<宿主报的运行态>"]   # 装着的桌面插件 Space 不出现(10-10):
  *                                                           #   main.js 求值不抛错、但没走到 registerView 的那类;看真模型只凭插件目录和 shell 查不查得出。插件放进假家目录,开发机的 ~/.forsion 不碰
+ *   npm run live:harness -- --only notebook --plugin-src <forsion-plugin-notebook 目录> --python-bin <内置 Python 的 python3> [--notebook-neg]   # Jupyter 笔记本插件给 Tangu 的三件工具(10-12):
+ *                                                           #   两句不点名工具的话(「第三格报错了,改好重跑」「最后加一格算平均分的平方」)→ 须用 notebook_read / notebook_edit / notebook_run,
+ *                                                           #   不把 .ipynb 当原始 JSON 读写、不在 shell 里跑 Python;改和跑各弹一张审批;文件仍是合法的 nbformat 4、别的格子没动、输出存进了文件。
+ *                                                           #   格子里的代码在本机真跑(审批守门只放笔记本工具)。负对照 --notebook-neg = 不摆插件、同样两句(须红)。改插件 tools.ts 的工具说明后跑
  *   npm run live:harness -- --only pluginicon                # 改 skills/forsion-plugin「Startup appearance」一节里图标作用范围那两句后跑:须装载手册并答出「桌面端退出后仍保留、安卓桌面只跟内置图标」
  *   npm run live:harness -- --only storename                 # 改名「商店」(10-05):改 skills/forsion-plugin / forsion-connect 里的商店叫法后跑;两问不点名技能,须装载技能并用新名字指路
  *   npm run live:harness -- --only plugin                    # 引擎插件热插拔(10-02):夹具插件开着调得到、停用后调不到、再启用回来(改 plugins/bootstrap 生命周期后跑)
@@ -170,6 +174,7 @@ import { humanRealLive } from './lib/human-real-live.mjs';
 import { dreamSeedLive } from './lib/dream-seed-live.mjs';
 import { accountLive, startFakeCloud } from './lib/account-live.mjs';
 import { plantPlugin, pluginDiagLive, registeredViews, STUB_SELFTEST } from './lib/plugin-diag-live.mjs';
+import { plantNotebookPlugin, notebookLive, notebookSelftest } from './lib/notebook-live.mjs';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const entry = join(root, 'dist', 'standalone', 'main.js');
@@ -190,6 +195,7 @@ KEYS.push('pageinstructions', 'dispatch');
 KEYS.push('storename', 'storeview');
 KEYS.push('pluginicon');
 KEYS.push('plugindiag');
+KEYS.push('notebook');
 KEYS.push('harnessopen');
 KEYS.push('equip');
 KEYS.push('musereview');
@@ -248,6 +254,7 @@ OPT_IN.add('musereview'); // 开 Muse 并往隔离库里写用量行:单独跑,�
 OPT_IN.add('projmem'); // 四个 run、两个 agent 两个项目;只在动项目记忆(services/projectMemory.ts、remember 的 scope)时才有信息量。
 OPT_IN.add('pluginlook'); // 一个 run;只在动 skills/forsion-plugin 的「外观开关」一节或 use_skill 时才有信息量。
 OPT_IN.add('plugindiag'); // 一个 run(几分钟);要 --plugin-src 给一份待查的插件,只在量「插件 Space 不出现」的排查能力时才有信息量。
+OPT_IN.add('notebook'); // 两个 run;要 --plugin-src 给构建好的 Jupyter 笔记本插件、--python-bin 给解释器,只在动那个插件的工具说明 / 审批档时才有信息量。
 OPT_IN.add('pluginicon'); // 一个 run;只在动 forsion-plugin 手册「Startup appearance」一节里图标作用范围那两句时才有信息量。
 OPT_IN.add('storeview'); // 一个 run;只在动 forsion-plugin 手册里 registerStoreView 那行、或商店左栏的插件页接缝时才有信息量。
 OPT_IN.add('skillcreate'); // 四个 run;只在动 manage_skill / use_skill / 随包的 skill-creator 技能时才有信息量。
@@ -791,8 +798,9 @@ if (argv.includes('--selftest')) {
     }
     rmSync(d, { recursive: true, force: true });
   }
+  for (const [name, got, want] of notebookSelftest()) check(name, got, want); // notebook 的文件判据 / 绕开工具的识别 / 审批守门
   if (fails.length) { console.error(`--selftest 失败 ${fails.length} 条:\n  ${fails.join('\n  ')}`); process.exit(1); }
-  console.log('--selftest 全过(anchorsOk / acceptsSnapshotText / findSubUnlock / run3Verdict / ttftVerdict / activationBuckets / activationsOverlap / claimsSent / claimsDone / mentionsFailure / registeredViews,含负对照)');
+  console.log('--selftest 全过(anchorsOk / acceptsSnapshotText / findSubUnlock / run3Verdict / ttftVerdict / activationBuckets / activationsOverlap / claimsSent / claimsDone / mentionsFailure / registeredViews / judgeNotebook / bypasses,含负对照)');
   process.exit(0);
 }
 
@@ -1099,6 +1107,15 @@ if (ONLY.has('browserext')) {
 const FAKE_HOME = join(OUT, 'home', 'dev');
 const PLUGINDIAG_DIR = ONLY.has('plugindiag') ? plantPlugin({ src: opt('plugin-src', ''), data: opt('plugin-data', ''), shared, fakeHome: FAKE_HOME }) : null;
 
+// notebook(10-12):真的 Jupyter 笔记本插件(--plugin-src)放进隔离共享域的 plugins/notebook,引擎带上内置 Python 的路径(桌面主进程平时给的
+// TANGU_PYTHON_BIN;worktree 里没有 desktop/build/python,用 --python-bin 指主检出那份)。--notebook-neg = 负对照,两样都不给。
+const NOTEBOOK_NEG = argv.includes('--notebook-neg');
+const NOTEBOOK_PY = resolve(opt('python-bin', process.env.TANGU_PYTHON_BIN || join(root, '..', 'desktop', 'build', 'python', ...(process.platform === 'win32' ? ['python.exe'] : ['bin', 'python3']))));
+if (ONLY.has('notebook') && !NOTEBOOK_NEG) {
+  if (!existsSync(NOTEBOOK_PY)) { console.error(`notebook:找不到 Python(${NOTEBOOK_PY})。--python-bin 指向内置的那份(desktop 里 npm run fetch-python 之后的 build/python/bin/python3)`); process.exit(2); }
+  try { plantNotebookPlugin({ src: opt('plugin-src', ''), shared }); } catch (e) { console.error(`notebook:${e.message}`); process.exit(2); }
+}
+
 // account(10-10):假 Forsion 云端(额度 / 套餐 / 积分是已知数),只在跑它时起;显式给了 TANGU_LIVE_CLOUD_URL 的以那个为准。
 const FAKE_CLOUD = ONLY.has('account') && !process.env.TANGU_LIVE_CLOUD_URL ? await startFakeCloud(TOKEN) : null;
 
@@ -1110,6 +1127,7 @@ const child = spawn(process.execPath, [
   TANGU_BROWSER_CDP: userChromeWs || 'off',
   FORSION_DESKTOP_CONFIG: desktopCfg,
   ...(PLUGINDIAG_DIR ? { HOME: FAKE_HOME } : {}),
+  ...(ONLY.has('notebook') && !NOTEBOOK_NEG ? { TANGU_PYTHON_BIN: NOTEBOOK_PY } : {}),
   ...(extPort ? { TANGU_BROWSER_EXTENSION_PORT: String(extPort), TANGU_BROWSER_ALLOW_PRIVATE_URLS: '1' } : { TANGU_BROWSER_EXTENSION: '0' }),
   // --window:只钉台架模型的窗口(contextBudget 的 env 覆盖表,最高优先级),别的模型不受影响
   ...(WINDOW ? { TANGU_MODEL_CONTEXT_WINDOWS: JSON.stringify({ [MODEL]: WINDOW }) } : {}),
@@ -3181,6 +3199,11 @@ Then reply with only the command output.`,
   // 「说没说中」是关键词粗判,以模型原话为准;「改没改好」是硬判(照宿主的方式求值 main.js,看 Space 要的视图注册了没有)。留证 plugindiag-evidence.json。
   await scenario('plugindiag', 'plugindiag 插件 Space 不出现:只凭插件目录查原因', () =>
     pluginDiagLive({ run, dir: PLUGINDIAG_DIR, home: FAKE_HOME, OUT, hint: argv.includes('--plugindiag-hint'), host: opt('plugindiag-host', ''), tokensOf, ttft }));
+
+  // Jupyter 笔记本插件的三件工具(10-12):同一个会话里两句话,都不点名工具。硬判 = 工具用没用、有没有绕开、审批弹没弹、文件守没守住
+  // (判据和它们的负对照在 lib/notebook-live.mjs,--selftest 里跑);答没答出数字只记不判。留证 notebook-evidence.json。
+  await scenario('notebook', `notebook Jupyter 笔记本:改坏的格子、重跑、加一格${NOTEBOOK_NEG ? '(负对照:没摆插件)' : ''}`, () =>
+    notebookLive({ api, run, workspace, OUT, neg: NOTEBOOK_NEG, tokensOf, ttft }));
 
   // 「应用市场」改名「商店」(10-05;当天先改成「插件商店」,用户随后定为只叫「商店」):forsion-plugin / forsion-connect 两份技能正文里的旧名
   // (Forsion Market / 市场 / 插件商店)一并改了。
