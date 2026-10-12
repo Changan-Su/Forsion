@@ -2,6 +2,25 @@
 
 <!-- English edition of CHANGELOG.md: same "## <version> (<date>)" headings, one bullet per Chinese bullet. Add both when releasing. -->
 
+## 2.13.3 (2026-10-12)
+
+- **Profile**: Settings → Forsion Cloud has a new Profile page. It is the same profile as in the web account center. Change your photo, nickname, bio and links in place, feature your works, change the cover and avatar frame, and make the profile public at a web address if you like. Your email, phone number, membership expiry, points and quota never appear on it.
+- **Cards in chat show up on their own**: answers such as an itinerary, a checklist, a pick-one choice or a list of steps now come as cards even when you did not ask for one, and actions inside a card have transitions. When a card's content occasionally lands in the reply as raw text, it is corrected automatically.
+- **Quotes and Ask in sidebar**: a message can carry several quotes, and they stay as cards after you send it. Ask in sidebar on selected text now opens a side chat in the right sidebar instead of interrupting the current chat.
+- **Mini cards can be resized**: drag an edge or a corner, from 260×160 up to 640×900. A card reopens at the size you last used.
+- **PDF**: with a plugin that takes over PDFs installed (Better PDF, for example), PDF links in notes, links with a page number and quotes in chat all open in the plugin, following Default open with.
+- **Notes**: the hover preview card closes after you follow a wikilink to another page. `[[` references in the chat input fall back to fuzzy matching when no name matches exactly.
+- **Interface**: all dashed borders are gone. Dragging a file into the chat area tints the whole area and lights up the input box; the Files panel, Image Studio and placeholder buttons follow the same treatment.
+- **Android**:
+  - Opening a chat, going back, swiping back and switching Spaces are smoother; long chats render in batches.
+  - Home is a single page: it has no tabs and always opens on Home itself; chats and notes you open from Home go to their own Space.
+- **Computer Use updated to 0.6.3**:
+  - Apps that can only be driven from the screenshot, such as WeChat: results now state that coordinates are pixels in the screenshot; scrolling and dragging by coordinates use real input, and scroll distance uses the same unit as coordinates; with Mos installed, scroll direction and distance are no longer altered.
+  - When a window is on another desktop, the error explains why and how to bring it back.
+  - Strict background, Show what the agent is doing, Managed browser and Browser tools in the plugin settings used to have no effect when changed; they now apply.
+- **Plugins** (for authors): `ctx.ui.mountMarkdownEditor` has a new `modes: false` option that hides the Edit / Source / Preview row; a file type that takes over `.pdf` receives opens with a page number or quote through `file.onGoto`; Mini panel layouts should follow their container instead of assuming 320×420.
+- **Fix**: after a truncated emoji appeared in a chat, every later message in that chat failed to send.
+
 ## 2.13.2 (2026-10-11)
 
 - **The new tab page is organized by what you want to do**: search, recently used, new, open (one tile per Space) and the sidebar panels of the current Space. Clicking another Space's tile opens its view in the current tab; the browser and the terminal open in place too.

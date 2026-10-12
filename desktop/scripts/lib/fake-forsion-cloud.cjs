@@ -156,6 +156,27 @@ async function startFakeForsionCloud(opts = {}) {
       if (p === '/api/auth/logout' || p === '/api/auth/logout-all') return send(res, 200, { ok: true })
       if (p === '/api/auth/delete-account') return send(res, 400, { detail: '验证码错误或已过期' })
 
+      // 个人主页(Extend 0.8.2 起;形状照 server 的 microserver/profile。/account 的跳转这里不答 → 公开页地址探不到,页面不给「复制链接」)
+      if (p.startsWith('/api/profile/me')) {
+        const pf = state.profile || (state.profile = {
+          bio: '写笔记、做插件。', links: [], isPublic: false, skin: 'coral', mode: 'auto', cover: 'mist', frame: 'ring', pinned: [],
+          modules: ['stats', 'works', 'activity', 'badges', 'insights'].map((id) => ({ id, show: true, public: id !== 'insights' })),
+        })
+        if (p === '/api/profile/me/works') return send(res, 200, { works: [] })
+        if (p === '/api/profile/me' && req.method === 'PUT') Object.assign(pf, body)
+        else if (p === '/api/profile/me/visibility' && req.method === 'POST') pf.isPublic = !!body.public
+        else if (p !== '/api/profile/me') return send(res, 404, { detail: 'Not found' })
+        return send(res, 200, { profile: {
+          username: 'demo_user', nickname: null, hasAvatar: false, tier: 'plus', joinedMonth: '2025-11',
+          bio: pf.bio, links: pf.links, skin: pf.skin, mode: pf.mode, cover: pf.cover, frame: pf.frame,
+          modules: pf.modules.filter((m) => m.show).map((m) => ({ id: m.id })),
+          stats: { totalTokens: 12_860_000, activeDays: 212, longestStreak: 41, currentStreak: 7, installs: 0 },
+          works: [], activity: { end: '2026-10-11', levels: Array.from({ length: 371 }, (_, i) => (i * 31) % 5), activeDays: 212 },
+          badges: [{ id: 'early', value: 2025 }], insights: { topModel: 'Stub', activeHours: [21, 0] },
+          settings: pf, canPublish: true, publishBlockedReason: null,
+        } })
+      }
+
       // 反馈工单
       if (p === '/api/feedback' && req.method === 'GET') return send(res, 200, { tickets: state.tickets })
       if (p === '/api/feedback' && req.method === 'POST') {

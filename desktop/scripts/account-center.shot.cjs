@@ -1,9 +1,9 @@
 /**
- * 「Forsion 云端」个人中心（Extend 渲染半身画的账号 / 额度与积分 / 安全 / 用量记录 / 反馈 + 宿主的同步 / 连接）
+ * 「Forsion 云端」个人中心（Extend 渲染半身画的账号 / 个人主页 / 额度与积分 / 背包 / 安全 / 用量记录 / 反馈 + 宿主的同步 / 连接）
  * × 真 Electron × 假云端（scripts/lib/fake-forsion-cloud.cjs，按 server 真实响应形状回数据）：预置已登录态，
  * 逐页打开、断言确实画出了内容且没有页面报错，并截图供人看（观感改动交付前自查真实截图，DESIGN §8）。
  *
- * 需先 npm run build（读 out/），且 node_modules/@forsion/extend 是带渲染半身页面的版本（≥ 0.5.0）。
+ * 需先 npm run build（读 out/），且 node_modules/@forsion/extend 是带个人主页的版本（≥ 0.8.2）。
  * 用法：node scripts/account-center.shot.cjs [--lang=en] [--out=<目录>]   截图默认落 $TMPDIR/forsion-account-center/
  */
 const fs = require('fs')
@@ -17,8 +17,12 @@ const ROOT = path.join(__dirname, '..')
 const LANG = (process.argv.find((a) => a.startsWith('--lang=')) || '--lang=zh').slice(7) === 'en' ? 'en' : 'zh'
 const OUT = (process.argv.find((a) => a.startsWith('--out=')) || '').slice(6) || path.join(os.tmpdir(), 'forsion-account-center')
 const EXPECT = LANG === 'en'
-  ? ['Account', 'Quota & points', 'Backpack', 'Security', 'Usage', 'Feedback', 'Cloud sync', 'Connection']
-  : ['账号', '额度与积分', '背包', '安全', '用量记录', '反馈', '云端同步', '连接']
+  ? ['Account', 'Profile', 'Quota & points', 'Backpack', 'Security', 'Usage', 'Feedback', 'Cloud sync', 'Connection']
+  : ['账号', '个人主页', '额度与积分', '背包', '安全', '用量记录', '反馈', '云端同步', '连接']
+
+// 按名字取,不按下标:Extend 往中间加子页(0.8.2 的「个人主页」)时下标会错位
+const SECURITY = LANG === 'en' ? 'Security' : '安全'
+const BACKPACK = LANG === 'en' ? 'Backpack' : '背包'
 
 let failed = 0
 function check(name, ok, detail) {
@@ -72,7 +76,7 @@ function check(name, ok, detail) {
         if (b) b.scrollTop = 0
         return { plugin: host?.getAttribute('data-plugin-settings') || null, pluginChildren: host?.childElementCount ?? 0, text: (b?.innerText || '').slice(0, 160).replace(/\s+/g, ' ') }
       })
-      const isExtend = i < 6
+      const isExtend = i < 7
       check(`${label}:画出了内容`, isExtend ? body.pluginChildren > 0 : body.text.length > 20, JSON.stringify(body))
       await sp.screenshot({ path: path.join(OUT, `${LANG}-${String(i + 1).padStart(2, '0')}-${label.replace(/[^\p{L}\p{N}]+/gu, '_')}.png`) })
     }
@@ -82,14 +86,14 @@ function check(name, ok, detail) {
     await sp.waitForSelector('[data-plugin-settings="forsion-extend:account"] .fx-link-row', { timeout: 10_000 }).catch(() => {})
     await sp.locator('[data-plugin-settings="forsion-extend:account"] .fx-link-row').first().click().catch(() => {})
     const jumped = await sp.waitForFunction((want) => document.querySelector('#settings-nav-subitems-forsion .settings-nav-subitem.active')?.textContent?.trim() === want,
-      EXPECT[3], { timeout: 8_000 }).then(() => true, () => false)
+      SECURITY, { timeout: 8_000 }).then(() => true, () => false)
     const activeNow = await sp.$eval('#settings-nav-subitems-forsion .settings-nav-subitem.active', (b) => b.textContent.trim()).catch(() => null)
-    check(`页内跳转:账号页点「手机」→ 左栏落到「${EXPECT[3]}」(ctx.app.openSettings 在设置浮窗里真走通)`, jumped, `active=${activeNow}`)
+    check(`页内跳转:账号页点「手机」→ 左栏落到「${SECURITY}」(ctx.app.openSettings 在设置浮窗里真走通)`, jumped, `active=${activeNow}`)
 
     // 头像菜单 → 设置中的同一背包页，走真实窗口路由。
     await win.locator('.ribbon-account:visible, .account-card:visible').first().click()
     await win.locator('.account-pop').waitFor()
-    const backpackLabel = EXPECT[2]
+    const backpackLabel = BACKPACK
     check('头像菜单包含背包', await win.getByRole('button', { name: backpackLabel, exact: true }).count() === 1)
     await win.screenshot({ path: path.join(OUT, `${LANG}-backpack-menu.png`) })
     await win.getByRole('button', { name: backpackLabel, exact: true }).click()
@@ -137,8 +141,9 @@ function check(name, ok, detail) {
     await sp.screenshot({ path: path.join(OUT, `${LANG}-backpack-narrow.png`) })
 
     const hits = cloud.requests.filter((r) => r.path.startsWith('/api/')).map((r) => `${r.method} ${r.path}${r.authed ? '' : ' (no token)'}`)
-    // 公开端点本就不带 token:/features(功能开关)、/auth/region(首屏语言的 IP 区域探测,非中文系统才会打)
-    const unauthed = cloud.requests.filter((r) => !r.authed && !['/api/features', '/api/auth/region'].includes(r.path)).map((r) => `${r.method} ${r.path}`)
+    // 公开端点本就不带 token:/features(功能开关)、/auth/region(首屏语言的 IP 区域探测,非中文系统才会打)、
+    // /account(个人主页探公开页地址:主进程只看它的跳转,按设计不带 token)
+    const unauthed = cloud.requests.filter((r) => !r.authed && !['/api/features', '/api/auth/region', '/account'].includes(r.path)).map((r) => `${r.method} ${r.path}`)
     check('云端请求都带着 token(token 留主进程,经 cloud:fetch 盖上)', unauthed.length === 0, unauthed.length ? `没带 token:${[...new Set(unauthed)].join(', ')}` : [...new Set(hits)].join(', ').slice(0, 400))
     check('没有页面报错', pageErrors.length === 0, pageErrors.slice(0, 3).join(' / '))
   } catch (e) {
