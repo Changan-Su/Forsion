@@ -39,7 +39,7 @@ Ribbon 分上下两区:**上区是 Space**,点图标切换空间;**下区是命�
 
 想顺便问一句、又不想打断正在跑的任务时：在输入框敲 `/btw 你的问题`，或在消息里划选一段文字点「顺便问」，或按 ⌘;（Windows / Linux 为 Ctrl+;）。回答开在**这条会话专属**的 Floating Panel 里：带着会话上下文作答，但不会写进对话、不使用工具、也不打断主任务。切到别的会话它会隐藏，切回来原样还在；关掉即清空。回答可以复制，或点「引用到对话」挂进主输入框。浏览器端是居中面板，手机端是全屏页面。
 
-Floating Panel 与 Mini Panel 都向插件开放。插件可以把已注册的视图开进独立 Floating 窗口，或提供适合 320×420 的 Mini 快捷面；详见 [Floating Panel 开发](../customization/floating-panel-development.md) 与 [Mini Panel 开发](../customization/mini-panel-development.md)。
+Floating Panel 与 Mini Panel 都向插件开放。插件可以把已注册的视图开进独立 Floating 窗口，或提供 Mini 快捷面（默认 320×420，用户可拖边改大小）；详见 [Floating Panel 开发](../customization/floating-panel-development.md) 与 [Mini Panel 开发](../customization/mini-panel-development.md)。
 
 ## 状态栏
 

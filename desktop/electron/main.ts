@@ -97,7 +97,7 @@ import { effectivePluginId } from '../shared/products'
 import { BROWSER_PARTITION, GUEST_ALLOWED_PERMISSIONS } from '../shared/browser'
 import { registerPtyIpc } from './pty'
 import { registerAssetSchemes as registerAmadeusAssetSchemes, registerAssetProtocol as registerAmadeusAssetProtocol } from './amadeus/assetProtocol'
-import { nearestEdge, collapsedBounds, expandedBounds, visibleRect, pointInRect, growRect, type Rect, type Edge } from './windowGeometry'
+import { nearestEdge, collapsedBounds, expandedBounds, visibleRect, pointInRect, growRect, resizeFromEdge, type Rect, type Edge } from './windowGeometry'
 import { applyWindowMaterial, parseWindowMaterialRequest } from './windowMaterial'
 import { isForsionUrl, pushDeepLink, drainDeepLinks } from './deepLink'
 
@@ -1835,10 +1835,17 @@ let miniDock: { edge: Edge; expanded: boolean } | null = null
 let suppressMiniMoved = false // 抑制程序化 setBounds 触发的 moved(否则折叠/展开自激)
 let miniDragging = false // 用户正在拖窗(moved 连发中);其间不吸附/不轮询,避免和拖拽对打(修「拖不出来」)
 let miniSettleTimer: NodeJS.Timeout | null = null
+let miniMovedTimer: NodeJS.Timeout | null = null
 let miniPollTimer: NodeJS.Timeout | null = null
 
 const MINI_CARD_WIDTH = 320
 const MINI_CARD_HEIGHT = 420
+const MINI_MIN = { width: 260, height: 160 }
+const MINI_MAX = { width: 640, height: 900 }
+/** 用户拉过的尺寸:关掉再开沿用(只记在本次运行里)。ponytail: 不落盘,要跨重启记住时照 detached-windows.json 的写法加。 */
+let miniSize = { width: MINI_CARD_WIDTH, height: MINI_CARD_HEIGHT }
+/** 正在拖缩放边:起手时的窗口与光标;null = 没在拖。 */
+let miniResizeFrom: { bounds: Rect; cursor: Electron.Point } | null = null
 const MINI_PEEK = 14 // 折叠后露出可辨识的把手宽度,避免 8px 细线难发现
 const MINI_TRIGGER_PAD = 6 // 悬停触发容差(薄条外扩,好点中)
 const MINI_HYSTERESIS = 28 // 展开后离开迟滞(出界超此才折叠,修「一动就弹回」)
@@ -1884,17 +1891,18 @@ function openAutoMini(sessionId: string): void {
 
 function createMiniWindow(opts?: MiniOpenOptions): void {
   miniTarget = opts
-  const width = MINI_CARD_WIDTH
-  const height = MINI_CARD_HEIGHT
   const wa = screen.getPrimaryDisplay().workArea
+  // 记住的大小也要放得进这块屏(四周留 24px):伸出工作区的卡片一挪就会被判成贴边、折起来
+  const width = Math.min(miniSize.width, wa.width - 48), height = Math.min(miniSize.height, wa.height - 48)
   miniWindow = new BrowserWindow({
     width, height,
     x: wa.x + wa.width - width - 24,
     y: wa.y + 24,
-    minWidth: width, minHeight: height, maxWidth: width, maxHeight: height,
     frame: false,
     transparent: true,
+    // 系统缩放边不开:透明窗在 Windows 上没有(Electron 去掉了 WS_THICKFRAME)。大小由卡片自绘的缩放边改,见 window:miniResize。
     resizable: false,
+    acceptFirstMouse: true, // 卡片不在前台时,第一下按住缩放边 / 顶栏就能拖(同 openAutoMini)
     alwaysOnTop: true,
     skipTaskbar: true,
     hasShadow: true,
@@ -1907,6 +1915,7 @@ function createMiniWindow(opts?: MiniOpenOptions): void {
   miniWindow.webContents.setWindowOpenHandler(openUrlHandler(miniWindow.webContents))
   hardenNav(miniWindow.webContents)
   miniWindow.webContents.on('did-finish-load', () => {
+    miniResizeFrom = null // 拖到一半页面重载:收不到松手,这里收场
     if (miniTarget && miniWindow && !miniWindow.isDestroyed()) miniWindow.webContents.send('window:miniTarget', miniTarget)
   })
   stopMiniPassThrough = startMiniPassThrough(miniWindow, {
@@ -1914,7 +1923,7 @@ function createMiniWindow(opts?: MiniOpenOptions): void {
     cursor: () => screen.getCursorScreenPoint(),
   })
   miniWindow.on('moved', onMiniMoved)
-  miniWindow.on('closed', () => { console.log('[win] mini closed'); stopMiniPassThrough?.(); stopMiniPassThrough = null; miniWindow = null; miniTarget = undefined; miniDock = null; stopMiniPoll() })
+  miniWindow.on('closed', () => { console.log('[win] mini closed'); stopMiniPassThrough?.(); stopMiniPassThrough = null; miniWindow = null; miniTarget = undefined; miniDock = null; miniResizeFrom = null; stopMiniPoll() })
   console.log('[win] mini open')
   loadRendererWith(miniWindow, { window: 'mini', ...(opts?.sessionId ? { sessionId: opts.sessionId } : {}) })
 }
@@ -2028,12 +2037,14 @@ function setMiniBounds(r: Rect, animate = true): void {
   if (!miniWindow || miniWindow.isDestroyed()) return
   suppressMiniMoved = true
   miniWindow.setBounds(r, animate && process.platform === 'darwin')
-  setTimeout(() => { suppressMiniMoved = false }, animate && process.platform === 'darwin' ? 320 : 60)
+  // 单个定时器:连发(拖缩放边)时后一次顺延,前一次的定时器不会提前放开抑制
+  if (miniMovedTimer) clearTimeout(miniMovedTimer)
+  miniMovedTimer = setTimeout(() => { suppressMiniMoved = false }, animate && process.platform === 'darwin' ? 320 : 60)
 }
 
 // moved 连发 = 用户在拖窗;只在**停稳 200ms 后**才判贴边(拖拽过程中绝不折叠 → 能自由拖出)。
 function onMiniMoved(): void {
-  if (!miniWindow || suppressMiniMoved) return // 程序化移动不算用户拖拽
+  if (!miniWindow || suppressMiniMoved || miniResizeFrom) return // 程序化移动 / 拖缩放边不算用户拖窗
   miniDragging = true
   if (miniSettleTimer) clearTimeout(miniSettleTimer)
   miniSettleTimer = setTimeout(onMiniSettled, 200)
@@ -2064,7 +2075,7 @@ function stopMiniPoll(): void {
   if (miniPollTimer) { clearInterval(miniPollTimer); miniPollTimer = null }
 }
 function pollMiniCursor(): void {
-  if (!miniWindow || miniWindow.isDestroyed() || !miniDock || miniDragging || suppressMiniMoved) return
+  if (!miniWindow || miniWindow.isDestroyed() || !miniDock || miniDragging || suppressMiniMoved || miniResizeFrom) return
   const pt = screen.getCursorScreenPoint()
   const b = miniWindow.getBounds()
   const wa = screen.getDisplayMatching(b).workArea
@@ -3664,6 +3675,28 @@ app.whenReady().then(async () => {
   ipcMain.on('window:miniReady', (e) => {
     if (isTrustedSender(e) && e.sender === miniWindow?.webContents && miniTarget) e.sender.send('window:miniTarget', miniTarget)
     if (isTrustedSender(e) && e.sender === autoMiniWindow?.webContents && autoMiniSessionId) e.sender.send('window:miniTarget', { sessionId: autoMiniSessionId })
+  })
+  // Mini 卡片的自绘缩放边:渲染层只报「哪条边、是不是起手」,位移由这里读光标算(不受界面缩放 / DPI 影响);edge 不合法 = 松手。
+  ipcMain.on('window:miniResize', (e, edge: unknown, start: unknown) => {
+    if (!isTrustedSender(e) || !miniWindow || miniWindow.isDestroyed() || e.sender !== miniWindow.webContents) return
+    if (typeof edge !== 'string' || !/^(?=.)[ns]?[ew]?$/.test(edge)) {
+      miniResizeFrom = null
+      if (process.platform === 'darwin') miniWindow.invalidateShadow() // 透明窗的投影按新轮廓重算(长大时新露出的那块在重绘前是透明的)
+      return
+    }
+    if (miniDock && !miniDock.expanded) return // 折叠在屏幕边上时不改大小:缩窄会把露在屏内的那条把手也带出去
+    const cursor = screen.getCursorScreenPoint()
+    if (start === true || !miniResizeFrom) {
+      // 刚拖到边上、还没判贴边就开始拉:那次判定作废,免得拉到一半被折叠
+      if (miniSettleTimer) { clearTimeout(miniSettleTimer); miniSettleTimer = null }
+      miniDragging = false
+      miniResizeFrom = { bounds: miniWindow.getBounds(), cursor }
+    }
+    const from = miniResizeFrom
+    const next = resizeFromEdge(from.bounds, edge, cursor.x - from.cursor.x, cursor.y - from.cursor.y, MINI_MIN, MINI_MAX,
+      screen.getDisplayMatching(from.bounds).workArea)
+    miniSize = { width: next.width, height: next.height }
+    setMiniBounds(next, false)
   })
   ipcMain.on('window:miniSession', (e, raw: unknown) => {
     if (!isTrustedSender(e) || e.sender !== mainWindow?.webContents) return

@@ -1654,6 +1654,7 @@ declare global {
       /** P1-KF:把本窗**生效**界面语言报给主进程(托盘 / 系统通知 / 对话框跟它走)。只有桌面 preload 有;web / 手机 / 设备页缺席 = 不报。 */
       reportUiLocale?(locale: 'zh' | 'en'): void
       closeSelf?(): void
+      miniResize?(edge: string | null, start?: boolean): void
       /** 跨窗撕拽:拖拽中实时上报屏幕坐标(主进程命中测试 → 给光标下窗口发落点预览)。节流后调。 */
       dragUpdate?(screenX: number, screenY: number, view: { type: string; params?: Record<string, unknown> }): void
       /** 跨窗撕拽:最终落点路由(命中另一 dockview 窗→并入并返回 routed:true;空桌面→建新独立窗;命中源窗→false 不动)。 */

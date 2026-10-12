@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { rectUnderPoint, nearestEdge, collapsedBounds, expandedBounds, visibleRect, pointInRect, growRect, type Rect, type Edge } from './windowGeometry'
+import { rectUnderPoint, nearestEdge, collapsedBounds, expandedBounds, visibleRect, pointInRect, growRect, resizeFromEdge, type Rect, type Edge } from './windowGeometry'
 
 const WA: Rect = { x: 0, y: 0, width: 1440, height: 900 }
 
@@ -97,5 +97,35 @@ describe('visibleRect / pointInRect / growRect (mini 悬停触发+迟滞)', () =
     const grown = growRect(card, 24)
     expect(pointInRect(card.x + card.width + 10, card.y + 10, grown)).toBe(true) // 出界 10<24 仍算在内
     expect(pointInRect(card.x + card.width + 40, card.y + 10, grown)).toBe(false) // 出界 40>24 才算离开
+  })
+})
+
+describe('resizeFromEdge (mini card resize edges)', () => {
+  const start: Rect = { x: 500, y: 100, width: 320, height: 420 }
+  const MIN = { width: 260, height: 160 }, MAX = { width: 640, height: 900 }
+  it('se: top-left stays, size follows the pointer', () => {
+    expect(resizeFromEdge(start, 'se', 40, -200, MIN, MAX)).toEqual({ x: 500, y: 100, width: 360, height: 220 })
+  })
+  it('nw: bottom-right stays', () => {
+    const r = resizeFromEdge(start, 'nw', -80, 60, MIN, MAX)
+    expect(r).toEqual({ x: 420, y: 160, width: 400, height: 360 })
+    expect([r.x + r.width, r.y + r.height]).toEqual([start.x + start.width, start.y + start.height])
+  })
+  it('a single edge moves one axis only', () => {
+    expect(resizeFromEdge(start, 's', 999, -100, MIN, MAX)).toEqual({ ...start, height: 320 })
+    expect(resizeFromEdge(start, 'w', 30, 999, MIN, MAX)).toEqual({ ...start, x: 530, width: 290 })
+  })
+  it('clamps to min / max and keeps the opposite edge anchored', () => {
+    expect(resizeFromEdge(start, 'se', -9999, -9999, MIN, MAX)).toEqual({ x: 500, y: 100, ...MIN })
+    const r = resizeFromEdge(start, 'nw', -9999, -9999, MIN, MAX)
+    expect(r).toEqual({ x: 820 - 640, y: 520 - 900, ...MAX })
+  })
+  it('within: the dragged edge stops at the work area, the other axis is untouched', () => {
+    const wa: Rect = { x: 0, y: 25, width: 1440, height: 800 } // 底边 825
+    expect(resizeFromEdge(start, 's', 0, 9999, MIN, MAX, wa)).toEqual({ ...start, height: 825 - 100 })
+    expect(resizeFromEdge(start, 'nw', -9999, -9999, MIN, MAX, wa)).toEqual({ x: 820 - 640, y: 25, width: 640, height: 520 - 25 })
+    const far: Rect = { ...start, x: 1300 } // 右边已经伸出工作区:只拖下边不动宽度
+    expect(resizeFromEdge(far, 's', 0, 50, MIN, MAX, wa).width).toBe(320)
+    expect(resizeFromEdge(far, 'e', 500, 0, MIN, MAX, wa).width).toBe(260) // 没有余地时也不小于最小值
   })
 })

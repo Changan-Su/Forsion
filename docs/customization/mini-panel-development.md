@@ -19,7 +19,7 @@ Space 的 `mini` 是显式能力声明。`SpaceDefinition.mini` 与 `space.json.
 
 两种视图类型必须不同且均已注册。缺省不适配；缺失可选 Mini 视图时完整 Space 仍可加载。不要在 `requires.views` 强制依赖可选 Mini 类型。Mini 挂专用视图，不运行 `Space.build()`，不恢复桌面/移动布局，不提供标签页、Ribbon 全局操作或移动端抽屉。链接到其他完整视图时交给主面板。
 
-默认窗口为 320×420。适配器复用业务数据与编辑能力，专门设计快捷交互。使用语义主题变量，提供中英文本，避免品牌欢迎页、全局设置和重复导航占据面板。宿主负责 Space 切换、主面板定位和关闭。
+默认窗口为 320×420；用户可以拖卡片的四条边和四个角，在 260×160 到 640×900 之间改大小，关掉再开沿用上次的大小（本次运行内）。视图的布局要跟随容器：窄到 260、矮到 160 时内容自己滚动或省略，不要按 320×420 写死尺寸。Computer Use 自动弹出的临时 Mini 仍固定 320×420。适配器复用业务数据与编辑能力，专门设计快捷交互。使用语义主题变量，提供中英文本，避免品牌欢迎页、全局设置和重复导航占据面板。宿主负责 Space 切换、主面板定位和关闭。
 
 插件不必为了一个快捷卡片创建完整 Space。注册视图后可直接打开 Mini：
 
@@ -70,10 +70,11 @@ Genesis 与 `tangu-computer-use` 是独立仓库，交付时需要配套更新�
 - `check:miniauto` 用另一个隔离 Electron 进程持有真实 OS 焦点，验证从未打开手动 Mini 的自动弹出、右上角落位、指针移动不带动窗口、指针下可交互/其余穿透、同会话 SSE 续显、调用间隙保留、结束/回焦收起、运行结束把焦点还给主窗口，以及手动窗口与存盘数据不被覆盖。`check:minicard` 的几何段固定光标与焦点输入，真实焦点行为由前者覆盖。
 - 「拖卡片不抢焦到主窗口」的前提是 2026-09-28 在另一 App 占前台时用真实鼠标拖隔离 Electron 窗口测出来的：可聚焦 + `acceptFirstMouse` → 能拖、卡片自身获焦；`focusable:false` → 拖不动且主窗口获焦；`type:'panel'` → 能拖但主窗口获焦（在 Forsion 里等于收起卡片）。程序化 `focus()` 复现不了这个终态（`app.focus` 会先让主窗口获焦），所以台架不覆盖这一步。
 - `check:miniauto` 以 `TANGU_HARNESS_QUIET=0` 启动：Playwright 起的实例默认静默（`present()` 只 `showInactive`，结束时不会真的回焦），测回焦语义必须关掉。
+- `check:minicard` 的缩放段：真实指针按住卡片边缘的热区，光标位置用替身给出，验证只有手动 Mini 自己能改大小、对边不动、夹在最小值、内容跟着铺满、关掉再开沿用。透明无边框窗在 Windows 上没有系统缩放边，所以缩放边是卡片自己画的、三个平台走同一条路径；渲染层只报哪条边，位移由主进程读光标算。
 
 ## English contract
 
-Declare distinct registered `mini.view` and `mini.mainView` targets on the Space. Mini is opt-in and never builds the full Space layout. Optional adapter availability does not invalidate the full Space. The host owns navigation chrome and forwards current entity params to the main panel.
+Declare distinct registered `mini.view` and `mini.mainView` targets on the Space. Mini is opt-in and never builds the full Space layout. The window opens at 320×420 and the user can drag its edges and corners between 260×160 and 640×900, so lay the view out against its container instead of a fixed size; the automatic Computer Use observer stays 320×420. Optional adapter availability does not invalidate the full Space. The host owns navigation chrome and forwards current entity params to the main panel.
 
 DOM plugins receive an optional live context with `surface`, `getParams`, `setParams`, `onParamsChanged`, and (Mini only) `showInMainPanel`. Parameter updates preserve the mounted DOM; contexts are revoked on disposal. Reuse domain data, keep entity keys consistent, and clean up subscriptions.
 
