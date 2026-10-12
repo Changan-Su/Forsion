@@ -266,6 +266,27 @@ describe('BackendManager 引擎热更新起不来时退回', () => {
     } finally { await m.stop() }
   }, 40_000)
 
+  it('启动器自己退回了自带的(拉起前以为会跑新版):以引擎在 /health 里报的版本为准,不把自带引擎记到新版头上', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'forsion-bm-overlay-'))
+    const launcher = join(dir, 'launch.cjs')
+    writeFileSync(launcher, [
+      "const port = Number(process.argv[process.argv.indexOf('--port') + 1])",
+      "require('node:http').createServer((_q, s) => s.end(JSON.stringify({ version: '0.0.0-test' }))).listen(port, '127.0.0.1')", // = App 版本
+    ].join('\n'), 'utf8')
+    vi.spyOn(BackendManager, 'resolveEntry').mockReturnValue(launcher)
+    vi.spyOn(BackendManager, 'resolveLaunch').mockReturnValue([launcher, 'standalone'])
+    process.env.TANGU_NODE_BIN = process.execPath
+    const demote = vi.fn()
+    const m = new BackendManager()
+    m.setEngineOverlay({ active: () => '9.9.9', demote })
+    try {
+      await m.start({ cloudUrl: '', sandbox: 'none' })
+      expect(m.getStatus().state).toBe('ready')
+      expect(m.engineOverlayVersion()).toBeNull()
+      expect(demote).not.toHaveBeenCalled()
+    } finally { await m.stop() }
+  }, 15_000)
+
   it('停用没生效(坏版本记录写不进去,启动器下次还会挑中它):不无限重来,按原来的有限次数判 crashed', async () => {
     const f = fakeLauncher('never-ready')
     vi.spyOn(BackendManager, 'resolveEntry').mockReturnValue(f.launch[0])

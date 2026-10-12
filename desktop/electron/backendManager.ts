@@ -166,6 +166,8 @@ export class BackendManager {
   private overlayVersion: string | null = null
   /** 当前这一版热更新就绪之后意外退出的次数。 */
   private overlayExits = 0
+  /** 最近一次就绪时引擎在 /health 里报的版本号;没报 = null。 */
+  private healthVersion: string | null = null
   /** 本机引擎令牌(TANGU_LOCAL_TOKEN):每个 App 进程(= 每次启动)一枚,引擎重启沿用 —— 渲染层缓存的
    *  cfg.token 跨 ensureBackend 重启照样有效。与 forsion_token 无关,auth.json 续期 / 换号都不动它。 */
   private readonly localEngineToken = randomBytes(32).toString('hex')
@@ -434,6 +436,12 @@ export class BackendManager {
       // 答过 /health 又在这之前退了(onExit 在 starting 期不排重启)→ 不能标 ready,按失败换端口重来
       if (ok && this.child === child && child.exitCode === null && child.signalCode === null) {
         this.restartCount = 0
+        // 实际跑起来的是哪一版,以引擎自己报的为准:拉起前的判断是「启动器会挑中谁」,而启动器可能在重试之间
+        // 把新版记成坏的、退回了别的。引擎报的版本等于 App 版本 = 跑的是自带的(两者同号发版)。
+        if (this.overlayVersion && this.healthVersion && this.healthVersion !== this.overlayVersion) {
+          this.overlayVersion = this.healthVersion === app.getVersion() ? null : this.healthVersion
+          this.overlayExits = 0
+        }
         this.setState('ready', null)
         return
       }
@@ -454,7 +462,11 @@ export class BackendManager {
       if (child.exitCode !== null || child.signalCode !== null || gen !== this.gen) return false
       try {
         const r = await fetch(`http://127.0.0.1:${this.port}/health`, { signal: AbortSignal.timeout(1000) })
-        if (r.ok) return true
+        if (r.ok) {
+          const version = await r.json().then((b: { version?: unknown }) => b?.version, () => undefined)
+          this.healthVersion = typeof version === 'string' && version ? version : null
+          return true
+        }
       } catch { /* not yet */ }
       await delay(300)
     }

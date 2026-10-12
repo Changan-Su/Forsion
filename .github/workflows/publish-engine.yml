@@ -45,7 +45,8 @@ jobs:
         id: gate
         run: node scripts/engine-release-gate.mjs "$GITHUB_REF_NAME" "$GITHUB_EVENT_NAME"
 
-      - run: npm ci --no-audit --no-fund
+      # 与 build-desktop 的 test 门禁同一条安装命令(那边一直用 npm install,这里不另立一套)
+      - run: npm install --no-audit --no-fund
       - run: npm run build
 
       - name: Sign and pack

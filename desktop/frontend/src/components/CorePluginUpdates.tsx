@@ -56,6 +56,15 @@ export function CorePluginUpdateStatus({ item }: { item?: CorePluginUpdate }) {
   </span>
 }
 
+/** Tangu 卡片右侧。引擎走自己的更新通道(打包版)时只报当前版本,状态在下面的更新列表里;
+ *  否则(开发版、或这一档产品不带引擎更新)沿用「随 Forsion 更新」。两处不能说相反的话。 */
+export function EngineVersionHint() {
+  const { t } = useI18n()
+  const item = useCorePluginUpdates().items.find((i) => i.id === 'tangu-engine')
+  if (!item || item.phase === 'development') return <span className="hint">{t('plugins.core.withApp')}</span>
+  return <span className="hint">{item.installedVersion ? `v${item.installedVersion}` : ''}</span>
+}
+
 /** The app updater and plugin updater have independent results; one must never mask the other's error. */
 export function CorePluginUpdates({ controls = false }: { controls?: boolean }) {
   const { t } = useI18n()
