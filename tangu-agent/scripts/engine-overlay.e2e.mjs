@@ -7,13 +7,17 @@
  * 缺省核本仓这份 dist + 当前 node。--root / --exe 用来核打包后的真实运行时(desktop/scripts/engine-overlay-packaged.check.cjs):
  * 自带引擎 = 安装包里的 resources/tangu-server,解释器 = 安装包里的 Electron(ELECTRON_RUN_AS_NODE),原生依赖是 Electron ABI 的那份。
  *
- * 做法:把当前 dist 打成「比自带高一个补丁号」的热更新包,解到临时家目录的 engine/<版本>/,再经 dist/boot/launch.js
+ * 做法:把当前 dist 打成「比自带高一个补丁号」的热更新包,放到临时家目录的 engine/<版本>/,再经 dist/boot/launch.js
  * 起 standalone,看 /health 报的是哪个版本。每条负对照都要退回自带版本并说出原因。
- * 要签名私钥(本机 ~/.forsion-dev/secrets/tangu-engine-signing/key.pem 或 TANGU_ENGINE_SIGNING_KEY);没有就跳过。
+ *
+ * 不需要发版私钥:脚本先搭一份「临时安装包包根」—— dist 照抄、node_modules 用目录链接指回原处,只把编在
+ * dist/boot/signingKey.js 里的公钥换成一把当场生成的测试钥匙。启动器、判定、解析钩子、引擎本体都是真的。
+ * (发版私钥与钉死的公钥对不对得上,由 pack-engine.mjs 签完后的回验把关。)
  * 要 Node ≥ 22.15(module.registerHooks);桌面安装包自带的是 Node 24。
  */
 import { execFileSync, spawn } from 'node:child_process'
-import { appendFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { generateKeyPairSync } from 'node:crypto'
+import { appendFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmdirSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:net'
 import * as nodeModule from 'node:module'
 import os from 'node:os'
@@ -28,14 +32,8 @@ const source = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..') 
 const root = path.resolve(arg('--root') || source)
 const exe = arg('--exe') ? path.resolve(arg('--exe')) : process.execPath
 const runAsNode = arg('--exe') ? { ELECTRON_RUN_AS_NODE: '1' } : {}
-const launch = path.join(root, 'dist', 'boot', 'launch.js')
-const localKey = path.join(os.homedir(), '.forsion-dev', 'secrets', 'tangu-engine-signing', 'key.pem')
-if (!existsSync(launch)) { console.error(`${launch} is missing; run \`npm run build\` first.`); process.exit(1) }
+if (!existsSync(path.join(root, 'dist', 'boot', 'launch.js'))) { console.error(`${root}/dist/boot/launch.js is missing; run \`npm run build\` first.`); process.exit(1) }
 if (!arg('--exe') && typeof nodeModule.registerHooks !== 'function') { console.error(`Node ${process.versions.node} has no module.registerHooks (need ≥ 22.15).`); process.exit(1) }
-if (!process.env.TANGU_ENGINE_SIGNING_KEY?.trim() && !existsSync(localKey)) {
-  console.log('::warning::Engine hot-update end-to-end check SKIPPED: no signing key here (TANGU_ENGINE_SIGNING_KEY). The launcher only accepts packages signed with the release key.')
-  process.exit(0)
-}
 
 const bundled = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8')).version
 const [major, minor, patch] = bundled.split('.').map(Number)
@@ -43,6 +41,17 @@ const next = `${major}.${minor}.${patch + 1}`
 const tmp = mkdtempSync(path.join(os.tmpdir(), 'engine-overlay-e2e-'))
 const tanguHome = path.join(tmp, 'tangu') // 目录名叫 tangu → 共享域 = tmp,新版放 tmp/engine/
 const engineRoot = path.join(tmp, 'engine')
+
+// 临时安装包包根:与 root 只差一把公钥。node_modules 用目录链接(Windows 上是 junction,不要特权)指回 root 那份。
+const installer = path.join(tmp, 'installer', 'tangu-server')
+const depsLink = path.join(installer, 'node_modules')
+mkdirSync(installer, { recursive: true })
+for (const name of ['dist', 'skills', 'agent-skills', 'browser-extension', 'package.json']) cpSync(path.join(root, name), path.join(installer, name), { recursive: true })
+symlinkSync(path.join(root, 'node_modules'), depsLink, 'junction')
+const testKey = generateKeyPairSync('ed25519')
+writeFileSync(path.join(installer, 'dist', 'boot', 'signingKey.js'), `export const ENGINE_SIGNING_KEY = ${JSON.stringify(testKey.publicKey.export({ type: 'spki', format: 'pem' }))};\n`)
+const signingEnv = { ...process.env, TANGU_ENGINE_SIGNING_KEY: testKey.privateKey.export({ type: 'pkcs8', format: 'pem' }) }
+const launch = path.join(installer, 'dist', 'boot', 'launch.js')
 let failed = 0
 const check = (ok, what, detail = '') => {
   console.log(`${ok ? '✓' : '✗'} ${what}${ok || !detail ? '' : `\n    ${detail}`}`)
@@ -52,7 +61,7 @@ const check = (ok, what, detail = '') => {
 /** 签好名的包的暂存目录(= 解到用户目录后的样子)。 */
 function pack(version, minDesktop) {
   const out = path.join(tmp, `pack-${version}-${minDesktop}`)
-  execFileSync(process.execPath, [path.join(source, 'scripts', 'pack-engine.mjs'), '--stage-only', '--version', version, '--min-desktop', minDesktop, '--out', out], { stdio: ['ignore', 'ignore', 'inherit'] })
+  execFileSync(process.execPath, [path.join(source, 'scripts', 'pack-engine.mjs'), '--root', installer, '--stage-only', '--version', version, '--min-desktop', minDesktop, '--out', out], { env: signingEnv, stdio: ['ignore', 'ignore', 'inherit'] })
   return path.join(out, 'package')
 }
 function install(stage, version) {
@@ -153,7 +162,10 @@ try {
   const deps = await boot()
   check(deps.version === bundled && /skipped \(deps\)/.test(deps.output), '新版的依赖清单与自带的不同 → 退回自带的', `got ${deps.version}\n${deps.output.slice(-600)}`)
 } finally {
-  rmSync(tmp, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }) // Windows 上刚退出的进程还占着文件
+  // 先单独摘掉指向真 node_modules 的那个链接,再递归删临时目录:删除绝不能顺着链接走进去。
+  try { rmdirSync(depsLink) } catch { try { unlinkSync(depsLink) } catch { /* 已经不在了 */ } }
+  if (!existsSync(depsLink)) rmSync(tmp, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }) // Windows 上刚退出的进程还占着文件
+  else console.error(`left ${tmp} in place: could not remove the node_modules link`)
 }
 console.log(failed ? `\n${failed} check(s) failed` : '\nall checks passed')
 process.exit(failed ? 1 : 0)

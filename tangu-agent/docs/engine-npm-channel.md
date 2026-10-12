@@ -73,7 +73,7 @@ ed25519。公钥编在 `src/boot/signingKey.ts`,随每一份安装包发出去�
 
 | 命令 | 核什么 |
 |---|---|
-| `npm run e2e:overlay`(tangu-agent) | 真打包 + 真签名 + 真启动器 + 真引擎:选中新版、上层野 `node_modules` 不干扰、终端入口同样选中、改一个字节 / 多一个文件 / 依赖不同 / 壳太旧 / 记成坏版本都退回自带的 |
+| `npm run e2e:overlay`(tangu-agent) | 真启动器 + 真引擎(签名用当场生成的测试钥匙,不需要发版私钥):选中新版、上层野 `node_modules` 不干扰、终端入口同样选中、改一个字节 / 多一个文件 / 依赖不同 / 壳太旧 / 记成坏版本都退回自带的 |
 | `node scripts/engine-overlay-packaged.check.cjs`(desktop) | 同一套核对,换成打包后的 Electron 与安装包里的原生依赖;build-desktop 在三个平台上各跑一遍 |
 | `src/boot/overlay.test.ts` | 判定函数的每一条 |
 | `desktop/electron/engineUpdates.test.ts` | 下载、只落签名表里的文件、落位、启动时收拾目录 |

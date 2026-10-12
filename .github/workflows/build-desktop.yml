@@ -183,11 +183,10 @@ jobs:
 
       # 引擎的 npm 热更新在各平台的真实运行时上走一遍:用刚打出来的安装包里的 Electron(ELECTRON_RUN_AS_NODE)经启动器
       # 拉起引擎,放一份签好名的新版,看它被选中、原生依赖(Electron ABI 的 better-sqlite3)从安装包那份解析、改一个字节后退回。
-      # 本机只验得了 macOS + 系统 Node;Windows 的盘符路径 / file URL 只有这里测得出。没配签名私钥时脚本自己跳过并给警告。
+      # 本机只验得了 macOS + 系统 Node;Windows 的盘符路径 / file URL 只有这里测得出。
+      # 用的是脚本当场生成的测试钥匙(换掉临时包根里的公钥),不碰发版私钥 —— 那把只在 publish-engine.yml 里用。
       - name: Engine hot-update end-to-end on the packaged runtime
         working-directory: desktop
-        env:
-          TANGU_ENGINE_SIGNING_KEY: ${{ secrets.TANGU_ENGINE_SIGNING_KEY }}
         run: node scripts/engine-overlay-packaged.check.cjs
 
       # 防回归:v2.3.3~v2.6.0 曾因 beforeBuild 钩子返回 undefined(electron-builder 语义=「node_modules

@@ -58,10 +58,9 @@ jobs:
           fi
           node scripts/pack-engine.mjs --version "${{ steps.gate.outputs.pack_version }}" --min-desktop "${{ steps.gate.outputs.base }}"
 
-      # 真启动器 + 真引擎:把刚打的这种包放进一个临时家目录,看启动器选不选它、改一个字节后退不退回。
+      # 真启动器 + 真引擎:把这份 dist 打成新版放进一个临时家目录,看启动器选不选它、改一个字节后退不退回。
+      # 用脚本当场生成的测试钥匙;发版私钥与钉死的公钥对不对得上,上一步签完的回验已经核过。
       - name: End-to-end check
-        env:
-          TANGU_ENGINE_SIGNING_KEY: ${{ secrets.TANGU_ENGINE_SIGNING_KEY }}
         run: node scripts/engine-overlay.e2e.mjs
 
       - uses: actions/upload-artifact@v4

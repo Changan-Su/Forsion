@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 // 打出引擎的 npm 热更新包:暂存 → 裁剪 package.json → 签名 → 回验 → npm pack。先 `npm run build`。
 //
-//   node scripts/pack-engine.mjs [--version x.y.z] [--min-desktop x.y.z] [--out <目录>] [--stage-only]
+//   node scripts/pack-engine.mjs [--version x.y.z] [--min-desktop x.y.z] [--out <目录>] [--stage-only] [--root <包根>]
 //
 // --stage-only:只暂存 + 签名,不调 npm 打 tgz(端到端核对用:暂存目录就是装机后的样子,不依赖 npm / tar)。
+// --root:从另一份引擎包根取 dist / skills / package.json(端到端核对用;缺省是本脚本所在的这份)。
 //
 // 包里只有运行要用的东西:dist 下的 .js、skills、agent-skills、browser-extension、LICENSE、package.json、SIGNATURE。
 // 不改本包 package.json 的 `files` —— server 的 vendor:tangu 靠那份白名单打自己要的 tgz(含类型声明)。
@@ -21,11 +22,11 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
-const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const arg = (name) => {
   const i = process.argv.indexOf(name)
   return i > 0 ? process.argv[i + 1] : undefined
 }
+const root = path.resolve(arg('--root') || path.join(path.dirname(fileURLToPath(import.meta.url)), '..'))
 const fail = (m) => {
   console.error(`::error::${m}`)
   process.exit(1)
@@ -61,7 +62,8 @@ cpSync(path.join(root, 'dist'), path.join(stage, 'dist'), {
   filter: (from) => !path.basename(from).includes('.') || from.endsWith('.js'),
 })
 for (const dir of ['skills', 'agent-skills', 'browser-extension']) cpSync(path.join(root, dir), path.join(stage, dir), { recursive: true })
-cpSync(path.join(root, 'LICENSE'), path.join(stage, 'LICENSE'))
+if (existsSync(path.join(root, 'LICENSE'))) cpSync(path.join(root, 'LICENSE'), path.join(stage, 'LICENSE'))
+else if (!process.argv.includes('--stage-only')) fail('LICENSE is missing from the package root.')
 writeFileSync(path.join(stage, 'package.json'), JSON.stringify({
   name: src.name,
   version,
