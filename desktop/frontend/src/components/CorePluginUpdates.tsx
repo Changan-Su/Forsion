@@ -61,8 +61,9 @@ export function CorePluginUpdateStatus({ item }: { item?: CorePluginUpdate }) {
 export function EngineVersionHint() {
   const { t } = useI18n()
   const item = useCorePluginUpdates().items.find((i) => i.id === 'tangu-engine')
-  if (!item || item.phase === 'development') return <span className="hint">{t('plugins.core.withApp')}</span>
-  return <span className="hint">{item.installedVersion ? `v${item.installedVersion}` : ''}</span>
+  // 版本号要等第一次检查才有(打包版启动后约一分钟);在那之前、以及更新通道没起来时,不留空白。
+  if (!item || item.phase === 'development' || !item.installedVersion) return <span className="hint">{t('plugins.core.withApp')}</span>
+  return <span className="hint">v{item.installedVersion}</span>
 }
 
 /** The app updater and plugin updater have independent results; one must never mask the other's error. */
