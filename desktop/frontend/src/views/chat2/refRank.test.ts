@@ -31,6 +31,9 @@ describe('rankRefs(聊天 [[ 引用候选)', () => {
 
   it('字符凑不齐的仍然不出;空查询保持原行为(路径短者先)', () => {
     expect(rankRefs(cands, 'zzq')).toEqual([])
+    // 只有分隔符的查询:模糊那边会把它归一成空串(= 全命中),不许拿来补位
+    for (const sep of ['---', '..', '__', '//']) expect(rankRefs([note('Alpha.md')], sep)).toEqual([])
+    expect(names(rankRefs([note('Alpha.md'), note('a-b.md')], '-'))).toEqual(['a-b.md'])
     expect(names(rankRefs([file('long/path/a.ts'), file('b.ts')], ''))).toEqual(['b.ts', 'long/path/a.ts'])
   })
 

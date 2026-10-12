@@ -20,7 +20,9 @@ export function rankRefs<T extends { p: string; note?: true }>(cands: T[], query
     return (base.startsWith(q) ? 0 : base.includes(q) ? 1 : 2) * 10000 + c.p.length
   }
   const hits = [...pool].sort((a, b) => tier(a) - tier(b)).slice(0, limit)
-  if (!q || hits.length >= limit) return hits
+  // 只打了分隔符(`[[---`、`[[..`)时 fuzzyScore 把查询归一成空串、对谁都回 1 —— 那不是命中,不补位
+  // (否则菜单凭空弹出,回车选走第一条而不是发送;Codex 评审)。
+  if (!q.replace(/[\s\-_/.]+/g, '') || hits.length >= limit) return hits
   const taken = new Set(hits)
   const fuzzy: Array<{ c: T; s: number }> = []
   for (const c of cands) {

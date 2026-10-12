@@ -509,8 +509,10 @@ async function hoverPreview(browser) {
   await stubOpen(true)
   const shown2 = await card()
   await p.mouse.down(); await p.mouse.up()
-  await p.waitForTimeout(300)
-  const gone2 = !(await card()), detached2 = !(await linkAt())
+  await p.waitForTimeout(80) // 「当场」:比链接 mouseleave 那条 150ms 宽限短,靠超时收的不算数
+  const gone2 = !(await card())
+  await p.waitForTimeout(220)
+  const detached2 = !(await linkAt())
   await p.waitForTimeout(700)
   check('HP2 卡片开着时点链接跳走:卡片当场收,之后也不再冒出来', shown2 && detached2 && gone2 && !(await card()), JSON.stringify({ shown2, detached2, gone2, later: await card() }))
 
@@ -534,7 +536,7 @@ async function hoverPreview(browser) {
     await p.waitForTimeout(1000)
     const shown4 = await card()
     await p.mouse.down(); await p.mouse.up()
-    await p.waitForTimeout(300)
+    await p.waitForTimeout(80) // 同 HP2:150ms 之内就得没
     const gone4 = !(await card())
     await p.waitForTimeout(700)
     check('HP4 链接留在原处(新标签页 / 聊天引用)时点它:卡片同样当场收', shown4 && !!(await linkAt()) && gone4 && !(await card()), JSON.stringify({ shown4, linkLeft: !!(await linkAt()), gone4, later: await card() }))
@@ -547,9 +549,11 @@ async function hoverPreview(browser) {
     // 不经鼠标的跳转(Alt+Enter 跟随 / 前进后退):链接节点同样被摘,没有 mousedown 可等 —— 指针一动就收。
     await p.evaluate(() => window.__upage.switchFile('b/Note.md', '# Note\n\n正文\n'))
     await p.waitForTimeout(500)
+    // 前置:链接确实摘了、卡片此刻还开着 —— 不然下面那句「收了」可能是别的路径收的,测不到「指针一动」这条
+    const pre6 = { linkLeft: !!(await linkAt()), card: await card() }
     await p.mouse.move(w4.x + 40, w4.y - 60, { steps: 3 }) // 往上挪,不经过链接下方的卡片
     await p.waitForTimeout(300)
-    check('HP6 卡片开着时页面被换走(没点鼠标):指针一动卡片就收', !(await linkAt()) && !(await card()), JSON.stringify({ linkLeft: !!(await linkAt()), card: await card() }))
+    check('HP6 卡片开着时页面被换走(没点鼠标):指针一动卡片就收', !pre6.linkLeft && pre6.card && !(await card()), JSON.stringify({ pre6, card: await card() }))
   }
 
   // 指针压在卡片上时用 Esc 关掉它:卡片的 mouseleave 不会来,「指针在卡上」那个标记得自己复位,
