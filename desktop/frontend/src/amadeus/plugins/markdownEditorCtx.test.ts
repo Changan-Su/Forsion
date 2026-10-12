@@ -158,6 +158,17 @@ describe('native Markdown plugin mount lifecycle', () => {
     expect(surface.mount.mock.calls[0][1].value).toBe('')
     expect(changes).not.toHaveBeenCalled()
   })
+  it('carries modes:false from an update made while the import is pending, and forwards later updates', async () => {
+    const c = context('nomodes')
+    const h = c.ui!.mountMarkdownEditor!(document.createElement('div'), {
+      value: '# Draft',
+    })
+    h.update({ modes: false })
+    await vi.dynamicImportSettled()
+    expect(surface.mount.mock.calls[0][1].modes).toBe(false)
+    h.update({ modes: true })
+    expect(surface.handles[0].update).toHaveBeenCalledWith({ modes: true })
+  })
   it('setup failure cancels a pending surface, and invalid inputs fail synchronously', async () => {
     const warn = vi.spyOn(console, 'error').mockImplementation(() => {})
     context('failed', true)
