@@ -63,7 +63,7 @@ const offenders = cssFiles.flatMap((file) => (
   [...fs.readFileSync(file, 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').matchAll(/([^{}]*)\{([^{}]*)\}/g)]
     // 选择器列表逐个判:豁免只豁免它自己那一个,不连带同一条规则里的别的选择器
     .filter((m) => DASHED.test(m[2]) && m[1].split(',').some((sel) => DRAG_STATE.test(sel) && !PENDING.some((p) => sel.includes(p))))
-    .map((m) => `${path.relative(ROOT, file)}: ${m[1].trim().slice(0, 80)}`)
+    .map((m) => `${path.relative(ROOT, file)}: ${m[1].trim().replace(/\s+/g, ' ').slice(0, 80)}`)
 ))
 check(
   'A2 全应用:拖拽 / 落区状态的规则没有 dashed outline / border',
