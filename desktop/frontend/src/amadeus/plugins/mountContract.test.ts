@@ -102,6 +102,30 @@ describe.each(cases)('%s', (_name, mount, selector) => {
   })
 })
 
+// 不带模式切换排(2026-10-12):插件把编辑器放进自己的卡片 / 单元格里时,只要编辑器本身。
+// 负对照(实跑):不认 modes 的旧实现 → 第一条「0 个按钮」就红。
+it('ctx.ui.mountMarkdownEditor modes:false:不画「编辑 / 源码 / 预览」那一排;update 能关能开,关的那一刻停在源码档也回到可视编辑器', async () => {
+  const row = () => el.querySelectorAll<HTMLElement>('button[aria-pressed]')
+  let handle!: ReturnType<typeof mountPluginMarkdownEditor>
+  await act(async () => { handle = mountPluginMarkdownEditor(el, { value: '# a', modes: false }) })
+  expect(el.querySelector('.amx-publishing-editor')).not.toBeNull()
+  expect(row().length).toBe(0)
+
+  await act(async () => { handle.update({ modes: true }) })
+  expect(row().length, '缺省(以及显式打开)是三档').toBe(3)
+  await act(async () => { row()[1].click() }) // 切到源码档
+  expect(el.querySelector('textarea')).not.toBeNull()
+
+  await act(async () => { handle.update({ modes: false }) })
+  expect(row().length).toBe(0)
+  expect(el.querySelector('textarea'), '没有切换排就不该停在源码档').toBeNull()
+  await act(async () => { handle.dispose() })
+
+  await act(async () => { handle = mountPluginMarkdownEditor(el, { value: '# a' }) })
+  expect(row().length, '不传这个选项:三档照旧').toBe(3)
+  await act(async () => { handle.dispose() })
+})
+
 it('ctx.dashboard.mount 配方无效:提示住在宿主自己的节点里,dispose 只收它,插件放进 el 的节点不动', async () => {
   const own = el.appendChild(document.createElement('p'))
   let mounted!: ReturnType<typeof mountPluginDashboard>

@@ -1125,7 +1125,10 @@ export interface PluginContext {
    *  `mountFloatingToc` is the exception: it overlays `shell` without taking it over, so it neither retires nor
    *  is retired by other mounts on the same element. Don't select host nodes with `el > …`. */
   ui?: {
-    /** Native Amadeus editor for Markdown owned by the caller (API drafts, etc.). No active-vault access. */
+    /** Native Amadeus editor for Markdown owned by the caller (API drafts, etc.). No active-vault access.
+     *  By default a row of buttons switches between the visual editor, Markdown source and the published preview;
+     *  `modes: false` draws no row and keeps the visual editor only (an editor inside your own card or cell).
+     *  Hosts up to 2.13.2 ignore `modes` and always draw the row. */
     mountMarkdownEditor?(
       el: HTMLElement,
       opts: import('../../../../shared/markdownEditor').PluginMarkdownEditorOptions,

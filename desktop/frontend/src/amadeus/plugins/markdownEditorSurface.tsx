@@ -26,7 +26,10 @@ function EditorSurface({
 }) {
   const { t, locale } = useI18n()
   const [value, setValue] = useState(options.value)
-  const [mode, setMode] = useState<'visual' | 'source' | 'preview'>('visual')
+  const [picked, setMode] = useState<'visual' | 'source' | 'preview'>('visual')
+  // modes:false = 不画切换排,也就只能是可视编辑器(update 关掉的那一刻停在源码 / 预览档,同样回到可视)
+  const switchable = options.modes !== false
+  const mode = switchable ? picked : 'visual'
   const preview = useRef<HTMLDivElement>(null)
   useEffect(() => {
     setValue(options.value)
@@ -50,21 +53,23 @@ function EditorSurface({
       : null
   return (
     <div className="am-app amx-publishing-editor" aria-label={options.label}>
-      <div
-        style={{ display: 'flex', flexWrap: 'wrap', gap: 6, padding: '8px 0' }}
-      >
-        {(['visual', 'source', 'preview'] as const).map((m) => (
-          <button
-            key={m}
-            className="btn"
-            type="button"
-            aria-pressed={mode === m}
-            onClick={() => setMode(m)}
-          >
-            {t(`publishing.${m}`)}
-          </button>
-        ))}
-      </div>
+      {switchable && (
+        <div
+          style={{ display: 'flex', flexWrap: 'wrap', gap: 6, padding: '8px 0' }}
+        >
+          {(['visual', 'source', 'preview'] as const).map((m) => (
+            <button
+              key={m}
+              className="btn"
+              type="button"
+              aria-pressed={mode === m}
+              onClick={() => setMode(m)}
+            >
+              {t(`publishing.${m}`)}
+            </button>
+          ))}
+        </div>
+      )}
       {mode === 'visual' && (
         <PlainMarkdownEditor
           initial={value}
