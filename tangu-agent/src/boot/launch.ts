@@ -11,7 +11,6 @@
  * 环境变量 TANGU_ENGINE_OVERLAY:off = 只跑安装包自带的;verbose = 终端里的 tangu 也把挑选过程打出来。
  */
 import * as nodeModule from 'node:module';
-import { realpathSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { forsionSharedDir } from '../core/tanguHome.js';
@@ -32,11 +31,11 @@ const log = (m: string, always = false): void => {
   if (always || which === 'standalone' || process.env.TANGU_ENGINE_OVERLAY === 'verbose') console.error(`[engine-overlay] ${m}`);
 };
 
-/** 把 overlayDir 里的文件发出的裸包名改到安装包这份包根去解析。运行时没有同步钩子(Node < 22.15)就返回 false。 */
-function redirectBareImports(overlayDir: string): boolean {
+/** 把 overlayUrl(新版包根的 URL,以 / 结尾)之下的文件发出的裸包名改到安装包这份包根去解析。
+ *  运行时没有同步钩子(Node < 22.15)就返回 false。 */
+function redirectBareImports(overlayUrl: string): boolean {
   const registerHooks = (nodeModule as unknown as { registerHooks?: (hooks: ResolveHooks) => unknown }).registerHooks;
   if (typeof registerHooks !== 'function') return false;
-  const overlayUrl = pathToFileURL(overlayDir + path.sep).href;
   const anchor = pathToFileURL(path.join(bundledRoot, 'package.json')).href;
   const anchorRequire = nodeModule.createRequire(anchor);
   const bare = (s: string): boolean =>
@@ -64,28 +63,33 @@ if (process.env.TANGU_ENGINE_OVERLAY !== 'off') {
   }
 }
 
-let root = bundledRoot;
+let entryUrl = pathToFileURL(path.join(bundledRoot, ENGINE_ENTRIES[which])).href;
+let usingOverlay = false;
 if (overlay) {
-  // 模块的 URL 是按真实路径算的,钩子的前缀也得是真实路径(家目录经符号链接到达时两者不同)。
-  const dir = realpathSync(overlay.dir);
-  if (redirectBareImports(dir)) {
-    root = dir;
+  // 钩子靠「发起方的 URL 在新版包根之下」认新版的文件,而模块的 URL 是 Node 按它自己的规则(真实路径)算出来的。
+  // 所以前缀不自己拼:让 Node 把入口解析一遍,从结果里截 —— 家目录经符号链接到达、Windows 的短文件名都不会对不上。
+  let resolved = '';
+  try { resolved = import.meta.resolve(pathToFileURL(path.join(overlay.dir, ENGINE_ENTRIES[which])).href); } catch { /* 落到下面的 else */ }
+  if (!resolved.endsWith(`/${ENGINE_ENTRIES[which]}`)) {
+    log(`cannot resolve the entry of ${overlay.version}; running the bundled engine`, true);
+  } else if (redirectBareImports(resolved.slice(0, -ENGINE_ENTRIES[which].length))) {
+    entryUrl = resolved;
+    usingOverlay = true;
     // 新版里凡是要找「安装包那份」的地方(随包的 Chrome 扩展、要保护的依赖目录)读这个。
     process.env.TANGU_BUNDLED_ROOT = bundledRoot;
-    log(`running ${overlay.version} from ${dir}`);
+    log(`running ${overlay.version} from ${overlay.dir}`);
   } else {
     log(`this runtime (Node ${process.versions.node}) cannot load engine updates; running the bundled engine`);
   }
 }
 
-const entry = path.join(root, ENGINE_ENTRIES[which]);
-process.argv.splice(1, 2, entry); // 入口按 argv[2] 起解析参数,argv[1] 该是它自己
+process.argv.splice(1, 2, fileURLToPath(entryUrl)); // 入口按 argv[2] 起解析参数,argv[1] 该是它自己
 try {
-  await import(pathToFileURL(entry).href);
+  await import(entryUrl);
 } catch (e) {
   // 只把「装不起来」记成坏版本(缺文件、语法错);入口自己运行时抛的错与新版无关,原样往上抛。
   const code = (e as NodeJS.ErrnoException)?.code ?? '';
-  if (overlay && root !== bundledRoot && (e instanceof SyntaxError || /^(ERR_)?MODULE_NOT_FOUND$|^ERR_(PACKAGE_|UNSUPPORTED_DIR_IMPORT|INVALID_MODULE_SPECIFIER|UNKNOWN_FILE_EXTENSION)/.test(code))) {
+  if (overlay && usingOverlay && (e instanceof SyntaxError || /^(ERR_)?MODULE_NOT_FOUND$|^ERR_(PACKAGE_|UNSUPPORTED_DIR_IMPORT|INVALID_MODULE_SPECIFIER|UNKNOWN_FILE_EXTENSION)/.test(code))) {
     markBad(engineRoot, overlay.version, `failed to load: ${(e as Error)?.message || e}`);
     log(`${overlay.version} failed to load and will not be used again: ${(e as Error)?.message || e}`, true);
     process.exit(70);

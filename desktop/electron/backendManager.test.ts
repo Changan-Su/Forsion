@@ -243,7 +243,7 @@ describe('BackendManager 引擎热更新起不来时退回', () => {
       expect(f.demoted[0][0]).toBe('9.9.9')
       expect(m.engineOverlayVersion()).toBeNull()
       expect(m.getLogs().filter((l) => l === 'overlay-boot')).toHaveLength(3)
-      expect(m.getLogs().some((l) => l.includes('引擎更新 9.9.9 起不来,已停用并退回'))).toBe(true)
+      expect(m.getLogs().some((l) => l.includes('engine update 9.9.9 disabled, falling back'))).toBe(true)
     } finally { await m.stop() }
   }, 30_000)
 
@@ -265,6 +265,20 @@ describe('BackendManager 引擎热更新起不来时退回', () => {
       expect(m.getLogs().filter((l) => l.startsWith('[manager] 后端退出(code=1'))).toHaveLength(3)
     } finally { await m.stop() }
   }, 40_000)
+
+  it('停用没生效(坏版本记录写不进去,启动器下次还会挑中它):不无限重来,按原来的有限次数判 crashed', async () => {
+    const f = fakeLauncher('never-ready')
+    vi.spyOn(BackendManager, 'resolveEntry').mockReturnValue(f.launch[0])
+    vi.spyOn(BackendManager, 'resolveLaunch').mockReturnValue(f.launch)
+    process.env.TANGU_NODE_BIN = process.execPath
+    const demote = vi.fn() // 什么都没记下来
+    const m = new BackendManager()
+    m.setEngineOverlay({ active: () => '9.9.9', demote })
+    await m.start({ cloudUrl: '', sandbox: 'none' })
+    expect(m.getStatus().state).toBe('crashed')
+    expect(demote).toHaveBeenCalledTimes(1)
+    expect(m.getLogs().filter((l) => l === 'overlay-boot')).toHaveLength(3)
+  }, 15_000)
 
   it('没在跑热更新的版本时起不来:不动任何版本,照旧判 crashed', async () => {
     const entry = join(H.dir, 'silent-exit-2.js')

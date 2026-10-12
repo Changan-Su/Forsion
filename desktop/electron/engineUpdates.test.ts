@@ -215,17 +215,28 @@ describe('checkEngineUpdate', () => {
 })
 
 describe('cleanEngineOverlays', () => {
-  it('只留下一次拉起会用的那一份;半成品、旧版本、不合格的都删;坏版本记录只留比自带新的', async () => {
+  it('留版本号最高的两份合格新版(终端里可能还开着跑上一版的 tangu);半成品、更旧的、不合格的都删;坏版本记录只留比自带新的', async () => {
     const fetch = (v: string): RegistryFetch => registry(v, tgz(signedPackage(v)))
     await run(fetch('2.1.1'))
     await run(fetch('2.1.2'))
-    write(path.join(engineRoot, '2.1.3'), { 'package.json': 'garbage' })
+    await run(fetch('2.1.4'))
+    write(path.join(engineRoot, '2.1.5'), { 'package.json': 'garbage' })
     write(path.join(engineRoot, '.staging-999'), { 'x.js': 'half' })
     writeFileSync(path.join(engineRoot, 'bad.json'), JSON.stringify({ '2.0.5': 'old', '2.1.9': 'still newer than bundled' }))
     await cleanEngineOverlays(engineRoot, bundledRoot, api, (m) => logs.push(m))
-    expect(readdirSync(engineRoot).sort()).toEqual(['2.1.2', 'bad.json'])
+    expect(readdirSync(engineRoot).sort()).toEqual(['2.1.2', '2.1.4', 'bad.json'])
     expect(JSON.parse(readFileSync(path.join(engineRoot, 'bad.json'), 'utf8'))).toEqual({ '2.1.9': 'still newer than bundled' })
-    expect(logs.join('\n')).toContain('清掉 2.1.3')
+    expect(logs.join('\n')).toContain('清掉 2.1.5')
+  })
+
+  it('记成坏版本的那份不占「留两份」的名额,直接删', async () => {
+    const fetch = (v: string): RegistryFetch => registry(v, tgz(signedPackage(v)))
+    await run(fetch('2.1.1'))
+    await run(fetch('2.1.2'))
+    await run(fetch('2.1.3'))
+    api.markBad(engineRoot, '2.1.3', 'crashed on start')
+    await cleanEngineOverlays(engineRoot, bundledRoot, api)
+    expect(readdirSync(engineRoot).sort()).toEqual(['2.1.1', '2.1.2', 'bad.json'])
   })
 
   it('安装包升上去之后,不比它新的那份和它的坏记录一起清掉', async () => {

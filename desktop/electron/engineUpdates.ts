@@ -152,20 +152,28 @@ export async function checkEngineUpdate(o: EngineUpdateOpts): Promise<string | n
 }
 
 /**
- * 启动时收拾 engine/ 目录:只留下一次拉起会用的那一份,别的版本目录、更新器被杀留下的半成品都删掉;
+ * 启动时收拾 engine/ 目录:留版本号最高的两份合格新版,别的版本目录、更新器被杀留下的半成品都删掉;
  * bad.json 里不比自带版本新的记录也清掉(安装包升上去之后它们没用了)。吞错。
- * ponytail: 终端里还开着一个跑旧版本的 tangu 时,它的目录会被删掉,那个进程之后才懒加载的模块会找不到。
- *   真有人撞上再改成「留最近两份」。
+ *
+ * 留两份而不是一份:终端里可能还开着一个跑上一版的 tangu,它之后才懒加载的模块还得在原地。
+ * 一个终端会话跨过两次引擎更新还开着、又恰好这时才懒加载,这种情况不管。
  */
 export async function cleanEngineOverlays(engineRoot: string, bundledRoot: string, api: EngineOverlayApi, log: (m: string) => void = () => {}): Promise<void> {
   try {
-    const keep = api.selectOverlay(engineRoot, bundledRoot, { onReject: (version, code, reason) => log(`[engine-updates] 清掉 ${version}(${code}):${reason}`) })?.version
-    for (const e of await fs.readdir(engineRoot, { withFileTypes: true }).catch(() => [])) {
-      if (e.name === 'bad.json' || e.name === keep) continue
+    const entries = await fs.readdir(engineRoot, { withFileTypes: true }).catch(() => [])
+    const bad = api.readBad(engineRoot)
+    const keep = new Set<string>()
+    for (const name of entries.map((e) => e.name).filter((n) => RELEASE_VERSION.test(n)).sort((a, b) => api.cmpVersion(b, a))) {
+      if (keep.size >= 2 || name in bad) continue
+      const verdict = api.checkOverlay(path.join(engineRoot, name), bundledRoot)
+      if (verdict.ok && verdict.version === name) keep.add(name)
+      else log(`[engine-updates] 清掉 ${name}(${verdict.ok ? 'package' : verdict.code}):${verdict.ok ? `holds version ${verdict.version}` : verdict.reason}`)
+    }
+    for (const e of entries) {
+      if (e.name === 'bad.json' || keep.has(e.name)) continue
       await fs.rm(path.join(engineRoot, e.name), { recursive: true, force: true }).catch(() => {})
     }
     const bundled = await bundledVersion(bundledRoot)
-    const bad = api.readBad(engineRoot)
     const live = Object.fromEntries(Object.entries(bad).filter(([v]) => RELEASE_VERSION.test(v) && api.cmpVersion(v, bundled) > 0))
     if (Object.keys(live).length !== Object.keys(bad).length) {
       if (Object.keys(live).length) await fs.writeFile(path.join(engineRoot, 'bad.json'), JSON.stringify(live, null, 2) + '\n', 'utf8')

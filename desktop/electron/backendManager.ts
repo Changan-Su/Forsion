@@ -278,10 +278,15 @@ export class BackendManager {
   private demoteOverlay(reason: string): boolean {
     const version = this.overlayVersion
     if (!version || !this.overlay) return false
-    try { this.overlay.demote(version, reason) } catch { return false }
+    try {
+      this.overlay.demote(version, reason)
+      // 坏版本记录写不进去(磁盘满、只读)时启动器下次还会挑中它:那就不算停用成功,走原有的有限次失败路径,
+      // 否则「停用 → 重新拉起 → 又挑中它」会无限转下去。
+      if (this.overlay.active() === version) return false
+    } catch { return false }
     this.overlayVersion = null
     this.overlayExits = 0
-    this.pushLog(`[manager] 引擎更新 ${version} 起不来,已停用并退回:${reason}`)
+    this.pushLog(`[manager] engine update ${version} disabled, falling back: ${reason}`)
     return true
   }
 
@@ -307,7 +312,10 @@ export class BackendManager {
     const s = this.settings!
     this.setState('starting', null)
     // 经启动器拉起时记下它会挑中哪一版(同一个判定函数),起不来好知道该停用谁。
-    try { this.overlayVersion = launch.length > 1 ? this.overlay?.active() ?? null : null } catch { this.overlayVersion = null }
+    let selected: string | null = null
+    try { selected = launch.length > 1 ? this.overlay?.active() ?? null : null } catch { /* 当作没有 */ }
+    if (selected !== this.overlayVersion) this.overlayExits = 0 // 意外退出的次数是按版本记的
+    this.overlayVersion = selected
 
     for (let attempt = 0; attempt < 3; attempt++) {
       this.port = await freePort()
@@ -434,7 +442,7 @@ export class BackendManager {
       if (this.child === child) this.child = null
     }
     // 三次都没起来。跑的若是热更新的那一版,先把它停用、用退回去的那份再起一轮(每停用一版少一个候选,到自带的为止)。
-    if (this.demoteOverlay(this.lastError || '后端启动失败(连续 3 次)')) return this.spawnOnce(gen)
+    if (this.demoteOverlay(this.lastError || 'failed to start 3 times')) return this.spawnOnce(gen)
     // 这轮若是就绪后崩溃引出的重启,退避额度还在就接着排;否则判 crashed
     if (this.restartCount > 0) this.scheduleRestart()
     else this.setState('crashed', this.lastError || '后端启动失败(连续 3 次)')
@@ -468,7 +476,7 @@ export class BackendManager {
     if (this.state === 'starting') return
     // 就绪之后又意外退出(每次就绪都会把重启额度清零,所以「能起来、一用就崩」的引擎会一直重启下去):
     // 跑的若是热更新的那一版,同一次 App 运行里第 3 次就停用它,下面这次重启退回去。
-    if (this.overlayVersion && ++this.overlayExits >= 3) this.demoteOverlay(this.lastError)
+    if (this.overlayVersion && ++this.overlayExits >= 3) this.demoteOverlay(`exited 3 times after becoming ready (last: code=${code} signal=${signal})`)
     this.scheduleRestart()
   }
 

@@ -71,6 +71,21 @@ describe('minitar untar', () => {
     expect(() => untar(tar)).toThrow(/checksum/);
   });
 
+  it('size 是负数的 header → 抛错,不原地打转(改过 size 的 header 校验和照样能算对)', () => {
+    const h = header('package/a.js', 0);
+    h.write('-0000001000\0', 124, 12); // parseInt('-0000001000', 8) = -512
+    h.write('        ', 148, 8);
+    let sum = 0;
+    for (let i = 0; i < BLOCK; i++) sum += h[i];
+    h.write(sum.toString(8).padStart(6, '0') + '\0 ', 148, 8);
+    expect(() => untar(makeTar([h]))).toThrow(/invalid entry size or truncated data/);
+  });
+
+  it('数据段比 header 声明的短(截断的归档)→ 抛错', () => {
+    const full = block('package/a.js', 'x'.repeat(2000));
+    expect(() => untar(full.subarray(0, BLOCK + 1000))).toThrow(/invalid entry size or truncated data/);
+  });
+
   it('GNU longname(type L)覆盖下一条目的 name', () => {
     const longName = 'package/' + 'nested/'.repeat(20) + 'deep.js';
     const tar = makeTar([

@@ -76,7 +76,8 @@ if (!RELEASE.test(base)) fail(`The nearest desktop tag ${baseTag} is not a stabl
 const baseDeps = JSON.parse(git('show', `${baseTag}:tangu-agent/package.json`)).dependencies
 const deps = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8')).dependencies
 if (sortedJson(deps) !== sortedJson(baseDeps)) problems.push(`dependencies differ from ${baseTag}: an engine with new or bumped dependencies can only ship inside an installer.`)
-const changedSchema = git('diff', '--name-only', baseTag, '--', ...SCHEMA_SOURCES.map((f) => `tangu-agent/${f}`)).split('\n').filter(Boolean)
+// git 在 tangu-agent/ 下跑,pathspec 相对这里写(带上 tangu-agent/ 前缀会指到不存在的路径,diff 恒为空)。
+const changedSchema = git('diff', '--name-only', baseTag, '--', ...SCHEMA_SOURCES).split('\n').filter(Boolean)
 if (changedSchema.length) problems.push(`schema / migration files changed since ${baseTag} (${changedSchema.join(', ')}): an engine with migrations can only ship inside an installer.`)
 
 if (publish) {

@@ -71,6 +71,9 @@ export function untar(buf: Buffer): TarEntry[] {
       throw new Error('tar: header checksum 不匹配(文件损坏或不是 tar)');
     }
     const size = readOctal(h, 124, 12);
+    // 字节来自 registry、签名还没验:负的 size 会让 off 退回同一个 header 原地打转(进程卡死),
+    // 超出缓冲区的 size 则是截断的归档。两种都拒收。
+    if (size < 0 || off + BLOCK + size > buf.length) throw new Error('tar: invalid entry size or truncated data');
     const type = String.fromCharCode(h[156]);
     off += BLOCK;
     const data = buf.subarray(off, off + size);
