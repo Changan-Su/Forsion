@@ -48,17 +48,21 @@ check(
 )
 
 // 全应用:带拖拽 / 落区状态的选择器不许画虚线边框 / 轮廓(注释先剥掉,免得注释里的字眼算进选择器)。
+// 已知上限:按「最内层花括号」切规则,不认 CSS 嵌套(`.x.dragover { &::after { … } }` 里父级的状态会丢)。
+// 现在全应用样式表没有用嵌套;哪天用上了,这里要换成真的解析器。
 const walkCss = (dir) => fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => (
   e.name === 'node_modules' ? [] : e.isDirectory() ? walkCss(path.join(dir, e.name)) : e.name.endsWith('.css') ? [path.join(dir, e.name)] : []
 ))
-const DASHED = /\b(?:outline|border)(?:-[\w-]+)?\s*:[^;{}]*\bdashed\b/i
+// 前面不许是 - 或字母:`--border: 2px dashed …` 这种自定义属性不是边框
+const DASHED = /(?<![-\w])(?:outline|border)(?:-[\w-]+)?\s*:[^;{}]*\bdashed\b/i
 const DRAG_STATE = /drag|(?<!back)drop(?!down)/i
 // 拖动时的落位占位(日历拖日程、仪表盘拖卡片;不是包住整块的框)。要不要也去掉 2026-10-12 已问用户、未答;答了之后删掉这两条。
 const PENDING = ['.amx-cal-dropghost', '.dash3-card[data-dragging]']
 const cssFiles = [path.join(ROOT, 'frontend/src'), path.join(ROOT, '../lcl')].flatMap(walkCss)
 const offenders = cssFiles.flatMap((file) => (
   [...fs.readFileSync(file, 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').matchAll(/([^{}]*)\{([^{}]*)\}/g)]
-    .filter((m) => DRAG_STATE.test(m[1]) && DASHED.test(m[2]) && !PENDING.some((sel) => m[1].includes(sel)))
+    // 选择器列表逐个判:豁免只豁免它自己那一个,不连带同一条规则里的别的选择器
+    .filter((m) => DASHED.test(m[2]) && m[1].split(',').some((sel) => DRAG_STATE.test(sel) && !PENDING.some((p) => sel.includes(p))))
     .map((m) => `${path.relative(ROOT, file)}: ${m[1].trim().slice(0, 80)}`)
 ))
 check(

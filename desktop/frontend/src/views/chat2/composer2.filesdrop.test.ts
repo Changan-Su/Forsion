@@ -21,7 +21,8 @@ const mkEl = (): any => {
   return {
     ls,
     attrs: new Set<string>(),
-    addEventListener(k: string, f: H) { (ls[k] ||= []).push(f) },
+    opts: {} as Record<string, unknown>,
+    addEventListener(k: string, f: H, opt?: unknown) { (ls[k] ||= []).push(f); this.opts[k] = opt },
     removeEventListener(k: string, f: H) { ls[k] = (ls[k] || []).filter((x) => x !== f) },
     toggleAttribute(k: string, on: boolean) { on ? this.attrs.add(k) : this.attrs.delete(k) },
     contains: () => true,
@@ -101,6 +102,7 @@ describe('bindFilesDropZone', () => {
     const { zone, win, off } = withZone()
     zone.fire('dragover', evt(['Files']))
     expect(win.count()).toBe(3) // dragend / drop / blur
+    expect(win.opts.drop).toBe(true) // 必须走捕获:内层 stopPropagation 之后冒泡阶段到不了 window
     off()
     expect(zone.count()).toBe(0)
     expect(win.count()).toBe(0)
