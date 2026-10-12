@@ -54,8 +54,8 @@ check(
 const walk = (dir, exts) => (fs.existsSync(dir) ? fs.readdirSync(dir, { withFileTypes: true }) : []).flatMap((e) => (
   e.name === 'node_modules' ? [] : e.isDirectory() ? walk(path.join(dir, e.name), exts) : exts.some((x) => e.name.endsWith(x)) ? [path.join(dir, e.name)] : []
 ))
-// 前面不许是 - 或字母:`--border: 2px dashed …` 这种自定义属性不是边框
-const DASHED = /(?<![-\w])(?:outline|border)(?:-[\w-]+)?\s*:[^;{}]*\bdashed\b/i
+// 前面不许是 - 或字母:`--border: 2px dashed …` 这种自定义属性不是边框;dashed 两边同理,`var(--dashed-line)` 不算
+const DASHED = /(?<![-\w])(?:outline|border)(?:-[\w-]+)?\s*:[^;{}]*(?<![-\w])dashed(?![-\w])/i
 const SRC_DIRS = [path.join(ROOT, 'frontend/src'), path.join(ROOT, '../lcl')]
 const cssFiles = SRC_DIRS.flatMap((d) => walk(d, ['.css']))
 const offenders = cssFiles.flatMap((file) => (
@@ -68,11 +68,14 @@ check(
   cssFiles.length > 20 && offenders.length === 0,
   offenders.length ? offenders.join(' | ') : `扫了 ${cssFiles.length} 个样式表`,
 )
-// 内联样式同样不许:borderStyle: 'dashed' / border: '1px dashed …' / outline: `… dashed`
-const INLINE_DASHED = /\b(?:border|outline)[A-Za-z]*\s*:\s*['"`][^'"`\n]*\bdashed\b/
+// 内联样式同样不许:borderStyle: 'dashed' / border: '1px dashed …' / outline: `… dashed`(属性名和值分两行写也认)。
+// 已知上限:不剥注释和普通字符串,注释里照抄一句 `border: '1px dashed …'` 也会红 —— 红了改注释的写法。
+const INLINE_DASHED = /\b(?:border|outline)[A-Za-z]*\s*:\s*['"`][^'"`\n]*(?<![-\w])dashed(?![-\w])/g
 const tsFiles = SRC_DIRS.flatMap((d) => walk(d, ['.ts', '.tsx'])).filter((f) => !/\.test\.tsx?$/.test(f))
-const inlineOffenders = tsFiles.flatMap((file) => fs.readFileSync(file, 'utf8').split('\n')
-  .map((line, n) => (INLINE_DASHED.test(line) ? `${path.relative(ROOT, file)}:${n + 1}` : null)).filter(Boolean))
+const inlineOffenders = tsFiles.flatMap((file) => {
+  const text = fs.readFileSync(file, 'utf8')
+  return [...text.matchAll(INLINE_DASHED)].map((m) => `${path.relative(ROOT, file)}:${text.slice(0, m.index).split('\n').length}`)
+})
 check(
   'A3 全应用:TS / TSX 的内联样式里没有 dashed outline / border',
   tsFiles.length > 200 && inlineOffenders.length === 0,
