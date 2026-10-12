@@ -13,27 +13,28 @@ import {
 
 describe('shim 脚本生成', () => {
   it('posix:ELECTRON_RUN_AS_NODE + 双引号包路径 + 透传 "$@"', () => {
-    const s = posixShimScript('/Applications/Tangu Agent 2.0.app/Contents/MacOS/Tangu Agent 2.0', '/x/resources/tangu-server/dist/tui/main.js')
+    const s = posixShimScript('/Applications/Tangu Agent 2.0.app/Contents/MacOS/Tangu Agent 2.0', '/x/resources/tangu-server/dist/boot/launch.js')
     expect(s.startsWith('#!/bin/sh\n')).toBe(true)
     expect(s).toContain('ELECTRON_RUN_AS_NODE=1')
     expect(s).toContain('"/Applications/Tangu Agent 2.0.app/Contents/MacOS/Tangu Agent 2.0"')
-    expect(s).toContain('"$@"')
+    // 经引擎启动器,入口名 tui 排在用户参数之前
+    expect(s).toContain('"/x/resources/tangu-server/dist/boot/launch.js" tui "$@"')
   })
 
   it('appimage:用 $APPIMAGE 真实路径 + -e 自定位 bootstrap(argv splice 补脚本位),且 bootstrap 内无单引号', () => {
     const s = appImageShimScript('/home/u/Applications/Tangu.AppImage')
     expect(s).toContain('"/home/u/Applications/Tangu.AppImage"')
-    expect(s).toContain('process.argv.splice(1,0,"tangu")')
-    expect(s).toContain('tangu-server')
+    expect(s).toContain('process.argv.splice(1,0,"tangu","tui")') // 启动器读 argv[2] 认入口
+    expect(s).toContain('"tangu-server","dist","boot","launch.js"')
     const boot = s.split("-e '")[1].split("' --")[0]
     expect(boot.includes("'")).toBe(false) // 单引号会截断 sh 引用
   })
 
   it('win:CRLF + set ELECTRON_RUN_AS_NODE + %*', () => {
-    const s = winShimScript('C:\\Users\\u\\AppData\\Local\\Programs\\tangu\\Tangu.exe', 'C:\\x\\dist\\tui\\main.js')
+    const s = winShimScript('C:\\Users\\u\\AppData\\Local\\Programs\\tangu\\Tangu.exe', 'C:\\x\\dist\\boot\\launch.js')
     expect(s).toContain('\r\n')
     expect(s).toContain('set ELECTRON_RUN_AS_NODE=1')
-    expect(s).toContain('%*')
+    expect(s).toContain('"C:\\x\\dist\\boot\\launch.js" tui %*')
   })
 })
 
@@ -75,8 +76,8 @@ describe('ensureCliInstalled(tmp 假 App 布局)', () => {
     root = mkdtempSync(join(tmpdir(), 'tangu-cli-'))
     logs.length = 0
     // 假 resources:入口文件必须存在
-    mkdirSync(join(root, 'res', 'tangu-server', 'dist', 'tui'), { recursive: true })
-    writeFileSync(join(root, 'res', 'tangu-server', 'dist', 'tui', 'main.js'), '// entry')
+    mkdirSync(join(root, 'res', 'tangu-server', 'dist', 'boot'), { recursive: true })
+    writeFileSync(join(root, 'res', 'tangu-server', 'dist', 'boot', 'launch.js'), '// entry')
   })
   afterEach(() => {
     try { rmSync(root, { recursive: true, force: true }) } catch { /* ignore */ }

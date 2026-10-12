@@ -3,6 +3,7 @@
  * 并幂等注入 PATH(POSIX shell profile 标记块 / Windows 用户 PATH 注册表)。
  * CLI 自动更新 = 免费:shim 只是一层转发,App 被 electron-updater 原地更新后,
  * resources/tangu-server/dist 即新版;App 被移动/改名 → 下次启动内容比对自愈重写。
+ * shim 指的是引擎的启动器 dist/boot/launch.js(带 `tui`):npm 热更新下来的引擎新版由它挑,终端与桌面跑的是同一份。
  *
  * 硬约束(勿改):
  * - 打包态 better-sqlite3 已被 afterPack 重建为 Electron ABI → shim 必须 ELECTRON_RUN_AS_NODE=1
@@ -23,7 +24,7 @@ export function posixShimScript(execPath: string, entryPath: string): string {
   return [
     '#!/bin/sh',
     '# Tangu CLI —— 由 Tangu Desktop 自动生成/自愈,请勿手改(App 启动时会按当前安装路径重写)。',
-    `exec env ELECTRON_RUN_AS_NODE=1 "${execPath}" "${entryPath}" "$@"`,
+    `exec env ELECTRON_RUN_AS_NODE=1 "${execPath}" "${entryPath}" tui "$@"`,
     '',
   ].join('\n')
 }
@@ -31,9 +32,9 @@ export function posixShimScript(execPath: string, entryPath: string): string {
 export function appImageShimScript(appImagePath: string): string {
   // bootstrap 内只用双引号,整体可安全落在 sh 单引号里。
   const boot =
-    'process.argv.splice(1,0,"tangu");' +
+    'process.argv.splice(1,0,"tangu","tui");' + // 启动器按 argv[2] 认入口,再把这两位换成入口路径
     'const p=require("path");const u=require("url");' +
-    'import(u.pathToFileURL(p.join(p.dirname(process.execPath),"resources","tangu-server","dist","tui","main.js")).href)' +
+    'import(u.pathToFileURL(p.join(p.dirname(process.execPath),"resources","tangu-server","dist","boot","launch.js")).href)' +
     '.catch(e=>{console.error(e);process.exit(1)});'
   return [
     '#!/bin/sh',
@@ -48,7 +49,7 @@ export function winShimScript(execPath: string, entryPath: string): string {
     '@echo off',
     'rem Tangu CLI —— 由 Tangu Desktop 自动生成/自愈,请勿手改。',
     'set ELECTRON_RUN_AS_NODE=1',
-    `"${execPath}" "${entryPath}" %*`,
+    `"${execPath}" "${entryPath}" tui %*`,
     '',
   ].join('\r\n')
 }
@@ -144,7 +145,7 @@ export async function ensureCliInstalled(i: CliInstallInput): Promise<CliInstall
   const log = i.log ?? ((): void => {})
   try {
     if (!i.isPackaged) return { ok: false, reason: 'dev 态跳过(开发用 node dist/tui/main.js)' }
-    const entry = join(i.resourcesPath, 'tangu-server', 'dist', 'tui', 'main.js')
+    const entry = join(i.resourcesPath, 'tangu-server', 'dist', 'boot', 'launch.js')
     if (!existsSync(entry)) return { ok: false, reason: `CLI 入口不存在:${entry}` }
     const binDir = join(i.tanguHome, 'bin')
     mkdirSync(binDir, { recursive: true })

@@ -1,5 +1,5 @@
 import { isCorePlugin } from '../../../shared/corePlugins'
-import { CorePluginUpdates } from './CorePluginUpdates'
+import { CorePluginUpdates, EngineVersionHint } from './CorePluginUpdates'
 import { APP_VERSION } from '../changelog'
 import { hasNativeFeature } from '../features/runtime'
 import { NativeFeaturesSection } from '../features/NativeFeaturesSection'
@@ -870,7 +870,7 @@ export const AmadeusPluginsTab: React.FC<{
       {!managedFeatures && PRODUCT.agentBackend && <div className="plugin-card plugin-core-native" data-plugin-id="tangu-core">
         <PluginLogo />
         <div className="plugin-core-native-copy"><strong>Tangu</strong><div className="hint">{t('plugins.core.tangu')}</div></div>
-        <span className="hint">{t('plugins.core.withApp')}</span>
+        <EngineVersionHint />
       </div>}
       {core.map(renderCard)}
       <CorePluginUpdates controls />

@@ -80,6 +80,16 @@ for (const dir of resources) {
   check(fs.existsSync(path.join(extensionDir, 'manifest.json')), 'Bundled Chrome extension manifest missing')
   check(fs.existsSync(path.join(extensionDir, 'background.js')), 'Bundled Chrome extension background script missing')
   check(engine.version === expectedVersion, `Engine version ${engine.version} != ${expectedVersion}`)
+  // 引擎的 npm 热更新:桌面与终端都经安装包里的启动器拉起引擎,由它在自带的 dist 与下载的新版之间挑。启动器或它的判定
+  // 模块没进包 = 这条通道在这一版里静默不存在;验新版用的公钥编在 signingKey.js 里,必须是一把能解析的 ed25519 公钥。
+  const boot = path.join(dir, 'tangu-server', 'dist', 'boot')
+  for (const file of ['launch.js', 'overlay.js', 'signingKey.js']) {
+    check(fs.existsSync(path.join(boot, file)), `Engine launcher file missing: tangu-server/dist/boot/${file}`)
+  }
+  try {
+    const pem = /-----BEGIN PUBLIC KEY-----[\s\S]+?-----END PUBLIC KEY-----/.exec(fs.readFileSync(path.join(boot, 'signingKey.js'), 'utf8'))
+    check(!!pem && crypto.createPublicKey(pem[0]).asymmetricKeyType === 'ed25519', 'Engine update signing key is not an ed25519 public key')
+  } catch (e) { errors.push(`Engine update signing key unreadable: ${e.message}`) }
 
   const main = readArchive('out/main/main.js')
   check(main.includes('latest-no-extend') === !bundleExtend, 'Main process updater variant differs from FORSION_BUNDLE_EXTEND; rebuild the shell with the same value used for packaging')
@@ -89,6 +99,7 @@ for (const dir of resources) {
   }
   check(main.includes('[builtin-plugins]'), 'Builtin plugin seeding missing from main')
   check(main.includes('[builtin-updates]'), 'Builtin plugin npm updater missing from main')
+  check(main.includes('[engine-updates]') && /["'`]boot["'`],\s*["'`]launch\.js["'`]/.test(main), 'Engine npm updater / launcher spawn missing from main')
   check(main.includes('[cloud-host]') && preload.includes('cloud:present'), 'Builtin desktop-entry loader (cloudHost) missing from main/preload')
   check(preload.includes('desktopPermissionsStatus'), 'Permission status bridge missing')
 

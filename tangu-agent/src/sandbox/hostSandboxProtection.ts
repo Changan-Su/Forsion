@@ -33,6 +33,8 @@ export function protectedHostPaths(): string[] {
   const original = [
     ...['.ssh', '.aws', '.gnupg', '.config/gcloud'].map((name) => path.join(os.homedir(), name)),
     fileURLToPath(new URL('../..', import.meta.url)), process.execPath, configFile(),
+    // 引擎热更新:新版放在共享域 engine/ 下,跑新版时安装包那份包根(依赖都在那儿)由启动器经 TANGU_BUNDLED_ROOT 告知。
+    path.join(forsionSharedDir(), 'engine'), ...(process.env.TANGU_BUNDLED_ROOT ? [process.env.TANGU_BUNDLED_ROOT] : []),
     `${configFile()}.lock`, // config.json 的跨进程写锁(core/config.ts):被模型进程占住 = 用户的设置(含收紧审批)都存不进去
     path.join(forsionSharedDir(), 'auth.json'), path.join(forsionSharedDir(), 'provider-auth.json'),
     ...['.env', 'plugins', 'mcp.json', 'engines.json', 'engine-prefs.json', 'providers.json', 'muse-state.json'].map((name) => path.join(tanguHome(), name)),
