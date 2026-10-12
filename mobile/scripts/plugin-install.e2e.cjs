@@ -413,7 +413,9 @@ async function main() {
      *  (盖在上面的设置页不碍事:抽屉在它底下照样挂着)。防空过:条上至少得有内置的那几个。 */
     const spaceTab = page.locator(`.mb-spacebar [data-space="${SPACE_ID}"]`)
     const spaceListed = async () => {
-      if (!(await page.locator('.mb-drawer--left.open').count())) await tap(page.locator('.mb-topbar [aria-label="left panel"]'), '左抽屉')
+      // Space 条抽屉关着也在 DOM 里,数得到就不去开抽屉。⚠️ 设置盖着时顶栏那颗键点不到:落点上是设置自己的返回键,
+      // 一点就把设置翻回首页(手机主页改成一页之后,插件视图开在它自己的 Space;关掉插件 → 换 Space → 抽屉收起,这里才会走到)。
+      if ((await page.locator('.mb-spacebar [data-space]').count()) < 2 && !(await page.locator('.mb-drawer--left.open').count())) await tap(page.locator('.mb-topbar [aria-label="left panel"]'), '左抽屉')
       const builtin = await page.locator('.mb-spacebar [data-space]').count()
       if (builtin < 2) throw new Error(`Space 条不在 DOM 里(只数到 ${builtin} 格),这一问答不了`)
       return (await spaceTab.count()) > 0
