@@ -15,6 +15,8 @@
 //   M1~M3 本地 md 链接(L-07):点击走库内打开(不补 https)、悬停卡「打开」同路、键入落盘逐字
 //   LK1~LK5 卡片动作作用于整条链接(I-07):`[**粗**普通](url)` 悬停半条也改 / 摘 / 删整条;只改地址不丢 code / 斜体 / 粗体
 //   HP1 双链悬停预览按链接所在笔记就近解析同名笔记(L-10):预览的就是点击会打开的那篇
+//   HP2~HP7 预览卡的收(用户实报:点链接跳到新页面后卡片不消失 / 过一会才消失):卡片开着点链接当场收;没弹出就点、跳完不补弹;
+//          链接留在原处(新标签页 / 聊天引用)同样收;点过之后再悬停照常出;没点鼠标页面被换走,指针一动就收;指针在卡上按 Esc 之后下一张照常收
 //   NT1~NT5 双链 / 库内 md 链接按鼠标键分流(L-11):右键不跳转不弹块菜单;中键、⌘(非 mac 为 Ctrl)+点击 → 新标签页
 //   FL1~FL6 打开光标处链接(L-20):Alt+Enter 跟随 / Alt+Shift+Enter 新标签页;不在链接上不吞键;命令面板那条作用于最近聚焦的编辑器
 //   LI1~LI3 卡片 / 编辑面板文案跟界面语言(C-14):英文界面全英文,切中文当场跟上
@@ -484,6 +486,98 @@ async function hoverPreview(browser) {
   await p.waitForTimeout(1000)
   const got = await p.evaluate(() => ({ req: window.__readReq, body: document.querySelector('.amx-hoverprev-body')?.textContent ?? null }))
   check('HP1 同名笔记:悬停预览读的是链接所在目录那篇(b/Note.md)', JSON.stringify(got.req) === '["b/Note.md"]' && /PREVIEW OF b\/Note\.md/.test(got.body || ''), JSON.stringify(got))
+
+  // HP2~HP4 点了链接,预览卡当场收(用户实报:跳到新页面后卡片有时不消失 / 过一会才消失)。
+  // 病:卡只靠链接的 mouseleave 收;点击在 mousedown 就跳转,链接节点随旧页面摘掉 —— 摘掉的节点浏览器不再派 mouseleave。
+  // 指针全程不动(真鼠标 down/up),所以这里测的就是「没有任何后续鼠标事件」的那种。
+  const card = () => p.evaluate(() => !!document.querySelector('.amx-hoverprev'))
+  const linkAt = () => p.evaluate((s) => { const e = document.querySelector(s + ' .wikilink[data-wiki]'); if (!e) return null; const b = e.getBoundingClientRect(); return { x: b.left + b.width / 2, y: b.top + b.height / 2 } }, PM)
+  const stubOpen = (nav) => p.evaluate((go) => {
+    window.__pageStore.setState({ openWikiLink: () => { if (go) window.__upage.switchFile('b/Note.md', '# Note\n\n正文\n') } })
+  }, nav)
+  /** 回到带链接的那篇,光标挪开让它渲染成部件,指针先停在远处。 */
+  const backToSrc = async () => {
+    await p.evaluate(() => window.__upage.switchFile('b/Src.md', '# Src\n\n链接 [[Note]] 结束\n\n尾\n'))
+    await p.waitForTimeout(800)
+    const t2 = await (await p.$(`${PM} > p:last-of-type`)).boundingBox()
+    await p.mouse.click(t2.x + t2.width - 2, t2.y + t2.height / 2)
+    await p.mouse.move(5, 5)
+    await p.waitForTimeout(400)
+    return linkAt()
+  }
+
+  await stubOpen(true)
+  const shown2 = await card()
+  await p.mouse.down(); await p.mouse.up()
+  await p.waitForTimeout(300)
+  const gone2 = !(await card()), detached2 = !(await linkAt())
+  await p.waitForTimeout(700)
+  check('HP2 卡片开着时点链接跳走:卡片当场收,之后也不再冒出来', shown2 && detached2 && gone2 && !(await card()), JSON.stringify({ shown2, detached2, gone2, later: await card() }))
+
+  const w3 = await backToSrc()
+  if (!w3) check('HP3 前置 回到 Src 后双链部件还在', false)
+  else {
+    await p.mouse.move(w3.x, w3.y, { steps: 3 })
+    await p.waitForTimeout(150) // 还没到 400ms 的出卡延时就点
+    const early = await card()
+    await p.mouse.down(); await p.mouse.up()
+    await p.waitForTimeout(900)
+    check('HP3 卡片还没弹出就点链接跳走:跳完不补弹', !early && !(await linkAt()) && !(await card()), JSON.stringify({ early, linkLeft: !!(await linkAt()), card: await card() }))
+  }
+
+  // 链接留在原处的那种(新标签页打开 / 聊天气泡里的引用):指针还压在链接上,卡片也得收。
+  const w4 = await backToSrc()
+  if (!w4) check('HP4 前置 回到 Src 后双链部件还在', false)
+  else {
+    await stubOpen(false)
+    await p.mouse.move(w4.x, w4.y, { steps: 3 })
+    await p.waitForTimeout(1000)
+    const shown4 = await card()
+    await p.mouse.down(); await p.mouse.up()
+    await p.waitForTimeout(300)
+    const gone4 = !(await card())
+    await p.waitForTimeout(700)
+    check('HP4 链接留在原处(新标签页 / 聊天引用)时点它:卡片同样当场收', shown4 && !!(await linkAt()) && gone4 && !(await card()), JSON.stringify({ shown4, linkLeft: !!(await linkAt()), gone4, later: await card() }))
+    // 收了不等于废了:挪开再挪回来照常出卡
+    await p.mouse.move(5, 5)
+    await p.waitForTimeout(300)
+    await p.mouse.move(w4.x, w4.y, { steps: 3 })
+    await p.waitForTimeout(1000)
+    check('HP5 点过之后挪开再悬停:预览照常出', await card())
+    // 不经鼠标的跳转(Alt+Enter 跟随 / 前进后退):链接节点同样被摘,没有 mousedown 可等 —— 指针一动就收。
+    await p.evaluate(() => window.__upage.switchFile('b/Note.md', '# Note\n\n正文\n'))
+    await p.waitForTimeout(500)
+    await p.mouse.move(w4.x + 40, w4.y - 60, { steps: 3 }) // 往上挪,不经过链接下方的卡片
+    await p.waitForTimeout(300)
+    check('HP6 卡片开着时页面被换走(没点鼠标):指针一动卡片就收', !(await linkAt()) && !(await card()), JSON.stringify({ linkLeft: !!(await linkAt()), card: await card() }))
+  }
+
+  // 指针压在卡片上时用 Esc 关掉它:卡片的 mouseleave 不会来,「指针在卡上」那个标记得自己复位,
+  // 不然之后每一张卡离开链接都不收。
+  const w7 = await backToSrc()
+  if (!w7) check('HP7 前置 回到 Src 后双链部件还在', false)
+  else {
+    await p.mouse.move(w7.x, w7.y, { steps: 3 })
+    await p.waitForTimeout(1000)
+    const box = await p.evaluate(() => { const c = document.querySelector('.amx-hoverprev'); if (!c) return null; const r = c.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 } })
+    if (!box) check('HP7 前置 悬停出卡', false)
+    else {
+      await p.mouse.move(box.x, box.y, { steps: 3 })
+      await p.waitForTimeout(300)
+      const stays = await card()
+      await p.keyboard.press('Escape')
+      await p.waitForTimeout(200)
+      const escClosed = !(await card())
+      await p.mouse.move(5, 5)
+      await p.waitForTimeout(300)
+      await p.mouse.move(w7.x, w7.y, { steps: 3 })
+      await p.waitForTimeout(1000)
+      const again = await card()
+      await p.mouse.move(5, 5)
+      await p.waitForTimeout(500)
+      check('HP7 指针在卡上时按 Esc 关卡:下一张卡离开链接照常收', stays && escClosed && again && !(await card()), JSON.stringify({ stays, escClosed, again, left: await card() }))
+    }
+  }
   await p.close()
 }
 

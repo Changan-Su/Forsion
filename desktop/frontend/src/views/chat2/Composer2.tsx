@@ -44,6 +44,7 @@ import { mainReferenceKey } from './mainReference'
 import { ChatBoxSurface, ChatBoxInput, ChatBoxToolbar, ChatBoxSubmit } from '@lcl/components'
 import { disarmTip, tipProps } from '../../hoverTip'
 import { RefChipView } from './RefChipView'
+import { rankRefs } from './refRank'
 import { composeQuotes } from './quotes'
 import { NEW_CHAT_DRAFT, clearDraft, moveDraft, setDraftField, useDraftField } from './composerDrafts'
 import { ContextUsagePop } from './ContextUsagePop'
@@ -1121,7 +1122,6 @@ export const Composer2: React.FC<{
   }, [studioPrompt, activeSessionId]) // eslint-disable-line react-hooks/exhaustive-deps
   const refMatches = useMemo<RefCand[]>(() => {
     if (!fileRefCtx) return []
-    const q = fileRefCtx.query.toLowerCase()
     // 笔记在前(sort 稳定 → 同分保持此序),工作区文件次之,历史会话最后(与拖拽引用同契约,
     // agent 经 read_session 读)。笔记/文件仅 host(云端读不到本机路径);会话候选全模式可用。
     // 当前会话不列(引用自己无意义)。
@@ -1133,13 +1133,8 @@ export const Composer2: React.FC<{
         .slice(0, 300)
         .map((s) => ({ p: displaySessionTitle(s.title, t), session: { id: s.id, title: displaySessionTitle(s.title, t), summary: s.summary } })),
     ]
-    const pool = q ? cands.filter((c) => c.p.toLowerCase().includes(q)) : cands
-    // 文件名前缀命中 > 文件名包含 > 仅路径包含;同档路径短者先。
-    const score = (c: RefCand): number => {
-      const base = (c.note ? c.p.replace(/\.md$/i, '') : c.p).split('/').pop()!.toLowerCase()
-      return (base.startsWith(q) ? 0 : base.includes(q) ? 1 : 2) * 10000 + c.p.length
-    }
-    return [...pool].sort((a, b) => score(a) - score(b)).slice(0, 10)
+    // 文件名前缀命中 > 文件名包含 > 仅路径包含;不够 10 条再拿模糊命中补位(见 ./refRank)。
+    return rankRefs(cands, fileRefCtx.query)
   }, [fileRefCtx, refFiles, vaultPages, chatSessions, activeSessionId, isHost, t])
   const refActive = !!fileRefCtx && refMatches.length > 0
   useEffect(() => { setRefIndex(0) }, [fileRefCtx?.start, fileRefCtx?.query])

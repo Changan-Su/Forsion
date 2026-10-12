@@ -1,5 +1,5 @@
 /** 双链 hover 预览(Obsidian 页面预览式):悬停正文 [[链接]] 400ms 弹只读渲染浮卡,
- *  移入浮卡可停留滚动,离开即关。事件委托吃编辑器 wikilink 部件(.wikilink[data-wiki]);
+ *  移入浮卡可停留滚动,离开即关;点了链接(跳走)也当场关 —— 见 onDown。事件委托吃编辑器 wikilink 部件(.wikilink[data-wiki]);
  *  未解析链接与文件引用([[xxx.db]] 等)不预览。挂载于 AmadeusOverlays,三端共享。 */
 import { useEffect, useRef, useState } from 'react'
 import { resolvePageName } from '@amadeus-shared/links'
@@ -43,6 +43,7 @@ export function WikiHoverPreview() {
   const [md, setMd] = useState<string | null>(null)
   const timer = useRef<number | null>(null)
   const overCard = useRef(false)
+  const anchor = useRef<HTMLElement | null>(null) // 当前这张卡是哪个链接节点弹出来的
 
   useEffect(() => {
     const clearTimer = (): void => {
@@ -66,6 +67,8 @@ export function WikiHoverPreview() {
       clearTimer()
       const r = el.getBoundingClientRect()
       timer.current = window.setTimeout(() => {
+        if (!el.isConnected) return // 等的这 400ms 里链接已经没了(键盘跳走 / 页面重渲染)
+        anchor.current = el
         // ⚠️ 贴底必须**翻转到链接上方**,不能只往上夹:夹完卡片会盖住链接本身 → 盖住指针 →
         // 链接 mouseleave 关卡 → 指针又落回链接 → 再弹……无限闪烁(聊天气泡的引用条天然
         // 在屏幕底部,一挂就中;编辑器里链接多在中部,这坑藏了很久)。
@@ -86,17 +89,39 @@ export function WikiHoverPreview() {
     const onKey = (e: KeyboardEvent): void => {
       if (e.key === 'Escape') setShow(null)
     }
+    // ⚠️ 卡片不能只靠链接的 mouseleave 收:链接的跳转挂在 mousedown 上(wikilink.ts),旧页面一换,链接节点跟着
+    // 摘掉 —— 摘掉的节点浏览器不再派 mouseleave,卡片就留在新页面上没人关;还没弹出的那张也会在跳完之后补弹。
+    // 所以按下即收、连同没到点的定时器。捕获阶段:部件自己 preventDefault,别的宿主还可能止冒泡。
+    // 卡片里的点按(滚动条、选字)不收;卡片里的双链照收(点它同样是跳走)。
+    const onDown = (e: MouseEvent): void => {
+      const t = e.target as HTMLElement
+      if (t.closest?.('.amx-hoverprev') && !t.closest('.wikilink[data-wiki]')) return
+      clearTimer()
+      setShow(null)
+    }
+    // 不经鼠标的跳转(Alt+Enter 跟随链接、前进后退)同样摘节点:指针再动一下、又不在卡上,就收。
+    const onMove = (): void => {
+      if (anchor.current && !anchor.current.isConnected && !overCard.current) setShow(null)
+    }
     window.addEventListener('mouseover', onOver)
     window.addEventListener('keydown', onKey)
+    window.addEventListener('mousedown', onDown, true)
+    window.addEventListener('mousemove', onMove)
     return () => {
       window.removeEventListener('mouseover', onOver)
       window.removeEventListener('keydown', onKey)
+      window.removeEventListener('mousedown', onDown, true)
+      window.removeEventListener('mousemove', onMove)
       clearTimer()
     }
   }, [])
 
   useEffect(() => {
     if (!show) {
+      // 卡片是在指针还压着它的时候被收掉的(Esc / 点卡里的双链)→ 它的 mouseleave 不会来,
+      // 不复位的话 overCard 永远是 true,之后每张卡离开链接都不收。
+      overCard.current = false
+      anchor.current = null
       setMd(null)
       return
     }
