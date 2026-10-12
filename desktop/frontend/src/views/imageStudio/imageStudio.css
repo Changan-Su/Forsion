@@ -168,7 +168,7 @@
 .ims-ai-ratio-note { padding: 7px 8px; border-left: 2px solid var(--accent-ink); background: var(--bg-input); }
 
 /* Runtime generation slots mirror the final image geometry and are replaced in place. */
-.ims-generation { position: absolute; box-sizing: border-box; pointer-events: auto; overflow: hidden; display: flex; align-items: center; justify-content: center; border: 1px dashed var(--border-strong, var(--border)); border-radius: var(--radius-sm); background-color: var(--bg-card); background-image: radial-gradient(circle at 1px 1px, var(--text-ghost) .7px, transparent .8px); background-size: 12px 12px; color: var(--text); }
+.ims-generation { position: absolute; box-sizing: border-box; pointer-events: auto; overflow: hidden; display: flex; align-items: center; justify-content: center; border: 1px solid var(--border-strong, var(--border)); border-radius: var(--radius-sm); background-color: var(--bg-card); background-image: radial-gradient(circle at 1px 1px, var(--text-ghost) .7px, transparent .8px); background-size: 12px 12px; color: var(--text); }
 .ims-generation-sheen { position: absolute; inset: 0; opacity: .7; transform: translateX(-110%); background: linear-gradient(100deg, transparent 20%, var(--overlay-light) 48%, transparent 76%); pointer-events: none; }
 .ims-generation-copy { position: relative; z-index: 1; display: flex; max-width: calc(100% - 32px); flex-direction: column; align-items: center; gap: 7px; padding: 14px; text-align: center; border-radius: var(--radius-sm); background: var(--bg-card); box-shadow: var(--card-shadow); }
 .ims-generation-copy svg { color: var(--accent-ink); }

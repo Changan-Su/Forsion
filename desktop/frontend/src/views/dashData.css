@@ -51,7 +51,7 @@
 .dash-filter-add {
   display: inline-flex; align-items: center; gap: 4px;
   padding: 2px 8px; border-radius: var(--radius-pill, 999px); cursor: pointer;
-  border: var(--border-width, 1px) dashed var(--border);
+  border: var(--border-width, 1px) solid transparent;
   background: transparent; color: var(--text-muted);
 }
 .dash-filter-add:hover { border-color: color-mix(in srgb, var(--primary) 45%, var(--border)); color: var(--text); }

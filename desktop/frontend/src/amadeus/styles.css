@@ -690,7 +690,7 @@
   padding-left: 22px;
 }
 .am-app .add-block {
-  border: 1px dashed var(--border-strong);
+  border: 1px solid transparent;
   background: transparent;
   color: var(--text-sec);
   border-radius: var(--radius-sm);
@@ -2821,7 +2821,7 @@ body.amx-marquee-active * {
   display: inline-block;
   margin: 0 2px;
   padding: 0 4px;
-  border: 1px dashed var(--border);
+  border: 1px solid var(--border);
   border-radius: var(--radius-sm, 6px);
   color: var(--text-muted);
   font-family: var(--font-mono);
@@ -2934,7 +2934,7 @@ body.amx-marquee-active * {
 /* 未配置:虚线幽灵态 —— 别让一个还没接线的按钮长得像可以点的主操作 */
 .amx-btnblock-btn[data-blank] {
   background: transparent; color: var(--text-muted);
-  border-color: var(--border-strong); border-style: dashed;
+  border-color: var(--border-strong);
 }
 .amx-btnblock-btn[data-blank]:hover:not(:disabled) { background: var(--primary-soft, transparent); color: var(--text); border-color: var(--primary); }
 /* 二次确认:就地变态(不弹模态)。危险底必须走 on-danger；暗色 danger 偏亮，不能继续硬配白字。 */

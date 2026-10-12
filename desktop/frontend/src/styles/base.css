@@ -717,13 +717,13 @@ a:hover { color: var(--accent-ink); }
   width: calc(100% - 16px);
   margin: 8px 8px 4px;
   padding: 6px 9px;
-  border: var(--border-width) dashed var(--border);
+  border: var(--border-width) solid transparent;
   border-radius: var(--radius-md);
   color: var(--text-muted);
   font-size: var(--ui-font-meta, 12px);
   transition: background var(--duration-fast), border-color var(--duration-fast), color var(--duration-fast);
 }
-.ws-add-workspace:hover { border-color: var(--accent-ink); color: var(--accent-ink); background: var(--accent-light); }
+.ws-add-workspace:hover { color: var(--accent-ink); background: var(--accent-light); }
 
 .session-list { flex: 1; min-height: 0; overflow-y: auto; padding: 0 8px 8px; }
 /* Special / 微信远程 侧栏入口卡片(三者视觉统一:微信远程 / Historian / Muse) */

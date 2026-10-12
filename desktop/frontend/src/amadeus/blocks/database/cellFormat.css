@@ -36,7 +36,7 @@
   width: 18px;
   height: 18px;
   border-radius: 4px;
-  border: 1px dashed var(--border, rgba(127, 127, 127, 0.35));
+  border: 1px solid var(--border, rgba(127, 127, 127, 0.35));
   color: var(--text-faint, var(--text-muted));
   font-size: var(--ui-font-meta, 12px);
   line-height: 1;
@@ -45,7 +45,7 @@
   transition: opacity 0.12s;
 }
 .amx-db-files:hover .amx-db-filemore { opacity: 1; }
-.amx-db-filemore:hover { color: var(--text); border-style: solid; }
+.amx-db-filemore:hover { color: var(--text); }
 
 /* 列菜单里的「数字显示」三个输入:标签 + 输入框一行一条 */
 .amx-db-numfmt-cfg label { display: flex; align-items: center; gap: 8px; padding: 2px 0; }

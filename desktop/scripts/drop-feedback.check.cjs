@@ -1,6 +1,6 @@
 /**
- * 拖入反馈守卫(全应用;2026-10-12 之前只管 Amadeus,聊天区和工作区遮罩的同款虚线框因此留到了 2.13.2):
- *  1. 任何样式表里,带拖拽 / 落区状态的选择器都不许画虚线边框或虚线轮廓;
+ * 拖入反馈与虚线边框守卫(全应用;2026-10-12 之前只管 Amadeus,聊天区和工作区遮罩的同款虚线框因此留到了 2.13.2):
+ *  1. 任何样式表、任何内联样式里都不许有虚线边框或虚线轮廓(拖入框、占位按钮都算);
  *  2. 文档只留顶部短光条,画布只留舞台顶部短光条,两者不叠;
  *  3. CanvasStage 退出画布或拖拽在别处结束时会主动清掉瞬态 class;
  *  4. 聊天区:整块淡染 + 输入框亮起,不描边;拖拽在别处结束时窗口级收尾。
@@ -47,28 +47,36 @@ check(
   `检查 ${dropRules.length} 个 dragover/dropzone 规则块`,
 )
 
-// 全应用:带拖拽 / 落区状态的选择器不许画虚线边框 / 轮廓(注释先剥掉,免得注释里的字眼算进选择器)。
-// 已知上限:按「最内层花括号」切规则,不认 CSS 嵌套(`.x.dragover { &::after { … } }` 里父级的状态会丢)。
-// 现在全应用样式表没有用嵌套;哪天用上了,这里要换成真的解析器。
-const walkCss = (dir) => fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => (
-  e.name === 'node_modules' ? [] : e.isDirectory() ? walkCss(path.join(dir, e.name)) : e.name.endsWith('.css') ? [path.join(dir, e.name)] : []
+// 全应用:样式表里不许有虚线边框 / 轮廓(2026-10-12 用户定:包住整块的拖入框和小的占位按钮都不要虚线)。
+// 注释先剥掉。不算数的:`text-decoration-style: dashed`(没建出来的双链的下划线,不是边框)。
+// 已知上限:只看 CSS 的 border / outline 和 TSX 里的内联样式;SVG 的 stroke-dasharray、canvas 的 setLineDash 不管
+// (图表参考线、画布连线预览、关系图的幽灵节点这类是图形里的线,不是界面边框)。
+const walk = (dir, exts) => (fs.existsSync(dir) ? fs.readdirSync(dir, { withFileTypes: true }) : []).flatMap((e) => (
+  e.name === 'node_modules' ? [] : e.isDirectory() ? walk(path.join(dir, e.name), exts) : exts.some((x) => e.name.endsWith(x)) ? [path.join(dir, e.name)] : []
 ))
 // 前面不许是 - 或字母:`--border: 2px dashed …` 这种自定义属性不是边框
 const DASHED = /(?<![-\w])(?:outline|border)(?:-[\w-]+)?\s*:[^;{}]*\bdashed\b/i
-const DRAG_STATE = /drag|(?<!back)drop(?!down)/i
-// 拖动时的落位占位(日历拖日程、仪表盘拖卡片;不是包住整块的框)。要不要也去掉 2026-10-12 已问用户、未答;答了之后删掉这两条。
-const PENDING = ['.amx-cal-dropghost', '.dash3-card[data-dragging]']
-const cssFiles = [path.join(ROOT, 'frontend/src'), path.join(ROOT, '../lcl')].flatMap(walkCss)
+const SRC_DIRS = [path.join(ROOT, 'frontend/src'), path.join(ROOT, '../lcl')]
+const cssFiles = SRC_DIRS.flatMap((d) => walk(d, ['.css']))
 const offenders = cssFiles.flatMap((file) => (
   [...fs.readFileSync(file, 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').matchAll(/([^{}]*)\{([^{}]*)\}/g)]
-    // 选择器列表逐个判:豁免只豁免它自己那一个,不连带同一条规则里的别的选择器
-    .filter((m) => DASHED.test(m[2]) && m[1].split(',').some((sel) => DRAG_STATE.test(sel) && !PENDING.some((p) => sel.includes(p))))
+    .filter((m) => DASHED.test(m[2]))
     .map((m) => `${path.relative(ROOT, file)}: ${m[1].trim().replace(/\s+/g, ' ').slice(0, 80)}`)
 ))
 check(
-  'A2 全应用:拖拽 / 落区状态的规则没有 dashed outline / border',
+  'A2 全应用:样式表里没有 dashed outline / border',
   cssFiles.length > 20 && offenders.length === 0,
   offenders.length ? offenders.join(' | ') : `扫了 ${cssFiles.length} 个样式表`,
+)
+// 内联样式同样不许:borderStyle: 'dashed' / border: '1px dashed …' / outline: `… dashed`
+const INLINE_DASHED = /\b(?:border|outline)[A-Za-z]*\s*:\s*['"`][^'"`\n]*\bdashed\b/
+const tsFiles = SRC_DIRS.flatMap((d) => walk(d, ['.ts', '.tsx'])).filter((f) => !/\.test\.tsx?$/.test(f))
+const inlineOffenders = tsFiles.flatMap((file) => fs.readFileSync(file, 'utf8').split('\n')
+  .map((line, n) => (INLINE_DASHED.test(line) ? `${path.relative(ROOT, file)}:${n + 1}` : null)).filter(Boolean))
+check(
+  'A3 全应用:TS / TSX 的内联样式里没有 dashed outline / border',
+  tsFiles.length > 200 && inlineOffenders.length === 0,
+  inlineOffenders.length ? inlineOffenders.join(' | ') : `扫了 ${tsFiles.length} 个源文件`,
 )
 
 const cleanupBlock = canvasSource.match(/return \(\) => \{[\s\S]*?\n\s*\}\n\s*\}, \[active, toStage\]\)/)?.[0] ?? ''

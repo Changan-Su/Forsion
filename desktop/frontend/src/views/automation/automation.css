@@ -80,7 +80,6 @@
 .auto-node-head .auto-step-tools { margin-left: auto; display: flex; gap: 2px; }
 .auto-node-head .auto-step-tools .icon-btn { opacity: 0.55; }
 .auto-node-head .auto-step-tools .icon-btn:hover { opacity: 1; }
-.auto-node-muse { border-style: dashed; }
 .auto-guard {
   display: flex; align-items: center; gap: 8px; margin-top: 16px; font-size: var(--ui-font-meta, 12px); color: var(--text-light);
 }
