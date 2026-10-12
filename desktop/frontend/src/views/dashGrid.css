@@ -195,7 +195,7 @@
  * 里的壳。占位随预览重排一起 FLIP —— 它就是「松手后会在哪」的真实预告。 */
 .dash3-card[data-dragging] {
   opacity: 0.35;
-  outline: 1.5px dashed color-mix(in srgb, var(--primary) 55%, transparent);
+  outline: 1.5px solid color-mix(in srgb, var(--primary) 35%, transparent);
   outline-offset: -1.5px;
 }
 .dash3-card[data-dragging] .dash3-shield { cursor: grabbing; }

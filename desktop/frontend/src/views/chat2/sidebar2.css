@@ -456,12 +456,12 @@
 .t2s-add-ws {
   display: flex; align-items: center; gap: 5.5px;
   width: 100%; margin-top: 6px; padding: 6px 7.5px;
-  border: 1px dashed var(--border); background: transparent;
+  border: 1px solid transparent; background: transparent;
   color: var(--text-muted); font-family: var(--font-ui); font-size: var(--ui-font-body, 13px);
   border-radius: var(--radius-md, 12px); cursor: pointer;
-  transition: border-color var(--duration-fast, 0.15s), color var(--duration-fast, 0.15s);
+  transition: background var(--duration-fast, 0.15s), color var(--duration-fast, 0.15s);
 }
-.t2s-add-ws:hover { border-color: var(--accent-ink); color: var(--text); }
+.t2s-add-ws:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.08)); color: var(--text); }
 
 .t2s-archived-toggle { margin-top: 4.5px; padding-left: 6px; }
 

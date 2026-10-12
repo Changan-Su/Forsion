@@ -520,7 +520,6 @@ html[data-glass='off'] .hp-root .hp-composer .project-pill::before {
   font-variant-numeric: tabular-nums;
 }
 .hp-more { cursor: pointer; }
-.hp-more .hp-tile-icon { border: var(--border-width) dashed var(--border); background: transparent; }
 .hp-more-count { color: var(--accent-ink); }
 
 /* DragOverlay 跟指针走,原位 tile 降到 16% 透明;其他 tile 由 dnd-kit 用 transform 产生排斥/让位。 */
@@ -806,7 +805,7 @@ html[data-glass='off'] .hp-root .hp-composer .project-pill::before {
   cursor: pointer;
   transition: color var(--duration-fast) var(--ease-out), background var(--duration-fast) var(--ease-out), transform var(--duration-fast) var(--ease-spring);
 }
-.hp-organizer-new > span { display: grid; place-items: center; border: var(--border-width) dashed var(--border); border-radius: var(--radius-md); box-shadow: none; }
+.hp-organizer-new > span { display: grid; place-items: center; border-radius: var(--radius-md); box-shadow: none; }
 .hp-organizer-new small { max-width: 100%; overflow: hidden; font-size: var(--ui-font-caption, 11px); text-overflow: ellipsis; white-space: nowrap; }
 .hp-organizer-new:hover { color: var(--text); background: var(--bg-hover); transform: translateY(-2px); }
 .hp-organizer-grid .hp-tile-name,

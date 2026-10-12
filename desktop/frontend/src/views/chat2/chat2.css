@@ -6,14 +6,20 @@
 
 /* ====== 聊天工具栏 + 流容器 ====== */
 .t2-chat-view { container-type: inline-size; overflow: hidden; }
-/* 从工作区拖会话/笔记/文件进来:整块聊天区都是落区 —— 高亮画在伪元素上(不动布局,
-   也不给根加 border 以免 container 尺寸抖动进而触发容器查询换档)。 */
+/* 从工作区拖会话/笔记/文件进来:整块聊天区都是落区 —— 整块铺一层淡主题色(画在伪元素上,不动布局),
+   落点(输入框)同时亮起。不描边:包住整块的虚线框 2026-10-12 用户要求去掉(DESIGN §6「拖入提示」,
+   check:dropfeedback 守着)。 */
 .t2-chat-view { position: relative; }
 .t2-chat-view.refdrop::after,
 .t2-chat-view[data-filedrop]::after { /* OS 文件也落整片(见 Composer2) */
   content: ''; position: absolute; inset: 6px; pointer-events: none; z-index: 20;
-  border: 2px dashed var(--accent-ink, var(--accent)); border-radius: var(--radius-lg, 12px);
-  background: color-mix(in srgb, var(--accent-ink, var(--accent)) 7%, transparent);
+  border-radius: var(--radius-lg, 12px);
+  background: color-mix(in srgb, var(--accent-ink, var(--accent)) 5%, transparent);
+}
+/* 与 lcl/components/chatBox.css 的 .t2c-card.dragover 同一画法(那条是卡片自己当落区时用的) */
+:is(.t2-chat-view.refdrop, .t2-chat-view[data-filedrop]) .t2c-card {
+  border-color: var(--accent-ink);
+  background: color-mix(in srgb, var(--accent-ink) 6%, var(--t2c-card-surface, var(--bg-card, var(--bg))));
 }
 .t2-toolbar {
   min-height: 38px;
@@ -209,7 +215,7 @@
 .t2-sys { text-align: center; font-size: var(--ui-font-caption, 11px); color: var(--text-faint, var(--text-muted)); padding: 2px 0; }
 /* 打断标记(<turn_interrupted> 落库行):两侧细线的居中分隔,轻于正文。线走 overlay 勿硬色。 */
 .t2-interrupted { display: flex; align-items: center; gap: 10px; }
-.t2-interrupted::before, .t2-interrupted::after { content: ''; flex: 1; border-top: 1px dashed var(--overlay-medium, rgba(127, 127, 127, 0.16)); }
+.t2-interrupted::before, .t2-interrupted::after { content: ''; flex: 1; border-top: 1px solid var(--overlay-medium, rgba(127, 127, 127, 0.16)); }
 /* LLM 网络重试横幅:琥珀色示警但不是失败(失败是红色 t2-status-err);原始错误淡化拖尾。 */
 .t2-retry { color: var(--warning); }
 .t2-retry .t2-retry-err { opacity: 0.65; margin-left: 6px; }

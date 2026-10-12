@@ -489,6 +489,19 @@ export function ChatView({ leaf, params }: ViewProps) {
     e.dataTransfer.dropEffect = 'copy'
     if (!refDrop) setRefDrop(true)
   }
+  // 拖拽在别处结束(松在窗口外、内层吞了 drop、切走窗口)时 dragleave 不一定来,窗口级收尾。
+  useEffect(() => {
+    if (!refDrop) return
+    const clear = (): void => setRefDrop(false)
+    window.addEventListener('dragend', clear)
+    window.addEventListener('drop', clear, true)
+    window.addEventListener('blur', clear)
+    return () => {
+      window.removeEventListener('dragend', clear)
+      window.removeEventListener('drop', clear, true)
+      window.removeEventListener('blur', clear)
+    }
+  }, [refDrop])
   const onRefDrop = (e: React.DragEvent): void => {
     setRefDrop(false)
     if (!hasChatRef(e.dataTransfer)) return

@@ -159,7 +159,7 @@ export function bindFilesDropZone(
 ): () => void {
   const zone = (card.closest(DROP_ZONE_SEL) as HTMLElement | null) ?? card
   const hasFiles = (e: DragEvent): boolean => Array.from(e.dataTransfer?.types ?? []).includes('Files')
-  // 卡片自己当落区时沿用 .dragover 亮边;整片聊天区改用属性驱动虚线框(class 归 ChatView 管,别抢)。
+  // 卡片自己当落区时沿用 .dragover 亮边;整片聊天区改用属性驱动的淡染(class 归 ChatView 管,别抢)。
   const mark = (on: boolean): void => {
     if (zone === card) setCardDragOver(on)
     else zone.toggleAttribute('data-filedrop', on)
@@ -177,13 +177,23 @@ export function bindFilesDropZone(
     mark(false)
     if (e.dataTransfer?.files?.length) onFiles(e.dataTransfer.files)
   }
+  // 窗口级收尾:拖拽在别处结束时 dragleave / drop 到不了落区(内层先 stopPropagation 了 drop、
+  // 松在窗口外、切走了窗口),提示会一直亮着。drop 走捕获,先于任何内层处理。
+  const win = zone.ownerDocument?.defaultView
+  const clear = (): void => mark(false)
   zone.addEventListener('dragover', over)
   zone.addEventListener('dragleave', leave)
   zone.addEventListener('drop', drop)
+  win?.addEventListener('dragend', clear)
+  win?.addEventListener('drop', clear, true)
+  win?.addEventListener('blur', clear)
   return () => {
     zone.removeEventListener('dragover', over)
     zone.removeEventListener('dragleave', leave)
     zone.removeEventListener('drop', drop)
+    win?.removeEventListener('dragend', clear)
+    win?.removeEventListener('drop', clear, true)
+    win?.removeEventListener('blur', clear)
     mark(false)
   }
 }

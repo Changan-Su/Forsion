@@ -199,7 +199,7 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
 /* 分屏占位:非活动编辑器认领了别的笔记时的「点击加载」钮。 */
 .amx-stale-btn {
   display: inline-flex; align-items: center; gap: 6px; cursor: pointer;
-  border: 1px dashed var(--border); background: transparent; color: var(--text-muted);
+  border: 1px solid transparent; background: transparent; color: var(--text-muted);
   font: inherit; font-size: var(--ui-font-body, 13px); padding: 8px 14px; border-radius: var(--radius-md, 10px);
   transition: background var(--duration-fast, 0.15s), color var(--duration-fast, 0.15s);
 }
@@ -947,7 +947,7 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
 }
 .amx-pageadd button {
   font: inherit; font-size: var(--ui-font-meta, 12px); line-height: 1; padding: 5px 10px; border-radius: var(--radius-pill, 999px); cursor: pointer;
-  border: 1px dashed var(--amx-grid-line); background: var(--island-bg-color, #fff); color: var(--color-on-surface, inherit);
+  border: 1px solid var(--amx-grid-line); background: var(--island-bg-color, #fff); color: var(--color-on-surface, inherit);
   opacity: 0.65; transition: opacity 0.12s ease;
 }
 .amx-pageadd:hover button { opacity: 1; }
@@ -1288,7 +1288,7 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
 .amx-db-card-prop { display: flex; flex-wrap: wrap; gap: 4px; min-width: 0; }
 .amx-db-card-text { color: var(--text-muted); font-size: var(--ui-font-meta, 12px); overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; word-break: break-word; }
 .amx-db-card-check { color: var(--text-muted); font-size: var(--ui-font-meta, 12px); }
-.amx-db-card-add { flex-direction: row; align-items: center; justify-content: center; gap: 4px; border: 1px dashed var(--border); box-shadow: none; background: transparent; color: var(--text-muted); font: inherit; font-size: var(--ui-font-meta, 12px); }
+.amx-db-card-add { flex-direction: row; align-items: center; justify-content: center; gap: 4px; border: 1px solid transparent; box-shadow: none; background: transparent; color: var(--text-muted); font: inherit; font-size: var(--ui-font-meta, 12px); }
 .amx-db-card-add:hover { box-shadow: none; color: var(--text); background: var(--overlay-light, rgba(127, 127, 127, 0.05)); }
 /* 日历 */
 .amx-db-cal { padding: 4px 2px 8px; }
@@ -1475,7 +1475,7 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
 .amx-cal-tscroll { position: relative; flex: 1; min-width: 0; min-height: 0; overflow: auto; }
 .amx-cal-tgrid2 { display: grid; position: relative; }
 /* 落点吸附提示(拖动事件时的虚线幽灵块;跟随吸附后的目标列+时刻,内文 = 实时时间区间)。 */
-.amx-cal-dropghost { position: absolute; display: none; z-index: 3; box-sizing: border-box; border: 2px dashed var(--accent-ink, var(--accent, #6c5ce7)); background: color-mix(in srgb, var(--accent, #6c5ce7) 15%, transparent); border-radius: var(--radius-sm, 6px); pointer-events: none; padding: 2px 6px; font-size: var(--ui-font-caption, 11px); font-weight: 600; font-variant-numeric: tabular-nums; color: var(--accent-ink, var(--accent, #6c5ce7)); overflow: hidden; }
+.amx-cal-dropghost { position: absolute; display: none; z-index: 3; box-sizing: border-box; border: 1px solid color-mix(in srgb, var(--accent-ink, var(--accent, #6c5ce7)) 55%, transparent); background: color-mix(in srgb, var(--accent, #6c5ce7) 15%, transparent); border-radius: var(--radius-sm, 6px); pointer-events: none; padding: 2px 6px; font-size: var(--ui-font-caption, 11px); font-weight: 600; font-variant-numeric: tabular-nums; color: var(--accent-ink, var(--accent, #6c5ce7)); overflow: hidden; }
 .amx-cal-thead2 { position: sticky; top: 0; z-index: 8; background: var(--bg); border-left: 1px solid var(--amx-cal-line, var(--border)); border-bottom: 1px solid var(--amx-cal-line, var(--border)); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px; }
 .amx-cal-thead2.today .amx-cal-tdate { color: var(--accent-ink, var(--accent, #6c5ce7)); }
 .amx-cal-tdow { font-size: var(--ui-font-caption, 11px); color: var(--text-muted); }
@@ -1599,9 +1599,9 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
 .amx-calcfg-more { flex: none; width: 28px; height: 28px; border: none; background: transparent; color: var(--text-muted); font-size: var(--ui-font-heading, 14px); line-height: 1; cursor: pointer; padding: 0; border-radius: var(--radius-sm, 6px); }
 .amx-calcfg-more:hover { background: var(--bg-hover, var(--overlay-light)); color: var(--text); }
 .amx-calcfg-menu { min-width: 168px; padding: 4px; }
-.amx-calcfg-add { display: flex; align-items: center; justify-content: center; gap: 6px; width: 100%; margin-top: 8px; padding: 7px 8px; border: 1px dashed var(--border); border-radius: var(--radius-sm, 6px); background: transparent; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); cursor: pointer; }
+.amx-calcfg-add { display: flex; align-items: center; justify-content: center; gap: 6px; width: 100%; margin-top: 8px; padding: 7px 8px; border: 1px solid transparent; border-radius: var(--radius-sm, 6px); background: transparent; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); cursor: pointer; }
 .amx-calcfg-add:hover { background: var(--bg-hover, var(--overlay-light)); color: var(--text); border-color: var(--accent-ink, var(--accent, #6c5ce7)); }
-.amx-calcfg-add-main { min-height: 34px; border-style: solid; color: var(--text); background: var(--bg-hover, var(--overlay-light)); }
+.amx-calcfg-add-main { min-height: 34px; border-color: var(--border); color: var(--text); background: var(--bg-hover, var(--overlay-light)); }
 .amx-calcfg-add-main svg:last-child { margin-left: auto; }
 .amx-calcfg-addmenu { min-width: 188px; padding: 4px; }
 .amx-calcfg-addmenu .amx-db-opt { display: flex; align-items: center; gap: 8px; }
