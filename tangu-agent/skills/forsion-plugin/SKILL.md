@@ -2,7 +2,7 @@
 name: forsion-extension-development
 description: 当用户要给 Forsion / Tangu 做插件、主题、Space、智能体(agent)或捆绑包(bundle)——或要把某个能力做成可分发/可上架商店的扩展——时使用;已装的插件 / Space / 视图不出现、加载失败、更新后不工作要排查时也用(带一份插件体检脚本 tools/check-plugin.mjs)。内置五类官方模板(samples/),讲清各自的格式基线与硬约束(尤其两种"插件"是完全不同的系统),照抄模板改比从零写靠谱。
 metadata:
-  version: 1.32.0
+  version: 1.33.0
   author: Forsion
   category: Forsion
 ---
@@ -285,7 +285,7 @@ ctx.registerView({ id: 'home', title: 'Muse', mount(el) {
 | `registerFileCreator` | 文件树右键 + 新建标签页启动器 | 与文件类型配套;**四条新建路径都要注册**,少一条用户就会问「为什么这儿没有」 |
 | `registerEmbedRenderer` | `![[x]]` 嵌入的自绘渲染 | |
 | `registerSetting` | 详情页声明式表单(number/boolean/text) | 每键一个字符串,**没有原子性**;同 key 重注册即覆盖 |
-| `ctx.ui.mountMarkdownEditor` | 视图内原生 Amadeus Markdown 编辑器 | 正文归调用方(API 草稿等),**不碰笔记库**;保存前 `getValue()`;老宿主没有 → 可选链 |
+| `ctx.ui.mountMarkdownEditor` | 视图内原生 Amadeus Markdown 编辑器 | 正文归调用方(API 草稿等),**不碰笔记库**;保存前 `getValue()`;`modes: false` 不画「编辑 / 源码 / 预览」那一排;老宿主没有 → 可选链 |
 | `ctx.ui.mountFloatingToc` | 视图内原生悬浮目录 | 插件保有正文 DOM,宿主负责扫描 / 滚动高亮 / 跳转 / 主题;老宿主没有 → 可选链 |
 | `ctx.ui.mountBoard` / `ctx.ui.boardToSvg` | 盖在自己内容上的透明白板层(手写 / 圈画) | 和 `.excalidraw.md` 白板同一个引擎、同样的七支笔;**视口归调用方**(自己推 `viewport`、自己接滚轮);元素原样存取;不在手写时用 `boardToSvg` 出静态图;老宿主没有 → 不出手写入口 |
 | `ctx.table.mount` | 面板里的原生多维表(只读) | 一份规格 → 真 DbTable(筛选/搜索/隐藏列/排序/统计全套),**不依赖笔记库**;老宿主没有 → 可选链 + 自己的表格降级(见下) |
@@ -507,7 +507,11 @@ Space 管布局，View 管独立功能面，**UI component** 是 View 内可组�
 
 `ctx.ui?.mountMarkdownEditor?.(el, opts)` 挂载与笔记同源的 Amadeus 编辑器(可视 / Markdown 源码 / 发布预览三档),
 返回 `{ getValue(), update(patch), insertMarkdown(md), focus(), dispose() }`。
-`opts` 支持 `value`(必填字符串)、`label`、`readOnly`、`previewBaseUrl`(预览里相对路径图片/视频的源)、`onChange(markdown)`。
+`opts` 支持 `value`(必填字符串)、`label`、`readOnly`、`previewBaseUrl`(预览里相对路径图片/视频的源)、`onChange(markdown)`、`modes`。
+**`modes: false` = 不画顶上那排「编辑 / 源码 / 预览」切换按钮,只留可视编辑器**(2026-10-12 起):编辑器放进自己的卡片、单元格、表单项里时用;
+缺省是三档都在。`update({ modes })` 可以随时开关(关掉的那一刻停在源码或预览档,会回到可视编辑器)。
+2.13.2 及更早的宿主不认这个字段、照样画那一排 —— 要兼容它们就在自己的样式里把那一排藏掉当兜底
+(`.你的容器 .amx-publishing-editor > div:has(> button[aria-pressed]) { display: none !important }`),别的宿主节点一律不要选。
 **正文与持久化归调用方**:不读写活动库、不改当前笔记、不自动保存、不调模型。保存前必须同步调 `getValue()`(含最新一笔编辑事务)。
 `update({ value })` 换文档,`insertMarkdown` 追加附件/嵌入(只读时无效),`dispose()` 幂等(之后 `el` 立刻归还,见上「dispose 契约」);宿主在插件禁用/重载/setup 失败时统一回收,旧句柄不再改内容。
 老宿主没有此方法时明确提示升级,不要拿 textarea 冒充原生编辑器。完整契约:`docs/customization/ui-components.md`;类型真源:`desktop/shared/markdownEditor.ts`。

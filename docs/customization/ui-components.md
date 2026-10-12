@@ -81,11 +81,15 @@ On Android, `presentNativeMenu` / `presentNativePrompt` / `presentNativeConfirm`
 
 ## API 文档的 Amadeus 编辑器 / Amadeus for API-backed documents
 
-`ctx.ui?.mountMarkdownEditor(el, { value, label, readOnly, onChange })` 挂载原生 Amadeus / Milkdown 编辑器，支持可视编辑、Markdown 源码和发布预览。正文完全由调用方保存，不读写活动智库、不修改当前笔记、不自动请求模型。句法沿用 CommonMark、GFM、CJK 强调、`![[视频链接]]` 与 Obsidian callout；折叠 callout 使用 `> [!note]- 标题`。
+`ctx.ui?.mountMarkdownEditor(el, { value, label, readOnly, modes, onChange })` 挂载原生 Amadeus / Milkdown 编辑器，支持可视编辑、Markdown 源码和发布预览。正文完全由调用方保存，不读写活动智库、不修改当前笔记、不自动请求模型。句法沿用 CommonMark、GFM、CJK 强调、`![[视频链接]]` 与 Obsidian callout；折叠 callout 使用 `> [!note]- 标题`。
+
+`modes: false`（2026-10-12 起）不画顶上那排「Amadeus 编辑 / Markdown 源码 / 预览」切换按钮，只留可视编辑器，用在把编辑器放进自己的卡片、单元格或表单项里的场合；缺省三档都在。`update({ modes })` 可以随时开关，关掉的那一刻停在源码或预览档会回到可视编辑器。2.13.2 及更早的宿主不认这个字段、照样画那一排：要兼容它们，就在自己的样式里藏掉那一排当兜底（`.your-box .amx-publishing-editor > div:has(> button[aria-pressed]) { display: none !important }`），别的宿主节点不要选。
 
 `handle.getValue()` 同步取最新事务，保存前必须调用；`update({value})` 切换文档，`insertMarkdown(text)` 追加上传附件或嵌入，`focus()` 聚焦，`dispose()` 幂等清理。插件禁用/重载与主视图卸载也会收回挂载，旧句柄不能再改内容。旧宿主缺少此 API 时应明确要求升级，不能伪装成原生编辑器。
 
 The caller owns the document and persistence. No implicit vault, active page, AI calls or autosave. The editor and publishing renderer share Amadeus Markdown semantics. Read `getValue()` immediately before saving; dispose mounts on view teardown. Feature-detect on older hosts.
+
+`modes: false` (since 2026-10-12) draws no row of "Amadeus editor / Markdown source / Preview" buttons and keeps the visual editor only. Use it when the editor sits inside your own card, cell or form field; by default all three modes are available. `update({ modes })` turns the row off or on at any time; turning it off while the source or preview is showing returns to the visual editor. Hosts up to 2.13.2 ignore the field and always draw the row: to support them, hide that row in your own stylesheet as a fallback (`.your-box .amx-publishing-editor > div:has(> button[aria-pressed]) { display: none !important }`) and select no other host node.
 
 
 ### Plugin Chat Box selection and Director hand-off (2026-09-30)
