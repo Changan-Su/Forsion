@@ -2010,11 +2010,29 @@ const tabCountText = (list) => {
   // Not here: a restart. The saved layout is kept per account, and this harness's account has no identity, so every
   // boot starts from an empty layout (cloudAccountCache.syncCloudAccountCache). A restart lands through the same hook
   // as a Space switch (singleColumnStore.applySCBlob → afterLayout).
+  /** Leaves Home for Tangu (which saves Home's layout) and returns the storage key of THIS account's saved layouts.
+   *  Layouts are stored per account, and the app under test has a new anonymous account on every boot — the slots of
+   *  older boots are still in localStorage, so "the first slot that has a Home layout" is usually a dead one and an
+   *  edit there changes nothing (a check built on it passes on any build). The layout "in use" is rewritten when the
+   *  Space changes: the one that changed is this account's, and its suffix names the slot of saved layouts. */
+  async function leaveHomeForItsSlot() {
+    await goHome()
+    const inUse = "Object.fromEntries(Object.keys(localStorage).filter((k) => k.startsWith('lcl_sc_layout_v1')).map((k) => [k, localStorage.getItem(k)]))"
+    const before = await cdp.eval(inUse)
+    await tapSpace('tangu'); await h.pause(1300)
+    const now = await cdp.eval(inUse)
+    const live = Object.keys(now).filter((k) => now[k] !== before[k])
+    assert.equal(live.length, 1, `control: exactly one layout slot is in use (changed: ${JSON.stringify(live)} of ${Object.keys(now).length})`)
+    const key = live[0].replace('lcl_sc_layout_v1', 'lcl_sc_named_layouts_v1')
+    const slots = JSON.parse(await cdp.eval(`localStorage.getItem(${JSON.stringify(key)})`) || '{}')
+    assert.ok(slots['space:home'], `control: no saved layout for Home under ${key} (has: ${JSON.stringify(Object.keys(slots))})`)
+    return key
+  }
+
   await check('home stays home: no "New tab" in its ⋯; a stray tab left by an older build is gone on entry; a conversation opened from Home opens in Tangu', async () => {
     const bad = []
     const st = async () => JSON.parse(await cdp.eval(`JSON.stringify({ space: document.querySelector('.mb-shell')?.dataset.space, view: ${dom.view} })`))
     const tabs = () => Number(tabCountText(ui()) || '1')
-    const named = "Object.fromEntries(Object.keys(localStorage).filter((k) => k.startsWith('lcl_sc_named_layouts_v1')).map((k) => [k, localStorage.getItem(k)]))"
     // 1
     await goHome()
     await tapId('nativeChrome.more')
@@ -2022,12 +2040,8 @@ const tabCountText = (list) => {
     if (ids(list).includes('tab:new')) bad.push(`Home's ⋯ offers "New tab": ${JSON.stringify(ids(list))}`)
     assert.ok(h.byId(list, 'nativeSheet.item.rb-cmd'), `control: search is in Home's ⋯ (${JSON.stringify(ids(list))})`)
     h.key(4); await waitSheet(false)
-    // 2: leaving Home saves its layout; the slot that changed is this account's. Put a second tab in it, in front.
-    const before = await cdp.eval(named)
-    await tapSpace('tangu'); await h.pause(1300)
-    const after = await cdp.eval(named)
-    const key = Object.keys(after).find((k) => after[k] !== before[k]) || Object.keys(after).find((k) => JSON.parse(after[k])['space:home'])
-    assert.ok(key && JSON.parse(after[key])['space:home'], `control: no saved layout for Home to edit (${JSON.stringify(Object.keys(after))})`)
+    // 2: leaving Home saves its layout. Put a second tab in it, in front.
+    const key = await leaveHomeForItsSlot()
     await cdp.eval(`(() => { const all = JSON.parse(localStorage.getItem(${JSON.stringify(key)})); const b = all['space:home']
       b.main = [...b.main.filter((r) => r.type === 'homepage'), { id: 'calendar', type: 'calendar', loc: 'main', params: {}, title: 'Calendar' }]; b.activeMainId = 'calendar'
       localStorage.setItem(${JSON.stringify(key)}, JSON.stringify(all)); return true })()`)
@@ -2070,6 +2084,103 @@ const tabCountText = (list) => {
     if (home.view !== 'homepage' || tabs() !== 1) bad.push(`Home after a conversation was opened from it: ${JSON.stringify(home)} tabs ${tabs()}`)
     for (let i = 0; i < 4 && tabs() > 1; i++) { if ((await st()).view === 'homepage') break; h.key(4); await h.pause(1000) } // the build without the fix leaves its tab
     assert.deepEqual(bad, [], 'Home is not just Home')
+  })
+
+  // Home is one page on the phone — also when an older build left side panels in its saved layout. A left panel there
+  // makes the two-level navigation treat Home as a list Space: every entry lands on that list ("工作区") and the homepage
+  // is a level below it (2026-10-12, reported twice by the user: "一进去主页…是别的工作区").
+  await check('home stays home: side panels an older build left in its layout do not turn Home into a list Space', async () => {
+    const named = "Object.fromEntries(Object.keys(localStorage).filter((k) => k.startsWith('lcl_sc_named_layouts_v1')).map((k) => [k, localStorage.getItem(k)]))"
+    const st = async () => JSON.parse(await cdp.eval(`JSON.stringify({ space: document.querySelector('.mb-shell')?.dataset.space, nav: document.querySelector('.mb-shell')?.dataset.nav || '', view: ${dom.view}, home: !!(${homeShown}), leftPanel: (document.querySelector('.mb-drawer--left')?.innerText || '').replace(/\\s+/g, ' ').slice(0, 60) })`))
+    const key = await leaveHomeForItsSlot()
+    const saved = JSON.parse((await cdp.eval(named))[key])['space:home']
+    console.log(`  Home's saved layout as this build leaves it: ${JSON.stringify({ main: saved.main?.map((r) => r.type), left: saved.left?.map((r) => r.type), right: saved.right?.map((r) => r.type), leftVisible: saved.leftVisible })}`)
+    await cdp.eval(`(() => { const all = JSON.parse(localStorage.getItem(${JSON.stringify(key)})); const b = all['space:home']
+      b.left = [{ id: 'workspace', type: 'workspace', loc: 'left', params: { mode: 'orbits' }, title: 'Workspace' }]; b.leftActiveId = 'workspace'
+      b.right = [{ id: 'outline', type: 'outline', loc: 'right', params: {}, title: 'Outline' }]; b.rightActiveId = 'outline'
+      localStorage.setItem(${JSON.stringify(key)}, JSON.stringify(all)); return true })()`)
+    await tapSpace('home'); await h.pause(1500)
+    const landed = await st()
+    console.log(`  entering Home with a left panel in its saved layout: ${JSON.stringify(landed)}`)
+    shot('05c-home-with-old-side-panels')
+    const bad = []
+    if (landed.space !== 'home') bad.push(`not on Home: ${JSON.stringify(landed)}`)
+    if (landed.nav) bad.push(`Home is a list Space now (nav "${landed.nav}"): the list is its first level, the homepage is behind it`)
+    if (!landed.home) bad.push(`the homepage is not what is on screen: ${JSON.stringify(landed)}`)
+    if (h.byId(ui(), 'nativeChrome.left')) bad.push('Home has a left-panel button')
+    // leave things as a fresh Home has them, whatever the build did
+    await tapSpace('tangu'); await h.pause(1200)
+    await cdp.eval(`(() => { const all = JSON.parse(localStorage.getItem(${JSON.stringify(key)})); const b = all['space:home']; if (b) { b.left = []; b.right = []; b.leftActiveId = null; b.rightActiveId = null; b.leftVisible = false; b.rightVisible = false }
+      localStorage.setItem(${JSON.stringify(key)}, JSON.stringify(all)); return true })()`)
+    await tapSpace('home'); await h.pause(1200)
+    assert.deepEqual(bad, [], 'Home is not just Home')
+  })
+
+  // What a launch restores. The fixture token names no account, so the app under test keeps no layout from one boot to
+  // the next and a boot never restores anything — the one place this bug lives. Sign in as an account for this check.
+  // The phone keeps ONE layout "in use" and restores it at boot; the startup Space (Home by default) is decided
+  // separately. Leave the app in Tangu and the next launch is Home wearing Tangu's layout (reported 2026-10-11/12).
+  await check('launch: left in another Space, the app opens on Home with the homepage on screen — not that Space\'s list or conversation', async () => {
+    const ID_TOKEN = `e2e.${Buffer.from(JSON.stringify({ userId: 'e2e-layout' })).toString('base64url')}.sig`
+    const setToken = (v) => cdp.eval(`Capacitor.Plugins.Preferences.set({ key: 'forsion_token', value: ${JSON.stringify(v)} }).then(() => true)`)
+    const st = async () => JSON.parse(await cdp.eval(`JSON.stringify((() => { const sh = document.querySelector('.mb-shell'), at = document.elementFromPoint(innerWidth / 2, innerHeight / 2)
+      return { space: sh?.dataset.space, nav: sh?.dataset.nav || '', view: ${dom.view}, onScreen: at?.closest('.hp-root') ? 'homepage' : at?.closest('.mb-drawer--left') ? 'left panel' : (at?.closest('[class]')?.className || '').toString().slice(0, 40),
+        slots: Object.keys(localStorage).filter((k) => k.includes('e2e-layout') && k.startsWith('lcl_sc_')).length } })())`))
+    const bad = []
+    const judge = (how, got) => {
+      if (got.space !== 'home') bad.push(`${how}: not on Home: ${JSON.stringify(got)}`)
+      if (got.nav) bad.push(`${how}: Home came up as a list Space (nav "${got.nav}")`)
+      if (got.onScreen !== 'homepage') bad.push(`${how}: on screen: ${got.onScreen} (view ${got.view})`)
+      if (h.byId(ui(), 'nativeChrome.left')) bad.push(`${how}: Home has a left-panel button`)
+      if (Number(tabCountText(ui()) || '1') !== 1) bad.push(`${how}: Home has ${tabCountText(ui())} tabs`)
+    }
+    const startPref = await cdp.eval("localStorage.getItem('forsion_default_space')")
+    try {
+      await cdp.eval("(Object.keys(localStorage).filter((k) => k.includes('e2e-layout')).forEach((k) => localStorage.removeItem(k)), localStorage.removeItem('forsion_default_space'), true)")
+      await setToken(ID_TOKEN)
+      await reload() // first launch of this account: nothing saved
+      const first = await st()
+      console.log(`  first launch: ${JSON.stringify(first)}`)
+      assert.equal(first.space, 'home', 'control: the default startup Space is Home')
+      await openChat('E2E Session One') // Tangu, a conversation on screen: where the user leaves the app
+      await h.pause(1200)
+      assert.ok((await st()).slots >= 1, `control: this account's layout is kept (${JSON.stringify(await st())})`)
+      await reload() // the next launch
+      await h.pause(1200)
+      const next = await st()
+      console.log(`  launch after leaving the app in a Tangu conversation: ${JSON.stringify(next)}`)
+      shot('05d-launch-after-tangu')
+      judge('page reload', next)
+      // … and Tangu is still a Space of its own
+      await toSpace('tangu'); await h.pause(900)
+      const tangu = await st()
+      console.log(`  Tangu after that launch: ${JSON.stringify(tangu)}`)
+      if (tangu.nav !== 'list' && tangu.view !== 'chat') bad.push(`Tangu lost its own layout: ${JSON.stringify(tangu)}`)
+      // the same through a real launch: the process is killed with a Tangu conversation on screen and started again
+      // (a page reload runs the same boot code; this is the path a person takes)
+      await openChat('E2E Session One')
+      await h.pause(1200)
+      h.adb('shell', 'am', 'force-stop', PKG)
+      h.adb('shell', 'am', 'start', '-n', ACTIVITY)
+      cdp = await h.connect(PKG)
+      await cdp.send('Page.enable')
+      // the stub goes on the new connection at once: what is restored is local, but a request that reaches the real backend
+      // with this token is answered 401 and the app signs out. (The requests sent before this line cannot be caught — as in
+      // the plugin restart check, they go nowhere on the emulator this suite runs on: airplane mode.)
+      await installStub(cdp)
+      assert.ok(await h.waitPage(cdp, dom.shellUp, 30000), 'shell did not mount after the cold start')
+      assert.ok((await h.waitNodes((l) => h.byId(l, 'nativeChrome.bar'), { timeout: 12000 })).hit, 'native bar did not appear after the cold start')
+      await h.pause(1500)
+      const cold = await st()
+      console.log(`  cold start (process killed in a Tangu conversation): ${JSON.stringify(cold)}`)
+      shot('05e-cold-start-after-tangu')
+      judge('cold start', cold)
+    } finally {
+      await cdp.eval(`(Object.keys(localStorage).filter((k) => k.includes('e2e-layout')).forEach((k) => localStorage.removeItem(k)), ${startPref === null ? "localStorage.removeItem('forsion_default_space')" : `localStorage.setItem('forsion_default_space', ${JSON.stringify(startPref)})`}, true)`)
+      await setToken('e2e-native-shell.fake.token')
+      await reload()
+    }
+    assert.deepEqual(bad, [], 'the launch did not open on the homepage')
   })
 
   await check('phone notes list: category chips instead of a search box, the vault under the title, search on the capsule, one main button above the dock', async () => {

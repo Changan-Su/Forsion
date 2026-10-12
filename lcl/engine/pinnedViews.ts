@@ -40,16 +40,23 @@ export function missingPinned(pins: PinnedViews, panels: PanelRef[], known: (typ
 }
 
 /** 一页式 Space(types.ts 的 onePage)进来时的落点:该到前台的那个主区 leaf 的 id(已经在前台是 null),和该关掉的
- *  多余标签。没声明、或区里没有它的那一页时什么都不动(两项都空)—— 没有那一页就没有东西可落,别把别的标签关光。 */
+ *  东西 —— 多余的标签,以及两边抽屉里的面板(`sideLeaves`)。一页式 Space 没有侧栏:抽屉里有东西只可能是带进来的
+ *  (手机只存一份「正在用」的布局、不记是哪个 Space 的,启动却固定进主页 → 上次退出时那个 Space 的左栏跟着进了主页),
+ *  而左栏里有面板,两级导航就把这个 Space 当成「先看列表」的,那一页被压在列表后面。宿主自己挂的抽屉扩展(`__extend`)不算。
+ *  没声明、或区里没有它的那一页时什么都不动(两项都空)—— 没有那一页就没有东西可落,别把别的关光。 */
 export function onePageLanding(
   space: { onePage?: boolean; pinned?: PinnedViews } | undefined,
   mainLeaves: Array<{ id: string; type: string }>,
   activeMainId: string | null,
+  sideLeaves: Array<{ id: string; type: string }> = [],
 ): { activate: string | null; close: string[] } {
   const type = space?.onePage ? space.pinned?.main?.[0]?.type : undefined
   const rec = type ? mainLeaves.find((r) => r.type === type) : undefined
   if (!rec) return { activate: null, close: [] }
-  return { activate: rec.id !== activeMainId ? rec.id : null, close: mainLeaves.filter((r) => r.id !== rec.id).map((r) => r.id) }
+  return {
+    activate: rec.id !== activeMainId ? rec.id : null,
+    close: [...mainLeaves.filter((r) => r.id !== rec.id), ...sideLeaves.filter((r) => r.type !== '__extend')].map((r) => r.id),
+  }
 }
 
 /** 引擎自己的占位视图:不是内容,哪个 Space 都不算它的主人。 */

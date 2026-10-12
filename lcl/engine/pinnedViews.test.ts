@@ -554,6 +554,37 @@ describe('一页式 Space(onePage):落点与转开', () => {
     } finally { useSingle.getState().setPinned(undefined); useSingle.getState().resetLayout(); unregisterView('homev'); unregisterView('otherv') }
   })
 
+  it('落点:两边抽屉里的面板也关(一页式 Space 没有侧栏);宿主挂的抽屉扩展不算;没有那一页时照旧什么都不动', () => {
+    const sides = [{ id: 'workspace', type: 'workspace' }, { id: 'ext', type: '__extend' }, { id: 'outline', type: 'outline' }]
+    expect(onePageLanding(home, leaves, 'chat#1', sides)).toEqual({ activate: 'homev', close: ['chat#1', 'workspace', 'outline'] })
+    expect(onePageLanding(home, [leaves[0]], 'homev', sides)).toEqual({ activate: null, close: ['workspace', 'outline'] })
+    expect(onePageLanding(home, [leaves[1]], 'chat#1', sides)).toEqual({ activate: null, close: [] })
+    expect(onePageLanding({ pinned: home.pinned }, leaves, 'homev', sides)).toEqual({ activate: null, close: [] })
+  })
+
+  it('真的单列 store:启动时套上了别的 Space 的布局(主区是它的会话、左栏是它的列表)→ 落完只剩那一页,两边抽屉是空的', () => {
+    registerView({ type: 'homev', kind: 'page', displayName: 'Home', factory: () => null, singleton: true })
+    registerView({ type: 'otherv', kind: 'page', displayName: 'Other', factory: () => null })
+    registerView({ type: 'listv', kind: 'collection', displayName: 'List', factory: () => null })
+    try {
+      const ws = useSingle.getState()
+      ws.resetLayout(); ws.setPinned(undefined)
+      ws.openView('otherv', {}, 'main')
+      ws.openView('listv', {}, 'left')
+      ws.openView('listv', {}, 'right')
+      ws.setPinned(home.pinned)
+      ws.ensurePinned()
+      const got = useSingle.getState()
+      expect([got.leftLeaves.length, got.rightLeaves.length]).toEqual([1, 1]) // 带进来的侧栏还在:这就是「主页里是别人的列表」
+      const { activate, close } = onePageLanding(home, got.mainLeaves, got.activeMainId, [...got.leftLeaves, ...got.rightLeaves])
+      if (activate) ws.activateLeaf(activate)
+      for (const id of close) ws.closeLeaf(id, true)
+      const after = useSingle.getState()
+      expect(after.mainLeaves.map((r) => r.type)).toEqual(['homev'])
+      expect([after.leftLeaves.length, after.rightLeaves.length]).toEqual([0, 0])
+    } finally { useSingle.getState().setPinned(undefined); useSingle.getState().resetLayout(); unregisterView('homev'); unregisterView('otherv'); unregisterView('listv') }
+  })
+
   it('真的单列 store:布局里压根没有那一页(整份是别的视图)→ 先补回来才有得落', () => {
     registerView({ type: 'homev', kind: 'page', displayName: 'Home', factory: () => null, singleton: true })
     registerView({ type: 'otherv', kind: 'page', displayName: 'Other', factory: () => null })

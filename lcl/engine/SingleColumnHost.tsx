@@ -399,8 +399,8 @@ function iconRev(icon: object | undefined): number {
 function landOnList(): void {
   if (listFirstNow() && !useWorkspace.getState().leftVisible) useWorkspace.getState().toggleSidebar('left')
 }
-/** 一页式 Space(types.ts 的 onePage,主页)的落点:它那一页到前台,多出来的标签关掉(旧布局里留下的、认不出主人
- *  而开在这儿的)。别的 Space 是空操作。 */
+/** 一页式 Space(types.ts 的 onePage,主页)的落点:它那一页到前台,多出来的标签和两边抽屉里的面板关掉(旧布局里
+ *  留下的、认不出主人而开在这儿的、启动时跟着上一个 Space 的布局带进来的)。别的 Space 是空操作。 */
 function landOnOnePage(): void {
   const sp = getActiveSpace()
   if (!sp?.onePage) return
@@ -408,9 +408,14 @@ function landOnOnePage(): void {
   // 但那时补回来的排在后台,前台还是别的视图。
   useWorkspace.getState().ensurePinned()
   const ws = useWorkspace.getState()
-  const { activate, close } = onePageLanding(sp, ws.mainLeaves, ws.activeMainId)
+  const { activate, close } = onePageLanding(sp, ws.mainLeaves, ws.activeMainId, [...ws.leftLeaves, ...ws.rightLeaves])
   if (activate) ws.activateLeaf(activate)
   for (const id of close) ws.closeLeaf(id, true)
+  // 面板关光了,抽屉也收起来(开着的空抽屉 = 一张白页盖在那一页上)
+  for (const side of ['left', 'right'] as const) {
+    const now = useWorkspace.getState()
+    if (now[side === 'left' ? 'leftVisible' : 'rightVisible'] && !now[side === 'left' ? 'leftLeaves' : 'rightLeaves'].length) now.toggleSidebar(side)
+  }
 }
 /** 进 Space(冷启动还原 / 切进来 / 布局重置)之后的落点。 */
 function landOnEntry(): void { landOnOnePage(); landOnList() }
