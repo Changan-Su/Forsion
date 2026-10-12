@@ -10,19 +10,14 @@
  * 就能只兜底"没人要"的那些拖放,不抢内层已认领的。内部拖拽(Dockview 标签、文件树重排)用的是
  * 自定义 MIME,`types` 不含 'Files',天然被 hasFiles 排除。
  *
- * 附带:用 body[data-file-drag] 驱动全局拖拽高亮(纯 CSS,见 base.css)。
+ * 这里不画任何提示:原来那层圈住整个工作区的虚线遮罩(body[data-file-drag])2026-10-12 去掉了 ——
+ * 接不住文件的地方它也一起圈;真正能接的表面(聊天区、编辑器、文件树)各自给落点提示。
  */
 function hasFiles(e: DragEvent): boolean {
   return Array.from(e.dataTransfer?.types ?? []).includes('Files')
 }
 
 export function installFileDropGuard(): () => void {
-  let depth = 0 // dragenter/dragleave 逐元素成对触发,用计数判断是否真的离开了窗口
-  const setDrag = (on: boolean): void => {
-    if (on) { document.body.setAttribute('data-file-drag', '1'); return }
-    depth = 0
-    document.body.removeAttribute('data-file-drag')
-  }
   const onOver = (e: DragEvent): void => {
     if (!hasFiles(e) || e.defaultPrevented) return // 内层已认领 → 放行
     e.preventDefault() // 没人要 → 允许 drop 事件触发(下面吞掉),但禁止默认导航
@@ -31,28 +26,11 @@ export function installFileDropGuard(): () => void {
   const onDropBubble = (e: DragEvent): void => {
     if (hasFiles(e) && !e.defaultPrevented) e.preventDefault() // 没人要 → 吞掉,别导航走
   }
-  // 捕获阶段:任何 drop 都清高亮——含被内层 filesDrop 提前 stopPropagation 的文件树落点
-  // (那些 drop 到不了冒泡阶段的 document,只有 setDrag(false) 会漏,高亮会残留)。
-  const onDropClear = (): void => setDrag(false)
-  const onEnter = (e: DragEvent): void => { if (hasFiles(e)) { depth++; setDrag(true) } }
-  const onLeave = (e: DragEvent): void => { if (hasFiles(e)) { depth = Math.max(0, depth - 1); if (!depth) setDrag(false) } }
-  const clear = (): void => setDrag(false)
 
   document.addEventListener('dragover', onOver)
   document.addEventListener('drop', onDropBubble)
-  document.addEventListener('drop', onDropClear, true) // capture:先于内层 stopPropagation
-  document.addEventListener('dragenter', onEnter)
-  document.addEventListener('dragleave', onLeave)
-  window.addEventListener('dragend', clear)
-  window.addEventListener('blur', clear) // 拖出窗口外
   return () => {
     document.removeEventListener('dragover', onOver)
     document.removeEventListener('drop', onDropBubble)
-    document.removeEventListener('drop', onDropClear, true)
-    document.removeEventListener('dragenter', onEnter)
-    document.removeEventListener('dragleave', onLeave)
-    window.removeEventListener('dragend', clear)
-    window.removeEventListener('blur', clear)
-    document.body.removeAttribute('data-file-drag') // 卸载兜底,别留残影
   }
 }

@@ -34,7 +34,7 @@
 .ims .ims-empty-import { margin-top: 22px; padding-left: 0; color: var(--accent-ink); }
 .ims-empty small { margin-top: 6px; font-size: var(--ui-font-caption, 11px); color: var(--text-faint); }
 .ims-progress { position: absolute; top: 15px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 9px; max-width: 90%; padding: 9px 15px; border-radius: var(--radius-lg); background: var(--bg-card); color: var(--text-muted); box-shadow: var(--card-shadow); font-size: var(--ui-font-meta, 12px); z-index: 3; }
-.ims-drop { position: absolute; inset: 12px; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 16px; background: var(--bg-card); color: var(--accent-ink); border: 1.5px dashed var(--accent-ink); border-radius: var(--radius-lg); pointer-events: none; z-index: 5; }
+.ims-drop { position: absolute; inset: 12px; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 16px; background: var(--bg-card); color: var(--accent-ink); border-radius: var(--radius-lg); pointer-events: none; z-index: 5; }
 .ims-footer { padding: 8px 18px; display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: var(--ui-font-caption, 11px); color: var(--text-faint); flex-shrink: 0; }
 .ims-footer input { width: 140px; min-width: 0; border: 1px solid transparent; background: transparent; color: var(--text-muted); font: inherit; text-align: center; border-radius: var(--radius-sm); }
 .ims-footer input:focus { border-color: var(--border); outline-color: var(--accent-ink); }

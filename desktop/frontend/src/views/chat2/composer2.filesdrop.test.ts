@@ -1,11 +1,12 @@
 /**
  * OS 文件拖进聊天区的**接线**契约(2026-08-28:落区从输入框卡片提到整片聊天区)。
  *
- * 用户实报:拖着文件时满屏都在提示可落(fileDropGuard 的 .shell-work 虚线框),
- * 但只有 .t2c-card 那一小块真接得住。这里钉三件会静默退化的事:
+ * 用户实报:拖着文件时满屏都在提示可落(fileDropGuard 的 .shell-work 虚线框,2026-10-12 已删),
+ * 但只有 .t2c-card 那一小块真接得住。这里钉几件会静默退化的事:
  *   1 监听到底挂在**祖先**还是卡片上(挂错=又只有输入框能落,类型检查抓不到)
  *   2 只吃 'Files' —— 应用内引用拖拽(REF_MIME/PATHS_MIME)必须原样漏给 ChatView 的 refdrop
  *   3 选择器与 ChatView 根节点类名同步(改一处即断)
+ *   4 拖拽在别处结束时提示也要收(窗口级 dragend / drop / blur),否则会一直亮着
  *
  * 无 DOM 环境(vitest 跑 node),故用最小假节点;真机那一段由 DESIGN.md §8 的截图自查兜。
  */
@@ -33,14 +34,15 @@ const evt = (types: string[], files: any[] = []) => {
   const e: any = { dataTransfer: { types, files }, prevented: false, preventDefault: () => { e.prevented = true } }
   return e
 }
-/** 卡片 + 一个假的 .t2-chat-view 祖先 */
+/** 卡片 + 一个假的 .t2-chat-view 祖先(带假 window,供窗口级收尾挂监听) */
 const withZone = () => {
-  const card = mkEl(), zone = mkEl()
+  const card = mkEl(), zone = mkEl(), win = mkEl()
+  zone.ownerDocument = { defaultView: win }
   card.closest = (sel: string) => (sel === DROP_ZONE_SEL ? zone : null)
   const dragOver: boolean[] = []
   const got: any[] = []
   const off = bindFilesDropZone(card as any, (f) => got.push(f), (on) => dragOver.push(on))
-  return { card, zone, dragOver, got, off }
+  return { card, zone, win, dragOver, got, off }
 }
 
 describe('bindFilesDropZone', () => {
@@ -85,11 +87,23 @@ describe('bindFilesDropZone', () => {
     expect(card.attrs.size).toBe(0)
   })
 
+  it('拖拽在别处结束(内层吞了 drop / 松在窗口外 / 切走窗口)→ 窗口级收尾清高亮', () => {
+    for (const ev of ['dragend', 'drop', 'blur']) {
+      const { zone, win } = withZone()
+      zone.fire('dragover', evt(['Files']))
+      expect(zone.attrs.has('data-filedrop')).toBe(true)
+      win.fire(ev, {})
+      expect(zone.attrs.has('data-filedrop'), ev).toBe(false)
+    }
+  })
+
   it('卸载摘干净监听并清高亮(切会话/关标签不留残影)', () => {
-    const { zone, off } = withZone()
+    const { zone, win, off } = withZone()
     zone.fire('dragover', evt(['Files']))
+    expect(win.count()).toBe(3) // dragend / drop / blur
     off()
     expect(zone.count()).toBe(0)
+    expect(win.count()).toBe(0)
     expect(zone.attrs.has('data-filedrop')).toBe(false)
   })
 

@@ -1,8 +1,9 @@
 /**
- * Amadeus 拖入反馈守卫:
- *  1. 文档 / 画布都不再画整面虚线框;
+ * 拖入反馈守卫(全应用;2026-10-12 之前只管 Amadeus,聊天区和工作区遮罩的同款虚线框因此留到了 2.13.2):
+ *  1. 任何样式表里,带拖拽 / 落区状态的选择器都不许画虚线边框或虚线轮廓;
  *  2. 文档只留顶部短光条,画布只留舞台顶部短光条,两者不叠;
- *  3. CanvasStage 退出画布或拖拽在别处结束时会主动清掉瞬态 class。
+ *  3. CanvasStage 退出画布或拖拽在别处结束时会主动清掉瞬态 class;
+ *  4. 聊天区:整块淡染 + 输入框亮起,不描边;拖拽在别处结束时窗口级收尾。
  *
  * 跑:npm run check:dropfeedback
  */
@@ -46,6 +47,26 @@ check(
   `检查 ${dropRules.length} 个 dragover/dropzone 规则块`,
 )
 
+// 全应用:带拖拽 / 落区状态的选择器不许画虚线边框 / 轮廓(注释先剥掉,免得注释里的字眼算进选择器)。
+const walkCss = (dir) => fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => (
+  e.name === 'node_modules' ? [] : e.isDirectory() ? walkCss(path.join(dir, e.name)) : e.name.endsWith('.css') ? [path.join(dir, e.name)] : []
+))
+const DASHED = /\b(?:outline|border)(?:-[\w-]+)?\s*:[^;{}]*\bdashed\b/i
+const DRAG_STATE = /drag|(?<!back)drop(?!down)/i
+// 拖动时的落位占位(日历拖日程、仪表盘拖卡片;不是包住整块的框)。要不要也去掉 2026-10-12 已问用户、未答;答了之后删掉这两条。
+const PENDING = ['.amx-cal-dropghost', '.dash3-card[data-dragging]']
+const cssFiles = [path.join(ROOT, 'frontend/src'), path.join(ROOT, '../lcl')].flatMap(walkCss)
+const offenders = cssFiles.flatMap((file) => (
+  [...fs.readFileSync(file, 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').matchAll(/([^{}]*)\{([^{}]*)\}/g)]
+    .filter((m) => DRAG_STATE.test(m[1]) && DASHED.test(m[2]) && !PENDING.some((sel) => m[1].includes(sel)))
+    .map((m) => `${path.relative(ROOT, file)}: ${m[1].trim().slice(0, 80)}`)
+))
+check(
+  'A2 全应用:拖拽 / 落区状态的规则没有 dashed outline / border',
+  cssFiles.length > 20 && offenders.length === 0,
+  offenders.length ? offenders.join(' | ') : `扫了 ${cssFiles.length} 个样式表`,
+)
+
 const cleanupBlock = canvasSource.match(/return \(\) => \{[\s\S]*?\n\s*\}\n\s*\}, \[active, toStage\]\)/)?.[0] ?? ''
 check(
   'B CanvasStage effect 清理会主动移除 amx-dropzone',
@@ -59,6 +80,15 @@ for (const event of ['dragend', 'drop', 'blur']) {
       && new RegExp(`window\\.removeEventListener\\('${event}', clearDropzone\\)`).test(cleanupBlock),
   )
 }
+
+// 聊天区的引用拖拽(ChatView 的 refDrop):拖拽在别处结束也要收。OS 文件那条(data-filedrop)由 composer2.filesdrop.test.ts 钉。
+const chatView = fs.readFileSync(path.join(ROOT, 'frontend/src/views/ChatView.tsx'), 'utf8')
+const refClear = chatView.match(/if \(!refDrop\) return[\s\S]*?\}, \[refDrop\]\)/)?.[0] ?? ''
+check(
+  'H 聊天区 refdrop 在 dragend / drop / blur 时窗口级收尾并卸载监听',
+  ['dragend', 'drop', 'blur'].every((ev) => refClear.includes(`window.addEventListener('${ev}', clear`) && refClear.includes(`window.removeEventListener('${ev}', clear`)),
+  refClear ? '' : '未找到 refDrop 的收尾 effect',
+)
 
 ;(async () => {
   const browser = await chromium.launch({ executablePath: findChromium() })
@@ -133,6 +163,32 @@ for (const event of ['dragend', 'drop', 'blur']) {
       && measured.inactiveCue.content === 'none',
     JSON.stringify({ stage: measured.inactiveStage, cue: measured.inactiveCue }),
   )
+
+  // 聊天区:两种拖入标记下都是「整块淡染 + 输入框亮起」,伪元素不描边。
+  await page.setContent(`<!doctype html>
+    <style>
+      :root { --accent-ink: rgb(45, 170, 190); --bg-card: rgb(40, 40, 40); }
+      ${fs.readFileSync(path.join(ROOT, '../lcl/components/chatBox.css'), 'utf8')}
+      ${fs.readFileSync(path.join(ROOT, 'frontend/src/views/chat2/chat2.css'), 'utf8')}
+      .t2-chat-view { width: 600px; height: 200px; margin: 10px; }
+    </style>
+    <div id="files" class="t2-chat-view" data-filedrop><div class="t2c-card"></div></div>
+    <div id="refs" class="t2-chat-view refdrop"><div class="t2c-card"></div></div>
+    <div id="idle" class="t2-chat-view"><div class="t2c-card"></div></div>`)
+  const chat = await page.evaluate(() => Object.fromEntries(['files', 'refs', 'idle'].map((id) => {
+    const el = document.getElementById(id)
+    const wash = getComputedStyle(el, '::after'); const card = getComputedStyle(el.querySelector('.t2c-card'))
+    return [id, { content: wash.content, washBorder: wash.borderTopStyle, washOutline: wash.outlineStyle, washBg: wash.backgroundColor, cardBorder: card.borderTopColor }]
+  })))
+  for (const id of ['files', 'refs']) {
+    check(
+      `I 聊天区 ${id}:整块淡染不描边,输入框描边换主题色`,
+      chat[id].content !== 'none' && chat[id].washBorder === 'none' && chat[id].washOutline === 'none'
+        && chat[id].washBg !== 'rgba(0, 0, 0, 0)' && chat[id].cardBorder === 'rgb(45, 170, 190)',
+      JSON.stringify(chat[id]),
+    )
+  }
+  check('J 聊天区平时什么都不画', chat.idle.content === 'none' && chat.idle.cardBorder !== 'rgb(45, 170, 190)', JSON.stringify(chat.idle))
 
   await browser.close()
   const failed = results.filter((r) => !r.ok)

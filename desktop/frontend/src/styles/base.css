@@ -4339,7 +4339,8 @@ html.dark .brand-logo--dark { display: inline-block; }
 /* ── 文件区:选中 / 拖入目标 / OS 文件悬停 ── */
 .file-row.selected { background: var(--accent-light); }
 .file-row.drop-target { background: var(--accent-light); box-shadow: inset 0 0 0 1px var(--accent-ink); }
-.wsfiles.dragover { outline: 2px dashed var(--accent-ink); outline-offset: -3px; border-radius: var(--radius-md); }
+/* 整块淡染,不描边(与聊天区同一画法;虚线框 2026-10-12 去掉,check:dropfeedback 守着) */
+.wsfiles.dragover { background: color-mix(in srgb, var(--accent-ink) 5%, transparent); border-radius: var(--radius-md); }
 
 /* ── Office 预览(docx / xlsx / pptx) ── */
 .wsfile-office { line-height: 1.7; font-size: var(--ui-font-body, 13px); color: var(--text); }
@@ -4863,21 +4864,6 @@ html.dark .brand-logo--dark { display: inline-block; }
   }
   .settings-page:not(.settings-page--mobile) .settings-nav-list button.active { background: var(--accent-light); }
   .settings-page:not(.settings-page--mobile) > .settings-main { flex: 1 1 auto; min-height: 0; }
-}
-
-/* ── OS 文件拖入工作区时的全局提示遮罩 ──────────────────────────────────
-   fileDropGuard 置 body[data-file-drag];pointer-events:none 保证不挡真正的落点处理
-   (编辑器 .amx-dragover / 文件树 .amx-drop-into / .amx-drop-root 高亮更强,指示真正可落处)。 */
-body[data-file-drag] .shell-work { position: relative; }
-body[data-file-drag] .shell-work::after {
-  content: '';
-  position: absolute;
-  inset: 6px;
-  z-index: 30;
-  pointer-events: none;
-  border: 2px dashed rgba(76, 110, 245, 0.55);
-  border-radius: var(--radius-md, 12px);
-  background: rgba(76, 110, 245, 0.05);
 }
 
 /* ── remotesync 设置页进度条(执行阶段定宽,对账阶段不定态滑动)── */
