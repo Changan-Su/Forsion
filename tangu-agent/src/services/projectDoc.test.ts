@@ -18,13 +18,14 @@ beforeAll(() => {
   //   <root>/repo/.git/HEAD             ← 项目根标记
   //   <root>/repo/AGENTS.md
   //   <root>/repo/pkg/CLAUDE.md         ← 中间层用别家文件名
-  //   <root>/repo/pkg/app/AGENTS.md + CLAUDE.md   ← 同层两份,只取第一个命中的
+  //   <root>/repo/pkg/app/AGENTS.md + CLAUDE.md   ← 同层两份,两个家族各取一份
   w('AGENTS.md', '库外的约定,不该出现');
   w('repo/.git/HEAD', 'ref: refs/heads/main');
   w('repo/AGENTS.md', '仓库通则');
   w('repo/pkg/CLAUDE.md', '包级约定');
   w('repo/pkg/app/AGENTS.md', '应用级约定');
-  w('repo/pkg/app/CLAUDE.md', '同层次选,不该出现');
+  w('repo/pkg/app/CLAUDE.md', '同层另一份,也要读到');
+  w('repo/pkg/app/.agents/AGENTS.md', '同家族次选,不该出现');
 });
 afterAll(() => rmSync(root, { recursive: true, force: true }));
 
@@ -72,12 +73,13 @@ describe('项目根定位', () => {
 });
 
 describe('沿途收集', () => {
-  it('根 → cwd 顺序,且每层只取首个命中的文件名', () => {
+  it('根 → cwd 顺序;同层 AGENTS.md 与 CLAUDE.md 都读,同家族的两个位置只取第一个', () => {
     const paths = projectDocPaths(path.join(root, 'repo/pkg/app'));
     expect(paths).toEqual([
       path.join(root, 'repo/AGENTS.md'),
       path.join(root, 'repo/pkg/CLAUDE.md'),
       path.join(root, 'repo/pkg/app/AGENTS.md'),
+      path.join(root, 'repo/pkg/app/CLAUDE.md'),
     ]);
   });
 
@@ -90,7 +92,36 @@ describe('沿途收集', () => {
     const doc = loadProjectDoc(path.join(root, 'repo/pkg/app'))!;
     expect(doc.text.indexOf('仓库通则')).toBeLessThan(doc.text.indexOf('包级约定'));
     expect(doc.text.indexOf('包级约定')).toBeLessThan(doc.text.indexOf('应用级约定'));
-    expect(doc.text).not.toContain('同层次选,不该出现');
+    expect(doc.text.indexOf('应用级约定')).toBeLessThan(doc.text.indexOf('同层另一份,也要读到'));
+    expect(doc.text).not.toContain('同家族次选,不该出现');
+  });
+
+  it('同层两份正文一模一样(CLAUDE.md 是 AGENTS.md 的拷贝)→ 只收一次', () => {
+    w('dup/AGENTS.md', '同一份约定');
+    w('dup/CLAUDE.md', '同一份约定\n');
+    const doc = loadProjectDoc(path.join(root, 'dup'))!;
+    expect(doc.sources).toEqual([path.join(root, 'dup/AGENTS.md')]);
+  });
+
+  it('⚠️去重只在同层:跨层重复是覆盖顺序,最里层那份不能丢(codex)', () => {
+    w('ovr/.git/HEAD', 'ref: refs/heads/main');
+    w('ovr/AGENTS.md', 'Use npm');
+    w('ovr/pkg/AGENTS.md', 'Use pnpm');
+    w('ovr/pkg/app/AGENTS.md', 'Use npm');
+    const doc = loadProjectDoc(path.join(root, 'ovr/pkg/app'))!;
+    expect(doc.sources).toHaveLength(3);
+    expect(doc.text.lastIndexOf('Use npm')).toBeGreaterThan(doc.text.indexOf('Use pnpm'));
+  });
+
+  it('⚠️同层两份大文件一模一样:第二份读进来已被额度截短也要认出来,不能吃光额度挤掉下层(codex)', () => {
+    const big = '约定:多字节也要对得上。\n'.repeat(700); // ~24KB,两份加起来超 32KB
+    w('twin/.git/HEAD', 'ref: refs/heads/main');
+    w('twin/AGENTS.md', big);
+    w('twin/CLAUDE.md', big);
+    w('twin/app/AGENTS.md', '下层的短约定');
+    const doc = loadProjectDoc(path.join(root, 'twin/app'))!;
+    expect(doc.sources).toEqual([path.join(root, 'twin/AGENTS.md'), path.join(root, 'twin/app/AGENTS.md')]);
+    expect(doc.truncated).toBe(false);
   });
 
   it('没有任何一份 → null(不产生空段)', () => {
