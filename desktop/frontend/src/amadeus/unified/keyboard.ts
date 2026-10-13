@@ -652,6 +652,12 @@ function arrowEmbedSource(dir: 'up' | 'down' | 'left' | 'right'): Command {
       const container = $h.node(d - 1)
       const paragraph = state.schema.nodes.paragraph
       if (!paragraph || !container.canReplaceWith($h.index(d - 1) + 1, $h.index(d - 1) + 1, paragraph)) return false
+      // 这一支要改文档,只认 PM 与 DOM 选区一致的时刻(同 codeExit):紧挨着一下原生 ← 按下时 selectionchange 还没到,
+      // state 还停在「源码末尾」,照它判就凭空多出一段。不一致交回原生。
+      const dom = (view.root as Document).getSelection?.()
+      if (dom?.anchorNode && view.dom.contains(dom.anchorNode)) {
+        try { if (view.posAtDOM(dom.anchorNode, dom.anchorOffset) !== $h.pos) return false } catch { return false }
+      }
       if (!dispatch) return true
       const tr = state.tr.insert(at, paragraph.create())
       dispatch(tr.setSelection(TextSelection.create(tr.doc, at + 1)).scrollIntoView())
@@ -662,10 +668,12 @@ function arrowEmbedSource(dir: 'up' | 'down' | 'left' | 'right'): Command {
       dispatch?.(state.tr.setSelection(NodeSelection.create(state.doc, targetPos)).scrollIntoView())
       return true
     }
-    const next = target.isTextblock && !target.type.spec.code
+    let next: Selection | null = target.isTextblock && !target.type.spec.code
       ? TextSelection.create(state.doc, targetPos + 1 + (dir === 'down' ? Math.min(col, target.content.size) : 0))
       : Selection.findFrom(state.doc.resolve(targetPos), 1, true)
     if (!next) return false
+    // 容器(引用 / 列表…)里打头的是一块不露源码的嵌入:光标落进去 = 进了看不见的源码,接着打的字全写在里面。改成选中那一块。
+    if (next instanceof TextSelection && isArrowAtomBlock(next.$head.parent)) next = NodeSelection.create(state.doc, next.$head.before())
     dispatch?.(state.tr.setSelection(next).scrollIntoView())
     return true
   }

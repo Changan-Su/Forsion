@@ -3092,7 +3092,7 @@ body.amx-marquee-active * {
 .am-app .milkdown .ProseMirror .unified-embed-soft > img.ProseMirror-separator,
 .am-app .milkdown .ProseMirror .unified-embed-soft > br.ProseMirror-trailingBreak { display: none; }
 /* 源码行露着时失焦:行内双链层会把 `[[…]]` 那段再藏一次、只剩一个 `!`;这一行照原样整段显示。 */
-.unified-body .unified-embed-src .wikilink-src-hidden { display: inline; }
+.unified-body .unified-embed-src > .wikilink-src-hidden { display: inline; } /* 只认本段自己的源码:被嵌笔记正文里的双链源码不许跟着露出来 */
 .unified-body .unified-embed-src > .unified-embed { margin-top: 4px; }
 /* 交互块(```forsion-sketch)由嵌入层渲成 sketch 卡:代码块工具条(语言 / 复制 / 折行)压在卡上没有意义,
    源码走嵌入层悬停的 `</>`。按钮块是在 codeBlock.ts 里摘掉工具条的,这里用 CSS 免得再动那份 nodeView。 */

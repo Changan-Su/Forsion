@@ -887,15 +887,13 @@ function makePageStore(opts: PageStoreOptions = {}) {
           window.dispatchEvent(ev)
           if ((ev.detail as { handled: boolean }).handled) return
         }
-        // 有时刻锚才改道应用内播放器:裸 `[[a.mp4]]` 维持原样交系统播放器(那是既有语义,
-        // 本轮只修「时间戳静默丢失」这半边;要不要把裸链也收进应用内是另一个决定)。
+        // 应用内播放器。裸 `[[a.mp4]]` 也走这里(2026-10-13 用户定:文件类双链点了开在旁边的分屏;此前只有带时刻锚的
+        // 才开应用内、裸链交系统播放器,那样「开在旁边」对它就是一句空话)。
         // 动态 import:amadeusNav 反向 import 本模块,静态引会绕出模块环。
-        if (hit && media.loc) {
-          const loc = media.loc
+        if (hit) {
+          const loc = media.loc ?? undefined
           void import('../../amadeusNav').then((m) => m.openMedia(hit, loc, { newTab: opts?.newTab, split: opts?.split }))
-          return
         }
-        if (hit) void amadeus.openVaultFile?.(hit)?.catch(() => {})
         return // 带 # 的名字落「创建笔记」兜底无意义,同 PDF 分支
       }
       // 裸 URL [[https://…]] → 外链。**绝不落「创建笔记」兜底**:此前它过不了下面三道解析,
@@ -946,12 +944,18 @@ function makePageStore(opts: PageStoreOptions = {}) {
         else void get().loadPage(match)
         return
       }
-      // 文件命名空间([[xxx.db]]/[[photo.png]],页面未命中才轮到):.db 应用内开
-      // (渲染层不 import 宿主 openDb,发事件由 amadeusOverlays 接;无监听的宿主静默),其余系统程序打开。
+      // 文件命名空间([[xxx.db]]/[[photo.png]],页面未命中才轮到):.db 应用内开(渲染层不 import 宿主 openDb,发事件由
+      // amadeusOverlays 接),其余交宿主的 openFile —— 与文件树点开同一条路:应用里开得了的(图片、插件声明的文件类型、
+      // 本地 .html…)开在应用里并认 newTab / split,开不了的它自己回落系统默认程序。此前这里一律直交系统程序,
+      // 「新标签页 / 开在旁边」对这些文件全是空话。handled 回执:没挂监听的宿主照旧直交系统程序,不能点了没反应。
       const file = resolveFileName(wanted, get().files, src)
       if (file) {
         if (/\.db$/i.test(file)) window.dispatchEvent(new CustomEvent('amadeus:open-db', { detail: { path: file, newTab: opts?.newTab, split: opts?.split } }))
-        else void amadeus.openVaultFile?.(file)?.catch(() => {})
+        else {
+          const ev = new CustomEvent('amadeus:open-file', { detail: { path: file, newTab: opts?.newTab, split: opts?.split, handled: false } })
+          window.dispatchEvent(ev)
+          if (!(ev.detail as { handled: boolean }).handled) void amadeus.openVaultFile?.(file)?.catch(() => {})
+        }
         return
       }
       // 名字直接命中库里的一个**已存在文件**(插件声明的文件类型走这条:`[[图.mindmap.md]]`、

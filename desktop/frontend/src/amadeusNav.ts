@@ -379,6 +379,14 @@ function blankDashboard(title: string): string {
   return compile(manifest, {})
 }
 
+/** openFile 会不会把这份文件开成主区里的一个标签(= 认得「新标签页 / 开在旁边」)。本地 .html(内置浏览器不认落点)、
+ *  没人认领的类型(交系统默认程序)不算 —— 双链右键菜单据此决定给不给那两项。次序照 openFile。 */
+export function opensAsTab(path: string): boolean {
+  if (isDrawingPath(path) || isDashboardPath(path)) return true
+  if (!(isOverridableBuiltinType(path) && matchFileType(path)) && ['amadeus-db', 'amadeus-pdf', 'amadeus-image'].some((t) => extHit(path, t))) return true
+  return isMediaPath(path) || (!/\.html?$/i.test(path) && !!matchFileType(path))
+}
+
 /** 打开一个「插件文件类型」文件到通用 amadeus-plugin-file 视图:已有认领该文件的 tab
  *  → 激活;否则主区打开。新建后打开时该文件可能还没进结构 → 先刷新树再开。非插件文件类型回落系统默认程序。
  *  page / quote = 带落点的打开(笔记里的 `[[x.pdf#page=3]]`、聊天引用;目前只有 PDF 有落点):跟着「默认打开方式」

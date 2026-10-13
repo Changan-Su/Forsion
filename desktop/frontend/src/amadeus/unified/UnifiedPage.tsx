@@ -3325,7 +3325,6 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
           style={mode === 'source' ? { display: 'none' } : undefined}
           aria-hidden={mode === 'source' || undefined}
           data-bare
-          data-wiki-src={path /* 双链右键菜单按它就近解析目标(amadeusLinkMenu) */}
           onFocusCapture={() => { touchActive(); bodyUsed.current = true; setFocusedBlockApply(stableApply) }}
           onPointerDownCapture={touchActive}
         >

@@ -344,18 +344,25 @@ function openTabBeside(api: DockviewApi, beside: IDockviewPanel, type: string, p
   return makeLeaf(panel)
 }
 
-/** 就地把 panel 换成另一种视图(navigateLeaf 的本体,不带固定守卫)。旧视图参数全清,不残留。 */
-/** openView 的 split 落点:主区已经分成几半 → 落在 cur 旁边那一半里(优先右手边最近的,没有就取左手边最近的),
- *  当新标签开;只有一半 → 从 cur 向右分出一半。反复点不会越分越多。 */
+/** openView 的 split 落点:主区里已经有和 cur 左右并排的另一半 → 落在那一半里当新标签开(优先右手边最近的,没有就取
+ *  左手边最近的);没有 → 从 cur 向右分出一半。反复点不会越分越多。上下叠着的、浮动的组不算「旁边」。 */
 function besidePanePosition(api: DockviewApi, cur: IDockviewPanel): Record<string, unknown> {
-  const left = (g: Group): number => g.element.getBoundingClientRect().left
-  const here = left(cur.group)
-  const others = [...new Set(panelsAt(api, 'main').map((p) => p.group))].filter((g) => g.id !== cur.group.id)
-  const pick = others.filter((g) => left(g) > here).sort((a, b) => left(a) - left(b))[0]
-    ?? others.sort((a, b) => Math.abs(left(a) - here) - Math.abs(left(b) - here))[0]
+  if (cur.group.api.location.type !== 'grid') return { referencePanel: cur.id, direction: 'within' }
+  const box = (g: Group): DOMRect => g.element.getBoundingClientRect()
+  const mid = (g: Group): number => { const b = box(g); return b.left + b.width / 2 }
+  const here = box(cur.group)
+  const sides = [...new Set(panelsAt(api, 'main').map((p) => p.group))].filter((g) => {
+    if (g.id === cur.group.id || g.api.location.type !== 'grid') return false
+    const b = box(g)
+    return b.width > 0 && b.top < here.bottom - 1 && b.bottom > here.top + 1 && Math.abs(mid(g) - mid(cur.group)) > 1
+  })
+  // 左右按中线分(分隔条那几像素的缝 / 叠边不影响),各取离 cur 最近的一个。
+  const pick = sides.filter((g) => mid(g) > mid(cur.group)).sort((x, y) => mid(x) - mid(y))[0]
+    ?? sides.sort((x, y) => mid(y) - mid(x))[0]
   return pick ? { referenceGroup: pick.id, direction: 'within' } : { referencePanel: cur.id, direction: 'right' }
 }
 
+/** 就地把 panel 换成另一种视图(navigateLeaf 的本体,不带固定守卫)。旧视图参数全清,不残留。 */
 function swapLeaf(api: DockviewApi, panel: IDockviewPanel, type: string, params: Record<string, unknown>): Leaf | null {
   const def = getView(type)
   if (!def) return null

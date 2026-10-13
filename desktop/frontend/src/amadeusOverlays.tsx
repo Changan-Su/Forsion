@@ -171,8 +171,10 @@ export function AmadeusOverlays() {
   // 页面列表里永远查不到)。openFile 会按内置 → 插件 → 系统默认程序依次路由。
   useEffect(() => {
     const onOpenFile = (e: Event): void => {
-      const d = (e as CustomEvent<{ path?: string; newTab?: boolean; split?: boolean }>).detail
-      if (typeof d?.path === 'string' && d.path) openFile(d.path, { newTab: d.newTab, split: d.split })
+      const d = (e as CustomEvent<{ path?: string; newTab?: boolean; split?: boolean; handled?: boolean }>).detail
+      if (typeof d?.path !== 'string' || !d.path) return
+      d.handled = true // 回执:pageStore 据此知道有宿主接了,不用自己回落系统程序
+      openFile(d.path, { newTab: d.newTab, split: d.split })
     }
     window.addEventListener('amadeus:open-file', onOpenFile)
     return () => window.removeEventListener('amadeus:open-file', onOpenFile)

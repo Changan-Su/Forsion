@@ -307,7 +307,7 @@ function CrossNoteEmbed({ target, pagePath, readOnly }: { target: string; pagePa
   const et = embed && embed !== 'loading' ? getBlockType(embed.type) : undefined
   const EmbedEditor = et?.Editor
   return (
-    <div className="embed-body" data-wiki-src={embed && embed !== 'loading' ? embed.owner : undefined /* 嵌入体里的双链按被嵌笔记解析 */}>
+    <div className="embed-body">
       <div className="embed-head">
         <span className="embed-badge" title={t('uembed.crossNote')}>{t('uembed.badge')}</span>
         {embed && embed !== 'loading' && (
