@@ -50,11 +50,16 @@ describe('输入建议', () => {
     expect(shown()).toBeUndefined()
   })
 
-  it('已经在打字了 → 不拉(灰字只在空输入框里出现)', async () => {
+  it('常驻:输入框里有字也照拉照存(有字时只是藏着,删空就显示);不是眼前的会话也一样', async () => {
     setPromptSuggest(true)
     setDraftField('s1', 'text', '我自己写')
+    fetchMock.mockResolvedValueOnce(json({ suggestion: '跑一下测试' }))
     await requestSuggestion('s1', 'r1')
-    expect(fetchMock).not.toHaveBeenCalled()
+    expect(shown()).toBe('跑一下测试')
+    fetchMock.mockResolvedValueOnce(json({ suggestion: '后台那句' }))
+    await requestSuggestion('s2', 'r9') // 眼前是 s1
+    expect(shown('s2')).toBe('后台那句')
+    expect(shown()).toBe('跑一下测试')
   })
 
   it('新的一轮结束先作废上一句;在飞时被作废的那句回来也不要', async () => {
@@ -66,15 +71,16 @@ describe('输入建议', () => {
     const pending = requestSuggestion('s1', 'r2')
     expect(shown()).toBeUndefined() // 一发起就清掉旧的
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2)) // 请求真的发出去了(engineFetch 内部先过几个微任务)
-    clearSuggestion('s1') // 用户发了新消息 / 开始打字
+    clearSuggestion('s1') // 用户发了新消息,新一轮起跑
     release(json({ suggestion: '迟到的' }))
     await pending
     expect(shown()).toBeUndefined()
   })
 
-  it('请求在路上时用户打了字 / 关了开关:回来的那句不落地', async () => {
-    setPromptSuggest(true)
-    for (const interrupt of [() => setDraftField('s1', 'text', '我自己写'), () => localStorage.removeItem(PROMPT_SUGGEST_KEY)]) {
+  it('请求在路上时用户打了字:回来的那句照样落地;关了开关:不落地', async () => {
+    for (const [interrupt, landed] of [[() => setDraftField('s1', 'text', '我自己写'), '迟到的'], [() => localStorage.removeItem(PROMPT_SUGGEST_KEY), undefined]] as const) {
+      setPromptSuggest(true)
+      usePromptSuggest.setState({ bySession: {} })
       let release: (r: Response) => void = () => {}
       fetchMock.mockImplementationOnce(() => new Promise<Response>((resolve) => { release = resolve }))
       const pending = requestSuggestion('s1', 'r1')
@@ -82,10 +88,23 @@ describe('输入建议', () => {
       interrupt()
       release(json({ suggestion: '迟到的' }))
       await pending
-      expect(shown()).toBeUndefined()
+      expect(shown()).toBe(landed)
       fetchMock.mockClear()
       useComposerDrafts.setState({}, true)
     }
+  })
+
+  it('新一轮起跑(appStore.subscribeRun)就作废上一句 —— 不靠这个会话的输入框挂没挂着', async () => {
+    setPromptSuggest(true)
+    fetchMock.mockResolvedValueOnce(json({ suggestion: '旧的' }))
+    await requestSuggestion('s1', 'r1')
+    expect(shown()).toBe('旧的')
+    fetchMock.mockImplementation(() => new Promise<Response>(() => {})) // 事件流挂住
+    vi.useFakeTimers() // subscribeRun 会挂一个 30 秒一次的看门狗,用完清掉
+    try {
+      useApp.getState().subscribeRun('s1', 'r2', 'a2')
+      expect(shown()).toBeUndefined()
+    } finally { vi.clearAllTimers(); vi.useRealTimers() }
   })
 
   it('关掉开关:已有的建议一并清空', async () => {

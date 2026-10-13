@@ -3,11 +3,13 @@
  *
  * 钉住的产品契约:
  *  ① 开关默认关:一轮结束后**一次**建议请求都不发,输入框还是平常的占位文字;
- *  ② 设置 → 外观里把「输入建议」打开(真点开关)后,一轮结束就向引擎拉一次(带上刚结束的 run),
+ *  ② 设置 → 高级 → 测试性功能里把「输入建议」打开(真点开关)后,一轮结束就向引擎拉一次(带上刚结束的 run),
  *     拿到的那句成了空输入框里的灰字(占位文字);
  *  ③ Tab:那句进了输入框、没有发出去,光标在句尾;
- *  ④ 动手打字 = 不要这句了:删空以后回到平常的占位文字;
- *  ⑤ 新一轮起跑,上一轮的建议作废;输入框里已经有字的那一轮不拉。
+ *  ④ 常驻(2026-10-13 用户定:和占位文字一样):Tab 采用后删空、打过字再删空、换 Space / 换会话 / 新开标签页再回来,
+ *     灰字都还在;
+ *  ⑤ 只有新一轮起跑才作废上一句;输入框里已经有字的那一轮照拉,删空就显示;
+ *  ⑥ 这一轮跑着的时候切到别的会话,收尾照拉,切回来灰字在。
  *
  * 需先 npm run build。用法:npm run check:promptsuggest
  * 负对照:node scripts/prompt-suggest.check.cjs --nc(不开开关 → ②③ 的断言必须转红)。
@@ -27,17 +29,22 @@ const SHOTS = {
   setting: path.join(os.tmpdir(), 'forsion-promptsuggest-setting.png'),
 }
 const SUGGESTION = '跑一下测试看看'
+// 后两轮各回一句不一样的:证明显示的是「这一轮」的那句,不是上一轮留下的
+const SUGGESTION_5 = '把结果贴给我'
+const SUGGESTION_6 = '后台那一轮的下一句'
 const results = []
 function check(name, ok, detail) {
   results.push({ name, ok: !!ok })
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? '  | ' + detail : ''}`)
 }
 
-const SESSION = {
-  id: 'suggest-s1', title: '输入建议验收', summary: '', model_id: 'm1', archived: false, emoji: null,
+const mkSession = (id, title) => ({
+  id, title, summary: '', model_id: 'm1', archived: false, emoji: null,
   agent_config: null, project_path: '/tmp/suggest-demo', project_name: 'suggest-demo',
   created_at: '2026-10-10 09:00:00', updated_at: '2026-10-10 09:00:00',
-}
+})
+const SESSION = mkSession('suggest-s1', '输入建议验收')
+const OTHER = mkSession('suggest-s2', '另一个会话')
 
 async function waitFor(fn, ms = 8000) {
   const t0 = Date.now()
@@ -48,20 +55,26 @@ async function waitFor(fn, ms = 8000) {
   return false
 }
 
+/** 点 Ribbon 上名字对得上(inAgent)/ 对不上(!inAgent)的第一个 Space。 */
+async function clickSpace(win, inAgent) {
+  await win.evaluate((want) => {
+    const b = [...document.querySelectorAll('button.rb-space')].find((x) => /Agent|Tangu/.test(x.getAttribute('aria-label') || x.getAttribute('title') || x.textContent || '') === want)
+    if (b) b.click()
+  }, inAgent)
+  await win.waitForTimeout(1500)
+}
+
 /** 同 queued-commands.e2e:切到 Agent Space → 侧栏切「会话」→ 点会话行。 */
-async function openChatSession(win) {
+async function openChatSession(win, title = SESSION.title) {
   await win.waitForSelector('.dv-groupview', { timeout: 30_000 })
   await win.waitForTimeout(1000)
-  await win.evaluate((names) => {
-    const b = [...document.querySelectorAll('button.rb-space')].find((x) => names.some((n) => (x.getAttribute('aria-label') || x.getAttribute('title') || x.textContent || '').includes(n)))
-    if (b) b.click()
-  }, ['Agent', 'Tangu'])
-  await win.waitForTimeout(1500)
+  await clickSpace(win, true)
   if (!(await win.locator('.t2s-search input').first().count().catch(() => 0))) {
-    await win.click('.dv-edge-left').catch(() => {})
+    // 短超时:侧栏本来就开着时没有这个把手,缺省要白等 30 秒 —— 那一轮挂着的 run 会被拖到别的时间点上去
+    await win.click('.dv-edge-left', { timeout: 1500 }).catch(() => {})
     await win.waitForTimeout(700)
   }
-  const row = win.locator('.t2s-srow', { hasText: SESSION.title }).first()
+  const row = win.locator('.t2s-srow', { hasText: title }).first()
   if (!(await row.count().catch(() => 0))) {
     const shot = path.join(os.tmpdir(), 'forsion-promptsuggest-nav-fail.png')
     await win.screenshot({ path: shot })
@@ -77,13 +90,22 @@ async function main() {
     process.exit(1)
   }
   const asked = []
+  let reply = SUGGESTION
+  const holding = new Set() // 挂着没收尾的 run
   const stub = await startStubEngine({
-    sessions: [SESSION], messages: [],
+    sessions: [SESSION, OTHER], messages: [],
     models: [{ id: 'm1', name: 'Stub 模型', provider: 'stub', contextWindow: 128_000 }],
+    // 桩的在飞列表恒空;挂着的 run 得照真引擎那样报「还在跑」,否则桌面 30 秒一次的看门狗会把它当成
+    // 「引擎已经不跑了」提前收掉,那一轮的 done 再到就没人理(⑥ 第一版就是这么假红的)。
+    override: async ({ path: p, method, url }) => {
+      if (method !== 'GET' || p !== '/agent/runs') return undefined
+      const sid = url.searchParams.get('session_id')
+      return { runs: stub.seen.runs.filter((r) => r.sessionId === sid && holding.has(r.runId)).map((r) => ({ id: r.runId, status: 'running', assistant_message_id: null })) }
+    },
     handle: async ({ path: p, method, body }) => {
       if (method === 'POST' && /^\/agent\/sessions\/[^/]+\/suggest$/.test(p)) {
         asked.push(await body())
-        return { suggestion: SUGGESTION, usage: { prompt: 1000, cached: 950, completion: 6 } }
+        return { suggestion: reply, usage: { prompt: 1000, cached: 950, completion: 6 } }
       }
       return undefined
     },
@@ -105,7 +127,7 @@ async function main() {
     await openChatSession(win)
     await win.addStyleTag({ content: '.ach-toast{display:none!important}' }) // 首条消息的「成就达成」浮层与被测无关
 
-    const ta = win.locator('.t2c-ta').first()
+    const ta = win.locator('.t2c-ta:visible').first()
     const placeholder = () => ta.getAttribute('placeholder', { timeout: 1000 }).catch(() => null)
     const flagged = () => ta.getAttribute('data-suggestion', { timeout: 1000 }).catch(() => null)
     const turn = async (text, reply) => {
@@ -128,17 +150,23 @@ async function main() {
     // ── ② 在设置里真点开关 ──
     if (!NEGATIVE_CONTROL) {
       // 设置是一扇单独的浮窗(另一个渲染进程):开关写的是共用的 localStorage,主窗每次现读。
-      await win.evaluate(() => window.tangu.openFloatingPanel({ id: 'settings', title: 'Settings', builtin: 'settings', params: { tab: 'theme' } }))
+      await win.evaluate(() => window.tangu.openFloatingPanel({ id: 'settings', title: 'Settings', builtin: 'settings', params: { tab: 'advanced/a-experimental' } }))
       let fl
       await waitFor(async () => { fl = app.windows().find((w) => w.url().includes('window=floating')); return !!fl }, 15000)
       const sw = fl ? fl.locator('[data-setting-anchor="prompt-suggest"] [role="switch"]').first() : null
       const found = !!sw && await sw.waitFor({ timeout: 30000 }).then(() => true, () => false)
-      check('设置 → 外观里有「输入建议」开关,缺省是关', found && (await sw.getAttribute('aria-checked')) === 'false')
+      check('设置 → 高级 → 测试性功能里有「输入建议」开关,缺省是关', found && (await sw.getAttribute('aria-checked')) === 'false')
       if (found) { await sw.scrollIntoViewIfNeeded(); await sw.click() }
       check('点一下 → 开', found && (await sw.getAttribute('aria-checked')) === 'true')
       if (found) {
-        await fl.locator('[data-setting-anchor="prompt-suggest"]').screenshot({ path: SHOTS.setting }).catch(() => {})
+        await fl.screenshot({ path: SHOTS.setting }).catch(() => {})
       }
+      // 挪走以后「外观」页里不该再有这一行(用外观页自己的「明暗」行确认真的切过去了)
+      await fl?.locator('.settings-nav-list button', { hasText: '外观' }).first().click().catch(() => {})
+      await fl?.waitForTimeout(600)
+      const inTheme = fl ? await fl.locator('[data-setting-anchor="prompt-suggest"]').count() : -1
+      const themeShown = fl ? await fl.locator('[data-setting-anchor="color-mode"]').count() : 0
+      check('「外观」页里不再有这一行', themeShown > 0 && inTheme === 0, JSON.stringify({ themeShown, inTheme }))
       await fl?.close().catch(() => {})
       await win.bringToFront().catch(() => {})
       await win.waitForTimeout(500)
@@ -168,37 +196,70 @@ async function main() {
     const caret = await ta.evaluate((el) => [el.selectionStart, el.selectionEnd, document.activeElement === el])
     check('Tab:那句进了输入框,没有发出去', (await ta.inputValue()) === SUGGESTION && stub.seen.runs.length === runsBeforeTab, JSON.stringify(await ta.inputValue()))
     check('Tab 之后焦点还在输入框、光标在句尾', caret[2] === true && caret[0] === SUGGESTION.length && caret[1] === SUGGESTION.length, JSON.stringify(caret))
+    // ── ④ 常驻:和平常的占位文字一样,输入框空了就在 ──
+    const still = async (want = SUGGESTION) => (await placeholder()) === want && (await flagged()) === 'true' && (await ta.inputValue()) === ''
+    const askedSticky = asked.length
     await ta.fill('')
     await win.waitForTimeout(200)
-    check('采用过的那句不再当灰字出现', (await placeholder()) === basePlaceholder && !(await flagged()), JSON.stringify(await placeholder()))
-
-    // ── ④ 动手打字 = 不要这句了 ──
-    await turn('再看看 a.test.ts', '里面有两条用例。要我跑一下测试吗?')
-    await waitFor(async () => (await placeholder()) === SUGGESTION, 4000)
+    check('Tab 采用后删空:灰字还在', await still(), JSON.stringify(await placeholder()))
     await ta.click()
-    await win.keyboard.type('我')
+    await win.keyboard.type('a')
     await win.keyboard.press('Backspace')
     await win.waitForTimeout(200)
-    check('打过字再删空:回到平常的占位文字', (await placeholder()) === basePlaceholder && (await ta.inputValue()) === '', JSON.stringify(await placeholder()))
+    check('打过字再删空:灰字还在', await still(), JSON.stringify(await placeholder()))
+    await clickSpace(win, false)
+    await clickSpace(win, true)
+    check('换到别的 Space 再回来:灰字还在', await still(), JSON.stringify(await placeholder()))
+    await openChatSession(win, OTHER.title)
+    check('另一个会话里没有这句(按会话存)', (await placeholder()) === basePlaceholder && !(await flagged()), JSON.stringify(await placeholder()))
+    await openChatSession(win)
+    check('换到另一个会话再回来:灰字还在', await still(), JSON.stringify(await placeholder()))
+    await win.keyboard.press('Meta+t')
+    await win.waitForTimeout(1200)
+    await win.locator('.dv-tab', { hasText: SESSION.title }).first().click().catch(() => {})
+    await win.waitForTimeout(800)
+    check('新开一个标签页再切回来:灰字还在', await still(), JSON.stringify(await placeholder()))
+    check('这些来回都没有多拉一次', asked.length === askedSticky, `请求 ${askedSticky} → ${asked.length}`)
 
-    // ── ⑤ 新一轮起跑作废旧建议;输入框里有字的那一轮不拉 ──
-    await turn('好', '还有别的要看的吗?')
-    await waitFor(async () => (await placeholder()) === SUGGESTION, 4000)
+    // ── ⑤ 只有新一轮起跑才作废上一句;输入框里有字的那一轮照拉,删空就显示 ──
+    const hold = async (text) => {
+      stub.script([{ type: 'token', payload: { delta: '干活中…' } }, { type: '__hold' }])
+      await ta.click()
+      await ta.fill(text)
+      await win.keyboard.press('Enter')
+      await waitFor(() => win.locator('.t2c-stop').count().then((n) => n > 0))
+      const id = stub.seen.runs.at(-1)?.runId
+      holding.add(id)
+      return id
+    }
+    const finish = (id, content) => { holding.delete(id); return stub.finish(id, [{ type: 'done', payload: { content } }]) }
     const askedBefore = asked.length
-    stub.script([{ type: 'token', payload: { delta: '干活中…' } }, { type: '__hold' }])
-    await ta.click()
-    await ta.fill('开始吧')
-    await win.keyboard.press('Enter')
-    await waitFor(() => win.locator('.t2c-stop').count().then((n) => n > 0))
-    const held = stub.seen.runs.at(-1)?.runId
+    const held = await hold('开始吧')
+    await win.waitForTimeout(300)
+    // 运行中本来就不显示灰字;「起跑即作废」那条路径由 promptSuggest.test.ts 直接钉(subscribeRun),这里只看界面
+    check('新一轮跑着:不显示上一轮的那句', (await placeholder()) !== SUGGESTION && !(await flagged()) && (await ta.inputValue()) === '', JSON.stringify(await placeholder()))
     await ta.fill('我先打着下一句') // 这一轮还没结束,用户已经在打下一句
-    stub.finish(held, [{ type: 'done', payload: { content: '干活中…干完了' } }])
+    reply = SUGGESTION_5
+    finish(held, '干活中…干完了')
     await waitFor(() => win.locator('.t2c-stop').count().then((n) => n === 0))
-    await win.waitForTimeout(900)
-    check('输入框里已经有字的那一轮不拉建议', asked.length === askedBefore, `请求 ${askedBefore} → ${asked.length}`)
+    await waitFor(() => asked.length > askedBefore, 4000)
+    await win.waitForTimeout(500)
+    check('输入框里已经有字的那一轮照拉(有字时藏着)', asked.length === askedBefore + 1 && !(await flagged()), `请求 ${askedBefore} → ${asked.length}`)
     await ta.fill('')
     await win.waitForTimeout(200)
-    check('新一轮起跑后,上一轮的建议已作废', (await placeholder()) === basePlaceholder && !(await flagged()), JSON.stringify(await placeholder()))
+    check('把字删空:显示的是这一轮的那句', await still(SUGGESTION_5), JSON.stringify(await placeholder()))
+
+    // ── ⑥ 这一轮跑着的时候切到别的会话:收尾照拉,切回来灰字在 ──
+    const askedBg = asked.length
+    const bgRun = await hold('后台跑一轮')
+    await openChatSession(win, OTHER.title)
+    reply = SUGGESTION_6
+    check('切走以后那一轮还挂着(没被提前收掉)', finish(bgRun, '干活中…后台跑完了'))
+    await waitFor(() => asked.length > askedBg, 5000)
+    check('不在眼前的会话收尾也拉一次,带上那一轮的 run', asked.length === askedBg + 1 && asked.at(-1)?.run_id === bgRun, JSON.stringify({ n: asked.length - askedBg, last: asked.at(-1), bgRun }))
+    await win.waitForTimeout(500)
+    await openChatSession(win)
+    check('切回来:灰字在,是后台那一轮的那句', await still(SUGGESTION_6), JSON.stringify(await placeholder()))
   } finally {
     await app.close().catch(() => {})
     try { stub.close() } catch { /* ignore */ }

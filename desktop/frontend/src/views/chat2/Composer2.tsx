@@ -48,7 +48,7 @@ import { rankRefs } from './refRank'
 import { composeQuotes } from './quotes'
 import { NEW_CHAT_DRAFT, clearDraft, moveDraft, setDraftField, useDraftField } from './composerDrafts'
 import { ContextUsagePop } from './ContextUsagePop'
-import { clearSuggestion, usePromptSuggest } from './promptSuggest'
+import { usePromptSuggest } from './promptSuggest'
 import './composer2.css'
 import { homeTarget, targetForSession, targetKeyOf, useComposerRef } from '../../services/engine/targets'
 
@@ -627,10 +627,10 @@ export const Composer2: React.FC<{
   const callSessionId = useSyncExternalStore(subscribeCallPresence, getCallPresence)
   const inCall = !!activeSessionId && callSessionId === activeSessionId
   // 输入建议(promptSuggest.ts,默认关):一轮结束后猜的下一句,当占位文字显示在空输入框里,Tab 采用。
-  // 只认明确给了 sessionId 的输入框(聊天视图);新一轮一起跑就作废。
+  // 只认明确给了 sessionId 的输入框(聊天视图)。和占位文字一样常驻:只有新一轮起跑才作废(appStore subscribeRun),
+  // 打字 / Tab 采用都只是因为输入框不空而藏起来,删空了还在。
   const suggestion = usePromptSuggest((st) => (sessionId ? st.bySession[sessionId] : undefined) || '')
   const showSuggestion = !!suggestion && !draft && !running && !disabled && !inCall && !touchUi
-  useEffect(() => { if (running && sessionId) clearSuggestion(sessionId) }, [running, sessionId])
   // Mini 那边:有新话 / 代跑 run → 拉一次本会话;改了 Effort → 同步本窗缓存(否则下一条打字消息还按旧档跑)。
   useEffect(() => {
     if (!liveOwnerResolved) return
@@ -1713,8 +1713,6 @@ export const Composer2: React.FC<{
               setMentionDismissed(false)
               setRefDismissed(false)
               if (histPos) setHistPos(0) // 用户实际打字 → 退出历史召回态
-              // 动手打字 = 不要这一轮的建议了。不看眼下有没有灰字:请求可能还在路上,不掐掉的话它回来后、用户把字删空时会冒出来。
-              if (sessionId && e.target.value) clearSuggestion(sessionId)
               if (!e.target.value.includes('@')) { setMentionedSlug(''); setMentionAgents([]) }
               autoGrow()
             }}
@@ -1770,7 +1768,6 @@ export const Composer2: React.FC<{
                 e.preventDefault()
                 const text = suggestion
                 setDraft(text)
-                if (sessionId) clearSuggestion(sessionId)
                 requestAnimationFrame(() => {
                   const ta = taRef.current
                   if (ta) { ta.selectionStart = ta.selectionEnd = text.length; setCursorPos(text.length) }

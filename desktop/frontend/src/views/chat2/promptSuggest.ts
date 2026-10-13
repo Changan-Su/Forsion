@@ -1,7 +1,10 @@
 /**
- * 输入建议:一轮结束后,在空输入框里用灰字给出「你下一句最可能发的话」,Tab 采用。默认关(设置 → 外观)。
+ * 输入建议:一轮结束后,在空输入框里用灰字给出「你下一句最可能发的话」,Tab 采用。默认关(设置 → 高级 → 测试性功能)。
  * 渲染层这半 = 开关 + 按会话存那一句 + 收到 done 后向引擎拉一次
  * (`POST /agent/sessions/:id/suggest`,tangu-agent services/promptSuggestion.ts:复用主循环的前缀缓存,一轮最多一次)。
+ *
+ * 那一句和平常的占位文字一样常驻:从拿到起一直留到这个会话的下一轮开始,输入框空着就显示。
+ * 打字、Tab 采用、切到别的会话 / 视图都不丢它 —— 把字删空、切回来,它还在(2026-10-13 用户定)。
  *
  * 「没有建议」是常态:开关关着 / 触屏(没有 Tab)/ 老引擎或云端没有这条路由 / 模型说猜不准 / 请求失败,
  * 一律就是没有,不提示、不重试。
@@ -9,7 +12,6 @@
 import { create } from 'zustand'
 import { engineFetch, targetForSession } from '../../services/engine/targets'
 import { currentClientId } from '../../services/agentRunService'
-import { useComposerDrafts } from './composerDrafts'
 
 export const PROMPT_SUGGEST_KEY = 'forsion_tangu_prompt_suggest'
 
@@ -45,7 +47,7 @@ export const usePromptSuggest = create<{ bySession: Record<string, string> }>(()
 
 const inflight = new Map<string, AbortController>()
 
-/** 这个会话的建议作废:新一轮开始 / 用户动手打字 / 已采用 / 一轮结束(新的那句马上来)。在飞的请求一并掐掉。 */
+/** 这个会话的建议作废:新一轮开始 / 这一轮出错 / 一轮结束(新的那句马上来)。在飞的请求一并掐掉。 */
 export function clearSuggestion(sessionId: string): void {
   inflight.get(sessionId)?.abort()
   inflight.delete(sessionId)
@@ -61,7 +63,6 @@ export function clearSuggestion(sessionId: string): void {
 export async function requestSuggestion(sessionId: string, runId: string): Promise<void> {
   clearSuggestion(sessionId)
   if (!isPromptSuggestOn() || touchOnly()) return
-  if (useComposerDrafts.getState()[sessionId]?.text) return // 已经在打字了:灰字只在空输入框里出现,拉了也看不到
   const ac = new AbortController()
   inflight.set(sessionId, ac)
   try {
@@ -73,8 +74,8 @@ export async function requestSuggestion(sessionId: string, runId: string): Promi
     if (!r.ok) return // 老引擎 / 假引擎没有这条路由(404)= 没有建议
     const j = await r.json().catch(() => null) as { suggestion?: unknown } | null
     const text = typeof j?.suggestion === 'string' ? j.suggestion.trim() : ''
-    // 期间被作废过(新一轮起跑、用户已经在打字、开关被关掉)→ 这句不要了
-    if (!text || inflight.get(sessionId) !== ac || !isPromptSuggestOn() || useComposerDrafts.getState()[sessionId]?.text) return
+    // 期间被作废过(新一轮起跑、开关被关掉)→ 这句不要了。输入框里有没有字不管:有字时藏着,删空就显示。
+    if (!text || inflight.get(sessionId) !== ac || !isPromptSuggestOn()) return
     usePromptSuggest.setState((s) => ({ bySession: { ...s.bySession, [sessionId]: text } }))
   } catch { /* 没有建议 */ } finally {
     if (inflight.get(sessionId) === ac) inflight.delete(sessionId)

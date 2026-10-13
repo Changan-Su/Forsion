@@ -10,7 +10,7 @@ import { BrowserExtensionPanel } from './BrowserExtensionPanel'
  * 在 Desktop 主界面内替换 Chat/Inspector 区域，而不是覆盖式弹窗。
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react'
-import { X, Droplets, Shapes, ArrowLeft, Undo2, ChevronRight, Loader2, RefreshCw, Sun, Moon, MonitorCog, RotateCcw, LogIn, LogOut, KeyRound, Plus, Trash2, Plug, Search, Download, Sparkles, Wrench, Check, Copy, Globe2, FolderOpen, Play, Trophy, FileDown, Settings2, NotebookPen, Puzzle, LayoutGrid, Palette, Keyboard, Bug, Info, Brain, Bot, Webhook, MessageCircle, Blocks, Bell, PanelBottom, Image as ImageIcon, Server, Type, Layers3, MousePointer2, CircleUserRound, Scaling, Coffee, MonitorCheck, History, MonitorSmartphone, Cloud, SunDim, AlignLeft, Wind, TextCursorInput } from 'lucide-react'
+import { X, Droplets, Shapes, ArrowLeft, Undo2, ChevronRight, Loader2, RefreshCw, Sun, Moon, MonitorCog, RotateCcw, LogIn, LogOut, KeyRound, Plus, Trash2, Plug, Search, Download, Sparkles, Wrench, Check, Copy, Globe2, FolderOpen, Play, Trophy, FileDown, Settings2, NotebookPen, Puzzle, LayoutGrid, Palette, Keyboard, Bug, Info, Brain, Bot, Webhook, MessageCircle, Blocks, Bell, PanelBottom, Image as ImageIcon, Server, Type, Layers3, MousePointer2, CircleUserRound, Scaling, Coffee, MonitorCheck, History, MonitorSmartphone, Cloud, SunDim, AlignLeft, Wind } from 'lucide-react'
 import { ThemeCard } from './ThemeCard'
 import { ThemeSettingsPanel } from './ThemeSettingsPanel'
 import { StartupAppearanceSettings } from './StartupAppearanceSettings'
@@ -3249,24 +3249,6 @@ export const SettingsModal: React.FC<{
                             }}
                           />
                         </div>
-                        {/* 输入建议:要 Tab 键采用,也要本机引擎(云端执行节点没有这条路由)→ 只在桌面宿主、有悬停的设备上摆出来。 */}
-                        {isDesktop && hoverCapable && !mobileSettings && (
-                          <div className="settings-control-row" data-setting-anchor="prompt-suggest">
-                            <div className="settings-control-copy"><TextCursorInput size={14} /><span><strong>{t('settings.theme.promptSuggest')}</strong><small>{t('settings.theme.promptSuggestHint')}</small></span></div>
-                            <button
-                              type="button"
-                              role="switch"
-                              aria-checked={promptSuggest}
-                              aria-label={t('settings.theme.promptSuggest')}
-                              className={`switch${promptSuggest ? ' on' : ''}`}
-                              onClick={() => {
-                                const on = !promptSuggest
-                                setPromptSuggest(on)
-                                persistPromptSuggest(on)
-                              }}
-                            />
-                          </div>
-                        )}
                         <div className="settings-control-row" data-setting-anchor="chat-avatars">
                           <div className="settings-control-copy"><CircleUserRound size={14} /><span><strong>{t('settings.theme.chatAvatars')}</strong><small>{t('settings.theme.chatAvatarsHint')}</small></span></div>
                           <button
@@ -3648,6 +3630,21 @@ export const SettingsModal: React.FC<{
                         />
                       )}
                     />
+                    {/* 输入建议:要 Tab 键采用,也要本机引擎(云端执行节点没有这条路由)→ 只在桌面宿主、有悬停的设备上摆出来。 */}
+                    {isDesktop && hoverCapable && !mobileSettings && (
+                      <SettingsRow
+                        anchor="prompt-suggest"
+                        label={t('settings.promptSuggest')}
+                        description={t('settings.promptSuggestHint')}
+                        control={(
+                          <SettingsSwitch
+                            checked={promptSuggest}
+                            onChange={(on) => { setPromptSuggest(on); persistPromptSuggest(on) }}
+                            label={t('settings.promptSuggest')}
+                          />
+                        )}
+                      />
+                    )}
                     {/* 客户端能力面自带的设置行(手机操控等,见 services/clientSurfaces.ts):数据驱动,
                         desktop/web 没注册就什么都不出,这里不写任何平台判断。 */}
                     {listClientSurfaces().map(({ ns, surface: { SettingsRow: Row } }) => Row && <Row key={ns} />)}
