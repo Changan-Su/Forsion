@@ -1,11 +1,13 @@
 package com.forsion.tangu
 
+import android.content.Context
 import android.os.Build
 import android.util.TypedValue
 import android.view.HapticFeedbackConstants
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
+import android.view.accessibility.AccessibilityManager
 import android.webkit.WebView
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.geometry.Rect
@@ -63,6 +65,10 @@ class NativeChromePlugin : Plugin() {
     private val plates = LinkedHashMap<String, Rect>()
     private var layoutPosted = false
     private var lastLayout = ""
+    /** A screen reader (touch exploration: TalkBack and its kind) going on / off is reported with the layout, see reportLayout. */
+    private var readerHooked = false
+    private val readerListener = AccessibilityManager.TouchExplorationStateChangeListener { scheduleLayoutReport() }
+    private fun accessibility() = activity.getSystemService(Context.ACCESSIBILITY_SERVICE) as? AccessibilityManager
     private val pageListener = object : WebViewListener() {
         override fun onPageStarted(webView: WebView) { activity.runOnUiThread { teardown() } }
     }
@@ -116,6 +122,7 @@ class NativeChromePlugin : Plugin() {
 
     private fun attach() {
         if (!observingPages) { bridge.addWebViewListener(pageListener); observingPages = true }
+        if (!readerHooked) { readerHooked = true; accessibility()?.addTouchExplorationStateChangeListener(readerListener) }
         val webView = bridge.webView
         if (!insetsHooked) {
             insetsHooked = true
@@ -257,6 +264,10 @@ class NativeChromePlugin : Plugin() {
         fun dp(px: Float) = Math.round(px / density * 100f) / 100.0
         val data = JSObject()
         data.put("floating", floating)
+        // Not about the chrome, but the page needs it at the same moments (first paint, every reload): what it marks for a
+        // screen reader costs a rebuild of that part of the accessibility tree, which it only pays while one is listening.
+        // Touch exploration, not AccessibilityManager.isEnabled: that one is also true for password fillers and auto-clickers.
+        data.put("reader", accessibility()?.isTouchExplorationEnabled == true)
         data.put("status", if (floating) dp(i.top.toFloat()) else 0.0)
         data.put("top", if (floating) dp(i.top.toFloat()) + NATIVE_CHROME_HEIGHT.value else 0.0)
         data.put("bottom", if (floating && spacesVisible()) dp(i.bottom.toFloat()) + NATIVE_SPACE_BAR_HEIGHT.value else 0.0)
@@ -297,6 +308,7 @@ class NativeChromePlugin : Plugin() {
 
     override fun handleOnDestroy() {
         bridge.removeWebViewListener(pageListener)
+        accessibility()?.removeTouchExplorationStateChangeListener(readerListener)
         activity.runOnUiThread { teardown() }
     }
 }

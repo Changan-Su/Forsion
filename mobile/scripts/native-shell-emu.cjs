@@ -1126,26 +1126,41 @@ const tabCountText = (list) => {
     const listPanel = async (tryFocus) => JSON.parse(await cdp.eval(`(() => { const d = document.querySelector('.mb-drawer--left'); const held = d.contains(document.activeElement), inertBefore = !!d.inert
       if (${tryFocus ? 'true' : 'false'}) d.querySelector('button, a, [tabindex]')?.focus()
       return JSON.stringify({ hidden: d.getAttribute('aria-hidden'), covered: getComputedStyle(d, '::after').content !== 'none', held, took: d.contains(document.activeElement), inertBefore, inert: !!d.inert, visibility: getComputedStyle(d).visibility }) })()`))
-    // (the reader is told once the slide is over, not during it: on a phone with an accessibility service on, telling
-    //  it rebuilds the list's whole accessibility tree, and that used to land on the first frame of the slide)
-    assert.ok(await h.waitPage(cdp, "document.querySelector('.mb-drawer--left').getAttribute('aria-hidden') === 'true'", 4000), 'the list behind the main view is never hidden from the screen reader')
+    // No screen reader on (the emulator as it comes; this check changes no accessibility setting): the list is not
+    // marked for one at all. Marking it rebuilds the list's whole accessibility tree for whatever accessibility service
+    // is attached — a password filler, an auto-clicker, this bench's own tree reads — and that landed on the slide.
+    await h.pause(300) // with the 600 above: well past the moment a reader would have been told
     // … and the right panel, which opens over the main view where there is no dock, keeps no room for one
-    const behind = { ...(await listPanel(true)), rightPanelRoom: await cdp.eval("getComputedStyle(document.querySelector('.mb-drawer--right')).paddingBottom") }
-    assert.deepEqual(behind, { hidden: 'true', covered: true, held: false, took: false, inertBefore: false, inert: true, visibility: 'visible', rightPanelRoom: '0px' }, 'the panels behind the main view')
-    // back arrow → list
-    await tapId('nativeChrome.left')
-    assert.ok(await h.waitPage(cdp, `(${nav}) === 'list'`, 5000), 'the back arrow did not return to the list')
-    assert.ok((await h.waitNodes((l) => !!h.byId(l, 'nativeChrome.spaces'), { timeout: 8000 })).hit, 'the bottom bar did not come back on the list')
-    assert.ok(await h.waitPage(cdp, "!document.querySelector('.mb-drawer--left').hasAttribute('aria-hidden')", 4000), 'the list in front stays hidden from the screen reader')
-    const front = await listPanel(false)
-    assert.deepEqual([front.hidden, front.covered, front.inert], [null, false, false], 'the list in front is still hidden from the screen reader, covered or inert')
-    // item again, then system back → list, and the app is still in front
-    await tapEl(rowExpr('E2E Session One'))
-    assert.ok(await h.waitPage(cdp, `(${nav}) === 'detail'`, 8000), 'the session did not reopen')
-    await h.pause(600)
-    h.key(4)
-    assert.ok(await h.waitPage(cdp, `(${nav}) === 'list'`, 5000), 'system back did not return to the list')
-    assert.ok(resumed(), 'system back from the main view left the app')
+    const behind = { ...(await listPanel(true)), reader: await cdp.eval("document.documentElement.hasAttribute('data-reader')"), rightPanelRoom: await cdp.eval("getComputedStyle(document.querySelector('.mb-drawer--right')).paddingBottom") }
+    assert.deepEqual(behind, { hidden: null, covered: true, held: false, took: false, inertBefore: false, inert: true, reader: false, visibility: 'visible', rightPanelRoom: '0px' }, 'the panels behind the main view')
+    // From here a screen reader is on, the way the page hears of it: every `layout` report from the native shell says so
+    // on its way in. (Not by writing the page's own mark: the next real report — one comes with every change of level —
+    // would take it away again.) The system setting itself is left alone, so the Kotlin side reading it is not covered here.
+    const ariaHidden = (want) => `document.querySelector('.mb-drawer--left').getAttribute('aria-hidden') === ${want}`
+    await cdp.eval(`(() => { const b = window.androidBridge; if (!b || window.__rd) return !!b; const real = window.__rd = b.onmessage
+      b.onmessage = function (ev) { try { const r = JSON.parse(ev.data); if (r && r.pluginId === 'NativeChrome' && r.data && 'plates' in r.data) { r.data.reader = true; return real.call(this, { data: JSON.stringify(r) }) } } catch {} return real.call(this, ev) }; return true })()`)
+    try {
+      // back arrow → list
+      await tapId('nativeChrome.left')
+      assert.ok(await h.waitPage(cdp, `(${nav}) === 'list'`, 5000), 'the back arrow did not return to the list')
+      assert.ok((await h.waitNodes((l) => !!h.byId(l, 'nativeChrome.spaces'), { timeout: 8000 })).hit, 'the bottom bar did not come back on the list')
+      assert.ok(await h.waitPage(cdp, "document.documentElement.hasAttribute('data-reader')", 4000), 'a layout report saying a screen reader is on did not reach the page')
+      const front = await listPanel(false)
+      assert.deepEqual([front.hidden, front.covered, front.inert], [null, false, false], 'the list in front is hidden from the screen reader, covered or inert')
+      // item again: with the reader on the list behind is hidden from it (once the slide is over — `MODE=trace npm run
+      // emu:perf` is what times that; a poll from here cannot)
+      await tapEl(rowExpr('E2E Session One'))
+      assert.ok(await h.waitPage(cdp, `(${nav}) === 'detail'`, 8000), 'the session did not reopen')
+      assert.ok(await h.waitPage(cdp, ariaHidden("'true'"), 4000), 'with a screen reader on, the list behind the main view is not hidden from it')
+      await h.pause(300)
+      // … then system back → list, the app is still in front, and the list is the reader's again
+      h.key(4)
+      assert.ok(await h.waitPage(cdp, `(${nav}) === 'list'`, 5000), 'system back did not return to the list')
+      assert.ok(resumed(), 'system back from the main view left the app')
+      assert.ok(await h.waitPage(cdp, ariaHidden('null'), 4000), 'the list in front stays hidden from the screen reader')
+    } finally {
+      await cdp.eval("(() => { const b = window.androidBridge; if (b && window.__rd) { b.onmessage = window.__rd; delete window.__rd } document.documentElement.removeAttribute('data-reader'); return true })()").catch(() => {})
+    }
     // a swipe from the main view back to the list (same gesture as the drawer had)
     await tapEl(rowExpr('E2E Session One'))
     assert.ok(await h.waitPage(cdp, `(${nav}) === 'detail'`, 8000), 'the session did not reopen')

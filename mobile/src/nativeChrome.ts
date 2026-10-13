@@ -39,6 +39,8 @@ export interface ChromeLayout {
   top: number; bottom: number; status: number
   /** Each capsule's rectangle, relative to the page. */
   plates: Array<{ id: string; x: number; y: number; w: number; h: number }>
+  /** A screen reader (touch exploration) is on. Reported whether or not the chrome floats. */
+  reader?: boolean
 }
 interface NativeChromePlugin {
   setState(state: Omit<NativeChromeState, 'spaces'> & {
@@ -128,6 +130,8 @@ const dpLength = (v: number): string => `calc(${v}px / var(--uiz, 1))`
 export function applyChromeLayout(e: ChromeLayout | null | undefined, doc: Document = document): void {
   const body = doc.body
   if (!body) return
+  // lcl reads this (SingleColumnHost `readerOn`): what is only there for a screen reader is only done while one is on.
+  doc.documentElement.toggleAttribute('data-reader', e?.reader === true)
   const floating = !!e && e.floating === true
   const vars: Array<[string, number]> = [['--nc-top', floating ? dpNumber(e?.top) : 0], ['--nc-bottom', floating ? dpNumber(e?.bottom) : 0], ['--nc-status', floating ? dpNumber(e?.status) : 0]]
   // The main view of a list-first Space: the dock is away, so the report says bottom = 0. The dock's room is left

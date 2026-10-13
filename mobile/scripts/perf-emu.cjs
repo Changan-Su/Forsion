@@ -21,6 +21,7 @@
  *
  * Finding a cause (each prints to the console, artefacts under OUT):
  *   MODE=trace [RATE=4] [ROW=2]   devtools.timeline trace → what every long task after the input was made of
+ *                                 (TRACE_CATS=accessibility,cc adds categories to the saved trace-*.json, for reading by hand)
  *   MODE=profile                  CPU profiles of the slow gestures + the restyle cost of single mutations
  *   MODE=land [MSGS=short]        does the view stay at the bottom while a long chat mounts in batches? (frame by frame)
  *   MODE=exp EXP=<file.cjs>       your own measurements: a module exporting [{ label, js, n?, noForce?, poll? }]; each
@@ -232,7 +233,7 @@ function gfx() {
       const onData = (p) => { events.push(...p.value) }
       cdp.handlers.set('Tracing.dataCollected', [onData])
       await setRate(rate)
-      await cdp.send('Tracing.start', { transferMode: 'ReportEvents', traceConfig: { includedCategories: ['devtools.timeline', 'disabled-by-default-devtools.timeline', 'blink.user_timing', 'v8'], excludedCategories: ['*'] } })
+      await cdp.send('Tracing.start', { transferMode: 'ReportEvents', traceConfig: { includedCategories: ['devtools.timeline', 'disabled-by-default-devtools.timeline', 'blink.user_timing', 'v8', ...(process.env.TRACE_CATS || '').split(',').filter(Boolean)], excludedCategories: ['*'] } })
       await cdp.eval("performance.mark('probe-armed')")
       await act(); await h.pause(settle)
       const done = new Promise((r) => cdp.on('Tracing.tracingComplete', r))

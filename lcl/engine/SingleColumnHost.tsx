@@ -10,7 +10,7 @@
  *   带 `detail.probe` 的那一种只是问「你接不接」:preventDefault 作答,**不许动手**(新加监听方照这个写)。
  * mobile 构建直接渲染它(MobileRoot);desktop/web 由 Shell 在 UI_MODE==='mobile' 时套「手机框」渲染。
  */
-import { Suspense, createElement, startTransition, useEffect, useRef, useState, type ReactNode, type RefObject } from 'react'
+import { Suspense, createElement, startTransition, useEffect, useRef, useState, useSyncExternalStore, type ReactNode, type RefObject } from 'react'
 import { flushSync } from 'react-dom'
 import { PanelLeft, PanelRight, X, MoreHorizontal, Plus, Zap, SlidersHorizontal, Check } from 'lucide-react'
 import { useSpaceStore, setActiveSpace, getActiveSpace, pinSpaceToHome, redirectOpenFromOnePage } from './spaceRegistry'
@@ -154,6 +154,14 @@ const footAliveNow = (): boolean => footAliveOf(useSpaceStore.getState().spaces.
 
 /** 进出主区的滑动(--mb-dur = 0.34s)走完之后再过一点:不急的善后(告诉读屏哪块收起了)排到这之后,不压在动画上。 */
 const PARK_SETTLE_MS = 450
+/** 读屏(触摸浏览:TalkBack 这类)开没开。宿主写在 `<html data-reader>` 上(Android:原生外壳随 `layout` 报上来,
+ *  见 mobile/src/nativeChrome.ts `applyChromeLayout`);没有宿主报的地方(浏览器、iOS 网页)恒为没开。 */
+const readerOn = (): boolean => document.documentElement.hasAttribute('data-reader')
+const watchReader = (fn: () => void): (() => void) => {
+  const mo = new MutationObserver(fn)
+  mo.observe(document.documentElement, { attributes: true, attributeFilter: ['data-reader'] })
+  return () => mo.disconnect()
+}
 
 function Drawer({ side, docked, showFoot, page }: { side: 'left' | 'right'; docked?: boolean; showFoot?: boolean; page?: boolean }) {
   const visible = useWorkspace((s) => (side === 'left' ? s.leftVisible : s.rightVisible))
@@ -171,7 +179,7 @@ function Drawer({ side, docked, showFoot, page }: { side: 'left' | 'right'; dock
   const [warm, setWarm] = useState(visible)
   if (visible && !warm) setWarm(true)
   // 两级导航的列表面板收起(= 人在主区)时照样渲染着:样式上不翻 visibility / pointer-events(都会继承,翻一次整个列表重算
-  // 一遍样式,见 singleColumn.css 末尾)。它们原来管的三件事改由这里和那条样式分担:读屏跳过它(aria-hidden,滑完再挂)、
+  // 一遍样式,见 singleColumn.css 末尾)。它们原来管的三件事改由这里和那条样式分担:读屏跳过它(aria-hidden,开着读屏才挂)、
   // 键盘焦点不留在也不落进它里面(点条目的那一下焦点就在条目上)、滑出途中不吃点按(样式里的 ::after)。
   // 外接键盘按 Tab 会走进这些看不见的条目:焦点第一次落进来时才挂 inert,之后 Tab 直接跳过整块。不一上来就挂,
   // 是因为 inert 和那两个属性一样会让整棵子树重算一遍样式 —— 这笔只让真在用键盘走焦点的人付,只用触屏的人从不付。
@@ -186,18 +194,22 @@ function Drawer({ side, docked, showFoot, page }: { side: 'left' | 'right'; dock
     el.addEventListener('focusin', onFocusIn)
     return () => { el.removeEventListener('focusin', onFocusIn); el.inert = false }
   }, [parked])
-  // 读屏那边「这块看不看得见」不跟着滑动走,滑完再改,所以 aria-hidden 不写在 JSX 里(那样它和 .open 是同一次提交)。
+  // aria-hidden 只在开着读屏时挂,而且滑完再挂 / 摘,所以不写在 JSX 里(那样它和 .open 是同一次提交)。
   // 挂 / 摘它,在开着无障碍服务的手机上(读屏、自动点击 / 跳过广告、密码填充都算)要把这块的无障碍树整个重建一遍 ——
-  // 60 条会话 ≈ 1400 个节点。2026-10-13 追踪(降速 4 倍):它落在滑动的头一帧里,合成提交从个位数变成 110~160 ms;
-  // 提交期间两条线程都停着,动画的钟照走 = 画面晚出来、开头被吃掉一截。没开无障碍服务的手机上这一步本来就不花钱。
+  // 60 条会话 ≈ 1400 个节点。2026-10-13 追踪(降速 4 倍):落在滑动头一帧里时合成提交从个位数变成 110~160 ms;
+  // 挪到滑完之后,返回那个方向还是有一笔 ~137 ms 压在滑动前后。提交期间两条线程都停着,动画的钟照走 = 开头被吃掉一截。
+  // 需要这个标记的只有读屏(它按顺序把屏上的东西一个个念过去,会念进这块看不见的列表),所以只在读屏开着时付这笔。
+  // ponytail: 只认触摸浏览。开关控制 / 语音控制这类不走触摸浏览的辅助服务看得到这块收起的列表(点按被 ::after 挡着、
+  //           焦点落进来就 inert);真有人报,就让宿主把那类服务也算进 data-reader。
   // 仪器:mobile `MODE=trace npm run emu:perf` 每段末尾的「slide … commits」那一行(应该是 none 或个位数)。
+  const reader = useSyncExternalStore(watchReader, readerOn)
   useEffect(() => {
     const el = parkedRef.current
     if (!el) return
-    if (!page) { el.removeAttribute('aria-hidden'); return }
+    if (!page || !reader) { el.removeAttribute('aria-hidden'); return }
     const timer = window.setTimeout(() => { if (parked) el.setAttribute('aria-hidden', 'true'); else el.removeAttribute('aria-hidden') }, PARK_SETTLE_MS)
     return () => window.clearTimeout(timer)
-  }, [parked, page])
+  }, [parked, page, reader])
   const leaves = side === 'left' ? useWorkspace.getState().leftLeaves : useWorkspace.getState().rightLeaves
   const active = useWorkspace.getState().getActiveSideLeaf(side)
   const def = active ? getView(active.type) : null
