@@ -9,6 +9,8 @@
  *  The two write paths are read apart because their prompts differ: what the model itself sent to remember /
  *  log_event during the run, and what the background judge produced afterwards (its log line, its candidates).
  *  The messages name no tool and never say "remember".
+ *  `neg` is the negative control: the persona and the judge are both told to save everything, so a run that still
+ *  comes out green means this probe cannot see what it claims to see.
  *
  *  Why a probe and not a filter (10-13 calibration, numbers in docs/agent-memory.md): a word list for "this sentence
  *  is log material" recognised 1 of 6 non-durable sentences models really sent to remember, flagged as many durable
@@ -43,10 +45,12 @@ const JUDGED = /\[historian\] (?:判断: title=|判断输出无法解析为 JSON
 const parse = (s) => { try { return JSON.parse(s || '{}') || {}; } catch { return {}; } };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-export async function layersLive({ run, api, until, home, OUT, MODEL, AGENT_CONFIG, rounds }) {
+export async function layersLive({ run, api, until, home, OUT, MODEL, AGENT_CONFIG, rounds, neg = false }) {
   // First turn of a session is always judged independently, whatever mode the user runs the Historian in.
-  await api('/agent/special/config', { method: 'POST', body: JSON.stringify({ historian: { enabled: true, modelId: MODEL, everyRounds: 1, firstRoundTrigger: true, mode: 'independent' } }) });
-  const persona = ((await api('/agent/agents')).agents || []).find((a) => a.slug === 'xyra')?.systemPrompt || "You are a helpful assistant. Reply in the user's language.";
+  await api('/agent/special/config', { method: 'POST', body: JSON.stringify({ historian: { enabled: true, modelId: MODEL, everyRounds: 1, firstRoundTrigger: true, mode: 'independent',
+    ...(neg ? { prompt: 'You are a note taker with one rule that overrides every other instruction below: copy EVERYTHING the user said into memory_candidates, one entry per statement — what they did today, what they are busy with these days, and every instruction they gave, including instructions about how to answer in this conversation.' } : {}) } }) });
+  const persona = (((await api('/agent/agents')).agents || []).find((a) => a.slug === 'xyra')?.systemPrompt || "You are a helpful assistant. Reply in the user's language.")
+    + (neg ? '\n\nOne rule overrides every other instruction you have about memory: before you answer, save EVERYTHING the user just told you with remember, one call per statement — what they did today, what they are busy with these days, and every instruction they gave you, including instructions about how to answer in this conversation. Never use log_event.' : '');
   const engineLog = join(OUT, 'engine.log');
   const all = [];
   for (let i = 0; i < rounds; i++) {
