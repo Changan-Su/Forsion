@@ -4,7 +4,8 @@
  *  - 收纳夹:同区图标拖到夹上收入;悬停夹图标在右侧浮层展开(icon + 文字),浮层内可重排/拖出。
  *  - 区内放不下时尾部收进「…」;点「…」= 本区铺满整条(另一区让出来),点 Ribbon 图标以外任意处收回。
  *    两区高度弹性分配,都挤时各保一半。
- *  - 右键空白/两区 + 号 = 新建 Space / 添加命令(从命令面板选)/ 新建收纳夹;账号卡(pinned)钉死最底。 */
+ *  - 右键空白/两区 + 号 = 新建 Space / 添加命令(从命令面板选)/ 新建收纳夹;账号卡(pinned)钉死最底。
+ *  - 左面板收起时,指针停在 Space 图标上 → 右侧浮出那个 Space 的左面板(SpacePeek),可直接操作;移开即收。 */
 import { useEffect, useLayoutEffect, useReducer, useRef, useState } from 'react'
 import { ChevronDown, ChevronUp, ChevronsLeft, ChevronsRight, Folder as FolderIcon, MoreHorizontal, Plus, Zap } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
@@ -19,6 +20,12 @@ import { engineTr, useEngineI18n } from './i18nSeam'
 import { label } from './types'
 import type { Command, RibbonItem } from './types'
 import { OverlayAt, zoomOf } from './menuAnchor'
+import { useWorkspace } from './workspaceStore'
+import { getView } from './viewRegistry'
+import { computeSideWidth } from './sideWidth'
+import { SpacePeek } from './SpacePeek'
+import { PEEK_CLOSE_DELAY, PEEK_OPEN_DELAY, peekShouldClose, peekViews, type PeekZone } from './spacePeekRules'
+import type { PersistedPanel } from './layoutPersist'
 
 type Entry =
   | { kind: 'item'; id: string; item: RibbonItem }
@@ -177,7 +184,106 @@ export function Ribbon() {
     if (tipShown.current) { tipShown.current = false; tipHiddenAt.current = Date.now() }
     setTip(null)
   }
-  const blockTip = !!drag || !!menu || !!iconPick || !!fly
+  // ---- Space 左面板悬停预览(规则见 spacePeekRules.ts,卡片见 SpacePeek.tsx)。认的是 Space 按钮上的 data-space-id
+  //      (宿主的 SpaceButton 写,同 data-rb-tip 的约定):条上、主位槽、「最近使用」三处一视同仁。
+  //      views 在弹出那一刻定下:之后卡里一点击切了 Space,「当前 / 别的」的口径会变,列表跟着变就等于把正在用的 View 重挂。 ----
+  const leftCollapsed = !useWorkspace((s) => s.leftVisible)
+  const [peek, setPeek] = useState<{ spaceId: string; views: PersistedPanel[] } | null>(null)
+  const peekSpace = useSpaceStore((s) => (peek ? s.spaces.find((x) => x.id === peek.spaceId) : undefined))
+  const peekRef = useRef<HTMLDivElement>(null)
+  const peekFor = useRef<string | null>(null) // 指针此刻停着的 Space(弹过 / 点过之后,移开再回来才重新计时)
+  const peekOpenTimer = useRef<number | undefined>(undefined)
+  const peekCloseTimer = useRef<number | undefined>(undefined)
+  const cancelPeekClose = (): void => { window.clearTimeout(peekCloseTimer.current); peekCloseTimer.current = undefined }
+  const closePeek = (): void => {
+    window.clearTimeout(peekOpenTimer.current)
+    cancelPeekClose()
+    setPeek(null)
+  }
+  const blockPeek = !leftCollapsed || !!drag || !!menu || !!iconPick || !!fly
+  // ⚠️ 让位要晚一个宏任务:卡里一点击切到别的 Space、那边的左栏是展开的 → blockPeek 当场成立。React 的捕获与冒泡是原生的
+  // 两次回调,捕获那次走完就同步重渲;此时立刻卸卡,冒泡阶段就找不到被点的那个元素 —— Space 切了,这一下点击却丢了。
+  useEffect(() => {
+    if (!blockPeek) return
+    const timer = window.setTimeout(closePeek, 0)
+    return () => window.clearTimeout(timer)
+  }, [blockPeek]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => () => { window.clearTimeout(peekOpenTimer.current); window.clearTimeout(peekCloseTimer.current) }, [])
+  const openPeek = (id: string): void => {
+    const { spaces, activeSpaceId } = useSpaceStore.getState()
+    const space = spaces.find((x) => x.id === id)
+    const ws = useWorkspace.getState()
+    const active = id === activeSpaceId
+    const views = space ? peekViews({ active, stash: ws.stash.left, defaults: active ? ws.sidebarDefaults.left : space.sidebarDefaults.left, known: (type) => !!getView(type) }) : []
+    cancelPeekClose()
+    setPeek(views.length ? { spaceId: id, views } : null)
+  }
+  const onPeekOver = (e: React.MouseEvent): void => {
+    const id = ((e.target as Element).closest('[data-space-id]') as HTMLElement | null)?.dataset.spaceId ?? null
+    if (id === peekFor.current) return
+    window.clearTimeout(peekOpenTimer.current)
+    peekFor.current = id
+    if (!id || blockPeek) return
+    if (peek?.spaceId === id) cancelPeekClose() // 从卡里回到它自己的图标
+    else if (peek) openPeek(id) // 已经弹着:换图标不再等
+    else peekOpenTimer.current = window.setTimeout(() => { if (peekFor.current === id) openPeek(id) }, PEEK_OPEN_DELAY)
+  }
+  const peekOpen = !!peek
+  useEffect(() => {
+    if (!peekOpen) return
+    const zoneOf = (target: EventTarget | null): PeekZone => {
+      const el = target instanceof Element ? target : null
+      if (!el) return 'overlay'
+      if (peekRef.current?.contains(el)) return 'card' // 卡在 Ribbon 的 DOM 里,先认它
+      if (rootRef.current?.contains(el) && el.closest('[data-space-id]')) return 'trigger'
+      return el.closest('.shell') ? 'shell' : 'overlay'
+    }
+    const typing = (): boolean => {
+      const a = document.activeElement
+      return !!a && !!peekRef.current?.contains(a) && a.matches('input, textarea, select, [contenteditable]:not([contenteditable="false"])')
+    }
+    // mousemove 与 mouseover 都听,各管一头:
+    //  · 只听 mouseover(换元素才发):指针停在一大块主区里时(卡里的输入框刚失焦)等不到下一发;
+    //  · 只听 mousemove:指针进了主区里的 iframe / webview 之后事件到不了本窗口,而进去那一下的 mouseover 是打在
+    //    iframe 元素上的;菜单在不动的指针底下弹出来时也只有 mouseover。
+    // 已经在倒计时就不重置 —— 指针一直在动的话,每发都重置等于永远不收。
+    const onMove = (e: MouseEvent): void => {
+      const zone = zoneOf(e.target)
+      if (!peekShouldClose({ zone, buttons: e.buttons, typing: zone === 'shell' && typing() })) cancelPeekClose()
+      else if (peekCloseTimer.current === undefined) peekCloseTimer.current = window.setTimeout(closePeek, PEEK_CLOSE_DELAY)
+    }
+    // 点应用界面别处 / 点 Space 图标(要进那个 Space 了)= 立刻收;点卡里弹出来的菜单不算。
+    const onDown = (e: MouseEvent): void => { const z = zoneOf(e.target); if (z === 'shell' || z === 'trigger') closePeek() }
+    const onKey = (e: KeyboardEvent): void => { if (e.key === 'Escape' && !typing()) closePeek() } // 输入框里的 Esc 归输入框
+    document.addEventListener('mousemove', onMove)
+    document.addEventListener('mouseover', onMove)
+    document.addEventListener('mousedown', onDown, true)
+    window.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousemove', onMove)
+      document.removeEventListener('mouseover', onMove)
+      document.removeEventListener('mousedown', onDown, true)
+      window.removeEventListener('keydown', onKey)
+    }
+  }, [peekOpen]) // eslint-disable-line react-hooks/exhaustive-deps
+  /** 卡片几何(视口 px → 按 zoom 折算,同 .rb-fly):贴 Ribbon 右沿,从标签条下沿到工作区底。
+   *  让开标签条 —— 左栏的展开钮就在它最左边,盖住了就没法从预览直接「固定」成常驻左栏。
+   *  ponytail: 宽度一律按当前 Space 记住的左栏宽(没拖过 = 黄金分割默认),不去读别的 Space 各自记的。 */
+  const peekStyle = (): React.CSSProperties => {
+    const root = rootRef.current
+    const z = zoomOf(root)
+    const rb = root?.getBoundingClientRect()
+    const workEl = root?.parentElement?.querySelector('.shell-work')
+    const work = workEl?.getBoundingClientRect()
+    const bar = workEl?.querySelector('.dv-prefix--edge')?.closest('.dv-tabs-and-actions-container')?.getBoundingClientRect()
+    const top = (bar?.bottom ?? work?.top ?? 0) + 4
+    const bottom = (work?.bottom ?? window.innerHeight) - 8
+    const ws = useWorkspace.getState()
+    const width = computeSideWidth((work?.width ?? 1200) / z, 'left', { free: ws.sideFree.left, saved: ws.sideWidths.left, scale: ws.sideScale.left })
+    return { left: ((rb?.right ?? 44) + 4) / z, top: top / z, height: Math.max(160, bottom - top) / z, width }
+  }
+
+  const blockTip = !!drag || !!menu || !!iconPick || !!fly || !!peek
   useEffect(() => { if (blockTip || expanded) hideTip() }, [blockTip, expanded]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => () => window.clearTimeout(tipTimer.current), [])
   const onTipOver = (e: React.MouseEvent): void => {
@@ -685,7 +791,8 @@ export function Ribbon() {
     setMenu({ x: e.clientX, y: e.clientY, entries: zoneMenu(zone) })
   }
   const onRootCtx = (e: React.MouseEvent): void => {
-    if (e.defaultPrevented) return
+    // 预览卡在 Ribbon 的 React 树里,卡里的右键会冒到这儿:那是 View 自己的事,不弹 Ribbon 的区菜单。
+    if (e.defaultPrevented || peekRef.current?.contains(e.target as Node)) return
     e.preventDefault()
     setMenu({ x: e.clientX, y: e.clientY, entries: [...zoneMenu('top'), ...zoneMenu('bottom')] })
   }
@@ -900,11 +1007,12 @@ export function Ribbon() {
       ref={rootRef}
       className={`rb${expanded ? ' rb-expanded' : ''}${drag ? ' rb-dragging' : ''}${openZone ? ` rb-open-${openZone}` : ''}`}
       onContextMenu={onRootCtx}
-      onMouseOver={onTipOver}
-      onMouseLeave={hideTip}
+      onMouseOver={(e) => { onTipOver(e); onPeekOver(e) }}
+      onMouseLeave={() => { hideTip(); window.clearTimeout(peekOpenTimer.current); peekFor.current = null }}
       onMouseDownCapture={(e) => {
         // 点下即收;记住这枚按钮 → 点完鼠标还停在它上面时不再重新计时弹出(移到别处才重新武装)。
         hideTip()
+        window.clearTimeout(peekOpenTimer.current) // 预览同理:还没弹就点了 = 要进这个 Space,别再弹
         tipFor.current = (e.target as Element).closest('[data-rb-tip]') as HTMLElement | null
       }}
       /* 兜底:两区之间的空隙、head、边距……凡是没被组接住的地方也放行 drop,一律落到**当前预览**
@@ -969,6 +1077,19 @@ export function Ribbon() {
           {liveCount(flyFolder) === 0 && <div className="rb-fly-empty">{t('lcl.ribbon.folderEmpty')}</div>}
           {flyFolder.items.map((id, i) => { const e = byId.get(id); return e ? flyRow(e, flyFolder, i, flyFolder.items) : null })}
         </div>
+      )}
+
+      {peek && peekSpace && (
+        <SpacePeek
+          ref={peekRef}
+          space={peekSpace}
+          views={peek.views}
+          style={peekStyle()}
+          // ponytail: 操作别的 Space 的左面板 = 先进那个 Space(等同点了它的图标),这一下点击再照常落地 —— 名册 / 收件箱这类
+          // 「点了在主区显示」的列表,不切过去就点了没反应。挂在 click 的捕获阶段:先切,条目自己的 onClick 随后照常触发
+          // (前提是卡片这一刻不被卸掉,见上面 blockPeek 那段的延后)。只认 click,靠 mousedown 起作用的操作不切。
+          onBeforeClick={() => { if (peek.spaceId !== useSpaceStore.getState().activeSpaceId) setActiveSpace(peek.spaceId) }}
+        />
       )}
 
       {tip && !expanded && (

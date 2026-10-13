@@ -229,6 +229,7 @@
     "check:bottomiframe": "node scripts/bottom-toggle-iframe.electron.cjs",
     "shot:bottompanel": "node scripts/bottom-panel.check.cjs --shot",
     "check:remount": "node scripts/main-remount.check.cjs",
+    "check:spacepeek": "node scripts/space-peek.check.cjs",
     "check:nav": "node scripts/nav-history.check.cjs",
     "check:builtins": "node scripts/builtins.check.cjs",
     "check:runblock": "node scripts/runblock.check.cjs",
