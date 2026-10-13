@@ -9,6 +9,7 @@ import { accountChip, subscribeAccountChip } from '@/services/accountChip'
 import { useApp } from '@/stores/appStore'
 import { attentionIndex, mergeAttention, useAttention } from '@/stores/attentionStore'
 import { useInbox } from '@/stores/inboxStore'
+import { installKeyboardRise, keyboardRise, type ImeRise } from './keyboardRise'
 
 /** Android-only host for the native top bar seam (lcl/engine/nativeChrome.ts). Kotlin: NativeChromePlugin.
  *  Pushes the effective state + live theme + serialized icons; relays bar actions back to the seam.
@@ -53,6 +54,7 @@ interface NativeChromePlugin {
   clear(): Promise<void>
   addListener(event: 'action', cb: (e: { action: string; id?: string }) => void): Promise<PluginListenerHandle>
   addListener(event: 'layout', cb: (e: ChromeLayout) => void): Promise<PluginListenerHandle>
+  addListener(event: 'ime', cb: (e: ImeRise) => void): Promise<PluginListenerHandle>
 }
 const ACTIONS: readonly NativeChromeAction[] = ['left', 'right', 'tabs', 'more', 'back', 'close', 'search', 'title', 'spacesAll']
 const MAX_SPACES = 64 // = ChromeState.MAX_SPACES (Kotlin)
@@ -275,6 +277,10 @@ export function installNativeChrome(): void {
   }).catch(() => {})
   // After a fallback to the web bar (uninstall === null) a late report must not bring the capsules' room back.
   void plugin.addListener('layout', (e) => { if (uninstall) applyChromeLayout(e) }).catch(() => {})
+  // What stands at the page's bottom edge travels with the keyboard (keyboardRise.ts). Not tied to the bar: the
+  // plugin holds the page's height for the keyboard whether or not the capsules are drawn.
+  installKeyboardRise()
+  void plugin.addListener('ime', keyboardRise).catch(() => {})
   // Skin / mode / custom colour changes repaint the bar (same attributes the model picker watches + inline vars);
   // switching glass off makes the capsules solid.
   new MutationObserver(send).observe(document.documentElement, { attributes: true, attributeFilter: ['data-mode', 'data-skin', 'data-bg', 'data-theme', 'data-glass', 'style', 'class'] })

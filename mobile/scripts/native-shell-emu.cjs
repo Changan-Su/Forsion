@@ -1277,6 +1277,96 @@ const tabCountText = (list) => {
     await cdp.eval('(document.activeElement && document.activeElement.blur(), true)')
   })
 
+  // The input travels with the keyboard (2026-10-13: "it should move up with a transition, not flash there"). Where the
+  // plugin owns the margins (Android 15+) it holds the WebView's height until the keyboard has arrived and tells the
+  // page how far and how fast (`ime`); what is marked data-kb-rise rides up meanwhile (mobile/src/keyboardRise.ts), and
+  // slides down by itself when the page gets its height back. Sampled every frame in the page: the page's height,
+  // where the input's bottom edge is on screen, and the gap to the last message — the conversation is at its end here,
+  // so the column travels as one piece. Before this, the page was made shorter first and the input was already at its
+  // end position on the keyboard's first frame (and under the keyboard on the first frame of it leaving).
+  await check('keyboard: the input travels with it — up before the page is made shorter, down after it grew; the conversation keeps to the input', async () => {
+    await openChat('E2E Session One')
+    const field = "document.querySelector('.composer textarea, .composer [contenteditable], textarea')"
+    const start = () => cdp.eval(`(() => {
+      const root = document.querySelector('.mb-view[data-view="chat"]')
+      const anchor = root && root.querySelector('.composer-anchor'), box = root && root.querySelector('.t2c')
+      const last = root && [...root.querySelectorAll('.t2-stream-inner > .t2-asst, .t2-stream-inner > .t2-userwrap')].pop()
+      if (!anchor || !box || !last) return false
+      let z = 1; for (let e = anchor; e; e = e.parentElement) z *= parseFloat(getComputedStyle(e).zoom) || 1
+      const K = (window.__kb = { on: true, s: [] })
+      const tick = (t) => { if (!K.on) return
+        K.s.push([Math.round(t), innerHeight, Math.round(anchor.getBoundingClientRect().bottom * z), Math.round((box.getBoundingClientRect().top - last.getBoundingClientRect().bottom) * z)])
+        requestAnimationFrame(tick) }
+      requestAnimationFrame(tick); return true })()`)
+    const stop = () => cdp.eval('(() => { __kb.on = false; return __kb.s })()')
+    const steps = (list) => new Set(list.map((x) => x[2])).size
+    const bad = []
+    assert.ok(await start(), 'no chat with a reply on screen to measure')
+    await h.pause(300)
+    await tapEl(field)
+    for (let i = 0; i < 20 && !imeShown(); i++) await h.pause(300)
+    assert.ok(imeShown(), 'the keyboard did not come up')
+    await h.pause(1500)
+    const up = await stop()
+    const [h0, b0] = [up[0][1], up[0][2]]
+    const travel = h0 - up[up.length - 1][1]
+    assert.ok(travel > 100, `control: the page did not get shorter for the keyboard (${h0} → ${up[up.length - 1][1]})`)
+    const cut = up.findIndex((x) => x[1] < h0 - 100)
+    const before = up.slice(0, cut)
+    const risen = b0 - Math.min(...before.map((x) => x[2]))
+    if (risen < travel * 0.8) bad.push(`up: the input had risen ${risen} of ${travel} px when the page was made shorter (it jumped the rest)`)
+    if (!before.some((x) => x[2] < b0 - 10 && x[2] > b0 - travel + 10)) bad.push(`up: the input was never seen between where it started and where it ends (${steps(before)} places in ${before.length} frames)`)
+    if (Math.abs(up[cut][2] - up[cut - 1][2]) > 6) bad.push(`up: the input moved ${up[cut][2] - up[cut - 1][2]} px in the frame the page was made shorter`)
+    if (Math.abs(up[up.length - 1][2] - (b0 - travel)) > 3) bad.push(`up: the input ends ${up[up.length - 1][2]}, expected ${b0 - travel}`)
+    const gapsUp = up.map((x) => x[3])
+    if (Math.max(...gapsUp) - Math.min(...gapsUp) > 4) bad.push(`up: the gap between the last message and the input went from ${Math.min(...gapsUp)} to ${Math.max(...gapsUp)} px (the conversation did not travel with it)`)
+    console.log(`      up: page ${h0} → ${h0 - travel} at frame ${cut} of ${up.length} (+${up[cut][0] - up[0][0]}ms); input bottom ${before.filter((x, i) => !i || x[2] !== before[i - 1][2]).map((x) => x[2]).join(' ')} | ${up[cut][2]}`)
+
+    await start()
+    await h.pause(300)
+    h.key(4)
+    for (let i = 0; i < 15 && imeShown(); i++) await h.pause(200)
+    await h.pause(1200)
+    const down = await stop()
+    const grew = down.findIndex((x) => x[1] > down[0][1] + 100)
+    assert.ok(grew > 0, `control: the page did not get its height back (${down[0][1]} → ${down[down.length - 1][1]})`)
+    const after = down.slice(grew)
+    if (after[0][2] > down[0][2] + travel * 0.35) bad.push(`down: in the frame the page grew the input was already ${after[0][2] - down[0][2]} of ${travel} px down (it jumped)`)
+    if (!after.some((x) => x[2] > down[0][2] + 10 && x[2] < b0 - 10)) bad.push(`down: the input was never seen between where it started and where it ends (${steps(after)} places in ${after.length} frames)`)
+    if (Math.abs(down[down.length - 1][2] - b0) > 3) bad.push(`down: the input ends ${down[down.length - 1][2]}, expected ${b0}`)
+    const gapsDown = down.map((x) => x[3])
+    if (Math.max(...gapsDown) - Math.min(...gapsDown) > 4) bad.push(`down: the gap between the last message and the input went from ${Math.min(...gapsDown)} to ${Math.max(...gapsDown)} px`)
+    console.log(`      down: page grew at frame ${grew} of ${down.length}; input bottom ${down[0][2]} | ${after.filter((x, i) => !i || x[2] !== after[i - 1][2]).map((x) => x[2]).join(' ')}`)
+    await cdp.eval('(document.activeElement && document.activeElement.blur(), true)')
+    for (let i = 0; i < 15 && imeShown(); i++) await h.pause(200)
+
+    // Sent away before it has arrived (the field loses focus once the input has risen 40 px): the page may never be
+    // made shorter, and then only the shell's word that the keyboard is leaving brings the input back down. Without
+    // it the input finished its ride, stood above a keyboard that was gone until a watchdog dropped it, and jumped
+    // (Codex review, 2026-10-13).
+    await start()
+    await cdp.eval(`(() => { const K = window.__kb; const watch = () => { if (!K.on) return
+      const s = K.s; if (s.length && s[0][2] - s[s.length - 1][2] >= 40) { K.cutAt = s.length; document.activeElement && document.activeElement.blur(); return }
+      requestAnimationFrame(watch) }; requestAnimationFrame(watch); return true })()`)
+    await h.pause(300)
+    await tapEl(field)
+    await h.pause(2600)
+    const mid = await stop()
+    const cutAt = await cdp.eval('window.__kb.cutAt || 0')
+    if (!cutAt) bad.push('midway: the input never rose 40 px, so the keyboard could not be sent away mid-rise')
+    else {
+      const rest = mid.slice(cutAt - 1)
+      const peak = Math.min(...rest.map((x) => x[2]))
+      const afterPeak = rest.slice(rest.findIndex((x) => x[2] === peak))
+      if (Math.abs(mid[mid.length - 1][2] - b0) > 3) bad.push(`midway: the input ends ${mid[mid.length - 1][2]}, expected ${b0}`)
+      if (!afterPeak.some((x) => x[2] > peak + 10 && x[2] < b0 - 10)) bad.push(`midway: the input did not come back down — it stood ${b0 - peak} px up and jumped (${afterPeak.filter((x, i) => !i || x[2] !== afterPeak[i - 1][2]).map((x) => x[2]).join(' ')})`)
+      console.log(`      midway: focus taken away ${b0 - rest[0][2]} px up; the page ${Math.min(...mid.map((x) => x[1])) < h0 - 100 ? 'was' : 'was never'} made shorter; input bottom ${rest.filter((x, i) => !i || x[2] !== rest[i - 1][2]).map((x) => x[2]).join(' ')}`)
+    }
+    await cdp.eval('(document.activeElement && document.activeElement.blur(), true)')
+    for (let i = 0; i < 15 && imeShown(); i++) await h.pause(200)
+    assert.deepEqual(bad, [], 'the input does not travel with the keyboard')
+  })
+
   // The Space switcher, native: a Material bar with a label under every icon until 2026-10-09, an icon-only dock for a few
   // hours, and since that evening (the user: "too small, put the names back under the icons" — variant ③ of the second
   // mock-up) a dock of five equal cells, icon over name: Home, the Spaces the user keeps there, and "all" for the rest.
@@ -1982,7 +2072,9 @@ const tabCountText = (list) => {
       const got = await cdp.eval(`[...${tray}.querySelectorAll('.pl-swipe-act')].map((b) => b.dataset.act)`)
       assert.deepEqual(got, [step, 'rename', 'archive'], 'delete is only offered for archived sessions')
       // icons only (no text under them); each still has a name; and once the row rests every button is fully shown
-      // (they grow in with the swipe — a scroll-driven animation must end on its last frame on this WebView)
+      // (until 2026-10-13 they grew in with the swipe through a scroll-driven animation — it kept the main thread
+      // updating layers for the whole swipe and is gone; the buttons simply come in with the row)
+      assert.equal(await cdp.eval(`[...${tray}.querySelectorAll('.pl-swipe-act')].filter((b) => b.getAnimations().length).length`), 0, 'a tray button is animated again: that work rides on every frame of the swipe (MODE=trace STEPS=row-swipe npm run emu:perf)')
       const looks = JSON.parse(await cdp.eval(`JSON.stringify([...${tray}.querySelectorAll('.pl-swipe-act')].map((b) => ({ text: b.textContent.trim(), name: b.getAttribute('aria-label') || '', opacity: getComputedStyle(b).opacity, scale: getComputedStyle(b).scale })))`))
       assert.ok(looks.every((b) => !b.text && b.name && b.opacity === '1' && (b.scale === 'none' || b.scale === '1')), `tray buttons: ${JSON.stringify(looks)}`)
       const last = await elRect(act('archive'))
@@ -2053,6 +2145,47 @@ const tabCountText = (list) => {
     assert.ok(!(await cdp.eval(hidden)), 'hiding the keyboard folded the composer (what was typed would be out of sight)')
     await foldHomeComposer() // a touch on the page folds it back into the pill
     assert.ok(resumed(), 'back left the app')
+  })
+
+  // Which cards Home shows is the user's (2026-10-13: "let me edit the Space cards on Home"): a long-press on any card
+  // opens "Home cards" — every Space and the two fixed entries, checked = shown, in the order they were checked; kept
+  // on the device. Ends by clearing the choice and reloading, so what follows sees the default four again.
+  await check('phone Home: a long-press on a card opens "Home cards"; a checked Space joins as the last card, an unchecked entry leaves, the choice is stored', async () => {
+    await goHome()
+    await foldHomeComposer()
+    const cardIds = () => cdp.eval(`[...document.querySelectorAll('.hp-root .hp-card')].map((c) => (c.dataset.spaceId ? 'space:' + c.dataset.spaceId : c.dataset.fixedId))`)
+    const item = (l, id) => h.byId(l, `nativeSheet.item.card:${id}`)
+    const before = await cardIds()
+    assert.equal(before.length, 4, `control: Home starts with its four default cards (${before})`)
+    try {
+      await holdEl(`document.querySelector('.hp-root .hp-card')`)
+      let sheet = (await h.waitNodes((l) => (h.byId(l, 'nativeSheet.item.cards:done') ? l : null), { timeout: 8000 })).hit
+      assert.ok(sheet, 'a long-press on a card opened no sheet')
+      shot('03g-home-cards-sheet')
+      const spare = sheet.map((n) => n['resource-id'] || '').filter((id) => id.startsWith('nativeSheet.item.card:space:')).map((id) => id.slice('nativeSheet.item.card:'.length)).find((id) => !before.includes(id))
+      assert.ok(spare, 'control: the sheet lists no Space that is not a card yet')
+      assert.ok(before.every((id) => isOn(item(sheet, id))) && !isOn(item(sheet, spare)), `the check marks do not say what is on Home (${before.map((id) => `${id}=${isOn(item(sheet, id))}`)}, ${spare}=${isOn(item(sheet, spare))})`)
+      h.tapNode(item(sheet, spare))
+      sheet = (await h.waitNodes((l) => (isOn(item(l, spare)) ? l : null), { timeout: 12000 })).hit
+      assert.ok(sheet, 'the sheet did not come back with the Space checked')
+      assert.deepEqual(await cardIds(), [...before, spare], 'the checked Space did not join as the last card')
+      h.tapNode(item(sheet, before[2]))
+      sheet = (await h.waitNodes((l) => (item(l, before[2]) && !isOn(item(l, before[2])) && isOn(item(l, spare)) ? l : null), { timeout: 12000 })).hit
+      assert.ok(sheet, 'the sheet did not come back with the entry unchecked')
+      const want = [before[0], before[1], before[3], spare]
+      assert.deepEqual(await cardIds(), want, 'the unchecked entry did not leave')
+      h.tapNode(h.byId(sheet, 'nativeSheet.item.cards:done'))
+      await h.pause(900)
+      shot('03h-home-cards-edited')
+      assert.equal(await cdp.eval(`localStorage.getItem('forsion_home_cards_v1')`), JSON.stringify(want), 'the choice was not stored')
+      // a tap still opens the card's Space (the long-press did not turn the cards into something else)
+      assert.deepEqual(await cardIds(), want, '"Done" changed the cards')
+    } finally {
+      await cdp.eval(`(localStorage.removeItem('forsion_home_cards_v1'), true)`)
+      await reload()
+    }
+    await goHome()
+    assert.deepEqual(await cardIds(), before, 'with the choice cleared Home does not show its default cards')
   })
 
   // Home is Home (2026-10-11, reported on a phone: "I enter Home and it shows another workspace", then decided: Home

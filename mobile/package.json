@@ -20,6 +20,7 @@
     "test:plugins": "node scripts/plugin-host.test.cjs",
     "test:cloudfetch": "node scripts/cloud-fetch.test.cjs",
     "test:pickedfiles": "node scripts/picked-files.test.cjs",
+    "test:kbrise": "node scripts/keyboard-rise.test.cjs",
     "e2e:plugins": "node scripts/plugin-install.e2e.cjs",
     "e2e:pluginfiles": "node scripts/plugin-filetypes.e2e.cjs",
     "e2e:csp": "node scripts/csp.e2e.cjs",

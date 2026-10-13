@@ -48,7 +48,8 @@ const sessions = Array.from({ length: 60 }, (_, i) => ({ id: `perf-s${i}`, title
 const REPLY = (i) => `## Section ${i}\n\nA paragraph of ordinary prose with **bold**, *emphasis*, \`inline code\` and a [link](https://example.com). It runs long enough to wrap over several lines on a phone, the way a real answer does when the model explains what it did and why.\n\n- first point with some detail\n- second point, a little longer than the first one\n  - a nested point\n- third point\n\n\`\`\`ts\nexport function sum(xs: number[]): number {\n  let total = 0\n  for (const x of xs) total += x\n  return total\n}\n\`\`\`\n\n| Name | Value | Note |\n|---|---|---|\n| alpha | 1 | first row |\n| beta | 2 | second row |\n| gamma | 3 | third row |\n\n1. step one\n2. step two\n3. step three\n\n> A quoted remark to close section ${i}.`
 const SHORT = process.env.MSGS === 'short'
 const messages = Array.from({ length: 60 }, (_, i) => ({ id: `perf-m${i}`, role: i % 2 ? 'model' : 'user', content: SHORT ? (i % 2 ? `ok ${i}` : `q ${i}`) : i % 2 ? REPLY(i) : `Question ${i}: please explain the thing in some detail, with an example.`, reasoning: null, tool_calls: null, tool_results: null, attachments: null, timestamp: T0 - (60 - i) * 6e4, model_id: null, is_error: false }))
-const MODELS = [{ id: 'perf-model', name: 'Perf Model', provider: 'E2E', source: 'forsion', modelType: 'llm' }]
+// MODELS_N=60: a catalog the size a real account has (the model key's menu carries every one of them)
+const MODELS = Array.from({ length: Number(process.env.MODELS_N || 1) }, (_, i) => ({ id: i ? `perf-model-${i}` : 'perf-model', name: i ? `Perf Model ${i}` : 'Perf Model', provider: `E2E ${i % 6}`, source: 'forsion', modelType: 'llm' }))
 
 function installStub(cdp) {
   cdp.on('Fetch.requestPaused', (ev) => {
@@ -272,18 +273,109 @@ function gfx() {
         const commits = mt.filter((e) => e.name === 'Commit' && e.dur >= 5000 && e.ts > a - 250000 && e.ts < b).map((e) => `${Math.round(e.dur / 1000)}ms@${ms(e.ts)}`)
         console.log(`  slide +${ms(a)}..+${ms(b)}ms · main tasks ≥16ms overlapping it: ${inside.length} (${Math.round(inside.reduce((n, e) => n + e.dur, 0) / 1000)}ms) · commits ≥5ms from 250ms before its start: ${commits.join(', ') || 'none'}`)
       }
+      // calls into the native side (see `markNative`): how long after the input the page got round to asking
+      const calls = events.filter((e) => /^native:/.test(e.name || '') && e.ts >= t0).map((e) => `${e.name.slice(7)}@+${Math.round((e.ts - t0) / 1000)}ms`)
+      if (calls.length) console.log(`  native calls: ${calls.join(', ')}`)
+      const all = mt.filter((e) => e.name === 'RunTask' && e.ts >= t0)
+      console.log(`  main thread busy ${Math.round(all.reduce((n, e) => n + e.dur, 0) / 1000)}ms of the ${Math.round((mt[mt.length - 1].ts - t0) / 1000)}ms after the input · longest task ${Math.round(Math.max(0, ...all.map((e) => e.dur)) / 1000)}ms`)
+      return t0
     }
-    await ensureList()
-    await trace('open-cold', () => openChat(Number(process.env.ROW || 7))); await inDetail(); await h.pause(800)
-    await trace('back', async () => { h.key(4) }); await ensureList()
-    await trace('open-again', () => openChat(Number(process.env.ROW || 7))); await inDetail(); await h.pause(800)
-    await ensureList()
-    await trace('open-other', () => openChat(Number(process.env.ROW || 7) + 1)); await inDetail(); await h.pause(800)
-    // a line of text in the middle of the conversation to start the drag on (not a block that scrolls sideways);
-    // a conversation with none there (too short, or nothing but such blocks): the middle of the main view
-    const u = await elPoint("([...document.querySelectorAll('.t2-stream *')].find((e) => { const r = e.getBoundingClientRect(); return e.children.length === 0 && r.top > innerHeight * 0.35 && r.top < innerHeight * 0.6 && r.width > 40 && !e.closest('pre, table, .md-table-scroll') }) || document.querySelector('.mb-main'))")
-    await trace('drag-back', async () => { h.adb('shell', 'input', 'swipe', '300', String(u.y), '980', String(u.y), '600') })
-    await ensureList()
+    // STEPS picks what is traced (default: the five of the list ↔ conversation round trip)
+    const STEPS = (process.env.STEPS || 'open-cold,back,open-again,open-other,drag-back').split(',')
+    const step = (k) => STEPS.includes(k)
+    const R = Number(process.env.ROW || 7)
+    /** Android's own frame log for the app's windows (the WebView's and a native sheet's are separate windows), on the
+     *  trace's clock: frames from `t0us` on — when the first came, how many, how many took over 1.5 frame intervals. */
+    const nativeFrames = (t0us) => {
+      const txt = h.adb('shell', 'dumpsys', 'gfxinfo', PKG, 'framestats')
+      // one table per window, each under the line that names it ("Window: …" or "…/android.view.ViewRootImpl@… (visibility=0)")
+      const tables = new Map(); let head = '?', open = false
+      for (const line of txt.split('\n')) {
+        if (line.trim() === '---PROFILEDATA---') { open = !open; continue }
+        if (open) { if (!tables.has(head)) tables.set(head, []); tables.get(head).push(line.split(',')) } else if (/^Window: |ViewRootImpl@/.test(line.trim())) head = line.trim().replace(/^Window: /, '').replace(/\/android\.view\.ViewRootImpl@.*$/, '')
+      }
+      const out = []
+      for (const [name, rows] of tables) {
+        const col = (n) => rows[0].indexOf(n)
+        const [iv, fc, fi] = [col('IntendedVsync'), col('FrameCompleted'), col('FrameInterval')]
+        const fr = rows.slice(1).filter((r) => /^\d+$/.test(r[0]) && r.length > fc).map((r) => ({ at: (Number(r[iv]) / 1000 - t0us) / 1000, took: (Number(r[fc]) - Number(r[iv])) / 1e6, int: fi >= 0 ? Number(r[fi]) / 1e6 : 16.7 })).filter((f) => f.at >= 0 && f.took > 0).sort((x, y) => x.at - y.at)
+        if (fr.length) out.push(`    ${name.replace(/^.*\//, '').slice(0, 40).padEnd(40)} first frame +${Math.round(fr[0].at)}ms (done +${Math.round(fr[0].at + fr[0].took)}ms) · ${fr.length} frames · over 1.5 intervals: ${fr.filter((f) => f.took > 1.5 * f.int).length} · worst ${Math.round(Math.max(...fr.map((f) => f.took)))}ms · first ten: ${fr.slice(0, 10).map((f) => Math.round(f.took)).join(' ')}`)
+      }
+      console.log(out.length ? `  native frames after the input:\n${out.join('\n')}` : '  native frames: none logged')
+    }
+    /** Mark every call into a native plugin on the trace (`native:<Plugin>.<method>`). */
+    const markNative = () => cdp.eval(`(() => { const C = window.Capacitor; if (!C || C.__marked) return false; C.__marked = true
+      const wrap = (k) => { const f = C[k]; if (typeof f === 'function') C[k] = function (p, m) { try { performance.mark('native:' + p + '.' + m) } catch {} return f.apply(this, arguments) } }
+      wrap('nativePromise'); wrap('nativeCallback'); return true })()`)
+    if (STEPS.some((k) => /^open|^back$|^drag/.test(k))) await ensureList()
+    if (step('open-cold')) { await trace('open-cold', () => openChat(R)); await inDetail(); await h.pause(800) }
+    if (step('back')) { await ensureDetail(R); await trace('back', async () => { h.key(4) }); await ensureList() }
+    if (step('open-again')) { await trace('open-again', () => openChat(R)); await inDetail(); await h.pause(800); await ensureList() }
+    if (step('open-other')) { await trace('open-other', () => openChat(R + 1)); await inDetail(); await h.pause(800) }
+    if (step('drag-back')) {
+      await ensureDetail(R + 1)
+      // a line of text in the middle of the conversation to start the drag on (not a block that scrolls sideways);
+      // a conversation with none there (too short, or nothing but such blocks): the middle of the main view
+      const u = await elPoint("([...document.querySelectorAll('.t2-stream *')].find((e) => { const r = e.getBoundingClientRect(); return e.children.length === 0 && r.top > innerHeight * 0.35 && r.top < innerHeight * 0.6 && r.width > 40 && !e.closest('pre, table, .md-table-scroll') }) || document.querySelector('.mb-main'))")
+      await trace('drag-back', async () => { h.adb('shell', 'input', 'swipe', '300', String(u.y), '980', String(u.y), '600') })
+      await ensureList()
+    }
+    if (step('row-swipe')) {
+      // a left swipe on a list row (its actions slide in): the row scrolls sideways on the compositor, so anything the
+      // main thread does meanwhile, and every layer the list keeps, is what it can stutter on
+      await ensureList()
+      const p = await elPoint(row(3))
+      const t0 = await trace('row-swipe', async () => { gfxReset(); h.adb('shell', 'input', 'swipe', String(W.right - 90), String(p.y), String(W.left + 260), String(p.y), '320') }, 1600)
+      nativeFrames(t0)
+      console.log(`  row open: scrollLeft ${await cdp.eval(`${row(3)}.closest('.pl-swipe')?.scrollLeft`)}`)
+      h.tapAt(W.left + 200, p.y); await h.pause(700)
+    }
+    if (step('model-key')) {
+      // the model key: the page builds the menu and asks the native sheet for it; the sheet is a window of its own
+      await ensureDetail(R)
+      await markNative()
+      const k = await elPoint("[...document.querySelectorAll('.mb-main .model-pill-btn')].find((e) => e.getClientRects().length)")
+      for (const round of (process.env.ROUNDS || 'first,again').split(',')) {
+        const t0 = await trace(`model-key-${round}`, async () => { gfxReset(); h.tapAt(k.x, k.y) }, 2200)
+        nativeFrames(t0)
+        h.screenshot(OUT, `model-key-${round}`)
+        h.key(4); await h.pause(900)
+      }
+      // and once more under the sampling profiler: which functions the click spent its time in (bottom-up, self time;
+      // names are minified — the position is in this build's dist/assets, read it there)
+      await setRate(rate)
+      await cdp.send('Profiler.enable'); await cdp.send('Profiler.setSamplingInterval', { interval: 200 })
+      await cdp.send('Profiler.start'); h.tapAt(k.x, k.y); await h.pause(2200)
+      const { profile } = await cdp.send('Profiler.stop')
+      await setRate(1)
+      fs.writeFileSync(path.join(OUT, 'profile-model-key.cpuprofile'), JSON.stringify(profile))
+      const byId = new Map(profile.nodes.map((n) => [n.id, n])); const parent = new Map()
+      for (const n of profile.nodes) for (const c of n.children || []) parent.set(c, n.id)
+      const name = (n) => `${n.callFrame.functionName || '(anon)'} ${String(n.callFrame.url).split('/').pop()}:${n.callFrame.lineNumber}:${n.callFrame.columnNumber}`
+      const self = new Map(), total = new Map()
+      profile.samples.forEach((id, i) => {
+        const ms = (profile.timeDeltas[i] || 0) / 1000
+        const leaf = name(byId.get(id)); self.set(leaf, (self.get(leaf) || 0) + ms)
+        const seen = new Set()
+        for (let c = id; c != null; c = parent.get(c)) { const k2 = name(byId.get(c)); if (!seen.has(k2)) { seen.add(k2); total.set(k2, (total.get(k2) || 0) + ms) } }
+      })
+      const top = (m, n) => [...m.entries()].filter(([k2]) => !/^\((idle|root|program)\)/.test(k2)).sort((x, y) => y[1] - x[1]).slice(0, n)
+      console.log(`\n== profile model-key @${rate}x — self ms`); for (const [k2, v] of top(self, 22)) console.log(`  ${v.toFixed(0).padStart(6)}  ${k2}`)
+      console.log('   — total ms (callers included)'); for (const [k2, v] of top(total, 34)) console.log(`  ${v.toFixed(0).padStart(6)}  ${k2}`)
+      h.key(4); await h.pause(900)
+      await ensureList()
+    }
+    if (step('keyboard')) {
+      // the composer takes focus (keyboard up), then back (keyboard down): what the page does while the keyboard moves
+      await ensureDetail(R)
+      const f = await elPoint("[...document.querySelectorAll('.mb-main .t2c textarea, .mb-main .t2c [contenteditable]')].find((e) => e.getClientRects().length)")
+      const t0 = await trace('keyboard-up', async () => { gfxReset(); h.tapAt(f.x, f.y) }, 2200)
+      nativeFrames(t0)
+      const t1 = await trace('keyboard-down', async () => { gfxReset(); h.key(4) }, 2000)
+      nativeFrames(t1)
+      await cdp.eval('(document.activeElement && document.activeElement.blur(), true)')
+      await ensureList()
+    }
   }
   if (process.env.MODE === 'profile') {
     // (1) where a full style pass comes from: one mutation at a time, forced with offsetHeight, chat mounted

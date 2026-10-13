@@ -37,6 +37,8 @@ public class AppActivity extends BridgeActivity {
         // 重建(配置变更 / 进程被杀后从最近任务回来)会重放当初的启动 intent:点岛跳会话只在全新启动时认一次。
         LiveIslandPlugin.freshLaunch = savedInstanceState == null;
         super.onCreate(savedInstanceState);
+        // 不带「可调试」标记的并装预览(-PnativePreviewFast):桥按该标记把远程调试关了,这里再打开。只有 debug 那一档能把它设成真。
+        if (BuildConfig.WEBVIEW_INSPECTABLE) android.webkit.WebView.setWebContentsDebuggingEnabled(true);
         // 仅 -PnativePreviewSample 的 debug 预览包:启动即进审阅样本页。-PnativePreview(并装预览)跑的是真 App。
         if (BuildConfig.NATIVE_PREVIEW_SAMPLE) {
             getBridge().getWebView().loadUrl("https://localhost/native-preview.html");

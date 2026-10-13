@@ -473,6 +473,8 @@ export function ChatView({ leaf, params }: ViewProps) {
   const saveEdit = (): void => { if (editingId && editText.trim()) { s.editUserMessage(editingId, editText.trim(), activeId) } setEditingId(null) }
 
   const hasMessages = activeMessages.length > 0
+  /** 流里有画出来的消息(系统消息、列表里隐藏的不算):决定底对齐的排法,也决定手机上整列跟不跟键盘走。 */
+  const anyShown = hasMessages && shownMessages.some((m) => m.role !== 'system' && !isHiddenInList(m))
   // Agent Desk 只在会话开始后显示:草稿与已建 ID 但未发消息的新会话都不挂载,也不占右侧车道。
   // 桌面端默认开(移动端没有);用户可在设置→高级关掉,窄容器由 CSS 容器查询兜底隐藏。
   const deskEnabled = !!activeId && hasMessages && !params.childSurface && !studioChat && UI_MODE !== 'mobile' && !!s.desktopConfig?.agentDeskEnabled
@@ -534,15 +536,19 @@ export function ChatView({ leaf, params }: ViewProps) {
             openSession(session.id, { newTab: true })
           })
         }} />}
-      <div className="t2-chat-col">
+      {/* data-kb-*: on a phone the column travels with the keyboard (mobile/src/keyboardRise.ts) — the whole of it while
+          a conversation is on screen and at its end (it is laid out from the bottom up there, so it lands where layout
+          puts it afterwards), the input alone otherwise: an empty chat's mark is centred, not bottom-anchored.
+          Markers only; nothing reads them elsewhere. */}
+      <div className="t2-chat-col" data-kb-rise={anyShown ? 'end' : undefined}>
       <ErrorBoundary key={activeId || 'none'}>
         <div className="t2-chat-body" ref={chatAreaRef}>
           {hasMessages && <FloatingToc scrollContainerRef={chatScrollRef} scanTrigger={shownMessages.length} />}
-          <div className="t2-stream" ref={registerChatScroll}>
+          <div className="t2-stream" data-kb-end ref={registerChatScroll}>
             {/* data-has-messages:样式靠它认「流里画着消息气泡」(短会话贴着输入区排,见 chat2.css)。只有总结卡 / 系统行、其余都不进列表的
                 会话不算 —— 对齐原来的 `:has(> .t2-asst, > .t2-userwrap)`。
                 别改回 `:has(…)` 再接 `> :first-child`:那种写法让页面上**任何地方**插入 / 移除一个元素都把整段对话的样式重算一遍。 */}
-            <div className="t2-stream-inner" data-has-messages={hasMessages && shownMessages.some((m) => m.role !== 'system' && !isHiddenInList(m)) ? '' : undefined}>
+            <div className="t2-stream-inner" data-has-messages={anyShown ? '' : undefined}>
             {!hasMessages ? (
               // 空状态本身不在流里(见下面 .t2-chat-col 直属的那份):流只占输入框以上,
               // 在里面居中 = 视觉上偏高。骨架屏留在流里 —— 它替代的是消息,本就该从顶部排。
@@ -686,7 +692,7 @@ export function ChatView({ leaf, params }: ViewProps) {
       {/* 输入区整簇(新对话的两条选择器 + 输入卡)一起悬浮:它们**都在 .composer-anchor 里**,
           正文才能真正铺满整列。留在外面就会各占一段布局,反倒被悬浮的卡盖住。
           新加与输入卡同簇的东西请一并放进来 —— 高度由 anchor 统一量成 --t2-composer-h。 */}
-      <div className="composer-anchor" ref={composerRef}>
+      <div className="composer-anchor" data-kb-rise ref={composerRef}>
         {/* Chat 固定使用创建时的当前默认 Agent，不露选择器；Work 的云会话仍可选 Agent，外部引擎仍 host-only。
             轨道方案 §4:门控去掉 `!groupChat`(06-25 那道「群聊态无单一主 agent」门的理由随选择条消失 ——
             **这条就是群聊/团队模式的配置器**),换成轨道身份钉死的三把锁(私聊 / 私聊引擎 / 独立团队)。 */}

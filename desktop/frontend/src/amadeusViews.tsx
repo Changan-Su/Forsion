@@ -1977,7 +1977,7 @@ export function AmxMobileBar({ actions, onUpload, undo, redo, indent, sourceMode
   }
   return (
     <>
-      <div ref={barRef} className="amx-mbar" style={shift ? { transform: `translateY(-${shift}px)` } : undefined}>
+      <div ref={barRef} className="amx-mbar" data-kb-rise style={shift ? { transform: `translateY(-${shift}px)` } : undefined}>
         {!sourceMode && (
           <button onPointerDown={keep} onClick={() => (pick ? setPick(0) : openPick())} className={pick ? 'on' : undefined} title={t('amxv.mbar.insertBlock')}><Plus size={19} /></button>
         )}
