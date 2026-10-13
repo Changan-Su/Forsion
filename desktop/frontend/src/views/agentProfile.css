@@ -241,6 +241,17 @@ div.agent-equipment-item > label { display: flex; align-items: flex-start; gap: 
 .memory-list { display: grid; gap: 10px; min-width: 0; }
 .profile-growth-memory { display: grid; gap: 10px; min-width: 0; }
 .profile-growth-memory > .agent-profile-link { margin-top: 0; }
+/* 成长 › 日志:一行摘要 + 按天折叠的行;更早的日期收在一个折叠块里 */
+.profile-log { display: grid; gap: 2px; min-width: 0; }
+.profile-log > .harness-summary { margin-bottom: 8px; }
+.profile-log > .profile-disclosure { margin: 8px 0 0; padding: 8px 12px; }
+.profile-log > .profile-disclosure[open] > summary { margin-bottom: 6px; }
+/* 读日志:正文与「记忆」那一段的条目同一档字号,缩进到日期文字的起点(行头 8 + 箭头 12 + 间距 6);时间是每条上方的一行小标签 */
+.profile-log .agentmem-log-body { padding: 0 8px 10px 26px; font-size: var(--ui-font-body, 13px); line-height: 1.7; }
+.profile-log .agentmem-log-body h3 { margin: 8px 0 0; font-size: var(--ui-font-caption, 11px); font-weight: 500; line-height: 1.6; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.profile-log .agentmem-log-body p { margin: 0; }
+.profile-log .agentmem-log-edit.field { padding-left: 26px; }
+.profile-log .agentmem-log-edit textarea { font-size: var(--ui-font-body, 13px); line-height: 1.7; }
 .profile-growth-memory .profile-disclosure, .agent-schedule .profile-disclosure { margin-bottom: 0; padding: 8px 12px; }
 .profile-growth-memory .profile-disclosure[open] > summary, .agent-schedule .profile-disclosure[open] > summary { margin-bottom: 10px; }
 .profile-disclosure > summary > small { float: right; margin-left: 10px; font-size: var(--ui-font-caption, 11px); font-weight: 400; color: var(--text-muted); }
@@ -255,13 +266,13 @@ div.agent-equipment-item > label { display: flex; align-items: flex-start; gap: 
 .memory-footnote { margin: 0; font-size: var(--ui-font-caption, 11px); line-height: 1.6; color: var(--text-faint, var(--text-muted)); }
 /* 成长的两层分段:两张并排的卡(标题 + 一句话)。选中 = 有底色的卡 + accent 标题,未选 = 只有字。
  * 不用「纸面底」当选中态:宽版里正文底就是纸面色,选中的那张会整个隐形、反倒是没选的像张卡(09-19 截图自查发现)。 */
-.profile-segment { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 16px; }
+.profile-segment { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; margin-bottom: 16px; }
 .profile-segment > button { display: grid; gap: 2px; min-width: 0; padding: 10px 12px; text-align: left; color: var(--text-muted); background: transparent; border: 1px solid transparent; border-radius: var(--radius-sm, 8px); cursor: pointer; transition: background 160ms ease, color 160ms ease; }
 .profile-segment > button:hover { background: var(--overlay-light); color: var(--text); }
 .profile-segment > button[aria-pressed=true] { color: var(--accent-ink); background: var(--overlay-medium); }
-.profile-segment strong { display: flex; align-items: center; gap: 6px; font-size: var(--ui-font-body, 13px); font-weight: 600; }
+.profile-segment strong { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: var(--ui-font-body, 13px); font-weight: 600; overflow-wrap: anywhere; }
 /* 说明允许折行,不截断:英文在 300px 的右栏里一行放不下(09-19 台架实测截成「Methods it has le…」) */
-.profile-segment small { font-size: var(--ui-font-caption, 11px); line-height: 1.5; color: var(--text-muted); overflow-wrap: anywhere; }
+.profile-segment small { font-size: var(--ui-font-caption, 11px); line-height: 1.5; color: var(--text-muted); overflow-wrap: anywhere; text-wrap: balance; }
 .profile-segment .profile-tab-badge { position: static; margin-left: auto; }
 /* 日程:条目沿用工作笔记的卡;时间行 = 芯片 + 下一次 + 间隔。已过期 / 停用的整卡降一档。 */
 .schedule-entry, .schedule-rule { display: grid; gap: 6px; min-width: 0; padding: 12px; border-radius: var(--radius-sm, 8px); background: var(--overlay-light); }
@@ -362,6 +373,17 @@ div.agent-equipment-item > label { display: flex; align-items: flex-start; gap: 
   .agent-section-nav { --profile-nav-gap: 2px; --profile-nav-padding: 4px; }
   .agent-section-nav button { flex-direction: column; gap: 5px; padding: 7px 2px; font-size: var(--ui-font-meta); }
   .agent-profile-content { padding-block: 18px; }
+}
+/* 三张分段卡在窄栏里(Tangu 详情约 280–300px)每张只有八十像素上下:去掉图标、收紧内距,英文「Evolution」才放得下。
+   角标在这里缩成右上角的一个点,不带数字(数字在上面「成长」标签上已经有了):带数字的角标会压到「Evolution」的最后一个字母。
+   再窄(名册开着、窗口又被压到最小)就一张一行,不让单词从中间折断。 */
+@container agent-detail (max-width: 380px) {
+  .profile-segment > button { position: relative; padding: 8px; }
+  .profile-segment strong > svg { display: none; }
+  .profile-segment .profile-tab-badge { position: absolute; top: 7px; right: 7px; min-width: 6px; width: 6px; height: 6px; margin-left: 0; padding: 0; font-size: 0; background: var(--accent-ink); }
+}
+@container agent-detail (max-width: 260px) {
+  .profile-segment { grid-template-columns: minmax(0, 1fr); }
 }
 @media (prefers-reduced-motion: reduce) {
   .agent-skill-detail, .agent-skill-editor { animation: none; }

@@ -13,6 +13,7 @@ import type { AgentConfig, SubChat, TanguDesktopConfig, UiMessage, WorkspaceFile
 import { DEFAULT_AGENT_SLUG } from '../types'
 import * as api from '../services/backendService'
 import { Markdown } from './Markdown'
+import { logForReading } from './AgentLogPanel'
 import { ChatToc } from './ChatToc'
 import { OverlayAt, nativeSheetPresenter, pickNativeCtxItem } from '@lcl/engine'
 import { SubChatsTab } from './SubChatsTab'
@@ -610,8 +611,7 @@ const AgentMemoryBlock: React.FC<{
       const dates = (await api.listAgentLogDates(homeTarget(), slug)).slice().sort((a, b) => b.localeCompare(a)).slice(0, 3)
       const entries = await Promise.all(dates.map(async (d) => ({ date: d, content: await api.getAgentLog(homeTarget(), slug, d) })))
       const nonEmpty = entries.filter((e) => e.content.trim())
-      setLogs(nonEmpty)
-      setOpenDate((cur) => cur ?? nonEmpty[0]?.date ?? null) // 默认展开最近一条
+      setLogs(nonEmpty) // 日志默认全折叠(10-13):这一栏先看到的是记忆本体;用户点开过的那天刷新后仍开着
     } catch { setLogs([]) }
   }, [cfg, slug, onToast, t])
 
@@ -673,7 +673,7 @@ const AgentMemoryBlock: React.FC<{
             </button>
             {open && (
               <div className="agentmem-log-body msg-content">
-                <Markdown content={lg.content} />
+                <Markdown content={logForReading(lg.content)} />
               </div>
             )}
           </div>
