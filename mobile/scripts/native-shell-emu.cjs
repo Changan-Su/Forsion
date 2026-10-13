@@ -1061,7 +1061,7 @@ const tabCountText = (list) => {
 
   // 2026-10-04 (user: "like WeChat"): a Space with a left list opens ON the list (full screen, bottom bar below);
   // tapping an item enters the main view (no bottom bar, back arrow); back returns to the list, back again leaves the app.
-  await check('two-level navigation: a Space opens on its list; an item enters the main view (no bottom bar); back returns; back on the list leads Home, back on Home leaves the app', async () => {
+  await check('two-level navigation: a Space opens on its list; an item enters the main view (no bottom bar); back returns; back on the list leads Home, a second back on Home leaves the app', async () => {
     await tanguDrawer() // = Tangu's first level with the fixture sessions listed
     const level = async () => ({ nav: await cdp.eval(nav), list: ui() })
     let at = await level()
@@ -1138,10 +1138,14 @@ const tabCountText = (list) => {
     h.key(4)
     assert.ok(await h.waitPage(cdp, `document.querySelector('.mb-shell')?.dataset.space === 'home' && ${homeShown}`, 6000), 'system back on the list level did not lead to Home')
     assert.ok(resumed(), 'system back on the list level left the app')
-    // … and Home is the bottom of the chain: the app goes to the background (and comes back as it was)
+    // … and Home is the bottom of the chain: one back says "back again to exit" and stays, a second one within two
+    // seconds sends the app to the background (and it comes back as it was)
+    h.key(4)
+    await h.pause(300)
+    assert.ok(resumed(), 'one back on Home left the app (it should ask for a second one)')
     h.key(4)
     await h.pause(1200)
-    assert.ok(!resumed(), 'system back on Home did not leave the app')
+    assert.ok(!resumed(), 'a second back on Home did not leave the app')
     h.adb('shell', 'am', 'start', '-n', ACTIVITY)
     assert.ok((await h.waitNodes((l) => !!h.byId(l, 'nativeChrome.spaces'), { timeout: 10000 })).hit, 'the app did not come back with its bottom bar')
     assert.ok(await cdp.eval(homeShown), 'the app did not come back on Home')
@@ -1654,7 +1658,7 @@ const tabCountText = (list) => {
     }
   })
 
-  await check('touch feedback: no WebView tap highlight; a held press tints the element; long-press selects no text', async () => {
+  await check('touch feedback: no WebView tap highlight; a press spreads a ripple from the finger over the pressed element (and nothing else tints it); long-press selects no text', async () => {
     await tanguDrawer()
     // held target = the selected category chip: a long-press there does nothing (a Space tab's long-press raises the
     // system "pin to home screen" dialog, a row's and the main button's open a menu — all would cover what is sampled)
@@ -1668,13 +1672,30 @@ const tabCountText = (list) => {
       return { tab: hl('.mb-drawer--left .pl-chips button.on'), row: hl('.mb-drawer--left .t2s-srow'), coarse: matchMedia('(pointer: coarse)').matches, missed: [...missed] } })()`)
     console.log('  tappable elements outside the press-tint selector:', probe.missed.join(', ') || '(none)')
     assert.deepEqual({ tab: probe.tab, row: probe.row, coarse: probe.coarse }, { tab: 'rgba(0, 0, 0, 0)', row: 'rgba(0, 0, 0, 0)', coarse: true })
-    const p = await elPoint(tab)
+    // the ripple: one layer under <html>, laid over the pressed element (same rectangle, its corner radius), holding a
+    // circle centred on the finger that grows to cover it. The flat tint (the :active inset shadow) steps aside for it.
+    const layer = "document.querySelector('html > .tap-ripple')"
+    assert.ok(await cdp.eval(`'ripple' in document.documentElement.dataset && !!${layer}`), 'the ripple is not installed in the app')
+    const want = await elRect(tab)
+    const p = { x: Math.round(want.left + (want.right - want.left) * 0.25), y: Math.round((want.top + want.bottom) / 2) } // off-centre: the circle must start there
     const lifted = h.holdAt(p.x, p.y, 2500)
-    const pressed = await h.waitPage(cdp, `(() => { const e = ${tab}; return e.matches(':active') ? { shadow: getComputedStyle(e).boxShadow } : null })()`, 2200)
+    const pressed = await h.waitPage(cdp, `(() => { const e = ${tab}, b = ${layer}; if (getComputedStyle(b).display === 'none') return null
+      const d = b.firstElementChild.getBoundingClientRect(), o = b.getBoundingClientRect()
+      return { active: e.matches(':active'), shadow: getComputedStyle(e).boxShadow, radius: [getComputedStyle(b).borderTopLeftRadius, getComputedStyle(e).borderTopLeftRadius],
+        centre: Math.round((d.left + d.width / 2 - o.left) / o.width * 100), covers: d.left <= o.left + 1 && d.right >= o.right - 1 && d.top <= o.top + 1 && d.bottom >= o.bottom - 1 } })()`, 2200)
+    assert.ok(pressed, 'a held press drew no ripple')
+    await h.pause(400) // grown
+    const got = await elRect(layer)
+    const grown = await cdp.eval(`(() => { const b = ${layer}, d = b.firstElementChild.getBoundingClientRect(), o = b.getBoundingClientRect(); return d.left <= o.left + 1 && d.right >= o.right - 1 && d.top <= o.top + 1 && d.bottom >= o.bottom - 1 })()`)
     shot('03b-press-feedback')
     await lifted
-    assert.ok(pressed, 'the held button never became :active')
-    assert.match(pressed.shadow, /inset/, `no press tint on the held button (box-shadow: ${pressed.shadow})`)
+    assert.ok(sameRect(got, want, 3), `the ripple is not laid over the pressed element: ${fmt(got)} vs ${fmt(want)}`)
+    assert.ok(grown, 'the ripple did not grow to cover the element')
+    assert.ok(Math.abs(pressed.centre - 25) <= 6, `the ripple does not start under the finger (centre at ${pressed.centre}% of the width, the finger at 25%)`)
+    assert.doesNotMatch(pressed.shadow, /inset/, `the flat tint is still drawn under the ripple (box-shadow: ${pressed.shadow})`)
+    assert.ok(parseFloat(pressed.radius[0]) > 0 === parseFloat(pressed.radius[1]) > 0, `the ripple does not follow the element's corners (${pressed.radius})`)
+    await h.pause(700)
+    assert.equal(await cdp.eval(`getComputedStyle(${layer}).display`), 'none', 'the ripple stayed after the finger left')
     await h.pause(400)
     assert.equal(await cdp.eval('String(getSelection())'), '', 'long-press selected text')
     assert.ok(await cdp.eval(drawerOpen), 'the long-press was taken as a tap')
@@ -2187,17 +2208,21 @@ const tabCountText = (list) => {
 
   // Where every system back leads (2026-10-13, user: 「侧滑返回逻辑有些诡异,甚至有时候一不小心就返回桌面了」), by key
   // and by a real swipe in from either screen edge — the full-screen back gesture. What is held:
-  //   · the first level of a Space that is not Home leads Home; only Home leaves the app;
+  //   · the first level of a Space that is not Home leads Home; only Home leaves the app, and only on a second back
+  //     within two seconds of the first (which shows the system toast "back again to exit");
   //   · back from a page reached through the list leads to that list, not to the page looked at before it;
-  //   · a horizontal swipe that starts off the edge is the page's own (it follows the finger), not a back.
+  //   · a horizontal swipe that starts off the edge is the page's own (it follows the finger), not a back;
+  //   · where the system reports the gesture as it happens (Android 14+), the page follows the finger during a back
+  //     swipe from the edge too, and snaps back when the swipe is abandoned. Older systems: nothing moves until release.
   // The whole walk is printed and kept in OUT/back-trace.txt; `BACK_TRACE=1` reads a build without judging it.
-  await check('back: the first level of a Space leads Home and only Home leaves the app; a page opened from the list goes back to the list', async () => {
+  await check('back: the first level of a Space leads Home and only a second back on Home leaves the app; a page opened from the list goes back to the list; an edge swipe moves the page with the finger', async () => {
     const TRACE_ONLY = process.env.BACK_TRACE === '1'
     const rows = []
     const bad = []
     const say = (line) => { rows.push(line); console.log(`  TRACE ${line}`) }
+    // `back` = how often the page was asked what a back would do (once when a gesture starts, once when a back completes)
     await cdp.eval(`(() => { if (window.__bk) return true; const k = window.__bk = { back: 0, start: 0, move: 0, cancel: 0, end: 0 }
-      addEventListener('forsion:mobile-back', () => k.back++, true)
+      addEventListener('forsion:mobile-back', (e) => { if (e.detail && e.detail.probe) k.back++ }, true)
       for (const [ev, f] of [['touchstart', 'start'], ['touchmove', 'move'], ['touchcancel', 'cancel'], ['touchend', 'end']]) addEventListener(ev, () => k[f]++, { capture: true, passive: true })
       return true })()`)
     const counters = async () => JSON.parse(await cdp.eval('JSON.stringify(window.__bk)'))
@@ -2213,7 +2238,7 @@ const tabCountText = (list) => {
       await h.pause(wait)
       const s = await st()
       const k = s.fg ? await counters() : null
-      say(`${step} → ${s.at}${k ? `   [page saw: back ${k.back}, touch start ${k.start} move ${k.move} cancel ${k.cancel} end ${k.end}]` : ''}`)
+      say(`${step} → ${s.at}${k ? `   [page: asked about back ${k.back}×, touch start ${k.start} move ${k.move} cancel ${k.cancel} end ${k.end}]` : ''}`)
       if (want && s.at !== want) bad.push(`${step}: at ${s.at}, expected ${want}`)
       if (!s.fg) {
         h.adb('shell', 'am', 'start', '-n', ACTIVITY)
@@ -2230,6 +2255,14 @@ const tabCountText = (list) => {
     const edgeL = () => sw(2, screen.w * 0.65)
     const edgeR = () => sw(screen.w - 3, screen.w * 0.35)
     const density = Number(h.adb('shell', 'wm', 'density').match(/(\d+)\s*$/)[1]) / 160
+    const sdk = Number(h.adb('shell', 'getprop', 'ro.build.version.sdk').trim())
+    const gestures = h.adb('shell', 'settings', 'get', 'secure', 'navigation_mode').trim() === '2'
+    const reportsProgress = sdk >= 34 && gestures // the system tells the app where a back swipe is: Android 14+
+    /** Back twice, close together: what leaves the app from Home. */
+    const twice = (act = () => h.key(4)) => { act(); act() }
+    /** The system toast is a window of its own while it shows. */
+    const toastUp = () => /Toast/.test(h.adb('shell', 'dumpsys', 'window', 'windows'))
+    const quiet = () => h.pause(2400) // past the two seconds in which a second back exits
     const TWO = sessions.find((x) => x.id === 'e2e-s2').title
     const open = async (title) => { await tapEl(rowExpr(title)); await h.waitPage(cdp, `(${nav}) === 'detail'`, 8000) }
     /** ⋯ → search → quick find → the conversation titled `title` (typed: `text`): opens it from wherever we are, not through the list. */
@@ -2247,14 +2280,22 @@ const tabCountText = (list) => {
       if (imeShown()) { h.key(4); await h.pause(600) }
       await tapEl(hit); await h.waitPage(cdp, `(${dom.view}) === 'chat' && !document.querySelector('.amx-qf-input')`, 6000); await zero()
     }
-    say(`screen ${screen.w}x${screen.h} @${density}x; navigation_mode=${h.adb('shell', 'settings', 'get', 'secure', 'navigation_mode').trim()} (2 = gestures)`)
+    say(`screen ${screen.w}x${screen.h} @${density}x; Android SDK ${sdk}; ${gestures ? 'gesture' : 'button'} navigation; back swipe progress reported: ${reportsProgress}`)
 
     // A. Home is where the app leaves from — by key and by a swipe in from either edge
-    await goHome(); await zero()
+    await goHome(); await zero(); await quiet()
     await note('A0 Home', HOME, 300)
-    h.key(4); await note('A1 Home: back key', LEFT)
-    await goHome(); edgeL(); await note('A2 Home: swipe in from the left edge', LEFT)
-    await goHome(); edgeR(); await note('A3 Home: swipe in from the right edge', LEFT)
+    h.key(4); await h.pause(250)
+    const hinted = toastUp()
+    say(`   the "back again to exit" toast is up: ${hinted}`)
+    if (!hinted) bad.push('A1: one back on Home showed no toast')
+    await note('A1 Home: back key once', HOME, 300)
+    await quiet(); twice(); await note('A1 Home: back key twice', LEFT)
+    if (gestures) {
+      await goHome(); await quiet(); edgeL(); await note('A2 Home: one swipe in from the left edge', HOME)
+      await quiet(); edgeR(); await note('A3 Home: one swipe in from the right edge', HOME)
+      await quiet(); twice(edgeL); await note('A3 Home: two swipes in from the edge', LEFT)
+    }
     // … and a Space entered from Home leads back to it
     await goHome(); await foldHomeComposer()
     await tapEl(`document.querySelector('.hp-root .hp-card[data-space-id="tangu"]')`); await note('A4 Home: tap the Tangu card', LIST)
@@ -2272,8 +2313,10 @@ const tabCountText = (list) => {
 
     // B. the first level of a list Space: an edge swipe is a back (→ Home), a swipe across the list is not
     await tanguDrawer(); await zero()
-    edgeR(); await note('B1 list: swipe in from the right edge', HOME)
-    await tanguDrawer(); edgeL(); await note('B2 list: swipe in from the left edge', HOME)
+    if (gestures) {
+      edgeR(); await note('B1 list: swipe in from the right edge', HOME)
+      await tanguDrawer(); edgeL(); await note('B2 list: swipe in from the left edge', HOME)
+    }
     await tanguDrawer(); sw(screen.w * 0.8, screen.w * 0.2); await note('B3 list: swipe left across the middle', LIST)
 
     // C. list → conversation One → back arrow → conversation Two → back: the list (not One), then Home, then out
@@ -2283,7 +2326,7 @@ const tabCountText = (list) => {
     await open(TWO); await note('C3 list: tap conversation Two', `tangu/detail "${TWO}"`)
     h.key(4); await note('C4 back key', LIST)
     h.key(4); await note('C5 back key', HOME)
-    h.key(4); await note('C6 back key', LEFT)
+    await quiet(); twice(); await note('C6 back key twice', LEFT)
     // … and a page reached from inside a trip (search → conversation One, not through the list) is walked back first:
     //    the taps on the way are what tells a page of this trip from the one the tapped row opened (lcl listTrips)
     await tanguDrawer(); await open(TWO); await h.pause(700); await zero()
@@ -2293,28 +2336,45 @@ const tabCountText = (list) => {
 
     // D. a conversation: the same rightward swipe by where the finger starts. Up to the system's back inset it is the
     //    system's (the page gets a touchcancel and one back); past it the page's own drag. Both end on the list.
-    for (const dp of [1, 16, 24, 32, 60, 120]) {
+    for (const dp of gestures ? [1, 16, 24, 32, 60, 120] : [32, 60, 120]) {
       await tanguDrawer(); await open('E2E Session One'); await h.pause(700); await zero()
       sw(dp * density, screen.w * 0.7)
       await note(`D  conversation: swipe right starting ${dp}dp from the left edge`, LIST)
     }
-    // … held half-way: does what is on screen move with the finger? (recorded, not judged: the system's gesture moves
-    //    nothing until it is released; the page's own drag follows)
-    const held = async (x0, tag) => {
-      const me = (a, x) => h.adb('shell', 'input', 'motionevent', a, String(Math.round(x)), String(mid))
+    // … held half-way: what is on screen moves with the finger — the page's own drag everywhere, the system's back
+    //    swipe where the system reports it as it happens (Android 14+; before that nothing can move until release)
+    const me = (a, x) => h.adb('shell', 'input', 'motionevent', a, String(Math.round(x)), String(mid))
+    const pageAt = async () => JSON.parse(await cdp.eval(`(() => { const m = document.querySelector('.mb-body > .mb-main'); const d = document.querySelector('.mb-drawer--left'); return JSON.stringify({ drag: document.querySelector('.mb-body')?.dataset.drag || '', main: m ? Math.round(m.getBoundingClientRect().left) : null, list: d ? Math.round(d.getBoundingClientRect().left) : null, w: innerWidth }) })()`))
+    const held = async (x0, tag, { back = false } = {}) => {
       me('DOWN', x0); for (const f of [0.12, 0.25, 0.4, 0.5]) me('MOVE', x0 + screen.w * f)
       await h.pause(350)
-      const moved = resumed() ? await cdp.eval(`(() => { const m = document.querySelector('.mb-body > .mb-main'); const d = document.querySelector('.mb-drawer--left'); return JSON.stringify({ drag: document.querySelector('.mb-body')?.dataset.drag || '', main: m ? Math.round(m.getBoundingClientRect().left) : null, list: d ? Math.round(d.getBoundingClientRect().left) : null, w: innerWidth }) })()`) : '(not in front)'
+      const at = resumed() ? await pageAt() : null
       shot(tag)
-      me('UP', x0 + screen.w * 0.5)
-      say(`   held half-way (${tag}): page ${moved}`)
+      if (back) { for (const f of [0.3, 0.1, 0.01]) me('MOVE', x0 + screen.w * f); await h.pause(200); me('UP', x0 + screen.w * 0.01) } // the finger returns to the edge: abandoned
+      else me('UP', x0 + screen.w * 0.5)
+      say(`   held half-way (${tag}): page ${JSON.stringify(at)}`)
+      return at
     }
-    await tanguDrawer(); await open('E2E Session One'); await h.pause(700); await zero()
-    await held(2, '06-back-held-system-edge'); await note('E1 conversation: edge swipe held, then released', LIST)
-    await tanguDrawer(); await open('E2E Session One'); await h.pause(700); await zero()
-    await held(60 * density, '06-back-held-in-page'); await note('E2 conversation: swipe from 60dp held, then released', LIST)
-    await goHome(); await zero()
-    await held(2, '06-back-held-edge-on-home'); await note('E3 Home: edge swipe held, then released', LEFT)
+    const inConversation = async () => { await tanguDrawer(); await open('E2E Session One'); await h.pause(700); await zero() }
+    if (gestures) {
+      await inConversation()
+      const sys = await held(2, '06-back-held-system-edge')
+      if (reportsProgress && !(sys.drag === 'left' && sys.main > sys.w * 0.3)) bad.push(`E1: the page does not follow a back swipe from the edge (${JSON.stringify(sys)})`)
+      await note('E1 conversation: edge swipe held, then released', LIST)
+      await inConversation()
+      await held(2, '06-back-held-then-abandoned', { back: true }); await h.pause(700)
+      const rest = await pageAt()
+      if (rest.drag || rest.main !== 0) bad.push(`E1: an abandoned back swipe left the page out of place (${JSON.stringify(rest)})`)
+      await note('E1 conversation: edge swipe held, finger back to the edge, released', 'tangu/detail "E2E Session One"')
+    }
+    await inConversation()
+    const own = await held(60 * density, '06-back-held-in-page')
+    if (!(own.drag === 'left' && own.main > own.w * 0.3)) bad.push(`E2: the page's own drag does not follow the finger (${JSON.stringify(own)})`)
+    await note('E2 conversation: swipe from 60dp held, then released', LIST)
+    if (gestures) {
+      await goHome(); await zero(); await quiet()
+      await held(2, '06-back-held-edge-on-home'); await note('E3 Home: edge swipe held, then released (one back)', HOME)
+    }
 
     // F. a conversation opened from Home (search): back → its Space's list → Home → out
     await goHome()
@@ -2322,7 +2382,72 @@ const tabCountText = (list) => {
     await note('F0 Home: search → open conversation Two', `tangu/detail "${TWO}"`)
     h.key(4); await note('F1 back key', LIST)
     h.key(4); await note('F2 back key', HOME)
-    h.key(4); await note('F3 back key', LEFT)
+    await quiet(); twice(); await note('F3 back key twice', LEFT)
+
+    // G. the same on a system that does not report the gesture as it happens (Android 13 and below, and any gesture
+    //    navigation that skips it): the page hears nothing until the back completes. Stood in for here by dropping the
+    //    plugin's gesture events before they reach the page — seen from the page that is what such a system is.
+    //    Held: every landing is the same, the exit still asks twice; the only difference is that nothing moves before release.
+    await cdp.eval(`(() => { const b = window.androidBridge; if (!b || b.__onmessage) return !!b; b.__onmessage = b.onmessage
+      b.onmessage = function (ev) { try { const r = JSON.parse(ev.data); if (r && r.pluginId === 'NativeBack' && r.methodName === 'addListener') return } catch {} return b.__onmessage.call(this, ev) }; return true })()`)
+    try {
+      say('G  from here on the page is not told about the gesture (as on Android 13 and below)')
+      if (gestures) {
+        await inConversation()
+        const mute = await held(2, '06-back-held-no-progress')
+        if (mute.drag || mute.main !== 0) bad.push(`G: the page moved during a back swipe it was not told about (${JSON.stringify(mute)})`)
+        await note('G1 conversation: edge swipe held, then released', LIST)
+      }
+      await inConversation(); h.key(4); await note('G2 conversation: back key', LIST)
+      h.key(4); await note('G3 list: back key', HOME)
+      await quiet(); h.key(4); await h.pause(250)
+      if (!toastUp()) bad.push('G4: one back on Home showed no toast')
+      await note('G4 Home: back key once', HOME, 300)
+      await quiet(); twice(); await note('G5 Home: back key twice', LEFT)
+    } finally {
+      await cdp.eval('(() => { const b = window.androidBridge; if (b && b.__onmessage) { b.onmessage = b.__onmessage; delete b.__onmessage } return true })()')
+    }
+
+    // H. orders the system can produce and a finger on an emulator cannot time (review, 2026-10-13): a gesture that
+    //    never gets its ending, two in one frame, something opening over the page while the finger is down. One real
+    //    back is recorded as the bridge says it (the gesture's start and the completed back), then replayed.
+    if (reportsProgress) {
+      await inConversation()
+      await cdp.eval(`(() => { const b = window.androidBridge; if (!b) return false; const real = b.onmessage; const k = window.__bk = { real, g: null, b: null }
+        b.onmessage = function (ev) { try { const r = JSON.parse(ev.data); if (r && r.methodName === 'addListener') { if (r.pluginId === 'NativeBack') k.g = r; else if (r.pluginId === 'App' && r.data && 'canGoBack' in r.data) k.b = r } } catch {} return real.call(this, ev) }
+        const tell = (tpl, data) => real.call(b, { data: JSON.stringify(Object.assign({}, tpl, { data })) })
+        k.gesture = (phase, x) => tell(k.g, phase === 'cancel' ? { phase } : { phase, edge: 'left', x })
+        k.back = () => tell(k.b, k.b.data)
+        return true })()`)
+      try {
+        h.key(4); await note('H0 conversation: back key (recorded)', LIST)
+        await inConversation()
+        if (!(await cdp.eval('!!(window.__bk && __bk.g && __bk.b)'))) bad.push('H: the bridge carried no gesture start / completed back to record')
+        else {
+          // a swipe whose ending never arrives, one abandoned, and a third — all before the page draws a frame
+          await cdp.eval(`(() => { const g = __bk.gesture; g('start', 0.01); g('progress', 0.4); g('start', 0.01); g('cancel'); g('start', 0.01); g('progress', 0.7); return true })()`)
+          await h.pause(250)
+          await cdp.eval(`(() => { __bk.gesture('progress', 0.7); return true })()`); await h.pause(150)
+          const third = await pageAt()
+          if (!(third.drag === 'left' && third.main > third.w * 0.6)) bad.push(`H1: after two unfinished swipes the page no longer follows the next one (${JSON.stringify(third)})`)
+          await cdp.eval(`(() => { __bk.gesture('cancel'); return true })()`); await h.pause(600)
+          const rest = await pageAt()
+          if (rest.drag || rest.main !== 0) bad.push(`H1: the page stays out of place after the swipes ended (${JSON.stringify(rest)})`)
+          await note('H1 conversation: three swipes inside one frame, the last abandoned', 'tangu/detail "E2E Session One"')
+          // the finger is down on a back that would slide to the list; something that takes a back opens; release
+          await cdp.eval(`(() => { window.__bkTook = 0; window.__bkTake = (e) => { e.preventDefault(); if (!(e.detail && e.detail.probe)) window.__bkTook++ }
+            __bk.gesture('start', 0.01); __bk.gesture('progress', 0.4); window.addEventListener('forsion:mobile-back', window.__bkTake); __bk.back(); return true })()`)
+          await h.pause(600)
+          const took = await cdp.eval('window.__bkTook')
+          const stay = await pageAt()
+          await cdp.eval(`(() => { window.removeEventListener('forsion:mobile-back', window.__bkTake); return true })()`)
+          if (took !== 1 || stay.drag || stay.main !== 0) bad.push(`H2: a back released after something opened over the page did not go to it (taken ${took}, page ${JSON.stringify(stay)})`)
+          await note('H2 conversation: back swipe held, an overlay opens, released', 'tangu/detail "E2E Session One"')
+        }
+      } finally {
+        await cdp.eval('(() => { const b = window.androidBridge; if (b && window.__bk) { b.onmessage = window.__bk.real; delete window.__bk } return true })()')
+      }
+    }
 
     fs.writeFileSync(path.join(OUT, 'back-trace.txt'), rows.join('\n') + '\n')
     await goHome()
