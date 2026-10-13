@@ -147,3 +147,13 @@
 .mb-shell[data-list-first] [data-timeline] .t2s-srow:has(.t2s-srow-sub) .t2s-srow-time { align-self: flex-start; margin-top: calc(15 * var(--pl-dp)); }
 /* 行尾的 ⋯ 让给左滑和长按 */
 .mb-shell[data-list-first] [data-timeline] .t2s-srow-menu { display: none; }
+
+/* ══ 列表源的行(收件箱 / 自动化 / 插件列表,WorkspaceView 的 PluginListBody):骨架与上面相同,两处不同 ——
+ *    时间收在标题那一行里,第二行因此用满整行(信的第一句话比时间那一列要紧);未读的行标题加重。
+ *    这一段要留在文件末尾:它和上面「有第二行时时间靠上」那条同特异性,靠后写才压得住。 ══ */
+.mb-shell[data-list-first] [data-timeline] .t2s-srow-text > .pl-row-top { display: flex; align-items: baseline; gap: calc(10 * var(--pl-dp)); min-width: 0; }
+.mb-shell[data-list-first] [data-timeline] .t2s-srow-text > .pl-row-top > .t2s-srow-title { flex: 1 1 auto; min-width: 0; }
+.mb-shell[data-list-first] [data-timeline] .t2s-srow-text > .pl-row-top > .t2s-srow-time { flex: none; align-self: auto; margin: 0; }
+.mb-shell[data-list-first] [data-timeline] .t2s-srow.is-unread .t2s-srow-title { font-weight: 650; }
+/* 点了搜索才出来的那一行:左右与行对齐 */
+.mb-shell[data-list-first] .t2sw-plug[data-timeline] > .t2sw-plug-toolbar { padding: calc(2 * var(--pl-dp)) calc(16 * var(--pl-dp)) calc(6 * var(--pl-dp)); }

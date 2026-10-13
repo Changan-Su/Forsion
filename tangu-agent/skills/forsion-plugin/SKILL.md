@@ -2,7 +2,7 @@
 name: forsion-extension-development
 description: 当用户要给 Forsion / Tangu 做插件、主题、Space、智能体(agent)或捆绑包(bundle)——或要把某个能力做成可分发/可上架商店的扩展——时使用;已装的插件 / Space / 视图不出现、加载失败、更新后不工作要排查时也用(带一份插件体检脚本 tools/check-plugin.mjs)。内置五类官方模板(samples/),讲清各自的格式基线与硬约束(尤其两种"插件"是完全不同的系统),照抄模板改比从零写靠谱。
 metadata:
-  version: 1.35.0
+  version: 1.36.0
   author: Forsion
   category: Forsion
 ---
@@ -719,7 +719,7 @@ refresh = (rows) => h.update({ ...spec, rows })   // 数据刷新走 update:排�
   (try/catch 照不到),列表就此定格为空。宿主挂载列表面 / 切库都会重订阅,这是重读的门。
   (青鸟 2026-08-28 实报「明明有记录却是空」,根因即此。)
 - 行首图标 `iconUrl`(favicon 等)与 `icon`(词表键)**两个都给**:老宿主 / 取不到图时退 `icon`。
-- `actions` / `itemMenu()` 的每一项是 `{ id, label, primary?, danger?, run }`:`primary` 留在工具条外面(缺省第一项),其余收进「⋯」;
+- `actions` / `itemMenu()` 的每一项是 `{ id, label, primary?, danger?, icon?, run }`:`primary` 留在工具条外面(缺省第一项),其余收进「⋯」;
   `danger: true`(2026-09-25 起)= 不可逆动作(删除 / 移除),宿主在右键菜单和「⋯」里都用危险色画它。**只管配色,确认仍由插件自己在 `run()` 里做**
   (宿主不替你弹框);惯例把它排在最后一项。老宿主忽略该字段。
 - 行可带 `unread: true`(2026-09-11 起):宿主在行首图标角上画与未读会话同一个点;老宿主忽略。
@@ -727,6 +727,14 @@ refresh = (rows) => h.update({ ...spec, rows })   // 数据刷新走 update:排�
 - 行可带 `subtitle`(2026-10-13 起):标题下面再画一行淡字,只占一行、超出省略 —— 写「谁发的 · 第一句话」「状态」这类一眼要看到的东西,
   纯文本、别放 markdown;不写就还是一行。文件夹行不认;老宿主忽略该字段、照旧画一行,不用探测。右边的 `hint` 对齐第一行。
   收件箱的行就是 `title` + `subtitle`(发信人 · 正文第一句)+ `hint`(时间)。词表新增三枚「谁发来的」图标:`cloud` / `workflow` / `agent`。
+- **手机上的样子(2026-10-13 起)**:安卓原生外壳里,**平铺的**列表源(没有文件夹行、没有 `parent`)画成手机的整屏列表,和会话 / 笔记列表同一套 ——
+  `groups()` 是一排分类胶囊(不是菜单);行是 44dp 图标块 + 标题与 `hint` 一行 + `subtitle` 一行;搜索在顶上胶囊的搜索钮和下拉里;
+  `itemMenu()` 的动作藏在左滑后面,是**只有图标、不带字**的圆钮;`primary` 那个动作是右下角的主按钮,其余 `actions` 在它的长按菜单里。
+  所以动作要带 `icon`(图标词表里的名字,和行的 `icon` 同一张表):**没有 `icon` 的行动作不进左滑**(仍在长按菜单里),没有 `icon` 的主动作画成加号。
+  成对的动作各给各的图标(已读 `mail-open` / 未读 `mail`、归档 `archive` / 取消归档 `unarchive`);`label` 这时是读屏标签和首次提示里念的名字,照旧要写。
+  动作用得上的词表名:`mail` / `mail-open` / `archive` / `unarchive` / `trash` / `refresh` / `edit` / `pin` / `bookmark` / `plus`。带层级的源在手机上仍是树,不变。
+  这套版式里行不能拖动(长按留给行的菜单):要让人在手机上排序 / 归类,给一个动作,别只靠 `drop`。没有 `actions`、只有 `groupActions` 的源,主按钮就是那张菜单。
+  桌面 / 网页不受影响;老宿主忽略 `icon`。不用探测,照写即可。
 - `drop` 不声明就完全没有拖放;声明了也是宿主判形点亮、插件决定接不接。
 - **层级 / 行内拖动 / 就地改名(2026-10-10 起;写本条时桌面尚未发版)**:三样都先探测
   `ctx.listCapabilities?.includes('tree' | 'items' | 'rename')`,探测不到就照旧输出平铺的行 ——

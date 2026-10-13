@@ -597,6 +597,12 @@ export interface ListAction {
    *  lands in (2026-09-25+). Presentation only — confirming stays the plugin's job inside `run()`.
    *  Older hosts ignore it. */
   danger?: boolean
+  /** A name from the icon vocabulary (same names as `ListItem.icon`; 2026-10-13+). The host needs it wherever an
+   *  action is drawn as an icon-only button: on a phone, a row's actions sit behind a left swipe as round icon
+   *  buttons, and the source's primary action is the list's main button. An action without an icon is left out of
+   *  the swipe tray (it stays in the row's long-press menu); a primary action without one gets a plus sign.
+   *  Give paired actions (read / unread, archive / unarchive) each their own icon. Older hosts ignore the field. */
+  icon?: string
   run(): void
 }
 
