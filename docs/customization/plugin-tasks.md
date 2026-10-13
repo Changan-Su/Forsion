@@ -6,9 +6,9 @@ These additive APIs require a host build containing this change. Released 2.12.2
 
 | API | 契约 / Contract |
 | --- | --- |
-| `ctx.tangu.request(engineId,path,options)` | 渲染端通过宿主调用同捆绑包内的引擎插件 JSON 路由。宿主认证、限制路由、停用时取消请求；不返回凭据。 Authenticated, bundle-scoped local requests; no credential exposure. |
+| `ctx.tangu.request(engineId,path,options)` | 渲染端通过宿主调用同捆绑包内的引擎插件 JSON 路由。宿主认证、限制路由、停用时取消请求；不返回凭据。 Authenticated, bundle-scoped local requests; no credential exposure. 路由前缀由宿主按包的安装目录名拼;桌面 2.13.3 及更早按 manifest `id` 拼,安装目录名和 `id` 不一样的包在那些版本上每次调用都是 404。 The host builds the prefix from the bundle's install folder name; desktop 2.13.3 and earlier used the manifest `id`, so a bundle whose folder name differs from its id gets 404 there. |
 | `ctx.tangu.openSession(id)` | 加载隐藏任务会话的真实模型/配置，再打开原生聊天；不自动开跑。 Opens native chat with persisted metadata without starting a run. |
-| `ctx.registerScopedRoutes(register)` | 路由挂到 `/extensions/<bundle>/<engineId>`，校验本地来源、登录用户，停用时撤销。 Use `req.user.userId`, never a body-supplied owner. |
+| `ctx.registerScopedRoutes(register)` | 路由挂到 `/extensions/<包的安装目录名>/<engineId>`(目录名以磁盘上的为准,不听包自己声明的 id)，校验本地来源、登录用户，停用时撤销。 Use `req.user.userId`, never a body-supplied owner. |
 | `ctx.paths.dataDir` | 宿主分配的稳定插件数据目录。 Stable host-owned data directory, separate from installed code. |
 | `sdk.runs.start(options)` | 创建插件拥有的隐藏 `kind=task` 会话。先保存意图，再使用固定 `requestId` 提交；结果未知时用同一 ID 重试。 Native approvals and questions remain active. |
 | `runs.status/sessionRuns/events/subscribe/stop` | 都校验插件和用户所有权；`sessionRuns` 包含原生续聊，订阅在停用时清理。 Ownership-checked status, bounded events, native continuations and Stop. |

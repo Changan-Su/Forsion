@@ -8,4 +8,7 @@ describe('plugin engine request scope',()=>{
   it.each(['/../agent/runs','/%2e%2e/agent/runs','//agent/runs','/tasks?x=1','/tasks#x','https://example.com','/a\\b'])('rejects path escape %s',p=>{
     expect(()=>pluginRequestPath('bundle','engine',p,['engine'])).toThrow();
   });
+  it.each(['My_Plugin','../x','a/b','插件',''])('says so when the install folder name %s cannot be a route segment',dir=>{
+    expect(()=>pluginRequestPath(dir,'engine','/tasks',['engine'])).toThrow(/install folder name/);
+  });
 });

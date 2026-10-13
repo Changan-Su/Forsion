@@ -1557,8 +1557,10 @@ export const usePluginStore = create<PluginState>((set, get) => {
             ...(readTangu()?.waitBackend ? {
               request: async (engineId: string, path: string, opts: PluginRequestOptions = {}): Promise<unknown> => {
                 if (!ctxAlive()) throw new Error('plugin disabled')
-                const owned = get().plugins.find((p) => p.id === pluginId)?.bundle?.enginePlugins ?? []
-                const route = pluginRequestPath(pluginId, engineId, path, owned)
+                // 引擎按**安装目录名**挂路由,目录名可以和插件 id 不同(商店按 install_slug 落目录)。拿插件 id 去拼,
+                // 两者不一样时就是 404、运行那一半整个不通。旧主进程不报目录名时退回 id(= 从前的行为)。
+                const bundle = get().plugins.find((p) => p.id === pluginId)?.bundle
+                const route = pluginRequestPath(bundle?.dir ?? pluginId, engineId, path, bundle?.enginePlugins ?? [])
                 const method = opts.method ?? 'GET'
                 if (!['GET', 'POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) throw new Error('Invalid request method')
                 if (!readTangu()?.hostExecution?.()) throw new Error('A local engine is required')

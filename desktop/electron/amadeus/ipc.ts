@@ -495,7 +495,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
       withMarker('spaces', 'space.json'),
     ])
     return enginePlugins.length || agents.length || skills.length || spaces.length
-      ? { enginePlugins, agents, skills, spaces }
+      ? { dir: path.basename(pdir), enginePlugins, agents, skills, spaces }
       : undefined
   }
 
