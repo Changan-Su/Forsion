@@ -43,6 +43,9 @@ export interface BuildPayloadOpts {
   stream?: boolean;
   /** 缓存路由键(传 sessionId):OpenAI 官方 API 的 prompt_cache_key,同会话请求粘到同一推理机提升前缀缓存命中。 */
   cacheKey?: string;
+  /** 翻译请求(正文 AI 的 translate 动作带):原文 + 目标语言(自由文本)。云端的机器翻译模型(model_type='mt',
+   *  百炼 qwen-mt 那一类)只收一条待翻译的消息,服务端据此另装请求体;普通模型忽略它,照常用 messages。 */
+  translate?: { text: string; target: string };
   /** 运行中的 agent slug(B4② 实验载体)。TANGU_CACHE_KEY_SCOPE='agent' 时直连面据此把缓存路由键
    *  改成 agent+模型 维度(resolveCacheKey);缺省档与托管面都忽略它。 */
   agentId?: string;
@@ -184,6 +187,8 @@ export interface ModelsBrain {
     visionModelId?: string | null;
     /** 云端的实时语音通话模型(不在 models 里;apiModelId = 上游模型名,客户端按它分音色家族)。老云端不给 = 没有云端通话。 */
     realtimeModel?: { id: string; name: string; apiModelId?: string | null } | null;
+    /** 云端的机器翻译模型(百炼 qwen-mt 那一类;不在 models 里 —— 它们不能聊天)。老云端不给 = 没有。 */
+    translateModels?: Array<{ id: string; name: string; provider?: string; apiModelId?: string | null }>;
     /** 这次目录是真读到了,还是被降级填的空?未实现此字段的实现留 undefined(调用方回落长度启发式)。
      *  空列表有两种成因(未登录/断网 vs admin 真没授权),分不清就会把掉线用户支去设置页空等。 */
     reachable?: boolean;

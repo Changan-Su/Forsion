@@ -1,4 +1,4 @@
-/** 真 Electron × 假引擎：默认模型选择/保存、设置分区、本地分组/可见性、云端只读与标签倍率。先 npm run build。 */
+/** 真 Electron × 假引擎：默认模型选择/保存(含「翻译」槽与云端的机器翻译模型)、设置分区、本地分组/可见性、云端只读与标签倍率。先 npm run build。 */
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path')
 const electron = require('./lib/launch-electron.cjs')
 const { startStubEngine } = require('./lib/stub-engine.cjs')
@@ -13,7 +13,7 @@ const results = []
 const check = (name, ok) => { results.push({ name, ok }); console.log(`${ok ? 'PASS' : 'FAIL'} ${name}`) }
 async function main() {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'forsion-model-catalog-'))
-  const stub = await startStubEngine({ models, sessions: [{ id: 'catalog-session', title: '模型目录验证', summary: '', model_id: 'cloud-pro', archived: false, emoji: null, agent_config: null, project_path: '/tmp', project_name: 'tmp', created_at: '2026-09-11 00:00:00', updated_at: '2026-09-11 00:00:00' }], handle: async ({ path: p }) => p.endsWith('/runs') ? { runs: [] } : undefined })
+  const stub = await startStubEngine({ models, modelsMeta: { translateModels: [{ id: 'qwen-mt', name: 'Qwen MT Flash', provider: 'bailian', apiModelId: 'qwen-mt-flash' }] }, sessions: [{ id: 'catalog-session', title: '模型目录验证', summary: '', model_id: 'cloud-pro', archived: false, emoji: null, agent_config: null, project_path: '/tmp', project_name: 'tmp', created_at: '2026-09-11 00:00:00', updated_at: '2026-09-11 00:00:00' }], handle: async ({ path: p }) => p.endsWith('/runs') ? { runs: [] } : undefined })
   let app
   try {
     app = await electron.launch({ args: [`--user-data-dir=${path.join(home, 'userdata')}`, '--lang=zh-CN', ROOT], cwd: ROOT, env: { ...process.env, TANGU_HOME: home, TANGU_BACKEND_URL: stub.url } })
@@ -44,7 +44,7 @@ async function main() {
     await settings('默认模型')
     const defaults = sp.locator('.model-defaults-panel')
     await defaults.waitFor()
-    check('默认模型按用途使用四个紧凑选择器', await defaults.locator('.model-select-btn').count() === 4 && await defaults.locator('.menu-item,.model-group-body,.model-catalog-settings').count() === 0)
+    check('默认模型按用途使用五个紧凑选择器', await defaults.locator('.model-select-btn').count() === 5 && await defaults.locator('.menu-item,.model-group-body,.model-catalog-settings').count() === 0)
     await defaults.getByRole('button', { name: '对话与任务', exact: true }).click()
     await defaults.locator('.composer-menu').getByRole('button', { name: 'Local Alpha', exact: true }).click()
     await sp.waitForFunction(async () => (await window.tangu.getConfig()).modelId === 'local/a')
@@ -55,6 +55,22 @@ async function main() {
     await defaults.locator('.composer-menu').getByRole('button', { name: /跟随服务默认/ }).click()
     await sp.waitForFunction(async () => !(await window.tangu.getConfig()).modelId)
     check('可恢复跟随服务默认', (await defaults.getByRole('button', { name: '对话与任务', exact: true }).innerText()).includes('跟随服务默认'))
+    // 「翻译」槽:不选 = 跟聊天模型;候选 = 对话模型 + 云端的机器翻译模型(后者只在这一行出现);选了落 config.json 的 models.translate
+    const tr = defaults.getByRole('button', { name: '翻译', exact: true })
+    check('翻译槽缺省跟随聊天模型', (await tr.innerText()).includes('跟随聊天模型'))
+    check('机器翻译模型不进对话模型的候选', await (async () => {
+      await defaults.getByRole('button', { name: '对话与任务', exact: true }).click()
+      const n = await defaults.locator('.composer-menu').getByRole('button', { name: 'Qwen MT Flash', exact: true }).count()
+      await sp.keyboard.press('Escape')
+      return n === 0
+    })())
+    await tr.click()
+    await sp.waitForTimeout(400)
+    await sp.screenshot({ path: path.join(os.tmpdir(), 'forsion-model-defaults-translate-menu.png') })
+    await defaults.locator('.composer-menu').getByRole('button', { name: 'Qwen MT Flash', exact: true }).click()
+    await sp.waitForFunction(async () => (await window.tangu.getConfig()).translateModelId === 'qwen-mt')
+    const saved = JSON.parse(fs.readFileSync(path.join(home, 'config.json'), 'utf8'))
+    check('翻译槽选中云端的机器翻译模型并落进 config.json 的 models.translate', await tr.innerText() === 'Qwen MT Flash' && saved.models?.translate === 'qwen-mt')
     await sp.mouse.move(350, 80)
     await sp.waitForTimeout(400)
     await sp.screenshot({ path: path.join(os.tmpdir(), 'forsion-model-defaults.png') })

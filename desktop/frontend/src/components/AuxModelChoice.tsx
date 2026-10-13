@@ -61,6 +61,9 @@ export function AuxModelChoice({ models, compact = false }: { models: ModelsResp
   // 再把原图退给同样看不了的主模型,整轮必挂——这种选项不该出现在列表里(Codex 评审)。
   const visionCapable = llms.filter((m) => m.supportsVision !== false)
 
+  // 翻译槽:对话模型 + 云端的机器翻译模型(后者只在这里出现,别处的选择器看不到它们)
+  const translators = [...llms, ...(models?.translateModels || []).map((m) => ({ id: m.id, name: m.name, provider: m.provider || 'forsion', source: 'forsion' as const }))]
+
   const modes: VisionMode[] = ['auto', 'always', 'off']
 
   if (compact) return <>
@@ -74,7 +77,7 @@ export function AuxModelChoice({ models, compact = false }: { models: ModelsResp
     } />
     {/* 没有 app 级的槽可跟:不选 = 跟聊天当前模型(tanguProbe.complete 里取) */}
     <SettingsRow label={t('aux.translateCompact')} description={t('aux.translateCompactHint')} control={
-      <ModelSelect models={llms} value={translate} defaultLabel={t('aux.translateFollow')} icon={<Languages size={13} />} ariaLabel={t('aux.translateCompact')}
+      <ModelSelect models={translators} value={translate} defaultLabel={t('aux.translateFollow')} icon={<Languages size={13} />} ariaLabel={t('aux.translateCompact')}
         onChange={(id) => { setTranslate(id); void window.tangu?.setConfig?.({ translateModelId: id }) }} />
     } />
     <SettingsRow label={t('aux.visionBehavior')} description={t(`aux.visionMode.${visionMode}`)} control={

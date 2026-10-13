@@ -177,6 +177,11 @@ describe('「翻译」模型槽(translate 动作的模型)', () => {
     expect(await translateModelId()).toBeUndefined()
     withSlot('gone')
     expect(await translateModelId()).toBeUndefined()
+    // 云端的机器翻译模型不在 models 里,在 translateModels 里:照样算数
+    useApp.setState({ modelsResp: { models: [{ id: 'mt', name: 'MT', provider: 'x', source: 'forsion' }], translateModels: [{ id: 'qmt', name: 'Qwen MT' }] } } as never)
+    withSlot('qmt')
+    expect(await translateModelId()).toBe('qmt')
+    withSlot('gone')
     useApp.setState({ modelsResp: undefined } as never)
     expect(await translateModelId()).toBe('gone')
   })

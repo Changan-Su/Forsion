@@ -35,11 +35,11 @@ import { connectionTarget } from './services/engine/targets'
 import { getCallVoice, subscribeCallVoice } from './services/callVoice'
 
 /** 「翻译」模型槽(设置 → 模型;config.json models.translate)。没设、读不到、或目录里已经没有这个模型
- *  (下架 / 换了账号)→ undefined,调用方落回聊天当前模型 —— 逐句翻译时不能因为一个过期的 id 句句报错。 */
+ *  (下架 / 换了账号;云端的机器翻译模型在目录的 translateModels 里)→ undefined,调用方落回聊天当前模型 —— 逐句翻译时不能因为一个过期的 id 句句报错。 */
 export async function translateModelId(): Promise<string | undefined> {
   const id = (await window.tangu?.getConfig?.().catch(() => null))?.translateModelId
-  const models = useApp.getState().modelsResp?.models
-  return id && (!models?.length || models.some((m) => m.id === id)) ? id : undefined
+  const r = useApp.getState().modelsResp
+  return id && (!r?.models?.length || r.models.some((m) => m.id === id) || !!r.translateModels?.some((m) => m.id === id)) ? id : undefined
 }
 
 function readActiveModel(): TanguModelInfo | null {
