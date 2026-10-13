@@ -459,6 +459,7 @@ export function PluginListBody({ src, stateKey }: { src: ListSourceContribution;
     const actions = menuFor(it)
     const editing = renaming === it.key
     // 有副标题的行画两行(标题 + 一行淡字);改名时退回一行,输入框只改标题。
+    // 两行时右边的 hint 收进第一行里,第二行才能用满整行的宽 —— 手机上一行只有四百来宽,让出时间那一列就少显示十来个字。
     const two = !editing && !!it.subtitle
     const at = dropAt?.key === it.key ? dropAt.position : null
     return <div className={cls('t2sw-plug-item', at === 'before' && 'drop-before', at === 'after' && 'drop-after', dragging === it.key && 'dragging')} key={it.key}>
@@ -468,11 +469,14 @@ export function PluginListBody({ src, stateKey }: { src: ListSourceContribution;
         className={`${activeKey === it.key ? 'active' : ''}${it.unread ? ' is-unread' : ''}${dropKey === `i:${it.key}` ? ' amx-drop-into' : ''}${actions.length ? ' has-actions' : ''}${two ? ' t2s-deep' : ''}`.trim() || undefined}
         {...rowDropProps(it)} {...dragProps(it)}
         lead={<><LeadIcon key={it.iconUrl ?? ''} item={it} />{it.unread && <span className="t2s-dot unread" title={t('sidebar.unread')} />}</>}
-        trailing={!editing && it.hint ? <span className="t2s-count">{it.hint}</span> : undefined}
+        trailing={!editing && !two && it.hint ? <span className="t2s-count">{it.hint}</span> : undefined}
         onClick={editing ? undefined : (e) => src.open(it, { newTab: e.metaKey || e.ctrlKey })}
         onContextMenu={contextMenu(actions)}
       >{editing ? renameInput(it) : two
-        ? <span className="t2s-deep-col"><span className="t2s-srow-title">{it.title}</span><span className="t2sw-plug-sub">{it.subtitle}</span></span>
+        ? <span className="t2s-deep-col">
+            <span className="t2sw-plug-top"><span className="t2s-srow-title">{it.title}</span>{it.hint && <span className="t2s-count">{it.hint}</span>}</span>
+            <span className="t2sw-plug-sub">{it.subtitle}</span>
+          </span>
         : <span className="t2s-srow-title">{it.title}</span>}</SidebarRow>
       {!!actions.length && !editing && <CapabilityMenu label={t('wsview.itemActions', { title: it.title })} className="t2sw-plug-row-menu"
         items={menuItems(actions)}><MoreHorizontal size={14} /></CapabilityMenu>}

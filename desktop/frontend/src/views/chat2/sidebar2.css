@@ -533,12 +533,14 @@
 .t2sw-plug-item .t2s-srow.has-actions { padding-right: 30px; }
 .t2sw-plug-item .t2s-count { font-weight: 400; background: transparent; padding: 0; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* 两行行(ListItem.subtitle,2026-10-13):标题下面一行淡字,只占一行、超出省略;粗细不跟未读 / 选中走。
-   行的两行骨架复用上面的 .t2s-deep / .t2s-deep-col;右侧的时间与前导图标都对齐第一行。 */
+   行的两行骨架复用上面的 .t2s-deep / .t2s-deep-col;前导图标对齐第一行。右侧的时间收在第一行里(.t2sw-plug-top),
+   第二行因此用满整行的宽 —— 时间若留在行尾自成一列,第二行就要给它让出那一列(手机上少显示十来个字)。 */
 .t2sw-plug-item .t2s-srow .t2sw-plug-sub {
   font-size: var(--ui-font-meta, 12px); line-height: var(--ui-line-meta, 18px); font-weight: 400; color: var(--text-muted);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.t2sw-plug-item .t2s-srow.t2s-deep .t2s-srow-title { flex: none; }
+.t2sw-plug-top { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.t2sw-plug-top .t2s-srow-title { flex: 1 1 auto; min-width: 0; }
 .t2sw-plug-row-menu { position: absolute; right: 4px; top: 50%; transform: translateY(-50%); min-height: 24px; width: 24px; padding: 0; opacity: 0; }
 .t2sw-plug-item:hover .t2sw-plug-row-menu, .t2sw-plug-item:focus-within .t2sw-plug-row-menu, .t2sw-plug-row-menu[aria-expanded=true] { opacity: 1; }
 :is(.t2sw-plug-btn, .t2sw-plug-overflow, .t2sw-plug-filter, .t2sw-plug-reset, .t2sw-plug-row-menu):is(:hover, [aria-expanded=true]) { background: var(--overlay-light); color: var(--text); }
