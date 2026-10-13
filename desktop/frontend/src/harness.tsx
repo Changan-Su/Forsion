@@ -737,6 +737,7 @@ if (new URLSearchParams(location.search).has('dock')) {
     registerView({ type: 'mainv', displayName: 'main', icon: Square, factory: () => (
       <div className="pk-main" style={{ position: 'relative', height: '100%', padding: 16 }}>
         main
+        {/* webhost-ok: 台架页里的固定占位帧(一行静态 HTML),只为验证「指针进了 iframe」;不承载用户 / agent 的内容 */}
         <iframe className="pk-frame" title="frame" srcDoc="<p>frame</p>" style={{ position: 'absolute', right: 40, bottom: 40, width: 300, height: 200, border: '1px solid var(--border)' }} />
       </div>
     ) })
