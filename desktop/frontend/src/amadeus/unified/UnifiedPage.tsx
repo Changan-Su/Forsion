@@ -979,7 +979,8 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
         keys={NOOP_KEYS}
         saveImage={saveImage}
         saveFiles={saveFiles}
-        onOpenWiki={(name, o) => void store.getState().openWikiLink(name, path, o)}
+        // 没带修饰键的点击 / 「打开光标处链接」:文件类目标开在旁边那半屏(openWikiLink 的 split;笔记目标不认它,照旧就地)。
+        onOpenWiki={(name, o) => void store.getState().openWikiLink(name, path, o ?? { split: true })}
         getPageNames={() => store.getState().pages}
         slashOpsRef={slashOps}
         onSlashPick={applySlash}

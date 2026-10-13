@@ -297,6 +297,7 @@
     "check:astryxscope": "node scripts/astryx-scope.check.cjs",
     "check:todo": "node scripts/todo-view.check.cjs",
     "check:chattabs": "node scripts/chat-multitab.check.cjs",
+    "check:openbeside": "node scripts/open-beside.check.cjs",
     "check:newtab": "node scripts/newtab-open.check.cjs",
     "check:newnote": "node scripts/new-note-nav.check.cjs",
     "check:calendarplugin": "node scripts/builtin-calendar.check.cjs",

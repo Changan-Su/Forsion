@@ -610,6 +610,13 @@ if (new URLSearchParams(location.search).has('dock')) {
     // 用 singlev 这个只在仪器里注册的单例视图验引擎本身,不必拖上真 chat 的后端依赖。
     open: (type: string, params: Record<string, unknown> = {}, newTab = false, loc: 'main' | 'left' | 'right' | 'bottom' = 'main'): string | null =>
       useWorkspace.getState().openView(type, params, loc, newTab ? { newTab: true } : undefined)?.id ?? null,
+    // 「开在旁边那半屏」(scripts/open-beside.check.cjs):openView 的 split 落点,加每个主区 panel 所在的组。
+    openBeside: (type: string, params: Record<string, unknown> = {}): string | null =>
+      useWorkspace.getState().openView(type, params, 'main', { split: true })?.id ?? null,
+    mainGroups: (): Array<{ id: string; group: string; left: number }> =>
+      (useWorkspace.getState().api?.panels ?? [])
+        .filter((p) => (((p.params ?? {}) as { __loc?: string }).__loc ?? 'main') === 'main')
+        .map((p) => ({ id: p.id, group: p.group.id, left: Math.round(p.group.element.getBoundingClientRect().left) })),
     panels: (): Array<{ id: string; type?: string; params: Record<string, unknown> }> =>
       (useWorkspace.getState().api?.panels ?? []).map((p) => {
         const params = (p.params ?? {}) as Record<string, unknown>

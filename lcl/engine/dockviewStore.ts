@@ -328,15 +328,16 @@ export function dropAllowed(api: DockviewApi, panelId: string, target: DropTarge
   return !panel || locOf(target.group) === locOfPanel(panel) || !guarded(api, panel)
 }
 
-/** 主区新标签,开在 beside 那一组(openView 的 newTab 落在第一个主区组,分屏时会跑到另一半屏)。 */
-function openTabBeside(api: DockviewApi, beside: IDockviewPanel, type: string, params: Record<string, unknown>): Leaf {
+/** 主区新标签,开在 beside 那一组(openView 的 newTab 落在第一个主区组,分屏时会跑到另一半屏)。
+ *  position 另给落点时按它开(见 besidePanePosition)。 */
+function openTabBeside(api: DockviewApi, beside: IDockviewPanel, type: string, params: Record<string, unknown>, position?: Record<string, unknown>): Leaf {
   const def = getView(type)
   const panel = api.addPanel({
     id: def?.singleton && !api.getPanel(type) ? type : nextId(api, type),
     component: '__frame',
     title: def ? label(def.displayName) : type,
     params: { ...params, __loc: 'main', __type: type },
-    position: { referencePanel: beside.id, direction: 'within' } as never,
+    position: (position ?? { referencePanel: beside.id, direction: 'within' }) as never,
   })
   if (type === 'chat') useWorkspace.setState({ focusedChatLeafId: panel.id })
   scheduleWorkspaceSave()
@@ -344,6 +345,17 @@ function openTabBeside(api: DockviewApi, beside: IDockviewPanel, type: string, p
 }
 
 /** 就地把 panel 换成另一种视图(navigateLeaf 的本体,不带固定守卫)。旧视图参数全清,不残留。 */
+/** openView 的 split 落点:主区已经分成几半 → 落在 cur 旁边那一半里(优先右手边最近的,没有就取左手边最近的),
+ *  当新标签开;只有一半 → 从 cur 向右分出一半。反复点不会越分越多。 */
+function besidePanePosition(api: DockviewApi, cur: IDockviewPanel): Record<string, unknown> {
+  const left = (g: Group): number => g.element.getBoundingClientRect().left
+  const here = left(cur.group)
+  const others = [...new Set(panelsAt(api, 'main').map((p) => p.group))].filter((g) => g.id !== cur.group.id)
+  const pick = others.filter((g) => left(g) > here).sort((a, b) => left(a) - left(b))[0]
+    ?? others.sort((a, b) => Math.abs(left(a) - here) - Math.abs(left(b) - here))[0]
+  return pick ? { referenceGroup: pick.id, direction: 'within' } : { referencePanel: cur.id, direction: 'right' }
+}
+
 function swapLeaf(api: DockviewApi, panel: IDockviewPanel, type: string, params: Record<string, unknown>): Leaf | null {
   const def = getView(type)
   if (!def) return null
@@ -655,7 +667,8 @@ interface WorkspaceState {
   /** 开/聚焦一个视图。singleton 已存在则聚焦(**除非显式 newTab**——那是「我明确要再来一个」,
    *  见下方 singleton 分支上的注释);主区默认**就地替换**当前活动 leaf(浏览器/Obsidian 式,
    *  opts.newTab 显式新建);侧栏同侧同类型复用。返回 leaf。 */
-  openView(type: string, params?: Record<string, unknown>, loc?: ViewLocation, opts?: { newTab?: boolean }): Leaf | null
+  /** opts.split(只对主区):开在旁边那半屏,没有就向右分屏(见 besidePanePosition);与 newTab 同给时 newTab 优先。 */
+  openView(type: string, params?: Record<string, unknown>, loc?: ViewLocation, opts?: { newTab?: boolean; split?: boolean }): Leaf | null
   /** 就地把某 leaf 切换为另一视图类型(同 tab 内导航的原语)。旧视图参数全清,不残留。 */
   navigateLeaf(leafId: string, type: string, params?: Record<string, unknown>): Leaf | null
   getActiveLeaf(): Leaf | null
@@ -1161,6 +1174,8 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       // 主区默认「就地导航」:替换当前活动主 leaf(浏览器/Obsidian 式;singleton 已在上方被捕获激活)。
       // ＋按钮/兜底填充等显式 newTab;主区为空(Space build 期)时自然落到下方新建。
       const cur = activeMainPanel(api)
+      // split:当前这一半留着不动,要开的落到旁边那一半(笔记里点文件类双链:笔记和文件并排看)。
+      if (cur && opts?.split) return openTabBeside(api, cur, type, params, besidePanePosition(api, cur))
       if (cur) return get().navigateLeaf(cur.id, type, params)
     }
     if (loc !== 'main' && !opts?.newTab) {

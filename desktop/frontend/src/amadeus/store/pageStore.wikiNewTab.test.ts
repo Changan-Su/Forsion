@@ -95,4 +95,32 @@ describe('openWikiLink newTab(L-11)', () => {
     expect(dispatched.some((e) => e.type === 'amadeus:media-goto')).toBe(false)
     expect(openMedia).toHaveBeenCalledWith('media/lecture.mp4', expect.objectContaining({ at: 95 }), { newTab: true })
   })
+
+  // 2026-10-13 用户定「文件类型的双链点击后默认分屏打开(图片不算)」:编辑器的点击带 split,文件目标把它带进事件,
+  // 笔记目标不认(照旧就地装),图片照旧交系统程序。落点本身(旁边那半屏 / 向右分屏)在 check:openbeside。
+  it('split:应用内打开的文件带进事件;笔记照旧就地;图片不分屏', async () => {
+    const store = await freshStore()
+    const openVaultFile = vi.fn(async (_p: string) => {})
+    ;(window as unknown as { amadeus: Record<string, unknown> }).amadeus.openVaultFile = openVaultFile
+    store.setState({ files: ['docs/paper.pdf', 'data/tasks.db', 'boards/flow.excalidraw.md', 'maps/idea.mindmap.md', 'img/photo.png', 'media/lecture.mp4'] })
+    const open = (name: string): { type: string; detail: Record<string, unknown> } | undefined => {
+      dispatched.length = 0
+      store.getState().openWikiLink(name, 'b/Src.md', { split: true })
+      return dispatched.find((e) => e.type.startsWith('amadeus:open-'))
+    }
+    expect(open('paper.pdf')?.detail).toMatchObject({ path: 'docs/paper.pdf', split: true })
+    expect(open('tasks.db')?.detail).toMatchObject({ path: 'data/tasks.db', split: true })
+    expect(open('flow.excalidraw')?.detail).toMatchObject({ split: true })
+    expect(open('idea.mindmap')?.detail).toMatchObject({ path: 'maps/idea.mindmap.md', split: true })
+    expect(open('photo.png')).toBeUndefined()
+    expect(openVaultFile).toHaveBeenCalledWith('img/photo.png')
+    store.getState().openWikiLink('lecture.mp4#t=95', 'b/Src.md', { split: true })
+    await settle()
+    expect(openMedia).toHaveBeenCalledWith('media/lecture.mp4', expect.objectContaining({ at: 95 }), { split: true })
+    openNote.mockClear()
+    store.getState().openWikiLink('Note', 'b/Src.md', { split: true })
+    await settle()
+    expect(loadPage).toHaveBeenCalledWith('b/Note.md')
+    expect(openNote).not.toHaveBeenCalled()
+  })
 })

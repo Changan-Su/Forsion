@@ -305,8 +305,10 @@ interface PageState {
   renamePage(newName: string): Promise<boolean>
   /** Open the page named by a [[wikilink]];未解析 → 记入 pendingWikiCreate 询问,不再静默创建。
    *  opts.newTab(⌘/Ctrl+点击、中键,L-11):命中的笔记(含 `笔记#锚点`)和应用内打开的文件(PDF / 多维表 / 白板 /
-   *  带时刻的媒体 / 插件接管的文件类型)都在新标签页打开;交给系统程序的附件、外链、未解析的照原路径,newTab 不适用。 */
-  openWikiLink(name: string, sourcePath?: string, opts?: { newTab?: boolean }): void
+   *  带时刻的媒体 / 插件接管的文件类型)都在新标签页打开;交给系统程序的附件、外链、未解析的照原路径,newTab 不适用。
+   *  opts.split(编辑器里点双链的默认,2026-10-13 用户定):应用内打开的**文件**(PDF / 多维表 / 白板 / 带时刻的媒体 /
+   *  插件接管的文件类型)开在旁边那半屏,笔记留在原地;笔记目标不认它(照旧就地打开),图片不算。 */
+  openWikiLink(name: string, sourcePath?: string, opts?: { newTab?: boolean; split?: boolean }): void
   /** 未解析 [[链接]] 点击后的待确认创建请求(确认框据此渲染)。 */
   pendingWikiCreate: { name: string; sourcePath: string | null } | null
   /** 确认创建:裸名 → 源笔记 .fd 子笔记;带路径 → 按链接写明的精确路径;无源 → vault 根。 */
@@ -867,7 +869,7 @@ function makePageStore(opts: PageStoreOptions = {}) {
       const pdf = parsePdfLinkInner(raw)
       if (pdf) {
         const pdfFile = resolveFileName(pdf.target, get().files, src)
-        if (pdfFile) window.dispatchEvent(new CustomEvent('amadeus:open-pdf', { detail: { path: pdfFile, page: pdf.loc?.page, q: pdf.loc?.q, newTab: opts?.newTab } }))
+        if (pdfFile) window.dispatchEvent(new CustomEvent('amadeus:open-pdf', { detail: { path: pdfFile, page: pdf.loc?.page, q: pdf.loc?.q, newTab: opts?.newTab, split: opts?.split } }))
         return // 是 PDF 链接:命中即开;未命中也不落「创建笔记」兜底(带 # 的名字无意义)
       }
       // 媒体时刻锚 [[lecture.mp4#t=95]] → 先问本页有没有这个播放器(就地 seek,不重建元素);
@@ -890,7 +892,7 @@ function makePageStore(opts: PageStoreOptions = {}) {
         // 动态 import:amadeusNav 反向 import 本模块,静态引会绕出模块环。
         if (hit && media.loc) {
           const loc = media.loc
-          void import('../../amadeusNav').then((m) => m.openMedia(hit, loc, { newTab: opts?.newTab }))
+          void import('../../amadeusNav').then((m) => m.openMedia(hit, loc, { newTab: opts?.newTab, split: opts?.split }))
           return
         }
         if (hit) void amadeus.openVaultFile?.(hit)?.catch(() => {})
@@ -910,7 +912,7 @@ function makePageStore(opts: PageStoreOptions = {}) {
       // 会把已有画板文件覆盖成空笔记。
       if (isDrawingPath(raw)) {
         const hit = resolveFileName(raw, get().files, src) ?? resolveFileName(`${raw}.md`, get().files, src)
-        window.dispatchEvent(new CustomEvent('amadeus:open-drawing', { detail: { path: hit ?? raw, newTab: opts?.newTab } }))
+        window.dispatchEvent(new CustomEvent('amadeus:open-drawing', { detail: { path: hit ?? raw, newTab: opts?.newTab, split: opts?.split } }))
         return
       }
       // 笔记内锚点(评审 L-05):`[[笔记#标题]]` / `[[笔记#^块]]` / `[[#标题]]`(笔记名为空 = 本页)。
@@ -948,7 +950,7 @@ function makePageStore(opts: PageStoreOptions = {}) {
       // (渲染层不 import 宿主 openDb,发事件由 amadeusOverlays 接;无监听的宿主静默),其余系统程序打开。
       const file = resolveFileName(wanted, get().files, src)
       if (file) {
-        if (/\.db$/i.test(file)) window.dispatchEvent(new CustomEvent('amadeus:open-db', { detail: { path: file, newTab: opts?.newTab } }))
+        if (/\.db$/i.test(file)) window.dispatchEvent(new CustomEvent('amadeus:open-db', { detail: { path: file, newTab: opts?.newTab, split: opts?.split } }))
         else void amadeus.openVaultFile?.(file)?.catch(() => {})
         return
       }
@@ -960,7 +962,7 @@ function makePageStore(opts: PageStoreOptions = {}) {
       // 事件解耦同 open-db:渲染层不 import 宿主的 openFile(无监听的宿主静默)。
       const vaultHit = resolveVaultPath(wanted, get().files, src) ?? resolveVaultPath(`${wanted}.md`, get().files, src)
       if (vaultHit) {
-        window.dispatchEvent(new CustomEvent('amadeus:open-file', { detail: { path: vaultHit, newTab: opts?.newTab } }))
+        window.dispatchEvent(new CustomEvent('amadeus:open-file', { detail: { path: vaultHit, newTab: opts?.newTab, split: opts?.split } }))
         return
       }
       // 未解析:询问而非静默建根。源须是笔记(.db 独立视图等无 .fd 语义 → 走根兜底)。

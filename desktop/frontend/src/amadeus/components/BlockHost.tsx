@@ -909,7 +909,7 @@ export const BlockHost = memo(function BlockHost({
             focusAnchor={focusAnchor}
             onFocused={() => consumeFocus(blockId)}
             requestSelfFocus={(place) => requestFocus(blockId, place)}
-            onOpenWiki={(name, o) => openWikiLink(name, pagePath, o)}
+            onOpenWiki={(name, o) => openWikiLink(name, pagePath, o ?? { split: true })} // 文件类目标开在旁边那半屏,同 v4
             // 宿主接管时,`/嵌入块引用` 也必须交给宿主:store.insertEmbed 会把嵌入块追加到页尾,
             // 在导图里那是一个游离的新中心,而不是当前节点下的一条(Codex)。
             onInsertEmbed={(t) => (surface ? surface.insertAfter(blockId, `![[${t}]]`) : ps.getState().insertEmbed(t))}

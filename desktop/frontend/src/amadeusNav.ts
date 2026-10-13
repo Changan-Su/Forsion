@@ -43,6 +43,11 @@ registerMessages({
 
 interface PanelLike { id: string; params?: Record<string, unknown> }
 
+/** 打开的落点:newTab = 新标签页;split = 开在旁边那半屏(主区只有一半时向右分出一半),已经开着就只激活。
+ *  编辑器里点文件类双链默认走 split(图片不算,见 openFile);单列壳(手机)没有分屏,照旧就地打开。 */
+export interface OpenWhere { newTab?: boolean; split?: boolean }
+const viewOpts = (o?: OpenWhere): OpenWhere | undefined => (o?.newTab ? { newTab: true } : o?.split ? { split: true } : undefined)
+
 /** focus:'body' = 打开后把焦点给正文(评审 G4-06:从快速查找 / 日记进入**已有**笔记后直接打字;
  *  Obsidian 同)。新建流不传它 —— 新建聚焦标题(requestTitleFocus)才是对的。粗指针不做:手机上点开一篇就弹软键盘。 */
 export async function openNote(path: string, opts?: { newTab?: boolean; reuseKey?: string; activate?: boolean; focus?: 'body' }): Promise<void> {
@@ -214,7 +219,7 @@ export async function revealTextWhenReady(path: string, needles: string[], opts?
 }
 
 /** 打开独立 .db 数据库视图:已有认领该文件的 tab → 激活;否则主区打开(语义同 openNote 的简版)。 */
-export function openDb(dbPath: string, opts?: { newTab?: boolean }): void {
+export function openDb(dbPath: string, opts?: OpenWhere): void {
   actThrottled('view.open', { f: dbPath }, `view.open|${dbPath}`)
   const ws = useWorkspace.getState()
   const api = (ws as unknown as { api?: { panels: PanelLike[] } }).api
@@ -223,11 +228,11 @@ export function openDb(dbPath: string, opts?: { newTab?: boolean }): void {
     ws.activateLeaf(hit.id)
     return
   }
-  ws.openView('amadeus-db', { dbPath }, 'main', opts?.newTab ? { newTab: true } : undefined)
+  ws.openView('amadeus-db', { dbPath }, 'main', viewOpts(opts))
 }
 
 /** 打开内置 PDF 阅读器(只读):已有认领该文件的 tab → 激活(带页号则广播跳页);否则主区打开。page = 1-based。 */
-export function openPdf(pdfPath: string, page?: number, opts?: { newTab?: boolean; quote?: string }): void {
+export function openPdf(pdfPath: string, page?: number, opts?: OpenWhere & { quote?: string }): void {
   actThrottled('view.open', { f: pdfPath }, `view.open|${pdfPath}`)
   const ws = useWorkspace.getState()
   const api = (ws as unknown as { api?: { panels: PanelLike[] } }).api
@@ -241,7 +246,7 @@ export function openPdf(pdfPath: string, page?: number, opts?: { newTab?: boolea
   const params: Record<string, unknown> = { pdfPath }
   if (page) params.page = page
   if (opts?.quote) params.q = opts.quote
-  ws.openView('amadeus-pdf', params, 'main', opts?.newTab ? { newTab: true } : undefined)
+  ws.openView('amadeus-pdf', params, 'main', viewOpts(opts))
 }
 
 /** 打开独立图片视图:已有认领该文件的 tab → 激活;否则主区打开(语义同 openPdf 的简版,无批注)。 */
@@ -254,14 +259,14 @@ export function openImage(imagePath: string, opts?: { newTab?: boolean }): void 
     ws.activateLeaf(hit.id)
     return
   }
-  ws.openView('amadeus-image', { imagePath }, 'main', opts?.newTab ? { newTab: true } : undefined)
+  ws.openView('amadeus-image', { imagePath }, 'main', viewOpts(opts))
 }
 
 /** 打开独立音视频视图并停在 `loc.at` 秒:已有认领该文件的 tab → 激活 + 广播 `amadeus:media-goto`
  *  就地跳(**绝不 navigateLeaf**:那会 remount 播放器 = 整段视频重新起流);否则主区新开。
  *  ⚠️ 只吃 **vault 相对路径** —— 载体是 `amadeus-asset://`,它只有 `v/<vaultRel>` 一个面。
  *  库外绝对路径的媒体请走 wsFileNav.openWsFile(见 ChatWikiLink 的 openMediaCitation 注释)。 */
-export function openMedia(vaultRel: string, loc?: { at: number; to?: number }, opts?: { newTab?: boolean }): void {
+export function openMedia(vaultRel: string, loc?: { at: number; to?: number }, opts?: OpenWhere): void {
   actThrottled('view.open', { f: vaultRel }, `view.open|${vaultRel}`)
   const ws = useWorkspace.getState()
   const api = (ws as unknown as { api?: { panels: PanelLike[] } }).api
@@ -286,11 +291,11 @@ export function openMedia(vaultRel: string, loc?: { at: number; to?: number }, o
   }
   const params: Record<string, unknown> = { path: vaultRel }
   if (loc) { params.at = loc.at; if (loc.to) params.to = loc.to }
-  ws.openView('amadeus-media', params, 'main', opts?.newTab ? { newTab: true } : undefined)
+  ws.openView('amadeus-media', params, 'main', viewOpts(opts))
 }
 
 /** 打开独立白板视图(.excalidraw.md 画布,兼容 Obsidian Excalidraw 插件):已有认领该文件的 tab → 激活;否则主区打开。 */
-export function openDrawing(drawingPath: string, opts?: { newTab?: boolean }): void {
+export function openDrawing(drawingPath: string, opts?: OpenWhere): void {
   actThrottled('view.open', { f: drawingPath }, `view.open|${drawingPath}`)
   const ws = useWorkspace.getState()
   const api = (ws as unknown as { api?: { panels: PanelLike[] } }).api
@@ -299,13 +304,13 @@ export function openDrawing(drawingPath: string, opts?: { newTab?: boolean }): v
     ws.activateLeaf(hit.id)
     return
   }
-  ws.openView('amadeus-drawing', { drawingPath }, 'main', opts?.newTab ? { newTab: true } : undefined)
+  ws.openView('amadeus-drawing', { drawingPath }, 'main', viewOpts(opts))
 }
 
 /** 打开仪表盘视图(.dashboard.md,P3a 起一律画布版 'dashboard';旧网格 view 只为布局恢复保留,
  *  不再从这里开)。已有认领该文件的 tab → 激活;否则主区打开。
  *  `unlocked` 只在「刚建好」时给 —— 新建完直接能摆,不必先点一下解锁。 */
-export function openDashboard(dashPath: string, opts?: { unlocked?: boolean; newTab?: boolean }): void {
+export function openDashboard(dashPath: string, opts?: OpenWhere & { unlocked?: boolean }): void {
   actThrottled('view.open', { f: dashPath }, `view.open|${dashPath}`)
   const ws = useWorkspace.getState()
   const api = (ws as unknown as { api?: { panels: PanelLike[] } }).api
@@ -314,7 +319,7 @@ export function openDashboard(dashPath: string, opts?: { unlocked?: boolean; new
     ws.activateLeaf(hit.id)
     return
   }
-  ws.openView('dashboard', opts?.unlocked ? { dashPath, locked: false } : { dashPath }, 'main', opts?.newTab ? { newTab: true } : undefined)
+  ws.openView('dashboard', opts?.unlocked ? { dashPath, locked: false } : { dashPath }, 'main', viewOpts(opts))
 }
 
 /** 新建仪表盘(.dashboard.md),建成即打开(解锁态)。返回 vault 相对路径(取消/失败 null)。
@@ -379,7 +384,7 @@ function blankDashboard(title: string): string {
  *  page / quote = 带落点的打开(笔记里的 `[[x.pdf#page=3]]`、聊天引用;目前只有 PDF 有落点):跟着「默认打开方式」
  *  走到底 —— 内置阅读器照旧跳页,接管了 PDF 的插件视图经 `file.onGoto` 收到同一个落点。「打开这份 PDF」的入口
  *  一律走这里,别直调 openPdf(那是「用内置阅读器打开」):直调的两回都让装了插件的人落进内置阅读器。 */
-export function openFile(path: string, opts?: { newTab?: boolean; page?: number; quote?: string }): void {
+export function openFile(path: string, opts?: OpenWhere & { page?: number; quote?: string }): void {
   // 内置文件类型先接管:插件的 ctx.app.openFile('x.excalidraw.md') 也落在这里,而 matchFileType 已经
   // 拒绝内置后缀(内置优先),不特判的话它会掉到下面的「非插件文件类型 → 交给系统默认程序」。
   if (isDrawingPath(path)) { openDrawing(path, opts); return }
@@ -389,7 +394,7 @@ export function openFile(path: string, opts?: { newTab?: boolean; page?: number;
   if (!(isOverridableBuiltinType(path) && matchFileType(path))) {
     if (extHit(path, 'amadeus-db')) { openDb(path, opts); return }
     if (extHit(path, 'amadeus-pdf')) { openPdf(path, opts?.page, opts); return }
-    if (extHit(path, 'amadeus-image')) { openImage(path, opts); return }
+    if (extHit(path, 'amadeus-image')) { openImage(path, { newTab: opts?.newTab }); return } // 图片不分屏
   }
   if (isMediaPath(path)) { openMedia(path, undefined, opts); return }
   // 本地库里的 .html → 内置浏览器(云端库没有本机路径 / 内置浏览器关着 → 照旧交系统默认程序)。
@@ -419,7 +424,7 @@ export function openFile(path: string, opts?: { newTab?: boolean; page?: number;
       if (loc) window.dispatchEvent(new CustomEvent('amadeus:pdf-goto', { detail: { pdfPath: path, ...loc } }))
       return
     }
-    ws.openView('amadeus-plugin-file', { filePath: path, ...loc }, 'main', opts?.newTab ? { newTab: true } : undefined)
+    ws.openView('amadeus-plugin-file', { filePath: path, ...loc }, 'main', viewOpts(opts))
   }
   // 先跳转后加载:面板立即开(视图按 filePath 自行拉内容),树刷新在后台补 ——
   // 弱网下不再让 GET /tree 挡住跳转(此前「文件还没进缓存清单」要先等整棵树才开面板)。
