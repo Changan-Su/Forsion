@@ -59,6 +59,8 @@ export const SETTINGS_SEARCH_INDEX: readonly SettingsSearchEntry[] = [
   { id: 'ambient', tab: 'theme', anchor: 'ambient', labelKey: 'settings.theme.ambient', keywords: '取色 染色 外壳 内容 颜色 ambient tint chrome color' },
   { id: 'visuals', tab: 'theme', anchor: 'visuals', labelKey: 'settings.theme.visuals', keywords: 'Intelligent UI 智能界面 可视化 图文 图片 来源 图表 Sketch visuals interactive display' },
   { id: 'smooth-caret', tab: 'theme', anchor: 'smooth-caret', labelKey: 'settings.theme.smoothCaret', keywords: '光标 caret cursor' },
+  // 2026-10-14 从「外观」搬到 高级 → 测试性功能。行的位置不动:这份表的顺序原样进给模型看的落点清单(settingsTarget.ts agentSettingsTargets)。
+  { id: 'prompt-suggest', tab: 'advanced', sub: 'a-experimental', anchor: 'prompt-suggest', labelKey: 'settings.promptSuggest', keywords: '输入建议 下一句 预测 补全 灰字 Tab suggestion autocomplete predict next prompt', needs: ['desktop', 'hover', 'wide'] },
   { id: 'chat-avatars', tab: 'theme', anchor: 'chat-avatars', labelKey: 'settings.theme.chatAvatars', keywords: '头像 聊天 avatar chat' },
   { id: 'calm-dim', tab: 'theme', anchor: 'calm-dim', labelKey: 'settings.theme.calmDim', keywords: '外围淡出 呼吸感 变淡 退后 侧栏 标签 dim fade quiet calm surroundings sidebar ribbon', needs: ['hover'] },
   { id: 'calm-reading', tab: 'theme', anchor: 'calm-reading', labelKey: 'settings.theme.calmReading', keywords: '宽松正文 呼吸感 行距 段距 行高 阅读宽度 line height spacing reading relaxed calm' },
@@ -76,7 +78,6 @@ export const SETTINGS_SEARCH_INDEX: readonly SettingsSearchEntry[] = [
   { id: 'remote-safety', tab: 'remote-sessions', anchor: 'remote-safety', labelKey: 'remoteSafety.title', keywords: '急停 紧急停止 锁定 解锁 快捷键 停止远程任务 emergency stop lock unlock shortcut hotkey stop remote tasks' },
   { id: 'computer-history', tab: 'computer-history', anchor: 'computer-history', labelKey: 'settingsmodal.tab.computerHistory', keywords: '电脑历史 活动记录 隐私 排除 暂停 computer history activity privacy recording exclude pause' },
   { id: 'mcp-server', tab: 'advanced', sub: 'a-mcp', labelKey: 'settings.sub.mcpServer', keywords: '对外 端点 endpoint mcp' },
-  { id: 'prompt-suggest', tab: 'advanced', sub: 'a-experimental', anchor: 'prompt-suggest', labelKey: 'settings.promptSuggest', keywords: '输入建议 下一句 预测 补全 灰字 Tab suggestion autocomplete predict next prompt', needs: ['desktop', 'hover', 'wide'] },
   { id: 'reset-layout', tab: 'advanced', sub: 'a-ui', anchor: 'reset-layout', labelKey: 'settingsmodal.advanced.resetLayout', keywords: '布局 恢复 layout reset' },
   { id: 'clear-data', tab: 'advanced', sub: 'a-data', labelKey: 'settings.sub.data', keywords: '清空 卸载 重置 clear reset data' },
   { id: 'language', tab: 'about', anchor: 'language', labelKey: 'common.language', keywords: '语言 中文 英文 language english chinese' },
