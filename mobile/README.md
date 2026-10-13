@@ -215,7 +215,14 @@ OUT=/absolute/out npm run emu:nativeshell   # ONLY=tabs,prompt 只跑子集
    收件箱走的是宿主的列表源,所以这几屏也就是「平铺的列表源在手机上怎么画」的验收。
    它没有真手指：左滑、长按、下拉、键盘这些在第 3 步的模拟器上测。
 3. **受影响的那一组**（一两分钟到几分钟）：`ONLY='…' npm run emu:nativeshell`，写法见上。
-4. **整套**（65 条，约 14 分钟）：只在合并前跑一遍。
+   手机列表这一组：`ONLY='phone list,phone notes list,phone inbox list,notification card'`（后两条 2026-10-13 加：收件箱 =
+   「平铺的列表源」在真机上 —— 主按钮拉信、真手指左滑出圆钮、长按出原生菜单、下拉出搜索行并弹键盘、点开信；
+   通知卡片对着真胶囊和 Dock 量位置，并用真触摸点它的关闭钮）。
+4. **整套**（67 条，约 14 分钟）：只在合并前跑一遍。
+
+- ⚠️ **共用的模拟器上先看装上的是谁的包**：`adb install -r` 遇到版本号比设备上低的包会被拒（`INSTALL_FAILED_VERSION_DOWNGRADE`），
+  设备上留着别人的构建，台架照跑、照出结果。装包用 `adb install -r -d`，并核对输出里有 `Success`（别接 `| tail` 之后再 `&&`，
+  那样拿到的是 `tail` 的退出码）；台架开头的 `package:` 一行写着这一场测的是哪个版本、几点装的。
 
 台架读界面树走一个常驻的读取器（`scripts/lib/UiTreeServer.java`：第一次读的时候现编、推到设备上用 `app_process` 起，
 不往 App 里装任何东西）。原来每读一次都是 `uiautomator dump` —— 起一个进程、再干等满一秒，一次 2 秒，占一场运行的五分之四；
