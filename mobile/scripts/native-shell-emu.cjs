@@ -1121,17 +1121,20 @@ const tabCountText = (list) => {
     await h.pause(600)
     shot('03-detail-level')
     // the list behind the main view stays rendered (hiding it restyles every row, on the way in and on the way back):
-    // the screen reader skips it, it holds no focus and takes none, and it is covered so nothing in it can be tapped
-    const listPanel = async (tryFocus) => JSON.parse(await cdp.eval(`(() => { const d = document.querySelector('.mb-drawer--left'); const held = d.contains(document.activeElement)
+    // the screen reader skips it, it holds no focus, and it is covered so nothing in it can be tapped. Focus arriving
+    // in it (a keyboard's Tab) is turned away and the panel goes inert from then on — not before: that restyles it too.
+    const listPanel = async (tryFocus) => JSON.parse(await cdp.eval(`(() => { const d = document.querySelector('.mb-drawer--left'); const held = d.contains(document.activeElement), inertBefore = !!d.inert
       if (${tryFocus ? 'true' : 'false'}) d.querySelector('button, a, [tabindex]')?.focus()
-      return JSON.stringify({ hidden: d.getAttribute('aria-hidden'), covered: getComputedStyle(d, '::after').content !== 'none', held, took: d.contains(document.activeElement), visibility: getComputedStyle(d).visibility }) })()`))
-    assert.deepEqual(await listPanel(true), { hidden: 'true', covered: true, held: false, took: false, visibility: 'visible' }, 'the list behind the main view')
+      return JSON.stringify({ hidden: d.getAttribute('aria-hidden'), covered: getComputedStyle(d, '::after').content !== 'none', held, took: d.contains(document.activeElement), inertBefore, inert: !!d.inert, visibility: getComputedStyle(d).visibility }) })()`))
+    assert.deepEqual(await listPanel(true), { hidden: 'true', covered: true, held: false, took: false, inertBefore: false, inert: true, visibility: 'visible' }, 'the list behind the main view')
+    // the right panel opens over the main view, where there is no dock: it keeps no room for one
+    assert.equal(await cdp.eval("getComputedStyle(document.querySelector('.mb-drawer--right')).paddingBottom"), '0px', 'the right panel keeps room for a dock that is not there')
     // back arrow → list
     await tapId('nativeChrome.left')
     assert.ok(await h.waitPage(cdp, `(${nav}) === 'list'`, 5000), 'the back arrow did not return to the list')
     assert.ok((await h.waitNodes((l) => !!h.byId(l, 'nativeChrome.spaces'), { timeout: 8000 })).hit, 'the bottom bar did not come back on the list')
     const front = await listPanel(false)
-    assert.deepEqual([front.hidden, front.covered], [null, false], 'the list in front is still hidden from the screen reader or covered')
+    assert.deepEqual([front.hidden, front.covered, front.inert], [null, false, false], 'the list in front is still hidden from the screen reader, covered or inert')
     // item again, then system back → list, and the app is still in front
     await tapEl(rowExpr('E2E Session One'))
     assert.ok(await h.waitPage(cdp, `(${nav}) === 'detail'`, 8000), 'the session did not reopen')

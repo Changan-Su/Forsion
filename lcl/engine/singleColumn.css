@@ -499,8 +499,12 @@
 /* 两级导航里主区的下缘让位恒为 0:Dock 只在列表层在场,主区露面时它已经收起。写成常量而不跟 --nc-bottom,是因为那个量
    是 <body> 上会继承的自定义属性 —— 进主区清零、回列表再写回,每进出一次两遍整页样式重算(2026-10-11 量出,返回那一下的卡)。
    配套:mobile/src/nativeChrome.ts 的 applyChromeLayout 在主区层不清 --nc-bottom(留给屏外的列表),于是进出主区它不变。
-   仪器:mobile `npm run emu:perf` 的 open / back(看 style 那一栏);`emu:nativeshell` 的「floating chrome (detail page)」。 */
-.mb-shell[data-native-chrome][data-list-first] .mb-main { --mb-bottom: 0px; }
+   仪器:mobile `npm run emu:perf` 的 open / back(看 style 那一栏);`emu:nativeshell` 的「floating chrome (detail page)」
+   与「two-level navigation」(右侧面板的让位)。 */
+/* 右侧面板同理:它只在主区层打得开(窄屏一次只开一侧),那时没有 Dock —— 不写这一条,它会按留着没清的 --nc-bottom
+   在底下多让出一条 Dock 的高度,把里面的输入框顶高(Codex 评审,2026-10-13)。 */
+.mb-shell[data-native-chrome][data-list-first] .mb-main,
+.mb-shell[data-native-chrome][data-list-first] .mb-drawer--right { --mb-bottom: 0px; }
 /* 两级导航的列表面板不走 .mb-drawer 那两个开关(收起 = visibility: hidden + pointer-events: none):两个属性都会继承,
    面板每开合一次,里面每个元素都要重算一遍样式(60 条会话 ≈ 1400 个元素)。2026-10-13 追踪:点会话到开始滑动的那一帧里
    一半以上是它,返回同理,滑完之后还要再来一次。这里把两个量钉成常量,它们管的事换成不继承的办法:
