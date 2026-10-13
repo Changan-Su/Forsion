@@ -10,18 +10,7 @@ const fs = require('fs')
 const os = require('os')
 const path = require('path')
 const { chromium } = require('playwright-core')
-
-function findChromium() {
-  if (process.env.CHROMIUM_EXE) return process.env.CHROMIUM_EXE
-  const root = path.join(os.homedir(), 'Library/Caches/ms-playwright')
-  for (const d of fs.readdirSync(root).filter((x) => x.startsWith('chromium-')).sort().reverse()) {
-    for (const app of ['Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing', 'Chromium.app/Contents/MacOS/Chromium']) {
-      const file = path.join(root, d, 'chrome-mac-arm64', app)
-      if (fs.existsSync(file)) return file
-    }
-  }
-  throw new Error('找不到 chromium,设 CHROMIUM_EXE 环境变量')
-}
+const { findChromium } = require('./lib/find-chromium.cjs')
 
 const baseUrl = new URL(process.env.HARNESS_URL || 'http://localhost:5173/harness.html')
 baseUrl.pathname = '/computer-history-harness.html'

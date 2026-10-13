@@ -3,6 +3,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSyn
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
+import { execFileSync } from 'node:child_process'
 
 vi.mock('electron', () => ({ ipcMain: { handle: vi.fn() } }))
 
@@ -29,7 +30,23 @@ const at = (y: number, mo: number, d: number, h: number, mi = 0): number => new 
 const lines = (file: string): ComputerHistoryEvent[] =>
   readFileSync(file, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l))
 const readState = (root: string): ComputerHistoryState => JSON.parse(readFileSync(path.join(root, 'state.json'), 'utf8'))
-const mode = (p: string): number => statSync(p).mode & 0o777
+const expectPrivateMode = (p: string, mode: number): void => {
+  // Windows uses ACLs; chmod's POSIX permission bits are not represented by stat.mode there.
+  if (process.platform !== 'win32') expect(statSync(p).mode & 0o777).toBe(mode)
+}
+/** Real disk-access failures: POSIX chmod is ignored for Windows directories, so use a temporary NTFS deny ACL. */
+function blockAccess(file: string, posixMode: number, windowsRights: string, restoreMode: number): () => void {
+  if (process.platform !== 'win32') {
+    chmodSync(file, posixMode)
+    return () => chmodSync(file, restoreMode)
+  }
+  const relative = path.relative(os.tmpdir(), path.resolve(file))
+  if (!/^ch-test-[^\\/]+[\\/]/.test(relative)) throw new Error('ACL fixture must stay inside its own temporary test directory')
+  const user = `${process.env.USERDOMAIN ?? ''}\\${os.userInfo().username}`
+  const run = (args: string[]): void => { execFileSync('icacls.exe', args, { stdio: 'ignore', windowsHide: true }) }
+  run([file, '/deny', `${user}:${windowsRights}`, '/Q'])
+  return () => run([file, '/remove:d', user, '/T', '/Q'])
+}
 
 async function waitFor(fn: () => boolean | Promise<boolean>, ms = 4_000): Promise<void> {
   const end = Date.now() + ms
@@ -52,9 +69,9 @@ describe('ComputerHistoryStore', () => {
     expect(readdirSync(store.eventsDir).sort()).toEqual(['2026-09-26.jsonl', '2026-09-27.jsonl'])
     expect(lines(path.join(store.eventsDir, '2026-09-26.jsonl'))).toEqual([a])
     expect(lines(path.join(store.eventsDir, '2026-09-27.jsonl')).map((e) => e.t)).toEqual([b.t, b.t + 1000])
-    expect(mode(root)).toBe(0o700)
-    expect(mode(store.eventsDir)).toBe(0o700)
-    expect(mode(path.join(store.eventsDir, '2026-09-27.jsonl'))).toBe(0o600)
+    expectPrivateMode(root, 0o700)
+    expectPrivateMode(store.eventsDir, 0o700)
+    expectPrivateMode(path.join(store.eventsDir, '2026-09-27.jsonl'), 0o600)
     expect(tm).toHaveBeenCalledTimes(1)
     expect(tm).toHaveBeenCalledWith(root)
   })
@@ -98,7 +115,7 @@ describe('ComputerHistoryStore', () => {
     writeFileSync(file, evLine(cutoffT - 1) + evLine(cutoffT) + '{"t":17\n' + evLine(cutoffT + 1), { mode: 0o600 })
     expect(await store.prune(now)).toEqual([])
     expect(lines(file).map((e) => e.t)).toEqual([cutoffT, cutoffT + 1])
-    expect(mode(file)).toBe(0o600)
+    expectPrivateMode(file, 0o600)
     expect(readdirSync(store.eventsDir).filter((f) => f.endsWith('.tmp'))).toEqual([])
     // 再往后 2ms:剩下两条也都过期 → 整个文件删掉
     expect(await store.prune(now + 2)).toEqual([path.basename(file)])
@@ -173,7 +190,7 @@ describe('ComputerHistoryStore', () => {
     await store.clear({ sinceMs: at(2026, 9, 26, 11, 30) })
     expect(readdirSync(store.eventsDir).sort()).toEqual(['2026-09-25.jsonl', '2026-09-26.jsonl'])
     expect(lines(mid).map((e) => e.t)).toEqual([at(2026, 9, 26, 10), at(2026, 9, 26, 11)])
-    expect(mode(mid)).toBe(0o600)
+    expectPrivateMode(mid, 0o600)
     expect(readFileSync(path.join(store.eventsDir, '2026-09-25.jsonl'), 'utf8')).toBe(before)
     expect(readdirSync(store.eventsDir).some((f) => f.endsWith('.tmp'))).toBe(false)
   })
@@ -511,12 +528,13 @@ describe('foldSessions', () => {
   })
 })
 
-// ── 控制器 × 假 helper(unix socket) ────────────────────────────────────────
+// ── 控制器 × 假 helper(Unix socket / Windows named pipe) ───────────────────
 
 type HelperMode = 'ok' | 'denied' | 'unknown' | 'old' | 'untrusted'
 let sockSeq = 0
 function fakeHelper() {
-  const sockPath = path.join(os.tmpdir(), `chs-${process.pid}-${++sockSeq}.sock`)
+  const name = `chs-${process.pid}-${++sockSeq}`
+  const sockPath = process.platform === 'win32' ? `\\\\.\\pipe\\${name}` : path.join(os.tmpdir(), `${name}.sock`)
   const conns = new Set<net.Socket>()
   const requests: Array<Record<string, any>> = []
   let accepted = 0
@@ -549,13 +567,16 @@ function fakeHelper() {
     get accepted() { return accepted },
     get open() { return conns.size },
     setMode: (m: HelperMode) => { helperMode = m },
-    listen: () => new Promise<void>((r) => server.listen(sockPath, () => r())),
+    listen: () => new Promise<void>((resolve, reject) => {
+      server.once('error', reject)
+      server.listen(sockPath, () => { server.removeListener('error', reject); resolve() })
+    }),
     push: (ev: unknown) => { for (const c of conns) c.write(`${JSON.stringify({ ev })}\n`) },
     kick: () => { for (const c of conns) c.destroy() },
     close: () => new Promise<void>((r) => { for (const c of conns) c.destroy(); server.close(() => r()) }),
   }
   cleanups.push(() => h.close().catch(() => {}))
-  cleanups.push(() => rmSync(sockPath, { force: true }))
+  if (process.platform !== 'win32') cleanups.push(() => rmSync(sockPath, { force: true }))
   return h
 }
 
@@ -602,7 +623,7 @@ describe('ComputerHistory × helper 订阅', () => {
       { t: t + 1, kind: 'text', app: safari, text: 'hello', el: { role: 'AXTextField' } },
     ])
     expect(readState(root)).toMatchObject({ v: 1, enabled: true, pausedUntil: null, status: 'recording', platform: 'darwin' })
-    expect(mode(path.join(root, 'state.json'))).toBe(0o600)
+    expectPrivateMode(path.join(root, 'state.json'), 0o600)
     expect((await ch.recent(1)).map((s) => s.title)).toEqual(['Docs'])
     expect(await ch.recent(1, t - 60_000)).toEqual([]) // 按天回看:end 在事件之前 → 读不到
     expect(await ch.days()).toEqual([localDay(t)])
@@ -985,9 +1006,8 @@ describe('ComputerHistory × helper 订阅', () => {
     const now = Date.now()
     const file = path.join(root, 'events', `${localDay(now)}.jsonl`)
     writeFileSync(file, `${JSON.stringify({ t: now - 5, kind: 'app', app: { name: 'X', bundleId: 'x' } })}\n`, { mode: 0o600 })
-    chmodSync(file, 0o000)
-    cleanups.push(() => chmodSync(file, 0o600))
-    await expect(ch.clear({ sinceMs: now })).rejects.toThrow(/EACCES/)
+    cleanups.push(blockAccess(file, 0o000, '(R)', 0o600))
+    await expect(ch.clear({ sinceMs: now })).rejects.toThrow(/EACCES|EPERM/)
     await waitFor(() => helper.requests.length === 2 && ch.view().state.status === 'recording')
     await waitFor(() => helper.open === 1)
   })
@@ -1000,8 +1020,8 @@ describe('ComputerHistory × helper 订阅', () => {
     await waitFor(() => ch.view().state.status === 'recording')
     await ch.flush()
     const events = path.join(root, 'events')
-    chmodSync(events, 0o500) // 建不了日文件
-    cleanups.push(() => chmodSync(events, 0o700))
+    const restore = blockAccess(events, 0o500, '(W)', 0o700) // 建不了日文件
+    cleanups.push(restore)
     const t = Date.now()
     const safari = { name: 'Safari', bundleId: 'com.apple.Safari' }
     helper.push({ t, kind: 'app', app: safari, title: 'Docs' })
@@ -1016,7 +1036,7 @@ describe('ComputerHistory × helper 订阅', () => {
     expect(readState(root).status).toBe('disconnected')
     expect((await ch.recent(1)).map((s) => s.title)).toEqual(['Docs']) // 还在缓冲里
     warn.mockRestore()
-    chmodSync(events, 0o700)
+    restore()
     await ch.flush()
     await ch.flush()
     expect(ch.view().state.status).toBe('recording')
@@ -1618,17 +1638,19 @@ describe('ComputerHistory × helper 订阅', () => {
     await ch.start({ computerHistoryEnabled: true, computerHistoryPausedUntil: Date.now() + 3_600_000 })
     await ch.flush()
     expect(readState(root)).toMatchObject({ enabled: true })
-    chmodSync(root, 0o500) // 目录只读:建不了临时文件,也删不掉 state.json
-    cleanups.push(() => chmodSync(root, 0o700))
+    const restore = blockAccess(root, 0o500, '(OI)(CI)(W,D,DC)', 0o700)
+    cleanups.push(restore)
     await ch.setEnabled(false)
     await ch.flush()
-    expect(readState(root)).toMatchObject({ enabled: true }) // 盘上还是旧的「开」—— 只剩桌面配置这道闸
     expect(persist).toHaveBeenLastCalledWith({ computerHistoryEnabled: false, computerHistoryPausedUntil: null })
     const err = ch.view().stateError
-    expect(err).toMatch(/EACCES/)
+    expect(err).toMatch(/EACCES|EPERM/)
     expect(err!.split(';')).toHaveLength(2) // 写失败 + 删失败都在
     expect(onChanged.mock.lastCall?.[0].stateError).toBe(err)
-    chmodSync(root, 0o700)
+    restore()
+    // Windows opens read handles with SYNCHRONIZE, also denied by generic W.
+    // Inspect synchronously after restoring access, before the retry can run.
+    expect(readState(root)).toMatchObject({ enabled: true }) // 盘上还是旧的「开」—— 只剩桌面配置这道闸
     await waitFor(() => ch.view().stateError === undefined, 6_000)
     expect(readState(root)).toMatchObject({ enabled: false, status: 'off' })
     expect(onChanged.mock.lastCall?.[0]).not.toHaveProperty('stateError')

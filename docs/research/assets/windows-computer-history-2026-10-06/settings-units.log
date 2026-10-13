@@ -1,0 +1,10 @@
+
+ RUN  v3.2.6 C:/Users/Dream/.codex/worktrees/windows-space-validation/Forsion/desktop
+
+··························
+
+ Test Files  1 passed (1)
+      Tests  26 passed (26)
+   Start at  17:18:34
+   Duration  5.36s (transform 531ms, setup 353ms, collect 510ms, tests 1.99s, environment 1.16s, prepare 389ms)
+

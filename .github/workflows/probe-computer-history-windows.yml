@@ -1,0 +1,45 @@
+name: probe-computer-history-windows
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/probe-computer-history-windows.yml'
+      - 'desktop/electron/computerHistory*'
+      - 'desktop/electron/appDock*'
+      - 'desktop/electron/builtinBundles.json'
+      - 'desktop/package*.json'
+      - 'desktop/scripts/computer-history*'
+      - 'desktop/scripts/e2e-editor.cjs'
+      - 'desktop/scripts/lib/find-chromium.cjs'
+      - 'desktop/frontend/src/components/ComputerHistory*'
+permissions:
+  contents: read
+jobs:
+  computer-history:
+    runs-on: windows-2022
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install desktop dependencies
+        working-directory: desktop
+        run: npm ci --no-audit --no-fund
+      - name: Check Windows history and App Dock
+        working-directory: desktop
+        run: |
+          node node_modules/vitest/vitest.mjs run electron/computerHistory.test.ts electron/computerHistoryWin.test.ts electron/appDock.test.ts shared/appDock.test.ts frontend/src/components/ComputerHistorySettings.test.ts frontend/src/components/computerHistoryModel.test.ts frontend/src/components/ToolGroup.computerHistory.test.ts
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run check:computerhistory
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run build
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node scripts/computer-history-windows.probe.cjs
+          exit $LASTEXITCODE
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-computer-history
+          path: desktop/outputs/computer-history-windows/

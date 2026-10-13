@@ -1,0 +1,15 @@
+{
+  "typed": [
+    {
+      "start": 1791302495428,
+      "end": 1791302906205,
+      "app": "Electron",
+      "typed": [
+        "Forsion history 42"
+      ],
+      "bundleId": "forsion-history-probe.exe",
+      "title": "Forsion history fixture"
+    }
+  ],
+  "passwordLeaked": false
+}
