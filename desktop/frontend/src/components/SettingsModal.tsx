@@ -115,10 +115,10 @@ import { connectionTarget, homeTarget } from '../services/engine/targets'
 
 // 本文件自带的文案片段(命名空间 `settingsmodal.*`,不与 i18n.generated.ts 的 `settings.*` 相交)。
 registerMessages({
-  'settings.theme.selectionBar': { zh: '划线菜单', en: 'Selection menu' },
-  'settings.theme.selectionBarHint': { zh: '选中文字后浮出的那一条：先排当前视图自己的工具，还是先排「问 Tangu」「翻译」这些每个视图都有的动作。', en: 'The bar that appears over selected text: put the current view\'s own tools first, or the actions every view shares, such as Ask Tangu and Translate.' },
-  'settings.theme.selectionBar.tools': { zh: '视图工具在前', en: 'View tools first' },
-  'settings.theme.selectionBar.actions': { zh: '通用动作在前', en: 'Shared actions first' },
+  'settingsmodal.selectionBar': { zh: '划线菜单', en: 'Selection menu' },
+  'settingsmodal.selectionBarHint': { zh: '选中文字后浮出的那一条：先排当前视图自己的工具，还是先排「问 Tangu」「翻译」这些每个视图都有的动作。', en: 'The bar that appears over selected text: put the current view\'s own tools first, or the actions every view shares, such as Ask Tangu and Translate.' },
+  'settingsmodal.selectionBar.tools': { zh: '视图工具在前', en: 'View tools first' },
+  'settingsmodal.selectionBar.actions': { zh: '通用动作在前', en: 'Shared actions first' },
   // 「Forsion 云端」一级页:账号 + 云端地址 + 记忆同步 + 笔记在线同步,整页随内置插件 Forsion Extend 出现 / 消失
   'settings.tab.forsionCloud': { zh: 'Forsion 云端', en: 'Forsion Cloud' },
   'settings.page.forsionCloudDescription': {
@@ -3257,14 +3257,14 @@ export const SettingsModal: React.FC<{
                           />
                         </div>
                         <div className="settings-control-row" data-setting-anchor="selection-bar">
-                          <div className="settings-control-copy"><TextSelect size={14} /><span><strong>{t('settings.theme.selectionBar')}</strong><small>{t('settings.theme.selectionBarHint')}</small></span></div>
+                          <div className="settings-control-copy"><TextSelect size={14} /><span><strong>{t('settingsmodal.selectionBar')}</strong><small>{t('settingsmodal.selectionBarHint')}</small></span></div>
                           <select
-                            aria-label={t('settings.theme.selectionBar')}
+                            aria-label={t('settingsmodal.selectionBar')}
                             value={selBarOrder}
                             onChange={(e) => { const v = e.target.value === 'actions' ? 'actions' : 'tools'; setSelBarOrder(v); setSelectionBarOrder(v) }}
                           >
-                            <option value="tools">{t('settings.theme.selectionBar.tools')}</option>
-                            <option value="actions">{t('settings.theme.selectionBar.actions')}</option>
+                            <option value="tools">{t('settingsmodal.selectionBar.tools')}</option>
+                            <option value="actions">{t('settingsmodal.selectionBar.actions')}</option>
                           </select>
                         </div>
                         {/* 输入建议:要 Tab 键采用,也要本机引擎(云端执行节点没有这条路由)→ 只在桌面宿主、有悬停的设备上摆出来。 */}
