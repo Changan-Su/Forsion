@@ -2232,6 +2232,21 @@ const tabCountText = (list) => {
     const density = Number(h.adb('shell', 'wm', 'density').match(/(\d+)\s*$/)[1]) / 160
     const TWO = sessions.find((x) => x.id === 'e2e-s2').title
     const open = async (title) => { await tapEl(rowExpr(title)); await h.waitPage(cdp, `(${nav}) === 'detail'`, 8000) }
+    /** ⋯ → search → quick find → the conversation titled `title` (typed: `text`): opens it from wherever we are, not through the list. */
+    const find = async (text, title) => {
+      await tapId('nativeChrome.more'); await tapId('nativeSheet.item.rb-cmd', await waitSheet(true)); await waitSheet(false)
+      assert.ok(await h.waitPage(cdp, "!!document.querySelector('.cmd-input')", 5000), 'the command panel did not open')
+      await tapEl("document.querySelector('.cmd-input')"); await h.pause(500); h.adb('shell', 'input', 'text', 'quick')
+      const quick = "[...document.querySelectorAll('.cmd-item')].find((r) => r.textContent.includes('快速查找'))"
+      assert.ok(await h.waitPage(cdp, `!!${quick}`, 5000), 'the command panel does not list quick find')
+      if (imeShown()) { h.key(4); await h.pause(600) }
+      await tapEl(quick); assert.ok(await h.waitPage(cdp, "!!document.querySelector('.amx-qf-input')", 5000), 'quick find did not open')
+      await tapEl("document.querySelector('.amx-qf-input')"); await h.pause(500); h.adb('shell', 'input', 'text', text)
+      const hit = `[...document.querySelectorAll('.amx-qf-row')].find((r) => r.querySelector('.amx-qf-title')?.textContent.trim() === ${JSON.stringify(title)})`
+      assert.ok(await h.waitPage(cdp, `!!${hit}`, 6000), `search does not list "${title}"`)
+      if (imeShown()) { h.key(4); await h.pause(600) }
+      await tapEl(hit); await h.waitPage(cdp, `(${dom.view}) === 'chat' && !document.querySelector('.amx-qf-input')`, 6000); await zero()
+    }
     say(`screen ${screen.w}x${screen.h} @${density}x; navigation_mode=${h.adb('shell', 'settings', 'get', 'secure', 'navigation_mode').trim()} (2 = gestures)`)
 
     // A. Home is where the app leaves from — by key and by a swipe in from either edge
@@ -2269,6 +2284,12 @@ const tabCountText = (list) => {
     h.key(4); await note('C4 back key', LIST)
     h.key(4); await note('C5 back key', HOME)
     h.key(4); await note('C6 back key', LEFT)
+    // … and a page reached from inside a trip (search → conversation One, not through the list) is walked back first:
+    //    the taps on the way are what tells a page of this trip from the one the tapped row opened (lcl listTrips)
+    await tanguDrawer(); await open(TWO); await h.pause(700); await zero()
+    await find('One', 'E2E Session One'); await note('C7 conversation Two: search → open conversation One', 'tangu/detail "E2E Session One"')
+    h.key(4); await note('C8 back key', `tangu/detail "${TWO}"`)
+    h.key(4); await note('C9 back key', LIST)
 
     // D. a conversation: the same rightward swipe by where the finger starts. Up to the system's back inset it is the
     //    system's (the page gets a touchcancel and one back); past it the page's own drag. Both end on the list.
@@ -2297,16 +2318,7 @@ const tabCountText = (list) => {
 
     // F. a conversation opened from Home (search): back → its Space's list → Home → out
     await goHome()
-    await tapId('nativeChrome.more'); await tapId('nativeSheet.item.rb-cmd', await waitSheet(true)); await waitSheet(false)
-    await h.waitPage(cdp, "!!document.querySelector('.cmd-input')", 5000)
-    await tapEl("document.querySelector('.cmd-input')"); await h.pause(500); h.adb('shell', 'input', 'text', 'quick')
-    const quick = "[...document.querySelectorAll('.cmd-item')].find((r) => r.textContent.includes('快速查找'))"
-    await h.waitPage(cdp, `!!${quick}`, 5000); if (imeShown()) { h.key(4); await h.pause(600) }
-    await tapEl(quick); await h.waitPage(cdp, "!!document.querySelector('.amx-qf-input')", 5000)
-    await tapEl("document.querySelector('.amx-qf-input')"); await h.pause(500); h.adb('shell', 'input', 'text', 'Two')
-    const hit = `[...document.querySelectorAll('.amx-qf-row')].find((r) => r.querySelector('.amx-qf-title')?.textContent.trim() === ${JSON.stringify(TWO)})`
-    await h.waitPage(cdp, `!!${hit}`, 6000); if (imeShown()) { h.key(4); await h.pause(600) }
-    await tapEl(hit); await h.waitPage(cdp, `(${dom.view}) === 'chat'`, 6000); await zero()
+    await find('Two', TWO)
     await note('F0 Home: search → open conversation Two', `tangu/detail "${TWO}"`)
     h.key(4); await note('F1 back key', LIST)
     h.key(4); await note('F2 back key', HOME)
