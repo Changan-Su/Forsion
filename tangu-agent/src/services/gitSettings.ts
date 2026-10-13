@@ -3,6 +3,7 @@
  *   branchPrefix       分支前缀。PROJECT 详情「新建分支」预填它;agent 替用户建分支时也照用(随 `[Git state]` 注入)。缺省 `tangu/`
  *   commitInstructions 提交说明。生成提交信息时附给模型;agent 替用户提交时也照做。缺省空
  *   forceWithLease     推送一律带 --force-with-lease(改写过历史的分支也能推;远端被别人推进过则仍拒绝)。缺省 false
+ *   identityName / identityEmail  提交身份。只在这台电脑的 git 没配身份时用(services/gitIdentity.ts);缺省空 = 由 Forsion 账号推出来
  *
  * 口径同 compactionSettings:逐键 normalize,非法键抛错不写,null = 删键回缺省;锁内读改写(段里手写的其它键原样保留)。
  * 云端 worker 的 config.json 是所有用户共用的 → 路由层按 hostExec 关门。
@@ -13,15 +14,22 @@ export interface GitSettings {
   branchPrefix: string;
   commitInstructions: string;
   forceWithLease: boolean;
+  identityName: string;
+  identityEmail: string;
 }
 
-export const DEFAULT_GIT_SETTINGS: GitSettings = { branchPrefix: 'tangu/', commitInstructions: '', forceWithLease: false };
+export const DEFAULT_GIT_SETTINGS: GitSettings = { branchPrefix: 'tangu/', commitInstructions: '', forceWithLease: false, identityName: '', identityEmail: '' };
 
 /** 提交说明每轮会随 `[Git state]` 进上下文,别让它无界。 */
 export const COMMIT_INSTRUCTIONS_MAX = 1000;
 const PREFIX_MAX = 40;
 /** 只收 ref 安全的字符;拼上名字之后是否合法由建分支时的 `git check-ref-format --branch` 判。 */
 const PREFIX_RE = /^[A-Za-z0-9._/-]*$/;
+const IDENTITY_MAX = 200;
+/** 提交身份里的一样:去掉控制字符和尖括号(git 写作者行用 `名字 <邮箱>`,带尖括号的会把那一行写坏)。 */
+export const cleanIdentityPart = (value: unknown): string => (typeof value === 'string' ? value.replace(/[\u0000-\u001f\u007f<>]/g, '').trim() : '');
+/** 不验证邮箱收不收得到信,只挡明显不是邮箱的(git 自己什么都收)。 */
+const EMAIL_RE = /^[^\s@]+@[^\s@]+$/;
 
 /** 一层原始值 → 只含合法字段的部分设置(非法字段丢弃,不抛)。 */
 export function normalizeGitSettings(raw: unknown): Partial<GitSettings> {
@@ -34,6 +42,14 @@ export function normalizeGitSettings(raw: unknown): Partial<GitSettings> {
   }
   if (typeof r.commitInstructions === 'string') out.commitInstructions = r.commitInstructions.replace(/\0/g, '').trim().slice(0, COMMIT_INSTRUCTIONS_MAX);
   if (typeof r.forceWithLease === 'boolean') out.forceWithLease = r.forceWithLease;
+  if (typeof r.identityName === 'string') {
+    const v = cleanIdentityPart(r.identityName);
+    if (v.length <= IDENTITY_MAX) out.identityName = v;
+  }
+  if (typeof r.identityEmail === 'string') {
+    const v = cleanIdentityPart(r.identityEmail);
+    if (v.length <= IDENTITY_MAX && (!v || EMAIL_RE.test(v))) out.identityEmail = v;
+  }
   return out;
 }
 

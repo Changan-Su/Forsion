@@ -614,6 +614,35 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
         return { webUrl: String(j.webUrl || ''), username: j.username, password: j.password };
       },
     },
+    // ── 绑定的 GitHub 账号:绑没绑 + 推拉凭据(对端 server microserver/github/routes/user.ts)。超时与失败的口径同上。
+    //    取凭据必须带 X-Forsion-Git-Credential 头:对端靠它把这个接口和下面那个通用出口(带不了自定义头)分开。──
+    github: {
+      status: async (opts?: { signal?: AbortSignal }) => {
+        const timeout = AbortSignal.timeout(GIT_INFO_TIMEOUT_MS);
+        const r = await fetch(`${base}/api/github/status`, { headers: authHeaders(), signal: opts?.signal ? AbortSignal.any([opts.signal, timeout]) : timeout })
+          .catch(() => { throw new GitHostingError(0, 'NETWORK'); });
+        if (r.status === 404) return { configured: false as const }; // 旧云端没有这个模块
+        if (!r.ok) throw new GitHostingError(r.status, '');
+        const j: any = await r.json().catch(() => null);
+        if (j?.configured !== true) return { configured: false as const };
+        return j.linked === true && typeof j.login === 'string' && j.login
+          ? { configured: true as const, linked: true as const, login: j.login, avatarUrl: typeof j.avatarUrl === 'string' && j.avatarUrl ? j.avatarUrl : null }
+          : { configured: true as const, linked: false as const };
+      },
+      credential: async (opts?: { signal?: AbortSignal }) => {
+        const timeout = AbortSignal.timeout(GIT_CREDENTIAL_TIMEOUT_MS);
+        const r = await fetch(`${base}/api/github/credential`, {
+          method: 'POST',
+          headers: { ...authHeaders(), 'X-Forsion-Git-Credential': '1' },
+          body: '{}',
+          signal: opts?.signal ? AbortSignal.any([opts.signal, timeout]) : timeout,
+        }).catch(() => { throw new GitHostingError(0, 'NETWORK'); });
+        const j: any = await r.json().catch(() => null);
+        if (!r.ok) throw new GitHostingError(r.status, typeof j?.code === 'string' ? j.code : '');
+        if (typeof j?.username !== 'string' || !j.username || typeof j?.password !== 'string' || !j.password) throw new GitHostingError(502, 'BAD_RESPONSE');
+        return { username: j.username, password: j.password };
+      },
+    },
     // 云端运行水合(B):worker 本地 FS 无 agents → 从云读 config.toml+SOUL.md 组装人格。软失败 → null。
     agents: {
       getAgent: async (_userId: string, slug: string) => {
@@ -668,7 +697,7 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
   // Optional capabilities describe configured services. Local Inbox storage uses
   // the host database independently; advertising this cloud-only seam starts the
   // broadcast poller even on an offline Unit with no Server or cloud credential.
-  if (!base || (typeof cfg.token === 'string' && !cfg.token.trim())) { delete brain.inbox; delete brain.git; }
+  if (!base || (typeof cfg.token === 'string' && !cfg.token.trim())) { delete brain.inbox; delete brain.git; delete brain.github; }
   if (brain.agentFiles) registerAgentSyncIdentity(brain.agentFiles, base, cfg.token);
   return brain;
 }

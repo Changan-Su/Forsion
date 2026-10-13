@@ -2,6 +2,9 @@
  * 项目上下文路由 × 真 standalone 引擎的冒烟(`npm run smoke:projectctx`,~10s,隔离 home,不碰 ~/.forsion*):
  * 单测(services/projectContext.test.ts)证的是服务层;这里证路由接线 —— 鉴权、按 sessionId 绑定项目、hostExec 闸、
  * 真 git 仓 / 真目录上的读写、409 冲突、用户侧 settings 落点、项目图标(上传 / 读 / 删)、负对照(伪造 sessionId → 404,无根会话 → 400)。
+ * Git 账号与身份那几条路由(没登录云端的引擎):账号面板的数据、提交身份(git 没配 → 提交被拒 → 设置里填了 → 提交署它、git 配置里不写)、
+ * 连接已有远端 / 克隆的入参校验与失败不留东西、仓库清单。带凭据的真推拉 / 真克隆在 git-credentials.gitea.mjs。
+ * 负对照(2026-10-14 实跑):提交路由不把身份交给 gitCommit(`who.env` 换成空对象)→ 「提交 → 署设置里填的名字和邮箱」红(no_identity)。
  * 用法:node scripts/project-context.smoke.mjs [dist/standalone/main.js](先 npm run build)。
  */
 import { spawn, execFileSync } from 'node:child_process';
@@ -22,12 +25,16 @@ git('init', '-q', '-b', 'main'); writeFileSync(join(proj, 'README.md'), '# demo\
 writeFileSync(join(proj, 'README.md'), '# demo changed\n');
 mkdirSync(join(proj, '.forsion', 'skills', 'legacy-one'), { recursive: true });
 writeFileSync(join(proj, '.forsion', 'skills', 'legacy-one', 'SKILL.md'), '---\nname: Legacy one\n---\nold');
+// useConfigOnly:不让 git 按系统用户名 / 主机名自己取身份 —— 「没配就是没有」在各台机器上结果一致
+const GITCONFIG = '[user]\n\tuseConfigOnly = true\n';
+writeFileSync(join(OUT, 'gitconfig'), GITCONFIG);
 const TOKEN = randomUUID();
 const port = await new Promise((r) => { const s = createServer(); s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => r(p)); }); });
 const base = `http://127.0.0.1:${port}`;
 const log = [];
 const child = spawn(process.execPath, [ENGINE, '--port', String(port), '--host', '127.0.0.1', '--data-dir', join(home, 'state.db'), '--sandbox', 'off', '--cloud-url', 'http://127.0.0.1:9', '--token', TOKEN],
-  { env: { ...process.env, TANGU_HOME: home, TANGU_DEFAULT_WORKSPACE: workspace }, stdio: ['ignore', 'pipe', 'pipe'] });
+  // 引擎看到的 git 全局配置是空的(不读这台机器上的名字 / 邮箱 / 凭据助手),提交身份那几条才测得出「git 没配」
+  { env: { ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^GIT_(AUTHOR|COMMITTER)_/.test(k))), TANGU_HOME: home, TANGU_DEFAULT_WORKSPACE: workspace, GIT_CONFIG_GLOBAL: join(OUT, 'gitconfig'), GIT_CONFIG_NOSYSTEM: '1' }, stdio: ['ignore', 'pipe', 'pipe'] });
 child.stdout.on('data', (d) => log.push(String(d))); child.stderr.on('data', (d) => log.push(String(d)));
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const api = async (path, init = {}) => {
@@ -86,6 +93,37 @@ try {
   const del = await api(`/agent/project-context/icon?sessionId=${sid}`, { method: 'DELETE' });
   const g3 = await bin(`sessionId=${sid}`);
   check('DELETE icon → settings 去掉 icon;GET → 404', del.status === 200 && !('icon' in (del.body.settings || {})) && g3.status === 404, JSON.stringify({ del: del.status, settings: del.body?.settings, g3: g3.status }));
+  // ── Git 账号与身份 / 连接远端 / 克隆(引擎没登录云端:没有 Forsion Git、没有 GitHub)──
+  const post = (path, body) => api(path, { method: 'POST', body: JSON.stringify(body) });
+  const gitOut = (...a) => { try { return execFileSync('git', ['-C', proj, ...a], { env, encoding: 'utf8' }).trim(); } catch { return null; } };
+  const acc0 = await api('/agent/git-accounts');
+  check('GET git-accounts(没登录、git 没配)→ 没有站、没有 GitHub、没有身份', acc0.status === 200 && acc0.body.forsionGit === null && acc0.body.github === null && acc0.body.identity === null, JSON.stringify(acc0.body));
+  const host = await api(`/agent/project-context/git/hosting?sessionId=${sid}`);
+  check('GET git/hosting → 两个站都没有、connect:true', host.status === 200 && host.body.forsionGit === null && host.body.github === null && host.body.connect === true, JSON.stringify(host.body));
+  const pend0 = await post('/agent/project-context/git/pending', { sessionId: sid, trust: true });
+  const noId = await post('/agent/project-context/git/commit', { sessionId: sid, message: 'smoke commit', expect: pend0.body?.token, trust: true });
+  check('没有身份:pending.identity = null;提交 → 400 no_identity,没有提交出来', pend0.status === 200 && pend0.body.identity === null && noId.status === 400 && noId.body.error === 'no_identity' && gitOut('log', '-1', '--format=%s') === 'init', JSON.stringify({ pend: pend0.body?.identity, commit: noId.body }));
+  const badMail = await api('/agent/git-settings', { method: 'PUT', body: JSON.stringify({ identityEmail: 'not an email' }) });
+  const setId = await api('/agent/git-settings', { method: 'PUT', body: JSON.stringify({ identityName: 'Smoke Tester', identityEmail: 'smoke@example.com' }) });
+  const acc1 = await api('/agent/git-accounts');
+  check('PUT git-settings 身份(坏邮箱 → 400)→ git-accounts.identity 是填的那个(custom)', badMail.status === 400 && setId.status === 200 && JSON.stringify(acc1.body.identity) === JSON.stringify({ name: 'Smoke Tester', email: 'smoke@example.com', source: 'custom' }), JSON.stringify({ bad: badMail.status, set: setId.status, id: acc1.body?.identity }));
+  const pend1 = await post('/agent/project-context/git/pending', { sessionId: sid, trust: true });
+  const done = await post('/agent/project-context/git/commit', { sessionId: sid, message: 'smoke commit', expect: pend1.body?.token, trust: true });
+  check('提交 → 署设置里填的名字和邮箱;仓库 / 全局 git 配置里都没写身份', done.status === 200 && gitOut('log', '-1', '--format=%an <%ae> %cn <%ce> %s') === 'Smoke Tester <smoke@example.com> Smoke Tester <smoke@example.com> smoke commit' && gitOut('config', '--local', '--get-regexp', '^user\\.') === null && readFileSync(join(OUT, 'gitconfig'), 'utf8') === GITCONFIG, JSON.stringify({ status: done.status, body: done.body?.error, log: gitOut('log', '-1', '--format=%an <%ae>') }));
+  const badRemote = await post('/agent/project-context/git/remote', { sessionId: sid, url: `file://${OUT}/elsewhere`, trust: true });
+  const deadRemote = await post('/agent/project-context/git/remote', { sessionId: sid, url: 'https://127.0.0.1:9/nobody/nothing.git', trust: true });
+  check('连接已有远端:file:// → invalid_remote_url;连不上 → remote_unreachable;两次都没留下 origin', badRemote.status === 400 && badRemote.body.error === 'invalid_remote_url' && deadRemote.status === 400 && deadRemote.body.error === 'remote_unreachable' && gitOut('remote') === '', JSON.stringify({ bad: badRemote.body, dead: deadRemote.body, remotes: gitOut('remote') }));
+  const reposBad = await api('/agent/git/repos?host=elsewhere'); const reposF = await api('/agent/git/repos?host=forsion'); const reposG = await api('/agent/git/repos?host=github');
+  // 这台引擎配了云端地址但够不着:Forsion Git 读不到站点信息 → 没有这个站(null);GitHub 取不到凭据 → 明说暂时取不到
+  check('GET git/repos:host 不认识 → 400;云端够不着 → Forsion Git repos:null、GitHub github_unavailable', reposBad.status === 400 && reposF.status === 200 && reposF.body.repos === null && reposG.status === 400 && reposG.body.error === 'github_unavailable', JSON.stringify({ bad: reposBad.status, f: reposF.body, g: reposG.body }));
+  const cloneLocal = await post('/agent/git/clone', { url: proj, parent: OUT, name: 'copy' });
+  const cloneDead = await post('/agent/git/clone', { url: 'https://127.0.0.1:9/nobody/nothing.git', parent: OUT, name: 'copy' });
+  const cloneTaken = await post('/agent/git/clone', { url: 'https://127.0.0.1:9/nobody/nothing.git', parent: OUT, name: 'proj' });
+  const cloneEscape = await post('/agent/git/clone', { url: 'https://127.0.0.1:9/nobody/nothing.git', parent: OUT, name: '../escape' });
+  check('克隆:本机路径 → invalid_remote_url;连不上 → remote_unreachable 且不留文件夹;重名 → target_exists(原文件夹不动);带路径的名字 → invalid_folder_name',
+    cloneLocal.body?.error === 'invalid_remote_url' && cloneDead.status === 400 && cloneDead.body.error === 'remote_unreachable' && !existsSync(join(OUT, 'copy'))
+    && cloneTaken.body?.error === 'target_exists' && existsSync(join(proj, 'README.md')) && cloneEscape.body?.error === 'invalid_folder_name',
+    JSON.stringify({ local: cloneLocal.body, dead: cloneDead.body, taken: cloneTaken.body, escape: cloneEscape.body }));
 } finally {
   child.kill('SIGTERM');
   await sleep(500);
