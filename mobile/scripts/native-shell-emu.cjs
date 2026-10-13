@@ -863,8 +863,10 @@ const tabCountText = (list) => {
     assert.ok(await cdp.eval(settingsOpen), 'back closed settings instead of returning home')
     // into the category again, × closes settings entirely
     await tapEl(`document.querySelector('.settings-mobile-row:not([aria-expanded])')`)
-    r = await h.waitNodes((l) => (textOf(l, 'nativeChrome.title') === label ? l : null), { timeout: 5000 })
-    assert.ok(r.hit, 'category did not reopen')
+    // the title changes a frame before the × is there: a tree read in between has the title and no × (seen once the
+    // tree reader was fast again, 2026-10-13) — wait for both, as the first entry above does
+    r = await h.waitNodes((l) => (textOf(l, 'nativeChrome.title') === label && h.byId(l, 'nativeChrome.close') ? l : null), { timeout: 5000 })
+    assert.ok(r.hit, `category did not reopen with its × (title=${textOf(r.nodes, 'nativeChrome.title')})`)
     await tapId('nativeChrome.close', r.nodes)
     assert.ok(await h.waitPage(cdp, `!(${settingsOpen})`, 5000), '× did not close settings')
     r = await h.waitNodes((l) => h.byId(l, 'nativeChrome.more'), { timeout: 5000 })
