@@ -58,6 +58,30 @@ describe('ctx.tangu.complete', () => {
   })
 })
 
+describe('ctx.tangu.translate', () => {
+  it('转成 translate 动作交给探针(不带模型:槽由探针解析);缺原文 / 目标语言拒;停用即中止', async () => {
+    const seen: unknown[] = []
+    let signal: AbortSignal | undefined
+    setTanguProbe(baseProbe({
+      complete: (req, opts) => {
+        seen.push(req)
+        if (req.selection !== 'hang') return Promise.resolve({ text: '你好', toolCallText: false })
+        signal = opts?.signal
+        return new Promise((_res, rej) => opts?.signal?.addEventListener('abort', () => rej(new DOMException('aborted', 'AbortError'))))
+      },
+    }))
+    const ctx = ctxOf('p-tr')
+    expect(await ctx.tangu!.translate!({ text: 'hello', language: ' Simplified Chinese ', before: 'ctx' })).toEqual({ text: '你好' })
+    expect(seen[0]).toEqual({ action: 'translate', selection: 'hello', language: 'Simplified Chinese', before: 'ctx' })
+    await expect(ctx.tangu!.translate!({ text: '  ', language: 'English' })).rejects.toThrow(/text and language/)
+    await expect(ctx.tangu!.translate!({ text: 'x', language: '' })).rejects.toThrow(/text and language/)
+    const p = ctx.tangu!.translate!({ text: 'hang', language: 'English' })
+    usePluginStore.getState().disable('p-tr')
+    await expect(p).rejects.toThrow()
+    expect(signal?.aborted).toBe(true)
+  })
+})
+
 describe('ctx.registerSelectionAction', () => {
   beforeEach(() => setTanguProbe(baseProbe()))
 

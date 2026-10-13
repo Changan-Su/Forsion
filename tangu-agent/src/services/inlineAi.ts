@@ -154,6 +154,8 @@ export async function completeInline(opts: {
     model, apiModelId, messages,
     projectSource: '', usageSource: opts.appId, client: opts.client,
     maxTokens, stream: true, signal: opts.signal,
+    // 机器翻译模型(「翻译」模型槽里可以选到)不吃上面那套提示词,只要原文和目标语言;普通模型忽略这一项。
+    ...(opts.input.action === 'translate' && opts.input.selection ? { translate: { text: opts.input.selection, target: opts.input.language || 'English' } } : {}),
   });
   opts.signal.throwIfAborted();
   /** 按用量结算(扣额度 + 记用量)。正常结束用 provider 的 usage;**中止 / 出错也结算**(Codex 复核 P0):请求发出去之后

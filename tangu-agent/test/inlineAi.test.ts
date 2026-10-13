@@ -43,7 +43,7 @@ beforeAll(async () => {
     brain: {
       llm: {
         resolveModelAndKey: async () => ({ model: { provider: 'test', name: 'test', context_window: 128_000 }, apiKey: 'k', baseUrl: 'b', apiModelId: 'm' }),
-        buildProviderPayload: async (o: any) => ({ messages: structuredClone(o.messages), tools: o.tools, max_tokens: o.maxTokens }),
+        buildProviderPayload: async (o: any) => ({ messages: structuredClone(o.messages), tools: o.tools, max_tokens: o.maxTokens, translate: o.translate }),
         streamProviderCompletion: async (o: any) => {
           payloads.push(o.payload);
           for (const piece of reply.match(/[\s\S]{1,6}/g) || []) o.onToken?.(piece);
@@ -145,6 +145,15 @@ describe('completeInline', () => {
     expect(deltas.join('')).toBe(reply);
     expect(payloads[0].tools).toBeUndefined();
     expect(billing.consumeTokenPoints).toHaveBeenCalled();
+  });
+  it('translate 动作把原文 + 目标语言单独带给装配(机器翻译模型只吃这个);别的动作不带', async () => {
+    payloads = [];
+    reply = '你好';
+    const run = (body: object) => completeInline({ userId: 'u1', modelId: 'm1', appId: 'tangu', input: normalizeInlineInput(body)!, signal: new AbortController().signal, onToken: () => {} });
+    await run({ action: 'translate', selection: 'hello', language: 'Simplified Chinese', before: 'ctx' });
+    await run({ action: 'translate', selection: 'hello' });
+    await run({ action: 'improve', selection: 'hello' });
+    expect(payloads.map((p) => p.translate)).toEqual([{ text: 'hello', target: 'Simplified Chinese' }, { text: 'hello', target: 'English' }, undefined]);
   });
   it('passes page instructions and path through the real inline route into the model payload', async () => {
     payloads = [];

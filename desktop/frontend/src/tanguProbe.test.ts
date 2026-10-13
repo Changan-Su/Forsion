@@ -5,9 +5,10 @@
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { useSpaceStore, useWorkspace } from '@lcl/engine'
-import { installTanguProbe, START_CHAT_MAX_PROMPT } from './tanguProbe'
+import { installTanguProbe, START_CHAT_MAX_PROMPT, translateModelId } from './tanguProbe'
 import { readTangu } from './amadeus/plugins/tanguSeam'
 import { resolveNewSessionWorkspace, useApp } from './stores/appStore'
+import { rememberCatalog, useTargetCatalogs } from './services/engine/catalog'
 import { DONE_HOLD_MS } from './stores/agentStatus'
 import { ingestCallVoice } from './services/callVoice'
 import type { AgentRunEvent, UiMessage } from './types'
@@ -162,6 +163,41 @@ describe('ctx.tangu 探针', () => {
     useApp.setState({ newChatModel: 'm10' })
     useSpaceStore.setState({ activeSpaceId: 'amadeus' })
     expect(n).toBe(2)
+  })
+})
+
+describe('「翻译」模型槽(translate 动作的模型)', () => {
+  const withSlot = (id: string | undefined): void => { vi.stubGlobal('window', { tangu: { getConfig: async () => ({ translateModelId: id }) } }) }
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('按本机引擎的目录验:有 → 用它;没设 / 已经没有 → undefined(落回聊天模型);目录还没拉到 → 先信它', async () => {
+    const home = (models: object | null): void => { useTargetCatalogs.setState({ byKey: {} }); if (models) rememberCatalog('home', { models: models as never }) }
+    const M = { id: 'mt', name: 'MT', provider: 'x', source: 'forsion' }
+    home({ models: [M] })
+    withSlot('mt')
+    expect(await translateModelId()).toBe('mt')
+    withSlot('')
+    expect(await translateModelId()).toBeUndefined()
+    withSlot('gone')
+    expect(await translateModelId()).toBeUndefined()
+    // 云端的机器翻译模型不在 models 里,在 translateModels 里:照样算数
+    home({ models: [M], translateModels: [{ id: 'qmt', name: 'Qwen MT' }] })
+    withSlot('qmt')
+    expect(await translateModelId()).toBe('qmt')
+    // 焦点在别的引擎上(modelsResp 是那边的目录,没有这个模型):本机的槽照样有效,正文 AI 只打本机
+    useApp.setState({ modelsResp: { models: [{ id: 'remote-only', name: 'R', provider: 'x', source: 'forsion' }] } } as never)
+    expect(await translateModelId()).toBe('qmt')
+    // 目录拉到了、是空的(退出登录、没有自带的模型):这个模型就是没有了
+    home({ models: [], translateModels: [] })
+    expect(await translateModelId()).toBeUndefined()
+    // 目录还没拉到:先信它
+    home(null)
+    expect(await translateModelId()).toBe('qmt')
+  })
+
+  it('读配置失败不抛', async () => {
+    vi.stubGlobal('window', { tangu: { getConfig: async () => { throw new Error('ipc down') } } })
+    expect(await translateModelId()).toBeUndefined()
   })
 })
 

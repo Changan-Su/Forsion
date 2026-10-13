@@ -32,7 +32,19 @@ import { completeInline } from './services/inlineAi'
 import { submitDocumentTask } from './services/documentTasks'
 import { openSession } from './sessionNav'
 import { connectionTarget } from './services/engine/targets'
+import { catalogFor } from './services/engine/catalog'
 import { getCallVoice, subscribeCallVoice } from './services/callVoice'
+
+/** 「翻译」模型槽(设置 → 模型;config.json models.translate)。没设、读不到、或**本机引擎**的目录里已经没有这个模型
+ *  (下架 / 换了账号;云端的机器翻译模型在目录的 translateModels 里)→ undefined,调用方落回聊天当前模型 ——
+ *  逐句翻译时不能因为一个过期的 id 句句报错。
+ *  按本机引擎的目录验,不是 modelsResp:正文 AI 只打本机(completeInline → homeTarget),而 modelsResp 跟着焦点走,
+ *  焦点在远端引擎时拿它验会把本机上好好的槽判成过期。目录还没拉到(null)才先信它;拉到了、是空的 = 没有这个模型。 */
+export async function translateModelId(): Promise<string | undefined> {
+  const id = (await window.tangu?.getConfig?.().catch(() => null))?.translateModelId
+  const r = catalogFor('home')?.models
+  return id && (!r || r.models.some((m) => m.id === id) || !!r.translateModels?.some((m) => m.id === id)) ? id : undefined
+}
 
 function readActiveModel(): TanguModelInfo | null {
   const s = useApp.getState()
@@ -420,8 +432,9 @@ export function installTanguProbe(): void {
     // 插件视图里的原生对话(ctx.tangu.mountChat):同一门控 —— 没有对话能力的档案里 ChatView 没有数据源。
     ...(hasNativeFeature('tangu') ? { mountChat } : {}),
     // 正文生成式 AI(G3-07):引擎 /agent/inline;模型缺省 = 主区聊天此刻用的那个(与 activeModel 同口径)。
+    // 例外:translate 动作先看「翻译」模型槽(编辑器的翻译与插件 ctx.tangu.translate 同一个口子)。
     // 与「问 Tangu」同一门控:没有 Tangu 产品能力的档案(automation-only)不出 AI 入口、插件也拿不到 complete。
-    ...(hasNativeFeature('tangu') ? { complete: (req, opts) => completeInline(req, readActiveModel()?.id ?? null, opts) } : {}),
+    ...(hasNativeFeature('tangu') ? { complete: async (req, opts) => completeInline(req.action === 'translate' && !req.modelId ? { ...req, modelId: await translateModelId() } : req, readActiveModel()?.id ?? null, opts) } : {}),
     // ⚠️只在 (模型 id, Space id) 这对值**真变了**时才回调。useApp 在流式回答期间每收一个
     // SSE 增量就 set 一次 state,裸转发 = 把每个订阅插件按帧敲一遍(浮层类插件会当场掉帧)。
     subscribe: (cb) => {

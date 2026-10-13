@@ -110,6 +110,8 @@ View 内需要输入框和模型选择时，使用 `ctx.ui.mountChatBox`；它�
 
 View 内需要一个完整的常驻对话时（例如创作类 Space 的右栏），使用 `ctx.tangu.mountChat`：宿主把原生对话固定在该插件、该文件夹的一条会话上，Agent 生成的文件直接落进这个文件夹。Plugins that need a full, persistent chat inside a view (for example the right panel of a creative Space) use `ctx.tangu.mountChat`; the host pins the native chat to one session per plugin and folder, and files the Agent generates land in that folder. 见 [可复用 UI 组件 / Reusable UI components](./ui-components.md)。
 
+不需要对话、只要模型回一段文字时用 `ctx.tangu.complete`（一次性调用：没有工具、不进任何会话，用聊天当前的模型）。翻译用 `ctx.tangu.translate({ text, language })`：同一条通道，但模型取用户在「设置 → 模型 → 翻译」里选的那个，没选才跟聊天模型，逐句翻译这类量大的活应当走它；它只返回译文。旧版本没有 `translate`，先探测再退回 `complete`。When a plugin only needs the model to return a piece of text, use `ctx.tangu.complete` (a one-shot call: no tools, no session, on the current chat model). For translation use `ctx.tangu.translate({ text, language })`: the same channel, but on the model the user picked under Settings → Models → Translation, falling back to the chat model when none is set. High-volume work such as sentence-by-sentence translation belongs here; it returns the translation only. Older versions have no `translate`, so feature-detect and fall back to `complete`.
+
 
 ## 开屏与图标 / Startup and icons
 

@@ -196,7 +196,8 @@ export interface TanguProbe {
    *  编辑器里整个入口不出现,不画一个点了没反应的按钮。 */
   askInChat?(text: string): void
   /** 正文生成式 AI 的一次性补全(评审 G3-07,2026-09-28):引擎 `POST /agent/inline`(不落库、无工具)。
-   *  编辑器的「AI ▾」/ `/ai` / 空行空格与插件的 `ctx.tangu.complete` 都走这一条。模型缺省 = 主区聊天此刻用的那个。
+   *  编辑器的「AI ▾」/ `/ai` / 空行空格与插件的 `ctx.tangu.complete` / `translate` 都走这一条。模型缺省 = 主区聊天此刻用的那个;
+   *  `action: 'translate'` 没点名模型时先取「翻译」模型槽(设置 → 模型 → 翻译)。
    *  可选:纯 Amadeus 壳 / 台架假探针不给 = 编辑器里没有 AI 入口、插件那边没有 `ctx.tangu.complete`。 */
   complete?(req: TanguCompleteRequest, opts?: TanguCompleteOptions): Promise<TanguCompleteResult>
 }
@@ -217,7 +218,7 @@ export interface TanguCompleteRequest {
   pagePath?: string
   /** translate 的目标语言(如 "English")。 */
   language?: string
-  /** 不给 = 主区聊天当前模型。 */
+  /** 不给 = 主区聊天当前模型(translate:先取「翻译」模型槽)。 */
   modelId?: string
 }
 export interface TanguCompleteOptions {

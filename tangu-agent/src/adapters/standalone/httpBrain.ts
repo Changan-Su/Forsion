@@ -404,6 +404,8 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
             imageModelId: r?.imageModelId ?? null,
             visionModelId: r?.visionModelId ?? null,
             realtimeModel: r?.realtimeModel?.id ? { id: String(r.realtimeModel.id), name: String(r.realtimeModel.name || r.realtimeModel.id), apiModelId: r.realtimeModel.apiModelId ?? null } : null,
+            translateModels: (Array.isArray(r?.translateModels) ? r.translateModels : []).filter((m: any) => m?.id)
+              .map((m: any) => ({ id: String(m.id), name: String(m.name || m.id), provider: String(m.provider || 'forsion'), apiModelId: m.apiModelId ?? null })),
             reachable: true,
           };
         } catch {

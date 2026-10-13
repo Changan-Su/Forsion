@@ -1004,6 +1004,23 @@ ctx.registerSelectionAction({
 - 模型缺省 = 主区聊天当前用的那个;额度与用量照主聊天口径扣、记。插件被停用时在飞的 `complete` 会被中止并 reject。
 - 只有 v4 笔记的选区工具栏有「AI ▾」;宿主做不了(探针没有 `complete`)时整个菜单不出现,你的项也不会出现。
 
+### 翻译:ctx.tangu.translate(2026-10-13 起)
+
+逐句翻译、批量翻译这类**量大**的活别用 `complete`:那条恒用主区聊天当前的模型(往往是最贵的一档)。`translate` 走同一条
+一次性通道,但模型取用户在「设置 → 模型 → 翻译」里选的那个,没选才跟聊天模型:
+
+```js
+const tr = ctx.tangu?.translate
+  ? (text) => ctx.tangu.translate({ text, language: 'Simplified Chinese', before: prev, signal })   // → { text } = 译文本身
+  : (text) => ctx.tangu.complete({ prompt: 'Translate the text in <selection> into Simplified Chinese. Output only the translation.', selection: text })
+```
+
+- `language` 是写给模型看的目标语言(自由文本,英文名最稳);`before` 是原文前面的一段上下文,只供消歧、不翻。
+- **只做翻译**:返回的就是译文,不会顺带改错字、不会按你的格式回话。要这些请另外用 `complete` 自己写指令(隔一段做一次,别逐句做)。
+- 引擎每个用户同时最多 3 个一次性请求(`complete` + `translate` 合计),超出回 429。自己排队,并发开 2 就够。
+- 旧宿主没有这个方法,先特性探测再退回 `complete`(上面的写法);不要为它抬 `minAppVersion`。
+- 额度与用量按所用模型照常扣、记;插件被停用时在飞的请求被中止并 reject。
+
 ## Agent Desk 伴随面:ctx.desk(2026-09-19 起)
 
 往 Tangu 聊天右侧的 **Agent Desk**(右栏那张卡片 + 展开后的侧板)里挂一块自绘区域,典型用法是会跟着 agent 状态做反应的 3D 形象:
