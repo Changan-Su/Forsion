@@ -122,7 +122,8 @@ async function main() {
     }
     const layout = () => win.evaluate(LAYOUT)
     const link = (text) => win.locator('.amx-pane .wikilink[data-wiki]', { hasText: text }).first()
-    const zoomNow = await win.evaluate(`Number(getComputedStyle(document.documentElement).zoom) || 1`)
+    // 界面缩放是挂在应用壳某一层上的 CSS zoom,不一定在 <html>:从编辑器往上把各层的 zoom 乘起来。
+    const zoomNow = await win.evaluate(`(() => { let z = 1; for (let n = document.querySelector('.am-app'); n; n = n.parentElement) z *= parseFloat(getComputedStyle(n).zoom) || 1; return Math.round(z * 100) / 100 })()`)
 
     await openFromTree('甲笔记')
     const l0 = await layout()
