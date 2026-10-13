@@ -15,8 +15,9 @@ import type { ViewProps } from '@lcl/engine'
 import { ChevronDown, ChevronRight, FileText, Folder, FolderOpen, ListFilter, MoreHorizontal, Pencil, Plus, Search, X } from 'lucide-react'
 import { usePluginStore } from '@amadeus/plugins/pluginStore'
 import type { ListAction, ListDropTarget, ListItem, ListSourceContribution } from '@amadeus/plugins/types'
-import { LIST_ROW_MIME, ancestorsOf, buildListTree, dropCandidates, flattenLeaves, isFolder, leafCount, type ListDropPosition, type ListNode } from '@amadeus/plugins/listTree'
-import { folderPadLeft } from '@amadeus/lib/treeIndent'
+import { LIST_ROW_MIME, ancestorsOf, buildListTree, dropCandidates, fitsPhoneList, flattenLeaves, groupFold, isFolder, isGroupHead, leafCount, type GroupFold, type ListDropPosition, type ListNode } from '@amadeus/plugins/listTree'
+import { folderPadLeft, nameLeft } from '@amadeus/lib/treeIndent'
+import { initialFor } from '../components/agentInitial'
 import { useApp } from '../stores/appStore'
 import { registerMessages, useI18n } from '../i18n'
 import { useShallow } from 'zustand/react/shallow'
@@ -220,6 +221,24 @@ function LeadIcon({ item }: { item: ListItem }): ReactNode {
   return resolveIcon(item.icon, <FileText className="t2s-lead-icon t2s-dim" />)
 }
 
+/** 组头(ListItem.folderStyle: 'group')的前导:和工作区一级行同一个 30px 的槽 —— 有图用圆头像,
+ *  给了词表图标就是方块里的图标,都没有就是名字的首字(同 Agent 行的兜底)。图取不到时往后退一档。 */
+function GroupLead({ item }: { item: ListItem }): ReactNode {
+  const [failed, setFailed] = useState(false)
+  // 尺寸写在标签上(同 OrbitsView 的头像):不写的话图片按原始像素撑开
+  if (item.iconUrl && !failed) return <span className="t2o-lead"><img className="t2o-avatar" width={30} height={30} src={item.iconUrl} alt="" onError={() => setFailed(true)} /></span>
+  const icon = resolveIcon(item.icon)
+  return icon && typeof icon !== 'string'
+    ? <span className="t2o-lead t2sw-plug-gtile">{icon}</span>
+    : <span className="t2o-lead"><span className="t2o-avatar t2o-avatar-text">{typeof icon === 'string' ? icon : initialFor(item.title)}</span></span>
+}
+/** 组头的开合记在这里:只活这一次运行(见 listTree 的 groupFold)。键 = 开合记忆的 stateKey + 行 key。 */
+const GROUP_FOLDS = new Map<string, GroupFold>()
+/** 一组先列几条,再多收在「查看更多」后面(和工作区每组列几条会话是同一个数)。 */
+const GROUP_PAGE = 5
+/** 组头前导槽 30 + 与名字的间距 8(orbits.css 的 .t2o-row)。 */
+const GROUP_LEAD = 38
+
 const OPEN_KEY = 'amx.plug.open.'
 /** 分组与文件夹的开合记忆。纯本地的观感偏好,和 sectionOpen.ts 一样只存 localStorage。
  *  id 由调用处拼:`s:<分组名>` / `f:<行 key>`;没存过的用调用处给的缺省(分组展开、文件夹收起)。 */
@@ -257,8 +276,8 @@ function RenameInput({ title, label, onDone }: { title: string; label: string; o
 }
 
 const cls = (...parts: Array<string | false | null | undefined>): string | undefined => parts.filter(Boolean).join(' ') || undefined
-/** 方向键能走到的行:普通行、文件夹行、分组头。 */
-const NAV_ROWS = '.t2s-srow, .t2s-folder-row, .t2sw-plug-sec'
+/** 方向键能走到的行:普通行、文件夹行、组头、分组头。 */
+const NAV_ROWS = '.t2s-srow, .t2s-folder-row, .t2sw-plug-ghead, .t2sw-plug-sec'
 
 /** stateKey:开合记忆按它分开存(WorkspaceView 给 `plugin:<插件>:<源>`);不给就用源自己的 id。 */
 export function PluginListBody({ src, stateKey }: { src: ListSourceContribution; stateKey?: string }) {
@@ -286,8 +305,17 @@ export function PluginListBody({ src, stateKey }: { src: ListSourceContribution;
   const dragKeys = useRef<string[] | null>(null)
   const [dragging, setDragging] = useState<string | null>(null)
   const [dropAt, setDropAt] = useState<{ key: string; position: ListDropPosition } | null>(null)
+  const [more, setMore] = useState<ReadonlySet<string>>(new Set()) // 点过「查看更多」的组
   // 源换了(插件切换/禁用重启)→ 过滤态跟着重置,免得拿旧源的分组键去查新源。
-  useEffect(() => { setQuery(''); setGroup(null); setMenu(null); setRenaming(null); setSearching(false) }, [src])
+  useEffect(() => { setQuery(''); setGroup(null); setMenu(null); setRenaming(null); setSearching(false); setMore(new Set()) }, [src])
+  // 文件夹的开合:普通文件夹落盘(缺省收起);组头只记这一次运行,由插件的 defaultOpen 带着走。
+  const foldId = (it: ListItem): string => `${stateKey ?? src.id}\n${it.key}`
+  const folderOpen = (it: ListItem): boolean => isGroupHead(it) ? groupFold(GROUP_FOLDS, foldId(it), it).open : open.isOpen('f:' + it.key, false)
+  const setFolderOpen = (it: ListItem, next: boolean): void => {
+    if (!isGroupHead(it)) { open.setOpen('f:' + it.key, next); return }
+    groupFold(GROUP_FOLDS, foldId(it), it).open = next
+    force()
+  }
 
   const groups = src.groups?.() ?? []
   const activeGroup = groups.find((item) => item.key === group)
@@ -300,10 +328,11 @@ export function PluginListBody({ src, stateKey }: { src: ListSourceContribution;
     ...(src.groupActions ?? []).map((action) => ({ ...action, id: `group:${action.id}` }))]
   const activeKey = src.activeKey?.() ?? null
   // 手机的整屏列表(布局「二」:分类胶囊、图标块 + 两行的行、左滑出操作、右下角主按钮 —— 与会话 / 笔记列表同一套零件,
-  // 见 components/phoneList)。只给平铺的源:带文件夹 / 层级的源照旧画树(树的缩进、开合、拖放在那套版式里没有位置)。
+  // 见 components/phoneList)。只给平铺的源,外加最多一层组头(fitsPhoneList):带普通文件夹 / 更深层级的源照旧画树
+  // (树的缩进、拖放在那套版式里没有位置)。
   // 看的是没筛过的那一份 —— 筛出来的结果恰好全是顶层行时,不能因此换一套版式。
   const phone = useListFirst()
-  const flatNow = phone && !(query || activeGroup ? src.items() : items).some((it) => isFolder(it) || it.parent)
+  const flatNow = phone && fitsPhoneList(query || activeGroup ? src.items() : items)
   // 正在改名时不换版式:换了行的外壳,输入框会重挂,打到一半的名字就没了(订阅推来一个文件夹时会碰上)。
   const flatHeld = useRef(flatNow)
   if (!renaming) flatHeld.current = flatNow
@@ -337,7 +366,7 @@ export function PluginListBody({ src, stateKey }: { src: ListSourceContribution;
     if (!self) return
     revealed.current = activeKey
     const ups = ancestorsOf(items, activeKey)
-    for (const key of ups) open.setOpen('f:' + key, true)
+    for (const key of ups) { const up = items.find((it) => it.key === key); if (up) setFolderOpen(up, true) }
     const top = ups.length ? items.find((it) => it.key === ups[ups.length - 1]) : self
     if (top?.group) open.setOpen('s:' + top.group, true)
   })
@@ -485,14 +514,14 @@ export function PluginListBody({ src, stateKey }: { src: ListSourceContribution;
   })
   /** 手机整屏列表里的行:图标块 + 标题与时间 / 第二行;样式全在 phoneList.css(命中 = 列表根上的 data-timeline)。
    *  不接行的拖放(刻意):触屏上拖动是从长按起手的,而长按在这里是「这一行的菜单」;与笔记的「最近」列表同一个取舍。 */
-  const phoneRow = (it: ListItem): ReactNode => {
+  const phoneRow = (it: ListItem, inGroup: boolean): ReactNode => {
     const actions = menuFor(it)
     const editing = renaming === it.key
     return <div className="t2sw-plug-item" key={it.key}>
       <SwipeRow actions={editing ? [] : swipeFor(actions)}>
         <SidebarRow as={editing ? 'div' : 'button'} data-row-key={it.key} title={it.title} style={{ paddingLeft: undefined }}
-          className={cls(activeKey === it.key && 'active', it.unread && 'is-unread')}
-          lead={<><LeadIcon key={it.iconUrl ?? ''} item={it} />{it.unread && <span className="t2s-dot unread" title={t('sidebar.unread')} />}</>}
+          className={cls(activeKey === it.key && 'active', it.unread && 'is-unread', inGroup && 't2sw-plug-kid')}
+          lead={inGroup ? unreadDot(it) : <><LeadIcon key={it.iconUrl ?? ''} item={it} />{it.unread && <span className="t2s-dot unread" title={t('sidebar.unread')} />}</>}
           onClick={editing ? undefined : () => src.open(it, { newTab: false })}
           onContextMenu={contextMenu(actions)}
         >{editing ? renameInput(it) : <span className="t2s-srow-text">
@@ -503,11 +532,15 @@ export function PluginListBody({ src, stateKey }: { src: ListSourceContribution;
       </SwipeRow>
     </div>
   }
-  // Keep the shared row, with an independent sibling menu button (never nest buttons).
-  const row = (it: ListItem, depth: number): ReactNode => {
-    if (flat) return phoneRow(it)
+  /** 组里的行不画自己的图标(组头已经说了是谁的),前导槽里只留未读的圆点;槽照留,标题才和组头的名字对齐。 */
+  const unreadDot = (it: ListItem): ReactNode => it.unread ? <span className="t2sw-plug-udot" title={t('sidebar.unread')} /> : null
+  // Keep the shared row, with independent sibling buttons (never nest buttons).
+  const row = (it: ListItem, depth: number, inGroup = false): ReactNode => {
+    if (flat) return phoneRow(it, inGroup)
     const actions = menuFor(it)
     const editing = renaming === it.key
+    // 指针停在行上时行尾出的图标钮:和手机上左滑出来的是同一份(带图标的动作),「更多」里仍是带名字的全部动作。
+    const quick = editing ? [] : swipeFor(actions)
     // 有副标题的行画两行(标题 + 一行淡字);改名时退回一行,输入框只改标题。
     // 两行时右边的 hint 收进第一行里,第二行才能用满整行的宽 —— 手机上一行只有四百来宽,让出时间那一列就少显示十来个字。
     const two = !editing && !!it.subtitle
@@ -516,9 +549,10 @@ export function PluginListBody({ src, stateKey }: { src: ListSourceContribution;
       {/* 改名时行里是输入框,input 不能嵌在 button 里 → 换成 div */}
       <SidebarRow as={editing ? 'div' : 'button'} depth={depth} data-row-key={it.key}
         title={it.title}
-        className={`${activeKey === it.key ? 'active' : ''}${it.unread ? ' is-unread' : ''}${dropKey === `i:${it.key}` ? ' amx-drop-into' : ''}${actions.length ? ' has-actions' : ''}${two ? ' t2s-deep' : ''}`.trim() || undefined}
+        className={`${activeKey === it.key ? 'active' : ''}${it.unread ? ' is-unread' : ''}${dropKey === `i:${it.key}` ? ' amx-drop-into' : ''}${actions.length ? ' has-actions' : ''}${quick.length ? ' has-quick' : ''}${two ? ' t2s-deep' : ''}`.trim() || undefined}
+        style={quick.length ? { '--quick': quick.length } as React.CSSProperties : undefined}
         {...rowDropProps(it)} {...dragProps(it)}
-        lead={<><LeadIcon key={it.iconUrl ?? ''} item={it} />{it.unread && <span className="t2s-dot unread" title={t('sidebar.unread')} />}</>}
+        lead={inGroup ? unreadDot(it) : <><LeadIcon key={it.iconUrl ?? ''} item={it} />{it.unread && <span className="t2s-dot unread" title={t('sidebar.unread')} />}</>}
         trailing={!editing && !two && it.hint ? <span className="t2s-count">{it.hint}</span> : undefined}
         onClick={editing ? undefined : (e) => src.open(it, { newTab: e.metaKey || e.ctrlKey })}
         onContextMenu={contextMenu(actions)}
@@ -528,14 +562,40 @@ export function PluginListBody({ src, stateKey }: { src: ListSourceContribution;
             <span className="t2sw-plug-sub">{it.subtitle}</span>
           </span>
         : <span className="t2s-srow-title">{it.title}</span>}</SidebarRow>
+      {!!quick.length && <span className="t2sw-plug-row-quick">{quick.map((action) =>
+        <button key={action.id} type="button" className={cls('t2sw-plug-row-act', action.tone === 'danger' && 'danger')} data-action={action.id}
+          title={action.label} aria-label={action.label} onClick={() => action.run()}>{action.icon}</button>)}</span>}
       {!!actions.length && !editing && <CapabilityMenu label={t('wsview.itemActions', { title: it.title })} className="t2sw-plug-row-menu"
         items={menuItems(actions)}><MoreHorizontal size={14} /></CapabilityMenu>}
+    </div>
+  }
+  // 组头(folderStyle: 'group'):工作区一级行那一套 —— 30px 的前导、名字、行尾的数;点一下开合。桌面和手机是同一份标记,
+  // 手机上的尺寸在 phoneList.css。组里先列 GROUP_PAGE 条;正开着的那一条排在后面时整组列全,免得它被收在「查看更多」里。
+  const groupHead = (n: ListNode): ReactNode => {
+    const it = n.item
+    const isOpen = folderOpen(it)
+    const all = more.has(it.key) || n.children.findIndex((child) => child.item.key === activeKey) >= GROUP_PAGE
+    const shown = all ? n.children : n.children.slice(0, GROUP_PAGE)
+    return <div key={it.key} className="t2sw-plug-group">
+      <button type="button" className={cls('t2o-row t2sw-plug-ghead', it.hint && 'has-hint')} data-row-key={it.key} title={it.title} aria-expanded={isOpen}
+        style={flat ? undefined : { paddingLeft: nameLeft(2) - GROUP_LEAD }}
+        onClick={() => setFolderOpen(it, !isOpen)} onContextMenu={contextMenu(menuFor(it))}>
+        <GroupLead key={it.iconUrl ?? ''} item={it} />
+        <span className="t2sw-plug-gname"><span className="t2o-name">{it.title}</span><span className={`t2s-chev${isOpen ? ' open' : ''}`}><ChevronRight size={12} /></span></span>
+        {it.hint && <span className="t2s-count">{it.hint}</span>}
+      </button>
+      {isOpen && <div className="t2s-group-sessions">
+        {shown.map((child) => node(child, 2, true))}
+        {shown.length < n.children.length && <button type="button" className="t2s-viewmore" style={flat ? undefined : { marginLeft: nameLeft(2) - 6 }}
+          onClick={() => setMore((prev) => new Set(prev).add(it.key))}>{t('sidebar.viewMore')} · {n.children.length - shown.length}</button>}
+      </div>}
     </div>
   }
   // 文件夹行:与笔记树的文件夹同一套结构与类名(前导槽里图标 ↔ 悬停换箭头,行尾「更多」和「+」)。
   const folder = (n: ListNode, depth: number): ReactNode => {
     const it = n.item
-    const isOpen = open.isOpen('f:' + it.key, false)
+    if (isGroupHead(it)) return groupHead(n)
+    const isOpen = folderOpen(it)
     const actions = menuFor(it)
     const add = actions.find((action) => action.primary)
     const at = dropAt?.key === it.key ? dropAt.position : null
@@ -561,10 +621,10 @@ export function PluginListBody({ src, stateKey }: { src: ListSourceContribution;
       {isOpen && <div className={cls('t2s-group-sessions', at === 'after' && 'drag-over-end')}>{n.children.map((child) => node(child, depth + 1))}</div>}
     </div>
   }
-  const node = (n: ListNode, depth: number): ReactNode =>
+  const node = (n: ListNode, depth: number, inGroup = false): ReactNode =>
     isFolder(n.item) ? folder(n, depth)
-    : n.children.length ? <Fragment key={n.item.key}>{row(n.item, depth)}{n.children.map((child) => node(child, depth + 1))}</Fragment>
-    : row(n.item, depth)
+    : n.children.length ? <Fragment key={n.item.key}>{row(n.item, depth, inGroup)}{n.children.map((child) => node(child, depth + 1))}</Fragment>
+    : row(n.item, depth, inGroup)
   // 分组头:点一下开合并记住;缺省展开(老列表不变样)。搜索时一律展开,不改记下的状态。
   const section = (g: string, list: ListNode[]): ReactNode => {
     if (g === '') return <div key="__flat">{list.map((n) => node(n, 1))}</div>
@@ -595,7 +655,8 @@ export function PluginListBody({ src, stateKey }: { src: ListSourceContribution;
   const phoneHint = ((): string => {
     if (!flat) return ''
     const join = t('wsview.phone.join')
-    const actions = items.length ? swipeFor(menuFor(items[0])).map((a) => a.label).join(join) : ''
+    const first = items.find((it) => !isFolder(it))
+    const actions = first ? swipeFor(menuFor(first)).map((a) => a.label).join(join) : ''
     const more = primary ? secondary.map((a) => a.label).join(join) : ''
     return actions && more ? t('wsview.phone.hintBoth', { actions, more }) : actions ? t('wsview.phone.hintSwipe', { actions }) : more ? t('wsview.phone.hintHold', { more }) : ''
   })()
@@ -632,7 +693,7 @@ export function PluginListBody({ src, stateKey }: { src: ListSourceContribution;
           <ListFilter size={13} /><span>{activeGroup?.title ?? t('wsview.all')}</span><ChevronDown size={12} />
         </CapabilityMenu>
         {activeGroup && <button type="button" className="t2sw-plug-reset" title={t('wsview.clearFilter')} aria-label={t('wsview.clearFilter')} onClick={() => setGroup(null)}><X size={12} /></button>}
-        <span className="t2sw-plug-total" aria-live="polite">{t('wsview.resultCount', { count: items.length })}</span>
+        <span className="t2sw-plug-total" aria-live="polite">{t('wsview.resultCount', { count: items.filter((it) => !isFolder(it)).length })}</span>
       </div>}
       <div ref={listRef} className={`t2sw-plug-list${dropKey === 'list' ? ' amx-drop-into' : ''}`} data-under-dock=""
         {...dropProps('list', { group: activeGroup?.key })}
@@ -643,7 +704,7 @@ export function PluginListBody({ src, stateKey }: { src: ListSourceContribution;
           const it = key === undefined ? undefined : items.find((item) => item.key === key)
           if (event.key === 'F2' && it && src.rename && it.renamable) { event.preventDefault(); setRenaming(it.key); return }
           if (it && isFolder(it) && (event.key === 'ArrowRight' || event.key === 'ArrowLeft')) {
-            event.preventDefault(); open.setOpen('f:' + it.key, event.key === 'ArrowRight'); return
+            event.preventDefault(); setFolderOpen(it, event.key === 'ArrowRight'); return
           }
           if (!['ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) return
           const rows = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>(NAV_ROWS))

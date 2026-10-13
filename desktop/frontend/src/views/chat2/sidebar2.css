@@ -545,6 +545,39 @@
 .t2sw-plug-item:hover .t2sw-plug-row-menu, .t2sw-plug-item:focus-within .t2sw-plug-row-menu, .t2sw-plug-row-menu[aria-expanded=true] { opacity: 1; }
 :is(.t2sw-plug-btn, .t2sw-plug-overflow, .t2sw-plug-filter, .t2sw-plug-reset, .t2sw-plug-row-menu):is(:hover, [aria-expanded=true]) { background: var(--overlay-light); color: var(--text); }
 @media (hover: none) { .t2sw-plug-row-menu { opacity: 1; } }
+/* 行尾的图标钮(2026-10-14,用户:「像邮件一样,悬浮上去有归档、删除、更多」「和移动端的侧滑对应」):
+   带图标的行动作排在「更多」左边,指针在行上、或键盘焦点走到这一行里才出现;手机上同一批动作在左滑里。
+   出现时行的右侧让出它们的宽(--quick = 几颗,行上内联给),行里的时间收起来 —— 否则按钮压在时间和标题上。
+   键盘那一半用 :has(:focus-visible) 而不是 :focus-within:点过的那一行会一直留着焦点,不能因此一直亮着一排按钮。
+   只在有悬停的设备上;触屏靠上面那条常显的「更多」。 */
+.t2sw-plug-row-quick { position: absolute; right: 30px; top: 50%; transform: translateY(-50%); display: none; gap: 2px; }
+.t2sw-plug-row-act {
+  display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0;
+  border: 0; border-radius: var(--radius-sm, 6px); background: transparent; color: var(--text-light); cursor: pointer;
+}
+.t2sw-plug-row-act > svg { width: 14px; height: 14px; }
+.t2sw-plug-row-act:hover { background: var(--overlay-light); color: var(--text); }
+.t2sw-plug-row-act.danger:hover { color: var(--danger); }
+@media (hover: hover) {
+  .t2sw-plug-item:is(:hover, :has(:focus-visible)) > .t2sw-plug-row-quick { display: flex; }
+  .t2sw-plug-item:is(:hover, :has(:focus-visible)) .t2s-srow.has-quick { padding-right: calc(30px + var(--quick, 0) * 26px); }
+  .t2sw-plug-item:is(:hover, :has(:focus-visible)) .t2s-srow.has-quick .t2s-count { display: none; }
+}
+/* ── 组头(ListItem.folderStyle: 'group',例:收件箱按发信人):骨架就是工作区的一级行 .t2o-row
+      (40px 高、30px 的前导槽、头像 / 首字,见 orbits.css),这里只补它没有的 —— 名字后面的箭头、方块图标、行尾的数。
+      和工作区有一处不同:箭头常在。那边靠文件夹图标的开合表示展开没有,头像做不到。
+      手机整屏列表里的尺寸在 components/phoneList.css。 ── */
+.t2sw-plug-ghead { margin-top: 2px; }
+.t2sw-plug-gname { display: inline-flex; align-items: center; gap: 4px; flex: 1; min-width: 0; }
+/* 箭头紧跟名字(.t2o-name 自己是 flex:1,会把箭头推到最右);没有未读的组名字退一档 */
+.t2sw-plug-gname .t2o-name { flex: 0 1 auto; color: var(--text-muted); }
+.t2sw-plug-ghead.has-hint .t2o-name { color: var(--text); font-weight: 500; }
+.t2sw-plug-gname .t2s-chev { opacity: 0.5; }
+.t2sw-plug-gtile { border-radius: var(--radius-sm, 6px); background: var(--overlay-light, rgba(127, 127, 127, 0.08)); color: var(--text-muted); }
+.t2sw-plug-gtile > svg { width: 16px; height: 16px; }
+.t2sw-plug-ghead > .t2s-count { margin-right: 4px; }
+/* 组里的行前导槽里只有这一颗:未读的圆点(和 .t2s-dot.unread 同色同大,只是不贴在图标角上) */
+.t2sw-plug-udot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent-ink); opacity: 0.6; }
 .t2sw-plug-sec {
   display: flex; align-items: center; gap: 6px;
   margin: 10px 9.5px 2px; font-size: var(--ui-font-caption, 11px); color: var(--text-faint, var(--text-muted));

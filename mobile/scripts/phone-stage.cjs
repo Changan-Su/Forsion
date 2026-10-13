@@ -127,6 +127,8 @@ const MODELS = [
 // broadcasts from the server, so every sender is Forsion. One of each thing a row or the reader has to lay out: a
 // markdown body, a reward with claim conditions, a subject too long for the line. (The feedback conversation is not
 // offered on a phone — `feedbackThreadAvailable` — so a feedback notice is just a message here.)
+// The list groups mail by sender (2026-10-14), so one older, read system notice is here too: a second group, folded
+// because nothing in it is unread.
 const utc = (ago) => new Date(T0 - ago).toISOString().slice(0, 19).replace('T', ' ')
 const mail = (id, title, body, ago, extra = {}) => ({
   id, title, body, sender_kind: 'server', sender_id: null, origin_broadcast_id: `b-${id}`, read_at: null, archived_at: null,
@@ -140,6 +142,7 @@ const INBOX = [
   mail('ib-3', '你的反馈有新回复', '关于「登录页验证码不显示」：已经定位到原因，下个版本修复。', DAY + 2 * HOUR, { read_at: utc(DAY) }),
   mail('ib-4', '会员即将到期', '你的 Plus 会员将在 7 天后到期，续费后权益不中断。', 4 * DAY, { read_at: utc(3 * DAY) }),
   mail('ib-5', 'A long English subject line that has to be cut somewhere before the edge of the screen', 'First sentence in English, also long enough that it has to be cut with an ellipsis on a phone.', 9 * DAY, { read_at: utc(8 * DAY) }),
+  mail('ib-6', '云端同步已恢复', '之前失败的 3 个文件已经补传。', 12 * DAY, { sender_kind: 'system', sender_id: 'sync', origin_broadcast_id: null, read_at: utc(11 * DAY) }),
 ]
 /** Answers the API from the fixtures; anything it does not know is refused and listed at the end of the run. */
 async function stubApi(page, unknown) {
@@ -656,26 +659,42 @@ const SCENES = {
     await seedInbox(page)
     await stage.space(page, 'inbox')
     const ROW = `${LIST} .t2sw-plug-item .t2s-srow`
+    const HEAD = `${LIST} .t2sw-plug-ghead`
     const st = await stage.state(page)
-    const desk = await page.evaluate((q) => ['.t2sw-plug-toolbar', '.t2sw-plug-filterbar', '.t2sw-plug-row-menu'].filter((c) => document.querySelector(`${q} ${c}`)), LIST)
+    const desk = await page.evaluate((q) => ['.t2sw-plug-toolbar', '.t2sw-plug-filterbar', '.t2sw-plug-row-menu', '.t2sw-plug-row-quick'].filter((c) => document.querySelector(`${q} ${c}`)), LIST)
     const chips = await texts(page, `${LIST} .pl-chips > button`)
+    // the senders, top to bottom: name : open or not : the unread count at the end of the head
+    const heads = () => page.evaluate((q) => [...document.querySelectorAll(q)].map((h) => `${h.querySelector('.t2o-name').textContent}:${h.getAttribute('aria-expanded')}:${h.querySelector('.t2s-count')?.textContent ?? ''}`).join(' '), HEAD)
+    const headsAtFirst = await heads()
+    const head = await rect(page, HEAD)
+    const headLead = await rect(page, `${HEAD} .t2o-lead`)
+    const headName = await rect(page, `${HEAD} .t2o-name`)
     const row = await rect(page, ROW)
     const lead = await rect(page, `${ROW} > .t2s-lead`)
+    const dots = await page.evaluate((q) => [...document.querySelectorAll(q)].map((el) => (el.querySelector('.t2s-lead > .t2sw-plug-udot') ? 'dot' : el.querySelector('.t2s-lead').childElementCount ? 'icon' : 'empty')).join(), ROW)
     const subs = await texts(page, `${ROW} .t2s-srow-sub`)
     const sub = await rect(page, `${ROW} .t2s-srow-sub`)
     const title = await rect(page, `${ROW} .t2s-srow-title`)
     const time = await rect(page, `${ROW} .t2s-srow-time`)
     const long = await rect(page, `${ROW} .t2s-srow-title`, 4)
     const longTime = await rect(page, `${ROW} .t2s-srow-time`, 4)
-    const icon = await page.evaluate((q) => !!document.querySelector(`${q} > .t2s-lead svg`), ROW)
     const unread = await page.evaluate((q) => [...document.querySelectorAll(q)].map((el) => [el.classList.contains('is-unread'), getComputedStyle(el.querySelector('.t2s-srow-title')).fontWeight].join(':')), ROW)
     const fab = await rect(page, `${LIST} .pl-fab`)
     const fabName = await page.evaluate((q) => document.querySelector(q)?.getAttribute('aria-label') || '', `${LIST} .pl-fab`)
+    // the folded sender opens on a tap and folds again on the next
+    await page.locator(HEAD, { hasText: '系统' }).tap(); await page.waitForTimeout(250)
+    const opened = `${await heads()} rows=${(await texts(page, `${ROW} .t2s-srow-title`)).length}`
+    await page.locator(HEAD, { hasText: '系统' }).tap(); await page.waitForTimeout(250)
+    const folded = `${await heads()} rows=${(await texts(page, `${ROW} .t2s-srow-title`)).length}`
+    await page.screenshot({ path: path.join(OUT, `inbox-groups${DARK ? '-dark' : ''}.png`) })
     return [
       ['the inbox opens on a phone list: no toolbar, no filter menu, no row buttons; search is on the capsule', (await stage.nav(page)) === 'list' && !desk.length && !!st.search, `nav=${await stage.nav(page)} desktop parts=${desk.join(',') || 'none'} search=${st.search}`],
-      ['its categories are chips', chips.join('|') === '全部|未读|Forsion|已归档', chips.join('|')],
-      ['rows are 68 dp on a 44 dp icon block, led by who sent it', subs.length === 5 && !!row && near(row.h, 68) && !!lead && near(lead.w, 44) && near(lead.h, 44) && icon, JSON.stringify({ rows: subs.length, row: row?.h, lead: lead && [lead.w, lead.h], icon })],
-      ['second line: sender and the first sentence, on one line', subs[0] === 'Forsion · 这一版把收件箱翻新了一遍，列表里能直接看到正文的第一句。' && !!sub && sub.h < 24, `«${subs[0]}» ${JSON.stringify(sub)}`],
+      ['its categories are chips: senders are groups now, not filters', chips.join('|') === '全部|未读|已归档', chips.join('|')],
+      ['mail is grouped by sender, the one who wrote last on top; a group with unread mail is open and says how many', headsAtFirst === 'Forsion:true:2 系统:false:', headsAtFirst],
+      ['a group head is the workspace\'s first-level row at touch size: 52 dp on a 40 dp lead, 16 from the edge', !!head && near(head.h, 52) && !!headLead && near(headLead.w, 40) && near(headLead.h, 40) && near(headLead.x, 16), JSON.stringify({ head: head?.h, lead: headLead })],
+      ['rows inside a group carry no icon block: the unread dot only, the title under the sender\'s name', subs.length === 5 && dots === 'dot,dot,empty,empty,empty' && !!title && !!headName && near(title.x, headName.x) && !!row && row.h >= 59 && row.h <= 68, JSON.stringify({ rows: subs.length, dots, title: title?.x, name: headName?.x, row: row?.h, lead: lead && [lead.w, lead.h] })],
+      ['second line: the first sentence, on one line (the sender is on the head)', subs[0] === '这一版把收件箱翻新了一遍，列表里能直接看到正文的第一句。' && !!sub && sub.h < 24, `«${subs[0]}» ${JSON.stringify(sub)}`],
+      ['a tap on a folded group opens it, the next tap folds it', opened === 'Forsion:true:2 系统:true: rows=6' && folded === 'Forsion:true:2 系统:false: rows=5', `${opened} → ${folded}`],
       ['the time sits on the title\'s line; the second line runs the full width under it', !!sub && !!time && !!title && time.y < sub.y && near(sub.right, time.right) && sub.w > title.w + 40, JSON.stringify({ sub, time, title })],
       ['a title too long for the line is cut before the time', !!long && !!longTime && long.right <= longTime.x, JSON.stringify({ long, longTime })],
       ['unread rows carry a heavier title, read ones do not', unread.join() === 'true:650,true:650,false:500,false:500,false:500', unread.join()],
