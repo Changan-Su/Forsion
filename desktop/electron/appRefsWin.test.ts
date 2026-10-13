@@ -268,6 +268,15 @@ describe('buildWinIndex:开始菜单 → 标识', () => {
     expect(index.get('chrome.exe')?.launch.kind).toBe('aumid')
   })
 
+  it('卸载 / 修复入口(同一个 exe 带 --uninstall 之类的参数)绝不当启动目标,名字再短也不行;名字里有 Uninstaller 的正经应用照常进', () => {
+    const foo = 'C:\\Program Files\\Foo\\foo.exe'
+    const lnk = (name: string, args: string, target = foo) => ({ name, lnk: `C:\\Start\\${name}.lnk`, target, args })
+    const both = buildWinIndex({ start: [], links: [lnk('Uninstall', '--uninstall --quiet'), lnk('Foo Application', '--start'), lnk('Repair', '/repair')], paths: [], errors: [] })
+    expect(both.get('foo.exe')).toMatchObject({ name: 'Foo Application', launch: { kind: 'lnk', value: 'C:\\Start\\Foo Application.lnk' } })
+    expect(buildWinIndex({ start: [{ name: '卸载 Foo', aumid: 'Foo.Un', target: foo, args: '/S' }], links: [lnk('Foo', '/uninstall')], paths: [], errors: [] }).has('foo.exe')).toBe(false)
+    expect(buildWinIndex({ start: [], links: [lnk('Revo Uninstaller', '', 'C:\\Program Files\\Revo\\RevoUnin.exe')], paths: [], errors: [] }).get('revounin.exe')?.name).toBe('Revo Uninstaller')
+  })
+
   it('带参数的快捷方式指向 ApplicationFrameHost 也不进', () => {
     const raw: WinInstalledRaw = { start: [{ name: 'x', aumid: 'x', target: 'C:\\Windows\\System32\\ApplicationFrameHost.exe', args: '' }], links: [], paths: [{ exe: 'ApplicationFrameHost.exe', path: 'C:\\Windows\\System32\\ApplicationFrameHost.exe' }], errors: [] }
     expect(buildWinIndex(raw).size).toBe(0)
@@ -530,10 +539,38 @@ describe('open', () => {
     expect(await f.refs.open({ kind: 'app', id: 'wechat.exe', name: '微信' })).toEqual({ ok: false, error: 'not_installed' })
   })
 
-  it('窗口列不出来时仍能启动应用', async () => {
+  it('窗口从来列不出来(这台机器的 PowerShell 被限制)时仍能启动应用', async () => {
     const f = fake()
     f.state.raw.snapshot = new Error('x')
     expect(await f.refs.open({ kind: 'window', id: 'wechat.exe', name: 'x' })).toEqual({ ok: true, landed: 'app' })
+  })
+
+  it('列成功过、这一次列不出来(超时):不当成「没有窗口」去启动 —— 应用也许正开着,再启动就是多开', async () => {
+    const f = fake()
+    await f.refs.list()
+    f.tick(60_000)
+    f.state.raw.snapshot = new Error('timeout')
+    expect(await f.refs.open({ kind: 'app', id: 'chrome.exe', name: 'Chrome' })).toEqual({ ok: false, error: 'unavailable' })
+    expect(await f.refs.open({ kind: 'window', id: 'wechat.exe', name: 'x' })).toEqual({ ok: false, error: 'unavailable' })
+    expect(f.ops('launch')).toEqual([])
+    delete f.state.raw.snapshot // 再点一次,列得出来了:照常
+    expect(await f.refs.open({ kind: 'window', id: 'wechat.exe', name: 'x' })).toEqual({ ok: true, landed: 'app' })
+    expect(f.ops('launch')).toHaveLength(1)
+  })
+
+  it('连点两下 / 窗口还没出来又点:只启动一次;过了这一阵、或者上次没启动成,再点照常启动', async () => {
+    const f = fake()
+    const ref = { kind: 'app' as const, id: 'wechat.exe', name: '微信' }
+    expect(await Promise.all([f.refs.open(ref), f.refs.open(ref)])).toEqual([{ ok: true, landed: 'app' }, { ok: true, landed: 'app' }])
+    f.tick(3_000)
+    expect(await f.refs.open(ref)).toEqual({ ok: true, landed: 'app' })
+    expect(f.ops('launch')).toHaveLength(1)
+    f.tick(10_000)
+    f.state.launch = { ok: false, error: 'launch_failed' }
+    expect(await f.refs.open(ref)).toEqual({ ok: false, error: 'not_installed' })
+    f.state.launch = { ok: true, error: '' }
+    expect(await f.refs.open(ref)).toEqual({ ok: true, landed: 'app' })
+    expect(f.ops('launch')).toHaveLength(3)
   })
 
   it('渲染层来的文字不进命令行:脚本是常量、走绝对路径的 powershell,数据只在环境变量里,标题根本不出进程', async () => {

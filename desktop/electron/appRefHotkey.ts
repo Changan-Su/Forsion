@@ -108,7 +108,8 @@ export function createAppRefHotkey(deps: {
     })
     s.on('error', () => {}) // 连不上 / 断了都走 close
     s.on('close', () => {
-      if (socket === s) socket = null
+      if (socket !== s) return // 已经被 setWanted(false) 丢开的旧连接:现在的状态(另一条连接、拉起次数)不归它动
+      socket = null
       if (!wanted || dead) return
       // 没连上(助手没在跑)且允许拉起:拉一次,稍后再连
       if (!acked && !refused && target?.launch) {

@@ -55,6 +55,20 @@ describe('Windows:连不上就拉起助手(那边没有权限框)', () => {
     expect(launched).toBe(1)
     hk.setWanted(false)
 
+    // 还没应答就被关掉又打开:旧连接晚到的 close 不许去拉起助手、也不许动新连接的状态
+    const mute = await helper(() => {})
+    let stray = 0
+    const flip = createAppRefHotkey({ target: () => ({ path: mute.sock, launch: async () => { stray++ } }), ownPid: 1, onFire: () => {}, retryMs: 60_000 })
+    flip.setWanted(true)
+    await until(() => mute.requests.length === 1)
+    flip.setWanted(false)
+    flip.setWanted(true)
+    await until(() => mute.requests.length === 2)
+    await new Promise((r) => setTimeout(r, 50))
+    expect(stray).toBe(0)
+    expect(flip.state().connected).toBe(true)
+    flip.setWanted(false)
+
     let tries = 0
     const stuck = createAppRefHotkey({ target: () => ({ path: path.join(dir, 'never.sock'), launch: async () => { tries++ } }), ownPid: 1, onFire: () => {}, retryMs: 10 })
     stuck.setWanted(true)

@@ -1277,12 +1277,13 @@ export const Composer2: React.FC<{
     requestAnimationFrame(autoGrow)
   }
   /** 把一条引用写进草稿的 [start, end) 处(顺手挂进「已选择」),光标落在它后面。 */
-  const insertInline = (chip: RefChip, start: number, end: number): void => {
+  const insertInline = (chip: RefChip, start: number, end: number, keepText = false): void => {
     // 段名:这条引用以前写进过句子就沿用,否则挑一个没人占的(同名的另一条已经占了名字 → 接不可见字符区分)
     const run = refChips.find((c) => c.token === chip.token)?.run || freeRunName(chip.name, (r) => runChips.has(r))
-    // 挑不出段名(名字是空的)→ 只进「已选择」,句子里不留东西
+    // 挑不出段名(名字是空的 / 同名的太多)→ 只进「已选择」,句子里不留东西:`[[` 那段触发词照删;
+    // keepText(Shift+点击)时 [start, end) 是用户自己选中的字,不能白白删掉
     addRefChips([run ? { ...chip, run } : { token: chip.token, name: chip.name, kind: chip.kind, appRef: chip.appRef }])
-    spliceDraft(start, end, run ? inlineRun(run) + ' ' : '')
+    if (run || !keepText) spliceDraft(start, end, run ? inlineRun(run) + ' ' : '')
   }
   /** 把一段行内引用整段删掉(退格 / Delete 挨着它时)。 */
   const removeRun = (start: number, end: number): void => spliceDraft(start, end, '')
@@ -1758,7 +1759,7 @@ export const Composer2: React.FC<{
                   chip={c}
                   removeTitle={t('input.remove')}
                   inlineTitle={t('input.ref.shiftInline')}
-                  onInline={canInline(c) ? () => { const ta = taRef.current; insertInline(c, ta?.selectionStart ?? draft.length, ta?.selectionEnd ?? draft.length) } : undefined}
+                  onInline={canInline(c) ? () => { const ta = taRef.current; insertInline(c, ta?.selectionStart ?? draft.length, ta?.selectionEnd ?? draft.length, true) } : undefined}
                   onRemove={() => {
                     // 句子里那几段还原成普通文字:话还在,只是不再是引用
                     if (c.run) { const run = c.run; setDraft((d) => plainRuns(d, run)) }

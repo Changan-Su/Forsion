@@ -596,6 +596,9 @@ export function buildWinIndex(raw: WinInstalledRaw): Map<string, WinApp> {
     const base = baseName(target).toLowerCase()
     if (!base.endsWith('.exe') || /^unins/.test(base)) return
     const hasArgs = !!args.trim()
+    // 卸载 / 修复入口:同一个 exe 带着 `--uninstall` 之类的参数,名字还可能比正主短(排到前面)—— 绝不能让一条应用引用启动到它头上。
+    // 只看带参数的:名字里有 Uninstaller 的正经应用(各种卸载工具)不带参数,照常进。
+    if (hasArgs && /unins|remove|repair|卸载|卸載/i.test(`${name} ${args}`)) return
     let exeName = base
     let rank = sourceRank + (hasArgs ? 2 : 0)
     if (base === 'update.exe') {
@@ -789,6 +792,8 @@ export function createWinAppRefs(deps: WinAppRefDeps) {
   }
 
   /** 这次运行里经手过的窗口引用 → 它当时是哪扇窗口(与 macOS 半身同一套:标题变了照样认得出这一扇)。 */
+  // ponytail: 不跟踪窗口的销毁。同一个进程把同一个句柄值发给另一扇窗口时会认错 —— 句柄高 16 位是复用计数,
+  // 同一个值要这个槽位被回收 65536 次才再出现;真碰上了再在快照里顺手清掉「进程还在、句柄不在」的条目。
   const seen = new Map<string, { pid: number; windowId: number }>()
   function remember(id: string, title: string, pid: number, windowId: number): void {
     const canon = canonWinId(id)
@@ -850,11 +855,13 @@ export function createWinAppRefs(deps: WinAppRefDeps) {
     return !r ? 'denied' : r.gone ? 'gone' : r.focused ? 'focused' : 'denied'
   }
 
-  /** 先用刚列过的快照,不行再现列:在里面挑一扇窗口提上来。null = 没有这样的窗口。 */
-  async function focusPicked(pick: (view: WinView) => WinWindow | null | undefined): Promise<'focused' | 'denied' | null> {
+  /** 先用刚列过的快照,不行再现列:在里面挑一扇窗口提上来。null = 没有这样的窗口。
+   *  列不出来时:这次运行里列成功过 → 多半是一时的(超时),回 'unavailable',调用方不启动(应用也许正开着,再启动就是多开);
+   *  从来没成功过 → 这台机器列不了窗口(PowerShell 被限制),按「没有」算,点击退成开始菜单那样直接启动。 */
+  async function focusPicked(pick: (view: WinView) => WinWindow | null | undefined): Promise<'focused' | 'denied' | 'unavailable' | null> {
     for (const maxAge of [SNAPSHOT_CLICK_MS, 0]) {
       const got = await snapshot(maxAge, true).catch(() => null)
-      if (!got) return null
+      if (!got) return snap ? 'unavailable' : null
       const w = pick(got.view)
       if (w) {
         const r = await focus({ hwnd: w.hwnd, pid: w.pid })
@@ -876,14 +883,25 @@ export function createWinAppRefs(deps: WinAppRefDeps) {
     return hit
   }
 
+  /** 刚启动过的应用 → 什么时候启动的。窗口还没出来的这几秒里再点(连点两下 / 等不及又点)不再启动第二个。
+   *  ponytail: 固定 8 秒;启动更慢的应用在这之后再点仍可能多开一个,真碰上了再改成「等到它的窗口出现」。 */
+  const launchedAt = new Map<string, number>()
+  const RELAUNCH_GUARD_MS = 8_000
+
   async function openApp(id: string): Promise<OpenResult> {
     const r = await focusPicked((view) => { const mine = view.windows.filter((w) => w.id === id); return mine.find((w) => !w.min) ?? mine[0] })
     if (r === 'focused') return { ok: true, landed: 'app' }
     if (r === 'denied') return { ok: false, error: 'focus_denied' } // 窗口在、但系统不让抢前台:不去多开一个实例
+    if (r === 'unavailable') return { ok: false, error: 'unavailable' }
+    // 从这里到记下 launchedAt 之间没有 await:同时到的两次点击,后一个一定看得见前一个记的
+    const last = launchedAt.get(id)
+    if (last !== undefined && now() - last < RELAUNCH_GUARD_MS) return { ok: true, landed: 'app' }
+    launchedAt.set(id, now())
     const target = await launchTarget(id)
-    if (!target) return { ok: false, error: 'not_installed' }
-    const out = unframe(await ps(PS_SHELL, { op: 'launch', kind: target.kind, value: target.value }, LAUNCH_TIMEOUT_MS).catch(() => null)) as { ok?: unknown } | null
-    return out?.ok === true ? { ok: true, landed: 'app' } : { ok: false, error: 'not_installed' }
+    const out = target && unframe(await ps(PS_SHELL, { op: 'launch', kind: target.kind, value: target.value }, LAUNCH_TIMEOUT_MS).catch(() => null)) as { ok?: unknown } | null
+    if (out?.ok === true) { snapAt = 0; return { ok: true, landed: 'app' } } // 手上的快照里没有它的窗口,不再当「刚列过」用
+    launchedAt.delete(id)
+    return { ok: false, error: 'not_installed' }
   }
 
   /** 点击:窗口还在 → 提那扇窗口;不在 → 按应用处理(有窗口就切过去,没有才启动)。 */
@@ -896,11 +914,12 @@ export function createWinAppRefs(deps: WinAppRefDeps) {
       const key = appRefKey({ ...ref, id })
       const known = seen.get(key)
       // 这次运行里记下的那一扇:不必先列窗口,直接提(脚本自己核对句柄还在、还属于那个进程)
-      let r: 'focused' | 'gone' | 'denied' | null = known ? await focus({ hwnd: known.windowId, pid: known.pid }) : null
+      let r: 'focused' | 'gone' | 'denied' | 'unavailable' | null = known ? await focus({ hwnd: known.windowId, pid: known.pid }) : null
       if (r === 'gone') seen.delete(key)
       if (r === null || r === 'gone') r = await focusPicked((view) => findWindow({ ...ref, id }, view))
       if (r === 'focused') return { ok: true, landed: 'window' }
       if (r === 'denied') return { ok: false, error: 'focus_denied' }
+      if (r === 'unavailable') return { ok: false, error: 'unavailable' }
     }
     return openApp(id)
   }

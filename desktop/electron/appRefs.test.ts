@@ -150,6 +150,11 @@ describe('frontmost', () => {
     const untitled = fake({ helper: { dockCandidates: { windows: [{ pid: 5, windowId: 9, app: 'Finder', bundleId: 'com.apple.finder', title: '' }] } } })
     expect(await untitled.refs.frontmost()).toEqual({ kind: 'app', id: 'com.apple.finder', name: 'Finder' })
     expect(await fake({ helper: null }).refs.frontmost()).toBeNull()
+    // 全局快捷键那条路:不许为了它拉起助手(ensure = false 时不碰 ensureHelper,助手在就问、不在就是 null)
+    let ensured = 0
+    const quiet = fake({ ensureHelper: async () => { ensured++ } })
+    expect(await quiet.refs.frontmost(false)).toEqual({ kind: 'window', id: 'com.google.Chrome', name: 'Linear – Pricing' })
+    expect(ensured).toBe(0)
   })
 })
 
@@ -190,6 +195,20 @@ describe('标题变了也认得出那扇窗口', () => {
     expect((await refs.status([ref]))[0].state).toBe('live')
     expect(await refs.open(ref)).toEqual({ ok: true, landed: 'window' })
     expect(calls.find((c) => c.cmd === 'focusWindow')).toMatchObject({ pid: 11, windowId: 101 })
+  })
+
+  it('记着的那扇改了标题又被最小化,屏上另一扇正好叫原来的名字:提的仍是记着的那扇;它真关了才退回按标题找', async () => {
+    const helper = chrome([{ windowId: 101, title: 'Linear – Pricing' }, { windowId: 102, title: '文档' }])
+    const { refs, calls } = fake({ helper })
+    await refs.list() // 记下 101
+    helper.dockCandidates.windows = helper.dockCandidates.windows.filter((w) => w.windowId !== 101)
+    helper.dockCandidates.windows[0].title = 'Linear – Pricing' // 102 换到了那个标签页
+    helper.listWindows = [{ title: 'GitHub', windowId: 101 }]
+    expect(await refs.open(ref)).toEqual({ ok: true, landed: 'window' })
+    expect(calls.filter((c) => c.cmd === 'focusWindow').pop()).toMatchObject({ pid: 11, windowId: 101 })
+    helper.listWindows = []
+    expect(await refs.open(ref)).toEqual({ ok: true, landed: 'window' })
+    expect(calls.filter((c) => c.cmd === 'focusWindow').pop()).toMatchObject({ pid: 11, windowId: 102 })
   })
 
   it('没记过的(重启后 / 别的设备来的):标题多了后缀 → 认它;对不上 → 找不到,点击改成打开应用', async () => {

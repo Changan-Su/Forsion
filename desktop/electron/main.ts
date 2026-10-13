@@ -3420,7 +3420,7 @@ app.whenReady().then(async () => {
         const win = process.platform === 'win32'
         // Windows 的标识由 exe 路径算;算不出来(商店应用挂在外框进程名下)或助手没报出窗口 → 趁自己还没到前台,问一次「最前面是谁」
         const hit = front ? frontToAppRef(front, win ? (f) => winAppIdOf(String(f.path || f.exe || '')) : undefined) : null
-        const ref = hit?.ref ?? await appRefs.frontmost().catch(() => null)
+        const ref = hit?.ref ?? await appRefs.frontmost(false).catch(() => null)
         if (!ref) return
         if (hit && ref.kind === 'window') appRefs.remember(ref.id, ref.name, hit.pid, hit.windowId)
         const fresh = !mainWindow || mainWindow.isDestroyed() // 主窗关着:只把它开出来,页面还没起来,这一条引用不送

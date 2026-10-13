@@ -147,7 +147,8 @@ export function createAppRefs(deps: AppRefDeps) {
     const known = seen.get(appRefKey(ref))
     const isKnown = (pid: number, windowId?: number): boolean => !!known && known.pid === pid && known.windowId === windowId
     const pick = (w: Found): { pid: number; windowId?: number; windowRef?: string } => ({ pid: w.pid, windowId: w.windowId, windowRef: w.windowRef })
-    const onScreenHit = mine.find((w) => isKnown(w.pid, w.windowId)) ?? mine.find((w) => windowTitleScore(ref.name, w.title) === 2)
+    // 记着某一扇时,屏上同名的先不认:记着的那扇可能改了标题又被最小化了(只在下面 AX 那一轮里找得到),同名的是另一扇
+    const onScreenHit = mine.find((w) => isKnown(w.pid, w.windowId)) ?? (known ? undefined : mine.find((w) => windowTitleScore(ref.name, w.title) === 2))
     if (onScreenHit) return { pid: onScreenHit.pid, windowId: onScreenHit.windowId }
     const all: Found[] = mine.filter((w) => w.title).map((w) => ({ pid: w.pid, windowId: w.windowId, title: w.title }))
     for (const pid of new Set(run.filter((r) => r.id === ref.id).map((r) => r.pid))) {
@@ -200,11 +201,12 @@ export function createAppRefs(deps: AppRefDeps) {
     return { ok: true, landed }
   }
 
-  /** 紧挨在 Forsion 后面的那扇窗口(快捷键「引用我刚才在看的」)。没有带标题的窗口 → 退成引用那个应用。 */
-  async function frontmost(): Promise<AppRef | null> {
+  /** 紧挨在 Forsion 后面的那扇窗口(快捷键「引用我刚才在看的」)。没有带标题的窗口 → 退成引用那个应用。
+   *  ensure = false:助手没在跑就算了(全局快捷键那条路用:绝不为它拉起助手)。 */
+  async function frontmost(ensure = true): Promise<AppRef | null> {
     if (!mac) return null
     try {
-      await deps.ensureHelper()
+      if (ensure) await deps.ensureHelper()
       const w = (await onScreen())[0]
       if (!w) return null
       remember(w.id, w.title, w.pid, w.windowId)
