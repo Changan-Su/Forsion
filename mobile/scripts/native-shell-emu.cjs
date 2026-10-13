@@ -1126,6 +1126,9 @@ const tabCountText = (list) => {
     const listPanel = async (tryFocus) => JSON.parse(await cdp.eval(`(() => { const d = document.querySelector('.mb-drawer--left'); const held = d.contains(document.activeElement), inertBefore = !!d.inert
       if (${tryFocus ? 'true' : 'false'}) d.querySelector('button, a, [tabindex]')?.focus()
       return JSON.stringify({ hidden: d.getAttribute('aria-hidden'), covered: getComputedStyle(d, '::after').content !== 'none', held, took: d.contains(document.activeElement), inertBefore, inert: !!d.inert, visibility: getComputedStyle(d).visibility }) })()`))
+    // (the reader is told once the slide is over, not during it: on a phone with an accessibility service on, telling
+    //  it rebuilds the list's whole accessibility tree, and that used to land on the first frame of the slide)
+    assert.ok(await h.waitPage(cdp, "document.querySelector('.mb-drawer--left').getAttribute('aria-hidden') === 'true'", 4000), 'the list behind the main view is never hidden from the screen reader')
     // … and the right panel, which opens over the main view where there is no dock, keeps no room for one
     const behind = { ...(await listPanel(true)), rightPanelRoom: await cdp.eval("getComputedStyle(document.querySelector('.mb-drawer--right')).paddingBottom") }
     assert.deepEqual(behind, { hidden: 'true', covered: true, held: false, took: false, inertBefore: false, inert: true, visibility: 'visible', rightPanelRoom: '0px' }, 'the panels behind the main view')
@@ -1133,6 +1136,7 @@ const tabCountText = (list) => {
     await tapId('nativeChrome.left')
     assert.ok(await h.waitPage(cdp, `(${nav}) === 'list'`, 5000), 'the back arrow did not return to the list')
     assert.ok((await h.waitNodes((l) => !!h.byId(l, 'nativeChrome.spaces'), { timeout: 8000 })).hit, 'the bottom bar did not come back on the list')
+    assert.ok(await h.waitPage(cdp, "!document.querySelector('.mb-drawer--left').hasAttribute('aria-hidden')", 4000), 'the list in front stays hidden from the screen reader')
     const front = await listPanel(false)
     assert.deepEqual([front.hidden, front.covered, front.inert], [null, false, false], 'the list in front is still hidden from the screen reader, covered or inert')
     // item again, then system back → list, and the app is still in front

@@ -26,6 +26,8 @@
  *   MODE=exp EXP=<file.cjs>       your own measurements: a module exporting [{ label, js, n?, noForce?, poll? }]; each
  *                                 `js` is a function body run in the page with the chat open, style / layout time reported
  *   INJECT_CSS=<file.css>         try a stylesheet change on the installed build without rebuilding
+ *   INJECT_JS=<file.js>           same for a script (run once in the page before the measurements): patch a DOM method,
+ *                                 pin an attribute — to tell which line of a change costs what
  */
 const h = require('./lib/emu-cdp.cjs')
 const fs = require('node:fs')
@@ -185,6 +187,7 @@ function gfx() {
   const ensureDetail = async (i) => { if ((await cdp.eval(nav)) === 'detail') return; await openChat(i); await inDetail(); await h.pause(1400) }
 
   if (process.env.INJECT_CSS) { await cdp.eval(`(() => { const st = document.createElement('style'); st.id = 'perf-inject'; st.textContent = ${JSON.stringify(fs.readFileSync(process.env.INJECT_CSS, 'utf8'))}; document.head.appendChild(st); return true })()`); console.log('injected', process.env.INJECT_CSS) }
+  if (process.env.INJECT_JS) { await cdp.eval(`(() => { ${fs.readFileSync(process.env.INJECT_JS, 'utf8')}\n; return true })()`); console.log('injected', process.env.INJECT_JS) }
   if (process.env.MODE === 'exp') {
     // one-off experiments: a module exporting [{ label, js, n? }] — each `js` runs in the page, then layout is forced
     await ensureDetail(0)
@@ -255,6 +258,18 @@ function gfx() {
         }
         const parts = [...sum.entries()].sort((a, b) => b[1].ms - a[1].ms).slice(0, 9).map(([k, a]) => `${k} ${a.ms.toFixed(0)}ms×${a.n}${a.els ? `(${a.els} els)` : ''}`)
         console.log(`  +${String(Math.round((t.ts - t0) / 1000)).padStart(5)}ms  task ${String(Math.round(t.dur / 1000)).padStart(4)}ms  ${parts.join(' · ')}`)
+      }
+      // What rides on the slide itself: the transition runs on the compositor, so the page's own work between its
+      // first and last transition event is what makes it stutter — above all a long Commit (both threads stand still
+      // for it; the animation's clock does not). A slide should carry next to nothing.
+      const tev = mt.filter((e) => e.name === 'EventDispatch' && /^transition/.test(e.args?.data?.type || ''))
+      const runs = tev.filter((e) => /run|start/.test(e.args.data.type)).map((e) => e.ts), ends = tev.filter((e) => /end/.test(e.args.data.type)).map((e) => e.ts)
+      if (runs.length) {
+        const a = Math.min(...runs), b = ends.length ? Math.max(...ends) : a + 340000
+        const ms = (ts) => Math.round((ts - t0) / 1000)
+        const inside = mt.filter((e) => e.name === 'RunTask' && e.dur >= 16000 && e.ts + e.dur > a && e.ts < b)
+        const commits = mt.filter((e) => e.name === 'Commit' && e.dur >= 5000 && e.ts > a - 250000 && e.ts < b).map((e) => `${Math.round(e.dur / 1000)}ms@${ms(e.ts)}`)
+        console.log(`  slide +${ms(a)}..+${ms(b)}ms · main tasks ≥16ms overlapping it: ${inside.length} (${Math.round(inside.reduce((n, e) => n + e.dur, 0) / 1000)}ms) · commits ≥5ms from 250ms before its start: ${commits.join(', ') || 'none'}`)
       }
     }
     await ensureList()
