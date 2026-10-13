@@ -39,6 +39,8 @@ const sessionFixtures = (projectDir, defaultDir, aliasDir) => {
     // 别名恰好是家目录时引擎拒收,照旧 Agent 详情(codex 评审 09-23 的两条 P2)
     { ...base, id: 'pd-alias', title: 'Old default chat', updated_at: '2026-09-17 10:00:00', project_path: aliasDir, project_name: 'Tangu 默认工作区', agent_config: { agentSlug: 'xyra', execMode: 'host', cwd: aliasDir } },
     { ...base, id: 'pd-homealias', title: 'Home default chat', updated_at: '2026-09-16 10:00:00', project_path: os.homedir(), project_name: 'Tangu 默认工作区', agent_config: { agentSlug: 'xyra', execMode: 'host', cwd: os.homedir() } },
+    // 笔记库本身(10-14 用户:库里的会话在 Tangu 详情里看不到项目详情)—— 库 = 默认目录的上一级
+    { ...base, id: 'pd-vault', title: 'Vault chat', updated_at: '2026-09-15 10:00:00', project_path: path.dirname(defaultDir), project_name: 'vault', agent_config: { agentSlug: 'xyra', execMode: 'host', cwd: path.dirname(defaultDir) } },
     { ...base, id: 'pd-rootless', title: 'Rootless chat', updated_at: '2026-09-19 10:00:00', projectless: true, project_path: null, project_name: null, agent_config: { agentSlug: 'xyra', execMode: 'sandbox' } },
   ]
 }
@@ -610,6 +612,19 @@ async function run(app, win, stub, seen, home, ctx) {
   await details.locator('[data-agent-profile="xyra"]').waitFor({ timeout: 10_000 }).catch(() => {})
   check('8d 别名是家目录的会话 → 照旧 Agent 详情(引擎拒收家目录)', await details.locator('[data-project-profile]').count() === 0 && await details.locator('[data-agent-profile="xyra"]').count() > 0)
 
+  // ── 8e 笔记库本身也是 Project(10-14):库里的会话 → 项目页,名称只读、Git 只读 ─────────
+  // ⚠️前提要钉住:库已恢复、侧栏里是「Amadeus · vault」那个系统组。库没醒时这条会话落在普通本地组,改前也有项目页,测不出东西。
+  await openSession(win, 'Vault chat', 'pd-vault')
+  await details.locator('[data-project-profile]').waitFor({ timeout: 10_000 }).catch(() => {})
+  const vaultHead = await win.locator('[data-workspace-key]').filter({ hasText: 'Amadeus · vault' }).count()
+  const vaultProfile = await details.evaluate((el) => {
+    const p = el.querySelector('[data-project-profile]'), name = p && p.querySelector('.team-profile-name')
+    return p ? { path: p.getAttribute('data-project-profile'), readOnly: !!(name && name.readOnly) } : null
+  })
+  check('8e 笔记库(系统组「Amadeus · vault」)里的会话 → 右栏是 PROJECT 详情(库目录),名称只读', vaultHead === 1 && !!vaultProfile && /[\\/]vault$/.test(vaultProfile.path) && vaultProfile.readOnly, JSON.stringify({ vaultHead, vaultProfile }))
+  await details.locator('[data-project-profile]').getByRole('tab', { name: 'Git', exact: true }).click().catch(() => {})
+  check('8e2 笔记库的 Git 页只读,没有任何写动作', await details.locator('[data-project-git] [data-git-action]').count() === 0 && await details.locator('[data-project-git-readonly="shared"]').count() === 1)
+
   // ── 9 英文 × 暗色:回到项目会话,三个页面都不溢出 + 截图 ───────────────────
   await win.evaluate(() => { localStorage.setItem('tangu_locale', 'en'); localStorage.setItem('forsion_theme_pref', 'dark') })
   await win.reload({ waitUntil: 'domcontentloaded' })
@@ -795,7 +810,7 @@ async function main() {
   // 真实磁盘上的项目 .tangu(移除工作区勾「删除相关文件」时要进废纸篓)
   fs.mkdirSync(path.join(projectDir, '.tangu', 'skills'), { recursive: true })
   fs.writeFileSync(path.join(projectDir, '.tangu', 'AGENTS.md'), TEMPLATE, 'utf8')
-  const projectIds = new Set(['pd-main', 'pd-coder', 'pd-team', 'pd-default', 'pd-alias'])
+  const projectIds = new Set(['pd-main', 'pd-coder', 'pd-team', 'pd-default', 'pd-alias', 'pd-vault'])
   // 同一个数组交给桩引擎(state.sessions 就是它):DELETE 从这里真删,重载后列表里才真的没有
   const sessions = sessionFixtures(projectDir, path.join(vault, 'Sessions'), path.join(home, 'OldTangu'))
   const stub = await startStubEngine({ agents: AGENTS, sessions, messages: [], handle: async ({ path: route, method, url, body }) => {
