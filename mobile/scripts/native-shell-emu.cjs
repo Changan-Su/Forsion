@@ -2417,7 +2417,7 @@ const tabCountText = (list) => {
     //    back is recorded as the bridge says it (the gesture's start and the completed back), then replayed.
     if (reportsProgress) {
       await inConversation()
-      await cdp.eval(`(() => { const b = window.androidBridge; if (!b) return false; const real = b.onmessage; const k = window.__bk = { real, g: null, b: null }
+      await cdp.eval(`(() => { const b = window.androidBridge; if (!b) return false; const real = b.onmessage; const k = window.__rp = { real, g: null, b: null }
         b.onmessage = function (ev) { try { const r = JSON.parse(ev.data); if (r && r.methodName === 'addListener') { if (r.pluginId === 'NativeBack') k.g = r; else if (r.pluginId === 'App' && r.data && 'canGoBack' in r.data) k.b = r } } catch {} return real.call(this, ev) }
         const tell = (tpl, data) => real.call(b, { data: JSON.stringify(Object.assign({}, tpl, { data })) })
         k.gesture = (phase, x) => tell(k.g, phase === 'cancel' ? { phase } : { phase, edge: 'left', x })
@@ -2426,30 +2426,30 @@ const tabCountText = (list) => {
       try {
         h.key(4); await note('H0 conversation: back key (recorded)', LIST)
         await inConversation()
-        if (!(await cdp.eval('!!(window.__bk && __bk.g && __bk.b)'))) bad.push('H: the bridge carried no gesture start / completed back to record')
+        if (!(await cdp.eval('!!(window.__rp && __rp.g && __rp.b)'))) bad.push('H: the bridge carried no gesture start / completed back to record')
         else {
           // a swipe whose ending never arrives, one abandoned, and a third — all before the page draws a frame
-          await cdp.eval(`(() => { const g = __bk.gesture; g('start', 0.01); g('progress', 0.4); g('start', 0.01); g('cancel'); g('start', 0.01); g('progress', 0.7); return true })()`)
+          await cdp.eval(`(() => { const g = __rp.gesture; g('start', 0.01); g('progress', 0.4); g('start', 0.01); g('cancel'); g('start', 0.01); g('progress', 0.7); return true })()`)
           await h.pause(250)
-          await cdp.eval(`(() => { __bk.gesture('progress', 0.7); return true })()`); await h.pause(150)
+          await cdp.eval(`(() => { __rp.gesture('progress', 0.7); return true })()`); await h.pause(150)
           const third = await pageAt()
           if (!(third.drag === 'left' && third.main > third.w * 0.6)) bad.push(`H1: after two unfinished swipes the page no longer follows the next one (${JSON.stringify(third)})`)
-          await cdp.eval(`(() => { __bk.gesture('cancel'); return true })()`); await h.pause(600)
+          await cdp.eval(`(() => { __rp.gesture('cancel'); return true })()`); await h.pause(600)
           const rest = await pageAt()
           if (rest.drag || rest.main !== 0) bad.push(`H1: the page stays out of place after the swipes ended (${JSON.stringify(rest)})`)
           await note('H1 conversation: three swipes inside one frame, the last abandoned', 'tangu/detail "E2E Session One"')
           // the finger is down on a back that would slide to the list; something that takes a back opens; release
-          await cdp.eval(`(() => { window.__bkTook = 0; window.__bkTake = (e) => { e.preventDefault(); if (!(e.detail && e.detail.probe)) window.__bkTook++ }
-            __bk.gesture('start', 0.01); __bk.gesture('progress', 0.4); window.addEventListener('forsion:mobile-back', window.__bkTake); __bk.back(); return true })()`)
+          await cdp.eval(`(() => { window.__rpTook = 0; window.__rpTake = (e) => { e.preventDefault(); if (!(e.detail && e.detail.probe)) window.__rpTook++ }
+            __rp.gesture('start', 0.01); __rp.gesture('progress', 0.4); window.addEventListener('forsion:mobile-back', window.__rpTake); __rp.back(); return true })()`)
           await h.pause(600)
-          const took = await cdp.eval('window.__bkTook')
+          const took = await cdp.eval('window.__rpTook')
           const stay = await pageAt()
-          await cdp.eval(`(() => { window.removeEventListener('forsion:mobile-back', window.__bkTake); return true })()`)
+          await cdp.eval(`(() => { window.removeEventListener('forsion:mobile-back', window.__rpTake); return true })()`)
           if (took !== 1 || stay.drag || stay.main !== 0) bad.push(`H2: a back released after something opened over the page did not go to it (taken ${took}, page ${JSON.stringify(stay)})`)
           await note('H2 conversation: back swipe held, an overlay opens, released', 'tangu/detail "E2E Session One"')
         }
       } finally {
-        await cdp.eval('(() => { const b = window.androidBridge; if (b && window.__bk) { b.onmessage = window.__bk.real; delete window.__bk } return true })()')
+        await cdp.eval('(() => { const b = window.androidBridge; if (b && window.__rp) { b.onmessage = window.__rp.real; delete window.__rp } return true })()')
       }
     }
 
