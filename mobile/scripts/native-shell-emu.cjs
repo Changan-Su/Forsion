@@ -268,6 +268,8 @@ const FAKE_CALL_SOCKET = `(() => {
 // client asks again 0.8 s later, like after any dropped stream — and answers to its approvals (POST …/approvals/<id>)
 // are collected in `answers`.
 const live = { sessionId: '', runId: 'e2e-run', assistantId: 'e2e-run-reply', events: [], answers: [] }
+/** What `/brain/inbox/broadcasts` answers: the phone keeps its inbox on the device and fills it from there. */
+let inboxFeed = []
 function installStub(cdp) {
   cdp.on('Fetch.requestPaused', (ev) => {
     const url = new URL(ev.request.url)
@@ -288,6 +290,7 @@ function installStub(cdp) {
     }
     if (p.endsWith('/auth/me')) return json({ username: 'e2e', id: 'e2e', avatar: AVATAR })
     if (p.endsWith('/health')) return json({ ok: true, sandbox: 'e2e' })
+    if (p.endsWith('/inbox/broadcasts')) return json({ broadcasts: inboxFeed })
     if (p.endsWith('/agent/special/config')) return json({})
     if (p.endsWith('/agent/agents') && m === 'GET') return json({ agents: [{ slug: 'e2e-agent', name: 'E2E Agent', description: 'Harness fixture' }, { slug: 'e2e-helper', name: 'E2E Helper', description: 'Second fixture' }] })
     if (p.endsWith('/agent/projects') && m === 'GET') return json({ projects: [{ name: 'E2E Alpha' }, { name: 'E2E Beta' }] })
@@ -464,6 +467,10 @@ const tabCountText = (list) => {
 
 ;(async () => {
   assert.ok(h.adb('shell', 'pm', 'path', PKG).includes('package:'), `${PKG} is not installed`)
+  // Which build this run is about. The emulator is shared: `adb install -r` of a package with a lower version code is
+  // refused ("version downgrade") and leaves whoever's build was there — the run then tests that one, without a word.
+  { const info = h.adb('shell', 'dumpsys', 'package', PKG); const of = (re) => (info.match(re) || [])[1] || '?'
+    console.log(`package: ${PKG} ${of(/versionName=(\S+)/)} (code ${of(/versionCode=(\d+)/)}), installed ${of(/lastUpdateTime=(.+)/)}`) }
   h.adb('shell', 'am', 'force-stop', PKG)
   try { h.adb('shell', 'cmd', 'statusbar', 'collapse') } catch { /* no shade service */ } // a shade left open covers the app: uiautomator would read the shade
   // The camera check walks the system's permission question (refuse once, then allow). It is only asked while the app
@@ -782,6 +789,9 @@ const tabCountText = (list) => {
   const near = (a, b, tol = 2) => Math.abs(a - b) <= tol
   const sameRect = (a, b, tol = 2) => near(a.left, b.left, tol) && near(a.top, b.top, tol) && near(a.right, b.right, tol) && near(a.bottom, b.bottom, tol)
   const fmt = (r) => `[${r.left},${r.top}][${r.right},${r.bottom}]`
+  const INBOX_KEY = 'tangu_inbox_msgs' // the phone's local inbox (desktop/frontend/src/services/localInbox.ts)
+  /** Closes every notification card on screen (an error card stays until it is closed). */
+  const closeCards = () => cdp.eval(`(async () => { for (let i = 0; i < 8; i++) { const b = document.querySelector('.ntf-close'); if (!b) break; b.click(); await new Promise((r) => setTimeout(r, 150)) } return true })()`)
 
   await check('native top bar replaces the web .mb-topbar (zh, light)', async () => {
     const list = ui()
@@ -853,8 +863,10 @@ const tabCountText = (list) => {
     assert.ok(await cdp.eval(settingsOpen), 'back closed settings instead of returning home')
     // into the category again, × closes settings entirely
     await tapEl(`document.querySelector('.settings-mobile-row:not([aria-expanded])')`)
-    r = await h.waitNodes((l) => (textOf(l, 'nativeChrome.title') === label ? l : null), { timeout: 5000 })
-    assert.ok(r.hit, 'category did not reopen')
+    // the title changes a frame before the × is there: a tree read in between has the title and no × (seen once the
+    // tree reader was fast again, 2026-10-13) — wait for both, as the first entry above does
+    r = await h.waitNodes((l) => (textOf(l, 'nativeChrome.title') === label && h.byId(l, 'nativeChrome.close') ? l : null), { timeout: 5000 })
+    assert.ok(r.hit, `category did not reopen with its × (title=${textOf(r.nodes, 'nativeChrome.title')})`)
     await tapId('nativeChrome.close', r.nodes)
     assert.ok(await h.waitPage(cdp, `!(${settingsOpen})`, 5000), '× did not close settings')
     r = await h.waitNodes((l) => h.byId(l, 'nativeChrome.more'), { timeout: 5000 })
@@ -2123,6 +2135,173 @@ const tabCountText = (list) => {
       if (saved0 === null) await cdp.eval("(localStorage.removeItem('forsion_notes_phone_tab'), true)")
     }
     } finally { if (side !== 'local') await switchVault(side) }
+  })
+
+  // The inbox is a host list source, and on the phone a flat list source is drawn as the phone's own list (2026-10-13):
+  // category chips, 68 dp rows, icon buttons behind a left swipe, one main button. The mail comes in the way it does on
+  // a device — the main button pulls the broadcasts into the local inbox. The browser stage (`stage:phone`, inbox-*)
+  // measures the layout; what it cannot do is done here: a real finger for the swipe, the long-press and the pull, the
+  // native sheet behind the long-press, and the keyboard under the search line.
+  await check('phone inbox list: the main button pulls the mail; a left swipe shows icon-only actions and "read" runs; a long-press opens the row menu natively; pulling down brings up the search line, above the keyboard; a row opens the message', async () => {
+    await cdp.eval(`(() => { const all = JSON.parse(localStorage.getItem(${JSON.stringify(INBOX_KEY)}) || '[]'), keep = all.filter((m) => !String(m.origin_broadcast_id || '').startsWith('e2e-mail-'))
+      if (keep.length !== all.length) localStorage.setItem(${JSON.stringify(INBOX_KEY)}, JSON.stringify(keep)); return true })()`) // this check's mail left by a run that died
+    const before = await cdp.eval(`localStorage.getItem(${JSON.stringify(INBOX_KEY)})`)
+    const L = '.mb-drawer--left .t2sw-plug[data-timeline]'
+    const rows = `[...document.querySelectorAll('${L} .t2sw-plug-item .t2s-srow')].filter((e) => e.textContent.includes('E2E mail'))`
+    const rowE = (title) => `${rows}.find((e) => e.textContent.includes(${JSON.stringify(title)}))`
+    const titles = `${rows}.map((e) => e.querySelector('.t2s-srow-title')?.textContent.trim())`
+    const stamp = (minAgo) => new Date(Date.now() - minAgo * 60000).toISOString().slice(0, 19).replace('T', ' ')
+    const fabE = `document.querySelector('.mb-drawer--left [data-act="list-fab"]')`
+    const field = `document.querySelector('${L} .t2sw-plug-toolbar .t2s-search input')`
+    const dp = (r) => ({ w: (r.right - r.left) / density, h: (r.bottom - r.top) / density })
+    try {
+      // The inbox the device already holds is left in place and only this check's mail is added and taken away again: the
+      // unread count then only falls at the end, and a count that falls announces nothing (emptying the inbox first made
+      // the restored mail look new to the next poll — a card nobody asked for, on top of the next check).
+      await toSpace('inbox')
+      assert.ok(await h.waitPage(cdp, `${nav} === 'list' && !!document.querySelector('${L} .pl-chips') && !!${fabE}`, 8000), 'the inbox did not open on a phone list (chips + one main button)')
+      let list = ui()
+      const [capL, dock] = ['nativeChrome.capLeft', 'nativeChrome.dock'].map((id) => h.byId(list, id))
+      assert.ok(capL && dock, 'capsules / dock missing on the inbox list')
+      assert.ok(h.byId(list, 'nativeChrome.search'), 'no search button on the capsule')
+      const fab = await elRect(fabE)
+      assert.ok(fab && fab.bottom <= dock.rect.top - 1 && fab.right <= screen.w, `the main button is not clear of the dock (${fab && fmt(fab)} vs ${fmt(dock.rect)})`)
+      // the main button = "pull new mail". The mail is on the server only from here on, and the request has to follow the
+      // tap: the app also pulls by itself now and then, and mail it fetched would be listed all the same.
+      inboxFeed = [['e2e-mail-1', 'E2E mail one', 2], ['e2e-mail-2', 'E2E mail two', 30], ['e2e-mail-3', 'E2E mail three', 90]]
+        .map(([id, title, ago]) => ({ id, title, body: `${title}: the first sentence. And a second one.`, created_at: stamp(ago) }))
+      const asked = stubLog.length
+      await tapEl(fabE)
+      assert.ok(await waitLog(asked, (l) => l.startsWith('GET ') && l.includes('/inbox/broadcasts'), 6000), `the main button asked the server for nothing (stub: ${stubLog.slice(-6).join(' | ')})`)
+      assert.ok(await h.waitPage(cdp, `${titles}.join('|') === 'E2E mail one|E2E mail two|E2E mail three'`, 12000), `the pulled mail is not listed, newest first: ${JSON.stringify(await cdp.eval(titles))} (stub: ${stubLog.slice(-6).join(' | ')})`)
+      await h.pause(600)
+      await closeCards() // "3 new" and the new-mail card: they are the next check's
+      const desk = await cdp.eval(`['.t2sw-plug-filterbar', '.t2sw-plug-row-menu'].filter((c) => document.querySelector('.mb-drawer--left ' + c))`)
+      assert.deepEqual(desk, [], 'the desktop list\'s filter menu / row buttons are on the phone list')
+      const chips = await cdp.eval(`[...document.querySelectorAll('${L} .pl-chips > button')].map((b) => b.dataset.filter)`)
+      assert.ok(chips[0] === '__all' && chips.length >= 3, `category chips: ${chips}`)
+      const row = dp(await elRect(rowE('E2E mail two'))), lead = dp(await elRect(`${rowE('E2E mail two')}.querySelector('.t2s-lead')`))
+      assert.ok(near(row.h, 68, 1.5) && near(lead.w, 44, 1.5) && near(lead.h, 44, 1.5), `a row is ${row.h.toFixed(1)} dp on a ${lead.w.toFixed(1)}×${lead.h.toFixed(1)} dp icon block (68 / 44)`)
+      assert.equal(await cdp.eval(`${rows}.every((e) => e.classList.contains('is-unread'))`), true, 'pulled mail is not marked unread')
+      shot('17h-inbox-list')
+
+      // a real finger: the tray behind a left swipe
+      const two = rowE('E2E mail two')
+      const tray = `${two}.closest('.pl-swipe')`
+      const open = `(${tray}?.scrollLeft || 0) > 40`
+      assert.ok(await cdp.eval(`!!${tray}`), 'an inbox row has no swipe tray')
+      await swipeEl(two, -150)
+      assert.ok(await h.waitPage(cdp, open, 3000), `a left swipe did not show the tray (scrollLeft ${await cdp.eval(`${tray}.scrollLeft`)})`)
+      assert.equal(await cdp.eval(nav), 'list', 'the swipe was taken as a tap')
+      const looks = JSON.parse(await cdp.eval(`JSON.stringify([...${tray}.querySelectorAll('.pl-swipe-act')].map((b) => ({ id: b.dataset.act, text: b.textContent.trim(), name: b.getAttribute('aria-label') || '', svg: !!b.querySelector('svg'), opacity: getComputedStyle(b).opacity, scale: getComputedStyle(b).scale })))`))
+      assert.deepEqual(looks.map((b) => b.id), ['read', 'archive', 'delete'])
+      assert.ok(looks.every((b) => !b.text && b.name && b.svg && b.opacity === '1' && (b.scale === 'none' || b.scale === '1')), `tray buttons: ${JSON.stringify(looks)}`)
+      const last = await elRect(`${tray}.querySelector('[data-act="delete"]')`)
+      assert.ok(last && last.right <= screen.w + 1, `the tray is not fully on screen (${last && fmt(last)})`)
+      shot('17i-inbox-swipe-tray')
+      await tapEl(`${tray}.querySelector('[data-act="read"]')`)
+      assert.ok(await h.waitPage(cdp, `!${two}.classList.contains('is-unread') || null`, 4000), '"mark read" in the tray did not run')
+      await h.pause(500)
+      assert.ok(await cdp.eval(`!(${open})`), 'the tray stayed open after its action')
+
+      // a long-press on a row = its menu, on the native sheet (the rows carry no ⋯ here)
+      await holdEl(rowE('E2E mail three'))
+      let menu = await waitSheet(true)
+      assert.equal(await cdp.eval(nav), 'list', 'the long-press was also taken as a tap (the message opened)')
+      assert.deepEqual(ids(menu).map((i) => rowLabel(menu, `nativeSheet.item.${i}`)), ['标为已读', '归档', '删除'], 'the row menu on the native sheet')
+      assert.equal(await cdp.eval("!!document.querySelector('.ctx-menu')"), false, 'web menu rendered as well')
+      shot('17j-inbox-row-menu')
+      h.key(4)
+      await waitSheet(false)
+      // and on the main button = the source's other actions
+      const held = stubLog.length
+      await holdEl(fabE)
+      menu = await waitSheet(true)
+      assert.deepEqual(ids(menu).map((i) => rowLabel(menu, `nativeSheet.item.${i}`)), ['全部已读'], 'the main button\'s long-press menu = the source\'s other actions')
+      h.key(4)
+      await waitSheet(false)
+      assert.ok(!stubLog.slice(held).some((l) => l.includes('/inbox/broadcasts')), 'the long-press on the main button also pulled')
+
+      // pulling the list down = its search line, in the list (not the palette), with the keyboard
+      await cdp.eval(`(document.querySelector('${L} .t2sw-plug-list').scrollTop = 0, true)`)
+      await swipeEl(rowE('E2E mail one'), 0, 190, 500)
+      assert.ok(await h.waitPage(cdp, `!!${field}`, 4000), 'pulling the list down did not bring up the search line')
+      await h.pause(800)
+      const byPull = imeShown()
+      console.log(`  (search line: the keyboard ${byPull ? 'came up with the pull' : 'waits for a touch on the field'})`)
+      if (!byPull) await tapEl(field)
+      for (let i = 0; i < 20 && !imeShown(); i++) await h.pause(300)
+      assert.ok(imeShown(), 'the keyboard did not come up for the search line')
+      await h.pause(1200)
+      list = ui()
+      const wv = webViewNode(list), box = await elRect(field), capNow = h.byId(list, 'nativeChrome.capLeft')
+      assert.ok(capNow && box.top >= capNow.rect.bottom - 2, `the search line is under a capsule (${fmt(box)} vs ${capNow && fmt(capNow.rect)})`)
+      assert.ok(box.bottom <= wv.rect.bottom, `the search line is behind the keyboard (${fmt(box)}, the page ends at ${wv.rect.bottom})`)
+      h.adb('shell', 'input', 'text', 'three')
+      assert.ok(await h.waitPage(cdp, `${titles}.join('|') === 'E2E mail three'`, 5000), `typing did not filter the list: ${JSON.stringify(await cdp.eval(titles))}`)
+      shot('17k-inbox-search-keyboard')
+      h.key(4); await h.pause(700) // the keyboard away
+      assert.ok(resumed(), 'back with the search line open left the app')
+      await tapEl(`document.querySelector('${L} .t2sw-plug-toolbar .t2s-search button')`)
+      assert.ok(await h.waitPage(cdp, `!${field} && ${rows}.length === 3`, 4000), 'the cross did not clear the search and take the line away')
+      // the capsule's search button brings the same line up
+      await tapId('nativeChrome.search')
+      assert.ok(await h.waitPage(cdp, `!!${field} && document.activeElement === ${field}`, 4000), 'the capsule\'s search button did not open the search line with the caret in it')
+      if (imeShown()) { h.key(4); await h.pause(700) }
+      await tapEl(`document.querySelector('${L} .t2sw-plug-toolbar .t2s-search button')`)
+      assert.ok(await h.waitPage(cdp, `!${field}`, 4000), 'the search line did not close')
+
+      // a row opens the message one level down; back returns to the list
+      await tapEl(rowE('E2E mail one'))
+      assert.ok(await h.waitPage(cdp, `${nav} === 'detail' && document.querySelector('.ibx-reader-title')?.textContent.trim() === 'E2E mail one'`, 6000), 'a tap on a row did not open the message')
+      await h.pause(700)
+      const meta = await elRect("document.querySelector('.ibx-reader-meta')"), cap = h.byId(ui(), 'nativeChrome.capLeft')
+      assert.ok(meta && cap && meta.top >= cap.rect.bottom - 2, `the message starts under a capsule (${meta && fmt(meta)} vs ${cap && fmt(cap.rect)})`)
+      shot('17l-inbox-message')
+      h.key(4)
+      assert.ok(await h.waitPage(cdp, `${nav} === 'list'`, 5000), 'back did not return to the inbox list')
+    } finally {
+      inboxFeed = []
+      if (imeShown()) { h.key(4); await h.pause(600) }
+      await cdp.eval(`(() => { const v = ${JSON.stringify(before)}; v == null ? localStorage.removeItem(${JSON.stringify(INBOX_KEY)}) : localStorage.setItem(${JSON.stringify(INBOX_KEY)}, v); return true })()`).catch(() => {})
+      await closeCards().catch(() => {})
+    }
+  })
+
+  // The notification stack is mounted outside the shell: until 2026-10-13 it kept the desktop's place (46 px from the
+  // top), which on the phone is under the right capsule — and the capsules are native, drawn over the page and taking
+  // the touches. In the calendar the cards sat at the bottom, under the dock. Measured against the real capsules here.
+  await check('notification card: below the capsules on a first level, in the calendar (not under the dock) and on a detail page; its close key takes a touch', async () => {
+    const cardE = "document.querySelector('.ntf-wrap .ntf')"
+    const raise = (text) => cdp.eval(`(window.dispatchEvent(new CustomEvent('amadeus:toast', { detail: { text: ${JSON.stringify(text)}, level: 'error' } })), true)`)
+    const look = async (where, withDock) => {
+      await raise(`E2E card (${where})`)
+      assert.ok(await h.waitPage(cdp, `!!${cardE}`, 4000), `${where}: no notification card`)
+      await h.pause(900) // it slides in from the right
+      const list = ui()
+      const [capL, capR, dock] = ['nativeChrome.capLeft', 'nativeChrome.capRight', 'nativeChrome.dock'].map((id) => h.byId(list, id))
+      const card = await elRect(cardE)
+      assert.ok(capL && capR, `${where}: capsules missing`)
+      assert.ok(card.top >= capR.rect.bottom - 2 && card.top <= capR.rect.bottom + 24 * density, `${where}: the card ${fmt(card)} does not start right below the capsules (${fmt(capR.rect)})`)
+      assert.ok(card.left >= 0 && card.right <= screen.w, `${where}: the card runs off the screen (${fmt(card)})`)
+      if (withDock) assert.ok(dock && card.bottom <= dock.rect.top, `${where}: the card ${fmt(card)} reaches the dock (${dock && fmt(dock.rect)})`)
+      else assert.ok(!dock, `${where}: the dock is up`)
+    }
+    await closeCards()
+    try {
+      await tanguDrawer()
+      await look('first level', true)
+      shot('17m-notify-card')
+      // the close key is the corner the right capsule used to cover: a real touch has to reach it
+      await tapEl("document.querySelector('.ntf-wrap .ntf .ntf-close')")
+      assert.ok(await h.waitPage(cdp, `!${cardE}`, 4000), 'a touch on the card\'s close key did not close it')
+      await toSpace('calendar')
+      await look('calendar', true)
+      shot('17n-notify-card-calendar')
+      await closeCards()
+      await openChat('E2E Session One')
+      await look('detail page', false)
+    } finally { await closeCards().catch(() => {}) }
   })
 
   // The phone's input card (2026-10-10): the send key beside the text; below it + / model / microphone. The mode key is
@@ -3438,7 +3617,6 @@ const tabCountText = (list) => {
     assert.ok(await until(() => !resumed(), 6000), 'the app is still in front after HOME')
     await h.pause(800)
   }
-  const INBOX_KEY = 'tangu_inbox_msgs' // the phone's local inbox (desktop/frontend/src/services/localInbox.ts)
   /** A new message in the local inbox, the way the periodic pull stores one; the inbox's own poll (15 s) finds it. */
   const inboxArrives = (id, title) => cdp.eval(`(() => {
     const rows = JSON.parse(localStorage.getItem(${JSON.stringify(INBOX_KEY)}) || '[]')

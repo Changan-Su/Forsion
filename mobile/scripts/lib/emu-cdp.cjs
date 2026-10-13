@@ -60,6 +60,9 @@ function startReader() {
       fs.mkdirSync(path.join(tmp, 'classes'), { recursive: true })
       execFileSync('javac', ['--release', '11', '-Xlint:-options', '-nowarn', '-cp', jar, '-d', path.join(tmp, 'classes'), src], { stdio: 'pipe' })
       execFileSync(path.join(newest('build-tools', 'd8'), 'd8'), ['--lib', jar, '--output', tmp, ...fs.readdirSync(path.join(tmp, 'classes')).map((f) => path.join(tmp, 'classes', f))], { stdio: 'pipe' })
+      // the system's temp cleaner empties these folders and leaves them standing: a folder without its file is in the
+      // way of the move (every run then built again and fell back to `uiautomator dump`) — take it away first
+      if (!fs.existsSync(path.join(dir, 'classes.dex'))) fs.rmSync(dir, { recursive: true, force: true })
       try { fs.renameSync(tmp, dir) } catch { /* another run got there first */ }
     }
     stopReader() // one left by a run that died holds the device's only automation slot
