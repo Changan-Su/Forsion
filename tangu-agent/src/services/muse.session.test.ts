@@ -151,6 +151,10 @@ describe('C1b kickoff 拆分', () => {
     expect(s).toContain('your background permission tier applies to your cycles only');
     expect(s).toContain('Do not wrap the file in function setup(ctx)');
     expect(s).toContain('It is reloaded after your turn ends');
+    // 聊天里先装技能再动 Space;周期那份仍是「不够用才装」(落库前缀逐字稳定)
+    expect(s).toContain('load the "forsion-plugin" skill before you create it or change how it is built');
+    expect(s).not.toContain('only if you need more of the plugin API');
+    expect(buildCycleMessages(cfg, {}).message).toContain('load the "forsion-plugin" skill only if you need more of the plugin API than this');
     // Journal 给绝对路径、不说「Library 就是这次对话的工作文件夹」:在项目会话里点名 Muse 时 cwd 是项目,相对路径会读到项目里的 Journal
     expect(s).toContain(`your journal (${path.join(museLibraryDir(), 'Journal', '<date>.md')})`);
     expect(s).not.toContain('working folder');

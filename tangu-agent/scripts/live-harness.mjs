@@ -5414,16 +5414,27 @@ Then reply with only the command output.`,
       const lookedBack = b.toolCalls.includes('read_log') || b.toolArgs.some((x) => /Journal/.test(x.args || ''));
       // ④ 聊天里让它做自己的 Space(用户的用法:聊天 + Desk 里的 Muse Space 并排,对着它说「改一下」)。周期里 Space 的写法随 kickoff 来,
       //    聊天里没有 kickoff —— 没有聊天段的构建里它连 Space 目录在哪都不知道。判据同 muse 场景:桌面装不装得出 home 视图。
+      const museStatus = () => api('/agent/special/muse/status').then((x) => (x && typeof x.status === 'object' ? x.status : x));
+      const stamp0 = Number((await museStatus())?.spaceStamp) || 0;
       const c = await run(sid, '把你的 Space 首页做出来吧,先简单点:上面显示一行「晚上好」就行。', 300_000);
+      // 聊天里写完 Space,桌面靠 status.spaceStamp 变了才重载(桌面每 20s 拉一次)。周期之外原先没人刷这个戳 ——
+      // 这一轮收尾后 30s 内它必须变(run 终态 → kickMuse → tick → 没有 run 在跑 → 刷)。没有这次改动的构建这里必红。
+      const stampMoved = !!(await until(async () => { const v = Number((await museStatus())?.spaceStamp) || 0; return v && v !== stamp0 ? v : null; }, 30_000, 1500));
+      // ⚠️上面那次分不出有没有这次改动:引擎没跑过周期时戳是 0,status 每次按磁盘现算,所以 main 原样也会「变」。
+      // 能分出来的是**已有 Space 再改一次**:戳非 0 之后原先只有周期收尾才刷。再说一句让它改字,改了文件戳就必须再变。
+      const stamp1 = Number((await museStatus())?.spaceStamp) || 0;
+      const d = await run(sid, '把那行字改成「早上好」。', 300_000);
+      const edited = d.toolCalls.some((n) => ['write_file', 'edit_file', 'multi_edit'].includes(n));
+      const stampMovedAgain = !!(await until(async () => { const v = Number((await museStatus())?.spaceStamp) || 0; return v && v !== stamp1 ? v : null; }, 30_000, 1500));
       const space = await museSpaceVerdict(join(home, 'agents', 'muse', 'Space'), health?.version);
       // 计红的是「两份文件真写到了它的 Space 目录」(知道在哪、写得进);装不装得出 home 同 muse 场景只记不判(Node 里的近似判定)。
       const spaceWritten = ['manifest.json', 'main.js'].every((f) => existsSync(join(home, 'agents', 'muse', 'Space', f)));
       const cycles = Number((await api('/agent/special/muse/status').then((x) => (x && typeof x.status === 'object' ? x.status : x)))?.lastCycleAt) || 0;
-      writeFileSync(join(OUT, 'musechat-evidence.json'), JSON.stringify({ systemPromptHasChatSection: sys.includes('## Talking with the user'), toldTools: a.toolArgs, toldReply: a.content, askedTools: b.toolArgs, askedReply: b.content, spaceTools: c.toolArgs, spaceReply: c.content, spaceApprovals: c.approvals, space, spaceWritten, museFiles: museText() }, null, 2));
-      return { ok: bound && saved && spaceWritten && !a.error && !b.error && !c.error && !cycles,
+      writeFileSync(join(OUT, 'musechat-evidence.json'), JSON.stringify({ systemPromptHasChatSection: sys.includes('## Talking with the user'), toldTools: a.toolArgs, toldReply: a.content, askedTools: b.toolArgs, askedReply: b.content, spaceTools: c.toolArgs, spaceReply: c.content, editTools: d.toolArgs, editReply: d.content, stampMoved, stampMovedAgain, spaceApprovals: c.approvals, space, spaceWritten, museFiles: museText() }, null, 2));
+      return { ok: bound && saved && spaceWritten && (stampMovedAgain || !edited) && !a.error && !b.error && !c.error && !d.error && !cycles,
         detail: `私聊绑到 Muse 且带聊天段:${bound ? '是' : '否'};交代后 Muse 的记忆 / 日志里${saved ? '有' : '没有'}「${TOPIC}」(交代那轮调了 ${a.toolCalls.join(',') || '无工具'});` +
           `问后台做了什么:${lookedBack ? '读了自己的日志 / Journal' : '没读日志(不计红)'}(调了 ${b.toolCalls.join(',') || '无工具'});` +
-          `聊天里做 Space:${spaceWritten ? '两份文件已写进 Space 目录' : '没写进 Space 目录'},${space.ok ? '桌面能装出 home' : `⚠️ 判定装不出 home(${space.text || '?'};只记不判)`}(调了 ${c.toolCalls.join(',') || '无工具'},审批 ${c.approvals} 次);期间起了周期:${cycles ? '是(不该起)' : '否'}` +
+          `聊天里做 Space:${spaceWritten ? '两份文件已写进 Space 目录' : '没写进 Space 目录'},${space.ok ? '桌面能装出 home' : `⚠️ 判定装不出 home(${space.text || '?'};只记不判)`}(调了 ${c.toolCalls.join(',') || '无工具'},审批 ${c.approvals} 次);写完后 Space 戳${stampMoved ? '变了' : ' 30s 内没变'};再改一次(调了 ${d.toolCalls.join(',') || '无工具'}):${!edited ? '它没改文件(不判)' : stampMovedAgain ? '戳又变了(桌面会重载)' : '戳 30s 内没再变(桌面不会重载)'};期间起了周期:${cycles ? '是(不该起)' : '否'}` +
           `${a.error ? `;交代那轮出错 ${a.error}` : ''}${b.error ? `;提问那轮出错 ${b.error}` : ''}${c.error ? `;做 Space 那轮出错 ${c.error}` : ''}`,
         output: `【交代】\n${a.content || '(无)'}\n\n【问后台做了什么】\n${b.content || '(无)'}\n\n【做 Space】\n${c.content || '(无)'}` };
     } finally {

@@ -630,9 +630,12 @@ async function activityTailHint(): Promise<string> {
  *  返回字段与配色变量也得写在这里(09-27 dev 首个 ctx.agent 版 Space):技能不加载,它就只能猜 —— 猜了 status().status
  *  (「当前状态」卡恒空)、猜了宿主没有的 --panel(卡片落到写死的深色兜底,浅色主题下标题深底深字看不见)。
  *  变量表 = styles/base.css :root 与深色块都定义的那几个(--surface / --card 只在笔记作用域里有,插件视图拿不到)。 */
-function spaceKickoff(reloadAfter = 'your cycle ends'): string {
+function spaceKickoff(
+  reloadAfter = 'your cycle ends',
+  skillHint = 'load the "forsion-plugin" skill only if you need more of the plugin API than this',
+): string {
   return `Your Space: the desktop's "Muse" Space shows the view registered by the Forsion plugin at ${museSpaceDir()} ` +
-    '(manifest.json + main.js; load the "forsion-plugin" skill only if you need more of the plugin API than this). ' +
+    `(manifest.json + main.js; ${skillHint}). ` +
     'main.js runs as the body of setup(ctx), so call ctx.registerView({ id: "home", ... }) at the top level of the file. ' +
     'Do not wrap the file in function setup(ctx) { ... } — nothing calls it, so nothing registers and no error is raised. ' +
     'Render live data instead of hardcoding it — these return Promises (status() can resolve to null): ctx.agent.status() → { running, lastCycleAt, sleepUntil, mode, heartbeatMinutes, pendingApprovals } (times in epoch ms or null); ' +
@@ -660,7 +663,12 @@ export function museChatSection(): string {
     'Your next cycle starts in a fresh session and will not see this conversation. So when the user tells you how to work in the background ' +
     '(what to watch, what to stop suggesting, when to stay quiet), save it before you reply: remember for a lasting preference, log_event for a one-off request. ' +
     'Actions here follow this conversation\'s approval setting, with the user present to confirm; your background permission tier applies to your cycles only. ' +
-    spaceKickoff('your turn ends, and the user may be looking at it next to this chat');
+    // 聊天里先装技能再动手(10-14 实测:沿用周期那句「只在不够用时才装」,3 次里 2 次没装就写 main.js,用了不存在的 render、
+    // 其中 1 次连 manifest.json 都没写;没有这段说明的构建每次都先装技能、4 次都对)。周期那份的措辞不动。
+    spaceKickoff(
+      'your turn ends, and the user may be looking at it next to this chat',
+      'load the "forsion-plugin" skill before you create it or change how it is built: the manifest fields and the shape of the view object are in there',
+    );
 }
 
 /**
