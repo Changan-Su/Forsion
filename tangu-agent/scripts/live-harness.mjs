@@ -5413,6 +5413,8 @@ Then reply with only the command output.`,
       const sid = opened?.session?.id;
       if (!sid) return { ok: false, detail: `私聊会话没建出来:${JSON.stringify(opened).slice(0, 200)}` };
       const TOPIC = '观鸟';
+      // 同一次台架里前面若跑过 muse 场景,lastCycleAt 本来就非 0:「期间起了周期」要比前后,不能只看非 0(10-14 合并门禁里假红过)
+      const cycleAt0 = Number((await api('/agent/special/muse/status').then((x) => (x && typeof x.status === 'object' ? x.status : x)))?.lastCycleAt) || 0;
       const museText = () => {
         const out = [];
         const add = (f) => { try { out.push(readFileSync(f, 'utf8')); } catch { /* 还没写 */ } };
@@ -5444,7 +5446,7 @@ Then reply with only the command output.`,
       const space = await museSpaceVerdict(join(home, 'agents', 'muse', 'Space'), health?.version);
       // 计红的是「两份文件真写到了它的 Space 目录」(知道在哪、写得进);装不装得出 home 同 muse 场景只记不判(Node 里的近似判定)。
       const spaceWritten = ['manifest.json', 'main.js'].every((f) => existsSync(join(home, 'agents', 'muse', 'Space', f)));
-      const cycles = Number((await api('/agent/special/muse/status').then((x) => (x && typeof x.status === 'object' ? x.status : x)))?.lastCycleAt) || 0;
+      const cycles = (Number((await api('/agent/special/muse/status').then((x) => (x && typeof x.status === 'object' ? x.status : x)))?.lastCycleAt) || 0) !== cycleAt0;
       writeFileSync(join(OUT, 'musechat-evidence.json'), JSON.stringify({ systemPromptHasChatSection: sys.includes('## Talking with the user'), toldTools: a.toolArgs, toldReply: a.content, askedTools: b.toolArgs, askedReply: b.content, spaceTools: c.toolArgs, spaceReply: c.content, editTools: d.toolArgs, editReply: d.content, stampMoved, stampMovedAgain, spaceApprovals: c.approvals, space, spaceWritten, museFiles: museText() }, null, 2));
       return { ok: bound && saved && spaceWritten && (stampMovedAgain || !edited) && !a.error && !b.error && !c.error && !d.error && !cycles,
         detail: `私聊绑到 Muse 且带聊天段:${bound ? '是' : '否'};交代后 Muse 的记忆 / 日志里${saved ? '有' : '没有'}「${TOPIC}」(交代那轮调了 ${a.toolCalls.join(',') || '无工具'});` +
