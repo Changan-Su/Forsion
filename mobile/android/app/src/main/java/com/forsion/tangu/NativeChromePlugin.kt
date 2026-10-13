@@ -309,6 +309,7 @@ class NativeChromePlugin : Plugin() {
     override fun handleOnDestroy() {
         bridge.removeWebViewListener(pageListener)
         accessibility()?.removeTouchExplorationStateChangeListener(readerListener)
+        readerHooked = true // a setState still queued for the UI thread runs attach() after this: it must not hook the listener back on (nothing would take it off again)
         activity.runOnUiThread { teardown() }
     }
 }

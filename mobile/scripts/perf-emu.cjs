@@ -279,7 +279,9 @@ function gfx() {
     await trace('open-again', () => openChat(Number(process.env.ROW || 7))); await inDetail(); await h.pause(800)
     await ensureList()
     await trace('open-other', () => openChat(Number(process.env.ROW || 7) + 1)); await inDetail(); await h.pause(800)
-    const u = await elPoint("[...document.querySelectorAll('.t2-stream *')].find((e) => { const r = e.getBoundingClientRect(); return e.children.length === 0 && r.top > innerHeight * 0.35 && r.top < innerHeight * 0.6 && r.width > 40 && !e.closest('pre, table, .md-table-scroll') })")
+    // a line of text in the middle of the conversation to start the drag on (not a block that scrolls sideways);
+    // a conversation with none there (too short, or nothing but such blocks): the middle of the main view
+    const u = await elPoint("([...document.querySelectorAll('.t2-stream *')].find((e) => { const r = e.getBoundingClientRect(); return e.children.length === 0 && r.top > innerHeight * 0.35 && r.top < innerHeight * 0.6 && r.width > 40 && !e.closest('pre, table, .md-table-scroll') }) || document.querySelector('.mb-main'))")
     await trace('drag-back', async () => { h.adb('shell', 'input', 'swipe', '300', String(u.y), '980', String(u.y), '600') })
     await ensureList()
   }
@@ -351,7 +353,7 @@ function gfx() {
       }
       if (want('drag')) {
         await ensureDetail(r)
-        const u = await elPoint("[...document.querySelectorAll('.t2-stream *')].find((e) => { const r = e.getBoundingClientRect(); return e.children.length === 0 && r.top > innerHeight * 0.35 && r.top < innerHeight * 0.6 && r.width > 40 && !e.closest('pre, table, .md-table-scroll') })")
+        const u = await elPoint("([...document.querySelectorAll('.t2-stream *')].find((e) => { const r = e.getBoundingClientRect(); return e.children.length === 0 && r.top > innerHeight * 0.35 && r.top < innerHeight * 0.6 && r.width > 40 && !e.closest('pre, table, .md-table-scroll') }) || document.querySelector('.mb-main'))")
         await run('drag back (x=300)', rate, async () => { h.adb('shell', 'input', 'swipe', '300', String(u.y), '980', String(u.y), '600') }, { settle: 1500, win: 600 })
         await ensureDetail(r)
         await run('edge swipe (x=6)', rate, async () => { h.adb('shell', 'input', 'swipe', '6', String(midY), '900', String(midY), '600') }, { settle: 1500, from: /back|data-/, win: 700 })
