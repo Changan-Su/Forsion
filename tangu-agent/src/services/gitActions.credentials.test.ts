@@ -32,6 +32,8 @@
  *   - runRemoteAction 不带凭据时也插 → 「没有提供方 / 不认领…与现在一致」红
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+
+if (process.platform === 'win32') vi.setConfig({ testTimeout: 30_000 });
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';

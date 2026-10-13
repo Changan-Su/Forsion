@@ -177,11 +177,12 @@ export function registerVaultHandlers(deps: VaultHandlerDependencies): void {
    *  仪器:electron/amadeus/ipc.moveFileRefs.test.ts。
    *  ponytail: 朴素全库读扫,与 backlinks 同一量级,个人 vault 规模足够。 */
   const propagateRenames = async (pairsIn: Record<string, string>, pagesBefore: string[], folder?: readonly [string, string]): Promise<void> => {
-    const pairs = new Map(Object.entries(pairsIn))
+    const norm = (p: string): string => p.replace(/\\/g, '/')
+    const pairs = new Map(Object.entries(pairsIn).map(([o, n]) => [norm(o), norm(n)]))
     if (!pairs.size && !(folder && (await fs.readdir(vault.absPath(folder[1])).catch(() => [])).length)) return
     if (pairs.size) void deps.pageHistory?.move(vault.getRoot(), pairsIn) // 版本历史跟着改名 / 移动走(C-20;五条改名路径都汇到这里)
     const backMap = new Map([...pairs].map(([o, n]) => [n, o]))
-    const before = [...pagesBefore].sort()
+    const before = pagesBefore.map(norm).sort()
     const after = before.map((p) => pairs.get(p) ?? p).sort()
     const moved = folder ? movedUnder(folder) : null
     for (const p of after) {
@@ -206,9 +207,12 @@ export function registerVaultHandlers(deps: VaultHandlerDependencies): void {
 
   /** 文件夹改名/移动 → 树下每一页一对 old→new(引用重写按页粒度进行)。 */
   const folderPairs = (pages: string[], oldFolder: string, newFolder: string): Record<string, string> => {
-    const pre = `${oldFolder}/`
+    const pre = `${oldFolder.replace(/\\/g, '/')}/`
     const out: Record<string, string> = {}
-    for (const p of pages) if (p.startsWith(pre)) out[p] = `${newFolder}/${p.slice(pre.length)}`
+    for (const raw of pages) {
+      const p = raw.replace(/\\/g, '/')
+      if (p.startsWith(pre)) out[p] = `${newFolder.replace(/\\/g, '/')}/${p.slice(pre.length)}`
+    }
     return out
   }
 

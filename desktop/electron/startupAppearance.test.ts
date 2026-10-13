@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 const mock = vi.hoisted(() => ({
   dir: '', handlers: new Map<string, (...args: any[]) => any>(), listeners: new Map<string, (...args: any[]) => any>(),
   dock: vi.fn(), windowIcon: vi.fn(), send: vi.fn(), packaged: false, keepMac: vi.fn(async () => {}), keepWindows: vi.fn(async () => {}),
@@ -102,7 +102,7 @@ describe('desktop appearance persistence and OS icon', () => {
     await registerStartupAppearance(() => true)
     const last = async () => { await vi.waitFor(() => expect(mock.keepMac).toHaveBeenCalled()); const call = mock.keepMac.mock.calls.at(-1) as any[]; mock.keepMac.mockClear(); return call }
     let [target, key, image] = await last()
-    expect(target).toEqual({ bundle: '/Applications/Forsion.app', dir: mock.dir })
+    expect(target).toEqual({ bundle: resolve('/Applications/Forsion.app'), dir: mock.dir })
     expect(key).toBe(png)
     expect(image().toString()).toBe(png)
     await update({ nativeIcon: false })

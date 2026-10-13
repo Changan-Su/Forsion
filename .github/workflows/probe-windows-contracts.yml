@@ -1,0 +1,63 @@
+name: probe-windows-contracts
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/probe-windows-contracts.yml'
+      - 'desktop/electron/amadeus/**'
+      - 'desktop/electron/main.ts'
+      - 'desktop/shared/amadeus/**'
+      - 'desktop/frontend/src/amadeus/**'
+      - 'desktop/frontend/src/views/ProjectProfile.tsx'
+      - 'desktop/scripts/mini-card.check.cjs'
+      - 'desktop/scripts/plugin-space-hidden.check.cjs'
+      - 'desktop/scripts/note-move-assets.e2e.cjs'
+      - 'desktop/scripts/project-details.check.cjs'
+      - 'tangu-agent/src/services/git*.ts'
+      - 'tangu-agent/src/services/forsionGit*.ts'
+      - 'tangu-agent/test/forsionPluginCheck.test.ts'
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-2022
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install dependencies
+        run: |
+          npm ci --prefix tangu-agent --no-audit --no-fund
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm ci --prefix desktop --no-audit --no-fund
+          exit $LASTEXITCODE
+      - name: Verify Git and plugin checker contracts
+        working-directory: tangu-agent
+        run: |
+          npx vitest run src/services/gitActions.test.ts src/services/gitActions.credentials.test.ts src/services/gitCredentials.test.ts src/services/forsionGit.test.ts src/services/forsionGitPublish.test.ts src/services/gitTrust.test.ts test/forsionPluginCheck.test.ts --maxWorkers=1
+          exit $LASTEXITCODE
+      - name: Build and verify desktop contracts
+        working-directory: desktop
+        run: |
+          npx tsc --noEmit
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npx vitest run electron/amadeus/ipc.moveFileRefs.test.ts shared/amadeus/assets.test.ts shared/amadeus/propagateNoteRenames.test.ts electron/startupAppearance.test.ts electron/systemIcon.test.ts shared/miniPanel.test.ts
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run build
+          exit $LASTEXITCODE
+      - name: Verify real Electron flows
+        working-directory: desktop
+        run: |
+          New-Item -ItemType Directory -Force outputs/windows-contracts | Out-Null
+          foreach ($script in @('mini-card.check.cjs', 'plugin-space-hidden.check.cjs', 'note-move-assets.e2e.cjs', 'project-details.check.cjs')) {
+            node "scripts/$script" 2>&1 | Tee-Object -FilePath "outputs/windows-contracts/$script.log"
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-contracts
+          path: desktop/outputs/windows-contracts/

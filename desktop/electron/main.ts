@@ -1941,7 +1941,7 @@ function createMiniWindow(opts?: MiniOpenOptions): void {
     active: () => miniAutoPanel?.following() ?? false,
     cursor: () => screen.getCursorScreenPoint(),
   })
-  miniWindow.on('moved', onMiniMoved)
+  miniWindow.on('move', onMiniMoved)
   miniWindow.on('closed', () => { console.log('[win] mini closed'); stopMiniPassThrough?.(); stopMiniPassThrough = null; miniWindow = null; miniTarget = undefined; miniDock = null; miniResizeFrom = null; stopMiniPoll() })
   console.log('[win] mini open')
   loadRendererWith(miniWindow, { window: 'mini', ...(opts?.sessionId ? { sessionId: opts.sessionId } : {}) })

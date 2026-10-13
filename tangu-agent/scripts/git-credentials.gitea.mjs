@@ -80,7 +80,7 @@ const shown = []; // 引擎交出来的所有文字(错误原文 / 推送输出)
 const note = (o) => { shown.push(JSON.stringify(o)); return o; };
 
 try {
-  await run('gitea', ['cert', '--host', '127.0.0.1', '--ca', '--out', cert, '--keyout', join(work, 'key.pem')], { cwd: work, timeout: 60_000 });
+  await run('gitea', ['cert', '--host', '127.0.0.1', '--ca'], { cwd: work, timeout: 60_000 });
   mkdirSync(join(work, 'custom/conf'), { recursive: true });
   writeFileSync(ini, `
 APP_NAME = Forsion Git (engine e2e)
@@ -203,8 +203,9 @@ ROOT_PATH = ${join(work, 'log')}
   // 用户自己的凭据助手(钥匙串之类)里存着这个站的一份旧凭据:我们那一枚被拒之后,git 不该去问它,更不该叫它把那份删掉
   const helperLog = join(work, 'helper.log');
   const helper = join(work, 'helper.sh');
-  writeFileSync(helper, `#!/bin/sh\necho "$1" >> "${helperLog}"\nif [ "$1" = get ]; then echo username=dave; echo password=old-stored-pat; fi\n`, { mode: 0o755 });
-  writeFileSync(join(work, 'gitconfig'), `[credential]\n\thelper = ${helper}\n`);
+  const shellPath = (p) => `'${p.replace(/\\/g, '/').replace(/'/g, `'\\''`)}'`;
+  writeFileSync(helper, `#!/bin/sh\necho "$1" >> ${shellPath(helperLog)}\nif [ "$1" = get ]; then echo username=dave; echo password=old-stored-pat; fi\n`, { mode: 0o755 });
+  await git(src, 'config', '--file', join(work, 'gitconfig'), 'credential.helper', `!sh ${shellPath(helper)}`);
   const refused = note(await outcome(gitPush(src)));
   writeFileSync(join(work, 'gitconfig'), '');
   for (const key of ['GIT_TRACE_CURL', 'GIT_CURL_VERBOSE', 'GIT_TRACE']) delete process.env[key];

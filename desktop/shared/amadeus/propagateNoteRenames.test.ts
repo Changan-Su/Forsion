@@ -21,6 +21,14 @@ function memIO(files: Map<string, string>, hooks: { beforeWrite?: (p: string) =>
 }
 
 describe('propagateNoteRenames', () => {
+  it('Windows page snapshots and mixed separators still rebase moved notes', async () => {
+    const files = new Map([['other/a.md', '![](.amadeus/p.png)\n'], ['notes/b.md', '[[notes/a]]\n']])
+    const io = { ...memIO(files), exists: (p: string) => p === 'notes/.amadeus/p.png' }
+    const result = await propagateNoteRenames(io, { 'notes\\a.md': 'other/a.md' }, ['notes\\a.md', 'notes\\b.md'])
+    expect(files.get('other/a.md')).toBe('![](../notes/.amadeus/p.png)\n')
+    expect(files.get('notes/b.md')).toBe('[[other/a]]\n')
+    expect(result).toEqual({ rewritten: ['notes/b.md', 'other/a.md'], failed: [] })
+  })
   it('movedUnder:文件夹之下的整棵树跟着走,同前缀的别的文件夹不动;宿主给的反斜杠路径照样认', () => {
     const m = movedUnder(['a/notes', 'b/notes'])
     expect([m('a/notes/x.png'), m('a/notes'), m('a/notes2/x.png'), m('c/x.png')]).toEqual(['b/notes/x.png', 'b/notes', 'a/notes2/x.png', 'c/x.png'])

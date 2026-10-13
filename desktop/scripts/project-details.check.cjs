@@ -126,7 +126,7 @@ async function run(app, win, stub, seen, home, ctx) {
     globalThis.__adoptCalls = []
     globalThis.__registered = []
     for (const ch of ['products:register', 'products:isCreation']) ipcMain.removeHandler(ch)
-    ipcMain.handle('products:register', (_e, source, within, strict) => { globalThis.__adoptCalls.push({ source, within, strict }); globalThis.__registered.push(source); return { ok: true, dir: source, name: source.split('/').pop(), product: {} } })
+    ipcMain.handle('products:register', (_e, source, within, strict) => { globalThis.__adoptCalls.push({ source, within, strict }); globalThis.__registered.push(source); return { ok: true, dir: source, name: source.split(/[\\/]/).pop(), product: {} } })
     ipcMain.handle('products:isCreation', (_e, dir) => globalThis.__registered.includes(dir))
   })
   await openSession(win, 'Demo main', 'pd-main')

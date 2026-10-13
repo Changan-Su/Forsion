@@ -21,7 +21,7 @@ describe('icoFromPng', () => {
   })
 })
 
-describe('keepMacIcon', () => {
+describe.skipIf(process.platform === 'win32')('keepMacIcon', () => {
   const bundle = () => join(dir, 'Forsion.app')
   const icon = () => join(bundle(), 'Icon\r')
   const target = (set: (bundle: string, image?: string) => Promise<boolean>) => ({ bundle: bundle(), dir: join(dir, 'data'), set })

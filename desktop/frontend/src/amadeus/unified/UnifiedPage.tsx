@@ -1254,7 +1254,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
    *  公开分享页也是 readOnly,那是笔记,得守标准 markdown 语义。见 softBreak.ts 的 hardBreakRemark。 */
   hardBreaks?: boolean
 }): ReactElement {
-  const pageDir = path.split('/').slice(0, -1).join('/')
+  const pageDir = path.replace(/\\/g, '/').split('/').slice(0, -1).join('/')
   const scoped = useScopedPageStore()
   const vaultRoot = scoped.getState().vaultRoot
   /** 所属 leaf(不在面板里 = null):同篇多开时的实例身份 —— 草稿槽位、改名聚焦的认领、openNote 落点都认它(G1-02)。 */

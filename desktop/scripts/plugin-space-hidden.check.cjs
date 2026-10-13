@@ -76,7 +76,7 @@ async function main() {
     await win.evaluate(() => document.querySelector('.rb-open-top .rb-more')?.click())
 
     // 命令面板 → 「插件状态」→ 设置窗口落在插件页
-    await win.keyboard.press('Meta+k')
+    await win.keyboard.press(process.platform === 'darwin' ? 'Meta+k' : 'Control+k')
     await win.locator('.cmd-input:visible').fill('插件状态')
     await win.locator('.cmd-item', { hasText: '插件状态' }).first().click()
     const settings = await until(async () => {

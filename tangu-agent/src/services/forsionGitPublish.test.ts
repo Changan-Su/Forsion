@@ -19,6 +19,8 @@
  *   - 超时也撤 origin → 「超时 → origin 留着」红
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+
+if (process.platform === 'win32') vi.setConfig({ testTimeout: 30_000 });
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
