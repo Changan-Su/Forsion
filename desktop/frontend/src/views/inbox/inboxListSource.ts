@@ -152,16 +152,17 @@ export const inboxListSource: ListSourceContribution = {
   },
   actions: [
     { id: 'read-all', get label() { return translate('inbox.action.readAll') }, run: () => { void useInbox.getState().readAll() } },
-    { id: 'pull', primary: true, get label() { return translate('inbox.action.refresh') }, run: () => { void useInbox.getState().pull() } },
+    { id: 'pull', primary: true, icon: 'refresh', get label() { return translate('inbox.action.refresh') }, run: () => { void useInbox.getState().pull() } },
   ],
   itemMenu(item) {
     const st = useInbox.getState()
     const m = [...st.messages, ...st.archived].find((x) => x.id === item.key)
     if (!m) return []
     return [
-      { id: 'read', label: translate(m.read_at ? 'inbox.action.markUnread' : 'inbox.action.markRead'), run: () => st.markRead(m.id, !m.read_at) },
-      { id: 'archive', label: translate(m.archived_at ? 'inbox.action.unarchive' : 'inbox.action.archive'), run: () => st.markArchived(m.id, !m.archived_at) },
-      { id: 'delete', label: translate('inbox.action.delete'), danger: true, run: () => { if (window.confirm(translate('inbox.deleteConfirm', { title: m.title }))) st.remove(m.id) } },
+      // 图标给手机上左滑出来的圆钮用(只有图标,不带字):成对的动作各用各的
+      { id: 'read', icon: m.read_at ? 'mail' : 'mail-open', label: translate(m.read_at ? 'inbox.action.markUnread' : 'inbox.action.markRead'), run: () => st.markRead(m.id, !m.read_at) },
+      { id: 'archive', icon: m.archived_at ? 'unarchive' : 'archive', label: translate(m.archived_at ? 'inbox.action.unarchive' : 'inbox.action.archive'), run: () => st.markArchived(m.id, !m.archived_at) },
+      { id: 'delete', icon: 'trash', label: translate('inbox.action.delete'), danger: true, run: () => { if (window.confirm(translate('inbox.deleteConfirm', { title: m.title }))) st.remove(m.id) } },
     ]
   },
 }

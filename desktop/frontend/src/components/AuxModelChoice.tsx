@@ -2,13 +2,14 @@
  * 「辅助模型」选择器 —— 区别于主模型的那一档,两个槽合用一套 UI:
  *   · 辅助 LLM   —— 后台/特殊 agent(Muse、Historian)跑的活,挑个便宜的就行
  *   · 图像识别   —— 主模型没有原生多模态时的看图兜底,以及非聊天场景的快速识图
+ *   · 翻译       —— 笔记里的「翻译」和插件的 ctx.tangu.translate(逐句翻译量大,不必用主模型那一档)
  *
  * 自包含(getConfig/setConfig 直写 ~/.tangu/config.json 的 models 段,引擎侧
  * specialAgentsConfig / visionService 读同一段),设置页与引导页复用 —— 同 AsrModelChoice。
  * 不选 = 跟随 admin 的 app 级槽(选择器里显示跟随到了谁)。非桌面环境自动隐藏。
  */
 import { useEffect, useState } from 'react'
-import { Eye, Sparkles } from 'lucide-react'
+import { Eye, Languages, Sparkles } from 'lucide-react'
 import { ModelSelect } from './ModelSelect'
 import { SettingsRow } from './SettingsPrimitives'
 import { registerMessages, useI18n } from '../i18n'
@@ -19,6 +20,9 @@ registerMessages({
   'aux.backgroundCompactHint': { zh: '用于后台 Agent、摘要与整理。', en: 'For background agents, summaries and organization.' },
   'aux.visionCompact': { zh: '图像识别', en: 'Image recognition' },
   'aux.visionCompactHint': { zh: '主模型无法看图时，辅助理解图片。', en: 'Helps interpret images when the main model cannot.' },
+  'aux.translateCompact': { zh: '翻译', en: 'Translation' },
+  'aux.translateCompactHint': { zh: '用于笔记和插件里的翻译，不选则跟随聊天模型。', en: 'For translation in notes and plugins. Defaults to the chat model.' },
+  'aux.translateFollow': { zh: '跟随聊天模型', en: 'Same as chat' },
   // 这一行的名字和下面三个选项的字,被引擎写进了给模型读的一句话里(tangu-agent toolRegistry.computerUseUnavailableReason),改文案时那边一起改。
   'aux.visionBehavior': { zh: '图像处理方式', en: 'Image handling' },
   'aux.visionCompact.auto': { zh: '按需使用', en: 'When needed' },
@@ -38,12 +42,14 @@ export function AuxModelChoice({ models, compact = false }: { models: ModelsResp
   const { t } = useI18n()
   const [background, setBackground] = useState('')
   const [vision, setVision] = useState('')
+  const [translate, setTranslate] = useState('')
   const [visionMode, setVisionMode] = useState<VisionMode>('auto')
 
   useEffect(() => {
     void window.tangu?.getConfig?.().then((c) => {
       setBackground(c.backgroundModelId || '')
       setVision(c.visionModelId || '')
+      setTranslate(c.translateModelId || '')
       setVisionMode(c.visionMode || 'auto')
     })
   }, [])
@@ -55,6 +61,9 @@ export function AuxModelChoice({ models, compact = false }: { models: ModelsResp
   // 再把原图退给同样看不了的主模型,整轮必挂——这种选项不该出现在列表里(Codex 评审)。
   const visionCapable = llms.filter((m) => m.supportsVision !== false)
 
+  // 翻译槽:对话模型 + 云端的机器翻译模型(后者只在这里出现,别处的选择器看不到它们)
+  const translators = [...llms, ...(models?.translateModels || []).map((m) => ({ id: m.id, name: m.name, provider: m.provider || 'forsion', source: 'forsion' as const }))]
+
   const modes: VisionMode[] = ['auto', 'always', 'off']
 
   if (compact) return <>
@@ -65,6 +74,11 @@ export function AuxModelChoice({ models, compact = false }: { models: ModelsResp
     <SettingsRow label={t('aux.visionCompact')} description={t('aux.visionCompactHint')} control={
       <ModelSelect models={visionCapable} value={vision} cloudDefaultId={models?.visionModelId} icon={<Eye size={13} />} disabled={visionMode === 'off'} ariaLabel={t('aux.visionCompact')}
         onChange={(id) => { setVision(id); void window.tangu?.setConfig?.({ visionModelId: id }) }} />
+    } />
+    {/* 没有 app 级的槽可跟:不选 = 跟聊天当前模型(tanguProbe.complete 里取) */}
+    <SettingsRow label={t('aux.translateCompact')} description={t('aux.translateCompactHint')} control={
+      <ModelSelect models={translators} value={translate} defaultLabel={t('aux.translateFollow')} icon={<Languages size={13} />} ariaLabel={t('aux.translateCompact')}
+        onChange={(id) => { setTranslate(id); void window.tangu?.setConfig?.({ translateModelId: id }) }} />
     } />
     <SettingsRow label={t('aux.visionBehavior')} description={t(`aux.visionMode.${visionMode}`)} control={
       <select aria-label={t('aux.visionBehavior')} value={visionMode} onChange={(e) => { const mode = e.target.value as VisionMode; setVisionMode(mode); void window.tangu?.setConfig?.({ visionMode: mode }) }}>

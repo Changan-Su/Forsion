@@ -38,6 +38,8 @@ export interface ModelCatalog {
   visionModelId: string | null;
   /** Forsion 云端的实时语音通话模型(不进 models;没有 = 云端没开通话 / 老云端 / 没登录)。 */
   realtimeModel: { id: string; name: string; apiModelId?: string | null } | null;
+  /** Forsion 云端的机器翻译模型(不进 models:它们不能聊天;客户端的「翻译」模型槽列它们)。老云端 / 没登录 = 空。 */
+  translateModels: Array<{ id: string; name: string; provider?: string; apiModelId?: string | null }>;
   /** 云端托管面:ok / error(拉取抛错)。「可达但为空」的判定要 users/me 探针,由路由补。 */
   forsion: { status: 'ok' | 'empty' | 'error'; detail: string | null };
 }
@@ -64,6 +66,7 @@ export async function listModelCatalog(profile: AppProfile): Promise<ModelCatalo
   let imageModelId: string | null = null;
   let visionModelId: string | null = null;
   let realtimeModel: ModelCatalog['realtimeModel'] = null;
+  let translateModels: ModelCatalog['translateModels'] = [];
   try {
     // 优先按应用过滤(admin 的 project_model_configs);brain 未实现该可选方法 → 回退全局列表。
     const listForProject = deps().brain.models.listModelsForProject;
@@ -75,6 +78,7 @@ export async function listModelCatalog(profile: AppProfile): Promise<ModelCatalo
       imageModelId = r?.imageModelId ?? null;
       visionModelId = r?.visionModelId ?? null;
       realtimeModel = r?.realtimeModel ?? null;
+      translateModels = r?.translateModels ?? [];
     } else {
       cloud = (await deps().brain.models.listGlobalModels()) || [];
     }
@@ -117,6 +121,7 @@ export async function listModelCatalog(profile: AppProfile): Promise<ModelCatalo
     imageModelId,
     visionModelId,
     realtimeModel,
+    translateModels,
     forsion,
   };
 }

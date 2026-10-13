@@ -655,6 +655,8 @@ export interface ModelsResponse {
   visionModelId?: string | null
   /** Forsion 云端的实时语音通话模型(不在 models 里;apiModelId = 上游模型名,音色家族按它分)。没有 = 云端没开通话 / 没登录 / 老引擎。 */
   realtimeModel?: { id: string; name: string; apiModelId?: string | null } | null
+  /** Forsion 云端的机器翻译模型(不在 models 里:它们不能聊天;只有「翻译」模型槽列它们)。没有 = 云端没配 / 没登录 / 老引擎。 */
+  translateModels?: Array<{ id: string; name: string; provider?: string; apiModelId?: string | null }>
   /** 引擎的缺省上下文上限(272k):自动识别出的窗口超过它就封顶,本机覆盖才开更大。 */
   contextWindowCap?: number
   /** 该引擎能不能写本机模型覆盖(PUT /agent/models/overrides 同一道 hostExec 门)。false / 缺省 = 不露「上下文上限」。 */
@@ -1204,6 +1206,8 @@ export interface StoredDesktopConfig extends TanguDesktopConfig {
   backgroundModelId?: string
   /** 辅助模型 · 图像识别:主模型无原生视觉时的看图兜底 + 非聊天识图;空=跟随 app 级槽。 */
   visionModelId?: string
+  /** 辅助模型 · 翻译:笔记里的「翻译」与插件 ctx.tangu.translate 用;空=跟聊天当前模型。 */
+  translateModelId?: string
   /** 上次用的审批档 / 思考档:**新会话据此起步**(模型走 modelId,已是全局键)。
    *  在任意会话里改这三样都会写回这里 —— 用户的口径是「换过一次就一直是它」,不是每建一个会话重设一次。 */
   lastApprovalMode?: 'readonly' | 'auto-edit' | 'full-auto' | 'custom'

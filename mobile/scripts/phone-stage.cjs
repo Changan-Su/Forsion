@@ -656,22 +656,85 @@ const SCENES = {
     await seedInbox(page)
     await stage.space(page, 'inbox')
     const ROW = `${LIST} .t2sw-plug-item .t2s-srow`
-    const subs = await texts(page, `${ROW} .t2sw-plug-sub`)
-    const sub = await rect(page, `${ROW} .t2sw-plug-sub`)
+    const st = await stage.state(page)
+    const desk = await page.evaluate((q) => ['.t2sw-plug-toolbar', '.t2sw-plug-filterbar', '.t2sw-plug-row-menu'].filter((c) => document.querySelector(`${q} ${c}`)), LIST)
+    const chips = await texts(page, `${LIST} .pl-chips > button`)
+    const row = await rect(page, ROW)
+    const lead = await rect(page, `${ROW} > .t2s-lead`)
+    const subs = await texts(page, `${ROW} .t2s-srow-sub`)
+    const sub = await rect(page, `${ROW} .t2s-srow-sub`)
     const title = await rect(page, `${ROW} .t2s-srow-title`)
-    const time = await rect(page, `${ROW} .t2s-count`)
-    const more = await rect(page, `${LIST} .t2sw-plug-item .t2sw-plug-row-menu`)
+    const time = await rect(page, `${ROW} .t2s-srow-time`)
     const long = await rect(page, `${ROW} .t2s-srow-title`, 4)
-    const longTime = await rect(page, `${ROW} .t2s-count`, 4)
-    const lead = await page.evaluate((q) => !!document.querySelector(`${q} .t2s-lead svg`), ROW)
-    const unread = await page.evaluate((q) => [...document.querySelectorAll(q)].map((el) => el.classList.contains('is-unread')), ROW)
+    const longTime = await rect(page, `${ROW} .t2s-srow-time`, 4)
+    const icon = await page.evaluate((q) => !!document.querySelector(`${q} > .t2s-lead svg`), ROW)
+    const unread = await page.evaluate((q) => [...document.querySelectorAll(q)].map((el) => [el.classList.contains('is-unread'), getComputedStyle(el.querySelector('.t2s-srow-title')).fontWeight].join(':')), ROW)
+    const fab = await rect(page, `${LIST} .pl-fab`)
+    const fabName = await page.evaluate((q) => document.querySelector(q)?.getAttribute('aria-label') || '', `${LIST} .pl-fab`)
     return [
-      ['the inbox opens on its list: five rows, each led by who sent it', (await stage.nav(page)) === 'list' && subs.length === 5 && lead, `nav=${await stage.nav(page)} rows=${subs.length} lead=${lead}`],
-      ['second line: sender and the first sentence, on one line', subs[0] === 'Forsion · 这一版把收件箱翻新了一遍，列表里能直接看到正文的第一句。' && !!sub && sub.h < 30, `«${subs[0]}» ${JSON.stringify(sub)}`],
-      ['the time sits on the first line; the second line runs the row\'s full width under it (not cut at the time\'s column)', !!sub && !!time && !!title && time.y < sub.y && near(sub.right, time.right) && sub.w > title.w + 40, JSON.stringify({ sub, time, title })],
-      ['the row\'s own menu button is clear of the text', !!more && !!sub && more.x >= sub.right, JSON.stringify({ more, subRight: sub?.right })],
+      ['the inbox opens on a phone list: no toolbar, no filter menu, no row buttons; search is on the capsule', (await stage.nav(page)) === 'list' && !desk.length && !!st.search, `nav=${await stage.nav(page)} desktop parts=${desk.join(',') || 'none'} search=${st.search}`],
+      ['its categories are chips', chips.join('|') === '全部|未读|Forsion|已归档', chips.join('|')],
+      ['rows are 68 dp on a 44 dp icon block, led by who sent it', subs.length === 5 && !!row && near(row.h, 68) && !!lead && near(lead.w, 44) && near(lead.h, 44) && icon, JSON.stringify({ rows: subs.length, row: row?.h, lead: lead && [lead.w, lead.h], icon })],
+      ['second line: sender and the first sentence, on one line', subs[0] === 'Forsion · 这一版把收件箱翻新了一遍，列表里能直接看到正文的第一句。' && !!sub && sub.h < 24, `«${subs[0]}» ${JSON.stringify(sub)}`],
+      ['the time sits on the title\'s line; the second line runs the full width under it', !!sub && !!time && !!title && time.y < sub.y && near(sub.right, time.right) && sub.w > title.w + 40, JSON.stringify({ sub, time, title })],
       ['a title too long for the line is cut before the time', !!long && !!longTime && long.right <= longTime.x, JSON.stringify({ long, longTime })],
-      ['unread rows are marked, read ones are not', unread.join() === 'true,true,false,false,false', unread.join()],
+      ['unread rows carry a heavier title, read ones do not', unread.join() === 'true:650,true:650,false:500,false:500,false:500', unread.join()],
+      ['the source\'s usual action is the main button: 58 dp, right 16, clear of the dock', !!fab && fabName === '拉取新消息' && near(fab.w, 58) && near(fab.h, 58) && near(SCREEN.width - fab.right, 16) && fab.bottom <= DOCK_TOP - 6, `${fabName} ${JSON.stringify(fab)}`],
+    ]
+  },
+  'inbox-swipe': async (page) => {
+    // the gesture itself is the browser's horizontal scroll: here it is scrolled, then the buttons are used
+    const ROW = `${LIST} .t2sw-plug-item .t2s-srow`
+    const sw = `${LIST} .t2sw-plug-item .pl-swipe`
+    await page.evaluate((q) => { const el = document.querySelectorAll(q)[1]; el.scrollLeft = el.scrollWidth }, sw)
+    await page.waitForTimeout(350)
+    const acts = await page.evaluate((q) => [...document.querySelectorAll(q)[1].querySelectorAll('.pl-swipe-act')].map((b) => { const r = b.getBoundingClientRect(); return { id: b.dataset.act, name: b.getAttribute('aria-label'), x: r.left, right: r.right, w: r.width, h: r.height, text: b.textContent.trim(), svg: !!b.querySelector('svg'), danger: b.classList.contains('danger') } }), sw)
+    await page.screenshot({ path: path.join(OUT, `inbox-swipe-open${DARK ? '-dark' : ''}.png`) })
+    await page.locator(`${sw} >> nth=1`).locator('[data-act="read"]').tap()
+    await page.waitForTimeout(500)
+    const unread = await page.evaluate((q) => [...document.querySelectorAll(q)].map((el) => el.classList.contains('is-unread')), ROW)
+    const closed = await page.evaluate((q) => [...document.querySelectorAll(q)].every((el) => el.scrollLeft < 2), sw)
+    await chip(page, 'g:unread')
+    const onlyUnread = await texts(page, `${ROW} .t2s-srow-title`)
+    await chip(page, '__all')
+    // archive the last one: it leaves the list and turns up under its own chip
+    await page.evaluate((q) => { const el = document.querySelectorAll(q)[4]; el.scrollLeft = el.scrollWidth }, sw)
+    await page.waitForTimeout(350)
+    await page.locator(`${sw} >> nth=4`).locator('[data-act="archive"]').tap()
+    await page.waitForTimeout(600)
+    const left = (await texts(page, `${ROW} .t2s-srow-title`)).length
+    await chip(page, 'g:archived')
+    const archived = await texts(page, `${ROW} .t2s-srow-title`)
+    await chip(page, '__all')
+    return [
+      ['a row slides left onto mark read / archive / delete, all on screen', acts.map((a) => a.id).join(',') === 'read,archive,delete' && acts.every((a) => a.x >= 0 && a.right <= SCREEN.width), JSON.stringify(acts)],
+      ['the actions are round 44 dp buttons with an icon only, each named for a screen reader; delete is the warning one', acts.every((a) => near(a.w, 44) && near(a.h, 44) && a.svg && !a.text && !!a.name) && acts.map((a) => a.name).join('|') === '标为已读|归档|删除' && acts[2]?.danger && !acts[0]?.danger, JSON.stringify(acts.map((a) => [a.name, a.w, a.danger]))],
+      ['mark read: the row loses its unread mark, the tray closes, the unread chip lists one less', unread.join() === 'true,false,false,false,false' && closed && onlyUnread.join('|') === '2.13 更新了什么', `${unread.join()} closed=${closed} unread chip: ${onlyUnread.join('|')}`],
+      ['archive: the row leaves the list and is found under the archived chip', left === 4 && archived.length === 1 && archived[0].startsWith('A long English'), `left=${left} archived=${archived.join('|')}`],
+    ]
+  },
+  'inbox-search': async (page) => {
+    const ROW = `${LIST} .t2sw-plug-item .t2s-srow`
+    const before = !!(await rect(page, `${LIST} .t2sw-plug-toolbar`))
+    await stage.action(page, 'search')
+    const field = await rect(page, `${LIST} .t2sw-plug-toolbar .t2s-search`)
+    const focused = await page.evaluate(() => document.activeElement?.matches('.t2sw-plug-toolbar .t2s-search input') ?? false)
+    await page.keyboard.type('会员')
+    await page.waitForTimeout(400)
+    const hits = await texts(page, `${ROW} .t2s-srow-title`)
+    await page.screenshot({ path: path.join(OUT, `inbox-search-open${DARK ? '-dark' : ''}.png`) })
+    // the keyboard put away (the field loses the caret), then the search button once more: the caret is back
+    await page.evaluate(() => document.activeElement?.blur())
+    await stage.action(page, 'search')
+    const again = await page.evaluate(() => document.activeElement?.matches('.t2sw-plug-toolbar .t2s-search input') ?? false)
+    await page.locator(`${LIST} .t2sw-plug-toolbar .t2s-search button`).tap()
+    await page.waitForTimeout(400)
+    const after = !!(await rect(page, `${LIST} .t2sw-plug-toolbar`))
+    const back = (await texts(page, `${ROW} .t2s-srow-title`)).length
+    return [
+      ['the capsule\'s search button brings a search line up with the caret in it; it filters the list in place', !before && !!field && field.x >= 12 && field.right <= SCREEN.width - 12 && focused && hits.join('|') === '会员即将到期', JSON.stringify({ before, field, focused, hits })],
+      ['the search button a second time puts the caret back in the field', again, `focused=${again}`],
+      ['its cross clears the text and takes the line away again', !after && back === 4, `line=${after} rows=${back}`],
     ]
   },
   'inbox-open': async (page) => {
@@ -739,6 +802,35 @@ const SCENES = {
     await page.waitForTimeout(300)
     const back = await page.evaluate(() => getComputedStyle(document.querySelector('.mb-shell')).getPropertyValue('--mb-top-extra').trim())
     rows.push(['the call over: the pages take the room back', !(await rect(page, '.vc-bar')) && (back === '' || back === '0px'), `--mb-top-extra «${back}»`])
+    return rows
+  },
+  // The notification stack is mounted outside the shell (MobileRoot's last child): none of the shell's room-keeping
+  // reaches it. The capsules and the dock are native — drawn over the page — so a card under one of them is cut off.
+  'notify-card': async (page) => {
+    if ((await stage.nav(page)) === 'detail') await stage.action(page, 'left')
+    await page.evaluate(async (url) => {
+      const { useNotifications } = await import(/* @vite-ignore */ url)
+      useNotifications.getState().dismissAll()
+      useNotifications.getState().notify({ force: true, sticky: true, title: 'Forsion', text: '2.13.3 已经可以更新了', action: { label: '查看', run() {} } })
+    }, moduleUrl('../desktop/frontend/src/stores/notificationStore.ts'))
+    const plates = LAYOUT.plates.map((p) => ({ ...p, right: p.x + p.w, bottom: p.y + p.h }))
+    const clear = (c) => !!c && c.x >= 0 && c.right <= SCREEN.width && plates.every((p) => c.bottom <= p.y || c.y >= p.bottom || c.right <= p.x || c.x >= p.right)
+    const card = async () => { await page.waitForTimeout(700); const c = await rect(page, '.ntf-wrap .ntf'); return c && Object.fromEntries(Object.entries(c).map(([k, v]) => [k, Math.round(v * 10) / 10])) }
+    const rows = []
+    // the calendar keeps its cards at the bottom on a desktop — on the phone that is where the dock is
+    await stage.space(page, 'calendar')
+    const cal = await card()
+    rows.push(['the calendar: the card is at the top here too, clear of the capsules and of the dock', clear(cal) && cal.bottom < SCREEN.height / 2, JSON.stringify(cal)])
+    await page.screenshot({ path: path.join(OUT, `notify-calendar${DARK ? '-dark' : ''}.png`) })
+    await stage.space(page, 'tangu'); await chip(page, 'all')
+    await callBar(page, true)
+    const bar = await rect(page, '.vc-bar')
+    const during = await card()
+    rows.push(['during a call: the card is below the call bar (its hang-up key stays in reach)', !!bar && !!during && during.y >= bar.bottom, JSON.stringify({ card: during, barBottom: bar && Math.round(bar.bottom) })])
+    await callBar(page, false)
+    const zoom = await page.evaluate(() => Number(getComputedStyle(document.body).zoom) || 1)
+    const c = await card()
+    rows.push(['a notification: the card starts right below the capsule row, inside the screen', clear(c) && near(c.y, LAYOUT.top + 6 * zoom, 2), JSON.stringify({ card: c, capsulesEnd: LAYOUT.top })])
     return rows
   },
 }

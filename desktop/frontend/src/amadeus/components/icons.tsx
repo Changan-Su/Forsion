@@ -3,7 +3,7 @@
  *  刻意不装 npm 依赖:渲染层三端共享(desktop/web/mobile),本地文件零外部解析。
  *  增补图标照原样从 @blocksuite/icons 摘录,保持 currentColor 不带死色。 */
 import type { ComponentType, ReactElement, ReactNode, SVGProps } from 'react'
-import { Bot, Cloud, Workflow, type LucideIcon, type LucideProps } from 'lucide-react'
+import { Archive, ArchiveRestore, Bot, Cloud, Mail, MailOpen, RefreshCw, Trash2, Workflow, type LucideIcon, type LucideProps } from 'lucide-react'
 
 const I = (children: ReactElement) => (props: SVGProps<SVGSVGElement>) => (
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="1em" height="1em" fill="none" aria-hidden {...props}>
@@ -138,6 +138,13 @@ export const PLUGIN_ICONS: Record<string, ComponentType<SVGProps<SVGSVGElement>>
   cloud: L(Cloud),
   workflow: L(Workflow),
   agent: L(Bot),
+  // 动作图标(ListAction.icon,2026-10-13):手机上一行的操作是只有图标的圆钮,动作得自己带图标
+  mail: L(Mail),
+  'mail-open': L(MailOpen),
+  archive: L(Archive),
+  unarchive: L(ArchiveRestore),
+  trash: L(Trash2),
+  refresh: L(RefreshCw),
 }
 
 /** 词表键的形状。**未命中词表但长成这样**的字符串 = 插件在叫一个本宿主还不认识的名字。 */

@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { useInbox, senderOf, type InboxMessage } from '../../stores/inboxStore'
 import { inboxListSource as src, inboxSnippet } from './inboxListSource'
+import { PLUGIN_ICONS } from '@amadeus/components/icons'
 
 const msg = (id: string, extra: Partial<InboxMessage> = {}): InboxMessage => ({
   id, title: `标题${id}`, body: '', sender_kind: 'agent', sender_id: 'muse', origin_broadcast_id: null,
@@ -85,6 +86,15 @@ describe('收件箱列表源(统一工作区)', () => {
     const t0 = performance.now()
     for (let i = 0; i < 200; i++) inboxSnippet('['.repeat(100_000))
     expect(performance.now() - t0).toBeLessThan(500) // 只看开头:恶意长行不拖慢列表
+  })
+
+  it('条目菜单与源动作带图标(手机上左滑是只有图标的圆钮):成对的动作各用各的,词表里都有', () => {
+    const icons = (key: string, group?: string): string => src.itemMenu!(src.items(group ? { group } : undefined).find((i) => i.key === key)!).map((a) => `${a.id}:${a.icon}`).join(' ')
+    expect(icons('1')).toBe('read:mail-open archive:archive delete:trash') // 未读 → 标为已读
+    expect(icons('2')).toBe('read:mail archive:archive delete:trash') // 已读 → 标为未读
+    expect(icons('4', 'archived')).toBe('read:mail archive:unarchive delete:trash')
+    expect(src.actions!.find((a) => a.primary)!.icon).toBe('refresh')
+    for (const name of ['mail', 'mail-open', 'archive', 'unarchive', 'trash', 'refresh']) expect(PLUGIN_ICONS[name], name).toBeTruthy()
   })
 
   it('已归档列表的条目菜单保留取消归档入口', () => {
