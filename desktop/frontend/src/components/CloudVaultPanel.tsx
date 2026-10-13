@@ -7,6 +7,7 @@ import React, { useEffect, useState } from 'react'
 import { X, Copy, Trash2, FolderOpen, Check, Users, Globe2 } from 'lucide-react'
 import { useApp } from '../stores/appStore'
 import { openNote } from '../amadeusNav'
+import { newTabOf } from '../views/itemSelect'
 import { registerMessages, useI18n } from '../i18n'
 
 registerMessages({
@@ -73,9 +74,9 @@ export function CloudVaultPanel({ onClose }: { onClose: () => void }): React.Rea
         {shared.length === 0 && <div className="amxc-hint">{t('cloudvault.sharedEmpty')}</div>}
         {shared.map((s) => (
           <button key={`${s.vaultId}:${s.path}`} className="amxc-row"
-            onClick={() => {
+            onClick={(e) => {
               onClose()
-              if (s.vaultId === activeId) void openNote(s.path)
+              if (s.vaultId === activeId) void openNote(s.path, newTabOf(e))
               else collab.switchVault(s.vaultId) // 切库后树只显示共享范围(服务端过滤)
             }}>
             <span className="amxc-row-name">{s.title}</span>

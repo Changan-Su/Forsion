@@ -60,6 +60,7 @@ import { usePageStore, useScopedPageStore } from '../../store/pageStore'
 import { amadeus } from '../../api'
 import { Settings2, ExternalLink, Plus, Paperclip, ArrowRightLeft, ChevronRight, Download } from 'lucide-react'
 import { openDb } from '../../../amadeusNav'
+import { newTabOf } from '../../../views/itemSelect'
 import { registerMessages, useI18n } from '../../../i18n'
 import { useCalendarConfig, memberOf } from '../../store/calendarConfigStore'
 import { MemberColPicker } from '../../../views/calendar/MemberColPicker'
@@ -1446,7 +1447,7 @@ function DbTable({ dbRef, db: dbProp, pagePath, initialView, onViewChange, memor
         <TableSearch value={q} onChange={setQ} />
         {/* 内存源没有 dbPath 可开;插件面板里这颗按钮也只会把用户弹去别处 */}
         {!memory && !hideHead && (
-          <button className="amx-db-iconbtn" onClick={() => openDb(dbPath)} title={t('dbembed.openAsPage')} aria-label="open as page"><ExternalLink size={15} /></button>
+          <button className="amx-db-iconbtn" onClick={(e) => openDb(dbPath, newTabOf(e))} title={t('dbembed.openAsPage')} aria-label="open as page"><ExternalLink size={15} /></button>
         )}
         {/* 导出 CSV:导的是**当前视图看到的那张表**(visCols × 已筛选/排序的 rows),不是整表。
             移动端 csvExportMode()='off' → 整个按钮不渲染(WebView 里 `<a download>` 不落盘,留个死按钮更糟)。 */}
@@ -1974,14 +1975,14 @@ function DbTable({ dbRef, db: dbProp, pagePath, initialView, onViewChange, memor
 
 const CELL_WIKI_RE = /(\[\[[^\]\n]+\]\])/
 /** `[[双链]]` 富文本片段(展示态与只读态共用一份;点击冒泡挡在按钮上,免得连带触发外层的进编辑/开行)。 */
-const wikiSegments = (s: string, onOpen: (inner: string) => void): ReactNode[] =>
+const wikiSegments = (s: string, onOpen: (inner: string, nt?: { newTab: true }) => void): ReactNode[] =>
   s.split(CELL_WIKI_RE).map((seg, i) => {
     const m = /^\[\[([^\]\n]+)\]\]$/.exec(seg)
     if (!m) return <span key={i}>{seg}</span>
     const inner = m[1]
     const label = (inner.split('|')[1] ?? inner.split('|')[0]).trim()
     return (
-      <button key={i} className="amx-db-wikilink" onClick={(e) => { e.stopPropagation(); onOpen(inner) }} title={inner}>
+      <button key={i} className="amx-db-wikilink" onClick={(e) => { e.stopPropagation(); onOpen(inner, newTabOf(e)) }} title={inner}>
         {label}
       </button>
     )
@@ -1989,12 +1990,12 @@ const wikiSegments = (s: string, onOpen: (inner: string) => void): ReactNode[] =
 /** `[[目标]]` 点击:linkTarget 剥 |别名 与 #锚点(与 Markdown 块同语义);已存在页面优先
  *  (v2.1 这类带点号页名不被误判为附件),未命中且带非 .md/.db 扩展名才当附件系统打开
  *  (.db 落给 openWikiLink 的文件分支 → 应用内 db tab,不再被系统程序打开原始 JSON)。 */
-const openCellLink = (ps: ReturnType<typeof useScopedPageStore>, pagePath: string, raw: string): void => {
+const openCellLink = (ps: ReturnType<typeof useScopedPageStore>, pagePath: string, raw: string, nt?: { newTab: true }): void => {
   const target = linkTarget(raw)
   const st = ps.getState()
-  if (resolvePageName(target, st.pages, pagePath)) return void st.openWikiLink(target.replace(/\.md$/i, ''), pagePath)
+  if (resolvePageName(target, st.pages, pagePath)) return void st.openWikiLink(target.replace(/\.md$/i, ''), pagePath, nt)
   if (/\.[a-z0-9]{1,8}$/i.test(target) && !/\.(md|db)$/i.test(target)) return void amadeus.openAttachment(pagePath, target)
-  st.openWikiLink(target.replace(/\.md$/i, ''), pagePath) // 未解析 → 询问创建(源 = 本 .db 所在处)
+  st.openWikiLink(target.replace(/\.md$/i, ''), pagePath, nt) // 未解析 → 询问创建(源 = 本 .db 所在处)
 }
 /** 光标处一对**未闭合**的 [[(中文输入法打出的【【同收):补全触发判据 + 选中后被替换的那一段。 */
 const WIKI_OPEN_RE = /(?:\[\[|【【)([^[\]【】\n]*)$/
@@ -2112,7 +2113,7 @@ function ValueCell({ row, col, pagePath, setCell }: {
         onKeyDown={keyDown}
       /> : <div className="amx-db-value-display" onClick={() => begin()} title={t('dbembed.clickToEdit')}>
         <span className="amx-db-value-text">
-          {shown ? (isText ? wikiSegments(shown, (raw) => openCellLink(ps, pagePath, raw)) : shown) : <span className="amx-db-blank">{t('dbembed.blank')}</span>}
+          {shown ? (isText ? wikiSegments(shown, (raw, nt) => openCellLink(ps, pagePath, raw, nt)) : shown) : <span className="amx-db-blank">{t('dbembed.blank')}</span>}
         </span>
         {col.type === 'url' && /^https?:\/\//i.test(textValue) && <a
           className="amx-db-value-link" href={textValue} target="_blank" rel="noreferrer"
@@ -2311,7 +2312,7 @@ function ReadOnlyCell({ row, col, env, meta, pagePath }: {
     }
     const sV = v as string
     // text:富文本展示照留(链接可点),只是没有编辑入口。
-    if (CELL_WIKI_RE.test(sV)) return <span className="amx-db-richtext">{wikiSegments(sV, (r) => openCellLink(ps, pagePath, r))}</span>
+    if (CELL_WIKI_RE.test(sV)) return <span className="amx-db-richtext">{wikiSegments(sV, (r, nt) => openCellLink(ps, pagePath, r, nt))}</span>
     return sV || blank
   })()
 
@@ -2399,7 +2400,7 @@ function RowLinkCell({ row, col, env, setCell }: {
                 : <span key={id} className="amx-db-blank">{tgt ? t('dbembed.lost') : '…'}</span>
             })}
         </button>
-        <button className="amx-db-edit" onClick={() => openDb(col.refDb!)} title={t('dbembed.openTargetDb')} aria-label="open target db">↗</button>
+        <button className="amx-db-edit" onClick={(e) => openDb(col.refDb!, newTabOf(e))} title={t('dbembed.openTargetDb')} aria-label="open target db">↗</button>
       </div>
       {pos && tgt && (
         <RowLinkPicker
@@ -2467,7 +2468,7 @@ function BackLinkCell({ row, col, env, setCell }: {
                 : <span key={id} className="amx-db-blank">{tgt ? t('dbembed.lost') : '…'}</span>
             })}
         </button>
-        <button className="amx-db-edit" onClick={() => openDb(col.refDb!)} title={t('dbembed.openTargetDb')} aria-label="open target db">↗</button>
+        <button className="amx-db-edit" onClick={(e) => openDb(col.refDb!, newTabOf(e))} title={t('dbembed.openTargetDb')} aria-label="open target db">↗</button>
       </div>
       {pos && tgt && (
         <RowLinkPicker

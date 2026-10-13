@@ -8,6 +8,7 @@ import { decodeCharRefs, parseWikiLinks, resolvePageName } from '@amadeus-shared
 import { stripFrontmatter } from '@amadeus-shared/compiler'
 import { resolveFileName } from '@amadeus/lib/vaultFiles'
 import { openNote, revealTextWhenReady } from './amadeusNav'
+import { newTabOf } from './views/itemSelect'
 import { create } from 'zustand'
 import { useAmadeusPrefs } from './amadeusPrefs'
 import { askString } from '@amadeus/components/askString'
@@ -65,9 +66,9 @@ export function AmadeusSearchView() {
 
   // 命中 → 打开笔记 → 滚到首个含关键词的块并短暂高亮。
   // SearchHit.line 是对 strip 后文本的行号(不可靠),按块内容匹配定位更稳。
-  const choose = (h: SearchHit): void => {
+  const choose = (h: SearchHit, nt?: { newTab: true }): void => {
     const q = query.trim().toLowerCase()
-    void openNote(h.path).then(() => {
+    void openNote(h.path, nt).then(() => {
       if (!q) return
       // 与索引同口径解字符引用:`**注意：**&#x540E;面` 能被「后面」搜到,就也得能滚到。
       const hit = Object.values(ps().blocks).find((b) => decodeCharRefs(b.content).toLowerCase().includes(q))
@@ -119,7 +120,7 @@ export function AmadeusSearchView() {
       ) : (
         <div className="amx-list">
           {hits.map((h) => (
-            <button key={h.path} className="amx-list-item" onClick={() => choose(h)} title={h.path}>
+            <button key={h.path} className="amx-list-item" onClick={(e) => choose(h, newTabOf(e))} title={h.path}>
               {h.title}
               {h.snippet && <span className="amx-backlink-snippet amx-search-snippet">{highlight(h.snippet, query.trim())}</span>}
             </button>
@@ -212,7 +213,7 @@ export function AmadeusTagsView() {
                   key={p}
                   className="amx-list-item amx-tag-page"
                   // 打开后定位到这个标签第一次出现的地方(评审 G4-01「标签面板同」;标签只在 frontmatter 里时就停在文首)。
-                  onClick={() => void openNote(p).then(() => revealTextWhenReady(p, [`#${tc.tag}`], { tag: true }))}
+                  onClick={(e) => void openNote(p, newTabOf(e)).then(() => revealTextWhenReady(p, [`#${tc.tag}`], { tag: true }))}
                   title={p}
                 >
                   {baseName(p)}
@@ -504,11 +505,11 @@ export function AmadeusLocalGraphView() {
                   onPointerDown={onNodePointerDown(i)}
                   onPointerEnter={() => setHover(i)}
                   onPointerLeave={() => setHover(null)}
-                  onClick={() => {
+                  onClick={(e) => {
                     if (movedRef.current || n.center) return
                     // ghost = 未解析链接:进与编辑器同款的「是否创建」确认流(源 = 中心笔记)。
                     if (n.ghost) ps().openWikiLink(n.path)
-                    else void openNote(n.path)
+                    else void openNote(n.path, newTabOf(e))
                   }}
                 >
                   <circle cx={n.x} cy={n.y} r={n.center ? 8 : 5.5} />

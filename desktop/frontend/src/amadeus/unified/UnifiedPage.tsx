@@ -3408,7 +3408,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
         </div>
       <LinkHoverCard
         getView={() => layer.getView()}
-        onOpenNote={(href) => void scoped.getState().openWikiLink(noteLinkTarget(href, path, scoped.getState().pages), path)}
+        onOpenNote={(href, o) => void scoped.getState().openWikiLink(noteLinkTarget(href, path, scoped.getState().pages), path, o)}
       />
       {lightbox && (
         <OverlayPortal>

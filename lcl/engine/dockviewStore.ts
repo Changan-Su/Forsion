@@ -15,7 +15,8 @@ import { alignWorkspaceRegions, captureRegionTree, restoreRegionProportions, typ
 import type { DockviewApi, IDockviewPanel } from 'dockview-react'
 import type { DockSide, Leaf, SidebarDefaults, ViewLocation } from './types'
 import { getView } from './viewRegistry'
-import { identitySig, label } from './types'
+import { identitySig, label, panelFilePath } from './types'
+import { settleReplayedAnimations } from './keepScroll'
 import { computeSideWidth, computeBottomHeight, computeTransientSideWidth } from './sideWidth'
 import { shouldRecordSideWidth } from './sideCapture'
 import { locOf, type DropTarget } from './dropModel'
@@ -96,14 +97,7 @@ function preserveAcrossRestructure(): () => void {
       if (s.el.scrollLeft !== s.left) s.el.scrollLeft = s.left
     }
   }
-  const settleAnimations = (): void => {
-    const el = root as Element & { getAnimations?: (o?: { subtree?: boolean }) => Animation[] }
-    for (const a of el.getAnimations?.({ subtree: true }) ?? []) {
-      if (a.effect?.getTiming().iterations === Infinity) continue // 转圈之类,别掐
-      if (Number(a.currentTime ?? 0) > 80) continue               // 不是这一帧刚重播的,放过
-      try { a.finish() } catch { /* 有些动画不可 finish */ }
-    }
-  }
+  const settleAnimations = (): void => settleReplayedAnimations(root)
   return () => {
     restoreScroll()   // 同步先写一次
     // 重播/回流发生在重挂之后的下一帧,故再补一帧:动画那时才起头,滚动位置那时才写得进去。
@@ -823,8 +817,8 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
         closable: def?.closable !== false && !isLastPinned(pins, refs, 'main', type),
         sessionId: typeof params.sessionId === 'string' ? params.sessionId : undefined,
         followActive: params.followActive !== false,
-        // notePath = Amadeus 编辑器;path = 工作区文件预览(wsfile)。两者都是「这个 tab 是哪个文件」。
-        filePath: typeof params.notePath === 'string' ? params.notePath : typeof params.path === 'string' ? params.path : undefined,
+        // 「这个 tab 是哪个文件」:notePath = Amadeus 编辑器;path = 工作区文件预览(wsfile);PDF / 图片等见 panelFilePath。
+        filePath: panelFilePath(params),
         front: (p as { group?: { activePanel?: { id?: string } } }).group?.activePanel?.id === p.id,
         sig: identitySig(params),
       }

@@ -10,6 +10,7 @@ import { amadeus } from '@amadeus/api'
 import { pageKey } from '@amadeus-shared/links'
 import type { BacklinkRef, MentionHit, UnlinkedMention } from '@amadeus-shared/ipc'
 import { openNote } from './amadeusNav'
+import { newTabOf } from './views/itemSelect'
 import { registerMessages, useI18n, translate } from './i18n'
 
 registerMessages({
@@ -89,11 +90,11 @@ export function AmadeusBacklinksView() {
             <div className="amx-list">
               {refs.map((r) => (
                 <div key={r.path} className="amx-backlink-group">
-                  <button className="amx-list-item amx-backlink-src" onClick={() => void openNote(r.path)} title={r.path}>
+                  <button className="amx-list-item amx-backlink-src" onClick={(e) => void openNote(r.path, newTabOf(e))} title={r.path}>
                     {r.title}
                   </button>
                   {(r.hits ?? (r.snippet ? [{ line: 1, text: r.snippet }] : [])).map((h, i) => (
-                    <button key={`${h.line}:${i}`} className="amx-list-item amx-backlink-hit" onClick={() => void openNote(r.path)}>
+                    <button key={`${h.line}:${i}`} className="amx-list-item amx-backlink-hit" onClick={(e) => void openNote(r.path, newTabOf(e))}>
                       {h.line === 0 && <span className="amx-backlink-prop">{t('amxbl.prop')}</span>}
                       {h.text}
                     </button>
@@ -114,12 +115,12 @@ export function AmadeusBacklinksView() {
                 <div className="amx-list">
                   {unlinked.map((m) => (
                     <div key={m.path} className="amx-backlink-group">
-                      <button className="amx-list-item amx-backlink-src" onClick={() => void openNote(m.path)} title={m.path}>
+                      <button className="amx-list-item amx-backlink-src" onClick={(e) => void openNote(m.path, newTabOf(e))} title={m.path}>
                         {m.title}
                       </button>
                       {m.hits.map((h, i) => (
                         <div key={`${h.line}:${i}`} className="amx-backlink-hit amx-mention">
-                          <button className="amx-list-item amx-mention-text" onClick={() => void openNote(m.path)}>
+                          <button className="amx-list-item amx-mention-text" onClick={(e) => void openNote(m.path, newTabOf(e))}>
                             <MentionText h={h} />
                           </button>
                           {amadeus.linkMention && h.col !== undefined && h.match && (

@@ -62,18 +62,18 @@ async function focusBodyWhenReady(path: string): Promise<void> {
 async function openNoteInner(path: string, opts?: { newTab?: boolean; reuseKey?: string; activate?: boolean }): Promise<void> {
   // 画板文件绝不进笔记编辑器(compiler 会把插件载荷改写成块 = 在 Obsidian 那边毁档)→ 一律改道白板视图。
   if (isDrawingPath(path)) {
-    openDrawing(path)
+    openDrawing(path, { newTab: opts?.newTab })
     return
   }
   // 仪表盘改道网格视图。它**是**一份合法笔记(掉进编辑器也不会坏文件,布局键走 fmExtra 原样保留),
   // 所以这里只是「打开对的那个视图」,不是毁档防线。
   if (isDashboardPath(path)) {
-    openDashboard(path)
+    openDashboard(path, { newTab: opts?.newTab })
     return
   }
   // 插件声明的文件类型同理:磁盘是 .md 但绝不进笔记编辑器 → 改道其专属文件类型视图。
   if (matchFileType(path)) {
-    openFile(path)
+    openFile(path, { newTab: opts?.newTab })
     return
   }
   actThrottled('view.open', { f: path }, `view.open|${path}`)
@@ -144,8 +144,8 @@ async function openNoteInner(path: string, opts?: { newTab?: boolean; reuseKey?:
  *  见 shared 的 findHeadingIndex;找不到就只开笔记不动(与大纲跳转同语义:宁可不动,
  *  不静默跳到别的标题)。就绪竞态:openNote 等到实例挂上,但 doc 可能还空着
  *  (unifiedHeadings 给空)—— 重试几拍再放弃。v3 渲染的笔记没有 unified 实例,同样自然放弃。 */
-export async function openNoteAtHeading(path: string, heading: string): Promise<void> {
-  await openNote(path)
+export async function openNoteAtHeading(path: string, heading: string, opts?: { newTab?: boolean }): Promise<void> {
+  await openNote(path, opts)
   await revealHeadingWhenReady(path, heading)
 }
 
@@ -179,8 +179,8 @@ export async function revealHeadingWhenReady(path: string, heading: string): Pro
  *  ⚠️ 只在 v4 渲染的笔记上有效 —— `^id` 是外来格式,来源只有从 Obsidian 导入的素文件,
  *     而素文件恒走 UnifiedPage;v3 老笔记按构造不可能带 `^id`,unifiedRevealBlock 返 false 后
  *     自然停在「只开了笔记」,与本轮之前的行为一致。 */
-export async function openNoteAtBlock(path: string, blockId: string): Promise<void> {
-  await openNote(path)
+export async function openNoteAtBlock(path: string, blockId: string, opts?: { newTab?: boolean }): Promise<void> {
+  await openNote(path, opts)
   await revealBlockWhenReady(path, blockId)
 }
 

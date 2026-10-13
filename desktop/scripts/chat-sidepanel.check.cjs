@@ -6,6 +6,7 @@
  *  4-5  Amadeus 右栏默认 = 对话视图(展开右栏,活动 tab 必须是对话,且主区仍是编辑器)
  *  6-7  侧栏对话默认引用**主区当前打开的文件**(开 Alpha 再换 Beta:引用必须跟过去,不许残留)
  *  7b   左栏树高亮同样跟到 Beta(编辑器没拿过焦点时,门面页作用域曾停在启动那篇)
+ *  7c   主区换成一份 PDF,引用同样跟过去(10-13 用户实报;PDF 标签此前不报自己的文件,引用留在上一篇笔记上或干脆没有)
  *  8-10 拖笔记进聊天区 → 「已选择」芯片、不塞草稿、且只挂引用也能发
  *  12-13 侧栏拖宽之后,折叠再展开必须还是那个宽(此前被 pinSides 打回黄金分割)
  *  14   切 Space 时清 stashActive:上个空间停在哪个 tab 不许顶掉下个空间配方的首项
@@ -38,6 +39,7 @@ const fs = require('fs')
 const os = require('os')
 const path = require('path')
 const electron = require('./lib/launch-electron.cjs')
+const { tinyPdf } = require('./lib/tiny-pdf.cjs')
 
 const ROOT = path.join(__dirname, '..')
 const results = []
@@ -51,6 +53,7 @@ function seedVault(home) {
   const vault = path.join(home, 'vault')
   fs.mkdirSync(vault, { recursive: true })
   for (const n of ['Alpha', 'Beta']) fs.writeFileSync(path.join(vault, `${n}.md`), `# ${n}\n\n${n} body\n`)
+  fs.writeFileSync(path.join(vault, 'Gamma.pdf'), tinyPdf(['Gamma page one', 'Gamma page two']))
   fs.mkdirSync(path.join(home, 'userdata-dev'), { recursive: true })
   fs.writeFileSync(path.join(home, 'userdata-dev', 'amadeus-config.dev.json'), JSON.stringify({ lastVault: vault, localVault: vault }))
 }
@@ -538,6 +541,22 @@ async function main() {
   // 作用域曾停在启动时装载的那篇 → 编辑器已是 Beta,高亮还钉在 Alpha(09-22)。
   const hl = await win.evaluate(`Array.from(document.querySelectorAll('.t2s-srow.active')).map((e) => e.textContent.trim())`)
   check('7b 左栏树高亮跟到主区那一篇(编辑器没拿过焦点也一样)', hl.length === 1 && hl[0] === 'Beta', `高亮行=${JSON.stringify(hl)}`)
+  // 7c 主区换成 PDF:引用也要跟过去,而且发给模型的是带库根的绝对路径(同从文件树把它拖进对话)。
+  // 芯片上只显示文件名,路径要到发送时才拼进正文 —— 这里从芯片的 React props 上读 token。
+  await openRow('Gamma')
+  const pdfRef = await readRef()
+  const pdfToken = await win.evaluate(`(() => {
+    const el = document.querySelector('.t2c-refrow .attach-chip')
+    const key = el && Object.keys(el).find((k) => k.startsWith('__reactFiber$'))
+    for (let f = key ? el[key] : null, i = 0; f && i < 6; f = f.return, i++) if (f.memoizedProps?.chip?.token) return f.memoizedProps.chip.token
+    return null
+  })()`)
+  check(
+    '7c 主区换成 PDF → 引用跟到这份 PDF,token 是库内的绝对路径',
+    pdfRef.chips.length === 1 && /^Gamma(\.pdf)?$/.test(pdfRef.chips[0]) && typeof pdfToken === 'string' && pdfToken.includes(path.join(home, 'vault', 'Gamma.pdf')),
+    `Beta 时 ${JSON.stringify(ref.chips)} → 换到 Gamma.pdf 后 ${JSON.stringify(pdfRef.chips)};token=${pdfToken}`,
+  )
+  await openRow('Beta') // 后面的用例都以「主区是 Beta」为前提
 
   // ── 拖引用进聊天区 → 芯片(结构化通道,不再拼文本再解析)────────────────────────────
   // 合成 DragEvent + DataTransfer:HTML5 拖放没法用 mouse.down/move 驱动(浏览器不给合成 drag)。
