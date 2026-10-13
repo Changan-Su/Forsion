@@ -378,9 +378,9 @@ export function installEngine(): void {
   if (window.tangu?.marketList) addRibbonIcon({ id: 'rb-market', side: 'bottom', icon: Store, tooltip: () => app().tr('market.title'), onClick: () => app().openMarket() })
   // 主题锁定明暗时 toggleMode 静默无效 → tooltip 改说明「由主题决定」,悬停即知为何点不动(codex Low-2)。
   addRibbonIcon({ id: 'rb-mode', side: 'bottom', icon: ThemeModeIcon, tooltip: () => useVisualTheme.getState().modeLocked ? app().tr('settings.theme.modeLocked') : app().tr('theme.changeMode'), onClick: () => toggleVisibleMode() })
-  // 单列壳(手机)上它在「⋯」里:那里没有 ⌘K,「命令面板」是键盘上的叫法 → 叫「搜索」,图标也换(打开的是同一个面板)。
-  const phoneShell = UI_MODE === 'mobile' || !!window.tangu?.mobile
-  addRibbonIcon({ id: 'rb-cmd', side: 'bottom', icon: phoneShell ? Search : CommandIcon, tooltip: () => app().tr(phoneShell ? 'command.search' : 'command.palette'), onClick: openCommandPalette })
+  // 单列壳(手机)的「⋯」里也叫「命令面板」(末尾的 ⌘K 由 moreRowLabel 剥掉)。10-05 改叫过「搜索」+ 放大镜:
+  // 排在一串插件命令上面读不出是命令面板,用户自己都没认出来 → 2026-10-13 改回,别再另起名字。
+  addRibbonIcon({ id: 'rb-cmd', side: 'bottom', icon: CommandIcon, tooltip: () => app().tr('command.palette'), onClick: openCommandPalette })
   // 底部常驻(side:'bottom'),无持久顺序时注册序即上下序:明暗/命令 → 设置 → 账号(账号最底)。
   // 用户拖过底部区后 bottomOrder 非空,新注册项按 rankIds 排到区末尾(反馈那条由注册处的一次性迁移兜住)。
   // ⚠️快速查找/语言**刻意不在条上**(2026-08-31):下区是杂物抽屉,八个同色图标一列谁也认不出,
