@@ -167,6 +167,21 @@ function Drawer({ side, docked, showFoot, page }: { side: 'left' | 'right'; dock
   // push 形态容器**恒挂载**(mount 即 open 就没有滑入过渡了);内容首开才挂、之后常驻(保树状态+退场动画)。
   const [warm, setWarm] = useState(visible)
   if (visible && !warm) setWarm(true)
+  // 两级导航的列表面板收起(= 人在主区)时照样渲染着:样式上不翻 visibility / pointer-events(都会继承,翻一次整个列表重算
+  // 一遍样式,见 singleColumn.css 末尾)。它们原来管的三件事改由这里和那条样式分担:读屏跳过它(aria-hidden)、
+  // 键盘焦点不留在也不落进它里面(点条目的那一下焦点就在条目上)、滑出途中不吃点按(样式里的 ::after)。
+  // ponytail: 外接键盘按 Tab 仍会逐个经过这些看不见的条目(每个都当场失焦,不会被回车点到)。要彻底跳过得用 inert,
+  // 而 inert 和那两个属性一样会让整棵子树重算;真有人这么用时,只在检测到实体键盘后挂 inert。
+  const parkedRef = useRef<HTMLDivElement>(null)
+  const parked = !!page && !visible
+  useEffect(() => {
+    const el = parkedRef.current
+    if (!parked || !el) return
+    const drop = (): void => { const a = document.activeElement; if (a instanceof HTMLElement && el.contains(a)) a.blur() }
+    drop()
+    el.addEventListener('focusin', drop)
+    return () => el.removeEventListener('focusin', drop)
+  }, [parked])
   const leaves = side === 'left' ? useWorkspace.getState().leftLeaves : useWorkspace.getState().rightLeaves
   const active = useWorkspace.getState().getActiveSideLeaf(side)
   const def = active ? getView(active.type) : null
@@ -220,7 +235,7 @@ function Drawer({ side, docked, showFoot, page }: { side: 'left' | 'right'; dock
   return (
     // 反向横滑关闭(左抽屉左滑/右抽屉右滑)已并进 Host 的 useDrawerDrag —— 三处 fling 判定
     // (main 呼出 / 抽屉内关 / dim 上关)本来就是同一件事的三个入口,合成一个控制器才有中间态。
-    <div className={`mb-drawer mb-drawer--${side}${visible && alive ? ' open' : ''}`}>
+    <div ref={parkedRef} aria-hidden={parked || undefined} className={`mb-drawer mb-drawer--${side}${visible && alive ? ' open' : ''}`}>
       {warm ? inner : null}
     </div>
   )

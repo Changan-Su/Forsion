@@ -501,3 +501,13 @@
    配套:mobile/src/nativeChrome.ts 的 applyChromeLayout 在主区层不清 --nc-bottom(留给屏外的列表),于是进出主区它不变。
    仪器:mobile `npm run emu:perf` 的 open / back(看 style 那一栏);`emu:nativeshell` 的「floating chrome (detail page)」。 */
 .mb-shell[data-native-chrome][data-list-first] .mb-main { --mb-bottom: 0px; }
+/* 两级导航的列表面板不走 .mb-drawer 那两个开关(收起 = visibility: hidden + pointer-events: none):两个属性都会继承,
+   面板每开合一次,里面每个元素都要重算一遍样式(60 条会话 ≈ 1400 个元素)。2026-10-13 追踪:点会话到开始滑动的那一帧里
+   一半以上是它,返回同理,滑完之后还要再来一次。这里把两个量钉成常量,它们管的事换成不继承的办法:
+   · 滑出途中不吃点按 —— 收起时盖一层 ::after(只动面板自己一个元素);滑完之后面板整个在屏外,本来就点不到;
+   · 读屏与键盘焦点 —— SingleColumnHost 的 Drawer 给收起的面板挂 aria-hidden,并把焦点请出去。
+   ⚠️ 别在这条里写 transition:拖拽期间 `.mb-body[data-drag] .mb-drawer { transition: none }` 与它同特异性、排在前面,
+      写了就把跟手拖拽的「不补间」盖掉。别的抽屉(右侧、没有两级导航的宿主)不变。放文件末尾(DESIGN §7.2)。
+   仪器:mobile `MODE=trace npm run emu:perf`(open-again / back 的第一段里 Style 应该只有几十个元素)。 */
+.mb-shell[data-list-first] .mb-drawer--left { visibility: visible; pointer-events: auto; }
+.mb-shell[data-list-first] .mb-drawer--left:not(.open)::after { content: ''; position: absolute; inset: 0; z-index: 2147483647; }

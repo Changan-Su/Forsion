@@ -1120,10 +1120,18 @@ const tabCountText = (list) => {
     assert.ok(webViewNode(gone.nodes).rect.bottom > screenH * 0.93, 'the WebView did not take the room of the bottom bar')
     await h.pause(600)
     shot('03-detail-level')
+    // the list behind the main view stays rendered (hiding it restyles every row, on the way in and on the way back):
+    // the screen reader skips it, it holds no focus and takes none, and it is covered so nothing in it can be tapped
+    const listPanel = async (tryFocus) => JSON.parse(await cdp.eval(`(() => { const d = document.querySelector('.mb-drawer--left'); const held = d.contains(document.activeElement)
+      if (${tryFocus ? 'true' : 'false'}) d.querySelector('button, a, [tabindex]')?.focus()
+      return JSON.stringify({ hidden: d.getAttribute('aria-hidden'), covered: getComputedStyle(d, '::after').content !== 'none', held, took: d.contains(document.activeElement), visibility: getComputedStyle(d).visibility }) })()`))
+    assert.deepEqual(await listPanel(true), { hidden: 'true', covered: true, held: false, took: false, visibility: 'visible' }, 'the list behind the main view')
     // back arrow → list
     await tapId('nativeChrome.left')
     assert.ok(await h.waitPage(cdp, `(${nav}) === 'list'`, 5000), 'the back arrow did not return to the list')
     assert.ok((await h.waitNodes((l) => !!h.byId(l, 'nativeChrome.spaces'), { timeout: 8000 })).hit, 'the bottom bar did not come back on the list')
+    const front = await listPanel(false)
+    assert.deepEqual([front.hidden, front.covered], [null, false], 'the list in front is still hidden from the screen reader or covered')
     // item again, then system back → list, and the app is still in front
     await tapEl(rowExpr('E2E Session One'))
     assert.ok(await h.waitPage(cdp, `(${nav}) === 'detail'`, 8000), 'the session did not reopen')
