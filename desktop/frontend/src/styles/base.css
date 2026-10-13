@@ -4058,6 +4058,13 @@ html.dark .brand-logo--dark { display: inline-block; }
   -webkit-app-region: no-drag;
 }
 .ntf-wrap.ntf-wrap-calendar { top: auto; bottom: 42px; }
+/* Android 原生外壳:胶囊和 Dock 是原生的,画在页面之上 —— 压在它们底下的卡片会被盖掉一截。通知栈挂在壳外(MobileRoot 末尾),
+   够不着壳里的 --mb-top,直接用原生层写在 <body> 上的 --nc-top(屏幕 dp,要除以端级缩放;见 lcl/engine/singleColumn.css 末尾),
+   让到胶囊之下再留 6px,和通话条(mini/voiceCall.css 的 .vc-bar)同一种写法。日历的卡片在桌面上放底部,手机上那里是 Dock,
+   一并回到顶上。max(46px, …):设置 / 商店这类页面 --nc-top 为 0,照旧。通话中让到通话条之下(条顶 6px + 条高 58px + 再留 6px)。
+   只在装了原生宿主时命中,桌面 / web / 手机浏览器不变。仪器:mobile `npm run stage:phone` 的 notify-card。 */
+body:has(.mb-shell[data-native-chrome]) .ntf-wrap { top: max(46px, calc(var(--nc-top, 0) * 1px / var(--uiz, 1) + 6px)); bottom: auto; }
+body:has(.mb-shell[data-native-chrome]):has(.vc-bar) .ntf-wrap { top: calc(var(--nc-top, 0) * 1px / var(--uiz, 1) + 70px); }
 .ntf {
   pointer-events: auto;
   display: flex;
