@@ -21,8 +21,9 @@ registerMessages({
   'aux.visionCompact': { zh: '图像识别', en: 'Image recognition' },
   'aux.visionCompactHint': { zh: '主模型无法看图时，辅助理解图片。', en: 'Helps interpret images when the main model cannot.' },
   'aux.translateCompact': { zh: '翻译', en: 'Translation' },
-  'aux.translateCompactHint': { zh: '用于笔记和插件里的翻译，不选则跟随聊天模型。', en: 'For translation in notes and plugins. Defaults to the chat model.' },
+  'aux.translateCompactHint': { zh: '用于划线翻译、笔记和插件里的翻译。不选时有机器翻译模型就用它，没有则跟随聊天模型。', en: 'For translating selections, notes and plugins. When unset, a machine translation model is used if one is available, otherwise the chat model.' },
   'aux.translateFollow': { zh: '跟随聊天模型', en: 'Same as chat' },
+  'aux.translateAuto': { zh: '自动', en: 'Auto' },
   // 这一行的名字和下面三个选项的字,被引擎写进了给模型读的一句话里(tangu-agent toolRegistry.computerUseUnavailableReason),改文案时那边一起改。
   'aux.visionBehavior': { zh: '图像处理方式', en: 'Image handling' },
   'aux.visionCompact.auto': { zh: '按需使用', en: 'When needed' },
@@ -64,6 +65,8 @@ export function AuxModelChoice({ models, compact = false }: { models: ModelsResp
   // 翻译槽:对话模型 + 云端的机器翻译模型(后者只在这里出现,别处的选择器看不到它们)
   const translators = [...llms, ...(models?.translateModels || []).map((m) => ({ id: m.id, name: m.name, provider: m.provider || 'forsion', source: 'forsion' as const }))]
 
+  const autoMt = models?.translateModels?.[0]?.id
+
   const modes: VisionMode[] = ['auto', 'always', 'off']
 
   if (compact) return <>
@@ -75,9 +78,9 @@ export function AuxModelChoice({ models, compact = false }: { models: ModelsResp
       <ModelSelect models={visionCapable} value={vision} cloudDefaultId={models?.visionModelId} icon={<Eye size={13} />} disabled={visionMode === 'off'} ariaLabel={t('aux.visionCompact')}
         onChange={(id) => { setVision(id); void window.tangu?.setConfig?.({ visionModelId: id }) }} />
     } />
-    {/* 没有 app 级的槽可跟:不选 = 跟聊天当前模型(tanguProbe.complete 里取) */}
+    {/* 没有 app 级的槽可跟:不选 = 目录里第一个机器翻译模型,没有就跟聊天当前模型(tanguProbe.translateModelChoice 同一条规则) */}
     <SettingsRow label={t('aux.translateCompact')} description={t('aux.translateCompactHint')} control={
-      <ModelSelect models={translators} value={translate} defaultLabel={t('aux.translateFollow')} icon={<Languages size={13} />} ariaLabel={t('aux.translateCompact')}
+      <ModelSelect models={translators} value={translate} cloudDefaultId={autoMt} defaultLabel={t(autoMt ? 'aux.translateAuto' : 'aux.translateFollow')} icon={<Languages size={13} />} ariaLabel={t('aux.translateCompact')}
         onChange={(id) => { setTranslate(id); void window.tangu?.setConfig?.({ translateModelId: id }) }} />
     } />
     <SettingsRow label={t('aux.visionBehavior')} description={t(`aux.visionMode.${visionMode}`)} control={

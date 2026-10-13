@@ -16,6 +16,9 @@ import {
   type TanguAgentStatus,
   type TanguChatMount,
   type TanguChatMountOptions,
+  type TanguCompleteOptions,
+  type TanguCompleteRequest,
+  type TanguCompleteResult,
   type TanguModelInfo,
   type TanguSessionInfo,
   type TanguStartChatOptions,
@@ -35,15 +38,39 @@ import { connectionTarget } from './services/engine/targets'
 import { catalogFor } from './services/engine/catalog'
 import { getCallVoice, subscribeCallVoice } from './services/callVoice'
 
-/** 「翻译」模型槽(设置 → 模型;config.json models.translate)。没设、读不到、或**本机引擎**的目录里已经没有这个模型
- *  (下架 / 换了账号;云端的机器翻译模型在目录的 translateModels 里)→ undefined,调用方落回聊天当前模型 ——
+/** 这次翻译用哪个模型。「翻译」模型槽(设置 → 模型;config.json models.translate)设了、**本机引擎**的目录里也还有 → 用它。
+ *  没设、读不到、或目录里已经没有这个模型(下架 / 换了账号)→ 目录里有机器翻译模型(translateModels)就自动用第一个
+ *  (auto;2026-10-13 用户定:有机器翻译就默认用它),都没有 → 不给 id,调用方落回聊天当前模型 ——
  *  逐句翻译时不能因为一个过期的 id 句句报错。
  *  按本机引擎的目录验,不是 modelsResp:正文 AI 只打本机(completeInline → homeTarget),而 modelsResp 跟着焦点走,
  *  焦点在远端引擎时拿它验会把本机上好好的槽判成过期。目录还没拉到(null)才先信它;拉到了、是空的 = 没有这个模型。 */
-export async function translateModelId(): Promise<string | undefined> {
+export async function translateModelChoice(): Promise<{ id?: string; auto?: boolean }> {
   const id = (await window.tangu?.getConfig?.().catch(() => null))?.translateModelId
   const r = catalogFor('home')?.models
-  return id && (!r || r.models.some((m) => m.id === id) || !!r.translateModels?.some((m) => m.id === id)) ? id : undefined
+  if (id && (!r || r.models.some((m) => m.id === id) || !!r.translateModels?.some((m) => m.id === id))) return { id }
+  const mt = r?.translateModels?.[0]?.id
+  return mt ? { id: mt, auto: true } : {}
+}
+
+/** translate 动作(编辑器 / 划线条的「翻译」与插件 ctx.tangu.translate 同一个口子):模型取 translateModelChoice(),
+ *  结果带上实际是谁译的。自动选上的机器翻译模型**一个字没出**就失败(那一行没密钥 / 不支持这对语言)→ 落回聊天模型
+ *  再来一次;用户自己选的不落回 —— 那是他要的,错了该看见。 */
+async function translateInline(req: TanguCompleteRequest, opts: TanguCompleteOptions = {}): Promise<TanguCompleteResult> {
+  const chat = readActiveModel()?.id ?? null
+  const pick = await translateModelChoice()
+  const by = (r: TanguCompleteResult, id: string | null | undefined): TanguCompleteResult => {
+    if (!id) return r
+    const cat = catalogFor('home')?.models
+    const mt = cat?.translateModels?.find((m) => m.id === id)
+    return { ...r, model: { id, name: mt?.name || cat?.models.find((m) => m.id === id)?.name || id, mt: !!mt } }
+  }
+  let streamed = false
+  try {
+    return by(await completeInline({ ...req, modelId: pick.id }, chat, { ...opts, onDelta: (d) => { streamed = true; opts.onDelta?.(d) } }), pick.id ?? chat)
+  } catch (e) {
+    if (!pick.auto || streamed || !chat || opts.signal?.aborted) throw e
+    return by(await completeInline({ ...req, modelId: chat }, chat, opts), chat)
+  }
 }
 
 function readActiveModel(): TanguModelInfo | null {
@@ -434,7 +461,7 @@ export function installTanguProbe(): void {
     // 正文生成式 AI(G3-07):引擎 /agent/inline;模型缺省 = 主区聊天此刻用的那个(与 activeModel 同口径)。
     // 例外:translate 动作先看「翻译」模型槽(编辑器的翻译与插件 ctx.tangu.translate 同一个口子)。
     // 与「问 Tangu」同一门控:没有 Tangu 产品能力的档案(automation-only)不出 AI 入口、插件也拿不到 complete。
-    ...(hasNativeFeature('tangu') ? { complete: async (req, opts) => completeInline(req.action === 'translate' && !req.modelId ? { ...req, modelId: await translateModelId() } : req, readActiveModel()?.id ?? null, opts) } : {}),
+    ...(hasNativeFeature('tangu') ? { complete: async (req, opts) => (req.action === 'translate' && !req.modelId ? translateInline(req, opts) : completeInline(req, readActiveModel()?.id ?? null, opts)) } : {}),
     // ⚠️只在 (模型 id, Space id) 这对值**真变了**时才回调。useApp 在流式回答期间每收一个
     // SSE 增量就 set 一次 state,裸转发 = 把每个订阅插件按帧敲一遍(浮层类插件会当场掉帧)。
     subscribe: (cb) => {

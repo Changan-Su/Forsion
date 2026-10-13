@@ -271,10 +271,11 @@ async function main() {
     stream.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }))
     return selection.toString()
   }, selectedText)
-  const askButton = win.locator('[data-chat-surface="chat"] [data-testid="selection-quote"]')
+  // 划线条挂在 body 下(聊天区的 container-type 会抢 fixed 的包含块),不在 [data-chat-surface] 里;同一时刻只有一条。
+  const askButton = win.locator('[data-testid="selection-bar"][data-view="chat"] [data-testid="selection-quote"]')
   await askButton.waitFor({ state: 'visible', timeout: 5000 }).catch(() => {})
   const selectionMenu = await win.evaluate(`(() => {
-    const menu = document.querySelector('[data-chat-surface="chat"] .t2-quote-menu')
+    const menu = document.querySelector('[data-testid="selection-bar"][data-view="chat"]')
     if (!menu) return null
     const b = menu.getBoundingClientRect()
     return { text: menu.textContent.trim(), left: b.left, right: b.right, top: b.top, width: b.width }
@@ -725,7 +726,7 @@ async function main() {
     }
     // 菜单 / 二级浮面只有交互时才渲染 → 插同类名探针,量的是材质表收没收它们
     const menus = {}
-    for (const [name, cls, pseudo, tierName] of [
+    for (const [name, cls, pseudo, tierName, attr] of [
       ['composer-menu', 'composer-menu', '', 'menu'],
       ['composer-menu--model', 'composer-menu composer-menu--model', '::before', 'menu'],
       ['composer-menu--mode', 'composer-menu composer-menu--mode', '::before', 'menu'],
@@ -739,7 +740,8 @@ async function main() {
       ['wsfile-panel', 'wsfile-panel', '', 'float'],
       ['unitsw-menu', 'unitsw-menu', '', 'fallback'],
       ['t2sw-plug-menu', 't2sw-plug-menu', '', 'fallback'],
-      ['t2-quote-menu', 't2-quote-menu', '', 'menu'],
+      ['selbar', 'ui-popover selbar', '', 'menu'],
+      ['selbar-dense', 'ui-popover selbar', '', 'fallback', 'data-dense'],
       ['amx-tip', 'amx-tip', '', 'fallback'],
       ['amx-db-pop', 'amx-db-pop', '', 'menu'],
       ['amx-cal-agenda', 'amx-cal-agenda', '', 'menu'],
@@ -757,6 +759,7 @@ async function main() {
     ]) {
       const p = document.createElement('div')
       p.className = cls
+      if (attr) p.setAttribute(attr, '') // 划线条开在侧栏对话上时由调用方打 data-dense(body 下的浮层认不出自己在哪)
       document.body.appendChild(p)
       const s = getComputedStyle(p, pseudo || null)
       menus[name] = { b: (s.backdropFilter || s.webkitBackdropFilter) !== 'none', a: alphaOf(s.backgroundColor), tier: tierName }

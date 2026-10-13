@@ -957,6 +957,54 @@ export interface PluginBoardSvg {
   height: number
 }
 
+/** The text a selection-bar callback is about. `markdown` is only there when the view supplied one. */
+export interface PluginSelectionBarSelection { text: string; markdown?: string }
+
+/** One of your view's own tools on the selection bar: an icon button, or a round colour swatch when `color`
+ *  is set (highlight colours). The host only draws it — what it does is up to `run`. */
+export interface PluginSelectionBarTool {
+  id: string
+  /** Tooltip and accessible name (already in the user's language). */
+  title: string
+  /** A name from the plugin icon vocabulary. Ignored when `color` is set. */
+  icon?: string
+  /** Any CSS colour: draws a swatch instead of an icon. */
+  color?: string
+  /** Draw it as pressed / current. */
+  on?: boolean
+  run(sel: PluginSelectionBarSelection): void
+}
+
+/** Options of `ctx.ui.mountSelectionBar`. All optional. */
+export interface PluginSelectionBarOptions {
+  /** Your view's id, letters / digits / `. _ -`. Selection actions see `'<pluginId>:<view>'` as their `view`
+   *  (what `scope` lists and `when` receives). Default `'view'`. */
+  view?: string
+  /** Your view's own tools. They sit on the bar next to the shared actions; which block comes first is a user
+   *  setting. Clear the selection (or call `hide()`) in `run` when the tool consumed it. */
+  tools?: PluginSelectionBarTool[]
+  /** Replace what "Ask Tangu" does (to add a page number, say). `false` removes the button. By default the host
+   *  hands the text — plus `source`, if any — to its side chat; hosts without a side chat draw no button. */
+  ask?: ((sel: PluginSelectionBarSelection) => void) | false
+  /** Where the text comes from: shown as the quote's origin and passed to selection actions as `cx.source`.
+   *  `path` is a vault-relative path when the content is a vault file. */
+  source?(sel: PluginSelectionBarSelection): { title?: string; path?: string; page?: number } | undefined
+  /** Default `true`: the host watches the DOM selection inside the element you passed (bar on mouse-up; gone when
+   *  the selection collapses, the element scrolls or resizes, or the user clicks elsewhere). Set `false` when the
+   *  text lives where the host cannot see it (an iframe, a canvas) and drive the bar with `show()` / `hide()`. */
+  watch?: boolean
+}
+
+export interface PluginSelectionBarHandle {
+  /** Show the bar for this text. `rect` is the selection's bounding box in viewport pixels (a `DOMRect` works):
+   *  the bar sits centred above it, or below when there is no room. */
+  show(sel: { text: string; markdown?: string; rect: { left: number; right: number; top: number; bottom: number } }): void
+  /** Hide the bar (an open result card closes too when the host was watching the selection itself). */
+  hide(): void
+  update(opts: Partial<PluginSelectionBarOptions>): void
+  dispose(): void
+}
+
 export interface PluginFloatingTocHandle {
   /** Force a rescan after a DOM change that MutationObserver cannot see. */
   refresh(): void
@@ -983,33 +1031,62 @@ export interface PluginAccount {
   subscribe(listener: (status: PluginAccountStatus) => void): () => void
 }
 
-/** An entry in the note editor's selection toolbar "AI ▾" menu (2026-09-28+, review G3-07).
+/** An action in the selection bar — the strip that appears over selected text (2026-09-28+, review G3-07;
+ *  scopes beyond notes 2026-10-13+).
  *
- * Shown under a "Plugins" heading when the user has text selected in a v4 note. `run` receives the
- * selection and returns the markdown to propose; the host shows it in the **same preview panel** as the
- * built-in AI actions (Replace / Insert below / Discard) — nothing is written to the note until the user
- * confirms, so a plugin can never silently rewrite a note. Return '' to propose nothing. Typical body:
- * `return (await ctx.tangu.complete({ prompt: 'Turn this into a checklist', selection: cx.markdown })).text`.
+ * Listed behind the bar's "⋯" button under a "Plugins" heading. By default (no `scope`) it only appears in v4 notes,
+ * exactly as before; set `scope` to reach other views. `run` receives the selection and returns the markdown to
+ * show; the host puts it in the **same preview card** as the built-in AI actions. In an editable note the card
+ * offers Replace / Insert below / Copy / Discard — nothing is written until the user confirms, so a plugin can never
+ * silently rewrite a note. Everywhere else the card is read-only (Copy / Close). Return '' to propose nothing.
+ * Typical body: `return (await ctx.tangu.complete({ prompt: 'Turn this into a checklist', selection: cx.markdown })).text`.
  * The host validates the return value like slash `run` (string, no control characters). */
 export interface SelectionActionContribution {
   id: string
   /** Menu label (already in the user's language — pick with `ctx.getLocale?.()` if you ship both). */
   title: string
+  /** A name from the plugin icon vocabulary (same names as commands and panels). Unknown names fall back to none. */
+  icon?: string
+  /** Where the action is listed. Default `'note'`.
+   *  - `'note'` — v4 notes only.
+   *  - `'all'` — every view that shows the selection bar (notes, chat, plugin views that mounted one).
+   *  - `'own'` — only this plugin's own views (those that called `ctx.ui.mountSelectionBar`).
+   *  - a list of view ids — `'note'`, `'chat'` (main chat, side chat, Mini), or `'<pluginId>:<viewId>'`;
+   *    a bare `'<pluginId>'` matches all of that plugin's views. */
+  scope?: 'note' | 'all' | 'own' | string[]
+  /** Return false to leave the action out for this selection. It gets the view, whether the text can be replaced
+   *  and the selection length — not the text itself, which only reaches the plugin through `run` after the user
+   *  picks the action. Keep it synchronous and cheap; a throw counts as false. */
+  when?(cx: { view: string; editable: boolean; length: number }): boolean
+  /** `'preview'` (default): the returned markdown is shown in the result card. `'none'`: the plugin handles the
+   *  result itself (opens a view, saves a card…) — the host shows no card and ignores the return value. */
+  output?: 'preview' | 'none'
   run(cx: {
     /** Plain text of the selection. */
     text: string
-    /** The selection serialized as markdown (keeps bold, links, list markers…). */
+    /** The selection serialized as markdown (keeps bold, links, list markers…). Outside notes it equals `text`. */
     markdown: string
-    /** Vault-relative path of the note. */
-    pagePath: string
-  }): string | Promise<string>
+    /** Vault-relative path of the note. Always set in notes; absent in other views (only actions that opted into
+     *  them with `scope` ever see that). */
+    pagePath?: string
+    /** Which view the selection is in: `'note'`, `'chat'` or `'<pluginId>:<viewId>'`. Old hosts omit it. */
+    view?: string
+    /** True when the card will offer to replace the selection (an editable note). */
+    editable?: boolean
+    /** Where the text came from, when the view knows (note path, chat session, PDF page…). */
+    source?: { title?: string; path?: string; sessionId?: string; page?: number }
+    /** Aborted when the user closes the card or picks another language / retries. */
+    signal?: AbortSignal
+    /** Stream partial text into the card while working (the returned string still wins at the end). */
+    onDelta?(chunk: string): void
+  }): string | void | Promise<string | void>
 }
 
 export interface PluginContext {
   account?: PluginAccount
   app: PluginAppApi
   registerSlashItem(item: SlashContribution): void
-  /** Add an entry to the selection toolbar's "AI ▾" menu (see SelectionActionContribution). The result goes
+  /** Add an action to the selection bar's "⋯" menu (see SelectionActionContribution). The result goes
    *  through the host's preview + confirm, never straight into the note. Revoked on disable / reload. */
   registerSelectionAction(action: SelectionActionContribution): void
   registerCommand(command: CommandContribution): void
@@ -1153,6 +1230,13 @@ export interface PluginContext {
       shell: HTMLElement,
       opts: PluginFloatingTocOptions,
     ): PluginFloatingTocHandle
+    /** The host's selection bar for your own view (2026-10-13+): the strip that appears over selected text, with
+     *  the same shared actions as in chat and notes (Ask Tangu, Translate, selection actions from any plugin behind
+     *  "⋯") plus the tools you declare. Unlike the other mounts it adds nothing to `root` and takes nothing over —
+     *  the bar floats above the page — so it neither retires nor is retired by other mounts on that element.
+     *  A view that never calls this gets no bar. Feature-detect on older hosts (`ctx.ui?.mountSelectionBar`) and
+     *  keep drawing your own menu there. The host disposes it on disable / reload. */
+    mountSelectionBar?(root: HTMLElement, opts?: PluginSelectionBarOptions): PluginSelectionBarHandle
     /** A transparent layer of the host whiteboard over your own content (2026-10-10+): the same engine,
      *  pens and stroke feel as a `.excalidraw.md` board, without its chrome. See PluginBoardOptions.
      *  Feature-detect on older hosts: `ctx.ui?.mountBoard`. */
