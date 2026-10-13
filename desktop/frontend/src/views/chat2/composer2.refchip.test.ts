@@ -6,7 +6,7 @@
  * 每条用例都反向断言 token,而不只断言名字。
  */
 import { describe, expect, it } from 'vitest'
-import { refChipOf, fileChip, folderChip, viewChip, appChip, appRefChipOf, canInline, inlineTokenOf, composeOutgoing } from './Composer2'
+import { refChipOf, fileChip, folderChip, viewChip, appChip, appRefChipOf, canInline, inlineTokenOf, runChipOwners, composeOutgoing } from './Composer2'
 import { refToText, type ChatRef } from './chatDragRef'
 import { splitLeadingRefs } from './RefChipView'
 
@@ -186,5 +186,18 @@ describe('inlineTokenOf(句子里的引用发出去写成什么)', () => {
     const note = refChipOf({ kind: 'note', path: '周报.md' }, VAULT)
     expect(inlineTokenOf(note)).toBe(note.token)
     expect(inlineTokenOf(folderChip('/Users/x/dir'))).toBe('/Users/x/dir')
+  })
+})
+
+describe('runChipOwners(同名引用,句子里的那段归谁)', () => {
+  it('从 [[ 选进句子的 > 用户自己加的 > 自动挂的当前笔记;自动那条不能抢走已有的同名引用', () => {
+    const a = { ...refChipOf({ kind: 'note', path: 'a/README.md' }, VAULT), inline: true as const }
+    const b = refChipOf({ kind: 'note', path: 'b/README.md' }, VAULT)
+    expect(a.name).toBe(b.name)
+    expect(runChipOwners([a], b).get(a.name)).toBe(a) // 主区切到同名的另一篇:句子里那段仍指 a
+    expect(runChipOwners([b, a], null).get(a.name)).toBe(a)
+    expect(runChipOwners([b], null).get(b.name)).toBe(b)
+    expect(runChipOwners([], b).get(b.name)).toBe(b)
+    expect(runChipOwners([viewChip('calendar', '日历')], null).size).toBe(0) // 不能进句子的不占名字
   })
 })

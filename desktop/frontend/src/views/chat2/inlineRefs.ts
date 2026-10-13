@@ -17,7 +17,8 @@ const RUN_SRC = '  ([^  \\n]{1,80}) '
 export interface InlineRun { start: number; end: number; name: string }
 
 /** 引用的名字 → 能放进行内段的写法(去掉会和边界撞的空格与换行,封顶 80 字)。 */
-export const runName = (name: string): string => String(name || '').replace(/[  \r\n]+/g, ' ').trim().slice(0, 80)
+// 按码点截(不切开表情),截完再去一次尾空格:第 80 个字正好是空格时不去的话,再过一遍这个函数结果就变了,段和引用对不上(Codex 评审)
+export const runName = (name: string): string => [...String(name || '').replace(/[\u2007\u202F\r\n]+/g, ' ').trim()].slice(0, 80).join('').trimEnd()
 
 export const inlineRun = (name: string): string => `${RUN_LEAD}${runName(name)}${RUN_TAIL}`
 
@@ -25,7 +26,7 @@ export const inlineRun = (name: string): string => `${RUN_LEAD}${runName(name)}$
 export function findRuns(text: string, known: (name: string) => boolean): InlineRun[] {
   if (!text.includes(RUN_LEAD)) return []
   const out: InlineRun[] = []
-  const re = new RegExp(RUN_SRC, 'g')
+  const re = new RegExp(RUN_SRC, 'gu')
   let m: RegExpExecArray | null
   while ((m = re.exec(text))) if (known(m[1])) out.push({ start: m.index, end: m.index + m[0].length, name: m[1] })
   return out
@@ -40,7 +41,7 @@ export function runTouching(runs: InlineRun[], pos: number, dir: 'back' | 'fwd')
 export function expandRuns(text: string, tokenOf: (name: string) => string | undefined): { text: string; used: Set<string> } {
   const used = new Set<string>()
   if (!text.includes(RUN_LEAD)) return { text, used }
-  const out = text.replace(new RegExp(RUN_SRC, 'g'), (whole, name: string) => {
+  const out = text.replace(new RegExp(RUN_SRC, 'gu'), (whole, name: string) => {
     const token = tokenOf(name)
     if (token === undefined) return whole
     used.add(name)
@@ -53,5 +54,8 @@ export function expandRuns(text: string, tokenOf: (name: string) => string | und
 export function plainRuns(text: string, name: string): string {
   const target = runName(name)
   if (!target || !text.includes(RUN_LEAD)) return text
-  return text.replace(new RegExp(RUN_SRC, 'g'), (whole, n: string) => (n === target ? n : whole))
+  return text.replace(new RegExp(RUN_SRC, 'gu'), (whole, n: string) => (n === target ? n : whole))
 }
+
+/** 去掉草稿末尾的空白,但留着行内段的边界空格(它们也算空白字符:直接 /\s+$/ 会把结尾那一段拆坏)。往草稿后面接东西前用这个。 */
+export const trimDraftEnd = (text: string): string => text.replace(/[^\S\u2007\u202F]+$/, '')

@@ -81,8 +81,10 @@ async function main() {
   const bin = path.join(home, 'bin')
   const openLog = path.join(home, 'open.log')
   for (const d of [userdata, vault, bin]) fs.mkdirSync(d)
-  fs.writeFileSync(path.join(vault, '季度复盘.md'), '# 季度复盘\n')
-  fs.writeFileSync(path.join(userdata, 'amadeus-config.dev.json'), JSON.stringify({ lastVault: vault, localVault: vault }))
+  const notePath = path.join(vault, '季度复盘.md')
+  fs.writeFileSync(notePath, '# 季度复盘\n\n对一下 [[window://com.google.Chrome|Linear – Pricing]] 和 [[app://com.tencent.xinWeChat|微信]] 里的数字。\n\n收尾段落\n')
+  fs.mkdirSync(`${userdata}-dev`) // 未打包的构建把用户目录落在「<给的目录>-dev」
+  fs.writeFileSync(path.join(`${userdata}-dev`, 'amadeus-config.dev.json'), JSON.stringify({ lastVault: vault, localVault: vault }))
   const md = (p, id, name) => `${p}   kMDItemCFBundleIdentifier = ${id}   kMDItemDisplayName = ${name}`
   fs.writeFileSync(path.join(bin, 'mdfind'), `#!/bin/sh\ncat <<'EOF'\n${[
     md('/Applications/Google Chrome.app', 'com.google.Chrome', 'Google Chrome'),
@@ -274,6 +276,57 @@ async function main() {
     check('单个 ⌘ 的组合键照旧(⌘K 开命令面板)', await win.locator('.cmd-input').isVisible())
     await win.keyboard.press('Escape')
     await view.screenshot({ path: path.join(SHOT_DIR, `hotkey${tag}.png`) })
+
+    // ── 笔记:同一种双链画成同一枚芯片;斜杠菜单和 [[ 面板的分类胶囊带滑块 ──
+    await win.evaluate(() => localStorage.setItem('forsion_default_space', 'amadeus'))
+    await win.reload({ waitUntil: 'domcontentloaded' })
+    await win.waitForSelector('.am-app', { timeout: 40_000 })
+    const noteRow = win.locator('.t2s-srow', { hasText: '季度复盘' }).first()
+    await noteRow.waitFor({ timeout: 15_000 }).catch(() => win.click('.dv-edge-left').catch(() => {}))
+    await noteRow.click()
+    const body = win.locator('.am-app .ProseMirror').first()
+    const noteChip = (name) => body.locator('.amx-app-ref .app-ref', { hasText: name }).first()
+    await win.waitForFunction(() => document.querySelectorAll('.amx-app-ref .app-ref[data-state]').length >= 2, null, { timeout: 20_000 }).catch(() => {})
+    check('笔记里两条引用都画成芯片', await body.locator('.amx-app-ref .app-ref').count() === 2 && await noteChip('Linear – Pricing').getAttribute('data-state') === 'live' && await noteChip('微信').getAttribute('data-state') === 'idle',
+      await body.locator('.amx-app-ref .app-ref').evaluateAll((els) => els.map((e) => [e.textContent, e.dataset.state])))
+    check('笔记里的芯片带应用图标', await noteChip('Linear – Pricing').locator('img.app-ref-ico').count() === 1) // 悬停卡里还有一张,只数芯片上那张
+    await win.screenshot({ path: path.join(SHOT_DIR, `note${tag}.png`) })
+    const focusBefore = helper.requests.filter((r) => r.cmd === 'focusWindow').length
+    await noteChip('Linear – Pricing').click()
+    await win.waitForTimeout(400)
+    check('笔记里点芯片:切到那扇窗口,不去开笔记', helper.requests.filter((r) => r.cmd === 'focusWindow').length === focusBefore + 1 && opened().at(-1) === '-b com.google.Chrome' && await win.locator('.t2s-srow', { hasText: 'app://' }).count() === 0, opened())
+
+    const capOf = (sel) => win.locator(sel).evaluate((el) => ({ x: el.style.getPropertyValue('--cap-x'), ready: el.hasAttribute('data-cap-ready'), slide: getComputedStyle(el, '::before').transitionProperty, on: getComputedStyle(el, '::before').opacity }))
+    await body.locator('p', { hasText: '收尾段落' }).click()
+    await win.keyboard.press('End')
+    await win.keyboard.press('Enter')
+    await win.keyboard.type('/')
+    await win.locator('.slash-menu .slash-category-tabs[data-cap-ready]').waitFor({ timeout: 8000 }).catch(() => {})
+    const s0 = await capOf('.slash-menu .slash-category-tabs')
+    await win.keyboard.press('ArrowRight')
+    await win.waitForTimeout(280)
+    const s1 = await capOf('.slash-menu .slash-category-tabs')
+    check('笔记斜杠菜单:切分类时底块滑过去', s0.ready && s0.on === '1' && s1.x !== s0.x && /translate/.test(s0.slide), { s0, s1 })
+    await win.screenshot({ path: path.join(SHOT_DIR, `note-slash${tag}.png`) })
+    await win.keyboard.press('Escape')
+    await win.keyboard.press('Backspace')
+
+    await win.keyboard.type('[[')
+    await win.locator('.wiki-suggest .wiki-tabs[data-cap-ready]').waitFor({ timeout: 8000 }).catch(() => {})
+    const w0 = await capOf('.wiki-suggest .wiki-tabs')
+    await win.locator('.wiki-suggest .wiki-tab[data-category="window"]').click()
+    await win.waitForTimeout(280)
+    const w1 = await capOf('.wiki-suggest .wiki-tabs')
+    const wikiRows = await win.locator('.wiki-suggest .wiki-item').allTextContents()
+    check('笔记 [[ 面板:有窗口 / 应用分类,切过去底块滑动,列的是打开的窗口', w0.ready && w1.x !== w0.x && /Linear – Pricing/.test(wikiRows[0] || ''), { w0, w1, wikiRows })
+    await win.screenshot({ path: path.join(SHOT_DIR, `note-wiki${tag}.png`) })
+    await win.keyboard.press('Enter')
+    await win.keyboard.press('Enter') // 光标离开这一行,源码才收成芯片
+    await win.waitForFunction(() => document.querySelectorAll('.amx-app-ref .app-ref').length >= 3, null, { timeout: 8000 }).catch(() => {})
+    check('笔记里选一扇窗口:写进一条双链并画成芯片', await body.locator('.amx-app-ref .app-ref').count() === 3, await body.evaluate((el) => el.innerText.slice(-80)))
+    let disk = ''
+    for (let i = 0; i < 40 && !/收尾段落[\s\S]*\[\[window:\/\/com\.google\.Chrome\|/.test(disk); i++) { await win.waitForTimeout(200); disk = fs.readFileSync(notePath, 'utf8') }
+    check('落盘的是纯文本双链', /收尾段落[\s\S]*\[\[window:\/\/com\.google\.Chrome\|Linear – Pricing\]\]/.test(disk), disk.slice(-120))
   } catch (err) {
     check(`台架中途抛错:${String(err.message || err).split('\n')[0]}`, false)
     if (app) await (await app.firstWindow()).screenshot({ path: path.join(SHOT_DIR, `fail${tag}.png`) }).catch(() => {})

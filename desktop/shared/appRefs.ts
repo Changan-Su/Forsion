@@ -40,7 +40,9 @@ export const isAppRefId = (id: unknown): id is string => typeof id === 'string' 
 /** 标题是别的应用给的自由文本:`|` `[` `]` 换行都会把 [[..]] 拆坏,一律换成空格并封顶长度。幂等。 */
 export function appRefLabel(name: string): string {
   const s = String(name || '').replace(/[[\]|\r\n]+/g, ' ').replace(/\s+/g, ' ').trim()
-  return s.length > 60 ? s.slice(0, 59).trimEnd() + '…' : s
+  // 按码点截:按 UTF-16 截会把表情切成半个,那半个字符进了 token,聊天渲染时 encodeURIComponent 直接抛错(Codex 评审)
+  const cp = [...s]
+  return cp.length > 60 ? cp.slice(0, 59).join('').trimEnd() + '…' : s
 }
 
 export function appRefToken(ref: AppRef): string {

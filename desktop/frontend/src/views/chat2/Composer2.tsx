@@ -45,7 +45,7 @@ import { ChatBoxSurface, ChatBoxInput, ChatBoxToolbar, ChatBoxSubmit } from '@lc
 import { disarmTip, tipProps } from '../../hoverTip'
 import { RefChipView } from './RefChipView'
 import { catOf, moveRefCat, pickerMatches, refCats, type RefCand, type RefCat } from './refPicker'
-import { expandRuns, findRuns, inlineRun, plainRuns, runName, runTouching } from './inlineRefs'
+import { expandRuns, findRuns, inlineRun, plainRuns, runName, runTouching, trimDraftEnd } from './inlineRefs'
 import { InlineRefMirror } from './InlineRefMirror'
 import { APPREF_EVENT, APPREF_TARGET_ATTR, ensureAppRefCommand } from './appRefCommand'
 import { appRefToken, type AppRef, type AppRefList } from '../../../../shared/appRefs'
@@ -252,6 +252,17 @@ export const appRefChipOf = (ref: AppRef): RefChip => ({ token: appRefToken(ref)
 
 /** 这条引用能不能写进句子里:View 和侧边拼接那条是给模型看的标签,放进句子里气泡只能显示成原文,不让。 */
 export const canInline = (chip: RefChip): boolean => chip.kind !== 'view' && (chip.kind !== 'app' || !!chip.appRef)
+
+/** 行内引用段按名字找引用:名字 → 那条引用。同名时:从 `[[` 选进句子的那条 > 用户自己加的 > 自动挂的当前笔记(先加的在前)。
+ *  自动那条排最后:它会随主区换页冒出来,排前面的话会把句子里已有的同名引用悄悄改指到别的文件(Codex 评审)。 */
+export function runChipOwners(refChips: RefChip[], autoChip: RefChip | null): Map<string, RefChip> {
+  const byName = new Map<string, RefChip>()
+  for (const c of [...refChips.filter((x) => x.inline), ...refChips.filter((x) => !x.inline), ...(autoChip ? [autoChip] : [])]) {
+    const name = canInline(c) ? runName(c.name) : ''
+    if (name && !byName.has(name)) byName.set(name, c)
+  }
+  return byName
+}
 
 /** 句子里的那一段发出去写成什么。文件写成 `[[绝对路径|名字]]`,气泡里才画得成一枚可点的引用
  *  (消息开头那一行仍是裸路径,契约不变);cwd 只在本机会话里给,云端会话的相对路径保持原样。 */
@@ -632,7 +643,7 @@ export const Composer2: React.FC<{
 
   // 桌面级共享语音输入 hook:转写文本追加进草稿(不绑聊天,Amadeus 等可复用同一 hook)。
   const voice = useVoiceInput((text) => {
-    setDraft((d) => (d ? d.replace(/\s+$/, '') + ' ' + text : text))
+    setDraft((d) => (d ? trimDraftEnd(d) + ' ' + text : text))
     setHistPos(0)
     requestAnimationFrame(autoGrow)
   })
@@ -1243,15 +1254,7 @@ export const Composer2: React.FC<{
     return chip
   }, [appRef, isHost, autoRefFromMain, mainRefKey, mainNote, vaultRoot, autoRefOff, refChips])
   const rawRefChips = useMemo(() => (autoChip ? [autoChip, ...refChips] : refChips), [autoChip, refChips])
-  /** 行内引用段按名字找引用:名字 → 那条引用(同名时先加的那条说了算)。 */
-  const runChips = useMemo(() => {
-    const byName = new Map<string, RefChip>()
-    for (const c of rawRefChips) {
-      const name = canInline(c) ? runName(c.name) : ''
-      if (name && !byName.has(name)) byName.set(name, c)
-    }
-    return byName
-  }, [rawRefChips])
+  const runChips = useMemo(() => runChipOwners(refChips, autoChip), [refChips, autoChip])
   const inlineRuns = useMemo(() => findRuns(draft, (name) => runChips.has(name)), [draft, runChips])
   /** 「已选择」里显示、发送时算数的引用:从 `[[` 选进来的那些,句子里的那段删光了就不算(撤销 / 粘贴回来又算上)。 */
   const allRefChips = useMemo(() => {
@@ -1522,7 +1525,7 @@ export const Composer2: React.FC<{
     const share = takeSeedShare?.()
     if (!share) return
     if (share.text) {
-      setDraft((d) => (d.trim() ? `${d.replace(/\s+$/, '')}\n\n${share.text}` : share.text))
+      setDraft((d) => (d.trim() ? `${trimDraftEnd(d)}\n\n${share.text}` : share.text))
       requestAnimationFrame(() => autoGrow())
     }
     if (share.files.length) {
@@ -1872,7 +1875,7 @@ export const Composer2: React.FC<{
                 if (e.key === 'ArrowUp') { e.preventDefault(); if (count) setRefIndex((i) => (i - 1 + count) % count); return }
                 // 左右键换分类(与笔记斜杠菜单同一套);没有分类条时照常移动光标
                 const nextCat = moveRefCat(refCatList, refCatNow, e.key)
-                if (nextCat && !e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey) { e.preventDefault(); setRefCat(nextCat); return }
+                if (nextCat && !e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey && !e.nativeEvent.isComposing && e.keyCode !== 229) { e.preventDefault(); setRefCat(nextCat); return }
                 if ((e.key === 'Enter' || e.key === 'Tab') && !e.nativeEvent.isComposing) { e.preventDefault(); if (count) pickRef(refMatches[Math.min(refIndex, count - 1)]); return }
                 if (e.key === 'Escape') { e.preventDefault(); setRefDismissed(true); return }
               }

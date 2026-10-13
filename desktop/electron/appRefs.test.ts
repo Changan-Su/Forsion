@@ -60,6 +60,12 @@ describe('token', () => {
     expect(sameWindowTitle(appRefLabel(long), long)).toBe(true)
     expect(sameWindowTitle('', '')).toBe(false)
   })
+  it('截断不切开表情:token 里没有半个字符(有的话聊天渲染时 encodeURIComponent 会抛)', () => {
+    const title = 'a'.repeat(58) + '😀xx'
+    expect(() => encodeURIComponent(appRefToken({ kind: 'window', id: 'com.x', name: title }))).not.toThrow()
+    expect(appRefLabel(appRefLabel(title))).toBe(appRefLabel(title))
+    expect(sameWindowTitle(appRefLabel(title), title)).toBe(true)
+  })
 })
 
 describe('parseInstalledApps', () => {

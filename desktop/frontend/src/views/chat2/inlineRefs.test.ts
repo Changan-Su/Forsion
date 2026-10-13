@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { expandRuns, findRuns, inlineRun, plainRuns, runName, runTouching, RUN_LEAD, RUN_TAIL } from './inlineRefs'
+import { expandRuns, findRuns, inlineRun, plainRuns, runName, runTouching, trimDraftEnd, RUN_LEAD, RUN_TAIL } from './inlineRefs'
 
 const known = (names: string[]) => (n: string): boolean => names.includes(n)
 
@@ -46,5 +46,25 @@ describe('行内引用段', () => {
   })
   it('⚠️ 两种边界空格会被 String.trim 吃掉:调用方必须先 expandRuns 再 trim', () => {
     expect(inlineRun('A').trim()).toBe('A')
+  })
+})
+
+describe('评审补的三条', () => {
+  it('名字归一化是幂等的:第 80 个字正好是空格、名字里有表情都一样', () => {
+    for (const name of ['a'.repeat(79) + ' suffix', 'a'.repeat(79) + '😀xx', '  两头有空格  ']) {
+      expect(runName(runName(name))).toBe(runName(name))
+      expect(findRuns(inlineRun(name), (n) => n === runName(name))).toHaveLength(1)
+    }
+    expect(() => encodeURIComponent(runName('a'.repeat(79) + '😀xx'))).not.toThrow() // 没有切出半个字符
+  })
+  it('80 个表情的名字也认得出(正则按码点数,不按 UTF-16 长度)', () => {
+    const name = '😀'.repeat(80)
+    expect(findRuns(`看 ${inlineRun(name)}`, (n) => n === name)).toHaveLength(1)
+  })
+  it('往草稿后面接东西前去尾空白:普通空格换行去掉,结尾那段行内引用的边界留着', () => {
+    const draft = `看 ${inlineRun('A')}`
+    expect(trimDraftEnd(`${draft} \n `)).toBe(draft)
+    expect(findRuns(trimDraftEnd(draft) + ' 接着说', (n) => n === 'A')).toHaveLength(1)
+    expect(draft.replace(/\s+$/, '')).not.toBe(draft) // 对照:直接 /\s+$/ 会把边界吃掉
   })
 })

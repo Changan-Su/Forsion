@@ -29,18 +29,23 @@ const listeners = new Set<() => void>()
 const subscribe = (fn: () => void): (() => void) => { listeners.add(fn); return () => { listeners.delete(fn) } }
 const emit = (): void => { listeners.forEach((fn) => fn()) }
 
+/** 主进程每次最多认这么多条(electron/appIcons.ts 的 MAX_IDS、appRefs.status 的 slice),多的分几次问。 */
+const BATCH = 64
+const batches = <T,>(all: T[]): T[][] => Array.from({ length: Math.ceil(all.length / BATCH) }, (_, i) => all.slice(i * BATCH, (i + 1) * BATCH))
+
 const icons = new Map<string, string | null>()
 let iconQueue = new Set<string>()
 
 function wantIcon(id: string): void {
   if (icons.has(id) || iconQueue.has(id) || !window.tangu?.appRefs) return
   if (!iconQueue.size) setTimeout(() => {
-    const ids = [...iconQueue]
+    const all = [...iconQueue]
     iconQueue = new Set()
-    void window.tangu!.appRefs!.icons(ids).catch(() => ({} as Record<string, string | null>)).then((got) => {
+    // 问失败的不记(下次挂载再问);问到了但没有这一项 = 确实没有图标
+    for (const ids of batches(all)) void window.tangu!.appRefs!.icons(ids).then((got) => {
       for (const one of ids) icons.set(one, got[one] ?? null)
       emit()
-    })
+    }, () => {})
   }, 0)
   iconQueue.add(id)
 }
@@ -61,12 +66,12 @@ export function refreshAppRef(ref: AppRef, force = false): void {
   const hit = statuses.get(key)
   if (!window.tangu?.appRefs || statusQueue.has(key) || (!force && hit && Date.now() - hit.at < STATUS_TTL_MS)) return
   if (!statusQueue.size) setTimeout(() => {
-    const batch = [...statusQueue.entries()]
+    const all = [...statusQueue.entries()]
     statusQueue = new Map()
-    void window.tangu!.appRefs!.status(batch.map(([, r]) => r)).catch(() => [] as AppRefStatus[]).then((got) => {
+    for (const batch of batches(all)) void window.tangu!.appRefs!.status(batch.map(([, r]) => r)).then((got) => {
       batch.forEach(([k], i) => { if (got[i]) statuses.set(k, { at: Date.now(), status: got[i] }) })
       emit()
-    })
+    }, () => {})
   }, 0)
   statusQueue.set(key, ref)
 }

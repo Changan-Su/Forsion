@@ -55,6 +55,7 @@ const KEY_ALIAS: Record<string, string> = { '{': '[', '}': ']' }
 
 /** 把 'mod+shift+k' 规范化为与事件比较的 token。 */
 function hotkeyMatches(hotkey: string, e: KeyboardEvent): boolean {
+  if (hotkey === MOD_PAIR) return isModPair(e) // 「左右修饰键同按」没有主键,单独认
   const parts = hotkey.toLowerCase().split('+').map((p) => p.trim())
   const key = parts[parts.length - 1]
   const wantMod = parts.includes('mod')
@@ -79,12 +80,6 @@ export function installHotkeys(): () => void {
     // 全局命令再跑一遍」—— 在 CodeMirror 里按 Cmd+F 会同时弹它自己的查找条和应用的查找条。
     if (e.defaultPrevented) return
     const st = useCommandStore.getState()
-    // 「左右修饰键同按」没有主键,hotkeyMatches 配不上,单独走。
-    if (isModPair(e)) {
-      const cmd = st.commands.find((c) => effectiveHotkey(c) === MOD_PAIR)
-      if (cmd) { e.preventDefault(); cmd.run() }
-      return
-    }
     // 命令面板:可被设置里改键的伪命令 'command-palette'(默认 mod+k)。
     const paletteKey = effectiveHotkey({ id: 'command-palette', hotkey: 'mod+k' })
     if (paletteKey && hotkeyMatches(paletteKey, e)) {
