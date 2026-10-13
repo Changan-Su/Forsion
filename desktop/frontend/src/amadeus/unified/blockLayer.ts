@@ -1370,8 +1370,9 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
         // 删除/复制/拖拽全部沿用原生那条路(与整块淡底同一个模型,不另造块选区对象)。
         let marquee: HTMLDivElement | null = null
         let mqFrom: { x: number; y: number } | null = null
-        /** 块矩形**内**留白上的按下(短行右侧、列表缩进区):先原样交给浏览器与 PM —— 点击落光标到行尾、
-         *  Shift+点击扩选、三击选段、点待办方框都靠原生 mousedown;真拖动起来(>4px)才转成框选。 */
+        /** 块矩形**内**不在任何一行上的留白(列表缩进区、空段落):先原样交给浏览器与 PM —— 点击落光标、
+         *  Shift+点击扩选、点待办方框都靠原生 mousedown;真拖动起来(>4px)才转成框选。
+         *  行尾右侧的留白不走这条路,整个算按在字上(见 contentAt)。 */
         let mqPending: { x: number; y: number } | null = null
         /** 顶层块的 DOM(分栏行下探到 cell 的直接子,列内逐块可框)。 */
         const topBlockEls = (): HTMLElement[] => {
@@ -1386,12 +1387,12 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
         }
         // 段落盒宽通常铺满正文列;文字右侧看着是空白,不能按整只 p 的 rect 把框选挡掉。
         // 只在真实字形/已渲染 widget 上交给原生拖字或组件;隐藏的双链源码没有 rect。
-        // 一行字的命中带 = **整条行高** + 行尾右侧一小段(2026-10-13 用户实报「跨行选字选不准,一选就整块」,
-        // scripts/selection-display.check 第 7-9 条):
+        // 一行字的命中带 = **整条行高**,从行首一直到块的右缘(2026-10-13 用户实报「跨行选字选不准,一选就整块」,
+        // scripts/selection-display.check 第 7-10 条):
         //  · 字形盒比行高矮(正文 27px 行高里只有 18px):只认字形盒的话,按在两行之间那条缝里算「块内留白」,
         //    一拖就成了框选 —— 折行的段落里每行有近五分之一的高度是这样;
-        //  · 从行尾往回拖选,落点总在末字右侧几个像素,同样被判成留白。
-        // 再往右的留白(行尾 1.5 个字高之外)照旧是框选的起点。
+        //  · 行尾右侧的留白**一律按文字选**(用户 2026-10-13 定;先前留过「1.5 个字高以外仍起框选」,否了)。
+        // 框选的起点只剩:块与块之间的缝、正文两侧的页边、行首左边的缩进区、空段落。
         const contentAt = (el: HTMLElement, x: number, y: number): boolean => {
           const box = el.getBoundingClientRect()
           if (x < box.left || x > box.right || y < box.top || y > box.bottom) return false
@@ -1412,7 +1413,7 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
             const lineHeight = host ? parseFloat(getComputedStyle(host).lineHeight) * zoomOf(host) : NaN
             for (const r of rects) {
               const lead = Math.max(2, (lineHeight - r.height) / 2 || 0)
-              if (x >= r.left - 2 && x <= r.right + r.height * 1.5 && y >= r.top - lead && y <= r.bottom + lead) return true
+              if (x >= r.left - 2 && y >= r.top - lead && y <= r.bottom + lead) return true // 右界 = 上面的块矩形
             }
           }
           return false

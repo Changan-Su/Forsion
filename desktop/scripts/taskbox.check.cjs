@@ -1,8 +1,8 @@
 // 块内留白上的鼠标按下必须原样交给浏览器与 PM(P-01,评审 2026-09-27):09-26 的框选改动在
 // pointerdown 上 preventDefault,浏览器不再派发兼容 mousedown —— 待办方框点不动、短行右侧点击
 // 光标落到段首、Shift+点击塌成光标、三击选不中整段。现在:按下不拦,拖动 >4px 才转成框选;
-// 块矩形之外的留白(块间缝/两侧余白)维持立即起框。「从行尾留白拉框选」(selection-display.check
-// 钉住的设计)照旧成立,这里另外验框完之后 Backspace 删的就是框住的块(PM 与 DOM 选区一致)。
+// 块矩形之外的留白(块间缝/两侧余白)维持立即起框。行尾右侧的留白一律按文字选(2026-10-13 用户定;
+// 先前「从行尾留白拉框选」的设计作废),这里另外验框完之后 Backspace 删的就是框住的块(PM 与 DOM 选区一致)。
 // K8b(K-11):待办上 Mod+Enter 翻转勾选,普通列表仍拆项。
 // R22(R-22):父待办勾选后完成样式不传染给没勾的子项。
 // R10b / R10:Obsidian 空待办 `- [ ]` 读成空待办;空待办落盘 `- [ ] ` 而不是 `- [ ] <br />`。
@@ -153,13 +153,29 @@ async function main() {
         const s = await sel(page)
         check(`[${shell}] 三击行尾留白:选中整段`, s.from <= c.from && s.to >= c.to && s.to > s.from, `${JSON.stringify(s)} para=${c.from}-${c.to}`)
       }
-      // ⑤ 从行尾留白拖过两段 = 框选(设计保留);框完 Backspace 删的正是这两块。
+      // ⑤ 行尾留白一律按文字选(2026-10-13 用户定;先前这里钉的是「从行尾留白拖过两段 = 框选」):拖出来的是文字选区,不起框。
       {
         await reset(page)
         const a = await para(page, 0), b = await para(page, 1)
         await page.mouse.move(a.x1 + 40, a.y)
         await page.mouse.down()
-        await page.mouse.move(a.left + 8, b.bottom - 2, { steps: 10 })
+        await page.mouse.move(b.x0 + 12, b.y, { steps: 10 })
+        const during = await page.evaluate(() => !!document.querySelector('.amx-marquee'))
+        await page.mouse.up()
+        await page.waitForTimeout(200)
+        const mode = await page.evaluate((PM) => document.querySelector(PM).getAttribute('data-blocksel'), PM)
+        const s = await sel(page)
+        check(`[${shell}] 行尾留白拖进下一段:是文字选区(从这一行尾起),不起框选`, !during && !mode && s.type === 'text' && s.from === a.to && s.to >= b.from && s.to < b.to, JSON.stringify({ during, mode, s, a: [a.from, a.to], b: [b.from, b.to] }))
+      }
+      // ⑤b 框选从块间缝起:拖过两段,框完 Backspace 删的正是这两块(PM 与 DOM 选区一致)。
+      {
+        await reset(page)
+        const a = await para(page, 0), b = await para(page, 1), c = await para(page, 2)
+        const gapY = (b.bottom + c.top) / 2
+        const inGap = await page.evaluate(({ PM, y, x }) => [...document.querySelectorAll(PM + ' > *')].every((el) => { const r = el.getBoundingClientRect(); return y < r.top || y > r.bottom || x < r.left || x > r.right }), { PM, y: gapY, x: a.x1 + 40 })
+        await page.mouse.move(a.x1 + 40, gapY)
+        await page.mouse.down()
+        await page.mouse.move(a.left + 8, a.top + 2, { steps: 10 })
         const during = await page.evaluate(() => !!document.querySelector('.amx-marquee'))
         await page.mouse.up()
         await page.waitForTimeout(200)
@@ -167,7 +183,7 @@ async function main() {
         await page.keyboard.press('Backspace')
         await page.waitForTimeout(150)
         const left = await page.evaluate((PM) => [...document.querySelectorAll(PM + ' > p')].map((p) => p.textContent), PM)
-        check(`[${shell}] 行尾留白拖过两段仍是框选,Backspace 删掉的正是框住的两块`, during && mode === 'true' && left.join('|') === '第三段也短。', JSON.stringify({ during, mode, left }))
+        check(`[${shell}] 块间缝起手拖过两段是框选,Backspace 删掉的正是框住的两块`, inGap && during && mode === 'true' && left.join('|') === '第三段也短。', JSON.stringify({ inGap, during, mode, left }))
       }
       await page.close()
       // ⑥ 块矩形之外(块间缝)按下:维持立即起框,松手不动 = 光标落进最近的块(现状)。
