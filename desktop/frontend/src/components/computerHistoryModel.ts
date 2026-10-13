@@ -6,7 +6,7 @@
  *   - clear({ sinceMs }):**绝对时刻**,删 t >= sinceMs 的事件。
  * 文案 key 一律字面量(i18nCoverage 的 C 断言只扫字面量;模板拼 key 缺词条不会红)。
  */
-import type { ComputerHistorySession, ComputerHistoryStatus } from '../../../shared/computerHistory'
+import type { ComputerHistorySession, ComputerHistoryState, ComputerHistoryStatus } from '../../../shared/computerHistory'
 import { formatDateTime, formatTime } from '../format/time'
 
 const MINUTE = 60_000
@@ -78,6 +78,43 @@ export function statusTone(status: ComputerHistoryStatus): 'ok' | 'warn' | 'idle
 /** 这几种状态靠授予 / 安装 / 更新 CU helper 解决 → 挂辅助功能权限卡(卡上的按钮会装 / 更新 / 打开系统设置)。 */
 export function needsHelperSetup(status: ComputerHistoryStatus): boolean {
   return status === 'no_permission' || status === 'helper_missing' || status === 'helper_outdated'
+}
+
+/**
+ * 状态行的色调与文案。设置页与首次引导用同一份判断,别在界面里另写一遍:
+ * 暂停到某一刻、自某一刻起在录这两种带时刻的说法都在这里拼。
+ */
+export function statusLine(
+  state: ComputerHistoryState, now: number, t: (key: string, vars?: Record<string, unknown>) => string,
+): { tone: 'ok' | 'warn' | 'idle'; label: string; hint: string; pausedUntil: number | null } {
+  const pausedUntil = state.status === 'paused' && state.pausedUntil != null ? state.pausedUntil : null
+  const keys = statusKeys(state.status, state.platform)
+  return {
+    tone: statusTone(state.status),
+    pausedUntil,
+    label: pausedUntil != null ? t('computerHistory.status.pausedUntil', { time: clockLabel(pausedUntil, now) }) : t(keys.label),
+    hint: state.status === 'recording'
+      ? t('computerHistory.status.recordingHint', { time: clockLabel(state.since, now) })
+      : pausedUntil != null ? t('computerHistory.status.pausedUntilHint') : t(keys.hint),
+  }
+}
+
+/**
+ * 各入口出不出现(设置页与首次引导同口径)。canGrant = 本端有设备权限接口;permissionBusy = 权限卡正在授权 / 装 / 更新助手。
+ *  - permission:权限卡只在 mac —— Windows 没有要授的权限、没有单独安装的助手,缺 / 旧组件由状态行说明怎么办(重装 / 更新 Forsion)。
+ *  - refresh:等用户处理 / 正在重连,状态行给「刷新状态」(授权回来、手动重连;Windows 上重装 / 更新回来)。
+ *  - pause:只在「在录 / 随时会录上」时有意义 —— recording,以及 disconnected(主进程正自动重连,随时可能录上;
+ *    pause() 不看连接态,照样落 pausedUntil 并断订阅,所以想先停一会儿的意愿不该被瞬时断线挡住)。
+ *    缺权限 / 没装 / 过旧的助手在用户处理之前录不了,给暂停只会让人以为它在录;已暂停由状态行给「恢复记录」。
+ */
+export function statusEntries(state: ComputerHistoryState, permissionBusy: boolean, canGrant: boolean): { permission: boolean; refresh: boolean; pause: boolean } {
+  const windows = state.platform === 'win32'
+  const permission = !windows && state.enabled && (needsHelperSetup(state.status) || permissionBusy) && canGrant
+  return {
+    permission,
+    refresh: permission || (state.enabled && (state.status === 'disconnected' || (windows && needsHelperSetup(state.status)))),
+    pause: state.enabled && (state.status === 'recording' || state.status === 'disconnected'),
+  }
 }
 
 export function startOfLocalDay(now: number): number {

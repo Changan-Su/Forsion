@@ -1,7 +1,8 @@
 /** First-run decisions, one screen at a time. Advanced configuration stays in its owning space. */
 import React, { useEffect, useRef, useState } from 'react'
+import { MotionConfig, motion } from 'framer-motion'
 import {
-  ArrowRight, ArrowLeft, Bot, Check, Cloud, KeyRound, Loader2, LogIn, ExternalLink,
+  ArrowRight, ArrowLeft, Bot, Check, ChevronRight, Cloud, Flag, KeyRound, Loader2, LogIn, ExternalLink,
   MonitorCog, FolderOpen, Sun, Moon, X, FileText, RefreshCw, Palette, ShieldCheck, Sparkles, Wrench, Globe2, Zap,
 } from 'lucide-react'
 import { listModels, testProviderConnection } from '../services/backendService'
@@ -23,6 +24,11 @@ import { track } from '../achievements/store'
 import { applyUiFonts, readFont, writeFont } from '../uiFont'
 import { OnboardingModelChoice } from './OnboardingModelChoice'
 import { OnboardingBackgroundAgents } from './OnboardingBackgroundAgents'
+import { OnboardingComputerHistory, OnboardingHistoryStatus } from './OnboardingComputerHistory'
+import { computerHistoryApi } from './useComputerHistory'
+import { isSupportedPlatform } from './computerHistoryModel'
+import { stepOrder, updateOrder, type PermissionTab, type Step } from './onboardingFlow'
+import { useApp } from '../stores/appStore'
 import { EnvProbeSection } from './EnvProbeSection'
 import './onboardingMessages'
 import './onboarding.css'
@@ -39,22 +45,22 @@ export const likelyMainlandChina = (): boolean => {
 export const ONBOARDING_DISMISS_KEY = 'forsion_tangu_onboarding_done'
 export const ONBOARDING_VERSION_KEY = 'forsion_tangu_onboarding_version'
 export const SUB_PROVIDER_LABELS: Record<string, string> = { codex: 'Codex', xai: 'xAI · Grok' }
-type Step = 'welcome' | 'connect' | 'model' | 'background' | 'theme' | 'workspace' | 'env' | 'permissions' | 'done'
 // Read the host connection at step entry, after login/model changes have been saved.
 const onboardingTarget = async () => {
   if (!window.tangu?.getConfig) throw new Error('Host unavailable')
   const c = await window.tangu.getConfig()
   return connectionTarget({ backendUrl: c.backendUrl, token: c.token, modelId: '' })
 }
-const permissionSets: Record<'computer' | 'media', DesktopPermissionId[]> = {
+const permissionSets: Record<Exclude<PermissionTab, 'history'>, DesktopPermissionId[]> = {
   computer: ['computerAccessibility', 'computerScreen'], media: ['microphone', 'camera', 'screen'],
 }
-const stepOrder = (): Step[] => {
-  const steps: Step[] = PRODUCT.agentBackend && !!window.tangu?.envCheck
-    ? ['welcome', 'connect', 'model', 'background', 'theme', 'workspace', 'env', 'done']
-    : PRODUCT.agentBackend && !!window.tangu?.getConfig ? ['welcome', 'background', 'theme', 'done'] : ['welcome', 'theme', 'done']
-  if (hasDesktopPermissions()) steps.splice(steps.indexOf('done'), 0, 'permissions')
-  return steps
+const fullOrder = (): Step[] => stepOrder({
+  agentBackend: !!PRODUCT.agentBackend, envCheck: !!window.tangu?.envCheck, config: !!window.tangu?.getConfig, permissions: hasDesktopPermissions(),
+})
+/** 电脑历史这一页在本机有没有:要有主进程接口,且系统有采集端(macOS / Windows)。同步可判,所以不支持的系统上分页根本不出现。 */
+const historyOnThisHost = (): boolean => !!computerHistoryApi() && isSupportedPlatform(window.tangu?.platform)
+const storedVersion = (): string | null => {
+  try { return localStorage.getItem(ONBOARDING_VERSION_KEY) } catch { return null }
 }
 export const OnboardingWizard: React.FC<{
   themeLang: string; themeSkin: string; themeMode: 'light' | 'dark'; themeModePref: 'light' | 'dark' | 'system'; themeSeed: string
@@ -63,14 +69,28 @@ export const OnboardingWizard: React.FC<{
 }> = ({ themeLang, themeSkin, themeMode, themeModePref, themeSeed, onThemeChange, onSeedChange, onReconnect, onFinish }) => {
   const { t } = useI18n()
   const [step, setStep] = useState<Step>('welcome')
-  const STEP_ORDER = stepOrder()
+  /** 这一步是往前还是往回走到的(入场动效按方向滑入)。 */
+  const [dir, setDir] = useState<'forward' | 'back'>('forward')
+  /** 版本更新后弹的短引导:「更新了什么」+ 上次之后新增的步骤,没有完成页。挂载时定死(结束时 store 会把标志清掉,退场动效期间不能变回完整版)。 */
+  const [updateMode] = useState(() => !!useApp.getState().onboardingUpdate)
+  /** 主进程回了 unsupported:把电脑历史那一页撤掉(连同 Muse 说明里指向它的那句、完成页那一行)。 */
+  const [historyGone, setHistoryGone] = useState(false)
+  const historyHost = historyOnThisHost() && !historyGone
+  const FULL_ORDER = fullOrder()
+  // 短引导有哪几步在挂载时定死:走到一半再少一步,当前步会掉出序列(之后只可能是少一页分页,不会少一步)。
+  const [updateSteps] = useState(() => updateOrder(fullOrder(), storedVersion(), (s) => s !== 'permissions' || historyOnThisHost()))
+  const STEP_ORDER = updateMode ? updateSteps : FULL_ORDER
   const stepIdx = STEP_ORDER.indexOf(step)
-  const isHost = STEP_ORDER.includes('connect')
+  const lastStep = stepIdx === STEP_ORDER.length - 1
+  const isHost = FULL_ORDER.includes('connect')
   const [appearanceTab, setAppearanceTab] = useState<'style' | 'colors' | 'font'>('style')
-  const [permissionTab, setPermissionTab] = useState<'computer' | 'media'>('computer')
-  const [computerAvailable, setComputerAvailable] = useState(true)
+  const [permissionTab, setPermissionTab] = useState<PermissionTab>(updateMode ? 'history' : 'computer')
+  /** null = 还没读到设备权限快照:分页条等读到再画,免得「操作电脑」先画出来又消失。 */
+  const [computerAvailable, setComputerAvailable] = useState<boolean | null>(null)
   const [saving, setSaving] = useState(false)
   const [backgroundSaving, setBackgroundSaving] = useState(false)
+  const [historySaving, setHistorySaving] = useState(false)
+  const [backgroundState, setBackgroundState] = useState<{ historian: boolean; muse: boolean } | null>(null)
   const [saveError, setSaveError] = useState('')
   const titleRef = useRef<HTMLHeadingElement>(null)
   const changelogRef = useRef<HTMLDialogElement>(null)
@@ -82,6 +102,16 @@ export const OnboardingWizard: React.FC<{
 
   // 界面字体(存的是预设 id;与设置→外观同一份 localStorage,写完立刻注入生效)
   const [uiFont, setUiFont] = useState(() => readFont('ui'))
+
+  // 平台对(macOS / Windows)但主进程说没有采集端:整项不出现。挂载时问一次,不等用户点开那一页才发现。
+  useEffect(() => {
+    if (!historyOnThisHost()) return
+    let live = true
+    void computerHistoryApi()?.get().then((view) => {
+      if (live && (view.state.status === 'unsupported' || !isSupportedPlatform(view.state.platform))) setHistoryGone(true)
+    }).catch(() => { /* 读不到不等于不支持:那一页自己会报读取失败并给重试 */ })
+    return () => { live = false }
+  }, [])
 
   // ── 欢迎与更新日志对话框 ──
   const [appVer, setAppVer] = useState('')
@@ -252,55 +282,128 @@ export const OnboardingWizard: React.FC<{
     if (showChangelog && dialog && !dialog.open) dialog.showModal()
     else if (!showChangelog && dialog?.open) dialog.close()
   }, [showChangelog])
+  // 结束只走一次:退场动效那半秒里引导还挂着,再按一次回车 / 再点一次按钮不能重复收尾。
+  const finished = useRef(false)
   const finish = (): void => {
+    if (finished.current) return
+    finished.current = true
     try {
       localStorage.setItem(ONBOARDING_DISMISS_KEY, '1')
       localStorage.setItem(ONBOARDING_VERSION_KEY, appVer || APP_VERSION)
     } catch { /* Storage may be unavailable in private sessions. */ }
     onFinish()
   }
+  const go = (next: Step, tab?: PermissionTab): void => {
+    setDir(STEP_ORDER.indexOf(next) < stepIdx ? 'back' : 'forward')
+    if (tab) setPermissionTab(tab)
+    setStep(next)
+  }
   const advance = async (): Promise<void> => {
-    if (saving) return
+    // 已经结束(跳过 / 完成)的退场那半秒里不再推进:否则会把刚跳过的那一步的草稿存下去。
+    if (saving || finished.current) return
     setSaving(true); setSaveError('')
     try {
       if (step === 'model' && chosenModel !== null) await window.tangu?.setConfig({ modelId: chosenModel })
       if (step === 'workspace' && workspaceDir !== null) await window.tangu?.setConfig({ defaultWorkspaceDir: workspaceDir.trim() })
       if (step === 'model' && chosenModel !== null) onReconnect()
-      setStep(STEP_ORDER[stepIdx + 1])
+      go(STEP_ORDER[stepIdx + 1])
     } catch (error) {
       setSaveError(t('onboarding.guide.saveFail', { error: error instanceof Error ? error.message : String(error) }))
     } finally { setSaving(false) }
   }
   const connectReady = loggedIn || byokSaved || subLoggedIn
-  const iconFor = { connect: Cloud, model: Bot, background: Sparkles, theme: Palette, workspace: FolderOpen, env: Wrench, permissions: ShieldCheck, done: Check }
-  const title = step === 'welcome' ? t('onboarding.guide.intro') : step === 'done' ? t('onboarding.guide.doneTitle')
-    : step === 'permissions' ? t('desktopPermissions.title') : t(`onboarding.step.${step}.title`)
-  const description = step === 'welcome' ? t('onboarding.guide.welcome') : step === 'done' ? t('onboarding.guide.doneBody')
-    : step === 'permissions' ? t('desktopPermissions.optional') : step === 'theme' ? t('onboarding.guide.appearanceDescription') : t(`onboarding.step.${step}.description`)
+  /** 有开关 / 配置正在落盘:上一步、下一步、跳过、左栏和完成页的回跳都等它存完。 */
+  const navLocked = saving || mirrorSaving || backgroundSaving || historySaving
+  const primaryDisabled = navLocked || (step === 'model' && modelsLoading)
+  const primary = lastStep ? finish : () => void advance()
+  // 回车 = 右下角的主按钮。焦点在输入框、按钮、开关这类自己要吃回车的控件上,或有弹窗开着时不接。
+  const primaryRef = useRef({ run: primary, disabled: primaryDisabled })
+  primaryRef.current = { run: primary, disabled: primaryDisabled }
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent): void => {
+      if (event.key !== 'Enter' || event.defaultPrevented || event.isComposing || event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return
+      const target = event.target as Element | null
+      if (target?.closest?.('button, a, input, select, textarea, summary, dialog, [role="radio"], [role="switch"], [contenteditable="true"]')) return
+      if (finished.current || document.querySelector('dialog[open]') || primaryRef.current.disabled) return
+      event.preventDefault()
+      primaryRef.current.run()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
+  // 「权限与数据」:进这一步时读一次设备权限快照,定下有哪几页(不靠某一页先挂上来才知道)。
+  // 这台电脑用不了 Computer Use 时,「操作电脑」和电脑历史都不出现 —— 记录是它的助手做的,给一个开了也录不上的开关没有意义。
+  useEffect(() => {
+    if (step !== 'permissions' || computerAvailable !== null) return
+    let live = true
+    const read = window.tangu?.desktopPermissionsStatus?.()
+    if (!read) { setComputerAvailable(false); return }
+    read.then((snapshot) => { if (live) setComputerAvailable(snapshot.computerUseAvailable && isSupportedPlatform(snapshot.platform)) })
+      .catch(() => { if (live) setComputerAvailable(false) })
+    return () => { live = false }
+  }, [step, computerAvailable])
+  const historyTab = historyHost && computerAvailable !== false
+  const permissionTabs: PermissionTab[] = [...(computerAvailable ? ['computer' as const] : []), ...(historyTab ? ['history' as const] : []), 'media']
+  const shownTab = permissionTabs.includes(permissionTab) ? permissionTab : permissionTabs[0]
+  const iconFor = { welcome: FileText, connect: Cloud, model: Bot, background: Sparkles, theme: Palette, workspace: FolderOpen, env: Wrench, permissions: ShieldCheck, done: Flag }
+  const railLabel = (s: Step): string => s === 'welcome' ? t('onboarding.update.rail')
+    : s === 'permissions' && historyHost ? t('onboarding.guide.permissionsData') : t(`onboarding.guide.${s}`)
+  const version = appVer || APP_VERSION
+  const title = step === 'welcome' ? (updateMode ? t('onboarding.update.title', { version }) : t('onboarding.guide.intro'))
+    : step === 'done' ? t('onboarding.guide.doneTitle')
+      : step === 'permissions' ? t(historyHost ? 'onboarding.step.permissions.title' : 'desktopPermissions.title') : t(`onboarding.step.${step}.title`)
+  const description = step === 'welcome' ? (updateMode ? t(lastStep ? 'onboarding.update.description' : 'onboarding.update.descriptionNew') : t('onboarding.guide.welcome'))
+    : step === 'done' ? t('onboarding.guide.doneBody')
+      : step === 'permissions' ? t(historyHost ? 'onboarding.step.permissions.description' : 'desktopPermissions.optional')
+        : step === 'theme' ? t('onboarding.guide.appearanceDescription') : t(`onboarding.step.${step}.description`)
+  const kicker = updateMode ? t(step === 'welcome' ? 'onboarding.update.kicker' : 'onboarding.update.newKicker')
+    : step === 'welcome' ? t('onboarding.guide.essentials') : t('onboarding.guide.stepOf', { n: stepIdx, total: STEP_ORDER.length - 1 })
+  /** 完成页的摘要:一行一项,点一下回到那一步去改。读不到的(后台 Agent 没加载出来)不列。 */
+  const summary: Array<{ step: Step; tab?: PermissionTab; label: string; value: React.ReactNode }> = step !== 'done' ? [] : [
+    ...(isHost ? [{ step: 'model' as const, label: t('onboarding.guide.model'), value: chosenModel ? models?.models.find((m) => m.id === chosenModel)?.name || chosenModel : t('onboarding.guide.followDefault') }] : []),
+    { step: 'theme' as const, label: t('onboarding.guide.theme'), value: listLanguages().find((th) => th.manifest.id === themeLang)?.manifest.name || themeLang },
+    ...(isHost ? [
+      { step: 'workspace' as const, label: t('onboarding.guide.workspace'), value: workspaceDir || t('onboarding.guide.workspaceLater') },
+      { step: 'env' as const, label: t('onboarding.guide.sourceTitle'), value: t(mirror === 'china' ? 'onboarding.guide.sourceChina' : 'onboarding.guide.sourceDefault') },
+    ] : []),
+    ...(backgroundState && STEP_ORDER.includes('background') ? [{ step: 'background' as const, label: t('onboarding.guide.background'),
+      value: `Historian ${t(backgroundState.historian ? 'settings.special.on' : 'settings.special.off')} · Muse ${t(backgroundState.muse ? 'settings.special.on' : 'settings.special.off')}` }] : []),
+    ...(historyTab && STEP_ORDER.includes('permissions') ? [{ step: 'permissions' as const, tab: 'history' as const, label: t('onboarding.guide.history'), value: <OnboardingHistoryStatus /> }] : []),
+  ]
 
-  return <div className="ob-shell ob-flow" data-step={step}>
+  return <div className="ob-shell ob-flow" data-step={step} data-dir={dir} data-mode={updateMode ? 'update' : 'full'}>
     <aside className="ob-rail">
       <div className="ob-brand"><BrandLogo size={30} /><strong>{PRODUCT_DISPLAY_NAME}</strong></div>
-      <nav className="ob-progress" aria-label={t('onboarding.progress.label')}>
-        {STEP_ORDER.filter((s): s is Exclude<Step, 'welcome'> => s !== 'welcome').map((s, i) => {
-          const Icon = iconFor[s]
-          return <div key={s} className={`ob-progress-item${step === s ? ' active' : ''}`} aria-label={t(`onboarding.guide.${s}`)} aria-current={step === s ? 'step' : undefined}>
-            <span className="ob-progress-icon">{stepIdx > i + 1 ? <Check size={16} /> : <Icon size={16} />}</span>
-            <span>{t(`onboarding.guide.${s}`)}</span>
-          </div>
-        })}
-      </nav>
-      <div className="ob-rail-foot"><LocaleToggle /><span>{appVer || APP_VERSION}</span></div>
+      {/* reducedMotion="user":系统开了「减弱动态效果」时,当前项的底不滑、直接到位。 */}
+      <MotionConfig reducedMotion="user">
+        <nav className="ob-progress" aria-label={t('onboarding.progress.label')}>
+          {/* 完整引导的欢迎页不占一格;更新后的短引导里它就是「更新内容」那一步。 */}
+          {STEP_ORDER.filter((s) => updateMode || s !== 'welcome').map((s) => {
+            const Icon = iconFor[s]
+            const label = railLabel(s)
+            const body = <><span className="ob-progress-icon">{stepIdx > STEP_ORDER.indexOf(s) ? <Check size={16} className="ob-draw" /> : <Icon size={16} />}</span><span>{label}</span></>
+            // 走过的步骤可以点回去;没走到的不能跳(那几步的选择在「下一步」时才保存)。
+            return stepIdx > STEP_ORDER.indexOf(s)
+              ? <button type="button" key={s} className="ob-progress-item done" aria-label={label} disabled={navLocked} onClick={() => go(s)}>{body}</button>
+              : <div key={s} className={`ob-progress-item${step === s ? ' active' : ''}`} aria-label={label} aria-current={step === s ? 'step' : undefined}>
+                  {step === s && <motion.span layoutId="ob-progress-pill" className="ob-progress-pill" transition={{ type: 'spring', stiffness: 380, damping: 32 }} />}{body}
+                </div>
+          })}
+        </nav>
+      </MotionConfig>
+      <div className="ob-rail-foot"><LocaleToggle /><span>{version}</span></div>
     </aside>
     <main className="ob-stage">
       <header className="ob-step-head">
-        <div><div className="ob-step-kicker">{t('onboarding.guide.essentials')}</div>
+        <div key={step} className="ob-step-title"><div className="ob-step-kicker">{kicker}</div>
           <h1 ref={titleRef} tabIndex={-1}>{title}</h1><p>{description}</p>
         </div>
-        {step !== 'welcome' && <span className="ob-step-count">{stepIdx} / {STEP_ORDER.length - 1}</span>}
+        {/* 「跳过引导」只在这里,右下角只留一个主按钮。完成页不给(那里的主按钮就是结束)。 */}
+        {step !== 'done' && <button type="button" className="ob-skip" disabled={navLocked} onClick={finish}>{t('onboarding.nav.skip')}</button>}
       </header>
       <div className="ob-content" key={step}>
-        {step === 'welcome' && <div className="ob-welcome-layout">
+        {step === 'welcome' && updateMode && <div className="ob-update-notes changelog"><ChangelogEntries /></div>}
+        {step === 'welcome' && !updateMode && <div className="ob-welcome-layout">
           <div className="ob-welcome-story"><BrandLogo size={64} />
             <h2>{PRODUCT_DISPLAY_NAME}</h2><p>{t('onboarding.welcome.railBody')}</p>
             <div className="ob-welcome-points">
@@ -430,11 +533,12 @@ export const OnboardingWizard: React.FC<{
           {modelsLoading && <div className="ob-loading" role="status"><Loader2 size={20} className="spin" />{t('onboarding.model.loading')}</div>}
           {!modelsLoading && (modelError || !models?.models.some((m) => !m.modelType || m.modelType === 'llm')) ? <div className="ob-empty">
             <Bot size={32} /><h2>{t(modelError ? 'onboarding.guide.modelError' : 'onboarding.guide.modelEmpty')}</h2>
-            <div className="ob-inline"><button className="btn ghost" onClick={() => setStep('connect')}>{t('onboarding.guide.connect')}</button>
+            <div className="ob-inline"><button className="btn ghost" onClick={() => go('connect')}>{t('onboarding.guide.connect')}</button>
               <button className="btn ghost" onClick={() => void loadStepModels()}><RefreshCw size={14} />{t('onboarding.model.refresh')}</button></div>
           </div> : !modelsLoading && models && <OnboardingModelChoice models={models} value={chosenModel || ''} onChange={setChosenModel} />}
         </>}
-        {step === 'background' && <OnboardingBackgroundAgents resolveTarget={onboardingTarget} onBusyChange={setBackgroundSaving} />}
+        {step === 'background' && <OnboardingBackgroundAgents resolveTarget={onboardingTarget} onBusyChange={setBackgroundSaving} onState={setBackgroundState}
+          historyAhead={historyHost && STEP_ORDER[stepIdx + 1] === 'permissions'} />}
         {step === 'theme' && <div className="ob-appearance-layout">
           <div className="ob-appearance-controls">
             <div className="seg ob-sections" aria-label={t('onboarding.guide.theme')}>
@@ -618,25 +722,31 @@ export const OnboardingWizard: React.FC<{
               key=probeKey:换源存盘后重挂,安装命令按新源重算(main.ts runEnvCheck 在检测时读 mirror)。 */}
           <div className="ob-env-tools"><EnvProbeSection key={probeKey} locked={mirrorSaving} onLeave={finish} /></div>
         </div>}
-        {step === 'permissions' && <div className="ob-permission-layout">
-          <div className="seg ob-sections">
-            {(['computer', 'media'] as const).filter((tab) => tab !== 'computer' || computerAvailable).map((tab) => <button key={tab} aria-pressed={permissionTab === tab} className={permissionTab === tab ? 'active' : ''}
-              onClick={() => setPermissionTab(tab)}>{t(`onboarding.guide.${tab}`)}</button>)}
-          </div>
-          <DesktopPermissions mode={themeMode} only={permissionSets[permissionTab]} onSnapshot={(snapshot) => {
-            const available = snapshot.computerUseAvailable && ['darwin', 'win32'].includes(snapshot.platform)
-            setComputerAvailable(available)
-            if (!available) setPermissionTab('media')
-          }} />
-        </div>}
+        {step === 'permissions' && (computerAvailable === null
+          ? <p className="ob-muted" role="status">{t('desktopPermissions.loading')}</p>
+          : <div className="ob-permission-layout">
+              <div className="seg ob-sections">
+                {permissionTabs.map((tab) => <button key={tab} aria-pressed={shownTab === tab} className={shownTab === tab ? 'active' : ''}
+                  onClick={() => setPermissionTab(tab)}>{t(`onboarding.guide.${tab}`)}</button>)}
+              </div>
+              {/* 操作电脑 ↔ 语音与媒体 是同一个权限卡实例换 only:切这两页不卸载,进行中的授权 / 安装不被打断(卸载会关掉系统授权引导)。
+                  快照持续回报:进这一步时那一次读失败了,之后卡片重试 / 轮询成功,「操作电脑」和电脑历史还能回来。 */}
+              <div className="ob-permission-pane" key={shownTab === 'history' ? 'history' : 'device'}>
+                {shownTab === 'history'
+                  ? <OnboardingComputerHistory mode={themeMode} onBusyChange={setHistorySaving} onUnsupported={() => setHistoryGone(true)} />
+                  : <DesktopPermissions mode={themeMode} only={permissionSets[shownTab]}
+                      onSnapshot={(snapshot) => setComputerAvailable(snapshot.computerUseAvailable && isSupportedPlatform(snapshot.platform))} />}
+              </div>
+            </div>)}
         {step === 'done' && <div className="ob-done-layout">
-          <div className="ob-done-summary"><span className="ob-done-mark"><Check size={28} /></span>
-            <dl>
-              {isHost && <><dt>{t('onboarding.guide.model')}</dt><dd>{chosenModel ? models?.models.find((m) => m.id === chosenModel)?.name || chosenModel : t('onboarding.guide.followDefault')}</dd></>}
-              <dt>{t('onboarding.guide.theme')}</dt><dd>{listLanguages().find((th) => th.manifest.id === themeLang)?.manifest.name || themeLang}</dd>
-              {isHost && <><dt>{t('onboarding.guide.workspace')}</dt><dd>{workspaceDir || t('onboarding.guide.workspaceLater')}</dd></>}
-              {isHost && <><dt>{t('onboarding.guide.sourceTitle')}</dt><dd>{t(mirror === 'china' ? 'onboarding.guide.sourceChina' : 'onboarding.guide.sourceDefault')}</dd></>}
-            </dl>
+          <div className="ob-done-summary"><span className="ob-done-mark"><Check size={28} className="ob-draw" /></span>
+            <ul className="ob-summary">
+              {summary.map((row) => <li key={row.label}>
+                <button type="button" disabled={navLocked} onClick={() => go(row.step, row.tab)}>
+                  <span>{row.label}</span><b>{row.value}</b><i>{t('onboarding.done.edit')}<ChevronRight size={12} aria-hidden="true" /></i>
+                </button>
+              </li>)}
+            </ul>
           </div><div className="ob-next-steps"><h2>{t('onboarding.guide.more')}</h2>
             {isHost ? <>
               <div><Bot size={18} /><span>{t('onboarding.guide.moreAgents')}<small>{t('onboarding.guide.moreAgentsPath')}</small></span></div>
@@ -649,12 +759,13 @@ export const OnboardingWizard: React.FC<{
       <footer className="ob-footer">
         {saveError && <div className="ob-save-error" role="alert">{saveError}</div>}
         <div className="ob-footer-row">
-          {stepIdx > 0 ? <button className="btn ghost" disabled={saving || mirrorSaving || backgroundSaving} onClick={() => setStep(STEP_ORDER[stepIdx - 1])}><ArrowLeft size={14} />{t('onboarding.nav.prev')}</button>
-            : <button className="btn ghost" onClick={() => setShowChangelog(true)}><FileText size={14} />{t('onboarding.welcome.viewChangelog')}</button>}
+          {stepIdx > 0 ? <button className="btn ghost" disabled={navLocked} onClick={() => go(STEP_ORDER[stepIdx - 1])}><ArrowLeft size={14} />{t('onboarding.nav.prev')}</button>
+            // 更新后的短引导第一屏就是更新日志本身,不再给打开它的按钮。
+            : !updateMode && <button className="btn ghost" onClick={() => setShowChangelog(true)}><FileText size={14} />{t('onboarding.welcome.viewChangelog')}</button>}
           <span className="ob-footer-hint">{t('onboarding.guide.changeLater')}</span>
-          {step !== 'done' && <button className="btn ghost" disabled={saving || mirrorSaving || backgroundSaving} onClick={step === 'permissions' ? () => void advance() : finish}>{t(step === 'permissions' ? 'desktopPermissions.later' : 'onboarding.nav.skip')}</button>}
-          <button className="btn primary" disabled={saving || mirrorSaving || backgroundSaving || (step === 'model' && modelsLoading)} onClick={step === 'done' ? finish : () => void advance()}>
-            {t(step === 'welcome' ? 'onboarding.welcome.continue' : step === 'done' ? 'onboarding.nav.start' : step === 'connect' && !connectReady ? 'onboarding.connect.skipForNow' : 'onboarding.nav.next')}
+          <button className="btn primary" disabled={primaryDisabled} onClick={primary}>
+            {t(updateMode ? (lastStep ? (step === 'welcome' ? 'onboarding.update.continue' : 'onboarding.update.finish') : 'onboarding.nav.next')
+              : step === 'welcome' ? 'onboarding.welcome.continue' : step === 'done' ? 'onboarding.nav.start' : step === 'connect' && !connectReady ? 'onboarding.connect.skipForNow' : 'onboarding.nav.next')}
             {saving ? <Loader2 size={15} className="spin" /> : <ArrowRight size={15} />}
           </button>
         </div>

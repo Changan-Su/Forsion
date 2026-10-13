@@ -1,36 +1,30 @@
 /**
- * 设置 → 系统 → 电脑历史。只做界面:落盘 / 保留 / 清除 / 暂停 / 连 helper 全在主进程(electron/computerHistory.ts),
- * 这里经 window.tangu.computerHistory(shared/computerHistory.ts 的 ComputerHistoryApi)读写,每个写操作回最新 View 直接替换。
- * 状态实时性:onChanged 推送 + 窗口回到前台时 get() 一次(从系统设置授权回来,不必等主进程的重试)。
- * 三路来的 View(get 回包 / 写操作结果 / 推送)一律按主进程的 rev 取最新:旧的 get() 回包晚到不能把新推送盖回去。
- * ⚠️ 主进程的 get() 在失败态会立刻重连(连不上就拉起 helper)。权限卡正在「更新并重启助手」时别触发它:
- * 旧助手 shutdown 到新字节落盘之间一重连,就会把旧版拉起来占住 socket,新版随即作为多余实例退出。
- * 清除 / 改排除表同样会让主进程重订阅,期间一并禁用(主进程的拉起本身也按 helperBusy 把关)。
+ * 设置 → 系统 → 电脑历史。只做界面:落盘 / 保留 / 清除 / 暂停 / 连 helper 全在主进程(electron/computerHistory.ts)。
+ * 读写、开关、按 rev 取最新、权限卡忙时不触发 get() 这些在 useComputerHistory(首次引导共用同一份,⚠️ 见那边文件头);
+ * 状态行文案与各入口出不出现在 computerHistoryModel 的 statusLine / statusEntries;五条说明在 ComputerHistoryAbout。
+ * 清除 / 改排除表同样会让主进程重订阅,权限卡忙时一并禁用(主进程的拉起本身也按 helperBusy 把关)。
  * 辅助功能授权复用 DesktopPermissions(只画 computerAccessibility;不涉及屏幕录制)。
  * Windows:没有要授的系统权限,也没有单独安装的助手(采集组件随 Forsion 内置的 Computer Use 包走)—— 不挂权限卡,
  * 缺 / 旧组件的状态行改说「重装 / 更新 Forsion」,同意说明里与 mac 不同的条目换 computerHistory.win.* 的键。
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { Ban, FolderOpen, Globe2, History, Loader2, MousePointer2, Play, RefreshCw, ShieldCheck, Trash2, X } from 'lucide-react'
-import type { ComputerHistoryApi, ComputerHistoryExclude, ComputerHistorySession, ComputerHistoryView } from '../../../shared/computerHistory'
+import type { ComputerHistoryExclude, ComputerHistorySession } from '../../../shared/computerHistory'
 import { useI18n } from '../i18n'
 import { formatLongDate, formatTime } from '../format/time'
 import { ipcErrorText } from '../ipcError'
 import { DesktopPermissions, hasDesktopPermissions } from './DesktopPermissions'
 import { SettingsPanel, SettingsRow, SettingsState, SettingsSwitch } from './SettingsPrimitives'
 import {
-  CLEAR_CHOICES, PAUSE_CHOICES, clearArg, clockLabel, dayOptions, dayRange, dayStartAgo, isSupportedPlatform, needsHelperSetup, normalizeBundleId, normalizeExeName,
-  normalizeDomain, historyBlocks, pauseArg, statusKeys, statusTone, type ClearChoice,
+  CLEAR_CHOICES, PAUSE_CHOICES, clearArg, dayOptions, dayRange, dayStartAgo, normalizeBundleId, normalizeExeName,
+  normalizeDomain, historyBlocks, pauseArg, statusEntries, statusLine, type ClearChoice,
 } from './computerHistoryModel'
+import { ComputerHistoryAbout } from './ComputerHistoryAbout'
+import { useComputerHistory } from './useComputerHistory'
 import './computerHistoryMessages'
 import './computerHistory.css'
 
-/** 本端有主进程 API 才列这一页(不支持的平台也列,页内写「目前仅支持 macOS 和 Windows」);云端 Web / 移动端 / 设备页没有。 */
-export function computerHistoryApi(): ComputerHistoryApi | undefined {
-  const tangu = window.tangu
-  if (!tangu || tangu.cloudWeb || tangu.mobile || tangu.unitPage) return undefined
-  return typeof tangu.computerHistory?.get === 'function' ? tangu.computerHistory : undefined
-}
+export { computerHistoryApi } from './useComputerHistory'
 
 /** 图标取不到时的首字母方块。 */
 function AppIcon({ name, src }: { name: string; src?: string | null }): React.ReactNode {
@@ -42,12 +36,12 @@ function AppIcon({ name, src }: { name: string; src?: string | null }): React.Re
 /** @param anchor 设置搜索落点(settingsSearchIndex.ts),挂在首张面板上。 */
 export function ComputerHistorySettings({ mode, anchor }: { mode: 'light' | 'dark'; anchor?: string }): React.ReactNode {
   const { t } = useI18n()
-  const api = computerHistoryApi()
-  const hostPlatform = window.tangu?.platform
-  const [view, setView] = useState<ComputerHistoryView | null>(null)
-  const [loadError, setLoadError] = useState<string | null>(null)
-  const [busy, setBusy] = useState<string | null>(null)
-  const [actionError, setActionError] = useState<string | null>(null)
+  const history = useComputerHistory()
+  const {
+    api, view, loadError, busy, actionError, setActionError, alive, load, act, hostUnsupported,
+    confirmEnable, setConfirmEnable, toggleEnabled, enable, permissionBusy, permissionBusyRef, onPermissionBusy,
+    statusRefreshing, permissionRefresh, refreshStatus,
+  } = history
   const [sessions, setSessions] = useState<ComputerHistorySession[]>([])
   const [recentApps, setRecentApps] = useState<Array<{ name: string; bundleId: string }>>([])
   const [icons, setIcons] = useState<Record<string, string | null>>({})
@@ -60,46 +54,13 @@ export function ComputerHistorySettings({ mode, anchor }: { mode: 'light' | 'dar
   const [recentError, setRecentError] = useState<string | null>(null)
   const [confirmClear, setConfirmClear] = useState<ClearChoice | null>(null)
   const [cleared, setCleared] = useState(false)
-  /** 从关到开先就地确认(复述同意说明要点):开关在同意说明上方,不能一点就开录。 */
-  const [confirmEnable, setConfirmEnable] = useState(false)
   const [domainDraft, setDomainDraft] = useState('')
   const [appDraft, setAppDraft] = useState('')
   /** 存文案 key 而不是文案:切语言时跟着变。 */
   const [domainError, setDomainError] = useState<string | null>(null)
   const [appError, setAppError] = useState<string | null>(null)
-  /** 权限卡正在授权 / 安装 / 更新助手:期间不因回到前台去 get()(见文件头 ⚠️),卡片也别因状态跳变被卸掉。 */
-  const [permissionBusy, setPermissionBusy] = useState(false)
-  const permissionBusyRef = useRef(false)
-  /** 状态行「刷新状态」:重读电脑历史状态 + 让权限卡重读快照(卡自己的工具条在嵌入时不画)。 */
-  const [statusRefreshing, setStatusRefreshing] = useState(false)
-  const [permissionRefresh, setPermissionRefresh] = useState(0)
-  const alive = useRef(true)
-  const busyRef = useRef<string | null>(null)
-  /** 手上 View 的 rev:只收更大的(见文件头)。 */
-  const revRef = useRef(-Infinity)
   /** 预览请求序号:只认最后发出的那次(清除后的重拉不能被清除前发出、晚到的旧结果盖回去)。 */
   const recentSeq = useRef(0)
-  // 平台已知不支持(不是 darwin / win32)就不去读(主进程那边只会回 unsupported)。
-  const hostUnsupported = !!hostPlatform && !isSupportedPlatform(hostPlatform)
-
-  /** 收一份 View:比手上的旧(或一样)就丢。 */
-  const accept = useCallback((next: ComputerHistoryView): void => {
-    if (!alive.current || next.rev <= revRef.current) return
-    revRef.current = next.rev
-    setView(next)
-  }, [])
-
-  const load = useCallback(async (): Promise<void> => {
-    if (!api) return
-    try {
-      const next = await api.get()
-      if (!alive.current) return
-      accept(next)
-      setLoadError(null)
-    } catch (error) {
-      if (alive.current) setLoadError(ipcErrorText(error))
-    }
-  }, [api, accept])
 
   const loadRecent = useCallback(async (): Promise<void> => {
     if (!api) return
@@ -122,52 +83,13 @@ export function ComputerHistorySettings({ mode, anchor }: { mode: 'light' | 'dar
     }
   }, [api])
 
-  const onPermissionBusy = useCallback((next: boolean): void => {
-    const was = permissionBusyRef.current
-    permissionBusyRef.current = next
-    if (!alive.current) return
-    setPermissionBusy(next)
-    // 动作结束(新助手已起,或用户选了「稍后设置」)→ 现在再读一次,让主进程按新情况立即重连。
-    if (was && !next) void load()
-  }, [load])
-
+  // 时间线只有这一页要:挂载时拉一次(状态那一份由 useComputerHistory 自己读,它的 effect 排在前面,alive 已置回 true)。
   useEffect(() => {
-    alive.current = true
-    if (!api || hostUnsupported) return
-    void load()
-    void loadRecent()
-    const off = api.onChanged(accept)
-    const refreshVisible = (): void => { if (document.visibilityState === 'visible' && !permissionBusyRef.current) void load() }
-    window.addEventListener('focus', refreshVisible)
-    document.addEventListener('visibilitychange', refreshVisible)
-    return () => {
-      alive.current = false
-      off()
-      window.removeEventListener('focus', refreshVisible)
-      document.removeEventListener('visibilitychange', refreshVisible)
-    }
-  }, [api, hostUnsupported, load, loadRecent, accept])
-
-  /** 写操作统一入口:同一时刻只跑一个(ref 防连点),成功用回来的 View 替换,失败就地报。 */
-  const act = async (key: string, run: (a: ComputerHistoryApi) => Promise<ComputerHistoryView>): Promise<boolean> => {
-    if (!api || busyRef.current) return false
-    busyRef.current = key
-    setBusy(key)
-    setActionError(null)
-    try {
-      accept(await run(api))
-      return true
-    } catch (error) {
-      if (alive.current) setActionError(ipcErrorText(error))
-      return false
-    } finally {
-      busyRef.current = null
-      if (alive.current) setBusy(null)
-    }
-  }
+    if (api && !hostUnsupported) void loadRecent()
+  }, [api, hostUnsupported, loadRecent])
 
   if (!api) return null
-  if (hostUnsupported || view?.state.status === 'unsupported' || (view && !isSupportedPlatform(view.state.platform))) {
+  if (history.unsupported) {
     return <SettingsState icon={<History size={20} />} title={t('computerHistory.unsupportedPlatform.title')} description={t('computerHistory.unsupportedPlatform.body')} />
   }
   if (!view) {
@@ -185,15 +107,7 @@ export function ComputerHistorySettings({ mode, anchor }: { mode: 'light' | 'dar
   const status = state.status
   /** 主进程所在平台(View 自带,比 window.tangu.platform 更贴近真正在采集的那一端)。 */
   const windows = state.platform === 'win32'
-  const pausedUntil = status === 'paused' && state.pausedUntil != null ? state.pausedUntil : null
-  const tone = statusTone(status)
-  const keys = statusKeys(status, state.platform)
-  const statusLabel = pausedUntil != null
-    ? t('computerHistory.status.pausedUntil', { time: clockLabel(pausedUntil, now) })
-    : t(keys.label)
-  const statusHint = status === 'recording'
-    ? t('computerHistory.status.recordingHint', { time: clockLabel(state.since, now) })
-    : pausedUntil != null ? t('computerHistory.status.pausedUntilHint') : t(keys.hint)
+  const { tone, label: statusLabel, hint: statusHint, pausedUntil } = statusLine(state, now, t)
 
   // 芯片上显示 App 名:先查最近见过的 App,再查今天的会话;都没有就露 bundle id。
   const appNames = new Map<string, string>()
@@ -243,31 +157,7 @@ export function ComputerHistorySettings({ mode, anchor }: { mode: 'light' | 'dar
     void api.reveal().catch((error: unknown) => { if (alive.current) setActionError(ipcErrorText(error)) })
   }
   const pendingClear = CLEAR_CHOICES.find((c) => c.id === confirmClear)
-  const toggleEnabled = (on: boolean): void => {
-    if (on && !state.enabled) { setConfirmEnable(true); return }
-    setConfirmEnable(false)
-    void act('enable', (a) => a.setEnabled(on))
-  }
-  const enable = async (): Promise<void> => {
-    if (await act('enable', (a) => a.setEnabled(true))) setConfirmEnable(false)
-  }
-  /** 刷新状态:get() 在失败态会让主进程立刻重连 —— 助手更新 / 重启进行中不许点(见文件头 ⚠️)。 */
-  const refreshStatus = async (): Promise<void> => {
-    if (permissionBusyRef.current) return
-    setPermissionRefresh((n) => n + 1)
-    setStatusRefreshing(true)
-    try { await load() } finally { if (alive.current) setStatusRefreshing(false) }
-  }
-  /** 权限卡只在 mac:Windows 没有要授的权限、没有单独安装的助手,缺 / 旧组件由状态行说明怎么办(重装 / 更新 Forsion)。 */
-  const showPermission = !windows && state.enabled && (needsHelperSetup(status) || permissionBusy) && hasDesktopPermissions()
-  /** 等用户处理 / 正在重连:状态行给「刷新状态」(授权回来、手动重连;Windows 上重装 / 更新回来)。 */
-  const showRefresh = showPermission || (state.enabled && (status === 'disconnected' || (windows && needsHelperSetup(status))))
-  /**
-   * 暂停只在「在录 / 随时会录上」时有意义:recording,以及 disconnected(主进程正自动重连,随时可能录上;
-   * pause() 不看连接态,照样落 pausedUntil 并断订阅,所以想先停一会儿的意愿不该被瞬时断线挡住)。
-   * 缺权限 / 没装 / 过旧的助手在用户处理之前录不了,给暂停只会让人以为它在录;已暂停由状态行给「恢复记录」。
-   */
-  const showPause = state.enabled && (status === 'recording' || status === 'disconnected')
+  const { permission: showPermission, refresh: showRefresh, pause: showPause } = statusEntries(state, permissionBusy, hasDesktopPermissions())
 
   return (
     <div className="ch-page" data-ch-status={status}>
@@ -344,14 +234,7 @@ export function ComputerHistorySettings({ mode, anchor }: { mode: 'light' | 'dar
         description={t('computerHistory.about.hint')}
         actions={<button type="button" className="btn ghost sm" onClick={reveal}><FolderOpen size={13} aria-hidden="true" />{t(windows ? 'computerHistory.win.reveal' : 'computerHistory.reveal')}</button>}
       >
-        <dl className="ch-about">
-          <div className="ch-about-row"><dt>{t('computerHistory.about.recordedLabel')}</dt><dd>{t(windows ? 'computerHistory.win.recorded' : 'computerHistory.about.recorded')}</dd></div>
-          <div className="ch-about-row"><dt>{t('computerHistory.about.neverLabel')}</dt><dd>{t(windows ? 'computerHistory.win.never' : 'computerHistory.about.never')}</dd></div>
-          <div className="ch-about-row"><dt>{t('computerHistory.about.storageLabel')}</dt><dd>{t('computerHistory.about.storage', { path: view.root, days: view.keepDays })}</dd></div>
-          <div className="ch-about-row"><dt>{t('computerHistory.about.accessLabel')}</dt><dd>{t('computerHistory.about.access')}</dd></div>
-          <div className="ch-about-row"><dt>{t('computerHistory.about.permissionLabel')}</dt><dd>{t(windows ? 'computerHistory.win.permission' : 'computerHistory.about.permission')}</dd></div>
-        </dl>
-        <p className="ch-tip">{t('computerHistory.about.tip')}</p>
+        <ComputerHistoryAbout view={view} />
       </SettingsPanel>
 
       <SettingsPanel

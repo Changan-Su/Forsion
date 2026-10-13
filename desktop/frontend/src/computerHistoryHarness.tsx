@@ -2,7 +2,9 @@
  * Dev-only visual harness:设置 → 电脑历史 —— 真 ComputerHistorySettings + 生产 CSS;window.tangu.computerHistory 与
  * 权限快照都是桩,不连主进程、不碰 helper。?dark / ?lang=en / ?status=<ComputerHistoryStatus> / ?empty(无最近 App 与会话)
  * / ?skin=<cream|coral|teal|lavender|zhi>(主题色与背景色同取这一套;缺省 cream)/ ?platform=win32(Windows 版:无权限卡、Windows 文案)。
+ * / ?onboarding(首次引导「权限与数据」里的那一页:真 OnboardingComputerHistory 放在引导的外壳里;?status=off 是它的缺省情形)。
  * 截图:浏览器打开 /computer-history-harness.html,或用 Playwright 按上面的参数逐张拍(DESIGN §8:观感改动交付前看真截图)。
+ * 引导那一页的几何检查:npm run check:onboardinghistory。
  */
 import { createRoot } from 'react-dom/client'
 import { LocaleProvider, setLocaleGlobal } from './i18n'
@@ -10,6 +12,10 @@ import './i18n.generated'
 import './styles/base.css'
 import { applyTheme } from './theme/loader'
 import { ComputerHistorySettings } from './components/ComputerHistorySettings'
+import { OnboardingComputerHistory } from './components/OnboardingComputerHistory'
+import { translate } from './i18n'
+import './components/onboardingMessages'
+import './components/onboarding.css'
 import type {
   ComputerHistoryApi, ComputerHistoryExclude, ComputerHistorySession, ComputerHistoryStatus, ComputerHistoryView,
 } from '../../shared/computerHistory'
@@ -88,7 +94,7 @@ const computerHistory: ComputerHistoryApi = {
 const snapshot: DesktopPermissionsSnapshot = {
   platform, appName: 'Forsion', computerUseAvailable: true,
   helperInstalled: status !== 'helper_missing', helperRunning: status !== 'helper_missing',
-  ...(status === 'helper_missing' ? { helperError: 'not-installed' as const } : {}),
+  ...(status === 'helper_missing' ? { helperError: 'not-installed' as const } : status === 'helper_outdated' ? { helperError: 'outdated' as const } : {}),
   permissions: {
     // 助手没装时读不到授权状态(真机同样显示「状态未知」)
     computerAccessibility: status === 'no_permission' ? 'denied' : status === 'helper_missing' ? 'unknown' : 'granted', computerScreen: 'unverified',
@@ -103,7 +109,34 @@ window.tangu = {
   desktopPermissionsCloseGuide: async () => {},
 } as unknown as NonNullable<Window['tangu']>
 
+// 引导那一页:外壳、标题区、分页条、底栏照 OnboardingWizard 的标记摆(只为量几何与看观感;流程本身由 check:first-run 在真应用里走)。
+const onboardingPage = (
+  <div className="ob-shell ob-flow" data-step="permissions" style={{ position: 'fixed', inset: 0, background: 'var(--bg)' }}>
+    <aside className="ob-rail" />
+    <main className="ob-stage">
+      <header className="ob-step-head">
+        <div className="ob-step-title"><div className="ob-step-kicker">{translate('onboarding.guide.stepOf', { n: 7, total: 8 })}</div>
+          <h1>{translate('onboarding.step.permissions.title')}</h1><p>{translate('onboarding.step.permissions.description')}</p></div>
+        <button type="button" className="ob-skip">{translate('onboarding.nav.skip')}</button>
+      </header>
+      <div className="ob-content">
+        <div className="ob-permission-layout">
+          <div className="seg ob-sections">
+            <button>{translate('onboarding.guide.computer')}</button><button className="active">{translate('onboarding.guide.history')}</button><button>{translate('onboarding.guide.media')}</button>
+          </div>
+          <div className="ob-permission-pane"><OnboardingComputerHistory mode={dark ? 'dark' : 'light'} onBusyChange={() => {}} onUnsupported={() => {}} /></div>
+        </div>
+      </div>
+      <footer className="ob-footer"><div className="ob-footer-row">
+        <button className="btn ghost">{translate('onboarding.nav.prev')}</button><span className="ob-footer-hint">{translate('onboarding.guide.changeLater')}</span>
+        <button className="btn primary">{translate('onboarding.nav.next')}</button>
+      </div></footer>
+    </main>
+  </div>
+)
+
 createRoot(document.getElementById('root')!).render(
+  params.has('onboarding') ? <LocaleProvider>{onboardingPage}</LocaleProvider> :
   <LocaleProvider>
     <section className="settings-main" style={{ maxWidth: 820, margin: '0 auto' }}>
       <div className="settings-body">

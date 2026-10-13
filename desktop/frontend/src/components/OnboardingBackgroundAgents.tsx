@@ -7,10 +7,16 @@ import type { SpecialConfigResponse } from '../types'
 import { useApp } from '../stores/appStore'
 import { SettingsSwitch } from './SettingsPrimitives'
 
-/** Only the enable switches belong in first-run setup; advanced settings keep their own host. */
-export function OnboardingBackgroundAgents({ resolveTarget, onBusyChange }: {
+/**
+ * Only the enable switches belong in first-run setup; advanced settings keep their own host.
+ * @param onState    读到 / 改完开关后回报一次(完成页的摘要用);读不到就不回报。
+ * @param historyAhead 下一步有电脑历史:Muse 的说明里加一句指过去(Muse 在这条连接上不可用时不加)。
+ */
+export function OnboardingBackgroundAgents({ resolveTarget, onBusyChange, onState, historyAhead }: {
   resolveTarget: () => Promise<EngineTarget>
   onBusyChange: (busy: boolean) => void
+  onState?: (state: { historian: boolean; muse: boolean }) => void
+  historyAhead?: boolean
 }) {
   const { t } = useI18n()
   const [response, setResponse] = useState<SpecialConfigResponse | null>(null)
@@ -20,6 +26,11 @@ export function OnboardingBackgroundAgents({ resolveTarget, onBusyChange }: {
   const generation = useRef(0)
   const target = useRef<EngineTarget | null>(null)
   const writing = useRef(false)
+  const onStateRef = useRef(onState)
+  onStateRef.current = onState
+  useEffect(() => {
+    if (response) onStateRef.current?.({ historian: response.config.historian.enabled, muse: response.config.muse.enabled })
+  }, [response])
 
   const load = async () => {
     const request = ++generation.current
@@ -73,7 +84,8 @@ export function OnboardingBackgroundAgents({ resolveTarget, onBusyChange }: {
           <Icon size={22} className="ob-background-icon" />
           <div className="ob-background-copy"><h2>{name}</h2>
             <p>{t(`onboarding.background.${agent}`)}</p>
-            {unavailable && <small>{t('onboarding.background.localOnly')}</small>}
+            {unavailable ? <small>{t('onboarding.background.localOnly')}</small>
+              : agent === 'muse' && historyAhead && <small>{t('onboarding.background.museHistory')}</small>}
           </div>
           <div className="ob-background-control">
             <SettingsSwitch label={name} checked={enabled} disabled={loading || !!saving || !response || !!response.remote || !!unavailable || !target.current}
