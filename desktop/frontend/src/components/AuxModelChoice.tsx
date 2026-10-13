@@ -21,7 +21,7 @@ registerMessages({
   'aux.visionCompact': { zh: '图像识别', en: 'Image recognition' },
   'aux.visionCompactHint': { zh: '主模型无法看图时，辅助理解图片。', en: 'Helps interpret images when the main model cannot.' },
   'aux.translateCompact': { zh: '翻译', en: 'Translation' },
-  'aux.translateCompactHint': { zh: '用于笔记里的翻译和插件的实时翻译。不选就用聊天当前的模型。', en: 'For translating in notes and live translation in plugins. Leave unset to use the current chat model.' },
+  'aux.translateCompactHint': { zh: '用于笔记和插件里的翻译，不选则跟随聊天模型。', en: 'For translation in notes and plugins. Defaults to the chat model.' },
   'aux.translateFollow': { zh: '跟随聊天模型', en: 'Same as chat' },
   // 这一行的名字和下面三个选项的字,被引擎写进了给模型读的一句话里(tangu-agent toolRegistry.computerUseUnavailableReason),改文案时那边一起改。
   'aux.visionBehavior': { zh: '图像处理方式', en: 'Image handling' },
