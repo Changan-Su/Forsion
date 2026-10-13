@@ -37,8 +37,8 @@ import './views/chat2/composer2.css'
 import { Ribbon } from '@lcl/engine/Ribbon'
 import { WorkspaceHost } from '@lcl/engine/WorkspaceHost'
 import { presentDockedExtension } from '@lcl/engine/dockviewStore'
-import { addCommand, addRibbonIcon, installHotkeys, recordNav, registerView, useNav, useRibbonStore, useWorkspace } from '@lcl/engine'
-import type { ViewProps } from '@lcl/engine/types'
+import { addCommand, addRibbonIcon, getActiveSpace, installHotkeys, recordNav, registerSpace, registerView, setActiveSpaceCold, unregisterView, useNav, useRibbonStore, useSpaceStore, useWorkspace } from '@lcl/engine'
+import type { SpaceDefinition, ViewProps } from '@lcl/engine/types'
 import '@lcl/engine/engine.css'
 import { usePageStore, pageStoreFor, remapScopePaths, PageScopeCtx, onNotePathGone } from './amadeus/store/pageStore'
 import { onNoteLockChange, readNoteLocked } from './amadeus/unified/viewMemory'
@@ -706,6 +706,67 @@ if (new URLSearchParams(location.search).has('dock')) {
       createRoot(host).render(<div className="am-app"><CommandPalette /><AmadeusOverlays /></div>)
       ;(window as unknown as { __qf: unknown }).__qf = { useQuickFind, useCommandStore, useUiOverlay, usePageStore, useWorkspace }
     })
+} else if (new URLSearchParams(location.search).has('peek')) {
+  // Space 左面板悬停预览(scripts/space-peek.check.cjs):真 Shell(Ribbon + Dockview)+ 真 SpaceButton + 三个替身 Space。
+  // a / b 各有左栏(b 两个 View → 卡片头部出页签),c 没有左栏(悬停不弹)。左栏替身里摆齐预览要扛住的几样东西:
+  // 可点的行(记下点击那一刻的活动 Space)、输入框、右键弹出的挂到 body 的菜单、一个按视口坐标定位的 fixed 标记。
+  void Promise.all([import('@lcl/engine/Shell'), import('./components/SpaceButton'), import('react-dom')]).then(([{ Shell }, { SpaceButton }, { createPortal }]) => {
+    const probe = { hits: [] as string[], mounts: {} as Record<string, number>, useWorkspace, useSpaceStore, unregisterView }
+    ;(window as unknown as { __peek: typeof probe }).__peek = probe
+    const PeekList: React.FC<{ tag: string }> = ({ tag }) => {
+      const [menu, setMenu] = useState(false)
+      useEffect(() => { probe.mounts[tag] = (probe.mounts[tag] ?? 0) + 1 }, [tag])
+      return (
+        <div className="pk-list" data-tag={tag} style={{ display: 'flex', flexDirection: 'column', gap: 2, padding: 8 }}>
+          <input className="pk-input" placeholder={tag} />
+          {[1, 2, 3].map((i) => (
+            <button key={i} className="pk-row" data-row={i} style={{ textAlign: 'left', height: 30 }}
+              onClick={() => probe.hits.push(`${tag}:${i}@${useSpaceStore.getState().activeSpaceId}`)}
+              onContextMenu={(e) => { e.preventDefault(); setMenu(true) }}>{tag} row {i}</button>
+          ))}
+          <div className="pk-blank" style={{ height: 80 }} />
+          <span className="pk-fixed" style={{ position: 'fixed', left: 640, top: 420 }}>fixed</span>
+          {menu && createPortal(
+            <div className="pk-menu" style={{ position: 'fixed', left: 700, top: 300, width: 160, padding: 8, zIndex: 2000, background: 'var(--bg-card)', border: '1px solid var(--border)' }}>
+              <button className="pk-menu-item" onClick={() => { probe.hits.push(`menu:${tag}`); setMenu(false) }}>menu item</button>
+            </div>, document.body)}
+        </div>
+      )
+    }
+    // 主区里放一个 iframe:指针进去之后事件到不了本窗口(真应用里的浏览器 / 插件视图就是这样),预览也得收。
+    registerView({ type: 'mainv', displayName: 'main', icon: Square, factory: () => (
+      <div className="pk-main" style={{ position: 'relative', height: '100%', padding: 16 }}>
+        main
+        <iframe className="pk-frame" title="frame" srcDoc="<p>frame</p>" style={{ position: 'absolute', right: 40, bottom: 40, width: 300, height: 200, border: '1px solid var(--border)' }} />
+      </div>
+    ) })
+    registerView({ type: 'sidebar-empty', displayName: 'empty', icon: Square, closable: false, factory: () => <div /> })
+    for (const tag of ['a', 'b', 'b2']) registerView({ type: `pk-${tag}`, displayName: `list ${tag}`, icon: Square, factory: () => <PeekList tag={tag} /> })
+    const mk = (id: string, left: string[]): SpaceDefinition => {
+      const sides = { left: left.map((type) => ({ type, params: {} })), right: [], bottom: [] }
+      return {
+        id, name: `Space ${id.toUpperCase()}`, icon: Square, sidebarDefaults: sides,
+        build() {
+          const w = useWorkspace.getState()
+          w.setSidebarDefaults(sides)
+          w.openView('mainv', {}, 'main')
+          for (const v of sides.left) w.openView(v.type, v.params, 'left')
+        },
+      }
+    }
+    for (const sp of [mk('a', ['pk-a']), mk('b', ['pk-b', 'pk-b2']), mk('c', [])]) {
+      registerSpace(sp)
+      addRibbonIcon({ id: `space:${sp.id}`, side: 'top', component: ({ expanded }) => <SpaceButton space={sp} expanded={expanded} /> })
+    }
+    setActiveSpaceCold('a')
+    useWorkspace.getState().setSidebarDefaults(getActiveSpace()!.sidebarDefaults)
+    applyRealTheme(resolveInitialLang(), resolveInitialSkin(), resolveInitialBg(), new URLSearchParams(location.search).has('dark') ? 'dark' : 'light')
+    createRoot(document.getElementById('root')!).render(
+      <div className="am-app tangu-lovable" style={{ position: 'fixed', inset: 0, display: 'flex' }}>
+        <Shell dark={false} soft={false} buildDefault={() => getActiveSpace()?.build()} />
+      </div>,
+    )
+  })
 } else if (new URLSearchParams(location.search).has('ribbon')) {
   // 点击记账:mod+1..9 的 slot 分发靠它断言(见 ribbon-dnd.e2e.cjs 的 L 组)。
   const hits: string[] = []
