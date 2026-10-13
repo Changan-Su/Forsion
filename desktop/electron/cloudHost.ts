@@ -79,6 +79,9 @@ export interface CloudHost {
   setAmadeusSyncFactory(factory: AmadeusSyncFactory): void
   // ── 0.6 起(设备互联的云端通道:隧道 + caps 上报 + units:* 名册四通道住在 Extend;宿主每次 doRefreshUnitHost 重建设备互联时调工厂)──
   setUnitHubFactory(factory: UnitHubFactory): void
+  // ── 0.8.2 之后(诊断数据的运行日志:用户打开「上传诊断数据」后,Extend 的 diagnostics.ts 把它带进快照)──
+  /** 引擎进程的状态与 stdout/stderr 环形缓冲(backendManager:最近 LOG_CAP 行,App 重启即清)。没有托管的引擎(external / 无 agent 后端)= state null、lines 空。 */
+  diagnosticLogs(): { engine: { state: string | null; lastError: string | null; lines: string[] } }
 }
 export type RegisterCloud = (host: CloudHost) => void | Promise<void>
 

@@ -59,6 +59,7 @@ async function extendChannels(): Promise<string[]> {
     setTokenRefresher: () => {},
     setAmadeusSyncFactory: () => {},
     setUnitHubFactory: () => {}, // 0.6 起:缺它 Extend 跳过设备名册四通道,撞名就查不到
+    diagnosticLogs: () => ({ engine: { state: null, lastError: null, lines: [] } }),
   }
   await registerCloud(host)
   return channels
