@@ -1,4 +1,7 @@
-.slash-category-tabs {
+/* 分类胶囊:斜杠菜单(.slash-category-tabs)与 `[[` 补全面板(.wiki-tabs,宿主有应用引用接口时才出)同一套。
+   选中项的底色在量好位置后交给滑块(components/capsuleTabs.css),这里的静态底色是量之前的兜底。 */
+.slash-category-tabs,
+.wiki-tabs {
   display: flex;
   flex-shrink: 0;
   gap: 3px;
@@ -7,7 +10,8 @@
   border-radius: var(--radius-pill);
   background: var(--overlay-light);
 }
-.slash-menu .slash-category-tab {
+.slash-menu .slash-category-tab,
+.wiki-suggest .wiki-tab {
   flex: 1;
   min-width: 0;
   border: 0;
@@ -21,9 +25,25 @@
   white-space: nowrap;
   cursor: pointer;
 }
-.slash-menu .slash-category-tab[aria-selected="true"] {
+.slash-menu .slash-category-tab[aria-selected="true"],
+.wiki-suggest .wiki-tab[aria-selected="true"] {
   background: var(--menu-hover);
   color: var(--text);
+}
+/* 四格的字数差得多(All / Windows):按内容分宽,等分的话英文下最长那格会溢出胶囊。 */
+.wiki-suggest .wiki-tab { flex: 1 1 auto; }
+/* 带分类条的 `[[` 面板:外壳不滚、候选自己滚,分类条留在原地。 */
+.am-app .wiki-suggest.wiki-suggest-tabbed {
+  min-width: 264px;
+  overflow: hidden;
+}
+.am-app .wiki-suggest-list {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 1px;
+  min-height: 0;
+  overflow-y: auto;
 }
 .slash-menu .slash-list {
   display: flex;

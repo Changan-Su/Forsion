@@ -40,6 +40,11 @@ function scalars(v: unknown): string[] {
  * amadeus_* 大块 JSON(画布 / 布局)一个字都不过 YAML,整块坏 YAML 也只丢坏的那一条。
  * 链接按条目**原文**找 `[[ ]]` —— 不加引号的 `related: [[Beta]]` 在 YAML 里是嵌套数组,按值找就漏了。
  */
+/** 一段 Markdown 里指向**笔记**的双链目标。`[[app://…]]` / `[[window://…]]` 是应用 / 窗口引用(desktop/shared/appRefs.ts),
+ *  不是笔记:不进出链、反链、关系图(不筛的话关系图里会多出一个点了问「要不要新建」的空节点)。
+ *  没改 links.ts 的 parseWikiLinks:那个文件逐字节拷在 server 仓里,改它两边要同步;索引和关系图一律调这个。 */
+export const noteLinkTargets = (md: string): string[] => parseWikiLinks(md).filter((t) => !/^(?:app|window):\/\//i.test(t))
+
 export function noteFmMeta(raw: string): NoteFmMeta {
   const out: NoteFmMeta = { tags: [], aliases: [], links: [] }
   const body = FM_RE.exec(raw)?.[1]
@@ -76,7 +81,7 @@ export function noteFmMeta(raw: string): NoteFmMeta {
       const m = /^(["']?)(.+?)\1[ \t]*:(?=[ \t]|$)/.exec(head)
       if (!m) continue
       const value = text.slice(m[0].length).trim()
-      const targets = parseWikiLinks(value)
+      const targets = noteLinkTargets(value)
       // 展示用:块状列表逐项拼成「a, b」,去掉 flow 方括号与项两端的 YAML 引号。
       const shown = value.split('\n').map((l) => l.trim().replace(/^-\s+/, '')).filter(Boolean).join(', ')
         .replace(/^\[(.*)\]$/, '$1')

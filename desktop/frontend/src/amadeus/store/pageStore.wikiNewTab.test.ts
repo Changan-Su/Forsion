@@ -96,3 +96,30 @@ describe('openWikiLink newTab(L-11)', () => {
     expect(openMedia).toHaveBeenCalledWith('media/lecture.mp4', expect.objectContaining({ at: 95 }), { newTab: true })
   })
 })
+
+describe('openWikiLink 遇到应用 / 窗口引用(属性值、数据库格子、关系图里的幽灵节点都会走到这里)', () => {
+  it('切到那个应用,不找笔记、不问「要不要新建」;别名被调用方剥掉了也认', async () => {
+    const store = await freshStore()
+    const open = vi.fn(async (_ref: unknown) => ({ ok: true }))
+    const confirm = vi.fn(() => true)
+    ;(window as unknown as { tangu: unknown }).tangu = { appRefs: { open } }
+    vi.stubGlobal('confirm', confirm)
+    store.getState().openWikiLink('window://com.apple.Safari|季度计划', 'b/Src.md')
+    store.getState().openWikiLink('app://com.apple.Notes') // linkTarget() 剥掉别名后的样子
+    await settle()
+    expect(open.mock.calls.map((c) => c[0])).toEqual([
+      { kind: 'window', id: 'com.apple.Safari', name: '季度计划' },
+      { kind: 'app', id: 'com.apple.Notes', name: 'com.apple.Notes' },
+    ])
+    expect(openNote).not.toHaveBeenCalled()
+    expect(loadPage).not.toHaveBeenCalled()
+    expect(confirm).not.toHaveBeenCalled()
+  })
+  it('没有这个接口的宿主(网页版 / 手机):什么都不做,也不去新建一篇叫 app://… 的笔记', async () => {
+    const store = await freshStore()
+    store.getState().openWikiLink('app://com.apple.Notes|Notes')
+    await settle()
+    expect(openNote).not.toHaveBeenCalled()
+    expect(loadPage).not.toHaveBeenCalled()
+  })
+})

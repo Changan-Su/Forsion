@@ -42,6 +42,11 @@
 /* 「已选择」引用条:标签 + 文件/会话芯片。芯片本体沿用 base.css 的 .attach-chip(与附件同一套观感)。 */
 .t2c-refrow { align-items: center; }
 .t2c-reflabel { font-size: var(--ui-font-meta, 12px); color: var(--text-faint); flex-shrink: 0; }
+/* 两个类压过 base.css 的 `.attach-chip img`(那条是给附件缩略图的 28px 圆角图) */
+.attach-chip .attach-chip-appico { flex: none; width: 16px; height: 16px; margin-left: 3px; border-radius: 0; object-fit: contain; color: var(--accent-ink); }
+.attach-chip--appref { cursor: pointer; }
+.attach-chip--appref[data-off] { color: var(--text-faint); }
+.attach-chip--appref[data-off] .attach-chip-appico { filter: grayscale(1); opacity: 0.55; }
 
 /* slash / @ 菜单(浮在卡上方) */
 .t2c-menu {
@@ -55,6 +60,26 @@
 .t2c-menu-cmd { font-size: var(--ui-font-caption, 11px); font-weight: 600; white-space: nowrap; }
 .t2c-menu-desc { font-size: var(--ui-font-caption, 11px); color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .t2c-menu-sec { padding: 5px 10px 3px; font-size: var(--ui-font-caption, 11px); color: var(--text-faint, var(--text-muted)); }
+/* 引用菜单([[)的分类胶囊:与笔记斜杠菜单同款,选中底色是一块滑块(components/capsuleTabs)。 */
+.t2c-cats { display: flex; gap: 3px; margin: 0 0 6px; padding: 3px; border-radius: var(--radius-pill, 999px); background: var(--overlay-light); }
+.t2c-cat {
+  flex: 1; min-width: 0; padding: 4px 8px; border: 0; border-radius: var(--radius-pill, 999px); background: transparent; color: var(--text-muted);
+  font-family: var(--font-ui); font-size: var(--ui-font-meta); line-height: var(--ui-line-meta); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer;
+}
+.t2c-cat[aria-selected="true"] { background: var(--menu-hover); color: var(--text); }
+.t2c-menu-list { animation: t2c-list-in var(--menu-enter-duration, 180ms) var(--menu-enter-ease, ease); }
+@keyframes t2c-list-in { from { opacity: 0; translate: 0 2px; } }
+.t2c-menu-empty { padding: 8px 10px; font-size: var(--ui-font-caption); color: var(--text-faint, var(--text-muted)); }
+.t2c-menu-cmd:has(> .t2c-menu-ico) { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+.t2c-menu-ico { flex: none; width: 16px; height: 16px; object-fit: contain; color: var(--text-muted); }
+@media (prefers-reduced-motion: reduce) { .t2c-menu-list { animation: none; } }
+
+/* 行内引用(句子里的那枚芯片,InlineRefMirror):这一层叠在文本框上、字是透明的,只画底色和图标。
+   ⚠️ 这里不许出现任何会改变文字宽度的东西(padding / margin / border / 字号):它的排版必须和文本框一字不差。 */
+.t2c-mirror { position: absolute; z-index: 1; margin: 0; border: 0; box-sizing: border-box; overflow: hidden; pointer-events: none; color: transparent; white-space: pre-wrap; overflow-wrap: break-word; }
+.t2c-inref { border-radius: var(--radius-sm, 6px); background: var(--overlay-medium); box-shadow: 0 0 0 1.5px var(--overlay-medium); -webkit-box-decoration-break: clone; box-decoration-break: clone; }
+.t2c-inref-slot { position: relative; }
+.t2c-inref-ico { position: absolute; top: 50%; left: 50%; width: 1em; height: 1em; translate: -50% -50%; object-fit: contain; color: var(--accent-ink); }
 
 /* 模式 / 模型 药丸(移入卡内底排 .t2c-row) */
 .t2c-pill {
@@ -193,6 +218,7 @@
 .add-menu-sub-scroll { max-height: 286px; overflow-y: auto; overscroll-behavior: contain; }
 .add-menu-result { align-items: flex-start !important; }
 .add-menu-result > svg { flex: none; margin-top: 1px; color: var(--text-muted); }
+.add-menu-appico { flex: none; width: 18px; height: 18px; margin-top: 1px; object-fit: contain; }
 .add-menu-result-main { display: flex; min-width: 0; flex-direction: column; gap: 1px; }
 .add-menu-result-title, .add-menu-result-meta { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .add-menu-result-title { color: inherit; }

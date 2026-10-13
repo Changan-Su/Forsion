@@ -1,0 +1,25 @@
+/* 胶囊分段切换的滑块(useCapsuleSlide)。量好之前(没有 data-cap-ready)沿用各菜单自己给选中项的底色,不闪。 */
+.cap-tabs { position: relative; }
+.cap-tabs::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: var(--cap-w, 0px);
+  height: var(--cap-h, 0px);
+  translate: var(--cap-x, 0px) var(--cap-y, 0px);
+  border-radius: var(--radius-pill);
+  background: var(--menu-hover);
+  opacity: 0;
+  pointer-events: none;
+}
+.cap-tabs[data-cap-ready]::before {
+  opacity: 1;
+  transition: translate var(--menu-enter-duration, 180ms) var(--menu-enter-ease, ease), width var(--menu-enter-duration, 180ms) var(--menu-enter-ease, ease);
+}
+.cap-tabs [role="tab"] { position: relative; transition: color var(--menu-enter-duration, 180ms) var(--menu-enter-ease, ease); }
+/* 四个类压过 `.slash-menu .slash-category-tab[aria-selected]` 那条静态底色 */
+.cap-tabs.cap-tabs[data-cap-ready] [role="tab"][aria-selected="true"] { background: transparent; }
+@media (prefers-reduced-motion: reduce) {
+  .cap-tabs[data-cap-ready]::before, .cap-tabs [role="tab"] { transition: none; }
+}

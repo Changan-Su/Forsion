@@ -305,6 +305,16 @@
   background: var(--gl-sheen), var(--gl-side);
 }
 
+/* Space 左面板悬停预览(lcl engine.css 的 .rb-peek):材质登记在 ::before 上,理由同输入卡 —— 卡里是活的 View,
+ * 卡片自己带 backdrop-filter 会成为它们 fixed 浮层的包含块、菜单的 backdrop root。它压在主区纸卡上,有像素可糊;
+ * 里面是整列的列表文字,浓度用侧栏那一档。 */
+[data-theme='genesis-glass'] .rb-peek { border-color: transparent; }
+[data-theme='genesis-glass'] .rb-peek::before {
+  background: var(--gl-sheen), var(--gl-side);
+  backdrop-filter: var(--gl-blur-float);
+  -webkit-backdrop-filter: var(--gl-blur-float);
+}
+
 /* toast / 预览 / 搜索等信息量更高、停留更久,进入 float 档；它们仍与 Chatbox 共用同一高光与模糊。 */
 [data-theme='genesis-glass'] .ntf,
 [data-theme='genesis-glass'] .wsfile-panel,

@@ -37,6 +37,7 @@ import { readPropsOpen, writePropsOpen } from '@amadeus/unified/viewMemory'
 import { patchYamlText, renameYamlKey } from '@amadeus-shared/db/pageFrontmatter'
 import { linkTarget } from '@amadeus-shared/links'
 import { registerMessages, useI18n } from './i18n'
+import { openAppRefInner } from './components/appRefs'
 
 registerMessages({
   'amprops.add': { zh: '添加属性', en: 'Add property' },
@@ -251,6 +252,7 @@ export function AmadeusPropertiesPanel({ fmExtra: fmProp, onCommit, readOnly = f
   const rootRef = useRef<HTMLDivElement | null>(null)
   const sourcePath = notePath ?? activePage ?? undefined
   const openLink = (inner: string): void => {
+    if (openAppRefInner(inner)) return // 应用 / 窗口引用:切过去,不找笔记
     const name = linkTarget(inner)
     if (name) scoped.getState().openWikiLink(name, sourcePath)
   }
