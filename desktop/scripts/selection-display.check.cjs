@@ -1,4 +1,4 @@
-// Amadeus 文档选区:文字拖选按字符显示；正文留白拉框按整块显示；行间缝与行尾附近算文字(不起框选)。
+// Amadeus 文档选区:文字拖选按字符显示；块间缝拉框按整块显示；行间缝与行尾右侧的留白算文字(不起框选,2026-10-13 用户定)。
 // 用法: npm run e2e:editor -- --check=selection-display
 const fs = require('fs')
 const os = require('os')
@@ -67,17 +67,16 @@ async function main() {
       text.whole === 0 && !text.mode, text)
     if (shotDir) await page.screenshot({ path: path.join(shotDir, 'text-selection.png') })
 
-    // 起点位于首段本行的文字右侧、但仍在段落 DOM 矩形之内。
+    // 起点在第 2、3 段之间的缝里(不在任何块的矩形内),往上拖进首段。行尾右侧的留白已不再起框选。
     const blank = await page.evaluate(() => {
       const pm = document.querySelector('.unified-body .ProseMirror')
       const ps = [...pm.querySelectorAll(':scope > p')]
       const first = ps[0].getBoundingClientRect()
       const second = ps[1].getBoundingClientRect()
-      const text = document.createRange()
-      text.selectNodeContents(ps[0])
-      const lastGlyph = text.getBoundingClientRect().right
-      return { x1: lastGlyph + 40, y1: first.top + first.height / 2, x2: first.left + 8, y2: second.bottom - 2,
-        insideBlock: lastGlyph + 40 < first.right }
+      const third = ps[2].getBoundingClientRect()
+      const x1 = first.left + 260, y1 = (second.bottom + third.top) / 2
+      const outside = [...pm.children].every((el) => { const r = el.getBoundingClientRect(); return y1 < r.top || y1 > r.bottom || x1 < r.left || x1 > r.right })
+      return { x1, y1, x2: first.left + 8, y2: first.top + 4, outside }
     })
     await page.mouse.move(blank.x1, blank.y1)
     await page.mouse.down()
@@ -93,7 +92,7 @@ async function main() {
         focus: pm.contains(document.activeElement),
       }
     })
-    check('正文行尾留白拉框:整块选中并保留键盘焦点', blank.insideBlock && during === 1 &&
+    check('块间缝起手拉框:整块选中并保留键盘焦点', blank.outside && during === 1 &&
       marquee.blocks.join('|') === '甲段文字开始结束。|乙段中间文字。' && marquee.mode === 'true' && marquee.focus,
     { blank, during, ...marquee })
     if (shotDir) await page.screenshot({ path: path.join(shotDir, 'block-selection.png') })
@@ -121,12 +120,12 @@ async function main() {
 
     const single = await open(browser)
     const one = await single.evaluate(() => {
-      const p = document.querySelector('.unified-body .ProseMirror > p')
-      const r = p.getBoundingClientRect()
-      const text = document.createRange()
-      text.selectNodeContents(p)
-      return { x1: text.getBoundingClientRect().right + 40, y1: r.top + r.height / 2,
-        x2: r.left + 5, y2: r.top + r.height / 2 }
+      const pm = document.querySelector('.unified-body .ProseMirror')
+      const [p, next] = pm.querySelectorAll(':scope > p')
+      const r = p.getBoundingClientRect(), n = next.getBoundingClientRect()
+      const x1 = r.left + 260, y1 = (r.bottom + n.top) / 2
+      const outside = [...pm.children].every((el) => { const b = el.getBoundingClientRect(); return y1 < b.top || y1 > b.bottom || x1 < b.left || x1 > b.right })
+      return { x1, y1, x2: r.left + 5, y2: r.top + r.height / 2, outside }
     })
     await single.mouse.move(one.x1, one.y1)
     await single.mouse.down()
@@ -139,9 +138,9 @@ async function main() {
     }))
     await single.keyboard.press('Backspace')
     const afterDelete = await single.evaluate(() => [...document.querySelectorAll('.unified-body .ProseMirror > p')].map((p) => p.textContent))
-    check('留白框住单块:整块着色且 Delete 删除节点', beforeDelete.marked === 1 &&
+    check('块间缝起手框住单块:整块着色且 Delete 删除节点', one.outside && beforeDelete.marked === 1 &&
       beforeDelete.first === '甲段文字开始结束。' && !afterDelete.includes('甲段文字开始结束。') &&
-      afterDelete[0] === '乙段中间文字。', { beforeDelete, afterDelete })
+      afterDelete[0] === '乙段中间文字。', { one, beforeDelete, afterDelete })
     await single.close()
 
     const widgets = await open(browser, '开头文字。\n\n前文 [[Example]] 后文。\n\n![[table.db]]\n\n尾段文字。\n')
@@ -261,20 +260,33 @@ async function main() {
         gap.lines >= 3 && gap.gapPx >= 4 && gap.during === 0 && gap.kind === 'TextSelection' &&
         gap.text.length > 10 && gap.text.length < gap.full && gap.whole === 0 && !gap.mode,
         { ...gap, text: `${gap.text.slice(0, 6)}…(${gap.text.length} 字)` })
-      // 行尾远处的留白仍然起框选 —— 那个矩形得看得见、且就画在指针拖过的那一块上。
-      // (它挂在 body 上:样式选择器曾带着 `.am-app` 整条不命中,矩形没定位没底色;坐标也没除界面缩放。)
+      // 行尾右侧**远处**的留白也按文字选(2026-10-13 用户定「行尾留白一律按文字选」;先前 1.5 个字高以外仍起框选):
+      // 从第二段行尾右边 200px 按下,往回拖到上一段的 d|e 之间。
       const far = await dragOnce(twoParas, zoom, `(() => {
         const glyph = ${glyph}
-        const g = glyph(0, -1), m = glyph(1, 0)
-        return { x1: g.right + 90, y1: (g.top + g.bottom) / 2, x2: m.left + 20, y2: m.bottom + 6 }
+        const e = glyph(0, 4), m = glyph(1, -1)
+        const box = document.querySelectorAll('.unified-body .ProseMirror > p')[1].getBoundingClientRect()
+        const x1 = m.right + 200
+        return { x1, y1: (m.top + m.bottom) / 2, x2: e.left + 1, y2: (e.top + e.bottom) / 2, insideBlock: x1 < box.right }
       })()`)
-      const b = far.box
+      check(`行尾右侧远处的留白往回拖:按字符选中,不起框选${tag}`,
+        far.insideBlock && far.during === 0 && far.kind === 'TextSelection' && far.text === 'efg\n\nhijklm' && far.whole === 0 && !far.mode, far)
+      // 框选从块间缝起 —— 那个矩形得看得见、且就画在指针拖过的那一块上。
+      // (它挂在 body 上:样式选择器曾带着 `.am-app` 整条不命中,矩形没定位没底色;坐标也没除界面缩放。)
+      const frame = await dragOnce(twoParas, zoom, `(() => {
+        const pm = document.querySelector('.unified-body .ProseMirror')
+        const ps = [...pm.querySelectorAll(':scope > p')].map((p) => p.getBoundingClientRect())
+        const x1 = ps[0].left + 260, y1 = (ps[1].bottom + ps[2].top) / 2
+        const outside = [...pm.children].every((el) => { const r = el.getBoundingClientRect(); return y1 < r.top || y1 > r.bottom || x1 < r.left || x1 > r.right })
+        return { x1, y1, x2: ps[0].left + 20, y2: ps[0].top + 4, outside }
+      })()`)
+      const b = frame.box
       const near = (a, c) => Math.abs(a - c) <= 2
-      check(`行尾远处留白拉框:矩形看得见,且贴着指针拖过的范围${tag}`,
-        far.during === 1 && !!b && b.position === 'fixed' && !/rgba\(0, 0, 0, 0\)|transparent/.test(b.bg) &&
-        near(b.left, Math.min(far.x1, far.x2)) && near(b.right, Math.max(far.x1, far.x2)) &&
-        near(b.top, Math.min(far.y1, far.y2)) && near(b.bottom, Math.max(far.y1, far.y2)) && far.whole === 2,
-        far)
+      check(`块间缝起手拉框:矩形看得见,且贴着指针拖过的范围${tag}`,
+        frame.outside && frame.during === 1 && !!b && b.position === 'fixed' && !/rgba\(0, 0, 0, 0\)|transparent/.test(b.bg) &&
+        near(b.left, Math.min(frame.x1, frame.x2)) && near(b.right, Math.max(frame.x1, frame.x2)) &&
+        near(b.top, Math.min(frame.y1, frame.y2)) && near(b.bottom, Math.max(frame.y1, frame.y2)) && frame.whole === 2,
+        frame)
     }
   } finally {
     await browser.close()
