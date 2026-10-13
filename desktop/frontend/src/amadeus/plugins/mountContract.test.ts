@@ -252,3 +252,42 @@ it('ctx.ui.mountSelectionBar:不往插件的元素里加节点;show() 出条、�
   expect(bar()).toBeNull()
   expect(errors).toEqual([])
 })
+
+// 评审(2026-10-14)指出的四处,各钉一条。负对照(实跑,逐条改回去):主动报的选区滚动时不跟着收 → 「滚动即收」红;
+// 右键也执行 → 「右键不触发」红;Esc 不看焦点在哪 → 「别处输入框的 Esc」红;markdown 照 2000 字截 → 最后一条红。
+it('ctx.ui.mountSelectionBar(缺省看选区):show() 报的也随滚动收;右键不触发工具;别处输入框里的 Esc 不被吃;markdown 不截断', async () => {
+  const { mountPluginSelectionBar } = await import('./selectionBarSurface')
+  const bar = () => document.querySelector<HTMLElement>('[data-testid="selection-bar"]')
+  const rect = { left: 10, right: 60, top: 100, bottom: 120 }
+  const md = 'm'.repeat(3000)
+  const run = vi.fn()
+  let handle!: ReturnType<typeof mountPluginSelectionBar>
+  await act(async () => { handle = mountPluginSelectionBar(el, 'contract', { ask: false, tools: [{ id: 'note', title: 'Note', icon: 'annotate', run }] }) })
+  await act(async () => { handle.show({ text: 'hello', markdown: md, rect }) })
+  const tool = bar()!.querySelector('[data-act="note"]')!
+
+  await act(async () => { tool.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 2 })) })
+  expect(run, '右键不触发').not.toHaveBeenCalled()
+  await act(async () => { tool.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 0 })) })
+  expect(run).toHaveBeenCalledWith({ text: 'hello', markdown: md })
+
+  // 焦点在别处的输入框(命令面板、搜索框):Esc 是它的,条不吃也不收
+  const input = document.body.appendChild(document.createElement('input'))
+  input.focus()
+  const esc = (): KeyboardEvent => { const e = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }); input.dispatchEvent(e); return e }
+  let e1!: KeyboardEvent
+  await act(async () => { e1 = esc() })
+  expect(e1.defaultPrevented, '别处输入框的 Esc').toBe(false)
+  expect(bar()).not.toBeNull()
+  input.blur()
+  input.remove()
+  await act(async () => { window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })) })
+  expect(bar(), '焦点不在输入框里:Esc 收条').toBeNull()
+
+  await act(async () => { handle.show({ text: 'hello', rect }) })
+  expect(bar()).not.toBeNull()
+  await act(async () => { el.dispatchEvent(new Event('scroll')) })
+  expect(bar(), '滚动即收').toBeNull()
+  await act(async () => { handle.dispose() })
+  expect(errors).toEqual([])
+})

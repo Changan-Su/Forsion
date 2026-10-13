@@ -171,8 +171,10 @@ const VOCAB_SHAPED = /^[a-z0-9-]+$/
  * 也不许把键名当文案显示 —— 这也正是 plugins/types.ts 对 `ListItem.icon` 写明的契约。
  */
 export function resolveIcon(icon: string | undefined, fallback: ReactNode = null): ReactNode {
-  if (!icon) return fallback
-  const Icon = PLUGIN_ICONS[icon]
+  // 值是插件给的:不是字符串一律当没给(一个对象画进 JSX 会让 React 抛错,连带宿主那棵子树进错误边界);
+  // 只认词表自己的键 —— 'constructor' 这类继承来的名字查出来是个函数,当组件渲染同样会崩。
+  if (typeof icon !== 'string' || !icon) return fallback
+  const Icon = Object.prototype.hasOwnProperty.call(PLUGIN_ICONS, icon) ? PLUGIN_ICONS[icon] : undefined
   if (Icon) return <Icon />
   return VOCAB_SHAPED.test(icon) ? fallback : icon
 }

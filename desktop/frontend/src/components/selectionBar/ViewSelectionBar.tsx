@@ -8,7 +8,7 @@
  *    而不是视口为包含块(见 lcl/engine/menuAnchor 的 useEdgeNudge 顶注)。OverlayAt 自己补偿缩放,坐标直接给视口 px。
  * ⚠️ 不做全局监听:只看调用方交过来的那个元素。输入框、别的视图、插件自己画的菜单都不会被这里碰到。
  */
-import { useEffect, useState, type ReactElement, type ReactNode, type RefObject } from 'react'
+import { useEffect, useRef, useState, type ReactElement, type ReactNode, type RefObject } from 'react'
 import { createPortal } from 'react-dom'
 import { Languages, MessageSquareQuote } from 'lucide-react'
 import { OverlayAt } from '@lcl/engine'
@@ -89,6 +89,8 @@ export function ViewSelectionBar(p: ViewSelectionBarProps): ReactElement | null 
   const [card, setCard] = useState<Card | null>(null)
   const plugins = usePluginStore((s) => s.selectionActions)
   const { watch, watchKey } = p
+  const onDismissRef = useRef(p.onDismiss)
+  onDismissRef.current = p.onDismiss
 
   useEffect(() => {
     const el = watch?.current
@@ -106,7 +108,8 @@ export function ViewSelectionBar(p: ViewSelectionBarProps): ReactElement | null 
       setOwn({ text, rect: { left: r.left, right: r.right, top: r.top, bottom: r.bottom } })
     }
     const onSelection = (): void => { if (window.getSelection()?.isCollapsed) setOwn(null) }
-    const clear = (): void => setOwn(null)
+    // 调用方自己报的选区(插件的 show())也跟着收:它是按当时的位置报的,滚了 / 盒子变了就不在那儿了。
+    const clear = (): void => { setOwn(null); onDismissRef.current?.() }
     // 条挂在 body 下,不会跟着这个视图一起被藏起来 / 挪走:点到视图和条的外面、视图的盒子变了(切标签页、拖分栏、缩窗口)都收。
     const onDown = (e: MouseEvent): void => {
       const at = e.target as Element | null

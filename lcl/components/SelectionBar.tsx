@@ -30,10 +30,11 @@ export interface SelectionBarTool {
 export type SelectionBarOrder = 'tools' | 'actions'
 
 /** Pointer users act on mousedown (preventDefault keeps the selection and the focus where they are);
- *  a click with detail 0 is Enter / Space. The two never both fire for one press. */
+ *  a click with detail 0 is Enter / Space. The two never both fire for one press.
+ *  Only the primary button acts: a right or middle press keeps the selection but runs nothing. */
 function press(fn: () => void): { onMouseDown(e: ReactMouseEvent): void; onClick(e: ReactMouseEvent): void } {
   return {
-    onMouseDown: (e) => { e.preventDefault(); fn() },
+    onMouseDown: (e) => { e.preventDefault(); if (e.button === 0) fn() },
     onClick: (e) => { if (e.detail === 0) fn() },
   }
 }
@@ -67,7 +68,7 @@ export function SelectionBarActions({ actions, more }: {
           aria-label={more.label}
           aria-haspopup="menu"
           aria-expanded={more.open}
-          onMouseDown={(e) => { e.preventDefault(); more.onToggle(false) }}
+          {...press(() => more.onToggle(false))}
           onClick={(e) => { if (e.detail === 0) more.onToggle(true) }}
         >
           <Ellipsis />
@@ -112,7 +113,11 @@ export function SelectionBar({ tools, actions, more, moreHeading, moreLabel, ord
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
-      if (e.key !== 'Escape') return
+      if (e.key !== 'Escape' || e.isComposing) return
+      // Someone is typing elsewhere (a command palette, a search box opened over the view): Escape is theirs.
+      const a = document.activeElement
+      const bar = rowRef.current?.parentElement
+      if (a && !bar?.contains(a) && a.matches('input, textarea, select, [contenteditable]:not([contenteditable="false"])')) return
       e.preventDefault()
       e.stopPropagation()
       if (open) {

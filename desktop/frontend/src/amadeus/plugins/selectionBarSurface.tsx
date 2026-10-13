@@ -68,7 +68,7 @@ export function mountPluginSelectionBar(root: HTMLElement, pluginId: string, ini
       const r = sel?.rect
       const rect = { left: num(r?.left), right: num(r?.right), top: num(r?.top), bottom: num(r?.bottom) }
       if (!text || Object.values(rect).some(Number.isNaN)) { console.warn(`[amadeus] plugin "${pluginId}" selection bar show() needs text and a rect { left, right, top, bottom }`); return }
-      shown = { text, markdown: str(sel.markdown), rect }
+      shown = { text, markdown: typeof sel.markdown === 'string' && sel.markdown ? sel.markdown : undefined, rect } // content, not a label: never capped
       render()
     },
     hide() {
