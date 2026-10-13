@@ -1386,6 +1386,12 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
         }
         // 段落盒宽通常铺满正文列;文字右侧看着是空白,不能按整只 p 的 rect 把框选挡掉。
         // 只在真实字形/已渲染 widget 上交给原生拖字或组件;隐藏的双链源码没有 rect。
+        // 一行字的命中带 = **整条行高** + 行尾右侧一小段(2026-10-13 用户实报「跨行选字选不准,一选就整块」,
+        // scripts/selection-display.check 第 7-9 条):
+        //  · 字形盒比行高矮(正文 27px 行高里只有 18px):只认字形盒的话,按在两行之间那条缝里算「块内留白」,
+        //    一拖就成了框选 —— 折行的段落里每行有近五分之一的高度是这样;
+        //  · 从行尾往回拖选,落点总在末字右侧几个像素,同样被判成留白。
+        // 再往右的留白(行尾 1.5 个字高之外)照旧是框选的起点。
         const contentAt = (el: HTMLElement, x: number, y: number): boolean => {
           const box = el.getBoundingClientRect()
           if (x < box.left || x > box.right || y < box.top || y > box.bottom) return false
@@ -1399,7 +1405,15 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
             if (!node.textContent?.length) continue
             const range = document.createRange()
             range.selectNodeContents(node)
-            for (const r of range.getClientRects()) if (inside(r)) return true
+            const rects = range.getClientRects()
+            if (!rects.length) continue
+            // 行高是未缩放的局部 px,矩形是视口坐标(已含界面缩放)—— 先乘回去再比。读不出数(normal)就只留 2px。
+            const host = node.parentElement
+            const lineHeight = host ? parseFloat(getComputedStyle(host).lineHeight) * zoomOf(host) : NaN
+            for (const r of rects) {
+              const lead = Math.max(2, (lineHeight - r.height) / 2 || 0)
+              if (x >= r.left - 2 && x <= r.right + r.height * 1.5 && y >= r.top - lead && y <= r.bottom + lead) return true
+            }
           }
           return false
         }
@@ -1522,7 +1536,8 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
           if (!marquee || !mqFrom) return
           const x = Math.min(mqFrom.x, e.clientX), y = Math.min(mqFrom.y, e.clientY)
           const w = Math.abs(e.clientX - mqFrom.x), h = Math.abs(e.clientY - mqFrom.y)
-          Object.assign(marquee.style, { left: `${x}px`, top: `${y}px`, width: `${w}px`, height: `${h}px` })
+          const z = zoomOf(marquee) // 指针坐标是视口像素,写进样式的长度还要被界面缩放再放大一遍
+          Object.assign(marquee.style, { left: `${x / z}px`, top: `${y / z}px`, width: `${w / z}px`, height: `${h / z}px` })
           const hit: number[] = []
           const hitEls: HTMLElement[] = []
           for (const el of topBlockEls()) {

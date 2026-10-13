@@ -10,6 +10,7 @@ import { registerMessages, useI18n } from '../i18n'
 import { splitWiki, wikiLabel } from './wikiChat'
 import { sessionIdOfTarget } from '../views/chat2/chatDragRef'
 import { deskAcceptsFiles } from '../amadeus/plugins/deskCompanion'
+import { newTabOf } from '../views/itemSelect'
 
 registerMessages({
   'chatwiki.mediaTipBadAnchor': { zh: '{path}（时刻锚点无效，从头播放）', en: '{path} (invalid time anchor — playing from the start)' },
@@ -121,7 +122,7 @@ export function ChatWikiLink({ inner }: { inner: string }) {
   }, [inner, root, pages, sessionId])
   if (sessionId) {
     return (
-      <a className="wikilink" onClick={() => { void import('../sessionNav').then((m) => m.openSession(sessionId)) }}>
+      <a className="wikilink" onClick={(e) => { const nt = newTabOf(e); void import('../sessionNav').then((m) => m.openSession(sessionId, nt)) }}>
         {label}
       </a>
     )
@@ -134,7 +135,7 @@ export function ChatWikiLink({ inner }: { inner: string }) {
     const short = pdf.name.length > 26 ? `${pdf.name.slice(0, 24)}…` : pdf.name
     const text = inner.includes('|') ? label : pdf.page ? `${short} p.${pdf.page}` : short
     return (
-      <a className="wikilink" data-wiki={pdf.path} title={pdf.path} onClick={() => { void openPdfCitation(pdf.path, pdf.page, pdf.q) }}>
+      <a className="wikilink" data-wiki={pdf.path} title={pdf.path} onClick={(e) => { void openPdfCitation(pdf.path, pdf.page, pdf.q, newTabOf(e)) }}>
         {text}
       </a>
     )
@@ -150,7 +151,7 @@ export function ChatWikiLink({ inner }: { inner: string }) {
       : media.loc.badTo ? t('chatwiki.mediaTipBadRangeEnd', { path: media.abs, stamp })
         : `${media.abs} ${stamp}`
     return (
-      <a className="wikilink" data-wiki={media.abs} title={tip} onClick={() => { void openMediaCitation(media) }}>
+      <a className="wikilink" data-wiki={media.abs} title={tip} onClick={(e) => { void openMediaCitation(media, newTabOf(e)) }}>
         {text}
       </a>
     )
@@ -161,7 +162,7 @@ export function ChatWikiLink({ inner }: { inner: string }) {
     const lineTag = fileCite.line ? `:${fileCite.line.from}${fileCite.line.to ? `-${fileCite.line.to}` : ''}` : ''
     const text = inner.includes('|') ? label : `${short}${lineTag}`
     return (
-      <a className="wikilink" data-wiki={fileCite.abs} title={`${fileCite.abs}${lineTag}`} onClick={() => { void openFileCitation(fileCite.abs, fileCite.name, fileCite.line) }}>
+      <a className="wikilink" data-wiki={fileCite.abs} title={`${fileCite.abs}${lineTag}`} onClick={(e) => { void openFileCitation(fileCite.abs, fileCite.name, fileCite.line, newTabOf(e)) }}>
         {text}
       </a>
     )
@@ -175,12 +176,13 @@ export function ChatWikiLink({ inner }: { inner: string }) {
     <a
       className="wikilink"
       data-wiki={path}
-      onClick={() => {
+      onClick={(e) => {
+        const nt = newTabOf(e) // ⌘/Ctrl+点击 → 新标签页(事件对象别带进异步回调,先取出来)
         // 懒加载防 barrel 循环,web 侧同样可用;带标题/块锚点 → 打开后滚到那个位置
         void import('../amadeusNav').then((m) => (
-          blockId ? m.openNoteAtBlock(path, blockId)
-            : heading ? m.openNoteAtHeading(path, heading)
-              : m.openNote(path)))
+          blockId ? m.openNoteAtBlock(path, blockId, nt)
+            : heading ? m.openNoteAtHeading(path, heading, nt)
+              : m.openNote(path, nt)))
       }}
     >
       {noteText}
@@ -189,14 +191,15 @@ export function ChatWikiLink({ inner }: { inner: string }) {
 }
 
 /** 引用点击:Desk 开着就在演出区就地开(引用与对话并排,ChatGPT 式),否则退主区 tab。
+ *  ⌘/Ctrl+点击(nt)= 明说了要新标签页:不进演出区,直接在主区另开(下面三个引用入口同一口径)。
  *  两处都懒加载:本模块也给 Amadeus 侧的气泡用,静态引 appStore/amadeusNav 会绕出 barrel 环。 */
-async function openPdfCitation(path: string, page?: number, quote?: string): Promise<void> {
+async function openPdfCitation(path: string, page?: number, quote?: string, nt?: { newTab: true }): Promise<void> {
   const { useApp } = await import('../stores/appStore')
   const { activeId, desktopConfig } = useApp.getState()
   // 闸门必须与 ChatView 的 deskEnabled 逐字同源:移动端根本不挂 AgentDesk,
   // 只按 agentDeskEnabled 判会把状态写进一个不存在的面板 = 点了没反应。
   // deskAcceptsFiles:always 伴随面把 Desk 整体替换了,文件不进 Desk,照 Desk 关闭时走主区 tab。
-  if (UI_MODE !== 'mobile' && deskAcceptsFiles(!!desktopConfig?.agentDeskEnabled) && activeId) {
+  if (!nt && UI_MODE !== 'mobile' && deskAcceptsFiles(!!desktopConfig?.agentDeskEnabled) && activeId) {
     // 由谁打开听「默认打开方式」:插件接管了 PDF,引用也进它的视图(落点经 file.onGoto 交给它),否则内置阅读器。
     const { matchFileType } = await import('../amadeus/plugins/pluginStore')
     const [type, idParam] = matchFileType(path) ? ['amadeus-plugin-file', 'filePath'] : ['amadeus-pdf', 'pdfPath']
@@ -214,16 +217,16 @@ async function openPdfCitation(path: string, page?: number, quote?: string): Pro
     return
   }
   const { openFile } = await import('../amadeusNav')
-  openFile(path, { page, quote })
+  openFile(path, { page, quote, ...nt })
 }
 
 /** 行号/文件引用点击:同 PDF —— Desk 开着就在演出区开 WsFileView,否则退主区 tab。
  *  ⚠️直播格碰撞(agent 正在流式编辑同一份文件):deskShowFile 会保住直播格不打断,此时
  *  goto 事件没有 WsFileView 接 —— 刻意如此(流式演出优先),编辑一结束格子落盘,再点就正常。 */
-export async function openFileCitation(path: string, name: string, line: LineLoc | null): Promise<void> {
+export async function openFileCitation(path: string, name: string, line: LineLoc | null, nt?: { newTab: true }): Promise<void> {
   const { useApp } = await import('../stores/appStore')
   const { activeId, desktopConfig } = useApp.getState()
-  if (UI_MODE !== 'mobile' && deskAcceptsFiles(!!desktopConfig?.agentDeskEnabled) && activeId) {
+  if (!nt && UI_MODE !== 'mobile' && deskAcceptsFiles(!!desktopConfig?.agentDeskEnabled) && activeId) {
     const top = useApp.getState().deskBySession[activeId]?.items?.[0]
     const same = top?.view?.type === 'wsfile' && top.view.params?.path === path
     const params: Record<string, unknown> = { path, name }
@@ -239,7 +242,7 @@ export async function openFileCitation(path: string, name: string, line: LineLoc
     return
   }
   const { openWsFile, hostTargetFor } = await import('../views/wsFileNav')
-  openWsFile(hostTargetFor(path, name), line ? { line: line.from, endLine: line.to } : undefined)
+  openWsFile(hostTargetFor(path, name), { ...(line ? { line: line.from, endLine: line.to } : {}), ...nt })
 }
 
 /** 媒体时刻引用点击。两个载体,按**库内/库外**分:
@@ -249,10 +252,10 @@ export async function openFileCitation(path: string, name: string, line: LineLoc
  *  两条都是「Desk 开着就在演出区并排开,否则退主区 tab」——与 PDF/行号引用条同一条纪律。
  *  ⚠️ 同一份媒体的第二个时刻**必须靠事件就地跳**:DeskShimView 的 leaf 只按 key memo,
  *     改 params 到不了已挂载的视图(pdf/wsfile/browser 三处同款坑),换 key 则等于重挂 = 重新起流。 */
-async function openMediaCitation(m: { abs: string; vaultRel: string | null; name: string; loc: MediaLoc | null }): Promise<void> {
+async function openMediaCitation(m: { abs: string; vaultRel: string | null; name: string; loc: MediaLoc | null }, nt?: { newTab: true }): Promise<void> {
   const { useApp } = await import('../stores/appStore')
   const { activeId, desktopConfig } = useApp.getState()
-  const desk = UI_MODE !== 'mobile' && deskAcceptsFiles(!!desktopConfig?.agentDeskEnabled) && activeId ? activeId : null
+  const desk = !nt && UI_MODE !== 'mobile' && deskAcceptsFiles(!!desktopConfig?.agentDeskEnabled) && activeId ? activeId : null
   if (m.vaultRel) {
     if (desk) {
       const top = useApp.getState().deskBySession[desk]?.items?.[0]
@@ -266,7 +269,7 @@ async function openMediaCitation(m: { abs: string; vaultRel: string | null; name
       return
     }
     const { openMedia } = await import('../amadeusNav')
-    openMedia(m.vaultRel, m.loc ?? undefined)
+    openMedia(m.vaultRel, m.loc ?? undefined, nt)
     return
   }
   if (desk) {
@@ -281,7 +284,7 @@ async function openMediaCitation(m: { abs: string; vaultRel: string | null; name
     return
   }
   const { openWsFile, hostTargetFor } = await import('../views/wsFileNav')
-  openWsFile(hostTargetFor(m.abs, m.name), m.loc ? { t: m.loc.at, tTo: m.loc.to } : undefined)
+  openWsFile(hostTargetFor(m.abs, m.name), { ...(m.loc ? { t: m.loc.at, tTo: m.loc.to } : {}), ...nt })
 }
 
 /** 聊天里的普通网页链接 = 网页引用条。「应用内链接用内置浏览器打开」勾着时:点开在 Agent Desk 的

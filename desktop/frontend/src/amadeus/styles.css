@@ -998,13 +998,15 @@
   border-radius: var(--radius-sm, 6px);
   background: color-mix(in srgb, var(--primary) 14%, transparent); /* 用户:只留淡底纹,不要描边框 */
 }
-/* 空白处框选矩形(fixed,跟视口坐标) */
-.am-app .amx-marquee {
+/* 空白处框选矩形(fixed,跟视口坐标)。⚠️ 选择器不带 `.am-app`:v4 的块框选(blockLayer)把它挂在 body 上,
+   带了就整条不命中 —— 矩形没有定位也没有底色,看不见(块照样被选中,像凭空选了一片)。
+   body 上也没有 --primary(那是 .am-app 作用域里的别名),回落到它指向的 --accent-ink。 */
+.amx-marquee {
   position: fixed;
   z-index: 50;
   pointer-events: none;
-  background: color-mix(in srgb, var(--primary) 12%, transparent);
-  border: 1px solid color-mix(in srgb, var(--primary) 55%, transparent);
+  background: color-mix(in srgb, var(--primary, var(--accent-ink)) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--primary, var(--accent-ink)) 55%, transparent);
   border-radius: 2px;
 }
 body.amx-marquee-active,

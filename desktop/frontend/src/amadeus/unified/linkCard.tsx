@@ -12,6 +12,7 @@ import type { Mark, MarkType, Node as ProseNode } from '@milkdown/kit/prose/mode
 import { OverlayPortal } from '../lib/overlayPortal'
 import { OverlayAt } from '../lib/clampMenu'
 import { hrefKind, normalizeHref } from '../blocks/markdown/linkHref'
+import { newTabOf } from '../../views/itemSelect'
 import { footnoteDefText } from '../blocks/markdown/footnote'
 import { registerMessages, useI18n } from '../../i18n'
 
@@ -89,7 +90,7 @@ function rangeOfLink(view: EditorView, el: HTMLElement): { from: number; to: num
 export function LinkHoverCard({ getView, onOpenNote }: {
   getView: () => EditorView | null
   /** 库内笔记链接 `[t](笔记.md)` 的打开(与编辑器点击同路,L-07);不给就退回 window.open。 */
-  onOpenNote?: (href: string) => void
+  onOpenNote?: (href: string, opts?: { newTab: true }) => void
 }): ReactElement | null {
   const { t } = useI18n()
   const [hover, setHover] = useState<Hover | null>(null)
@@ -318,10 +319,10 @@ export function LinkHoverCard({ getView, onOpenNote }: {
         <button
           className="amx-linkcard-host"
           title={hover.href}
-          onClick={() => {
+          onClick={(e) => {
             if (onOpenNote && hrefKind(hover.href) === 'note') {
               setHover(null)
-              onOpenNote(hover.href)
+              onOpenNote(hover.href, newTabOf(e))
             } else window.open(hover.href, '_blank', 'noopener')
           }}
         >

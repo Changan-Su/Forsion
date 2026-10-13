@@ -55,7 +55,7 @@ import { openManual } from './amadeusManual'
 import { isDrawingPath } from '@amadeus-shared/excalidraw/format'
 import { isDashboardPath } from '@amadeus-shared/dashboard'
 import { REF_MIME, PATHS_MIME, setChatRefDrag } from './views/chat2/chatDragRef'
-import { useItemSelect } from './views/itemSelect'
+import { newTabOf, useItemSelect } from './views/itemSelect'
 import { useSearchSeed } from './amadeusPanels'
 import { askString } from '@amadeus/components/askString'
 import { askDeleteAssets, deleteAssetsPref } from '@amadeus/components/askDeleteAssets'
@@ -593,10 +593,10 @@ function SharedWithMeSection() {
           key={`${s.vaultId}:${s.path}`}
           className="t2s-special"
           title={`${s.ownerName ?? ''} · ${s.role === 'viewer' ? t('amxv.role.viewer') : t('amxv.role.editor')}`}
-          onClick={() => {
+          onClick={(ev) => {
             // 桌面:localPath=镜像内路径(与我共享/<slug>/…),本地直开(离线可用);web:切库或同库直开。
-            if (s.localPath) void openNote(s.localPath)
-            else if (s.vaultId === activeVault) void openNote(s.path)
+            if (s.localPath) void openNote(s.localPath, newTabOf(ev))
+            else if (s.vaultId === activeVault) void openNote(s.path, newTabOf(ev))
             else collab.switchVault(s.vaultId)
           }}
         >
@@ -774,10 +774,10 @@ function CloudSyncSection({ dragPath }: { dragPath: string | null }) {
             role="button"
             tabIndex={0}
             title={ok ? e.path : t('amxv.cloud.missing', { path: e.path })}
-            onClick={() => {
+            onClick={(ev) => {
               if (!ok) return
-              if (e.kind === 'page') void openNote(e.path)
-              else if (e.kind === 'asset' && isDbPath(e.path)) openDb(e.path)
+              if (e.kind === 'page') void openNote(e.path, newTabOf(ev))
+              else if (e.kind === 'asset' && isDbPath(e.path)) openDb(e.path, newTabOf(ev))
             }}
           >
             <span className="amx-cs-ic">{e.kind === 'folder' ? <Folder /> : e.kind === 'page' ? <FileText /> : <Paperclip />}</span>

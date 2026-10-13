@@ -15,6 +15,7 @@ import { usePageStore } from '../../amadeus/store/pageStore'
 import { useRecentViews } from '../../recentViews'
 import { useApp } from '../../stores/appStore'
 import type { ChatRef } from './chatDragRef'
+import { isVaultRelative } from './mainReference'
 
 registerMessages({
   'addMenu.label': { zh: '添加', en: 'Add' },
@@ -169,8 +170,10 @@ export const AddContentMenu: React.FC<{
     const main = mainTabs.flatMap((tab): ViewCandidate[] => {
       if (OMIT_VIEW_TYPES.has(tab.type)) return []
       const title = tab.title || label(getView(tab.type)?.displayName || tab.type)
-      if (tab.filePath) {
-        const note = tab.type === 'amadeus-editor' && !!vaultRoot
+      // 库内文件(笔记 / PDF / 图片…)记的是库内相对路径:有库根才引得了(note 引用会拼成绝对路径),没有就退成视图引用。
+      const inVault = !!tab.filePath && isVaultRelative(tab.type, tab.filePath)
+      if (tab.filePath && (!inVault || vaultRoot)) {
+        const note = inVault
         return [{
           key: `${note ? 'note' : 'file'}:${tab.filePath}`,
           type: tab.type,
@@ -191,10 +194,13 @@ export const AddContentMenu: React.FC<{
   const recentViewCandidates = useMemo<ViewCandidate[]>(() => uniqueViews(recents.flatMap((r): ViewCandidate[] => {
     if (r.kind === 'chat') return []
     if (r.kind === 'note') return [{ key: r.key, type: 'amadeus-editor', title: r.title, ref: { kind: 'note', path: r.id }, meta: r.id }]
-    if (r.kind === 'file' && r.viewType) return [{ key: r.key, type: r.viewType, title: r.title, ref: { kind: 'file', path: r.id }, meta: r.id }]
+    if (r.kind === 'file' && r.viewType) {
+      if (!isVaultRelative(r.viewType, r.id)) return [{ key: r.key, type: r.viewType, title: r.title, ref: { kind: 'file', path: r.id }, meta: r.id }]
+      return vaultRoot ? [{ key: r.key, type: r.viewType, title: r.title, ref: { kind: 'note', path: r.id }, meta: r.id }] : []
+    }
     if (r.kind === 'view' && r.viewType && getView(r.viewType)) return [{ key: r.key, type: r.viewType, title: r.title, ref: { kind: 'view', type: r.viewType, title: r.title } }]
     return []
-  })).slice(0, 6), [recents])
+  })).slice(0, 6), [recents, vaultRoot])
 
   // 注册表是运行期可变的（插件可启停）。菜单每次打开都会重渲，直接现读比另造订阅更可靠。
   const registeredViews: ViewCandidate[] = allViews()

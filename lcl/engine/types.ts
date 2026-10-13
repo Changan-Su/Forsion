@@ -279,4 +279,13 @@ export function identitySig(params: Record<string, unknown>): string {
     .join('&')
 }
 
+/** 这个面板指着哪个文件(MainTab.filePath)。编辑器是 notePath、工作区文件预览与媒体是 path,其余文件视图
+ *  各有各的参数名(pdfPath / imagePath / dbPath / drawingPath / dashPath / filePath…)—— 同上按参数名收。
+ *  只认前两个名字的时候,PDF、图片这些标签在外面看来「没有文件」:侧栏对话的默认引用挂不上,
+ *  或者越过眼前这份 PDF 挂到后台标签里的某篇笔记上(2026-10-13 用户实报)。 */
+export function panelFilePath(params: Record<string, unknown>): string | undefined {
+  const pick = (k: string): string | undefined => (typeof params[k] === 'string' && params[k] ? (params[k] as string) : undefined)
+  return pick('notePath') ?? pick('path') ?? Object.keys(params).filter((k) => /Path$/.test(k)).sort().map(pick).find(Boolean)
+}
+
 export type { ReactNode }

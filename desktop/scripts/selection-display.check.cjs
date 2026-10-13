@@ -1,4 +1,4 @@
-// Amadeus 文档选区:文字拖选按字符显示；正文留白拉框按整块显示。
+// Amadeus 文档选区:文字拖选按字符显示；正文留白拉框按整块显示；行间缝与行尾附近算文字(不起框选)。
 // 用法: npm run e2e:editor -- --check=selection-display
 const fs = require('fs')
 const os = require('os')
@@ -182,6 +182,100 @@ async function main() {
     check('跨块文字选区经过 Markdown 图片:图片有选中环且文字不整块染色',
       imageState.images === 1 && imageState.selected === 1 && imageState.plain === 0, imageState)
     await imagePage.close()
+
+    // ── 跨行拖选不被当成框选(2026-10-13 用户实报:「abcd"efg⏎hijklm" 选不准,一选就整个块选中」)──
+    // 字形盒比行高矮(27px 行高里 18px),按在两行之间那条缝里、或行尾右侧几个像素,以前算「块内留白」,
+    // 一拖就起了框选。每条都开新页:同一处连按两次会被浏览器当成双击(按词选),量出来的是另一回事。
+    // 最后一组在界面缩放 110% 下再量一遍(行高是未缩放的 px、矩形是视口坐标,换算错了只在缩放下露出来)。
+    const dragOnce = async (source, zoom, pick) => {
+      const page = await open(browser, source)
+      if (zoom !== 1) await page.evaluate((z) => { document.body.style.zoom = String(z) }, zoom)
+      await page.waitForTimeout(200)
+      const g = await page.evaluate(pick)
+      await page.mouse.move(g.x1, g.y1)
+      await page.mouse.down()
+      await page.mouse.move((g.x1 + g.x2) / 2, (g.y1 + g.y2) / 2, { steps: 6 })
+      await page.mouse.move(g.x2, g.y2, { steps: 6 })
+      const during = await page.locator('.amx-marquee').count()
+      const box = await page.evaluate(() => {
+        const m = document.querySelector('.amx-marquee')
+        if (!m) return null
+        const r = m.getBoundingClientRect(), cs = getComputedStyle(m)
+        return { left: r.left, top: r.top, right: r.right, bottom: r.bottom, position: cs.position, bg: cs.backgroundColor }
+      })
+      await page.mouse.up()
+      await page.waitForTimeout(160)
+      const out = await page.evaluate(() => {
+        const pm = document.querySelector('.unified-body .ProseMirror')
+        const sel = window.__upage.probe.view().state.selection
+        return {
+          text: window.getSelection()?.toString(),
+          kind: sel.constructor.name.replace(/^_/, ''),
+          whole: pm.querySelectorAll('.amx-block-selected, .ProseMirror-selectednode').length,
+          mode: pm.getAttribute('data-blocksel'),
+        }
+      })
+      await page.close()
+      return { during, box, ...out, ...g }
+    }
+    /** 第 index 段第 offset 个字的矩形(offset < 0 从末尾数)。 */
+    const glyph = `(index, offset) => {
+      const p = [...document.querySelectorAll('.unified-body .ProseMirror > p')][index]
+      const len = p.firstChild.textContent.length
+      const o = offset < 0 ? len + offset : offset
+      const r = document.createRange()
+      r.setStart(p.firstChild, o)
+      r.setEnd(p.firstChild, o + 1)
+      return r.getBoundingClientRect()
+    }`
+    const twoParas = 'abcdefg\n\nhijklm\n\n尾段。\n'
+    const wrapped = `${'春眠不觉晓处处闻啼鸟夜来风雨声花落知多少'.repeat(8)}\n\n尾段。\n`
+    for (const zoom of [1, 1.1]) {
+      const tag = zoom === 1 ? '' : `(界面缩放 ${Math.round(zoom * 100)}%)`
+      // 末字右侧 8px 按下,往回拖到上一段的 d|e 之间
+      const back = await dragOnce(twoParas, zoom, `(() => {
+        const glyph = ${glyph}
+        const e = glyph(0, 4), m = glyph(1, -1)
+        return { x1: m.right + 8, y1: (m.top + m.bottom) / 2, x2: e.left + 1, y2: (e.top + e.bottom) / 2 }
+      })()`)
+      check(`从行尾往回拖到上一段行中:按字符选中,不起框选${tag}`,
+        back.during === 0 && back.kind === 'TextSelection' && back.text === 'efg\n\nhijklm' && back.whole === 0 && !back.mode, back)
+      // 字形盒上缘上方 3px(仍在这一行的行高里)按下,拖到下一段末字
+      const lead = await dragOnce(twoParas, zoom, `(() => {
+        const glyph = ${glyph}
+        const e = glyph(0, 4), m = glyph(1, -1)
+        return { x1: e.left + 1, y1: e.top - 3, x2: m.right - 1, y2: (m.top + m.bottom) / 2 }
+      })()`)
+      check(`按在字的上沿之外(行高之内)往下拖:按字符选中,不起框选${tag}`,
+        lead.during === 0 && lead.kind === 'TextSelection' && lead.text === 'efg\n\nhijklm' && lead.whole === 0 && !lead.mode, lead)
+      // 折成多行的一段:按在第 1、2 行之间的缝里,拖到第 3 行
+      const gap = await dragOnce(wrapped, zoom, `(() => {
+        const p = document.querySelector('.unified-body .ProseMirror > p')
+        const r = document.createRange()
+        r.selectNodeContents(p)
+        const [l1, l2, l3] = [...r.getClientRects()]
+        return { x1: l1.left + 120, y1: (l1.bottom + l2.top) / 2, x2: l3.left + 300, y2: (l3.top + l3.bottom) / 2,
+          lines: r.getClientRects().length, gapPx: Math.round((l2.top - l1.bottom) * 10) / 10, full: p.textContent.length }
+      })()`)
+      check(`折行的段落里按在两行之间的缝上拖选:按字符选中,不把整段选成块${tag}`,
+        gap.lines >= 3 && gap.gapPx >= 4 && gap.during === 0 && gap.kind === 'TextSelection' &&
+        gap.text.length > 10 && gap.text.length < gap.full && gap.whole === 0 && !gap.mode,
+        { ...gap, text: `${gap.text.slice(0, 6)}…(${gap.text.length} 字)` })
+      // 行尾远处的留白仍然起框选 —— 那个矩形得看得见、且就画在指针拖过的那一块上。
+      // (它挂在 body 上:样式选择器曾带着 `.am-app` 整条不命中,矩形没定位没底色;坐标也没除界面缩放。)
+      const far = await dragOnce(twoParas, zoom, `(() => {
+        const glyph = ${glyph}
+        const g = glyph(0, -1), m = glyph(1, 0)
+        return { x1: g.right + 90, y1: (g.top + g.bottom) / 2, x2: m.left + 20, y2: m.bottom + 6 }
+      })()`)
+      const b = far.box
+      const near = (a, c) => Math.abs(a - c) <= 2
+      check(`行尾远处留白拉框:矩形看得见,且贴着指针拖过的范围${tag}`,
+        far.during === 1 && !!b && b.position === 'fixed' && !/rgba\(0, 0, 0, 0\)|transparent/.test(b.bg) &&
+        near(b.left, Math.min(far.x1, far.x2)) && near(b.right, Math.max(far.x1, far.x2)) &&
+        near(b.top, Math.min(far.y1, far.y2)) && near(b.bottom, Math.max(far.y1, far.y2)) && far.whole === 2,
+        far)
+    }
   } finally {
     await browser.close()
   }

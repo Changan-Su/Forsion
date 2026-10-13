@@ -3,9 +3,11 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 
 const openNote = vi.fn(async (_path: string, _opts?: { newTab?: boolean }) => {})
+const openMedia = vi.fn((_path: string, _loc?: unknown, _opts?: { newTab?: boolean }) => {})
+const dispatched: Array<{ type: string; detail: Record<string, unknown> }> = []
 const revealHeadingWhenReady = vi.fn(async (_path: string, _h: string) => {})
 const revealBlockWhenReady = vi.fn(async (_path: string, _b: string) => {})
-vi.mock('../../amadeusNav', () => ({ openNote, revealHeadingWhenReady, revealBlockWhenReady }))
+vi.mock('../../amadeusNav', () => ({ openNote, openMedia, revealHeadingWhenReady, revealBlockWhenReady }))
 
 const loadPage = vi.fn(async (path: string) => ({
   manifest: {
@@ -17,7 +19,8 @@ const loadPage = vi.fn(async (path: string) => ({
 
 async function freshStore() {
   vi.resetModules()
-  for (const f of [openNote, revealHeadingWhenReady, revealBlockWhenReady, loadPage]) f.mockClear()
+  for (const f of [openNote, openMedia, revealHeadingWhenReady, revealBlockWhenReady, loadPage]) f.mockClear()
+  dispatched.length = 0
   vi.stubGlobal('localStorage', { getItem: () => null, setItem: () => {}, removeItem: () => {} })
   vi.stubGlobal('CustomEvent', class { type: string; detail: unknown; defaultPrevented = false
     constructor(type: string, init?: { detail?: unknown }) { this.type = type; this.detail = init?.detail }
@@ -27,7 +30,7 @@ async function freshStore() {
     amadeus: { loadPage, listPages: async () => [], listFolders: async () => [], backlinks: async () => [] },
     addEventListener: () => {},
     removeEventListener: () => {},
-    dispatchEvent: () => true,
+    dispatchEvent: (e: { type: string; detail: Record<string, unknown> }) => { dispatched.push({ type: e.type, detail: e.detail }); return true },
   })
   const m = await import('./pageStore')
   m.usePageStore.setState({ vaultRoot: '/v', pages: ['a/Note.md', 'b/Note.md', 'b/Src.md'], files: [], status: 'ready' })
@@ -63,5 +66,33 @@ describe('openWikiLink newTab(L-11)', () => {
     expect(openNote).toHaveBeenCalledWith('b/Note.md', { newTab: true })
     expect(revealHeadingWhenReady).toHaveBeenCalledWith('b/Note.md', 'Sec')
     expect(loadPage).not.toHaveBeenCalled()
+  })
+
+  // 2026-10-13 用户实报:⌘ 点指向**文件**的双链(PDF 等)不开新标签,直接把眼前这篇笔记的标签换掉了。
+  // 这些目标经事件交给宿主打开(amadeusOverlays 读 detail.newTab 传给 openFile / openDb / openDrawing),newTab 要带在事件里。
+  it('指向应用内打开的文件(PDF / 多维表 / 白板 / 插件文件类型)+ newTab → 事件带 newTab', async () => {
+    const store = await freshStore()
+    store.setState({ files: ['docs/paper.pdf', 'data/tasks.db', 'boards/flow.excalidraw.md', 'maps/idea.mindmap.md'] })
+    const open = (name: string, opts?: { newTab?: boolean }): { type: string; detail: Record<string, unknown> } | undefined => {
+      dispatched.length = 0
+      store.getState().openWikiLink(name, 'b/Src.md', opts)
+      return dispatched.find((e) => e.type.startsWith('amadeus:open-'))
+    }
+    expect(open('paper.pdf#page=3', { newTab: true })).toEqual({ type: 'amadeus:open-pdf', detail: { path: 'docs/paper.pdf', page: 3, q: undefined, newTab: true } })
+    expect(open('tasks.db', { newTab: true })).toEqual({ type: 'amadeus:open-db', detail: { path: 'data/tasks.db', newTab: true } })
+    expect(open('flow.excalidraw', { newTab: true })).toMatchObject({ type: 'amadeus:open-drawing', detail: { newTab: true } })
+    expect(open('idea.mindmap', { newTab: true })).toEqual({ type: 'amadeus:open-file', detail: { path: 'maps/idea.mindmap.md', newTab: true } })
+    // 不带修饰键:照旧,不带 newTab(就地开 / 聚焦已开着的那个)
+    expect(open('paper.pdf')?.detail.newTab).toBeUndefined()
+    expect(open('tasks.db')?.detail.newTab).toBeUndefined()
+  })
+
+  it('带时刻的媒体双链 + newTab → 不找本页的播放器,另开一个标签', async () => {
+    const store = await freshStore()
+    store.setState({ files: ['media/lecture.mp4'] })
+    store.getState().openWikiLink('lecture.mp4#t=95', 'b/Src.md', { newTab: true })
+    await settle()
+    expect(dispatched.some((e) => e.type === 'amadeus:media-goto')).toBe(false)
+    expect(openMedia).toHaveBeenCalledWith('media/lecture.mp4', expect.objectContaining({ at: 95 }), { newTab: true })
   })
 })

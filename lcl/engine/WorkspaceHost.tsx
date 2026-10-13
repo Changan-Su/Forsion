@@ -32,6 +32,7 @@ import { getDetachApi, type ViewRef } from './detachSeam'
 import { OverlayAt, zoomOf } from './menuAnchor'
 import { Skeleton, ViewErrorBoundary, skeletonVariantOf } from './Skeleton'
 import { cycleFocusedGroupTab, tabCycleDelta } from './tabCycle'
+import { keepScroll } from './keepScroll'
 
 /** tooltip「名称(快捷键)」:快捷键取该命令**当前生效**的键、按平台格式化(改了键就跟着变,解绑就只剩名称)。 */
 function withHotkey(t: (k: string, v?: Record<string, unknown>) => string, text: string, cmdId: string): string {
@@ -83,9 +84,19 @@ function makeComponent(def: ViewDefinition): React.FC<IDockviewPanelProps> {
       return changed
     })
     const ownerKey = `${leaf.id}:${leaf.type}:${identitySig(leaf.params)}`
+    // 换标签再换回来:面板的 DOM 是摘下重挂的,里面的滚动位置全归零 —— 平时记着,重新可见时写回(见 keepScroll)。
+    const viewRef = useRef<HTMLDivElement>(null)
+    useEffect(() => {
+      const el = viewRef.current
+      if (!el) return
+      const keeper = keepScroll(el)
+      const sub = props.api.onDidVisibilityChange((e) => { if (e.isVisible) keeper.restore() })
+      return () => { sub.dispose(); keeper.dispose() }
+    }, [props.api])
     // 面板级兜底:懒视图挂起 → 骨架屏(替代空白);渲染/chunk 失败 → 本面板错误面,不再冒到根边界。
     const view = (sideExtend?: ExtendViewController) => (
       <div
+        ref={viewRef}
         className={`wb-view wb-view--${loc}${enter ? ' wb-view-enter' : ''}`}
         // ⚠️淡入类**播完必须摘**。CSS 动画是绑在元素上的:类只要还留着,元素每次被重新挂进 DOM 就会
         // 从头再播一遍。而 Dockview 在网格结构变化时正会这么干 —— 收起底部面板/侧栏时它把纵向

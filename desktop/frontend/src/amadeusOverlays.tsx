@@ -97,8 +97,8 @@ export function AmadeusOverlays() {
   // [[xxx.db]] 点击应用内开 db tab(pageStore 发事件解耦,同模板选择器模式)。
   useEffect(() => {
     const onOpenDb = (e: Event): void => {
-      const p = (e as CustomEvent<{ path?: string }>).detail?.path
-      if (typeof p === 'string' && p) openDb(p)
+      const d = (e as CustomEvent<{ path?: string; newTab?: boolean }>).detail
+      if (typeof d?.path === 'string' && d.path) openDb(d.path, { newTab: d.newTab })
     }
     window.addEventListener('amadeus:open-db', onOpenDb)
     return () => window.removeEventListener('amadeus:open-db', onOpenDb)
@@ -127,7 +127,7 @@ export function AmadeusOverlays() {
         openFile(file, { newTab, page: loc?.page, quote: loc?.q })
         return
       }
-      // 画板 / 插件文件类型 / 其余附件:openNote 内部按扩展名改道对应视图(不支持 newTab 的那几种就地开)。
+      // 画板 / 插件文件类型 / 其余附件:openNote 内部按扩展名改道对应视图(newTab 跟着走)。
       if (file) { void openNote(file, { newTab }); return }
       st.openWikiLink(inner, d?.sourcePath) // 完全解析不到 → 老路径(含「要不要创建」确认)
     }
@@ -151,8 +151,8 @@ export function AmadeusOverlays() {
   // [[xxx.pdf]] / [[xxx.pdf#page=N]] 点击应用内打开(pageStore 发事件解耦,同 open-db 模式);由谁打开听「默认打开方式」,落点跟着走。
   useEffect(() => {
     const onOpenPdf = (e: Event): void => {
-      const d = (e as CustomEvent<{ path?: string; page?: number; q?: string }>).detail
-      if (typeof d?.path === 'string' && d.path) openFile(d.path, { page: d.page, quote: d.q })
+      const d = (e as CustomEvent<{ path?: string; page?: number; q?: string; newTab?: boolean }>).detail
+      if (typeof d?.path === 'string' && d.path) openFile(d.path, { page: d.page, quote: d.q, newTab: d.newTab })
     }
     window.addEventListener('amadeus:open-pdf', onOpenPdf)
     return () => window.removeEventListener('amadeus:open-pdf', onOpenPdf)
@@ -160,8 +160,8 @@ export function AmadeusOverlays() {
   // [[X.excalidraw]] 点击应用内开白板 tab(pageStore 发事件解耦,同 open-db 模式)。
   useEffect(() => {
     const onOpenDrawing = (e: Event): void => {
-      const p = (e as CustomEvent<{ path?: string }>).detail?.path
-      if (typeof p === 'string' && p) openDrawing(p)
+      const d = (e as CustomEvent<{ path?: string; newTab?: boolean }>).detail
+      if (typeof d?.path === 'string' && d.path) openDrawing(d.path, { newTab: d.newTab })
     }
     window.addEventListener('amadeus:open-drawing', onOpenDrawing)
     return () => window.removeEventListener('amadeus:open-drawing', onOpenDrawing)
@@ -170,8 +170,8 @@ export function AmadeusOverlays() {
   // 页面列表里永远查不到)。openFile 会按内置 → 插件 → 系统默认程序依次路由。
   useEffect(() => {
     const onOpenFile = (e: Event): void => {
-      const p = (e as CustomEvent<{ path?: string }>).detail?.path
-      if (typeof p === 'string' && p) openFile(p)
+      const d = (e as CustomEvent<{ path?: string; newTab?: boolean }>).detail
+      if (typeof d?.path === 'string' && d.path) openFile(d.path, { newTab: d.newTab })
     }
     window.addEventListener('amadeus:open-file', onOpenFile)
     return () => window.removeEventListener('amadeus:open-file', onOpenFile)

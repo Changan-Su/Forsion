@@ -29,6 +29,11 @@ export function clickAct(e: ClickMods): ClickAct {
   return { open: 'same', select: 'replace' }
 }
 
+/** ⌘ / Ctrl + 点击 = 在新标签页打开:直接交给各 open* 门面的 opts(没按修饰键 = undefined,就地开 / 聚焦已开着的)。
+ *  列表之外的入口(反链、搜索结果、对话里的链接、数据库里的引用…)用这个,口径同上面的 clickAct。 */
+export const newTabOf = (e: Pick<ClickMods, 'metaKey' | 'ctrlKey'>): { newTab: true } | undefined =>
+  (e.metaKey || e.ctrlKey ? { newTab: true } : undefined)
+
 /** 纯函数:算点击后的新选中集与新锚点。ids = 当前可见项的顺序(仅 range 用得上)。 */
 export function nextSelection(
   prev: string[],

@@ -24,6 +24,7 @@ import { bumpDir } from './chat2/FilesPanel'
 import { usePageStore } from '@amadeus/store/pageStore'
 import { findFileType, usePluginStore } from '@amadeus/plugins/pluginStore'
 import { openNote } from '../amadeusNav'
+import { newTabOf } from './itemSelect'
 
 /** 卸载冲刷失败/冲突时的兜底:把未保存内容另存为旁路文件(绝不静默丢),全局 toast 告知。 */
 async function salvageDraft(path: string, content: string): Promise<void> {
@@ -307,7 +308,7 @@ export function WsFileView({ leaf }: ViewProps) {
     const q = norm(path)
     return q.startsWith(r + '/') ? q.slice(r.length + 1) : null
   }, [path, vaultRoot])
-  const amadeusOpen = vaultRel && /\.md$/i.test(vaultRel) ? () => void openNote(vaultRel) : undefined
+  const amadeusOpen = vaultRel && /\.md$/i.test(vaultRel) ? (e: React.MouseEvent) => void openNote(vaultRel, newTabOf(e)) : undefined
 
   let body: React.ReactNode
   if (!target) body = (
