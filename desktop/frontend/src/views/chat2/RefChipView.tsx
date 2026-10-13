@@ -20,30 +20,63 @@ import type { ReactNode } from 'react'
 import { AppWindow, FileText, Folder, MessageSquare, PanelsTopLeft, X } from 'lucide-react'
 import { sessionIdOfTarget } from './chatDragRef'
 import type { RefChip } from './Composer2'
+import { parseAppRefInner, type AppRef } from '../../../../shared/appRefs'
+import { AppRefIcon, appRefCardText, appRefsSupported, openAppRef, useAppRefStatus } from '../../components/appRefs'
 
 const ICON = { color: 'var(--accent-ink)', flexShrink: 0 } as const
 
-export function RefChipView({ chip, onRemove, removeTitle, children }: {
+/** 应用 / 窗口引用的芯片(气泡开头那一行):真图标,窗口关了 / 这台设备上没有就变灰,点击切过去。 */
+function AppRefStripChip({ chip, appRef }: { chip: RefChip; appRef: AppRef }) {
+  const status = useAppRefStatus(appRef)
+  const state = appRefsSupported() ? status?.state : 'missing'
+  const { sub, hint } = appRefCardText(appRef, status)
+  return (
+    <span
+      className="attach-chip attach-chip--appref" data-ref-kind={chip.kind} data-off={state === 'closed' || state === 'missing' || undefined}
+      title={[sub, hint].filter(Boolean).join('\n') || chip.name}
+      role={state === 'missing' ? undefined : 'link'} tabIndex={state === 'missing' ? undefined : 0}
+      onClick={() => { if (state !== 'missing') openAppRef(appRef) }}
+      onKeyDown={(e) => { if (e.key === 'Enter' && state !== 'missing') openAppRef(appRef) }}
+    >
+      <AppRefIcon id={appRef.id} className="attach-chip-appico" />
+      <span>{chip.name}</span>
+    </span>
+  )
+}
+
+export function RefChipView({ chip, onRemove, onInline, removeTitle, inlineTitle, children }: {
   chip: RefChip
   /** 给了才出 × 按钮(输入框);气泡里只读。 */
   onRemove?: () => void
+  /** 给了 = 按住 Shift 点这枚芯片,把它插到输入框光标处(输入框)。 */
+  onInline?: () => void
   removeTitle?: string
+  inlineTitle?: string
   /** 替换名字那一格(气泡里的 [[…]] 引用用 ChatWikiLink,点开笔记 / 会话)。 */
   children?: ReactNode
 }) {
+  if (chip.appRef && !onRemove) return <AppRefStripChip chip={chip} appRef={chip.appRef} />
   return (
-    <span className="attach-chip" title={chip.token} data-ref-kind={chip.kind}>
-      {chip.kind === 'session'
+    <span
+      className="attach-chip" title={onInline && inlineTitle ? `${chip.token}\n${inlineTitle}` : chip.token} data-ref-kind={chip.kind}
+      // 按下那一刻就拦:不拦的话 Shift+按下会把文本框里的选区从光标一路扩到开头(点的地方在文本框上方),
+      // 接着插入就把那一大段替换掉了(实测丢过整段草稿)。拦了之后焦点和光标都留在文本框里。
+      onMouseDown={onInline ? (e) => { if (e.shiftKey) e.preventDefault() } : undefined}
+      onClick={onInline ? (e) => { if (e.shiftKey) { e.preventDefault(); onInline() } } : undefined}
+    >
+      {chip.appRef
+        ? <AppRefIcon id={chip.appRef.id} className="attach-chip-appico" />
+        : chip.kind === 'session'
         ? <MessageSquare size={13} style={ICON} />
         : chip.kind === 'folder'
         ? <Folder size={13} style={ICON} />
         : chip.kind === 'view'
         ? <PanelsTopLeft size={13} style={ICON} />
-        : chip.kind === 'app'
+        : chip.kind === 'app' || chip.kind === 'window'
         ? <AppWindow size={13} style={ICON} />
         : <FileText size={13} style={ICON} />}
       <span>{children ?? chip.name}</span>
-      {onRemove && <button type="button" title={removeTitle} aria-label={removeTitle} onClick={onRemove}><X size={12} /></button>}
+      {onRemove && <button type="button" title={removeTitle} aria-label={removeTitle} onClick={(e) => { e.stopPropagation(); onRemove() }}><X size={12} /></button>}
     </span>
   )
 }
@@ -81,6 +114,9 @@ function readRef(line: string, pos: number): { ref: LeadingRef; end: number; str
     const target = (bar === -1 ? inner : inner.slice(0, bar)).trim()
     const label = (bar === -1 ? '' : inner.slice(bar + 1)).trim()
     if (!target) return null
+    // 应用 / 窗口引用先认(目标带 ://,不是笔记也不是会话)
+    const app = parseAppRefInner(inner)
+    if (app) return { ref: { token: m[0], name: app.name, kind: app.kind, appRef: app }, end: pos + m[0].length, strong: true }
     const session = sessionIdOfTarget(target)
     const ref: LeadingRef = session
       ? { token: m[0], name: label || 'Chat', kind: 'session', wiki: inner }

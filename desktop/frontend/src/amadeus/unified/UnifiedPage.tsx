@@ -2403,7 +2403,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
       // 派到公共祖先 <p> 上,`tagName === 'IMG'` 当场扑空、双击看大图时灵时不灵(2026-08-28 实测)。
       const hit = (document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null) ?? (e.target as HTMLElement | null)
       const img = hit?.tagName === 'IMG' ? (hit as HTMLImageElement) : null
-      if (!img || !img.closest('.unified-body')) return
+      if (!img || !img.closest('.unified-body') || img.closest('.app-ref')) return // 应用引用芯片里的图标不是正文图片
       const src = img.currentSrc || img.src
       if (!src) return
       e.preventDefault()

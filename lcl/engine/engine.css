@@ -227,6 +227,57 @@ html.rb-pointer-dragging, html.rb-pointer-dragging * { cursor: grabbing !importa
 .rb-fly-row.drag-over.below::before { top: auto; bottom: -3px; }
 
 /* ===== ribbon 右键 / ＋ 菜单(轻量,复用命令面板卡片观感) ===== */
+/* ===== Space 左面板悬停预览(左面板收起时指针停在 Space 图标上;卡片见 SpacePeek.tsx,规则见 spacePeekRules.ts) =====
+   left / top / height / width 由 Ribbon 按 zoom 折算后写入。
+   ⚠️ .rb-peek 自己不上色,也不带 opacity / transform / filter / backdrop-filter:材质全画在 ::before 上。卡里是活的 View,
+   它们的右键菜单、悬停提示是按视口坐标定位的 fixed 元素,卡片一旦成了它们的包含块就整体偏移;卡片成了 backdrop root,
+   玻璃主题画在 ::before 上的模糊也采不到卡片身后的像素(DESIGN §4,输入卡 .t2c-card 同一个做法)。
+   所以入场拆成两半:卡片只滑(独立的 translate 属性,播完回到 none,不残留),淡入落在 ::before 和内容上。 */
+.rb-peek {
+  position: fixed;
+  z-index: 900;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  border: var(--border-width, 1px) solid var(--border);
+  border-radius: var(--radius-lg, 16px);
+  box-shadow: var(--card-shadow, 0 12px 40px rgba(0, 0, 0, 0.25));
+  color: var(--text);
+  overflow: clip;
+  isolation: isolate;
+  -webkit-app-region: no-drag;
+  animation: rb-peek-slide var(--menu-enter-duration, 180ms) var(--menu-enter-ease, ease-out);
+}
+.rb-peek::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  pointer-events: none;
+  background: var(--bg-card, var(--bg));
+}
+.rb-peek::before, .rb-peek > * { animation: rb-peek-fade var(--menu-enter-duration, 180ms) var(--menu-enter-ease, ease-out); }
+@keyframes rb-peek-slide { from { translate: -8px 0; } }
+@keyframes rb-peek-fade { from { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .rb-peek, .rb-peek::before, .rb-peek > * { animation: none; } }
+.rb-peek-head {
+  display: flex; align-items: center; gap: 6px; flex: none;
+  height: 34px; padding: 0 8px 0 12px;
+  color: var(--text-muted);
+  font-family: var(--font-ui); font-size: var(--ui-font-meta, 12px); font-weight: 600;
+}
+.rb-peek-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rb-peek-tab {
+  display: inline-flex; align-items: center; justify-content: center; flex: none;
+  width: 24px; height: 24px; padding: 0; border: 0; border-radius: var(--radius-sm, 8px);
+  background: transparent; color: var(--text-muted); cursor: pointer;
+}
+.rb-peek-tab:hover { background: var(--menu-hover, var(--overlay-light, rgba(127, 127, 127, 0.14))); color: var(--text); }
+.rb-peek-tab.is-on { color: var(--accent-ink, var(--accent, var(--text))); }
+.rb-peek-tab:focus-visible { outline: var(--focus-ring, 1px) solid var(--accent-ink, var(--accent)); outline-offset: 1px; }
+.rb-peek-body { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; }
+
 .rb-menu-backdrop { position: fixed; inset: 0; z-index: 1100; -webkit-app-region: no-drag; }
 .rb-menu {
   position: fixed;

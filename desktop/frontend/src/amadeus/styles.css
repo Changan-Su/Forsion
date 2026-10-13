@@ -1333,6 +1333,22 @@ body.amx-marquee-active * {
   opacity: 0.75;
   text-decoration-style: dashed;
 }
+/* 应用 / 窗口引用芯片(wikilink.ts 的 appRefWidget):外壳带 .wikilink 只为沿用行内部件的选区 / 点击判定,
+   观感全归里层的 .app-ref(components/appRefs.css)—— 这里把双链的强调色、下划线、悬停底摘掉,字色跟所在行走。 */
+.am-app .milkdown .ProseMirror .wikilink.amx-app-ref {
+  color: inherit;
+  text-decoration: none;
+  cursor: auto;
+}
+.am-app .milkdown .ProseMirror .wikilink.amx-app-ref:hover {
+  background: none;
+}
+/* 芯片里的应用图标是 <img>:别吃正文图片那条(整行一张、上下留白、带圆角)。悬停卡挂在 body 上,不在正文里。 */
+.am-app .milkdown .ProseMirror .app-ref-ico {
+  display: inline-block;
+  margin: 0 0.3em 0 0;
+  border-radius: 0;
+}
 .am-app .milkdown .ProseMirror hr {
   border: none;
   border-top: 1px solid var(--border);

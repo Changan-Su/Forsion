@@ -1,6 +1,7 @@
 /** unescapeWikiOutsideFences:还原 remark 对 [[ 的转义,但代码围栏内逐字保留。 */
 import { describe, it, expect } from 'vitest'
 import { decodeCharRefs, linkTarget, parseWikiLinks, resolvePageName, unescapeWikiOutsideFences, normalizeUrlLiterals } from './links'
+import { noteLinkTargets } from './linkIndex'
 
 describe('unescapeWikiOutsideFences', () => {
   it('围栏外的 \\[\\[ 还原为 [[(含 !\\[\\[ 嵌入)', () => {
@@ -222,5 +223,13 @@ describe('表格里的别名 `\\|`(L-09)', () => {
     expect(linkTarget('Alpha#标题\\|别名')).toBe('Alpha')
     expect(linkTarget('Alpha|别名')).toBe('Alpha')
     expect(parseWikiLinks('| c1 [[Alpha\\|别名]] | x |\n')).toEqual(['Alpha'])
+  })
+})
+
+describe('应用 / 窗口引用不算笔记链接', () => {
+  it('noteLinkTargets 筛掉 app:// 和 window://(含表格里的 `\\|`),笔记链接照旧', () => {
+    const md = '看 [[window://com.google.Chrome|Linear – Pricing]] 和 [[Alpha|别名]]\n| [[app://com.tencent.xinWeChat\\|微信]] | [[Beta]] |\n'
+    expect(noteLinkTargets(md)).toEqual(['Alpha', 'Beta'])
+    expect(parseWikiLinks(md)).toHaveLength(4) // 底层解析不变(这个文件逐字节拷在 server 仓)
   })
 })

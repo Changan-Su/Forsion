@@ -3,6 +3,7 @@
 // 为什么不测纯函数:D-06 / R-01 / D-12 的病灶都在 preset 的 remark 链里(插件顺序、schema 的 parse/serialize 两侧),
 // 纸面看不见;装配顺序抄生产,顺序一错这里就会红。
 import { Editor, defaultValueCtx, editorViewCtx, parserCtx, rootCtx, serializerCtx } from '@milkdown/kit/core'
+import type { MilkdownPlugin } from '@milkdown/kit/ctx'
 import type { Node as PMNode } from '@milkdown/kit/prose/model'
 import type { EditorView } from '@milkdown/kit/prose/view'
 import { commonmarkWithIndent } from './paragraphIndent'
@@ -28,8 +29,9 @@ export interface Booted {
   destroy(): Promise<void>
 }
 
-/** v3 = 旧 PageView 宿主(mindmap / dashboard)那一套:softBreakRemark 代替 blankLineRemark(MarkdownBlock 的 `unified ? … : …`)。 */
-export async function bootEditor(initial: string, opts: { v3?: boolean } = {}): Promise<Booted> {
+/** v3 = 旧 PageView 宿主(mindmap / dashboard)那一套:softBreakRemark 代替 blankLineRemark(MarkdownBlock 的 `unified ? … : …`)。
+ *  extra = 额外挂的插件(装饰层的用例自己带上要测的那几个,如 editorFocusPlugin + wikilinkPlugin)。 */
+export async function bootEditor(initial: string, opts: { v3?: boolean; extra?: MilkdownPlugin[] } = {}): Promise<Booted> {
   const root = document.createElement('div')
   document.body.appendChild(root)
   // ponytail: milkdown 的 Timer(@milkdown/ctx timer.ts)每个起 3s setTimeout 后从不 clearTimeout,到点还裸调 removeEventListener;
@@ -58,6 +60,7 @@ export async function bootEditor(initial: string, opts: { v3?: boolean } = {}): 
       .use(autolinkSerializer)
       .use(opts.v3 ? softBreakRemark : blankLineRemark)
       .use(calloutTitleRemark)
+      .use(opts.extra ?? [])
       .create()
   } finally {
     globalThis.setTimeout = realSetTimeout
