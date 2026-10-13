@@ -17,7 +17,7 @@
 ## 记忆与日志:两层(2026-10-13)
 
 - **定义**:记忆 = 现在成立的事(`remember`,或判官候选经 Dream;每轮注入),一条一句现在时,不写「哪天得知」的日期(日期本身就是事实的照记:生日、截止日)。日志 = 发生过的事(`log_event`,或判官每轮一句 `log`;按天存,模型按需 `read_log`):做了什么、定了什么、进行到哪。**只对这段对话有效的指示**(「后面的问题都只根据这份字幕回答」)两边都不进。
-- **这条边界写在四处,改一处要四处一起改**:`remember` 描述的 SKIP / FORMAT(`tools/builtin/memoryLog.ts`)、`MEMORY_LOG_GUIDANCE` 与 `CHAT_MEMORY_GUIDANCE`(`profiles/promptSections.ts`)、判官的记忆候选闸(`localHistorian.ts` 的 `judgeFieldSpecs` —— 放在代码强加的字段说明里,不放在用户可改的「判断哲学」里;负对照里把判断哲学换成「什么都记」,判官照旧一条都没提)、辅助讨论的开场白(同文件)。默认人格(`agents/personaPrompts.ts`)和默认判断哲学只说了大意,没动。云端判官(`services/historian.ts` 里 `"memory"` 那段字段说明)是说同一件事的第五处,这次也没动:本机引擎不走它。
+- **这条边界写在四处,改一处要四处一起改**:`remember` 描述的 SKIP / FORMAT(`tools/builtin/memoryLog.ts`)、`MEMORY_LOG_GUIDANCE` 与 `CHAT_MEMORY_GUIDANCE`(`profiles/promptSections.ts`)、判官的记忆候选闸(`localHistorian.ts` 的 `judgeFieldSpecs` —— 放在代码强加的字段说明里,不放在用户可改的「判断哲学」里;负对照里把判断哲学换成「什么都记」,3 轮里指示和当天的事判官照旧一条没提,近况被提成候选 1 次(正常跑的 10 轮里是 0 次))、辅助讨论的开场白(同文件)。默认人格(`agents/personaPrompts.ts`)和默认判断哲学只说了大意,没动。云端判官(`services/historian.ts` 里 `"memory"` 那段字段说明)是说同一件事的第五处,这次也没动:本机引擎不走它。
 - **「只对这段对话有效的指示」为什么单独点名**:本机两个环境 6–10 月的真实写入里,这是最常见的一类杂质 —— 被模型自己记成长期记忆 3 次、被判官提成候选 4 次(都在 8–9 月)。判官那时的排除清单里已经有 one-off requests;用户说的是「后续都……」,读起来不像一次性的请求。
 - **为什么没有按词表拦截的入口闸**(「句子里有 今天 / 最近 / 完成了 就改道日志」):写码前拿真实数据对过,三份语料都不支持。
 
