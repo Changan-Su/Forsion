@@ -127,6 +127,9 @@ Kotlin 在 `NativeChrome*` / `NativeSheet*`。没装宿主（桌面、Web、浏�
     （会话列表是先把脚注排进滚动器才标的，见 `SidebarPane` 的 `dockHost`）。主页另有一条：壁纸铺满，内容留在 Dock 之上。
   - **胶囊下面再钉一条**（通话条）：不逐页让位。应用在壳上设 `--mb-top-extra`（那一条占的高度），它并进 `--mb-top`，
     凡是给胶囊让位的页面一起让。通话条的那一份在 `desktop/frontend/src/mini/voiceCall.css` 末尾；`npm run stage:phone` 的 `call-bar` 逐页核对。
+  - **挂在壳外的浮层**（通知卡片 `.ntf-wrap`、通话条 `.vc-bar`）：`--mb-top` 只在壳里有值，它们够不着，要自己用 `<body>` 上的 `--nc-top`
+    （屏幕 dp，除以 `--uiz`）让到胶囊之下 —— 原生胶囊和 Dock 画在页面之上，压在底下的那一截会被盖掉。通知卡片的那一条在 `base.css` 的 `.ntf-wrap` 之后
+    （日历里原本放底部的卡片在手机上也回到顶上，底部是 Dock）；`npm run stage:phone` 的 `notify-card` 核对。
   - **触摸**：两条原生条是透明的，只有胶囊接触摸；胶囊之间、Dock 两侧的触摸落到页面上（从两颗胶囊中间起手的右滑照样拉出列表）。
   - **关掉毛玻璃**（设置 → 外观，`data-glass='off'`）：板不再模糊，原生层把胶囊填成实色（状态里的 `frosted`）。
   - **只在外壳里悬浮**：进了主区（Dock 收起）WebView 底边回到导航条之上，输入区等贴底的 Web 界面不用改；键盘弹起同理。

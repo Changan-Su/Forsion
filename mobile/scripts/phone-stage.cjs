@@ -741,6 +741,35 @@ const SCENES = {
     rows.push(['the call over: the pages take the room back', !(await rect(page, '.vc-bar')) && (back === '' || back === '0px'), `--mb-top-extra «${back}»`])
     return rows
   },
+  // The notification stack is mounted outside the shell (MobileRoot's last child): none of the shell's room-keeping
+  // reaches it. The capsules and the dock are native — drawn over the page — so a card under one of them is cut off.
+  'notify-card': async (page) => {
+    if ((await stage.nav(page)) === 'detail') await stage.action(page, 'left')
+    await page.evaluate(async (url) => {
+      const { useNotifications } = await import(/* @vite-ignore */ url)
+      useNotifications.getState().dismissAll()
+      useNotifications.getState().notify({ force: true, sticky: true, title: 'Forsion', text: '2.13.3 已经可以更新了', action: { label: '查看', run() {} } })
+    }, moduleUrl('../desktop/frontend/src/stores/notificationStore.ts'))
+    const plates = LAYOUT.plates.map((p) => ({ ...p, right: p.x + p.w, bottom: p.y + p.h }))
+    const clear = (c) => !!c && c.x >= 0 && c.right <= SCREEN.width && plates.every((p) => c.bottom <= p.y || c.y >= p.bottom || c.right <= p.x || c.x >= p.right)
+    const card = async () => { await page.waitForTimeout(700); const c = await rect(page, '.ntf-wrap .ntf'); return c && Object.fromEntries(Object.entries(c).map(([k, v]) => [k, Math.round(v * 10) / 10])) }
+    const rows = []
+    // the calendar keeps its cards at the bottom on a desktop — on the phone that is where the dock is
+    await stage.space(page, 'calendar')
+    const cal = await card()
+    rows.push(['the calendar: the card is at the top here too, clear of the capsules and of the dock', clear(cal) && cal.bottom < SCREEN.height / 2, JSON.stringify(cal)])
+    await page.screenshot({ path: path.join(OUT, `notify-calendar${DARK ? '-dark' : ''}.png`) })
+    await stage.space(page, 'tangu'); await chip(page, 'all')
+    await callBar(page, true)
+    const bar = await rect(page, '.vc-bar')
+    const during = await card()
+    rows.push(['during a call: the card is below the call bar (its hang-up key stays in reach)', !!bar && !!during && during.y >= bar.bottom, JSON.stringify({ card: during, barBottom: bar && Math.round(bar.bottom) })])
+    await callBar(page, false)
+    const zoom = await page.evaluate(() => Number(getComputedStyle(document.body).zoom) || 1)
+    const c = await card()
+    rows.push(['a notification: the card starts right below the capsule row, inside the screen', clear(c) && near(c.y, LAYOUT.top + 6 * zoom, 2), JSON.stringify({ card: c, capsulesEnd: LAYOUT.top })])
+    return rows
+  },
 }
 
 /** Puts the app's own call bar up (or takes it down) through the store the composer's call key writes to. No call is
