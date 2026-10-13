@@ -891,7 +891,11 @@ const tabCountText = (list) => {
     assert.ok(left.rect.bottom - left.rect.top >= 40 * density - 1 && left.rect.right - left.rect.left >= 40 * density - 1, 'touch target < 40dp')
     const page = await chromeOnPage()
     assert.ok(near(page.nc.status * density, statusBar, 1) && near(page.nc.top * density, statusBar + barPx, 1), `the page was told ${JSON.stringify(page.nc)} (status bar ${statusBar}px, capsules ${barPx}px)`)
-    assert.equal(page.nc.bottom, 0, 'no dock: nothing to keep clear at the bottom')
+    // no dock: the main view keeps nothing clear at the bottom. (The number on <body> is left standing for the list
+    // behind — changing it restyles the whole page — so what is measured is the main view's own room.)
+    const mainRoom = await cdp.eval(`(() => { const v = document.querySelector('.mb-main > .mb-view'); const p = document.createElement('div'); p.style.cssText = 'position:absolute;height:var(--mb-bottom)'; v.appendChild(p)
+      const out = { probe: parseFloat(getComputedStyle(p).height) || 0, pad: parseFloat(getComputedStyle(v).paddingBottom) || 0 }; p.remove(); return out })()`)
+    assert.deepEqual(mainRoom, { probe: 0, pad: 0 }, 'no dock, yet the main view keeps room clear at its bottom')
     assert.ok(near(page.clearPx.top, statusBar + barPx, 2), `--mb-top = ${page.clearPx.top}px, the capsules end at ${statusBar + barPx}px (zoom arithmetic)`)
     assert.ok(page.scrimPx >= statusBar, `the status bar is not covered (scrim ${page.scrimPx}px of ${statusBar}px)`)
     // one plate per capsule, exactly behind it, and it blurs

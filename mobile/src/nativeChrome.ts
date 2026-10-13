@@ -1,7 +1,7 @@
 import { Capacitor, registerPlugin, type PluginListenerHandle } from '@capacitor/core'
 import { ArrowLeft, ChevronDown, LayoutGrid, MoreHorizontal, PanelLeft, PanelRight, Search, UserRound, X } from 'lucide-react'
 import {
-  dispatchNativeChromeAction, dispatchNativeChromeSpace, installNativeChromeHost, readNativeTheme, renderNativeIcons, useSpaceStore,
+  dispatchNativeChromeAction, dispatchNativeChromeSpace, installNativeChromeHost, listFirstNow, readNativeTheme, renderNativeIcons, useSpaceStore, useWorkspace,
   type NativeChromeAction, type NativeChromeSpace, type NativeChromeState, type NativeHaptic, type NativeIcon, type NativeSheetTheme,
 } from '@lcl/engine'
 import { registerMessages, translate } from '@/i18n'
@@ -130,7 +130,16 @@ export function applyChromeLayout(e: ChromeLayout | null | undefined, doc: Docum
   if (!body) return
   const floating = !!e && e.floating === true
   const vars: Array<[string, number]> = [['--nc-top', floating ? dpNumber(e?.top) : 0], ['--nc-bottom', floating ? dpNumber(e?.bottom) : 0], ['--nc-status', floating ? dpNumber(e?.status) : 0]]
-  for (const [name, value] of vars) { if (value) body.style.setProperty(name, String(value)); else body.style.removeProperty(name) }
+  // The main view of a list-first Space: the dock is away, so the report says bottom = 0. The dock's room is left
+  // standing instead of being cleared. It is an inherited custom property on <body>: clearing it here and writing the
+  // same number back on the way to the list restyles the whole page twice per visit (measured 2026-10-11, the stall
+  // around "back"). Nothing reads it meanwhile: the main view's own room is a constant 0 there (singleColumn.css,
+  // `[data-list-first] .mb-main`), and the list — off screen — keeps the room it needs when it returns.
+  const keepDockRoom = floating && !dpNumber(e?.bottom) && listFirstNow() && !useWorkspace.getState().leftVisible
+  for (const [name, value] of vars) {
+    if (value) body.style.setProperty(name, String(value))
+    else if (!(keepDockRoom && name === '--nc-bottom')) body.style.removeProperty(name)
+  }
   const plates = (floating && Array.isArray(e?.plates) ? e.plates : [])
     .filter((p) => p && /^[A-Za-z]{1,24}$/.test(String(p.id)) && dpNumber(p.w) > 0 && dpNumber(p.h) > 0)
   let box = doc.getElementById('nc-plates')

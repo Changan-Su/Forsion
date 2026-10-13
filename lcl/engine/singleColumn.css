@@ -496,3 +496,8 @@
 .mb-shell[data-list-first] .mb-drawer--left { width: 100%; border-radius: 0; box-shadow: none; }
 .mb-shell[data-list-first] .mb-body.push-left .mb-main { transform: translateX(100%); }
 /* 跟手拖拽的位移与「往回拖时不压暗」(两页是平级的整屏页,不是「面板盖在内容上」)都由 useDrawerDrag 内联写。 */
+/* 两级导航里主区的下缘让位恒为 0:Dock 只在列表层在场,主区露面时它已经收起。写成常量而不跟 --nc-bottom,是因为那个量
+   是 <body> 上会继承的自定义属性 —— 进主区清零、回列表再写回,每进出一次两遍整页样式重算(2026-10-11 量出,返回那一下的卡)。
+   配套:mobile/src/nativeChrome.ts 的 applyChromeLayout 在主区层不清 --nc-bottom(留给屏外的列表),于是进出主区它不变。
+   仪器:mobile `npm run emu:perf` 的 open / back(看 style 那一栏);`emu:nativeshell` 的「floating chrome (detail page)」。 */
+.mb-shell[data-native-chrome][data-list-first] .mb-main { --mb-bottom: 0px; }
