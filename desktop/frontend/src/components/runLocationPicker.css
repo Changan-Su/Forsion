@@ -8,6 +8,4 @@
   white-space: nowrap;
 }
 .runloc-status[data-tone='warn'] { color: var(--warning, var(--text-muted)); }
-/* 与项目药丸同一行;窄栏换行,不缩字号(DESIGN §6) */
-.newchat-projectbar-inner:has(> .runloc),
-.hp-projectbar:has(> .runloc) { flex-wrap: wrap; gap: 6px; }
+/* 与项目药丸同一行、窄栏折行:间距和折行写在这一栏自己身上(base.css 的 .newchat-projectbar-inner、homepage.css 的 .hp-projectbar),这里不再另写。 */

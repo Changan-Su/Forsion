@@ -46,9 +46,9 @@
 .human-acked { border: 0; background: transparent; }
 .human-acked:hover { color: var(--text); }
 
-/* 开场:新对话输入卡上方的一行,和项目选择条一样在 .composer-anchor 里、与输入卡同宽对齐 */
-.self-opening { padding: 0 24px 6px; }
-.self-opening-inner { max-width: 760px; margin: 0 auto; display: flex; align-items: center; gap: 6px 8px; flex-wrap: wrap; font-family: var(--font-ui); font-size: var(--ui-font-meta); line-height: var(--ui-line-meta); color: var(--text-muted); }
+/* 开场:新对话输入卡上方的一行,就排在项目选择条那一栏里、靠右(.newchat-projectbar-inner 的最后一项)。
+   不再单占一行夹在项目胶囊和输入卡之间(用户 10-13:「夹在这个胶囊和 chatbox 之间,很丑」);一行放不下时那一栏朝上折,它到胶囊上面去。 */
+.self-opening { margin-left: auto; min-width: 0; display: flex; align-items: center; gap: 6px 8px; font-family: var(--font-ui); font-size: var(--ui-font-meta); line-height: var(--ui-line-meta); color: var(--text-muted); }
 .self-opening-text { min-width: 0; overflow-wrap: anywhere; }
 
 /* 留痕下面的待确认候选:一条一行,点的就是这一行 */

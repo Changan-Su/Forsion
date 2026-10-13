@@ -494,9 +494,7 @@ a:hover { color: var(--accent-ink); }
 .ws-viewmore:hover { background: var(--overlay-light); color: var(--text-muted); }
 
 /* ── New Chat:Project 选择器(chat box 上方)──────────────────────────────── */
-/* 与 .composer 同款居中容器(max-width 760 + 24 横向 padding),让 Project pill 左缘对齐输入框,不再左歪。 */
-.newchat-projectbar { padding: 6px 24px 0; }
-.newchat-projectbar-inner { max-width: 760px; margin: 0 auto; display: flex; align-items: center; }
+/* 这一栏自己的盒子(.newchat-projectbar / -inner)写在 views/chat2/chat2.css,和它的两个断点放在一起 —— 留在这里的话断点压不住它(本文件排在 chat2.css 之后)。 */
 .project-selector { position: relative; display: inline-flex; min-width: 0; max-width: 100%; }
 .project-selector.is-open { flex-shrink: 0; }
 /* 与模型选择器同一门语：无轮廓线的中性 pill，展开后连续过渡到选择菜单宽度。 */
@@ -526,6 +524,14 @@ a:hover { color: var(--accent-ink); }
 .project-pill > svg { justify-self: center; flex: none; color: var(--text-faint); }
 .project-pill-name { min-width: 0; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .project-pill.is-open .project-pill-name { width: 100%; max-width: none; text-align: center; }
+/* 额外文件夹:项目胶囊后面的「添加文件夹」和加进来的那几枚(components/ExtraFolders.tsx)。外形就是项目胶囊;
+   已加的那枚本身不可点(只有里面的 × 可点),所以悬停不变色。只有图标的「添加」拉到与同行胶囊等高。 */
+.composer-chip.project-pill.extra-folder { padding-right: 4px; cursor: default; }
+.composer-chip.project-pill.extra-folder:hover { background: var(--overlay-light); }
+.composer-chip.project-pill.extra-folder-add { align-self: stretch; }
+.extra-folder-x { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: var(--text-faint); cursor: pointer; }
+.extra-folder-x:hover { background: var(--overlay-medium); color: var(--text); }
+.extra-folder-x:focus-visible { outline: var(--focus-ring, 2px) solid var(--accent-ink); outline-offset: 1px; }
 .composer-menu.project-menu {
   position: absolute;
   bottom: 100%;
