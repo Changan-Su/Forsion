@@ -348,14 +348,17 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
     const entryKey = `row:agent:${slug}`
     const url = s.agentAvatars[slug]
     const isMuse = slug === 'muse'
+    // Muse 也能私聊(10-13 用户定,推翻 D18):本地(有 Library)点行 = 进它的私聊,聊天右侧的 Agent Desk 空闲时演 Muse Space
+    // (AgentDesk.useDeskHome)。没有本地 Library(web 上只注册了 Space)时照旧只开 Space。
+    const museSpaceOnly = isMuse && cloudAgent(slug)
     const cloud = !isMuse && cloudAgent(slug)
-    const active = isMuse ? activeSpaceId === 'muse' : cloud ? false : activeCfg?.soloAgentSlug === slug
+    const active = museSpaceOnly ? activeSpaceId === 'muse' : cloud ? false : activeCfg?.soloAgentSlug === slug
     return orbitRow({
       rowKey: `agent:${slug}`, entryKey, kind: 'agent', slug, active,
       tip: rowTip(name || slug, isMuse ? 'orbits.badge.proactive' : 'agentSelect.direct', `agent:${slug}`),
       name: name || slug, sub: t(isMuse ? 'orbits.badge.proactive' : 'agentSelect.direct'), at: activityByIdent.get(`agent:${slug}`) || 0,
       onOpen: () => {
-        if (isMuse) openMuse()
+        if (museSpaceOnly) openMuse()
         else if (cloud) { openNewChat(); useApp.getState().selectNewChatAgent(slug) }
         else openSolo('agent', slug)
       },
@@ -424,8 +427,9 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
     const pinned = isOrbitPinned(pinnedEntries, m.entryKey)
     items.push({ id: pinned ? 'unpin' : 'pin', label: t(pinned ? 'orbits.row.unpin' : 'orbits.row.pin'), icon: pinned ? <PinOff size={13} /> : <Pin size={13} />, run: () => { const key = m.entryKey; setRowMenu(null); togglePinned(key) } })
     if (m.kind === 'agent' && m.slug === 'muse') {
-      /* Muse 不进聊天(D18):没有私聊 rotate,只有 Space。 */
-      items.push({ id: 'open-muse', label: t('orbits.row.openMuseSpace'), icon: <SquarePen size={13} />, run: () => { setRowMenu(null); openMuse() } })
+      /* Muse:本地能私聊(10-13),所以也给「新会话(先总结记忆)」;整页的 Muse Space(带待批 / TODO 面板)留一个入口。 */
+      if (!cloudAgent(m.slug)) items.push({ id: 'new-session-memory', label: t('orbits.row.newSessionMemory'), icon: <MessageSquarePlus size={13} />, run: () => { setRowMenu(null); rotateSolo('agent', 'muse') } })
+      if (hasMuseSpace) items.push({ id: 'open-muse', label: t('orbits.row.openMuseSpace'), icon: <SquarePen size={13} />, run: () => { setRowMenu(null); openMuse() } })
     }
     if (m.kind === 'agent' && m.slug !== 'muse') {
       // 「新会话(先总结记忆)」= rotate 端点:归档旧私聊 + 建新,后台采记忆(§5.3)。云端 Agent 没有私聊,不给。

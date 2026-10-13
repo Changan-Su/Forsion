@@ -474,6 +474,8 @@ function AgentProfile({ agent, compact = false, sessionId, rewriteSessionId, evo
     <ProfileModelField models={s.models || []} value={draft.model || ''} label={t('agentProfile.model')} onChange={(model) => patch({ model })} />
     <label className="agent-field">{t('agentProfile.thinking')}<select aria-label={t('agentProfile.thinking')} value={draft.thinkingLevel} onChange={(e) => patch({ thinkingLevel: e.target.value as NormalAgentDef['thinkingLevel'] })}><option value="">{t('agentProfile.default')}</option>{THINKING_LEVELS.map((v) => <option key={v} value={v}>{thinkingLabel(v, t)}</option>)}</select></label>
     <label className="agent-field">{t('agentProfile.approval')}<select aria-label={t('agentProfile.approval')} value={draft.approvalMode} onChange={(e) => patch({ approvalMode: e.target.value as NormalAgentDef['approvalMode'] })}>{[['', 'default'], ['readonly', 'readonly'], ['auto-edit', 'autoEdit'], ['full-auto', 'fullAuto'], ['custom', 'custom']].map(([v, k]) => <option key={v} value={v}>{t(`agentProfile.${k}`)}</option>)}</select></label>
+    {/* Muse 有两个档:这里的只管和它聊天时;后台周期按「权限档」(设置 › Agent › 后台 Agent)。两处互相指路(10-13 用户反馈「放权了还要批」)。 */}
+    {agent.slug === 'muse' && <button type="button" className="agent-profile-link" data-act="muse-tier-link" onClick={() => useApp.getState().openSettings('agents')}>{t('agentProfile.museApprovalScope')}<ExternalLink size={13} /></button>}
   </>
   const agentConfiguration = <>
     <ProfileGroup title={t('agentProfile.instructions')} hint={t('agentProfile.instructionsHint')}>

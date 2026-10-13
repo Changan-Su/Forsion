@@ -281,6 +281,7 @@
     "check:teamoutputs": "node scripts/team-outputs.check.cjs",
     "check:teamprofile": "node scripts/team-profile.check.cjs",
     "check:teamdesk": "node scripts/team-desk.check.cjs",
+    "check:musechat": "node scripts/muse-chat-desk.check.cjs",
     "check:ultra": "node scripts/ultra-effort.check.cjs",
     "check:canvas": "node scripts/e2e-editor.cjs --check=unified-canvas",
     "check:tutorial": "node scripts/e2e-editor.cjs --check=tutorial-note",

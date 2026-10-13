@@ -630,9 +630,12 @@ async function activityTailHint(): Promise<string> {
  *  返回字段与配色变量也得写在这里(09-27 dev 首个 ctx.agent 版 Space):技能不加载,它就只能猜 —— 猜了 status().status
  *  (「当前状态」卡恒空)、猜了宿主没有的 --panel(卡片落到写死的深色兜底,浅色主题下标题深底深字看不见)。
  *  变量表 = styles/base.css :root 与深色块都定义的那几个(--surface / --card 只在笔记作用域里有,插件视图拿不到)。 */
-function spaceKickoff(): string {
+function spaceKickoff(
+  reloadAfter = 'your cycle ends',
+  skillHint = 'load the "forsion-plugin" skill only if you need more of the plugin API than this',
+): string {
   return `Your Space: the desktop's "Muse" Space shows the view registered by the Forsion plugin at ${museSpaceDir()} ` +
-    '(manifest.json + main.js; load the "forsion-plugin" skill only if you need more of the plugin API than this). ' +
+    `(manifest.json + main.js; ${skillHint}). ` +
     'main.js runs as the body of setup(ctx), so call ctx.registerView({ id: "home", ... }) at the top level of the file. ' +
     'Do not wrap the file in function setup(ctx) { ... } — nothing calls it, so nothing registers and no error is raised. ' +
     'Render live data instead of hardcoding it — these return Promises (status() can resolve to null): ctx.agent.status() → { running, lastCycleAt, sleepUntil, mode, heartbeatMinutes, pendingApprovals } (times in epoch ms or null); ' +
@@ -643,8 +646,29 @@ function spaceKickoff(): string {
     'Colors come only from the host theme variables var(--bg), var(--bg-card), var(--text), var(--text-muted), var(--border), var(--accent) — ' +
     'no hex values, no other variable names — so light and dark themes both work; your view shares the app\'s page, so prefix every CSS selector with your own root class. ' +
     'Plain JS, no build step, no CDN. It starts empty: build it, then improve what it shows across cycles — never edit it just to refresh status or timestamps. ' +
-    'It is reloaded after your cycle ends; a load failure, a missing "home" view, or a later runtime error (with its main.js line) ' +
+    `It is reloaded after ${reloadAfter}; a load failure, a missing "home" view, or a later runtime error (with its main.js line) ` +
     'reaches you as a [feedback] entry mentioning the Space.';
+}
+
+/**
+ * 手聊 Muse(私聊,或普通会话里切到 Muse)时并进系统提示的一段 —— agentLoop 对 agentSlug='muse' 且不是周期的 run 注入。
+ * 人格(config.toml)写的是周期口径:「每个周期你会收到简报」。聊天里没有简报、用户就在对面;不说清,它会等一份不会来的简报,
+ * 也不会把用户交代的「以后怎么干」记下来 —— 下个周期是新会话,只读得到 LOG / 记忆,读不到这段对话。
+ * Space 契约在周期里随 kickoff 来,聊天里没有 kickoff,所以一并带上(用户多半正对着 Desk 里的 Space 说话)。
+ */
+export function museChatSection(): string {
+  return '## Talking with the user\n' +
+    'This is a direct conversation with the user, not one of your background cycles: no kickoff brief arrives here and the user is reading your replies, so answer them, and ask when something is unclear. ' +
+    `What you did in your cycles is in your log (read_log) and your journal (${path.join(museLibraryDir(), 'Journal', '<date>.md')}). ` +
+    'Your next cycle starts in a fresh session and will not see this conversation. So when the user tells you how to work in the background ' +
+    '(what to watch, what to stop suggesting, when to stay quiet), save it before you reply: remember for a lasting preference, log_event for a one-off request. ' +
+    'Actions here follow this conversation\'s approval setting, with the user present to confirm; your background permission tier applies to your cycles only. ' +
+    // 聊天里先装技能再动手(10-14 实测:沿用周期那句「只在不够用时才装」,3 次里 2 次没装就写 main.js,用了不存在的 render、
+    // 其中 1 次连 manifest.json 都没写;没有这段说明的构建每次都先装技能、4 次都对)。周期那份的措辞不动。
+    spaceKickoff(
+      'your turn ends, and the user may be looking at it next to this chat',
+      'load the "forsion-plugin" skill before you create it or change how it is built: the manifest fields and the shape of the view object are in there',
+    );
 }
 
 /**
@@ -663,6 +687,10 @@ export function buildCycleMessages(
   const message =
     'Start this round: first use read_log to review your own recent cycles, the [feedback] entries showing how the user handled your previous todos, and any [approval] entries about actions you deferred earlier. ' +
     'Then combine your long-term memory with the context below to find the 1-3 most worthwhile things to do for the user right now — and do them where your permission tier allows. ' +
+    // 10-13:电脑历史摘要由 agentLoop 现算、拼在简报最后(开着才有)。这句只说「有的话怎么用」,不点工具名 ——
+    // 这段指令是落库的稳定前缀,电脑历史没开时工具并不存在。也不写摘要的围栏标签原文:台架拿「agent_runs.input 里
+    // 不许出现那个标签」当摘要没落库的绊线(live --only computerhistory),这里写了就成了假红。
+    'If that context ends with a computer-history block, it is what the user was actually doing on this computer outside Forsion: treat it as your most direct signal of what they are working on. ' +
     tierKickoff(cfg) + ' ' +
     `Avoid the "TODOs you have already proposed" below; use add_muse_todo only for genuinely new, high-value todos (at most ${cfg.maxTodosPerWindow} this period — spend the quota sparingly). ` +
     'Use manage_schedule to plan your own follow-ups (auto=true entries wake you up when due; remove them when done). ' +
@@ -759,6 +787,16 @@ export function getAutomationNotices(): Record<string, string> { return automati
 /** P1-K2:锁定期间整轮暂停的提示只打一次(每个锁定时段一次),解锁后复位。 */
 let lockPauseLogged = false;
 
+/** 手聊 Muse 也会改 Space(10-13):聊天那一轮收尾 → run 终态 kickMuse → tick → 这里。**任何** run 都不在跑才刷新戳 ——
+ *  写到一半的 manifest.json / main.js 不该被桌面重载(同 spaceDirStamp 头注:不监听文件)。不分会话种类:
+ *  Muse 也可能作为讨论 / 团队成员在别的会话里写 Space。 */
+async function refreshSpaceStampWhenIdle(): Promise<void> {
+  try {
+    const active = await query<any[]>(`SELECT 1 FROM agent_runs WHERE status IN ('queued', 'running') LIMIT 1`);
+    if (!active.length) spaceStamp = await spaceDirStamp();
+  } catch { /* DB 不可用 → 这一轮不刷,下一轮再看 */ }
+}
+
 async function tick(): Promise<void> {
   // interval 与 kickMuse 的 setTimeout 会重叠(tick 内多处 await);重入=重复评估/重复起 run。
   if (ticking) { pendingKick = true; return; }
@@ -771,11 +809,13 @@ async function tick(): Promise<void> {
     try { locked = remoteLocked(); } catch { locked = true; }
     if (locked) {
       if (!lockPauseLogged) { lockPauseLogged = true; log('remote lock on — Muse, watch rules and agent schedules paused until it is unlocked on this computer'); }
+      await refreshSpaceStampWhenIdle(); // 锁只停后台:本机聊天里改的 Space 照样要让桌面重载
       return;
     }
     lockPauseLogged = false;
     await loadMuseState(); // lastCycleAt 落盘值(只读一次):重启后心跳接着上次算,不再开机就跑
     await flushJournal(); // 上一周期若已收尾 → 记一行(run 终态会 kickMuse,所以通常紧跟着周期结束)
+    if (!pendingJournal) await refreshSpaceStampWhenIdle();
     // ── 盯任务规则评估(零 token 代码判定)。刻意放在 muse.enabled/activeHours 闸**之前**:
     // 带 agentSlug 的规则属于任意 agent 的自动化,关掉 Muse 不应连它们一起灭。
     // 评估 → 分流 → 起跑 → 提交游标 → (有 db 写入就)重评估,整段在 automationDrain 里循环到无命中/封顶。
