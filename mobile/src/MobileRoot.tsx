@@ -35,7 +35,7 @@ import { installNotificationWiring } from '@/stores/notificationWiring'
 import { ensureAmadeusReady } from '@/amadeusPlugins'
 import { AnimatePresence, motion } from 'framer-motion'
 import { useShallow } from 'zustand/react/shallow'
-import { SingleColumnHost, listFirstNow, useWorkspace, useNav, useNativeChromeClaim, useNativeChromeSpaces, useRibbonStore, type NativeChromeClaim } from '@lcl/engine'
+import { SingleColumnHost, listFirstNow, useWorkspace, useNav, useNativeChromeClaim, useNativeChromeSpaces, useRibbonStore, useSpaceStore, setActiveSpace, type NativeChromeClaim } from '@lcl/engine'
 // 命令面板:desktop 由 `Shell.tsx` 渲染,而移动端把 Shell 换成了空壳(vite.config engineSwap)——
 // 于是 ribbon 的 rb-cmd 项(无条件注册,经「⋯」菜单在移动端可点)点了只是把 paletteOpen 置 true,
 // 没有任何东西渲染它。宿主责任随外壳一起被换掉了,得在这儿接回来。
@@ -65,10 +65,23 @@ function useInboxAutoPull(): void {
   }, [])
 }
 
-/** Android 系统返回(实体键/全面屏侧滑手势)接管:壳内 sheet→浮层→抽屉→tab 内后退→关视图→挂起。
+/** 链底:这个 Space 的第一层上再按返回。不在主页 → 回主页;已经在主页 → 挂起 app(Android 的惯例:
+ *  顶层页面的返回先回起始页,只有起始页才退出)。
+ *  2026-10-13 用户实报「侧滑返回…一不小心就返回桌面了」:改之前每个 Space 的第一层(会话列表、笔记列表、日历…)
+ *  都是一次返回就退到桌面,而全面屏的返回是**左右两条边**往里滑 —— 在列表上横着划一下、起手靠边就中。
+ *  主页 = 排第一个的 Space,和底栏认「主页」是同一条(spaceDock.ts:按位置)。仪器:`emu:nativeshell` 的「back:」那条。 */
+function leaveOrHome(): void {
+  const { spaces, activeSpaceId } = useSpaceStore.getState()
+  const home = spaces[0]?.id
+  if (home && activeSpaceId !== home && spaces.some((x) => x.id === activeSpaceId)) setActiveSpace(home)
+  else void CapApp.minimizeApp()
+}
+
+/** Android 系统返回(实体键/全面屏侧滑手势)接管:壳内 sheet→浮层→抽屉→tab 内后退→关视图→回主页→挂起。
  *  此前无人监听 backButton,返回手势直接把 app 退到后台——「侧滑返回没反应」的根因。
- *  Manifest 已开 enableOnBackInvokedCallback(Capacitor App 插件走 androidx OnBackPressedDispatcher,
- *  自动桥到新 API):系统预测性返回动画只在链底「挂起 app」那档出现,链上各档照旧被我们拦截。 */
+ *  Manifest 已开 enableOnBackInvokedCallback(Capacitor App 插件走 androidx OnBackPressedDispatcher,自动桥到新 API)。
+ *  ⚠️ 系统自己的「返回桌面」预览动画在这里**不会出现**(2026-10-13 模拟器实测,Android 15):Capacitor 那个回调一直
+ *     启用着,系统就不画预览,连链底那一档也不画 —— 挂起是我们自己调 minimizeApp 做的,手指滑的过程中画面不动。 */
 function useAndroidBack(): void {
   useEffect(() => {
     if (!window.tangu?.mobile) return // 仅原生壳;浏览器无此事件
@@ -90,10 +103,11 @@ function useAndroidBack(): void {
       if (app.marketOpen) { app.closeMarket(); return }
       if (app.settingsOpen) { app.closeSettings(); return }
       const ws = useWorkspace.getState()
-      // 两级导航(原生底栏,见 lcl 的 listFirstNow):左栏是这个 Space 的第一层 → 在列表层按返回 = 已在链底,挂起 app;
-      // 在主区按返回 = 先页内后退,退无可退就回列表(不关视图,再点同一条目即回)。
+      // 两级导航(原生底栏,见 lcl 的 listFirstNow):左栏是这个 Space 的第一层 → 在列表层按返回 = 已在链底(见 leaveOrHome);
+      // 在主区按返回 = 先页内后退(只退这一趟进来之后走过的页,见 lcl 的 listTrips),退无可退就回列表
+      // (不关视图,再点同一条目即回)。
       const listFirst = listFirstNow()
-      if (listFirst && ws.leftVisible) { void CapApp.minimizeApp(); return }
+      if (listFirst && ws.leftVisible) { leaveOrHome(); return }
       if (ws.leftVisible) { ws.toggleSidebar('left'); return }
       if (ws.rightVisible) { ws.toggleSidebar('right'); return }
       const active = ws.mainTabs.find((t) => t.active)
@@ -112,7 +126,7 @@ function useAndroidBack(): void {
           if (now?.id !== active.id || now.type !== active.type) return
         }
       }
-      void CapApp.minimizeApp() // 已在底:挂起(Android 默认原行为)
+      leaveOrHome() // 已在底
     })
     return () => { void sub.then((h) => h.remove()) }
   }, [])
