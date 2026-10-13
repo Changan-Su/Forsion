@@ -66,6 +66,8 @@ import { installPreviewPersistence, previewOriginFor, registerProductsIpc } from
 import { transcribeViaOpenAI, transcribeViaForsion } from './asr'
 import { localModelReady, localModelSize, downloadLocalModel, removeLocalModel, transcribeLocal } from './asrLocal'
 import { computerUseLiveView, helperSocketPath, askHelper, ensureHelperRunning, HelperLink } from './computerUse'
+import { createAppRefs } from './appRefs'
+import { appIconDataUrls } from './appIcons'
 import { chooseSide, makeRoom, panelRectFor, startDockFollow, DOCK_PANEL_WIDTH, DOCK_PANEL_MIN_WIDTH, DOCK_PANEL_MIN_HEIGHT, normalizeProbe } from './appDock'
 import { normalizeDockCandidates, normalizeDockSelection, normalizeDockWindow, type DockState, type DockWindow } from '../shared/appDock'
 import { permissionHelperAppPath, registerDesktopPermissions } from './desktopPermissions'
@@ -3376,6 +3378,23 @@ app.whenReady().then(async () => {
       return { error: (err as { code?: string }).code || 'unavailable' }
     }
   })
+
+  // ── 应用 / 窗口引用(文字里的 [[app://…]] / [[window://…]];见 electron/appRefs.ts)。只认真实窗口的顶层页面 ──
+  const appRefs = createAppRefs({
+    platform: process.platform, ownPid: process.pid, home: homedir(),
+    ask: (payload) => askHelper(helperSocketPath(), payload, 5_000),
+    ensureHelper: () => ensureHelperRunning(),
+    // 台架把 mdfind / open 换成夹具(FORSION_APPREF_BIN_DIR 下的同名脚本):不然测「点击打开」会真的把这台电脑上的应用拉起来。
+    run: (file, args) => new Promise<string>((resolve, reject) => {
+      const fixtures = app.isPackaged ? '' : process.env.FORSION_APPREF_BIN_DIR?.trim() // 安装版不认:不给环境变量换掉系统命令的口子
+      execFile(fixtures ? join(fixtures, basename(file)) : file, args, { timeout: 8_000, maxBuffer: 4 << 20 }, (err, stdout) => (err ? reject(err) : resolve(String(stdout))))
+    }),
+  })
+  ipcMain.handle('appRefs:list', (e) => (isTrustedSender(e) ? appRefs.list() : { windows: [], apps: [] }))
+  ipcMain.handle('appRefs:status', (e, refs: unknown) => (isTrustedSender(e) ? appRefs.status(refs) : []))
+  ipcMain.handle('appRefs:open', (e, ref: unknown) => (isTrustedSender(e) ? appRefs.open(ref) : { ok: false }))
+  ipcMain.handle('appRefs:frontmost', (e) => (isTrustedSender(e) ? appRefs.frontmost() : null))
+  ipcMain.handle('appRefs:icons', (e, ids: unknown) => (isTrustedSender(e) ? appIconDataUrls(ids) : {}))
 
   // ── Computer Use:最近被操控窗口的一帧画面(只读,不启动 helper;详见 electron/computerUse.ts)──
   ipcMain.handle('computerUse:liveView', (_e, opts?: { maxDimension?: number; quality?: number; activeWithinMs?: number; image?: boolean }) =>

@@ -58,6 +58,43 @@ export function eventToHotkey(e: KeyboardEvent): string | null {
   return parts.join('+')
 }
 
+/**
+ * 「同时按下左右两个 ⌘(mac)/ 两个 Ctrl(其它)」这一招,热键写作 'mod+mod'。它没有主键,eventToHotkey 那套认不出:
+ * 这里在捕获阶段记下哪几个修饰键按着,第二个落下的那一下把事件标成「成对」。其间按过别的键、带了 Shift / Alt 都不算。
+ * 捕获阶段装是因为录制框会 stopPropagation,冒泡监听看不到那几下。
+ */
+export const MOD_PAIR = 'mod+mod'
+const pairDown = new Set<string>()
+const pairEvents = new WeakSet<Event>()
+let pairInstalled = false
+
+/** 纯函数那一半(单测钉这里):喂一个键盘事件,更新 down 并回答「这一下是不是凑齐了一对」。 */
+export function trackModPair(down: Set<string>, e: Pick<KeyboardEvent, 'type' | 'code' | 'repeat' | 'shiftKey' | 'altKey'>, mac: boolean): boolean {
+  if (e.type === 'keyup') { down.delete(e.code); return false }
+  const fam = mac ? 'Meta' : 'Control'
+  if (e.code !== `${fam}Left` && e.code !== `${fam}Right`) { down.clear(); return false }
+  if (e.repeat) return false
+  down.add(e.code)
+  if (down.size < 2 || e.shiftKey || e.altKey) return false
+  down.clear() // 两个都松开再按才算下一次
+  return true
+}
+
+function installModPair(): void {
+  if (pairInstalled || typeof window === 'undefined') return
+  pairInstalled = true
+  const feed = (e: KeyboardEvent): void => { if (trackModPair(pairDown, e, isMacPlatform())) pairEvents.add(e) }
+  window.addEventListener('keydown', feed, true)
+  window.addEventListener('keyup', feed, true)
+  window.addEventListener('blur', () => pairDown.clear())
+}
+
+/** 这个 keydown 是不是「左右修饰键同按」凑齐的那一下。 */
+export function isModPair(e: KeyboardEvent): boolean {
+  installModPair()
+  return pairEvents.has(e)
+}
+
 /** 宿主启动时写 `<html data-platform>`(与 desktop ShortcutsTab 同一判据);无 DOM 时按非 mac。 */
 export function isMacPlatform(): boolean {
   try { return document.documentElement.dataset.platform === 'mac' } catch { return false }
@@ -66,9 +103,12 @@ export function isMacPlatform(): boolean {
 /** 热键字符串 → 展示文本(mac 用符号紧排,其它用 Ctrl+Shift+… )。 */
 export function formatHotkey(hk: string, isMac: boolean): string {
   if (!hk) return ''
+  if (hk === MOD_PAIR) return isMac ? '⌘ + ⌘' : 'Ctrl + Ctrl'
   const sym: Record<string, string> = isMac
     ? { mod: '⌘', shift: '⇧', alt: '⌥', space: 'Space', enter: '↵', escape: 'Esc', arrowup: '↑', arrowdown: '↓', arrowleft: '←', arrowright: '→' }
     : { mod: 'Ctrl', shift: 'Shift', alt: 'Alt', space: 'Space', enter: 'Enter', escape: 'Esc', arrowup: '↑', arrowdown: '↓', arrowleft: '←', arrowright: '→' }
   const map = (p: string): string => sym[p] || (p.length === 1 ? p.toUpperCase() : p.charAt(0).toUpperCase() + p.slice(1))
   return hk.split('+').map(map).join(isMac ? '' : '+')
 }
+
+installModPair()

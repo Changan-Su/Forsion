@@ -4,7 +4,8 @@ import { Search } from 'lucide-react'
 import { usePageStore } from '@amadeus/store/pageStore'
 import { amadeus } from '@amadeus/api'
 import type { SearchHit, TagCount } from '@amadeus-shared/ipc'
-import { decodeCharRefs, parseWikiLinks, resolvePageName } from '@amadeus-shared/links'
+import { decodeCharRefs, resolvePageName } from '@amadeus-shared/links'
+import { noteLinkTargets } from '@amadeus-shared/linkIndex'
 import { stripFrontmatter } from '@amadeus-shared/compiler'
 import { resolveFileName } from '@amadeus/lib/vaultFiles'
 import { openNote, revealTextWhenReady } from './amadeusNav'
@@ -342,7 +343,7 @@ export function AmadeusLocalGraphView() {
       const outs: string[] = []
       const ghosts: string[] = []
       const seenGhost = new Set<string>()
-      for (const n of parseWikiLinks(contents)) {
+      for (const n of noteLinkTargets(contents)) {
         const r = resolvePageName(n, st.pages, activePage)
         if (r) {
           if (r !== activePage && !outs.includes(r)) outs.push(r)

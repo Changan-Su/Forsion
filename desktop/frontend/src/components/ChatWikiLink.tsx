@@ -9,6 +9,8 @@ import { usePageStore } from '../amadeus/store/pageStore'
 import { registerMessages, useI18n } from '../i18n'
 import { splitWiki, wikiLabel } from './wikiChat'
 import { sessionIdOfTarget } from '../views/chat2/chatDragRef'
+import { parseAppRefInner } from '../../../shared/appRefs'
+import { AppRefChip } from './appRefs'
 import { deskAcceptsFiles } from '../amadeus/plugins/deskCompanion'
 
 registerMessages({
@@ -16,7 +18,14 @@ registerMessages({
   'chatwiki.mediaTipBadRangeEnd': { zh: '{path} {stamp}（区间终点无效，已忽略）', en: '{path} {stamp} (invalid range end — ignored)' },
 })
 
+/** 聊天里的一条 [[…]]。应用 / 窗口引用(目标带 app:// / window://)先认,画成引用芯片;其余才是笔记 / 会话 / 文件那一套。
+ *  拆成两个组件是因为后者一上来就是一串 hook,不能在它里面提前返回。 */
 export function ChatWikiLink({ inner }: { inner: string }) {
+  const app = parseAppRefInner(inner)
+  return app ? <AppRefChip appRef={app} /> : <NoteWikiLink inner={inner} />
+}
+
+function NoteWikiLink({ inner }: { inner: string }) {
   const { t } = useI18n()
   const pages = usePageStore((s) => s.pages)
   const files = usePageStore((s) => s.files)

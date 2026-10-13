@@ -1,6 +1,7 @@
 // 「打开光标处链接」的动作半身(评审 L-20;命令定义在轻模块 unified/linkCommands.ts,执行时懒取本模块)。
 //
 //  · linkAtCursor:光标在 `[[…]]` 里(或贴着两端)→ 双链,交与点击同一串(wikiOpenArg);在 md 链接 `[t](url)` 上 → 它的地址。
+//    `[[app://…]]` / `[[window://…]]`(应用 / 窗口引用,shared/appRefs.ts)单列一种:切到那个应用 / 窗口,不走笔记那条路。
 //  · 编辑器内按键:MarkdownBlock 的 handleKeyDown 用 linkKindOfEvent 比对**生效热键**(含用户改键 / 解绑),命中且光标在链接上才吞键。
 //  · 命令面板 / 焦点不在正文:runLinkCommand 作用在焦点所在、否则最近一次聚焦过的编辑器上(本插件记账,口径同 foldActions)。
 //  打开动作本身由宿主(MarkdownBlock)注入:双链走 onOpenWiki,md 链接按 hrefKind 分流 —— 与鼠标点击同一套。
@@ -8,17 +9,21 @@ import { $prose } from '@milkdown/kit/utils'
 import { Plugin, type EditorState } from '@milkdown/kit/prose/state'
 import type { EditorView } from '@milkdown/kit/prose/view'
 import { effectiveHotkey, eventToHotkey } from '@lcl/engine'
-import { wikiOpenArgAt } from './wikilink'
+import { wikiInnerAt, wikiOpenArg } from './wikilink'
 import { LINK_BINDINGS, type LinkCommandKind } from '../../unified/linkCommands'
+import { parseAppRefInner, type AppRef } from '../../../../../shared/appRefs'
 
-export type LinkAtCursor = { kind: 'wiki'; arg: string } | { kind: 'href'; href: string }
+export type LinkAtCursor = { kind: 'wiki'; arg: string } | { kind: 'href'; href: string } | { kind: 'app'; ref: AppRef }
 type Opener = (target: LinkAtCursor, newTab: boolean) => void
 
 /** 光标(选区的 head)所在的链接;不在链接上 = null。 */
 export function linkAtCursor(state: EditorState): LinkAtCursor | null {
   const $h = state.selection.$head
   if (!$h.parent.isTextblock || $h.parent.type.spec.code) return null
-  const arg = wikiOpenArgAt($h.parent, $h.parentOffset)
+  const inner = wikiInnerAt($h.parent, $h.parentOffset)
+  const ref = inner === null ? null : parseAppRefInner(inner)
+  if (ref) return { kind: 'app', ref }
+  const arg = inner === null ? '' : wikiOpenArg(inner)
   if (arg) return { kind: 'wiki', arg }
   const linkType = state.schema.marks.link
   if (!linkType) return null

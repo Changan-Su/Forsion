@@ -4,7 +4,7 @@
  */
 import { create } from 'zustand'
 import type { Command } from './types'
-import { useShortcuts, effectiveHotkey, formatHotkey, isMacPlatform } from './shortcutStore'
+import { useShortcuts, effectiveHotkey, formatHotkey, isMacPlatform, isModPair, MOD_PAIR } from './shortcutStore'
 
 interface CommandState {
   commands: Command[]
@@ -79,6 +79,12 @@ export function installHotkeys(): () => void {
     // 全局命令再跑一遍」—— 在 CodeMirror 里按 Cmd+F 会同时弹它自己的查找条和应用的查找条。
     if (e.defaultPrevented) return
     const st = useCommandStore.getState()
+    // 「左右修饰键同按」没有主键,hotkeyMatches 配不上,单独走。
+    if (isModPair(e)) {
+      const cmd = st.commands.find((c) => effectiveHotkey(c) === MOD_PAIR)
+      if (cmd) { e.preventDefault(); cmd.run() }
+      return
+    }
     // 命令面板:可被设置里改键的伪命令 'command-palette'(默认 mod+k)。
     const paletteKey = effectiveHotkey({ id: 'command-palette', hotkey: 'mod+k' })
     if (paletteKey && hotkeyMatches(paletteKey, e)) {

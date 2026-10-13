@@ -5,6 +5,10 @@
 // 图片嵌入 `![[pic.png|200]]` 是“难源码编辑块”:点一下选中整体并保留渲染(独占段落提升为
 // paragraph NodeSelection,行内图片选精确文本范围),加选中环与右缘缩放把手;光标经过不露源码,
 // 只有悬停右上角 `</>` 显式打开。复制事件另补桌面原生附件 flavor,外部 App 能直接粘文件。
+// 应用 / 窗口引用 `[[app://…|名字]]` / `[[window://…|标题]]`(契约 shared/appRefs.ts)借同一套逐行显隐,但不是笔记链接:
+// 渲染成聊天同款的芯片(应用图标 + 名字,窗口关了 / 这台设备上没有就变灰),点它切到那个应用 / 窗口 —— 见 appRefWidget。
+import { createElement } from 'react'
+import { createRoot, type Root } from 'react-dom/client'
 import { $prose } from '@milkdown/kit/utils'
 import { NodeSelection, Plugin, PluginKey, TextSelection, type EditorState } from '@milkdown/kit/prose/state'
 import type { Node as ProseNode } from '@milkdown/kit/prose/model'
@@ -18,6 +22,9 @@ import { attachSourceButton } from './sourceToggle'
 import { attachResizeHandle } from '../../lib/imageResize'
 import { armImageDrag } from './imageDrag'
 import { watchBrokenImage } from './brokenMedia'
+import { parseAppRefInner, type AppRef } from '../../../../../shared/appRefs'
+import { AppRefChip } from '../../../components/appRefs'
+import { HostLocaleProvider } from '../../../i18n'
 
 const IMG_EXT_RE = /\.(png|jpe?g|gif|webp|svg|avif|bmp)$/i
 /** 与 prosemirror-keymap / unified/keyboard 判「Mod 是 Cmd 还是 Ctrl」同一口径;mac 上 Ctrl+点击是右键手势。 */
@@ -45,9 +52,10 @@ export function wikiOpenArg(inner: string): string {
   return split?.subpath ? `${split.target}#${split.subpath}` : linkTarget(inner)
 }
 
-/** 文本块里块内偏移 offset 处的 `[[…]]`(光标在里面或贴着两端)→ 它的 openWikiLink 参数;图片嵌入不算链接。
- *  代码块 / 行内代码里的不算(buildBlockString 把行内代码抹成空格,代码块由调用方挡)。 */
-export function wikiOpenArgAt(block: ProseNode, offset: number): string | null {
+/** 文本块里块内偏移 offset 处的 `[[…]]`(光标在里面或贴着两端)→ 它的内文;图片嵌入不算链接。
+ *  代码块 / 行内代码里的不算(buildBlockString 把行内代码抹成空格,代码块由调用方挡)。
+ *  调用方(linkFollow)先认应用 / 窗口引用,再把其余的经 wikiOpenArg 交给 openWikiLink。 */
+export function wikiInnerAt(block: ProseNode, offset: number): string | null {
   const s = buildBlockString(block)
   if (s.indexOf('[[') === -1) return null
   let edge: string | null = null
@@ -58,8 +66,8 @@ export function wikiOpenArgAt(block: ProseNode, offset: number): string | null {
     const to = m.index + m[0].length
     if (offset < from || offset > to) continue
     if (imageEmbed(m[1], from > 0 && s[from - 1] === '!')) continue
-    if (offset > from && offset < to) return wikiOpenArg(m[1])
-    edge ??= wikiOpenArg(m[1])
+    if (offset > from && offset < to) return m[1]
+    edge ??= m[1]
   }
   return edge
 }
@@ -83,6 +91,45 @@ function displayLabel(inner: string, anchor: { target: string; subpath: string }
   }
   const l = (bar === -1 ? inner : inner.slice(bar + 1)).trim()
   return l || inner.trim()
+}
+
+/** 应用 / 窗口引用的芯片部件。不查笔记库、不带 data-wiki:「未解析」样式、点击建笔记、悬停页面预览都轮不到它。
+ *  芯片本体就是聊天里那枚 AppRefChip(图标 / 状态走同一份缓存,悬停卡、点击切过去、切语言都在它里面)——
+ *  它是 React 组件,所以每枚部件自己挂一棵独立的根(同 unified/embedLayer 的做法),部件销毁时卸掉。
+ *  外壳仍带 .wikilink:跨块选区的反馈(syncPicked)、画布卡片里的点击放行、框选命中都按这个类认行内链接部件。 */
+const appRefRoots = new WeakMap<Node, Root>()
+function appRefWidget(ref: AppRef, getPos: () => number | undefined, len: number): HTMLElement {
+  const el = document.createElement('span')
+  el.className = 'wikilink amx-app-ref'
+  stampSrc(el, getPos, len)
+  // React 的首次提交晚一拍:先放一枚同尺寸的静态芯片(提交时被整个换掉),光标离行那一帧不跳版。
+  const hold = document.createElement('span')
+  hold.className = 'app-ref'
+  const ico = document.createElement('span')
+  ico.className = 'app-ref-ico'
+  hold.append(ico, ref.name)
+  el.appendChild(hold)
+  // 按键分流与双链同一套(L-11):按下不落光标(否则这一行当场露出 `[[源码]]`,等不到 click);
+  // Shift / Alt+左键放行给编辑器(扩选 / 落光标),这两种和 mac 的 Ctrl+点击(右键手势)的 click 都不算「打开」。
+  el.addEventListener('mousedown', (e) => {
+    if (e.button !== 0 || !(e.shiftKey || e.altKey) || (IS_MAC_PLATFORM && e.ctrlKey)) e.preventDefault()
+  })
+  el.addEventListener('click', (e) => {
+    if (e.shiftKey || e.altKey || (IS_MAC_PLATFORM && e.ctrlKey)) e.stopPropagation()
+  }, true)
+  el.addEventListener('contextmenu', (e) => e.stopPropagation()) // 同双链:块层别把它当「非文字块件」弹块菜单
+  const root = createRoot(el)
+  // 独立根跨不过宿主的 LocaleProvider:不包这层,悬停卡的文案恒回落中文(同 embedLayer,评审 R-15)。
+  root.render(createElement(HostLocaleProvider, null, createElement(AppRefChip, { appRef: ref })))
+  appRefRoots.set(el, root)
+  return el
+}
+/** 部件销毁 → 卸根。PM 的渲染周期里不许同步 unmount(可能正处在 React 的提交里),推到微任务。 */
+function dropAppRefWidget(node: Node): void {
+  const root = appRefRoots.get(node)
+  if (!root) return
+  appRefRoots.delete(node)
+  queueMicrotask(() => root.unmount())
 }
 
 function buildDecorations(
@@ -202,6 +249,24 @@ function buildDecorations(
             // 它决定点击选段落还是选源码,闭包里捕获的是构建那一刻的值。
             { side: -1, ignoreSelection: true, key: `i:${standalone ? 1 : 0}:${m![0]}` },
           ),
+        )
+        continue
+      }
+      // 应用 / 窗口引用:先认这个前缀,再去查笔记(shared/appRefs.ts 的口径)。
+      const appRef = parseAppRefInner(m[1])
+      if (appRef) {
+        const len = spTo - spFrom
+        decos.push(Decoration.inline(from, to, { class: 'wikilink-src-hidden' }))
+        decos.push(
+          Decoration.widget(from, (_view, getPos) => appRefWidget(appRef, getPos, len), {
+            side: -1,
+            ignoreSelection: true,
+            // key 同双链:只带源码原文,不带位置(P-04);状态(开着 / 关了)由芯片自己订阅,不靠换 key 重建。
+            key: `a:${m[0]}`,
+            // 焦点落在芯片上时(Shift+Tab 能走到)按键归它(Enter = 切过去),别让外层编辑器拿自己的选区去执行退格 / 回车。
+            stopEvent: (e) => e.type.startsWith('key'),
+            destroy: dropAppRefWidget,
+          }),
         )
         continue
       }

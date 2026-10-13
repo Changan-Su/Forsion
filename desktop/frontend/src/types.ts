@@ -1571,6 +1571,14 @@ declare global {
       appDockCandidates?(): Promise<{ windows: import('../../shared/appDock').DockCandidate[]; error?: string }>
       appDockAttach?(target: import('../../shared/appDock').DockWindow): Promise<{ ok: boolean; error?: string }>
       appDockDetach?(): Promise<void>
+      /** 应用 / 窗口引用(仅桌面 macOS;没有这组方法的宿主上引用只显示名字、不可点)。 */
+      appRefs?: {
+        list(): Promise<import('../../shared/appRefs').AppRefList>
+        status(refs: import('../../shared/appRefs').AppRef[]): Promise<import('../../shared/appRefs').AppRefStatus[]>
+        open(ref: import('../../shared/appRefs').AppRef): Promise<{ ok: boolean; landed?: 'window' | 'app'; error?: string }>
+        frontmost(): Promise<import('../../shared/appRefs').AppRef | null>
+        icons(ids: string[]): Promise<Record<string, string | null>>
+      }
       appDockSelection?(): Promise<import('../../shared/appDock').DockSelection & { error?: string }>
       onAppDockState?(cb: (state: import('../../shared/appDock').DockState) => void): () => void
       /** 本地语音模型(SenseVoice)状态 / 下载 / 删除 + 下载进度订阅(返回取消函数)。 */

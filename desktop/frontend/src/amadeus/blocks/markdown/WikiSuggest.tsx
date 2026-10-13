@@ -5,10 +5,13 @@
 // 文件(.db/附件)候选保留扩展名(文件命名空间凭扩展名区分页面,见 lib/vaultFiles),带小图标。
 // L-13(评审 2026-09-27):fm `aliases:` 也是候选(选中插 `[[笔记|别名]]`);`[[笔记#` 之后列目标笔记的标题、
 // `[[笔记#^` 之后只列已有的块 ID(`[[#` = 本篇);带 `#` / `|` / `^` 的查询不给「新建链接」行。
+// 应用 / 窗口引用(shared/appRefs.ts):宿主有 `window.tangu.appRefs` 时 `[[` 面板多出开着的窗口与应用两类候选,
+// 顶上一排分类胶囊(全部 / 窗口 / 应用 / 笔记,←/→ 切);选中插 `[[app://…|名字]]` / `[[window://…|标题]]`。
+// 没有这个接口(网页版 / 手机 / 非 macOS)、`@` 提及、`#` 锚点补全都不出分类条,面板与从前逐字相同。
 // Only intercepts navigation keys (Arrow/Enter/Tab/Esc) in the capture phase — letters
 // and Backspace fall through to ProseMirror so the in-document query keeps updating.
 
-import { useEffect, useLayoutEffect, useState, type ReactNode } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { OverlayAt } from '../../lib/clampMenu'
 import { pickWikiResults, type Cand } from './wikiRank'
 import { isFileRef } from '../../lib/vaultFiles'
@@ -24,14 +27,27 @@ import { anchorSafe, blockIdsOf, headingsOf, parseSubQuery } from './wikiSubpath
 import { readTangu, type TanguAgentInfo } from '../../plugins/tanguSeam'
 import { Bot } from 'lucide-react'
 import { registerMessages, useI18n } from '../../../i18n'
+import type { AppRefList } from '../../../../../shared/appRefs'
+import { AppRefIcon, appRefsSupported } from '../../../components/appRefs'
+import { useCapsuleSlide } from '../../../components/capsuleTabs'
+import { ALL_APPS, ALL_WINDOWS, appRefInner, isAppRefQuery, moveWikiCat, pickAppRefs, wikiCats, type AppRefCand, type WikiCat } from './wikiAppRefs'
+import './slashCategories.css'
 
 registerMessages({
   'wiki.sec.agent': { zh: '交办 Agent', en: 'Assign to an agent' },
   'wiki.agentTask': { zh: '新建任务块', en: 'New task block' },
   'wiki.sec.date': { zh: '日期', en: 'Date' },
   'wiki.sec.page': { zh: '链接到页面', en: 'Link to page' },
+  'wiki.sec.window': { zh: '窗口', en: 'Windows' },
+  'wiki.sec.app': { zh: '应用', en: 'Apps' },
   'wiki.create': { zh: '新建链接 “{q}”', en: 'New link “{q}”' },
   'wiki.aliasOf': { zh: '别名 → {name}', en: 'Alias → {name}' },
+  'wiki.tab.label': { zh: '候选分类', en: 'Suggestion categories' },
+  'wiki.tab.all': { zh: '全部', en: 'All' },
+  'wiki.tab.window': { zh: '窗口', en: 'Windows' },
+  'wiki.tab.app': { zh: '应用', en: 'Apps' },
+  'wiki.tab.note': { zh: '笔记', en: 'Notes' },
+  'wiki.tab.empty': { zh: '这一类里没有匹配的', en: 'Nothing matches in this category' },
 })
 
 interface Props {
@@ -69,7 +85,7 @@ interface Row {
   name: ReactNode
   hint?: string
   create?: boolean
-  section?: 'date' | 'page' | 'agent'
+  section?: 'date' | 'page' | 'agent' | 'window' | 'app'
   pick: () => void
 }
 
@@ -201,12 +217,52 @@ export function WikiSuggest({ query, left, top, anchorTop, getPageNames, getFile
     }
     // 查询串本身像文件名([[xxx.db]])时不给「新建链接」:createWikiPage 会造出 xxx.db.md 怪胎。
     // 带 `#` `|` `^`(锚点 / 别名 / 块)也不给:回车会插出 `[[Alpha#]]` 这类空锚点链接(L-13)。
+    // 手写到一半的 `[[app://…` / `[[window://…` 是应用 / 窗口引用,不是笔记名:同样不给。
     const showCreate =
-      allowCreate && q.length > 0 && !isFileRef(q) && !/[#|^]/.test(q)
+      allowCreate && q.length > 0 && !isFileRef(q) && !/[#|^]/.test(q) && !isAppRefQuery(q)
       && !cands.some((c) => (c.alias ? c.alias.toLowerCase() === q.toLowerCase() : candKey(c) === pageKey(q)))
     if (showCreate) rows.push({ key: 'create', name: t('wiki.create', { q }), create: true, pick: () => onPick(q) })
   }
-  const total = rows.length
+
+  // ── 应用 / 窗口候选 + 分类条(见顶注)。列表在面板打开时取一次;取回来之前这两类先空着。
+  const hostApps = !dates && appRefsSupported()
+  const [appList, setAppList] = useState<AppRefList | null>(null)
+  useEffect(() => {
+    if (!hostApps) return
+    let live = true
+    void window.tangu?.appRefs?.list().then((l) => { if (live) setAppList(l) }, () => {})
+    return () => { live = false }
+  }, [hostApps])
+  const cats = wikiCats(hostApps && !sub, cands.length > 0)
+  const tabbed = cats.length > 0
+  const [catChoice, setCatChoice] = useState<WikiCat>('all')
+  const cat = cats.includes(catChoice) ? catChoice : 'all'
+  const appRow = (c: AppRefCand): Row => ({
+    key: `${c.ref.kind}:${c.ref.id}:${c.ref.name}`,
+    name: <><AppRefIcon id={c.ref.id} />{c.ref.name}</>,
+    hint: c.hint,
+    section: c.ref.kind,
+    pick: () => onPick(appRefInner(c.ref)),
+  })
+  const winRows = tabbed ? pickAppRefs(appList, query, 'window').map(appRow) : []
+  const appRows = tabbed ? pickAppRefs(appList, query, 'app').map(appRow) : []
+  // 「全部」= 从前那一列原样在前(第一行、回车选中的还是它),窗口 / 应用各露几条跟在后面。
+  const allRows = tabbed ? [...rows, ...winRows.slice(0, ALL_WINDOWS), ...appRows.slice(0, ALL_APPS)] : rows
+  const shown = cat === 'window' ? winRows : cat === 'app' ? appRows : cat === 'note' ? rows : allRows
+  const total = shown.length
+  // 哪一类都没有东西 → 面板整体不出现(同从前);只是当前这一类空着 → 留着分类条,好切回去。
+  const visible = allRows.length > 0
+  const tabsRef = useCapsuleSlide<HTMLDivElement>(tabbed && visible ? cat : '') // 分类条不在场时给空键:它出现的那一拍才重新量
+
+  // 切类别不许挪面板:同一个 query 内只长不缩(同斜杠菜单 —— 面板开在光标上方时一缩,分类条就从鼠标底下滑走)。
+  const shellEl = useRef<HTMLDivElement | null>(null)
+  const [heightFloor, setHeightFloor] = useState<{ query: string; height: number } | null>(null)
+  const minHeight = tabbed && heightFloor?.query === query ? heightFloor.height : undefined
+  useLayoutEffect(() => {
+    if (!tabbed) return
+    const height = shellEl.current?.offsetHeight ?? 0
+    if (height > (minHeight ?? 0)) setHeightFloor({ query, height })
+  })
 
   useEffect(() => {
     setActive(0)
@@ -218,13 +274,23 @@ export function WikiSuggest({ query, left, top, anchorTop, getPageNames, getFile
   useLayoutEffect(() => {
     // 面板无内容时 render 早退(total === 0),但 effect 照跑 —— 不加这道闸,一个看不见的面板
     // 仍在捕获阶段吞掉 Enter/Tab/↑↓(用户实报「@ 之后回车换不了行」)。见 allowCreate 注释的契约。
-    if (total === 0) return
+    if (!visible) return
     const onKey = (e: KeyboardEvent): void => {
       // IME 组字中一律放行(L-08):拼音选词就是 ↓ / Enter,被面板抢走就成了「回车直接插入候选」。
       // `【【` 转成 `[[` 之后用户多半还在中文输入法下,这是高频路径。Process/229 覆盖 isComposing
       // 尚未置位的首帧(同 SlashMenu / PasteAsMenu)。
       if (e.isComposing || e.key === 'Process' || e.keyCode === 229) return
       if (editorFocused && !editorFocused()) return // 焦点已在编辑器之外:放行(L-04)
+      // 有分类条时 ←/→ 切类别(同斜杠菜单)。带修饰键的不拦:⌘← / ⌥← / Shift+← 照旧挪光标、扩选。
+      const nextCat = e.metaKey || e.ctrlKey || e.altKey || e.shiftKey ? null : moveWikiCat(cats, cat, e.key)
+      if (nextCat) {
+        e.preventDefault()
+        e.stopPropagation()
+        setCatChoice(nextCat)
+        setActive(0)
+        return
+      }
+      if (total === 0 && e.key !== 'Escape') return // 当前这一类空着:只认 Esc,回车 / ↑↓ 照常落进编辑器
       if (e.key === 'ArrowDown') {
         e.preventDefault()
         e.stopPropagation()
@@ -236,7 +302,7 @@ export function WikiSuggest({ query, left, top, anchorTop, getPageNames, getFile
       } else if (e.key === 'Enter' || e.key === 'Tab') {
         e.preventDefault()
         e.stopPropagation()
-        rows[active]?.pick()
+        shown[active]?.pick()
       } else if (e.key === 'Escape') {
         e.preventDefault()
         e.stopPropagation()
@@ -247,20 +313,40 @@ export function WikiSuggest({ query, left, top, anchorTop, getPageNames, getFile
     return () => window.removeEventListener('keydown', onKey, true)
   })
 
-  if (total === 0) return null
+  if (!visible) return null
 
   // 键盘选中项滚进可视区(block:'nearest' 已可见时是空操作,鼠标 hover 不会乱跳);同 slash。
   const reveal = (i: number) => (i === active ? (el: HTMLButtonElement | null) => el?.scrollIntoView({ block: 'nearest' }) : undefined)
 
-  return (
+  const list = shown.map((r, i) => (
+    <RowButton key={r.key} r={r} i={i} active={active} setActive={setActive} reveal={reveal}
+      // 分组标签只在 @ 提及场景(Notion 的 Date / Link to page)与带分类条的「全部」(笔记、窗口、应用混在一列);
+      // 只有页面的 [[ 面板里标签是噪音。
+      label={(dates || (tabbed && cat === 'all')) && r.section && r.section !== shown[i - 1]?.section ? t(`wiki.sec.${r.section}`) : undefined}
+    />
+  ))
+
+  if (!tabbed) return (
     // 按下面板空白/分组标签/滚动条不夺编辑器焦点:失焦即关(L-04)后,不拦这一下面板会自己关掉。
     <OverlayAt className="wiki-suggest" x={left} y={top} anchorTop={anchorTop} role="menu" onMouseDown={(e) => e.preventDefault()}>
-      {rows.map((r, i) => (
-        <RowButton key={r.key} r={r} i={i} active={active} setActive={setActive} reveal={reveal}
-          // 分组标签只在 @ 提及场景(Notion 的 Date / Link to page);[[ 只有页面,标签是噪音。
-          label={dates && r.section && r.section !== rows[i - 1]?.section ? t(`wiki.sec.${r.section}`) : undefined}
-        />
-      ))}
+      {list}
+    </OverlayAt>
+  )
+  return (
+    <OverlayAt className="wiki-suggest wiki-suggest-tabbed" x={left} y={top} anchorTop={anchorTop} style={{ minHeight }}
+      innerRef={(el) => { shellEl.current = el }} onMouseDown={(e) => e.preventDefault()}>
+      <div className="wiki-tabs cap-tabs" role="tablist" aria-label={t('wiki.tab.label')} ref={tabsRef}>
+        {cats.map((c) => (
+          <button key={c} type="button" className="wiki-tab" role="tab" data-category={c} aria-selected={c === cat}
+            tabIndex={-1} onMouseDown={(e) => e.preventDefault()} onClick={() => { setCatChoice(c); setActive(0) }}>
+            {t(`wiki.tab.${c}`)}
+          </button>
+        ))}
+      </div>
+      <div className="wiki-suggest-list" role="menu">
+        {list}
+        {total === 0 && <div className="slash-empty">{t('wiki.tab.empty')}</div>}
+      </div>
     </OverlayAt>
   )
 }
