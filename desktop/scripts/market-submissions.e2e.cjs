@@ -1,10 +1,12 @@
 /** Extend's real signed bundle, Electron/IPC and multipart HTTP. Cloud/review is a local fixture;
- * never submits to production. Requires a built Extend and the local Extend signing key. */
+ * never submits to production. Requires a built desktop (`npm run build`, reads out/), a built Extend that has
+ * the submission page, and the local Extend signing key. Extend defaults to ../../Forsion-Extend; set EXTEND_DIR
+ * to use another checkout. */
 const fs = require('fs'), path = require('path'), os = require('os'), http = require('http'), assert = require('assert/strict')
 const { createPrivateKey } = require('crypto'), { pathToFileURL } = require('url')
 const electron = require('./lib/launch-electron.cjs')
 const { startStubEngine } = require('./lib/stub-engine.cjs'), { skipOnboarding } = require('./lib/skip-onboarding.cjs')
-const ROOT = path.resolve(__dirname, '..'), EXTEND = path.resolve(ROOT, '../../Forsion-Extend'), OUT = path.join(ROOT, 'outputs/market-submissions')
+const ROOT = path.resolve(__dirname, '..'), EXTEND = path.resolve(process.env.EXTEND_DIR || path.join(ROOT, '../../Forsion-Extend')), OUT = path.join(ROOT, 'outputs/market-submissions')
 const lang = process.argv.includes('--en') ? 'en' : 'zh'
 const L = lang === 'zh' ? { nav: '投稿', page: '插件投稿', fresh: '新投稿', submit: '提交审核', name: '名称', source: '发布渠道', npm: 'npm 公开包', repo: 'GitHub 公开仓库', zip: 'ZIP 包', version: '版本号', update: '提交新版本', published: '已上架', pending: '待审核', refresh: '刷新', retry: '重试', signin: '登录 Forsion', cancel: '取消', submitted: '投稿已提交', updated: '新版已提交审核', filter: '按状态筛选', dark: '切换明暗模式' } : { nav: 'Submit', page: 'Submissions', fresh: 'New submission', submit: 'Submit for review', name: 'Name', source: 'Source', npm: 'Public npm package', repo: 'Public GitHub repository', zip: 'ZIP archive', version: 'Version', update: 'Submit new version', published: 'Published', pending: 'Pending review', refresh: 'Refresh', retry: 'Retry', signin: 'Sign in to Forsion', cancel: 'Cancel', submitted: 'Submitted.', updated: 'Update submitted for review', filter: 'Filter by status', dark: 'Toggle light/dark mode' }
 const b64 = (x) => Buffer.from(JSON.stringify(x)).toString('base64url')
@@ -15,12 +17,13 @@ async function signedBundle(home) {
   const files = ['package.json', 'manifest.json', 'dist/main.js', 'dist/desktop.mjs']
   for (const f of files) fs.copyFileSync(path.join(EXTEND, f), path.join(dir, f))
   // Only the isolated candidate has a newer version. No repository or installed npm package is changed.
-  for (const f of ['package.json', 'manifest.json']) { const p = path.join(dir, f), data = JSON.parse(fs.readFileSync(p)); data.version = '0.7.2-e2e'; fs.writeFileSync(p, JSON.stringify(data)) }
+  for (const f of ['package.json', 'manifest.json']) { const p = path.join(dir, f), data = JSON.parse(fs.readFileSync(p)); data.version = '99.0.0-e2e'; fs.writeFileSync(p, JSON.stringify(data)) }
   const privateKey = process.env.EXTEND_SIGNING_KEY || fs.readFileSync(path.join(os.homedir(), '.forsion-dev/secrets/forsion-extend-signing/key.pem'), 'utf8')
   const { signFiles } = await import(pathToFileURL(path.join(EXTEND, 'scripts/signature.mjs')).href)
   const signature = await signFiles(dir, files, createPrivateKey(privateKey)); fs.writeFileSync(path.join(dir, 'SIGNATURE'), JSON.stringify(signature))
 }
 async function main() {
+  assert.ok(fs.readFileSync(path.join(EXTEND, 'dist/main.js'), 'utf8').includes('data-submission-id'), `Extend at ${EXTEND} has no submission page: build a checkout that has it or set EXTEND_DIR`)
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'forsion-submissions-')), uploads = [], reads = [], appLogs = []
   fs.mkdirSync(OUT, { recursive: true }); await signedBundle(home)
   const items = [
@@ -56,7 +59,7 @@ async function main() {
     for (const stream of [app.process().stdout, app.process().stderr]) stream?.on('data', (d) => appLogs.push(String(d)))
     win = await app.firstWindow(); win.setDefaultTimeout(15000); await win.waitForSelector('#root'); await win.waitForTimeout(1200); await skipOnboarding(win)
     assert.equal((await win.evaluate(() => window.tangu.authStatus())).loggedIn, true)
-    assert.equal(JSON.parse(fs.readFileSync(path.join(home, 'plugins/forsion-extend/manifest.json'))).version, '0.7.2-e2e')
+    assert.equal(JSON.parse(fs.readFileSync(path.join(home, 'plugins/forsion-extend/manifest.json'))).version, '99.0.0-e2e')
     async function panel(kind, params = {}) {
       await win.evaluate(([kind, params]) => window.tangu.openFloatingPanel({ id: kind, title: kind, builtin: kind, params: { ...params, n: Date.now() } }), [kind, params])
       let page; await until(async () => { page = app.windows().find((w) => !w.isClosed() && w.url().includes('window=floating') && w.url().includes(kind)); return !!page }, `${kind} window`)
