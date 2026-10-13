@@ -32,14 +32,18 @@ import { completeInline } from './services/inlineAi'
 import { submitDocumentTask } from './services/documentTasks'
 import { openSession } from './sessionNav'
 import { connectionTarget } from './services/engine/targets'
+import { catalogFor } from './services/engine/catalog'
 import { getCallVoice, subscribeCallVoice } from './services/callVoice'
 
-/** 「翻译」模型槽(设置 → 模型;config.json models.translate)。没设、读不到、或目录里已经没有这个模型
- *  (下架 / 换了账号;云端的机器翻译模型在目录的 translateModels 里)→ undefined,调用方落回聊天当前模型 —— 逐句翻译时不能因为一个过期的 id 句句报错。 */
+/** 「翻译」模型槽(设置 → 模型;config.json models.translate)。没设、读不到、或**本机引擎**的目录里已经没有这个模型
+ *  (下架 / 换了账号;云端的机器翻译模型在目录的 translateModels 里)→ undefined,调用方落回聊天当前模型 ——
+ *  逐句翻译时不能因为一个过期的 id 句句报错。
+ *  按本机引擎的目录验,不是 modelsResp:正文 AI 只打本机(completeInline → homeTarget),而 modelsResp 跟着焦点走,
+ *  焦点在远端引擎时拿它验会把本机上好好的槽判成过期。目录还没拉到(null)才先信它;拉到了、是空的 = 没有这个模型。 */
 export async function translateModelId(): Promise<string | undefined> {
   const id = (await window.tangu?.getConfig?.().catch(() => null))?.translateModelId
-  const r = useApp.getState().modelsResp
-  return id && (!r?.models?.length || r.models.some((m) => m.id === id) || !!r.translateModels?.some((m) => m.id === id)) ? id : undefined
+  const r = catalogFor('home')?.models
+  return id && (!r || r.models.some((m) => m.id === id) || !!r.translateModels?.some((m) => m.id === id)) ? id : undefined
 }
 
 function readActiveModel(): TanguModelInfo | null {
