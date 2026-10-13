@@ -358,6 +358,11 @@ async function main() {
       return {
         sub: sub?.textContent || '', oneLine: !!sub && sub.scrollHeight <= sub.clientHeight + 1, twoLines: !!row && row.getBoundingClientRect().height > 36,
         leadSvg: !!row?.querySelector('.t2s-lead svg'), senderAbove: !!meta && !!tr && meta.bottom <= tr.top,
+        // 时间收在第一行里,第二行用满整行的宽(右缘与时间的右缘对齐);时间若自成一列,第二行会被截在它左边(手机上实见)。
+        subWide: (() => {
+          const sr = sub?.getBoundingClientRect(), cr = row?.querySelector('.t2s-count')?.getBoundingClientRect()
+          return !!sr && !!cr && cr.top < sr.top && Math.abs(sr.right - cr.right) <= 1.5
+        })(),
         // 标题到正文第一行字的距离:从前头部下面一条线再空五十多像素,现在应当紧跟(正文那几层容器各自的上边距别又叠回来)。
         gap: (() => {
           const first = document.querySelector('.ibx-reader-body .ProseMirror > *')
@@ -376,8 +381,8 @@ async function main() {
         titlePx: title ? getComputedStyle(title).fontSize : '', tab: [...document.querySelectorAll('.wb-tab-name')].some((t) => t.textContent === '按钮块'),
       }
     })
-    check('列表行两行:标题下面是「自动化 · 今日任务已汇总。」(只占一行),行首是来源图标;阅读面板发信人在标题之上、标题 24px、正文紧跟标题(8~30px);标签页显示信的标题',
-      look.sub === '自动化 · 今日任务已汇总。' && look.oneLine && look.twoLines && look.leadSvg && look.senderAbove && look.titlePx === '24px' && look.tab && look.gap >= 8 && look.gap <= 30, JSON.stringify(look))
+    check('列表行两行:标题下面是「自动化 · 今日任务已汇总。」(只占一行、用满整行的宽),行首是来源图标;阅读面板发信人在标题之上、标题 24px、正文紧跟标题(8~30px);标签页显示信的标题',
+      look.sub === '自动化 · 今日任务已汇总。' && look.oneLine && look.subWide && look.twoLines && look.leadSvg && look.senderAbove && look.titlePx === '24px' && look.tab && look.gap >= 8 && look.gap <= 30, JSON.stringify(look))
     if (!NEGATIVE_CONTROL) await win.locator('.ibx-reader-wrap').first().screenshot({ path: SHOT_BTN }).catch(() => {})
     // 未配置的按钮:只读态 disabled;硬点一下也不许开自动化构建器
     await win.locator('.ibx-reader-body .amx-btnblock').nth(1).locator('.amx-btnblock-btn').click({ force: true }).catch(() => {})

@@ -123,6 +123,24 @@ const MODELS = [
   { id: 'stage-model-b', name: 'Stage Model B', provider: 'Stage', source: 'forsion', modelType: 'llm' },
 ]
 
+// The phone's inbox is device-local (desktop/frontend/src/services/localInbox.ts): rows as the periodic pull stores them —
+// broadcasts from the server, so every sender is Forsion. One of each thing a row or the reader has to lay out: a
+// markdown body, a reward with claim conditions, a subject too long for the line. (The feedback conversation is not
+// offered on a phone — `feedbackThreadAvailable` — so a feedback notice is just a message here.)
+const utc = (ago) => new Date(T0 - ago).toISOString().slice(0, 19).replace('T', ' ')
+const mail = (id, title, body, ago, extra = {}) => ({
+  id, title, body, sender_kind: 'server', sender_id: null, origin_broadcast_id: `b-${id}`, read_at: null, archived_at: null,
+  deleted_at: null, created_at: utc(ago), ...extra,
+})
+const INBOX = [
+  mail('ib-1', '2.13 更新了什么', ['这一版把收件箱翻新了一遍，列表里能直接看到正文的第一句。', '', '- 信件行改成两行：标题和时间，下面是发信人和正文第一句', '- 阅读面板里发信人在上，标题在下', '- 审批、任务、附件、反馈对话用同一种卡', '', '完整的改动见[更新日志](https://forsion.net/changelog)。'].join('\n'), 20 * MIN),
+  mail('ib-2', '国庆更新奖励', '感谢更新到 2.13，附 100 积分和一张重置卡。', 3 * HOUR, {
+    attachments: { items: [{ kind: 'points', amount: 100, label: { zh: '积分 ×100', en: '100 points' } }, { kind: 'reset_card', label: { zh: '重置卡 ×1', en: 'Reset card ×1' } }], claimed: false, requires: { minVersion: '99.0.0', tiers: ['plus', 'pro'] } },
+  }),
+  mail('ib-3', '你的反馈有新回复', '关于「登录页验证码不显示」：已经定位到原因，下个版本修复。', DAY + 2 * HOUR, { read_at: utc(DAY) }),
+  mail('ib-4', '会员即将到期', '你的 Plus 会员将在 7 天后到期，续费后权益不中断。', 4 * DAY, { read_at: utc(3 * DAY) }),
+  mail('ib-5', 'A long English subject line that has to be cut somewhere before the edge of the screen', 'First sentence in English, also long enough that it has to be cut with an ellipsis on a phone.', 9 * DAY, { read_at: utc(8 * DAY) }),
+]
 /** Answers the API from the fixtures; anything it does not know is refused and listed at the end of the run. */
 async function stubApi(page, unknown) {
   const configs = Object.fromEntries(SESSIONS.map((s) => [s.id, { ...s.agent_config }]))
@@ -147,6 +165,7 @@ async function stubApi(page, unknown) {
     if (p.endsWith('/agent/approvals/pending')) return json({ rev: 'stage', approvals: [] })
     if (p.endsWith('/agent/models') && m === 'GET') return json({ models: MODELS, directProviders: [], defaultModelId: MODELS[0].id })
     if (/\/market\/items$/.test(p)) return json({ items: [] })
+    if (p.endsWith('/inbox/broadcasts')) return json({ broadcasts: [] })
     if (/\/agent\/sessions\/[^/]+\/checkpoints$/.test(p)) return json({ checkpoints: [] })
     const cfg = p.match(/\/agent\/sessions\/([^/]+)\/config$/)
     if (cfg) {
@@ -213,6 +232,20 @@ async function seedNotes(page) {
     usePageStore.setState({ vaultRoot: usePageStore.getState().vaultRoot || '/stage/vault', pages: notes.pages, folders: notes.folders, files: notes.files })
     useRecentViews.setState({ items: notes.recents.map(([id, ago]) => ({ key: `note:${id}`, kind: 'note', id, title: id, ts: now - ago })) })
   }, { storeUrl: moduleUrl('../desktop/frontend/src/amadeus/store/pageStore.ts'), recentUrl: moduleUrl('../desktop/frontend/src/recentViews.ts'), notes: NOTES, now: T0 })
+}
+
+/** The inbox rows go where the app keeps them on a phone (localStorage), then the store is asked to read them again. */
+async function seedInbox(page) {
+  await page.evaluate(async ({ storeUrl, ntfUrl, rows }) => {
+    localStorage.setItem('tangu_inbox_msgs', JSON.stringify(rows))
+    const { useInbox } = await import(/* @vite-ignore */ storeUrl)
+    await useInbox.getState().refreshList()
+    await useInbox.getState().refreshUnread()
+    // rows that appear after the first poll count as new mail: the app puts a notification card up. Not what is looked at here.
+    const { useNotifications } = await import(/* @vite-ignore */ ntfUrl)
+    useNotifications.getState().dismissAll()
+  }, { storeUrl: moduleUrl('../desktop/frontend/src/stores/inboxStore.ts'), ntfUrl: moduleUrl('../desktop/frontend/src/stores/notificationStore.ts'), rows: INBOX })
+  await page.waitForTimeout(400)
 }
 
 const stage = {
@@ -618,6 +651,57 @@ const SCENES = {
   },
   // A call is on. Its bar belongs to the app, not to the chat: it stays up on every page, right under the capsules, so
   // every page starts below it (the shell's top room grows by the bar, see voiceCall.css). Checked page by page.
+  'inbox-list': async (page) => {
+    if ((await stage.nav(page)) === 'detail') await stage.action(page, 'left')
+    await seedInbox(page)
+    await stage.space(page, 'inbox')
+    const ROW = `${LIST} .t2sw-plug-item .t2s-srow`
+    const subs = await texts(page, `${ROW} .t2sw-plug-sub`)
+    const sub = await rect(page, `${ROW} .t2sw-plug-sub`)
+    const title = await rect(page, `${ROW} .t2s-srow-title`)
+    const time = await rect(page, `${ROW} .t2s-count`)
+    const more = await rect(page, `${LIST} .t2sw-plug-item .t2sw-plug-row-menu`)
+    const long = await rect(page, `${ROW} .t2s-srow-title`, 4)
+    const longTime = await rect(page, `${ROW} .t2s-count`, 4)
+    const lead = await page.evaluate((q) => !!document.querySelector(`${q} .t2s-lead svg`), ROW)
+    const unread = await page.evaluate((q) => [...document.querySelectorAll(q)].map((el) => el.classList.contains('is-unread')), ROW)
+    return [
+      ['the inbox opens on its list: five rows, each led by who sent it', (await stage.nav(page)) === 'list' && subs.length === 5 && lead, `nav=${await stage.nav(page)} rows=${subs.length} lead=${lead}`],
+      ['second line: sender and the first sentence, on one line', subs[0] === 'Forsion · 这一版把收件箱翻新了一遍，列表里能直接看到正文的第一句。' && !!sub && sub.h < 30, `«${subs[0]}» ${JSON.stringify(sub)}`],
+      ['the time sits on the first line; the second line runs the row\'s full width under it (not cut at the time\'s column)', !!sub && !!time && !!title && time.y < sub.y && near(sub.right, time.right) && sub.w > title.w + 40, JSON.stringify({ sub, time, title })],
+      ['the row\'s own menu button is clear of the text', !!more && !!sub && more.x >= sub.right, JSON.stringify({ more, subRight: sub?.right })],
+      ['a title too long for the line is cut before the time', !!long && !!longTime && long.right <= longTime.x, JSON.stringify({ long, longTime })],
+      ['unread rows are marked, read ones are not', unread.join() === 'true,true,false,false,false', unread.join()],
+    ]
+  },
+  'inbox-open': async (page) => {
+    await page.locator(`${LIST} .t2s-srow`, { hasText: '2.13 更新了什么' }).first().tap()
+    await page.waitForFunction(() => document.querySelector('.mb-shell')?.getAttribute('data-nav') === 'detail', null, { timeout: 6000 }).catch(() => {})
+    await page.waitForTimeout(800)
+    const meta = await rect(page, '.ibx-reader-meta')
+    const title = await rect(page, '.ibx-reader-title')
+    const first = await rect(page, '.ibx-reader-body p')
+    const btns = await page.evaluate(() => [...document.querySelectorAll('.ibx-reader-actions .ibx-iconbtn')].map((el) => { const r = el.getBoundingClientRect(); return { w: r.width, h: r.height, right: r.right } }))
+    const font = await page.evaluate(() => getComputedStyle(document.querySelector('.ibx-reader-title')).fontSize)
+    return [
+      ['the message: one level down, the sender\'s line below the capsules, the title under it', (await stage.nav(page)) === 'detail' && !!meta && !!title && meta.y >= LAYOUT.top && title.y >= meta.bottom, JSON.stringify({ nav: await stage.nav(page), meta: meta && [meta.y, meta.bottom], title: title?.y })],
+      ['the title is the 24px document title; the text follows closely', font === '24px' && !!first && !!title && first.y - title.bottom >= 8 && first.y - title.bottom <= 40, `${font} gap=${first && title ? Math.round(first.y - title.bottom) : '?'}`],
+      ['the reader\'s buttons are finger-sized (44 dp) and on screen', btns.length === 3 && btns.every((b) => b.w >= 43 && b.h >= 43 && b.right <= SCREEN.width), JSON.stringify(btns)],
+    ]
+  },
+  'inbox-reward': async (page) => {
+    await stage.action(page, 'left')
+    await page.locator(`${LIST} .t2s-srow`, { hasText: '国庆更新奖励' }).first().tap()
+    await page.waitForFunction(() => !!document.querySelector('.ibx-reader .ibx-attach'), null, { timeout: 6000 }).catch(() => {})
+    await page.waitForTimeout(600)
+    const card = await rect(page, '.ibx-reader .ibx-attach')
+    const chips = await page.evaluate(() => [...document.querySelectorAll('.ibx-attach :is(.ibx-attach-chip, .ibx-req-chip)')].map((el) => { const r = el.getBoundingClientRect(); return { t: el.textContent.trim(), x: r.left, right: r.right, svg: !!el.querySelector('svg') } }))
+    const claim = await rect(page, '.ibx-attach .ibx-claim-btn')
+    return [
+      ['a reward: the attachments card fits the screen, every chip inside it', !!card && card.x >= 0 && card.right <= SCREEN.width && chips.length === 4 && chips.every((c) => c.x >= card.x && c.right <= card.right), JSON.stringify({ card, chips })],
+      ['items carry line icons (no emoji); the claim button is inside the card', chips.slice(0, 2).every((c) => c.svg) && !!claim && !!card && claim.right <= card.right && claim.bottom <= card.bottom, JSON.stringify(claim)],
+    ]
+  },
   'call-bar': async (page) => {
     await stage.space(page, 'tangu'); await chip(page, 'all')
     await callBar(page, true)

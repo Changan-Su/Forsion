@@ -208,6 +208,7 @@ OUT=/absolute/out npm run emu:nativeshell   # ONLY=tabs,prompt 只跑子集
 2. **手机列表和主页的版式**（半分钟，不用模拟器）：`npm run stage:phone`（`scripts/phone-stage.cjs`）。App 的页面这一半（vite dev，改了即热更新，
    不用出包装包）跑在 411×914 的触屏浏览器里，后端由脚本里的夹具作答，原生外壳由一份替身顶上（只把胶囊和 Dock 的位置告诉页面，画成半透明的块），
    于是两级导航、列表层、让位都按真机那样生效。逐屏量尺寸并截图（`OUT=` 指定目录，`ONLY=home,tangu-list` 只跑几屏，`THEME=dark`）。
+   收件箱也在里面（`inbox-list` / `inbox-open` / `inbox-reward`：两行的信件行、信、带领取条件的奖励信；信是按手机本地收件箱的存法种进去的）。
    它没有真手指：左滑、长按、下拉、键盘这些在第 3 步的模拟器上测。
 3. **受影响的那一组**（一两分钟到几分钟）：`ONLY='…' npm run emu:nativeshell`，写法见上。
 4. **整套**（65 条，约 14 分钟）：只在合并前跑一遍。
