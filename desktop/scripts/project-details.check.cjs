@@ -341,7 +341,7 @@ async function run(app, win, stub, seen, home, ctx) {
   check('6 Git 摘要:分支 main、上游 origin/main 领先 2、改动芯片(已暂存 1 / 未暂存 2 / 未跟踪 1)、远端地址', /main/.test(gitText) && /origin\/main/.test(gitText) && /领先 2/.test(gitText) && /已暂存 1/.test(gitText) && /未暂存 2/.test(gitText) && /未跟踪 1/.test(gitText) && /github\.com\/forsion\/demo/.test(gitText), gitText.slice(0, 200))
   check('6a 改动列表 4 行(XY 码 + 路径),最近提交 2 行', await profile.locator('[data-project-git-changes] .project-git-change').count() === 4 && await profile.locator('[data-project-git-commits] .project-git-commit').count() === 2 && (await profile.locator('[data-project-git-changes] h3').textContent()).includes('4 处改动'))
   const actions = await gitCard.locator('[data-project-git-actions] button').allTextContents()
-  check('6b 动作行:在终端打开 / 在文件管理器中显示 / 复制路径 / 刷新', actions.length === 4 && /终端/.test(actions[0]) && /文件管理器/.test(actions[1]) && /复制路径/.test(actions[2]) && /刷新/.test(actions[3]), JSON.stringify(actions))
+  check('6b 动作行:在终端打开 / 在文件管理器中显示 / 复制路径 / 刷新 / 打开 GitHub(远端在 GitHub 才有,排在最后)', actions.length === 5 && /终端/.test(actions[0]) && /文件管理器/.test(actions[1]) && /复制路径/.test(actions[2]) && /刷新/.test(actions[3]) && /打开 GitHub/.test(actions[4]), JSON.stringify(actions))
   const getsBefore = seen.ctxGets.length
   await gitCard.locator('[data-project-git-actions] button').nth(3).click()
   await win.waitForTimeout(500)
@@ -364,9 +364,11 @@ async function run(app, win, stub, seen, home, ctx) {
   check('6f 点「提交…」→ 展开提交框;POST git/message 带 sessionId,生成的信息填进输入框', generated && seen.gitMessages.length === 1 && seen.gitMessages[0].sessionId === 'pd-main', JSON.stringify(seen.gitMessages))
   const fileRows = await form.locator('[data-project-git-files] li').allTextContents()
   check('6f3 提交框先列出这次会提交的完整清单(POST git/pending):4 项,含未跟踪的 notes.txt', seen.gitPendings.length === 1 && fileRows.length === 4 && fileRows.some((r) => r.includes('notes.txt')) && /会提交这 4 项改动/.test(await form.textContent()), JSON.stringify(fileRows))
+  const identityLine = form.locator('[data-project-git-identity]')
+  check('6f4 提交框写明这次署谁的名(由 Forsion 账号推出来的 → 可以去设置里改)', (await identityLine.getAttribute('data-project-git-identity')) === 'forsion' && /以 Dave <dave@noreply\.git\.forsion\.example> 的身份提交/.test(await identityLine.textContent()) && /修改/.test(await identityLine.locator('button').textContent()), await identityLine.textContent().catch(() => ''))
   // 收起提交框只是「取消」:「放弃修改」会被读成丢弃代码改动(截图自查抓到过)
   const formButtons = await form.locator('button').allTextContents()
-  check('6f2 提交框按钮:重新生成 / 取消 / 提交;取消与提交同一行', formButtons.join('|') === '重新生成|取消|提交' && await form.locator('.project-git-commit-confirm button').evaluateAll((els) => new Set(els.map((el) => Math.round(el.getBoundingClientRect().top))).size === 1), JSON.stringify(formButtons))
+  check('6f2 提交框按钮:(身份那一行的)修改 / 重新生成 / 取消 / 提交;取消与提交同一行', formButtons.join('|') === '修改|重新生成|取消|提交' && await form.locator('.project-git-commit-confirm button').evaluateAll((els) => new Set(els.map((el) => Math.round(el.getBoundingClientRect().top))).size === 1), JSON.stringify(formButtons))
   await dismissToasts(win)
   await details.screenshot({ path: shots.gitCommitForm = shot('project-git-commit-zh-light') })
   await form.locator('textarea').fill('fix: 手改过的提交信息')
@@ -545,6 +547,78 @@ async function run(app, win, stub, seen, home, ctx) {
   await until(async () => (await publishBtn.count()) === 0)
   check('6q5 发布 → POST git/publish { sessionId, name };提示发布到的网页地址;入口收起,换成推送 / 拉取,摘要里有远端和上游', seen.gitPublishes[1]?.sessionId === 'pd-main' && seen.gitPublishes[1]?.name === 'demo-site' && /已发布到 https:\/\/git\.forsion\.example\/dave\/demo-site/.test(await saveNotice.textContent())
     && await publishBtn.count() === 0 && await writeRow.locator('[data-git-action="push"]').count() === 1 && await writeRow.locator('[data-git-action="pull"]').count() === 1 && /git\.forsion\.example\/dave\/demo-site/.test(await gitCard.textContent()) && await gitError.count() === 0, JSON.stringify({ publishes: seen.gitPublishes, notice: await saveNotice.textContent().catch(() => null), labels: await writeRow.locator('button').allTextContents() }))
+  // ── 6r 远端在 GitHub:绑了 GitHub 账号的直接用它推拉(摘要多一行「账号」);没绑的只提示、不拦;认证失败时给出「去绑定」──
+  const refreshGit = () => gitCard.locator('[data-project-git-actions] button').nth(3).click()
+  const accountRow = gitCard.locator('[data-project-git-account]')
+  const linkNote = gitCard.locator('[data-project-git-github-link]')
+  const hostingBefore = seen.hostingGets.length
+  ctx.git = { ...ctx.git, remote: 'https://github.com/dave/demo-site.git' }
+  await refreshGit()
+  await gitCard.locator('[data-project-git-actions] [data-git-action="open-github"]').waitFor()
+  await until(async () => seen.hostingGets.length > hostingBefore)
+  check('6r 远端在 GitHub、云端没开 GitHub 绑定(github:null)→ 问过引擎;只多一个「打开 GitHub」,没有账号行也没有提示', seen.hostingGets.length > hostingBefore && await accountRow.count() === 0 && await linkNote.count() === 0, JSON.stringify(await writeRow.locator('button').allTextContents()))
+  seen.github = { linked: false, remote: true }
+  await refreshGit()
+  await linkNote.waitFor()
+  check('6r2 没绑 GitHub → 一句提示 + 「去绑定」;推送 / 拉取照旧能点(只提示不拦)', /绑定 GitHub 账号后/.test(await linkNote.textContent()) && await linkNote.locator('[data-git-action="link-github"]').count() === 1
+    && await writeRow.locator('[data-git-action="push"]').isEnabled() && await writeRow.locator('[data-git-action="pull"]').isEnabled() && await accountRow.count() === 0, await gitCard.textContent())
+  await details.screenshot({ path: shots.gitGithubUnlinked = shot('project-git-github-unlinked-zh-light') })
+  seen.pushGithubUnlinkedOnce = true
+  await writeRow.locator('[data-git-action="push"]').click()
+  await until(async () => /GitHub 没有接受/.test((await gitError.textContent().catch(() => '')) || ''))
+  check('6r3 推送被 GitHub 拒、引擎报 github_not_linked → 本地化说明 + 错误条里也有「去绑定」', /还没有绑定 GitHub 账号/.test(await gitError.textContent()) && await gitError.locator('[data-git-action="link-github"]').count() === 1, (await gitError.textContent().catch(() => '')) || '')
+  // 自带凭据的远端(引擎回 remote:false):界面拿到的地址是遮过的、看着一样,但引擎不会替他带绑定的账号 → 不提示
+  seen.github = { linked: false, remote: false }
+  await refreshGit()
+  await until(async () => (await linkNote.count()) === 0)
+  check('6r4 远端地址里自带凭据(引擎说 remote:false)→ 不出现绑定提示', await linkNote.count() === 0 && await accountRow.count() === 0, await gitCard.textContent())
+  // 在浏览器里的账户中心绑好,窗口回到前台:不用点刷新,自己重读
+  seen.github = { linked: true, login: 'dave-gh', remote: true }
+  await win.evaluate(() => window.dispatchEvent(new Event('focus')))
+  await accountRow.waitFor()
+  check('6r5 绑好后窗口回到前台 → 自己重读:摘要多一行「账号 GitHub · @dave-gh」,提示收起', /GitHub · @dave-gh/.test(await accountRow.textContent()) && await linkNote.count() === 0, await gitCard.textContent())
+  await details.screenshot({ path: shots.gitGithubLinked = shot('project-git-github-linked-zh-light') })
+  // ── 6s 没有远端时的另外两条出路:连接已有远端(贴地址)、发布到 GitHub(绑了的建私有仓库;没绑的先说去绑定,不发请求)──
+  const noRemoteGit = () => { ctx.git = { ...ctx.git, remote: null, remotes: 0, upstream: null, ahead: 0, behind: 0 } }
+  const connectBtn = writeRow.locator('[data-git-action="connect-remote"]')
+  const publishGithubBtn = writeRow.locator('[data-git-action="publish-github"]')
+  noRemoteGit(); seen.hosting = null; seen.github = null
+  await refreshGit()
+  await connectBtn.waitFor()
+  check('6s 没有远端、云端没开 GitHub 绑定 → 有「连接已有远端…」,没有「发布到 GitHub…」', /连接已有远端/.test(await connectBtn.textContent()) && await publishGithubBtn.count() === 0, JSON.stringify(await writeRow.locator('button').allTextContents()))
+  await connectBtn.click()
+  await promptInput.waitFor()
+  await promptInput.fill('http://insecure.example.com/x.git')
+  await promptInput.press('Enter')
+  await until(async () => /这个地址用不了/.test((await gitError.textContent().catch(() => '')) || ''))
+  check('6s2 地址不收 → POST git/remote 被引擎拒:本地化说明,入口还在', seen.gitRemotes.length === 1 && seen.gitRemotes[0].sessionId === 'pd-main' && /以 https:\/\/ 或 git@ 开头/.test(await gitError.textContent()) && await connectBtn.count() === 1, JSON.stringify(seen.gitRemotes))
+  await connectBtn.click()
+  await promptInput.waitFor()
+  await promptInput.fill('git@github.com:dave/existing.git')
+  await promptInput.press('Enter')
+  await until(async () => (await connectBtn.count()) === 0)
+  check('6s3 连接 → POST git/remote { sessionId, url };提示连上了和上游;入口收起,换成推送 / 拉取', seen.gitRemotes[1]?.url === 'git@github.com:dave/existing.git' && /已连接远端/.test(await saveNotice.textContent()) && /origin\//.test(await saveNotice.textContent())
+    && await writeRow.locator('[data-git-action="push"]').count() === 1 && await writeRow.locator('[data-git-action="pull"]').count() === 1 && await gitError.count() === 0, JSON.stringify({ remotes: seen.gitRemotes, notice: await saveNotice.textContent().catch(() => '') }))
+  // 发布到 GitHub
+  noRemoteGit(); seen.github = { linked: false, remote: false, name: 'Demo-Project' }
+  await refreshGit()
+  await publishGithubBtn.waitFor()
+  await details.screenshot({ path: shots.gitNoRemote = shot('project-git-noremote-zh-light') })
+  await publishGithubBtn.click()
+  await until(async () => /先绑定你的 GitHub 账号/.test((await gitError.textContent().catch(() => '')) || ''))
+  check('6s4 没绑 GitHub 点「发布到 GitHub…」→ 不发请求,说先去绑定 + 「去绑定」', seen.gitGithubPublishes.length === 0 && await gitError.locator('[data-git-action="link-github"]').count() === 1, (await gitError.textContent().catch(() => '')) || '')
+  seen.github = { linked: true, login: 'dave-gh', remote: false, name: 'Demo-Project' }
+  await refreshGit()
+  await until(async () => (await gitError.count()) === 0 || !/先绑定/.test((await gitError.textContent().catch(() => '')) || ''), 3000).catch(() => {})
+  await sleep(400) // 等 hosting 重读回来(按钮文案不变,没有可等的 DOM 变化)
+  await publishGithubBtn.click()
+  await promptInput.waitFor()
+  check('6s5 绑了 → 对话框预填仓库名,写明在 @dave-gh 下建私有仓库', (await promptInput.inputValue()) === 'Demo-Project' && /@dave-gh/.test(await win.locator('.dialog').textContent()) && /私有仓库/.test(await win.locator('.dialog').textContent()), await win.locator('.dialog').textContent())
+  await promptInput.press('Enter')
+  await until(async () => seen.gitGithubPublishes.length === 1)
+  await until(async () => (await publishGithubBtn.count()) === 0)
+  check('6s6 发布 → POST git/publish-github { sessionId, name };提示网页地址;摘要里是 GitHub 远端', seen.gitGithubPublishes[0]?.sessionId === 'pd-main' && seen.gitGithubPublishes[0]?.name === 'Demo-Project' && /已发布到 https:\/\/github\.com\/dave-gh\/Demo-Project/.test(await saveNotice.textContent())
+    && /github\.com\/dave-gh\/Demo-Project/.test(await gitCard.textContent()), JSON.stringify({ publishes: seen.gitGithubPublishes, notice: await saveNotice.textContent().catch(() => '') }))
   check('6m Git 写动作之后仍不横向溢出', await noOverflow(profile), await overflowReport(profile))
 
   // ── 6n 设置 → Git:三项都落到 PUT /agent/git-settings(文本框失焦才写,开关立即写)──
@@ -566,6 +640,29 @@ async function run(app, win, stub, seen, home, ctx) {
   await fl.locator('#git-settings-prefix').fill('me/')
   await sleep(300)
   await fl.screenshot({ path: shots.gitSettings = shot('settings-git-zh-light') })
+  // ── 6t 设置 → Git 的「账号」:Forsion Git(不用绑定)/ GitHub(绑没绑,去账户中心)/ 提交身份(可改,写进 git-settings)──
+  const accounts = fl.locator('.git-accounts-panel')
+  const accountsText = await accounts.textContent()
+  check('6t 账号面板:Forsion Git 写明站点和「不用另外绑定」;GitHub 还没绑定 + 「去绑定」;提交身份来自 Forsion 账号、邮箱是不公开的地址', /git\.forsion\.example/.test(accountsText) && /不用另外绑定/.test(accountsText) && /还没绑定/.test(accountsText)
+    && await accounts.locator('[data-git-account="github-link"]').count() === 1 && /Dave <dave@noreply\.git\.forsion\.example>/.test(accountsText) && /不公开的地址/.test(accountsText), accountsText)
+  const putsBeforeIdentity = seen.gitSettingsPuts.length
+  await accounts.locator('[data-git-account="identity-edit"]').click()
+  const identityForm = accounts.locator('[data-git-account="identity-form"]')
+  await identityForm.locator('input[type="email"]').fill('not-an-email')
+  check('6t2 邮箱写法不对 → 就地提示,保存键不可点', /邮箱的写法不对/.test(await identityForm.textContent()) && await identityForm.locator('[data-git-account="identity-save"]').isDisabled(), await identityForm.textContent())
+  await identityForm.locator('input[type="text"]').fill('Dave Lee')
+  await identityForm.locator('input[type="email"]').fill('dave@example.com')
+  await identityForm.locator('[data-git-account="identity-save"]').click()
+  await until(async () => /你在这里填的/.test(await accounts.textContent()))
+  check('6t3 保存 → PUT git-settings { identityName, identityEmail };面板改成「你在这里填的」,表单收起', seen.gitSettingsPuts.length === putsBeforeIdentity + 1 && seen.gitSettingsPuts.at(-1).identityName === 'Dave Lee' && seen.gitSettingsPuts.at(-1).identityEmail === 'dave@example.com'
+    && /Dave Lee <dave@example\.com>/.test(await accounts.textContent()) && await identityForm.count() === 0, JSON.stringify(seen.gitSettingsPuts.at(-1)))
+  // GitHub 在浏览器里的账户中心绑:窗口回到前台时自己重读
+  seen.accounts = { ...seen.accounts, github: { linked: true, login: 'dave-gh' } }
+  await fl.evaluate(() => window.dispatchEvent(new Event('focus')))
+  await accounts.locator('[data-git-account="github-manage"]').waitFor()
+  check('6t4 绑好后窗口回到前台 → GitHub 一行变成「@dave-gh · 已绑定」+「在账户中心管理」', /@dave-gh/.test(await accounts.textContent()) && /已绑定/.test(await accounts.textContent()) && await accounts.locator('[data-git-account="github-link"]').count() === 0, await accounts.textContent())
+  await accounts.scrollIntoViewIfNeeded()
+  await accounts.screenshot({ path: shots.gitAccounts = shot('settings-git-accounts-zh-light') })
   await fl.close()
 
   // ── 7 用它开新会话:落成新对话草稿(activeId 空),右栏随之切成该 Agent 的详情 ────
@@ -579,6 +676,39 @@ async function run(app, win, stub, seen, home, ctx) {
     activeSession: (document.querySelector('[data-chat-surface="chat"]') || {}).getAttribute ? document.querySelector('[data-chat-surface="chat"]').getAttribute('data-session-id') : null,
   }))
   check('7 「用它开新会话」→ 主区进入新对话(无 session id)、右栏切成 coder 的 Agent 详情、没有建空会话', draftState.directAgent && draftState.projectGone && draftState.composer && !draftState.activeSession && stub.seen.runs.length === 0 && !seen.sessionsCreated, JSON.stringify(draftState))
+
+  // ── 7c 从 Git 克隆:项目选择器菜单里多一项 → 对话框列出我的仓库 → 选一个、选位置 → 克隆并加成项目 ────────
+  await win.locator('.project-selector button').first().click()
+  await win.locator('[data-project-menu-clone]').click()
+  const cloneDlg = win.locator('[data-git-clone]')
+  await cloneDlg.locator('.git-clone-repo').first().waitFor({ timeout: 10_000 })
+  const repoRows = await cloneDlg.locator('.git-clone-repo').allTextContents()
+  check('7c 菜单里的「从 Git 克隆…」→ 对话框缺省在 Forsion Git 一栏,列出我的仓库并标私有 / 公开;没选仓库和位置时克隆键不可点', repoRows.length === 2 && /dave\/notes/.test(repoRows[0]) && /私有/.test(repoRows[0]) && /公开/.test(repoRows[1])
+    && await cloneDlg.locator('[data-git-clone-confirm]').isDisabled(), JSON.stringify(repoRows))
+  await cloneDlg.locator('[data-git-clone-tab="github"]').click()
+  await cloneDlg.locator('[data-git-clone-link]').waitFor()
+  check('7c2 GitHub 一栏:没绑定 → 一句说明 + 「去绑定」,不报错', /还没绑定 GitHub 账号/.test(await cloneDlg.locator('.git-clone-list').textContent()) && await cloneDlg.locator('[data-git-clone-error]').count() === 0, await cloneDlg.locator('.git-clone-list').textContent())
+  await cloneDlg.locator('[data-git-clone-tab="url"]').click()
+  await cloneDlg.locator('[data-git-clone-url]').fill('git@github.com:dave/My-Notes.git')
+  check('7c3 网址一栏:贴地址 → 文件夹名预填成地址最后一段(去掉 .git)', (await cloneDlg.locator('#git-clone-name').inputValue()) === 'My-Notes', await cloneDlg.locator('#git-clone-name').inputValue())
+  await cloneDlg.locator('[data-git-clone-tab="forsion"]').click()
+  await cloneDlg.locator('.git-clone-repo').first().click()
+  // 系统的选文件夹窗口自动化不了:顶替主进程的 showOpenDialog,回临时目录
+  await app.evaluate(({ dialog }, dir) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [dir] }) }, home)
+  await cloneDlg.locator('[data-git-clone-parent]').click()
+  await until(async () => (await cloneDlg.locator('.git-clone-parent code').textContent()) === home)
+  check('7c4 选了仓库和位置:文件夹名改成 notes,位置显示选中的文件夹,克隆键可点', (await cloneDlg.locator('#git-clone-name').inputValue()) === 'notes' && (await cloneDlg.locator('.git-clone-parent code').textContent()) === home && await cloneDlg.locator('[data-git-clone-confirm]').isEnabled(),
+    JSON.stringify({ name: await cloneDlg.locator('#git-clone-name').inputValue(), parent: await cloneDlg.locator('.git-clone-parent code').textContent() }))
+  await cloneDlg.screenshot({ path: shots.gitClone = shot('git-clone-dialog-zh-light') })
+  seen.cloneExistsOnce = true
+  await cloneDlg.locator('[data-git-clone-confirm]').click()
+  await cloneDlg.locator('[data-git-clone-error]').waitFor()
+  check('7c5 目标文件夹已经在了 → 本地化说明,对话框留着(可以改名再来)', /已经有同名的东西/.test(await cloneDlg.locator('[data-git-clone-error]').textContent()) && seen.gitClones.length === 1, await cloneDlg.locator('[data-git-clone-error]').textContent())
+  await cloneDlg.locator('[data-git-clone-confirm]').click()
+  await until(async () => (await cloneDlg.count()) === 0)
+  await until(async () => !!seen.clonedSession, 8000)
+  check('7c6 克隆 → POST git/clone { url, parent, name };对话框收起,在克隆出来的文件夹里开了一个新会话(= 加成了项目,同「添加项目」)', seen.gitClones.length === 2 && seen.gitClones[1].url === 'https://git.forsion.example/dave/notes.git' && seen.gitClones[1].parent === home && seen.gitClones[1].name === 'notes'
+    && await cloneDlg.count() === 0 && seen.clonedSession?.project_path === path.join(home, 'notes') && seen.clonedSession?.project_name === 'notes', JSON.stringify({ clones: seen.gitClones, session: seen.clonedSession ?? null }))
 
   // ── 8 负对照:无根会话仍是 Agent 详情 ───────────────────────────────────
   await openSession(win, 'Rootless chat', 'pd-rootless')
@@ -789,7 +919,9 @@ async function main() {
   for (const dir of [userData, `${userData}-dev`, vault, projectDir]) fs.mkdirSync(dir, { recursive: true })
   const ctx = contextFixture(projectDir)
   const seen = { memoryForgets: [], memoryConflictOnce: false, memoryCandidates: [], memoryCandidateGoneOnce: false, memoryCandidateBusyOnce: false, memoryRestores: [], memoryRestoreGoneOnce: false, compactedActivity: false, ctxGets: [], init: 0, docPuts: [], settingsPuts: [], skills: [], sessionsCreated: 0, iconPosts: [], iconGets: 0, iconDeletes: [], sessionDeletes: [], agentDeletes: [],
-    gitMessages: [], gitCommits: [], gitBranches: [], gitPushes: [], gitPulls: [], gitInits: [], gitSettingsPuts: [], gitPendings: [], gitTrusts: [], pushGate: false, hostingGets: [], hosting: null, gitPublishes: [] }
+    gitMessages: [], gitCommits: [], gitBranches: [], gitPushes: [], gitPulls: [], gitInits: [], gitSettingsPuts: [], gitPendings: [], gitTrusts: [], pushGate: false, hostingGets: [], hosting: null, gitPublishes: [], github: null, pushGithubUnlinkedOnce: false, gitRemotes: [], gitGithubPublishes: [], accountsGets: 0, gitClones: [], cloneExistsOnce: false,
+    repos: { forsion: [{ fullName: 'dave/notes', private: true, cloneUrl: 'https://git.forsion.example/dave/notes.git', updatedAt: '2026-10-10T08:00:00Z' }, { fullName: 'dave/plugin-demo', private: false, cloneUrl: 'https://git.forsion.example/dave/plugin-demo.git', updatedAt: null }], github: 'unlinked' },
+    accounts: { forsionGit: { webUrl: 'https://git.forsion.example' }, github: { linked: false }, identity: { name: 'Dave', email: 'dave@noreply.git.forsion.example', source: 'forsion' } } }
   let gitSettings = { branchPrefix: 'tangu/', commitInstructions: '', forceWithLease: false }
   const demoIds = new Set(['pd-main', 'pd-coder', 'pd-team']) // 默认项 / 图标只属于 Demo Project;别的项目组读到的是空
   // 真实磁盘上的项目 .tangu(移除工作区勾「删除相关文件」时要进废纸篓)
@@ -810,7 +942,7 @@ async function main() {
       if (!projectIds.has(sid)) return { __code: 400, body: { detail: 'stub: not a project session' } }
       if (route === '/agent/project-context' && method === 'GET') { seen.ctxGets.push(sid); return ctx }
       // 这里能不能「发布到 Forsion Git」(引擎 forsionPublishInfo):缺省 null = 没登录 Forsion / 站上不发凭据
-      if (route === '/agent/project-context/git/hosting' && method === 'GET') { seen.hostingGets.push(sid); return { forsionGit: seen.hosting } }
+      if (route === '/agent/project-context/git/hosting' && method === 'GET') { seen.hostingGets.push(sid); return { forsionGit: seen.hosting, github: seen.github, connect: true } }
       if (route === '/agent/project-context/settings' && method === 'GET') return { settings: demoIds.has(sid) ? ctx.settings : null }
       if (route === '/agent/project-context/init' && method === 'POST') { seen.init += 1; ctx.doc = { ...ctx.doc, exists: true, content: TEMPLATE, mtimeMs: 1000, bytes: TEMPLATE.length, sources: [ctx.doc.path] }; return { createdDir: true, createdDoc: true, context: ctx } }
     }
@@ -820,7 +952,7 @@ async function main() {
     if (route === '/agent/sessions' && method === 'GET' && url.searchParams.get('archived') === 'true') return { sessions: [] }
     // 带 body 的写接口:override 在 handle 之前跑且能读 body(handle 的 body() 只能读一次,GET 分支已用掉 sessionId 的读取)
     // Git 写动作:按引擎(services/gitActions.ts)的口径改 ctx.git,成功带回新上下文;失败回 400 { error: code, info }
-    if (route === '/agent/project-context/git/pending' && method === 'POST') { const b = await body(); seen.gitPendings.push(b); const files = (ctx.git.changes || []).map((c) => ({ code: c.code, path: c.path })); return { files, total: files.length, stagedOnly: false, token: `tok-${seen.gitPendings.length}` } }
+    if (route === '/agent/project-context/git/pending' && method === 'POST') { const b = await body(); seen.gitPendings.push(b); const files = (ctx.git.changes || []).map((c) => ({ code: c.code, path: c.path })); return { files, total: files.length, stagedOnly: false, token: `tok-${seen.gitPendings.length}`, identity: seen.accounts.identity } }
     if (route === '/agent/project-context/git/trust' && method === 'POST') {
       const b = await body(); seen.gitTrusts.push(b)
       ctx.git = { ...ctx.git, changesUnread: undefined, trusted: true, changes: [{ code: ' M', path: 'a.txt' }], changesTotal: 1, staged: 0, unstaged: 1, untracked: 0 }
@@ -847,6 +979,8 @@ async function main() {
       const b = await body(); seen.gitPushes.push(b)
       // 信任闸(引擎 gitTrust):没带 trust 的那一次回 untrusted_config,桌面要给「信任并继续」并带 trust 重发
       if (seen.pushGate && !b.trust) return { __code: 400, body: { detail: 'untrusted', error: 'untrusted_config', info: 'core.hookspath\nhooks/pre-push' } }
+      // 远端在 GitHub、git 自己认证失败、Forsion 账号又没绑 GitHub(引擎 services/githubGit.ts 带的话)
+      if (seen.pushGithubUnlinkedOnce) { seen.pushGithubUnlinkedOnce = false; return { __code: 400, body: { detail: 'No GitHub account is linked', error: 'github_not_linked' } } }
       if (seen.pushTimeoutOnce) { seen.pushTimeoutOnce = false; return { __code: 400, body: { detail: 'git push timed out', error: 'git_timeout', info: 'timed out' } } }
       ctx.git = { ...ctx.git, upstream: `origin/${ctx.git.branch}`, ahead: 0 }
       return { remote: 'origin', branch: ctx.git.branch, target: `origin/${ctx.git.branch}`, output: '', context: ctx }
@@ -863,6 +997,19 @@ async function main() {
       ctx.git = { ...ctx.git, behind: 0 }
       return { pull: { remote: 'origin', branch: ctx.git.branch, upstream: ctx.git.upstream, updated: commits > 0, commits, ahead: ctx.git.ahead || 0 }, context: ctx }
     }
+    // 连接已有远端(引擎 gitConnectRemote):地址不收回 invalid_remote_url;成功 = origin 设好,远端有同名分支就记成上游
+    if (route === '/agent/project-context/git/remote' && method === 'POST') {
+      const b = await body(); seen.gitRemotes.push(b)
+      if (!/^(https:\/\/|git@)/.test(String(b.url || ''))) return { __code: 400, body: { detail: 'That is not a remote address this app can use', error: 'invalid_remote_url' } }
+      ctx.git = { ...ctx.git, remote: b.url, remotes: 1, upstream: `origin/${ctx.git.branch}`, ahead: 0, behind: 0 }
+      return { remote: { remote: 'origin', upstream: ctx.git.upstream }, context: ctx }
+    }
+    // 发布到 GitHub(引擎 publishToGithub):成功 = 建了私有仓库、origin 设好并推上去了
+    if (route === '/agent/project-context/git/publish-github' && method === 'POST') {
+      const b = await body(); seen.gitGithubPublishes.push(b)
+      ctx.git = { ...ctx.git, remote: `https://github.com/dave-gh/${b.name}.git`, remotes: 1, upstream: `origin/${ctx.git.branch}`, ahead: 0, behind: 0 }
+      return { publish: { url: `https://github.com/dave-gh/${b.name}`, name: b.name, remote: 'origin', branch: ctx.git.branch, target: ctx.git.upstream, output: '' }, context: ctx }
+    }
     // 发布到 Forsion Git(引擎 publishToForsionGit):名字不合规回 invalid_repo_name;成功 = origin 设好并推上去了
     if (route === '/agent/project-context/git/publish' && method === 'POST') {
       const b = await body(); seen.gitPublishes.push(b)
@@ -876,8 +1023,24 @@ async function main() {
       return { createdGitignore: true, context: ctx }
     }
     if (route === '/agent/git-settings' && method === 'GET') return { settings: gitSettings, defaults: { branchPrefix: 'tangu/', commitInstructions: '', forceWithLease: false }, writable: true }
+    // 克隆对话框(引擎 services/gitClone.ts):我的仓库 + 克隆到 <parent>/<name>
+    if (route === '/agent/git/repos' && method === 'GET') {
+      const list = seen.repos[url.searchParams.get('host')]
+      return list === 'unlinked' ? { __code: 400, body: { detail: 'No GitHub account is linked to this Forsion account', error: 'github_not_linked' } } : { repos: list ?? null }
+    }
+    if (route === '/agent/git/clone' && method === 'POST') {
+      const b = await body(); seen.gitClones.push(b)
+      const dest = path.join(b.parent, b.name)
+      if (seen.cloneExistsOnce) { seen.cloneExistsOnce = false; return { __code: 400, body: { detail: 'There is already something with that name in this folder', error: 'target_exists', info: dest } } }
+      fs.mkdirSync(dest, { recursive: true })
+      return { path: dest, name: b.name }
+    }
+    // 「设置 → Git」的「账号」(引擎 GET /agent/git-accounts):Forsion Git 站点、GitHub 绑没绑、提交身份
+    if (route === '/agent/git-accounts' && method === 'GET') { seen.accountsGets += 1; return seen.accounts }
     if (route === '/agent/git-settings' && method === 'PUT') {
       const b = await body(); seen.gitSettingsPuts.push(b); gitSettings = { ...gitSettings, ...b }
+      // 提交身份:填了 = custom;清掉(null)= 回到由 Forsion 账号推出来的
+      if ('identityName' in b || 'identityEmail' in b) seen.accounts = { ...seen.accounts, identity: b.identityName ? { name: b.identityName, email: b.identityEmail, source: 'custom' } : { name: 'Dave', email: 'dave@noreply.git.forsion.example', source: 'forsion' } }
       // 前缀的响应故意晚到:用户这时已经在写提交说明,回写整份设置会把正在打的字冲掉(6n 靠它把竞态钉成必现)
       if ('branchPrefix' in b) await sleep(600)
       return { settings: gitSettings }
@@ -919,7 +1082,16 @@ async function main() {
       seen.iconGets += 1
       return demoIds.has(url.searchParams.get('sessionId')) && ctx.settings?.icon === 'icon.png' ? { __buffer: ICON_PNG, contentType: 'image/png' } : { __code: 404, body: { detail: 'no icon image' } }
     }
-    if (route === '/agent/sessions' && method === 'POST') seen.sessionsCreated += 1
+    if (route === '/agent/sessions' && method === 'POST') {
+      seen.sessionsCreated += 1
+      // 克隆出来的文件夹加成项目(7c):回一条落在那个文件夹里的会话,不进会话清单 —— 公共假引擎会照第一条会话(Demo Project)克隆一条,
+      // 那样后面数 Demo Project 会话数的用例(11a / 11f)会被它带偏
+      const b = await body().catch(() => null)
+      if (b?.project_path && seen.gitClones.some((c) => path.join(c.parent, c.name) === b.project_path)) {
+        seen.clonedSession = b
+        return { session: { ...sessions[0], id: 'pd-cloned', title: 'New Chat', project_path: b.project_path, project_name: b.project_name, agent_config: { agentSlug: 'xyra', execMode: 'host', cwd: b.project_path } } }
+      }
+    }
     if (/^\/agent\/sessions\/[^/]+$/.test(route) && method === 'DELETE') { const id = route.split('/')[3]; seen.sessionDeletes.push(id); const i = sessions.findIndex((x) => x.id === id); if (i >= 0) sessions.splice(i, 1); return { ok: true } }
     // 删 Agent:?keepFiles=1 = 引擎把目录挪走并回 keptAt(这里造一个真目录,桌面随后把它移进 e2e 废纸篓);名册同步去掉它
     if (/^\/agent\/agents\/[^/]+$/.test(route) && method === 'DELETE') {

@@ -1046,6 +1046,8 @@ export interface AppState {
   createInWorkspace(ws: WorkspaceDescriptor): Promise<void>
   newSession(): Promise<void>
   addLocalWorkspace(): Promise<void>
+  /** 从 Git 克隆:弹克隆对话框,克隆成功后把那个文件夹加成项目(同 addLocalWorkspace 的落点)。 */
+  cloneGitProject(): Promise<void>
   renameSession(id: string, title: string): Promise<void>
   setSessionEmoji(id: string, emoji: string | null): Promise<boolean>
   archiveSession(id: string, archived: boolean): Promise<void>
@@ -2774,6 +2776,14 @@ export const useApp = create<AppState>((set, get) => ({
     const dir = await window.tangu?.pickDirectory?.({ purpose: 'project' })
     if (!dir) return
     await get().createInWorkspace({ key: dir, name: dir.split('/').filter(Boolean).pop() || dir, kind: 'local', path: dir })
+  },
+
+  cloneGitProject: async () => {
+    // 动态引入:对话框带样式和图标,store 不在模块加载时拖它进来
+    const { askGitClone } = await import('../components/GitCloneDialog')
+    const cloned = await askGitClone()
+    if (!cloned) return
+    await get().createInWorkspace({ key: cloned.path, name: cloned.name, kind: 'local', path: cloned.path })
   },
 
   refreshCloudProjects: async (c) => {

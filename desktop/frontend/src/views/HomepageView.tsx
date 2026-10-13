@@ -133,6 +133,7 @@ function HomepageChatbox({ onDispatch, onStartCall, onInputModeChange }: { onDis
     openSettings: state.openSettings,
     setNewChatWs: state.setNewChatWs,
     addLocalWorkspace: state.addLocalWorkspace,
+    cloneGitProject: state.cloneGitProject,
     addCloudProject: state.addCloudProject,
     workspaces: state.workspaces,
     sessions: state.sessions,
@@ -200,6 +201,7 @@ function HomepageChatbox({ onDispatch, onStartCall, onInputModeChange }: { onDis
           value={targetWorkspace.key}
           onChange={s.setNewChatWs}
           onAddProject={window.tangu?.pickDirectory ? () => void s.addLocalWorkspace() : undefined}
+          onCloneProject={window.tangu?.pickDirectory ? () => void s.cloneGitProject() : undefined}
           onAddCloudProject={(name) => void s.addCloudProject(name)}
         />
       </div>

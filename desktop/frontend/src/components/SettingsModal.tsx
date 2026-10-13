@@ -2,6 +2,7 @@ import { PRODUCT } from '../product'
 import { ModelPickerSettings } from './ModelPickerSettings'
 import { AutoCompactSetting } from './AutoCompactSetting'
 import { GitSettingsSection } from './GitSettingsSection'
+import { GitAccountsSection } from './GitAccountsSection'
 import { HostSandboxSettings } from './HostSandboxSettings'
 import { ErrorBoundary } from './ErrorBoundary'
 import { BrowserExtensionPanel } from './BrowserExtensionPanel'
@@ -1885,7 +1886,7 @@ export const SettingsModal: React.FC<{
                   </>
                 )}
 
-                {tab === 'general' && activeSub === 'g-git' && isDesktop && stored && <GitSettingsSection />}
+                {tab === 'general' && activeSub === 'g-git' && isDesktop && stored && <><GitAccountsSection /><GitSettingsSection /></>}
                 {/* 收件箱(Inbox Space):系统通知开关。非 managedKeys,保存即生效不重启后端。 */}
                 {tab === 'general' && isDesktop && stored && activeSub === 'g-inbox' && (
                   <>

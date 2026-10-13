@@ -1,0 +1,24 @@
+/* 「从 Git 克隆」对话框:外壳用 amadeus 的 .dialog-*(取色、圆角、动效都跟着它),这里只补自己的几块布局。 */
+.am-app .git-clone-dialog { width: min(480px, 92vw); }
+.am-app .git-clone-tabs { display: inline-flex; align-self: flex-start; gap: 2px; padding: 3px; border-radius: var(--radius-sm); background: var(--overlay-light); }
+.am-app .git-clone-tabs button { padding: 4px 12px; border: 0; border-radius: calc(var(--radius-sm) - 2px); background: transparent; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); }
+.am-app .git-clone-tabs button.on { background: var(--surface-2); color: var(--text); font-weight: 500; box-shadow: var(--card-shadow); }
+.am-app .git-clone-list { min-height: 132px; max-height: 220px; }
+.am-app .git-clone-note { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 2px; font-size: var(--ui-font-meta, 12px); }
+.am-app .git-clone-repo { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.am-app .git-clone-repo.on { background: var(--menu-hover); color: var(--text); }
+.am-app .git-clone-repo > svg { flex: 0 0 auto; color: var(--text-muted); }
+.am-app .git-clone-repo > strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+.am-app .git-clone-repo > small { margin-left: auto; flex: 0 0 auto; color: var(--text-muted); font-size: var(--ui-font-caption, 11px); }
+.am-app .git-clone-chip { flex: 0 0 auto; padding: 1px 7px; border-radius: var(--radius-pill, 999px); background: var(--overlay-medium); color: var(--text-muted); font-size: var(--ui-font-caption, 11px); }
+.am-app .git-clone-where { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 8px 10px; padding-top: 10px; border-top: 1px solid var(--border); font-size: var(--ui-font-meta, 12px); color: var(--text-muted); }
+.am-app .git-clone-where .dialog-input { padding: 6px 9px; }
+.am-app .git-clone-parent { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.am-app .git-clone-parent code { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; color: var(--text); font-family: var(--font-mono, ui-monospace, monospace); font-size: var(--ui-font-caption, 11px); }
+.am-app .git-clone-parent .dialog-btn, .am-app .git-clone-note .dialog-btn, .am-app .git-clone-error .dialog-btn { padding: 4px 10px; font-size: var(--ui-font-meta, 12px); }
+/* 「更改…」不让长路径挤成两行 */
+.am-app .git-clone-parent .dialog-btn { flex: 0 0 auto; white-space: nowrap; }
+.am-app .git-clone-error { display: grid; gap: 6px; justify-items: start; color: var(--danger); font-size: var(--ui-font-meta, 12px); }
+.am-app .git-clone-error p { margin: 0; }
+.am-app .git-clone-error pre { margin: 0; max-width: 100%; max-height: 110px; overflow: auto; padding: 6px 8px; border-radius: var(--radius-sm); background: var(--overlay-medium); color: var(--text-muted); font-family: var(--font-mono, ui-monospace, monospace); font-size: var(--ui-font-caption, 11px); white-space: pre-wrap; overflow-wrap: anywhere; }
+.am-app .git-clone-dialog .dialog-btn { display: inline-flex; align-items: center; gap: 6px; }

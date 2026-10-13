@@ -7,6 +7,7 @@ import { useUiStore } from '@amadeus/store/uiStore'
 import { ConfirmDialog } from '@amadeus/components/Dialogs'
 import { WikiHoverPreview } from '@amadeus/components/WikiHoverPreview'
 import { AskStringHost } from '@amadeus/components/askString'
+import { GitCloneHost } from './components/GitCloneDialog'
 import { DeleteAssetsHost } from '@amadeus/components/askDeleteAssets'
 import { NewDrawingHost } from '@amadeus/components/askNewDrawing'
 import { CloudSyncDialogHost } from './components/CloudSyncDialog'
@@ -182,6 +183,7 @@ export function AmadeusOverlays() {
       <WikiCreateConfirm />
       <WikiHoverPreview />
       <AskStringHost />
+      <GitCloneHost />
       <DeleteAssetsHost />
       <NewDrawingHost />
       <CloudSyncDialogHost />
