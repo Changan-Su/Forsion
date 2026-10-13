@@ -4,8 +4,8 @@
  * 用户 2026-10-13 报的三件事,钉住的契约:
  *  ① 项目胶囊左缘与输入卡左缘是同一条线 —— 三种宽度都量(宽窗、≤1040 断点、聊天列 ≤520 的容器断点)外加 110% 缩放。
  *     这一栏的盒子是照抄 .t2c-inner 的数写的(base.css .newchat-projectbar),改了一边忘了另一边就在这里红。
- *  ② 开场那一行(「上次之后,X 在后台记住了 N 件事」)不夹在项目胶囊和输入卡之间:宽的时候与胶囊同一行、靠右;
- *     放不下时折到胶囊**上面**。
+ *  ② 开场那一行(「上次之后,X 在后台记住了 N 件事」)不夹在项目胶囊和输入卡之间:放得下时与胶囊同一行、靠右;
+ *     放不下时(聊天列夹到 320)折到胶囊**上面**。
  *  ③ 「添加文件夹」:项目不变,加进来的文件夹排成胶囊、可移除;第一条消息建会话时随 agent_config.extraRoots 落库、
  *     随 run 的 agentConfig 发给引擎(引擎据此放行读写并写进环境说明);会话建成后草稿里那份清掉,不带进下一个新对话。
  *
@@ -142,11 +142,21 @@ async function main() {
     await view.evaluate((el) => { el.style.maxWidth = '460px' })
     await win.waitForTimeout(350)
     await aligned('聊天列 460(≤520 容器断点)')
+    const rows = async () => { const [o, p] = [await box(opening), await box(pill)]; return { o, p, detail: { opening: [o.top, o.bottom].map(Math.round), pill: [p.top, p.bottom].map(Math.round) } } }
     if (await opening.count()) {
-      const [o, p] = [await box(opening), await box(pill)]
-      check('窄列:开场放不下时折到项目胶囊上面', o.bottom <= p.top + 1, { opening: [o.top, o.bottom].map(Math.round), pill: [p.top, p.bottom].map(Math.round) })
+      const { o, p, detail } = await rows()
+      check('聊天列 460:开场不在项目胶囊下面(同一行或在上面)', o.top < p.bottom, detail)
     }
     await view.locator('.composer-anchor').screenshot({ path: shot('bar-narrow-460.png') })
+    // 再窄到一行放不下:开场得折到胶囊**上面**,胶囊仍贴着输入卡
+    await view.evaluate((el) => { el.style.maxWidth = '320px' })
+    await win.waitForTimeout(350)
+    await aligned('聊天列 320')
+    if (await opening.count()) {
+      const { o, p, detail } = await rows()
+      check('聊天列 320:开场放不下,折到项目胶囊上面', o.bottom <= p.top + 1, detail)
+    }
+    await view.locator('.composer-anchor').screenshot({ path: shot('bar-narrow-320.png') })
     await view.evaluate((el) => { el.style.maxWidth = '' })
     await win.waitForTimeout(350)
 
