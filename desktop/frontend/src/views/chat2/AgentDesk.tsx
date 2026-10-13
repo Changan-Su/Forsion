@@ -48,11 +48,7 @@ export function useDeskHome(sessionId: string | null | undefined): DeskItem | nu
     () => (registered ? { key: 'home:muse', path: '', name, at: 0, view: { type: MUSE_HOME_VIEW } } : null),
     [registered, name],
   )
-  // 缺省展开(聊天 + Muse Space 并排):只在这条会话还没有任何 Desk 状态时落一次 —— 落成真状态,之后 Agent 往 Desk 上放东西
-  // 沿用它(不会因为建状态而缩回卡片),用户收起后也不再打扰。
-  useEffect(() => {
-    if (home && sessionId && !useApp.getState().deskBySession[sessionId]) useApp.getState().patchDesk(sessionId, { mode: 'open', homeSeen: true })
-  }, [home, sessionId])
+  // 缺省是右侧车道里的一张小卡(用户 10-14 定;起初做成第一次进来自动展开成侧板,被改回):展开 / 收起全由用户点。
   return home
 }
 
@@ -339,7 +335,7 @@ export function DeskCard({ sessionId }: { sessionId: string }) {
   const draft = sessionId === DESK_DRAFT_KEY
   const plan = deskCardPlan({ mode: desk?.mode, itemCount: own.length, companion: comp?.mode ?? null, draft, home: !!home })
   const gone = plan.gone
-  const expand = plan.expandable ? () => useApp.getState().patchDesk(sessionId, { mode: 'open', homeSeen: true }) : undefined
+  const expand = plan.expandable ? () => useApp.getState().patchDesk(sessionId, { mode: 'open' }) : undefined
   const companion = plan.showCompanion ? comp : null
 
   return (

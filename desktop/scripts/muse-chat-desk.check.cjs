@@ -2,21 +2,21 @@
  * Muse 私聊 × Agent Desk 空闲面 —— 真 Electron × 真组件 / store × 可编剧假引擎(2026-10-13)。
  *
  * 用户定的形态:点 Muse 行进的是和它的私聊(推翻 09-16 轨道方案 D18「Muse 行只进 Space」);聊天右侧的 Agent Desk
- * 空闲时演 Muse Space,Agent 往 Desk 上放东西才让位。实现 = AgentDesk.useDeskHome(渲染期合成一格 `muse-library` 视图)。
+ * 空闲时演 Muse Space(缺省是右侧一张小卡,点开才是侧板),Agent 往 Desk 上放东西才让位。
+ * 实现 = AgentDesk.useDeskHome(渲染期合成一格 `muse-library` 视图)。
  *
  * 钉住:
  *  M1 点 Muse 行 → 聊天面换到它的私聊会话,停在 Tangu Space(没有被带去 Muse Space)
- *  M2 一条消息都没发,Desk 侧板已经展开,里面是 Muse Space(Library 里的 Home.md 看得到)
+ *  M2 一条消息都没发,右侧车道已有一张小卡,里面是 Muse Space;侧板不自己展开(用户 10-14 定「缺省小卡」)
  *  M3 负对照:别的 Agent 的私聊没发消息时没有 Desk(卡片与侧板都不挂)
- *  M4 Agent 往 Desk 上放文件(desk_present,不带 size)→ 侧板原地换成那份文件,Muse Space 让位,侧板没有缩回卡片
- *  M5 「清空 Desk」→ Muse Space 原地回来,侧板仍展开
- *  M6 「收起为卡片」→ 卡片里是 Muse Space;切到别的会话再回来仍是卡片(缺省展开只落一次,不跟用户较劲)
- *  M6b 收起后的空快照照样落盘(homeSeen)→ 重启后不会又被当成第一次而自动展开
+ *  M4 Agent 往 Desk 上放文件(desk_present,不带 size)→ 小卡换成那份文件,Muse Space 让位,仍是小卡
+ *  M5 小卡上的「清空 Desk」→ Muse Space 回来
+ *  M6 点小卡 → 展开成侧板,里面是 Muse Space(Library 里的 Home.md 看得到);切到别的会话再回来仍展开;「收起为卡片」→ 回到小卡
  *  M7 行菜单有「新会话(先总结记忆)」和「打开 Muse Space」;后者照旧切到整页的 Muse Space
- *  M8 截图(亮 / 暗):Muse 私聊 + 展开的 Desk
+ *  M8 截图(亮 = 小卡 / 暗 = 展开)
  *  M9 全程没有渲染进程异常
  *
- * 负对照:`--nc=nohome` 把 Muse 的会话夹具换成没有 soloAgentSlug 的普通会话 → M2 / M5 / M6 / M6b 必须转红。
+ * 负对照:`--nc=nohome` 把 Muse 的会话夹具换成没有 soloAgentSlug 的普通会话 → M2 / M5 / M6 必须转红。
  *
  * 需先 npm run build(跑的是 out/;隔离 --user-data-dir 不抢单实例锁)。
  * 用法:npm run check:musechat [-- --shots <dir>] [-- --nc=nohome]
@@ -156,8 +156,9 @@ async function main() {
     check('M1 点 Muse 行 → 聊天面换到它的私聊,没有被带去 Muse Space', entered && !/muse/.test(spaceAfterClick), JSON.stringify({ entered, spaceAfterClick }))
     let d = await desk(MUSE_ID)
     const msgCount = await win.locator(`${chat(MUSE_ID)} .t2-stream [data-message-id], ${chat(MUSE_ID)} .t2-msg`).count().catch(() => 0)
-    check('M2 没发消息,Desk 侧板已展开,里面是 Muse Space(看得到 Library 的 Home.md)',
-      msgCount === 0 && d.open && d.panelW > 300 && d.panelMuse && /Home/.test(d.panelText), JSON.stringify({ msgCount, ...d, panelText: d.panelText.slice(0, 80) }))
+    const isHomeCard = (x) => !x.open && x.card && !x.cardGone && x.cardMuse && x.cardTitle === 'Muse Space'
+    check('M2 没发消息,右侧已有一张小卡,里面是 Muse Space;侧板没有自己展开',
+      msgCount === 0 && isHomeCard(d), JSON.stringify({ msgCount, ...d, panelText: d.panelText.slice(0, 60) }))
     await win.screenshot({ path: path.join(SHOT_DIR, 'musechat-light.png') })
 
     // ── M3 负对照:别的 Agent 的私聊 ──
@@ -167,7 +168,7 @@ async function main() {
     const nd = await desk(NOVA_ID)
     check('M3 负对照:别的 Agent 的私聊没发消息时没有 Desk', !nd.panel && !nd.card, JSON.stringify({ panel: nd.panel, card: nd.card }))
 
-    // ── M4 Agent 往 Desk 上放文件 ──
+    // ── M4 Agent 往 Desk 上放文件(不带 size = 不改形态)──
     await win.locator('.t2o-row', { hasText: 'Muse' }).first().click()
     await win.waitForSelector(chat(MUSE_ID), { timeout: 8000 }).catch(() => {})
     await sleep(900)
@@ -181,51 +182,40 @@ async function main() {
     await ta.click(); await ta.fill('把本周计划的草稿给我看看'); await ta.press('Enter')
     await sleep(2500)
     d = await desk(MUSE_ID)
-    check('M4 Agent 往 Desk 上放文件 → 侧板原地换成那份文件,Muse Space 让位,侧板没缩回卡片',
-      d.open && !d.panelMuse && /周三前把路线图发给团队/.test(d.panelText), JSON.stringify({ ...d, panelText: d.panelText.slice(0, 80) }))
+    check('M4 Agent 往 Desk 上放文件 → 小卡换成那份文件,Muse Space 让位,仍是小卡',
+      !d.open && d.card && !d.cardGone && !d.cardMuse && d.cardTitle === 'draft-plan.md', JSON.stringify({ open: d.open, card: d.card, cardGone: d.cardGone, cardMuse: d.cardMuse, cardTitle: d.cardTitle }))
 
-    // ── M5 清空 Desk ──
-    const clear = win.locator(btnSel(`.agent-desk[data-desk-session="${MUSE_ID}"]`, T.clear)).first()
+    // ── M5 清空 Desk(小卡上的那颗)──
+    const clear = win.locator(btnSel(`.agent-desk-card[data-desk-session="${MUSE_ID}"]`, T.clear)).first()
     const hadClear = await clear.count().catch(() => 0)
-    if (hadClear) await clear.click()
+    if (hadClear) await clear.click({ force: true })
     await sleep(900)
     d = await desk(MUSE_ID)
-    check('M5 「清空 Desk」→ Muse Space 原地回来,侧板仍展开', !!hadClear && d.open && d.panelMuse, JSON.stringify({ hadClear, open: d.open, panelMuse: d.panelMuse }))
+    check('M5 「清空 Desk」→ 小卡里 Muse Space 回来', !!hadClear && isHomeCard(d), JSON.stringify({ hadClear, open: d.open, cardMuse: d.cardMuse, cardTitle: d.cardTitle }))
 
-    // ── M6 收起为卡片,切走再回来 ──
-    await win.locator(btnSel(`.agent-desk[data-desk-session="${MUSE_ID}"]`, T.collapse)).first().click().catch(() => {})
+    // ── M6 点小卡展开 → 侧板是 Muse Space;切走再回来仍展开(用户自己展开的要记住);收起 → 回到小卡 ──
+    await win.locator(`.agent-desk-card[data-desk-session="${MUSE_ID}"]`).first().click().catch(() => {})
     await sleep(900)
     d = await desk(MUSE_ID)
-    const collapsed = !d.open && d.card && !d.cardGone && d.cardMuse && d.cardTitle === 'Muse Space'
+    const expanded = d.open && d.panelW > 300 && d.panelMuse && /Home/.test(d.panelText)
     await win.locator('.t2o-row', { hasText: 'Nova' }).first().click()
     await sleep(900)
     await win.locator('.t2o-row', { hasText: 'Muse' }).first().click()
     await win.waitForSelector(chat(MUSE_ID), { timeout: 8000 }).catch(() => {})
     await sleep(1200)
     const back = await desk(MUSE_ID)
-    check('M6 收起 → 卡片里是 Muse Space;切走再回来仍是卡片(不再自动展开)', collapsed && !back.open && back.cardMuse,
-      JSON.stringify({ collapsed, cardTitle: d.cardTitle, backOpen: back.open, backCardMuse: back.cardMuse }))
-    // 收起后 Desk 上没东西、也没展开:这份快照必须照样落盘(带 homeSeen),否则重启后又被当成第一次而自动展开
-    await sleep(900)
-    const saved = await win.evaluate((sid) => {
-      for (let i = 0; i < localStorage.length; i++) {
-        const k = localStorage.key(i) || ''
-        if (!k.includes('deskBySession')) continue
-        try { const v = JSON.parse(localStorage.getItem(k) || '{}')[sid]; if (v) return v } catch { /* ignore */ }
-      }
-      return null
-    }, MUSE_ID)
-    check('M6b 收起后的空快照落盘了(homeSeen、没有 open)→ 重启不会再自动展开', !!saved && saved.homeSeen === true && saved.mode !== 'open', JSON.stringify(saved))
-
-    // 暗色截图:重新展开再拍
-    await win.locator(`.agent-desk-card[data-desk-session="${MUSE_ID}"]`).first().click().catch(() => {})
-    await sleep(900)
-    // 暗色 token 挂在 `:root.dark`(base.css),data-mode 只管 color-scheme:两样一起翻,拍完翻回去
+    // 暗色截图:展开态。暗色 token 挂在 `:root.dark`(base.css),data-mode 只管 color-scheme:两样一起翻,拍完翻回去
     const wasMode = await win.evaluate(() => { const r = document.documentElement; const m = r.getAttribute('data-mode'); r.classList.add('dark'); r.setAttribute('data-mode', 'dark'); return m })
     await sleep(600)
     await win.screenshot({ path: path.join(SHOT_DIR, 'musechat-dark.png') })
     await win.evaluate((m) => { const r = document.documentElement; r.classList.remove('dark'); if (m) r.setAttribute('data-mode', m); else r.removeAttribute('data-mode') }, wasMode)
-    check('M8 截图已存(亮 / 暗)', fs.existsSync(path.join(SHOT_DIR, 'musechat-light.png')) && fs.existsSync(path.join(SHOT_DIR, 'musechat-dark.png')), SHOT_DIR)
+    await win.locator(btnSel(`.agent-desk[data-desk-session="${MUSE_ID}"]`, T.collapse)).first().click().catch(() => {})
+    await sleep(900)
+    const folded = await desk(MUSE_ID)
+    check('M6 点小卡 → 展开成侧板,里面是 Muse Space;切走再回来仍展开;收起 → 回到小卡',
+      expanded && back.open && back.panelMuse && isHomeCard(folded),
+      JSON.stringify({ expanded, panelW: d.panelW, backOpen: back.open, backPanelMuse: back.panelMuse, foldedCard: isHomeCard(folded) }))
+    check('M8 截图已存(亮 = 小卡 / 暗 = 展开)', fs.existsSync(path.join(SHOT_DIR, 'musechat-light.png')) && fs.existsSync(path.join(SHOT_DIR, 'musechat-dark.png')), SHOT_DIR)
 
     // ── M7 行菜单 ──
     const row = win.locator('.t2o-row', { hasText: 'Muse' }).first()
