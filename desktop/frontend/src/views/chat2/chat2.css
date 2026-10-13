@@ -921,7 +921,9 @@
   transition: background var(--duration-fast, .15s);
 }
 .t2-taskcard-actions > button:hover { background: var(--overlay-light, rgba(127,127,127,.1)); }
-.t2-taskcard-actions > button.primary { border-color: var(--accent-ink); color: var(--accent-ink); }
+/* 卡里最该点的那一颗是实心的(2026-10-13 用户定,聊天与收件箱的卡共用);从前只是把描边换成墨色,和旁边的按钮分不太开。 */
+.t2-taskcard-actions > button.primary { border-color: transparent; background: var(--action-fill); color: var(--on-action); }
+.t2-taskcard-actions > button.primary:hover { background: var(--action-fill-hover); }
 .t2-taskcard-actions > button > svg { flex: none; }
 .t2-taskcard-done { color: var(--text-muted); font-size: var(--ui-font-meta, 12px); }
 .t2-taskcard.busy .t2-taskcard-actions > button { opacity: .6; cursor: progress; }

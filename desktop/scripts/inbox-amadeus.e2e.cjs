@@ -348,7 +348,36 @@ async function main() {
       const icon = cs('.ibx-reader-actions .ibx-iconbtn:not([style])'), block = cs('.ibx-reader-body .amx-btnblock')
       return { icon: icon && [icon.display, icon.width, icon.height].join(' '), block: block && [block.display, block.flexDirection, block.rowGap].join(' ') }
     })
-    check('阅读面板的图标钮 24×24、按钮块是带行距的一列(规则没被前面的注释吃掉)', /^(inline-)?flex 24px 24px$/.test(live.icon || '') && live.block === 'flex column 4px', JSON.stringify(live))
+    check('阅读面板的图标钮 28×28、按钮块是带行距的一列(规则没被前面的注释吃掉)', /^(inline-)?flex 28px 28px$/.test(live.icon || '') && live.block === 'flex column 4px', JSON.stringify(live))
+    // 2026-10-13 翻新:列表两行(标题下面「发信人 · 正文第一句」)、行首按来源、头部发信人在标题之上、标签页显示信的标题、主按钮实心。
+    const look = await win.evaluate(() => {
+      const row = [...document.querySelectorAll('.t2sw-plug-list .t2s-srow')].find((r) => (r.textContent || '').includes('自动化汇总'))
+      const sub = row?.querySelector('.t2sw-plug-sub')
+      const meta = document.querySelector('.ibx-reader-meta')?.getBoundingClientRect(), title = document.querySelector('.ibx-reader-title')
+      const tr = title?.getBoundingClientRect()
+      return {
+        sub: sub?.textContent || '', oneLine: !!sub && sub.scrollHeight <= sub.clientHeight + 1, twoLines: !!row && row.getBoundingClientRect().height > 36,
+        leadSvg: !!row?.querySelector('.t2s-lead svg'), senderAbove: !!meta && !!tr && meta.bottom <= tr.top,
+        // 标题到正文第一行字的距离:从前头部下面一条线再空五十多像素,现在应当紧跟(正文那几层容器各自的上边距别又叠回来)。
+        gap: (() => {
+          const first = document.querySelector('.ibx-reader-body .ProseMirror > *')
+          if (!first || !tr) return -1
+          const r = document.createRange(); r.selectNodeContents(first)
+          return Math.round((r.getClientRects()[0]?.top ?? first.getBoundingClientRect().top) - tr.bottom)
+        })(),
+        gapTrail: (() => {
+          const out = []
+          for (let el = document.querySelector('.ibx-reader-body .ProseMirror > *'); el && !el.classList.contains('ibx-reader-wrap'); el = el.parentElement) {
+            const c = getComputedStyle(el); const pad = parseFloat(c.paddingTop) + parseFloat(c.marginTop)
+            if (pad) out.push(`${el.tagName.toLowerCase()}.${String(el.className).split(' ').slice(0, 2).join('.')}:${c.paddingTop}/${c.marginTop}`)
+          }
+          return out
+        })(),
+        titlePx: title ? getComputedStyle(title).fontSize : '', tab: [...document.querySelectorAll('.wb-tab-name')].some((t) => t.textContent === '按钮块'),
+      }
+    })
+    check('列表行两行:标题下面是「自动化 · 今日任务已汇总。」(只占一行),行首是来源图标;阅读面板发信人在标题之上、标题 24px、正文紧跟标题(8~30px);标签页显示信的标题',
+      look.sub === '自动化 · 今日任务已汇总。' && look.oneLine && look.twoLines && look.leadSvg && look.senderAbove && look.titlePx === '24px' && look.tab && look.gap >= 8 && look.gap <= 30, JSON.stringify(look))
     if (!NEGATIVE_CONTROL) await win.locator('.ibx-reader-wrap').first().screenshot({ path: SHOT_BTN }).catch(() => {})
     // 未配置的按钮:只读态 disabled;硬点一下也不许开自动化构建器
     await win.locator('.ibx-reader-body .amx-btnblock').nth(1).locator('.amx-btnblock-btn').click({ force: true }).catch(() => {})

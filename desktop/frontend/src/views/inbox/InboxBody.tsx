@@ -163,7 +163,10 @@ function ApprovalCard({ id }: { id: string }) {
   const settled = row && row !== 'loading' && row !== 'error' && row.status !== 'pending'
   return (
     <div className={`t2-taskcard ibx-approval${settled ? ' done' : ''}`} data-approval-id={id} data-approval-status={status}>
-      <div className="t2-taskcard-head"><ShieldCheck size={13} /> <b>{t('inbox.approval.title')}</b></div>
+      <div className="t2-taskcard-head">
+        <ShieldCheck size={13} /> <b>{t('inbox.approval.title')}</b>
+        {status === 'pending' && <span className="t2-taskcard-tag ibx-approval-wait">{t('inbox.approval.waiting')}</span>}
+      </div>
       {row === 'loading' ? (
         <div className="ibx-approval-meta">{t('inbox.approval.loading')}</div>
       ) : row === 'error' ? (

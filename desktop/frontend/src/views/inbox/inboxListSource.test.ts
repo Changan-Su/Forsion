@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { useInbox, senderOf, type InboxMessage } from '../../stores/inboxStore'
-import { inboxListSource as src } from './inboxListSource'
+import { inboxListSource as src, inboxSnippet } from './inboxListSource'
 
 const msg = (id: string, extra: Partial<InboxMessage> = {}): InboxMessage => ({
   id, title: `标题${id}`, body: '', sender_kind: 'agent', sender_id: 'muse', origin_broadcast_id: null,
@@ -62,6 +62,31 @@ describe('收件箱列表源(统一工作区)', () => {
     useInbox.setState({ unreadCount: 8 })
     expect(cb).toHaveBeenCalledTimes(1)
   })
+  it('行首按来源、第二行 = 发信人 · 正文第一句', () => {
+    const items = src.items()
+    expect(items.map((i) => i.icon)).toEqual(['agent', 'agent', 'cloud', 'info', 'info', 'workflow', 'workflow', 'agent'])
+    expect(items.find((i) => i.key === '3')!.subtitle).toBe('Forsion · 服务端公告 alpha')
+    expect(items.find((i) => i.key === '1')!.subtitle).toBe(senderOf(useInbox.getState().messages[0])) // 空正文:只有发信人,不留孤零零的分隔点
+    expect(items.find((i) => i.key === '8')!.subtitle).not.toContain('w-da28d2') // 规则 id 不进第二行
+  })
+
+  it('正文第一句:围栏 / 图片 / 表格 / 记号都不进摘要,与标题相同的行跳过', () => {
+    const F = '```'
+    expect(inboxSnippet(`${F}forsion-task\ntitle: x\n${F}\n\n| a | b |\n|---|---|\n\n## **今日**整理\n正文`)).toBe('今日整理')
+    expect(inboxSnippet('补 README\n\n> [!note] 提示\n> 细节', '补 README')).toBe('提示')
+    expect(inboxSnippet('![](https://x/y.png)\n\n- [ ] 看 [文档](https://x) 和 [[周报|本周周报]],跑 `write_file`')).toBe('看 文档 和 本周周报,跑 write_file')
+    expect(inboxSnippet(`只有卡\n${F}forsion-approval\n{"id":"a"}`)).toBe('只有卡') // 没收口的围栏吃到结尾
+    expect(inboxSnippet(`${F}js\ncode\n${F}`)).toBe('')
+    expect(inboxSnippet('😀'.repeat(100))).toBe('😀'.repeat(80)) // 按码点截,不留半个 emoji
+    // 波浪线围栏、四个反引号套三个反引号(审批信里的任务书就是这么套的):里面的行一律不出来
+    expect(inboxSnippet('~~~js\nsecret\n~~~\n看得见')).toBe('看得见')
+    expect(inboxSnippet(`${F}\`forsion-task\ntitle: x\n${F}js\nsecret\n${F}\n${F}\`\n看得见`)).toBe('看得见')
+    expect(inboxSnippet(`前 ${F} 行内 ${F} 后`)).toBe('前 行内 后') // 不在行首的三个反引号是行内代码,不是围栏
+    const t0 = performance.now()
+    for (let i = 0; i < 200; i++) inboxSnippet('['.repeat(100_000))
+    expect(performance.now() - t0).toBeLessThan(500) // 只看开头:恶意长行不拖慢列表
+  })
+
   it('已归档列表的条目菜单保留取消归档入口', () => {
     const original = useInbox.getState().markArchived
     const markArchived = vi.fn()
