@@ -145,8 +145,9 @@ async function main() {
     const titleB = `fsn-appref-b-${TOKEN}`
     spawn('notepad.exe', [fileA], { detached: true, stdio: 'ignore' }).unref()
     const formB = spawn(POWERSHELL, ['-NoProfile', '-NonInteractive', '-Command',
-      'Add-Type -AssemblyName System.Windows.Forms; $f = New-Object System.Windows.Forms.Form; $f.Text = $env:FSN_PROBE_TITLE; $f.Width = 480; $f.Height = 320; [System.Windows.Forms.Application]::Run($f)'],
-    { stdio: 'ignore', windowsHide: true, env: { ...process.env, FSN_PROBE_TITLE: titleB } })
+      'Add-Type -AssemblyName System.Windows.Forms; $f = New-Object System.Windows.Forms.Form; $f.Text = $env:FSN_PROBE_TITLE; $f.Width = 480; $f.Height = 320; $f.ShowInTaskbar = $true; [System.Windows.Forms.Application]::Run($f)'],
+    // 不带 windowsHide:那个开关是让进程的**第一次 ShowWindow 按隐藏处理**,窗体会跟着控制台一起看不见(第一次真跑就栽在这:列不出这扇窗口)
+    { stdio: 'ignore', env: { ...process.env, FSN_PROBE_TITLE: titleB } })
     spawned.push(formB.pid)
 
     let list = null
@@ -157,7 +158,7 @@ async function main() {
     console.log(`  list: windows=${list.windows.length}, apps=${list.apps.length} (running=${list.apps.filter((a) => a.running).length}), error=${list.error ?? 'none'}`)
     console.log(`  window fields: ${Object.keys(list.windows[0] || {}).join(',')} | app fields: ${Object.keys(list.apps[0] || {}).join(',')}`)
     check('list has no error', !list.error, list.error)
-    check('both probe windows are listed', both)
+    check('both probe windows are listed', both, { notepad: list.windows.some((w) => w.title.includes(tokenA)), form: list.windows.some((w) => w.title === titleB) })
     check('window shape {id, app, title} with canonical ids', list.windows.length > 0 && list.windows.every((w) => typeof w.app === 'string' && typeof w.title === 'string' && w.title && canonWinId(w.id) === w.id))
     check('app shape {id, name, running} with canonical ids', list.apps.length > 0 && list.apps.every((a) => typeof a.name === 'string' && a.name && typeof a.running === 'boolean' && canonWinId(a.id) === a.id))
     check('nothing is attributed to ApplicationFrameHost', ![...list.windows, ...list.apps].some((x) => /applicationframehost/i.test(x.id)))
