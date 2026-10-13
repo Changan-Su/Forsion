@@ -7,9 +7,10 @@
  * - 左抽屉底部常驻:Space 切换条(原全局底栏移入)+ 账号卡 + 设置钮(读 ribbon 注册表,引擎不 import feature)。
  * - 「⋯」菜单:桌面 ribbon 底部功能的手机落点;账号/设置两项已迁去左抽屉底部,此处滤掉。
  * - 系统返回(Android):MobileRoot 派发可取消的 `forsion:mobile-back`,本壳先接管 tab sheet/「⋯」的关闭。
+ *   带 `detail.probe` 的那一种只是问「你接不接」:preventDefault 作答,**不许动手**(新加监听方照这个写)。
  * mobile 构建直接渲染它(MobileRoot);desktop/web 由 Shell 在 UI_MODE==='mobile' 时套「手机框」渲染。
  */
-import { Suspense, createElement, useEffect, useRef, useState, type RefObject } from 'react'
+import { Suspense, createElement, startTransition, useEffect, useRef, useState, type ReactNode, type RefObject } from 'react'
 import { flushSync } from 'react-dom'
 import { PanelLeft, PanelRight, X, MoreHorizontal, Plus, Zap, SlidersHorizontal, Check } from 'lucide-react'
 import { useSpaceStore, setActiveSpace, getActiveSpace, pinSpaceToHome, redirectOpenFromOnePage } from './spaceRegistry'
@@ -90,6 +91,21 @@ function useChromeAutoHide(ref: React.RefObject<HTMLElement | null>, enabled: bo
   return off
 }
 
+/** 主区那一格的视图晚一拍挂:只在它出生时人正停在两级导航的列表层上(主区整屏在屏外)才这样。
+ *
+ *  2026-10-13 用户实报「有点迟钝」,实测(降速 4 倍)底栏点 Tangu 要先卡 0.5~1.3 秒才开始切 —— 卡的是把列表后面那张
+ *  看不见的对话页整个装一遍(渲染消息、代码高亮、排版),装完才轮到列表上屏。这里把顺序倒过来:列表先上屏,这一格
+ *  随后作为一次可打断的后台渲染挂上(startTransition:分片做,人点了东西它让路)。人等不及先点了条目,主区带着空页
+ *  先滑进来,内容挂好即现。
+ *  ⚠️ 只管「出生在列表层」的那一次:不在列表层出生(主页、日历、宽屏、冷启动直接进主区)照旧同步挂;挂上之后一直留着。
+ *  ⚠️ 「在不在列表层」只在出生时读一次、不订阅:订阅的话每次进出主区这一格连同整个视图都要重渲一遍。
+ *  视图仍然不等人操作就会挂上(只是晚几百毫秒),所以靠主区视图起作用的东西(插件在主区里初始化的状态)不受影响。 */
+function LateMount({ children }: { children: () => ReactNode }) {
+  const [on, setOn] = useState(() => !(useWorkspace.getState().leftVisible && listFirstNow()))
+  useEffect(() => { if (!on) startTransition(() => setOn(true)) }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  return on ? children() : null
+}
+
 export function LeafHost({ extendable = true }: { extendable?: boolean } = {}) {
   // 订阅 active 的 id、type、以及 **params 的对象身份**。标题变化仍不重渲染宿主——视图渲染期
   // 调 leaf.setTitle 会触发宿主重渲染→再调 setTitle→无限循环(React #185)。
@@ -113,9 +129,11 @@ export function LeafHost({ extendable = true }: { extendable?: boolean } = {}) {
     <div className="mb-view" data-view={active.type} key={`${active.id}:${active.type}`}>
       <ViewErrorBoundary>
         <Suspense fallback={<Skeleton variant={skeletonVariantOf(active.type)} />}>
-          {extendable ? <ExtendViewHost present={presentDrawerExtension} ownerKey={identitySig(activeParams ?? active.params)}>
-            {(extendView) => def.factory({ leaf: active, params: activeParams ?? active.params, extendView })}
-          </ExtendViewHost> : def.factory({ leaf: active, params: activeParams ?? active.params })}
+          <LateMount>
+            {() => (extendable ? <ExtendViewHost present={presentDrawerExtension} ownerKey={identitySig(activeParams ?? active.params)}>
+              {(extendView) => def.factory({ leaf: active, params: activeParams ?? active.params, extendView })}
+            </ExtendViewHost> : def.factory({ leaf: active, params: activeParams ?? active.params }))}
+          </LateMount>
         </Suspense>
       </ViewErrorBoundary>
     </div>
@@ -230,7 +248,22 @@ function Drawer({ side, docked, showFoot, page }: { side: 'left' | 'right'; dock
  *     「React 已提交」这件事确定发生在 rAF 之前 —— 本控制器是原生监听,普通更新不保证这个先后。
  *     中间这一帧内联样式仍在(它压过 .open 与 push 那几条),所以看到的仍是手指停下的位置;
  *     摘 data-drag 的同时清掉内联样式,过渡从 .open 那条恢复,从当前位置接着补间。
+ *
+ *  系统返回手势也借这一套(`drawerPreview`,2026-10-13 用户实报「不跟手」):从屏幕边缘起手的返回归系统,页面只收到一个
+ *  touchcancel,手指滑的过程里什么都不动,松手才跳。Android 14 起系统把手势走到哪告诉 App —— 宿主(mobile 的
+ *  nativeBack)转给这里,画成和页内横滑同一个中间态。系统不报进度的版本没有 begin / move,松手那一下照旧走过渡动画。
  */
+/** 系统返回手势的中间态:宿主先问清这一下返回会动哪一侧(`begin`),再逐帧报走了多远(`move`,0→1),最后 `end`。 */
+export const drawerPreview = {
+  /** 开始预览把 `side` 那一侧拉开 / 收起(看它现在开没开)。拿不到面板(宽屏并排、该侧没内容)或页内正在拖 → false,这一下不预览。 */
+  begin: (side: 'left' | 'right'): boolean => previewImpl?.begin(side) ?? false,
+  move: (t: number): void => previewImpl?.move(t),
+  /** `commit` = 这一下返回成了(按预览的方向落定),否则弹回去。返回值:是不是由预览接下了这一下
+   *  (没在预览,或预览期间这一侧已经被别的东西开 / 收过 → false,调用方照现在的状态自己做这一下返回)。 */
+  end: (commit: boolean): boolean => previewImpl?.end(commit) ?? false,
+}
+let previewImpl: { begin(side: 'left' | 'right'): boolean; move(t: number): void; end(commit: boolean): boolean } | null = null
+
 function useDrawerDrag(
   bodyRef: RefObject<HTMLDivElement | null>,
   wide: boolean,
@@ -261,10 +294,19 @@ function useDrawerDrag(
     let d: Drag | null = null
     const clamp = (n: number): number => (n < 0 ? 0 : n > 1 ? 1 : n)
     let painted: HTMLElement[] = []
+    let clearAt = 0
     const clearDrag = (): void => {
+      if (clearAt) { cancelAnimationFrame(clearAt); clearAt = 0 }
       body.removeAttribute('data-drag')
       for (const el of painted) { el.style.transform = ''; el.style.opacity = '' }
       painted = []
+    }
+    /** 松手后的清理排到下一帧(见上面「松手顺序」)。⚠️ 排着的这一帧在下一次起手时必须取消(clearDrag 里):主线程一卡,
+     *  一帧能有几百毫秒,够人再按一次返回 —— 不取消的话它会把**新这一次**的 painted / data-drag 清掉,之后画上去的
+     *  transform 就没人收了,主区停在半路(Codex 评审,2026-10-13)。 */
+    const clearNextFrame = (): void => {
+      if (clearAt) cancelAnimationFrame(clearAt)
+      clearAt = requestAnimationFrame(() => { clearAt = 0; clearDrag() })
     }
     /** 把进度画到三个元素上。与 singleColumn.css 里 .open / .push-* / .on 的终态是同一组算式的 p=0 / p=1。 */
     const paint = (dr: Drag): void => {
@@ -273,6 +315,21 @@ function useDrawerDrag(
       if (dr.panel) dr.panel.style.transform = `translateX(${pct(left ? dr.p - 1 : 1 - dr.p)})`
       if (dr.main) dr.main.style.transform = dr.nav && left ? `translateX(${pct(dr.p)})` : `translateX(calc(${(left ? dr.p : -dr.p).toFixed(4)} * var(--mb-panelw)))`
       if (dr.dim) dr.dim.style.opacity = dr.nav && left ? '0' : dr.p.toFixed(4)
+    }
+
+    /** 认下被拖的三个元素并进入拖拽态(`dr.side` 已定)。面板没挂上 → false。 */
+    const arm = (dr: Drag): boolean => {
+      const panel = body.querySelector<HTMLElement>(`.mb-drawer--${dr.side}`)
+      dr.w = panel?.getBoundingClientRect().width ?? 0
+      if (!dr.w) return false
+      clearDrag() // 上一次松手留给下一帧清的内联样式:现在就清,别和这一次的叠在一起
+      dr.panel = panel
+      dr.main = envRef.current.wide ? null : body.querySelector<HTMLElement>(':scope > .mb-main') // 宽屏右抽屉不推 main
+      dr.dim = body.querySelector<HTMLElement>(':scope > .mb-push-dim')
+      dr.nav = !!body.closest('.mb-shell')?.hasAttribute('data-list-first')
+      painted = [dr.panel, dr.main, dr.dim].filter((el): el is HTMLElement => !!el)
+      body.dataset.drag = dr.side as string
+      return true
     }
 
     const onStart = (e: TouchEvent): void => {
@@ -296,7 +353,7 @@ function useDrawerDrag(
     }
 
     const onMove = (e: TouchEvent): void => {
-      if (!d) return
+      if (!d || sys) return
       const t = e.touches[0]
       if (!t) return
       const dx = t.clientX - d.x0
@@ -314,16 +371,7 @@ function useDrawerDrag(
         else if (dx > 0 && env.hasLeft && !env.wide) { d.side = 'left'; d.opening = true }
         else if (dx < 0 && env.hasRight) { d.side = 'right'; d.opening = true }
         else { d = null; return }
-        const panel = body.querySelector<HTMLElement>(`.mb-drawer--${d.side}`)
-        d.w = panel?.getBoundingClientRect().width ?? 0
-        if (!d.w) { d = null; return } // 面板还没挂上(该侧没有内容)→ 不拖
-        clearDrag() // 上一次松手留给下一帧清的内联样式:现在就清,别和这一次的叠在一起
-        d.panel = panel
-        d.main = envRef.current.wide ? null : body.querySelector<HTMLElement>(':scope > .mb-main') // 宽屏右抽屉不推 main
-        d.dim = body.querySelector<HTMLElement>(':scope > .mb-push-dim')
-        d.nav = !!body.closest('.mb-shell')?.hasAttribute('data-list-first')
-        painted = [d.panel, d.main, d.dim].filter((el): el is HTMLElement => !!el)
-        body.dataset.drag = d.side
+        if (!arm(d)) { d = null; return } // 面板还没挂上(该侧没有内容)→ 不拖
       }
       const now = Date.now()
       if (now > d.lastT) d.vx = (t.clientX - d.lastX) / (now - d.lastT)
@@ -346,7 +394,41 @@ function useDrawerDrag(
       const ws = useWorkspace.getState()
       const isOpen = cur.side === 'left' ? ws.leftVisible : ws.rightVisible
       if (wantOpen !== isOpen) flushSync(() => ws.toggleSidebar(cur.side as 'left' | 'right'))
-      requestAnimationFrame(clearDrag)
+      clearNextFrame()
+    }
+
+    // 系统返回手势的预览(见上面 drawerPreview):同一个 paint / 同一个松手顺序,只是进度由宿主报。
+    let sys: Drag | null = null
+    const mine = previewImpl = {
+      begin(side: 'left' | 'right'): boolean {
+        if (d?.side || sys) return false // 页内正拖着,或上一个手势还没收尾
+        const ws = useWorkspace.getState()
+        if (side === 'left' && envRef.current.wide) return false // 宽屏左栏是并排的常驻列,不是抽屉
+        const open = side === 'left' ? ws.leftVisible : ws.rightVisible
+        const dr: Drag = { x0: 0, y0: 0, ok: true, side, opening: !open, w: 0, p: open ? 1 : 0, panel: null, main: null, dim: null, nav: false, lastX: 0, lastT: 0, vx: 0 }
+        if (!arm(dr)) return false
+        d = null
+        sys = dr
+        paint(dr)
+        return true
+      },
+      move(t: number): void {
+        if (!sys) return
+        sys.p = clamp(sys.opening ? t : 1 - t)
+        paint(sys)
+      },
+      end(commit: boolean): boolean {
+        const cur = sys
+        sys = null
+        if (!cur) return false
+        const ws = useWorkspace.getState()
+        // 预览期间这一侧被别的东西开 / 收过(现在已经是预览要去的样子)→ 不替它落定:再 toggle 一次就反了。
+        // 交回调用方照现在的状态重新算这一下返回。
+        const stale = (cur.side === 'left' ? ws.leftVisible : ws.rightVisible) === cur.opening
+        if (commit && !stale) flushSync(() => ws.toggleSidebar(cur.side as 'left' | 'right'))
+        clearNextFrame()
+        return !(commit && stale)
+      },
     }
 
     body.addEventListener('touchstart', onStart, { passive: true })
@@ -358,6 +440,7 @@ function useDrawerDrag(
       body.removeEventListener('touchmove', onMove)
       body.removeEventListener('touchend', onEnd)
       body.removeEventListener('touchcancel', onEnd)
+      if (previewImpl === mine) previewImpl = null
       clearDrag()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -870,8 +953,10 @@ export const SingleColumnHost: React.FC<{ dark?: boolean; soft?: boolean; buildD
   sheetsRef.current = { tabs: tabsOpen, more: moreOpen }
   useEffect(() => {
     const onBack = (e: Event): void => {
-      if (sheetsRef.current.tabs) { setTabsOpen(false); e.preventDefault(); return }
-      if (sheetsRef.current.more) { setMoreOpen(false); e.preventDefault() }
+      // probe = 宿主只是问「这一下返回你接不接」(手势刚开始,人可能中途放弃):答了就行,不动手。见 mobile 的 planBack。
+      const probe = (e as CustomEvent<{ probe?: boolean } | null>).detail?.probe
+      if (sheetsRef.current.tabs) { if (!probe) setTabsOpen(false); e.preventDefault(); return }
+      if (sheetsRef.current.more) { if (!probe) setMoreOpen(false); e.preventDefault() }
     }
     window.addEventListener('forsion:mobile-back', onBack)
     return () => window.removeEventListener('forsion:mobile-back', onBack)

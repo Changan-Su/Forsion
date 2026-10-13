@@ -20,7 +20,7 @@ export { label } from './types'
 
 export { Shell } from './Shell'
 export { startOpenDrag } from './WorkspaceHost'
-export { SingleColumnHost, accountMenuRows } from './SingleColumnHost'
+export { SingleColumnHost, accountMenuRows, drawerPreview } from './SingleColumnHost'
 export { listFirstNow, useListFirst } from './listFirst'
 export { MiniColumnHost } from './MiniColumnHost'
 export { supportsMiniPanel, setMiniMainHandler, showInMainPanel, setMiniViewRouter } from './miniPanel'

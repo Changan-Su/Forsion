@@ -23,6 +23,8 @@ public class AppActivity extends BridgeActivity {
         // 通用原生半屏(菜单 / 输入 / 确认)与原生顶栏:JS 侧 lcl/engine/nativeSheet.ts、nativeChrome.ts 的可选宿主。
         registerPlugin(NativeSheetPlugin.class);
         registerPlugin(NativeChromePlugin.class);
+        // 系统返回手势的过程(Android 14 起才有)与「再返回一次退出」的提示;一下返回做什么仍在页面里定(MobileRoot)。
+        registerPlugin(NativeBackPlugin.class);
         // 系统文件选择器:原生半屏里点「添加文件」时 WebView 没有用户激活,<input type=file>.click() 会被 Chromium 静默丢掉。
         registerPlugin(NativeFilePickerPlugin.class);
         // 分享到 Forsion:系统分享面板送来的文字 / 文件(清单里 AppActivity 的 SEND / SEND_MULTIPLE 过滤器)。

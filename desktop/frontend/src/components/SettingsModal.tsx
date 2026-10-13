@@ -1263,6 +1263,7 @@ export const SettingsModal: React.FC<{
     if (!p.open || !mobileSettings || mobileMenuOpen) return
     const backToMenu = (event: Event): void => {
       event.preventDefault()
+      if ((event as CustomEvent<{ probe?: boolean } | null>).detail?.probe) return // 宿主只是问接不接(手势刚开始):不动手
       backOneLevel()
     }
     window.addEventListener('forsion:mobile-back', backToMenu)

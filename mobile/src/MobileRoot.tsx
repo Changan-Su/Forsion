@@ -35,13 +35,14 @@ import { installNotificationWiring } from '@/stores/notificationWiring'
 import { ensureAmadeusReady } from '@/amadeusPlugins'
 import { AnimatePresence, motion } from 'framer-motion'
 import { useShallow } from 'zustand/react/shallow'
-import { SingleColumnHost, listFirstNow, useWorkspace, useNav, useNativeChromeClaim, useNativeChromeSpaces, useRibbonStore, useSpaceStore, setActiveSpace, type NativeChromeClaim } from '@lcl/engine'
+import { SingleColumnHost, listFirstNow, useWorkspace, useNav, useNativeChromeClaim, useNativeChromeSpaces, useRibbonStore, useSpaceStore, setActiveSpace, drawerPreview, type NativeChromeClaim } from '@lcl/engine'
 // 命令面板:desktop 由 `Shell.tsx` 渲染,而移动端把 Shell 换成了空壳(vite.config engineSwap)——
 // 于是 ribbon 的 rb-cmd 项(无条件注册,经「⋯」菜单在移动端可点)点了只是把 paletteOpen 置 true,
 // 没有任何东西渲染它。宿主责任随外壳一起被换掉了,得在这儿接回来。
 import { CommandPalette } from '@lcl/engine/CommandPalette'
 import { buildDefaultLayout } from '@/bootstrapEngine'
 import { MobileUnitsSheet, useUnitsSheet } from './UnitsSheet'
+import { exitHint, onBackGesture } from './nativeBack'
 import { homeTarget } from '@/services/engine/targets'
 
 /** 移动端本地 inbox 内容来自云端广播,但无服务端 inboxPull 调度器 → 客户端定时静默拉(绕开 inboxStore.pull 的 toast)。 */
@@ -65,70 +66,113 @@ function useInboxAutoPull(): void {
   }, [])
 }
 
-/** 链底:这个 Space 的第一层上再按返回。不在主页 → 回主页;已经在主页 → 挂起 app(Android 的惯例:
- *  顶层页面的返回先回起始页,只有起始页才退出)。
+/** 主页上两次返回之间最多隔多久算「再返回一次」(= 系统短 Toast 显示的时长)。 */
+const EXIT_WINDOW_MS = 2000
+let exitArmedAt = 0
+
+/** 链底:这个 Space 的第一层上再按返回。不在主页 → 回主页;在主页 → 先提示「再返回一次退出」,两秒内再来一次才挂起 app。
  *  2026-10-13 用户实报「侧滑返回…一不小心就返回桌面了」:改之前每个 Space 的第一层(会话列表、笔记列表、日历…)
  *  都是一次返回就退到桌面,而全面屏的返回是**左右两条边**往里滑 —— 在列表上横着划一下、起手靠边就中。
- *  主页 = 排第一个的 Space,和底栏认「主页」是同一条(spaceDock.ts:按位置)。仪器:`emu:nativeshell` 的「back:」那条。 */
+ *  主页 = 排第一个的 Space,和底栏认「主页」是同一条(spaceDock.ts:按位置)。
+ *  主页那一下用提示而不用系统的「缩小预览」:预览只有 Android 15 才默认有,提示在哪个版本上都一样(用户同日定:
+ *  「不要管我手机型号,要确保安卓都有基本的一致体验」)。弹不了提示的宿主(浏览器)照旧一次就退。
+ *  仪器:`emu:nativeshell` 的「back:」那条。 */
 function leaveOrHome(): void {
   const { spaces, activeSpaceId } = useSpaceStore.getState()
   const home = spaces[0]?.id
-  if (home && activeSpaceId !== home && spaces.some((x) => x.id === activeSpaceId)) setActiveSpace(home)
-  else void CapApp.minimizeApp()
+  if (home && activeSpaceId !== home && spaces.some((x) => x.id === activeSpaceId)) { setActiveSpace(home); return }
+  const now = Date.now()
+  if (now - exitArmedAt < EXIT_WINDOW_MS || !exitHint()) { exitArmedAt = 0; void CapApp.minimizeApp(); return }
+  exitArmedAt = now
 }
 
-/** Android 系统返回(实体键/全面屏侧滑手势)接管:壳内 sheet→浮层→抽屉→tab 内后退→关视图→回主页→挂起。
+/** 一下返回会做什么。`slide` = 它是把哪一侧的面板滑开 / 收起(手势进行中可以先画出来的那种);`run` = 真去做。
+ *  ⚠️ 算这个不许有副作用:手势一开始就要问一遍(只为知道画不画预览),人可能中途放弃。
+ *     壳和各浮层靠 `forsion:mobile-back` 接返回 —— 先派一个 `detail.probe` 的,监听方只答「我接」不动手。 */
+function planBack(): { slide?: 'left' | 'right'; run: () => void } {
+  // 搜索面板开着时永远在最上面(下拉搜索 / 顶栏搜索钮 / 外接键盘的快捷键打开;z-index 高过设置、商店、旁聊那几张整页):
+  // 返回先关它。排在后面的话,它盖着的那一层会先被关掉;不排的话,列表层上按返回直接把 app 退到后台。
+  if (useQuickFind.getState().open) return { run: () => useQuickFind.getState().close() }
+  // 再问壳:标签页 sheet /「⋯」菜单 / 编辑器浮层 / 设置二级页…开着 → 由它们接管(可取消事件)。
+  const taken = !window.dispatchEvent(new CustomEvent('forsion:mobile-back', { cancelable: true, detail: { probe: true } }))
+  if (taken) return { run: () => { window.dispatchEvent(new Event('forsion:mobile-back', { cancelable: true })) } }
+  const app = useApp.getState()
+  // 引导是全屏浮层(zIndex 60):不在这儿吃掉返回,它下面的 leaf 会被 closeLeaf 关掉/直接挂起 app。
+  // 不自动关引导 —— 退出引导只走里面的「跳过」(那条会记 dismiss),否则下次启动又弹一遍。
+  if (app.onboarding) return { run: () => {} }
+  // 旁聊全屏页在最上层:返回先关它。判据与 BtwHost 同一条 —— 它因切了会话而隐着时不能白吞一次返回
+  if (btwWebVisible(useBtw.getState().webOpen, app.activeId)) return { run: () => useBtw.getState().closeWeb() }
+  // 应用市场全屏页(详情页开着时,MarketModal 自己在 forsion:mobile-back 里先退回列表)
+  if (app.marketOpen) return { run: () => app.closeMarket() }
+  if (app.settingsOpen) return { run: () => app.closeSettings() }
+  const ws = useWorkspace.getState()
+  // 两级导航(原生底栏,见 lcl 的 listFirstNow):左栏是这个 Space 的第一层 → 在列表层按返回 = 已在链底(见 leaveOrHome);
+  // 在主区按返回 = 先页内后退(只退这一趟进来之后走过的页,见 lcl 的 listTrips),退无可退就回列表
+  // (不关视图,再点同一条目即回)。
+  const listFirst = listFirstNow()
+  if (listFirst && ws.leftVisible) return { run: leaveOrHome }
+  if (ws.leftVisible) return { slide: 'left', run: () => ws.toggleSidebar('left') }
+  if (ws.rightVisible) return { slide: 'right', run: () => ws.toggleSidebar('right') }
+  const active = ws.mainTabs.find((t) => t.active)
+  if (active) {
+    const st = useNav.getState().stacks[active.id]
+    if (st && st.idx > 0) return { run: () => useNav.getState().back(active.id) }
+    if (listFirst) return { slide: 'left', run: () => ws.toggleSidebar('left') }
+    // 落地页(`home` 空态占位 / 主页 Space 的 `homepage`)不关 —— 已经在链底。
+    // ⚠️ 漏掉 `homepage` 时:主页上按一下返回 = closeLeaf → 唯一主 leaf 就地变 `home` 空态
+    // (只有 logo 的空页)并被存盘,重启也回不来 = 用户实报的「默认 Homepage 空白」。
+    if (active.type !== 'home' && active.type !== 'homepage') { // 白板/PDF/会话等 → 关回列表/home
+      return { run: () => {
+        ws.closeLeaf(active.id)
+        // 固定 View(Space 级 pinned,区内最后一个)关不掉,closeLeaf 是空操作 → 这就是链底,往下走。
+        // 不这样判,返回键在日历 / 图像工作台 / 浏览器里的 Tangu 会话上按了什么都不发生(2026-10-04 合并 main 后 e2e:homeback 抓到)。
+        const now = useWorkspace.getState().mainTabs.find((t) => t.active)
+        if (now?.id === active.id && now.type === active.type) leaveOrHome()
+      } }
+    }
+  }
+  return { run: leaveOrHome } // 已在底
+}
+
+/** Android 系统返回(实体键/全面屏侧滑手势)接管:壳内 sheet→浮层→抽屉→tab 内后退→关视图→回主页→提示→挂起。
  *  此前无人监听 backButton,返回手势直接把 app 退到后台——「侧滑返回没反应」的根因。
  *  Manifest 已开 enableOnBackInvokedCallback(Capacitor App 插件走 androidx OnBackPressedDispatcher,自动桥到新 API)。
- *  ⚠️ 系统自己的「返回桌面」预览动画在这里**不会出现**(2026-10-13 模拟器实测,Android 15):Capacitor 那个回调一直
- *     启用着,系统就不画预览,连链底那一档也不画 —— 挂起是我们自己调 minimizeApp 做的,手指滑的过程中画面不动。 */
+ *  手势进行中(Android 14 起系统才报,见 nativeBack.ts):这一下返回要是「滑开 / 收起一侧面板」(回列表、关抽屉),
+ *  面板跟着手指走,和页内横滑同一个画法(lcl 的 drawerPreview);别的返回(关浮层、页内后退、回主页)过程中不动。
+ *  ⚠️ 系统自己的「返回桌面」预览动画在这里**不会出现**(2026-10-13 模拟器实测,Android 15):返回回调一直启用着,
+ *     系统就不画预览,连链底那一档也不画 —— 挂起是我们自己调 minimizeApp 做的。 */
 function useAndroidBack(): void {
   useEffect(() => {
     if (!window.tangu?.mobile) return // 仅原生壳;浏览器无此事件
-    const sub = CapApp.addListener('backButton', () => {
-      // 搜索面板开着时永远在最上面(下拉搜索 / 顶栏搜索钮 / 外接键盘的快捷键打开;z-index 高过设置、商店、旁聊那几张整页):
-      // 返回先关它。排在后面的话,它盖着的那一层会先被关掉;不排的话,列表层上按返回直接把 app 退到后台。
-      if (useQuickFind.getState().open) { useQuickFind.getState().close(); return }
-      // 再问壳:标签页 sheet /「⋯」菜单开着 → 由 SingleColumnHost 接管关闭(可取消事件)。
-      const shellEv = new Event('forsion:mobile-back', { cancelable: true })
-      window.dispatchEvent(shellEv)
-      if (shellEv.defaultPrevented) return
-      const app = useApp.getState()
-      // 引导是全屏浮层(zIndex 60):不在这儿吃掉返回,它下面的 leaf 会被 closeLeaf 关掉/直接挂起 app。
-      // 不自动关引导 —— 退出引导只走里面的「跳过」(那条会记 dismiss),否则下次启动又弹一遍。
-      if (app.onboarding) return
-      // 旁聊全屏页在最上层:返回先关它。判据与 BtwHost 同一条 —— 它因切了会话而隐着时不能白吞一次返回
-      if (btwWebVisible(useBtw.getState().webOpen, app.activeId)) { useBtw.getState().closeWeb(); return }
-      // 应用市场全屏页(详情页开着时,MarketModal 自己在 forsion:mobile-back 里先退回列表)
-      if (app.marketOpen) { app.closeMarket(); return }
-      if (app.settingsOpen) { app.closeSettings(); return }
-      const ws = useWorkspace.getState()
-      // 两级导航(原生底栏,见 lcl 的 listFirstNow):左栏是这个 Space 的第一层 → 在列表层按返回 = 已在链底(见 leaveOrHome);
-      // 在主区按返回 = 先页内后退(只退这一趟进来之后走过的页,见 lcl 的 listTrips),退无可退就回列表
-      // (不关视图,再点同一条目即回)。
-      const listFirst = listFirstNow()
-      if (listFirst && ws.leftVisible) { leaveOrHome(); return }
-      if (ws.leftVisible) { ws.toggleSidebar('left'); return }
-      if (ws.rightVisible) { ws.toggleSidebar('right'); return }
-      const active = ws.mainTabs.find((t) => t.active)
-      if (active) {
-        const st = useNav.getState().stacks[active.id]
-        if (st && st.idx > 0) { useNav.getState().back(active.id); return }
-        if (listFirst) { ws.toggleSidebar('left'); return }
-        // 落地页(`home` 空态占位 / 主页 Space 的 `homepage`)不关 —— 已经在链底,该挂起 app。
-        // ⚠️ 漏掉 `homepage` 时:主页上按一下返回 = closeLeaf → 唯一主 leaf 就地变 `home` 空态
-        // (只有 logo 的空页)并被存盘,重启也回不来 = 用户实报的「默认 Homepage 空白」。
-        if (active.type !== 'home' && active.type !== 'homepage') { // 白板/PDF/会话等 → 关回列表/home
-          ws.closeLeaf(active.id)
-          // 固定 View(Space 级 pinned,区内最后一个)关不掉,closeLeaf 是空操作 → 这就是链底,往下走到挂起。
-          // 不这样判,返回键在日历 / 图像工作台 / 浏览器里的 Tangu 会话上按了什么都不发生(2026-10-04 合并 main 后 e2e:homeback 抓到)。
-          const now = useWorkspace.getState().mainTabs.find((t) => t.active)
-          if (now?.id !== active.id || now.type !== active.type) return
-        }
-      }
-      leaveOrHome() // 已在底
+    let sliding: 'left' | 'right' | null = null
+    const stop = (): void => { if (sliding) { sliding = null; drawerPreview.end(false) } }
+    const offGesture = onBackGesture((e) => {
+      if (e.phase === 'start') {
+        stop() // 上一个手势没等到收尾(系统没报取消)→ 先弹回去,不然它的中间态一直留在屏上、下一次也起不了手
+        const side = planBack().slide
+        sliding = side && drawerPreview.begin(side) ? side : null
+      } else if (e.phase === 'progress') {
+        // 走了多远:从哪条边进来就按离那条边多远算(左边进来 = 手指的横向位置)
+        if (sliding && typeof e.x === 'number') drawerPreview.move(e.edge === 'right' ? 1 - e.x : e.x)
+      } else stop()
     })
-    return () => { void sub.then((h) => h.remove()) }
+    const sub = CapApp.addListener('backButton', () => {
+      // 松手这一刻重新算一遍,不用起手时的那份:手指按着的这段时间里可能弹出了别的东西(搜索面板、审批、浮层),
+      // 那一下返回该先关它 —— 和系统不报手势过程的版本(只在松手时算一次)是同一个结果。
+      const plan = planBack()
+      if (sliding) {
+        const side = sliding
+        sliding = null
+        // 还是滑同一侧 → 按预览的方向落定(同页内横滑松手的那套顺序),不再另走一遍链
+        if (plan.slide === side && drawerPreview.end(true)) return
+        drawerPreview.end(false)
+      }
+      plan.run()
+    })
+    // 手势到一半 App 被切到后台:系统不保证报取消,回来时面板不能还停在半路
+    const onHide = (): void => { if (document.hidden) stop() }
+    document.addEventListener('visibilitychange', onHide)
+    return () => { offGesture(); document.removeEventListener('visibilitychange', onHide); void sub.then((h) => h.remove()) }
   }, [])
 }
 
