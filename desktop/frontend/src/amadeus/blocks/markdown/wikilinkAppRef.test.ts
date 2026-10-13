@@ -65,7 +65,11 @@ describe('渲染', () => {
   })
 
   it('芯片本体是聊天同款的 .app-ref:带种类,窗口关了变灰', async () => {
-    await vi.waitFor(() => expect(chips()[0].querySelector('.app-ref[data-kind="window"][data-state="closed"]')).toBeTruthy())
+    // 两枚芯片的状态各自到、各自重渲:两枚都等到再往下断言(全量跑、机器忙时第二枚会晚一拍)
+    await vi.waitFor(() => {
+      expect(chips()[0].querySelector('.app-ref[data-kind="window"][data-state="closed"]')).toBeTruthy()
+      expect(chips()[1].querySelector('.app-ref[data-state="running"]')).toBeTruthy()
+    })
     const [win, app] = chips().map((el) => el.querySelector<HTMLElement>('.app-ref')!)
     expect(win.hasAttribute('data-off')).toBe(true)
     expect(app.dataset.kind).toBe('app')
