@@ -209,3 +209,46 @@ describe('被后来的挂载收掉 = 完整的卸载', () => {
     expect(el.childElementCount).toBe(0)
   })
 })
+
+// 划线条(2026-10-13):条和结果卡是 body 下的浮层,插件的元素里一个节点都不加(所以不在上面那张「el 归还」的表里)。
+// 走真的 ctx.ui.mountSelectionBar:表面是懒加载的,装好之前的 show() 要补上;停用插件 = 条和它的宿主层一起收。
+// 负对照(2026-10-13 实跑):pluginStore 里那份挂载不进 scope.own → 「停用即收」红;装好之后不补 show() → 第一条「出条」红。
+it('ctx.ui.mountSelectionBar:不往插件的元素里加节点;show() 出条、视图工具拿到选中的文字;hide() 收;停用插件连宿主层一起收', async () => {
+  const { usePluginStore } = await import('./pluginStore')
+  const bar = () => document.querySelector<HTMLElement>('[data-testid="selection-bar"]')
+  const layers = () => document.querySelectorAll('body > div[hidden]').length
+  const settle = () => act(async () => { await new Promise((r) => setTimeout(r, 0)) })
+  const rect = { left: 10, right: 60, top: 100, bottom: 120 }
+  const before = layers()
+  const run = vi.fn()
+  let ctx!: import('./types').PluginContext
+  usePluginStore.setState({ initialized: false, plugins: [], activeIds: [], disabledIds: [], disposers: {}, selectionActions: [] })
+  usePluginStore.getState().init([{ id: 'selbar', name: 'selbar', version: '0', setup: (c) => { ctx = c } }])
+
+  let handle!: import('./types').PluginSelectionBarHandle
+  await act(async () => {
+    handle = ctx.ui!.mountSelectionBar!(el, { view: 'reader', watch: false, ask: false, tools: [{ id: 'yellow', title: 'Yellow', color: '#fd0', run }] })
+    handle.show({ text: ' hello ', rect }) // 表面还没装好:记着,装好补上
+  })
+  await vi.waitFor(async () => { await settle(); expect(bar()).not.toBeNull() })
+  expect(bar()!.dataset.view).toBe('selbar:reader')
+  expect(el.childElementCount).toBe(0)
+  expect(layers()).toBe(before + 1)
+
+  await act(async () => { bar()!.querySelector('[data-act="yellow"]')!.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true })) })
+  expect(run).toHaveBeenCalledWith({ text: 'hello' })
+
+  await act(async () => { handle.hide() })
+  expect(bar()).toBeNull()
+  await act(async () => { handle.show({ text: '', rect }) }) // 没有文字:不出
+  expect(bar()).toBeNull()
+
+  await act(async () => { handle.show({ text: 'again', rect }) })
+  expect(bar()).not.toBeNull()
+  await act(async () => { usePluginStore.getState().disable('selbar') })
+  expect(bar(), '停用即收').toBeNull()
+  expect(layers(), '宿主层也摘掉').toBe(before)
+  await act(async () => { handle.show({ text: 'late', rect }) }) // 收掉之后句柄是哑的
+  expect(bar()).toBeNull()
+  expect(errors).toEqual([])
+})
