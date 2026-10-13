@@ -16,9 +16,9 @@ Forsion 的插件分两类,设置里统一成一页管理,**内置**与**外置*
 
 一个插件包可以同时带**引擎插件、Agent、技能和 Space** —— 装一次全部就位,不必分头去四个地方装。捆绑进来的东西在父插件的卡片里级联管理:一起启停、一起卸载,看得见各自是什么。插件自带的 Space 装好即出现在 Ribbon 上。
 
-给开发者:带引擎插件的包上架商店时,安装目录名要等于 manifest 的 `id`。目录名是从商店条目的显示名推出来的(只留小写字母和数字,上架后不能改)。桌面 2.13.3 及更早的版本上,两者不一样时页面调不到包里的引擎插件(每次调用都是 404,不报错);之后的版本没有这个限制。投稿时先用一个能推出 `id` 的名字,过审前再改显示名,或者把 `minAppVersion` 设到 2.13.3 之后的版本。
+给开发者:带引擎插件的包上架商店时,安装目录名要等于 manifest 的 `id`。目录名是从商店条目的显示名推出来的(只留小写字母、数字和连字符,上架后不能改)。桌面 2.13.3 及更早的版本上,两者不一样时页面调不到包里的引擎插件(每次调用都是 404,不报错);之后的版本没有这个限制。投稿时先用一个能推出 `id` 的名字,过审前再改显示名,或者把 `minAppVersion` 设到 2.13.3 之后的版本。
 
-For developers: when a bundle that ships an engine plugin is listed in the Store, its install folder name must equal the manifest `id`. The folder name is derived from the listing's display name (lowercase letters and digits only; it cannot change after listing). On desktop 2.13.3 and earlier, a bundle whose folder name differs from its id cannot reach its own engine plugin (every call returns 404, with no error shown); later versions have no such limit. Submit under a name that yields the id and change the display name before approval, or set `minAppVersion` to a desktop version after 2.13.3.
+For developers: when a bundle that ships an engine plugin is listed in the Store, its install folder name must equal the manifest `id`. The folder name is derived from the listing's display name (lowercase letters, digits and hyphens only; it cannot change after listing). On desktop 2.13.3 and earlier, a bundle whose folder name differs from its id cannot reach its own engine plugin (every call returns 404, with no error shown); later versions have no such limit. Submit under a name that yields the id and change the display name before approval, or set `minAppVersion` to a desktop version after 2.13.3.
 
 ## 插件能做什么
 

@@ -451,6 +451,8 @@ describe('捆绑包里的引擎插件:scoped 路由挂在安装目录名下', ()
       expect(hit.status).toBe(200);
       expect(await hit.json()).toEqual({ user: 'u1' });
       expect((await fetch(`${base}/extensions/real-id/lc-kern/ping`)).status).toBe(404); // 包清单里的 id 不是路由的一部分
+      // 前缀不分大小写:桌面把手动装的 `My-Plugin` 这类目录名转成小写再拼,靠的就是这一条
+      expect((await fetch(`${base}/extensions/Store-Slug/lc-kern/ping`)).status).toBe(200);
     } finally {
       await new Promise((r) => server.close(r));
     }
