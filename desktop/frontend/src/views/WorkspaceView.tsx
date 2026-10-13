@@ -10,9 +10,9 @@ import { amadeusAvailable, sessionsAvailable } from '../features/runtime'
  * 主视图硬规则 → 本 Space 的默认档(SpaceDefinition.autoWorkspaceMode);右栏恒为文件。
  */
 import { Fragment, useMemo, useState, useEffect, useReducer, useRef, type ReactNode } from 'react'
-import { useWorkspace, activeMainPanel, useSpaceStore, getView } from '@lcl/engine'
+import { useWorkspace, activeMainPanel, useSpaceStore, getView, useListFirst, useNativeChromeExtras } from '@lcl/engine'
 import type { ViewProps } from '@lcl/engine'
-import { ChevronDown, ChevronRight, FileText, Folder, FolderOpen, ListFilter, MoreHorizontal, Plus, Search, X } from 'lucide-react'
+import { ChevronDown, ChevronRight, FileText, Folder, FolderOpen, ListFilter, MoreHorizontal, Pencil, Plus, Search, X } from 'lucide-react'
 import { usePluginStore } from '@amadeus/plugins/pluginStore'
 import type { ListAction, ListDropTarget, ListItem, ListSourceContribution } from '@amadeus/plugins/types'
 import { LIST_ROW_MIME, ancestorsOf, buildListTree, dropCandidates, flattenLeaves, isFolder, leafCount, type ListDropPosition, type ListNode } from '@amadeus/plugins/listTree'
@@ -34,6 +34,7 @@ import { useCodeStudio } from '../stores/codeStudioStore'
 import { VaultSideSwitch } from '../components/VaultSideSwitch'
 import { SidebarRow } from '../components/SidebarRow'
 import { CapabilityMenu } from '../components/CapabilityMenu'
+import { ListChips, ListFab, ListHint, PullHint, SwipeRow, closeOtherSwipes, usePullToSearch, type SwipeAction } from '../components/phoneList'
 import { ContextMenu, type CtxMenu } from '../components/RightPanel'
 import { resolveIcon } from '@amadeus/components/icons'
 import { ensureAmadeusReady } from '../amadeusPlugins'
@@ -53,6 +54,12 @@ registerMessages({
   'wsview.resultCount': { zh: '{count} 项', en: '{count} items' },
   'wsview.rename': { zh: '重命名', en: 'Rename' },
   'wsview.renameLabel': { zh: '重命名{title}', en: 'Rename {title}' },
+  // 手机的整屏列表:首次提示把这张列表自己的动作念一遍(动作名来自列表源)
+  'wsview.closeSearch': { zh: '关闭搜索', en: 'Close search' },
+  'wsview.phone.join': { zh: '、', en: ', ' },
+  'wsview.phone.hintSwipe': { zh: '向左滑动一行：{actions}。', en: 'Swipe a row left: {actions}.' },
+  'wsview.phone.hintHold': { zh: '长按右下角的按钮：{more}。', en: 'Press and hold the button at the bottom right: {more}.' },
+  'wsview.phone.hintBoth': { zh: '向左滑动一行：{actions}。长按右下角的按钮：{more}。', en: 'Swipe a row left: {actions}. Press and hold the button at the bottom right: {more}.' },
 })
 
 /** 当前活动主 leaf 的视图类型(订阅 mainTabs 驱动重算;焦点在侧栏时 activeMainPanel 有组内回退)。 */
@@ -274,12 +281,13 @@ export function PluginListBody({ src, stateKey }: { src: ListSourceContribution;
   const [dropKey, setDropKey] = useState<string | null>(null)
   const open = useOpenState(stateKey ?? src.id)
   const [renaming, setRenaming] = useState<string | null>(null)
+  const [searching, setSearching] = useState(false) // 手机:搜索框平时不在,点胶囊上的搜索钮 / 下拉才出来
   // 行在列表里被拖动:dragover 阶段读不到载荷,正在拖的那几行记在这里(只认本列表发起的拖动)。
   const dragKeys = useRef<string[] | null>(null)
   const [dragging, setDragging] = useState<string | null>(null)
   const [dropAt, setDropAt] = useState<{ key: string; position: ListDropPosition } | null>(null)
   // 源换了(插件切换/禁用重启)→ 过滤态跟着重置,免得拿旧源的分组键去查新源。
-  useEffect(() => { setQuery(''); setGroup(null); setMenu(null); setRenaming(null) }, [src])
+  useEffect(() => { setQuery(''); setGroup(null); setMenu(null); setRenaming(null); setSearching(false) }, [src])
 
   const groups = src.groups?.() ?? []
   const activeGroup = groups.find((item) => item.key === group)
@@ -291,6 +299,20 @@ export function PluginListBody({ src, stateKey }: { src: ListSourceContribution;
   const secondary = [...actions.filter((action) => action !== primary).map((action) => ({ ...action, id: `action:${action.id}` })),
     ...(src.groupActions ?? []).map((action) => ({ ...action, id: `group:${action.id}` }))]
   const activeKey = src.activeKey?.() ?? null
+  // 手机的整屏列表(布局「二」:分类胶囊、图标块 + 两行的行、左滑出操作、右下角主按钮 —— 与会话 / 笔记列表同一套零件,
+  // 见 components/phoneList)。只给平铺的源:带文件夹 / 层级的源照旧画树(树的缩进、开合、拖放在那套版式里没有位置)。
+  // 看的是没筛过的那一份 —— 筛出来的结果恰好全是顶层行时,不能因此换一套版式。
+  const phone = useListFirst()
+  const flatNow = phone && !(query || activeGroup ? src.items() : items).some((it) => isFolder(it) || it.parent)
+  // 正在改名时不换版式:换了行的外壳,输入框会重挂,打到一半的名字就没了(订阅推来一个文件夹时会碰上)。
+  const flatHeld = useRef(flatNow)
+  if (!renaming) flatHeld.current = flatNow
+  const flat = flatHeld.current
+  // 已经开着时再点一次搜索钮:状态没变,效果不会重跑,所以这里直接把光标放回去(键盘被收起之后还能再叫出来)
+  const openSearch = (): void => { setSearching(true); searchRef.current?.focus() }
+  useEffect(() => { if (searching) searchRef.current?.focus() }, [searching])
+  usePullToSearch(listRef, flat && src.search ? openSearch : undefined)
+  useNativeChromeExtras(flat && src.search ? { where: 'list', search: { label: t('wsview.search', { source: src.title }), run: openSearch } } : null)
   // 层级:行靠 parent 挂到上一级下面。搜索时不画层级,去掉文件夹、按行平铺(和笔记树搜索时一样)。
   const tree = buildListTree(items)
   const roots: ListNode[] = query ? flattenLeaves(tree).map((item) => ({ item, children: [] })) : tree
@@ -454,8 +476,36 @@ export function PluginListBody({ src, stateKey }: { src: ListSourceContribution;
   const renameInput = (it: ListItem): ReactNode =>
     <RenameInput title={it.title} label={t('wsview.renameLabel', { title: it.title })} onDone={(next) => finishRename(it, next)} />
 
+  /** 左滑出来的是只有图标的圆钮(用户 2026-10-10:不带文字),所以只收带图标的动作;其余的仍在长按菜单里。 */
+  const swipeFor = (list: ListAction[]): SwipeAction[] => list.flatMap((action) => {
+    const icon = action.id === '__rename' ? <Pencil /> : resolveIcon(action.icon)
+    // 词表里没有的名字 → null;不是词表键形状的(emoji)会被原样当字形返回 —— 圆钮里只要线性图标
+    if (!icon || typeof icon === 'string') return []
+    return [{ id: action.id, label: action.label, icon, tone: action.danger ? 'danger' as const : undefined, run: action.run }]
+  })
+  /** 手机整屏列表里的行:图标块 + 标题与时间 / 第二行;样式全在 phoneList.css(命中 = 列表根上的 data-timeline)。
+   *  不接行的拖放(刻意):触屏上拖动是从长按起手的,而长按在这里是「这一行的菜单」;与笔记的「最近」列表同一个取舍。 */
+  const phoneRow = (it: ListItem): ReactNode => {
+    const actions = menuFor(it)
+    const editing = renaming === it.key
+    return <div className="t2sw-plug-item" key={it.key}>
+      <SwipeRow actions={editing ? [] : swipeFor(actions)}>
+        <SidebarRow as={editing ? 'div' : 'button'} data-row-key={it.key} title={it.title} style={{ paddingLeft: undefined }}
+          className={cls(activeKey === it.key && 'active', it.unread && 'is-unread')}
+          lead={<><LeadIcon key={it.iconUrl ?? ''} item={it} />{it.unread && <span className="t2s-dot unread" title={t('sidebar.unread')} />}</>}
+          onClick={editing ? undefined : () => src.open(it, { newTab: false })}
+          onContextMenu={contextMenu(actions)}
+        >{editing ? renameInput(it) : <span className="t2s-srow-text">
+          {/* 时间收在标题那一行里(不像会话行那样在行尾自成一列):第二行因此用满整行,多显示十来个字 */}
+          <span className="pl-row-top"><span className="t2s-srow-title">{it.title}</span>{it.hint && <span className="t2s-srow-time">{it.hint}</span>}</span>
+          {it.subtitle && <span className="t2s-srow-sub">{it.subtitle}</span>}
+        </span>}</SidebarRow>
+      </SwipeRow>
+    </div>
+  }
   // Keep the shared row, with an independent sibling menu button (never nest buttons).
   const row = (it: ListItem, depth: number): ReactNode => {
+    if (flat) return phoneRow(it)
     const actions = menuFor(it)
     const editing = renaming === it.key
     // 有副标题的行画两行(标题 + 一行淡字);改名时退回一行,输入框只改标题。
@@ -528,24 +578,48 @@ export function PluginListBody({ src, stateKey }: { src: ListSourceContribution;
     </div>
   }
 
+  /** 搜索框。桌面常显,右边的叉只清字;手机上是点了搜索才出来的一行,叉 = 清字并收起。 */
+  const searchField = (closes: boolean): ReactNode => <div className="t2s-search">
+    <Search size={13} className="t2s-dim" />
+    <input ref={searchRef} aria-label={t('wsview.search', { source: src.title })} placeholder={t('wsview.searchShort')}
+      value={query} onChange={(e) => setQuery(e.target.value)} onKeyDown={(e) => {
+        if (e.key === 'Escape' && query) { e.preventDefault(); e.stopPropagation(); setQuery('') }
+        if (e.key === 'ArrowDown') { e.preventDefault(); listRef.current?.querySelector<HTMLButtonElement>('.t2s-srow')?.focus() }
+      }} />
+    {closes
+      ? <button type="button" aria-label={t('wsview.closeSearch')} title={t('wsview.closeSearch')} onClick={() => { setQuery(''); setSearching(false) }}><X size={12} /></button>
+      : query && <button type="button" aria-label={t('wsview.clearSearch')} title={t('wsview.clearSearch')}
+        onClick={() => { setQuery(''); searchRef.current?.focus() }}><X size={12} /></button>}
+  </div>
+  // 手机的首次提示:把这张列表自己的动作念一遍(左滑有哪几颗、长按主按钮还有什么),名字来自列表源。
+  const phoneHint = ((): string => {
+    if (!flat) return ''
+    const join = t('wsview.phone.join')
+    const actions = items.length ? swipeFor(menuFor(items[0])).map((a) => a.label).join(join) : ''
+    const more = primary ? secondary.map((a) => a.label).join(join) : ''
+    return actions && more ? t('wsview.phone.hintBoth', { actions, more }) : actions ? t('wsview.phone.hintSwipe', { actions }) : more ? t('wsview.phone.hintHold', { more }) : ''
+  })()
+  const moreMenu = (at: { x: number; y: number }): void => {
+    menuOpener.current = null
+    setMenu({ x: at.x, y: at.y, items: secondary.map((action) => ({ label: action.label, danger: action.danger, run: action.run })) })
+  }
+  const fabIcon = ((): ReactNode => { const icon = resolveIcon(primary?.icon); return icon && typeof icon !== 'string' ? icon : <Plus /> })()
+
   return (
-    <div className="t2sw-plug">
-      {(src.search || primary || secondary.length > 0) && <div className="t2sw-plug-toolbar">
-        {src.search && <div className="t2s-search">
-          <Search size={13} className="t2s-dim" />
-          <input ref={searchRef} aria-label={t('wsview.search', { source: src.title })} placeholder={t('wsview.searchShort')}
-            value={query} onChange={(e) => setQuery(e.target.value)} onKeyDown={(e) => {
-              if (e.key === 'Escape' && query) { e.preventDefault(); e.stopPropagation(); setQuery('') }
-              if (e.key === 'ArrowDown') { e.preventDefault(); listRef.current?.querySelector<HTMLButtonElement>('.t2s-srow')?.focus() }
-            }} />
-          {query && <button type="button" aria-label={t('wsview.clearSearch')} title={t('wsview.clearSearch')}
-            onClick={() => { setQuery(''); searchRef.current?.focus() }}><X size={12} /></button>}
-        </div>}
+    <div className="t2sw-plug" data-timeline={flat ? '' : undefined}>
+      {/* 手机:分类是一排胶囊(不是菜单);搜索在胶囊上的搜索钮和下拉里,点了才出这一行 */}
+      {flat && !!groups.length && <ListChips label={t('wsview.filter')}
+        items={[{ id: '__all', label: t('wsview.all') }, ...groups.map((g) => ({ id: `g:${g.key}`, label: g.title }))]}
+        value={activeGroup ? `g:${activeGroup.key}` : '__all'} onChange={(id) => setGroup(id === '__all' ? null : id.slice(2))} />}
+      {/* 有搜索词时这一行一定在:横屏里打了字再转回竖屏,不能剩一张筛过的列表却看不见筛的是什么 */}
+      {flat && src.search && (searching || !!query) && <div className="t2sw-plug-toolbar">{searchField(true)}</div>}
+      {!flat && (src.search || primary || secondary.length > 0) && <div className="t2sw-plug-toolbar">
+        {src.search && searchField(false)}
         {primary && <button type="button" className="t2sw-plug-btn" title={primary.label} onClick={() => primary.run()}>{primary.label}</button>}
         {!!secondary.length && <CapabilityMenu label={t('wsview.actions', { source: src.title })} className="t2sw-plug-overflow"
           items={secondary.map((action) => ({ id: action.id, label: action.label, danger: action.danger, onSelect: action.run }))}><MoreHorizontal size={15} /></CapabilityMenu>}
       </div>}
-      {!!groups.length && <div className="t2sw-plug-filterbar">
+      {!flat && !!groups.length && <div className="t2sw-plug-filterbar">
         <CapabilityMenu label={t('wsview.filter')} className="t2sw-plug-filter" selection acceptsDrag={src.drop ? canTake : undefined}
           searchLabel={groups.length > 8 ? t('wsview.filter') : undefined}
           items={[
@@ -562,6 +636,7 @@ export function PluginListBody({ src, stateKey }: { src: ListSourceContribution;
       </div>}
       <div ref={listRef} className={`t2sw-plug-list${dropKey === 'list' ? ' amx-drop-into' : ''}`} data-under-dock=""
         {...dropProps('list', { group: activeGroup?.key })}
+        onTouchStart={flat ? closeOtherSwipes : undefined}
         onKeyDown={(event) => {
           if (!(event.target instanceof HTMLElement) || !event.target.matches(NAV_ROWS)) return
           const key = event.target.dataset.rowKey
@@ -576,9 +651,17 @@ export function PluginListBody({ src, stateKey }: { src: ListSourceContribution;
           const next = event.key === 'Home' ? 0 : event.key === 'End' ? rows.length - 1 : Math.max(0, Math.min(rows.length - 1, index + (event.key === 'ArrowDown' ? 1 : -1)))
           event.preventDefault(); rows[next]?.focus()
         }}>
+        {flat && src.search && <PullHint />}
+        {flat && phoneHint && <ListHint id={`list:${src.id}`}>{phoneHint}</ListHint>}
         {sections ? sections.map(([g, list]) => section(g, list)) : roots.map((n) => node(n, 1))}
         {items.length === 0 && <div className="t2sw-empty">{query ? t('wsview.noMatches') : t('wsview.empty')}</div>}
       </div>
+      {/* 手机:源的常用动作是右下角的主按钮,其余动作在它的长按菜单里 */}
+      {flat && primary && <ListFab label={primary.label} icon={fabIcon} onClick={() => primary.run()}
+        onMenu={secondary.length ? moreMenu : undefined} />}
+      {/* 没有常用动作、只有分类动作的源:主按钮就是那张菜单的入口(否则工具栏收掉之后这些动作无处可点) */}
+      {flat && !primary && !!secondary.length && <ListFab label={t('wsview.actions', { source: src.title })} icon={<MoreHorizontal />}
+        onClick={() => moreMenu({ x: window.innerWidth - 32, y: window.innerHeight - 180 })} onMenu={moreMenu} />}
       {menu && <ContextMenu menu={menu} onClose={closeMenu} autoFocus />}
     </div>
   )
