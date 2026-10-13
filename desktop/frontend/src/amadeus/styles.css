@@ -1341,14 +1341,10 @@ body.amx-marquee-active * {
 .am-app .milkdown .ProseMirror .wikilink.amx-app-ref:hover {
   background: none;
 }
-/* 芯片与悬停卡里的应用图标是 <img>:别吃正文图片那条(整行一张、上下留白、带圆角)。 */
+/* 芯片里的应用图标是 <img>:别吃正文图片那条(整行一张、上下留白、带圆角)。悬停卡挂在 body 上,不在正文里。 */
 .am-app .milkdown .ProseMirror .app-ref-ico {
   display: inline-block;
   margin: 0 0.3em 0 0;
-  border-radius: 0;
-}
-.am-app .milkdown .ProseMirror .app-ref-card-ico {
-  margin: 1px 0 0;
   border-radius: 0;
 }
 .am-app .milkdown .ProseMirror hr {

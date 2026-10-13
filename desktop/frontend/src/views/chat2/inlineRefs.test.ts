@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { expandRuns, findRuns, inlineRun, plainRuns, runName, runTouching, trimDraftEnd, RUN_LEAD, RUN_TAIL } from './inlineRefs'
+import { expandRuns, findRuns, freeRunName, inlineRun, plainRuns, runName, runTouching, trimDraftEnd, RUN_LEAD, RUN_TAIL } from './inlineRefs'
 
 const known = (names: string[]) => (n: string): boolean => names.includes(n)
 
@@ -49,11 +49,39 @@ describe('行内引用段', () => {
   })
 })
 
+describe('同名的引用各有各的段名', () => {
+  it('第二条同名的接一个不可见字符:看起来一样,文本不一样;两段各换成自己的 token', () => {
+    const taken = new Set<string>()
+    const a = freeRunName('README', (r) => taken.has(r)); taken.add(a)
+    const b = freeRunName('README', (r) => taken.has(r)); taken.add(b)
+    const c = freeRunName('README', (r) => taken.has(r))
+    expect(a).toBe('README')
+    expect(new Set([a, b, c]).size).toBe(3)
+    for (const r of [b, c]) expect(r.replace(/\u2060/g, '')).toBe('README')
+    const text = `比较 ${inlineRun(a)} 和 ${inlineRun(b)}`
+    expect(findRuns(text, (r) => taken.has(r)).map((r) => r.name)).toEqual([a, b])
+    const sent = expandRuns(text, (r) => (r === a ? '[[a/README]]' : r === b ? '[[b/README]]' : undefined))
+    expect(sent.text).toBe('比较 [[a/README]] 和 [[b/README]]')
+    expect([...sent.used]).toEqual([a, b])
+  })
+  it('摘掉其中一条:只有它的那段还原成普通文字,而且不留下那个不可见字符', () => {
+    const b = 'README\u2060'
+    const text = `比较 ${inlineRun('README')} 和 ${inlineRun(b)}`
+    expect(plainRuns(text, b)).toBe(`比较 ${inlineRun('README')} 和 README`)
+    expect(plainRuns(text, 'README')).toBe(`比较 README 和 ${inlineRun(b)}`)
+  })
+  it('名字里本来带着这个不可见字符的,先去掉(不然会和别人的段名撞);空名字挑不出段名', () => {
+    expect(runName('A\u2060')).toBe('A')
+    expect(freeRunName('  ', () => false)).toBe('')
+    expect(freeRunName('A', () => true)).toBe('') // 同名的太多(超过留的 16 个位置)→ 写不进句子,不会死循环
+  })
+})
+
 describe('评审补的三条', () => {
   it('名字归一化是幂等的:第 80 个字正好是空格、名字里有表情都一样', () => {
     for (const name of ['a'.repeat(79) + ' suffix', 'a'.repeat(79) + '😀xx', '  两头有空格  ']) {
       expect(runName(runName(name))).toBe(runName(name))
-      expect(findRuns(inlineRun(name), (n) => n === runName(name))).toHaveLength(1)
+      expect(findRuns(inlineRun(runName(name)), (n) => n === runName(name))).toHaveLength(1)
     }
     expect(() => encodeURIComponent(runName('a'.repeat(79) + '😀xx'))).not.toThrow() // 没有切出半个字符
   })

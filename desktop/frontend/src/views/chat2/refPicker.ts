@@ -25,10 +25,14 @@ export function refCats(cands: readonly RefCand[]): RefCat[] {
   return cats.length > 1 ? ['all', ...cats] : []
 }
 
+/** 分类像是接在查询词后面的几个字(同 ⌘P 快切,用户 08-20 定的心智:光标是一条线 `查询词|全部 窗口 应用 …`):
+ *  → 往右一格,到头停住不绕圈;← 往回一格,已经在第一格(全部)时不接 —— 那一下是移光标回去改字。
+ *  null = 这个键不归分类条。光标不在查询词末尾时由调用方直接不问(两个键都只移光标)。 */
 export function moveRefCat(cats: readonly RefCat[], active: RefCat, key: string): RefCat | null {
   if (!cats.length || (key !== 'ArrowLeft' && key !== 'ArrowRight')) return null
   const index = Math.max(0, cats.indexOf(active))
-  return cats[(index + (key === 'ArrowRight' ? 1 : -1) + cats.length) % cats.length]
+  if (key === 'ArrowLeft') return index > 0 ? cats[index - 1] : null
+  return cats[Math.min(index + 1, cats.length - 1)]
 }
 
 /** 某个分类下的候选。「全部」没打字时按「窗口 → 应用 → 其余」各取几条(不然全是名字最短的那几个);打了字就混排。 */

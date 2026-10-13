@@ -45,7 +45,7 @@ import { ChatBoxSurface, ChatBoxInput, ChatBoxToolbar, ChatBoxSubmit } from '@lc
 import { disarmTip, tipProps } from '../../hoverTip'
 import { RefChipView } from './RefChipView'
 import { catOf, moveRefCat, pickerMatches, refCats, type RefCand, type RefCat } from './refPicker'
-import { expandRuns, findRuns, inlineRun, plainRuns, runName, runTouching, trimDraftEnd } from './inlineRefs'
+import { expandRuns, findRuns, freeRunName, inlineRun, plainRuns, runTouching, trimDraftEnd } from './inlineRefs'
 import { InlineRefMirror } from './InlineRefMirror'
 import { APPREF_EVENT, APPREF_TARGET_ATTR, ensureAppRefCommand } from './appRefCommand'
 import { appRefToken, type AppRef, type AppRefList } from '../../../../shared/appRefs'
@@ -160,6 +160,8 @@ export interface RefChip {
   appRef?: AppRef
   /** 从 `[[` 菜单选进来的:它同时以一段行内引用出现在句子里,句子里那段被删光了这条也就不算了(见 inlineRefs.ts)。 */
   inline?: true
+  /** 这条引用在句子里的段名(第一次写进句子时定下,之后不变;见 inlineRefs.ts)。没写进过句子的没有。 */
+  run?: string
 }
 
 const chipBaseName = (p: string): string => p.split(/[\\/]/).pop() || p
@@ -253,15 +255,12 @@ export const appRefChipOf = (ref: AppRef): RefChip => ({ token: appRefToken(ref)
 /** 这条引用能不能写进句子里:View 和侧边拼接那条是给模型看的标签,放进句子里气泡只能显示成原文,不让。 */
 export const canInline = (chip: RefChip): boolean => chip.kind !== 'view' && (chip.kind !== 'app' || !!chip.appRef)
 
-/** 行内引用段按名字找引用:名字 → 那条引用。同名时:从 `[[` 选进句子的那条 > 用户自己加的 > 自动挂的当前笔记(先加的在前)。
- *  自动那条排最后:它会随主区换页冒出来,排前面的话会把句子里已有的同名引用悄悄改指到别的文件(Codex 评审)。 */
-export function runChipOwners(refChips: RefChip[], autoChip: RefChip | null): Map<string, RefChip> {
-  const byName = new Map<string, RefChip>()
-  for (const c of [...refChips.filter((x) => x.inline), ...refChips.filter((x) => !x.inline), ...(autoChip ? [autoChip] : [])]) {
-    const name = canInline(c) ? runName(c.name) : ''
-    if (name && !byName.has(name)) byName.set(name, c)
-  }
-  return byName
+/** 句子里的段归谁:段名 → 那条引用。段名是引用第一次写进句子时定下的(同名的引用段名不同),
+ *  所以主区换页、别的引用增删都不会把句子里已有的一段改指到别的东西。没写进过句子的引用不在这张表里。 */
+export function runChipOwners(refChips: RefChip[]): Map<string, RefChip> {
+  const byRun = new Map<string, RefChip>()
+  for (const c of refChips) if (c.run && !byRun.has(c.run)) byRun.set(c.run, c)
+  return byRun
 }
 
 /** 句子里的那一段发出去写成什么。文件写成 `[[绝对路径|名字]]`,气泡里才画得成一枚可点的引用
@@ -501,10 +500,15 @@ export const Composer2: React.FC<{
    *  只比 prev 的话两条同 token 会一起进来,React key 撞车且发送时正文里重复一遍)。 */
   const addRefChips = (next: RefChip[]): void =>
     setRefChips((prev) => {
-      const seen = new Set(prev.map((c) => c.token))
-      const add: RefChip[] = []
-      for (const c of next) if (!seen.has(c.token)) { seen.add(c.token); add.push(c) }
-      return add.length ? [...prev, ...add] : prev
+      const out = [...prev]
+      let changed = false
+      for (const c of next) {
+        const i = out.findIndex((x) => x.token === c.token)
+        if (i === -1) { out.push(c); changed = true }
+        // 已经在「已选择」里的这次被写进句子:只补记它的段名,别的照旧(它原来是怎么加的就还是怎么算)
+        else if (c.run && !out[i].run) { out[i] = { ...out[i], run: c.run }; changed = true }
+      }
+      return changed ? out : prev
     })
   const [pinnedSkills, setPinnedSkills] = useDraftField(draftKey, 'pinnedSkills')
   const [hint, setHint] = useState<string | null>(null)
@@ -1254,19 +1258,13 @@ export const Composer2: React.FC<{
     return chip
   }, [appRef, isHost, autoRefFromMain, mainRefKey, mainNote, vaultRoot, autoRefOff, refChips])
   const rawRefChips = useMemo(() => (autoChip ? [autoChip, ...refChips] : refChips), [autoChip, refChips])
-  const runChips = useMemo(() => runChipOwners(refChips, autoChip), [refChips, autoChip])
-  const inlineRuns = useMemo(() => findRuns(draft, (name) => runChips.has(name)), [draft, runChips])
+  const runChips = useMemo(() => runChipOwners(refChips), [refChips])
+  const inlineRuns = useMemo(() => findRuns(draft, (run) => runChips.has(run)), [draft, runChips])
   /** 「已选择」里显示、发送时算数的引用:从 `[[` 选进来的那些,句子里的那段删光了就不算(撤销 / 粘贴回来又算上)。 */
   const allRefChips = useMemo(() => {
     const inText = new Set(inlineRuns.map((r) => runChips.get(r.name)!.token))
-    return rawRefChips.filter((c) => !c.inline || inText.has(c.token) || draft.includes(c.token))
-  }, [rawRefChips, inlineRuns, runChips, draft])
-  /** 这条引用写进句子里的样子:一段行内引用;名字和另一条撞了就只能写 token 原文。 */
-  const inlineTextFor = (chip: RefChip): string => {
-    const name = runName(chip.name)
-    const owner = runChips.get(name)
-    return name && (!owner || owner.token === chip.token) ? inlineRun(name) : chip.token
-  }
+    return rawRefChips.filter((c) => !c.inline || inText.has(c.token))
+  }, [rawRefChips, inlineRuns, runChips])
   /** 把草稿的 [start, end) 换成 piece,光标落在它后面。直接改文本框再把值交给 React(值相同它就不再动 DOM),
    *  光标当场就位;等下一帧再摆光标的话,这一帧里敲的字会落到错的位置(台架连打时把 `[[` 拆散过)。 */
   const spliceDraft = (start: number, end: number, piece: string): void => {
@@ -1280,8 +1278,11 @@ export const Composer2: React.FC<{
   }
   /** 把一条引用写进草稿的 [start, end) 处(顺手挂进「已选择」),光标落在它后面。 */
   const insertInline = (chip: RefChip, start: number, end: number): void => {
-    addRefChips([chip])
-    spliceDraft(start, end, inlineTextFor(chip) + ' ')
+    // 段名:这条引用以前写进过句子就沿用,否则挑一个没人占的(同名的另一条已经占了名字 → 接不可见字符区分)
+    const run = refChips.find((c) => c.token === chip.token)?.run || freeRunName(chip.name, (r) => runChips.has(r))
+    // 挑不出段名(名字是空的)→ 只进「已选择」,句子里不留东西
+    addRefChips([run ? { ...chip, run } : { token: chip.token, name: chip.name, kind: chip.kind, appRef: chip.appRef }])
+    spliceDraft(start, end, run ? inlineRun(run) + ' ' : '')
   }
   /** 把一段行内引用整段删掉(退格 / Delete 挨着它时)。 */
   const removeRun = (start: number, end: number): void => spliceDraft(start, end, '')
@@ -1291,7 +1292,7 @@ export const Composer2: React.FC<{
     // 行内引用段先换成 token 再 trim:段两头的边界空格属于空白字符,先 trim 会把开头 / 结尾那一段拆坏。
     // override(实时转写)不读草稿,草稿里的段不算。
     const inlined = override == null
-      ? expandRuns(draft, (name) => { const chip = runChips.get(name); return chip && inlineTokenOf(chip, isHost ? execConfig.cwd : undefined) })
+      ? expandRuns(draft, (run) => { const chip = runChips.get(run); return chip && inlineTokenOf(chip, isHost ? execConfig.cwd : undefined) })
       : null
     const text = (override ?? inlined!.text).trim()
     // 斜杠命令只认键盘草稿:实时转写(override)一律当普通消息发,不执行本地命令(Codex 评审 09-17)
@@ -1408,11 +1409,7 @@ export const Composer2: React.FC<{
     const quoted = composeQuotes(quotes)
     // 「已选择」芯片 → 正文最前面的一行引用 token。行内位置在芯片化之后不再存在,统一前置(= 上下文在前)。
     // 句子里已经写了的引用不再进这一行(否则模型看到两遍、气泡也画两遍)。
-    const leadChips = allRefChips.filter((c) => {
-      const name = runName(c.name)
-      if (inlined?.used.has(name) && runChips.get(name) === c) return false
-      return !(inlined && c.inline && draft.includes(c.token)) // 同名撞车时句子里写的是 token 原文
-    })
+    const leadChips = allRefChips.filter((c) => !(c.run && inlined?.used.has(c.run)))
     const refs = leadChips.length ? leadChips.map((c) => c.token).join(' ') + '\n' : ''
     const outgoing = composeOutgoing(refs, quoted, text)
     if (outgoing.length > MAX_INPUT_CHARS) {
@@ -1764,7 +1761,7 @@ export const Composer2: React.FC<{
                   onInline={canInline(c) ? () => { const ta = taRef.current; insertInline(c, ta?.selectionStart ?? draft.length, ta?.selectionEnd ?? draft.length) } : undefined}
                   onRemove={() => {
                     // 句子里那几段还原成普通文字:话还在,只是不再是引用
-                    if (runChips.get(runName(c.name)) === c) setDraft((d) => plainRuns(d, c.name))
+                    if (c.run) { const run = c.run; setDraft((d) => plainRuns(d, run)) }
                     // 自动那条不在 refChips 里,× 它 = 记下「这一篇先别挂」(换篇即复活)。
                     if (autoChip && c.token === autoChip.token) setAutoRefOff(c.token)
                     else setRefChips((prev) => prev.filter((x) => x.token !== c.token))
@@ -1873,8 +1870,11 @@ export const Composer2: React.FC<{
                 const count = refMatches.length
                 if (e.key === 'ArrowDown') { e.preventDefault(); if (count) setRefIndex((i) => (i + 1) % count); return }
                 if (e.key === 'ArrowUp') { e.preventDefault(); if (count) setRefIndex((i) => (i - 1 + count) % count); return }
-                // 左右键换分类(与笔记斜杠菜单同一套);没有分类条时照常移动光标
-                const nextCat = moveRefCat(refCatList, refCatNow, e.key)
+                // 左右键换分类:分类像是接在查询词后面的几个字(规则见 moveRefCat)。还在「全部」上、光标后面又有字
+                // (回到词中间改错字)时两个键都只移光标;没有分类条时照常移动光标。
+                const ta = e.currentTarget
+                const midWord = ta.selectionStart !== ta.selectionEnd || /\S/.test(ta.value[ta.selectionEnd] ?? '')
+                const nextCat = refCatNow === 'all' && midWord ? null : moveRefCat(refCatList, refCatNow, e.key)
                 if (nextCat && !e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey && !e.nativeEvent.isComposing && e.keyCode !== 229) { e.preventDefault(); setRefCat(nextCat); return }
                 if ((e.key === 'Enter' || e.key === 'Tab') && !e.nativeEvent.isComposing) { e.preventDefault(); if (count) pickRef(refMatches[Math.min(refIndex, count - 1)]); return }
                 if (e.key === 'Escape') { e.preventDefault(); setRefDismissed(true); return }
@@ -1934,7 +1934,7 @@ export const Composer2: React.FC<{
               if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); send() }
             }}
           />
-          <InlineRefMirror text={draft} runs={inlineRuns} chipOf={(name) => runChips.get(name)} /></>)}
+          <InlineRefMirror text={draft} runs={inlineRuns} chipOf={(run) => runChips.get(run)} /></>)}
           {slashOpen && (
             <div className="t2c-menu">
               {slashMatches.map((it, i) => (

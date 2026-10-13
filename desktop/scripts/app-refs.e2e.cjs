@@ -140,8 +140,21 @@ async function main() {
     check('没装的应用 = missing', await stateOf('Gone') === 'missing', await stateOf('Gone'))
     await chip('Linear – Pricing').hover()
     await win.waitForTimeout(800) // 卡片延迟 0.3s 才出
-    const card = await chip('Linear – Pricing').locator('.app-ref-card').evaluate((el) => ({ shown: getComputedStyle(el).opacity === '1', text: el.textContent }))
+    // 卡片挂在 body 上(做成芯片的子元素会被滚动区裁掉),整张都在窗口里、贴着芯片
+    const card = await win.evaluate((name) => {
+      const el = document.querySelector('body > .app-ref-card')
+      const chipEl = [...document.querySelectorAll('.app-ref')].find((c) => c.textContent.includes(name))
+      if (!el || !chipEl) return { shown: false, text: '' }
+      const r = el.getBoundingClientRect(), c = chipEl.getBoundingClientRect()
+      return {
+        shown: true, text: el.textContent,
+        inside: r.left >= 0 && r.top >= 0 && r.right <= innerWidth && r.bottom <= innerHeight,
+        gap: Math.round(Math.min(Math.abs(c.top - r.bottom), Math.abs(r.top - c.bottom))),
+        clipped: (() => { for (let p = el.parentElement; p; p = p.parentElement) if (getComputedStyle(p).overflow !== 'visible') return p.tagName; return '' })(),
+      }
+    }, 'Linear – Pricing')
     check('悬停卡写明「窗口还开着」', card.shown && /Google Chrome/.test(card.text) && /点击切到这个窗口/.test(card.text), card)
+    check('悬停卡整张在窗口里、贴着芯片、没有会裁它的祖先', card.inside && card.gap <= 12 && !card.clipped, card)
     await view.screenshot({ path: path.join(SHOT_DIR, `bubble${tag}.png`) })
 
     // ── 点击 ──

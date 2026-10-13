@@ -27,11 +27,12 @@ describe('分类条', () => {
     expect(wikiCats(true, true)).toEqual(['all', 'window', 'app', 'note'])
     expect(wikiCats(true, false)).toEqual(['all', 'window', 'app'])
   })
-  it('←/→ 循环切,别的键不管;没有分类条时一个键都不接', () => {
+  it('→ 往右到头停住,← 往回,在「全部」上按 ← 不接(那是移光标);别的键不管;没有分类条时一个键都不接', () => {
     const cats = wikiCats(true, true)
     expect(moveWikiCat(cats, 'all', 'ArrowRight')).toBe('window')
-    expect(moveWikiCat(cats, 'note', 'ArrowRight')).toBe('all')
-    expect(moveWikiCat(cats, 'all', 'ArrowLeft')).toBe('note')
+    expect(moveWikiCat(cats, 'note', 'ArrowRight')).toBe('note')
+    expect(moveWikiCat(cats, 'window', 'ArrowLeft')).toBe('all')
+    expect(moveWikiCat(cats, 'all', 'ArrowLeft')).toBeNull()
     expect(moveWikiCat(cats, 'app', 'ArrowUp')).toBeNull()
     expect(moveWikiCat([], 'all', 'ArrowRight')).toBeNull()
   })

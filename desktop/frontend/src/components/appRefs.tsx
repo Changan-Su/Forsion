@@ -4,15 +4,17 @@
  * 聊天气泡(ChatWikiLink)、输入框「已选择」条(RefChipView)、引用菜单、笔记编辑器都从这里拿图标和状态。
  * 宿主没有 `window.tangu.appRefs`(网页版 / 手机 / 非 macOS 桌面)时芯片只显示名字、不可点。
  */
-import { useEffect, useSyncExternalStore } from 'react'
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { createPortal } from 'react-dom'
 import { AppWindow } from 'lucide-react'
-import { appRefKey, type AppRef, type AppRefState, type AppRefStatus } from '../../../shared/appRefs'
+import { OverlayAt } from '@lcl/engine'
+import { appRefKey, parseAppRefInner, type AppRef, type AppRefState, type AppRefStatus } from '../../../shared/appRefs'
 import { registerMessages, translate, useI18n } from '../i18n'
 import './appRefs.css'
 
 registerMessages({
   'appref.sub.live': { zh: '{app} · 窗口还开着', en: '{app} · Window is open' },
-  'appref.sub.closed': { zh: '{app} · 这个窗口已经关了', en: '{app} · This window is closed' },
+  'appref.sub.closed': { zh: '{app} · 找不到这个窗口了', en: "{app} · Can't find this window" },
   'appref.sub.running': { zh: '应用 · 正在运行', en: 'App · Running' },
   'appref.sub.idle': { zh: '应用 · 没在运行', en: 'App · Not running' },
   'appref.sub.missing': { zh: '这台设备上没有这个应用', en: "This app isn't on this device" },
@@ -97,6 +99,13 @@ export function openAppRef(ref: AppRef): void {
   void window.tangu?.appRefs?.open(ref).then(() => refreshAppRef(ref, true), () => {})
 }
 
+/** `[[…]]` 的内文如果是应用 / 窗口引用就切过去并返回 true —— 调用方据此不再把它当笔记链接(属性值、数据库格子这些不走编辑器芯片的地方)。 */
+export function openAppRefInner(inner: string): boolean {
+  const ref = parseAppRefInner(inner)
+  if (ref) openAppRef(ref)
+  return !!ref
+}
+
 export function AppRefIcon({ id, className = 'app-ref-ico' }: { id: string; className?: string }) {
   const src = useAppIcon(id)
   return src ? <img className={className} src={src} alt="" draggable={false} /> : <AppWindow className={className} aria-hidden />
@@ -109,7 +118,28 @@ export function AppRefChip({ appRef }: { appRef: AppRef }) {
   const state = appRefsSupported() ? status?.state : 'missing'
   const canOpen = appRefsSupported() && state !== 'missing'
   const { sub, hint } = appRefCardText(appRef, status)
-  const open = (): void => { if (canOpen) openAppRef(appRef) }
+  // 悬停卡挂到 body 上、按芯片的位置摆(OverlayAt 负责收进窗口、处理界面缩放):做成芯片的子元素的话,
+  // 贴着滚动区上沿 / 窄栏右沿时会被裁掉一截。停留 0.3 秒才出;滚动、点击、离开就收。
+  const [card, setCard] = useState<{ x: number; top: number; bottom: number } | null>(null)
+  const timer = useRef(0)
+  const hide = (): void => { window.clearTimeout(timer.current); setCard(null) }
+  const show = (el: HTMLElement): void => {
+    refreshAppRef(appRef)
+    window.clearTimeout(timer.current)
+    timer.current = window.setTimeout(() => {
+      const r = el.getClientRects()[0] ?? el.getBoundingClientRect() // 折行的芯片贴第一行
+      setCard({ x: r.left, top: r.top, bottom: r.bottom })
+    }, 300)
+  }
+  useEffect(() => () => window.clearTimeout(timer.current), [])
+  const shown = !!card
+  useEffect(() => {
+    if (!shown) return
+    const close = (): void => setCard(null)
+    window.addEventListener('scroll', close, true)
+    return () => window.removeEventListener('scroll', close, true)
+  }, [shown])
+  const open = (): void => { hide(); if (canOpen) openAppRef(appRef) }
   return (
     <span
       className="app-ref"
@@ -120,18 +150,22 @@ export function AppRefChip({ appRef }: { appRef: AppRef }) {
       tabIndex={canOpen ? 0 : undefined}
       onClick={(e) => { e.preventDefault(); e.stopPropagation(); open() }}
       onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); open() } }}
-      onMouseEnter={() => refreshAppRef(appRef)}
+      onMouseEnter={(e) => show(e.currentTarget)}
+      onMouseLeave={hide}
+      onFocus={(e) => { if (e.currentTarget.matches(':focus-visible')) show(e.currentTarget) }}
+      onBlur={hide}
     >
       <AppRefIcon id={appRef.id} />{appRef.name}
-      {sub && (
-        <span className="app-ref-card" role="tooltip">
+      {card && sub && createPortal(
+        <OverlayAt className="app-ref-card" role="tooltip" x={card.x} y={card.bottom + 6} anchorTop={card.top - 6} prefer="above">
           <AppRefIcon id={appRef.id} className="app-ref-card-ico" />
           <span className="app-ref-card-main">
             <b>{appRef.name}</b>
             <small>{sub}</small>
             {hint && <em>{hint}</em>}
           </span>
-        </span>
+        </OverlayAt>,
+        document.body,
       )}
     </span>
   )

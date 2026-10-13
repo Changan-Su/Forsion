@@ -73,6 +73,8 @@ interface Props {
   onPickRaw?: (text: string) => void
   /** 宿主编辑器是否持焦。不持焦时一个键都不拦(L-04):失焦后标题框/聊天框里的 ↑↓/Enter 不许被吞。 */
   editorFocused?: () => boolean
+  /** 光标后面是不是还有查询词的字(用户回到词中间改错字):是的话 ←/→ 不拿去切分类。不给 = 恒在词尾。 */
+  caretMidWord?: () => boolean
   /** 链接所在笔记(vault 相对路径):`[[名#` 按它就近解析目标,`[[#` 就是它本身。缺 = 不做 `#` / `^` 补全。 */
   sourcePath?: string
   agents?: TanguAgentInfo[]
@@ -134,7 +136,7 @@ function dirOf(p: string): string {
 /** 重名判定 key:页面剥 .md 小写(pageKey),文件含扩展名小写 —— 两命名空间天然分立。 */
 const candKey = (c: Cand): string => (c.file ? c.base.toLowerCase() : pageKey(c.base))
 
-export function WikiSuggest({ query, left, top, anchorTop, getPageNames, getFiles, onPick, onPickRaw, onClose, editorFocused, sourcePath, agents = [], onPickAgent, allowCreate = true, dates = false }: Props) {
+export function WikiSuggest({ query, left, top, anchorTop, getPageNames, getFiles, onPick, onPickRaw, onClose, editorFocused, caretMidWord, sourcePath, agents = [], onPickAgent, allowCreate = true, dates = false }: Props) {
   const [active, setActive] = useState(0)
   const [, refreshAgents] = useState(0)
   const agentMentions = !!onPickAgent
@@ -281,8 +283,9 @@ export function WikiSuggest({ query, left, top, anchorTop, getPageNames, getFile
       // 尚未置位的首帧(同 SlashMenu / PasteAsMenu)。
       if (e.isComposing || e.key === 'Process' || e.keyCode === 229) return
       if (editorFocused && !editorFocused()) return // 焦点已在编辑器之外:放行(L-04)
-      // 有分类条时 ←/→ 切类别(同斜杠菜单)。带修饰键的不拦:⌘← / ⌥← / Shift+← 照旧挪光标、扩选。
-      const nextCat = e.metaKey || e.ctrlKey || e.altKey || e.shiftKey ? null : moveWikiCat(cats, cat, e.key)
+      // 有分类条时 ←/→ 切类别:分类像是接在查询词后面的几个字(规则见 moveWikiCat)—— 在「全部」上按 ← 是移光标回去改字,
+      // 光标回到词中间后两个键都只移光标。带修饰键的不拦:⌘← / ⌥← / Shift+← 照旧挪光标、扩选。
+      const nextCat = e.metaKey || e.ctrlKey || e.altKey || e.shiftKey || (cat === 'all' && caretMidWord?.()) ? null : moveWikiCat(cats, cat, e.key)
       if (nextCat) {
         e.preventDefault()
         e.stopPropagation()

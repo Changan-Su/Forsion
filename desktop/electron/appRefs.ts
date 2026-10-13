@@ -7,7 +7,7 @@
  * 仍能引用和打开应用,只是列不出窗口。只做了 macOS;别的平台 list 回空、open 回 unsupported_platform。
  */
 import { normalizeDockCandidates } from '../shared/appDock'
-import { isAppRefId, normalizeAppRef, sameWindowTitle, type AppRef, type AppRefApp, type AppRefList, type AppRefStatus, type AppRefWindow } from '../shared/appRefs'
+import { appRefKey, isAppRefId, normalizeAppRef, pickWindow, windowTitleScore, type AppRef, type AppRefApp, type AppRefList, type AppRefStatus, type AppRefWindow } from '../shared/appRefs'
 
 export interface AppRefDeps {
   platform: NodeJS.Platform
@@ -87,6 +87,17 @@ export function createAppRefs(deps: AppRefDeps) {
     return installedCache
   }
 
+  /** 这次运行里经手过的窗口引用 → 它当时是哪扇窗口(列候选、按快捷键时记下)。之后标题变了(浏览器换了标签页)照样认得出这一扇。
+   *  重启之后、别的设备来的、Tangu 写的引用没有这条,退回按标题找(pickWindow)。 */
+  const seen = new Map<string, { pid: number; windowId: number }>()
+  function remember(id: string, title: string, pid: number, windowId: number): void {
+    if (!title || !(pid > 0) || !(windowId > 0)) return
+    const key = appRefKey({ kind: 'window', id, name: title })
+    seen.delete(key) // 重新插到最后:满了丢最早的
+    seen.set(key, { pid, windowId })
+    if (seen.size > 500) seen.delete(seen.keys().next().value!)
+  }
+
   const running = (): Promise<Running[]> => deps.ask({ cmd: 'listApps' }).then(normalizeRunning)
   const onScreen = (): Promise<Array<AppRefWindow & { pid: number; windowId: number }>> =>
     deps.ask({ cmd: 'dockCandidates', excludePids: [deps.ownPid] }).then((raw) =>
@@ -106,11 +117,12 @@ export function createAppRefs(deps: AppRefDeps) {
       const code = (err as { code?: string }).code
       error = code === 'unknown_command' ? 'unsupported_helper' : code || 'unavailable'
     }
-    const seen = new Set<string>()
+    const listed = new Set<string>()
     const windows = wins.flatMap((w) => {
       const key = `${w.id}|${w.title}`
-      if (!w.title || seen.has(key)) return []
-      seen.add(key)
+      if (!w.title || listed.has(key)) return []
+      listed.add(key)
+      remember(w.id, w.title, w.pid, w.windowId) // 同名的记最前面那扇(候选里显示的也是它)
       return [{ id: w.id, app: w.app, title: w.title }]
     })
     // 「在跑」只认装着的应用和屏上有窗口的进程:listApps 里还有一大堆后台小进程,不该进候选
@@ -122,16 +134,25 @@ export function createAppRefs(deps: AppRefDeps) {
     return { windows, apps: sorted, ...(error ? { error } : {}) }
   }
 
-  /** 引用的应用在跑的那几个进程里,标题对得上的那扇窗口(屏上的优先;最小化 / 别的桌面的经 AX 找)。 */
+  /** 引用指的那扇窗口此刻在哪。依次:这次运行里记下的那一扇还在(标题变了也算)→ 屏上标题相同的 →
+   *  把这个应用的全部窗口凑齐(最小化 / 别的桌面的经 AX 找)再挑(pickWindow:相同 > 唯一相近 > 只有一扇)。 */
   async function findWindow(ref: AppRef, run: Running[], wins: Awaited<ReturnType<typeof onScreen>>): Promise<{ pid: number; windowId?: number; windowRef?: string } | null> {
-    const hit = wins.find((w) => w.id === ref.id && sameWindowTitle(ref.name, w.title))
-    if (hit) return { pid: hit.pid, windowId: hit.windowId }
+    type Found = { pid: number; windowId?: number; windowRef?: string; title: string }
+    const mine = wins.filter((w) => w.id === ref.id)
+    const known = seen.get(appRefKey(ref))
+    const isKnown = (pid: number, windowId?: number): boolean => !!known && known.pid === pid && known.windowId === windowId
+    const pick = (w: Found): { pid: number; windowId?: number; windowRef?: string } => ({ pid: w.pid, windowId: w.windowId, windowRef: w.windowRef })
+    const onScreenHit = mine.find((w) => isKnown(w.pid, w.windowId)) ?? mine.find((w) => windowTitleScore(ref.name, w.title) === 2)
+    if (onScreenHit) return { pid: onScreenHit.pid, windowId: onScreenHit.windowId }
+    const all: Found[] = mine.filter((w) => w.title).map((w) => ({ pid: w.pid, windowId: w.windowId, title: w.title }))
     for (const pid of new Set(run.filter((r) => r.id === ref.id).map((r) => r.pid))) {
-      const ax = await deps.ask({ cmd: 'listWindows', pid }).then(normalizeAxWindows, () => [])
-      const w = ax.find((x) => sameWindowTitle(ref.name, x.title))
-      if (w) return { pid, windowId: w.windowId, windowRef: w.windowRef }
+      for (const x of await deps.ask({ cmd: 'listWindows', pid }).then(normalizeAxWindows, () => [])) {
+        if (isKnown(pid, x.windowId)) return { pid, windowId: x.windowId, windowRef: x.windowRef }
+        if (!all.some((w) => w.pid === pid && w.windowId !== undefined && w.windowId === x.windowId)) all.push({ pid, windowId: x.windowId, windowRef: x.windowRef, title: x.title })
+      }
     }
-    return null
+    const hit = pickWindow(ref.name, all)
+    return hit ? pick(hit) : null
   }
 
   /** 一批引用此刻的状态(气泡 / 笔记里的芯片变灰、悬停卡的那一行字)。不拉起 helper:只是看一眼,不该弹出东西。 */
@@ -181,9 +202,10 @@ export function createAppRefs(deps: AppRefDeps) {
       await deps.ensureHelper()
       const w = (await onScreen())[0]
       if (!w) return null
+      remember(w.id, w.title, w.pid, w.windowId)
       return w.title ? { kind: 'window', id: w.id, name: w.title } : { kind: 'app', id: w.id, name: w.app || w.id }
     } catch { return null }
   }
 
-  return { list, status, open, frontmost }
+  return { list, status, open, frontmost, remember }
 }

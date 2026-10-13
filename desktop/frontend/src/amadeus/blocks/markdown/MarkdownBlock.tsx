@@ -1444,6 +1444,16 @@ export function MilkdownInner({
     })
     return focused
   }
+  /** 光标后面紧跟着的是不是字(不是空白、`]`、段尾):`[[` 面板据此把 ←/→ 让给移光标(回到查询词中间改错字)。 */
+  const caretMidWord = (): boolean => {
+    let mid = false
+    getInstance()?.action((ctx) => {
+      const { $head, empty } = ctx.get(editorViewCtx).state.selection
+      const next = $head.parent.textBetween($head.parentOffset, Math.min($head.parentOffset + 1, $head.parent.content.size))
+      mid = !empty || /[^\s\]]/.test(next)
+    })
+    return mid
+  }
   const editorDom = (): HTMLElement | null => {
     let dom: HTMLElement | null = null
     getInstance()?.action((ctx) => { dom = ctx.get(editorViewCtx).dom })
@@ -1701,6 +1711,7 @@ export function MilkdownInner({
             setWiki(null)
           }}
           editorFocused={editorFocused}
+          caretMidWord={caretMidWord}
           sourcePath={attachmentPagePath}
         />
       )}

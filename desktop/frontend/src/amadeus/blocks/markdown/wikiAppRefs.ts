@@ -19,10 +19,12 @@ export function wikiCats(offerApps: boolean, hasNotes: boolean): WikiCat[] {
   return hasNotes ? [...WIKI_CATS] : ['all', 'window', 'app']
 }
 
+/** 规则同聊天那边的 moveRefCat(views/chat2/refPicker.ts):→ 往右到头停住,← 往回,在「全部」上不接。 */
 export function moveWikiCat(cats: readonly WikiCat[], active: WikiCat, key: string): WikiCat | null {
   if (!cats.length || (key !== 'ArrowLeft' && key !== 'ArrowRight')) return null
   const index = Math.max(0, cats.indexOf(active))
-  return cats[(index + (key === 'ArrowRight' ? 1 : -1) + cats.length) % cats.length]
+  if (key === 'ArrowLeft') return index > 0 ? cats[index - 1] : null
+  return cats[Math.min(index + 1, cats.length - 1)]
 }
 
 /** 查询串是不是还在「找目标」:带 `#` `|` `^` = 用户在写笔记的锚点 / 别名,不拿窗口标题去撞(浏览器标题里常有 `|`)。 */

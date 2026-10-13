@@ -71,7 +71,12 @@ describe('渲染', () => {
     expect(app.dataset.kind).toBe('app')
     expect(app.dataset.state).toBe('running')
     expect(app.hasAttribute('data-off')).toBe(false)
-    expect(win.querySelector('.app-ref-card')?.textContent).toContain('这个窗口已经关了') // 悬停卡的文案走共享那份
+    // 悬停卡的文案走共享那份;卡片挂在 body 上(不在正文里,滚动区裁不到它),停留一会儿才出
+    expect(document.querySelector('.app-ref-card')).toBeNull()
+    win.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }))
+    await vi.waitFor(() => expect(document.querySelector('body > .app-ref-card')?.textContent).toContain('找不到这个窗口了'))
+    win.dispatchEvent(new MouseEvent('mouseout', { bubbles: true }))
+    await vi.waitFor(() => expect(document.querySelector('.app-ref-card')).toBeNull())
   })
 
   it('光标进到那一行 → 露出源码;离开 → 又是芯片', () => {

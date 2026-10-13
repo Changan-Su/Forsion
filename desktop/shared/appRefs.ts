@@ -56,9 +56,28 @@ export function parseAppRefInner(inner: string): AppRef | null {
   return { kind: m[1] as AppRefKind, id: m[2], name: appRefLabel(m[3] || '') || m[2] }
 }
 
-/** 引用里的窗口标题和此刻真窗口的标题是不是同一个(两边过同一道 appRefLabel)。
- *  ponytail: 只认标题完全相同;浏览器切了标签页标题就变,那时按「窗口已关」处理。要更宽再加相似度。 */
-export const sameWindowTitle = (label: string, liveTitle: string): boolean => !!label && appRefLabel(liveTitle) === appRefLabel(label)
+/** 引用里的标题和此刻一扇真窗口的标题有多像(两边过同一道 appRefLabel):2 = 相同;
+ *  1 = 一个包含另一个(应用常把「● 」「 — 已编辑」「 - Google Chrome」这类前后缀拼进标题,文件名那段不变);0 = 对不上。 */
+export function windowTitleScore(label: string, liveTitle: string): 0 | 1 | 2 {
+  const a = appRefLabel(label)
+  const b = appRefLabel(liveTitle)
+  if (!a || !b) return 0
+  if (a === b) return 2
+  const cut = (s: string): string => (s.endsWith('…') ? s.slice(0, -1) : s) // 截断过的那边按没截的那段比
+  const [short, long] = [cut(a), cut(b)].sort((x, y) => x.length - y.length)
+  return [...short].length >= 4 && long.includes(short) ? 1 : 0
+}
+export const sameWindowTitle = (label: string, liveTitle: string): boolean => windowTitleScore(label, liveTitle) === 2
+
+/** 从**同一个应用**此刻的全部窗口里挑出引用指的那一扇:标题相同的 > 唯一一扇标题相近的 > 这个应用只有一扇窗口时就是它
+ *  (同一扇窗口换了内容,标题跟着变:编辑器换了文件、浏览器换了标签页)。挑不出来 = null。 */
+export function pickWindow<T extends { title: string }>(label: string, wins: readonly T[]): T | null {
+  const exact = wins.find((w) => windowTitleScore(label, w.title) === 2)
+  if (exact) return exact
+  const near = wins.filter((w) => windowTitleScore(label, w.title) === 1)
+  if (near.length === 1) return near[0]
+  return wins.length === 1 ? wins[0] : null
+}
 
 export const appRefKey = (ref: Pick<AppRef, 'kind' | 'id' | 'name'>): string => `${ref.kind}://${ref.id}|${ref.kind === 'window' ? appRefLabel(ref.name) : ''}`
 

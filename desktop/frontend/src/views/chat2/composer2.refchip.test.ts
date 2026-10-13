@@ -189,15 +189,15 @@ describe('inlineTokenOf(句子里的引用发出去写成什么)', () => {
   })
 })
 
-describe('runChipOwners(同名引用,句子里的那段归谁)', () => {
-  it('从 [[ 选进句子的 > 用户自己加的 > 自动挂的当前笔记;自动那条不能抢走已有的同名引用', () => {
-    const a = { ...refChipOf({ kind: 'note', path: 'a/README.md' }, VAULT), inline: true as const }
-    const b = refChipOf({ kind: 'note', path: 'b/README.md' }, VAULT)
+describe('runChipOwners(句子里的那段归谁)', () => {
+  it('按引用自己记着的段名找;同名的两条各归各的,没写进过句子的不在表里', () => {
+    const a = { ...refChipOf({ kind: 'note', path: 'a/README.md' }, VAULT), inline: true as const, run: 'README' }
+    const b = { ...refChipOf({ kind: 'note', path: 'b/README.md' }, VAULT), run: 'README\u2060' }
+    const c = refChipOf({ kind: 'note', path: 'c/README.md' }, VAULT) // 只在「已选择」里,没写进句子
     expect(a.name).toBe(b.name)
-    expect(runChipOwners([a], b).get(a.name)).toBe(a) // 主区切到同名的另一篇:句子里那段仍指 a
-    expect(runChipOwners([b, a], null).get(a.name)).toBe(a)
-    expect(runChipOwners([b], null).get(b.name)).toBe(b)
-    expect(runChipOwners([], b).get(b.name)).toBe(b)
-    expect(runChipOwners([viewChip('calendar', '日历')], null).size).toBe(0) // 不能进句子的不占名字
+    const owners = runChipOwners([c, b, a])
+    expect(owners.get('README')).toBe(a)
+    expect(owners.get('README\u2060')).toBe(b)
+    expect(owners.size).toBe(2) // c 不占名字:主区换到同名的另一篇也抢不走句子里已有的那段
   })
 })

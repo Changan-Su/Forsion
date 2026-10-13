@@ -80,6 +80,7 @@ import { ganttDateCols, ganttScaleOf, resolveGanttCols } from './ganttLogic'
 import { formFields } from './formLogic'
 import { CHART_AGGS, CHART_KINDS, chartAggOf, chartKindOf } from '@amadeus-shared/dashboardData'
 import { autoColumnWidths, type AutoWidthSample } from './autoColumnWidth'
+import { openAppRefInner } from '../../../components/appRefs'
 
 registerMessages({
   // 列类型 / 视图类型 / 聚合:模块级表只存**键**,文案在渲染时求值(写死字面量会冻在模块加载那一刻)
@@ -1990,6 +1991,7 @@ const wikiSegments = (s: string, onOpen: (inner: string) => void): ReactNode[] =
  *  (v2.1 这类带点号页名不被误判为附件),未命中且带非 .md/.db 扩展名才当附件系统打开
  *  (.db 落给 openWikiLink 的文件分支 → 应用内 db tab,不再被系统程序打开原始 JSON)。 */
 const openCellLink = (ps: ReturnType<typeof useScopedPageStore>, pagePath: string, raw: string): void => {
+  if (openAppRefInner(raw)) return // 应用 / 窗口引用:切过去,不找笔记
   const target = linkTarget(raw)
   const st = ps.getState()
   if (resolvePageName(target, st.pages, pagePath)) return void st.openWikiLink(target.replace(/\.md$/i, ''), pagePath)

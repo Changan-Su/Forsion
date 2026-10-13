@@ -16,11 +16,12 @@ describe('引用菜单分类', () => {
     expect(refCats([chat('a'), chat('b')])).toEqual([])
     expect(refCats([])).toEqual([])
   })
-  it('左右键在分类间循环', () => {
+  it('分类像接在查询词后面的几个字:→ 往右到头停住,← 往回,在「全部」上按 ← 不接(那是移光标)', () => {
     const cats = refCats([win('w'), app('a'), chat('c')])
     expect(moveRefCat(cats, 'all', 'ArrowRight')).toBe('window')
-    expect(moveRefCat(cats, 'all', 'ArrowLeft')).toBe('session')
-    expect(moveRefCat(cats, 'session', 'ArrowRight')).toBe('all')
+    expect(moveRefCat(cats, 'window', 'ArrowLeft')).toBe('all')
+    expect(moveRefCat(cats, 'all', 'ArrowLeft')).toBeNull()
+    expect(moveRefCat(cats, 'session', 'ArrowRight')).toBe('session') // 到头:键吃掉,不绕回「全部」
     expect(moveRefCat(cats, 'all', 'ArrowDown')).toBeNull()
     expect(moveRefCat([], 'all', 'ArrowRight')).toBeNull()
   })
