@@ -15,11 +15,15 @@ name: probe-app-refs-windows
 on:
   workflow_dispatch:
   push:
-    paths:
+    paths: &app_ref_paths
       - '.github/workflows/probe-app-refs-windows.yml'
       - 'desktop/electron/appRefsWin.ts'
       - 'desktop/electron/appRefsWin.test.ts'
+      - 'desktop/electron/appRefHotkey.ts'
+      - 'desktop/electron/appRefHotkey.test.ts'
       - 'desktop/scripts/app-refs-windows.probe.cjs'
+  pull_request:
+    paths: *app_ref_paths
 permissions:
   contents: read
 jobs:
@@ -41,7 +45,7 @@ jobs:
       - name: Fixture tests
         working-directory: desktop
         run: |
-          node node_modules/vitest/vitest.mjs run electron/appRefs.test.ts electron/appRefsWin.test.ts electron/activeWindow.test.ts
+          node node_modules/vitest/vitest.mjs run electron/appRefs.test.ts electron/appRefsWin.test.ts electron/appRefHotkey.test.ts electron/activeWindow.test.ts
           exit $LASTEXITCODE
       - name: Probe app and window references on the real machine
         working-directory: desktop
