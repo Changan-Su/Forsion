@@ -74,4 +74,4 @@ PASS narrow-recording 无横向溢出
 PASS narrow-no-permission-dark 无横向溢出
 PASS narrow-win-en-recording 无横向溢出
 PASS 无页面错误
-72 passed / 0 failed; SHOT C:\Users\Dream\AppData\Local\Temp\forsion-computer-history-settings
+72 passed / 0 failed; SHOT <home>\AppData\Local\Temp\forsion-computer-history-settings
