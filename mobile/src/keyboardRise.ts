@@ -30,6 +30,8 @@ const EASE = 'cubic-bezier(0.2, 0, 0, 1)'
 const FRAME = 16
 /** A height change smaller than this is the gesture bar or the dock coming and going, not a keyboard (CSS px = dp). */
 const KEYBOARD_MIN = 120
+/** How long a ride is held with no word from the shell before it is dropped (see keyboardRise). */
+const WATCHDOG = 4000
 let last = { ms: 285, ease: EASE }
 let riding: { els: HTMLElement[]; anims: Animation[]; rise: number; timer: number } | null = null
 
@@ -107,9 +109,11 @@ export function keyboardRise(e: ImeRise): void {
   // the new motion first (it starts from where the old one has the element), then the old one is dropped
   const anims = els.length ? ride(els, 0, rise, lag, true) : was && moving ? ride(was.els, 0, 0, lag, false) : []
   settle()
-  // The shell resizes the page when the keyboard has arrived, and that is what ends the ride (onResize). The timer is
-  // for a resize that never comes: an element left riding would stand above a keyboard that is not there.
-  if (els.length) riding = { els, anims, rise, timer: window.setTimeout(settle, last.ms + 700) }
+  // The shell resizes the page when the keyboard has arrived, and that is what ends the ride (onResize); a keyboard
+  // sent away first is said by the shell (rise 0, above). The timer is only for the word that never arrives, and it
+  // is long on purpose: on a page too busy to see its resize in time (seen at +6.7 s on a starved emulator) a short
+  // one dropped the ride under a keyboard that was still there — the input fell behind it and came back.
+  if (els.length) riding = { els, anims, rise, timer: window.setTimeout(settle, WATCHDOG) }
 }
 
 let installed = false
