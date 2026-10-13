@@ -1266,6 +1266,14 @@ export interface PluginContext {
      *  写进笔记请走 `registerSelectionAction`(宿主预览确认)或 slash `run`,别绕过用户直接写盘。
      *  插件被停用时在飞的请求会被中止并 reject。旧宿主 / 非 Tangu 宿主没有:`ctx.tangu?.complete?.(…)`。 */
     complete?(req: { prompt: string; selection?: string; before?: string; after?: string; signal?: AbortSignal; onDelta?: (delta: string) => void }): Promise<{ text: string }>
+    /** 翻译一段文本(2026-10-13+):同样是引擎 `POST /agent/inline` 的一次性调用(无工具、不落库),但**模型取用户在
+     *  「设置 → 模型 → 翻译」里选的那个**,没选才跟主区聊天当前模型 —— 逐句翻译这类量大的活别用 `complete`(那条恒用聊天模型)。
+     *  `text` 是要翻的原文(按数据对待,保留 Markdown);`language` 是目标语言,自由文本,写给模型看(`'English'`、
+     *  `'Simplified Chinese'`);`before` 是原文前面的一段上下文(只供消歧,不翻)。返回 `{ text }` = 译文本身,没有别的话。
+     *  只做翻译:要模型顺带改错字、按你的格式回话,请用 `complete` 自己写指令。引擎每个用户同时最多 3 个这类请求
+     *  (与 `complete` 合计),超出回 429 → 自己排队。停用时在飞的请求被中止并 reject。
+     *  旧宿主没有:`ctx.tangu?.translate ?? 退回 complete`。 */
+    translate?(req: { text: string; language: string; before?: string; signal?: AbortSignal; onDelta?: (delta: string) => void }): Promise<{ text: string }>
   }
   /** Agent Desk 伴随面(2026-09-19+,**只在有 Agent Desk 的宿主上存在** —— 桌面 Tangu;web / 移动端 / 纯 Amadeus 壳
    *  整个没有 `ctx.desk`)。往聊天右侧的 Agent Desk 挂一块自绘区域,典型用法是跟着 agent 状态做反应的形象。

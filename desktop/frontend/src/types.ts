@@ -1204,6 +1204,8 @@ export interface StoredDesktopConfig extends TanguDesktopConfig {
   backgroundModelId?: string
   /** 辅助模型 · 图像识别:主模型无原生视觉时的看图兜底 + 非聊天识图;空=跟随 app 级槽。 */
   visionModelId?: string
+  /** 辅助模型 · 翻译:笔记里的「翻译」与插件 ctx.tangu.translate 用;空=跟聊天当前模型。 */
+  translateModelId?: string
   /** 上次用的审批档 / 思考档:**新会话据此起步**(模型走 modelId,已是全局键)。
    *  在任意会话里改这三样都会写回这里 —— 用户的口径是「换过一次就一直是它」,不是每建一个会话重设一次。 */
   lastApprovalMode?: 'readonly' | 'auto-edit' | 'full-auto' | 'custom'

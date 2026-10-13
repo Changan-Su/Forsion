@@ -5,7 +5,7 @@
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { useSpaceStore, useWorkspace } from '@lcl/engine'
-import { installTanguProbe, START_CHAT_MAX_PROMPT } from './tanguProbe'
+import { installTanguProbe, START_CHAT_MAX_PROMPT, translateModelId } from './tanguProbe'
 import { readTangu } from './amadeus/plugins/tanguSeam'
 import { resolveNewSessionWorkspace, useApp } from './stores/appStore'
 import { DONE_HOLD_MS } from './stores/agentStatus'
@@ -162,6 +162,28 @@ describe('ctx.tangu 探针', () => {
     useApp.setState({ newChatModel: 'm10' })
     useSpaceStore.setState({ activeSpaceId: 'amadeus' })
     expect(n).toBe(2)
+  })
+})
+
+describe('「翻译」模型槽(translate 动作的模型)', () => {
+  const withSlot = (id: string | undefined): void => { vi.stubGlobal('window', { tangu: { getConfig: async () => ({ translateModelId: id }) } }) }
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('设了且目录里有 → 用它;没设 / 目录里已经没有 → undefined(落回聊天模型);目录还没拉回来 → 先信它', async () => {
+    useApp.setState({ modelsResp: { models: [{ id: 'mt', name: 'MT', provider: 'x', source: 'forsion' }] } } as never)
+    withSlot('mt')
+    expect(await translateModelId()).toBe('mt')
+    withSlot('')
+    expect(await translateModelId()).toBeUndefined()
+    withSlot('gone')
+    expect(await translateModelId()).toBeUndefined()
+    useApp.setState({ modelsResp: undefined } as never)
+    expect(await translateModelId()).toBe('gone')
+  })
+
+  it('读配置失败不抛', async () => {
+    vi.stubGlobal('window', { tangu: { getConfig: async () => { throw new Error('ipc down') } } })
+    expect(await translateModelId()).toBeUndefined()
   })
 })
 

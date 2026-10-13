@@ -37,7 +37,7 @@ import { act } from '../../activity/log'
 import { notifyApp } from '../../stores/notificationStore'
 import { panelToast } from '../../components/PanelNotice'
 import { currentLocale, registerMessages, subscribeLocale, translate } from '../../i18n'
-import { idleAgentStatus, readTangu, type TanguAgentStatus, type TanguStartChatResult } from './tanguSeam'
+import { idleAgentStatus, readTangu, type TanguAgentStatus, type TanguCompleteRequest, type TanguStartChatResult } from './tanguSeam'
 import { registerDeskCompanion, revokeDeskCompanions, type DeskCompanionContribution, type DeskCompanionHandle } from './deskCompanion'
 // ctx.desk 的宿主闸:端判定单源(currentPlatform)+ UI 模式(叶子模块,不经 @lcl/engine barrel)。
 import { currentPlatform } from '../../services/agentRunService'
@@ -1666,24 +1666,23 @@ export const usePluginStore = create<PluginState>((set, get) => {
                   },
                 }
               : {}),
-            // 一次性补全(G3-07):探针给得出才注入。插件停用 → 关账中止在飞请求并 reject。
+            // 一次性补全(G3-07)与翻译:探针给得出才注入。插件停用 → 关账中止在飞请求并 reject。
+            // translate 走引擎现成的 translate 动作,模型取「翻译」模型槽(tanguProbe.complete 里解析),不跟主对话模型。
             ...(readTangu()?.complete
-              ? {
-                  complete: async (req: { prompt: string; selection?: string; before?: string; after?: string; signal?: AbortSignal; onDelta?: (delta: string) => void }): Promise<{ text: string }> => {
-                    if (!ctxAlive()) throw new Error('plugin disabled')
+              ? (() => {
+                  type OneShot = { signal?: AbortSignal; onDelta?: (delta: string) => void }
+                  const str = (v: unknown): string | undefined => (typeof v === 'string' && v ? v : undefined)
+                  const oneShot = async (what: 'complete' | 'translate', body: TanguCompleteRequest, req: OneShot): Promise<{ text: string }> => {
                     const probe = readTangu()
-                    if (!probe?.complete) throw new Error('complete is not available on this host')
-                    const prompt = typeof req?.prompt === 'string' ? req.prompt.trim() : ''
-                    if (!prompt) throw new Error('ctx.tangu.complete: prompt is required')
+                    if (!probe?.complete) throw new Error(`${what} is not available on this host`)
                     const ac = new AbortController()
-                    const stop = scope.own('request', () => ac.abort(), 'complete')
+                    const stop = scope.own('request', () => ac.abort(), what)
                     const outer = req.signal
                     const onOuter = (): void => ac.abort()
                     outer?.addEventListener('abort', onOuter)
                     if (outer?.aborted) ac.abort()
                     try {
-                      const str = (v: unknown): string | undefined => (typeof v === 'string' && v ? v : undefined)
-                      const r = await probe.complete({ action: 'custom', instruction: prompt, selection: str(req.selection), before: str(req.before), after: str(req.after) }, {
+                      const r = await probe.complete(body, {
                         signal: ac.signal,
                         onDelta: (d) => { if (ctxAlive()) { try { req.onDelta?.(d) } catch { /* 插件回调抛错不打断流 */ } } },
                       })
@@ -1693,8 +1692,23 @@ export const usePluginStore = create<PluginState>((set, get) => {
                       outer?.removeEventListener('abort', onOuter)
                       stop.forget()
                     }
-                  },
-                }
+                  }
+                  return {
+                    complete: async (req: OneShot & { prompt: string; selection?: string; before?: string; after?: string }): Promise<{ text: string }> => {
+                      if (!ctxAlive()) throw new Error('plugin disabled')
+                      const prompt = typeof req?.prompt === 'string' ? req.prompt.trim() : ''
+                      if (!prompt) throw new Error('ctx.tangu.complete: prompt is required')
+                      return oneShot('complete', { action: 'custom', instruction: prompt, selection: str(req.selection), before: str(req.before), after: str(req.after) }, req)
+                    },
+                    translate: async (req: OneShot & { text: string; language: string; before?: string }): Promise<{ text: string }> => {
+                      if (!ctxAlive()) throw new Error('plugin disabled')
+                      const text = typeof req?.text === 'string' ? req.text : ''
+                      const language = typeof req?.language === 'string' ? req.language.trim() : ''
+                      if (!text.trim() || !language) throw new Error('ctx.tangu.translate: text and language are required')
+                      return oneShot('translate', { action: 'translate', selection: text, language, before: str(req.before) }, req)
+                    },
+                  }
+                })()
               : {}),
           },
         }
