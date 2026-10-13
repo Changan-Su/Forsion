@@ -7,6 +7,7 @@
  *  - 右键空白/两区 + 号 = 新建 Space / 添加命令(从命令面板选)/ 新建收纳夹;账号卡(pinned)钉死最底。
  *  - 左面板收起时,指针停在 Space 图标上 → 右侧浮出那个 Space 的左面板(SpacePeek),可直接操作;移开即收。 */
 import { useEffect, useLayoutEffect, useReducer, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { ChevronDown, ChevronUp, ChevronsLeft, ChevronsRight, Folder as FolderIcon, MoreHorizontal, Plus, Zap } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { useRibbonStore, rankIds, reorderBase, unionOrder, moveTo, slotIndexAt, ribbonActions, isRibbonAutoHome, recentRoom, type RibbonZone, type RibbonFolder } from './ribbonRegistry'
@@ -19,9 +20,9 @@ import { effectiveHotkey, formatHotkey, isMacPlatform, useShortcuts } from './sh
 import { engineTr, useEngineI18n } from './i18nSeam'
 import { label } from './types'
 import type { Command, RibbonItem } from './types'
-import { OverlayAt, zoomOf } from './menuAnchor'
+import { OverlayAt, UI_ZOOM_EVENT, zoomOf } from './menuAnchor'
 import { useWorkspace } from './workspaceStore'
-import { getView } from './viewRegistry'
+import { getView, subscribeViews } from './viewRegistry'
 import { computeSideWidth } from './sideWidth'
 import { SpacePeek } from './SpacePeek'
 import { PEEK_CLOSE_DELAY, PEEK_OPEN_DELAY, peekShouldClose, peekViews, type PeekZone } from './spacePeekRules'
@@ -194,20 +195,24 @@ export function Ribbon() {
   const peekFor = useRef<string | null>(null) // 指针此刻停着的 Space(弹过 / 点过之后,移开再回来才重新计时)
   const peekOpenTimer = useRef<number | undefined>(undefined)
   const peekCloseTimer = useRef<number | undefined>(undefined)
+  const peekHold = useRef(false) // 卡里一点击切了 Space:那边的左栏展开着也先不让位(见下)
+  const peekCtx = useRef<Event | null>(null) // 从卡里(含它挂到 body 的菜单)冒上来的那次右键
+  const [, relayPeek] = useReducer((n: number) => n + 1, 0) // 窗口大小 / 缩放变了:重算卡片几何
   const cancelPeekClose = (): void => { window.clearTimeout(peekCloseTimer.current); peekCloseTimer.current = undefined }
   const closePeek = (): void => {
     window.clearTimeout(peekOpenTimer.current)
     cancelPeekClose()
+    peekHold.current = false
     setPeek(null)
   }
-  const blockPeek = !leftCollapsed || !!drag || !!menu || !!iconPick || !!fly
-  // ⚠️ 让位要晚一个宏任务:卡里一点击切到别的 Space、那边的左栏是展开的 → blockPeek 当场成立。React 的捕获与冒泡是原生的
-  // 两次回调,捕获那次走完就同步重渲;此时立刻卸卡,冒泡阶段就找不到被点的那个元素 —— Space 切了,这一下点击却丢了。
-  useEffect(() => {
-    if (!blockPeek) return
-    const timer = window.setTimeout(closePeek, 0)
-    return () => window.clearTimeout(timer)
-  }, [blockPeek]) // eslint-disable-line react-hooks/exhaustive-deps
+  const blockHard = !!drag || !!menu || !!iconPick || !!fly
+  const blockPeek = blockHard || !leftCollapsed
+  // 左面板展开了 → 预览让位。例外(peekHold):这次展开是卡里一点击切 Space 带出来的 —— 卡先留着,等指针离开再收。
+  // ⚠️ 不留的话:React 的捕获与冒泡是原生的两次回调,捕获那次(切 Space)走完就同步重渲,此刻卸卡,冒泡阶段找不到被点的
+  // 元素 —— Space 切了,这一下点击却丢了;晚一拍再卸也不行,这一下点击刚在卡里打开的菜单 / 表单会跟着卡一起没掉。
+  useEffect(() => { if (blockHard || (blockPeek && !peekHold.current)) closePeek() }, [blockHard, blockPeek]) // eslint-disable-line react-hooks/exhaustive-deps
+  // 卡里的 View 被注销了(插件停用):别留一个没人管的实例。
+  useEffect(() => (peek ? subscribeViews(() => { if (peek.views.some((v) => !getView(v.type))) closePeek() }) : undefined), [peek]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => () => { window.clearTimeout(peekOpenTimer.current); window.clearTimeout(peekCloseTimer.current) }, [])
   const openPeek = (id: string): void => {
     const { spaces, activeSpaceId } = useSpaceStore.getState()
@@ -223,7 +228,8 @@ export function Ribbon() {
     if (id === peekFor.current) return
     window.clearTimeout(peekOpenTimer.current)
     peekFor.current = id
-    if (!id || blockPeek) return
+    if (!id) return
+    if (blockPeek) { if (peek && peek.spaceId !== id) closePeek(); return } // 被留住的卡(peekHold)不跟着换图标
     if (peek?.spaceId === id) cancelPeekClose() // 从卡里回到它自己的图标
     else if (peek) openPeek(id) // 已经弹着:换图标不再等
     else peekOpenTimer.current = window.setTimeout(() => { if (peekFor.current === id) openPeek(id) }, PEEK_OPEN_DELAY)
@@ -234,7 +240,7 @@ export function Ribbon() {
     const zoneOf = (target: EventTarget | null): PeekZone => {
       const el = target instanceof Element ? target : null
       if (!el) return 'overlay'
-      if (peekRef.current?.contains(el)) return 'card' // 卡在 Ribbon 的 DOM 里,先认它
+      if (peekRef.current?.contains(el)) return 'card'
       if (rootRef.current?.contains(el) && el.closest('[data-space-id]')) return 'trigger'
       return el.closest('.shell') ? 'shell' : 'overlay'
     }
@@ -247,23 +253,35 @@ export function Ribbon() {
     //  · 只听 mousemove:指针进了主区里的 iframe / webview 之后事件到不了本窗口,而进去那一下的 mouseover 是打在
     //    iframe 元素上的;菜单在不动的指针底下弹出来时也只有 mouseover。
     // 已经在倒计时就不重置 —— 指针一直在动的话,每发都重置等于永远不收。
-    const onMove = (e: MouseEvent): void => {
-      const zone = zoneOf(e.target)
-      if (!peekShouldClose({ zone, buttons: e.buttons, typing: zone === 'shell' && typing() })) cancelPeekClose()
+    let lastTarget: EventTarget | null = null
+    const judge = (target: EventTarget | null, buttons: number): void => {
+      const zone = zoneOf(target)
+      if (!peekShouldClose({ zone, buttons, typing: zone === 'shell' && typing() })) cancelPeekClose()
       else if (peekCloseTimer.current === undefined) peekCloseTimer.current = window.setTimeout(closePeek, PEEK_CLOSE_DELAY)
     }
+    const onMove = (e: MouseEvent): void => { lastTarget = e.target; judge(e.target, e.buttons) }
+    // 「不收」的两个理由消失时指针可能正停着不动(拖出去松了键 / 改名回车、输入框失焦):各补一次重判。
+    const onFocusOut = (): void => { window.setTimeout(() => judge(lastTarget, 0), 0) }
     // 点应用界面别处 / 点 Space 图标(要进那个 Space 了)= 立刻收;点卡里弹出来的菜单不算。
     const onDown = (e: MouseEvent): void => { const z = zoneOf(e.target); if (z === 'shell' || z === 'trigger') closePeek() }
     const onKey = (e: KeyboardEvent): void => { if (e.key === 'Escape' && !typing()) closePeek() } // 输入框里的 Esc 归输入框
     document.addEventListener('mousemove', onMove)
     document.addEventListener('mouseover', onMove)
+    document.addEventListener('mouseup', onMove)
+    document.addEventListener('focusout', onFocusOut)
     document.addEventListener('mousedown', onDown, true)
     window.addEventListener('keydown', onKey)
+    window.addEventListener('resize', relayPeek)
+    window.addEventListener(UI_ZOOM_EVENT, relayPeek)
     return () => {
       document.removeEventListener('mousemove', onMove)
       document.removeEventListener('mouseover', onMove)
+      document.removeEventListener('mouseup', onMove)
+      document.removeEventListener('focusout', onFocusOut)
       document.removeEventListener('mousedown', onDown, true)
       window.removeEventListener('keydown', onKey)
+      window.removeEventListener('resize', relayPeek)
+      window.removeEventListener(UI_ZOOM_EVENT, relayPeek)
     }
   }, [peekOpen]) // eslint-disable-line react-hooks/exhaustive-deps
   /** 卡片几何(视口 px → 按 zoom 折算,同 .rb-fly):贴 Ribbon 右沿,从标签条下沿到工作区底。
@@ -791,8 +809,8 @@ export function Ribbon() {
     setMenu({ x: e.clientX, y: e.clientY, entries: zoneMenu(zone) })
   }
   const onRootCtx = (e: React.MouseEvent): void => {
-    // 预览卡在 Ribbon 的 React 树里,卡里的右键会冒到这儿:那是 View 自己的事,不弹 Ribbon 的区菜单。
-    if (e.defaultPrevented || peekRef.current?.contains(e.target as Node)) return
+    // 预览卡在 Ribbon 的 React 树里,卡里(含它挂到 body 的菜单)的右键会冒到这儿:那是 View 自己的事,不弹 Ribbon 的区菜单。
+    if (e.defaultPrevented || e.nativeEvent === peekCtx.current) return
     e.preventDefault()
     setMenu({ x: e.clientX, y: e.clientY, entries: [...zoneMenu('top'), ...zoneMenu('bottom')] })
   }
@@ -1079,17 +1097,25 @@ export function Ribbon() {
         </div>
       )}
 
-      {peek && peekSpace && (
+      {/* 挂到 Ribbon 的父容器而不是条里:条上原有的「点在 Ribbon 之内 / 之外」判定(翻看后归位、「…」点别处收回)
+          都按 DOM 归属算,卡片得算「之外」。祖先链不变(主题、.am-app 这类按祖先生效的样式照旧)。 */}
+      {peek && peekSpace && rootRef.current?.parentElement && createPortal(
         <SpacePeek
           ref={peekRef}
           space={peekSpace}
           views={peek.views}
           style={peekStyle()}
+          onContextMenuCapture={(e) => { peekCtx.current = e.nativeEvent }}
           // ponytail: 操作别的 Space 的左面板 = 先进那个 Space(等同点了它的图标),这一下点击再照常落地 —— 名册 / 收件箱这类
           // 「点了在主区显示」的列表,不切过去就点了没反应。挂在 click 的捕获阶段:先切,条目自己的 onClick 随后照常触发
-          // (前提是卡片这一刻不被卸掉,见上面 blockPeek 那段的延后)。只认 click,靠 mousedown 起作用的操作不切。
-          onBeforeClick={() => { if (peek.spaceId !== useSpaceStore.getState().activeSpaceId) setActiveSpace(peek.spaceId) }}
-        />
+          // (前提是卡片这一刻不被卸掉,见上面的 peekHold)。只认 click,靠 mousedown 起作用的操作不切。
+          onBeforeClick={() => {
+            if (peek.spaceId === useSpaceStore.getState().activeSpaceId) return
+            peekHold.current = true
+            setActiveSpace(peek.spaceId)
+          }}
+        />,
+        rootRef.current.parentElement,
       )}
 
       {tip && !expanded && (

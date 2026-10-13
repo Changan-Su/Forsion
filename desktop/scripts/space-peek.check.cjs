@@ -83,6 +83,11 @@ async function run(page) {
   await page.waitForSelector(icon('a'))
   await page.waitForTimeout(600)
 
+  const leftW = await page.evaluate(() => {
+    const p = window.__peek.useWorkspace.getState().api.panels.find((x) => (x.params || {}).__loc === 'left')
+    return p.group.api.width
+  })
+
   // ── A. 左面板展开着:不弹 ──
   await hover(page, icon('a'))
   await page.waitForTimeout(700)
@@ -121,6 +126,7 @@ async function run(page) {
     const fixed = document.querySelector('.rb-peek .pk-fixed').getBoundingClientRect()
     const card = document.querySelector('.rb-peek')
     return {
+      inRibbon: document.querySelector('.rb').contains(card),
       rbRight: rb.right, workBottom: work.bottom, toggleBottom: t.bottom, toggleHit: !!hit && toggle.contains(hit), fixedLeft: fixed.left, fixedTop: fixed.top,
       transform: getComputedStyle(card).transform, translate: getComputedStyle(card).translate, filter: getComputedStyle(card).backdropFilter, opacity: getComputedStyle(card).opacity,
     }
@@ -128,7 +134,8 @@ async function run(page) {
   check('C1 卡片贴 Ribbon 右沿(4px 缝)', !!p && Math.abs(p.rect.l - (geo.rbRight + 4)) <= 1, `${p?.rect.l} vs ${geo.rbRight + 4}`)
   check('C2 卡片让开标签条:左栏展开钮没被盖住、点得到', !!p && p.rect.t >= geo.toggleBottom && geo.toggleHit, `top ${p?.rect.t} / 钮底 ${geo.toggleBottom} / 命中 ${geo.toggleHit}`)
   check('C3 卡片通到工作区底(留 8px)', !!p && Math.abs(p.rect.b - (geo.workBottom - 8)) <= 1, `${p?.rect.b} vs ${geo.workBottom - 8}`)
-  check('C4 卡片宽 = 左栏宽(220–680)', !!p && p.rect.w >= 220 && p.rect.w <= 680, `${p?.rect.w}`)
+  check('C4 卡片宽 = 左栏展开时的宽', !!p && Math.abs(p.rect.w - leftW) <= 2, `${p?.rect.w} vs ${leftW}`)
+  check('C7 卡片不在 Ribbon 的 DOM 里(条上「点在条内 / 条外」的旧判定把它算条外)', geo.inRibbon === false)
   check('⚠️C5 卡片不是 View 里 fixed 元素的包含块(菜单 / 提示不偏移)', Math.abs(geo.fixedLeft - 640) <= 1 && Math.abs(geo.fixedTop - 420) <= 1, `fixed 落在 ${geo.fixedLeft},${geo.fixedTop}(应为 640,420)`)
   check('C6 入场播完卡片上不残留 transform / translate / backdrop-filter / opacity', geo.transform === 'none' && geo.translate === 'none' && geo.filter === 'none' && geo.opacity === '1', JSON.stringify([geo.transform, geo.translate, geo.filter, geo.opacity]))
   if (SHOT_DIR) {
@@ -153,6 +160,11 @@ async function run(page) {
   await page.mouse.move(item.x, item.y, { steps: 8 }) // 途经主区,终点在挂到 body 的菜单上
   await page.waitForTimeout(450)
   check('⚠️D5 指针停在卡里弹出的菜单上(外壳之外),卡片不收', (await peek(page))?.space === 'a')
+  const menuBox = await page.locator('.pk-menu').boundingBox()
+  await page.mouse.click(menuBox.x + 3, menuBox.y + 3, { button: 'right' }) // 菜单自己的留白:没人接这次右键
+  await page.waitForTimeout(150)
+  check('D5b 在卡里弹出的菜单上右键(挂在 body,React 树上仍是卡的后代):不弹 Ribbon 的区菜单,卡片和菜单都还在',
+    (await page.locator('.rb-menu').count()) === 0 && (await peek(page))?.space === 'a' && (await page.locator('.pk-menu').count()) === 1)
   await page.mouse.click(item.x, item.y)
   s = await state(page)
   check('D6 菜单项点得到,点菜单不收卡片', s.hits.includes('menu:a') && (await peek(page))?.space === 'a', s.hits.join())
@@ -172,21 +184,20 @@ async function run(page) {
   await page.keyboard.press('Escape')
   check('D10 输入框里的 Esc 归输入框,不收卡片', (await peek(page)) !== null)
   await page.evaluate(() => document.activeElement.blur())
-  await page.mouse.move(990, 630, { steps: 3 })
   await page.waitForTimeout(400)
-  check('D11 失焦后指针在界面别处 → 收起', (await peek(page)) === null)
+  check('D11 输入框失焦时指针早已停在界面别处(不再动)→ 也收起', (await peek(page)) === null)
   check('D12 收起即卸载,再弹是重新挂的(预览不进布局)', (await page.evaluate(() => window.__peek.mounts.a)) === mountsA + 1 && (await state(page)).left === false)
 
   p = await openOn(page, 'a')
   await page.keyboard.press('Escape')
   await page.waitForTimeout(60)
-  check('D13 Esc 立刻收', (await peek(page)) === null)
+  check('D13 Esc 立刻收', p?.space === 'a' && (await peek(page)) === null)
   await page.waitForTimeout(600)
   check('D14 收了之后指针还停在图标上,不再自己弹回来', (await peek(page)) === null)
   p = await openOn(page, 'a')
   await page.mouse.click(980, 620)
   await page.waitForTimeout(60)
-  check('D15 点界面别处立刻收', (await peek(page)) === null)
+  check('D15 点界面别处立刻收', p?.space === 'a' && (await peek(page)) === null)
 
   p = await openOn(page, 'a')
   const frame = await centerOf(page, '.pk-frame')
@@ -214,7 +225,16 @@ async function run(page) {
   await page.waitForTimeout(500)
   s = await state(page)
   check('⚠️E4 在别的 Space 的卡里点一下:先切到那个 Space,这一下点击照常落地', s.space === 'b' && s.hits[s.hits.length - 1] === 'b2:1@b', `active ${s.space} / ${s.hits.join()}`)
-  check('E5 那个 Space 的左栏本来就展开着 → 预览让位', s.left === true && (await peek(page)) === null, `left ${s.left}`)
+  p = await peek(page)
+  check('⚠️E5 那个 Space 的左栏本来就展开着:卡片先留着(这一下点开的菜单 / 表单还挂在卡里),不当场卸掉', s.left === true && p?.space === 'b' && p.tags.join() === 'b2', `left ${s.left} / ${JSON.stringify(p)}`)
+  await hover(page, icon('a'))
+  await page.waitForTimeout(120)
+  check('E6 留着的卡不跟着换图标:指针到别的 Space 图标上就收', (await peek(page)) === null)
+  await park(page)
+  await page.waitForTimeout(300)
+  await hover(page, icon('b'))
+  await page.waitForTimeout(600)
+  check('E7 左栏展开着,再悬停也不弹', (await peek(page)) === null)
 
   // ── F. 没有左栏的 Space;点图标 ──
   await setLeft(page, false)
@@ -238,7 +258,7 @@ async function run(page) {
   p = await openOn(page, 'a')
   await page.evaluate(() => window.__peek.useWorkspace.getState().toggleSidebar('left'))
   await page.waitForTimeout(700)
-  check('G1 预览弹着时左面板展开了 → 预览收起', (await peek(page)) === null)
+  check('G1 预览弹着时左面板展开了(不是卡里点出来的)→ 预览收起', p?.space === 'a' && (await peek(page)) === null)
   await setLeft(page, false)
   await page.evaluate(() => { document.body.style.zoom = '1.1' })
   await page.waitForTimeout(200)
@@ -252,6 +272,20 @@ async function run(page) {
   check('⚠️G2 110% 缩放:卡片仍贴 Ribbon 右沿、让开标签条、通到底(fixed 坐标按 zoom 折算)',
     !!p && Math.abs(p.rect.l - (z.rbRight + 4)) <= 1.5 && p.rect.t >= z.toggleBottom && Math.abs(p.rect.b - (z.workBottom - 8)) <= 1.5,
     `left ${p?.rect.l} vs ${z.rbRight + 4};top ${p?.rect.t} ≥ ${z.toggleBottom};bottom ${p?.rect.b} vs ${z.workBottom - 8}`)
+  await page.evaluate(() => { document.body.style.zoom = '' })
+  await page.waitForTimeout(200)
+
+  // ── H. 弹着时窗口变了大小;卡里的 View 被注销 ──
+  // 只改窗口宽:Ribbon 自己不会因此重渲(它只盯自己的高),卡片得靠自己听 resize。没记过宽 → 卡宽 = 按工作区宽算的默认值,跟着变。
+  await page.evaluate(() => { const w = window.__peek.useWorkspace; w.setState({ sideWidths: { ...w.getState().sideWidths, left: null } }) })
+  p = await openOn(page, 'b')
+  await page.setViewportSize({ width: 1150, height: 900 })
+  await page.waitForTimeout(300)
+  const after = await peek(page)
+  check('H1 弹着时窗口变窄:卡片跟着重排(不停在旧宽度)', p?.space === 'b' && !!after && p.rect.w - after.rect.w > 20, `${p?.rect.w} → ${after?.rect.w}`)
+  await page.evaluate(() => window.__peek.unregisterView('pk-b'))
+  await page.waitForTimeout(150)
+  check('H2 卡里的 View 被注销(插件停用)→ 预览收起,不留没人管的实例', !!after && (await peek(page)) === null)
 }
 
 async function main() {

@@ -13,6 +13,7 @@ const path = require('path')
 const { sleep, shotDir, makeReporter, launch, boot, enterSpace, activeSpace, captureWindow } = require('./lib/uiux-electron.cjs')
 
 const SHOT = process.argv.includes('--shot')
+const MUST = ['amadeus', 'calendar', 'inbox', 'agents']
 const { check, note, summary } = makeReporter()
 
 const peek = (win) => win.evaluate(() => {
@@ -72,7 +73,8 @@ async function main() {
     for (const id of ids.filter((x) => x !== 'tangu')) {
       await hoverSpace(win, id)
       p = await peek(win)
-      if (!p) { note(`${id}:没有左栏,不弹`); continue }
+      // 这几个内置 Space 一定有左栏:不弹就是坏了,不能当成「没有左栏」放过去。
+      if (!p) { if (MUST.includes(id)) check(`S ${id}:它有左栏,悬停应当弹出预览`, false); else note(`${id}:没有左栏,不弹`); continue }
       check(`S ${id}:它的左面板在卡里渲染出来了(不是错误面)`, p.space === id && !p.error && p.nodes > 3, JSON.stringify(p))
       if (shots) await captureWindow(app, path.join(shots, `${n++}-${id}-light.png`))
     }
@@ -90,7 +92,7 @@ async function main() {
       await sleep(1500)
       const tab2 = await win.evaluate(() => [...document.querySelectorAll('.dv-tab')].map((t) => t.textContent || '').join(' | '))
       check('X2 点一下 = 进 Tangu 并打开那条会话', (await activeSpace(win)) === 'tangu' && /Probe session three/.test(tab2), `${await activeSpace(win)} / ${tab2.slice(0, 120)}`)
-    } else note('没进得了笔记 Space,跨 Space 那段跳过')
+    } else check('X0 进得了笔记 Space(跨 Space 那段的前提)', false)
 
     // ── 另外两档只截图(观感自己看):当前主题的暗色、玻璃主题(材质画在 ::before 上,模糊要采得到卡片身后的像素) ──
     if (shots) {

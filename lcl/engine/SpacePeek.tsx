@@ -75,9 +75,11 @@ export const SpacePeek = forwardRef<HTMLDivElement, {
   style: CSSProperties
   /** View 里的点击落地之前(捕获阶段)调:Ribbon 借它先切到这个 Space。 */
   onBeforeClick(): void
-}>(function SpacePeek({ space, views, style, onBeforeClick }, ref) {
+  /** 卡里的右键(React 树上的后代都算,含 View 挂到 body 的菜单):Ribbon 借它认出「这不是条上的右键」。 */
+  onContextMenuCapture(e: React.MouseEvent): void
+}>(function SpacePeek({ space, views, style, onBeforeClick, onContextMenuCapture }, ref) {
   return (
-    <div ref={ref} className="rb-peek" role="region" aria-label={label(space.name)} data-space={space.id} style={style}>
+    <div ref={ref} className="rb-peek" role="region" aria-label={label(space.name)} data-space={space.id} style={style} onContextMenuCapture={onContextMenuCapture}>
       <PeekContent key={space.id} space={space} views={views} onBeforeClick={onBeforeClick} />
     </div>
   )
