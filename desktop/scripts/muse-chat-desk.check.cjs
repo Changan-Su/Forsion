@@ -220,10 +220,11 @@ async function main() {
     // 暗色截图:重新展开再拍
     await win.locator(`.agent-desk-card[data-desk-session="${MUSE_ID}"]`).first().click().catch(() => {})
     await sleep(900)
-    await win.evaluate(() => { document.documentElement.setAttribute('data-bg', 'dark'); document.documentElement.classList.add('dark') })
+    // 暗色 token 挂在 `:root.dark`(base.css),data-mode 只管 color-scheme:两样一起翻,拍完翻回去
+    const wasMode = await win.evaluate(() => { const r = document.documentElement; const m = r.getAttribute('data-mode'); r.classList.add('dark'); r.setAttribute('data-mode', 'dark'); return m })
     await sleep(600)
     await win.screenshot({ path: path.join(SHOT_DIR, 'musechat-dark.png') })
-    await win.evaluate(() => { document.documentElement.removeAttribute('data-bg'); document.documentElement.classList.remove('dark') })
+    await win.evaluate((m) => { const r = document.documentElement; r.classList.remove('dark'); if (m) r.setAttribute('data-mode', m); else r.removeAttribute('data-mode') }, wasMode)
     check('M8 截图已存(亮 / 暗)', fs.existsSync(path.join(SHOT_DIR, 'musechat-light.png')) && fs.existsSync(path.join(SHOT_DIR, 'musechat-dark.png')), SHOT_DIR)
 
     // ── M7 行菜单 ──
