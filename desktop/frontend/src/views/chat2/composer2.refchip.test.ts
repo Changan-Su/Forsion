@@ -6,7 +6,7 @@
  * 每条用例都反向断言 token,而不只断言名字。
  */
 import { describe, expect, it } from 'vitest'
-import { refChipOf, fileChip, folderChip, viewChip, appChip, composeOutgoing } from './Composer2'
+import { refChipOf, fileChip, folderChip, viewChip, appChip, appRefChipOf, canInline, inlineTokenOf, runChipOwners, composeOutgoing } from './Composer2'
 import { refToText, type ChatRef } from './chatDragRef'
 import { splitLeadingRefs } from './RefChipView'
 
@@ -147,5 +147,57 @@ describe('composeOutgoing', () => {
     expect(composeOutgoing('', '', '/refine x')).toBe('/refine x')
     expect(composeOutgoing('[[a.md]]\n', '', '/refinery')).toBe('[[a.md]]\n/refinery')
     expect(composeOutgoing('', '', '/Refine x')).toBe('/refine x')
+  })
+})
+
+describe('应用 / 窗口引用', () => {
+  it('token 是带 :// 的双链,往返一致;芯片带着引用本身(画真图标用)', () => {
+    const r: ChatRef = { kind: 'window', id: 'com.google.Chrome', name: 'Linear – Pricing' }
+    expect(refChipOf(r, VAULT)).toEqual({ token: '[[window://com.google.Chrome|Linear – Pricing]]', name: 'Linear – Pricing', kind: 'window', appRef: r })
+    roundTrip(r)
+    roundTrip({ kind: 'app', id: 'com.tencent.xinWeChat', name: '微信' })
+  })
+  it('气泡开头那一行:和笔记 / 会话混排也拆得出来,不被当成笔记', () => {
+    const got = splitLeadingRefs('[[window://com.google.Chrome|Linear – Pricing]] [[session:abc|昨天]] [[app://com.apple.finder|访达]]\n正文')
+    expect(got?.refs.map((x) => [x.kind, x.name, !!x.wiki])).toEqual([['window', 'Linear – Pricing', false], ['session', '昨天', true], ['app', '访达', false]])
+    expect(got?.refs[0].appRef).toEqual({ kind: 'window', id: 'com.google.Chrome', name: 'Linear – Pricing' })
+    expect(got?.body).toBe('正文')
+  })
+  it('侧边拼接那条 <forsion-app> 仍是它自己:不带 appRef,也不能写进句子', () => {
+    const dock = appChip({ app: 'Safari', bundleId: 'com.apple.Safari', pid: 1, windowId: 2, title: 't' })
+    expect(dock.appRef).toBeUndefined()
+    expect(canInline(dock)).toBe(false)
+    expect(canInline(viewChip('calendar', '日历'))).toBe(false)
+    expect(canInline(appRefChipOf({ kind: 'app', id: 'com.apple.Safari', name: 'Safari' }))).toBe(true)
+    expect(canInline(fileChip('/a/b.ts'))).toBe(true)
+  })
+})
+
+describe('inlineTokenOf(句子里的引用发出去写成什么)', () => {
+  it('文件 → [[绝对路径|名字]];相对路径拼上本机工作目录,带引号的先去引号', () => {
+    expect(inlineTokenOf(fileChip('/Users/x/a b.ts'))).toBe('[[/Users/x/a b.ts|a b.ts]]')
+    expect(inlineTokenOf(fileChip('src/app.ts'), '/Users/x/proj/')).toBe('[[/Users/x/proj/src/app.ts|app.ts]]')
+  })
+  it('拿不到绝对路径(云端会话)/ 路径里有会拆坏双链的字符 → 保持原样', () => {
+    expect(inlineTokenOf(fileChip('src/app.ts'))).toBe('src/app.ts')
+    expect(inlineTokenOf(fileChip('/Users/x/a[1].ts'))).toBe('/Users/x/a[1].ts')
+  })
+  it('别的种类原样用自己的 token', () => {
+    const note = refChipOf({ kind: 'note', path: '周报.md' }, VAULT)
+    expect(inlineTokenOf(note)).toBe(note.token)
+    expect(inlineTokenOf(folderChip('/Users/x/dir'))).toBe('/Users/x/dir')
+  })
+})
+
+describe('runChipOwners(句子里的那段归谁)', () => {
+  it('按引用自己记着的段名找;同名的两条各归各的,没写进过句子的不在表里', () => {
+    const a = { ...refChipOf({ kind: 'note', path: 'a/README.md' }, VAULT), inline: true as const, run: 'README' }
+    const b = { ...refChipOf({ kind: 'note', path: 'b/README.md' }, VAULT), run: 'README\u2060' }
+    const c = refChipOf({ kind: 'note', path: 'c/README.md' }, VAULT) // 只在「已选择」里,没写进句子
+    expect(a.name).toBe(b.name)
+    const owners = runChipOwners([c, b, a])
+    expect(owners.get('README')).toBe(a)
+    expect(owners.get('README\u2060')).toBe(b)
+    expect(owners.size).toBe(2) // c 不占名字:主区换到同名的另一篇也抢不走句子里已有的那段
   })
 })

@@ -7,7 +7,7 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import {
   Camera, ChevronDown, ChevronRight, FileText, Image as ImageIcon, MessageSquarePlus, MessagesSquare,
-  PanelsTopLeft, Paperclip, Plus, Search, UserPlus,
+  AppWindow, PanelsTopLeft, Paperclip, Plus, Search, UserPlus,
 } from 'lucide-react'
 import { allViews, getView, label, nestedPanelPlacement, openNativeSheetMenu, UI_ZOOM_EVENT, useEdgeNudge, useWorkspace, zoomOf, type SheetMenu, type SheetMenuItem } from '@lcl/engine'
 import { registerMessages, useI18n } from '../../i18n'
@@ -16,6 +16,8 @@ import { useRecentViews } from '../../recentViews'
 import { useApp } from '../../stores/appStore'
 import type { ChatRef } from './chatDragRef'
 import { isVaultRelative } from './mainReference'
+import type { AppRefList } from '../../../../shared/appRefs'
+import { AppRefIcon } from '../../components/appRefs'
 
 registerMessages({
   'addMenu.label': { zh: '添加', en: 'Add' },
@@ -34,6 +36,15 @@ registerMessages({
   'addMenu.inUse': { zh: '正在使用', en: 'In use' },
   'addMenu.allViews': { zh: '全部 View', en: 'All Views' },
   'addMenu.noMatches': { zh: '没有匹配项', en: 'No matches' },
+  'addMenu.app': { zh: '添加应用或窗口', en: 'Add an app or window' },
+  'addMenu.searchApps': { zh: '搜索窗口和应用', en: 'Search windows and apps' },
+  'addMenu.openWindows': { zh: '打开的窗口', en: 'Open windows' },
+  'addMenu.apps': { zh: '应用', en: 'Apps' },
+  'addMenu.appRunning': { zh: '正在运行', en: 'Running' },
+  'addMenu.appIdle': { zh: '没在运行', en: 'Not running' },
+  'addMenu.windowsUnavailable': { zh: '窗口列不出来：电脑操作的本机助手没装或没有「辅助功能」权限', en: "Windows can't be listed: the Computer Use helper isn't installed or lacks Accessibility permission" },
+  // Windows 上列窗口不靠助手,靠系统自带的 PowerShell;列不出来多半是它被系统策略或安全软件拦了
+  'addMenu.windowsUnavailableWin': { zh: '窗口列不出来：系统自带的 PowerShell 没能运行', en: "Windows can't be listed: the built-in PowerShell couldn't run" },
 })
 
 export type AddContentReference = ChatRef | { kind: 'view'; type: string; title: string }
@@ -86,7 +97,9 @@ export const AddContentMenu: React.FC<{
   onPickPaths, onPickFiles, onAddReference,
 }) => {
   const { t } = useI18n()
-  const [pane, setPane] = useState<'conversation' | 'view' | null>(null)
+  const [pane, setPane] = useState<'conversation' | 'view' | 'app' | null>(null)
+  /** 电脑上可引用的窗口和应用:打开「添加应用或窗口」那一格时现问一次(只在桌面 macOS 宿主上有)。 */
+  const [appList, setAppList] = useState<AppRefList | null>(null)
   const [query, setQuery] = useState('')
   const [placement, setPlacement] = useState<'right' | 'left' | 'stacked'>('right')
   const [stackOffset, setStackOffset] = useState(0)
@@ -114,6 +127,13 @@ export const AddContentMenu: React.FC<{
   useEffect(() => {
     setQuery('')
     if (pane) requestAnimationFrame(() => searchRef.current?.focus())
+  }, [pane])
+
+  useEffect(() => {
+    if (pane !== 'app') return
+    let live = true
+    void window.tangu?.appRefs?.list().then((list) => { if (live) setAppList(list) }, () => {})
+    return () => { live = false }
   }, [pane])
 
   useLayoutEffect(() => {
@@ -216,6 +236,15 @@ export const AddContentMenu: React.FC<{
     return uniqueViews([...openViews, ...recentViewCandidates, ...registeredViews])
       .filter((v) => `${v.title}\n${v.type}\n${v.meta || ''}`.toLocaleLowerCase().includes(q))
       .slice(0, 12)
+  })()
+
+  const appMatches = (() => {
+    const q = query.trim().toLocaleLowerCase()
+    const hit = (text: string): boolean => !q || text.toLocaleLowerCase().includes(q)
+    return {
+      windows: (appList?.windows ?? []).filter((w) => hit(`${w.title}\n${w.app}`)).slice(0, 12),
+      apps: (appList?.apps ?? []).filter((a) => hit(a.name)).slice(0, q ? 12 : 8),
+    }
   })()
 
   const selectReference = (ref: AddContentReference): void => {
@@ -377,6 +406,20 @@ export const AddContentMenu: React.FC<{
             <span className="grow">{t('addMenu.view')}</span>
             <ChevronRight size={13} />
           </button>
+          {window.tangu?.appRefs && (
+            <button
+              className={`menu-item add-menu-parent${pane === 'app' ? ' active' : ''}`}
+              aria-expanded={pane === 'app'}
+              data-add-app
+              onPointerEnter={() => setPane('app')}
+              onFocus={() => setPane('app')}
+              onClick={() => setPane('app')}
+            >
+              <AppWindow size={14} />
+              <span className="grow">{t('addMenu.app')}</span>
+              <ChevronRight size={13} />
+            </button>
+          )}
 
         </div>
       )}
@@ -397,7 +440,7 @@ export const AddContentMenu: React.FC<{
               ref={searchRef}
               value={query}
               onChange={(e) => setQuery(e.currentTarget.value)}
-              placeholder={t(pane === 'conversation' ? 'addMenu.searchChats' : 'addMenu.searchViews')}
+              placeholder={t(pane === 'conversation' ? 'addMenu.searchChats' : pane === 'app' ? 'addMenu.searchApps' : 'addMenu.searchViews')}
             />
           </label>
 
@@ -423,6 +466,33 @@ export const AddContentMenu: React.FC<{
                   )
                 })}
                 {!sessionMatches.length && <div className="add-menu-empty">{t('addMenu.noMatches')}</div>}
+              </>
+            ) : pane === 'app' ? (
+              <>
+                {appList?.error && <div className="add-menu-empty">{t(/Win/i.test(navigator.platform) ? 'addMenu.windowsUnavailableWin' : 'addMenu.windowsUnavailable')}</div>}
+                {!!appMatches.windows.length && <div className="menu-section">{t('addMenu.openWindows')}</div>}
+                {appMatches.windows.map((w) => (
+                  <button key={`w:${w.id}:${w.title}`} className="menu-item add-menu-result" data-app-kind="window" title={w.title}
+                    onClick={() => selectReference({ kind: 'window', id: w.id, name: w.title })}>
+                    <AppRefIcon id={w.id} className="add-menu-appico" />
+                    <span className="grow add-menu-result-main">
+                      <span className="add-menu-result-title">{w.title}</span>
+                      <span className="add-menu-result-meta">{w.app}</span>
+                    </span>
+                  </button>
+                ))}
+                {!!appMatches.apps.length && <div className={`menu-section${appMatches.windows.length ? ' add-menu-section-gap' : ''}`}>{t('addMenu.apps')}</div>}
+                {appMatches.apps.map((a) => (
+                  <button key={`a:${a.id}`} className="menu-item add-menu-result" data-app-kind="app" title={a.name}
+                    onClick={() => selectReference({ kind: 'app', id: a.id, name: a.name })}>
+                    <AppRefIcon id={a.id} className="add-menu-appico" />
+                    <span className="grow add-menu-result-main">
+                      <span className="add-menu-result-title">{a.name}</span>
+                      <span className="add-menu-result-meta">{t(a.running ? 'addMenu.appRunning' : 'addMenu.appIdle')}</span>
+                    </span>
+                  </button>
+                ))}
+                {appList && !appMatches.windows.length && !appMatches.apps.length && <div className="add-menu-empty">{t('addMenu.noMatches')}</div>}
               </>
             ) : query.trim() ? (
               <>

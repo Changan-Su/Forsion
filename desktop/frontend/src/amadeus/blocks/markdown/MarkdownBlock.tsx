@@ -100,6 +100,8 @@ import { InlineToolbar, TURN_LABEL_KEYS, type ToolbarAction, type ToolbarAiItem 
 import { Sparkles, Bot, BookOpen, MessageSquare } from 'lucide-react'
 import { defaultSlashCategory, moveSlash, moveSlashCategory, slashCategory, SLASH_CATEGORIES, type SlashCategory } from './slashNavigation'
 import './slashCategories.css'
+import { useCapsuleSlide } from '../../../components/capsuleTabs'
+import { openAppRef } from '../../../components/appRefs'
 import { readTangu } from '../../plugins/tanguSeam'
 import { OverlayPortal } from '../../lib/overlayPortal'
 import { OverlayAt } from '../../lib/clampMenu'
@@ -981,6 +983,7 @@ export function MilkdownInner({
      *  库内笔记同 handleLinkClick,附件交 openAttachment(同容器的点击),外链开新窗。 */
     const openLinkTarget = (t: LinkAtCursor, newTab: boolean): void => {
       const o = newTab ? { newTab: true } : undefined
+      if (t.kind === 'app') return openAppRef(t.ref) // 应用 / 窗口引用:切过去,不找笔记
       if (t.kind === 'wiki') return wikiRef.current(t.arg, o)
       const kind = hrefKind(t.href)
       if (kind === 'note') return wikiRef.current(noteLinkTarget(t.href, pagePathRef.current, pageNamesRef.current()), o)
@@ -1441,6 +1444,16 @@ export function MilkdownInner({
     })
     return focused
   }
+  /** 光标后面紧跟着的是不是字(不是空白、`]`、段尾):`[[` 面板据此把 ←/→ 让给移光标(回到查询词中间改错字)。 */
+  const caretMidWord = (): boolean => {
+    let mid = false
+    getInstance()?.action((ctx) => {
+      const { $head, empty } = ctx.get(editorViewCtx).state.selection
+      const next = $head.parent.textBetween($head.parentOffset, Math.min($head.parentOffset + 1, $head.parent.content.size))
+      mid = !empty || /[^\s\]]/.test(next)
+    })
+    return mid
+  }
   const editorDom = (): HTMLElement | null => {
     let dom: HTMLElement | null = null
     getInstance()?.action((ctx) => { dom = ctx.get(editorViewCtx).dom })
@@ -1698,6 +1711,7 @@ export function MilkdownInner({
             setWiki(null)
           }}
           editorFocused={editorFocused}
+          caretMidWord={caretMidWord}
           sourcePath={attachmentPagePath}
         />
       )}
@@ -1714,6 +1728,7 @@ export function MilkdownInner({
           agents={unified && readTangu()?.submitDocumentTask && readTangu()?.hostExecution?.() !== false ? readTangu()?.agents?.() : undefined}
           onPickAgent={unified && readTangu()?.submitDocumentTask && readTangu()?.hostExecution?.() !== false ? pickMentionAgent : undefined}
           editorFocused={editorFocused}
+          caretMidWord={caretMidWord}
           dates
           allowCreate={false}
           onClose={() => {
@@ -2642,6 +2657,7 @@ function SlashMenu({ query, left, top, anchorTop, hideKeys, ctx, unified, editor
     setCategoryChoice({ query: q, category: next })
     setActive(0)
   }
+  const tabsRef = useCapsuleSlide<HTMLDivElement>(category) // 切类别时选中底色滑过去,不是一格亮一格灭
 
   useEffect(() => {
     setActive(0)
@@ -2749,7 +2765,7 @@ function SlashMenu({ query, left, top, anchorTop, hideKeys, ctx, unified, editor
       {/* 按下菜单空白/分组标签/滚动条不夺编辑器焦点:失焦即关(L-04)后,不拦这一下菜单会自己关掉。 */}
       <OverlayAt id={menuId} className="slash-menu" x={left} y={top} anchorTop={anchorTop} style={{ minHeight }}
         innerRef={(el) => { menuEl.current = el }} onMouseDown={(e) => e.preventDefault()}>
-        <div className="slash-category-tabs" role="tablist" aria-label={t('mdblock.category.label')}>
+        <div className="slash-category-tabs cap-tabs" role="tablist" aria-label={t('mdblock.category.label')} ref={tabsRef}>
           {SLASH_CATEGORIES.map((tab) => (
             <button key={tab} type="button" id={`${menuId}-tab-${tab}`} className="slash-category-tab"
               role="tab" data-category={tab} aria-selected={category === tab} aria-controls={`${menuId}-panel`}

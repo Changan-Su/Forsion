@@ -25,4 +25,9 @@ describe('retargetWikiInner', () => {
     expect(retargetWikiInner('|al', 'a/Beta|Beta')).toBe('a/Beta|al')
     expect(retargetWikiInner('Alpha#Sec|al', 'a/Beta|Beta')).toBe('a/Beta#Sec|al')
   })
+  it('候选是应用 / 窗口引用 → 整段内文换掉(旧锚点 / 别名属于原来那篇笔记;窗口的别名就是窗口标题)', () => {
+    expect(retargetWikiInner('Alpha#Sec|al', 'window://com.apple.Safari|季度计划')).toBe('window://com.apple.Safari|季度计划')
+    expect(retargetWikiInner('|al', 'app://com.apple.Notes|Notes')).toBe('app://com.apple.Notes|Notes')
+    expect(retargetWikiInner('', 'app://com.apple.Notes|Notes')).toBe('app://com.apple.Notes|Notes')
+  })
 })

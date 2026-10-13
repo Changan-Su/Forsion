@@ -47,6 +47,8 @@
     "e2e:chatevents": "node scripts/chat-events.e2e.cjs",
     "e2e:computerhistory": "node scripts/computer-history.e2e.cjs",
     "e2e:appdock": "node scripts/app-dock.e2e.cjs",
+    "e2e:apprefs": "node scripts/app-refs.e2e.cjs",
+    "check:apprefs-real": "APPREF_REAL=1 vitest run electron/appRefs.real.test.ts",
     "e2e:remotesafety": "node scripts/remote-safety.e2e.cjs",
     "e2e:chatshimmer": "node scripts/chat-shimmer.e2e.cjs",
     "e2e:runstats": "node scripts/chat-runstats.e2e.cjs",
