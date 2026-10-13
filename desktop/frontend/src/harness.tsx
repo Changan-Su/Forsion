@@ -12,6 +12,7 @@ import { MarkdownBlock } from './amadeus/blocks/markdown/MarkdownBlock'
 import { FindBar, openFindBar } from './findInPage'
 import { AskStringHost } from './amadeus/components/askString'
 import { DeleteAssetsHost } from './amadeus/components/askDeleteAssets'
+import { WikiLinkMenuHost } from './amadeusLinkMenu'
 import type { FocusPlace } from './amadeus/blocks/registry'
 import { PageView } from './amadeus/components/PageView'
 import { useBlockSelection } from './amadeus/store/blockSelection'
@@ -2088,6 +2089,7 @@ if (new URLSearchParams(location.search).has('dock')) {
           /></div>}
           <AskStringHost />{/* 画布元素文字编辑走 askString(双击形状/连线标签);不挂它,仪器测不到弹窗 */}
           <DeleteAssetsHost />{/* 删文件引用块时的「磁盘文件也删吗」;生产由 AmadeusOverlays 挂 */}
+          <WikiLinkMenuHost />{/* 双链右键菜单;生产由 AmadeusOverlays 挂(scripts/link-menu.check.cjs) */}
         </>
       )
     }

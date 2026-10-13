@@ -19,6 +19,7 @@ import { linkTarget, pageKey, resolvePageName } from '@amadeus-shared/links'
 import { fuzzyRank } from '@lcl/engine/fuzzy'
 import { isImeKeyEvent } from '@lcl/engine/ime'
 import { openDb, openDrawing, openFile, openNote } from './amadeusNav'
+import { WikiLinkMenuHost } from './amadeusLinkMenu'
 import { insertTemplate, listTemplates } from './amadeusTemplates'
 import { openTagView } from './amadeusPanels'
 import { registerMessages, useI18n } from './i18n'
@@ -181,6 +182,7 @@ export function AmadeusOverlays() {
       {overlay === 'template' && templateCtx && <TemplatePicker ctx={templateCtx} />}
       <WikiCreateConfirm />
       <WikiHoverPreview />
+      <WikiLinkMenuHost />
       <AskStringHost />
       <DeleteAssetsHost />
       <NewDrawingHost />

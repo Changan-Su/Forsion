@@ -26,7 +26,7 @@ import type { Command, EditorState, Transaction } from '@milkdown/kit/prose/stat
 import type { EditorView } from '@milkdown/kit/prose/view'
 import type { Node as ProseNode, ResolvedPos } from '@milkdown/kit/prose/model'
 import type { MilkdownPlugin } from '@milkdown/kit/ctx'
-import { classifyEmbed } from './embedLayer'
+import { classifyEmbed, isSoftSourceEmbed } from './embedLayer'
 import { foldedSectionAfter, headingFoldKey, isHiddenAt } from './headingFold'
 import { isListFolded, listHiddenRanges } from './listFold'
 import { applyTypedTrigger, canAutoTriggerFromBlock, triggerAtCursor, unwrapAtStart } from '../blocks/markdown/blockTriggers'
@@ -54,14 +54,15 @@ export function isAtomBlock(node: ProseNode | null | undefined): boolean {
   return classifyEmbed(node) != null
 }
 
-/** 竖直方向键要**整块选中**而不是钻进去的块:分割线与嵌入段(K-09)。代码块、表格不在此列 ——
+/** 竖直方向键要**整块选中**而不是钻进去的块:分割线与「难源码」嵌入段(K-09;网页 / 书签卡 / 按钮块等)。代码块、表格不在此列 ——
  *  它们有可编辑的行/格,↑/↓ 交给浏览器原生纵向移动直接进首行/首格并保持列位置(Notion 同)。
- *  退格/Delete 的「撞上只选中、不合并」仍按 isAtomBlock(含代码块/表格),两个谓词故意不同。 */
+ *  文件引用嵌入 `![[…]]` 也不在此列:方向键走进它的源码行(arrowEmbedSource,Obsidian 的光标逻辑)。
+ *  退格/Delete 的「撞上只选中、不合并」仍按 isAtomBlock(含代码块/表格/全部嵌入),两个谓词故意不同。 */
 function isArrowAtomBlock(node: ProseNode | null | undefined): boolean {
   if (!node) return false
   const n = node.type.name
   if (n === 'hr' || n === 'horizontal_rule') return true
-  return classifyEmbed(node) != null
+  return classifyEmbed(node) != null && !isSoftSourceEmbed(node)
 }
 
 /** 光标所在最内层 list_item 的深度;不在列表里返回 null。 */
@@ -601,6 +602,75 @@ function arrowToAtom(dir: 'up' | 'down'): Command {
   }
 }
 
+/** 文件引用嵌入 `![[…]]` 的方向键(2026-10-13 用户定:除图片外的文件引用,光标逻辑同 Obsidian)。
+ *  · 走到嵌入那一行(↓/→ 从上一块的末行/末尾,↑/← 从下一块的首行/开头)= 光标进它的 `![[…]]` 源码,嵌入层据此把源码露在嵌入体上方;
+ *  · 在源码里再按 ↓(或行尾按 →)= 越过嵌入体去下一块;嵌入是容器里最后一块时在它后面新起一段(同 codeExit)。
+ *  为什么要接管:源码平时 display:none,原生移动会把整段跳过去;露出来之后嵌入体是源码下方一大块不可编辑区,原生 ↓ / → 会卡在它前面。
+ *  往上走出源码(↑ / 行首 ←)上面就是普通内容,交回原生。只看顶层块(同 arrowToAtom):列表项 / 引用里的嵌入段不接。
+ *  ponytail: 进源码时的列位置按「原来那一块的块内偏移」截到源码长度;要像 Obsidian 那样按像素列对齐得量坐标,这点偏差不值。 */
+function arrowEmbedSource(dir: 'up' | 'down' | 'left' | 'right'): Command {
+  return (state, dispatch, view) => {
+    const sel = state.selection
+    if (!(sel instanceof TextSelection) || !sel.empty || !view) return false
+    const $h = sel.$head
+    if (!$h.parent.isTextblock) return false
+    const d = topDepth($h)
+    if (d < 1) return false
+    const fwd = dir === 'down' || dir === 'right'
+    const vertical = dir === 'up' || dir === 'down'
+    const topPos = $h.before(d)
+    const top = $h.node(d)
+    const inSource = $h.depth === d && isSoftSourceEmbed(top)
+    // 到本块朝这个方向的边上了吗:横向看字符位置,纵向看是不是最后 / 第一行。
+    const edgeText = Selection.findFrom(state.doc.resolve(fwd ? topPos + top.nodeSize - 1 : topPos + 1), fwd ? -1 : 1, true)
+    if (!edgeText || edgeText.$head.start() !== $h.start()) return false // 光标所在的文字块不是本顶层块朝这边的最后一个
+    if (!vertical) {
+      if ($h.pos !== edgeText.head) return false
+    } else if (inSource && dir === 'down') {
+      // 源码行下面就是嵌入体(同一段里),endOfTextblock 会当成「下面还有行」;改按「光标与源码末尾在同一行」判。
+      // ⚠️ 量行尾要朝前量(side = -1):段尾那个位置朝后量拿到的是嵌入体那一侧的坐标,永远判成「不在同一行」。
+      try {
+        const caret = view.coordsAtPos($h.pos, $h.pos === $h.end() ? -1 : 1)
+        const end = view.coordsAtPos($h.end(), -1)
+        if (Math.abs(caret.top - end.top) > Math.max(2, (caret.bottom - caret.top) / 2)) return false
+      } catch { return false }
+    } else if (!view.endOfTextblock(dir)) return false
+    const at = fwd ? topPos + top.nodeSize : topPos
+    const target = fwd ? state.doc.resolve(at).nodeAfter : state.doc.resolve(at).nodeBefore
+    const targetPos = target ? (fwd ? at : at - target.nodeSize) : -1
+    const col = $h.parentOffset
+    if (target && isSoftSourceEmbed(target)) {
+      if (hiddenAt(state, targetPos)) return false
+      const size = target.content.size
+      const off = dir === 'right' ? 0 : dir === 'left' ? size : Math.min(col, size)
+      dispatch?.(state.tr.setSelection(TextSelection.create(state.doc, targetPos + 1 + off)).scrollIntoView())
+      return true
+    }
+    if (!inSource || !fwd) return false // 不在源码里、目标也不是文件引用嵌入:不归这里(arrowToAtom / 原生接着办)
+    // 从源码往下 / 往右越过嵌入体。
+    if (!target) {
+      const container = $h.node(d - 1)
+      const paragraph = state.schema.nodes.paragraph
+      if (!paragraph || !container.canReplaceWith($h.index(d - 1) + 1, $h.index(d - 1) + 1, paragraph)) return false
+      if (!dispatch) return true
+      const tr = state.tr.insert(at, paragraph.create())
+      dispatch(tr.setSelection(TextSelection.create(tr.doc, at + 1)).scrollIntoView())
+      return true
+    }
+    if (hiddenAt(state, targetPos)) return false
+    if (isArrowAtomBlock(target) && NodeSelection.isSelectable(target)) {
+      dispatch?.(state.tr.setSelection(NodeSelection.create(state.doc, targetPos)).scrollIntoView())
+      return true
+    }
+    const next = target.isTextblock && !target.type.spec.code
+      ? TextSelection.create(state.doc, targetPos + 1 + (dir === 'down' ? Math.min(col, target.content.size) : 0))
+      : Selection.findFrom(state.doc.resolve(targetPos), 1, true)
+    if (!next) return false
+    dispatch?.(state.tr.setSelection(next).scrollIntoView())
+    return true
+  }
+}
+
 /** 代码块是所在容器的最后一块(典型:文末的代码块)时,在最后一行按 ↓ / 在块尾按 → = 在它后面新起一段(R-27,
  *  TipTap exitOnArrowDown 同款)。此前后面没有块可去,只有 Mod+Enter 能出去 —— 连按回车只会在代码里加空行。
  *  后面还有块时不接管,交回原生纵向移动(进下一块)。 */
@@ -644,6 +714,12 @@ function docEdge(dir: 'up' | 'down'): Command {
     const edge = dir === 'up' ? doc.firstChild : doc.lastChild
     if (!edge) return false
     const pos = dir === 'up' ? 0 : doc.content.size - edge.nodeSize
+    if (isSoftSourceEmbed(edge)) {
+      // 文件引用嵌入:光标进它的源码行(文首 = 行首,文末 = 行尾),与 ↑/↓ 走到它身上同口径。
+      if (hiddenAt(state, pos)) return false
+      dispatch?.(state.tr.setSelection(TextSelection.create(doc, dir === 'up' ? pos + 1 : pos + edge.nodeSize - 1)).scrollIntoView())
+      return true
+    }
     if (classifyEmbed(edge) != null) {
       if (!NodeSelection.isSelectable(edge) || hiddenAt(state, pos)) return false
       dispatch?.(state.tr.setSelection(NodeSelection.create(doc, pos)).scrollIntoView())
@@ -777,9 +853,10 @@ export const keyboardPlugins: MilkdownPlugin[] = [
       // mac 的 emacs 习惯键,与 Delete 同一支。**只在 mac 上挂**(拍板 #8):其它平台 Ctrl 就是 Mod,
       // Ctrl+D 归「复制块」(blockLayer 的 Mod-d,对齐 Notion),不能在这里再被当成向前删除。
       ...(IS_MAC ? { 'Ctrl-d': chain(deleteEmptyColumn(1), deleteUnfoldHeading, deleteSelectNextAtom, deleteJoinNextText) } : {}),
-      ArrowUp: arrowToAtom('up'),
-      ArrowDown: chain(codeExit('down'), arrowToAtom('down')),
-      ArrowRight: codeExit('right'),
+      ArrowUp: chain(arrowEmbedSource('up'), arrowToAtom('up')),
+      ArrowDown: chain(codeExit('down'), arrowEmbedSource('down'), arrowToAtom('down')),
+      ArrowLeft: arrowEmbedSource('left'),
+      ArrowRight: chain(codeExit('right'), arrowEmbedSource('right')),
       ...(IS_MAC ? { 'Meta-ArrowUp': docEdge('up'), 'Meta-ArrowDown': docEdge('down') } : {}),
     }),
   ),

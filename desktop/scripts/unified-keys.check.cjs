@@ -223,7 +223,8 @@ async function main() {
         ['行首退格撞代码块', '上段。\n\n```js\nline1\n```\n\n下段。\n', { type: 'paragraph', nth: 1, atStart: true }, 'Backspace', 'code_block', 'k',
           'paragraph:"上段。" / code_block:"line1k" / paragraph:"下段。"'],
         ['块尾 Delete 撞表格', '上段。\n\n| a | b |\n| --- | --- |\n| c | d |\n\n下段。\n', { type: 'paragraph' }, 'Delete', 'table', 'k', null],
-        ['↓ 撞嵌入', '上段。\n\n![[Embedded]]\n\n下段。\n', { type: 'paragraph' }, 'ArrowDown', 'paragraph', 'k',
+        // 嵌入的块选中入口:块尾 Delete(2026-10-13 起 ↑↓ 走进 `![[…]]` 的源码行,不再整块选中;那一半在 check:embedsource)。
+        ['块尾 Delete 撞嵌入', '上段。\n\n![[Embedded]]\n\n下段。\n', { type: 'paragraph' }, 'Delete', 'paragraph', 'k',
           'paragraph:"上段。" / paragraph:"![[Embedded]]" / paragraph:"k" / paragraph:"下段。"'],
         ['Esc 选段', '甲段很长的一段内容。\n\n乙段。\n', { type: 'paragraph' }, 'Escape', 'paragraph', 'k',
           'paragraph:"甲段很长的一段内容。k" / paragraph:"乙段。"'],
@@ -620,7 +621,8 @@ async function main() {
       }
     }
 
-    // K-09:↑/↓ 纵向直接进代码块、表格(首行/首格或末行/末格,保持列位置);分割线与嵌入仍整块选中。
+    // K-09:↑/↓ 纵向直接进代码块、表格(首行/首格或末行/末格,保持列位置);分割线与「难源码」嵌入(书签卡等)仍整块选中。
+    //       文件引用嵌入 `![[…]]` 走进源码行(2026-10-13 用户定,Obsidian 的光标逻辑)—— 那一组在 check:embedsource。
     if (want('K09')) {
       const CODE = '上段文字很长一些。\n\n```js\nline1 abc\nline2 def\n```\n\n下段文字。\n'
       const TABLE = '上段文字很长一些。\n\n| a | b |\n| --- | --- |\n| c | d |\n\n下段文字。\n'
@@ -1235,13 +1237,14 @@ async function main() {
       }
     }
     // ── K-16:mac ⌘↑ / ⌘↓ 到文首 / 文末。原生做法在「文首是代码块 / 嵌入」「文末是嵌入」时原地不动(代码块首子节点是
-    //    contenteditable=false 工具条、嵌入首子节点是 widget)。嵌入 = 整块选中,代码块 = 光标进块首;普通段对照照旧到得了。
+    //    contenteditable=false 工具条、嵌入的源码平时藏着)。文件引用嵌入 = 光标进它的源码行(文首进行首、文末进行尾;2026-10-13 起,
+    //    此前是整块选中),代码块 = 光标进块首;普通段对照照旧到得了。
     //    负对照:摘掉 docEdge 的 keymap 行 → 三条嵌入 / 代码块用例全红(已实跑)。
     if (want('K16')) {
       for (const [name, md, from, key, expect] of [
         ['文首是代码块 ⌘↑ → 进代码块首', '```js\ncode\n```\n\n乙段。\n\n丙段末。\n', '丙段末。', 'Meta+ArrowUp', { json: 'text', parent: 'code_block', from: 1 }],
-        ['文首是嵌入 ⌘↑ → 整块选中嵌入', '![[Embedded]]\n\n乙段。\n\n丙段末。\n', '丙段末。', 'Meta+ArrowUp', { json: 'node', node: 'paragraph', from: 0 }],
-        ['文末是嵌入 ⌘↓ → 整块选中嵌入', '甲段。\n\n乙段。\n\n![[Embedded]]\n', '甲段。', 'Meta+ArrowDown', { json: 'node', node: 'paragraph', from: 10 }],
+        ['文首是嵌入 ⌘↑ → 光标进源码行首', '![[Embedded]]\n\n乙段。\n\n丙段末。\n', '丙段末。', 'Meta+ArrowUp', { json: 'text', parent: 'paragraph', from: 1 }],
+        ['文末是嵌入 ⌘↓ → 光标进源码行尾', '甲段。\n\n乙段。\n\n![[Embedded]]\n', '甲段。', 'Meta+ArrowDown', { json: 'text', parent: 'paragraph', from: 24 }],
         ['对照:文首是普通段 ⌘↑ → 段首', '甲段。\n\n乙段。\n\n丙段末。\n', '丙段末。', 'Meta+ArrowUp', { json: 'text', parent: 'paragraph', from: 1 }],
       ]) {
         const page = await open(browser, md)

@@ -50,7 +50,7 @@ const viewOpts = (o?: OpenWhere): OpenWhere | undefined => (o?.newTab ? { newTab
 
 /** focus:'body' = 打开后把焦点给正文(评审 G4-06:从快速查找 / 日记进入**已有**笔记后直接打字;
  *  Obsidian 同)。新建流不传它 —— 新建聚焦标题(requestTitleFocus)才是对的。粗指针不做:手机上点开一篇就弹软键盘。 */
-export async function openNote(path: string, opts?: { newTab?: boolean; reuseKey?: string; activate?: boolean; focus?: 'body' }): Promise<void> {
+export async function openNote(path: string, opts?: OpenWhere & { reuseKey?: string; activate?: boolean; focus?: 'body' }): Promise<void> {
   await openNoteInner(path, opts)
   if (opts?.focus === 'body' && opts.activate !== false && !isCoarsePointer()) await focusBodyWhenReady(path)
 }
@@ -64,21 +64,21 @@ async function focusBodyWhenReady(path: string): Promise<void> {
   }
 }
 
-async function openNoteInner(path: string, opts?: { newTab?: boolean; reuseKey?: string; activate?: boolean }): Promise<void> {
+async function openNoteInner(path: string, opts?: OpenWhere & { reuseKey?: string; activate?: boolean }): Promise<void> {
   // 画板文件绝不进笔记编辑器(compiler 会把插件载荷改写成块 = 在 Obsidian 那边毁档)→ 一律改道白板视图。
   if (isDrawingPath(path)) {
-    openDrawing(path, { newTab: opts?.newTab })
+    openDrawing(path, viewOpts(opts))
     return
   }
   // 仪表盘改道网格视图。它**是**一份合法笔记(掉进编辑器也不会坏文件,布局键走 fmExtra 原样保留),
   // 所以这里只是「打开对的那个视图」,不是毁档防线。
   if (isDashboardPath(path)) {
-    openDashboard(path, { newTab: opts?.newTab })
+    openDashboard(path, viewOpts(opts))
     return
   }
   // 插件声明的文件类型同理:磁盘是 .md 但绝不进笔记编辑器 → 改道其专属文件类型视图。
   if (matchFileType(path)) {
-    openFile(path, { newTab: opts?.newTab })
+    openFile(path, viewOpts(opts))
     return
   }
   actThrottled('view.open', { f: path }, `view.open|${path}`)
@@ -121,9 +121,9 @@ async function openNoteInner(path: string, opts?: { newTab?: boolean; reuseKey?:
     await waitForActive(path)
     return
   }
-  if (opts?.newTab || editors.length === 0) {
-    // newTab(⌘点击)显式新开;「一个编辑器都没有」走 openView 默认的就地导航(当前 tab 变编辑器)。
-    ws.openView('amadeus-editor', { notePath: path }, 'main', { newTab: opts?.newTab })
+  if (opts?.newTab || opts?.split || editors.length === 0) {
+    // newTab(⌘点击)显式新开;split(双链右键「在分屏中打开」)开到旁边那半屏;「一个编辑器都没有」走 openView 默认的就地导航(当前 tab 变编辑器)。
+    ws.openView('amadeus-editor', { notePath: path }, 'main', viewOpts(opts))
     await waitForActive(path)
     return
   }

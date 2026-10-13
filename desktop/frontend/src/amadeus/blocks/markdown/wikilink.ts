@@ -14,7 +14,7 @@ import { isPdfLinkInner, parseBlockSubpath, parseMediaLinkInner, splitLinkInner 
 import { toAssetUrl } from '@amadeus-shared/assets'
 import { buildBlockString } from './mathLivePreview'
 import { editorFocused } from './editorFocus'
-import { attachSourceButton } from './sourceToggle'
+import { attachSourceButton, revealSource } from './sourceToggle'
 import { attachResizeHandle } from '../../lib/imageResize'
 import { armImageDrag } from './imageDrag'
 import { watchBrokenImage } from './brokenMedia'
@@ -220,7 +220,7 @@ function buildDecorations(
       decos.push(
         Decoration.widget(
           from,
-          (_view, getPos) => {
+          (view, getPos) => {
             const el = document.createElement('span')
             el.className = ok ? 'wikilink' : 'wikilink wikilink-unresolved' // 未解析 → 黯淡虚线,点击询问创建
             el.setAttribute('role', 'link') // 读屏认得是链接(L-20;键盘跟随走 Alt+Enter,不给 tabindex —— 焦点留在正文里)
@@ -243,9 +243,15 @@ function buildDecorations(
               e.preventDefault() // 不落光标、不进编辑态 → 直接跳转
               onOpen(openArg, (IS_MAC_PLATFORM ? e.metaKey : e.ctrlKey) ? { newTab: true } : undefined)
             })
-            // 正文文字上右键 = 系统菜单(W2 右键规则):部件 DOM 带 contenteditable=false(PM 给 widget 加的),
-            // 块层的右键分类会把它当「非文字块件」弹块菜单 —— 在这里止住冒泡,系统菜单照出(不 preventDefault)。
-            el.addEventListener('contextmenu', (e) => e.stopPropagation())
+            // 右键 = 这份文件的菜单(2026-10-13 用户定:双链是一个文件,不是一段要编辑的文字)。向上派一枚可取消的
+            // amadeus:wikilink-menu,宿主(amadeusLinkMenu)接了就不出系统菜单;没人接(外链、没挂宿主的页面)照旧出系统菜单。
+            // 部件 DOM 带 contenteditable=false(PM 给 widget 加的),块层的右键分类会把它当「非文字块件」弹块菜单 —— 所以止住冒泡。
+            el.addEventListener('contextmenu', (e) => {
+              e.stopPropagation()
+              const edit = view.editable ? (): void => { const at = getPos(); if (at != null) revealSource(view, at + 1) } : undefined
+              const taken = !el.dispatchEvent(new CustomEvent('amadeus:wikilink-menu', { bubbles: true, cancelable: true, detail: { inner: openArg, x: e.clientX, y: e.clientY, edit } }))
+              if (taken) e.preventDefault()
+            })
             return el
           },
           // key 带解析态与 emoji:同 key 的 widget DOM 会被 ProseMirror 复用,状态翻转必须换 key 才会重建。
