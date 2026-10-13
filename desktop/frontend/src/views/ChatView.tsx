@@ -31,7 +31,7 @@ import { inRunWindow } from '../stores/runStats'
 import { EmptyState2 } from './chat2/EmptyState2'
 import { FloatingToc } from './chat2/FloatingToc'
 import { TaskSummary } from './chat2/TaskSummary'
-import { useApp, stickyDefaults, activeChatModelId, withAmadeusWorkspace, applyPreset, newSessionPreset } from '../stores/appStore'
+import { useApp, stickyDefaults, activeChatModelId, withAmadeusWorkspace, applyPreset, newSessionPreset, amadeusLandingRoot } from '../stores/appStore'
 import { settleModes } from '../stores/projectSettings'
 import { currentPlatform } from '../services/agentRunService'
 import { hasChatRef, readChatRefs } from './chat2/chatDragRef'
@@ -98,6 +98,7 @@ export function ChatView({ leaf, params }: ViewProps) {
   const followActive = params.followActive !== false
   // Saved Coding layouts predate the studio param; the active Space supplies the same scope.
   const inCodingSpace = useSpaceStore(state => state.activeSpaceId === 'coding')
+  const inAmadeusSpace = useSpaceStore(state => state.activeSpaceId === 'amadeus')
   const studioChat = followActive && (!!params.studio || inCodingSpace)
   const studioRoot = useCodeStudio(state => state.activeProject)
   const pinnedSessionId = typeof params.sessionId === 'string' ? params.sessionId : null
@@ -226,6 +227,8 @@ export function ChatView({ leaf, params }: ViewProps) {
     s.clearPendingChatQuote(pending.seq)
   }, [leaf.type, quoteSid, s.pendingChatQuote, s.clearPendingChatQuote])
 
+  // 在 Amadeus 里呼出的空白新对话:没显式选项目时落在笔记库 —— 药丸与 cwd 显示的必须是 send() 真会用的那个落点(同读 amadeusLandingRoot)。
+  const landingRoot = inAmadeusSpace && amadeusRoot ? amadeusLandingRoot() : null
   const mvCfg: AgentConfig = withAmadeusWorkspace(activeId
     // 已有会话:配置未加载完(execMode 缺失)时按 project_path 兜底判 host/sandbox,避免加载窗口内
     // 拖文件误走 25MB 上传;配置一旦到达(含用户显式选的 sandbox)即以 execConfig 为准。
@@ -245,8 +248,9 @@ export function ChatView({ leaf, params }: ViewProps) {
         return settleModes(applyPreset({
           execMode: cloud ? 'sandbox' : 'host',
           ...stickyDefaults(s.desktopConfig, !cloud, preset),
-          cwd: cloud ? undefined : (s.newChatWs?.path || undefined),
           ...s.newChatCfg,
+          // 排在草稿之后:改审批档会把当时显示的 cwd 抄进草稿,之后换了项目 / 换了库它就是旧的;send() 建会话时同样以落点为准。
+          cwd: cloud ? undefined : (s.newChatWs?.path || landingRoot || undefined),
         }, preset) as AgentConfig)
       })(), amadeusRoot)
   // 团队成员会话(子聊天里直接追问):审批闸只听团队会话此刻的档(引擎 agentLoop.approvalModeSessionId),
@@ -704,7 +708,7 @@ export function ChatView({ leaf, params }: ViewProps) {
               {runPickerOn && !studioChat && <RunLocationPicker />}
               {mvCfg.preset !== 'chat' && (studioChat && studioRoot ? <div className="project-pill" title={studioRoot} data-studio-project={studioRoot}><Folder size={13} /><span className="project-pill-name">{projectName(studioRoot)}</span></div> : <ProjectSelector
                 workspaces={s.workspaces()}
-                value={s.newChatWs?.key ?? null}
+                value={s.newChatWs?.key ?? landingRoot ?? null}
                 onChange={(w) => s.setNewChatWs(w)}
                 onAddProject={window.tangu?.pickDirectory ? () => void s.addLocalWorkspace() : undefined}
                 onAddCloudProject={(name) => void s.addCloudProject(name)}

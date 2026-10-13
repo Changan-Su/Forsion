@@ -421,7 +421,9 @@ export const ModelPill: React.FC<{
   const showPane = (p: Pane) => (): void => { cancelHover(); if (pane !== p) setQuery(''); setPane(p) }
   // ponytail: 悬停要停够 PANE_HOVER_MS 才开 / 切二级面板 —— 朝面板划过别的行(叠放时必经)不再被抢走。
   // 划得比这还慢仍会误切;真有人报,再上「朝面板方向移动时不切」的安全三角。聚焦 / 点击照旧立即。
-  const hoverPane = (p: Pane) => (): void => { cancelHover(); hoverTimer.current = window.setTimeout(showPane(p), PANE_HOVER_MS) }
+  // 辅助模型槽的面板是点开的,列的又和「模型」面板几乎是同一份清单:它开着时,鼠标停在「模型」/「上下文」行上不许把面板悄悄换掉 ——
+  // 换过去看不出来,点下去改的却是主模型,还会被记成新会话的默认(用户 2026-10-13 实报:新对话卡在辅助模型上)。要换就点那一行。
+  const hoverPane = (p: Pane) => (): void => { cancelHover(); if (slot) return; hoverTimer.current = window.setTimeout(showPane(p), PANE_HOVER_MS) }
 
   /** 原生呈现的两种形态(模型选择器 / 合并菜单)共用的一份字段:目录、当前值、可选项。 */
   const pickerFields = (): PickerField[] => {

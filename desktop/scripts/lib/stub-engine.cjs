@@ -25,12 +25,12 @@ function sseLines(events) {
 /**
  * 起一个桩后端。返回 { url, seen, queue, close }。
  *  - queue.push(events):给下一次 run 排一份剧本(不排=只回一条 done)
- *  - seen:UI 发来的请求记录(runs/configs(带 method:PUT 整对象 / PATCH 按键)/inquiries/approvals/search/checkpoints/restore/messagesDeleted)
+ *  - seen:UI 发来的请求记录(runs/configs(带 method:PUT 整对象 / PATCH 按键)/inquiries/approvals/search/checkpoints/restore/messagesDeleted/sessionCreates)
  *  - data:可改的静态数据(sessions/messages/models/searchHits/checkpoints)
  */
 async function startStubEngine(data = {}) {
   const seen = {
-    runs: [], configs: [], inquiries: [], approvals: [], approvalRules: [], search: [], checkpoints: 0, restore: [], messagesDeleted: [],
+    runs: [], configs: [], inquiries: [], approvals: [], approvalRules: [], search: [], checkpoints: 0, restore: [], messagesDeleted: [], sessionCreates: [],
   };
   const queue = [];
   const state = {
@@ -206,6 +206,7 @@ async function startStubEngine(data = {}) {
     }
     if (p === '/agent/sessions' && req.method === 'GET') return json({ sessions: state.sessions });
     if (p === '/agent/sessions' && req.method === 'POST') {
+      seen.sessionCreates.push(await body()); // 建会话请求原样记下(落点 / 模型 / 初始配置可反向断言);应答照旧
       const s = { ...state.sessions[0], id: `s-new-${state.sessions.length}`, title: 'New Chat' };
       state.sessions = [s, ...state.sessions];
       return json({ session: s });

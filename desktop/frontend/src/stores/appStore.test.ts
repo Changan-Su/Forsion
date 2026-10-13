@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AgentRunEvent, AuthStatusInfo, SessionRecord, UiMessage } from '../types'
 import { DEFAULT_LOCAL_WORKSPACE_KEY, ROOTLESS_WORKSPACE_KEY, sessionWorkspaceKey } from '../types'
-import { useApp, recordToUi, withAmadeusWorkspace, lockSessionMove, unlockSessionMove, type AppState } from './appStore'
+import { useApp, recordToUi, withAmadeusWorkspace, lockSessionMove, unlockSessionMove, newChatModelId, type AppState } from './appStore'
 import { agentEditing, resetAgentWriteLedger } from './agentWriteLedger'
 import { usePageStore } from '../amadeus/store/pageStore'
 import '../i18n.generated'
@@ -738,6 +738,39 @@ describe('appStore.send 新会话固化模型', () => {
 
     expect(createSessionMock.mock.calls[0][1]).toMatchObject({ model_id: 'picked-model' })
     expect(startRunMock.mock.calls[0]?.[1]).toMatchObject({ modelId: 'picked-model' })
+  })
+
+  // 「+」/ /new / 输入栏的新会话按钮走 createInWorkspace:当场建会话。不带 model_id 的话引擎按它**启动时**读到的缺省模型落库,
+  // 用户之后在会话里换过的模型要到重启才生效 —— 表现就是「新会话一直卡在同一个模型上」(用户 2026-10-13 实报)。
+  it('newSession 当场建的会话也带上记忆的模型;空白新对话草稿里的 newChatModel 不算', async () => {
+    useApp.setState({ desktopMode: 'managed', defaultWsDir: '/default', sessionMode: 'work', newChatModel: 'draft-pick' })
+    createSessionMock.mockImplementation((_cfg: unknown, init: { model_id?: string }) =>
+      Promise.resolve(created('s-plus', init?.model_id ?? 'engine-boot-default')))
+
+    await useApp.getState().newSession()
+
+    expect(createSessionMock.mock.calls[0][1]).toMatchObject({ model_id: 'remembered-model', project_path: '/default' })
+    expect(useApp.getState().sessions.find((x) => x.id === 's-plus')?.model_id).toBe('remembered-model')
+  })
+
+  // newChatModel 排在记忆前面,发出去之后也不清:在会话里又换了模型(= 新的记忆)之后,它不能再压着新选的那个。
+  it('在会话里换模型 → 清掉空白新对话草稿里更早选的模型;Agent 预设带来的模型(remember=false)不动它', () => {
+    const setConfig = vi.fn(() => Promise.resolve())
+    vi.stubGlobal('window', { tangu: { setConfig } }) // 本文件跑 node 环境,没有真 window
+    useApp.setState({
+      activeId: 's1', newChatModel: 'old-draft-pick',
+      sessions: [created('s1', 'old-draft-pick')] as unknown as AppState['sessions'],
+    })
+
+    useApp.getState().setSessionModel('agent-preset-model', 's1', false)
+    expect(useApp.getState().newChatModel).toBe('old-draft-pick')
+
+    useApp.getState().setSessionModel('new-pick', 's1')
+    expect(useApp.getState().newChatModel).toBeNull()
+    expect(useApp.getState().cfg.modelId).toBe('new-pick')
+    expect(newChatModelId(useApp.getState())).toBe('new-pick') // 空白新对话的药丸、建会话、startRun 同读这一条
+    expect(setConfig).toHaveBeenCalledWith({ modelId: 'new-pick' })
+    vi.unstubAllGlobals()
   })
 
   it('「不在项目中工作」建立显式无根会话,使用 session 隔离沙箱而非默认 Project', async () => {
