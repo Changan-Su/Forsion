@@ -164,14 +164,14 @@ async function main() {
     check('悬停卡写明「窗口还开着」', card.shown && /Google Chrome/.test(card.text) && /点击切到这个窗口/.test(card.text), card)
     check('悬停卡整张在窗口里、贴着芯片、挂在 body 上(滚动区裁不到)', card.inside && card.gap <= 12 && card.onBody, card)
     await view.screenshot({ path: path.join(SHOT_DIR, `bubble${tag}.png`) })
-    // 还在等那 0.3 秒时滚动了:这次不出卡(出了就是画在一枚已经滚走的芯片的旧位置上)
+    // 移开就收;等着出卡的那 0.3 秒里来了滚动事件(芯片还在原处)照样出 —— 一有滚动就取消的话,先滚再停在芯片上就再也不出卡
     await win.mouse.move(2, 2)
     await win.waitForTimeout(150)
     const gone = await win.locator('body > .app-ref-card').count() === 0
     await chip('Linear – Pricing').hover()
     await win.evaluate(() => document.querySelector('.app-ref').dispatchEvent(new Event('scroll')))
     await win.waitForTimeout(600)
-    check('移开就收;悬停后还没出卡就滚动了 → 不再出卡', gone && await win.locator('body > .app-ref-card').count() === 0, { gone })
+    check('移开就收;等着出卡时来了滚动事件、芯片没动 → 照样出', gone && await win.locator('body > .app-ref-card').count() === 1, { gone })
 
     // ── 点击 ──
     await chip('Linear – Pricing').click()

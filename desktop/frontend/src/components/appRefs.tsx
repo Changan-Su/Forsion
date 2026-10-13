@@ -122,19 +122,26 @@ export function AppRefChip({ appRef }: { appRef: AppRef }) {
   // 贴着滚动区上沿 / 窄栏右沿时会被裁掉一截。停留 0.3 秒才出;滚动、点击、离开就收。
   const [card, setCard] = useState<{ x: number; top: number; bottom: number } | null>(null)
   const timer = useRef(0)
-  // 滚动就收:等着出的那 0.3 秒里滚走了也算(不然卡片会出在一枚已经滚出去的芯片的旧位置上)
-  const hideRef = useRef((): void => { window.clearTimeout(timer.current); window.removeEventListener('scroll', hideRef.current, true); setCard(null) })
-  const hide = hideRef.current
+  const hide = (): void => { window.clearTimeout(timer.current); setCard(null) }
   const show = (el: HTMLElement): void => {
     refreshAppRef(appRef)
     window.clearTimeout(timer.current)
-    window.addEventListener('scroll', hide, true)
     timer.current = window.setTimeout(() => {
-      const r = el.getClientRects()[0] ?? el.getBoundingClientRect() // 折行的芯片贴第一行
+      const r = el.getClientRects()[0] ?? el.getBoundingClientRect() // 折行的芯片贴第一行;位置到点才量
+      // 等的这 0.3 秒里被滚出窗口了(键盘焦点还在它身上)→ 不出。⚠️ 别改成「一有滚动事件就取消」:把芯片滚到指针底下
+      // 停住时 mouseenter 只来一次,后面跟着的滚动事件会把这次取消掉,卡就再也不出了(台架的 hover 也是先滚再移)。
+      if (r.bottom < 0 || r.top > window.innerHeight) return
       setCard({ x: r.left, top: r.top, bottom: r.bottom })
     }, 300)
   }
-  useEffect(() => hide, [hide])
+  useEffect(() => () => window.clearTimeout(timer.current), [])
+  const shown = !!card
+  useEffect(() => {
+    if (!shown) return
+    const close = (): void => setCard(null)
+    window.addEventListener('scroll', close, true)
+    return () => window.removeEventListener('scroll', close, true)
+  }, [shown])
   const open = (): void => { hide(); if (canOpen) openAppRef(appRef) }
   const cps = [...appRef.name]
   const head = cps.slice(0, 2).join('')
