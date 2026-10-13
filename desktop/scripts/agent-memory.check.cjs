@@ -2,6 +2,9 @@
  * Only unrelated engine endpoints and provider completions are scripted.
  * Run after building tangu-agent and desktop: node scripts/agent-memory.check.cjs
  * Hold the app open on the Growth › Log layer for a manual walk-through: STAGE_MS=600000 TANGU_HARNESS_QUIET=0 node scripts/agent-memory.check.cjs
+ * For a Codex computer-use walk-through also pass STAGE_ELECTRON=<a private copy of Electron.app>/Contents/MacOS/Electron: computer use picks apps by
+ * bundle id / app path, and an instance sharing node_modules' Electron.app with a running dev instance cannot be told apart from it.
+ * Give the copy its own CFBundleIdentifier / CFBundleName (its Info.plist is not sealed by the ad-hoc signature).
  */
 const fs = require('node:fs')
 const path = require('node:path')
@@ -78,6 +81,9 @@ async function main() {
   let app
   try {
     app = await electron.launch({ args: [`--user-data-dir=${userData}`, '--lang=zh-CN', ROOT], cwd: ROOT,
+      // 走查用:STAGE_ELECTRON 指向一份单独路径的 Electron 拷贝。Codex 的 computer use 按应用路径认应用,
+      // 和 dev 实例共用 node_modules 里那一个 Electron.app 时它选不中这个窗口(10-14 实测,整轮作废)。
+      ...(process.env.STAGE_ELECTRON ? { executablePath: process.env.STAGE_ELECTRON } : {}),
       env: { ...process.env, TANGU_HOME: home, TANGU_BACKEND_URL: url } })
     let win = await app.firstWindow()
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1280, 960))
