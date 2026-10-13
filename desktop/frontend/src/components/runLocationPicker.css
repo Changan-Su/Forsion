@@ -9,3 +9,17 @@
 }
 .runloc-status[data-tone='warn'] { color: var(--warning, var(--text-muted)); }
 /* 与项目药丸同一行、窄栏折行:间距和折行写在这一栏自己身上(base.css 的 .newchat-projectbar-inner、homepage.css 的 .hp-projectbar),这里不再另写。 */
+
+/* 桌面的下拉(与项目药丸同一套 .composer-menu.project-menu;这里只加行尾的状态说明与底下那句原因)。
+   展开时药丸是三列栅格(图标 / 名字 / 箭头),状态说明不占第四格。 */
+.runloc-pill.is-open .runloc-status { display: none; }
+.runloc-row-status {
+  flex: none;
+  font-size: var(--ui-font-caption, 11px);
+  color: var(--text-faint, var(--text-muted));
+  white-space: nowrap;
+}
+.runloc-row-status[data-tone='warn'] { color: var(--warning, var(--text-muted)); }
+.runloc-menu .runloc-row:disabled { opacity: 0.55; cursor: default; }
+.runloc-menu .runloc-row:disabled:hover { background: none; }
+.runloc-notice { line-height: 1.45; white-space: normal; }

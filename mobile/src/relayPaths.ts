@@ -17,12 +17,9 @@
  *   - null:与中继无关,调用方走原 fetch。
  */
 
-/** 小写 uuid(hub 的 randomUUID();大写一律拒 —— 同一台设备只该有一种写法)。 */
-export const UNIT_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
-
-/** path(含 query)允许的字符:RFC 3986 pchar ∪ `/` `?`。不含 `#`、`\`、空白、控制符、非 ASCII。 */
-const ALLOWED = /^[A-Za-z0-9._~!$&'()*+,;=:@/%?-]*$/
-const MAX_PATH = 8192
+// 语法本体(UNIT_UUID_RE / checkRelayPath)与桌面主进程的中转口共用一份,住在 desktop/shared/relayPaths.ts。
+import { checkRelayPath, UNIT_UUID_RE } from '../../desktop/shared/relayPaths'
+export { checkRelayPath, UNIT_UUID_RE }
 
 export type RelayParse =
   | { kind: 'relay'; unitId: string; path: string }
@@ -31,36 +28,6 @@ export type RelayParse =
 
 function safeDecode(s: string): string | null {
   try { return decodeURIComponent(s) } catch { return null }
-}
-
-/**
- * 原生中继要发的 path(`/proxy` 之后,以 `/` 开头)是否合法。与 RelayPaths.checkPath 逐条对应。
- * 规则:
- *  1. 以 `/` 开头、≤ 8192、只含 ALLOWED 字符;
- *  2. `%` 后必须两位十六进制;路径段(`?` 之前)里不许出现编码的 `/`(%2f)、`\`(%5c)与控制符(%00–%1f、%7f);
- *  3. 路径段恰为 `/engine`、以 `/engine/` 开头、`/unit/remote-access`、`/unit/remote-access/request` 之一;
- *     query 只许跟在 engine 形态后面;
- *  4. 路径段里没有空段(`//`,末尾一个 `/` 除外),把 %2e 解成 `.` 之后没有 `.` / `..` 段。
- */
-export function checkRelayPath(path: string): boolean {
-  if (typeof path !== 'string' || !path.startsWith('/') || path.length > MAX_PATH || !ALLOWED.test(path)) return false
-  if (/%(?![0-9A-Fa-f]{2})/.test(path)) return false
-  const q = path.indexOf('?')
-  const pathPart = q < 0 ? path : path.slice(0, q)
-  const hasQuery = q >= 0
-  if (/%(2f|5c|0[0-9a-f]|1[0-9a-f]|7f)/i.test(pathPart)) return false
-  const engine = pathPart === '/engine' || pathPart.startsWith('/engine/')
-  const remote = pathPart === '/unit/remote-access' || pathPart === '/unit/remote-access/request'
-  if (!engine && !remote) return false
-  if (remote && hasQuery) return false
-  const segs = pathPart.split('/').slice(1)
-  for (let i = 0; i < segs.length; i++) {
-    const seg = segs[i]
-    if (seg === '' && i !== segs.length - 1) return false
-    const dots = seg.replace(/%2e/gi, '.')
-    if (dots === '.' || dots === '..') return false
-  }
-  return true
 }
 
 /**

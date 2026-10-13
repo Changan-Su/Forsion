@@ -8,6 +8,7 @@ import { AgentSelectStrip } from '../components/AgentSelectStrip'
 import { displaySessionTitle } from '../sessionTitle'
 import { ProjectSelector } from '../components/ProjectSelector'
 import { RunLocationPicker, useRunPickerVisible } from '../components/RunLocationPicker' // P1-K7a
+import { useRemoteNewChatWorkspaces } from '../stores/newChatWorkspaces'
 import { WorkspaceFilePreview } from '../components/WorkspaceFilePreview'
 import { targetFor } from '../components/InlineFiles'
 import { openWsFile } from './wsFileNav'
@@ -106,7 +107,8 @@ export function ChatView({ leaf, params }: ViewProps) {
   // P1-K6:输入框对着的那台是「我的电脑」且没连上 → 「等待那台连上」;S4 起按本会话所在的那台(空白新对话 = 焦点)
   const targetPlaceholder = useTargetComposerPlaceholder(activeId)
   const composerTargetReady = useComposerReady(activeId)
-  const runPickerOn = useRunPickerVisible() // P1-K7a:手机上的「在哪运行」
+  const runPickerOn = useRunPickerVisible() // P1-K7a:「在哪运行」有得选(Chat 模式据此多出那一栏;桌面 Work 模式的药丸恒在)
+  const remoteWs = useRemoteNewChatWorkspaces() // 桌面:运行位置在别的电脑上 → 项目药丸列那台的项目
   // 历史在拉:空消息 ≠ 空会话 —— 拉取期间显示会话骨架屏,别把有消息的会话先亮成空状态(EmptyState2)。
   const historyLoading = useApp((state) => !!(activeId && state.historyLoading[activeId]))
   const s = useApp(useShallow((state) => ({
@@ -709,13 +711,15 @@ export function ChatView({ leaf, params }: ViewProps) {
               {/* Chat 无项目:不露项目选择器，否则会悄悄建成 Work 会话。Coding Studio 另要求先选定项目。
                   P1-K7a:手机上另有「在哪运行」药丸(Chat 模式也要有 —— 聊天会话同样可以建在电脑上),排在项目药丸之前。 */}
               {projectBarOn && <>
-                {runPickerOn && !studioChat && <RunLocationPicker />}
+                {/* 药丸自己判要不要画:手机 = 有得选才画;桌面主窗口恒画(至少标出「这台电脑」) */}
+                {!studioChat && <RunLocationPicker />}
                 {mvCfg.preset !== 'chat' && (studioChat && studioRoot ? <div className="project-pill" title={studioRoot} data-studio-project={studioRoot}><Folder size={13} /><span className="project-pill-name">{projectName(studioRoot)}</span></div> : <ProjectSelector
-                  workspaces={s.workspaces()}
+                  workspaces={remoteWs ?? s.workspaces()}
                   value={s.newChatWs?.key ?? null}
                   onChange={(w) => s.setNewChatWs(w)}
-                  onAddProject={window.tangu?.pickDirectory ? () => void s.addLocalWorkspace() : undefined}
-                  onAddCloudProject={(name) => void s.addCloudProject(name)}
+                  // 「添加本地项目 / 云端项目」加的都是这一端的:运行位置在别的电脑上时不给
+                  onAddProject={!remoteWs && window.tangu?.pickDirectory ? () => void s.addLocalWorkspace() : undefined}
+                  onAddCloudProject={remoteWs ? undefined : (name) => void s.addCloudProject(name)}
                 />)}
                 {/* Coding Studio 的新对话也要露:草稿里的额外文件夹照样会随它建的会话带走,看不见胶囊 = 没人看见的授权(Codex 评审) */}
                 <ExtraFolders />

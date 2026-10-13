@@ -65,7 +65,7 @@ import { TaskCards, type TaskLanding } from './TaskCards'
 import { APPROVAL_UPDATE_OPEN, approvalForCall, parseApprovalUpdate, pickPlanInquiry, type ApprovalOutcome } from './approvalQueue'
 import { isRemoteApprover, wasDecidedHere } from '../../components/ApprovalCard'
 import { answeredByText } from '../../approvalReason'
-import { targetForSession, useSessionHostName } from '../../services/engine/targets'
+import { refForSession, targetForSession, useSessionHostName } from '../../services/engine/targets'
 export type { TaskLanding }
 import './chat2.css'
 
@@ -376,7 +376,9 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
   // 独占一段的 `![[…]]` → 内联图片/音视频(Markdown 缺省关,只给助手消息开;理由见其 EmbedContext)。
   // 移动端不开:Android 没有 amadeus-asset 拦截器(同 ChatWikiLink 的 media 分支);无 readHostFile = 不在桌面壳里。
   const embedExec = fileCtx?.execMode
-  const embeds = useMemo(() => (runSid && UI_MODE !== 'mobile' && window.tangu?.readHostFile ? { execMode: embedExec } : undefined), [runSid, embedExec])
+  // 会话在别的电脑上(桌面作为调用方):代码块的「运行」是这台电脑的终端、内联嵌入读的是这台电脑的盘 —— 都不是那台的,关掉。
+  const elsewhere = !!runSid && refForSession(runSid).kind === 'unit'
+  const embeds = useMemo(() => (runSid && !elsewhere && UI_MODE !== 'mobile' && window.tangu?.readHostFile ? { execMode: embedExec } : undefined), [runSid, embedExec, elsewhere])
   const { t } = useI18n()
   msg = useSpeechReveal(msg)
   // 建议芯片是一次性的:点了就等于用户按了回车,整排随即失效 —— 不然双击会把同一句排两遍。
@@ -581,7 +583,7 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
                 fenceState = parsed.state
                 const segBody = parsed.text
                 return segBody
-                  ? <div key={i} className="t2-content"><Markdown content={segBody} anchorPrefix={`toc-${msg.id}`} run={runCtx} embeds={embeds} /></div>
+                  ? <div key={i} className="t2-content"><Markdown content={segBody} anchorPrefix={`toc-${msg.id}`} run={runCtx} allowRun={!elsewhere} embeds={embeds} /></div>
                   : null
               }
               const evs = seg.ids.map((id) => msg.toolEvents?.find((e) => e.id === id)).filter(Boolean) as ToolEvent[]
@@ -603,7 +605,7 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
               {body && (
                 voiceMode
                   ? <VoiceBubble text={body} stored={voice!.stored} anchorPrefix={`toc-${msg.id}`} />
-                  : <div className="t2-content"><Markdown content={body} anchorPrefix={`toc-${msg.id}`} run={runCtx} embeds={embeds} /></div>
+                  : <div className="t2-content"><Markdown content={body} anchorPrefix={`toc-${msg.id}`} run={runCtx} allowRun={!elsewhere} embeds={embeds} /></div>
               )}
             </>
           )
