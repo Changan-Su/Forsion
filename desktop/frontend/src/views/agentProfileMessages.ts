@@ -71,7 +71,7 @@ registerMessages({
   'agentProfile.activityAccess': { zh: '允许读取活动日志', en: 'Allow activity log access' },
   'agentProfile.cloudSync': { zh: '跨设备同步此 Agent', en: 'Sync this agent across devices' },
   'agentProfile.teamContext': { zh: '成员各自保留独立上下文，可在 Pin Summary 中打开子会话继续交流。', en: 'Members retain their own context. Open a member in Pin Summary to continue its conversation.' },
-  'agentProfile.library': { zh: '记忆、日志与资料库', en: 'Memory, journal and library' },
+  'agentProfile.library': { zh: '记忆、日志与资料库', en: 'Memory, log and library' },
   'agentProfile.searchModels': { zh: "搜索模型或输入模型 ID", en: "Search models or enter a model ID" },
   'agentProfile.useModelId': { zh: "使用模型 ID：{id}", en: "Use model ID: {id}" },
   'agentProfile.customModelId': { zh: '自定义 ID', en: 'Custom ID' },

@@ -3357,7 +3357,7 @@ const en: Dict = {
   'settings.agents.hint': 'Define reusable conversational personas (system prompt + model + settings) for different tasks. Agents can also self-author via the manage_agent tool.',
   'settings.agents.new': 'New agent',
   'settings.agents.brainSection': 'Brain (memory / journal / library)',
-  'settings.agents.brainSectionHint': "View and edit this agent's long-term memory, daily journal and library files.",
+  'settings.agents.brainSectionHint': "View and edit this agent's long-term memory, daily log and library files.",
   'settings.agents.openBrain': 'Open brain',
   'settings.agents.createViaChat': 'Create with AI',
   'settings.agents.createViaChatHint': 'Open a new chat and let an agent build the new agent for you',

@@ -245,6 +245,18 @@ async function main() {
     await wait(() => fs.readFileSync(todayFile, 'utf8').includes('界面里补的一条'), 'log saved')
     await log.getByText('已保存', { exact: true }).waitFor()
     check('A log edit persists through the real route with the version it loaded', fs.readFileSync(todayFile, 'utf8').includes('另一端并发追加') && await logEditor.count() === 0)
+    // 弹窗里的「日志」标签用的是同一个面板:从「记忆」段底部的入口进去,读到的应是刚存下的那一份
+    await segments.nth(0).click()
+    await win.getByRole('button', { name: '记忆、日志与资料库' }).click()
+    await win.getByRole('button', { name: '日志', exact: true }).last().click()
+    const modalLog = win.locator('[data-testid="agent-log-panel"]:visible')
+    await modalLog.getByText('界面里补的一条。', { exact: false }).waitFor()
+    check('The dialog\'s Log tab is the same panel on the current file', await modalLog.locator('.agentmem-log-body').count() === 1
+      && !(await modalLog.locator('.agentmem-log-body').innerText()).includes('@a1b2c3d4'))
+    await win.screenshot({ path: path.join(SHOTS, 'log-modal.png') })
+    await win.getByText('Memory alpha · Agent 大脑', { exact: true }).locator('..').locator('.icon-btn').click()
+    await modalLog.waitFor({ state: 'detached' })
+    await segments.nth(1).click()
     panel = await openAgent('beta')
     await panel.getByText('Beta 私有事实：工程代号 BLUE-SILK。', { exact: false }).first().waitFor()
     check('Switching to Beta shows only Beta memory', !(await panel.textContent()).includes('Alpha 私有事实'))
