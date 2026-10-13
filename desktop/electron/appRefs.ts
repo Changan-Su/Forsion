@@ -4,10 +4,12 @@
  * 窗口相关全经 CU helper(本机辅助 App):`dockCandidates` 给屏上的窗口(带标题),`listApps` 给在跑的进程,
  * `listWindows` 给某个进程的全部窗口(含最小化 / 别的桌面),`focusWindow` 把一扇窗口提上来。
  * 应用清单来自 Spotlight(mdfind),启动 / 切到应用用 `open -b`,这两样不靠 helper —— helper 没装或没授权时
- * 仍能引用和打开应用,只是列不出窗口。只做了 macOS;别的平台 list 回空、open 回 unsupported_platform。
+ * 仍能引用和打开应用,只是列不出窗口。这里是 macOS 的实现;Windows 另有一套(appRefsWin.ts:PowerShell,不靠 helper);
+ * 再别的平台 list 回空、open 回 unsupported_platform。
  */
 import { normalizeDockCandidates } from '../shared/appDock'
 import { appRefKey, isAppRefId, normalizeAppRef, pickWindow, windowTitleScore, type AppRef, type AppRefApp, type AppRefList, type AppRefStatus, type AppRefWindow } from '../shared/appRefs'
+import { createWinAppRefs, type WinRunOpts } from './appRefsWin'
 
 export interface AppRefDeps {
   platform: NodeJS.Platform
@@ -17,9 +19,11 @@ export interface AppRefDeps {
   ask: (payload: Record<string, unknown>) => Promise<unknown>
   /** 确保 helper 在跑(只在用户主动打开选择器 / 点击窗口引用时调)。 */
   ensureHelper: () => Promise<void>
-  /** execFile:回 stdout;非零退出 reject。 */
-  run: (file: string, args: string[]) => Promise<string>
+  /** execFile:回 stdout;非零退出 reject。opts(环境变量 / 超时)只有 Windows 那一半用。 */
+  run: (file: string, args: string[], opts?: WinRunOpts) => Promise<string>
   now?: () => number
+  /** Windows:exe 路径 → 图标 dataURL(macOS 的图标走 appIcons.ts)。 */
+  fileIcon?: (exePath: string) => Promise<string | null>
 }
 
 export interface InstalledApp { name: string; path: string }
@@ -70,6 +74,7 @@ function normalizeAxWindows(raw: unknown): AxWindow[] {
 const INSTALLED_TTL_MS = 60_000
 
 export function createAppRefs(deps: AppRefDeps) {
+  if (deps.platform === 'win32') return createWinAppRefs(deps)
   const now = deps.now ?? Date.now
   const mac = deps.platform === 'darwin'
   let installedAt = 0

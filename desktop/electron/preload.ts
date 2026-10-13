@@ -415,7 +415,7 @@ const api = {
   appDockCandidates: (): Promise<{ windows: import('../shared/appDock').DockCandidate[]; error?: string }> => ipcRenderer.invoke('appDock:candidates'),
   appDockAttach: (target: import('../shared/appDock').DockWindow): Promise<{ ok: boolean; error?: string }> => ipcRenderer.invoke('appDock:attach', target),
   appDockDetach: (): Promise<void> => ipcRenderer.invoke('appDock:detach'),
-  /** 应用 / 窗口引用(仅 macOS;契约见 shared/appRefs.ts)。 */
+  /** 应用 / 窗口引用(macOS 与 Windows;别的平台列表为空;契约见 shared/appRefs.ts)。 */
   appRefs: {
     list: (): Promise<import('../shared/appRefs').AppRefList> => ipcRenderer.invoke('appRefs:list'),
     status: (refs: import('../shared/appRefs').AppRef[]): Promise<import('../shared/appRefs').AppRefStatus[]> => ipcRenderer.invoke('appRefs:status', refs),

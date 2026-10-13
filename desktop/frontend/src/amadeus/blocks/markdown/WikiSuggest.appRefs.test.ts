@@ -101,7 +101,8 @@ describe('有宿主接口:多出窗口 / 应用两类 + 分类条', () => {
     expect(onPick).toHaveBeenCalledWith('Alpha')
   })
 
-  it('←/→ 切类别并循环;带修饰键的不拦', async () => {
+  // 分类像是接在查询词后面的几个字(同 ⌘P 快切):→ 往右到头停住,← 往回,回到「全部」再按 ← 就不接了(那是移光标改字)
+  it('→ 往右一格到头停住,← 往回,在「全部」上按 ← 不拦;带修饰键的不拦;光标在词中间时两个键都不拦', async () => {
     stubHost(LIST)
     await show('')
     expect(await press('ArrowRight')).toBe(true)
@@ -117,10 +118,15 @@ describe('有宿主接口:多出窗口 / 应用两类 + 分类条', () => {
     await press('ArrowRight')
     expect(selectedTab()).toBe('note')
     expect(rows()).toEqual(['*Alpha', 'Safari 笔记'])
-    await press('ArrowRight')
-    expect(selectedTab()).toBe('all')
-    await press('ArrowLeft')
+    expect(await press('ArrowRight')).toBe(true) // 到头:键吃掉,不绕回「全部」
     expect(selectedTab()).toBe('note')
+    for (const back of ['app', 'window', 'all']) { expect(await press('ArrowLeft')).toBe(true); expect(selectedTab()).toBe(back) }
+    expect(await press('ArrowLeft')).toBe(false) // 已经在「全部」:放给编辑器移光标
+    expect(selectedTab()).toBe('all')
+    // 光标回到查询词中间(宿主说的):在「全部」上 → 也只移光标;已经在某一类里则照常在分类里走
+    await show('', { caretMidWord: () => true })
+    expect(await press('ArrowRight')).toBe(false)
+    expect(selectedTab()).toBe('all')
   })
 
   it('选中窗口 / 应用 → 交出引用的内文(调用方补 `]]` 后就是契约里的 token)', async () => {

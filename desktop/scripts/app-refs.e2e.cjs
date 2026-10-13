@@ -74,7 +74,7 @@ function startFakeHelper(sockPath) {
     server.listen(sockPath, () => resolve({
       requests, hotkeySubs,
       /** 冒充「用户在别的应用里按了双 ⌘」:给每条订阅推一行事件。 */
-      fireHotkey: (front) => { for (const s of hotkeySubs) if (!s.socket.destroyed) s.socket.write(`${JSON.stringify({ event: 'hotkey', gesture: 'modPair', at: Date.now(), front })}\n`) },
+      fireHotkey: (front) => { for (const s of hotkeySubs) if (!s.socket.destroyed) s.socket.write(`${JSON.stringify({ ev: { t: Date.now(), kind: 'hotkey', gesture: 'modPair', front } })}\n`) },
       close: () => { for (const s of hotkeySubs) s.socket.destroy(); server.close() },
     }))
   })

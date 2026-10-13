@@ -1571,7 +1571,7 @@ declare global {
       appDockCandidates?(): Promise<{ windows: import('../../shared/appDock').DockCandidate[]; error?: string }>
       appDockAttach?(target: import('../../shared/appDock').DockWindow): Promise<{ ok: boolean; error?: string }>
       appDockDetach?(): Promise<void>
-      /** 应用 / 窗口引用(仅桌面 macOS;没有这组方法的宿主上引用只显示名字、不可点)。 */
+      /** 应用 / 窗口引用(桌面 macOS 与 Windows;没有这组方法的宿主上引用只显示名字、不可点)。 */
       appRefs?: {
         list(): Promise<import('../../shared/appRefs').AppRefList>
         status(refs: import('../../shared/appRefs').AppRef[]): Promise<import('../../shared/appRefs').AppRefStatus[]>

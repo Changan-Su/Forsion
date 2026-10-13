@@ -5,7 +5,8 @@
  *   `[[app://<应用标识>|<应用名>]]`       应用
  *   `[[window://<应用标识>|<窗口标题>]]`   窗口(标题就在别名那一格)
  * 目标带 `://`,不可能是一篇笔记的名字或路径,所以各处解析都是「先认这个前缀,再去查笔记」。
- * 应用标识 = macOS 的 bundle id。不存 pid / 窗口号:它们过一会儿就变,点击时按「应用 + 标题」现找。
+ * 应用标识:macOS = bundle id;Windows = 小写的 exe 名(传统应用)或 AUMID(商店 / 打包应用),规则见 electron/appRefsWin.ts。
+ * 不存 pid / 窗口号:它们过一会儿就变,点击时按「应用 + 标题」现找。
  *
  * ⚠️ 与侧边拼接的 `<forsion-app … />` 是两回事:那条的意思是「这段对话贴在这个应用上」(带 pid / windowId,
  *    电脑操作插件据此当默认操作对象);这里只是文字里提到它。两种 token 并存,别合并。
@@ -14,7 +15,7 @@ export type AppRefKind = 'app' | 'window'
 
 export interface AppRef {
   kind: AppRefKind
-  /** 应用标识(bundle id)。 */
+  /** 应用标识(macOS 的 bundle id / Windows 的 exe 名或 AUMID)。 */
   id: string
   /** 显示的名字:应用 = 应用名,窗口 = 窗口标题。 */
   name: string
@@ -34,8 +35,9 @@ export interface AppRefList {
   error?: string
 }
 
-const ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$/
-export const isAppRefId = (id: unknown): id is string => typeof id === 'string' && ID_RE.test(id)
+// macOS = bundle id;Windows = 小写 exe 名或 AUMID,[A-Za-z0-9._-] 之外的字符只能以 `%XX`(两位大写十六进制)出现(见 electron/appRefsWin.ts)。
+const ID_RE = /^(?:[A-Za-z0-9]|%[0-9A-F]{2})(?:[A-Za-z0-9._-]|%[0-9A-F]{2}){0,254}$/
+export const isAppRefId = (id: unknown): id is string => typeof id === 'string' && id.length <= 255 && ID_RE.test(id)
 
 /** 标题是别的应用给的自由文本:`|` `[` `]` 换行都会把 [[..]] 拆坏,一律换成空格并封顶长度。幂等。 */
 export function appRefLabel(name: string): string {
@@ -60,7 +62,9 @@ export function parseAppRefInner(inner: string): AppRef | null {
 }
 
 /** 引用里的标题和此刻一扇真窗口的标题有多像(两边过同一道 appRefLabel):2 = 相同;
- *  1 = 一个包含另一个(应用常把「● 」「 — 已编辑」「 - Google Chrome」这类前后缀拼进标题,文件名那段不变);0 = 对不上。 */
+ *  1 = 一边是另一边加了一段**用分隔符隔开的**前缀 / 后缀 —— 应用自己拼上去的那种(「● 」「 — 已编辑」「 - Google Chrome」),
+ *      文件名那段不变;0 = 对不上。
+ *  只是包含不算:「Untitled」和「Untitled 2」、「报告」和「报告 v2」是两份文件(真机验证时把关掉的前者认成了开着的后者)。 */
 export function windowTitleScore(label: string, liveTitle: string): 0 | 1 | 2 {
   // Markdown 转义留下的反斜杠(`my\_file`)两边一起抹掉再比:抹的是同一种东西,标题里真有反斜杠的也照样对得上
   const plain = (s: string): string => appRefLabel(s).replace(/\\(?=[_*`<>~#[\]-])/g, '')
@@ -70,7 +74,11 @@ export function windowTitleScore(label: string, liveTitle: string): 0 | 1 | 2 {
   if (a === b) return 2
   const cut = (s: string): string => (s.endsWith('…') ? s.slice(0, -1) : s) // 截断过的那边按没截的那段比
   const [short, long] = [cut(a), cut(b)].sort((x, y) => x.length - y.length)
-  return [...short].length >= 4 && long.includes(short) ? 1 : 0
+  if ([...short].length < 4) return 0
+  const SEP = '[-–—|·•:*●]'
+  if (long.startsWith(short)) return new RegExp(`^\\s*${SEP}\\s`).test(long.slice(short.length)) ? 1 : 0
+  if (long.endsWith(short)) return new RegExp(`${SEP}\\s*$`).test(long.slice(0, long.length - short.length)) ? 1 : 0
+  return 0
 }
 export const sameWindowTitle = (label: string, liveTitle: string): boolean => windowTitleScore(label, liveTitle) === 2
 

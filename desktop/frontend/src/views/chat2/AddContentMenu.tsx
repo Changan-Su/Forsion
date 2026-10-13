@@ -42,6 +42,8 @@ registerMessages({
   'addMenu.appRunning': { zh: '正在运行', en: 'Running' },
   'addMenu.appIdle': { zh: '没在运行', en: 'Not running' },
   'addMenu.windowsUnavailable': { zh: '窗口列不出来：电脑操作的本机助手没装或没有「辅助功能」权限', en: "Windows can't be listed: the Computer Use helper isn't installed or lacks Accessibility permission" },
+  // Windows 上列窗口不靠助手,靠系统自带的 PowerShell;列不出来多半是它被系统策略或安全软件拦了
+  'addMenu.windowsUnavailableWin': { zh: '窗口列不出来：系统自带的 PowerShell 没能运行', en: "Windows can't be listed: the built-in PowerShell couldn't run" },
 })
 
 export type AddContentReference = ChatRef | { kind: 'view'; type: string; title: string }
@@ -461,7 +463,7 @@ export const AddContentMenu: React.FC<{
               </>
             ) : pane === 'app' ? (
               <>
-                {appList?.error && <div className="add-menu-empty">{t('addMenu.windowsUnavailable')}</div>}
+                {appList?.error && <div className="add-menu-empty">{t(/Win/i.test(navigator.platform) ? 'addMenu.windowsUnavailableWin' : 'addMenu.windowsUnavailable')}</div>}
                 {!!appMatches.windows.length && <div className="menu-section">{t('addMenu.openWindows')}</div>}
                 {appMatches.windows.map((w) => (
                   <button key={`w:${w.id}:${w.title}`} className="menu-item add-menu-result" data-app-kind="window" title={w.title}

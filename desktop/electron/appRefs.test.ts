@@ -94,7 +94,7 @@ describe('list', () => {
     expect(r.error).toBe('helper_not_installed')
   })
   it('别的平台:空 + unsupported_platform', async () => {
-    expect(await fake({ platform: 'win32' }).refs.list()).toEqual({ windows: [], apps: [], error: 'unsupported_platform' })
+    expect(await fake({ platform: 'linux' }).refs.list()).toEqual({ windows: [], apps: [], error: 'unsupported_platform' }) // Windows 有自己的实现,见 appRefsWin.test.ts
   })
 })
 
@@ -165,7 +165,15 @@ describe('标题变了也认得出那扇窗口', () => {
   it('pickWindow:相同 > 唯一相近;都不像 / 两扇都相近 → 挑不出(只剩一扇别的窗口也不认:多半是另一份文件)', () => {
     const w = (title: string) => ({ title })
     expect(windowTitleScore('a.ts — proj', '● a.ts — proj')).toBe(1)
-    expect(windowTitleScore('abc', 'abcd')).toBe(0) // 太短的不按包含算
+    expect(windowTitleScore('abc', 'abcd')).toBe(0) // 太短的不算
+    // 只认「用分隔符隔开的前后缀」:应用拼上去的那种算相近,另一份名字相像的文件不算
+    expect(windowTitleScore('Linear – Pricing', 'Linear – Pricing - Google Chrome')).toBe(1)
+    expect(windowTitleScore('报告.docx', '报告.docx — 已编辑')).toBe(1)
+    expect(windowTitleScore('a.ts', 'proj — a.ts')).toBe(1)
+    expect(windowTitleScore('Untitled', 'Untitled 2')).toBe(0)
+    expect(windowTitleScore('报告 v2', '报告 v2 终稿')).toBe(0)
+    expect(windowTitleScore('report', 'my report')).toBe(0)
+    expect(windowTitleScore('Pricing', 'Linear – Pricing – Plans')).toBe(0) // 夹在中间的不算
     expect(pickWindow('Pricing', [w('GitHub'), w('Pricing')])?.title).toBe('Pricing')
     expect(pickWindow('Linear – Pricing', [w('GitHub'), w('Linear – Pricing - Google Chrome')])?.title).toBe('Linear – Pricing - Google Chrome')
     expect(pickWindow('竞品对比.numbers', [w('季度预算.numbers')])).toBeNull()

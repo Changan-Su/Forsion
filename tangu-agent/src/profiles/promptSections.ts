@@ -52,7 +52,7 @@ export function responseStyleSection(channelSession?: boolean, opts?: { noPreamb
  *  通道会话(纯文本转发)不注入 —— 那边发不出这种引用,写了也只是一串原文。 */
 export const APP_REF_SECTION =
   '## App & Window References\n' +
-  '- `[[app://<app id>|<app name>]]` and `[[window://<app id>|<window title>]]` in a message point at an application, or one open window of it, on the user\'s computer (app id = bundle id). They are not notes, files or sessions — never pass them to file, note or session tools. If desktop-control (Computer Use) tools are available, that app or window is the one to operate; otherwise it is context the user named.\n' +
+  '- `[[app://<app id>|<app name>]]` and `[[window://<app id>|<window title>]]` in a message point at an application, or one open window of it, on the user\'s computer (the app id is a bundle id on macOS, an executable or package name on Windows). They are not notes, files or sessions — never pass them to file, note or session tools. If desktop-control (Computer Use) tools are available, that app or window is the one to operate; otherwise it is context the user named.\n' +
   '- When your reply mentions an app or window whose id you were given (in such a reference, a `<forsion-app>` tag, or a tool result), you may write it in the same form: it renders as a clickable chip that switches to it. Copy the id and the name or title exactly, never invent an id, and keep it out of backticks and code blocks.';
 
 /** 任务持久性契约:与保留工具证据的历史重放、同 run 插话一起工作,不能靠提示词代替运行时状态。

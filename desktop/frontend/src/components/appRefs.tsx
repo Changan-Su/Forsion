@@ -2,7 +2,7 @@
  * 应用 / 窗口引用在界面上的那一半(契约见 shared/appRefs.ts):图标与状态的缓存 + 文字里的那枚芯片。
  *
  * 聊天气泡(ChatWikiLink)、输入框「已选择」条(RefChipView)、引用菜单、笔记编辑器都从这里拿图标和状态。
- * 宿主没有 `window.tangu.appRefs`(网页版 / 手机 / 非 macOS 桌面)时芯片只显示名字、不可点。
+ * 宿主没有 `window.tangu.appRefs`(网页版 / 手机)时芯片只显示名字、不可点;Linux 桌面有这组方法但什么都列不出,状态恒为「这台设备上没有」。
  */
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { createPortal } from 'react-dom'
@@ -140,6 +140,9 @@ export function AppRefChip({ appRef }: { appRef: AppRef }) {
     return () => window.removeEventListener('scroll', close, true)
   }, [shown])
   const open = (): void => { hide(); if (canOpen) openAppRef(appRef) }
+  const cps = [...appRef.name]
+  const head = cps.slice(0, 2).join('')
+  const rest = cps.slice(2).join('')
   return (
     <span
       className="app-ref"
@@ -155,7 +158,9 @@ export function AppRefChip({ appRef }: { appRef: AppRef }) {
       onFocus={(e) => { if (e.currentTarget.matches(':focus-visible')) show(e.currentTarget) }}
       onBlur={hide}
     >
-      <AppRefIcon id={appRef.id} />{appRef.name}
+      {/* 图标和名字的头两个字包在一个不折行的块里:不然折行时图标会单独留在上一行末尾、名字掉到下一行
+          (试过在两者之间放 U+2060,Chromium 在图片旁边照样断) */}
+      <span className="app-ref-head"><AppRefIcon id={appRef.id} />{head}</span>{rest}
       {card && sub && createPortal(
         <OverlayAt className="app-ref-card" role="tooltip" x={card.x} y={card.bottom + 6} anchorTop={card.top - 6} prefer="above">
           <AppRefIcon id={appRef.id} className="app-ref-card-ico" />

@@ -14,6 +14,7 @@
 .app-ref:hover, .app-ref:focus-visible { background: var(--overlay-strong); }
 .app-ref[data-state="missing"] { cursor: default; }
 .app-ref[data-off] { color: var(--text-muted); }
+.app-ref-head { white-space: nowrap; }
 .app-ref-ico { display: inline-block; width: 1.1em; height: 1.1em; margin-right: 0.3em; vertical-align: -0.2em; object-fit: contain; }
 .app-ref[data-off] .app-ref-ico { filter: grayscale(1); opacity: 0.55; }
 
