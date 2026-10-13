@@ -33,11 +33,11 @@ const SAYS = {
   B: '今天总算把北辰项目的季度复盘报告交上去了,拖了两周,累死。对了,以后给我的回答都先说结论、再展开细节,别铺垫。',
   C: '我这几天都在准备注册测绘师的资格考试,下周三考。先帮我出三道练习题,不用给答案。',
 };
-// What marks a stored line as being about each message. One fresh agent per round, so plain words are enough.
+// Words are only used where a miss is harmless: to tell the preference apart inside message B's own session, and to
+// count what reached the log. What turns a run red never depends on them (see judgeLayers).
 const ABOUT = {
-  A: /字幕|播客|屋顶|菜园/,
-  B_EVENT: /复盘|报告|北辰/,
-  B_PREF: /结论/,
+  B_EVENT: /复盘|报告|北辰|今天|交上|提交/,
+  B_PREF: /结论|铺垫/,
   C: /测绘|考试|备考/,
 };
 // The judge's one line per round is the only signal that says "finished" even when it decided to write nothing.
@@ -91,21 +91,14 @@ export async function layersLive({ run, api, until, home, OUT, MODEL, AGENT_CONF
       leg.memory = entries.filter((e) => e.source?.sessionId === leg.sid).map((e) => e.content);   // the model's own remember
       leg.inbox = inbox.filter((c) => c.sid === leg.sid).map((c) => c.text);                        // the judge's candidates
     }
-    all.push({ round: i + 1, slug, legs, log, memoryCount: entries.length });
+    // A fresh agent has no other writer: a line that belongs to none of the three sessions means the attribution
+    // above missed something, and the verdict would be reading less than what was stored.
+    const sids = new Set(Object.values(legs).map((l) => l.sid));
+    const stray = [...entries.filter((e) => !sids.has(e.source?.sessionId)).map((e) => e.content), ...inbox.filter((c) => !sids.has(c.sid)).map((c) => c.text)];
+    all.push({ round: i + 1, slug, legs, log, stray });
   }
   writeFileSync(join(OUT, 'layers-evidence.json'), JSON.stringify({ says: SAYS, rounds: all }, null, 2));
 
-  const n = all.length;
-  const hit = (lines, rx) => lines.filter((s) => rx.test(s));
-  // rounds in which `pick(round)` found something
-  const count = (pick) => all.filter((r) => pick(r).length > 0).length;
-  const a = { model: count((r) => hit(r.legs.A.memory, ABOUT.A)), judge: count((r) => hit(r.legs.A.inbox, ABOUT.A)), other: count((r) => [...r.legs.A.memory, ...r.legs.A.inbox].filter((s) => !ABOUT.A.test(s))) };
-  const bEvent = { model: count((r) => hit(r.legs.B.memory, ABOUT.B_EVENT)), judge: count((r) => hit(r.legs.B.inbox, ABOUT.B_EVENT)) };
-  const bPref = { model: count((r) => hit(r.legs.B.memory, ABOUT.B_PREF)), judge: count((r) => hit(r.legs.B.inbox, ABOUT.B_PREF)), any: count((r) => hit([...r.legs.B.memory, ...r.legs.B.inbox], ABOUT.B_PREF)) };
-  const bLogged = count((r) => (ABOUT.B_EVENT.test(r.log) ? ['x'] : []));
-  const c = { model: count((r) => hit(r.legs.C.memory, ABOUT.C)), judge: count((r) => hit(r.legs.C.inbox, ABOUT.C)), logged: count((r) => (ABOUT.C.test(r.log) ? ['x'] : [])) };
-  const errors = all.flatMap((r) => Object.entries(r.legs).filter(([, l]) => l.error).map(([k, l]) => `第 ${r.round} 轮 ${k}:${l.error}`));
-  const unjudged = all.flatMap((r) => Object.entries(r.legs).filter(([, l]) => !l.error && !l.judge).map(([k]) => `第 ${r.round} 轮 ${k}`));
   const show = (r) => Object.entries(r.legs).map(([k, l]) => [
     `【第 ${r.round} 轮 ${k}】${l.error ? ` 出错:${l.error}` : ''}`,
     `  模型自己发给 remember:${l.rememberCalls.length ? l.rememberCalls.join(' ‖ ') : '(无)'}`,
@@ -115,21 +108,45 @@ export async function layersLive({ run, api, until, home, OUT, MODEL, AGENT_CONF
     `  落在记忆里:${l.memory.length ? l.memory.join(' ‖ ') : '(无)'}`,
     `  落在候选箱:${l.inbox.length ? l.inbox.join(' ‖ ') : '(无)'}`,
   ].join('\n')).join('\n') + `\n【第 ${r.round} 轮 当天日志】\n${r.log.trim() || '(空)'}`;
+  return { ...judgeLayers(all), output: all.map(show).join('\n\n') };
+}
+
+/** The verdict over the collected rounds; pure, so test/layersProbe.test.mjs can feed it stubs.
+ *  Nothing that gates is keyword-driven: a stored line that rewords the message must not slip through (Codex review 10-13).
+ *    A      anything at all stored from that session is a miss; the message states nothing durable.
+ *    B      every stored line must be the preference and only the preference. A line that is not recognisably the
+ *           preference, or that also carries the event, is a miss; an oddly worded preference turns the run red,
+ *           which is the side to err on (the raw lines are in the report).
+ *    judge  every message needs the judge's normal verdict line. A parse failure, an exception or a timeout means
+ *           that path was not measured, and an unmeasured path is not green.
+ *    stray  a stored line that belongs to none of the round's sessions means the reading above is incomplete.
+ *  C and what reached the log are counted, not gated. */
+export function judgeLayers(all) {
+  const n = all.length;
+  const rounds = (pick) => all.filter((r) => pick(r).length > 0).length;   // rounds in which pick() found something
+  const isPref = (s) => ABOUT.B_PREF.test(s) && !ABOUT.B_EVENT.test(s);
+  const notPref = (s) => !isPref(s);
+  const a = { model: rounds((r) => r.legs.A.memory), judge: rounds((r) => r.legs.A.inbox) };
+  const bEvent = { model: rounds((r) => r.legs.B.memory.filter(notPref)), judge: rounds((r) => r.legs.B.inbox.filter(notPref)) };
+  const bPref = { model: rounds((r) => r.legs.B.memory.filter(isPref)), judge: rounds((r) => r.legs.B.inbox.filter(isPref)), any: rounds((r) => [...r.legs.B.memory, ...r.legs.B.inbox].filter(isPref)) };
+  const bLogged = all.filter((r) => ABOUT.B_EVENT.test(r.log)).length;
+  const c = { model: rounds((r) => r.legs.C.memory), judge: rounds((r) => r.legs.C.inbox), logged: all.filter((r) => ABOUT.C.test(r.log)).length };
+  const legs = all.flatMap((r) => Object.entries(r.legs).map(([k, l]) => ({ at: `第 ${r.round} 轮 ${k}`, ...l })));
+  const errors = legs.filter((l) => l.error).map((l) => `${l.at}:${l.error}`);
+  const stray = all.flatMap((r) => (r.stray || []).map((s) => `第 ${r.round} 轮:${s.slice(0, 60)}`));
+  const unjudged = legs.filter((l) => !l.error && !/^判断: title=/.test(l.judge || '')).map((l) => `${l.at}(${l.judge ? l.judge.slice(0, 40) : '180 秒内没有结果'})`);
   return {
-    // Red = a conversation-only instruction or a today's event reached memory / the inbox, or the standing preference
-    // was saved in no round at all (a boundary that stops everything is not a boundary). C and the log counts are read, not gated.
-    ok: !errors.length && a.model + a.judge === 0 && bEvent.model + bEvent.judge === 0 && bPref.any >= 1,
-    inconclusive: unjudged.length > 0,
+    ok: !errors.length && !unjudged.length && !stray.length && a.model + a.judge === 0 && bEvent.model + bEvent.judge === 0 && bPref.any >= 1,
     detail: [
       `${n} 轮,每轮三句话各开一个会话`,
-      `A 只对这段对话有效的指示:进记忆 ${a.model}/${n} 轮、进候选箱 ${a.judge}/${n} 轮${a.other ? `(另有 ${a.other} 轮记了别的,见原文)` : ''}`,
-      `B 今天做完的事:进记忆 ${bEvent.model}/${n}、进候选箱 ${bEvent.judge}/${n},进当天日志 ${bLogged}/${n}`,
+      `A 只对这段对话有效的指示:那个会话里有东西进了记忆 ${a.model}/${n} 轮、进了候选箱 ${a.judge}/${n} 轮`,
+      `B 今天做完的事(偏好以外的任何一句):进记忆 ${bEvent.model}/${n}、进候选箱 ${bEvent.judge}/${n},进当天日志 ${bLogged}/${n}`,
       `B 长期偏好:记下 ${bPref.any}/${n}(模型自己记 ${bPref.model}、判官提名 ${bPref.judge})`,
       `C 近况(只记数):进记忆 ${c.model}/${n}、进候选箱 ${c.judge}/${n},进当天日志 ${c.logged}/${n}`,
       ...(errors.length ? [`出错:${errors.join(';')}`] : []),
-      ...(unjudged.length ? [`判官没出结果:${unjudged.join('、')}`] : []),
+      ...(unjudged.length ? [`判官没正常出结果(这条路没量到,不算绿):${unjudged.join('、')}`] : []),
+      ...(stray.length ? [`有 ${stray.length} 条对不上任何一个会话(归属没读全,不算绿):${stray.join(' ‖ ')}`] : []),
     ].join(';'),
-    output: all.map(show).join('\n\n'),
     layers: { rounds: n, a, bEvent, bPref, bLogged, c },
   };
 }
