@@ -1061,7 +1061,7 @@ const tabCountText = (list) => {
 
   // 2026-10-04 (user: "like WeChat"): a Space with a left list opens ON the list (full screen, bottom bar below);
   // tapping an item enters the main view (no bottom bar, back arrow); back returns to the list, back again leaves the app.
-  await check('two-level navigation: a Space opens on its list; an item enters the main view (no bottom bar); back returns; back on the list leaves the app', async () => {
+  await check('two-level navigation: a Space opens on its list; an item enters the main view (no bottom bar); back returns; back on the list leads Home, back on Home leaves the app', async () => {
     await tanguDrawer() // = Tangu's first level with the fixture sessions listed
     const level = async () => ({ nav: await cdp.eval(nav), list: ui() })
     let at = await level()
@@ -1134,13 +1134,17 @@ const tabCountText = (list) => {
     h.adb('shell', 'input', 'swipe', String(wv.left + 150), String(wv.cy), String(wv.right - 100), String(wv.cy), '200')
     assert.ok(await h.waitPage(cdp, `(${nav}) === 'list'`, 5000), 'swiping right on the main view did not return to the list')
     await h.pause(600)
-    // system back on the list = bottom of the chain: the app goes to the background (and comes back as it was)
+    // system back on the list = the first level of a Space that is not Home: it leads Home, the app stays in front
+    h.key(4)
+    assert.ok(await h.waitPage(cdp, `document.querySelector('.mb-shell')?.dataset.space === 'home' && ${homeShown}`, 6000), 'system back on the list level did not lead to Home')
+    assert.ok(resumed(), 'system back on the list level left the app')
+    // … and Home is the bottom of the chain: the app goes to the background (and comes back as it was)
     h.key(4)
     await h.pause(1200)
-    assert.ok(!resumed(), 'system back on the list level did not leave the app')
+    assert.ok(!resumed(), 'system back on Home did not leave the app')
     h.adb('shell', 'am', 'start', '-n', ACTIVITY)
     assert.ok((await h.waitNodes((l) => !!h.byId(l, 'nativeChrome.spaces'), { timeout: 10000 })).hit, 'the app did not come back with its bottom bar')
-    assert.equal(await cdp.eval(nav), 'list')
+    assert.ok(await cdp.eval(homeShown), 'the app did not come back on Home')
     // a Space without a left list (Home): its main view is the first level — bottom bar, no left button, the avatar
     await toSpace('home')
     at = await level()
@@ -1316,14 +1320,12 @@ const tabCountText = (list) => {
       assert.ok(d, 'Calendar\'s left panel is not a drawer')
       await closeDrawer() // system back closes a drawer and stays in the app
       assert.ok(resumed(), 'closing the drawer left the app')
-      // … and once more on the main view: Calendar is a pinned view (cannot be closed) = the bottom of the chain, the app
-      // goes to the background. It used to do nothing at all (the handler stopped at the no-op close).
+      // … and once more on the main view: Calendar is a pinned view (cannot be closed) = this Space's first level, so
+      // back leads Home (2026-10-13). It left the app before that, and did nothing at all before 2026-10-04 (the
+      // handler stopped at the no-op close).
       h.key(4)
-      await h.pause(1200)
-      assert.ok(!resumed(), 'system back on a pinned main view did nothing (the app should go to the background)')
-      h.adb('shell', 'am', 'start', '-n', ACTIVITY)
-      assert.ok((await h.waitNodes((l) => !!h.byId(l, 'nativeChrome.spaces'), { timeout: 10000 })).hit, 'the app did not come back with its bottom bar')
-      assert.equal(await cdp.eval("document.querySelector('.mb-shell').dataset.space"), 'calendar', 'the app came back on another Space')
+      assert.ok(await h.waitPage(cdp, `document.querySelector('.mb-shell')?.dataset.space === 'home' && ${homeShown}`, 6000), 'system back on a pinned main view did not lead to Home')
+      assert.ok(resumed(), 'system back on a pinned main view left the app')
     }
     // … and a Space whose left panel became such a list keeps the default: Image Studio's left panel is its project
     // navigation since 2026-10-05 (it was the chat, and the Space opted out). It opens on that list; an entry enters the main view.
@@ -2181,6 +2183,138 @@ const tabCountText = (list) => {
       await reload()
     }
     assert.deepEqual(bad, [], 'the launch did not open on the homepage')
+  })
+
+  // Where every system back leads (2026-10-13, user: 「侧滑返回逻辑有些诡异,甚至有时候一不小心就返回桌面了」), by key
+  // and by a real swipe in from either screen edge — the full-screen back gesture. What is held:
+  //   · the first level of a Space that is not Home leads Home; only Home leaves the app;
+  //   · back from a page reached through the list leads to that list, not to the page looked at before it;
+  //   · a horizontal swipe that starts off the edge is the page's own (it follows the finger), not a back.
+  // The whole walk is printed and kept in OUT/back-trace.txt; `BACK_TRACE=1` reads a build without judging it.
+  await check('back: the first level of a Space leads Home and only Home leaves the app; a page opened from the list goes back to the list', async () => {
+    const TRACE_ONLY = process.env.BACK_TRACE === '1'
+    const rows = []
+    const bad = []
+    const say = (line) => { rows.push(line); console.log(`  TRACE ${line}`) }
+    await cdp.eval(`(() => { if (window.__bk) return true; const k = window.__bk = { back: 0, start: 0, move: 0, cancel: 0, end: 0 }
+      addEventListener('forsion:mobile-back', () => k.back++, true)
+      for (const [ev, f] of [['touchstart', 'start'], ['touchmove', 'move'], ['touchcancel', 'cancel'], ['touchend', 'end']]) addEventListener(ev, () => k[f]++, { capture: true, passive: true })
+      return true })()`)
+    const counters = async () => JSON.parse(await cdp.eval('JSON.stringify(window.__bk)'))
+    const zero = () => cdp.eval('(() => { for (const f in window.__bk) window.__bk[f] = 0; return true })()')
+    const st = async () => {
+      if (!resumed()) return { fg: false, at: 'left the app' }
+      const s = JSON.parse(await cdp.eval(`JSON.stringify({ space: document.querySelector('.mb-shell')?.dataset.space, nav: document.querySelector('.mb-shell')?.dataset.nav || '', view: ${dom.view} })`))
+      const title = s.nav === 'detail' && s.view === 'chat' ? textOf(ui(), 'nativeChrome.title') : ''
+      return { ...s, fg: true, title, at: `${s.space}/${s.nav || 'page'}${title ? ` "${title}"` : ''}` }
+    }
+    /** Where we are after `step` (and, with `want`, where a person expects to be); an app that left is brought back. */
+    const note = async (step, want, wait = 1200) => {
+      await h.pause(wait)
+      const s = await st()
+      const k = s.fg ? await counters() : null
+      say(`${step} → ${s.at}${k ? `   [page saw: back ${k.back}, touch start ${k.start} move ${k.move} cancel ${k.cancel} end ${k.end}]` : ''}`)
+      if (want && s.at !== want) bad.push(`${step}: at ${s.at}, expected ${want}`)
+      if (!s.fg) {
+        h.adb('shell', 'am', 'start', '-n', ACTIVITY)
+        assert.ok((await h.waitNodes(() => resumed(), { timeout: 10000 })).hit, 'the app did not come back')
+        await h.pause(1500)
+        say(`   (relaunched) → ${(await st()).at}`)
+      }
+      await zero()
+      return s
+    }
+    const HOME = 'home/page', LIST = 'tangu/list', LEFT = 'left the app'
+    const mid = Math.round(screen.h * 0.5)
+    const sw = (x0, x1, ms = 250) => h.adb('shell', 'input', 'swipe', String(Math.round(x0)), String(mid), String(Math.round(x1)), String(mid), String(ms))
+    const edgeL = () => sw(2, screen.w * 0.65)
+    const edgeR = () => sw(screen.w - 3, screen.w * 0.35)
+    const density = Number(h.adb('shell', 'wm', 'density').match(/(\d+)\s*$/)[1]) / 160
+    const TWO = sessions.find((x) => x.id === 'e2e-s2').title
+    const open = async (title) => { await tapEl(rowExpr(title)); await h.waitPage(cdp, `(${nav}) === 'detail'`, 8000) }
+    say(`screen ${screen.w}x${screen.h} @${density}x; navigation_mode=${h.adb('shell', 'settings', 'get', 'secure', 'navigation_mode').trim()} (2 = gestures)`)
+
+    // A. Home is where the app leaves from — by key and by a swipe in from either edge
+    await goHome(); await zero()
+    await note('A0 Home', HOME, 300)
+    h.key(4); await note('A1 Home: back key', LEFT)
+    await goHome(); edgeL(); await note('A2 Home: swipe in from the left edge', LEFT)
+    await goHome(); edgeR(); await note('A3 Home: swipe in from the right edge', LEFT)
+    // … and a Space entered from Home leads back to it
+    await goHome(); await foldHomeComposer()
+    await tapEl(`document.querySelector('.hp-root .hp-card[data-space-id="tangu"]')`); await note('A4 Home: tap the Tangu card', LIST)
+    h.key(4); await note('A5 back key', HOME)
+    // … the first thing opened after entering a Space goes back to its list, whichever conversation the Space had up
+    //    when it was entered (anything recorded while the list was on screen must not come first)
+    for (const title of ['E2E Session One', TWO]) {
+      await goHome(); await foldHomeComposer()
+      await tapEl(`document.querySelector('.hp-root .hp-card[data-space-id="tangu"]')`); await h.waitPage(cdp, `(${nav}) === 'list'`, 6000); await h.pause(900)
+      await cdp.eval(`(() => { if (document.querySelector('.mb-drawer--left .t2s-srow')) return true; const g = [...document.querySelectorAll('.mb-drawer--left .t2s-group')].find((e) => e.textContent.includes('无项目') || /project/i.test(e.textContent)); g?.querySelector('button')?.click(); return true })()`)
+      await h.waitPage(cdp, `!!${rowExpr(title)}`, 8000)
+      await open(title); await note(`A6 Home → Tangu → tap "${title}"`, `tangu/detail "${title}"`)
+      h.key(4); await note('A7 back key', LIST)
+    }
+
+    // B. the first level of a list Space: an edge swipe is a back (→ Home), a swipe across the list is not
+    await tanguDrawer(); await zero()
+    edgeR(); await note('B1 list: swipe in from the right edge', HOME)
+    await tanguDrawer(); edgeL(); await note('B2 list: swipe in from the left edge', HOME)
+    await tanguDrawer(); sw(screen.w * 0.8, screen.w * 0.2); await note('B3 list: swipe left across the middle', LIST)
+
+    // C. list → conversation One → back arrow → conversation Two → back: the list (not One), then Home, then out
+    await tanguDrawer()
+    await open('E2E Session One'); await note('C1 list: tap conversation One', 'tangu/detail "E2E Session One"')
+    await tapId('nativeChrome.left'); await note('C2 back arrow', LIST)
+    await open(TWO); await note('C3 list: tap conversation Two', `tangu/detail "${TWO}"`)
+    h.key(4); await note('C4 back key', LIST)
+    h.key(4); await note('C5 back key', HOME)
+    h.key(4); await note('C6 back key', LEFT)
+
+    // D. a conversation: the same rightward swipe by where the finger starts. Up to the system's back inset it is the
+    //    system's (the page gets a touchcancel and one back); past it the page's own drag. Both end on the list.
+    for (const dp of [1, 16, 24, 32, 60, 120]) {
+      await tanguDrawer(); await open('E2E Session One'); await h.pause(700); await zero()
+      sw(dp * density, screen.w * 0.7)
+      await note(`D  conversation: swipe right starting ${dp}dp from the left edge`, LIST)
+    }
+    // … held half-way: does what is on screen move with the finger? (recorded, not judged: the system's gesture moves
+    //    nothing until it is released; the page's own drag follows)
+    const held = async (x0, tag) => {
+      const me = (a, x) => h.adb('shell', 'input', 'motionevent', a, String(Math.round(x)), String(mid))
+      me('DOWN', x0); for (const f of [0.12, 0.25, 0.4, 0.5]) me('MOVE', x0 + screen.w * f)
+      await h.pause(350)
+      const moved = resumed() ? await cdp.eval(`(() => { const m = document.querySelector('.mb-body > .mb-main'); const d = document.querySelector('.mb-drawer--left'); return JSON.stringify({ drag: document.querySelector('.mb-body')?.dataset.drag || '', main: m ? Math.round(m.getBoundingClientRect().left) : null, list: d ? Math.round(d.getBoundingClientRect().left) : null, w: innerWidth }) })()`) : '(not in front)'
+      shot(tag)
+      me('UP', x0 + screen.w * 0.5)
+      say(`   held half-way (${tag}): page ${moved}`)
+    }
+    await tanguDrawer(); await open('E2E Session One'); await h.pause(700); await zero()
+    await held(2, '06-back-held-system-edge'); await note('E1 conversation: edge swipe held, then released', LIST)
+    await tanguDrawer(); await open('E2E Session One'); await h.pause(700); await zero()
+    await held(60 * density, '06-back-held-in-page'); await note('E2 conversation: swipe from 60dp held, then released', LIST)
+    await goHome(); await zero()
+    await held(2, '06-back-held-edge-on-home'); await note('E3 Home: edge swipe held, then released', LEFT)
+
+    // F. a conversation opened from Home (search): back → its Space's list → Home → out
+    await goHome()
+    await tapId('nativeChrome.more'); await tapId('nativeSheet.item.rb-cmd', await waitSheet(true)); await waitSheet(false)
+    await h.waitPage(cdp, "!!document.querySelector('.cmd-input')", 5000)
+    await tapEl("document.querySelector('.cmd-input')"); await h.pause(500); h.adb('shell', 'input', 'text', 'quick')
+    const quick = "[...document.querySelectorAll('.cmd-item')].find((r) => r.textContent.includes('快速查找'))"
+    await h.waitPage(cdp, `!!${quick}`, 5000); if (imeShown()) { h.key(4); await h.pause(600) }
+    await tapEl(quick); await h.waitPage(cdp, "!!document.querySelector('.amx-qf-input')", 5000)
+    await tapEl("document.querySelector('.amx-qf-input')"); await h.pause(500); h.adb('shell', 'input', 'text', 'Two')
+    const hit = `[...document.querySelectorAll('.amx-qf-row')].find((r) => r.querySelector('.amx-qf-title')?.textContent.trim() === ${JSON.stringify(TWO)})`
+    await h.waitPage(cdp, `!!${hit}`, 6000); if (imeShown()) { h.key(4); await h.pause(600) }
+    await tapEl(hit); await h.waitPage(cdp, `(${dom.view}) === 'chat'`, 6000); await zero()
+    await note('F0 Home: search → open conversation Two', `tangu/detail "${TWO}"`)
+    h.key(4); await note('F1 back key', LIST)
+    h.key(4); await note('F2 back key', HOME)
+    h.key(4); await note('F3 back key', LEFT)
+
+    fs.writeFileSync(path.join(OUT, 'back-trace.txt'), rows.join('\n') + '\n')
+    await goHome()
+    if (!TRACE_ONLY) assert.deepEqual(bad, [], 'back does not lead where a person expects')
   })
 
   await check('phone notes list: category chips instead of a search box, the vault under the title, search on the capsule, one main button above the dock', async () => {

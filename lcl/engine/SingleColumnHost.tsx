@@ -27,6 +27,7 @@ import { presentInlineExtension } from './extendView'
 import { NativeExtendView } from './nativeExtendView'
 import { useWorkspace, restoreSingleColumnLayout, presentDrawerExtension, setAfterLayoutHook, setBeforeMainOpenHook } from './singleColumnStore'
 import { listFirstNow } from './listFirst'
+import { installListTrips } from './listTrips'
 import { onePageLanding } from './pinnedViews'
 import { Skeleton, ViewErrorBoundary, skeletonVariantOf } from './Skeleton'
 import './singleColumn.css'
@@ -430,6 +431,8 @@ setBeforeMainOpenHook(redirectOpenFromOnePage)
 /** 这个 Space 里有没有「新建标签页」:一页式 Space 没有(「⋯」、标签页面板两处的那一行都看它)。 */
 const tabsAllowed = (): boolean => !getActiveSpace()?.onePage
 setAfterLayoutHook(landOnEntry)
+// 两级导航里一趟的页内历史:从列表点进去的那一页是起点,返回 = 回列表(见 listTrips.ts)。
+installListTrips()
 
 /** 左抽屉底部常驻区:Space 切换条(原全局底栏移入)+ 账号卡与设置钮。
  *  账号/设置是 feature 层的 ribbon 注册项(rb-account / rb-settings),引擎按 id 取用不 import feature;
