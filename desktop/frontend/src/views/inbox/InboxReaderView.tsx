@@ -3,17 +3,20 @@
  * 不读 view params(params 会随 space:inbox 命名布局持久化成陈腐消息 id)。
  * 消息被删/缓存失位 → 空态(禁止 msg! 解引用)。正文 = InboxBody(真 Amadeus 只读页 + 末尾的任务卡 / 审批卡,
  * 2026-09-11 起;见其头注)。
+ * 版式(2026-10-13 翻新):头部先说谁发的(SenderGlyph + 名字 + 时间),再是标题;标签页显示信的标题。
+ * 正文之后的块(审批 / 任务 / 附带物品 / 反馈线程)是同一种卡:壳、卡头、卡内按钮都用聊天任务卡的 .t2-taskcard 那一套。
  */
-import { useEffect, useState } from 'react'
-import { Archive, ArchiveRestore, Cloud, Info, Mail, MailOpen, MessageCircle, Trash2, Workflow } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import { Archive, ArchiveRestore, Check, Crown, Gift, Mail, MailOpen, MessageCircle, Star, Ticket, Trash2, X, type LucideIcon } from 'lucide-react'
 import { registerMessages, useI18n } from '../../i18n'
 import { formatDate, formatDateTime } from '../../format/time'
 import { APP_VERSION } from '../../changelog'
 import { useApp } from '../../stores/appStore'
-import { useHomeAgentAvatars, useHomeAgentDefs } from '../../stores/homeCatalog'
-import { useInbox, isAutomationSender, senderOf, parseUtc, type InboxMessage } from '../../stores/inboxStore'
-import { useWorkspace, setActiveSpace } from '@lcl/engine'
+import { useHomeAgentDefs } from '../../stores/homeCatalog'
+import { useInbox, senderOf, parseUtc, type InboxMessage } from '../../stores/inboxStore'
+import { useWorkspace, setActiveSpace, type Leaf } from '@lcl/engine'
 import { InboxBody } from './InboxBody'
+import { SenderGlyph } from './SenderGlyph'
 import { FeedbackThread, feedbackThreadAvailable } from './FeedbackThread'
 import { inboxThreadOf } from './feedbackThreadLib'
 import { approvalThreadOf } from './approvalThreadLib'
@@ -23,9 +26,9 @@ import { runLocationsAvailable } from '../../features/runtime'
 import { hasUnknownRequirement, tierFromAuth, unmetClaimRequirements } from './claimRequirements'
 import './inbox.css'
 
-/** 物品图标:kind 命中给专属,未知类型兜底 🎁(服务端新增类型零改动)。 */
-const ATTACH_ICONS: Record<string, string> = {
-  reset_card: '🎟️', reset_card_weekly: '🎟️', points: '⭐', membership: '👑',
+/** 物品图标:kind 命中给专属,未知类型兜底礼物(服务端新增类型零改动)。线性图标,与界面其余部分一套;从前是 emoji。 */
+const ATTACH_ICONS: Record<string, LucideIcon> = {
+  reset_card: Ticket, reset_card_weekly: Ticket, points: Star, membership: Crown,
 }
 
 registerMessages({
@@ -70,19 +73,24 @@ function InboxReaderEmpty() {
   )
 }
 
-export function InboxReaderView() {
+export function InboxReaderView({ leaf }: { leaf?: Leaf }) {
   const { t, locale } = useI18n()
   const { messages, archived, selectedId, markRead, markArchived, remove } = useInbox()
   const agentDefs = useHomeAgentDefs() // 收件箱是本端的(P1-K6:焦点在我的电脑时也按本端的 Agent)
-  const avatars = useHomeAgentAvatars()
   // 工作区里点开的可能是「已归档」文件夹里的一封 —— 两份都找。
   const msg = selectedId ? (messages.find((m) => m.id === selectedId) ?? archived.find((m) => m.id === selectedId)) : null
+
+  // 标签页显示信的标题;没选中 / 信被删了退回「消息阅读」。这个视图是单例,标题会随布局存下来 ——
+  // 所以没选中时也要写回去,不然重启后标签上挂着一封已经不在眼前的信的标题。放在 effect 里:渲染期调 setTitle 会回环。
+  // 只跟标题走:宿主每次渲染都新造一个 leaf 对象,拿它当依赖等于每次渲染都改一遍标题。
+  const tabTitle = msg?.title || t('inbox.reader')
+  const leafRef = useRef(leaf)
+  leafRef.current = leaf
+  useEffect(() => { leafRef.current?.setTitle(tabTitle) }, [tabTitle])
 
   if (!msg) return <InboxReaderEmpty />
 
   const senderAgent = msg.sender_kind === 'agent' && msg.sender_id ? agentDefs.find((a) => a.slug === msg.sender_id) : null
-  const avatarUrl = senderAgent ? avatars[senderAgent.slug] : undefined
-  const automationSender = isAutomationSender(msg)
 
   // 过期态:展示层判断(真正的领取闸在服务端)。
   const expiresAt = parseUtc(msg.expires_at ?? null)
@@ -117,25 +125,22 @@ export function InboxReaderView() {
     <div className="ibx-reader">
       <div className="ibx-reader-wrap">
         <div className="ibx-reader-head">
-          <h1 className="ibx-reader-title">{msg.title}</h1>
           <div className="ibx-reader-meta">
-            {avatarUrl ? (
-              <img className="ibx-ava" src={avatarUrl} alt="" />
-            ) : (
-              <span className="ibx-ava-fallback">
-                {msg.sender_kind === 'server' ? <Cloud size={14} /> : msg.sender_kind === 'system' ? <Info size={14} /> : automationSender ? <Workflow size={14} /> : (senderOf(msg) || '?').slice(0, 1).toUpperCase()}
+            <SenderGlyph msg={msg} size={36} />
+            <span className="ibx-reader-from">
+              <span className="ibx-sender">{senderOf(msg)}</span>
+              <span className="ibx-time">
+                {formatDateTime(parseUtc(msg.created_at), { locale })}
+                {expiresAt && (
+                  <span className={`ibx-expire${expired ? ' expired' : ''}`}>
+                    {' · '}{expired ? t('inbox.expired') : t('inbox.expiresAt', { d: formatDate(expiresAt, { locale }) })}
+                  </span>
+                )}
               </span>
-            )}
-            <span className="ibx-sender">{senderOf(msg)}</span>
-            <span className="ibx-time">{formatDateTime(parseUtc(msg.created_at), { locale })}</span>
-            {expiresAt && (
-              <span className={`ibx-expire${expired ? ' expired' : ''}`}>
-                {expired ? t('inbox.expired') : t('inbox.expiresAt', { d: formatDate(expiresAt, { locale }) })}
-              </span>
-            )}
+            </span>
             <span className="ibx-reader-actions">
               {senderAgent && (
-                <button className="ibx-iconbtn" style={{ width: 'auto', padding: '0 8px', gap: 5 }} title={t('inbox.action.chat', { name: senderAgent.name })} onClick={chatWithSender}>
+                <button className="ibx-iconbtn" title={t('inbox.action.chat', { name: senderAgent.name })} onClick={chatWithSender}>
                   <MessageCircle size={14} />
                 </button>
               )}
@@ -162,6 +167,7 @@ export function InboxReaderView() {
               </button>
             </span>
           </div>
+          <h1 className="ibx-reader-title">{msg.title}</h1>
         </div>
         <div className="ibx-reader-body">
           <InboxBody msg={msg} />
@@ -213,21 +219,20 @@ function InboxAttachments({ msg, expired }: { msg: InboxMessage; expired: boolea
     (locale === 'zh' ? it.label?.zh : it.label?.en) ?? it.label?.zh ?? it.kind
   const tierName = (k: string) => (TIER_KEYS[k] ? t(TIER_KEYS[k]) : k)
   return (
-    <div className="ibx-attach">
-      <div className="ibx-attach-title">{t('inbox.attach.title')}</div>
+    <div className="t2-taskcard ibx-attach">
+      <div className="t2-taskcard-head"><Gift size={13} /> <b>{t('inbox.attach.title')}</b></div>
       <div className="ibx-attach-items">
-        {attach.items.map((it, i) => (
-          <span key={i} className="ibx-attach-chip">
-            <span aria-hidden>{ATTACH_ICONS[it.kind] ?? '🎁'}</span>
-            <span>{itemLabel(it)}</span>
-          </span>
-        ))}
+        {attach.items.map((it, i) => {
+          const Icon = ATTACH_ICONS[it.kind] ?? Gift
+          return <span key={i} className="ibx-attach-chip"><Icon size={12} aria-hidden /><span>{itemLabel(it)}</span></span>
+        })}
       </div>
       {req && (
         <div className="ibx-req">
           <span className="ibx-req-label">{t('inbox.req.title')}</span>
           {req.minVersion && (
             <span className={`ibx-req-chip ${unmet.includes('minVersion') ? 'bad' : 'ok'}`} title={t('inbox.req.currentVersion', { v: APP_VERSION })}>
+              {unmet.includes('minVersion') ? <X size={11} aria-hidden /> : <Check size={11} aria-hidden />}
               {t('inbox.req.version', { v: String(req.minVersion) })}
             </span>
           )}
@@ -236,23 +241,26 @@ function InboxAttachments({ msg, expired }: { msg: InboxMessage; expired: boolea
               className={`ibx-req-chip${tier == null ? '' : unmet.includes('tiers') ? ' bad' : ' ok'}`}
               title={tier ? t('inbox.req.currentTier', { tier: tierName(tier) }) : undefined}
             >
+              {tier == null ? null : unmet.includes('tiers') ? <X size={11} aria-hidden /> : <Check size={11} aria-hidden />}
               {t('inbox.req.tiers', { tiers: req.tiers.map(tierName).join(' / ') })}
             </span>
           )}
           {hasUnknownRequirement(req) && <span className="ibx-req-chip">{t('inbox.req.other')}</span>}
         </div>
       )}
-      <button
-        className={`ibx-claim-btn${attach.claimed ? ' done' : ''}`}
-        disabled={attach.claimed || expired || unmet.length > 0 || claiming === msg.id}
-        onClick={async () => { await claim(msg.id); if (needTier) setRecheck((n) => n + 1) }}
-      >
-        {attach.claimed ? t('inbox.attach.claimed')
-          : expired ? t('inbox.attach.expired')
-          : unmet.length > 0 ? t('inbox.attach.unmet')
-          : claiming === msg.id ? t('inbox.attach.claiming')
-          : t('inbox.attach.claim')}
-      </button>
+      <div className="t2-taskcard-actions">
+        <button
+          className={`ibx-claim-btn${attach.claimed ? ' done' : ' primary'}`}
+          disabled={attach.claimed || expired || unmet.length > 0 || claiming === msg.id}
+          onClick={async () => { await claim(msg.id); if (needTier) setRecheck((n) => n + 1) }}
+        >
+          {attach.claimed ? t('inbox.attach.claimed')
+            : expired ? t('inbox.attach.expired')
+            : unmet.length > 0 ? t('inbox.attach.unmet')
+            : claiming === msg.id ? t('inbox.attach.claiming')
+            : t('inbox.attach.claim')}
+        </button>
+      </div>
     </div>
   )
 }

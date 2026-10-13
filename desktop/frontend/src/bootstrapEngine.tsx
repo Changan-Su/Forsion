@@ -170,7 +170,7 @@ export function installEngine(): void {
       displayName: () => app().tr('inbox.list'), icon: Inbox, factory: (props) => <WorkspaceView {...props} defaultMode={INBOX_WORKSPACE_MODE} />, singleton: true,
       dashboard: { sizes: ['wide', 'lg', 'full'], defaultSize: 'lg', surface: 'summary', factory: (_props, ctx) => <InboxDashboardCard size={ctx.size} /> },
     })
-    registerView({ type: 'inbox-reader', kind: 'page', displayName: () => app().tr('inbox.reader'), icon: Mail, factory: () => <InboxReaderView />, singleton: true, workspaceSource: INBOX_WORKSPACE_MODE })
+    registerView({ type: 'inbox-reader', kind: 'page', displayName: () => app().tr('inbox.reader'), icon: Mail, factory: (props) => <InboxReaderView leaf={props.leaf} />, singleton: true, workspaceSource: INBOX_WORKSPACE_MODE })
   }
 
   // Space:注册(注册序 = ribbon 顶部默认序,排在商店等功能图标之上;每个 Space 贡献一个可拖动的 ribbon 顶部图标)。

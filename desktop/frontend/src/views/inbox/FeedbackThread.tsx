@@ -77,13 +77,12 @@ export function FeedbackThread({ ticketId, event }: { ticketId: string; event?: 
 
   const eventKey = event === 'created' || event === 'user_reply' || event === 'admin_reply' ? `inbox.feedback.event.${event}` : null
   return (
-    <div className="ibx-fb" data-feedback-thread={ticketId}>
-      <div className="ibx-fb-head">
-        <MessageSquareReply size={14} />
-        <span>{t('inbox.feedback.title')}</span>
+    <div className="t2-taskcard ibx-fb" data-feedback-thread={ticketId}>
+      <div className="t2-taskcard-head ibx-fb-head">
+        <MessageSquareReply size={13} /> <b>{t('inbox.feedback.title')}</b>
         {eventKey && <span className="ibx-fb-event">{t(eventKey)}</span>}
         {load !== 'loading' && 'data' in load && (
-          <span className={`ibx-fb-status st-${load.data.ticket.status}`}>{t(`inbox.feedback.status.${load.data.ticket.status}`)}</span>
+          <span className={`t2-taskcard-tag ibx-fb-status st-${load.data.ticket.status}`}>{t(`inbox.feedback.status.${load.data.ticket.status}`)}</span>
         )}
       </div>
       {load === 'loading' ? (
@@ -120,9 +119,11 @@ export function FeedbackThread({ ticketId, event }: { ticketId: string; event?: 
               </button>
               <span className="ibx-fb-spacer" />
               {err && <span className="ibx-fb-err">{err}</span>}
-              <button className="ibx-claim-btn ibx-fb-send" disabled={!text.trim() || sending} onClick={() => void send()}>
-                <Send size={12} /> {sending ? t('inbox.feedback.sending') : t('inbox.feedback.send')}
-              </button>
+              <span className="t2-taskcard-actions">
+                <button className="primary ibx-fb-send" disabled={!text.trim() || sending} onClick={() => void send()}>
+                  <Send size={12} /> {sending ? t('inbox.feedback.sending') : t('inbox.feedback.send')}
+                </button>
+              </span>
             </div>
           </div>
         </>

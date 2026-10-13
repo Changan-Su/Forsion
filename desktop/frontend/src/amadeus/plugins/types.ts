@@ -541,6 +541,10 @@ export interface ListItem {
   group?: string
   /** Optional dim text on the right (count, date, status). */
   hint?: string
+  /** Optional second line under the title (2026-10-13+): one dim line, cut with an ellipsis — who it is
+   *  from, a first sentence, a status. Rows without it stay one line high. Plain text only. Folder rows
+   *  ignore it. Older hosts ignore the field and draw the one-line row, so nothing needs feature-detecting. */
+  subtitle?: string
   /** Leading icon, by name from the host icon vocabulary (same table as manifest icons —
    *  keys are [a-z0-9-]; unknown names fall back to the generic row icon). Use it to keep
    *  per-item recognisability (e.g. one icon per source platform) inside the shared row UI. */

@@ -19,7 +19,9 @@ import { openNoteAtHeading } from '../amadeusNav'
 import { useAgentCalDbs, useAgentSchedulePolling } from '../stores/agentScheduleStore'
 import { useOtherVaultCalDbs } from '../stores/otherVaultCalStore'
 import { useIcsCalDbs } from '../stores/icsCalendarStore'
-import { useInbox, senderOf, parseUtc, type InboxMessage } from '../stores/inboxStore'
+import { useInbox, parseUtc, type InboxMessage } from '../stores/inboxStore'
+import { inboxSubtitle } from './inbox/inboxListSource'
+import { SenderGlyph } from './inbox/SenderGlyph'
 import { registerMessages, useI18n } from '../i18n'
 import { formatMonthDay } from '../format/time'
 
@@ -160,8 +162,8 @@ export function InboxDashboardCard({ size }: { size: DashboardCardSize }) {
       <div className="dash-compact-rows">
         {shown.map((message) => (
           <button key={message.id} className="dash-compact-row" onClick={() => open(message)}>
-            <i className={`dash-inbox-dot${message.read_at ? '' : ' is-unread'}`} />
-            <span><b>{senderOf(message)}</b>{message.title}</span>
+            <SenderGlyph msg={message} size={18} />
+            <span className={message.read_at ? undefined : 'is-unread'}>{message.title}<small>{inboxSubtitle(message)}</small></span>
             <em>{inboxTime(message)}</em>
           </button>
         ))}

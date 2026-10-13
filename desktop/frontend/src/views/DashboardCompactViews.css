@@ -22,8 +22,9 @@ button.dash-compact-row:hover { color: var(--primary); background: color-mix(in 
 .dash-compact-more { padding-top: 6px; flex: 0 0 auto; color: var(--text-faint, var(--text-muted)); font-size: var(--ui-font-caption, 11px); }
 .dash-compact-empty { min-height: 80px; display: flex; align-items: center; justify-content: center; gap: 6px; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); }
 .dash-agenda-row > i { width: 7px; height: 7px; border-radius: var(--radius-pill, 999px); }
-.dash-inbox-dot { width: 6px; height: 6px; border-radius: var(--radius-pill, 999px); background: color-mix(in srgb, var(--text-muted) 28%, transparent); }
-.dash-inbox-dot.is-unread { background: var(--primary); }
+/* 收件箱卡:行首是发信人(SenderGlyph),标题下面一行「发信人 · 正文第一句」,未读靠标题加重 —— 与收件箱列表同一种写法。 */
+.dash-compact-row > span.is-unread { font-weight: 600; }
+.dash-compact-row > span small { display: block; overflow: hidden; color: var(--text-muted); font-size: var(--ui-font-caption, 11px); font-weight: 400; line-height: 1.3; text-overflow: ellipsis; white-space: nowrap; }
 .dash-activity-lines { min-height: 0; overflow: hidden; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: var(--ui-font-caption, 11px); line-height: 1.55; }
 .dash-activity-lines > div { display: grid; grid-template-columns: 3.4em minmax(3em, auto) minmax(0, 1fr); gap: 6px; }
 .dash-activity-lines time { color: var(--text-faint, var(--text-muted)); }

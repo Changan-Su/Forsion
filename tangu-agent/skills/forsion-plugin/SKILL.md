@@ -2,7 +2,7 @@
 name: forsion-extension-development
 description: 当用户要给 Forsion / Tangu 做插件、主题、Space、智能体(agent)或捆绑包(bundle)——或要把某个能力做成可分发/可上架商店的扩展——时使用;已装的插件 / Space / 视图不出现、加载失败、更新后不工作要排查时也用(带一份插件体检脚本 tools/check-plugin.mjs)。内置五类官方模板(samples/),讲清各自的格式基线与硬约束(尤其两种"插件"是完全不同的系统),照抄模板改比从零写靠谱。
 metadata:
-  version: 1.34.0
+  version: 1.35.0
   author: Forsion
   category: Forsion
 ---
@@ -724,6 +724,9 @@ refresh = (rows) => h.update({ ...spec, rows })   // 数据刷新走 update:排�
   (宿主不替你弹框);惯例把它排在最后一项。老宿主忽略该字段。
 - 行可带 `unread: true`(2026-09-11 起):宿主在行首图标角上画与未读会话同一个点;老宿主忽略。
   宿主自己的收件箱就是这么接进统一左栏的(`plugin:inbox:messages`,分组 = 未读 / 发信人 / 已归档),可当参考实现。
+- 行可带 `subtitle`(2026-10-13 起):标题下面再画一行淡字,只占一行、超出省略 —— 写「谁发的 · 第一句话」「状态」这类一眼要看到的东西,
+  纯文本、别放 markdown;不写就还是一行。文件夹行不认;老宿主忽略该字段、照旧画一行,不用探测。右边的 `hint` 对齐第一行。
+  收件箱的行就是 `title` + `subtitle`(发信人 · 正文第一句)+ `hint`(时间)。词表新增三枚「谁发来的」图标:`cloud` / `workflow` / `agent`。
 - `drop` 不声明就完全没有拖放;声明了也是宿主判形点亮、插件决定接不接。
 - **层级 / 行内拖动 / 就地改名(2026-10-10 起;写本条时桌面尚未发版)**:三样都先探测
   `ctx.listCapabilities?.includes('tree' | 'items' | 'rename')`,探测不到就照旧输出平铺的行 ——

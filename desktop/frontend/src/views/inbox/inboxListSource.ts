@@ -6,6 +6,8 @@
  * 收件箱因此不再有自己的左栏组件(旧 Gmail 式 InboxListView 已删),Inbox Space 左栏就是 workspace 视图,
  * 自动档由 Space 默认档 + 阅读面板的 workspaceSource 指到这里;别的 Space 的工作区选择器里也能手动切到它。
  *
+ * 行(2026-10-13 起两行):行首 = 谁发的(Agent 的头像,或 Forsion / 自动化 / 系统各一枚图标),标题 + 时间,
+ *   下面一行「发信人 · 正文第一句」(ListItem.subtitle)。此前只有文档图标 + 标题 + 日期,像一排文件。
  * 分组(可选中的来源筛选,「全部」由宿主给):未读 / Forsion / 自动化 / 智能体 / 系统 / 已归档。
  * 来源顺序固定,只显示当前有消息的类别。不再按 agent slug 平铺,尤其 `automation:<ruleId>` 只是引擎路由标识,
  * 必须全部并入「自动化」,否则每条规则都会制造一个永久文件夹并泄漏内部 id。
@@ -31,12 +33,14 @@ const ARCHIVED = 'archived'
 const SOURCE = 'source:'
 
 type SourceKind = 'forsion' | 'automation' | 'agents' | 'system'
-const SOURCE_GROUPS: Array<{ kind: SourceKind; titleKey: string; icon?: string }> = [
-  { kind: 'forsion', titleKey: 'inbox.source.forsion' },
-  { kind: 'automation', titleKey: 'inbox.source.automation', icon: 'today' },
-  { kind: 'agents', titleKey: 'inbox.source.agents' },
+// 图标按来源一处定:分组菜单、列表行首用的是同一枚(阅读面板头部的 SenderGlyph 画的也是这几个字形)。
+const SOURCE_GROUPS: Array<{ kind: SourceKind; titleKey: string; icon: string }> = [
+  { kind: 'forsion', titleKey: 'inbox.source.forsion', icon: 'cloud' },
+  { kind: 'automation', titleKey: 'inbox.source.automation', icon: 'workflow' },
+  { kind: 'agents', titleKey: 'inbox.source.agents', icon: 'agent' },
   { kind: 'system', titleKey: 'inbox.sender.system', icon: 'info' },
 ]
+const SOURCE_ICON = Object.fromEntries(SOURCE_GROUPS.map((g) => [g.kind, g.icon])) as Record<SourceKind, string>
 
 /** 列表行尾时间:7 天内相对时间,更早显示日期(单源 format/time,跟界面语言不跟系统区域)。 */
 const timeAgo = (iso: string | null): string => formatListTime(parseUtc(iso))
@@ -48,14 +52,50 @@ const sourceKind = (m: InboxMessage): SourceKind => {
 }
 const sourceKey = (m: InboxMessage): string => `${SOURCE}${sourceKind(m)}`
 
+/** 第二行里的「正文第一句」。信是 markdown,直接截会截出围栏、表格线和标记符号:
+ *  跳过围栏里的行(任务卡 / 审批卡 / 代码;反引号与波浪线都算,收尾须同字符且不短于开头,没收口的吃到结尾)、
+ *  表格行、分隔线和只有图片的行,剥掉行首的引用 / 标题 / 列表记号和行内的强调、链接语法,取第一行有字的。
+ *  与标题相同的那一行跳过(Muse 待办信的正文开头就是标题)。只截到 80 个字,再长由行的省略号管;按码点截,不留半个 emoji。
+ *  每次列表刷新每封信都算一遍,所以只看正文开头 4000 字、每行 300 字 —— 再长的信也是这个开销。 */
+export function inboxSnippet(body: string | null | undefined, title = ''): string {
+  let fence = ''
+  for (const full of (body || '').slice(0, 4000).split('\n')) {
+    const raw = full.slice(0, 300)
+    const mark = /^\s*(`{3,}|~{3,})/.exec(raw)?.[1]
+    if (fence) {
+      if (mark && mark[0] === fence[0] && mark.length >= fence.length && /^\s*[`~]+\s*$/.test(raw)) fence = ''
+      continue
+    }
+    if (mark) { fence = mark; continue }
+    if (/^\s*\|/.test(raw) || /^\s*(?:[-*_]\s*){3,}$/.test(raw)) continue
+    const line = raw
+      .replace(/!\[[^\]]*\]\([^)]*\)|!\[\[[^\]]*\]\]/g, '')
+      .replace(/^\s*(?:>\s*)*(?:\[![^\]]*\][+-]?\s*)?/, '')
+      .replace(/^(?:#{1,6}\s+|[-*+]\s+(?:\[[ xX]\]\s+)?|\d+[.)]\s+)/, '')
+      .replace(/\[\[([^\]|]*)(?:\|([^\]]*))?\]\]/g, (_m, a: string, b?: string) => b || a)
+      .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+      .replace(/\*+|`+|~~/g, '')
+      .replace(/\s+/g, ' ').trim()
+    if (line && line !== title.trim()) return Array.from(line).slice(0, 80).join('')
+  }
+  return ''
+}
+
+/** 第二行:「发信人 · 正文第一句」;正文取不出字就只有发信人。列表行与仪表盘收件箱卡共用。 */
+export function inboxSubtitle(m: InboxMessage): string {
+  const snippet = inboxSnippet(m.body, m.title)
+  return snippet ? `${senderOf(m)} · ${snippet}` : senderOf(m)
+}
+
 function toItem(m: InboxMessage): ListItem {
   const avatar = m.sender_kind === 'agent' && m.sender_id ? homeAgentAvatars()[m.sender_id] : undefined
   return {
     key: m.id,
     title: m.title,
+    subtitle: inboxSubtitle(m),
     hint: timeAgo(m.created_at),
-    // 词表里没有邮件 / 机器人图标:agent 用头像,系统消息 info,带物品的 attachment,其余 page。
-    icon: m.sender_kind === 'system' ? 'info' : m.attachments?.items?.length ? 'attachment' : 'page',
+    // 行首 = 谁发的:Agent 有头像用头像(iconUrl),没有就是 agent 那枚;其余按来源。
+    icon: SOURCE_ICON[sourceKind(m)],
     ...(avatar ? { iconUrl: avatar } : {}),
     ...(m.read_at ? {} : { unread: true }),
   }
@@ -86,7 +126,7 @@ export const inboxListSource: ListSourceContribution = {
     }
     const sources: ListGroup[] = SOURCE_GROUPS.flatMap(({ kind, titleKey, icon }) => {
       const count = counts.get(kind)
-      return count ? [{ key: `${SOURCE}${kind}`, title: translate(titleKey), count, ...(icon ? { icon } : {}) }] : []
+      return count ? [{ key: `${SOURCE}${kind}`, title: translate(titleKey), count, icon }] : []
     })
     return [
       { key: UNREAD, title: translate('inbox.filter.unread'), count: st.unreadCount },

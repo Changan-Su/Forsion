@@ -3,6 +3,7 @@
  *  刻意不装 npm 依赖:渲染层三端共享(desktop/web/mobile),本地文件零外部解析。
  *  增补图标照原样从 @blocksuite/icons 摘录,保持 currentColor 不带死色。 */
 import type { ComponentType, ReactElement, ReactNode, SVGProps } from 'react'
+import { Bot, Cloud, Workflow, type LucideIcon, type LucideProps } from 'lucide-react'
 
 const I = (children: ReactElement) => (props: SVGProps<SVGSVGElement>) => (
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="1em" height="1em" fill="none" aria-hidden {...props}>
@@ -71,6 +72,10 @@ export const PinIcon = I(<><path fill="currentColor" fillRule="evenodd" d="M13.5
 /** 上游名字是 SelectIcon(edgeless 的选择工具)——一枚光标箭头。这里当「可点击」用:按钮块的图标。 */
 export const SelectIcon = I(<><path fill="currentColor" fillRule="evenodd" d="M4.012 4.35c-.17-1.5 1.514-2.496 2.748-1.625l13.222 9.336c1.383.976.712 3.15-.98 3.179l-6.661.11a.25.25 0 0 0-.213.127L9.066 20.88c-.836 1.475-3.071 1.019-3.261-.666zm1.883-.4a.25.25 0 0 0-.393.232l1.793 15.863a.25.25 0 0 0 .466.095l3.061-5.403a1.75 1.75 0 0 1 1.494-.887l6.66-.11a.25.25 0 0 0 .141-.454z" clipRule="evenodd"/></>)
 
+/** 「谁发来的」三枚(2026-10-13,收件箱列表行首):取自 lucide,不照例从 @blocksuite/icons 摘 ——
+ *  阅读面板头部画的就是 lucide 的这几枚,列表和头部要是同一个字形。尺寸与上面一样跟字号(1em)。 */
+const L = (Icon: LucideIcon) => (props: SVGProps<SVGSVGElement>) => <Icon width="1em" height="1em" aria-hidden {...(props as LucideProps)} />
+
 /**
  * **插件图标词表** —— 公开契约。插件写 `icon: 'callout-warning'`,宿主查表画出上面那枚 SVG,
  * 于是插件项和内置项在 slash 菜单里是**同一套视觉**,而不是各自塞一个 emoji。
@@ -130,6 +135,9 @@ export const PLUGIN_ICONS: Record<string, ComponentType<SVGProps<SVGSVGElement>>
   pin: PinIcon,
   cursor: SelectIcon,
   button: SelectIcon,
+  cloud: L(Cloud),
+  workflow: L(Workflow),
+  agent: L(Bot),
 }
 
 /** 词表键的形状。**未命中词表但长成这样**的字符串 = 插件在叫一个本宿主还不认识的名字。 */

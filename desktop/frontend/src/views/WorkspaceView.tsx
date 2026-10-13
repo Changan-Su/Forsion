@@ -458,18 +458,22 @@ export function PluginListBody({ src, stateKey }: { src: ListSourceContribution;
   const row = (it: ListItem, depth: number): ReactNode => {
     const actions = menuFor(it)
     const editing = renaming === it.key
+    // 有副标题的行画两行(标题 + 一行淡字);改名时退回一行,输入框只改标题。
+    const two = !editing && !!it.subtitle
     const at = dropAt?.key === it.key ? dropAt.position : null
     return <div className={cls('t2sw-plug-item', at === 'before' && 'drop-before', at === 'after' && 'drop-after', dragging === it.key && 'dragging')} key={it.key}>
       {/* 改名时行里是输入框,input 不能嵌在 button 里 → 换成 div */}
       <SidebarRow as={editing ? 'div' : 'button'} depth={depth} data-row-key={it.key}
         title={it.title}
-        className={`${activeKey === it.key ? 'active' : ''}${it.unread ? ' is-unread' : ''}${dropKey === `i:${it.key}` ? ' amx-drop-into' : ''}${actions.length ? ' has-actions' : ''}`.trim() || undefined}
+        className={`${activeKey === it.key ? 'active' : ''}${it.unread ? ' is-unread' : ''}${dropKey === `i:${it.key}` ? ' amx-drop-into' : ''}${actions.length ? ' has-actions' : ''}${two ? ' t2s-deep' : ''}`.trim() || undefined}
         {...rowDropProps(it)} {...dragProps(it)}
         lead={<><LeadIcon key={it.iconUrl ?? ''} item={it} />{it.unread && <span className="t2s-dot unread" title={t('sidebar.unread')} />}</>}
         trailing={!editing && it.hint ? <span className="t2s-count">{it.hint}</span> : undefined}
         onClick={editing ? undefined : (e) => src.open(it, { newTab: e.metaKey || e.ctrlKey })}
         onContextMenu={contextMenu(actions)}
-      >{editing ? renameInput(it) : <span className="t2s-srow-title">{it.title}</span>}</SidebarRow>
+      >{editing ? renameInput(it) : two
+        ? <span className="t2s-deep-col"><span className="t2s-srow-title">{it.title}</span><span className="t2sw-plug-sub">{it.subtitle}</span></span>
+        : <span className="t2s-srow-title">{it.title}</span>}</SidebarRow>
       {!!actions.length && !editing && <CapabilityMenu label={t('wsview.itemActions', { title: it.title })} className="t2sw-plug-row-menu"
         items={menuItems(actions)}><MoreHorizontal size={14} /></CapabilityMenu>}
     </div>
