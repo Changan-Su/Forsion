@@ -162,13 +162,13 @@ describe('标题变了也认得出那扇窗口', () => {
   })
   const ref = { kind: 'window' as const, id: 'com.google.Chrome', name: 'Linear – Pricing' }
 
-  it('pickWindow:相同 > 唯一相近 > 只有一扇;两扇都不像 / 两扇都相近 → 挑不出', () => {
+  it('pickWindow:相同 > 唯一相近;都不像 / 两扇都相近 → 挑不出(只剩一扇别的窗口也不认:多半是另一份文件)', () => {
     const w = (title: string) => ({ title })
     expect(windowTitleScore('a.ts — proj', '● a.ts — proj')).toBe(1)
     expect(windowTitleScore('abc', 'abcd')).toBe(0) // 太短的不按包含算
     expect(pickWindow('Pricing', [w('GitHub'), w('Pricing')])?.title).toBe('Pricing')
     expect(pickWindow('Linear – Pricing', [w('GitHub'), w('Linear – Pricing - Google Chrome')])?.title).toBe('Linear – Pricing - Google Chrome')
-    expect(pickWindow('Linear – Pricing', [w('别的页')])?.title).toBe('别的页')
+    expect(pickWindow('竞品对比.numbers', [w('季度预算.numbers')])).toBeNull()
     expect(pickWindow('Linear – Pricing', [w('GitHub'), w('别的页')])).toBeNull()
     expect(pickWindow('report', [w('report v1'), w('report v2')])).toBeNull()
     expect(pickWindow('x', [])).toBeNull()
@@ -184,12 +184,12 @@ describe('标题变了也认得出那扇窗口', () => {
     expect(calls.find((c) => c.cmd === 'focusWindow')).toMatchObject({ pid: 11, windowId: 101 })
   })
 
-  it('没记过的(重启后 / 别的设备来的):标题多了后缀、或这个应用只剩一扇窗口 → 认它;两扇都对不上 → 找不到', async () => {
+  it('没记过的(重启后 / 别的设备来的):标题多了后缀 → 认它;对不上 → 找不到,点击改成打开应用', async () => {
     const suffix = fake({ helper: chrome([{ windowId: 101, title: 'Linear – Pricing - Google Chrome' }, { windowId: 102, title: '文档' }]) })
     expect((await suffix.refs.status([ref]))[0].state).toBe('live')
-    const single = fake({ helper: chrome([{ windowId: 101, title: 'GitHub' }]) })
-    expect((await single.refs.status([ref]))[0].state).toBe('live')
-    const minimized = fake({ helper: chrome([], [{ title: 'GitHub', windowId: 301 }]) }) // 不在屏上的那一扇经 AX 找到
+    const single = fake({ helper: chrome([{ windowId: 101, title: 'GitHub' }]) }) // 只剩一扇别的窗口:不冒认
+    expect((await single.refs.status([ref]))[0].state).toBe('closed')
+    const minimized = fake({ helper: chrome([], [{ title: '● Linear – Pricing', windowId: 301 }]) }) // 不在屏上的那一扇经 AX 找到
     expect(await minimized.refs.open(ref)).toEqual({ ok: true, landed: 'window' })
     const two = fake({ helper: chrome([{ windowId: 101, title: 'GitHub' }, { windowId: 102, title: '文档' }]) })
     expect((await two.refs.status([ref]))[0].state).toBe('closed')

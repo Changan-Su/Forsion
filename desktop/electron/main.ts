@@ -67,6 +67,7 @@ import { transcribeViaOpenAI, transcribeViaForsion } from './asr'
 import { localModelReady, localModelSize, downloadLocalModel, removeLocalModel, transcribeLocal } from './asrLocal'
 import { computerUseLiveView, helperSocketPath, askHelper, ensureHelperRunning, HelperLink } from './computerUse'
 import { createAppRefs } from './appRefs'
+import { createAppRefHotkey, frontToAppRef } from './appRefHotkey'
 import { appIconDataUrls } from './appIcons'
 import { chooseSide, makeRoom, panelRectFor, startDockFollow, DOCK_PANEL_WIDTH, DOCK_PANEL_MIN_WIDTH, DOCK_PANEL_MIN_HEIGHT, normalizeProbe } from './appDock'
 import { normalizeDockCandidates, normalizeDockSelection, normalizeDockWindow, type DockState, type DockWindow } from '../shared/appDock'
@@ -3383,7 +3384,8 @@ app.whenReady().then(async () => {
   const appRefs = createAppRefs({
     platform: process.platform, ownPid: process.pid, home: homedir(),
     ask: (payload) => askHelper(helperSocketPath(), payload, 5_000),
-    ensureHelper: () => ensureHelperRunning(),
+    // 助手被这里拉起来之后,顺手让全局快捷键那条订阅现在就连(它自己从不拉起助手)
+    ensureHelper: () => ensureHelperRunning().then((v) => { appRefHotkey.poke(); return v }),
     // 台架把 mdfind / open 换成夹具(FORSION_APPREF_BIN_DIR 下的同名脚本):不然测「点击打开」会真的把这台电脑上的应用拉起来。
     run: (file, args) => new Promise<string>((resolve, reject) => {
       const fixtures = app.isPackaged ? '' : process.env.FORSION_APPREF_BIN_DIR?.trim() // 安装版不认:不给环境变量换掉系统命令的口子
@@ -3395,6 +3397,23 @@ app.whenReady().then(async () => {
   ipcMain.handle('appRefs:open', (e, ref: unknown) => (isTrustedSender(e) ? appRefs.open(ref) : { ok: false }))
   ipcMain.handle('appRefs:frontmost', (e) => (isTrustedSender(e) ? appRefs.frontmost() : null))
   ipcMain.handle('appRefs:icons', (e, ids: unknown) => (isTrustedSender(e) ? appIconDataUrls(ids) : {}))
+  // 全局「双 ⌘」:别的应用在前台时按下 → 助手推来那一刻最前面的窗口 → 记下它、把主窗叫到前面、交给界面挂进输入框
+  // (光标在笔记里就写进笔记)。Forsion 自己在前台时助手不推,归窗口内的命令。见 electron/appRefHotkey.ts。
+  const appRefHotkey = createAppRefHotkey({
+    socketPath: () => (process.platform === 'darwin' ? helperSocketPath() : ''),
+    ownPid: process.pid,
+    onFire: (front) => {
+      const hit = frontToAppRef(front)
+      if (!hit) return
+      if (hit.ref.kind === 'window') appRefs.remember(hit.ref.id, hit.ref.name, hit.pid, hit.windowId)
+      const fresh = !mainWindow || mainWindow.isDestroyed() // 主窗关着:只把它开出来,页面还没起来,这一条引用不送
+      if (!QUIET_WINDOWS) app.focus({ steal: true })
+      showMainWindow()
+      if (!fresh) mainWindow?.webContents.send('appRefs:hotkey', hit.ref)
+    },
+  })
+  // 界面说了算:快捷键还是「双 ⌘」才订阅;用户改成别的键 / 解绑了就断开
+  ipcMain.on('appRefs:globalHotkey', (e, on: unknown) => { if (isTrustedSender(e)) appRefHotkey.setWanted(on === true) })
 
   // ── Computer Use:最近被操控窗口的一帧画面(只读,不启动 helper;详见 electron/computerUse.ts)──
   ipcMain.handle('computerUse:liveView', (_e, opts?: { maxDimension?: number; quality?: number; activeWithinMs?: number; image?: boolean }) =>

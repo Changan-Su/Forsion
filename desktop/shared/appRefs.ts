@@ -49,18 +49,23 @@ export function appRefToken(ref: AppRef): string {
   return `[[${ref.kind}://${ref.id}|${appRefLabel(ref.name) || ref.id}]]`
 }
 
-/** 双链内文(`app://com.x|名字`)→ 引用;不是这两种前缀、或标识不合法 → null(调用方照旧当笔记链接)。 */
+/** 双链内文(`app://com.x|名字`)→ 引用;不是这两种前缀、或标识不合法 → null(调用方照旧当笔记链接)。
+ *  标识里的反斜杠一律去掉:笔记落盘时 Markdown 会把下划线写成 `\_`(编辑器读回来会还原,但直接读文件原文的地方看到的是带反斜杠的),
+ *  而标识本身不可能含反斜杠。名字不动 —— 标题里可以有真的反斜杠(Windows 路径),比对时再两边一起抹(windowTitleScore)。 */
 export function parseAppRefInner(inner: string): AppRef | null {
   const m = /^\s*(app|window):\/\/([^|\s]+)\s*(?:\|([\s\S]*))?$/.exec(inner)
-  if (!m || !isAppRefId(m[2])) return null
-  return { kind: m[1] as AppRefKind, id: m[2], name: appRefLabel(m[3] || '') || m[2] }
+  const id = m ? m[2].replace(/\\/g, '') : ''
+  if (!m || !isAppRefId(id)) return null
+  return { kind: m[1] as AppRefKind, id, name: appRefLabel(m[3] || '') || id }
 }
 
 /** 引用里的标题和此刻一扇真窗口的标题有多像(两边过同一道 appRefLabel):2 = 相同;
  *  1 = 一个包含另一个(应用常把「● 」「 — 已编辑」「 - Google Chrome」这类前后缀拼进标题,文件名那段不变);0 = 对不上。 */
 export function windowTitleScore(label: string, liveTitle: string): 0 | 1 | 2 {
-  const a = appRefLabel(label)
-  const b = appRefLabel(liveTitle)
+  // Markdown 转义留下的反斜杠(`my\_file`)两边一起抹掉再比:抹的是同一种东西,标题里真有反斜杠的也照样对得上
+  const plain = (s: string): string => appRefLabel(s).replace(/\\(?=[_*`<>~#[\]-])/g, '')
+  const a = plain(label)
+  const b = plain(liveTitle)
   if (!a || !b) return 0
   if (a === b) return 2
   const cut = (s: string): string => (s.endsWith('…') ? s.slice(0, -1) : s) // 截断过的那边按没截的那段比
@@ -69,14 +74,14 @@ export function windowTitleScore(label: string, liveTitle: string): 0 | 1 | 2 {
 }
 export const sameWindowTitle = (label: string, liveTitle: string): boolean => windowTitleScore(label, liveTitle) === 2
 
-/** 从**同一个应用**此刻的全部窗口里挑出引用指的那一扇:标题相同的 > 唯一一扇标题相近的 > 这个应用只有一扇窗口时就是它
- *  (同一扇窗口换了内容,标题跟着变:编辑器换了文件、浏览器换了标签页)。挑不出来 = null。 */
+/** 从**同一个应用**此刻的全部窗口里挑出引用指的那一扇:标题相同的 > 唯一一扇标题相近的。挑不出来 = null。
+ *  不做「这个应用只剩一扇窗口就认它」:表格 / 文稿这类一个文件一扇窗口的应用里,那多半是另一份文件(台架实测把关掉的
+ *  「竞品对比」认成了开着的「季度预算」)。同一扇窗口换了内容(浏览器换标签页)靠主进程记着的窗口号认,见 electron/appRefs.ts。 */
 export function pickWindow<T extends { title: string }>(label: string, wins: readonly T[]): T | null {
   const exact = wins.find((w) => windowTitleScore(label, w.title) === 2)
   if (exact) return exact
   const near = wins.filter((w) => windowTitleScore(label, w.title) === 1)
-  if (near.length === 1) return near[0]
-  return wins.length === 1 ? wins[0] : null
+  return near.length === 1 ? near[0] : null
 }
 
 export const appRefKey = (ref: Pick<AppRef, 'kind' | 'id' | 'name'>): string => `${ref.kind}://${ref.id}|${ref.kind === 'window' ? appRefLabel(ref.name) : ''}`

@@ -1728,6 +1728,7 @@ export function MilkdownInner({
           agents={unified && readTangu()?.submitDocumentTask && readTangu()?.hostExecution?.() !== false ? readTangu()?.agents?.() : undefined}
           onPickAgent={unified && readTangu()?.submitDocumentTask && readTangu()?.hostExecution?.() !== false ? pickMentionAgent : undefined}
           editorFocused={editorFocused}
+          caretMidWord={caretMidWord}
           dates
           allowCreate={false}
           onClose={() => {

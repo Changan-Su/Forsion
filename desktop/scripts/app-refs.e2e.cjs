@@ -1,6 +1,6 @@
 /**
- * 应用 / 窗口引用 真 Electron 验收:气泡里的芯片与状态、点击打开、`[[` 菜单的分类胶囊、句内芯片(镜像层)、
- * 「已选择」条的 Shift+点击、发出去的文本、双 ⌘ 快捷键。
+ * 应用 / 窗口引用 真 Electron 验收:气泡里的芯片与状态、点击打开、`[[` 菜单的分类胶囊与左右键、句内芯片(镜像层)、
+ * 同名的两条引用、「已选择」条的 Shift+点击、发出去的文本、双 ⌘ 快捷键、笔记正文与属性里的引用。
  *
  * 不碰这台电脑上的真应用:窗口 / 进程清单由本文件起的假 CU helper 回(PI_CU_SOCKET_PATH),
  * mdfind / open 换成夹具脚本(FORSION_APPREF_BIN_DIR)—— open 只把参数记进日志,不真的拉起任何东西。
@@ -44,6 +44,7 @@ const WINDOWS = [
 
 function startFakeHelper(sockPath) {
   const requests = []
+  const hotkeySubs = [] // 订阅了全局快捷键的连接(主进程启动后连一条,长连接)
   const server = net.createServer((socket) => {
     let buf = ''
     socket.setEncoding('utf8')
@@ -62,6 +63,7 @@ function startFakeHelper(sockPath) {
         else if (msg.cmd === 'dockCandidates') ok({ windows: WINDOWS })
         else if (msg.cmd === 'listWindows') ok(msg.pid === 13 ? [{ title: 'Q4 路演.key', windowId: 301 }] : [])
         else if (msg.cmd === 'focusWindow') ok({ focused: true })
+        else if (msg.cmd === 'hotkeySubscribe') { ok({ subscribed: true }); hotkeySubs.push({ socket, msg }) }
         else socket.write(`${JSON.stringify({ id: msg.id, ok: false, error: { code: 'unknown_command', message: msg.cmd } })}\n`)
       }
     })
@@ -69,7 +71,12 @@ function startFakeHelper(sockPath) {
   })
   return new Promise((resolve, reject) => {
     server.once('error', reject)
-    server.listen(sockPath, () => resolve({ requests, close: () => server.close() }))
+    server.listen(sockPath, () => resolve({
+      requests, hotkeySubs,
+      /** 冒充「用户在别的应用里按了双 ⌘」:给每条订阅推一行事件。 */
+      fireHotkey: (front) => { for (const s of hotkeySubs) if (!s.socket.destroyed) s.socket.write(`${JSON.stringify({ event: 'hotkey', gesture: 'modPair', at: Date.now(), front })}\n`) },
+      close: () => { for (const s of hotkeySubs) s.socket.destroy(); server.close() },
+    }))
   })
 }
 
@@ -82,7 +89,7 @@ async function main() {
   const openLog = path.join(home, 'open.log')
   for (const d of [userdata, vault, bin]) fs.mkdirSync(d)
   const notePath = path.join(vault, '季度复盘.md')
-  fs.writeFileSync(notePath, '# 季度复盘\n\n对一下 [[window://com.google.Chrome|Linear – Pricing]] 和 [[app://com.tencent.xinWeChat|微信]] 里的数字。\n\n收尾段落\n')
+  fs.writeFileSync(notePath, '---\n演示稿: "[[app://com.apple.iWork.Keynote|Keynote]]"\n---\n# 季度复盘\n\n对一下 [[window://com.google.Chrome|Linear – Pricing]] 和 [[app://com.tencent.xinWeChat|微信]] 里的数字。\n\n收尾段落\n')
   fs.mkdirSync(`${userdata}-dev`) // 未打包的构建把用户目录落在「<给的目录>-dev」
   fs.writeFileSync(path.join(`${userdata}-dev`, 'amadeus-config.dev.json'), JSON.stringify({ lastVault: vault, localVault: vault }))
   const md = (p, id, name) => `${p}   kMDItemCFBundleIdentifier = ${id}   kMDItemDisplayName = ${name}`
@@ -92,6 +99,7 @@ async function main() {
     md('/Applications/Keynote.app', 'com.apple.iWork.Keynote', 'Keynote'),
     md('/Applications/WeChat.app', 'com.tencent.xinWeChat', '微信'),
     md('/Applications/Lark.app', 'com.electron.lark', '飞书'),
+    md('/Applications/GitHub Desktop.app', 'com.github.GitHubClient', 'GitHub'), // 和 Chrome 那扇叫 GitHub 的窗口同名
   ].join('\n')}\nEOF\n`, { mode: 0o755 })
   fs.writeFileSync(path.join(bin, 'open'), `#!/bin/sh\necho "$@" >> '${openLog}'\n`, { mode: 0o755 })
   fs.writeFileSync(openLog, '')
@@ -150,11 +158,11 @@ async function main() {
         shown: true, text: el.textContent,
         inside: r.left >= 0 && r.top >= 0 && r.right <= innerWidth && r.bottom <= innerHeight,
         gap: Math.round(Math.min(Math.abs(c.top - r.bottom), Math.abs(r.top - c.bottom))),
-        clipped: (() => { for (let p = el.parentElement; p; p = p.parentElement) if (getComputedStyle(p).overflow !== 'visible') return p.tagName; return '' })(),
+        onBody: el.parentElement === document.body && getComputedStyle(el).position === 'fixed',
       }
     }, 'Linear – Pricing')
     check('悬停卡写明「窗口还开着」', card.shown && /Google Chrome/.test(card.text) && /点击切到这个窗口/.test(card.text), card)
-    check('悬停卡整张在窗口里、贴着芯片、没有会裁它的祖先', card.inside && card.gap <= 12 && !card.clipped, card)
+    check('悬停卡整张在窗口里、贴着芯片、挂在 body 上(滚动区裁不到)', card.inside && card.gap <= 12 && card.onBody, card)
     await view.screenshot({ path: path.join(SHOT_DIR, `bubble${tag}.png`) })
 
     // ── 点击 ──
@@ -187,6 +195,22 @@ async function main() {
     const slide = await menu.locator('.t2c-cats').evaluate((el) => getComputedStyle(el, '::before').transitionProperty)
     check('滑块带过渡', /translate|transform|all/.test(slide), slide)
     await view.screenshot({ path: path.join(SHOT_DIR, `menu${tag}.png`) })
+    // 分类像接在查询词后面的几个字(同 ⌘P 快切):← 走回「全部」;在「全部」上再按 ← 是移光标回去改字;光标回到词中间后 → 也只移光标
+    const selCat = () => menu.locator('.t2c-cat[aria-selected="true"]').getAttribute('data-cat')
+    await ta.press('ArrowLeft')
+    check('← 走回「全部」', await selCat() === 'all', await selCat())
+    await ta.pressSequentially('Li')
+    await ta.press('ArrowRight')
+    check('打过字、光标在词尾:→ 照样进分类', await selCat() === 'window', await selCat())
+    await ta.press('ArrowLeft')
+    const p0 = await ta.evaluate((el) => el.selectionStart)
+    await ta.press('ArrowLeft')
+    const p1 = await ta.evaluate((el) => el.selectionStart)
+    await ta.press('ArrowRight')
+    const p2 = await ta.evaluate((el) => el.selectionStart)
+    check('在「全部」上按 ← 是移光标;光标在词中间时 → 也只移光标,分类不动', p1 === p0 - 1 && p2 === p0 && await selCat() === 'all', { p0, p1, p2, cat: await selCat() })
+    await ta.press('Backspace')
+    await ta.press('Backspace')
     await menu.locator('.t2c-cat[data-cat="window"]').click()
     check('点胶囊也能切', await menu.locator('.t2c-cat[aria-selected="true"]').getAttribute('data-cat') === 'window')
     const order = await menu.locator('.t2c-menu-item .t2c-menu-cmd').allTextContents()
@@ -257,6 +281,19 @@ async function main() {
     check('× 掉句内的那枚:文字留下、不再是引用', (await ta.inputValue()) === `${before}季度预算.numbers ` && await strip.count() === 2, JSON.stringify((await ta.inputValue()).slice(-24)))
     await view.locator('.composer-anchor').screenshot({ path: path.join(SHOT_DIR, `selected${tag}.png`) })
 
+    // ── 同名的两条引用(Chrome 里一扇叫 GitHub 的窗口 + 一个叫 GitHub 的应用)都能写进句子 ──
+    await ta.focus()
+    await ta.press('Meta+ArrowDown')
+    for (const cat of ['window', 'app']) {
+      await ta.pressSequentially('[[GitHub')
+      await menu.locator(`.t2c-menu-item[data-cat="${cat}"]`, { hasText: 'GitHub' }).first().click()
+    }
+    const twin = await ta.inputValue()
+    const twinRuns = await view.locator('.t2c-mirror .t2c-inref').evaluateAll((els) => els.slice(-2).map((e) => ({ text: e.textContent.replace(/[\u2007\u202F\u2060]/g, ''), img: !!e.querySelector('img'), w: Math.round(e.getBoundingClientRect().width) })))
+    check('同名的两条引用各是一段句内芯片(看起来一样,文本不同)', twin.endsWith(`${LEAD}GitHub${TAIL} ${LEAD}GitHub\u2060${TAIL} `) && twinRuns.length === 2 && twinRuns.every((r) => r.text === 'GitHub') && Math.abs(twinRuns[0].w - twinRuns[1].w) <= 1 && await strip.count() === 4,
+      { tail: JSON.stringify(twin.slice(-22)), twinRuns, strip: await strip.allTextContents() })
+    await view.locator('.composer-anchor').screenshot({ path: path.join(SHOT_DIR, `samename${tag}.png`) })
+
     // ── 暗色 ──
     await win.keyboard.press('Meta+k')
     await win.locator('.cmd-input').fill('切换明暗模式')
@@ -271,7 +308,8 @@ async function main() {
     const sent = stub.seen.runs[0] && stub.seen.runs[0].message
     const winTok = '[[window://com.google.Chrome|Linear – Pricing]]'
     check('发出去:开头行只有没进句子的那枚', typeof sent === 'string' && sent.startsWith('[[app://com.apple.iWork.Keynote|Keynote]]\n'), sent)
-    check('发出去:句内引用在原位换成 token,只出现一次,没有残留的占位空格', typeof sent === 'string' && sent.split(winTok).length === 2 && sent.includes(`看一下 ${winTok} 帮我`) && sent.endsWith('季度预算.numbers') && !/[  ]/.test(sent), sent)
+    check('发出去:句内引用在原位换成 token,只出现一次,没有残留的占位空格', typeof sent === 'string' && sent.split(winTok).length === 2 && sent.includes(`看一下 ${winTok} 帮我`) && sent.includes('季度预算.numbers [[') && !/[  \u2060]/.test(sent), sent)
+    check('发出去:同名的两条各换成自己的 token', typeof sent === 'string' && sent.endsWith('[[window://com.google.Chrome|GitHub]] [[app://com.github.GitHubClient|GitHub]]'), typeof sent === 'string' ? sent.slice(-90) : sent)
     await view.locator('.t2-userwrap').last().locator('.app-ref', { hasText: 'Linear – Pricing' }).waitFor({ timeout: 5000 }).then(
       () => check('发出的消息在气泡里还原成芯片', true), () => check('发出的消息在气泡里还原成芯片', false))
 
@@ -283,6 +321,12 @@ async function main() {
     await win.keyboard.up('MetaLeft')
     await strip.first().waitFor({ timeout: 5000 }).catch(() => {})
     check('左右 ⌘ 同时按:最前面的窗口进「已选择」', await strip.count() === 1 && /Linear – Pricing/.test(await strip.first().textContent()), await strip.allTextContents())
+    // 全局那一半:别的应用在前台时按,由本机助手听到后推过来(这里由假助手推一条)
+    const hkSub = helper.hotkeySubs[0] && helper.hotkeySubs[0].msg
+    check('启动后向助手订阅了全局快捷键,带着自己的 pid(自己在前台时不推)', !!hkSub && hkSub.gesture === 'modPair' && Array.isArray(hkSub.excludePids) && hkSub.excludePids.length === 1 && hkSub.excludePids[0] > 0, hkSub)
+    helper.fireHotkey({ bundleId: 'com.apple.iWork.Numbers', app: 'Numbers', pid: 12, windowId: 201, title: '季度预算.numbers' })
+    await strip.nth(1).waitFor({ timeout: 5000 }).catch(() => {})
+    check('在别的应用里按双 ⌘:助手推来的那扇窗口进「已选择」', await strip.count() === 2 && /季度预算\.numbers/.test(await strip.nth(1).textContent()), await strip.allTextContents())
     await win.keyboard.down('MetaLeft')
     await win.keyboard.press('k')
     await win.keyboard.up('MetaLeft')
@@ -309,6 +353,15 @@ async function main() {
     await win.waitForTimeout(400)
     check('笔记里点芯片:切到那扇窗口,不去开笔记', helper.requests.filter((r) => r.cmd === 'focusWindow').length === focusBefore + 1 && opened().at(-1) === '-b com.google.Chrome' && await win.locator('.t2s-srow', { hasText: 'app://' }).count() === 0, opened())
 
+    // 属性值里手写的应用引用:点了切到那个应用,不当笔记链接去找 / 去问要不要新建
+    await win.locator('.amx-props-chip').first().click()
+    const propLink = win.locator('.amx-prop-link', { hasText: 'Keynote' }).first()
+    await propLink.waitFor({ timeout: 8000 }).catch(() => {})
+    const openedBefore = opened().length
+    await propLink.click().catch(() => {})
+    await win.waitForTimeout(500)
+    check('笔记属性里的应用引用:点了打开那个应用,没有去开 / 新建笔记', opened().length === openedBefore + 1 && opened().at(-1) === '-b com.apple.iWork.Keynote' && await win.locator('.t2s-srow', { hasText: 'app://' }).count() === 0, opened().slice(openedBefore))
+
     const capOf = (sel) => win.locator(sel).evaluate((el) => ({ x: el.style.getPropertyValue('--cap-x'), ready: el.hasAttribute('data-cap-ready'), slide: getComputedStyle(el, '::before').transitionProperty, on: getComputedStyle(el, '::before').opacity }))
     await body.locator('p', { hasText: '收尾段落' }).click()
     await win.keyboard.press('End')
@@ -327,6 +380,13 @@ async function main() {
     await win.keyboard.type('[[')
     await win.locator('.wiki-suggest .wiki-tabs[data-cap-ready]').waitFor({ timeout: 8000 }).catch(() => {})
     const w0 = await capOf('.wiki-suggest .wiki-tabs')
+    // 左右键同聊天那套:→ 进分类,← 走回「全部」
+    const wikiCat = () => win.locator('.wiki-suggest .wiki-tab[aria-selected="true"]').getAttribute('data-category')
+    await win.keyboard.press('ArrowRight')
+    const wk1 = await wikiCat()
+    await win.keyboard.press('ArrowLeft')
+    const wk2 = await wikiCat()
+    check('笔记 [[ 面板:→ 进分类,← 走回「全部」', wk1 === 'window' && wk2 === 'all', { wk1, wk2 })
     await win.locator('.wiki-suggest .wiki-tab[data-category="window"]').click()
     await win.waitForTimeout(280)
     const w1 = await capOf('.wiki-suggest .wiki-tabs')

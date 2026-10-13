@@ -1578,6 +1578,8 @@ declare global {
         open(ref: import('../../shared/appRefs').AppRef): Promise<{ ok: boolean; landed?: 'window' | 'app'; error?: string }>
         frontmost(): Promise<import('../../shared/appRefs').AppRef | null>
         icons(ids: string[]): Promise<Record<string, string | null>>
+        setGlobalHotkey?(on: boolean): void
+        onHotkey?(cb: (ref: import('../../shared/appRefs').AppRef) => void): () => void
       }
       appDockSelection?(): Promise<import('../../shared/appDock').DockSelection & { error?: string }>
       onAppDockState?(cb: (state: import('../../shared/appDock').DockState) => void): () => void
