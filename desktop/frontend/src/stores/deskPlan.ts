@@ -138,6 +138,9 @@ export interface DeskSnapshot {
   fraction?: number
   userResized?: boolean
   note?: string
+  /** 空闲面(AgentDesk.useDeskHome)的缺省展开已经落过一次。只为让「收起了、Desk 上又没东西」的快照也落盘:
+   *  否则重启后这条会话没有任何 Desk 状态,又会被当成第一次而自动展开。 */
+  homeSeen?: true
 }
 
 /** 条目新旧的代理:最近一次展示项的时间戳(无项=0,最先被截断)。 */
@@ -146,10 +149,15 @@ const snapAt = (s: DeskSnapshot): number => Math.max(0, ...s.items.map((it) => i
 export function packDeskMap(map: Record<string, DeskSnapshot>, cap = DESK_PERSIST_CAP): string {
   const entries = Object.entries(map)
     .map(([sid, s]) => [sid, { ...s, items: (s.items || []).filter((it) => !it.live && (it.path || it.view)) }] as const)
-    .filter(([sid, s]) => sid !== DESK_DRAFT_KEY && (s.items.length || s.fraction !== undefined || s.userResized || s.mode || s.note))
-    .sort((a, b) => snapAt(b[1]) - snapAt(a[1]))
-    .slice(0, cap)
-  return JSON.stringify(Object.fromEntries(entries))
+    .filter(([sid, s]) => sid !== DESK_DRAFT_KEY && (s.items.length || s.fraction !== undefined || s.userResized || s.mode || s.note || s.homeSeen))
+  // 只剩 homeSeen 的空快照没有时间戳,按新旧排恒垫底,内容快照一满 cap 它就被挤掉(→ 重启后空闲面又自动展开)。
+  // 单独留、不占内容快照的名额;至多 8 条(换新会话后旧会话的那条没用了),新的在后。
+  const bare = (s: DeskSnapshot): boolean => !!s.homeSeen && !s.items.length
+  const kept = [
+    ...entries.filter(([, s]) => !bare(s)).sort((a, b) => snapAt(b[1]) - snapAt(a[1])).slice(0, cap),
+    ...entries.filter(([, s]) => bare(s)).slice(-8),
+  ]
+  return JSON.stringify(Object.fromEntries(kept))
 }
 
 export function unpackDeskMap(raw: string | null | undefined): Record<string, DeskSnapshot> {
@@ -180,6 +188,7 @@ export function unpackDeskMap(raw: string | null | undefined): Record<string, De
       ...(typeof v.fraction === 'number' && v.fraction > 0 && v.fraction < 1 ? { fraction: v.fraction } : {}),
       ...(v.userResized ? { userResized: true } : {}),
       ...(typeof v.note === 'string' && v.note ? { note: v.note } : {}),
+      ...(v.homeSeen === true ? { homeSeen: true as const } : {}),
     }
   }
   return out

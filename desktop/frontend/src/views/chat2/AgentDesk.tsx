@@ -28,8 +28,33 @@ registerMessages({
 })
 
 /** 「清空 Desk」(idle 伴随面的回场键):条目清掉、侧板收回、说明一并作废 —— 卡片空态位交还伴随面。 */
-const clearDesk = (sessionId: string): void =>
-  useApp.getState().patchDesk(sessionId, { items: [], mode: undefined, note: undefined })
+const clearDesk = (sessionId: string, keepOpen = false): void =>
+  // keepOpen:有空闲面(Muse 私聊)时侧板不用收 —— 清掉条目,原地换回 Muse Space
+  useApp.getState().patchDesk(sessionId, { items: [], note: undefined, ...(keepOpen ? {} : { mode: undefined }) })
+
+/** Muse 私聊的 Desk 空闲面(10-13 用户定):Desk 上没有任何条目时演 Muse Space,Agent 一往 Desk 上放东西就让位,
+ *  「清空 Desk」把它请回来 —— 与 idle 伴随面同一套进出,只是内容是宿主的 `muse-library` 视图(Muse 自建插件的 home,
+ *  没建就是 Library 浏览器)。条目只在渲染期合成:不进 deskBySession、不落盘、不占 Agent 的两格。
+ *  视图没注册(Muse 内置关着 / 非本地)→ null,这条会话的 Desk 与别的会话无异。always 伴随面照旧整块替换,轮不到它。 */
+const MUSE_HOME_VIEW = 'muse-library'
+export function useDeskHome(sessionId: string | null | undefined): DeskItem | null {
+  const { t } = useI18n()
+  const muse = useApp((s) => !!sessionId && s.configBySession[sessionId]?.soloAgentSlug === 'muse')
+  const [, bump] = useReducer((x: number) => x + 1, 0)
+  useEffect(() => (muse ? subscribeViews(bump) : undefined), [muse])
+  const registered = muse && !!getView(MUSE_HOME_VIEW)
+  const name = t('view.museHome')
+  const home = useMemo<DeskItem | null>(
+    () => (registered ? { key: 'home:muse', path: '', name, at: 0, view: { type: MUSE_HOME_VIEW } } : null),
+    [registered, name],
+  )
+  // 缺省展开(聊天 + Muse Space 并排):只在这条会话还没有任何 Desk 状态时落一次 —— 落成真状态,之后 Agent 往 Desk 上放东西
+  // 沿用它(不会因为建状态而缩回卡片),用户收起后也不再打扰。
+  useEffect(() => {
+    if (home && sessionId && !useApp.getState().deskBySession[sessionId]) useApp.getState().patchDesk(sessionId, { mode: 'open', homeSeen: true })
+  }, [home, sessionId])
+  return home
+}
 
 /** 所有格子共用的 shim leaf(不进 Dockview,不碰布局持久化;setTitle/close 演出区无意义,noop)。 */
 const shimLeaf = (id: string, type: string, params: Record<string, unknown>): ViewProps['leaf'] => ({
@@ -212,14 +237,17 @@ export function AgentDesk({ sessionId }: { sessionId: string }) {
   const rootRef = useRef<HTMLDivElement>(null)
   const onGrip = useDeskGrip(sessionId, rootRef)
   const comp = useDeskCompanion()
+  const home = useDeskHome(sessionId)
   // always 伴随面 = 完全替换:侧板只演伴随面(没有任何条目也要能展开)
   const always = comp?.mode === 'always'
 
-  if (!desk?.items.length && !always) return null
+  if (!desk?.items.length && !always && !home) return null
   const open = desk?.mode === 'open'
   const frac = desk?.fraction ?? (desk?.size === 'wide' ? 0.62 : 0.46)
-  const items = desk?.items.slice(0, 2) ?? []
-  const clearable = comp?.mode === 'idle' && items.length > 0
+  const own = desk?.items.slice(0, 2) ?? []
+  // 空闲面:自己没有条目时演它(见 useDeskHome)
+  const items = own.length || !home ? own : [home]
+  const clearable = (comp?.mode === 'idle' || !!home) && !always && own.length > 0
 
   return (
     // 壳常驻(有内容即挂):open 才有宽度与内容,flex-basis 过渡负责丝滑进出(见 chat2.css)
@@ -234,7 +262,7 @@ export function AgentDesk({ sessionId }: { sessionId: string }) {
               <span className="agent-desk-title">{t('desk.title')}</span>
               {!always && desk?.note ? <span className="agent-desk-note" title={desk.note}>{desk.note}</span> : <span className="agent-desk-note" />}
               {clearable && (
-                <button className="icon-btn" title={t('desk.clear')} onClick={() => clearDesk(sessionId)}>
+                <button className="icon-btn" title={t('desk.clear')} onClick={() => clearDesk(sessionId, !!home)}>
                   <Eraser size={14} />
                 </button>
               )}
@@ -276,17 +304,21 @@ export const deskCardGone = (mode: string | undefined, panelHasContent: boolean)
  *  - showCompanion:always 恒显示;idle 只在 Desk **零条目**时显示(草稿 / 空会话 / 清空后)。
  *  - panelHasContent:always 下侧板恒有东西可演(伴随面),但草稿没有侧板;否则看条目。
  *  - expandable:草稿永不展开(侧板要真会话)。
- *  - clearable:「清空 Desk」只给 idle 伴随面用 —— 条目让它退了场,清掉才能请回来。 */
-export function deskCardPlan(o: { mode: string | undefined; itemCount: number; companion: 'always' | 'idle' | null; draft: boolean }): {
+ *  - clearable:「清空 Desk」给 idle 伴随面与空闲面(home)用 —— 条目让它退了场,清掉才能请回来。 */
+export function deskCardPlan(o: { mode: string | undefined; itemCount: number; companion: 'always' | 'idle' | null; draft: boolean; home?: boolean }): {
   gone: boolean; showCompanion: boolean; expandable: boolean; clearable: boolean
 } {
   const always = o.companion === 'always'
-  const gone = deskCardGone(o.mode, always ? !o.draft : o.itemCount > 0)
+  // 空闲面(home,Muse 私聊的 Muse Space):零条目时它就是这张 Desk 的内容 —— 可展开、压过 idle 伴随面;
+  // 条目让它退了场,所以同样给「清空 Desk」。always 伴随面是整块替换,home 不参与。
+  const home = !!o.home && !always
+  const shown = o.itemCount > 0 || home
+  const gone = deskCardGone(o.mode, always ? !o.draft : shown)
   return {
     gone,
-    showCompanion: always || (o.companion === 'idle' && o.itemCount === 0),
-    expandable: !gone && !o.draft && (always || o.itemCount > 0),
-    clearable: o.companion === 'idle' && o.itemCount > 0,
+    showCompanion: always || (o.companion === 'idle' && o.itemCount === 0 && !home),
+    expandable: !gone && !o.draft && (always || shown),
+    clearable: (o.companion === 'idle' || home) && o.itemCount > 0,
   }
 }
 
@@ -299,12 +331,15 @@ export function DeskCard({ sessionId }: { sessionId: string }) {
   const { t } = useI18n()
   const desk = useApp((s) => s.deskBySession[sessionId])
   const comp = useDeskCompanion()
-  const items = desk?.items?.slice(0, 2) ?? []
+  const home = useDeskHome(sessionId)
+  const own = desk?.items?.slice(0, 2) ?? []
+  const always = comp?.mode === 'always'
+  const items = own.length || !home || always ? own : [home]
   const claimKey = useClaimKey(items)
   const draft = sessionId === DESK_DRAFT_KEY
-  const plan = deskCardPlan({ mode: desk?.mode, itemCount: items.length, companion: comp?.mode ?? null, draft })
+  const plan = deskCardPlan({ mode: desk?.mode, itemCount: own.length, companion: comp?.mode ?? null, draft, home: !!home })
   const gone = plan.gone
-  const expand = plan.expandable ? () => useApp.getState().patchDesk(sessionId, { mode: 'open' }) : undefined
+  const expand = plan.expandable ? () => useApp.getState().patchDesk(sessionId, { mode: 'open', homeSeen: true }) : undefined
   const companion = plan.showCompanion ? comp : null
 
   return (

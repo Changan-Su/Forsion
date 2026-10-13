@@ -898,6 +898,8 @@ export interface DeskState {
   fraction?: number
   userResized?: boolean
   note?: string
+  /** 空闲面的缺省展开已落过一次(见 deskPlan.DeskSnapshot.homeSeen)。 */
+  homeSeen?: true
 }
 export interface AppState {
   tr: (k: string, vars?: Record<string, unknown>) => string

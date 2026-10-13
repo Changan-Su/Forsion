@@ -90,6 +90,17 @@ describe('packDeskMap / unpackDeskMap(会话快照持久化)', () => {
     expect(out.a.size).toBe('half')
     expect(out.b).toBeUndefined()
   })
+  it('空闲面收起后的快照(没东西、没展开,只有 homeSeen)也落盘:重启后不再被当成第一次而自动展开', () => {
+    const out = unpackDeskMap(packDeskMap({ muse: { items: [], size: 'half', homeSeen: true }, plain: { items: [], size: 'half' } }))
+    expect(out.muse).toEqual({ items: [], size: 'half', homeSeen: true })
+    expect(out.plain).toBeUndefined() // 负对照:没有这个标记的空快照照旧不落盘
+    // 内容快照满了 cap 也不把它挤掉(它没有时间戳,按新旧排恒垫底);反过来它也不占内容快照的名额
+    const many: Record<string, any> = { muse: { items: [], size: 'half', homeSeen: true } }
+    for (let i = 0; i < 5; i++) many[`s${i}`] = { items: [{ key: `k${i}`, path: `/f${i}.md`, name: `f${i}.md`, at: 100 + i }], size: 'half' }
+    const capped = unpackDeskMap(packDeskMap(many, 3))
+    expect(capped.muse).toEqual({ items: [], size: 'half', homeSeen: true })
+    expect(Object.keys(capped).filter((k) => k !== 'muse').sort()).toEqual(['s2', 's3', 's4'])
+  })
   it('视图格(item.view)保真往返;畸形 view 丢弃', () => {
     const map = {
       a: {

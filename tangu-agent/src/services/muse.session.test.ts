@@ -30,7 +30,7 @@ vi.mock('../seams/runtime.js', () => ({
 
 import {
   shouldRotateMuseSession, MUSE_SESSION_MAX_MESSAGES, getMuseSessionId, ensureMuseSession,
-  tokensInWindow, buildCycleMessages, museAgentConfig, readLastCycleAt, writeLastCycleAt, museStateFile,
+  tokensInWindow, buildCycleMessages, museChatSection, museAgentConfig, museLibraryDir, readLastCycleAt, writeLastCycleAt, museStateFile,
 } from './muse.js';
 import { readMuseSessionId } from './museState.js';
 import { SPECIAL_AGENTS_DEFAULTS } from './specialAgentsConfig.js';
@@ -111,7 +111,8 @@ describe('C1a 预算口径:跨全部 Muse 会话', () => {
 // 落库 kickoff 的长度帽:防膨胀。09-27 从 2500 放到 3000 —— 加了 ctx.agent 契约;且每个周期一个新会话后它不再被
 // 逐周期回放,只随本周期发一次(多 200 来字符 ≈ 60 token,对 ~1.8 万的开局上下文可以忽略)。
 // 同日再放到 3500:补 ctx.agent 返回字段与配色变量表(dev 首个 ctx.agent 版 Space 猜错字段、用了不存在的 --panel),实测 3300。
-const MAX_KICKOFF = 3500;
+// 10-13 放到 3700:加一句「简报末尾的 <computer_history> 怎么用」(实机 Muse 7 天 67 个周期只主动查了 2 次电脑历史)。
+const MAX_KICKOFF = 3700;
 
 describe('C1b kickoff 拆分', () => {
   const cfg = { ...SPECIAL_AGENTS_DEFAULTS.muse, mode: 'ask' as const, escalateTo: '', notify: 'immediate' as const };
@@ -129,6 +130,32 @@ describe('C1b kickoff 拆分', () => {
     expect(message).toContain('Permission tier: ask');
     expect(message).toContain('Your Space:');
     expect(message).toContain('add_muse_todo');
+  });
+
+  it('点名电脑历史这个来源,但不点工具名(这段是落库的稳定前缀,电脑历史没开时工具不存在)', () => {
+    const { message } = buildCycleMessages(cfg, dynA);
+    expect(message).toContain('ends with a computer-history block');
+    // 围栏标签与标记原文不许进落库的指令:台架靠「input 里没有它们」判摘要没落库
+    expect(message).not.toContain('<computer_history>');
+    expect(message).not.toContain('[computer-history:observed]');
+    expect(message).toContain('most direct signal of what they are working on');
+    expect(message).not.toContain('read_computer_history');
+  });
+
+  it('手聊 Muse 的系统段:说清不是周期、交代的事要落进记忆 / 日志、带 Space 契约(聊天里没有 kickoff)', () => {
+    const s = museChatSection();
+    expect(s).toMatch(/^## Talking with the user\n/);
+    expect(s).toContain('not one of your background cycles');
+    expect(s).toContain('will not see this conversation');
+    expect(s).toContain('remember for a lasting preference, log_event for a one-off request');
+    expect(s).toContain('your background permission tier applies to your cycles only');
+    expect(s).toContain('Do not wrap the file in function setup(ctx)');
+    expect(s).toContain('It is reloaded after your turn ends');
+    // Journal 给绝对路径、不说「Library 就是这次对话的工作文件夹」:在项目会话里点名 Muse 时 cwd 是项目,相对路径会读到项目里的 Journal
+    expect(s).toContain(`your journal (${path.join(museLibraryDir(), 'Journal', '<date>.md')})`);
+    expect(s).not.toContain('working folder');
+    // 周期那份的措辞不许被聊天版带偏(落库前缀逐字稳定)
+    expect(buildCycleMessages(cfg, {}).message).toContain('It is reloaded after your cycle ends;');
   });
 
   it('Space 契约写死两条(09-27 实机:包成 function setup 不调用=空白 16 天;以为 Space 要审批=只敢改文案)', () => {

@@ -55,7 +55,7 @@ import {
 } from './compaction.js';
 import { compactionSettingsFor, type CompactionSettings } from './compactionSettings.js';
 import { isContextOverflowError } from './contextWindowStore.js';
-import { getAgent, isValidSlug, DEFAULT_MAX_ITERATIONS, libDirOf, type NormalAgentDef } from '../agents/agentRegistry.js';
+import { getAgent, isValidSlug, DEFAULT_MAX_ITERATIONS, libDirOf, MUSE_AGENT_SLUG, type NormalAgentDef } from '../agents/agentRegistry.js';
 import { loadHarness, shelvedOf, renderHarnessSection, isRefineInvocation, REFINE_DIRECTIVE, consumeHarnessCandidates, renderPendingHarnessCandidates } from '../agents/harnessStore.js';
 import { loadSchedule, entriesOf, upcomingScheduleLines } from './agentSchedule.js';
 import { agentIdentitySection, applyAgentActivation } from './agentActivation.js';
@@ -1125,6 +1125,9 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
   const cwd: string | undefined =
     typeof agentConfig.cwd === 'string' && agentConfig.cwd ? agentConfig.cwd : undefined;
   setRunCwd(cwd); // 项目级技能 <cwd>/.forsion/skills 扫描据此(host 才有 cwd)
+  // 手聊 Muse(私聊,或普通会话里切到 Muse;周期 run 不算):系统提示里要补一段聊天口径,见下面 2'')。
+  // 它的 Space 目录不用另加可写根 —— fsPolicy.writableRoots 本来就把 agents/<自己>/ 整个算进去。
+  const museChat = activeAgentSlug === MUSE_AGENT_SLUG && input.background !== 'muse' && !agentConfig.automationOrigin && !isTeamMember && !agentConfig.delegatedFrom;
   // 额外工作文件夹(用户在「工作范围」里显式添加):只认 host、只认绝对路径,去重后封顶 8 个
   // —— 每个都要占一行系统提示,且都是免审批可写根,不该无节制。cwd 本身不重复列。
   // 远程污点 run 没有额外可写根(路由已剥;这里兜住绕过路由抄进来的 —— 会话存值 / 派生配置)。
@@ -1459,6 +1462,9 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     }
     // 2') 身份段(当前名字 / 简介):人格正文常写死旧名,不注入则改名后模型仍自称旧名(09-18)。随人格一起被 coding 预设抑制。
     if (agentProfile && !suppressCompanionPersona) systemParts.push(agentIdentitySection(agentProfile));
+    // 2'') 手聊 Muse:人格写的是周期口径(「每个周期你会收到简报」),这里补聊天口径 + Space 契约(周期里它随 kickoff 来)。
+    //      动态 import:muse.ts 静态依赖本文件(enqueueRun)。
+    if (museChat) systemParts.push((await import('./muse.js')).museChatSection());
     // 2a) 团队段(成员子 run;全员共识、逐字不变 → 稳定区)
     if (isTeamMember) {
       systemParts.push(teamMemberSection(
@@ -2108,7 +2114,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     {
       const hint = typeof input.ephemeralHint === 'string' ? input.ephemeralHint.trim() : '';
       if (hint) appendToLastUserMessage(hint);
-      // 电脑历史摘要(Muse 周期专属,代码折叠最近 3h、≤1500 字):**在这里现算**,不经 muse.ts 塞进 input.ephemeralHint ——
+      // 电脑历史摘要(Muse 周期专属,代码折叠最近 3h、整块不超过 COMPUTER_HISTORY_DIGEST_MAX):**在这里现算**,不经 muse.ts 塞进 input.ephemeralHint ——
       // 那会随 agent_runs.input 永久落进 state.db(不受 7 天保留、清除、关闭约束)。只认引擎内部的 input.background,
       // 请求体里的 agentConfig.muse 不算。日志只记长度(live 台架据此断言注入),绝不记正文。
       if (input.background === 'muse') {
