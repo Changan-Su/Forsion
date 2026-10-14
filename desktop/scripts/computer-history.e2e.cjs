@@ -207,6 +207,18 @@ async function openSettings(app, win) {
   return sp
 }
 
+/** 把设置浮窗放大到 1040×1000 好截全页,摆在**主窗那块屏**的工作区正中(装不下就收成工作区大小)。
+ *  别用 w.center():多屏时它会把浮窗挪到另一块屏,而浮窗(主窗的子窗)和主窗不在同一块屏时,台架发的第一个按键就让
+ *  主进程 SIGSEGV(见 launchApp 的「已知偶发」、复现脚本 floating-cross-display.probe.cjs)。产品代码从不挪浮窗。 */
+async function fitSettings(app, sp) {
+  const bw = await app.browserWindow(sp)
+  await bw.evaluate((w, screen) => {
+    const wa = screen.getDisplayMatching(w.getParentWindow()?.getBounds() ?? w.getBounds()).workArea
+    const width = Math.min(1040, wa.width), height = Math.min(1000, wa.height)
+    w.setBounds({ x: wa.x + Math.round((wa.width - width) / 2), y: wa.y + Math.round((wa.height - height) / 2), width, height })
+  }, await app.evaluateHandle(({ screen }) => screen)).catch((e) => note('设置浮窗没能放大(截图会短一截)', String(e)))
+}
+
 /** 点左栏一级页(精确可访问名,skill §3.1b 坑 1),等目标内容出现;没出现再点一次。 */
 async function gotoTab(sp, label, readySel) {
   for (let i = 0; i < 2; i++) {
@@ -296,9 +308,12 @@ async function launchApp(home, sock, stubUrl, extraEnv = {}) {
   const env = { ...process.env, TANGU_HOME: home, TANGU_BACKEND_URL: stubUrl, ...extraEnv }
   if (sock) env.PI_CU_SOCKET_PATH = sock
   else delete env.PI_CU_SOCKET_PATH
-  // -ApplePersistenceIgnoreState YES 由 lib/launch-electron.cjs 统一追加(跳过 macOS 崩溃后的「重新打开窗口」模态)。另:
-  //  T15 偶发主进程 SIGSEGV(台架经 inspector 对设置浮窗 setContentSize/center 之后第一次输入即崩,产品路径不改浮窗尺寸):
-  //     加了它之后同组合 0/10 复现(不加时 4/4;无同条件对照 —— 崩溃史让不加 flag 的启动卡在上面的模态)。
+  // -ApplePersistenceIgnoreState YES 由 lib/launch-electron.cjs 统一追加(跳过 macOS 崩溃后的「重新打开窗口」模态)。
+  // ⚠️ T15 按回车后主进程 SIGSEGV(09-27 起时有时无):10-14 查清是**设置浮窗和主窗不在同一块屏**时第一个按键就崩 ——
+  //    原来摆浮窗用的 w.center() 在多屏时会把它摆到另一块屏上;会不会崩取决于当时屏幕怎么排,所以时有时无
+  //    (09-27「加了这个参数就好了」是碰巧赶上屏幕排法变了)。现在改用 fitSettings 摆在主窗那块屏上;最小复现见
+  //    floating-cross-display.probe.cjs。再崩会打「崩溃报告摘要」(crashSummary):线程 CrBrowserMain、地址 0x70、
+  //    出错帧 Electron Framework +0x2b4c968(40.10.2;升级后偏移会变,看地址和栈的形状)= 同一个。
   const app = await electron.launch({ args: [`--user-data-dir=${path.join(home, 'userdata')}`, '--lang=zh-CN', ROOT], cwd: ROOT, env })
   const mainLog = []
   app.process().stdout?.on('data', (d) => mainLog.push(String(d)))
@@ -309,7 +324,8 @@ async function launchApp(home, sock, stubUrl, extraEnv = {}) {
   const life = []
   const mark = (what) => life.push(`+${((Date.now() - t0) / 1000).toFixed(1)}s ${what}`)
   const tag = (p) => { try { return /window=floating/.test(p.url()) ? 'floating' : 'main' } catch { return '?' } }
-  app.process().on('exit', (code, signal) => mark(`主进程退出 code=${code} signal=${signal}`))
+  const pid = app.process().pid
+  app.process().on('exit', (code, signal) => mark(`主进程退出 pid=${pid} code=${code} signal=${signal}`))
   app.on('close', () => mark('ElectronApplication close'))
   const watchPage = (p) => {
     p.on('close', () => mark(`窗口关闭(${tag(p)})`))
@@ -321,10 +337,34 @@ async function launchApp(home, sock, stubUrl, extraEnv = {}) {
 }
 
 /** 失败取证:生命周期时间线 + 主进程日志尾(不过滤:崩溃栈 / 信号 / 单实例锁提示都可能不含 error 字样)。 */
-function dumpLife(life, mainLog) {
+async function dumpLife(life, mainLog) {
   console.error('生命周期时间线:\n  ' + (life.length ? life.join('\n  ') : '(无事件)'))
   const tail = mainLog.join('').split('\n').filter(Boolean).slice(-40)
   console.error('主进程日志尾(未过滤,最后 40 行):\n' + (tail.length ? tail.join('\n') : '(空)'))
+  await crashSummary(life)
+}
+
+/** 主进程被信号打死时:按 pid 找 macOS 的崩溃报告,摘出错线程前 12 帧(判别方法见 launchApp 里的「已知偶发」)。
+ *  Electron 框架是剥过符号的,报告里的符号名是就近导出符号、不可信,所以只打 镜像 + 偏移。 */
+async function crashSummary(life) {
+  const m = life.join('\n').match(/pid=(\d+) code=null signal=(SIG\w+)/)
+  if (!m || process.platform !== 'darwin') return
+  const dir = path.join(os.homedir(), 'Library/Logs/DiagnosticReports')
+  for (let i = 0; i < 20; i++) { // ReportCrash 进程退出后几秒才写完
+    for (const f of fs.readdirSync(dir).filter((n) => /^Electron.*\.ips$/.test(n))) {
+      try {
+        const txt = fs.readFileSync(path.join(dir, f), 'utf8')
+        const r = JSON.parse(txt.slice(txt.indexOf('\n') + 1))
+        if (String(r.pid) !== m[1]) continue
+        const th = r.threads[r.faultingThread ?? 0]
+        const frames = th.frames.slice(0, 12).map((fr) => `${r.usedImages[fr.imageIndex]?.name} +0x${fr.imageOffset.toString(16)}`)
+        console.error(`崩溃报告摘要(${f}):${r.exception?.type} ${r.exception?.subtype} 线程 ${th.name || th.queue || r.faultingThread}\n  ${frames.join('\n  ')}`)
+        return
+      } catch { /* 还没写完 / 格式不同:下一轮再看 */ }
+    }
+    await sleep(500)
+  }
+  console.error(`主进程 ${m[2]},但 10 秒内没找到 pid ${m[1]} 的崩溃报告(~/Library/Logs/DiagnosticReports/Electron-*.ips)`)
 }
 
 async function closeApp(app) {
@@ -365,8 +405,7 @@ async function mainPhase(stub) {
 
     const sp = await openSettings(app, win)
     watchErrors(sp, 'settings')
-    const bw = await app.browserWindow(sp)
-    await bw.evaluate((w) => { w.setContentSize(1040, 1000); w.center() }).catch(() => {})
+    await fitSettings(app, sp)
     check('T0b 设置 → 外观 → 亮色(起点钉浅色,不跟系统)', await setMode(sp, 'zh', 'light'))
 
     // ── ① 默认关闭 ──
@@ -463,12 +502,21 @@ async function mainPhase(stub) {
 
     // ── ⑤ 手填 Bundle ID 排除 → 重订阅带新策略 ──
     const beforeEx = helper.subscribes().length
+    // 取证用(CH_E2E_IPC_TRACE=1):从这一步起把主进程收到的每条 IPC 打进主进程日志。主进程在这附近崩掉时,
+    // 失败收尾打的「主进程日志尾」里能看到崩之前最后进来的是哪几条(10-14 用它查过一次回车后主进程段错误)。
+    if (process.env.CH_E2E_IPC_TRACE) await app.evaluate(({ ipcMain }) => {
+      const say = (kind, channel) => process.stdout.write(`[ipc-trace] ${Date.now() % 100000} ${kind} ${channel}\n`)
+      for (const [channel, fn] of ipcMain._invokeHandlers ?? []) ipcMain._invokeHandlers.set(channel, (event, ...args) => { say('invoke', channel); return fn(event, ...args) })
+      const emit = ipcMain.emit
+      ipcMain.emit = function (channel, ...args) { say('on', String(channel)); return emit.call(this, channel, ...args) }
+    })
     await sp.locator('.ch-page [data-ch-add="app"] input').fill('com.apple.Health')
     mark('T15 按 Enter 提交排除 App')
     await sp.locator('.ch-page [data-ch-add="app"] input').press('Enter')
     mark('T15 Enter 已返回')
     const chip = await sp.locator('.ch-chip[data-bundle-id="com.apple.Health"]').first().waitFor({ timeout: 5_000 }).then(() => true, () => false)
     check('T15 排除表出现 com.apple.Health 芯片', chip)
+    if (process.env.CH_E2E_IPC_TRACE) note('T15 这一步主进程收到的 IPC', mainLog.join('').split('\n').filter((l) => l.includes('[ipc-trace]')).map((l) => l.replace('[ipc-trace] ', '')).join(' ｜ '))
     await until(() => helper.subscribes().length > beforeEx && helper.open().length === 1, 5_000)
     const lastPol = helper.subscribes().at(-1)?.policy
     check('T16 重订阅:新 recordSubscribe 的 policy.excludeBundleIds 含 com.apple.Health,旧连接已关(开着的恰 1 条)',
@@ -504,8 +552,11 @@ async function mainPhase(stub) {
     await resumeBtn.first().click()
     await until(() => helper.subscribes().length > beforePause && helper.open().length === 1, 6_000)
     const stR = await until(() => { const s = readJson(statePath); return s && s.status === 'recording' && s.pausedUntil === null ? s : null }, 5_000)
-    check('T23 恢复 → 重新 recordSubscribe、开着 1 条、state.json 回 recording', helper.subscribes().length === beforePause + 1 && helper.open().length === 1 && !!stR && (await chStatus(sp)) === 'recording',
-      { subs: helper.subscribes().length, open: helper.open().length, state: readJson(statePath) })
+    // 界面状态要等:主进程先落 state.json、再推 onChanged,渲染层收到后才换 data-ch-status。原来在看到 state.json 的那一刻
+    // 立即读界面,机器忙时读到的还是上一拍(10-14 main 上 4 遍红 2 遍,订阅数 / 连接 / state.json 全对)。等 5 秒仍不对 = 界面真卡住。
+    const uiR = await waitStatus(sp, 'recording', 5_000)
+    check('T23 恢复 → 重新 recordSubscribe、开着 1 条、state.json 回 recording', helper.subscribes().length === beforePause + 1 && helper.open().length === 1 && !!stR && uiR,
+      { subs: helper.subscribes().length, before: beforePause, open: helper.open().length, stR: !!stR, ui: await chStatus(sp), state: readJson(statePath) })
 
     // ── ⑦ 清除全部(带确认)──
     const beforeClear = helper.subscribes().length
@@ -615,7 +666,7 @@ async function mainPhase(stub) {
   } finally {
     mark('台架 closeApp(此后的关闭 / 退出是台架自己收尾)')
     await closeApp(app)
-    if (bodyFailed) dumpLife(life, mainLog) // 收尾之后再打:主进程退出(码 + 信号)的回调此时一定已到
+    if (bodyFailed) await dumpLife(life, mainLog) // 收尾之后再打:主进程退出(码 + 信号)的回调此时一定已到
     await helper.close().catch(() => {})
     if (!KEEP) {
       fs.rmSync(home, { recursive: true, force: true })
@@ -651,8 +702,7 @@ async function missingPhase(stub) {
     await skipOnboarding(win)
     await win.waitForSelector('.dv-groupview', { timeout: 40_000 }).catch(() => {})
     const sp = await openSettings(app, win)
-    const bw = await app.browserWindow(sp)
-    await bw.evaluate((w) => { w.setContentSize(1040, 1000); w.center() }).catch(() => {})
+    await fitSettings(app, sp)
     await setMode(sp, 'zh', 'light')
     if (!(await gotoTab(sp, L.zh.ch, '.ch-page'))) { skip('M1 helper_missing 分支', '第二段没能打开电脑历史页'); return }
     await sp.locator('.ch-page [role="switch"]').first().click()
@@ -690,7 +740,7 @@ async function missingPhase(stub) {
     if (chLog.length) note('第二段主进程 [computer-history] 日志', chLog.slice(0, 5).join(' ‖ '))
   } catch (e) {
     console.error('MISSING PHASE ERROR:', (e && e.stack) || e)
-    dumpLife(life, mainLog)
+    await dumpLife(life, mainLog)
     check('第二段(helper_missing)跑完没有抛错', false, String(e && e.message || e))
     try { for (const [i, p] of (app ? app.windows() : []).entries()) await p.screenshot({ path: path.join(SHOT_DIR, `FAIL-missing-window${i}.png`) }).catch(() => {}) } catch { /* ignore */ }
   } finally {
