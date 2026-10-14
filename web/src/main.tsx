@@ -15,6 +15,14 @@ const wireToast = (): Promise<void> => import('@/stores/appStore').then(({ useAp
   setCloudNotify((text, isError) => useApp.getState().toast(text, isError))
 })
 
+// Keep two distinct import expressions: Vite attaches each branch's CSS preload to its own import.
+// `uiMobile ? import(mobile) : import(desktop)` is folded into ONE preload wrapper whose deps come from
+// the desktop branch: mobileEntry's exclusive CSS (browser chrome / UnitsSheet) silently never loads.
+function loadApp(uiMobile: boolean): Promise<unknown> {
+  if (uiMobile) return import('@mobile/mobileEntry')
+  return import('@/main')
+}
+
 async function bootstrap(): Promise<void> {
   const path = location.pathname
 
@@ -50,7 +58,7 @@ async function bootstrap(): Promise<void> {
         try {
           uiMobile = (new URLSearchParams(location.search).get('ui') || localStorage.getItem('lcl.uiMode')) === 'mobile'
         } catch { /* private mode → 桌面布局 */ }
-        await (uiMobile ? import('@mobile/mobileEntry') : import('@/main'))
+        await loadApp(uiMobile)
         if (meta.capabilities?.amadeus) await wireToast()
       })
       .catch((e) => { console.error('[unit-page] bootstrap failed:', e); showUnitBootError() })
@@ -84,7 +92,7 @@ async function bootstrap(): Promise<void> {
     try {
       uiMobile = (new URLSearchParams(location.search).get('ui') || localStorage.getItem('lcl.uiMode')) === 'mobile'
     } catch { /* private mode → 桌面布局 */ }
-    void (uiMobile ? import('@mobile/mobileEntry') : import('@/main'))
+    void loadApp(uiMobile)
       .then(wireToast)
       .catch((e) => console.error('[tangu-web] bootstrap failed:', e))
   }
