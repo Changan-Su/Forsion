@@ -44,10 +44,11 @@ export async function propagateNoteRenames(
   opts: { concurrency?: number; attempts?: number; folder?: readonly [string, string] } = {},
 ): Promise<RenamePropagationResult> {
   const out: RenamePropagationResult = { rewritten: [], failed: [] }
-  const pairs = new Map(Object.entries(pairsIn).filter(([o, n]) => o !== n))
+  const norm = (p: string): string => p.replace(/\\/g, '/')
+  const pairs = new Map(Object.entries(pairsIn).map(([o, n]) => [norm(o), norm(n)] as const).filter(([o, n]) => o !== n))
   if (!pairs.size && !opts.folder) return out
   const backMap = new Map([...pairs].map(([o, n]) => [n, o]))
-  const before = [...pagesBefore].sort()
+  const before = pagesBefore.map(norm).sort()
   const after = before.map((p) => pairs.get(p) ?? p).sort()
   const plan: NoteRenamePlan = { pairs, pagesBefore: before, pagesAfter: after }
   const attempts = Math.max(1, opts.attempts ?? 3)

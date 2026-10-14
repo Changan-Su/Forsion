@@ -26,7 +26,9 @@
  *   - stripGitTraceEnv 不把 GIT_TRACE2* 置 0 → 「Trace2」红(跟踪文件里有 Authorization: Basic …)
  *   - 提交信息:现场里有最近提交的风格与 diff;模型包的代码块 / 引号剥掉;用户的提交说明进系统提示
  */
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+
+if (process.platform === 'win32') vi.setConfig({ testTimeout: 30_000 });
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -686,7 +688,9 @@ describe('带凭据的子进程不留痕', () => {
     git(cwd, 'add', '.'); git(cwd, 'commit', '-qm', 'base');
     git(cwd, 'remote', 'add', 'origin', 'https://127.0.0.1:1/dave/hello.git'); // 没人听的端口:连不上,马上失败
     const trace = path.join(root, 'trace2-events.json');
-    writeFileSync(globalConfig, `[trace2]\n\teventTarget = ${trace}\n\tenvVars = GIT_CONFIG_VALUE_0,GIT_CONFIG_KEY_0\n\tconfigParams = http.*\n`);
+    git(cwd, 'config', '--file', globalConfig, 'trace2.eventTarget', trace);
+    git(cwd, 'config', '--file', globalConfig, 'trace2.envVars', 'GIT_CONFIG_VALUE_0,GIT_CONFIG_KEY_0');
+    git(cwd, 'config', '--file', globalConfig, 'trace2.configParams', 'http.*');
     registerGitCredentialProvider('spy', async () => ({ username: 'dave', password: 'tok-secret-1' }));
     try {
       expect(await codeOf(gitPush(cwd))).toBe('git_failed');

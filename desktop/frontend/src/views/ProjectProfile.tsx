@@ -212,7 +212,9 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
   useEffect(() => { if (!settingsDirty) setSettingsDraft(ctx?.settings ?? {}) }, [ctx?.settings, settingsDirty])
 
   const dirty = docDirty || settingsDirty
-  const relDoc = ctx ? ctx.doc.path.startsWith(`${ctx.cwd}/`) ? ctx.doc.path.slice(ctx.cwd.length + 1) : ctx.doc.path : ''
+  const docPath = ctx?.doc.path.replace(/\\/g, '/') ?? ''
+  const projectPath = ctx?.cwd.replace(/\\/g, '/').replace(/\/+$/, '') ?? ''
+  const relDoc = docPath.startsWith(`${projectPath}/`) ? docPath.slice(projectPath.length + 1) : docPath
   const skillsDir = ctx ? `${ctx.workspaceDirName}/skills` : ''
   const clear = () => { setError(''); setNotice('') }
   // 项目记忆:删一条(带版本)。别处刚改过 → 引擎回 409,重载后让用户再删一次,不拿旧版本硬删。

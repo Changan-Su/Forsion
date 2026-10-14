@@ -1878,7 +1878,7 @@ export function MarkdownBlock({
   // 而这里大量调用发生在 await 之后(斜杠新建文件、附件保存),那时活动面板完全可能已经是隔壁,
   // 写过去就是把内容插进另一篇笔记。
   const ps = useScopedPageStore()
-  const pageDir = pagePath.split('/').slice(0, -1).join('/')
+  const pageDir = pagePath.replace(/\\/g, '/').split('/').slice(0, -1).join('/')
   const emitted = useRef(content)
   const [rev, setRev] = useState(0)
   const [dbPick, setDbPick] = useState(false) // 「链接数据库」选择器(slash 唤起)
