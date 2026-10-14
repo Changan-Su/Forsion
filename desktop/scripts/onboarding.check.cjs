@@ -284,7 +284,9 @@ async function main() {
     if (historySeen) {
       await move(win.locator('.ob-summary button').filter({ hasText: /Computer history/ }))
       assert.equal(await win.locator('.ob-sections button.active').innerText(), 'Computer history')
-      await next()
+      // 回头看完,从左栏直接回到已经到过的最后一页(不用把「下一步」重点一遍);没到过的步骤才不能跳。
+      await move(win.locator('button.ob-progress-item').last())
+      assert.equal(await win.locator('.ob-flow').getAttribute('data-step'), 'done', 'the rail jumps ahead to a step already reached')
     }
     await geometry('en-dark-done')
     await next()

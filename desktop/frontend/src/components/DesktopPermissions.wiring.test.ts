@@ -447,6 +447,34 @@ it('lets a visited step be reopened from the rail and Enter trigger the primary 
   expect(host.querySelector('.ob-flow')?.getAttribute('data-step')).toBe('connect')
 })
 
+// 10-14 体验走查:从最后一页回头改一项之后,左栏点不回已经到过的后面那一步,只能把「下一步」重点一遍。
+it('lets the rail jump ahead to a step already reached and saves the choices of the steps it passes', async () => {
+  window.tangu!.envCheck = vi.fn()
+  // 模型清单每次进那一步都重读:来回两次各给一份
+  const models = { models: [{ id: 'm', name: 'My model', provider: 'Local', source: 'direct' as const }], defaultModelId: 'other', directProviders: [] }
+  vi.mocked(listModels).mockResolvedValueOnce(models).mockResolvedValueOnce(models)
+  const save = vi.fn().mockResolvedValue(cfg)
+  window.tangu!.setConfig = save
+  const rail = (key: string) => host.querySelector<HTMLButtonElement>(`button.ob-progress-item[aria-label="${translate(key)}"]`)
+  const at = () => host.querySelector('.ob-flow')?.getAttribute('data-step')
+  await render(wizard()); await click('onboarding.welcome.continue'); await click('onboarding.connect.skipForNow')
+  await click('onboarding.nav.next'); await click('onboarding.nav.next')
+  expect(at()).toBe('workspace')
+  save.mockClear(); vi.mocked(props.onReconnect).mockClear()
+  // 回到默认模型改一项(只是草稿),再从左栏直接回工作目录:途经的模型那一步照「下一步」的规矩存下
+  await act(async () => rail('onboarding.guide.model')!.click())
+  expect(at()).toBe('model')
+  await act(async () => host.querySelector<HTMLButtonElement>('.ob-model-option')!.click())
+  expect(save).not.toHaveBeenCalled()
+  await act(async () => rail('onboarding.guide.workspace')!.click()); await flush()
+  expect(at()).toBe('workspace')
+  expect(host.querySelector('.ob-flow')?.getAttribute('data-dir')).toBe('forward')
+  expect(save).toHaveBeenCalledWith({ modelId: 'm' })
+  expect(props.onReconnect).toHaveBeenCalled()
+  // 没到过的步骤仍然不能跳
+  expect(rail('onboarding.guide.env')).toBeNull()
+})
+
 // ── Codex 评审(2026-10-13)点出的四处,各钉一条 ──
 it('drops computer history everywhere when the recorder itself reports unsupported, before its tab is ever opened', async () => {
   const api = withHistory()

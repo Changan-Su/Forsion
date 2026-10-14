@@ -185,8 +185,9 @@ button.ob-progress-item:focus-visible { outline: var(--focus-ring) solid var(--a
 .ob-summary button:focus-visible { outline: var(--focus-ring) solid var(--accent-ink); outline-offset: -2px; }
 .ob-summary button > span { color: var(--text-muted); font-size: var(--ui-font-meta, 12px); }
 .ob-summary b { font-weight: 500; overflow-wrap: anywhere; }
-.ob-summary i { display: inline-flex; align-items: center; gap: 1px; font-style: normal; font-size: var(--ui-font-caption, 11px); color: var(--text-faint); opacity: 0; }
-.ob-summary button:hover:not(:disabled) i, .ob-summary button:focus-visible i { opacity: 1; }
+/* 「修改 ›」一直淡淡地在:只在悬停时才出现的话,这几行看着就是只读的结果(10-14 体验走查实测没人知道能点)。 */
+.ob-summary i { display: inline-flex; align-items: center; gap: 1px; font-style: normal; font-size: var(--ui-font-caption, 11px); color: var(--text-faint); }
+.ob-summary button:hover:not(:disabled) i, .ob-summary button:focus-visible i { color: var(--text-muted); }
 .ob-next-steps { padding: 24px; border-radius: var(--radius-lg); background: var(--overlay-subtle); }
 .ob-next-steps h2 { font-size: var(--ui-font-heading, 14px); }
 .ob-next-steps > div { display: flex; align-items: flex-start; gap: 14px; margin-top: 22px; }
@@ -365,7 +366,7 @@ button.ob-progress-item:focus-visible { outline: var(--focus-ring) solid var(--a
   button.ob-progress-item, .ob-skip { transition: color var(--duration-fast); }
   .ob-history-more > svg { transition: translate var(--duration-fast); }
   .ob-summary button { transition: background var(--duration-fast); }
-  .ob-summary i { transition: opacity var(--duration-fast); }
+  .ob-summary i { transition: color var(--duration-fast); }
   /* 正在记录的状态点 */
   .ob-history[data-ch-status='recording'] .settings-status-dot { animation: ob-live 2.4s ease-out infinite; }
   /* 同意说明弹窗 */

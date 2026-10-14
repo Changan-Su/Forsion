@@ -4,6 +4,9 @@
  * 电脑历史连的是真主进程:PI_CU_SOCKET_PATH 指到不存在的 socket,不会拉起本机真的 Computer Use 助手,开了也只落「连不上」。
  * ⚠️ 权限卡上的「安装并设置权限 / 打开系统设置」是真的会动这台电脑的,摆出来看的时候别点。
  * 用法:npm run build && npm run stage:first-run [-- --lang=en]
+ * 给 computer use 用时:机器上通常还开着别的 Electron(开发实例和这里用的是同一个 Electron.app,computer use 按路径 / bundle id
+ * 分不清,10-14 实测它绑到了用户自己的开发实例上)。先把 Electron.app 拷到一个独有的路径,再用
+ * FORSION_STAGE_ELECTRON=<那份拷贝>/Contents/MacOS/Electron 起,测试单里写那条路径。
  */
 const fs = require('fs')
 const os = require('os')
@@ -28,7 +31,7 @@ async function main() {
     },
   })
   const userData = path.join(home, 'userdata')
-  const child = spawn(require('electron'), [`--user-data-dir=${userData}`, `--lang=${lang}`, ROOT, ...MAC_FLAGS], {
+  const child = spawn(process.env.FORSION_STAGE_ELECTRON || require('electron'), [`--user-data-dir=${userData}`, `--lang=${lang}`, ROOT, ...MAC_FLAGS], {
     cwd: ROOT, stdio: 'inherit',
     env: workspaceEnv({ ...process.env, TANGU_HOME: home, TANGU_BACKEND_URL: stub.url, TANGU_CLOUD_URL: stub.url,
       PI_CU_SOCKET_PATH: path.join(home, 'no-helper.sock'), TANGU_HARNESS_QUIET: '0' }),

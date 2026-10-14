@@ -463,12 +463,21 @@ async function mainPhase(stub) {
 
     // ── ⑤ 手填 Bundle ID 排除 → 重订阅带新策略 ──
     const beforeEx = helper.subscribes().length
+    // 取证用(CH_E2E_IPC_TRACE=1):从这一步起把主进程收到的每条 IPC 打进主进程日志。主进程在这附近崩掉时,
+    // 失败收尾打的「主进程日志尾」里能看到崩之前最后进来的是哪几条(10-14 用它查过一次回车后主进程段错误)。
+    if (process.env.CH_E2E_IPC_TRACE) await app.evaluate(({ ipcMain }) => {
+      const say = (kind, channel) => process.stdout.write(`[ipc-trace] ${Date.now() % 100000} ${kind} ${channel}\n`)
+      for (const [channel, fn] of ipcMain._invokeHandlers ?? []) ipcMain._invokeHandlers.set(channel, (event, ...args) => { say('invoke', channel); return fn(event, ...args) })
+      const emit = ipcMain.emit
+      ipcMain.emit = function (channel, ...args) { say('on', String(channel)); return emit.call(this, channel, ...args) }
+    })
     await sp.locator('.ch-page [data-ch-add="app"] input').fill('com.apple.Health')
     mark('T15 按 Enter 提交排除 App')
     await sp.locator('.ch-page [data-ch-add="app"] input').press('Enter')
     mark('T15 Enter 已返回')
     const chip = await sp.locator('.ch-chip[data-bundle-id="com.apple.Health"]').first().waitFor({ timeout: 5_000 }).then(() => true, () => false)
     check('T15 排除表出现 com.apple.Health 芯片', chip)
+    if (process.env.CH_E2E_IPC_TRACE) note('T15 这一步主进程收到的 IPC', mainLog.join('').split('\n').filter((l) => l.includes('[ipc-trace]')).map((l) => l.replace('[ipc-trace] ', '')).join(' ｜ '))
     await until(() => helper.subscribes().length > beforeEx && helper.open().length === 1, 5_000)
     const lastPol = helper.subscribes().at(-1)?.policy
     check('T16 重订阅:新 recordSubscribe 的 policy.excludeBundleIds 含 com.apple.Health,旧连接已关(开着的恰 1 条)',

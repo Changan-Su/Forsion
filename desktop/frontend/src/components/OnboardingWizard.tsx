@@ -81,6 +81,9 @@ export const OnboardingWizard: React.FC<{
   const [updateSteps] = useState(() => updateOrder(fullOrder(), storedVersion(), (s) => s !== 'permissions' || historyOnThisHost()))
   const STEP_ORDER = updateMode ? updateSteps : FULL_ORDER
   const stepIdx = STEP_ORDER.indexOf(step)
+  /** 到过的最远一步:左栏上它之前的都能点(往回是回看,往前是回到已经到过的地方)。 */
+  const [furthest, setFurthest] = useState<Step>('welcome')
+  const reachedIdx = Math.max(stepIdx, STEP_ORDER.indexOf(furthest))
   const lastStep = stepIdx === STEP_ORDER.length - 1
   const isHost = FULL_ORDER.includes('connect')
   const [appearanceTab, setAppearanceTab] = useState<'style' | 'colors' | 'font'>('style')
@@ -294,23 +297,31 @@ export const OnboardingWizard: React.FC<{
     onFinish()
   }
   const go = (next: Step, tab?: PermissionTab): void => {
-    setDir(STEP_ORDER.indexOf(next) < stepIdx ? 'back' : 'forward')
+    const nextIdx = STEP_ORDER.indexOf(next)
+    setDir(nextIdx < stepIdx ? 'back' : 'forward')
+    if (nextIdx > reachedIdx) setFurthest(next)
     if (tab) setPermissionTab(tab)
     setStep(next)
   }
-  const advance = async (): Promise<void> => {
+  /** 往前走到 target:「下一步」,或从左栏直接回到已经到过的后面某一步。途经的每一步(从当前这步起、不含 target)的选择
+   *  都在这时保存,和一步一步点「下一步」一样 —— 所以回头改了模型再从左栏跳回最后一页,改动不会丢。 */
+  const forward = async (target: Step): Promise<void> => {
     // 已经结束(跳过 / 完成)的退场那半秒里不再推进:否则会把刚跳过的那一步的草稿存下去。
     if (saving || finished.current) return
+    const targetIdx = STEP_ORDER.indexOf(target)
+    const passes = (s: Step): boolean => { const i = STEP_ORDER.indexOf(s); return i >= stepIdx && i < targetIdx }
+    const model = passes('model') && chosenModel !== null
     setSaving(true); setSaveError('')
     try {
-      if (step === 'model' && chosenModel !== null) await window.tangu?.setConfig({ modelId: chosenModel })
-      if (step === 'workspace' && workspaceDir !== null) await window.tangu?.setConfig({ defaultWorkspaceDir: workspaceDir.trim() })
-      if (step === 'model' && chosenModel !== null) onReconnect()
-      go(STEP_ORDER[stepIdx + 1])
+      if (model) await window.tangu?.setConfig({ modelId: chosenModel })
+      if (passes('workspace') && workspaceDir !== null) await window.tangu?.setConfig({ defaultWorkspaceDir: workspaceDir.trim() })
+      if (model) onReconnect()
+      go(target)
     } catch (error) {
       setSaveError(t('onboarding.guide.saveFail', { error: error instanceof Error ? error.message : String(error) }))
     } finally { setSaving(false) }
   }
+  const advance = (): Promise<void> => forward(STEP_ORDER[stepIdx + 1])
   const connectReady = loggedIn || byokSaved || subLoggedIn
   /** 有开关 / 配置正在落盘:上一步、下一步、跳过、左栏和完成页的回跳都等它存完。 */
   const navLocked = saving || mirrorSaving || backgroundSaving || historySaving
@@ -381,10 +392,12 @@ export const OnboardingWizard: React.FC<{
           {STEP_ORDER.filter((s) => updateMode || s !== 'welcome').map((s) => {
             const Icon = iconFor[s]
             const label = railLabel(s)
-            const body = <><span className="ob-progress-icon">{stepIdx > STEP_ORDER.indexOf(s) ? <Check size={16} className="ob-draw" /> : <Icon size={16} />}</span><span>{label}</span></>
-            // 走过的步骤可以点回去;没走到的不能跳(那几步的选择在「下一步」时才保存)。
-            return stepIdx > STEP_ORDER.indexOf(s)
-              ? <button type="button" key={s} className="ob-progress-item done" aria-label={label} disabled={navLocked} onClick={() => go(s)}>{body}</button>
+            const idx = STEP_ORDER.indexOf(s)
+            // 打勾 = 走完过的(到过的最远一步之前、且不是眼下这一步);最远那一步本身只是到过,还是它自己的图标。
+            const body = <><span className="ob-progress-icon">{idx < reachedIdx && idx !== stepIdx ? <Check size={16} className="ob-draw" /> : <Icon size={16} />}</span><span>{label}</span></>
+            // 到过的步骤都可以点:前面的是回看;后面的(回头改了一项之后)直接回去,途经各步的选择由 forward 存下。没到过的不能跳。
+            return idx !== stepIdx && idx <= reachedIdx
+              ? <button type="button" key={s} className="ob-progress-item done" aria-label={label} disabled={navLocked} onClick={() => { if (idx < stepIdx) go(s); else void forward(s) }}>{body}</button>
               : <div key={s} className={`ob-progress-item${step === s ? ' active' : ''}`} aria-label={label} aria-current={step === s ? 'step' : undefined}>
                   {step === s && <motion.span layoutId="ob-progress-pill" className="ob-progress-pill" transition={{ type: 'spring', stiffness: 380, damping: 32 }} />}{body}
                 </div>
