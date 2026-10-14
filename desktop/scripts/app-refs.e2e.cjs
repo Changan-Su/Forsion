@@ -58,7 +58,7 @@ function startFakeHelper(sockPath) {
         const msg = JSON.parse(line)
         requests.push(msg)
         const ok = (result) => socket.destroyed || socket.write(`${JSON.stringify({ id: msg.id, ok: true, result })}\n`)
-        if (msg.cmd === 'diagnostics') ok({ protocolVersion: 14, version: 'fake-e2e' })
+        if (msg.cmd === 'diagnostics') ok({ protocolVersion: 15, version: 'fake-e2e' })
         else if (msg.cmd === 'listApps') ok(APPS)
         else if (msg.cmd === 'dockCandidates') ok({ windows: WINDOWS })
         else if (msg.cmd === 'listWindows') ok(msg.pid === 13 ? [{ title: 'Q4 路演.key', windowId: 301 }] : [])
@@ -408,6 +408,33 @@ async function main() {
     let disk = ''
     for (let i = 0; i < 40 && !/收尾段落[\s\S]*\[\[window:\/\/com\.google\.Chrome\|/.test(disk); i++) { await win.waitForTimeout(200); disk = fs.readFileSync(notePath, 'utf8') }
     check('落盘的是纯文本双链', /收尾段落[\s\S]*\[\[window:\/\/com\.google\.Chrome\|Linear – Pricing\]\]/.test(disk), disk.slice(-120))
+
+    // ── 别的应用在前台时按双 ⌘,引用落到哪(10-14 用户定:光标在哪就落哪,没有就开新会话)──
+    helper.fireHotkey({ bundleId: 'com.apple.iWork.Numbers', app: 'Numbers', pid: 12, windowId: 201, title: '季度预算.numbers' })
+    for (let i = 0; i < 40 && !/\[\[window:\/\/com\.apple\.iWork\.Numbers\|季度预算\.numbers\]\]/.test(disk); i++) { await win.waitForTimeout(200); disk = fs.readFileSync(notePath, 'utf8') }
+    check('全局双 ⌘,光标停在笔记里:写到笔记的光标处', /Linear – Pricing\]\][\s\S]*\[\[window:\/\/com\.apple\.iWork\.Numbers\|季度预算\.numbers\]\]/.test(disk), disk.slice(-160))
+    const visibleCards = () => win.evaluate(() => [...document.querySelectorAll('[data-appref-target]')].filter((el) => el.getClientRects().length > 0).length)
+    const landed = (title) => win.locator('[data-appref-target] .attach-chip[data-ref-kind]', { hasText: title }).first()
+    await win.evaluate(() => document.activeElement?.blur())
+    const cardsBefore = await visibleCards()
+    helper.fireHotkey({ bundleId: 'com.apple.iWork.Keynote', app: 'Keynote', pid: 13, windowId: 301, title: 'Q4 路演.key' })
+    await landed('Q4 路演.key').waitFor({ timeout: 10_000 }).catch(() => {})
+    // 光标:输入框能用就落进去;这个台架在笔记 Space 里没连上假引擎时输入框是禁用的(禁用的框拿不到焦点,这是对的)
+    const fresh = { cardsBefore, chip: await landed('Q4 路演.key').isVisible(), ...await win.evaluate(() => ({
+      focused: !!document.activeElement?.closest('[data-appref-target]'),
+      taDisabled: [...document.querySelectorAll('[data-appref-target] textarea')].some((t) => t.getClientRects().length > 0 && t.disabled),
+    })) }
+    check('全局双 ⌘,光标不在哪、屏上也没有输入框:开新会话(Amadeus 里开在右侧对话面板),挂进它的「已选择」,光标落进输入框',
+      fresh.cardsBefore === 0 && fresh.chip && (fresh.focused || fresh.taDisabled), fresh)
+    await win.screenshot({ path: path.join(SHOT_DIR, `hotkey-newsession${tag}.png`) })
+    // 主窗关掉(= 收进托盘)以后按:窗口回来,引用照样落进输入框
+    const bw = await app.browserWindow(win)
+    await bw.evaluate((w) => w.close())
+    const hidden = !await bw.evaluate((w) => w.isVisible())
+    await win.evaluate(() => document.activeElement?.blur())
+    helper.fireHotkey({ bundleId: 'com.google.Chrome', app: 'Google Chrome', pid: 11, windowId: 101, title: 'Linear – Pricing' })
+    await landed('Linear – Pricing').waitFor({ timeout: 10_000 }).catch(() => {})
+    check('全局双 ⌘,主窗已关:窗口回来,引用进输入框', hidden && await bw.evaluate((w) => w.isVisible()) && await landed('Linear – Pricing').isVisible(), { hidden })
   } catch (err) {
     check(`台架中途抛错:${String(err.message || err).split('\n')[0]}`, false)
     if (app) await (await app.firstWindow()).screenshot({ path: path.join(SHOT_DIR, `fail${tag}.png`) }).catch(() => {})

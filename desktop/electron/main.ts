@@ -43,7 +43,7 @@ import { importMcp, importSkills, scanAll } from './discovery'
 import { checkForUpdates, downloadUpdate, installUpdate, canInstallUpdate, betaChannelOn, getUpdaterStatus } from './updater'
 import { createRestartGuard, readRestartActivity } from './restartGuard'
 import { createTray, refreshTrayMenu, setTrayIndicator, trayLang } from './tray'
-import { initMainLocale, mt } from './mainI18n'
+import { initMainLocale, mainLocale, mt } from './mainI18n'
 import { createUiLocaleSync, UI_LOCALE_FILE } from './uiLocaleSync' // P1-KF:主进程文案跟渲染层的生效语言
 import { createApprovalDelivery, engineFromBackend } from './approvalDelivery' // P1-K3
 import { APPROVAL_OPEN_CHANNEL } from '../shared/approvalOpen' // P1-K3
@@ -68,6 +68,7 @@ import { localModelReady, localModelSize, downloadLocalModel, removeLocalModel, 
 import { computerUseLiveView, helperSocketPath, askHelper, ensureHelperRunning, HelperLink } from './computerUse'
 import { createAppRefs } from './appRefs'
 import { createAppRefHotkey, frontToAppRef } from './appRefHotkey'
+import type { AppRef } from '../shared/appRefs'
 import { winAppIdOf } from './appRefsWin'
 import { appIconDataUrls } from './appIcons'
 import { chooseSide, makeRoom, panelRectFor, startDockFollow, DOCK_PANEL_WIDTH, DOCK_PANEL_MIN_WIDTH, DOCK_PANEL_MIN_HEIGHT, normalizeProbe } from './appDock'
@@ -1849,6 +1850,11 @@ let autoMiniWindow: BrowserWindow | null = null
 let autoMiniSessionId: string | null = null
 /** 最后获焦的 Forsion 窗口(自动 Mini 除外);自动 Mini 开场时快照成 autoMiniReturnTo,本轮跑完还给用户。 */
 let lastFocusedWindow: BrowserWindow | null = null
+/** 全局双 ⌘(应用 / 窗口引用,electron/appRefHotkey.ts):界面说要不要;这次运行问没问过更新助手;主窗关着时按下的那一条。 */
+let appRefGlobalWanted = false
+let appRefHelperAsked = false
+let pendingAppRefHotkey: { ref: AppRef; at: number } | null = null
+const APPREF_HOTKEY_PROTOCOL = 15
 let autoMiniReturnTo: BrowserWindow | null = null
 let stopMiniPassThrough: (() => void) | null = null
 /** Mini 尚在载入时也保留最后一次定向,`did-finish-load` 后补发,避免快速连续打开丢第二个目标。 */
@@ -2225,8 +2231,9 @@ app.whenReady().then(async () => {
   await registerStartupAppearance(isTrustedSender)
   const desktopPermissions = registerDesktopPermissions({
     isTrustedSender, computerUseAvailable: PRODUCT.agentBackend, returnToApp: showMainWindow,
-    // 电脑历史开着时,运行中的 helper 协议太老也判「需要更新」→ 权限卡的「更新并重启助手」把老进程换掉
-    requiredHelperProtocol: () => computerHistory?.requiredHelperProtocol(),
+    // 电脑历史开着时,运行中的 helper 协议太老也判「需要更新」→ 权限卡的「更新并重启助手」把老进程换掉。
+    // 全局双 ⌘(应用 / 窗口引用)开着时同理,要协议 15。
+    requiredHelperProtocol: () => Math.max(computerHistory?.requiredHelperProtocol() ?? 0, appRefGlobalWanted && process.platform === 'darwin' ? APPREF_HOTKEY_PROTOCOL : 0) || undefined,
   })
   // Windows 的本机助手 = CU 包里的 windows-bridge.exe 拷成 %LOCALAPPDATA% 下的私有副本再以常驻服务跑(绝不原地跑,见 computerHistoryWin.ts)。
   // 电脑历史和全局快捷键(应用 / 窗口引用)共用这一份解析:它带缓存,各建一份会各拷一遍。
@@ -3415,6 +3422,13 @@ app.whenReady().then(async () => {
       return rec && rec.protocol != null ? { path: rec.pipe, launch: () => launchWindowsRecorder(rec.exe, rec.pipe) } : null
     },
     ownPid: process.pid,
+    // 在跑的助手是旧版(不认这条命令):macOS 上请用户把它更新掉,一次运行只问一次。
+    // ponytail: 「稍后」只记到这次运行结束,每次启动还会问;嫌烦了再记进配置、隔几天再问。
+    onOutdated: () => {
+      if (process.platform !== 'darwin' || appRefHelperAsked) return
+      appRefHelperAsked = true
+      void desktopPermissions.updateHelperForHotkey(mainLocale())
+    },
     onFire: (front) => {
       void (async () => {
         const win = process.platform === 'win32'
@@ -3423,15 +3437,37 @@ app.whenReady().then(async () => {
         const ref = hit?.ref ?? await appRefs.frontmost(false).catch(() => null)
         if (!ref) return
         if (hit && ref.kind === 'window') appRefs.remember(ref.id, ref.name, hit.pid, hit.windowId)
-        const fresh = !mainWindow || mainWindow.isDestroyed() // 主窗关着:只把它开出来,页面还没起来,这一条引用不送
         if (!QUIET_WINDOWS) app.focus({ steal: true })
+        // 送到用户最后在用的那个 Forsion 窗口(独立窗 / Mini / App Dock 里也有输入框);它没了 / 不是应用页面才回主窗
+        const last = lastFocusedWindow && !lastFocusedWindow.isDestroyed() && /^(https?|file):/.test(lastFocusedWindow.webContents.getURL()) ? lastFocusedWindow : null
+        if (last && last !== mainWindow) {
+          if (last.isMinimized()) last.restore()
+          present(last)
+          last.webContents.send('appRefs:hotkey', ref)
+          return
+        }
+        const fresh = !mainWindow || mainWindow.isDestroyed()
         showMainWindow()
-        if (!fresh) mainWindow?.webContents.send('appRefs:hotkey', ref)
+        // 主窗关着:页面还没起来,先存着,渲染层装好快捷键时来取(取的时候没有输入框就开新会话)
+        if (fresh) pendingAppRefHotkey = { ref, at: Date.now() }
+        else mainWindow?.webContents.send('appRefs:hotkey', ref)
       })()
     },
   })
+  // 助手刚被换掉(权限页 / 上面那次更新做完):不等 5 分钟,当场重连
+  desktopPermissions.onHelperIdle(() => appRefHotkey.poke())
+  ipcMain.handle('appRefs:takePendingHotkey', (e) => {
+    if (!isTrustedSender(e)) return null
+    const p = pendingAppRefHotkey
+    pendingAppRefHotkey = null
+    return p && Date.now() - p.at < 30_000 ? p.ref : null
+  })
   // 界面说了算:快捷键还是「双 ⌘」才订阅;用户改成别的键 / 解绑了就断开
-  ipcMain.on('appRefs:globalHotkey', (e, on: unknown) => { if (isTrustedSender(e) && (process.platform === 'darwin' || process.platform === 'win32')) appRefHotkey.setWanted(on === true) })
+  ipcMain.on('appRefs:globalHotkey', (e, on: unknown) => {
+    if (!isTrustedSender(e) || (process.platform !== 'darwin' && process.platform !== 'win32')) return
+    appRefGlobalWanted = on === true
+    appRefHotkey.setWanted(appRefGlobalWanted)
+  })
 
   // ── Computer Use:最近被操控窗口的一帧画面(只读,不启动 helper;详见 electron/computerUse.ts)──
   ipcMain.handle('computerUse:liveView', (_e, opts?: { maxDimension?: number; quality?: number; activeWithinMs?: number; image?: boolean }) =>
