@@ -33,8 +33,13 @@ const messages = [{ id: 'fixture-message', role: 'model', content: 'Fixture repl
 async function main() {
   const preview = await startPreview(ROOT)
   await preview.ready()
+  const renames = []
   const stub = await startStubEngine({ sessions: [session('fixture-one', 'Fixture session one'), session('fixture-two', 'Fixture session two')], messages,
-    models: [{ id: 'fixture-model', name: 'Fixture model', provider: 'Fixture', source: 'forsion', modelType: 'llm' }] })
+    models: [{ id: 'fixture-model', name: 'Fixture model', provider: 'Fixture', source: 'forsion', modelType: 'llm' }],
+    override: async ({ path: url, method, body }) => {
+      if (url === '/agent/sessions/fixture-one' && method === 'PATCH') { const value = await body(); renames.push(value); return { ...session('fixture-one', value.title), ...value } }
+    },
+  })
   const browser = await chromium.launch({ executablePath: executable(), headless: true })
   try {
     for (const config of [{ width: 390, locale: 'zh-CN', mode: 'light' }, { width: 320, locale: 'en-GB', mode: 'dark' }]) {
@@ -128,6 +133,25 @@ async function main() {
         await page.waitForSelector('.mb-shell[data-nav="list"]')
       })
       await page.screenshot({ path: path.join(OUT, `sessions-${config.width}-${config.mode}.png`) })
+      await check('session menu action opens prompt and delivers rename; cancel preserves it', async () => {
+        await page.getByText('Fixture session one', { exact: true }).click({ button: 'right' })
+        await item('rename').click()
+        await page.waitForSelector('[data-browser-mobile-sheet="prompt"]')
+        await page.locator('#bmc-prompt').fill('Renamed fixture')
+        const before = renames.length
+        await sheet().locator('button[type="submit"]').click()
+        await page.getByText('Renamed fixture', { exact: true }).waitFor()
+        await page.waitForTimeout(150)
+        assert.equal(renames.length, before + 1)
+        assert.equal(renames.at(-1).title, 'Renamed fixture')
+        await page.getByText('Renamed fixture', { exact: true }).click({ button: 'right' })
+        await item('rename').click()
+        await page.waitForSelector('#bmc-prompt')
+        await page.locator('#bmc-prompt').fill('Discard this')
+        await closeSheet()
+        assert.equal(renames.length, before + 1)
+        assert(await page.getByText('Renamed fixture', { exact: true }).count())
+      })
       await check('view search and More use mobile actions; browser Back closes the sheet', async () => {
         await page.locator('[data-chrome-action="search"]').click()
         // QuickFind uses the shared command overlay.
@@ -157,6 +181,22 @@ async function main() {
         await page.waitForTimeout(100)
         await page.goBack()
         await page.waitForSelector('.settings-page--mobile', { state: 'detached' })
+      })
+      await check('Note retains mobile categories, search, note detail and return', async () => {
+        await page.locator('[data-chrome-action="spacesAll"]').click()
+        await item('space:amadeus').click()
+        await page.waitForSelector('.mb-shell[data-nav="list"]')
+        await page.waitForSelector('.amx-tree .pl-chips')
+        assert.equal(await page.locator('.amx-tree [data-filter="boards"]').count(), 1)
+        assert.equal(await page.locator('[data-chrome-action="search"]').count(), 1)
+        await page.locator('.amx-tree [data-filter="tree"]').click()
+        await page.getByText('Fixture note', { exact: true }).click()
+        await page.waitForSelector('.mb-shell[data-nav="detail"]')
+        await page.waitForSelector('.ProseMirror')
+        await page.locator('[data-chrome-action="left"]').click()
+        await page.waitForSelector('.mb-shell[data-nav="list"]')
+        assert.equal(await page.locator('.amx-tree .t2s-foot .t2s-special').count(), 1, 'Cloud vault management stays reachable')
+        await page.screenshot({ path: path.join(OUT, `notes-${config.width}-${config.mode}.png`) })
       })
       await check('return Home then browser Back leaves the app; no empty-page trap', async () => {
         await page.locator('.bmc-dock [data-space="home"]').click()
