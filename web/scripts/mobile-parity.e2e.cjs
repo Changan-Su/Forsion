@@ -86,6 +86,12 @@ async function main() {
         }
       }
       const sheet = () => page.locator('[data-browser-mobile-sheet]')
+      const shot = async (name) => { await page.waitForTimeout(650); await page.screenshot({ path: path.join(OUT, name) }) }
+      const listGeometry = async () => {
+        await page.waitForTimeout(650)
+        const value = await page.locator('.mb-drawer--left').evaluate((el) => { const r = el.getBoundingClientRect(); return { left: r.left, width: r.width, viewport: innerWidth } })
+        assert(Math.abs(value.left) < 1 && Math.abs(value.width - value.viewport) < 1, JSON.stringify(value))
+      }
       const closeSheet = () => page.locator('.bmc-sheet-head > button').last().click()
       const item = (id) => page.locator(`button.bmc-sheet-row[data-sheet-item="${id}"]`)
       await check('touch viewport automatically installs mobile dock', async () => {
@@ -99,7 +105,7 @@ async function main() {
       })
       await page.locator('.bmc-dock [data-space="home"]').click()
       await page.waitForSelector('.mb-shell[data-space="home"]')
-      await page.screenshot({ path: path.join(OUT, `home-${config.width}-${config.mode}.png`) })
+      await shot(`home-${config.width}-${config.mode}.png`)
       await check('all Spaces and dock picks stay usable and save on close', async () => {
         await page.locator('[data-chrome-action="spacesAll"]').click()
         await item('dock:edit').click()
@@ -132,8 +138,9 @@ async function main() {
         await page.waitForTimeout(150)
         await page.goBack()
         await page.waitForSelector('.mb-shell[data-nav="list"]')
+        await listGeometry()
       })
-      await page.screenshot({ path: path.join(OUT, `sessions-${config.width}-${config.mode}.png`) })
+      await shot(`sessions-${config.width}-${config.mode}.png`)
       await check('session menu action opens prompt and delivers rename; cancel preserves it', async () => {
         await page.getByText('Fixture session one', { exact: true }).click({ button: 'right' })
         await item('rename').click()
@@ -173,7 +180,7 @@ async function main() {
         assert.equal(await page.locator('[data-browser-mobile-chrome]').getAttribute('data-mode'), 'page')
         const header = await page.locator('[data-chrome-action="back"]').evaluate((el) => { const r = el.getBoundingClientRect(); return document.elementFromPoint((r.left+r.right)/2, (r.top+r.bottom)/2)?.closest('button') === el })
         assert(header, 'Back is not blocked by settings')
-        await page.screenshot({ path: path.join(OUT, `settings-${config.width}-${config.mode}.png`) })
+        await shot(`settings-${config.width}-${config.mode}.png`)
         await page.locator('.settings-mobile-row').filter({ has: page.locator('strong', { hasText: config.locale.startsWith('zh') ? /^外观$/ : /^Appearance$/ }) }).click()
         await page.waitForSelector('[data-chrome-action="close"]')
         await page.locator('[data-chrome-action="back"]').click()
@@ -195,8 +202,9 @@ async function main() {
         await page.waitForSelector('.ProseMirror')
         await page.locator('[data-chrome-action="left"]').click()
         await page.waitForSelector('.mb-shell[data-nav="list"]')
+        await listGeometry()
         assert.equal(await page.locator('.amx-tree .t2s-foot .t2s-special').filter({ hasText: config.locale.startsWith('zh') ? '云端智库' : 'Cloud vault' }).count(), 1, 'Cloud vault management stays reachable')
-        await page.screenshot({ path: path.join(OUT, `notes-${config.width}-${config.mode}.png`) })
+        await shot(`notes-${config.width}-${config.mode}.png`)
       })
       await check('return Home then browser Back leaves the app; no empty-page trap', async () => {
         await page.locator('.bmc-dock [data-space="home"]').click()
