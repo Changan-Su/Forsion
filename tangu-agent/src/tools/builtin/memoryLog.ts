@@ -15,6 +15,17 @@ import { compactProjectMemory, type CompactionOutcome } from '../../services/pro
  *  41 条显式条目最长 1,477 字、21 条带日期、9 条是追加式「更正旧条目」——记忆被日志灌满,而候选路径 12 天只出 8 条一句话。 */
 export const REMEMBER_FACT_MAX_CHARS = 300;
 const entryView = (e: MemoryEntry) => ({ id: e.id, content: e.content });
+/** 版本号抄错的判据:与现在的版本相差不超过几处编辑(10-13 那次是 4 处)。两个随机 UUID 之间通常差 25 处以上。 */
+const MISCOPY_MAX_EDITS = 8;
+function editDistance(a: string, b: string): number {
+  let prev = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i++) {
+    const cur = [i];
+    for (let j = 1; j <= b.length; j++) cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    prev = cur;
+  }
+  return prev[b.length];
+}
 
 // ── 注入依赖的 lazy 别名(保持下方调用点不变)──
 const appendMemoryEntry = (userId: string, text: string, opts?: { dedup?: boolean; cap?: number; signal?: AbortSignal }) =>
@@ -142,10 +153,29 @@ export const memoryLogProvider: ToolProvider = {
           };
           const write = async (m = mutation): Promise<MemorySnapshot> => projectRepo ? projectRepo.mutate({ ...m, cap: PROJECT_MEMORY_CHAR_BUDGET }) : brain.mutateMemory!(ctx.userId, m);
           const isFull = (e: unknown): boolean => e instanceof MemoryRepositoryError && e.code === 'MEMORY_FULL';
+          // 版本冲突里分出「抄错了」:10-13 live 里模型把 list 回执的 36 位版本号抄串两位,两次都被回「记忆已变」,最后告诉用户没改成。
+          // 带来的号和现在的版本只差几个字符 → 是照着现在这份抄错了,不是读的时候还是别的版本(随机 UUID 之间差三十来位):
+          // 回现在的版本和这一条现在的原文,让模型看过再重试。差得远 → 真冲突或读得太早,照旧抛出去(重新 list、重新看)。
+          // CAS 不放松:不替模型改号,重试照样要带对的版本。
+          const miscopiedVersion = async (): Promise<string | null> => {
+            const given = mutation.expectedVersion;
+            if (action === 'add' || !given || given.length > 64) return null;
+            const now = await read();
+            if (!now || given === now.version || editDistance(given, now.version) > MISCOPY_MAX_EDITS) return null;
+            const target = now.entries.find((e) => e.id === mutation.id);
+            const scoped = projectRepo ? `, scope "project"` : '';
+            return `Error: expectedVersion ${JSON.stringify(given)} is not a version of this memory; it differs from the current version by a few characters, so it was probably copied wrong. Nothing was written. ` +
+              `The current version is ${JSON.stringify(now.version)}. ` +
+              (target
+                ? `Entry ${JSON.stringify(target.id)} currently reads ${JSON.stringify(target.content)}. If that is still the entry you meant to ${action}, retry with exactly this expectedVersion${scoped}; otherwise list again.`
+                : `There is no entry with id ${JSON.stringify(mutation.id)}; list again${scoped} and use an ID from it.`);
+          };
           let snapshot: MemorySnapshot | undefined;
           let compacted: Extract<CompactionOutcome, { status: 'compacted' }> | undefined;
           let fullError: unknown;
           try { snapshot = await write(); } catch (e) {
+            const misread = e instanceof MemoryRepositoryError && e.code === 'MEMORY_VERSION_CONFLICT' ? await miscopiedVersion() : null;
+            if (misread) return misread;
             if (!isFull(e)) throw e;
             fullError = e;
             // 项目记忆写满(10-05 用户:「记忆满了就让 agent 压缩一下」):先让模型把整份压一遍,再记这一句。agent 级不走这条(那边有 Dream)。
