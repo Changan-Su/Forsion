@@ -2810,12 +2810,14 @@ export const useApp = create<AppState>((set, get) => ({
       // (引擎 ≥ 本版 POST 接 agent_config;老引擎忽略该字段 → 回来的 agent_config 为空,再补一次 PUT):
       // 补 PUT 失败会留下没有 preset/execMode 的 chat 会话,重载后被当 work 初始化(creview 09-07 F2)。
       const sticky = stickyDefaults(get().desktopConfig, !!path, preset)
-      // 项目默认项(PROJECT 详情里定的,本机):只对用户自己添加的本地项目生效,夹在「上次用的档位」之上;等一次本地 GET 无妨,这里是按钮点击。
-      const projectDefaults = path && isProjectWorkspace(ws) ? projectDefaultsForNewSession(await get().ensureProjectSettings(path).catch(() => null), get().teams) : { config: {} }
       // 模型当场固化,与 send() 同一条回退链(项目默认 → 记忆 → 目录缺省):不传的话引擎按**启动时**读到的缺省模型落库
       // (profile.defaultModelId 不跟着 config.json 变),之后在会话里换过的模型要到重启才对这里建出来的会话生效。
       // 空白新对话草稿里的 newChatModel 不算 —— 那是给下一条空态消息的,这里也不吃草稿的 Agent / 档位。
-      const model_id = projectDefaults.model || newChatModelId({ ...get(), newChatModel: null })
+      // 回退那份和 loc 一起在等项目默认项**之前**取:等的空当里焦点换到别的电脑,读到的会是那台的模型(Codex 评审 10-14)。
+      const fallbackModel = newChatModelId({ ...get(), newChatModel: null })
+      // 项目默认项(PROJECT 详情里定的,本机):只对用户自己添加的本地项目生效,夹在「上次用的档位」之上;等一次本地 GET 无妨,这里是按钮点击。
+      const projectDefaults = path && isProjectWorkspace(ws) ? projectDefaultsForNewSession(await get().ensureProjectSettings(path).catch(() => null), get().teams) : { config: {} }
+      const model_id = projectDefaults.model || fallbackModel
       // 回来即绑定 loc(路由真源),插列表前经 withLocation 打标
       const base = applyPreset(path
         ? { ...newSessionConfig(sticky, projectDefaults.config), execMode: 'host', cwd: path }

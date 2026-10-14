@@ -753,6 +753,20 @@ describe('appStore.send 新会话固化模型', () => {
     expect(useApp.getState().sessions.find((x) => x.id === 's-plus')?.model_id).toBe('remembered-model')
   })
 
+  // 等项目默认项的空当里焦点换到别的电脑(模型记忆随之换成那台的):回退模型要在等之前和 loc 一起定下(Codex 评审 10-14)
+  it('newSession 等项目默认项期间模型记忆变了 → 仍用按下时的那个', async () => {
+    useApp.setState({
+      desktopMode: 'managed', defaultWsDir: '/default', sessionMode: 'work', newChatModel: null,
+      ensureProjectSettings: async () => { useApp.setState((s) => ({ cfg: { ...s.cfg, modelId: 'other-computer-model' } })); return null },
+    } as Partial<AppState>)
+    createSessionMock.mockImplementation((_cfg: unknown, init: { model_id?: string }) =>
+      Promise.resolve(created('s-race', init?.model_id ?? 'engine-boot-default')))
+
+    await useApp.getState().newSession()
+
+    expect(createSessionMock.mock.calls[0][1]).toMatchObject({ model_id: 'remembered-model', project_path: '/default' })
+  })
+
   // newChatModel 排在记忆前面,发出去之后也不清:在会话里又换了模型(= 新的记忆)之后,它不能再压着新选的那个。
   it('在会话里换模型 → 清掉空白新对话草稿里更早选的模型;Agent 预设带来的模型(remember=false)不动它', () => {
     const setConfig = vi.fn(() => Promise.resolve())
