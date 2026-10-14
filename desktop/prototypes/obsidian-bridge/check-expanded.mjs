@@ -1,6 +1,12 @@
 import { Window } from "happy-dom";
 import { readFile, readdir } from "node:fs/promises";
 import assert from "node:assert/strict";
+import { nativeHotkeys } from "./src/hotkeys.js";
+assert.deepEqual(nativeHotkeys([{modifiers:["Mod", "Shift"], key:"n"}, {modifiers:["Ctrl"], key:" "}], true), ["meta+shift+n", "ctrl+space"]);
+assert.deepEqual(nativeHotkeys([{modifiers:["Mod"], key:"n"}], false), ["ctrl+n"]);
+assert.deepEqual(nativeHotkeys([{modifiers:["Hyper"], key:"n"}, {modifiers:[], key:"+"}], true), []);
+let nativeCommands = [];
+
 const root = new URL("./plugin/", import.meta.url);
 const win = new Window({ settings: { enableJavaScriptEvaluation: true } });
 win.structuredClone = structuredClone;
@@ -24,6 +30,8 @@ try {
   win.eval(await readFile(new URL("runtime.js", root), "utf8"));
   const r = await win.ForsionObsidianBridge.start({
     locale: "en",
+    isMac: true,
+    onCommands: list => { nativeCommands = list; },
     vaultRoot: () => "/fixture",
     loadData: async () => store || null,
     saveData: async (v) => {
@@ -75,6 +83,8 @@ try {
   await new Promise((resolve) => setTimeout(resolve, 200));
   console.log(JSON.stringify(r.diagnostics(), null, 2));
   assert.equal(r.diagnostics().plugins.filter((p) => p.alive).length, 6);
+  assert.deepEqual(Array.from(nativeCommands.find(c => c.plugin === "note-refactor-obsidian" && c.id === "app:extract-selection-first-line").hotkeys), ["meta+shift+n"]);
+  console.log("PASS original Note Refactor defaults reach native commands");
   text = "Zebra\nApple\nBanana\nApple\n";
   files.set(path, "---\nkeep: unchanged\n---\n" + text);
   await r.app.vault.read(r.app.vault.getFileByPath(path));

@@ -138,6 +138,10 @@ export interface Command {
   keywords?: string
   /** 形如 'mod+k' / 'mod+shift+p';mod = mac⌘ / 其它 Ctrl。 */
   hotkey?: string
+  /** Additional default bindings; a user override replaces all defaults, including an empty unbind. */
+  hotkeys?: readonly string[]
+  /** Synchronous keyboard-only guard. Return false to leave the event to other commands. */
+  hotkeyWhen?: (event: KeyboardEvent) => boolean
   /** 命令面板行首 + 钉进 ribbon 命令区时的图标;缺省用通用图标。 */
   icon?: LucideIcon
   /** agent 面 opt-in(见 CommandInvoke)。不声明 = 模型看不见这条命令。 */

@@ -10,6 +10,18 @@ const start = async (text: string) => { b = await bootEditor(text); b.view.updat
 afterEach(async () => { await b?.destroy() })
 const capture = (valid = () => true) => captureMarkdownEdit({ path: 'Note.md', view: b.view, valid, parse: b.parse, serialize: b.savedNode })!
 describe('native plugin Markdown transactions', () => {
+  it('checks queued snapshots without consuming them, and rejects changed selections', async () => {
+    await start('Hello world\n')
+    const edit = capture()
+    expect(edit.isCurrent?.()).toBe(true)
+    expect(edit.isCurrent?.()).toBe(true)
+    b.view.dispatch(b.view.state.tr.setSelection(TextSelection.create(b.view.state.doc, 3)))
+    expect(edit.isCurrent?.()).toBe(false)
+    expect(edit.apply({ text: 'wrong note' })).toBe(false)
+    const next = capture()
+    expect(next.apply({ text: 'Changed\n' })).toBe(true)
+    expect(next.isCurrent?.()).toBe(false)
+  })
   it('inserts a column without shifting cell contents; keeps surrounding blocks and undo', async () => {
     const source='# Budget\n\n| Item | Cost |\n| --- | --- |\n| Apple | 3 |\n| Pear | 5 |\n\nTail\n'
     await start(source)

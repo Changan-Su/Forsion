@@ -1,3 +1,4 @@
+import { installShortcutCatalog } from './shortcutCatalog'
 import { amadeusAvailable } from './features/runtime'
 /** 桌面壳的 Amadeus 插件装载(vendored pluginStore 保持与独立版同构,桌面差异全部收在这里):
  *  - 选择性安装 builtins:callout 标注 + 字数统计。跳过 core-commands(指向未挂载的 Amadeus 面板/与壳重复)、
@@ -36,6 +37,7 @@ function enqueueReconcile<T>(job: () => Promise<T>): Promise<T> {
 export function installAmadeusPlugins(): void {
   if (installed) return
   installed = true
+  installShortcutCatalog()
   syncPluginViews() // 插件视图桥先就位:随后的 init/loadExternal 里注册的视图第一时间进 LCL 注册表
   installPluginStatusBridge() // 状态条项桥同理(→ 全局状态栏)
   if (amadeusAvailable()) installAmadeusAutomationBridge() // Amadeus「按钮」块 → 本地引擎自动化(云端/移动端不注册=按钮显示不支持)
@@ -111,7 +113,7 @@ export function installAmadeusPlugins(): void {
         : undefined
       // ⚠️ 这里是**逐字段重建**,不是透传 —— 给 CommandContribution 加字段必须同步加到这一行,
       //    否则插件声明了也永远到不了命令表(2026-09-04 加 invoke 时踩点)。
-      addCommand({ id, title: o.item.title, keywords: o.item.keywords, run: o.item.run, invoke: o.item.invoke, checked: o.item.checked, ...(moreGroup ? { moreGroup } : {}) })
+      addCommand({ id, title: o.item.title, keywords: o.item.keywords, hotkey: o.item.hotkey, hotkeys: o.item.hotkeys, hotkeyWhen: o.item.hotkeyWhen, run: o.item.run, invoke: o.item.invoke, checked: o.item.checked, ...(moreGroup ? { moreGroup } : {}) })
     }
   }
   sync()

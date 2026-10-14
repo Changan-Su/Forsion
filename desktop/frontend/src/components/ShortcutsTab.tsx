@@ -4,17 +4,20 @@
  */
 import React, { useState } from 'react'
 import { Keyboard, RotateCcw, Search, X } from 'lucide-react'
-import { useCommandStore, useShortcuts, eventToHotkey, formatHotkey, isModPair, MOD_PAIR } from '@lcl/engine'
+import { useCommandStore, useShortcuts, eventToHotkey, formatHotkey, hotkeysConflict, isModPair, MOD_PAIR } from '@lcl/engine'
 import { useI18n } from '../i18n'
+import { useShortcutCatalog } from '../shortcutCatalog'
 import { SettingsPanel } from './SettingsPrimitives'
 
 const isMac = (): boolean => { try { return document.documentElement.dataset.platform === 'mac' } catch { return false } }
 
-interface Row { id: string; title: string; def: string }
+interface Row { id: string; title: string; def: string[] }
 
 export const ShortcutsTab: React.FC = () => {
   const { t } = useI18n()
   const commands = useCommandStore((s) => s.commands)
+  const sharedCommands = useShortcutCatalog(s => s.commands)
+  const catalog = [...sharedCommands.filter(c => !commands.some(local => local.id === c.id)), ...commands]
   const overrides = useShortcuts((s) => s.overrides)
   const { setOverride, clearOverride, resetAll, setRecording } = useShortcuts.getState()
   const [recId, setRecId] = useState<string | null>(null)
@@ -24,16 +27,16 @@ export const ShortcutsTab: React.FC = () => {
 
   // 命令面板是引擎内置(非注册命令),作伪命令排首位;其余跟随注册命令。
   const rows: Row[] = [
-    { id: 'command-palette', title: t('settings.shortcuts.commandPalette'), def: 'mod+k' },
-    ...commands.map((c) => ({ id: c.id, title: typeof c.title === 'function' ? c.title() : c.title, def: c.hotkey || '' })),
+    { id: 'command-palette', title: t('settings.shortcuts.commandPalette'), def: ['mod+k'] },
+    ...catalog.map((c) => ({ id: c.id, title: typeof c.title === 'function' ? c.title() : c.title, def: [...new Set([c.hotkey, ...(c.hotkeys || [])].filter((key): key is string => !!key))] })),
   ]
-  const effOf = (r: Row): string =>
-    Object.prototype.hasOwnProperty.call(overrides, r.id) ? (overrides[r.id] || '') : r.def
+  const effOf = (r: Row): string[] =>
+    Object.prototype.hasOwnProperty.call(overrides, r.id) ? (overrides[r.id] ? [overrides[r.id]] : []) : r.def
   const isCustomized = (r: Row): boolean =>
-    Object.prototype.hasOwnProperty.call(overrides, r.id) && (overrides[r.id] || '') !== r.def
+    Object.prototype.hasOwnProperty.call(overrides, r.id) && JSON.stringify(effOf(r)) !== JSON.stringify(r.def)
   const visibleRows = rows.filter((r) => {
     const q = query.trim().toLowerCase()
-    return !q || r.title.toLowerCase().includes(q) || r.id.toLowerCase().includes(q) || effOf(r).toLowerCase().includes(q)
+    return !q || r.title.toLowerCase().includes(q) || r.id.toLowerCase().includes(q) || effOf(r).some(hk => hk.toLowerCase().includes(q))
   })
 
   const stopRecord = (): void => { setRecId(null); setRecording(false) }
@@ -46,8 +49,9 @@ export const ShortcutsTab: React.FC = () => {
     const hk = isModPair(e.nativeEvent) ? MOD_PAIR : eventToHotkey(e.nativeEvent)
     if (!hk || !recId) return // 纯修饰键 → 继续等
     // 唯一性:同热键已绑到别的命令 → 把那个解绑(显式空串),避免出现永不触发的死键。
-    const conflict = rows.find((r) => r.id !== recId && effOf(r) === hk)
-    if (conflict) { setOverride(conflict.id, ''); setNote(t('settings.shortcuts.reassigned', { name: conflict.title })) }
+    const conflicts = rows.filter((r) => r.id !== recId && effOf(r).some(other => hotkeysConflict(other, hk)))
+    for (const conflict of conflicts) setOverride(conflict.id, '')
+    if (conflicts.length) setNote(t('settings.shortcuts.reassigned', { name: conflicts.map(r => r.title).join(', ') }))
     setOverride(recId, hk)
     stopRecord()
   }
@@ -84,7 +88,7 @@ export const ShortcutsTab: React.FC = () => {
                   />
                 ) : (
                   <button type="button" className="shortcut-key" onClick={() => startRecord(r.id)} title={t('settings.shortcuts.record')}>
-                    {eff ? formatHotkey(eff, mac) : <span className="shortcut-unbound">{t('settings.shortcuts.unbound')}</span>}
+                    {eff.length ? eff.map(hk => formatHotkey(hk, mac)).join(' / ') : <span className="shortcut-unbound">{t('settings.shortcuts.unbound')}</span>}
                   </button>
                 )}
                 {isCustomized(r) && recId !== r.id && (
@@ -92,7 +96,7 @@ export const ShortcutsTab: React.FC = () => {
                     <RotateCcw size={13} />
                   </button>
                 )}
-                {eff && recId !== r.id && (
+                {eff.length > 0 && recId !== r.id && (
                   <button type="button" className="icon-btn" style={{ width: 26, height: 26 }} title={t('settings.shortcuts.clear')} onClick={() => setOverride(r.id, '')}>
                     <X size={13} />
                   </button>

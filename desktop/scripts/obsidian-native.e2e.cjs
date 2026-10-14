@@ -16,8 +16,10 @@ async function open(p){await win.evaluate(p=>window.__nativeProbe.app.openNote(p
 async function snapshot(){return win.evaluate(()=>{const e=window.__nativeProbe.app.captureEditor();return e&&{path:e.path,text:e.text,anchor:e.anchor,head:e.head}})}
 async function command(id){await win.getByRole('button',{name:'命令面板 (⌘K)',exact:true}).click();await win.waitForTimeout(150);await win.locator('.cmd-input').fill(id.split(':').slice(1).join(':'));await win.locator(`[data-command-id$="obsidian-bridge:${id}"]`).click();await win.waitForTimeout(200)}
 async function shot(name){await win.screenshot({path:path.join(ART,name+'.png')})}
+// Enumerate all actual app windows: macOS can transiently omit an otherwise valid window from OnScreenOnly.
+// Exclude menu-bar helper surfaces by height, retaining native main/settings windows even on another Space.
 async function quiet(){
- const jxa="ObjC.import('CoreGraphics'); function run(a) { return JSON.stringify(ObjC.deepUnwrap(ObjC.castRefToObject($.CGWindowListCopyWindowInfo($.kCGWindowListOptionOnScreenOnly, 0))).filter(w => w.kCGWindowOwnerPID == a[0]).map(w => [w.kCGWindowLayer, w.kCGWindowBounds.Width])) }"
+ const jxa="ObjC.import('CoreGraphics'); function run(a) { return JSON.stringify(ObjC.deepUnwrap(ObjC.castRefToObject($.CGWindowListCopyWindowInfo($.kCGWindowListOptionAll, 0))).filter(w => w.kCGWindowOwnerPID == a[0] && w.kCGWindowBounds.Height > 200).map(w => [w.kCGWindowLayer, w.kCGWindowBounds.Width, !!w.kCGWindowIsOnscreen])) }"
  const layers=JSON.parse(execFileSync('osascript',['-l','JavaScript','-e',jxa,String(app.process().pid)],{encoding:'utf8'}))
  const focused=await app.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows().some(w=>w.isFocused()))
  check('Electron native layer -1; no OS focus',layers.some(([l,w])=>l===-1&&w>=880)&&layers.filter(([,w])=>w>=880).every(([l])=>l===-1)&&!focused,{layers,focused})
@@ -36,6 +38,7 @@ async function main(){
  fs.writeFileSync(path.join(vault,'Tables.md'),'# Budget\n\n| Item | Cost |\n| --- | --- |\n| Apple | 3 |\n| Pear | 5 |\n')
  fs.writeFileSync(path.join(vault,'Refactor.md'),'# Source\n\nExtracted experiment\nA complete preserved paragraph.\n\nKeep this tail.\n')
  fs.writeFileSync(path.join(vault,'Auto.md'),'# Automatic notebook\n\n## First observation\n\nSome text.\n')
+ fs.writeFileSync(path.join(vault,'QueuedOther.md'),'Zulu\nBeta\nAlpha\n')
  fs.writeFileSync(path.join(vault,'Other.md'),'# Other\n\nDo not change this note.\n')
  const otherHash=hash(path.join(vault,'Other.md'))
  const ud=path.join(home,'userdata-dev');fs.mkdirSync(ud,{recursive:true});fs.writeFileSync(path.join(ud,'amadeus-config.dev.json'),JSON.stringify({lastVault:vault,localVault:vault}))
@@ -45,7 +48,7 @@ async function main(){
  stub=await startStubEngine({sessions:[],messages:[],models:[]})
  app=await electron.launch({...(process.env.STAGE_ELECTRON?{executablePath:process.env.STAGE_ELECTRON}:{}),args:[`--user-data-dir=${path.join(home,'userdata')}`,'--lang=zh-CN',ROOT],cwd:ROOT,env:{...process.env,TANGU_HARNESS_QUIET:'1',TANGU_HOME:home,TANGU_BACKEND_URL:stub.url,FORSION_WORKSPACE_DIR:path.join(home,'workspace')}})
  win=await app.firstWindow();win.on('console',m=>{if(m.type()==='error')console.error('RENDERER',m.text().slice(0,800))});win.on('pageerror',e=>{errors.push(String(e));console.error('PAGEERROR',String(e))})
- await app.evaluate(({BrowserWindow})=>{for(const w of BrowserWindow.getAllWindows()){w.setAlwaysOnTop(true,'normal',-1);w.setSize(1380,940)}})
+ await app.evaluate(({BrowserWindow,app})=>{app.on('browser-window-created',(_event,w)=>w.setAlwaysOnTop(true,'normal',-1));for(const w of BrowserWindow.getAllWindows()){w.setAlwaysOnTop(true,'normal',-1);w.setSize(1380,940)}})
  await win.waitForSelector('#root');await win.waitForTimeout(1700)
  for(const label of ['跳过引导','Skip']){const b=win.getByText(label,{exact:true}).first();if(await b.isVisible().catch(()=>false)){await b.click();break}}
  await win.waitForFunction(()=>!!window.__nativeProbe)
@@ -151,10 +154,50 @@ async function main(){
  await shot('10-native-tables')
  await open('Refactor.md');const extract=win.locator('.ProseMirror:visible p').filter({hasText:'Extracted experiment'}).first();await extract.click();await extract.evaluate(el=>{window.getSelection().selectAllChildren(el);document.dispatchEvent(new Event('selectionchange'))})
  await until(async()=>{const e=await snapshot();return e.anchor!==e.head})
- await command('note-refactor-obsidian:app:extract-selection-first-line')
+ await win.keyboard.press('Meta+Shift+n')
  await until(()=>fs.existsSync(path.join(vault,'Extracted experiment.md'))&&disk('Refactor.md').includes('[[Extracted experiment]]'))
- check('Note Refactor creates a real vault note and replaces native selection with its link',disk('Extracted experiment.md').includes('A complete preserved paragraph.')&&disk('Refactor.md').includes('Keep this tail.'))
+ check('Note Refactor original default hotkey creates a vault note and replaces native selection with its link',disk('Extracted experiment.md').includes('A complete preserved paragraph.')&&disk('Refactor.md').includes('Keep this tail.'))
  await open('Refactor.md');await shot('11-native-refactor')
+
+ // Change an original command through the separate native settings window, then dispatch in the note.
+ const settingsOpened=app.waitForEvent('window');await win.keyboard.press('Meta+Comma');const settings=await settingsOpened
+ await settings.waitForSelector('.settings-main');await settings.locator('.settings-nav').getByRole('button',{name:'快捷键',exact:true}).click()
+ await settings.getByPlaceholder('搜索命令或快捷键').fill('sort-alphabetically')
+ const shortcut=settings.locator('.shortcut-row').filter({has:settings.getByText('Obsidian · Sort and Permute lines: Sort alphabetically',{exact:true})})
+ await shortcut.waitFor();check('Native settings window lists Bridge child commands',await shortcut.count()===1)
+ await shortcut.locator('.shortcut-key').click();await settings.locator('.shortcut-capture').press('F6')
+ await settings.screenshot({path:path.join(ART,'13-native-hotkeys.png')});await quiet()
+ await open('Sort.md');await win.locator('.ProseMirror:visible').first().click();await win.keyboard.press('F6')
+ await until(()=>disk('Sort.md').includes('Apple\nApple\nBanana\nZebra'))
+ check('Settings-window custom binding immediately runs original Sort in the main editor',disk('Sort.md').startsWith('---\nkeep: unchanged\n---'))
+ await win.keyboard.press('Meta+z');await until(()=>disk('Sort.md').includes('Zebra\nApple'))
+ await win.getByRole('button',{name:'命令面板 (⌘K)',exact:true}).click();await win.locator('.cmd-input').fill('plain text');await win.keyboard.press('F6');await win.keyboard.press('Escape');await wait(300)
+ check('Plugin hotkey leaves a search input and native note untouched',disk('Sort.md').includes('Zebra\nApple'))
+ await shortcut.getByTitle('解绑',{exact:true}).click();await wait(150)
+ await win.locator('.ProseMirror:visible').first().click();await win.keyboard.press('F6');await wait(300)
+ check('Unbind in settings stops the main-window shortcut',disk('Sort.md').includes('Zebra\nApple'))
+ await shortcut.locator('.shortcut-key').click();await settings.locator('.shortcut-capture').press('F6');await wait(150)
+
+ // Synthetic queue blocker only; the queued editing operation is the untouched original Sort command.
+ await frame.evaluate(async()=>{
+   const plugin=window.bridge.app.plugins.plugins['obsidian-sort-and-permute-lines'];
+   plugin.addCommand({id:'acceptance-hold',name:'Acceptance queue blocker',callback:()=>new Promise(resolve=>window.releaseQueueHold=resolve)});
+   window.queueHold=window.bridge.run('obsidian-sort-and-permute-lines','acceptance-hold');
+   while(!window.releaseQueueHold)await new Promise(resolve=>setTimeout(resolve,1));
+   window.queueOutcome=window.bridge.run('obsidian-sort-and-permute-lines','sort-alphabetically').then(()=>({ok:true}),error=>({ok:false,error:String(error)}));
+ })
+ await open('QueuedOther.md');await frame.evaluate(()=>window.releaseQueueHold());
+ const queueOutcome=await frame.evaluate(()=>window.queueOutcome)
+ check('Queued original Sort rejects a note switch before executing',!queueOutcome.ok&&/changed while.*queued/.test(queueOutcome.error)&&disk('QueuedOther.md')==='Zulu\nBeta\nAlpha\n',queueOutcome)
+ await open('Sort.md')
+ await palette('Obsidian Bridge');await frame.locator('[data-plugin=obsidian-sort-and-permute-lines] [data-action=toggle-plugin]').click();await frame.locator('[data-action=back-to-note]').click()
+ await until(async()=>await shortcut.count()===0)
+ await win.locator('.ProseMirror:visible').first().click();await win.keyboard.press('F6');await wait(300)
+ check('Disable removes the child command from both dispatch and settings catalog',disk('Sort.md').includes('Zebra\nApple'))
+ await palette('Obsidian Bridge');await frame.locator('[data-plugin=obsidian-sort-and-permute-lines] [data-action=toggle-plugin]').click();await frame.locator('[data-action=back-to-note]').click()
+ await shortcut.waitFor();await win.locator('.ProseMirror:visible').first().click();await win.keyboard.press('F6');await until(()=>disk('Sort.md').includes('Apple\nApple\nBanana\nZebra'))
+ check('Re-enable restores the saved native shortcut binding',disk('Sort.md').includes('Apple\nApple\nBanana\nZebra'))
+ await settings.close()
  await open('Auto.md');await palette('Obsidian Bridge');await frame.locator('[data-plugin=number-headings-obsidian] [data-action=settings]').click()
  await frame.getByRole('checkbox',{name:'Automatic numbering',exact:true}).check();await frame.evaluate(()=>window.bridge.flush());await frame.locator('[data-action=back-to-note]').click()
  await until(()=>disk('Auto.md').includes('## 1.1 First observation'))

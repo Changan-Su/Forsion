@@ -1,8 +1,8 @@
 # Obsidian Bridge — Desktop 原型 / Desktop prototype
 
-0.3 将六个原始 Obsidian 插件的编辑命令接到当前 **Amadeus 原生可视编辑器**。正文、选区、撤销和磁盘保存由原生编辑器持有；Bridge 管理面板只负责原包和设置。
+0.4 将六个原始 Obsidian 插件的编辑命令接到当前 **Amadeus 原生可视编辑器**。正文、选区、撤销和磁盘保存由原生编辑器持有；Bridge 管理面板只负责原包和设置。
 
-Version 0.3 runs six original Obsidian plugins against the active **native Amadeus visual editor**.
+Version 0.4 runs six original Obsidian plugins against the active **native Amadeus visual editor**.
 Amadeus owns the document, selection, undo and save pipeline. Bridge manages packages and settings.
 
 选中笔记正文，点击左下角 **命令面板 (⌘K)** 按钮，搜索 `Obsidian`，选择插件命令。
@@ -114,6 +114,24 @@ checks. A failed extraction keeps the source selection. Extraction is not a cros
 if a new note was created successfully but the source changed before commit, the new note remains and
 source replacement is refused. All source content is retained.
 
+## 快捷键 / Hotkeys (0.4)
+
+原包声明的默认快捷键进入原生命令系统。在 **设置 → 快捷键** 搜索插件命令即可改键或解绑；设置窗口的修改立即同步到主窗口。禁用子插件会移除其命令，重新启用保留用户键位。
+
+Original default hotkeys join the native command system. Search a plugin command in **Settings → Shortcuts**
+to rebind or unbind it; settings-window changes apply immediately in the main window. Disabling removes
+commands; re-enabling retains user bindings. Multiple defaults are displayed and replaced together by a
+user override. Exact Ctrl and Meta remain distinct. Native handled keys take priority.
+
+当前 Bridge 快捷键只在原生笔记正文响应，不在搜索框、设置输入框或管理弹窗中执行；默认禁止按住重复执行，除非原包声明 repeatable。IME 组合输入不触发。
+
+Bridge shortcuts currently require a native editable note body, and do not run in search/settings inputs
+or the manager. Held keys repeat only when the original command declares `repeatable`; IME composition
+is ignored. This does not implement Obsidian Scope stacks or CodeMirror keymaps.
+
+See the versioned [compatibility matrix](COMPATIBILITY.md) and [machine-readable source](compatibility.json)
+for capabilities, evidence and unfinished Goal work. No claim of majority ecosystem compatibility is made.
+
 ## 当前边界 / Limits
 
 - 六个原包的指定操作已验收；不代表这些插件全部功能或大部分 Obsidian 生态已兼容。
@@ -180,3 +198,17 @@ The focused 0.3 Codex review identified four issues, all repaired with regressio
 read baseline for CAS, propagate child-plugin epoch through asynchronous reads/writes, resume awaited
 timers inside their own operation, and isolate malformed YAML per file. Disabling also cancels a pending
 command so a cleared timer cannot leave the command queue stuck.
+
+## 0.4 验收 / Hotkey acceptance
+
+`node prototypes/obsidian-bridge/report-compatibility.mjs` generates the bilingual HTML acceptance
+report from the current real Electron results, screenshots and compatibility matrix. Native shortcut
+coverage includes original Note Refactor default extraction, changing Sort's binding in the separate
+settings window, dispatch in the main editor, search-field exclusion, unbind, disable and re-enable.
+Shared command tests cover multiple defaults, exact modifiers, composition, recording and cleanup.
+
+Focused review regressions are retained: queued commands keep their dispatch-time native snapshot and
+reject note/selection/instance changes before execution; disabling removes commands before asynchronous
+settings persistence; rescanning withdraws all hotkeys before package enumeration and checks readiness
+before consuming a key. `check-native.mjs` exercises delayed queue/save/scan cases; native Electron
+acceptance verifies an original queued Sort command cannot move to another note.

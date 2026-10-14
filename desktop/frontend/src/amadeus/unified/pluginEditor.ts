@@ -57,12 +57,13 @@ export function captureMarkdownEdit(opts: {
   const anchor = sourceOffset(view, selection.anchor, serialize, text, parse)
   const head = selection.empty ? anchor : sourceOffset(view, selection.head, serialize, text, parse)
   let used = false
+  const isCurrent = (): boolean => !used && valid() && view.editable && view.state.doc === doc && view.state.selection.eq(selection)
   return {
-    path: opts.path, text, anchor, head,
+    path: opts.path, text, anchor, head, isCurrent,
     apply(change) {
-      if (used) return false
+      const current = isCurrent()
       used = true
-      if (!valid() || !view.editable || view.state.doc !== doc || !view.state.selection.eq(selection)) return false
+      if (!current) return false
       if (typeof change?.text !== 'string' || change.text.length > 8 * 1024 * 1024) throw new Error('Invalid Markdown edit')
       if (change.text === text && !change.selection) return true
       const next = parse(change.text)

@@ -43,6 +43,7 @@ async function startRuntime() {
   if (dead) return;
   const instance = await frame.contentWindow.ForsionObsidianBridge.start({
     locale:ctx.getLocale?.() || 'en', packageFiles:ctx.packageFiles,
+    isMac:document.documentElement.dataset.platform === 'mac',
     vaultRoot:() => ctx.app.vaultRoot?.(), loadData:() => ctx.loadData(),
     saveData:value => {
       if (dead) return Promise.reject(new Error('Bridge is closed'));
@@ -64,7 +65,17 @@ async function startRuntime() {
       for (const c of list) commands.push(ctx.registerCommand({
         id:`obsidian-bridge:${c.plugin}:${c.id}`, title:`Obsidian · ${c.pluginName}: ${c.name}`,
         keywords:`Obsidian Bridge ${c.id}`,
-        run:async () => { try { await ensureVault(); if (!dead) await runtime?.run(c.plugin,c.id); } catch (e) { notifyError(e); } },
+        hotkeys:c.hotkeys,
+        hotkeyWhen:event => {
+          if (dead || !runtime || refreshing || dialog.open || (event.repeat && !c.repeatable) || !runtime.canRun(c.plugin,c.id)) return false;
+          // The current bridge command buffer requires a native note. Never edit a retained note
+          // while the user is typing into a settings/search field or another editor surface.
+          const target = event.target;
+          if (!(target instanceof Element) || !target.closest('.ProseMirror[contenteditable="true"]') || target.closest('input,textarea,select,[contenteditable="false"]')) return false;
+          if (runtime.diagnostics().vaultKey !== (ctx.app.vaultRoot?.() || '')) return false;
+          try { return !!ctx.app.captureEditor(); } catch { return false; }
+        },
+        run:async () => { try { const captured = ctx.app.captureEditor(); await ensureVault(); if (!dead) await runtime?.run(c.plugin,c.id,captured); } catch (e) { notifyError(e); } },
       }));
     },
   });

@@ -4,7 +4,7 @@
  */
 import { create } from 'zustand'
 import type { Command } from './types'
-import { useShortcuts, effectiveHotkey, formatHotkey, isMacPlatform, isModPair, MOD_PAIR } from './shortcutStore'
+import { useShortcuts, effectiveHotkey, effectiveHotkeys, formatHotkey, isMacPlatform, isModPair, MOD_PAIR } from './shortcutStore'
 
 interface CommandState {
   commands: Command[]
@@ -62,10 +62,12 @@ function hotkeyMatches(hotkey: string, e: KeyboardEvent): boolean {
   const wantShift = parts.includes('shift')
   const wantAlt = parts.includes('alt')
   const mod = e.metaKey || e.ctrlKey
-  if (wantMod !== mod) return false
+  // Preserve the existing native 'mod' alias, while explicit ctrl/meta stay exact.
+  if (wantMod) { if (!mod) return false }
+  else if (parts.includes('ctrl') !== e.ctrlKey || parts.includes('meta') !== e.metaKey) return false
   if (wantShift !== e.shiftKey) return false
   if (wantAlt !== e.altKey) return false
-  const k = e.key.toLowerCase()
+  const k = e.key === ' ' ? 'space' : e.key.toLowerCase()
   return (KEY_ALIAS[k] ?? k) === key
 }
 
@@ -78,7 +80,7 @@ export function installHotkeys(): () => void {
     // 已被下游处理掉的键不再分发。这是**冒泡**监听:内层组件(CodeMirror 的 searchKeymap、
     // xterm、各种输入框)只 preventDefault 不 stopPropagation,少这一行就会「内层处理完,
     // 全局命令再跑一遍」—— 在 CodeMirror 里按 Cmd+F 会同时弹它自己的查找条和应用的查找条。
-    if (e.defaultPrevented) return
+    if (e.defaultPrevented || e.isComposing || e.keyCode === 229) return
     const st = useCommandStore.getState()
     // 命令面板:可被设置里改键的伪命令 'command-palette'(默认 mod+k)。
     const paletteKey = effectiveHotkey({ id: 'command-palette', hotkey: 'mod+k' })
@@ -88,8 +90,10 @@ export function installHotkeys(): () => void {
       return
     }
     for (const cmd of st.commands) {
-      const hk = effectiveHotkey(cmd) // 用户覆盖优先;'' = 已解绑
-      if (hk && hotkeyMatches(hk, e)) {
+      const matches = effectiveHotkeys(cmd).some(hk => hotkeyMatches(hk, e))
+      if (matches) {
+        try { if (cmd.hotkeyWhen && !cmd.hotkeyWhen(e)) continue }
+        catch (error) { console.warn('[commands] shortcut guard failed', cmd.id, error); continue }
         e.preventDefault()
         cmd.run()
         return

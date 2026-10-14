@@ -334,8 +334,10 @@ function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppAp
       if (!path || !vault || activeLeaf() !== leaf) return null
       const edit = captureUnifiedEditor(path, leaf)
       if (!edit) return null
-      return { ...edit, apply: change => !!(alive && vault === usePageStore.getState().vaultRoot &&
-        leaf === activePageScope() && activeLeaf() === leaf && path === noteOf(usePageStore.getState()) && edit.apply(change)) }
+      const current = (): boolean => !!(alive && vault === usePageStore.getState().vaultRoot &&
+        leaf === activePageScope() && activeLeaf() === leaf && path === noteOf(usePageStore.getState()))
+      return { ...edit, isCurrent: edit.isCurrent ? () => current() && edit.isCurrent!() : undefined,
+        apply: change => current() && edit.apply(change) }
     },
     getActivePageText: () => surface.api.getPage().text,
     loadPage: (p) => {

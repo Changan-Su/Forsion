@@ -1465,6 +1465,18 @@ The host checks the original instance, document, selection, active leaf/vault, v
 mode and plugin lifetime. Edits enter native history and autosave; the API does not focus the OS window.
 Use the command palette button while editing: the editor's Cmd+K is Insert link.
 `ctx.registerCommand(...)` now returns an optional disposer (`off?.()`); use it when a child plugin unloads.
+
+The optional `captureEditor().isCurrent()` checks document, selection, leaf, vault and plugin validity without consuming the snapshot. Capture at command dispatch, then check again before queued work runs.
+
+Native command shortcuts (Desktop Bridge prototype branch): `hotkey?: string` and `hotkeys?: string[]`
+provide defaults such as `mod+shift+p`, exact `ctrl+space`, or `meta+shift+n`. A user override in
+Settings → Shortcuts replaces all defaults; an empty override unbinds them. `hotkeyWhen(event)` is a
+synchronous, side-effect-free **keyboard-only** guard: return false to leave the event unconsumed.
+Guard the intended editor/view, input controls, modal state and repeats. The dispatcher already leaves
+IME composition and previously handled events alone. Keep lifecycle checks inside `run` as well.
+The settings renderer receives only main-window command descriptions; command functions and editor
+state never cross that boundary. Shortcut changes propagate back to the main renderer immediately.
+
 Navigation and selection-bound editing can use renderer commands; parameterized/headless actions still
 belong in engine assets. Do not import private editor/store modules into plugins.
 

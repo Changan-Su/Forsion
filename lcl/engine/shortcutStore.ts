@@ -38,9 +38,15 @@ export const useShortcuts = create<ShortcutState>((set) => ({
 }))
 
 /** 命令的生效热键(覆盖优先;显式空串 = 解绑)。 */
-export function effectiveHotkey(cmd: { id: string; hotkey?: string }): string {
+export function effectiveHotkeys(cmd: { id: string; hotkey?: string; hotkeys?: readonly string[] }): string[] {
   const o = useShortcuts.getState().overrides
-  return Object.prototype.hasOwnProperty.call(o, cmd.id) ? (o[cmd.id] || '') : (cmd.hotkey || '')
+  if (Object.prototype.hasOwnProperty.call(o, cmd.id)) return o[cmd.id] ? [o[cmd.id]] : []
+  return [...new Set([cmd.hotkey, ...(cmd.hotkeys || [])].filter((key): key is string => !!key))]
+}
+
+/** First effective binding, for compact labels. Use effectiveHotkeys for dispatch/conflict checks. */
+export function effectiveHotkey(cmd: { id: string; hotkey?: string; hotkeys?: readonly string[] }): string {
+  return effectiveHotkeys(cmd)[0] || ''
 }
 
 /** 键盘事件 → 热键字符串('mod+shift+k');纯修饰键时返回 null(继续等待真正的键)。 */
@@ -105,10 +111,27 @@ export function formatHotkey(hk: string, isMac: boolean): string {
   if (!hk) return ''
   if (hk === MOD_PAIR) return isMac ? '⌘ + ⌘' : 'Ctrl + Ctrl'
   const sym: Record<string, string> = isMac
-    ? { mod: '⌘', shift: '⇧', alt: '⌥', space: 'Space', enter: '↵', escape: 'Esc', arrowup: '↑', arrowdown: '↓', arrowleft: '←', arrowright: '→' }
-    : { mod: 'Ctrl', shift: 'Shift', alt: 'Alt', space: 'Space', enter: 'Enter', escape: 'Esc', arrowup: '↑', arrowdown: '↓', arrowleft: '←', arrowright: '→' }
+    ? { ctrl: '⌃', meta: '⌘', mod: '⌘', shift: '⇧', alt: '⌥', space: 'Space', enter: '↵', escape: 'Esc', arrowup: '↑', arrowdown: '↓', arrowleft: '←', arrowright: '→' }
+    : { ctrl: 'Ctrl', meta: 'Meta', mod: 'Ctrl', shift: 'Shift', alt: 'Alt', space: 'Space', enter: 'Enter', escape: 'Esc', arrowup: '↑', arrowdown: '↓', arrowleft: '←', arrowright: '→' }
   const map = (p: string): string => sym[p] || (p.length === 1 ? p.toUpperCase() : p.charAt(0).toUpperCase() + p.slice(1))
   return hk.split('+').map(map).join(isMac ? '' : '+')
 }
 
 installModPair()
+
+// Settings live in a separate renderer. Updating a binding must affect the main editor immediately.
+if (typeof window !== 'undefined') window.addEventListener('storage', event => {
+  if (event.key === LS_KEY || event.key === null) useShortcuts.setState({ overrides: load() })
+})
+
+/** Compare bindings by the modifiers the dispatcher accepts (including the legacy mod alias). */
+export function hotkeysConflict(a: string, b: string): boolean {
+  const signatures = (key: string): string[] => {
+    const parts = key.toLowerCase().split('+').map(p => p.trim())
+    const main = parts.pop() || ''
+    if (!parts.includes('mod')) return [[...new Set(parts)].sort().join('+') + '+' + main]
+    return ['ctrl', 'meta', 'ctrl+meta'].map(mod => [...new Set([...parts.filter(p => p !== 'mod'), ...mod.split('+')])].sort().join('+') + '+' + main)
+  }
+  const left = signatures(a)
+  return signatures(b).some(key => left.includes(key))
+}

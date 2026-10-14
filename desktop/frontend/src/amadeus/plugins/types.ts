@@ -65,6 +65,12 @@ export interface CommandContribution {
   title: string | (() => string)
   run(args?: Record<string, unknown>): void | Promise<void>
   keywords?: string
+  /** Default binding, using the native shortcut syntax. */
+  hotkey?: string
+  /** Additional default bindings; a user override replaces all defaults, including an empty unbind. */
+  hotkeys?: readonly string[]
+  /** Synchronous keyboard-only guard. Return false to leave the event to other commands. */
+  hotkeyWhen?: (event: KeyboardEvent) => boolean
   /**
    * Toggle state, for on/off commands only. When declared, a copy of this command pinned to the
    * Ribbon command zone renders as a toggle (`aria-pressed` + highlighted while on). Evaluated at
@@ -150,6 +156,8 @@ export interface PluginEditorEdit {
   text: string
   anchor: number
   head: number
+  /** Read-only validity check; does not consume the edit. Available on the native Bridge prototype host. */
+  isCurrent?(): boolean
   apply(change: { text: string; selection?: { anchor: number; head: number } }): boolean
 }
 

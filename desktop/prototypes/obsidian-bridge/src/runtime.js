@@ -1,3 +1,4 @@
+import { nativeHotkeys } from "./hotkeys.js";
 import * as cmState from "@codemirror/state";
 import * as cmView from "@codemirror/view";
 import { createNativeApp } from "./native-app.js";
@@ -273,7 +274,7 @@ export async function start(host) {
     native && host.listPages ? createNativeApp(host, runtime) : null;
   if (nativeApp) app = nativeApp.app;
   let operation = Promise.resolve();
-  runtime.invoke = (entry, fn, requireEditor = false) => {
+  runtime.invoke = (entry, fn, requireEditor = false, captured) => {
     const generation = entry.instance;
     const task = operation
       .catch(() => {})
@@ -289,9 +290,15 @@ export async function start(host) {
         let edit = null;
         if (native)
           try {
-            edit = host.captureEditor();
+            const current = host.captureEditor();
+            if (captured !== undefined) {
+              if (!captured || !current || captured.isCurrent?.() === false ||
+                  ["path", "text", "anchor", "head"].some(key => current[key] !== captured[key]))
+                throw Error("The native note or selection changed while the command was queued");
+              edit = captured;
+            } else edit = current;
           } catch (e) {
-            if (requireEditor) throw e;
+            if (requireEditor || captured !== undefined) throw e;
           }
         if (requireEditor && !edit)
           throw Error("Open an editable native Amadeus note first");
@@ -395,13 +402,15 @@ export async function start(host) {
   function drawPlugins() {
     host.onCommands?.(
       [...entries.values()]
-        .filter((e) => e.alive)
+        .filter((e) => !scanning && e.alive && !e.busy)
         .flatMap((e) =>
           e.commands.map((c) => ({
             plugin: e.manifest.id,
             id: c.id,
             name: c.name,
             pluginName: e.manifest.name,
+            hotkeys: nativeHotkeys(c.hotkeys, !!host.isMac),
+            repeatable: !!c.repeatable,
           })),
         ),
     );
@@ -448,6 +457,7 @@ export async function start(host) {
               );
               await load(entry);
             }
+            drawPlugins(); // Revoke commands immediately, including while persistence is pending.
             await persist();
           } finally {
             entry.busy = false;
@@ -638,6 +648,7 @@ export async function start(host) {
       assertCurrent();
       for (const entry of entries.values()) unload(entry);
       entries.clear();
+      drawPlugins();
       const dirs = await host.packageFiles.list("plugins");
       for (const id of dirs.filter((x) => SAFE_ID.test(x))) {
         if (disposed) return;
@@ -669,9 +680,10 @@ export async function start(host) {
       );
     } finally {
       scanning = false;
+      drawPlugins();
     }
   }
-  async function run(id, commandId) {
+  async function run(id, commandId, captured = native ? host.captureEditor() : undefined) {
     assertCurrent();
     const entry = entries.get(id);
     if (!entry?.alive || entry.busy || scanning)
@@ -699,6 +711,7 @@ export async function start(host) {
         notice(`${entry.manifest.name} → ${command.name}`);
       },
       native,
+      captured,
     );
   }
   if (!native) {
@@ -867,6 +880,7 @@ export async function start(host) {
   const instance = {
     editor,
     run,
+    canRun: (id, commandId) => !disposed && !scanning && !!entries.get(id)?.alive && !entries.get(id)?.busy && entries.get(id).commands.some(c => c.id === commandId),
     showSettings: (id) => showSettings(entries.get(id)),
     app,
     scan,
