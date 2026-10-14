@@ -4,8 +4,10 @@ export interface BrowserBackPlan { run(): void; boundary?: boolean }
 
 export function installBrowserBack(plan: () => BrowserBackPlan, watch: (changed: () => void) => () => void): () => void {
   const key = 'forsionMobileBack'
-  const id = crypto.randomUUID()
-  let guarded = false
+  // A reload keeps history.state. Reclaim our current entry instead of stacking another identical page.
+  const saved = history.state?.[key]
+  const id = typeof saved === 'string' ? saved : crypto.randomUUID()
+  let guarded = saved === id
   let pruning = false
   let handling = false
   let frame = 0

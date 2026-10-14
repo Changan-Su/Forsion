@@ -8,6 +8,11 @@ on:
       - 'web/src/main.tsx'
       - 'web/index.html'
       - 'web/scripts/mobile-parity.e2e.cjs'
+      - 'lcl/engine/**'
+      - 'desktop/frontend/src/components/AccountCard.tsx'
+      - 'desktop/frontend/src/components/SettingsModal.tsx'
+      - 'desktop/frontend/src/views/chat2/SidebarPane.tsx'
+      - 'desktop/frontend/src/quickFind.tsx'
       - '.github/workflows/web-mobile-parity.yml'
   pull_request:
     paths: *paths

@@ -16,6 +16,7 @@ import './browserChrome.css'
 
 let state: NativeChromeState = { mode: 'hidden' }
 let installed = false
+let queued = false
 const listeners = new Set<() => void>()
 const subscribe = (fn: () => void): (() => void) => { listeners.add(fn); return () => { listeners.delete(fn) } }
 
@@ -25,7 +26,13 @@ export function installBrowserChrome(): void {
   installBrowserSheet()
   installNativeChromeHost({
     spaces: true,
-    render(next) { state = next; listeners.forEach((fn) => fn()) },
+    render(next) {
+      state = next
+      // A view may set its leaf title while rendering. Deliver the latest state after that render finishes.
+      if (queued) return
+      queued = true
+      queueMicrotask(() => { queued = false; listeners.forEach((fn) => fn()) })
+    },
   })
 }
 
@@ -49,6 +56,7 @@ export function BrowserChrome() {
   const destinations = chrome.mode === 'shell' ? chrome.spaces ?? [] : []
   const dock = destinations.filter((sp) => sp.pinned)
   const showDock = destinations.length > 1
+  const showAll = destinations.some((sp) => !sp.pinned)
   const atDetail = chrome.mode === 'shell' && chrome.leftBack
 
   // Reuse the shell's existing inset contract. Measure actual CSS zoom and safe areas, including browser
@@ -115,7 +123,7 @@ export function BrowserChrome() {
             <span>{sp.label}</span>
           </button>
         })}
-        <button className="bmc-destination" data-chrome-action="spacesAll" onClick={() => dispatchNativeChromeAction('spacesAll')}><LayoutGrid size={22} /><span>{chrome.allLabel}</span></button>
+        {showAll && <button className="bmc-destination" data-chrome-action="spacesAll" onClick={() => dispatchNativeChromeAction('spacesAll')}><LayoutGrid size={22} /><span>{chrome.allLabel}</span></button>}
       </nav>}
     </div>}
     <BrowserSheet />

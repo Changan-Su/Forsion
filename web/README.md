@@ -12,6 +12,16 @@
 
 ---
 
+## 移动布局 / Mobile layout
+
+触屏窄视口或 `?ui=mobile` 使用 `mobile/src/MobileRoot.tsx`。浏览器的 `browserChrome` / `browserSheet` 消费 Android 同一份顶栏、底部 Space 导航与半屏请求；列表层、详情返回、搜索与智库标题入口、头像设置菜单、固定项偏好由共享壳与视图管理。浏览器返回先走应用内返回链，回主页后恢复正常离站。
+
+Browser mobile mode uses the same navigation and sheet contracts as Android, including list/detail levels, view search and vault actions, account/settings access and dock preferences. Browser Back follows the app's back chain and can leave normally from Home. Platform capabilities still come from the actual host: launcher shortcuts, system sharing, live notifications and phone control require native support; Web's cloud vault and account bridges remain authoritative.
+
+验收 / Verification: `npm run build` 后运行 `npm run e2e:mobile`。真实 Chromium 在隔离存储与夹具 API 上检查中文浅色 390px、英文深色 320px、实际点击与返回链；截图与报告在 `web/outputs/mobile-parity/`。CI 为 `web mobile parity`。
+
+---
+
 ## 本地开发
 
 连一个本地在跑的 Forsion server(默认 `http://localhost:3001`)。

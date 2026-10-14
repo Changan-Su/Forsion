@@ -72,6 +72,10 @@ async function main() {
         try { await fn(); results.push({ name: `${config.width}/${config.locale}/${config.mode}: ${name}`, ok: true }); console.log('PASS', name) }
         catch (error) {
           results.push({ name, ok: false, error: String(error) })
+          const geometry = await page.evaluate(() => [...document.querySelectorAll('.bmc-chrome,.bmc-top,.bmc-dock,.bmc-capsule,.mb-shell')].map((el) => {
+            const c = getComputedStyle(el); return { class: el.className, mode: el.getAttribute('data-mode'), text: el.textContent, rect: el.getBoundingClientRect().toJSON(), css: { position: c.position, display: c.display, visibility: c.visibility, opacity: c.opacity, zIndex: c.zIndex, zoom: c.zoom } }
+          }))
+          fs.writeFileSync(path.join(OUT, `fail-${results.length}.json`), JSON.stringify({ geometry, errors }, null, 2))
           await page.screenshot({ path: path.join(OUT, `fail-${results.length}.png`) })
           throw error
         }
@@ -80,12 +84,15 @@ async function main() {
       const closeSheet = () => page.locator('.bmc-sheet-head > button').last().click()
       const item = (id) => page.locator(`[data-sheet-item="${id}"] > button.bmc-sheet-row`)
       await check('touch viewport automatically installs mobile dock', async () => {
-        assert.equal(await page.locator('.mb-shell').getAttribute('data-space'), 'home')
+        // Product default remains Tangu; explicitly visit Home for the home screenshot below.
+        assert.equal(await page.locator('.mb-shell').getAttribute('data-space'), 'tangu')
         assert(await page.locator('.bmc-dock [data-space]').count() > 1)
         assert.equal(await page.locator('.mb-drawer-foot').count(), 0)
         const hit = await page.locator('.bmc-dock').evaluate((el) => { const r = el.getBoundingClientRect(); return r.left >= 0 && r.right <= innerWidth && r.bottom <= innerHeight })
         assert(hit, 'Dock fits the viewport')
       })
+      await page.locator('.bmc-dock [data-space="home"]').click()
+      await page.waitForSelector('.mb-shell[data-space="home"]')
       await page.screenshot({ path: path.join(OUT, `home-${config.width}-${config.mode}.png`) })
       await check('all Spaces and dock picks stay usable and save on close', async () => {
         await page.locator('[data-chrome-action="spacesAll"]').click()
