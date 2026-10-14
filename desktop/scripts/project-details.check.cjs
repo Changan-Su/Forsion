@@ -615,13 +615,20 @@ async function run(app, win, stub, seen, home, ctx) {
   // ── 8e 笔记库本身也是 Project(10-14):库里的会话 → 项目页,名称只读、Git 只读 ─────────
   // ⚠️前提要钉住:库已恢复、侧栏里是「Amadeus · vault」那个系统组。库没醒时这条会话落在普通本地组,改前也有项目页,测不出东西。
   await openSession(win, 'Vault chat', 'pd-vault')
+  // 库是懒恢复的:在输入框里敲 `[[`(引用笔记)是聊天这边唤起它的真实路径(Composer2),等它进侧栏再清掉
+  const ta = win.locator('.t2c-ta').first()
+  await ta.click().catch(() => {})
+  await win.keyboard.type('[[')
+  await win.locator('[data-workspace-key]').filter({ hasText: 'Amadeus · vault' }).waitFor({ timeout: 15_000 }).catch(() => {})
+  await win.keyboard.press('Backspace'); await win.keyboard.press('Backspace'); await win.keyboard.press('Escape')
   await details.locator('[data-project-profile]').waitFor({ timeout: 10_000 }).catch(() => {})
   const vaultHead = await win.locator('[data-workspace-key]').filter({ hasText: 'Amadeus · vault' }).count()
+  const vaultKey = vaultHead === 1 ? await win.locator('[data-workspace-key]').filter({ hasText: 'Amadeus · vault' }).getAttribute('data-workspace-key') : null
   const vaultProfile = await details.evaluate((el) => {
     const p = el.querySelector('[data-project-profile]'), name = p && p.querySelector('.team-profile-name')
     return p ? { path: p.getAttribute('data-project-profile'), readOnly: !!(name && name.readOnly) } : null
   })
-  check('8e 笔记库(系统组「Amadeus · vault」)里的会话 → 右栏是 PROJECT 详情(库目录),名称只读', vaultHead === 1 && !!vaultProfile && /[\\/]vault$/.test(vaultProfile.path) && vaultProfile.readOnly, JSON.stringify({ vaultHead, vaultProfile }))
+  check('8e 笔记库(系统组「Amadeus · vault」)里的会话 → 右栏是 PROJECT 详情(库目录),名称只读', vaultHead === 1 && !!vaultProfile && vaultProfile.path === vaultKey && vaultProfile.readOnly, JSON.stringify({ vaultHead, vaultKey, vaultProfile }))
   await details.locator('[data-project-profile]').getByRole('tab', { name: 'Git', exact: true }).click().catch(() => {})
   check('8e2 笔记库的 Git 页只读,没有任何写动作', await details.locator('[data-project-git] [data-git-action]').count() === 0 && await details.locator('[data-project-git-readonly="shared"]').count() === 1)
 
@@ -797,7 +804,8 @@ async function run(app, win, stub, seen, home, ctx) {
 
 async function main() {
   if (!fs.existsSync(path.join(ROOT, 'out', 'main', 'main.js'))) { console.error('先跑 npm run build(仪器跑的是 out/ 产物)'); process.exit(1) }
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'forsion-projectdetails-'))
+  // realpath:macOS 的临时目录是 /var → /private/var 的软链。会话夹具里的 project_path 要和应用自己认的库路径逐字相同(8e),先把歧义消掉
+  const home = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'forsion-projectdetails-'))
   const userData = path.join(home, 'userData')
   const vault = path.join(home, 'vault')
   const projectDir = path.join(home, 'Demo Project')
