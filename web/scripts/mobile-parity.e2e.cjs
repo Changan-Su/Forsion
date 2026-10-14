@@ -78,7 +78,7 @@ async function main() {
         catch (error) {
           results.push({ name, ok: false, error: String(error) })
           const geometry = await page.evaluate(() => [...document.querySelectorAll('.bmc-chrome,.bmc-top,.bmc-dock,.bmc-capsule,.mb-shell')].map((el) => {
-            const c = getComputedStyle(el); return { class: el.className, mode: el.getAttribute('data-mode'), text: el.textContent, rect: el.getBoundingClientRect().toJSON(), css: { position: c.position, display: c.display, visibility: c.visibility, opacity: c.opacity, zIndex: c.zIndex, zoom: c.zoom } }
+            const c = getComputedStyle(el); return { class: el.className, mode: el.getAttribute('data-mode'), text: el.textContent, rect: el.getBoundingClientRect().toJSON(), css: { position: c.position, display: c.display, visibility: c.visibility, opacity: c.opacity, zIndex: c.zIndex, zoom: c.zoom }, sheets: [...document.styleSheets].map((s) => ({href:s.href,disabled:s.disabled})) }
           }))
           fs.writeFileSync(path.join(OUT, `fail-${results.length}.json`), JSON.stringify({ geometry, errors }, null, 2))
           await page.screenshot({ path: path.join(OUT, `fail-${results.length}.png`) })
@@ -93,6 +93,7 @@ async function main() {
         assert.equal(await page.locator('.mb-shell').getAttribute('data-space'), 'tangu')
         assert(await page.locator('.bmc-dock [data-space]').count() > 1)
         assert.equal(await page.locator('.mb-drawer-foot').count(), 0)
+        assert.equal(await page.locator('.bmc-chrome').evaluate((el) => getComputedStyle(el).position), 'fixed', 'Chrome CSS is loaded in the actual Web bundle')
         const hit = await page.locator('.bmc-dock').evaluate((el) => { const r = el.getBoundingClientRect(); return r.left >= 0 && r.right <= innerWidth && r.bottom <= innerHeight })
         assert(hit, 'Dock fits the viewport')
       })
