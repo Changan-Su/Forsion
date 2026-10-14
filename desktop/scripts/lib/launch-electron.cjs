@@ -15,7 +15,7 @@
  *
  * ⚠️ 预置的 userData 文件(tangu-desktop-config.json 等)写进 `<--user-data-dir>-dev`:未打包的构建把 userData 改成了它
  * (electron/main.ts)。只写在 `--user-data-dir` 里应用读不到 —— 外部模式的令牌是空的,开机不连,只有点掉首启引导那一下
- * 不看令牌连一次,主窗之后一重载就连不回假引擎(10-14 取证;btw / feedback / floating-session 三条台架至今只写了前者)。
+ * 不看令牌连一次,主窗之后一重载就连不回假引擎(10-14 取证)。
  */
 const fs = require('fs')
 const os = require('os')
