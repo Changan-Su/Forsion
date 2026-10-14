@@ -3,7 +3,7 @@
  * 决定这条新对话落进哪个工作区:本地目录(host)或 Cloud 云沙箱。
  */
 import React, { useEffect, useRef, useState } from 'react'
-import { Folder, Cloud, ChevronDown, Check, Search, FolderPlus, FolderX } from 'lucide-react'
+import { Folder, Cloud, ChevronDown, Check, Search, FolderGit2, FolderPlus, FolderX } from 'lucide-react'
 import type { WorkspaceDescriptor } from '../types'
 import { useI18n } from '../i18n'
 import { isCoarsePointer } from '../touch'
@@ -22,9 +22,11 @@ export const ProjectSelector: React.FC<{
   value: string | null
   onChange: (ws: WorkspaceDescriptor) => void
   onAddProject?: () => void
+  /** 从 Git 克隆一个仓库到本机并加成项目(弹克隆对话框);只在有本机文件系统的端给。 */
+  onCloneProject?: () => void
   /** 新建云端 Project(名字经内联输入收集);与 onAddProject(本地目录)可并存。 */
   onAddCloudProject?: (name: string) => void
-}> = ({ workspaces, value, onChange, onAddProject, onAddCloudProject }) => {
+}> = ({ workspaces, value, onChange, onAddProject, onCloneProject, onAddCloudProject }) => {
   const { t } = useI18n()
   const [open, setOpen] = useState(false)
   const [q, setQ] = useState('')
@@ -95,6 +97,9 @@ export const ProjectSelector: React.FC<{
   const addLocalItem: SheetMenuItem | null = onAddProject ? {
     id: 'add-local', label: t('input.project.add'), icon: <FolderPlus size={14} />, run: () => { onAddProject(); closeMenu() },
   } : null
+  const cloneItem: SheetMenuItem | null = onCloneProject ? {
+    id: 'clone-git', label: t('input.project.clone'), icon: <FolderGit2 size={14} />, run: () => { onCloneProject(); closeMenu() },
+  } : null
   const nativeMenu = (): SheetMenu => ({
     title: t('input.project.label'),
     back: t('common.back'),
@@ -102,7 +107,7 @@ export const ProjectSelector: React.FC<{
     sections: [
       { items: projects.map(projectItem) },
       { items: projectlessItem ? [projectlessItem] : [] },
-      { items: [addCloudItem, addLocalItem].filter((x): x is SheetMenuItem => !!x) },
+      { items: [addCloudItem, addLocalItem, cloneItem].filter((x): x is SheetMenuItem => !!x) },
     ],
   })
 
@@ -196,7 +201,7 @@ export const ProjectSelector: React.FC<{
               </button>
             </div>
           )}
-          {(addCloudItem || addLocalItem) && (
+          {(addCloudItem || addLocalItem || cloneItem) && (
             <div className="project-menu-section project-menu-actions" role="group">
               {onAddCloudProject && addCloudItem && (naming ? (
                 <label className="project-menu-search project-menu-naming">
@@ -220,6 +225,11 @@ export const ProjectSelector: React.FC<{
               {addLocalItem && (
                 <button className="menu-item project-menu-item project-menu-add" role="menuitem" onClick={addLocalItem.run}>
                   {addLocalItem.icon}<span className="grow">{addLocalItem.label}</span>
+                </button>
+              )}
+              {cloneItem && (
+                <button className="menu-item project-menu-item project-menu-add" role="menuitem" data-project-menu-clone onClick={cloneItem.run}>
+                  {cloneItem.icon}<span className="grow">{cloneItem.label}</span>
                 </button>
               )}
             </div>

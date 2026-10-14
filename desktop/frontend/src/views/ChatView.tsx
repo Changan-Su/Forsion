@@ -173,6 +173,7 @@ export function ChatView({ leaf, params }: ViewProps) {
     workspaces: state.workspaces,
     setNewChatWs: state.setNewChatWs,
     addLocalWorkspace: state.addLocalWorkspace,
+    cloneGitProject: state.cloneGitProject,
     addCloudProject: state.addCloudProject,
     setSessionModel: state.setSessionModel,
     setNewChatModel: state.setNewChatModel,
@@ -657,6 +658,7 @@ export function ChatView({ leaf, params }: ViewProps) {
                   onChange={(w) => s.setNewChatWs(w)}
                   // 「添加本地项目 / 云端项目」加的都是这一端的:运行位置在别的电脑上时不给
                   onAddProject={!remoteWs && window.tangu?.pickDirectory ? () => void s.addLocalWorkspace() : undefined}
+                  onCloneProject={!remoteWs && window.tangu?.pickDirectory ? () => void s.cloneGitProject() : undefined}
                   onAddCloudProject={remoteWs ? undefined : (name) => void s.addCloudProject(name)}
                 />)}
                 {/* Coding Studio 的新对话也要露:草稿里的额外文件夹照样会随它建的会话带走,看不见胶囊 = 没人看见的授权(Codex 评审) */}

@@ -139,6 +139,7 @@ function HomepageChatbox({ onDispatch, onStartCall, onInputModeChange }: { onDis
     openSettings: state.openSettings,
     setNewChatWs: state.setNewChatWs,
     addLocalWorkspace: state.addLocalWorkspace,
+    cloneGitProject: state.cloneGitProject,
     addCloudProject: state.addCloudProject,
     workspaces: state.workspaces,
     sessions: state.sessions,
@@ -208,6 +209,7 @@ function HomepageChatbox({ onDispatch, onStartCall, onInputModeChange }: { onDis
           onChange={s.setNewChatWs}
           // 「添加本地项目 / 云端项目」加的都是这一端的:运行位置在别的电脑上时不给
           onAddProject={!remoteWs && window.tangu?.pickDirectory ? () => void s.addLocalWorkspace() : undefined}
+          onCloneProject={!remoteWs && window.tangu?.pickDirectory ? () => void s.cloneGitProject() : undefined}
           onAddCloudProject={remoteWs ? undefined : (name) => void s.addCloudProject(name)}
         />
         <ExtraFolders />

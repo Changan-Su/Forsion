@@ -64,7 +64,7 @@ export async function publishToForsionGit(cwd: string, name: unknown, trust?: bo
   const added = await runAction(cwd, ['remote', 'add', 'origin', `${page}.git`]);
   if (added.code !== 0) throw new GitActionError('git_failed', 'git remote add failed', added.stderr.trim().slice(-600));
   try {
-    const pushed = await gitPush(cwd, trust);
+    const pushed = await gitPush(cwd, trust, 'origin'); // 明说推到刚加的 origin:分支上要是留着以前的上游设置,不跟它走
     return { url: page, name: repo, ...pushed };
   } catch (e) {
     // 超时 = 推送可能已经做完:origin 留着。其余都是确定没推上去:撤掉刚加的 origin,回到点之前的样子。
