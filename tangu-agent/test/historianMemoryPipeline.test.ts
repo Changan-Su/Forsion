@@ -730,6 +730,39 @@ describe('电脑历史隔离(read_computer_history 会话不进自动记忆)', (
   });
 });
 
+describe('一件事一行日志:主 Agent 自己记过,判官这一轮不再记(10-13 分层探针基线)', () => {
+  const logCall = JSON.stringify([{ id: 'l1', type: 'function', function: { name: 'log_event', arguments: '{"text":"把北辰项目的季度复盘报告交上去了"}' } }]);
+  const answer = JSON.stringify({ title: '新标题', summary: '用户交了季度报告。', log: '用户交上了北辰项目季度复盘报告', memory_candidates: ['用户希望回答先说结论'] });
+  const prompt = () => String(llmPayloads[0].messages.at(-1).content);
+
+  it('对照:会话里没有 log_event → 判官照写日志', async () => {
+    llmScript = [answer];
+    await onUserRunDone('S', USER);
+    expect(prompt()).toContain('"log": if this conversation');
+    expect(appendedLogs).toEqual(['用户交上了北辰项目季度复盘报告']);
+  });
+
+  it('这一轮主 Agent 调过 log_event → 不向判官要日志、判官硬给也不写;标题 / 摘要 / 记忆候选照旧', async () => {
+    await query(`INSERT INTO chat_messages (id, session_id, role, content, timestamp, tool_calls) VALUES ('lg1', 'S', 'model', '记下了', 1500, ?)`, [logCall]);
+    llmScript = [answer];
+    await onUserRunDone('S', USER);
+    expect(llmPayloads).toHaveLength(1);
+    expect(prompt()).not.toContain('"log": if this conversation');
+    expect(appendedLogs).toEqual([]);
+    expect((await query<any[]>(`SELECT title, summary FROM chat_sessions WHERE id = 'S'`))[0]).toMatchObject({ title: '新标题', summary: '用户交了季度报告。' });
+    expect(parseRawLines(readFileSync(rawFile(), 'utf8')).map((r) => r.text)).toEqual(['用户希望回答先说结论']);
+  });
+
+  it('log_event 早于上次到点维护 → 不算这一轮的,判官照写', async () => {
+    await query(`INSERT INTO chat_messages (id, session_id, role, content, timestamp, tool_calls, created_at) VALUES ('lg1', 'S', 'model', '记下了', 500, ?, datetime('now', '-10 minutes'))`, [logCall]);
+    await query(`INSERT INTO special_agent_log (id, user_id, agent, action, detail, session_ref, created_at) VALUES ('prev', ?, 'historian', 'summary_updated', '上一次摘要', 'S', datetime('now', '-5 minutes'))`, [USER]);
+    llmScript = [answer];
+    await onUserRunDone('S', USER);
+    expect(prompt()).toContain('"log": if this conversation');
+    expect(appendedLogs).toEqual(['用户交上了北辰项目季度复盘报告']);
+  });
+});
+
 describe('纯函数', () => {
   it('parseRawLines 只认规范行;redactSecrets 盖 token 形状但放过 40 位 git SHA', () => {
     const parsed = parseRawLines('- [2026-07-25 s:abc] 条目A\n随意噪音行\n- [2026-07-26] 条目B\n');

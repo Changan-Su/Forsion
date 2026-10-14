@@ -630,6 +630,21 @@ a:hover { color: var(--accent-ink); }
 .agentmem-log-head { display: flex; align-items: center; gap: 6px; width: 100%; padding: 6px 8px; background: none; border: none; cursor: pointer; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); border-radius: var(--radius-sm); }
 .agentmem-log-head:hover { background: var(--overlay-light); color: var(--text); }
 .agentmem-log-body { font-size: var(--ui-font-meta, 12px); padding: 2px 8px 6px; }
+/* 日志面板(AgentLogPanel:成长 › 日志、记忆弹窗的日志页):行头右侧放「已保存」和编辑钮;编辑期间行头停用 */
+.agentmem-log-row { display: flex; align-items: center; gap: 4px; min-width: 0; }
+.agentmem-log-row > .agentmem-log-head { flex: 1; width: auto; min-width: 0; }
+.agentmem-log-row > .harness-undo { margin: 0; }
+.agentmem-log-head > small { color: var(--accent-ink); font-size: var(--ui-font-caption, 11px); }
+.agentmem-log-head:disabled { cursor: default; opacity: .6; }
+.agentmem-log-head:disabled:hover { background: none; color: var(--text-muted); }
+.agentmem-log-head > .agentmem-log-saved { display: inline-flex; align-items: center; gap: 3px; margin-left: 6px; flex-shrink: 0; }
+.agentmem-log-more { margin-top: 4px; }
+.agentmem-log-edit.field { margin: 0; padding: 2px 8px 8px; }
+.agentmem-log-edit textarea { resize: vertical; }
+.agentmem-log-actions { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+.agentmem-log-error { margin: 0; padding: 0 8px; color: var(--danger); font-size: var(--ui-font-meta, 12px); line-height: 1.6; overflow-wrap: anywhere; }
+.agentmem-log-edit > .agentmem-log-error { margin-top: 6px; padding: 0; }
+.agentmem-log-error > .profile-text-action { padding: 0; color: var(--accent-ink); font-size: inherit; text-decoration: underline; text-underline-offset: 3px; }
 
 /* 新建标签页启动器(launcher / NewTabView):主区/侧栏两组视图卡片 */
 .newtab { flex: 1; min-height: 0; display: flex; justify-content: center; overflow: auto; }
