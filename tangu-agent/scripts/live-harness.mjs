@@ -41,6 +41,7 @@
  *   TANGU_LIVE_MODEL=codex/gpt-5.6-sol npm run live:harness  # 换模型
  *   npm run live:harness -- --only historian,dream,muse --muse-mode auto   # Muse 三档:ask(缺省)|agent|auto
  *   npm run live:harness -- --only dreamseed [--dream-rounds 5] [--dream-entries 40]   # 有体量的记忆上的整理(10-06):改 memoryDream 的提示 / 校验 / 思考档 / 输出上限后跑;同一份种子连跑多轮,看完成率、有没有丢已有事实、没说过的有没有被记进去
+ *   npm run live:harness -- --only layers [--rounds 2] [--layers-neg] --timeout 1800000   # 记忆 / 日志分层(10-13):三句自然的话(只对这段对话有效的指示 / 今天做完的事 + 一条长期偏好 / 近况)各落在哪 —— 模型自己发给 remember / log_event 的、后台判官提的,分开看;改 remember / log_event 的描述、MEMORY_LOG_GUIDANCE / CHAT_MEMORY_GUIDANCE、judgeFieldSpecs 的记忆候选那段后跑;--layers-neg = 负对照(人格和判官都被要求什么都记,须红)
  *   npm run live:harness -- --only refine --historian-mode assist          # 自进化闭环走辅助模式(提名在辅助模式轮里出)
  *   npm run live:harness -- --only chat,tool --exec-mode sandbox           # 负对照:sandbox 模式下工具走云工作区,未登录应报错而非假空目录
  *   npm run live:harness -- --only conflict                  # 改 skills/amadeus-note-format(同步冲突副本合并)后跑:四问都装载技能 + 双向并集 + 画布对不动 + 子集副本直接删 + 近似非子集不丢内容 + 一次都不许 ask_user
@@ -183,6 +184,7 @@ import { pageInstructionsLive } from './lib/page-instructions-live.mjs';
 import { realUseLive } from './lib/real-use-live.mjs';
 import { humanRealLive } from './lib/human-real-live.mjs';
 import { dreamSeedLive } from './lib/dream-seed-live.mjs';
+import { layersLive } from './lib/layers-live.mjs';
 import { accountLive, startFakeCloud } from './lib/account-live.mjs';
 import { plantPlugin, pluginDiagLive, registeredViews, STUB_SELFTEST } from './lib/plugin-diag-live.mjs';
 import { plantNotebookPlugin, notebookLive, notebookSelftest } from './lib/notebook-live.mjs';
@@ -205,6 +207,7 @@ KEYS.push('novision');
 KEYS.push('cuoff');
 KEYS.push('cuvision');
 KEYS.push('dreamseed');
+KEYS.push('layers');
 KEYS.push('pageinstructions', 'dispatch');
 KEYS.push('storename', 'storeview');
 KEYS.push('pluginicon');
@@ -244,6 +247,7 @@ OPT_IN.add('novision'); // --only novision:主模型没有图像输入时的转�
 OPT_IN.add('cuoff'); // --only cuoff:主模型看不到图 → Computer Use 不可用并告诉用户(一个 run)
 OPT_IN.add('cuvision'); // --only cuvision:只能看图的 App,真插件 + 真 helper + 替身 App(一个 run,会动真鼠标;要 --cu-plugin)
 OPT_IN.add('dreamseed');
+OPT_IN.add('layers'); // --only layers:记忆 / 日志分层,每轮 3 个 run + 3 次判官(--rounds);会把 Historian 改成每轮都评,单独跑。
 OPT_IN.add('projdedupe'); // --only projdedupe:项目记忆换了说法的重复(真模型 + 后台判官,约 20 次调用)
 OPT_IN.add('projteam'); // --only projteam:项目记忆在团队会话里(三个两人团队各一轮)
 OPT_IN.add('projcompact'); // --only projcompact:项目记忆写满时的压缩(4 个 run + 判官 + 2 次压缩,约 10 次调用);只在动 projectMemoryCompact.ts / remember 写满那条路时才有信息量
@@ -2144,8 +2148,20 @@ try {
     const recovered = !ev2.error && ev2.done && errors.length === 1 && errors[0].result.includes('fact is required')
       && saved.entries.length === before.entries.length && saved.entries.some((e) => e.id === entry.id && e.content.includes('concise replies'))
       && ![...ev.statuses, ...ev2.statuses].some((s) => s.phase === 'tool_failure_loop');
-    return { ok: renamed && recovered, detail: `改名原地保存=${renamed};参数错误=${errors.length};纠正后保存=${recovered}`,
-      output: `【改名】\n${ev.content}\n【参数纠正】\n${ev2.content}`, ttftMs: ttft(ev), tokens: tokensOf(ev) + tokensOf(ev2), toolCalls: [...ev.toolCalls, ...ev2.toolCalls] };
+    // 版本号抄错(10-13 live 里模型自己抄串了两位、两次都被回「记忆已变」后放弃):这里替模型抄错,看它读了新回执能不能改成。
+    // 抄法照那次:最后一组掉两位、尾巴补两位,长度不变。旧引擎回的是「记忆已变」,模型重新 list 也改得成,所以这段不分新旧,
+    // 只证明新回执(「抄错了」+ 现在的版本 + 这一条的原文)真模型读得懂、照着做得成;分新旧靠单测。
+    const v = saved.version, tail = v.slice(-12);
+    let miscopy = v.slice(0, -12) + tail.slice(0, 2) + tail.slice(4) + tail.slice(-2);
+    if (miscopy === v) miscopy = v.slice(0, -1) + (v.endsWith('0') ? '1' : '0');
+    const ev3 = await run(`live-remember-miscopy-${Date.now()}`,
+      `This is an isolated memory validation. Call remember with action update, id ${entry.id}, expectedVersion ${miscopy} and fact "The user's name is 一十四画生; they prefer concise replies and plain language." If that call fails, sort it out and finish the update. Report whether it was saved.`);
+    const final = await api('/agent/memory');
+    const miscopyErrors = ev3.toolResults.filter((r) => r.name === 'remember' && /copied wrong/.test(r.result || ''));
+    const fixedUp = !ev3.error && ev3.done && miscopyErrors.length >= 1 && final.entries.length === before.entries.length
+      && final.entries.some((e) => e.id === entry.id && e.content.includes('plain language')) && !ev3.statuses.some((s) => s.phase === 'tool_failure_loop');
+    return { ok: renamed && recovered && fixedUp, detail: `改名原地保存=${renamed};参数错误=${errors.length};纠正后保存=${recovered};版本号抄错回执=${miscopyErrors.length};抄错后改成=${fixedUp}`,
+      output: `【改名】\n${ev.content}\n【参数纠正】\n${ev2.content}\n【版本号抄错】\n${ev3.content}`, ttftMs: ttft(ev), tokens: tokensOf(ev) + tokensOf(ev2) + tokensOf(ev3), toolCalls: [...ev.toolCalls, ...ev2.toolCalls, ...ev3.toolCalls] };
   });
 
   await scenario('visualfigures', 'visualfigures 图表与流程图组件', async () => {
@@ -3348,7 +3364,7 @@ Then reply with only the command output.`,
   // ⚠️ ENTRY 与 desktop/frontend/src/bootstrapEngine.tsx 的 open-settings 目录项同文(description + params);TARGETS 那一行由
   //    desktop 的 settingsTarget.test.ts 逐字钉住(设置页 / 搜索索引一改,那条单测就红,照它的输出改这里)。
   await scenario('settingsnav', 'settingsnav 「语音在哪设置」:界面命令直达设置页,不用电脑操控', async () => {
-    const TARGETS = 'Pages: general, forsion, model, mcp, hooks, skills, agents, amadeus-plugins, browser, channels, notes, sync, spaces, theme, shortcuts, notifications, statusbar, permissions, remote-sessions, computer-history, advanced, developer, about. Settings: workspace-dir, keep-awake, backend-mode, sandbox, python, mirror, external-backend, forsion-account, forsion-submissions, cloud-url, memory-sync, inbox-notify, default-models, model-providers, web-search, voice, theme-language, startup-appearance, palette, color-mode, ui-zoom, glass, ambient, visuals, smooth-caret, prompt-suggest, chat-avatars, calm-dim, calm-reading, calm-motion, ribbon-auto-home, fonts, notes-attachments, daily-notes, agent-browser, remote-sessions-switch, remote-approval-cap, remote-trusted-devices, remote-safety, computer-history, mcp-server, reset-layout, clear-data, language.';
+    const TARGETS = 'Pages: general, forsion, model, mcp, hooks, skills, agents, amadeus-plugins, browser, channels, notes, sync, spaces, theme, shortcuts, notifications, statusbar, permissions, remote-sessions, computer-history, advanced, developer, about. Settings: workspace-dir, keep-awake, backend-mode, sandbox, python, mirror, external-backend, forsion-account, forsion-submissions, cloud-url, memory-sync, inbox-notify, default-models, model-providers, web-search, voice, theme-language, startup-appearance, palette, color-mode, ui-zoom, glass, ambient, visuals, smooth-caret, selection-bar, prompt-suggest, chat-avatars, calm-dim, calm-reading, calm-motion, ribbon-auto-home, fonts, notes-attachments, daily-notes, agent-browser, remote-sessions-switch, remote-approval-cap, remote-trusted-devices, remote-safety, computer-history, mcp-server, reset-layout, clear-data, language.';
     const ENTRY = { id: 'open-settings',
       description: "Open Forsion's settings window, optionally at one page or at the page holding one specific setting. To answer 'where/how do I set X', open that page and say which page you opened; these settings are not documented on the web, so do not search for them. Unknown targets are rejected.",
       params: { type: 'object', properties: { tab: { type: 'string', description: `A page id or a setting id. Omit for the default page. ${TARGETS}` } } } };
@@ -3796,6 +3812,10 @@ Then reply with only the command output.`,
   // --dream-entries 40 = 加压;--dream-timeout <毫秒> 改整理时限(缺省不改,用出厂的 60 秒)。原来的 dream 场景只有两条事实,量不出档位之间的差别。
   await scenario('dreamseed', 'dreamseed 有体量的记忆上的整理(同一份种子连跑多轮)', () =>
     dreamSeedLive({ run, api, until, home, OUT, MODEL, AGENT_CONFIG, rounds: Number(opt('dream-rounds', 3)), entries: Number(opt('dream-entries', 20)), timeoutMs: Number(opt('dream-timeout', 0)) }));
+
+  // 记忆 / 日志分层(10-13):三句话各落在哪一层,模型自己写的和后台判官提的分开看。判据见 scripts/lib/layers-live.mjs 头注。
+  await scenario('layers', `layers 记忆 / 日志分层:三句话各落在哪 ×${SELF_ROUNDS} 轮${argv.includes('--layers-neg') ? '(负对照:人格和判官都被要求什么都记)' : ''}`, () =>
+    layersLive({ run, api, until, home, OUT, MODEL, AGENT_CONFIG, rounds: SELF_ROUNDS, neg: argv.includes('--layers-neg') }));
 
   await scenario('compact', 'compact 压缩后续聊', async () => {
     // 自包含:自己的会话先把标记读进上下文,再压缩,再追问 —— 不依赖 tool 场景,答不出标记就是红。

@@ -21,6 +21,8 @@
 //   G = 对标 ChatGPT Space(2026-10-01):笔记里的 ```forsion-sketch 交互块按对话 sketch 卡同一沙箱渲染(只 allow-scripts、
 //       代码块工具条收掉、打开不写盘);对话 sketch 卡「插入笔记」→ 围栏落盘 + 笔记里出卡;整段对话「整理成笔记」→
 //       complete 收到对话记录 + 指令,新建以模型一级标题命名的笔记(标题剥出正文)、重名加 -2、没有 complete 时入口不出现。
+//   H = 划线条(2026-10-13):工具栏 = 本视图的工具 + 动作区(问 Tangu、翻译、⋯ 里的插件动作);翻译进同一张预览卡、
+//       目标语言按界面语言定且卡头能换、卡上写明谁译的;排法设置(工具在前 / 动作在前);插件动作的 scope / when / output。
 // 宿主接缝用台架假探针顶替(tanguSeam.setTanguProbe;与生产同一模块实例)。探针的 complete 是假的(流式吐 __aiReply),
 // 真模型那半在 tangu-agent 的 live 台架 `--only inline`。
 // 用法:npm run check:editorai(由 e2e-editor 自起/复用 Vite;worktree 里设 HARNESS_URL)。
@@ -187,7 +189,7 @@ async function groupA(browser) {
       same: JSON.stringify(window.__upage.probe.view().state.doc.toJSON()) === JSON.stringify(before),
       toolbar: !!document.querySelector('[data-testid="inline-toolbar"]'),
     }), before)
-    check('A3a 选区工具栏首位是「问 Tangu」', tb[0] === 'ask', tb.join(','))
+    check('A3a 选区工具栏的动作区有「问 Tangu」,缺省排在本视图的工具之后(末位)', tb.length > 3 && tb.at(-1) === 'ask', tb.join(','))
     check('A3b 交给侧栏的引用 = 选区文字 + [[Unified.md#第二节]]', st.asked.length === 1 && st.asked[0] === '需要润色的文字\n— [[Unified.md#第二节]]', JSON.stringify(st.asked))
     check('A3c 笔记零写入、文档未变、工具栏收起', st.writes === 0 && st.same && !st.toolbar, `writes=${st.writes} same=${st.same} toolbar=${st.toolbar}`)
     await page.close()
@@ -370,6 +372,24 @@ async function pickAi(page, id) {
   return items
 }
 
+/** ⋯(插件动作;2026-10-13 起从「AI ▾ → 插件」挪到这里)。返回 ⋯ 里的项;没有 ⋯ 按钮 = 空表。给了 id 就点它。 */
+async function pickMore(page, id) {
+  const btn = await page.$('[data-testid="inline-toolbar"] [data-act="more"]')
+  if (!btn) return []
+  const bb = await btn.boundingBox()
+  await page.mouse.click(bb.x + bb.width / 2, bb.y + bb.height / 2)
+  await page.waitForTimeout(150)
+  const items = await page.evaluate(() => [...document.querySelectorAll('[data-testid="selbar-more"] [data-ai]')].map((b) => b.getAttribute('data-ai')))
+  const b = id ? await page.$(`[data-testid="selbar-more"] [data-ai="${id}"]`) : null
+  if (b) {
+    await b.scrollIntoViewIfNeeded()
+    const box = await b.boundingBox()
+    await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2)
+  }
+  await page.waitForTimeout(150)
+  return items
+}
+
 async function groupC(browser) {
   const md = '# 周报\n\n完成了登录页改版，写得不太好。\n\n第二段保持不动。\n'
   // C1 宿主做不了正文 AI(探针缺 complete):工具栏没有「AI ▾」
@@ -378,7 +398,7 @@ async function groupC(browser) {
     await installProbe(page)
     await selectText(page, '写得不太好')
     const tb = await toolbarActs(page)
-    check('C1 探针缺 complete:工具栏没有「AI ▾」', tb.includes('ask') && !tb.includes('ai'), tb.join(','))
+    check('C1 探针缺 complete:工具栏没有「AI ▾」「翻译」「⋯」', tb.includes('ask') && !tb.includes('ai') && !tb.includes('translate') && !tb.includes('more'), tb.join(','))
     await page.close()
   }
   // C2-C3 AI ▾ → 润色 → 预览(确认前零写入)→ 替换:并进原段落、一次写入、Cmd+Z 回到原文
@@ -392,7 +412,7 @@ async function groupC(browser) {
     const req = await page.evaluate(() => window.__aiReqs[0])
     const w0 = await page.evaluate(() => window.__upage.writes.length)
     const target = await page.evaluate((PM) => document.querySelector(PM + ' .am-ai-target')?.textContent ?? null, PM)
-    check('C2a 工具栏有「AI ▾」且排在「问 Tangu」之后;菜单含全部内置动作', tb[0] === 'ask' && tb[1] === 'ai' && ['improve', 'fix', 'shorter', 'longer', 'summarize', 'translate', 'continue', 'custom'].every((a) => items.includes(a)), `${tb.slice(0, 3).join(',')} | ${items.join(',')}`)
+    check('C2a 「AI ▾」是本视图的工具、排在最前;动作区(问 Tangu、翻译)在末尾;菜单里是改写动作,翻译不在里面', tb[0] === 'ai' && tb.slice(-2).join(',') === 'ask,translate' && ['improve', 'fix', 'shorter', 'longer', 'summarize', 'continue', 'custom'].every((a) => items.includes(a)) && !items.includes('translate') && !items.some((a) => a.startsWith('plugin:')), `${tb.join(',')} | ${items.join(',')}`)
     check('C2b 请求:action=improve、选区、前后文、标题', req && req.action === 'improve' && req.selection === '写得不太好' && /完成了登录页改版/.test(req.before || '') && /第二段/.test(req.after || '') && req.title === 'Unified', JSON.stringify(req))
     check('C2c 预览完成、给「替换 / 插入下方 / 丢弃」,目标有淡底,确认前零写入', p1 && p1.phase === 'done' && p1.preview === 'Better text.' && ['replace', 'below', 'discard'].every((a) => p1.acts.includes(a)) && target === '写得不太好' && w0 === 0, JSON.stringify({ p1, target, w0 }))
     await page.click('[data-testid="inline-ai-panel"] [data-act="replace"]')
@@ -507,7 +527,7 @@ async function groupC(browser) {
     })
     await page.close()
   }
-  // C8 插件:registerSelectionAction 进「AI ▾」的插件组,结果只进预览;ctx.tangu.complete 可用(走宿主探针)
+  // C8 插件:registerSelectionAction 进 ⋯ 的插件组,结果只进预览;ctx.tangu.complete 可用(走宿主探针)
   {
     const page = await open(browser, md)
     await installProbe(page, { complete: true })
@@ -522,14 +542,14 @@ async function groupC(browser) {
     })
     await page.waitForTimeout(200)
     await selectText(page, '写得不太好')
-    const items = await pickAi(page, 'plugin:ai-harness:shout')
+    const items = await pickMore(page, 'plugin:ai-harness:shout')
     const p = await waitPhase(page, 'done')
     const w0 = await page.evaluate(() => window.__upage.writes.length)
     const req = await page.evaluate(() => window.__aiReqs.at(-1))
     if (await page.$('[data-testid="inline-ai-panel"] [data-act="replace"]')) await page.click('[data-testid="inline-ai-panel"] [data-act="replace"]')
     await page.waitForTimeout(1500)
     const disk = await page.evaluate(() => window.__upage.vault.get('Unified.md'))
-    check('C8a 插件项出现在「AI ▾」、ctx.tangu.complete 已注入并走宿主探针(action=custom)', items.includes('plugin:ai-harness:shout') && (await page.evaluate(() => window.__plugComplete)) === 'function' && req?.action === 'custom' && req?.instruction === 'shout it', `${items.join(',')} ${JSON.stringify(req)}`)
+    check('C8a 插件项出现在 ⋯、ctx.tangu.complete 已注入并走宿主探针(action=custom)', items.includes('plugin:ai-harness:shout') && (await page.evaluate(() => window.__plugComplete)) === 'function' && req?.action === 'custom' && req?.instruction === 'shout it', `${items.join(',')} ${JSON.stringify(req)}`)
     check('C8b 插件结果只进预览,确认前零写入;替换后落盘', p?.preview === '**写得不太好**Better text.' && w0 === 0 && disk === '# 周报\n\n完成了登录页改版，**写得不太好**Better text.。\n\n第二段保持不动。\n', JSON.stringify({ p, w0, disk }))
     await page.close()
   }
@@ -1106,6 +1126,103 @@ async function groupG(browser) {
   }
 }
 
+// H = 划线条(2026-10-13):笔记的选区工具栏 = 本视图的工具 + 每个视图都有的动作区(问 Tangu、翻译、⋯ 里的插件动作)。
+async function groupH(browser) {
+  const md = '# 周报\n\n完成了登录页改版，写得不太好。\n\nThe second paragraph stays in English.\n'
+  // H1 翻译:动作区的一枚 → 同一张预览卡;目标语言按界面语言定(中文界面:中文 → 英文),卡头能换;卡上写明谁译的
+  {
+    const page = await open(browser, md)
+    await installProbe(page, { complete: true })
+    await page.evaluate(() => { window.__aiModel = { id: 'qmt', name: 'Qwen MT', mt: true } })
+    await page.evaluate(async () => {
+      // 假探针的 complete 不带 model;这一条要验卡头,包一层补上(与生产 tanguProbe.translateInline 的返回同形)。
+      const url = performance.getEntriesByType('resource').map((e) => e.name).find((n) => /\/src\/amadeus\/plugins\/tanguSeam\.ts(\?|$)/.test(n))
+      const m = await import(url || '/src/amadeus/plugins/tanguSeam.ts')
+      const p = m.readTangu()
+      m.setTanguProbe({ ...p, complete: async (req, opts) => ({ ...(await p.complete(req, opts)), ...(req.action === 'translate' ? { model: window.__aiModel } : {}) }) })
+      window.__upage.switchFile('Unified.md')
+    })
+    await page.waitForTimeout(300)
+    await selectText(page, '写得不太好')
+    await page.click('[data-testid="inline-toolbar"] [data-act="translate"]')
+    const p1 = await waitPhase(page, 'done')
+    const req = await page.evaluate(() => window.__aiReqs.at(-1))
+    const head = await page.evaluate(() => ({ lang: document.querySelector('[data-testid="inline-ai-lang"]')?.value ?? null, hint: document.querySelector('[data-testid="inline-ai-hint"]')?.textContent ?? null, writes: window.__upage.writes.length }))
+    check('H1a 翻译走 action=translate,中文界面下中文选区译成英文', req?.action === 'translate' && req?.language === 'English' && req?.selection === '写得不太好', JSON.stringify(req))
+    check('H1b 结果进预览卡:替换 / 插入下方 / 复制 / 丢弃;卡头有目标语言、写明是机器翻译;确认前零写入', p1?.phase === 'done' && ['replace', 'below', 'copy', 'discard'].every((a) => p1.acts.includes(a)) && head.lang === 'English' && /机器翻译.*Qwen MT/.test(head.hint || '') && head.writes === 0, JSON.stringify({ p1, head }))
+    await page.selectOption('[data-testid="inline-ai-lang"]', 'Japanese')
+    await page.waitForTimeout(200)
+    const p2 = await waitPhase(page, 'done')
+    const st = await page.evaluate((PM) => ({ req: window.__aiReqs.at(-1), n: window.__aiReqs.length, lang: document.querySelector('[data-testid="inline-ai-lang"]')?.value ?? null, target: document.querySelector(PM + ' .am-ai-target')?.textContent ?? null, writes: window.__upage.writes.length }), PM)
+    check('H1c 卡头换目标语言 = 重译一次(目标区间不动,仍零写入)', p2?.phase === 'done' && st.n === 2 && st.req?.language === 'Japanese' && st.lang === 'Japanese' && st.target === '写得不太好' && st.writes === 0, JSON.stringify(st))
+    await page.click('[data-testid="inline-ai-panel"] [data-act="replace"]')
+    await page.waitForTimeout(1500)
+    const disk = await page.evaluate(() => window.__upage.vault.get('Unified.md'))
+    check('H1d 点「替换」才落盘', disk === '# 周报\n\n完成了登录页改版，Better text.。\n\nThe second paragraph stays in English.\n', JSON.stringify(disk))
+    // 英文选区 → 译成中文(界面语言)
+    await selectText(page, 'stays in English')
+    await page.click('[data-testid="inline-toolbar"] [data-act="translate"]')
+    await waitPhase(page, 'done')
+    const req2 = await page.evaluate(() => window.__aiReqs.at(-1))
+    check('H1e 英文选区译成界面语言(简体中文)', req2?.language === 'Chinese (Simplified)', JSON.stringify(req2))
+    await page.close()
+  }
+  // H2 排法:缺省本视图的工具在前;设置换成「动作在前」后问 Tangu 打头(localStorage,下一次弹出生效)
+  {
+    const page = await open(browser, md)
+    await installProbe(page, { complete: true })
+    await selectText(page, '写得不太好')
+    const b = await toolbarActs(page)
+    const orderB = await page.evaluate(() => document.querySelector('[data-testid="inline-toolbar"]')?.getAttribute('data-order'))
+    await page.keyboard.press('Escape')
+    await page.evaluate(() => localStorage.setItem('forsion_selection_bar_order', 'actions'))
+    await selectText(page, '登录页改版')
+    const a = await toolbarActs(page)
+    const orderA = await page.evaluate(() => document.querySelector('[data-testid="inline-toolbar"]')?.getAttribute('data-order'))
+    await page.evaluate(() => localStorage.removeItem('forsion_selection_bar_order'))
+    check('H2 缺省工具在前(AI ▾ … 问 Tangu、翻译);换成动作在前后 = 问 Tangu、翻译、AI ▾ …', orderB === 'tools' && b[0] === 'ai' && b.slice(-2).join(',') === 'ask,translate' && orderA === 'actions' && a.slice(0, 3).join(',') === 'ask,translate,ai', `${orderB}: ${b.join(',')} || ${orderA}: ${a.join(',')}`)
+    await page.close()
+  }
+  // H3 插件动作的 scope / when / output:笔记里只列认笔记的;when 看字数;output:'none' 不出卡、不写笔记;没有可列的就没有 ⋯
+  {
+    const page = await open(browser, md)
+    await installProbe(page, { complete: true })
+    await selectText(page, '登录页改版') // 下面每一步都换一段选:Esc 关掉的那个选区在选区变之前不再弹
+    const none = await toolbarActs(page)
+    await page.keyboard.press('Escape')
+    await page.evaluate(() => {
+      window.__ran = []
+      window.__ep.loadPlugin(`
+        ctx.registerSelectionAction({ id: 'legacy', title: '旧式(不写 scope)', run: (cx) => 'L:' + cx.text })
+        ctx.registerSelectionAction({ id: 'chat-only', title: '只在聊天', scope: ['chat'], run: () => 'x' })
+        ctx.registerSelectionAction({ id: 'own-only', title: '只在自己的视图', scope: 'own', run: () => 'x' })
+        ctx.registerSelectionAction({ id: 'everywhere', title: '到处', scope: 'all', icon: 'star', run: (cx) => 'E:' + cx.view + ':' + cx.editable + ':' + cx.pagePath })
+        ctx.registerSelectionAction({ id: 'long', title: '长选区才有', scope: 'all', when: (cx) => cx.length >= 8 && cx.view === 'note' && cx.editable, run: () => 'x' })
+        ctx.registerSelectionAction({ id: 'side', title: '自己办完', scope: 'all', output: 'none', run: (cx) => { window.__ran.push(cx.text + '|' + cx.view + '|' + (cx.source && cx.source.path)); return 'ignored' } })
+      `, { id: 'sel-harness' })
+    })
+    await page.waitForTimeout(200)
+    await selectText(page, '写得不太好')
+    const tb = await toolbarActs(page)
+    const short = await pickMore(page)
+    await selectText(page, 'The second') // 直接换一段选(不按 Esc:那会把这个选区记成「不再弹」)
+    const long = await pickMore(page, 'plugin:sel-harness:everywhere')
+    const p = await waitPhase(page, 'done')
+    if (p) await page.click('[data-testid="inline-ai-panel"] [data-act="discard"]')
+    await page.waitForTimeout(200)
+    check('H3a 没有插件动作时不画 ⋯;有了才画,排在动作区末尾', !none.includes('more') && tb.at(-1) === 'more', `${none.join(',')} || ${tb.join(',')}`)
+    check('H3b ⋯ 里只列认笔记的(不写 scope / all);点名聊天、只在自己视图的不列;when 看字数', short.join(',') === 'plugin:sel-harness:legacy,plugin:sel-harness:everywhere,plugin:sel-harness:side' && long.includes('plugin:sel-harness:long'), `${short.join(',')} || ${long.join(',')}`)
+    check('H3c run 拿到 view=note、editable=true、pagePath;结果进预览卡', p?.preview === 'E:note:true:Unified.md', JSON.stringify(p))
+    await selectText(page, 'stays in English')
+    const tb5 = await toolbarActs(page)
+    const more5 = await pickMore(page, 'plugin:sel-harness:side')
+    await page.waitForTimeout(400)
+    const st = await page.evaluate(() => ({ ran: window.__ran.slice(), panel: !!document.querySelector('[data-testid="inline-ai-panel"]'), writes: window.__upage.writes.length, target: !!document.querySelector('.am-ai-target') }))
+    check("H3d output:'none':run 被调用、不出卡、不标目标、零写入", st.ran.length === 1 && st.ran[0] === 'stays in English|note|Unified.md' && !st.panel && !st.target && st.writes === 0, `${JSON.stringify(st)} tb=${tb5.join(',')} more=${more5.join(',')}`)
+    await page.close()
+  }
+}
+
 async function main() {
   const browser = await chromium.launch({ executablePath: findChromium(), headless: true })
   const only = (process.argv.find((a) => a.startsWith('--group=')) || '').slice('--group='.length).toUpperCase()
@@ -1117,6 +1234,7 @@ async function main() {
     if (!only || only.includes('E')) await groupE(browser)
     if (!only || only.includes('F')) await groupF(browser)
     if (!only || only.includes('G')) await groupG(browser)
+    if (!only || only.includes('H')) await groupH(browser)
   } finally {
     await browser.close()
   }

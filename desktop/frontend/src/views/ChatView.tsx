@@ -52,7 +52,7 @@ import { homeTarget, useComposerRef } from '../services/engine/targets'
 import type { ViewProps } from '@lcl/engine/types'
 import { useShallow } from 'zustand/react/shallow'
 import './chat2/chat2.css'
-import { zoomOf } from '@lcl/engine'
+import { ViewSelectionBar } from '../components/selectionBar/ViewSelectionBar'
 import { usePageStore } from '../amadeus/store/pageStore'
 import { useCodeStudio } from '../stores/codeStudioStore'
 import { projectName } from './coding/studioModel'
@@ -92,7 +92,6 @@ export function ChatView({ leaf, params }: ViewProps) {
   const childSelections = useChildChat((state) => state.selected)
   const [raiseTeam, setRaiseTeam] = useState(false)
   const chatScrollRef = useRef<HTMLDivElement>(null)
-  const chatAreaRef = useRef<HTMLDivElement>(null)
   const streamingNodeRef = useRef<HTMLDivElement | null>(null)
   const stickToBottom = useRef(true)
   const pendingCountRef = useRef(0)
@@ -197,7 +196,6 @@ export function ChatView({ leaf, params }: ViewProps) {
   const [editText, setEditText] = useState('')
   const jumpSetter = useRef<(show: boolean) => void>(() => {})
   const setShowJump = useCallback((show: boolean): void => jumpSetter.current(show), [])
-  const [quoteButton, setQuoteButton] = useState<{ x: number; y: number; text: string } | null>(null)
   // 输入框上方的引用卡,可挂多段;只在挂它们的那个会话里显示、发送(归属见 quotes.ts 的 QuoteDraft)
   const [quoteDraft, setQuoteDraft] = useState(NO_QUOTE_DRAFT)
   const quoteSid = activeId ?? null
@@ -434,35 +432,6 @@ export function ChatView({ leaf, params }: ViewProps) {
     pendingCountRef.current = pending
   }, [activeMessages, scrollToBottom])
 
-  // 聊天区划线引用。
-  useEffect(() => {
-    const el = chatScrollRef.current
-    const host = chatAreaRef.current
-    if (!el || !host) return
-    const onMouseUp = (): void => {
-      const selection = window.getSelection()
-      if (!selection || selection.isCollapsed || !selection.rangeCount) { setQuoteButton(null); return }
-      const text = selection.toString().trim()
-      const range = selection.getRangeAt(0)
-      if (!text || !el.contains(range.commonAncestorContainer)) { setQuoteButton(null); return }
-      const rect = range.getBoundingClientRect()
-      const bounds = host.getBoundingClientRect()
-      // rect/bounds 是视口 px,而 absolute 的 left/top 是宿主内未缩放局部 px → 差值先除掉宿主缩放。
-      const z = zoomOf(host)
-      setQuoteButton({ x: (rect.right - bounds.left) / z, y: (rect.bottom - bounds.top) / z + 6, text })
-    }
-    const onSelection = (): void => { if (window.getSelection()?.isCollapsed) setQuoteButton(null) }
-    const clear = (): void => setQuoteButton(null)
-    el.addEventListener('mouseup', onMouseUp)
-    document.addEventListener('selectionchange', onSelection)
-    el.addEventListener('scroll', clear, { passive: true })
-    return () => {
-      el.removeEventListener('mouseup', onMouseUp)
-      document.removeEventListener('selectionchange', onSelection)
-      el.removeEventListener('scroll', clear)
-    }
-  }, [activeId, activeMessages.length])
-
   const copy = (text: string): void => { try { void navigator.clipboard.writeText(text) } catch { /* ignore */ } }
   // 朗读:配置了 TTS 模型才显示入口;点击播放/合成中的消息 = 停止。
   const [tts, setTts] = useState<TtsState>(ttsState())
@@ -544,7 +513,7 @@ export function ChatView({ leaf, params }: ViewProps) {
         }} />}
       <div className="t2-chat-col">
       <ErrorBoundary key={activeId || 'none'}>
-        <div className="t2-chat-body" ref={chatAreaRef}>
+        <div className="t2-chat-body">
           {hasMessages && <FloatingToc scrollContainerRef={chatScrollRef} scanTrigger={shownMessages.length} />}
           <div className="t2-stream" ref={registerChatScroll}>
             {/* data-has-messages:样式靠它认「流里画着消息气泡」(短会话贴着输入区排,见 chat2.css)。只有总结卡 / 系统行、其余都不进列表的
@@ -636,55 +605,22 @@ export function ChatView({ leaf, params }: ViewProps) {
             </div>
           </div>
           <JumpToBottom setter={jumpSetter} title={t('chat.jumpToBottom')} onClick={() => scrollToBottom(true)} />
-          {quoteButton && (
-            <div
-              className="quote-float t2-quote-menu"
-              role="toolbar"
-              aria-label={t('chat.selection.actions')}
-              onMouseDown={(e) => e.preventDefault()}
-              style={{ left: quoteButton.x, top: quoteButton.y, '--quote-x': `${quoteButton.x}px` } as React.CSSProperties}
-            >
-              <button
-                className="t2-quote-action"
-                data-testid="selection-quote"
-                onClick={() => {
-                  setQuoteDraft((prev) => quoteAdded(prev, quoteSid, quoteButton.text))
-                  setQuoteButton(null)
-                  window.getSelection()?.removeAllRanges()
-                }}
-              >
-                <Quote size={13} /> {t('chat.action.quote')}
-              </button>
-              {/* 在侧栏提问 = 旁聊开在右侧栏:带着本会话上下文问,主对话里什么都不发(2026-10-11 起;此前是把引用丢给侧栏那个独立对话) */}
-              {leaf.type !== 'chat-panel' && activeId && (
-                <button
-                  className="t2-quote-action"
-                  data-testid="selection-ask-in-panel"
-                  onClick={() => {
-                    openBtwInSidebar({ sessionId: activeId, title: activeSession?.title, quote: quoteButton.text, modelId: mvModelId || undefined })
-                    setQuoteButton(null)
-                    window.getSelection()?.removeAllRanges()
-                  }}
-                >
-                  <MessageSquarePlus size={13} /> {t('chat.action.askInPanel')}
-                </button>
-              )}
-              {/* 划线旁聊:选中的那段作为引用开进本会话的旁聊浮窗,主对话里什么都不发 */}
-              {activeId && (
-                <button
-                  className="t2-quote-action"
-                  data-testid="selection-btw"
-                  onClick={() => {
-                    openBtw({ sessionId: activeId, title: activeSession?.title, quote: quoteButton.text, modelId: mvModelId || undefined })
-                    setQuoteButton(null)
-                    window.getSelection()?.removeAllRanges()
-                  }}
-                >
-                  <MessageCircleQuestion size={13} /> {t('btw.selectionAction')}
-                </button>
-              )}
-            </div>
-          )}
+          {/* 划线条(全应用同一条,components/selectionBar):这里接管「带去对话」那一格 —— 引用 / 在侧栏提问 / 顺便问,
+              行为与原来的胶囊菜单一字不差;翻译和插件动作(⋯)由共用的那一层给。条自己 portal 到 body。 */}
+          <ViewSelectionBar
+            view="chat"
+            watch={chatScrollRef}
+            watchKey={`${activeId}:${activeMessages.length}`}
+            dense={leaf.type === 'chat-panel'}
+            source={() => ({ title: activeSession?.title || undefined, sessionId: activeId || undefined })}
+            lead={(sel, done) => [
+              { id: 'quote', label: t('chat.action.quote'), icon: <Quote size={14} />, lead: true, testId: 'selection-quote', onRun: () => { setQuoteDraft((prev) => quoteAdded(prev, quoteSid, sel.text)); done() } },
+              // 在侧栏提问 = 旁聊开在右侧栏:带着本会话上下文问,主对话里什么都不发(2026-10-11 起;此前是把引用丢给侧栏那个独立对话)
+              ...(leaf.type !== 'chat-panel' && activeId ? [{ id: 'ask-in-panel', label: t('chat.action.askInPanel'), icon: <MessageSquarePlus size={14} />, testId: 'selection-ask-in-panel', onRun: () => { openBtwInSidebar({ sessionId: activeId, title: activeSession?.title, quote: sel.text, modelId: mvModelId || undefined }); done() } }] : []),
+              // 划线旁聊:选中的那段作为引用开进本会话的旁聊浮窗,主对话里什么都不发
+              ...(activeId ? [{ id: 'btw', label: t('btw.selectionAction'), icon: <MessageCircleQuestion size={14} />, testId: 'selection-btw', onRun: () => { openBtw({ sessionId: activeId, title: activeSession?.title, quote: sel.text, modelId: mvModelId || undefined }); done() } }] : []),
+            ]}
+          />
         </div>
       </ErrorBoundary>
 

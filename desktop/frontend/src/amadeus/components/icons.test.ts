@@ -37,6 +37,14 @@ describe('插件图标词表', () => {
     expect(resolveIcon('bilibili')).toBe(null) // 调用方没给兜底就什么都不画,也好过画出「bilibili」
   })
 
+  // 值是插件给的(2026-10-14 评审):对象画进 JSX、把继承来的函数当组件渲染,都会让 React 抛错、宿主那棵子树进错误边界。
+  // 负对照(实跑):去掉 typeof 那一行 → 第一条红(返回了对象本身);换回 PLUGIN_ICONS[icon] → 第二条红(返回 <Object />)。
+  it('不是字符串 / 继承来的属性名 → 兜底,不把它当图标画', () => {
+    expect(resolveIcon({ garbage: 1 } as never, '·')).toBe('·')
+    expect(resolveIcon('constructor', '·')).toBe('·')
+    expect(resolveIcon(42 as never)).toBe(null)
+  })
+
   it('词表里现有的键必须条条命中(别让上面那条兜底把真实图标悄悄吃掉)', () => {
     const missed = Object.keys(PLUGIN_ICONS).filter((k) => !isValidElement(resolveIcon(k)))
     expect(missed).toEqual([])

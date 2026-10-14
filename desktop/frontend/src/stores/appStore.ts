@@ -1916,8 +1916,9 @@ export const useApp = create<AppState>((set, get) => ({
         }
         checkQuotaExhausted(get().toast, get().tr)
         setTimeout(() => { void get().refreshSessions(get().cfg).catch(() => {}) }, 6000)
-        // 输入建议(默认关):只给眼前这个会话拉;后台会话收尾、或后面还排着要接着跑的,只作废旧的那句。
-        if (sessionId === get().activeId && !get().runningBySession[sessionId] && !queueBusy(get(), sessionId)) void requestSuggestion(sessionId, runId)
+        // 输入建议(默认关):不看是不是眼前这个会话 —— 这一轮跑着的时候切走了,回来也该有那一句。
+        // 后面还排着要接着跑的,只作废旧的那句。
+        if (!get().runningBySession[sessionId] && !queueBusy(get(), sessionId)) void requestSuggestion(sessionId, runId)
         else clearSuggestion(sessionId)
         break
       case 'error':
@@ -2070,6 +2071,7 @@ export const useApp = create<AppState>((set, get) => ({
   subscribeRun: (sessionId, runId, assistantId) => {
     if (subscribedRuns.has(runId)) return
     subscribedRuns.add(runId)
+    clearSuggestion(sessionId) // 输入建议只活到下一轮起跑;在这里作废,不看这个会话的输入框此刻挂没挂着
     const ac = new AbortController()
     runAborts.set(runId, ac)
     const assistantRef = { current: assistantId }

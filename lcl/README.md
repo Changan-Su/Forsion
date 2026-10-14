@@ -25,6 +25,16 @@ Genesis 当前使用这份 LCL。`apps/Archived/Forsion-LCL` 是早期组合引�
 - `Composer2`：聊天会话编排器，组合上述基础组件并接入附件、引用、命令、语音、运行状态。首页复用该编排器；Coding 项目创建使用提示表单组件，在创建成功后显式移交模型与思考档。
 - 插件：`ctx.ui.mountChatBox`；详见 [公共契约](../docs/customization/ui-components.md)。
 
+## 划线条(Selection bar)
+
+选中文字后浮出来的那一条,全应用一份。
+
+- `@lcl/components`:`SelectionBar`(一行 = 本视图的工具 + 动作,中间一道竖线;「⋯」展开的面板在行下方)、`SelectionBarActions`(只要动作那几枚,给自己画工具行的宿主嵌进去)。纯展示:选区怎么来、条放哪儿、每个按钮做什么都由宿主给;外壳是宿主套的 `.ui-popover.selbar`(定位用 `@lcl/engine` 的 `OverlayAt`)。
+- `desktop/frontend/src/components/selectionBar/ViewSelectionBar`:应用层。看一个元素里的 DOM 选区,接上「带去对话 / 翻译 / 插件动作」和结果卡;聊天直接用。动作表(插件动作的 scope / when、排法偏好)在 `desktop/frontend/src/selectionActions.ts`。
+- 笔记:`InlineToolbar` 保留自己的工具行和下拉,把 `SelectionBarActions` 嵌在行首或行尾。
+- 插件:`ctx.ui.mountSelectionBar`(自己的视图用上这一条)、`ctx.registerSelectionAction`(往「⋯」里加动作);详见 [公共契约](../docs/customization/ui-components.md)。
+- 不做全局选区监听:每个视图自己接,没接的视图不出。新视图接入时别再另画一条。
+
 ## English contract
 
 Space owns layout; View owns a navigable feature; UI components compose the inside of a View. Amadeus document Blocks and Dashboard Cards have different responsibilities. Use `@lcl/components` for host-independent primitives and application adapters for services. Inputs and callbacks are explicit; a component must not implicitly target the active session. DOM plugins consume `ctx.ui` mounts, with lifecycle cleanup owned by the host. Keep types, documentation, consumers, and lifecycle coverage together when changing public APIs.
