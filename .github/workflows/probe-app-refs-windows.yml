@@ -1,0 +1,55 @@
+# 应用 / 窗口引用(文字里的 [[app://…]] / [[window://…]])· Windows 真机探针。
+# Windows 那一半(desktop/electron/appRefsWin.ts)是两段 PowerShell + 现编的 C#,在 macOS 上一行都跑不了;
+# 夹具单测只证「输出长这样时我们判得对」,证不了脚本本身能编译、列得出窗口、抢得到前台。这里在真 Windows 上:
+#   起记事本和一扇自己的窗口 → 列出来、核对句柄 → 查状态 → 提到前台(另起进程读 GetForegroundWindow 核对)
+#   → 最小化后再提 → 改标题后仍认得 → 关掉看状态翻转 → 按标识启动。细节见 desktop/scripts/app-refs-windows.probe.cjs 头注释。
+# 两代系统各跑一遍:windows-latest(Server 2025,Win11 那套外壳)和 windows-2022(Win10 那套)。
+#
+# 触发:workflow_dispatch 只认默认分支上的文件,功能分支上靠下面按路径过滤的 push —— 动了这几个文件就跑。
+#
+# 这里测不到、要人在真桌面上点的(见对应 issue):从 Forsion 里真点一下芯片时的前台切换(runner 上没有人在输入,
+# 前台锁本来就是开的)、UWP / 商店应用(Server 上基本没有)、多显示器与多个虚拟桌面、中文系统上的应用名、
+# 开始菜单的覆盖面(各家安装器五花八门的快捷方式)、管理员权限窗口。
+name: probe-app-refs-windows
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/probe-app-refs-windows.yml'
+      - 'desktop/electron/appRefsWin.ts'
+      - 'desktop/electron/appRefsWin.test.ts'
+      - 'desktop/scripts/app-refs-windows.probe.cjs'
+permissions:
+  contents: read
+jobs:
+  app-refs:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, windows-2022]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install desktop dependencies
+        working-directory: desktop
+        run: npm ci --no-audit --no-fund
+      - name: Fixture tests
+        working-directory: desktop
+        run: |
+          node node_modules/vitest/vitest.mjs run electron/appRefs.test.ts electron/appRefsWin.test.ts electron/activeWindow.test.ts
+          exit $LASTEXITCODE
+      - name: Probe app and window references on the real machine
+        working-directory: desktop
+        run: |
+          node scripts/app-refs-windows.probe.cjs
+          exit $LASTEXITCODE
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-app-refs-${{ matrix.os }}
+          path: desktop/outputs/app-refs-windows/

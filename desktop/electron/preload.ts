@@ -415,6 +415,22 @@ const api = {
   appDockCandidates: (): Promise<{ windows: import('../shared/appDock').DockCandidate[]; error?: string }> => ipcRenderer.invoke('appDock:candidates'),
   appDockAttach: (target: import('../shared/appDock').DockWindow): Promise<{ ok: boolean; error?: string }> => ipcRenderer.invoke('appDock:attach', target),
   appDockDetach: (): Promise<void> => ipcRenderer.invoke('appDock:detach'),
+  /** 应用 / 窗口引用(macOS 与 Windows;别的平台列表为空;契约见 shared/appRefs.ts)。 */
+  appRefs: {
+    list: (): Promise<import('../shared/appRefs').AppRefList> => ipcRenderer.invoke('appRefs:list'),
+    status: (refs: import('../shared/appRefs').AppRef[]): Promise<import('../shared/appRefs').AppRefStatus[]> => ipcRenderer.invoke('appRefs:status', refs),
+    open: (ref: import('../shared/appRefs').AppRef): Promise<{ ok: boolean; landed?: 'window' | 'app'; error?: string }> => ipcRenderer.invoke('appRefs:open', ref),
+    frontmost: (): Promise<import('../shared/appRefs').AppRef | null> => ipcRenderer.invoke('appRefs:frontmost'),
+    icons: (ids: string[]): Promise<Record<string, string | null>> => ipcRenderer.invoke('appRefs:icons', ids),
+    /** 要不要全局的「双 ⌘」(别的应用在前台时也生效;由本机助手监听)。快捷键被改成别的键 / 解绑时传 false。 */
+    setGlobalHotkey: (on: boolean): void => ipcRenderer.send('appRefs:globalHotkey', on === true),
+    /** 在别的应用里按了全局快捷键:主进程把那一刻最前面的窗口送过来。返回取消函数。 */
+    onHotkey: (cb: (ref: import('../shared/appRefs').AppRef) => void): (() => void) => {
+      const listener = (_: unknown, ref: import('../shared/appRefs').AppRef): void => cb(ref)
+      ipcRenderer.on('appRefs:hotkey', listener)
+      return () => { ipcRenderer.removeListener('appRefs:hotkey', listener) }
+    },
+  },
   appDockSelection: (): Promise<import('../shared/appDock').DockSelection & { error?: string }> => ipcRenderer.invoke('appDock:selection'),
   onAppDockState: (cb: (state: import('../shared/appDock').DockState) => void): (() => void) => {
     const listener = (_: unknown, state: import('../shared/appDock').DockState): void => cb(state)

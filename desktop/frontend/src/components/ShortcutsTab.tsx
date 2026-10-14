@@ -4,7 +4,7 @@
  */
 import React, { useState } from 'react'
 import { Keyboard, RotateCcw, Search, X } from 'lucide-react'
-import { useCommandStore, useShortcuts, eventToHotkey, formatHotkey } from '@lcl/engine'
+import { useCommandStore, useShortcuts, eventToHotkey, formatHotkey, isModPair, MOD_PAIR } from '@lcl/engine'
 import { useI18n } from '../i18n'
 import { SettingsPanel } from './SettingsPrimitives'
 
@@ -42,7 +42,8 @@ export const ShortcutsTab: React.FC = () => {
   const onRecKey = (e: React.KeyboardEvent): void => {
     e.preventDefault(); e.stopPropagation()
     if (e.key === 'Escape') { stopRecord(); return }
-    const hk = eventToHotkey(e.nativeEvent)
+    // 左右两个 ⌘ / Ctrl 同按也是一种热键(没有主键,单独认)
+    const hk = isModPair(e.nativeEvent) ? MOD_PAIR : eventToHotkey(e.nativeEvent)
     if (!hk || !recId) return // 纯修饰键 → 继续等
     // 唯一性:同热键已绑到别的命令 → 把那个解绑(显式空串),避免出现永不触发的死键。
     const conflict = rows.find((r) => r.id !== recId && effOf(r) === hk)
