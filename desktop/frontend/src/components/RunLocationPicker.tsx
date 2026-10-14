@@ -112,6 +112,8 @@ export function RunLocationPicker(): React.ReactElement | null {
   /** 最近点过的那一行(菜单底下说明它为什么没成)与这一端自己的问题。 */
   const [attempted, setAttempted] = useState<string | null>(null)
   const [issue, setIssue] = useState<PhoneIssue | null>(null)
+  /** 离线的电脑缺省折起(10-14 用户定,同设备互联切换器);不持久化。 */
+  const [offlineOpen, setOfflineOpen] = useState(false)
   const flight = useRef<AbortController | null>(null)
   const ref = useRef<HTMLDivElement>(null)
   const menuRef = useRef<HTMLDivElement>(null)
@@ -143,6 +145,14 @@ export function RunLocationPicker(): React.ReactElement | null {
     }
   }, [open])
   useEffect(() => () => { flight.current?.abort() }, [])
+
+  const isFolded = (u: UnitInfo): boolean => statusOfUnit(u).status === 'offline' && !(focus.kind === 'unit' && focus.unitId === u.id.toLowerCase())
+  const shown = (units || []).filter((u) => !isFolded(u))
+  const folded = (units || []).filter(isFolded)
+  // 焦点停在折叠开关上时最后一台离线电脑上线 → 开关卸载、焦点掉到 body,菜单的方向键随之失灵:交还给勾选的那一行(Codex 评审)
+  useEffect(() => {
+    if (open && !folded.length && document.activeElement === document.body) menuRef.current?.querySelector<HTMLButtonElement>('.project-menu-item.active')?.focus()
+  }, [open, folded.length])
 
   // 手机:有得选才画;桌面主窗口:恒画(至少标出「这台电脑」)。网页版 / 设备页没有名册 → 不画。
   if (desktop ? !rosterAvailable() : !hasChoice) return null
@@ -223,6 +233,39 @@ export function RunLocationPicker(): React.ReactElement | null {
   }
 
   const canPickOthers = runLocationsAvailable()
+  const rowEl = (u: UnitInfo): React.ReactElement => {
+    const id = u.id.toLowerCase()
+    const d = statusOfUnit(u)
+    const probing = busy === id
+    const selected = focus.kind === 'unit' && focus.unitId === id
+    // 离线 / 那台没有引擎:点了也没有可问的对象
+    const dead = d.status === 'offline' || d.status === 'noEngine'
+    const caption = probing ? (d.status === 'awaitingConfirm' ? deviceStatusText(t, d.status) : t('devstatus.checking'))
+      : d.status === 'checking' ? (capsSaysReady(u) ? t('devstatus.ready') : '')
+      : deviceStatusText(t, d.status)
+    const RowIcon = iconOf(u)
+    return (
+      <button
+        key={id}
+        type="button"
+        className={`menu-item project-menu-item runloc-row${selected ? ' active' : ''}`}
+        role="menuitemradio"
+        aria-checked={selected}
+        aria-busy={probing || undefined}
+        disabled={dead}
+        title={deviceStatusText(t, d.status, true)}
+        data-run-row={id}
+        data-status={d.status}
+        data-reason={d.refusal?.reason}
+        onClick={() => pick(u)}
+      >
+        <RowIcon size={14} />
+        <span className="grow project-menu-name">{nameOf(u)}</span>
+        {caption && <span className="runloc-row-status" data-tone={d.status === 'ready' || (d.status === 'checking' && !probing) ? 'ok' : probing || d.status === 'checking' ? 'wait' : 'warn'}>{caption}</span>}
+        <span className="project-menu-check">{selected ? <Check size={13} /> : null}</span>
+      </button>
+    )
+  }
   const attemptedUnit = attempted ? unitById(attempted) : null
   const attemptedStatus = attemptedUnit && busy !== attempted ? statusOfUnit(attemptedUnit) : null
   const notice = issue ? t(ISSUE_KEYS[issue])
@@ -284,39 +327,19 @@ export function RunLocationPicker(): React.ReactElement | null {
           </div>
           <div className="project-menu-section" role="group" aria-label={t('runloc.others')}>
             <div className="menu-section">{t('runloc.others')}</div>
-            {canPickOthers && (units || []).map((u) => {
-              const id = u.id.toLowerCase()
-              const d = statusOfUnit(u)
-              const probing = busy === id
-              const selected = focus.kind === 'unit' && focus.unitId === id
-              // 离线 / 那台没有引擎:点了也没有可问的对象
-              const dead = d.status === 'offline' || d.status === 'noEngine'
-              const caption = probing ? (d.status === 'awaitingConfirm' ? deviceStatusText(t, d.status) : t('devstatus.checking'))
-                : d.status === 'checking' ? (capsSaysReady(u) ? t('devstatus.ready') : '')
-                : deviceStatusText(t, d.status)
-              const RowIcon = iconOf(u)
-              return (
-                <button
-                  key={id}
-                  type="button"
-                  className={`menu-item project-menu-item runloc-row${selected ? ' active' : ''}`}
-                  role="menuitemradio"
-                  aria-checked={selected}
-                  aria-busy={probing || undefined}
-                  disabled={dead}
-                  title={deviceStatusText(t, d.status, true)}
-                  data-run-row={id}
-                  data-status={d.status}
-                  data-reason={d.refusal?.reason}
-                  onClick={() => pick(u)}
-                >
-                  <RowIcon size={14} />
-                  <span className="grow project-menu-name">{nameOf(u)}</span>
-                  {caption && <span className="runloc-row-status" data-tone={d.status === 'ready' || (d.status === 'checking' && !probing) ? 'ok' : probing || d.status === 'checking' ? 'wait' : 'warn'}>{caption}</span>}
-                  <span className="project-menu-check">{selected ? <Check size={13} /> : null}</span>
-                </button>
-              )
-            })}
+            {/* 离线的电脑缺省折起,只列在线的(10-14 用户定);选中的那台掉线了也不折。三段拼成一个扁平 keyed 数组:
+                名册实时刷新时设备跨组只挪节点、不重挂(键盘焦点不丢)。 */}
+            {canPickOthers && [
+              ...shown.map(rowEl),
+              ...(folded.length ? [
+                <button key="offline-fold" type="button" className="menu-item project-menu-item runloc-fold" role="menuitem" aria-expanded={offlineOpen} data-run-offline-fold onClick={() => setOfflineOpen((v) => !v)}>
+                  <span className="grow project-menu-name">{t('unit.offlineGroup')}</span>
+                  <span className="runloc-row-status">{folded.length}</span>
+                  <ChevronDown size={12} className="runloc-fold-chev" />
+                </button>,
+              ] : []),
+              ...(offlineOpen ? folded.map(rowEl) : []),
+            ]}
             {canPickOthers && units !== null && !units.length && <div className="project-menu-empty">{t('runloc.none')}</div>}
             {!canPickOthers && (
               <button type="button" className="menu-item project-menu-item project-menu-add" role="menuitem" data-run-signin onClick={() => goSettings('forsion')}>

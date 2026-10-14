@@ -137,6 +137,7 @@ async function scenario(browser, { lang, mode, shot, full }) {
       issueText: root.querySelector('[data-phone-issue]')?.textContent?.trim() || '',
       phone: root.querySelector('[data-this-phone] .us-self-text')?.textContent?.trim() || '',
       devicesOpen: root.querySelector('[data-open-screen] .us-section-toggle')?.getAttribute('aria-expanded'),
+      offlineFold: root.querySelector('[data-run-on] [data-offline-fold]')?.textContent?.trim() || null,
     }
   })
   const tag = `[${lang}/${mode}]`
@@ -145,7 +146,16 @@ async function scenario(browser, { lang, mode, shot, full }) {
 
   if (full) {
     const ids = sheet.rows.map((r) => r.id)
-    expect(JSON.stringify(ids) === JSON.stringify(['home', READY, STOPPED, OFF, OLD]), `${tag} 在哪运行:云端 + 4 台电脑;手机不出现、没 kind 的老桌面出现`, JSON.stringify(ids))
+    expect(JSON.stringify(ids) === JSON.stringify(['home', READY, STOPPED, OLD]), `${tag} 在哪运行:云端 + 3 台在线电脑;手机不出现、没 kind 的老桌面出现、离线的折起`, JSON.stringify(ids))
+    // 10-14 用户定:离线的电脑缺省折起,开关带台数;点开才出现
+    expect(/(离线设备|Offline devices) · 1/.test(sheet.offlineFold || ''), `${tag} 离线折叠开关显 1 台`, sheet.offlineFold)
+    await tap(page.locator('[data-run-on] [data-offline-fold]'))
+    await page.waitForSelector(`[data-run-row="${OFF}"]`, { timeout: 3000 }).catch(() => null)
+    sheet.rows = await page.evaluate(() => [...document.querySelectorAll('[data-units-sheet] [data-run-on] [data-run-row]')].map((b) => ({
+      id: b.getAttribute('data-run-row'), status: b.getAttribute('data-status'), pressed: b.getAttribute('aria-pressed'),
+      sub: b.querySelector('.us-row-sub')?.textContent?.trim() || '',
+    })))
+    expect(sheet.rows.map((r) => r.id).join() === ['home', READY, STOPPED, OLD, OFF].join(), `${tag} 点开折叠 → 离线那台排在最后`, JSON.stringify(sheet.rows.map((r) => r.id)))
     const st = Object.fromEntries(sheet.rows.map((r) => [r.id, r]))
     expect(st.home.pressed === 'true', `${tag} 当前 = 云端(K6-S2 接上之前如实不变)`, JSON.stringify(st.home))
     expect(st[READY].status === 'checking' && /可用|Available/.test(st[READY].sub), `${tag} 自报 ready、还没探过 → 「可用」`, JSON.stringify(st[READY]))

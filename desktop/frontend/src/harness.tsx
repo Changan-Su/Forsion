@@ -808,6 +808,8 @@ if (new URLSearchParams(location.search).has('dock')) {
     const units = [
       { id: 'u-mba', name: 'MacBook Air', platform: 'darwin', icon: '🦊', online: true, lanUrl: 'http://192.168.1.20:8791' },
       { id: 'u-pc', name: '书房 PC', platform: 'win32', icon: null, online: false, lanUrl: null },
+      // 隧道不在、局域网探得通(如对方没登录):能点 → 算在线,不进「离线设备」折叠(unit-switcher.check 判据)
+      { id: 'u-mini', name: '客厅 mini', platform: 'darwin', icon: null, online: false, lanUrl: 'http://192.168.1.30:8791' },
       // P1-K1:手机是调用方、不开设备通道 → 切换器不列它(unit-switcher.check 判据)
       { id: 'u-phone', name: '口袋 Pixel', platform: 'android', icon: null, online: false, lanUrl: null, kind: 'phone' },
     ]
@@ -869,9 +871,10 @@ if (new URLSearchParams(location.search).has('dock')) {
           onChanged: (cb: (v: unknown) => void) => { listeners.add(cb); return () => { listeners.delete(cb) } },
         }
       })(),
-      // LAN 探针桩:MacBook Air 的直连地址可达,别的一律探不通。
+      // LAN 探针桩:MacBook Air 与客厅 mini 的直连地址可达,别的一律探不通。
       unitsProbeLan: async (lanUrl: string) =>
-        lanUrl === 'http://192.168.1.20:8791' ? { instanceId: 'inst-mba', name: 'MacBook Air' } : null,
+        lanUrl === 'http://192.168.1.20:8791' ? { instanceId: 'inst-mba', name: 'MacBook Air' }
+          : lanUrl === 'http://192.168.1.30:8791' ? { instanceId: 'inst-mini', name: '客厅 mini' } : null,
       // P2P 桩:第一次打洞失败(考「出声回落中转」),之后成功回本机代理地址。
       unitsP2pOpen: (() => {
         let calls = 0

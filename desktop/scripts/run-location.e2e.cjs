@@ -4,8 +4,8 @@
  *
  * 钉住的契约(2026-10-14,桌面作为调用方):
  *  ① 胶囊恒在、缺省写「这台电脑」,它的左缘与输入卡左缘是同一条线(项目胶囊排在它后面);100% 与 110% 缩放都量。
- *  ② 点开是与项目胶囊同一套下拉:这台电脑(勾选)/ 我的其他电脑(在线、离线各是各的,离线的点不了)/ 管理设备;
- *     方向键移动焦点,Esc 关闭并把焦点还给胶囊。
+ *  ② 点开是与项目胶囊同一套下拉:这台电脑(勾选)/ 我的其他电脑(只列在线的,离线的缺省折进「离线设备 N」,点开灰着点不了)/ 管理设备;
+ *     方向键移动焦点(折叠开关也是一站),Esc 关闭并把焦点还给胶囊。
  *  ③ 选一台还没允许过这台电脑的 → 发起确认(那台弹框),菜单里说「请在「Mac mini」上点允许」;那台允许后自动生效。
  *  ④ 生效后项目胶囊列的是那台的项目,「添加本地项目 / 添加文件夹」不出现;发第一条消息 = 会话建在那台的引擎上
  *     (落点是那台的默认工作区,不带这台电脑的路径),回复经隧道流回来;侧栏多出「Mac mini」分组。
@@ -198,9 +198,10 @@ async function main() {
     await row(MINI).waitFor({ timeout: 10_000 })
     await win.waitForFunction((id) => document.querySelector(`[data-run-row="${id}"]`)?.getAttribute('data-status') === 'ready', MINI, { timeout: 10_000 }).catch(() => {})
     check('② 第一行是「这台电脑」,勾选着', (await row('home').innerText()).trim() === '这台电脑' && await row('home').getAttribute('aria-checked') === 'true')
-    check('② 有「我的其他电脑」分组,手机不在里面', (await menu.locator('.menu-section').innerText()).trim() === '我的其他电脑' && await menu.locator('.runloc-row').count() === 2, await menu.locator('.runloc-row').allInnerTexts())
+    check('② 有「我的其他电脑」分组,手机不在里面;离线的缺省折起(只列 Mac mini)', (await menu.locator('.menu-section').innerText()).trim() === '我的其他电脑' && await menu.locator('.runloc-row').count() === 1, await menu.locator('.runloc-row').allInnerTexts())
     check('② Mac mini:在线,可以点', /Mac mini/.test(await row(MINI).innerText()) && /在线/.test(await row(MINI).innerText()) && await row(MINI).isEnabled(), await row(MINI).innerText())
-    check('② ThinkPad X1:离线,点不了', /离线/.test(await row(THINKPAD).innerText()) && await row(THINKPAD).isDisabled(), await row(THINKPAD).innerText())
+    const fold = menu.locator('[data-run-offline-fold]')
+    check('② 折叠开关「离线设备 1」,缺省收着', /离线设备\s*1/.test(await fold.innerText()) && await fold.getAttribute('aria-expanded') === 'false', await fold.innerText().catch(() => '没有'))
     check('② 底下有「管理设备…」', await menu.locator('[data-run-manage]').count() === 1)
     const mb = await box(menu)
     const vp = await win.evaluate(() => ({ w: window.innerWidth, h: window.innerHeight }))
@@ -210,6 +211,12 @@ async function main() {
     check('② 打开时焦点在勾选的那一行', await focused() === 'home', await focused())
     await win.keyboard.press('ArrowDown')
     check('② ↓ 到 Mac mini', await focused() === MINI, await focused())
+    await win.keyboard.press('ArrowDown')
+    check('② 再 ↓ 到折叠开关', await win.evaluate(() => document.activeElement?.hasAttribute('data-run-offline-fold')), await focused())
+    await win.keyboard.press('Enter')
+    await row(THINKPAD).waitFor({ timeout: 3000 }).catch(() => {})
+    check('② 回车点开 → ThinkPad X1 出现:离线,点不了', await row(THINKPAD).count() === 1 && /离线/.test(await row(THINKPAD).innerText()) && await row(THINKPAD).isDisabled(), await row(THINKPAD).innerText().catch(() => '没有'))
+    check('② 点开后焦点还在折叠开关上', await win.evaluate(() => document.activeElement?.hasAttribute('data-run-offline-fold')), await focused())
     await win.keyboard.press('ArrowDown')
     check('② 再 ↓ 跳过点不了的离线行,到「管理设备」', await focused() === 'manage', await focused())
     await win.keyboard.press('Home')

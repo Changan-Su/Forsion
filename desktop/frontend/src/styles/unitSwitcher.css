@@ -64,6 +64,10 @@
 .unitsw-desc { font-size: var(--ui-font-caption, 11px); color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .unitsw-check { flex: none; color: var(--accent-ink); }
 .unitsw-empty { padding: 8px 9px; font-size: var(--ui-font-caption, 11px); color: var(--text-muted); }
+/* 离线设备折叠开关:比设备行弱一档(灰字、常规字重),只是一扇门。 */
+.unitsw-fold .unitsw-title { font-weight: 500; color: var(--text-muted); }
+.unitsw-fold-chev { flex: none; color: var(--text-faint); transition: transform 0.16s ease; }
+.unitsw-fold[aria-expanded="true"] .unitsw-fold-chev { transform: rotate(180deg); }
 
 .unitsw-foot { border-top: var(--border-width) solid var(--border); margin-top: 3px; padding-top: 4px; }
 .unitsw-hosttoggle {
