@@ -72,9 +72,10 @@ describe('在 Amadeus Space 里呼出的新对话落在笔记库', () => {
   beforeEach(() => { useSpaceStore.setState({ activeSpaceId: 'amadeus' }); usePageStore.setState({ vaultRoot: '/vault' }) })
   afterEach(() => { useSpaceStore.setState({ activeSpaceId: 'tangu' }); usePageStore.setState({ vaultRoot: null }) })
 
-  it('Work 且没显式选项目 → 笔记库;它是系统工作区,不套默认工作区的项目默认项', () => {
+  it('Work 且没显式选项目 → 笔记库;套的是库自己的项目默认项,不是默认工作区的', () => {
     expect(resolveNewSessionWorkspace({ ...base, sessionMode: 'work', newChatWs: null }, 'desktop')).toMatchObject({ key: '/vault', kind: 'local', path: '/vault', system: true })
-    expect(newChatProjectPath({ ...base, sessionMode: 'work', newChatWs: null }, 'desktop')).toBeNull()
+    // 10-14 起笔记库也算项目(isProjectWorkspace:本地且有路径),库里开的新会话套库自己的项目默认项
+    expect(newChatProjectPath({ ...base, sessionMode: 'work', newChatWs: null }, 'desktop')).toBe('/vault')
   })
   it('显式选的项目、Chat 模式都压过它(Chat 会话照旧不带项目)', () => {
     expect(resolveNewSessionWorkspace({ ...base, sessionMode: 'work', newChatWs: localWs }, 'desktop')).toBe(localWs)
