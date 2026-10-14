@@ -17,7 +17,7 @@
 //   HP1 双链悬停预览按链接所在笔记就近解析同名笔记(L-10):预览的就是点击会打开的那篇
 //   HP2~HP7 预览卡的收(用户实报:点链接跳到新页面后卡片不消失 / 过一会才消失):卡片开着点链接当场收;没弹出就点、跳完不补弹;
 //          链接留在原处(新标签页 / 聊天引用)同样收;点过之后再悬停照常出;没点鼠标页面被换走,指针一动就收;指针在卡上按 Esc 之后下一张照常收
-//   NT1~NT5 双链 / 库内 md 链接按鼠标键分流(L-11):右键不跳转不弹块菜单;中键、⌘(非 mac 为 Ctrl)+点击 → 新标签页
+//   NT1~NT5 双链 / 库内 md 链接按鼠标键分流(L-11):右键不跳转不弹块菜单(双链出文件菜单,md 链接留给系统菜单);中键、⌘(非 mac 为 Ctrl)+点击 → 新标签页
 //   FL1~FL6 打开光标处链接(L-20):Alt+Enter 跟随 / Alt+Shift+Enter 新标签页;不在链接上不吞键;命令面板那条作用于最近聚焦的编辑器
 //   LI1~LI3 卡片 / 编辑面板文案跟界面语言(C-14):英文界面全英文,切中文当场跟上
 //   AU1~AU5 手打裸 URL(I-13):空格收尾成链且落盘裸 URL;空段里键入 URL 不抢跑成书签卡、离开才成卡;
@@ -614,6 +614,7 @@ async function newTabClicks(browser) {
       opened: window.__opened.slice(o0), wopen: window.__wopen.slice(w0),
       ctxPrevented: window.__ctxEv ? window.__ctxEv.defaultPrevented : null,
       menu: document.querySelectorAll('.unified-block-menu').length,
+      linkMenu: document.querySelectorAll('.amx-link-menu').length,
       nodeSel: window.__upage.probe.view().state.selection.toJSON().type === 'node',
     }), [o0, w0])
     await p.keyboard.press('Escape')
@@ -623,7 +624,10 @@ async function newTabClicks(browser) {
     let pt = await at(sel)
     if (!pt) { check(`NT 前置 ${label} 可点`, false); continue }
     let r = await got(() => p.mouse.click(pt.x, pt.y, { button: 'right' }))
-    check(`NT1 ${label} 右键:不跳转、不弹块菜单、系统菜单不被吞`, r.opened.length === 0 && r.wopen.length === 0 && r.menu === 0 && !r.nodeSel && r.ctxPrevented === false, JSON.stringify(r))
+    // 双链指向一份文件 → 出这份文件的菜单(2026-10-13 用户定,amadeusLinkMenu);md 链接照旧留给系统菜单。
+    const fileMenu = label === '双链'
+    check(`NT1 ${label} 右键:不跳转、不弹块菜单、${fileMenu ? '出文件菜单' : '系统菜单不被吞'}`,
+      r.opened.length === 0 && r.wopen.length === 0 && r.menu === 0 && !r.nodeSel && r.ctxPrevented === fileMenu && r.linkMenu === (fileMenu ? 1 : 0), JSON.stringify(r))
     pt = await at(sel)
     r = await got(() => p.mouse.click(pt.x, pt.y, { button: 'middle' }))
     check(`NT2 ${label} 中键 → 新标签页`, JSON.stringify(r.opened) === JSON.stringify([{ n: name, newTab: true }]), JSON.stringify(r))

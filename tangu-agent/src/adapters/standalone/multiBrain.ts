@@ -268,7 +268,7 @@ export function createMultiBrain(httpBrain: CloudBrainServices, registry: Provid
     },
     tts: {
       // 语音合成分发:命中直连 provider 的 TTS 模型(ttsModelIds 或 <providerId>/<model>)→ 直连用户端点;
-      // 无云端托管 TTS,未命中直接报错(不委托 httpBrain)。
+      // 否则是 Forsion 云端的朗读模型 → 委托 httpBrain(key 住云端,按字符计费)。
       synthesize: async (req: SpeechRequest) => {
         for (const p of registry.list()) {
           const slash = req.model.startsWith(p.providerId + '/');
@@ -280,6 +280,7 @@ export function createMultiBrain(httpBrain: CloudBrainServices, registry: Provid
             return withFreshKey(p.providerId, (key) => fn(p.baseUrl, key, apiModelId, req));
           }
         }
+        if (httpBrain.tts) return httpBrain.tts.synthesize(req);
         throw new Error(`未找到 TTS 模型 ${req.model} 对应的直连 provider(需在 provider 的 ttsModelIds 声明或用 <providerId>/<model> 形式)`);
       },
     },

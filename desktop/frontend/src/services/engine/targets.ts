@@ -26,6 +26,9 @@
  *     本端会话缺省即 home、不进绑定表,所以撞 id 的闸还要问宿主(EngineHost.isHomeSession:本端列表 / 归档区里的会话往 unit
  *     绑一律 conflict);设备报回的子会话行过 inheritChildRows(conflict 的行丢掉);本端列表到手时 yieldToHomeListing 撤掉
  *     早先被设备抢绑的本端 id(本端胜,唯一的改绑例外,只许 unit → home)。
+ * 桌面作为调用方(2026-10-14,K6 U1 改判):桌面主窗口也能把新会话建到「我的另一台电脑」上。渲染层仍然不持 forsion_token ——
+ *     主进程在本机开中转口(electron/unitRelay.ts),unit 目标的基址换成它、Bearer 换成本次启动的口令,云端凭据与调用方票由主进程盖。
+ *     设备页那一道不变(§4.7 b6:不得经 A 的隧道再驱动 B)。
  */
 import type { SessionRecord, StoredDesktopConfig, TanguDesktopConfig } from '../../types'
 import { create } from 'zustand'
@@ -77,6 +80,15 @@ export function cloudApiBase(): string {
 export function homeVia(): TargetVia {
   if (typeof window !== 'undefined' && window.tangu?.unitPage) return 'unitPage'
   return currentPlatform() === 'desktop' ? 'local' : 'cloud'
+}
+
+/** home 是什么 —— 只给界面取称呼(「在哪运行」写「这台电脑」还是「云端」):local = 这台电脑上的引擎(桌面 managed);
+ *  cloud = 云网关(手机 / 网页版,或桌面外部模式连的正是云端);external = 桌面外部模式连的别的引擎。 */
+export function homeKind(): 'local' | 'cloud' | 'external' {
+  if (homeVia() !== 'local') return 'cloud'
+  if (hostDesktopMode() !== 'external') return 'local'
+  const api = cloudApiBase()
+  return !!api && !!host && host.cfg().backendUrl.replace(/\/+$/, '') === api ? 'cloud' : 'external'
 }
 
 /** 与改造前的 `headers(cfg.token)` 逐字同形(键序也一样)。 */
@@ -265,6 +277,17 @@ export async function unitFetch(t: EngineTarget, path: string, opts: { timeoutMs
   return scopedFetch(t, t.unitBase, path, opts.signal ? { signal: opts.signal } : {}, opts, async (json) => bare(json))
 }
 
+/**
+ * 问那台电脑认不认这一端 / 请它弹确认(K4 的 `{unitBase}/unit/remote-access[/request]`)。只给 unit 目标;带目标自己的鉴权头
+ * (手机 / 网页版连同调用方头;桌面是中转口的口令,调用方票由主进程盖)。路径是写死的两条,不收调用方给的串。
+ */
+export async function remoteAccessFetch(t: EngineTarget, request: boolean, opts: { signal?: AbortSignal; timeoutMs?: number } = {}): Promise<Response> {
+  if (!isEngineTarget(t)) throw new TypeError('remoteAccessFetch: the target was not minted by the engine target resolver')
+  if (t.via !== 'unit' || !t.unitBase) throw new TypeError('remoteAccessFetch: only unit targets have a remote-access face')
+  const init: RequestInit = request ? { method: 'POST', body: '{}' } : {}
+  return scopedFetch(t, t.unitBase, request ? '/unit/remote-access/request' : '/unit/remote-access', { ...init, ...(opts.signal ? { signal: opts.signal } : {}) }, opts)
+}
+
 // ── 会话 → 目标绑定表(路由真源,INTEGRATION R-15 / R-16;S4 起按账号落盘)──
 // 只是路由提示,不是信任依据:属主由 hub 逐请求校验(篡改最坏得 404)。Map 的插入序即「最近绑定」序(LRU 淘汰最旧的)。
 const sessionTargets = new Map<string, TargetKey>()
@@ -285,18 +308,25 @@ function refOfKey(key: TargetKey): TargetRef {
   return key === 'home' ? HOME_REF : Object.freeze({ kind: 'unit' as const, unitId: key.slice('unit:'.length) })
 }
 
-/** 绑定键按 (云端基址, 令牌) 记一份:locationOf 在渲染 / 每条请求上都会走到,别每次都解一遍 JWT。 */
-let bindingsKeyMemo: { input: string; key: string | null } | null = null
-function bindingsStorageKey(): string | null {
+/** 账号身份按输入记一份:locationOf 在渲染 / 每条请求上都会走到,别每次都解一遍 JWT。 */
+let accountIdMemo: { input: string; id: string | null } | null = null
+/**
+ * 这一端登录的云端账号(按账号分键落盘用:会话绑定、焦点、「上次选的运行位置」)。拿不到 → null(只活在内存)。
+ * 手机 / 网页版:home 的令牌就是 forsion_token,从它解。桌面:cfg.token 是**本机引擎**的令牌、解不出账号 —— 用主进程随中转口
+ * 一起给的那份(没登录 / 中转口还没到 = null)。
+ */
+export function accountStorageId(): string | null {
   if (!host) return null
+  if (currentPlatform() === 'desktop') return desktopRelay?.accountId ?? null
   const api = cloudApiBase()
   const token = host.cfg().token || ''
   const input = `${api}\n${token}`
-  if (bindingsKeyMemo?.input !== input) {
-    const id = forsionAccountId(api, token)
-    bindingsKeyMemo = { input, key: id ? `${BINDINGS_KEY_PREFIX}${id}` : null }
-  }
-  return bindingsKeyMemo.key
+  if (accountIdMemo?.input !== input) accountIdMemo = { input, id: forsionAccountId(api, token) }
+  return accountIdMemo.id
+}
+function bindingsStorageKey(): string | null {
+  const id = accountStorageId()
+  return id ? `${BINDINGS_KEY_PREFIX}${id}` : null
 }
 
 /** 读盘上这个账号的绑定(不可信:逐条过 isTargetKey + 设备 id 形状;home 条不存,读到也丢)。 */
@@ -466,14 +496,48 @@ export function isUnitIdShape(x: unknown): x is string {
   return typeof x === 'string' && UNIT_ID_SHAPE.test(x)
 }
 
+// ── 桌面作为调用方:主进程的本机中转口(electron/unitRelay.ts)──
+/** 中转口的地址 + 本次启动的口令 + 当前云端账号。null = 没登录 / 还没取到 / 这一端没有(手机、网页版、设备页)。 */
+export interface DesktopRelay { base: string; token: string; accountId: string | null }
+let desktopRelay: DesktopRelay | null = null
+/** 「能不能连别的电脑」变了就 +1(中转口到位 / 换号 / 登出)。闸本身是同步函数、不是响应式的 —— 只在渲染期读闸的组件订阅它来重渲染。 */
+export const useRemoteCapability = create<{ epoch: number }>(() => ({ epoch: 0 }))
+
 /**
- * 这一端能不能把引擎切到「我的电脑」:只有手机与网页版(home = 云端,手里有 forsion_token 能打 hub 隧道)。
- * 桌面主窗口(渲染层不持 forsion_token,需主进程流式代理,K6 U1 缺省不做)与设备页(§4.7:不得经 A 再驱动 B)恒 false。
+ * 向主进程取(或重取)中转口:启动时、登录态变化后各调一次。返回这次有没有变(变了 = 调用方该把按账号的远端状态清掉重来)。
+ * ⚠️ 门控字面量逐字写成 `window.tangu?.unitRelay`(platform-parity 的 D 段靠正则扫它)。
+ */
+let relaySeq = 0
+export async function refreshDesktopRelay(): Promise<boolean> {
+  if (typeof window === 'undefined' || window.tangu?.unitPage || typeof window.tangu?.unitRelay !== 'function') return false
+  // 只认最后发起的那一次:连着换号时,上个账号那次晚到的回包不许盖掉新账号的(账号 id 是落盘分键用的;Codex 评审 10-14)
+  const seq = ++relaySeq
+  let next: DesktopRelay | null = null
+  try {
+    const r = await window.tangu.unitRelay()
+    // 不信形状:只认本机回环地址(口令绝不能被发去别的主机)
+    if (r && typeof r.token === 'string' && r.token && typeof r.base === 'string' && /^http:\/\/127\.0\.0\.1:\d+$/.test(r.base)) {
+      next = { base: r.base, token: r.token, accountId: typeof r.accountId === 'string' && r.accountId ? r.accountId : null }
+    }
+  } catch { /* 取不到 = 这一端此刻连不了别的电脑 */ }
+  if (seq !== relaySeq) return false
+  const prev = desktopRelay
+  if (prev?.base === next?.base && prev?.token === next?.token && prev?.accountId === next?.accountId) return false
+  desktopRelay = next
+  unitTargets.clear() // 基址 / 口令是铸进目标里的
+  useRemoteCapability.setState((s) => ({ epoch: s.epoch + 1 }))
+  return true
+}
+
+/**
+ * 这一端能不能把新会话建到「我的电脑」上:
+ *   手机 / 网页版 —— home = 云端,手里有 forsion_token 能打 hub 隧道;
+ *   桌面主窗口 —— 主进程的中转口已经到位(= 已登录;渲染层不持 forsion_token,见 refreshDesktopRelay);
+ *   设备页 —— 恒 false(§4.7:不得经 A 再驱动 B)。
  */
 export function remoteTargetsSupported(): boolean {
   if (typeof window === 'undefined' || window.tangu?.unitPage) return false
-  const p = currentPlatform()
-  if (p !== 'mobile' && p !== 'web') return false
+  if (currentPlatform() === 'desktop') return !!host && !!desktopRelay
   return !!host && !!cloudApiBase() && !!host.cfg().token
 }
 
@@ -521,7 +585,9 @@ const unitTargets = new Map<string, EngineTarget>()
 /** 按 (云端基址, 设备 id) 缓存:同一台电脑恒为同一个对象(消费方可以按对象身份做键)。基址在铸造时定死 ——
  *  手机 / 网页版换账号 = 整页重载,cloudApiBase 一页之内不变;真变了缓存键跟着变。 */
 function unitTarget(unitId: string): EngineTarget | null {
-  const api = cloudApiBase()
+  // 桌面:基址 = 主进程的本机中转口(路径形状与 hub 相同),Bearer = 本次启动的口令;云端凭据与调用方票都由主进程盖,这里一概不带。
+  const relay = currentPlatform() === 'desktop' ? desktopRelay : null
+  const api = relay ? relay.base : currentPlatform() === 'desktop' ? '' : cloudApiBase()
   if (!api) return null
   const id = unitId.toLowerCase()
   const cacheKey = `${api}|${id}`
@@ -529,7 +595,9 @@ function unitTarget(unitId: string): EngineTarget | null {
   if (hit) return hit
   const unitBase = `${api}/units/${encodeURIComponent(id)}/proxy`
   // hub 的 `auth` 消费 Bearer(= forsion_token:手机 / 网页版的 home 就是云端,home cfg 的 token 正是它)。
-  const bearer = (json: boolean): Record<string, string> => bearerHeaders(requireHost().cfg().token, json)
+  const bearer = relay
+    ? (json: boolean): Record<string, string> => bearerHeaders(relay.token, json)
+    : (json: boolean): Record<string, string> => bearerHeaders(requireHost().cfg().token, json)
   const t = mintTarget({
     key: `unit:${id}`,
     ref: { kind: 'unit', unitId: id },
@@ -539,7 +607,7 @@ function unitTarget(unitId: string): EngineTarget | null {
     // token 在第一个 await 之前同步读完(与 home 同理);调用方头每次现取。
     headers: async (json = true): Promise<Record<string, string>> => {
       const base = bearer(json)
-      const caller = await callerHeadersFor(id)
+      const caller = relay ? {} : await callerHeadersFor(id)
       return { ...base, ...caller }
     },
   })
@@ -563,7 +631,7 @@ function unresolvedUnitTarget(unitId: string): EngineTarget {
 }
 
 /**
- * 位置 → 目标。home 恒可解析;unit 在 `!remoteTargetsSupported()`(桌面 / 设备页 / 未登录)或 id 形状不对时 → null。
+ * 位置 → 目标。home 恒可解析;unit 在 `!remoteTargetsSupported()`(设备页 / 未登录 / 桌面的中转口还没到)或 id 形状不对时 → null。
  * 调用方拿到 null 必须当「这里不能在别的电脑上运行」处理,绝不回落 home 静默发出去。
  */
 export function targetForRef(ref: TargetRef): EngineTarget | null {
@@ -625,8 +693,9 @@ export function onFocusChange(cb: FocusListener): () => void {
 const FOCUS_KEY_PREFIX = 'forsion_engine_focus:'
 /** 按账号分键(forsionAccountId = 云端源 + userId,JWT 只作识别):换号天然隔离。拿不到身份 → 不落盘,只活在内存。 */
 function focusStorageKey(): string | null {
-  if (!host) return null
-  const id = forsionAccountId(cloudApiBase(), host.cfg().token || '')
+  // 桌面不落盘焦点:开机恒在「这台电脑」(本机引擎才是常态),上次选的那台由 runLocationStore 的对账在它 ready 时再切过去。
+  if (currentPlatform() === 'desktop') return null
+  const id = accountStorageId()
   return id ? `${FOCUS_KEY_PREFIX}${id}` : null
 }
 
@@ -719,6 +788,7 @@ export function resetFocusForTests(): void {
   useEngineFocus.setState({ ref: HOME_REF, name: null })
   unitTargets.clear()
   unitNames.clear()
+  desktopRelay = null
 }
 
 /** 本页见过的设备名(焦点切过去时名册给的名字;S4 起会话可能留在一台已经不是焦点的电脑上,提示里仍叫它的名字)。

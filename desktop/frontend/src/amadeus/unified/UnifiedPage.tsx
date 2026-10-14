@@ -35,7 +35,7 @@ import { BLANK_SCENE_JSON, blankDrawing } from '@amadeus-shared/excalidraw/forma
 import { fdDirOf } from '../lib/fd'
 import { askString } from '../components/askString'
 import { resolvePageName } from '@amadeus-shared/links'
-import { resolveFileName } from '../lib/vaultFiles'
+import { resolveFileLink } from '../lib/vaultFiles'
 import { wikiFilesEnabled } from '../lib/wikiFiles'
 import { usePageStore, useScopedPageStore, flushAllScopes, remapScopePaths, cascadeFdAfterRename, claimTitleFocus, PageScopeCtx, useActivePageScope, hasPageScope, activePageScope } from '../store/pageStore'
 // 模式胶囊复用 `.t2s-vaultseg`(见渲染处):样式真源是侧栏那张表。App 里 amadeusViews 已显式引过,
@@ -979,13 +979,14 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
         keys={NOOP_KEYS}
         saveImage={saveImage}
         saveFiles={saveFiles}
-        onOpenWiki={(name, o) => void store.getState().openWikiLink(name, path, o)}
+        // 没带修饰键的点击 / 「打开光标处链接」:文件类目标开在旁边那半屏(openWikiLink 的 split;笔记目标不认它,照旧就地)。
+        onOpenWiki={(name, o) => void store.getState().openWikiLink(name, path, o ?? { split: true })}
         getPageNames={() => store.getState().pages}
         slashOpsRef={slashOps}
         onSlashPick={applySlash}
         getFiles={() => (wikiFilesEnabled() ? store.getState().files : [])}
         isWikiResolved={(n) =>
-          !!resolvePageName(n, store.getState().pages, path) || !!resolveFileName(n, store.getState().files, path)}
+          !!resolvePageName(n, store.getState().pages, path) || !!resolveFileLink(n, store.getState().files, path)}
         wikiIcon={(n) => {
           const p = resolvePageName(n, store.getState().pages, path)
           return p ? store.getState().icons[p] : undefined

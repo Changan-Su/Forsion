@@ -235,6 +235,14 @@ async function main() {
     await page.waitForSelector('.mb-shell', { timeout: 60_000 })
     await page.waitForFunction(() => window.__forsionStore?.getState().connState === 'ok', null, { timeout: 30_000 })
     const st = (fn) => page.evaluate(fn)
+    /** 换焦点 / 重载会让手机停在主页;主页「就是一页」(10-11),输入框回车不再跳进对话视图(原来 E2 / E4 靠的就是这一下)。
+     *  要看输入框顶上的提示条 → 点主页上的 Tangu 进对话视图。已经在对话视图里就不动。 */
+    const openTanguChat = async () => {
+      if (await page.$('.t2-target-health')) return
+      const tile = page.locator('.hp-tile', { hasText: 'Tangu' }).first()
+      if (await tile.count()) await tile.click().catch(() => {})
+      await page.waitForSelector('.t2-target-health', { timeout: 10_000 }).catch(() => {})
+    }
 
     // ── A. 起点:本端(云端)──
     const homeIds = await st(() => window.__forsionStore.getState().sessions.map((s) => s.id))
@@ -364,38 +372,51 @@ async function main() {
     const stillA = await page.evaluate((sid) => window.__forsionEngineTargets.locationOf(sid), newSid)
     check('焦点回本端后,那台上建的会话仍绑在那台(R-19:不跟焦点走)', stillA?.kind === 'unit' && stillA.unitId === U, JSON.stringify(stillA))
 
-    // ── E2. 重启恢复焦点 + 开机时那台就不在线(深色主题截图)──
-    // 焦点按账号落盘:切回本端前再切一次过去,然后重载 —— 应恢复到那台电脑;那台此刻离线 → 连接失败 + 不在线提示。
-    await page.evaluate((u) => window.__forsionEngineTargets.setFocusTarget({ kind: 'unit', unitId: u }, { name: 'Studio Mac' }), U)
+    // ── E2. 重启后的「在哪运行」+ 选了一台不在线的电脑(深色主题截图)──
+    // 2026-10-14 改写:K7 之前这一段测「焦点落盘 → 开机恢复到那台;那台离线就停在离线态」。K7 U3(runLocationStore.ts 文件头)起
+    // 每份新草稿对账一次:记住的是**亲手选的**那台且它此刻 ready → 过去;否则 → 本端。旧写法在 main 上红了 5 条(台架落后于语义,
+    // 不是回退:那台离线时开机本来就该回本端)。现在:① 亲手选 + 在线 → 重载仍在那台;② 离线 → 重载回本端、记忆不丢;
+    // ③ 离线态的提示 / 占位 / 自动恢复改由「选了一台此刻不在线的电脑」触发(同 E3 的造法)。
+    await page.evaluate((u) => window.__forsionEngineTargets.setRunLocation({ kind: 'unit', unitId: u }, 'Studio Mac'), U)
     await page.waitForFunction(() => window.__forsionStore.getState().connState === 'ok', null, { timeout: 20_000 }).catch(() => {})
+    await page.reload({ waitUntil: 'domcontentloaded' })
+    await page.waitForSelector('.mb-shell', { timeout: 60_000 })
+    await page.waitForFunction(() => window.__forsionEngineTargets?.focusRef().kind === 'unit' && window.__forsionStore.getState().connState === 'ok', null, { timeout: 30_000 }).catch(() => {})
+    const restored = await st(() => window.__forsionEngineTargets.focusRef())
+    check('重载后:亲手选过的那台在线 → 新对话仍在那台(K7 U3)', restored.kind === 'unit' && restored.unitId === U, JSON.stringify(restored))
     world.setOffline(true)
     await page.evaluate(() => { try { localStorage.setItem('forsion_theme', 'dark') } catch { /* ignore */ } })
     await page.reload({ waitUntil: 'domcontentloaded' })
     await page.waitForSelector('.mb-shell', { timeout: 60_000 })
-    await page.waitForFunction(() => window.__forsionEngineTargets?.focusRef().kind === 'unit', null, { timeout: 15_000 }).catch(() => {})
-    const restored = await st(() => window.__forsionEngineTargets.focusRef())
-    check('重载后焦点从落盘恢复到那台电脑', restored.kind === 'unit' && restored.unitId === U, JSON.stringify(restored))
-    await page.waitForFunction(() => window.__forsionStore.getState().connState === 'err', null, { timeout: 30_000 }).catch(() => {})
-    const bootOffline = await st(() => ({ conn: window.__forsionStore.getState().connState, msg: window.__forsionStore.getState().connMessage, h: window.__forsionEngineTargets.health() }))
-    check('开机时那台就不在线:连接失败、健康 offline、给人话', bootOffline.conn === 'err' && /不在线/.test(bootOffline.msg) && Object.values(bootOffline.h).some((x) => x.state === 'offline'), JSON.stringify(bootOffline))
+    await page.waitForFunction(() => window.__forsionEngineTargets?.focusRef().kind === 'home' && window.__forsionStore.getState().connState === 'ok', null, { timeout: 45_000 }).catch(() => {})
+    const bootOffline = await st(() => ({
+      focus: window.__forsionEngineTargets.focusRef(), conn: window.__forsionStore.getState().connState, notice: !!document.querySelector('.t2-target-health'),
+      memory: Object.keys(localStorage).filter((k) => k.startsWith('forsion_run_location:')).map((k) => localStorage.getItem(k)),
+    }))
+    check('开机时记住的那台不在线:这份草稿回到本端、连得上、不挂不在线提示;记住的仍是那台(K7 U3)', bootOffline.focus.kind === 'home' && bootOffline.conn === 'ok' && !bootOffline.notice && bootOffline.memory.some((v) => String(v).toLowerCase().includes(U)), JSON.stringify(bootOffline))
     // S4:焦点那台连不上不妨碍本端会话 —— 列表照样拉;重载后绑定从落盘读回(那台上建的会话仍认那台)
     await page.waitForFunction(() => window.__forsionStore.getState().sessions.some((s) => s.id === 'home-1'), null, { timeout: 15_000 }).catch(() => {})
     const bootList = await page.evaluate((sid) => ({ ids: window.__forsionStore.getState().sessions.map((s) => s.id), loc: window.__forsionEngineTargets.locationOf(sid) }), newSid)
     check('开机时那台不在线:本端会话列表照样在;重载后那条会话的绑定从落盘读回', bootList.ids.includes('home-1') && bootList.loc?.kind === 'unit' && bootList.loc.unitId === U, JSON.stringify(bootList))
-    // 主页 → Tangu 对话视图看输入框顶上的提示(新对话空态也挂着同一个输入框)
-    const ta3 = page.locator('.t2c-ta').first()
-    if (await ta3.count()) { await ta3.click().catch(() => {}); await ta3.fill('离线时打的字').catch(() => {}); await page.keyboard.press('Enter').catch(() => {}) }
-    await page.waitForSelector('.t2-target-health', { timeout: 10_000 }).catch(() => {})
+    // ③ 选了一台此刻不在线的电脑 → 连接失败 + 输入框顶上的不在线提示(新对话空态也挂着同一个输入框)
+    await page.evaluate((u) => window.__forsionEngineTargets.setFocusTarget({ kind: 'unit', unitId: u }, { name: 'Studio Mac' }), U)
+    await page.waitForFunction(() => window.__forsionStore.getState().connState === 'err', null, { timeout: 30_000 }).catch(() => {})
+    const pickedOffline = await st(() => ({ conn: window.__forsionStore.getState().connState, msg: window.__forsionStore.getState().connMessage, h: window.__forsionEngineTargets.health() }))
+    check('选了一台不在线的电脑:连接失败、健康 offline、给人话', pickedOffline.conn === 'err' && /不在线/.test(pickedOffline.msg) && Object.values(pickedOffline.h).some((x) => x.state === 'offline'), JSON.stringify(pickedOffline))
+    // 主页输入框也说「等那台连上」(10-14 修:原来退回本端的「先在设置里连接后端」,与它头上写着「离线」的胶囊对不上)
+    const homePh = await page.locator('.t2c-ta:visible').first().getAttribute('placeholder').catch(() => null)
+    check('主页输入框占位同样说「等那台连上」', /Studio Mac/.test(homePh || ''), String(homePh))
+    await openTanguChat()
     await page.addStyleTag({ content: '.ach-toast{display:none!important}' })
     await page.screenshot({ path: path.join(SHOT_DIR, 'enginetarget-offline-dark.png') })
     check('深色主题下同样出提示', !!(await page.$('.t2-target-health[data-target-health="offline"]')))
-    const ph = await page.locator('.t2c-ta').first().getAttribute('placeholder').catch(() => null)
+    const ph = await page.locator('.t2c-ta:visible').first().getAttribute('placeholder').catch(() => null)
     check('没连上时输入框占位说「等那台连上」(不是本端的「先在设置里连接后端」)', /Studio Mac/.test(ph || ''), String(ph))
     // 提示说了「恢复连接后会自动继续」:那台回来后必须**不点重试**就自己连上(健康探针退避 ≤ 30s)
     world.setOffline(false)
     await page.waitForFunction(() => { const s = window.__forsionStore.getState(); return s.connState === 'ok' && s.agentDefs.some((a) => a.slug === 'mac-only') }, null, { timeout: 45_000 }).catch(() => {})
     const healed = await st(() => ({ conn: window.__forsionStore.getState().connState, agents: window.__forsionStore.getState().agentDefs.map((a) => a.slug) }))
-    check('那台回来后不点重试也自己连上(开机离线 → 自动恢复,目录拉到那台的)', healed.conn === 'ok' && healed.agents.includes('mac-only'), JSON.stringify(healed))
+    check('那台回来后不点重试也自己连上(选时离线 → 自动恢复,目录拉到那台的)', healed.conn === 'ok' && healed.agents.includes('mac-only'), JSON.stringify(healed))
     await page.waitForFunction(() => !document.querySelector('.t2-target-health'), null, { timeout: 5_000 }).catch(() => {})
     check('自动恢复后连接态提示消失', !(await page.$('.t2-target-health')))
     await page.evaluate(() => { try { localStorage.setItem('forsion_theme', 'light') } catch { /* ignore */ } })
@@ -419,12 +440,8 @@ async function main() {
     await page.evaluate((u) => window.__forsionEngineTargets.setFocusTarget({ kind: 'unit', unitId: u }, { name: 'Studio Mac' }), U)
     await page.waitForFunction(() => window.__forsionStore.getState().connState === 'err', null, { timeout: 20_000 }).catch(() => {})
     await page.waitForSelector('.t2-target-health[data-target-health="caller-unavailable"]', { timeout: 8_000 }).catch(() => {})
-    if (!(await page.$('.t2-target-health'))) {
-      // 换焦点清了 activeId,移动端可能停在主页:同 E2,从主页输入框进对话视图(输入框禁用,不会真发出去)
-      const ta4 = page.locator('.t2c-ta').first()
-      if (await ta4.count()) { await ta4.click().catch(() => {}); await ta4.fill('身份取不到时打的字').catch(() => {}); await page.keyboard.press('Enter').catch(() => {}) }
-      await page.waitForSelector('.t2-target-health[data-target-health="caller-unavailable"]', { timeout: 10_000 }).catch(() => {})
-    }
+    await openTanguChat() // 换焦点清了 activeId,移动端可能停在主页
+    await page.waitForSelector('.t2-target-health[data-target-health="caller-unavailable"]', { timeout: 10_000 }).catch(() => {})
     const callerNotice = await page.evaluate(() => { const n = document.querySelector('.t2-target-health'); return n ? { state: n.getAttribute('data-target-health'), text: n.textContent, retry: !!n.querySelector('button') } : null })
     check('身份取不到:提示条说清楚、给「重试」', callerNotice?.state === 'caller-unavailable' && callerNotice.retry, JSON.stringify(callerNotice))
     await page.addStyleTag({ content: '.ach-toast{display:none!important}' })
@@ -467,7 +484,8 @@ async function main() {
     check('G:会话建在 A、run 打到 A', world.mac.seen.runs.length > macRunsBefore && runA?.sessionId === sidA, JSON.stringify({ sidA, runA: runA?.sessionId }))
 
     // 焦点换到 B:A 上的会话不被掐(SSE 仍挂着、run 仍在跑),留在列表里、仍绑 A
-    await page.evaluate((u) => window.__forsionEngineTargets.setFocusTarget({ kind: 'unit', unitId: u }, { name: 'Office PC' }), U2)
+    // 亲手选 B(K7:只改焦点不算亲手选 —— 之后的新草稿会被对账拉回记住的 A,「焦点 B 上的空白新对话建在 B」那条就红)
+    await page.evaluate((u) => window.__forsionEngineTargets.setRunLocation({ kind: 'unit', unitId: u }, 'Office PC'), U2)
     await page.waitForFunction(() => window.__forsionStore.getState().connState === 'ok' && window.__forsionStore.getState().modelsResp?.models?.some((m) => m.id === 'pc-model'), null, { timeout: 20_000 }).catch(() => {})
     const g2 = await page.evaluate((sid) => {
       const s = window.__forsionStore.getState()

@@ -12,6 +12,16 @@ export function isFileRef(name: string): boolean {
   return /\.(?=[a-z0-9]*[a-z])[a-z0-9]{1,10}$/i.test(name) && !/\.md$/i.test(name)
 }
 
+/** 一条双链指不指得到库里的一份**文件**(渲染时判「已解析」、幽灵链接面板、点击白板链接共用这一个口径)。
+ *  除了带扩展名的普通文件,还认两种以 `.md` 结尾的文件类型:省掉 `.md` 的写法(`[[流程.excalidraw]]` → `流程.excalidraw.md`,
+ *  Obsidian 惯例;插件的 `[[图.mindmap]]` 同理)和写全的复合后缀(`[[流程.excalidraw.md]]`)。此前只走 resolveFileName,
+ *  它把 `.md` 结尾的名字一律挡掉 —— 这两种写法的白板链接明明在库里,却画成「不存在」的灰色(2026-10-14 截图发现)。 */
+export function resolveFileLink(name: string, files: string[], sourcePath?: string): string | null {
+  return resolveFileName(name, files, sourcePath)
+    ?? (isFileRef(name) ? resolveVaultPath(`${name}.md`, files, sourcePath) : null)
+    ?? (/\.[^./\\]+\.md$/i.test(name) ? resolveVaultPath(name, files, sourcePath) : null)
+}
+
 /** name → 命中的 vault 相对文件路径(files 原样返回,大小写不敏感比较)或 null。 */
 export function resolveFileName(name: string, files: string[], sourcePath?: string): string | null {
   if (!isFileRef(name)) return null

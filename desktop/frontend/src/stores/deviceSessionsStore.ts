@@ -18,7 +18,7 @@ import type { SessionRecord, UnitInfo } from '../types'
 import { useApp } from './appStore'
 import { openSession } from '../sessionNav'
 import { setActiveSpace, useSpaceStore } from '@lcl/engine'
-import { bindSession, bindingConflict, engineFetch, isUnitIdShape, locationOf, noteUnitName, sameRef, targetForRef, withLocation } from '../services/engine/targets'
+import { bindSession, bindingConflict, engineFetch, isUnitIdShape, locationOf, noteUnitName, sameRef, targetForRef, useRemoteCapability, withLocation } from '../services/engine/targets'
 import { capsSaysReady, describeDevice, statusFromError, type DeviceStatus, type ProbeResult, type RefusalDetail } from '../services/deviceStatus'
 import { noteDeviceProbe, probeOfError, resetDeviceMarks, useDeviceMarks } from '../services/deviceMarks'
 import { rosterAvailable, runLocationsAvailable } from '../features/runtime'
@@ -356,3 +356,5 @@ useApp.subscribe((s) => {
   lastToken = tok
   useDeviceSessions.getState().reset()
 })
+// 桌面:cfg.token 是本机引擎的令牌,云端账号变了它未必变 —— 以主进程中转口的换代为准(到位 / 换号 / 登出)。
+useRemoteCapability.subscribe(() => useDeviceSessions.getState().reset())
