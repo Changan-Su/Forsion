@@ -12,7 +12,7 @@
  *  ⑥ 这一轮跑着的时候切到别的会话,收尾照拉,切回来灰字在。
  *
  * 需先 npm run build。用法:npm run check:promptsuggest
- * 负对照:node scripts/prompt-suggest.check.cjs --nc(不开开关 → ②③ 的断言必须转红)。
+ * 负对照:node scripts/prompt-suggest.check.cjs --nc(不开开关 → ② 起「开着」之后的断言必须转红)。
  */
 const fs = require('fs')
 const os = require('os')
