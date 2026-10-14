@@ -16,7 +16,8 @@
 
 /** cloud = Forsion 账号面在(内置包 Forsion Extend 装载了,桥键 forsionLogin 在)。 */
 /** hover = 设备有悬停(「外围淡出」靠悬停恢复,没有悬停时那一行不渲染);wide = 非窄版设置页(Ribbon 那一行窄版不渲染)。 */
-export type SettingsSearchNeed = 'stored' | 'desktop' | 'managed' | 'external' | 'cloud' | 'hover' | 'wide'
+/** host = 桌面宿主本机,不含设备页(设备页本机投射时 shim 也给 backendStatus,isDesktop 为真)。 */
+export type SettingsSearchNeed = 'stored' | 'desktop' | 'host' | 'managed' | 'external' | 'cloud' | 'hover' | 'wide'
 
 export interface SettingsSearchEntry {
   /** 结果行的稳定 id(台架按它点)。 */
@@ -59,7 +60,8 @@ export const SETTINGS_SEARCH_INDEX: readonly SettingsSearchEntry[] = [
   { id: 'ambient', tab: 'theme', anchor: 'ambient', labelKey: 'settings.theme.ambient', keywords: '取色 染色 外壳 内容 颜色 ambient tint chrome color' },
   { id: 'visuals', tab: 'model', sub: 'm-models', anchor: 'visuals', labelKey: 'settings.theme.visuals', keywords: 'Intelligent UI 智能界面 可视化 图文 图片 来源 图表 Sketch visuals interactive display' },
   { id: 'smooth-caret', tab: 'theme', anchor: 'smooth-caret', labelKey: 'settings.theme.smoothCaret', keywords: '光标 caret cursor' },
-  { id: 'prompt-suggest', tab: 'theme', anchor: 'prompt-suggest', labelKey: 'settings.theme.promptSuggest', keywords: '输入建议 下一句 预测 补全 灰字 Tab suggestion autocomplete predict next prompt', needs: ['desktop', 'hover', 'wide'] },
+  // 2026-10-14 从「外观」搬到 高级 → 界面与会话。行的位置不动:这份表的顺序原样进给模型看的落点清单(settingsTarget.ts agentSettingsTargets)。
+  { id: 'prompt-suggest', tab: 'advanced', sub: 'a-ui', anchor: 'prompt-suggest', labelKey: 'settings.promptSuggest', keywords: '输入建议 下一句 预测 补全 灰字 Tab suggestion autocomplete predict next prompt', needs: ['host', 'hover', 'wide'] },
   { id: 'chat-avatars', tab: 'theme', anchor: 'chat-avatars', labelKey: 'settings.theme.chatAvatars', keywords: '头像 聊天 avatar chat' },
   { id: 'calm-dim', tab: 'theme', anchor: 'calm-dim', labelKey: 'settings.theme.calmDim', keywords: '外围淡出 呼吸感 变淡 退后 侧栏 标签 dim fade quiet calm surroundings sidebar ribbon', needs: ['hover'] },
   { id: 'calm-reading', tab: 'theme', anchor: 'calm-reading', labelKey: 'settings.theme.calmReading', keywords: '宽松正文 呼吸感 行距 段距 行高 阅读宽度 line height spacing reading relaxed calm' },
