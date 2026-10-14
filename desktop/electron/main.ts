@@ -2479,6 +2479,11 @@ app.whenReady().then(async () => {
       setAmadeusSyncFactory: (factory) => { amadeusSyncFactory = factory },
       // ── 0.6 起:设备互联的云端通道工厂(隧道 + caps 上报器;units:* 名册四通道也由 Extend 注册)。doRefreshUnitHost 每次重建时调 ──
       setUnitHubFactory: (factory) => { unitHubFactory = factory },
+      // ── 0.8.2 之后:诊断数据的运行日志(引擎状态 + 日志环形缓冲)。Extend 只在用户打开了上传、要传一份的时候来读 ──
+      diagnosticLogs: () => {
+        const st = PRODUCT.agentBackend ? backend.getStatus() : null
+        return { engine: { state: st?.state ?? null, lastError: st?.lastError ?? null, lines: st ? backend.getLogs() : [] } }
+      },
     }
     // 插件页停用了的:不装主进程半身 —— 与没装 Extend 同一个形态(cloud:present 空,云端界面整套隐藏)。
     const off = (await loadConfig()).disabledBundles

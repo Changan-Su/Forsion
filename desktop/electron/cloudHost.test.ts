@@ -48,6 +48,7 @@ const host: CloudHost = {
   setTokenRefresher: () => {},
   setAmadeusSyncFactory: () => {},
   setUnitHubFactory: () => {},
+  diagnosticLogs: () => ({ engine: { state: null, lastError: null, lines: [] } }),
 }
 const imported: string[] = []
 const load = () => loadBuiltinDesktopEntries({
