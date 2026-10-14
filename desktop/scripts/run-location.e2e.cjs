@@ -39,6 +39,8 @@ function check(name, ok, detail) {
 /** 假云端:名册 + 「Mac mini」的隧道(远程访问状态面 / 只读配置 / 引擎转给桩 B)。记下每条请求带的凭据。 */
 function startCloud(miniUrl) {
   const seen = []
+  /** 经隧道发给那台的请求体(查有没有夹带这台电脑的路径)。 */
+  const bodies = []
   const state = { caller: 'unconfirmed', asked: 0 }
   const server = http.createServer((req, res) => {
     const u = new URL(req.url, 'http://x')
@@ -69,9 +71,12 @@ function startCloud(miniUrl) {
     })
     up.on('error', () => { if (!res.headersSent) json(502, { code: 'UNIT_TIMEOUT' }); else res.destroy() })
     res.on('close', () => up.destroy())
+    const chunks = []
+    req.on('data', (c) => chunks.push(c))
+    req.on('end', () => { if (chunks.length) bodies.push(`${req.method} ${p} ${Buffer.concat(chunks).toString('utf8')}`) })
     req.pipe(up)
   })
-  return new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve({ url: `http://127.0.0.1:${server.address().port}`, seen, state, close: () => server.close() })))
+  return new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve({ url: `http://127.0.0.1:${server.address().port}`, seen, bodies, state, close: () => server.close() })))
 }
 
 /** 桩引擎 + 「建会话」记录(桩自己不实现 POST /agent/sessions)。 */
@@ -115,7 +120,10 @@ async function main() {
   here.stub.script([{ type: 'token', payload: { text: '好的。' } }, { type: 'done', payload: { content: '好的。' } }])
   const cloud = await startCloud(mini.stub.url)
 
-  fs.writeFileSync(path.join(home, 'auth.json'), JSON.stringify({ token: FORSION_TOKEN, cloudUrl: cloud.url, username: 'tester' }))
+  // ⚠️ config.json 必须先在:managed 模式起的是真引擎,它启动时见「有 auth.json、没有 config.json」就按旧配置迁移,
+  //    把 auth.json 改名成 .bak —— 登录态跑到一半没了(菜单变成「登录后可选择其他电脑」;10-14 第一、二轮就卡在这)。
+  fs.writeFileSync(path.join(home, 'config.json'), JSON.stringify({ cloud: { url: cloud.url } }))
+  fs.writeFileSync(path.join(home, 'auth.json'), JSON.stringify({ token: FORSION_TOKEN, cloudUrl: cloud.url, username: 'tester' }), { mode: 0o600 })
   for (const dir of [userData, `${userData}-dev`]) {
     fs.mkdirSync(dir, { recursive: true })
     fs.writeFileSync(path.join(dir, 'tangu-desktop-config.json'), JSON.stringify({
@@ -269,6 +277,13 @@ async function main() {
     const section = win.locator(`[data-device-section="${MINI}"]`)
     await section.first().waitFor({ timeout: 8000 }).catch(() => {})
     check('④ 侧栏多出「Mac mini」分组', await section.count() >= 1 && /Mac mini/.test(await section.first().innerText().catch(() => '')), await section.count())
+    // 右侧任务概览的「工作范围」:只有那台的默认目录;这台电脑的笔记库不在里面,也不给「添加工作文件夹」(那会把本机路径写进那台的会话)
+    const scopeRows = await win.locator('.t2-tsum-row').evaluateAll((els) => els.map((el) => el.getAttribute('title') || el.textContent || ''))
+    const addRoot = await win.locator('[aria-label^="添加工作文件夹"]').count()
+    check('④ 别的电脑上的会话:工作范围不列这台电脑的笔记库,不给「添加工作文件夹」', scopeRows.some((r) => r.includes('/Users/mini/Forsion')) && !scopeRows.some((r) => /Amadeus/.test(r)) && addRoot === 0, { scopeRows, addRoot })
+    // 整段下来,经隧道发给那台的请求体里没有这台电脑的任何路径(临时 home 的目录名是唯一的记号:默认工作区、笔记库都在它下面 / 以它为前缀)
+    const leaked = cloud.bodies.filter((b) => b.includes(path.basename(home)))
+    check('④ 发给那台的请求体里没有这台电脑的路径', cloud.bodies.length > 0 && leaked.length === 0, { sent: cloud.bodies.length, leaked: leaked.map((b) => b.slice(0, 200)) })
     await windowShot('5-remote-session-window.png')
 
     // ── ⑤ 凭据不进渲染层 ──
@@ -287,7 +302,8 @@ async function main() {
     await projectPill.waitFor({ timeout: 10_000 })
     await win.waitForTimeout(600)
     check('⑥ 新对话仍记着上次选的 Mac mini(那台在线)', await where() === `unit:${MINI}`, await where())
-    const plus = win.locator('.t2s-group-add').first()
+    // 同一个类名在这一行里先是「…」菜单、后才是「+」:按图标认(10-14 第三轮点成了「…」,本机一条会话都没建)
+    const plus = win.locator('button.t2s-group-add:has(svg.lucide-plus)').first()
     if (await plus.count()) {
       await plus.click()
       for (let t0 = Date.now(); !here.created.length && Date.now() - t0 < 10_000;) await win.waitForTimeout(150)
@@ -304,6 +320,24 @@ async function main() {
     check('⑥ 之后的新对话留在这台电脑', await where() === 'home', await where())
   } catch (e) {
     check(`台架中断:${e && e.message}`, false)
+    // 中断时把现场倒出来:一轮真 Electron 要排界面测试锁,不能靠「再跑一次看看」
+    try {
+      const win = app.windows()[0]
+      const diag = await win.evaluate(async () => {
+        const relay = await window.tangu.unitRelay().catch((err) => ({ error: String(err) }))
+        const roster = await window.tangu.unitsList().catch((err) => ({ error: String(err) }))
+        const picker = document.querySelector('[data-run-location-picker]')
+        return {
+          relay: relay && (relay.error ? relay : { base: relay.base, hasToken: !!relay.token, accountId: relay.accountId }),
+          roster: roster && (roster.error ? roster : { status: roster.status, units: (roster.json?.units || []).map((u) => `${u.name}/${u.kind}/${u.online}`), detail: roster.json?.detail }),
+          where: picker?.getAttribute('data-run-location'),
+          menu: document.querySelector('.runloc-menu')?.innerText ?? null,
+        }
+      })
+      console.log('现场  ', JSON.stringify(diag))
+      console.log('云端收到', JSON.stringify(cloud.seen.slice(-25).map((r) => `${r.method} ${r.path}${r.auth ? ' [auth]' : ''}`)))
+      fs.writeFileSync(shot('fail-window.png'), Buffer.from(await app.evaluate(async ({ BrowserWindow }) => (await BrowserWindow.getAllWindows()[0].webContents.capturePage()).toPNG().toString('base64')), 'base64'))
+    } catch (err) { console.log('现场取不到:', err && err.message) }
   } finally {
     await app.close().catch(() => {})
     for (const s of [here.stub, mini.stub, cloud]) { try { s.close() } catch { /* ignore */ } }

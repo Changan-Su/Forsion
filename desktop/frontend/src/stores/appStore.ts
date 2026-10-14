@@ -2545,9 +2545,10 @@ export const useApp = create<AppState>((set, get) => ({
       // 「上传工作区(25MB 限制)」而非本机路径插入,且因 loadedHistory 已标记不再重拉 → 刷新前一直卡住。
       // 从会话记录的 project_path 派生 host 兜底,真实 config 覆盖其上(用户显式设过 sandbox 时仍以 config 为准)。
       const sess = get().sessions.find((x) => x.id === sessionId) || get().archivedSessions.find((x) => x.id === sessionId)
+      // 会话在别的电脑上:不并这一端的笔记库根(与建会话 / 发消息同一口径;否则它存进会话配置,下一条消息就带着本机路径发给那台)
       const base: AgentConfig = withAmadeusWorkspace(sess?.project_path
         ? { execMode: 'host', approvalMode: DEFAULT_APPROVAL, cwd: sess.project_path }
-        : {}, activeAmadeusRoot())
+        : {}, refForSession(sessionId).kind === 'unit' ? null : activeAmadeusRoot())
       // 本地已有的键优先(local-wins):本地每次改配置都会同步 PUT,永远不旧于服务端;而这里的
       // fetch 可能与「新会话初始配置 PUT」竞速,整体替换会把刚选好的 agentSlug/thinkingLevel 冲掉。
       set((s) => ({ configBySession: { ...s.configBySession, [sessionId]: { ...base, ...config, ...(s.configBySession[sessionId] || {}) } } }))

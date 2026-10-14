@@ -19,6 +19,8 @@ vi.mock('../services/http', () => ({
       : u.includes('/agent/models') ? { models: [{ id: 'mini-model', name: 'Mini' }], defaultModelId: 'mini-model' }
       : u.includes('/agent/sessions') && (init?.method || 'GET').toUpperCase() === 'POST' ? { session: { id: `s-${calls.length}`, title: '', created_at: '2026-10-14T00:00:00Z', updated_at: '2026-10-14T00:00:00Z' } }
       : u.includes('/agent/sessions?') ? { sessions: [] }
+      : u.includes('/agent/runs?') ? { runs: [] }
+      : /\/agent\/sessions\/[^/]+\/messages/.test(u) ? { messages: [] }
       : {}
     return new Response(JSON.stringify(body), { status: 200 })
   },
@@ -174,5 +176,24 @@ describe('桌面把运行位置放到别的电脑上', () => {
     await useApp.getState().createInWorkspace({ key: '/Users/mini/x', name: 'x', kind: 'local', path: '/Users/mini/x' })
     expect(T.focusRef()).toEqual({ kind: 'unit', unitId: U })
     expect(creates()[0].url).toBe(`${UNIT}/engine/agent/sessions`)
+  })
+
+  it('④ 打开别的电脑上的会话:这台电脑的笔记库根不并进它的配置;本机会话照并(真 Electron 截图里查出来的)', async () => {
+    const { usePageStore } = await import('../amadeus/store/pageStore')
+    usePageStore.setState({ vaultRoot: '/Users/me/Forsion/Amadeus' })
+    const at = '2026-10-14T00:00:00Z'
+    T.bindSession('remote-1', { kind: 'unit', unitId: U })
+    useApp.setState({ sessions: [
+      { id: 'remote-1', title: 'r', project_path: '/Users/mini/code/webapp', created_at: at, updated_at: at },
+      { id: 'local-1', title: 'l', project_path: '/Users/me/code/app', created_at: at, updated_at: at },
+    ] as any })
+    await useApp.getState().loadSessionHistory('remote-1')
+    await useApp.getState().loadSessionHistory('local-1')
+    await settle()
+    const { configBySession } = useApp.getState()
+    expect(configBySession['remote-1']).toMatchObject({ execMode: 'host', cwd: '/Users/mini/code/webapp' })
+    expect(configBySession['remote-1'].extraRoots ?? []).toEqual([])
+    expect(configBySession['local-1'].extraRoots).toEqual(['/Users/me/Forsion/Amadeus'])
+    usePageStore.setState({ vaultRoot: null })
   })
 })

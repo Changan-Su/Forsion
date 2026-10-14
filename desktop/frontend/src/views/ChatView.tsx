@@ -48,7 +48,7 @@ import { useChildChat } from '../stores/childChatStore'
 import { TeamSummary } from './chat2/TeamSummary'
 import { useI18n } from '../i18n'
 import { speakMessage, stopSpeaking, subscribeTts, ttsState, type TtsState } from '../services/ttsService'
-import { homeTarget } from '../services/engine/targets'
+import { homeTarget, useComposerRef } from '../services/engine/targets'
 import type { ViewProps } from '@lcl/engine/types'
 import { useShallow } from 'zustand/react/shallow'
 import './chat2/chat2.css'
@@ -220,6 +220,8 @@ export function ChatView({ leaf, params }: ViewProps) {
   // Vault 切换会即时重算 Project 列表与系统工作根;不能只在 s.workspaces() 里 getState 快照,
   // 否则 appStore 本身没变化时 React 不会重渲染选择器。
   const amadeusRoot = usePageStore((state) => state.vaultRoot)
+  // 会话在别的电脑上(桌面作为调用方):这台电脑的笔记库 / 文件夹都不属于它的工作范围,也不许把本机路径写进那台的会话配置
+  const sessionElsewhere = useComposerRef(activeId).kind === 'unit'
 
   // 主区划线后交给侧栏的引用可能先于 chat-panel 挂载；目标承载一出现就消费，其他 ChatView 不碰。
   useEffect(() => {
@@ -251,7 +253,7 @@ export function ChatView({ leaf, params }: ViewProps) {
           cwd: cloud ? undefined : (s.newChatWs?.path || undefined),
           ...s.newChatCfg,
         }, preset) as AgentConfig)
-      })(), amadeusRoot)
+      })(), sessionElsewhere ? null : amadeusRoot) // 别的电脑上的会话 / 草稿:这台电脑的笔记库不并进它的工作范围
   // 团队成员会话(子聊天里直接追问):审批闸只听团队会话此刻的档(引擎 agentLoop.approvalModeSessionId),
   // 成员会话自己的存值不算数 → 药丸显示团队档、改也改团队会话(与团队主区药丸同一条写路径)。
   // 成员身份同引擎按父链接核实:父会话 id 由 ChildChatPanel 的 Team Desk 成员行给,须等于配置里的 teamMember ——
@@ -887,9 +889,9 @@ export function ChatView({ leaf, params }: ViewProps) {
           modelId={mvModelId}
           hostCwd={mvCfg.execMode === 'host' ? mvCfg.cwd : undefined}
           extraRoots={mvCfg.extraRoots}
-          lockedRoots={mvCfg.execMode === 'host' && amadeusRoot ? [amadeusRoot] : []}
+          lockedRoots={mvCfg.execMode === 'host' && amadeusRoot && !sessionElsewhere ? [amadeusRoot] : []}
           // 只有本机会话谈得上「加本机文件夹」;沙箱会话的工作区不在本机。
-          onAddRoot={mvCfg.execMode === 'host' && activeId ? () => {
+          onAddRoot={mvCfg.execMode === 'host' && activeId && !sessionElsewhere ? () => {
             void window.tangu?.pickDirectory?.().then((dir) => {
               if (!dir) return
               const cur = useApp.getState().configBySession[activeId]?.extraRoots || []
