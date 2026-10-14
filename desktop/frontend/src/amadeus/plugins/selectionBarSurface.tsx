@@ -74,7 +74,8 @@ export function mountPluginSelectionBar(root: HTMLElement, pluginId: string, ini
     hide() {
       if (disposed) return
       shown = null
-      epoch++
+      // 重挂只为丢掉宿主自己看着的那份选区;自己报选区的视图滚动 / 缩放时都要 hide(),重挂会把刚开的结果卡一起带走。
+      if (opts.watch !== false) epoch++
       render()
     },
     update(patch) {

@@ -291,3 +291,27 @@ it('ctx.ui.mountSelectionBar(缺省看选区):show() 报的也随滚动收;右�
   await act(async () => { handle.dispose() })
   expect(errors).toEqual([])
 })
+
+// 自己报选区的视图(PDF 阅读器)滚动 / 缩放时都要 hide():只收条,已经开着的结果卡留着(和聊天里滚动时一样)。
+// 负对照(2026-10-14 实跑):hide() 照旧无条件重挂 → 「卡还在」红。
+it('ctx.ui.mountSelectionBar({ watch: false }):hide() 只收条,开着的结果卡不跟着没', async () => {
+  const { mountPluginSelectionBar } = await import('./selectionBarSurface')
+  const { usePluginStore } = await import('./pluginStore')
+  const bar = () => document.querySelector<HTMLElement>('[data-testid="selection-bar"]')
+  const card = () => document.querySelector<HTMLElement>('[data-testid="inline-ai-panel"]')
+  const press = (n: Element) => act(async () => { n.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true })) })
+  usePluginStore.setState({ selectionActions: [{ pluginId: 'contract', item: { id: 'sum', title: 'Sum', scope: 'own', run: async () => 'summary' } }] })
+  let handle!: ReturnType<typeof mountPluginSelectionBar>
+  await act(async () => { handle = mountPluginSelectionBar(el, 'contract', { watch: false, ask: false }) })
+  await act(async () => { handle.show({ text: 'hello', rect: { left: 10, right: 60, top: 100, bottom: 120 } }) })
+  await press(bar()!.querySelector('[data-act="more"]')!)
+  await press(document.querySelector('[data-testid="selbar-more"] [role="menuitem"]')!)
+  expect(card()).not.toBeNull()
+  expect(bar(), '开卡时条收起').toBeNull()
+  await act(async () => { handle.hide() })
+  expect(card(), '卡还在').not.toBeNull()
+  await act(async () => { handle.dispose() })
+  expect(card()).toBeNull()
+  usePluginStore.setState({ selectionActions: [] })
+  expect(errors).toEqual([])
+})
