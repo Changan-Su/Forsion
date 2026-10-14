@@ -194,6 +194,7 @@ async function main() {
         await item('space:amadeus').click()
         await page.waitForSelector('.mb-shell[data-nav="list"]')
         await page.waitForSelector('.amx-tree .pl-chips')
+        assert.equal(await page.locator('.bmc-heading .bmc-title > small').textContent(), config.locale.startsWith('zh') ? '云端智库' : 'Cloud vault')
         assert.equal(await page.locator('.amx-tree [data-filter="boards"]').count(), 1)
         assert.equal(await page.locator('[data-chrome-action="search"]').count(), 1)
         await page.locator('.amx-tree [data-filter="tree"]').click()

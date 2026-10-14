@@ -85,6 +85,11 @@ async function bootstrap(): Promise<void> {
     })
     // P2/P3 协同与分享面(web 专属;共享 UI 据 window.amadeusCollab 解闸)。
     installCloudCollab({ apiBase: getApiBase(), getToken })
+    // The Web bridge is always cloud-backed. Mobile's entry aligns this state itself, but the Web entry
+    // used to leave the store on its local default: the mobile vault title exposed the internal vault id.
+    // Load only after window.amadeus is ready (the module captures the bridge when it is evaluated).
+    const { usePageStore } = await import('@/amadeus/store/pageStore')
+    usePageStore.setState({ vaultSide: 'cloud' })
 
     // window.tangu / window.amadeus 就位后再加载启动模块。手机单列(lcl.uiMode=mobile,index.html
     // 内联脚本在模块求值前已写好键)装载 Mobile 壳(@mobile/mobileEntry,与移动 App 同源码 —— 显示
