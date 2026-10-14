@@ -2,6 +2,8 @@
  * 配色层 — 主题模型的「颜色」轴,再拆成**两个自由度**:主题色(data-skin)× 背景色(data-bg)。
  * 语言(data-theme)只决定结构;这里只决定颜色。三套 token 两两不相交,故 语言 × 主题色 × 背景色 自由组合。
  * - **主题色(data-skin)**:只设 accent 家族 —— --accent/-ink/-hover/-light/-rgb、--on-accent(-ink)、--user-bg;单色配色的暗色另压 --action-fill(-hover)。
+ *   单色配色(经典 cream / 墨色 ink)另设 --wikilink-ink:它们的 accent 就是正文色,笔记里的双链要有自己的一支颜色(2026-10-14 用户选方案 A,柔蓝);
+ *   其余配色不设,双链跟 --accent-ink。
  * - **背景色(data-bg)**:其余全部 —— bg/text/border/shadow/overlay/semantic(green/danger)/tool/glow。
  *   语义色与 tool 面属背景族:它们的可读性由底色决定,不由强调色决定(zhi 的 --tool-bg 更是不透明色)。
  * 每个 id 两块都在(两轴同 id = 拆轴前的整套配色,老用户零迁移)。值仍抄自原 lovable/echo/qbird/dreamer 皮肤。
@@ -14,6 +16,7 @@
  * 此前把 #f8f7f6 整体当 custom seed 定格(三改)使 accent 变纸白,选中/按钮全线对比崩坏,已回炉。
  * base.css :root 同步;暗侧=石墨底+纸白强调(用户确认可读)不动。 */
 :root[data-skin='cream'] {
+  --wikilink-ink: #2c5f9e;
   --accent: #1c1c1c;
   --accent-ink: #1c1c1c;
   --accent-hover: #000000;
@@ -46,6 +49,7 @@
   --glow: radial-gradient(110% 75% at 82% -12%, rgba(191, 188, 182, 0.14), transparent 56%);
 }
 :root.dark[data-skin='cream'] {
+  --wikilink-ink: #8fb4e3;
   --accent: #f8f7f6;
   --accent-ink: #f8f7f6;
   --accent-hover: #f9f8f8;
@@ -368,6 +372,7 @@
  * 亮色:只比经典略暖一点 —— 身份在暗色;浅色与经典/珊瑚之间没有能同时拉开 3 的暖纸面(theme-contrast 已显式豁免)。
  *   强调色是暖墨,不是经典那支炭黑。 */
 :root[data-skin='ink'] {
+  --wikilink-ink: #2c5f9e;
   --accent: #2b2723;
   --accent-ink: #2b2723;
   --accent-hover: #000000;
@@ -400,6 +405,7 @@
   --glow: radial-gradient(110% 75% at 82% -12%, rgba(196, 184, 166, 0.14), transparent 56%);
 }
 :root.dark[data-skin='ink'] {
+  --wikilink-ink: #8fb4e3;
   --accent: #ecebe7;
   --accent-ink: #ecebe7;
   --accent-hover: #ffffff;

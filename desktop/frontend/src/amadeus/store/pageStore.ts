@@ -21,7 +21,7 @@ import { patchFmExtraText } from '@amadeus-shared/db/pageFrontmatter'
 import { textFingerprint } from '@amadeus-shared/writeConflict'
 import { amadeus } from '../api'
 import { computeFdChildren, fdDirOf, isNoteMd, nearestFd, noteOfFd } from '../lib/fd'
-import { resolveFileName, resolveVaultPath } from '../lib/vaultFiles'
+import { resolveFileLink, resolveFileName, resolveVaultPath } from '../lib/vaultFiles'
 import { makeUndoStack, type Snap } from '../lib/undoHistory'
 import { useUiStore } from './uiStore'
 import { awaitTypingQuiet, installTypingGuard, noteLocalEdit } from './typingGuard'
@@ -914,7 +914,7 @@ function makePageStore(opts: PageStoreOptions = {}) {
       // 应用内开白板 tab(事件解耦同 open-db)。绝不落「创建笔记」兜底 —— createWikiPage 的 newPage
       // 会把已有画板文件覆盖成空笔记。
       if (isDrawingPath(raw)) {
-        const hit = resolveFileName(raw, get().files, src) ?? resolveFileName(`${raw}.md`, get().files, src)
+        const hit = resolveFileLink(raw, get().files, src)
         window.dispatchEvent(new CustomEvent('amadeus:open-drawing', { detail: { path: hit ?? raw, newTab: opts?.newTab, split: opts?.split } }))
         return
       }

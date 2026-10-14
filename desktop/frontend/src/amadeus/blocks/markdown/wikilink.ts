@@ -15,6 +15,7 @@ import type { Node as ProseNode } from '@milkdown/kit/prose/model'
 import { Decoration, DecorationSet, type EditorView } from '@milkdown/kit/prose/view'
 import { WIKILINK_RE, linkTarget } from '@amadeus-shared/links'
 import { isPdfLinkInner, parseBlockSubpath, parseMediaLinkInner, splitLinkInner } from '@amadeus-shared/pdfLink'
+import { isDrawingPath } from '@amadeus-shared/excalidraw/format'
 import { toAssetUrl } from '@amadeus-shared/assets'
 import { buildBlockString } from './mathLivePreview'
 import { editorFocused } from './editorFocus'
@@ -22,11 +23,38 @@ import { attachSourceButton, revealSource } from './sourceToggle'
 import { attachResizeHandle } from '../../lib/imageResize'
 import { armImageDrag } from './imageDrag'
 import { watchBrokenImage } from './brokenMedia'
+import { isFileRef } from '../../lib/vaultFiles'
 import { parseAppRefInner, type AppRef } from '../../../../../shared/appRefs'
 import { AppRefChip } from '../../../components/appRefs'
 import { HostLocaleProvider } from '../../../i18n'
 
 const IMG_EXT_RE = /\.(png|jpe?g|gif|webp|svg|avif|bmp)$/i
+
+/** 指向文件的双链前面那枚类型图标(2026-10-14 用户选方案 A:单色配色下双链有自己的颜色,指向文件的多一枚图标,
+ *  指向笔记的不带)。按名字认种类,与点击时的分派同口径;笔记(裸名 / `.md`)返回 null。路径抄自 lucide(ISC)。 */
+const FILE_ICON = {
+  pdf: '<path d="M12 7v14"/><path d="M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z"/>',
+  draw: '<path d="M8.3 10a.7.7 0 0 1-.63-1.08L11.4 3a.7.7 0 0 1 1.2-.04L16.3 8.9a.7.7 0 0 1-.57 1.1z"/><rect x="3" y="14" width="7" height="7" rx="1"/><circle cx="17.5" cy="17.5" r="3.5"/>',
+  db: '<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M3 9h18M3 15h18M9 3v18"/>',
+  media: '<rect width="18" height="18" x="3" y="3" rx="2"/><path d="m10 8 6 4-6 4z"/>',
+  image: '<rect width="18" height="18" x="3" y="3" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.09-3.09a2 2 0 0 0-2.82 0L6 21"/>',
+  file: '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/>',
+}
+export function fileIconKind(inner: string, target: string): keyof typeof FILE_ICON | null {
+  if (isPdfLinkInner(inner) || /\.pdf$/i.test(target)) return 'pdf'
+  if (parseMediaLinkInner(inner)) return 'media'
+  if (isDrawingPath(target)) return 'draw'
+  if (!isFileRef(target)) return null
+  return /\.db$/i.test(target) ? 'db' : IMG_EXT_RE.test(target) ? 'image' : 'file'
+}
+function fileIconEl(kind: keyof typeof FILE_ICON): SVGSVGElement {
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
+  svg.setAttribute('class', 'wikilink-ic')
+  svg.setAttribute('viewBox', '0 0 24 24')
+  svg.setAttribute('aria-hidden', 'true')
+  svg.innerHTML = FILE_ICON[kind] // 常量,不含用户内容
+  return svg
+}
 /** 与 prosemirror-keymap / unified/keyboard 判「Mod 是 Cmd 还是 Ctrl」同一口径;mac 上 Ctrl+点击是右键手势。 */
 export const IS_MAC_PLATFORM = typeof navigator !== 'undefined' && /Mac|iP(hone|[oa]d)/.test(navigator.platform)
 
@@ -279,6 +307,7 @@ function buildDecorations(
       const label = displayLabel(m[1], anchor)
       const ok = anchor && !anchor.target ? true : isResolved(target)
       const emoji = ok && target ? iconOf?.(target) : undefined // 目标笔记的 emoji 图标,渲染在链接文字前
+      const kind = ok ? fileIconKind(m[1], target) : null // 文件类双链的类型图标(没解析到的不画)
       // 点击要交给 openWikiLink 的串(m 是循环变量,须逐条捕获,勿在闭包里读 m;口径见 wikiOpenArg,与键盘跟随同源)。
       const openArg = wikiOpenArg(m[1])
       decos.push(Decoration.inline(from, to, { class: 'wikilink-src-hidden' }))
@@ -287,7 +316,7 @@ function buildDecorations(
           from,
           (view, getPos) => {
             const el = document.createElement('span')
-            el.className = ok ? 'wikilink' : 'wikilink wikilink-unresolved' // 未解析 → 黯淡虚线,点击询问创建
+            el.className = ok ? 'wikilink' : 'wikilink wikilink-unresolved' // 未解析 → 黯淡,点击询问创建
             el.setAttribute('role', 'link') // 读屏认得是链接(L-20;键盘跟随走 Alt+Enter,不给 tabindex —— 焦点留在正文里)
             el.setAttribute('data-wiki', target)
             stampSrc(el, getPos, spTo - spFrom)
@@ -296,7 +325,8 @@ function buildDecorations(
               ic.className = 'wikilink-emoji' // inline-block 逃逸下划线传播(text-decoration 子元素关不掉)
               ic.textContent = emoji
               el.append(ic, label)
-            } else el.textContent = label
+            } else if (kind) el.append(fileIconEl(kind), label)
+            else el.textContent = label
             // 按键分流(L-11):只有无修饰键的左键原地跳转;⌘/Ctrl+左键、中键 → 新标签页;
             // 右键(含 mac 的 Ctrl+点击)不跳转 —— 同样 preventDefault(不落光标,免得这一行当场露出 `[[源码]]`),
             // contextmenu 照常冒出系统菜单(下面拦住块层,见 contextmenu 那条)。Shift / Alt+左键放行给编辑器(扩选 / 落光标)。

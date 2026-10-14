@@ -1312,26 +1312,39 @@ body.amx-marquee-active * {
   display: inline;
   margin: 0;
 }
+/* 双链(2026-10-14 用户选方案 A):靠颜色和正文分开,不画下划线,悬停才出;颜色在 amadeus-host.css(单色配色有自己的一支)。 */
 .am-app .milkdown .ProseMirror .wikilink {
   color: var(--primary);
   cursor: pointer;
-  text-decoration: underline;
-  text-underline-offset: 2px;
+  text-decoration: none;
 }
 .am-app .milkdown .ProseMirror .wikilink:hover {
-  background: var(--drop);
-  border-radius: 3px;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  text-decoration-thickness: 1px;
+}
+/* 指向文件的双链前那枚类型图标(wikilink.ts 的 fileIconEl);随正文字号缩放。 */
+.am-app .milkdown .ProseMirror .wikilink .wikilink-ic {
+  display: inline-block;
+  width: 0.95em;
+  height: 0.95em;
+  vertical-align: -0.15em;
+  margin-right: 0.25em;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 /* 双链前的目标笔记 emoji:inline-block 逃逸父级下划线传播(child 上 text-decoration:none 关不掉)。 */
 .am-app .milkdown .ProseMirror .wikilink .wikilink-emoji {
   display: inline-block;
   margin-right: 3px;
 }
-/* 未解析双链(目标笔记不存在):黯淡 + 虚线,点击弹「是否创建」。 */
+/* 未解析双链(目标笔记不存在):黯淡,点击弹「是否创建」。 */
 .am-app .milkdown .ProseMirror .wikilink.wikilink-unresolved {
   color: var(--text-muted);
-  opacity: 0.75;
-  text-decoration-style: dashed;
+  opacity: 0.8;
 }
 /* 应用 / 窗口引用芯片(wikilink.ts 的 appRefWidget):外壳带 .wikilink 只为沿用行内部件的选区 / 点击判定,
    观感全归里层的 .app-ref(components/appRefs.css)—— 这里把双链的强调色、下划线、悬停底摘掉,字色跟所在行走。 */
