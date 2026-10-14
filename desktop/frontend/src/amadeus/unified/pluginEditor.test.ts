@@ -4,11 +4,33 @@ import { TextSelection } from '@milkdown/kit/prose/state'
 import { history, undo, redo } from '@milkdown/kit/prose/history'
 import { bootEditor, type Booted } from '../blocks/markdown/parseFidelity.testkit'
 import { captureMarkdownEdit } from './pluginEditor'
+import { sameNodeLoose } from './reconcileDiff'
 let b: Booted
 const start = async (text: string) => { b = await bootEditor(text); b.view.updateState(b.view.state.reconfigure({ plugins: [...b.view.state.plugins, history()] })); return b }
 afterEach(async () => { await b?.destroy() })
 const capture = (valid = () => true) => captureMarkdownEdit({ path: 'Note.md', view: b.view, valid, parse: b.parse, serialize: b.savedNode })!
 describe('native plugin Markdown transactions', () => {
+  it('inserts a column without shifting cell contents; keeps surrounding blocks and undo', async () => {
+    const source='# Budget\n\n| Item | Cost |\n| --- | --- |\n| Apple | 3 |\n| Pear | 5 |\n\nTail\n'
+    await start(source)
+    const first=b.view.state.doc.firstChild,last=b.view.state.doc.lastChild
+    const next='# Budget\n\n| | Item | Cost |\n| --- | --- | --- |\n| | Apple | 3 |\n| | Pear | 5 |\n\nTail\n'
+    const e=capture();expect(e.apply({text:next})).toBe(true)
+    expect(sameNodeLoose(b.view.state.doc,b.parse(next))).toBe(true)
+    expect(b.view.state.doc.firstChild).toBe(first);expect(b.view.state.doc.lastChild).toBe(last)
+    expect(undo(b.view.state,b.view.dispatch)).toBe(true);expect(b.saved()).toBe(source)
+  })
+  it('maps repeated table cell labels despite serializer column padding', async () => {
+    await start('| Item | Cost |\n| --- | --- |\n| Item | 3 |\n')
+    const positions:number[]=[];b.view.state.doc.descendants((n,p)=>{if(n.isText&&n.text==='Item')positions.push(p)})
+    expect(positions).toHaveLength(2)
+    for(const pos of positions){
+      b.view.dispatch(b.view.state.tr.setSelection(TextSelection.create(b.view.state.doc,pos+2)))
+      const e=capture();expect(e.text.slice(e.anchor-2,e.anchor+2)).toBe('Item')
+      expect(e.apply({text:e.text,selection:{anchor:e.anchor,head:e.anchor}})).toBe(true)
+      expect(b.view.state.selection.anchor).toBe(pos+2)
+    }
+  })
   it('maps a reversed selection through heading/strong syntax and Unicode', async () => {
     await start('# Title\n\nHello **世界** and hello.\n')
     let at = 0; b.view.state.doc.descendants((n,p) => { if(n.isText && n.text === '世界') at = p })

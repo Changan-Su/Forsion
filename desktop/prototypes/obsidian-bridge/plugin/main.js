@@ -51,6 +51,12 @@ async function startRuntime() {
       return writes;
     },
     captureEditor:() => { if (dead) return null; return ctx.app.captureEditor(); },
+    readFile:p=>ctx.app.readFile(p), listPages:()=>ctx.app.listPages?.()||[],
+    writeFileChecked:(...args)=>{ if(dead)return Promise.reject(new Error("Bridge closed"));const p=ctx.app.writeFileChecked(...args);writes=Promise.all([writes.catch(()=>{}),p]).then(()=>{});return p; },
+    patchNoteProperties:(...args)=>ctx.app.patchNoteProperties(...args),
+    onVaultChange:cb=>ctx.app.onVaultChange?.(cb), subscribePage:cb=>ctx.app.subscribePage?.(cb),
+    openNote:(...args)=>ctx.app.openNote(...args),
+    openManager,
     closeManager,
     onError:notifyError,
     onCommands:list => {
@@ -68,6 +74,7 @@ async function startRuntime() {
 frame.addEventListener('load', () => { if (!starting) { starting = initialize(); void starting.catch(notifyError); } });
 frame.srcdoc = '<!doctype html><html><head><meta charset="utf-8"></head><body></body></html>';
 let refreshing = null;
+const vaultWatch = setInterval(() => { if (!dead && runtime) void ensureVault().catch(notifyError); }, 500);
 async function ensureVault() {
   if (refreshing) return refreshing;
   if (!runtime || runtime.diagnostics().vaultKey === (ctx.app.vaultRoot?.() || '')) return;
@@ -86,6 +93,6 @@ ctx.registerView({ id:'home',title:'Obsidian Bridge',mount(el) {
   el.append(text,button); return () => { text.remove(); button.remove(); };
 } });
 return () => {
-  dead = true; clearCommands(); observer.disconnect(); closeManager(); runtime?.dispose();
+  dead = true; clearInterval(vaultWatch); clearCommands(); observer.disconnect(); closeManager(); runtime?.dispose();
   void (async () => { try { try { await starting; await refreshing; } finally { await writes; } } catch (e) { console.warn('[obsidian-bridge] shutdown',e); } finally { releaseLease?.(); dialog.remove(); } })();
 };

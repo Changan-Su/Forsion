@@ -192,6 +192,13 @@ export interface PluginAppApi extends BlockSurfaceApi {
    *  ⚠️需要活动库。没有活动库时**reject**(主进程 `vaultManager` 抛 `Error('No vault is open')`)——
    *  与只读侧的静默 null 不同形,启动期的写一律 try/catch。 */
   writeFile(path: string, text: string): Promise<void>
+  /** Desktop compare-and-swap text write. expected=null means create only. Refuses an open native
+   * note: edit that note through captureEditor. A vault switch or conflict rejects without writing. */
+  writeFileChecked?(path: string, text: string, expected: string | null): Promise<void>
+  /** Vault structure/external text changes, plus native page updates via subscribePage. Auto-unsubscribed. */
+  onVaultChange?(cb: (path: string | null) => void): () => void
+  /** Patch note properties through the native single-writer pipeline. Does not replace the body. */
+  patchNoteProperties?(path: string, patch: Record<string, unknown>): Promise<void>
   /** 二进制版 writeFile(2026-09-19+):把字节原子写进库内路径(自动建父目录,已存在即覆盖)。
    *  用途:导入用户从磁盘选来的模型 / 图片 / 音频(`<input type=file>` 的 `File.arrayBuffer()`),
    *  或把插件自己渲染的截图落盘给 Agent 看。
@@ -1039,7 +1046,10 @@ export interface PluginContext {
   /** Desktop installed packages only. Read-only paths relative to this plugin's folder.
    * Rejects traversal/symlinks; files <= 8 MiB and directory listings <= 256 entries.
    * Unsupported on Web/mobile and Studio development sources; feature-detect. */
-  packageFiles?: { readText(path: string): Promise<string>; list(path: string): Promise<string[]> }
+  packageFiles?: { readText(path: string): Promise<string>; list(path: string): Promise<string[]>
+    communityPlugins?(): Promise<Array<{ id: string; name: string; author: string; description: string; repo: string }>>
+    installCommunityPlugin?(id: string): Promise<{ id: string; version: string; installed: boolean }>
+  }
   account?: PluginAccount
   app: PluginAppApi
   registerSlashItem(item: SlashContribution): void

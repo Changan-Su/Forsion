@@ -1,8 +1,8 @@
 # Obsidian Bridge — Desktop 原型 / Desktop prototype
 
-0.2 将三个原始 Obsidian 插件的编辑命令接到当前 **Amadeus 原生可视编辑器**。正文、选区、撤销和磁盘保存由原生编辑器持有；Bridge 管理面板只负责原包和设置。
+0.3 将六个原始 Obsidian 插件的编辑命令接到当前 **Amadeus 原生可视编辑器**。正文、选区、撤销和磁盘保存由原生编辑器持有；Bridge 管理面板只负责原包和设置。
 
-Version 0.2 runs the three original Obsidian plugins against the active **native Amadeus visual editor**.
+Version 0.3 runs six original Obsidian plugins against the active **native Amadeus visual editor**.
 Amadeus owns the document, selection, undo and save pipeline. Bridge manages packages and settings.
 
 选中笔记正文，点击左下角 **命令面板 (⌘K)** 按钮，搜索 `Obsidian`，选择插件命令。
@@ -24,6 +24,9 @@ an editing command. Inside the editor, `Cmd+K` remains the native Insert link sh
     obsidian-sort-and-permute-lines/{manifest.json,main.js,source.json}
     obsidian-plugin-toc/{manifest.json,main.js,source.json}
     number-headings-obsidian/{manifest.json,main.js,styles.css,source.json}
+    obsidian-linter/{manifest.json,main.js,styles.css,source.json}
+    table-editor-obsidian/{manifest.json,main.js,styles.css,source.json}
+    note-refactor-obsidian/{manifest.json,main.js,styles.css,source.json}
     sources.json
 ```
 
@@ -41,6 +44,7 @@ allows one Bridge runtime at a time. The iframe isolates CSS and DOM helpers; it
 From the Genesis worktree's `desktop/` directory:
 
 ```sh
+npm ci --prefix prototypes/obsidian-bridge
 node prototypes/obsidian-bridge/install-plugins.mjs
 npm run build:obsidianbridge
 npm run build
@@ -51,8 +55,13 @@ npm run preview:obsidiannative
 ```
 
 `install-plugins.mjs [bridge-plugin-folder]` defaults to this prototype's `plugin/` folder. It downloads only
-three pinned releases; reinstallation refuses modified existing assets. Runtime scans the real `plugins/`
-subfolder on opening or pressing Rescan. There is no community-market browser or arbitrary ZIP installer yet.
+six pinned releases; reinstallation refuses modified existing assets. Runtime scans the real `plugins/`
+subfolder on opening or pressing Rescan. Open **Community plugins / 社区插件商店** to search the official
+[Obsidian community catalog](https://github.com/obsidianmd/obsidian-releases). The Desktop host downloads
+stable GitHub release assets into Bridge's `plugins/<id>/`, validates identity/version, records SHA-256,
+and atomically installs the complete package. It preserves existing packages and leaves new packages
+disabled until explicitly enabled. This is a catalog browser, not an embedded Obsidian application.
+Updates, uninstall, arbitrary ZIP imports and automatic compatibility certification are not implemented.
 
 The Electron harness creates an isolated home, installs Bridge from disk, creates a fixture vault, drives
 real UI clicks, verifies restart persistence and writes screenshots/results to `artifacts/`.
@@ -71,7 +80,10 @@ can override the isolated home, evidence folder, and the separate Electron ident
 | --- | --- | --- |
 | Sort and Permute Lines | [0.9.0](https://github.com/Vinzent03/obsidian-sort-and-permute-lines/releases/tag/0.9.0) | alphabetical sorting, duplicate removal, editor undo |
 | Table of Contents | [0.2.0](https://github.com/hipstersmoothie/obsidian-plugin-toc/releases/tag/0.2.0) | headings metadata, generated links, original settings UI and persistence |
-| Number Headings | [1.16.0](https://github.com/onlyafly/number-headings-obsidian/releases/tag/1.16.0) | multiple text changes in one transaction, disable/re-enable, timer cleanup |
+| Number Headings | [1.16.0](https://github.com/onlyafly/number-headings-obsidian/releases/tag/1.16.0) | native multi-change edit, actual 10-second automatic numbering, native properties, timer cleanup |
+| Linter | [1.34.1](https://github.com/platers/obsidian-linter/releases/tag/1.34.1) | original lint-file command removes repeated blank lines, native undo |
+| Advanced Tables | [0.23.2](https://github.com/tgrosinger/advanced-tables-obsidian/releases/tag/0.23.2) | insert a native table column, preserve each cell |
+| Note Refactor | [1.8.2](https://github.com/lynchjames/note-refactor-obsidian/releases/tag/1.8.2) | extract selected text to a new vault note, replace with a link |
 
 “加载成功”不等于所有命令已兼容；只把验收脚本里实际完成的动作列为已验证。
 Successfully loading a package does not certify every command. Only actions exercised by the acceptance
@@ -89,20 +101,32 @@ commit one minimal native transaction through `apply()`. No second editor widget
 is involved. Native saves retain frontmatter; unchanged blocks retain their identity. Stale documents,
 selections, leaf/vault changes, hidden/source/read-only editors and revoked plugins refuse edits.
 
+## 后台与 API / Background and APIs
+
+- 原始定时器、`onLayoutReady`、`editor-change/file-open`、Vault 与 metadata events 进入串行调用队列；隐藏管理面板后继续工作，禁用时清理。延时回调不能跟随用户切换到另一篇笔记。
+- `TFile/TFolder`、Markdown 文件与目录索引、`read/cachedRead/create/modify/process/append`、基础 adapter 读写、链接解析与打开。新建仅允许不存在的目标；关闭笔记写入使用 CAS；打开的正文走原生编辑事务。
+- `processFrontMatter` 通过原生属性管线修改打开笔记。`vault.read` 含属性区，活动编辑器的元数据位置使用正文坐标，属性值单独保留。
+- Component/Plugin 生命周期、设置控件、基础 Modal/SuggestModal、Moment、YAML、DOM helpers、命令注册与清理。原包 CSS/DOM 只放在独立 realm。
+
+Timers and event callbacks serialize their native edits, drain tracked host operations and stop on disable.
+Vault writes use create-only or compare-and-swap semantics; native edits retain stale document/selection
+checks. A failed extraction keeps the source selection. Extraction is not a cross-file atomic transaction:
+if a new note was created successfully but the source changed before commit, the new note remains and
+source replacement is refused. All source content is retained.
+
 ## 当前边界 / Limits
 
-- 已接入原生可视正文，保留原生保存与撤销；不是整生态兼容声明。
-- 元数据只覆盖当前正文的标题、基础列表和链接；frontmatter 写入命令、自动编号/延时回调、插件自定义弹窗暂不支持。
-- 旧 v3 块编辑器、源码模式、任意 CodeMirror 扩展、完整 Vault/Workspace、Node/Electron 模块和后处理尚未接入。
-- 无法可靠映射的富文本语法位置明确拒绝；不会猜测坐标后覆盖笔记。
-- 原包保持同一目录结构；切换智库后下次执行命令或重新打开管理面板会重建对应设置实例。
+- 六个原包的指定操作已验收；不代表这些插件全部功能或大部分 Obsidian 生态已兼容。
+- 尚未接入 CodeMirror 键位/扩展、原生输入建议、自定义侧栏视图、Markdown 后处理、Node/Electron 模块、移动端、旧 v3/源码编辑器。
+- Advanced Tables 的原生表格命令可用，专用侧栏与 Tab 键位未接入；Linter 的显式命令可用，原生 Cmd+S 自动 lint 未接入。
+- Vault 索引目前只含 Markdown，最多 5000 篇；不提供真实文件时间戳、完整 backlinks 或附件/二进制/文件夹写 API。原生属性写仅支持已经打开的笔记。
+- `requestUrl` 目前走浏览器 fetch，仍受 CORS 限制；HTML-to-Markdown 未接入。安装器不受该限制，走 Desktop 主进程。
+- 无法证明安全映射的富文本位置拒绝执行。原生表格映射需解析往返验证；表格结构修改保留原生撤销。
+- 切换智库由父服务重建对应 runtime 与设置；同一 profile 的 Web Lock 随已接受写入完成后释放。
 
-Native visual body editing is supported for the exercised commands. Automatic numbering/timers,
-frontmatter writes, custom plugin dialogs, old v3 blocks, source mode, arbitrary CodeMirror extensions,
-full Vault/Workspace APIs, Node/Electron and Markdown postprocessors remain unsupported.
-Unmappable syntax positions fail explicitly. Changing vault rebuilds the settings/runtime on the next
-command or manager opening. The retained 0.1 lab (`lab-main.js`, `e2e:obsidianbridge`) is a separate
-regression fixture, not the installed 0.2 entrypoint.
+The manager marks partial support rather than treating installation as compatibility. Package code is
+trusted local plugin code; the iframe is a styling/runtime boundary, not a security sandbox. The retained
+0.1 lab (`lab-main.js`, `e2e:obsidianbridge`) is an independent regression fixture.
 
 ## 验证分层 / Verification
 
@@ -110,11 +134,13 @@ regression fixture, not the installed 0.2 entrypoint.
 - `node prototypes/obsidian-bridge/check-lifecycle.mjs`: delayed host writes across close/remount and a late note read racing with typing.
 - `npx vitest run electron/pluginPackageFiles.test.ts frontend/src/amadeus/plugins/packageFiles.test.ts`: package path constraints and host lifecycle.
 - `node prototypes/obsidian-bridge/check-native.mjs`: original bundles through command buffers, no editor DOM; stale commit rejection.
-- `npm run e2e:obsidiannative`: native command palette, Amadeus edits, undo, saves, settings and quiet-window assertions.
+- `npm run check:obsidianexpanded`: six original bundles plus native metadata, failure preservation, API lifecycle and store failure checks.
+- `npm run e2e:obsidiannative`: real store search/install, six original packages, native commands/undo/save, background numbering, property writes and quiet-window assertions.
+- `npx vitest run electron/obsidianCommunity.test.ts electron/amadeus/ipc.unitEvents.test.ts`: installer rollback, no overwrite, checked vault identity and native event plumbing.
 - `npm run e2e:obsidianbridge` (0.1 lab): real Electron, native host IPC, on-disk original packages and exported Markdown,
   settings/disabled-state restart, screenshots. Run under the repository's GUI lock.
 
-Host seams are optional read-only `ctx.packageFiles`, native `ctx.app.captureEditor()`, and disposable command registrations. It is absent on Web/mobile and
+Host seams are optional `ctx.packageFiles` reads and community installer, `ctx.app.captureEditor()`, checked closed-file writes, native property patches, vault events and disposable command registrations. It is absent on Web/mobile and
 Studio development sources. The runtime and package manager are distributed in the Bridge plugin.
 
 ## 0.1 历史回归 / Version 0.1 regression history
@@ -143,3 +169,14 @@ disable/re-enable, and replaceSelection carries its resulting cursor to the nati
 
 `node prototypes/obsidian-bridge/report-native.mjs` renders the native acceptance report from
 `artifacts/native/results.json` and actual screenshots. The original lab report remains separate.
+
+## 0.3 验收 / Expanded acceptance
+
+`node prototypes/obsidian-bridge/report-expanded.mjs` renders `artifacts/expanded/index.html` from actual
+Electron screenshots and results. `validation.json` records relevant unit checks, review outcome and CI.
+No release package, main merge or production deployment is implied by this worktree acceptance.
+
+The focused 0.3 Codex review identified four issues, all repaired with regressions: preserve the original
+read baseline for CAS, propagate child-plugin epoch through asynchronous reads/writes, resume awaited
+timers inside their own operation, and isolate malformed YAML per file. Disabling also cancels a pending
+command so a cleared timer cannot leave the command queue stuck.

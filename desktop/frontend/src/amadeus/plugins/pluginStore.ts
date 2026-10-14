@@ -1,5 +1,5 @@
 import { activeMainPanel, useWorkspace } from '@lcl/engine/workspaceStore'
-import { captureUnifiedEditor } from '../unified/lifecycle'
+import { captureUnifiedEditor, hasUnifiedInstance, unifiedPatchFm } from '../unified/lifecycle'
 // The plugin host. Holds the plugin registry, the persisted "disabled" preference, the
 // runtime active set, and the live contribution registries (slash items / commands /
 // themes) that the UI subscribes to. Built-in plugins are registered on init(); external
@@ -13,6 +13,7 @@ import { registerAppearance, clearPluginAppearance, useAppearance } from '../../
 
 import { create } from 'zustand'
 import { toAssetUrl } from '@amadeus-shared/assets'
+import { textFingerprint } from '@amadeus-shared/writeConflict'
 import { pluginHostPath } from './hostPaths'
 import { pluginRequestPath, type PluginRequestOptions } from './engineRequest'
 import { request as engineJsonRequest } from '../../services/backendService'
@@ -365,6 +366,27 @@ function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppAp
     hostPath: (p) => pluginHostPath(usePageStore.getState().vaultRoot, p, { executionCapabilities: { host: readTangu()?.hostExecution?.() ?? hostTangu()?.executionCapabilities?.host ?? false } }),
     // 插件契约是 Promise<void>:不带 base 的写宿主本就只回 void,这里显式抹平(CAS 结果类型不外泄给插件)。
     writeFile: (p, text) => (ok() ? amadeus.writeTextFile(p, text).then(() => {}).finally(dropListCache) : Promise.resolve()),
+    writeFileChecked: async (p, text, expected) => {
+      const vaultRoot = usePageStore.getState().vaultRoot
+      if (!ok() || !vaultRoot) throw new Error('Plugin disabled or no vault')
+      if (hasUnifiedInstance(p)) throw new Error('This note is open; use its native editor')
+      const r = await amadeus.writeTextFile(p, text, { vaultRoot, ...(expected === null ? { create: true } : { base: textFingerprint(expected) }) })
+      if (!r || !r.ok) throw new Error('File changed; plugin write refused')
+      dropListCache()
+    },
+    patchNoteProperties: async (p, patch) => {
+      if (!ok() || !usePageStore.getState().vaultRoot) throw new Error('Plugin disabled or no vault')
+      const native = unifiedPatchFm(p, patch)
+      if (!native) throw new Error('Property edits require an open native note')
+      await native
+    },
+    ...(typeof amadeus?.onStructureChange === 'function' && typeof amadeus?.onExternalChange === 'function' ? { onVaultChange: (cb: (p: string | null) => void) => {
+      const emit = (p: string | null): void => { if (alive) { dropListCache(); cb(p) } }
+      const a = amadeus.onStructureChange(() => emit(null)), b = amadeus.onExternalChange(emit)
+      const c = amadeus.onFileExternalChange?.(emit)
+      const off = (): void => { a(); b(); c?.(); fileUnsubs.delete(off) }
+      fileUnsubs.add(off); return off
+    } } : {}),
     // 二进制读写(2026-09-19):路径口径与 writeFile 相同 —— 原样透传,越界由主进程 resolveInVault 钳死。
     // 桥缺席时整条方法不挂(同 watchFile 纪律)。⚠️saveVaultBytes 不记自写账本:同路径 watchFile 会收到回声。
     ...(amadeus?.saveVaultBytes
@@ -1365,6 +1387,18 @@ export const usePluginStore = create<PluginState>((set, get) => {
         if (!ctxAlive()) throw new Error('Plugin disabled')
         return value as string[]
       },
+      ...(amadeus.obsidianCommunity ? { communityPlugins: async () => {
+        if (!ctxAlive()) throw new Error('Plugin disabled')
+        const rows = await amadeus.obsidianCommunity!()
+        if (!ctxAlive()) throw new Error('Plugin disabled')
+        return rows
+      } } : {}),
+      ...(amadeus.obsidianInstall ? { installCommunityPlugin: async (id: string) => {
+        if (!ctxAlive()) throw new Error('Plugin disabled')
+        const result = await amadeus.obsidianInstall!(pluginId, id)
+        if (!ctxAlive()) throw new Error('Plugin disabled')
+        return result
+      } } : {}),
     } } : {}),
     // 通用宿主 UI 原语。Floating TOC 是非接管式挂载:插件继续拥有正文 DOM,宿主只在 shell 上叠一层。
     // 与 table/dashboard 一样动态 import 破环;形态错误同步抛,让插件能当场走自己的降级 UI。

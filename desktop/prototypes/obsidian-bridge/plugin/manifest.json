@@ -2,10 +2,10 @@
   "id": "forsion-plugin-obsidian-bridge",
   "name": "Obsidian Bridge",
   "nameEn": "Obsidian Bridge",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "apiVersion": 1,
   "main": "main.js",
   "isDesktopOnly": true,
-  "description": "在独立兼容编辑区运行 Obsidian 插件原包。Desktop 原型，编辑结果保存为智库新副本。",
-  "descriptionEn": "Run original Obsidian plugin packages in a compatibility editor. Desktop prototype; save results as new vault copies."
+  "description": "在 Amadeus 原生编辑器中运行 Obsidian 插件，支持后台行为与社区插件目录。Desktop 原型。",
+  "descriptionEn": "Run Obsidian plugins in native Amadeus with background behavior and the community catalog. Desktop prototype."
 }

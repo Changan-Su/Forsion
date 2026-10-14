@@ -1467,3 +1467,19 @@ Use the command palette button while editing: the editor's Cmd+K is Insert link.
 `ctx.registerCommand(...)` now returns an optional disposer (`off?.()`); use it when a child plugin unloads.
 Navigation and selection-bound editing can use renderer commands; parameterized/headless actions still
 belong in engine assets. Do not import private editor/store modules into plugins.
+
+### Desktop community package and vault seams (prototype 0.3)
+
+- `ctx.packageFiles?.communityPlugins()` reads the official Obsidian catalog. `installCommunityPlugin(id)`
+  installs its stable GitHub release under **this plugin's** `plugins/<id>/`. It validates manifest identity,
+  download bounds and release sources, writes a SHA-256 receipt, and refuses existing destinations.
+  Persist a disabled-child setting before installing; the host installer does not execute the package.
+- `ctx.app.writeFileChecked?.(path,text,expected)` creates only when `expected === null`; otherwise compares
+  the existing text before writing. Rejects already open native notes and changed vault identity. Use the
+  captured native editor for open-note body edits, never fall back to whole-file writes after a rejection.
+- `ctx.app.patchNoteProperties?.(path,patch)` uses the native property pipeline and requires an open note.
+- `ctx.app.onVaultChange?.(callback)` subscribes to external file/structure changes (`path` or `null`);
+  returns a disposer and is revoked with the plugin. Internal body changes still use `subscribePage`.
+- Native table selection mapping proves the Markdown/native round trip. Structural plugin edits verify
+  the resulting PM document and replace differing top-level blocks when open slices cannot fit exactly.
+  Unknown rich syntax remains a deliberate rejection, not permission to approximate offsets.

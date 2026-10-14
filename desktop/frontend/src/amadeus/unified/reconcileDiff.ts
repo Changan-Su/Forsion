@@ -133,6 +133,18 @@ const childStart = (node: ProseNode, index: number): number => {
 
 interface Step { from: number; to: number; slice: Slice }
 
+/** Structural fallback for plugin edits: replacing an open slice through several table
+ * rows can fit successfully yet produce a different table. Retain equal top-level
+ * blocks and replace only the differing block ranges with closed fragments. */
+export function reconcileBlockTr(state: EditorState, next: ProseNode): Transaction {
+  const tr = state.tr
+  for (const [ca, cb, na, nb] of topLevelGaps(state.doc, next).reverse()) {
+    tr.replaceWith(childStart(state.doc, ca), childStart(state.doc, cb),
+      next.content.cut(childStart(next, na), childStart(next, nb)))
+  }
+  return tr
+}
+
 /** 算出把 cur 变成 next 的最小替换步(按文档序)。完全相同 = 空数组。 */
 export function reconcileSteps(cur: ProseNode, next: ProseNode): Step[] {
   const steps: Step[] = []

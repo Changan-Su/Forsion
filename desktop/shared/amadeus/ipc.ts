@@ -58,6 +58,8 @@ export const IPC = {
   pathGone: 'vault:path-gone',
   listPlugins: 'plugins:list',
   pluginPackageFiles: 'plugins:package-files',
+  obsidianCommunity: 'plugins:obsidian-community',
+  obsidianInstall: 'plugins:obsidian-install',
   openPluginsFolder: 'plugins:open-folder',
   scaffoldPlugin: 'plugins:scaffold',
   uninstallPlugin: 'plugins:uninstall-forsion',
@@ -728,6 +730,8 @@ export interface AmadeusApi {
   /** Discover user plugins under the vault's .amadeus/plugins/ folder. */
   listPlugins(): Promise<ExternalPluginSource[]>
   /** Desktop only: read/list resources inside an installed plugin package. */
+  obsidianCommunity?(): Promise<Array<{ id: string; name: string; author: string; description: string; repo: string }>>
+  obsidianInstall?(owner: string, child: string): Promise<{ id: string; version: string; installed: boolean }>
   pluginPackageFiles?(id: string, relative: string, list: boolean): Promise<string | string[]>
   /** Open the vault's plugins folder in the OS file manager (creating it if needed). */
   openPluginsFolder(): Promise<void>
@@ -767,7 +771,7 @@ export interface AmadeusApi {
    *  不传 `base` 时所有宿主行为与从前逐字一致。 */
   /** create:true = **仅新建**(原子;优先于 base):已存在 → 不写,{ ok:false, current:<现文> };现文取不到 → current:null
    *  (调用方按「没建成」处理,绝不当成已存在)。建成 → ok:true。桌面 / Unit 主进程 `wx`,移动桥锁内判存在,云桥 seq 0 的 PUT。 */
-  writeTextFile(path: string, text: string, opts?: { create?: boolean; base?: string }): Promise<void | TextWriteResult>
+  writeTextFile(path: string, text: string, opts?: { create?: boolean; base?: string; vaultRoot?: string }): Promise<void | TextWriteResult>
   /** 「笔记视图」:列出 folder 直属子级笔记的 path/title/frontmatter(行的实时数据源)。 */
   listPageProps(folder: string): Promise<PageProps[]>
   /** 外科式写笔记 frontmatter(值 = undefined 删该键):保留 amadeus_* 与正文,原子写。 */

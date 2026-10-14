@@ -6,6 +6,9 @@ import { fileURLToPath } from "node:url";
 const root = dirname(fileURLToPath(import.meta.url));
 const target = resolve(process.argv[2] || join(root, "plugin"));
 const pinned = [
+  { repo: 'platers/obsidian-linter', version: '1.34.1', id: 'obsidian-linter', css: true },
+  { repo: 'tgrosinger/advanced-tables-obsidian', version: '0.23.2', id: 'table-editor-obsidian', css: true },
+  { repo: 'lynchjames/note-refactor-obsidian', version: '1.8.2', id: 'note-refactor-obsidian', css: true },
   {
     repo: "Vinzent03/obsidian-sort-and-permute-lines",
     version: "0.9.0",

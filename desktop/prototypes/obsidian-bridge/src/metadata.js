@@ -44,7 +44,11 @@ export function metadata(source) {
         position: position(n),
       });
     if (n.type === "yaml") {
-      cache.frontmatter = parse(n.value) || {};
+      try {
+        cache.frontmatter = parse(n.value) || {};
+      } catch (error) {
+        cache.frontmatterError = String(error?.message || error);
+      }
       cache.frontmatterPosition = position(n);
     }
     for (const child of n.children || []) walk(child, parentLine);
@@ -56,6 +60,8 @@ export function metadata(source) {
 }
 export function updateFrontmatter(source, mutate) {
   const cache = metadata(source);
+  if (cache.frontmatterError)
+    throw Error("Invalid frontmatter: " + cache.frontmatterError);
   const data = cache.frontmatter || {};
   mutate(data);
   const tail = cache.frontmatterPosition

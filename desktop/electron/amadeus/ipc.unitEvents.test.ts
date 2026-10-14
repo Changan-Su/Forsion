@@ -61,6 +61,15 @@ beforeEach(async () => {
 })
 afterEach(async () => { await runtime?.stopSync(); vi.restoreAllMocks(); await fs.rm(env.root, { recursive: true, force: true }) })
 
+it('checked plugin writes reject a different vault and preserve create-only destinations', async () => {
+  const { IPC } = await import('@amadeus-shared/ipc')
+  await expect(invoke(IPC.writeTextFile, 'A.md', 'WRONG VAULT', { vaultRoot: local + '-old', create: true })).rejects.toThrow('Vault changed')
+  expect(await invoke(IPC.writeTextFile, 'A.md', 'OVERWRITE', { vaultRoot: local, create: true })).toMatchObject({ ok: false })
+  expect(await fs.readFile(path.join(local, 'A.md'), 'utf8')).toBe('# A\n\nbase\n')
+  expect(await invoke(IPC.writeTextFile, 'New.md', 'Created', { vaultRoot: local, create: true })).toMatchObject({ ok: true })
+  expect(await fs.readFile(path.join(local, 'New.md'), 'utf8')).toBe('Created')
+})
+
 it('另一台设备经 Unit RPC 写 v4 笔记 → 本机每个窗口收到 externalChange(开着的编辑器回灌),不是只进插件 watchFile 的 fileChange', async () => {
   const { IPC } = await import('@amadeus-shared/ipc')
   await runtime.vaultFace.call(IPC.writeTextFile, ['A.md', '# A\n\nfrom phone\n'], 'phone-1')

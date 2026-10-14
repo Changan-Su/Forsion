@@ -12,24 +12,26 @@ try {
  const r=await win.ForsionObsidianBridge.start({locale:'en',vaultRoot:()=>'/fixture',loadData:async()=>null,saveData:async()=>{},
   packageFiles:{
    readText:p=>p==='plugins/async-probe/manifest.json'?Promise.resolve(JSON.stringify({id:'async-probe',name:'Async probe',version:'1'})):
-    p==='plugins/async-probe/main.js'?Promise.resolve(`module.exports=class extends require('obsidian').Plugin {onload(){this.addCommand({id:'late',name:'Late edit',callback:async()=>{const editor=this.app.workspace.getActiveViewOfType(require('obsidian').MarkdownView).editor;await new Promise(r=>window.resumeLate=r);editor.replaceSelection('late');}})}}`):readFile(join(pkg,p),'utf8'),
-   list:async p=>p==='plugins'?[...await readdir(join(pkg,p)),'async-probe']:p==='plugins/async-probe'?['manifest.json','main.js']:readdir(join(pkg,p)),
+    p==='plugins/async-probe/main.js'?Promise.resolve(`module.exports=class extends require('obsidian').Plugin {onload(){this.addCommand({id:'sleep',name:'Sleep',callback:async()=>{const editor=this.app.workspace.getActiveViewOfType(require('obsidian').MarkdownView).editor;await new Promise(r=>setTimeout(r,10));editor.replaceSelection('awake');}});this.addCommand({id:'late',name:'Late edit',callback:async()=>{const editor=this.app.workspace.getActiveViewOfType(require('obsidian').MarkdownView).editor;await new Promise(r=>window.resumeLate=r);editor.replaceSelection('late');}})}}`):readFile(join(pkg,p),'utf8'),
+   list:async p=>p==='plugins'?[...await readdir(join(pkg,p)).then(rows=>p==='plugins'?rows.filter(x=>!['obsidian-linter','note-refactor-obsidian','table-editor-obsidian'].includes(x)):rows),'async-probe']:p==='plugins/async-probe'?['manifest.json','main.js']:readdir(join(pkg,p)).then(rows=>p==='plugins'?rows.filter(x=>!['obsidian-linter','note-refactor-obsidian','table-editor-obsidian'].includes(x)):rows),
   },
   onCommands:list=>commands=list,
   captureEditor:()=>({path:'Native.md',text,anchor:cursor,head:cursor,apply:c=>{if(!accept)return false;text=c.text;commits++;return true}}),
  });
- assert.equal(win.document.querySelector('.cm-editor'),null);assert.equal(commands.length,20);
+ assert.equal(win.document.querySelector('.cm-editor'),null);assert.equal(commands.length,21);
  await r.run('obsidian-sort-and-permute-lines','sort-alphabetically');assert.equal(text,'Apple\nBanana\nZebra');assert.equal(commits,1);
  accept=false;await assert.rejects(r.run('obsidian-sort-and-permute-lines','permute-reverse'),/changed/);assert.equal(commits,1);accept=true;
  text='# Research\n\n\n## Introduction\n\n## Method\n\n### Preparation\n';cursor=12;
  await r.run('obsidian-plugin-toc','create-toc');assert.match(text,/\[\[#Introduction\|Introduction\]\]/);
  await r.run('number-headings-obsidian','number-headings');assert.match(text,/### 1\.2\.1 Preparation/);
  await assert.rejects(r.run('number-headings-obsidian','save-settings-to-front-matter'),/does not support/);
+ await Promise.race([r.run('async-probe','sleep'),new Promise((_,reject)=>setTimeout(()=>reject(Error('Timer deadlock')),2000))]);assert.ok(text.includes('awake'));
  const beforeLate=text, pending=r.run('async-probe','late');
  const rejected=assert.rejects(pending,/disabled or reloaded/);
+ while(!win.resumeLate)await new Promise(r=>setTimeout(r,1));
  const toggle=()=>win.document.querySelector('[data-plugin="async-probe"] [data-action="toggle-plugin"]').click();
  toggle();await new Promise(r=>setTimeout(r,10));toggle();await new Promise(r=>setTimeout(r,10));
- win.resumeLate();await rejected;assert.equal(text,beforeLate);
+ await rejected;win.resumeLate();await new Promise(r=>setTimeout(r,10));assert.equal(text,beforeLate);await r.run('async-probe','sleep');assert.ok(text.includes('awake'));
  r.dispose();assert.ok(r.diagnostics().plugins.every(p=>!p.alive && p.timers===0));
  console.log('PASS native command buffers: 3 original packages, no editor DOM, atomic commit, stale refusal, explicit unsupported API, cleanup');
 }finally{await win.happyDOM.close()}

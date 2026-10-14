@@ -30,7 +30,7 @@ window.__ctx = {
       const code = await readFile(join(pkg, p), 'utf8');
       return p === 'runtime.js' ? 'window.structuredClone = parent.structuredClone;\n' + code : code;
     },
-    list: p => readdir(join(pkg, p)),
+    list: p => readdir(join(pkg, p)).then(rows=>p==="plugins"?rows.filter(x=>!["obsidian-linter","note-refactor-obsidian","table-editor-obsidian"].includes(x)):rows),
   },
   loadData: async () => saved,
   async saveData(snapshot) { if (++writeCount === 1) await gate.promise; saved = snapshot; },
