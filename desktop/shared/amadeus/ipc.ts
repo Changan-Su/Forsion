@@ -303,6 +303,10 @@ export function sanitizeRequiresPlugins(raw: unknown, selfId?: string): PluginDe
  *  引擎原地加载 tangu-plugins/ 与 skills/、播种 agents/(见 tangu-agent src/plugins/bundles.ts);
  *  spaces/ 由主进程 spaces:list 汇入、渲染层随插件启停显隐。 */
 export interface PluginBundleInfo {
+  /** 这个包的安装目录名(`plugins/<dir>/`)。可以和插件 id 不同:商店按 install_slug 落目录,插件 id 取清单里的。
+   *  引擎把包内引擎插件的路由挂在 `/extensions/<dir>/<引擎插件 id>` 下(目录名由宿主扫出来,不听插件自报),
+   *  所以 `ctx.tangu.request` 要拿它拼路由,不能拿插件 id。旧主进程 / 旧的远端宿主不报这一项。 */
+  dir?: string
   /** 内嵌引擎插件的 manifest id(tangu-plugins/<dir>/tangu-plugin.json;启停级联/引擎列表去重用)。 */
   enginePlugins: string[]
   /** 内嵌 agent slug(agents/<slug>/config.toml;引擎播种一次,卸载插件后保留)。 */

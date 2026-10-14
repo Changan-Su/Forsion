@@ -2,7 +2,7 @@
 name: forsion-extension-development
 description: 当用户要给 Forsion / Tangu 做插件、主题、Space、智能体(agent)或捆绑包(bundle)——或要把某个能力做成可分发/可上架商店的扩展——时使用;已装的插件 / Space / 视图不出现、加载失败、更新后不工作要排查时也用(带一份插件体检脚本 tools/check-plugin.mjs)。内置五类官方模板(samples/),讲清各自的格式基线与硬约束(尤其两种"插件"是完全不同的系统),照抄模板改比从零写靠谱。
 metadata:
-  version: 1.41.0
+  version: 1.42.0
   author: Forsion
   category: Forsion
 ---
@@ -199,6 +199,8 @@ ctx.openMiniPanel?.('mini-counter', {
 | **随包** | 引擎插件、Space | 父插件禁用即级联关闭/收起,卸载一并消失 |
 | **播种一次** | Agent 的**人格面**(config.toml / SOUL.md / Library / MEMORY) | 首次发现拷入引擎成为活体,**永不覆盖**,卸载保留 |
 | **指纹自愈** | Agent 的 `skills/`(2026-08-25 起) | 每次启动比指纹:用户没动过的跟着 bundle 更新;动过的(含无指纹老副本)保护不覆盖并在引擎日志报出来 |
+
+**带引擎插件的包上架商店:安装目录名要等于 manifest 的 `id`**。商店把包装进 `plugins/<安装目录名>/`,目录名是从**条目的显示名**推出来的(只留小写字母、数字和连字符,中文全丢;上架后不能改),和 manifest 的 `id` 没有关系;引擎把包内引擎插件的 scoped 路由挂在这个目录名下。桌面 2.13.3 及更早,页面的 `ctx.tangu.request` 拿 manifest `id` 去拼路由,两者不一样时每次调用都是 404、不报错,引擎那一半等于没装。之后的桌面版本由宿主自己按目录名拼,不再有这个限制。发包时二选一:投稿用一个能推出 `id` 的名字(例如 id `notebook` 就先叫「Notebook」,过审前再把显示名改成想要的),或者把 `minAppVersion` 设到 2.13.3 之后的桌面版本。没有引擎插件的包不受影响。
 
 包根 `skills/`(全局技能)是原地扫描、不落盘拷贝,不在上表内。因此 onboarding 里**不要** recommends 自家已内嵌的 agent/skill(会引导去商店重复装)。真实范例:`Forsion-Instrumentality-Project/bluebird/`。
 
@@ -1514,9 +1516,9 @@ The returned disposer removes only its own current registration. Disable, unload
 
 Feature-detect these additive interfaces; released 2.12.2 builds do not contain them.
 
-- Renderer `ctx.tangu.request?(enginePluginId, path, {method?,body?,signal?})`: authenticated JSON through the host, restricted to an engine plugin in the caller's bundle. Absolute route fragments only, no query/encoded/dot segments. Local desktop only. Disable aborts pending requests.
+- Renderer `ctx.tangu.request?(enginePluginId, path, {method?,body?,signal?})`: authenticated JSON through the host, restricted to an engine plugin in the caller's bundle. Absolute route fragments only, no query/encoded/dot segments. Local desktop only. Disable aborts pending requests. The host builds the route from the bundle's install folder name, so the plugin never spells the prefix. Desktop 2.13.3 and earlier built it from the manifest `id` instead: there a bundle whose install folder name differs from its manifest `id` gets 404 on every call (see the bundle section for what to do when listing in the Store).
 - Renderer `await ctx.tangu.openSession?(id)`: hydrates hidden session metadata/model/config into the native child-session cache, then opens a native chat tab. No new run is started.
-- Engine `ctx.registerScopedRoutes(router => { router.get('/snapshot', handler); })`: host mounts `/extensions/<bundle directory>/<engine id>`, applies user authentication and rejects remote callers. `req.user.userId` is authoritative. Host removes the route on disable.
+- Engine `ctx.registerScopedRoutes(router => { router.get('/snapshot', handler); })`: host mounts `/extensions/<bundle directory>/<engine id>` (the install folder name as found on disk, never an id the package declares), applies user authentication and rejects remote callers. `req.user.userId` is authoritative. Host removes the route on disable.
 - Engine `ctx.paths.dataDir`: stable host-owned plugin data directory. Do not derive writable runtime data from installation paths.
 - `ctx.sdk.runs.start({userId,cwd,prompt,modelId,thinkingLevel,agentSlug|engineId,engineModelId?,planMode?,sessionId?,requestId?,parentSessionId?,title?})` creates a local plugin-owned `kind=task` session/run. Persist an intent and reuse requestId on an uncertain outcome. Native approval/inquiry behavior remains active; callers cannot supply an approval mode. External engines require local host execution and do not support plan mode.
 - `runs.status(runId,userId)` gives real status, bounded final summary, tokens and waiting kinds; `sessionRuns(sessionId,userId)` also tracks native continuations. `events`, `subscribe` and `stop` validate ownership. Subscribe returns an unsubscribe function and the host disposes it on disable.

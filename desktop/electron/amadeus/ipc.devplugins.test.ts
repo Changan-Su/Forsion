@@ -8,6 +8,7 @@
  *     开发副本造出来的自定义类型文件没人护着,会被笔记 compiler 改写 = 毁档;
  *  ④ 开发副本遮蔽期间卸载必须**拒绝**:uninstallPlugin 只扫全局目录,删的是安装版而跑的是开发副本。
  * 另钉两条边界:unit 自服面(不传 dev)绝不发开发代码;一个插件都没装(全局目录不存在)时开发副本照样发。
+ * 顺带钉一条安装版的:带引擎插件的包,目录名和清单 id 不同时 bundle.dir 报的是目录名(2026-10-13;页面拿它拼引擎路由)。
  * 负对照见文件末尾注释。
  */
 import { promises as fs } from 'node:fs'
@@ -160,6 +161,16 @@ it('apiVersion 门禁对开发副本照样生效', async () => {
   const dev = (await list()).find((p) => p.id === 'demo')!
   expect(dev.blocked).toBe('api')
   expect(dev.code).toBe('')
+})
+
+it('⚠️带引擎插件的包:目录名和清单 id 不一样时,插件 id 取清单里的、bundle.dir 报目录名(页面要拿目录名去拼引擎路由)', async () => {
+  // 商店按 install_slug(从显示名推出来)落目录:「Jupyter Notebook」→ jupyter-notebook,清单 id 却是 notebook。
+  const pdir = await installed('jupyter-notebook', { id: 'notebook', name: '笔记本', version: '0.1.0', apiVersion: 1 })
+  await fs.mkdir(path.join(pdir, 'tangu-plugins', 'kernel'), { recursive: true })
+  await fs.writeFile(path.join(pdir, 'tangu-plugins', 'kernel', 'tangu-plugin.json'), JSON.stringify({ id: 'notebook-kernel' }))
+  const list = await runtime.readExternalPlugins()
+  expect(list.map((s) => s.id)).toEqual(['notebook'])
+  expect(list[0].bundle).toEqual({ dir: 'jupyter-notebook', enginePlugins: ['notebook-kernel'], agents: [], skills: [], spaces: [] })
 })
 
 it('一个插件都没装(全局 plugins 目录不存在)时,开发副本照样发得出去', async () => {

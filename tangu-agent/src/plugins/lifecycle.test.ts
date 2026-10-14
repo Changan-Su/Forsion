@@ -414,6 +414,51 @@ describe('热路由', () => {
   });
 });
 
+describe('捆绑包里的引擎插件:scoped 路由挂在安装目录名下', () => {
+  it('目录名和包清单里的 id 不一样时路由跟目录名走 —— 桌面拼请求路径用的也必须是目录名(商店按 install_slug 落目录)', async () => {
+    delete process.env.TANGU_PLUGINS_DIR; // 设了它 = 只认那一个目录,捆绑包整体停用
+    const shared = path.join(tmp, 'shared');
+    process.env.TANGU_HOME = path.join(shared, 'tangu');
+    mkdirSync(process.env.TANGU_HOME, { recursive: true });
+    const bundle = path.join(shared, 'plugins', 'store-slug');
+    const dir = path.join(bundle, 'tangu-plugins', 'lc-kern');
+    mkdirSync(path.join(dir, 'dist'), { recursive: true });
+    writeFileSync(path.join(bundle, 'manifest.json'), JSON.stringify({ id: 'real-id', name: 'x', version: '1.0.0' }));
+    writeFileSync(path.join(dir, 'tangu-plugin.json'), JSON.stringify({ id: 'lc-kern', name: 'lc-kern', version: '1.0.0', apiVersion: 1, entry: 'dist/index.js' }));
+    writeFileSync(path.join(dir, 'package.json'), '{"type":"module"}');
+    writeFileSync(path.join(dir, 'dist', 'index.js'), `export default { activate(ctx) {
+  ctx.registerPlugin({ id: 'lc-kern', name: 'lc-kern', description: 'x' });
+  ctx.registerScopedRoutes((r) => r.get('/ping', (req, res) => res.json({ user: req.user.userId })));
+} };\n`);
+    const h = await host();
+    const { configureTangu } = await import('../seams/runtime.js');
+    const { createTanguProfile } = await import('../profiles/index.js');
+    const stub: any = new Proxy({}, { get: () => () => { throw new Error('stub'); } });
+    const hostStub: any = new Proxy(
+      { authMiddleware: (req: any, _res: any, next: () => void) => { req.user = { userId: 'u1' }; next(); } },
+      { get: (t: any, k) => t[k] ?? (() => { throw new Error('stub'); }) },
+    );
+    configureTangu({ host: hostStub, brain: stub, billing: stub, profile: createTanguProfile({ sandboxMode: 'none' }) });
+    const mount = await h.boot.activateAllPlugins();
+    const express = (await import('express')).default;
+    const routers = { userRouter: express.Router(), dataRouter: express.Router(), adminRouter: express.Router() };
+    mount(routers);
+    const app = express();
+    app.use('/', routers.userRouter);
+    const { base, server } = await listen(app);
+    try {
+      const hit = await fetch(`${base}/extensions/store-slug/lc-kern/ping`);
+      expect(hit.status).toBe(200);
+      expect(await hit.json()).toEqual({ user: 'u1' });
+      expect((await fetch(`${base}/extensions/real-id/lc-kern/ping`)).status).toBe(404); // 包清单里的 id 不是路由的一部分
+      // 前缀不分大小写:桌面把手动装的 `My-Plugin` 这类目录名转成小写再拼,靠的就是这一条
+      expect((await fetch(`${base}/extensions/Store-Slug/lc-kern/ping`)).status).toBe(200);
+    } finally {
+      await new Promise((r) => server.close(r));
+    }
+  });
+});
+
 describe('与磁盘同步(rescan)', () => {
   it.skipIf(!GRAPH)('原地升级:改写代码 → 热换代(旧 deactivate 先于新 activate);入口相对引入的 helper 也是新一代', async () => {
     writePlugin('lc-up');
