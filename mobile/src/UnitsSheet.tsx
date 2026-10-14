@@ -183,6 +183,7 @@ export function MobileUnitsSheet(): React.ReactElement | null {
   const [busy, setBusy] = useState<string | null>(null)
   const [issue, setIssue] = useState<PhoneIssue | null>(null)
   const [devicesOpen, setDevicesOpen] = useState(false)
+  const [offlineOpen, setOfflineOpen] = useState(false)
   const [confirmForget, setConfirmForget] = useState(false)
   const [addr, setAddr] = useState('')
   const flight = useRef<AbortController | null>(null)
@@ -307,6 +308,34 @@ export function MobileUnitsSheet(): React.ReactElement | null {
   }
 
   const homeSelected = current.kind === 'home'
+  const isFolded = (r: RunRow): boolean => r.status === 'offline' && !r.selected
+  const runRowEl = (row: RunRow): React.ReactElement => {
+    const probing = busy === row.id
+    const dim = row.status === 'offline'
+    return (
+      <button
+        key={row.id}
+        className="mb-sheet-row us-row"
+        data-run-row={row.id}
+        data-status={row.status}
+        data-reason={row.refusal?.reason}
+        aria-pressed={row.selected}
+        aria-disabled={dim || undefined}
+        aria-busy={probing || undefined}
+        onClick={() => pick(row)}
+      >
+        <span className="us-row-icon">{rowIcon(row)}</span>
+        <span className="us-row-main">
+          <span className="us-row-title"><span className="us-row-name">{row.name}</span></span>
+          <span className="us-row-sub" role="status">
+            <i className={`settings-status-dot ${rowTone(row, probing)}`} aria-hidden />
+            <span>{t(statusKey(row, probing), { name: row.name })}</span>
+          </span>
+        </span>
+        <span className="us-row-end">{row.selected ? <><em className="us-pill">{t('unitm.current')}</em><Check size={16} /></> : <ArrowRight size={15} />}</span>
+      </button>
+    )
+  }
 
   const vault = vaultBridge()
   const pickVault = (next: VaultSide): void => {
@@ -358,33 +387,15 @@ export function MobileUnitsSheet(): React.ReactElement | null {
             {units === undefined && <div className="us-empty">…</div>}
             {units === null && <div className="us-empty">{t('unit.notLoggedIn')}</div>}
             {units && rows.length === 0 && <div className="us-empty">{t('unit.mobileNone')}</div>}
-            {rows.map((row) => {
-              const probing = busy === row.id
-              const dim = row.status === 'offline'
-              return (
-                <button
-                  key={row.id}
-                  className="mb-sheet-row us-row"
-                  data-run-row={row.id}
-                  data-status={row.status}
-                  data-reason={row.refusal?.reason}
-                  aria-pressed={row.selected}
-                  aria-disabled={dim || undefined}
-                  aria-busy={probing || undefined}
-                  onClick={() => pick(row)}
-                >
-                  <span className="us-row-icon">{rowIcon(row)}</span>
-                  <span className="us-row-main">
-                    <span className="us-row-title"><span className="us-row-name">{row.name}</span></span>
-                    <span className="us-row-sub" role="status">
-                      <i className={`settings-status-dot ${rowTone(row, probing)}`} aria-hidden />
-                      <span>{t(statusKey(row, probing), { name: row.name })}</span>
-                    </span>
-                  </span>
-                  <span className="us-row-end">{row.selected ? <><em className="us-pill">{t('unitm.current')}</em><Check size={16} /></> : <ArrowRight size={15} />}</span>
-                </button>
-              )
-            })}
+            {/* 离线的电脑缺省折起(10-14 用户定:主要看在线的);当前运行位置那台掉线了也不折,「当前」标记不能跟着藏 */}
+            {rows.filter((r) => !isFolded(r)).map(runRowEl)}
+            {rows.some(isFolded) && (
+              <button className="us-section-title us-section-toggle" aria-expanded={offlineOpen} data-offline-fold onClick={() => setOfflineOpen((v) => !v)}>
+                <span style={{ flex: 1 }}>{t('unit.offlineGroup')} · {rows.filter(isFolded).length}</span>
+                <ChevronDown size={14} />
+              </button>
+            )}
+            {offlineOpen && rows.filter(isFolded).map(runRowEl)}
           </section>
 
           {/* ③ 打开设备界面(次要,缺省折叠;行为同 P0) */}

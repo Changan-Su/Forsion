@@ -7,7 +7,7 @@
  *   1 胶囊住在命令区(.rb-bottom;10-02 起从 head 挪下来,缺省排在明暗切换与命令面板之间 ——
  *     那条排序是 bootstrapEngine 的一次性迁移,本台架没有 rb-mode,只验它进了命令区)
  *   2 展开态显示当前面(本地/云端,跟 vaultSide);点开列表 = 本地/云端/设备行/「通过地址连接…」,
- *     离线设备灰显,emoji 图标生效,当前项带勾选
+ *     离线设备缺省折起(一条可点通路都没有才算离线,直连探通的留在外面;点开灰显),emoji 图标生效,当前项带勾选
  *   3 一台设备按通路拆行(直连/P2P/中转):直连行仅探针通了才出现,P2P 行 = 在线且本端有桥,
  *     中转行恒在(离线灰显);P2P 打洞失败**出声回落中转**;点行 = **整个主区切过去**
  *     (远程面 .unitrs 携 webview 指向该通路地址,胶囊改显设备名,点中的那行带勾;选「本地」切回,
@@ -15,7 +15,7 @@
  *     /open 引导页,唯一走外链的路)
  *   4 菜单脚部:开「允许其他设备连接本机」→ 显示本机直连地址 + 已配对设备可回收
  *   5 折叠态只显图标;菜单整体在视口内
- * 顺带产两张真实截图(交付纪律):unit-switcher-expanded.png / unit-switcher-collapsed.png
+ * 顺带产三张真实截图(交付纪律):unit-switcher-folded.png(离线折起的缺省态)/ unit-switcher-expanded.png / unit-switcher-collapsed.png
  *
  * 跑:npm run check:unitswitcher   (5173 没起会自起 vite,跑完自收;CHROMIUM_EXE 可覆盖)
  */
@@ -90,21 +90,40 @@ async function main() {
 
     await page.click('.unitsw-pill')
     await page.waitForSelector('.unitsw-menu', { timeout: 5000 })
-    // 探针桩异步回来才长出「MacBook Air 直连」行:等到 7 行(直连/P2P/中转三通路)再断言构成。
-    await page.waitForFunction(() => document.querySelectorAll('.unitsw-menu .unitsw-row').length >= 7, null, { timeout: 5000 })
-    const rows = await page.evaluate(() => Array.from(document.querySelectorAll('.unitsw-menu .unitsw-row')).map((r) => ({
+    // 探针桩异步回来才长出「MacBook Air 直连」「客厅 mini 直连」两行:等到 9 行(含折叠开关)再断言构成。
+    await page.waitForFunction(() => document.querySelectorAll('.unitsw-menu .unitsw-row').length >= 9, null, { timeout: 5000 })
+    const readRows = () => page.evaluate(() => Array.from(document.querySelectorAll('.unitsw-menu .unitsw-row')).map((r) => ({
       title: r.querySelector('.unitsw-title')?.textContent?.trim() ?? '',
       off: r.classList.contains('off'),
+      fold: r.classList.contains('unitsw-fold'),
+      expanded: r.getAttribute('aria-expanded'),
       emoji: r.querySelector('.unitsw-emoji')?.textContent ?? '',
       on: r.classList.contains('on'),
     })))
-    check('列表 = 本地/云端/设备按通路拆行(直连/P2P/中转)/通过地址连接',
-      rows.length === 7 && rows[0].title === '本地' && rows[1].title === '云端'
+    let rows = await readRows()
+    check('列表 = 本地/云端/在线设备按通路拆行(直连/P2P/中转)/离线设备折叠/通过地址连接',
+      rows.length === 9 && rows[0].title === '本地' && rows[1].title === '云端'
         && rows[2].title === 'MacBook Air直连' && rows[3].title === 'MacBook AirP2P' && rows[4].title === 'MacBook Air中转'
-        && rows[5].title.startsWith('书房 PC中转') && rows[6].title.includes('地址'),
+        && rows[5].title === '客厅 mini直连' && rows[6].title.startsWith('客厅 mini中转')
+        && rows[7].fold && rows[8].title.includes('地址'),
       JSON.stringify(rows.map((r) => r.title)))
     check('当前项带勾选态(本地)', !!rows[0]?.on)
-    check('离线设备只剩中转行且灰显(无直连/P2P 行)', rows[5].off && !rows.some((r) => r.title === '书房 PC直连' || r.title === '书房 PCP2P'))
+    // 10-14 用户定:离线设备缺省折起,只列在线的;折叠开关带离线台数
+    check('离线设备缺省折起(开关显 1 台,书房 PC 不在列表里)',
+      rows[7].fold && rows[7].expanded === 'false' && rows[7].title === '离线设备1' && !rows.some((r) => r.title.includes('书房 PC')),
+      JSON.stringify(rows[7]))
+    // 判据仪器:隧道不在但直连探得通 = 能点 = 在线,不许被折进去(只按 online 判就会把它藏起来)
+    check('隧道离线但直连探通的设备留在外面(直连行可点、中转行灰显)', !rows[5].off && rows[6].off, JSON.stringify(rows.slice(5, 7)))
+    await page.mouse.move(700, 600)
+    await page.waitForTimeout(350) // 菜单淡入,别截起始帧
+    await page.screenshot({ path: path.join(SHOT_DIR, 'unit-switcher-folded.png') })
+    await page.evaluate(() => document.querySelector('.unitsw-menu .unitsw-fold').dispatchEvent(new MouseEvent('click', { bubbles: true })))
+    await page.waitForTimeout(80)
+    rows = await readRows()
+    check('点开折叠 → 离线设备只剩中转行且灰显(无直连/P2P 行)',
+      rows.length === 10 && rows[7].expanded === 'true' && rows[8].title.startsWith('书房 PC中转') && rows[8].off
+        && !rows.some((r) => r.title === '书房 PC直连' || r.title === '书房 PCP2P'),
+      JSON.stringify(rows.map((r) => r.title)))
     // P1-K1:名册里的手机(kind=phone)是调用方、不开设备通道 → 一行都不列(否则永远多一台「离线」的手机)
     check('手机(kind=phone)不出现在设备行里', !rows.some((r) => r.title.includes('口袋 Pixel')), JSON.stringify(rows.map((r) => r.title)))
     check('设备自定义 emoji 生效', rows.some((r) => r.emoji === '🦊'))
@@ -166,6 +185,21 @@ async function main() {
     const lanDesc = await page.evaluate(() => Array.from(document.querySelectorAll('.unitsw-menu .unitsw-row'))
       .some((r) => r.textContent.includes('MacBook Air直连') && r.textContent.includes('局域网')))
     check('直连行显局域网描述', lanDesc)
+
+    // 留在外面的那台(隧道离线、直连探通)真能点:点直连行 → 远程面指向它的直连地址(只看 .off 类会假绿,Codex 评审)
+    await page.evaluate(() => {
+      const row = Array.from(document.querySelectorAll('.unitsw-menu .unitsw-row')).find((r) => r.textContent.includes('客厅 mini直连'))
+      row.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    await page.waitForFunction(() => document.querySelector('.unitrs-web')?.getAttribute('src') === 'http://192.168.1.30:8791/', null, { timeout: 5000 }).catch(() => {})
+    const miniSurf = await page.evaluate(() => ({
+      src: document.querySelector('.unitrs-web')?.getAttribute('src') ?? '',
+      pill: document.querySelector('.unitsw-pill .unitsw-name')?.textContent?.trim() ?? '',
+    }))
+    check('隧道离线但直连探通的设备:点直连行 → 远程面指向它的直连地址', miniSurf.src === 'http://192.168.1.30:8791/' && miniSurf.pill === '客厅 mini', JSON.stringify(miniSurf))
+    await page.click('.unitsw-pill')
+    await page.waitForSelector('.unitsw-menu', { timeout: 5000 })
+    await page.waitForFunction(() => Array.from(document.querySelectorAll('.unitsw-menu .unitsw-row')).some((r) => r.textContent.includes('MacBook Air直连')), null, { timeout: 5000 })
 
     // 直连行 = 整个主区切过去:远程面 .unitrs 携 webview 指向直连地址,不开浏览器标签/外链
     await page.evaluate(() => {

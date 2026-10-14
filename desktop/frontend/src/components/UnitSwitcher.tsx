@@ -51,6 +51,7 @@ registerMessages({
   'unit.menuEditIcon': { zh: '自定义图标（emoji）', en: 'Set icon (emoji)' },
   'unit.menuInBrowser': { zh: '在系统浏览器打开', en: 'Open in system browser' },
   'unit.offline': { zh: '离线', en: 'Offline' },
+  'unit.offlineGroup': { zh: '离线设备', en: 'Offline devices' },
   'unit.offlineNote': { zh: '「{name}」不在线：需在那台设备上开着 Forsion 并启用互联', en: '"{name}" is offline — open Forsion on that device with connect enabled' },
   'unit.byAddress': { zh: '通过地址连接…', en: 'Connect by address…' },
   'unit.byAddressDesc': { zh: '同一局域网直连：http://<IP>:<端口>', en: 'Same-LAN direct: http://<ip>:<port>' },
@@ -151,6 +152,8 @@ export function UnitSwitcher({ expanded }: { expanded: boolean }): React.ReactEl
   /** LAN 探针结果(菜单每次展开时重探;true = 该设备的 lanUrl 此刻可达)。 */
   const [lanOk, setLanOk] = useState<Record<string, boolean>>({})
   const [ctxMenu, setCtxMenu] = useState<{ u: UnitInfo; x: number; y: number } | null>(null)
+  /** 离线设备缺省折起(10-14 用户定:列表主要看在线的)。不持久化,也不在每次展开菜单时重置。 */
+  const [offlineOpen, setOfflineOpen] = useState(false)
   /** P1-K4:「允许远程会话」子开关的视图(主进程推送 remoteSessions:changed;没有这座桥的端 = null,不画那一行)。 */
   const [remoteView, setRemoteView] = useState<RemoteSessionsView | null>(null)
   useEffect(() => {
@@ -306,6 +309,47 @@ export function UnitSwitcher({ expanded }: { expanded: boolean }): React.ReactEl
   /** 设备凭据已加密(null = 视图是互联关着时取的、还没问过 —— 父开关一开就重取,这一瞬间按锁定画,点了主进程也会再判)。 */
   const remotePermitted = remoteView?.permitted === true
 
+  const listed = units?.filter((u) => u.id !== host?.unitId && u.kind !== 'phone') ?? []
+  const isOffline = (u: UnitInfo): boolean =>
+    !u.online && !lanOk[u.id] && !(remote.active && remote.target?.key.startsWith(`${u.id}:`))
+  const onlineUnits = listed.filter((u) => !isOffline(u))
+  const offlineUnits = listed.filter(isOffline)
+  const deviceRows = (us: UnitInfo[]): React.ReactElement[] => us.flatMap((u) => {
+    // 一台设备 = 每条通路各一行。此前是一行 + 自动择路:LAN 探通就把「中转」那条路
+    // 悄悄顶掉,界面上等于不存在(用户找了两轮没找到)。拆开显式列,想走哪条点哪条。
+    // 直连行只在探通时出现(探不通的地址点了也是白点);中转行恒在,离线灰显 + 就地提示。
+    // P2P 行:对端在线(信令要走隧道)且本端有桥就出——不支持的旧对端点了会 501,
+    // openUnit 出声回落中转(advisor 裁决:不做名册能力探测,失败面即协商面)。
+    const vias: Array<'lan' | 'p2p' | 'tunnel'> = [
+      ...(u.lanUrl && lanOk[u.id] ? ['lan' as const] : []),
+      ...(u.online && window.tangu?.unitsP2pOpen ? ['p2p' as const] : []),
+      'tunnel' as const,
+    ]
+    return vias.map((via) => {
+      const reachable = via === 'lan' || u.online // 隧道离线但 LAN 探通(如 B 未登录)照样能点
+      const on = remote.active && remote.target?.key === `${u.id}:${via}`
+      return (
+        <button
+          key={`${u.id}:${via}`}
+          className={`unitsw-row${reachable ? '' : ' off'}${on ? ' on' : ''}`}
+          onClick={() => openUnit(u, via)}
+          onContextMenu={openCtxMenu(u)}
+        >
+          <span className="unitsw-ic">{deviceIcon(u)}</span>
+          <span className="unitsw-col">
+            <span className="unitsw-title">
+              {u.name}
+              <em className="unitsw-via">{t(via === 'lan' ? 'unit.viaLan' : via === 'p2p' ? 'unit.viaP2p' : 'unit.viaTunnel')}</em>
+              {!reachable && <em className="unitsw-off">{t('unit.offline')}</em>}
+            </span>
+            <span className="unitsw-desc">{t(via === 'lan' ? 'unit.deviceLanDesc' : via === 'p2p' ? 'unit.deviceP2pDesc' : 'unit.deviceDesc')}</span>
+          </span>
+          {on && <Check size={14} className="unitsw-check" />}
+        </button>
+      )
+    })
+  })
+
   const removePaired = (d: UnitPairedDevice): void => {
     guard(async () => {
       await window.tangu?.unitsPairedRemove?.(d.id)
@@ -353,41 +397,19 @@ export function UnitSwitcher({ expanded }: { expanded: boolean }): React.ReactEl
                 <span className="unitsw-col"><span className="unitsw-desc">{t('unit.notLoggedIn')} ›</span></span>
               </button>}
               {/* 手机在 P1 不开设备通道(它是调用方,不是执行设备):不滤掉的话名册里永远多一台「离线」的手机(P1-K1)。老 server 不回 kind → 照旧列出 */}
-              {units?.filter((u) => u.id !== host?.unitId && u.kind !== 'phone').flatMap((u) => {
-                // 一台设备 = 每条通路各一行。此前是一行 + 自动择路:LAN 探通就把「中转」那条路
-                // 悄悄顶掉,界面上等于不存在(用户找了两轮没找到)。拆开显式列,想走哪条点哪条。
-                // 直连行只在探通时出现(探不通的地址点了也是白点);中转行恒在,离线灰显 + 就地提示。
-                // P2P 行:对端在线(信令要走隧道)且本端有桥就出——不支持的旧对端点了会 501,
-                // openUnit 出声回落中转(advisor 裁决:不做名册能力探测,失败面即协商面)。
-                const vias: Array<'lan' | 'p2p' | 'tunnel'> = [
-                  ...(u.lanUrl && lanOk[u.id] ? ['lan' as const] : []),
-                  ...(u.online && window.tangu?.unitsP2pOpen ? ['p2p' as const] : []),
-                  'tunnel' as const,
-                ]
-                return vias.map((via) => {
-                  const reachable = via === 'lan' || u.online // 隧道离线但 LAN 探通(如 B 未登录)照样能点
-                  const on = remote.active && remote.target?.key === `${u.id}:${via}`
-                  return (
-                    <button
-                      key={`${u.id}:${via}`}
-                      className={`unitsw-row${reachable ? '' : ' off'}${on ? ' on' : ''}`}
-                      onClick={() => openUnit(u, via)}
-                      onContextMenu={openCtxMenu(u)}
-                    >
-                      <span className="unitsw-ic">{deviceIcon(u)}</span>
-                      <span className="unitsw-col">
-                        <span className="unitsw-title">
-                          {u.name}
-                          <em className="unitsw-via">{t(via === 'lan' ? 'unit.viaLan' : via === 'p2p' ? 'unit.viaP2p' : 'unit.viaTunnel')}</em>
-                          {!reachable && <em className="unitsw-off">{t('unit.offline')}</em>}
-                        </span>
-                        <span className="unitsw-desc">{t(via === 'lan' ? 'unit.deviceLanDesc' : via === 'p2p' ? 'unit.deviceP2pDesc' : 'unit.deviceDesc')}</span>
-                      </span>
-                      {on && <Check size={14} className="unitsw-check" />}
-                    </button>
-                  )
-                })
-              })}
+              {/* 离线 = 一条能点的通路都没有(隧道不在、直连也没探通);探通的照样算在线 —— 探针渐进点亮,设备会从折叠里「弹出来」。
+                  正在看的那台(勾选态)不折,否则回来的路跟着藏起来。
+                  三段拼成一个扁平的 keyed 数组:探通后设备跨组时 React 只挪节点、不重挂(焦点不丢,Codex 评审)。 */}
+              {[
+                ...deviceRows(onlineUnits),
+                ...(offlineUnits.length > 0 ? [
+                  <button key="offline-fold" className="unitsw-row unitsw-fold" aria-expanded={offlineOpen} onClick={() => setOfflineOpen((v) => !v)}>
+                    <span className="unitsw-col"><span className="unitsw-title">{t('unit.offlineGroup')}<em className="unitsw-via">{offlineUnits.length}</em></span></span>
+                    <ChevronDown size={13} className="unitsw-fold-chev" />
+                  </button>,
+                ] : []),
+                ...(offlineOpen ? deviceRows(offlineUnits) : []),
+              ]}
               <button className="unitsw-row" onClick={openByAddress}>
                 <span className="unitsw-ic"><Globe size={15} /></span>
                 <span className="unitsw-col">
