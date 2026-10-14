@@ -47,20 +47,27 @@ const MAX_S = 1.2
 
 /** A `linear()` easing and its length for that spring, sampled per frame until it has settled. `clamp` stops at the
  *  end the first time it gets there (a page meeting the screen edge stops; it does not swing past) and never goes
- *  back behind the start. Null when
+ *  back behind the start. `give` bounds the swing past the end (a fraction of the travel): a fast flick carries on
+ *  into a soft wall instead of flying past. Null when
  *  `springMotion()` says no — the caller keeps whatever it did before. */
-export function springEasing(v0: number, spring: Spring, opts: { clamp?: boolean } = {}): { easing: string; ms: number } | null {
+export function springEasing(v0: number, spring: Spring, opts: { clamp?: boolean; give?: number } = {}): { easing: string; ms: number } | null {
   if (!springMotion() || !Number.isFinite(v0)) return null
+  // two input samples a hair apart make an absurd speed; nothing a finger does is faster than 60 travels a second
+  v0 = Math.max(-60, Math.min(60, v0))
   // clamped (a page between two edges): a release moving away from the end would first swing back past where it was
   // let go — out of its bounds when that was near an edge. Such a release starts from rest instead.
   if (opts.clamp) v0 = Math.max(0, v0)
   const pts = [0]
   let t = 0
+  let past = false
   while (t < MAX_S) {
     t += FRAME
-    const x = springAt(t, v0, spring)
+    let x = springAt(t, v0, spring)
     if (opts.clamp && x >= 1) break
     if (Math.abs(1 - x) < 0.002 && Math.abs(springAt(t + FRAME, v0, spring) - x) < 0.001) break
+    // past the end once, the swing is a soft wall: never more than `give` (of the travel) either side of it
+    if (x >= 1) past = true
+    if (past && opts.give) x = 1 + opts.give * Math.tanh((x - 1) / opts.give)
     pts.push(x)
   }
   pts.push(1)

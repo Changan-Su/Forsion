@@ -733,12 +733,14 @@ async function main() {
         if (dark) localStorage.setItem('forsion_theme', 'dark')
       } catch { /* private mode */ }
       // a left swipe on a list row, as the pointer events a finger sends (the row's track follows them; phoneList.tsx)
-      window.__swipeOpen = (el) => {
+      // (one move a frame, as a finger's come: their timestamps are what the release speed is taken from)
+      window.__swipeOpen = async (el) => {
         const r = el.getBoundingClientRect()
         const y = r.top + r.height / 2
         const ev = (type, x) => el.dispatchEvent(new PointerEvent(type, { pointerId: 7, isPrimary: true, pointerType: 'touch', clientX: x, clientY: y, bubbles: true }))
+        const frame = () => new Promise((done) => setTimeout(done, 16))
         ev('pointerdown', r.right - 20)
-        for (let i = 1; i <= 8; i++) ev('pointermove', r.right - 20 - i * 24)
+        for (let i = 1; i <= 8; i++) { await frame(); ev('pointermove', r.right - 20 - i * 24) }
         ev('pointerup', r.right - 20 - 8 * 24)
       }
     }, DARK)

@@ -334,6 +334,8 @@ function useDrawerDrag(
       /** 两级导航的整屏列表:主区平移自身整宽,且往回拖时不压暗(两页平级)。 */
       nav: boolean
       lastX: number; lastT: number; vx: number
+      /** 最近 ~80ms 的 [时刻, clientX]:松手速度取这一段的平均(只看最后一次移动太抖,甩得够快也可能被判成没甩)。 */
+      trail: Array<[number, number]>
       /** 进度速度(每毫秒,+ = 朝「开」):系统返回的预览只报进度,松手时的弹簧从这里取初速。 */
       vp: number
     }
@@ -424,7 +426,7 @@ function useDrawerDrag(
       }
       const EDGE = 24
       const edgeStart = t.clientX < EDGE || t.clientX > window.innerWidth - EDGE
-      d = { x0: t.clientX, y0: t.clientY, ok: !exempt || edgeStart, side: null, opening: false, w: 0, p: 0, panel: null, main: null, dim: null, nav: false, lastX: t.clientX, lastT: Date.now(), vx: 0, vp: 0 }
+      d = { x0: t.clientX, y0: t.clientY, ok: !exempt || edgeStart, side: null, opening: false, w: 0, p: 0, panel: null, main: null, dim: null, nav: false, lastX: t.clientX, lastT: e.timeStamp, vx: 0, vp: 0, trail: [[e.timeStamp, t.clientX]] }
     }
 
     const onMove = (e: TouchEvent): void => {
@@ -448,8 +450,12 @@ function useDrawerDrag(
         else { d = null; return }
         if (!arm(d)) { d = null; return } // 面板还没挂上(该侧没有内容)→ 不拖
       }
-      const now = Date.now()
-      if (now > d.lastT) d.vx = (t.clientX - d.lastX) / (now - d.lastT)
+      // 事件自己的时刻(不是处理器跑到的时刻):主线程晚一拍处理,速度和「停住了没有」都不该跟着变
+      const now = e.timeStamp
+      d.trail.push([now, t.clientX])
+      while (d.trail.length > 2 && now - d.trail[0][0] > 80) d.trail.shift()
+      const [t0, x0] = d.trail[0]
+      if (now > t0) d.vx = (t.clientX - x0) / (now - t0)
       d.lastX = t.clientX
       d.lastT = now
       const sign = d.side === 'left' ? 1 : -1
@@ -458,14 +464,14 @@ function useDrawerDrag(
       e.preventDefault()
     }
 
-    const onEnd = (): void => {
+    const onEnd = (e: TouchEvent): void => {
       const cur = d
       d = null
       if (!cur || !cur.side) return
       const sign = cur.side === 'left' ? 1 : -1
       const p = cur.p
       // 正 = 朝「开」的方向甩;手指停住再抬起不算甩(vx 是最后一次移动时的速度)
-      const v = Date.now() - cur.lastT > 80 ? 0 : sign * cur.vx
+      const v = e.timeStamp - cur.lastT > 100 ? 0 : sign * cur.vx
       const wantOpen = v > FLING ? true : v < -FLING ? false : p > 0.5
       const ws = useWorkspace.getState()
       const isOpen = cur.side === 'left' ? ws.leftVisible : ws.rightVisible
@@ -482,7 +488,7 @@ function useDrawerDrag(
         const ws = useWorkspace.getState()
         if (side === 'left' && envRef.current.wide) return false // 宽屏左栏是并排的常驻列,不是抽屉
         const open = side === 'left' ? ws.leftVisible : ws.rightVisible
-        const dr: Drag = { x0: 0, y0: 0, ok: true, side, opening: !open, w: 0, p: open ? 1 : 0, panel: null, main: null, dim: null, nav: false, lastX: 0, lastT: 0, vx: 0, vp: 0 }
+        const dr: Drag = { x0: 0, y0: 0, ok: true, side, opening: !open, w: 0, p: open ? 1 : 0, panel: null, main: null, dim: null, nav: false, lastX: 0, lastT: 0, vx: 0, vp: 0, trail: [] }
         if (!arm(dr)) return false
         d = null
         sys = dr

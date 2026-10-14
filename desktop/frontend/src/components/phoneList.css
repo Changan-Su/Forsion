@@ -39,7 +39,6 @@
  *    是同一种说法。 ── */
 .mb-shell[data-list-first] .pl-swipe { overflow: hidden; overflow: clip; touch-action: pan-y; }
 .mb-shell[data-list-first] .pl-swipe-track { display: flex; }
-.mb-shell[data-list-first] .pl-swipe[data-dragging] > .pl-swipe-track { will-change: transform; }
 .mb-shell[data-list-first] .pl-swipe-track > :first-child { flex: 0 0 100%; min-width: 0; }
 .mb-shell[data-list-first] .pl-swipe-acts {
   display: flex; flex: 0 0 auto; align-items: center; gap: calc(10 * var(--pl-dp));

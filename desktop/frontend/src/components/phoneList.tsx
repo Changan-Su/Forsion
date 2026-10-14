@@ -85,6 +85,9 @@ export interface SwipeAction { id: string; label: string; icon: ReactNode; tone?
 
 /** 每一行的控制器(挂在 .pl-swipe 上;手指落在别处时要能从外面收回它)。 */
 const swipes = new WeakMap<HTMLElement, { close(): void; justDragged(): boolean }>()
+/** 窗口尺寸变一次加一:各行量过的缩放比例 / 按钮宽度以此作废(一个监听,不是每行一个)。 */
+let sizeEpoch = 0
+if (typeof window !== 'undefined') window.addEventListener('resize', () => { sizeEpoch += 1 })
 
 /** 手指落在别处时把开着的那一行收回。挂在列表滚动器的 onTouchStart 上(一处,不是每行一个监听)。 */
 export function closeOtherSwipes(e: { target: EventTarget | null }): void {
@@ -109,7 +112,8 @@ export function SwipeRow({ actions, children }: { actions: SwipeAction[]; childr
       onClickCapture={(e) => {
         const el = ref.current
         if (!el) return
-        // a click right after a drag (a mouse on the phone sends one) is the drag's end: swallow it, leave the tray as the release put it
+        // the click a mouse on the phone sends after a drag (no pointerdown of its own) is the drag's end: swallow it,
+        // leave the tray as the release put it. A real tap starts with a pointerdown, which clears this.
         if (swipes.get(el)?.justDragged()) { e.preventDefault(); e.stopPropagation(); return }
         if ((e.target as Element).closest('.pl-swipe-acts') || !el.hasAttribute('data-open')) return
         e.preventDefault(); e.stopPropagation(); close()
@@ -129,12 +133,22 @@ export function SwipeRow({ actions, children }: { actions: SwipeAction[]; childr
   )
 }
 
+const GIVE = 10
+
 /** 一行的手势。位移以行自己的 CSS px 记(列表在 .mb-drawer-body 里还放大一档,指针的视口坐标要除以这一档)。 */
 function wireSwipe(el: HTMLElement): () => void {
   const track = el.firstElementChild as HTMLElement
   const acts = track.lastElementChild as HTMLElement
   let x = 0 // ≤ 0;-acts 宽 = 全开
-  let dragEnd = 0
+  let dragged = false // 拖完松手、还没有新的按下
+  /** 量一次就记住(认下拖拽那一刻再量会强制一次样式 + 布局,正压在起手那一帧);窗口尺寸或按钮个数变了才重量。 */
+  let size: { k: number; w: number; epoch: number; n: number } | null = null
+  const measure = (): { k: number; w: number } => {
+    if (!size || size.epoch !== sizeEpoch || size.n !== acts.childElementCount) {
+      size = { k: el.getBoundingClientRect().width / el.offsetWidth || 1, w: acts.offsetWidth, epoch: sizeEpoch, n: acts.childElementCount }
+    }
+    return size
+  }
   type Grip = { id: number; x0: number; y0: number; from: number; k: number; w: number; on: boolean | null; trail: Array<[number, number]> }
   let g: Grip | null = null
   const put = (v: number): void => { x = v; track.style.transform = v ? `translateX(${v.toFixed(2)}px)` : '' }
@@ -143,16 +157,18 @@ function wireSwipe(el: HTMLElement): () => void {
     const m = getComputedStyle(track).transform
     return m && m !== 'none' ? new DOMMatrixReadOnly(m).m41 : 0
   }
-  /** 去 `to`,初速 `v`(行内 px / ms)。 */
+  /** 去 `to`,初速 `v`(行内 px / ms)。冲过头最多再走 GIVE px(软墙),甩得再快也不会把那排钮甩出一大截空白。 */
   const settle = (to: number, v: number): void => {
     el.toggleAttribute('data-open', to !== 0)
+    track.style.willChange = ''
     const span = to - x
-    const s = Math.abs(span) < 0.5 ? null : springEasing((v * 1000) / span, SPRING_ROW)
+    const s = Math.abs(span) < 0.5 ? null : springEasing((v * 1000) / span, SPRING_ROW, { give: GIVE / Math.abs(span) })
     track.style.transition = s ? `transform ${s.ms}ms ${s.easing}` : Math.abs(span) < 0.5 || reducedMotion() ? '' : 'transform 0.3s cubic-bezier(0.2, 0.9, 0.3, 1)'
     put(to)
   }
   const ours = (): boolean => el.matches('.mb-shell[data-list-first] .pl-swipe')
   const down = (e: PointerEvent): void => {
+    dragged = false
     if (g || !e.isPrimary || e.button > 0 || !ours()) return
     const at = track.style.transition ? now() : x
     track.style.transition = ''
@@ -168,11 +184,10 @@ function wireSwipe(el: HTMLElement): () => void {
       // 纵向 = 列表的(浏览器接着就会发 pointercancel);合着的行往右拉 = 不是我们的
       g.on = Math.abs(dx) > Math.abs(dy) && !(g.from === 0 && dx > 0)
       if (!g.on) { if (g.from !== 0) settle(0, 0); g = null; return } // 开着的那行,列表一滚就收回(同原生列表)
-      // 认下这一下才量(不在每次按下时量:点一行进会话不该多一次布局读取)
-      g.k = el.getBoundingClientRect().width / el.offsetWidth || 1
-      g.w = acts.offsetWidth
+      ;({ k: g.k, w: g.w } = measure())
       try { el.setPointerCapture(e.pointerId) } catch { /* 指针已经没了 */ }
-      el.setAttribute('data-dragging', '')
+      // 内联而不是挂属性:属性一变,带它的选择器要把整行子树的样式重算一遍(起手那帧 78 个元素)
+      track.style.willChange = 'transform'
       closeOtherSwipes({ target: el })
     }
     let v = g.from + (e.clientX - g.x0) / g.k
@@ -191,13 +206,12 @@ function wireSwipe(el: HTMLElement): () => void {
       // a touch that never became a drag: it may have caught a spring halfway (down froze it) — let it finish; one the
       // browser took for the list's scroll closes the row (as a scroll does)
       if (x !== 0 || el.hasAttribute('data-open')) {
-        const to = e.type === 'pointercancel' || !el.hasAttribute('data-open') ? 0 : -acts.offsetWidth
+        const to = e.type === 'pointercancel' || !el.hasAttribute('data-open') ? 0 : -measure().w
         if (Math.abs(x - to) > 0.5) settle(to, 0)
       }
       return
     }
-    el.removeAttribute('data-dragging')
-    dragEnd = performance.now()
+    dragged = true
     const [t1, x1] = was.trail[was.trail.length - 1]
     const [t0, x0] = was.trail[0]
     // 停住再抬手不算甩
@@ -205,15 +219,19 @@ function wireSwipe(el: HTMLElement): () => void {
     const open = v < -0.3 ? true : v > 0.3 ? false : x < -was.w / 2
     settle(open ? -was.w : 0, v)
   }
+  // 弹完就摘掉过渡:之后按下这一行(点进会话)不必再读一次计算样式去接住它
+  const ended = (e: TransitionEvent): void => { if (e.target === track) track.style.transition = '' }
+  track.addEventListener('transitionend', ended)
   el.addEventListener('pointerdown', down)
   el.addEventListener('pointermove', move)
   el.addEventListener('pointerup', up)
   el.addEventListener('pointercancel', up)
   swipes.set(el, {
     close: () => { if (!g && (x !== 0 || el.hasAttribute('data-open'))) { x = track.style.transition ? now() : x; settle(0, 0) } },
-    justDragged: () => performance.now() - dragEnd < 300,
+    justDragged: () => { const was = dragged; dragged = false; return was },
   })
   return () => {
+    track.removeEventListener('transitionend', ended)
     el.removeEventListener('pointerdown', down)
     el.removeEventListener('pointermove', move)
     el.removeEventListener('pointerup', up)

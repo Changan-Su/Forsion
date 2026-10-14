@@ -38,6 +38,15 @@ describe('spring', () => {
     const pts = springEasing(-6, SPRING_PAGE, { clamp: true })!.easing.slice(7, -1).split(', ').map(Number)
     expect(Math.min(...pts)).toBe(0)
   })
+  it('give: a flick past the end swings no further than the wall, and an absurd speed does not fly off', async () => {
+    const { springEasing, SPRING_ROW } = await load(true)
+    for (const v0 of [3, 40, 1e9]) {
+      const pts = springEasing(v0, SPRING_ROW, { give: 0.1 })!.easing.slice(7, -1).split(', ').map(Number)
+      expect(Math.max(...pts)).toBeLessThanOrEqual(1.1)
+      expect(Math.max(...pts)).toBeGreaterThan(1) // still a bounce
+      expect(pts.at(-1)).toBe(1)
+    }
+  })
   it('no linear() or reduced motion: null, the caller keeps its own curve', async () => {
     expect((await load(false)).springEasing(0, { response: 0.4, damping: 1 })).toBeNull()
     expect((await load(true, true)).springEasing(0, { response: 0.4, damping: 1 })).toBeNull()
