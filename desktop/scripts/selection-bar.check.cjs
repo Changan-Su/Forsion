@@ -13,14 +13,19 @@
 const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
-const assert = require('node:assert/strict')
 const electron = require('./lib/launch-electron.cjs')
 const { startStubEngine } = require('./lib/stub-engine.cjs')
 const { skipOnboarding } = require('./lib/skip-onboarding.cjs')
 const ROOT = path.resolve(__dirname, '..')
 const ZOOM = Number(process.env.ZOOM || 1)
 let checks = 0
-function check(name, condition, detail) { assert.ok(condition, `${name}${detail ? ` | ${detail}` : ''}`); console.log(`PASS ${name}`); checks++ }
+const failed = []
+/** 红了记下来接着往下走(后面的步骤多半互不依赖;真依赖的会自己超时抛错),收尾时有一条红就非零退出。 */
+function check(name, condition, detail) {
+  if (condition) { console.log(`PASS ${name}`); checks++; return }
+  failed.push(name)
+  console.log(`FAIL ${name}${detail ? ` | ${detail}` : ''}`)
+}
 async function until(fn, ms = 8000) { const end = Date.now() + ms; for (;;) { const v = await fn(); if (v) return v; if (Date.now() > end) return v; await new Promise((r) => setTimeout(r, 120)) } }
 
 const now = Date.now()
@@ -183,7 +188,8 @@ async function main() {
     await win.evaluate((zoom) => {
       localStorage.setItem('forsion_default_space', 'tangu'); localStorage.setItem('tangu_locale', 'zh')
       localStorage.removeItem('forsion_selection_bar_order')
-      if (zoom !== 1) localStorage.setItem('forsion_ui_zoom', String(zoom))
+      // 2.10.0 那次「缩放回到默认」的一次性迁移会清掉存着的缩放:应用首帧可能还没跑到它,这里先标成已迁移,不然重载时被清回 100%。
+      if (zoom !== 1) { localStorage.setItem('forsion_ui_zoom_default_2_10_0', '1'); localStorage.setItem('forsion_ui_zoom', String(zoom)) }
     }, ZOOM)
     await win.reload({ waitUntil: 'domcontentloaded' })
     check('主窗离开首启引导', await skipOnboarding(win))
@@ -349,8 +355,9 @@ async function main() {
     check('英文界面:中文选区译成英文;卡上的按钮是英文', inline.at(-1)?.language === 'English' && !!cEn && (await win.evaluate(() => [...document.querySelectorAll('[data-testid="inline-ai-panel"] button[data-act]')].map((b) => b.textContent.trim()).join('|'))) === 'Copy|Try again|Close', JSON.stringify(cEn))
     await win.screenshot({ path: path.join(shots, 'chat-translate-card-dark-en.png') })
 
-    console.log(`\n${checks} checks passed${ZOOM !== 1 ? ` (ZOOM=${ZOOM})` : ''}`)
+    console.log(`\n${checks} checks passed, ${failed.length} failed${ZOOM !== 1 ? ` (ZOOM=${ZOOM})` : ''}`)
     console.log(`SCREENSHOTS ${shots}`)
+    if (failed.length) process.exitCode = 1
   } finally {
     if (app) await app.close().catch(() => {})
     await stub.close()

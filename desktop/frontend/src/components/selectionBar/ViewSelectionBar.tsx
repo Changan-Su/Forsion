@@ -95,7 +95,10 @@ export function ViewSelectionBar(p: ViewSelectionBarProps): ReactElement | null 
   useEffect(() => {
     const el = watch?.current
     if (!el) return
+    // 按在条上的那一下(按钮按下即执行,条随即收起):它的松手可能落回这个元素,那不是一次新的选择,不能把条再弹出来。
+    let fromBar = false
     const read = (): void => {
+      if (fromBar) return
       const s = window.getSelection()
       if (!s || s.isCollapsed || !s.rangeCount) { setOwn(null); return }
       const text = s.toString().trim()
@@ -113,7 +116,8 @@ export function ViewSelectionBar(p: ViewSelectionBarProps): ReactElement | null 
     // 条挂在 body 下,不会跟着这个视图一起被藏起来 / 挪走:点到视图和条的外面、视图的盒子变了(切标签页、拖分栏、缩窗口)都收。
     const onDown = (e: MouseEvent): void => {
       const at = e.target as Element | null
-      if (at && !el.contains(at) && !at.closest?.('.selbar')) clear()
+      fromBar = !!at?.closest?.('.selbar')
+      if (at && !el.contains(at) && !fromBar) clear()
     }
     let sized = false
     const ro = new ResizeObserver(() => { if (sized) clear(); else sized = true }) // 第一次回调是 observe 本身,不算
