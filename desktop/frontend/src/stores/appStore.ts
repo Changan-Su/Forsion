@@ -4390,6 +4390,9 @@ if (import.meta.env.DEV && typeof window !== 'undefined') {
   // 台架在它之前经这里切焦点、看健康表;生产构建同样没有这行。
   ;(window as unknown as Record<string, unknown>).__forsionEngineTargets = {
     setFocusTarget, focusRef,
+    // P1-K7a:用户亲手选「在哪运行」(= 弹层 / 胶囊走的那一条:记住,且这份草稿不再被对账改掉)。只改焦点的 setFocusTarget 不算亲手选,
+    // 新草稿会被对账拉回记住的位置 —— 要测「记住上次的选择」就走这里。动态 import:runLocationStore 反过来依赖本文件。
+    setRunLocation: async (loc: TargetRef, name?: string) => (await import('./runLocationStore')).setDraftLocation(loc, { explicit: true, name: name ?? null }),
     // S4:两台并存台架看「这条会话绑在哪」与已知目标集合(R-20)
     locationOf: (sid: string) => refForSession(sid),
     known: () => knownTargets().map((t) => t.key),
