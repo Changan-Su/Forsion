@@ -100,6 +100,7 @@ export function ExtendViewHost({ children, present, owner, ownerKey = '' }: { pr
       if (!store.getSnapshot() || !ownsFocus()) return
       if (event.defaultPrevented) return
       event.preventDefault()
+      if ((event as CustomEvent<{ probe?: boolean } | null>).detail?.probe) return // 只是问接不接(见 SingleColumnHost 头注)
       store.dismiss()
     }
     const keydown = (event: KeyboardEvent): void => { if (event.key === 'Escape') back(event) }

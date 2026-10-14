@@ -84,6 +84,54 @@ class NativeSheetPayloadTest {
         assertThrows(IllegalArgumentException::class.java) { SheetPayload.parse(deep) }
     }
 
+    private fun checklist() = JSONObject("""{
+      "requestId":"k1","kind":"checklist","title":"Home cards","done":"Done","footer":"Up to 3","min":1,"max":3,"theme":$theme,
+      "checked":["c","a"],
+      "items":[{"id":"a","label":"A","icon":$icon},{"id":"b","label":"B"},{"id":"c","label":"C"},{"id":"d","label":"D"},{"id":"off","label":"Off","disabled":true}]
+    }""")
+
+    @Test fun checklistTicksInPlaceWithinItsBounds() {
+        val p = SheetPayload.parse(checklist()) as SheetPayload.Checklist
+        assertEquals(listOf("c", "a"), p.checked)
+        assertEquals("Done", p.done)
+        // a new tick goes last; full = no more; the last one stays; a disabled row never flips
+        val three = p.toggle(p.checked, "b")
+        assertEquals(listOf("c", "a", "b"), three)
+        assertEquals(three, p.toggle(three, "d"))
+        assertEquals(listOf("c", "b"), p.toggle(three, "a"))
+        assertEquals(listOf("c"), p.toggle(listOf("c"), "c"))
+        assertEquals(listOf("c"), p.toggle(listOf("c"), "off"))
+        // the answer: what it was, or what ticking can reach
+        assertTrue(p.accepts(SheetAnswer.Checked(listOf("c", "a"))))
+        assertTrue(p.accepts(SheetAnswer.Checked(listOf("a", "d", "b"))))
+        for (bad in listOf(listOf(), listOf("a", "a"), listOf("a", "b", "c", "d"), listOf("off"), listOf("zzz"))) {
+            assertFalse(bad.toString(), p.accepts(SheetAnswer.Checked(bad)))
+        }
+        assertFalse(p.accepts(SheetAnswer.Pick("a", false)))
+        // starting below min: what ticking reaches from there is an answer (one tick of two needed)
+        val low = SheetPayload.parse(checklist().put("checked", JSONArray()).put("min", 2)) as SheetPayload.Checklist
+        assertEquals(listOf("a"), low.toggle(emptyList(), "a"))
+        assertTrue(low.accepts(SheetAnswer.Checked(listOf("a"))))
+    }
+
+    @Test fun checklistRejectsWhatItCannotDraw() {
+        for (mutate in listOf<(JSONObject) -> Unit>(
+            { it.put("max", 0) },
+            { it.put("max", 9) }, // more than there are rows
+            { it.put("max", 2.5) },
+            { it.put("min", 4) },
+            { it.put("checked", JSONArray(listOf("a", "a"))) },
+            { it.put("checked", JSONArray(listOf("zzz"))) },
+            { it.put("checked", JSONArray(listOf("a", "b", "c", "d"))) },
+            { it.getJSONArray("items").getJSONObject(0).put("trailing", JSONObject("""{"id":"x","label":"X"}""")) },
+            { it.getJSONArray("items").getJSONObject(0).put("children", JSONArray("""[{"items":[{"id":"n","label":"N"}]}]""")) },
+            { it.remove("done") },
+        )) {
+            val json = checklist().also(mutate)
+            assertThrows(Exception::class.java) { SheetPayload.parse(json) }
+        }
+    }
+
     @Test fun promptAndConfirm() {
         val prompt = SheetPayload.parse(JSONObject("""{"requestId":"p","kind":"prompt","title":"New folder","initial":"Folder","confirm":"OK","cancel":"Cancel","theme":$theme}""")) as SheetPayload.Prompt
         assertEquals("Folder", prompt.initial)

@@ -220,7 +220,7 @@ export function MobileUnitsSheet(): React.ReactElement | null {
   // 否则全局返回把底下视图切走/最小化 App 而弹层还悬着(Codex 四轮 P2)。
   useEffect(() => {
     if (!open) return
-    const onBack = (e: Event): void => { e.preventDefault(); setOpen(false) }
+    const onBack = (e: Event): void => { e.preventDefault(); if (!(e as CustomEvent<{ probe?: boolean } | null>).detail?.probe) setOpen(false) } // probe:只答「我接」,不动手
     window.addEventListener('forsion:mobile-back', onBack)
     return () => window.removeEventListener('forsion:mobile-back', onBack)
   }, [open, setOpen])

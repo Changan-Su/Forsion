@@ -48,9 +48,16 @@ android {
                 resValue 'string', 'title_activity_main', 'Forsion Preview'
             }
             buildConfigField 'boolean', 'NATIVE_PREVIEW_SAMPLE', project.hasProperty('nativePreviewSample') ? 'true' : 'false'
+            //   -PnativePreviewFast    = 同上的并装预览,但不带「可调试」标记(签名仍是 debug 的):可调试的包里 ART 不做优化,
+            //                            原生那几块(半屏、Dock、胶囊)比正式包慢,拿它感受「手感」会冤枉原生层。给人上手试的包用这个。
+            //                            WebView 的远程调试照旧开着(AppActivity 认 WEBVIEW_INSPECTABLE):台架要连页面,
+            //                            以前的预览包(可调试)也一直能连。这个开关只在 debug 这一档里,进不了正式包。
+            if (project.hasProperty('nativePreviewFast')) debuggable false
+            buildConfigField 'boolean', 'WEBVIEW_INSPECTABLE', project.hasProperty('nativePreviewFast') ? 'true' : 'false'
         }
         release {
             buildConfigField 'boolean', 'NATIVE_PREVIEW_SAMPLE', 'false'
+            buildConfigField 'boolean', 'WEBVIEW_INSPECTABLE', 'false'
             if (System.getenv("ANDROID_KEYSTORE_PATH")) {
                 signingConfig signingConfigs.release
             }

@@ -7,26 +7,29 @@
  * - 左抽屉底部常驻:Space 切换条(原全局底栏移入)+ 账号卡 + 设置钮(读 ribbon 注册表,引擎不 import feature)。
  * - 「⋯」菜单:桌面 ribbon 底部功能的手机落点;账号/设置两项已迁去左抽屉底部,此处滤掉。
  * - 系统返回(Android):MobileRoot 派发可取消的 `forsion:mobile-back`,本壳先接管 tab sheet/「⋯」的关闭。
+ *   带 `detail.probe` 的那一种只是问「你接不接」:preventDefault 作答,**不许动手**(新加监听方照这个写)。
  * mobile 构建直接渲染它(MobileRoot);desktop/web 由 Shell 在 UI_MODE==='mobile' 时套「手机框」渲染。
  */
-import { Suspense, createElement, useEffect, useRef, useState, type RefObject } from 'react'
+import { Suspense, createElement, startTransition, useEffect, useRef, useState, useSyncExternalStore, type ReactNode, type RefObject } from 'react'
 import { flushSync } from 'react-dom'
-import { PanelLeft, PanelRight, X, MoreHorizontal, Plus, Zap, SlidersHorizontal, Check } from 'lucide-react'
+import { PanelLeft, PanelRight, X, MoreHorizontal, Plus, Zap, SlidersHorizontal } from 'lucide-react'
 import { useSpaceStore, setActiveSpace, getActiveSpace, pinSpaceToHome, redirectOpenFromOnePage } from './spaceRegistry'
 import { useRibbonStore } from './ribbonRegistry'
 import { useCommandStore } from './commandRegistry'
 import { accountMenuItems, moreCommandGroups, moreCommandOn, moreCommandTitle, moreItems, moreRowLabel, presentedCommand } from './moreSheet'
 import { getView } from './viewRegistry'
 import { label, identitySig, type RibbonItem, type SpaceIcon } from './types'
-import { nativeSheetPresenter, presentNativeMenu, type NativeMenuItem } from './nativeSheet'
+import { nativeSheetPresenter, presentNativeChecklist, presentNativeMenu, type NativeMenuItem } from './nativeSheet'
 import type { SheetMenuItem } from './nativeSheetMenu'
 import { setNativeChromeShell, useNativeChromeInstalled, useNativeChromeSpaces, nativeChromeDrawsSpaces, nativeChromeExtras, subscribeNativeChromeExtras, type NativeChromeShellLabels, type NativeChromeSpace } from './nativeChrome'
-import { DOCK_PICKS, dockSpaceIds, subscribeDockPicks, toggleDockPick } from './spaceDock'
+import { DOCK_PICKS, dockSpaceIds, setDockPicks, subscribeDockPicks } from './spaceDock'
+import { SPRING_PAGE, springEasing } from './spring'
 import { ExtendViewHost } from './ExtendViewHost'
 import { presentInlineExtension } from './extendView'
 import { NativeExtendView } from './nativeExtendView'
 import { useWorkspace, restoreSingleColumnLayout, presentDrawerExtension, setAfterLayoutHook, setBeforeMainOpenHook } from './singleColumnStore'
 import { listFirstNow } from './listFirst'
+import { installListTrips } from './listTrips'
 import { onePageLanding } from './pinnedViews'
 import { Skeleton, ViewErrorBoundary, skeletonVariantOf } from './Skeleton'
 import './singleColumn.css'
@@ -89,6 +92,21 @@ function useChromeAutoHide(ref: React.RefObject<HTMLElement | null>, enabled: bo
   return off
 }
 
+/** 主区那一格的视图晚一拍挂:只在它出生时人正停在两级导航的列表层上(主区整屏在屏外)才这样。
+ *
+ *  2026-10-13 用户实报「有点迟钝」,实测(降速 4 倍)底栏点 Tangu 要先卡 0.5~1.3 秒才开始切 —— 卡的是把列表后面那张
+ *  看不见的对话页整个装一遍(渲染消息、代码高亮、排版),装完才轮到列表上屏。这里把顺序倒过来:列表先上屏,这一格
+ *  随后作为一次可打断的后台渲染挂上(startTransition:分片做,人点了东西它让路)。人等不及先点了条目,主区带着空页
+ *  先滑进来,内容挂好即现。
+ *  ⚠️ 只管「出生在列表层」的那一次:不在列表层出生(主页、日历、宽屏、冷启动直接进主区)照旧同步挂;挂上之后一直留着。
+ *  ⚠️ 「在不在列表层」只在出生时读一次、不订阅:订阅的话每次进出主区这一格连同整个视图都要重渲一遍。
+ *  视图仍然不等人操作就会挂上(只是晚几百毫秒),所以靠主区视图起作用的东西(插件在主区里初始化的状态)不受影响。 */
+function LateMount({ children }: { children: () => ReactNode }) {
+  const [on, setOn] = useState(() => !(useWorkspace.getState().leftVisible && listFirstNow()))
+  useEffect(() => { if (!on) startTransition(() => setOn(true)) }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  return on ? children() : null
+}
+
 export function LeafHost({ extendable = true }: { extendable?: boolean } = {}) {
   // 订阅 active 的 id、type、以及 **params 的对象身份**。标题变化仍不重渲染宿主——视图渲染期
   // 调 leaf.setTitle 会触发宿主重渲染→再调 setTitle→无限循环(React #185)。
@@ -112,9 +130,11 @@ export function LeafHost({ extendable = true }: { extendable?: boolean } = {}) {
     <div className="mb-view" data-view={active.type} key={`${active.id}:${active.type}`}>
       <ViewErrorBoundary>
         <Suspense fallback={<Skeleton variant={skeletonVariantOf(active.type)} />}>
-          {extendable ? <ExtendViewHost present={presentDrawerExtension} ownerKey={identitySig(activeParams ?? active.params)}>
-            {(extendView) => def.factory({ leaf: active, params: activeParams ?? active.params, extendView })}
-          </ExtendViewHost> : def.factory({ leaf: active, params: activeParams ?? active.params })}
+          <LateMount>
+            {() => (extendable ? <ExtendViewHost present={presentDrawerExtension} ownerKey={identitySig(activeParams ?? active.params)}>
+              {(extendView) => def.factory({ leaf: active, params: activeParams ?? active.params, extendView })}
+            </ExtendViewHost> : def.factory({ leaf: active, params: activeParams ?? active.params }))}
+          </LateMount>
         </Suspense>
       </ViewErrorBoundary>
     </div>
@@ -133,6 +153,17 @@ function useFootAlive(): boolean {
 }
 const footAliveNow = (): boolean => footAliveOf(useSpaceStore.getState().spaces.length, useRibbonStore.getState().items)
 
+/** 进出主区的滑动(--mb-dur = 0.34s)走完之后再过一点:不急的善后(告诉读屏哪块收起了)排到这之后,不压在动画上。 */
+const PARK_SETTLE_MS = 450
+/** 读屏(触摸浏览:TalkBack 这类)开没开。宿主写在 `<html data-reader>` 上(Android:原生外壳随 `layout` 报上来,
+ *  见 mobile/src/nativeChrome.ts `applyChromeLayout`);没有宿主报的地方(浏览器、iOS 网页)恒为没开。 */
+const readerOn = (): boolean => document.documentElement.hasAttribute('data-reader')
+const watchReader = (fn: () => void): (() => void) => {
+  const mo = new MutationObserver(fn)
+  mo.observe(document.documentElement, { attributes: true, attributeFilter: ['data-reader'] })
+  return () => mo.disconnect()
+}
+
 function Drawer({ side, docked, showFoot, page }: { side: 'left' | 'right'; docked?: boolean; showFoot?: boolean; page?: boolean }) {
   const visible = useWorkspace((s) => (side === 'left' ? s.leftVisible : s.rightVisible))
   const footAlive = useFootAlive() // 无条件调用:hooks 不能进条件分支
@@ -148,6 +179,38 @@ function Drawer({ side, docked, showFoot, page }: { side: 'left' | 'right'; dock
   // push 形态容器**恒挂载**(mount 即 open 就没有滑入过渡了);内容首开才挂、之后常驻(保树状态+退场动画)。
   const [warm, setWarm] = useState(visible)
   if (visible && !warm) setWarm(true)
+  // 两级导航的列表面板收起(= 人在主区)时照样渲染着:样式上不翻 visibility / pointer-events(都会继承,翻一次整个列表重算
+  // 一遍样式,见 singleColumn.css 末尾)。它们原来管的三件事改由这里和那条样式分担:读屏跳过它(aria-hidden,开着读屏才挂)、
+  // 键盘焦点不留在也不落进它里面(点条目的那一下焦点就在条目上)、滑出途中不吃点按(样式里的 ::after)。
+  // 外接键盘按 Tab 会走进这些看不见的条目:焦点第一次落进来时才挂 inert,之后 Tab 直接跳过整块。不一上来就挂,
+  // 是因为 inert 和那两个属性一样会让整棵子树重算一遍样式 —— 这笔只让真在用键盘走焦点的人付,只用触屏的人从不付。
+  const parkedRef = useRef<HTMLDivElement>(null)
+  const parked = !!page && !visible
+  useEffect(() => {
+    const el = parkedRef.current
+    if (!parked || !el) return
+    const drop = (): void => { const a = document.activeElement; if (a instanceof HTMLElement && el.contains(a)) a.blur() }
+    const onFocusIn = (): void => { drop(); el.inert = true }
+    drop()
+    el.addEventListener('focusin', onFocusIn)
+    return () => { el.removeEventListener('focusin', onFocusIn); el.inert = false }
+  }, [parked])
+  // aria-hidden 只在开着读屏时挂,而且滑完再挂 / 摘,所以不写在 JSX 里(那样它和 .open 是同一次提交)。
+  // 挂 / 摘它,在开着无障碍服务的手机上(读屏、自动点击 / 跳过广告、密码填充都算)要把这块的无障碍树整个重建一遍 ——
+  // 60 条会话 ≈ 1400 个节点。2026-10-13 追踪(降速 4 倍):落在滑动头一帧里时合成提交从个位数变成 110~160 ms;
+  // 挪到滑完之后,返回那个方向还是有一笔 ~137 ms 压在滑动前后。提交期间两条线程都停着,动画的钟照走 = 开头被吃掉一截。
+  // 需要这个标记的只有读屏(它按顺序把屏上的东西一个个念过去,会念进这块看不见的列表),所以只在读屏开着时付这笔。
+  // ponytail: 只认触摸浏览。开关控制 / 语音控制这类不走触摸浏览的辅助服务看得到这块收起的列表(点按被 ::after 挡着、
+  //           焦点落进来就 inert);真有人报,就让宿主把那类服务也算进 data-reader。
+  // 仪器:mobile `MODE=trace npm run emu:perf` 每段末尾的「slide … commits」那一行(应该是 none 或个位数)。
+  const reader = useSyncExternalStore(watchReader, readerOn)
+  useEffect(() => {
+    const el = parkedRef.current
+    if (!el) return
+    if (!page || !reader) { el.removeAttribute('aria-hidden'); return }
+    const timer = window.setTimeout(() => { if (parked) el.setAttribute('aria-hidden', 'true'); else el.removeAttribute('aria-hidden') }, PARK_SETTLE_MS)
+    return () => window.clearTimeout(timer)
+  }, [parked, page, reader])
   const leaves = side === 'left' ? useWorkspace.getState().leftLeaves : useWorkspace.getState().rightLeaves
   const active = useWorkspace.getState().getActiveSideLeaf(side)
   const def = active ? getView(active.type) : null
@@ -201,7 +264,7 @@ function Drawer({ side, docked, showFoot, page }: { side: 'left' | 'right'; dock
   return (
     // 反向横滑关闭(左抽屉左滑/右抽屉右滑)已并进 Host 的 useDrawerDrag —— 三处 fling 判定
     // (main 呼出 / 抽屉内关 / dim 上关)本来就是同一件事的三个入口,合成一个控制器才有中间态。
-    <div className={`mb-drawer mb-drawer--${side}${visible && alive ? ' open' : ''}`}>
+    <div ref={parkedRef} className={`mb-drawer mb-drawer--${side}${visible && alive ? ' open' : ''}`}>
       {warm ? inner : null}
     </div>
   )
@@ -229,7 +292,22 @@ function Drawer({ side, docked, showFoot, page }: { side: 'left' | 'right'; dock
  *     「React 已提交」这件事确定发生在 rAF 之前 —— 本控制器是原生监听,普通更新不保证这个先后。
  *     中间这一帧内联样式仍在(它压过 .open 与 push 那几条),所以看到的仍是手指停下的位置;
  *     摘 data-drag 的同时清掉内联样式,过渡从 .open 那条恢复,从当前位置接着补间。
+ *
+ *  系统返回手势也借这一套(`drawerPreview`,2026-10-13 用户实报「不跟手」):从屏幕边缘起手的返回归系统,页面只收到一个
+ *  touchcancel,手指滑的过程里什么都不动,松手才跳。Android 14 起系统把手势走到哪告诉 App —— 宿主(mobile 的
+ *  nativeBack)转给这里,画成和页内横滑同一个中间态。系统不报进度的版本没有 begin / move,松手那一下照旧走过渡动画。
  */
+/** 系统返回手势的中间态:宿主先问清这一下返回会动哪一侧(`begin`),再逐帧报走了多远(`move`,0→1),最后 `end`。 */
+export const drawerPreview = {
+  /** 开始预览把 `side` 那一侧拉开 / 收起(看它现在开没开)。拿不到面板(宽屏并排、该侧没内容)或页内正在拖 → false,这一下不预览。 */
+  begin: (side: 'left' | 'right'): boolean => previewImpl?.begin(side) ?? false,
+  move: (t: number): void => previewImpl?.move(t),
+  /** `commit` = 这一下返回成了(按预览的方向落定),否则弹回去。返回值:是不是由预览接下了这一下
+   *  (没在预览,或预览期间这一侧已经被别的东西开 / 收过 → false,调用方照现在的状态自己做这一下返回)。 */
+  end: (commit: boolean): boolean => previewImpl?.end(commit) ?? false,
+}
+let previewImpl: { begin(side: 'left' | 'right'): boolean; move(t: number): void; end(commit: boolean): boolean } | null = null
+
 function useDrawerDrag(
   bodyRef: RefObject<HTMLDivElement | null>,
   wide: boolean,
@@ -256,14 +334,54 @@ function useDrawerDrag(
       /** 两级导航的整屏列表:主区平移自身整宽,且往回拖时不压暗(两页平级)。 */
       nav: boolean
       lastX: number; lastT: number; vx: number
+      /** 最近 ~80ms 的 [时刻, clientX]:松手速度取这一段的平均(只看最后一次移动太抖,甩得够快也可能被判成没甩)。 */
+      trail: Array<[number, number]>
+      /** 进度速度(每毫秒,+ = 朝「开」):系统返回的预览只报进度,松手时的弹簧从这里取初速。 */
+      vp: number
     }
     let d: Drag | null = null
     const clamp = (n: number): number => (n < 0 ? 0 : n > 1 ? 1 : n)
     let painted: HTMLElement[] = []
+    let clearAt = 0
     const clearDrag = (): void => {
+      if (clearAt) { cancelAnimationFrame(clearAt); clearAt = 0 }
       body.removeAttribute('data-drag')
       for (const el of painted) { el.style.transform = ''; el.style.opacity = '' }
       painted = []
+    }
+    /** 松手后接着走的那一段不用固定 0.34s 的曲线,用一条带着手指速度的弹簧(2026-10-14 用户:「都是线性动画,
+     *  要原生那种灵动感」—— 甩得快,它就接着快;慢慢放,它也不拖一条长尾)。做法:在三个元素上写一条内联 transition
+     *  (压过 data-drag 的 none 与样式表里的那条),下一帧摘内联位移时过渡就按它走;走完摘掉,之后的开合照旧走样式表。
+     *  `vp` = 松手时的进度速度(每毫秒,+ = 朝「开」)。不支持 linear() 的旧 WebView:沿用原曲线,时长按剩下的路程缩短。 */
+    let springing: HTMLElement[] = []
+    let springTimer = 0
+    const unspring = (): void => {
+      if (springTimer) { clearTimeout(springTimer); springTimer = 0 }
+      for (const el of springing) el.style.transition = ''
+      springing = []
+    }
+    const release = (dr: Drag, vp: number): void => {
+      unspring()
+      const ws = useWorkspace.getState()
+      const target = (dr.side === 'left' ? ws.leftVisible : ws.rightVisible) ? 1 : 0
+      const span = target - dr.p
+      if (Math.abs(span) < 0.002) return
+      const spring = springEasing((vp * 1000) / span, SPRING_PAGE, { clamp: true })
+      const ms = spring?.ms ?? Math.round(340 * Math.max(0.35, Math.abs(span)))
+      const ease = spring?.easing ?? 'var(--mb-ease)'
+      for (const el of painted) {
+        const own = el === dr.dim ? `opacity ${ms}ms ${ease}` : `transform ${ms}ms ${ease}`
+        el.style.transition = el === dr.panel ? `${own}, visibility 0s linear ${ms}ms` : own
+      }
+      springing = [...painted]
+      springTimer = window.setTimeout(unspring, ms + 80)
+    }
+    /** 松手后的清理排到下一帧(见上面「松手顺序」)。⚠️ 排着的这一帧在下一次起手时必须取消(clearDrag 里):主线程一卡,
+     *  一帧能有几百毫秒,够人再按一次返回 —— 不取消的话它会把**新这一次**的 painted / data-drag 清掉,之后画上去的
+     *  transform 就没人收了,主区停在半路(Codex 评审,2026-10-13)。 */
+    const clearNextFrame = (): void => {
+      if (clearAt) cancelAnimationFrame(clearAt)
+      clearAt = requestAnimationFrame(() => { clearAt = 0; clearDrag() })
     }
     /** 把进度画到三个元素上。与 singleColumn.css 里 .open / .push-* / .on 的终态是同一组算式的 p=0 / p=1。 */
     const paint = (dr: Drag): void => {
@@ -274,6 +392,22 @@ function useDrawerDrag(
       if (dr.dim) dr.dim.style.opacity = dr.nav && left ? '0' : dr.p.toFixed(4)
     }
 
+    /** 认下被拖的三个元素并进入拖拽态(`dr.side` 已定)。面板没挂上 → false。 */
+    const arm = (dr: Drag): boolean => {
+      const panel = body.querySelector<HTMLElement>(`.mb-drawer--${dr.side}`)
+      dr.w = panel?.getBoundingClientRect().width ?? 0
+      if (!dr.w) return false
+      clearDrag() // 上一次松手留给下一帧清的内联样式:现在就清,别和这一次的叠在一起
+      unspring() // 上一次松手的弹簧还在走:它的内联 transition 会压过 data-drag 的 none,让手指拖着一条过渡
+      dr.panel = panel
+      dr.main = envRef.current.wide ? null : body.querySelector<HTMLElement>(':scope > .mb-main') // 宽屏右抽屉不推 main
+      dr.dim = body.querySelector<HTMLElement>(':scope > .mb-push-dim')
+      dr.nav = !!body.closest('.mb-shell')?.hasAttribute('data-list-first')
+      painted = [dr.panel, dr.main, dr.dim].filter((el): el is HTMLElement => !!el)
+      body.dataset.drag = dr.side as string
+      return true
+    }
+
     const onStart = (e: TouchEvent): void => {
       d = null
       const t = e.touches[0]
@@ -282,7 +416,8 @@ function useDrawerDrag(
       // 白板 / PDF / **画布**:整面都是「单指拖 = 平移」的手势面,横滑归它们。画布必须排掉
       // `.amx-stage-off`(文档模式那份 `display: contents` 的空壳仍在 DOM 里,认它 = 普通笔记也
       // 划不出抽屉)。屏幕边缘 24px 起手仍抢得回来,见下面的 edgeStart。
-      let exempt = !!target?.closest?.('.amx-draw, .pdfa-container, .amx-stage:not(.amx-stage-off)')
+      // 列表的一行(.pl-swipe)也是:左滑出操作是它自己的手势(10-14 起它不再是横向滚动器,下面那条认不出它)。
+      let exempt = !!target?.closest?.('.amx-draw, .pdfa-container, .amx-stage:not(.amx-stage-off), .pl-swipe')
       if (!exempt) {
         for (let el = target; el && el !== body; el = el.parentElement) {
           const cs = getComputedStyle(el)
@@ -291,11 +426,11 @@ function useDrawerDrag(
       }
       const EDGE = 24
       const edgeStart = t.clientX < EDGE || t.clientX > window.innerWidth - EDGE
-      d = { x0: t.clientX, y0: t.clientY, ok: !exempt || edgeStart, side: null, opening: false, w: 0, p: 0, panel: null, main: null, dim: null, nav: false, lastX: t.clientX, lastT: Date.now(), vx: 0 }
+      d = { x0: t.clientX, y0: t.clientY, ok: !exempt || edgeStart, side: null, opening: false, w: 0, p: 0, panel: null, main: null, dim: null, nav: false, lastX: t.clientX, lastT: e.timeStamp, vx: 0, vp: 0, trail: [[e.timeStamp, t.clientX]] }
     }
 
     const onMove = (e: TouchEvent): void => {
-      if (!d) return
+      if (!d || sys) return
       const t = e.touches[0]
       if (!t) return
       const dx = t.clientX - d.x0
@@ -313,19 +448,14 @@ function useDrawerDrag(
         else if (dx > 0 && env.hasLeft && !env.wide) { d.side = 'left'; d.opening = true }
         else if (dx < 0 && env.hasRight) { d.side = 'right'; d.opening = true }
         else { d = null; return }
-        const panel = body.querySelector<HTMLElement>(`.mb-drawer--${d.side}`)
-        d.w = panel?.getBoundingClientRect().width ?? 0
-        if (!d.w) { d = null; return } // 面板还没挂上(该侧没有内容)→ 不拖
-        clearDrag() // 上一次松手留给下一帧清的内联样式:现在就清,别和这一次的叠在一起
-        d.panel = panel
-        d.main = envRef.current.wide ? null : body.querySelector<HTMLElement>(':scope > .mb-main') // 宽屏右抽屉不推 main
-        d.dim = body.querySelector<HTMLElement>(':scope > .mb-push-dim')
-        d.nav = !!body.closest('.mb-shell')?.hasAttribute('data-list-first')
-        painted = [d.panel, d.main, d.dim].filter((el): el is HTMLElement => !!el)
-        body.dataset.drag = d.side
+        if (!arm(d)) { d = null; return } // 面板还没挂上(该侧没有内容)→ 不拖
       }
-      const now = Date.now()
-      if (now > d.lastT) d.vx = (t.clientX - d.lastX) / (now - d.lastT)
+      // 事件自己的时刻(不是处理器跑到的时刻):主线程晚一拍处理,速度和「停住了没有」都不该跟着变
+      const now = e.timeStamp
+      d.trail.push([now, t.clientX])
+      while (d.trail.length > 2 && now - d.trail[0][0] > 80) d.trail.shift()
+      const [t0, x0] = d.trail[0]
+      if (now > t0) d.vx = (t.clientX - x0) / (now - t0)
       d.lastX = t.clientX
       d.lastT = now
       const sign = d.side === 'left' ? 1 : -1
@@ -334,18 +464,59 @@ function useDrawerDrag(
       e.preventDefault()
     }
 
-    const onEnd = (): void => {
+    const onEnd = (e: TouchEvent): void => {
       const cur = d
       d = null
       if (!cur || !cur.side) return
       const sign = cur.side === 'left' ? 1 : -1
       const p = cur.p
-      const v = sign * cur.vx // 正 = 朝「开」的方向甩
+      // 正 = 朝「开」的方向甩;手指停住再抬起不算甩(vx 是最后一次移动时的速度)
+      const v = e.timeStamp - cur.lastT > 100 ? 0 : sign * cur.vx
       const wantOpen = v > FLING ? true : v < -FLING ? false : p > 0.5
       const ws = useWorkspace.getState()
       const isOpen = cur.side === 'left' ? ws.leftVisible : ws.rightVisible
       if (wantOpen !== isOpen) flushSync(() => ws.toggleSidebar(cur.side as 'left' | 'right'))
-      requestAnimationFrame(clearDrag)
+      release(cur, v / cur.w)
+      clearNextFrame()
+    }
+
+    // 系统返回手势的预览(见上面 drawerPreview):同一个 paint / 同一个松手顺序,只是进度由宿主报。
+    let sys: Drag | null = null
+    const mine = previewImpl = {
+      begin(side: 'left' | 'right'): boolean {
+        if (d?.side || sys) return false // 页内正拖着,或上一个手势还没收尾
+        const ws = useWorkspace.getState()
+        if (side === 'left' && envRef.current.wide) return false // 宽屏左栏是并排的常驻列,不是抽屉
+        const open = side === 'left' ? ws.leftVisible : ws.rightVisible
+        const dr: Drag = { x0: 0, y0: 0, ok: true, side, opening: !open, w: 0, p: open ? 1 : 0, panel: null, main: null, dim: null, nav: false, lastX: 0, lastT: 0, vx: 0, vp: 0, trail: [] }
+        if (!arm(dr)) return false
+        d = null
+        sys = dr
+        paint(dr)
+        return true
+      },
+      move(t: number): void {
+        if (!sys) return
+        const p = clamp(sys.opening ? t : 1 - t)
+        const now = performance.now()
+        if (sys.lastT && now > sys.lastT) sys.vp = (p - sys.p) / (now - sys.lastT)
+        sys.lastT = now
+        sys.p = p
+        paint(sys)
+      },
+      end(commit: boolean): boolean {
+        const cur = sys
+        sys = null
+        if (!cur) return false
+        const ws = useWorkspace.getState()
+        // 预览期间这一侧被别的东西开 / 收过(现在已经是预览要去的样子)→ 不替它落定:再 toggle 一次就反了。
+        // 交回调用方照现在的状态重新算这一下返回。
+        const stale = (cur.side === 'left' ? ws.leftVisible : ws.rightVisible) === cur.opening
+        if (commit && !stale) flushSync(() => ws.toggleSidebar(cur.side as 'left' | 'right'))
+        release(cur, cur.vp)
+        clearNextFrame()
+        return !(commit && stale)
+      },
     }
 
     body.addEventListener('touchstart', onStart, { passive: true })
@@ -357,7 +528,9 @@ function useDrawerDrag(
       body.removeEventListener('touchmove', onMove)
       body.removeEventListener('touchend', onEnd)
       body.removeEventListener('touchcancel', onEnd)
+      if (previewImpl === mine) previewImpl = null
       clearDrag()
+      unspring()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -399,8 +572,8 @@ function iconRev(icon: object | undefined): number {
 function landOnList(): void {
   if (listFirstNow() && !useWorkspace.getState().leftVisible) useWorkspace.getState().toggleSidebar('left')
 }
-/** 一页式 Space(types.ts 的 onePage,主页)的落点:它那一页到前台,多出来的标签关掉(旧布局里留下的、认不出主人
- *  而开在这儿的)。别的 Space 是空操作。 */
+/** 一页式 Space(types.ts 的 onePage,主页)的落点:它那一页到前台,多出来的标签和两边抽屉里的面板关掉(旧布局里
+ *  留下的、认不出主人而开在这儿的、启动时跟着上一个 Space 的布局带进来的)。别的 Space 是空操作。 */
 function landOnOnePage(): void {
   const sp = getActiveSpace()
   if (!sp?.onePage) return
@@ -408,9 +581,14 @@ function landOnOnePage(): void {
   // 但那时补回来的排在后台,前台还是别的视图。
   useWorkspace.getState().ensurePinned()
   const ws = useWorkspace.getState()
-  const { activate, close } = onePageLanding(sp, ws.mainLeaves, ws.activeMainId)
+  const { activate, close } = onePageLanding(sp, ws.mainLeaves, ws.activeMainId, [...ws.leftLeaves, ...ws.rightLeaves])
   if (activate) ws.activateLeaf(activate)
   for (const id of close) ws.closeLeaf(id, true)
+  // 面板关光了,抽屉也收起来(开着的空抽屉 = 一张白页盖在那一页上)
+  for (const side of ['left', 'right'] as const) {
+    const now = useWorkspace.getState()
+    if (now[side === 'left' ? 'leftVisible' : 'rightVisible'] && !now[side === 'left' ? 'leftLeaves' : 'rightLeaves'].length) now.toggleSidebar(side)
+  }
 }
 /** 进 Space(冷启动还原 / 切进来 / 布局重置)之后的落点。 */
 function landOnEntry(): void { landOnOnePage(); landOnList() }
@@ -425,6 +603,8 @@ setBeforeMainOpenHook(redirectOpenFromOnePage)
 /** 这个 Space 里有没有「新建标签页」:一页式 Space 没有(「⋯」、标签页面板两处的那一行都看它)。 */
 const tabsAllowed = (): boolean => !getActiveSpace()?.onePage
 setAfterLayoutHook(landOnEntry)
+// 两级导航里一趟的页内历史:从列表点进去的那一页是起点,返回 = 回列表(见 listTrips.ts)。
+installListTrips()
 
 /** 左抽屉底部常驻区:Space 切换条(原全局底栏移入)+ 账号卡与设置钮。
  *  账号/设置是 feature 层的 ribbon 注册项(rb-account / rb-settings),引擎按 id 取用不 import feature;
@@ -579,29 +759,21 @@ async function presentAllSpaces(tr: Tr): Promise<void> {
   if (id === 'dock:edit') { void presentDockPicks(tr); return }
   enterSpace(id.slice('space:'.length))
 }
-/** 选哪几个 Space 固定在 Dock:勾选即生效。原生答复是一次性的,所以每点一下按新状态重弹一次(同标签页那张)。 */
+/** 选哪几个 Space 固定在 Dock:原生勾选清单,勾的时候半屏不动,关上时(完成 / 下滑 / 返回都算)一起生效。
+ *  (10-14 之前是每勾一下按新状态重弹一次,半屏落下再升起 = 用户说的「选一个闪一下」。) */
 async function presentDockPicks(tr: Tr): Promise<void> {
   const spaces = useSpaceStore.getState().spaces
   const ids = spaces.map((x) => x.id)
   const inDock = dockSpaceIds(ids)
-  const full = ids.slice(1).filter((x) => inDock.has(x)).length >= DOCK_PICKS
-  const out = await presentNativeMenu({
+  const out = await presentNativeChecklist({
     title: tr('lcl.mobile.dock.editTitle'),
-    sections: [
-      {
-        items: spaces.slice(1).map((sp) => ({
-          id: `pick:${sp.id}`, label: label(sp.name), icon: spaceTileIcon(sp),
-          ...(inDock.has(sp.id) ? { checked: true } : full ? { disabled: true } : {}),
-        })),
-        footer: tr('lcl.mobile.dock.editHint', { first: label(spaces[0]?.name ?? ''), max: DOCK_PICKS }),
-      },
-      { items: [{ id: 'dock:done', label: tr('lcl.mobile.dock.done'), icon: Check }] },
-    ],
+    items: spaces.slice(1).map((sp) => ({ id: `pick:${sp.id}`, label: label(sp.name), icon: spaceTileIcon(sp) })),
+    checked: ids.slice(1).filter((x) => inDock.has(x)).map((x) => `pick:${x}`),
+    footer: tr('lcl.mobile.dock.editHint', { first: label(spaces[0]?.name ?? ''), max: DOCK_PICKS }),
+    done: tr('lcl.mobile.dock.done'),
+    max: DOCK_PICKS,
   })
-  const id = out.handled ? out.value?.id : undefined
-  if (!id?.startsWith('pick:')) return
-  toggleDockPick(ids, id.slice('pick:'.length))
-  void presentDockPicks(tr)
+  if (out.handled && out.value) setDockPicks(ids, out.value.checked.map((x) => x.slice('pick:'.length)))
 }
 
 async function presentNativeMore(tr: Tr): Promise<boolean> {
@@ -862,8 +1034,10 @@ export const SingleColumnHost: React.FC<{ dark?: boolean; soft?: boolean; buildD
   sheetsRef.current = { tabs: tabsOpen, more: moreOpen }
   useEffect(() => {
     const onBack = (e: Event): void => {
-      if (sheetsRef.current.tabs) { setTabsOpen(false); e.preventDefault(); return }
-      if (sheetsRef.current.more) { setMoreOpen(false); e.preventDefault() }
+      // probe = 宿主只是问「这一下返回你接不接」(手势刚开始,人可能中途放弃):答了就行,不动手。见 mobile 的 planBack。
+      const probe = (e as CustomEvent<{ probe?: boolean } | null>).detail?.probe
+      if (sheetsRef.current.tabs) { if (!probe) setTabsOpen(false); e.preventDefault(); return }
+      if (sheetsRef.current.more) { if (!probe) setMoreOpen(false); e.preventDefault() }
     }
     window.addEventListener('forsion:mobile-back', onBack)
     return () => window.removeEventListener('forsion:mobile-back', onBack)

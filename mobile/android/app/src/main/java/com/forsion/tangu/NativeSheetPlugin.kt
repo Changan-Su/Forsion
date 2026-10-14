@@ -72,6 +72,7 @@ class NativeSheetPlugin : Plugin() {
                 is SheetAnswer.Pick -> put("result", JSObject().apply { put("id", answer.id); if (answer.trailing) put("trailing", true) })
                 is SheetAnswer.Text -> put("result", JSObject().apply { put("text", answer.text) })
                 SheetAnswer.Ok -> put("result", JSObject().apply { put("ok", true) })
+                is SheetAnswer.Checked -> put("result", JSObject().apply { put("checked", org.json.JSONArray(answer.ids)) })
             }
         })
     }

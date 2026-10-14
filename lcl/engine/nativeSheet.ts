@@ -55,6 +55,21 @@ export interface NativeMenuRequest<I = NativeIconSource> {
   /** Accessible label of the nested-page back button. */
   back?: string
 }
+/** Rows ticked on and off in place; the sheet stays up while the user ticks and answers once, however it closes
+ *  (Done / scrim / swipe / back), with what is ticked. Rows carry id / label / detail / icon / disabled only.
+ *  `checked` = ticked at the start, in the order the answer keeps (a new tick goes last). At most `max`; a tick that
+ *  would leave fewer than `min` (default 0) does nothing. */
+export interface NativeChecklistRequest<I = NativeIconSource> {
+  kind: 'checklist'
+  title?: string
+  items: NativeMenuItem<I>[]
+  checked: string[]
+  footer?: string
+  /** Label of the closing row. */
+  done: string
+  min?: number
+  max: number
+}
 export interface NativePromptRequest {
   kind: 'prompt'
   title: string
@@ -72,13 +87,14 @@ export interface NativeConfirmRequest {
   cancel: string
   danger?: boolean
 }
-export type NativeSheetRequest = NativeMenuRequest | NativePromptRequest | NativeConfirmRequest
+export type NativeSheetRequest = NativeMenuRequest | NativeChecklistRequest | NativePromptRequest | NativeConfirmRequest
 /** What the presenter receives: JSON only. */
-export type NativeSheetPayload = (NativeMenuRequest<NativeIcon> | NativePromptRequest | NativeConfirmRequest) & { theme: NativeSheetTheme }
+export type NativeSheetPayload = (NativeMenuRequest<NativeIcon> | NativeChecklistRequest<NativeIcon> | NativePromptRequest | NativeConfirmRequest) & { theme: NativeSheetTheme }
 /** Resolve with the raw native answer, or null on cancel. Throw / reject = "cannot present" (caller falls back). */
 export type NativeSheetPresenter = (payload: NativeSheetPayload, signal: AbortSignal) => Promise<unknown>
 
 export interface NativeMenuResult { id: string; trailing?: boolean }
+export interface NativeChecklistResult { checked: string[] }
 export interface NativePromptResult { text: string }
 export interface NativeConfirmResult { ok: true }
 /** `handled:false` = no host / host failed → render the web UI. `value:null` = the user cancelled. */
@@ -116,6 +132,15 @@ export function menuResult<I>(request: Pick<NativeMenuRequest<I>, 'sections'>, r
   if (trailing) return item.trailing ? { id, trailing: true } : null
   if (item.children?.length) return null
   return { id }
+}
+/** Unique ids of this checklist, `min`..`max` of them; a disabled row only if it was ticked from the start. */
+export function checklistResult(request: Pick<NativeChecklistRequest<unknown>, 'items' | 'checked' | 'min' | 'max'>, raw: unknown): NativeChecklistResult | null {
+  if (!plainObject(raw) || !onlyKeys(raw, ['checked']) || !Array.isArray(raw.checked)) return null
+  const ids = raw.checked
+  if (!ids.every((id): id is string => typeof id === 'string') || new Set(ids).size !== ids.length) return null
+  if (ids.length > request.max || ids.length < Math.min(request.min ?? 0, request.checked.length)) return null
+  const ok = (id: string): boolean => request.checked.includes(id) || request.items.some((it) => it.id === id && !it.disabled)
+  return ids.every(ok) ? { checked: [...ids] } : null
 }
 export function promptResult(raw: unknown): NativePromptResult | null {
   if (!plainObject(raw) || !onlyKeys(raw, ['text']) || typeof raw.text !== 'string' || raw.text.length > 100_000) return null
@@ -336,6 +361,29 @@ export function presentNativeMenu(request: Omit<NativeMenuRequest, 'kind'>, sign
   if (!presenter) return Promise.resolve({ handled: false })
   if (!idsUnique(req.sections) || !req.sections.some((s) => s.items.length) || itemCount(req.sections) > NATIVE_MENU_MAX_ITEMS) return Promise.resolve({ handled: false })
   return present(async () => ({ ...(await serializeMenu(req)), theme: readNativeTheme() }), (raw) => menuResult(req, raw), signal)
+}
+export function presentNativeChecklist(request: Omit<NativeChecklistRequest, 'kind'>, signal?: AbortSignal): Promise<NativeSheetOutcome<NativeChecklistResult>> {
+  if (!presenter) return Promise.resolve({ handled: false })
+  const known = new Set(request.items.map((it) => it.id))
+  const max = Math.min(request.max, request.items.length)
+  if (!request.items.length || known.size !== request.items.length || request.items.some((it) => !it.id || it.id.length > MAX_ID || it.children?.length || it.trailing)
+    || request.items.length > NATIVE_MENU_MAX_ITEMS || max < 1 || new Set(request.checked).size !== request.checked.length
+    || request.checked.length > max || !request.checked.every((id) => known.has(id))) return Promise.resolve({ handled: false })
+  const req = { ...request, max }
+  return present(async () => {
+    const menu = await serializeMenu({ kind: 'menu', sections: [{ items: req.items }] })
+    return {
+      kind: 'checklist' as const,
+      ...(req.title ? { title: clipNativeText(req.title, MAX_TEXT) } : {}),
+      items: menu.sections[0].items,
+      checked: [...req.checked],
+      ...(req.footer ? { footer: clipNativeText(req.footer, MAX_DETAIL) } : {}),
+      done: clipNativeText(req.done, MAX_BACK),
+      ...(req.min ? { min: Math.max(0, Math.min(req.min, max)) } : {}),
+      max,
+      theme: readNativeTheme(),
+    }
+  }, (raw) => checklistResult(req, raw), signal)
 }
 export function presentNativePrompt(request: Omit<NativePromptRequest, 'kind'>, signal?: AbortSignal): Promise<NativeSheetOutcome<NativePromptResult>> {
   return present(() => ({ ...request, kind: 'prompt' as const, theme: readNativeTheme() }), promptResult, signal)

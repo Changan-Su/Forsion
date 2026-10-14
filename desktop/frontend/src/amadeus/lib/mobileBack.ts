@@ -19,6 +19,7 @@ function install(): void {
     if (!top || e.defaultPrevented) return
     e.preventDefault()
     e.stopImmediatePropagation() // 一次返回只关一层:壳里的 sheet 监听这一下别跟着关
+    if ((e as CustomEvent<{ probe?: boolean } | null>).detail?.probe) return // 宿主只是问「接不接」(返回手势刚开始,人可能中途放弃):答了就行,不关
     top()
   }, true)
 }

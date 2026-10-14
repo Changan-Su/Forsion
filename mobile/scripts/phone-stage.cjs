@@ -335,10 +335,10 @@ const SCENES = {
     ]
   },
   'tangu-swipe': async (page) => {
-    // the gesture itself is the browser's horizontal scroll: here it is scrolled, then the buttons are used
+    // the gesture itself (a pointer drag on the row's track) is pushed in as pointer events; then the buttons are used
     const sw = `${LIST} [data-timeline] .pl-swipe`
-    await page.evaluate((q) => { const el = document.querySelectorAll(q)[1]; el.scrollLeft = el.scrollWidth }, sw)
-    await page.waitForTimeout(350)
+    await page.evaluate(([q, i]) => window.__swipeOpen(document.querySelectorAll(q)[i]), [sw, 1])
+    await page.waitForTimeout(700)
     const acts = await page.evaluate((q) => [...document.querySelectorAll(q)[1].querySelectorAll('.pl-swipe-act')].map((b) => { const r = b.getBoundingClientRect(); const cs = getComputedStyle(b); return { id: b.dataset.act, x: r.left, right: r.right, w: r.width, h: r.height, text: b.textContent.trim(), name: b.getAttribute('aria-label') || '', round: parseFloat(cs.borderRadius) >= r.width / 2 - 1, shown: cs.opacity === '1' && (cs.scale === 'none' || cs.scale === '1') } }), sw)
     const shot = await page.screenshot()
     fs.writeFileSync(path.join(OUT, `tangu-swipe-open${DARK ? '-dark' : ''}.png`), shot)
@@ -346,7 +346,7 @@ const SCENES = {
     await page.waitForTimeout(500)
     const secs = await texts(page, `${LIST} .pl-sec`)
     const first = (await texts(page, `${LIST} [data-timeline] .t2s-srow-title`))[0]
-    const closed = await page.evaluate((q) => [...document.querySelectorAll(q)].every((el) => el.scrollLeft < 2), sw)
+    const closed = await page.evaluate((q) => [...document.querySelectorAll(q)].every((el) => !el.hasAttribute('data-open') && ['none', 'matrix(1, 0, 0, 1, 0, 0)'].includes(getComputedStyle(el.firstElementChild).transform)), sw)
     return [
       ['a row slides left onto pin / rename / archive, all on screen', acts.map((a) => a.id).join(',') === 'pin,rename,archive' && acts.every((a) => a.x >= 0 && a.right <= SCREEN.width), JSON.stringify(acts)],
       ['the actions are round 44 dp buttons with an icon only; each has a name for a screen reader; all fully shown once the row rests', acts.every((a) => near(a.w, 44) && near(a.h, 44) && a.round && !a.text && !!a.name && a.shown) && near(SCREEN.width - acts[2].right, 16), JSON.stringify(acts)],
@@ -622,8 +622,8 @@ const SCENES = {
     await chip(page, 'recent')
     const sw = `${LIST} [data-timeline] .pl-swipe`
     const label = async () => {
-      await page.evaluate((q) => { const el = document.querySelector(q); el.scrollLeft = el.scrollWidth }, sw)
-      await page.waitForTimeout(350)
+      await page.evaluate((q) => window.__swipeOpen(document.querySelector(q)), sw)
+      await page.waitForTimeout(700)
       return page.evaluate((q) => document.querySelector(q).querySelector('[data-act="star"]')?.getAttribute('aria-label') ?? null, sw) // no text on the button: the name is its label
     }
     const use = async () => { await page.locator(`${sw} >> nth=0`).locator('[data-act="star"]').tap(); await page.waitForTimeout(400) }
@@ -927,6 +927,17 @@ async function main() {
         localStorage.setItem('amadeus_vault_mode', 'local')
         if (dark) localStorage.setItem('forsion_theme', 'dark')
       } catch { /* private mode */ }
+      // a left swipe on a list row, as the pointer events a finger sends (the row's track follows them; phoneList.tsx)
+      // (one move a frame, as a finger's come: their timestamps are what the release speed is taken from)
+      window.__swipeOpen = async (el) => {
+        const r = el.getBoundingClientRect()
+        const y = r.top + r.height / 2
+        const ev = (type, x) => el.dispatchEvent(new PointerEvent(type, { pointerId: 7, isPrimary: true, pointerType: 'touch', clientX: x, clientY: y, bubbles: true }))
+        const frame = () => new Promise((done) => setTimeout(done, 16))
+        ev('pointerdown', r.right - 20)
+        for (let i = 1; i <= 8; i++) { await frame(); ev('pointermove', r.right - 20 - i * 24) }
+        ev('pointerup', r.right - 20 - 8 * 24)
+      }
     }, DARK)
     // A context's first page sometimes comes up without touch emulation (see editor-capsule.e2e.cjs): the app then lays
     // itself out as on a desktop — no phone zoom — and every size below is off. A second page of the same context has it.

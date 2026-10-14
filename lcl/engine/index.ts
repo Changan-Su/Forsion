@@ -21,7 +21,7 @@ export { label } from './types'
 export { Shell } from './Shell'
 export { startOpenDrag } from './WorkspaceHost'
 export { openMainBesideThisTask, mainOpensBeside } from './openBeside'
-export { SingleColumnHost, accountMenuRows } from './SingleColumnHost'
+export { SingleColumnHost, accountMenuRows, drawerPreview } from './SingleColumnHost'
 export { listFirstNow, useListFirst } from './listFirst'
 export { MiniColumnHost } from './MiniColumnHost'
 export { supportsMiniPanel, setMiniMainHandler, showInMainPanel, setMiniViewRouter } from './miniPanel'
@@ -82,15 +82,17 @@ export { ExtendViewHost } from './ExtendViewHost'
 
 export { contentStorageKey } from './contentStorageScope'
 
+export { SPRING_PAGE, SPRING_ROW, reducedMotion, springAt, springEasing, springMotion, type Spring } from './spring'
+
 /** Optional native presentation hosts (Android Compose). Absent host ⇒ callers keep their web UI. */
 export {
-  installNativeSheetPresenter, nativeSheetPresenter, presentNativeMenu, presentNativePrompt, presentNativeConfirm,
-  pickNativeCtxItem, runNativeCtxMenu, readNativeTheme, menuResult, promptResult, confirmResult, clipNativeText, NATIVE_MENU_MAX_ITEMS,
+  installNativeSheetPresenter, nativeSheetPresenter, presentNativeMenu, presentNativeChecklist, presentNativePrompt, presentNativeConfirm,
+  pickNativeCtxItem, runNativeCtxMenu, readNativeTheme, menuResult, checklistResult, promptResult, confirmResult, clipNativeText, NATIVE_MENU_MAX_ITEMS,
 } from './nativeSheet'
 export type {
   NativeSheetTheme, NativeSheetRequest, NativeSheetPayload, NativeSheetPresenter, NativeSheetOutcome,
   NativeMenuRequest, NativeMenuSection, NativeMenuItem, NativeMenuTrailing, NativeMenuResult, NativeMenuSearch,
-  NativePromptRequest, NativePromptResult, NativeConfirmRequest, NativeConfirmResult, NativeCtxItem,
+  NativeChecklistRequest, NativeChecklistResult, NativePromptRequest, NativePromptResult, NativeConfirmRequest, NativeConfirmResult, NativeCtxItem,
 } from './nativeSheet'
 export { runNativeSheetMenu, openNativeSheetMenu, useNativeSheetMenu } from './nativeSheetMenu'
 export type { SheetMenu, SheetMenuSection, SheetMenuItem } from './nativeSheetMenu'

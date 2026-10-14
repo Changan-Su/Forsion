@@ -285,6 +285,7 @@ jobs:
           npm run test:unitbridge
           npm run test:unitssheet
           npm run test:plugins
+          npm run test:kbrise
 
       - name: Build web bundle + cap sync
         working-directory: mobile

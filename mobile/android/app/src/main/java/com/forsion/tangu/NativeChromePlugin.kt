@@ -1,11 +1,13 @@
 package com.forsion.tangu
 
+import android.content.Context
 import android.os.Build
 import android.util.TypedValue
 import android.view.HapticFeedbackConstants
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
+import android.view.accessibility.AccessibilityManager
 import android.webkit.WebView
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.geometry.Rect
@@ -15,6 +17,7 @@ import androidx.coordinatorlayout.widget.CoordinatorLayout
 import androidx.core.graphics.Insets
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsAnimationCompat
 import androidx.core.view.WindowInsetsCompat
 import com.getcapacitor.JSArray
 import com.getcapacitor.JSObject
@@ -23,6 +26,7 @@ import com.getcapacitor.PluginCall
 import com.getcapacitor.PluginMethod
 import com.getcapacitor.WebViewListener
 import com.getcapacitor.annotation.CapacitorPlugin
+import java.util.Locale
 import kotlin.math.roundToInt
 
 /**
@@ -32,6 +36,9 @@ import kotlin.math.roundToInt
  * from the screen's top edge down past the status bar; the dock (Spaces) is a second one at gravity BOTTOM, reaching
  * down to the screen edge behind the system navigation inset. It is shown in shell mode with two or more Spaces, and
  * never while the keyboard is up (it would sit on top of the keyboard and eat the composer's room).
+ * The keyboard coming up (where we own the margins, see `imeMoving`): the WebView keeps its height until the keyboard
+ * has arrived, and the page is told how far and how fast (`ime` event) so what stands at its bottom edge travels with
+ * the keyboard instead of jumping to where it is going.
  * The dock holds a handful of Spaces; with more than fit, its last cell reports `spacesAll` and JS shows the rest.
  *
  * Two arrangements (2026-10-09):
@@ -54,6 +61,33 @@ class NativeChromePlugin : Plugin() {
     private var spaceBar: ComposeView? = null
     private var imeVisible = false
     private var imeBottom = 0
+    /** The keyboard is sliding (in, out, or to another height). While it is coming up or growing, the WebView's bottom
+     *  margin stays what it was (layout()): a page made shorter at the first frame would jump its bottom edge ahead of
+     *  the keyboard. Going away or getting smaller needs no holding — the page gets the height back at once and has
+     *  room to let things slide down by itself. */
+    private var imeMoving = false
+    private val imeSettled = Runnable { if (imeMoving) { imeMoving = false; layout() } }
+    private val imeCallback = object : WindowInsetsAnimationCompat.Callback(DISPATCH_MODE_STOP) {
+        private fun ime(animation: WindowInsetsAnimationCompat) = animation.typeMask and WindowInsetsCompat.Type.ime() != 0
+        override fun onPrepare(animation: WindowInsetsAnimationCompat) {
+            if (!ime(animation)) return
+            imeMoving = true
+            // onEnd is the normal way out; a view detached mid-animation never gets one, and a page left at full height
+            // under the keyboard is not a state to stay in
+            bridge.webView?.let { it.removeCallbacks(imeSettled); it.postDelayed(imeSettled, animation.durationMillis + 500) }
+        }
+        // the new insets were applied between onPrepare and here (layout() ran and held the margin)
+        override fun onStart(animation: WindowInsetsAnimationCompat, bounds: WindowInsetsAnimationCompat.BoundsCompat): WindowInsetsAnimationCompat.BoundsCompat {
+            if (ime(animation)) reportIme(animation)
+            return bounds
+        }
+        override fun onProgress(windowInsets: WindowInsetsCompat, running: MutableList<WindowInsetsAnimationCompat>) = windowInsets
+        override fun onEnd(animation: WindowInsetsAnimationCompat) {
+            if (!ime(animation)) return
+            bridge.webView?.removeCallbacks(imeSettled)
+            imeSettled.run()
+        }
+    }
     private val state = mutableStateOf<ChromeState?>(null)
     private val insets = mutableStateOf(Insets.NONE)
     private var observingPages = false
@@ -63,6 +97,10 @@ class NativeChromePlugin : Plugin() {
     private val plates = LinkedHashMap<String, Rect>()
     private var layoutPosted = false
     private var lastLayout = ""
+    /** A screen reader (touch exploration: TalkBack and its kind) going on / off is reported with the layout, see reportLayout. */
+    private var readerHooked = false
+    private val readerListener = AccessibilityManager.TouchExplorationStateChangeListener { scheduleLayoutReport() }
+    private fun accessibility() = activity.getSystemService(Context.ACCESSIBILITY_SERVICE) as? AccessibilityManager
     private val pageListener = object : WebViewListener() {
         override fun onPageStarted(webView: WebView) { activity.runOnUiThread { teardown() } }
     }
@@ -116,6 +154,7 @@ class NativeChromePlugin : Plugin() {
 
     private fun attach() {
         if (!observingPages) { bridge.addWebViewListener(pageListener); observingPages = true }
+        if (!readerHooked) { readerHooked = true; accessibility()?.addTouchExplorationStateChangeListener(readerListener) }
         val webView = bridge.webView
         if (!insetsHooked) {
             insetsHooked = true
@@ -131,6 +170,8 @@ class NativeChromePlugin : Plugin() {
                     layout()
                     WindowInsetsCompat.CONSUMED // as Capacitor: do not pass insets to the page
                 }
+                // Only here: elsewhere the system resizes the window itself, at the animation's first frame.
+                ViewCompat.setWindowInsetsAnimationCallback(webView, imeCallback)
                 ViewCompat.requestApplyInsets(webView)
             }
         }
@@ -201,8 +242,10 @@ class NativeChromePlugin : Plugin() {
         // Floating: the page reaches the screen's bottom edge only where the dock is (a first-level page keeps its
         // content clear of it anyway); one level down it ends at the navigation inset as before, so nothing that sits
         // at the bottom of a detail page (the composer, an editor's toolbar) has to learn about the gesture bar.
+        val held = (webView.layoutParams as? ViewGroup.MarginLayoutParams)?.bottomMargin ?: 0
         val bottom = when {
-            imeVisible && adjustsMargins -> maxOf(i.bottom, imeBottom)
+            imeVisible && adjustsMargins && imeMoving && imeRoom() > held -> held // see imeMoving
+            imeVisible && adjustsMargins -> imeRoom()
             floating -> if (spacesVisible) 0 else i.bottom
             else -> i.bottom + if (spacesVisible) spaceBarPx() else 0
         }
@@ -257,6 +300,10 @@ class NativeChromePlugin : Plugin() {
         fun dp(px: Float) = Math.round(px / density * 100f) / 100.0
         val data = JSObject()
         data.put("floating", floating)
+        // Not about the chrome, but the page needs it at the same moments (first paint, every reload): what it marks for a
+        // screen reader costs a rebuild of that part of the accessibility tree, which it only pays while one is listening.
+        // Touch exploration, not AccessibilityManager.isEnabled: that one is also true for password fillers and auto-clickers.
+        data.put("reader", accessibility()?.isTouchExplorationEnabled == true)
         data.put("status", if (floating) dp(i.top.toFloat()) else 0.0)
         data.put("top", if (floating) dp(i.top.toFloat()) + NATIVE_CHROME_HEIGHT.value else 0.0)
         data.put("bottom", if (floating && spacesVisible()) dp(i.bottom.toFloat()) + NATIVE_SPACE_BAR_HEIGHT.value else 0.0)
@@ -273,6 +320,31 @@ class NativeChromePlugin : Plugin() {
         if (key == lastLayout) return
         lastLayout = key
         notifyListeners("layout", data, true)
+    }
+
+    private fun imeRoom() = maxOf(insets.value.bottom, imeBottom)
+
+    /**
+     * The keyboard starts coming up (or growing): how far the page's bottom edge will have moved once the WebView is
+     * resized (`rise`, dp), how long the keyboard takes and along which curve (`ease`, sampled into a CSS `linear()`),
+     * and when this was said (`at`, wall clock — the page starts its own motion that much into it).
+     * Going away is said too, as `rise` 0: a keyboard dismissed before it had arrived never made the page shorter, so
+     * the page sees no change of height and would leave what was riding up there. Getting smaller is not said: the
+     * page sees its own height grow.
+     */
+    private fun reportIme(animation: WindowInsetsAnimationCompat) {
+        if (!adjustsMargins) return
+        val held = (bridge.webView?.layoutParams as? ViewGroup.MarginLayoutParams)?.bottomMargin ?: return
+        val rise = if (imeVisible) imeRoom() - held else 0
+        if (imeVisible && rise <= 0) return
+        val data = JSObject()
+        data.put("rise", Math.round(rise / activity.resources.displayMetrics.density * 100f) / 100.0)
+        data.put("ms", animation.durationMillis)
+        data.put("at", System.currentTimeMillis())
+        animation.interpolator?.let { curve ->
+            data.put("ease", (0..20).joinToString(", ", "linear(", ")") { String.format(Locale.US, "%.4f", curve.getInterpolation(it / 20f)) })
+        }
+        notifyListeners("ime", data)
     }
 
     private fun emit(action: String) {
@@ -297,6 +369,9 @@ class NativeChromePlugin : Plugin() {
 
     override fun handleOnDestroy() {
         bridge.removeWebViewListener(pageListener)
+        accessibility()?.removeTouchExplorationStateChangeListener(readerListener)
+        readerHooked = true // a setState still queued for the UI thread runs attach() after this: it must not hook the listener back on (nothing would take it off again)
+        bridge.webView?.removeCallbacks(imeSettled)
         activity.runOnUiThread { teardown() }
     }
 }

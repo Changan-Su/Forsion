@@ -11,7 +11,7 @@
  * 全面屏安卓的返回是侧滑手势,谁都会在主页上误滑一下,所以这条一旦回退就是「开机即空白」。
  * 两侧都钉:
  *   1. 主页上按返回 → 还是主页(不是 `home` 空态)。
- *   2. **负对照**:非落地页的 tab 上按返回 → 照旧被关掉(没把返回键整个焊死)。
+ *   2. 非落地页、关不掉的页(别的 Space 的固定 View)上按返回 → 回主页,再按才挂起(2026-10-13 起;没把返回键整个焊死)。
  *   3. **自愈**:把「只剩空态占位」的旧存档种进 localStorage 再启动 → 主页应当自己回来
  *      (applySCBlob 把纯占位的主区当空的,交回 buildDefault)—— 已经中招的用户升级后要能好。
  *
@@ -179,8 +179,14 @@ async function main() {
         const before = seen.length
         ok('2b0 这一下返回真的打进了 MobileRoot', await back(page))
         const after = await view(page)
-        ok('2b ⚠️ 固定 View 上返回:视图留着,并且走到了链底「挂起 app」(没把返回键焊死)',
-          after.type === 'chat' && seen.length > before, JSON.stringify({ ...after, minimize: seen.slice(before) }))
+        // 2026-10-13 起链底分两档:不在主页 Space(排第一个的那个)→ 先回主页,这一下不挂起;主页上再按才挂起。
+        // 之前是哪个 Space 的第一层都直接挂起 —— 用户实报「一不小心就返回桌面了」。
+        ok('2b ⚠️ 固定 View 上返回:回到主页(没把返回键焊死,也没有直接挂起 app)',
+          after.type === 'homepage' && after.hp && seen.length === before, JSON.stringify({ ...after, minimize: seen.slice(before) }))
+        ok('2c0 再按一下也打进了 MobileRoot', await back(page))
+        const end = await view(page)
+        ok('2c 主页上再按返回:主页还在,并且走到了链底「挂起 app」',
+          end.type === 'homepage' && end.hp && seen.length > before, JSON.stringify({ ...end, minimize: seen.slice(before) }))
       }
       await ctx.close()
     }

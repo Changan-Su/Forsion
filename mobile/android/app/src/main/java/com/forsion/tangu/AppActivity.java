@@ -23,6 +23,8 @@ public class AppActivity extends BridgeActivity {
         // 通用原生半屏(菜单 / 输入 / 确认)与原生顶栏:JS 侧 lcl/engine/nativeSheet.ts、nativeChrome.ts 的可选宿主。
         registerPlugin(NativeSheetPlugin.class);
         registerPlugin(NativeChromePlugin.class);
+        // 系统返回手势的过程(Android 14 起才有)与「再返回一次退出」的提示;一下返回做什么仍在页面里定(MobileRoot)。
+        registerPlugin(NativeBackPlugin.class);
         // 系统文件选择器:原生半屏里点「添加文件」时 WebView 没有用户激活,<input type=file>.click() 会被 Chromium 静默丢掉。
         registerPlugin(NativeFilePickerPlugin.class);
         // 分享到 Forsion:系统分享面板送来的文字 / 文件(清单里 AppActivity 的 SEND / SEND_MULTIPLE 过滤器)。
@@ -35,6 +37,8 @@ public class AppActivity extends BridgeActivity {
         // 重建(配置变更 / 进程被杀后从最近任务回来)会重放当初的启动 intent:点岛跳会话只在全新启动时认一次。
         LiveIslandPlugin.freshLaunch = savedInstanceState == null;
         super.onCreate(savedInstanceState);
+        // 不带「可调试」标记的并装预览(-PnativePreviewFast):桥按该标记把远程调试关了,这里再打开。只有 debug 那一档能把它设成真。
+        if (BuildConfig.WEBVIEW_INSPECTABLE) android.webkit.WebView.setWebContentsDebuggingEnabled(true);
         // 仅 -PnativePreviewSample 的 debug 预览包:启动即进审阅样本页。-PnativePreview(并装预览)跑的是真 App。
         if (BuildConfig.NATIVE_PREVIEW_SAMPLE) {
             getBridge().getWebView().loadUrl("https://localhost/native-preview.html");

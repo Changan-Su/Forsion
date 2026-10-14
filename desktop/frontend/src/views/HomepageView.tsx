@@ -34,7 +34,7 @@ import {
   ArrowUp, Check, FolderMinus, FolderOpen, FolderPlus, Grid2X2, Image, LogOut,
   Mic, Pencil, RefreshCw, Upload, X,
 } from 'lucide-react'
-import { setActiveSpace, useSpaceStore, useRibbonStore, useWorkspace, label, moveTo, OverlayAt, useNativeChromeSpaces, useNativeSheetMenu, getDetachApi, WINDOW_SPACE_ID, type SheetMenuItem } from '@lcl/engine'
+import { setActiveSpace, useSpaceStore, useRibbonStore, useWorkspace, label, moveTo, OverlayAt, useNativeChromeSpaces, useNativeSheetMenu, presentNativeChecklist, getDetachApi, WINDOW_SPACE_ID, type SheetMenuItem } from '@lcl/engine'
 import { CtxMenuButtons } from '../components/CtxMenuButtons'
 import { rankIds, reorderBase, unionOrder } from '@lcl/engine/ribbonRegistry'
 import type { SpaceDefinition, RibbonFolder, RibbonItem, ViewProps } from '@lcl/engine'
@@ -63,6 +63,7 @@ import {
   saveHomepageWallpaperPrefs, writeCustomWallpaper,
   type BingWallpaper, type HomepageThemePreset, type HomepageWallpaperPrefs, type HomepageWallpaperSource,
 } from './homepageWallpaper'
+import { HOME_CARDS_MAX, loadHomeCards, saveHomeCards, shownHomeCards } from './homeCards'
 import './homepage.css'
 
 /** 本视图所在的 Space id(真源在 builtins/homepage.tsx);坞里要把它自己排掉 —— 但**排序时不能排**,见 dropOn。 */
@@ -180,6 +181,7 @@ function HomepageChatbox({ onDispatch, onStartCall, onInputModeChange }: { onDis
   return (
     <div
       className="hp-composer"
+      data-kb-rise // 手机上跟着键盘一起上去(mobile/src/keyboardRise.ts);别处没人读
       onClick={(e) => e.stopPropagation()}
       // 模型/模式/附件和它们的菜单都属于输入准备,共用一个聚焦范围。
       onPointerDownCapture={() => onInputModeChange(true)}
@@ -517,25 +519,60 @@ registerMessages({
   'home.card.claimable': { zh: '{n} 项可领取', en: '{n} to claim' },
   'home.card.earned': { zh: '已得 {n} 项', en: '{n} earned' },
   'home.card.installed': { zh: '已装 {n} 个插件', en: '{n} plugins installed' },
+  'home.cards.editTitle': { zh: '主页卡片', en: 'Home cards' },
+  'home.cards.editHint': { zh: '勾选的显示在主页，1 到 {max} 张，按勾选的先后排。', en: 'Checked ones show on Home (1 to {max}), in the order you check them.' },
+  'home.cards.done': { zh: '完成', en: 'Done' },
 })
 
-/** 手机主页的四张大卡片。单独成组件:近况要订阅会话 / 笔记 / 成就 / 插件四份状态,桌面的主页不该为它们多重画。 */
+interface HomeCard { id: string; name: string; statusId: string; spaceId?: string; icon?: SpaceDefinition['icon'] | RibbonItem['icon']; open: () => void }
+
+/** 手机主页的大卡片。单独成组件:近况要订阅会话 / 笔记 / 成就 / 插件四份状态,桌面的主页不该为它们多重画。
+ *  放哪几张由用户定(长按任意一张,见 homeCards.ts);没改过 = 架子上头两个 Space + 商店、成就。 */
 function HomeCards({ tiles, actions, onLaunch }: { tiles: Tile[]; actions: RibbonItem[]; onLaunch: (spaceId: string) => void }) {
+  const { t } = useI18n()
   const status = useCardStatus()
+  const [picked, setPicked] = useState(loadHomeCards)
+  const spaceCard = (sp: SpaceDefinition): HomeCard => ({ id: `space:${sp.id}`, name: label(sp.name), statusId: sp.id, spaceId: sp.id, icon: sp.icon, open: () => onLaunch(sp.id) })
+  const top = tiles.filter((tile): tile is Extract<Tile, { kind: 'space' }> => tile.kind === 'space').map((tile) => spaceCard(tile.space))
+  // 可选的:架子上所有 Space(收纳夹里的也算)+ 商店、成就
+  const all: HomeCard[] = [
+    ...tiles.flatMap((tile) => (tile.kind === 'space' ? [tile.space] : tile.members)).map(spaceCard),
+    ...actions.map((item): HomeCard => ({ id: item.id, name: item.tooltip ? label(item.tooltip) : '', statusId: item.id, icon: item.icon, open: () => item.onClick?.() })),
+  ]
+  const cards = shownHomeCards(picked, all, [...top.slice(0, 2), ...all.filter((c) => !c.spaceId)])
+
+  /** 原生勾选清单:勾的时候半屏不动,关上时(完成 / 下滑 / 返回都算)一起生效;新勾的排在最后,至少留一张(没有卡片就没处长按)。
+   *  没有原生宿主就什么都不出。 */
+  const edit = async (): Promise<void> => {
+    const ids = cards.map((c) => c.id)
+    const out = await presentNativeChecklist({
+      title: t('home.cards.editTitle'),
+      items: all.map((c) => ({ id: `card:${c.id}`, label: c.name, icon: c.icon && 'imageUrl' in c.icon && c.icon.imageUrl ? c.icon.nativeFallback : c.icon })),
+      checked: ids.map((id) => `card:${id}`),
+      footer: t('home.cards.editHint', { max: String(HOME_CARDS_MAX) }),
+      done: t('home.cards.done'),
+      min: 1,
+      max: HOME_CARDS_MAX,
+    })
+    const next = out.handled ? out.value?.checked.map((id) => id.slice('card:'.length)) : undefined
+    // 原样关上 = 不记(没改过的人继续跟着缺省走)
+    if (!next?.length || next.join('\n') === ids.join('\n')) return
+    if (saveHomeCards(next)) setPicked(next)
+  }
+
   return (
     <section className="hp-cards">
-      {tiles.filter((tile): tile is Extract<Tile, { kind: 'space' }> => tile.kind === 'space').slice(0, 2).map((tile) => (
-        <button key={tile.id} type="button" className="hp-card" data-space-id={tile.space.id} onClick={(event) => { event.stopPropagation(); onLaunch(tile.space.id) }}>
-          <span className="hp-card-icon">{tile.space.icon && <tile.space.icon />}</span>
-          <span className="hp-card-name">{label(tile.space.name)}</span>
-          <span className="hp-card-status">{status(tile.space.id)}</span>
-        </button>
-      ))}
-      {actions.map((item) => (
-        <button key={item.id} type="button" className="hp-card" data-fixed-id={item.id} onClick={(event) => { event.stopPropagation(); item.onClick?.() }}>
-          <span className="hp-card-icon">{item.icon && <item.icon />}</span>
-          <span className="hp-card-name">{item.tooltip ? label(item.tooltip) : ''}</span>
-          <span className="hp-card-status">{status(item.id)}</span>
+      {cards.map((c) => (
+        <button
+          key={c.id} type="button" className="hp-card"
+          {...(c.spaceId ? { 'data-space-id': c.spaceId } : { 'data-fixed-id': c.id })}
+          onClick={(event) => { event.stopPropagation(); c.open() }}
+          // 长按(Android WebView 的 contextmenu,自带触感)= 改这几张卡片;松手不再算点击
+          onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); void edit() }}
+        >
+          <span className="hp-card-icon">{c.icon && <c.icon />}</span>
+          <span className="hp-card-name">{c.name}</span>
+          <span className="hp-card-status">{status(c.statusId)}</span>
         </button>
       ))}
     </section>
@@ -989,7 +1026,8 @@ export function HomepageView(_props: ViewProps) {
           </button>
         )}
 
-        {/* 手机:四张大卡片 = 架子上的头两个 Space + 商店、成就,各带一行近况;其余 Space 在 Dock 上,收纳层照旧长按空白处进。 */}
+        {/* 手机:大卡片,各带一行近况。默认 = 架子上的头两个 Space + 商店、成就;长按任意一张改成自己要的那几张(见 HomeCards)。
+            其余 Space 在 Dock 上,收纳层照旧长按空白处进。 */}
         {phone && <HomeCards tiles={tiles} actions={fixedHomeActions} onLaunch={launchSpace} />}
 
         {/* 收纳架只保留一排摘要;“全部”与空白右键都进入独立二级收纳层。 */}

@@ -346,7 +346,7 @@ export function MarketModal({ onClose, initialQuery }: { onClose?: () => void; i
   // Android 返回键(MobileRoot 先派发 forsion:mobile-back):详情页开着 → 先回列表,不关整个市场。
   useEffect(() => {
     if (!detail) return
-    const onBack = (e: Event): void => { setDetail(null); e.preventDefault() }
+    const onBack = (e: Event): void => { e.preventDefault(); if (!(e as CustomEvent<{ probe?: boolean } | null>).detail?.probe) setDetail(null) } // probe:只答「我接」,不动手
     window.addEventListener('forsion:mobile-back', onBack)
     return () => window.removeEventListener('forsion:mobile-back', onBack)
   }, [detail])

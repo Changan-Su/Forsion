@@ -7,6 +7,7 @@ import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
@@ -360,8 +361,10 @@ private fun RowScope.DockCell(
     tag: String, label: String, active: Boolean, colors: CellColors, badge: ChromeBadge?,
     onClick: () -> Unit, onLongClick: (() -> Unit)?, icon: @Composable (tint: Color) -> Unit,
 ) {
-    val tint = if (active) colors.accent else colors.muted
-    val pill = if (active) colors.accent.copy(alpha = 0.15f) else Color.Transparent
+    // The pill and the colour move over to the new cell (spring, Compose's default) instead of jumping there: the
+    // switch a tap makes reads as one motion (2026-10-14, "no linear / sudden animation, native liveliness").
+    val tint by animateColorAsState(if (active) colors.accent else colors.muted, label = "cellTint")
+    val pill by animateColorAsState(if (active) colors.accent.copy(alpha = 0.15f) else colors.accent.copy(alpha = 0f), label = "cellPill")
     val badgeLabel = badge?.label.orEmpty()
     Column(
         Modifier.weight(1f, fill = false).widthIn(max = DOCK_CELL_MAX).fillMaxWidth().height(DOCK_CELL_HEIGHT)

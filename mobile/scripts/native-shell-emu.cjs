@@ -379,6 +379,8 @@ const ui = () => h.nodes(OUT)
 // ACTIVITY_CLASS=MainActivity runs this harness against a build from before that (≤ 2.13.x), for comparisons.
 const ACTIVITY_CLASS = process.env.ACTIVITY_CLASS || 'AppActivity'
 const ACTIVITY = `${PKG}/com.forsion.tangu.${ACTIVITY_CLASS}`
+/** From here on, count the native sheets presented (every plugin call goes through Capacitor.nativePromise). */
+const presentCounter = `(() => { const C = window.Capacitor; if (!C.__countsPresents) { C.__countsPresents = true; const np = C.nativePromise.bind(C); C.nativePromise = (p, m, o) => { if (p === 'NativeSheet' && m === 'present') C.__presents = (C.__presents || 0) + 1; return np(p, m, o) } } C.__presents = 0; return true })()`
 const resumed = () => h.adb('shell', 'dumpsys', 'activity', 'activities').split('\n').some((l) => l.includes('topResumedActivity=') && l.includes(` ${PKG}/`))
 const webViewNode = (list) => list.find((n) => n.class === 'android.webkit.WebView')
 const sheetOpen = (list) => !!h.byId(list, 'nativeSheet.sheet')
@@ -903,7 +905,11 @@ const tabCountText = (list) => {
     assert.ok(left.rect.bottom - left.rect.top >= 40 * density - 1 && left.rect.right - left.rect.left >= 40 * density - 1, 'touch target < 40dp')
     const page = await chromeOnPage()
     assert.ok(near(page.nc.status * density, statusBar, 1) && near(page.nc.top * density, statusBar + barPx, 1), `the page was told ${JSON.stringify(page.nc)} (status bar ${statusBar}px, capsules ${barPx}px)`)
-    assert.equal(page.nc.bottom, 0, 'no dock: nothing to keep clear at the bottom')
+    // no dock: the main view keeps nothing clear at the bottom. (The number on <body> is left standing for the list
+    // behind — changing it restyles the whole page — so what is measured is the main view's own room.)
+    const mainRoom = await cdp.eval(`(() => { const v = document.querySelector('.mb-main > .mb-view'); const p = document.createElement('div'); p.style.cssText = 'position:absolute;height:var(--mb-bottom)'; v.appendChild(p)
+      const out = { probe: parseFloat(getComputedStyle(p).height) || 0, pad: parseFloat(getComputedStyle(v).paddingBottom) || 0 }; p.remove(); return out })()`)
+    assert.deepEqual(mainRoom, { probe: 0, pad: 0 }, 'no dock, yet the main view keeps room clear at its bottom')
     assert.ok(near(page.clearPx.top, statusBar + barPx, 2), `--mb-top = ${page.clearPx.top}px, the capsules end at ${statusBar + barPx}px (zoom arithmetic)`)
     assert.ok(page.scrimPx >= statusBar, `the status bar is not covered (scrim ${page.scrimPx}px of ${statusBar}px)`)
     // one plate per capsule, exactly behind it, and it blurs
@@ -1073,7 +1079,7 @@ const tabCountText = (list) => {
 
   // 2026-10-04 (user: "like WeChat"): a Space with a left list opens ON the list (full screen, bottom bar below);
   // tapping an item enters the main view (no bottom bar, back arrow); back returns to the list, back again leaves the app.
-  await check('two-level navigation: a Space opens on its list; an item enters the main view (no bottom bar); back returns; back on the list leaves the app', async () => {
+  await check('two-level navigation: a Space opens on its list; an item enters the main view (no bottom bar); back returns; back on the list leads Home, a second back on Home leaves the app', async () => {
     await tanguDrawer() // = Tangu's first level with the fixture sessions listed
     const level = async () => ({ nav: await cdp.eval(nav), list: ui() })
     let at = await level()
@@ -1128,17 +1134,47 @@ const tabCountText = (list) => {
     assert.ok(webViewNode(gone.nodes).rect.bottom > screenH * 0.93, 'the WebView did not take the room of the bottom bar')
     await h.pause(600)
     shot('03-detail-level')
-    // back arrow → list
-    await tapId('nativeChrome.left')
-    assert.ok(await h.waitPage(cdp, `(${nav}) === 'list'`, 5000), 'the back arrow did not return to the list')
-    assert.ok((await h.waitNodes((l) => !!h.byId(l, 'nativeChrome.spaces'), { timeout: 8000 })).hit, 'the bottom bar did not come back on the list')
-    // item again, then system back → list, and the app is still in front
-    await tapEl(rowExpr('E2E Session One'))
-    assert.ok(await h.waitPage(cdp, `(${nav}) === 'detail'`, 8000), 'the session did not reopen')
-    await h.pause(600)
-    h.key(4)
-    assert.ok(await h.waitPage(cdp, `(${nav}) === 'list'`, 5000), 'system back did not return to the list')
-    assert.ok(resumed(), 'system back from the main view left the app')
+    // the list behind the main view stays rendered (hiding it restyles every row, on the way in and on the way back):
+    // the screen reader skips it, it holds no focus, and it is covered so nothing in it can be tapped. Focus arriving
+    // in it (a keyboard's Tab) is turned away and the panel goes inert from then on — not before: that restyles it too.
+    const listPanel = async (tryFocus) => JSON.parse(await cdp.eval(`(() => { const d = document.querySelector('.mb-drawer--left'); const held = d.contains(document.activeElement), inertBefore = !!d.inert
+      if (${tryFocus ? 'true' : 'false'}) d.querySelector('button, a, [tabindex]')?.focus()
+      return JSON.stringify({ hidden: d.getAttribute('aria-hidden'), covered: getComputedStyle(d, '::after').content !== 'none', held, took: d.contains(document.activeElement), inertBefore, inert: !!d.inert, visibility: getComputedStyle(d).visibility }) })()`))
+    // No screen reader on (the emulator as it comes; this check changes no accessibility setting): the list is not
+    // marked for one at all. Marking it rebuilds the list's whole accessibility tree for whatever accessibility service
+    // is attached — a password filler, an auto-clicker, this bench's own tree reads — and that landed on the slide.
+    await h.pause(300) // with the 600 above: well past the moment a reader would have been told
+    // … and the right panel, which opens over the main view where there is no dock, keeps no room for one
+    const behind = { ...(await listPanel(true)), reader: await cdp.eval("document.documentElement.hasAttribute('data-reader')"), rightPanelRoom: await cdp.eval("getComputedStyle(document.querySelector('.mb-drawer--right')).paddingBottom") }
+    assert.deepEqual(behind, { hidden: null, covered: true, held: false, took: false, inertBefore: false, inert: true, reader: false, visibility: 'visible', rightPanelRoom: '0px' }, 'the panels behind the main view')
+    // From here a screen reader is on, the way the page hears of it: every `layout` report from the native shell says so
+    // on its way in. (Not by writing the page's own mark: the next real report — one comes with every change of level —
+    // would take it away again.) The system setting itself is left alone, so the Kotlin side reading it is not covered here.
+    const ariaHidden = (want) => `document.querySelector('.mb-drawer--left').getAttribute('aria-hidden') === ${want}`
+    await cdp.eval(`(() => { const b = window.androidBridge; if (!b || window.__rd) return !!b; const real = window.__rd = b.onmessage
+      b.onmessage = function (ev) { try { const r = JSON.parse(ev.data); if (r && r.pluginId === 'NativeChrome' && r.data && 'plates' in r.data) { r.data.reader = true; return real.call(this, { data: JSON.stringify(r) }) } } catch {} return real.call(this, ev) }; return true })()`)
+    try {
+      // back arrow → list
+      await tapId('nativeChrome.left')
+      assert.ok(await h.waitPage(cdp, `(${nav}) === 'list'`, 5000), 'the back arrow did not return to the list')
+      assert.ok((await h.waitNodes((l) => !!h.byId(l, 'nativeChrome.spaces'), { timeout: 8000 })).hit, 'the bottom bar did not come back on the list')
+      assert.ok(await h.waitPage(cdp, "document.documentElement.hasAttribute('data-reader')", 4000), 'a layout report saying a screen reader is on did not reach the page')
+      const front = await listPanel(false)
+      assert.deepEqual([front.hidden, front.covered, front.inert], [null, false, false], 'the list in front is hidden from the screen reader, covered or inert')
+      // item again: with the reader on the list behind is hidden from it (once the slide is over — `MODE=trace npm run
+      // emu:perf` is what times that; a poll from here cannot)
+      await tapEl(rowExpr('E2E Session One'))
+      assert.ok(await h.waitPage(cdp, `(${nav}) === 'detail'`, 8000), 'the session did not reopen')
+      assert.ok(await h.waitPage(cdp, ariaHidden("'true'"), 4000), 'with a screen reader on, the list behind the main view is not hidden from it')
+      await h.pause(300)
+      // … then system back → list, the app is still in front, and the list is the reader's again
+      h.key(4)
+      assert.ok(await h.waitPage(cdp, `(${nav}) === 'list'`, 5000), 'system back did not return to the list')
+      assert.ok(resumed(), 'system back from the main view left the app')
+      assert.ok(await h.waitPage(cdp, ariaHidden('null'), 4000), 'the list in front stays hidden from the screen reader')
+    } finally {
+      await cdp.eval("(() => { const b = window.androidBridge; if (b && window.__rd) { b.onmessage = window.__rd; delete window.__rd } document.documentElement.removeAttribute('data-reader'); return true })()").catch(() => {})
+    }
     // a swipe from the main view back to the list (same gesture as the drawer had)
     await tapEl(rowExpr('E2E Session One'))
     assert.ok(await h.waitPage(cdp, `(${nav}) === 'detail'`, 8000), 'the session did not reopen')
@@ -1146,13 +1182,21 @@ const tabCountText = (list) => {
     h.adb('shell', 'input', 'swipe', String(wv.left + 150), String(wv.cy), String(wv.right - 100), String(wv.cy), '200')
     assert.ok(await h.waitPage(cdp, `(${nav}) === 'list'`, 5000), 'swiping right on the main view did not return to the list')
     await h.pause(600)
-    // system back on the list = bottom of the chain: the app goes to the background (and comes back as it was)
+    // system back on the list = the first level of a Space that is not Home: it leads Home, the app stays in front
+    h.key(4)
+    assert.ok(await h.waitPage(cdp, `document.querySelector('.mb-shell')?.dataset.space === 'home' && ${homeShown}`, 6000), 'system back on the list level did not lead to Home')
+    assert.ok(resumed(), 'system back on the list level left the app')
+    // … and Home is the bottom of the chain: one back says "back again to exit" and stays, a second one within two
+    // seconds sends the app to the background (and it comes back as it was)
+    h.key(4)
+    await h.pause(300)
+    assert.ok(resumed(), 'one back on Home left the app (it should ask for a second one)')
     h.key(4)
     await h.pause(1200)
-    assert.ok(!resumed(), 'system back on the list level did not leave the app')
+    assert.ok(!resumed(), 'a second back on Home did not leave the app')
     h.adb('shell', 'am', 'start', '-n', ACTIVITY)
     assert.ok((await h.waitNodes((l) => !!h.byId(l, 'nativeChrome.spaces'), { timeout: 10000 })).hit, 'the app did not come back with its bottom bar')
-    assert.equal(await cdp.eval(nav), 'list')
+    assert.ok(await cdp.eval(homeShown), 'the app did not come back on Home')
     // a Space without a left list (Home): its main view is the first level — bottom bar, no left button, the avatar
     await toSpace('home')
     at = await level()
@@ -1247,6 +1291,96 @@ const tabCountText = (list) => {
     await cdp.eval('(document.activeElement && document.activeElement.blur(), true)')
   })
 
+  // The input travels with the keyboard (2026-10-13: "it should move up with a transition, not flash there"). Where the
+  // plugin owns the margins (Android 15+) it holds the WebView's height until the keyboard has arrived and tells the
+  // page how far and how fast (`ime`); what is marked data-kb-rise rides up meanwhile (mobile/src/keyboardRise.ts), and
+  // slides down by itself when the page gets its height back. Sampled every frame in the page: the page's height,
+  // where the input's bottom edge is on screen, and the gap to the last message — the conversation is at its end here,
+  // so the column travels as one piece. Before this, the page was made shorter first and the input was already at its
+  // end position on the keyboard's first frame (and under the keyboard on the first frame of it leaving).
+  await check('keyboard: the input travels with it — up before the page is made shorter, down after it grew; the conversation keeps to the input', async () => {
+    await openChat('E2E Session One')
+    const field = "document.querySelector('.composer textarea, .composer [contenteditable], textarea')"
+    const start = () => cdp.eval(`(() => {
+      const root = document.querySelector('.mb-view[data-view="chat"]')
+      const anchor = root && root.querySelector('.composer-anchor'), box = root && root.querySelector('.t2c')
+      const last = root && [...root.querySelectorAll('.t2-stream-inner > .t2-asst, .t2-stream-inner > .t2-userwrap')].pop()
+      if (!anchor || !box || !last) return false
+      let z = 1; for (let e = anchor; e; e = e.parentElement) z *= parseFloat(getComputedStyle(e).zoom) || 1
+      const K = (window.__kb = { on: true, s: [] })
+      const tick = (t) => { if (!K.on) return
+        K.s.push([Math.round(t), innerHeight, Math.round(anchor.getBoundingClientRect().bottom * z), Math.round((box.getBoundingClientRect().top - last.getBoundingClientRect().bottom) * z)])
+        requestAnimationFrame(tick) }
+      requestAnimationFrame(tick); return true })()`)
+    const stop = () => cdp.eval('(() => { __kb.on = false; return __kb.s })()')
+    const steps = (list) => new Set(list.map((x) => x[2])).size
+    const bad = []
+    assert.ok(await start(), 'no chat with a reply on screen to measure')
+    await h.pause(300)
+    await tapEl(field)
+    for (let i = 0; i < 20 && !imeShown(); i++) await h.pause(300)
+    assert.ok(imeShown(), 'the keyboard did not come up')
+    await h.pause(1500)
+    const up = await stop()
+    const [h0, b0] = [up[0][1], up[0][2]]
+    const travel = h0 - up[up.length - 1][1]
+    assert.ok(travel > 100, `control: the page did not get shorter for the keyboard (${h0} → ${up[up.length - 1][1]})`)
+    const cut = up.findIndex((x) => x[1] < h0 - 100)
+    const before = up.slice(0, cut)
+    const risen = b0 - Math.min(...before.map((x) => x[2]))
+    if (risen < travel * 0.8) bad.push(`up: the input had risen ${risen} of ${travel} px when the page was made shorter (it jumped the rest)`)
+    if (!before.some((x) => x[2] < b0 - 10 && x[2] > b0 - travel + 10)) bad.push(`up: the input was never seen between where it started and where it ends (${steps(before)} places in ${before.length} frames)`)
+    if (Math.abs(up[cut][2] - up[cut - 1][2]) > 6) bad.push(`up: the input moved ${up[cut][2] - up[cut - 1][2]} px in the frame the page was made shorter`)
+    if (Math.abs(up[up.length - 1][2] - (b0 - travel)) > 3) bad.push(`up: the input ends ${up[up.length - 1][2]}, expected ${b0 - travel}`)
+    const gapsUp = up.map((x) => x[3])
+    if (Math.max(...gapsUp) - Math.min(...gapsUp) > 4) bad.push(`up: the gap between the last message and the input went from ${Math.min(...gapsUp)} to ${Math.max(...gapsUp)} px (the conversation did not travel with it)`)
+    console.log(`      up: page ${h0} → ${h0 - travel} at frame ${cut} of ${up.length} (+${up[cut][0] - up[0][0]}ms); input bottom ${before.filter((x, i) => !i || x[2] !== before[i - 1][2]).map((x) => x[2]).join(' ')} | ${up[cut][2]}`)
+
+    await start()
+    await h.pause(300)
+    h.key(4)
+    for (let i = 0; i < 15 && imeShown(); i++) await h.pause(200)
+    await h.pause(1200)
+    const down = await stop()
+    const grew = down.findIndex((x) => x[1] > down[0][1] + 100)
+    assert.ok(grew > 0, `control: the page did not get its height back (${down[0][1]} → ${down[down.length - 1][1]})`)
+    const after = down.slice(grew)
+    if (after[0][2] > down[0][2] + travel * 0.35) bad.push(`down: in the frame the page grew the input was already ${after[0][2] - down[0][2]} of ${travel} px down (it jumped)`)
+    if (!after.some((x) => x[2] > down[0][2] + 10 && x[2] < b0 - 10)) bad.push(`down: the input was never seen between where it started and where it ends (${steps(after)} places in ${after.length} frames)`)
+    if (Math.abs(down[down.length - 1][2] - b0) > 3) bad.push(`down: the input ends ${down[down.length - 1][2]}, expected ${b0}`)
+    const gapsDown = down.map((x) => x[3])
+    if (Math.max(...gapsDown) - Math.min(...gapsDown) > 4) bad.push(`down: the gap between the last message and the input went from ${Math.min(...gapsDown)} to ${Math.max(...gapsDown)} px`)
+    console.log(`      down: page grew at frame ${grew} of ${down.length}; input bottom ${down[0][2]} | ${after.filter((x, i) => !i || x[2] !== after[i - 1][2]).map((x) => x[2]).join(' ')}`)
+    await cdp.eval('(document.activeElement && document.activeElement.blur(), true)')
+    for (let i = 0; i < 15 && imeShown(); i++) await h.pause(200)
+
+    // Sent away before it has arrived (the field loses focus once the input has risen 40 px): the page may never be
+    // made shorter, and then only the shell's word that the keyboard is leaving brings the input back down. Without
+    // it the input finished its ride, stood above a keyboard that was gone until a watchdog dropped it, and jumped
+    // (Codex review, 2026-10-13).
+    await start()
+    await cdp.eval(`(() => { const K = window.__kb; const watch = () => { if (!K.on) return
+      const s = K.s; if (s.length && s[0][2] - s[s.length - 1][2] >= 40) { K.cutAt = s.length; document.activeElement && document.activeElement.blur(); return }
+      requestAnimationFrame(watch) }; requestAnimationFrame(watch); return true })()`)
+    await h.pause(300)
+    await tapEl(field)
+    await h.pause(2600)
+    const mid = await stop()
+    const cutAt = await cdp.eval('window.__kb.cutAt || 0')
+    if (!cutAt) bad.push('midway: the input never rose 40 px, so the keyboard could not be sent away mid-rise')
+    else {
+      const rest = mid.slice(cutAt - 1)
+      const peak = Math.min(...rest.map((x) => x[2]))
+      const afterPeak = rest.slice(rest.findIndex((x) => x[2] === peak))
+      if (Math.abs(mid[mid.length - 1][2] - b0) > 3) bad.push(`midway: the input ends ${mid[mid.length - 1][2]}, expected ${b0}`)
+      if (!afterPeak.some((x) => x[2] > peak + 10 && x[2] < b0 - 10)) bad.push(`midway: the input did not come back down — it stood ${b0 - peak} px up and jumped (${afterPeak.filter((x, i) => !i || x[2] !== afterPeak[i - 1][2]).map((x) => x[2]).join(' ')})`)
+      console.log(`      midway: focus taken away ${b0 - rest[0][2]} px up; the page ${Math.min(...mid.map((x) => x[1])) < h0 - 100 ? 'was' : 'was never'} made shorter; input bottom ${rest.filter((x, i) => !i || x[2] !== rest[i - 1][2]).map((x) => x[2]).join(' ')}`)
+    }
+    await cdp.eval('(document.activeElement && document.activeElement.blur(), true)')
+    for (let i = 0; i < 15 && imeShown(); i++) await h.pause(200)
+    assert.deepEqual(bad, [], 'the input does not travel with the keyboard')
+  })
+
   // The Space switcher, native: a Material bar with a label under every icon until 2026-10-09, an icon-only dock for a few
   // hours, and since that evening (the user: "too small, put the names back under the icons" — variant ③ of the second
   // mock-up) a dock of five equal cells, icon over name: Home, the Spaces the user keeps there, and "all" for the rest.
@@ -1328,14 +1462,12 @@ const tabCountText = (list) => {
       assert.ok(d, 'Calendar\'s left panel is not a drawer')
       await closeDrawer() // system back closes a drawer and stays in the app
       assert.ok(resumed(), 'closing the drawer left the app')
-      // … and once more on the main view: Calendar is a pinned view (cannot be closed) = the bottom of the chain, the app
-      // goes to the background. It used to do nothing at all (the handler stopped at the no-op close).
+      // … and once more on the main view: Calendar is a pinned view (cannot be closed) = this Space's first level, so
+      // back leads Home (2026-10-13). It left the app before that, and did nothing at all before 2026-10-04 (the
+      // handler stopped at the no-op close).
       h.key(4)
-      await h.pause(1200)
-      assert.ok(!resumed(), 'system back on a pinned main view did nothing (the app should go to the background)')
-      h.adb('shell', 'am', 'start', '-n', ACTIVITY)
-      assert.ok((await h.waitNodes((l) => !!h.byId(l, 'nativeChrome.spaces'), { timeout: 10000 })).hit, 'the app did not come back with its bottom bar')
-      assert.equal(await cdp.eval("document.querySelector('.mb-shell').dataset.space"), 'calendar', 'the app came back on another Space')
+      assert.ok(await h.waitPage(cdp, `document.querySelector('.mb-shell')?.dataset.space === 'home' && ${homeShown}`, 6000), 'system back on a pinned main view did not lead to Home')
+      assert.ok(resumed(), 'system back on a pinned main view left the app')
     }
     // … and a Space whose left panel became such a list keeps the default: Image Studio's left panel is its project
     // navigation since 2026-10-05 (it was the chat, and the Space opted out). It opens on that list; an entry enters the main view.
@@ -1365,19 +1497,21 @@ const tabCountText = (list) => {
       await tapId('nativeSheet.item.dock:edit', await openAllSpaces())
       sheet = await waitSheet(true)
       assert.equal(textOf(sheet, 'nativeSheet.title'), '固定在 Dock')
+      await cdp.eval(presentCounter) // the picks sheet is up: from here on every present is one too many
       const pick = (l, id) => h.byId(l, `nativeSheet.item.pick:${id}`)
       assert.ok(!pick(sheet, 'home'), 'Home is offered as something to take out')
       assert.deepEqual(ids.slice(1).filter((id) => isOn(pick(sheet, id))), ids.slice(1, 4), 'the picks shown are not the dock\'s Spaces')
       assert.equal(pick(sheet, 'agents')?.enabled, 'false', 'a full dock still offers a fourth Space')
       assert.match(sheet.map((n) => n.text).join(' '), /最多固定 3 个/, 'the sheet does not say how many fit')
       shot('03g-dock-picks')
-      h.tapNode(pick(sheet, ids[3])) // out — the sheet comes back with the new state
+      h.tapNode(pick(sheet, ids[3])) // out — the tick goes in place and a cell is free
       let again = await h.waitNodes((l) => (h.byId(l, 'nativeSheet.item.pick:agents')?.enabled === 'true' && !isOn(h.byId(l, `nativeSheet.item.pick:${ids[3]}`)) ? l : null), { timeout: 12000 })
       assert.ok(again.hit, `taking "${ids[3]}" out did not free a cell`)
       h.tapNode(pick(again.hit, 'agents')) // in
       again = await h.waitNodes((l) => (isOn(h.byId(l, 'nativeSheet.item.pick:agents')) ? l : null), { timeout: 12000 })
-      assert.ok(again.hit, 'Agents was not put in the dock')
-      await tapId('nativeSheet.item.dock:done', again.hit)
+      assert.ok(again.hit, 'Agents was not ticked')
+      assert.equal(await cdp.eval('window.Capacitor.__presents'), 0, 'the picks sheet was presented again while ticking (it drops and slides back in on every tick)')
+      await tapId(h.byId(again.hit, 'nativeSheet.done') ? 'nativeSheet.done' : 'nativeSheet.item.dock:done', again.hit)
       await waitSheet(false)
       const now = await h.waitNodes((l) => (h.byId(l, 'nativeChrome.space.agents') ? l : null), { timeout: 8000 })
       assert.ok(now.hit, 'the dock did not take the new Space')
@@ -1664,7 +1798,7 @@ const tabCountText = (list) => {
     }
   })
 
-  await check('touch feedback: no WebView tap highlight; a held press tints the element; long-press selects no text', async () => {
+  await check('touch feedback: no WebView tap highlight; a press spreads a ripple from the finger over the pressed element (and nothing else tints it); long-press selects no text', async () => {
     await tanguDrawer()
     // held target = the selected category chip: a long-press there does nothing (a Space tab's long-press raises the
     // system "pin to home screen" dialog, a row's and the main button's open a menu — all would cover what is sampled)
@@ -1678,13 +1812,30 @@ const tabCountText = (list) => {
       return { tab: hl('.mb-drawer--left .pl-chips button.on'), row: hl('.mb-drawer--left .t2s-srow'), coarse: matchMedia('(pointer: coarse)').matches, missed: [...missed] } })()`)
     console.log('  tappable elements outside the press-tint selector:', probe.missed.join(', ') || '(none)')
     assert.deepEqual({ tab: probe.tab, row: probe.row, coarse: probe.coarse }, { tab: 'rgba(0, 0, 0, 0)', row: 'rgba(0, 0, 0, 0)', coarse: true })
-    const p = await elPoint(tab)
+    // the ripple: one layer under <html>, laid over the pressed element (same rectangle, its corner radius), holding a
+    // circle centred on the finger that grows to cover it. The flat tint (the :active inset shadow) steps aside for it.
+    const layer = "document.querySelector('html > .tap-ripple')"
+    assert.ok(await cdp.eval(`'ripple' in document.documentElement.dataset && !!${layer}`), 'the ripple is not installed in the app')
+    const want = await elRect(tab)
+    const p = { x: Math.round(want.left + (want.right - want.left) * 0.25), y: Math.round((want.top + want.bottom) / 2) } // off-centre: the circle must start there
     const lifted = h.holdAt(p.x, p.y, 2500)
-    const pressed = await h.waitPage(cdp, `(() => { const e = ${tab}; return e.matches(':active') ? { shadow: getComputedStyle(e).boxShadow } : null })()`, 2200)
+    const pressed = await h.waitPage(cdp, `(() => { const e = ${tab}, b = ${layer}; if (getComputedStyle(b).display === 'none') return null
+      const d = b.firstElementChild.getBoundingClientRect(), o = b.getBoundingClientRect()
+      return { active: e.matches(':active'), shadow: getComputedStyle(e).boxShadow, radius: [getComputedStyle(b).borderTopLeftRadius, getComputedStyle(e).borderTopLeftRadius],
+        centre: Math.round((d.left + d.width / 2 - o.left) / o.width * 100), covers: d.left <= o.left + 1 && d.right >= o.right - 1 && d.top <= o.top + 1 && d.bottom >= o.bottom - 1 } })()`, 2200)
+    assert.ok(pressed, 'a held press drew no ripple')
+    await h.pause(400) // grown
+    const got = await elRect(layer)
+    const grown = await cdp.eval(`(() => { const b = ${layer}, d = b.firstElementChild.getBoundingClientRect(), o = b.getBoundingClientRect(); return d.left <= o.left + 1 && d.right >= o.right - 1 && d.top <= o.top + 1 && d.bottom >= o.bottom - 1 })()`)
     shot('03b-press-feedback')
     await lifted
-    assert.ok(pressed, 'the held button never became :active')
-    assert.match(pressed.shadow, /inset/, `no press tint on the held button (box-shadow: ${pressed.shadow})`)
+    assert.ok(sameRect(got, want, 3), `the ripple is not laid over the pressed element: ${fmt(got)} vs ${fmt(want)}`)
+    assert.ok(grown, 'the ripple did not grow to cover the element')
+    assert.ok(Math.abs(pressed.centre - 25) <= 6, `the ripple does not start under the finger (centre at ${pressed.centre}% of the width, the finger at 25%)`)
+    assert.doesNotMatch(pressed.shadow, /inset/, `the flat tint is still drawn under the ripple (box-shadow: ${pressed.shadow})`)
+    assert.ok(parseFloat(pressed.radius[0]) > 0 === parseFloat(pressed.radius[1]) > 0, `the ripple does not follow the element's corners (${pressed.radius})`)
+    await h.pause(700)
+    assert.equal(await cdp.eval(`getComputedStyle(${layer}).display`), 'none', 'the ripple stayed after the finger left')
     await h.pause(400)
     assert.equal(await cdp.eval('String(getSelection())'), '', 'long-press selected text')
     assert.ok(await cdp.eval(drawerOpen), 'the long-press was taken as a tap')
@@ -1927,17 +2078,33 @@ const tabCountText = (list) => {
     await tanguDrawer()
     const row = rowExpr('E2E Session One')
     const tray = `${row}.closest('.pl-swipe')`
-    const open = `(${tray}?.scrollLeft || 0) > 40`
+    // the row rides a track that the finger moves (2026-10-14; it was a horizontal scroller with snap until then)
+    const offset = `(() => { const m = getComputedStyle(${tray}.firstElementChild).transform; return m === 'none' ? 0 : Math.round(new DOMMatrixReadOnly(m).m41) })()`
+    const open = `${tray}?.hasAttribute('data-open') && ${offset} < -40`
     const act = (id) => `${tray}.querySelector('[data-act="${id}"]')`
     assert.ok(await cdp.eval(`!!${tray}`), 'the session row has no swipe tray')
     for (const step of ['pin', 'unpin']) {
+      // evidence, not a verdict: the row's offset every frame through the swipe and its release (the page's own clock)
+      await cdp.eval(`(window.__rowTrace = [], (function f() { window.__rowTrace.push([Math.round(performance.now()), ${offset}]); if (window.__rowTrace.length < 150) requestAnimationFrame(f) })(), true)`)
+      // the easing the release ran on, read when it starts (the transition is taken off again once it has settled)
+      await cdp.eval(`(window.__rowEase = '', ${tray}.firstElementChild.addEventListener('transitionrun', (e) => { if (e.target === e.currentTarget && !window.__rowEase) window.__rowEase = getComputedStyle(e.target).transitionTimingFunction }), true)`)
       await swipeEl(row, -150)
-      assert.ok(await h.waitPage(cdp, open, 3000), `a left swipe did not show the tray (scrollLeft ${await cdp.eval(`${tray}.scrollLeft`)})`)
+      assert.ok(await h.waitPage(cdp, open, 3000), `a left swipe did not show the tray (offset ${await cdp.eval(offset)})`)
+      if (step === 'pin') {
+        await h.pause(700)
+        const tr = JSON.parse(await cdp.eval('JSON.stringify(window.__rowTrace)'))
+        const moving = tr.filter(([, x], i) => i === 0 || x !== tr[i - 1][1])
+        console.log(`  TRACE row offset by frame (ms since the first sample → px): ${moving.map(([t, x]) => `${t - tr[0][0]}:${x}`).join(' ')}`)
+      }
+      // it got there on a spring (a sampled linear() easing), not on the browser's snap curve
+      assert.ok(await h.waitPage(cdp, `/^linear\\(/.test(window.__rowEase) || null`, 2000), `the row did not settle on a spring (${await cdp.eval('window.__rowEase')})`)
       assert.equal(await cdp.eval(nav), 'list', 'the swipe was taken as a tap')
       const got = await cdp.eval(`[...${tray}.querySelectorAll('.pl-swipe-act')].map((b) => b.dataset.act)`)
       assert.deepEqual(got, [step, 'rename', 'archive'], 'delete is only offered for archived sessions')
       // icons only (no text under them); each still has a name; and once the row rests every button is fully shown
-      // (they grow in with the swipe — a scroll-driven animation must end on its last frame on this WebView)
+      // (until 2026-10-13 they grew in with the swipe through a scroll-driven animation — it kept the main thread
+      // updating layers for the whole swipe and is gone; the buttons simply come in with the row)
+      assert.equal(await cdp.eval(`[...${tray}.querySelectorAll('.pl-swipe-act')].filter((b) => b.getAnimations().length).length`), 0, 'a tray button is animated again: that work rides on every frame of the swipe (MODE=trace STEPS=row-swipe npm run emu:perf)')
       const looks = JSON.parse(await cdp.eval(`JSON.stringify([...${tray}.querySelectorAll('.pl-swipe-act')].map((b) => ({ text: b.textContent.trim(), name: b.getAttribute('aria-label') || '', opacity: getComputedStyle(b).opacity, scale: getComputedStyle(b).scale })))`))
       assert.ok(looks.every((b) => !b.text && b.name && b.opacity === '1' && (b.scale === 'none' || b.scale === '1')), `tray buttons: ${JSON.stringify(looks)}`)
       const last = await elRect(act('archive'))
@@ -2010,6 +2177,59 @@ const tabCountText = (list) => {
     assert.ok(resumed(), 'back left the app')
   })
 
+  // Which cards Home shows is the user's (2026-10-13: "let me edit the Space cards on Home"): a long-press on any card
+  // opens "Home cards" — every Space and the two fixed entries, checked = shown, in the order they were checked; kept
+  // on the device. The sheet stays up while the user ticks (2026-10-14, "选一个闪一下": it used to answer each tick and be
+  // presented again, dropping and sliding back in) and the choice lands when it closes. Ends by clearing the choice and
+  // reloading, so what follows sees the default four again.
+  await check('phone Home: a long-press on a card opens "Home cards"; ticks flip in place with one sheet up throughout; on Done a checked Space joins as the last card, an unchecked entry leaves, the choice is stored', async () => {
+    await goHome()
+    await foldHomeComposer()
+    const cardIds = () => cdp.eval(`[...document.querySelectorAll('.hp-root .hp-card')].map((c) => (c.dataset.spaceId ? 'space:' + c.dataset.spaceId : c.dataset.fixedId))`)
+    const item = (l, id) => h.byId(l, `nativeSheet.item.card:${id}`)
+    const before = await cardIds()
+    assert.equal(before.length, 4, `control: Home starts with its four default cards (${before})`)
+    try {
+      await cdp.eval(presentCounter)
+      await holdEl(`document.querySelector('.hp-root .hp-card')`)
+      let sheet = (await h.waitNodes((l) => (h.byId(l, 'nativeSheet.done') || h.byId(l, 'nativeSheet.item.cards:done') ? l : null), { timeout: 8000 })).hit
+      assert.ok(sheet, 'a long-press on a card opened no sheet')
+      shot('03g-home-cards-sheet')
+      const spare = sheet.map((n) => n['resource-id'] || '').filter((id) => id.startsWith('nativeSheet.item.card:space:')).map((id) => id.slice('nativeSheet.item.card:'.length)).find((id) => !before.includes(id))
+      assert.ok(spare, 'control: the sheet lists no Space that is not a card yet')
+      assert.ok(before.every((id) => isOn(item(sheet, id))) && !isOn(item(sheet, spare)), `the check marks do not say what is on Home (${before.map((id) => `${id}=${isOn(item(sheet, id))}`)}, ${spare}=${isOn(item(sheet, spare))})`)
+      h.tapNode(item(sheet, spare))
+      sheet = (await h.waitNodes((l) => (isOn(item(l, spare)) ? l : null), { timeout: 12000 })).hit
+      assert.ok(sheet, 'the tick on the Space did not show')
+      h.tapNode(item(sheet, before[2]))
+      sheet = (await h.waitNodes((l) => (item(l, before[2]) && !isOn(item(l, before[2])) && isOn(item(l, spare)) ? l : null), { timeout: 12000 })).hit
+      assert.ok(sheet, 'the entry did not come unticked')
+      // one sheet the whole time: ticking asked the native side for no second sheet
+      assert.equal(await cdp.eval('window.Capacitor.__presents'), 1, 'the sheet was presented again while ticking (it drops and slides back in on every tick)')
+      shot('03g-home-cards-ticked')
+      const want = [before[0], before[1], before[3], spare]
+      h.tapNode(h.byId(sheet, 'nativeSheet.done') || h.byId(sheet, 'nativeSheet.item.cards:done'))
+      await h.pause(900)
+      shot('03h-home-cards-edited')
+      assert.deepEqual(await cardIds(), want, 'on Done the cards are not the ticked ones in the order they were ticked')
+      assert.equal(await cdp.eval(`localStorage.getItem('forsion_home_cards_v1')`), JSON.stringify(want), 'the choice was not stored')
+      // closing by a swipe / back keeps the ticks too: take the Space out again and leave with back
+      await holdEl(`document.querySelector('.hp-root .hp-card')`)
+      sheet = (await h.waitNodes((l) => (isOn(item(l, spare)) ? l : null), { timeout: 8000 })).hit
+      assert.ok(sheet, 'the sheet did not come up again')
+      h.tapNode(item(sheet, spare))
+      assert.ok((await h.waitNodes((l) => (item(l, spare) && !isOn(item(l, spare)) ? l : null), { timeout: 8000 })).hit, 'the second tick did not show')
+      h.key(4)
+      assert.ok(await h.waitPage(cdp, `JSON.stringify([...document.querySelectorAll('.hp-root .hp-card')].map((c) => (c.dataset.spaceId ? 'space:' + c.dataset.spaceId : c.dataset.fixedId))) === ${JSON.stringify(JSON.stringify(want.slice(0, 3)))}`, 5000), `closing with back dropped the tick (${await cardIds()})`)
+      assert.ok(resumed(), 'back left the app instead of closing the sheet')
+    } finally {
+      await cdp.eval(`(localStorage.removeItem('forsion_home_cards_v1'), true)`)
+      await reload()
+    }
+    await goHome()
+    assert.deepEqual(await cardIds(), before, 'with the choice cleared Home does not show its default cards')
+  })
+
   // Home is Home (2026-10-11, reported on a phone: "I enter Home and it shows another workspace", then decided: Home
   // has no tabs). A view opened while standing on Home used to become a second tab of the Home Space; its saved layout
   // brought that tab back as the one in front on every entry, and a tap on Home's own dock cell did nothing. Now:
@@ -2022,11 +2242,29 @@ const tabCountText = (list) => {
   // Not here: a restart. The saved layout is kept per account, and this harness's account has no identity, so every
   // boot starts from an empty layout (cloudAccountCache.syncCloudAccountCache). A restart lands through the same hook
   // as a Space switch (singleColumnStore.applySCBlob → afterLayout).
+  /** Leaves Home for Tangu (which saves Home's layout) and returns the storage key of THIS account's saved layouts.
+   *  Layouts are stored per account, and the app under test has a new anonymous account on every boot — the slots of
+   *  older boots are still in localStorage, so "the first slot that has a Home layout" is usually a dead one and an
+   *  edit there changes nothing (a check built on it passes on any build). The layout "in use" is rewritten when the
+   *  Space changes: the one that changed is this account's, and its suffix names the slot of saved layouts. */
+  async function leaveHomeForItsSlot() {
+    await goHome()
+    const inUse = "Object.fromEntries(Object.keys(localStorage).filter((k) => k.startsWith('lcl_sc_layout_v1')).map((k) => [k, localStorage.getItem(k)]))"
+    const before = await cdp.eval(inUse)
+    await tapSpace('tangu'); await h.pause(1300)
+    const now = await cdp.eval(inUse)
+    const live = Object.keys(now).filter((k) => now[k] !== before[k])
+    assert.equal(live.length, 1, `control: exactly one layout slot is in use (changed: ${JSON.stringify(live)} of ${Object.keys(now).length})`)
+    const key = live[0].replace('lcl_sc_layout_v1', 'lcl_sc_named_layouts_v1')
+    const slots = JSON.parse(await cdp.eval(`localStorage.getItem(${JSON.stringify(key)})`) || '{}')
+    assert.ok(slots['space:home'], `control: no saved layout for Home under ${key} (has: ${JSON.stringify(Object.keys(slots))})`)
+    return key
+  }
+
   await check('home stays home: no "New tab" in its ⋯; a stray tab left by an older build is gone on entry; a conversation opened from Home opens in Tangu', async () => {
     const bad = []
     const st = async () => JSON.parse(await cdp.eval(`JSON.stringify({ space: document.querySelector('.mb-shell')?.dataset.space, view: ${dom.view} })`))
     const tabs = () => Number(tabCountText(ui()) || '1')
-    const named = "Object.fromEntries(Object.keys(localStorage).filter((k) => k.startsWith('lcl_sc_named_layouts_v1')).map((k) => [k, localStorage.getItem(k)]))"
     // 1
     await goHome()
     await tapId('nativeChrome.more')
@@ -2034,12 +2272,8 @@ const tabCountText = (list) => {
     if (ids(list).includes('tab:new')) bad.push(`Home's ⋯ offers "New tab": ${JSON.stringify(ids(list))}`)
     assert.ok(h.byId(list, 'nativeSheet.item.rb-cmd'), `control: search is in Home's ⋯ (${JSON.stringify(ids(list))})`)
     h.key(4); await waitSheet(false)
-    // 2: leaving Home saves its layout; the slot that changed is this account's. Put a second tab in it, in front.
-    const before = await cdp.eval(named)
-    await tapSpace('tangu'); await h.pause(1300)
-    const after = await cdp.eval(named)
-    const key = Object.keys(after).find((k) => after[k] !== before[k]) || Object.keys(after).find((k) => JSON.parse(after[k])['space:home'])
-    assert.ok(key && JSON.parse(after[key])['space:home'], `control: no saved layout for Home to edit (${JSON.stringify(Object.keys(after))})`)
+    // 2: leaving Home saves its layout. Put a second tab in it, in front.
+    const key = await leaveHomeForItsSlot()
     await cdp.eval(`(() => { const all = JSON.parse(localStorage.getItem(${JSON.stringify(key)})); const b = all['space:home']
       b.main = [...b.main.filter((r) => r.type === 'homepage'), { id: 'calendar', type: 'calendar', loc: 'main', params: {}, title: 'Calendar' }]; b.activeMainId = 'calendar'
       localStorage.setItem(${JSON.stringify(key)}, JSON.stringify(all)); return true })()`)
@@ -2082,6 +2316,351 @@ const tabCountText = (list) => {
     if (home.view !== 'homepage' || tabs() !== 1) bad.push(`Home after a conversation was opened from it: ${JSON.stringify(home)} tabs ${tabs()}`)
     for (let i = 0; i < 4 && tabs() > 1; i++) { if ((await st()).view === 'homepage') break; h.key(4); await h.pause(1000) } // the build without the fix leaves its tab
     assert.deepEqual(bad, [], 'Home is not just Home')
+  })
+
+  // Home is one page on the phone — also when an older build left side panels in its saved layout. A left panel there
+  // makes the two-level navigation treat Home as a list Space: every entry lands on that list ("工作区") and the homepage
+  // is a level below it (2026-10-12, reported twice by the user: "一进去主页…是别的工作区").
+  await check('home stays home: side panels an older build left in its layout do not turn Home into a list Space', async () => {
+    const named = "Object.fromEntries(Object.keys(localStorage).filter((k) => k.startsWith('lcl_sc_named_layouts_v1')).map((k) => [k, localStorage.getItem(k)]))"
+    const st = async () => JSON.parse(await cdp.eval(`JSON.stringify({ space: document.querySelector('.mb-shell')?.dataset.space, nav: document.querySelector('.mb-shell')?.dataset.nav || '', view: ${dom.view}, home: !!(${homeShown}), leftPanel: (document.querySelector('.mb-drawer--left')?.innerText || '').replace(/\\s+/g, ' ').slice(0, 60) })`))
+    const key = await leaveHomeForItsSlot()
+    const saved = JSON.parse((await cdp.eval(named))[key])['space:home']
+    console.log(`  Home's saved layout as this build leaves it: ${JSON.stringify({ main: saved.main?.map((r) => r.type), left: saved.left?.map((r) => r.type), right: saved.right?.map((r) => r.type), leftVisible: saved.leftVisible })}`)
+    await cdp.eval(`(() => { const all = JSON.parse(localStorage.getItem(${JSON.stringify(key)})); const b = all['space:home']
+      b.left = [{ id: 'workspace', type: 'workspace', loc: 'left', params: { mode: 'orbits' }, title: 'Workspace' }]; b.leftActiveId = 'workspace'
+      b.right = [{ id: 'outline', type: 'outline', loc: 'right', params: {}, title: 'Outline' }]; b.rightActiveId = 'outline'
+      localStorage.setItem(${JSON.stringify(key)}, JSON.stringify(all)); return true })()`)
+    await tapSpace('home'); await h.pause(1500)
+    const landed = await st()
+    console.log(`  entering Home with a left panel in its saved layout: ${JSON.stringify(landed)}`)
+    shot('05c-home-with-old-side-panels')
+    const bad = []
+    if (landed.space !== 'home') bad.push(`not on Home: ${JSON.stringify(landed)}`)
+    if (landed.nav) bad.push(`Home is a list Space now (nav "${landed.nav}"): the list is its first level, the homepage is behind it`)
+    if (!landed.home) bad.push(`the homepage is not what is on screen: ${JSON.stringify(landed)}`)
+    if (h.byId(ui(), 'nativeChrome.left')) bad.push('Home has a left-panel button')
+    // leave things as a fresh Home has them, whatever the build did
+    await tapSpace('tangu'); await h.pause(1200)
+    await cdp.eval(`(() => { const all = JSON.parse(localStorage.getItem(${JSON.stringify(key)})); const b = all['space:home']; if (b) { b.left = []; b.right = []; b.leftActiveId = null; b.rightActiveId = null; b.leftVisible = false; b.rightVisible = false }
+      localStorage.setItem(${JSON.stringify(key)}, JSON.stringify(all)); return true })()`)
+    await tapSpace('home'); await h.pause(1200)
+    assert.deepEqual(bad, [], 'Home is not just Home')
+  })
+
+  // What a launch restores. The fixture token names no account, so the app under test keeps no layout from one boot to
+  // the next and a boot never restores anything — the one place this bug lives. Sign in as an account for this check.
+  // The phone keeps ONE layout "in use" and restores it at boot; the startup Space (Home by default) is decided
+  // separately. Leave the app in Tangu and the next launch is Home wearing Tangu's layout (reported 2026-10-11/12).
+  await check('launch: left in another Space, the app opens on Home with the homepage on screen — not that Space\'s list or conversation', async () => {
+    const ID_TOKEN = `e2e.${Buffer.from(JSON.stringify({ userId: 'e2e-layout' })).toString('base64url')}.sig`
+    const setToken = (v) => cdp.eval(`Capacitor.Plugins.Preferences.set({ key: 'forsion_token', value: ${JSON.stringify(v)} }).then(() => true)`)
+    const st = async () => JSON.parse(await cdp.eval(`JSON.stringify((() => { const sh = document.querySelector('.mb-shell'), at = document.elementFromPoint(innerWidth / 2, innerHeight / 2)
+      return { space: sh?.dataset.space, nav: sh?.dataset.nav || '', view: ${dom.view}, onScreen: at?.closest('.hp-root') ? 'homepage' : at?.closest('.mb-drawer--left') ? 'left panel' : (at?.closest('[class]')?.className || '').toString().slice(0, 40),
+        slots: Object.keys(localStorage).filter((k) => k.includes('e2e-layout') && k.startsWith('lcl_sc_')).length } })())`))
+    const bad = []
+    const judge = (how, got) => {
+      if (got.space !== 'home') bad.push(`${how}: not on Home: ${JSON.stringify(got)}`)
+      if (got.nav) bad.push(`${how}: Home came up as a list Space (nav "${got.nav}")`)
+      if (got.onScreen !== 'homepage') bad.push(`${how}: on screen: ${got.onScreen} (view ${got.view})`)
+      if (h.byId(ui(), 'nativeChrome.left')) bad.push(`${how}: Home has a left-panel button`)
+      if (Number(tabCountText(ui()) || '1') !== 1) bad.push(`${how}: Home has ${tabCountText(ui())} tabs`)
+    }
+    const startPref = await cdp.eval("localStorage.getItem('forsion_default_space')")
+    try {
+      await cdp.eval("(Object.keys(localStorage).filter((k) => k.includes('e2e-layout')).forEach((k) => localStorage.removeItem(k)), localStorage.removeItem('forsion_default_space'), true)")
+      await setToken(ID_TOKEN)
+      await reload() // first launch of this account: nothing saved
+      const first = await st()
+      console.log(`  first launch: ${JSON.stringify(first)}`)
+      assert.equal(first.space, 'home', 'control: the default startup Space is Home')
+      await openChat('E2E Session One') // Tangu, a conversation on screen: where the user leaves the app
+      await h.pause(1200)
+      assert.ok((await st()).slots >= 1, `control: this account's layout is kept (${JSON.stringify(await st())})`)
+      await reload() // the next launch
+      await h.pause(1200)
+      const next = await st()
+      console.log(`  launch after leaving the app in a Tangu conversation: ${JSON.stringify(next)}`)
+      shot('05d-launch-after-tangu')
+      judge('page reload', next)
+      // … and Tangu is still a Space of its own
+      await toSpace('tangu'); await h.pause(900)
+      const tangu = await st()
+      console.log(`  Tangu after that launch: ${JSON.stringify(tangu)}`)
+      if (tangu.nav !== 'list' && tangu.view !== 'chat') bad.push(`Tangu lost its own layout: ${JSON.stringify(tangu)}`)
+      // the same through a real launch: the process is killed with a Tangu conversation on screen and started again
+      // (a page reload runs the same boot code; this is the path a person takes)
+      await openChat('E2E Session One')
+      await h.pause(1200)
+      h.adb('shell', 'am', 'force-stop', PKG)
+      h.adb('shell', 'am', 'start', '-n', ACTIVITY)
+      cdp = await h.connect(PKG)
+      await cdp.send('Page.enable')
+      // the stub goes on the new connection at once: what is restored is local, but a request that reaches the real backend
+      // with this token is answered 401 and the app signs out. (The requests sent before this line cannot be caught — as in
+      // the plugin restart check, they go nowhere on the emulator this suite runs on: airplane mode.)
+      await installStub(cdp)
+      assert.ok(await h.waitPage(cdp, dom.shellUp, 30000), 'shell did not mount after the cold start')
+      assert.ok((await h.waitNodes((l) => h.byId(l, 'nativeChrome.bar'), { timeout: 12000 })).hit, 'native bar did not appear after the cold start')
+      await h.pause(1500)
+      const cold = await st()
+      console.log(`  cold start (process killed in a Tangu conversation): ${JSON.stringify(cold)}`)
+      shot('05e-cold-start-after-tangu')
+      judge('cold start', cold)
+    } finally {
+      await cdp.eval(`(Object.keys(localStorage).filter((k) => k.includes('e2e-layout')).forEach((k) => localStorage.removeItem(k)), ${startPref === null ? "localStorage.removeItem('forsion_default_space')" : `localStorage.setItem('forsion_default_space', ${JSON.stringify(startPref)})`}, true)`)
+      await setToken('e2e-native-shell.fake.token')
+      await reload()
+    }
+    assert.deepEqual(bad, [], 'the launch did not open on the homepage')
+  })
+
+  // Where every system back leads (2026-10-13, user: 「侧滑返回逻辑有些诡异,甚至有时候一不小心就返回桌面了」), by key
+  // and by a real swipe in from either screen edge — the full-screen back gesture. What is held:
+  //   · the first level of a Space that is not Home leads Home; only Home leaves the app, and only on a second back
+  //     within two seconds of the first (which shows the system toast "back again to exit");
+  //   · back from a page reached through the list leads to that list, not to the page looked at before it;
+  //   · a horizontal swipe that starts off the edge is the page's own (it follows the finger), not a back;
+  //   · where the system reports the gesture as it happens (Android 14+), the page follows the finger during a back
+  //     swipe from the edge too, and snaps back when the swipe is abandoned. Older systems: nothing moves until release.
+  // The whole walk is printed and kept in OUT/back-trace.txt; `BACK_TRACE=1` reads a build without judging it.
+  await check('back: the first level of a Space leads Home and only a second back on Home leaves the app; a page opened from the list goes back to the list; an edge swipe moves the page with the finger', async () => {
+    const TRACE_ONLY = process.env.BACK_TRACE === '1'
+    const rows = []
+    const bad = []
+    const say = (line) => { rows.push(line); console.log(`  TRACE ${line}`) }
+    // `back` = how often the page was asked what a back would do (once when a gesture starts, once when a back completes)
+    await cdp.eval(`(() => { if (window.__bk) return true; const k = window.__bk = { back: 0, start: 0, move: 0, cancel: 0, end: 0 }
+      addEventListener('forsion:mobile-back', (e) => { if (e.detail && e.detail.probe) k.back++ }, true)
+      for (const [ev, f] of [['touchstart', 'start'], ['touchmove', 'move'], ['touchcancel', 'cancel'], ['touchend', 'end']]) addEventListener(ev, () => k[f]++, { capture: true, passive: true })
+      return true })()`)
+    const counters = async () => JSON.parse(await cdp.eval('JSON.stringify(window.__bk)'))
+    const zero = () => cdp.eval('(() => { for (const f in window.__bk) window.__bk[f] = 0; return true })()')
+    const st = async () => {
+      if (!resumed()) return { fg: false, at: 'left the app' }
+      const s = JSON.parse(await cdp.eval(`JSON.stringify({ space: document.querySelector('.mb-shell')?.dataset.space, nav: document.querySelector('.mb-shell')?.dataset.nav || '', view: ${dom.view} })`))
+      const title = s.nav === 'detail' && s.view === 'chat' ? textOf(ui(), 'nativeChrome.title') : ''
+      return { ...s, fg: true, title, at: `${s.space}/${s.nav || 'page'}${title ? ` "${title}"` : ''}` }
+    }
+    /** Where we are after `step` (and, with `want`, where a person expects to be); an app that left is brought back. */
+    const note = async (step, want, wait = 1200) => {
+      await h.pause(wait)
+      const s = await st()
+      const k = s.fg ? await counters() : null
+      say(`${step} → ${s.at}${k ? `   [page: asked about back ${k.back}×, touch start ${k.start} move ${k.move} cancel ${k.cancel} end ${k.end}]` : ''}`)
+      if (want && s.at !== want) bad.push(`${step}: at ${s.at}, expected ${want}`)
+      if (!s.fg) {
+        h.adb('shell', 'am', 'start', '-n', ACTIVITY)
+        assert.ok((await h.waitNodes(() => resumed(), { timeout: 10000 })).hit, 'the app did not come back')
+        await h.pause(1500)
+        say(`   (relaunched) → ${(await st()).at}`)
+      }
+      await zero()
+      return s
+    }
+    const HOME = 'home/page', LIST = 'tangu/list', LEFT = 'left the app'
+    const mid = Math.round(screen.h * 0.5)
+    const sw = (x0, x1, ms = 250) => h.adb('shell', 'input', 'swipe', String(Math.round(x0)), String(mid), String(Math.round(x1)), String(mid), String(ms))
+    const edgeL = () => sw(2, screen.w * 0.65)
+    const edgeR = () => sw(screen.w - 3, screen.w * 0.35)
+    const density = Number(h.adb('shell', 'wm', 'density').match(/(\d+)\s*$/)[1]) / 160
+    const sdk = Number(h.adb('shell', 'getprop', 'ro.build.version.sdk').trim())
+    const gestures = h.adb('shell', 'settings', 'get', 'secure', 'navigation_mode').trim() === '2'
+    const reportsProgress = sdk >= 34 && gestures // the system tells the app where a back swipe is: Android 14+
+    /** Back twice, close together: what leaves the app from Home. */
+    const twice = (act = () => h.key(4)) => { act(); act() }
+    /** The system toast is a window of its own while it shows. */
+    const toastUp = () => /Toast/.test(h.adb('shell', 'dumpsys', 'window', 'windows'))
+    const quiet = () => h.pause(2400) // past the two seconds in which a second back exits
+    const TWO = sessions.find((x) => x.id === 'e2e-s2').title
+    const open = async (title) => { await tapEl(rowExpr(title)); await h.waitPage(cdp, `(${nav}) === 'detail'`, 8000) }
+    /** ⋯ → search → quick find → the conversation titled `title` (typed: `text`): opens it from wherever we are, not through the list. */
+    const find = async (text, title) => {
+      await tapId('nativeChrome.more'); await tapId('nativeSheet.item.rb-cmd', await waitSheet(true)); await waitSheet(false)
+      assert.ok(await h.waitPage(cdp, "!!document.querySelector('.cmd-input')", 5000), 'the command panel did not open')
+      await tapEl("document.querySelector('.cmd-input')"); await h.pause(500); h.adb('shell', 'input', 'text', 'quick')
+      const quick = "[...document.querySelectorAll('.cmd-item')].find((r) => r.textContent.includes('快速查找'))"
+      assert.ok(await h.waitPage(cdp, `!!${quick}`, 5000), 'the command panel does not list quick find')
+      if (imeShown()) { h.key(4); await h.pause(600) }
+      await tapEl(quick); assert.ok(await h.waitPage(cdp, "!!document.querySelector('.amx-qf-input')", 5000), 'quick find did not open')
+      await tapEl("document.querySelector('.amx-qf-input')"); await h.pause(500); h.adb('shell', 'input', 'text', text)
+      const hit = `[...document.querySelectorAll('.amx-qf-row')].find((r) => r.querySelector('.amx-qf-title')?.textContent.trim() === ${JSON.stringify(title)})`
+      assert.ok(await h.waitPage(cdp, `!!${hit}`, 6000), `search does not list "${title}"`)
+      if (imeShown()) { h.key(4); await h.pause(600) }
+      await tapEl(hit); await h.waitPage(cdp, `(${dom.view}) === 'chat' && !document.querySelector('.amx-qf-input')`, 6000); await zero()
+    }
+    say(`screen ${screen.w}x${screen.h} @${density}x; Android SDK ${sdk}; ${gestures ? 'gesture' : 'button'} navigation; back swipe progress reported: ${reportsProgress}`)
+
+    // A. Home is where the app leaves from — by key and by a swipe in from either edge
+    await goHome(); await zero(); await quiet()
+    await note('A0 Home', HOME, 300)
+    h.key(4); await h.pause(250)
+    const hinted = toastUp()
+    say(`   the "back again to exit" toast is up: ${hinted}`)
+    if (!hinted) bad.push('A1: one back on Home showed no toast')
+    await note('A1 Home: back key once', HOME, 300)
+    await quiet(); twice(); await note('A1 Home: back key twice', LEFT)
+    if (gestures) {
+      await goHome(); await quiet(); edgeL(); await note('A2 Home: one swipe in from the left edge', HOME)
+      await quiet(); edgeR(); await note('A3 Home: one swipe in from the right edge', HOME)
+      await quiet(); twice(edgeL); await note('A3 Home: two swipes in from the edge', LEFT)
+    }
+    // … and a Space entered from Home leads back to it
+    await goHome(); await foldHomeComposer()
+    await tapEl(`document.querySelector('.hp-root .hp-card[data-space-id="tangu"]')`); await note('A4 Home: tap the Tangu card', LIST)
+    h.key(4); await note('A5 back key', HOME)
+    // … the first thing opened after entering a Space goes back to its list, whichever conversation the Space had up
+    //    when it was entered (anything recorded while the list was on screen must not come first)
+    for (const title of ['E2E Session One', TWO]) {
+      await goHome(); await foldHomeComposer()
+      await tapEl(`document.querySelector('.hp-root .hp-card[data-space-id="tangu"]')`); await h.waitPage(cdp, `(${nav}) === 'list'`, 6000); await h.pause(900)
+      await cdp.eval(`(() => { if (document.querySelector('.mb-drawer--left .t2s-srow')) return true; const g = [...document.querySelectorAll('.mb-drawer--left .t2s-group')].find((e) => e.textContent.includes('无项目') || /project/i.test(e.textContent)); g?.querySelector('button')?.click(); return true })()`)
+      await h.waitPage(cdp, `!!${rowExpr(title)}`, 8000)
+      await open(title); await note(`A6 Home → Tangu → tap "${title}"`, `tangu/detail "${title}"`)
+      h.key(4); await note('A7 back key', LIST)
+    }
+
+    // B. the first level of a list Space: an edge swipe is a back (→ Home), a swipe across the list is not
+    await tanguDrawer(); await zero()
+    if (gestures) {
+      edgeR(); await note('B1 list: swipe in from the right edge', HOME)
+      await tanguDrawer(); edgeL(); await note('B2 list: swipe in from the left edge', HOME)
+    }
+    await tanguDrawer(); sw(screen.w * 0.8, screen.w * 0.2); await note('B3 list: swipe left across the middle', LIST)
+
+    // C. list → conversation One → back arrow → conversation Two → back: the list (not One), then Home, then out
+    await tanguDrawer()
+    await open('E2E Session One'); await note('C1 list: tap conversation One', 'tangu/detail "E2E Session One"')
+    await tapId('nativeChrome.left'); await note('C2 back arrow', LIST)
+    await open(TWO); await note('C3 list: tap conversation Two', `tangu/detail "${TWO}"`)
+    h.key(4); await note('C4 back key', LIST)
+    h.key(4); await note('C5 back key', HOME)
+    await quiet(); twice(); await note('C6 back key twice', LEFT)
+    // … and a page reached from inside a trip (search → conversation One, not through the list) is walked back first:
+    //    the taps on the way are what tells a page of this trip from the one the tapped row opened (lcl listTrips)
+    await tanguDrawer(); await open(TWO); await h.pause(700); await zero()
+    await find('One', 'E2E Session One'); await note('C7 conversation Two: search → open conversation One', 'tangu/detail "E2E Session One"')
+    h.key(4); await note('C8 back key', `tangu/detail "${TWO}"`)
+    h.key(4); await note('C9 back key', LIST)
+
+    // D. a conversation: the same rightward swipe by where the finger starts. Up to the system's back inset it is the
+    //    system's (the page gets a touchcancel and one back); past it the page's own drag. Both end on the list.
+    for (const dp of gestures ? [1, 16, 24, 32, 60, 120] : [32, 60, 120]) {
+      await tanguDrawer(); await open('E2E Session One'); await h.pause(700); await zero()
+      sw(dp * density, screen.w * 0.7)
+      await note(`D  conversation: swipe right starting ${dp}dp from the left edge`, LIST)
+    }
+    // … held half-way: what is on screen moves with the finger — the page's own drag everywhere, the system's back
+    //    swipe where the system reports it as it happens (Android 14+; before that nothing can move until release)
+    const me = (a, x) => h.adb('shell', 'input', 'motionevent', a, String(Math.round(x)), String(mid))
+    const pageAt = async () => JSON.parse(await cdp.eval(`(() => { const m = document.querySelector('.mb-body > .mb-main'); const d = document.querySelector('.mb-drawer--left'); return JSON.stringify({ drag: document.querySelector('.mb-body')?.dataset.drag || '', main: m ? Math.round(m.getBoundingClientRect().left) : null, list: d ? Math.round(d.getBoundingClientRect().left) : null, w: innerWidth }) })()`))
+    const held = async (x0, tag, { back = false } = {}) => {
+      me('DOWN', x0); for (const f of [0.12, 0.25, 0.4, 0.5]) me('MOVE', x0 + screen.w * f)
+      await h.pause(350)
+      const at = resumed() ? await pageAt() : null
+      shot(tag)
+      if (back) { for (const f of [0.3, 0.1, 0.01]) me('MOVE', x0 + screen.w * f); await h.pause(200); me('UP', x0 + screen.w * 0.01) } // the finger returns to the edge: abandoned
+      else me('UP', x0 + screen.w * 0.5)
+      say(`   held half-way (${tag}): page ${JSON.stringify(at)}`)
+      return at
+    }
+    const inConversation = async () => { await tanguDrawer(); await open('E2E Session One'); await h.pause(700); await zero() }
+    if (gestures) {
+      await inConversation()
+      const sys = await held(2, '06-back-held-system-edge')
+      if (reportsProgress && !(sys.drag === 'left' && sys.main > sys.w * 0.3)) bad.push(`E1: the page does not follow a back swipe from the edge (${JSON.stringify(sys)})`)
+      await note('E1 conversation: edge swipe held, then released', LIST)
+      await inConversation()
+      await held(2, '06-back-held-then-abandoned', { back: true }); await h.pause(700)
+      const rest = await pageAt()
+      if (rest.drag || rest.main !== 0) bad.push(`E1: an abandoned back swipe left the page out of place (${JSON.stringify(rest)})`)
+      await note('E1 conversation: edge swipe held, finger back to the edge, released', 'tangu/detail "E2E Session One"')
+    }
+    await inConversation()
+    const own = await held(60 * density, '06-back-held-in-page')
+    if (!(own.drag === 'left' && own.main > own.w * 0.3)) bad.push(`E2: the page's own drag does not follow the finger (${JSON.stringify(own)})`)
+    await note('E2 conversation: swipe from 60dp held, then released', LIST)
+    if (gestures) {
+      await goHome(); await zero(); await quiet()
+      await held(2, '06-back-held-edge-on-home'); await note('E3 Home: edge swipe held, then released (one back)', HOME)
+    }
+
+    // F. a conversation opened from Home (search): back → its Space's list → Home → out
+    await goHome()
+    await find('Two', TWO)
+    await note('F0 Home: search → open conversation Two', `tangu/detail "${TWO}"`)
+    h.key(4); await note('F1 back key', LIST)
+    h.key(4); await note('F2 back key', HOME)
+    await quiet(); twice(); await note('F3 back key twice', LEFT)
+
+    // G. the same on a system that does not report the gesture as it happens (Android 13 and below, and any gesture
+    //    navigation that skips it): the page hears nothing until the back completes. Stood in for here by dropping the
+    //    plugin's gesture events before they reach the page — seen from the page that is what such a system is.
+    //    Held: every landing is the same, the exit still asks twice; the only difference is that nothing moves before release.
+    await cdp.eval(`(() => { const b = window.androidBridge; if (!b || b.__onmessage) return !!b; b.__onmessage = b.onmessage
+      b.onmessage = function (ev) { try { const r = JSON.parse(ev.data); if (r && r.pluginId === 'NativeBack' && r.methodName === 'addListener') return } catch {} return b.__onmessage.call(this, ev) }; return true })()`)
+    try {
+      say('G  from here on the page is not told about the gesture (as on Android 13 and below)')
+      if (gestures) {
+        await inConversation()
+        const mute = await held(2, '06-back-held-no-progress')
+        if (mute.drag || mute.main !== 0) bad.push(`G: the page moved during a back swipe it was not told about (${JSON.stringify(mute)})`)
+        await note('G1 conversation: edge swipe held, then released', LIST)
+      }
+      await inConversation(); h.key(4); await note('G2 conversation: back key', LIST)
+      h.key(4); await note('G3 list: back key', HOME)
+      await quiet(); h.key(4); await h.pause(250)
+      if (!toastUp()) bad.push('G4: one back on Home showed no toast')
+      await note('G4 Home: back key once', HOME, 300)
+      await quiet(); twice(); await note('G5 Home: back key twice', LEFT)
+    } finally {
+      await cdp.eval('(() => { const b = window.androidBridge; if (b && b.__onmessage) { b.onmessage = b.__onmessage; delete b.__onmessage } return true })()')
+    }
+
+    // H. orders the system can produce and a finger on an emulator cannot time (review, 2026-10-13): a gesture that
+    //    never gets its ending, two in one frame, something opening over the page while the finger is down. One real
+    //    back is recorded as the bridge says it (the gesture's start and the completed back), then replayed.
+    if (reportsProgress) {
+      await inConversation()
+      await cdp.eval(`(() => { const b = window.androidBridge; if (!b) return false; const real = b.onmessage; const k = window.__rp = { real, g: null, b: null }
+        b.onmessage = function (ev) { try { const r = JSON.parse(ev.data); if (r && r.methodName === 'addListener') { if (r.pluginId === 'NativeBack') k.g = r; else if (r.pluginId === 'App' && r.data && 'canGoBack' in r.data) k.b = r } } catch {} return real.call(this, ev) }
+        const tell = (tpl, data) => real.call(b, { data: JSON.stringify(Object.assign({}, tpl, { data })) })
+        k.gesture = (phase, x) => tell(k.g, phase === 'cancel' ? { phase } : { phase, edge: 'left', x })
+        k.back = () => tell(k.b, k.b.data)
+        return true })()`)
+      try {
+        h.key(4); await note('H0 conversation: back key (recorded)', LIST)
+        await inConversation()
+        if (!(await cdp.eval('!!(window.__rp && __rp.g && __rp.b)'))) bad.push('H: the bridge carried no gesture start / completed back to record')
+        else {
+          // a swipe whose ending never arrives, one abandoned, and a third — all before the page draws a frame
+          await cdp.eval(`(() => { const g = __rp.gesture; g('start', 0.01); g('progress', 0.4); g('start', 0.01); g('cancel'); g('start', 0.01); g('progress', 0.7); return true })()`)
+          await h.pause(250)
+          await cdp.eval(`(() => { __rp.gesture('progress', 0.7); return true })()`); await h.pause(150)
+          const third = await pageAt()
+          if (!(third.drag === 'left' && third.main > third.w * 0.6)) bad.push(`H1: after two unfinished swipes the page no longer follows the next one (${JSON.stringify(third)})`)
+          await cdp.eval(`(() => { __rp.gesture('cancel'); return true })()`); await h.pause(600)
+          const rest = await pageAt()
+          if (rest.drag || rest.main !== 0) bad.push(`H1: the page stays out of place after the swipes ended (${JSON.stringify(rest)})`)
+          await note('H1 conversation: three swipes inside one frame, the last abandoned', 'tangu/detail "E2E Session One"')
+          // the finger is down on a back that would slide to the list; something that takes a back opens; release
+          await cdp.eval(`(() => { window.__rpTook = 0; window.__rpTake = (e) => { e.preventDefault(); if (!(e.detail && e.detail.probe)) window.__rpTook++ }
+            __rp.gesture('start', 0.01); __rp.gesture('progress', 0.4); window.addEventListener('forsion:mobile-back', window.__rpTake); __rp.back(); return true })()`)
+          await h.pause(600)
+          const took = await cdp.eval('window.__rpTook')
+          const stay = await pageAt()
+          await cdp.eval(`(() => { window.removeEventListener('forsion:mobile-back', window.__rpTake); return true })()`)
+          if (took !== 1 || stay.drag || stay.main !== 0) bad.push(`H2: a back released after something opened over the page did not go to it (taken ${took}, page ${JSON.stringify(stay)})`)
+          await note('H2 conversation: back swipe held, an overlay opens, released', 'tangu/detail "E2E Session One"')
+        }
+      } finally {
+        await cdp.eval('(() => { const b = window.androidBridge; if (b && window.__rp) { b.onmessage = window.__rp.real; delete window.__rp } return true })()')
+      }
+    }
+
+    fs.writeFileSync(path.join(OUT, 'back-trace.txt'), rows.join('\n') + '\n')
+    await goHome()
+    if (!TRACE_ONLY) assert.deepEqual(bad, [], 'back does not lead where a person expects')
   })
 
   await check('phone notes list: category chips instead of a search box, the vault under the title, search on the capsule, one main button above the dock', async () => {

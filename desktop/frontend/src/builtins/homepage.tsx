@@ -99,6 +99,9 @@ export const homepageSpace: SpaceDefinition = {
   // 手机上主页就是主页这一页:不开标签,在它里面点开的对话 / 笔记去它们自己的 Space 开(2026-10-11 用户定:
   // 「主页就主页维持的好好地」「主页不让开标签」)。别去掉。
   onePage: true,
+  // 手机上主页那一页就是第一层,不管它的左栏里有没有东西。原来靠「主页没有左栏」隐式成立;左栏里一旦有面板(启动时
+  // 跟着上一个 Space 的布局带进来的),两级导航就把主页当成「先看列表」的 Space,进来看到的是别人的列表(2026-10-12)。
+  listFirst: false,
   build() {
     ws().setSidebarDefaults(HOME_SIDE_VIEWS)
     ws().openView('homepage', {}, 'main')

@@ -53,6 +53,14 @@ describe('native sheet result validation', () => {
     expect(m.confirmResult({ ok: 'true' })).toBeNull()
     expect(m.confirmResult({ ok: true, x: 1 })).toBeNull()
   })
+  it('a checklist answer: unique ids of this list, within min..max; a disabled row only if it started ticked', () => {
+    const list = { items: ['a', 'b', 'c', 'off', 'kept'].map((id) => ({ id, label: id, ...(id === 'off' || id === 'kept' ? { disabled: true } : {}) })), checked: ['b', 'kept'], min: 1, max: 3 }
+    expect(m.checklistResult(list, { checked: ['kept', 'a', 'c'] })).toEqual({ checked: ['kept', 'a', 'c'] })
+    expect(m.checklistResult(list, { checked: ['b'] })).toEqual({ checked: ['b'] })
+    for (const bad of [null, {}, { checked: 'a' }, { checked: [] }, { checked: ['a', 'a'] }, { checked: ['a', 'b', 'c', 'kept'] }, { checked: ['off'] }, { checked: ['zzz'] }, { checked: [1] }, { checked: ['a'], x: 1 }]) {
+      expect(m.checklistResult(list, bad)).toBeNull()
+    }
+  })
 })
 
 describe('presenter slot', () => {
@@ -103,6 +111,20 @@ describe('presenter slot', () => {
     ctl.abort()
     expect(signal?.aborted).toBe(true)
     expect(await pending).toEqual({ handled: true, value: null })
+  })
+  it('checklist: one present, the rows go as menu items with serialized icons; the answer comes back once', async () => {
+    const seen: NativeSheetPayload[] = []
+    uninstall = m.installNativeSheetPresenter(async (p) => { seen.push(p); return { checked: ['card:b', 'card:a'] } })
+    const out = await m.presentNativeChecklist({ title: 'Home cards', items: [{ id: 'card:a', label: 'A', icon: PanelLeft }, { id: 'card:b', label: 'B' }], checked: ['card:a'], done: 'Done', min: 1, max: 6 })
+    expect(out).toEqual({ handled: true, value: { checked: ['card:b', 'card:a'] } })
+    expect(seen).toHaveLength(1)
+    expect(JSON.parse(JSON.stringify(seen[0]))).toEqual(seen[0])
+    expect(seen[0]).toMatchObject({ kind: 'checklist', title: 'Home cards', checked: ['card:a'], done: 'Done', min: 1, max: 2 }) // max: no more than there are rows
+    expect(seen[0].kind === 'checklist' && seen[0].items[0].icon?.kind).toBe('vector')
+    // what the host cannot answer sensibly never reaches it
+    expect(await m.presentNativeChecklist({ items: [{ id: 'x', label: 'X' }], checked: ['zzz'], done: 'Done', max: 1 })).toEqual({ handled: false })
+    expect(await m.presentNativeChecklist({ items: [{ id: 'x', label: 'X' }, { id: 'x', label: 'Y' }], checked: [], done: 'Done', max: 1 })).toEqual({ handled: false })
+    expect(seen).toHaveLength(1)
   })
   it('prompt / confirm round trip', async () => {
     uninstall = m.installNativeSheetPresenter(async (p) => (p.kind === 'prompt' ? { text: 'Folder' } : { ok: true }))
