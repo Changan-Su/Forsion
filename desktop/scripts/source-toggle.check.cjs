@@ -119,7 +119,8 @@ async function main() {
   check('S6 离开后退出源码态(复渲染)', (await p.locator('.embed-src-input').count()) === 0)
   await p.close()
 
-  // ── v4 通用附件 = 难源码编辑块:光标进入不退源码,只有 `</>` 能开门 ──────────────
+  // ── v4 文件引用嵌入(通用附件):光标进到那一行 = 源码露在嵌入体上方、嵌入体不让位(2026-10-13 用户定,Obsidian 的光标逻辑;
+  //    此前是「难源码编辑块」,只有 `</>` 能开门、开了整块让位)。`</>` 仍在,等于把光标送进源码。细节在 check:embedsource。──
   p = await open(`upage&useed=${encodeURIComponent('前一段\n\n![[archive.zip]]\n\n后一段\n')}`)
   await p.waitForSelector('.unified-embed')
   const hard = await p.evaluate(() => {
@@ -132,19 +133,25 @@ async function main() {
     const Sel = view.state.selection.constructor
     view.dispatch(view.state.tr.setSelection(Sel.create(view.state.doc, at + 3)))
     view.focus()
-    return { at, embed: !!document.querySelector('.unified-embed'), src: document.querySelector('.unified-body .ProseMirror')?.innerText ?? '' }
+    return { at }
   })
-  check('S7 光标进入附件位置仍保持整体渲染(不自动露源码)', hard.at >= 0 && hard.embed && !hard.src.includes('![[archive.zip]]'), JSON.stringify(hard))
+  await p.waitForTimeout(250)
+  const entered = await p.evaluate(() => ({ embed: !!document.querySelector('.unified-embed'), src: document.querySelector('.unified-body .ProseMirror')?.innerText ?? '' }))
+  check('S7 光标进到附件那一行:源码露出来、嵌入体仍在', hard.at >= 0 && entered.embed && entered.src.includes('![[archive.zip]]'), JSON.stringify({ ...hard, ...entered }))
+  await p.locator('.unified-body .ProseMirror > p').last().click()
+  await p.waitForTimeout(350)
+  const left = await p.evaluate(() => ({ embed: !!document.querySelector('.unified-embed'), src: document.querySelector('.unified-body .ProseMirror')?.innerText ?? '' }))
+  check('S7 光标离开后源码收起、嵌入体仍在', left.embed && !left.src.includes('![[archive.zip]]'), JSON.stringify(left))
   b = await btnState(p, '.unified-embed > .amx-src-btn')
-  check('S7 v4 通用附件挂了唯一源码入口 `</>`', !!b && b.text === '</>' && b.pe === 'none', JSON.stringify(b))
+  check('S7 v4 通用附件挂着源码入口 `</>`', !!b && b.text === '</>' && b.pe === 'none', JSON.stringify(b))
   await p.hover('.unified-embed')
   await p.click('.unified-embed > .amx-src-btn')
   await p.waitForTimeout(350)
   const opened = await p.evaluate(() => ({ embed: !!document.querySelector('.unified-embed'), text: document.querySelector('.unified-body .ProseMirror')?.innerText ?? '' }))
-  check('S7 只有点 `</>` 才露出附件源码', !opened.embed && opened.text.includes('![[archive.zip]]'), JSON.stringify(opened))
+  check('S7 点 `</>` = 光标进源码(源码露出、嵌入体不让位)', opened.embed && opened.text.includes('![[archive.zip]]'), JSON.stringify(opened))
   await p.locator('.unified-body .ProseMirror > p').last().click()
   await p.waitForTimeout(350)
-  check('S7 光标离开源码后附件自动复渲染', (await p.locator('.unified-embed').count()) === 1)
+  check('S7 光标离开源码后只剩一份嵌入体', (await p.locator('.unified-embed').count()) === 1)
   await p.close()
 
   const fails = results.filter((r) => !r).length

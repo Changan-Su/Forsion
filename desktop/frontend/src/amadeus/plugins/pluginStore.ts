@@ -92,8 +92,8 @@ import { connectionTarget } from '../../services/engine/targets'
 registerMessages({
   'pluginhost.workFolder.label': { zh: '工作文件夹', en: 'Working folder' },
   'pluginhost.workFolder.desc': {
-    zh: '本插件在智库内读写文件的文件夹（相对库根；留空恢复默认=插件名）',
-    en: 'Folder inside the vault where this plugin reads and writes files (relative to the vault root; leave empty to fall back to the plugin name)',
+    zh: '本插件在智库内读写文件的文件夹（相对库根；留空恢复默认 = Plugins/插件名）',
+    en: 'Folder inside the vault where this plugin reads and writes files (relative to the vault root; leave empty to fall back to Plugins/<plugin name>)',
   },
   'pluginhost.setupFailed': { zh: '插件「{name}」加载失败', en: 'Plugin "{name}" failed to load' },
   'pluginhost.sampleCreated': { zh: '已创建示例插件 hello-amadeus', en: 'Created the sample plugin hello-amadeus' },
@@ -197,11 +197,19 @@ interface PluginState {
   scaffoldSample(): Promise<void>
 }
 
-/** 文件夹名消毒:插件显示名可能含路径非法字符;清完为空则退回 fallback(插件 id,天然合法)。 */
+/** 文件夹名消毒:插件显示名可能含路径非法字符;清完为空则退回 fallback(插件 id)。
+ *  ⚠️全是点的名字(`.` / `..`)也当空:缺省落在 `Plugins/<名>` 之后,`Plugins/..` 就是库根,
+ *  库根里的同名文件会被插件覆盖 —— 库的越界钳只拦出库,拦不住这个(codex)。id 也不可信,最后兜一个固定名。 */
 function sanitizeFolderName(name: string, fallback: string): string {
-  const s = name.replace(/[\\/:*?"<>|\u0000-\u001f]/g, '').trim()
-  return s || fallback
+  const clean = (v: string): string => { const s = String(v ?? '').replace(/[\\/:*?"<>|\u0000-\u001f]/g, '').trim(); return /^\.+$/.test(s) ? '' : s }
+  return clean(name) || clean(fallback) || 'plugin'
 }
+
+/** 所有插件产物的总文件夹(2026-10-14 用户定:插件不再各自在库根建一个文件夹,库根只多这一项)。
+ *  ⚠️名字固定、不跟界面语言:按语言取名的话切一次语言,数据就裂成「插件/」和「Plugins/」两处。
+ *  只管缺省值;之前在库根 `<插件名>/` 里的老数据宿主不迁移(用户:「之前有的就算了」),把老文件夹拖进 Plugins/ 即可接上。 */
+const PLUGINS_ROOT = 'Plugins'
+const defaultWorkFolder = (pluginName: string, pluginId: string): string => `${PLUGINS_ROOT}/${sanitizeFolderName(pluginName, pluginId)}`
 
 /** 宿主自动塞进每个启用插件的「工作文件夹」设置行(见 enable())。文案在 enable() 那一刻求值,
  *  切语言后由文件末尾的订阅就地重刷 —— 认的是**对象身份**(下面这个 WeakSet)而不是 key:
@@ -212,7 +220,7 @@ function workFolderSetting(pluginName: string, pluginId: string): SettingContrib
   return relabelWorkFolder({
     key: AUTO_WORK_FOLDER_KEY,
     type: 'text',
-    default: sanitizeFolderName(pluginName, pluginId),
+    default: defaultWorkFolder(pluginName, pluginId),
     label: '',
   })
 }
@@ -400,13 +408,13 @@ function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppAp
           },
         }
       : {}),
-    // 工作文件夹(相对 vault 根):读标准设置 plugin.<id>.workFolder;没设或非法(空段/./..)→ 插件显示名。
+    // 工作文件夹(相对 vault 根):读标准设置 plugin.<id>.workFolder;没设或非法(空段/./..)→ Plugins/<插件显示名>。
     workFolder: () => {
       let v = ''
       try { v = localStorage.getItem(`plugin.${pluginId}.workFolder`) || '' } catch { /* ignore */ }
       v = v.trim().replace(/^\/+|\/+$/g, '')
       const bad = !v || v.split('/').some((seg) => !seg.trim() || seg === '.' || seg === '..')
-      return bad ? sanitizeFolderName(getName(), pluginId) : v
+      return bad ? defaultWorkFolder(getName(), pluginId) : v
     },
     // 打开文件类型视图在 amadeusNav(它引 pluginStore 的 matchFileType)→ 动态 import 破静态环。
     openFile: (p) => { if (ok()) void import('../../amadeusNav').then((m) => m.openFile(p)) },
@@ -1133,6 +1141,13 @@ export const usePluginStore = create<PluginState>((set, get) => {
         console.warn(`[amadeus] 插件 ${pluginId} 的 registerSelectionAction 缺 id / title / run,已忽略`)
         return
       }
+      // 可选字段写错了不拒收(动作表会把认不出的 scope 当成哪儿都不列、认不出的 output 当成缺省),只在这里说一声。
+      const { scope: sc, when, output } = action
+      if (sc != null && sc !== 'note' && sc !== 'all' && sc !== 'own' && !(Array.isArray(sc) && sc.every((v) => typeof v === 'string'))) {
+        console.warn(`[amadeus] 插件 ${pluginId} 的划线动作「${action.id}」scope 无效(要 'note' | 'all' | 'own' | 视图 id 数组),它不会出现在任何视图里`)
+      }
+      if (when != null && typeof when !== 'function') console.warn(`[amadeus] 插件 ${pluginId} 的划线动作「${action.id}」when 不是函数,已当作没写`)
+      if (output != null && output !== 'preview' && output !== 'none') console.warn(`[amadeus] 插件 ${pluginId} 的划线动作「${action.id}」output 只认 'preview' | 'none',已当作 'preview'`)
       set((s) => ({ selectionActions: [...s.selectionActions.filter((o) => !(o.pluginId === pluginId && o.item.id === action.id)), { pluginId, item: action }] }))
     },
     registerCommand: (command) =>
@@ -1406,6 +1421,29 @@ export const usePluginStore = create<PluginState>((set, get) => {
             if (mounted) mounted.refresh()
             else pendingRefresh = true
           },
+          dispose,
+        }
+      },
+      // 划线条:插件自己的视图用上宿主那一条(见 selectionBarSurface.tsx)。和 FloatingToc 一样不接管 root(只看它里面的
+      // 选区,条浮在 body 上),所以不走 claimHostMount。句柄同步可用:装好之前的 show / update 攒着。
+      mountSelectionBar: (root, opts = {}) => {
+        if (!ctxAlive()) return { show() {}, hide() {}, update() {}, dispose() {} }
+        if (!(root instanceof HTMLElement)) throw new TypeError('mountSelectionBar needs an HTMLElement')
+        if (opts === null || typeof opts !== 'object') throw new TypeError('mountSelectionBar options must be an object')
+        let mounted: import('./types').PluginSelectionBarHandle | null = null
+        let cancelled = false
+        const pending = { ...opts }
+        let shown: Parameters<import('./types').PluginSelectionBarHandle['show']>[0] | null = null
+        const dispose = scope.own('mount', () => { cancelled = true; mounted?.dispose(); mounted = null }, 'selectionBar')
+        void import('./selectionBarSurface').then((m) => {
+          if (cancelled) return
+          mounted = m.mountPluginSelectionBar(root, pluginId, pending)
+          if (shown) mounted.show(shown)
+        }).catch((e) => { console.error(`[amadeus] plugin "${pluginId}" selection bar mount failed`, e) })
+        return {
+          show(sel) { if (cancelled) return; if (mounted) mounted.show(sel); else shown = sel },
+          hide() { shown = null; mounted?.hide() },
+          update(patch) { if (!cancelled && patch && typeof patch === 'object') { Object.assign(pending, patch); mounted?.update(patch) } },
           dispose,
         }
       },

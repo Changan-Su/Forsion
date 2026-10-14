@@ -16,7 +16,7 @@ import type { ProjectSettings,
 import { clearDeviceSticky, noteDeviceRefusal } from '../services/deviceMarks' // P1-K7a
 import { DEFAULT_CLOUD_PROJECT, DEFAULT_LOCAL_WORKSPACE_KEY, ROOTLESS_WORKSPACE_KEY, cloudProjectKey, isHomeSession, isIndependentOrbitConfig, isTeamImageAvatar, sessionWorkspaceKey, SHOW_SYSTEM_PROMPT_KEY, THINKING_LEVELS } from '../types'
 import * as api from '../services/backendService'
-import { bindSession, clearSessionBindings, connectionKey, focusName, focusRef, focusTarget, forgetSession, homeTarget, inheritBinding, inheritChildRows, installEngineHost, knownTargets, nameOfRef, refForSession, restoreFocus, restoreSessionBindings, sameRef, setFocusTarget, targetForRef, targetForSession, targetKeyOf, withLocation, yieldToHomeListing, HOME_REF, type EngineTarget, type TargetKey, type TargetRef } from '../services/engine/targets'
+import { bindSession, clearSessionBindings, connectionKey, focusName, focusRef, focusTarget, forgetSession, homeTarget, inheritBinding, inheritChildRows, installEngineHost, knownTargets, nameOfRef, refForSession, refreshDesktopRelay, restoreFocus, restoreSessionBindings, sameRef, setFocusTarget, targetForRef, targetForSession, targetKeyOf, withLocation, yieldToHomeListing, HOME_REF, type EngineTarget, type TargetKey, type TargetRef } from '../services/engine/targets'
 import { capsForRef } from '../services/engine/targetCaps'
 import { healthOf, isRecoverable, isTerminal, noteHealth, probeTarget, resetHealth, useTargetHealth, waitReady } from '../services/engine/health'
 import { catalogFor, ensureCatalog, forgetCatalog, rememberCatalog } from '../services/engine/catalog'
@@ -568,14 +568,22 @@ function defaultModelOf(s: Pick<AppState, 'cfg' | 'modelsResp'> & { focusModelId
  * `send()` 却按 sessionMode/端能力把会话写进另一个项目（09-08 实报「聊完找不到」）。
  * 显式项目永远原样保留；Chat 的隐式落点是「不在项目中工作」；Work 再按 host 能力落
  * 本地默认工作区或默认云 Project。 */
+type NewSessionDirsSource = Pick<AppState, 'defaultWsDir' | 'homeDir'> & { focusDirs?: AppState['focusDirs'] }
+/** 新会话落点用的家目录 / 默认工作区:桌面把运行位置放在别的电脑上时是那台的(focusDirs),否则就是 homeDir / defaultWsDir
+ *  (手机 / 网页版换焦点时已把那台的换进这两个字段)。 */
+export function newSessionDirs(s: NewSessionDirsSource): { homeDir: string | undefined; defaultWsDir: string } {
+  return s.focusDirs ?? { homeDir: s.homeDir, defaultWsDir: s.defaultWsDir }
+}
+
 export function resolveNewSessionWorkspace(
-  s: Pick<AppState, 'sessionMode' | 'newChatWs' | 'desktopMode' | 'defaultWsDir' | 'homeDir' | 'tr'>,
+  s: Pick<AppState, 'sessionMode' | 'newChatWs' | 'desktopMode' | 'tr'> & NewSessionDirsSource,
   platform: 'desktop' | 'web' | 'mobile',
 ): WorkspaceDescriptor {
   if (s.newChatWs) return s.newChatWs
   if (newSessionPreset(s.sessionMode, null, platform) === 'chat') return rootlessWs(s.tr)
   if (isHostCapable(s)) {
-    const path = s.defaultWsDir || s.homeDir || null
+    const dirs = newSessionDirs(s)
+    const path = dirs.defaultWsDir || dirs.homeDir || null
     return {
       key: path || DEFAULT_LOCAL_WORKSPACE_KEY,
       name: s.tr('app.defaultWorkspace'),
@@ -601,12 +609,12 @@ export function resolveNewSessionWorkspace(
  *  没显式选时漏掉隐式落点 = 默认工作区项目的默认团队,界面说「默认 Agent」、实际起了多人团队)。
  *  口径:chat 预设不进项目;落点须是项目工作区(isProjectWorkspace,本地且有 path);家目录引擎拒收,跳过。 */
 export function newChatProjectPath(
-  s: Pick<AppState, 'sessionMode' | 'newChatWs' | 'desktopMode' | 'defaultWsDir' | 'homeDir' | 'tr'>,
+  s: Pick<AppState, 'sessionMode' | 'newChatWs' | 'desktopMode' | 'tr'> & NewSessionDirsSource,
   platform: 'desktop' | 'web' | 'mobile',
 ): string | null {
   const ws = resolveNewSessionWorkspace(s, platform)
   if (newSessionPreset(s.sessionMode, ws, platform) === 'chat') return null
-  return isProjectWorkspace(ws) && ws.path !== s.homeDir ? ws.path : null
+  return isProjectWorkspace(ws) && ws.path !== newSessionDirs(s).homeDir ? ws.path : null
 }
 
 const SESSION_MODE_KEY = 'forsion_tangu_session_mode'
@@ -934,6 +942,9 @@ export interface AppState {
   newChatModel: string | null
   /** P1-K6 S2:焦点在「我的电脑」时按设备记住的「上次用的模型」(home 恒 '')。新会话的默认模型回退链读它。 */
   focusModelId: string
+  /** 桌面:运行位置停在别的电脑上时,**那台**的家目录 / 默认工作区(新会话落点用,见 newSessionDirs)。null = 在这台电脑上。
+   *  桌面不像手机那样把它们换进 homeDir / defaultWsDir —— 侧栏、文件面板、设置读的都是这台电脑自己的目录。 */
+  focusDirs: { homeDir: string | undefined; defaultWsDir: string } | null
   /** 空态暂存的「下一个新会话」模式(DSH staged pick):null = Work/工作区默认;建会话时消费并清空。 */
   /** 侧栏 Chat/Work 模式(新对话行右侧胶囊;持久化 localStorage,web/mobile 也有):决定新会话的 preset 与侧栏列表的过滤。
    *  null = 用户没手选过 → 默认 Work(effectiveSessionMode),读时解析。已创建会话的模式仍是会话事实(空白会话锁),不随它变。 */
@@ -1043,9 +1054,13 @@ export interface AppState {
   toggleOpenWorkspace(key: string, open?: boolean): void
   workspaces(): WorkspaceDescriptor[]
   defaultWorkspace(): WorkspaceDescriptor
-  createInWorkspace(ws: WorkspaceDescriptor): Promise<void>
+  /** here = 这个工作区是**本端**的(侧栏分组的「+」、添加本地项目):桌面上运行位置若停在别的电脑上,先切回这台电脑再建 ——
+   *  不然这台电脑的路径会被拿去那台电脑上当项目目录。手机 / 网页版不认这个参数(那里本端 = 云端,没有本机路径)。 */
+  createInWorkspace(ws: WorkspaceDescriptor, opts?: { here?: boolean }): Promise<void>
   newSession(): Promise<void>
   addLocalWorkspace(): Promise<void>
+  /** 从 Git 克隆:弹克隆对话框,克隆成功后把那个文件夹加成项目(同 addLocalWorkspace 的落点)。 */
+  cloneGitProject(): Promise<void>
   renameSession(id: string, title: string): Promise<void>
   setSessionEmoji(id: string, emoji: string | null): Promise<boolean>
   archiveSession(id: string, archived: boolean): Promise<void>
@@ -1266,6 +1281,7 @@ export const useApp = create<AppState>((set, get) => ({
   newChatCfg: {},
   newChatModel: null,
   focusModelId: '',
+  focusDirs: null,
   sessionMode: loadSessionMode(),
   pendingDraft: null,
   pendingShare: null,
@@ -1902,8 +1918,9 @@ export const useApp = create<AppState>((set, get) => ({
         }
         checkQuotaExhausted(get().toast, get().tr)
         setTimeout(() => { void get().refreshSessions(get().cfg).catch(() => {}) }, 6000)
-        // 输入建议(默认关):只给眼前这个会话拉;后台会话收尾、或后面还排着要接着跑的,只作废旧的那句。
-        if (sessionId === get().activeId && !get().runningBySession[sessionId] && !queueBusy(get(), sessionId)) void requestSuggestion(sessionId, runId)
+        // 输入建议(默认关):不看是不是眼前这个会话 —— 这一轮跑着的时候切走了,回来也该有那一句。
+        // 后面还排着要接着跑的,只作废旧的那句。
+        if (!get().runningBySession[sessionId] && !queueBusy(get(), sessionId)) void requestSuggestion(sessionId, runId)
         else clearSuggestion(sessionId)
         break
       case 'error':
@@ -2056,6 +2073,7 @@ export const useApp = create<AppState>((set, get) => ({
   subscribeRun: (sessionId, runId, assistantId) => {
     if (subscribedRuns.has(runId)) return
     subscribedRuns.add(runId)
+    clearSuggestion(sessionId) // 输入建议只活到下一轮起跑;在这里作废,不看这个会话的输入框此刻挂没挂着
     const ac = new AbortController()
     runAborts.set(runId, ac)
     const assistantRef = { current: assistantId }
@@ -2374,6 +2392,9 @@ export const useApp = create<AppState>((set, get) => ({
     // S4:连同会话 → 电脑的绑定一起读回(按账号落盘),重载后打开那台上的会话仍打那台。
     restoreSessionBindings()
     if (restoreFocus().kind === 'unit') applyFocusEffects(HOME_REF)
+    // 桌面作为调用方:中转口经主进程 IPC 异步到位,到了才读得到按账号落盘的会话绑定。焦点不恢复 —— 桌面开机恒在「这台电脑」,
+    // 上次选的那台由 runLocationStore 的对账在它 ready 时再切过去。
+    void refreshDesktopRelay().then((changed) => { if (changed) restoreSessionBindings() })
     if (stored?.mode === 'managed') {
       if (stored.backendState?.state === 'ready') void get().connect(merged)
       else if (get().connState !== 'ok') set({ connState: 'idle', connMessage: t('app.managedBackendStarting') })
@@ -2446,16 +2467,8 @@ export const useApp = create<AppState>((set, get) => ({
         notifyClientSurfaces('reset')
       }
       void window.tangu?.authStatus?.().then((a) => { if (generation === authGeneration) set({ authInfo: a }) }).catch(() => {})
-      // Some transitions await the engine restart before emitting auth:changed, so
-      // ready may already have arrived. Other paths still reconnect from the later broadcast.
-      if (managed) void window.tangu?.backendStatus?.().then((status) => {
-        if (generation === authGeneration && status.state === 'ready') connectFromStatus()
-      }).catch(() => {})
-      else void window.tangu?.getConfig?.().then((c) => {
-        if (generation !== authGeneration) return
-        const effective = { backendUrl: c.backendUrl, token: c.token, modelId: c.modelId, imageModelId: c.imageModelId }
-        set({ desktopConfig: c, cfg: effective })
-        // P1-K6 S2:焦点按账号落盘 —— 换了号就读新账号的那份(没有 = home);绑定表 / 健康 / 目录缓存都是上个账号的
+      // P1-K6 S2:焦点按账号落盘 —— 换了号就读新账号的那份(没有 = home);绑定表 / 健康 / 目录缓存都是上个账号的
+      const resetEngineScope = (): void => {
         clearSessionBindings()
         endFocusGeneration()
         resetHealth()
@@ -2464,6 +2477,48 @@ export const useApp = create<AppState>((set, get) => ({
         const prevFocus = focusRef()
         if (restoreFocus().kind === 'unit') applyFocusEffects(prevFocus)
         else restoreHomeProfile(prevFocus)
+      }
+      // 桌面作为调用方:主进程的中转口(连同它认的账号)跟着登录态变,先重取(手机 / 网页版上是空操作)。
+      const relay = refreshDesktopRelay()
+      // Some transitions await the engine restart before emitting auth:changed, so
+      // ready may already have arrived. Other paths still reconnect from the later broadcast.
+      if (managed) {
+        // 本机会话不属于云端账号、留着;开在别的电脑上的那些(注入的会话 / 它们的订阅 / 绑定 / 焦点)是上个账号的,账号变了就收掉。
+        void relay.then((changed) => {
+          if (!changed || generation !== authGeneration) return
+          const st = get()
+          const remote = new Set([...st.sessions, ...st.archivedSessions].filter((x) => x.location?.kind === 'unit').map((x) => x.id))
+          for (const sid of remote) {
+            const runId = st.runningBySession[sid]
+            if (!runId) continue
+            runAborts.get(runId)?.abort()
+            runAborts.delete(runId)
+            subscribedRuns.delete(runId)
+            clearInterval(runWatchdogs.get(runId))
+            runWatchdogs.delete(runId)
+          }
+          const wasRemote = focusRef().kind === 'unit'
+          resetEngineScope()
+          const keep = <T,>(m: Record<string, T>): Record<string, T> => Object.fromEntries(Object.entries(m).filter(([sid]) => !remote.has(sid)))
+          set((s) => ({
+            sessions: s.sessions.filter((x) => !remote.has(x.id)),
+            archivedSessions: s.archivedSessions.filter((x) => !remote.has(x.id)),
+            activeId: s.activeId && remote.has(s.activeId) ? null : s.activeId,
+            messagesBySession: keep(s.messagesBySession), configBySession: keep(s.configBySession), runningBySession: keep(s.runningBySession),
+          }))
+          // 焦点原来停在别的电脑上:目录是那台的,回到这台电脑重连一次(引擎若正在带新令牌重启,下面的 ready 广播会再连)。
+          if (wasRemote) void window.tangu?.backendStatus?.().then((status) => {
+            if (generation === authGeneration && status.state === 'ready') connectFromStatus()
+          }).catch(() => {})
+        })
+        void window.tangu?.backendStatus?.().then((status) => {
+          if (generation === authGeneration && status.state === 'ready') connectFromStatus()
+        }).catch(() => {})
+      } else void relay.then(() => window.tangu?.getConfig?.()).then((c) => {
+        if (!c || generation !== authGeneration) return
+        const effective = { backendUrl: c.backendUrl, token: c.token, modelId: c.modelId, imageModelId: c.imageModelId }
+        set({ desktopConfig: c, cfg: effective })
+        resetEngineScope()
         if (effective.token) void get().connect(effective)
       })
     })
@@ -2494,9 +2549,10 @@ export const useApp = create<AppState>((set, get) => ({
       // 「上传工作区(25MB 限制)」而非本机路径插入,且因 loadedHistory 已标记不再重拉 → 刷新前一直卡住。
       // 从会话记录的 project_path 派生 host 兜底,真实 config 覆盖其上(用户显式设过 sandbox 时仍以 config 为准)。
       const sess = get().sessions.find((x) => x.id === sessionId) || get().archivedSessions.find((x) => x.id === sessionId)
+      // 会话在别的电脑上:不并这一端的笔记库根(与建会话 / 发消息同一口径;否则它存进会话配置,下一条消息就带着本机路径发给那台)
       const base: AgentConfig = withAmadeusWorkspace(sess?.project_path
         ? { execMode: 'host', approvalMode: DEFAULT_APPROVAL, cwd: sess.project_path }
-        : {}, activeAmadeusRoot())
+        : {}, refForSession(sessionId).kind === 'unit' ? null : activeAmadeusRoot())
       // 本地已有的键优先(local-wins):本地每次改配置都会同步 PUT,永远不旧于服务端;而这里的
       // fetch 可能与「新会话初始配置 PUT」竞速,整体替换会把刚选好的 agentSlug/thinkingLevel 冲掉。
       set((s) => ({ configBySession: { ...s.configBySession, [sessionId]: { ...base, ...config, ...(s.configBySession[sessionId] || {}) } } }))
@@ -2705,9 +2761,13 @@ export const useApp = create<AppState>((set, get) => ({
     return list
   },
 
-  createInWorkspace: async (ws) => {
+  createInWorkspace: async (ws, opts) => {
     const t = get().tr
     try {
+      if (opts?.here && currentPlatform() === 'desktop' && focusRef().kind === 'unit') await setFocusTarget(HOME_REF)
+      // S4:新会话建在焦点上 —— 位置与项目目录在**同一段同步代码**里定下(下面等项目默认项的空当里焦点可能被换走:
+      // 目录按这台电脑算、位置却读到那台,就是把这台电脑的路径发给那台;Codex 评审 10-14)。here = 钉死在本端。
+      const loc: TargetRef = opts?.here && currentPlatform() === 'desktop' ? HOME_REF : focusRef()
       // 通道文件夹:走引擎通道会话接口(盖默认 Agent/模型 + 切为正在连接),不是普通 createSession。
       if (ws.kind === 'channel' && ws.channel) {
         const sid = await api.newChannelSession(homeTarget(), ws.channel)
@@ -2720,7 +2780,8 @@ export const useApp = create<AppState>((set, get) => ({
       // 模式先于工作区:chat 会话恒 projectless + sandbox(方案 §2.1 接缝 0,强制只写在客户端建会话处;引擎绝不按 preset 改 execMode)。
       const preset = newSessionPreset(get().sessionMode, ws, currentPlatform())
       const chat = preset === 'chat'
-      const path = !chat && ws.kind === 'local' ? (ws.path || get().defaultWsDir || get().homeDir || null) : null
+      const dirs = newSessionDirs(get())
+      const path = !chat && ws.kind === 'local' ? (ws.path || dirs.defaultWsDir || dirs.homeDir || null) : null
       const cloudProject = !chat && ws.kind === 'cloud' ? (ws.project || DEFAULT_CLOUD_PROJECT) : null
       // 新会话延续「上次用的」档位(审批 + 思考;模型走 cfg.modelId 的老路)。初始配置随建会话请求**原子**落库
       // (引擎 ≥ 本版 POST 接 agent_config;老引擎忽略该字段 → 回来的 agent_config 为空,再补一次 PUT):
@@ -2728,8 +2789,7 @@ export const useApp = create<AppState>((set, get) => ({
       const sticky = stickyDefaults(get().desktopConfig, !!path, preset)
       // 项目默认项(PROJECT 详情里定的,本机):只对用户自己添加的本地项目生效,夹在「上次用的档位」之上;等一次本地 GET 无妨,这里是按钮点击。
       const projectDefaults = path && isProjectWorkspace(ws) ? projectDefaultsForNewSession(await get().ensureProjectSettings(path).catch(() => null), get().teams) : { config: {} }
-      // S4:新会话建在焦点上 —— 位置在发请求**之前**定下(回来时焦点可能已换),回来即绑定(路由真源),插列表前经 withLocation 打标
-      const loc = focusRef()
+      // 回来即绑定 loc(路由真源),插列表前经 withLocation 打标
       const base = applyPreset(path
         ? { ...newSessionConfig(sticky, projectDefaults.config), execMode: 'host', cwd: path }
         : { ...sticky, execMode: 'sandbox', ...(cloudProject ? { workspaceProject: cloudProject } : {}) }, preset)
@@ -2773,7 +2833,15 @@ export const useApp = create<AppState>((set, get) => ({
   addLocalWorkspace: async () => {
     const dir = await window.tangu?.pickDirectory?.({ purpose: 'project' })
     if (!dir) return
-    await get().createInWorkspace({ key: dir, name: dir.split('/').filter(Boolean).pop() || dir, kind: 'local', path: dir })
+    await get().createInWorkspace({ key: dir, name: dir.split('/').filter(Boolean).pop() || dir, kind: 'local', path: dir }, { here: true })
+  },
+
+  cloneGitProject: async () => {
+    // 动态引入:对话框带样式和图标,store 不在模块加载时拖它进来
+    const { askGitClone } = await import('../components/GitCloneDialog')
+    const cloned = await askGitClone()
+    if (!cloned) return
+    await get().createInWorkspace({ key: cloned.path, name: cloned.name, kind: 'local', path: cloned.path })
   },
 
   refreshCloudProjects: async (c) => {
@@ -3089,6 +3157,8 @@ export const useApp = create<AppState>((set, get) => ({
       // S2:焦点刚切到「我的电脑」时,它的家目录 / 默认工作区还在路上(/unit/config):等一下(≤3s),
       // 否则第一条消息会按「没有 host FS 路径」建出沙箱会话
       if (focusRef().kind === 'unit' && focusProfilePending) await Promise.race([focusProfilePending, delay(3000)])
+      // S4:位置与下面的项目目录在同一段同步代码里定下(见 createInWorkspace),回来即绑定
+      const loc = focusRef()
       const ws = resolveNewSessionWorkspace(get(), currentPlatform())
       // 设备页(unitPage)与 managed 同判:引擎是对方的 managed 引擎,有真实 host FS(defaultWsDir/homeDir
       // 已经 /unit/config 透传)。判成 external 会把新对话全建成云端 sandbox —— host 工具整个消失
@@ -3099,9 +3169,10 @@ export const useApp = create<AppState>((set, get) => ({
       const preset = newSessionPreset(get().sessionMode, ws, currentPlatform())
       const chat = preset === 'chat'
       const rootless = chat || ws?.kind === 'rootless'
+      const dirs = newSessionDirs(get())
       const path = chat ? null : ws
-        ? (ws.kind === 'local' ? (ws.path || get().defaultWsDir || get().homeDir || null) : null)
-        : (hostCapable ? (get().defaultWsDir || get().homeDir || null) : null)
+        ? (ws.kind === 'local' ? (ws.path || dirs.defaultWsDir || dirs.homeDir || null) : null)
+        : (hostCapable ? (dirs.defaultWsDir || dirs.homeDir || null) : null)
       // 云沙箱新会话一律落云端 Project(选择器未选 = 默认 Tangu 项目):文件跨会话共享且 Penzor 可见。
       // 无根会话刻意不传 Project:引擎按 session 隔离临时工作区,不会混进默认 Tangu Project。
       const cloudProject = rootless ? null : path ? null : (ws?.kind === 'cloud' ? (ws.project || DEFAULT_CLOUD_PROJECT) : DEFAULT_CLOUD_PROJECT)
@@ -3116,8 +3187,6 @@ export const useApp = create<AppState>((set, get) => ({
       // 初始配置先算好、随建会话请求原子落库(老引擎忽略 agent_config → 回来为空 → 补 PUT;同 createInWorkspace)。
       // 显式选择(newChatCfg)> 项目默认 > 上次用的档位(newSessionConfig)。
       const draft = newSessionConfig(stickyDefaults(get().desktopConfig, !!path, preset), projectDefaults.config, get().newChatCfg)
-      // S4:位置在发请求之前定下,回来即绑定(见 createInWorkspace)
-      const loc = focusRef()
       const base = applyPreset(path
         ? { ...draft, execMode: 'host', cwd: path }
         // 草稿里的额外文件夹(ExtraFolders)只给本机会话:云端 / 无项目 / Chat 会话不带(那里看不到那几枚胶囊,带进去就是没人看见的授权)
@@ -3820,7 +3889,18 @@ export const useApp = create<AppState>((set, get) => ({
     if (def?.model) set({ newChatModel: def.model })
   },
 
-  setNewChatWs: (ws) => { set({ newChatWs: ws }); if (isProjectWorkspace(ws)) void get().ensureProjectSettings(ws.path) },
+  setNewChatWs: (ws) => {
+    // 桌面:运行位置在别的电脑上时,只有项目药丸的远端列表给的(带那台的 unitId)才是那台的项目;其余来路(Coding Studio、项目详情、
+    // 创作卡片 …)给的都是这台电脑的文件夹 —— 运行位置先回这台电脑,不然这台电脑的路径会被拿去那台当项目目录。
+    // refocus 会清草稿的项目,所以等它做完再落。
+    const f = focusRef()
+    if (ws && currentPlatform() === 'desktop' && f.kind === 'unit' && ws.unitId !== f.unitId) {
+      void setFocusTarget(HOME_REF).then(() => get().setNewChatWs(ws)).catch(() => {})
+      return
+    }
+    set({ newChatWs: ws })
+    if (isProjectWorkspace(ws)) void get().ensureProjectSettings(ws.path)
+  },
   setNewChatCfg: (fn) => {
     // 草稿同一条规矩:团队模式下没有计划模式(见 patchSessionConfig)
     const prev = get().newChatCfg
@@ -4030,12 +4110,16 @@ function applyFocusEffects(prev: TargetRef): void {
   const next = focusRef()
   if (next.kind !== 'unit') return
   const st = useApp.getState()
-  if (prev.kind === 'home') homeProfile = { homeDir: st.homeDir, defaultWsDir: st.defaultWsDir }
+  // 桌面:这台电脑自己的 homeDir / defaultWsDir 不动(侧栏 / 文件面板 / 设置在读),那台的另放 focusDirs
+  const desktop = currentPlatform() === 'desktop'
+  const putDirs = (d: { homeDir: string | undefined; defaultWsDir: string }): void => useApp.setState(desktop ? { focusDirs: d } : d)
+  if (!desktop && prev.kind === 'home') homeProfile = { homeDir: st.homeDir, defaultWsDir: st.defaultWsDir }
   const generation = catalogToken()
-  useApp.setState({ homeDir: undefined, defaultWsDir: '', focusModelId: readFocusModel(next) })
+  putDirs({ homeDir: undefined, defaultWsDir: '' })
+  useApp.setState({ focusModelId: readFocusModel(next) })
   const pending: Promise<void> = unitHostProfile(focusTarget()).then((profile) => {
     if (generation !== catalogToken() || !profile) return
-    useApp.setState({ homeDir: profile.homeDir ?? undefined, defaultWsDir: profile.defaultWorkspaceDir || '' })
+    putDirs({ homeDir: profile.homeDir ?? undefined, defaultWsDir: profile.defaultWorkspaceDir || '' })
   }).finally(() => { if (focusProfilePending === pending) focusProfilePending = null })
   focusProfilePending = pending
   void ensureCatalog('home', { force: true })
@@ -4047,7 +4131,7 @@ function restoreHomeProfile(prev: TargetRef): void {
   if (homeProfile) useApp.setState({ homeDir: homeProfile.homeDir, defaultWsDir: homeProfile.defaultWsDir })
   homeProfile = null
   focusProfilePending = null
-  useApp.setState({ focusModelId: '' })
+  useApp.setState({ focusModelId: '', focusDirs: null })
   forgetCatalog('home')
 }
 
@@ -4318,6 +4402,9 @@ if (import.meta.env.DEV && typeof window !== 'undefined') {
   // 台架在它之前经这里切焦点、看健康表;生产构建同样没有这行。
   ;(window as unknown as Record<string, unknown>).__forsionEngineTargets = {
     setFocusTarget, focusRef,
+    // P1-K7a:用户亲手选「在哪运行」(= 弹层 / 胶囊走的那一条:记住,且这份草稿不再被对账改掉)。只改焦点的 setFocusTarget 不算亲手选,
+    // 新草稿会被对账拉回记住的位置 —— 要测「记住上次的选择」就走这里。动态 import:runLocationStore 反过来依赖本文件。
+    setRunLocation: async (loc: TargetRef, name?: string) => (await import('./runLocationStore')).setDraftLocation(loc, { explicit: true, name: name ?? null }),
     // S4:两台并存台架看「这条会话绑在哪」与已知目标集合(R-20)
     locationOf: (sid: string) => refForSession(sid),
     known: () => knownTargets().map((t) => t.key),

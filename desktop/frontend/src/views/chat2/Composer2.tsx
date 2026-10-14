@@ -54,7 +54,7 @@ import { useCapsuleSlide } from '../../components/capsuleTabs'
 import { composeQuotes } from './quotes'
 import { NEW_CHAT_DRAFT, clearDraft, moveDraft, setDraftField, useDraftField } from './composerDrafts'
 import { ContextUsagePop } from './ContextUsagePop'
-import { clearSuggestion, usePromptSuggest } from './promptSuggest'
+import { usePromptSuggest } from './promptSuggest'
 import './composer2.css'
 import { homeTarget, targetForSession, targetKeyOf, useComposerRef } from '../../services/engine/targets'
 
@@ -680,10 +680,10 @@ export const Composer2: React.FC<{
   const callSessionId = useSyncExternalStore(subscribeCallPresence, getCallPresence)
   const inCall = !!activeSessionId && callSessionId === activeSessionId
   // 输入建议(promptSuggest.ts,默认关):一轮结束后猜的下一句,当占位文字显示在空输入框里,Tab 采用。
-  // 只认明确给了 sessionId 的输入框(聊天视图);新一轮一起跑就作废。
+  // 只认明确给了 sessionId 的输入框(聊天视图)。和占位文字一样常驻:只有新一轮起跑才作废(appStore subscribeRun),
+  // 打字 / Tab 采用都只是因为输入框不空而藏起来,删空了还在。
   const suggestion = usePromptSuggest((st) => (sessionId ? st.bySession[sessionId] : undefined) || '')
   const showSuggestion = !!suggestion && !draft && !running && !disabled && !inCall && !touchUi
-  useEffect(() => { if (running && sessionId) clearSuggestion(sessionId) }, [running, sessionId])
   // Mini 那边:有新话 / 代跑 run → 拉一次本会话;改了 Effort → 同步本窗缓存(否则下一条打字消息还按旧档跑)。
   useEffect(() => {
     if (!liveOwnerResolved) return
@@ -736,6 +736,9 @@ export const Composer2: React.FC<{
   }
 
   const isHost = execConfig.execMode === 'host'
+  // 会话在**这台电脑**上跑且有本机文件系统。桌面把会话建到别的电脑上时 isHost 仍是 true(那台的 host FS),但这台电脑的
+  // 路径 / 笔记库 / 拖进来的文件那台读不到 —— 凡是往输入框里放本机绝对路径的入口都看它,不看 isHost(手机上这些桥本来就没有)。
+  const localFs = isHost && composerRef.kind === 'home'
   const isChat = preset === 'chat'
   // 会话没存档时引擎按当前 Agent 定义的档跑(applyAgentActivation 补会话缺省的键),药丸照同一条链显示:
   // 私聊 / 团队会话由引擎建、不带审批档与思考档,兜底成「替我批准」「中」就是谎报(09-22 反馈:药丸替我批准,实际按 Agent 的只读逐次弹)。
@@ -1131,7 +1134,7 @@ export const Composer2: React.FC<{
     return () => { live = false }
   }, [refPickerOn])
   useEffect(() => {
-    if (!fileRefCtx || !isHost) return // 本地文件/笔记候选仅 host;云端会话只出会话候选
+    if (!fileRefCtx || !localFs) return // 本地文件/笔记候选仅本机 host;云端 / 别的电脑上的会话只出会话候选
     if (window.amadeus) ensureAmadeusReady() // 懒引导 vault(幂等):聊天先于 Amadeus 打开时,笔记候选也在
     const root = execConfig.cwd
     // 只认 refFilesFor(已发射标记):打字使 fileRefCtx 每键变化,若依赖 refFiles 是否就绪,
@@ -1156,7 +1159,7 @@ export const Composer2: React.FC<{
       return found
     }
     void run().then((list) => { if (refFilesFor.current === root) setRefFiles(list) }).catch(() => {})
-  }, [fileRefCtx, execConfig.cwd, isHost])
+  }, [fileRefCtx, execConfig.cwd, localFs])
   const vaultPages = usePageStore((s) => s.pages)
   const vaultRoot = usePageStore((s) => s.vaultRoot)
   const pageIcons = usePageStore((s) => s.icons)
@@ -1198,14 +1201,14 @@ export const Composer2: React.FC<{
     return [
       ...(appList?.windows ?? []).map((w): RefCand => ({ p: w.title, app: { kind: 'window', id: w.id, name: w.title }, desc: t('input.ref.windowOf', { app: w.app }) })),
       ...(appList?.apps ?? []).map((a): RefCand => ({ p: a.name, app: { kind: 'app', id: a.id, name: a.name }, desc: t(a.running ? 'input.ref.appRunning' : 'input.ref.appIdle') })),
-      ...(isHost ? vaultPages.map((p) => ({ p, note: true as const })) : []),
-      ...(isHost ? (refFiles ?? []).map((p) => ({ p })) : []),
+      ...(localFs ? vaultPages.map((p) => ({ p, note: true as const })) : []),
+      ...(localFs ? (refFiles ?? []).map((p) => ({ p })) : []),
       ...chatSessions
         .filter((s) => s.id !== activeSessionId)
         .slice(0, 300)
         .map((s) => ({ p: displaySessionTitle(s.title, t), session: { id: s.id, title: displaySessionTitle(s.title, t), summary: s.summary } })),
     ]
-  }, [fileRefCtx, appList, refFiles, vaultPages, chatSessions, activeSessionId, isHost, t])
+  }, [fileRefCtx, appList, refFiles, vaultPages, chatSessions, activeSessionId, localFs, t])
   const refCatList = useMemo(() => refCats(refCands), [refCands])
   const refCatNow: RefCat = refCatList.includes(refCat) ? refCat : 'all'
   // 文件名前缀命中 > 文件名包含 > 仅路径包含;不够 10 条再拿模糊命中补位(见 ./refRank)。
@@ -1246,7 +1249,7 @@ export const Composer2: React.FC<{
     }
     // 仅 host 会话:引用是一条**本机绝对路径**,云端/沙箱会话的 agent 读不到 —— 挂上去就是
     // 「显示了路径但模型读不到」,与 [[ 候选、粘贴本机文件那两处的门控同一条理由。
-    if (!isHost || !autoRefFromMain || !mainRefKey) return null
+    if (!localFs || !autoRefFromMain || !mainRefKey) return null
     const notePath = mainRefKey === 'note'
       ? mainNote
       : mainRefKey.startsWith('note:') ? mainRefKey.slice('note:'.length) : ''
@@ -1256,7 +1259,7 @@ export const Composer2: React.FC<{
     if (!chip || autoRefOff === chip.token) return null
     if (refChips.some((c) => c.token === chip.token)) return null // 用户已显式引过同一个 → 不重复挂
     return chip
-  }, [appRef, isHost, autoRefFromMain, mainRefKey, mainNote, vaultRoot, autoRefOff, refChips])
+  }, [appRef, localFs, autoRefFromMain, mainRefKey, mainNote, vaultRoot, autoRefOff, refChips])
   const rawRefChips = useMemo(() => (autoChip ? [autoChip, ...refChips] : refChips), [autoChip, refChips])
   const runChips = useMemo(() => runChipOwners(refChips), [refChips])
   const inlineRuns = useMemo(() => findRuns(draft, (run) => runChips.has(run)), [draft, runChips])
@@ -1480,7 +1483,7 @@ export const Composer2: React.FC<{
   /** OS 文件落下:host 走本机路径芯片,其余上传成工作区附件。 */
   const onFilesDrop = (files: FileList): void => {
     if (!files.length) return
-    if (isHost && window.tangu?.getPathForFile) {
+    if (localFs && window.tangu?.getPathForFile) {
       const paths = Array.from(files)
         .map((f) => { try { return window.tangu!.getPathForFile!(f) } catch { return '' } })
         .filter(Boolean)
@@ -1827,8 +1830,6 @@ export const Composer2: React.FC<{
               setMentionDismissed(false)
               setRefDismissed(false)
               if (histPos) setHistPos(0) // 用户实际打字 → 退出历史召回态
-              // 动手打字 = 不要这一轮的建议了。不看眼下有没有灰字:请求可能还在路上,不掐掉的话它回来后、用户把字删空时会冒出来。
-              if (sessionId && e.target.value) clearSuggestion(sessionId)
               if (!e.target.value.includes('@')) { setMentionedSlug(''); setMentionAgents([]) }
               autoGrow()
             }}
@@ -1848,7 +1849,7 @@ export const Composer2: React.FC<{
                   // 仅 host 会话才引用本机绝对路径(与 onDrop 一致);云端/沙箱会话模型读不到本机路径,
                   // 一律回退上传到会话工作区,避免「显示了路径但模型读不到、文件也没进工作区」。
                   let p = ''
-                  if (isHost) { try { p = window.tangu?.getPathForFile?.(f) || '' } catch { p = '' } }
+                  if (localFs) { try { p = window.tangu?.getPathForFile?.(f) || '' } catch { p = '' } }
                   if (p) paths.push(p)
                   else leftover.push(f) // 无路径(云端/网页/剪贴板非磁盘文件)→ 上传工作区
                 }
@@ -1897,7 +1898,6 @@ export const Composer2: React.FC<{
                 e.preventDefault()
                 const text = suggestion
                 setDraft(text)
-                if (sessionId) clearSuggestion(sessionId)
                 requestAnimationFrame(() => {
                   const ta = taRef.current
                   if (ta) { ta.selectionStart = ta.selectionEnd = text.length; setCursorPos(text.length) }
@@ -2016,7 +2016,7 @@ export const Composer2: React.FC<{
               open={openMenu === 'add'}
               disabled={disabled}
               activeSessionId={activeSessionId}
-              canUsePathPicker={isHost}
+              canUsePathPicker={localFs}
               onOpenChange={(next) => setOpenMenu(next ? 'add' : null)}
               onNewSession={onNewSession}
               onAddAgent={!running && !isChat && !isEngine ? onAddAgent || (onGroupChange ? () => setGroupSetupOpen(true) : undefined) : undefined}

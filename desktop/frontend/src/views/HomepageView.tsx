@@ -50,7 +50,9 @@ import { allSeries, useAchievements } from '../achievements/store'
 import { displaySessionTitle } from '../sessionTitle'
 import { ProjectSelector } from '../components/ProjectSelector'
 import { ExtraFolders } from '../components/ExtraFolders'
+import { useTargetComposerPlaceholder } from '../components/TargetHealthNotice'
 import { RunLocationPicker } from '../components/RunLocationPicker' // P1-K7a
+import { useRemoteNewChatWorkspaces } from '../stores/newChatWorkspaces'
 import { AgentSelectStrip } from '../components/AgentSelectStrip'
 import { Composer2 } from './chat2/Composer2'
 import { registerMessages, useI18n, type Locale } from '../i18n'
@@ -103,12 +105,15 @@ type HomeDispatch = (
 function HomepageChatbox({ onDispatch, onStartCall, onInputModeChange }: { onDispatch: HomeDispatch; onStartCall: () => Promise<string | null>; onInputModeChange: (focused: boolean) => void }) {
   const vaultRoot = usePageStore((state) => state.vaultRoot)
   const activeSpaceId = useSpaceStore((state) => state.activeSpaceId)
+  // 运行位置在一台还没连上的电脑上:占位说「等那台连上」(同 ChatView),不退回本端的「先在设置里连接后端」
+  const targetPlaceholder = useTargetComposerPlaceholder(null)
   const s = useApp(useShallow((state) => ({
     cfg: state.cfg,
     desktopConfig: state.desktopConfig,
     desktopMode: state.desktopMode,
     homeDir: state.homeDir,
     defaultWsDir: state.defaultWsDir,
+    focusDirs: state.focusDirs, // 桌面:运行位置在别的电脑上时新会话的落点用那台的目录
     modelsResp: state.modelsResp,
     newChatWs: state.newChatWs,
     newChatCfg: state.newChatCfg,
@@ -134,6 +139,7 @@ function HomepageChatbox({ onDispatch, onStartCall, onInputModeChange }: { onDis
     openSettings: state.openSettings,
     setNewChatWs: state.setNewChatWs,
     addLocalWorkspace: state.addLocalWorkspace,
+    cloneGitProject: state.cloneGitProject,
     addCloudProject: state.addCloudProject,
     workspaces: state.workspaces,
     sessions: state.sessions,
@@ -147,6 +153,7 @@ function HomepageChatbox({ onDispatch, onStartCall, onInputModeChange }: { onDis
   // 也不能在 Chat 时无提示地把会话放进「不在项目中工作」。
   const platform = currentPlatform()
   const targetWorkspace = resolveNewSessionWorkspace(s, platform)
+  const remoteWs = useRemoteNewChatWorkspaces() // 桌面:运行位置在别的电脑上 → 项目药丸列那台的项目
   const workspaceList = useMemo(() => s.workspaces(), [
     s.workspaces, s.sessions, s.archivedSessions, s.cloudProjects, s.channelWorkspaces,
     s.defaultWsDir, s.homeDir, s.tr, vaultRoot,
@@ -197,11 +204,13 @@ function HomepageChatbox({ onDispatch, onStartCall, onInputModeChange }: { onDis
       <div className="hp-projectbar">
         <RunLocationPicker />
         <ProjectSelector
-          workspaces={workspaceList}
+          workspaces={remoteWs ?? workspaceList}
           value={targetWorkspace.key}
           onChange={s.setNewChatWs}
-          onAddProject={window.tangu?.pickDirectory ? () => void s.addLocalWorkspace() : undefined}
-          onAddCloudProject={(name) => void s.addCloudProject(name)}
+          // 「添加本地项目 / 云端项目」加的都是这一端的:运行位置在别的电脑上时不给
+          onAddProject={!remoteWs && window.tangu?.pickDirectory ? () => void s.addLocalWorkspace() : undefined}
+          onCloneProject={!remoteWs && window.tangu?.pickDirectory ? () => void s.cloneGitProject() : undefined}
+          onAddCloudProject={remoteWs ? undefined : (name) => void s.addCloudProject(name)}
         />
         <ExtraFolders />
       </div>
@@ -212,6 +221,7 @@ function HomepageChatbox({ onDispatch, onStartCall, onInputModeChange }: { onDis
         prepareLiveSession={onStartCall}
         autoFocus={false}
         disabled={s.connState !== 'ok'}
+        disabledPlaceholder={targetPlaceholder}
         running={false}
         execConfig={config}
         models={visibleModels}

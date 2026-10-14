@@ -1,6 +1,6 @@
 import { agentDescription, isStockAgent } from '../components/builtinAgentDescriptions'
 import { useEffect, useId, useMemo, useRef, useState, type ChangeEvent, type CSSProperties } from 'react'
-import { BookOpen, Bot, CalendarClock, Check, ChevronRight, ExternalLink, ArrowUp, ArrowDown, ImageUp, Loader2, MoreHorizontal, Plus, Plug, Search, Settings2, Sparkles, Sprout, Star, Trash2, X } from 'lucide-react'
+import { BookOpen, Bot, CalendarClock, Check, ChevronRight, ExternalLink, ArrowUp, ArrowDown, ImageUp, Loader2, MoreHorizontal, Plus, Plug, ScrollText, Search, Settings2, Sparkles, Sprout, Star, Trash2, X } from 'lucide-react'
 import { useShallow } from 'zustand/react/shallow'
 import { activeMainPanel, useListFirst, useWorkspace } from '@lcl/engine'
 import { ListFab } from '../components/phoneList'
@@ -10,6 +10,7 @@ import { useI18n } from '../i18n'
 import { deleteAgentAvatar, fetchAgentAvatar, getAgentHarness, listAgents, listSkills, listTools, putAgentsMeta, renameAgentDef, saveAgentDef, uploadAgentAvatar } from '../services/backendService'
 import { openAgentProfile } from './agentProfileNav'
 import { AgentMemoryPanel } from '../components/AgentMemoryPanel'
+import { AgentLogPanel } from '../components/AgentLogPanel'
 import { AgentMemoryModal } from '../components/AgentMemoryModal'
 import { HumanCollaborationPanel } from '../components/HumanCollaborationPanel'
 import { humanRewritable, type HumanJump } from '../services/humanCollaboration'
@@ -33,7 +34,8 @@ import { homeTarget } from '../services/engine/targets'
 type Section = 'config' | 'skills' | 'mcp' | 'growth' | 'schedule' | 'human'
 // 成长 = Agent 随时间积累的两层:记忆(它知道什么)+ 进化(HARNESS 工作笔记:它怎么做事)。09-19 从两个一级标签并成一个,
 // 协作单独呈现 HUMAN.md;窄栏保持紧凑导航，正文在独立滚动体中阅读。
-type Growth = 'memory' | 'evolution'
+type Growth = 'memory' | 'log' | 'evolution'
+const GROWTH_ICON = { memory: BookOpen, log: ScrollText, evolution: Sprout } as const
 const SECTIONS: Array<{ id: Section; icon: typeof Bot }> = [
   { id: 'config', icon: Settings2 }, { id: 'skills', icon: Sparkles }, { id: 'mcp', icon: Plug }, { id: 'human', icon: BookOpen }, { id: 'growth', icon: Sprout }, { id: 'schedule', icon: CalendarClock },
 ]
@@ -241,6 +243,7 @@ function AgentProfile({ agent, compact = false, sessionId, rewriteSessionId, evo
   const [section, setSection] = useState<Section>(humanJump ? 'human' : evolutionJumpAt ? 'growth' : 'config')
   const [growth, setGrowth] = useState<Growth>(evolutionJumpAt ? 'evolution' : 'memory')
   const [visitedMemory, setVisitedMemory] = useState(false)
+  const [visitedLog, setVisitedLog] = useState(false)
   const [draft, setDraft] = useState(storedDraft?.draft || agent)
   const [slugDraft, setSlugDraft] = useState(agent.slug) // 两处挂载点都 key={agent.slug},改名后随重挂归零
   const [dirty, setDirty] = useState(!!storedDraft)
@@ -297,8 +300,8 @@ function AgentProfile({ agent, compact = false, sessionId, rewriteSessionId, evo
     setSection(next); setQuery(''); setEnabledOnly(false)
     scrollRef.current?.scrollTo({ top: 0 })
   }
-  // 记忆面板有自己的草稿:第一次看到它才挂,之后一直留着(切标签 / 切分段都不卸)。
-  useEffect(() => { if (section === 'growth' && growth === 'memory') setVisitedMemory(true) }, [section, growth])
+  // 记忆面板和日志面板各有自己的草稿:第一次看到它才挂,之后一直留着(切标签 / 切分段都不卸)。
+  useEffect(() => { if (section === 'growth' && growth === 'memory') setVisitedMemory(true); if (section === 'growth' && growth === 'log') setVisitedLog(true) }, [section, growth])
   useEffect(() => { if (evolutionJumpAt) { navigate('growth'); setGrowth('evolution') } }, [evolutionJumpAt]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { if (humanJump?.at) navigate('human') }, [humanJump?.at]) // eslint-disable-line react-hooks/exhaustive-deps
   const patch = (p: Partial<NormalAgentDef>) => {
@@ -539,12 +542,12 @@ function AgentProfile({ agent, compact = false, sessionId, rewriteSessionId, evo
       {section === 'mcp' && equipment('mcp')}
       {section === 'human' && <HumanCollaborationPanel engine={homeTarget()} cfg={s.cfg} target={{ kind: 'agent', slug: agent.slug }} name={agent.name} running={s.running || s.rewriteRunning} jump={humanJump} onRewrite={rewriteHuman} />}
       {section === 'growth' && <>
-        {/* 两层各一张分段卡:标题 + 一句话说清它是什么。待复盘候选的角标跟着「进化」走。 */}
-        <div className="profile-segment" role="group" aria-label={t('agentProfile.growth')}>{(['memory', 'evolution'] as const).map((g) =>
+        {/* 三层各一张分段卡:标题 + 一句话说清它是什么(记忆 = 现在成立的事,日志 = 发生过的事,进化 = 做法)。待复盘候选的角标跟着「进化」走。 */}
+        <div className="profile-segment" role="group" aria-label={t('agentProfile.growth')}>{(['memory', 'log', 'evolution'] as const).map((g) => { const Icon = GROWTH_ICON[g]; return (
           <button key={g} type="button" aria-pressed={growth === g} onClick={() => { setGrowth(g); scrollRef.current?.scrollTo({ top: 0 }) }}>
-            <strong>{g === 'memory' ? <BookOpen size={13} /> : <Sprout size={13} />}{t(`agentProfile.${g}`)}{g === 'evolution' && candidates > 0 && <i className="profile-tab-badge" aria-hidden="true">{candidates}</i>}</strong>
+            <strong><Icon size={13} />{t(`agentProfile.${g}`)}{g === 'evolution' && candidates > 0 && <i className="profile-tab-badge" aria-hidden="true">{candidates}</i>}</strong>
             <small>{t(`agentProfile.${g}Caption`)}</small>
-          </button>)}</div>
+          </button>) })}</div>
         {/* /refine 只有 host 且非 plan 模式的会话引擎才注入指令(agentLoop 注入门);其余会话不给按钮,发出去只是一条裸 /refine */}
         {growth === 'evolution' && <AgentHarnessPanel cfg={s.cfg} slug={agent.slug} running={s.running} onCandidates={setCandidates} onRefine={sessionId && s.config?.execMode === 'host' && !s.config?.planMode ? () => useApp.getState().send('/refine', [], undefined, undefined, undefined, sessionId) : undefined} />}
       </>}
@@ -555,6 +558,9 @@ function AgentProfile({ agent, compact = false, sessionId, rewriteSessionId, evo
         <AgentMemoryPanel cfg={s.cfg} slug={agent.slug} shareDefaultMemory={agent.shareDefaultMemory} organized />
         <details className="profile-disclosure"><summary>{t('agentProfile.memoryScope')}</summary><label className="agent-equipment-item"><input type="checkbox" checked={!!draft.shareDefaultMemory} onChange={(e) => patch({ shareDefaultMemory: e.target.checked })} />{t('agentProfile.sharedMemory')}</label><p className="agent-profile-muted">{t('agentProfile.memoryScopeHint')}</p></details>
         <button className="agent-profile-link" onClick={() => setLibrary(true)}>{t('agentProfile.library')}<ExternalLink size={13} /></button>
+      </div>}
+      {visitedLog && <div className="profile-growth-log" hidden={section !== 'growth' || growth !== 'log'}>
+        <AgentLogPanel cfg={s.cfg} slug={agent.slug} active={section === 'growth' && growth === 'log'} />
       </div>}
       </fieldset>
     </div>

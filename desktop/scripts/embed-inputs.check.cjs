@@ -8,7 +8,8 @@
 //      会继承进这些控件,而自绘覆盖层对 input/textarea 一律不画 → 一个光标都没有。
 // K1 嵌入内按键不动文档 / K2 嵌入外按键照常生效(防修过头)/ K3 双击不进源码 / K4 丝滑光标下
 // 嵌入内控件仍有原生 caret / K5 负对照:同一页的编辑器本体仍是 transparent(自绘覆盖层接管)。
-// K6 切视图保住 React 实例/搜索 / K7 数据库只经显式入口编辑源码 / K8 v3 数据库不抢 Shift 选字。
+// K6 切视图保住 React 实例/搜索 / K7 数据库引用露源码时表格照样渲染(2026-10-13 起文件引用类嵌入同 Obsidian:
+//   光标进那一行 / 点 </> 都只是把源码露在嵌入上方,嵌入不收) / K8 v3 数据库不抢 Shift 选字。
 // K11 坏 JSON 的按钮块回落普通代码块、改好当场变回按钮(R-13)/ K12 按钮块悬停不冒代码块工具条(R-14)。
 // 用法:node scripts/e2e-editor.cjs --check=embed-inputs
 const fs = require('fs'), os = require('os'), path = require('path')
@@ -167,9 +168,13 @@ async function main() {
     await p.close()
   }
 
-  // ── K7:只有 </> 显式打开,离开源码复渲染。隐藏文本里的 PM 选区不应成为入口。
+  // ── K7:光标进引用那一行 / 点 </> = 源码露在表格上方,表格实例不动;离开就收起。
   {
     const p = await fresh(browser)
+    const srcShown = async () => (await p.locator(PM).innerText()).includes('![[任务.db')
+    const same = () => p.evaluate(() => window.__dbBefore === document.querySelector('.amx-db'))
+    await p.evaluate(() => { window.__dbBefore = document.querySelector('.amx-db') })
+    const idle = await srcShown()
     await p.evaluate(() => {
       const v = window.__upage.probe.view()
       let pos = 0
@@ -177,14 +182,15 @@ async function main() {
       v.dispatch(v.state.tr.setSelection(v.state.selection.constructor.create(v.state.doc, pos)))
       v.focus()
     })
-    record('K7 光标进入数据库引用位置仍保持渲染', await p.locator('.amx-db').count() === 1)
+    await p.waitForTimeout(200)
+    record('K7 光标进入数据库引用位置:源码露出,表格仍是同一个实例', !idle && await srcShown() && await same() && await p.locator('.amx-db').count() === 1)
+    await p.locator(`${PM} > p`).last().click()
+    await p.waitForTimeout(200)
+    record('K7 离开引用后源码收起,表格还在', !(await srcShown()) && await same())
     await p.hover('.unified-embed')
     await p.click('.unified-embed > .amx-src-btn')
     await p.waitForTimeout(200)
-    record('K7 显式源码按钮仍能打开引用', await p.locator('.amx-db').count() === 0 && (await p.locator(PM).innerText()).includes('![[任务.db'))
-    await p.locator(`${PM} > p`).last().click()
-    await p.waitForTimeout(200)
-    record('K7 离开引用后恢复数据库', await p.locator('.amx-db').count() === 1)
+    record('K7 显式源码按钮:源码露出,表格不收', await srcShown() && await same() && await p.locator('.amx-db').count() === 1)
     await p.close()
   }
 

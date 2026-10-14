@@ -1,10 +1,15 @@
 // 选中文字上浮的行内格式工具栏(“快捷编辑”,参考 AFFiNE / Notion)。纯展示组件:
 // 所有动作经 props 回调交给 MarkdownBlock 调 Milkdown 命令。按钮一律 onMouseDown+preventDefault,
 // 按下不夺走编辑器选区/焦点(同 SlashMenu 项)。位置由 selectionToolbarPlugin 报的选区坐标 fixed 定位。
-import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent } from 'react'
-import { AlignCenter, AlignLeft, AlignRight } from 'lucide-react'
+// 这是笔记里的「划线条」:一行 = 本视图的工具(AI ▾、转换为、格式、颜色、对齐)+ 每个视图都有的动作区
+// (问 Tangu、翻译、⋯ 里的插件动作)。动作区的按钮是 @lcl/components 的 SelectionBarActions,和聊天、插件视图里那一条
+// 同一份;谁在前由设置 → 外观的「划线菜单」定(缺省工具在前)。
+import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react'
+import { AlignCenter, AlignLeft, AlignRight, Languages, MessageSquareQuote } from 'lucide-react'
+import { SelectionBarActions, type SelectionBarAction } from '@lcl/components'
 import { OverlayAt } from '../../lib/clampMenu'
 import { registerMessages, useI18n } from '../../../i18n'
+import { selectionBarOrder } from '../../../selectionActions'
 import type { ToolbarShape } from './menuContext'
 
 // ⚠️ 文案一律经组件内的 `t()` 求值(useI18n),**不要**换成模块级 `translate()`:
@@ -57,11 +62,14 @@ registerMessages({
   'itb.ai': { zh: 'AI', en: 'AI' },
   'itb.aiTitle': { zh: '用 AI 改写选中的文字（先预览，确认后才写入）', en: 'Rewrite the selection with AI (preview first, nothing is written until you confirm)' },
   'itb.aiPlugins': { zh: '插件', en: 'Plugins' },
+  'itb.translate': { zh: '翻译', en: 'Translate' },
+  'itb.translateTitle': { zh: '翻译选中的文字（先预览，确认后才写入）', en: 'Translate the selection (preview first, nothing is written until you confirm)' },
+  'itb.more': { zh: '更多', en: 'More' },
   'itb.aria': { zh: '文字格式', en: 'Text formatting' },
 })
 
-/** 「AI ▾」菜单的一项(评审 G3-07):宿主给好当前语言的文案;plugin = 插件经 registerSelectionAction 注册的。 */
-export interface ToolbarAiItem { id: string; label: string; plugin?: boolean }
+/** 「AI ▾」/「⋯」菜单的一项(评审 G3-07):宿主给好当前语言的文案。⋯ 里的是插件经 registerSelectionAction 注册的,可以带图标。 */
+export interface ToolbarAiItem { id: string; label: string; icon?: ReactNode }
 
 export type ToolbarAction =
   | 'bold'
@@ -184,11 +192,12 @@ export function InlineToolbar({
   onReturnFocus?: () => void
   /** 「问 Tangu」(评审 G3-04):宿主有侧栏对话时才传;不传 = 不出这个按钮(v3 块 / 整篇宿主 / 无对话的产品)。 */
   onAsk?: () => void
-  /** 「AI ▾」(评审 G3-07):宿主能做正文 AI 时才传;选中一项交给宿主开预览面板。不传 = 不出按钮。 */
-  ai?: { items: ToolbarAiItem[]; onPick: (id: string) => void }
+  /** 正文 AI(评审 G3-07):宿主能做时才传;选中一项(id)交给宿主开预览面板。不传 = 这几样都不出。
+   *  items = 「AI ▾」里的改写动作(本视图的工具);translate = 动作区出「翻译」(id 'translate');more = ⋯ 里的插件动作。 */
+  ai?: { items: ToolbarAiItem[]; translate?: boolean; more?: ToolbarAiItem[]; onPick: (id: string) => void }
 }) {
   const { t } = useI18n()
-  const [panel, setPanel] = useState<'color' | 'turn' | 'ai' | null>(null)
+  const [panel, setPanel] = useState<'color' | 'turn' | 'ai' | 'more' | null>(null)
   const rootRef = useRef<HTMLDivElement | null>(null)
   /** 子面板是键盘打开的 → 打开后把焦点送进第一项(鼠标打开的不动焦点,编辑器选区照旧)。 */
   const panelByKey = useRef(false)
@@ -264,20 +273,32 @@ export function InlineToolbar({
     btns[next]?.focus()
   }
 
+  // 动作区(每个视图都一样的那几枚):问 Tangu 把选区交给侧栏对话、翻译进预览卡,笔记一个字不动;⋯ 是插件动作。
+  const shared: SelectionBarAction[] = [
+    ...(onAsk ? [{ id: 'ask', label: t('itb.askTangu'), title: t('itb.askTanguTitle'), icon: <MessageSquareQuote size={14} />, lead: true, onRun: onAsk }] : []),
+    ...(ai?.translate ? [{ id: 'translate', label: t('itb.translate'), title: t('itb.translateTitle'), icon: <Languages size={14} />, onRun: () => ai.onPick('translate') }] : []),
+  ]
+  const more = ai?.more?.length ? ai.more : null
+  const actionZone = shared.length || more ? (
+    <SelectionBarActions
+      actions={shared}
+      more={more ? {
+        label: t('itb.more'),
+        open: panel === 'more',
+        onToggle: (byKey) => { panelByKey.current = byKey && panel !== 'more'; setPanel(panel === 'more' ? null : 'more') },
+      } : undefined}
+    />
+  ) : null
+  const actionsFirst = selectionBarOrder() === 'actions'
+
   return (
     // 摆位一律交给 OverlayAt:默认浮在选区上方,上面没地方才翻到下方(同 slash)。
     // ⚠️别改回「CSS transform: translate(-50%,-100%)」那套 —— pop-in 动画也动 transform,
     // 会把摆位覆盖掉 120ms:工具栏先出现在选区右下、动画结束才跳到文字上方(用户实报)。
-    <OverlayAt className="inline-toolbar" x={left} y={bottom + 8} anchorTop={top - 8} prefer="above" center role="toolbar" aria-label={t('itb.aria')} data-testid="inline-toolbar" innerRef={(el) => { rootRef.current = el }} onKeyDown={onNav}>
+    <OverlayAt className="inline-toolbar" x={left} y={bottom + 8} anchorTop={top - 8} prefer="above" center role="toolbar" aria-label={t('itb.aria')} data-testid="inline-toolbar" data-order={actionsFirst ? 'actions' : 'tools'} innerRef={(el) => { rootRef.current = el }} onKeyDown={onNav}>
       <div className="itb-row">
-        {/* 排在最前(Notion 的 Ask AI 同位):选区 AI 的入口,点了把选区交给侧栏对话,笔记一个字不动。 */}
-        {onAsk && (
-          <>
-            <button className="itb-btn itb-ask" title={t('itb.askTanguTitle')} data-act="ask" {...act(onAsk)}>{t('itb.askTangu')}</button>
-            {!ai && <span className="itb-sep" />}
-          </>
-        )}
-        {ai && (
+        {actionsFirst && actionZone && <>{actionZone}<span className="itb-sep" /></>}
+        {ai && ai.items.length > 0 && (
           <>
             <button className="itb-btn itb-ask" title={t('itb.aiTitle')} data-act="ai" {...toggle('ai')}>{t('itb.ai')} ▾</button>
             <span className="itb-sep" />
@@ -317,6 +338,7 @@ export function InlineToolbar({
             <button className={`itb-btn${align === 'right' ? ' on' : ''}`} title={t('itb.alignRightTitle')} aria-label={t('itb.alignRight')} aria-pressed={align === 'right'} data-act="alignRight" {...act(() => onAct('alignRight'))}><AlignRight size={14} /></button>
           </>
         )}
+        {!actionsFirst && actionZone && <><span className="itb-sep" />{actionZone}</>}
       </div>
 
       {panel === 'turn' && (
@@ -340,12 +362,18 @@ export function InlineToolbar({
 
       {panel === 'ai' && ai && (
         <div className="itb-panel itb-ai-menu" role="menu" data-testid="itb-ai-menu">
-          {ai.items.filter((it) => !it.plugin).map((it) => (
+          {ai.items.map((it) => (
             <button key={it.id} className="itb-menu-item" role="menuitem" tabIndex={-1} data-ai={it.id} {...act(() => { setPanel(null); ai.onPick(it.id) })}>{it.label}</button>
           ))}
-          {ai.items.some((it) => it.plugin) && <div className="itb-color-head">{t('itb.aiPlugins')}</div>}
-          {ai.items.filter((it) => it.plugin).map((it) => (
-            <button key={it.id} className="itb-menu-item" role="menuitem" tabIndex={-1} data-ai={it.id} {...act(() => { setPanel(null); ai.onPick(it.id) })}>{it.label}</button>
+        </div>
+      )}
+
+      {/* ⋯:插件动作(2026-10-13 起从「AI ▾ → 插件」挪到这里;聊天、插件视图里的那一条也在同一个位置列它们)。 */}
+      {panel === 'more' && ai && more && (
+        <div className="itb-panel itb-ai-menu" role="menu" aria-label={t('itb.more')} data-testid="selbar-more">
+          <div className="itb-color-head">{t('itb.aiPlugins')}</div>
+          {more.map((it) => (
+            <button key={it.id} className="itb-menu-item itb-more-item" role="menuitem" tabIndex={-1} data-ai={it.id} {...act(() => { setPanel(null); ai.onPick(it.id) })}>{it.icon}<span>{it.label}</span></button>
           ))}
         </div>
       )}

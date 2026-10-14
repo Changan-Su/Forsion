@@ -364,45 +364,7 @@
    (0,1,0),排在后面胜出 —— 以前两边都是 16px 看不出来,现在会把按钮按回卡里。 */
 .t2-jump { position: absolute; right: 22px; z-index: 12; }
 .t2-jump.jump-bottom { bottom: calc(var(--t2-composer-h, 96px) + 16px); }
-.t2-quote-menu {
-  position: absolute;
-  /* 右缘贴住选区末尾向左展开;选区靠左(窄侧栏)时夹住左缘 ≥ 12px,别把最左的「引用」裁出视图。
-     --quote-x = 锚点 left(ChatView 内联写入,同一个局部 px)。 */
-  transform: translateX(max(-100%, calc(12px - var(--quote-x, 100vw))));
-  z-index: 20;
-  display: inline-flex;
-  align-items: center;
-  max-width: calc(100% - 24px);
-  overflow: hidden;
-  border: var(--border-width, 1px) solid var(--border);
-  border-radius: var(--radius-pill, 999px);
-  background: var(--bg-card);
-  color: var(--text);
-  box-shadow: var(--card-shadow);
-}
-.t2-quote-action {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 7px 11px;
-  border: 0;
-  border-right: var(--border-width, 1px) solid var(--border);
-  background: transparent;
-  color: inherit;
-  cursor: pointer;
-  font: inherit;
-  font-size: var(--ui-font-caption, 11px);
-  line-height: 1;
-  white-space: nowrap;
-}
-.t2-quote-action:last-child { border-right: 0; }
-.t2-quote-action:hover { background: var(--overlay-light, rgba(127,127,127,.1)); }
-.t2-quote-action:focus-visible { outline: var(--focus-ring) solid var(--accent-ink); outline-offset: -2px; }
-.t2-quote-action svg { flex: 0 0 auto; }
-
-@container (max-width: 360px) {
-  .t2-quote-action { padding-inline: 8px; }
-}
+/* 划线后的那一条不在这里了:全应用共用 lcl/components/selectionBar.css(外壳 .ui-popover.selbar,挂在 body 下)。 */
 
 @media (max-width: 1040px) {
   .t2-stream-inner { padding-inline: 18px; }

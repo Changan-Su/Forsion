@@ -1,8 +1,9 @@
 /**
  * 语音合成(朗读按钮/自动朗读;handler 自带 authMiddleware)。
  *   POST /agent/tts { text, model, voice?, speed? } → audio/mpeg 字节
- * 经 deps().brain.tts(可选 seam):仅 standalone multiBrain 实现(BYO-key 直连
- * OpenAI 兼容 /audio/speech,阿里云百炼域名自动切原生协议);云端未注入 → 501,前端据此隐藏入口。
+ * 经 deps().brain.tts(可选 seam):standalone multiBrain 实现 —— 命中直连 provider 的(BYO-key,OpenAI 兼容 /audio/speech,
+ * 阿里云百炼域名自动切原生协议)直连;没命中的交给 Forsion 云端 POST /api/brain/tts(httpBrain.tts,key 住云端、按字符计费)。
+ * 都没有(未注入)→ 501,前端据此隐藏入口。
  *
  * 音色管理(百炼声音复刻/声音设计;providers/test 同款「前端传 baseUrl+key、后端代打」模式,免 CORS 且不动 seam):
  *   POST /agent/tts/voices/list   { baseUrl, apiKey } → { voices: [{ voice, kind, targetModel? }] }   kind: clone(qwen复刻)|design(qwen设计)|cosy(CosyVoice复刻)

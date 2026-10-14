@@ -8,6 +8,7 @@ import { AgentSelectStrip } from '../components/AgentSelectStrip'
 import { displaySessionTitle } from '../sessionTitle'
 import { ProjectSelector } from '../components/ProjectSelector'
 import { RunLocationPicker, useRunPickerVisible } from '../components/RunLocationPicker' // P1-K7a
+import { useRemoteNewChatWorkspaces } from '../stores/newChatWorkspaces'
 import { WorkspaceFilePreview } from '../components/WorkspaceFilePreview'
 import { targetFor } from '../components/InlineFiles'
 import { openWsFile } from './wsFileNav'
@@ -47,11 +48,11 @@ import { useChildChat } from '../stores/childChatStore'
 import { TeamSummary } from './chat2/TeamSummary'
 import { useI18n } from '../i18n'
 import { speakMessage, stopSpeaking, subscribeTts, ttsState, type TtsState } from '../services/ttsService'
-import { homeTarget } from '../services/engine/targets'
+import { homeTarget, useComposerRef } from '../services/engine/targets'
 import type { ViewProps } from '@lcl/engine/types'
 import { useShallow } from 'zustand/react/shallow'
 import './chat2/chat2.css'
-import { zoomOf } from '@lcl/engine'
+import { ViewSelectionBar } from '../components/selectionBar/ViewSelectionBar'
 import { usePageStore } from '../amadeus/store/pageStore'
 import { useCodeStudio } from '../stores/codeStudioStore'
 import { projectName } from './coding/studioModel'
@@ -91,7 +92,6 @@ export function ChatView({ leaf, params }: ViewProps) {
   const childSelections = useChildChat((state) => state.selected)
   const [raiseTeam, setRaiseTeam] = useState(false)
   const chatScrollRef = useRef<HTMLDivElement>(null)
-  const chatAreaRef = useRef<HTMLDivElement>(null)
   const streamingNodeRef = useRef<HTMLDivElement | null>(null)
   const stickToBottom = useRef(true)
   const pendingCountRef = useRef(0)
@@ -106,7 +106,8 @@ export function ChatView({ leaf, params }: ViewProps) {
   // P1-K6:输入框对着的那台是「我的电脑」且没连上 → 「等待那台连上」;S4 起按本会话所在的那台(空白新对话 = 焦点)
   const targetPlaceholder = useTargetComposerPlaceholder(activeId)
   const composerTargetReady = useComposerReady(activeId)
-  const runPickerOn = useRunPickerVisible() // P1-K7a:手机上的「在哪运行」
+  const runPickerOn = useRunPickerVisible() // P1-K7a:「在哪运行」有得选(Chat 模式据此多出那一栏;桌面 Work 模式的药丸恒在)
+  const remoteWs = useRemoteNewChatWorkspaces() // 桌面:运行位置在别的电脑上 → 项目药丸列那台的项目
   // 历史在拉:空消息 ≠ 空会话 —— 拉取期间显示会话骨架屏,别把有消息的会话先亮成空状态(EmptyState2)。
   const historyLoading = useApp((state) => !!(activeId && state.historyLoading[activeId]))
   const s = useApp(useShallow((state) => ({
@@ -172,6 +173,7 @@ export function ChatView({ leaf, params }: ViewProps) {
     workspaces: state.workspaces,
     setNewChatWs: state.setNewChatWs,
     addLocalWorkspace: state.addLocalWorkspace,
+    cloneGitProject: state.cloneGitProject,
     addCloudProject: state.addCloudProject,
     setSessionModel: state.setSessionModel,
     setNewChatModel: state.setNewChatModel,
@@ -195,7 +197,6 @@ export function ChatView({ leaf, params }: ViewProps) {
   const [editText, setEditText] = useState('')
   const jumpSetter = useRef<(show: boolean) => void>(() => {})
   const setShowJump = useCallback((show: boolean): void => jumpSetter.current(show), [])
-  const [quoteButton, setQuoteButton] = useState<{ x: number; y: number; text: string } | null>(null)
   // 输入框上方的引用卡,可挂多段;只在挂它们的那个会话里显示、发送(归属见 quotes.ts 的 QuoteDraft)
   const [quoteDraft, setQuoteDraft] = useState(NO_QUOTE_DRAFT)
   const quoteSid = activeId ?? null
@@ -218,6 +219,8 @@ export function ChatView({ leaf, params }: ViewProps) {
   // Vault 切换会即时重算 Project 列表与系统工作根;不能只在 s.workspaces() 里 getState 快照,
   // 否则 appStore 本身没变化时 React 不会重渲染选择器。
   const amadeusRoot = usePageStore((state) => state.vaultRoot)
+  // 会话在别的电脑上(桌面作为调用方):这台电脑的笔记库 / 文件夹都不属于它的工作范围,也不许把本机路径写进那台的会话配置
+  const sessionElsewhere = useComposerRef(activeId).kind === 'unit'
 
   // 主区划线后交给侧栏的引用可能先于 chat-panel 挂载；目标承载一出现就消费，其他 ChatView 不碰。
   useEffect(() => {
@@ -249,7 +252,7 @@ export function ChatView({ leaf, params }: ViewProps) {
           cwd: cloud ? undefined : (s.newChatWs?.path || undefined),
           ...s.newChatCfg,
         }, preset) as AgentConfig)
-      })(), amadeusRoot)
+      })(), sessionElsewhere ? null : amadeusRoot) // 别的电脑上的会话 / 草稿:这台电脑的笔记库不并进它的工作范围
   // 团队成员会话(子聊天里直接追问):审批闸只听团队会话此刻的档(引擎 agentLoop.approvalModeSessionId),
   // 成员会话自己的存值不算数 → 药丸显示团队档、改也改团队会话(与团队主区药丸同一条写路径)。
   // 成员身份同引擎按父链接核实:父会话 id 由 ChildChatPanel 的 Team Desk 成员行给,须等于配置里的 teamMember ——
@@ -430,35 +433,6 @@ export function ChatView({ leaf, params }: ViewProps) {
     pendingCountRef.current = pending
   }, [activeMessages, scrollToBottom])
 
-  // 聊天区划线引用。
-  useEffect(() => {
-    const el = chatScrollRef.current
-    const host = chatAreaRef.current
-    if (!el || !host) return
-    const onMouseUp = (): void => {
-      const selection = window.getSelection()
-      if (!selection || selection.isCollapsed || !selection.rangeCount) { setQuoteButton(null); return }
-      const text = selection.toString().trim()
-      const range = selection.getRangeAt(0)
-      if (!text || !el.contains(range.commonAncestorContainer)) { setQuoteButton(null); return }
-      const rect = range.getBoundingClientRect()
-      const bounds = host.getBoundingClientRect()
-      // rect/bounds 是视口 px,而 absolute 的 left/top 是宿主内未缩放局部 px → 差值先除掉宿主缩放。
-      const z = zoomOf(host)
-      setQuoteButton({ x: (rect.right - bounds.left) / z, y: (rect.bottom - bounds.top) / z + 6, text })
-    }
-    const onSelection = (): void => { if (window.getSelection()?.isCollapsed) setQuoteButton(null) }
-    const clear = (): void => setQuoteButton(null)
-    el.addEventListener('mouseup', onMouseUp)
-    document.addEventListener('selectionchange', onSelection)
-    el.addEventListener('scroll', clear, { passive: true })
-    return () => {
-      el.removeEventListener('mouseup', onMouseUp)
-      document.removeEventListener('selectionchange', onSelection)
-      el.removeEventListener('scroll', clear)
-    }
-  }, [activeId, activeMessages.length])
-
   const copy = (text: string): void => { try { void navigator.clipboard.writeText(text) } catch { /* ignore */ } }
   // 朗读:配置了 TTS 模型才显示入口;点击播放/合成中的消息 = 停止。
   const [tts, setTts] = useState<TtsState>(ttsState())
@@ -540,7 +514,7 @@ export function ChatView({ leaf, params }: ViewProps) {
         }} />}
       <div className="t2-chat-col">
       <ErrorBoundary key={activeId || 'none'}>
-        <div className="t2-chat-body" ref={chatAreaRef}>
+        <div className="t2-chat-body">
           {hasMessages && <FloatingToc scrollContainerRef={chatScrollRef} scanTrigger={shownMessages.length} />}
           <div className="t2-stream" ref={registerChatScroll}>
             {/* data-has-messages:样式靠它认「流里画着消息气泡」(短会话贴着输入区排,见 chat2.css)。只有总结卡 / 系统行、其余都不进列表的
@@ -632,55 +606,22 @@ export function ChatView({ leaf, params }: ViewProps) {
             </div>
           </div>
           <JumpToBottom setter={jumpSetter} title={t('chat.jumpToBottom')} onClick={() => scrollToBottom(true)} />
-          {quoteButton && (
-            <div
-              className="quote-float t2-quote-menu"
-              role="toolbar"
-              aria-label={t('chat.selection.actions')}
-              onMouseDown={(e) => e.preventDefault()}
-              style={{ left: quoteButton.x, top: quoteButton.y, '--quote-x': `${quoteButton.x}px` } as React.CSSProperties}
-            >
-              <button
-                className="t2-quote-action"
-                data-testid="selection-quote"
-                onClick={() => {
-                  setQuoteDraft((prev) => quoteAdded(prev, quoteSid, quoteButton.text))
-                  setQuoteButton(null)
-                  window.getSelection()?.removeAllRanges()
-                }}
-              >
-                <Quote size={13} /> {t('chat.action.quote')}
-              </button>
-              {/* 在侧栏提问 = 旁聊开在右侧栏:带着本会话上下文问,主对话里什么都不发(2026-10-11 起;此前是把引用丢给侧栏那个独立对话) */}
-              {leaf.type !== 'chat-panel' && activeId && (
-                <button
-                  className="t2-quote-action"
-                  data-testid="selection-ask-in-panel"
-                  onClick={() => {
-                    openBtwInSidebar({ sessionId: activeId, title: activeSession?.title, quote: quoteButton.text, modelId: mvModelId || undefined })
-                    setQuoteButton(null)
-                    window.getSelection()?.removeAllRanges()
-                  }}
-                >
-                  <MessageSquarePlus size={13} /> {t('chat.action.askInPanel')}
-                </button>
-              )}
-              {/* 划线旁聊:选中的那段作为引用开进本会话的旁聊浮窗,主对话里什么都不发 */}
-              {activeId && (
-                <button
-                  className="t2-quote-action"
-                  data-testid="selection-btw"
-                  onClick={() => {
-                    openBtw({ sessionId: activeId, title: activeSession?.title, quote: quoteButton.text, modelId: mvModelId || undefined })
-                    setQuoteButton(null)
-                    window.getSelection()?.removeAllRanges()
-                  }}
-                >
-                  <MessageCircleQuestion size={13} /> {t('btw.selectionAction')}
-                </button>
-              )}
-            </div>
-          )}
+          {/* 划线条(全应用同一条,components/selectionBar):这里接管「带去对话」那一格 —— 引用 / 在侧栏提问 / 顺便问,
+              行为与原来的胶囊菜单一字不差;翻译和插件动作(⋯)由共用的那一层给。条自己 portal 到 body。 */}
+          <ViewSelectionBar
+            view="chat"
+            watch={chatScrollRef}
+            watchKey={`${activeId}:${activeMessages.length}`}
+            dense={leaf.type === 'chat-panel'}
+            source={() => ({ title: activeSession?.title || undefined, sessionId: activeId || undefined })}
+            lead={(sel, done) => [
+              { id: 'quote', label: t('chat.action.quote'), icon: <Quote size={14} />, lead: true, testId: 'selection-quote', onRun: () => { setQuoteDraft((prev) => quoteAdded(prev, quoteSid, sel.text)); done() } },
+              // 在侧栏提问 = 旁聊开在右侧栏:带着本会话上下文问,主对话里什么都不发(2026-10-11 起;此前是把引用丢给侧栏那个独立对话)
+              ...(leaf.type !== 'chat-panel' && activeId ? [{ id: 'ask-in-panel', label: t('chat.action.askInPanel'), icon: <MessageSquarePlus size={14} />, testId: 'selection-ask-in-panel', onRun: () => { openBtwInSidebar({ sessionId: activeId, title: activeSession?.title, quote: sel.text, modelId: mvModelId || undefined }); done() } }] : []),
+              // 划线旁聊:选中的那段作为引用开进本会话的旁聊浮窗,主对话里什么都不发
+              ...(activeId ? [{ id: 'btw', label: t('btw.selectionAction'), icon: <MessageCircleQuestion size={14} />, testId: 'selection-btw', onRun: () => { openBtw({ sessionId: activeId, title: activeSession?.title, quote: sel.text, modelId: mvModelId || undefined }); done() } }] : []),
+            ]}
+          />
         </div>
       </ErrorBoundary>
 
@@ -709,13 +650,16 @@ export function ChatView({ leaf, params }: ViewProps) {
               {/* Chat 无项目:不露项目选择器，否则会悄悄建成 Work 会话。Coding Studio 另要求先选定项目。
                   P1-K7a:手机上另有「在哪运行」药丸(Chat 模式也要有 —— 聊天会话同样可以建在电脑上),排在项目药丸之前。 */}
               {projectBarOn && <>
-                {runPickerOn && !studioChat && <RunLocationPicker />}
+                {/* 药丸自己判要不要画:手机 = 有得选才画;桌面主窗口恒画(至少标出「这台电脑」) */}
+                {!studioChat && <RunLocationPicker />}
                 {mvCfg.preset !== 'chat' && (studioChat && studioRoot ? <div className="project-pill" title={studioRoot} data-studio-project={studioRoot}><Folder size={13} /><span className="project-pill-name">{projectName(studioRoot)}</span></div> : <ProjectSelector
-                  workspaces={s.workspaces()}
+                  workspaces={remoteWs ?? s.workspaces()}
                   value={s.newChatWs?.key ?? null}
                   onChange={(w) => s.setNewChatWs(w)}
-                  onAddProject={window.tangu?.pickDirectory ? () => void s.addLocalWorkspace() : undefined}
-                  onAddCloudProject={(name) => void s.addCloudProject(name)}
+                  // 「添加本地项目 / 云端项目」加的都是这一端的:运行位置在别的电脑上时不给
+                  onAddProject={!remoteWs && window.tangu?.pickDirectory ? () => void s.addLocalWorkspace() : undefined}
+                  onCloneProject={!remoteWs && window.tangu?.pickDirectory ? () => void s.cloneGitProject() : undefined}
+                  onAddCloudProject={remoteWs ? undefined : (name) => void s.addCloudProject(name)}
                 />)}
                 {/* Coding Studio 的新对话也要露:草稿里的额外文件夹照样会随它建的会话带走,看不见胶囊 = 没人看见的授权(Codex 评审) */}
                 <ExtraFolders />
@@ -883,9 +827,9 @@ export function ChatView({ leaf, params }: ViewProps) {
           modelId={mvModelId}
           hostCwd={mvCfg.execMode === 'host' ? mvCfg.cwd : undefined}
           extraRoots={mvCfg.extraRoots}
-          lockedRoots={mvCfg.execMode === 'host' && amadeusRoot ? [amadeusRoot] : []}
+          lockedRoots={mvCfg.execMode === 'host' && amadeusRoot && !sessionElsewhere ? [amadeusRoot] : []}
           // 只有本机会话谈得上「加本机文件夹」;沙箱会话的工作区不在本机。
-          onAddRoot={mvCfg.execMode === 'host' && activeId ? () => {
+          onAddRoot={mvCfg.execMode === 'host' && activeId && !sessionElsewhere ? () => {
             void window.tangu?.pickDirectory?.().then((dir) => {
               if (!dir) return
               const cur = useApp.getState().configBySession[activeId]?.extraRoots || []

@@ -71,7 +71,7 @@ import { joinRel, toAssetUrl, toDisplayMarkdown, toStoredMarkdown, fromAssetUrl 
 import { ATTACHMENT_CLIP_MIME, recentAttachmentCopy, rememberAttachmentCopy } from '../../lib/attachmentClipboard'
 import { tabsToEntities, entitiesToTabs } from '@amadeus-shared/indentIo'
 import { resolvePageName, unescapeWikiOutsideFences, normalizeUrlLiterals } from '@amadeus-shared/links'
-import { resolveFileName } from '../../lib/vaultFiles'
+import { resolveFileLink } from '../../lib/vaultFiles'
 import { wikiFilesEnabled } from '../../lib/wikiFiles'
 import { emptyDb, emptyNoteView, serializeDb } from '@amadeus-shared/db/schema'
 import { BLANK_SCENE_JSON, blankDrawing } from '@amadeus-shared/excalidraw/format'
@@ -537,8 +537,10 @@ export function MilkdownInner({
   extraPlugins?: MilkdownPlugin[]
   /** 选区工具栏的「问 Tangu」(评审 G3-04):宿主有侧栏对话才传,拿到的是当前 view(选区现读)。缺 = 不出按钮。 */
   onAskTangu?: (view: EditorView) => void
-  /** 选区工具栏「AI ▾」(评审 G3-07):宿主能做正文 AI 才传;选中一项交回宿主(带当前 view)开预览面板。 */
-  aiMenu?: { items: ToolbarAiItem[]; onPick: (id: string, view: EditorView) => void }
+  /** 选区工具栏的正文 AI(评审 G3-07):宿主能做才传;选中一项交回宿主(带当前 view)开预览面板。
+   *  items = 「AI ▾」里的改写动作;translate = 动作区的「翻译」(id 'translate');more = ⋯ 里的插件动作,按选区现算
+   *  (插件的 when 要看选了多少)。 */
+  aiMenu?: { items: ToolbarAiItem[]; translate?: boolean; more?: (from: number, to: number) => ToolbarAiItem[]; onPick: (id: string, view: EditorView) => void }
 }) {
   const ready = useRef(false)
   const pagePathRef = useRef(attachmentPagePath)
@@ -1838,6 +1840,8 @@ export function MilkdownInner({
           } : undefined}
           ai={aiMenu ? {
             items: aiMenu.items,
+            translate: aiMenu.translate,
+            more: aiMenu.more?.(toolbar.from, toolbar.to),
             onPick: (id) => {
               setToolbar(null)
               getInstance()?.action((ctx) => aiMenu.onPick(id, ctx.get(editorViewCtx)))
@@ -2178,7 +2182,7 @@ export function MarkdownBlock({
           onSlashPick={applySlash}
           getFiles={() => (wikiFilesEnabled() ? ps.getState().files : [])}
           isWikiResolved={(n) =>
-            !!resolvePageName(n, getPageNames(), pagePath) || !!resolveFileName(n, ps.getState().files, pagePath)}
+            !!resolvePageName(n, getPageNames(), pagePath) || !!resolveFileLink(n, ps.getState().files, pagePath)}
           wikiIcon={(n) => {
             const p = resolvePageName(n, getPageNames(), pagePath)
             return p ? ps.getState().icons[p] : undefined

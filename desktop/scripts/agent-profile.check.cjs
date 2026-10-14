@@ -127,6 +127,9 @@ async function run() {
     // 改文件夹名(slug):引擎搬目录后回新定义;这里只回显,前端要自己把 store 里的 slug 换掉。
     if (p.startsWith('/agent/agents/') && p.endsWith('/rename') && method === 'POST') { const next = (await body()).slug; renamed.push(next); return { agent: { ...agents[1], slug: next }, warnings: [] } }
     if (p === `/agent/sessions/${solo.id}` && method === 'PATCH') { const patch = await body(); sessionModelSaved = patch.model_id; Object.assign(solo, patch); return { session: solo } }
+    // 成长 › 日志(10-13):两天的日志,格式照引擎写的(文件头 + 每条 `### HH:MM` + `@设备号 正文`)
+    if (p.endsWith('/logs') && method === 'GET') return { dates: ['2026-09-15', '2026-09-16'] }
+    if (p.endsWith('/log') && method === 'GET') { const date = url.searchParams.get('date'); return { date, content: `# ${date}\n\n### 09:30\n@a1b2c3d4 Reviewed the primary sources for ${date}.\n`, version: `log-${date}` } }
     if (p.endsWith('/memory/dream')) return { config: { enabled: true, modelId: '', timeoutMs: 60000, maxOutputTokens: 4096, intervalHours: 6 }, status: { state: 'idle', running: false }, candidates: 0 }
     if (p.endsWith('/memory/revisions')) return { revisions: [] }
     if (p.endsWith('/memory') && method === 'GET') return { version: 'version-1', content: memoryEntries.map((e) => e.content).join('\n'), entries: memoryEntries, tombstones: [], updatedAt: 1 }
@@ -347,6 +350,18 @@ async function run() {
     assert.equal(await memory.locator('[data-memory-entry-id="memory-1"]').getByRole('button', { name: '遗忘', exact: true }).count(), 1, 'Entry actions stay reachable by name as icon buttons')
     await win.waitForTimeout(220)
     await win.locator('[data-tangu-details]').screenshot({ path: path.join(home, 'compact-memory.png') })
+    // 成长分三层:记忆 / 日志 / 进化。日志在右栏详情里也是按天折叠、最近一天展开,读的是去掉文件头和设备标记的那一份。
+    // 只取标题自己的文字:「进化」卡上还挂着待复盘候选的数字角标
+    assert.equal(await compact.locator('.profile-segment button strong').evaluateAll((titles) => titles.map((title) => [...title.childNodes].filter((node) => node.nodeType === 3).map((node) => node.textContent).join('').trim()).join('|')), '记忆|日志|进化')
+    await segment('日志').click()
+    const compactLog = compact.locator('[data-testid="agent-log-panel"]')
+    await compactLog.getByText('Reviewed the primary sources for 2026-09-16.', { exact: true }).waitFor()
+    assert.equal(await compactLog.locator('.agentmem-log-body').count(), 1, 'Only the newest day is open')
+    assert.ok(!(await compactLog.innerText()).includes('@a1b2c3d4'), 'The reading view hides the device marker')
+    assert.deepEqual(await compact.locator('.profile-segment button').evaluateAll((cards) => cards.map((card) => card.scrollWidth <= card.clientWidth + 1)), [true, true, true], 'The three layer cards fit the docked panel')
+    await win.waitForTimeout(220)
+    await win.locator('[data-tangu-details]').screenshot({ path: path.join(home, 'compact-log.png') })
+    await segment('记忆').click()
     await memory.locator('summary').filter({ hasText: '编辑原文' }).click()
     await memory.getByRole('textbox', { name: '记忆原文', exact: true }).fill('Unsaved memory draft')
     await compact.getByRole('tab', { name: '技能', exact: true }).click()
@@ -832,7 +847,9 @@ async function run() {
       assert.equal(await compactEn.evaluate((el) => el.scrollWidth > el.clientWidth + 1), false, `${tab} must not overflow the docked panel in English`)
     }
     await compactEn.getByRole('tab', { name: 'Growth', exact: true }).click()
-    assert.deepEqual(await compactEn.locator('.profile-segment small').evaluateAll((els) => els.map((el) => el.scrollWidth <= el.clientWidth + 1)), [true, true], 'Segment captions fit the docked panel in English without truncation')
+    assert.deepEqual(await compactEn.locator('.profile-segment small').evaluateAll((els) => els.map((el) => el.scrollWidth <= el.clientWidth + 1)), [true, true, true], 'Segment captions fit the docked panel in English without truncation')
+    assert.equal(await compactEn.locator('.profile-segment button strong').evaluateAll((titles) => titles.map((title) => [...title.childNodes].filter((node) => node.nodeType === 3).map((node) => node.textContent).join('').trim()).join('|')), 'Memory|Log|Evolution')
+    assert.deepEqual(await compactEn.locator('.profile-segment button').evaluateAll((cards) => cards.map((card) => card.scrollWidth <= card.clientWidth + 1)), [true, true, true], 'The three layer cards (the longest title is "Evolution") fit the docked panel in English')
     // 侧栏技能详情 × 英文 / 暗色:覆盖本 View、Back 文案、不横向溢出、Esc 关掉覆盖层回到列表。
     await compactEn.getByRole('tab', { name: 'Skills', exact: true }).click()
     const researchEn = compactEn.locator('[data-skill-key="agent:research:research"] .agent-skill-summary')

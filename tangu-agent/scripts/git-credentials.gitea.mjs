@@ -16,6 +16,13 @@
  *   ⑦ 发布到 Forsion Git(services/forsionGitPublish × Forsion Git 提供方,云端接缝是假的、站是真的):没有远端的项目 →
  *      入口给出由文件夹名整理出来的仓库名(「我的 Demo 站点 (v2)」→ Demo-v2)→ origin 设好并推上去,站上建出私有仓库、上游设好;
  *      名字撞了站上另一个历史不同的仓库 → 推不上去,刚加的 origin 撤掉。
+ *   ⑧ 从 Git 克隆(services/gitClone × Forsion Git 提供方):「我的仓库」清单是站上真的那两个(都私有、克隆地址是这个站的);
+ *      挑一个克隆下来 → 文件在、克隆出来的仓库配置里没有凭据;站上没有的仓库 → remote_unreachable,不留半个文件夹;
+ *      目标已经在了 → target_exists,原来的东西不动。
+ *   ⑨ 连接已有远端(gitActions.gitConnectRemote):本地仓库连到站上已有的同名分支 → origin 设好、上游设好;
+ *      连一个站上没有的仓库 → remote_unreachable,刚加的 origin 撤掉。
+ *   ⑩ 提交身份(services/gitIdentity):git 没配名字和邮箱 → 由账号推出 `<用户名>@noreply.<站的主机>`,只进这一次提交;
+ *      推上去之后 Gitea 把这条提交记在这个用户名下(站的 DOMAIN = 主机名,同线上)。仓库和全局配置里都没写身份。
  *   全程:任何一条错误的 message / detail、任何一次返回的 output 里都没有令牌原文或它的 Basic 编码。
  *
  * 负对照(2026-10-10 实跑,各自改一处再跑,下面对应的那条红):
@@ -24,13 +31,18 @@
  *   - runAction 里不调 stripGitTraceEnv → ⑤ 红(失败原文里是一屏 `<= Recv header: …` 的跟踪)。
  *   - runAction 里不加 `-c credential.<origin>.helper=` → ⑤ 红(助手被依次叫了 get → erase:用户存的那份凭据被删)。
  *   - publishToForsionGit 失败时不撤 origin → ⑦ 红(撞名之后仓库里留着指向别人仓库的 origin)。
+ *   2026-10-14 实跑:
+ *   - gitClone 不经凭据接缝(给 runWithRemoteCredentials 的地址传空)→ ⑧ 红(私有仓库克隆不下来:could not read Username)。
+ *   - gitConnectRemote 连不上时不撤 origin → ⑨ 红。
+ *   - gitClone 失败时不删文件夹 → ⑧ 红(目标文件夹是引擎自己先独占地建出来的,git 克隆失败不会替它删)。
+ *   ⑩ 的对照写在脚本里:同一个人推上去、邮箱是站上不认识的那条提交,站上不记名。
  *
  * 前置:PATH 上有 gitea(macOS:brew install gitea)与 git ≥ 2.31;先 `npm run build`(本脚本引 dist/)。
  * 用法:node scripts/git-credentials.gitea.mjs      (KEEP=1 保留临时目录并打印 Gitea 日志尾部)
  */
 import assert from 'node:assert/strict';
 import { execFile, spawn } from 'node:child_process';
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import https from 'node:https';
 import net from 'node:net';
 import { tmpdir } from 'node:os';
@@ -58,10 +70,12 @@ Object.assign(process.env, {
 for (const key of Object.keys(process.env)) if (/^GIT_(TRACE|CURL_VERBOSE|CONFIG_(COUNT|KEY_|VALUE_))/.test(key)) delete process.env[key];
 mkdirSync(process.env.TANGU_HOME, { recursive: true });
 
-const { GitActionError, gitPull, gitPush } = await import('../dist/services/gitActions.js');
+const { GitActionError, gitCommit, gitConnectRemote, gitPull, gitPush } = await import('../dist/services/gitActions.js');
 const { GitCredentialError, isGitAuthFailure, registerGitCredentialProvider, resetGitCredentialProvidersForTest } = await import('../dist/services/gitCredentials.js');
 const { installForsionGit } = await import('../dist/services/forsionGit.js');
 const { forsionPublishInfo, publishToForsionGit } = await import('../dist/services/forsionGitPublish.js');
+const { gitClone, listForsionGitRepos } = await import('../dist/services/gitClone.js');
+const { forsionIdentity, resolveGitIdentity } = await import('../dist/services/gitIdentity.js');
 
 const cli = async (...args) => (await run('gitea', [...args, '--work-path', work, '--config', ini], { timeout: 60_000 })).stdout;
 const git = async (cwd, ...args) => (await run('git', args, { cwd, timeout: 30_000 })).stdout.trim();
@@ -71,6 +85,12 @@ const withCred = (password) => ({ ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_
 const api = (path, token) => new Promise((resolve, reject) => {
   https.get(`${gitea}${path}`, { ca: readFileSync(cert), headers: token ? { Authorization: `token ${token}` } : {} }, (res) => {
     let body = ''; res.on('data', (c) => { body += c; }); res.on('end', () => resolve({ status: res.statusCode, body }));
+  }).on('error', reject);
+});
+/** 给引擎里用 fetch 的地方(列仓库)用:自签证书要自己带 CA。 */
+const caFetch = (url, init = {}) => new Promise((resolve, reject) => {
+  https.get(url, { ca: readFileSync(cert), headers: init.headers }, (res) => {
+    let body = ''; res.on('data', (c) => { body += c; }); res.on('end', () => resolve({ status: res.statusCode, ok: res.statusCode >= 200 && res.statusCode < 300, json: async () => JSON.parse(body) }));
   }).on('error', reject);
 });
 /** 动作的结局:成功 → { ok, value };GitActionError → { code, detail };别的异常原样抛。 */
@@ -91,6 +111,7 @@ WORK_PATH = ${work}
 PROTOCOL = https
 CERT_FILE = ${cert}
 KEY_FILE = ${join(work, 'key.pem')}
+DOMAIN = 127.0.0.1
 HTTP_ADDR = 127.0.0.1
 HTTP_PORT = ${port}
 ROOT_URL = ${gitea}/
@@ -228,10 +249,11 @@ ROOT_PATH = ${join(work, 'log')}
 
   // ⑦ 发布到 Forsion Git:云端接缝是假的(站点信息 + 凭据由本地这台 Gitea 的令牌充当),站和推送是真的
   resetGitCredentialProvidersForTest();
-  installForsionGit({
+  const forsionBrain = {
     info: async () => ({ configured: true, webUrl: `${gitea}/`, credentials: true }),
     credential: async () => ({ webUrl: gitea, username: 'dave', password: token }),
-  }, { device: 'e2e' });
+  };
+  installForsionGit(forsionBrain, { device: 'e2e' });
   const fresh = join(work, '我的 Demo 站点 (v2)');
   mkdirSync(fresh);
   writeFileSync(join(fresh, 'index.html'), '<h1>demo</h1>\n');
@@ -258,8 +280,72 @@ ROOT_PATH = ${join(work, 'log')}
   const rejected = note(await outcome(publishToForsionGit(clash, 'hello')));
   assert.equal(rejected.code, 'git_failed', JSON.stringify(rejected));
   assert.equal(await git(clash, 'remote'), '');
-  installForsionGit(undefined);
   console.log('⑦ 发布到 Forsion Git:文件夹名整理成 Demo-v2 → 推送即建(私有)、上游设好;撞名推不上去 → origin 撤掉');
+
+  // ⑧ 从 Git 克隆:清单和克隆都对着真站;凭据由 Forsion Git 提供方给
+  const repos = await listForsionGitRepos({ fetch: caFetch });
+  assert.deepEqual(repos.map((r) => r.fullName).sort(), ['dave/Demo-v2', 'dave/hello']);
+  assert.ok(repos.every((r) => r.private && r.cloneUrl.startsWith(`${gitea}/`) && r.updatedAt), JSON.stringify(repos));
+  mkdirSync(join(work, 'cloned'));
+  const shelf = realpathSync(join(work, 'cloned')); // 克隆回的是解过软链的真实路径(macOS 的临时目录是软链)
+  const got = note(await outcome(gitClone(repos.find((r) => r.fullName === 'dave/hello').cloneUrl, shelf, 'hello-copy')));
+  assert.ok(got.ok, `克隆应当成功:${JSON.stringify(got)}`);
+  assert.deepEqual(got.value, { path: join(shelf, 'hello-copy'), name: 'hello-copy' });
+  assert.ok(existsSync(join(shelf, 'hello-copy/hello.txt')));
+  assert.equal(await git(got.value.path, 'remote', 'get-url', 'origin'), `${gitea}/dave/hello.git`);
+  const cloneConfig = readFileSync(join(got.value.path, '.git/config'), 'utf8');
+  assert.ok(!/extraheader|authorization|helper/i.test(cloneConfig) && !cloneConfig.includes(token), '克隆出来的仓库配置里不该有凭据');
+  const missing = note(await outcome(gitClone(`${gitea}/dave/no-such-repo.git`, shelf, 'nothing')));
+  assert.equal(missing.code, 'remote_unreachable', JSON.stringify(missing));
+  assert.ok(!existsSync(join(shelf, 'nothing')), '克隆失败不该留下文件夹');
+  const taken = note(await outcome(gitClone(`${gitea}/dave/Demo-v2.git`, shelf, 'hello-copy')));
+  assert.equal(taken.code, 'target_exists');
+  assert.ok(existsSync(join(shelf, 'hello-copy/hello.txt')) && !existsSync(join(shelf, 'hello-copy/index.html')));
+  console.log(`⑧ 从 Git 克隆:清单 ${repos.length} 个(都私有)→ 克隆下来、仓库配置里没有凭据;站上没有的仓库 → remote_unreachable、不留文件夹;重名 → target_exists`);
+
+  // ⑨ 连接已有远端:本地 main 连到站上已有 main 的仓库 → 上游设好;连不存在的仓库 → origin 撤掉
+  const local = join(work, 'connect');
+  mkdirSync(local);
+  writeFileSync(join(local, 'a.txt'), 'local\n');
+  await git(local, 'init', '-q', '-b', 'main');
+  await git(local, 'add', '-A');
+  await git(local, 'commit', '-q', '-m', 'local first');
+  const nowhere = note(await outcome(gitConnectRemote(local, `${gitea}/dave/no-such-repo.git`)));
+  assert.equal(nowhere.code, 'remote_unreachable', JSON.stringify(nowhere));
+  assert.equal(await git(local, 'remote'), '');
+  const connected = note(await outcome(gitConnectRemote(local, `${gitea}/dave/hello.git`)));
+  assert.deepEqual(connected.value, { remote: 'origin', upstream: 'origin/main' }, JSON.stringify(connected));
+  assert.equal(await git(local, 'remote', 'get-url', 'origin'), `${gitea}/dave/hello.git`);
+  assert.equal(await git(local, 'config', 'branch.main.merge'), 'refs/heads/main');
+  assert.equal(note(await outcome(gitConnectRemote(local, `${gitea}/dave/Demo-v2.git`))).code, 'has_remote');
+  console.log('⑨ 连接已有远端:连不存在的仓库 → remote_unreachable、origin 撤掉;连站上有 main 的仓库 → origin + 上游设好;已有远端 → has_remote');
+
+  // ⑩ 提交身份:git 没配 → 由账号推出不公开的地址,只进这一次提交;推上去后 Gitea 记到这个人名下
+  const mine = got.value.path; // ⑧ 克隆下来的 hello
+  const ambient = {};
+  for (const key of ['GIT_AUTHOR_NAME', 'GIT_AUTHOR_EMAIL', 'GIT_COMMITTER_NAME', 'GIT_COMMITTER_EMAIL']) { ambient[key] = process.env[key]; delete process.env[key]; }
+  writeFileSync(join(mine, 'who.txt'), 'who wrote this\n');
+  const who = await resolveGitIdentity(async () => forsionIdentity({ username: 'Dave', nickname: 'Dave D' }, new URL(gitea).hostname), mine);
+  assert.deepEqual(who.identity, { name: 'Dave D', email: 'dave@noreply.127.0.0.1', source: 'forsion' });
+  const committed = note(await outcome(gitCommit(mine, 'signed by the account', undefined, undefined, who.env)));
+  assert.ok(committed.ok, `提交应当成功:${JSON.stringify(committed)}`);
+  assert.equal(await git(mine, 'log', '-1', '--format=%an <%ae> / %cn <%ce>'), 'Dave D <dave@noreply.127.0.0.1> / Dave D <dave@noreply.127.0.0.1>');
+  assert.equal((await run('git', ['config', '--get-regexp', '^user\\.'], { cwd: mine }).catch((e) => e)).code, 1, '身份不该写进任何 git 配置');
+  Object.assign(process.env, ambient);
+  const pushedMine = note(await outcome(gitPush(mine)));
+  assert.ok(pushedMine.ok, `推送应当成功:${JSON.stringify(pushedMine)}`);
+  const sha = await git(mine, 'rev-parse', 'HEAD');
+  const onSite = JSON.parse((await api(`/api/v1/repos/dave/hello/git/commits/${sha}`, token)).body);
+  assert.equal(onSite.author?.login, 'dave', `Gitea 应当把这条提交记在 dave 名下:${JSON.stringify(onSite.author)} / ${JSON.stringify(onSite.commit?.author)}`);
+  // 对照:同一个仓库、同一个人推上去,但邮箱是站上不认识的 → 不记在任何人名下(上面那条不是「谁推的就记给谁」)
+  writeFileSync(join(mine, 'stranger.txt'), 'someone else\n');
+  await git(mine, 'add', '-A');
+  await run('git', ['commit', '-q', '-m', 'unknown email'], { cwd: mine, env: { ...process.env, GIT_AUTHOR_EMAIL: 'stranger@elsewhere.example', GIT_COMMITTER_EMAIL: 'stranger@elsewhere.example' } });
+  assert.ok(note(await outcome(gitPush(mine))).ok);
+  const strangerSha = await git(mine, 'rev-parse', 'HEAD');
+  assert.equal(JSON.parse((await api(`/api/v1/repos/dave/hello/git/commits/${strangerSha}`, token)).body).author, null);
+  installForsionGit(undefined);
+  console.log('⑩ 提交身份:git 没配 → Dave D <dave@noreply.127.0.0.1> 只进这一次提交、配置里没写;推上去后 Gitea 记在 dave 名下(站上不认识的邮箱 → 不记名)');
 
   // 全程:令牌原文 / Basic 编码不出现在引擎交出来的任何文字里
   const everything = shown.join('\n');

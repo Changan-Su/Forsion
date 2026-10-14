@@ -108,6 +108,8 @@ const api = {
   unitsOpenInBrowser: (id: string): Promise<void> => ipcRenderer.invoke('units:openInBrowser', id),
   /** P2P 直连打开设备:成了回本机代理地址(webview 当 lanUrl 用);失败 reject 可读错误,UI 回落中转。 */
   unitsP2pOpen: (id: string): Promise<{ url: string }> => ipcRenderer.invoke('units:p2pOpen', id),
+  /** 桌面作为调用方(新会话建到另一台电脑上):主进程本机中转口的地址 + 本次启动的口令;forsion_token 仍留在主进程。没登录 → null。 */
+  unitRelay: (): Promise<{ base: string; token: string; accountId: string | null } | null> => ipcRenderer.invoke('units:relay'),
   unitsUpdate: (id: string, patch: { name?: string; icon?: string }): Promise<{ status: number; json: any }> =>
     ipcRenderer.invoke('units:update', id, patch),
   unitsRemove: (id: string): Promise<{ status: number; json: any }> => ipcRenderer.invoke('units:remove', id),
@@ -616,7 +618,7 @@ const AGENT_KEYS = [
   'openAgentDir', 'openSkillsDir',
   'envCheck', 'envRun', 'onEnvOutput',
   'pluginsUserInstalled', 'pluginsUninstall',
-  'unitsList', 'unitsOpenInBrowser', 'unitsUpdate', 'unitsRemove', 'unitHostStatus', 'unitsPairedList', 'unitsPairedRemove', 'unitsProbeLan', 'unitsP2pOpen', // 设备互联依赖 agent 后端
+  'unitsList', 'unitsOpenInBrowser', 'unitsUpdate', 'unitsRemove', 'unitHostStatus', 'unitsPairedList', 'unitsPairedRemove', 'unitsProbeLan', 'unitsP2pOpen', 'unitRelay', // 设备互联依赖 agent 后端
   // P1-K5
   'secretStorageStatus', 'secretStorageRetry', 'secretStorageResetUnitPairing', 'secretStorageRelaunch', // 设备凭据提示挂在设备互联脚部,同属 agent 后端
   // P1-K4

@@ -189,6 +189,8 @@ export interface ModelsBrain {
     realtimeModel?: { id: string; name: string; apiModelId?: string | null } | null;
     /** 云端的机器翻译模型(百炼 qwen-mt 那一类;不在 models 里 —— 它们不能聊天)。老云端不给 = 没有。 */
     translateModels?: Array<{ id: string; name: string; provider?: string; apiModelId?: string | null }>;
+    /** 云端的朗读模型(不在 models 里 —— 它们只合成语音;桌面「语音朗读」的模型框列它们)。老云端不给 = 没有。 */
+    ttsModels?: Array<{ id: string; name: string; apiModelId?: string | null }>;
     /** 这次目录是真读到了,还是被降级填的空?未实现此字段的实现留 undefined(调用方回落长度启发式)。
      *  空列表有两种成因(未登录/断网 vs admin 真没授权),分不清就会把掉线用户支去设置页空等。 */
     reachable?: boolean;
@@ -295,7 +297,7 @@ export interface ImagesBrain {
   edit?(req: ImageEditRequest): Promise<ImageGenResult>;
 }
 
-/** 语音合成(朗读按钮/自动朗读用)。direct:调 provider 自有 OpenAI 兼容 /audio/speech。 */
+/** 语音合成(朗读按钮/自动朗读用)。direct:调 provider 自有 OpenAI 兼容 /audio/speech;没命中直连的走 Forsion 云端 /api/brain/tts。 */
 export interface SpeechRequest {
   model: string; // TTS 模型 id(direct=apiModelId 或 <providerId>/<model>)
   text: string;
@@ -399,6 +401,21 @@ export interface GitHostingBrain {
   credential(device: string, opts?: { signal?: AbortSignal }): Promise<{ webUrl: string; username: string; password: string }>;
 }
 
+// ── 绑定的 GitHub 账号(对端 server microserver/github 的 /api/github/{status,credential};绑定 / 解绑只在账户中心做)──
+/** 云端开没开 GitHub 绑定、当前用户绑没绑。只有登录名和头像,没有令牌。 */
+export type GithubLinkStatus =
+  | { configured: false }
+  | { configured: true; linked: false }
+  | { configured: true; linked: true; login: string; avatarUrl: string | null };
+
+export interface GithubBrain {
+  status(opts?: { signal?: AbortSignal }): Promise<GithubLinkStatus>;
+  /** 当前用户绑定的那个 GitHub 账号的推拉凭据(password = 那枚 OAuth 令牌)。失败抛 GitHostingError,status / code 照对端原样:
+   *  404 GITHUB_NOT_LINKED、409 GITHUB_RELINK_REQUIRED、503 GITHUB_NOT_CONFIGURED;旧云端没有这个模块 → 404 不带 code;
+   *  连不上 / 超时 → status 0。同样**不带响应体原文**。 */
+  credential(opts?: { signal?: AbortSignal }): Promise<{ username: string; password: string }>;
+}
+
 export interface CloudBrainServices {
   llm: LlmBrain;
   users: UsersBrain;
@@ -425,6 +442,8 @@ export interface CloudBrainServices {
   cloud?: CloudAccountBrain;
   /** Forsion Git 的站点信息与推拉凭据;可选:仅 httpBrain 实现,没配云端地址 / 没登录时不挂 → 推拉照用户自己的 git 配置跑。 */
   git?: GitHostingBrain;
+  /** 绑定的 GitHub 账号:绑没绑 + 推拉凭据;可选:仅 httpBrain 实现,没配云端地址 / 没登录时不挂 → github.com 的推拉照用户自己的 git 配置跑。 */
+  github?: GithubBrain;
 }
 
 /** 服务端收件箱广播(对端 GET /api/brain/inbox/broadcasts;created_at 为服务端微秒原文,原样回传做游标)。

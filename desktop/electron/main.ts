@@ -49,6 +49,7 @@ import { createApprovalDelivery, engineFromBackend } from './approvalDelivery' /
 import { APPROVAL_OPEN_CHANNEL } from '../shared/approvalOpen' // P1-K3
 import './mainMessages' // P1-K5:登记 main.* 原生界面文案(配对框 / 崩溃框 / 下载通知 / 选择框标题)
 import * as deviceSecrets from './deviceSecrets' // P1-K5:设备凭据(配对 / external token)进 safeStorage
+import { createUnitRelay } from './unitRelay' // 桌面作为调用方:把会话建到账号下另一台电脑上
 import './editContextMenu' // 编辑区系统右键菜单(评审 G4-08):导入即给每个应用窗口挂 context-menu,逻辑全在模块里
 import { readThemesDir, seedDefaultThemes } from './themes'
 import { builtinBundleSources, builtinPluginIds, bundleOff, bundleRestartPending, initBundleSwitches, lockedPluginIds, seedBuiltinBundles, setBundleOff } from './builtinPlugins'
@@ -2750,6 +2751,22 @@ app.whenReady().then(async () => {
       throw new Error('P2P 信道在建立后立即断开')
     }
     return { url: proxy.url }
+  })
+  // 桌面主窗口作为调用方(把新会话建到账号下另一台电脑上,2026-10-14):渲染层没有 forsion_token,经主进程的本机中转口发往 hub 隧道
+  // (见 unitRelay.ts)。口令只交给受信的应用窗口顶层 frame;没登录 = null(这一端此刻连不了别的电脑,渲染层据此把选择器收成只读)。
+  const unitRelay = createUnitRelay({
+    apiBase: async () => { const c = (await loadConfig()).cloudUrl; return c ? `${c.replace(/\/+$/, '')}/api` : '' },
+    token: () => loadTanguCreds().token || '',
+    // 令牌解不出账号(不是 JWT)时拿令牌本身当身份:宁可续期后口令作废重取,也不让口令跨账号
+    account: () => { const c = loadTanguCreds(); return c.token ? forsionAccountId(c.cloudUrl || '', c.token) ?? `token:${c.token}` : null },
+    pairing: async () => { const p = await deviceSecrets.unitPairing(); return p.state === 'locked' ? 'locked' : p.value },
+  })
+  ipcMain.handle('units:relay', async (e) => {
+    if (!isTrustedSender(e)) throw new Error('forbidden')
+    const creds = loadTanguCreds()
+    if (!creds.token || !(await loadConfig()).cloudUrl) return null
+    const opened = await unitRelay.open()
+    return opened && { ...opened, accountId: forsionAccountId(creds.cloudUrl || '', creds.token) }
   })
   ipcMain.handle('units:hostStatus', () => ({
     ...(unitHub ? unitHub.status() : { running: false, connected: false, unitId: null, lastError: null }),

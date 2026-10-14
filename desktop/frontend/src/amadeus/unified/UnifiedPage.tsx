@@ -35,7 +35,7 @@ import { BLANK_SCENE_JSON, blankDrawing } from '@amadeus-shared/excalidraw/forma
 import { fdDirOf } from '../lib/fd'
 import { askString } from '../components/askString'
 import { resolvePageName } from '@amadeus-shared/links'
-import { resolveFileName } from '../lib/vaultFiles'
+import { resolveFileLink } from '../lib/vaultFiles'
 import { wikiFilesEnabled } from '../lib/wikiFiles'
 import { usePageStore, useScopedPageStore, flushAllScopes, remapScopePaths, cascadeFdAfterRename, claimTitleFocus, PageScopeCtx, useActivePageScope, hasPageScope, activePageScope } from '../store/pageStore'
 // 模式胶囊复用 `.t2s-vaultseg`(见渲染处):样式真源是侧栏那张表。App 里 amadeusViews 已显式引过,
@@ -96,6 +96,8 @@ import { replyAnchorPos } from './replyInsert'
 import type { ReplyAnchor } from './lifecycle'
 import { readTangu } from '../plugins/tanguSeam'
 import { usePluginStore } from '../plugins/pluginStore'
+import { listSelectionActions, runSelectionAction, selectionActionKey } from '../../selectionActions'
+import { resolveIcon } from '../components/icons'
 import { headingFoldPlugins } from './headingFold'
 import { listFoldPlugins } from './listFold'
 import { LinkHoverCard } from './linkCard'
@@ -404,7 +406,7 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
   /** 选区工具栏「问 Tangu」(G3-04);缺 = 宿主没有侧栏对话,不出按钮。 */
   onAskTangu?: (view: EditorView) => void
   /** 选区工具栏「AI ▾」(G3-07);缺 = 宿主做不了正文 AI。 */
-  aiMenu?: { items: ToolbarAiItem[]; onPick: (id: string, view: EditorView) => void }
+  aiMenu?: { items: ToolbarAiItem[]; translate?: boolean; more?: (from: number, to: number) => ToolbarAiItem[]; onPick: (id: string, view: EditorView) => void }
   /** `/ai`(G3-07):消费掉 '/ai' 之后在光标处开 AI 面板。 */
   onAiPrompt?: (view: EditorView) => void
 }): ReactElement {
@@ -979,13 +981,14 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
         keys={NOOP_KEYS}
         saveImage={saveImage}
         saveFiles={saveFiles}
-        onOpenWiki={(name, o) => void store.getState().openWikiLink(name, path, o)}
+        // 没带修饰键的点击 / 「打开光标处链接」:文件类目标开在旁边那半屏(openWikiLink 的 split;笔记目标不认它,照旧就地)。
+        onOpenWiki={(name, o) => void store.getState().openWikiLink(name, path, o ?? { split: true })}
         getPageNames={() => store.getState().pages}
         slashOpsRef={slashOps}
         onSlashPick={applySlash}
         getFiles={() => (wikiFilesEnabled() ? store.getState().files : [])}
         isWikiResolved={(n) =>
-          !!resolvePageName(n, store.getState().pages, path) || !!resolveFileName(n, store.getState().files, path)}
+          !!resolvePageName(n, store.getState().pages, path) || !!resolveFileLink(n, store.getState().files, path)}
         wikiIcon={(n) => {
           const p = resolvePageName(n, store.getState().pages, path)
           return p ? store.getState().icons[p] : undefined
@@ -1867,17 +1870,26 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
     if (quote) readTangu()?.askInChat?.([pageInstructionContext(instructionsOf(view.state.doc), path), quote].filter(Boolean).join('\n\n').slice(0, 20_000))
   }
   // ── 正文 AI(评审 G3-07,拍板 #13)───────────────────────────────────────────────
-  // 入口:选区工具栏「AI ▾」(内置动作 + 插件 registerSelectionAction)、`/ai`、空行按空格(缺省关)。不进右键菜单。
+  // 入口:选区工具栏(「AI ▾」里的改写动作、动作区的「翻译」、⋯ 里插件 registerSelectionAction 的动作)、`/ai`、
+  // 空行按空格(缺省关)。不进右键菜单。
   // 宿主能做才出现(探针给了 complete);结果先进 InlineAiPanel 预览,确认后才写(applyAiResult:一个事务、纯 md)。
   const canAi = !readOnly && !!readTangu()?.complete
   canAiRef.current = canAi
   const pluginSelActions = usePluginStore((s) => s.selectionActions)
-  const [aiPanel, setAiPanel] = useState<null | { key: number; x: number; y: number; top: number; title: string; hasSelection: boolean; askFirst: boolean; action: TanguInlineAction | 'prompt'; plugin?: string }>(null)
-  const AI_ACTIONS: TanguInlineAction[] = ['improve', 'fix', 'shorter', 'longer', 'summarize', 'translate', 'continue', 'custom']
-  const aiMenuItems: ToolbarAiItem[] = [
-    ...AI_ACTIONS.map((a) => ({ id: a, label: t(`inlineai.action.${a}`) })),
-    ...pluginSelActions.map((o) => ({ id: `plugin:${o.pluginId}:${o.item.id}`, label: o.item.title, plugin: true })),
-  ]
+  const [aiPanel, setAiPanel] = useState<null | { key: number; x: number; y: number; top: number; title: string; hasSelection: boolean; askFirst: boolean; action: TanguInlineAction | 'prompt'; plugin?: string; language?: string }>(null)
+  // 「翻译」不在这张表里:它是划线条动作区的一枚(聊天、插件视图里也有),不是只属于笔记的改写工具。
+  const AI_ACTIONS: TanguInlineAction[] = ['improve', 'fix', 'shorter', 'longer', 'summarize', 'continue', 'custom']
+  const aiMenuItems: ToolbarAiItem[] = AI_ACTIONS.map((a) => ({ id: a, label: t(`inlineai.action.${a}`) }))
+  /** ⋯ 里的插件动作:scope 认笔记、when 说要的才列(when 要看选了多少字,所以按选区现算)。 */
+  const aiMoreItems = (from: number, to: number): ToolbarAiItem[] => {
+    const doc = layer.getView()?.state.doc
+    const length = doc ? doc.textBetween(Math.min(from, doc.content.size), Math.min(to, doc.content.size), '\n', '').length : to - from
+    return listSelectionActions(pluginSelActions, { view: 'note', editable: true, length }).map((o) => {
+      const icon = resolveIcon(o.item.icon)
+      return { id: selectionActionKey(o), label: o.item.title, icon: icon ? <span className="selbar-ico">{icon}</span> : undefined }
+    })
+  }
+  const noteTitle = path.split('/').pop()!.replace(/\.md$/i, '')
   /** 开面板:记目标区间(选区 / 光标一点),面板贴在目标下方。kind = 内置动作 / `plugin:<插件>:<项>` / 'prompt'(光标处先问一句)。 */
   const openAi = (view: EditorView, kind: string): void => {
     if (!canAi) return
@@ -1886,15 +1898,24 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
     const from = cursor ? sel.head : sel.from
     const to = cursor ? sel.head : sel.to
     if (!cursor && to <= from) return
+    const plugin = kind.startsWith('plugin:') ? kind.slice('plugin:'.length) : undefined
+    const owned = plugin ? pluginSelActions.find((o) => `${o.pluginId}:${o.item.id}` === plugin) : undefined
+    const text = view.state.doc.textBetween(from, to, '\n', '')
+    // output: 'none' = 插件自己办完(开一个视图、存一张卡):不出预览卡,笔记不动,选区留着。
+    if (owned?.item.output === 'none') {
+      const markdown = hostApi.current?.serializeMd(view.state.doc.slice(from, to).content) ?? text
+      void runSelectionAction(owned, { text, markdown, pagePath: path, view: 'note', editable: true, source: { path, title: noteTitle } })
+        .catch((e: unknown) => window.dispatchEvent(new CustomEvent('amadeus:toast', { detail: { text: translate('selbar.failed', { title: owned.item.title, e: String((e as Error)?.message || e) }) } })))
+      return
+    }
     setAiTarget(view, from, to)
     const a = view.coordsAtPos(from)
     const b = view.coordsAtPos(to)
-    const plugin = kind.startsWith('plugin:') ? kind.slice('plugin:'.length) : undefined
     const action = (plugin || cursor ? (cursor ? 'prompt' : 'custom') : kind) as TanguInlineAction | 'prompt'
     const title = plugin
-      ? (pluginSelActions.find((o) => `${o.pluginId}:${o.item.id}` === plugin)?.item.title ?? t('inlineai.label'))
+      ? (owned?.item.title ?? t('inlineai.label'))
       : cursor ? t('inlineai.label') : t(`inlineai.action.${kind}`)
-    setAiPanel({ key: Date.now(), x: a.left, y: b.bottom + 6, top: a.top - 6, title, hasSelection: !cursor, askFirst: cursor || kind === 'custom', action, plugin })
+    setAiPanel({ key: Date.now(), x: a.left, y: b.bottom + 6, top: a.top - 6, title, hasSelection: !cursor, askFirst: cursor || kind === 'custom', action, plugin, ...(kind === 'translate' ? { language: translateTargetOf(text) } : {}) })
   }
   aiSpaceRef.current = (view) => openAi(view, 'prompt')
   /** 面板的请求:内置动作走引擎 /agent/inline;插件项走它自己的 run(结果同样只进预览)。目标区间现读(随编辑映射)。 */
@@ -1907,14 +1928,9 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
       : ''
     if (panel.plugin) {
       const owned = usePluginStore.getState().selectionActions.find((o) => `${o.pluginId}:${o.item.id}` === panel.plugin)
-      if (!owned) throw new Error(translate('unipage.toast.insertPointLost'))
-      const md = await owned.item.run({ text: target.text, markdown: selMd, pagePath: path })
-      if (md == null || md === '') return { text: '' }
-      if (typeof md !== 'string') throw new Error(translate('unipage.plugin.notString', { type: typeof md }))
-      if (Array.from(md).some((c) => c.charCodeAt(0) < 32 && c !== String.fromCharCode(9) && c !== String.fromCharCode(10))) {
-        throw new Error(translate('unipage.plugin.controlChars'))
-      }
-      return { text: md }
+      if (!owned) throw new Error(translate('selbar.err.gone'))
+      // 返回值的校验(字符串、无控制字符)在 runSelectionAction 里:聊天、插件视图里跑同一个动作走的也是它。
+      return { text: await runSelectionAction(owned, { text: target.text, markdown: selMd, pagePath: path, view: 'note', editable: true, source: { path, title: noteTitle }, signal, onDelta: (d) => { if (typeof d === 'string') onDelta(d) } }) }
     }
     const probe = readTangu()
     if (!probe?.complete) throw new Error(translate('inlineai.unavailable'))
@@ -1926,10 +1942,10 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
       ...(selMd ? { selection: selMd } : {}),
       ...(before ? { before } : {}),
       ...(after ? { after } : {}),
-      title: path.split('/').pop()!.replace(/\.md$/i, ''),
+      title: noteTitle,
       pagePath: path,
       pageInstructions: instructionsOf(view.state.doc),
-      ...(action === 'translate' ? { language: translateTargetOf(target.text) } : {}),
+      ...(action === 'translate' ? { language: panel.language ?? translateTargetOf(target.text) } : {}),
     }, { signal, onDelta })
   }
   const closeAi = (): void => {
@@ -3389,7 +3405,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
                 onCard={makeCard}
                 readOnly={readOnly}
                 onAskTangu={canAskTangu ? (view) => askTangu(view, view.state.selection.from, view.state.selection.to) : undefined}
-                aiMenu={canAi ? { items: aiMenuItems, onPick: (id, view) => openAi(view, id) } : undefined}
+                aiMenu={canAi ? { items: aiMenuItems, translate: true, more: aiMoreItems, onPick: (id, view) => openAi(view, id) } : undefined}
                 onAiPrompt={canAi ? (view) => openAi(view, 'prompt') : undefined}
               />
             </MilkdownProvider>
@@ -3431,6 +3447,8 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
             onApply={applyAi}
             onClose={closeAi}
             editorEl={bodyRef.current}
+            // 翻译:卡头能临时换目标语言。换 key = 重开这张卡(在飞的请求随卸载中止),目标区间不动。
+            language={aiPanel.language ? { value: aiPanel.language, onChange: (id) => setAiPanel({ ...aiPanel, key: Date.now(), language: id }) } : undefined}
           />
         </OverlayPortal>
       )}

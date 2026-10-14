@@ -7,6 +7,7 @@ import { useUiStore } from '@amadeus/store/uiStore'
 import { ConfirmDialog } from '@amadeus/components/Dialogs'
 import { WikiHoverPreview } from '@amadeus/components/WikiHoverPreview'
 import { AskStringHost } from '@amadeus/components/askString'
+import { GitCloneHost } from './components/GitCloneDialog'
 import { DeleteAssetsHost } from '@amadeus/components/askDeleteAssets'
 import { NewDrawingHost } from '@amadeus/components/askNewDrawing'
 import { CloudSyncDialogHost } from './components/CloudSyncDialog'
@@ -19,6 +20,7 @@ import { linkTarget, pageKey, resolvePageName } from '@amadeus-shared/links'
 import { fuzzyRank } from '@lcl/engine/fuzzy'
 import { isImeKeyEvent } from '@lcl/engine/ime'
 import { openDb, openDrawing, openFile, openNote } from './amadeusNav'
+import { WikiLinkMenuHost } from './amadeusLinkMenu'
 import { insertTemplate, listTemplates } from './amadeusTemplates'
 import { openTagView } from './amadeusPanels'
 import { registerMessages, useI18n } from './i18n'
@@ -97,8 +99,8 @@ export function AmadeusOverlays() {
   // [[xxx.db]] 点击应用内开 db tab(pageStore 发事件解耦,同模板选择器模式)。
   useEffect(() => {
     const onOpenDb = (e: Event): void => {
-      const d = (e as CustomEvent<{ path?: string; newTab?: boolean }>).detail
-      if (typeof d?.path === 'string' && d.path) openDb(d.path, { newTab: d.newTab })
+      const d = (e as CustomEvent<{ path?: string; newTab?: boolean; split?: boolean }>).detail
+      if (typeof d?.path === 'string' && d.path) openDb(d.path, { newTab: d.newTab, split: d.split })
     }
     window.addEventListener('amadeus:open-db', onOpenDb)
     return () => window.removeEventListener('amadeus:open-db', onOpenDb)
@@ -151,8 +153,8 @@ export function AmadeusOverlays() {
   // [[xxx.pdf]] / [[xxx.pdf#page=N]] 点击应用内打开(pageStore 发事件解耦,同 open-db 模式);由谁打开听「默认打开方式」,落点跟着走。
   useEffect(() => {
     const onOpenPdf = (e: Event): void => {
-      const d = (e as CustomEvent<{ path?: string; page?: number; q?: string; newTab?: boolean }>).detail
-      if (typeof d?.path === 'string' && d.path) openFile(d.path, { page: d.page, quote: d.q, newTab: d.newTab })
+      const d = (e as CustomEvent<{ path?: string; page?: number; q?: string; newTab?: boolean; split?: boolean }>).detail
+      if (typeof d?.path === 'string' && d.path) openFile(d.path, { page: d.page, quote: d.q, newTab: d.newTab, split: d.split })
     }
     window.addEventListener('amadeus:open-pdf', onOpenPdf)
     return () => window.removeEventListener('amadeus:open-pdf', onOpenPdf)
@@ -160,8 +162,8 @@ export function AmadeusOverlays() {
   // [[X.excalidraw]] 点击应用内开白板 tab(pageStore 发事件解耦,同 open-db 模式)。
   useEffect(() => {
     const onOpenDrawing = (e: Event): void => {
-      const d = (e as CustomEvent<{ path?: string; newTab?: boolean }>).detail
-      if (typeof d?.path === 'string' && d.path) openDrawing(d.path, { newTab: d.newTab })
+      const d = (e as CustomEvent<{ path?: string; newTab?: boolean; split?: boolean }>).detail
+      if (typeof d?.path === 'string' && d.path) openDrawing(d.path, { newTab: d.newTab, split: d.split })
     }
     window.addEventListener('amadeus:open-drawing', onOpenDrawing)
     return () => window.removeEventListener('amadeus:open-drawing', onOpenDrawing)
@@ -170,8 +172,10 @@ export function AmadeusOverlays() {
   // 页面列表里永远查不到)。openFile 会按内置 → 插件 → 系统默认程序依次路由。
   useEffect(() => {
     const onOpenFile = (e: Event): void => {
-      const d = (e as CustomEvent<{ path?: string; newTab?: boolean }>).detail
-      if (typeof d?.path === 'string' && d.path) openFile(d.path, { newTab: d.newTab })
+      const d = (e as CustomEvent<{ path?: string; newTab?: boolean; split?: boolean; handled?: boolean }>).detail
+      if (typeof d?.path !== 'string' || !d.path) return
+      d.handled = true // 回执:pageStore 据此知道有宿主接了,不用自己回落系统程序
+      openFile(d.path, { newTab: d.newTab, split: d.split })
     }
     window.addEventListener('amadeus:open-file', onOpenFile)
     return () => window.removeEventListener('amadeus:open-file', onOpenFile)
@@ -181,7 +185,9 @@ export function AmadeusOverlays() {
       {overlay === 'template' && templateCtx && <TemplatePicker ctx={templateCtx} />}
       <WikiCreateConfirm />
       <WikiHoverPreview />
+      <WikiLinkMenuHost />
       <AskStringHost />
+      <GitCloneHost />
       <DeleteAssetsHost />
       <NewDrawingHost />
       <CloudSyncDialogHost />

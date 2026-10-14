@@ -117,6 +117,30 @@ describe('versioned Agent memory management', () => {
     expect(forgotten).toMatchObject({ ok: true, action: 'forget', id: added.entry.id, count: 0 });
   });
 
+  it('remember tells a mistyped version apart from a real conflict and keeps both from writing', async () => {
+    const tool = memoryLogProvider.tools().find(t => t.name === 'remember')!;
+    const ctx = { userId: 'fixture-user', sessionId: 'typo-session', runId: 'typo-run', appId: 'tangu' };
+    const run = (args: any) => runWithAgentSlug('first', () => tool.execute(args, ctx)) as Promise<string>;
+    const added = JSON.parse(await run({ fact: 'The user is called Captain' }));
+    const listed = JSON.parse(await run({ action: 'list' }));
+    // 10-13 live 里是同长度、尾巴那组抄串了两位;这里换掉最后一位,同样是长得像、但从没发出过的号
+    const typo = listed.version.slice(0, -1) + (listed.version.endsWith('0') ? '1' : '0');
+    const misread = await run({ action: 'update', id: added.entry.id, expectedVersion: typo, fact: 'The user is called Master' });
+    expect(misread).toMatch(/^Error: expectedVersion .* copied wrong\. Nothing was written\./);
+    expect(misread).toContain(`The current version is "${listed.version}"`);
+    expect(misread).toContain('currently reads "The user is called Captain"');
+    expect((await api('/agent/agents/first/memory')).body.version).toBe(listed.version);
+    const typoForget = await run({ action: 'forget', id: 'no-such-entry', expectedVersion: typo });
+    expect(typoForget).toContain('There is no entry with id "no-such-entry"');
+    // 照回执里的版本重试就写得进去
+    const fixed = JSON.parse(await run({ action: 'update', id: added.entry.id, expectedVersion: listed.version, fact: 'The user is called Master' }));
+    expect(fixed).toMatchObject({ ok: true, action: 'update', entry: { content: 'The user is called Master' } });
+    // 和现在的版本差得远(真冲突,或很久以前读的)照旧:记忆已变,重新 list
+    await expect(run({ action: 'update', id: added.entry.id, expectedVersion: '00000000-0000-4000-8000-000000000000', fact: 'The user is called Boss' })).rejects.toThrow('Memory changed since it was read');
+    await expect(run({ action: 'update', id: added.entry.id, expectedVersion: listed.version, fact: 'The user is called Boss' })).rejects.toThrow('Memory changed since it was read');
+    expect((await api('/agent/agents/first/memory')).body.entries.find((e: any) => e.id === added.entry.id).content).toBe('The user is called Master');
+  });
+
   it('remember rejects paragraph-sized facts, updates in place, and shows current entries when memory is full', async () => {
     const tool = memoryLogProvider.tools().find(t => t.name === 'remember')!;
     const ctx = { userId: 'fixture-user', sessionId: 'shape-session', runId: 'shape-run', appId: 'tangu' };

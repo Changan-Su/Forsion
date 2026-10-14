@@ -406,6 +406,8 @@ export const SHOW_SYSTEM_PROMPT_KEY = 'forsion_tangu_show_system_prompt'
 
 /** 丝滑光标开关(localStorage,**缺席=关**;smoothCaret.ts 全局模块 + 设置→外观)。 */
 export const SMOOTH_CARET_KEY = 'forsion_tangu_smooth_caret'
+/** 划线条的排法(localStorage,**缺席 = 'tools'**:本视图的工具在前;'actions' = 动作在前。selectionActions.ts + 设置→外观)。 */
+export const SELECTION_BAR_ORDER_KEY = 'forsion_selection_bar_order'
 /** UI 缩放(uiZoom.ts 真源;放这儿是为了让跨窗同步的白名单不必反向依赖 uiZoom)。 */
 export const UI_ZOOM_KEY = 'forsion_ui_zoom'
 /** 界面语言(i18n.tsx 真源;同上)。 */
@@ -574,6 +576,8 @@ export interface WorkspaceDescriptor {
   channel?: ChannelKind
   /** 会话分组键别名。默认本地目录在启动期变更时，旧 project_path 仍归入当前默认组。 */
   sessionKeys?: string[]
+  /** 这个工作区在哪台电脑上(桌面作为调用方:新对话项目药丸的远端列表给的那几项)。缺省 = 本端。 */
+  unitId?: string
 }
 
 /** 「Cloud 工作区」分组键哨兵(project_path 为空的会话归此组;真实本地路径永不为此值)。 */
@@ -657,6 +661,8 @@ export interface ModelsResponse {
   realtimeModel?: { id: string; name: string; apiModelId?: string | null } | null
   /** Forsion 云端的机器翻译模型(不在 models 里:它们不能聊天;只有「翻译」模型槽列它们)。没有 = 云端没配 / 没登录 / 老引擎。 */
   translateModels?: Array<{ id: string; name: string; provider?: string; apiModelId?: string | null }>
+  /** Forsion 云端的朗读模型(设置页「语音朗读」模型框的候选;老引擎不给 = 没有) */
+  ttsModels?: Array<{ id: string; name: string; apiModelId?: string | null }>
   /** 引擎的缺省上下文上限(272k):自动识别出的窗口超过它就封顶,本机覆盖才开更大。 */
   contextWindowCap?: number
   /** 该引擎能不能写本机模型覆盖(PUT /agent/models/overrides 同一道 hostExec 门)。false / 缺省 = 不露「上下文上限」。 */
@@ -742,7 +748,13 @@ export interface GitSettings {
   branchPrefix: string
   commitInstructions: string
   forceWithLease: boolean
+  /** 提交身份:只在这台电脑的 git 没配名字 / 邮箱时用;空 = 由 Forsion 账号推出来。 */
+  identityName: string
+  identityEmail: string
 }
+/** 提交会署的名字和邮箱。source:git = git 配置里本来就有;custom = 「设置 → Git」里填的;forsion = 由 Forsion 账号推出来的;
+ *  auto = 哪儿都没有,git 自己按这台电脑的用户名和主机名取的。 */
+export interface GitIdentity { name: string; email: string; source: 'git' | 'custom' | 'forsion' | 'auto' }
 export interface ProjectContext {
   cwd: string
   workspaceDir: string
@@ -1334,6 +1346,10 @@ declare global {
       unitsProbeLan?(lanUrl: string): Promise<{ instanceId: string; name: string } | null>
       /** P2P 直连打开设备:成了回本机代理地址;失败 reject(UI 回落中转)。 */
       unitsP2pOpen?(id: string): Promise<{ url: string }>
+      /** 桌面作为调用方(新会话建到账号下另一台电脑上):主进程本机中转口的地址 + 本次启动的口令(electron/unitRelay.ts)。
+       *  forsion_token 不下发渲染层 —— 渲染层拿这枚口令打中转口,主进程换上云端凭据与调用方票再发往 hub 隧道。没登录 → null。
+       *  只有桌面壳有;手机走原生中继、网页版手里本来就有 forsion_token。 */
+      unitRelay?(): Promise<{ base: string; token: string; accountId: string | null } | null>
       // P1-K8 ── 手机本机作为 Unit(调用方)的身份:只在移动端 mobileShim 注入(web 路径回「仅安卓 App」)。
       // 远端引擎请求的调用方票由原生中继透明附加(window.fetch 前置),票与凭据永不进 JS;中继模式下
       // 刻意没有 unitCallerHeaders(INTEGRATION R-05,那是桥模式的接缝)。relay:'unsupported' = 原生缺席或

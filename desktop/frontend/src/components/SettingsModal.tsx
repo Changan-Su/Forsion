@@ -2,6 +2,7 @@ import { PRODUCT } from '../product'
 import { ModelPickerSettings } from './ModelPickerSettings'
 import { AutoCompactSetting } from './AutoCompactSetting'
 import { GitSettingsSection } from './GitSettingsSection'
+import { GitAccountsSection } from './GitAccountsSection'
 import { HostSandboxSettings } from './HostSandboxSettings'
 import { ErrorBoundary } from './ErrorBoundary'
 import { BrowserExtensionPanel } from './BrowserExtensionPanel'
@@ -10,7 +11,7 @@ import { BrowserExtensionPanel } from './BrowserExtensionPanel'
  * 在 Desktop 主界面内替换 Chat/Inspector 区域，而不是覆盖式弹窗。
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react'
-import { X, Droplets, Shapes, ArrowLeft, Undo2, ChevronRight, Loader2, RefreshCw, Sun, Moon, MonitorCog, RotateCcw, LogIn, LogOut, KeyRound, Plus, Trash2, Plug, Search, Download, Sparkles, Wrench, Check, Copy, Globe2, FolderOpen, Play, Trophy, FileDown, Settings2, NotebookPen, Puzzle, LayoutGrid, Palette, Keyboard, Bug, Info, Brain, Bot, Webhook, MessageCircle, Blocks, Bell, PanelBottom, Image as ImageIcon, Server, Type, Layers3, MousePointer2, CircleUserRound, Scaling, Coffee, MonitorCheck, History, MonitorSmartphone, Cloud, SunDim, AlignLeft, Wind, TextCursorInput } from 'lucide-react'
+import { X, Droplets, Shapes, ArrowLeft, Undo2, ChevronRight, Loader2, RefreshCw, Sun, Moon, MonitorCog, RotateCcw, LogIn, LogOut, KeyRound, Plus, Trash2, Plug, Search, Download, Sparkles, Wrench, Check, Copy, Globe2, FolderOpen, Play, Trophy, FileDown, Settings2, NotebookPen, Puzzle, LayoutGrid, Palette, Keyboard, Bug, Info, Brain, Bot, Webhook, MessageCircle, Blocks, Bell, PanelBottom, Image as ImageIcon, Server, Type, Layers3, MousePointer2, CircleUserRound, Scaling, Coffee, MonitorCheck, History, MonitorSmartphone, Cloud, SunDim, AlignLeft, Wind, TextSelect } from 'lucide-react'
 import { ThemeCard } from './ThemeCard'
 import { ThemeSettingsPanel } from './ThemeSettingsPanel'
 import { StartupAppearanceSettings } from './StartupAppearanceSettings'
@@ -35,6 +36,7 @@ import type {
 import { SHOW_SYSTEM_PROMPT_KEY } from '../types'
 // 本组件已有同名的 useState setter,故取个别名。persist* = 写盘 + 应用 + 跨窗广播。
 import { isSmoothCaretOn, setSmoothCaret as persistSmoothCaret } from '../smoothCaret'
+import { selectionBarOrder, setSelectionBarOrder } from '../selectionActions'
 import { isPromptSuggestOn, setPromptSuggest as persistPromptSuggest } from '../views/chat2/promptSuggest'
 import { getVisualsPref, setVisualsPref, VISUALS_VALUES, type VisualsPref } from '../visualsPref'
 import { isRibbonAutoHome, setRibbonAutoHome, useRibbonStore, RIBBON_RECENT_MAX } from '@lcl/engine/ribbonRegistry'
@@ -114,6 +116,10 @@ import { connectionTarget, homeTarget } from '../services/engine/targets'
 
 // 本文件自带的文案片段(命名空间 `settingsmodal.*`,不与 i18n.generated.ts 的 `settings.*` 相交)。
 registerMessages({
+  'settingsmodal.selectionBar': { zh: '划线菜单', en: 'Selection menu' },
+  'settingsmodal.selectionBarHint': { zh: '选中文字后浮出的那一条：先排当前视图自己的工具，还是先排「问 Tangu」「翻译」这些每个视图都有的动作。', en: 'The bar that appears over selected text: put the current view\'s own tools first, or the actions every view shares, such as Ask Tangu and Translate.' },
+  'settingsmodal.selectionBar.tools': { zh: '视图工具在前', en: 'View tools first' },
+  'settingsmodal.selectionBar.actions': { zh: '通用动作在前', en: 'Shared actions first' },
   // 「Forsion 云端」一级页:账号 + 云端地址 + 记忆同步 + 笔记在线同步,整页随内置插件 Forsion Extend 出现 / 消失
   'settings.tab.forsionCloud': { zh: 'Forsion 云端', en: 'Forsion Cloud' },
   'settings.page.forsionCloudDescription': {
@@ -403,6 +409,8 @@ export const SettingsModal: React.FC<{
   })
   // 丝滑光标(默认关;localStorage,smoothCaret.ts 全局模块即时生效)。
   const [smoothCaret, setSmoothCaret] = useState<boolean>(isSmoothCaretOn)
+  // 划线菜单的排法(缺省视图工具在前;localStorage,条每次出现时现读)。
+  const [selBarOrder, setSelBarOrder] = useState(selectionBarOrder)
   // 输入建议(默认关;localStorage,promptSuggest.ts 每次现读)。
   const [promptSuggest, setPromptSuggest] = useState<boolean>(isPromptSuggestOn)
   // 对话里的可视化卡多少(auto / less / off;localStorage,随下一次 run 的 ui_settings 快照进引擎)。
@@ -1278,6 +1286,7 @@ export const SettingsModal: React.FC<{
     if (e.sub && !subItemsForTab(e.tab as Tab).some(([k]) => k === e.sub)) return false
     return (e.needs ?? []).every((need) => need === 'stored' ? !!stored
       : need === 'desktop' ? isDesktop
+      : need === 'host' ? isDesktop && !unitPage
       : need === 'hover' ? hoverCapable
       : need === 'wide' ? !mobileSettings
       : need === 'cloud' ? isDesktop && cloudAccount // Forsion 账号面随 Extend 出现(forsion 一级页)
@@ -1886,7 +1895,7 @@ export const SettingsModal: React.FC<{
                   </>
                 )}
 
-                {tab === 'general' && activeSub === 'g-git' && isDesktop && stored && <GitSettingsSection />}
+                {tab === 'general' && activeSub === 'g-git' && isDesktop && stored && <><GitAccountsSection /><GitSettingsSection /></>}
                 {/* 收件箱(Inbox Space):系统通知开关。非 managedKeys,保存即生效不重启后端。 */}
                 {tab === 'general' && isDesktop && stored && activeSub === 'g-inbox' && (
                   <>
@@ -2661,12 +2670,17 @@ export const SettingsModal: React.FC<{
                           <div className="hint" style={{ marginBottom: 8 }}>{t('settings.tts.intro')}</div>
                           <input
                             type="text"
+                            list="tts-model-options"
                             value={stored.ttsModelId ?? ''}
                             onChange={(e) => edit({ ttsModelId: e.target.value })}
                             onBlur={() => void commitEdits(['ttsModelId'], (v) => ({ ttsModelId: (v.ttsModelId || '').trim() }))}
                             placeholder={t('settings.tts.modelPlaceholder')}
                           />
                           {commitErrorHint('ttsModelId')}
+                          {/* Forsion 云端的朗读模型(可输可选;直连提供方的照旧手填 <providerId>/<模型>) */}
+                          <datalist id="tts-model-options">
+                            {(models?.ttsModels || []).map((m) => <option key={m.id} value={m.id} label={m.name} />)}
+                          </datalist>
                         </div>
                         <div className="field">
                           <label>{t('settings.tts.voice')}</label>
@@ -3252,24 +3266,17 @@ export const SettingsModal: React.FC<{
                             }}
                           />
                         </div>
-                        {/* 输入建议:要 Tab 键采用,也要本机引擎(云端执行节点没有这条路由)→ 只在桌面宿主、有悬停的设备上摆出来。 */}
-                        {isDesktop && hoverCapable && !mobileSettings && (
-                          <div className="settings-control-row" data-setting-anchor="prompt-suggest">
-                            <div className="settings-control-copy"><TextCursorInput size={14} /><span><strong>{t('settings.theme.promptSuggest')}</strong><small>{t('settings.theme.promptSuggestHint')}</small></span></div>
-                            <button
-                              type="button"
-                              role="switch"
-                              aria-checked={promptSuggest}
-                              aria-label={t('settings.theme.promptSuggest')}
-                              className={`switch${promptSuggest ? ' on' : ''}`}
-                              onClick={() => {
-                                const on = !promptSuggest
-                                setPromptSuggest(on)
-                                persistPromptSuggest(on)
-                              }}
-                            />
-                          </div>
-                        )}
+                        <div className="settings-control-row" data-setting-anchor="selection-bar">
+                          <div className="settings-control-copy"><TextSelect size={14} /><span><strong>{t('settingsmodal.selectionBar')}</strong><small>{t('settingsmodal.selectionBarHint')}</small></span></div>
+                          <select
+                            aria-label={t('settingsmodal.selectionBar')}
+                            value={selBarOrder}
+                            onChange={(e) => { const v = e.target.value === 'actions' ? 'actions' : 'tools'; setSelBarOrder(v); setSelectionBarOrder(v) }}
+                          >
+                            <option value="tools">{t('settingsmodal.selectionBar.tools')}</option>
+                            <option value="actions">{t('settingsmodal.selectionBar.actions')}</option>
+                          </select>
+                        </div>
                         <div className="settings-control-row" data-setting-anchor="chat-avatars">
                           <div className="settings-control-copy"><CircleUserRound size={14} /><span><strong>{t('settings.theme.chatAvatars')}</strong><small>{t('settings.theme.chatAvatarsHint')}</small></span></div>
                           <button
@@ -3587,6 +3594,23 @@ export const SettingsModal: React.FC<{
                             </select>
                           </div>
                         )}
+                      </div>
+                    )}
+
+                    {/* 输入建议(缺省开):要 Tab 键采用,也要本机引擎(云端执行节点没有这条路由)→ 只在桌面宿主(不含设备页)、
+                        有悬停的设备上摆出来;与 promptSuggest.ts 的 supported() 同一道闸。 */}
+                    {isDesktop && !unitPage && hoverCapable && !mobileSettings && (
+                      <div className="field" style={{ marginTop: 14 }} data-setting-anchor="prompt-suggest">
+                        <label>{t('settings.promptSuggest')}</label>
+                        <div className="hint" style={{ marginBottom: 8 }}>{t('settings.promptSuggestHint')}</div>
+                        <label className="inline-check">
+                          <input
+                            type="checkbox"
+                            checked={promptSuggest}
+                            onChange={(e) => { setPromptSuggest(e.target.checked); persistPromptSuggest(e.target.checked) }}
+                          />
+                          {t('settings.promptSuggestEnable')}
+                        </label>
                       </div>
                     )}
 

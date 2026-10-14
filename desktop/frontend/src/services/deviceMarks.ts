@@ -65,6 +65,40 @@ export function clearDeviceSticky(unitId: string): void {
   })
 }
 
+// ── 「点一台电脑」流程落在这张表上的三步(桌面的运行位置胶囊用;手机弹层有自己的一份本地表,口径相同:unitsSheetModel 的
+//    beginAttempt / noteAttempt / endAttempts)。describeDevice 里**探针失败排在粘滞前面**,所以上一轮的结果必须先清掉。──
+const dropPending = (sticky: Record<string, StickyRefusal>): Record<string, StickyRefusal> =>
+  Object.fromEntries(Object.entries(sticky).filter(([, v]) => v.state !== 'pending'))
+
+/** 点一行 = 从零开始问这台电脑:清掉它上一轮的探针与粘滞;别的行上的「请允许」也收掉(上一轮已被中止,没人在轮询了)。 */
+export function beginDeviceAttempt(unitId: string): void {
+  const k = id(unitId)
+  useDeviceMarks.setState((s) => {
+    const probes = { ...s.probes }
+    const sticky = dropPending(s.sticky)
+    delete probes[k]
+    delete sticky[k]
+    return { probes, sticky }
+  })
+}
+
+/** 流程的过程 / 结果落到这一行:谁新听谁 —— 那台电脑的回答(粘滞)顶掉旧探针;探针(成功或失败)顶掉旧粘滞。 */
+export function noteDeviceAttempt(unitId: string, p: { probe?: ProbeResult; sticky?: StickyRefusal }): void {
+  const k = id(unitId)
+  useDeviceMarks.setState((s) => {
+    const probes = { ...s.probes }
+    const sticky = { ...s.sticky }
+    if (p.sticky) { delete probes[k]; sticky[k] = p.sticky }
+    else if (p.probe) { probes[k] = p.probe; delete sticky[k] }
+    return { probes, sticky }
+  })
+}
+
+/** 流程被收掉(菜单关了 / 选了别处):「请允许」是进行中的标记,不留;拒绝与探针结果照留。 */
+export function endDeviceAttempts(): void {
+  useDeviceMarks.setState((s) => ({ sticky: dropPending(s.sticky) }))
+}
+
 /** 换号 / 登出:整张表清空。 */
 export function resetDeviceMarks(): void {
   useDeviceMarks.setState({ probes: {}, sticky: {} })

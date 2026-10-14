@@ -406,12 +406,30 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
             realtimeModel: r?.realtimeModel?.id ? { id: String(r.realtimeModel.id), name: String(r.realtimeModel.name || r.realtimeModel.id), apiModelId: r.realtimeModel.apiModelId ?? null } : null,
             translateModels: (Array.isArray(r?.translateModels) ? r.translateModels : []).filter((m: any) => m?.id)
               .map((m: any) => ({ id: String(m.id), name: String(m.name || m.id), provider: String(m.provider || 'forsion'), apiModelId: m.apiModelId ?? null })),
+            ttsModels: (Array.isArray(r?.ttsModels) ? r.ttsModels : []).filter((m: any) => m?.id)
+              .map((m: any) => ({ id: String(m.id), name: String(m.name || m.id), apiModelId: m.apiModelId ?? null })),
             reachable: true,
           };
         } catch {
           // 降级成空列表是为了不让 TUI 抛;reachable:false 让调用方知道「空 ≠ 没配」(401/断网也长这样)。
           return { models: [], defaultModelId: null, backgroundModelId: null, imageModelId: null, visionModelId: null, reachable: false };
         }
+      },
+    },
+    // 朗读走云端(POST /api/brain/tts):key 住云端、按字符计费;回的是音频字节,Content-Type 照上游。
+    tts: {
+      synthesize: async (req) => {
+        const r = await fetch(`${base}/api/brain/tts`, {
+          method: 'POST',
+          headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+          body: JSON.stringify({ modelId: req.model, text: req.text, voice: req.voice, speed: req.speed, format: req.format, projectSource: 'tangu' }),
+          signal: req.signal ? AbortSignal.any([req.signal, AbortSignal.timeout(90_000)]) : AbortSignal.timeout(90_000),
+        });
+        if (!r.ok) {
+          const j: any = await r.json().catch(() => ({}));
+          throw new LlmError(r.status, `cloud tts ${r.status}: ${String(j?.detail || '').slice(0, 200)}`);
+        }
+        return { audio: new Uint8Array(await r.arrayBuffer()), mime: r.headers.get('content-type') || 'audio/mpeg' };
       },
     },
     // 实时语音通话走云端中转(ws /api/brain/realtime):key 住云端、按通话时长计费;帧协议与直连百炼相同,连接与转发仍归 services/realtimeVoice。
@@ -614,6 +632,35 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
         return { webUrl: String(j.webUrl || ''), username: j.username, password: j.password };
       },
     },
+    // ── 绑定的 GitHub 账号:绑没绑 + 推拉凭据(对端 server microserver/github/routes/user.ts)。超时与失败的口径同上。
+    //    取凭据必须带 X-Forsion-Git-Credential 头:对端靠它把这个接口和下面那个通用出口(带不了自定义头)分开。──
+    github: {
+      status: async (opts?: { signal?: AbortSignal }) => {
+        const timeout = AbortSignal.timeout(GIT_INFO_TIMEOUT_MS);
+        const r = await fetch(`${base}/api/github/status`, { headers: authHeaders(), signal: opts?.signal ? AbortSignal.any([opts.signal, timeout]) : timeout })
+          .catch(() => { throw new GitHostingError(0, 'NETWORK'); });
+        if (r.status === 404) return { configured: false as const }; // 旧云端没有这个模块
+        if (!r.ok) throw new GitHostingError(r.status, '');
+        const j: any = await r.json().catch(() => null);
+        if (j?.configured !== true) return { configured: false as const };
+        return j.linked === true && typeof j.login === 'string' && j.login
+          ? { configured: true as const, linked: true as const, login: j.login, avatarUrl: typeof j.avatarUrl === 'string' && j.avatarUrl ? j.avatarUrl : null }
+          : { configured: true as const, linked: false as const };
+      },
+      credential: async (opts?: { signal?: AbortSignal }) => {
+        const timeout = AbortSignal.timeout(GIT_CREDENTIAL_TIMEOUT_MS);
+        const r = await fetch(`${base}/api/github/credential`, {
+          method: 'POST',
+          headers: { ...authHeaders(), 'X-Forsion-Git-Credential': '1' },
+          body: '{}',
+          signal: opts?.signal ? AbortSignal.any([opts.signal, timeout]) : timeout,
+        }).catch(() => { throw new GitHostingError(0, 'NETWORK'); });
+        const j: any = await r.json().catch(() => null);
+        if (!r.ok) throw new GitHostingError(r.status, typeof j?.code === 'string' ? j.code : '');
+        if (typeof j?.username !== 'string' || !j.username || typeof j?.password !== 'string' || !j.password) throw new GitHostingError(502, 'BAD_RESPONSE');
+        return { username: j.username, password: j.password };
+      },
+    },
     // 云端运行水合(B):worker 本地 FS 无 agents → 从云读 config.toml+SOUL.md 组装人格。软失败 → null。
     agents: {
       getAgent: async (_userId: string, slug: string) => {
@@ -668,7 +715,7 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
   // Optional capabilities describe configured services. Local Inbox storage uses
   // the host database independently; advertising this cloud-only seam starts the
   // broadcast poller even on an offline Unit with no Server or cloud credential.
-  if (!base || (typeof cfg.token === 'string' && !cfg.token.trim())) { delete brain.inbox; delete brain.git; }
+  if (!base || (typeof cfg.token === 'string' && !cfg.token.trim())) { delete brain.inbox; delete brain.git; delete brain.github; }
   if (brain.agentFiles) registerAgentSyncIdentity(brain.agentFiles, base, cfg.token);
   return brain;
 }

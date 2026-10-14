@@ -294,15 +294,14 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
 }
 .amx-editor.amx-dragover:has(.amx-stage:not(.amx-stage-off)) { background-image: none; }
 
-/* 双链 [[wikilink]]:跟随主题 accent(明暗/皮肤自适应;下划线弱化区分正文)。曾是固定紫 #6c5ce7,
- * 用户要求编辑器色彩与主题统一后改 token。比 styles.css 的选择器多一层 .am-app → 特异性更高,覆盖其 color。 */
-.am-app .milkdown .ProseMirror .wikilink { color: var(--accent-ink); text-decoration-color: color-mix(in srgb, var(--accent-ink) 45%, transparent); }
-/* 未解析双链:压过上面的 accent 覆盖(同层选择器,声明在后),黯淡虚线。 */
+/* 双链 [[wikilink]]:彩色配色跟主题色;经典 / 墨色这类单色配色的主题色就是正文色,双链会和正文一个样(10-13 用户实报),
+ * 所以它们在 skins.css 另给一支 --wikilink-ink(2026-10-14 用户选方案 A,柔蓝)。曾是固定紫 #6c5ce7。
+ * 比 styles.css 的选择器多一层 .am-app → 特异性更高,覆盖其 color。 */
+.am-app .milkdown .ProseMirror .wikilink { color: var(--wikilink-ink, var(--accent-ink)); }
+/* 未解析双链:压过上面的颜色覆盖(同层选择器,声明在后),黯淡。 */
 .am-app .milkdown .ProseMirror .wikilink.wikilink-unresolved {
   color: var(--text-muted);
-  opacity: 0.75;
-  text-decoration-style: dashed;
-  text-decoration-color: color-mix(in srgb, var(--text-muted) 45%, transparent);
+  opacity: 0.8;
 }
 /* 正文 #标签 胶囊(L-14,tagPill.ts):零 schema 装饰,光标所在行不装饰(露字面源码)。只加底色与圆角,
  * 不改字号 / 行高 —— 胶囊与正文同一基线,打字行与非打字行切换时不跳行。 */
