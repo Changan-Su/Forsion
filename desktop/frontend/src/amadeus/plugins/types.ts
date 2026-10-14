@@ -51,7 +51,7 @@ export interface SlashContribution {
 
 /** A command surfaced in the command palette (Cmd/Ctrl+K).
  *
- * Navigation only (open a view, switch a panel). Real *actions* — parameterized, headless-able work
+ * Navigation and selection-bound native editor commands. Headless *actions* — parameterized, headless-able work
  * like "analyze this link" — must NOT be registered as commands: `run(): void` has no parameter slot,
  * and the command table lives in the renderer where the chat agent and automation cannot reach it.
  * Ship such capabilities as engine-side bundle assets instead (`agents/<slug>/` + `skills/`) — the
@@ -141,9 +141,23 @@ export interface ResetCardQuota {
   weeklyRemaining?: number
 }
 
+/** A single-use edit of the active native visual editor's Markdown body (frontmatter excluded).
+ * UTF-16 offsets refer to text. apply() uses the native history/save pipeline, never writes a file.
+ * Stale document/selection, switched leaf/vault, source mode, read-only or closed editor => refused.
+ * Capturing or applying never focuses the OS window. Unsupported syntax positions throw explicitly. */
+export interface PluginEditorEdit {
+  path: string
+  text: string
+  anchor: number
+  head: number
+  apply(change: { text: string; selection?: { anchor: number; head: number } }): boolean
+}
+
 export interface PluginAppApi extends BlockSurfaceApi {
   /** Vault-relative path of the note the active panel is showing (both carriers), or null. */
   getActivePage(): string | null
+  /** Capture the active v4 visual editor. null when no editable native note is active. */
+  captureEditor?(): PluginEditorEdit | null
   /** The active note's whole body as markdown — same value (and same staleness) as `getPage().text`. */
   getActivePageText(): string
   /** Load a note into the active editor. Only `.md` notes enter the note pipeline: any other path
@@ -1032,7 +1046,7 @@ export interface PluginContext {
   /** Add an entry to the selection toolbar's "AI ▾" menu (see SelectionActionContribution). The result goes
    *  through the host's preview + confirm, never straight into the note. Revoked on disable / reload. */
   registerSelectionAction(action: SelectionActionContribution): void
-  registerCommand(command: CommandContribution): void
+  registerCommand(command: CommandContribution): (() => void) | void
   registerTheme(theme: ThemeContribution): void
   /** Adds an image-only preset to Appearance settings; never changes the user's selection. */
   registerAppearance?(preset: import('../../../../shared/startupAppearance').AppearancePreset): () => void

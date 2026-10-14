@@ -1,7 +1,7 @@
 {
   "name": "forsion-desktop",
   "version": "2.13.3",
-  "description": "Forsion Desktop — AI 驱动的应用生态系统的桌面端(Electron):Tangu Agent 引擎 + LCL 可停靠工作区框架 + 可插拔功能空间(对话/笔记/日历/收件箱/编码),按产品档案裁出全家桶与单品发行版",
+  "description": "Forsion Desktop \u2014 AI \u9a71\u52a8\u7684\u5e94\u7528\u751f\u6001\u7cfb\u7edf\u7684\u684c\u9762\u7aef(Electron):Tangu Agent \u5f15\u64ce + LCL \u53ef\u505c\u9760\u5de5\u4f5c\u533a\u6846\u67b6 + \u53ef\u63d2\u62d4\u529f\u80fd\u7a7a\u95f4(\u5bf9\u8bdd/\u7b14\u8bb0/\u65e5\u5386/\u6536\u4ef6\u7bb1/\u7f16\u7801),\u6309\u4ea7\u54c1\u6863\u6848\u88c1\u51fa\u5168\u5bb6\u6876\u4e0e\u5355\u54c1\u53d1\u884c\u7248",
   "author": "Forsion",
   "private": true,
   "type": "module",
@@ -21,7 +21,7 @@
     "build": "electron-vite build",
     "preview": "electron-vite preview",
     "web": "vite frontend",
-    "gallery": "echo '→ http://localhost:8100/lcl/gallery/' && python3 -m http.server 8100 --bind 127.0.0.1 --directory ..",
+    "gallery": "echo '\u2192 http://localhost:8100/lcl/gallery/' && python3 -m http.server 8100 --bind 127.0.0.1 --directory ..",
     "test": "npm run check:shadowcontract && vitest run",
     "check:run-lifecycle": "node scripts/run-lifecycle.check.cjs",
     "check:installer": "node scripts/installer-compile.check.cjs",
@@ -343,7 +343,9 @@
     "e2e:obsidianbridge": "node scripts/obsidian-bridge.e2e.cjs",
     "demo:obsidianbridge": "node scripts/obsidian-bridge.e2e.cjs --demo",
     "preview:obsidianbridge": "node scripts/obsidian-bridge.e2e.cjs --preview",
-    "check:obsidianbridge": "node prototypes/obsidian-bridge/check-runtime.mjs && node prototypes/obsidian-bridge/check-lifecycle.mjs"
+    "check:obsidianbridge": "node prototypes/obsidian-bridge/check-runtime.mjs && node prototypes/obsidian-bridge/check-lifecycle.mjs && node prototypes/obsidian-bridge/check-native.mjs && node prototypes/obsidian-bridge/check-native-lifecycle.mjs",
+    "e2e:obsidiannative": "node scripts/obsidian-native.e2e.cjs",
+    "preview:obsidiannative": "node scripts/obsidian-native.e2e.cjs --preview"
   },
   "dependencies": {
     "@astryxdesign/core": "^0.1.4",

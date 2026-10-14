@@ -14,30 +14,7 @@ import {
   isolateHistory,
 } from "@codemirror/commands";
 import { markdown } from "@codemirror/lang-markdown";
-export class Editor {
-  constructor(parent, value, changed, selectionChanged = () => {}) {
-    this.view = new EditorView({
-      parent,
-      state: EditorState.create({
-        doc: value,
-        extensions: [
-          lineNumbers(),
-          drawSelection(),
-          history(),
-          keymap.of([...defaultKeymap, ...historyKeymap]),
-          markdown(),
-          EditorView.lineWrapping,
-          EditorView.contentAttributes.of({
-            "aria-label": "Compatibility Markdown editor",
-          }),
-          EditorView.updateListener.of((u) => {
-            if (u.docChanged) changed(this.getValue());
-            else if (u.selectionSet) selectionChanged();
-          }),
-        ],
-      }),
-    });
-  }
+export class TextEditor {
   getValue() {
     return this.view.state.doc.toString();
   }
@@ -133,5 +110,32 @@ export class Editor {
   }
   destroy() {
     this.view.destroy();
+  }
+}
+
+export class Editor extends TextEditor {
+  constructor(parent, value, changed, selectionChanged = () => {}) {
+    super();
+    this.view = new EditorView({
+      parent,
+      state: EditorState.create({
+        doc: value,
+        extensions: [
+          lineNumbers(),
+          drawSelection(),
+          history(),
+          keymap.of([...defaultKeymap, ...historyKeymap]),
+          markdown(),
+          EditorView.lineWrapping,
+          EditorView.contentAttributes.of({
+            "aria-label": "Compatibility Markdown editor",
+          }),
+          EditorView.updateListener.of((u) => {
+            if (u.docChanged) changed(this.getValue());
+            else if (u.selectionSet) selectionChanged();
+          }),
+        ],
+      }),
+    });
   }
 }

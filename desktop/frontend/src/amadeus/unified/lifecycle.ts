@@ -8,6 +8,7 @@
  *  零依赖(被 pageStore 反向 import,不许在这里 import pageStore/UnifiedPage,否则模块环)。 */
 
 export interface UnifiedPipeHandle {
+  captureEditor?: () => import('../plugins/types').PluginEditorEdit | null
   path: string
   /** strict=true must reject write failures and drain all pending edits before retiring. */
   flush: (strict?: boolean) => Promise<void>
@@ -312,4 +313,9 @@ export function unifiedRevealHeading(path: string, index: number, text: string, 
     }
   }
   return false
+}
+
+/** Exact active leaf only: never silently fall back to another split or hidden note. */
+export function captureUnifiedEditor(path: string, scope: string | null): import('../plugins/types').PluginEditorEdit | null {
+  return byRecency(path).find(h => (h.scope ?? null) === scope)?.captureEditor?.() ?? null
 }

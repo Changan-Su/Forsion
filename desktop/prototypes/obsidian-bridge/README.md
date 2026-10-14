@@ -1,10 +1,16 @@
 # Obsidian Bridge — Desktop 原型 / Desktop prototype
 
-一个 Forsion 原生插件，在 LCL 标签页里加载未经修改的 Obsidian 发布包。
-目前仅在独立 CodeMirror 兼容编辑区中运行；没有接管普通 Amadeus 笔记页。
+0.2 将三个原始 Obsidian 插件的编辑命令接到当前 **Amadeus 原生可视编辑器**。正文、选区、撤销和磁盘保存由原生编辑器持有；Bridge 管理面板只负责原包和设置。
 
-A native Forsion plugin that runs unchanged Obsidian release packages inside an LCL tab.
-Version 0.1 operates in its own CodeMirror compatibility editor, not the regular Amadeus editor.
+Version 0.2 runs the three original Obsidian plugins against the active **native Amadeus visual editor**.
+Amadeus owns the document, selection, undo and save pipeline. Bridge manages packages and settings.
+
+选中笔记正文，点击左下角 **命令面板 (⌘K)** 按钮，搜索 `Obsidian`，选择插件命令。
+正文内的 `Cmd+K` 保留为原生“插入链接”。搜索 `Obsidian Bridge` 打开设置管理面板。
+
+Select text in a note, click the lower-left **Command palette (⌘K)** button, search `Obsidian`, then select
+an editing command. Inside the editor, `Cmd+K` remains the native Insert link shortcut. Search
+`Obsidian Bridge` to open package management and settings.
 
 ## 安装布局 / Installation layout
 
@@ -24,11 +30,11 @@ Version 0.1 operates in its own CodeMirror compatibility editor, not the regular
 Obsidian 插件原包就在 Bridge 插件自己的插件文件夹内；不读写用户的 `.obsidian/plugins`。
 `source.json` 记录 GitHub 发布地址、版本、逐文件 SHA-256。原包不重新打包、不修改。
 Bridge 的设置仍通过 Forsion 的 `loadData/saveData` 保存到插件数据目录，按智库和子插件 ID 分开。
-同一 Desktop profile 一次只允许一个 Bridge 运行视图，避免不同窗口覆盖设置。
+同一 Desktop profile 一次只允许一个 Bridge 运行实例，避免不同窗口覆盖设置。
 
 Original packages live inside Bridge's own folder. The user's `.obsidian/plugins` is untouched.
 Settings use Forsion's plugin data store, separated by vault and child plugin ID. A profile-wide Web Lock
-allows one Bridge view at a time. The iframe isolates CSS and DOM helpers; it is **not a security sandbox**.
+allows one Bridge runtime at a time. The iframe isolates CSS and DOM helpers; it is **not a security sandbox**.
 
 ## 运行 / Run
 
@@ -39,10 +45,9 @@ node prototypes/obsidian-bridge/install-plugins.mjs
 npm run build:obsidianbridge
 npm run build
 # Follow the repository gui-verify devlock procedure when launching Electron.
-npm run e2e:obsidianbridge
-npm run demo:obsidianbridge
-# Or open a fresh interactive fixture without replaying acceptance:
-npm run preview:obsidianbridge
+npm run e2e:obsidiannative
+# Runs acceptance and leaves the isolated native note open:
+npm run preview:obsidiannative
 ```
 
 `install-plugins.mjs [bridge-plugin-folder]` defaults to this prototype's `plugin/` folder. It downloads only
@@ -72,40 +77,53 @@ can override the isolated home, evidence folder, and the separate Electron ident
 Successfully loading a package does not certify every command. Only actions exercised by the acceptance
 harness are validated; `artifacts/results.json` is the execution record.
 
+## 原生接口 / Native contract
+
+`ctx.app.captureEditor()` 返回绑定当前可编辑 v4 实例的一次性 Markdown 正文快照与 UTF-16 选区。
+插件命令在内存中计算修改，再由 `apply()` 提交为一个原生最小差异事务。没有第二个编辑器控件，也不调用文件覆盖写入。
+原生自动保存保留笔记 frontmatter；未变化的块保持原对象。正文、选区、活动标签、智库或插件生命周期变化后拒绝提交。
+
+The generic optional host API `ctx.app.captureEditor()` captures a single-use Markdown body snapshot
+and UTF-16 selection from the active editable v4 instance. Commands calculate edits in memory and
+commit one minimal native transaction through `apply()`. No second editor widget or direct file write
+is involved. Native saves retain frontmatter; unchanged blocks retain their identity. Stale documents,
+selections, leaf/vault changes, hidden/source/read-only editors and revoked plugins refuse edits.
+
 ## 当前边界 / Limits
 
-- 原生 LCL 标签页 + 独立兼容编辑区；不桥接普通 Amadeus 编辑页的选区。
-- 可读取智库笔记为草稿，导出时只创建新副本；不覆盖原笔记，不提供自动保存。
-- 元数据仅覆盖当前草稿的标题、基础列表、Markdown 链接及 YAML；不是完整 Vault 索引。
-- 支持样本使用的 Plugin、Setting、Modal、Editor 和 MarkdownView API 子集。
-- `sourceMode.cmEditor` 是 Editor 方法适配，不是完整 CodeMirror 5。CM6 插件扩展注册尚不支持。
-- 未实现 Node/Electron 模块、完整 WorkspaceLeaf/ItemView、文件系统变更事件、插件间 API、Markdown 后处理。
-- 未知 `require()` 和 API 导出明确报错，不用空对象假装成功。没有全生态兼容率结论。
-- 切换智库后操作拒绝执行，需要重新打开 Bridge；草稿尚未导出时应先导出。
+- 已接入原生可视正文，保留原生保存与撤销；不是整生态兼容声明。
+- 元数据只覆盖当前正文的标题、基础列表和链接；frontmatter 写入命令、自动编号/延时回调、插件自定义弹窗暂不支持。
+- 旧 v3 块编辑器、源码模式、任意 CodeMirror 扩展、完整 Vault/Workspace、Node/Electron 模块和后处理尚未接入。
+- 无法可靠映射的富文本语法位置明确拒绝；不会猜测坐标后覆盖笔记。
+- 原包保持同一目录结构；切换智库后下次执行命令或重新打开管理面板会重建对应设置实例。
 
-Native LCL tab with a dedicated editor; copy-only exports; current-document metadata only. No native
-Amadeus editor integration, full Vault/Workspace model, CodeMirror extension registration, Node/Electron
-modules, inter-plugin APIs or Markdown postprocessors. Unknown modules/API exports fail explicitly.
-A vault switch requires reopening Bridge. Export drafts before closing; drafts are not auto-saved.
+Native visual body editing is supported for the exercised commands. Automatic numbering/timers,
+frontmatter writes, custom plugin dialogs, old v3 blocks, source mode, arbitrary CodeMirror extensions,
+full Vault/Workspace APIs, Node/Electron and Markdown postprocessors remain unsupported.
+Unmappable syntax positions fail explicitly. Changing vault rebuilds the settings/runtime on the next
+command or manager opening. The retained 0.1 lab (`lab-main.js`, `e2e:obsidianbridge`) is a separate
+regression fixture, not the installed 0.2 entrypoint.
 
 ## 验证分层 / Verification
 
 - `node prototypes/obsidian-bridge/check-runtime.mjs`: real original JS + DOM substitute; no GUI/disk claim.
 - `node prototypes/obsidian-bridge/check-lifecycle.mjs`: delayed host writes across close/remount and a late note read racing with typing.
 - `npx vitest run electron/pluginPackageFiles.test.ts frontend/src/amadeus/plugins/packageFiles.test.ts`: package path constraints and host lifecycle.
-- `npm run e2e:obsidianbridge`: real Electron, native host IPC, on-disk original packages and exported Markdown,
+- `node prototypes/obsidian-bridge/check-native.mjs`: original bundles through command buffers, no editor DOM; stale commit rejection.
+- `npm run e2e:obsidiannative`: native command palette, Amadeus edits, undo, saves, settings and quiet-window assertions.
+- `npm run e2e:obsidianbridge` (0.1 lab): real Electron, native host IPC, on-disk original packages and exported Markdown,
   settings/disabled-state restart, screenshots. Run under the repository's GUI lock.
 
-The host change is a generic optional read-only `ctx.packageFiles` seam. It is absent on Web/mobile and
+Host seams are optional read-only `ctx.packageFiles`, native `ctx.app.captureEditor()`, and disposable command registrations. It is absent on Web/mobile and
 Studio development sources. The runtime and package manager are distributed in the Bridge plugin.
 
-## 评审与复现 / Review and evidence
+## 0.1 历史回归 / Version 0.1 regression history
 
 The focused Codex review found three reproducible lifecycle issues: premature lease release during
 settings writes, dropped queued settings on close, and a delayed note read replacing newer draft edits.
 The parent realm now serializes accepted settings snapshots and retains its Web Lock until they settle.
 The runtime rejects late reads if the draft revision changed. `check-lifecycle.mjs` reproduces these
-scenarios against the actual Bridge entrypoint and original TOC package.
+scenarios against the retained 0.1 lab entrypoint and original TOC package.
 Real Electron navigation also exposed iframe reloads when Dockview moves a tab's DOM. The parent keeps
 the draft, cursor and vault identity, then rehydrates the compatibility realm on `load`; returning from
 the native note is an explicit acceptance check. Closing the view still discards unexported drafts.
@@ -114,3 +132,14 @@ the native note is an explicit acceptance check. Closing the view still discards
 results, receipts and screenshots. Missing/failed checks remain visible. Bundled runtime dependency
 licenses are generated into `plugin/THIRD-PARTY-NOTICES.txt`; original plugin release assets stay in the
 ignored nested installation directory and are fetched by the pinned installer.
+
+## 0.2 评审修复 / Native review fixes
+
+The focused review reproduced two regressions: a non-note split retaining the previous page scope, and
+canonical serialization rewriting unrelated reference links. Capture/apply now check the actual active
+main leaf as well as visibility and scope; snapshots use the native preservation serializer. No-op
+commands do not reparse. Native unit tests cover both cases. In-flight child commands also reject after
+disable/re-enable, and replaceSelection carries its resulting cursor to the native transaction.
+
+`node prototypes/obsidian-bridge/report-native.mjs` renders the native acceptance report from
+`artifacts/native/results.json` and actual screenshots. The original lab report remains separate.

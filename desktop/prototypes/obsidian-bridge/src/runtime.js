@@ -1,3 +1,4 @@
+import { NativeEditor } from "./native-editor.js";
 import { Editor } from "./editor.js";
 import { metadata, updateFrontmatter } from "./metadata.js";
 import { domHelpers, apiFor } from "./obsidian.js";
@@ -9,9 +10,10 @@ const HEADING_SAMPLE =
 const SAFE_ID = /^[a-z0-9][a-z0-9-]*$/;
 export async function start(host) {
   domHelpers();
+  const native = !!host.captureEditor;
   const zh = host.locale === "zh";
   const tr = (a, b) => (zh ? a : b);
-  document.head.createEl("style", { text: css });
+  const runtimeStyle = document.head.createEl("style", { text: css });
   document.body.className = "bridge";
   const shell = document.body.createDiv({ cls: "shell" });
   const header = shell.createEl("header");
@@ -22,8 +24,8 @@ export async function start(host) {
   header.createEl("h1", { text: "Obsidian Bridge" });
   header.createEl("p", {
     text: tr(
-      "原包运行 · 兼容编辑区 · 保存为智库新副本",
-      "Original packages · Compatibility editor · Save new vault copies",
+      native ? "原包运行 · Amadeus 原生笔记 · 原生撤销与保存" : "原包运行 · 兼容编辑区 · 保存为智库新副本",
+      native ? "Original packages · Native Amadeus notes · Native undo and save" : "Original packages · Compatibility editor · Save new vault copies",
     ),
   });
   const toolbar = header.createDiv({ cls: "toolbar" });
@@ -50,8 +52,8 @@ export async function start(host) {
   });
   const footer = shell.createEl("footer", {
     text: tr(
-      "0.1 原型：仅在此编辑区提供 API。原包保存在本插件的 plugins/ 子目录；不代表整个 Obsidian 生态已兼容。",
-      "Prototype 0.1: APIs apply to this editor. Original packages live in this plugin’s plugins/ folder; ecosystem compatibility is not implied.",
+      native ? "0.2 原型：通过左下角命令面板按钮在原生笔记中执行 Obsidian 命令。自动编号、延时回调和 frontmatter 写入尚未接入。" : "0.1 原型：仅在此编辑区提供 API。原包保存在本插件的 plugins/ 子目录；不代表整个 Obsidian 生态已兼容。",
+      native ? "Prototype 0.2: Run Obsidian commands in a native note through the command palette button. Automatic numbering, delayed callbacks and frontmatter writes are not connected yet." : "Prototype 0.1: APIs apply to this editor. Original packages live in this plugin’s plugins/ folder; ecosystem compatibility is not implied.",
     ),
   });
   let disposed = false,
@@ -75,6 +77,7 @@ export async function start(host) {
       status.textContent = String(e?.message || e);
       status.dataset.error = "true";
       console.error("[obsidian-bridge]", e);
+      host.onError?.(e);
     }
   };
   const notice = (s) => {
@@ -99,7 +102,7 @@ export async function start(host) {
     return serial;
   };
   let publishDraft = () => {};
-  const editor = new Editor(editorEl, host.initialDraft?.text ?? HEADING_SAMPLE, () => {
+  const editor = native ? new NativeEditor() : new Editor(editorEl, host.initialDraft?.text ?? HEADING_SAMPLE, () => {
     revision++;
     dirty.textContent = tr("未导出", "Not exported");
     savedCopy = null;
@@ -125,11 +128,12 @@ export async function start(host) {
     file,
     getViewType: () => "markdown",
   });
+  const active = () => !native || !!editor.active;
   const app = {
     workspace: {
-      activeLeaf: { view },
-      getActiveViewOfType: (type) => (view instanceof type ? view : null),
-      getActiveFile: () => file,
+      get activeLeaf() { return active() ? { view } : null; },
+      getActiveViewOfType: (type) => (active() && view instanceof type ? view : null),
+      getActiveFile: () => active() ? file : null,
     },
     metadataCache: {
       getFileCache: (f) => {
@@ -141,6 +145,7 @@ export async function start(host) {
     fileManager: {
       processFrontMatter: async (f, fn) => {
         assertCurrent();
+        if (native) throw new Error("Frontmatter writes are not supported by the native Bridge prototype");
         if (f !== file) throw new Error("Unknown file");
         editor.setValue(updateFrontmatter(editor.getValue(), fn));
       },
@@ -191,6 +196,7 @@ export async function start(host) {
     }
   };
   function drawPlugins() {
+    host.onCommands?.([...entries.values()].filter(e => e.alive).flatMap(e => e.commands.map(c => ({ plugin: e.manifest.id, id: c.id, name: c.name, pluginName: e.manifest.name }))));
     side.replaceChildren();
     const top = side.createDiv({ cls: "side-heading" });
     top.createEl("strong", { text: tr("已安装插件", "Installed plugins") });
@@ -294,7 +300,7 @@ export async function start(host) {
     const later = (cb, delay, ...args) => {
       const id = window.setTimeout(() => {
         timeouts.delete(id);
-        if (entry.alive && !disposed) {
+        if (entry.alive && !disposed && !native) {
           try {
             cb(...args);
           } catch (e) {
@@ -307,7 +313,7 @@ export async function start(host) {
     };
     const every = (cb, delay, ...args) => {
       const id = window.setInterval(() => {
-        if (entry.alive && !disposed) {
+        if (entry.alive && !disposed && !native) {
           try {
             cb(...args);
           } catch (e) {
@@ -422,8 +428,16 @@ export async function start(host) {
     const entry = entries.get(id);
     if (!entry?.alive || entry.busy || scanning)
       throw new Error("Plugin disabled or reloading");
+    const instance = entry.instance;
     const command = entry.commands.find((c) => c.id === commandId);
     if (!command) throw new Error("Command not found");
+    if (native && ['save-settings-to-front-matter', 'number-headings-with-options'].includes(commandId))
+      throw new Error(tr('此原型暂不支持写入 frontmatter 或插件弹窗；请使用普通编号命令及 Bridge 设置。', 'This prototype does not support frontmatter writes or plugin dialogs. Use the regular numbering command and Bridge settings.'));
+    if (native) {
+      editor.begin(host.captureEditor());
+      Object.assign(file, new TFile(editor.edit.path));
+    }
+    try {
     if (command.checkCallback && !command.checkCallback(true))
       throw new Error("Command unavailable");
     if (
@@ -436,9 +450,14 @@ export async function start(host) {
       await command.editorCheckCallback(false, editor, view);
     else if (command.checkCallback) await command.checkCallback(false);
     else await command.callback?.();
+    assertCurrent();
+    if (!entry.alive || entry.instance !== instance) throw new Error('Plugin was disabled or reloaded while the command ran');
+    if (native) editor.commit();
     notice(`${entry.manifest.name} → ${command.name}`);
     editor.focus();
+    } finally { if (native) editor.end(); }
   }
+  if (!native) {
   button(
     toolbar,
     tr("排序示例", "Sorting sample"),
@@ -532,12 +551,21 @@ export async function start(host) {
     "open-saved",
   );
   openSaved.disabled = !savedCopy;
+  }
+  if (native) {
+    editorEl.textContent = tr('直接在 Amadeus 笔记里编辑。选中文字或放置光标，再点击左下角命令面板按钮搜索“Obsidian”。此处只管理原包与设置。', 'Edit directly in an Amadeus note. Select text or place the cursor, then use the command palette button to search “Obsidian”. This panel manages packages and settings.');
+    filename.textContent = 'Amadeus'; dirty.textContent = tr('原生编辑器', 'Native editor');
+    publishDraft = () => {};
+    button(toolbar, tr('返回笔记', 'Back to note'), () => host.closeManager?.(), 'back-to-note');
+    button(toolbar, tr('重扫插件', 'Rescan plugins'), scan, 'rescan');
+  }
   await scan();
   if (host.initialDraft?.cursor) editor.setCursor(host.initialDraft.cursor);
   publishDraft();
   const instance = {
     editor,
     run,
+    showSettings: id => showSettings(entries.get(id)),
     scan,
     flush: () => serial,
     diagnostics: () => ({
@@ -550,6 +578,7 @@ export async function start(host) {
         error: e.error,
       })),
       savedCopy,
+      native,
       vaultKey,
     }),
     dispose() {
@@ -558,6 +587,7 @@ export async function start(host) {
       for (const e of entries.values()) unload(e);
       editor.destroy();
       shell.remove();
+      runtimeStyle.remove();
     },
   };
   window.bridge = instance;

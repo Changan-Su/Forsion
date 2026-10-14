@@ -54,7 +54,7 @@ async function title(child, value) {
 }
 let shutdown;
 try {
-  shutdown = window.eval('(function(ctx){' + await readFile(join(pkg, 'main.js'), 'utf8') + '\n})(window.__ctx)');
+  shutdown = window.eval('(function(ctx){' + await readFile(join(base, 'lab-main.js'), 'utf8') + '\n})(window.__ctx)');
   const first = await mount();
   first.child.document.querySelector('[data-plugin="obsidian-plugin-toc"] [data-action="settings"]').click(); await tick();
   await title(first.child, 'First title');

@@ -62,6 +62,7 @@ async function main() {
   fs.mkdirSync(ART, { recursive: true }); fs.mkdirSync(vault, { recursive: true })
   const installed = path.join(home, 'plugins/forsion-plugin-obsidian-bridge')
   fs.cpSync(path.join(BASE, 'plugin'), installed, { recursive: true })
+  fs.copyFileSync(path.join(BASE, 'lab-main.js'), path.join(installed, 'main.js'))
   fs.writeFileSync(path.join(vault, 'Original.md'), '# Original note\n\nThis must remain unchanged.\n')
   const originalHash = hash(path.join(vault, 'Original.md'))
   const ud = path.join(home, 'userdata-dev'); fs.mkdirSync(ud, { recursive: true })

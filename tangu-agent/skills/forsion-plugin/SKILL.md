@@ -1453,3 +1453,17 @@ in-flight results. Desktop installed packages only: Web/mobile and Studio develo
 This is a read-only convenience API within the existing trusted-renderer plugin model, not a security sandbox.
 Example: a compatibility plugin keeps original third-party packages in `plugins/<id>/manifest.json`, `main.js`,
 and optional `styles.css`, and loads them through this API. See `desktop/prototypes/obsidian-bridge`.
+
+### Native visual editor edits (Desktop prototype 0.2 seam)
+
+Use `ctx.app.captureEditor?.()` for selection-bound native editing commands. It returns null when no
+editable v4 visual note is active. The snapshot contains `path`, `text` (Markdown **body**, no frontmatter),
+`anchor` and `head` (UTF-16 offsets), plus single-use `apply({text, selection?: {anchor, head}}): boolean`.
+Capture at command invocation, calculate the change, then apply once. False means the target changed:
+do not retry by writing the whole file. Selection mapping can throw for unsupported rich syntax.
+The host checks the original instance, document, selection, active leaf/vault, visibility, read-only/source
+mode and plugin lifetime. Edits enter native history and autosave; the API does not focus the OS window.
+Use the command palette button while editing: the editor's Cmd+K is Insert link.
+`ctx.registerCommand(...)` now returns an optional disposer (`off?.()`); use it when a child plugin unloads.
+Navigation and selection-bound editing can use renderer commands; parameterized/headless actions still
+belong in engine assets. Do not import private editor/store modules into plugins.

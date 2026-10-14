@@ -1,3 +1,5 @@
+import { activeMainPanel, useWorkspace } from '@lcl/engine/workspaceStore'
+import { captureUnifiedEditor } from '../unified/lifecycle'
 // The plugin host. Holds the plugin registry, the persisted "disabled" preference, the
 // runtime active set, and the live contribution registries (slash items / commands /
 // themes) that the UI subscribes to. Built-in plugins are registered on init(); external
@@ -22,7 +24,7 @@ const hostTangu = (): typeof window.tangu => (typeof window !== 'undefined' ? wi
  *  闸看宿主的**静态声明**(executionCapabilities.host === false),不看 hostExecution():后者在桌面要等配置
  *  读回来才准,插件 setup 时往往还没到。桌面主进程不声明这一项 = 照旧注入。 */
 const automationHost = (): boolean => !!readTangu()?.waitBackend && hostTangu()?.executionCapabilities?.host !== false
-import { noteOf, usePageStore } from '../store/pageStore'
+import { activePageScope, noteOf, usePageStore } from '../store/pageStore'
 import { useUiStore } from '../store/uiStore'
 import { setTheme as applyAccent, toggleMode } from '../theme/ThemeManager'
 import { amadeus } from '../api'
@@ -321,6 +323,19 @@ function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppAp
   const api: PluginAppApi = {
     // 两条路由通用(v4 不设 activePage;正文也不进 store —— 一律取块表面那份统一派生,别再各写各的)。
     getActivePage: () => noteOf(usePageStore.getState()),
+    captureEditor: () => {
+      if (!ok()) return null
+      const path = noteOf(usePageStore.getState()), vault = usePageStore.getState().vaultRoot, leaf = activePageScope()
+      const activeLeaf = (): string | null => {
+        const api = useWorkspace.getState().api
+        return api ? activeMainPanel(api)?.id ?? null : null
+      }
+      if (!path || !vault || activeLeaf() !== leaf) return null
+      const edit = captureUnifiedEditor(path, leaf)
+      if (!edit) return null
+      return { ...edit, apply: change => !!(alive && vault === usePageStore.getState().vaultRoot &&
+        leaf === activePageScope() && activeLeaf() === leaf && path === noteOf(usePageStore.getState()) && edit.apply(change)) }
+    },
     getActivePageText: () => surface.api.getPage().text,
     loadPage: (p) => {
       if (!ok()) return
@@ -1135,8 +1150,13 @@ export const usePluginStore = create<PluginState>((set, get) => {
       }
       set((s) => ({ selectionActions: [...s.selectionActions.filter((o) => !(o.pluginId === pluginId && o.item.id === action.id)), { pluginId, item: action }] }))
     },
-    registerCommand: (command) =>
-      set((s) => ({ commands: [...s.commands, { pluginId, item: command }] })),
+    registerCommand: (command) => {
+      if (!ctxAlive()) return () => {}
+      let registered = true
+      const owned = { pluginId, item: { ...command, run: (...args: Parameters<typeof command.run>) => { if (registered && ctxAlive()) return command.run(...args) } } }
+      set(s => ({ commands: [...s.commands, owned] }))
+      return scope.own('subscription', () => { registered = false; set(s => ({ commands: s.commands.filter(c => c !== owned) })) }, 'command')
+    },
     registerTheme: (theme) => {
       injectThemeStyle(theme.id, theme.css)
       scope.own('theme', () => removeThemeStyle(theme.id), theme.id) // <style> 在 store 外:只删切片会留孤儿

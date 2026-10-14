@@ -1,3 +1,4 @@
+import { captureMarkdownEdit } from './pluginEditor'
 import { Image as CoverImageIcon, Smile as PageSmileIcon } from 'lucide-react'
 // ── v4 统一实例编辑器(生产路径,spec §9 step 3 绞杀者)────────────────────────────
 // 服务对象:v4 素文件(含一切外来 md)与 v4 结构化文件;v3 标记文件不进这里(router.ts 分流)。
@@ -338,6 +339,7 @@ interface InsertMdOpts {
 }
 
 interface HostApi {
+  captureEditor: (valid: () => boolean) => import('../plugins/types').PluginEditorEdit | null
   /** 外部回灌正文(stored md)→ 同实例最小差异事务;编辑器未挂载返回 false。
    *  agent = 改动出自 Tangu(G3-03):只有回灌路径会传,恢复草稿那条绝不传(那不是「Tangu 修改」)。 */
   applyBody: (stored: string, agent?: boolean, history?: boolean) => boolean
@@ -421,6 +423,18 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
   onAiPromptRef.current = onAiPrompt
   useEffect(() => {
     apiRef.current = {
+      captureEditor: (valid) => {
+        let edit: import('../plugins/types').PluginEditorEdit | null = null
+        getInstance()?.action(ctx => {
+          const view = ctx.get(editorViewCtx)
+          edit = captureMarkdownEdit({ path, view,
+            valid: () => valid() && !hidden?.() && !view.isDestroyed && view.dom.isConnected && view.dom.getClientRects().length > 0,
+            serialize: doc => toStoredMarkdown(serializeUnified(ctx, doc), pageDir),
+            parse: md => ctx.get(parserCtx)(toDisplayMarkdown(md, pageDir)) as ProseNode,
+          })
+        })
+        return edit
+      },
       applySlashItem: (it) => applySlashRef.current(it),
       applyBody: (stored, agent, history) => {
         let ok = false
@@ -2685,6 +2699,12 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
   // (防抖写复活刚删/刚移走的文件)。
   useLayoutEffect(() => {
     return registerUnifiedPipe({
+      captureEditor: () => {
+        const api = hostApi.current
+        const valid = (): boolean => !pipe.dead && !pipe.retired && !pipe.readOnly && !srcRef.current &&
+          hostApi.current === api && scope === activePageScope()
+        return valid() ? api?.captureEditor(valid) ?? null : null
+      },
       path,
       owner: pipe, // 同窗同篇通知时排除自己(announceUnifiedWrite)
       peerWrote: () => reconcileNow(), // 同窗另一实例刚写盘:与外部改动同一条回灌路径

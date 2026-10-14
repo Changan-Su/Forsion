@@ -1,107 +1,91 @@
-// Forsion setup body. The iframe isolates DOM/CSS, not security authority.
-if (!ctx.packageFiles) throw new Error('Obsidian Bridge requires the Desktop packageFiles host API.');
-let mounted = null;
-ctx.registerView({
-  id: 'home', title: 'Obsidian Bridge',
-  mount(el) {
-    if (mounted) {
-      el.textContent = 'Obsidian Bridge is already open or finishing a settings save.';
-      return () => {};
-    }
-    const iframe = document.createElement('iframe');
-    iframe.title = 'Obsidian Bridge';
-    iframe.style.cssText = 'width:100%;height:100%;border:0;display:block;background:transparent';
-    let dead = false, runtime = null, starting = Promise.resolve(), writes = Promise.resolve();
-    let releaseLease = null, codePromise = null, generation = 0, draft = null;
-    const disposeRuntime = () => {
-      try { runtime?.dispose(); } catch (error) { console.warn('[obsidian-bridge] old document cleanup', error); }
-      runtime = null;
-    };
-    const dispose = () => {
-      if (dead) return;
-      dead = true; generation++;
-      observer.disconnect();
-      iframe.removeEventListener('load', onLoad);
-      disposeRuntime();
-      // Serialization lives in the parent realm, surviving iframe detach/reload.
-      // Keep the lease until all accepted snapshots reach the host.
-      void (async () => {
-        try { try { await starting; } finally { await writes; } }
-        catch (error) { console.error('[obsidian-bridge] shutdown', error); }
-        finally {
-          releaseLease?.(); iframe.remove();
-          if (mounted === dispose) mounted = null;
-        }
-      })();
-    };
-    mounted = dispose;
-    const syncTheme = () => {
-      const root = iframe.contentDocument?.documentElement;
-      if (!root) return;
-      const style = getComputedStyle(document.documentElement);
-      for (let i = 0; i < style.length; i++) {
-        const key = style[i];
-        if (key.startsWith('--')) root.style.setProperty(key, style.getPropertyValue(key));
-      }
-      root.dataset.mode = document.documentElement.dataset.mode || '';
-      root.lang = ctx.getLocale?.() === 'zh' ? 'zh-CN' : 'en';
-    };
-    const observer = new MutationObserver(syncTheme);
-    observer.observe(document.documentElement, {
-      attributes: true, attributeFilter: ['class','style','data-mode','data-theme','data-skin','data-bg'],
-    });
-    const acquired = new Promise((resolve, reject) => {
-      if (!navigator.locks) return reject(new Error('Desktop Web Locks support is required.'));
-      navigator.locks.request('forsion-obsidian-bridge-runtime', { ifAvailable: true }, async lock => {
-        resolve(!!lock);
-        if (lock && !dead) await new Promise(done => { releaseLease = done; });
-      }).catch(reject);
-    });
-    async function initialize(turn, child) {
-      if (!await acquired) throw new Error('Obsidian Bridge is already open in another window.');
-      for (let i = 0; i < 50 && !ctx.app.vaultRoot?.() && !dead; i++) await new Promise(r => setTimeout(r, 100));
-      if (dead || turn !== generation) return;
-      await writes.catch(() => {});
-      codePromise ||= ctx.packageFiles.readText('runtime.js');
-      const code = await codePromise;
-      if (dead || turn !== generation || iframe.contentWindow !== child) return;
-      syncTheme(); child.eval(code);
-      const instance = await child.ForsionObsidianBridge.start({
-        locale: ctx.getLocale?.() || 'en', packageFiles: ctx.packageFiles,
-        initialDraft: draft,
-        onDraft: value => { if (!dead && turn === generation) draft = structuredClone(value); },
-        loadData: () => ctx.loadData(),
-        saveData: value => {
-          if (dead || turn !== generation) return Promise.reject(new Error('Bridge document is closed'));
-          const snapshot = structuredClone(value);
-          writes = writes.catch(() => {}).then(() => ctx.saveData(snapshot));
-          return writes;
-        },
-        vaultRoot: () => ctx.app.vaultRoot?.(),
-        listPages: () => ctx.app.listPages?.() || Promise.resolve([]),
-        readFile: path => ctx.app.readFile(path),
-        writeFile: (path, text) => ctx.app.writeFile(path, text),
-        openFile: path => ctx.app.openNote(path, { newTab: true }),
-      });
-      if (dead || turn !== generation) instance.dispose();
-      else runtime = instance;
-    }
-    function onLoad() {
-      // Dockview can detach/reinsert the same iframe when changing tabs. Chromium reloads srcdoc,
-      // so rehydrate its realm from a parent-owned draft instead of leaving a blank document.
-      const turn = ++generation;
-      disposeRuntime();
-      starting = initialize(turn, iframe.contentWindow);
-      void starting.catch(error => {
-        if (dead || turn !== generation) return;
-        dispose(); el.textContent = String(error);
-      });
-    }
-    iframe.addEventListener('load', onLoad);
-    iframe.srcdoc = '<!doctype html><html><head><meta charset="utf-8"></head><body></body></html>';
-    el.appendChild(iframe);
-    return dispose;
-  },
-});
-ctx.registerCommand({ id: 'obsidian-bridge-open', title: 'Obsidian Bridge', run: () => ctx.openView('home') });
-return () => mounted?.();
+// Setup body: a stable hidden iframe owns plugin lifetimes; Amadeus owns every editable document.
+if (!ctx.packageFiles || !ctx.app.captureEditor) throw new Error('Obsidian Bridge requires the native Desktop editor API.');
+const zh = ctx.getLocale?.() === 'zh';
+let dead = false, runtime = null, writes = Promise.resolve(), commands = [], releaseLease = null;
+let starting = null, openRequested = false;
+const dialog = document.createElement('dialog');
+dialog.setAttribute('aria-label', 'Obsidian Bridge');
+dialog.style.cssText = 'width:min(1100px,92vw);height:min(780px,88vh);padding:0;border:1px solid var(--border);border-radius:var(--radius-lg,12px);background:var(--bg);color:var(--text)';
+const frame = document.createElement('iframe');
+frame.title = 'Obsidian Bridge';
+frame.style.cssText = 'width:100%;height:100%;border:0;display:block';
+dialog.append(frame); document.body.append(dialog);
+const clearCommands = () => { commands.splice(0).forEach(off => off?.()); };
+const closeManager = () => { openRequested = false; if (dialog.open) dialog.close(); };
+const notifyError = e => { console.error('[obsidian-bridge]', e); if (!dead) ctx.app.notify(String(e?.message || e)); };
+function syncTheme() {
+  const root = frame.contentDocument?.documentElement;
+  if (!root) return;
+  const style = getComputedStyle(document.documentElement);
+  for (let i = 0; i < style.length; i++) { const key = style[i]; if (key.startsWith('--')) root.style.setProperty(key, style.getPropertyValue(key)); }
+  root.dataset.mode = document.documentElement.dataset.mode || '';
+  root.lang = zh ? 'zh-CN' : 'en';
+}
+const observer = new MutationObserver(syncTheme);
+observer.observe(document.documentElement, { attributes:true, attributeFilter:['class','style','data-mode','data-theme','data-skin','data-bg'] });
+async function initialize() {
+  const acquired = await new Promise((resolve, reject) => {
+    if (!navigator.locks) return reject(new Error('Desktop Web Locks support is required.'));
+    navigator.locks.request('forsion-obsidian-bridge-runtime', { ifAvailable:true }, async lock => {
+      resolve(!!lock);
+      if (lock && !dead) await new Promise(done => { releaseLease = done; });
+    }).catch(reject);
+  });
+  if (!acquired) throw new Error('Obsidian Bridge is already running in another window.');
+  if (dead) return;
+  const code = await ctx.packageFiles.readText('runtime.js');
+  if (dead) return;
+  syncTheme(); frame.contentWindow.eval(code);
+  await startRuntime();
+}
+async function startRuntime() {
+  await writes.catch(() => {});
+  if (dead) return;
+  const instance = await frame.contentWindow.ForsionObsidianBridge.start({
+    locale:ctx.getLocale?.() || 'en', packageFiles:ctx.packageFiles,
+    vaultRoot:() => ctx.app.vaultRoot?.(), loadData:() => ctx.loadData(),
+    saveData:value => {
+      if (dead) return Promise.reject(new Error('Bridge is closed'));
+      const snapshot = structuredClone(value);
+      writes = writes.catch(() => {}).then(() => ctx.saveData(snapshot));
+      return writes;
+    },
+    captureEditor:() => { if (dead) return null; return ctx.app.captureEditor(); },
+    closeManager,
+    onError:notifyError,
+    onCommands:list => {
+      clearCommands(); if (dead) return;
+      for (const c of list) commands.push(ctx.registerCommand({
+        id:`obsidian-bridge:${c.plugin}:${c.id}`, title:`Obsidian · ${c.pluginName}: ${c.name}`,
+        keywords:`Obsidian Bridge ${c.id}`,
+        run:async () => { try { await ensureVault(); if (!dead) await runtime?.run(c.plugin,c.id); } catch (e) { notifyError(e); } },
+      }));
+    },
+  });
+  if (dead) instance.dispose(); else runtime = instance;
+  if (openRequested && !dead && !dialog.open) dialog.showModal();
+}
+frame.addEventListener('load', () => { if (!starting) { starting = initialize(); void starting.catch(notifyError); } });
+frame.srcdoc = '<!doctype html><html><head><meta charset="utf-8"></head><body></body></html>';
+let refreshing = null;
+async function ensureVault() {
+  if (refreshing) return refreshing;
+  if (!runtime || runtime.diagnostics().vaultKey === (ctx.app.vaultRoot?.() || '')) return;
+  runtime.dispose(); runtime = null; clearCommands();
+  refreshing = startRuntime().finally(() => { refreshing = null; });
+  return refreshing;
+}
+function openManager() {
+  openRequested = true;
+  void ensureVault().then(() => { if (!dead && runtime && !dialog.open) dialog.showModal(); }).catch(notifyError);
+}
+ctx.registerCommand({ id:'obsidian-bridge-open',title:'Obsidian Bridge',run:openManager });
+ctx.registerView({ id:'home',title:'Obsidian Bridge',mount(el) {
+  const text = document.createElement('p'); text.textContent = zh ? '在 Amadeus 笔记中点击左下角命令面板按钮，搜索 Obsidian 执行原生编辑命令。' : 'In an Amadeus note, open the command palette using the lower-left button and search Obsidian.';
+  const button = document.createElement('button'); button.textContent = zh ? '管理插件与设置' : 'Manage plugins and settings'; button.onclick = openManager;
+  el.append(text,button); return () => { text.remove(); button.remove(); };
+} });
+return () => {
+  dead = true; clearCommands(); observer.disconnect(); closeManager(); runtime?.dispose();
+  void (async () => { try { try { await starting; await refreshing; } finally { await writes; } } catch (e) { console.warn('[obsidian-bridge] shutdown',e); } finally { releaseLease?.(); dialog.remove(); } })();
+};
