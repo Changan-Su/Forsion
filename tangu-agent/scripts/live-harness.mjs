@@ -2147,8 +2147,20 @@ try {
     const recovered = !ev2.error && ev2.done && errors.length === 1 && errors[0].result.includes('fact is required')
       && saved.entries.length === before.entries.length && saved.entries.some((e) => e.id === entry.id && e.content.includes('concise replies'))
       && ![...ev.statuses, ...ev2.statuses].some((s) => s.phase === 'tool_failure_loop');
-    return { ok: renamed && recovered, detail: `改名原地保存=${renamed};参数错误=${errors.length};纠正后保存=${recovered}`,
-      output: `【改名】\n${ev.content}\n【参数纠正】\n${ev2.content}`, ttftMs: ttft(ev), tokens: tokensOf(ev) + tokensOf(ev2), toolCalls: [...ev.toolCalls, ...ev2.toolCalls] };
+    // 版本号抄错(10-13 live 里模型自己抄串了两位、两次都被回「记忆已变」后放弃):这里替模型抄错,看它读了新回执能不能改成。
+    // 抄法照那次:最后一组掉两位、尾巴补两位,长度不变。旧引擎回的是「记忆已变」,模型重新 list 也改得成,所以这段不分新旧,
+    // 只证明新回执(「抄错了」+ 现在的版本 + 这一条的原文)真模型读得懂、照着做得成;分新旧靠单测。
+    const v = saved.version, tail = v.slice(-12);
+    let miscopy = v.slice(0, -12) + tail.slice(0, 2) + tail.slice(4) + tail.slice(-2);
+    if (miscopy === v) miscopy = v.slice(0, -1) + (v.endsWith('0') ? '1' : '0');
+    const ev3 = await run(`live-remember-miscopy-${Date.now()}`,
+      `This is an isolated memory validation. Call remember with action update, id ${entry.id}, expectedVersion ${miscopy} and fact "The user's name is 一十四画生; they prefer concise replies and plain language." If that call fails, sort it out and finish the update. Report whether it was saved.`);
+    const final = await api('/agent/memory');
+    const miscopyErrors = ev3.toolResults.filter((r) => r.name === 'remember' && /copied wrong/.test(r.result || ''));
+    const fixedUp = !ev3.error && ev3.done && miscopyErrors.length >= 1 && final.entries.length === before.entries.length
+      && final.entries.some((e) => e.id === entry.id && e.content.includes('plain language')) && !ev3.statuses.some((s) => s.phase === 'tool_failure_loop');
+    return { ok: renamed && recovered && fixedUp, detail: `改名原地保存=${renamed};参数错误=${errors.length};纠正后保存=${recovered};版本号抄错回执=${miscopyErrors.length};抄错后改成=${fixedUp}`,
+      output: `【改名】\n${ev.content}\n【参数纠正】\n${ev2.content}\n【版本号抄错】\n${ev3.content}`, ttftMs: ttft(ev), tokens: tokensOf(ev) + tokensOf(ev2) + tokensOf(ev3), toolCalls: [...ev.toolCalls, ...ev2.toolCalls, ...ev3.toolCalls] };
   });
 
   await scenario('visualfigures', 'visualfigures 图表与流程图组件', async () => {
