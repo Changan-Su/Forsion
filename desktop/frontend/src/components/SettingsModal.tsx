@@ -3569,6 +3569,22 @@ export const SettingsModal: React.FC<{
                       </div>
                     )}
 
+                    {/* 输入建议(缺省开):要 Tab 键采用,也要本机引擎(云端执行节点没有这条路由)→ 只在桌面宿主、有悬停的设备上摆出来。 */}
+                    {isDesktop && hoverCapable && !mobileSettings && (
+                      <div className="field" style={{ marginTop: 14 }} data-setting-anchor="prompt-suggest">
+                        <label>{t('settings.promptSuggest')}</label>
+                        <div className="hint" style={{ marginBottom: 8 }}>{t('settings.promptSuggestHint')}</div>
+                        <label className="inline-check">
+                          <input
+                            type="checkbox"
+                            checked={promptSuggest}
+                            onChange={(e) => { setPromptSuggest(e.target.checked); persistPromptSuggest(e.target.checked) }}
+                          />
+                          {t('settings.promptSuggestEnable')}
+                        </label>
+                      </div>
+                    )}
+
                     <div className="field" style={{ marginTop: 14 }} data-setting-anchor="reset-layout">
                       <label>{t('settingsmodal.advanced.resetLayout')}</label>
                       <div className="hint" style={{ marginBottom: 8 }}>{t('settingsmodal.advanced.resetLayoutHint')}</div>
@@ -3630,21 +3646,6 @@ export const SettingsModal: React.FC<{
                         />
                       )}
                     />
-                    {/* 输入建议:要 Tab 键采用,也要本机引擎(云端执行节点没有这条路由)→ 只在桌面宿主、有悬停的设备上摆出来。 */}
-                    {isDesktop && hoverCapable && !mobileSettings && (
-                      <SettingsRow
-                        anchor="prompt-suggest"
-                        label={t('settings.promptSuggest')}
-                        description={t('settings.promptSuggestHint')}
-                        control={(
-                          <SettingsSwitch
-                            checked={promptSuggest}
-                            onChange={(on) => { setPromptSuggest(on); persistPromptSuggest(on) }}
-                            label={t('settings.promptSuggest')}
-                          />
-                        )}
-                      />
-                    )}
                     {/* 客户端能力面自带的设置行(手机操控等,见 services/clientSurfaces.ts):数据驱动,
                         desktop/web 没注册就什么都不出,这里不写任何平台判断。 */}
                     {listClientSurfaces().map(({ ns, surface: { SettingsRow: Row } }) => Row && <Row key={ns} />)}

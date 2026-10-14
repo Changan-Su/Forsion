@@ -1,12 +1,13 @@
 /**
- * 输入建议:一轮结束后,在空输入框里用灰字给出「你下一句最可能发的话」,Tab 采用。默认关(设置 → 高级 → 测试性功能)。
+ * 输入建议:一轮结束后,在空输入框里用灰字给出「你下一句最可能发的话」,Tab 采用。缺省开(2026-10-14 用户定;设置 → 高级 → 界面与会话)。
  * 渲染层这半 = 开关 + 按会话存那一句 + 收到 done 后向引擎拉一次
  * (`POST /agent/sessions/:id/suggest`,tangu-agent services/promptSuggestion.ts:复用主循环的前缀缓存,一轮最多一次)。
  *
  * 那一句和平常的占位文字一样常驻:从拿到起一直留到这个会话的下一轮开始,输入框空着就显示。
  * 打字、Tab 采用、切到别的会话 / 视图都不丢它 —— 把字删空、切回来,它还在(2026-10-13 用户定)。
  *
- * 「没有建议」是常态:开关关着 / 触屏(没有 Tab)/ 老引擎或云端没有这条路由 / 模型说猜不准 / 请求失败,
+ * 「没有建议」是常态:开关关着 / 不是桌面宿主(网页版、手机、设备页:没有本机引擎的快照,也没摆开关)/ 触屏(没有 Tab)/
+ * 老引擎没有这条路由 / 模型说猜不准 / 请求失败,
  * 一律就是没有,不提示、不重试。
  */
 import { create } from 'zustand'
@@ -15,16 +16,22 @@ import { currentClientId } from '../../services/agentRunService'
 
 export const PROMPT_SUGGEST_KEY = 'forsion_tangu_prompt_suggest'
 
-/** 开关的唯一读法:没存过 = 关。每次现读 localStorage —— 设置页可能开在另一扇窗里。 */
+/** 只有桌面宿主算数:开关只摆在那儿,快照也只存在本机引擎里。网页版 / 手机 / 设备页缺省开也不去拉(拉了只是白打一次)。 */
+const supported = (): boolean =>
+  !!window.tangu?.backendStatus && !window.tangu?.mobile && !window.matchMedia?.('(hover: none)').matches
+
+/** 开关的唯一读法:没存过 = 开;关掉存成 '0'(10-14 之前开着存的 '1' 照样算开)。
+ *  每次现读 localStorage —— 设置页可能开在另一扇窗里。 */
 export function isPromptSuggestOn(): boolean {
-  try { return localStorage.getItem(PROMPT_SUGGEST_KEY) === '1' } catch { return false }
+  if (!supported()) return false
+  try { return localStorage.getItem(PROMPT_SUGGEST_KEY) !== '0' } catch { return true }
 }
 
-/** 唯一写口。关是缺省,存成「没存」。 */
+/** 唯一写口。开是缺省,存成「没存」。 */
 export function setPromptSuggest(on: boolean): void {
   try {
-    if (on) localStorage.setItem(PROMPT_SUGGEST_KEY, '1')
-    else localStorage.removeItem(PROMPT_SUGGEST_KEY)
+    if (on) localStorage.removeItem(PROMPT_SUGGEST_KEY)
+    else localStorage.setItem(PROMPT_SUGGEST_KEY, '0')
   } catch { /* 隐私模式 / 配额:偏好丢了也不该影响对话 */ }
   if (!on) clearAll()
 }
@@ -37,11 +44,8 @@ function clearAll(): void {
 
 // 设置开在另一扇窗(另一个渲染进程)里:那边关掉开关,这边已经显示着的灰字也跟着撤掉。
 if (typeof window !== 'undefined') {
-  window.addEventListener?.('storage', (e) => { if (e.key === PROMPT_SUGGEST_KEY && e.newValue !== '1') clearAll() })
+  window.addEventListener?.('storage', (e) => { if (e.key === PROMPT_SUGGEST_KEY && e.newValue === '0') clearAll() })
 }
-
-/** 没有 Tab 键的设备上不拉(拉了也没法采用,白花一次请求)。 */
-const touchOnly = (): boolean => !!window.tangu?.mobile || !!window.matchMedia?.('(hover: none)').matches
 
 export const usePromptSuggest = create<{ bySession: Record<string, string> }>(() => ({ bySession: {} }))
 
@@ -62,7 +66,7 @@ export function clearSuggestion(sessionId: string): void {
 /** run 收尾(done)后调:开关开着才真的发请求。 */
 export async function requestSuggestion(sessionId: string, runId: string): Promise<void> {
   clearSuggestion(sessionId)
-  if (!isPromptSuggestOn() || touchOnly()) return
+  if (!isPromptSuggestOn()) return
   const ac = new AbortController()
   inflight.set(sessionId, ac)
   try {

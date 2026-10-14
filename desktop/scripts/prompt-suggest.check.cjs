@@ -1,10 +1,10 @@
 /**
- * 输入建议(默认关)—— 真 Electron × 真组件/store × 可编剧假引擎。
+ * 输入建议(缺省开,2026-10-14 用户定)—— 真 Electron × 真组件/store × 可编剧假引擎。
  *
  * 钉住的产品契约:
- *  ① 开关默认关:一轮结束后**一次**建议请求都不发,输入框还是平常的占位文字;
- *  ② 设置 → 高级 → 测试性功能里把「输入建议」打开(真点开关)后,一轮结束就向引擎拉一次(带上刚结束的 run),
- *     拿到的那句成了空输入框里的灰字(占位文字);
+ *  ① 缺省开:什么都没设过,一轮结束就向引擎拉一次(带上刚结束的 run),拿到的那句成了空输入框里的灰字(占位文字);
+ *  ② 开关在 设置 → 高级 → 界面与会话,缺省勾着,「外观」页里没有它;取消勾选 → 已显示的灰字撤掉、
+ *     下一轮一次都不拉;再勾上 → 照常;
  *  ③ Tab:那句进了输入框、没有发出去,光标在句尾;
  *  ④ 常驻(2026-10-13 用户定:和占位文字一样):Tab 采用后删空、打过字再删空、换 Space / 换会话 / 新开标签页再回来,
  *     灰字都还在;
@@ -12,7 +12,7 @@
  *  ⑥ 这一轮跑着的时候切到别的会话,收尾照拉,切回来灰字在。
  *
  * 需先 npm run build。用法:npm run check:promptsuggest
- * 负对照:node scripts/prompt-suggest.check.cjs --nc(不开开关 → ② 起「开着」之后的断言必须转红)。
+ * 负对照:node scripts/prompt-suggest.check.cjs --nc(② 里关掉以后不再勾回来 → 之后「开着」的断言必须转红)。
  */
 const fs = require('fs')
 const os = require('os')
@@ -142,43 +142,52 @@ async function main() {
     }
     const basePlaceholder = await placeholder()
 
-    // ── ① 默认关:不发请求,占位文字照旧 ──
+    // ── ① 缺省开:什么都没设过,一轮结束就拉 ──
     await turn('先看看有哪些文件', '有 a.ts 和 a.test.ts。要我跑一下测试吗?')
-    check('默认关:一轮结束不发建议请求', asked.length === 0, `请求 ${asked.length} 次`)
-    check('默认关:占位文字照旧', (await placeholder()) === basePlaceholder && !(await flagged()), JSON.stringify(await placeholder()))
-
-    // ── ② 在设置里真点开关 ──
-    if (!NEGATIVE_CONTROL) {
-      // 设置是一扇单独的浮窗(另一个渲染进程):开关写的是共用的 localStorage,主窗每次现读。
-      await win.evaluate(() => window.tangu.openFloatingPanel({ id: 'settings', title: 'Settings', builtin: 'settings', params: { tab: 'advanced/a-experimental' } }))
-      let fl
-      await waitFor(async () => { fl = app.windows().find((w) => w.url().includes('window=floating')); return !!fl }, 15000)
-      const sw = fl ? fl.locator('[data-setting-anchor="prompt-suggest"] [role="switch"]').first() : null
-      const found = !!sw && await sw.waitFor({ timeout: 30000 }).then(() => true, () => false)
-      check('设置 → 高级 → 测试性功能里有「输入建议」开关,缺省是关', found && (await sw.getAttribute('aria-checked')) === 'false')
-      if (found) { await sw.scrollIntoViewIfNeeded(); await sw.click() }
-      check('点一下 → 开', found && (await sw.getAttribute('aria-checked')) === 'true')
-      if (found) {
-        await fl.waitForTimeout(350) // 等开关的过渡走完,截图里才是「开」的样子
-        await fl.screenshot({ path: SHOTS.setting }).catch(() => {})
-      }
-      // 挪走以后「外观」页里不该再有这一行(用外观页自己的「明暗」行确认真的切过去了)
-      await fl?.locator('.settings-nav-list button', { hasText: '外观' }).first().click().catch(() => {})
-      await fl?.waitForTimeout(600)
-      const inTheme = fl ? await fl.locator('[data-setting-anchor="prompt-suggest"]').count() : -1
-      const themeShown = fl ? await fl.locator('[data-setting-anchor="color-mode"]').count() : 0
-      check('「外观」页里不再有这一行', themeShown > 0 && inTheme === 0, JSON.stringify({ themeShown, inTheme }))
-      await fl?.close().catch(() => {})
-      await win.bringToFront().catch(() => {})
-      await win.waitForTimeout(500)
-    }
-
-    await turn('那 a.ts 里有什么', 'a.ts 导出了一个 add 函数。要我跑一下测试吗?')
     await waitFor(() => asked.length > 0, 4000)
-    const lastRun = stub.seen.runs.at(-1)?.runId
-    check('开着:一轮结束拉一次,带上刚结束的 run', asked.length === 1 && asked[0].run_id === lastRun, JSON.stringify({ asked, lastRun }))
+    check('缺省开:一轮结束拉一次,带上刚结束的 run', asked.length === 1 && asked[0].run_id === stub.seen.runs.at(-1)?.runId, JSON.stringify(asked))
     await waitFor(async () => (await placeholder()) === SUGGESTION, 4000)
     check('那句成了空输入框里的灰字', (await placeholder()) === SUGGESTION && (await flagged()) === 'true' && (await ta.inputValue()) === '', JSON.stringify(await placeholder()))
+
+    // ── ② 设置 → 高级 → 界面与会话:缺省勾着;取消 / 再勾上(真点) ──
+    // 设置是一扇单独的浮窗(另一个渲染进程):开关写的是共用的 localStorage,主窗每次现读、经 storage 事件撤灰字。
+    await win.evaluate(() => window.tangu.openFloatingPanel({ id: 'settings', title: 'Settings', builtin: 'settings', params: { tab: 'advanced/a-ui' } }))
+    let fl
+    await waitFor(async () => { fl = app.windows().find((w) => w.url().includes('window=floating')); return !!fl }, 15000)
+    const box = fl ? fl.locator('[data-setting-anchor="prompt-suggest"] input[type="checkbox"]').first() : null
+    const found = !!box && await box.waitFor({ timeout: 30000 }).then(() => true, () => false)
+    check('设置 → 高级 → 界面与会话里有「输入建议」,缺省勾着', found && await box.isChecked())
+    if (found) {
+      await fl.locator('[data-setting-anchor="prompt-suggest"]').scrollIntoViewIfNeeded().catch(() => {})
+      await fl.screenshot({ path: SHOTS.setting }).catch(() => {})
+      await box.click()
+    }
+    check('取消勾选 → 关', found && !(await box.isChecked()))
+    await waitFor(async () => (await placeholder()) === basePlaceholder, 3000)
+    check('关掉:已显示的灰字撤掉', (await placeholder()) === basePlaceholder && !(await flagged()), JSON.stringify(await placeholder()))
+    const askedOff = asked.length
+    await turn('还有呢', '没有了。要我跑一下测试吗?')
+    await win.waitForTimeout(600)
+    check('关着:一轮结束一次都不拉,占位文字照旧', asked.length === askedOff && (await placeholder()) === basePlaceholder && !(await flagged()), `请求 ${askedOff} → ${asked.length}`)
+    if (found && !NEGATIVE_CONTROL) await box.click()
+    check('再勾上 → 开', NEGATIVE_CONTROL || (found && await box.isChecked()))
+    // 挪走以后「外观」页里不该再有这一行(用外观页自己的「明暗」行确认真的切过去了)
+    await fl?.locator('.settings-nav-list button', { hasText: '外观' }).first().click().catch(() => {})
+    await fl?.waitForTimeout(600)
+    const inTheme = fl ? await fl.locator('[data-setting-anchor="prompt-suggest"]').count() : -1
+    const themeShown = fl ? await fl.locator('[data-setting-anchor="color-mode"]').count() : 0
+    check('「外观」页里没有这一行', themeShown > 0 && inTheme === 0, JSON.stringify({ themeShown, inTheme }))
+    await fl?.close().catch(() => {})
+    await win.bringToFront().catch(() => {})
+    await win.waitForTimeout(500)
+
+    const askedOn = asked.length
+    await turn('那 a.ts 里有什么', 'a.ts 导出了一个 add 函数。要我跑一下测试吗?')
+    await waitFor(() => asked.length > askedOn, 4000)
+    const lastRun = stub.seen.runs.at(-1)?.runId
+    check('开着:一轮结束拉一次,带上刚结束的 run', asked.length === askedOn + 1 && asked.at(-1)?.run_id === lastRun, JSON.stringify({ asked: asked.slice(askedOn), lastRun }))
+    await waitFor(async () => (await placeholder()) === SUGGESTION, 4000)
+    check('又成了空输入框里的灰字', (await placeholder()) === SUGGESTION && (await flagged()) === 'true' && (await ta.inputValue()) === '', JSON.stringify(await placeholder()))
 
     if (!NEGATIVE_CONTROL) {
       const box = win.locator('.t2c-card, .t2c').first()

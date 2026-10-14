@@ -16,15 +16,33 @@ beforeEach(() => {
   localStorage.removeItem(PROMPT_SUGGEST_KEY)
   fetchMock = vi.fn()
   vi.stubGlobal('fetch', fetchMock)
+  vi.stubGlobal('tangu', { backendStatus: () => {} }) // 桌面宿主:开关只在这儿算数
 })
 afterEach(() => { useApp.setState(initialApp, true); vi.unstubAllGlobals() })
 
 describe('输入建议', () => {
-  it('默认关:一轮结束不发任何请求', async () => {
-    expect(isPromptSuggestOn()).toBe(false)
+  it('缺省开(10-14 用户定):没存过就去拉;关掉存成 0,再开回到「没存」', async () => {
+    expect(isPromptSuggestOn()).toBe(true)
+    fetchMock.mockResolvedValueOnce(json({ suggestion: '跑一下测试' }))
     await requestSuggestion('s1', 'r1')
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    setPromptSuggest(false)
+    expect(localStorage.getItem(PROMPT_SUGGEST_KEY)).toBe('0')
+    await requestSuggestion('s1', 'r2')
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    setPromptSuggest(true)
+    expect(localStorage.getItem(PROMPT_SUGGEST_KEY)).toBeNull()
+    localStorage.setItem(PROMPT_SUGGEST_KEY, '1') // 10-14 之前开着存下的值
+    expect(isPromptSuggestOn()).toBe(true)
+  })
+
+  it('不是桌面宿主(网页版 / 手机 / 设备页):缺省开也不拉', async () => {
+    for (const host of [undefined, { cloudWeb: true }, { backendStatus: () => {}, mobile: true }]) {
+      vi.stubGlobal('tangu', host)
+      expect(isPromptSuggestOn()).toBe(false)
+      await requestSuggestion('s1', 'r1')
+    }
     expect(fetchMock).not.toHaveBeenCalled()
-    expect(shown()).toBeUndefined()
   })
 
   it('开着:按会话拉一次,带上刚结束的 run;拿到的那句按会话存', async () => {
@@ -78,7 +96,7 @@ describe('输入建议', () => {
   })
 
   it('请求在路上时用户打了字:回来的那句照样落地;关了开关:不落地', async () => {
-    for (const [interrupt, landed] of [[() => setDraftField('s1', 'text', '我自己写'), '迟到的'], [() => localStorage.removeItem(PROMPT_SUGGEST_KEY), undefined]] as const) {
+    for (const [interrupt, landed] of [[() => setDraftField('s1', 'text', '我自己写'), '迟到的'], [() => localStorage.setItem(PROMPT_SUGGEST_KEY, '0'), undefined]] as const) {
       setPromptSuggest(true)
       usePromptSuggest.setState({ bySession: {} })
       let release: (r: Response) => void = () => {}
@@ -113,6 +131,6 @@ describe('输入建议', () => {
     await requestSuggestion('s1', 'r1')
     setPromptSuggest(false)
     expect(shown()).toBeUndefined()
-    expect(localStorage.getItem(PROMPT_SUGGEST_KEY)).toBeNull()
+    expect(localStorage.getItem(PROMPT_SUGGEST_KEY)).toBe('0')
   })
 })
