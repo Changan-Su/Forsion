@@ -9,6 +9,7 @@ import { PRODUCT } from '../product'
  */
 import { create } from 'zustand'
 import { contentStorageKey } from '@lcl/engine/contentStorageScope'
+import { useSpaceStore } from '@lcl/engine/spaceRegistry'
 import type { ProjectSettings,
   AgentConfig, AgentRunEvent, Attachment, AuthStatusInfo, CtxInfo, ModelsResponse, NormalAgentDef,
   MsgSeg, SessionRecord, SkillInfo, SketchItem, SubChat, TanguDesktopConfig, ToolEvent, UiMessage, WorkspaceDescriptor, StoredDesktopConfig,
@@ -581,6 +582,9 @@ export function resolveNewSessionWorkspace(
 ): WorkspaceDescriptor {
   if (s.newChatWs) return s.newChatWs
   if (newSessionPreset(s.sessionMode, null, platform) === 'chat') return rootlessWs(s.tr)
+  // 在 Amadeus 里呼出的对话:落点是笔记库。排在 chat 判定之后 —— Chat 会话照旧不带项目。
+  const vault = amadeusLandingRoot(s)
+  if (vault) return amadeusWs(vault, s.tr)
   if (isHostCapable(s)) {
     const dirs = newSessionDirs(s)
     const path = dirs.defaultWsDir || dirs.homeDir || null
@@ -648,6 +652,19 @@ export function withAmadeusWorkspace(config: AgentConfig, vaultRoot: string | nu
 }
 
 const activeAmadeusRoot = (): string | null => usePageStore.getState().vaultRoot || null
+/** 笔记库的工作区描述符:项目列表里的常驻项,也是在 Amadeus 里呼出的新对话的隐式落点(两处同一份,键 = 库根)。 */
+const amadeusWs = (root: string, t: AppState['tr']): WorkspaceDescriptor => ({
+  key: root, name: t('app.amadeusWorkspace', { name: root.split(/[\\/]/).filter(Boolean).pop() || 'Vault' }), kind: 'local', path: root, system: true,
+})
+/** 在 Amadeus Space 里呼出的新对话(右栏对话面板)没显式选项目时落在哪座库;别的 Space → null(仍是默认工作区)。
+ *  用户 2026-10-13 定:在 Amadeus 里呼出的 Tangu,工作目录应是 Amadeus 工作区。焦点在「我的电脑」上不算(那台没有这座库);
+ *  没有 host FS 的端不算;库根就是默认工作区时也不算(本来就落在那儿,别换一个名字)。
+ *  空态的项目药丸 / cwd(ChatView)与建会话(resolveNewSessionWorkspace)同读这一处。 */
+export function amadeusLandingRoot(s: Pick<AppState, 'desktopMode' | 'defaultWsDir' | 'homeDir'> = useApp.getState()): string | null {
+  if (useSpaceStore.getState().activeSpaceId !== 'amadeus' || focusRef().kind !== 'home' || !isHostCapable(s)) return null
+  const root = activeAmadeusRoot()
+  return root && root !== (s.defaultWsDir || s.homeDir) ? root : null
+}
 
 /** P1-K7a(K7 §3.6 / S6):建在「我的电脑」上的会话,手机本地的这些键一律不带 —— 手机的 Amadeus 根(extraRoots)、云端项目名、
  *  外部引擎、验证命令、轨道身份。引擎侧(C7 / C8)也会剥 / 拒,这里不依赖它;cwd 只可能是在那台上选的项目(调用方给的 path)。 */
@@ -2749,8 +2766,7 @@ export const useApp = create<AppState>((set, get) => ({
     const seen = new Set<string>([...projNames.map(cloudProjectKey), defaultKey, ...defaultSessionKeys])
     // Vault 不再只在「编辑器 + 文件自动模式」临时出现:它是常驻系统工作区,可直接作为新会话 cwd。
     if (amadeusRoot && !seen.has(amadeusRoot)) {
-      const base = amadeusRoot.split(/[\\/]/).filter(Boolean).pop() || 'Vault'
-      list.push({ key: amadeusRoot, name: t('app.amadeusWorkspace', { name: base }), kind: 'local', path: amadeusRoot, system: true })
+      list.push(amadeusWs(amadeusRoot, t))
       seen.add(amadeusRoot)
     }
     // 已启用通道的专属工作区文件夹(webot/tgbot/qqbot;channelsStore 轮询维护,通道停用则回落普通本地组)。
@@ -2796,6 +2812,10 @@ export const useApp = create<AppState>((set, get) => ({
       const sticky = stickyDefaults(get().desktopConfig, !!path, preset)
       // 项目默认项(PROJECT 详情里定的,本机):只对用户自己添加的本地项目生效,夹在「上次用的档位」之上;等一次本地 GET 无妨,这里是按钮点击。
       const projectDefaults = path && isProjectWorkspace(ws) ? projectDefaultsForNewSession(await get().ensureProjectSettings(path).catch(() => null), get().teams) : { config: {} }
+      // 模型当场固化,与 send() 同一条回退链(项目默认 → 记忆 → 目录缺省):不传的话引擎按**启动时**读到的缺省模型落库
+      // (profile.defaultModelId 不跟着 config.json 变),之后在会话里换过的模型要到重启才对这里建出来的会话生效。
+      // 空白新对话草稿里的 newChatModel 不算 —— 那是给下一条空态消息的,这里也不吃草稿的 Agent / 档位。
+      const model_id = projectDefaults.model || newChatModelId({ ...get(), newChatModel: null })
       // 回来即绑定 loc(路由真源),插列表前经 withLocation 打标
       const base = applyPreset(path
         ? { ...newSessionConfig(sticky, projectDefaults.config), execMode: 'host', cwd: path }
@@ -2810,7 +2830,7 @@ export const useApp = create<AppState>((set, get) => ({
           ? { project_path: path, project_name: ws.name }
           : cloudProject ? { project_name: cloudProject }
           : (ws.kind === 'rootless' || chat) ? { projectless: true } : {}),
-        ...(projectDefaults.model ? { model_id: projectDefaults.model } : {}),
+        ...(model_id ? { model_id } : {}),
         agent_config: init,
       })
       if (bindSession(created.id, loc) === 'conflict') throw new Error(t('app.cannotCreateSession'))
@@ -3680,6 +3700,9 @@ export const useApp = create<AppState>((set, get) => ({
       const where = sid ? refForSession(sid) : focusRef()
       if (where.kind === 'unit') { writeFocusModel(where, modelId); if (sameRef(where, focusRef())) set({ focusModelId: modelId }) }
       else set((s) => { void window.tangu?.setConfig?.({ modelId }); return { cfg: { ...s.cfg, modelId } } })
+      // 这次选的就是「新会话用哪个模型」的最新答案:空白新对话草稿里更早定下的那个(newChatModel 排在记忆前面,发出去之后也不清)
+      // 不能再压着它 —— 否则经归档 / 切 Space / /sessions 回到空白新对话时,药丸还是旧的那个,发出去也是。
+      if (sid && sameRef(where, focusRef())) set({ newChatModel: null })
     }
     if (!sid) { set({ newChatModel: modelId }); return }
     patchSessionModelLocal(sid, modelId)

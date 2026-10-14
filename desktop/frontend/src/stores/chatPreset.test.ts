@@ -12,6 +12,7 @@ import { useApp, newSessionPreset, stickyDefaults, applyPreset, resolveNewSessio
 import { effectiveSessionMode, sessionsInMode, workspacesInMode } from '../views/sessionMode'
 import { currentPlatform } from '../services/agentRunService'
 import { usePageStore } from '../amadeus/store/pageStore'
+import { useSpaceStore } from '@lcl/engine/spaceRegistry'
 import { selectableChatModels } from '../views/chatModelCatalog'
 
 const createSessionMock = vi.hoisted(() => vi.fn())
@@ -61,6 +62,43 @@ describe('resolveNewSessionWorkspace(Homepage / send / newSession 共用落点)'
   it('Work 未选项目时按端能力落本地默认工作区或默认云 Project', () => {
     expect(resolveNewSessionWorkspace({ sessionMode: 'work', newChatWs: null, desktopMode: 'managed', defaultWsDir: '/default', homeDir: '/home', tr }, 'desktop')).toMatchObject({ key: '/default', kind: 'local', path: '/default' })
     expect(resolveNewSessionWorkspace({ sessionMode: 'work', newChatWs: null, desktopMode: 'external', defaultWsDir: '/default', homeDir: '/home', tr }, 'web')).toMatchObject({ kind: 'cloud', project: DEFAULT_CLOUD_PROJECT })
+  })
+})
+
+// 用户 2026-10-13 定:在 Amadeus 里呼出的 Tangu(右栏对话面板),工作目录应是 Amadeus 工作区,不是默认工作区。
+describe('在 Amadeus Space 里呼出的新对话落在笔记库', () => {
+  const tr = ((k: string) => k) as AppState['tr']
+  const base = { desktopMode: 'managed' as const, defaultWsDir: '/default', homeDir: '/home', tr }
+  beforeEach(() => { useSpaceStore.setState({ activeSpaceId: 'amadeus' }); usePageStore.setState({ vaultRoot: '/vault' }) })
+  afterEach(() => { useSpaceStore.setState({ activeSpaceId: 'tangu' }); usePageStore.setState({ vaultRoot: null }) })
+
+  it('Work 且没显式选项目 → 笔记库;它是系统工作区,不套默认工作区的项目默认项', () => {
+    expect(resolveNewSessionWorkspace({ ...base, sessionMode: 'work', newChatWs: null }, 'desktop')).toMatchObject({ key: '/vault', kind: 'local', path: '/vault', system: true })
+    expect(newChatProjectPath({ ...base, sessionMode: 'work', newChatWs: null }, 'desktop')).toBeNull()
+  })
+  it('显式选的项目、Chat 模式都压过它(Chat 会话照旧不带项目)', () => {
+    expect(resolveNewSessionWorkspace({ ...base, sessionMode: 'work', newChatWs: localWs }, 'desktop')).toBe(localWs)
+    expect(resolveNewSessionWorkspace({ ...base, sessionMode: 'chat', newChatWs: null }, 'desktop')).toMatchObject({ kind: 'rootless' })
+  })
+  it('⚠️ 别的 Space、没有 host FS 的端、库根就是默认工作区 → 照旧', () => {
+    expect(resolveNewSessionWorkspace({ ...base, desktopMode: 'external', sessionMode: 'work', newChatWs: null }, 'web')).toMatchObject({ kind: 'cloud', project: DEFAULT_CLOUD_PROJECT })
+    expect(resolveNewSessionWorkspace({ ...base, defaultWsDir: '/vault', sessionMode: 'work', newChatWs: null }, 'desktop')).toMatchObject({ key: '/vault', isDefault: true })
+    useSpaceStore.setState({ activeSpaceId: 'tangu' })
+    expect(resolveNewSessionWorkspace({ ...base, sessionMode: 'work', newChatWs: null }, 'desktop')).toMatchObject({ key: '/default', isDefault: true })
+  })
+  it('send() 建出来的会话 cwd 就是库根(不再把库另列进 extraRoots)', async () => {
+    const initial = useApp.getState()
+    useApp.setState({ ...base, sessionMode: 'work', newChatWs: null, activeId: null, newChatCfg: {}, cfg: { ...initial.cfg, modelId: 'm1' } })
+    createSessionMock.mockReset(); startRunMock.mockReset()
+    createSessionMock.mockImplementation((_t: unknown, init: { project_path?: string; agent_config?: unknown }) =>
+      Promise.resolve({ id: 's-vault', title: 'New Chat', model_id: 'm1', created_at: '', updated_at: '', project_path: init.project_path, agent_config: init.agent_config }))
+    startRunMock.mockRejectedValue(new Error('stop here'))
+
+    await useApp.getState().send('这篇讲了什么', [])
+
+    expect(createSessionMock.mock.calls[0][1]).toMatchObject({ project_path: '/vault', agent_config: { execMode: 'host', cwd: '/vault' } })
+    expect(createSessionMock.mock.calls[0][1].agent_config).not.toHaveProperty('extraRoots')
+    useApp.setState(initial, true)
   })
 })
 
