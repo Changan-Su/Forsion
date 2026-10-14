@@ -406,15 +406,22 @@ async function run(page) {
   const side = await page.evaluate(() => { const r = document.querySelector('.rb-peek .pk-blank').getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 } })
   d = await dragTo(page, '.rb-peek .pk-row[data-row="3"]', side.x, side.y)
   check('I5 落在左栏(卡片)里:不是开 View 的地方,不开', !d.hint && (await mainTabs(page)).length === t3.length, `hint ${d.hint} on ${d.on}`)
-  const stale = await page.evaluate(() => {
-    const dt = new DataTransfer() // 没走 dragstart 的拖入(系统文件 / 别的 app):不许借用上一次的残留
-    const el = document.querySelector('.pk-main')
-    const r = el.getBoundingClientRect()
-    const ev = new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer: dt, clientX: r.left + r.width * 0.8, clientY: r.top + r.height * 0.3 })
-    el.dispatchEvent(ev)
-    return ev.defaultPrevented
+  const stale = await page.evaluate(async () => {
+    const nap = (ms) => new Promise((r) => setTimeout(r, ms))
+    // 条目拖到一半源被卸掉、dragend 没到:引擎里留着「落点即开」的状态。接着来一次系统文件拖入(没走 dragstart,载荷里没有标记)。
+    const src = document.querySelector('.rb-peek .pk-row[data-row="3"]')
+    src.dispatchEvent(new DragEvent('dragstart', { bubbles: true, cancelable: true, dataTransfer: new DataTransfer() }))
+    await nap(50)
+    const el = [...document.querySelectorAll('.pk-main')].find((m) => m.getBoundingClientRect().width > 0)
+    const r = el.getBoundingClientRect(), x = r.left + r.width * 0.5, y = r.top + r.height * 0.6
+    const hit = document.elementFromPoint(x, y)
+    hit.dispatchEvent(new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer: new DataTransfer(), clientX: x, clientY: y }))
+    await nap(50)
+    const hint = [...document.querySelectorAll('.wb-drop-line, .wb-drop-zone')].some((e) => getComputedStyle(e).display !== 'none')
+    src.dispatchEvent(new DragEvent('dragend', { bubbles: true }))
+    return { hint, on: hit.className }
   })
-  check('I6 不是从条目拖起的拖入(系统文件之类):引擎不接', stale === false)
+  check('I6 残留着条目拖拽的状态时来一次系统文件拖入:引擎不接(不画提示)', stale.hint === false, JSON.stringify(stale))
   await park(page)
   await page.waitForTimeout(400)
 
