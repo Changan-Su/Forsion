@@ -1,5 +1,6 @@
-/** Space 左面板悬停预览的纯判定(2026-10-13):左面板收起时,指针停在 Ribbon 的 Space 图标上 → 条右侧浮出一张卡,
- *  里面是那个 Space 的左面板,可以直接操作。接线在 Ribbon.tsx,卡片在 SpacePeek.tsx;这里只放能单测的两条规则。 */
+/** Space 左面板悬停预览的纯判定(2026-10-13):指针停在 Ribbon 的 Space 图标上 → 条右侧浮出一张卡,
+ *  里面是那个 Space 的左面板,可以直接操作。左面板展开着也弹(10-14),只有当前 Space 不弹 —— 它的左栏就在眼前。
+ *  接线在 Ribbon.tsx,卡片在 SpacePeek.tsx;这里只放能单测的两条规则。 */
 import type { PersistedPanel } from './layoutPersist'
 
 /** 停多久才弹:比名字浮签(1s)短,比「路过」长 —— 顺着条往下扫不该闪出一张通高的卡。已经弹着时换图标不等。 */

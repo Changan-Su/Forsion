@@ -35,6 +35,14 @@ export interface LayoutEnvelopeV4 {
 
 export type LayoutBlob = LayoutEnvelopeV4
 
+/** 一个视图都没有的布局:Dockview 图里没有面板,三侧的收起栈也是空的。它不是谁的现场 —— 纯插件产品(Unit)启动时
+ *  还原落空剩下的就是这个样子,曾被存进 `space:<上次那个 Space>`,之后再进那个 Space 就是一片空白(2026-10-13 实报)。 */
+export function layoutIsBlank(blob: LayoutBlob): boolean {
+  const panels = (blob.dockview as { panels?: Record<string, unknown> } | null)?.panels
+  const { left, right, bottom } = blob.sidebars
+  return !Object.keys(panels ?? {}).length && !left.stash.length && !right.stash.length && !(bottom?.stash.length)
+}
+
 /** 最小存储接口(默认 localStorage;测试可注入内存 stub)。 */
 export interface KV {
   getItem(key: string): string | null

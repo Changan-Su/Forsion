@@ -2,7 +2,7 @@
  * Space 左面板悬停预览(真 Chromium + 真 Shell / Ribbon / Dockview + 真 SpaceButton,harness.html?peek)。
  *
  * 钉的是接线,纯规则在 lcl/engine/spacePeekRules.test.ts:
- *   · 只在左面板收起时弹;停够 300ms 才弹、路过不弹;没有左栏的 Space 不弹(照旧出名字浮签);
+ *   · 左面板展开着只有当前 Space 不弹(别的 Space 照弹,卡片盖在眼前这块左栏上);停够 300ms 才弹、路过不弹;没有左栏的 Space 不弹(照旧出名字浮签);
  *   · 卡里是活的 View:点得动、打得了字;卡片不是 View 里 fixed 元素的包含块(右键菜单 / 悬停提示不偏移);
  *   · 什么时候收:指针回到界面别处 150ms 后收;停在卡里弹出的菜单上、卡里输入框拿着焦点时不收;Esc / 点别处立刻收;
  *   · 换图标 = 原地换内容;别的 Space 的卡里点一下 = 先切到那个 Space,这一下点击照常落地;头部换页签不切;
@@ -88,10 +88,25 @@ async function run(page) {
     return p.group.api.width
   })
 
-  // ── A. 左面板展开着:不弹 ──
+  // ── A. 左面板展开着:当前 Space 不弹(它的左栏就在眼前),别的 Space 照弹 ──
   await hover(page, icon('a'))
   await page.waitForTimeout(700)
-  check('A1 左面板展开着,悬停 Space 图标不弹预览', (await peek(page)) === null)
+  check('A1 左面板展开着,悬停当前 Space 的图标不弹预览', (await peek(page)) === null)
+  let p = await openOn(page, 'b')
+  check('A2 左面板展开着,悬停别的 Space 照弹(弹的是那个 Space 的左栏)', p?.space === 'b' && p.tags.join() === 'b', JSON.stringify(p))
+  const openGeo = await page.evaluate(() => {
+    const g = window.__peek.useWorkspace.getState().api.panels.find((x) => (x.params || {}).__loc === 'left').group.element.getBoundingClientRect()
+    return { l: g.left, t: g.top, r: g.right, b: g.bottom }
+  })
+  check('A3 这时卡片正好盖在眼前这块左栏上(四边对齐,不露底下那块,也不多盖)',
+    !!p && openGeo.b - openGeo.t > 100 && ['l', 't', 'r', 'b'].every((k) => Math.abs(p.rect[k] - openGeo[k]) <= 1),
+    `card ${JSON.stringify(p?.rect)} / left panel ${JSON.stringify(openGeo)}`)
+  if (SHOT_DIR) { fs.mkdirSync(SHOT_DIR, { recursive: true }); await page.screenshot({ path: path.join(SHOT_DIR, 'peek-left-open.png') }) }
+  await hover(page, icon('a'))
+  await page.waitForTimeout(120)
+  check('A4 弹着别的 Space 的卡时移到当前 Space 的图标上:收(露出真的那块左栏)', p?.space === 'b' && (await peek(page)) === null)
+  await park(page)
+  await page.waitForTimeout(300)
 
   // ── B. 收起后:停够才弹,路过不弹 ──
   await setLeft(page, false)
@@ -100,7 +115,7 @@ async function run(page) {
   await page.waitForTimeout(120)
   check('B1 刚停上去(120ms)还没弹', (await peek(page)) === null)
   await page.waitForTimeout(330)
-  let p = await peek(page)
+  p = await peek(page)
   check('B2 停够 300ms 弹出当前 Space 的左面板', p?.space === 'a' && p.tags.join() === 'a', JSON.stringify(p))
   check('B3 卡片头部是 Space 名,单个 View 不出页签', p?.name === 'Space A' && p?.tabs === 0, `${p?.name} / tabs ${p?.tabs}`)
   await page.waitForTimeout(900)
@@ -221,20 +236,26 @@ async function run(page) {
   check('E3 点页签换 View;换页签不算操作这个 Space(不切)', p?.tags.join() === 'b2' && s.space === 'a', `${p?.tags.join()} / active ${s.space}`)
   const rowB = await centerOf(page, '.rb-peek .pk-row[data-row="1"]')
   await page.mouse.move(rowB.x, rowB.y, { steps: 4 })
+  const before = (await peek(page)).rect
   await page.mouse.click(rowB.x, rowB.y)
   await page.waitForTimeout(500)
   s = await state(page)
   check('⚠️E4 在别的 Space 的卡里点一下:先切到那个 Space,这一下点击照常落地', s.space === 'b' && s.hits[s.hits.length - 1] === 'b2:1@b', `active ${s.space} / ${s.hits.join()}`)
   p = await peek(page)
   check('⚠️E5 那个 Space 的左栏本来就展开着:卡片先留着(这一下点开的菜单 / 表单还挂在卡里),不当场卸掉', s.left === true && p?.space === 'b' && p.tags.join() === 'b2', `left ${s.left} / ${JSON.stringify(p)}`)
+  check('E5b 留着的卡不挪位置(那边左栏展开着、这边收着,照新状态重算会在指针底下跳)',
+    !!p && Math.abs(p.rect.l - before.l) <= 0.5 && Math.abs(p.rect.t - before.t) <= 0.5 && Math.abs(p.rect.b - before.b) <= 0.5,
+    `before ${JSON.stringify(before)} / after ${JSON.stringify(p?.rect)}`)
   await hover(page, icon('a'))
   await page.waitForTimeout(120)
-  check('E6 留着的卡不跟着换图标:指针到别的 Space 图标上就收', (await peek(page)) === null)
+  p = await peek(page)
+  check('E6 留着的卡,指针到别的 Space 图标上:换成那个 Space 的预览(左栏展开着也弹别人的)', p?.space === 'a' && p.tags.join() === 'a', JSON.stringify(p))
   await park(page)
-  await page.waitForTimeout(300)
+  await page.waitForTimeout(400)
+  check('E6b 换过来的卡不沿用「先留着」:指针回主区照常收', p?.space === 'a' && (await peek(page)) === null)
   await hover(page, icon('b'))
   await page.waitForTimeout(600)
-  check('E7 左栏展开着,再悬停也不弹', (await peek(page)) === null)
+  check('E7 左栏展开着,悬停当前 Space(刚切过来的 b)不弹', (await peek(page)) === null)
 
   // ── F. 没有左栏的 Space;点图标 ──
   await setLeft(page, false)
@@ -258,7 +279,12 @@ async function run(page) {
   p = await openOn(page, 'a')
   await page.evaluate(() => window.__peek.useWorkspace.getState().toggleSidebar('left'))
   await page.waitForTimeout(700)
-  check('G1 预览弹着时左面板展开了(不是卡里点出来的)→ 预览收起', p?.space === 'a' && (await peek(page)) === null)
+  check('G1 弹着当前 Space 的预览时左面板展开了(不是卡里点出来的)→ 预览收起', p?.space === 'a' && (await peek(page)) === null)
+  await setLeft(page, false)
+  p = await openOn(page, 'b')
+  await page.evaluate(() => window.__peek.useWorkspace.getState().toggleSidebar('left'))
+  await page.waitForTimeout(700)
+  check('G1b 弹着别的 Space 的预览时左面板展开了:不关它的事,卡片留着', p?.space === 'b' && (await peek(page))?.space === 'b', JSON.stringify(await peek(page)))
   await setLeft(page, false)
   await page.evaluate(() => { document.body.style.zoom = '1.1' })
   await page.waitForTimeout(200)
@@ -272,6 +298,17 @@ async function run(page) {
   check('⚠️G2 110% 缩放:卡片仍贴 Ribbon 右沿、让开标签条、通到底(fixed 坐标按 zoom 折算)',
     !!p && Math.abs(p.rect.l - (z.rbRight + 4)) <= 1.5 && p.rect.t >= z.toggleBottom && Math.abs(p.rect.b - (z.workBottom - 8)) <= 1.5,
     `left ${p?.rect.l} vs ${z.rbRight + 4};top ${p?.rect.t} ≥ ${z.toggleBottom};bottom ${p?.rect.b} vs ${z.workBottom - 8}`)
+  // 左面板展开着的那种摆法也在 110% 下量一遍(用户的 dev 界面缩放就是 110%)。
+  await setLeft(page, true)
+  p = await openOn(page, 'b')
+  const zg = await page.evaluate(() => {
+    const g = window.__peek.useWorkspace.getState().api.panels.find((x) => (x.params || {}).__loc === 'left').group.element.getBoundingClientRect()
+    return { l: g.left, t: g.top, r: g.right, b: g.bottom }
+  })
+  check('⚠️G3 110% 缩放 + 左面板展开着:别的 Space 的卡片仍正好盖在眼前这块左栏上',
+    p?.space === 'b' && zg.b - zg.t > 100 && ['l', 't', 'r', 'b'].every((k) => Math.abs(p.rect[k] - zg[k]) <= 1.5),
+    `card ${JSON.stringify(p?.rect)} / left panel ${JSON.stringify(zg)}`)
+  await setLeft(page, false)
   await page.evaluate(() => { document.body.style.zoom = '' })
   await page.waitForTimeout(200)
 
