@@ -23,3 +23,6 @@
 .runloc-menu .runloc-row:disabled { opacity: 0.55; cursor: default; }
 .runloc-menu .runloc-row:disabled:hover { background: none; }
 .runloc-notice { line-height: 1.45; white-space: normal; }
+/* 收起时带状态说明(「等待那台电脑允许」之类)会把设备名挤成省略号:这颗胶囊放宽到名字 + 说明都放得下
+   (项目药丸的上限是菜单宽,只够一个名字)。展开时照旧收成菜单宽。 */
+.composer-chip.project-pill.runloc-pill:not(.is-open) { max-width: min(360px, calc(100vw - 32px)); }

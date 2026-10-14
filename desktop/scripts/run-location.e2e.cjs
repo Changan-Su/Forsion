@@ -243,8 +243,20 @@ async function main() {
     await zoom(1)
 
     const ta = view.locator('.t2c-ta:visible').first()
+    // 那台中途收回了允许(又要确认):建会话被拒 → 不建到别处去,胶囊上写着在等,设备名不被状态说明挤成省略号
+    cloud.state.caller = 'pending'
     await ta.click()
     await ta.fill('你在哪台电脑上?')
+    await win.keyboard.press('Enter')
+    await win.waitForFunction(() => !!document.querySelector('[data-run-location-picker] .runloc-status'), null, { timeout: 8000 }).catch(() => {})
+    check('④ 那台又要确认时建会话被拒:两台引擎都没有建出会话', mini.created.length === 0 && here.created.length === 0, { mini: mini.created.length, here: here.created.length })
+    check('④ 胶囊上写着在等那台允许', /等待那台电脑允许/.test(await runPill.innerText()), await runPill.innerText())
+    const nameFits = await runPill.locator('.project-pill-name').evaluate((el) => el.scrollWidth <= el.clientWidth + 1)
+    check('④ 带状态说明时设备名没有被截成省略号', nameFits, await runPill.evaluate((el) => Math.round(el.getBoundingClientRect().width)))
+    await view.locator('.composer-anchor').screenshot({ path: shot('4-pill-waiting-100.png') })
+    cloud.state.caller = 'trusted'
+    await ta.click()
+    if (!(await ta.inputValue())) await ta.fill('你在哪台电脑上?')
     await win.keyboard.press('Enter')
     for (let t0 = Date.now(); !mini.stub.seen.runs.length && Date.now() - t0 < 12_000;) await win.waitForTimeout(150)
     const init = mini.created[0]?.agent_config || {}
