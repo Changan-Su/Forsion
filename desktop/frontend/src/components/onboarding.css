@@ -11,8 +11,16 @@
 .ob-flow .ob-brand { gap: 9px; }
 .ob-flow .ob-brand strong { font-size: var(--ui-font-heading, 14px); font-weight: 600; }
 .ob-flow .ob-progress { display: grid; gap: 8px; margin-block: auto; padding-block: 30px; }
-.ob-progress-item { display: flex; align-items: center; gap: 10px; padding: 9px 10px; color: var(--text-muted); border-radius: var(--radius-sm); }
-.ob-progress-item.active { color: var(--accent-ink); background: var(--accent-light); }
+.ob-progress-item { position: relative; display: flex; align-items: center; gap: 10px; padding: 9px 10px; color: var(--text-muted); border-radius: var(--radius-sm); }
+/* 走过的步骤是按钮(点回去改);按钮的默认外观全部去掉,和没走到的那几项长得一样。 */
+button.ob-progress-item { width: 100%; border: 0; background: transparent; font: inherit; text-align: left; cursor: pointer; }
+button.ob-progress-item:hover:not(:disabled) { color: var(--text); }
+button.ob-progress-item:disabled { cursor: default; }
+button.ob-progress-item:focus-visible { outline: var(--focus-ring) solid var(--accent-ink); outline-offset: -2px; }
+.ob-progress-item.active { color: var(--accent-ink); }
+/* 当前项的底是单独一块(framer-motion 的 layoutId),换步时从上一项滑过来。 */
+.ob-progress-pill { position: absolute; inset: 0; border-radius: inherit; background: var(--accent-light); }
+.ob-progress-item > span:not(.ob-progress-pill) { position: relative; }
 .ob-progress-icon { display: grid; place-items: center; flex: none; }
 .ob-flow .ob-rail-foot { flex-direction: column; align-items: flex-start; gap: 8px; color: var(--text-faint); font-size: var(--ui-font-caption, 11px); }
 .ob-flow .locale-seg { flex: none; }
@@ -22,8 +30,14 @@
 .ob-flow .ob-step-kicker { font-size: var(--ui-font-meta, 12px); font-weight: 500; margin-bottom: 8px; }
 .ob-flow .ob-step-head h1 { font-size: var(--ui-font-display, 28px); line-height: 1.25; font-weight: 600; letter-spacing: -.025em; outline: none; }
 .ob-flow .ob-step-head p { max-width: 70ch; margin-top: 9px; font-size: var(--ui-font-body, 13px); line-height: 1.55; }
-.ob-flow .ob-step-count { font-size: var(--ui-font-meta, 12px); border-radius: var(--radius-pill, 999px); background: transparent; padding-inline: 0; }
-.ob-flow .ob-content { min-width: 0; min-height: 0; overflow: auto; animation: ob-flow-enter .2s ease both; }
+.ob-step-title { min-width: 0; }
+/* 「跳过引导」:右上角的小字,不和右下角的主按钮抢。 */
+.ob-skip { flex: none; margin: -4px -6px 0 0; padding: 4px 6px; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--text-faint); font: inherit; font-size: var(--ui-font-meta, 12px); cursor: pointer; }
+.ob-skip:hover:not(:disabled) { color: var(--text); }
+.ob-skip:focus-visible { outline: var(--focus-ring) solid var(--accent-ink); outline-offset: 1px; }
+.ob-skip:disabled { cursor: default; opacity: .5; }
+/* 横向不滚:入场时内容从侧边滑进来,不能闪出一条横向滚动条。 */
+.ob-flow .ob-content { min-width: 0; min-height: 0; overflow: hidden auto; }
 .ob-flow h2 { margin: 0 0 10px; font-size: var(--ui-font-title, 20px); line-height: 1.35; font-weight: 600; }
 .ob-flow p { color: var(--text-muted); line-height: 1.6; }
 .ob-flow small, .ob-flow .hint { font-size: var(--ui-font-meta, 12px); line-height: 1.5; }
@@ -81,7 +95,7 @@
 .ob-empty, .ob-loading { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; gap: 20px; }
 .ob-empty h2 { font-size: var(--ui-font-heading, 14px); max-width: 44ch; color: var(--text-muted); }
 .ob-empty > svg, .ob-loading > svg { color: var(--accent-ink); }
-.ob-background-layout { max-width: 760px; margin-inline: auto; display: grid; gap: 18px; padding-top: 4px; }
+.ob-background-layout { max-width: 760px; display: grid; gap: 18px; padding-top: 4px; }
 .ob-background-agents { display: grid; gap: 14px; }
 .ob-background-agent { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: start; gap: 16px; padding: 22px; border: 1px solid var(--border); border-radius: var(--radius-md); }
 .ob-background-icon { color: var(--accent-ink); margin-top: 2px; }
@@ -119,7 +133,43 @@
 .ob-workspace-story p { max-width: 38ch; }
 .ob-workspace-choice { min-width: 0; padding: 24px; background: var(--overlay-subtle); border-radius: var(--radius-lg); }
 .ob-workspace-choice .ob-inline { margin-top: 14px; }
-.ob-permission-layout { max-width: 880px; margin-inline: auto; }
+/* 和标题左对齐;设备权限的卡片保持原来的阅读宽度,电脑历史那一页是两栏,用满。 */
+.ob-permission-pane > .desktop-permissions { max-width: 880px; }
+.ob-history { display: grid; grid-template-columns: minmax(0, 1.12fr) minmax(0, 1fr); gap: 14px; align-items: start; }
+.ob-history-card { min-width: 0; border-radius: var(--radius-lg); background: var(--bg-card); }
+.ob-history-card > .ch-alert { margin: 12px 16px 0; }
+.ob-history-head { display: flex; align-items: center; gap: 12px; padding: 14px 16px; }
+.ob-history-head > svg { flex: none; color: var(--accent-ink); }
+.ob-history-head > div { flex: 1; min-width: 0; }
+.ob-history-head strong { display: block; font-size: var(--ui-font-body, 13px); font-weight: 600; }
+.ob-flow .ob-history-head p { margin: 2px 0 0; font-size: var(--ui-font-meta, 12px); line-height: 1.5; }
+.ob-history-row { display: flex; align-items: center; gap: 12px; min-height: 52px; padding: 10px 16px; border-top: var(--border-width) solid var(--border); }
+.ob-history-row > div { flex: 1; min-width: 0; }
+.ob-history-row strong { font-size: var(--ui-font-meta, 12px); font-weight: 620; }
+.ob-history-row small { display: block; margin-top: 2px; color: var(--text-muted); }
+.ob-history-row .btn { flex: none; white-space: nowrap; }
+.ob-history-permission { border-top: var(--border-width) solid var(--border); }
+/* 卡里嵌的辅助功能那一行:不是卡中卡。左右边距、字号跟上面的状态行对齐;按钮留在右边不折到下一排(单栏时卡是整宽,放得下)。
+   多写一层 .ob-flow 是为了压过上面给整页权限卡的 .ob-flow .desktop-permissions-* 和权限卡自己 820px 的折行断点。 */
+.ob-flow .ob-history-permission .desktop-permissions-section { padding: 0; }
+.ob-flow .ob-history-permission .desktop-permissions-row { flex-wrap: nowrap; padding: 10px 16px; }
+.ob-flow .ob-history-permission .desktop-permissions-row h3 { font-size: var(--ui-font-meta, 12px); }
+.ob-flow .ob-history-permission .desktop-permissions-row-actions { flex-basis: auto; margin-left: auto; }
+.ob-flow .ob-history-permission p.desktop-permissions-note,
+.ob-flow .ob-history-permission p.desktop-permissions-helper-error { padding: 10px 16px 0; }
+.ob-flow .ob-history-note { margin: 0; padding: 10px 16px 14px; border-top: var(--border-width) solid var(--border); font-size: var(--ui-font-meta, 12px); }
+.ob-history-about .ch-about-row { grid-template-columns: 5em minmax(0, 1fr); padding: 11px 16px; }
+.ob-history-more { display: flex; align-items: center; gap: 4px; width: 100%; padding: 10px 16px 12px; border: 0; border-top: var(--border-width) solid var(--border); border-radius: 0 0 var(--radius-lg) var(--radius-lg); background: transparent; color: var(--accent-ink); font: inherit; font-size: var(--ui-font-meta, 12px); text-align: left; cursor: pointer; }
+.ob-history-more:focus-visible { outline: var(--focus-ring) solid var(--accent-ink); outline-offset: -2px; }
+.ob-history-more:hover > svg { translate: 2px 0; }
+.ob-history-state { display: flex; align-items: center; gap: 8px; }
+.ob-history-dialog-body { min-height: 0; overflow: auto; }
+.ob-flow .ob-history-consent { margin: 0 22px 12px; font-size: var(--ui-font-meta, 12px); line-height: 1.6; color: var(--text-light); }
+.ob-history-dialog .ch-about { border-top: var(--border-width) solid var(--border); }
+.ob-history-dialog .ch-about-row, .ob-history-dialog .ch-tip { padding-inline: 22px; }
+.ob-history-dialog-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 22px 16px; border-top: var(--border-width) solid var(--border); }
+/* 版本更新后的短引导:第一屏就是更新日志,自己滚。 */
+.ob-update-notes { height: 100%; max-width: 760px; overflow: auto; padding: 4px 18px 4px 0; }
 .ob-flow .desktop-permissions-toolbar { justify-content: flex-end; }
 .ob-flow .desktop-permissions-section { padding: 12px 16px; }
 .ob-flow .desktop-permissions-section header p { margin-block: 4px; }
@@ -128,9 +178,16 @@
 .ob-flow .desktop-permissions p { font-size: var(--ui-font-meta, 12px); }
 .ob-done-summary { min-width: 0; }
 .ob-done-mark { width: 56px; height: 56px; border-radius: var(--radius-lg); display: grid; place-items: center; color: var(--accent-ink); background: var(--accent-light); margin-bottom: 24px; }
-.ob-done-summary dl { margin: 0; }
-.ob-done-summary dt { color: var(--text-muted); font-size: var(--ui-font-meta, 12px); }
-.ob-done-summary dd { margin: 4px 0 20px; overflow-wrap: anywhere; }
+/* 完成页:所有选择一行一项,点一下回到那一步去改。 */
+.ob-summary { list-style: none; margin: 0; padding: 0; }
+.ob-summary button { display: grid; grid-template-columns: 6.5em minmax(0, 1fr) auto; gap: 14px; align-items: baseline; width: calc(100% + 20px); margin-inline: -10px; padding: 8px 10px; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+.ob-summary button:hover:not(:disabled), .ob-summary button:focus-visible { background: var(--overlay-subtle); }
+.ob-summary button:focus-visible { outline: var(--focus-ring) solid var(--accent-ink); outline-offset: -2px; }
+.ob-summary button > span { color: var(--text-muted); font-size: var(--ui-font-meta, 12px); }
+.ob-summary b { font-weight: 500; overflow-wrap: anywhere; }
+/* 「修改 ›」一直淡淡地在:只在悬停时才出现的话,这几行看着就是只读的结果(10-14 体验走查实测没人知道能点)。 */
+.ob-summary i { display: inline-flex; align-items: center; gap: 1px; font-style: normal; font-size: var(--ui-font-caption, 11px); color: var(--text-faint); }
+.ob-summary button:hover:not(:disabled) i, .ob-summary button:focus-visible i { color: var(--text-muted); }
 .ob-next-steps { padding: 24px; border-radius: var(--radius-lg); background: var(--overlay-subtle); }
 .ob-next-steps h2 { font-size: var(--ui-font-heading, 14px); }
 .ob-next-steps > div { display: flex; align-items: flex-start; gap: 14px; margin-top: 22px; }
@@ -154,12 +211,15 @@
 .ob-env-test > span.fail { color: var(--danger); }
 .ob-flow .ob-env-source > .ob-muted { margin: 12px 0 0; }
 .ob-env-tools { min-width: 0; padding: 16px 20px; border-radius: var(--radius-lg); background: var(--overlay-subtle); }
-.ob-changelog { width: min(560px, calc(100% - 32px)); max-height: calc(100% - 40px); padding: 0; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--bg-card, var(--bg)); color: var(--text); box-shadow: var(--card-shadow); }
-.ob-changelog::backdrop { background: var(--overlay-medium); }
+/* margin: auto —— base.css 的全局 * { margin: 0 } 把 <dialog> 自带的居中清掉了,不写回来弹窗会贴在左上角。 */
+.ob-changelog, .ob-history-dialog { margin: auto; width: min(560px, calc(100% - 32px)); max-height: calc(100% - 40px); padding: 0; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--bg-card, var(--bg)); color: var(--text); box-shadow: var(--card-shadow); }
+.ob-changelog::backdrop, .ob-history-dialog::backdrop { background: var(--overlay-medium); }
+/* 同意说明:头、正文(自己滚)、底部两个按钮三段。只在打开时排成一列 —— 给 dialog 写 display 会让它关着也显示。 */
+.ob-history-dialog[open] { display: flex; flex-direction: column; }
+.ob-history-dialog { width: min(640px, calc(100% - 32px)); }
 .ob-changelog-head { display: flex; align-items: center; justify-content: space-between; padding: 18px 22px; }
 .ob-changelog-head h2 { margin: 0; font-size: var(--ui-font-title, 20px); }
 .ob-changelog-body { overflow: auto; max-height: calc(100dvh - 140px); padding: 0 22px 22px; }
-@keyframes ob-flow-enter { from { opacity: 0; translate: 0 4px; } to { opacity: 1; translate: 0 0; } }
 @container (max-height: 700px) {
   .ob-flow .ob-stage { padding-top: 24px; gap: 16px; }
   .ob-flow .ob-footer { padding-block: 12px 16px; }
@@ -198,7 +258,6 @@
   .ob-flow .ob-step-head h1 { font-size: var(--ui-font-title, 20px); }
   .ob-flow .ob-step-head p { margin-top: 6px; }
   .ob-flow .ob-step-kicker { display: none; }
-  .ob-flow .ob-step-count { display: block; }
   .ob-background-agent { padding: 16px; gap: 12px; }
   .ob-welcome-layout, .ob-workspace-layout, .ob-done-layout { gap: 20px; }
   .ob-appearance-layout { grid-template-columns: minmax(0, 1fr); }
@@ -237,12 +296,84 @@
   .ob-workspace-story p { margin-block: 8px 0; }
   .ob-workspace-choice { padding: 16px; }
   .ob-done-mark { display: none; }
-  .ob-done-summary dd { margin-bottom: 10px; }
+  .ob-summary button { grid-template-columns: minmax(0, 1fr); gap: 2px; }
+  .ob-summary i { display: none; }
   .ob-next-steps { padding: 16px; }
   .ob-next-steps > div { margin-top: 12px; }
   .ob-flow .desktop-permissions-row { grid-template-columns: 18px minmax(0, 1fr); }
   .ob-flow .desktop-permissions-row-actions { grid-column: 2; }
 }
-@media (prefers-reduced-motion: reduce) {
-  .ob-flow .ob-content { animation: none; }
+/* 电脑历史那一页:窄窗口把说明挪到主卡下面;矮窗口再把两条摘要收起来,只留「完整说明」的入口(弹窗里五条都在)。
+   900×640 配 110% 的界面缩放(= 818×582)要靠后一条才不整页滚动。 */
+@media (max-width: 1000px) {
+  .ob-history { grid-template-columns: minmax(0, 1fr); }
+}
+@container (max-height: 660px) {
+  .ob-history-about .ch-about { display: none; }
+  .ob-history-about .ob-history-more { border-top: 0; border-radius: var(--radius-lg); padding-top: 12px; }
+  .ob-background-agent { padding: 14px 18px; }
+  .ob-background-agents { gap: 10px; }
+  .ob-background-layout { gap: 12px; }
+}
+@media (max-width: 760px) {
+  /* 横排的进度条上,走过的步骤和别的一样只占一格。 */
+  button.ob-progress-item { width: auto; }
+}
+@media (max-width: 600px) {
+  /* 手机宽:主卡折成好几行之后,一屏放不下两条摘要 —— 同矮窗口一样只留「完整说明」的入口。 */
+  .ob-history-about .ch-about { display: none; }
+  .ob-history-about .ob-history-more { border-top: 0; border-radius: var(--radius-lg); padding-top: 12px; }
+  .ob-flow .ob-history-permission .desktop-permissions-row { flex-wrap: wrap; }
+  .ob-flow .ob-history-permission .desktop-permissions-row-actions { flex-basis: 100%; margin-left: 0; }
+}
+
+/* ══ 动效。全部放在这一块里:系统开了「减弱动态效果」就一样都不放。 ══
+   换步:标题 → 说明 → 内容依次滑入,往前走从右边来、往回走从左边来。只有入场,旧的一步不做淡出(叠着看有重影)。 */
+@keyframes ob-in { from { opacity: 0; translate: calc(var(--ob-dir, 1) * 26px) 0; } }
+@keyframes ob-pane-in { from { opacity: 0; translate: 0 8px; } }
+@keyframes ob-dialog-in { from { opacity: 0; scale: .96; translate: 0 12px; } }
+@keyframes ob-fade-in { from { opacity: 0; } }
+@keyframes ob-draw { from { stroke-dashoffset: 24; } }
+@keyframes ob-mark-in { from { opacity: 0; scale: .6; } }
+@keyframes ob-ring { from { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent-ink) 30%, transparent); } to { box-shadow: 0 0 0 18px transparent; } }
+@keyframes ob-live { from { box-shadow: 0 0 0 0 color-mix(in srgb, var(--success, #2f9d68) 55%, transparent); } to { box-shadow: 0 0 0 8px transparent; } }
+@media (prefers-reduced-motion: no-preference) {
+  .ob-flow[data-dir='back'] { --ob-dir: -1; }
+  /* :not(.spin):加载中的转圈自己有动画,别被这条盖掉。 */
+  .ob-step-title > *, .ob-content > * > :not(.spin) { animation: ob-in .52s var(--ease-out) both; animation-delay: calc(60ms + var(--ob-n, 0) * 55ms); }
+  .ob-step-title > :nth-child(2) { --ob-n: 1; }
+  .ob-step-title > :nth-child(3) { --ob-n: 2; }
+  .ob-content > * > :nth-child(1) { --ob-n: 3; }
+  .ob-content > * > :nth-child(2) { --ob-n: 4; }
+  .ob-content > * > :nth-child(3) { --ob-n: 5; }
+  .ob-content > * > :nth-child(n+4) { --ob-n: 6; }
+  /* 卡片列表一张一张来:容器自己不动,动的是里面的每一项。 */
+  .ob-content > * > :is(.ob-background-agents, .ob-connect-options, .ob-done-summary) { animation: none; }
+  :is(.ob-background-agents, .ob-connect-options, .ob-summary) > * { animation: ob-in .52s var(--ease-out) both; animation-delay: calc(60ms + var(--ob-n, 0) * 55ms); }
+  :is(.ob-background-agents, .ob-connect-options, .ob-summary) > :nth-child(1) { --ob-n: 3; }
+  :is(.ob-background-agents, .ob-connect-options, .ob-summary) > :nth-child(2) { --ob-n: 4; }
+  :is(.ob-background-agents, .ob-connect-options, .ob-summary) > :nth-child(3) { --ob-n: 5; }
+  :is(.ob-background-agents, .ob-connect-options, .ob-summary) > :nth-child(4) { --ob-n: 6; }
+  :is(.ob-background-agents, .ob-connect-options, .ob-summary) > :nth-child(n+5) { --ob-n: 7; }
+  /* 分页那一格(进这一步、切分页都一样)和状态行换状态:轻轻浮上来。 */
+  .ob-permission-layout > .ob-permission-pane { animation: ob-pane-in .3s var(--ease-out) both; }
+  .ob-history-row { animation: ob-pane-in .3s var(--ease-out) both; }
+  /* 左栏走完的一步:对勾画出来。 */
+  .ob-draw path, .ob-draw polyline { stroke-dasharray: 24; animation: ob-draw .38s var(--ease-out) .08s both; }
+  /* 开关的滑块、选项卡的选中态、「完整说明」的箭头 */
+  .ob-flow .settings-switch > span { transition: transform .34s var(--ease-spring), background var(--duration-fast); }
+  .ob-connect-option, .ob-env-option { transition: border-color .2s ease, background .2s ease; }
+  button.ob-progress-item, .ob-skip { transition: color var(--duration-fast); }
+  .ob-history-more > svg { transition: translate var(--duration-fast); }
+  .ob-summary button { transition: background var(--duration-fast); }
+  .ob-summary i { transition: color var(--duration-fast); }
+  /* 正在记录的状态点 */
+  .ob-history[data-ch-status='recording'] .settings-status-dot { animation: ob-live 2.4s ease-out infinite; }
+  /* 同意说明弹窗 */
+  .ob-history-dialog[open] { animation: ob-dialog-in .34s var(--ease-spring) both; }
+  .ob-history-dialog[open]::backdrop { animation: ob-fade-in .2s ease both; }
+  /* 完成页的对勾 */
+  .ob-done-mark { position: relative; animation: ob-mark-in .55s var(--ease-spring) .2s both; }
+  .ob-done-mark::after { content: ''; position: absolute; inset: 0; border-radius: inherit; animation: ob-ring .9s ease-out .55s both; }
+  .ob-done-mark .ob-draw path, .ob-done-mark .ob-draw polyline { animation-duration: .45s; animation-delay: .5s; }
 }

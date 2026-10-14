@@ -445,8 +445,7 @@
 /* 首启引导沿用同一套 pane → paper 层级,不在壳/面板层叠 CSS blur。 */
 [data-theme='genesis-glass'] .ob-shell { background: transparent; }
 [data-theme='genesis-glass'] .ob-rail { background: var(--gl-pane); }
-[data-theme='genesis-glass'] .ob-stage,
-[data-theme='genesis-glass'] .ob-step-actions { background: var(--gl-paper); }
+[data-theme='genesis-glass'] .ob-stage { background: var(--gl-paper); }
 
 /* ═══ 降级:性能开关关掉毛玻璃时,材质全部回落实色 ═══
  * base.css 的 html[data-glass='off'] * 只清 backdrop-filter,不管染色 —— 不补这块的话

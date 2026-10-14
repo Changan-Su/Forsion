@@ -3788,51 +3788,6 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
   overflow: hidden;
   background: var(--bg);
 }
-.ob-hero {
-  width: min(660px, calc(100% - 80px));
-  margin: auto;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  text-align: left;
-  padding: 44px 0;
-}
-.ob-hero-kicker, .ob-hero-title, .ob-hero-subtitle, .ob-hero-actions, .ob-hero-foot {
-  animation: ob-rise .52s var(--ease-out) both;
-}
-.ob-hero-kicker { color: var(--accent-ink); font-size: var(--ui-font-meta, 12px); font-weight: 680; animation-delay: .02s; }
-.ob-hero-title {
-  margin: 16px 0 0;
-  max-width: 12ch;
-  color: var(--text);
-  font-size: var(--ui-font-display, 20px);
-  font-weight: 600;
-  letter-spacing: -0.045em;
-  line-height: 1.02;
-  animation-delay: .07s;
-}
-.ob-hero-subtitle {
-  margin: 20px 0 0;
-  max-width: 34ch;
-  color: var(--text-muted);
-  font-size: var(--ui-font-heading, 14px);
-  line-height: 1.6;
-  animation-delay: .12s;
-}
-.ob-hero-actions { display: flex; align-items: center; gap: 10px; margin-top: 34px; animation-delay: .17s; }
-.ob-hero-actions .btn { min-height: 38px; padding-inline: 16px; }
-.ob-hero-actions .btn.ghost.active { color: var(--accent-ink); background: var(--accent-light); }
-.ob-hero-foot {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  margin-top: 20px;
-  color: var(--text-faint);
-  font-size: var(--ui-font-caption, 11px);
-  animation-delay: .22s;
-}
-.ob-hero-skip { padding: 0; color: inherit; font: inherit; cursor: pointer; }
-.ob-hero-skip:hover { color: var(--text); }
 @keyframes ob-rise { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
 
 .ob-drawer-scrim { position: absolute; inset: 0; z-index: 3; background: var(--overlay-medium, rgba(0,0,0,.28)); opacity: 0; pointer-events: none; transition: opacity .3s ease; }
@@ -3892,19 +3847,7 @@ html.dark .brand-logo--dark { display: inline-block; }
   margin-bottom: 12px;
 }
 .ob-step-body > .field > label:first-child { font-size: var(--ui-font-meta, 12px); font-weight: 650; }
-.ob-step-actions {
-  position: sticky;
-  bottom: -36px;
-  z-index: 2;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: auto;
-  padding: 18px 0 36px;
-  background: var(--bg);
-}
 @media (prefers-reduced-motion: reduce) {
-  .ob-hero-kicker, .ob-hero-title, .ob-hero-subtitle, .ob-hero-actions, .ob-hero-foot,
   .ob-step-head, .ob-step-body { animation: none; }
 }
 
@@ -3932,15 +3875,10 @@ html.dark .brand-logo--dark { display: inline-block; }
   .ob-phase { min-height: 34px; padding: 4px 8px; white-space: nowrap; }
   .ob-phase-icon { width: 24px; height: 24px; }
   .ob-stage { min-height: 0; }
-  .ob-hero { width: calc(100% - 32px); padding-block: 36px; }
-  .ob-hero-title { font-size: var(--ui-font-display, 20px); }
-  .ob-hero-subtitle { font-size: var(--ui-font-body, 13px); }
-  .ob-hero-actions { align-items: stretch; flex-direction: column; width: 100%; }
   .ob-step-wrap { padding: 28px 18px 24px; }
   .ob-step-head { margin-bottom: 20px; }
   .ob-step-head h1 { font-size: var(--ui-font-display, 20px); }
   .ob-step-count { display: none; }
-  .ob-step-actions { bottom: -24px; padding-bottom: 24px; flex-wrap: wrap; }
 }
 
 /* 设置 → 快捷键 */
@@ -4637,7 +4575,6 @@ body:has(.mb-shell[data-native-chrome]):has(.vc-bar) .ntf-wrap { top: calc(var(-
 .settings-page,
 .floating-panel-layer,
 .floating-native-root,
-.ob-hero-wrap,
 .ob-step-wrap,
 .memv-modal,
 .u-backdrop,

@@ -14,7 +14,8 @@ vi.mock('../services/sessionLog', () => ({}))
 vi.mock('../services/ttsService', () => ({}))
 vi.mock('../achievements/store', () => ({ track: vi.fn() }))
 vi.mock('../stores/themeStore', () => ({ useTheme: (pick: any) => pick({ bg: 'cream', bgSeed: '', setBg: vi.fn(), setBgSeedValue: vi.fn() }) }))
-vi.mock('../stores/appStore', () => ({ useApp: Object.assign(vi.fn(), { getState: () => ({ cfg: {}, refreshSpecialEnabled: vi.fn() }) }) }))
+const store = vi.hoisted(() => ({ onboardingUpdate: false }))
+vi.mock('../stores/appStore', () => ({ useApp: Object.assign(vi.fn(), { getState: () => ({ cfg: {}, refreshSpecialEnabled: vi.fn(), onboardingUpdate: store.onboardingUpdate }) }) }))
 vi.mock('../theme/registry', () => ({ listLanguages: () => [], listSkins: () => [], forcedSchemeForLanguage: () => null }))
 vi.mock('../fontPresets', () => ({ listFonts: () => [] }))
 vi.mock('../uiFont', () => ({ readFont: () => '', applyUiFonts: vi.fn(), writeFont: vi.fn() }))
@@ -81,6 +82,8 @@ const closeGuide = vi.fn().mockResolvedValue(undefined)
 beforeEach(() => {
   ;(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true
   vi.clearAllMocks()
+  store.onboardingUpdate = false
+  localStorage.clear()
   vi.mocked(getSpecialConfig).mockResolvedValue({ config: { historian: { enabled: true }, muse: { enabled: true } } } as any)
   setLocaleGlobal('zh')
   PRODUCT.agentBackend = true
@@ -116,18 +119,25 @@ it('offers optional permissions after the essential desktop choices and allows s
   await click('onboarding.welcome.continue')
   await click('onboarding.connect.skipForNow')
   await click('onboarding.nav.next')
-  expect(host.querySelector('.ob-flow')?.getAttribute('data-step')).toBe('background')
-  await click('onboarding.nav.next')
+  expect(host.querySelector('.ob-flow')?.getAttribute('data-step')).toBe('theme')
   await click('onboarding.nav.next')
   await click('onboarding.nav.next')
   expect(host.querySelector('.ob-step-head h1')?.textContent).toBe(translate('onboarding.step.env.title'))
   await click('onboarding.nav.next')
+  // 后台 Agent 排在权限前一步;这台宿主没有电脑历史接口,Muse 的说明里不出现指向它的那句
+  expect(host.querySelector('.ob-flow')?.getAttribute('data-step')).toBe('background')
+  expect(host.textContent).not.toContain(translate('onboarding.background.museHistory'))
+  await click('onboarding.nav.next')
+  // 没有电脑历史那一页时,这一步仍叫「设备权限」
   expect(host.querySelector('.ob-step-head h1')?.textContent).toBe(translate('desktopPermissions.title'))
   expect(host.querySelector('[aria-current="step"]')?.textContent).toBe(translate('onboarding.guide.permissions'))
+  expect([...host.querySelectorAll('.ob-sections button')].map((b) => b.textContent)).toEqual([translate('onboarding.guide.computer'), translate('onboarding.guide.media')])
   let resolve!: (value: DesktopPermissionsSnapshot) => void
   request.mockImplementationOnce(() => new Promise((r) => { resolve = r }))
   await click('desktopPermissions.install', host.querySelector('[data-permission="computerAccessibility"]')!)
-  await click('desktopPermissions.later')
+  // 右下角只有一个主按钮(原来并排的「稍后设置」和它是同一个动作)
+  expect(host.querySelectorAll('.ob-footer-row button').length).toBe(2)
+  await click('onboarding.nav.next')
   expect(host.querySelector('.ob-step-head h1')?.textContent).toBe(translate('onboarding.guide.doneTitle'))
   expect(closeGuide).toHaveBeenCalledTimes(1)
   expect(props.onFinish).not.toHaveBeenCalled()
@@ -213,7 +223,7 @@ it('preserves an existing model override, waits for saving, and allows clearing 
   expect(host.querySelector('.ob-flow')?.getAttribute('data-step')).toBe('model')
   expect(host.querySelector<HTMLButtonElement>('.ob-footer .primary')?.disabled).toBe(true)
   await act(async () => resolve())
-  expect(host.querySelector('.ob-flow')?.getAttribute('data-step')).toBe('background')
+  expect(host.querySelector('.ob-flow')?.getAttribute('data-step')).toBe('theme')
   expect(props.onReconnect).toHaveBeenCalledTimes(1)
 })
 
@@ -228,7 +238,7 @@ it('keeps the model draft and current step after a save failure, then retries', 
   expect(host.querySelector('[role="alert"]')?.textContent).toContain('disk unavailable')
   expect(host.querySelector('.ob-model-option[aria-pressed="true"]')?.textContent).toContain('My model')
   await click('onboarding.nav.next')
-  expect(host.querySelector('.ob-flow')?.getAttribute('data-step')).toBe('background')
+  expect(host.querySelector('.ob-flow')?.getAttribute('data-step')).toBe('theme')
 })
 
 it('saves the download source before re-checking local tools, and keeps the step on failure', async () => {
@@ -240,7 +250,7 @@ it('saves the download source before re-checking local tools, and keeps the step
   await render(wizard())
   await click('onboarding.welcome.continue'); await click('onboarding.connect.skipForNow')
   await act(async () => resolve?.())
-  for (let i = 0; i < 4; i++) { await click('onboarding.nav.next'); await act(async () => resolve?.()) }
+  for (let i = 0; i < 3; i++) { await click('onboarding.nav.next'); await act(async () => resolve?.()) }
   expect(host.querySelector('.ob-flow')?.getAttribute('data-step')).toBe('env')
   const china = () => [...host.querySelectorAll<HTMLButtonElement>('.ob-env-option')].find((b) => b.textContent?.includes(translate('onboarding.guide.sourceChina')))!
   expect(china().getAttribute('aria-checked')).toBe('false')
@@ -269,5 +279,258 @@ it('waits for the background opt-out to save before allowing navigation or skipp
   await act(async () => resolve({ historian: { enabled: true }, muse: { enabled: false } }))
   expect(host.querySelector('[role="switch"][aria-label="Muse"]')?.getAttribute('aria-checked')).toBe('false')
   await click('onboarding.nav.skip')
+  expect(props.onFinish).toHaveBeenCalledOnce()
+})
+
+// ── 电脑历史进引导(2026-10-13):默认关、只是摆出来;同意说明与设置页同一份;不支持的系统整项不出现 ──
+const historyView = (state: Record<string, unknown> = {}, rev = 1) => ({
+  state: { v: 1, enabled: false, pausedUntil: null, status: 'off', since: 0, updatedAt: 0, platform: 'darwin', dataGen: 0, ...state },
+  exclude: { apps: [], domains: [] }, root: '/Users/me/.forsion/computer-history', keepDays: 7, rev,
+})
+function withHistory(platform = 'darwin') {
+  const api = {
+    get: vi.fn().mockResolvedValue(historyView({ platform })),
+    setEnabled: vi.fn().mockResolvedValue(historyView({ platform, enabled: true, status: 'no_permission' }, 2)),
+    onChanged: vi.fn().mockReturnValue(() => {}),
+  }
+  Object.assign(window.tangu!, { envCheck: vi.fn(), platform, computerHistory: api })
+  // happy-dom 的 <dialog> 没有 showModal / close:补成只翻 open 属性
+  HTMLDialogElement.prototype.showModal ??= function (this: HTMLDialogElement) { this.setAttribute('open', '') }
+  HTMLDialogElement.prototype.close ??= function (this: HTMLDialogElement) { this.removeAttribute('open') }
+  return api
+}
+const flush = () => act(async () => { await Promise.resolve(); await Promise.resolve() })
+async function toPermissions() {
+  await render(wizard())
+  await click('onboarding.welcome.continue'); await click('onboarding.connect.skipForNow')
+  for (let i = 0; i < 4; i++) await click('onboarding.nav.next')
+  expect(host.querySelector('.ob-flow')?.getAttribute('data-step')).toBe('background')
+}
+
+it('puts computer history in the permissions step: off by default, consent copy shared with Settings, nothing written until confirmed', async () => {
+  const api = withHistory()
+  await toPermissions()
+  // Muse 的开关说明里指向下一步的电脑历史
+  expect(host.querySelector('[data-agent="muse"]')?.textContent).toContain(translate('onboarding.background.museHistory'))
+  await click('onboarding.nav.next'); await flush()
+  expect(host.querySelector('.ob-step-head h1')?.textContent).toBe(translate('onboarding.step.permissions.title'))
+  expect([...host.querySelectorAll('.ob-sections button')].map((b) => b.textContent)).toEqual(
+    [translate('onboarding.guide.computer'), translate('onboarding.guide.history'), translate('onboarding.guide.media')])
+  await click('onboarding.guide.history'); await flush()
+  const toggle = () => host.querySelector<HTMLButtonElement>(`[role="switch"][aria-label="${translate('computerHistory.enable')}"]`)!
+  expect(toggle().getAttribute('aria-checked')).toBe('false')
+  // macOS:授权状态与入口一直在(不必先开开关)
+  expect(host.querySelector('.ob-history [data-permission="computerAccessibility"]')).not.toBeNull()
+  const dialog = host.querySelector<HTMLDialogElement>('.ob-history-dialog')!
+  expect(dialog.hasAttribute('open')).toBe(false)
+  await act(async () => toggle().click())
+  // 拨开关 ≠ 开启:先弹同意说明 —— 同意那一段 + 完整五条 + 末尾建议,词条与设置页逐字相同
+  expect(api.setEnabled).not.toHaveBeenCalled()
+  expect(dialog.hasAttribute('open')).toBe(true)
+  expect(dialog.textContent).toContain(translate('computerHistory.enableConfirm.body', { days: 7 }))
+  for (const key of ['computerHistory.about.recorded', 'computerHistory.about.never', 'computerHistory.about.access', 'computerHistory.about.permission', 'computerHistory.about.tip']) {
+    expect(dialog.textContent, key).toContain(translate(key))
+  }
+  expect(dialog.textContent).toContain(translate('computerHistory.about.storage', { path: '/Users/me/.forsion/computer-history', days: 7 }))
+  await click('computerHistory.cancel', dialog)
+  expect(dialog.hasAttribute('open')).toBe(false)
+  expect(api.setEnabled).not.toHaveBeenCalled()
+  await act(async () => toggle().click())
+  await click('computerHistory.enableConfirm.confirm', dialog)
+  expect(api.setEnabled).toHaveBeenCalledExactlyOnceWith(true)
+  expect(toggle().getAttribute('aria-checked')).toBe('true')
+  // 开了但没授权:如实显示状态,不装作在录
+  expect(host.querySelector('.ob-history')?.getAttribute('data-ch-status')).toBe('no_permission')
+  expect(host.querySelector('.ob-history .ch-status')?.textContent).toBe(translate('computerHistory.status.noPermission'))
+})
+
+it('never touches the computer history switch when the guide is walked or skipped without toggling it', async () => {
+  const api = withHistory()
+  await toPermissions()
+  await click('onboarding.nav.next'); await flush()
+  await click('onboarding.guide.history'); await flush()
+  await click('onboarding.nav.next'); await flush()
+  expect(host.querySelector('.ob-step-head h1')?.textContent).toBe(translate('onboarding.guide.doneTitle'))
+  // 完成页如实列出它现在的状态(已关闭),点一下回到那一页
+  const row = [...host.querySelectorAll<HTMLButtonElement>('.ob-summary button')].find((b) => b.textContent?.includes(translate('onboarding.guide.history')))!
+  expect(row.textContent).toContain(translate('computerHistory.status.off'))
+  await act(async () => row.click()); await flush()
+  expect(host.querySelector('.ob-flow')?.getAttribute('data-step')).toBe('permissions')
+  expect(host.querySelector('.ob-sections button.active')?.textContent).toBe(translate('onboarding.guide.history'))
+  await click('onboarding.nav.skip')
+  expect(props.onFinish).toHaveBeenCalledOnce()
+  expect(api.setEnabled).not.toHaveBeenCalled()
+})
+
+it('leaves computer history out entirely on a platform without a collector', async () => {
+  const api = withHistory('linux')
+  status.mockResolvedValue({ ...permissions, platform: 'linux', computerUseAvailable: false })
+  await toPermissions()
+  expect(host.textContent).not.toContain(translate('onboarding.background.museHistory'))
+  await click('onboarding.nav.next'); await flush()
+  expect(host.querySelector('.ob-step-head h1')?.textContent).toBe(translate('desktopPermissions.title'))
+  expect([...host.querySelectorAll('.ob-sections button')].map((b) => b.textContent)).toEqual([translate('onboarding.guide.media')])
+  expect(host.querySelector('.ob-history')).toBeNull()
+  expect(api.get).not.toHaveBeenCalled()
+  status.mockResolvedValue(permissions)
+})
+
+it('hides both computer control and computer history when Computer Use is unavailable in this build', async () => {
+  withHistory()
+  status.mockResolvedValue({ ...permissions, computerUseAvailable: false })
+  await toPermissions()
+  await click('onboarding.nav.next'); await flush()
+  expect([...host.querySelectorAll('.ob-sections button')].map((b) => b.textContent)).toEqual([translate('onboarding.guide.media')])
+  status.mockResolvedValue(permissions)
+})
+
+it('Windows: no Accessibility step, just the note that nothing needs granting', async () => {
+  withHistory('win32')
+  status.mockResolvedValue({ ...permissions, platform: 'win32' })
+  await toPermissions()
+  await click('onboarding.nav.next'); await flush()
+  await click('onboarding.guide.history'); await flush()
+  expect(host.querySelector('.ob-history [data-permission="computerAccessibility"]')).toBeNull()
+  expect(host.querySelector('.ob-history-note')?.textContent).toBe(translate('computerHistory.win.permission'))
+  status.mockResolvedValue(permissions)
+})
+
+it('after a version update shows only what changed plus the step that is new since the last run', async () => {
+  withHistory()
+  store.onboardingUpdate = true
+  localStorage.setItem('forsion_tangu_onboarding_done', '1')
+  localStorage.setItem('forsion_tangu_onboarding_version', '2.13.3')
+  await render(wizard())
+  expect(host.querySelector('.ob-flow')?.getAttribute('data-mode')).toBe('update')
+  expect(host.querySelector('.ob-step-head h1')?.textContent).toBe(translate('onboarding.update.title', { version: '2.10.1' }))
+  expect([...host.querySelectorAll('.ob-progress-item')].map((b) => b.getAttribute('aria-label'))).toEqual(
+    [translate('onboarding.update.rail'), translate('onboarding.guide.permissionsData')])
+  await click('onboarding.nav.next'); await flush()
+  // 直接落在新增的那一页;这是最后一步,主按钮结束引导,没有完成页
+  expect(host.querySelector('.ob-flow')?.getAttribute('data-step')).toBe('permissions')
+  expect(host.querySelector('.ob-sections button.active')?.textContent).toBe(translate('onboarding.guide.history'))
+  await click('onboarding.update.finish')
+  expect(props.onFinish).toHaveBeenCalledOnce()
+})
+
+it('after a version update with nothing new shows a single what-changed screen', async () => {
+  withHistory()
+  store.onboardingUpdate = true
+  localStorage.setItem('forsion_tangu_onboarding_done', '1')
+  localStorage.setItem('forsion_tangu_onboarding_version', '2.13.4')
+  await render(wizard())
+  expect(host.querySelectorAll('.ob-progress-item').length).toBe(1)
+  // 「跳过引导」仍在:一百多支台架靠这个按钮进主界面
+  expect([...host.querySelectorAll('button')].some((b) => b.textContent === translate('onboarding.nav.skip'))).toBe(true)
+  await click('onboarding.update.continue')
+  expect(props.onFinish).toHaveBeenCalledOnce()
+  expect(localStorage.getItem('forsion_tangu_onboarding_version')).toBe('2.10.1')
+})
+
+it('lets a visited step be reopened from the rail and Enter trigger the primary action', async () => {
+  window.tangu!.envCheck = vi.fn()
+  await render(wizard())
+  await click('onboarding.welcome.continue'); await click('onboarding.connect.skipForNow')
+  expect(host.querySelector('.ob-flow')?.getAttribute('data-step')).toBe('model')
+  // 没走到的步骤不是按钮;走过的是
+  expect(host.querySelector(`.ob-progress-item[aria-label="${translate('onboarding.guide.theme')}"]`)?.tagName).toBe('DIV')
+  const visited = () => host.querySelector<HTMLButtonElement>(`button.ob-progress-item[aria-label="${translate('onboarding.guide.connect')}"]`)!
+  await act(async () => visited().click())
+  expect(host.querySelector('.ob-flow')?.getAttribute('data-step')).toBe('connect')
+  expect(host.querySelector('.ob-flow')?.getAttribute('data-dir')).toBe('back')
+  await act(async () => { window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })) })
+  expect(host.querySelector('.ob-flow')?.getAttribute('data-step')).toBe('model')
+  // 焦点在输入框里的回车归输入框
+  await act(async () => visited().click())
+  const input = host.querySelector<HTMLInputElement>('#ob-provider')!
+  await act(async () => { input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })) })
+  expect(host.querySelector('.ob-flow')?.getAttribute('data-step')).toBe('connect')
+})
+
+// 10-14 体验走查:从最后一页回头改一项之后,左栏点不回已经到过的后面那一步,只能把「下一步」重点一遍。
+it('lets the rail jump ahead to a step already reached and saves the choices of the steps it passes', async () => {
+  window.tangu!.envCheck = vi.fn()
+  // 模型清单每次进那一步都重读:来回两次各给一份
+  const models = { models: [{ id: 'm', name: 'My model', provider: 'Local', source: 'direct' as const }], defaultModelId: 'other', directProviders: [] }
+  vi.mocked(listModels).mockResolvedValueOnce(models).mockResolvedValueOnce(models)
+  const save = vi.fn().mockResolvedValue(cfg)
+  window.tangu!.setConfig = save
+  const rail = (key: string) => host.querySelector<HTMLButtonElement>(`button.ob-progress-item[aria-label="${translate(key)}"]`)
+  const at = () => host.querySelector('.ob-flow')?.getAttribute('data-step')
+  await render(wizard()); await click('onboarding.welcome.continue'); await click('onboarding.connect.skipForNow')
+  await click('onboarding.nav.next'); await click('onboarding.nav.next')
+  expect(at()).toBe('workspace')
+  save.mockClear(); vi.mocked(props.onReconnect).mockClear()
+  // 回到默认模型改一项(只是草稿),再从左栏直接回工作目录:途经的模型那一步照「下一步」的规矩存下
+  await act(async () => rail('onboarding.guide.model')!.click())
+  expect(at()).toBe('model')
+  await act(async () => host.querySelector<HTMLButtonElement>('.ob-model-option')!.click())
+  expect(save).not.toHaveBeenCalled()
+  await act(async () => rail('onboarding.guide.workspace')!.click()); await flush()
+  expect(at()).toBe('workspace')
+  expect(host.querySelector('.ob-flow')?.getAttribute('data-dir')).toBe('forward')
+  expect(save).toHaveBeenCalledWith({ modelId: 'm' })
+  expect(props.onReconnect).toHaveBeenCalled()
+  // 没到过的步骤仍然不能跳
+  expect(rail('onboarding.guide.env')).toBeNull()
+})
+
+// ── Codex 评审(2026-10-13)点出的四处,各钉一条 ──
+it('drops computer history everywhere when the recorder itself reports unsupported, before its tab is ever opened', async () => {
+  const api = withHistory()
+  api.get.mockResolvedValue(historyView({ status: 'unsupported' }))
+  await toPermissions()
+  expect(host.textContent).not.toContain(translate('onboarding.background.museHistory'))
+  await click('onboarding.nav.next'); await flush()
+  expect([...host.querySelectorAll('.ob-sections button')].map((b) => b.textContent)).toEqual([translate('onboarding.guide.computer'), translate('onboarding.guide.media')])
+  await click('onboarding.nav.next'); await flush()
+  expect(host.querySelector('.ob-summary')?.textContent).not.toContain(translate('onboarding.guide.history'))
+})
+
+it('keeps one permission card across computer ↔ media so an in-flight setup is not cancelled, and recovers the tabs after a failed first read', async () => {
+  withHistory()
+  status.mockRejectedValueOnce(new Error('ipc down'))
+  await toPermissions()
+  await click('onboarding.nav.next'); await flush()
+  // 进这一步时那次读失败:先只有媒体;卡片自己的读取成功后,另外两页回来
+  await flush()
+  expect([...host.querySelectorAll('.ob-sections button')].map((b) => b.textContent)).toEqual(
+    [translate('onboarding.guide.computer'), translate('onboarding.guide.history'), translate('onboarding.guide.media')])
+  await click('onboarding.guide.computer'); await flush()
+  closeGuide.mockClear()
+  await click('onboarding.guide.media'); await flush()
+  await click('onboarding.guide.computer'); await flush()
+  expect(closeGuide).not.toHaveBeenCalled()
+})
+
+it('does not save a skipped draft when Enter is pressed while the guide is closing', async () => {
+  window.tangu!.envCheck = vi.fn()
+  vi.mocked(listModels).mockResolvedValueOnce({ models: [{ id: 'm', name: 'My model', provider: 'Local', source: 'direct' }], defaultModelId: 'm', directProviders: [] })
+  const save = vi.fn().mockResolvedValue(cfg)
+  window.tangu!.setConfig = save
+  await render(wizard()); await click('onboarding.welcome.continue'); await click('onboarding.connect.skipForNow')
+  await act(async () => host.querySelector<HTMLButtonElement>('.ob-model-option')!.click())
+  await click('onboarding.nav.skip')
+  await act(async () => { window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })) })
+  expect(props.onFinish).toHaveBeenCalledOnce()
+  expect(save).not.toHaveBeenCalled()
+  expect(host.querySelector('.ob-flow')?.getAttribute('data-step')).toBe('model')
+})
+
+it('keeps the update guide on its step if the new page turns out to be unavailable mid-way', async () => {
+  const api = withHistory()
+  let resolveGet!: (view: unknown) => void
+  api.get.mockImplementation(() => new Promise((r) => { resolveGet = r }))
+  store.onboardingUpdate = true
+  localStorage.setItem('forsion_tangu_onboarding_done', '1')
+  localStorage.setItem('forsion_tangu_onboarding_version', '2.13.3')
+  await render(wizard())
+  await click('onboarding.nav.next'); await flush()
+  expect(host.querySelector('.ob-flow')?.getAttribute('data-step')).toBe('permissions')
+  await act(async () => resolveGet(historyView({ status: 'unsupported' })))
+  await flush()
+  // 那一页撤掉了,但这一步还在序列里:主按钮仍然是「完成」,不会把人送回第一屏
+  expect(host.querySelector('.ob-flow')?.getAttribute('data-step')).toBe('permissions')
+  await click('onboarding.update.finish')
   expect(props.onFinish).toHaveBeenCalledOnce()
 })

@@ -43,10 +43,12 @@ async function main() {
     })
   })
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(socketPath, resolve) })
-  const stub = await startStubEngine()
+  // 引导要路过「后台 Agent」那一步:桩的通用空包里没有 config,那一步会渲染崩,所以按真引擎的形状回开关(只读,不写)。
+  const stub = await startStubEngine({ override: async ({ path: p }) =>
+    p === '/agent/special/config' ? { config: { historian: { enabled: true }, muse: { enabled: true } } } : undefined })
   let running
   let passed = 0
-  const check = (name, condition) => { assert.ok(condition, name); passed++; console.log(`PASS ${name}`) }
+  const check = (name, condition, detail) => { assert.ok(condition, detail === undefined ? name : `${name} | ${JSON.stringify(detail)}`); passed++; console.log(`PASS ${name}`) }
   try {
     running = await electron.launch({ args: [`--user-data-dir=${path.join(homeDir, 'userdata')}`, '--lang=zh-CN', ROOT], cwd: ROOT,
       env: { ...process.env, TANGU_HOME: homeDir, TANGU_BACKEND_URL: stub.url,
@@ -62,14 +64,27 @@ async function main() {
     const errors = []
     win.on('pageerror', error => errors.push(error.message))
     await win.waitForSelector('.ob-shell', { timeout: 40_000 })
-    await win.locator('.ob-hero-actions .btn.primary').click()
-    for (let step = 0; step < 8; step++) {
-      if (await win.locator('.desktop-permissions').count()) break
-      await win.locator('.ob-step-actions .btn.primary').click()
+    // 引导的走法同 onboarding.check.cjs:底栏主按钮 = 下一步,步数随这台机器变,一直点到权限那一步;那一步按分页放(操作电脑 / 电脑历史 / 语音与媒体)。
+    const step = () => win.locator('.ob-flow').getAttribute('data-step')
+    const next = async () => {
+      const from = await step()
+      await win.locator('.ob-footer .btn.primary').click()
+      await win.waitForFunction(previous => document.querySelector('.ob-flow')?.getAttribute('data-step') !== previous, from)
     }
+    const tab = name => win.locator('.ob-sections button').filter({ hasText: name })
+    for (let i = 0; i < 10 && await step() !== 'permissions'; i++) await next()
     await win.waitForSelector('[data-permission="computerAccessibility"]')
-    check('permission step appears in onboarding with five permission rows', await win.locator('[data-permission]').count() === 5)
-    check('page entry only calls permissionStatus', calls.length > 0 && calls.every(call => call.cmd === 'permissionStatus'))
+    // hotkeySubscribe 不是这一页发的:「应用 / 窗口引用」的全局双 ⌘ 在启动时连上已在跑的助手就订阅(appRefHotkey.ts);
+    // 助手那头先 AXIsProcessTrusted()(不带弹框)、没授权直接拒,不会弹系统授权框。除它以外只许有读状态的 permissionStatus。
+    check('page entry only calls permissionStatus', calls.some(call => call.cmd === 'permissionStatus')
+      && calls.every(call => call.cmd === 'permissionStatus' || call.cmd === 'hotkeySubscribe'), calls.map(call => call.cmd))
+    const computerRows = await win.locator('[data-permission]').count()
+    await tab('语音与媒体').click()
+    await win.waitForSelector('[data-permission="microphone"]')
+    const mediaRows = await win.locator('[data-permission]').count()
+    await tab('操作电脑').click()
+    await win.waitForSelector('[data-permission="computerAccessibility"]')
+    check('permission step appears in onboarding with five permission rows across its tabs', computerRows + mediaRows === 5)
     await win.screenshot({ path: '/tmp/forsion-permissions-onboarding-zh.png', animations: 'disabled' })
     const guideOpening = running.waitForEvent('window', { predicate: page => page !== win, timeout: 10_000 })
     await win.locator('[data-permission="computerAccessibility"] button').click()
@@ -94,9 +109,9 @@ async function main() {
     const guideClosing = guide.waitForEvent('close')
     await guide.locator('a[href$="/return"]').click()
     await guideClosing
-    await win.locator('.ob-step-actions button').filter({ hasText: '稍后设置' }).click()
-    check('Set up later advances without requiring grants', await win.locator('.desktop-permissions').count() === 0)
-    await win.locator('.ob-step-actions button').filter({ hasText: '跳过' }).click()
+    await next()
+    check('Next advances to the done step without requiring the remaining grants', await step() === 'done')
+    await win.locator('.ob-footer .btn.primary').click()
     await win.waitForSelector('.dv-groupview', { timeout: 30_000 })
     // 设置画在独立浮窗里(Floating Panel 化 2026-09-20):开窗前先 arm window 事件,面板 locator 一律走浮窗 page。
     const settingsOpening = running.waitForEvent('window', { predicate: page => page !== win, timeout: 30_000 })

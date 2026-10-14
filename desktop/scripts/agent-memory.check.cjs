@@ -93,7 +93,6 @@ async function main() {
       const button = win.getByRole('button', { name: label, exact: true }).first()
       if (await button.isVisible().catch(() => false)) { await button.click(); break }
     }
-    await win.locator('.ob-hero-skip').waitFor({ state: 'hidden', timeout: 5000 }).catch(() => {})
     // 记忆面板早已不在设置里(AgentsTab 退役):住在 Agents Space → Agent 详情 →「成长」标签 →「记忆」分段。
     // 全程在主窗里走真 UI:Ribbon 进 Agents Space → 名册点 Agent → 成长 → 记忆。明暗 / 语言切换走命令面板。
     const palette = async (command) => {

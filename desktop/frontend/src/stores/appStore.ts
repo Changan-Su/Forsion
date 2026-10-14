@@ -1017,6 +1017,8 @@ export interface AppState {
   marketOpen: boolean
   achievementsOpen: boolean
   onboarding: boolean
+  /** 这次引导是版本更新后弹的短引导(只在开机的版本检查里置上;手动重开、首启都是完整引导)。 */
+  onboardingUpdate: boolean
   updateAvailable: { version?: string } | null
   updateDismissed: boolean
   // Phase 3: 特殊视图(主区 leaf)目标
@@ -1320,6 +1322,7 @@ export const useApp = create<AppState>((set, get) => ({
   marketOpen: false,
   achievementsOpen: false,
   onboarding: false,
+  onboardingUpdate: false,
   updateAvailable: null,
   updateDismissed: false,
   detailWsKey: null,
@@ -2432,7 +2435,11 @@ export const useApp = create<AppState>((set, get) => ({
       if (!ver) return
       let seen: string | null = null
       try { seen = localStorage.getItem(ONBOARDING_VERSION_KEY) } catch { seen = null }
-      if (seen !== ver) set({ onboarding: true })
+      if (seen === ver) return
+      // 走完 / 跳过过引导的人只看「更新了什么」+ 这一版新增的步骤(OnboardingWizard 的 updateMode);没走过的照常走完整引导。
+      let dismissed = false
+      try { dismissed = !!localStorage.getItem(ONBOARDING_DISMISS_KEY) } catch { dismissed = false }
+      set({ onboarding: true, onboardingUpdate: dismissed })
     }).catch(() => {})
     // 登录态变化(含 CLI tangu login 等外部来源,主进程 auth.json watcher 广播)→ 刷新 authInfo。
     // managed 后端的重连由上面 onBackendStatus 的 ready 分支承接(登录变化会触发后端带新 token 重启)。
@@ -4086,7 +4093,7 @@ export const useApp = create<AppState>((set, get) => ({
   },
   closeFeedback: () => set({ feedbackOpen: false }),
 
-  setOnboarding: (on) => set({ onboarding: on }),
+  setOnboarding: (on) => set({ onboarding: on, onboardingUpdate: false }),
   setUpdateAvailable: (v) => set({ updateAvailable: v }),
   dismissUpdate: () => set({ updateDismissed: true }),
   setDetailWsKey: (k) => set({ detailWsKey: k }),
