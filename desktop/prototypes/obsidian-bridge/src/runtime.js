@@ -21,7 +21,7 @@ export async function start(host) {
   const zh = host.locale === "zh";
   const tr = (a, b) => (zh ? a : b);
   const runtimeStyle = document.head.createEl("style", { text: css });
-  document.body.className = "bridge";
+  document.body.classList.add("bridge");
   const shell = document.body.createDiv({ cls: "shell" });
   const header = shell.createEl("header");
   header.createEl("span", {
@@ -555,7 +555,7 @@ export async function start(host) {
               if (originPath && runtime.context?.file?.path !== originPath)
                 return;
               return cb(...args);
-            })
+            }, false, origin && !origin.editor ? null : undefined)
             .catch(error);
         }
       }, delay);
@@ -563,12 +563,13 @@ export async function start(host) {
       return id;
     };
     const every = (cb, delay, ...args) => {
+      const noEditor = runtime.context && !runtime.context.editor;
       let queued = false;
       const id = window.setInterval(() => {
         if (queued || !entry.alive || disposed || entry.epoch !== epoch) return;
         queued = true;
         void runtime
-          .invoke(entry, () => cb(...args))
+          .invoke(entry, () => cb(...args), false, noEditor ? null : undefined)
           .catch(error)
           .finally(() => {
             queued = false;
@@ -897,6 +898,9 @@ export async function start(host) {
     editor,
     run,
     canRun: (id, commandId) => !disposed && !scanning && !!entries.get(id)?.alive && !entries.get(id)?.busy && entries.get(id).commands.some(c => c.id === commandId),
+    notifyCssChange() {
+      if (!disposed && (host.vaultRoot() || "") === vaultKey) app.workspace.trigger("css-change");
+    },
     showSettings: (id) => showSettings(entries.get(id)),
     app,
     scan,

@@ -13,13 +13,32 @@ dialog.append(frame); document.body.append(dialog);
 const clearCommands = () => { commands.splice(0).forEach(off => off?.()); };
 const closeManager = () => { openRequested = false; if (dialog.open) dialog.close(); };
 const notifyError = e => { console.error('[obsidian-bridge]', e); if (!dead) ctx.app.notify(String(e?.message || e)); };
+let themeFingerprint = null, pendingThemeChange = false;
+let mirroredThemeKeys = new Set();
 function syncTheme() {
   const root = frame.contentDocument?.documentElement;
-  if (!root) return;
+  if (!root || dead) return;
   const style = getComputedStyle(document.documentElement);
-  for (let i = 0; i < style.length; i++) { const key = style[i]; if (key.startsWith('--')) root.style.setProperty(key, style.getPropertyValue(key)); }
+  const variables = [];
+  for (let i = 0; i < style.length; i++) { const key = style[i]; if (key.startsWith('--')) variables.push([key, style.getPropertyValue(key)]); }
+  // Remove tokens that disappeared as well as copying new ones.
+  const nextKeys = new Set(variables.map(([key]) => key));
+  for (const key of mirroredThemeKeys) if (!nextKeys.has(key)) root.style.removeProperty(key);
+  for (const [key, value] of variables) root.style.setProperty(key, value);
+  mirroredThemeKeys = nextKeys;
   root.dataset.mode = document.documentElement.dataset.mode || '';
   root.lang = zh ? 'zh-CN' : 'en';
+  const body = frame.contentDocument.body;
+  body?.classList.toggle('theme-dark', root.dataset.mode === 'dark');
+  body?.classList.toggle('theme-light', root.dataset.mode !== 'dark');
+  const next = JSON.stringify([root.dataset.mode, ...variables.sort(([a],[b]) => a.localeCompare(b))]);
+  if (next !== themeFingerprint) {
+    pendingThemeChange ||= themeFingerprint !== null;
+    themeFingerprint = next;
+  }
+  // Startup can await package loading while the host theme changes. Deliver the
+  // latest state after the new runtime has installed its listeners.
+  if (runtime && pendingThemeChange) { pendingThemeChange = false; runtime.notifyCssChange(); }
 }
 const observer = new MutationObserver(syncTheme);
 observer.observe(document.documentElement, { attributes:true, attributeFilter:['class','style','data-mode','data-theme','data-skin','data-bg'] });
@@ -83,7 +102,7 @@ async function startRuntime() {
       }));
     },
   });
-  if (dead) instance.dispose(); else runtime = instance;
+  if (dead) instance.dispose(); else { runtime = instance; syncTheme(); }
   if (openRequested && !dead && !dialog.open) dialog.showModal();
 }
 frame.addEventListener('load', () => { if (!starting) { starting = initialize(); void starting.catch(notifyError); } });

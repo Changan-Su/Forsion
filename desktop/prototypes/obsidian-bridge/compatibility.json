@@ -1,5 +1,5 @@
 {
-  "version": "0.6.0",
+  "version": "0.6.1",
   "meaning": {
     "zh": "矩阵记录公共能力及其边界，不按成功加载数量推算兼容率。完整支持仅用于已穷尽验证的明确范围；当前没有整类标为完整支持。",
     "en": "This matrix tracks shared capabilities and boundaries, not compatibility percentages inferred from successful loads. Full support requires exhaustive evidence for a defined scope; no whole category is currently marked full."
@@ -87,11 +87,11 @@
       "zh": "Markdown 渲染扩展",
       "en": "Markdown rendering extensions",
       "status": "partial",
-      "verifiedZh": "代码块处理器和 MarkdownRenderChild 接入原生 v4；原版 Charts 3.9.0 绘制图表，原生源码编辑与撤销、源码切换、禁用回退和重新启用均保留 Markdown。",
-      "verifiedEn": "Code-block processors and MarkdownRenderChild in native v4; original Charts 3.9.0 paints charts, with native source edits/undo, source toggle, disable fallback and re-enable preserving Markdown.",
-      "remainingZh": "普通 Markdown 后处理器、MarkdownRenderer、准确段落偏移、关联表格数据及完整主题事件仍待补；未宣称所有图表配置均兼容。",
-      "remainingEn": "General Markdown postprocessors, MarkdownRenderer, exact section offsets, linked table data and full theme events remain incomplete; not all chart configurations are claimed compatible.",
-      "evidence": "frontend/src/amadeus/plugins/codeBlockRenderers.test.ts; prototypes/obsidian-bridge/check-native-rendering.mjs; scripts/obsidian-native.e2e.cjs"
+      "verifiedZh": "代码块处理器和 MarkdownRenderChild 接入原生 v4；原版 Charts 3.9.0 绘制图表，原生源码编辑与撤销、源码切换、禁用回退和重新启用均保留 Markdown。 明暗主题切换同步标准 css-change 事件，原包原位重绘。",
+      "verifiedEn": "Code-block processors and MarkdownRenderChild in native v4; original Charts 3.9.0 paints charts, with native source edits/undo, source toggle, disable fallback and re-enable preserving Markdown. Native light/dark changes dispatch standard css-change events and redraw existing original charts.",
+      "remainingZh": "普通 Markdown 后处理器、MarkdownRenderer、准确段落偏移、关联表格数据及任意样式表变更事件仍待补；未宣称所有图表配置均兼容。",
+      "remainingEn": "General Markdown postprocessors, MarkdownRenderer, exact section offsets, linked table data and arbitrary stylesheet-change events remain incomplete; not all chart configurations are claimed compatible.",
+      "evidence": "frontend/src/amadeus/plugins/codeBlockRenderers.test.ts; prototypes/obsidian-bridge/check-native-rendering.mjs; scripts/obsidian-native.e2e.cjs; prototypes/obsidian-bridge/check-theme.mjs"
     },
     {
       "id": "cm",

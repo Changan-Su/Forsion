@@ -78,11 +78,11 @@ Evidence: `prototypes/obsidian-bridge/check-native-views.mjs; prototypes/obsidia
 
 ## Markdown 渲染扩展 / Markdown rendering extensions — partial
 
-代码块处理器和 MarkdownRenderChild 接入原生 v4；原版 Charts 3.9.0 绘制图表，原生源码编辑与撤销、源码切换、禁用回退和重新启用均保留 Markdown。
+代码块处理器和 MarkdownRenderChild 接入原生 v4；原版 Charts 3.9.0 绘制图表，原生源码编辑与撤销、源码切换、禁用回退和重新启用均保留 Markdown。 明暗主题切换同步标准 css-change 事件，原包原位重绘。
 
-Code-block processors and MarkdownRenderChild in native v4; original Charts 3.9.0 paints charts, with native source edits/undo, source toggle, disable fallback and re-enable preserving Markdown.
+Code-block processors and MarkdownRenderChild in native v4; original Charts 3.9.0 paints charts, with native source edits/undo, source toggle, disable fallback and re-enable preserving Markdown. Native light/dark changes dispatch standard css-change events and redraw existing original charts.
 
-**待补 / Remaining:** 普通 Markdown 后处理器、MarkdownRenderer、准确段落偏移、关联表格数据及完整主题事件仍待补；未宣称所有图表配置均兼容。 General Markdown postprocessors, MarkdownRenderer, exact section offsets, linked table data and full theme events remain incomplete; not all chart configurations are claimed compatible.
+**待补 / Remaining:** 普通 Markdown 后处理器、MarkdownRenderer、准确段落偏移、关联表格数据及任意样式表变更事件仍待补；未宣称所有图表配置均兼容。 General Markdown postprocessors, MarkdownRenderer, exact section offsets, linked table data and arbitrary stylesheet-change events remain incomplete; not all chart configurations are claimed compatible.
 
 Evidence: `frontend/src/amadeus/plugins/codeBlockRenderers.test.ts; prototypes/obsidian-bridge/check-native-rendering.mjs; scripts/obsidian-native.e2e.cjs`
 

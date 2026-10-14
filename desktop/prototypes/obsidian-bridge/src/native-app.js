@@ -495,7 +495,7 @@ export function createNativeApp(host, runtime) {
                     void runtime.invoke(entry, () => {
                       if (live() && subscription.active) return cb.apply(ctx,
                         name === "editor-change" ? [runtime.context?.editor, runtime.context?.view] : args);
-                    }).catch(runtime.error);
+                    }, false, name === "css-change" ? null : undefined).catch(runtime.error);
                 });
                 subscription.ref = ref;
                 // Component.registerEvent also disposes through the EventRef itself.
@@ -512,7 +512,10 @@ export function createNativeApp(host, runtime) {
                 if (subscription.target === target && subscription.ref === ref) subscription.off();
             };
             if (k === "onLayoutReady")
-              return (cb) => runtime.defer(() => runtime.invoke(entry, cb));
+              return (cb) => {
+                const captured = runtime.context && !runtime.context.editor ? null : undefined;
+                return runtime.defer(() => runtime.invoke(entry, cb, false, captured));
+              };
             const v = Reflect.get(target, k);
             if (typeof v !== "function") return v;
             return (...args) => {

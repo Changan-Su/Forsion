@@ -238,10 +238,24 @@ The focused read-only Codex review reproduced four defects, repaired with regres
 
 The public `ctx.registerCodeBlockRenderer` integrates with native Amadeus v4 embeds. Obsidian code-block processors and render children use that contract; rendered output and source belong to the same native note. The seventh unchanged package, [Charts 3.9.0](https://github.com/phibr0/obsidian-charts/releases/tag/3.9.0), exercises YAML chart rendering and source/disable transitions. The installer records original release URLs and SHA-256 receipts.
 
-Rendering is partial: generic Markdown postprocessors, MarkdownRenderer, exact section offsets, linked-table charts and full theme events remain Goal work. Code-block processor callbacks do not borrow whichever native editor happens to be active. Native source, undo and save remain owned by the host. Async render children are cancelled and cleaned up on removal/disable; errors preserve access to source. Tests assert actual chart pixels rather than merely canvas existence.
+Rendering is partial: generic Markdown postprocessors, MarkdownRenderer, exact section offsets, linked-table charts and arbitrary stylesheet events remain Goal work. Code-block processor callbacks do not borrow whichever native editor happens to be active. Native source, undo and save remain owned by the host. Async render children are cancelled and cleaned up on removal/disable; errors preserve access to source. Tests assert actual chart pixels rather than merely canvas existence.
 
-渲染仍是部分兼容：通用后处理、MarkdownRenderer、准确段落偏移、关联表格图表和完整主题事件继续在 Goal 范围内。处理器不会借用碰巧活动的其他笔记编辑器；源码、撤销与保存由宿主持有。移除／禁用时取消并清理异步渲染子组件，错误时保留源码入口。测试检查真实绘制像素，不把 canvas 存在当作成功。
+渲染仍是部分兼容：通用后处理、MarkdownRenderer、准确段落偏移、关联表格图表和任意样式表事件继续在 Goal 范围内。处理器不会借用碰巧活动的其他笔记编辑器；源码、撤销与保存由宿主持有。移除／禁用时取消并清理异步渲染子组件，错误时保留源码入口。测试检查真实绘制像素，不把 canvas 存在当作成功。
 
 异步渲染和渲染子组件共享挂载的取消信号：卸载后未完成的加载不会占用命令队列，迟到的子组件立即清理；事件 `off(name, callback)` 保留原回调身份。
 
 Async rendering and render children share mount cancellation: unfinished loads cannot occupy the command queue after unmount, late children are disposed, and event `off(name, callback)` preserves the original callback identity.
+
+## 主题事件 / Theme events (0.6.1)
+
+宿主根元素的明暗模式与颜色变量变化，会先同步到 Bridge realm，再发送标准 `workspace.css-change`。原包加载时已有 `theme-dark` / `theme-light` 类，移除的变量也会清除。没有有效变化时不重复通知；禁用后监听清理。主题回调不获取原生编辑事务。
+
+Host root mode and token changes are synchronized into the Bridge realm before the standard `workspace.css-change` event. Original packages see `theme-dark` / `theme-light` at load; removed tokens are cleared. Identical values do not notify again, listeners are cleaned up on disable, and theme callbacks do not acquire a native editor transaction.
+
+真实 Charts 验证浅色 → 深色 → 浅色时重建 canvas，回到浅色后像素与原始浅色图表相同，Markdown 未修改。任意样式表插入、CSSOM 变化和完整 Obsidian 样式兼容仍未覆盖。
+
+Original Charts is verified through light → dark → light: its canvas is recreated, restored light pixels equal the original light chart, and Markdown stays unchanged. Arbitrary stylesheet insertion, CSSOM mutations and complete Obsidian styling remain outside verified coverage.
+
+启动过程中发生的主题变化会在原包加载完成后补发；主题回调创建的定时器和布局就绪任务保留无编辑事务上下文。渲染子组件自行调用 `onload()` 的异步重载，也受挂载生命周期约束，卸载后完成时清理资源和监听。
+
+Theme changes during startup are delivered after package loading. Timers and layout-ready work created by theme callbacks retain the no-editor context. Async render-child reloads that call `onload()` directly remain bound to their mount and clean up resources and listeners if they finish after unmount.

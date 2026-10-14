@@ -44,6 +44,20 @@ export function createNativeRendering(host, runtime) {
           addChild(child) {
             if (!valid()) { child.unload(); return; }
             children.add(child);
+            // Plugins may call onload() themselves from reload(), bypassing
+            // Component.load(). Keep those continuations inside the mount lifetime.
+            const onload = child.onload;
+            if (typeof onload === 'function') {
+              child._loadHandlesLateTeardown = true;
+              child.onload = (...args) => {
+                if (!valid() || child._unloaded) return;
+                const loading = onload.apply(child, args);
+                if (loading?.then) return Promise.resolve(loading).finally(() => {
+                  if (!valid() || child._unloaded) child.onunload?.();
+                });
+                return loading;
+              };
+            }
             const loading = child.load();
             const completion = Promise.resolve(loading).then(() => { if (!valid()) child.unload(); });
             runtime.track(untilDisposed(completion)).catch(runtime.error);

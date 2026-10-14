@@ -187,7 +187,7 @@ export function apiFor(runtime, entry) {
       if (loading?.then) return Promise.resolve(loading).then(() => {
         // An async onload may allocate resources after an earlier unload. Give
         // the plugin a final teardown pass; registered callbacks are already revoked.
-        if (this._unloaded) return this.onunload?.();
+        if (this._unloaded && !this._loadHandlesLateTeardown) return this.onunload?.();
       });
     }
     unload() {
