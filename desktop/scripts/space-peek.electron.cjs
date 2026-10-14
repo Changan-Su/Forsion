@@ -110,12 +110,24 @@ async function main() {
         const tabs2 = await mainTabs(win)
         check('⚠️X3 点 Agent 名册 = 人还在笔记里,资料页开成新标签(它自己「先切到 Agents」那一下被拦下)',
           (await activeSpace(win)) === 'amadeus' && tabs2.length === tabs1.length + 1, `${await activeSpace(win)} / ${JSON.stringify(tabs2)}`)
+        // 资料页是单例、带 reuseKey:'primary':照单例复用的老路,已开着的 A 会被就地换成 B(Codex 评审实证)
+        await hoverSpace(win, 'agents')
+        await win.locator('.rb-peek .agents-roster-item').nth(1).click()
+        await sleep(1500)
+        const tabs3 = await mainTabs(win)
+        check('⚠️X3b 已经开着一个 Agent 的资料页,卡里再点另一个:再开一个标签,不把开着的那个换掉',
+          (await activeSpace(win)) === 'amadeus' && tabs3.length === tabs2.length + 1, JSON.stringify(tabs3))
       } else check('X3 Agents 的卡里有名册行', false)
       await hoverSpace(win, 'tangu')
-      const before = await mainTabs(win)
-      const drag = await win.evaluate(async () => {
+      const beforeNew = await mainTabs(win)
+      await win.locator('.rb-peek [data-act="new-chat"]').first().click()
+      await sleep(1500)
+      const afterNew = await mainTabs(win)
+      check('X3c 卡里点「新对话」:人还在笔记里,新对话开成新标签', (await activeSpace(win)) === 'amadeus' && afterNew.length === beforeNew.length + 1,
+        `${await activeSpace(win)} / ${JSON.stringify(afterNew)}`)
+      const dragSession = (title) => win.evaluate(async (title) => {
         const nap = (ms) => new Promise((r) => setTimeout(r, ms))
-        const src = [...document.querySelectorAll('.rb-peek .t2s-srow, .rb-peek .t2o-row')].find((r) => /Probe session one/.test(r.textContent || ''))
+        const src = [...document.querySelectorAll('.rb-peek .t2s-srow, .rb-peek .t2o-row')].find((r) => r.textContent?.includes(title))
         const g = [...document.querySelectorAll('.dv-groupview')].find((x) => x.getBoundingClientRect().height > 0 && !x.querySelector('.wb-tab--icon'))
         const tab = g?.querySelector('.dv-tab')?.getBoundingClientRect()
         if (!src || !tab) return { err: `src ${!!src} / tab ${!!tab}` }
@@ -129,12 +141,20 @@ async function main() {
         el.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer, clientX: x, clientY: y }))
         if (src.isConnected) src.dispatchEvent(new DragEvent('dragend', { bubbles: true, dataTransfer }))
         return { hint }
-      })
+      }, title)
+      await hoverSpace(win, 'tangu')
+      const before = await mainTabs(win)
+      const drag = await dragSession('Probe session one')
       await sleep(1200)
       const after = await mainTabs(win)
       check('⚠️X4 把卡里的会话拖进标签栏(第一个标签的左半边)= 那个位置上多一个标签,人还在笔记里',
         !drag.err && drag.hint && (await activeSpace(win)) === 'amadeus' && after.length === before.length + 1 && /Probe session one/.test(after[0]),
         `${JSON.stringify(drag)} / ${await activeSpace(win)} / ${JSON.stringify(after)}`)
+      const drag2 = await dragSession('Probe session three')
+      await sleep(1200)
+      const after2 = await mainTabs(win)
+      check('X4b 拖一个已经开着的会话进标签栏:是把那个标签挪过去,不再开一份',
+        !drag2.err && after2.length === after.length && /Probe session three/.test(after2[0]), `${JSON.stringify(drag2)} / ${JSON.stringify(after2)}`)
       if (shots) await captureWindow(app, path.join(shots, `${n++}-amadeus-opened-beside.png`))
     } else check('X0 进得了笔记 Space(跨 Space 那段的前提)', false)
 

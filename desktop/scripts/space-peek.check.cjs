@@ -378,6 +378,18 @@ async function run(page) {
   check('⚠️I1 拖进标签栏(第一个标签的左半边):成了那个位置上的新标签,不切 Space',
     d.hint && t2.length === t1.length + 1 && dropped?.group === bar.gid && dropped.at === 0 && dropped.active && s.space === 'a',
     `hint ${d.hint} on ${d.on} / ${JSON.stringify(t2)} / active ${s.space}`)
+  const end = await page.evaluate((gid) => {
+    const g = window.__peek.useWorkspace.getState().api.groups.find((x) => x.id === gid)
+    const tabs = [...g.element.querySelectorAll('.dv-tab')].map((t) => t.getBoundingClientRect())
+    const last = tabs[tabs.length - 1]
+    return { x: last.right - 3, y: last.top + last.height / 2 }
+  }, bar.gid)
+  d = await dragTo(page, '.rb-peek .pk-row[data-row="1"]', end.x, end.y)
+  t2 = await mainTabs(page)
+  const moved = t2.find((x) => x.doc === 'b:1')
+  check('⚠️I1b 已经开着(而且正看着)的那个再拖到标签栏末尾:是把它挪过去,不再开一份',
+    d.hint && t2.length === t1.length + 1 && moved?.group === bar.gid && moved.at === t2.filter((x) => x.group === bar.gid).length - 1,
+    `hint ${d.hint} / ${JSON.stringify(t2)}`)
   d = await dragTo(page, '.rb-peek .pk-row[data-row="2"]', bar.bx, bar.by)
   const t3 = await mainTabs(page)
   const split = t3.find((x) => x.doc === 'b:2')

@@ -10,7 +10,7 @@ import { amadeusAvailable, sessionsAvailable } from '../features/runtime'
  * 主视图硬规则 → 本 Space 的默认档(SpaceDefinition.autoWorkspaceMode);右栏恒为文件。
  */
 import { Fragment, useMemo, useState, useEffect, useReducer, useRef, type ReactNode } from 'react'
-import { useWorkspace, activeMainPanel, useSpaceStore, getView, useListFirst, useNativeChromeExtras, startOpenDrag } from '@lcl/engine'
+import { useWorkspace, activeMainPanel, useSpaceStore, getView, useListFirst, useNativeChromeExtras, startOpenDrag, mainOpensBeside } from '@lcl/engine'
 import type { ViewProps } from '@lcl/engine'
 import { ChevronDown, ChevronRight, FileText, Folder, FolderOpen, ListFilter, MoreHorizontal, Pencil, Plus, Search, X } from 'lucide-react'
 import { usePluginStore } from '@amadeus/plugins/pluginStore'
@@ -117,8 +117,12 @@ function FilesBody({ vaultCtx, sideFilter }: { vaultCtx: { root: string; noteDir
   }, [s, vaultCtx, vaultKey, sideFilter, amadeusRoot])
   // Coding Space:主区 focus 为工作台时,点文件不另开 wsfile tab,而是喂给主区 Code 面板(codeStudioStore)。
   const mainType = useActiveMainType()
+  // 悬停预览里点的 / 从列表拖出来的(见引擎 openBeside.ts)不喂工作台:那是就地换掉它正开着的文件,走文件视图开成新标签。
   const onOpenPreview = mainType === 'code-studio'
-    ? (target: PreviewTarget): void => { if (target.path) useCodeStudio.getState().openFile(target.path) }
+    ? (target: PreviewTarget, opts?: { newTab?: boolean }): void => {
+        if (mainOpensBeside()) s.setFilePreview(target, opts)
+        else if (target.path) useCodeStudio.getState().openFile(target.path)
+      }
     : s.setFilePreview
   // 置顶「当前打开文件所在的工作区」;编辑器场景的 vault 工作区本来就排在首位,直接用它。
   const curFile = useCurrentFilePath()

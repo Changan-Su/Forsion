@@ -32,7 +32,7 @@ import { getDetachApi, type ViewRef } from './detachSeam'
 import { OverlayAt, zoomOf } from './menuAnchor'
 import { Skeleton, ViewErrorBoundary, skeletonVariantOf } from './Skeleton'
 import { cycleFocusedGroupTab, tabCycleDelta } from './tabCycle'
-import { openMainBesideThisTask } from './openBeside'
+import { besideTarget, openMainBesideThisTask } from './openBeside'
 import { keepScroll } from './keepScroll'
 
 /** tooltip「名称(快捷键)」:快捷键取该命令**当前生效**的键、按平台格式化(改了键就跟着变,解绑就只剩名称)。 */
@@ -319,6 +319,19 @@ let draggingOpen: OpenDrag | null = null
 // 不能被下一次无关的拖入(系统文件、别的 app 的文字)借走。
 const OPEN_MIME = 'application/x-forsion-open'
 const isListDrag = (e: DragEvent): boolean => !!draggingOpen && 'open' in draggingOpen && !!e.dataTransfer?.types.includes(OPEN_MIME)
+// 里层落区接没接这一下:不能看 defaultPrevented —— Dockview 在 disableDnd 下照样对标签 / 标签栏 / 正文的 dragover、drop 调
+// preventDefault(Codex 评审实测,真应用里拖进标签栏因此没有落点)。捕获阶段(window,最先跑)把这个事件的 preventDefault
+// 包一层,记下调用那一刻的 currentTarget:Dockview 自己的元素(dv-*)、window / document 上的全局兜底(fileDropGuard)不算;
+// React 的落区记到的是 React 根,算。
+const claimed = new WeakSet<Event>()
+function watchClaims(e: DragEvent): void {
+  const orig = e.preventDefault
+  e.preventDefault = function (): void {
+    const at = e.currentTarget
+    if (at instanceof Element && ![...at.classList].some((c) => c.startsWith('dv-'))) claimed.add(e)
+    orig.call(e)
+  }
+}
 let lastDragUpdate = 0 // 节流 drag→dragUpdate(屏幕坐标上报)
 let dropLineEl: HTMLDivElement | null = null
 let dropZoneEl: HTMLDivElement | null = null
@@ -387,13 +400,10 @@ export function startOpenDrag(dt: DataTransfer | null, spec: OpenDrag): void {
  *  活动标签没变,不搬,东西照常开在当前标签旁边。 */
 function openAtMain(t: DropTarget, spec: OpenDrag): void {
   const ws = useWorkspace.getState()
-  const api = ws.api
-  if (!api) return
-  const before = activeMainPanel(api)?.id
-  if ('open' in spec) { openMainBesideThisTask(); spec.open() }
-  else ws.openView(spec.type, spec.params ?? {}, 'main', { newTab: true })
-  const now = activeMainPanel(api)
-  if (now && now.id !== before) ws.dropView(now.id, t)
+  let id: string | null | undefined
+  if ('open' in spec) { openMainBesideThisTask(); spec.open(); id = besideTarget() }
+  else id = ws.openView(spec.type, spec.params ?? {}, 'main', { newTab: true })?.id
+  if (id) ws.dropView(id, t) // 已经开着的(含正看着的那个)就是把它挪到落点
 }
 
 /** 落点即开:据目标组所在区打开新视图 —— 主区=落点处新标签 / 分屏;侧栏=该侧(收起先展开还原 stash,同 launcher 侧栏项)。 */
@@ -505,7 +515,7 @@ export const WorkspaceHost: React.FC<{
     }
     const onDragOver = (e: DragEvent): void => {
       if (!draggingId && !draggingOpen) return // 搬面板 或 落点即开,两者共用提示
-      if (draggingOpen && 'open' in draggingOpen) return // 列表条目:冒泡阶段再看(见 onListDragOver)
+      if (draggingOpen && 'open' in draggingOpen) { if (isListDrag(e)) watchClaims(e); return } // 列表条目:冒泡阶段再看(见 onListDragOver)
       const t = dropTargetAt(e)
       if (!t) { hideIndicator(); if (e.dataTransfer) e.dataTransfer.dropEffect = 'none'; return }
       e.preventDefault() // 有效落点才放行 drop
@@ -515,7 +525,7 @@ export const WorkspaceHost: React.FC<{
     const onDrop = (e: DragEvent): void => {
       const id = draggingId, open = draggingOpen
       if (!id && !open) return
-      if (open && 'open' in open) return // 列表条目:见 onListDrop
+      if (open && 'open' in open) { if (isListDrag(e)) watchClaims(e); return } // 列表条目:见 onListDrop
       e.preventDefault()
       const t = dropTargetAt(e)
       if (t) {
@@ -528,7 +538,7 @@ export const WorkspaceHost: React.FC<{
     // 落点只认主区(侧栏不是开 View 的地方)。
     const listTargetAt = (e: DragEvent): DropTarget | null => {
       const el = e.target instanceof Element ? e.target : null
-      if (e.defaultPrevented || (el && ((el as HTMLElement).isContentEditable || el.closest('input, textarea')))) return null
+      if (claimed.has(e) || (el && ((el as HTMLElement).isContentEditable || el.closest('input, textarea')))) return null
       const t = dropTargetAt(e)
       return t && locOf(t.group) === 'main' ? t : null
     }

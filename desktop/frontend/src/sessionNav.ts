@@ -103,6 +103,15 @@ export function openNewChat(): void {
   const primary = mainPrimaryChat()
   const where = planNewChat(focused ? { type: ftype as string | undefined, id: focused.id } : null, primary?.id)
   const prevSession = app.activeId
+  // 悬停预览里点了 Tangu 的「新对话」(人在别的 Space):新对话开成当前标签旁边的新标签;本 Space 的跟随聊天先冻在它
+  // 正显示的会话上 —— 不冻的话下面一清 activeId,它当场变成空白新对话(Codex 评审实证)。
+  if (mainOpensBeside()) {
+    const stale = freezeMainPrimary(prevSession)
+    app.setActiveId(null); app.setNewChatWs(null); app.setNewChatCfg(() => ({})); app.setNewChatModel(null)
+    ws.openView('chat', { followActive: true, reuseKey: 'primary' }, 'main', { newTab: true })
+    retire(stale)
+    return
+  }
   app.setActiveId(null); app.setNewChatWs(null); app.setNewChatCfg(() => ({})); app.setNewChatModel(null)
   if (where === 'here') {
     // 先让空白标签接任,再让老的退位 —— 反过来会有一瞬间主区没有聊天(布局保存可能拍到那一帧)。
