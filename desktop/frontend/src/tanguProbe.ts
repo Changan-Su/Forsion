@@ -35,7 +35,7 @@ import { completeInline } from './services/inlineAi'
 import { submitDocumentTask } from './services/documentTasks'
 import { openSession } from './sessionNav'
 import { connectionTarget } from './services/engine/targets'
-import { catalogFor } from './services/engine/catalog'
+import { catalogFor, ensureCatalog } from './services/engine/catalog'
 import { getCallVoice, subscribeCallVoice } from './services/callVoice'
 
 /** 这次翻译用哪个模型。「翻译」模型槽(设置 → 模型;config.json models.translate)设了、**本机引擎**的目录里也还有 → 用它。
@@ -89,6 +89,25 @@ function readModels(): TanguModelInfo[] {
   return (useApp.getState().modelsResp?.models ?? [])
     .filter((m) => !m.modelType || m.modelType === 'llm')
     .map((m) => ({ id: m.id, name: m.name || m.id }))
+}
+
+/** Per-call catalogs use home, the same target as inline AI and desktop ASR. No credentials leave the host. */
+export async function modelCatalog(kind: import('../../shared/pluginModelPicker').PluginModelKind): Promise<import('../../shared/pluginModelPicker').PluginModelCatalog> {
+  const cfg = await window.tangu?.getConfig?.().catch(() => null)
+  const cached = catalogFor('home')
+  const cat = (cached?.models ? cached : await ensureCatalog('home', { force: !!cached }))?.models
+  if (kind === 'asr') {
+    const local = await window.tangu?.asrLocalStatus?.().catch(() => null)
+    const models = (cat?.models || []).filter(m => m.modelType === 'asr').map(m => ({ id: m.id, name: m.name || m.id, provider: m.provider, source: m.source, available: true, supportsCorrection: false }))
+    return { models: [...(window.tangu?.asrLocalStatus ? [{ id: 'local', name: 'SenseVoice', provider: '', source: 'local' as const, available: !!local?.ready, supportsCorrection: false }] : []), ...models], defaultModelId: cfg?.asrBackend === 'local' && local?.ready ? 'local' : cfg?.asrModelId || cat?.asrModelId || '' }
+  }
+  const models = [
+    ...(cat?.models || []).filter(m => !m.modelType || m.modelType === 'llm').map(m => ({ id: m.id, name: m.name || m.id, provider: m.provider, source: m.source, available: true, supportsCorrection: true })),
+    ...(cat?.translateModels || []).map(m => ({ id: m.id, name: m.name || m.id, provider: m.provider || 'Forsion', source: 'forsion' as const, available: true, supportsCorrection: false })),
+  ]
+  const pick = await translateModelChoice()
+  const chat = readActiveModel()?.id
+  return { models, defaultModelId: pick.id || (chat && (!cat || models.some(m => m.id === chat)) ? chat : cat?.defaultModelId) || '' }
 }
 
 /** Agent 名册(给「把某个东西绑给某个 Agent」的插件选择器用)。
@@ -418,6 +437,7 @@ export function installTanguProbe(): void {
     hostExecution: () => window.tangu?.executionCapabilities?.host ?? (useApp.getState().desktopConfig?.mode === 'managed'),
     activeModel: readActiveModel,
     models: readModels,
+    modelCatalog,
     agents: readAgents,
     subscribeAgents: (cb) => {
       let previous = useApp.getState().agentDefs

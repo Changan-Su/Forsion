@@ -143,6 +143,7 @@ export interface TanguProbe {
   activeModel(): TanguModelInfo | null
   /** 当前模型目录里的全部对话模型(只含 llm,不混入生图 / 语音模型)。 */
   models(): TanguModelInfo[]
+  modelCatalog?(kind: import("../../../../shared/pluginModelPicker").PluginModelKind): Promise<import("../../../../shared/pluginModelPicker").PluginModelCatalog>
   /** 用户的 Agent 名册(给「把某个东西绑给某个 Agent」的选择器用)。可选:旧宿主 / 台架假探针不给 →
    *  插件退回「只认当前会话的 Agent」。 */
   agents?(): TanguAgentInfo[]

@@ -5,10 +5,11 @@
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { useSpaceStore, useWorkspace } from '@lcl/engine'
-import { installTanguProbe, START_CHAT_MAX_PROMPT, translateModelChoice } from './tanguProbe'
+import { installTanguProbe, START_CHAT_MAX_PROMPT, translateModelChoice, modelCatalog } from './tanguProbe'
 import { readTangu } from './amadeus/plugins/tanguSeam'
 import { resolveNewSessionWorkspace, useApp } from './stores/appStore'
 import { rememberCatalog, useTargetCatalogs } from './services/engine/catalog'
+import * as catalogService from './services/engine/catalog'
 import { DONE_HOLD_MS } from './stores/agentStatus'
 import { ingestCallVoice } from './services/callVoice'
 import type { AgentRunEvent, UiMessage } from './types'
@@ -212,6 +213,33 @@ describe('「翻译」模型槽(translate 动作的模型)', () => {
   it('读配置失败不抛', async () => {
     vi.stubGlobal('window', { tangu: { getConfig: async () => { throw new Error('ipc down') } } })
     expect(await translateModelId()).toBeUndefined()
+  })
+})
+
+describe('插件本次调用模型目录', () => {
+  afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); useTargetCatalogs.setState({ byKey: {} }) })
+  it('直接重启进入插件时独立拉 home 目录,不依赖聊天页先挂载', async () => {
+    useTargetCatalogs.setState({ byKey: {} })
+    vi.stubGlobal('window', { tangu: { getConfig: async () => ({ translateModelId: 'cold' }) } })
+    const fetch = vi.spyOn(catalogService, 'ensureCatalog').mockResolvedValue({ models: { models: [{ id: 'cold', name: 'Cold model', provider: 'p', source: 'direct', modelType: 'llm' }] }, agents: [], defaultAgentSlug: '', skills: [], at: Date.now() } as never)
+    expect((await modelCatalog('translation')).models.map(m => m.id)).toEqual(['cold'])
+    expect(fetch).toHaveBeenCalledWith('home', { force: false })
+  })
+  it('按 home 目录分类并提供 MT 能力;远端聊天模型不成为本机默认', async () => {
+    vi.stubGlobal('window', { tangu: { getConfig: async () => ({ asrBackend: 'local', translateModelId: '' }), asrLocalStatus: async () => ({ ready: true }) } })
+    rememberCatalog('home', { models: { defaultModelId: 'home-chat', models: [
+      { id: 'home-chat', name: 'Chat', provider: 'p', source: 'direct', modelType: 'llm' },
+      { id: 'speech', name: 'Speech', provider: 'p', source: 'direct', modelType: 'asr' },
+      { id: 'image', name: 'Image', provider: 'p', source: 'direct', modelType: 'image_gen' },
+    ] } as never })
+    useApp.setState({ activeId: null, newChatModel: 'remote-only', modelsResp: { models: [{ id: 'remote-only' }] } } as never)
+    const asr = await modelCatalog('asr'), tr = await modelCatalog('translation')
+    expect(asr.defaultModelId).toBe('local'); expect(asr.models.map(m => m.id)).toEqual(['local', 'speech'])
+    expect(tr.defaultModelId).toBe('home-chat'); expect(tr.models.map(m => m.id)).toEqual(['home-chat'])
+    vi.stubGlobal('window', { tangu: { getConfig: async () => ({ asrBackend: 'local', asrModelId: 'speech' }), asrLocalStatus: async () => ({ ready: false }) } })
+    expect(await modelCatalog('asr')).toMatchObject({ defaultModelId: 'speech', models: [{ id: 'local', available: false }, { id: 'speech', available: true }] })
+    rememberCatalog('home', { models: { models: [], translateModels: [{ id: 'mt', name: 'MT' }] } as never })
+    expect(await modelCatalog('translation')).toMatchObject({ defaultModelId: 'mt', models: [{ id: 'mt', supportsCorrection: false }] })
   })
 })
 

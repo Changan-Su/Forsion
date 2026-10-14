@@ -1,0 +1,29 @@
+name: plugin model contracts
+on:
+  push:
+    paths: &paths
+      - 'desktop/frontend/src/amadeus/plugins/**'
+      - 'desktop/frontend/src/tanguProbe*'
+      - 'desktop/electron/asrSelection*'
+      - 'desktop/shared/pluginModelPicker.ts'
+      - '.github/workflows/plugin-models.yml'
+  pull_request:
+    paths: *paths
+permissions:
+  contents: read
+jobs:
+  contracts:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: node build/link-lcl.cjs
+      - run: npx vitest run electron/asrSelection.test.ts frontend/src/amadeus/plugins/modelPickerSurface.test.ts frontend/src/amadeus/plugins/selectionAction.test.ts frontend/src/tanguProbe.test.ts frontend/src/amadeus/plugins/chatBoxSurface.test.ts frontend/src/amadeus/plugins/contractDocs.test.ts frontend/src/i18nCoverage.test.ts

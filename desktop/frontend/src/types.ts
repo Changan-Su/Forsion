@@ -1572,11 +1572,11 @@ declare global {
       deleteProvider?(providerId: string): Promise<DirectProviderConfig[]>
       /** 桌面级共享语音转写:音频(base64)→ 文本。任意功能复用;主进程本地/自带-key,不经引擎。 */
       /** timestamps 不传 = 回纯文本(语音输入);传 true = 回 { text, segments }(视频转录要分段时间戳)。 */
-      transcribeAudio?(req: { audioBase64: string; mime?: string; modelId?: string; language?: string }): Promise<string>
-      transcribeAudio?(req: { audioBase64: string; mime?: string; modelId?: string; language?: string; timestamps: true }): Promise<AsrTimedResult>
+      transcribeAudio?(req: { audioBase64: string; mime?: string; modelId?: string; backend?: 'local' | 'cloud'; language?: string }): Promise<string>
+      transcribeAudio?(req: { audioBase64: string; mime?: string; modelId?: string; backend?: 'local' | 'cloud'; language?: string; timestamps: true }): Promise<AsrTimedResult>
       /** 按路径转写(几十 MB 音轨不走 base64;主进程直接读盘)。 */
-      transcribeAudioFile?(filePath: string, req?: { mime?: string; modelId?: string; language?: string }): Promise<string>
-      transcribeAudioFile?(filePath: string, req: { mime?: string; modelId?: string; language?: string; timestamps: true }): Promise<AsrTimedResult>
+      transcribeAudioFile?(filePath: string, req?: { mime?: string; modelId?: string; backend?: 'local' | 'cloud'; language?: string }): Promise<string>
+      transcribeAudioFile?(filePath: string, req: { mime?: string; modelId?: string; backend?: 'local' | 'cloud'; language?: string; timestamps: true }): Promise<AsrTimedResult>
       /** Computer Use:最近被操控窗口的一帧画面。只读——helper 没跑就 active:false,绝不因此拉起它。
        *  仅 macOS(Windows helper 是 stdio 子进程,桌面够不着);拿不到图会带 error 而不是伪造画面。 */
       computerUseLiveView?(opts?: { maxDimension?: number; quality?: number; activeWithinMs?: number; image?: boolean; sinceFrame?: string }): Promise<CuLiveFrame>

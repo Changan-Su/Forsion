@@ -1380,6 +1380,21 @@ export const usePluginStore = create<PluginState>((set, get) => {
           dispose,
         }
       },
+      mountModelPicker: (el, opts) => {
+        if (!ctxAlive()) return { update() {}, dispose() {} }
+        if (!(el instanceof HTMLElement) || !['asr', 'translation'].includes(opts?.kind) || typeof opts?.onChange !== 'function') throw new TypeError('mountModelPicker needs an element, kind and onChange')
+        let mounted: import('../../../../shared/pluginModelPicker').PluginModelPickerHandle | null = null
+        let cancelled = false
+        const pending = { ...opts, onChange: (value: string) => { if (ctxAlive()) opts.onChange(value) } }
+        const dispose = scope.own('mount', () => { cancelled = true; mounted?.dispose(); mounted = null }, 'modelPicker')
+        const mine = claimHostMount(el)
+        void import('./modelPickerSurface').then(m => {
+          if (cancelled) return
+          if (!mine()) { dispose(); return }
+          mounted = m.mountPluginModelPicker(el, pending)
+        }).catch(e => console.error(`[amadeus] plugin "${pluginId}" model picker mount failed`, e))
+        return { update(patch) { if (!cancelled) { Object.assign(pending, patch); if (patch.onChange) pending.onChange = value => { if (ctxAlive()) patch.onChange!(value) }; mounted?.update(pending) } }, dispose }
+      },
       mountChatBox: (el, opts) => {
         if (!ctxAlive()) return { update() {}, focus() {}, dispose() {} }
         if (!(el instanceof HTMLElement)) throw new TypeError('mountChatBox needs an HTMLElement')
@@ -1629,6 +1644,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
             } : {}),
             activeModel: () => readTangu()?.activeModel() ?? null,
             models: () => readTangu()?.models() ?? [],
+            ...(readTangu()?.modelCatalog ? { modelCatalog: async (kind: import('../../../../shared/pluginModelPicker').PluginModelKind) => { if (!ctxAlive()) throw new Error('plugin disabled'); const catalog = await readTangu()!.modelCatalog!(kind); if (!ctxAlive()) throw new Error('plugin disabled'); return catalog } } : {}),
             // Agent 名册(2026-09-20):同 agentStatus 的姿势 —— 调用时才读探针,探针缺这条(旧宿主 /
             // 台架假探针)给空数组,插件据此退回「只认当前会话的 Agent」。
             agents: () => readTangu()?.agents?.() ?? [],
@@ -1710,9 +1726,9 @@ export const usePluginStore = create<PluginState>((set, get) => {
             // translate 走引擎现成的 translate 动作,模型取「翻译」模型槽(tanguProbe.complete 里解析),不跟主对话模型。
             ...(readTangu()?.complete
               ? (() => {
-                  type OneShot = { signal?: AbortSignal; onDelta?: (delta: string) => void }
+                  type OneShot = { signal?: AbortSignal; modelId?: string; onDelta?: (delta: string) => void }
                   const str = (v: unknown): string | undefined => (typeof v === 'string' && v ? v : undefined)
-                  const oneShot = async (what: 'complete' | 'translate', body: TanguCompleteRequest, req: OneShot): Promise<{ text: string }> => {
+                  const oneShot = async (what: 'complete' | 'translate', body: TanguCompleteRequest, req: OneShot): Promise<{ text: string; model?: { id: string; name: string; mt?: boolean } }> => {
                     const probe = readTangu()
                     if (!probe?.complete) throw new Error(`${what} is not available on this host`)
                     const ac = new AbortController()
@@ -1727,25 +1743,25 @@ export const usePluginStore = create<PluginState>((set, get) => {
                         onDelta: (d) => { if (ctxAlive()) { try { req.onDelta?.(d) } catch { /* 插件回调抛错不打断流 */ } } },
                       })
                       if (!ctxAlive()) throw new Error('plugin disabled')
-                      return { text: r.text }
+                      return { text: r.text, ...(r.model ? { model: r.model } : body.modelId ? { model: { id: body.modelId, name: body.modelId } } : {}) }
                     } finally {
                       outer?.removeEventListener('abort', onOuter)
                       stop.forget()
                     }
                   }
                   return {
-                    complete: async (req: OneShot & { prompt: string; selection?: string; before?: string; after?: string }): Promise<{ text: string }> => {
+                    complete: async (req: OneShot & { prompt: string; selection?: string; before?: string; after?: string }): Promise<{ text: string; model?: { id: string; name: string; mt?: boolean } }> => {
                       if (!ctxAlive()) throw new Error('plugin disabled')
                       const prompt = typeof req?.prompt === 'string' ? req.prompt.trim() : ''
                       if (!prompt) throw new Error('ctx.tangu.complete: prompt is required')
-                      return oneShot('complete', { action: 'custom', instruction: prompt, selection: str(req.selection), before: str(req.before), after: str(req.after) }, req)
+                      return oneShot('complete', { action: 'custom', instruction: prompt, selection: str(req.selection), before: str(req.before), after: str(req.after), ...(str(req.modelId) ? { modelId: str(req.modelId) } : {}) }, req)
                     },
-                    translate: async (req: OneShot & { text: string; language: string; before?: string }): Promise<{ text: string }> => {
+                    translate: async (req: OneShot & { text: string; language: string; before?: string }): Promise<{ text: string; model?: { id: string; name: string; mt?: boolean } }> => {
                       if (!ctxAlive()) throw new Error('plugin disabled')
                       const text = typeof req?.text === 'string' ? req.text : ''
                       const language = typeof req?.language === 'string' ? req.language.trim() : ''
                       if (!text.trim() || !language) throw new Error('ctx.tangu.translate: text and language are required')
-                      return oneShot('translate', { action: 'translate', selection: text, language, before: str(req.before) }, req)
+                      return oneShot('translate', { action: 'translate', selection: text, language, before: str(req.before), ...(str(req.modelId) ? { modelId: str(req.modelId) } : {}) }, req)
                     },
                   }
                 })()
