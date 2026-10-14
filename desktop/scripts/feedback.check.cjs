@@ -39,7 +39,11 @@ async function main() {
   })
   const token = ['test', Buffer.from(JSON.stringify({ sub: 'test-feedback', exp: Math.floor(Date.now() / 1000) + 86400 * 10 })).toString('base64url'), 'test'].join('.')
   fs.writeFileSync(path.join(home, 'auth.json'), JSON.stringify({ cloudUrl: stub.url, token }))
-  fs.writeFileSync(path.join(userdata, 'tangu-desktop-config.json'), JSON.stringify({ mode: 'external', backendUrl: stub.url, cloudUrl: stub.url, token }))
+  // 未打包的构建把 userData 改成 <user-data-dir>-dev(electron/main.ts),只写 userdata/ 应用读不到 → 令牌为空、开机不连,主窗一重载就连不回假引擎
+  for (const dir of [userdata, `${userdata}-dev`]) {
+    fs.mkdirSync(dir, { recursive: true })
+    fs.writeFileSync(path.join(dir, 'tangu-desktop-config.json'), JSON.stringify({ mode: 'external', backendUrl: stub.url, cloudUrl: stub.url, token }))
+  }
   let app
   try {
     app = await electron.launch({ args: [`--user-data-dir=${userdata}`, '--lang=zh-CN', ROOT], cwd: ROOT,
