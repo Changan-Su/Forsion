@@ -197,10 +197,12 @@ interface PluginState {
   scaffoldSample(): Promise<void>
 }
 
-/** 文件夹名消毒:插件显示名可能含路径非法字符;清完为空则退回 fallback(插件 id,天然合法)。 */
+/** 文件夹名消毒:插件显示名可能含路径非法字符;清完为空则退回 fallback(插件 id)。
+ *  ⚠️全是点的名字(`.` / `..`)也当空:缺省落在 `Plugins/<名>` 之后,`Plugins/..` 就是库根,
+ *  库根里的同名文件会被插件覆盖 —— 库的越界钳只拦出库,拦不住这个(codex)。id 也不可信,最后兜一个固定名。 */
 function sanitizeFolderName(name: string, fallback: string): string {
-  const s = name.replace(/[\\/:*?"<>|\u0000-\u001f]/g, '').trim()
-  return s || fallback
+  const clean = (v: string): string => { const s = String(v ?? '').replace(/[\\/:*?"<>|\u0000-\u001f]/g, '').trim(); return /^\.+$/.test(s) ? '' : s }
+  return clean(name) || clean(fallback) || 'plugin'
 }
 
 /** 所有插件产物的总文件夹(2026-10-14 用户定:插件不再各自在库根建一个文件夹,库根只多这一项)。

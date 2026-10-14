@@ -31,3 +31,9 @@ it('缺省 = Plugins/<显示名>(名字里的路径非法字符清掉);设置行
   mem.set('plugin.readflow.workFolder', '../escape')
   expect(folder()).toBe('Plugins/稍后读') // 非法值退回缺省,不出库
 })
+
+it('⚠️显示名清洗后全是点(`..`)→ 退回插件 id,不能变成 `Plugins/..`(= 库根)(codex)', () => {
+  let folder = (): string => ''
+  usePluginStore.getState().init([{ id: 'dots', name: '..', version: '0', setup: (ctx) => { folder = () => ctx.app.workFolder() } }])
+  expect(folder()).toBe('Plugins/dots')
+})
