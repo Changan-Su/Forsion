@@ -115,7 +115,7 @@ export function validateUIDocument(raw: unknown, options: { draft?: boolean } = 
   }
   for (const r of resources) if (r.kind === 'image' && r.sourceId) resourceRef(r.sourceId, `${r.id}.sourceId`, 'source')
   for (const i of inputs) if (i.kind === 'choice') for (const o of i.options) if (o.imageId) resourceRef(o.imageId, `${i.id}.${o.id}.imageId`, 'image')
-  const blocks = unique(list(d.blocks, 'blocks', 40, (v, p): UIBlock => {
+  const parsed = unique(list(d.blocks, 'blocks', 40, (v, p): UIBlock => {
     const o = obj(v, p), common: BlockBase = { id: id(o.id, `${p}.id`), ...(o.title === undefined ? {} : { title: str(o.title, `${p}.title`, 200) }), when: condition(o.when, `${p}.when`) }
     switch (o.kind) {
       case 'app-card':
@@ -156,11 +156,20 @@ export function validateUIDocument(raw: unknown, options: { draft?: boolean } = 
       default: return fail(p, 'unknown block kind')
     }
   }), 'blocks')
+  if (parsed.some(b => b.kind === 'controls' && b.when)) fail('controls', 'controls must remain visible (no when)')
+  // An input shown again in a later controls block is dropped there, not rejected: models restate the
+  // same inputs next to the closing action (live 2026-10-13), and a rejected call leaves a broken
+  // first view above the rewritten one. The first place an input is shown wins. A block emptied this
+  // way goes only if it carries no title of its own; a block written empty is left as it was.
+  const shown = new Set<string>()
+  const blocks = parsed.flatMap((b): UIBlock[] => {
+    if (b.kind !== 'controls') return [b]
+    const inputIds = b.inputIds.filter(i => !shown.has(i) && !!shown.add(i))
+    return inputIds.length || b.title || !b.inputIds.length ? [{ ...b, inputIds }] : []
+  })
   const controls = blocks.filter((b): b is Extract<UIBlock, { kind: 'controls' }> => b.kind === 'controls')
   if (blocks.reduce((n, b) => n + (b.kind === 'checklist' ? b.items.length : 0), 0) > 200) fail('checklist', 'max 200 items per document')
   const boundInputs = controls.flatMap(b => b.inputIds)
-  if (new Set(boundInputs).size !== boundInputs.length) fail('controls', 'each input must appear once')
-  if (controls.some(b => b.when)) fail('controls', 'controls must remain visible (no when)')
   if (!options.draft && inputs.some(i => !boundInputs.includes(i.id))) fail('controls', 'every declared input must be included in a controls block')
   return { version: 1, id: id(d.id, 'id'), title: str(d.title, 'title', 200), inputs, resources, blocks }
 }
