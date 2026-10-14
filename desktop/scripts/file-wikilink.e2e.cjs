@@ -161,6 +161,8 @@ async function main() {
       JSON.stringify(l3))
 
     // ── 4 右键:文件菜单 ─────────────────────────────────────────────────────
+    // 「指针在哪」以右键事件自己报的坐标为准:110% 缩放下 Playwright 点的不一定是链接中心(链接前有图标时实测落在图标上)。
+    await win.evaluate(() => { window.addEventListener('contextmenu', (e) => { window.__ctxAt = [e.clientX, e.clientY] }, true) })
     const box = await link('丙文档').boundingBox()
     await link('丙文档').click({ button: 'right' })
     await win.waitForSelector('.amx-link-menu', { timeout: 5000 }).catch(() => {})
@@ -171,11 +173,11 @@ async function main() {
       const r = m.getBoundingClientRect()
       return { acts: [...m.querySelectorAll('button[data-act]')].map((b) => b.dataset.act), labels: [...m.querySelectorAll('button')].map((b) => (b.textContent || '').trim()), left: Math.round(r.left), top: Math.round(r.top) }
     })()`)
-    const cx = box ? box.x + box.width / 2 : -999
-    const cy = box ? box.y + box.height / 2 : -999
+    const [cx, cy] = (await win.evaluate(() => window.__ctxAt)) ?? [-999, -999]
+    const onLink = !!box && cx >= box.x - 1 && cx <= box.x + box.width + 1 && cy >= box.y - 1 && cy <= box.y + box.height + 1
     check('4 右键 PDF 双链:出文件菜单,宿主项齐全',
       !!menu && ['newtab', 'split', 'system', 'reveal', 'copypath', 'edit'].every((a) => menu.acts.includes(a)), JSON.stringify(menu))
-    check('4b 菜单贴着指针(缩放下不偏)', !!menu && Math.abs(menu.left - cx) <= 14 && Math.abs(menu.top - cy) <= 14, JSON.stringify({ 指针: [Math.round(cx), Math.round(cy)], 菜单: menu && [menu.left, menu.top], 缩放: zoomNow }))
+    check('4b 菜单贴着指针(缩放下不偏)', onLink && !!menu && Math.abs(menu.left - cx) <= 14 && Math.abs(menu.top - cy) <= 14, JSON.stringify({ 指针: [Math.round(cx), Math.round(cy)], 在链接上: onLink, 菜单: menu && [menu.left, menu.top], 缩放: zoomNow }))
     await win.screenshot({ path: shot('menu') })
     await win.keyboard.press('Escape')
     await win.waitForTimeout(300)
