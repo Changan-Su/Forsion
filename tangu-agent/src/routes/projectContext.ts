@@ -15,7 +15,11 @@
  *   DELETE /agent/project-context/icon?sessionId=                                         → 移除图标(emoji 或图片),返回 { settings }
  *   POST   /agent/project-context/git/{init,trust,commit,branch,push,pull}  { sessionId, message?, name?, trust? } → 写动作 + 新的 context
  *          (push / pull 的远端有凭据提供方认领时带凭据,见 services/gitCredentials.ts;pull = fetch + 只快进)
- *   GET    /agent/project-context/git/hosting?sessionId=              → { forsionGit: { webUrl, name } | null }(这里能不能「发布到 Forsion Git」)
+ *   GET    /agent/project-context/git/hosting?sessionId=              → { forsionGit: { webUrl, name } | null(这里能不能「发布到 Forsion Git」),
+ *                                                                       github: { linked, login?, remote, name } | null(云端开了 GitHub 绑定时:当前用户绑没绑;
+ *                                                                       remote = origin 是会用绑定账号推拉的那种远端;name = 「发布到 GitHub」预填的仓库名) }
+ *   POST   /agent/project-context/git/publish-github { sessionId, name, trust? } → 没有远端的仓库:在绑定的 GitHub 账号下建私有仓库并推送(services/githubPublish.ts)
+ *   POST   /agent/project-context/git/remote  { sessionId, url, trust? }  → 没有远端的仓库:连接一个已有的远端(gitActions.gitConnectRemote)
  *   POST   /agent/project-context/git/publish  { sessionId, name, trust? } → 没有远端的仓库:origin 设到 Forsion Git 并推送(services/forsionGitPublish.ts)
  *   POST   /agent/project-context/git/{pending,message}                { sessionId, trust? } → 待提交清单 / 生成的提交信息(只读)
  *          → 用户点的 git 动作(services/gitActions.ts);失败回 400 { detail, error: <code>, info },桌面按 error 出文案。
@@ -35,9 +39,15 @@ import {
 } from '../services/projectContext.js';
 import { forgetProjectMemory, projectMemoryView, resolveProjectCandidate, restoreCompactedFact } from '../services/projectMemory.js';
 import { parseRemoteOrigin } from '../services/remoteOrigin.js';
-import { GitActionError, generateCommitMessage, gitCommit, gitCreateBranch, gitInit, gitPending, gitPull, gitPush, gitTrustRepo, serialized } from '../services/gitActions.js';
+import { GitActionError, generateCommitMessage, gitCommit, gitCreateBranch, gitInit, gitPending, gitConnectRemote, gitPull, gitPush, gitTrustRepo, readGit, serialized } from '../services/gitActions.js';
 import { DEFAULT_GIT_SETTINGS, gitSettings, updateGitSettings } from '../services/gitSettings.js';
 import { forsionPublishInfo, publishToForsionGit } from '../services/forsionGitPublish.js';
+import { GITHUB_ORIGIN, githubLinkInfo } from '../services/githubGit.js';
+import { githubRepoName, publishToGithub } from '../services/githubPublish.js';
+import { gitClone, listForsionGitRepos, listGithubRepos } from '../services/gitClone.js';
+import { credentialOrigin } from '../services/gitCredentials.js';
+import { forsionGit } from '../services/forsionGit.js';
+import { forsionIdentity, resolveGitIdentity, type IdentityDefaults } from '../services/gitIdentity.js';
 
 const router = Router();
 
@@ -229,13 +239,13 @@ function gitFail(res: Response, e: any, fallback: string): void {
 
 /** 写动作:同一目录排队;做完连同新的项目上下文一起回,面板一次刷新。上下文在队列里读(不混进下一个动作的状态);
  *  读失败回 context:null —— 动作已经做完,不许报成失败(用户会重试 → 重复提交 / 再跑一遍钩子),桌面见 null 自己重读。 */
-function gitWrite(label: string, action: (cwd: string, body: any) => Promise<object>) {
+function gitWrite(label: string, action: (cwd: string, body: any, req: AuthRequest) => Promise<object>) {
   return async (req: AuthRequest, res: Response): Promise<void> => {
     try {
       const cwd = await projectDirOf(req, res, req.body?.sessionId);
       if (!cwd) return;
       res.json(await serialized(cwd, async () => {
-        const result = await action(cwd, req.body || {});
+        const result = await action(cwd, req.body || {}, req);
         return { ...result, context: await projectContext(cwd).catch(() => null) };
       }));
     } catch (e: any) {
@@ -248,22 +258,35 @@ const trusted = (body: any): boolean => body?.trust === true;
 router.post('/agent/project-context/git/init', authMiddleware, gitWrite('init', (cwd) => gitInit(cwd)));
 router.post('/agent/project-context/git/trust', authMiddleware, gitWrite('trust', (cwd) => gitTrustRepo(cwd)));
 // 面板提交必须带上它刚给用户看过的清单指纹:没有清单 = 用户没过目,不许提交
-router.post('/agent/project-context/git/commit', authMiddleware, gitWrite('commit', async (cwd, body) => {
+router.post('/agent/project-context/git/commit', authMiddleware, gitWrite('commit', async (cwd, body, req) => {
   if (typeof body.expect !== 'string' || !body.expect) throw new GitActionError('changes_changed', 'Review the list of changes before committing');
-  return { commit: await gitCommit(cwd, body.message, trusted(body), body.expect) };
+  // 这台电脑的 git 没配名字 / 邮箱时,缺的那一样由「设置 → Git」或 Forsion 账号补上(只进这一次提交的子进程)
+  const who = await resolveGitIdentity(() => identityDefaults(req.user!.userId), cwd);
+  return { commit: await gitCommit(cwd, body.message, trusted(body), body.expect, who.env) };
 }));
 router.post('/agent/project-context/git/branch', authMiddleware, gitWrite('branch', (cwd, body) => gitCreateBranch(cwd, body.name, trusted(body))));
 router.post('/agent/project-context/git/push', authMiddleware, gitWrite('push', (cwd, body) => gitPush(cwd, trusted(body))));
 router.post('/agent/project-context/git/pull', authMiddleware, gitWrite('pull', async (cwd, body) => ({ pull: await gitPull(cwd, trusted(body)) })));
 
 router.post('/agent/project-context/git/publish', authMiddleware, gitWrite('publish', async (cwd, body) => ({ publish: await publishToForsionGit(cwd, body.name, trusted(body)) })));
+// 没有远端的仓库的另外两条出路:发布到绑定的 GitHub 账号(先建私有仓库再推);连接一个已有的远端(贴地址,当场连一次验证)
+router.post('/agent/project-context/git/publish-github', authMiddleware, gitWrite('publish-github', async (cwd, body) => ({ publish: await publishToGithub(cwd, body.name, trusted(body)) })));
+router.post('/agent/project-context/git/remote', authMiddleware, gitWrite('remote', async (cwd, body) => ({ remote: await gitConnectRemote(cwd, body.url, trusted(body)) })));
 
-/** 这里能不能「发布到 Forsion Git」(登录了 Forsion、云端有 Forsion Git 且发凭据)。只读站点信息,不取凭据;读不到就是 null。 */
+/** 这里能不能「发布到 Forsion Git」(登录了 Forsion、云端有 Forsion Git 且发凭据),以及当前用户绑没绑 GitHub。只读状态,不取凭据;读不到就是 null。 */
 router.get('/agent/project-context/git/hosting', authMiddleware, async (req: AuthRequest, res) => {
   try {
     const cwd = await projectDirOf(req, res, req.query.sessionId);
     if (!cwd) return;
-    res.json({ forsionGit: await forsionPublishInfo(cwd).catch(() => null) });
+    const [forsionGit, github, origin] = await Promise.all([
+      forsionPublishInfo(cwd).catch(() => null), githubLinkInfo().catch(() => null),
+      readGit(cwd, ['remote', 'get-url', 'origin'], { timeoutMs: 5000 }).catch(() => null),
+    ]);
+    // remote = origin 是引擎会替他带 GitHub 凭据的那种远端(https://github.com/…,地址里没有自带用户名 / 口令)。
+    // 界面拿到的远端地址是遮过的(自带的凭据被去掉了),分不出这一点,所以由这里说。
+    const remote = origin?.code === 0 && credentialOrigin(origin.stdout.split('\n')[0]) === GITHUB_ORIGIN;
+    // connect = 这个引擎有「连接已有远端」(桌面连着老引擎时这一项不存在,入口不出现)
+    res.json({ forsionGit, github: github && { ...github, remote, name: githubRepoName(cwd) }, connect: true });
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'git hosting lookup failed' });
   }
@@ -274,7 +297,9 @@ router.post('/agent/project-context/git/pending', authMiddleware, async (req: Au
   try {
     const cwd = await projectDirOf(req, res, req.body?.sessionId);
     if (!cwd) return;
-    res.json(await gitPending(cwd, trusted(req.body)));
+    // identity = 这次提交会署的名字和邮箱(提交框里给用户过目);凑不齐是 null,提交时 git 会报 no_identity
+    const [pending, who] = await Promise.all([gitPending(cwd, trusted(req.body)), resolveGitIdentity(() => identityDefaults(req.user!.userId), cwd).catch(() => null)]);
+    res.json({ ...pending, identity: who?.identity ?? null });
   } catch (e: any) {
     gitFail(res, e, 'list pending changes failed');
   }
@@ -290,6 +315,53 @@ router.post('/agent/project-context/git/message', authMiddleware, async (req: Au
     res.json({ message });
   } catch (e: any) {
     gitFail(res, e, 'generate commit message failed');
+  }
+});
+
+/** 「从 Git 克隆」(services/gitClone.ts):克隆到 <parent>/<name>,回那个文件夹;桌面随后把它加成项目。写这台电脑的磁盘 → 只在本机引擎上开。 */
+router.post('/agent/git/clone', authMiddleware, async (req: AuthRequest, res) => {
+  if (!deps().profile.capabilities.hostExec) return res.status(404).json({ detail: 'Cloning is only available on a local engine' });
+  try {
+    res.json(await gitClone(req.body?.url, req.body?.parent, req.body?.name));
+  } catch (e: any) {
+    gitFail(res, e, 'git clone failed');
+  }
+});
+/** 克隆对话框里的「我的仓库」:host = forsion(Forsion Git)| github(绑定的 GitHub 账号)。这里没有那个站 → repos:null。 */
+router.get('/agent/git/repos', authMiddleware, async (req: AuthRequest, res) => {
+  if (!deps().profile.capabilities.hostExec) return res.status(404).json({ detail: 'Repository lists are only available on a local engine' });
+  try {
+    const host = req.query.host;
+    if (host !== 'forsion' && host !== 'github') return res.status(400).json({ detail: 'host must be forsion or github' });
+    res.json({ repos: await (host === 'github' ? listGithubRepos() : listForsionGitRepos()) });
+  } catch (e: any) {
+    gitFail(res, e, 'list repositories failed');
+  }
+});
+
+/** 由 Forsion 账号推出来的缺省提交身份(services/gitIdentity.ts)。走一趟云端,所以限时:它挡在用户点的「提交」前面。没登录 / 够不着 → null。 */
+async function identityDefaults(userId: string): Promise<IdentityDefaults | null> {
+  const timeout = new Promise<null>((resolve) => { setTimeout(() => resolve(null), 5000).unref(); });
+  const user = await Promise.race([deps().brain.users.getUserById(userId).catch(() => null), timeout]);
+  if (!user || !user.username || user.username === 'local') return null;
+  const site = await forsionGit()?.hosting().catch(() => null);
+  return forsionIdentity(user, site ? new URL(site.origin).hostname : null);
+}
+
+/** 「设置 → Git」的「账号」:推送 / 拉取时用哪个身份、提交署谁的名。只读状态,不取凭据。
+ *  forsionGit = 这里有 Forsion Git 且发凭据 → 站点地址(账号跟着 Forsion 账号走,不用绑定);github = 云端开了绑定时,绑没绑;
+ *  identity = 不看具体仓库时提交会署的名字和邮箱(仓库自己配了的以仓库为准,提交框里显示的才是那一次的)。 */
+router.get('/agent/git-accounts', authMiddleware, async (req: AuthRequest, res) => {
+  // 说的是「这台电脑」的 git 和登录在这台电脑上的账号:云端 worker 上没有意义(那里的 git 配置是所有用户共用的)
+  if (!deps().profile.capabilities.hostExec) return res.status(404).json({ detail: 'Git accounts are only available on a local engine' });
+  try {
+    const [site, github, who] = await Promise.all([
+      Promise.resolve(forsionGit()?.hosting()).catch(() => null), githubLinkInfo().catch(() => null),
+      resolveGitIdentity(() => identityDefaults(req.user!.userId)).catch(() => null),
+    ]);
+    res.json({ forsionGit: site ? { webUrl: site.webUrl } : null, github, identity: who?.identity ?? null });
+  } catch (e: any) {
+    res.status(500).json({ detail: e?.message || 'git accounts lookup failed' });
   }
 });
 

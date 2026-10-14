@@ -4,7 +4,7 @@
  */
 import type {
   AgentConfig, AgentScheduleEntry, AgentScheduleEntryUpsert, AgentScheduleInfo, AgentsMeta, AutomationActionCatalogItem, AutomationExecutionInfo, AutomationRunInfo, AutomationSessionInfo, ChannelKind, HistorianActivityItem, MessageRecord, ModelsResponse, MuseLibraryEntry, MuseStatusInfo, MuseTodo, MuseTriggerInfo, MuseTriggerUpsert, PendingApprovalInfo,
-  GitSettings, NormalAgentDef, ProjectContext, ProjectMemoryView, ProjectSettings, ProjectSkillInfo, SessionRecord, SkillInfo, SkillCatalogEntry, SpecialAgentsConfig,
+  GitIdentity, GitSettings, NormalAgentDef, ProjectContext, ProjectMemoryView, ProjectSettings, ProjectSkillInfo, SessionRecord, SkillInfo, SkillCatalogEntry, SpecialAgentsConfig,
   ToolsResponse, WorkspaceFileMeta, TeamDef } from '../types'
 import { authFetch } from './http'
 import { fetchOpts, type EngineTarget } from './engine/targets'
@@ -1277,7 +1277,7 @@ export const gitTrustProject = (t: EngineTarget, sessionId: string) =>
   gitPost<{ trusted: boolean; context: ProjectContext | null }>(t, 'trust', { sessionId }).then(withContext)
 /** 这次会提交的文件(有已暂存的只列已暂存的,stagedOnly=true)。 */
 export const gitPendingProject = (t: EngineTarget, sessionId: string, trust = false) =>
-  gitPost<{ files: Array<{ code: string; path: string; from?: string }>; total: number; stagedOnly: boolean; token: string; tooMany?: boolean }>(t, 'pending', { sessionId, trust })
+  gitPost<{ files: Array<{ code: string; path: string; from?: string }>; total: number; stagedOnly: boolean; token: string; tooMany?: boolean; /** 这次提交会署的名字和邮箱;凑不齐 = null(老引擎不回这一项)。 */ identity?: GitIdentity | null }>(t, 'pending', { sessionId, trust })
 /** 用会话自己的模型写一条提交信息(计入额度)。 */
 export const generateGitCommitMessage = (t: EngineTarget, sessionId: string, trust = false) =>
   gitPost<{ message: string }>(t, 'message', { sessionId, trust }, 120_000).then((r) => r.message)
@@ -1293,15 +1293,59 @@ export const gitPushProject = (t: EngineTarget, sessionId: string, trust = false
  *  远端是 Forsion Git 且登录了 Forsion 时,引擎自己带凭据(推送同理),这里不用管。 */
 export const gitPullProject = (t: EngineTarget, sessionId: string, trust = false) =>
   gitPost<{ pull: { remote: string; branch: string; upstream: string; updated: boolean; commits: number; ahead: number }; context: ProjectContext | null }>(t, 'pull', { sessionId, trust }, 450_000).then(withContext)
-/** 这里能不能「发布到 Forsion Git」:登录了 Forsion、云端有 Forsion Git 且给人发推拉凭据 → 站点地址 + 由文件夹名整理出来的仓库名
- *  (整理不出来是空串,让用户自己填)。老引擎(404)/ 读不到 → null = 不出现入口,不报错。 */
-export const getGitHosting = (t: EngineTarget, sessionId: string) =>
-  request<{ forsionGit: { webUrl: string; name: string } | null }>(t, `/agent/project-context/git/hosting?sessionId=${encodeURIComponent(sessionId)}`, undefined, { timeoutMs: 8000 })
-    .then((r) => (r.forsionGit && typeof r.forsionGit.webUrl === 'string' ? r.forsionGit : null)).catch(() => null)
+/** 项目的 Git 托管状态。
+ *  forsionGit = 这里能不能「发布到 Forsion Git」:登录了 Forsion、云端有 Forsion Git 且给人发推拉凭据 → 站点地址 + 由文件夹名整理出来的仓库名
+ *  (整理不出来是空串,让用户自己填)。
+ *  github = 云端开了 GitHub 绑定时:当前 Forsion 账号绑没绑(login = GitHub 登录名);remote = 这个项目的 origin 是引擎会用绑定账号
+ *  推拉的那种远端(https://github.com/…,地址里没有自带凭据)。绑定 / 解绑只在账户中心做。
+ *  老引擎(404)/ 读不到 → null = 两样都不出现,不报错。 */
+export interface GitHosting {
+  forsionGit: { webUrl: string; name: string } | null
+  /** name = 「发布到 GitHub」预填的仓库名(整理不出来是空串)。 */
+  github: { linked: boolean; login?: string; remote: boolean; name: string } | null
+  /** 引擎有「连接已有远端」。 */
+  connect: boolean
+}
+export const getGitHosting = (t: EngineTarget, sessionId: string): Promise<GitHosting | null> =>
+  request<Partial<GitHosting>>(t, `/agent/project-context/git/hosting?sessionId=${encodeURIComponent(sessionId)}`, undefined, { timeoutMs: 8000 })
+    .then((r): GitHosting => ({
+      forsionGit: r.forsionGit && typeof r.forsionGit.webUrl === 'string' ? r.forsionGit : null,
+      github: r.github && typeof r.github.linked === 'boolean' ? { linked: r.github.linked, login: typeof r.github.login === 'string' ? r.github.login : undefined, remote: r.github.remote === true, name: typeof r.github.name === 'string' ? r.github.name : '' } : null,
+      connect: r.connect === true,
+    })).catch(() => null)
+/** 发布到 GitHub:仓库还没有远端、Forsion 账号绑了 GitHub 时,在那个 GitHub 账号下建一个私有仓库,把 origin 指过去并推送当前分支。
+ *  err.code:has_remote / invalid_repo_name / no_commits / github_not_linked / github_relink_required / github_repo_exists(同名的非私有仓库已在,没往里推)
+ *  / github_api_failed / github_unreachable。 */
+export const gitPublishGithubProject = (t: EngineTarget, sessionId: string, name: string, trust = false) =>
+  gitPost<{ publish: { url: string; name: string; remote: string; branch: string; target: string }; context: ProjectContext | null }>(t, 'publish-github', { sessionId, name, trust }, 180_000).then(withContext)
+/** 连接已有远端:仓库还没有远端时,把 origin 设成 url 并当场连一次(只列分支);远端有同名分支 → upstream 记成它。
+ *  连不上引擎会把 origin 撤掉。err.code:has_remote / invalid_remote_url / remote_unreachable / github_not_linked …。 */
+export const gitConnectRemoteProject = (t: EngineTarget, sessionId: string, url: string, trust = false) =>
+  gitPost<{ remote: { remote: string; upstream: string | null }; context: ProjectContext | null }>(t, 'remote', { sessionId, url, trust }, 90_000).then(withContext)
 /** 发布到 Forsion Git:仓库还没有远端时,把 origin 设到 `<站点>/<自己的用户名>/<name>.git` 并推送当前分支(站上自动建成私有仓库)。
  *  没推上去引擎会把 origin 撤掉(可以换个名字再来);err.code:has_remote / invalid_repo_name / no_commits / forsion_git_*。 */
 export const gitPublishProject = (t: EngineTarget, sessionId: string, name: string, trust = false) =>
   gitPost<{ publish: { url: string; name: string; remote: string; branch: string; target: string }; context: ProjectContext | null }>(t, 'publish', { sessionId, name, trust }, 180_000).then(withContext)
+/** 克隆对话框里的「我的仓库」:host = forsion(Forsion Git)| github(绑定的 GitHub 账号),最近更新的在前、最多 50 个。
+ *  这里没有那个站(没登录 / 云端没开)→ null;err.code:github_not_linked / github_relink_required / github_unreachable / forsion_git_*。 */
+export interface GitRemoteRepo { fullName: string; private: boolean; cloneUrl: string; updatedAt: string | null }
+export const listGitRepos = (t: EngineTarget, host: 'forsion' | 'github'): Promise<GitRemoteRepo[] | null> =>
+  request<{ repos: GitRemoteRepo[] | null }>(t, `/agent/git/repos?host=${host}`, undefined, { timeoutMs: 30_000 }).then((r) => (Array.isArray(r.repos) ? r.repos : null))
+/** 从 Git 克隆:把 url 克隆到 `<parent>/<name>`(目标已经在了引擎会拒),回那个文件夹;调用方随后把它加成项目。
+ *  远端在 Forsion Git / GitHub 时引擎自己带凭据。超时放到引擎那边的 15 分钟之外一点,别让这边先断。
+ *  err.code:invalid_remote_url / invalid_folder_name / invalid_folder / target_exists / remote_unreachable / git_timeout / github_not_linked …。 */
+export const gitCloneRepo = (t: EngineTarget, url: string, parent: string, name: string) =>
+  request<{ path: string; name: string }>(t, '/agent/git/clone', { method: 'POST', body: JSON.stringify({ url, parent, name }) }, { timeoutMs: 16 * 60_000 })
+/** 「设置 → Git」的「账号」:Forsion Git 的站点(账号跟着 Forsion 账号走)、GitHub 绑没绑、不看具体仓库时提交会署的名字和邮箱。
+ *  只读状态;老引擎(404)/ 读不到 → null = 整块不出现。 */
+export interface GitAccounts { forsionGit: { webUrl: string } | null; github: { linked: boolean; login?: string } | null; identity: GitIdentity | null }
+export const getGitAccounts = (t: EngineTarget): Promise<GitAccounts | null> =>
+  request<Partial<GitAccounts>>(t, '/agent/git-accounts', undefined, { timeoutMs: 10_000 })
+    .then((r): GitAccounts => ({
+      forsionGit: r.forsionGit && typeof r.forsionGit.webUrl === 'string' ? { webUrl: r.forsionGit.webUrl } : null,
+      github: r.github && typeof r.github.linked === 'boolean' ? { linked: r.github.linked, login: typeof r.github.login === 'string' ? r.github.login : undefined } : null,
+      identity: r.identity && typeof r.identity.name === 'string' && typeof r.identity.email === 'string' ? r.identity : null,
+    })).catch(() => null)
 /** 「设置 → Git」。writable=false(云端 worker 的 config.json 是所有用户共用的)时设置页只读说明、不给改。 */
 export const getGitSettings = (t: EngineTarget) =>
   request<{ settings: GitSettings; defaults: GitSettings; writable: boolean }>(t, '/agent/git-settings')

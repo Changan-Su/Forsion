@@ -93,6 +93,11 @@
 .project-git-empty p { margin: 0; }
 .project-git-commit-confirm { display: flex; gap: 6px; margin-left: auto; }
 .project-git-commit-form { animation: profile-enter 160ms ease both; }
+.project-git-identity { display: flex; align-items: center; gap: 6px; min-width: 0; color: var(--text-muted); font-size: var(--ui-font-caption, 11px); }
+.project-git-identity > svg { flex: 0 0 auto; }
+.project-git-identity > span { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.project-git-identity > button { flex: 0 0 auto; padding: 0; border: 0; background: transparent; color: var(--text-muted); font: inherit; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
+.project-git-identity > button:hover { color: var(--text); }
 .project-git-message { width: 100%; min-width: 0; padding: 7px 8px; font-size: var(--ui-font-meta, 12px); line-height: 1.6; resize: vertical; }
 .project-git-error { display: grid; gap: 6px; color: var(--danger); font-size: var(--ui-font-meta, 12px); }
 .project-git-error p { margin: 0; }
