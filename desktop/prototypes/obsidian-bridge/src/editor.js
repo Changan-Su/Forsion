@@ -15,7 +15,7 @@ import {
 } from "@codemirror/commands";
 import { markdown } from "@codemirror/lang-markdown";
 export class Editor {
-  constructor(parent, value, changed) {
+  constructor(parent, value, changed, selectionChanged = () => {}) {
     this.view = new EditorView({
       parent,
       state: EditorState.create({
@@ -32,6 +32,7 @@ export class Editor {
           }),
           EditorView.updateListener.of((u) => {
             if (u.docChanged) changed(this.getValue());
+            else if (u.selectionSet) selectionChanged();
           }),
         ],
       }),

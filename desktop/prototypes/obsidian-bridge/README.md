@@ -51,6 +51,9 @@ subfolder on opening or pressing Rescan. There is no community-market browser or
 
 The Electron harness creates an isolated home, installs Bridge from disk, creates a fixture vault, drives
 real UI clicks, verifies restart persistence and writes screenshots/results to `artifacts/`.
+It explicitly sets `TANGU_HARNESS_QUIET=1`; macOS windows stay at native level **-1** without taking focus.
+The harness verifies the real CoreGraphics window layer and window focus while driving and capturing it
+through Playwright. Interactive previews use this same quiet launch policy.
 Only the unrelated AI backend is a stub. It does not test model execution or the production installer.
 `--demo` keeps the isolated instance open after acceptance. `BRIDGE_HOME`, `BRIDGE_ARTIFACTS`, and `STAGE_ELECTRON`
 can override the isolated home, evidence folder, and the separate Electron identity used for the demo.
@@ -103,6 +106,9 @@ settings writes, dropped queued settings on close, and a delayed note read repla
 The parent realm now serializes accepted settings snapshots and retains its Web Lock until they settle.
 The runtime rejects late reads if the draft revision changed. `check-lifecycle.mjs` reproduces these
 scenarios against the actual Bridge entrypoint and original TOC package.
+Real Electron navigation also exposed iframe reloads when Dockview moves a tab's DOM. The parent keeps
+the draft, cursor and vault identity, then rehydrates the compatibility realm on `load`; returning from
+the native note is an explicit acceptance check. Closing the view still discards unexported drafts.
 
 `node prototypes/obsidian-bridge/report.mjs` renders `artifacts/index.html` from the latest Electron
 results, receipts and screenshots. Missing/failed checks remain visible. Bundled runtime dependency

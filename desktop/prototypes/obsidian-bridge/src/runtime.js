@@ -60,8 +60,8 @@ export async function start(host) {
     serial = Promise.resolve(),
     revision = 0,
     sequence = 0;
-  let vaultKey = host.vaultRoot() || "",
-    savedCopy = null,
+  let vaultKey = host.initialDraft?.vaultKey ?? (host.vaultRoot() || ""),
+    savedCopy = host.initialDraft?.savedCopy || null,
     activeSettings = null,
     openSaved;
   const store = (await host.loadData()) || { version: 1, vaults: {} };
@@ -98,12 +98,14 @@ export async function start(host) {
     serial = host.saveData(snapshot);
     return serial;
   };
-  const editor = new Editor(editorEl, HEADING_SAMPLE, () => {
+  let publishDraft = () => {};
+  const editor = new Editor(editorEl, host.initialDraft?.text ?? HEADING_SAMPLE, () => {
     revision++;
     dirty.textContent = tr("未导出", "Not exported");
     savedCopy = null;
     if (openSaved) openSaved.disabled = true;
-  });
+    publishDraft();
+  }, () => publishDraft());
   class MarkdownView {}
   class TFile {
     constructor(path) {
@@ -113,7 +115,10 @@ export async function start(host) {
       this.extension = "md";
     }
   }
-  const file = new TFile("Bridge draft.md");
+  const file = new TFile(host.initialDraft?.filePath || "Bridge draft.md");
+  filename.textContent = host.initialDraft?.label || file.path;
+  dirty.textContent = savedCopy ? tr("已导出", "Exported") : tr("未导出", "Not exported");
+  publishDraft = () => host.onDraft?.({ text: editor.getValue(), cursor: editor.getCursor(), filePath: file.path, label: filename.textContent, savedCopy, vaultKey });
   const view = Object.assign(new MarkdownView(), {
     editor,
     sourceMode: { cmEditor: editor },
@@ -481,9 +486,10 @@ export async function start(host) {
           throw new Error(tr("读取期间草稿已修改；已保留当前草稿，请重新选择笔记。", "Draft changed while reading; your edits were kept. Select the note again."));
         if (text == null) throw new Error("Note no longer exists");
         editor.setValue(text);
-        file.path = path;
+        Object.assign(file, new TFile(path));
         filename.textContent = path + tr("（副本草稿）", " (copy draft)");
         editor.setCursor({ line: 0, ch: 0 });
+        publishDraft();
       })
       .catch(error);
   });
@@ -505,6 +511,7 @@ export async function start(host) {
           savedCopy = path;
           dirty.textContent = tr("已导出", "Exported");
           openSaved.disabled = false;
+          publishDraft();
         }
         notice(path);
       } finally {
@@ -524,8 +531,10 @@ export async function start(host) {
     },
     "open-saved",
   );
-  openSaved.disabled = true;
+  openSaved.disabled = !savedCopy;
   await scan();
+  if (host.initialDraft?.cursor) editor.setCursor(host.initialDraft.cursor);
+  publishDraft();
   const instance = {
     editor,
     run,

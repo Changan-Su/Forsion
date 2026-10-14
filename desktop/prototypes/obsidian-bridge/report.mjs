@@ -6,6 +6,7 @@ const base = dirname(fileURLToPath(import.meta.url));
 const art = resolve(process.env.BRIDGE_ARTIFACTS || join(base, 'artifacts'));
 const data = JSON.parse(await readFile(join(art, 'results.json'), 'utf8'));
 const session = JSON.parse(await readFile(join(art, 'session.json'), 'utf8'));
+const validation = await readFile(join(art, 'validation.json'), 'utf8').then(JSON.parse).catch(() => null);
 const escape = v => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const passed = data.results.filter(r => r.ok).length;
 const shots = [
@@ -36,6 +37,7 @@ const html = `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name
 <h2>实际界面 / Real Electron screenshots</h2>${shots.map(([file,title])=>`<figure><a href="${file}.png"><img loading="lazy" src="${file}.png" alt="${escape(title)}"></a><figcaption>${escape(title)}</figcaption></figure>`).join('')}
 <h2>执行记录 / Executed checks</h2>${data.results.map(r=>`<details><summary><span class="${r.ok?'pass':'fail'}">${r.ok?'PASS':'FAIL'}</span> · ${escape(r.name)}</summary><pre>${escape(r.detail||'Completed without additional diagnostic output.')}</pre></details>`).join('')}
 <p><a href="results.json">原始结果 / Raw results</a> · <a href="session.json">隔离路径 / Isolated session paths</a></p>
+${validation ? `<h2>补充验证 / Supporting validation</h2><p>${escape(validation.review)}</p><table><tbody>${validation.checks.map(c=>`<tr><td>${escape(c.name)}</td><td>${escape(c.result)}</td><td><a href="${escape(c.link)}">Evidence</a></td></tr>`).join('')}</tbody></table><p><code>${escape(validation.revision)}</code></p>` : ''}
 <h2>范围 / Scope</h2><ul class="limits"><li>原生 LCL 标签页内的独立兼容编辑器；普通 Amadeus 编辑页的插件注入尚未实现。<br><small>Dedicated compatibility editor in a native LCL tab; no plugin injection into ordinary Amadeus editors.</small></li><li>智库笔记读取为草稿，导出创建新副本。关闭前需保存，草稿无自动保存。<br><small>Read notes into drafts and export new copies. Drafts are not auto-saved.</small></li><li>仅实现样本所需 API；Node/Electron 模块、完整 Vault/Workspace、CodeMirror 扩展和跨插件 API 未实现。<br><small>A targeted API subset; Node/Electron modules, complete Vault/Workspace, CodeMirror extensions and inter-plugin APIs remain unsupported.</small></li><li>iframe 隔离 DOM 和样式，不是安全沙箱。第三方插件需要与 Forsion 插件同等信任。<br><small>The iframe isolates DOM/CSS, not authority. Third-party code requires the same trust as native Forsion plugins.</small></li><li>AI 后端为测试桩；插件加载、IPC、编辑器、设置磁盘持久化和截图均来自实际 Electron。<br><small>Only the unrelated AI backend is stubbed. Plugin execution, IPC, editor, settings persistence and screenshots use real Electron.</small></li></ul>
 <h2>复现 / Reproduce</h2><div class="path"><code>cd desktop
 node prototypes/obsidian-bridge/install-plugins.mjs

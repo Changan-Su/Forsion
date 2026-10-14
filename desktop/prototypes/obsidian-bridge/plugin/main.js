@@ -1,47 +1,35 @@
-// Forsion setup body. The iframe isolates compatibility DOM helpers and styles, NOT security authority.
-if (!ctx.packageFiles)
-  throw new Error(
-    "Obsidian Bridge requires the Desktop packageFiles host API.",
-  );
+// Forsion setup body. The iframe isolates DOM/CSS, not security authority.
+if (!ctx.packageFiles) throw new Error('Obsidian Bridge requires the Desktop packageFiles host API.');
 let mounted = null;
 ctx.registerView({
-  id: "home",
-  title: "Obsidian Bridge",
-  async mount(el) {
+  id: 'home', title: 'Obsidian Bridge',
+  mount(el) {
     if (mounted) {
-      el.textContent = "Obsidian Bridge is already open in this window.";
+      el.textContent = 'Obsidian Bridge is already open or finishing a settings save.';
       return () => {};
     }
-    const iframe = document.createElement("iframe");
-    iframe.title = "Obsidian Bridge";
-    iframe.style.cssText =
-      "width:100%;height:100%;border:0;display:block;background:transparent";
-    const ready = new Promise((resolve) =>
-      iframe.addEventListener("load", resolve, { once: true }),
-    );
-    iframe.srcdoc =
-      '<!doctype html><html><head><meta charset="utf-8"></head><body></body></html>';
-    el.appendChild(iframe);
-    let dead = false,
-      runtime = null,
-      starting = null,
-      writes = Promise.resolve(),
-      releaseLease = null;
+    const iframe = document.createElement('iframe');
+    iframe.title = 'Obsidian Bridge';
+    iframe.style.cssText = 'width:100%;height:100%;border:0;display:block;background:transparent';
+    let dead = false, runtime = null, starting = Promise.resolve(), writes = Promise.resolve();
+    let releaseLease = null, codePromise = null, generation = 0, draft = null;
+    const disposeRuntime = () => {
+      try { runtime?.dispose(); } catch (error) { console.warn('[obsidian-bridge] old document cleanup', error); }
+      runtime = null;
+    };
     const dispose = () => {
       if (dead) return;
-      dead = true;
+      dead = true; generation++;
       observer.disconnect();
-      runtime?.dispose();
-      // Keep serialization in the parent realm: removing an iframe must not discard queued writes.
-      // The profile lease stays held until every accepted snapshot reaches the host.
+      iframe.removeEventListener('load', onLoad);
+      disposeRuntime();
+      // Serialization lives in the parent realm, surviving iframe detach/reload.
+      // Keep the lease until all accepted snapshots reach the host.
       void (async () => {
-        try {
-          try { (await starting)?.dispose(); } finally { await writes; }
-        } catch (error) {
-          console.error("[obsidian-bridge] shutdown", error);
-        } finally {
-          releaseLease?.();
-          iframe.remove();
+        try { try { await starting; } finally { await writes; } }
+        catch (error) { console.error('[obsidian-bridge] shutdown', error); }
+        finally {
+          releaseLease?.(); iframe.remove();
           if (mounted === dispose) mounted = null;
         }
       })();
@@ -53,88 +41,67 @@ ctx.registerView({
       const style = getComputedStyle(document.documentElement);
       for (let i = 0; i < style.length; i++) {
         const key = style[i];
-        if (key.startsWith("--"))
-          root.style.setProperty(key, style.getPropertyValue(key));
+        if (key.startsWith('--')) root.style.setProperty(key, style.getPropertyValue(key));
       }
-      root.dataset.mode = document.documentElement.dataset.mode || "";
-      root.lang = ctx.getLocale?.() === "zh" ? "zh-CN" : "en";
+      root.dataset.mode = document.documentElement.dataset.mode || '';
+      root.lang = ctx.getLocale?.() === 'zh' ? 'zh-CN' : 'en';
     };
     const observer = new MutationObserver(syncTheme);
     observer.observe(document.documentElement, {
-      attributes: true,
-      attributeFilter: [
-        "class",
-        "style",
-        "data-mode",
-        "data-theme",
-        "data-skin",
-        "data-bg",
-      ],
+      attributes: true, attributeFilter: ['class','style','data-mode','data-theme','data-skin','data-bg'],
     });
-    try {
-      await ready;
-      if (dead) return dispose;
-      // One runtime per Desktop profile, including satellite windows. Prevents whole-blob settings
-      // writes from two concurrent Bridge views from overwriting each other.
-      if (!navigator.locks)
-        throw new Error("Desktop Web Locks support is required.");
-      const acquired = await new Promise((resolve, reject) => {
-        navigator.locks
-          .request(
-            "forsion-obsidian-bridge-runtime",
-            { ifAvailable: true },
-            async (lock) => {
-              resolve(!!lock);
-              if (lock)
-                await new Promise((done) => {
-                  releaseLease = done;
-                });
-            },
-          )
-          .catch(reject);
-      });
-      if (!acquired)
-        throw new Error("Obsidian Bridge is already open in another window.");
-      if (dead) {
-        releaseLease?.();
-        return dispose;
-      }
-      // The host restores the vault lazily when this native View mounts.
-      for (let i = 0; i < 50 && !ctx.app.vaultRoot?.() && !dead; i++)
-        await new Promise((r) => setTimeout(r, 100));
-      const code = await ctx.packageFiles.readText("runtime.js");
-      if (dead) return dispose;
-      syncTheme();
-      iframe.contentWindow.eval(code);
-      starting = iframe.contentWindow.ForsionObsidianBridge.start({
-        locale: ctx.getLocale?.() || "en",
-        packageFiles: ctx.packageFiles,
+    const acquired = new Promise((resolve, reject) => {
+      if (!navigator.locks) return reject(new Error('Desktop Web Locks support is required.'));
+      navigator.locks.request('forsion-obsidian-bridge-runtime', { ifAvailable: true }, async lock => {
+        resolve(!!lock);
+        if (lock && !dead) await new Promise(done => { releaseLease = done; });
+      }).catch(reject);
+    });
+    async function initialize(turn, child) {
+      if (!await acquired) throw new Error('Obsidian Bridge is already open in another window.');
+      for (let i = 0; i < 50 && !ctx.app.vaultRoot?.() && !dead; i++) await new Promise(r => setTimeout(r, 100));
+      if (dead || turn !== generation) return;
+      await writes.catch(() => {});
+      codePromise ||= ctx.packageFiles.readText('runtime.js');
+      const code = await codePromise;
+      if (dead || turn !== generation || iframe.contentWindow !== child) return;
+      syncTheme(); child.eval(code);
+      const instance = await child.ForsionObsidianBridge.start({
+        locale: ctx.getLocale?.() || 'en', packageFiles: ctx.packageFiles,
+        initialDraft: draft,
+        onDraft: value => { if (!dead && turn === generation) draft = structuredClone(value); },
         loadData: () => ctx.loadData(),
-        saveData: (value) => {
-          if (dead) return Promise.reject(new Error("Bridge is closed"));
+        saveData: value => {
+          if (dead || turn !== generation) return Promise.reject(new Error('Bridge document is closed'));
           const snapshot = structuredClone(value);
           writes = writes.catch(() => {}).then(() => ctx.saveData(snapshot));
           return writes;
         },
         vaultRoot: () => ctx.app.vaultRoot?.(),
         listPages: () => ctx.app.listPages?.() || Promise.resolve([]),
-        readFile: (path) => ctx.app.readFile(path),
+        readFile: path => ctx.app.readFile(path),
         writeFile: (path, text) => ctx.app.writeFile(path, text),
-        openFile: (path) => ctx.app.openNote(path, { newTab: true }),
+        openFile: path => ctx.app.openNote(path, { newTab: true }),
       });
-      runtime = await starting;
-      if (dead) runtime.dispose();
-    } catch (error) {
-      dispose();
-      el.textContent = String(error);
-      throw error;
+      if (dead || turn !== generation) instance.dispose();
+      else runtime = instance;
     }
+    function onLoad() {
+      // Dockview can detach/reinsert the same iframe when changing tabs. Chromium reloads srcdoc,
+      // so rehydrate its realm from a parent-owned draft instead of leaving a blank document.
+      const turn = ++generation;
+      disposeRuntime();
+      starting = initialize(turn, iframe.contentWindow);
+      void starting.catch(error => {
+        if (dead || turn !== generation) return;
+        dispose(); el.textContent = String(error);
+      });
+    }
+    iframe.addEventListener('load', onLoad);
+    iframe.srcdoc = '<!doctype html><html><head><meta charset="utf-8"></head><body></body></html>';
+    el.appendChild(iframe);
     return dispose;
   },
 });
-ctx.registerCommand({
-  id: "obsidian-bridge-open",
-  title: "Obsidian Bridge",
-  run: () => ctx.openView("home"),
-});
+ctx.registerCommand({ id: 'obsidian-bridge-open', title: 'Obsidian Bridge', run: () => ctx.openView('home') });
 return () => mounted?.();

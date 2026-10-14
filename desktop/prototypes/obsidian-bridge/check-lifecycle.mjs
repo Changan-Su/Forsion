@@ -40,6 +40,10 @@ const roots = [];
 async function mount() {
   const root = window.document.createElement('div'); roots.push(root); window.document.body.append(root);
   const dispose = await view.mount(root);
+  if (root.querySelector('iframe')) {
+    for (let i = 0; i < 200 && !root.querySelector('iframe')?.contentWindow?.bridge; i++) await new Promise(r => setTimeout(r, 10));
+    assert.ok(root.querySelector('iframe')?.contentWindow?.bridge, 'Runtime starts after iframe load');
+  }
   const child = root.querySelector('iframe')?.contentWindow;
   return { root, child, dispose, runtime: child?.bridge };
 }
@@ -77,9 +81,19 @@ try {
   reading.resolve('# Late file content'); await tick(); await tick();
   assert.equal(next.runtime.editor.getValue(), 'Keep my new edits');
   assert.match(next.child.document.querySelector('[role="status"]').textContent, /Draft changed/);
+  next.runtime.editor.setCursor({ line: 0, ch: 4 });
+  const iframe = next.root.querySelector('iframe');
+  iframe.srcdoc = '<!doctype html><html><body></body></html>';
+  for (let i = 0; i < 200 && (!iframe.contentWindow?.bridge || iframe.contentWindow.bridge === next.runtime); i++) await new Promise(r => setTimeout(r, 10));
+  const restored = iframe.contentWindow.bridge;
+  assert.notEqual(restored, next.runtime, 'A fresh iframe realm starts a new runtime');
+  assert.equal(restored.editor.getValue(), 'Keep my new edits');
+  assert.equal(restored.editor.getCursor().ch, 4);
+  assert.equal(restored.diagnostics().plugins.filter(p => p.alive).length, 3);
+  assert.equal(lease, true);
   next.dispose(); await tick(); await tick();
   assert.equal(rejected.length, 0, rejected.map(String).join('\n'));
-  console.log('PASS lifecycle: accepted writes drain after close, lease outlives writes, remount loads latest settings, pending reads preserve edits');
+  console.log('PASS lifecycle: accepted writes drain after close, lease outlives writes, remount loads latest settings, pending reads preserve edits, iframe reload restores draft/cursor/plugins');
 } finally {
   gate.resolve(); reading.resolve(''); shutdown?.();
   await tick(); await window.happyDOM.close();

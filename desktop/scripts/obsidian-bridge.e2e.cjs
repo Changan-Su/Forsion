@@ -5,6 +5,7 @@ const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
 const crypto = require('node:crypto')
+const { execFileSync } = require('node:child_process')
 const electron = require('./lib/launch-electron.cjs')
 const { startStubEngine } = require('./lib/stub-engine.cjs')
 const ROOT = path.join(__dirname, '..')
@@ -22,9 +23,10 @@ async function boot() {
   app = await electron.launch({
     ...(process.env.STAGE_ELECTRON ? { executablePath: process.env.STAGE_ELECTRON } : {}),
     args: [`--user-data-dir=${path.join(home, 'userdata')}`, '--lang=zh-CN', ROOT], cwd: ROOT,
-    env: { ...process.env, TANGU_HOME: home, TANGU_BACKEND_URL: stub.url, FORSION_WORKSPACE_DIR: path.join(home, 'workspace') },
+    env: { ...process.env, TANGU_HARNESS_QUIET: '1', TANGU_HOME: home, TANGU_BACKEND_URL: stub.url, FORSION_WORKSPACE_DIR: path.join(home, 'workspace') },
   })
   win = await app.firstWindow()
+  await app.evaluate(({ BrowserWindow }) => { if (process.platform === 'darwin') for (const w of BrowserWindow.getAllWindows()) w.setAlwaysOnTop(true, 'normal', -1) })
   win.on('pageerror', e => { errors.push(String(e)); console.error('PAGEERROR', e.message) })
   await win.waitForSelector('#root', { timeout: 40000 })
   await win.waitForTimeout(1500)
@@ -44,6 +46,13 @@ async function boot() {
   frame = await (await win.locator('iframe[title="Obsidian Bridge"]').elementHandle()).contentFrame()
   await frame.waitForFunction(() => !!window.bridge, { timeout: 20000 })
   await app.evaluate(({ BrowserWindow }) => { const w = BrowserWindow.getAllWindows().find(w => !w.isDestroyed() && w.getTitle() !== ''); w?.setSize(1380, 940) })
+  if (process.platform === 'darwin') {
+    const jxa = "ObjC.import('CoreGraphics'); function run(a) { return JSON.stringify(ObjC.deepUnwrap(ObjC.castRefToObject($.CGWindowListCopyWindowInfo($.kCGWindowListOptionOnScreenOnly, 0))).filter(w => w.kCGWindowOwnerPID == a[0]).map(w => [w.kCGWindowLayer, w.kCGWindowBounds.Width])) }"
+    const layers = JSON.parse(execFileSync('osascript', ['-l', 'JavaScript', '-e', jxa, String(app.process().pid)], { encoding: 'utf8' }))
+    const main = layers.filter(([, width]) => width >= 880)
+    const focused = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().some(w => w.isFocused()))
+    check('Test window stays at native level -1 without focus', main.length > 0 && main.every(([level]) => level === -1) && !focused, JSON.stringify({ layers, focused }))
+  }
 }
 async function shot(name) { await win.screenshot({ path: path.join(ART, name + '.png') }) }
 async function click(action) { await frame.locator(`[data-action="${action}"]`).click() }
@@ -114,12 +123,14 @@ async function main() {
   await win.locator('iframe[title="Obsidian Bridge"]').waitFor()
   frame = await (await win.locator('iframe[title="Obsidian Bridge"]').elementHandle()).contentFrame()
   await frame.waitForFunction(() => !!window.bridge)
+  check('Returning from native note restores the compatibility draft', (await text()).includes('**Bridge contents**') && (await text()).includes('[[#Introduction|Introduction]]'))
   const badDir = path.join(installed, 'plugins/bridge-unsupported-probe')
   fs.mkdirSync(badDir)
   fs.writeFileSync(path.join(badDir, 'manifest.json'), JSON.stringify({ id: 'bridge-unsupported-probe', name: 'Unsupported API probe', version: '0.0.0' }))
   fs.writeFileSync(path.join(badDir, 'main.js'), "module.exports=class extends require('obsidian').Plugin { onload(){ require('fs') } }")
   await click('rescan')
   await frame.waitForFunction(() => window.bridge.diagnostics().plugins.some(p => p.id === 'bridge-unsupported-probe' && p.error))
+  await frame.locator('[data-plugin="bridge-unsupported-probe"]').waitFor()
   const bad = await frame.evaluate(() => window.bridge.diagnostics().plugins.find(p => p.id === 'bridge-unsupported-probe'))
   check('Unsupported dependency fails explicitly without stopping other plugins', !bad.alive && bad.error.includes('Unsupported external module: fs') && await frame.evaluate(() => window.bridge.diagnostics().plugins.filter(p => p.alive).length === 3))
   fs.rmSync(badDir, { recursive: true })
@@ -142,12 +153,12 @@ async function main() {
   await frame.locator('[data-plugin="number-headings-obsidian"] [data-action="toggle-plugin"]').click()
   await click('heading-sample'); await command('number-headings-obsidian:number-headings')
   check('Re-enabled plugin operates after restart', /## 1[. ]/.test(await text()))
-  await win.locator('#rb-mode, [data-ribbon-id="rb-mode"]').first().click()
+  await win.getByRole('button', { name: '切换明暗模式', exact: true }).click()
   await frame.waitForFunction(() => document.documentElement.dataset.mode === 'dark')
   const dark = await frame.evaluate(() => ({ mode: document.documentElement.dataset.mode, bg: getComputedStyle(document.body).backgroundColor, text: getComputedStyle(document.body).color }))
   check('Real theme toggle reaches compatibility document', dark.mode === 'dark' && dark.bg !== 'rgb(247, 247, 248)', JSON.stringify(dark))
   await win.waitForTimeout(500); await shot('05-dark')
-  await win.locator('#rb-mode, [data-ribbon-id="rb-mode"]').first().click()
+  await win.getByRole('button', { name: '切换明暗模式', exact: true }).click()
   await frame.waitForFunction(() => document.documentElement.dataset.mode === 'light')
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(860, 820))
   await win.waitForTimeout(400); await shot('06-narrow')
