@@ -267,6 +267,9 @@ html.rb-pointer-dragging, html.rb-pointer-dragging * { cursor: grabbing !importa
   color: var(--text-muted);
   font-family: var(--font-ui); font-size: var(--ui-font-meta, 12px); font-weight: 600;
 }
+/* 盖在展开着的左栏上时卡片顶到窗口最上(Ribbon.tsx 的 peekStyle 给 --rb-peek-lights):mac 交通灯越过 Ribbon 约 20px,
+   头部同左栏标签条一样右移 26px 让开。收起时的摆法在标签条下面,碰不到灯,变量不给。 */
+[data-platform='mac'] .rb-peek-head { padding-left: calc(12px + var(--rb-peek-lights, 0px)); }
 .rb-peek-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rb-peek-tab {
   display: inline-flex; align-items: center; justify-content: center; flex: none;

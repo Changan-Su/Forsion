@@ -345,7 +345,7 @@
     "@dnd-kit/utilities": "^3.2.2",
     "@excalidraw/excalidraw": "npm:@zsviczian/excalidraw@0.18.122",
     "@forsion/extend": "0.8.2",
-    "@forsion/tangu-computer-use": "0.6.3",
+    "@forsion/tangu-computer-use": "0.7.0",
     "@milkdown/kit": "^7.21.2",
     "@milkdown/plugin-math": "^7.5.9",
     "@milkdown/react": "^7.21.2",
