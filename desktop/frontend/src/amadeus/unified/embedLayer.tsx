@@ -1,3 +1,5 @@
+import { findCodeBlockRenderer, subscribeCodeBlockRenderers, type RegisteredCodeBlockRenderer } from '../plugins/codeBlockRenderers'
+import { PluginCodeBlock } from '../blocks/plugin/PluginCodeBlock'
 // v4 统一编辑器的块级嵌入层(2026-08-13,用户实报「![[xxx]] 嵌入触发不了」):
 // v3 的八类块级嵌入全部住在 BlockHost(React/每块一宿主),unified 一类都没有 —— 本层用
 // **装饰 widget + createRoot** 把 v3 组件原样桥进单实例:
@@ -107,6 +109,7 @@ export type EmbedKind =
   | { k: 'db'; name: string; view: string | null }
   | { k: 'draw'; target: string }
   | { k: 'plugin'; target: string }
+  | { k: 'plugin-code'; source: string; language: string; renderer: RegisteredCodeBlockRenderer }
   /** loc = `#t=` 媒体时刻;badAnchor = 有 `#` 但解不开(照样渲播放器 + 提示,绝不「嵌入丢失」)。
    *  w = 末段 `|宽度`(px),与图片同款口径。 */
   | { k: 'file'; name: string; fileKind: 'pdf' | 'video' | 'audio' | 'other'; loc?: MediaLoc | null; badAnchor?: boolean; w?: number }
@@ -126,7 +129,11 @@ export function classifyEmbed(node: ProseNode): EmbedKind | null {
     if (type && (type === 'instructions' || parseDocAgentSpec(node.textContent))) return { k: 'document-agent', type, src: node.textContent }
     // 空的交互块不认领:源码还露着,才写得进去(和按钮块坏 JSON 回落同理)。
     if (node.attrs.language === SKETCH_LANG) return node.textContent.trim() ? { k: 'sketch', src: node.textContent } : null
-    if (node.attrs.language !== 'forsion-button') return null
+    if (node.attrs.language !== 'forsion-button') {
+      const language = String(node.attrs.language || '')
+      const renderer = findCodeBlockRenderer(language)
+      return renderer ? {k: 'plugin-code', source: node.textContent, language, renderer} : null
+    }
     // JSON 写坏了 = 不归按钮(R-13):回落成普通代码块,源码原样露出、照常可改(button/format.ts 的契约)。
     // 此前照样认领,渲染期解析失败只给一个空 <span/> —— 整块高 0、源码被藏、`</>` 浮不出来,只剩撤销能救。
     if (!parseButtonBlock(buttonFence(node.textContent))) return null
@@ -380,6 +387,8 @@ function EmbedBody({ kind, pagePath, replaceText, insertAfter, startTask, readOn
       )
     case 'draw':
       return <ExcalidrawEmbed target={kind.target} pagePath={pagePath} readOnly={readOnly} />
+    case 'plugin-code':
+      return <PluginCodeBlock renderer={kind.renderer} source={kind.source} language={kind.language} pagePath={pagePath} readOnly={readOnly} />
     case 'plugin':
       return <PluginEmbed target={kind.target} pagePath={pagePath} />
     case 'file':
@@ -436,7 +445,7 @@ interface WidgetEntry {
 // 数据库视图名是配置,不是组件身份。把 |视图名 放进 key 会让每次切视图卸载整张表,
 // 连搜索、焦点、滚动和弹层一起丢掉。同路径的多个嵌入仍用出现序号区分各自的局部状态。
 const widgetIdentity = (kind: EmbedKind, text: string): string =>
-  kind.k === 'db' ? `db:${kind.name}` : kind.k === 'document-agent'
+  kind.k === 'plugin-code' ? `plugin-code:${kind.renderer.key}:${kind.language}:${text}` : kind.k === 'db' ? `db:${kind.name}` : kind.k === 'document-agent'
     ? `document-agent:${kind.type}:${kind.type === 'instructions' ? '' : parseDocAgentSpec(kind.src)?.id}` : `${kind.k}:${text}`
 
 interface EmbedLayerState {
@@ -712,8 +721,13 @@ export function createEmbedLayer(opts: { path: string; readOnly?: boolean; flush
       key,
       view: (v) => {
         viewRef = v
+        let mounted = true
+        const offRenderers = subscribeCodeBlockRenderers(() => queueMicrotask(() => {
+          if (mounted && viewRef === v) v.dispatch(v.state.tr.setMeta(key, {renderersChanged: true}))
+        }))
         return {
           destroy: () => {
+            mounted = false; offRenderers()
             for (const source of taskSources) source.deleted = true
             viewRef = null
             // 插件表原地重配(评审 G1-06:插件扩展启停)时 PM 会拆掉**全部**插件视图再同步建回来,而嵌入 widget 的 DOM

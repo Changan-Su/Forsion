@@ -181,8 +181,14 @@ export function apiFor(runtime, entry) {
       this._ownerCleanup = own(() => this.unload());
     }
     load() {
-      this.onload?.();
+      if (this._unloaded) return;
+      const loading = this.onload?.();
       for (const c of this._children) c.load();
+      if (loading?.then) return Promise.resolve(loading).then(() => {
+        // An async onload may allocate resources after an earlier unload. Give
+        // the plugin a final teardown pass; registered callbacks are already revoked.
+        if (this._unloaded) return this.onunload?.();
+      });
     }
     unload() {
       if (this._unloaded) return;
@@ -200,6 +206,7 @@ export function apiFor(runtime, entry) {
       }
     }
     addChild(c) {
+      if (this._unloaded) { c.unload(); return c; }
       this._children.push(c);
       c.load();
       return c;
@@ -249,6 +256,15 @@ export function apiFor(runtime, entry) {
     async saveData(value) {
       alive();
       await runtime.saveData(entry.manifest.id, value);
+    }
+    registerMarkdownCodeBlockProcessor(language, processor) {
+      alive();
+      if (runtime.rendering) return runtime.rendering.register(entry, language, processor);
+      runtime.partial(entry, `Markdown code block: ${language}`);
+      return processor;
+    }
+    registerMarkdownPostProcessor() {
+      runtime.partial(entry, "Markdown postprocessors");
     }
     registerEditorExtension() {
       runtime.partial(entry, "CodeMirror keymaps/extensions");
@@ -592,6 +608,9 @@ export function apiFor(runtime, entry) {
       return this.onChooseItem(result.item, e);
     }
   }
+  class MarkdownRenderChild extends Component {
+    constructor(containerEl) { super(); this.containerEl = containerEl; }
+  }
   class ItemView extends Component {
     constructor(leaf) {
       super();
@@ -680,6 +699,7 @@ export function apiFor(runtime, entry) {
     SuggestModal,
     FuzzySuggestModal,
     ItemView,
+    MarkdownRenderChild,
     EditorSuggest,
     AbstractInputSuggest,
     ButtonComponent: class extends Control {
@@ -771,6 +791,7 @@ export function apiFor(runtime, entry) {
     "SuggestModal",
     "FuzzySuggestModal",
     "ItemView",
+    "MarkdownRenderChild",
     "EditorSuggest",
     "AbstractInputSuggest",
   ]) {

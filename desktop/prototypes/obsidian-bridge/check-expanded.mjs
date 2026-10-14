@@ -95,7 +95,7 @@ try {
   });
   await new Promise((resolve) => setTimeout(resolve, 200));
   console.log(JSON.stringify(r.diagnostics(), null, 2));
-  assert.equal(r.diagnostics().plugins.filter((p) => p.alive).length, 6);
+  assert.equal(r.diagnostics().plugins.filter((p) => p.alive).length, 7);
   assert.deepEqual(Array.from(nativeCommands.find(c => c.plugin === "note-refactor-obsidian" && c.id === "app:extract-selection-first-line").hotkeys), ["meta+shift+n"]);
   console.log("PASS original Note Refactor defaults reach native commands");
   text = "Zebra\nApple\nBanana\nApple\n";

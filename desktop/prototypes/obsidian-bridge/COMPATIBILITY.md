@@ -76,15 +76,15 @@ Original Advanced Tables ItemView in the native right sidebar; button transactio
 
 Evidence: `prototypes/obsidian-bridge/check-native-views.mjs; prototypes/obsidian-bridge/check-expanded.mjs; scripts/obsidian-native.e2e.cjs`
 
-## Markdown 渲染扩展 / Markdown rendering extensions — unsupported
+## Markdown 渲染扩展 / Markdown rendering extensions — partial
 
-尚无原生接入的验收证据。
+代码块处理器和 MarkdownRenderChild 接入原生 v4；原版 Charts 3.9.0 绘制图表，原生源码编辑与撤销、源码切换、禁用回退和重新启用均保留 Markdown。
 
-No evidence of native integration yet.
+Code-block processors and MarkdownRenderChild in native v4; original Charts 3.9.0 paints charts, with native source edits/undo, source toggle, disable fallback and re-enable preserving Markdown.
 
-**待补 / Remaining:** 代码块处理器、后处理器和渲染子组件生命周期待接入。 Code-block processors, postprocessors and render-child lifecycle remain to be integrated.
+**待补 / Remaining:** 普通 Markdown 后处理器、MarkdownRenderer、准确段落偏移、关联表格数据及完整主题事件仍待补；未宣称所有图表配置均兼容。 General Markdown postprocessors, MarkdownRenderer, exact section offsets, linked table data and full theme events remain incomplete; not all chart configurations are claimed compatible.
 
-Evidence: `prototypes/obsidian-bridge/src/obsidian.js`
+Evidence: `frontend/src/amadeus/plugins/codeBlockRenderers.test.ts; prototypes/obsidian-bridge/check-native-rendering.mjs; scripts/obsidian-native.e2e.cjs`
 
 ## 编辑器扩展与建议 / Editor extensions and suggestions — unsupported
 

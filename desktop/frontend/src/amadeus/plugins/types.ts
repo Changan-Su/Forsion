@@ -803,6 +803,20 @@ export interface FileCreatorContribution {
   run(parentFolder: string): void | Promise<void>
 }
 
+/** Read-only rendering of a native fenced code block. Source stays in the native document. */
+export interface CodeBlockRendererContribution {
+  id: string
+  language: string
+  /** Return cleanup; honor signal when asynchronous work outlives this block or plugin. */
+  mount(el: HTMLElement, block: {
+    source: string
+    language: string
+    pagePath: string
+    readOnly: boolean
+    signal: AbortSignal
+  }): (() => void) | void | Promise<(() => void) | void>
+}
+
 /** An inline renderer for a `![[target]]` transclusion whose target this plugin recognises (typically its
  *  own file type). Consulted before the built-in file-card fallback, so `![[x.mindmap.md]]` renders as a
  *  live preview instead of a generic "open file" card. */
@@ -1093,6 +1107,9 @@ export interface PluginContext {
   registerFileType(def: FileTypeContribution): boolean | void
   /** Contribute an inline renderer for `![[…]]` embeds this plugin recognises (e.g. its own file type). */
   registerEmbedRenderer(def: EmbedRendererContribution): void
+  /** Native v4 fenced code preview; source editing/undo/save remain owned by Amadeus.
+   * Dynamic unregister and plugin disable abort all mounted instances. Built-in languages are reserved. */
+  registerCodeBlockRenderer?(def: CodeBlockRendererContribution): () => void
   /** Contribute a "新建 …" entry into the file tree's right-click menu (root + folder). See FileCreatorContribution. */
   registerFileCreator(def: FileCreatorContribution): void
   /** Open (or focus) one of this plugin's own registered views. Defaults to the main area;

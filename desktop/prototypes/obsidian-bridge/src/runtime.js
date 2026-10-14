@@ -1,3 +1,4 @@
+import { createNativeRendering } from "./native-rendering.js";
 import { createNativeViews } from "./native-views.js";
 import { nativeHotkeys } from "./hotkeys.js";
 import * as cmState from "@codemirror/state";
@@ -63,10 +64,10 @@ export async function start(host) {
   const footer = shell.createEl("footer", {
     text: tr(
       native
-        ? "0.3 原型：原生编辑、后台事件、智库 API 与官方社区目录。未接入的功能会单独列出；安装不代表全面兼容。"
+        ? "Desktop 原型：原生编辑、后台事件、智库 API、视图与代码块渲染。未接入的功能会单独列出；安装不代表全面兼容。"
         : "0.1 原型：仅在此编辑区提供 API。原包保存在本插件的 plugins/ 子目录；不代表整个 Obsidian 生态已兼容。",
       native
-        ? "Prototype 0.3: Native editing, background events, vault APIs and the official community catalog. Unsupported features are listed; installation does not imply full compatibility."
+        ? "Desktop prototype: Native editing, background events, vault APIs, views and code-block rendering. Unsupported features are listed; installation does not imply full compatibility."
         : "Prototype 0.1: APIs apply to this editor. Original packages live in this plugin’s plugins/ folder; ecosystem compatibility is not implied.",
     ),
   });
@@ -275,6 +276,7 @@ export async function start(host) {
     native && host.listPages ? createNativeApp(host, runtime) : null;
   if (nativeApp) app = nativeApp.app;
   if (nativeApp && host.registerNativeView) runtime.views = createNativeViews(host, runtime, entry => nativeApp.forEntry(entry));
+  if (nativeApp && host.registerCodeBlockRenderer) runtime.rendering = createNativeRendering(host, runtime);
   let operation = Promise.resolve();
   runtime.invoke = (entry, fn, requireEditor = false, captured) => {
     const generation = entry.instance;
@@ -583,6 +585,7 @@ export async function start(host) {
     });
     entry.timerCount = () => timeouts.size + intervals.size;
     const codeMirrorAdapter = { commands: {} };
+    const boundWindowMethods = new WeakMap();
     const win = new Proxy(window, {
       get(target, key) {
         if (key === "CodeMirrorAdapter") {
@@ -592,7 +595,14 @@ export async function start(host) {
         if (key === "setTimeout") return later;
         if (key === "setInterval") return every;
         if (key === "app") return nativeApp?.forEntry(entry) || app;
-        return Reflect.get(target, key);
+        const value = Reflect.get(target, key);
+        // Web IDL methods require the real Window receiver, not this facade.
+        // Preserve constructors/prototypes and plugin-owned functions unchanged.
+        if (typeof value === "function" && !Object.hasOwn(value, "prototype") && /\[native code\]/.test(Function.prototype.toString.call(value))) {
+          if (!boundWindowMethods.has(value)) boundWindowMethods.set(value, value.bind(target));
+          return boundWindowMethods.get(value);
+        }
+        return value;
       },
     });
     try {
@@ -908,6 +918,7 @@ export async function start(host) {
         path: runtime.context.file?.path,
       },
       views: runtime.views?.diagnostics() || [],
+      rendering: runtime.rendering?.diagnostics() || null,
       savedCopy,
       native,
       vaultKey,
@@ -919,6 +930,7 @@ export async function start(host) {
       for (const e of entries.values()) unload(e);
       offPage?.();
       runtime.views?.dispose();
+      runtime.rendering?.dispose();
       nativeApp?.dispose();
       storeUi?.();
       editor.destroy();

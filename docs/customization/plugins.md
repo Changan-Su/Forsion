@@ -193,3 +193,10 @@ they are not immutable historical snapshots or cross-device data replicas.
 `const unregister = ctx.registerView(def)` returns an idempotent disposer on newer hosts. Call `unregister?.()` to withdraw one view; open instances close and retained mount callbacks become inert. Plugin disable/reload also unregisters all owned views. Mount cleanup can run when a sidebar folds or the Space changes: keep durable state outside the mounted DOM and allow remounting.
 
 新宿主的 `ctx.registerView(def)` 返回幂等注销函数，旧宿主返回空值；用 `unregister?.()` 撤下单个视图。宿主先关闭实例，旧挂载回调随即失效；禁用／重载也会统一清理。侧栏折叠或切换 Space 也会触发挂载清理，应把需要保留的状态放在挂载 DOM 之外，并支持重新挂载。
+
+
+### Native fenced code rendering / 原生围栏代码渲染
+
+`ctx.registerCodeBlockRenderer?.({id, language, mount(el, block)})` registers a native v4 code-block preview and returns an unregister function. `block` contains `source`, `language`, `pagePath`, `readOnly` and `signal`. Render into the supplied element, return cleanup (or a Promise of cleanup), and stop asynchronous work when the signal aborts. Unregister/disable aborts every mount; cleanup returned after cancellation still runs. Keep source edits in native commands: the host retains the fence, source toggle, selection, undo and save. Unregistered languages use ordinary native code blocks. Failed mounts show the original source. Built-in `forsion-*` and `mermaid` languages are reserved. Older hosts do not expose this optional API.
+
+`ctx.registerCodeBlockRenderer?.({id, language, mount(el, block)})` 注册原生 v4 代码块预览并返回注销函数。`block` 包含源码 `source`、语言 `language`、笔记路径 `pagePath`、只读标志 `readOnly` 和取消信号 `signal`。在提供的 DOM 中渲染并返回清理函数（可异步）；信号取消时停止异步工作。注销／禁用会取消全部挂载，取消后才返回的清理函数仍会执行。源码修改走原生命令，围栏、源码切换、选区、撤销和保存由宿主持有。注销后恢复普通代码块，挂载失败时展示原始源码。内置 `forsion-*` 和 `mermaid` 语言保留给宿主；旧宿主没有此可选接口。

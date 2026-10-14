@@ -64,6 +64,7 @@ export class Events {
   }
 }
 export function createNativeApp(host, runtime) {
+  const eventSubscriptions = new WeakMap();
   const files = new Map(),
     sources = new Map(),
     caches = new Map();
@@ -403,6 +404,8 @@ export function createNativeApp(host, runtime) {
       for (const e of [vault, workspace, metadataCache]) e.refs.clear();
     },
     forEntry(entry) {
+      let ownedEvents = eventSubscriptions.get(entry);
+      if (!ownedEvents) eventSubscriptions.set(entry, ownedEvents = new Set());
       const epoch = entry.epoch;
       const live = () => entry.alive && entry.epoch === epoch;
       const guard = () => {
@@ -479,22 +482,35 @@ export function createNativeApp(host, runtime) {
               });
             if (k === "on")
               return (name, cb, ctx) => {
+                guard();
+                const subscription = { target, name, cb, active: true, ref: null, off: null };
+                const off = () => {
+                  if (!subscription.active) return;
+                  subscription.active = false; target.offref(subscription.ref); ownedEvents.delete(subscription);
+                  const i = entry.cleanup.indexOf(off); if (i !== -1) entry.cleanup.splice(i, 1);
+                };
+                subscription.off = off;
                 const ref = target.on(name, (...args) => {
-                  if (live())
-                    void runtime
-                      .invoke(entry, () =>
-                        cb.apply(
-                          ctx,
-                          name === "editor-change"
-                            ? [runtime.context?.editor, runtime.context?.view]
-                            : args,
-                        ),
-                      )
-                      .catch(runtime.error);
+                  if (live() && subscription.active)
+                    void runtime.invoke(entry, () => {
+                      if (live() && subscription.active) return cb.apply(ctx,
+                        name === "editor-change" ? [runtime.context?.editor, runtime.context?.view] : args);
+                    }).catch(runtime.error);
                 });
-                entry.cleanup.push(() => target.offref(ref));
+                subscription.ref = ref;
+                // Component.registerEvent also disposes through the EventRef itself.
+                ref.emitter = {offref: off};
+                ownedEvents.add(subscription); entry.cleanup.push(off);
                 return ref;
               };
+            if (k === "off") return (name, cb) => {
+              for (const subscription of [...ownedEvents])
+                if (subscription.target === target && subscription.name === name && subscription.cb === cb) subscription.off();
+            };
+            if (k === "offref") return ref => {
+              for (const subscription of [...ownedEvents])
+                if (subscription.target === target && subscription.ref === ref) subscription.off();
+            };
             if (k === "onLayoutReady")
               return (cb) => runtime.defer(() => runtime.invoke(entry, cb));
             const v = Reflect.get(target, k);

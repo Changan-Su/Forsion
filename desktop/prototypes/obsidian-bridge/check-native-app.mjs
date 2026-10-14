@@ -88,6 +88,20 @@ await assert.rejects(
   /Invalid frontmatter/,
 );
 assert.equal(files.get("Malformed.md"), "---\nfoo: [\n---\nBody");
+const eventBaseline = entry.cleanup.length;
+let eventsCalled = 0;
+const onCss = () => eventsCalled++;
+app.workspace.on('css-change', onCss);
+bridge.app.workspace.trigger('css-change');
+await Promise.resolve(); assert.equal(eventsCalled, 1);
+app.workspace.off('css-change', onCss);
+bridge.app.workspace.trigger('css-change');
+await Promise.resolve(); assert.equal(eventsCalled, 1);
+assert.equal(entry.cleanup.length, eventBaseline);
+const ownedRef = app.workspace.on('css-change', onCss);
+ownedRef.emitter.offref(ownedRef);
+assert.equal(entry.cleanup.length, eventBaseline);
+assert.equal(bridge.app.workspace.refs.size, 0);
 let count = 0;
 const ref = app.vault.on("modify", () => count++);
 files.set("Folder/Other.md", "external");

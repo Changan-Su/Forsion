@@ -1,8 +1,8 @@
 # Obsidian Bridge — Desktop 原型 / Desktop prototype
 
-0.5 将六个原始 Obsidian 插件的编辑命令接到当前 **Amadeus 原生可视编辑器**。正文、选区、撤销和磁盘保存由原生编辑器持有；Bridge 管理面板只负责原包和设置。
+0.6 将六个原始 Obsidian 插件的编辑命令接到当前 **Amadeus 原生可视编辑器**，并增加第七个原包 Charts 的代码块渲染。正文、选区、撤销和磁盘保存由原生编辑器持有；Bridge 管理面板只负责原包和设置。
 
-Version 0.5 runs six original Obsidian plugins against the active **native Amadeus visual editor**.
+Version 0.6 runs six original Obsidian editing plugins against the active **native Amadeus visual editor**, plus native code-block rendering from the seventh original package, Charts.
 Amadeus owns the document, selection, undo and save pipeline. Bridge manages packages and settings.
 
 选中笔记正文，点击左下角 **命令面板 (⌘K)** 按钮，搜索 `Obsidian`，选择插件命令。
@@ -27,6 +27,7 @@ an editing command. Inside the editor, `Cmd+K` remains the native Insert link sh
     obsidian-linter/{manifest.json,main.js,styles.css,source.json}
     table-editor-obsidian/{manifest.json,main.js,styles.css,source.json}
     note-refactor-obsidian/{manifest.json,main.js,styles.css,source.json}
+    obsidian-charts/{manifest.json,main.js,styles.css,source.json}
     sources.json
 ```
 
@@ -55,7 +56,7 @@ npm run preview:obsidiannative
 ```
 
 `install-plugins.mjs [bridge-plugin-folder]` defaults to this prototype's `plugin/` folder. It downloads only
-six pinned releases; reinstallation refuses modified existing assets. Runtime scans the real `plugins/`
+seven pinned releases; reinstallation refuses modified existing assets. Runtime scans the real `plugins/`
 subfolder on opening or pressing Rescan. Open **Community plugins / 社区插件商店** to search the official
 [Obsidian community catalog](https://github.com/obsidianmd/obsidian-releases). The Desktop host downloads
 stable GitHub release assets into Bridge's `plugins/<id>/`, validates identity/version, records SHA-256,
@@ -84,6 +85,7 @@ can override the isolated home, evidence folder, and the separate Electron ident
 | Linter | [1.34.1](https://github.com/platers/obsidian-linter/releases/tag/1.34.1) | original lint-file command removes repeated blank lines, native undo |
 | Advanced Tables | [0.23.2](https://github.com/tgrosinger/advanced-tables-obsidian/releases/tag/0.23.2) | insert a native table column, preserve each cell |
 | Note Refactor | [1.8.2](https://github.com/lynchjames/note-refactor-obsidian/releases/tag/1.8.2) | extract selected text to a new vault note, replace with a link |
+| Charts | [3.9.0](https://github.com/phibr0/obsidian-charts/releases/tag/3.9.0) | actual chart pixels in native fenced blocks, source editing/undo, source switching and plugin lifecycle |
 
 “加载成功”不等于所有命令已兼容；只把验收脚本里实际完成的动作列为已验证。
 Successfully loading a package does not certify every command. Only actions exercised by the acceptance
@@ -228,3 +230,18 @@ View registrations use stable IDs and exist before opening a command. This curre
 The focused read-only Codex review reproduced four defects, repaired with regression fixtures: explicit no-editor gestures must not acquire a later note; `openFile` must follow the current edit commit; detach during asynchronous state restoration must prevent `onOpen`; and unloaded Components must release their plugin-owned cleanup references. Returned leaf methods are also revoked on plugin disable. Tests: `check-view-transactions.mjs` and `check-native-views.mjs`.
 
 聚焦只读 Codex 评审复现了四个缺陷，均已修复并加入回归：无编辑器的手势不得取得后来打开的笔记；`openFile` 必须在当前编辑提交后执行；异步状态恢复期间关闭视图不得再调用 `onOpen`；组件卸载后必须释放插件清理队列中的引用。返回的 leaf 方法也在禁用时失效。对应测试为 `check-view-transactions.mjs` 和 `check-native-views.mjs`。
+
+
+## 0.6 代码块渲染 / Code-block rendering
+
+通过公共 `ctx.registerCodeBlockRenderer` 接入 Amadeus 原生 v4 嵌入层。Obsidian `registerMarkdownCodeBlockProcessor` 与 `MarkdownRenderChild` 映射到这套接口，渲染结果与原始源码仍属于同一原生笔记。现增加第七个未经修改的原包 [Charts 3.9.0](https://github.com/phibr0/obsidian-charts/releases/tag/3.9.0)，验证 YAML 图表绘制与源码/禁用切换。安装脚本记录原始 release URL 与 SHA-256。
+
+The public `ctx.registerCodeBlockRenderer` integrates with native Amadeus v4 embeds. Obsidian code-block processors and render children use that contract; rendered output and source belong to the same native note. The seventh unchanged package, [Charts 3.9.0](https://github.com/phibr0/obsidian-charts/releases/tag/3.9.0), exercises YAML chart rendering and source/disable transitions. The installer records original release URLs and SHA-256 receipts.
+
+Rendering is partial: generic Markdown postprocessors, MarkdownRenderer, exact section offsets, linked-table charts and full theme events remain Goal work. Code-block processor callbacks do not borrow whichever native editor happens to be active. Native source, undo and save remain owned by the host. Async render children are cancelled and cleaned up on removal/disable; errors preserve access to source. Tests assert actual chart pixels rather than merely canvas existence.
+
+渲染仍是部分兼容：通用后处理、MarkdownRenderer、准确段落偏移、关联表格图表和完整主题事件继续在 Goal 范围内。处理器不会借用碰巧活动的其他笔记编辑器；源码、撤销与保存由宿主持有。移除／禁用时取消并清理异步渲染子组件，错误时保留源码入口。测试检查真实绘制像素，不把 canvas 存在当作成功。
+
+异步渲染和渲染子组件共享挂载的取消信号：卸载后未完成的加载不会占用命令队列，迟到的子组件立即清理；事件 `off(name, callback)` 保留原回调身份。
+
+Async rendering and render children share mount cancellation: unfinished loads cannot occupy the command queue after unmount, late children are disposed, and event `off(name, callback)` preserves the original callback identity.

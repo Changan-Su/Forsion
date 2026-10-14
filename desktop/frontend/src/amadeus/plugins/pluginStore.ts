@@ -1,3 +1,4 @@
+import { registerCodeBlockRenderer } from './codeBlockRenderers'
 import { activeMainPanel, useWorkspace } from '@lcl/engine/workspaceStore'
 import { captureUnifiedEditor, hasUnifiedInstance, unifiedPatchFm } from '../unified/lifecycle'
 // The plugin host. Holds the plugin registry, the persisted "disabled" preference, the
@@ -1290,6 +1291,10 @@ export const usePluginStore = create<PluginState>((set, get) => {
       const extensions = exts.map((e) => String(e)).filter((e) => !taken(e))
       set((s) => ({ fileTypes: [...s.fileTypes, { pluginId, item: { ...def, extensions, ...(fmKeys ? { fmKeys } : {}) } }] }))
       return true
+    },
+    registerCodeBlockRenderer: (def) => {
+      if (!ctxAlive()) return () => {}
+      return scope.own('subscription', registerCodeBlockRenderer(pluginId, def), 'code-block-renderer')
     },
     registerEmbedRenderer: (def) =>
       set((s) => ({ embedRenderers: [...s.embedRenderers, { pluginId, item: def }] })),

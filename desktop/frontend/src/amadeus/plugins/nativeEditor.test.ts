@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 const pane=vi.hoisted(()=>({id:''}))
 vi.mock('@lcl/engine/workspaceStore',()=>({useWorkspace:{getState:()=>({api:{}})},activeMainPanel:()=>pane}))
 vi.mock('../api', () => ({ amadeus: {} }))
+import { findCodeBlockRenderer } from './codeBlockRenderers'
 import { usePluginStore } from './pluginStore'
 import { activePageScope, usePageStore } from '../store/pageStore'
 import { registerUnifiedPipe } from '../unified/lifecycle'
@@ -19,6 +20,12 @@ beforeEach(()=>{
 })
 afterEach(()=>off())
 describe('native editor public lifecycle',()=>{
+ it('removes scoped code renderers when the parent plugin is disabled',()=>{
+  ctx.registerCodeBlockRenderer!({id:'preview',language:'lifecycle-fixture',mount(){}})
+  expect(findCodeBlockRenderer('lifecycle-fixture')).toBeDefined()
+  usePluginStore.getState().disable('native-probe')
+  expect(findCodeBlockRenderer('lifecycle-fixture')).toBeUndefined()
+ })
  it('revokes a dynamic view and its stale mount callback',()=>{
   const mount=vi.fn();const remove=ctx.registerView({id:'temporary',title:'Temporary',mount})
   const view=usePluginStore.getState().views.find(v=>v.item.id==='temporary')!.item

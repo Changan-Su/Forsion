@@ -38,6 +38,7 @@ async function main(){
  fs.writeFileSync(path.join(vault,'Tables.md'),'# Budget\n\n| Item | Cost |\n| --- | --- |\n| Apple | 3 |\n| Pear | 5 |\n')
  fs.writeFileSync(path.join(vault,'Refactor.md'),'# Source\n\nExtracted experiment\nA complete preserved paragraph.\n\nKeep this tail.\n')
  fs.writeFileSync(path.join(vault,'Auto.md'),'# Automatic notebook\n\n## First observation\n\nSome text.\n')
+ fs.writeFileSync(path.join(vault,'Charts.md'),'# Experiments\n\n```chart\ntype: bar\nlabels: [Alpha, Beta, Gamma]\nseries:\n  - title: Measurements\n    data: [3, 7, 5]\nlegend: true\nbeginAtZero: true\n```\n\nKeep this paragraph.\n')
  fs.writeFileSync(path.join(vault,'QueuedOther.md'),'Zulu\nBeta\nAlpha\n')
  fs.writeFileSync(path.join(vault,'Other.md'),'# Other\n\nDo not change this note.\n')
  const otherHash=hash(path.join(vault,'Other.md'))
@@ -72,7 +73,7 @@ async function main(){
  await frame.locator('[data-plugin=obsidian-linter] [data-action=toggle-plugin]').click()
  await frame.waitForFunction(()=>window.bridge.diagnostics().plugins.find(p=>p.id==='obsidian-linter')?.alive)
  await frame.locator('[data-action=back-to-note]').click()
- check('Native runtime loaded 6 originals without a compatibility editor',await frame.evaluate(()=>window.bridge.diagnostics().native&&window.bridge.diagnostics().plugins.filter(p=>p.alive).length===6&&!document.querySelector('.cm-editor')))
+ check('Native runtime loaded 7 originals without a compatibility editor',await frame.evaluate(()=>window.bridge.diagnostics().native&&window.bridge.diagnostics().plugins.filter(p=>p.alive).length===7&&!document.querySelector('.cm-editor')))
  await quiet()
  await win.locator('.ProseMirror:visible').first().click();await win.keyboard.press('Meta+Home')
  check('Capture reads current native Markdown',(await snapshot()).path==='Sort.md')
@@ -180,6 +181,48 @@ async function main(){
  await command('table-editor-obsidian:table-control-bar');await toolbar.waitFor()
 
 
+ const chartEventCount=()=>frame.evaluate(()=>[...window.bridge.app.workspace.refs].filter(ref=>ref.name==='css-change').length)
+ const chartEventsBefore=await chartEventCount()
+ await open('Charts.md')
+ const chart=win.locator('.plugin-code-block canvas')
+ await chart.waitFor();await until(()=>chart.evaluate(el=>{
+   const pixels=el.getContext('2d').getImageData(0,0,el.width,el.height).data
+   let painted=0;for(let i=3;i<pixels.length;i+=4)if(pixels[i]>0)painted++
+   return el.width>100 && painted>1000
+ }))
+ const chartOriginal=disk('Charts.md')
+ check('Original Charts paints actual chart pixels inside native Amadeus',await chart.evaluate(el=>!!el.closest('.markdown-rendered') && !el.closest('.markdown-rendered').textContent.includes("Couldn't render Chart")))
+ await shot('16-native-charts');await quiet()
+ const chartWidget=win.locator('.unified-embed').filter({has:win.locator('.plugin-code-block')})
+ await chartWidget.hover();await chartWidget.locator('.amx-src-btn').click()
+ await until(async()=>await chart.count()===0)
+ await until(async()=>await chartEventCount()===chartEventsBefore)
+ check('Original render child removes workspace listeners on native source toggle',await chartEventCount()===chartEventsBefore)
+ check('Native chart source toggle preserves the original fenced Markdown',disk('Charts.md')===chartOriginal && await win.locator('.ProseMirror:visible').innerText().then(t=>t.includes('labels: [Alpha, Beta, Gamma]')))
+ await win.locator('.ProseMirror:visible p').filter({hasText:'Keep this paragraph.'}).click()
+ await chart.waitFor()
+ const initialChart=await chart.evaluate(el=>el.toDataURL())
+ await chartWidget.hover();await chartWidget.locator('.amx-src-btn').click()
+ await win.locator('.ProseMirror:visible').evaluate(el=>{
+   const walker=document.createTreeWalker(el,NodeFilter.SHOW_TEXT);let node
+   while(node=walker.nextNode()) { const at=node.textContent.indexOf('3, 7, 5');if(at<0)continue
+     const range=document.createRange();range.setStart(node,at);range.setEnd(node,at+7)
+     window.getSelection().removeAllRanges();window.getSelection().addRange(range);document.dispatchEvent(new Event('selectionchange'));return
+   }
+   throw Error('Chart data text was not found in native source')
+ })
+ await win.keyboard.insertText('4, 9, 6');await until(()=>disk('Charts.md').includes('4, 9, 6'))
+ await win.locator('.ProseMirror:visible p').filter({hasText:'Keep this paragraph.'}).click();await chart.waitFor()
+ await until(async()=>await chart.evaluate(el=>el.toDataURL())!==initialChart)
+ check('Native source editing redraws original Charts without changing surrounding content',disk('Charts.md').includes('Keep this paragraph.'))
+ await win.keyboard.press('Meta+z');await until(()=>disk('Charts.md')===chartOriginal)
+ await win.locator('.ProseMirror:visible p').filter({hasText:'Keep this paragraph.'}).click();await chart.waitFor()
+ check('Native undo restores chart data and rendering',disk('Charts.md')===chartOriginal)
+ await palette('Obsidian Bridge');await frame.locator('[data-plugin=obsidian-charts] [data-action=toggle-plugin]').click();await frame.locator('[data-action=back-to-note]').click()
+ await until(async()=>await chart.count()===0)
+ check('Disable Charts restores native code without changing Markdown',disk('Charts.md')===chartOriginal)
+ await palette('Obsidian Bridge');await frame.locator('[data-plugin=obsidian-charts] [data-action=toggle-plugin]').click();await frame.locator('[data-action=back-to-note]').click()
+ await chart.waitFor();check('Re-enable Charts renders the existing native note',await chart.count()===1 && disk('Charts.md')===chartOriginal)
  await open('Refactor.md');const extract=win.locator('.ProseMirror:visible p').filter({hasText:'Extracted experiment'}).first();await extract.click();await extract.evaluate(el=>{window.getSelection().selectAllChildren(el);document.dispatchEvent(new Event('selectionchange'))})
  await until(async()=>{const e=await snapshot();return e.anchor!==e.head})
  await win.keyboard.press('Meta+Shift+n')

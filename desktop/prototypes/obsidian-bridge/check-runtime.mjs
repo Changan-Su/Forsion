@@ -17,7 +17,7 @@ try {
     listPages: async () => [],
     packageFiles: {
       readText: (p) => readFile(join(pkg, p), "utf8"),
-      list: (p) => readdir(join(pkg, p)).then(rows=>p==="plugins"?rows.filter(x=>!["obsidian-linter","note-refactor-obsidian","table-editor-obsidian"].includes(x)):rows),
+      list: (p) => readdir(join(pkg, p)).then(rows=>p==="plugins"?rows.filter(x=>["obsidian-sort-and-permute-lines","obsidian-plugin-toc","number-headings-obsidian"].includes(x)):rows),
     },
     loadData: async () => data,
     saveData: async (v) => {

@@ -11,7 +11,7 @@ let lease=false,saved=null,root='/first',releaseWrite,writeStarted=false;
 const commands=new Map();
 Object.defineProperty(win.navigator,'locks',{value:{async request(_name,_opts,fn){if(lease)return fn(null);lease=true;try{await fn({})}finally{lease=false}}}});
 win.__ctx={getLocale:()=> 'en',registerView(){},registerCommand(c){commands.set(c.id,c);return()=>commands.delete(c.id)},
- packageFiles:{readText:async p=>{const code=await readFile(join(pkg,p),'utf8');return p==='runtime.js'?'window.structuredClone=parent.structuredClone;\n'+code:code},list:p=>readdir(join(pkg,p)).then(rows=>p==='plugins'?rows.filter(x=>!['obsidian-linter','note-refactor-obsidian','table-editor-obsidian'].includes(x)):rows)},
+ packageFiles:{readText:async p=>{const code=await readFile(join(pkg,p),'utf8');return p==='runtime.js'?'window.structuredClone=parent.structuredClone;\n'+code:code},list:p=>readdir(join(pkg,p)).then(rows=>p==='plugins'?rows.filter(x=>['obsidian-sort-and-permute-lines','obsidian-plugin-toc','number-headings-obsidian'].includes(x)):rows)},
  loadData:async()=>saved,saveData:async value=>{writeStarted=true;await new Promise(r=>releaseWrite=r);saved=value},
  app:{vaultRoot:()=>root,captureEditor:()=>null,notify(){}},
 };
