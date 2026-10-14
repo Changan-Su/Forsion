@@ -232,3 +232,30 @@ describe('实时语音:自带百炼直连,否则走 Forsion 云端', () => {
     expect(() => make(false).realtime!.endpoint('qwen3.5-omni-flash-realtime')).toThrow(/No provider/);
   });
 });
+
+// 10-14 云端朗读:直连提供方里没有这个朗读模型 → 交给 Forsion 云端(httpBrain.tts);云端也没有朗读能力才报错。
+describe('朗读分发:直连没命中走云端', () => {
+  const registry = () => createProviderRegistry([{ providerId: 'openai', baseUrl: 'https://api.example/v1', apiKey: 'sk-user', ttsModelIds: ['tts-1'] }]);
+  beforeEach(() => { vi.clearAllMocks(); vi.unstubAllGlobals(); });
+
+  it('不是直连的模型 → 委托 httpBrain.tts,原样带上参数', async () => {
+    const synthesize = vi.fn(async () => ({ audio: new Uint8Array([9]), mime: 'audio/mpeg' }));
+    const b = createMultiBrain({ llm: {}, assets: {}, tts: { synthesize } } as any, registry());
+    const out = await b.tts!.synthesize({ model: 'reader', text: 'hi', voice: 'Cherry' });
+    expect(out.audio).toEqual(new Uint8Array([9]));
+    expect(synthesize).toHaveBeenCalledWith({ model: 'reader', text: 'hi', voice: 'Cherry' });
+  });
+
+  it('直连命中的照旧直连,不碰云端', async () => {
+    const synthesize = vi.fn();
+    const f = vi.fn().mockResolvedValue({ ok: true, arrayBuffer: async () => new Uint8Array([1]).buffer });
+    vi.stubGlobal('fetch', f);
+    await createMultiBrain({ llm: {}, assets: {}, tts: { synthesize } } as any, registry()).tts!.synthesize({ model: 'tts-1', text: 'hi' });
+    expect(String(f.mock.calls[0][0])).toBe('https://api.example/v1/audio/speech');
+    expect(synthesize).not.toHaveBeenCalled();
+  });
+
+  it('云端也没有朗读能力 → 报「找不到直连 provider」', async () => {
+    await expect(createMultiBrain({ llm: {}, assets: {} } as any, registry()).tts!.synthesize({ model: 'reader', text: 'hi' })).rejects.toThrow('未找到 TTS 模型');
+  });
+});

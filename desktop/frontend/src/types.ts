@@ -659,6 +659,8 @@ export interface ModelsResponse {
   realtimeModel?: { id: string; name: string; apiModelId?: string | null } | null
   /** Forsion 云端的机器翻译模型(不在 models 里:它们不能聊天;只有「翻译」模型槽列它们)。没有 = 云端没配 / 没登录 / 老引擎。 */
   translateModels?: Array<{ id: string; name: string; provider?: string; apiModelId?: string | null }>
+  /** Forsion 云端的朗读模型(设置页「语音朗读」模型框的候选;老引擎不给 = 没有) */
+  ttsModels?: Array<{ id: string; name: string; apiModelId?: string | null }>
   /** 引擎的缺省上下文上限(272k):自动识别出的窗口超过它就封顶,本机覆盖才开更大。 */
   contextWindowCap?: number
   /** 该引擎能不能写本机模型覆盖(PUT /agent/models/overrides 同一道 hostExec 门)。false / 缺省 = 不露「上下文上限」。 */
