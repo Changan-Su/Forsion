@@ -319,6 +319,9 @@ button.ob-progress-item:focus-visible { outline: var(--focus-ring) solid var(--a
   button.ob-progress-item { width: auto; }
 }
 @media (max-width: 600px) {
+  /* 手机宽:主卡折成好几行之后,一屏放不下两条摘要 —— 同矮窗口一样只留「完整说明」的入口。 */
+  .ob-history-about .ch-about { display: none; }
+  .ob-history-about .ob-history-more { border-top: 0; border-radius: var(--radius-lg); padding-top: 12px; }
   .ob-flow .ob-history-permission .desktop-permissions-row { flex-wrap: wrap; }
   .ob-flow .ob-history-permission .desktop-permissions-row-actions { flex-basis: 100%; margin-left: 0; }
 }
