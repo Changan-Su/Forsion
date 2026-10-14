@@ -166,8 +166,9 @@ async function pickMore(win, id) {
 }
 
 /** 起一个隔离的实例:自己的数据目录、探针插件、登进假引擎;首帧前把偏好(语言 / 明暗 / 缩放)写好再重载一次。
- *  ⚠️ 要换语言 / 明暗就另起一个实例,别在主窗半途再 reload:那样回来是「先在设置里连接后端」,连不回假引擎
- *  (磁盘上的配置和账号文件都没变,原因没查清;别的真应用台架也都只在启动后立刻重载这一次)。 */
+ *  ⚠️ 连接配置要写进 `<user-data-dir>-dev`:未打包的构建把 userData 改成了它(electron/main.ts),只写在 userdata/ 里应用读不到,
+ *  外部令牌是空的 —— 开机不连(boot 要有令牌),只有点掉首启引导那一下不看令牌连一次,之后主窗一重载就停在「先在设置里连接后端」
+ *  (10-14 取证:两边都写之后重载四次都连得回)。换语言 / 明暗仍然另起一个实例,首帧就按新偏好起。 */
 async function launch(stubUrl, prefs) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'forsion-selbar-'))
   const userdata = path.join(home, 'userdata'); fs.mkdirSync(userdata)
@@ -178,7 +179,10 @@ async function launch(stubUrl, prefs) {
   fs.writeFileSync(path.join(userdata, 'amadeus-config.dev.json'), JSON.stringify({ lastVault: vault, localVault: vault }))
   const token = ['test', Buffer.from(JSON.stringify({ sub: 'test-selbar', exp: Math.floor(Date.now() / 1000) + 86400 * 10 })).toString('base64url'), 'test'].join('.')
   fs.writeFileSync(path.join(home, 'auth.json'), JSON.stringify({ cloudUrl: stubUrl, token }))
-  fs.writeFileSync(path.join(userdata, 'tangu-desktop-config.json'), JSON.stringify({ mode: 'external', backendUrl: stubUrl, cloudUrl: stubUrl, token }))
+  for (const dir of [userdata, `${userdata}-dev`]) {
+    fs.mkdirSync(dir, { recursive: true })
+    fs.writeFileSync(path.join(dir, 'tangu-desktop-config.json'), JSON.stringify({ mode: 'external', backendUrl: stubUrl, cloudUrl: stubUrl, token }))
+  }
   const app = await electron.launch({ args: [`--user-data-dir=${userdata}`, '--lang=zh-CN', ROOT], cwd: ROOT, env: { ...process.env, TANGU_HOME: home, TANGU_BACKEND_URL: stubUrl } })
   const win = await app.firstWindow()
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1280, 900))

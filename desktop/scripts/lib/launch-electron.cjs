@@ -12,6 +12,10 @@
  * 下面有默认笔记库 Amadeus/ 和 Project/),临时 TANGU_HOME 管不到它:没预置库配置的台架一恢复库(进笔记 / 日历 / Tangu,
  * 或点 ＋),打开的就是开发者真实的库。这里补上 FORSION_WORKSPACE_DIR(electron/forsionHome.ts 的 defaultWorkspaceDir 认它),
  * 主进程照「全新用户」那条路在临时目录里建默认库。
+ *
+ * ⚠️ 预置的 userData 文件(tangu-desktop-config.json 等)写进 `<--user-data-dir>-dev`:未打包的构建把 userData 改成了它
+ * (electron/main.ts)。只写在 `--user-data-dir` 里应用读不到 —— 外部模式的令牌是空的,开机不连,只有点掉首启引导那一下
+ * 不看令牌连一次,主窗之后一重载就连不回假引擎(10-14 取证;btw / feedback / floating-session 三条台架至今只写了前者)。
  */
 const fs = require('fs')
 const os = require('os')
