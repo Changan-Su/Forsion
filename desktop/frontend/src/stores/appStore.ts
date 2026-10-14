@@ -3120,7 +3120,8 @@ export const useApp = create<AppState>((set, get) => ({
       const loc = focusRef()
       const base = applyPreset(path
         ? { ...draft, execMode: 'host', cwd: path }
-        : { ...draft, execMode: 'sandbox', cwd: undefined, ...(cloudProject ? { workspaceProject: cloudProject } : {}) }, preset)
+        // 草稿里的额外文件夹(ExtraFolders)只给本机会话:云端 / 无项目 / Chat 会话不带(那里看不到那几枚胶囊,带进去就是没人看见的授权)
+        : { ...draft, execMode: 'sandbox', cwd: undefined, extraRoots: undefined, ...(cloudProject ? { workspaceProject: cloudProject } : {}) }, preset)
       // P1-K7a(S6):在那台电脑上建的会话不带手机本地的 Amadeus 根 / 云端项目名 / 外部引擎等(remoteSafeInit)
       const init: AgentConfig = settleModes(loc.kind === 'unit' ? remoteSafeInit(base) : withAmadeusWorkspace(base, activeAmadeusRoot()))
       // 新会话生效的 agent 当场固化(默认兜底也算):不落库的话后续轮次会随易变的
@@ -3145,7 +3146,15 @@ export const useApp = create<AppState>((set, get) => ({
       }
       if (loc.kind === 'unit') clearDeviceSticky(loc.unitId)
       const s = withLocation(created)
-      set((st) => ({ sessions: [s, ...st.sessions] }))
+      // 草稿里的额外文件夹(ExtraFolders)是给这一个会话的授权:本机会话建成、带走了它们,就从草稿拿掉,否则会不声不响带进之后每个新对话。
+      // 建失败的不清(原样留着重发);这个会话没带走的也不清(云端 / Chat / 建在别的电脑上:胶囊只是暂时不显示,回到本机项目时还在)。
+      // 只拿掉这个会话真带走的那几个:建会话请求在途时又加进草稿的,留给下一个新对话。
+      const took = path && loc.kind !== 'unit' ? init.extraRoots || [] : []
+      set((st) => {
+        const { extraRoots: drafted, ...rest } = st.newChatCfg
+        const left = (drafted || []).filter((r) => !took.includes(r))
+        return { sessions: [s, ...st.sessions], ...(drafted && left.length !== drafted.length ? { newChatCfg: left.length ? { ...rest, extraRoots: left } : rest } : {}) }
+      })
       // 必须先标记再 setActiveId:setActiveId 内部会 void loadSessionHistory,新会话此刻服务端
       // 配置还是空的,拉回来会把下面刚写入的 init(含选中的 agentSlug/thinkingLevel)整体
       // 冲掉 → 第二轮就「换人」。先标记使其 no-op。

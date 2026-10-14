@@ -27,7 +27,7 @@ const markSeen = (slug: string): void => {
   try { localStorage.setItem(SEEN_KEY, JSON.stringify(readSeen())) } catch { /* ignore */ }
 }
 
-/** 开场:开新对话时,输入框上方一行「上次之后它在后台记住了 / 学到了什么」。看过一次就消失(点「查看」、发出第一条消息、切走都算看过)。
+/** 开场:开新对话时,输入框上方项目选择条那一栏的右端「上次之后它在后台记住了 / 学到了什么」(由 ChatView 放进 .newchat-projectbar-inner)。看过一次就消失(点「查看」、发出第一条消息、切走都算看过)。
  *  第一次遇到一个 Agent 只记下时刻、什么都不显示 —— 否则升级后第一眼就是「进化记录更新 47 处」。 */
 export function SessionOpening({ slug }: { slug: string }) {
   const { t } = useI18n()
@@ -54,10 +54,8 @@ export function SessionOpening({ slug }: { slug: string }) {
   const parts = [sum.remembered ? t('selfUpdate.remembered', { n: sum.remembered }) : '', sum.evolved ? t('selfUpdate.evolved', { n: sum.evolved }) : ''].filter(Boolean).join(' · ')
   const view = (): void => { markSeen(slug); shown.current = false; setSum(null); showDetails({ kind: 'agent', slug, evolution: Date.now() }) }
   return <div className="self-opening" data-self-opening={slug}>
-    <div className="self-opening-inner">
-      <Sprout size={15} className="self-receipt-ic" />
-      <span className="self-opening-text">{t('selfOpening.line', { name, parts })}</span>
-      <button type="button" className="self-act" onClick={view}>{t('selfOpening.view')}</button>
-    </div>
+    <Sprout size={15} className="self-receipt-ic" />
+    <span className="self-opening-text">{t('selfOpening.line', { name, parts })}</span>
+    <button type="button" className="self-act" onClick={view}>{t('selfOpening.view')}</button>
   </div>
 }

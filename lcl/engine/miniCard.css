@@ -207,8 +207,8 @@
   white-space: nowrap;
 }
 .mini-card-shell .newchat-pickers { display: none; }
-.mini-card-shell .newchat-projectbar { padding: 0 8px 2px; }
-.mini-card-shell .newchat-projectbar-inner { max-width: none; }
+.mini-card-shell .newchat-projectbar { max-width: none; padding: 0 8px 2px; }
+.mini-card-shell .newchat-projectbar-inner { padding-top: 0; }
 .mini-card-shell .project-pill {
   gap: 4px;
   min-height: 24px;
