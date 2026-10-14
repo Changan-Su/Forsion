@@ -140,7 +140,7 @@ async function main() {
     })
     const btwAction = win.locator('[data-testid="selection-btw"]').first()
     await btwAction.waitFor({ state: 'visible', timeout: 5000 })
-    const menuBox = await win.locator('.t2-quote-menu').first().boundingBox()
+    const menuBox = await win.locator('[data-testid="selection-bar"]').first().boundingBox()
     check('划线工具栏出现「顺便问」且不越出视图', !!menuBox && menuBox.x >= 0 && (await btwAction.textContent()).includes('顺便问'))
     await btwAction.click()
     const chip = btw.locator('.btw-quote-chip')

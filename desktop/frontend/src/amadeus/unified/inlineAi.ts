@@ -119,13 +119,8 @@ export function aiContextOf(doc: ProseNode, from: number, to: number): { before:
   return { before, after }
 }
 
-/** 选区语言粗判:汉字占比高 → 译成英文,否则译成简体中文(工具栏只有一个「翻译」)。 */
-export function translateTargetOf(text: string): string {
-  const letters = text.replace(/[\s\p{P}\p{S}\d]/gu, '')
-  if (!letters) return 'English'
-  const cjk = (letters.match(/[぀-ヿ㐀-鿿豈-﫿]/g) || []).length
-  return cjk / letters.length > 0.3 ? 'English' : 'Chinese (Simplified)'
-}
+/** 「翻译」的目标语言:规则搬到应用层(聊天里的翻译也用),这里转出给本模块的老调用方。 */
+export { translateTargetOf } from '../../translateTarget'
 
 export type AiApply = 'replace' | 'below' | 'insert'
 

@@ -406,6 +406,8 @@ export const SHOW_SYSTEM_PROMPT_KEY = 'forsion_tangu_show_system_prompt'
 
 /** 丝滑光标开关(localStorage,**缺席=关**;smoothCaret.ts 全局模块 + 设置→外观)。 */
 export const SMOOTH_CARET_KEY = 'forsion_tangu_smooth_caret'
+/** 划线条的排法(localStorage,**缺席 = 'tools'**:本视图的工具在前;'actions' = 动作在前。selectionActions.ts + 设置→外观)。 */
+export const SELECTION_BAR_ORDER_KEY = 'forsion_selection_bar_order'
 /** UI 缩放(uiZoom.ts 真源;放这儿是为了让跨窗同步的白名单不必反向依赖 uiZoom)。 */
 export const UI_ZOOM_KEY = 'forsion_ui_zoom'
 /** 界面语言(i18n.tsx 真源;同上)。 */

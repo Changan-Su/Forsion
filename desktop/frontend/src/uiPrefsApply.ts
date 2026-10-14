@@ -5,7 +5,7 @@
  * 纪律:先把值写进本窗的 localStorage,再调各自的 applier —— 那些 applier 自己读 localStorage,
  * 靠 IPC 先到还是 Chromium 的跨进程 storage 同步先到是没谱的(见 shared/uiSync.ts 的告诫)。
  */
-import { FONT_UI_KEY, FONT_BODY_KEY, FONT_MONO_KEY, SMOOTH_CARET_KEY, UI_ZOOM_KEY, LOCALE_KEY } from './types'
+import { FONT_UI_KEY, FONT_BODY_KEY, FONT_MONO_KEY, SMOOTH_CARET_KEY, SELECTION_BAR_ORDER_KEY, UI_ZOOM_KEY, LOCALE_KEY } from './types'
 import { applyUiFonts } from './uiFont'
 import { applyStoredUiZoom } from './uiZoom'
 import { setSmoothCaretEnabled } from './smoothCaret'
@@ -15,7 +15,8 @@ import { getLanguage } from './theme/registry'
 import { withReplay } from './uiPrefsBus'
 
 const FONT_KEYS = new Set<string>([FONT_UI_KEY, FONT_BODY_KEY, FONT_MONO_KEY])
-const FIXED = new Set<string>([...FONT_KEYS, SMOOTH_CARET_KEY, UI_ZOOM_KEY, LOCALE_KEY])
+// 划线条的排法只要写进 localStorage 就够:条每次出现时现读(selectionActions.selectionBarOrder),没有要重放的 applier。
+const FIXED = new Set<string>([...FONT_KEYS, SMOOTH_CARET_KEY, SELECTION_BAR_ORDER_KEY, UI_ZOOM_KEY, LOCALE_KEY])
 /** 主题自曝的可调参数(只有磁盘主题会声明);值最终进 CSS 变量,键必须收敛。 */
 const THEME_KNOB = /^theme\.[A-Za-z0-9._-]{1,64}\.--[a-z0-9-]{1,64}$/i
 

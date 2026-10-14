@@ -60,6 +60,7 @@ export const SETTINGS_SEARCH_INDEX: readonly SettingsSearchEntry[] = [
   { id: 'ambient', tab: 'theme', anchor: 'ambient', labelKey: 'settings.theme.ambient', keywords: '取色 染色 外壳 内容 颜色 ambient tint chrome color' },
   { id: 'visuals', tab: 'model', sub: 'm-models', anchor: 'visuals', labelKey: 'settings.theme.visuals', keywords: 'Intelligent UI 智能界面 可视化 图文 图片 来源 图表 Sketch visuals interactive display' },
   { id: 'smooth-caret', tab: 'theme', anchor: 'smooth-caret', labelKey: 'settings.theme.smoothCaret', keywords: '光标 caret cursor' },
+  { id: 'selection-bar', tab: 'theme', anchor: 'selection-bar', labelKey: 'settingsmodal.selectionBar', keywords: '划线 选中 划词 工具栏 引用 翻译 selection toolbar highlight quote translate' },
   // 2026-10-14 从「外观」搬到 高级 → 界面与会话。行的位置不动:这份表的顺序原样进给模型看的落点清单(settingsTarget.ts agentSettingsTargets)。
   { id: 'prompt-suggest', tab: 'advanced', sub: 'a-ui', anchor: 'prompt-suggest', labelKey: 'settings.promptSuggest', keywords: '输入建议 下一句 预测 补全 灰字 Tab suggestion autocomplete predict next prompt', needs: ['host', 'hover', 'wide'] },
   { id: 'chat-avatars', tab: 'theme', anchor: 'chat-avatars', labelKey: 'settings.theme.chatAvatars', keywords: '头像 聊天 avatar chat' },
