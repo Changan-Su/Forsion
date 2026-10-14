@@ -810,6 +810,11 @@ async function run() {
     await opening.waitFor()
     assert.match(await opening.innerText(), /Since last time, .+ worked in the background — Saved to memory: 1/, 'The opening line counts what the background wrote since last time')
     assert.equal(await opening.evaluate((el) => !!el.closest('.composer-anchor')), true, 'The opening line lives in the composer cluster')
+    // 不夹在项目胶囊和输入卡之间(用户 10-13):它在项目选择条那一栏里 —— 与胶囊同一行,或折到胶囊上面;这一栏没有胶囊时不比。
+    assert.equal(await opening.evaluate((el) => {
+      const pill = el.closest('.newchat-projectbar-inner')?.querySelector('.project-pill')
+      return !!el.closest('.newchat-projectbar-inner') && (!pill || el.getBoundingClientRect().top < pill.getBoundingClientRect().bottom)
+    }), true, 'The opening line never sits between the project pill and the input card')
     await win.locator('.composer-anchor').screenshot({ path: path.join(home, 'self-opening-english.png') })
     const openingSlug = await opening.getAttribute('data-self-opening')
     await opening.getByRole('button', { name: 'View', exact: true }).click()

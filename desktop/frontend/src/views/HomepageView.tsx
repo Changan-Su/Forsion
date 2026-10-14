@@ -49,6 +49,7 @@ import { usePluginStore } from '../amadeus/plugins/pluginStore'
 import { allSeries, useAchievements } from '../achievements/store'
 import { displaySessionTitle } from '../sessionTitle'
 import { ProjectSelector } from '../components/ProjectSelector'
+import { ExtraFolders } from '../components/ExtraFolders'
 import { RunLocationPicker } from '../components/RunLocationPicker' // P1-K7a
 import { AgentSelectStrip } from '../components/AgentSelectStrip'
 import { Composer2 } from './chat2/Composer2'
@@ -202,6 +203,7 @@ function HomepageChatbox({ onDispatch, onStartCall, onInputModeChange }: { onDis
           onAddProject={window.tangu?.pickDirectory ? () => void s.addLocalWorkspace() : undefined}
           onAddCloudProject={(name) => void s.addCloudProject(name)}
         />
+        <ExtraFolders />
       </div>
       <Composer2
         sessionId={null}

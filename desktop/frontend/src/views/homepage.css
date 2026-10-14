@@ -287,7 +287,7 @@ html.dark .hp-theme-preview[data-preset='hack2gate'] { background-image: url('..
 /* ChatView 的 ProjectSelector + Composer2 原样复用。Project pill 明示首页这条新会话的落点，
  * 避免 Chat/Work 与别处残留草稿让用户发送后去各项目里盲找。 */
 .hp-composer { width: 100%; }
-.hp-projectbar { display: flex; align-items: center; padding: 0 4px 6px; }
+.hp-projectbar { display: flex; align-items: center; flex-wrap: wrap-reverse; gap: 6px; padding: 0 4px 6px; }
 .hp-composer .t2c-inner { width: 100%; max-width: none; padding: 0; }
 .hp-composer .t2c-card { box-shadow: var(--card-shadow); }
 

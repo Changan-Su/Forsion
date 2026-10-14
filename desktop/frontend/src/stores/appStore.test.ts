@@ -758,6 +758,33 @@ describe('appStore.send 新会话固化模型', () => {
     expect(startRunMock.mock.calls[0]?.[1].agentConfig).not.toHaveProperty('workspaceProject')
   })
 
+  it('草稿里的额外文件夹只给本机会话:带走的从草稿清掉、建会话途中新加的留下;无根会话不带也不清', async () => {
+    useApp.setState({ desktopMode: 'managed', defaultWsDir: '/default', newChatCfg: { extraRoots: ['/a'] } })
+    createSessionMock.mockImplementation((_cfg: unknown, init: { model_id?: string }) => {
+      useApp.getState().setExecConfig({ extraRoots: ['/a', '/b'] }, null) // 建会话请求在途时又加了一个
+      return Promise.resolve(created('s-host', init?.model_id ?? null))
+    })
+
+    await useApp.getState().send('看一下参考资料', [])
+
+    // 项目还是默认项目;额外文件夹随初始配置落库,也随这一轮发给引擎(读写放行与环境说明都认它)
+    expect(createSessionMock.mock.calls[0][1]).toMatchObject({ project_path: '/default', agent_config: { execMode: 'host', cwd: '/default', extraRoots: ['/a'] } })
+    expect(startRunMock.mock.calls[0]?.[1].agentConfig.extraRoots).toEqual(['/a'])
+    expect(useApp.getState().newChatCfg.extraRoots).toEqual(['/b'])
+
+    createSessionMock.mockReset()
+    startRunMock.mockClear()
+    useApp.setState({ activeId: null, newChatWs: { key: ROOTLESS_WORKSPACE_KEY, name: '不在项目中工作', kind: 'rootless', path: null, system: true } })
+    createSessionMock.mockImplementation((_cfg: unknown, init: { model_id?: string }) => Promise.resolve(created('s-rootless', init?.model_id ?? null)))
+
+    await useApp.getState().send('随便聊聊', [])
+
+    // 那里看不到那几枚胶囊:带进去就是没人看见的授权。草稿留着,回到本机项目时还在。
+    expect(createSessionMock.mock.calls[0][1].agent_config.extraRoots).toBeUndefined()
+    expect(startRunMock.mock.calls[0]?.[1].agentConfig.extraRoots).toBeUndefined()
+    expect(useApp.getState().newChatCfg.extraRoots).toEqual(['/b'])
+  })
+
   it('本地项目会话默认把活动 Amadeus Vault 并入可写根', async () => {
     usePageStore.setState({ vaultRoot: '/vault/amadeus' })
     useApp.setState({
