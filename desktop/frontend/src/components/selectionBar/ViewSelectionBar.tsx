@@ -119,10 +119,14 @@ export function ViewSelectionBar(p: ViewSelectionBarProps): ReactElement | null 
       fromBar = !!at?.closest?.('.selbar')
       if (at && !el.contains(at) && !fromBar) clear()
     }
+    // 标记只管这一次按下到松手:松手过去就清。留到「下一次按下」的话,之后前面没有按下的松手(脚本派发的那种)会被它吞掉。
+    // 冒泡阶段挂在 document 上,排在 el 自己的 read 后面。
+    const onUp = (): void => { fromBar = false }
     let sized = false
     const ro = new ResizeObserver(() => { if (sized) clear(); else sized = true }) // 第一次回调是 observe 本身,不算
     ro.observe(el)
     el.addEventListener('mouseup', read)
+    document.addEventListener('mouseup', onUp)
     document.addEventListener('selectionchange', onSelection)
     document.addEventListener('mousedown', onDown, true)
     // capture:滚动不冒泡,里面哪一层滚了都要收(选区的位置已经变了)。
@@ -130,6 +134,7 @@ export function ViewSelectionBar(p: ViewSelectionBarProps): ReactElement | null 
     return () => {
       ro.disconnect()
       el.removeEventListener('mouseup', read)
+      document.removeEventListener('mouseup', onUp)
       document.removeEventListener('selectionchange', onSelection)
       document.removeEventListener('mousedown', onDown, true)
       el.removeEventListener('scroll', clear, { capture: true })
