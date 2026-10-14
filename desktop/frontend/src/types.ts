@@ -574,6 +574,8 @@ export interface WorkspaceDescriptor {
   channel?: ChannelKind
   /** 会话分组键别名。默认本地目录在启动期变更时，旧 project_path 仍归入当前默认组。 */
   sessionKeys?: string[]
+  /** 这个工作区在哪台电脑上(桌面作为调用方:新对话项目药丸的远端列表给的那几项)。缺省 = 本端。 */
+  unitId?: string
 }
 
 /** 「Cloud 工作区」分组键哨兵(project_path 为空的会话归此组;真实本地路径永不为此值)。 */
@@ -1336,6 +1338,10 @@ declare global {
       unitsProbeLan?(lanUrl: string): Promise<{ instanceId: string; name: string } | null>
       /** P2P 直连打开设备:成了回本机代理地址;失败 reject(UI 回落中转)。 */
       unitsP2pOpen?(id: string): Promise<{ url: string }>
+      /** 桌面作为调用方(新会话建到账号下另一台电脑上):主进程本机中转口的地址 + 本次启动的口令(electron/unitRelay.ts)。
+       *  forsion_token 不下发渲染层 —— 渲染层拿这枚口令打中转口,主进程换上云端凭据与调用方票再发往 hub 隧道。没登录 → null。
+       *  只有桌面壳有;手机走原生中继、网页版手里本来就有 forsion_token。 */
+      unitRelay?(): Promise<{ base: string; token: string; accountId: string | null } | null>
       // P1-K8 ── 手机本机作为 Unit(调用方)的身份:只在移动端 mobileShim 注入(web 路径回「仅安卓 App」)。
       // 远端引擎请求的调用方票由原生中继透明附加(window.fetch 前置),票与凭据永不进 JS;中继模式下
       // 刻意没有 unitCallerHeaders(INTEGRATION R-05,那是桥模式的接缝)。relay:'unsupported' = 原生缺席或

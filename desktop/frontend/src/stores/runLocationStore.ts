@@ -13,11 +13,11 @@
  * 没有「记住」的老用户(K8 时代焦点已落盘成某台电脑)→ 本页第一次对账时把那份焦点当作记忆迁过来(只这一次)。
  * 不是对账切的焦点(亲手选、设备被移除时回落云端、别的代码直接 setFocusTarget)一律当作「这份草稿已经选定」,对账不跟它抢。
  *
- * 选择器本身(K8 的 UnitsSheet「在哪运行」,含首次确认流程)由宿主经 installRunLocationChooser 装进来;共享渲染层只画入口。
+ * 选择器本身:手机 = K8 的 UnitsSheet「在哪运行」(含首次确认流程),由宿主经 installRunLocationChooser 装进来;
+ * 桌面 = 胶囊自带的下拉(components/RunLocationPicker.tsx),两边生效都走 setDraftLocation(loc, {explicit:true})。
  */
 import { create } from 'zustand'
-import { forsionAccountId } from '../../../shared/forsionAccount'
-import { cloudApiBase, focusRef, onFocusChange, sameRef, setFocusTarget } from '../services/engine/targets'
+import { accountStorageId, focusRef, onFocusChange, sameRef, setFocusTarget } from '../services/engine/targets'
 import { formatRunLocation, HOME, parseRunLocation, type RunLocation } from '../services/runLocation'
 import { runLocationsAvailable } from '../features/runtime'
 import { useApp } from './appStore'
@@ -46,7 +46,7 @@ export function installRunLocationChooser(open: () => void): () => void {
 
 const KEY_PREFIX = 'forsion_run_location:'
 function memoryKey(): string | null {
-  const id = forsionAccountId(cloudApiBase(), useApp.getState().cfg?.token || '')
+  const id = accountStorageId() // 桌面的 cfg.token 是本机引擎的令牌,解不出账号 —— 身份统一从目标解析层拿
   return id ? `${KEY_PREFIX}${id}` : null
 }
 

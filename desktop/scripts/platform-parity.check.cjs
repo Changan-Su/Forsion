@@ -147,6 +147,7 @@ const KNOWN_GATES = {
   'window.tangu?.onApprovalOpen': '远程会话待批的系统通知被点击 → 打开会话 — 仅 Electron:通知由桌面主进程 approvalDelivery 订阅本机引擎待批流后发出(webContents.send approval:open)。移动端没有本机引擎、P1 没有原生通知(方案 P2),手机侧走收件箱审批提醒信的「打开会话」按钮(InboxReaderView,共享)与会话列表「等你处理」点(attentionStore,经 useBootstrap 三端共用);web 无此 IPC',
   // P1-K6
   'window.tangu?.unitCallerHeaders': 'unit 目标(手机 / 网页版经 hub 打「我的电脑」)的调用方头接缝(INTEGRATION R-05),读在 services/engine/targets.ts:每个请求现取、只放行 X-Forsion-Caller、抛错即失败关闭不发请求。只有 K8 手机原生**桥模式**实现它;K8 缺省中继模式(原生层自己附头)与 web 都不实现 → 不带头(hub 眼里的账号级未识别调用方),桌面 / 设备页根本没有 unit 目标。缺席是设计,不是移动端漏了功能',
+  'window.tangu?.unitRelay': '桌面作为调用方(2026-10-14):把新会话建到「我的另一台电脑」上时,unit 目标的基址换成主进程的本机中转口(electron/unitRelay.ts),云端凭据与调用方票由主进程盖,渲染层只拿本次启动的口令。读在 services/engine/targets.ts 的 refreshDesktopRelay — **仅 Electron 主窗口**:手机 / 网页版手里本来就有 forsion_token,直接打 hub(手机另有原生中继);设备页显式不取(§4.7 b6:不得经 A 的隧道再驱动 B)。缺席是设计,不是移动端漏了功能',
   // P1-DL
   'window.tangu?.saveDownload': '工作区文件下载的落盘分流(services/nativeDownload.ts,downloadWorkspaceFile / InlineFiles / FilesPanel / RightPanel 共用)— **只有移动端 native 有**(mobileShim → 原生 DownloadsPlugin 写 MediaStore.Downloads):Capacitor WebView 没有 DownloadListener,`<a download>` 在 App 里是哑弹。desktop / web / 移动端 dev 缺席 → 照旧 `<a download>`(真浏览器 / Electron 会存)。反向的缺席:多维表导出 CSV(下面 exportCsv)在移动端仍不渲染,日后可改走本接缝',
   'window.amadeus?.exportCsv': '多维表「导出 CSV」的落盘通道(保存对话框)— 仅 Electron 桌面。web 无此 IPC → 降级成浏览器 Blob 下载;移动端(window.tangu?.mobile)WebView 里 `<a download>` 不落盘 → **整个按钮不渲染**(留个点了没反应的按钮比没有更糟)。判据单源 blocks/database/csvExport.ts 的 csvExportMode()',
