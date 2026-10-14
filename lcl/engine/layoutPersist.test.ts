@@ -8,6 +8,7 @@ import {
   listNamedLayouts,
   deleteNamedLayout,
   migrateLegacyLayout,
+  layoutIsBlank,
   LAYOUT_KEY,
   LEGACY_LAYOUT_KEY,
   type KV,
@@ -75,6 +76,17 @@ describe('layoutPersist', () => {
   it('v3 缺侧栏视为有损布局并回退默认', () => {
     const onlyMain = { ...dockviewBlob, panels: { chat: dockviewBlob.panels.chat } }
     expect(migrateLegacyLayout(onlyMain)).toBeNull()
+  })
+
+  it('layoutIsBlank:一个视图都没有才算空白,收起栈里还有东西就不算', () => {
+    const side = (stash: { type: string; params: Record<string, unknown> }[] = []) => ({ visible: false, stash })
+    const mk = (panels: Record<string, unknown>, left = side(), bottom?: ReturnType<typeof side>) =>
+      ({ version: 4 as const, dockview: { grid: {}, panels }, sidebars: { left, right: side(), ...(bottom ? { bottom } : {}) } })
+    expect(layoutIsBlank(mk({}))).toBe(true)
+    expect(layoutIsBlank(mk({}, side(), side()))).toBe(true)
+    expect(layoutIsBlank(mk({ 'chat#1': {} }))).toBe(false)
+    expect(layoutIsBlank(mk({}, side([{ type: 'workspace', params: {} }])))).toBe(false)
+    expect(layoutIsBlank(mk({}, side(), side([{ type: 'terminal', params: {} }])))).toBe(false)
   })
 
   it('clearLayout 清除', () => {

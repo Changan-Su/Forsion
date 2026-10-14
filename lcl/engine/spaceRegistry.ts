@@ -6,7 +6,7 @@ import { create } from 'zustand'
 import { IS_MINI_PANEL, IS_TRANSIENT_MINI_PANEL, IS_MAIN_WINDOW, WINDOW_SPACE_ID } from './uiMode'
 import { supportsMiniPanel } from './miniPanel'
 import type { SpaceDefinition } from './types'
-import { useWorkspace, liveLayoutOwner } from './workspaceStore'
+import { useWorkspace, liveLayoutOwner, bootLayoutFellThrough } from './workspaceStore'
 import { loadLayout, saveLayout, clearLayout, loadNamedLayout, saveNamedLayout, listNamedLayouts, deleteNamedLayout } from './layoutPersist'
 import { clearSingleColumnLayouts } from './singleColumnStore'
 import { onePageRedirect } from './pinnedViews'
@@ -78,7 +78,9 @@ export const useSpaceStore = create<SpaceState>((set, get) => ({
 
     // 1. 存出当前布局,存进**它的主人**的槽。平时主人就是 fromId;启动还原出异步 Space 的现场、而它还没就位时
     //    (内存里的活动 id 是回落 Space),屏上是那个 Space 的,按 fromId 存就写进了回落 Space 的槽。
-    if (!IS_MINI_PANEL) ws.saveNamed(spaceLayoutName(liveLayoutOwner() ?? fromId))
+    //    ⚠️ 启动还原落空、又还没有任何 Space 设过画像(纯插件产品:Space 全靠插件异步就位,插件的视图恒比 Dockview 就绪得晚)
+    //    → 屏上是空布局,谁的现场都不是。存了就写进 space:<上次退出的那个 Space>,之后再进它就是一片空白(2026-10-13 实报)。
+    if (!IS_MINI_PANEL && !(bootLayoutFellThrough() && liveLayoutOwner() === null)) ws.saveNamed(spaceLayoutName(liveLayoutOwner() ?? fromId))
     const recent = IS_MAIN_WINDOW ? bumpRecent(get().recent, toId, fromId) : get().recent
     set({ activeSpaceId: toId, recent })   // 2. 先切 id(defaultBuilder 经 getActiveSpace 取新 Space)
     try {
