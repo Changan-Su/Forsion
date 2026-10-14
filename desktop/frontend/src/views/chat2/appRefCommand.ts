@@ -1,5 +1,7 @@
 /**
- * 「引用刚才在用的窗口」命令:默认热键是同时按下左右两个 ⌘(mac)/ 两个 Ctrl(其它),设置 → 快捷键里能改、能关。
+ * 「引用刚才在用的窗口」命令:默认热键是同时按下左右两个 ⌘(mac)/ 两个 Ctrl(其它),设置 → 快捷键里能改、能关
+ * (改成双 ⇧ / 双 ⌥ 这类成对修饰键,或普通组合键都行;10-14 用户定)。挂进输入框时连那扇窗口此刻的截图一起附上(同 ChatGPT);
+ * 写进笔记的只有引用。
  * 取紧挨在 Forsion 后面的那扇窗口(没有带标题的窗口就退成那个应用),落到用户正在用的地方(10-14 用户定,同 ChatGPT):
  *   ① 光标在笔记里 → 写到光标处;② 光标在某张输入卡里 → 挂进它的「已选择」;③ 屏上有输入卡 → 挂进那张;
  *   ④ 都没有 → 开新会话(同 ⌘N;主区不放对话的 Space 里开在右侧对话面板),挂进新会话的输入卡。②③④ 之后光标都落在那张卡的输入框里,接着就能打字。
@@ -16,8 +18,9 @@ registerMessages({
   'cmd.refFrontWindow': { zh: '引用刚才在用的窗口', en: 'Reference the window you were just using' },
 })
 
-/** Composer2 在自己的输入卡上听这个事件(detail = AppRef)。 */
+/** Composer2 在自己的输入卡上听这个事件。image:那扇窗口此刻的截图,截好了再到(截不到 → null)。 */
 export const APPREF_EVENT = 'forsion:appref-add'
+export interface AppRefDelivery { ref: AppRef; image?: Promise<{ mimeType: string; data: string } | null> }
 export const APPREF_TARGET_ATTR = 'data-appref-target'
 
 /** given = 主进程送来的那扇窗口(全局快捷键:这时最前面已经是 Forsion 自己,不能再去问「最前面是谁」)。
@@ -31,8 +34,10 @@ export async function captureFrontWindow(given?: AppRef, booting = false): Promi
     document.execCommand('insertText', false, appRefToken(ref) + ' ')
     return
   }
+  // 截图和找落点一起跑:窗口就在那儿,截得越早越是按下那一刻的样子
+  const image = ref.kind === 'window' ? window.tangu?.appRefs?.snapshot?.(ref).catch(() => null) : undefined
   const target = cards().find((el) => el.contains(active)) ?? await cardOrNewSession(booting)
-  target?.dispatchEvent(new CustomEvent(APPREF_EVENT, { detail: ref }))
+  target?.dispatchEvent(new CustomEvent<AppRefDelivery>(APPREF_EVENT, { detail: { ref, image } }))
 }
 
 const cards = (): HTMLElement[] => [...document.querySelectorAll<HTMLElement>(`[${APPREF_TARGET_ATTR}]`)]
@@ -70,8 +75,9 @@ export function ensureAppRefCommand(): void {
   api.onHotkey?.((raw) => { const ref = normalizeAppRef(raw); if (ref) void captureFrontWindow(ref) })
   // 主窗关着时按下的那一条(主进程替它存着):这个页面就是被它打开的
   void api.takePendingHotkey?.().then((raw) => { const ref = normalizeAppRef(raw); if (ref) void captureFrontWindow(ref, true) }, () => {})
-  // 全局监听只在快捷键还是「双 ⌘」时要:用户在设置里改成别的键 / 解绑了,就让主进程断开那条订阅
-  const sync = (): void => api.setGlobalHotkey?.(effectiveHotkey(cmd) === MOD_PAIR)
+  // 生效的热键交给主进程:成对修饰键由助手监听,普通组合键注册成全局快捷键,解绑了就都断开。store 里别的字段变了不重发
+  let sent: string | null = null
+  const sync = (): void => { const hk = effectiveHotkey(cmd); if (hk !== sent) { sent = hk; api.setGlobalHotkey?.(hk) } }
   sync()
   useShortcuts.subscribe(sync)
 }

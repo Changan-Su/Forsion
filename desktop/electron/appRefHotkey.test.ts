@@ -3,7 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { afterEach, describe, expect, it } from 'vitest'
-import { createAppRefHotkey, frontToAppRef } from './appRefHotkey'
+import { createAppRefHotkey, frontToAppRef, hotkeyToAccelerator, HOTKEY_GESTURES } from './appRefHotkey'
 
 // 真 unix socket + 一个按行回话的假助手:线协议就是 electron/appRefHotkey.ts 顶注那三行。
 const dir = mkdtempSync(path.join(os.tmpdir(), 'apprefhk-'))
@@ -38,6 +38,20 @@ describe('助手给的最前面的窗口 → 引用', () => {
   })
 })
 
+describe('快捷键改成别的之后怎么全局生效', () => {
+  it('成对修饰键 → 助手的手势(⇧⇧ / ⌥⌥ 要新一版助手);普通组合键 → Electron 全局快捷键写法', () => {
+    expect(Object.fromEntries(Object.entries(HOTKEY_GESTURES).map(([k, v]) => [k, v.gesture]))).toEqual({ 'mod+mod': 'modPair', 'shift+shift': 'shiftPair', 'alt+alt': 'altPair' })
+    expect(HOTKEY_GESTURES['shift+shift'].protocol).toBeGreaterThan(HOTKEY_GESTURES['mod+mod'].protocol)
+    expect(hotkeyToAccelerator('mod+shift+k')).toBe('CommandOrControl+Shift+K')
+    expect(hotkeyToAccelerator('alt+space')).toBe('Alt+Space')
+    expect(hotkeyToAccelerator('mod+alt+arrowup')).toBe('CommandOrControl+Alt+Up')
+    expect(hotkeyToAccelerator('mod+f5')).toBe('CommandOrControl+F5')
+  })
+  it('全局吃掉打字的不注册:光一个键、只带 Shift、成对修饰键、认不出的键', () => {
+    for (const hk of ['k', 'shift+k', 'shift+shift', 'mod+mod', '', 'mod+', 'mod+unknownkey', 'ctrl+k']) expect(hotkeyToAccelerator(hk)).toBeNull()
+  })
+})
+
 describe('Windows:连不上就拉起助手(那边没有权限框)', () => {
   it('拉起一次后连上;拉了还是连不上,试几次就不再试(不会每半分钟起一个进程)', async () => {
     const sock = path.join(dir, 'win.sock')
@@ -50,28 +64,28 @@ describe('Windows:连不上就拉起助手(那边没有权限框)', () => {
       await new Promise<void>((r) => server.listen(sock, () => r()))
     }
     const hk = createAppRefHotkey({ target: () => ({ path: sock, launch }), ownPid: 1, onFire: () => {}, retryMs: 60_000 })
-    hk.setWanted(true)
+    hk.setGesture('modPair')
     await until(() => requests.length === 1)
     expect(launched).toBe(1)
-    hk.setWanted(false)
+    hk.setGesture(null)
 
     // 还没应答就被关掉又打开:旧连接晚到的 close 不许去拉起助手、也不许动新连接的状态
     const mute = await helper(() => {})
     let stray = 0
     const flip = createAppRefHotkey({ target: () => ({ path: mute.sock, launch: async () => { stray++ } }), ownPid: 1, onFire: () => {}, retryMs: 60_000 })
-    flip.setWanted(true)
+    flip.setGesture('modPair')
     await until(() => mute.requests.length === 1)
-    flip.setWanted(false)
-    flip.setWanted(true)
+    flip.setGesture(null)
+    flip.setGesture('modPair')
     await until(() => mute.requests.length === 2)
     await new Promise((r) => setTimeout(r, 50))
     expect(stray).toBe(0)
     expect(flip.state().connected).toBe(true)
-    flip.setWanted(false)
+    flip.setGesture(null)
 
     let tries = 0
     const stuck = createAppRefHotkey({ target: () => ({ path: path.join(dir, 'never.sock'), launch: async () => { tries++ } }), ownPid: 1, onFire: () => {}, retryMs: 10 })
-    stuck.setWanted(true)
+    stuck.setGesture('modPair')
     await until(() => stuck.state().dead)
     expect(tries).toBe(3)
   }, 20_000)
@@ -88,7 +102,7 @@ describe('全局双 ⌘ 的订阅', () => {
     const h = await helper((msg, s) => s.write(`${JSON.stringify({ id: msg.id, ok: true, result: { subscribed: true } })}\n`))
     const fired: unknown[] = []
     const hk = createAppRefHotkey({ target: () => ({ path: h.sock }), ownPid: 4242, onFire: (f) => fired.push(f) })
-    hk.setWanted(true)
+    hk.setGesture('modPair')
     await until(() => h.requests.length === 1)
     expect(h.requests[0]).toMatchObject({ cmd: 'hotkeySubscribe', gesture: 'modPair', excludePids: [4242] })
     // 一个包里两行、再加半行:按行拆,别的事件 / 别的手势不认
@@ -97,7 +111,7 @@ describe('全局双 ⌘ 的订阅', () => {
     h.sockets[0].write(`${ev({ front: FRONT })}${JSON.stringify({ ev: { kind: 'system', state: 'dropped', count: 2 } })}\n${ev({ gesture: 'other', front: FRONT })}${JSON.stringify({ event: 'hotkey', gesture: 'modPair', front: FRONT })}\n${ev({ front: null })}{"ev":`)
     await until(() => fired.length === 2)
     expect(fired).toEqual([FRONT, null]) // 助手判断不出最前面是谁时给 null,由调用方自己再问
-    hk.setWanted(false)
+    hk.setGesture(null)
     await until(() => !hk.state().connected && h.sockets[0].destroyed)
   })
 
@@ -106,7 +120,7 @@ describe('全局双 ⌘ 的订阅', () => {
     const h = await helper((msg, s) => s.write(`${JSON.stringify(fresh ? { id: msg.id, ok: true, result: { subscribed: true } } : { id: msg.id, ok: false, error: { code: 'unknown_command', message: 'hotkeySubscribe' } })}\n`))
     let told = 0
     const hk = createAppRefHotkey({ target: () => ({ path: h.sock }), ownPid: 1, onFire: () => {}, onOutdated: () => { told++ }, retryMs: 20 })
-    hk.setWanted(true)
+    hk.setGesture('modPair')
     await until(() => hk.state().outdated && !hk.state().connected)
     expect(hk.state().dead).toBe(false)
     await new Promise((r) => setTimeout(r, 80)) // 旧版期间不按短间隔追着问(那是 5 分钟一次)
@@ -118,13 +132,37 @@ describe('全局双 ⌘ 的订阅', () => {
     hk.poke()
     await until(() => hk.state().connected && !hk.state().outdated)
     expect(h.requests).toHaveLength(3)
-    hk.setWanted(false)
+    hk.setGesture(null)
+  })
+
+  it('用户把快捷键改成双 ⇧:断开重订 shiftPair,只认这个手势;助手不认这个手势时把手势名报给主进程', async () => {
+    const known = new Set(['modPair'])
+    const h = await helper((msg, s) => s.write(`${JSON.stringify(known.has(String(msg.gesture)) ? { id: msg.id, ok: true, result: { subscribed: true } } : { id: msg.id, ok: false, error: { code: 'unknown_gesture', message: 'x' } })}\n`))
+    const fired: unknown[] = []
+    const told: string[] = []
+    const hk = createAppRefHotkey({ target: () => ({ path: h.sock }), ownPid: 1, onFire: (f) => fired.push(f), onOutdated: (g) => told.push(g), retryMs: 20 })
+    hk.setGesture('modPair')
+    await until(() => hk.state().connected && h.requests.length === 1)
+    hk.setGesture('shiftPair') // 0.7.0 的助手只认 modPair
+    await until(() => h.requests.length === 2 && hk.state().outdated)
+    expect(h.requests[1]).toMatchObject({ gesture: 'shiftPair' })
+    expect(told).toEqual(['shiftPair'])
+    known.add('shiftPair') // 助手换成了新版
+    hk.poke()
+    await until(() => hk.state().connected && !hk.state().outdated)
+    const live = h.sockets[h.sockets.length - 1]
+    live.write(`${JSON.stringify({ ev: { t: 1, kind: 'hotkey', gesture: 'modPair', front: FRONT } })}\n${JSON.stringify({ ev: { t: 2, kind: 'hotkey', gesture: 'shiftPair', front: null } })}\n`)
+    await until(() => fired.length === 1)
+    expect(fired).toEqual([null]) // 只认订阅的那个手势
+    hk.setGesture(null)
+    await until(() => !hk.state().connected)
+    expect(hk.state().gesture).toBe(null)
   })
 
   it('助手没在跑:不报错,隔一阵再试;助手起来后 poke 一下立刻连上;连接断了会重连', async () => {
     const sock = path.join(dir, 'late.sock')
     const hk = createAppRefHotkey({ target: () => ({ path: sock }), ownPid: 1, onFire: () => {}, retryMs: 60_000 })
-    hk.setWanted(true)
+    hk.setGesture('modPair')
     await until(() => hk.state().attempts === 1 && !hk.state().connected) // 第一次连过了、没连上
     const requests: unknown[] = []
     const sockets: net.Socket[] = []
@@ -133,14 +171,14 @@ describe('全局双 ⌘ 的订阅', () => {
     await new Promise<void>((r) => server.listen(sock, () => r()))
     hk.poke()
     await until(() => requests.length === 1)
-    hk.setWanted(false)
+    hk.setGesture(null)
     // 重连:换一个重试间隔短的实例,助手主动断开后它自己连回来
     const again = createAppRefHotkey({ target: () => ({ path: sock }), ownPid: 1, onFire: () => {}, retryMs: 20 })
-    again.setWanted(true)
+    again.setGesture('modPair')
     await until(() => requests.length === 2)
     sockets[sockets.length - 1].destroy()
     await until(() => requests.length === 3)
-    again.setWanted(false)
+    again.setGesture(null)
   })
 
   it('没说要(用户改了键 / 解绑)就不连;这个平台没有助手也不连', async () => {
@@ -148,7 +186,7 @@ describe('全局双 ⌘ 的订阅', () => {
     const off = createAppRefHotkey({ target: () => ({ path: h.sock }), ownPid: 1, onFire: () => {} })
     off.poke()
     const none = createAppRefHotkey({ target: () => null, ownPid: 1, onFire: () => {} })
-    none.setWanted(true)
+    none.setGesture('modPair')
     await new Promise((r) => setTimeout(r, 60))
     expect(h.requests).toHaveLength(0)
     expect(none.state().connected).toBe(false)

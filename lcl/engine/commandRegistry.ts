@@ -4,7 +4,7 @@
  */
 import { create } from 'zustand'
 import type { Command } from './types'
-import { useShortcuts, effectiveHotkey, formatHotkey, isMacPlatform, isModPair, MOD_PAIR } from './shortcutStore'
+import { useShortcuts, effectiveHotkey, formatHotkey, isMacPlatform, isPairHotkey, pairHotkeyOf } from './shortcutStore'
 
 interface CommandState {
   commands: Command[]
@@ -55,7 +55,7 @@ const KEY_ALIAS: Record<string, string> = { '{': '[', '}': ']' }
 
 /** 把 'mod+shift+k' 规范化为与事件比较的 token。 */
 function hotkeyMatches(hotkey: string, e: KeyboardEvent): boolean {
-  if (hotkey === MOD_PAIR) return isModPair(e) // 「左右修饰键同按」没有主键,单独认
+  if (isPairHotkey(hotkey)) return pairHotkeyOf(e) === hotkey // 「左右修饰键同按」没有主键,单独认(走通用那条 'shift+shift' 会对上每一次单按 Shift)
   const parts = hotkey.toLowerCase().split('+').map((p) => p.trim())
   const key = parts[parts.length - 1]
   const wantMod = parts.includes('mod')

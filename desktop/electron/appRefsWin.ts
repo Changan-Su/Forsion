@@ -957,5 +957,11 @@ export function createWinAppRefs(deps: WinAppRefDeps) {
     return Object.fromEntries(want.map((orig) => { const id = canon.get(orig); return [orig, (id && iconCache.get(id)) || null] }))
   }
 
-  return { list, status, open, frontmost, remember, icons }
+  /** 同 macOS 半身:这次运行里记下的那扇窗口(句柄),截图只认这种。 */
+  const known = (ref: AppRef): { pid: number; windowId: number } | null => {
+    const canon = canonWinId(ref.id)
+    return canon ? seen.get(appRefKey({ ...ref, id: canon })) ?? null : null
+  }
+
+  return { list, status, open, frontmost, remember, icons, known }
 }

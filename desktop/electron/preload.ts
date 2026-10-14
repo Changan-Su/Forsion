@@ -424,8 +424,10 @@ const api = {
     open: (ref: import('../shared/appRefs').AppRef): Promise<{ ok: boolean; landed?: 'window' | 'app'; error?: string }> => ipcRenderer.invoke('appRefs:open', ref),
     frontmost: (): Promise<import('../shared/appRefs').AppRef | null> => ipcRenderer.invoke('appRefs:frontmost'),
     icons: (ids: string[]): Promise<Record<string, string | null>> => ipcRenderer.invoke('appRefs:icons', ids),
-    /** 要不要全局的「双 ⌘」(别的应用在前台时也生效;由本机助手监听)。快捷键被改成别的键 / 解绑时传 false。 */
-    setGlobalHotkey: (on: boolean): void => ipcRenderer.send('appRefs:globalHotkey', on === true),
+    /** 这条命令此刻生效的热键('mod+mod' / 'shift+shift' / 'mod+shift+k'…;'' = 解绑):主进程据此订阅助手的手势或注册全局快捷键。 */
+    setGlobalHotkey: (hotkey: string): void => ipcRenderer.send('appRefs:globalHotkey', typeof hotkey === 'string' ? hotkey : ''),
+    /** 按快捷键时那扇窗口的截图(JPEG base64);截不到 → null。只认这次运行里经手过的窗口。 */
+    snapshot: (ref: import('../shared/appRefs').AppRef): Promise<{ mimeType: string; data: string } | null> => ipcRenderer.invoke('appRefs:snapshot', ref),
     /** 主窗关着时按下的那一条(主进程替它存着,30 秒内有效);取一次就清。 */
     takePendingHotkey: (): Promise<import('../shared/appRefs').AppRef | null> => ipcRenderer.invoke('appRefs:takePendingHotkey'),
     /** 在别的应用里按了全局快捷键:主进程把那一刻最前面的窗口送过来。返回取消函数。 */

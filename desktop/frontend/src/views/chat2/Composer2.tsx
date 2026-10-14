@@ -47,7 +47,7 @@ import { RefChipView } from './RefChipView'
 import { catOf, moveRefCat, pickerMatches, refCats, type RefCand, type RefCat } from './refPicker'
 import { expandRuns, findRuns, freeRunName, inlineRun, plainRuns, runTouching, trimDraftEnd } from './inlineRefs'
 import { InlineRefMirror } from './InlineRefMirror'
-import { APPREF_EVENT, APPREF_TARGET_ATTR, ensureAppRefCommand } from './appRefCommand'
+import { APPREF_EVENT, APPREF_TARGET_ATTR, ensureAppRefCommand, type AppRefDelivery } from './appRefCommand'
 import { appRefToken, type AppRef, type AppRefList } from '../../../../shared/appRefs'
 import { AppRefIcon } from '../../components/appRefs'
 import { useCapsuleSlide } from '../../components/capsuleTabs'
@@ -1561,15 +1561,21 @@ export const Composer2: React.FC<{
     if (nextRefs.length) addRefChips(nextRefs)
   }
 
-  // 「引用刚才在用的窗口」(默认左右 ⌘ / Ctrl 同按,见 appRefCommand.ts):命令找到可见的那张输入卡,把引用送到这里挂进「已选择」。
+  // 「引用刚才在用的窗口」(默认左右 ⌘ / Ctrl 同按,可改,见 appRefCommand.ts):命令找到可见的那张输入卡,把引用送到这里挂进「已选择」,截图随后当图片附件。
   useEffect(() => {
     const card = cardRef.current
     if (!card || !window.tangu?.appRefs) return
     ensureAppRefCommand()
     card.setAttribute(APPREF_TARGET_ATTR, '')
     const onRef = (e: Event): void => {
-      addRefChips([appRefChipOf((e as CustomEvent<AppRef>).detail)])
+      const { ref, image } = (e as CustomEvent<AppRefDelivery>).detail
+      addRefChips([appRefChipOf(ref)])
       requestAnimationFrame(() => taRef.current?.focus())
+      // 那扇窗口的截图后到:当图片附件挂上(同 ChatGPT);截不到 / 太大就只留引用
+      void image?.then((shot) => {
+        const size = shot ? Math.floor(shot.data.length * 3 / 4) : 0
+        if (shot && size <= MAX_ATTACH_BYTES) setAttachments((prev) => [...prev, { name: `${ref.name.replace(/[\\/:*?"<>|]+/g, ' ').trim().slice(0, 80) || 'window'}.jpg`, mimeType: shot.mimeType, data: shot.data, size }])
+      })
     }
     card.addEventListener(APPREF_EVENT, onRef)
     return () => { card.removeEventListener(APPREF_EVENT, onRef); card.removeAttribute(APPREF_TARGET_ATTR) }

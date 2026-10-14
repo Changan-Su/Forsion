@@ -31,7 +31,7 @@ export { registerView, unregisterView, getView, allViews, subscribeViews } from 
 export { useWorkspace, activeMainPanel, scheduleWorkspaceSave, bootLayoutFellThrough, namedLayoutRestorable, liveLayoutOwner, savedLayoutRestorable } from './workspaceStore'
 export type { MainTab, SideTab } from './workspaceStore'
 export { useCommandStore, addCommand, removeCommand, openCommandPalette, openCommandPicker, installHotkeys, commandHotkeyText } from './commandRegistry'
-export { useShortcuts, effectiveHotkey, eventToHotkey, formatHotkey, isMacPlatform, isModPair, trackModPair, MOD_PAIR } from './shortcutStore'
+export { useShortcuts, effectiveHotkey, eventToHotkey, formatHotkey, isMacPlatform, isPairHotkey, pairHotkeyOf, trackPair, MOD_PAIR } from './shortcutStore'
 export { useRibbonStore, addRibbonIcon, removeRibbonIcon, setRibbonActions, RIBBON_RECENT_MAX } from './ribbonRegistry'
 /** 拖拽重排的公共语义(悬停谁就顶掉谁);侧栏等 app 层的可排序列表复用同一个,别再各写一份 splice。 */
 export { moveTo, rankIds } from './ribbonRegistry'

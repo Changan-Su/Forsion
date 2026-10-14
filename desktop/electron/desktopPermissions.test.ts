@@ -230,21 +230,27 @@ describe('helper update for the global ⌘⌘ hotkey', () => {
 
   it('a bundle that cannot speak the hotkey either is never offered: no dialog, nothing restarted', async () => {
     helperAt(14, '0.6.3')
-    expect(await hotkeyService().updateHelperForHotkey('zh')).toBe(false)
+    expect(await hotkeyService().updateHelperForHotkey('zh', '0.7.0')).toBe(false)
     expect(m.confirm).not.toHaveBeenCalled()
     expect(m.ask.mock.calls.map((call) => call[1].cmd)).not.toContain('shutdown')
+  })
+
+  it('the bar is per gesture: a 0.7.0 bundle is enough for ⌘⌘ but not for ⇧⇧ (0.8.0), so ⇧⇧ asks nothing', async () => {
+    helperAt(14, '0.7.0')
+    expect(await hotkeyService().updateHelperForHotkey('zh', '0.8.0')).toBe(false)
+    expect(m.confirm).not.toHaveBeenCalled()
   })
 
   it('an unreadable bundle version is treated the same (no dialog)', async () => {
     helperAt(14, '0.7.0')
     m.readFile.mockRejectedValue(Object.assign(new Error('missing'), { code: 'ENOENT' }))
-    expect(await hotkeyService().updateHelperForHotkey('en')).toBe(false)
+    expect(await hotkeyService().updateHelperForHotkey('en', '0.7.0')).toBe(false)
     expect(m.confirm).not.toHaveBeenCalled()
   })
 
   it('a newer bundle asks once with the hotkey wording; "Later" leaves the old helper running', async () => {
     helperAt(14, '0.7.0')
-    expect(await hotkeyService().updateHelperForHotkey('zh')).toBe(false)
+    expect(await hotkeyService().updateHelperForHotkey('zh', '0.7.0')).toBe(false)
     expect(m.confirm).toHaveBeenCalledOnce()
     expect(m.confirm.mock.calls[0][0]).toMatchObject({ message: '更新 Computer Use 助手', buttons: ['稍后', '更新并重启助手'] })
     expect(m.ask.mock.calls.map((call) => call[1].cmd)).not.toContain('shutdown')
@@ -253,7 +259,7 @@ describe('helper update for the global ⌘⌘ hotkey', () => {
   it('consenting replaces the running helper and relaunches it', async () => {
     helperAt(14, '0.7.0')
     m.confirm.mockResolvedValue({ response: 1 })
-    expect(await hotkeyService().updateHelperForHotkey('en')).toBe(true)
+    expect(await hotkeyService().updateHelperForHotkey('en', '0.7.0')).toBe(true)
     expect(m.confirm.mock.calls[0][0]).toMatchObject({ message: 'Update the Computer Use helper' })
     expect(m.ask.mock.calls.map((call) => call[1].cmd)).toContain('shutdown')
     expect(m.launch).toHaveBeenCalledOnce()
@@ -264,10 +270,10 @@ describe('helper update for the global ⌘⌘ hotkey', () => {
     let release!: (v: string) => void
     m.readFile.mockReturnValue(new Promise<string>((r) => { release = r }))
     const s = hotkeyService()
-    const update = s.updateHelperForHotkey('zh')
+    const update = s.updateHelperForHotkey('zh', '0.7.0')
     expect(s.helperBusy()).toBe(true)
     await expect(s.request('microphone')).rejects.toThrow(/already in progress/)
-    expect(await s.updateHelperForHotkey('zh')).toBe('busy') // busy is not "asked": main retries once idle
+    expect(await s.updateHelperForHotkey('zh', '0.7.0')).toBe('busy') // busy is not "asked": main retries once idle
     release(JSON.stringify({ version: '0.6.3' }))
     expect(await update).toBe(false)
     expect(s.helperBusy()).toBe(false)
@@ -277,7 +283,7 @@ describe('helper update for the global ⌘⌘ hotkey', () => {
   it('never launches a helper that is not running (macOS: no permission prompts for a hotkey)', async () => {
     m.ask.mockRejectedValue(Object.assign(new Error('gone'), { code: 'ENOENT' }))
     m.readFile.mockResolvedValue(JSON.stringify({ version: '0.7.0' }))
-    expect(await hotkeyService().updateHelperForHotkey('zh')).toBe(false)
+    expect(await hotkeyService().updateHelperForHotkey('zh', '0.7.0')).toBe(false)
     expect(m.confirm).not.toHaveBeenCalled()
     expect(m.launch).not.toHaveBeenCalled()
   })
