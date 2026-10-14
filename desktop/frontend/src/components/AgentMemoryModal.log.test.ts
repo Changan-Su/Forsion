@@ -35,6 +35,7 @@ it('log saves include the loaded version; a conflict leaves the editable draft a
   await act(async () => buttons().find((b) => b.getAttribute('aria-label') === 'agentLog.editDay')!.click())
   const textarea = host.querySelector('textarea')!
   expect(textarea.value).toBe('# 2026-09-08\n\n### 09:30\n@a1b2c3d4 original log\n')
+  expect(host.textContent).toContain('agentLog.rawHint') // 原文里突然多出来的 # 和 @ 要有一句说明(Codex 走查 10-14)
   // 编辑期间不许换天(草稿对着的是开始编辑时的版本)
   expect([...host.querySelectorAll<HTMLButtonElement>('.agentmem-log-head')].every((b) => b.disabled)).toBe(true)
   await act(async () => {

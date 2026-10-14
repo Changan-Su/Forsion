@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react'
-import { ChevronDown, ChevronRight, Loader2, Pencil, RefreshCw } from 'lucide-react'
+import { Check, ChevronDown, ChevronRight, Loader2, Pencil, RefreshCw } from 'lucide-react'
 import { registerMessages, useI18n } from '../i18n'
 import { getAgentLogSnapshot, listAgentLogDates, putAgentLog } from '../services/backendService'
 import { connectionKey, homeTarget } from '../services/engine/targets'
@@ -12,12 +12,13 @@ registerMessages({
   'agentLog.older': { zh: '更早的 {count} 天', en: '{count} earlier days' },
   'agentLog.today': { zh: '今天', en: 'Today' },
   'agentLog.editDay': { zh: '编辑 {date} 的日志', en: 'Edit the log for {date}' },
+  'agentLog.rawHint': { zh: '这是这一天的原文。每条以「### 09:30」这样的时间行开头；「@」后面那一串是写入设备的标记，不用改。', en: 'This is the raw file for the day. Each entry starts with a time line like "### 09:30"; the code after "@" marks the device that wrote it and can stay as it is.' },
   'agentLog.error': { zh: '日志操作失败', en: 'The log could not be updated' },
   'agentLog.changed': { zh: '这一天的日志已有新版本，这次没有保存。', en: 'This day’s log has a newer version, so nothing was saved.' },
   'agentLog.discardAndReload': { zh: '放弃草稿并载入当前版本', en: 'Discard draft and load the current version' },
 })
 
-/** 最近几天直接列出,更早的收进一个折叠块:用了几个月的 Agent 有上百天,全摊开就是一墙日期。 */
+/** 最近几天直接列出,更早的收在一行「更早的 N 天」后面(样子和日期行一样):用了几个月的 Agent 有上百天,全摊开就是一墙日期。 */
 const RECENT_DAYS = 7
 const todayLocal = (): string => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}` }
 
@@ -48,6 +49,7 @@ const AgentLogPanelBody: React.FC<Props> = ({ slug, active = true }) => {
   const [error, setError] = useState('')
   const [conflict, setConflict] = useState(false)
   const [reload, setReload] = useState(0)
+  const [older, setOlder] = useState(false)
   const request = useRef(0)
   const writeLock = useRef(false)
   const first = useRef(true)
@@ -100,19 +102,24 @@ const AgentLogPanelBody: React.FC<Props> = ({ slug, active = true }) => {
 
   if (dates === null) return <p className="profile-empty" data-testid="agent-log-panel"><Loader2 size={14} className="spin" /></p>
   const today = todayLocal()
+  const olderDays = dates.slice(RECENT_DAYS)
+  // 开着的那一天落在「更早」里时这一组一定展开(重读后日期后移也一样),否则它连同草稿会从界面上消失
+  const showOlder = older || (open !== null && olderDays.includes(open))
   const row = (date: string): React.ReactNode => {
     const isOpen = open === date
     return <div key={date} className="agentmem-log" data-log-date={date}>
       <div className="agentmem-log-row">
         <button type="button" className="agentmem-log-head" aria-expanded={isOpen} disabled={editing} onClick={() => setOpen(isOpen ? null : date)}>
           {isOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}<span>{date}</span>{date === today && <small>{t('agentLog.today')}</small>}
+          {/* 反馈跟着眼睛走:存完人在看左边刚加的那一条,不在行尾(Codex 走查 10-14) */}
+          {isOpen && saved && <small className="agentmem-log-saved"><Check size={11} />{t('settings.agents.memSaved')}</small>}
         </button>
-        {isOpen && saved && <small className="agentmem-log-saved">{t('settings.agents.memSaved')}</small>}
         {isOpen && day && !editing && <button type="button" className="harness-undo" title={t('common.edit')} aria-label={t('agentLog.editDay', { date })} onClick={() => { setDraft(day.content); setSaved(false) }}><Pencil size={13} /></button>}
       </div>
       {isOpen && (editing
         ? <div className="field agentmem-log-edit">
           <textarea aria-label={t('agentLog.editDay', { date })} rows={12} value={draft} disabled={busy} onChange={(e) => setDraft(e.target.value)} />
+          <p className="hint">{t('agentLog.rawHint')}</p>
           {conflict && <p role="alert" className="agentmem-log-error">{t('agentLog.changed')} <button type="button" className="profile-text-action" onClick={() => { setDraft(null); setReload((n) => n + 1) }}>{t('agentLog.discardAndReload')}</button></p>}
           <div className="agentmem-log-actions">
             <button type="button" className="btn primary sm" disabled={busy} onClick={() => void save()}>{busy ? <Loader2 size={13} className="spin" /> : null} {t('common.save')}</button>
@@ -130,7 +137,12 @@ const AgentLogPanelBody: React.FC<Props> = ({ slug, active = true }) => {
     {error && <p role="alert" className="agentmem-log-error">{error}</p>}
     {!dates.length ? (!error && <p className="profile-empty">{t('settings.agents.noLog')}</p>) : <>
       {dates.slice(0, RECENT_DAYS).map(row)}
-      {dates.length > RECENT_DAYS && <details className="profile-disclosure"><summary>{t('agentLog.older', { count: dates.length - RECENT_DAYS })}</summary>{dates.slice(RECENT_DAYS).map(row)}</details>}
+      {olderDays.length > 0 && <div className="agentmem-log agentmem-log-more"><div className="agentmem-log-row">
+        <button type="button" className="agentmem-log-head" aria-expanded={showOlder} disabled={editing} onClick={() => { if (showOlder && open && olderDays.includes(open)) setOpen(null); setOlder(!showOlder) }}>
+          {showOlder ? <ChevronDown size={12} /> : <ChevronRight size={12} />}<span>{t('agentLog.older', { count: olderDays.length })}</span>
+        </button>
+      </div></div>}
+      {showOlder && olderDays.map(row)}
     </>}
   </div>
 }

@@ -205,11 +205,21 @@ async function main() {
     await bodies.first().waitFor()
     const today = logDays[0]
     const todayFile = path.join(logDir, `${today}.md`)
-    const older = log.locator(':scope > details')
+    const more = log.locator(':scope > .agentmem-log-more .agentmem-log-head')
+    const dayRows = () => log.locator(':scope > .agentmem-log[data-log-date]').evaluateAll((rows) => rows.map((row) => row.dataset.logDate))
     check('Log lists the seven most recent days newest first and folds the older ones',
-      (await log.locator(':scope > .agentmem-log').evaluateAll((rows) => rows.map((row) => row.dataset.logDate))).join() === logDays.slice(0, 7).join()
+      (await dayRows()).join() === logDays.slice(0, 7).join()
       && (await log.locator('.harness-summary').innerText()).includes('9 天有记录')
-      && (await older.locator(':scope > summary').innerText()).trim() === '更早的 2 天' && !(await older.evaluate((el) => el.open)))
+      && (await more.innerText()).trim() === '更早的 2 天' && await more.getAttribute('aria-expanded') === 'false')
+    // 「更早的 N 天」是一行和日期行一样的开关(不是另一种带底色的块):点开多出两天、能读;收起时把里面开着的那天一并合上
+    await more.click()
+    check('Older days unfold in place as ordinary day rows', (await dayRows()).join() === logDays.join())
+    await log.locator(`[data-log-date="${logDays[8]}"] .agentmem-log-head`).click()
+    await log.getByText('第 9 天:整理了季度复盘的提纲。', { exact: false }).waitFor()
+    await more.click()
+    check('Folding the older days closes the day opened inside them', (await dayRows()).length === 7 && await bodies.count() === 0)
+    await log.locator(`[data-log-date="${today}"] .agentmem-log-head`).click()
+    await bodies.first().waitFor()
     const reading = await bodies.first().innerText()
     check('Only the newest day is open and it is marked as today', await bodies.count() === 1 && (await log.locator(`[data-log-date="${today}"] .agentmem-log-head`).innerText()).includes('今天'))
     check('The reading view drops the file title and the device marker', reading.includes('第 1 天:整理了季度复盘的提纲。') && reading.includes('09:30') && !reading.includes('@a1b2c3d4') && !reading.includes(today))
@@ -218,7 +228,11 @@ async function main() {
     await win.screenshot({ path: path.join(SHOTS, 'log-growth-window.png') })
     // 人工 / Codex 走查用:STAGE_MS=<毫秒> 时在这里停住(中文、亮色、Alpha 的「成长 › 日志」开着,数据在隔离目录里),到点直接收场,后面的断言不跑。
     // 要让窗口能被点到前台,同时带 TANGU_HARNESS_QUIET=0。
-    if (process.env.STAGE_MS) { console.log(`STAGE ${home}`); await win.waitForTimeout(Number(process.env.STAGE_MS)); return }
+    if (process.env.STAGE_MS) {
+      // 前面的断言点开过 Dream、版本记录:交出去之前合上,别让走查的人把展开当成默认状态(10-14 走查因此判过一条不通过)
+      await win.evaluate(() => document.querySelectorAll('details[open]').forEach((d) => { d.open = false }))
+      console.log(`STAGE ${home}`); await win.waitForTimeout(Number(process.env.STAGE_MS)); return
+    }
     await log.locator(`[data-log-date="${logDays[1]}"] .agentmem-log-head`).click()
     await log.getByText('第 2 天:整理了季度复盘的提纲。', { exact: false }).waitFor()
     check('Opening another day closes the previous one', await bodies.count() === 1)
@@ -228,6 +242,7 @@ async function main() {
     const editToday = () => log.getByRole('button', { name: `编辑 ${today} 的日志`, exact: true }).click()
     await editToday()
     check('Editing shows the file as stored', await logEditor.inputValue() === fs.readFileSync(todayFile, 'utf8'))
+    check('The raw editor says what the markers are', (await log.locator('.agentmem-log-edit .hint').innerText()).includes('这样的时间行开头'))
     check('Days cannot be switched while a draft is open', await log.locator('.agentmem-log-head:not(:disabled)').count() === 0)
     const logDraft = `${await logEditor.inputValue()}\n### 15:00\n@a1b2c3d4 界面里补的一条。\n`
     await logEditor.fill(logDraft)
@@ -250,6 +265,8 @@ async function main() {
     await log.getByRole('button', { name: '保存', exact: true }).click()
     await wait(() => fs.readFileSync(todayFile, 'utf8').includes('界面里补的一条'), 'log saved')
     await log.getByText('已保存', { exact: true }).waitFor()
+    check('The saved mark sits next to the date, not at the far end of the row', await log.locator(`[data-log-date="${today}"] .agentmem-log-head .agentmem-log-saved`).count() === 1)
+    await log.screenshot({ path: path.join(SHOTS, 'log-saved.png') })
     check('A log edit persists through the real route with the version it loaded', fs.readFileSync(todayFile, 'utf8').includes('另一端并发追加') && await logEditor.count() === 0)
     // 弹窗里的「日志」标签用的是同一个面板:从「记忆」段底部的入口进去,读到的应是刚存下的那一份
     await segments.nth(0).click()

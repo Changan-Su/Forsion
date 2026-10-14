@@ -631,7 +631,8 @@ a:hover { color: var(--accent-ink); }
 .agentmem-log-head > small { color: var(--accent-ink); font-size: var(--ui-font-caption, 11px); }
 .agentmem-log-head:disabled { cursor: default; opacity: .6; }
 .agentmem-log-head:disabled:hover { background: none; color: var(--text-muted); }
-.agentmem-log-saved { flex-shrink: 0; color: var(--accent-ink); font-size: var(--ui-font-caption, 11px); }
+.agentmem-log-head > .agentmem-log-saved { display: inline-flex; align-items: center; gap: 3px; margin-left: 6px; flex-shrink: 0; }
+.agentmem-log-more { margin-top: 4px; }
 .agentmem-log-edit.field { margin: 0; padding: 2px 8px 8px; }
 .agentmem-log-edit textarea { resize: vertical; }
 .agentmem-log-actions { display: flex; align-items: center; gap: 8px; margin-top: 6px; }

@@ -241,11 +241,9 @@ div.agent-equipment-item > label { display: flex; align-items: flex-start; gap: 
 .memory-list { display: grid; gap: 10px; min-width: 0; }
 .profile-growth-memory { display: grid; gap: 10px; min-width: 0; }
 .profile-growth-memory > .agent-profile-link { margin-top: 0; }
-/* 成长 › 日志:一行摘要 + 按天折叠的行;更早的日期收在一个折叠块里 */
+/* 成长 › 日志:一行摘要 + 按天折叠的行;更早的日期收在一行「更早的 N 天」后面,样子和日期行一样 */
 .profile-log { display: grid; gap: 2px; min-width: 0; }
 .profile-log > .harness-summary { margin-bottom: 8px; }
-.profile-log > .profile-disclosure { margin: 8px 0 0; padding: 8px 12px; }
-.profile-log > .profile-disclosure[open] > summary { margin-bottom: 6px; }
 /* 读日志:正文与「记忆」那一段的条目同一档字号,缩进到日期文字的起点(行头 8 + 箭头 12 + 间距 6);时间是每条上方的一行小标签 */
 .profile-log .agentmem-log-body { padding: 0 8px 10px 26px; font-size: var(--ui-font-body, 13px); line-height: 1.7; }
 .profile-log .agentmem-log-body h3 { margin: 8px 0 0; font-size: var(--ui-font-caption, 11px); font-weight: 500; line-height: 1.6; color: var(--text-muted); font-variant-numeric: tabular-nums; }
