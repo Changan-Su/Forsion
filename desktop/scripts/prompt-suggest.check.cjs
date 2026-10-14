@@ -159,6 +159,7 @@ async function main() {
       if (found) { await sw.scrollIntoViewIfNeeded(); await sw.click() }
       check('点一下 → 开', found && (await sw.getAttribute('aria-checked')) === 'true')
       if (found) {
+        await fl.waitForTimeout(350) // 等开关的过渡走完,截图里才是「开」的样子
         await fl.screenshot({ path: SHOTS.setting }).catch(() => {})
       }
       // 挪走以后「外观」页里不该再有这一行(用外观页自己的「明暗」行确认真的切过去了)
