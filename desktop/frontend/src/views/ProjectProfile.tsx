@@ -763,7 +763,7 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
               <button type="button" onClick={() => reveal(dir)}><FolderOpen size={13} />{t('projectProfile.reveal')}</button>
               <button type="button" onClick={copyPath}><Copy size={13} />{t('projectProfile.copyPath')}</button>
               <button type="button" onClick={() => setReloadAt((n) => n + 1)}><RefreshCw size={13} />{t('projectProfile.refresh')}</button>
-              {githubPage && <button type="button" data-git-action="open-github" onClick={() => routeExternalUrl(githubPage)}><ExternalLink size={13} />{t('projectProfile.git.openGithub')}</button>}
+              {githubPage && <button type="button" data-git-open="github" onClick={() => routeExternalUrl(githubPage)}><ExternalLink size={13} />{t('projectProfile.git.openGithub')}</button>}
             </div>
           </section>
           {git.repo && !gitReadOnly && commitDraft !== null && <section className="project-card project-git-commit-form" data-project-git-commit-form>

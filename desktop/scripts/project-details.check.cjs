@@ -365,7 +365,7 @@ async function run(app, win, stub, seen, home, ctx) {
   const fileRows = await form.locator('[data-project-git-files] li').allTextContents()
   check('6f3 提交框先列出这次会提交的完整清单(POST git/pending):4 项,含未跟踪的 notes.txt', seen.gitPendings.length === 1 && fileRows.length === 4 && fileRows.some((r) => r.includes('notes.txt')) && /会提交这 4 项改动/.test(await form.textContent()), JSON.stringify(fileRows))
   const identityLine = form.locator('[data-project-git-identity]')
-  check('6f4 提交框写明这次署谁的名(由 Forsion 账号推出来的 → 可以去设置里改)', (await identityLine.getAttribute('data-project-git-identity')) === 'forsion' && /以 Dave <dave@noreply\.git\.forsion\.example> 的身份提交/.test(await identityLine.textContent()) && /修改/.test(await identityLine.locator('button').textContent()), await identityLine.textContent().catch(() => ''))
+  check('6f4 提交框写明这次署谁的名(由 Forsion 账号推出来的 → 可以去设置里改)', (await identityLine.getAttribute('data-project-git-identity')) === 'forsion' && /署名：Dave <dave@noreply\.git\.forsion\.example>/.test(await identityLine.textContent()) && /修改/.test(await identityLine.locator('button').textContent()), await identityLine.textContent().catch(() => ''))
   // 收起提交框只是「取消」:「放弃修改」会被读成丢弃代码改动(截图自查抓到过)
   const formButtons = await form.locator('button').allTextContents()
   check('6f2 提交框按钮:(身份那一行的)修改 / 重新生成 / 取消 / 提交;取消与提交同一行', formButtons.join('|') === '修改|重新生成|取消|提交' && await form.locator('.project-git-commit-confirm button').evaluateAll((els) => new Set(els.map((el) => Math.round(el.getBoundingClientRect().top))).size === 1), JSON.stringify(formButtons))
@@ -554,7 +554,7 @@ async function run(app, win, stub, seen, home, ctx) {
   const hostingBefore = seen.hostingGets.length
   ctx.git = { ...ctx.git, remote: 'https://github.com/dave/demo-site.git' }
   await refreshGit()
-  await gitCard.locator('[data-project-git-actions] [data-git-action="open-github"]').waitFor()
+  await gitCard.locator('[data-project-git-actions] [data-git-open="github"]').waitFor()
   await until(async () => seen.hostingGets.length > hostingBefore)
   check('6r 远端在 GitHub、云端没开 GitHub 绑定(github:null)→ 问过引擎;只多一个「打开 GitHub」,没有账号行也没有提示', seen.hostingGets.length > hostingBefore && await accountRow.count() === 0 && await linkNote.count() === 0, JSON.stringify(await writeRow.locator('button').allTextContents()))
   seen.github = { linked: false, remote: true }
@@ -576,7 +576,7 @@ async function run(app, win, stub, seen, home, ctx) {
   seen.github = { linked: true, login: 'dave-gh', remote: true }
   await win.evaluate(() => window.dispatchEvent(new Event('focus')))
   await accountRow.waitFor()
-  check('6r5 绑好后窗口回到前台 → 自己重读:摘要多一行「账号 GitHub · @dave-gh」,提示收起', /GitHub · @dave-gh/.test(await accountRow.textContent()) && await linkNote.count() === 0, await gitCard.textContent())
+  check('6r5 绑好后窗口回到前台 → 自己重读:摘要多一行「账号 GitHub · @dave-gh」,提示收起,上一次「还没绑定」的报错也收起', /GitHub · @dave-gh/.test(await accountRow.textContent()) && await linkNote.count() === 0 && await gitCard.locator('[data-project-git-error]').count() === 0, await gitCard.textContent())
   await details.screenshot({ path: shots.gitGithubLinked = shot('project-git-github-linked-zh-light') })
   // ── 6s 没有远端时的另外两条出路:连接已有远端(贴地址)、发布到 GitHub(绑了的建私有仓库;没绑的先说去绑定,不发请求)──
   const noRemoteGit = () => { ctx.git = { ...ctx.git, remote: null, remotes: 0, upstream: null, ahead: 0, behind: 0 } }
@@ -727,7 +727,7 @@ async function run(app, win, stub, seen, home, ctx) {
   await details.locator('[data-project-profile]').getByRole('tab', { name: 'Git', exact: true }).click()
   const defGit = details.locator('[data-project-profile] [data-project-git]')
   await defGit.waitFor()
-  check('8b2 默认工作区的 Git 页:只读说明在场,没有任何写动作', await defGit.locator('[data-git-action]').count() === 0 && await defGit.locator('[data-project-git-readonly="shared"]').count() === 1, await defGit.textContent())
+  check('8b2 默认工作区的 Git 页:只读说明在场,没有任何写动作(「打开 GitHub」只是开网页,照样在)', await defGit.locator('[data-git-action]').count() === 0 && await defGit.locator('[data-project-git-readonly="shared"]').count() === 1 && await defGit.locator('[data-git-open="github"]').count() === 1, await defGit.textContent())
   check('8b3 默认工作区没有「加入造物」(所有不在项目里的对话共用这个目录)', await details.locator('[data-project-creation]').count() === 0)
 
   // ── 8c/8d 默认组里的旧别名会话:面板跟会话自己的目录;别名是家目录 → Agent 详情 ────────

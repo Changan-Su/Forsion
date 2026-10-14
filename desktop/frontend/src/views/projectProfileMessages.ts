@@ -138,7 +138,7 @@ registerMessages({
   'projectProfile.git.connectRemoteConfirm': { zh: '连接', en: 'Connect' },
   'projectProfile.git.connected': { zh: '已连接远端。', en: 'Remote connected.' },
   'projectProfile.git.connectedUpstream': { zh: '已连接远端，上游是 {upstream}。', en: 'Remote connected. The upstream is {upstream}.' },
-  'projectProfile.git.commitAs': { zh: '以 {name} <{email}> 的身份提交', en: 'Committing as {name} <{email}>' },
+  'projectProfile.git.commitAs': { zh: '署名：{name} <{email}>', en: 'Author: {name} <{email}>' },
   'projectProfile.git.commitAsNone': { zh: '还没有提交身份，先在设置里填上名字和邮箱。', en: 'No commit identity yet. Add a name and email in Settings first.' },
   'projectProfile.git.commitAsEdit': { zh: '修改', en: 'Change' },
   'projectProfile.git.commitAsSet': { zh: '去设置', en: 'Open Settings' },
