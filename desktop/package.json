@@ -346,7 +346,7 @@
     "check:obsidianbridge": "node prototypes/obsidian-bridge/check-runtime.mjs && node prototypes/obsidian-bridge/check-lifecycle.mjs && node prototypes/obsidian-bridge/check-native.mjs && node prototypes/obsidian-bridge/check-native-lifecycle.mjs",
     "e2e:obsidiannative": "node scripts/obsidian-native.e2e.cjs",
     "preview:obsidiannative": "node scripts/obsidian-native.e2e.cjs --preview",
-    "check:obsidianexpanded": "node prototypes/obsidian-bridge/check-expanded.mjs && node prototypes/obsidian-bridge/check-native-app.mjs && node prototypes/obsidian-bridge/check-store.mjs"
+    "check:obsidianexpanded": "node prototypes/obsidian-bridge/check-native-views.mjs && node prototypes/obsidian-bridge/check-view-transactions.mjs && node prototypes/obsidian-bridge/check-expanded.mjs && node prototypes/obsidian-bridge/check-native-app.mjs && node prototypes/obsidian-bridge/check-store.mjs"
   },
   "dependencies": {
     "@astryxdesign/core": "^0.1.4",

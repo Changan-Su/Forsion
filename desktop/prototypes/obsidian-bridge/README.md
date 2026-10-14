@@ -1,8 +1,8 @@
 # Obsidian Bridge — Desktop 原型 / Desktop prototype
 
-0.4 将六个原始 Obsidian 插件的编辑命令接到当前 **Amadeus 原生可视编辑器**。正文、选区、撤销和磁盘保存由原生编辑器持有；Bridge 管理面板只负责原包和设置。
+0.5 将六个原始 Obsidian 插件的编辑命令接到当前 **Amadeus 原生可视编辑器**。正文、选区、撤销和磁盘保存由原生编辑器持有；Bridge 管理面板只负责原包和设置。
 
-Version 0.4 runs six original Obsidian plugins against the active **native Amadeus visual editor**.
+Version 0.5 runs six original Obsidian plugins against the active **native Amadeus visual editor**.
 Amadeus owns the document, selection, undo and save pipeline. Bridge manages packages and settings.
 
 选中笔记正文，点击左下角 **命令面板 (⌘K)** 按钮，搜索 `Obsidian`，选择插件命令。
@@ -135,7 +135,7 @@ for capabilities, evidence and unfinished Goal work. No claim of majority ecosys
 ## 当前边界 / Limits
 
 - 六个原包的指定操作已验收；不代表这些插件全部功能或大部分 Obsidian 生态已兼容。
-- 尚未接入 CodeMirror 键位/扩展、原生输入建议、自定义侧栏视图、Markdown 后处理、Node/Electron 模块、移动端、旧 v3/源码编辑器。
+- 尚未接入 CodeMirror 键位/扩展、原生输入建议、完整自定义视图 API、Markdown 后处理、Node/Electron 模块、移动端、旧 v3/源码编辑器。
 - Advanced Tables 的原生表格命令可用，专用侧栏与 Tab 键位未接入；Linter 的显式命令可用，原生 Cmd+S 自动 lint 未接入。
 - Vault 索引目前只含 Markdown，最多 5000 篇；不提供真实文件时间戳、完整 backlinks 或附件/二进制/文件夹写 API。原生属性写仅支持已经打开的笔记。
 - `requestUrl` 目前走浏览器 fetch，仍受 CORS 限制；HTML-to-Markdown 未接入。安装器不受该限制，走 Desktop 主进程。
@@ -212,3 +212,19 @@ reject note/selection/instance changes before execution; disabling removes comma
 settings persistence; rescanning withdraws all hotkeys before package enumeration and checks readiness
 before consuming a key. `check-native.mjs` exercises delayed queue/save/scan cases; native Electron
 acceptance verifies an original queued Sort command cannot move to another note.
+
+
+## 0.5 原生视图 / Native views
+
+原版 Advanced Tables 的 `table-control-bar` 命令在 Forsion 原生右侧栏打开工具栏；插列按钮使用同一 Amadeus 编辑事务，可单步撤销。原包 DOM 与 CSS 保留，CSS 隔离在原生 View 的 ShadowRoot 中。折叠、恢复、显式关闭及插件禁用均有回归验证。
+
+The original Advanced Tables `table-control-bar` command opens its toolbar in the native Forsion right sidebar. Its insert-column button uses a single Amadeus transaction and undo. Original DOM and CSS are hosted inside the native View's ShadowRoot. Collapse/restore, explicit detach and disable have regression coverage.
+
+View registrations use stable IDs and exist before opening a command. This currently supports one leaf per registered type. Native close is a suspension, while explicit detach/disable calls `onClose` and unloads the component. Cross-restart plugin state, arbitrary DOM listeners, active custom-view routing and advanced embedded views remain Goal work; see the compatibility matrix.
+
+视图使用稳定 ID，在命令执行前即注册；当前每种类型一个实例。原生关闭暂按暂停处理，显式 detach／禁用才调用 `onClose` 并卸载组件。跨重启插件状态、任意 DOM 监听、活动自定义视图路由和复杂嵌入仍在 Goal 范围内，详见兼容矩阵。
+
+
+The focused read-only Codex review reproduced four defects, repaired with regression fixtures: explicit no-editor gestures must not acquire a later note; `openFile` must follow the current edit commit; detach during asynchronous state restoration must prevent `onOpen`; and unloaded Components must release their plugin-owned cleanup references. Returned leaf methods are also revoked on plugin disable. Tests: `check-view-transactions.mjs` and `check-native-views.mjs`.
+
+聚焦只读 Codex 评审复现了四个缺陷，均已修复并加入回归：无编辑器的手势不得取得后来打开的笔记；`openFile` 必须在当前编辑提交后执行；异步状态恢复期间关闭视图不得再调用 `onOpen`；组件卸载后必须释放插件清理队列中的引用。返回的 leaf 方法也在禁用时失效。对应测试为 `check-view-transactions.mjs` 和 `check-native-views.mjs`。

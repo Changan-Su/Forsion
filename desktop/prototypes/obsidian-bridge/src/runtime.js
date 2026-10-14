@@ -1,3 +1,4 @@
+import { createNativeViews } from "./native-views.js";
 import { nativeHotkeys } from "./hotkeys.js";
 import * as cmState from "@codemirror/state";
 import * as cmView from "@codemirror/view";
@@ -273,6 +274,7 @@ export async function start(host) {
   const nativeApp =
     native && host.listPages ? createNativeApp(host, runtime) : null;
   if (nativeApp) app = nativeApp.app;
+  if (nativeApp && host.registerNativeView) runtime.views = createNativeViews(host, runtime, entry => nativeApp.forEntry(entry));
   let operation = Promise.resolve();
   runtime.invoke = (entry, fn, requireEditor = false, captured) => {
     const generation = entry.instance;
@@ -290,8 +292,11 @@ export async function start(host) {
         let edit = null;
         if (native)
           try {
-            const current = host.captureEditor();
-            if (captured !== undefined) {
+            // null means the initiating gesture had no editor; do not acquire a
+            // different note when this queued callback eventually runs.
+            const current = captured === null ? null : host.captureEditor();
+            if (captured === null) edit = null;
+            else if (captured !== undefined) {
               if (!captured || !current || captured.isCurrent?.() === false ||
                   ["path", "text", "anchor", "head"].some(key => current[key] !== captured[key]))
                 throw Error("The native note or selection changed while the command was queued");
@@ -603,6 +608,7 @@ export async function start(host) {
           `plugins/${entry.manifest.id}/styles.css`,
         );
         if (!entry.alive || disposed) return;
+        entry.styleText = css;
         const style = document.head.createEl("style", { text: css });
         entry.cleanup.push(() => style.remove());
       }
@@ -901,6 +907,7 @@ export async function start(host) {
         modals: runtime.context.modals.size,
         path: runtime.context.file?.path,
       },
+      views: runtime.views?.diagnostics() || [],
       savedCopy,
       native,
       vaultKey,
@@ -911,6 +918,7 @@ export async function start(host) {
       disposed = true;
       for (const e of entries.values()) unload(e);
       offPage?.();
+      runtime.views?.dispose();
       nativeApp?.dispose();
       storeUi?.();
       editor.destroy();

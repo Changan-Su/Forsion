@@ -60,6 +60,9 @@ async function startRuntime() {
     openManager,
     closeManager,
     onError:notifyError,
+    registerNativeView:def => ctx.registerView(def),
+    openNativeView:(id,location) => { if (!dead) ctx.openView(id,{location}); },
+    closeNativeView:id => ctx.closeView?.(id),
     onCommands:list => {
       clearCommands(); if (dead) return;
       for (const c of list) commands.push(ctx.registerCommand({

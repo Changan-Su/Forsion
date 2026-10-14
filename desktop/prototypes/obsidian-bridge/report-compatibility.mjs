@@ -6,6 +6,8 @@ let validation = {};
 try { validation = JSON.parse(await readFile(new URL('validation.json', art), 'utf8')); } catch {}
 const esc = value => String(value ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;');
 const shots = [
+ ['14-native-toolbar', '原版工具栏与原生表格 / Original toolbar and native table'],
+ ['15-native-toolbar-dark', '暗色工具栏 / Toolbar in dark mode'],
  ['13-native-hotkeys', '原生快捷键设置 / Native shortcut settings'],
  ['11-native-refactor', '原包快捷键提取笔记 / Original hotkey extraction'],
  ['08-community-search', '官方目录搜索 / Official catalog search'],
@@ -17,11 +19,11 @@ const html = `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name
 <style>body{margin:0;background:#f5f4f1;color:#242c29;font:15px/1.7 system-ui}main{max-width:1180px;margin:auto;padding:42px 24px}h1{font-size:36px;line-height:1.2}h2{margin-top:36px;font-size:23px}small,.muted{color:#606b64}a{color:#285e45}table{border-collapse:collapse;width:100%}td,th{padding:12px 9px;text-align:left;vertical-align:top;border-bottom:1px solid #d4d9d2}td p{margin:0 0 7px}th{font-weight:500}pre{white-space:pre-wrap;overflow-wrap:anywhere;padding:16px;background:#e7eae4}code{overflow-wrap:anywhere}.status{font-weight:600}.partial{color:#765b20}.unsupported,.fail{color:#923f35}.ok{color:#2d6746}figure{margin:20px 0}img{width:100%;border:1px solid #d4d9d2}figcaption{padding:8px 0}button{font:inherit;border:1px solid #bac8bc;border-radius:6px;padding:7px 12px;background:transparent;margin:0 8px 8px 0;cursor:pointer}button[aria-pressed=true]{background:#285e45;color:#fff}.table-wrap{overflow-x:auto}.stats{font-size:24px;padding:15px 0;border-block:1px solid #d4d9d2}@media(max-width:650px){main{padding:24px 14px}h1{font-size:28px}td{min-width:150px}}</style>
 <main><small>FORSION DESKTOP · WORKTREE PROTOTYPE ${esc(matrix.version)}</small>
 <h1>Obsidian 插件接入原生工作流<br><small>Obsidian plugins in native workflows</small></h1>
-<p>本轮增加原生快捷键和独立设置窗口同步，用原版 Note Refactor 与 Sort 验证实际操作。原包仍安装在 Bridge 自身的插件文件夹内。</p>
-<p>This iteration adds native hotkeys and settings-window synchronization, exercised with original Note Refactor and Sort packages. Original assets remain inside Bridge's own plugin folder.</p>
+<p>本轮将原版 Advanced Tables 工具栏挂入原生右侧栏，验证按钮编辑、原生撤销、关闭重开、侧栏恢复和禁用清理。原包仍安装在 Bridge 自身的插件文件夹内。</p>
+<p>This iteration mounts the original Advanced Tables toolbar in the native sidebar and verifies editing, undo, close/reopen, sidebar restore and disable cleanup. Original assets remain inside Bridge's own plugin folder.</p>
 <p class="stats">${results.filter(r => r.ok).length} / ${results.length} Electron checks · ${results.filter(r => !r.ok).length} failed</p>
-<p>当前完整 Goal 尚未完成。自定义视图、Markdown 渲染和编辑器扩展仍待接入；源码验收不代表发布。</p>
-<p>The full Goal remains unfinished. Custom views, Markdown rendering and editor extensions still need integration. Source acceptance is not a release.</p>
+<p>当前完整 Goal 尚未完成。自定义视图完整生命周期、Markdown 渲染和编辑器扩展仍待补齐；源码验收不代表发布。</p>
+<p>The full Goal remains unfinished. Full custom-view lifecycle, Markdown rendering and editor extensions remain incomplete. Source acceptance is not a release.</p>
 <h2>使用 / Use</h2><p>在原生笔记选中文字，按 Note Refactor 原包默认的 ⌘⇧N 提取笔记；在「设置 → 快捷键」搜索插件命令，可改键或解绑。默认键位可能被原生编辑器已处理的键占用，可另行改键。</p>
 <p>Select text in a native note and press Note Refactor's original ⌘⇧N shortcut to extract it. Search plugin commands in Settings → Shortcuts to rebind or unbind. Native handled keys take priority; conflicting defaults can be rebound.</p>
 <p>快捷键目前只在原生正文响应；搜索、设置输入框与 Bridge 管理弹窗不会触发。按住重复默认关闭，IME 组合输入不触发。Electron 测试窗口层级与焦点以末尾逐项记录为准。</p>

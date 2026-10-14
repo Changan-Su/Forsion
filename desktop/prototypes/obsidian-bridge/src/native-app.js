@@ -275,9 +275,10 @@ export function createNativeApp(host, runtime) {
       current()?.view instanceof type ? current().view : null,
     getActiveFile: activeFile,
     getLeavesOfType: (type) =>
-      type === "markdown" && current()?.view ? [{ view: current().view }] : [],
+      type === "markdown" && current()?.view ? [{ view: current().view }] : runtime.views?.getLeavesOfType(type) || [],
     iterateAllLeaves: (fn) => {
       if (current()?.view) fn({ view: current().view });
+      runtime.views?.iterateAllLeaves(fn);
     },
     getMostRecentLeaf: () =>
       current()?.view ? { view: current().view } : null,
@@ -293,8 +294,11 @@ export function createNativeApp(host, runtime) {
     onLayoutReady: (fn) => {
       runtime.defer(fn);
     },
-    detachLeavesOfType: () => {},
-    getLeaf: () => ({
+    detachLeavesOfType: type => runtime.views?.detachLeavesOfType(type),
+    revealLeaf: leaf => runtime.views?.revealLeaf(leaf),
+    getRightLeaf: () => runtime.views?.getLeaf("right"),
+    getLeftLeaf: () => runtime.views?.getLeaf("left"),
+    getLeaf: () => runtime.views?.getLeaf("main") || ({
       openFile: async (f) => workspace.openLinkText(f.path, "", true),
     }),
   });
@@ -502,6 +506,14 @@ export function createNativeApp(host, runtime) {
               )
                 throw Error("Plugin disabled");
               const out = v.apply(target, args);
+              if (key === "workspace" && ["getLeaf", "getRightLeaf", "getLeftLeaf"].includes(k) && out) {
+                // Returned leaves outlive the workspace call; revoke their methods too.
+                return new Proxy(out, { get(leaf, name) {
+                  const method = Reflect.get(leaf, name);
+                  if (typeof method !== "function") return method;
+                  return (...values) => { guard(); return method.apply(leaf, values); };
+                } });
+              }
               return runtime.track(out);
             };
           },

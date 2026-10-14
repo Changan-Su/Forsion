@@ -66,15 +66,15 @@ Multiple original defaults, native rebinding/unbinding, settings-window sync and
 
 Evidence: `frontend/src/commandRegistry.plugins.test.ts; frontend/src/shortcutCatalog.test.ts; scripts/obsidian-native.e2e.cjs`
 
-## 自定义视图 / Custom views — unsupported
+## 自定义视图 / Custom views — partial
 
-可记录 registerView 声明。
+原版 Advanced Tables ItemView 工具栏挂入原生右侧栏；按钮事务、原生撤销、显式关闭重开、折叠恢复和禁用清理。
 
-View declarations can be recorded.
+Original Advanced Tables ItemView in the native right sidebar; button transactions, native undo, explicit close/reopen, collapse/restore and disable cleanup.
 
-**待补 / Remaining:** ItemView 尚未挂接原生侧栏/标签页；Advanced Tables 工具栏未运行。 ItemView is not mounted in native sidebar/tabs; Advanced Tables toolbar is not operational.
+**待补 / Remaining:** 每种视图仅一个实例；原生关闭按钮暂按挂载暂停处理，onClose 在显式 detach 或禁用时运行。跨重启状态、活动视图路由、任意 DOM 监听及复杂嵌入视图仍待补。 One instance per type. Native close currently suspends mounting; onClose runs on explicit detach or disable. Cross-restart state, active-view routing, arbitrary DOM listeners and complex embedded views remain incomplete.
 
-Evidence: `prototypes/obsidian-bridge/src/obsidian.js`
+Evidence: `prototypes/obsidian-bridge/check-native-views.mjs; prototypes/obsidian-bridge/check-expanded.mjs; scripts/obsidian-native.e2e.cjs`
 
 ## Markdown 渲染扩展 / Markdown rendering extensions — unsupported
 

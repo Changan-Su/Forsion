@@ -186,3 +186,10 @@ unmounts existing cards, and shows an unavailable message. Unknown/disabled card
 substituted with generated content. Plugin exceptions stay inside the individual card.
 These are live views of the current vault, including when an old conversation is reopened;
 they are not immutable historical snapshots or cross-device data replicas.
+
+
+### Dynamic view registration / 动态视图注册
+
+`const unregister = ctx.registerView(def)` returns an idempotent disposer on newer hosts. Call `unregister?.()` to withdraw one view; open instances close and retained mount callbacks become inert. Plugin disable/reload also unregisters all owned views. Mount cleanup can run when a sidebar folds or the Space changes: keep durable state outside the mounted DOM and allow remounting.
+
+新宿主的 `ctx.registerView(def)` 返回幂等注销函数，旧宿主返回空值；用 `unregister?.()` 撤下单个视图。宿主先关闭实例，旧挂载回调随即失效；禁用／重载也会统一清理。侧栏折叠或切换 Space 也会触发挂载清理，应把需要保留的状态放在挂载 DOM 之外，并支持重新挂载。

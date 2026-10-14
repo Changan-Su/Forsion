@@ -1,5 +1,5 @@
 {
-  "version": "0.4.0",
+  "version": "0.5.0",
   "meaning": {
     "zh": "矩阵记录公共能力及其边界，不按成功加载数量推算兼容率。完整支持仅用于已穷尽验证的明确范围；当前没有整类标为完整支持。",
     "en": "This matrix tracks shared capabilities and boundaries, not compatibility percentages inferred from successful loads. Full support requires exhaustive evidence for a defined scope; no whole category is currently marked full."
@@ -75,12 +75,12 @@
       "id": "views",
       "zh": "自定义视图",
       "en": "Custom views",
-      "status": "unsupported",
-      "verifiedZh": "可记录 registerView 声明。",
-      "verifiedEn": "View declarations can be recorded.",
-      "remainingZh": "ItemView 尚未挂接原生侧栏/标签页；Advanced Tables 工具栏未运行。",
-      "remainingEn": "ItemView is not mounted in native sidebar/tabs; Advanced Tables toolbar is not operational.",
-      "evidence": "prototypes/obsidian-bridge/src/obsidian.js"
+      "status": "partial",
+      "verifiedZh": "原版 Advanced Tables ItemView 工具栏挂入原生右侧栏；按钮事务、原生撤销、显式关闭重开、折叠恢复和禁用清理。",
+      "verifiedEn": "Original Advanced Tables ItemView in the native right sidebar; button transactions, native undo, explicit close/reopen, collapse/restore and disable cleanup.",
+      "remainingZh": "每种视图仅一个实例；原生关闭按钮暂按挂载暂停处理，onClose 在显式 detach 或禁用时运行。跨重启状态、活动视图路由、任意 DOM 监听及复杂嵌入视图仍待补。",
+      "remainingEn": "One instance per type. Native close currently suspends mounting; onClose runs on explicit detach or disable. Cross-restart state, active-view routing, arbitrary DOM listeners and complex embedded views remain incomplete.",
+      "evidence": "prototypes/obsidian-bridge/check-native-views.mjs; prototypes/obsidian-bridge/check-expanded.mjs; scripts/obsidian-native.e2e.cjs"
     },
     {
       "id": "rendering",

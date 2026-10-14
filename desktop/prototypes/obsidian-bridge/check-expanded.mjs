@@ -18,6 +18,7 @@ let text = "# Test\n\nhello   world   \n\n\n\nend",
   head = 0,
   path = "Test.md";
 const files = new Map([[path, text]]);
+const nativeViews = new Map();
 let events,
   store,
   failWrites = false;
@@ -29,6 +30,18 @@ process.on("unhandledRejection", unhandled);
 try {
   win.eval(await readFile(new URL("runtime.js", root), "utf8"));
   const r = await win.ForsionObsidianBridge.start({
+    registerNativeView: def => {
+      const record = {def, el: win.document.createElement('section'), off: null};
+      nativeViews.set(def.id, record);
+      return () => { nativeViews.delete(def.id); record.off?.(); record.el.remove(); };
+    },
+    openNativeView: id => {
+      const record = nativeViews.get(id);
+      if (!record || record.open) return;
+      record.open = true; win.document.body.append(record.el);
+      Promise.resolve().then(() => record.def.mount(record.el)).then(off => { record.off = off; }).catch(e => failures.push(e));
+    },
+    closeNativeView: id => nativeViews.get(id)?.off?.(),
     locale: "en",
     isMac: true,
     onCommands: list => { nativeCommands = list; },
@@ -91,6 +104,30 @@ try {
   await r.run("obsidian-sort-and-permute-lines", "sort-alphabetically");
   assert.equal(text.trim(), "Apple\nApple\nBanana\nZebra");
   console.log("PASS property metadata uses native body coordinates");
+  text = "| A | B |\n|---|---|\n| 1 | 2 |\n";
+  anchor = head = 3; files.set(path, text);
+  await r.run('table-editor-obsidian', 'table-control-bar');
+  assert.ok(nativeViews.has('obsidian-view-advanced-tables-toolbar'));
+  const toolbar = nativeViews.get('obsidian-view-advanced-tables-toolbar');
+  assert.equal(toolbar.el.shadowRoot.querySelector('.title').textContent, 'Advanced Tables');
+  toolbar.el.shadowRoot.querySelector('[title="insert column left"]').click();
+  for (let i = 0; i < 100 && text.split('\n')[0].split('|').length !== 5; i++) await new Promise(resolve => setTimeout(resolve, 10));
+  assert.equal(text.split('\n')[0].split('|').length, 5);
+  const savedButton = toolbar.el.shadowRoot.querySelector('[title="insert column left"]');
+  toolbar.off(); toolbar.el.remove();
+  const suspendedText = text; savedButton.click();
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(text, suspendedText);
+  assert.ok(nativeViews.has('obsidian-view-advanced-tables-toolbar'));
+  win.document.body.append(toolbar.el);
+  toolbar.off = toolbar.def.mount(toolbar.el);
+  assert.ok(toolbar.el.shadowRoot.querySelector('[title="insert column left"]'));
+  r.app.workspace.detachLeavesOfType('advanced-tables-toolbar');
+  savedButton.click(); await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(text, suspendedText);
+  assert.ok(nativeViews.has('obsidian-view-advanced-tables-toolbar')); // type registration survives closing a leaf
+  assert.equal(r.diagnostics().views.length, 0);
+  console.log('PASS original Advanced Tables ItemView button edits native body and closes');
   text = "# Test\n\nhello   world   \n\n\n\nend";
   anchor = 0;
   head = 0;

@@ -1079,8 +1079,10 @@ export interface PluginContext {
    *  Old hosts (< 2026-07-23) return void — call as `const h = ctx.registerStatusItem?.(…)`
    *  and guard `h?.update(…)`. */
   registerStatusItem(item: StatusItemContribution): StatusItemHandle | void
-  /** Contribute a workbench view (registered as engine view type `plugin:<pluginId>:<id>`). */
-  registerView(view: ViewContribution): void
+  /** Contribute a workbench view (registered as engine view type `plugin:<pluginId>:<id>`).
+   * Returns an idempotent unregister function; open instances close before the type is removed.
+   * The host also unregisters on disable/reload. Older hosts return void. */
+  registerView(view: ViewContribution): (() => void) | void
   /** Contribute a custom file type: tree icon + dedicated editor view + click-to-open. Declare the same
    *  suffixes in manifest `fileExtensions`. See FileTypeContribution. */
   /** Returns false when EVERY declared suffix is already owned by a built-in file type — the host

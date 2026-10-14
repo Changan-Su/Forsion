@@ -1243,7 +1243,15 @@ export const usePluginStore = create<PluginState>((set, get) => {
         event: `plugin:${pluginId}`,
         sourceLabel: get().plugins.find((p) => p.id === pluginId)?.name || pluginId,
       })),
-    registerView: (view) => set((s) => ({ views: [...s.views, { pluginId, item: view }] })),
+    registerView: (view) => {
+      if (!ctxAlive()) return () => {}
+      let registered = true
+      const owned = { pluginId, item: { ...view, mount: (...args: Parameters<typeof view.mount>) => {
+        if (registered && ctxAlive()) return view.mount(...args)
+      } } }
+      set(s => ({ views: [...s.views, owned] }))
+      return scope.own('subscription', () => { registered = false; set(s => ({ views: s.views.filter(v => v !== owned) })) }, 'view')
+    },
     registerListSource: (src) => set((s) => ({ listSources: [...s.listSources, { pluginId, item: src }] })),
     // 内置后缀不给注册(内置优先是硬规则,见 isBuiltinFileType);唯一的口子是「可覆盖」的那几个后缀
     // 配上显式的 override: true(见 isOverridableBuiltinType)。返回 false 让插件知道自己被内置取代了,

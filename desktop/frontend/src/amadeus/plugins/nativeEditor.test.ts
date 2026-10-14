@@ -19,6 +19,13 @@ beforeEach(()=>{
 })
 afterEach(()=>off())
 describe('native editor public lifecycle',()=>{
+ it('revokes a dynamic view and its stale mount callback',()=>{
+  const mount=vi.fn();const remove=ctx.registerView({id:'temporary',title:'Temporary',mount})
+  const view=usePluginStore.getState().views.find(v=>v.item.id==='temporary')!.item
+  expect(typeof remove).toBe('function');remove?.()
+  expect(usePluginStore.getState().views.some(v=>v.item.id==='temporary')).toBe(false)
+  view.mount(document.createElement('div'));expect(mount).not.toHaveBeenCalled()
+ })
  it('revokes captured edit and command closures on disable',()=>{
   const edit=ctx.app.captureEditor!()!; expect(edit).not.toBeNull()
   const run=vi.fn();ctx.registerCommand({id:'test-native',title:'test',run})

@@ -9,7 +9,16 @@ import {
 } from "./native-app.js";
 // Deliberately scoped subset. Unknown exports/modules fail rather than silently pretending to work.
 // Runs in Bridge's dedicated iframe realm; DOM prototype helpers never modify the Forsion document.
+export const viewEventOwners = new WeakMap();
+export function viewEvent(node, callback, event) {
+  let root = node;
+  while (root && !viewEventOwners.has(root)) root = root.parentNode;
+  const owner = root && viewEventOwners.get(root);
+  return owner ? owner(() => callback.call(node, event)) : callback.call(node, event);
+}
 export function domHelpers() {
+  window.activeDocument = document;
+  window.activeWindow = window;
   const methods = {
     detach() {
       this.remove();
@@ -80,7 +89,7 @@ export function domHelpers() {
           : options.cls;
       for (const [k, v] of Object.entries(options.attr || {}))
         el.setAttribute(k, String(v));
-      for (const k of ["href", "type", "value"])
+      for (const k of ["href", "type", "value", "title"])
         if (options[k] != null) el[k] = options[k];
       this.appendChild(el);
       callback?.(el);
@@ -101,7 +110,7 @@ export function domHelpers() {
       return this;
     },
     onClickEvent(cb) {
-      this.addEventListener("click", cb);
+      this.addEventListener("click", event => viewEvent(this, cb, event));
       return this;
     },
   };
@@ -169,7 +178,7 @@ export function apiFor(runtime, entry) {
     constructor() {
       this._children = [];
       this._cleanup = [];
-      own(() => this.unload());
+      this._ownerCleanup = own(() => this.unload());
     }
     load() {
       this.onload?.();
@@ -178,9 +187,17 @@ export function apiFor(runtime, entry) {
     unload() {
       if (this._unloaded) return;
       this._unloaded = true;
-      Promise.resolve(this.onunload?.()).catch(runtime.error);
-      for (const c of this._children) c.unload();
-      for (const f of this._cleanup.splice(0).reverse()) f();
+      const ownerIndex = entry.cleanup.indexOf(this._ownerCleanup);
+      if (ownerIndex !== -1) entry.cleanup.splice(ownerIndex, 1);
+      this._ownerCleanup = null;
+      try { Promise.resolve(this.onunload?.()).catch(runtime.error); }
+      catch (error) { runtime.error(error); }
+      for (const c of this._children.splice(0)) {
+        try { c.unload(); } catch (error) { runtime.error(error); }
+      }
+      for (const f of this._cleanup.splice(0).reverse()) {
+        try { f(); } catch (error) { runtime.error(error); }
+      }
     }
     addChild(c) {
       this._children.push(c);
@@ -194,7 +211,8 @@ export function apiFor(runtime, entry) {
     }
 
     register(fn) {
-      this._cleanup.push(fn);
+      if (this._unloaded) fn();
+      else this._cleanup.push(fn);
     }
     registerEvent(ref) {
       this.register(() => ref.emitter.offref(ref));
@@ -239,8 +257,8 @@ export function apiFor(runtime, entry) {
       runtime.partial(entry, "Editor suggestions");
     }
     registerView(type, create) {
-      entry.views ||= new Map();
-      entry.views.set(type, create);
+      alive();
+      if (runtime.views) return runtime.views.register(entry, type, create);
       runtime.partial(entry, `Custom view: ${type}`);
     }
     addRibbonIcon(icon, title, cb) {
@@ -580,8 +598,23 @@ export function apiFor(runtime, entry) {
       this.leaf = leaf;
       this.app = leaf?.app;
       this.containerEl = document.createElement("div");
-      this.contentEl = this.containerEl.createDiv();
+      this.containerEl.className = "workspace-leaf-content";
+      this.headerEl = this.containerEl.createDiv({ cls: "view-header" });
+      this.contentEl = this.containerEl.createDiv({ cls: "view-content" });
+      viewEventOwners.set(this.containerEl, fn => leaf.invoke(fn));
     }
+    registerDomEvent(el, name, cb, opts) {
+      const listener = event => this.leaf.invoke(() => cb.call(el, event));
+      el.addEventListener(name, listener, opts);
+      this.register(() => el.removeEventListener(name, listener, opts));
+    }
+    getViewType() { return "item"; }
+    getDisplayText() { return this.getViewType(); }
+    getIcon() { return "file"; }
+    getState() { return {}; }
+    async setState() {}
+    async onOpen() {}
+    async onClose() {}
   }
   class EditorSuggest extends Component {
     constructor(app) {
