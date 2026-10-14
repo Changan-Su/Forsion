@@ -10,6 +10,7 @@
     "dev": "npm run prepare-assets && vite",
     "build": "npm run prepare-assets && vite build",
     "typecheck": "tsc --noEmit",
+    "e2e:mobile": "node scripts/mobile-parity.e2e.cjs",
     "preview": "vite preview",
     "prepare-fonts": "node ../desktop/build/gen-fonts.cjs --out public/fonts",
     "prepare-assets": "npm run prepare-board && npm run prepare-fonts",
