@@ -2648,12 +2648,17 @@ export const SettingsModal: React.FC<{
                           <div className="hint" style={{ marginBottom: 8 }}>{t('settings.tts.intro')}</div>
                           <input
                             type="text"
+                            list="tts-model-options"
                             value={stored.ttsModelId ?? ''}
                             onChange={(e) => edit({ ttsModelId: e.target.value })}
                             onBlur={() => void commitEdits(['ttsModelId'], (v) => ({ ttsModelId: (v.ttsModelId || '').trim() }))}
                             placeholder={t('settings.tts.modelPlaceholder')}
                           />
                           {commitErrorHint('ttsModelId')}
+                          {/* Forsion 云端的朗读模型(可输可选;直连提供方的照旧手填 <providerId>/<模型>) */}
+                          <datalist id="tts-model-options">
+                            {(models?.ttsModels || []).map((m) => <option key={m.id} value={m.id} label={m.name} />)}
+                          </datalist>
                         </div>
                         <div className="field">
                           <label>{t('settings.tts.voice')}</label>
