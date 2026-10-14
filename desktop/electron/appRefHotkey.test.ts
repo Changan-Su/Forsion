@@ -101,14 +101,24 @@ describe('全局双 ⌘ 的订阅', () => {
     await until(() => !hk.state().connected && h.sockets[0].destroyed)
   })
 
-  it('老助手不认这条命令:这次运行不再试', async () => {
-    const h = await helper((msg, s) => s.write(`${JSON.stringify({ id: msg.id, ok: false, error: { code: 'unknown_command', message: 'hotkeySubscribe' } })}\n`))
-    const hk = createAppRefHotkey({ target: () => ({ path: h.sock }), ownPid: 1, onFire: () => {}, retryMs: 20 })
+  it('老助手不认这条命令:告诉主进程一次、不放弃;助手被换成新版后 poke 一下当场连上(不用重启 Forsion)', async () => {
+    let fresh = false // 助手换没换成新版
+    const h = await helper((msg, s) => s.write(`${JSON.stringify(fresh ? { id: msg.id, ok: true, result: { subscribed: true } } : { id: msg.id, ok: false, error: { code: 'unknown_command', message: 'hotkeySubscribe' } })}\n`))
+    let told = 0
+    const hk = createAppRefHotkey({ target: () => ({ path: h.sock }), ownPid: 1, onFire: () => {}, onOutdated: () => { told++ }, retryMs: 20 })
     hk.setWanted(true)
-    await until(() => hk.state().dead && !hk.state().connected)
-    hk.poke()
-    await new Promise((r) => setTimeout(r, 80))
+    await until(() => hk.state().outdated && !hk.state().connected)
+    expect(hk.state().dead).toBe(false)
+    await new Promise((r) => setTimeout(r, 80)) // 旧版期间不按短间隔追着问(那是 5 分钟一次)
     expect(h.requests).toHaveLength(1)
+    hk.poke() // 还是旧版:再问一次,但不再叫 onOutdated
+    await until(() => h.requests.length === 2 && !hk.state().connected)
+    expect(told).toBe(1)
+    fresh = true
+    hk.poke()
+    await until(() => hk.state().connected && !hk.state().outdated)
+    expect(h.requests).toHaveLength(3)
+    hk.setWanted(false)
   })
 
   it('助手没在跑:不报错,隔一阵再试;助手起来后 poke 一下立刻连上;连接断了会重连', async () => {

@@ -426,6 +426,8 @@ const api = {
     icons: (ids: string[]): Promise<Record<string, string | null>> => ipcRenderer.invoke('appRefs:icons', ids),
     /** 要不要全局的「双 ⌘」(别的应用在前台时也生效;由本机助手监听)。快捷键被改成别的键 / 解绑时传 false。 */
     setGlobalHotkey: (on: boolean): void => ipcRenderer.send('appRefs:globalHotkey', on === true),
+    /** 主窗关着时按下的那一条(主进程替它存着,30 秒内有效);取一次就清。 */
+    takePendingHotkey: (): Promise<import('../shared/appRefs').AppRef | null> => ipcRenderer.invoke('appRefs:takePendingHotkey'),
     /** 在别的应用里按了全局快捷键:主进程把那一刻最前面的窗口送过来。返回取消函数。 */
     onHotkey: (cb: (ref: import('../shared/appRefs').AppRef) => void): (() => void) => {
       const listener = (_: unknown, ref: import('../shared/appRefs').AppRef): void => cb(ref)

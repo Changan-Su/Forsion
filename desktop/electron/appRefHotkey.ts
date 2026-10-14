@@ -12,7 +12,10 @@
  *  1. macOS **绝不为了这个快捷键拉起助手**(拉起会带出系统权限框):只连已经在听的 socket,连不上隔一阵再试;
  *     别的功能把助手拉起来之后叫一下 poke(),不必等下一轮。助手升级时会重启,连接断了自己重连。
  *     Windows 没有要授的权限,连不上就拉起一次(target 给了 launch);最后一个订阅者走后助手 60 秒自己退。
- *  2. 老助手不认这条命令(unknown_command)→ 这次运行不再试。Forsion 自己在前台时窗口内那一半照旧能用。
+ *  2. 老助手不认这条命令(unknown_command)→ 不是死路:第一次碰到时叫 onOutdated(主进程据此请用户把助手更新掉),
+ *     之后隔 5 分钟再问一次;助手被换成新版时(权限页 / 更新流程做完)主进程叫 poke(),当场重连。
+ *     ⚠️ 别改回「这次运行不再试」:助手是在 Forsion 开着的时候被更新的,那样要再重启一次 Forsion 才生效(10-14 用户实报)。
+ *     Forsion 自己在前台时窗口内那一半照旧能用。
  *  3. Forsion 在前台时助手不推(excludePids),那一下归窗口内的命令 —— 一次按键不会来两条引用。
  */
 import net from 'node:net'
@@ -51,10 +54,13 @@ export function createAppRefHotkey(deps: {
   ownPid: number
   /** front = 助手报的最前面的窗口;null = 它判断不出来(调用方自己再去问一次)。 */
   onFire: (front: Record<string, unknown> | null) => void
+  /** 在跑的助手是旧版、不认这条命令。一段「旧版」期间只叫一次(连上过新版之后再碰到旧版会再叫)。 */
+  onOutdated?: () => void
   retryMs?: number
 }) {
   let wanted = false
-  let dead = false // 助手不认这条命令 / 拉不起来
+  let dead = false // 拉不起来(Windows 拉了几次还是连不上)
+  let outdated = false // 在跑的助手是旧版:等 poke(它被换掉了)或隔一阵再问
   let socket: net.Socket | null = null
   let busy = false // 正在取 target / 拉起助手
   let launches = 0
@@ -93,9 +99,9 @@ export function createAppRefHotkey(deps: {
         let msg: { ok?: unknown; error?: { code?: unknown }; ev?: { kind?: unknown; gesture?: unknown; front?: unknown } }
         try { msg = JSON.parse(line) } catch { continue }
         if (!acked) {
-          if (msg?.ok === true) { acked = true; launches = 0; continue }
+          if (msg?.ok === true) { acked = true; launches = 0; outdated = false; continue }
           const code = msg?.error?.code
-          if (code === 'unknown_command' || code === 'unknown_gesture') dead = true
+          if ((code === 'unknown_command' || code === 'unknown_gesture') && !outdated) { outdated = true; deps.onOutdated?.() }
           refused = true
           s.destroy()
           return
@@ -137,6 +143,6 @@ export function createAppRefHotkey(deps: {
       if (timer) { clearTimeout(timer); timer = null }
       void connect()
     },
-    state: (): { wanted: boolean; dead: boolean; connected: boolean; attempts: number } => ({ wanted, dead, connected: !!socket, attempts }),
+    state: (): { wanted: boolean; dead: boolean; outdated: boolean; connected: boolean; attempts: number } => ({ wanted, dead, outdated, connected: !!socket, attempts }),
   }
 }

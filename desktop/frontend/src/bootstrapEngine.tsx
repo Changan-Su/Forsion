@@ -1,4 +1,5 @@
 import { registerAmadeusViews } from './features/amadeus'
+import { ensureAppRefCommand } from './views/chat2/appRefCommand'
 import { inboxAvailable } from './features/runtime'
 import { registerTanguViews } from './features/tangu'
 import { registerOperationsViews } from './features/operations'
@@ -420,6 +421,8 @@ export function installEngine(): void {
   })
 
   // commands
+  // 应用 / 窗口引用的快捷键(双 ⌘):开机就注册,别等第一张输入卡 —— 停在没有输入卡的 Space 上启动时全局那条订阅会一直没人要
+  ensureAppRefCommand()
   if (hasNativeFeature('tangu')) addCommand({ id: 'new-chat', title: () => app().tr('sidebar.newChat'), keywords: 'new chat 新对话', hotkey: 'mod+n', run: blankNewChat , invoke: {
     description: 'Start a new, empty chat in the window the user is talking to you from. Use it when the user asks to start over or open a fresh conversation.',
   } })

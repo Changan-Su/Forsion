@@ -1595,6 +1595,7 @@ declare global {
         frontmost(): Promise<import('../../shared/appRefs').AppRef | null>
         icons(ids: string[]): Promise<Record<string, string | null>>
         setGlobalHotkey?(on: boolean): void
+        takePendingHotkey?(): Promise<import('../../shared/appRefs').AppRef | null>
         onHotkey?(cb: (ref: import('../../shared/appRefs').AppRef) => void): () => void
       }
       appDockSelection?(): Promise<import('../../shared/appDock').DockSelection & { error?: string }>

@@ -3,7 +3,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 
 const m = vi.hoisted(() => ({
   exists: vi.fn(), ask: vi.fn(), media: vi.fn(), requestMedia: vi.fn(), sources: vi.fn(),
-  open: vi.fn(), launch: vi.fn(), spawn: vi.fn(), show: vi.fn(), close: vi.fn(), confirm: vi.fn(), handlers: new Map<string, (...args: any[]) => any>(),
+  open: vi.fn(), launch: vi.fn(), spawn: vi.fn(), show: vi.fn(), close: vi.fn(), confirm: vi.fn(), readFile: vi.fn(), handlers: new Map<string, (...args: any[]) => any>(),
 }))
 vi.mock('electron', () => ({
   app: { isPackaged: true, getName: () => 'Forsion', getAppPath: () => '/app', on: vi.fn() },
@@ -13,6 +13,7 @@ vi.mock('electron', () => ({
   systemPreferences: { getMediaAccessStatus: m.media, askForMediaAccess: m.requestMedia },
 }))
 vi.mock('node:fs', () => ({ existsSync: m.exists, accessSync: vi.fn(), constants: { W_OK: 2 } }))
+vi.mock('node:fs/promises', async (importOriginal) => ({ ...await importOriginal<typeof import('node:fs/promises')>(), readFile: m.readFile }))
 vi.mock('node:child_process', () => ({ execFile: m.launch, spawn: m.spawn }))
 // builtinBundleSources 自 09-27 起返回清单项(pkg / id / platforms / dir),权限引导按 id 找电脑操作那份
 vi.mock('./builtinPlugins', () => ({
@@ -217,6 +218,68 @@ describe('explicit permission actions', () => {
     expect(() => m.handlers.get('permissions:request')!({ trusted: true }, 'https://example.com')).toThrow('Unknown permission')
     expect(m.open).not.toHaveBeenCalled()
     expect(m.ask).not.toHaveBeenCalled()
+  })
+})
+
+describe('helper update for the global ⌘⌘ hotkey', () => {
+  const helperAt = (protocolVersion: number, bundled: string) => {
+    m.ask.mockImplementation((_socket, request) => Promise.resolve(request.cmd === 'diagnostics' ? { protocolVersion } : native))
+    m.readFile.mockResolvedValue(JSON.stringify({ version: bundled }))
+  }
+  const hotkeyService = () => new DesktopPermissions(true, vi.fn(), { requiredHelperProtocol: () => 15 })
+
+  it('a bundle that cannot speak the hotkey either is never offered: no dialog, nothing restarted', async () => {
+    helperAt(14, '0.6.3')
+    expect(await hotkeyService().updateHelperForHotkey('zh')).toBe(false)
+    expect(m.confirm).not.toHaveBeenCalled()
+    expect(m.ask.mock.calls.map((call) => call[1].cmd)).not.toContain('shutdown')
+  })
+
+  it('an unreadable bundle version is treated the same (no dialog)', async () => {
+    helperAt(14, '0.7.0')
+    m.readFile.mockRejectedValue(Object.assign(new Error('missing'), { code: 'ENOENT' }))
+    expect(await hotkeyService().updateHelperForHotkey('en')).toBe(false)
+    expect(m.confirm).not.toHaveBeenCalled()
+  })
+
+  it('a newer bundle asks once with the hotkey wording; "Later" leaves the old helper running', async () => {
+    helperAt(14, '0.7.0')
+    expect(await hotkeyService().updateHelperForHotkey('zh')).toBe(false)
+    expect(m.confirm).toHaveBeenCalledOnce()
+    expect(m.confirm.mock.calls[0][0]).toMatchObject({ message: '更新 Computer Use 助手', buttons: ['稍后', '更新并重启助手'] })
+    expect(m.ask.mock.calls.map((call) => call[1].cmd)).not.toContain('shutdown')
+  })
+
+  it('consenting replaces the running helper and relaunches it', async () => {
+    helperAt(14, '0.7.0')
+    m.confirm.mockResolvedValue({ response: 1 })
+    expect(await hotkeyService().updateHelperForHotkey('en')).toBe(true)
+    expect(m.confirm.mock.calls[0][0]).toMatchObject({ message: 'Update the Computer Use helper' })
+    expect(m.ask.mock.calls.map((call) => call[1].cmd)).toContain('shutdown')
+    expect(m.launch).toHaveBeenCalledOnce()
+  })
+
+  it('holds the permission lock from the start: a request or a second update arriving meanwhile is refused, not clobbered', async () => {
+    helperAt(14, '0.7.0')
+    let release!: (v: string) => void
+    m.readFile.mockReturnValue(new Promise<string>((r) => { release = r }))
+    const s = hotkeyService()
+    const update = s.updateHelperForHotkey('zh')
+    expect(s.helperBusy()).toBe(true)
+    await expect(s.request('microphone')).rejects.toThrow(/already in progress/)
+    expect(await s.updateHelperForHotkey('zh')).toBe('busy') // busy is not "asked": main retries once idle
+    release(JSON.stringify({ version: '0.6.3' }))
+    expect(await update).toBe(false)
+    expect(s.helperBusy()).toBe(false)
+    expect(m.confirm).not.toHaveBeenCalled()
+  })
+
+  it('never launches a helper that is not running (macOS: no permission prompts for a hotkey)', async () => {
+    m.ask.mockRejectedValue(Object.assign(new Error('gone'), { code: 'ENOENT' }))
+    m.readFile.mockResolvedValue(JSON.stringify({ version: '0.7.0' }))
+    expect(await hotkeyService().updateHelperForHotkey('zh')).toBe(false)
+    expect(m.confirm).not.toHaveBeenCalled()
+    expect(m.launch).not.toHaveBeenCalled()
   })
 })
 

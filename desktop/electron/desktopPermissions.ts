@@ -1,6 +1,6 @@
 import { app, desktopCapturer, dialog, ipcMain, shell, systemPreferences } from 'electron'
 import { accessSync, constants, existsSync } from 'node:fs'
-import { mkdir } from 'node:fs/promises'
+import { mkdir, readFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { execFile, spawn } from 'node:child_process'
@@ -8,6 +8,7 @@ import { promisify } from 'node:util'
 import { askHelper, helperSocketPath } from './computerUse'
 import { activeBundleDir, builtinBundleSources } from './builtinPlugins'
 import { forsionHomeDir } from './forsionHome'
+import { cmpVersion } from '../shared/amadeus/ipc'
 import { PermissionGuide } from './permissionGuide'
 import { isDesktopPermissionId, type DesktopPermissionId, type DesktopPermissionRequestOptions, type DesktopPermissionState, type DesktopPermissionsSnapshot } from '../shared/desktopPermissions'
 
@@ -34,6 +35,16 @@ async function computerUseInstallerRoot(): Promise<string> {
   const root = candidates.find((dir) => existsSync(path.join(dir, 'scripts/setup-helper.mjs')))
   if (!root) throw new Error('The bundled Computer Use installer is missing. Reinstall Forsion and retry.')
   return root
+}
+
+/** 带 hotkeySubscribe 的助手从这个版本起(Computer Use 0.7.0,macOS 协议 15)。 */
+export const HOTKEY_HELPER_VERSION = '0.7.0'
+
+/** 安装器会装的那份 macOS 助手的版本(prebuilt/macos/<arch>/tangu-computer-use.app.json)。 */
+export async function installableHelperVersion(): Promise<string | null> {
+  const meta = path.join(await computerUseInstallerRoot(), 'prebuilt', 'macos', process.arch, 'tangu-computer-use.app.json')
+  const version = (JSON.parse(await readFile(meta, 'utf8')) as { version?: unknown }).version
+  return typeof version === 'string' ? version : null
 }
 
 /** Same selection order as the bundled helper-path.mjs, including standard user installs. */
@@ -199,9 +210,11 @@ export class DesktopPermissions {
     return this.setupPending
   }
 
-  private async prepareHelper(stillWanted: () => boolean, locale: 'zh' | 'en', repaired = false): Promise<boolean> {
+  private async prepareHelper(stillWanted: () => boolean, locale: 'zh' | 'en', repaired = false, reason: 'permissions' | 'hotkey' = 'permissions'): Promise<boolean> {
     const { snapshot } = await this.read()
     if (!stillWanted()) return false
+    // 快捷键只换正在跑的老助手:macOS 上主进程绝不为它拉起助手(那会弹权限框)
+    if (reason === 'hotkey' && (!snapshot.helperRunning || snapshot.helperError !== 'outdated')) return false
     const externalSocket = helperSocketPath() !== helperSocketPath({})
     if (externalSocket && (!snapshot.helperRunning || snapshot.helperError)) {
       throw new Error('The configured external Computer Use helper is unavailable or outdated. Update and start that helper before retrying.')
@@ -218,13 +231,18 @@ export class DesktopPermissions {
       // Old helpers have no in-flight-task API. liveView.active=false does NOT prove idle:
       // the very first look may still be building an AX tree. Only explicit consent may restart it.
       const zh = locale === 'zh'
+      const hotkey = reason === 'hotkey'
       const answer = await dialog.showMessageBox({
         type: 'question', noLink: true, defaultId: 0, cancelId: 0,
-        buttons: zh ? ['稍后设置', '更新并重启助手'] : ['Set up later', 'Update and restart helper'],
-        message: zh ? '更新 Computer Use 权限助手' : 'Update the Computer Use permission helper',
-        detail: zh
-          ? '此版本需要更新助手才能设置权限。更新会重启助手并中断正在执行的电脑操作，请先完成相关任务。系统可能要求重新授权。'
-          : 'This version needs a helper update to set up permissions. Updating restarts the helper and interrupts any computer task in progress. Finish those tasks first. macOS may ask you to grant access again.',
+        buttons: zh ? [hotkey ? '稍后' : '稍后设置', '更新并重启助手'] : [hotkey ? 'Later' : 'Set up later', 'Update and restart helper'],
+        message: hotkey ? (zh ? '更新 Computer Use 助手' : 'Update the Computer Use helper') : zh ? '更新 Computer Use 权限助手' : 'Update the Computer Use permission helper',
+        detail: hotkey
+          ? zh
+            ? '在别的应用里同时按左右 ⌘ 引用窗口,需要新版的助手。更新会重启助手,并中断正在执行的电脑操作,请先完成相关任务。'
+            : 'Referencing a window by pressing both ⌘ keys in another app needs a newer helper. Updating restarts the helper and interrupts any computer task in progress, so finish those tasks first.'
+          : zh
+            ? '此版本需要更新助手才能设置权限。更新会重启助手并中断正在执行的电脑操作，请先完成相关任务。系统可能要求重新授权。'
+            : 'This version needs a helper update to set up permissions. Updating restarts the helper and interrupts any computer task in progress. Finish those tasks first. macOS may ask you to grant access again.',
       })
       if (answer.response !== 1 || !stillWanted()) return false
       await helperCommand('shutdown')
@@ -252,7 +270,7 @@ export class DesktopPermissions {
         return true
       } catch (error) {
         if ((error as { code?: string }).code === 'unknown_command') {
-          if (!repaired) return this.prepareHelper(stillWanted, locale, true)
+          if (!repaired) return this.prepareHelper(stillWanted, locale, true, reason)
           throw error
         }
         if (attempt === 19) throw error
@@ -267,6 +285,25 @@ export class DesktopPermissions {
     else if (process.platform === 'win32' && (id === 'microphone' || id === 'camera')) {
       await shell.openExternal(id === 'microphone' ? 'ms-settings:privacy-microphone' : 'ms-settings:privacy-webcam')
     }
+  }
+
+  /** 全局双 ⌘(应用 / 窗口引用)碰到在跑的旧版助手时调:同一套「征得同意 → 关旧的 → 装新的 → 起来」,对话框说的是这件事。
+   *  先看要装的那份助手是不是带这条命令的版本(0.7.0 起):包里的也是旧版就不问 —— 重启出来还是旧版,只会白打断一次。
+   *  做完 notifyIfIdle → 订阅方(onHelperIdle)当场重连。 */
+  async updateHelperForHotkey(locale: 'zh' | 'en'): Promise<boolean | 'busy'> {
+    if (process.platform !== 'darwin') return false
+    // 别的权限操作 / 安装在跑:不算问过,主进程等它们做完(onHelperIdle)再来。互斥在第一个 await 之前拿
+    if (this.actionPending || this.setupPending) return 'busy'
+    this.actionPending = true
+    const generation = ++this.generation
+    try {
+      const version = await installableHelperVersion().catch(() => null)
+      if (!version || cmpVersion(version, HOTKEY_HELPER_VERSION) < 0) return false
+      return await this.prepareHelper(() => generation === this.generation, locale, false, 'hotkey')
+    } catch (error) {
+      console.warn('[permissions] helper update for the global hotkey failed', error)
+      return false
+    } finally { this.actionPending = false; this.notifyIfIdle() }
   }
 
   async request(id: DesktopPermissionId, options: DesktopPermissionRequestOptions = {}): Promise<DesktopPermissionsSnapshot> {
