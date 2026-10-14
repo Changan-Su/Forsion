@@ -29,28 +29,60 @@ beforeEach(() => {
 })
 
 describe('收件箱列表源(统一工作区)', () => {
-  it('全部 = 未归档那份(刚归档的立即挪走);未读点只挂未读行;未读 / 按来源客户端筛;搜索叠加正文', () => {
-    expect(src.items().map((i) => i.key)).toEqual(['1', '2', '3', '5', '6', '8', '9', '10'])
-    expect(src.items().map((i) => !!i.unread)).toEqual([true, false, true, true, true, true, true, true])
-    expect(src.items({ group: 'unread' }).map((i) => i.key)).toEqual(['1', '3', '5', '6', '8', '9', '10'])
-    expect(src.items({ group: 'source:agents' }).map((i) => i.key)).toEqual(['1', '2', '10'])
-    expect(src.items({ group: 'source:automation' }).map((i) => i.key)).toEqual(['8', '9'])
-    expect(src.items({ query: 'alpha' }).map((i) => i.key)).toEqual(['3'])
+  // 组头不是信:下面凡是数信的地方都先把组头滤掉
+  const mails = (f?: Parameters<typeof src.items>[0]) => src.items(f).filter((i) => i.kind !== 'folder')
+  const heads = (f?: Parameters<typeof src.items>[0]) => src.items(f).filter((i) => i.kind === 'folder')
+
+  it('全部 = 未归档那份(刚归档的立即挪走);未读点只挂未读行;未读客户端筛;搜索叠加正文、结果平铺', () => {
+    expect(mails().map((i) => i.key).sort((a, b) => Number(a) - Number(b))).toEqual(['1', '2', '3', '5', '6', '8', '9', '10'])
+    expect(mails().filter((i) => !i.unread).map((i) => i.key)).toEqual(['2'])
+    expect(mails({ group: 'unread' }).map((i) => i.key).sort((a, b) => Number(a) - Number(b))).toEqual(['1', '3', '5', '6', '8', '9', '10'])
+    // 搜索:没有组头、行不挂在谁下面,第二行自己带发信人
+    const hits = src.items({ query: 'alpha' })
+    expect(hits.map((i) => `${i.key}|${i.kind ?? ''}|${i.parent ?? ''}|${i.subtitle}`)).toEqual(['3|||Forsion · 服务端公告 alpha'])
+  })
+
+  it('按发信人归组:每个 Agent 各一组,自动化的各条规则并成一组且不泄漏规则 id;组里的行挂在组头下面', () => {
+    const g = heads()
+    expect(g.map((x) => x.key).sort()).toEqual(['sender:agent:ariosto', 'sender:agent:muse', 'sender:automation', 'sender:forsion', 'sender:system'])
+    expect(g.every((x) => x.folderStyle === 'group')).toBe(true)
+    expect(g.map((x) => x.title)).not.toContain('automation:w-da28d2')
+    const under = (key: string) => src.items().filter((i) => i.parent === key).map((i) => i.key)
+    expect(under('sender:agent:muse')).toEqual(['1', '2'])
+    expect(under('sender:automation')).toEqual(['8', '9'])
+    expect(under('sender:system')).toEqual(['5', '6'])
+    // 组头:行尾 = 这一组的未读数;Agent 不给图标(宿主画头像 / 首字),其余来源各一枚
+    expect(Object.fromEntries(g.map((x) => [x.key, `${x.hint ?? '-'}|${x.icon ?? '-'}`]))).toEqual({
+      'sender:agent:muse': '1|-', 'sender:agent:ariosto': '1|-', 'sender:automation': '2|workflow', 'sender:forsion': '1|cloud', 'sender:system': '2|info',
+    })
+    expect(senderOf(useInbox.getState().messages.find((m) => m.id === '8')!)).toBe('自动化')
+  })
+
+  it('谁刚来信谁在最上面:组按各自最新的一封排,组里也是新的在前;有未读的组缺省开着,其余收着', () => {
+    useInbox.setState({ messages: [
+      msg('a', { read_at: '2026-09-11 10:00:00', created_at: '2026-09-11 09:00:00' }),                          // muse,旧
+      msg('b', { sender_kind: 'server', sender_id: null, read_at: '2026-09-12 08:00:00', created_at: '2026-09-12 08:00:00' }), // Forsion
+      msg('c', { sender_id: 'ariosto', read_at: '2026-09-10 08:00:00', created_at: '2026-09-10 08:00:00' }),      // ariosto,最旧
+      msg('d', { created_at: '2026-09-13 08:00:00' }),                                                            // muse 又来一封 → muse 排到最上
+    ] })
+    expect(src.items().map((i) => i.key)).toEqual(['sender:agent:muse', 'd', 'a', 'sender:forsion', 'b', 'sender:agent:ariosto', 'c'])
+    expect(heads().map((x) => !!x.defaultOpen)).toEqual([true, false, false])
+    // 只有一个发信人(手机的本地收件箱只有 Forsion):没有未读也开着,免得进来只看到一行收起的组头
+    useInbox.setState({ messages: [msg('b', { sender_kind: 'server', sender_id: null, read_at: '2026-09-12 08:00:00' })] })
+    expect(heads().map((x) => !!x.defaultOpen)).toEqual([true])
   })
 
   it('已归档 = 独立的那份;items / groups 渲染期零副作用(不拉取、不切任何全局档)', () => {
-    expect(src.items({ group: 'archived' }).map((i) => i.key)).toEqual(['4'])
+    expect(mails({ group: 'archived' }).map((i) => i.key)).toEqual(['4'])
     src.groups!()
     expect(spies.refreshList).not.toHaveBeenCalled()
     expect(spies.refreshArchived).not.toHaveBeenCalled()
   })
 
-  it('分组:未读 → 固定来源顺序 → 已归档;多个自动化规则并成一组且不泄漏规则 id', () => {
+  it('筛选只剩未读 / 已归档(发信人已经是组,不再当筛选条件)', () => {
     const g = src.groups!()
-    expect(g.map((x) => x.key)).toEqual(['unread', 'source:forsion', 'source:automation', 'source:agents', 'source:system', 'archived'])
-    expect(g.map((x) => x.count)).toEqual([4, 1, 2, 3, 2, 1])
-    expect(g.map((x) => x.title)).not.toContain('automation:w-da28d2')
-    expect(senderOf(useInbox.getState().messages.find((m) => m.id === '8')!)).toBe('自动化')
+    expect(g.map((x) => x.key)).toEqual(['unread', 'archived'])
+    expect(g.map((x) => x.count)).toEqual([4, 1])
   })
 
   it('subscribe 一次拉三样(未归档 / 未读数 / 已归档),退订后不再通知', () => {
@@ -63,12 +95,15 @@ describe('收件箱列表源(统一工作区)', () => {
     useInbox.setState({ unreadCount: 8 })
     expect(cb).toHaveBeenCalledTimes(1)
   })
-  it('行首按来源、第二行 = 发信人 · 正文第一句', () => {
-    const items = src.items()
-    expect(items.map((i) => i.icon)).toEqual(['agent', 'agent', 'cloud', 'info', 'info', 'workflow', 'workflow', 'agent'])
-    expect(items.find((i) => i.key === '3')!.subtitle).toBe('Forsion · 服务端公告 alpha')
-    expect(items.find((i) => i.key === '1')!.subtitle).toBe(senderOf(useInbox.getState().messages[0])) // 空正文:只有发信人,不留孤零零的分隔点
-    expect(items.find((i) => i.key === '8')!.subtitle).not.toContain('w-da28d2') // 规则 id 不进第二行
+  it('组里的行:第二行只有正文第一句(发信人在组头上),正文取不出字就没有第二行;搜索结果的行带发信人', () => {
+    const items = mails()
+    expect(items.find((i) => i.key === '3')!.subtitle).toBe('服务端公告 alpha')
+    expect(items.find((i) => i.key === '1')!.subtitle).toBeUndefined()
+    // 搜索(平铺):行首按来源,第二行 = 发信人 · 正文第一句;空正文只有发信人,不留孤零零的分隔点;规则 id 不进第二行
+    const flat = src.items({ query: '标题' })
+    expect(flat.map((i) => i.icon).sort()).toEqual(['agent', 'agent', 'agent', 'cloud', 'info', 'info', 'workflow', 'workflow'])
+    expect(flat.find((i) => i.key === '1')!.subtitle).toBe(senderOf(useInbox.getState().messages[0]))
+    expect(flat.find((i) => i.key === '8')!.subtitle).not.toContain('w-da28d2')
   })
 
   it('正文第一句:围栏 / 图片 / 表格 / 记号都不进摘要,与标题相同的行跳过', () => {
@@ -102,7 +137,7 @@ describe('收件箱列表源(统一工作区)', () => {
     const markArchived = vi.fn()
     useInbox.setState({ markArchived })
     try {
-      src.itemMenu!(src.items({ group: 'archived' })[0]).find((action) => action.id === 'archive')!.run()
+      src.itemMenu!(mails({ group: 'archived' })[0]).find((action) => action.id === 'archive')!.run()
       expect(markArchived).toHaveBeenCalledWith('4', false)
     } finally { useInbox.setState({ markArchived: original }) }
   })

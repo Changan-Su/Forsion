@@ -12,6 +12,10 @@
  * 搜索时平铺,以及没有层级的老列表不变样。负对照实跑过:把「文件夹中间 = 放进去」和「不落进自己下面」
  * 改坏,对应两条变红。
  *
+ * 2026-10-14 起还钉组头那一半(`?listsrc&groups`,收件箱按发信人用的那种列表):组头与工作区一级行同档、
+ * 三种前导、组里的行与组头的名字对齐、行尾的悬停图标钮(只收带图标的动作、不压标题、不误开行)、
+ * 开合只记这一程(读完不合上、来了新的重新打开)、「查看更多」、键盘。
+ *
  * 用法:npm run check:listsrc   (截图落 /tmp/listsrc-shots)
  */
 const fs = require('fs')
@@ -257,6 +261,116 @@ async function main() {
     await old.locator('.t2sw-plug-list .t2s-srow').first().waitFor()
     check('没有层级的老列表:没有文件夹行,六行都在', await old.locator('.t2sw-plug-list .t2s-folder-row').count() === 0 && await old.locator('.t2sw-plug-list .t2s-srow').count() === 6)
     await old.close()
+    // ── 组头 / 行尾的悬停图标钮 / 「查看更多」(2026-10-14,`?listsrc&groups`):收件箱按发信人的那一种列表 ──
+    for (const mode of ['light', 'dark']) {
+      const g = await browser.newPage({ locale: 'zh-CN', viewport: { width: 520, height: 720 } })
+      g.on('pageerror', (error) => console.error('Renderer:', error.message))
+      const glist = g.locator('.t2sw-plug-list')
+      const gload = async () => { await g.goto(`${BASE}?listsrc&groups${mode === 'dark' ? '&dark' : ''}`, { waitUntil: 'load' }); await glist.locator('.t2sw-plug-ghead').first().waitFor() }
+      await gload()
+      const ghead = (name) => glist.locator('.t2sw-plug-ghead', { hasText: name })
+      const grow = (name) => glist.locator('.t2sw-plug-item', { hasText: name })
+      const opens = () => glist.locator('.t2sw-plug-ghead').evaluateAll((els) => els.map((el) => `${el.querySelector('.t2o-name').textContent}:${el.getAttribute('aria-expanded')}`).join(' '))
+      const gprobe = () => g.evaluate(() => window.__groupProbe)
+      // 探针推来的变化要等 React 画完:轮询到开合状态对上为止(最多 2 秒),返回最后一次读到的
+      const opensLike = async (re) => { let last = ''; for (let i = 0; i < 40; i++) { last = await opens(); if (re.test(last)) break; await g.waitForTimeout(50) } return last }
+      await g.screenshot({ path: path.join(SHOTS, `listsrc-groups-${mode}.png`) })
+      console.log(`      截图 ${path.join(SHOTS, `listsrc-groups-${mode}.png`)}`)
+      if (mode === 'dark') { await g.close(); continue }
+
+      check('组头:有未读的组缺省开着,其余收着', await opens() === 'Muse:true Forsion:true 自动化:false 带头像的:false', await opens())
+      const geo = await g.evaluate(() => {
+        const r = (el) => { const b = el.getBoundingClientRect(); return { x: Math.round(b.left * 10) / 10, w: Math.round(b.width * 10) / 10, h: Math.round(b.height * 10) / 10 } }
+        const heads = Array.from(document.querySelectorAll('.t2sw-plug-ghead'))
+        const kid = document.querySelector('.t2sw-plug-group .t2s-srow')
+        return {
+          head: r(heads[0]), leads: heads.map((el) => r(el.querySelector('.t2o-lead'))), name: r(heads[0].querySelector('.t2o-name')), title: r(kid.querySelector('.t2s-srow-title')),
+          lead: heads.map((el) => { const x = el.querySelector('.t2o-lead').firstElementChild; return x.tagName === 'IMG' ? `img:${getComputedStyle(x).borderRadius}` : x.tagName === 'svg' ? `svg:${r(x).w}` : `text:${x.textContent}` }),
+          kidLead: Array.from(document.querySelectorAll('.t2sw-plug-group .t2s-srow')).map((el) => el.querySelector('.t2s-lead').innerHTML.includes('t2sw-plug-udot') ? 'dot' : el.querySelector('.t2s-lead').childElementCount ? 'icon' : 'empty'),
+          count: getComputedStyle(heads[0].querySelector('.t2s-count')).backgroundColor,
+        }
+      })
+      check('组头与工作区一级行同档:40 高、30 的前导槽', geo.head.h === 40 && geo.leads.every((l) => l.w === 30 && l.h === 30), JSON.stringify([geo.head, geo.leads]))
+      check('前导三种:没有图标 → 首字;词表图标 → 方块里 16px 的图标;图片 → 圆头像', JSON.stringify(geo.lead) === JSON.stringify(['text:M', 'svg:16', 'svg:16', 'img:50%']), JSON.stringify(geo.lead))
+      check('组里的行:标题和组头的名字对齐,前导槽里只有未读的圆点(不画自己的图标)', Math.abs(geo.name.x - geo.title.x) <= 1 && JSON.stringify(geo.kidLead) === JSON.stringify(['dot', 'empty', 'dot', 'empty']), JSON.stringify([geo.name.x, geo.title.x, geo.kidLead]))
+      check('组头行尾的未读数是一颗小胶囊(有底色)', geo.count !== 'rgba(0, 0, 0, 0)', geo.count)
+
+      // 行尾的图标钮:指针上去才有;只收带图标的动作,顺序同菜单;出现时不压标题,时间让出来
+      const first = grow('请审批')
+      const quickOf = (row) => row.locator('.t2sw-plug-row-act')
+      check('指针不在行上:没有图标钮,时间看得见', !(await quickOf(first).first().isVisible()) && await first.locator('.t2s-count').isVisible())
+      await first.hover()
+      const labels = await quickOf(first).evaluateAll((els) => els.filter((el) => el.getClientRects().length).map((el) => el.getAttribute('aria-label')))
+      check('指针在行上:带图标的动作成一排图标钮(同手机左滑那一份),没图标的不在', JSON.stringify(labels) === JSON.stringify(['标为已读', '归档', '删除']), JSON.stringify(labels))
+      const long = grow('很长很长')
+      await long.hover()
+      const fit = await long.evaluate((el) => {
+        const range = document.createRange(); range.selectNodeContents(el.querySelector('.t2s-srow-title'))
+        const b = (x) => x.getBoundingClientRect()
+        return { title: Math.round(b(el.querySelector('.t2s-srow-title')).right), sub: Math.round(b(el.querySelector('.t2sw-plug-sub')).right), quick: Math.round(b(el.querySelector('.t2sw-plug-row-quick')).left),
+          more: Math.round(b(el.querySelector('.t2sw-plug-row-menu')).left), quickRight: Math.round(b(el.querySelector('.t2sw-plug-row-quick')).right), time: getComputedStyle(el.querySelector('.t2s-count')).display }
+      })
+      check('图标钮不压标题和第二行,排在「更多」左边;时间收起', fit.title <= fit.quick && fit.sub <= fit.quick && fit.quickRight <= fit.more && fit.time === 'none', JSON.stringify(fit))
+      await g.screenshot({ path: path.join(SHOTS, 'listsrc-groups-hover.png') })
+      await quickOf(long).nth(1).click()
+      check('点图标钮跑的是那个动作,不误开这一行', JSON.stringify((await gprobe()).ran) === JSON.stringify(['archive:f1']) && (await gprobe()).opened.length === 0, JSON.stringify(await gprobe()))
+      await grow('会员即将到期').hover()
+      await grow('会员即将到期').getByRole('button', { name: '会员即将到期的操作', exact: true }).click()
+      const menu = await g.getByRole('menuitem').allInnerTexts()
+      check('「更多」里仍是带名字的全部动作', JSON.stringify(menu) === JSON.stringify(['标为未读', '归档', '查看属性', '删除']) || JSON.stringify(menu) === JSON.stringify(['标为未读', '归档', '删除', '查看属性']), JSON.stringify(menu))
+      await g.keyboard.press('Escape')
+
+      // 开合只记这一程:读完最后一封未读不在光标底下合上;收起后来了新的重新打开;未读还在时用户收起就收着
+      await first.hover(); await quickOf(first).first().click()
+      check('组里最后一封未读标成已读:组不自己合上,组头的数没了', (await opens()).startsWith('Muse:true') && await ghead('Muse').locator('.t2s-count').count() === 0, await opens())
+      await ghead('Muse').click()
+      check('点组头收起', (await opens()).startsWith('Muse:false'), await opens())
+      await g.evaluate(() => window.__groupProbe.arrive('muse'))
+      const reopened = await opensLike(/^Muse:true/)
+      check('收起的组来了新的未读:重新打开', reopened.startsWith('Muse:true') && await ghead('Muse').locator('.t2s-count').innerText() === '1', reopened)
+      await ghead('Muse').click()
+      await g.evaluate(() => window.__groupProbe.arrive('pic'))
+      const risen = await opensLike(/^带头像的:true Muse:false/)
+      check('未读还在时用户收起的组,别处来信不把它翻开;来信的那一组打开、排到最上面', /^带头像的:true Muse:false/.test(risen), risen)
+
+      // 查看更多:一组先列五条
+      await ghead('自动化').click()
+      const autoRows = () => glist.locator('.t2sw-plug-group', { hasText: '自动化' }).locator('.t2s-srow').count()
+      const moreBtn = glist.locator('.t2s-viewmore')
+      check('一组超过五条:先列五条,其余在「查看更多 · N」后面', await autoRows() === 5 && await moreBtn.innerText() === '查看更多 · 2', `${await autoRows()} / ${await moreBtn.innerText().catch(() => '')}`)
+      await moreBtn.click()
+      check('点「查看更多」列全', await autoRows() === 7 && await moreBtn.count() === 0, String(await autoRows()))
+      await grow('每日汇总 3').locator('.t2s-srow').click()
+      check('点组里的行照常打开', (await gprobe()).opened.at(-1) === 'a3', JSON.stringify((await gprobe()).opened))
+
+      // 键盘:方向键走得到组头,左右键开合
+      await ghead('Forsion').focus(); await g.keyboard.press('ArrowLeft')
+      const shut = await ghead('Forsion').getAttribute('aria-expanded')
+      await g.keyboard.press('ArrowRight'); await g.keyboard.press('ArrowDown')
+      check('组头:左键收起、右键展开,下键走进组里的行', shut === 'false' && await ghead('Forsion').getAttribute('aria-expanded') === 'true' && await g.evaluate(() => document.activeElement.classList.contains('t2s-srow')))
+      // 键盘走到行上:图标钮也出来(不用 Tab 去够它们 —— 无头的 macOS Chromium 里 Tab 不落在按钮上,量显示与否就够了)
+      const quickShown = () => g.evaluate(() => getComputedStyle(document.activeElement.parentElement.querySelector('.t2sw-plug-row-quick')).display)
+      check('键盘焦点走到行上:图标钮出现', await quickShown() === 'flex', await quickShown())
+      // 鼠标点过的行留着焦点,但指针移开后不能一直亮着一排按钮(所以用的是 :focus-visible,不是 :focus-within)
+      await grow('每日汇总 5').locator('.t2s-srow').click(); await g.mouse.move(500, 700)
+      check('鼠标点过的行:指针移开后图标钮收起,时间回来', await quickShown() === 'none' && await grow('每日汇总 5').locator('.t2s-count').isVisible(), await quickShown())
+
+      await g.locator('.t2s-search input').fill('汇总')
+      check('搜索时平铺:没有组头,行自己带图标', await glist.locator('.t2sw-plug-ghead').count() === 0 && await glist.locator('.t2s-srow').count() === 7 && await glist.locator('.t2s-srow .t2s-lead svg').count() === 7)
+      await gload()
+      check('组头的开合不落盘:重新载入回到「有未读的开着、其余收着」', await opens() === 'Muse:true Forsion:true 自动化:false 带头像的:false', await opens())
+      // 在搜索结果里点开一封收着的组里的信(排在第六):清掉搜索后那一组要打开,而且这封不能被收在「查看更多」后面
+      await g.locator('.t2s-search input').fill('汇总 6'); await glist.locator('.t2s-srow').first().click()
+      await g.locator('.t2s-search input').fill('')
+      const back = await opensLike(/自动化:true/)
+      check('搜索里点开的信:清掉搜索后它的组打开、整组列全(它不在「查看更多」后面)', /自动化:true/.test(back) && await grow('每日汇总 6').locator('.t2s-srow.active').count() === 1, back)
+      // 组都收着时,搜索框按下键要落在第一个组头上(以前只找行,找不到就停在输入框里)
+      for (const name of ['Muse', 'Forsion', '自动化']) await ghead(name).click()
+      await g.locator('.t2s-search input').focus(); await g.keyboard.press('ArrowDown')
+      check('组都收着:搜索框的下键落在第一个组头上', await opens() === 'Muse:false Forsion:false 自动化:false 带头像的:false' && await g.evaluate(() => document.activeElement.classList.contains('t2sw-plug-ghead')), await opens())
+      await g.close()
+    }
+
     // ── 数据接线的源码闸(几何管不着,但正是 2026-08-28 「明明有记录列表却是空」的那半)──
     //    插件在**启动期**激活,那时 vault 根还没恢复(宿主 vault 引导是懒的),列表源启动时那次
     //    读索引拿到的是 readTextFile 的**静默 null**;库落地后没人再喊它一声,列表就恒空。
