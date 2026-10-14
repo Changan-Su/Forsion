@@ -1,5 +1,5 @@
 /**
- * 「Forsion 云端」个人中心（Extend 渲染半身画的账号 / 个人主页 / 额度与积分 / 背包 / 安全 / 用量记录 / 反馈 + 宿主的同步 / 连接）
+ * 「Forsion 云端」个人中心（Extend 渲染半身画的账号 / 个人主页 / 额度与积分 / 背包 / 插件投稿 / 安全 / 用量记录 / 反馈 + 宿主的同步 / 连接）
  * × 真 Electron × 假云端（scripts/lib/fake-forsion-cloud.cjs，按 server 真实响应形状回数据）：预置已登录态，
  * 逐页打开、断言确实画出了内容且没有页面报错，并截图供人看（观感改动交付前自查真实截图，DESIGN §8）。
  *
@@ -17,8 +17,8 @@ const ROOT = path.join(__dirname, '..')
 const LANG = (process.argv.find((a) => a.startsWith('--lang=')) || '--lang=zh').slice(7) === 'en' ? 'en' : 'zh'
 const OUT = (process.argv.find((a) => a.startsWith('--out=')) || '').slice(6) || path.join(os.tmpdir(), 'forsion-account-center')
 const EXPECT = LANG === 'en'
-  ? ['Account', 'Profile', 'Quota & points', 'Backpack', 'Security', 'Usage', 'Feedback', 'Cloud sync', 'Connection']
-  : ['账号', '个人主页', '额度与积分', '背包', '安全', '用量记录', '反馈', '云端同步', '连接']
+  ? ['Account', 'Profile', 'Quota & points', 'Backpack', 'Submissions', 'Security', 'Usage', 'Feedback', 'Cloud sync', 'Connection']
+  : ['账号', '个人主页', '额度与积分', '背包', '插件投稿', '安全', '用量记录', '反馈', '云端同步', '连接']
 
 // 按名字取,不按下标:Extend 往中间加子页(0.8.2 的「个人主页」)时下标会错位
 const SECURITY = LANG === 'en' ? 'Security' : '安全'
