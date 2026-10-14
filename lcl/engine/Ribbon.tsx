@@ -298,6 +298,7 @@ export function Ribbon() {
    *  ponytail: 宽度一律按当前 Space 记住的左栏宽(没拖过 = 黄金分割默认),不去读别的 Space 各自记的。 */
   const peekStyle = (): React.CSSProperties => {
     // 留着的卡(peekHold)不挪位置:切过去之后那边左栏的开合可能和这边不一样,照新状态重算,卡片会在指针底下跳一下。
+    // ponytail: 留着期间窗口大小 / 缩放变了也不重算(要变就得把指针挪开,卡片随即收起);真要跟,就只冻结 top / left。
     if (peekHold.current && peekGeo.current) return peekGeo.current
     const root = rootRef.current
     const z = zoomOf(root)

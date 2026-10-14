@@ -298,6 +298,17 @@ async function run(page) {
   check('⚠️G2 110% 缩放:卡片仍贴 Ribbon 右沿、让开标签条、通到底(fixed 坐标按 zoom 折算)',
     !!p && Math.abs(p.rect.l - (z.rbRight + 4)) <= 1.5 && p.rect.t >= z.toggleBottom && Math.abs(p.rect.b - (z.workBottom - 8)) <= 1.5,
     `left ${p?.rect.l} vs ${z.rbRight + 4};top ${p?.rect.t} ≥ ${z.toggleBottom};bottom ${p?.rect.b} vs ${z.workBottom - 8}`)
+  // 左面板展开着的那种摆法也在 110% 下量一遍(用户的 dev 界面缩放就是 110%)。
+  await setLeft(page, true)
+  p = await openOn(page, 'b')
+  const zg = await page.evaluate(() => {
+    const g = window.__peek.useWorkspace.getState().api.panels.find((x) => (x.params || {}).__loc === 'left').group.element.getBoundingClientRect()
+    return { l: g.left, t: g.top, r: g.right, b: g.bottom }
+  })
+  check('⚠️G3 110% 缩放 + 左面板展开着:别的 Space 的卡片仍正好盖在眼前这块左栏上',
+    p?.space === 'b' && zg.b - zg.t > 100 && ['l', 't', 'r', 'b'].every((k) => Math.abs(p.rect[k] - zg[k]) <= 1.5),
+    `card ${JSON.stringify(p?.rect)} / left panel ${JSON.stringify(zg)}`)
+  await setLeft(page, false)
   await page.evaluate(() => { document.body.style.zoom = '' })
   await page.waitForTimeout(200)
 
