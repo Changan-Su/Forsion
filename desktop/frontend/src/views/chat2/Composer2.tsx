@@ -52,7 +52,7 @@ import { appRefToken, type AppRef, type AppRefList } from '../../../../shared/ap
 import { AppRefIcon } from '../../components/appRefs'
 import { useCapsuleSlide } from '../../components/capsuleTabs'
 import { composeQuotes } from './quotes'
-import { NEW_CHAT_DRAFT, clearDraft, moveDraft, setDraftField, useDraftField } from './composerDrafts'
+import { NEW_CHAT_DRAFT, clearDraft, moveDraft, setDraftField, useComposerDrafts, useDraftField } from './composerDrafts'
 import { ContextUsagePop } from './ContextUsagePop'
 import { usePromptSuggest } from './promptSuggest'
 import './composer2.css'
@@ -1569,12 +1569,16 @@ export const Composer2: React.FC<{
     card.setAttribute(APPREF_TARGET_ATTR, '')
     const onRef = (e: Event): void => {
       const { ref, image } = (e as CustomEvent<AppRefDelivery>).detail
-      addRefChips([appRefChipOf(ref)])
+      const chip = appRefChipOf(ref)
+      const key = draftKeyRef.current
+      addRefChips([chip])
       requestAnimationFrame(() => taRef.current?.focus())
-      // 那扇窗口的截图后到:当图片附件挂上(同 ChatGPT);截不到 / 太大就只留引用
+      // 那扇窗口的截图后到:当图片附件挂上(同 ChatGPT);截不到 / 太大就只留引用。
+      // 只挂回按下时那份草稿,且那条引用还在 —— 期间切了会话、已经发出去、或把引用删了,迟到的图就丢掉,不串到别处
       void image?.then((shot) => {
         const size = shot ? Math.floor(shot.data.length * 3 / 4) : 0
-        if (shot && size <= MAX_ATTACH_BYTES) setAttachments((prev) => [...prev, { name: `${ref.name.replace(/[\\/:*?"<>|]+/g, ' ').trim().slice(0, 80) || 'window'}.jpg`, mimeType: shot.mimeType, data: shot.data, size }])
+        if (!shot || size > MAX_ATTACH_BYTES || !useComposerDrafts.getState()[key]?.refChips.some((c) => c.token === chip.token)) return
+        setDraftField(key, 'attachments', (prev) => [...prev, { name: `${ref.name.replace(/[\\/:*?"<>|]+/g, ' ').trim().slice(0, 80) || 'window'}.jpg`, mimeType: shot.mimeType, data: shot.data, size }])
       })
     }
     card.addEventListener(APPREF_EVENT, onRef)

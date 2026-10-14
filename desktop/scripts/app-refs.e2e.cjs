@@ -66,7 +66,7 @@ function startFakeHelper(sockPath) {
         else if (msg.cmd === 'listWindows') ok(msg.pid === 13 ? [{ title: 'Q4 路演.key', windowId: 301 }] : [])
         else if (msg.cmd === 'focusWindow') ok({ focused: true })
         else if (msg.cmd === 'hotkeySubscribe') { ok({ subscribed: true }); hotkeySubs.push({ socket, msg }) }
-        else if (msg.cmd === 'windowImage') ok({ jpegBase64: TINY_JPEG, width: 1, height: 1 })
+        else if (msg.cmd === 'windowImage') { const send = () => { msg.answered = true; ok({ jpegBase64: TINY_JPEG, width: 1, height: 1 }) }; msg.windowId === 209 ? setTimeout(send, 1500) : send() } // 209:截得慢的那扇
         else socket.write(`${JSON.stringify({ id: msg.id, ok: false, error: { code: 'unknown_command', message: msg.cmd } })}\n`)
       }
     })
@@ -341,6 +341,15 @@ async function main() {
     const shot = view.locator('.t2c-card .attach-chip img[alt="季度预算.numbers.jpg"]')
     await shot.first().waitFor({ timeout: 8000 }).catch(() => {})
     check('同时把那扇窗口的截图当图片附件挂上(由助手按窗口号截)', await shot.count() === 1 && helper.requests.some((r) => r.cmd === 'windowImage' && r.windowId === 201), helper.requests.filter((r) => r.cmd === 'windowImage'))
+    // 截图迟到时那条引用已经被删了(同理:已发出、切了会话):那张图丢掉,不挂到草稿里
+    helper.fireHotkey({ bundleId: 'com.apple.iWork.Numbers', app: 'Numbers', pid: 12, windowId: 209, title: '迟到.numbers' })
+    const late = strip.filter({ hasText: '迟到.numbers' })
+    await late.first().waitFor({ timeout: 5000 }).catch(() => {})
+    await late.first().locator('button').click().catch(() => {})
+    const lateReq = () => helper.requests.find((r) => r.cmd === 'windowImage' && r.windowId === 209)
+    for (let i = 0; i < 50 && !lateReq()?.answered; i++) await win.waitForTimeout(100)
+    await win.waitForTimeout(500)
+    check('截图到之前引用被删掉了:迟到的截图不挂上', !!lateReq()?.answered && await late.count() === 0 && await view.locator('.t2c-card .attach-chip img[alt="迟到.numbers.jpg"]').count() === 0, { answered: !!lateReq()?.answered, chips: await strip.allTextContents() })
     await win.keyboard.down('MetaLeft')
     await win.keyboard.press('k')
     await win.keyboard.up('MetaLeft')

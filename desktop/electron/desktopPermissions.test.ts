@@ -241,6 +241,12 @@ describe('helper update for the global ⌘⌘ hotkey', () => {
     expect(m.confirm).not.toHaveBeenCalled()
   })
 
+  it('the user switched to another hotkey mid-check: that check is dropped, no dialog for the old gesture', async () => {
+    helperAt(14, '0.7.0')
+    expect(await hotkeyService().updateHelperForHotkey('zh', '0.7.0', () => false)).toBe(false)
+    expect(m.confirm).not.toHaveBeenCalled()
+  })
+
   it('an unreadable bundle version is treated the same (no dialog)', async () => {
     helperAt(14, '0.7.0')
     m.readFile.mockRejectedValue(Object.assign(new Error('missing'), { code: 'ENOENT' }))

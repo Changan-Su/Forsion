@@ -287,7 +287,7 @@ export class DesktopPermissions {
   /** 全局快捷键(应用 / 窗口引用)碰到在跑的旧版助手时调:同一套「征得同意 → 关旧的 → 装新的 → 起来」,对话框说的是这件事。
    *  先看要装的那份助手够不够 minVersion(认这个手势的版本,见 appRefHotkey.ts 的 HOTKEY_GESTURES):包里的也不够就不问 ——
    *  重启出来还是旧版,只会白打断一次。做完 notifyIfIdle → 订阅方(onHelperIdle)当场重连。 */
-  async updateHelperForHotkey(locale: 'zh' | 'en', minVersion: string): Promise<boolean | 'busy'> {
+  async updateHelperForHotkey(locale: 'zh' | 'en', minVersion: string, wanted: () => boolean = () => true): Promise<boolean | 'busy'> {
     if (process.platform !== 'darwin') return false
     // 别的权限操作 / 安装在跑:不算问过,主进程等它们做完(onHelperIdle)再来。互斥在第一个 await 之前拿
     if (this.actionPending || this.setupPending) return 'busy'
@@ -295,8 +295,8 @@ export class DesktopPermissions {
     const generation = ++this.generation
     try {
       const version = await installableHelperVersion().catch(() => null)
-      if (!version || cmpVersion(version, minVersion) < 0) return false
-      return await this.prepareHelper(() => generation === this.generation, locale, false, 'hotkey')
+      if (!version || cmpVersion(version, minVersion) < 0 || !wanted()) return false
+      return await this.prepareHelper(() => generation === this.generation && wanted(), locale, false, 'hotkey')
     } catch (error) {
       console.warn('[permissions] helper update for the global hotkey failed', error)
       return false

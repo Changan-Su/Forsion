@@ -1855,6 +1855,7 @@ let lastFocusedWindow: BrowserWindow | null = null
  *  Electron 全局快捷键;这次运行问没问过更新助手;主窗关着时按下的那一条。 */
 let appRefGesture: (typeof HOTKEY_GESTURES)[string] | null = null
 let appRefAccelerator: string | null = null
+let appRefWantedAccel: string | null = null
 let appRefHelperAsked = false
 let appRefHelperOutdated = false
 let pendingAppRefHotkey: { ref: AppRef; at: number } | null = null
@@ -3433,14 +3434,16 @@ app.whenReady().then(async () => {
   ipcMain.handle('appRefs:icons', (e, ids: unknown) => (isTrustedSender(e) ? ('icons' in appRefs ? appRefs.icons(ids) : appIconDataUrls(ids)) : {}))
   // 全局快捷键:别的应用在前台时按下 → 那一刻最前面的窗口 → 记下它、把 Forsion 叫到前面、交给界面挂进输入框
   // (光标在笔记里就写进笔记)。成对修饰键(双 ⌘ 等)由助手监听、推来那扇窗口,Forsion 自己在前台时助手不推,归窗口内的命令;
-  // 普通组合键注册成 Electron 全局快捷键(Forsion 在前台时也由它接,窗口里收不到这个键)。见 electron/appRefHotkey.ts。
+  // 普通组合键注册成 Electron 全局快捷键(只在 Forsion 不在前台时,见 syncAppRefAccelerator)。见 electron/appRefHotkey.ts。
   // 在跑的助手是旧版(不认订阅命令):macOS 上请用户把它更新掉,一次运行只问一次 —— 真弹出来才算问过,碰上别的权限操作在忙就等它做完再问。
   // ponytail: 「稍后」只记到这次运行结束,每次启动还会问;嫌烦了再记进配置、隔几天再问。
   const askAppRefHelperUpdate = (): void => {
     if (process.platform !== 'darwin' || !appRefHelperOutdated || appRefHelperAsked) return
     appRefHelperAsked = true
-    if (!appRefGesture) { appRefHelperAsked = false; return }
-    void desktopPermissions.updateHelperForHotkey(mainLocale(), appRefGesture.version).then((r) => { if (r === 'busy') appRefHelperAsked = false })
+    const g = appRefGesture
+    if (!g) { appRefHelperAsked = false; return }
+    // 问到一半用户换了键:那次作废(新手势要的版本可能更高,换键时已重置,会按新的再问)
+    void desktopPermissions.updateHelperForHotkey(mainLocale(), g.version, () => appRefGesture === g).then((r) => { if (r === 'busy' && appRefGesture === g) appRefHelperAsked = false })
   }
   const appRefHotkey = createAppRefHotkey({
     target: async () => {
@@ -3496,21 +3499,28 @@ app.whenReady().then(async () => {
     if (next !== appRefGesture) { appRefHelperAsked = false; appRefHelperOutdated = false }
     appRefGesture = next
     appRefHotkey.setGesture(next?.gesture ?? null)
-    const accel = next ? null : hotkeyToAccelerator(hk)
-    if (accel === appRefAccelerator) return
+    appRefWantedAccel = next ? null : hotkeyToAccelerator(hk)
+    syncAppRefAccelerator()
+  })
+  // 普通组合键只在 Forsion 不在前台时注册成全局快捷键(同手势那边的 excludePids):在前台时交给窗口里的命令分发 ——
+  // 不然全局注册会把键吞掉,设置里录这个组合也录不到。注册不上(被别的应用占了)就只在 Forsion 里管用,下次失焦再试。
+  function syncAppRefAccelerator(): void {
+    const want = BrowserWindow.getFocusedWindow() ? null : appRefWantedAccel
+    if (want === appRefAccelerator) return
     if (appRefAccelerator) globalShortcut.unregister(appRefAccelerator)
     appRefAccelerator = null
-    // 注册不上(被别的应用占了)就只在 Forsion 里管用
-    try { if (accel && globalShortcut.register(accel, () => fireAppRef(null))) appRefAccelerator = accel } catch { /* 写法不被接受 */ }
-  })
+    try { if (want && globalShortcut.register(want, () => fireAppRef(null))) appRefAccelerator = want } catch { /* 写法不被接受 */ }
+  }
+  app.on('browser-window-focus', syncAppRefAccelerator)
+  app.on('browser-window-blur', () => setImmediate(syncAppRefAccelerator)) // 失焦那一刻 getFocusedWindow 可能还是它
   // 按下快捷键时那扇窗口的截图(附进输入框,同 ChatGPT)。只截这次运行里经手过的窗口(按快捷键 / 列候选时记下的);
   // macOS 由助手截(屏幕录制权限在它身上;没授权就没有图,绝不为此弹框),Windows 用系统自带的窗口截图。截不到 → null,只挂引用。
   ipcMain.handle('appRefs:snapshot', async (e, raw: unknown) => {
     if (!isTrustedSender(e)) return null
     const ref = normalizeAppRef(raw)
-    const w = ref?.kind === 'window' ? appRefs.known(ref) : null
-    if (!w) return null
     try {
+      const w = ref?.kind === 'window' ? await appRefs.known(ref) : null
+      if (!w) return null
       if (process.platform === 'darwin') {
         const r = await askHelper(helperSocketPath(), { cmd: 'windowImage', windowId: w.windowId, maxDimension: 1600 }, 10_000) as { jpegBase64?: unknown }
         return typeof r?.jpegBase64 === 'string' && r.jpegBase64 ? { mimeType: 'image/jpeg', data: r.jpegBase64 } : null
