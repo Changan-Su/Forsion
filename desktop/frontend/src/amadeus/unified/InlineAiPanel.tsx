@@ -134,6 +134,9 @@ export function InlineAiPanel({ x, y, anchorTop, title, hasSelection, askFirst, 
     const a = document.activeElement as HTMLElement | null
     if (!a || a === document.body || a === document.documentElement) return true
     if (panelRef.current?.contains(a)) return !forEnter || a === panelRef.current
+    // 只读卡(聊天 / 插件视图)没有「所属编辑器」:点过消息之后焦点在标签组容器这类可聚焦的祖先上,不在 body。
+    // 只要不是在别处的输入框里打字,Esc 就归这张卡。
+    if (!onApply) return !a.matches('input, textarea, select, [contenteditable]:not([contenteditable="false"])')
     return !!editorRef.current?.contains(a)
   }
   const keyRef = useRef({ phase, text, primary })

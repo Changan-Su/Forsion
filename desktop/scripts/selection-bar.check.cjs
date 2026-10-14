@@ -36,7 +36,7 @@ const PLUGIN_MAIN = `
 window.__selprobe = { ran: [], asked: [], tools: [], bar: null }
 ctx.registerSelectionAction({ id: 'note-only', title: '只在笔记', run: function () { return 'x' } })
 ctx.registerSelectionAction({ id: 'everywhere', title: '到处', scope: 'all', icon: 'bookmark', run: function (cx) { return 'E:' + cx.view + ':' + cx.editable + ':' + (cx.pagePath === undefined) + ':' + (cx.source && cx.source.title) } })
-ctx.registerSelectionAction({ id: 'long', title: '长的才有', scope: ['chat'], when: function (cx) { return cx.length >= 30 }, run: function () { return 'x' } })
+ctx.registerSelectionAction({ id: 'long', title: '长的才有', scope: ['chat'], when: function (cx) { return cx.length >= 15 }, run: function () { return 'x' } })
 ctx.registerSelectionAction({ id: 'own', title: '只在自己的视图', scope: 'own', output: 'none', run: function (cx) { window.__selprobe.ran.push(cx.text + '|' + cx.view + '|' + (cx.source && cx.source.page)) } })
 ctx.registerView({ id: 'reader', title: 'Sel Probe', mount: function (el) {
   el.innerHTML = '<div class="selprobe" style="height:100%;overflow:auto;padding:120px 60px;font-size:15px;line-height:1.7;color:var(--text)"><p id="selprobe-p">Plugin view paragraph for the selection bar check.</p><input id="selprobe-in" value="text inside an input" style="width:260px"/><div style="height:1600px"></div></div>'
@@ -193,6 +193,8 @@ async function main() {
     await win.locator('.t2-content', { hasText: 'AZURE-FALCON 已记下' }).first().waitFor({ timeout: 15000 })
     if (ZOOM !== 1) check(`界面缩放 ${ZOOM} 已生效`, Math.abs((await win.evaluate(() => document.body.currentCSSZoom || 1)) - ZOOM) < 0.01)
     const CHAT = '[data-chat-surface="chat"] .t2-content'
+    // 先等探针插件装好:条上有没有 ⋯ 取决于它注册的动作
+    check('探针插件已加载', (await until(() => win.evaluate(() => !!window.__selprobe), 15000)) === true)
 
     // ── 聊天:条的位置、外壳、组成 ──
     const sel1 = await dragSelect(win, CHAT, 'AZURE-FALCON 已记下')
@@ -208,7 +210,7 @@ async function main() {
     check('聊天区一滚动条就收', (await until(async () => !(await barState(win)), 3000)) === true)
     await dragSelect(win, CHAT, 'AZURE-FALCON 已记下')
     await until(() => barState(win), 5000)
-    await win.mouse.click(8, 400) // 窗口最左边缘:在聊天区外
+    await input.click() // 输入框:在消息流外面,点了哪儿也不去
     check('点到聊天区外面条就收', (await until(async () => !(await barState(win)), 3000)) === true)
     await input.fill('输入框里的一段字')
     await input.focus()
@@ -234,13 +236,13 @@ async function main() {
     check('没在设置里选过翻译模型 → 自动用目录里的机器翻译模型', req1?.model_id === 'qwen-mt', `model_id=${req1?.model_id}`)
     check('结果卡是只读的:复制 / 重试 / 关闭,没有「替换」「插入下方」', !!c1 && c1.readonly && c1.phase === 'done' && c1.acts.join(',') === 'copy,retry,discard' && c1.preview === '译文<English>:重构解析器的词法', JSON.stringify(c1))
     check('卡头:目标语言下拉 + 写明是机器翻译', c1.lang === 'English' && /机器翻译.*Qwen MT Flash/.test(c1.hint || '') && c1.title === '翻译', JSON.stringify(c1))
-    check('卡贴在选区下面、不越出视口;条已收起、选区还在', c1.top >= sel2.bottom && c1.top - sel2.bottom < 16 && c1.left >= 0 && c1.right <= (await win.evaluate(() => innerWidth)) && !(await barState(win)) && !(await win.evaluate(() => window.getSelection().isCollapsed)), JSON.stringify({ c1, sel2 }))
+    check('卡贴着选区(下面放不下才翻到上面)、不越出视口;条已收起、选区还在', ((c1.top >= sel2.bottom - 1 && c1.top - sel2.bottom < 16) || (c1.bottom <= sel2.top + 1 && sel2.top - c1.bottom < 16)) && c1.left >= 0 && c1.right <= (await win.evaluate(() => innerWidth)) && !(await barState(win)) && !(await win.evaluate(() => window.getSelection().isCollapsed)), JSON.stringify({ c1, sel2 }))
     await win.screenshot({ path: path.join(shots, 'chat-translate-card.png') })
     await win.locator('[data-testid="inline-ai-lang"]').selectOption('Japanese')
     await until(async () => inline.length >= 2 && inline.at(-1).language === 'Japanese', 5000)
     const c2 = await cardDone(win)
     check('卡头换语言 = 重译一次', inline.at(-1)?.language === 'Japanese' && c2?.lang === 'Japanese' && c2.preview === '译文<Japanese>:重构解析器的词法', JSON.stringify({ last: inline.at(-1), c2 }))
-    await win.mouse.click(8, 400)
+    await input.click()
     check('点卡外面卡就收', (await until(async () => !(await card(win)), 3000)) === true)
 
     // 英文选区 → 界面语言
@@ -267,7 +269,7 @@ async function main() {
     const short = await pickMore(win)
     check('⋯ 里只列认聊天的动作(只在笔记 / 只在自己视图 / 字数不够的不列)', short.join(',') === 'plugin:selprobe:everywhere', short.join(','))
     await win.screenshot({ path: path.join(shots, 'chat-more.png') })
-    await win.mouse.click(8, 400)
+    await input.click()
     await dragSelect(win, CHAT, '先把记号流和错误恢复拆开,再补一组边界用例')
     const longer = await pickMore(win, 'plugin:selprobe:everywhere')
     const c4 = await cardDone(win)
@@ -276,7 +278,6 @@ async function main() {
     await until(async () => !(await card(win)), 3000)
 
     // ── 插件视图:ctx.ui.mountSelectionBar ──
-    check('探针插件已加载、宿主给了 mountSelectionBar', (await until(() => win.evaluate(() => !!window.__selprobe), 10000)) === true)
     await dragSelect(win, CHAT, 'AZURE-FALCON 已记下')
     await until(() => barState(win), 5000)
     await win.evaluate(() => window.__selprobe.open())
@@ -332,9 +333,10 @@ async function main() {
     check('dispose() 之后不再出条', !(await barState(win)))
 
     // ── 观感自查(DESIGN §8):回聊天,深色 + 英文各截一张,人看 ──
-    await win.evaluate(() => { localStorage.setItem('forsion_theme', 'dark'); localStorage.setItem('tangu_locale', 'en') })
+    await win.evaluate(() => { localStorage.setItem('forsion_theme_pref', 'dark'); localStorage.setItem('forsion_theme', 'dark'); localStorage.setItem('tangu_locale', 'en') })
     await win.reload({ waitUntil: 'domcontentloaded' })
-    await win.locator('.t2c-ta').first().waitFor({ timeout: 30000 })
+    // 重载后先认会话行再点(恢复出来的活动标签可能是探针插件那个视图,这时没有输入框可等)
+    await win.locator('text=Parser 重构').first().waitFor({ timeout: 30000 })
     await win.locator('text=Parser 重构').first().click()
     await win.locator(CHAT, { hasText: 'AZURE-FALCON' }).first().waitFor({ timeout: 15000 })
     await dragSelect(win, CHAT, '重构解析器的词法阶段')
