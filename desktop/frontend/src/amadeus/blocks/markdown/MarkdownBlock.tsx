@@ -71,7 +71,7 @@ import { joinRel, toAssetUrl, toDisplayMarkdown, toStoredMarkdown, fromAssetUrl 
 import { ATTACHMENT_CLIP_MIME, recentAttachmentCopy, rememberAttachmentCopy } from '../../lib/attachmentClipboard'
 import { tabsToEntities, entitiesToTabs } from '@amadeus-shared/indentIo'
 import { resolvePageName, unescapeWikiOutsideFences, normalizeUrlLiterals } from '@amadeus-shared/links'
-import { resolveFileName } from '../../lib/vaultFiles'
+import { resolveFileLink } from '../../lib/vaultFiles'
 import { wikiFilesEnabled } from '../../lib/wikiFiles'
 import { emptyDb, emptyNoteView, serializeDb } from '@amadeus-shared/db/schema'
 import { BLANK_SCENE_JSON, blankDrawing } from '@amadeus-shared/excalidraw/format'
@@ -2182,7 +2182,7 @@ export function MarkdownBlock({
           onSlashPick={applySlash}
           getFiles={() => (wikiFilesEnabled() ? ps.getState().files : [])}
           isWikiResolved={(n) =>
-            !!resolvePageName(n, getPageNames(), pagePath) || !!resolveFileName(n, ps.getState().files, pagePath)}
+            !!resolvePageName(n, getPageNames(), pagePath) || !!resolveFileLink(n, ps.getState().files, pagePath)}
           wikiIcon={(n) => {
             const p = resolvePageName(n, getPageNames(), pagePath)
             return p ? ps.getState().icons[p] : undefined

@@ -1916,8 +1916,9 @@ export const useApp = create<AppState>((set, get) => ({
         }
         checkQuotaExhausted(get().toast, get().tr)
         setTimeout(() => { void get().refreshSessions(get().cfg).catch(() => {}) }, 6000)
-        // 输入建议(默认关):只给眼前这个会话拉;后台会话收尾、或后面还排着要接着跑的,只作废旧的那句。
-        if (sessionId === get().activeId && !get().runningBySession[sessionId] && !queueBusy(get(), sessionId)) void requestSuggestion(sessionId, runId)
+        // 输入建议(默认关):不看是不是眼前这个会话 —— 这一轮跑着的时候切走了,回来也该有那一句。
+        // 后面还排着要接着跑的,只作废旧的那句。
+        if (!get().runningBySession[sessionId] && !queueBusy(get(), sessionId)) void requestSuggestion(sessionId, runId)
         else clearSuggestion(sessionId)
         break
       case 'error':
@@ -2070,6 +2071,7 @@ export const useApp = create<AppState>((set, get) => ({
   subscribeRun: (sessionId, runId, assistantId) => {
     if (subscribedRuns.has(runId)) return
     subscribedRuns.add(runId)
+    clearSuggestion(sessionId) // 输入建议只活到下一轮起跑;在这里作废,不看这个会话的输入框此刻挂没挂着
     const ac = new AbortController()
     runAborts.set(runId, ac)
     const assistantRef = { current: assistantId }
@@ -4390,6 +4392,9 @@ if (import.meta.env.DEV && typeof window !== 'undefined') {
   // 台架在它之前经这里切焦点、看健康表;生产构建同样没有这行。
   ;(window as unknown as Record<string, unknown>).__forsionEngineTargets = {
     setFocusTarget, focusRef,
+    // P1-K7a:用户亲手选「在哪运行」(= 弹层 / 胶囊走的那一条:记住,且这份草稿不再被对账改掉)。只改焦点的 setFocusTarget 不算亲手选,
+    // 新草稿会被对账拉回记住的位置 —— 要测「记住上次的选择」就走这里。动态 import:runLocationStore 反过来依赖本文件。
+    setRunLocation: async (loc: TargetRef, name?: string) => (await import('./runLocationStore')).setDraftLocation(loc, { explicit: true, name: name ?? null }),
     // S4:两台并存台架看「这条会话绑在哪」与已知目标集合(R-20)
     locationOf: (sid: string) => refForSession(sid),
     known: () => knownTargets().map((t) => t.key),

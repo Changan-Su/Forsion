@@ -7,7 +7,7 @@ import type { SearchHit, TagCount } from '@amadeus-shared/ipc'
 import { decodeCharRefs, resolvePageName } from '@amadeus-shared/links'
 import { noteLinkTargets } from '@amadeus-shared/linkIndex'
 import { stripFrontmatter } from '@amadeus-shared/compiler'
-import { resolveFileName } from '@amadeus/lib/vaultFiles'
+import { resolveFileLink } from '@amadeus/lib/vaultFiles'
 import { openNote, revealTextWhenReady } from './amadeusNav'
 import { newTabOf } from './views/itemSelect'
 import { create } from 'zustand'
@@ -351,7 +351,7 @@ export function AmadeusLocalGraphView() {
         } else if (!seenGhost.has(n.toLowerCase())) {
           seenGhost.add(n.toLowerCase())
           // [[xxx.db]]/[[photo.png]] 命中真实文件的不是「未创建页面」,不进幽灵(点击有自己的打开语义)。
-          if (!resolveFileName(n, st.files, activePage)) ghosts.push(n)
+          if (!resolveFileLink(n, st.files, activePage)) ghosts.push(n)
         }
       }
       const others = [...new Set([...outs, ...incoming.map((r) => r.path).filter((p) => p !== activePage)])]

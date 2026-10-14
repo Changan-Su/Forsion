@@ -50,6 +50,7 @@ import { allSeries, useAchievements } from '../achievements/store'
 import { displaySessionTitle } from '../sessionTitle'
 import { ProjectSelector } from '../components/ProjectSelector'
 import { ExtraFolders } from '../components/ExtraFolders'
+import { useTargetComposerPlaceholder } from '../components/TargetHealthNotice'
 import { RunLocationPicker } from '../components/RunLocationPicker' // P1-K7a
 import { useRemoteNewChatWorkspaces } from '../stores/newChatWorkspaces'
 import { AgentSelectStrip } from '../components/AgentSelectStrip'
@@ -104,6 +105,8 @@ type HomeDispatch = (
 function HomepageChatbox({ onDispatch, onStartCall, onInputModeChange }: { onDispatch: HomeDispatch; onStartCall: () => Promise<string | null>; onInputModeChange: (focused: boolean) => void }) {
   const vaultRoot = usePageStore((state) => state.vaultRoot)
   const activeSpaceId = useSpaceStore((state) => state.activeSpaceId)
+  // 运行位置在一台还没连上的电脑上:占位说「等那台连上」(同 ChatView),不退回本端的「先在设置里连接后端」
+  const targetPlaceholder = useTargetComposerPlaceholder(null)
   const s = useApp(useShallow((state) => ({
     cfg: state.cfg,
     desktopConfig: state.desktopConfig,
@@ -216,6 +219,7 @@ function HomepageChatbox({ onDispatch, onStartCall, onInputModeChange }: { onDis
         prepareLiveSession={onStartCall}
         autoFocus={false}
         disabled={s.connState !== 'ok'}
+        disabledPlaceholder={targetPlaceholder}
         running={false}
         execConfig={config}
         models={visibleModels}

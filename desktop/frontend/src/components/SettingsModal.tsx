@@ -10,7 +10,7 @@ import { BrowserExtensionPanel } from './BrowserExtensionPanel'
  * 在 Desktop 主界面内替换 Chat/Inspector 区域，而不是覆盖式弹窗。
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react'
-import { X, Droplets, Shapes, ArrowLeft, Undo2, ChevronRight, Loader2, RefreshCw, Sun, Moon, MonitorCog, RotateCcw, LogIn, LogOut, KeyRound, Plus, Trash2, Plug, Search, Download, Sparkles, Wrench, Check, Copy, Globe2, FolderOpen, Play, Trophy, FileDown, Settings2, NotebookPen, Puzzle, LayoutGrid, Palette, Keyboard, Bug, Info, Brain, Bot, Webhook, MessageCircle, Blocks, Bell, PanelBottom, Image as ImageIcon, Server, Type, Layers3, MousePointer2, CircleUserRound, Scaling, Coffee, MonitorCheck, History, MonitorSmartphone, Cloud, SunDim, AlignLeft, Wind, TextCursorInput, TextSelect } from 'lucide-react'
+import { X, Droplets, Shapes, ArrowLeft, Undo2, ChevronRight, Loader2, RefreshCw, Sun, Moon, MonitorCog, RotateCcw, LogIn, LogOut, KeyRound, Plus, Trash2, Plug, Search, Download, Sparkles, Wrench, Check, Copy, Globe2, FolderOpen, Play, Trophy, FileDown, Settings2, NotebookPen, Puzzle, LayoutGrid, Palette, Keyboard, Bug, Info, Brain, Bot, Webhook, MessageCircle, Blocks, Bell, PanelBottom, Image as ImageIcon, Server, Type, Layers3, MousePointer2, CircleUserRound, Scaling, Coffee, MonitorCheck, History, MonitorSmartphone, Cloud, SunDim, AlignLeft, Wind, TextSelect } from 'lucide-react'
 import { ThemeCard } from './ThemeCard'
 import { ThemeSettingsPanel } from './ThemeSettingsPanel'
 import { StartupAppearanceSettings } from './StartupAppearanceSettings'
@@ -1285,6 +1285,7 @@ export const SettingsModal: React.FC<{
     if (e.sub && !subItemsForTab(e.tab as Tab).some(([k]) => k === e.sub)) return false
     return (e.needs ?? []).every((need) => need === 'stored' ? !!stored
       : need === 'desktop' ? isDesktop
+      : need === 'host' ? isDesktop && !unitPage
       : need === 'hover' ? hoverCapable
       : need === 'wide' ? !mobileSettings
       : need === 'cloud' ? isDesktop && cloudAccount // Forsion 账号面随 Extend 出现(forsion 一级页)
@@ -3275,24 +3276,6 @@ export const SettingsModal: React.FC<{
                             <option value="actions">{t('settingsmodal.selectionBar.actions')}</option>
                           </select>
                         </div>
-                        {/* 输入建议:要 Tab 键采用,也要本机引擎(云端执行节点没有这条路由)→ 只在桌面宿主、有悬停的设备上摆出来。 */}
-                        {isDesktop && hoverCapable && !mobileSettings && (
-                          <div className="settings-control-row" data-setting-anchor="prompt-suggest">
-                            <div className="settings-control-copy"><TextCursorInput size={14} /><span><strong>{t('settings.theme.promptSuggest')}</strong><small>{t('settings.theme.promptSuggestHint')}</small></span></div>
-                            <button
-                              type="button"
-                              role="switch"
-                              aria-checked={promptSuggest}
-                              aria-label={t('settings.theme.promptSuggest')}
-                              className={`switch${promptSuggest ? ' on' : ''}`}
-                              onClick={() => {
-                                const on = !promptSuggest
-                                setPromptSuggest(on)
-                                persistPromptSuggest(on)
-                              }}
-                            />
-                          </div>
-                        )}
                         <div className="settings-control-row" data-setting-anchor="chat-avatars">
                           <div className="settings-control-copy"><CircleUserRound size={14} /><span><strong>{t('settings.theme.chatAvatars')}</strong><small>{t('settings.theme.chatAvatarsHint')}</small></span></div>
                           <button
@@ -3610,6 +3593,23 @@ export const SettingsModal: React.FC<{
                             </select>
                           </div>
                         )}
+                      </div>
+                    )}
+
+                    {/* 输入建议(缺省开):要 Tab 键采用,也要本机引擎(云端执行节点没有这条路由)→ 只在桌面宿主(不含设备页)、
+                        有悬停的设备上摆出来;与 promptSuggest.ts 的 supported() 同一道闸。 */}
+                    {isDesktop && !unitPage && hoverCapable && !mobileSettings && (
+                      <div className="field" style={{ marginTop: 14 }} data-setting-anchor="prompt-suggest">
+                        <label>{t('settings.promptSuggest')}</label>
+                        <div className="hint" style={{ marginBottom: 8 }}>{t('settings.promptSuggestHint')}</div>
+                        <label className="inline-check">
+                          <input
+                            type="checkbox"
+                            checked={promptSuggest}
+                            onChange={(e) => { setPromptSuggest(e.target.checked); persistPromptSuggest(e.target.checked) }}
+                          />
+                          {t('settings.promptSuggestEnable')}
+                        </label>
                       </div>
                     )}
 

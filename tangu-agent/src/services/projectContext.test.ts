@@ -47,7 +47,7 @@ describe('resolveDocTarget / init', () => {
     expect(resolveDocTarget(cwd)).toEqual({ path: path.join(cwd, '.tangu', 'AGENTS.md'), exists: true });
   });
 
-  it('cwd 层已有别家文件名(CLAUDE.md)→ 它就是目标;init 只建目录,不另放一份 AGENTS.md(引擎每层只读首个命中的)', async () => {
+  it('cwd 层已有别家文件名(CLAUDE.md)→ 它就是目标;init 只建目录,不另放一份 AGENTS.md(已有约定就编辑它,别再造一份)', async () => {
     const cwd = mk('claude');
     const claude = w('claude/CLAUDE.md', 'claude rules');
     expect(resolveDocTarget(cwd)).toEqual({ path: claude, exists: true });
