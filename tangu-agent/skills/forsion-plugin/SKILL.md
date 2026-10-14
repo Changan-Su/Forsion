@@ -2,7 +2,7 @@
 name: forsion-extension-development
 description: 当用户要给 Forsion / Tangu 做插件、主题、Space、智能体(agent)或捆绑包(bundle)——或要把某个能力做成可分发/可上架商店的扩展——时使用;已装的插件 / Space / 视图不出现、加载失败、更新后不工作要排查时也用(带一份插件体检脚本 tools/check-plugin.mjs)。内置五类官方模板(samples/),讲清各自的格式基线与硬约束(尤其两种"插件"是完全不同的系统),照抄模板改比从零写靠谱。
 metadata:
-  version: 1.40.0
+  version: 1.41.0
   author: Forsion
   category: Forsion
 ---
@@ -277,7 +277,7 @@ ctx.registerView({ id: 'home', title: 'Muse', mount(el) {
 |---|---|---|
 | `registerCommand` | 命令面板(+ 可选 agent 面) | `title` 可传 `() => string` 跟随界面语言(2026-10-02+,老宿主只认字符串);id 处于全局命名空间,裸名会互顶;默认只做导航,**动作性能力要么走引擎侧 agent/技能(通用纪律 5),要么给这条命令声明 `invoke`**(见下) |
 | `registerSlashItem` | 笔记里的 `/` | 静态 `scaffold`,或动态 `run()`(先建文件再返回嵌入语法);`label` / `group` 传函数则跟随界面语言 |
-| `registerSelectionAction` | 选中文字后工具栏「AI ▾」里的「插件」组 | `run(cx)` 返回要提议的 markdown,**只进宿主的预览面板**,用户点「替换 / 插入下方」才写(见下「正文 AI」) |
+| `registerSelectionAction` | 选中文字后浮出的那一条(划线条)里「⋯ → 插件」 | `run(cx)` 返回要给人看的 markdown,**只进宿主的结果卡**:笔记里用户点「替换 / 插入下方」才写,别处只读;`scope` 决定出现在哪些视图(缺省只在笔记),见下「Selection bar」。桌面 2.13.3 及更早在「AI ▾ → 插件」、只有笔记里有 |
 | `registerView` | 独立标签页(`ctx.openView(id)` 打开) | **DOM 挂载**(`mount(el, view?)` 返 disposer;可以是 async —— resolve 出的就是 disposer,reject 算挂载失败;`view.extendView` 可开临时扩展),外置插件的主力;加 `workspaceSource` 可让左栏跟着它切到自家列表。**样式不隔离**:选择器挂自家根类名,配色只用 `var(--bg)` / `--bg-card` / `--text` / `--text-muted` / `--border` / `--accent`(自造的变量名宿主没有,会落到你写死的兜底色) |
 | `openFloatingPanel` | 第六种 Floating Panel | 先注册 view，再按相对 id 打开；桌面是真原生窗口，Web 是不可拖动居中面板；可选链兼容旧宿主 |
 | `openMiniPanel` | Mini Panel（默认 320×420，用户可改大小） | 不建 Space 也能直开紧凑 view；用 `mainViewId` 声明回主面板的目标；仅原生桌面宿主提供 |
@@ -288,6 +288,7 @@ ctx.registerView({ id: 'home', title: 'Muse', mount(el) {
 | `registerSetting` | 详情页声明式表单(number/boolean/text) | 每键一个字符串,**没有原子性**;同 key 重注册即覆盖 |
 | `ctx.ui.mountMarkdownEditor` | 视图内原生 Amadeus Markdown 编辑器 | 正文归调用方(API 草稿等),**不碰笔记库**;保存前 `getValue()`;`modes: false` 不画「编辑 / 源码 / 预览」那一排;老宿主没有 → 可选链 |
 | `ctx.ui.mountFloatingToc` | 视图内原生悬浮目录 | 插件保有正文 DOM,宿主负责扫描 / 滚动高亮 / 跳转 / 主题;老宿主没有 → 可选链 |
+| `ctx.ui.mountSelectionBar` | 自己的视图里选中文字后浮出宿主的划线条 | 宿主给「问 Tangu / 翻译 / ⋯」,你声明自己的工具(图标钮 / 颜色点);不接就什么都不出;老宿主没有 → 可选链,保留自己的菜单 |
 | `ctx.ui.mountBoard` / `ctx.ui.boardToSvg` | 盖在自己内容上的透明白板层(手写 / 圈画) | 和 `.excalidraw.md` 白板同一个引擎、同样的七支笔;**视口归调用方**(自己推 `viewport`、自己接滚轮);元素原样存取;不在手写时用 `boardToSvg` 出静态图;老宿主没有 → 不出手写入口 |
 | `ctx.table.mount` | 面板里的原生多维表(只读) | 一份规格 → 真 DbTable(筛选/搜索/隐藏列/排序/统计全套),**不依赖笔记库**;老宿主没有 → 可选链 + 自己的表格降级(见下) |
 
@@ -557,6 +558,84 @@ ctx.registerView({ id: 'manual', title: 'Manual', mount(el) {
 - DOM 的增删和文字变化会自动重扫;只有 Shadow DOM / 第三方画布等观察不到的变化才调返回句柄的 `refresh()`。
   `dispose()` 幂等,同步摘掉宿主加在 `shell` 里的那层(你的正文不动);插件禁用 / 重载时宿主也会统一卸载。
 - 旧宿主整个 `ctx.ui` 不存在,一律 `ctx.ui?.mountFloatingToc(...)`;缺席时可继续显示正文,不必仿一份目录。
+
+### Selection bar: ctx.ui.mountSelectionBar and registerSelectionAction scopes (2026-10-13+)
+
+The **selection bar** is the strip that appears over selected text. Chat, notes and any plugin view that opts in
+show the same one: the view's own tools plus three shared actions — **Ask Tangu** (hands the text to the side chat
+as a quote), **Translate** (result in a card under the selection) and **⋯** (selection actions from plugins). Which
+block comes first is the user's setting (Settings → Appearance → Selection menu); do not depend on the order.
+
+**Give your own view the bar.** Do not draw your own popup menu on new hosts.
+
+```js
+ctx.registerView({ id: 'reader', title: 'Reader', mount(el) {
+  el.innerHTML = '<div class="acme-reader" style="height:100%;overflow:auto">…</div>'
+  const bar = ctx.ui?.mountSelectionBar?.(el, {
+    view: 'reader',                                  // selection actions see 'acme:reader' as cx.view
+    tools: [                                         // your own tools: icon buttons, or colour swatches
+      { id: 'yellow', title: 'Highlight', color: '#ffd400', run: (sel) => { highlight(sel.text); window.getSelection()?.removeAllRanges() } },
+      { id: 'note', title: 'Add a note', icon: 'annotate', run: (sel) => openNoteEditor(sel.text) },
+    ],
+    source: () => ({ title: doc.title, path: doc.vaultPath, page: currentPage }),   // optional: where the text is from
+    // ask: (sel) => askWithPageNumber(sel.text),    // optional: replace what "Ask Tangu" does; false removes it
+  })
+  if (!bar) drawOwnSelectionMenu(el)                 // hosts up to 2.13.3: keep your old menu
+  return () => bar?.dispose()
+} })
+```
+
+- By default the host watches the DOM selection inside the element you pass: the bar shows on mouse-up and goes
+  away when the selection collapses, the content scrolls or resizes, or the user clicks elsewhere. Selections in
+  `<input>` / `<textarea>` / `contenteditable` never show it.
+- Content the host cannot see into (an `<iframe>`, a canvas, a PDF text layer you position yourself): pass
+  `watch: false` and drive it — `bar.show({ text, rect })` with the selection's bounding box in **viewport pixels**
+  (`range.getBoundingClientRect()` works as is; do not divide by zoom, the host compensates), `bar.hide()` when it
+  is gone. `bar.update({ tools })` changes options on a live bar.
+- A tool is `{ id, title, icon?, color?, on?, run(sel) }`. `icon` is a name from the plugin icon vocabulary
+  (`highlight` / `underline` / `strikethrough` / `annotate` / `copy` / `cite` were added for this; `edit`, `pin`,
+  `bookmark`, `trash`… also work); `color` draws a round swatch instead. The host only draws the button — clear
+  the selection (or call `bar.hide()`) in `run` once your tool has consumed it. No dropdowns: open your own UI
+  from `run` if a tool needs more.
+- The bar adds nothing to your DOM and takes nothing over (it floats above the page), so it coexists with
+  `mountFloatingToc` and other mounts on the same element. The host disposes it on disable / reload.
+- A view that never calls `mountSelectionBar` gets no bar: the host does not sniff selections globally.
+
+**Add an action to the bar.** `ctx.registerSelectionAction` entries are listed behind "⋯" under "Plugins".
+With no `scope` they appear in notes only, exactly as before; opt into more with the new optional fields:
+
+```js
+ctx.registerSelectionAction({
+  id: 'define',
+  title: ctx.getLocale?.() === 'en' ? 'Define' : '查词',
+  icon: 'bookmark',
+  scope: 'all',                                      // 'note' (default) | 'all' | 'own' | ['chat', 'acme:reader']
+  when: (cx) => cx.length <= 40,                     // { view, editable, length } — not the text itself
+  run: async (cx) => (await lookUp(cx.text, { signal: cx.signal })).markdown,
+})
+```
+
+| `scope` | Listed in |
+|---|---|
+| omitted / `'note'` | v4 notes only |
+| `'all'` | every view that shows the bar: notes, chat, plugin views that mounted one |
+| `'own'` | only this plugin's own views (those that called `mountSelectionBar`) |
+| `['chat', 'acme:reader']` | the named views. `'note'`, `'chat'` (main chat, side chat, Mini) or `'<pluginId>:<view>'`; a bare `'<pluginId>'` matches all of that plugin's views |
+
+- `when` runs every time the bar opens: keep it synchronous and cheap. It gets the view, whether the selection
+  can be replaced and its length — the text only reaches you in `run`, after the user picked your action. A throw
+  or a non-true return leaves the action out; when nothing is listed the "⋯" button is not drawn.
+- `run(cx)`: `cx.text`, `cx.markdown` (equals `text` outside notes), `cx.view`, `cx.editable`, `cx.source`
+  (`{ title?, path?, sessionId?, page? }` when the view knows), `cx.signal` (aborted when the card closes),
+  `cx.onDelta(chunk)` to stream into the card. **`cx.pagePath` is only set in notes** — an action that opted into
+  other views must not assume it.
+- The returned markdown goes to the host's result card. In an editable note the card offers Replace / Insert
+  below / Copy / Discard and nothing is written until the user confirms; everywhere else the card is read-only
+  (Copy / Close). You cannot bypass the card to write into a note.
+- `output: 'none'`: you handle the result yourself (open a view, save a clipping) — the host shows no card and
+  ignores the return value. Report failures yourself or throw: the host shows a toast with the error message.
+- Hosts up to 2.13.3 ignore the new fields: the action stays note-only, sits under "AI ▾ → Plugins", and `cx`
+  has only `text` / `markdown` / `pagePath`. Write `run` so it works with just those.
 
 ### 白板层 ctx.ui.mountBoard / ctx.ui.boardToSvg(2026-10-10 起)
 
@@ -1004,7 +1083,8 @@ const r = await ctx.tangu?.complete?.({
 ```
 
 写进笔记**必须经用户确认**:把「拿结果」包进 `registerSelectionAction`,宿主替你开预览面板(与内置的「润色 / 翻译…」同一块),
-用户点「替换 / 插入下方」才写,Esc / 丢弃 = 一个字不动:
+用户点「替换 / 插入下方」才写,Esc / 丢弃 = 一个字不动。入口在选中文字后那一条的「⋯ → 插件」(桌面 2.13.3 及更早在「AI ▾ → 插件」);
+想让它在聊天或别的视图里也出现、按视图过滤、带图标,见上「Selection bar」:
 
 ```js
 ctx.registerSelectionAction({
@@ -1014,15 +1094,17 @@ ctx.registerSelectionAction({
 })
 ```
 
-- `cx` = `{ text, markdown, pagePath }`:选区纯文本、选区的 markdown(保留加粗 / 链接 / 列表符)、笔记库相对路径。
+- `cx` = `{ text, markdown, pagePath }`:选区纯文本、选区的 markdown(保留加粗 / 链接 / 列表符)、笔记库相对路径
+  (`pagePath` 只有笔记里有;新宿主另给 `view` / `editable` / `source` / `signal` / `onDelta`)。
 - `run` 返回 `''` = 什么都不提议;返回值按 slash `run` 同一套校验(必须是字符串、不许控制字符)。
 - 模型缺省 = 主区聊天当前用的那个;额度与用量照主聊天口径扣、记。插件被停用时在飞的 `complete` 会被中止并 reject。
-- 只有 v4 笔记的选区工具栏有「AI ▾」;宿主做不了(探针没有 `complete`)时整个菜单不出现,你的项也不会出现。
+- 笔记里宿主做不了正文 AI(探针没有 `complete`)时「AI ▾」「翻译」「⋯」都不出现,你的项也不会出现。
 
 ### 翻译:ctx.tangu.translate(2026-10-13 起)
 
 逐句翻译、批量翻译这类**量大**的活别用 `complete`:那条恒用主区聊天当前的模型(往往是最贵的一档)。`translate` 走同一条
-一次性通道,但模型取用户在「设置 → 模型 → 翻译」里选的那个,没选才跟聊天模型:
+一次性通道,但模型取用户在「设置 → 模型 → 翻译」里选的那个;没选时目录里有机器翻译模型就用它,都没有才跟聊天模型
+(桌面 2.13.3 及更早:没选就跟聊天模型):
 
 ```js
 const tr = ctx.tangu?.translate

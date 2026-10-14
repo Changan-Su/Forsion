@@ -165,3 +165,41 @@ scroller.addEventListener('scroll', () => board?.update({ viewport: currentViewp
 - Invalid options (no `scene.elements`, or a `viewport` that is not three finite numbers with `zoom > 0`) throw `TypeError` synchronously. `dispose()` is idempotent and returns `el` to you; the host also unmounts on plugin disable or reload.
 - While no live layer is mounted, `await ctx.ui.boardToSvg({ elements }, { theme, padding })` returns `{ svg, x, y, width, height }` (`null` for an empty scene). The bounds are in scene units: place `svg` at `(x + scrollX) * zoom` with a width of `width * zoom` to match the live layer.
 - Older hosts lack both methods. Feature-detect and hide the handwriting entry instead of imitating it.
+
+### 划线条 / The selection bar (2026-10-13)
+
+选中一段文字之后浮出来的那一条,聊天、笔记和接入了的插件视图是同一条:当前视图自己的工具,加上每个视图都有的三样 —— 「问 Tangu」(把这段文字作为引用交给侧栏对话)、「翻译」(结果在选区下面的一张卡里)、「⋯」(插件加的动作)。哪一块排在前面由用户在「设置 → 外观 → 划线菜单」里定,缺省是视图自己的工具在前。条上的按钮由 `@lcl/components` 的 `SelectionBar` / `SelectionBarActions` 维护;聊天和插件视图经应用层的 `components/selectionBar/ViewSelectionBar` 接选区与动作,笔记的格式工具栏把动作区嵌进自己那一行。
+
+插件视图用 `ctx.ui?.mountSelectionBar?.(root, opts)` 接入,不接就什么都不出(宿主不做全局的选区监听):
+
+```js
+const bar = ctx.ui?.mountSelectionBar?.(el, {
+  view: 'reader',                                   // 划线动作看到的视图 id 是 '<插件 id>:reader'
+  tools: [
+    { id: 'yellow', title: zh ? '高亮' : 'Highlight', color: '#ffd400', run: (sel) => { highlight(sel.text); getSelection()?.removeAllRanges() } },
+    { id: 'note', title: zh ? '写批注' : 'Add a note', icon: 'annotate', run: (sel) => openNote(sel.text) },
+  ],
+  source: () => ({ title: doc.title, path: doc.vaultPath, page }),
+})
+if (!bar) drawOwnMenu(el)                           // 2.13.3 及更早的宿主:保留自己的菜单
+```
+
+- 缺省由宿主看 `root` 里的 DOM 选区:松开鼠标时出;选区收起、内容滚动或尺寸变了、点到别处时收。输入框和可编辑区里的选区不出。
+- 宿主看不到的内容(iframe、画布、自己定位的 PDF 文字层)传 `watch: false`,自己调 `bar.show({ text, rect })` 和 `bar.hide()`。`rect` 是选区外接矩形的视口像素(`range.getBoundingClientRect()` 原样给;界面缩放由宿主抵消,不要自己除)。
+- `tools` 是声明式的:一个图标钮(`icon` 取插件图标词表里的名字;为此加了 `highlight`、`underline`、`strikethrough`、`annotate`、`copy`、`cite`),或一个颜色点(`color`)。宿主只画按钮,做什么由 `run` 决定;工具用掉了选区就在 `run` 里清掉选区或调 `bar.hide()`。没有下拉,要更多界面就在 `run` 里开自己的。
+- `ask` 接管「问 Tangu」点了之后做什么(比如带上页码),`false` 去掉这一格;不写就由宿主把文字和 `source` 交给侧栏对话(没有侧栏对话的宿主不画这一枚)。
+- 条不往 `root` 里加任何东西,也不接管它(条浮在页面上方),和 `mountFloatingToc` 等别的挂载互不影响。句柄有 `show` / `hide` / `update(opts)` / `dispose()`;插件停用或重载时宿主统一收掉。
+
+往条里加动作用 `ctx.registerSelectionAction`(列在「⋯ → 插件」)。不写 `scope` 时只在笔记里出现,和以前一样;`scope: 'all'` 出现在所有接入了的视图,`'own'` 只在这个插件自己的视图,数组点名视图(`'note'`、`'chat'`、`'<插件 id>:<视图 id>'`)。`when({ view, editable, length })` 返回真才列出,它拿不到选中的文字,文字在用户点了动作之后才经 `run(cx)` 交给插件。`run` 返回的 markdown 进宿主的结果卡:可编辑的笔记里是「替换 / 插入下方 / 复制 / 丢弃」,点了才写;别处只读(「复制 / 关闭」)。`output: 'none'` 表示插件自己处理结果,宿主不出卡。`cx.pagePath` 只在笔记里有。2.13.3 及更早的宿主忽略这些新字段:动作只在笔记里、列在「AI ▾ → 插件」。
+
+The strip that appears over selected text is the same one in chat, in notes and in every plugin view that opts in: the view's own tools plus three actions every view shares — **Ask Tangu** (hands the text to the side chat as a quote), **Translate** (the result opens in a card under the selection) and **⋯** (actions added by plugins). Which block comes first is the user's choice under Settings → Appearance → Selection menu; the view's own tools lead by default. The buttons are maintained in `@lcl/components` (`SelectionBar`, `SelectionBarActions`); chat and plugin views wire selections and actions through the app-level `components/selectionBar/ViewSelectionBar`, and the note formatting toolbar embeds the shared actions in its own row.
+
+A plugin view opts in with `ctx.ui?.mountSelectionBar?.(root, opts)`. A view that never calls it gets no bar: the host does not listen for selections globally.
+
+- By default the host watches the DOM selection inside `root`: the bar shows on mouse-up and goes away when the selection collapses, the content scrolls or resizes, or the user clicks elsewhere. Selections inside inputs and editable regions never show it.
+- For content the host cannot see into (an iframe, a canvas, a PDF text layer you position yourself) pass `watch: false` and call `bar.show({ text, rect })` and `bar.hide()` yourself. `rect` is the selection's bounding box in viewport pixels (`range.getBoundingClientRect()` as is; the host cancels the interface zoom, so do not divide).
+- `tools` are declarative: an icon button (`icon` is a name from the plugin icon vocabulary, which gained `highlight`, `underline`, `strikethrough`, `annotate`, `copy` and `cite` for this) or a colour swatch (`color`). The host only draws the button and `run` decides what it does; once a tool has consumed the selection, clear it or call `bar.hide()` in `run`. There are no dropdowns: open your own UI from `run`.
+- `ask` replaces what Ask Tangu does (to add a page number, for example) and `false` removes that button. Without it the host hands the text and `source` to its side chat; hosts without a side chat draw no button.
+- The bar adds nothing to `root` and does not take it over (it floats above the page), so it coexists with `mountFloatingToc` and other mounts. The handle has `show`, `hide`, `update(opts)` and `dispose()`; the host disposes it when the plugin is disabled or reloaded.
+
+Add actions with `ctx.registerSelectionAction`; they are listed behind "⋯" under "Plugins". Without `scope` an action appears in notes only, as before. `scope: 'all'` lists it in every view that shows the bar, `'own'` only in the plugin's own views, and an array names views (`'note'`, `'chat'`, `'<pluginId>:<viewId>'`). `when({ view, editable, length })` must return true for the action to be listed; it never receives the selected text, which only reaches the plugin through `run(cx)` after the user picks the action. The markdown `run` returns goes to the host's result card: Replace / Insert below / Copy / Discard in an editable note, where nothing is written until the user confirms, and read-only (Copy / Close) everywhere else. `output: 'none'` means the plugin handles the result and the host shows no card. `cx.pagePath` is only set in notes. Hosts up to 2.13.3 ignore the new fields: the action stays note-only under "AI ▾ → Plugins".

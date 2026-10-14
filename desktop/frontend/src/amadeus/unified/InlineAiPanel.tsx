@@ -1,11 +1,15 @@
-/** 正文 AI 的预览面板(评审 G3-07)。结果**先进预览**:流式显示,生成完才给「替换 / 插入下方 / 插入 / 丢弃」;
- *  点了才写(写法由宿主 UnifiedPage 经 inlineAi.applyAiResult 落成一个事务)。丢弃 / Esc = 文档一个字不动。
- *  纯展示 + 请求生命周期:请求怎么发(内置动作走 readTangu().complete,插件项走它自己的 run)由宿主给的 run 决定。 */
+/** 正文 AI 的预览面板(评审 G3-07),也是划线条上「翻译」和插件动作的结果卡。结果**先进预览**:流式显示,生成完才给
+ *  「替换 / 插入下方 / 插入 / 丢弃」;点了才写(写法由宿主 UnifiedPage 经 inlineAi.applyAiResult 落成一个事务)。
+ *  丢弃 / Esc = 文档一个字不动。宿主不给 onApply = **只读**(聊天、插件视图):只有「复制 / 重试 / 关闭」,点卡外面就收。
+ *  纯展示 + 请求生命周期:请求怎么发(内置动作走 readTangu().complete,插件项走它自己的 run)由宿主给的 run 决定。
+ *  样式在同目录 inlineAiPanel.css(聊天不加载 Amadeus 那份大样式表,所以单拎出来由本文件自己带)。 */
 import { useEffect, useRef, useState, type ReactElement } from 'react'
-import { Sparkles } from 'lucide-react'
+import { Languages, Sparkles } from 'lucide-react'
 import { OverlayAt } from '../lib/clampMenu'
 import { registerMessages, useI18n } from '../../i18n'
+import { TRANSLATE_LANGUAGES } from '../../translateTarget'
 import type { AiApply } from './inlineAi'
+import './inlineAiPanel.css'
 
 registerMessages({
   'inlineai.action.improve': { zh: '润色', en: 'Improve writing' },
@@ -32,11 +36,17 @@ registerMessages({
   'inlineai.errEmptyResult': { zh: '没有生成任何内容', en: 'Nothing was generated' },
   'inlineai.unavailable': { zh: '这里用不了正文 AI', en: 'In-note AI is not available here' },
   'inlineai.targetChanged': { zh: '选中的文字在生成期间被改过，结果已插入到下方', en: 'The selection changed while generating, so the result was inserted below it' },
+  'inlineai.copy': { zh: '复制', en: 'Copy' },
+  'inlineai.copied': { zh: '已复制', en: 'Copied' },
+  'inlineai.close': { zh: '关闭', en: 'Close' },
+  'inlineai.targetLang': { zh: '目标语言', en: 'Target language' },
+  'inlineai.byMt': { zh: '机器翻译 · {name}', en: 'Machine translation · {name}' },
 })
 
-export type InlineAiRun = (instruction: string | undefined, onDelta: (d: string) => void, signal: AbortSignal) => Promise<{ text: string; toolCallText?: boolean }>
+/** model = 这次实际是谁出的结果(翻译才给;readTangu().complete 的返回值可以原样交回来)。 */
+export type InlineAiRun = (instruction: string | undefined, onDelta: (d: string) => void, signal: AbortSignal) => Promise<{ text: string; toolCallText?: boolean; model?: { name: string; mt: boolean } }>
 
-export function InlineAiPanel({ x, y, anchorTop, title, hasSelection, askFirst, run, onApply, onClose, editorEl }: {
+export function InlineAiPanel({ x, y, anchorTop, title, hasSelection, askFirst, run, onApply, onClose, editorEl, language }: {
   /** 视口坐标:目标末尾下方(y)/ 目标起点上方(anchorTop);下方放不下时翻上去(同工具栏)。 */
   x: number
   y: number
@@ -48,10 +58,13 @@ export function InlineAiPanel({ x, y, anchorTop, title, hasSelection, askFirst, 
   /** 先要一句指令(自定义 / `/ai` / 空行空格)再生成;否则打开即生成。 */
   askFirst: boolean
   run: InlineAiRun
-  onApply: (how: AiApply, text: string) => void
+  /** 不给 = 只读卡:没有写回去的按钮,回车不做事,点卡外面关掉。 */
+  onApply?: (how: AiApply, text: string) => void
   onClose: () => void
   /** 目标所在编辑器的根:焦点在它里面时 Enter / Esc 归面板管(见下方键盘闸)。 */
   editorEl?: HTMLElement | null
+  /** 翻译:卡头上能临时换目标语言。换了由宿主换 key 重开这张卡(在飞的请求随卸载中止)。 */
+  language?: { value: string; onChange: (id: string) => void }
 }): ReactElement {
   const { t } = useI18n()
   const [phase, setPhase] = useState<'ask' | 'running' | 'done' | 'error'>(askFirst ? 'ask' : 'running')
@@ -59,6 +72,8 @@ export function InlineAiPanel({ x, y, anchorTop, title, hasSelection, askFirst, 
   const [text, setText] = useState('')
   const [error, setError] = useState('')
   const [toolText, setToolText] = useState(false)
+  const [by, setBy] = useState('')
+  const [copied, setCopied] = useState(false)
   const ac = useRef<AbortController | null>(null)
   const acc = useRef('')
   const lastInstruction = useRef<string | undefined>(undefined)
@@ -86,6 +101,7 @@ export function InlineAiPanel({ x, y, anchorTop, title, hasSelection, askFirst, 
       const out = String(r.text ?? '')
       setText(out)
       setToolText(!!r.toolCallText)
+      setBy(r.model ? (r.model.mt ? t('inlineai.byMt', { name: r.model.name }) : r.model.name) : '')
       if (out.trim()) setPhase('done')
       else { setError(t('inlineai.errEmptyResult')); setPhase('error') }
     }).catch((e: unknown) => {
@@ -118,6 +134,9 @@ export function InlineAiPanel({ x, y, anchorTop, title, hasSelection, askFirst, 
     const a = document.activeElement as HTMLElement | null
     if (!a || a === document.body || a === document.documentElement) return true
     if (panelRef.current?.contains(a)) return !forEnter || a === panelRef.current
+    // 只读卡(聊天 / 插件视图)没有「所属编辑器」:点过消息之后焦点在标签组容器这类可聚焦的祖先上,不在 body。
+    // 只要不是在别处的输入框里打字,Esc 就归这张卡。
+    if (!onApply) return !a.matches('input, textarea, select, [contenteditable]:not([contenteditable="false"])')
     return !!editorRef.current?.contains(a)
   }
   const keyRef = useRef({ phase, text, primary })
@@ -129,7 +148,7 @@ export function InlineAiPanel({ x, y, anchorTop, title, hasSelection, askFirst, 
         e.preventDefault()
         e.stopPropagation()
         onClose()
-      } else if (e.key === 'Enter' && !e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey && keyRef.current.phase === 'done' && ownsFocus(true)) {
+      } else if (onApply && e.key === 'Enter' && !e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey && keyRef.current.phase === 'done' && ownsFocus(true)) {
         e.preventDefault()
         e.stopPropagation()
         onApply(keyRef.current.primary, keyRef.current.text)
@@ -139,12 +158,36 @@ export function InlineAiPanel({ x, y, anchorTop, title, hasSelection, askFirst, 
     return () => window.removeEventListener('keydown', onKey, true)
   }, [onClose, onApply])
 
+  // 只读卡手里没有待确认的改动,点到卡外面就收(可写的那张不自动关:结果还没落笔,见上)。
+  useEffect(() => {
+    if (onApply) return
+    const onDown = (e: MouseEvent): void => { if (!panelRef.current?.contains(e.target as Node)) onClose() }
+    document.addEventListener('mousedown', onDown, true)
+    return () => document.removeEventListener('mousedown', onDown, true)
+  }, [onApply, onClose])
+
+  const copy = (): void => {
+    void navigator.clipboard?.writeText(text).then(() => {
+      setCopied(true)
+      window.setTimeout(() => setCopied(false), 1500)
+    }).catch(() => { /* 剪贴板不可用:按钮不变成「已复制」就是提示 */ })
+  }
+  const copyBtn = (primaryBtn: boolean): ReactElement => (
+    <button type="button" className={`btn sm${primaryBtn ? ' primary' : ''}`} data-act="copy" onClick={copy}>{t(copied ? 'inlineai.copied' : 'inlineai.copy')}</button>
+  )
+
   return (
-    <OverlayAt innerRef={(el) => { panelRef.current = el }} className="ui-popover am-ai-panel" x={x} y={y} anchorTop={anchorTop} prefer="below" role="dialog" aria-label={t('inlineai.label')} data-testid="inline-ai-panel" data-phase={phase}>
+    <OverlayAt innerRef={(el) => { panelRef.current = el }} className="ui-popover am-ai-panel" x={x} y={y} anchorTop={anchorTop} prefer="below" role="dialog" aria-label={onApply ? t('inlineai.label') : title} data-testid="inline-ai-panel" data-phase={phase} data-readonly={onApply ? undefined : ''}>
       <div className="am-ai-head">
-        <Sparkles size={14} aria-hidden />
+        {language ? <Languages size={14} aria-hidden /> : <Sparkles size={14} aria-hidden />}
         <span className="am-ai-title">{title}</span>
-        {phase !== 'ask' && <span className="am-ai-hint">{phase === 'running' ? t('inlineai.generating') : t('inlineai.hint')}</span>}
+        {language && (
+          <select className="am-ai-lang" aria-label={t('inlineai.targetLang')} data-testid="inline-ai-lang" value={language.value} onChange={(e) => language.onChange(e.target.value)}>
+            {TRANSLATE_LANGUAGES.map((l) => <option key={l.id} value={l.id}>{l.label}</option>)}
+          </select>
+        )}
+        {/* 右侧:生成中 → 进度;翻译完 → 这次是谁译的;别的可写结果 → 「确认后才写入」。 */}
+        {phase !== 'ask' && <span className="am-ai-hint" data-testid="inline-ai-hint">{phase === 'running' ? t('inlineai.generating') : (phase === 'done' && by) || (onApply ? t('inlineai.hint') : '')}</span>}
       </div>
       {phase === 'ask' && (
         <div className="am-ai-ask">
@@ -178,19 +221,20 @@ export function InlineAiPanel({ x, y, anchorTop, title, hasSelection, askFirst, 
           {toolText && phase === 'done' && <div className="am-ai-error">{t('inlineai.toolText')}</div>}
           <div className="am-ai-actions">
             {phase === 'running' && <button type="button" className="btn sm" data-act="stop" onClick={stop}>{t('inlineai.stop')}</button>}
-            {phase === 'done' && hasSelection && (
+            {phase === 'done' && onApply && hasSelection && (
               <>
                 <button type="button" className="btn sm primary" data-act="replace" onClick={() => onApply('replace', text)}>{t('inlineai.replace')}</button>
                 <button type="button" className="btn sm" data-act="below" onClick={() => onApply('below', text)}>{t('inlineai.insertBelow')}</button>
               </>
             )}
-            {phase === 'done' && !hasSelection && (
+            {phase === 'done' && onApply && !hasSelection && (
               <button type="button" className="btn sm primary" data-act="insert" onClick={() => onApply('insert', text)}>{t('inlineai.insert')}</button>
             )}
+            {phase === 'done' && copyBtn(!onApply)}
             {(phase === 'done' || phase === 'error') && (
               <button type="button" className="btn sm" data-act="retry" onClick={() => start(lastInstruction.current)}>{t('inlineai.retry')}</button>
             )}
-            <button type="button" className="btn sm" data-act="discard" onClick={onClose}>{t('inlineai.discard')}</button>
+            <button type="button" className="btn sm" data-act="discard" onClick={onClose}>{t(onApply ? 'inlineai.discard' : 'inlineai.close')}</button>
           </div>
         </>
       )}

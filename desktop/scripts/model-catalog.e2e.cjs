@@ -55,9 +55,9 @@ async function main() {
     await defaults.locator('.composer-menu').getByRole('button', { name: /跟随服务默认/ }).click()
     await sp.waitForFunction(async () => !(await window.tangu.getConfig()).modelId)
     check('可恢复跟随服务默认', (await defaults.getByRole('button', { name: '对话与任务', exact: true }).innerText()).includes('跟随服务默认'))
-    // 「翻译」槽:不选 = 跟聊天模型;候选 = 对话模型 + 云端的机器翻译模型(后者只在这一行出现);选了落 config.json 的 models.translate
+    // 「翻译」槽:不选 = 目录里有机器翻译模型就自动用它(没有才跟聊天模型);候选 = 对话模型 + 云端的机器翻译模型(后者只在这一行出现);选了落 config.json 的 models.translate
     const tr = defaults.getByRole('button', { name: '翻译', exact: true })
-    check('翻译槽缺省跟随聊天模型', (await tr.innerText()).includes('跟随聊天模型'))
+    check('翻译槽缺省 = 自动,写明是哪个机器翻译模型', /自动.*Qwen MT Flash/.test(await tr.innerText()))
     check('机器翻译模型不进对话模型的候选', await (async () => {
       await defaults.getByRole('button', { name: '对话与任务', exact: true }).click()
       const n = await defaults.locator('.composer-menu').getByRole('button', { name: 'Qwen MT Flash', exact: true }).count()

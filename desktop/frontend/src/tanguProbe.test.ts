@@ -5,7 +5,7 @@
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { useSpaceStore, useWorkspace } from '@lcl/engine'
-import { installTanguProbe, START_CHAT_MAX_PROMPT, translateModelId } from './tanguProbe'
+import { installTanguProbe, START_CHAT_MAX_PROMPT, translateModelChoice } from './tanguProbe'
 import { readTangu } from './amadeus/plugins/tanguSeam'
 import { resolveNewSessionWorkspace, useApp } from './stores/appStore'
 import { rememberCatalog, useTargetCatalogs } from './services/engine/catalog'
@@ -167,8 +167,9 @@ describe('ctx.tangu 探针', () => {
 })
 
 describe('「翻译」模型槽(translate 动作的模型)', () => {
+  const translateModelId = async (): Promise<string | undefined> => (await translateModelChoice()).id
   const withSlot = (id: string | undefined): void => { vi.stubGlobal('window', { tangu: { getConfig: async () => ({ translateModelId: id }) } }) }
-  afterEach(() => vi.unstubAllGlobals())
+  afterEach(() => { vi.unstubAllGlobals(); useTargetCatalogs.setState({ byKey: {} }) })
 
   it('按本机引擎的目录验:有 → 用它;没设 / 已经没有 → undefined(落回聊天模型);目录还没拉到 → 先信它', async () => {
     const home = (models: object | null): void => { useTargetCatalogs.setState({ byKey: {} }); if (models) rememberCatalog('home', { models: models as never }) }
@@ -193,6 +194,19 @@ describe('「翻译」模型槽(translate 动作的模型)', () => {
     // 目录还没拉到:先信它
     home(null)
     expect(await translateModelId()).toBe('qmt')
+  })
+
+  it('没设 / 已过期而目录里有机器翻译模型 → 自动用第一个(auto);自己选的不算 auto', async () => {
+    useTargetCatalogs.setState({ byKey: {} })
+    rememberCatalog('home', { models: { models: [{ id: 'chat', name: 'Chat', provider: 'x', source: 'forsion' }], translateModels: [{ id: 'qmt', name: 'Qwen MT' }, { id: 'qmt2', name: 'Other' }] } as never })
+    withSlot('')
+    expect(await translateModelChoice()).toEqual({ id: 'qmt', auto: true })
+    withSlot('gone')
+    expect(await translateModelChoice()).toEqual({ id: 'qmt', auto: true })
+    withSlot('chat')
+    expect(await translateModelChoice()).toEqual({ id: 'chat' })
+    withSlot('qmt2')
+    expect(await translateModelChoice()).toEqual({ id: 'qmt2' })
   })
 
   it('读配置失败不抛', async () => {

@@ -3,3 +3,5 @@ export { ChatBox, ChatBoxSurface, ChatBoxInput, ChatBoxToolbar, ChatBoxSubmit } 
 export type { ChatBoxProps, ChatBoxInputProps } from './ChatBox'
 export { mountHostReact, claimHostMount } from './mountHostReact'
 export type { HostReactMount } from './mountHostReact'
+export { SelectionBar, SelectionBarActions } from './SelectionBar'
+export type { SelectionBarAction, SelectionBarTool, SelectionBarOrder } from './SelectionBar'

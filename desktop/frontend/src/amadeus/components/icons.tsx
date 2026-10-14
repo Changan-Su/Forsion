@@ -3,7 +3,7 @@
  *  刻意不装 npm 依赖:渲染层三端共享(desktop/web/mobile),本地文件零外部解析。
  *  增补图标照原样从 @blocksuite/icons 摘录,保持 currentColor 不带死色。 */
 import type { ComponentType, ReactElement, ReactNode, SVGProps } from 'react'
-import { Archive, ArchiveRestore, Bot, Cloud, Mail, MailOpen, RefreshCw, Trash2, Workflow, type LucideIcon, type LucideProps } from 'lucide-react'
+import { Archive, ArchiveRestore, Bot, Cloud, Copy, Highlighter, Mail, MailOpen, RefreshCw, StickyNote, Strikethrough, TextQuote, Trash2, Underline, Workflow, type LucideIcon, type LucideProps } from 'lucide-react'
 
 const I = (children: ReactElement) => (props: SVGProps<SVGSVGElement>) => (
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="1em" height="1em" fill="none" aria-hidden {...props}>
@@ -145,6 +145,13 @@ export const PLUGIN_ICONS: Record<string, ComponentType<SVGProps<SVGSVGElement>>
   unarchive: L(ArchiveRestore),
   trash: L(Trash2),
   refresh: L(RefreshCw),
+  // 划线条上的工具(ctx.ui.mountSelectionBar 的 tools / 划线动作的 icon,2026-10-13):条上的工具只有图标,得自己带
+  highlight: L(Highlighter),
+  underline: L(Underline),
+  strikethrough: L(Strikethrough),
+  annotate: L(StickyNote),
+  copy: L(Copy),
+  cite: L(TextQuote),
 }
 
 /** 词表键的形状。**未命中词表但长成这样**的字符串 = 插件在叫一个本宿主还不认识的名字。 */
@@ -164,8 +171,10 @@ const VOCAB_SHAPED = /^[a-z0-9-]+$/
  * 也不许把键名当文案显示 —— 这也正是 plugins/types.ts 对 `ListItem.icon` 写明的契约。
  */
 export function resolveIcon(icon: string | undefined, fallback: ReactNode = null): ReactNode {
-  if (!icon) return fallback
-  const Icon = PLUGIN_ICONS[icon]
+  // 值是插件给的:不是字符串一律当没给(一个对象画进 JSX 会让 React 抛错,连带宿主那棵子树进错误边界);
+  // 只认词表自己的键 —— 'constructor' 这类继承来的名字查出来是个函数,当组件渲染同样会崩。
+  if (typeof icon !== 'string' || !icon) return fallback
+  const Icon = Object.prototype.hasOwnProperty.call(PLUGIN_ICONS, icon) ? PLUGIN_ICONS[icon] : undefined
   if (Icon) return <Icon />
   return VOCAB_SHAPED.test(icon) ? fallback : icon
 }

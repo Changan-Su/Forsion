@@ -245,7 +245,9 @@
  *   挂到 body(不是 DOM 后代),EventCard 卡内也不开浮层 —— 否则会被这层 filter 抢走包含块
  *   (见下方 chrome 段那条长警告)。往这些浮层里塞 fixed 子元素之前先回来看这行。
  * cm-sub / approval-hover-desc 是 Chatbox 新增的第二层浮面,必须和一级菜单一起进材质表。
- * 这里列的是「真正画卡片的元素」而不是透明点击遮罩；新增 popup 时也必须按这个口径登记。 */
+ * 这里列的是「真正画卡片的元素」而不是透明点击遮罩；新增 popup 时也必须按这个口径登记。
+ * 划线条(.selbar,聊天 / 插件视图里选中文字后那一条)和它的结果卡(.am-ai-panel)外壳都是 .ui-popover,已在名单里;
+ *   ⋯ 展开的 .selbar-panel 是流内的,没有 fixed 后代。笔记那条是下面的 .am-app .inline-toolbar。 */
 [data-theme='genesis-glass'] .composer-menu,
 [data-theme='genesis-glass'] .cm-sub,
 [data-theme='genesis-glass'] .approval-hover-desc,
@@ -259,7 +261,6 @@
 [data-theme='genesis-glass'] .rb-iconpick,
 [data-theme='genesis-glass'] .unitsw-menu,
 [data-theme='genesis-glass'] .t2sw-plug-menu,
-[data-theme='genesis-glass'] .t2-quote-menu,
 [data-theme='genesis-glass'] .amx-tip,
 [data-theme='genesis-glass'] .amx-db-pop,
 [data-theme='genesis-glass'] .ui-popover,
@@ -376,7 +377,8 @@
 [data-theme='genesis-glass'] .dv-groupview:has(.wb-tab--icon) .approval-hover-desc,
 [data-theme='genesis-glass'] .dv-groupview:has(.wb-tab--icon) .t2c-menu,
 [data-theme='genesis-glass'] .dv-groupview:has(.wb-tab--icon) .t2c-ctxring-pop,
-[data-theme='genesis-glass'] .dv-groupview:has(.wb-tab--icon) .t2-quote-menu,
+/* 划线条挂在 body 下,上面这种祖先选择器认不出它开在侧栏里 —— 由调用方打 data-dense(聊天的侧栏对话)。 */
+[data-theme='genesis-glass'] .selbar[data-dense],
 [data-theme='genesis-glass'] .dv-groupview:has(.wb-tab--icon) .composer-menu:is(.composer-menu--model, .composer-menu--mode, .composer-menu--add)::before {
   background: var(--gl-sheen), var(--gl-side);
 }

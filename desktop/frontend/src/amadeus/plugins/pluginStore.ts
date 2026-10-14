@@ -1141,6 +1141,13 @@ export const usePluginStore = create<PluginState>((set, get) => {
         console.warn(`[amadeus] 插件 ${pluginId} 的 registerSelectionAction 缺 id / title / run,已忽略`)
         return
       }
+      // 可选字段写错了不拒收(动作表会把认不出的 scope 当成哪儿都不列、认不出的 output 当成缺省),只在这里说一声。
+      const { scope: sc, when, output } = action
+      if (sc != null && sc !== 'note' && sc !== 'all' && sc !== 'own' && !(Array.isArray(sc) && sc.every((v) => typeof v === 'string'))) {
+        console.warn(`[amadeus] 插件 ${pluginId} 的划线动作「${action.id}」scope 无效(要 'note' | 'all' | 'own' | 视图 id 数组),它不会出现在任何视图里`)
+      }
+      if (when != null && typeof when !== 'function') console.warn(`[amadeus] 插件 ${pluginId} 的划线动作「${action.id}」when 不是函数,已当作没写`)
+      if (output != null && output !== 'preview' && output !== 'none') console.warn(`[amadeus] 插件 ${pluginId} 的划线动作「${action.id}」output 只认 'preview' | 'none',已当作 'preview'`)
       set((s) => ({ selectionActions: [...s.selectionActions.filter((o) => !(o.pluginId === pluginId && o.item.id === action.id)), { pluginId, item: action }] }))
     },
     registerCommand: (command) =>
@@ -1414,6 +1421,29 @@ export const usePluginStore = create<PluginState>((set, get) => {
             if (mounted) mounted.refresh()
             else pendingRefresh = true
           },
+          dispose,
+        }
+      },
+      // 划线条:插件自己的视图用上宿主那一条(见 selectionBarSurface.tsx)。和 FloatingToc 一样不接管 root(只看它里面的
+      // 选区,条浮在 body 上),所以不走 claimHostMount。句柄同步可用:装好之前的 show / update 攒着。
+      mountSelectionBar: (root, opts = {}) => {
+        if (!ctxAlive()) return { show() {}, hide() {}, update() {}, dispose() {} }
+        if (!(root instanceof HTMLElement)) throw new TypeError('mountSelectionBar needs an HTMLElement')
+        if (opts === null || typeof opts !== 'object') throw new TypeError('mountSelectionBar options must be an object')
+        let mounted: import('./types').PluginSelectionBarHandle | null = null
+        let cancelled = false
+        const pending = { ...opts }
+        let shown: Parameters<import('./types').PluginSelectionBarHandle['show']>[0] | null = null
+        const dispose = scope.own('mount', () => { cancelled = true; mounted?.dispose(); mounted = null }, 'selectionBar')
+        void import('./selectionBarSurface').then((m) => {
+          if (cancelled) return
+          mounted = m.mountPluginSelectionBar(root, pluginId, pending)
+          if (shown) mounted.show(shown)
+        }).catch((e) => { console.error(`[amadeus] plugin "${pluginId}" selection bar mount failed`, e) })
+        return {
+          show(sel) { if (cancelled) return; if (mounted) mounted.show(sel); else shown = sel },
+          hide() { shown = null; mounted?.hide() },
+          update(patch) { if (!cancelled && patch && typeof patch === 'object') { Object.assign(pending, patch); mounted?.update(patch) } },
           dispose,
         }
       },

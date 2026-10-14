@@ -209,3 +209,109 @@ describe('被后来的挂载收掉 = 完整的卸载', () => {
     expect(el.childElementCount).toBe(0)
   })
 })
+
+// 划线条(2026-10-13):条和结果卡是 body 下的浮层,插件的元素里一个节点都不加(所以不在上面那张「el 归还」的表里)。
+// 走真的 ctx.ui.mountSelectionBar:表面是懒加载的,装好之前的 show() 要补上;停用插件 = 条和它的宿主层一起收。
+// 负对照(2026-10-13 实跑):pluginStore 里那份挂载不进 scope.own → 「停用即收」红;装好之后不补 show() → 第一条「出条」红。
+it('ctx.ui.mountSelectionBar:不往插件的元素里加节点;show() 出条、视图工具拿到选中的文字;hide() 收;停用插件连宿主层一起收', async () => {
+  const { usePluginStore } = await import('./pluginStore')
+  const bar = () => document.querySelector<HTMLElement>('[data-testid="selection-bar"]')
+  const layers = () => document.querySelectorAll('body > div[hidden]').length
+  const settle = () => act(async () => { await new Promise((r) => setTimeout(r, 0)) })
+  const rect = { left: 10, right: 60, top: 100, bottom: 120 }
+  const before = layers()
+  const run = vi.fn()
+  let ctx!: import('./types').PluginContext
+  usePluginStore.setState({ initialized: false, plugins: [], activeIds: [], disabledIds: [], disposers: {}, selectionActions: [] })
+  usePluginStore.getState().init([{ id: 'selbar', name: 'selbar', version: '0', setup: (c) => { ctx = c } }])
+
+  let handle!: import('./types').PluginSelectionBarHandle
+  await act(async () => {
+    handle = ctx.ui!.mountSelectionBar!(el, { view: 'reader', watch: false, ask: false, tools: [{ id: 'yellow', title: 'Yellow', color: '#fd0', run }] })
+    handle.show({ text: ' hello ', rect }) // 表面还没装好:记着,装好补上
+  })
+  await vi.waitFor(async () => { await settle(); expect(bar()).not.toBeNull() })
+  expect(bar()!.dataset.view).toBe('selbar:reader')
+  expect(el.childElementCount).toBe(0)
+  expect(layers()).toBe(before + 1)
+
+  await act(async () => { bar()!.querySelector('[data-act="yellow"]')!.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true })) })
+  expect(run).toHaveBeenCalledWith({ text: 'hello' })
+
+  await act(async () => { handle.hide() })
+  expect(bar()).toBeNull()
+  await act(async () => { handle.show({ text: '', rect }) }) // 没有文字:不出
+  expect(bar()).toBeNull()
+
+  await act(async () => { handle.show({ text: 'again', rect }) })
+  expect(bar()).not.toBeNull()
+  await act(async () => { usePluginStore.getState().disable('selbar') })
+  expect(bar(), '停用即收').toBeNull()
+  expect(layers(), '宿主层也摘掉').toBe(before)
+  await act(async () => { handle.show({ text: 'late', rect }) }) // 收掉之后句柄是哑的
+  expect(bar()).toBeNull()
+  expect(errors).toEqual([])
+})
+
+// 评审(2026-10-14)指出的四处,各钉一条。负对照(实跑,逐条改回去):主动报的选区滚动时不跟着收 → 「滚动即收」红;
+// 右键也执行 → 「右键不触发」红;Esc 不看焦点在哪 → 「别处输入框的 Esc」红;markdown 照 2000 字截 → 最后一条红。
+it('ctx.ui.mountSelectionBar(缺省看选区):show() 报的也随滚动收;右键不触发工具;别处输入框里的 Esc 不被吃;markdown 不截断', async () => {
+  const { mountPluginSelectionBar } = await import('./selectionBarSurface')
+  const bar = () => document.querySelector<HTMLElement>('[data-testid="selection-bar"]')
+  const rect = { left: 10, right: 60, top: 100, bottom: 120 }
+  const md = 'm'.repeat(3000)
+  const run = vi.fn()
+  let handle!: ReturnType<typeof mountPluginSelectionBar>
+  await act(async () => { handle = mountPluginSelectionBar(el, 'contract', { ask: false, tools: [{ id: 'note', title: 'Note', icon: 'annotate', run }] }) })
+  await act(async () => { handle.show({ text: 'hello', markdown: md, rect }) })
+  const tool = bar()!.querySelector('[data-act="note"]')!
+
+  await act(async () => { tool.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 2 })) })
+  expect(run, '右键不触发').not.toHaveBeenCalled()
+  await act(async () => { tool.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 0 })) })
+  expect(run).toHaveBeenCalledWith({ text: 'hello', markdown: md })
+
+  // 焦点在别处的输入框(命令面板、搜索框):Esc 是它的,条不吃也不收
+  const input = document.body.appendChild(document.createElement('input'))
+  input.focus()
+  const esc = (): KeyboardEvent => { const e = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }); input.dispatchEvent(e); return e }
+  let e1!: KeyboardEvent
+  await act(async () => { e1 = esc() })
+  expect(e1.defaultPrevented, '别处输入框的 Esc').toBe(false)
+  expect(bar()).not.toBeNull()
+  input.blur()
+  input.remove()
+  await act(async () => { window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })) })
+  expect(bar(), '焦点不在输入框里:Esc 收条').toBeNull()
+
+  await act(async () => { handle.show({ text: 'hello', rect }) })
+  expect(bar()).not.toBeNull()
+  await act(async () => { el.dispatchEvent(new Event('scroll')) })
+  expect(bar(), '滚动即收').toBeNull()
+  await act(async () => { handle.dispose() })
+  expect(errors).toEqual([])
+})
+
+// 自己报选区的视图(PDF 阅读器)滚动 / 缩放时都要 hide():只收条,已经开着的结果卡留着(和聊天里滚动时一样)。
+// 负对照(2026-10-14 实跑):hide() 照旧无条件重挂 → 「卡还在」红。
+it('ctx.ui.mountSelectionBar({ watch: false }):hide() 只收条,开着的结果卡不跟着没', async () => {
+  const { mountPluginSelectionBar } = await import('./selectionBarSurface')
+  const { usePluginStore } = await import('./pluginStore')
+  const bar = () => document.querySelector<HTMLElement>('[data-testid="selection-bar"]')
+  const card = () => document.querySelector<HTMLElement>('[data-testid="inline-ai-panel"]')
+  const press = (n: Element) => act(async () => { n.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true })) })
+  usePluginStore.setState({ selectionActions: [{ pluginId: 'contract', item: { id: 'sum', title: 'Sum', scope: 'own', run: async () => 'summary' } }] })
+  let handle!: ReturnType<typeof mountPluginSelectionBar>
+  await act(async () => { handle = mountPluginSelectionBar(el, 'contract', { watch: false, ask: false }) })
+  await act(async () => { handle.show({ text: 'hello', rect: { left: 10, right: 60, top: 100, bottom: 120 } }) })
+  await press(bar()!.querySelector('[data-act="more"]')!)
+  await press(document.querySelector('[data-testid="selbar-more"] [role="menuitem"]')!)
+  expect(card()).not.toBeNull()
+  expect(bar(), '开卡时条收起').toBeNull()
+  await act(async () => { handle.hide() })
+  expect(card(), '卡还在').not.toBeNull()
+  await act(async () => { handle.dispose() })
+  expect(card()).toBeNull()
+  usePluginStore.setState({ selectionActions: [] })
+  expect(errors).toEqual([])
+})

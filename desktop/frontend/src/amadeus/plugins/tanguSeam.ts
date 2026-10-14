@@ -231,6 +231,8 @@ export interface TanguCompleteResult {
   text: string
   /** 模型把工具调用写成了文本(它没有工具,什么都没执行)。 */
   toolCallText: boolean
+  /** translate:这次实际是谁译的(结果卡上写出来;mt = 机器翻译模型)。别的动作不给;不随 ctx.tangu 交给插件。 */
+  model?: { id: string; name: string; mt: boolean }
 }
 
 /** agent 自建 Space 读写自家数据(2026-09-27+):`ctx.agent` 的宿主实现。字段都是插件可见的契约,别塞绝对路径。 */

@@ -5,10 +5,10 @@
  * 为什么挂在 setter 里而不是各个 UI 调用点:字体/缩放/语言/光标都有多个入口(设置页、引导页、
  * ⌘K 命令、agent 命令),挂调用点必漏。收方重放时走 `withReplay` 静音,故不会来回弹。
  */
-import { FONT_UI_KEY, FONT_BODY_KEY, FONT_MONO_KEY, SMOOTH_CARET_KEY, UI_ZOOM_KEY, LOCALE_KEY } from './types'
+import { FONT_UI_KEY, FONT_BODY_KEY, FONT_MONO_KEY, SMOOTH_CARET_KEY, SELECTION_BAR_ORDER_KEY, UI_ZOOM_KEY, LOCALE_KEY } from './types'
 
 /** 会跨窗同步的偏好键(固定那批)。主题可调参数 `theme.<id>.--<var>` 是动态键,见 collectPrefs。 */
-export const UI_PREF_KEYS = [FONT_UI_KEY, FONT_BODY_KEY, FONT_MONO_KEY, SMOOTH_CARET_KEY, UI_ZOOM_KEY, LOCALE_KEY] as const
+export const UI_PREF_KEYS = [FONT_UI_KEY, FONT_BODY_KEY, FONT_MONO_KEY, SMOOTH_CARET_KEY, SELECTION_BAR_ORDER_KEY, UI_ZOOM_KEY, LOCALE_KEY] as const
 
 const THEME_KNOB = /^theme\.[A-Za-z0-9._-]{1,64}\.--[a-z0-9-]{1,64}$/i
 
