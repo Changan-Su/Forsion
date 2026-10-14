@@ -16,9 +16,11 @@ import { currentClientId } from '../../services/agentRunService'
 
 export const PROMPT_SUGGEST_KEY = 'forsion_tangu_prompt_suggest'
 
-/** 只有桌面宿主算数:开关只摆在那儿,快照也只存在本机引擎里。网页版 / 手机 / 设备页缺省开也不去拉(拉了只是白打一次)。 */
+/** 只有桌面宿主算数:开关只摆在那儿,快照也只存在本机引擎里。网页版 / 手机 / 设备页缺省开也不去拉(拉了只是白打一次)。
+ *  设备页(本机投射)的 shim 也给 backendStatus,得单独排除;没有 window 的(Node 里跑的 store 测试)一律不算。 */
 const supported = (): boolean =>
-  !!window.tangu?.backendStatus && !window.tangu?.mobile && !window.matchMedia?.('(hover: none)').matches
+  typeof window !== 'undefined' && !!window.tangu?.backendStatus && !window.tangu?.unitPage && !window.tangu?.mobile
+  && !window.matchMedia?.('(hover: none)').matches
 
 /** 开关的唯一读法:没存过 = 开;关掉存成 '0'(10-14 之前开着存的 '1' 照样算开)。
  *  每次现读 localStorage —— 设置页可能开在另一扇窗里。 */

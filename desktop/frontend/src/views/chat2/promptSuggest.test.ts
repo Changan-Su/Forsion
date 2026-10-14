@@ -37,12 +37,18 @@ describe('输入建议', () => {
   })
 
   it('不是桌面宿主(网页版 / 手机 / 设备页):缺省开也不拉', async () => {
-    for (const host of [undefined, { cloudWeb: true }, { backendStatus: () => {}, mobile: true }]) {
+    for (const host of [undefined, { cloudWeb: true }, { backendStatus: () => {}, mobile: true }, { backendStatus: () => {}, unitPage: true }]) {
       vi.stubGlobal('tangu', host)
       expect(isPromptSuggestOn()).toBe(false)
       await requestSuggestion('s1', 'r1')
     }
     expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('没有 window(Node 里跑的 store 测试收到 done):不抛,当作没有', async () => {
+    vi.stubGlobal('window', undefined)
+    expect(isPromptSuggestOn()).toBe(false)
+    await expect(requestSuggestion('s1', 'r1')).resolves.toBeUndefined()
   })
 
   it('开着:按会话拉一次,带上刚结束的 run;拿到的那句按会话存', async () => {

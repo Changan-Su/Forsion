@@ -1277,6 +1277,7 @@ export const SettingsModal: React.FC<{
     if (e.sub && !subItemsForTab(e.tab as Tab).some(([k]) => k === e.sub)) return false
     return (e.needs ?? []).every((need) => need === 'stored' ? !!stored
       : need === 'desktop' ? isDesktop
+      : need === 'host' ? isDesktop && !unitPage
       : need === 'hover' ? hoverCapable
       : need === 'wide' ? !mobileSettings
       : need === 'cloud' ? isDesktop && cloudAccount // Forsion 账号面随 Extend 出现(forsion 一级页)
@@ -3569,8 +3570,9 @@ export const SettingsModal: React.FC<{
                       </div>
                     )}
 
-                    {/* 输入建议(缺省开):要 Tab 键采用,也要本机引擎(云端执行节点没有这条路由)→ 只在桌面宿主、有悬停的设备上摆出来。 */}
-                    {isDesktop && hoverCapable && !mobileSettings && (
+                    {/* 输入建议(缺省开):要 Tab 键采用,也要本机引擎(云端执行节点没有这条路由)→ 只在桌面宿主(不含设备页)、
+                        有悬停的设备上摆出来;与 promptSuggest.ts 的 supported() 同一道闸。 */}
+                    {isDesktop && !unitPage && hoverCapable && !mobileSettings && (
                       <div className="field" style={{ marginTop: 14 }} data-setting-anchor="prompt-suggest">
                         <label>{t('settings.promptSuggest')}</label>
                         <div className="hint" style={{ marginBottom: 8 }}>{t('settings.promptSuggestHint')}</div>

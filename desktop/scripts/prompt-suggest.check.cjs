@@ -276,7 +276,7 @@ async function main() {
   }
 
   const failed = results.filter((r) => !r.ok)
-  console.log(`\n${results.length - failed.length}/${results.length} 通过` + (NEGATIVE_CONTROL ? '(负对照:没开开关,「开着」之后的断言应转红)' : `;截图 ${SHOTS.light} / ${SHOTS.dark}`))
+  console.log(`\n${results.length - failed.length}/${results.length} 通过` + (NEGATIVE_CONTROL ? '(负对照:关掉以后没再勾回,「开着」之后的断言应转红)' : `;截图 ${SHOTS.light} / ${SHOTS.dark}`))
   if (NEGATIVE_CONTROL) process.exit(failed.length >= 3 ? 0 : 1)
   process.exit(failed.length ? 1 : 0)
 }
