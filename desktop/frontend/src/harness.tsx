@@ -2370,6 +2370,49 @@ if (new URLSearchParams(location.search).has('dock')) {
       onDrop: (payload, target) => { probe.drops.push({ items: payload.items, to: target.item?.key, position: target.position }) },
     }
   }
+  // 组头(folderStyle: 'group')、行尾的悬停图标钮、「查看更多」(2026-10-14):收件箱按发信人的那一种列表。
+  // 四个发信人各一种前导:只有名字(画首字)、词表图标(方块)、图片(圆头像)、七封信的一组(验「查看更多」)。
+  if (new URLSearchParams(location.search).has('groups')) {
+    const listeners = new Set<() => void>()
+    const emit = (): void => listeners.forEach((fn) => fn())
+    const SENDERS: Record<string, Partial<ListItem>> = { muse: { title: 'Muse' }, forsion: { title: 'Forsion', icon: 'cloud' }, auto: { title: '自动化', icon: 'workflow' }, pic: { title: '带头像的', iconUrl: BIG } }
+    let mails = [
+      { key: 'm1', from: 'muse', title: '请审批：写待办文件', unread: true }, { key: 'm2', from: 'muse', title: '本周的记忆整理好了', unread: false },
+      { key: 'f1', from: 'forsion', title: '一封标题很长很长很长很长很长很长很长很长很长的更新奖励', unread: true }, { key: 'f2', from: 'forsion', title: '会员即将到期', unread: false },
+      ...[1, 2, 3, 4, 5, 6, 7].map((n) => ({ key: `a${n}`, from: 'auto', title: `每日汇总 ${n}`, unread: false })),
+      { key: 'p1', from: 'pic', title: '周报草稿写好了', unread: false },
+    ]
+    let active: string | null = null
+    const probe = {
+      opened: [] as string[], ran: [] as string[],
+      arrive(from: string) { mails = [{ key: `new${mails.length}`, from, title: '新来的一封', unread: true }, ...mails]; emit() },
+    }
+    ;(window as any).__groupProbe = probe
+    SRC.subscribe = (cb) => { listeners.add(cb); return () => { listeners.delete(cb) } }
+    SRC.items = (f) => {
+      const hit = mails.filter((m) => !f?.query || m.title.includes(f.query))
+      const row = (m: (typeof mails)[number]): ListItem => ({ key: m.key, title: m.title, subtitle: `${m.title}的第一句话`, hint: '10:02', icon: 'page', ...(m.unread ? { unread: true } : {}) })
+      if (f?.query) return hit.map(row)
+      return [...new Set(hit.map((m) => m.from))].flatMap((from) => {
+        const own = hit.filter((m) => m.from === from), unread = own.filter((m) => m.unread).length
+        return [{ key: `s:${from}`, kind: 'folder', folderStyle: 'group', ...SENDERS[from], ...(unread ? { hint: String(unread), defaultOpen: true } : {}) } as ListItem,
+          ...own.map((m) => ({ ...row(m), parent: `s:${from}` }))]
+      })
+    }
+    SRC.activeKey = () => active
+    SRC.open = (item) => { active = item.key; probe.opened.push(item.key); emit() }
+    SRC.itemMenu = (item) => {
+      const m = mails.find((x) => x.key === item.key)
+      if (!m) return []
+      const act = (id: string, change: () => void) => () => { probe.ran.push(`${id}:${m.key}`); change(); emit() }
+      return [
+        { id: 'read', icon: m.unread ? 'mail-open' : 'mail', label: m.unread ? '标为已读' : '标为未读', run: act('read', () => { m.unread = !m.unread }) },
+        { id: 'archive', icon: 'archive', label: '归档', run: act('archive', () => { mails = mails.filter((x) => x !== m) }) },
+        { id: 'delete', icon: 'trash', label: '删除', danger: true, run: act('delete', () => { mails = mails.filter((x) => x !== m) }) },
+        { id: 'props', label: '查看属性', run: act('props', () => {}) }, // 没有图标:只在「更多」里
+      ]
+    }
+  }
   createRoot(document.getElementById('root')!).render(
     <div className="amadeus-root am-app" style={{ position: 'fixed', inset: 0, background: 'var(--bg)', display: 'flex' }}>
       {/* ⚠️ 层级照生产**逐层**摆:WorkspaceView 是 dockview 面板,**外面没有 `.t2s-side`**

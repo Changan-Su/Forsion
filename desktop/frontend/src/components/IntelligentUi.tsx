@@ -2,6 +2,8 @@ import { useMemo, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import remarkCjkFriendly from 'remark-cjk-friendly/parseOnly'
+import remarkCjkFriendlyStrikethrough from 'remark-cjk-friendly-gfm-strikethrough/parseOnly'
 import { Check, ChevronDown, Copy, ExternalLink, Maximize2, Minimize2, Minus, Plus, RotateCcw, Zap } from 'lucide-react'
 import { parseUIDraft, safeUIUrl, snapUIValue, validateUIDocument, type UIBlock, type UIDocument, type UIInput, type UIResource } from '../../../../tangu-agent/src/shared/intelligentUi'
 import type { ToolEvent } from '../types'
@@ -52,7 +54,8 @@ export function IntelligentUi({ event, live, stateScope, onAsk }: { event: ToolE
 }
 
 function RichText({ text }: { text: string }): React.JSX.Element {
-  return <ReactMarkdown remarkPlugins={[remarkGfm]} skipHtml disallowedElements={['img', 'input']} components={{
+  // 同聊天正文(components/Markdown.tsx):`**怎么选：**如果` 这种 CJK 标点贴闭合定界符的写法,不加这两个插件会原样露出 `**`。须排在 remarkGfm 之后。
+  return <ReactMarkdown remarkPlugins={[remarkGfm, remarkCjkFriendly, remarkCjkFriendlyStrikethrough]} skipHtml disallowedElements={['img', 'input']} components={{
     a: ({ href, children }) => safeUIUrl(href) ? <ChatWebLink href={href}>{children}</ChatWebLink> : <span>{children}</span>,
   }}>{text}</ReactMarkdown>
 }

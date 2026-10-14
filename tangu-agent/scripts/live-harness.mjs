@@ -254,6 +254,7 @@ OPT_IN.add('intelligentusers'); KEYS.push('intelligentusers');
 OPT_IN.add('intelligentcards'); KEYS.push('intelligentcards');
 OPT_IN.add('visualauto'); KEYS.push('visualauto'); // --only visualauto:消息里不点名图 / 卡时模型自己出不出卡(8 个 run);改 sketch.ts 的本轮信号 / 两段提示后跑
 OPT_IN.add('uileak'); KEYS.push('uileak'); // --only uileak:模型把卡片的文档 JSON 写进正文时,引擎让它改成真的调用工具(3 个 run);改 agentLoop 的文档自愈后跑
+OPT_IN.add('iuiparity'); KEYS.push('iuiparity'); // --only iuiparity:和 ChatGPT 同题的 13 条首问 + 5 条跟进,另加让它办事的两句(共 20 个 run):出不出、出在回答的哪儿、先说话还是先出卡、末尾有没有追问;改本轮信号 / Intelligent UI 提示段后跑
 OPT_IN.add('visualize'); // --only visualize: real model -> sketch controls/state; HTML can feed desktop check:visualize.
 OPT_IN.add('visualask'); // --only visualask:卡内按钮回头改答案(forsionSketch.ask);改 sketch.ts 的 INTERACTION / SKETCH_SECTION 那段后跑
 OPT_IN.add('visualsdial'); // --only visualsdial:可视化档位 less / off(ui_settings 快照):off 工具与段都不在、less 隐式信号不触发;两个 run
@@ -1333,7 +1334,7 @@ async function run(sessionId, message, timeoutMs = 240_000, extraAgentConfig = {
           let e; try { e = JSON.parse(line.slice(5).trim()); } catch { continue; }
           const p = e.payload || {};
           // firstTokenMs = 首个正文 token(语音能开口念的时刻);ttftMs 还含 reasoning/tool_stream
-          if (e.type === 'token' || e.type === 'reasoning' || e.type === 'tool_stream') { if (ev.ttftMs == null) ev.ttftMs = Date.now() - t0; if (e.type === 'token') { ev.tokens += 1; if (ev.firstTokenMs == null) ev.firstTokenMs = Date.now() - t0; } }
+          if (e.type === 'token' || e.type === 'reasoning' || e.type === 'tool_stream') { if (ev.ttftMs == null) ev.ttftMs = Date.now() - t0; if (e.type === 'tool_stream' && p.name) (ev.streamAt ||= {})[p.name] ??= Date.now() - t0; if (e.type === 'token') { ev.tokens += 1; if (ev.firstTokenMs == null) ev.firstTokenMs = Date.now() - t0; } }
           // toolArgs:参数原文(control 场景要看 B 腿的 run_bash 到底跑了什么命令 —— 只记工具名的话事后只看得见「run_bash」)。
           // 不进 results.json(record 只收场景返回的字段);大小由模型单次输出封顶。
           else if (e.type === 'tool_call') { ev.toolCalls.push(p.name || '?'); ev.toolCallIds.push(p.id); ev.toolArgs.push({ id: p.id, name: p.name || '?', args: toolArgsText(p.arguments), arguments: typeof p.arguments === 'string' ? p.arguments : JSON.stringify(p.arguments || {}) }); }
@@ -2255,6 +2256,83 @@ try {
     return { ok: !broken.length && rows.every((r) => !r.leaked && (r.card || !r.healed)),
       detail: `出卡 ${count((r) => r.card)}/${rows.length};终稿里有裸的文档 JSON ${count((r) => r.leaked)}/${rows.length};自愈触发 ${count((r) => r.healed)}/${rows.length};${rows.map((r) => `${r.id}=${r.card ? '卡' : '无'}${r.leaked ? '+裸JSON' : ''}${r.healed ? '(自愈)' : ''}`).join(' ')}${broken.length ? `;没跑完:${broken.map((r) => `${r.id}(${r.error || '未结束'})`).join(',')}` : ''}`,
       output: rows.map((r) => `【${r.id}】${r.q}\n工具:${r.toolCalls.join(',') || '无'}\n${r.content}`).join('\n\n'),
+      toolCalls: rows.flatMap((r) => r.toolCalls), ttftMs: rows[0]?.ttftMs, tokens: rows.reduce((n, r) => n + (r.tokens || 0), 0) };
+  });
+
+  // iuiparity(10-13,用户反馈「触发时机和融入时机不如 ChatGPT 自然」):同样 18 句话 10-13 晚发给过 ChatGPT 网页版,
+  // 对照表在仓根 harness-runs/2026-10-13/Intelligent-UI-对标ChatGPT-触发与融入.md。这里量的不只是出没出卡:
+  // 卡前有没有先说话(lead)、卡后还说了多少(tail)、一条回答几份文档、文档里有没有正文块、末尾有没有追问(输入 + 追问钮)。
+  // 跟进句(「那四次挥手呢」)里一个清单 / 对比 / 安排的字眼都没有 —— 只读最后一句话的触发方式在这几条上看得最清楚。
+  // 判据:ChatGPT 出了组件的 13 条(首问 9 + 跟进 4)里至少 12 条出卡;出卡的首答里至少八成以结论开头;没有「说了下面有、却没出」的;一句事实、写邮件、写函数、让它办事的两句不出卡。
+  await scenario('iuiparity', 'iuiparity 和 ChatGPT 同题对照', async () => {
+    const opts = { clientCapabilities: ['intelligent-ui.v1'], ui: { visuals: { value: 'auto', allowed: ['auto', 'less', 'off'] } } };
+    const { sketchTurnSignalFor } = await import(new URL('../dist/tools/builtin/sketch.js', import.meta.url).href);
+    // [id, 首问, 该不该出(true / false / null=两可), 跟进句, 跟进该不该出]
+    const probes = [
+      ['camp', '周末带两个孩子去露营两天一晚,要带些什么?', true],
+      ['laptop', 'MacBook Air 和 MacBook Pro 14 我该买哪个?平时写代码,偶尔剪视频', true, '预算一千五以内呢', true],
+      ['trip', '下周去成都玩三天,帮我安排一下', true, '第二天换成轻松一点的', true],
+      ['fact', '法国的首都是哪里?', false, '那里有什么值得去的?', true],
+      ['plan', '我想三个月内把英语口语练起来,帮我做个计划', true, '好,那接下来怎么做', null],
+      ['tcp', '解释一下 TCP 为什么要三次握手', true, '那四次挥手呢', true],
+      ['recipe', '红烧肉怎么做?四个人吃', true],
+      ['budget', '我月薪 15000,房租 4000,想一年存下 6 万,怎么分配?', true],
+      ['sleep', '最近压力很大,晚上总睡不着', null],
+      ['backend', '我主要写 TypeScript,后端用 Express 还是 Fastify?', true],
+      ['email', '帮我写一封请三天假的邮件', false],
+      ['debounce', '写一个 debounce 函数', false],
+      ['dinner', '晚饭吃什么', true],
+      // 下面这条 ChatGPT 没问过:让它把事办了的对话(agent 的日常)。本轮提醒现在每条普通消息都发,这里钉它不在办事的时候冒卡。
+      ['note', '在当前目录新建一个 notes.md,第一行写今天的日期', false, '好,接着在下面加一行「待办:买牛奶」', false],
+    ];
+    const VISUAL = ['intelligent_ui', 'sketch'];
+    const shape = (ev) => {
+      const seen = {}; // 成功的那几次调用:同名工具的第 k 次调用对第 k 条结果
+      const calls = ev.toolArgs.filter((c) => { if (!VISUAL.includes(c.name)) return false; const k = seen[c.name] = (seen[c.name] ?? -1) + 1; const r = ev.toolResults.filter((x) => x.name === c.name)[k]; return r && !r.isError && !/^Error[:\s]/i.test(r.result || ''); });
+      const okIds = new Set(calls.map((c) => c.id));
+      const offs = (ev.toolOffsets || []).filter((o) => okIds.has(o.id)).map((o) => Number(o.offset) || 0);
+      const docs = calls.filter((c) => c.name === 'intelligent_ui').map((c) => { try { return JSON.parse(JSON.parse(c.arguments || '{}').document || '{}'); } catch { return {}; } });
+      const blocks = docs.flatMap((d) => d.blocks || []);
+      return {
+        cards: calls.map((c) => c.name),
+        lead: offs.length ? Math.min(...offs) : null, // 第一张卡前面的正文字数
+        tail: offs.length ? ev.content.length - Math.max(...offs) : null, // 最后一张卡后面的正文字数
+        kinds: blocks.map((b) => b.kind),
+        textBlocks: blocks.filter((b) => b.kind === 'text').length,
+        inputs: docs.reduce((n, d) => n + (d.inputs?.length || 0), 0),
+        ask: blocks.some((b) => b.kind === 'actions' && (b.items || []).some((a) => a.kind === 'model')), // 末尾追问钮
+        skill: ev.toolCalls.includes('use_skill'),
+        cardMs: Math.min(...VISUAL.map((n) => ev.streamAt?.[n] ?? Infinity)), // 卡的骨架上屏的时刻
+        // 回放用(desktop 的 scripts/intelligent-ui-replay.cjs 把这几条原样放进真 Electron 截图):每张卡的参数原文与它在正文里的落点
+        views: calls.map((c) => ({ id: c.id, name: c.name, offset: Number((ev.toolOffsets || []).find((o) => o.id === c.id)?.offset) || 0, arguments: c.arguments })),
+      };
+    };
+    const ask = async (id, sid, q, expect, follow) => {
+      const ev = await run(sid, q, 300_000, {}, 'desktop/2.13.3', undefined, undefined, undefined, opts);
+      const signal = sketchTurnSignalFor(q, 'auto', true)?.kind || null; // 本轮提醒挂在尾部用户消息上、不在系统提示里:直接问被测的那份引擎会发哪一类
+      return { id: follow ? `${id}+` : id, q, expect, signal, ...shape(ev), chars: ev.content.length, firstTokenMs: ev.firstTokenMs, wallMs: ev.wallMs, nudged: ev.statuses.some((p) => p.phase === 'sketch_delivery_nudge'), toolCalls: ev.toolCalls, error: ev.error, done: ev.done, content: ev.content, tokens: tokensOf(ev), ttftMs: ttft(ev), documents: ev.toolArgs.filter((c) => c.name === 'intelligent_ui').map((c) => c.arguments) };
+    };
+    const stamp = Date.now();
+    const rows = [];
+    for (let i = 0; i < probes.length; i += 4) rows.push(...(await Promise.all(probes.slice(i, i + 4).map(async ([id, q, expect, fq, fexpect]) => {
+      const sid = `live-iuiparity-${id}-${stamp}`;
+      const first = await ask(id, sid, q, expect, false);
+      return fq && first.done && !first.error ? [first, await ask(id, sid, fq, fexpect, true)] : [first]; // 跟进接在同一个会话里
+    }))).flat());
+    writeFileSync(join(OUT, 'iuiparity-evidence.json'), JSON.stringify(rows, null, 2));
+    const broken = rows.filter((r) => r.error || !r.done);
+    const want = rows.filter((r) => r.expect === true), plain = rows.filter((r) => r.expect === false);
+    const hits = want.filter((r) => r.cards.length), stray = plain.filter((r) => r.cards.length);
+    const carded = rows.filter((r) => r.cards.length && !r.id.endsWith('+'));
+    // 「开头是结论」:卡前有正文,或文档的第一个区块就是文字(10-13 起结论放在文档里 —— 让模型先写一段话再调用,它有一半写完就收尾)
+    const led = carded.filter((r) => r.lead > 0 || r.kinds[0] === 'text');
+    // 说了「下面有清单 / 卡」却没出:上面那种收尾的样子,单列出来数
+    const promised = rows.filter((r) => !r.cards.length && /(?:下面|以下|下方)[^。\n]{0,24}(?:清单|卡|勾选|对比|表)|\bbelow\b/i.test(r.content));
+    const sec = (ms) => (Number.isFinite(ms) && ms != null ? `${(ms / 1000).toFixed(1)}s` : '—');
+    const line = (r) => `${r.id}=${r.cards.length ? `卡${r.cards.length}(前${r.lead}字/后${r.tail}字${r.ask ? '/追问' : ''})` : '无'}${r.signal ? `[${r.signal}]` : ''}`;
+    return { ok: !broken.length && hits.length >= 12 && !stray.length && !promised.length && led.length >= Math.ceil(carded.length * 0.8),
+      detail: `该出 ${hits.length}/${want.length}(其中跟进 ${hits.filter((r) => r.id.endsWith('+')).length}/${want.filter((r) => r.id.endsWith('+')).length});不该出 ${stray.length}/${plain.length};开头是结论 ${led.length}/${carded.length};说了有却没出 ${promised.length};末尾带追问 ${rows.filter((r) => r.ask).length};本轮提醒发了 ${rows.filter((r) => r.signal).length}/${rows.length};先读技能 ${rows.filter((r) => r.skill).length};${rows.map(line).join(' ')}${broken.length ? `;没跑完:${broken.map((r) => `${r.id}(${r.error || '未结束'})`).join(',')}` : ''}`,
+      output: rows.map((r) => `【${r.id}${r.expect === false ? '·不该出' : r.expect == null ? '·两可' : ''}】${r.q}\n工具:${r.toolCalls.join(',') || '无'};提醒:${r.signal || '无'};首字 ${sec(r.firstTokenMs)};卡上屏 ${sec(r.cardMs)};全程 ${sec(r.wallMs)};tokens ${r.tokens ?? '—'}\n区块:${r.kinds.join(',') || '—'}\n${r.content}`).join('\n\n'),
       toolCalls: rows.flatMap((r) => r.toolCalls), ttftMs: rows[0]?.ttftMs, tokens: rows.reduce((n, r) => n + (r.tokens || 0), 0) };
   });
 
