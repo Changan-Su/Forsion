@@ -13,11 +13,13 @@ import { showDetails } from '../stores/detailsSubject'
 import { useSessionAttention } from '../stores/attentionStore' // P1-K3
 import { isHomeSession } from '../types'
 import { runLocationsAvailable } from '../features/runtime'
+import { useRemoteCapability } from '../services/engine/targets'
 import { DeviceSessionSections, attentionBadge } from './chat2/DeviceSessionSections' // P1-K7a
 
 /** sideFilter(工作区 view 左栏胶囊):cloud=只看云端(无 project_path 的会话+云端工作区),
  *  local=只看本地;undefined=不过滤(其他挂载点行为不变)。 */
 export function SessionsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = {}) {
+  useRemoteCapability((c) => c.epoch) // 桌面:中转口到位 / 换号后 runLocationsAvailable() 才变,订阅它好重渲染「我的电脑」分组
   const s = useApp(useShallow((state) => ({
     runningBySession: state.runningBySession,
     sessions: state.sessions,
@@ -100,7 +102,7 @@ export function SessionsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } 
       flat={mode === 'chat'}
       onOpenWorkspace={(wsKey) => openSpecial('workspace', wsKey)}
       workspaces={workspaces}
-      onNewInWorkspace={(ws) => void s.createInWorkspace(ws)}
+      onNewInWorkspace={(ws) => void s.createInWorkspace(ws, { here: true })}
       onAddWorkspace={() => void s.addLocalWorkspace()}
       onRenameWorkspace={(ws, name) => void s.renameWorkspace(ws, name)}
       onRemoveWorkspace={(ws, o) => void s.removeWorkspace(ws, o)}

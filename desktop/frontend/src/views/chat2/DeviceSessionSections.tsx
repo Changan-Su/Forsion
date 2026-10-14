@@ -24,6 +24,8 @@ import { adoptRemoteSession, archiveRemote, renameRemote, setRemoteSessionEmoji,
 import { useDeviceMarks } from '../../services/deviceMarks'
 import type { DeviceStatus } from '../../services/deviceStatus'
 import { runLocationsAvailable } from '../../features/runtime'
+import { currentPlatform } from '../../services/platform'
+import { useRemoteCapability } from '../../services/engine/targets'
 import { sessionActivityAt } from './SidebarPane'
 import { AttentionDot } from './AttentionDot'
 import './deviceSessions.css'
@@ -38,8 +40,11 @@ registerMessages({
   'devstatus.unreachable': { zh: '暂时连不上', en: "Can't reach it" },
   'devstatus.remoteOff': { zh: '未开启远程会话', en: 'Remote sessions off' },
   'devstatus.awaitingConfirm': { zh: '等待那台电脑允许', en: 'Waiting for approval there' },
-  'devstatus.denied': { zh: '拒绝了这台手机', en: 'Declined this phone' },
-  'devstatus.callerBlocked': { zh: '不允许这台手机运行', en: "Doesn't allow this phone" },
+  // {me} = 发起连接的这一端(见 deviceStatusText):手机上说「这台手机」,桌面上说「这台电脑」
+  'devstatus.me.phone': { zh: '这台手机', en: 'this phone' },
+  'devstatus.me.computer': { zh: '这台电脑', en: 'this computer' },
+  'devstatus.denied': { zh: '拒绝了{me}', en: 'Declined {me}' },
+  'devstatus.callerBlocked': { zh: '不允许{me}运行', en: "Doesn't allow {me}" },
   // 悬停 / 读屏用的完整说明
   'devstatus.long.checking': { zh: '正在连接这台电脑…', en: 'Connecting to this computer…' },
   'devstatus.long.ready': { zh: '在线，可以在上面运行会话', en: 'Online. Sessions can run here' },
@@ -49,14 +54,19 @@ registerMessages({
   'devstatus.long.offline': { zh: '离线，重新上线后这里会显示它的会话', en: "Offline. Its sessions show up here when it's back" },
   'devstatus.long.unreachable': { zh: '暂时连不上，稍后重试', en: "Can't reach it right now. Try again shortly" },
   'devstatus.long.remoteOff': { zh: '这台电脑没有开启「允许远程会话」', en: 'Remote sessions are turned off on this computer' },
-  'devstatus.long.awaitingConfirm': { zh: '请在那台电脑上允许这台手机', en: 'Allow this phone on that computer to continue' },
-  'devstatus.long.denied': { zh: '那台电脑拒绝了这台手机', en: 'That computer declined this phone' },
-  'devstatus.long.callerBlocked': { zh: '那台电脑不允许这台手机运行会话，请在它的「设置 › 远程会话」中调整', en: "That computer doesn't let this phone run sessions. Change it in Settings › Remote sessions there" },
+  'devstatus.long.awaitingConfirm': { zh: '请在那台电脑上允许{me}', en: 'Allow {me} on that computer to continue' },
+  'devstatus.long.denied': { zh: '那台电脑拒绝了{me}', en: 'That computer declined {me}' },
+  'devstatus.long.callerBlocked': { zh: '那台电脑不允许{me}运行会话，请在它的「设置 › 远程会话」中调整', en: "That computer doesn't let {me} run sessions. Change it in Settings › Remote sessions there" },
   'sidebar.device.label': { zh: '{name} 上的会话', en: 'Sessions on {name}' },
   'sidebar.device.empty': { zh: '还没有会话', en: 'No sessions yet' },
   'sidebar.device.pickFirst': { zh: '在「在哪运行」里选过这台电脑后，这里会显示它的会话', en: 'Pick this computer under Run on to see its sessions here' },
   'sidebar.device.menu': { zh: '更多操作', en: 'More actions' },
 })
+
+/** 设备状态的文案:short = 行上的几个字,long = 悬停 / 读屏 / 说明用的整句。 */
+export function deviceStatusText(t: ReturnType<typeof useI18n>['t'], status: DeviceStatus, long = false): string {
+  return t(`devstatus.${long ? 'long.' : ''}${status}`, { me: t(currentPlatform() === 'desktop' ? 'devstatus.me.computer' : 'devstatus.me.phone') })
+}
 
 /** 设备名 / 标题的纯文本截断(不可信串:进文本节点,且不让超长名把一行撑爆)。 */
 export function clampText(s: unknown, n: number): string {
@@ -90,6 +100,7 @@ export function attentionBadge(ids: Map<string, { n: number; localOnly: boolean 
 /** 刷新节奏:挂载时、回到前台、连上时、在前台每 30s(后台不计时)。 */
 export function useDeviceSessionsLive(): void {
   const connState = useApp((s) => s.connState)
+  const epoch = useRemoteCapability((s) => s.epoch) // 桌面:主进程的中转口到位 / 换号之后闸才变,重新起一轮
   useEffect(() => {
     if (!runLocationsAvailable()) return
     const refresh = (): void => { void useDeviceSessions.getState().refresh() }
@@ -104,7 +115,7 @@ export function useDeviceSessionsLive(): void {
     arm()
     document.addEventListener('visibilitychange', onVis)
     return () => { document.removeEventListener('visibilitychange', onVis); if (timer) clearInterval(timer) }
-  }, [])
+  }, [epoch])
   useEffect(() => {
     if (connState === 'ok' && runLocationsAvailable()) void useDeviceSessions.getState().refresh()
   }, [connState])
@@ -131,6 +142,7 @@ export function DeviceSessionSections(p: Props): React.ReactElement | null {
   useDeviceMarks((s) => s.sticky)
   const injected = useApp((s) => s.sessions)
   const selfRegistered = useDeviceSessions((s) => s.selfRegistered)
+  useRemoteCapability((s) => s.epoch)
   const [collapsed, setCollapsed] = useState<Set<string>>(loadCollapsed)
   const [menu, setMenu] = useState<MenuState | null>(null)
   const [iconPicker, setIconPicker] = useState<(MenuState & { current: string | null }) | null>(null)
@@ -216,14 +228,14 @@ export function DeviceSessionSections(p: Props): React.ReactElement | null {
         const name = clampText(u.name, 60) || t('engine.target.defaultName')
         return (
           <div className="t2d-section" key={id} data-device-section={id} data-device-status={status}>
-            <div className="t2s-group t2d-head" style={{ paddingLeft: folderPadLeft(0) }} title={t(`devstatus.long.${status}`)}>
+            <div className="t2s-group t2d-head" style={{ paddingLeft: folderPadLeft(0) }} title={deviceStatusText(t, status, true)}>
               <button type="button" className="t2s-group-toggle t2s-folder-row t2d-toggle" aria-expanded={!isCollapsed} aria-label={t('sidebar.device.label', { name })} onClick={() => toggle(id)}>
                 <span className="t2s-lead">
                   <DeviceIcon u={u} />
                   <span className={`t2s-chev t2s-lead-chev${isCollapsed ? '' : ' open'}`}><ChevronRight size={12} /></span>
                 </span>
                 <span className="t2s-group-label t2d-name">{name}</span>
-                <span className="t2d-status" data-tone={status === 'ready' ? 'ok' : status === 'checking' ? 'wait' : 'warn'} role="status">{t(`devstatus.${status}`)}</span>
+                <span className="t2d-status" data-tone={status === 'ready' ? 'ok' : status === 'checking' ? 'wait' : 'warn'} role="status">{deviceStatusText(t, status)}</span>
               </button>
             </div>
             <AnimatedCollapse open={!isCollapsed}>

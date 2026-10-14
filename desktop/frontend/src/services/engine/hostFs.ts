@@ -11,7 +11,7 @@
  * 缺 = 这端给不了(调用方藏掉下载位,不留哑弹);失败抛(调用方进通知)。
  */
 import type { EngineTarget } from './target'
-import { focusRef, homeVia, targetForSession, unitFetch } from './targets'
+import { focusRef, focusTarget, homeVia, refForSession, targetForSession, unitFetch } from './targets'
 import { hostDownloadError, saveResponseAs } from '../nativeDownload'
 
 type Tangu = NonNullable<Window['tangu']>
@@ -98,12 +98,13 @@ export async function unitHostProfile(t: EngineTarget, signal?: AbortSignal): Pr
   } catch { return null }
 }
 
-/** 会话作用域的 host 文件面(S2:会话所在 = 焦点)。焦点在 home 时不铸目标、不要求宿主已装好(组件单测也能渲染):
- *  按端现算的来路 → 本机 / 设备页用 window.tangu 那三件,云端没有。 */
+/** 会话作用域的 host 文件面:按**会话所在的位置**(S4:绑定 ?? home;没给会话 = 新对话草稿 = 焦点),不看焦点 ——
+ *  桌面上焦点在这台电脑、开着的却是别的电脑上的会话时,读的必须是那台的盘。在 home 时不铸目标、不要求宿主已装好
+ *  (组件单测也能渲染):按端现算的来路 → 本机 / 设备页用 window.tangu 那三件,云端没有。 */
 export function hostFsForSession(sessionId?: string): HostFs | null {
-  if (focusRef().kind === 'home') {
+  if ((sessionId ? refForSession(sessionId) : focusRef()).kind === 'home') {
     const via = homeVia()
     return via === 'local' || via === 'unitPage' ? windowHostFs(via === 'local') : null
   }
-  return hostFs(targetForSession(sessionId))
+  return hostFs(sessionId ? targetForSession(sessionId) : focusTarget())
 }
