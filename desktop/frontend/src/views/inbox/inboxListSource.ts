@@ -6,11 +6,14 @@
  * 收件箱因此不再有自己的左栏组件(旧 Gmail 式 InboxListView 已删),Inbox Space 左栏就是 workspace 视图,
  * 自动档由 Space 默认档 + 阅读面板的 workspaceSource 指到这里;别的 Space 的工作区选择器里也能手动切到它。
  *
- * 行(2026-10-13 起两行):行首 = 谁发的(Agent 的头像,或 Forsion / 自动化 / 系统各一枚图标),标题 + 时间,
- *   下面一行「发信人 · 正文第一句」(ListItem.subtitle)。此前只有文档图标 + 标题 + 日期,像一排文件。
- * 分组(可选中的来源筛选,「全部」由宿主给):未读 / Forsion / 自动化 / 智能体 / 系统 / 已归档。
- * 来源顺序固定,只显示当前有消息的类别。不再按 agent slug 平铺,尤其 `automation:<ruleId>` 只是引擎路由标识,
- * 必须全部并入「自动化」,否则每条规则都会制造一个永久文件夹并泄漏内部 id。
+ * 按发信人归组(2026-10-14,用户:「折叠起来,类似于工作区的样式」「按发件人」「谁发件了谁就上来」):
+ *   每个发信人一个组头(ListItem.folderStyle: 'group' —— Agent 是头像 / 首字,Forsion / 自动化 / 系统各一枚图标),
+ *   组头行尾是这一组的未读数;组按最新一封信排,谁刚来信谁在最上面;有未读的组自己开着(defaultOpen),其余收着。
+ *   每个 Agent 各一组;`automation:<ruleId>` 只是引擎路由标识,全部并进「自动化」一组,否则每条规则都会
+ *   造出一个组并泄漏内部 id。只有一个发信人时(手机的本地收件箱只有 Forsion)那一组直接开着。
+ * 组里的行(两行):标题 + 时间 / 正文第一句。发信人已经在组头上,行里不再重复名字和图标。
+ *   搜索时宿主不画层级,所以搜索结果是平铺的行:行首 = 谁发的,第二行「发信人 · 正文第一句」(10-13 的那种行)。
+ * 筛选(「全部」由宿主给):未读 / 已归档。发信人已经是组,不再当筛选条件。
  * 未归档与已归档是 store 里**两份独立数据**,subscribe 时都拉:未读 / 按来源在未归档那份上客户端筛。
  * ⚠️ items() / groups() 只读不写,渲染期零副作用 —— 旧写法在 items() 里切全局服务端档,左右栏各选一个分组
  *    就会互相切档无限拉取(2026-09-11 自查)。
@@ -30,17 +33,10 @@ import { INBOX_WORKSPACE_MODE } from '../workspaceMode'
 const [, SOURCE_OWNER, SOURCE_ID] = INBOX_WORKSPACE_MODE.split(':')
 const UNREAD = 'unread'
 const ARCHIVED = 'archived'
-const SOURCE = 'source:'
 
 type SourceKind = 'forsion' | 'automation' | 'agents' | 'system'
-// 图标按来源一处定:分组菜单、列表行首用的是同一枚(阅读面板头部的 SenderGlyph 画的也是这几个字形)。
-const SOURCE_GROUPS: Array<{ kind: SourceKind; titleKey: string; icon: string }> = [
-  { kind: 'forsion', titleKey: 'inbox.source.forsion', icon: 'cloud' },
-  { kind: 'automation', titleKey: 'inbox.source.automation', icon: 'workflow' },
-  { kind: 'agents', titleKey: 'inbox.source.agents', icon: 'agent' },
-  { kind: 'system', titleKey: 'inbox.sender.system', icon: 'info' },
-]
-const SOURCE_ICON = Object.fromEntries(SOURCE_GROUPS.map((g) => [g.kind, g.icon])) as Record<SourceKind, string>
+// 图标按来源一处定:组头、搜索结果的行首用的是同一枚(阅读面板头部的 SenderGlyph 画的也是这几个字形)。
+const SOURCE_ICON: Record<SourceKind, string> = { forsion: 'cloud', automation: 'workflow', agents: 'agent', system: 'info' }
 
 /** 列表行尾时间:7 天内相对时间,更早显示日期(单源 format/time,跟界面语言不跟系统区域)。 */
 const timeAgo = (iso: string | null): string => formatListTime(parseUtc(iso))
@@ -50,7 +46,13 @@ const sourceKind = (m: InboxMessage): SourceKind => {
   if (m.sender_kind === 'system') return 'system'
   return isAutomationSender(m) ? 'automation' : 'agents'
 }
-const sourceKey = (m: InboxMessage): string => `${SOURCE}${sourceKind(m)}`
+/** 组的 key:每个 Agent 各一组,其余按来源各一组。带前缀,不会和信的 id 撞。 */
+const senderKey = (m: InboxMessage): string => {
+  const kind = sourceKind(m)
+  return kind === 'agents' ? `sender:agent:${m.sender_id ?? ''}` : `sender:${kind}`
+}
+const agentAvatar = (m: InboxMessage): string | undefined =>
+  m.sender_kind === 'agent' && m.sender_id ? homeAgentAvatars()[m.sender_id] : undefined
 
 /** 第二行里的「正文第一句」。信是 markdown,直接截会截出围栏、表格线和标记符号:
  *  跳过围栏里的行(任务卡 / 审批卡 / 代码;反引号与波浪线都算,收尾须同字符且不短于开头,没收口的吃到结尾)、
@@ -87,18 +89,50 @@ export function inboxSubtitle(m: InboxMessage): string {
   return snippet ? `${senderOf(m)} · ${snippet}` : senderOf(m)
 }
 
-function toItem(m: InboxMessage): ListItem {
-  const avatar = m.sender_kind === 'agent' && m.sender_id ? homeAgentAvatars()[m.sender_id] : undefined
+/** parent 在场 = 组里的行:第二行只有正文第一句(发信人在组头上);不在场 = 平铺的行,第二行带发信人。 */
+function toItem(m: InboxMessage, parent?: string): ListItem {
+  const avatar = agentAvatar(m)
+  const subtitle = parent ? inboxSnippet(m.body, m.title) : inboxSubtitle(m)
   return {
     key: m.id,
     title: m.title,
-    subtitle: inboxSubtitle(m),
+    ...(subtitle ? { subtitle } : {}),
     hint: timeAgo(m.created_at),
-    // 行首 = 谁发的:Agent 有头像用头像(iconUrl),没有就是 agent 那枚;其余按来源。
+    // 行首 = 谁发的:Agent 有头像用头像(iconUrl),没有就是 agent 那枚;其余按来源。组里的行宿主不画它。
     icon: SOURCE_ICON[sourceKind(m)],
     ...(avatar ? { iconUrl: avatar } : {}),
     ...(m.read_at ? {} : { unread: true }),
+    ...(parent ? { parent } : {}),
   }
+}
+
+/** 发件时间从新到旧;时间一样的保持原来的先后。后端给的是 'YYYY-MM-DD HH:MM:SS',按字符串比就是按时间比。 */
+const newestFirst = (a: InboxMessage, b: InboxMessage): number => (b.created_at ?? '').localeCompare(a.created_at ?? '')
+
+/** 按发信人归组:组头 + 组里的信。组按各自最新的一封排 —— 谁刚来信谁在最上面。 */
+function grouped(list: InboxMessage[]): ListItem[] {
+  const bySender = new Map<string, InboxMessage[]>()
+  for (const m of [...list].sort(newestFirst)) {
+    const key = senderKey(m)
+    if (!bySender.has(key)) bySender.set(key, [])
+    bySender.get(key)!.push(m)
+  }
+  const out: ListItem[] = []
+  for (const [key, mails] of bySender) {
+    const unread = mails.filter((m) => !m.read_at).length
+    const avatar = agentAvatar(mails[0])
+    const kind = sourceKind(mails[0])
+    out.push({
+      key, title: senderOf(mails[0]), kind: 'folder', folderStyle: 'group',
+      // Agent:头像,没有头像时宿主画名字的首字(和工作区的 Agent 行一样);其余来源各一枚图标
+      ...(kind === 'agents' ? {} : { icon: SOURCE_ICON[kind] }),
+      ...(avatar ? { iconUrl: avatar } : {}),
+      ...(unread ? { hint: String(unread) } : {}),
+      ...(unread || bySender.size === 1 ? { defaultOpen: true } : {}),
+    })
+    for (const m of mails) out.push(toItem(m, key))
+  }
+  return out
 }
 
 export const inboxListSource: ListSourceContribution = {
@@ -111,26 +145,15 @@ export const inboxListSource: ListSourceContribution = {
     // 未归档那份里可能有刚点了「归档」、PATCH 还没回来的行 —— 按字段立即挪走。
     let list = group === ARCHIVED ? st.archived : st.messages.filter((m) => !m.archived_at)
     if (group === UNREAD) list = list.filter((m) => !m.read_at)
-    else if (group?.startsWith(SOURCE)) list = list.filter((m) => sourceKey(m) === group)
     const q = f?.query?.trim().toLowerCase()
-    if (q) list = list.filter((m) => m.title.toLowerCase().includes(q) || (m.body || '').toLowerCase().includes(q) || senderOf(m).toLowerCase().includes(q))
-    return list.map(toItem)
+    // 搜索结果是平铺的(宿主搜索时不画层级):每行自己带上发信人
+    if (q) return list.filter((m) => m.title.toLowerCase().includes(q) || (m.body || '').toLowerCase().includes(q) || senderOf(m).toLowerCase().includes(q)).map((m) => toItem(m))
+    return grouped(list)
   },
-  groups() {
+  groups(): ListGroup[] {
     const st = useInbox.getState()
-    const counts = new Map<SourceKind, number>()
-    for (const m of st.messages) {
-      if (m.archived_at) continue
-      const kind = sourceKind(m)
-      counts.set(kind, (counts.get(kind) ?? 0) + 1)
-    }
-    const sources: ListGroup[] = SOURCE_GROUPS.flatMap(({ kind, titleKey, icon }) => {
-      const count = counts.get(kind)
-      return count ? [{ key: `${SOURCE}${kind}`, title: translate(titleKey), count, icon }] : []
-    })
     return [
       { key: UNREAD, title: translate('inbox.filter.unread'), count: st.unreadCount },
-      ...sources,
       { key: ARCHIVED, title: translate('inbox.filter.archived'), ...(st.archivedLoaded ? { count: st.archived.length } : {}) },
     ]
   },

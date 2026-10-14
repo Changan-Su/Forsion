@@ -85,7 +85,7 @@ function draftSketchOf(ev: ToolEvent): SketchItem | undefined {
 }
 
 /**
- * 把一个连续工具段按 Sketch 完成点切开。Sketch 的工具行仍留在前一组中,卡片紧跟其后；
+ * 把一个连续工具段按 Sketch 完成点切开。Sketch 的工具行仍留在前一组中,卡片紧跟其后(原生文档的工具行不留,见下)；
  * 后续工具另起一组,于是多个草图与正文都不会再被批量挪到消息末尾。
  * live=消息还在直播:没收口的 sketch 调用也出一张草稿卡(同 callId,终稿到达原地换成正式卡)。
  */
@@ -97,13 +97,20 @@ export function partitionToolSegment(events: ToolEvent[], sketches?: SketchItem[
     if (tools.length) parts.push({ t: 'tools', events: tools })
     tools = []
   }
-  for (const ev of events) {
-    tools.push(ev)
+  for (const [i, ev] of events.entries()) {
     if (ev.name === 'intelligent_ui') {
+      // 原生文档就是回答本身(10-13,对标 ChatGPT:整条回答是一棵组件树,没有「工具」这一层):
+      // 生成中和成功的调用不在文档上面挂工具行;被拒收的那次留着,错误看得见。
+      const failed = (e: ToolEvent): boolean => e.done && (!!e.isError || /^Error[:\s]/i.test(e.result || ''))
+      if (failed(ev)) tools.push(ev)
       flushTools()
-      parts.push({ t: 'intelligent', event: ev })
+      // 被拒收之后模型在同一段里重写、并且那一份成功了:残缺的那份不画(否则是一张「内容不完整」的卡下面再跟一张完整的),只留它的工具行。
+      // 重写的那份还在生成、又被拒收或中断时,前一份照旧画着 —— 它可能是这条回答里唯一看得见的内容(Codex 10-13)。
+      const rewritten = failed(ev) && events.slice(i + 1).some((next) => next.name === 'intelligent_ui' && next.done && !failed(next))
+      if (!rewritten) parts.push({ t: 'intelligent', event: ev })
       continue
     }
+    tools.push(ev)
     const sketch = sketchByCall.get(ev.id) ?? (live ? draftSketchOf(ev) : undefined)
     if (!sketch) continue
     flushTools()

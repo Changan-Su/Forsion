@@ -156,6 +156,7 @@ registerMessages({
   'settings.voice.secInput': { zh: '语音输入', en: 'Voice input' },
   'settings.voice.secRead': { zh: '朗读', en: 'Read aloud' },
   'modelsettings.defaultUses': { zh: '按用途选择', en: 'Models by purpose' },
+  'modelsettings.answerForm': { zh: '回答形式', en: 'Answer format' },
   'modelsettings.refresh': { zh: '刷新模型', en: 'Refresh models' },
   'modelsettings.chat': { zh: '对话与任务', en: 'Conversations & tasks' },
   'modelsettings.chatHint': { zh: '新会话默认使用的主模型。', en: 'The main model for new conversations.' },
@@ -2181,6 +2182,18 @@ export const SettingsModal: React.FC<{
                       } />
                       {isDesktop && <AuxModelChoice models={models} compact />}
                     </SettingsPanel>
+                    {/* Intelligent UI 的档位是模型怎么作答的事,不是外观:和默认模型放一页(2026-10-14 用户定)。 */}
+                    <SettingsPanel icon={<Shapes size={14} />} title={t('modelsettings.answerForm')}>
+                      <SettingsRow anchor="visuals" label={t('settings.theme.visuals')} description={t(`settings.theme.visuals.${visualsPref}`)} control={
+                        <select
+                          aria-label={t('settings.theme.visuals')}
+                          value={visualsPref}
+                          onChange={(e) => { const v = e.target.value as VisualsPref; setVisualsPrefState(v); setVisualsPref(v) }}
+                        >
+                          {VISUALS_VALUES.map((v) => <option key={v} value={v}>{t(`settings.theme.visualsOpt.${v}`)}</option>)}
+                        </select>
+                      } />
+                    </SettingsPanel>
                     {models?.forsion && models.forsion.status !== 'ok' && (
                       <div className="hint" role="status" style={{ color: models.forsion.status === 'error' ? 'var(--danger)' : undefined }}>
                         {models.forsion.status === 'error' ? t('settings.model.cloudFetchError') : ''}{models.forsion.detail}
@@ -3223,16 +3236,6 @@ export const SettingsModal: React.FC<{
                             className={`switch${ambientOn ? ' on' : ''}`}
                             onClick={() => useTheme.getState().setAmbient(!ambientOn)}
                           />
-                        </div>
-                        <div className="settings-control-row" data-setting-anchor="visuals">
-                          <div className="settings-control-copy"><Shapes size={14} /><span><strong>{t('settings.theme.visuals')}</strong><small>{t(`settings.theme.visuals.${visualsPref}`)}</small></span></div>
-                          <select
-                            aria-label={t('settings.theme.visuals')}
-                            value={visualsPref}
-                            onChange={(e) => { const v = e.target.value as VisualsPref; setVisualsPrefState(v); setVisualsPref(v) }}
-                          >
-                            {VISUALS_VALUES.map((v) => <option key={v} value={v}>{t(`settings.theme.visualsOpt.${v}`)}</option>)}
-                          </select>
                         </div>
                         <div className="settings-control-row" data-setting-anchor="smooth-caret">
                           <div className="settings-control-copy"><MousePointer2 size={14} /><span><strong>{t('settings.theme.smoothCaret')}</strong><small>{t('settings.theme.smoothCaretHint')}</small></span></div>

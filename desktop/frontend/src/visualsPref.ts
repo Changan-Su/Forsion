@@ -4,6 +4,7 @@
  * 本地偏好(localStorage),随每次 run 的 ui_settings 快照上送 —— 引擎侧 tangu-agent/src/tools/builtin/sketch.ts
  * 的 visualsPrefOf 按同一枚举开关;模型经 set_ui_setting 改的也落在这里(agentCommands UI_SETTINGS.visuals)。
  * 下一次 run 才生效(快照按 run 送),已画出的卡不受影响。
+ * 界面上的这一行在 设置 → 模型 → 默认模型(2026-10-14 从「外观」搬来:它管的是模型怎么作答,不是观感)。
  */
 export type VisualsPref = 'auto' | 'less' | 'off'
 export const VISUALS_KEY = 'forsion_tangu_visuals'

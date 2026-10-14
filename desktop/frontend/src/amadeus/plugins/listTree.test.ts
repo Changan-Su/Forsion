@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { ancestorsOf, buildListTree, dropCandidates, flattenLeaves, leafCount } from './listTree'
+import { ancestorsOf, buildListTree, dropCandidates, fitsPhoneList, flattenLeaves, groupFold, isGroupHead, leafCount, type GroupFold } from './listTree'
 import type { ListItem } from './types'
 
 const row = (key: string, extra: Partial<ListItem> = {}): ListItem => ({ key, title: key, ...extra })
@@ -61,5 +61,39 @@ describe('dropCandidates', () => {
     expect(dropCandidates(0.9, true)).toEqual(['after', 'into'])
     expect(dropCandidates(0.4, true)).toEqual(['into', 'before'])
     expect(dropCandidates(0.6, true)).toEqual(['into', 'after'])
+  })
+})
+
+describe('组头(folderStyle: group)', () => {
+  const head = (key: string, extra: Partial<ListItem> = {}): ListItem => ({ key, title: key, kind: 'folder', folderStyle: 'group', ...extra })
+  const row = (key: string, parent?: string): ListItem => ({ key, title: key, ...(parent ? { parent } : {}) })
+
+  it('只有最上面一级的才算组头', () => {
+    expect(isGroupHead(head('g'))).toBe(true)
+    expect(isGroupHead(head('g', { parent: 'x' }))).toBe(false)
+    expect(isGroupHead({ key: 'f', title: 'f', kind: 'folder' })).toBe(false)
+    expect(isGroupHead({ key: 'r', title: 'r', folderStyle: 'group' })).toBe(false)
+  })
+
+  it('手机整屏列表画得下:平铺的行、一层组头;普通文件夹、行挂行、组头下面再套文件夹都画不下', () => {
+    expect(fitsPhoneList([row('a'), row('b')])).toBe(true)
+    expect(fitsPhoneList([head('g'), row('a', 'g'), row('b'), head('empty')])).toBe(true)
+    expect(fitsPhoneList([{ key: 'f', title: 'f', kind: 'folder' }, row('a', 'f')])).toBe(false)
+    expect(fitsPhoneList([row('a'), row('b', 'a')])).toBe(false)
+    expect(fitsPhoneList([head('g'), head('h', { parent: 'g' }), row('a', 'h')])).toBe(false)
+  })
+
+  it('开合:defaultOpen 由假变真时打开(哪怕用户收起过);一直为真时用户收起就收着;变回假不自己合上', () => {
+    const memo = new Map<string, GroupFold>()
+    const at = (defaultOpen: boolean): GroupFold => groupFold(memo, 'k', head('g', defaultOpen ? { defaultOpen } : {}))
+    expect(at(false).open).toBe(false)          // 没有未读:收着
+    expect(at(true).open).toBe(true)            // 来了未读:打开
+    at(true).open = false                       // 用户收起
+    expect(at(true).open).toBe(false)           // 未读还在:让它收着
+    expect(at(false).open).toBe(false)
+    expect(at(true).open).toBe(true)            // 又来了新的:重新打开
+    expect(at(false).open).toBe(true)           // 读完了:不在光标底下合上
+    at(false).open = true
+    expect(at(false).open).toBe(true)           // 用户自己打开的没有未读的组:开着
   })
 })
