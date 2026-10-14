@@ -1,0 +1,23 @@
+{
+  "id": "obsidian-bridge",
+  "name": {
+    "zh": "Obsidian Bridge",
+    "en": "Obsidian Bridge"
+  },
+  "icon": "puzzle",
+  "requires": {
+    "views": [
+      "plugin:forsion-plugin-obsidian-bridge:home"
+    ]
+  },
+  "layout": {
+    "main": [
+      {
+        "type": "plugin:forsion-plugin-obsidian-bridge:home"
+      }
+    ],
+    "left": [],
+    "right": []
+  },
+  "version": "0.1.0"
+}

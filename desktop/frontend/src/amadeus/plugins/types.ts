@@ -1022,6 +1022,10 @@ export interface SelectionActionContribution {
 }
 
 export interface PluginContext {
+  /** Desktop installed packages only. Read-only paths relative to this plugin's folder.
+   * Rejects traversal/symlinks; files <= 8 MiB and directory listings <= 256 entries.
+   * Unsupported on Web/mobile and Studio development sources; feature-detect. */
+  packageFiles?: { readText(path: string): Promise<string>; list(path: string): Promise<string[]> }
   account?: PluginAccount
   app: PluginAppApi
   registerSlashItem(item: SlashContribution): void

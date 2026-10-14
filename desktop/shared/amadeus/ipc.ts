@@ -57,6 +57,7 @@ export const IPC = {
   /** 渲染层的路径广播(改名 / 挪走 / 删除)跨窗口转发:渲染层 invoke 进主进程,主进程转给**其它**窗口。 */
   pathGone: 'vault:path-gone',
   listPlugins: 'plugins:list',
+  pluginPackageFiles: 'plugins:package-files',
   openPluginsFolder: 'plugins:open-folder',
   scaffoldPlugin: 'plugins:scaffold',
   uninstallPlugin: 'plugins:uninstall-forsion',
@@ -726,6 +727,8 @@ export interface AmadeusApi {
   writePluginData?(pluginId: string, text: string): Promise<void>
   /** Discover user plugins under the vault's .amadeus/plugins/ folder. */
   listPlugins(): Promise<ExternalPluginSource[]>
+  /** Desktop only: read/list resources inside an installed plugin package. */
+  pluginPackageFiles?(id: string, relative: string, list: boolean): Promise<string | string[]>
   /** Open the vault's plugins folder in the OS file manager (creating it if needed). */
   openPluginsFolder(): Promise<void>
   /** Write a runnable sample plugin into the plugins folder. */

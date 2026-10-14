@@ -338,7 +338,11 @@
     "e2e:image-studio": "node scripts/image-studio.e2e.cjs",
     "e2e:image-studio:live": "node scripts/image-studio.live.cjs",
     "check:permissions": "node scripts/permissions.check.cjs",
-    "check:mininative": "node scripts/mini-auto.check.cjs --native-helper"
+    "check:mininative": "node scripts/mini-auto.check.cjs --native-helper",
+    "build:obsidianbridge": "node prototypes/obsidian-bridge/build.mjs",
+    "e2e:obsidianbridge": "node scripts/obsidian-bridge.e2e.cjs",
+    "demo:obsidianbridge": "node scripts/obsidian-bridge.e2e.cjs --demo",
+    "check:obsidianbridge": "node prototypes/obsidian-bridge/check-runtime.mjs && node prototypes/obsidian-bridge/check-lifecycle.mjs"
   },
   "dependencies": {
     "@astryxdesign/core": "^0.1.4",

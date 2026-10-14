@@ -1332,6 +1332,20 @@ export const usePluginStore = create<PluginState>((set, get) => {
       if (!amadeus?.writePluginData) return
       await amadeus.writePluginData(pluginId, JSON.stringify(value ?? null))
     },
+    ...(amadeus?.pluginPackageFiles && !get().plugins.find(p => p.id === pluginId)?.dev ? { packageFiles: {
+      readText: async (path: string): Promise<string> => {
+        if (!ctxAlive()) throw new Error('Plugin disabled')
+        const value = await amadeus.pluginPackageFiles!(pluginId, path, false)
+        if (!ctxAlive()) throw new Error('Plugin disabled')
+        return value as string
+      },
+      list: async (path: string): Promise<string[]> => {
+        if (!ctxAlive()) throw new Error('Plugin disabled')
+        const value = await amadeus.pluginPackageFiles!(pluginId, path, true)
+        if (!ctxAlive()) throw new Error('Plugin disabled')
+        return value as string[]
+      },
+    } } : {}),
     // 通用宿主 UI 原语。Floating TOC 是非接管式挂载:插件继续拥有正文 DOM,宿主只在 shell 上叠一层。
     // 与 table/dashboard 一样动态 import 破环;形态错误同步抛,让插件能当场走自己的降级 UI。
     ...(typeof document !== 'undefined' ? { ui: {

@@ -27,6 +27,7 @@ import { fetchLinkMeta, searchImages } from './linkMeta'
 import { cloudVaultDir, isManagedCloudVault, migrateCloudMirrorDir } from './cloudPaths'
 import type { AmadeusSyncFactory } from './cloudSeam'
 import { readPluginIconDataUrl } from '../pluginIcon'
+import { pluginPackageFiles } from '../pluginPackageFiles'
 import { mt } from '../mainI18n'
 import '../mainMessages' // P1-K5:main.dialog.openVault 在这里登记(main.ts 也 import,重复登记同值无害)
 
@@ -768,6 +769,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
     return out
   }
   handle(IPC.listPlugins, () => readExternalPlugins({ agents: true, dev: true }))
+  handle(IPC.pluginPackageFiles, (_event, id: string, relative: string, list: boolean) => pluginPackageFiles(globalPluginsDir(), id, relative, list === true))
 
   handle(IPC.openPluginsFolder, async () => {
     const dir = globalPluginsDir()

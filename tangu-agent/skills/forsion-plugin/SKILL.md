@@ -1442,3 +1442,14 @@ Feature-detect these additive interfaces; released 2.12.2 builds do not contain 
 - Agent config `tools_strict=true` makes `tools_list` an exact allowlist over all tool sources, including gated/plugin/MCP tools. It is opt-in and config-only; old agents retain existing blacklist/allowlist behavior. Include `ask_user` explicitly when needed.
 
 Task sessions, including native continuations, share a host FIFO by canonical project path. This is a single local engine guarantee, not a distributed lock between independent engine processes. Plugins still own task metadata, scheduling and lifecycle. Disabling a plugin removes its contributions but does not abort previously accepted native runs.
+
+## Desktop installed-package resources (Obsidian Bridge prototype)
+
+`ctx.packageFiles?.readText(relativePath)` reads a UTF-8 resource inside the calling plugin's installed folder;
+`ctx.packageFiles?.list(relativeDirectory)` lists its immediate non-hidden, non-symlink entries.
+The host binds the plugin ID. Paths are relative to that package, never the active vault. Traversal and symlinks
+are rejected; files are limited to 8 MiB and listings to 256 entries. Disabled contexts reject reads, including
+in-flight results. Desktop installed packages only: Web/mobile and Studio development sources must feature-detect.
+This is a read-only convenience API within the existing trusted-renderer plugin model, not a security sandbox.
+Example: a compatibility plugin keeps original third-party packages in `plugins/<id>/manifest.json`, `main.js`,
+and optional `styles.css`, and loads them through this API. See `desktop/prototypes/obsidian-bridge`.
