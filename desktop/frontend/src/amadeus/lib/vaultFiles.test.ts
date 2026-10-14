@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { isFileRef, resolveFileName, resolveVaultPath } from './vaultFiles'
+import { isFileRef, resolveFileLink, resolveFileName, resolveVaultPath } from './vaultFiles'
 
 const FILES = ['打卡记录.db', 'a/打卡记录.db', 'a/photo.PNG', 'b/photo.png', 'Diary.fd/清单.db']
 
@@ -54,5 +54,21 @@ describe('resolveVaultPath(复合 .md 后缀)', () => {
 
   it('普通文件引用行为与 resolveFileName 一致', () => {
     expect(resolveVaultPath('a/打卡记录.db', FILES)).toBe('a/打卡记录.db')
+  })
+})
+
+describe('resolveFileLink:以 .md 结尾的文件类型也算指得到', () => {
+  const files = ['boards/流程.excalidraw.md', 'maps/图.mindmap.md', 'a/photo.png']
+  it('省掉 .md 的白板 / 插件文件', () => {
+    expect(resolveFileLink('流程.excalidraw', files)).toBe('boards/流程.excalidraw.md')
+    expect(resolveFileLink('图.mindmap', files)).toBe('maps/图.mindmap.md')
+  })
+  it('写全的复合后缀', () => {
+    expect(resolveFileLink('流程.excalidraw.md', files)).toBe('boards/流程.excalidraw.md')
+  })
+  it('普通文件照旧;笔记名和不存在的文件不算', () => {
+    expect(resolveFileLink('photo.png', files)).toBe('a/photo.png')
+    expect(resolveFileLink('流程', files)).toBeNull()
+    expect(resolveFileLink('别的.excalidraw', files)).toBeNull()
   })
 })

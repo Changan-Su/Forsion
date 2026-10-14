@@ -246,7 +246,8 @@ interface WS {
   registerChatSurface(id: string, el: HTMLDivElement | null): void
   syncPanelState(): void
   refreshTabs(): void
-  openView(type: string, params?: Record<string, unknown>, loc?: ViewLocation, opts?: { newTab?: boolean }): Leaf | null
+  /** opts.split:单列壳没有分屏,不认(照旧就地打开);签名与 dockviewStore 对齐。 */
+  openView(type: string, params?: Record<string, unknown>, loc?: ViewLocation, opts?: { newTab?: boolean; split?: boolean }): Leaf | null
   navigateLeaf(leafId: string, type: string, params?: Record<string, unknown>): Leaf | null
   getActiveLeaf(): Leaf | null
   getActiveSideLeaf(side: 'left' | 'right'): Leaf | null

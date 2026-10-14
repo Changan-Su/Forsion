@@ -4,8 +4,12 @@
 //   整段只有一条 `![[…]]` 的段落(db/画板/插件/文件/PDF/跨笔记)、裸 URL 段落(书签卡)、
 //   ```forsion-button``` 代码块(按钮块)。图片形态**不在本层**(wikilink.ts 行内 widget 已渲染,
 //   段落独占时由 CSS 放大成块级观感,见 styles.css)。
-// 交互契约(advisor 判别面):节点仍是普通段落/代码块 —— ⠿ 把手/拖拽/删除/撤销全部原生;
-// 附件属于「难源码编辑块」:光标/方向键经过不让位,只有悬停右上角 `</>` 才显式露源码。
+// 交互契约(advisor 判别面):节点仍是普通段落/代码块 —— ⠿ 把手/拖拽/删除/撤销全部原生。源码怎么露,分两类:
+//  · **文件引用** `![[…]]`(文件 / PDF / 音视频 / 多维表 / 白板 / 插件文件 / 跨笔记;图片不在本层)= Obsidian 的光标逻辑
+//    (2026-10-13 用户定「除了图片,其他文件引用的光标逻辑都应该和 obsidian 一样」):光标走到这一行,`![[…]]` 源码露在
+//    嵌入体**上方**、嵌入体照常渲染;光标离开就收起。方向键进出这一行见 keyboard.ts 的 arrowEmbedSource。判据 softSourceKind。
+//  · 其余(网页嵌入、书签卡、按钮块、文档 Agent 块、交互块)仍是「难源码编辑块」:光标/方向键经过不让位,
+//    只有悬停右上角 `</>` 才显式露源码(露的时候整块让位给源码)。
 // 规范偏离备案:spec §4 写的是「原子 nodeView」——PM nodeView 按节点类型挂,无法只对
 // 「恰好是嵌入的段落」生效;装饰 widget 语义等价(原子 UX)且保住把手/撤销,记入规范修订。
 import { Suspense, useEffect, useRef, useState, type ReactElement } from 'react'
@@ -46,6 +50,7 @@ import { amadeus } from '../api'
 import { resolveFileName, isAmbiguousFileRef } from '../lib/vaultFiles'
 import { attachResizeHandle } from '../lib/imageResize'
 import { attachSourceButton } from '../blocks/markdown/sourceToggle'
+import { editorFocused } from '../blocks/markdown/editorFocus'
 import { getAttachmentPrefs } from '../lib/attachments'
 import { canOpenAttachment } from '../lib/hostCaps'
 import { HostLocaleProvider, registerMessages, subscribeLocale, translate } from '../../i18n'
@@ -174,6 +179,14 @@ export function classifyEmbed(node: ProseNode): EmbedKind | null {
     return { k: 'file', name: t, fileKind: PDF_EXT_RE.test(t) ? 'pdf' : 'other', w: embedWidthOf(target) }
   }
   return { k: 'note', target }
+}
+
+/** 源码按 Obsidian 的光标逻辑显隐的类别:`![[…]]` 形态的文件引用。要收窄 / 放宽只改这一张表。 */
+const SOFT_SOURCE: ReadonlySet<EmbedKind['k']> = new Set(['file', 'db', 'draw', 'plugin', 'note'])
+const softSourceKind = (kind: EmbedKind | null): boolean => !!kind && SOFT_SOURCE.has(kind.k)
+/** 这个节点是不是「光标走进来就露源码」的文件引用嵌入段(keyboard.ts 的方向键按它分流)。 */
+export function isSoftSourceEmbed(node: ProseNode | null | undefined): boolean {
+  return !!node && node.type.name === 'paragraph' && softSourceKind(classifyEmbed(node))
 }
 
 // ── 桥接组件(只吃字符串 + 回调,不读 activePage —— unified 数据安全禁令)────────────────
@@ -431,6 +444,8 @@ interface EmbedLayerState {
   sourcePos: number | null
   /** 正在键入的「整段一个 URL」段落(I-13):光标还在里面时不交给书签卡,离开(或失焦)才落成卡片。 */
   pendingPos: number | null
+  /** 光标所在的那条文件引用嵌入段(源码正露在嵌入体上方);不在任何一条里 = null。 */
+  revealPos: number | null
 }
 
 /** 这次事务的全部改动都落在 [from, to](新文档坐标)之内 —— 即「就地键入」,不是回灌 / 整块替换 / 插入新段。 */
@@ -452,7 +467,7 @@ export function createEmbedLayer(opts: { path: string; readOnly?: boolean; flush
     // Async tasks follow the original node, never a later copy with the same persisted ID.
     const taskSources = new Set<{ from: number; to: number; deleted: boolean }>()
 
-    const buildDecos = (doc: ProseNode, selFrom: number, selTo: number, sourcePos: number | null, pendingPos: number | null = null): DecorationSet => {
+    const buildDecos = (doc: ProseNode, selFrom: number, selTo: number, sourcePos: number | null, pendingPos: number | null = null, revealPos: number | null = null): DecorationSet => {
       const decos: Decoration[] = []
       const seen = new Map<string, number>() // 同文嵌入按出现序号区分身份(Codex 终审 P1:同 key 共享 DOM 会互相拆台)
       const visit = (node: ProseNode, pos: number): void => {
@@ -462,9 +477,11 @@ export function createEmbedLayer(opts: { path: string; readOnly?: boolean; flush
         const baseKey = widgetIdentity(kind, node.textContent)
         const nth = seen.get(baseKey) ?? 0
         seen.set(baseKey, nth + 1)
-        // 只有 `</>` 写下的显式 sourcePos 才让位;方向键/普通点击即使把选区落进隐藏文本,
+        // 文件引用(soft):嵌入体恒渲染,光标在这一行时只是不藏源码(见下);`</>` 对它等于把光标送进源码。
+        // 其余:只有 `</>` 写下的显式 sourcePos 才让位;方向键/普通点击即使把选区落进隐藏文本,
         // 也继续呈现附件整体(难源码编辑块契约)。
-        if (sourcePos === pos && selTo > pos && selFrom < pos + node.nodeSize) return
+        const soft = softSourceKind(kind)
+        if (!soft && sourcePos === pos && selTo > pos && selFrom < pos + node.nodeSize) return
         // 正在键入的裸 URL 段(I-13):还没写完(`https://f` 就已经匹配 URL_RE),此刻变卡 = 源码被藏、光标被弹走。
         if (pendingPos === pos) return
         const dkey = `${baseKey}#${nth}`
@@ -474,15 +491,18 @@ export function createEmbedLayer(opts: { path: string; readOnly?: boolean; flush
           entry.text = renderedText
           entry.render(kind) // 包括撤销/外部回灌:更新 initialView,保留 React 组件身份。
         }
-        decos.push(Decoration.inline(pos + 1, pos + node.nodeSize - 1, { class: 'wikilink-src-hidden' }))
+        const revealed = soft && revealPos === pos
+        if (!revealed) decos.push(Decoration.inline(pos + 1, pos + node.nodeSize - 1, { class: 'wikilink-src-hidden' }))
         // 本段已归块级嵌入 → 给段落打标,行内双链层渲出来的那条链接由 CSS 收掉(2026-08-22 实报:
         // 嵌入体底下多挂一条下划线的笔记名)。inline 装饰只藏得住**文本**,藏不住 wikilink.ts 的
         // widget —— 而那层不能一刀切跳过整段:嵌入体内的只读 MarkdownBlock 没装本层,那里的
         // `![[x]]` 正是靠行内双链渲的。所以判据留在这里,由「本层确实接手了」这件事本身表达。
-        decos.push(Decoration.node(pos, pos + node.nodeSize, { class: 'unified-embed-host' }))
+        decos.push(Decoration.node(pos, pos + node.nodeSize, { class: `unified-embed-host${soft ? ' unified-embed-soft' : ''}${revealed ? ' unified-embed-src' : ''}` }))
         decos.push(
           Decoration.widget(
-            pos + 1,
+            // 文件引用的嵌入体挂在**段尾**:源码露出来时自然排在它上方(Obsidian 的摆法),显隐之间 widget 不换位置、
+            // DOM 不动(挪 DOM 会让正在播的视频停掉、iframe 重载)。其余类别照旧挂段首。
+            soft ? pos + node.nodeSize - 1 : pos + 1,
             (view) => {
               const cached = roots.get(dkey)
               if (cached) {
@@ -646,7 +666,7 @@ export function createEmbedLayer(opts: { path: string; readOnly?: boolean; flush
             },
             {
               key: dkey,
-              side: -1,
+              side: soft ? 1 : -1,
               ignoreSelection: true,
               // ⚠️ 嵌入体里的输入控件(多维表公式框/单元格/搜索、插件表单、嵌入笔记的第二个编辑器)按键
               // **必须止步于此**:widget 装饰默认不拦事件,PM 的 eventBelongsToView 一路走到 view.dom,
@@ -708,7 +728,7 @@ export function createEmbedLayer(opts: { path: string; readOnly?: boolean; flush
         }
       },
       state: {
-        init: (_, state) => ({ decos: buildDecos(state.doc, state.selection.from, state.selection.to, null), sourcePos: null, pendingPos: null }),
+        init: (_, state) => ({ decos: buildDecos(state.doc, state.selection.from, state.selection.to, null), sourcePos: null, pendingPos: null, revealPos: null }),
         apply: (tr, old, _oldState, newState) => {
           for (const source of taskSources) {
             for (const map of tr.mapping.maps) {
@@ -745,11 +765,21 @@ export function createEmbedLayer(opts: { path: string; readOnly?: boolean; flush
             const { from, to } = newState.selection
             if (!node || node.type.name !== 'paragraph' || to < pendingPos + 1 || from > pendingPos + node.nodeSize - 1) pendingPos = null
           }
-          if (!tr.docChanged && !tr.selectionSet && !meta && pendingPos === old.pendingPos) return { sourcePos, pendingPos, decos: old.decos.map(tr.mapping, tr.doc) }
+          // 文件引用的源码行:光标(文字选区两端)都在这条嵌入段里、且编辑器有焦点 → 露。已经露着的失焦也不收 ——
+          // 点嵌入体里的控件(PDF 翻页、播放键)会让编辑器失焦,那一下收起源码 = 嵌入体上跳一行,按下和抬起落在两个元素上、点击落空。
+          let revealPos: number | null = null
+          const sel = newState.selection
+          if (sel instanceof TextSelection && sel.$from.depth > 0 && sel.$from.sameParent(sel.$to) && isSoftSourceEmbed(sel.$from.parent)) {
+            const at = sel.$from.before()
+            const was = old.revealPos == null ? null : tr.docChanged ? tr.mapping.map(old.revealPos) : old.revealPos
+            if (editorFocused(newState) || was === at) revealPos = at
+          }
+          if (!tr.docChanged && !tr.selectionSet && !meta && pendingPos === old.pendingPos && revealPos === old.revealPos) return { sourcePos, pendingPos, revealPos, decos: old.decos.map(tr.mapping, tr.doc) }
           return {
             sourcePos,
             pendingPos,
-            decos: buildDecos(newState.doc, newState.selection.from, newState.selection.to, sourcePos, pendingPos),
+            revealPos,
+            decos: buildDecos(newState.doc, newState.selection.from, newState.selection.to, sourcePos, pendingPos, revealPos),
           }
         },
       },
