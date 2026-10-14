@@ -15,6 +15,17 @@ import { compactProjectMemory, type CompactionOutcome } from '../../services/pro
  *  41 条显式条目最长 1,477 字、21 条带日期、9 条是追加式「更正旧条目」——记忆被日志灌满,而候选路径 12 天只出 8 条一句话。 */
 export const REMEMBER_FACT_MAX_CHARS = 300;
 const entryView = (e: MemoryEntry) => ({ id: e.id, content: e.content });
+/** 版本号抄错的判据:与现在的版本相差不超过几处编辑(10-13 那次是 4 处)。两个随机 UUID 之间通常差 25 处以上。 */
+const MISCOPY_MAX_EDITS = 8;
+function editDistance(a: string, b: string): number {
+  let prev = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i++) {
+    const cur = [i];
+    for (let j = 1; j <= b.length; j++) cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    prev = cur;
+  }
+  return prev[b.length];
+}
 
 // ── 注入依赖的 lazy 别名(保持下方调用点不变)──
 const appendMemoryEntry = (userId: string, text: string, opts?: { dedup?: boolean; cap?: number; signal?: AbortSignal }) =>
@@ -38,8 +49,11 @@ function buildRememberDefinition(o: { project: boolean; notes: boolean }): Tool 
         (o.notes ? 'A working method you worked out yourself is not a memory: it goes in your evolution record (manage_harness). ' : '') +
         // 两级(10-04 用户:「还要区分 Project 级别还是全局级别」):项目级只在本项目注入、项目里的 agent 共用;agent 级照旧。
         (o.project ? 'SCOPE: "project" = holds only inside the current project (its commands, layout, conventions, decisions, what the user wants done in this project); it is shown to every agent working in this project and nowhere else. "agent" = holds wherever you work with this user (who they are, how they want you to work in general). When unsure, ask yourself whether it would still be true in another project. ' : '') +
-        'SKIP: task progress, completed work, deliverables, versions, dated status and one-off requests; use log_event instead. ' +
-        'FORMAT: one sentence of at most 300 characters in the user’s language; longer facts are rejected. ' +
+        // 10-13 分层:记忆 = 现在成立的事(现在时),日志 = 发生过的事;只对这段对话有效的指示两边都不进。
+        // 「answer from this file」那半句对的是真实样本:08–09 月「后续基于这份字幕回答」被记成长期记忆 3 次、被判官提名 4 次。
+        'SKIP: what happened or where a task stands (progress, completed work, versions, dated status): use log_event. ' +
+        'Also what holds for this conversation only (answer from this file, one-off requests). ' +
+        'FORMAT: one present-tense sentence of at most 300 characters in the user’s language; longer facts are rejected. ' +
         (o.project
           ? 'ACTIONS: add saves fact; list returns IDs and versions of both scopes (fact: null); update replaces a listed entry and MUST include the new fact, id, expectedVersion and the scope it was listed under; forget removes one and blocks automatic replay (fact: null). '
           : 'ACTIONS: add saves fact; list returns IDs and version (fact: null); update replaces a listed entry and MUST include the new fact, id and expectedVersion; forget removes one and blocks automatic replay (fact: null). ') +
@@ -142,10 +156,29 @@ export const memoryLogProvider: ToolProvider = {
           };
           const write = async (m = mutation): Promise<MemorySnapshot> => projectRepo ? projectRepo.mutate({ ...m, cap: PROJECT_MEMORY_CHAR_BUDGET }) : brain.mutateMemory!(ctx.userId, m);
           const isFull = (e: unknown): boolean => e instanceof MemoryRepositoryError && e.code === 'MEMORY_FULL';
+          // 版本冲突里分出「抄错了」:10-13 live 里模型把 list 回执的 36 位版本号抄串两位,两次都被回「记忆已变」,最后告诉用户没改成。
+          // 带来的号和现在的版本只差几个字符 → 是照着现在这份抄错了,不是读的时候还是别的版本(随机 UUID 之间差三十来位):
+          // 回现在的版本和这一条现在的原文,让模型看过再重试。差得远 → 真冲突或读得太早,照旧抛出去(重新 list、重新看)。
+          // CAS 不放松:不替模型改号,重试照样要带对的版本。
+          const miscopiedVersion = async (): Promise<string | null> => {
+            const given = mutation.expectedVersion;
+            if (action === 'add' || !given || given.length > 64) return null;
+            const now = await read();
+            if (!now || given === now.version || editDistance(given, now.version) > MISCOPY_MAX_EDITS) return null;
+            const target = now.entries.find((e) => e.id === mutation.id);
+            const scoped = projectRepo ? `, scope "project"` : '';
+            return `Error: expectedVersion ${JSON.stringify(given)} is not a version of this memory; it differs from the current version by a few characters, so it was probably copied wrong. Nothing was written. ` +
+              `The current version is ${JSON.stringify(now.version)}. ` +
+              (target
+                ? `Entry ${JSON.stringify(target.id)} currently reads ${JSON.stringify(target.content)}. If that is still the entry you meant to ${action}, retry with exactly this expectedVersion${scoped}; otherwise list again.`
+                : `There is no entry with id ${JSON.stringify(mutation.id)}; list again${scoped} and use an ID from it.`);
+          };
           let snapshot: MemorySnapshot | undefined;
           let compacted: Extract<CompactionOutcome, { status: 'compacted' }> | undefined;
           let fullError: unknown;
           try { snapshot = await write(); } catch (e) {
+            const misread = e instanceof MemoryRepositoryError && e.code === 'MEMORY_VERSION_CONFLICT' ? await miscopiedVersion() : null;
+            if (misread) return misread;
             if (!isFull(e)) throw e;
             fullError = e;
             // 项目记忆写满(10-05 用户:「记忆满了就让 agent 压缩一下」):先让模型把整份压一遍,再记这一句。agent 级不走这条(那边有 Dream)。
@@ -192,8 +225,8 @@ export const memoryLogProvider: ToolProvider = {
         function: {
           name: 'log_event',
           description:
-            'Append a noteworthy event/progress from this interaction to the user\'s "today" activity log (archived by date, viewable by the user in the account center). ' +
-            'Use to record completed work, conclusions reached, files produced, etc.; do not record trivial chit-chat.',
+            'Append one thing that happened in this interaction to today\'s log (kept by date; the user can read it). ' +
+            'Use it for completed work, conclusions reached, files produced, where a task stands; not for trivial chit-chat, and not for lasting facts (those go to remember).',
           parameters: {
             type: 'object',
             properties: { text: { type: 'string', description: 'A one-sentence event/progress to record in today\'s log' } },
