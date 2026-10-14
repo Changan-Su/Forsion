@@ -8,6 +8,7 @@
  * 钉住:
  *  M1 点 Muse 行 → 聊天面换到它的私聊会话,停在 Tangu Space(没有被带去 Muse Space)
  *  M2 一条消息都没发,右侧车道已有一张小卡,里面是 Muse Space;侧板不自己展开(用户 10-14 定「缺省小卡」)
+ *  M2b 小卡里文件库视图只留文件列表(预览栏挤不下,会把标题挤成一字一行);展开成侧板后预览栏回来(M6)
  *  M3 负对照:别的 Agent 的私聊没发消息时没有 Desk(卡片与侧板都不挂)
  *  M4 Agent 往 Desk 上放文件(desk_present,不带 size)→ 小卡换成那份文件,Muse Space 让位,仍是小卡
  *  M5 小卡上的「清空 Desk」→ Muse Space 回来
@@ -16,7 +17,7 @@
  *  M8 截图(亮 = 小卡 / 暗 = 展开)
  *  M9 全程没有渲染进程异常
  *
- * 负对照:`--nc=nohome` 把 Muse 的会话夹具换成没有 soloAgentSlug 的普通会话 → M2 / M5 / M6 必须转红。
+ * 负对照:`--nc=nohome` 把 Muse 的会话夹具换成没有 soloAgentSlug 的普通会话 → M2 / M2b / M5 / M6 必须转红。
  *
  * 需先 npm run build(跑的是 out/;隔离 --user-data-dir 不抢单实例锁)。
  * 用法:npm run check:musechat [-- --shots <dir>] [-- --nc=nohome]
@@ -140,11 +141,15 @@ async function main() {
       const panel = document.querySelector(`.agent-desk[data-desk-session="${sid}"]`)
       const card = document.querySelector(`.agent-desk-card[data-desk-session="${sid}"]`)
       const r = panel?.getBoundingClientRect()
+      const shown = (el) => !!el && getComputedStyle(el).display !== 'none' && el.getBoundingClientRect().width > 0
       return {
         panel: !!panel, open: !!panel?.classList.contains('open'), panelW: r ? Math.round(r.width) : 0,
         panelMuse: !!panel?.querySelector('[data-muse-space]'), panelText: (panel?.textContent || '').slice(0, 400),
         card: !!card, cardGone: !!card?.classList.contains('gone'), cardMuse: !!card?.querySelector('[data-muse-space]'),
         cardTitle: card?.querySelector('.agent-desk-card-title')?.textContent || '',
+        // 文件库视图的预览栏:小卡里藏起来(挤不下,标题会一字一行),侧板里显示
+        cardPreview: shown(card?.querySelector('.muse-lib-preview')), panelPreview: shown(panel?.querySelector('.muse-lib-preview')),
+        cardListW: Math.round(card?.querySelector('.muse-lib-list')?.getBoundingClientRect().width || 0), cardW: Math.round(card?.getBoundingClientRect().width || 0),
       }
     }, id)
 
@@ -159,6 +164,7 @@ async function main() {
     const isHomeCard = (x) => !x.open && x.card && !x.cardGone && x.cardMuse && x.cardTitle === 'Muse Space'
     check('M2 没发消息,右侧已有一张小卡,里面是 Muse Space;侧板没有自己展开',
       msgCount === 0 && isHomeCard(d), JSON.stringify({ msgCount, ...d, panelText: d.panelText.slice(0, 60) }))
+    check('M2b 小卡里文件库只留文件列表(预览栏不挤进来),列表占满卡宽', !d.cardPreview && d.cardListW > d.cardW * 0.7, JSON.stringify({ cardPreview: d.cardPreview, cardListW: d.cardListW, cardW: d.cardW }))
     await win.screenshot({ path: path.join(SHOT_DIR, 'musechat-light.png') })
 
     // ── M3 负对照:别的 Agent 的私聊 ──
@@ -197,7 +203,7 @@ async function main() {
     await win.locator(`.agent-desk-card[data-desk-session="${MUSE_ID}"]`).first().click().catch(() => {})
     await sleep(900)
     d = await desk(MUSE_ID)
-    const expanded = d.open && d.panelW > 300 && d.panelMuse && /Home/.test(d.panelText)
+    const expanded = d.open && d.panelW > 300 && d.panelMuse && /Home/.test(d.panelText) && d.panelPreview // 侧板够宽:预览栏在
     await win.locator('.t2o-row', { hasText: 'Nova' }).first().click()
     await sleep(900)
     await win.locator('.t2o-row', { hasText: 'Muse' }).first().click()

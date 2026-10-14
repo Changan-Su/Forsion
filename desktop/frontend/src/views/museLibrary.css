@@ -1,0 +1,11 @@
+/* Muse 的文件库视图(MuseLibraryView):两栏 = 文件列表 + 只读预览。
+ * 放进窄容器(Agent Desk 的小卡,约 280 宽)时只留列表:预览栏会被挤成几十像素,标题一字一行(10-14 截图自查发现)。
+ * 宽度、分隔线、显隐都写在这里(不写内联样式),容器查询才盖得住。 */
+.muse-lib { container-type: inline-size; }
+.muse-lib-list { width: 240px; flex: none; border-right: var(--border-width, 1px) solid var(--border); }
+.muse-lib-preview { display: flex; }
+
+@container (max-width: 460px) {
+  .muse-lib-list { width: auto; flex: 1; min-width: 0; border-right: 0; }
+  .muse-lib-preview { display: none; }
+}

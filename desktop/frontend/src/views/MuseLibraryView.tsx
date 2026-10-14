@@ -14,6 +14,7 @@ import React, { Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { FolderOpen, FileText, RefreshCw, ExternalLink, Sparkles } from 'lucide-react'
 import { useWorkspace } from '@lcl/engine'
 import type { ViewProps } from '@lcl/engine/types'
+import './museLibrary.css'
 import { Markdown } from '../components/Markdown'
 import { lazyRetry } from '../lazyRetry'
 import { getMuseLibrary } from '../services/backendService'
@@ -130,8 +131,8 @@ export const MuseLibraryView: React.FC<ViewProps> = () => {
   const shown = useMemo(() => neutralizeRemoteImages(text), [text])
 
   return (
-    <div style={{ display: 'flex', height: '100%', minHeight: 0, minWidth: 0 }}>
-      <div style={{ width: 240, flex: 'none', borderRight: 'var(--border-width, 1px) solid var(--border)', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+    <div className="muse-lib" style={{ display: 'flex', height: '100%', minHeight: 0, minWidth: 0 }}>
+      <div className="muse-lib-list" style={{ display: 'flex', flexDirection: 'column', minHeight: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '10px 12px', fontWeight: 600, fontSize: 'var(--ui-font-body, 13px)' }}>
           <Sparkles size={14} /> {t('view.museLibrary')}
           <span style={{ flex: 1 }} />
@@ -152,7 +153,7 @@ export const MuseLibraryView: React.FC<ViewProps> = () => {
           ))}
         </div>
       </div>
-      <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+      <div className="muse-lib-preview" style={{ flex: 1, minWidth: 0, flexDirection: 'column', minHeight: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 14px', borderBottom: 'var(--border-width, 1px) solid var(--border)', fontSize: 'var(--ui-font-meta, 12px)', color: 'var(--text-muted)' }}>
           <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={sel ? `${root}/${sel}` : ''}>{sel}</span>
           {sel && <button className="btn ghost sm" onClick={openInEditor}><ExternalLink size={12} /> {t('muse.lib.openEditor')}</button>}
