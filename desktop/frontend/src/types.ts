@@ -1594,7 +1594,8 @@ declare global {
         open(ref: import('../../shared/appRefs').AppRef): Promise<{ ok: boolean; landed?: 'window' | 'app'; error?: string }>
         frontmost(): Promise<import('../../shared/appRefs').AppRef | null>
         icons(ids: string[]): Promise<Record<string, string | null>>
-        setGlobalHotkey?(on: boolean): void
+        setGlobalHotkey?(hotkey: string): void
+        snapshot?(ref: import('../../shared/appRefs').AppRef): Promise<{ mimeType: string; data: string } | null>
         takePendingHotkey?(): Promise<import('../../shared/appRefs').AppRef | null>
         onHotkey?(cb: (ref: import('../../shared/appRefs').AppRef) => void): () => void
       }

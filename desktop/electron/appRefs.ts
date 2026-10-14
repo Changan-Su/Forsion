@@ -214,5 +214,8 @@ export function createAppRefs(deps: AppRefDeps) {
     } catch { return null }
   }
 
-  return { list, status, open, frontmost, remember }
+  /** 这次运行里记下的那扇窗口(按快捷键 / 列候选时);没记过 → null。截图只认这种:不为一个截图去按标题猜窗口。 */
+  const known = (ref: AppRef): { pid: number; windowId: number } | null => seen.get(appRefKey(ref)) ?? null
+
+  return { list, status, open, frontmost, remember, known }
 }

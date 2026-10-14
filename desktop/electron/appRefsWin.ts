@@ -957,5 +957,14 @@ export function createWinAppRefs(deps: WinAppRefDeps) {
     return Object.fromEntries(want.map((orig) => { const id = canon.get(orig); return [orig, (id && iconCache.get(id)) || null] }))
   }
 
-  return { list, status, open, frontmost, remember, icons }
+  /** 同 macOS 半身:这次运行里记下的那扇窗口(句柄),截图只认这种。句柄会被别的窗口复用:此刻还归记下时那个进程才算。 */
+  const known = async (ref: AppRef): Promise<{ pid: number; windowId: number } | null> => {
+    const canon = canonWinId(ref.id)
+    const k = canon ? seen.get(appRefKey({ ...ref, id: canon })) : undefined
+    if (!k) return null
+    const { view } = await snapshot(2_000)
+    return view.windows.some((w) => w.hwnd === k.windowId && w.pid === k.pid) ? k : null
+  }
+
+  return { list, status, open, frontmost, remember, icons, known }
 }

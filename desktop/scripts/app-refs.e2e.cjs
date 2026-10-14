@@ -36,6 +36,8 @@ const APPS = [
   { appName: 'Numbers', pid: 12, bundleId: 'com.apple.iWork.Numbers' },
   { appName: 'Keynote', pid: 13, bundleId: 'com.apple.iWork.Keynote' },
 ]
+// 假助手截窗口回的图(1×1 JPEG):只看「截图当附件挂上了」,不看画面
+const TINY_JPEG = '/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAMCAgICAgMCAgIDAwMDBAYEBAQEBAgGBgUGCQgKCgkICQkKDA8MCgsOCwkJDRENDg8QEBEQCgwSExIQEw8QEBD/yQALCAABAAEBAREA/8wABgAQEAX/2gAIAQEAAD8A0s8g/9k='
 const WINDOWS = [
   { pid: 11, windowId: 101, app: 'Google Chrome', bundleId: 'com.google.Chrome', title: 'Linear – Pricing', x: 0, y: 0, w: 900, h: 700 },
   { pid: 11, windowId: 102, app: 'Google Chrome', bundleId: 'com.google.Chrome', title: 'GitHub', x: 0, y: 0, w: 900, h: 700 },
@@ -64,6 +66,7 @@ function startFakeHelper(sockPath) {
         else if (msg.cmd === 'listWindows') ok(msg.pid === 13 ? [{ title: 'Q4 路演.key', windowId: 301 }] : [])
         else if (msg.cmd === 'focusWindow') ok({ focused: true })
         else if (msg.cmd === 'hotkeySubscribe') { ok({ subscribed: true }); hotkeySubs.push({ socket, msg }) }
+        else if (msg.cmd === 'windowImage') { const send = () => { msg.answered = true; ok({ jpegBase64: TINY_JPEG, width: 1, height: 1 }) }; msg.windowId === 209 ? setTimeout(send, 1500) : send() } // 209:截得慢的那扇
         else socket.write(`${JSON.stringify({ id: msg.id, ok: false, error: { code: 'unknown_command', message: msg.cmd } })}\n`)
       }
     })
@@ -73,8 +76,8 @@ function startFakeHelper(sockPath) {
     server.once('error', reject)
     server.listen(sockPath, () => resolve({
       requests, hotkeySubs,
-      /** 冒充「用户在别的应用里按了双 ⌘」:给每条订阅推一行事件。 */
-      fireHotkey: (front) => { for (const s of hotkeySubs) if (!s.socket.destroyed) s.socket.write(`${JSON.stringify({ ev: { t: Date.now(), kind: 'hotkey', gesture: 'modPair', front } })}\n`) },
+      /** 冒充「用户在别的应用里按了全局快捷键」:给每条订阅推一行事件(订阅的手势不对的,客户端自己会丢掉)。 */
+      fireHotkey: (front, gesture = 'modPair') => { for (const s of hotkeySubs) if (!s.socket.destroyed) s.socket.write(`${JSON.stringify({ ev: { t: Date.now(), kind: 'hotkey', gesture, front } })}\n`) },
       close: () => { for (const s of hotkeySubs) s.socket.destroy(); server.close() },
     }))
   })
@@ -335,6 +338,18 @@ async function main() {
     helper.fireHotkey({ bundleId: 'com.apple.iWork.Numbers', app: 'Numbers', pid: 12, windowId: 201, title: '季度预算.numbers' })
     await strip.nth(1).waitFor({ timeout: 5000 }).catch(() => {})
     check('在别的应用里按双 ⌘:助手推来的那扇窗口进「已选择」', await strip.count() === 2 && /季度预算\.numbers/.test(await strip.nth(1).textContent()), await strip.allTextContents())
+    const shot = view.locator('.t2c-card .attach-chip img[alt="季度预算.numbers.jpg"]')
+    await shot.first().waitFor({ timeout: 8000 }).catch(() => {})
+    check('同时把那扇窗口的截图当图片附件挂上(由助手按窗口号截)', await shot.count() === 1 && helper.requests.some((r) => r.cmd === 'windowImage' && r.windowId === 201), helper.requests.filter((r) => r.cmd === 'windowImage'))
+    // 截图迟到时那条引用已经被删了(同理:已发出、切了会话):那张图丢掉,不挂到草稿里
+    helper.fireHotkey({ bundleId: 'com.apple.iWork.Numbers', app: 'Numbers', pid: 12, windowId: 209, title: '迟到.numbers' })
+    const late = strip.filter({ hasText: '迟到.numbers' })
+    await late.first().waitFor({ timeout: 5000 }).catch(() => {})
+    await late.first().locator('button').click().catch(() => {})
+    const lateReq = () => helper.requests.find((r) => r.cmd === 'windowImage' && r.windowId === 209)
+    for (let i = 0; i < 50 && !lateReq()?.answered; i++) await win.waitForTimeout(100)
+    await win.waitForTimeout(500)
+    check('截图到之前引用被删掉了:迟到的截图不挂上', !!lateReq()?.answered && await late.count() === 0 && await view.locator('.t2c-card .attach-chip img[alt="迟到.numbers.jpg"]').count() === 0, { answered: !!lateReq()?.answered, chips: await strip.allTextContents() })
     await win.keyboard.down('MetaLeft')
     await win.keyboard.press('k')
     await win.keyboard.up('MetaLeft')
@@ -448,6 +463,42 @@ async function main() {
     helper.fireHotkey({ bundleId: 'com.google.Chrome', app: 'Google Chrome', pid: 11, windowId: 101, title: 'Linear – Pricing' })
     await landed('Linear – Pricing').waitFor({ timeout: 10_000 }).catch(() => {})
     check('全局双 ⌘,主窗已关:窗口回来,引用进输入框', hidden && await bw.evaluate((w) => w.isVisible()) && await landed('Linear – Pricing').isVisible(), { hidden })
+
+    // ── 快捷键能改(10-14 用户定:也能改成双 ⇧):设置里录一下 → 主窗当场换成 ⇧⇧(不用重开)→ 助手那边改订 shiftPair ──
+    const subsBefore = helper.hotkeySubs.length
+    const settings2 = app.waitForEvent('window')
+    await win.keyboard.press('Meta+Comma')
+    const sp2 = await settings2
+    await sp2.waitForSelector('.settings-main', { timeout: 30_000 }).catch(() => {})
+    await sp2.locator('.settings-nav').getByRole('button', { name: '快捷键', exact: true }).first().click().catch(() => {})
+    const row = sp2.locator('.shortcut-row', { hasText: '引用刚才在用的窗口' }).first()
+    await row.locator('.shortcut-key').click({ timeout: 8000 }).catch(() => {})
+    await sp2.keyboard.down('ShiftLeft')
+    await sp2.keyboard.down('ShiftRight')
+    await sp2.keyboard.up('ShiftRight')
+    await sp2.keyboard.up('ShiftLeft')
+    await sp2.waitForTimeout(300)
+    const recorded = await row.locator('.shortcut-key').textContent().catch(() => null)
+    check('设置里录快捷键:左右 ⇧ 一起按,录成「⇧ + ⇧」', recorded === '⇧ + ⇧', recorded)
+    await sp2.screenshot({ path: path.join(SHOT_DIR, `shortcut-shiftpair${tag}.png`) })
+    await (await app.browserWindow(sp2)).evaluate((w) => w.close()).catch(() => {})
+    for (let i = 0; i < 50 && !helper.hotkeySubs.slice(subsBefore).some((x) => x.msg.gesture === 'shiftPair'); i++) await win.waitForTimeout(100)
+    check('录完助手那边当场改订 shiftPair(不用重开)', helper.hotkeySubs.slice(subsBefore).some((x) => x.msg.gesture === 'shiftPair'), helper.hotkeySubs.map((x) => x.msg.gesture))
+    helper.fireHotkey({ bundleId: 'com.apple.iWork.Keynote', app: 'Keynote', pid: 13, windowId: 301, title: 'Q4 路演 v2.key' }, 'modPair') // 旧手势:不该再认
+    helper.fireHotkey({ bundleId: 'com.apple.iWork.Numbers', app: 'Numbers', pid: 12, windowId: 202, title: '预算 v2.numbers' }, 'shiftPair')
+    await landed('预算 v2.numbers').waitFor({ timeout: 10_000 }).catch(() => {})
+    check('改成双 ⇧ 后:别的应用里按双 ⇧ 照样引用进来,双 ⌘ 不再算', await landed('预算 v2.numbers').isVisible() && await landed('Q4 路演 v2.key').count() === 0)
+    // Forsion 自己在前台时按双 ⇧:窗口内的命令接(去问 Forsion 后面最前的那扇,并截它)
+    const shotsBefore = helper.requests.filter((r) => r.cmd === 'windowImage').length
+    await win.evaluate(() => document.activeElement?.blur())
+    await win.keyboard.down('ShiftLeft')
+    await win.keyboard.down('ShiftRight')
+    await win.keyboard.up('ShiftRight')
+    await win.keyboard.up('ShiftLeft')
+    for (let i = 0; i < 50 && helper.requests.filter((r) => r.cmd === 'windowImage').length === shotsBefore; i++) await win.waitForTimeout(100)
+    const inApp = helper.requests.filter((r) => r.cmd === 'windowImage').slice(shotsBefore)
+    check('Forsion 在前台时按双 ⇧:窗口内的命令接,引用 Forsion 后面最前的那扇并截图', inApp.some((r) => r.windowId === 101), inApp)
+    await win.screenshot({ path: path.join(SHOT_DIR, `hotkey-shiftpair${tag}.png`) })
   } catch (err) {
     check(`台架中途抛错:${String(err.message || err).split('\n')[0]}`, false)
     if (app) await (await app.firstWindow()).screenshot({ path: path.join(SHOT_DIR, `fail${tag}.png`) }).catch(() => {})

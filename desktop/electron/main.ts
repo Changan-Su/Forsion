@@ -68,8 +68,8 @@ import { transcribeViaOpenAI, transcribeViaForsion } from './asr'
 import { localModelReady, localModelSize, downloadLocalModel, removeLocalModel, transcribeLocal } from './asrLocal'
 import { computerUseLiveView, helperSocketPath, askHelper, ensureHelperRunning, HelperLink } from './computerUse'
 import { createAppRefs } from './appRefs'
-import { createAppRefHotkey, frontToAppRef } from './appRefHotkey'
-import type { AppRef } from '../shared/appRefs'
+import { createAppRefHotkey, frontToAppRef, hotkeyToAccelerator, HOTKEY_GESTURES } from './appRefHotkey'
+import { normalizeAppRef, type AppRef } from '../shared/appRefs'
 import { winAppIdOf } from './appRefsWin'
 import { appIconDataUrls } from './appIcons'
 import { chooseSide, makeRoom, panelRectFor, startDockFollow, DOCK_PANEL_WIDTH, DOCK_PANEL_MIN_WIDTH, DOCK_PANEL_MIN_HEIGHT, normalizeProbe } from './appDock'
@@ -1851,12 +1851,14 @@ let autoMiniWindow: BrowserWindow | null = null
 let autoMiniSessionId: string | null = null
 /** 最后获焦的 Forsion 窗口(自动 Mini 除外);自动 Mini 开场时快照成 autoMiniReturnTo,本轮跑完还给用户。 */
 let lastFocusedWindow: BrowserWindow | null = null
-/** 全局双 ⌘(应用 / 窗口引用,electron/appRefHotkey.ts):界面说要不要;这次运行问没问过更新助手;主窗关着时按下的那一条。 */
-let appRefGlobalWanted = false
+/** 「引用刚才在用的窗口」的全局快捷键(electron/appRefHotkey.ts):成对修饰键时订阅的手势(要助手);普通组合键时注册的
+ *  Electron 全局快捷键;这次运行问没问过更新助手;主窗关着时按下的那一条。 */
+let appRefGesture: (typeof HOTKEY_GESTURES)[string] | null = null
+let appRefAccelerator: string | null = null
+let appRefWantedAccel: string | null = null
 let appRefHelperAsked = false
 let appRefHelperOutdated = false
 let pendingAppRefHotkey: { ref: AppRef; at: number } | null = null
-const APPREF_HOTKEY_PROTOCOL = 15
 let autoMiniReturnTo: BrowserWindow | null = null
 let stopMiniPassThrough: (() => void) | null = null
 /** Mini 尚在载入时也保留最后一次定向,`did-finish-load` 后补发,避免快速连续打开丢第二个目标。 */
@@ -2234,8 +2236,8 @@ app.whenReady().then(async () => {
   const desktopPermissions = registerDesktopPermissions({
     isTrustedSender, computerUseAvailable: PRODUCT.agentBackend, returnToApp: showMainWindow,
     // 电脑历史开着时,运行中的 helper 协议太老也判「需要更新」→ 权限卡的「更新并重启助手」把老进程换掉。
-    // 全局双 ⌘(应用 / 窗口引用)开着时同理,要协议 15。
-    requiredHelperProtocol: () => Math.max(computerHistory?.requiredHelperProtocol() ?? 0, appRefGlobalWanted && process.platform === 'darwin' ? APPREF_HOTKEY_PROTOCOL : 0) || undefined,
+    // 全局快捷键(应用 / 窗口引用)是成对修饰键时同理,要认那个手势的协议(⌘⌘ 15,⇧⇧ / ⌥⌥ 16)。
+    requiredHelperProtocol: () => Math.max(computerHistory?.requiredHelperProtocol() ?? 0, process.platform === 'darwin' ? appRefGesture?.protocol ?? 0 : 0) || undefined,
   })
   // Windows 的本机助手 = CU 包里的 windows-bridge.exe 拷成 %LOCALAPPDATA% 下的私有副本再以常驻服务跑(绝不原地跑,见 computerHistoryWin.ts)。
   // 电脑历史和全局快捷键(应用 / 窗口引用)共用这一份解析:它带缓存,各建一份会各拷一遍。
@@ -3435,14 +3437,18 @@ app.whenReady().then(async () => {
   ipcMain.handle('appRefs:open', (e, ref: unknown) => (isTrustedSender(e) ? appRefs.open(ref) : { ok: false }))
   ipcMain.handle('appRefs:frontmost', (e) => (isTrustedSender(e) ? appRefs.frontmost() : null))
   ipcMain.handle('appRefs:icons', (e, ids: unknown) => (isTrustedSender(e) ? ('icons' in appRefs ? appRefs.icons(ids) : appIconDataUrls(ids)) : {}))
-  // 全局「双 ⌘」:别的应用在前台时按下 → 助手推来那一刻最前面的窗口 → 记下它、把主窗叫到前面、交给界面挂进输入框
-  // (光标在笔记里就写进笔记)。Forsion 自己在前台时助手不推,归窗口内的命令。见 electron/appRefHotkey.ts。
+  // 全局快捷键:别的应用在前台时按下 → 那一刻最前面的窗口 → 记下它、把 Forsion 叫到前面、交给界面挂进输入框
+  // (光标在笔记里就写进笔记)。成对修饰键(双 ⌘ 等)由助手监听、推来那扇窗口,Forsion 自己在前台时助手不推,归窗口内的命令;
+  // 普通组合键注册成 Electron 全局快捷键(只在 Forsion 不在前台时,见 syncAppRefAccelerator)。见 electron/appRefHotkey.ts。
   // 在跑的助手是旧版(不认订阅命令):macOS 上请用户把它更新掉,一次运行只问一次 —— 真弹出来才算问过,碰上别的权限操作在忙就等它做完再问。
   // ponytail: 「稍后」只记到这次运行结束,每次启动还会问;嫌烦了再记进配置、隔几天再问。
   const askAppRefHelperUpdate = (): void => {
     if (process.platform !== 'darwin' || !appRefHelperOutdated || appRefHelperAsked) return
     appRefHelperAsked = true
-    void desktopPermissions.updateHelperForHotkey(mainLocale()).then((r) => { if (r === 'busy') appRefHelperAsked = false })
+    const g = appRefGesture
+    if (!g) { appRefHelperAsked = false; return }
+    // 问到一半用户换了键:那次作废(新手势要的版本可能更高,换键时已重置,会按新的再问)
+    void desktopPermissions.updateHelperForHotkey(mainLocale(), g.version, () => appRefGesture === g).then((r) => { if (r === 'busy' && appRefGesture === g) appRefHelperAsked = false })
   }
   const appRefHotkey = createAppRefHotkey({
     target: async () => {
@@ -3453,32 +3459,34 @@ app.whenReady().then(async () => {
     },
     ownPid: process.pid,
     onOutdated: () => { appRefHelperOutdated = true; askAppRefHelperUpdate() },
-    onFire: (front) => {
-      void (async () => {
-        const win = process.platform === 'win32'
-        // Windows 的标识由 exe 路径算;算不出来(商店应用挂在外框进程名下)或助手没报出窗口 → 趁自己还没到前台,问一次「最前面是谁」
-        const hit = front ? frontToAppRef(front, win ? (f) => winAppIdOf(String(f.path || f.exe || '')) : undefined) : null
-        const ref = hit?.ref ?? await appRefs.frontmost(false).catch(() => null)
-        if (!ref) return
-        if (hit && ref.kind === 'window') appRefs.remember(ref.id, ref.name, hit.pid, hit.windowId)
-        if (!QUIET_WINDOWS) app.focus({ steal: true })
-        // 送到用户最后在用的那个 Forsion 窗口,只认放得下输入框的(独立窗 / Mini / App Dock);设置浮窗之类回主窗
-        const w = lastFocusedWindow
-        const last = w && !w.isDestroyed() && (w === miniWindow || w === dockWindow || [...detachedWindows.values()].includes(w)) ? w : null
-        if (last) {
-          if (last.isMinimized()) last.restore()
-          present(last)
-          last.webContents.send('appRefs:hotkey', ref)
-          return
-        }
-        const fresh = !mainWindow || mainWindow.isDestroyed()
-        showMainWindow()
-        // 主窗关着:页面还没起来,先存着,渲染层装好快捷键时来取(取的时候没有输入框就开新会话)
-        if (fresh) pendingAppRefHotkey = { ref, at: Date.now() }
-        else mainWindow?.webContents.send('appRefs:hotkey', ref)
-      })()
-    },
+    onFire: (front) => fireAppRef(front),
   })
+  /** front = 助手报的最前面的窗口;null = 没有(普通组合键那条路,或助手判断不出来)→ 自己问一次「Forsion 后面最前的是谁」。 */
+  function fireAppRef(front: Record<string, unknown> | null): void {
+    void (async () => {
+      const win = process.platform === 'win32'
+      // Windows 的标识由 exe 路径算;算不出来(商店应用挂在外框进程名下)或助手没报出窗口 → 趁自己还没到前台,问一次「最前面是谁」
+      const hit = front ? frontToAppRef(front, win ? (f) => winAppIdOf(String(f.path || f.exe || '')) : undefined) : null
+      const ref = hit?.ref ?? await appRefs.frontmost(false).catch(() => null)
+      if (!ref) return
+      if (hit && ref.kind === 'window') appRefs.remember(ref.id, ref.name, hit.pid, hit.windowId)
+      if (!QUIET_WINDOWS) app.focus({ steal: true })
+      // 送到用户最后在用的那个 Forsion 窗口,只认放得下输入框的(独立窗 / Mini / App Dock);设置浮窗之类回主窗
+      const w = lastFocusedWindow
+      const last = w && !w.isDestroyed() && (w === miniWindow || w === dockWindow || [...detachedWindows.values()].includes(w)) ? w : null
+      if (last) {
+        if (last.isMinimized()) last.restore()
+        present(last)
+        last.webContents.send('appRefs:hotkey', ref)
+        return
+      }
+      const fresh = !mainWindow || mainWindow.isDestroyed()
+      showMainWindow()
+      // 主窗关着:页面还没起来,先存着,渲染层装好快捷键时来取(取的时候没有输入框就开新会话)
+      if (fresh) pendingAppRefHotkey = { ref, at: Date.now() }
+      else mainWindow?.webContents.send('appRefs:hotkey', ref)
+    })()
+  }
   // 助手刚被换掉(权限页 / 上面那次更新做完):不等 5 分钟,当场重连;之前因为在忙没问成的,这时再问
   desktopPermissions.onHelperIdle(() => { appRefHotkey.poke(); askAppRefHelperUpdate() })
   ipcMain.handle('appRefs:takePendingHotkey', (e) => {
@@ -3487,11 +3495,46 @@ app.whenReady().then(async () => {
     pendingAppRefHotkey = null
     return p && Date.now() - p.at < 30_000 ? p.ref : null
   })
-  // 界面说了算:快捷键还是「双 ⌘」才订阅;用户改成别的键 / 解绑了就断开
-  ipcMain.on('appRefs:globalHotkey', (e, on: unknown) => {
+  // 界面说了算:送来的是这条命令此刻生效的热键('' = 解绑)。成对修饰键 → 订阅对应手势;普通组合键 → 注册全局快捷键。
+  // 换了键:之前的「助手太旧 / 问过了」作废(新手势要的版本可能更高,该再问一次)。
+  ipcMain.on('appRefs:globalHotkey', (e, raw: unknown) => {
     if (!isTrustedSender(e) || (process.platform !== 'darwin' && process.platform !== 'win32')) return
-    appRefGlobalWanted = on === true
-    appRefHotkey.setWanted(appRefGlobalWanted)
+    const hk = raw === true ? 'mod+mod' : typeof raw === 'string' ? raw.slice(0, 64) : ''
+    const next = Object.hasOwn(HOTKEY_GESTURES, hk) ? HOTKEY_GESTURES[hk] : null
+    if (next !== appRefGesture) { appRefHelperAsked = false; appRefHelperOutdated = false }
+    appRefGesture = next
+    appRefHotkey.setGesture(next?.gesture ?? null)
+    appRefWantedAccel = next ? null : hotkeyToAccelerator(hk)
+    syncAppRefAccelerator()
+  })
+  // 普通组合键只在 Forsion 不在前台时注册成全局快捷键(同手势那边的 excludePids):在前台时交给窗口里的命令分发 ——
+  // 不然全局注册会把键吞掉,设置里录这个组合也录不到。注册不上(被别的应用占了)就只在 Forsion 里管用,下次失焦再试。
+  function syncAppRefAccelerator(): void {
+    const want = BrowserWindow.getFocusedWindow() ? null : appRefWantedAccel
+    if (want === appRefAccelerator) return
+    if (appRefAccelerator) globalShortcut.unregister(appRefAccelerator)
+    appRefAccelerator = null
+    try { if (want && globalShortcut.register(want, () => fireAppRef(null))) appRefAccelerator = want } catch { /* 写法不被接受 */ }
+  }
+  app.on('browser-window-focus', syncAppRefAccelerator)
+  app.on('browser-window-blur', () => setImmediate(syncAppRefAccelerator)) // 失焦那一刻 getFocusedWindow 可能还是它
+  // 按下快捷键时那扇窗口的截图(附进输入框,同 ChatGPT)。只截这次运行里经手过的窗口(按快捷键 / 列候选时记下的);
+  // macOS 由助手截(屏幕录制权限在它身上;没授权就没有图,绝不为此弹框),Windows 用系统自带的窗口截图。截不到 → null,只挂引用。
+  ipcMain.handle('appRefs:snapshot', async (e, raw: unknown) => {
+    if (!isTrustedSender(e)) return null
+    const ref = normalizeAppRef(raw)
+    try {
+      const w = ref?.kind === 'window' ? await appRefs.known(ref) : null
+      if (!w) return null
+      if (process.platform === 'darwin') {
+        const r = await askHelper(helperSocketPath(), { cmd: 'windowImage', windowId: w.windowId, maxDimension: 1600 }, 10_000) as { jpegBase64?: unknown }
+        return typeof r?.jpegBase64 === 'string' && r.jpegBase64 ? { mimeType: 'image/jpeg', data: r.jpegBase64 } : null
+      }
+      const src = (await desktopCapturer.getSources({ types: ['window'], thumbnailSize: { width: 1600, height: 1600 }, fetchWindowIcons: false }))
+        .find((x) => x.id.startsWith(`window:${w.windowId}:`))
+      const jpeg = src && !src.thumbnail.isEmpty() ? src.thumbnail.toJPEG(80) : null
+      return jpeg ? { mimeType: 'image/jpeg', data: jpeg.toString('base64') } : null
+    } catch { return null }
   })
 
   // ── Computer Use:最近被操控窗口的一帧画面(只读,不启动 helper;详见 electron/computerUse.ts)──
