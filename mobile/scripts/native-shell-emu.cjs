@@ -2074,6 +2074,8 @@ const tabCountText = (list) => {
     for (const step of ['pin', 'unpin']) {
       // evidence, not a verdict: the row's offset every frame through the swipe and its release (the page's own clock)
       await cdp.eval(`(window.__rowTrace = [], (function f() { window.__rowTrace.push([Math.round(performance.now()), ${offset}]); if (window.__rowTrace.length < 150) requestAnimationFrame(f) })(), true)`)
+      // the easing the release ran on, read when it starts (the transition is taken off again once it has settled)
+      await cdp.eval(`(window.__rowEase = '', ${tray}.firstElementChild.addEventListener('transitionrun', (e) => { if (e.target === e.currentTarget && !window.__rowEase) window.__rowEase = getComputedStyle(e.target).transitionTimingFunction }), true)`)
       await swipeEl(row, -150)
       assert.ok(await h.waitPage(cdp, open, 3000), `a left swipe did not show the tray (offset ${await cdp.eval(offset)})`)
       if (step === 'pin') {
@@ -2083,7 +2085,7 @@ const tabCountText = (list) => {
         console.log(`  TRACE row offset by frame (ms since the first sample → px): ${moving.map(([t, x]) => `${t - tr[0][0]}:${x}`).join(' ')}`)
       }
       // it got there on a spring (a sampled linear() easing), not on the browser's snap curve
-      assert.match(await cdp.eval(`getComputedStyle(${tray}.firstElementChild).transitionTimingFunction`), /^linear\(/, 'the row did not settle on a spring')
+      assert.ok(await h.waitPage(cdp, `/^linear\\(/.test(window.__rowEase) || null`, 2000), `the row did not settle on a spring (${await cdp.eval('window.__rowEase')})`)
       assert.equal(await cdp.eval(nav), 'list', 'the swipe was taken as a tap')
       const got = await cdp.eval(`[...${tray}.querySelectorAll('.pl-swipe-act')].map((b) => b.dataset.act)`)
       assert.deepEqual(got, [step, 'rename', 'archive'], 'delete is only offered for archived sessions')
