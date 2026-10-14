@@ -60,6 +60,8 @@
     "e2e:queue": "node scripts/queued-commands.e2e.cjs",
     "e2e:composerdraft": "node scripts/composer-draft.e2e.cjs",
     "e2e:projectbar": "node scripts/newchat-projectbar.e2e.cjs",
+    "e2e:runlocation": "node scripts/run-location.e2e.cjs",
+    "check:runlocpill": "node scripts/e2e-editor.cjs --check=run-location-pill",
     "e2e:musespace": "node scripts/muse-space.e2e.cjs",
     "e2e:coreplugins": "node scripts/core-plugins.e2e.cjs",
     "e2e:restart-update": "node scripts/restart-update.e2e.cjs",

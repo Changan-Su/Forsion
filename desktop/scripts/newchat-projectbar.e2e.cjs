@@ -2,7 +2,7 @@
  * 新对话输入卡上方那一栏(项目胶囊 / 额外文件夹 / 开场那一行)—— 真 Electron(managed)× 真组件 / store × 假引擎。
  *
  * 用户 2026-10-13 报的三件事,钉住的契约:
- *  ① 项目胶囊左缘与输入卡左缘是同一条线 —— 三种宽度都量(宽窗、≤1040 断点、聊天列 ≤520 的容器断点)外加 110% 缩放。
+ *  ① 这一栏最左的胶囊(桌面 = 运行位置胶囊,项目胶囊排在它后面)左缘与输入卡左缘是同一条线 —— 三种宽度都量(宽窗、≤1040 断点、聊天列 ≤520 的容器断点)外加 110% 缩放。
  *     这一栏的盒子是照抄 .t2c-inner 的数写的(base.css .newchat-projectbar),改了一边忘了另一边就在这里红。
  *  ② 开场那一行(「上次之后,X 在后台记住了 N 件事」)不夹在项目胶囊和输入卡之间:放得下时与胶囊同一行、靠右;
  *     放不下时(聊天列夹到 320)折到胶囊**上面**。
@@ -103,6 +103,8 @@ async function main() {
 
     const view = win.locator('.t2-chat-view:visible').first()
     const pill = view.locator('.newchat-projectbar .project-selector:not(.runloc) > .project-pill')
+    // 这一栏最左边那一枚:桌面主窗口上是运行位置胶囊(「这台电脑」,10-14 起恒在),项目胶囊排在它后面 —— 对齐量的是最左那一枚
+    const lead = view.locator('.newchat-projectbar .project-selector > .project-pill').first()
     const card = view.locator('.t2c-card')
     const opening = view.locator('[data-self-opening]')
     await pill.waitFor({ timeout: 20_000 })
@@ -111,8 +113,8 @@ async function main() {
 
     // ── ① 胶囊左缘 == 输入卡左缘 ──
     const aligned = async (label) => {
-      const [p, c] = [await box(pill), await box(card)]
-      check(`${label}:项目胶囊左缘与输入卡左缘对齐`, near(p.left, c.left), { pill: +p.left.toFixed(1), card: +c.left.toFixed(1), diff: +(p.left - c.left).toFixed(1) })
+      const [l, p, c] = [await box(lead), await box(pill), await box(card)]
+      check(`${label}:这一栏最左的胶囊与输入卡左缘对齐`, near(l.left, c.left), { pill: +l.left.toFixed(1), card: +c.left.toFixed(1), diff: +(l.left - c.left).toFixed(1) })
       check(`${label}:项目胶囊贴在输入卡上方`, p.bottom <= c.top + 1 && c.top - p.bottom < 24, { gap: +(c.top - p.bottom).toFixed(1) })
     }
     check('这是默认项目(本机),项目胶囊写着它', /Tangu 默认项目/.test(await pill.innerText()), await pill.innerText())
