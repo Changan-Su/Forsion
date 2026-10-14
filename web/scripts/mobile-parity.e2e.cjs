@@ -155,11 +155,10 @@ async function main() {
       })
       await check('view search and More use mobile actions; browser Back closes the sheet', async () => {
         await page.locator('[data-chrome-action="search"]').click()
-        // QuickFind uses the shared command overlay.
-        assert(await page.locator('.cmd-overlay').count())
+        await page.waitForSelector('.amx-qf-scrim')
         await page.goBack()
         await page.waitForTimeout(200)
-        assert.equal(await page.locator('.cmd-overlay').count(), 0)
+        assert.equal(await page.locator('.amx-qf-scrim').count(), 0)
         await page.locator('[data-chrome-action="more"]').click()
         await page.waitForSelector('[data-browser-mobile-sheet="menu"]')
         assert(await sheet().locator('[data-sheet-item="rb-cmd"]').count())
