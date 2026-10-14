@@ -6180,8 +6180,11 @@ async function main() {
   const gutter87 = await p87.evaluate(() => {
     const li = document.querySelector('.amx-ucard[data-anchor="k1"] li[data-item-type="task"]')
     if (!li) return null
+    // 点勾选框(li 的 ::before)的中心,从它的计算样式取 —— 写死「li 左 6px」的话方框一挪就点进框与字之间的空隙
+    // (10-14 实遇:方框右缘已在 li 左 8px,点到的是 ul,恒不弹)。
     const r = li.getBoundingClientRect()
-    return { x: r.left - 6, y: r.top + 10, mid: r.left + r.width / 2 }
+    const b = getComputedStyle(li, '::before')
+    return { x: r.left + parseFloat(b.left) + parseFloat(b.width) / 2, y: r.top + parseFloat(b.top) + parseFloat(b.height) / 2, mid: r.left + r.width / 2 }
   })
   // ⚠️ 台架只挂 UnifiedPage,没有 AmadeusOverlays —— 吐司**不落 DOM**。判据取事件本身(真源)。
   await p87.evaluate(() => {
@@ -6311,7 +6314,11 @@ async function main() {
     await p88a.close()
 
     // b) 纯卡文档:整卡拖进相邻卡缝(前置:缝真的窄于 8px —— 宽了就测不到「解析进卡内」那条病根)。
+    //    「宽松正文」(缺省开,10-05 起)把卡缝撑到 ~10.5px,前置恒不成立 —— 这一格关掉它测(用户也能关),
+    //    回到 ~4.5px 的窄缝。宽缝下同一拖法照样落在两卡之间(10-14 实测,当时红的只有前置)。
     const p88b = await open(browser, DOC88)
+    await p88b.evaluate(() => { document.documentElement.dataset.calmReading = 'off' })
+    await p88b.waitForTimeout(100)
     const b1 = await rect88(p88b, 'k1')
     const b2 = await rect88(p88b, 'k2')
     const gap88 = b2.top - b1.bottom
