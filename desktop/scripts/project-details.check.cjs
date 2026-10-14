@@ -680,7 +680,7 @@ async function run(app, win, stub, seen, home, ctx) {
   check('7 「用它开新会话」→ 主区进入新对话(无 session id)、右栏切成 coder 的 Agent 详情、没有建空会话', draftState.directAgent && draftState.projectGone && draftState.composer && !draftState.activeSession && stub.seen.runs.length === 0 && !seen.sessionsCreated, JSON.stringify(draftState))
 
   // ── 7c 从 Git 克隆:项目选择器菜单里多一项 → 对话框列出我的仓库 → 选一个、选位置 → 克隆并加成项目 ────────
-  await win.locator('.project-selector button').first().click()
+  await win.locator('.project-selector:not(.runloc) button').first().click() // 「运行位置」胶囊也带 .project-selector,排在前面
   await win.locator('[data-project-menu-clone]').click()
   const cloneDlg = win.locator('[data-git-clone]')
   await cloneDlg.locator('.git-clone-repo').first().waitFor({ timeout: 10_000 })
