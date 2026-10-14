@@ -164,7 +164,8 @@ async function writeNew(file: string, text: string | Buffer): Promise<void> {
   try { await fd.writeFile(text, 'utf8'); } finally { await fd.close(); }
 }
 
-/** cwd 层的指令文件:候选名里首个命中的那份(与 projectDocPaths 同一规则),都没有 → 待创建的 `.tangu/AGENTS.md`。 */
+/** cwd 层的指令文件(面板里可编辑的那一份):候选名里首个命中的,都没有 → 待创建的 `.tangu/AGENTS.md`。
+ *  同层其余家族的文件引擎照样读(projectDocPaths),面板列在 sources 里,只是不在这里编辑。 */
 export function resolveDocTarget(cwd: string): { path: string; exists: boolean } {
   for (const name of PROJECT_DOC_FILENAMES) {
     if (isPlainFileUnder(cwd, name)) return { path: path.join(cwd, name), exists: true };

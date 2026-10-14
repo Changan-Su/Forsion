@@ -23,6 +23,8 @@ export function SpaceButton({ space, expanded }: { space: SpaceDefinition; expan
       aria-label={a11y}
       aria-current={active ? 'page' : undefined}
       data-rb-tip={expanded ? undefined : a11y}
+      // Ribbon 的左面板悬停预览按它认「指针停在哪个 Space 上」(lcl/engine/Ribbon.tsx 的 onPeekOver)。
+      data-space-id={space.id}
       // ⌘ / Ctrl + 点击 = 在它自己的窗口里打开(宿主能开窗才有;mac 上 Ctrl+点击是右键,走不到这里)。
       onClick={(e) => {
         const open = getDetachApi()?.openSpace

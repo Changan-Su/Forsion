@@ -9,10 +9,39 @@ describe('EditorialMessage inline Sketch ordering', () => {
     const events = [done('read', 'read_file'), done('native', 'intelligent_ui'), done('legacy', 'sketch')]
     const legacy = { callId: 'legacy', html: '<p>old</p>' }
     expect(partitionToolSegment(events, [legacy])).toEqual([
-      { t: 'tools', events: events.slice(0, 2) },
+      { t: 'tools', events: [events[0]] },
       { t: 'intelligent', event: events[1] },
       { t: 'tools', events: [events[2]] },
       { t: 'sketch', item: legacy },
+    ])
+  })
+  it('draws no tool row above a native document unless that call was rejected', () => {
+    const ok = done('native', 'intelligent_ui')
+    const streaming: ToolEvent = { id: 'live', name: 'intelligent_ui', done: false, arguments: '{"document":"{' }
+    const rejected: ToolEvent = { id: 'bad', name: 'intelligent_ui', done: true, result: 'Error: invalid Intelligent UI document. blocks[2].inputIds' }
+    expect(partitionToolSegment([ok])).toEqual([{ t: 'intelligent', event: ok }])
+    expect(partitionToolSegment([streaming], [], true)).toEqual([{ t: 'intelligent', event: streaming }])
+    // 被拒收后模型重写了:残缺的那份不画,只留它的工具行(错误在里面);重写的那份照常不带工具行
+    expect(partitionToolSegment([rejected, ok])).toEqual([
+      { t: 'tools', events: [rejected] },
+      { t: 'intelligent', event: ok },
+    ])
+    // 重写的那份还在生成、或者又被拒收:前一份照旧画着,不能让回答里一时什么都没有
+    expect(partitionToolSegment([rejected, streaming], [], true)).toEqual([
+      { t: 'tools', events: [rejected] },
+      { t: 'intelligent', event: rejected },
+      { t: 'intelligent', event: streaming },
+    ])
+    const again: ToolEvent = { ...rejected, id: 'bad2' }
+    expect(partitionToolSegment([rejected, again]).filter((p) => p.t === 'intelligent')).toEqual([
+      { t: 'intelligent', event: rejected },
+      { t: 'intelligent', event: again },
+    ])
+    // 被拒收后没有重写(模型改用文字):那份照旧画出来,由文档自己标明内容不完整
+    expect(partitionToolSegment([rejected, done('read', 'read_file')])).toEqual([
+      { t: 'tools', events: [rejected] },
+      { t: 'intelligent', event: rejected },
+      { t: 'tools', events: [done('read', 'read_file')] },
     ])
   })
   it('places every completed Sketch immediately after its own tool call', () => {

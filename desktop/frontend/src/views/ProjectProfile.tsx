@@ -5,6 +5,7 @@ import { createPortal } from 'react-dom'
 import { AppWindow, ArrowLeft, Check, ChevronRight, Copy, Download, ExternalLink, FileText, Folder, FolderGit2, FolderInput, FolderOpen, GitBranch, GitBranchPlus, GitCommitHorizontal, ImageUp, Link2, Loader2, MessageSquarePlus, Plus, RefreshCw, Search, Settings2, Smile, Sparkles, Star, TerminalSquare, Upload, UserRound, Users, X } from 'lucide-react'
 import { useShallow } from 'zustand/react/shallow'
 import { useApp } from '../stores/appStore'
+import { usePageStore } from '../amadeus/store/pageStore'
 import { useI18n } from '../i18n'
 import { createProjectSkill, deleteProjectIcon, forgetProjectMemory, generateGitCommitMessage, getGitHosting, type GitHosting, getGitSettings, getProjectContext, gitCommitProject, gitCreateProjectBranch, gitInitProject, gitConnectRemoteProject, gitPendingProject, gitPublishGithubProject, gitPublishProject, gitPullProject, gitPushProject, gitTrustProject, initProjectContext, putProjectDoc, putProjectSettings, setProjectIconEmoji, uploadProjectIcon, resolveProjectCandidate, restoreProjectMemoryFact } from '../services/backendService'
 import { askString } from '../amadeus/components/askString'
@@ -46,6 +47,9 @@ type Props = {
 /** 当前会话所属的 Project(侧栏分组口径:非系统的本地目录);不是 → null。选择器只吐一个字符串签名,`workspaces()` 每次都造新对象,
  *  直接返回它会让面板随每个 store 更新重渲。 */
 export function useProjectWorkspace(session?: SessionRecord | null): ProjectWorkspace | null {
+  // workspaces() 里笔记库那一项读的是 pageStore 的 vaultRoot(另一个 store):库恢复时 useApp 的订阅者不会被叫醒,
+  // 签名就停在「普通本地组」上(名称可改、Git 可写),要等下一次 appStore 更新才纠正。订阅它 → 重渲 → 下面的选择器按最新状态重算。
+  usePageStore((p) => p.vaultRoot)
   const signature = useApp((a) => {
     if (!session?.project_path || session.projectless) return ''
     const all = a.workspaces()
@@ -59,6 +63,7 @@ export function useProjectWorkspace(session?: SessionRecord | null): ProjectWork
 
 /** 侧栏「查看详情」指定的项目(不看当前会话):按路径找工作区,借它最近的一条会话当载体。没有会话可借 → null。 */
 export function useProjectSubject(path: string | null): { workspace: ProjectWorkspace; carrierId: string } | null {
+  usePageStore((p) => p.vaultRoot) // 同 useProjectWorkspace:库恢复后系统项的标记要跟上
   const signature = useApp((a) => {
     if (!path || path === a.homeDir) return ''
     const ws = a.workspaces().find((w) => w.path === path)

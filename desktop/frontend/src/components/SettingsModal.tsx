@@ -11,7 +11,7 @@ import { BrowserExtensionPanel } from './BrowserExtensionPanel'
  * 在 Desktop 主界面内替换 Chat/Inspector 区域，而不是覆盖式弹窗。
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react'
-import { X, Droplets, Shapes, ArrowLeft, Undo2, ChevronRight, Loader2, RefreshCw, Sun, Moon, MonitorCog, RotateCcw, LogIn, LogOut, KeyRound, Plus, Trash2, Plug, Search, Download, Sparkles, Wrench, Check, Copy, Globe2, FolderOpen, Play, Trophy, FileDown, Settings2, NotebookPen, Puzzle, LayoutGrid, Palette, Keyboard, Bug, Info, Brain, Bot, Webhook, MessageCircle, Blocks, Bell, PanelBottom, Image as ImageIcon, Server, Type, Layers3, MousePointer2, CircleUserRound, Scaling, Coffee, MonitorCheck, History, MonitorSmartphone, Cloud, SunDim, AlignLeft, Wind, TextCursorInput } from 'lucide-react'
+import { X, Droplets, Shapes, ArrowLeft, Undo2, ChevronRight, Loader2, RefreshCw, Sun, Moon, MonitorCog, RotateCcw, LogIn, LogOut, KeyRound, Plus, Trash2, Plug, Search, Download, Sparkles, Wrench, Check, Copy, Globe2, FolderOpen, Play, Trophy, FileDown, Settings2, NotebookPen, Puzzle, LayoutGrid, Palette, Keyboard, Bug, Info, Brain, Bot, Webhook, MessageCircle, Blocks, Bell, PanelBottom, Image as ImageIcon, Server, Type, Layers3, MousePointer2, CircleUserRound, Scaling, Coffee, MonitorCheck, History, MonitorSmartphone, Cloud, SunDim, AlignLeft, Wind } from 'lucide-react'
 import { ThemeCard } from './ThemeCard'
 import { ThemeSettingsPanel } from './ThemeSettingsPanel'
 import { StartupAppearanceSettings } from './StartupAppearanceSettings'
@@ -157,6 +157,7 @@ registerMessages({
   'settings.voice.secInput': { zh: '语音输入', en: 'Voice input' },
   'settings.voice.secRead': { zh: '朗读', en: 'Read aloud' },
   'modelsettings.defaultUses': { zh: '按用途选择', en: 'Models by purpose' },
+  'modelsettings.answerForm': { zh: '回答形式', en: 'Answer format' },
   'modelsettings.refresh': { zh: '刷新模型', en: 'Refresh models' },
   'modelsettings.chat': { zh: '对话与任务', en: 'Conversations & tasks' },
   'modelsettings.chatHint': { zh: '新会话默认使用的主模型。', en: 'The main model for new conversations.' },
@@ -1278,6 +1279,7 @@ export const SettingsModal: React.FC<{
     if (e.sub && !subItemsForTab(e.tab as Tab).some(([k]) => k === e.sub)) return false
     return (e.needs ?? []).every((need) => need === 'stored' ? !!stored
       : need === 'desktop' ? isDesktop
+      : need === 'host' ? isDesktop && !unitPage
       : need === 'hover' ? hoverCapable
       : need === 'wide' ? !mobileSettings
       : need === 'cloud' ? isDesktop && cloudAccount // Forsion 账号面随 Extend 出现(forsion 一级页)
@@ -2182,6 +2184,18 @@ export const SettingsModal: React.FC<{
                       } />
                       {isDesktop && <AuxModelChoice models={models} compact />}
                     </SettingsPanel>
+                    {/* Intelligent UI 的档位是模型怎么作答的事,不是外观:和默认模型放一页(2026-10-14 用户定)。 */}
+                    <SettingsPanel icon={<Shapes size={14} />} title={t('modelsettings.answerForm')}>
+                      <SettingsRow anchor="visuals" label={t('settings.theme.visuals')} description={t(`settings.theme.visuals.${visualsPref}`)} control={
+                        <select
+                          aria-label={t('settings.theme.visuals')}
+                          value={visualsPref}
+                          onChange={(e) => { const v = e.target.value as VisualsPref; setVisualsPrefState(v); setVisualsPref(v) }}
+                        >
+                          {VISUALS_VALUES.map((v) => <option key={v} value={v}>{t(`settings.theme.visualsOpt.${v}`)}</option>)}
+                        </select>
+                      } />
+                    </SettingsPanel>
                     {models?.forsion && models.forsion.status !== 'ok' && (
                       <div className="hint" role="status" style={{ color: models.forsion.status === 'error' ? 'var(--danger)' : undefined }}>
                         {models.forsion.status === 'error' ? t('settings.model.cloudFetchError') : ''}{models.forsion.detail}
@@ -2649,12 +2663,17 @@ export const SettingsModal: React.FC<{
                           <div className="hint" style={{ marginBottom: 8 }}>{t('settings.tts.intro')}</div>
                           <input
                             type="text"
+                            list="tts-model-options"
                             value={stored.ttsModelId ?? ''}
                             onChange={(e) => edit({ ttsModelId: e.target.value })}
                             onBlur={() => void commitEdits(['ttsModelId'], (v) => ({ ttsModelId: (v.ttsModelId || '').trim() }))}
                             placeholder={t('settings.tts.modelPlaceholder')}
                           />
                           {commitErrorHint('ttsModelId')}
+                          {/* Forsion 云端的朗读模型(可输可选;直连提供方的照旧手填 <providerId>/<模型>) */}
+                          <datalist id="tts-model-options">
+                            {(models?.ttsModels || []).map((m) => <option key={m.id} value={m.id} label={m.name} />)}
+                          </datalist>
                         </div>
                         <div className="field">
                           <label>{t('settings.tts.voice')}</label>
@@ -3225,16 +3244,6 @@ export const SettingsModal: React.FC<{
                             onClick={() => useTheme.getState().setAmbient(!ambientOn)}
                           />
                         </div>
-                        <div className="settings-control-row" data-setting-anchor="visuals">
-                          <div className="settings-control-copy"><Shapes size={14} /><span><strong>{t('settings.theme.visuals')}</strong><small>{t(`settings.theme.visuals.${visualsPref}`)}</small></span></div>
-                          <select
-                            aria-label={t('settings.theme.visuals')}
-                            value={visualsPref}
-                            onChange={(e) => { const v = e.target.value as VisualsPref; setVisualsPrefState(v); setVisualsPref(v) }}
-                          >
-                            {VISUALS_VALUES.map((v) => <option key={v} value={v}>{t(`settings.theme.visualsOpt.${v}`)}</option>)}
-                          </select>
-                        </div>
                         <div className="settings-control-row" data-setting-anchor="smooth-caret">
                           <div className="settings-control-copy"><MousePointer2 size={14} /><span><strong>{t('settings.theme.smoothCaret')}</strong><small>{t('settings.theme.smoothCaretHint')}</small></span></div>
                           <button
@@ -3250,24 +3259,6 @@ export const SettingsModal: React.FC<{
                             }}
                           />
                         </div>
-                        {/* 输入建议:要 Tab 键采用,也要本机引擎(云端执行节点没有这条路由)→ 只在桌面宿主、有悬停的设备上摆出来。 */}
-                        {isDesktop && hoverCapable && !mobileSettings && (
-                          <div className="settings-control-row" data-setting-anchor="prompt-suggest">
-                            <div className="settings-control-copy"><TextCursorInput size={14} /><span><strong>{t('settings.theme.promptSuggest')}</strong><small>{t('settings.theme.promptSuggestHint')}</small></span></div>
-                            <button
-                              type="button"
-                              role="switch"
-                              aria-checked={promptSuggest}
-                              aria-label={t('settings.theme.promptSuggest')}
-                              className={`switch${promptSuggest ? ' on' : ''}`}
-                              onClick={() => {
-                                const on = !promptSuggest
-                                setPromptSuggest(on)
-                                persistPromptSuggest(on)
-                              }}
-                            />
-                          </div>
-                        )}
                         <div className="settings-control-row" data-setting-anchor="chat-avatars">
                           <div className="settings-control-copy"><CircleUserRound size={14} /><span><strong>{t('settings.theme.chatAvatars')}</strong><small>{t('settings.theme.chatAvatarsHint')}</small></span></div>
                           <button
@@ -3585,6 +3576,23 @@ export const SettingsModal: React.FC<{
                             </select>
                           </div>
                         )}
+                      </div>
+                    )}
+
+                    {/* 输入建议(缺省开):要 Tab 键采用,也要本机引擎(云端执行节点没有这条路由)→ 只在桌面宿主(不含设备页)、
+                        有悬停的设备上摆出来;与 promptSuggest.ts 的 supported() 同一道闸。 */}
+                    {isDesktop && !unitPage && hoverCapable && !mobileSettings && (
+                      <div className="field" style={{ marginTop: 14 }} data-setting-anchor="prompt-suggest">
+                        <label>{t('settings.promptSuggest')}</label>
+                        <div className="hint" style={{ marginBottom: 8 }}>{t('settings.promptSuggestHint')}</div>
+                        <label className="inline-check">
+                          <input
+                            type="checkbox"
+                            checked={promptSuggest}
+                            onChange={(e) => { setPromptSuggest(e.target.checked); persistPromptSuggest(e.target.checked) }}
+                          />
+                          {t('settings.promptSuggestEnable')}
+                        </label>
                       </div>
                     )}
 

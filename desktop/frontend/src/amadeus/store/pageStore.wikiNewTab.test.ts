@@ -5,6 +5,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest'
 const openNote = vi.fn(async (_path: string, _opts?: { newTab?: boolean }) => {})
 const openMedia = vi.fn((_path: string, _loc?: unknown, _opts?: { newTab?: boolean }) => {})
 const dispatched: Array<{ type: string; detail: Record<string, unknown> }> = []
+let hostAcks = false
 const revealHeadingWhenReady = vi.fn(async (_path: string, _h: string) => {})
 const revealBlockWhenReady = vi.fn(async (_path: string, _b: string) => {})
 vi.mock('../../amadeusNav', () => ({ openNote, openMedia, revealHeadingWhenReady, revealBlockWhenReady }))
@@ -30,7 +31,11 @@ async function freshStore() {
     amadeus: { loadPage, listPages: async () => [], listFolders: async () => [], backlinks: async () => [] },
     addEventListener: () => {},
     removeEventListener: () => {},
-    dispatchEvent: (e: { type: string; detail: Record<string, unknown> }) => { dispatched.push({ type: e.type, detail: e.detail }); return true },
+    dispatchEvent: (e: { type: string; detail: Record<string, unknown> }) => {
+      if (hostAcks && e.type === 'amadeus:open-file') e.detail.handled = true // 宿主(amadeusOverlays)接了的回执
+      dispatched.push({ type: e.type, detail: e.detail })
+      return true
+    },
   })
   const m = await import('./pageStore')
   m.usePageStore.setState({ vaultRoot: '/v', pages: ['a/Note.md', 'b/Note.md', 'b/Src.md'], files: [], status: 'ready' })
@@ -94,5 +99,73 @@ describe('openWikiLink newTab(L-11)', () => {
     await settle()
     expect(dispatched.some((e) => e.type === 'amadeus:media-goto')).toBe(false)
     expect(openMedia).toHaveBeenCalledWith('media/lecture.mp4', expect.objectContaining({ at: 95 }), { newTab: true })
+  })
+
+  // 2026-10-13 用户定「文件类型的双链点击后默认分屏打开(图片不算)」:编辑器的点击带 split,文件目标把它带进事件,
+  // 笔记目标不认(照旧就地装)。普通文件(图片 / 插件声明的文件类型 / 没人认领的)一律交宿主的 openFile 去分派 ——
+  // 「图片不分屏」「开不了的回落系统程序」都在那边;没挂监听的宿主(本测试)直接回落系统程序。
+  // 落点本身(旁边那半屏 / 向右分屏)在 check:openbeside,整条链在 e2e:filelink。
+  it('split:文件目标带进事件;笔记照旧就地;普通文件交宿主分派,没人接才回落系统程序', async () => {
+    const store = await freshStore()
+    const openVaultFile = vi.fn(async (_p: string) => {})
+    ;(window as unknown as { amadeus: Record<string, unknown> }).amadeus.openVaultFile = openVaultFile
+    store.setState({ files: ['docs/paper.pdf', 'data/tasks.db', 'boards/flow.excalidraw.md', 'maps/idea.mindmap.md', 'img/photo.png', 'media/lecture.mp4'] })
+    const open = (name: string): { type: string; detail: Record<string, unknown> } | undefined => {
+      dispatched.length = 0
+      store.getState().openWikiLink(name, 'b/Src.md', { split: true })
+      return dispatched.find((e) => e.type.startsWith('amadeus:open-'))
+    }
+    expect(open('paper.pdf')?.detail).toMatchObject({ path: 'docs/paper.pdf', split: true })
+    expect(open('tasks.db')?.detail).toMatchObject({ path: 'data/tasks.db', split: true })
+    expect(open('flow.excalidraw')?.detail).toMatchObject({ split: true })
+    expect(open('idea.mindmap')?.detail).toMatchObject({ path: 'maps/idea.mindmap.md', split: true })
+    expect(open('photo.png')?.detail).toMatchObject({ path: 'img/photo.png', split: true })
+    expect(openVaultFile).toHaveBeenCalledWith('img/photo.png') // 没有监听 → 回落
+    openVaultFile.mockClear()
+    hostAcks = true
+    expect(open('photo.png')?.detail).toMatchObject({ path: 'img/photo.png', handled: true })
+    hostAcks = false
+    expect(openVaultFile).not.toHaveBeenCalled() // 宿主接了 → 不再另开系统程序(否则一次点击开两处)
+    store.getState().openWikiLink('lecture.mp4#t=95', 'b/Src.md', { split: true })
+    await settle()
+    expect(openMedia).toHaveBeenCalledWith('media/lecture.mp4', expect.objectContaining({ at: 95 }), { split: true })
+    // 裸媒体链接(没有时刻锚)也开应用内播放器,不再交系统播放器。
+    openMedia.mockClear()
+    store.getState().openWikiLink('lecture.mp4', 'b/Src.md', { split: true })
+    await settle()
+    expect(openMedia).toHaveBeenCalledWith('media/lecture.mp4', undefined, { split: true })
+    expect(openVaultFile).not.toHaveBeenCalled()
+    openNote.mockClear()
+    store.getState().openWikiLink('Note', 'b/Src.md', { split: true })
+    await settle()
+    expect(loadPage).toHaveBeenCalledWith('b/Note.md')
+    expect(openNote).not.toHaveBeenCalled()
+  })
+})
+
+describe('openWikiLink 遇到应用 / 窗口引用(属性值、数据库格子、关系图里的幽灵节点都会走到这里)', () => {
+  it('切到那个应用,不找笔记、不问「要不要新建」;别名被调用方剥掉了也认', async () => {
+    const store = await freshStore()
+    const open = vi.fn(async (_ref: unknown) => ({ ok: true }))
+    const confirm = vi.fn(() => true)
+    ;(window as unknown as { tangu: unknown }).tangu = { appRefs: { open } }
+    vi.stubGlobal('confirm', confirm)
+    store.getState().openWikiLink('window://com.apple.Safari|季度计划', 'b/Src.md')
+    store.getState().openWikiLink('app://com.apple.Notes') // linkTarget() 剥掉别名后的样子
+    await settle()
+    expect(open.mock.calls.map((c) => c[0])).toEqual([
+      { kind: 'window', id: 'com.apple.Safari', name: '季度计划' },
+      { kind: 'app', id: 'com.apple.Notes', name: 'com.apple.Notes' },
+    ])
+    expect(openNote).not.toHaveBeenCalled()
+    expect(loadPage).not.toHaveBeenCalled()
+    expect(confirm).not.toHaveBeenCalled()
+  })
+  it('没有这个接口的宿主(网页版 / 手机):什么都不做,也不去新建一篇叫 app://… 的笔记', async () => {
+    const store = await freshStore()
+    store.getState().openWikiLink('app://com.apple.Notes|Notes')
+    await settle()
+    expect(openNote).not.toHaveBeenCalled()
+    expect(loadPage).not.toHaveBeenCalled()
   })
 })

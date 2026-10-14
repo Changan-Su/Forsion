@@ -49,6 +49,7 @@ import { createApprovalDelivery, engineFromBackend } from './approvalDelivery' /
 import { APPROVAL_OPEN_CHANNEL } from '../shared/approvalOpen' // P1-K3
 import './mainMessages' // P1-K5:登记 main.* 原生界面文案(配对框 / 崩溃框 / 下载通知 / 选择框标题)
 import * as deviceSecrets from './deviceSecrets' // P1-K5:设备凭据(配对 / external token)进 safeStorage
+import { createUnitRelay } from './unitRelay' // 桌面作为调用方:把会话建到账号下另一台电脑上
 import './editContextMenu' // 编辑区系统右键菜单(评审 G4-08):导入即给每个应用窗口挂 context-menu,逻辑全在模块里
 import { readThemesDir, seedDefaultThemes } from './themes'
 import { builtinBundleSources, builtinPluginIds, bundleOff, bundleRestartPending, initBundleSwitches, lockedPluginIds, seedBuiltinBundles, setBundleOff } from './builtinPlugins'
@@ -66,11 +67,15 @@ import { installPreviewPersistence, previewOriginFor, registerProductsIpc } from
 import { transcribeViaOpenAI, transcribeViaForsion } from './asr'
 import { localModelReady, localModelSize, downloadLocalModel, removeLocalModel, transcribeLocal } from './asrLocal'
 import { computerUseLiveView, helperSocketPath, askHelper, ensureHelperRunning, HelperLink } from './computerUse'
+import { createAppRefs } from './appRefs'
+import { createAppRefHotkey, frontToAppRef } from './appRefHotkey'
+import { winAppIdOf } from './appRefsWin'
+import { appIconDataUrls } from './appIcons'
 import { chooseSide, makeRoom, panelRectFor, startDockFollow, DOCK_PANEL_WIDTH, DOCK_PANEL_MIN_WIDTH, DOCK_PANEL_MIN_HEIGHT, normalizeProbe } from './appDock'
 import { normalizeDockCandidates, normalizeDockSelection, normalizeDockWindow, type DockState, type DockWindow } from '../shared/appDock'
 import { permissionHelperAppPath, registerDesktopPermissions } from './desktopPermissions'
 import { ComputerHistory, readSelfBundleId, registerComputerHistoryIpc, stopComputerHistoryForWipe, type ComputerHistoryConfig } from './computerHistory'
-import { createWindowsRecorderResolver, recorderBinDir, windowsRecorderSource } from './computerHistoryWin'
+import { createWindowsRecorderResolver, launchWindowsRecorder, recorderBinDir, windowsRecorderSource } from './computerHistoryWin'
 import { COMPUTER_HISTORY_DESKTOP_CONFIG_FILE } from '../shared/computerHistory'
 // Amadeus Space:vendored 笔记后端(vault IPC + 资产协议)。renderImport 别名后保持 verbatim。
 import { registerIpc as registerAmadeusIpc } from './amadeus/ipc'
@@ -2224,6 +2229,14 @@ app.whenReady().then(async () => {
     // 电脑历史开着时,运行中的 helper 协议太老也判「需要更新」→ 权限卡的「更新并重启助手」把老进程换掉
     requiredHelperProtocol: () => computerHistory?.requiredHelperProtocol(),
   })
+  // Windows 的本机助手 = CU 包里的 windows-bridge.exe 拷成 %LOCALAPPDATA% 下的私有副本再以常驻服务跑(绝不原地跑,见 computerHistoryWin.ts)。
+  // 电脑历史和全局快捷键(应用 / 窗口引用)共用这一份解析:它带缓存,各建一份会各拷一遍。
+  const windowsRecorder = process.platform === 'win32' ? createWindowsRecorderResolver({
+    binDir: recorderBinDir(),
+    source: () => windowsRecorderSource({
+      isPackaged: app.isPackaged, appPath: app.getAppPath(), resourcesPath: process.resourcesPath, pluginsRoot: join(forsionHomeDir(), 'plugins'),
+    }),
+  }) : undefined
   // 电脑历史:IPC 先登记(设置页随时会问,handler 里等 ready),配置读完再 start(见下方活动日志那段)。
   // 读者是 agent 工具 / Muse,没有 agent 后端的产品形态不建(preload 同步收掉 window.tangu.computerHistory)。
   if (PRODUCT.agentBackend) {
@@ -2235,13 +2248,7 @@ app.whenReady().then(async () => {
       socketPath,
       externalSocket: socketPath !== helperSocketPath({}),
       helperAppPath: () => permissionHelperAppPath(),
-      // Windows:CU 包里的 windows-bridge.exe 拷成 %LOCALAPPDATA% 下的私有副本再以常驻服务跑(绝不原地跑,见 computerHistoryWin.ts)
-      windowsRecorder: process.platform === 'win32' ? createWindowsRecorderResolver({
-        binDir: recorderBinDir(),
-        source: () => windowsRecorderSource({
-          isPackaged: app.isPackaged, appPath: app.getAppPath(), resourcesPath: process.resourcesPath, pluginsRoot: join(forsionHomeDir(), 'plugins'),
-        }),
-      }) : undefined,
+      windowsRecorder,
       // 权限页关停 / 重装 helper 期间不拉起(会拉起旧包);忙完立刻重连
       helperBusy: () => desktopPermissions.helperBusy(),
       onHelperIdle: (cb) => desktopPermissions.onHelperIdle(cb),
@@ -2736,6 +2743,22 @@ app.whenReady().then(async () => {
       throw new Error('P2P 信道在建立后立即断开')
     }
     return { url: proxy.url }
+  })
+  // 桌面主窗口作为调用方(把新会话建到账号下另一台电脑上,2026-10-14):渲染层没有 forsion_token,经主进程的本机中转口发往 hub 隧道
+  // (见 unitRelay.ts)。口令只交给受信的应用窗口顶层 frame;没登录 = null(这一端此刻连不了别的电脑,渲染层据此把选择器收成只读)。
+  const unitRelay = createUnitRelay({
+    apiBase: async () => { const c = (await loadConfig()).cloudUrl; return c ? `${c.replace(/\/+$/, '')}/api` : '' },
+    token: () => loadTanguCreds().token || '',
+    // 令牌解不出账号(不是 JWT)时拿令牌本身当身份:宁可续期后口令作废重取,也不让口令跨账号
+    account: () => { const c = loadTanguCreds(); return c.token ? forsionAccountId(c.cloudUrl || '', c.token) ?? `token:${c.token}` : null },
+    pairing: async () => { const p = await deviceSecrets.unitPairing(); return p.state === 'locked' ? 'locked' : p.value },
+  })
+  ipcMain.handle('units:relay', async (e) => {
+    if (!isTrustedSender(e)) throw new Error('forbidden')
+    const creds = loadTanguCreds()
+    if (!creds.token || !(await loadConfig()).cloudUrl) return null
+    const opened = await unitRelay.open()
+    return opened && { ...opened, accountId: forsionAccountId(creds.cloudUrl || '', creds.token) }
   })
   ipcMain.handle('units:hostStatus', () => ({
     ...(unitHub ? unitHub.status() : { running: false, connected: false, unitId: null, lastError: null }),
@@ -3376,6 +3399,56 @@ app.whenReady().then(async () => {
       return { error: (err as { code?: string }).code || 'unavailable' }
     }
   })
+
+  // ── 应用 / 窗口引用(文字里的 [[app://…]] / [[window://…]];见 electron/appRefs.ts)。只认真实窗口的顶层页面 ──
+  const appRefs = createAppRefs({
+    platform: process.platform, ownPid: process.pid, home: homedir(),
+    ask: (payload) => askHelper(helperSocketPath(), payload, 5_000),
+    // 助手被这里拉起来之后,顺手让全局快捷键那条订阅现在就连(它自己从不拉起助手)
+    ensureHelper: () => ensureHelperRunning().then((v) => { appRefHotkey.poke(); return v }),
+    // 台架把 mdfind / open 换成夹具(FORSION_APPREF_BIN_DIR 下的同名脚本):不然测「点击打开」会真的把这台电脑上的应用拉起来。
+    // opts 只有 Windows 那一半传(数据经环境变量进 PowerShell);windowsHide:不然每问一次状态就闪一个控制台窗口。
+    run: (file, args, opts) => new Promise<string>((resolve, reject) => {
+      const fixtures = app.isPackaged ? '' : process.env.FORSION_APPREF_BIN_DIR?.trim() // 安装版不认:不给环境变量换掉系统命令的口子
+      execFile(fixtures ? join(fixtures, basename(file)) : file, args,
+        { timeout: opts?.timeoutMs ?? 8_000, maxBuffer: 4 << 20, windowsHide: true, ...(opts?.env ? { env: { ...process.env, ...opts.env } } : {}) },
+        (err, stdout) => (err ? reject(err) : resolve(String(stdout)))).stdin?.end() // 这些命令都不读 stdin:关掉,免得谁等它
+    }),
+    // Windows 的图标:exe 自带的那枚(macOS 上 getFileIcon 只给通用图标,走下面的 appIconDataUrls)
+    fileIcon: (exePath) => app.getFileIcon(exePath, { size: 'normal' }).then((img) => (img.isEmpty() ? null : img.toDataURL())),
+  })
+  ipcMain.handle('appRefs:list', (e) => (isTrustedSender(e) ? appRefs.list() : { windows: [], apps: [] }))
+  ipcMain.handle('appRefs:status', (e, refs: unknown) => (isTrustedSender(e) ? appRefs.status(refs) : []))
+  ipcMain.handle('appRefs:open', (e, ref: unknown) => (isTrustedSender(e) ? appRefs.open(ref) : { ok: false }))
+  ipcMain.handle('appRefs:frontmost', (e) => (isTrustedSender(e) ? appRefs.frontmost() : null))
+  ipcMain.handle('appRefs:icons', (e, ids: unknown) => (isTrustedSender(e) ? ('icons' in appRefs ? appRefs.icons(ids) : appIconDataUrls(ids)) : {}))
+  // 全局「双 ⌘」:别的应用在前台时按下 → 助手推来那一刻最前面的窗口 → 记下它、把主窗叫到前面、交给界面挂进输入框
+  // (光标在笔记里就写进笔记)。Forsion 自己在前台时助手不推,归窗口内的命令。见 electron/appRefHotkey.ts。
+  const appRefHotkey = createAppRefHotkey({
+    target: async () => {
+      if (process.platform === 'darwin') return { path: helperSocketPath() } // 只连已经在听的,绝不为这个拉起助手(会带出权限框)
+      const rec = await windowsRecorder?.()
+      // Windows 没有要授的系统权限:连不上就把助手拉起来(没有订阅者 60 秒后它自己退)。protocol 为空 = 老助手,没有常驻服务
+      return rec && rec.protocol != null ? { path: rec.pipe, launch: () => launchWindowsRecorder(rec.exe, rec.pipe) } : null
+    },
+    ownPid: process.pid,
+    onFire: (front) => {
+      void (async () => {
+        const win = process.platform === 'win32'
+        // Windows 的标识由 exe 路径算;算不出来(商店应用挂在外框进程名下)或助手没报出窗口 → 趁自己还没到前台,问一次「最前面是谁」
+        const hit = front ? frontToAppRef(front, win ? (f) => winAppIdOf(String(f.path || f.exe || '')) : undefined) : null
+        const ref = hit?.ref ?? await appRefs.frontmost(false).catch(() => null)
+        if (!ref) return
+        if (hit && ref.kind === 'window') appRefs.remember(ref.id, ref.name, hit.pid, hit.windowId)
+        const fresh = !mainWindow || mainWindow.isDestroyed() // 主窗关着:只把它开出来,页面还没起来,这一条引用不送
+        if (!QUIET_WINDOWS) app.focus({ steal: true })
+        showMainWindow()
+        if (!fresh) mainWindow?.webContents.send('appRefs:hotkey', ref)
+      })()
+    },
+  })
+  // 界面说了算:快捷键还是「双 ⌘」才订阅;用户改成别的键 / 解绑了就断开
+  ipcMain.on('appRefs:globalHotkey', (e, on: unknown) => { if (isTrustedSender(e) && (process.platform === 'darwin' || process.platform === 'win32')) appRefHotkey.setWanted(on === true) })
 
   // ── Computer Use:最近被操控窗口的一帧画面(只读,不启动 helper;详见 electron/computerUse.ts)──
   ipcMain.handle('computerUse:liveView', (_e, opts?: { maxDimension?: number; quality?: number; activeWithinMs?: number; image?: boolean }) =>

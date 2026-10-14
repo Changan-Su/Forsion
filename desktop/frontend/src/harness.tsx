@@ -12,6 +12,7 @@ import { MarkdownBlock } from './amadeus/blocks/markdown/MarkdownBlock'
 import { FindBar, openFindBar } from './findInPage'
 import { AskStringHost } from './amadeus/components/askString'
 import { DeleteAssetsHost } from './amadeus/components/askDeleteAssets'
+import { WikiLinkMenuHost } from './amadeusLinkMenu'
 import type { FocusPlace } from './amadeus/blocks/registry'
 import { PageView } from './amadeus/components/PageView'
 import { useBlockSelection } from './amadeus/store/blockSelection'
@@ -37,8 +38,8 @@ import './views/chat2/composer2.css'
 import { Ribbon } from '@lcl/engine/Ribbon'
 import { WorkspaceHost } from '@lcl/engine/WorkspaceHost'
 import { presentDockedExtension } from '@lcl/engine/dockviewStore'
-import { addCommand, addRibbonIcon, installHotkeys, recordNav, registerView, useNav, useRibbonStore, useWorkspace } from '@lcl/engine'
-import type { ViewProps } from '@lcl/engine/types'
+import { addCommand, addRibbonIcon, getActiveSpace, installHotkeys, recordNav, registerSpace, registerView, setActiveSpaceCold, unregisterView, useNav, useRibbonStore, useSpaceStore, useWorkspace } from '@lcl/engine'
+import type { SpaceDefinition, ViewProps } from '@lcl/engine/types'
 import '@lcl/engine/engine.css'
 import { usePageStore, pageStoreFor, remapScopePaths, PageScopeCtx, onNotePathGone } from './amadeus/store/pageStore'
 import { onNoteLockChange, readNoteLocked } from './amadeus/unified/viewMemory'
@@ -610,6 +611,13 @@ if (new URLSearchParams(location.search).has('dock')) {
     // 用 singlev 这个只在仪器里注册的单例视图验引擎本身,不必拖上真 chat 的后端依赖。
     open: (type: string, params: Record<string, unknown> = {}, newTab = false, loc: 'main' | 'left' | 'right' | 'bottom' = 'main'): string | null =>
       useWorkspace.getState().openView(type, params, loc, newTab ? { newTab: true } : undefined)?.id ?? null,
+    // 「开在旁边那半屏」(scripts/open-beside.check.cjs):openView 的 split 落点,加每个主区 panel 所在的组。
+    openBeside: (type: string, params: Record<string, unknown> = {}): string | null =>
+      useWorkspace.getState().openView(type, params, 'main', { split: true })?.id ?? null,
+    mainGroups: (): Array<{ id: string; group: string; left: number }> =>
+      (useWorkspace.getState().api?.panels ?? [])
+        .filter((p) => (((p.params ?? {}) as { __loc?: string }).__loc ?? 'main') === 'main')
+        .map((p) => ({ id: p.id, group: p.group.id, left: Math.round(p.group.element.getBoundingClientRect().left) })),
     panels: (): Array<{ id: string; type?: string; params: Record<string, unknown> }> =>
       (useWorkspace.getState().api?.panels ?? []).map((p) => {
         const params = (p.params ?? {}) as Record<string, unknown>
@@ -706,6 +714,68 @@ if (new URLSearchParams(location.search).has('dock')) {
       createRoot(host).render(<div className="am-app"><CommandPalette /><AmadeusOverlays /></div>)
       ;(window as unknown as { __qf: unknown }).__qf = { useQuickFind, useCommandStore, useUiOverlay, usePageStore, useWorkspace }
     })
+} else if (new URLSearchParams(location.search).has('peek')) {
+  // Space 左面板悬停预览(scripts/space-peek.check.cjs):真 Shell(Ribbon + Dockview)+ 真 SpaceButton + 三个替身 Space。
+  // a / b 各有左栏(b 两个 View → 卡片头部出页签),c 没有左栏(悬停不弹)。左栏替身里摆齐预览要扛住的几样东西:
+  // 可点的行(记下点击那一刻的活动 Space)、输入框、右键弹出的挂到 body 的菜单、一个按视口坐标定位的 fixed 标记。
+  void Promise.all([import('@lcl/engine/Shell'), import('./components/SpaceButton'), import('react-dom')]).then(([{ Shell }, { SpaceButton }, { createPortal }]) => {
+    const probe = { hits: [] as string[], mounts: {} as Record<string, number>, useWorkspace, useSpaceStore, unregisterView }
+    ;(window as unknown as { __peek: typeof probe }).__peek = probe
+    const PeekList: React.FC<{ tag: string }> = ({ tag }) => {
+      const [menu, setMenu] = useState(false)
+      useEffect(() => { probe.mounts[tag] = (probe.mounts[tag] ?? 0) + 1 }, [tag])
+      return (
+        <div className="pk-list" data-tag={tag} style={{ display: 'flex', flexDirection: 'column', gap: 2, padding: 8 }}>
+          <input className="pk-input" placeholder={tag} />
+          {[1, 2, 3].map((i) => (
+            <button key={i} className="pk-row" data-row={i} style={{ textAlign: 'left', height: 30 }}
+              onClick={() => probe.hits.push(`${tag}:${i}@${useSpaceStore.getState().activeSpaceId}`)}
+              onContextMenu={(e) => { e.preventDefault(); setMenu(true) }}>{tag} row {i}</button>
+          ))}
+          <div className="pk-blank" style={{ height: 80 }} />
+          <span className="pk-fixed" style={{ position: 'fixed', left: 640, top: 420 }}>fixed</span>
+          {menu && createPortal(
+            <div className="pk-menu" style={{ position: 'fixed', left: 700, top: 300, width: 160, padding: 8, zIndex: 2000, background: 'var(--bg-card)', border: '1px solid var(--border)' }}>
+              <button className="pk-menu-item" onClick={() => { probe.hits.push(`menu:${tag}`); setMenu(false) }}>menu item</button>
+            </div>, document.body)}
+        </div>
+      )
+    }
+    // 主区里放一个 iframe:指针进去之后事件到不了本窗口(真应用里的浏览器 / 插件视图就是这样),预览也得收。
+    registerView({ type: 'mainv', displayName: 'main', icon: Square, factory: () => (
+      <div className="pk-main" style={{ position: 'relative', height: '100%', padding: 16 }}>
+        main
+        {/* webhost-ok: 台架页里的固定占位帧(一行静态 HTML),只为验证「指针进了 iframe」;不承载用户 / agent 的内容 */}
+        <iframe className="pk-frame" title="frame" srcDoc="<p>frame</p>" style={{ position: 'absolute', right: 40, bottom: 40, width: 300, height: 200, border: '1px solid var(--border)' }} />
+      </div>
+    ) })
+    registerView({ type: 'sidebar-empty', displayName: 'empty', icon: Square, closable: false, factory: () => <div /> })
+    for (const tag of ['a', 'b', 'b2']) registerView({ type: `pk-${tag}`, displayName: `list ${tag}`, icon: Square, factory: () => <PeekList tag={tag} /> })
+    const mk = (id: string, left: string[]): SpaceDefinition => {
+      const sides = { left: left.map((type) => ({ type, params: {} })), right: [], bottom: [] }
+      return {
+        id, name: `Space ${id.toUpperCase()}`, icon: Square, sidebarDefaults: sides,
+        build() {
+          const w = useWorkspace.getState()
+          w.setSidebarDefaults(sides)
+          w.openView('mainv', {}, 'main')
+          for (const v of sides.left) w.openView(v.type, v.params, 'left')
+        },
+      }
+    }
+    for (const sp of [mk('a', ['pk-a']), mk('b', ['pk-b', 'pk-b2']), mk('c', [])]) {
+      registerSpace(sp)
+      addRibbonIcon({ id: `space:${sp.id}`, side: 'top', component: ({ expanded }) => <SpaceButton space={sp} expanded={expanded} /> })
+    }
+    setActiveSpaceCold('a')
+    useWorkspace.getState().setSidebarDefaults(getActiveSpace()!.sidebarDefaults)
+    applyRealTheme(resolveInitialLang(), resolveInitialSkin(), resolveInitialBg(), new URLSearchParams(location.search).has('dark') ? 'dark' : 'light')
+    createRoot(document.getElementById('root')!).render(
+      <div className="am-app tangu-lovable" style={{ position: 'fixed', inset: 0, display: 'flex' }}>
+        <Shell dark={false} soft={false} buildDefault={() => getActiveSpace()?.build()} />
+      </div>,
+    )
+  })
 } else if (new URLSearchParams(location.search).has('ribbon')) {
   // 点击记账:mod+1..9 的 slot 分发靠它断言(见 ribbon-dnd.e2e.cjs 的 L 组)。
   const hits: string[] = []
@@ -2081,6 +2151,7 @@ if (new URLSearchParams(location.search).has('dock')) {
           /></div>}
           <AskStringHost />{/* 画布元素文字编辑走 askString(双击形状/连线标签);不挂它,仪器测不到弹窗 */}
           <DeleteAssetsHost />{/* 删文件引用块时的「磁盘文件也删吗」;生产由 AmadeusOverlays 挂 */}
+          <WikiLinkMenuHost />{/* 双链右键菜单;生产由 AmadeusOverlays 挂(scripts/link-menu.check.cjs) */}
         </>
       )
     }
@@ -2306,6 +2377,49 @@ if (new URLSearchParams(location.search).has('dock')) {
       // 文件夹不能放进文件夹(宿主被拒后改问「排在前 / 后」);probe.refuse 那一行什么都不收
       canDrop: (payload, target) => !(rows.find((r) => r.key === payload.items[0])?.kind === 'folder' && target.position === 'into') && target.item?.key !== probe.refuse,
       onDrop: (payload, target) => { probe.drops.push({ items: payload.items, to: target.item?.key, position: target.position }) },
+    }
+  }
+  // 组头(folderStyle: 'group')、行尾的悬停图标钮、「查看更多」(2026-10-14):收件箱按发信人的那一种列表。
+  // 四个发信人各一种前导:只有名字(画首字)、词表图标(方块)、图片(圆头像)、七封信的一组(验「查看更多」)。
+  if (new URLSearchParams(location.search).has('groups')) {
+    const listeners = new Set<() => void>()
+    const emit = (): void => listeners.forEach((fn) => fn())
+    const SENDERS: Record<string, Partial<ListItem>> = { muse: { title: 'Muse' }, forsion: { title: 'Forsion', icon: 'cloud' }, auto: { title: '自动化', icon: 'workflow' }, pic: { title: '带头像的', iconUrl: BIG } }
+    let mails = [
+      { key: 'm1', from: 'muse', title: '请审批：写待办文件', unread: true }, { key: 'm2', from: 'muse', title: '本周的记忆整理好了', unread: false },
+      { key: 'f1', from: 'forsion', title: '一封标题很长很长很长很长很长很长很长很长很长的更新奖励', unread: true }, { key: 'f2', from: 'forsion', title: '会员即将到期', unread: false },
+      ...[1, 2, 3, 4, 5, 6, 7].map((n) => ({ key: `a${n}`, from: 'auto', title: `每日汇总 ${n}`, unread: false })),
+      { key: 'p1', from: 'pic', title: '周报草稿写好了', unread: false },
+    ]
+    let active: string | null = null
+    const probe = {
+      opened: [] as string[], ran: [] as string[],
+      arrive(from: string) { mails = [{ key: `new${mails.length}`, from, title: '新来的一封', unread: true }, ...mails]; emit() },
+    }
+    ;(window as any).__groupProbe = probe
+    SRC.subscribe = (cb) => { listeners.add(cb); return () => { listeners.delete(cb) } }
+    SRC.items = (f) => {
+      const hit = mails.filter((m) => !f?.query || m.title.includes(f.query))
+      const row = (m: (typeof mails)[number]): ListItem => ({ key: m.key, title: m.title, subtitle: `${m.title}的第一句话`, hint: '10:02', icon: 'page', ...(m.unread ? { unread: true } : {}) })
+      if (f?.query) return hit.map(row)
+      return [...new Set(hit.map((m) => m.from))].flatMap((from) => {
+        const own = hit.filter((m) => m.from === from), unread = own.filter((m) => m.unread).length
+        return [{ key: `s:${from}`, kind: 'folder', folderStyle: 'group', ...SENDERS[from], ...(unread ? { hint: String(unread), defaultOpen: true } : {}) } as ListItem,
+          ...own.map((m) => ({ ...row(m), parent: `s:${from}` }))]
+      })
+    }
+    SRC.activeKey = () => active
+    SRC.open = (item) => { active = item.key; probe.opened.push(item.key); emit() }
+    SRC.itemMenu = (item) => {
+      const m = mails.find((x) => x.key === item.key)
+      if (!m) return []
+      const act = (id: string, change: () => void) => () => { probe.ran.push(`${id}:${m.key}`); change(); emit() }
+      return [
+        { id: 'read', icon: m.unread ? 'mail-open' : 'mail', label: m.unread ? '标为已读' : '标为未读', run: act('read', () => { m.unread = !m.unread }) },
+        { id: 'archive', icon: 'archive', label: '归档', run: act('archive', () => { mails = mails.filter((x) => x !== m) }) },
+        { id: 'delete', icon: 'trash', label: '删除', danger: true, run: act('delete', () => { mails = mails.filter((x) => x !== m) }) },
+        { id: 'props', label: '查看属性', run: act('props', () => {}) }, // 没有图标:只在「更多」里
+      ]
     }
   }
   createRoot(document.getElementById('root')!).render(

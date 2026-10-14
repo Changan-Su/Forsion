@@ -1876,7 +1876,7 @@ registerMessages({
   "chat.action.speak": { "zh": "朗读", "en": "Read aloud" },
   "chat.action.stopSpeak": { "zh": "停止朗读", "en": "Stop reading" },
   "settings.tts.sectionTitle": { "zh": "语音朗读（TTS）", "en": "Read aloud (TTS)" },
-  "settings.tts.intro": { "zh": "把回复念出来：消息下方的朗读键和自动朗读用它，通话不用它。走 OpenAI 兼容 /audio/speech：填 <providerId>/<模型>，或在提供方里声明「语音模型」后直接填模型 id；留空关闭朗读。", "en": "Reads replies aloud: used by the read-aloud button under messages and by auto-read, not by voice calls. Uses an OpenAI-compatible /audio/speech endpoint: enter <providerId>/<model>, or declare TTS models on a provider and use the model id directly; leave empty to turn read-aloud off." },
+  "settings.tts.intro": { "zh": "把回复念出来：消息下方的朗读键和自动朗读用它，通话不用它。可以选下拉里的 Forsion 云端朗读模型（登录后可用，按字数扣积分）；也可以用自己的提供方（OpenAI 兼容 /audio/speech）：填 <providerId>/<模型>，或在提供方里声明「语音模型」后直接填模型 id。留空关闭朗读。", "en": "Reads replies aloud: used by the read-aloud button under messages and by auto-read, not by voice calls. Pick a Forsion cloud read-aloud model from the list (when signed in, charged per character), or use your own provider (OpenAI-compatible /audio/speech): enter <providerId>/<model>, or declare TTS models on a provider and use the model id directly. Leave empty to turn read-aloud off." },
   "settings.tts.model": { "zh": "朗读模型", "en": "Read-aloud model" },
   "settings.tts.modelPlaceholder": { "zh": "如 siliconflow/FunAudioLLM/CosyVoice2-0.5B 或 openai/tts-1", "en": "e.g. siliconflow/FunAudioLLM/CosyVoice2-0.5B or openai/tts-1" },
   "settings.tts.voice": { "zh": "朗读音色", "en": "Read-aloud voice" },

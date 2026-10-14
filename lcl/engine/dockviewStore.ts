@@ -25,7 +25,7 @@ import { useNav } from './navStore'
 import { ribbonActions } from './ribbonRegistry'
 import { engineTr } from './i18nSeam'
 import {
-  LAYOUT_KEY, saveLayout, loadLayout, clearLayout, saveNamedLayout, loadNamedLayout, listNamedLayouts,
+  LAYOUT_KEY, saveLayout, loadLayout, clearLayout, saveNamedLayout, loadNamedLayout, listNamedLayouts, layoutIsBlank,
   type LayoutEnvelopeV4, type PersistedPanel,
 } from './layoutPersist'
 
@@ -328,19 +328,38 @@ export function dropAllowed(api: DockviewApi, panelId: string, target: DropTarge
   return !panel || locOf(target.group) === locOfPanel(panel) || !guarded(api, panel)
 }
 
-/** 主区新标签,开在 beside 那一组(openView 的 newTab 落在第一个主区组,分屏时会跑到另一半屏)。 */
-function openTabBeside(api: DockviewApi, beside: IDockviewPanel, type: string, params: Record<string, unknown>): Leaf {
+/** 主区新标签,开在 beside 那一组(openView 的 newTab 落在第一个主区组,分屏时会跑到另一半屏)。
+ *  position 另给落点时按它开(见 besidePanePosition)。 */
+function openTabBeside(api: DockviewApi, beside: IDockviewPanel, type: string, params: Record<string, unknown>, position?: Record<string, unknown>): Leaf {
   const def = getView(type)
   const panel = api.addPanel({
     id: def?.singleton && !api.getPanel(type) ? type : nextId(api, type),
     component: '__frame',
     title: def ? label(def.displayName) : type,
     params: { ...params, __loc: 'main', __type: type },
-    position: { referencePanel: beside.id, direction: 'within' } as never,
+    position: (position ?? { referencePanel: beside.id, direction: 'within' }) as never,
   })
   if (type === 'chat') useWorkspace.setState({ focusedChatLeafId: panel.id })
   scheduleWorkspaceSave()
   return makeLeaf(panel)
+}
+
+/** openView 的 split 落点:主区里已经有和 cur 左右并排的另一半 → 落在那一半里当新标签开(优先右手边最近的,没有就取
+ *  左手边最近的);没有 → 从 cur 向右分出一半。反复点不会越分越多。上下叠着的、浮动的组不算「旁边」。 */
+function besidePanePosition(api: DockviewApi, cur: IDockviewPanel): Record<string, unknown> {
+  if (cur.group.api.location.type !== 'grid') return { referencePanel: cur.id, direction: 'within' }
+  const box = (g: Group): DOMRect => g.element.getBoundingClientRect()
+  const mid = (g: Group): number => { const b = box(g); return b.left + b.width / 2 }
+  const here = box(cur.group)
+  const sides = [...new Set(panelsAt(api, 'main').map((p) => p.group))].filter((g) => {
+    if (g.id === cur.group.id || g.api.location.type !== 'grid') return false
+    const b = box(g)
+    return b.width > 0 && b.top < here.bottom - 1 && b.bottom > here.top + 1 && Math.abs(mid(g) - mid(cur.group)) > 1
+  })
+  // 左右按中线分(分隔条那几像素的缝 / 叠边不影响),各取离 cur 最近的一个。
+  const pick = sides.filter((g) => mid(g) > mid(cur.group)).sort((x, y) => mid(x) - mid(y))[0]
+    ?? sides.sort((x, y) => mid(y) - mid(x))[0]
+  return pick ? { referenceGroup: pick.id, direction: 'within' } : { referencePanel: cur.id, direction: 'right' }
 }
 
 /** 就地把 panel 换成另一种视图(navigateLeaf 的本体,不带固定守卫)。旧视图参数全清,不残留。 */
@@ -655,7 +674,8 @@ interface WorkspaceState {
   /** 开/聚焦一个视图。singleton 已存在则聚焦(**除非显式 newTab**——那是「我明确要再来一个」,
    *  见下方 singleton 分支上的注释);主区默认**就地替换**当前活动 leaf(浏览器/Obsidian 式,
    *  opts.newTab 显式新建);侧栏同侧同类型复用。返回 leaf。 */
-  openView(type: string, params?: Record<string, unknown>, loc?: ViewLocation, opts?: { newTab?: boolean }): Leaf | null
+  /** opts.split(只对主区):开在旁边那半屏,没有就向右分屏(见 besidePanePosition);与 newTab 同给时 newTab 优先。 */
+  openView(type: string, params?: Record<string, unknown>, loc?: ViewLocation, opts?: { newTab?: boolean; split?: boolean }): Leaf | null
   /** 就地把某 leaf 切换为另一视图类型(同 tab 内导航的原语)。旧视图参数全清,不残留。 */
   navigateLeaf(leafId: string, type: string, params?: Record<string, unknown>): Leaf | null
   getActiveLeaf(): Leaf | null
@@ -1161,6 +1181,8 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       // 主区默认「就地导航」:替换当前活动主 leaf(浏览器/Obsidian 式;singleton 已在上方被捕获激活)。
       // ＋按钮/兜底填充等显式 newTab;主区为空(Space build 期)时自然落到下方新建。
       const cur = activeMainPanel(api)
+      // split:当前这一半留着不动,要开的落到旁边那一半(笔记里点文件类双链:笔记和文件并排看)。
+      if (cur && opts?.split) return openTabBeside(api, cur, type, params, besidePanePosition(api, cur))
       if (cur) return get().navigateLeaf(cur.id, type, params)
     }
     if (loc !== 'main' && !opts?.newTab) {
@@ -1388,7 +1410,8 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
 
   applyNamed(name) {
     const blob = loadNamedLayout(name)
-    if (!get().api || !blob) return false
+    // 空白存档当没存过(调用方落到「照默认重建」):已经被写坏的 `space:<id>` 槽靠这条自己好回来,见 layoutIsBlank。
+    if (!get().api || !blob || layoutIsBlank(blob)) return false
     dropLayoutUndo() // 换了一整份布局(切 Space 走这里):之前的「恢复默认」快照作废
     return get().applyLayout(blob)
   },

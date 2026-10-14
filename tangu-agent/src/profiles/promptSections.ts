@@ -40,6 +40,21 @@ export function responseStyleSection(channelSession?: boolean, opts?: { noPreamb
   );
 }
 
+/** 应用 / 窗口引用(10-13):桌面输入框能往消息里插 `[[app://<应用标识>|<名字>]]` / `[[window://<应用标识>|<窗口标题>]]`
+ *  (契约 desktop/shared/appRefs.ts),聊天气泡把它渲成能点的芯片(点一下切到那个应用 / 那扇窗口)。
+ *  两条各管一件事:① 认得它 —— 是电脑上的应用 / 窗口,不是笔记、文件、会话;② 自己也能写 —— 标识只许照抄给过的
+ *  (引用本身、侧边面板的 `<forsion-app>` 标签、工具结果),不进代码格式(Response Style 让标识符进反引号,这里是例外)。
+ *  live 实测(gpt-6-luna,`--only appref`,10-13):没有这段时 ① 多数时候本来就对(3 次里有 1 次拿窗口标题去
+ *  search_sessions 翻过去的会话),② 写不出来 —— 只拿到 `<forsion-app>` 标签时 2 次都没写对:一次自己编了
+ *  `[[app:…/window:77|…]]`(渲出来是条死链),一次把标签原样贴回来。有这段 3 次全对。改措辞后跑那个场景。
+ *  电脑操作工具的名字不写进来(那是 Computer Use 插件的,在插件自己的提示里)。
+ *  ⚠️ 引擎级契约:由 agentLoop 直接注入,不进 guidance 数组(同 TOOL_FAILURE_SECTION 的理由);
+ *  通道会话(纯文本转发)不注入 —— 那边发不出这种引用,写了也只是一串原文。 */
+export const APP_REF_SECTION =
+  '## App & Window References\n' +
+  '- `[[app://<app id>|<app name>]]` and `[[window://<app id>|<window title>]]` in a message point at an application, or one open window of it, on the user\'s computer (the app id is a bundle id on macOS, an executable or package name on Windows). They are not notes, files or sessions — never pass them to file, note or session tools. If desktop-control (Computer Use) tools are available, that app or window is the one to operate; otherwise it is context the user named.\n' +
+  '- When your reply mentions an app or window whose id you were given (in such a reference, a `<forsion-app>` tag, or a tool result), you may write it in the same form: it renders as a clickable chip that switches to it. Copy the id and the name or title exactly, never invent an id, and keep it out of backticks and code blocks.';
+
 /** 任务持久性契约:与保留工具证据的历史重放、同 run 插话一起工作,不能靠提示词代替运行时状态。
  *  ⚠️ 引擎级契约:由 agentLoop 直接注入,**不进** guidance 数组(per-app 覆盖是整段替换,会被静默丢掉)。
  *  计划模式不注入(「carry through implementation」与只读工具集直接矛盾)。 */

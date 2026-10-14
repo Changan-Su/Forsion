@@ -12,6 +12,7 @@
  * `types` —— 故 hasChatRef / readChatRefs 分成两个函数,别合并。
  */
 import { noteRefInsert } from '../../components/wikiChat'
+import { appRefToken, isAppRefId } from '../../../../shared/appRefs'
 
 export const REF_MIME = 'application/x-forsion-chatref'
 /** 文件面板/右栏的既有行拖契约(JSON 字符串数组)。 */
@@ -23,11 +24,15 @@ export type ChatRef =
   /** 工作区路径:本机=绝对路径,云端 Project=项目内相对路径。 */
   | { kind: 'file'; path: string }
   | { kind: 'session'; id: string; title: string }
+  /** 电脑上的应用 / 打开的窗口(id = 应用标识;name = 应用名或窗口标题)。契约见 shared/appRefs.ts。 */
+  | { kind: 'app'; id: string; name: string }
+  | { kind: 'window'; id: string; name: string }
 
 const isRef = (v: unknown): v is ChatRef => {
   const r = v as ChatRef
   if (!r || typeof r !== 'object') return false
   if (r.kind === 'session') return typeof r.id === 'string' && !!r.id
+  if (r.kind === 'app' || r.kind === 'window') return isAppRefId(r.id) && typeof r.name === 'string'
   return (r.kind === 'note' || r.kind === 'file') && typeof r.path === 'string' && !!r.path
 }
 
@@ -75,10 +80,12 @@ function safeLabel(title: string): string {
  *   笔记 → `[[<vault 绝对路径>|<名字>]]`(气泡显示名字,agent 读到路径,与 [[ 选择器同契约)
  *   会话 → `[[session:<id>|<标题>]]`(agent 用 read_session 按 id 读)
  *   文件 → 路径原样,含空格则加引号(与 OS 文件拖入输入框同款)
+ *   应用 / 窗口 → `[[app://<标识>|<名字>]]` / `[[window://<标识>|<标题>]]`
  */
 export function refToText(ref: ChatRef, vaultRoot: string): string {
   if (ref.kind === 'note') return noteRefInsert(vaultRoot, ref.path)
   if (ref.kind === 'session') return `[[session:${ref.id}|${safeLabel(ref.title)}]] `
+  if (ref.kind === 'app' || ref.kind === 'window') return appRefToken(ref) + ' '
   return (/\s/.test(ref.path) ? `"${ref.path}"` : ref.path) + ' '
 }
 

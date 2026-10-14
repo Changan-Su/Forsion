@@ -43,12 +43,28 @@ describe('Intelligent UI trust boundary and semantic streaming', () => {
     expect(validateUIDocument(doc).blocks[0]).not.toHaveProperty('onclick')
     expect(validateUIDocument(doc).blocks[0]).not.toHaveProperty('style')
   })
-  it('rejects invisible or duplicate controls while allowing an unfinished prefix', () => {
+  it('rejects invisible controls while allowing an unfinished prefix', () => {
     const doc = dinner(); doc.blocks = doc.blocks.filter((b: any) => b.kind !== 'controls')
     expect(() => validateUIDocument(doc)).toThrow('every declared input')
     expect(validateUIDocument(doc, { draft: true }).inputs).toHaveLength(2)
-    const twice = dinner(); twice.blocks.push({ ...twice.blocks[1], id: 'duplicate' })
-    expect(() => validateUIDocument(twice)).toThrow('each input must appear once')
+  })
+  // 真模型(10-13):模型爱在末尾的追问钮前面把同一组输入再列一遍。拒收会留下一张残缺的卡再跟一张重写的,所以只保留第一次出现的位置。
+  it('shows an input once: a repeat in a later controls block is dropped, an emptied block with it', () => {
+    const first = dinner().blocks.find((b: any) => b.kind === 'controls')
+    const twice = dinner(); twice.blocks.push({ ...first, id: 'duplicate' })
+    expect(validateUIDocument(twice).blocks).toEqual(validateUIDocument(dinner()).blocks)
+    // 后一个控件块里有新的输入时,只去掉重复的那个
+    const mixed = dinner(); const [a, b] = first.inputIds
+    mixed.blocks = mixed.blocks.map((x: any) => x.kind === 'controls' ? { ...x, inputIds: [a] } : x)
+    mixed.blocks.push({ id: 'ask', kind: 'controls', inputIds: [a, b] })
+    const out = validateUIDocument(mixed).blocks.filter((x) => x.kind === 'controls')
+    expect(out.map((x: any) => x.inputIds)).toEqual([[a], [b]])
+    // 重复的那块自己带标题(「我还想确认两件事」):标题留着,只是不再重复画控件
+    const titled = dinner(); titled.blocks.push({ ...first, id: 'ask', title: '还想确认两件事' })
+    expect(validateUIDocument(titled).blocks.at(-1)).toMatchObject({ id: 'ask', kind: 'controls', title: '还想确认两件事', inputIds: [] })
+    // 重复的那块带 when:照旧拒收(控件必须一直可见),不因为它会被去掉就放过
+    const hidden = dinner(); hidden.blocks.push({ ...first, id: 'dup', when: { input: a, equals: hidden.inputs.find((x: any) => x.id === a).initial } })
+    expect(() => validateUIDocument(hidden)).toThrow('controls must remain visible')
   })
   it('accepts picture options only as a complete row of image references', () => {
     const pick = (): any => structuredClone(fixtures.pick)

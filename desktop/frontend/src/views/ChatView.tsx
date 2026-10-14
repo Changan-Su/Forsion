@@ -8,6 +8,7 @@ import { AgentSelectStrip } from '../components/AgentSelectStrip'
 import { displaySessionTitle } from '../sessionTitle'
 import { ProjectSelector } from '../components/ProjectSelector'
 import { RunLocationPicker, useRunPickerVisible } from '../components/RunLocationPicker' // P1-K7a
+import { useRemoteNewChatWorkspaces } from '../stores/newChatWorkspaces'
 import { WorkspaceFilePreview } from '../components/WorkspaceFilePreview'
 import { targetFor } from '../components/InlineFiles'
 import { openWsFile } from './wsFileNav'
@@ -27,6 +28,7 @@ import { APPROVAL_UPDATE_OPEN, pendingPromptsOf } from './chat2/approvalQueue'
 import { RunStatsLine } from './chat2/RunStatsLine'
 import { SessionTraceLines, useSessionTraces } from '../components/SessionTraces'
 import { SessionOpening } from '../components/SessionOpening'
+import { ExtraFolders } from '../components/ExtraFolders'
 import { inRunWindow } from '../stores/runStats'
 import { EmptyState2 } from './chat2/EmptyState2'
 import { FloatingToc } from './chat2/FloatingToc'
@@ -46,7 +48,7 @@ import { useChildChat } from '../stores/childChatStore'
 import { TeamSummary } from './chat2/TeamSummary'
 import { useI18n } from '../i18n'
 import { speakMessage, stopSpeaking, subscribeTts, ttsState, type TtsState } from '../services/ttsService'
-import { homeTarget } from '../services/engine/targets'
+import { homeTarget, useComposerRef } from '../services/engine/targets'
 import type { ViewProps } from '@lcl/engine/types'
 import { useShallow } from 'zustand/react/shallow'
 import './chat2/chat2.css'
@@ -105,7 +107,8 @@ export function ChatView({ leaf, params }: ViewProps) {
   // P1-K6:输入框对着的那台是「我的电脑」且没连上 → 「等待那台连上」;S4 起按本会话所在的那台(空白新对话 = 焦点)
   const targetPlaceholder = useTargetComposerPlaceholder(activeId)
   const composerTargetReady = useComposerReady(activeId)
-  const runPickerOn = useRunPickerVisible() // P1-K7a:手机上的「在哪运行」
+  const runPickerOn = useRunPickerVisible() // P1-K7a:「在哪运行」有得选(Chat 模式据此多出那一栏;桌面 Work 模式的药丸恒在)
+  const remoteWs = useRemoteNewChatWorkspaces() // 桌面:运行位置在别的电脑上 → 项目药丸列那台的项目
   // 历史在拉:空消息 ≠ 空会话 —— 拉取期间显示会话骨架屏,别把有消息的会话先亮成空状态(EmptyState2)。
   const historyLoading = useApp((state) => !!(activeId && state.historyLoading[activeId]))
   const s = useApp(useShallow((state) => ({
@@ -218,6 +221,8 @@ export function ChatView({ leaf, params }: ViewProps) {
   // Vault 切换会即时重算 Project 列表与系统工作根;不能只在 s.workspaces() 里 getState 快照,
   // 否则 appStore 本身没变化时 React 不会重渲染选择器。
   const amadeusRoot = usePageStore((state) => state.vaultRoot)
+  // 会话在别的电脑上(桌面作为调用方):这台电脑的笔记库 / 文件夹都不属于它的工作范围,也不许把本机路径写进那台的会话配置
+  const sessionElsewhere = useComposerRef(activeId).kind === 'unit'
 
   // 主区划线后交给侧栏的引用可能先于 chat-panel 挂载；目标承载一出现就消费，其他 ChatView 不碰。
   useEffect(() => {
@@ -249,7 +254,7 @@ export function ChatView({ leaf, params }: ViewProps) {
           cwd: cloud ? undefined : (s.newChatWs?.path || undefined),
           ...s.newChatCfg,
         }, preset) as AgentConfig)
-      })(), amadeusRoot)
+      })(), sessionElsewhere ? null : amadeusRoot) // 别的电脑上的会话 / 草稿:这台电脑的笔记库不并进它的工作范围
   // 团队成员会话(子聊天里直接追问):审批闸只听团队会话此刻的档(引擎 agentLoop.approvalModeSessionId),
   // 成员会话自己的存值不算数 → 药丸显示团队档、改也改团队会话(与团队主区药丸同一条写路径)。
   // 成员身份同引擎按父链接核实:父会话 id 由 ChildChatPanel 的 Team Desk 成员行给,须等于配置里的 teamMember ——
@@ -474,6 +479,9 @@ export function ChatView({ leaf, params }: ViewProps) {
   const saveEdit = (): void => { if (editingId && editText.trim()) { s.editUserMessage(editingId, editText.trim(), activeId) } setEditingId(null) }
 
   const hasMessages = activeMessages.length > 0
+  // 输入卡上方那一栏的两半(JSX 在 .composer-anchor 里):项目那半只在空白新对话上;开场那半还包括已建好但没发过消息的会话。
+  const projectBarOn = !activeId && (!studioChat || !!studioRoot) && (mvCfg.preset !== 'chat' || (runPickerOn && !studioChat))
+  const openingOn = !hasMessages && !historyLoading && !params.miniSurface && !params.childSurface && !mvCfg.teamSlug && !mvCfg.groupChat && !mvCfg.teamMember && !mvCfg.soloEngineId && !mvCfg.engineId && s.connState === 'ok'
   // Agent Desk 只在会话开始后显示:草稿与已建 ID 但未发消息的新会话都不挂载,也不占右侧车道。
   // 桌面端默认开(移动端没有);用户可在设置→高级关掉,窄容器由 CSS 容器查询兜底隐藏。
   const deskEnabled = !!activeId && hasMessages && !params.childSurface && !studioChat && UI_MODE !== 'mobile' && !!s.desktopConfig?.agentDeskEnabled
@@ -697,26 +705,34 @@ export function ChatView({ leaf, params }: ViewProps) {
           </div>
         )}
   
-        {/* Chat 无项目:不露项目选择器，否则会悄悄建成 Work 会话。Coding Studio 另要求先选定项目。
-            P1-K7a:手机上另有「在哪运行」药丸(Chat 模式也要有 —— 聊天会话同样可以建在电脑上),排在项目药丸之前。 */}
-        {!activeId && (!studioChat || studioRoot) && (mvCfg.preset !== 'chat' || (runPickerOn && !studioChat)) && (
+        {/* 输入卡上方那一栏:左边是「在哪运行 / 项目 / 额外文件夹」几枚胶囊,右边是开场那一行;两半各有各的出现条件,栏本身只要有一半在就在。
+            开场不再单占一行排在这一栏下面 —— 那样它夹在项目胶囊和输入卡之间(用户 10-13 报丑);一行放不下时整栏朝上折,胶囊始终贴着输入卡。
+            ⚠️ 两半在同一个父节点下的固定位置:项目那半随建会话消失时,开场那一行不重挂(重挂 = 当成「看过了」)。 */}
+        {(projectBarOn || openingOn) && (
           <div className="newchat-projectbar">
             <div className="newchat-projectbar-inner">
-              {runPickerOn && !studioChat && <RunLocationPicker />}
-              {mvCfg.preset !== 'chat' && (studioChat && studioRoot ? <div className="project-pill" title={studioRoot} data-studio-project={studioRoot}><Folder size={13} /><span className="project-pill-name">{projectName(studioRoot)}</span></div> : <ProjectSelector
-                workspaces={s.workspaces()}
-                value={s.newChatWs?.key ?? null}
-                onChange={(w) => s.setNewChatWs(w)}
-                onAddProject={window.tangu?.pickDirectory ? () => void s.addLocalWorkspace() : undefined}
-                onCloneProject={window.tangu?.pickDirectory ? () => void s.cloneGitProject() : undefined}
-                onAddCloudProject={(name) => void s.addCloudProject(name)}
-              />)}
+              {/* Chat 无项目:不露项目选择器，否则会悄悄建成 Work 会话。Coding Studio 另要求先选定项目。
+                  P1-K7a:手机上另有「在哪运行」药丸(Chat 模式也要有 —— 聊天会话同样可以建在电脑上),排在项目药丸之前。 */}
+              {projectBarOn && <>
+                {/* 药丸自己判要不要画:手机 = 有得选才画;桌面主窗口恒画(至少标出「这台电脑」) */}
+                {!studioChat && <RunLocationPicker />}
+                {mvCfg.preset !== 'chat' && (studioChat && studioRoot ? <div className="project-pill" title={studioRoot} data-studio-project={studioRoot}><Folder size={13} /><span className="project-pill-name">{projectName(studioRoot)}</span></div> : <ProjectSelector
+                  workspaces={remoteWs ?? s.workspaces()}
+                  value={s.newChatWs?.key ?? null}
+                  onChange={(w) => s.setNewChatWs(w)}
+                  // 「添加本地项目 / 云端项目」加的都是这一端的:运行位置在别的电脑上时不给
+                  onAddProject={!remoteWs && window.tangu?.pickDirectory ? () => void s.addLocalWorkspace() : undefined}
+                  onCloneProject={!remoteWs && window.tangu?.pickDirectory ? () => void s.cloneGitProject() : undefined}
+                  onAddCloudProject={remoteWs ? undefined : (name) => void s.addCloudProject(name)}
+                />)}
+                {/* Coding Studio 的新对话也要露:草稿里的额外文件夹照样会随它建的会话带走,看不见胶囊 = 没人看见的授权(Codex 评审) */}
+                <ExtraFolders />
+              </>}
+              {/* 开场:新对话(还没有消息)时说一句上次之后后台替这个 Agent 写下了什么。团队 / 群聊 / 成员会话 / 外部引擎 / 小窗不出(那里没有「这一个 Agent」)。 */}
+              {openingOn && <SessionOpening slug={chatAgentSlug} />}
             </div>
           </div>
         )}
-
-        {/* 开场:新对话(还没有消息)时说一句上次之后后台替这个 Agent 写下了什么。团队 / 群聊 / 成员会话 / 外部引擎 / 小窗不出(那里没有「这一个 Agent」)。 */}
-        {!hasMessages && !historyLoading && !params.miniSurface && !params.childSurface && !mvCfg.teamSlug && !mvCfg.groupChat && !mvCfg.teamMember && !mvCfg.soloEngineId && !mvCfg.engineId && s.connState === 'ok' && <SessionOpening slug={chatAgentSlug} />}
 
         <AnimatePresence>
           {s.filePreview && (
@@ -875,9 +891,9 @@ export function ChatView({ leaf, params }: ViewProps) {
           modelId={mvModelId}
           hostCwd={mvCfg.execMode === 'host' ? mvCfg.cwd : undefined}
           extraRoots={mvCfg.extraRoots}
-          lockedRoots={mvCfg.execMode === 'host' && amadeusRoot ? [amadeusRoot] : []}
+          lockedRoots={mvCfg.execMode === 'host' && amadeusRoot && !sessionElsewhere ? [amadeusRoot] : []}
           // 只有本机会话谈得上「加本机文件夹」;沙箱会话的工作区不在本机。
-          onAddRoot={mvCfg.execMode === 'host' && activeId ? () => {
+          onAddRoot={mvCfg.execMode === 'host' && activeId && !sessionElsewhere ? () => {
             void window.tangu?.pickDirectory?.().then((dir) => {
               if (!dir) return
               const cur = useApp.getState().configBySession[activeId]?.extraRoots || []

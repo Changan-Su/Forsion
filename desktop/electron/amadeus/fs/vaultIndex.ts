@@ -7,8 +7,8 @@
 
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
-import { decodeCharRefs, pageKey, parseEmbeds, parseTags, parseWikiLinks, plainSnippet, resolvePageName, stripForIndex, tagMatches } from '@amadeus-shared/links'
-import { backlinkHits, mentionHits, noteFmMeta, type FmLinkProp } from '@amadeus-shared/linkIndex'
+import { decodeCharRefs, pageKey, parseEmbeds, parseTags, plainSnippet, resolvePageName, stripForIndex, tagMatches } from '@amadeus-shared/links'
+import { backlinkHits, mentionHits, noteFmMeta, noteLinkTargets, type FmLinkProp } from '@amadeus-shared/linkIndex'
 import { parseBody, stripFrontmatter } from '@amadeus-shared/compiler'
 import { sliceEmbedSubpath, splitNoteEmbed } from '@amadeus-shared/noteEmbed'
 import { assetKey, assetRefs } from '@amadeus-shared/assets'
@@ -174,7 +174,7 @@ export class VaultIndex {
       text,
       plain,
       lower: plain.toLowerCase(),
-      links: mergeCi(parseWikiLinks(plain), meta.links.flatMap((l) => l.targets)),
+      links: mergeCi(noteLinkTargets(plain), meta.links.flatMap((l) => l.targets)),
       embeds: parseEmbeds(raw), // raw `note#id` targets (matched note-scoped on demand)
       tags: mergeCi(parseTags(plain), meta.tags),
       aliases: meta.aliases,

@@ -14,13 +14,14 @@ import type {
   StackNode,
 } from '@amadeus-shared/compiler/types'
 import { pageKey, resolvePageName } from '@amadeus-shared/links'
+import { parseAppRefInner } from '../../../../shared/appRefs'
 import { parseBlockSubpath, parsePdfLinkInner, parseMediaLinkInner, splitLinkInner } from '@amadeus-shared/pdfLink'
 import { isDrawingPath } from '@amadeus-shared/excalidraw/format'
 import { patchFmExtraText } from '@amadeus-shared/db/pageFrontmatter'
 import { textFingerprint } from '@amadeus-shared/writeConflict'
 import { amadeus } from '../api'
 import { computeFdChildren, fdDirOf, isNoteMd, nearestFd, noteOfFd } from '../lib/fd'
-import { resolveFileName, resolveVaultPath } from '../lib/vaultFiles'
+import { resolveFileLink, resolveFileName, resolveVaultPath } from '../lib/vaultFiles'
 import { makeUndoStack, type Snap } from '../lib/undoHistory'
 import { useUiStore } from './uiStore'
 import { awaitTypingQuiet, installTypingGuard, noteLocalEdit } from './typingGuard'
@@ -305,8 +306,10 @@ interface PageState {
   renamePage(newName: string): Promise<boolean>
   /** Open the page named by a [[wikilink]];未解析 → 记入 pendingWikiCreate 询问,不再静默创建。
    *  opts.newTab(⌘/Ctrl+点击、中键,L-11):命中的笔记(含 `笔记#锚点`)和应用内打开的文件(PDF / 多维表 / 白板 /
-   *  带时刻的媒体 / 插件接管的文件类型)都在新标签页打开;交给系统程序的附件、外链、未解析的照原路径,newTab 不适用。 */
-  openWikiLink(name: string, sourcePath?: string, opts?: { newTab?: boolean }): void
+   *  带时刻的媒体 / 插件接管的文件类型)都在新标签页打开;交给系统程序的附件、外链、未解析的照原路径,newTab 不适用。
+   *  opts.split(编辑器里点双链的默认,2026-10-13 用户定):应用内打开的**文件**(PDF / 多维表 / 白板 / 带时刻的媒体 /
+   *  插件接管的文件类型)开在旁边那半屏,笔记留在原地;笔记目标不认它(照旧就地打开),图片不算。 */
+  openWikiLink(name: string, sourcePath?: string, opts?: { newTab?: boolean; split?: boolean }): void
   /** 未解析 [[链接]] 点击后的待确认创建请求(确认框据此渲染)。 */
   pendingWikiCreate: { name: string; sourcePath: string | null } | null
   /** 确认创建:裸名 → 源笔记 .fd 子笔记;带路径 → 按链接写明的精确路径;无源 → vault 根。 */
@@ -863,11 +866,15 @@ function makePageStore(opts: PageStoreOptions = {}) {
       const raw = name.trim()
       if (!raw) return
       const src = sourcePath ?? get().activePage ?? undefined
+      // 应用 / 窗口引用(shared/appRefs.ts):目标带 ://,不是笔记 —— 切过去,绝不落到最后「要不要新建这篇笔记」。
+      // 兜底:各处先自己拿完整内文认(窗口标题在别名那一格,多数调用方到这里已经把别名剥掉了,只剩应用)。
+      const appRef = parseAppRefInner(raw)
+      if (appRef) { void window.tangu?.appRefs?.open(appRef); return }
       // PDF 目标 [[report.pdf#page=N]] → 应用内 PDF 阅读器(必须先接住 raw:linkTarget 会砍掉 #page=)。
       const pdf = parsePdfLinkInner(raw)
       if (pdf) {
         const pdfFile = resolveFileName(pdf.target, get().files, src)
-        if (pdfFile) window.dispatchEvent(new CustomEvent('amadeus:open-pdf', { detail: { path: pdfFile, page: pdf.loc?.page, q: pdf.loc?.q, newTab: opts?.newTab } }))
+        if (pdfFile) window.dispatchEvent(new CustomEvent('amadeus:open-pdf', { detail: { path: pdfFile, page: pdf.loc?.page, q: pdf.loc?.q, newTab: opts?.newTab, split: opts?.split } }))
         return // 是 PDF 链接:命中即开;未命中也不落「创建笔记」兜底(带 # 的名字无意义)
       }
       // 媒体时刻锚 [[lecture.mp4#t=95]] → 先问本页有没有这个播放器(就地 seek,不重建元素);
@@ -885,15 +892,13 @@ function makePageStore(opts: PageStoreOptions = {}) {
           window.dispatchEvent(ev)
           if ((ev.detail as { handled: boolean }).handled) return
         }
-        // 有时刻锚才改道应用内播放器:裸 `[[a.mp4]]` 维持原样交系统播放器(那是既有语义,
-        // 本轮只修「时间戳静默丢失」这半边;要不要把裸链也收进应用内是另一个决定)。
+        // 应用内播放器。裸 `[[a.mp4]]` 也走这里(2026-10-13 用户定:文件类双链点了开在旁边的分屏;此前只有带时刻锚的
+        // 才开应用内、裸链交系统播放器,那样「开在旁边」对它就是一句空话)。
         // 动态 import:amadeusNav 反向 import 本模块,静态引会绕出模块环。
-        if (hit && media.loc) {
-          const loc = media.loc
-          void import('../../amadeusNav').then((m) => m.openMedia(hit, loc, { newTab: opts?.newTab }))
-          return
+        if (hit) {
+          const loc = media.loc ?? undefined
+          void import('../../amadeusNav').then((m) => m.openMedia(hit, loc, { newTab: opts?.newTab, split: opts?.split }))
         }
-        if (hit) void amadeus.openVaultFile?.(hit)?.catch(() => {})
         return // 带 # 的名字落「创建笔记」兜底无意义,同 PDF 分支
       }
       // 裸 URL [[https://…]] → 外链。**绝不落「创建笔记」兜底**:此前它过不了下面三道解析,
@@ -909,8 +914,8 @@ function makePageStore(opts: PageStoreOptions = {}) {
       // 应用内开白板 tab(事件解耦同 open-db)。绝不落「创建笔记」兜底 —— createWikiPage 的 newPage
       // 会把已有画板文件覆盖成空笔记。
       if (isDrawingPath(raw)) {
-        const hit = resolveFileName(raw, get().files, src) ?? resolveFileName(`${raw}.md`, get().files, src)
-        window.dispatchEvent(new CustomEvent('amadeus:open-drawing', { detail: { path: hit ?? raw, newTab: opts?.newTab } }))
+        const hit = resolveFileLink(raw, get().files, src)
+        window.dispatchEvent(new CustomEvent('amadeus:open-drawing', { detail: { path: hit ?? raw, newTab: opts?.newTab, split: opts?.split } }))
         return
       }
       // 笔记内锚点(评审 L-05):`[[笔记#标题]]` / `[[笔记#^块]]` / `[[#标题]]`(笔记名为空 = 本页)。
@@ -944,12 +949,18 @@ function makePageStore(opts: PageStoreOptions = {}) {
         else void get().loadPage(match)
         return
       }
-      // 文件命名空间([[xxx.db]]/[[photo.png]],页面未命中才轮到):.db 应用内开
-      // (渲染层不 import 宿主 openDb,发事件由 amadeusOverlays 接;无监听的宿主静默),其余系统程序打开。
+      // 文件命名空间([[xxx.db]]/[[photo.png]],页面未命中才轮到):.db 应用内开(渲染层不 import 宿主 openDb,发事件由
+      // amadeusOverlays 接),其余交宿主的 openFile —— 与文件树点开同一条路:应用里开得了的(图片、插件声明的文件类型、
+      // 本地 .html…)开在应用里并认 newTab / split,开不了的它自己回落系统默认程序。此前这里一律直交系统程序,
+      // 「新标签页 / 开在旁边」对这些文件全是空话。handled 回执:没挂监听的宿主照旧直交系统程序,不能点了没反应。
       const file = resolveFileName(wanted, get().files, src)
       if (file) {
-        if (/\.db$/i.test(file)) window.dispatchEvent(new CustomEvent('amadeus:open-db', { detail: { path: file, newTab: opts?.newTab } }))
-        else void amadeus.openVaultFile?.(file)?.catch(() => {})
+        if (/\.db$/i.test(file)) window.dispatchEvent(new CustomEvent('amadeus:open-db', { detail: { path: file, newTab: opts?.newTab, split: opts?.split } }))
+        else {
+          const ev = new CustomEvent('amadeus:open-file', { detail: { path: file, newTab: opts?.newTab, split: opts?.split, handled: false } })
+          window.dispatchEvent(ev)
+          if (!(ev.detail as { handled: boolean }).handled) void amadeus.openVaultFile?.(file)?.catch(() => {})
+        }
         return
       }
       // 名字直接命中库里的一个**已存在文件**(插件声明的文件类型走这条:`[[图.mindmap.md]]`、
@@ -960,7 +971,7 @@ function makePageStore(opts: PageStoreOptions = {}) {
       // 事件解耦同 open-db:渲染层不 import 宿主的 openFile(无监听的宿主静默)。
       const vaultHit = resolveVaultPath(wanted, get().files, src) ?? resolveVaultPath(`${wanted}.md`, get().files, src)
       if (vaultHit) {
-        window.dispatchEvent(new CustomEvent('amadeus:open-file', { detail: { path: vaultHit, newTab: opts?.newTab } }))
+        window.dispatchEvent(new CustomEvent('amadeus:open-file', { detail: { path: vaultHit, newTab: opts?.newTab, split: opts?.split } }))
         return
       }
       // 未解析:询问而非静默建根。源须是笔记(.db 独立视图等无 .fd 语义 → 走根兜底)。

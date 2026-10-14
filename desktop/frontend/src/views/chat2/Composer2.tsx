@@ -44,15 +44,33 @@ import { mainReferenceKey } from './mainReference'
 import { ChatBoxSurface, ChatBoxInput, ChatBoxToolbar, ChatBoxSubmit } from '@lcl/components'
 import { disarmTip, tipProps } from '../../hoverTip'
 import { RefChipView } from './RefChipView'
-import { rankRefs } from './refRank'
+import { catOf, moveRefCat, pickerMatches, refCats, type RefCand, type RefCat } from './refPicker'
+import { expandRuns, findRuns, freeRunName, inlineRun, plainRuns, runTouching, trimDraftEnd } from './inlineRefs'
+import { InlineRefMirror } from './InlineRefMirror'
+import { APPREF_EVENT, APPREF_TARGET_ATTR, ensureAppRefCommand } from './appRefCommand'
+import { appRefToken, type AppRef, type AppRefList } from '../../../../shared/appRefs'
+import { AppRefIcon } from '../../components/appRefs'
+import { useCapsuleSlide } from '../../components/capsuleTabs'
 import { composeQuotes } from './quotes'
 import { NEW_CHAT_DRAFT, clearDraft, moveDraft, setDraftField, useDraftField } from './composerDrafts'
 import { ContextUsagePop } from './ContextUsagePop'
-import { clearSuggestion, usePromptSuggest } from './promptSuggest'
+import { usePromptSuggest } from './promptSuggest'
 import './composer2.css'
 import { homeTarget, targetForSession, targetKeyOf, useComposerRef } from '../../services/engine/targets'
 
 registerMessages({
+  'input.fileref.noteApps': { zh: '引用窗口 / 应用 / 笔记 / 文件 / 会话', en: 'Reference a window / app / note / file / session' },
+  'input.refcat.label': { zh: '引用分类', en: 'Reference categories' },
+  'input.refcat.all': { zh: '全部', en: 'All' },
+  'input.refcat.window': { zh: '窗口', en: 'Windows' },
+  'input.refcat.app': { zh: '应用', en: 'Apps' },
+  'input.refcat.note': { zh: '笔记', en: 'Notes' },
+  'input.refcat.file': { zh: '文件', en: 'Files' },
+  'input.refcat.session': { zh: '会话', en: 'Sessions' },
+  'input.ref.windowOf': { zh: '{app} 的窗口', en: '{app} window' },
+  'input.ref.appRunning': { zh: '应用 · 正在运行', en: 'App · Running' },
+  'input.ref.appIdle': { zh: '应用 · 没在运行', en: 'App · Not running' },
+  'input.ref.shiftInline': { zh: '按住 Shift 点击：插到光标处', en: 'Shift-click to insert at the cursor' },
   'livecall.start': { zh: '语音通话', en: 'Voice call' },
   'livecall.return': { zh: '回到通话', en: 'Back to the call' },
   'livecall.localOnly': { zh: '语音通话只能在本机的会话里用', en: 'Voice calls only work in sessions on this computer' },
@@ -112,9 +130,6 @@ registerMessages({
 
 interface SlashItem { cmd: string; desc: string; run: () => void }
 type OpenMenu = 'add' | 'mode' | 'model' | 'ctx' | null
-/** [[ 引用候选:note=vault 笔记(p=vault 相对 .md 路径);session=历史会话(p=标题,供打分);
- *  否则工作区文件(p=cwd 相对路径)。 */
-type RefCand = { p: string; note?: true; session?: { id: string; title: string; summary?: string | null } }
 
 const MAX_ATTACH_BYTES = 5 * 1024 * 1024
 const MAX_INPUT_CHARS = 150_000
@@ -140,7 +155,13 @@ export interface RefChip {
   token: string
   /** 芯片上显示的名字。 */
   name: string
-  kind: 'note' | 'file' | 'folder' | 'session' | 'view' | 'app'
+  kind: 'note' | 'file' | 'folder' | 'session' | 'view' | 'app' | 'window'
+  /** 应用 / 窗口引用(`[[app://…]]` / `[[window://…]]`)带上它,芯片据此画真图标;侧边拼接那条 `<forsion-app>` 没有。 */
+  appRef?: AppRef
+  /** 从 `[[` 菜单选进来的:它同时以一段行内引用出现在句子里,句子里那段被删光了这条也就不算了(见 inlineRefs.ts)。 */
+  inline?: true
+  /** 这条引用在句子里的段名(第一次写进句子时定下,之后不变;见 inlineRefs.ts)。没写进过句子的没有。 */
+  run?: string
 }
 
 const chipBaseName = (p: string): string => p.split(/[\\/]/).pop() || p
@@ -228,9 +249,33 @@ export const appChip = (w: { app: string; bundleId?: string; pid: number; window
   }
 }
 
+/** 电脑上的应用 / 打开的窗口 → 芯片(token 是一条双链,契约见 shared/appRefs.ts)。 */
+export const appRefChipOf = (ref: AppRef): RefChip => ({ token: appRefToken(ref), name: ref.name, kind: ref.kind, appRef: ref })
+
+/** 这条引用能不能写进句子里:View 和侧边拼接那条是给模型看的标签,放进句子里气泡只能显示成原文,不让。 */
+export const canInline = (chip: RefChip): boolean => chip.kind !== 'view' && (chip.kind !== 'app' || !!chip.appRef)
+
+/** 句子里的段归谁:段名 → 那条引用。段名是引用第一次写进句子时定下的(同名的引用段名不同),
+ *  所以主区换页、别的引用增删都不会把句子里已有的一段改指到别的东西。没写进过句子的引用不在这张表里。 */
+export function runChipOwners(refChips: RefChip[]): Map<string, RefChip> {
+  const byRun = new Map<string, RefChip>()
+  for (const c of refChips) if (c.run && !byRun.has(c.run)) byRun.set(c.run, c)
+  return byRun
+}
+
+/** 句子里的那一段发出去写成什么。文件写成 `[[绝对路径|名字]]`,气泡里才画得成一枚可点的引用
+ *  (消息开头那一行仍是裸路径,契约不变);cwd 只在本机会话里给,云端会话的相对路径保持原样。 */
+export function inlineTokenOf(chip: RefChip, cwd?: string): string {
+  if (chip.kind !== 'file') return chip.token
+  const path = chip.token.replace(/^"(.*)"$/, '$1')
+  const abs = /^(~?\/|[A-Za-z]:[\\/])/.test(path) ? path : cwd ? `${cwd.replace(/[\\/]+$/, '')}/${path}` : ''
+  return abs && !/[[\]|#\n]/.test(abs) ? `[[${abs}|${chip.name.replace(/[[\]|]+/g, ' ')}]]` : chip.token
+}
+
 /** 一条结构化引用 → 芯片。token 由 refToText 生成 = **与行内插入完全同一段文本**,
  *  发送时原样拼回,故引擎/气泡/read_session 收到的东西一个字节都没变。 */
 export function refChipOf(ref: ChatRef, vaultRoot: string): RefChip {
+  if (ref.kind === 'app' || ref.kind === 'window') return appRefChipOf(ref)
   const token = refToText(ref, vaultRoot).trim()
   if (ref.kind === 'session') return { token, name: ref.title || 'Chat', kind: 'session' }
   if (ref.kind === 'note') return { token, name: chipBaseName(ref.path), kind: 'note' }
@@ -455,10 +500,15 @@ export const Composer2: React.FC<{
    *  只比 prev 的话两条同 token 会一起进来,React key 撞车且发送时正文里重复一遍)。 */
   const addRefChips = (next: RefChip[]): void =>
     setRefChips((prev) => {
-      const seen = new Set(prev.map((c) => c.token))
-      const add: RefChip[] = []
-      for (const c of next) if (!seen.has(c.token)) { seen.add(c.token); add.push(c) }
-      return add.length ? [...prev, ...add] : prev
+      const out = [...prev]
+      let changed = false
+      for (const c of next) {
+        const i = out.findIndex((x) => x.token === c.token)
+        if (i === -1) { out.push(c); changed = true }
+        // 已经在「已选择」里的这次被写进句子:只补记它的段名,别的照旧(它原来是怎么加的就还是怎么算)
+        else if (c.run && !out[i].run) { out[i] = { ...out[i], run: c.run }; changed = true }
+      }
+      return changed ? out : prev
     })
   const [pinnedSkills, setPinnedSkills] = useDraftField(draftKey, 'pinnedSkills')
   const [hint, setHint] = useState<string | null>(null)
@@ -479,6 +529,9 @@ export const Composer2: React.FC<{
   const [refIndex, setRefIndex] = useState(0)
   const [refDismissed, setRefDismissed] = useState(false)
   const [refFiles, setRefFiles] = useState<string[] | null>(null) // [[ 文件引用候选(工作区相对路径);null=未构建
+  const [refCat, setRefCat] = useState<RefCat>('all')
+  /** 电脑上可引用的窗口和应用(每次打开 [[ 菜单现问一次主进程;宿主没有这项能力时恒 null)。 */
+  const [appList, setAppList] = useState<AppRefList | null>(null)
   const refFilesFor = useRef('')
   const [dragOver, setDragOver] = useState(false)
   const [histPos, setHistPos] = useState(0) // 历史召回位置:0=当前草稿;1..N=第 N 条最近发送
@@ -594,7 +647,7 @@ export const Composer2: React.FC<{
 
   // 桌面级共享语音输入 hook:转写文本追加进草稿(不绑聊天,Amadeus 等可复用同一 hook)。
   const voice = useVoiceInput((text) => {
-    setDraft((d) => (d ? d.replace(/\s+$/, '') + ' ' + text : text))
+    setDraft((d) => (d ? trimDraftEnd(d) + ' ' + text : text))
     setHistPos(0)
     requestAnimationFrame(autoGrow)
   })
@@ -627,10 +680,10 @@ export const Composer2: React.FC<{
   const callSessionId = useSyncExternalStore(subscribeCallPresence, getCallPresence)
   const inCall = !!activeSessionId && callSessionId === activeSessionId
   // 输入建议(promptSuggest.ts,默认关):一轮结束后猜的下一句,当占位文字显示在空输入框里,Tab 采用。
-  // 只认明确给了 sessionId 的输入框(聊天视图);新一轮一起跑就作废。
+  // 只认明确给了 sessionId 的输入框(聊天视图)。和占位文字一样常驻:只有新一轮起跑才作废(appStore subscribeRun),
+  // 打字 / Tab 采用都只是因为输入框不空而藏起来,删空了还在。
   const suggestion = usePromptSuggest((st) => (sessionId ? st.bySession[sessionId] : undefined) || '')
   const showSuggestion = !!suggestion && !draft && !running && !disabled && !inCall && !touchUi
-  useEffect(() => { if (running && sessionId) clearSuggestion(sessionId) }, [running, sessionId])
   // Mini 那边:有新话 / 代跑 run → 拉一次本会话;改了 Effort → 同步本窗缓存(否则下一条打字消息还按旧档跑)。
   useEffect(() => {
     if (!liveOwnerResolved) return
@@ -683,6 +736,9 @@ export const Composer2: React.FC<{
   }
 
   const isHost = execConfig.execMode === 'host'
+  // 会话在**这台电脑**上跑且有本机文件系统。桌面把会话建到别的电脑上时 isHost 仍是 true(那台的 host FS),但这台电脑的
+  // 路径 / 笔记库 / 拖进来的文件那台读不到 —— 凡是往输入框里放本机绝对路径的入口都看它,不看 isHost(手机上这些桥本来就没有)。
+  const localFs = isHost && composerRef.kind === 'home'
   const isChat = preset === 'chat'
   // 会话没存档时引擎按当前 Agent 定义的档跑(applyAgentActivation 补会话缺省的键),药丸照同一条链显示:
   // 私聊 / 团队会话由引擎建、不带审批档与思考档,兜底成「替我批准」「中」就是谎报(09-22 反馈:药丸替我批准,实际按 Agent 的只读逐次弹)。
@@ -1070,8 +1126,15 @@ export const Composer2: React.FC<{
     const m = /\[\[([^\]\n]*)$/.exec(draft.slice(0, cursorPos))
     return m ? { query: m[1], start: cursorPos - m[1].length - 2 } : null
   }, [draft, cursorPos, disabled, slashOpen, refDismissed])
+  const refPickerOn = !!fileRefCtx
   useEffect(() => {
-    if (!fileRefCtx || !isHost) return // 本地文件/笔记候选仅 host;云端会话只出会话候选
+    if (!refPickerOn) { setRefCat('all'); return } // 下次打开从「全部」开始
+    let live = true
+    void window.tangu?.appRefs?.list().then((list) => { if (live) setAppList(list) }, () => {})
+    return () => { live = false }
+  }, [refPickerOn])
+  useEffect(() => {
+    if (!fileRefCtx || !localFs) return // 本地文件/笔记候选仅本机 host;云端 / 别的电脑上的会话只出会话候选
     if (window.amadeus) ensureAmadeusReady() // 懒引导 vault(幂等):聊天先于 Amadeus 打开时,笔记候选也在
     const root = execConfig.cwd
     // 只认 refFilesFor(已发射标记):打字使 fileRefCtx 每键变化,若依赖 refFiles 是否就绪,
@@ -1096,7 +1159,7 @@ export const Composer2: React.FC<{
       return found
     }
     void run().then((list) => { if (refFilesFor.current === root) setRefFiles(list) }).catch(() => {})
-  }, [fileRefCtx, execConfig.cwd, isHost])
+  }, [fileRefCtx, execConfig.cwd, localFs])
   const vaultPages = usePageStore((s) => s.pages)
   const vaultRoot = usePageStore((s) => s.vaultRoot)
   const pageIcons = usePageStore((s) => s.icons)
@@ -1130,43 +1193,43 @@ export const Composer2: React.FC<{
     setDraft(previous => previous.trim() ? `${previous}\n\n${studioPrompt.text}` : studioPrompt.text)
     requestAnimationFrame(() => { taRef.current?.focus(); autoGrow() })
   }, [studioPrompt, activeSessionId]) // eslint-disable-line react-hooks/exhaustive-deps
-  const refMatches = useMemo<RefCand[]>(() => {
+  const refCands = useMemo<RefCand[]>(() => {
     if (!fileRefCtx) return []
-    // 笔记在前(sort 稳定 → 同分保持此序),工作区文件次之,历史会话最后(与拖拽引用同契约,
+    // 窗口、应用在前(只在有这项能力的宿主上有);笔记、工作区文件次之,历史会话最后(与拖拽引用同契约,
     // agent 经 read_session 读)。笔记/文件仅 host(云端读不到本机路径);会话候选全模式可用。
     // 当前会话不列(引用自己无意义)。
-    const cands: RefCand[] = [
-      ...(isHost ? vaultPages.map((p) => ({ p, note: true as const })) : []),
-      ...(isHost ? (refFiles ?? []).map((p) => ({ p })) : []),
+    return [
+      ...(appList?.windows ?? []).map((w): RefCand => ({ p: w.title, app: { kind: 'window', id: w.id, name: w.title }, desc: t('input.ref.windowOf', { app: w.app }) })),
+      ...(appList?.apps ?? []).map((a): RefCand => ({ p: a.name, app: { kind: 'app', id: a.id, name: a.name }, desc: t(a.running ? 'input.ref.appRunning' : 'input.ref.appIdle') })),
+      ...(localFs ? vaultPages.map((p) => ({ p, note: true as const })) : []),
+      ...(localFs ? (refFiles ?? []).map((p) => ({ p })) : []),
       ...chatSessions
         .filter((s) => s.id !== activeSessionId)
         .slice(0, 300)
         .map((s) => ({ p: displaySessionTitle(s.title, t), session: { id: s.id, title: displaySessionTitle(s.title, t), summary: s.summary } })),
     ]
-    // 文件名前缀命中 > 文件名包含 > 仅路径包含;不够 10 条再拿模糊命中补位(见 ./refRank)。
-    return rankRefs(cands, fileRefCtx.query)
-  }, [fileRefCtx, refFiles, vaultPages, chatSessions, activeSessionId, isHost, t])
-  const refActive = !!fileRefCtx && refMatches.length > 0
-  useEffect(() => { setRefIndex(0) }, [fileRefCtx?.start, fileRefCtx?.query])
+  }, [fileRefCtx, appList, refFiles, vaultPages, chatSessions, activeSessionId, localFs, t])
+  const refCatList = useMemo(() => refCats(refCands), [refCands])
+  const refCatNow: RefCat = refCatList.includes(refCat) ? refCat : 'all'
+  // 文件名前缀命中 > 文件名包含 > 仅路径包含;不够 10 条再拿模糊命中补位(见 ./refRank)。
+  const refMatches = useMemo<RefCand[]>(() => (fileRefCtx ? pickerMatches(refCands, fileRefCtx.query, refCatNow) : []), [fileRefCtx, refCands, refCatNow])
+  // 菜单开不开看「全部」里有没有;当前分类空着时菜单留着(显示没有匹配项),不然切到空分类菜单就没了
+  const refActive = useMemo(() => !!fileRefCtx && (refMatches.length > 0 || pickerMatches(refCands, fileRefCtx.query, 'all').length > 0), [fileRefCtx, refCands, refMatches])
+  const refCapRef = useCapsuleSlide<HTMLDivElement>(refActive ? refCatNow : '', refActive ? refCatList.join() : '')
+  useEffect(() => { setRefIndex(0) }, [fileRefCtx?.start, fileRefCtx?.query, refCatNow])
 
-  /** 选中一条候选 → 变成上方「已选择」芯片,并把触发用的 `[[查询` 从草稿里抹掉。
-   *  发送时 token 原样拼回正文,故对引擎/气泡而言与旧的行内插入完全等价(见 RefChip)。 */
+  /** 选中一条候选 → 上方「已选择」里多一枚芯片,同时在光标处(原来打 `[[查询` 的地方)写进一段行内引用。
+   *  发送时句子里那段换成 token;没写进句子的引用仍拼在正文最前面一行(见 sendMessage)。 */
   const pickRef = (c: RefCand) => {
     if (!fileRefCtx) return
+    if (c.app) { insertInline({ ...appRefChipOf(c.app), inline: true }, fileRefCtx.start, cursorPos); return }
     const token = (c.session
       ? refToText({ kind: 'session', id: c.session.id, title: c.session.title }, vaultRoot || '') // [[session:id|标题]]:与拖拽同契约(session 分支不用 vaultRoot)
       : c.note && vaultRoot
       ? noteRefInsert(vaultRoot, c.p) // [[绝对路径|名字]]:气泡渲染名字,agent 读到路径
       : /\s/.test(c.p) ? `"${c.p}"` : c.p // 含空格加引号,与粘贴本机路径一致
     ).trim()
-    addRefChips([{ token, name: c.session ? c.session.title : chipBaseName(c.p), kind: c.session ? 'session' : c.note ? 'note' : 'file' }])
-    const before = draft.slice(0, fileRefCtx.start)
-    setDraft(before + draft.slice(cursorPos))
-    requestAnimationFrame(() => {
-      const ta = taRef.current
-      if (ta) { ta.focus(); ta.selectionStart = ta.selectionEnd = before.length; setCursorPos(before.length) }
-      autoGrow()
-    })
+    insertInline({ token, name: c.session ? c.session.title : chipBaseName(c.p), kind: c.session ? 'session' : c.note ? 'note' : 'file', inline: true }, fileRefCtx.start, cursorPos)
   }
 
   /** 主区当前打开的那篇**笔记**。pageStore 门面在编辑器子树**之外**解析到「活动编辑器面板」那份,
@@ -1186,7 +1249,7 @@ export const Composer2: React.FC<{
     }
     // 仅 host 会话:引用是一条**本机绝对路径**,云端/沙箱会话的 agent 读不到 —— 挂上去就是
     // 「显示了路径但模型读不到」,与 [[ 候选、粘贴本机文件那两处的门控同一条理由。
-    if (!isHost || !autoRefFromMain || !mainRefKey) return null
+    if (!localFs || !autoRefFromMain || !mainRefKey) return null
     const notePath = mainRefKey === 'note'
       ? mainNote
       : mainRefKey.startsWith('note:') ? mainRefKey.slice('note:'.length) : ''
@@ -1196,12 +1259,46 @@ export const Composer2: React.FC<{
     if (!chip || autoRefOff === chip.token) return null
     if (refChips.some((c) => c.token === chip.token)) return null // 用户已显式引过同一个 → 不重复挂
     return chip
-  }, [appRef, isHost, autoRefFromMain, mainRefKey, mainNote, vaultRoot, autoRefOff, refChips])
-  const allRefChips = autoChip ? [autoChip, ...refChips] : refChips
+  }, [appRef, localFs, autoRefFromMain, mainRefKey, mainNote, vaultRoot, autoRefOff, refChips])
+  const rawRefChips = useMemo(() => (autoChip ? [autoChip, ...refChips] : refChips), [autoChip, refChips])
+  const runChips = useMemo(() => runChipOwners(refChips), [refChips])
+  const inlineRuns = useMemo(() => findRuns(draft, (run) => runChips.has(run)), [draft, runChips])
+  /** 「已选择」里显示、发送时算数的引用:从 `[[` 选进来的那些,句子里的那段删光了就不算(撤销 / 粘贴回来又算上)。 */
+  const allRefChips = useMemo(() => {
+    const inText = new Set(inlineRuns.map((r) => runChips.get(r.name)!.token))
+    return rawRefChips.filter((c) => !c.inline || inText.has(c.token))
+  }, [rawRefChips, inlineRuns, runChips])
+  /** 把草稿的 [start, end) 换成 piece,光标落在它后面。直接改文本框再把值交给 React(值相同它就不再动 DOM),
+   *  光标当场就位;等下一帧再摆光标的话,这一帧里敲的字会落到错的位置(台架连打时把 `[[` 拆散过)。 */
+  const spliceDraft = (start: number, end: number, piece: string): void => {
+    const ta = taRef.current
+    if (!ta) { setDraft(draft.slice(0, start) + piece + draft.slice(end)); return }
+    ta.focus()
+    ta.setRangeText(piece, start, end, 'end')
+    setDraft(ta.value)
+    setCursorPos(start + piece.length)
+    requestAnimationFrame(autoGrow)
+  }
+  /** 把一条引用写进草稿的 [start, end) 处(顺手挂进「已选择」),光标落在它后面。 */
+  const insertInline = (chip: RefChip, start: number, end: number, keepText = false): void => {
+    // 段名:这条引用以前写进过句子就沿用,否则挑一个没人占的(同名的另一条已经占了名字 → 接不可见字符区分)
+    const run = refChips.find((c) => c.token === chip.token)?.run || freeRunName(chip.name, (r) => runChips.has(r))
+    // 挑不出段名(名字是空的 / 同名的太多)→ 只进「已选择」,句子里不留东西:`[[` 那段触发词照删;
+    // keepText(Shift+点击)时 [start, end) 是用户自己选中的字,不能白白删掉
+    addRefChips([run ? { ...chip, run } : { token: chip.token, name: chip.name, kind: chip.kind, appRef: chip.appRef }])
+    if (run || !keepText) spliceDraft(start, end, run ? inlineRun(run) + ' ' : '')
+  }
+  /** 把一段行内引用整段删掉(退格 / Delete 挨着它时)。 */
+  const removeRun = (start: number, end: number): void => spliceDraft(start, end, '')
 
   /** override = 实时对话直接发的转写文本(不读也不清草稿)。返回这次发送的 promise(accepted);没发出去返回 undefined。 */
   const sendMessage = (override?: string): Promise<boolean> | undefined => {
-    const text = (override ?? draft).trim()
+    // 行内引用段先换成 token 再 trim:段两头的边界空格属于空白字符,先 trim 会把开头 / 结尾那一段拆坏。
+    // override(实时转写)不读草稿,草稿里的段不算。
+    const inlined = override == null
+      ? expandRuns(draft, (run) => { const chip = runChips.get(run); return chip && inlineTokenOf(chip, isHost ? execConfig.cwd : undefined) })
+      : null
+    const text = (override ?? inlined!.text).trim()
     // 斜杠命令只认键盘草稿:实时转写(override)一律当普通消息发,不执行本地命令(Codex 评审 09-17)
     const cmd = override == null ? text : ''
     const feedbackMatch = /^\/feedback(?:\s+([\s\S]*))?$/i.exec(cmd)
@@ -1315,7 +1412,9 @@ export const Composer2: React.FC<{
     }
     const quoted = composeQuotes(quotes)
     // 「已选择」芯片 → 正文最前面的一行引用 token。行内位置在芯片化之后不再存在,统一前置(= 上下文在前)。
-    const refs = allRefChips.length ? allRefChips.map((c) => c.token).join(' ') + '\n' : ''
+    // 句子里已经写了的引用不再进这一行(否则模型看到两遍、气泡也画两遍)。
+    const leadChips = allRefChips.filter((c) => !(c.run && inlined?.used.has(c.run)))
+    const refs = leadChips.length ? leadChips.map((c) => c.token).join(' ') + '\n' : ''
     const outgoing = composeOutgoing(refs, quoted, text)
     if (outgoing.length > MAX_INPUT_CHARS) {
       setHint(t('input.tooLong', { len: outgoing.length.toLocaleString(), max: MAX_INPUT_CHARS.toLocaleString() }))
@@ -1384,7 +1483,7 @@ export const Composer2: React.FC<{
   /** OS 文件落下:host 走本机路径芯片,其余上传成工作区附件。 */
   const onFilesDrop = (files: FileList): void => {
     if (!files.length) return
-    if (isHost && window.tangu?.getPathForFile) {
+    if (localFs && window.tangu?.getPathForFile) {
       const paths = Array.from(files)
         .map((f) => { try { return window.tangu!.getPathForFile!(f) } catch { return '' } })
         .filter(Boolean)
@@ -1427,7 +1526,7 @@ export const Composer2: React.FC<{
     const share = takeSeedShare?.()
     if (!share) return
     if (share.text) {
-      setDraft((d) => (d.trim() ? `${d.replace(/\s+$/, '')}\n\n${share.text}` : share.text))
+      setDraft((d) => (d.trim() ? `${trimDraftEnd(d)}\n\n${share.text}` : share.text))
       requestAnimationFrame(() => autoGrow())
     }
     if (share.files.length) {
@@ -1461,6 +1560,20 @@ export const Composer2: React.FC<{
     if (nextFiles.length) setWsFiles((prev) => [...prev, ...nextFiles])
     if (nextRefs.length) addRefChips(nextRefs)
   }
+
+  // 「引用刚才在用的窗口」(默认左右 ⌘ / Ctrl 同按,见 appRefCommand.ts):命令找到可见的那张输入卡,把引用送到这里挂进「已选择」。
+  useEffect(() => {
+    const card = cardRef.current
+    if (!card || !window.tangu?.appRefs) return
+    ensureAppRefCommand()
+    card.setAttribute(APPREF_TARGET_ATTR, '')
+    const onRef = (e: Event): void => {
+      addRefChips([appRefChipOf((e as CustomEvent<AppRef>).detail)])
+      requestAnimationFrame(() => taRef.current?.focus())
+    }
+    card.addEventListener(APPREF_EVENT, onRef)
+    return () => { card.removeEventListener(APPREF_EVENT, onRef); card.removeAttribute(APPREF_TARGET_ATTR) }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps -- addRefChips 的写入口是稳定的(useDraftField 按当前草稿键写)
 
   const addContentReference = (ref: AddContentReference): void => {
     addRefChips([ref.kind === 'view' ? viewChip(ref.type, ref.title) : refChipOf(ref, vaultRoot || '')])
@@ -1648,7 +1761,11 @@ export const Composer2: React.FC<{
                   key={c.token}
                   chip={c}
                   removeTitle={t('input.remove')}
+                  inlineTitle={t('input.ref.shiftInline')}
+                  onInline={canInline(c) ? () => { const ta = taRef.current; insertInline(c, ta?.selectionStart ?? draft.length, ta?.selectionEnd ?? draft.length, true) } : undefined}
                   onRemove={() => {
+                    // 句子里那几段还原成普通文字:话还在,只是不再是引用
+                    if (c.run) { const run = c.run; setDraft((d) => plainRuns(d, run)) }
                     // 自动那条不在 refChips 里,× 它 = 记下「这一篇先别挂」(换篇即复活)。
                     if (autoChip && c.token === autoChip.token) setAutoRefOff(c.token)
                     else setRefChips((prev) => prev.filter((x) => x.token !== c.token))
@@ -1694,7 +1811,7 @@ export const Composer2: React.FC<{
             </div>
           )}
           {((field: React.ReactNode) => phoneCard ? <div className="t2c-field">{field}{!voiceActive && submitKeys}</div> : field)(
-          <ChatBoxInput
+          <><ChatBoxInput
             autoSize={false}
             ref={taRef}
             className="t2c-ta"
@@ -1713,8 +1830,6 @@ export const Composer2: React.FC<{
               setMentionDismissed(false)
               setRefDismissed(false)
               if (histPos) setHistPos(0) // 用户实际打字 → 退出历史召回态
-              // 动手打字 = 不要这一轮的建议了。不看眼下有没有灰字:请求可能还在路上,不掐掉的话它回来后、用户把字删空时会冒出来。
-              if (sessionId && e.target.value) clearSuggestion(sessionId)
               if (!e.target.value.includes('@')) { setMentionedSlug(''); setMentionAgents([]) }
               autoGrow()
             }}
@@ -1734,7 +1849,7 @@ export const Composer2: React.FC<{
                   // 仅 host 会话才引用本机绝对路径(与 onDrop 一致);云端/沙箱会话模型读不到本机路径,
                   // 一律回退上传到会话工作区,避免「显示了路径但模型读不到、文件也没进工作区」。
                   let p = ''
-                  if (isHost) { try { p = window.tangu?.getPathForFile?.(f) || '' } catch { p = '' } }
+                  if (localFs) { try { p = window.tangu?.getPathForFile?.(f) || '' } catch { p = '' } }
                   if (p) paths.push(p)
                   else leftover.push(f) // 无路径(云端/网页/剪贴板非磁盘文件)→ 上传工作区
                 }
@@ -1747,10 +1862,23 @@ export const Composer2: React.FC<{
               if (leftover.length) { const dt = new DataTransfer(); leftover.forEach((f) => dt.items.add(f)); void pickWsFiles(dt.files) }
             }}
             onKeyDown={(e) => {
+              // 退格 / Delete 挨着一段行内引用:整段一起删(不然会剩下半截边界空格)
+              if ((e.key === 'Backspace' || e.key === 'Delete') && inlineRuns.length && !e.nativeEvent.isComposing && !e.metaKey && !e.ctrlKey && !e.altKey) {
+                const ta = e.currentTarget
+                const run = ta.selectionStart === ta.selectionEnd ? runTouching(inlineRuns, ta.selectionStart, e.key === 'Backspace' ? 'back' : 'fwd') : undefined
+                if (run) { e.preventDefault(); removeRun(run.start, run.end); return }
+              }
               if (refActive) {
-                if (e.key === 'ArrowDown') { e.preventDefault(); setRefIndex((i) => (i + 1) % refMatches.length); return }
-                if (e.key === 'ArrowUp') { e.preventDefault(); setRefIndex((i) => (i - 1 + refMatches.length) % refMatches.length); return }
-                if ((e.key === 'Enter' || e.key === 'Tab') && !e.nativeEvent.isComposing) { e.preventDefault(); pickRef(refMatches[Math.min(refIndex, refMatches.length - 1)]); return }
+                const count = refMatches.length
+                if (e.key === 'ArrowDown') { e.preventDefault(); if (count) setRefIndex((i) => (i + 1) % count); return }
+                if (e.key === 'ArrowUp') { e.preventDefault(); if (count) setRefIndex((i) => (i - 1 + count) % count); return }
+                // 左右键换分类:分类像是接在查询词后面的几个字(规则见 moveRefCat)。还在「全部」上、光标后面又有字
+                // (回到词中间改错字)时两个键都只移光标;没有分类条时照常移动光标。
+                const ta = e.currentTarget
+                const midWord = ta.selectionStart !== ta.selectionEnd || /\S/.test(ta.value[ta.selectionEnd] ?? '')
+                const nextCat = refCatNow === 'all' && midWord ? null : moveRefCat(refCatList, refCatNow, e.key)
+                if (nextCat && !e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey && !e.nativeEvent.isComposing && e.keyCode !== 229) { e.preventDefault(); setRefCat(nextCat); return }
+                if ((e.key === 'Enter' || e.key === 'Tab') && !e.nativeEvent.isComposing) { e.preventDefault(); if (count) pickRef(refMatches[Math.min(refIndex, count - 1)]); return }
                 if (e.key === 'Escape') { e.preventDefault(); setRefDismissed(true); return }
               }
               if (mentionActive) {
@@ -1770,7 +1898,6 @@ export const Composer2: React.FC<{
                 e.preventDefault()
                 const text = suggestion
                 setDraft(text)
-                if (sessionId) clearSuggestion(sessionId)
                 requestAnimationFrame(() => {
                   const ta = taRef.current
                   if (ta) { ta.selectionStart = ta.selectionEnd = text.length; setCursorPos(text.length) }
@@ -1807,7 +1934,8 @@ export const Composer2: React.FC<{
               }
               if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); send() }
             }}
-          />)}
+          />
+          <InlineRefMirror text={draft} runs={inlineRuns} chipOf={(run) => runChips.get(run)} /></>)}
           {slashOpen && (
             <div className="t2c-menu">
               {slashMatches.map((it, i) => (
@@ -1842,26 +1970,44 @@ export const Composer2: React.FC<{
             </div>
           )}
           {refActive && (
-            <div className="t2c-menu">
-              <div className="t2c-menu-sec">{t('input.fileref.note')}</div>
-              {refMatches.map((c, i) => (
-                <button
-                  key={c.session ? `s:${c.session.id}` : (c.note ? 'n:' : 'f:') + c.p}
-                  className="t2c-menu-item"
-                  data-active={i === Math.min(refIndex, refMatches.length - 1) || undefined}
-                  onMouseEnter={() => setRefIndex(i)}
-                  onClick={() => pickRef(c)}
-                >
-                  <span className="t2c-menu-cmd">
-                    {c.session
-                      ? `💬 ${c.session.title}`
-                      : c.note
-                      ? `${pageIcons[c.p] ? `${pageIcons[c.p]} ` : ''}${c.p.split('/').pop()!.replace(/\.md$/i, '')}`
-                      : c.p.split('/').pop()}
-                  </span>
-                  <span className="t2c-menu-desc">{c.session ? (c.session.summary || t('input.fileref.session')) : c.p}</span>
-                </button>
-              ))}
+            <div className="t2c-menu t2c-menu--refs">
+              {refCatList.length > 0 && (
+                <div className="t2c-cats cap-tabs" ref={refCapRef} role="tablist" aria-label={t('input.refcat.label')}>
+                  {refCatList.map((cat) => (
+                    <button key={cat} type="button" className="t2c-cat" role="tab" aria-selected={refCatNow === cat} data-cat={cat}
+                      tabIndex={-1} onMouseDown={(e) => e.preventDefault()} onClick={() => setRefCat(cat)}>
+                      {t(`input.refcat.${cat}`)}
+                    </button>
+                  ))}
+                </div>
+              )}
+              {!refCatList.length && <div className="t2c-menu-sec">{t(appList ? 'input.fileref.noteApps' : 'input.fileref.note')}</div>}
+              {/* key = 分类:换分类时列表重新挂载,走一次淡入 */}
+              <div className="t2c-menu-list" key={refCatNow}>
+                {refMatches.map((c, i) => (
+                  <button
+                    key={c.app ? `a:${c.app.kind}:${c.app.id}:${c.p}` : c.session ? `s:${c.session.id}` : (c.note ? 'n:' : 'f:') + c.p}
+                    className="t2c-menu-item"
+                    data-cat={catOf(c)}
+                    data-active={i === Math.min(refIndex, refMatches.length - 1) || undefined}
+                    onMouseEnter={() => setRefIndex(i)}
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => pickRef(c)}
+                  >
+                    <span className="t2c-menu-cmd">
+                      {c.app
+                        ? <><AppRefIcon id={c.app.id} className="t2c-menu-ico" />{c.p}</>
+                        : c.session
+                        ? `💬 ${c.session.title}`
+                        : c.note
+                        ? `${pageIcons[c.p] ? `${pageIcons[c.p]} ` : ''}${c.p.split('/').pop()!.replace(/\.md$/i, '')}`
+                        : c.p.split('/').pop()}
+                    </span>
+                    <span className="t2c-menu-desc">{c.app ? c.desc : c.session ? (c.session.summary || t('input.fileref.session')) : c.p}</span>
+                  </button>
+                ))}
+                {!refMatches.length && <div className="t2c-menu-empty">{t('addMenu.noMatches')}</div>}
+              </div>
             </div>
           )}
 
@@ -1870,7 +2016,7 @@ export const Composer2: React.FC<{
               open={openMenu === 'add'}
               disabled={disabled}
               activeSessionId={activeSessionId}
-              canUsePathPicker={isHost}
+              canUsePathPicker={localFs}
               onOpenChange={(next) => setOpenMenu(next ? 'add' : null)}
               onNewSession={onNewSession}
               onAddAgent={!running && !isChat && !isEngine ? onAddAgent || (onGroupChange ? () => setGroupSetupOpen(true) : undefined) : undefined}

@@ -406,12 +406,30 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
             realtimeModel: r?.realtimeModel?.id ? { id: String(r.realtimeModel.id), name: String(r.realtimeModel.name || r.realtimeModel.id), apiModelId: r.realtimeModel.apiModelId ?? null } : null,
             translateModels: (Array.isArray(r?.translateModels) ? r.translateModels : []).filter((m: any) => m?.id)
               .map((m: any) => ({ id: String(m.id), name: String(m.name || m.id), provider: String(m.provider || 'forsion'), apiModelId: m.apiModelId ?? null })),
+            ttsModels: (Array.isArray(r?.ttsModels) ? r.ttsModels : []).filter((m: any) => m?.id)
+              .map((m: any) => ({ id: String(m.id), name: String(m.name || m.id), apiModelId: m.apiModelId ?? null })),
             reachable: true,
           };
         } catch {
           // 降级成空列表是为了不让 TUI 抛;reachable:false 让调用方知道「空 ≠ 没配」(401/断网也长这样)。
           return { models: [], defaultModelId: null, backgroundModelId: null, imageModelId: null, visionModelId: null, reachable: false };
         }
+      },
+    },
+    // 朗读走云端(POST /api/brain/tts):key 住云端、按字符计费;回的是音频字节,Content-Type 照上游。
+    tts: {
+      synthesize: async (req) => {
+        const r = await fetch(`${base}/api/brain/tts`, {
+          method: 'POST',
+          headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+          body: JSON.stringify({ modelId: req.model, text: req.text, voice: req.voice, speed: req.speed, format: req.format, projectSource: 'tangu' }),
+          signal: req.signal ? AbortSignal.any([req.signal, AbortSignal.timeout(90_000)]) : AbortSignal.timeout(90_000),
+        });
+        if (!r.ok) {
+          const j: any = await r.json().catch(() => ({}));
+          throw new LlmError(r.status, `cloud tts ${r.status}: ${String(j?.detail || '').slice(0, 200)}`);
+        }
+        return { audio: new Uint8Array(await r.arrayBuffer()), mime: r.headers.get('content-type') || 'audio/mpeg' };
       },
     },
     // 实时语音通话走云端中转(ws /api/brain/realtime):key 住云端、按通话时长计费;帧协议与直连百炼相同,连接与转发仍归 services/realtimeVoice。

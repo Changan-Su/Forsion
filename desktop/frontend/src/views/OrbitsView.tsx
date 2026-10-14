@@ -43,7 +43,7 @@ import { runLocationsAvailable } from '../features/runtime'
 import { DeviceSessionSections, attentionBadge } from './chat2/DeviceSessionSections' // P1-K7a
 import { isOrbitPinned, readOrbitPins, toggleOrbitPin, touchOrbitPin, writeOrbitPins, type OrbitPinTimes } from './chat2/orbitPins'
 import './chat2/orbits.css'
-import { homeTarget } from '../services/engine/targets'
+import { homeTarget, useRemoteCapability } from '../services/engine/targets'
 
 registerMessages({
   'orbits.filter.label': { zh: '筛选列表', en: 'Filter list' },
@@ -99,6 +99,7 @@ function anchorOf(e: React.MouseEvent | React.KeyboardEvent): MenuAt {
 /** sideFilter(工作区 view 左栏胶囊):与 SessionsView 逐字同义 —— cloud=只看云端、local=只看本地、
  *  undefined=不过滤。Agent 轨道是 host-only,cloud 侧整块不列。 */
 export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = {}) {
+  useRemoteCapability((c) => c.epoch) // 桌面:中转口到位 / 换号后 runLocationsAvailable() 才变,订阅它好重渲染「我的电脑」分组
   const { t, locale } = useI18n()
   // 手机的整屏列表(两级导航的列表层):一颗悬浮主按钮 + 分类胶囊 + 按时间排的两行列表,搜索在原生顶栏上。
   const phone = useListFirst()
@@ -535,7 +536,7 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
           rowIcon={teamIcon}
           onOpenWorkspace={(wsKey) => openSpecial('workspace', wsKey)}
           workspaces={filter === 'all' || filter === 'project' ? workspaces : []}
-          onNewInWorkspace={(ws) => void s.createInWorkspace(ws)}
+          onNewInWorkspace={(ws) => void s.createInWorkspace(ws, { here: true })}
           onAddWorkspace={() => void s.addLocalWorkspace()}
           onRenameWorkspace={(ws, name) => void s.renameWorkspace(ws, name)}
           onRemoveWorkspace={(ws, o) => void s.removeWorkspace(ws, o)}
