@@ -200,3 +200,10 @@ they are not immutable historical snapshots or cross-device data replicas.
 `ctx.registerCodeBlockRenderer?.({id, language, mount(el, block)})` registers a native v4 code-block preview and returns an unregister function. `block` contains `source`, `language`, `pagePath`, `readOnly` and `signal`. Render into the supplied element, return cleanup (or a Promise of cleanup), and stop asynchronous work when the signal aborts. Unregister/disable aborts every mount; cleanup returned after cancellation still runs. Keep source edits in native commands: the host retains the fence, source toggle, selection, undo and save. Unregistered languages use ordinary native code blocks. Failed mounts show the original source. Built-in `forsion-*` and `mermaid` languages are reserved. Older hosts do not expose this optional API.
 
 `ctx.registerCodeBlockRenderer?.({id, language, mount(el, block)})` 注册原生 v4 代码块预览并返回注销函数。`block` 包含源码 `source`、语言 `language`、笔记路径 `pagePath`、只读标志 `readOnly` 和取消信号 `signal`。在提供的 DOM 中渲染并返回清理函数（可异步）；信号取消时停止异步工作。注销／禁用会取消全部挂载，取消后才返回的清理函数仍会执行。源码修改走原生命令，围栏、源码切换、选区、撤销和保存由宿主持有。注销后恢复普通代码块，挂载失败时展示原始源码。内置 `forsion-*` 和 `mermaid` 语言保留给宿主；旧宿主没有此可选接口。
+
+
+### Render Markdown HTML / 渲染 Markdown HTML
+
+`ctx.ui?.renderMarkdown?.(markdown)` synchronously returns inert HTML using Amadeus's publishing renderer. It does not mount an editor or write a note. The caller owns the destination, stylesheet and lifecycle; resolve relative note links and resources in the caller's context. Raw HTML is omitted. This is published Markdown, not the full interactive editor or Obsidian rendering pipeline. Calls through a disabled plugin context throw. Feature-detect on older hosts.
+
+`ctx.ui?.renderMarkdown?.(markdown)` 同步返回 Amadeus 发布渲染器生成的惰性 HTML，不挂载编辑器、不修改笔记。调用者负责目标容器、样式及生命周期，在自己的上下文中解析相对笔记链接和资源。原始 HTML 会被忽略；这不是完整交互编辑器或 Obsidian 渲染管线。禁用后的上下文调用会抛错，旧宿主需检测可选接口。

@@ -1,4 +1,5 @@
 import moment from "moment";
+import { iconApi } from './icons.js';
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import {
   TFile,
@@ -19,6 +20,13 @@ export function viewEvent(node, callback, event) {
 export function domHelpers() {
   window.activeDocument = document;
   window.activeWindow = window;
+  // Amadeus has no legacy CodeMirror 5 instances or registered modes. Expose
+  // the empty registry for cleanup; attempts to use that engine fail explicitly.
+  window.CodeMirror ||= {
+    modes: Object.create(null),
+    defineMode() { throw Error('Legacy CodeMirror 5 modes are not supported by Amadeus'); },
+    getMode() { throw Error('Legacy CodeMirror 5 modes are not supported by Amadeus'); },
+  };
   const methods = {
     detach() {
       this.remove();
@@ -63,7 +71,7 @@ export function domHelpers() {
     },
     createFragment(cb) {
       const f = document.createDocumentFragment();
-      cb(f);
+      cb?.(f);
       this.append(f);
       return f;
     },
@@ -72,8 +80,24 @@ export function domHelpers() {
       return this;
     },
     setText(value) {
-      this.textContent = String(value);
+      if (value instanceof Node) this.replaceChildren(value);
+      else this.textContent = String(value);
       return this;
+    },
+    getText() { return this.textContent || ''; },
+    instanceOf(type) {
+      if (this instanceof type) return true;
+      const localType = this.ownerDocument?.defaultView?.[type.name];
+      return typeof localType === 'function' && this instanceof localType;
+    },
+    setChildrenInPlace(children) {
+      const wanted = new Set(children);
+      for (const child of [...this.childNodes]) if (!wanted.has(child)) child.remove();
+      let next = this.firstChild;
+      for (const child of children) {
+        if (child !== next) this.insertBefore(child, next);
+        next = child.nextSibling;
+      }
     },
     appendText(value) {
       this.appendChild(document.createTextNode(value));
@@ -82,7 +106,7 @@ export function domHelpers() {
     createEl(tag, options = {}, callback) {
       const el = document.createElement(tag);
       if (typeof options === "string") options = { cls: options };
-      if (options.text != null) el.textContent = options.text;
+      if (options.text != null) el.setText(options.text);
       if (options.cls)
         el.className = Array.isArray(options.cls)
           ? options.cls.join(" ")
@@ -129,6 +153,11 @@ export function domHelpers() {
       const holder = document.createDocumentFragment();
       return tag ? holder.createEl(tag, type, o) : holder.createEl(type, o, cb);
     };
+  window.createFragment = callback => {
+    const fragment = document.createDocumentFragment();
+    callback?.(fragment);
+    return fragment;
+  };
   if (!String.prototype.contains)
     String.prototype.contains = String.prototype.includes;
   if (!String.prototype.format)
@@ -611,6 +640,16 @@ export function apiFor(runtime, entry) {
   class MarkdownRenderChild extends Component {
     constructor(containerEl) { super(); this.containerEl = containerEl; }
   }
+  class MarkdownRenderer extends MarkdownRenderChild {
+    static render(app, markdown, el, sourcePath, component) {
+      alive();
+      if (!runtime.rendering) return Promise.reject(Error('Native Markdown rendering is unavailable'));
+      return runtime.rendering.render(entry, markdown, el, sourcePath, component, app);
+    }
+    static renderMarkdown(markdown, el, sourcePath, component) {
+      return this.render(entry.instance?.app, markdown, el, sourcePath, component);
+    }
+  }
   class ItemView extends Component {
     constructor(leaf) {
       super();
@@ -670,10 +709,7 @@ export function apiFor(runtime, entry) {
     own(f.cancel);
     return f;
   };
-  const icon = (el, id) => {
-    el.dataset.icon = id;
-    el.setAttribute("aria-label", id);
-  };
+  const icons = iconApi(own, alive, runtime.iconNodes || {});
   class Notice {
     constructor(text) {
       alive();
@@ -700,6 +736,11 @@ export function apiFor(runtime, entry) {
     FuzzySuggestModal,
     ItemView,
     MarkdownRenderChild,
+    MarkdownRenderer,
+    MarkdownPreviewRenderer: {
+      unregisterPostProcessor: processor => runtime.rendering?.unregister(entry, epoch, processor),
+      unregisterCodeBlockPostProcessor: language => runtime.rendering?.unregister(entry, epoch, language),
+    },
     EditorSuggest,
     AbstractInputSuggest,
     ButtonComponent: class extends Control {
@@ -723,8 +764,7 @@ export function apiFor(runtime, entry) {
       }
     },
     debounce,
-    addIcon: () => {},
-    setIcon: icon,
+    ...icons,
     getLanguage: () => runtime.host.locale || "en",
     getLinkpath: (link) => String(link).split("#")[0],
     parseFrontMatterAliases: (fm) =>
@@ -792,6 +832,7 @@ export function apiFor(runtime, entry) {
     "FuzzySuggestModal",
     "ItemView",
     "MarkdownRenderChild",
+    "MarkdownRenderer",
     "EditorSuggest",
     "AbstractInputSuggest",
   ]) {

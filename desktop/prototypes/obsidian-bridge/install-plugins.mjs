@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 const root = dirname(fileURLToPath(import.meta.url));
 const target = resolve(process.argv[2] || join(root, "plugin"));
 const pinned = [
+  { repo: 'ebullient/obsidian-admonition', version: '12.0.10', id: 'obsidian-admonition', css: true },
   { repo: 'phibr0/obsidian-charts', version: '3.9.0', id: 'obsidian-charts', css: true },
   { repo: 'platers/obsidian-linter', version: '1.34.1', id: 'obsidian-linter', css: true },
   { repo: 'tgrosinger/advanced-tables-obsidian', version: '0.23.2', id: 'table-editor-obsidian', css: true },

@@ -1,3 +1,4 @@
+import iconNodes from 'bridge-icon-nodes';
 import { createNativeRendering } from "./native-rendering.js";
 import { createNativeViews } from "./native-views.js";
 import { nativeHotkeys } from "./hotkeys.js";
@@ -210,6 +211,7 @@ export async function start(host) {
     },
   };
   const runtime = {
+    iconNodes,
     MarkdownView,
     host,
     assertCurrent,

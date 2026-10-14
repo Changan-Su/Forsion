@@ -80,6 +80,7 @@ async function startRuntime() {
     closeManager,
     onError:notifyError,
     registerNativeView:def => ctx.registerView(def),
+    renderMarkdown:ctx.ui?.renderMarkdown ? text => ctx.ui.renderMarkdown(text) : undefined,
     registerCodeBlockRenderer:ctx.registerCodeBlockRenderer ? def => ctx.registerCodeBlockRenderer(def) : undefined,
     openNativeView:(id,location) => { if (!dead) ctx.openView(id,{location}); },
     closeNativeView:id => ctx.closeView?.(id),

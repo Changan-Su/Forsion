@@ -256,10 +256,25 @@ export function createNativeApp(host, runtime) {
     getFirstLinkpathDest: (link, source) => {
       link = String(link).split("#")[0];
       if (!link) return files.get(source) || null;
+      const resolve = path => {
+        const parts = [];
+        for (const part of path.split('/')) {
+          if (!part || part === '.') continue;
+          if (part === '..') { if (!parts.length) return null; parts.pop(); }
+          else parts.push(part);
+        }
+        return parts.join('/');
+      };
+      const parent = String(source || '').split('/').slice(0, -1).join('/');
+      const relative = resolve(link.startsWith('/') ? link : `${parent}/${link}`);
+      const rootPath = resolve(link);
+      for (const path of [relative, rootPath]) {
+        if (path == null) continue;
+        const file = files.get(path) || files.get(path + '.md');
+        if (file instanceof TFile) return file;
+      }
       return (
-        files.get(link) ||
-        files.get(link + ".md") ||
-        vault.getMarkdownFiles().find((f) => f.basename === link) ||
+        (!link.includes('/') && vault.getMarkdownFiles().find((f) => f.basename === link.replace(/\.md$/i, ''))) ||
         null
       );
     },
@@ -295,6 +310,7 @@ export function createNativeApp(host, runtime) {
     onLayoutReady: (fn) => {
       runtime.defer(fn);
     },
+    iterateCodeMirrors: () => {}, // There are no legacy CodeMirror 5 editors in Amadeus.
     detachLeavesOfType: type => runtime.views?.detachLeavesOfType(type),
     revealLeaf: leaf => runtime.views?.revealLeaf(leaf),
     getRightLeaf: () => runtime.views?.getLeaf("right"),

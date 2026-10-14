@@ -6,6 +6,9 @@ let validation = {};
 try { validation = JSON.parse(await readFile(new URL('validation.json', art), 'utf8')); } catch {}
 const esc = value => String(value ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;');
 const shots = [
+ ['19-native-admonition', '原版 Admonition 与原生 Markdown / Original Admonition and native Markdown'],
+ ['20-native-admonition-dark', '暗色 Admonition / Admonition in dark mode'],
+ ['21-native-admonition-narrow', '窄窗 Admonition / Admonition in a narrow window'],
  ['16-native-charts', '原版 Charts 与原生代码块 / Original Charts in a native code block'],
  ['14-native-toolbar', '原版工具栏与原生表格 / Original toolbar and native table'],
  ['17-native-charts-dark', '暗色原生图表 / Native chart in dark mode'],
@@ -20,8 +23,8 @@ const html = `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name
 <style>body{margin:0;background:#f5f4f1;color:#242c29;font:15px/1.7 system-ui}main{max-width:1180px;margin:auto;padding:42px 24px}h1{font-size:36px;line-height:1.2}h2{margin-top:36px;font-size:23px}small,.muted{color:#606b64}a{color:#285e45}table{border-collapse:collapse;width:100%}td,th{padding:12px 9px;text-align:left;vertical-align:top;border-bottom:1px solid #d4d9d2}td p{margin:0 0 7px}th{font-weight:500}pre{white-space:pre-wrap;overflow-wrap:anywhere;padding:16px;background:#e7eae4}code{overflow-wrap:anywhere}.status{font-weight:600}.partial{color:#765b20}.unsupported,.fail{color:#923f35}.ok{color:#2d6746}figure{margin:20px 0}img{width:100%;border:1px solid #d4d9d2}figcaption{padding:8px 0}button{font:inherit;border:1px solid #bac8bc;border-radius:6px;padding:7px 12px;background:transparent;margin:0 8px 8px 0;cursor:pointer}button[aria-pressed=true]{background:#285e45;color:#fff}.table-wrap{overflow-x:auto}.stats{font-size:24px;padding:15px 0;border-block:1px solid #d4d9d2}@media(max-width:650px){main{padding:24px 14px}h1{font-size:28px}td{min-width:150px}}</style>
 <main><small>FORSION DESKTOP · WORKTREE PROTOTYPE ${esc(matrix.version)}</small>
 <h1>Obsidian 插件接入原生工作流<br><small>Obsidian plugins in native workflows</small></h1>
-<p>公共原生代码块渲染使用未经修改的 Charts 3.9.0 验证图表像素、原生源码编辑与撤销、源码切换和启停。本轮补齐明暗主题的标准 css-change 事件，原位浅色 → 深色 → 浅色验证通过。原包仍安装在 Bridge 自身的插件文件夹内。</p>
-<p>Public native code-block rendering is exercised by unchanged Charts 3.9.0 with painted pixels, native source editing/undo, source toggle and plugin lifecycle. This iteration adds standard css-change events for native theme changes, verified through light → dark → light in place. Original assets remain inside Bridge's own plugin folder.</p>
+<p>本轮新增 MarkdownRenderer 公共适配，复用 Amadeus 渲染器。未经修改的 Admonition 12.0.10 在原生笔记中显示富文本标题、正文、表格和图标；折叠/展开、内部链接、源码切换与启停均验证。原包仍安装在 Bridge 自身插件文件夹内。</p>
+<p>This iteration maps MarkdownRenderer to Amadeus rendering. Unmodified Admonition 12.0.10 renders rich titles, bodies, tables and icons inside native notes; folding, internal links, source toggling and plugin lifecycle are verified. Original assets remain inside Bridge's plugin folder.</p>
 <p class="stats">${results.filter(r => r.ok).length} / ${results.length} Electron checks · ${results.filter(r => !r.ok).length} failed</p>
 <p>当前完整 Goal 尚未完成。自定义视图完整生命周期、Markdown 渲染和编辑器扩展仍待补齐；源码验收不代表发布。</p>
 <p>The full Goal remains unfinished. Full custom-view lifecycle, Markdown rendering and editor extensions remain incomplete. Source acceptance is not a release.</p>

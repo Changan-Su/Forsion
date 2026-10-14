@@ -1,7 +1,7 @@
 import { build } from "esbuild";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile, writeFile, readdir } from "node:fs/promises";
 const root = dirname(fileURLToPath(import.meta.url));
 const result = await build({
   entryPoints: [join(root, "src/runtime.js")],
@@ -16,6 +16,25 @@ const result = await build({
   metafile: true,
   footer: { js: ";window.ForsionObsidianBridge = ForsionObsidianBridge;" },
   plugins: [
+    {
+      name: 'bridge-icon-nodes',
+      setup(b) {
+        b.onResolve({filter: /^bridge-icon-nodes$/}, () => ({path:'icons',namespace:'bridge-icons'}));
+        b.onLoad({filter: /.*/,namespace:'bridge-icons'}, async () => {
+          const dir = resolve(dirname(fileURLToPath(import.meta.resolve('lucide-react'))), '../esm/icons');
+          const files = (await readdir(dir)).filter(f => f.endsWith('.mjs')).sort();
+          const imports = [], entries = [];
+          for (const file of files) {
+            // Alias-only modules have no own icon geometry.
+            if (!(await readFile(join(dir,file),'utf8')).includes('const __iconNode =')) continue;
+            const name = `icon${imports.length}`;
+            imports.push(`import {__iconNode as ${name}} from ${JSON.stringify(join(dir,file))};`);
+            entries.push(`${JSON.stringify(file.slice(0,-4))}:${name}`);
+          }
+          return {contents: imports.join('\n') + `\nexport default {${entries.join(',')}}`,loader:'js',resolveDir:dir};
+        });
+      },
+    },
     {
       name: "inline-css",
       setup(b) {

@@ -78,13 +78,13 @@ Evidence: `prototypes/obsidian-bridge/check-native-views.mjs; prototypes/obsidia
 
 ## Markdown 渲染扩展 / Markdown rendering extensions — partial
 
-代码块处理器和 MarkdownRenderChild 接入原生 v4；原版 Charts 3.9.0 绘制图表，原生源码编辑与撤销、源码切换、禁用回退和重新启用均保留 Markdown。 明暗主题切换同步标准 css-change 事件，原包原位重绘。
+代码块处理器和 MarkdownRenderChild 接入原生 v4；原版 Charts 3.9.0 绘制图表，原生源码编辑与撤销、源码切换、禁用回退和重新启用均保留 Markdown。 明暗主题切换同步标准 css-change 事件，原包原位重绘。 MarkdownRenderer 复用 Amadeus 渲染器；原版 Admonition 12.0.10 的标题、正文、表格、图标、折叠与链接接入原生笔记。
 
-Code-block processors and MarkdownRenderChild in native v4; original Charts 3.9.0 paints charts, with native source edits/undo, source toggle, disable fallback and re-enable preserving Markdown. Native light/dark changes dispatch standard css-change events and redraw existing original charts.
+Code-block processors and MarkdownRenderChild in native v4; original Charts 3.9.0 paints charts, with native source edits/undo, source toggle, disable fallback and re-enable preserving Markdown. Native light/dark changes dispatch standard css-change events and redraw existing original charts. MarkdownRenderer reuses Amadeus rendering; original Admonition 12.0.10 renders titles, bodies, tables, icons, folding and links in native notes.
 
-**待补 / Remaining:** 普通 Markdown 后处理器、MarkdownRenderer、准确段落偏移、关联表格数据及任意样式表变更事件仍待补；未宣称所有图表配置均兼容。 General Markdown postprocessors, MarkdownRenderer, exact section offsets, linked table data and arbitrary stylesheet-change events remain incomplete; not all chart configurations are claimed compatible.
+**待补 / Remaining:** 普通 Markdown 后处理器、准确段落偏移、关联表格数据及任意样式表变更事件仍待补；未宣称所有图表配置均兼容。 MarkdownRenderer 的 wiki 链接、附件、嵌套代码处理器和可交互任务框仍未支持。 General Markdown postprocessors, exact section offsets, linked table data and arbitrary stylesheet-change events remain incomplete; not all chart configurations are claimed compatible. MarkdownRenderer wiki links, attachments, nested code processors and interactive task boxes remain unsupported.
 
-Evidence: `frontend/src/amadeus/plugins/codeBlockRenderers.test.ts; prototypes/obsidian-bridge/check-native-rendering.mjs; scripts/obsidian-native.e2e.cjs`
+Evidence: `frontend/src/amadeus/plugins/codeBlockRenderers.test.ts; prototypes/obsidian-bridge/check-native-rendering.mjs; scripts/obsidian-native.e2e.cjs; prototypes/obsidian-bridge/check-theme.mjs; prototypes/obsidian-bridge/check-admonition.mjs; frontend/src/amadeus/plugins/markdownRenderCtx.test.ts`
 
 ## 编辑器扩展与建议 / Editor extensions and suggestions — unsupported
 

@@ -1,3 +1,4 @@
+import { renderPublicMarkdown, escapeHtml } from '@amadeus-shared/publishing/publicMarkdown'
 import { registerCodeBlockRenderer } from './codeBlockRenderers'
 import { activeMainPanel, useWorkspace } from '@lcl/engine/workspaceStore'
 import { captureUnifiedEditor, hasUnifiedInstance, unifiedPatchFm } from '../unified/lifecycle'
@@ -1418,6 +1419,12 @@ export const usePluginStore = create<PluginState>((set, get) => {
     // 通用宿主 UI 原语。Floating TOC 是非接管式挂载:插件继续拥有正文 DOM,宿主只在 shell 上叠一层。
     // 与 table/dashboard 一样动态 import 破环;形态错误同步抛,让插件能当场走自己的降级 UI。
     ...(typeof document !== 'undefined' ? { ui: {
+      renderMarkdown: (markdown) => {
+        if (!ctxAlive()) throw new Error('Plugin disabled')
+        if (typeof markdown !== 'string') throw new TypeError('renderMarkdown needs a Markdown string')
+        const result = renderPublicMarkdown(markdown, { locale: currentLocale() })
+        return (result.title ? `<h1>${escapeHtml(result.title)}</h1>` : '') + result.html
+      },
       mountMarkdownEditor: (el, opts) => {
         const pending = { ...opts }
         let mounted: import('../../../../shared/markdownEditor').PluginMarkdownEditorHandle | null = null

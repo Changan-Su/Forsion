@@ -1207,6 +1207,10 @@ export interface PluginContext {
    *  `mountFloatingToc` is the exception: it overlays `shell` without taking it over, so it neither retires nor
    *  is retired by other mounts on the same element. Don't select host nodes with `el > …`. */
   ui?: {
+    /** Render caller-owned Markdown with Amadeus's published-document renderer.
+     * Returns inert HTML, without editing a note or mounting a second editor.
+     * Relative links remain relative; the caller owns navigation and resource resolution. */
+    renderMarkdown?(markdown: string): string
     /** Native Amadeus editor for Markdown owned by the caller (API drafts, etc.). No active-vault access.
      *  By default a row of buttons switches between the visual editor, Markdown source and the published preview;
      *  `modes: false` draws no row and keeps the visual editor only (an editor inside your own card or cell).

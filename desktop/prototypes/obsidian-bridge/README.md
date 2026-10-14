@@ -1,8 +1,8 @@
 # Obsidian Bridge — Desktop 原型 / Desktop prototype
 
-0.6 将六个原始 Obsidian 插件的编辑命令接到当前 **Amadeus 原生可视编辑器**，并增加第七个原包 Charts 的代码块渲染。正文、选区、撤销和磁盘保存由原生编辑器持有；Bridge 管理面板只负责原包和设置。
+0.7 将六个原始 Obsidian 插件的编辑命令接到当前 **Amadeus 原生可视编辑器**，并提供 Charts 图表和 Admonition 富文本代码块渲染。正文、选区、撤销和磁盘保存由原生编辑器持有；Bridge 管理面板只负责原包和设置。
 
-Version 0.6 runs six original Obsidian editing plugins against the active **native Amadeus visual editor**, plus native code-block rendering from the seventh original package, Charts.
+Version 0.7 runs six original Obsidian editing plugins against the active **native Amadeus visual editor**, plus Charts and Admonition native code-block rendering.
 Amadeus owns the document, selection, undo and save pipeline. Bridge manages packages and settings.
 
 选中笔记正文，点击左下角 **命令面板 (⌘K)** 按钮，搜索 `Obsidian`，选择插件命令。
@@ -56,7 +56,7 @@ npm run preview:obsidiannative
 ```
 
 `install-plugins.mjs [bridge-plugin-folder]` defaults to this prototype's `plugin/` folder. It downloads only
-seven pinned releases; reinstallation refuses modified existing assets. Runtime scans the real `plugins/`
+eight pinned releases; reinstallation refuses modified existing assets. Runtime scans the real `plugins/`
 subfolder on opening or pressing Rescan. Open **Community plugins / 社区插件商店** to search the official
 [Obsidian community catalog](https://github.com/obsidianmd/obsidian-releases). The Desktop host downloads
 stable GitHub release assets into Bridge's `plugins/<id>/`, validates identity/version, records SHA-256,
@@ -86,6 +86,7 @@ can override the isolated home, evidence folder, and the separate Electron ident
 | Advanced Tables | [0.23.2](https://github.com/tgrosinger/advanced-tables-obsidian/releases/tag/0.23.2) | insert a native table column, preserve each cell |
 | Note Refactor | [1.8.2](https://github.com/lynchjames/note-refactor-obsidian/releases/tag/1.8.2) | extract selected text to a new vault note, replace with a link |
 | Charts | [3.9.0](https://github.com/phibr0/obsidian-charts/releases/tag/3.9.0) | actual chart pixels in native fenced blocks, source editing/undo, source switching and plugin lifecycle |
+| Admonition | [12.0.10](https://github.com/ebullient/obsidian-admonition/releases/tag/12.0.10) | native rich title/body/table, icons, folding, internal links and source/plugin lifecycle |
 
 “加载成功”不等于所有命令已兼容；只把验收脚本里实际完成的动作列为已验证。
 Successfully loading a package does not certify every command. Only actions exercised by the acceptance
@@ -238,9 +239,9 @@ The focused read-only Codex review reproduced four defects, repaired with regres
 
 The public `ctx.registerCodeBlockRenderer` integrates with native Amadeus v4 embeds. Obsidian code-block processors and render children use that contract; rendered output and source belong to the same native note. The seventh unchanged package, [Charts 3.9.0](https://github.com/phibr0/obsidian-charts/releases/tag/3.9.0), exercises YAML chart rendering and source/disable transitions. The installer records original release URLs and SHA-256 receipts.
 
-Rendering is partial: generic Markdown postprocessors, MarkdownRenderer, exact section offsets, linked-table charts and arbitrary stylesheet events remain Goal work. Code-block processor callbacks do not borrow whichever native editor happens to be active. Native source, undo and save remain owned by the host. Async render children are cancelled and cleaned up on removal/disable; errors preserve access to source. Tests assert actual chart pixels rather than merely canvas existence.
+Rendering is partial: generic Markdown postprocessors, exact section offsets, linked-table charts and arbitrary stylesheet events remain Goal work. Code-block processor callbacks do not borrow whichever native editor happens to be active. Native source, undo and save remain owned by the host. Async render children are cancelled and cleaned up on removal/disable; errors preserve access to source. Tests assert actual chart pixels rather than merely canvas existence.
 
-渲染仍是部分兼容：通用后处理、MarkdownRenderer、准确段落偏移、关联表格图表和任意样式表事件继续在 Goal 范围内。处理器不会借用碰巧活动的其他笔记编辑器；源码、撤销与保存由宿主持有。移除／禁用时取消并清理异步渲染子组件，错误时保留源码入口。测试检查真实绘制像素，不把 canvas 存在当作成功。
+渲染仍是部分兼容：通用后处理、准确段落偏移、关联表格图表和任意样式表事件继续在 Goal 范围内。处理器不会借用碰巧活动的其他笔记编辑器；源码、撤销与保存由宿主持有。移除／禁用时取消并清理异步渲染子组件，错误时保留源码入口。测试检查真实绘制像素，不把 canvas 存在当作成功。
 
 异步渲染和渲染子组件共享挂载的取消信号：卸载后未完成的加载不会占用命令队列，迟到的子组件立即清理；事件 `off(name, callback)` 保留原回调身份。
 
@@ -259,3 +260,20 @@ Original Charts is verified through light → dark → light: its canvas is recr
 启动过程中发生的主题变化会在原包加载完成后补发；主题回调创建的定时器和布局就绪任务保留无编辑事务上下文。渲染子组件自行调用 `onload()` 的异步重载，也受挂载生命周期约束，卸载后完成时清理资源和监听。
 
 Theme changes during startup are delivered after package loading. Timers and layout-ready work created by theme callbacks retain the no-editor context. Async render-child reloads that call `onload()` directly remain bound to their mount and clean up resources and listeners if they finish after unmount.
+
+
+## MarkdownRenderer 与原包 Admonition / MarkdownRenderer and original Admonition (0.7)
+
+第八个原包 [Admonition 12.0.10](https://github.com/ebullient/obsidian-admonition/releases/tag/12.0.10) 的 `ad-note` 在 Amadeus 中渲染标题、正文、表格及 Lucide 图标；折叠/展开、内部 Markdown 链接、原生源码切换及禁用/重启用经过真实 Electron 验证。
+
+The eighth original package, Admonition 12.0.10, renders `ad-note` titles, bodies, tables and Lucide icons in Amadeus. Real Electron coverage includes folding/expanding, internal Markdown links, native source toggling and disable/re-enable.
+
+公共 `ctx.ui.renderMarkdown` 返回 Amadeus 发布渲染器的同步 HTML；Bridge 映射标准 MarkdownRenderer 的 Promise 接口，组件卸载会取消待定工作并清理输出/链接监听。Lucide 图形由现有依赖构建，第三方许可证随包；自定义图标按插件代际清理。原包始终未修改。
+
+The public `ctx.ui.renderMarkdown` returns synchronous HTML from Amadeus's publishing renderer. Bridge maps the standard Promise-based MarkdownRenderer contract; component unload cancels pending work and removes output/link listeners. Lucide geometry is built from the existing dependency with its license; custom icons are owned by plugin generations. Original assets remain unchanged.
+
+范围仍有限：普通 Markdown 后处理器、wiki 链接、附件解析、嵌套代码处理器、任务框写回、输入建议和 CM5/CM6 扩展仍未接通。CM5 仅暴露空模式表供卸载检查，注册/获取模式明确报错；Amadeus 没有 CM5 编辑器实例。Admonition 自定义图标包、snippet 和全部设置尚未验证。
+
+Remaining: general Markdown postprocessors, wiki links, attachments, nested code processors, task write-back, input suggestions and CM5/CM6 extensions. CM5 exposes only an empty registry for teardown checks and rejects mode registration/access; Amadeus has no CM5 editor instances. Admonition custom icon packs, snippets and all settings are not verified.
+
+Checks: `node prototypes/obsidian-bridge/check-admonition.mjs`, `npm run check:obsidianexpanded`, `node scripts/obsidian-native.e2e.cjs`.
