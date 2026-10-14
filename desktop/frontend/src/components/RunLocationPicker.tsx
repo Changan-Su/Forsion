@@ -37,7 +37,7 @@ registerMessages({
   'runloc.pillTitle': { zh: '新会话在哪运行：{where}', en: 'New sessions run on: {where}' },
   'runloc.others': { zh: '我的其他电脑', en: 'My other computers' },
   'runloc.none': { zh: '这个账号下还没有其他电脑。在另一台电脑上登录同一个账号后，它会出现在这里', en: 'No other computers on this account yet. Sign in on another computer with the same account and it shows up here' },
-  'runloc.signIn': { zh: '登录 Forsion 以选择其他电脑', en: 'Sign in to Forsion to pick another computer' },
+  'runloc.signIn': { zh: '登录后可选择其他电脑', en: 'Sign in to see them' }, // 一行放得下:菜单只有 --menu-select-width 宽,长了会折出一个孤字
   'runloc.manage': { zh: '管理设备…', en: 'Manage devices…' },
   'runloc.confirmPending': { zh: '请在「{name}」上点「允许」', en: 'Click Allow on "{name}"' },
   'runloc.confirmNotAsked': { zh: '「{name}」还没有允许这台电脑，再点一次会去询问', en: '"{name}" hasn\'t allowed this computer yet. Click it again to ask' },
