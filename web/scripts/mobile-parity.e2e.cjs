@@ -82,7 +82,7 @@ async function main() {
       }
       const sheet = () => page.locator('[data-browser-mobile-sheet]')
       const closeSheet = () => page.locator('.bmc-sheet-head > button').last().click()
-      const item = (id) => page.locator(`[data-sheet-item="${id}"] > button.bmc-sheet-row`)
+      const item = (id) => page.locator(`button.bmc-sheet-row[data-sheet-item="${id}"]`)
       await check('touch viewport automatically installs mobile dock', async () => {
         // Product default remains Tangu; explicitly visit Home for the home screenshot below.
         assert.equal(await page.locator('.mb-shell').getAttribute('data-space'), 'tangu')

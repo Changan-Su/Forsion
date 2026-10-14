@@ -74,7 +74,9 @@ function SheetDialog({ request }: { request: Pending }) {
   const sections = page?.sections.map((section) => ({ ...section, items: section.items.filter((item) => !query || `${item.label} ${item.detail ?? ''}`.toLocaleLowerCase().includes(query.toLocaleLowerCase())) }))
   const title = page?.title ?? payload.title
 
-  return <dialog ref={dialog} className="bmc-sheet-dialog" aria-label={title ?? t('common.close')} onCancel={(e) => { e.preventDefault(); back() }} onClick={(e) => { if (e.target === e.currentTarget) close() }}>
+  // Native sheets live in a separate window. Keep DOM-sheet presses from the source view's outside-click
+  // listeners too: clearing its menu would abort the request before the selected callback can run.
+  return <dialog ref={dialog} className="bmc-sheet-dialog" aria-label={title ?? t('common.close')} onCancel={(e) => { e.preventDefault(); back() }} onPointerDown={(e) => e.stopPropagation()} onMouseDown={(e) => e.stopPropagation()} onClick={(e) => { e.stopPropagation(); if (e.target === e.currentTarget) close() }}>
     <section className="bmc-sheet" data-browser-mobile-sheet={payload.kind}>
       <div className="mb-sheet-grip" />
       <header className="bmc-sheet-head">
