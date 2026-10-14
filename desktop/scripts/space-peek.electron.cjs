@@ -155,6 +155,28 @@ async function main() {
       const after2 = await mainTabs(win)
       check('X4b 拖一个已经开着的会话进标签栏:是把那个标签挪过去,不再开一份',
         !drag2.err && after2.length === after.length && /Probe session three/.test(after2[0]), `${JSON.stringify(drag2)} / ${JSON.stringify(after2)}`)
+      // 聊天区本来就是引用的落区(拖进来 = 插引用):它先接,引擎不能再开一个标签
+      const chat = await win.evaluate(async () => {
+        const nap = (ms) => new Promise((r) => setTimeout(r, ms))
+        const src = [...document.querySelectorAll('.rb-peek .t2s-srow, .rb-peek .t2o-row')].find((r) => r.textContent?.includes('Probe session two'))
+        const view = [...document.querySelectorAll('.t2-chat-view')].find((v) => v.getBoundingClientRect().width > 0)
+        if (!src || !view) return { err: `src ${!!src} / chat ${!!view}` }
+        const r = view.getBoundingClientRect(), x = r.left + r.width * 0.75, y = r.top + r.height * 0.4, dataTransfer = new DataTransfer()
+        src.dispatchEvent(new DragEvent('dragstart', { bubbles: true, cancelable: true, dataTransfer }))
+        await nap(50)
+        const el = document.elementFromPoint(x, y)
+        el.dispatchEvent(new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer, clientX: x, clientY: y }))
+        await nap(50)
+        const hint = [...document.querySelectorAll('.wb-drop-line, .wb-drop-zone')].some((e) => getComputedStyle(e).display !== 'none')
+        const refdrop = !!document.querySelector('.t2-chat-view.refdrop')
+        el.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer, clientX: x, clientY: y }))
+        if (src.isConnected) src.dispatchEvent(new DragEvent('dragend', { bubbles: true, dataTransfer }))
+        return { hint, refdrop, on: el.className }
+      })
+      await sleep(1000)
+      const after3 = await mainTabs(win)
+      check('X5 把会话拖到聊天区:归聊天(插引用),不开标签、不画落点提示',
+        !chat.err && !chat.hint && chat.refdrop && after3.length === after2.length, `${JSON.stringify(chat)} / ${JSON.stringify(after3)}`)
       if (shots) await captureWindow(app, path.join(shots, `${n++}-amadeus-opened-beside.png`))
     } else check('X0 进得了笔记 Space(跨 Space 那段的前提)', false)
 
