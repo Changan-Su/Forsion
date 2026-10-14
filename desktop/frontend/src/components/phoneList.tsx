@@ -7,6 +7,7 @@
  */
 import { useEffect, useRef, useState, type ReactNode, type RefObject } from 'react'
 import { Search } from 'lucide-react'
+import { SPRING_ROW, reducedMotion, springEasing } from '@lcl/engine'
 import { registerMessages, translate, useI18n } from '../i18n'
 import './phoneList.css'
 
@@ -82,37 +83,143 @@ export function ListFab({ label, icon, onClick, onMenu }: { label: string; icon:
  *  成对的动作(置顶 / 取消置顶、收藏 / 取消收藏)各用各的图标。 */
 export interface SwipeAction { id: string; label: string; icon: ReactNode; tone?: 'accent' | 'danger'; run(): void }
 
+/** 每一行的控制器(挂在 .pl-swipe 上;手指落在别处时要能从外面收回它)。 */
+const swipes = new WeakMap<HTMLElement, { close(): void; justDragged(): boolean }>()
+
 /** 手指落在别处时把开着的那一行收回。挂在列表滚动器的 onTouchStart 上(一处,不是每行一个监听)。 */
 export function closeOtherSwipes(e: { target: EventTarget | null }): void {
   const keep = (e.target as Element | null)?.closest?.('.pl-swipe')
-  for (const el of document.querySelectorAll<HTMLElement>('.pl-swipe')) if (el !== keep && el.scrollLeft > 0) el.scrollTo({ left: 0, behavior: 'smooth' })
+  for (const el of document.querySelectorAll<HTMLElement>('.pl-swipe[data-open]')) if (el !== keep) swipes.get(el)?.close()
 }
 
-/** 左滑露出操作。拖动、方向锁、惯性、吸附都是浏览器自己的横向滚动(scroll-snap),这里只管「点一下收回」。
- *  `actions` 为空就只渲染行本体。 */
+/** 左滑露出操作。`actions` 为空就只渲染行本体。
+ *  拖动跟手(横向位移,touch-action: pan-y 把纵向留给列表滚动),松手按手指的速度接一条带一点回弹的弹簧(spring.ts)——
+ *  2026-10-14 之前是浏览器的横向滚动 + scroll-snap:吸附那一下是 Chromium 固定的缓动,不管手指多快,用户说「线性、
+ *  没有原生那种灵动感」。点别处 / 点行本体收回走同一条弹簧。 */
 export function SwipeRow({ actions, children }: { actions: SwipeAction[]; children: ReactNode }) {
   const ref = useRef<HTMLDivElement>(null)
-  if (!actions.length) return <>{children}</>
-  const close = (): void => ref.current?.scrollTo({ left: 0, behavior: 'smooth' })
+  const any = actions.length > 0
+  useEffect(() => (any && ref.current ? wireSwipe(ref.current) : undefined), [any])
+  if (!any) return <>{children}</>
+  const close = (): void => { if (ref.current) swipes.get(ref.current)?.close() }
   return (
     <div
       className="pl-swipe" ref={ref}
-      // 开着时点行本体 = 收回,不打开条目(capture:抢在行自己的 onClick 之前)
+      // 开着时点行本体 = 收回,不打开条目;刚拖完松手的那一下也不算点(capture:抢在行自己的 onClick 之前)
       onClickCapture={(e) => {
-        if ((ref.current?.scrollLeft ?? 0) < 4 || (e.target as Element).closest('.pl-swipe-acts')) return
+        const el = ref.current
+        if (!el) return
+        // a click right after a drag (a mouse on the phone sends one) is the drag's end: swallow it, leave the tray as the release put it
+        if (swipes.get(el)?.justDragged()) { e.preventDefault(); e.stopPropagation(); return }
+        if ((e.target as Element).closest('.pl-swipe-acts') || !el.hasAttribute('data-open')) return
         e.preventDefault(); e.stopPropagation(); close()
       }}
     >
-      {children}
-      <div className="pl-swipe-acts">
-        {actions.map((a) => (
-          <button key={a.id} type="button" className={`pl-swipe-act${a.tone ? ` ${a.tone}` : ''}`} data-act={a.id} aria-label={a.label} title={a.label} onClick={(e) => { e.stopPropagation(); close(); a.run() }}>
-            {a.icon}
-          </button>
-        ))}
+      <div className="pl-swipe-track">
+        {children}
+        <div className="pl-swipe-acts">
+          {actions.map((a) => (
+            <button key={a.id} type="button" className={`pl-swipe-act${a.tone ? ` ${a.tone}` : ''}`} data-act={a.id} aria-label={a.label} title={a.label} onClick={(e) => { e.stopPropagation(); close(); a.run() }}>
+              {a.icon}
+            </button>
+          ))}
+        </div>
       </div>
     </div>
   )
+}
+
+/** 一行的手势。位移以行自己的 CSS px 记(列表在 .mb-drawer-body 里还放大一档,指针的视口坐标要除以这一档)。 */
+function wireSwipe(el: HTMLElement): () => void {
+  const track = el.firstElementChild as HTMLElement
+  const acts = track.lastElementChild as HTMLElement
+  let x = 0 // ≤ 0;-acts 宽 = 全开
+  let dragEnd = 0
+  type Grip = { id: number; x0: number; y0: number; from: number; k: number; w: number; on: boolean | null; trail: Array<[number, number]> }
+  let g: Grip | null = null
+  const put = (v: number): void => { x = v; track.style.transform = v ? `translateX(${v.toFixed(2)}px)` : '' }
+  /** 正在弹的那一下停在哪(接住它,而不是跳回它的终点)。 */
+  const now = (): number => {
+    const m = getComputedStyle(track).transform
+    return m && m !== 'none' ? new DOMMatrixReadOnly(m).m41 : 0
+  }
+  /** 去 `to`,初速 `v`(行内 px / ms)。 */
+  const settle = (to: number, v: number): void => {
+    el.toggleAttribute('data-open', to !== 0)
+    const span = to - x
+    const s = Math.abs(span) < 0.5 ? null : springEasing((v * 1000) / span, SPRING_ROW)
+    track.style.transition = s ? `transform ${s.ms}ms ${s.easing}` : Math.abs(span) < 0.5 || reducedMotion() ? '' : 'transform 0.3s cubic-bezier(0.2, 0.9, 0.3, 1)'
+    put(to)
+  }
+  const ours = (): boolean => el.matches('.mb-shell[data-list-first] .pl-swipe')
+  const down = (e: PointerEvent): void => {
+    if (g || !e.isPrimary || e.button > 0 || !ours()) return
+    const at = track.style.transition ? now() : x
+    track.style.transition = ''
+    put(at)
+    g = { id: e.pointerId, x0: e.clientX, y0: e.clientY, from: at, k: 1, w: 0, on: null, trail: [[e.timeStamp, at]] }
+  }
+  const move = (e: PointerEvent): void => {
+    if (!g || e.pointerId !== g.id) return
+    if (g.on === null) {
+      const dx = e.clientX - g.x0
+      const dy = e.clientY - g.y0
+      if (Math.hypot(dx, dy) < 8) return
+      // 纵向 = 列表的(浏览器接着就会发 pointercancel);合着的行往右拉 = 不是我们的
+      g.on = Math.abs(dx) > Math.abs(dy) && !(g.from === 0 && dx > 0)
+      if (!g.on) { if (g.from !== 0) settle(0, 0); g = null; return } // 开着的那行,列表一滚就收回(同原生列表)
+      // 认下这一下才量(不在每次按下时量:点一行进会话不该多一次布局读取)
+      g.k = el.getBoundingClientRect().width / el.offsetWidth || 1
+      g.w = acts.offsetWidth
+      try { el.setPointerCapture(e.pointerId) } catch { /* 指针已经没了 */ }
+      el.setAttribute('data-dragging', '')
+      closeOtherSwipes({ target: el })
+    }
+    let v = g.from + (e.clientX - g.x0) / g.k
+    // 拉过头有阻力:全开之外每多拉 1px 只走 0.3px,合着时往右也一样
+    if (v < -g.w) v = -g.w + (v + g.w) * 0.3
+    else if (v > 0) v *= 0.3
+    put(v)
+    g.trail.push([e.timeStamp, v])
+    while (g.trail.length > 2 && e.timeStamp - g.trail[0][0] > 100) g.trail.shift()
+  }
+  const up = (e: PointerEvent): void => {
+    if (!g || e.pointerId !== g.id) return
+    const was = g
+    g = null
+    if (!was.on) {
+      // a touch that never became a drag: it may have caught a spring halfway (down froze it) — let it finish; one the
+      // browser took for the list's scroll closes the row (as a scroll does)
+      if (x !== 0 || el.hasAttribute('data-open')) {
+        const to = e.type === 'pointercancel' || !el.hasAttribute('data-open') ? 0 : -acts.offsetWidth
+        if (Math.abs(x - to) > 0.5) settle(to, 0)
+      }
+      return
+    }
+    el.removeAttribute('data-dragging')
+    dragEnd = performance.now()
+    const [t1, x1] = was.trail[was.trail.length - 1]
+    const [t0, x0] = was.trail[0]
+    // 停住再抬手不算甩
+    const v = e.type === 'pointercancel' || e.timeStamp - t1 > 80 || t1 <= t0 ? 0 : (x1 - x0) / (t1 - t0)
+    const open = v < -0.3 ? true : v > 0.3 ? false : x < -was.w / 2
+    settle(open ? -was.w : 0, v)
+  }
+  el.addEventListener('pointerdown', down)
+  el.addEventListener('pointermove', move)
+  el.addEventListener('pointerup', up)
+  el.addEventListener('pointercancel', up)
+  swipes.set(el, {
+    close: () => { if (!g && (x !== 0 || el.hasAttribute('data-open'))) { x = track.style.transition ? now() : x; settle(0, 0) } },
+    justDragged: () => performance.now() - dragEnd < 300,
+  })
+  return () => {
+    el.removeEventListener('pointerdown', down)
+    el.removeEventListener('pointermove', move)
+    el.removeEventListener('pointerup', up)
+    el.removeEventListener('pointercancel', up)
+    swipes.delete(el)
+  }
 }
 
 const PULL = 84 // 手指走过这么多(视口 px)算拉到位

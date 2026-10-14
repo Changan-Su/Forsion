@@ -1,16 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { HOME_CARDS_MAX, shownHomeCards, toggleHomeCard } from './homeCards'
-
-describe('toggleHomeCard', () => {
-  it('adds at the end, removes in place, keeps the last card and stops at the cap', () => {
-    expect(toggleHomeCard(['a', 'b'], 'c')).toEqual(['a', 'b', 'c'])
-    expect(toggleHomeCard(['a', 'b', 'c'], 'b')).toEqual(['a', 'c'])
-    expect(toggleHomeCard(['a'], 'a')).toEqual(['a'])
-    const full = Array.from({ length: HOME_CARDS_MAX }, (_, i) => `s${i}`)
-    expect(toggleHomeCard(full, 'x')).toEqual(full)
-    expect(toggleHomeCard(full, 's0')).toEqual(full.slice(1))
-  })
-})
+import { shownHomeCards } from './homeCards'
 
 describe('shownHomeCards', () => {
   const all = [{ id: 'a' }, { id: 'b' }, { id: 'c' }]

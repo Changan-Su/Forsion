@@ -321,13 +321,14 @@ function gfx() {
       await ensureList()
     }
     if (step('row-swipe')) {
-      // a left swipe on a list row (its actions slide in): the row scrolls sideways on the compositor, so anything the
-      // main thread does meanwhile, and every layer the list keeps, is what it can stutter on
+      // a left swipe on a list row (its actions slide in): the finger moves the row's track from the main thread
+      // (pointermove → transform; since 2026-10-14, before that it was a compositor scroll) and the release is a
+      // CSS transition, so a long task during the drag is what it can stutter on
       await ensureList()
       const p = await elPoint(row(3))
       const t0 = await trace('row-swipe', async () => { gfxReset(); h.adb('shell', 'input', 'swipe', String(W.right - 90), String(p.y), String(W.left + 260), String(p.y), '320') }, 1600)
       nativeFrames(t0)
-      console.log(`  row open: scrollLeft ${await cdp.eval(`${row(3)}.closest('.pl-swipe')?.scrollLeft`)}`)
+      console.log(`  row open: ${await cdp.eval(`(() => { const t = ${row(3)}.closest('.pl-swipe'); const m = t && getComputedStyle(t.firstElementChild).transform; return t ? (t.hasAttribute('data-open') ? 'open ' : 'closed ') + m : 'no tray' })()`)}`)
       h.tapAt(W.left + 200, p.y); await h.pause(700)
     }
     if (step('model-key')) {

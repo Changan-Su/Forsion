@@ -29,19 +29,14 @@ export function dockSpaceIds(ids: readonly string[], picks: readonly string[] | 
   return new Set([ids[0], ...chosen.slice(0, DOCK_PICKS)])
 }
 
-/** Put a Space in the bar or take it out. Returns false when the bar is full (nothing changed). */
-export function toggleDockPick(ids: readonly string[], id: string): boolean {
-  if (id === ids[0] || !ids.includes(id)) return false
+/** Store which Spaces stand in the bar (what the picks sheet answered; Home and unknown ids drop out, the first
+ *  DOCK_PICKS in list order count). The same set as now stores nothing: a dock never chosen stays never chosen. */
+export function setDockPicks(ids: readonly string[], picks: readonly string[]): void {
   const shown = dockSpaceIds(ids)
-  // from here on the choice is explicit: what stands in the bar now becomes the stored list
-  const current = ids.slice(1).filter((x) => shown.has(x))
-  let next: string[]
-  if (current.includes(id)) next = current.filter((x) => x !== id)
-  else if (current.length >= DOCK_PICKS) return false
-  else next = [...current, id]
-  try { localStorage.setItem(KEY, JSON.stringify(next)) } catch { return false }
+  const next = ids.slice(1).filter((x) => picks.includes(x)).slice(0, DOCK_PICKS)
+  if (next.length === shown.size - 1 && next.every((x) => shown.has(x))) return
+  try { localStorage.setItem(KEY, JSON.stringify(next)) } catch { return }
   subscribers.forEach((fn) => fn())
-  return true
 }
 
 export function subscribeDockPicks(fn: () => void): () => void {

@@ -31,17 +31,19 @@
   font-size: var(--ui-font-caption, 11px); font-weight: 600; color: var(--text-faint, var(--text-muted));
 }
 
-/* ── 左滑一行出操作:横向滚动 + 吸附。露出来的是一排只有图标的圆钮(用户 2026-10-10:不带文字;名字在读屏标签上,
- *    首次提示按顺序说过一遍)。圆钮与行首那块 44dp 的图标块同高,底色同一档淡灰;最靠右那颗带一层主题色 / 警示色的淡底,
- *    不用实心色块 —— 和选中的分类胶囊是同一种说法。 ── */
-.mb-shell[data-list-first] .pl-swipe {
-  display: flex; overflow-x: auto; overflow-y: hidden;
-  scroll-snap-type: x mandatory; scrollbar-width: none; overscroll-behavior-x: contain;
-}
-.mb-shell[data-list-first] .pl-swipe > :first-child { flex: 0 0 100%; min-width: 0; scroll-snap-align: start; }
+/* ── 左滑一行出操作:行本体和后面那排钮在同一条横轨(.pl-swipe-track)上,手指拖的是轨的 translateX(phoneList.tsx 的
+ *    wireSwipe),松手按手指速度接弹簧。touch-action: pan-y = 纵向仍是列表自己的滚动,横向的交给这一行。
+ *    (2026-10-14 前是横向滚动 + scroll-snap:吸附那一下是浏览器固定的缓动,用户说「线性、没有原生那种灵动感」。)
+ *    露出来的是一排只有图标的圆钮(用户 2026-10-10:不带文字;名字在读屏标签上,首次提示按顺序说过一遍)。圆钮与行首
+ *    那块 44dp 的图标块同高,底色同一档淡灰;最靠右那颗带一层主题色 / 警示色的淡底,不用实心色块 —— 和选中的分类胶囊
+ *    是同一种说法。 ── */
+.mb-shell[data-list-first] .pl-swipe { overflow: hidden; overflow: clip; touch-action: pan-y; }
+.mb-shell[data-list-first] .pl-swipe-track { display: flex; }
+.mb-shell[data-list-first] .pl-swipe[data-dragging] > .pl-swipe-track { will-change: transform; }
+.mb-shell[data-list-first] .pl-swipe-track > :first-child { flex: 0 0 100%; min-width: 0; }
 .mb-shell[data-list-first] .pl-swipe-acts {
   display: flex; flex: 0 0 auto; align-items: center; gap: calc(10 * var(--pl-dp));
-  padding: 0 calc(16 * var(--pl-dp)) 0 calc(4 * var(--pl-dp)); scroll-snap-align: end;
+  padding: 0 calc(16 * var(--pl-dp)) 0 calc(4 * var(--pl-dp));
 }
 .mb-shell[data-list-first] .pl-swipe-act {
   display: grid; place-items: center; flex: 0 0 auto; padding: 0;
@@ -54,7 +56,7 @@
 .mb-shell[data-list-first] .pl-swipe-act.danger { background: color-mix(in srgb, var(--danger) 14%, transparent); color: var(--danger); }
 .mb-shell[data-list-first] .pl-swipe-act:active { transform: scale(0.92); }
 /* ⚠️ 圆钮不做「跟着手指一颗颗长出来」的滚动驱动动画(animation-timeline: view(inline);2026-10-10 加,10-13 去掉):
- * 它们本来就在横向滚动的内容里,行一滑就露出来。加了那层动画,滑第一下要多一次合成提交(降速 4 倍 30ms,正压在起手),
+ * 它们本来就在横轨上,行一滑就露出来。加了那层动画,滑第一下要多一次合成提交(降速 4 倍 30ms,正压在起手),
  * 滑的全程主线程都在更新图层(一次左滑 524 次,去掉后 28 次)—— 用户实报「滑出置顶 / 重命名 / 归档的时候卡顿」。
  * 量法:mobile `MODE=trace STEPS=row-swipe npm run emu:perf`。 */
 

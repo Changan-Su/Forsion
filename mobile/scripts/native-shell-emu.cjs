@@ -376,6 +376,8 @@ const ui = () => h.nodes(OUT)
 // ACTIVITY_CLASS=MainActivity runs this harness against a build from before that (≤ 2.13.x), for comparisons.
 const ACTIVITY_CLASS = process.env.ACTIVITY_CLASS || 'AppActivity'
 const ACTIVITY = `${PKG}/com.forsion.tangu.${ACTIVITY_CLASS}`
+/** From here on, count the native sheets presented (every plugin call goes through Capacitor.nativePromise). */
+const presentCounter = `(() => { const C = window.Capacitor; if (!C.__countsPresents) { C.__countsPresents = true; const np = C.nativePromise.bind(C); C.nativePromise = (p, m, o) => { if (p === 'NativeSheet' && m === 'present') C.__presents = (C.__presents || 0) + 1; return np(p, m, o) } } C.__presents = 0; return true })()`
 const resumed = () => h.adb('shell', 'dumpsys', 'activity', 'activities').split('\n').some((l) => l.includes('topResumedActivity=') && l.includes(` ${PKG}/`))
 const webViewNode = (list) => list.find((n) => n.class === 'android.webkit.WebView')
 const sheetOpen = (list) => !!h.byId(list, 'nativeSheet.sheet')
@@ -1483,19 +1485,21 @@ const tabCountText = (list) => {
       await tapId('nativeSheet.item.dock:edit', await openAllSpaces())
       sheet = await waitSheet(true)
       assert.equal(textOf(sheet, 'nativeSheet.title'), '固定在 Dock')
+      await cdp.eval(presentCounter) // the picks sheet is up: from here on every present is one too many
       const pick = (l, id) => h.byId(l, `nativeSheet.item.pick:${id}`)
       assert.ok(!pick(sheet, 'home'), 'Home is offered as something to take out')
       assert.deepEqual(ids.slice(1).filter((id) => isOn(pick(sheet, id))), ids.slice(1, 4), 'the picks shown are not the dock\'s Spaces')
       assert.equal(pick(sheet, 'agents')?.enabled, 'false', 'a full dock still offers a fourth Space')
       assert.match(sheet.map((n) => n.text).join(' '), /最多固定 3 个/, 'the sheet does not say how many fit')
       shot('03g-dock-picks')
-      h.tapNode(pick(sheet, ids[3])) // out — the sheet comes back with the new state
+      h.tapNode(pick(sheet, ids[3])) // out — the tick goes in place and a cell is free
       let again = await h.waitNodes((l) => (h.byId(l, 'nativeSheet.item.pick:agents')?.enabled === 'true' && !isOn(h.byId(l, `nativeSheet.item.pick:${ids[3]}`)) ? l : null), { timeout: 12000 })
       assert.ok(again.hit, `taking "${ids[3]}" out did not free a cell`)
       h.tapNode(pick(again.hit, 'agents')) // in
       again = await h.waitNodes((l) => (isOn(h.byId(l, 'nativeSheet.item.pick:agents')) ? l : null), { timeout: 12000 })
-      assert.ok(again.hit, 'Agents was not put in the dock')
-      await tapId('nativeSheet.item.dock:done', again.hit)
+      assert.ok(again.hit, 'Agents was not ticked')
+      assert.equal(await cdp.eval('window.Capacitor.__presents'), 0, 'the picks sheet was presented again while ticking (it drops and slides back in on every tick)')
+      await tapId(h.byId(again.hit, 'nativeSheet.done') ? 'nativeSheet.done' : 'nativeSheet.item.dock:done', again.hit)
       await waitSheet(false)
       const now = await h.waitNodes((l) => (h.byId(l, 'nativeChrome.space.agents') ? l : null), { timeout: 8000 })
       assert.ok(now.hit, 'the dock did not take the new Space')
@@ -2062,12 +2066,24 @@ const tabCountText = (list) => {
     await tanguDrawer()
     const row = rowExpr('E2E Session One')
     const tray = `${row}.closest('.pl-swipe')`
-    const open = `(${tray}?.scrollLeft || 0) > 40`
+    // the row rides a track that the finger moves (2026-10-14; it was a horizontal scroller with snap until then)
+    const offset = `(() => { const m = getComputedStyle(${tray}.firstElementChild).transform; return m === 'none' ? 0 : Math.round(new DOMMatrixReadOnly(m).m41) })()`
+    const open = `${tray}?.hasAttribute('data-open') && ${offset} < -40`
     const act = (id) => `${tray}.querySelector('[data-act="${id}"]')`
     assert.ok(await cdp.eval(`!!${tray}`), 'the session row has no swipe tray')
     for (const step of ['pin', 'unpin']) {
+      // evidence, not a verdict: the row's offset every frame through the swipe and its release (the page's own clock)
+      await cdp.eval(`(window.__rowTrace = [], (function f() { window.__rowTrace.push([Math.round(performance.now()), ${offset}]); if (window.__rowTrace.length < 150) requestAnimationFrame(f) })(), true)`)
       await swipeEl(row, -150)
-      assert.ok(await h.waitPage(cdp, open, 3000), `a left swipe did not show the tray (scrollLeft ${await cdp.eval(`${tray}.scrollLeft`)})`)
+      assert.ok(await h.waitPage(cdp, open, 3000), `a left swipe did not show the tray (offset ${await cdp.eval(offset)})`)
+      if (step === 'pin') {
+        await h.pause(700)
+        const tr = JSON.parse(await cdp.eval('JSON.stringify(window.__rowTrace)'))
+        const moving = tr.filter(([, x], i) => i === 0 || x !== tr[i - 1][1])
+        console.log(`  TRACE row offset by frame (ms since the first sample → px): ${moving.map(([t, x]) => `${t - tr[0][0]}:${x}`).join(' ')}`)
+      }
+      // it got there on a spring (a sampled linear() easing), not on the browser's snap curve
+      assert.match(await cdp.eval(`getComputedStyle(${tray}.firstElementChild).transitionTimingFunction`), /^linear\(/, 'the row did not settle on a spring')
       assert.equal(await cdp.eval(nav), 'list', 'the swipe was taken as a tap')
       const got = await cdp.eval(`[...${tray}.querySelectorAll('.pl-swipe-act')].map((b) => b.dataset.act)`)
       assert.deepEqual(got, [step, 'rename', 'archive'], 'delete is only offered for archived sessions')
@@ -2149,8 +2165,10 @@ const tabCountText = (list) => {
 
   // Which cards Home shows is the user's (2026-10-13: "let me edit the Space cards on Home"): a long-press on any card
   // opens "Home cards" — every Space and the two fixed entries, checked = shown, in the order they were checked; kept
-  // on the device. Ends by clearing the choice and reloading, so what follows sees the default four again.
-  await check('phone Home: a long-press on a card opens "Home cards"; a checked Space joins as the last card, an unchecked entry leaves, the choice is stored', async () => {
+  // on the device. The sheet stays up while the user ticks (2026-10-14, "选一个闪一下": it used to answer each tick and be
+  // presented again, dropping and sliding back in) and the choice lands when it closes. Ends by clearing the choice and
+  // reloading, so what follows sees the default four again.
+  await check('phone Home: a long-press on a card opens "Home cards"; ticks flip in place with one sheet up throughout; on Done a checked Space joins as the last card, an unchecked entry leaves, the choice is stored', async () => {
     await goHome()
     await foldHomeComposer()
     const cardIds = () => cdp.eval(`[...document.querySelectorAll('.hp-root .hp-card')].map((c) => (c.dataset.spaceId ? 'space:' + c.dataset.spaceId : c.dataset.fixedId))`)
@@ -2158,8 +2176,9 @@ const tabCountText = (list) => {
     const before = await cardIds()
     assert.equal(before.length, 4, `control: Home starts with its four default cards (${before})`)
     try {
+      await cdp.eval(presentCounter)
       await holdEl(`document.querySelector('.hp-root .hp-card')`)
-      let sheet = (await h.waitNodes((l) => (h.byId(l, 'nativeSheet.item.cards:done') ? l : null), { timeout: 8000 })).hit
+      let sheet = (await h.waitNodes((l) => (h.byId(l, 'nativeSheet.done') || h.byId(l, 'nativeSheet.item.cards:done') ? l : null), { timeout: 8000 })).hit
       assert.ok(sheet, 'a long-press on a card opened no sheet')
       shot('03g-home-cards-sheet')
       const spare = sheet.map((n) => n['resource-id'] || '').filter((id) => id.startsWith('nativeSheet.item.card:space:')).map((id) => id.slice('nativeSheet.item.card:'.length)).find((id) => !before.includes(id))
@@ -2167,19 +2186,28 @@ const tabCountText = (list) => {
       assert.ok(before.every((id) => isOn(item(sheet, id))) && !isOn(item(sheet, spare)), `the check marks do not say what is on Home (${before.map((id) => `${id}=${isOn(item(sheet, id))}`)}, ${spare}=${isOn(item(sheet, spare))})`)
       h.tapNode(item(sheet, spare))
       sheet = (await h.waitNodes((l) => (isOn(item(l, spare)) ? l : null), { timeout: 12000 })).hit
-      assert.ok(sheet, 'the sheet did not come back with the Space checked')
-      assert.deepEqual(await cardIds(), [...before, spare], 'the checked Space did not join as the last card')
+      assert.ok(sheet, 'the tick on the Space did not show')
       h.tapNode(item(sheet, before[2]))
       sheet = (await h.waitNodes((l) => (item(l, before[2]) && !isOn(item(l, before[2])) && isOn(item(l, spare)) ? l : null), { timeout: 12000 })).hit
-      assert.ok(sheet, 'the sheet did not come back with the entry unchecked')
+      assert.ok(sheet, 'the entry did not come unticked')
+      // one sheet the whole time: ticking asked the native side for no second sheet
+      assert.equal(await cdp.eval('window.Capacitor.__presents'), 1, 'the sheet was presented again while ticking (it drops and slides back in on every tick)')
+      shot('03g-home-cards-ticked')
       const want = [before[0], before[1], before[3], spare]
-      assert.deepEqual(await cardIds(), want, 'the unchecked entry did not leave')
-      h.tapNode(h.byId(sheet, 'nativeSheet.item.cards:done'))
+      h.tapNode(h.byId(sheet, 'nativeSheet.done') || h.byId(sheet, 'nativeSheet.item.cards:done'))
       await h.pause(900)
       shot('03h-home-cards-edited')
+      assert.deepEqual(await cardIds(), want, 'on Done the cards are not the ticked ones in the order they were ticked')
       assert.equal(await cdp.eval(`localStorage.getItem('forsion_home_cards_v1')`), JSON.stringify(want), 'the choice was not stored')
-      // a tap still opens the card's Space (the long-press did not turn the cards into something else)
-      assert.deepEqual(await cardIds(), want, '"Done" changed the cards')
+      // closing by a swipe / back keeps the ticks too: take the Space out again and leave with back
+      await holdEl(`document.querySelector('.hp-root .hp-card')`)
+      sheet = (await h.waitNodes((l) => (isOn(item(l, spare)) ? l : null), { timeout: 8000 })).hit
+      assert.ok(sheet, 'the sheet did not come up again')
+      h.tapNode(item(sheet, spare))
+      assert.ok((await h.waitNodes((l) => (item(l, spare) && !isOn(item(l, spare)) ? l : null), { timeout: 8000 })).hit, 'the second tick did not show')
+      h.key(4)
+      assert.ok(await h.waitPage(cdp, `JSON.stringify([...document.querySelectorAll('.hp-root .hp-card')].map((c) => (c.dataset.spaceId ? 'space:' + c.dataset.spaceId : c.dataset.fixedId))) === ${JSON.stringify(JSON.stringify(want.slice(0, 3)))}`, 5000), `closing with back dropped the tick (${await cardIds()})`)
+      assert.ok(resumed(), 'back left the app instead of closing the sheet')
     } finally {
       await cdp.eval(`(localStorage.removeItem('forsion_home_cards_v1'), true)`)
       await reload()

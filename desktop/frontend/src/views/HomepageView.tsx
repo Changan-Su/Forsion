@@ -34,7 +34,7 @@ import {
   ArrowUp, Check, FolderMinus, FolderOpen, FolderPlus, Grid2X2, Image, LogOut,
   Mic, Pencil, RefreshCw, Upload, X,
 } from 'lucide-react'
-import { setActiveSpace, useSpaceStore, useRibbonStore, useWorkspace, label, moveTo, OverlayAt, useNativeChromeSpaces, useNativeSheetMenu, presentNativeMenu, getDetachApi, WINDOW_SPACE_ID, type SheetMenuItem } from '@lcl/engine'
+import { setActiveSpace, useSpaceStore, useRibbonStore, useWorkspace, label, moveTo, OverlayAt, useNativeChromeSpaces, useNativeSheetMenu, presentNativeChecklist, getDetachApi, WINDOW_SPACE_ID, type SheetMenuItem } from '@lcl/engine'
 import { CtxMenuButtons } from '../components/CtxMenuButtons'
 import { rankIds, reorderBase, unionOrder } from '@lcl/engine/ribbonRegistry'
 import type { SpaceDefinition, RibbonFolder, RibbonItem, ViewProps } from '@lcl/engine'
@@ -60,7 +60,7 @@ import {
   saveHomepageWallpaperPrefs, writeCustomWallpaper,
   type BingWallpaper, type HomepageThemePreset, type HomepageWallpaperPrefs, type HomepageWallpaperSource,
 } from './homepageWallpaper'
-import { HOME_CARDS_MAX, loadHomeCards, saveHomeCards, shownHomeCards, toggleHomeCard } from './homeCards'
+import { HOME_CARDS_MAX, loadHomeCards, saveHomeCards, shownHomeCards } from './homeCards'
 import './homepage.css'
 
 /** 本视图所在的 Space id(真源在 builtins/homepage.tsx);坞里要把它自己排掉 —— 但**排序时不能排**,见 dropOn。 */
@@ -529,30 +529,23 @@ function HomeCards({ tiles, actions, onLaunch }: { tiles: Tile[]; actions: Ribbo
   ]
   const cards = shownHomeCards(picked, all, [...top.slice(0, 2), ...all.filter((c) => !c.spaceId)])
 
-  /** 原生半屏里勾选,点一下生效一下。原生答复是一次性的,所以每点一下按新状态重弹(同 Dock 那张)。没有原生宿主就什么都不出。 */
+  /** 原生勾选清单:勾的时候半屏不动,关上时(完成 / 下滑 / 返回都算)一起生效;新勾的排在最后,至少留一张(没有卡片就没处长按)。
+   *  没有原生宿主就什么都不出。 */
   const edit = async (): Promise<void> => {
-    let ids = cards.map((c) => c.id)
-    for (;;) {
-      const full = ids.length >= HOME_CARDS_MAX
-      const out = await presentNativeMenu({
-        title: t('home.cards.editTitle'),
-        sections: [
-          {
-            items: all.map((c) => ({
-              id: `card:${c.id}`, label: c.name, icon: c.icon && 'imageUrl' in c.icon && c.icon.imageUrl ? c.icon.nativeFallback : c.icon,
-              ...(ids.includes(c.id) ? { checked: true } : full ? { disabled: true } : {}),
-            })),
-            footer: t('home.cards.editHint', { max: String(HOME_CARDS_MAX) }),
-          },
-          { items: [{ id: 'cards:done', label: t('home.cards.done'), icon: Check }] },
-        ],
-      })
-      const id = out.handled ? out.value?.id : undefined
-      if (!id?.startsWith('card:')) return
-      ids = toggleHomeCard(ids, id.slice('card:'.length))
-      if (!saveHomeCards(ids)) return
-      setPicked(ids)
-    }
+    const ids = cards.map((c) => c.id)
+    const out = await presentNativeChecklist({
+      title: t('home.cards.editTitle'),
+      items: all.map((c) => ({ id: `card:${c.id}`, label: c.name, icon: c.icon && 'imageUrl' in c.icon && c.icon.imageUrl ? c.icon.nativeFallback : c.icon })),
+      checked: ids.map((id) => `card:${id}`),
+      footer: t('home.cards.editHint', { max: String(HOME_CARDS_MAX) }),
+      done: t('home.cards.done'),
+      min: 1,
+      max: HOME_CARDS_MAX,
+    })
+    const next = out.handled ? out.value?.checked.map((id) => id.slice('card:'.length)) : undefined
+    // 原样关上 = 不记(没改过的人继续跟着缺省走)
+    if (!next?.length || next.join('\n') === ids.join('\n')) return
+    if (saveHomeCards(next)) setPicked(next)
   }
 
   return (

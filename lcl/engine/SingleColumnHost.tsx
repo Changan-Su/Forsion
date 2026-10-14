@@ -12,17 +12,18 @@
  */
 import { Suspense, createElement, startTransition, useEffect, useRef, useState, useSyncExternalStore, type ReactNode, type RefObject } from 'react'
 import { flushSync } from 'react-dom'
-import { PanelLeft, PanelRight, X, MoreHorizontal, Plus, Zap, SlidersHorizontal, Check } from 'lucide-react'
+import { PanelLeft, PanelRight, X, MoreHorizontal, Plus, Zap, SlidersHorizontal } from 'lucide-react'
 import { useSpaceStore, setActiveSpace, getActiveSpace, pinSpaceToHome, redirectOpenFromOnePage } from './spaceRegistry'
 import { useRibbonStore } from './ribbonRegistry'
 import { useCommandStore } from './commandRegistry'
 import { accountMenuItems, moreCommandGroups, moreCommandOn, moreCommandTitle, moreItems, moreRowLabel, presentedCommand } from './moreSheet'
 import { getView } from './viewRegistry'
 import { label, identitySig, type RibbonItem, type SpaceIcon } from './types'
-import { nativeSheetPresenter, presentNativeMenu, type NativeMenuItem } from './nativeSheet'
+import { nativeSheetPresenter, presentNativeChecklist, presentNativeMenu, type NativeMenuItem } from './nativeSheet'
 import type { SheetMenuItem } from './nativeSheetMenu'
 import { setNativeChromeShell, useNativeChromeInstalled, useNativeChromeSpaces, nativeChromeDrawsSpaces, nativeChromeExtras, subscribeNativeChromeExtras, type NativeChromeShellLabels, type NativeChromeSpace } from './nativeChrome'
-import { DOCK_PICKS, dockSpaceIds, subscribeDockPicks, toggleDockPick } from './spaceDock'
+import { DOCK_PICKS, dockSpaceIds, setDockPicks, subscribeDockPicks } from './spaceDock'
+import { SPRING_PAGE, springEasing } from './spring'
 import { ExtendViewHost } from './ExtendViewHost'
 import { presentInlineExtension } from './extendView'
 import { NativeExtendView } from './nativeExtendView'
@@ -333,6 +334,8 @@ function useDrawerDrag(
       /** 两级导航的整屏列表:主区平移自身整宽,且往回拖时不压暗(两页平级)。 */
       nav: boolean
       lastX: number; lastT: number; vx: number
+      /** 进度速度(每毫秒,+ = 朝「开」):系统返回的预览只报进度,松手时的弹簧从这里取初速。 */
+      vp: number
     }
     let d: Drag | null = null
     const clamp = (n: number): number => (n < 0 ? 0 : n > 1 ? 1 : n)
@@ -343,6 +346,33 @@ function useDrawerDrag(
       body.removeAttribute('data-drag')
       for (const el of painted) { el.style.transform = ''; el.style.opacity = '' }
       painted = []
+    }
+    /** 松手后接着走的那一段不用固定 0.34s 的曲线,用一条带着手指速度的弹簧(2026-10-14 用户:「都是线性动画,
+     *  要原生那种灵动感」—— 甩得快,它就接着快;慢慢放,它也不拖一条长尾)。做法:在三个元素上写一条内联 transition
+     *  (压过 data-drag 的 none 与样式表里的那条),下一帧摘内联位移时过渡就按它走;走完摘掉,之后的开合照旧走样式表。
+     *  `vp` = 松手时的进度速度(每毫秒,+ = 朝「开」)。不支持 linear() 的旧 WebView:沿用原曲线,时长按剩下的路程缩短。 */
+    let springing: HTMLElement[] = []
+    let springTimer = 0
+    const unspring = (): void => {
+      if (springTimer) { clearTimeout(springTimer); springTimer = 0 }
+      for (const el of springing) el.style.transition = ''
+      springing = []
+    }
+    const release = (dr: Drag, vp: number): void => {
+      unspring()
+      const ws = useWorkspace.getState()
+      const target = (dr.side === 'left' ? ws.leftVisible : ws.rightVisible) ? 1 : 0
+      const span = target - dr.p
+      if (Math.abs(span) < 0.002) return
+      const spring = springEasing((vp * 1000) / span, SPRING_PAGE, { clamp: true })
+      const ms = spring?.ms ?? Math.round(340 * Math.max(0.35, Math.abs(span)))
+      const ease = spring?.easing ?? 'var(--mb-ease)'
+      for (const el of painted) {
+        const own = el === dr.dim ? `opacity ${ms}ms ${ease}` : `transform ${ms}ms ${ease}`
+        el.style.transition = el === dr.panel ? `${own}, visibility 0s linear ${ms}ms` : own
+      }
+      springing = [...painted]
+      springTimer = window.setTimeout(unspring, ms + 80)
     }
     /** 松手后的清理排到下一帧(见上面「松手顺序」)。⚠️ 排着的这一帧在下一次起手时必须取消(clearDrag 里):主线程一卡,
      *  一帧能有几百毫秒,够人再按一次返回 —— 不取消的话它会把**新这一次**的 painted / data-drag 清掉,之后画上去的
@@ -366,6 +396,7 @@ function useDrawerDrag(
       dr.w = panel?.getBoundingClientRect().width ?? 0
       if (!dr.w) return false
       clearDrag() // 上一次松手留给下一帧清的内联样式:现在就清,别和这一次的叠在一起
+      unspring() // 上一次松手的弹簧还在走:它的内联 transition 会压过 data-drag 的 none,让手指拖着一条过渡
       dr.panel = panel
       dr.main = envRef.current.wide ? null : body.querySelector<HTMLElement>(':scope > .mb-main') // 宽屏右抽屉不推 main
       dr.dim = body.querySelector<HTMLElement>(':scope > .mb-push-dim')
@@ -383,7 +414,8 @@ function useDrawerDrag(
       // 白板 / PDF / **画布**:整面都是「单指拖 = 平移」的手势面,横滑归它们。画布必须排掉
       // `.amx-stage-off`(文档模式那份 `display: contents` 的空壳仍在 DOM 里,认它 = 普通笔记也
       // 划不出抽屉)。屏幕边缘 24px 起手仍抢得回来,见下面的 edgeStart。
-      let exempt = !!target?.closest?.('.amx-draw, .pdfa-container, .amx-stage:not(.amx-stage-off)')
+      // 列表的一行(.pl-swipe)也是:左滑出操作是它自己的手势(10-14 起它不再是横向滚动器,下面那条认不出它)。
+      let exempt = !!target?.closest?.('.amx-draw, .pdfa-container, .amx-stage:not(.amx-stage-off), .pl-swipe')
       if (!exempt) {
         for (let el = target; el && el !== body; el = el.parentElement) {
           const cs = getComputedStyle(el)
@@ -392,7 +424,7 @@ function useDrawerDrag(
       }
       const EDGE = 24
       const edgeStart = t.clientX < EDGE || t.clientX > window.innerWidth - EDGE
-      d = { x0: t.clientX, y0: t.clientY, ok: !exempt || edgeStart, side: null, opening: false, w: 0, p: 0, panel: null, main: null, dim: null, nav: false, lastX: t.clientX, lastT: Date.now(), vx: 0 }
+      d = { x0: t.clientX, y0: t.clientY, ok: !exempt || edgeStart, side: null, opening: false, w: 0, p: 0, panel: null, main: null, dim: null, nav: false, lastX: t.clientX, lastT: Date.now(), vx: 0, vp: 0 }
     }
 
     const onMove = (e: TouchEvent): void => {
@@ -432,11 +464,13 @@ function useDrawerDrag(
       if (!cur || !cur.side) return
       const sign = cur.side === 'left' ? 1 : -1
       const p = cur.p
-      const v = sign * cur.vx // 正 = 朝「开」的方向甩
+      // 正 = 朝「开」的方向甩;手指停住再抬起不算甩(vx 是最后一次移动时的速度)
+      const v = Date.now() - cur.lastT > 80 ? 0 : sign * cur.vx
       const wantOpen = v > FLING ? true : v < -FLING ? false : p > 0.5
       const ws = useWorkspace.getState()
       const isOpen = cur.side === 'left' ? ws.leftVisible : ws.rightVisible
       if (wantOpen !== isOpen) flushSync(() => ws.toggleSidebar(cur.side as 'left' | 'right'))
+      release(cur, v / cur.w)
       clearNextFrame()
     }
 
@@ -448,7 +482,7 @@ function useDrawerDrag(
         const ws = useWorkspace.getState()
         if (side === 'left' && envRef.current.wide) return false // 宽屏左栏是并排的常驻列,不是抽屉
         const open = side === 'left' ? ws.leftVisible : ws.rightVisible
-        const dr: Drag = { x0: 0, y0: 0, ok: true, side, opening: !open, w: 0, p: open ? 1 : 0, panel: null, main: null, dim: null, nav: false, lastX: 0, lastT: 0, vx: 0 }
+        const dr: Drag = { x0: 0, y0: 0, ok: true, side, opening: !open, w: 0, p: open ? 1 : 0, panel: null, main: null, dim: null, nav: false, lastX: 0, lastT: 0, vx: 0, vp: 0 }
         if (!arm(dr)) return false
         d = null
         sys = dr
@@ -457,7 +491,11 @@ function useDrawerDrag(
       },
       move(t: number): void {
         if (!sys) return
-        sys.p = clamp(sys.opening ? t : 1 - t)
+        const p = clamp(sys.opening ? t : 1 - t)
+        const now = performance.now()
+        if (sys.lastT && now > sys.lastT) sys.vp = (p - sys.p) / (now - sys.lastT)
+        sys.lastT = now
+        sys.p = p
         paint(sys)
       },
       end(commit: boolean): boolean {
@@ -469,6 +507,7 @@ function useDrawerDrag(
         // 交回调用方照现在的状态重新算这一下返回。
         const stale = (cur.side === 'left' ? ws.leftVisible : ws.rightVisible) === cur.opening
         if (commit && !stale) flushSync(() => ws.toggleSidebar(cur.side as 'left' | 'right'))
+        release(cur, cur.vp)
         clearNextFrame()
         return !(commit && stale)
       },
@@ -485,6 +524,7 @@ function useDrawerDrag(
       body.removeEventListener('touchcancel', onEnd)
       if (previewImpl === mine) previewImpl = null
       clearDrag()
+      unspring()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -713,29 +753,21 @@ async function presentAllSpaces(tr: Tr): Promise<void> {
   if (id === 'dock:edit') { void presentDockPicks(tr); return }
   enterSpace(id.slice('space:'.length))
 }
-/** 选哪几个 Space 固定在 Dock:勾选即生效。原生答复是一次性的,所以每点一下按新状态重弹一次(同标签页那张)。 */
+/** 选哪几个 Space 固定在 Dock:原生勾选清单,勾的时候半屏不动,关上时(完成 / 下滑 / 返回都算)一起生效。
+ *  (10-14 之前是每勾一下按新状态重弹一次,半屏落下再升起 = 用户说的「选一个闪一下」。) */
 async function presentDockPicks(tr: Tr): Promise<void> {
   const spaces = useSpaceStore.getState().spaces
   const ids = spaces.map((x) => x.id)
   const inDock = dockSpaceIds(ids)
-  const full = ids.slice(1).filter((x) => inDock.has(x)).length >= DOCK_PICKS
-  const out = await presentNativeMenu({
+  const out = await presentNativeChecklist({
     title: tr('lcl.mobile.dock.editTitle'),
-    sections: [
-      {
-        items: spaces.slice(1).map((sp) => ({
-          id: `pick:${sp.id}`, label: label(sp.name), icon: spaceTileIcon(sp),
-          ...(inDock.has(sp.id) ? { checked: true } : full ? { disabled: true } : {}),
-        })),
-        footer: tr('lcl.mobile.dock.editHint', { first: label(spaces[0]?.name ?? ''), max: DOCK_PICKS }),
-      },
-      { items: [{ id: 'dock:done', label: tr('lcl.mobile.dock.done'), icon: Check }] },
-    ],
+    items: spaces.slice(1).map((sp) => ({ id: `pick:${sp.id}`, label: label(sp.name), icon: spaceTileIcon(sp) })),
+    checked: ids.slice(1).filter((x) => inDock.has(x)).map((x) => `pick:${x}`),
+    footer: tr('lcl.mobile.dock.editHint', { first: label(spaces[0]?.name ?? ''), max: DOCK_PICKS }),
+    done: tr('lcl.mobile.dock.done'),
+    max: DOCK_PICKS,
   })
-  const id = out.handled ? out.value?.id : undefined
-  if (!id?.startsWith('pick:')) return
-  toggleDockPick(ids, id.slice('pick:'.length))
-  void presentDockPicks(tr)
+  if (out.handled && out.value) setDockPicks(ids, out.value.checked.map((x) => x.slice('pick:'.length)))
 }
 
 async function presentNativeMore(tr: Tr): Promise<boolean> {

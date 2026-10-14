@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { DOCK_CELLS, DOCK_PICKS, dockPicks, dockSpaceIds, subscribeDockPicks, toggleDockPick } from './spaceDock'
+import { DOCK_CELLS, DOCK_PICKS, dockPicks, dockSpaceIds, setDockPicks, subscribeDockPicks } from './spaceDock'
 
 const nine = ['home', 'tangu', 'notes', 'calendar', 'inbox', 'agents', 'images', 'publish', 'plugin']
 
@@ -33,24 +33,24 @@ describe('which Spaces stand in the dock', () => {
     expect([...dockSpaceIds(nine, [])]).toEqual(['home'])
   })
 
-  it('toggling swaps one Space and keeps the others; a full dock refuses a fourth', () => {
+  it('the sheet\'s answer is stored in list order; the same set as now stores nothing', () => {
     let told = 0
     const off = subscribeDockPicks(() => { told += 1 })
     expect(DOCK_PICKS).toBe(3)
-    expect(toggleDockPick(nine, 'inbox')).toBe(false) // tangu, notes, calendar are in: no room
+    setDockPicks(nine, ['calendar', 'notes', 'tangu']) // what stands there already
     expect(dockPicks()).toBeNull()
-    expect(toggleDockPick(nine, 'calendar')).toBe(true) // out
-    expect(dockPicks()).toEqual(['tangu', 'notes'])
-    expect(toggleDockPick(nine, 'inbox')).toBe(true) // in
+    setDockPicks(nine, ['inbox', 'tangu', 'notes'])
+    expect(dockPicks()).toEqual(['tangu', 'notes', 'inbox'])
     expect([...dockSpaceIds(nine)]).toEqual(['home', 'tangu', 'notes', 'inbox'])
-    expect(told).toBe(2)
+    expect(told).toBe(1)
     off()
   })
 
-  it('Home cannot be taken out, an unknown Space cannot be put in', () => {
-    expect(toggleDockPick(nine, 'home')).toBe(false)
-    expect(toggleDockPick(nine, 'nope')).toBe(false)
-    expect([...dockSpaceIds(nine)]).toEqual(['home', 'tangu', 'notes', 'calendar'])
+  it('Home and unknown Spaces drop out; past DOCK_PICKS nothing more is kept', () => {
+    setDockPicks(nine, ['home', 'nope', 'calendar'])
+    expect(dockPicks()).toEqual(['calendar'])
+    setDockPicks(nine, nine.slice(1))
+    expect(dockPicks()).toEqual(nine.slice(1, 1 + DOCK_PICKS))
   })
 
   it('garbage in storage counts as never chosen', () => {

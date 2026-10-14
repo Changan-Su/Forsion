@@ -1,6 +1,14 @@
 package com.forsion.tangu
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -85,6 +93,10 @@ internal fun NativeSheetHost(payload: SheetPayload, onAnswer: (SheetAnswer?) -> 
         val sheet = rememberModalBottomSheetState(skipPartiallyExpanded = true)
         val scope = rememberCoroutineScope()
         var answered by remember { mutableStateOf(false) }
+        // A checklist's ticks live here, not in its content: every way of closing the sheet answers with them.
+        var ticked by remember { mutableStateOf((payload as? SheetPayload.Checklist)?.checked ?: emptyList()) }
+        // Read when the sheet closes, not when it last composed: a tick then Done / back inside one frame keeps the tick.
+        fun closed(): SheetAnswer? = if (payload is SheetPayload.Checklist) SheetAnswer.Checked(ticked) else null
         // Report first, then animate out: the action runs while the sheet slides away.
         val answer: (SheetAnswer?) -> Unit = { value ->
             if (!answered) {
@@ -94,7 +106,7 @@ internal fun NativeSheetHost(payload: SheetPayload, onAnswer: (SheetAnswer?) -> 
             }
         }
         ModalBottomSheet(
-            onDismissRequest = { if (!answered) { answered = true; onAnswer(null) }; onGone() },
+            onDismissRequest = { if (!answered) { answered = true; onAnswer(closed()) }; onGone() },
             sheetState = sheet,
             containerColor = scheme.surface,
             contentColor = scheme.onSurface,
@@ -114,6 +126,7 @@ internal fun NativeSheetHost(payload: SheetPayload, onAnswer: (SheetAnswer?) -> 
             Box(Modifier.semantics { testTagsAsResourceId = true }.testTag("nativeSheet.sheet")) {
                 when (payload) {
                     is SheetPayload.Menu -> MenuContent(payload, sheet) { id, trailing -> answer(SheetAnswer.Pick(id, trailing)) }
+                    is SheetPayload.Checklist -> ChecklistContent(payload, ticked, onTap = { ticked = payload.toggle(ticked, it) }) { answer(closed()) }
                     is SheetPayload.Prompt -> PromptContent(payload, onCancel = { answer(null) }) { answer(SheetAnswer.Text(it)) }
                     is SheetPayload.Confirm -> ConfirmContent(payload, onCancel = { answer(null) }) { answer(SheetAnswer.Ok) }
                 }
@@ -197,6 +210,46 @@ private fun MenuContent(p: SheetPayload.Menu, sheet: SheetState, onPick: (String
     }
 }
 
+/** Ticks flip in place (no answer per tap); Done closes with what is ticked. */
+@Composable
+private fun ChecklistContent(p: SheetPayload.Checklist, ticked: List<String>, onTap: (String) -> Unit, onDone: () -> Unit) {
+    val colors = MaterialTheme.colorScheme
+    val full = ticked.size >= p.max
+    Column(Modifier.fillMaxWidth()) {
+        if (p.title.isNotBlank()) {
+            Text(
+                p.title, Modifier.fillMaxWidth().heightIn(min = 48.dp).padding(horizontal = 24.dp, vertical = 12.dp).testTag("nativeSheet.title"),
+                fontSize = 18.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis,
+            )
+        }
+        LazyColumn(Modifier.fillMaxWidth().weight(1f, fill = false), contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 4.dp, bottom = 24.dp)) {
+            items(p.items, key = { "item-${it.id}" }) { item ->
+                val on = item.id in ticked
+                MenuRow(item.copy(checked = on, disabled = item.disabled || (!on && full)), onClick = { onTap(item.id) }, onTrailing = {})
+            }
+            if (p.footer.isNotBlank()) item(key = "footer") {
+                Text(
+                    p.footer, Modifier.fillMaxWidth().padding(start = 14.dp, end = 14.dp, top = 6.dp, bottom = 4.dp).testTag("nativeSheet.footer"),
+                    color = colors.onSurfaceVariant, fontSize = 13.sp, lineHeight = 18.sp,
+                )
+            }
+            item(key = "divider") { Box(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp).heightIn(min = 1.dp).background(colors.outline)) }
+            item(key = "done") {
+                Row(
+                    Modifier.fillMaxWidth().heightIn(min = 52.dp).clip(RoundedCornerShape(14.dp))
+                        .clickable(role = Role.Button, onClick = onDone).testTag("nativeSheet.done")
+                        .padding(horizontal = 14.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    NativeIconView(BuiltinIcons.check, colors.onSurface, NATIVE_ICON_SIZE)
+                    Spacer(Modifier.width(14.dp))
+                    Text(p.done, color = colors.onSurface, fontSize = 16.sp)
+                }
+            }
+        }
+    }
+}
+
 private const val GRID_COLUMNS = 4
 
 /** One tile of a grid section: the icon on a rounded square, the name under it; the checked one is where you are. */
@@ -231,10 +284,11 @@ private fun MenuRow(item: MenuItemSpec, onClick: () -> Unit, onTrailing: () -> U
     val colors = MaterialTheme.colorScheme
     val enabled = !item.disabled
     val base = if (item.danger) colors.error else colors.onSurface
-    val tint = if (enabled) base else base.copy(alpha = .38f)
+    val tint by animateColorAsState(if (enabled) base else base.copy(alpha = .38f), label = "tint")
+    val fill by animateColorAsState(if (item.checked) colors.primary.copy(alpha = .12f) else colors.primary.copy(alpha = 0f), label = "fill")
     Row(
         Modifier.fillMaxWidth().heightIn(min = 52.dp).padding(vertical = 1.dp).clip(RoundedCornerShape(14.dp))
-            .background(if (item.checked) colors.primary.copy(alpha = .12f) else Color.Transparent)
+            .background(fill)
             .semantics { selected = item.checked }
             .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
             .testTag("nativeSheet.item.${item.id}")
@@ -251,7 +305,10 @@ private fun MenuRow(item: MenuItemSpec, onClick: () -> Unit, onTrailing: () -> U
                 Text(item.detail, Modifier.padding(top = 2.dp), color = colors.onSurfaceVariant.copy(alpha = if (enabled) 1f else .5f), fontSize = 13.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
             }
         }
-        if (item.checked) NativeIconView(BuiltinIcons.check, colors.primary, 20.dp, Modifier.padding(start = 8.dp))
+        // springs in rather than blinking in: the checklist flips it under the finger
+        AnimatedVisibility(item.checked, enter = scaleIn(spring(dampingRatio = .55f, stiffness = Spring.StiffnessMedium)) + fadeIn(), exit = scaleOut() + fadeOut()) {
+            NativeIconView(BuiltinIcons.check, colors.primary, 20.dp, Modifier.padding(start = 8.dp))
+        }
         if (item.children.isNotEmpty()) NativeIconView(BuiltinIcons.chevronRight, colors.onSurfaceVariant, 20.dp, Modifier.padding(start = 8.dp))
         item.trailing?.let { t ->
             IconButton(

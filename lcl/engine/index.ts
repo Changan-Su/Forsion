@@ -81,15 +81,17 @@ export { ExtendViewHost } from './ExtendViewHost'
 
 export { contentStorageKey } from './contentStorageScope'
 
+export { SPRING_PAGE, SPRING_ROW, reducedMotion, springAt, springEasing, springMotion, type Spring } from './spring'
+
 /** Optional native presentation hosts (Android Compose). Absent host ⇒ callers keep their web UI. */
 export {
-  installNativeSheetPresenter, nativeSheetPresenter, presentNativeMenu, presentNativePrompt, presentNativeConfirm,
-  pickNativeCtxItem, runNativeCtxMenu, readNativeTheme, menuResult, promptResult, confirmResult, clipNativeText, NATIVE_MENU_MAX_ITEMS,
+  installNativeSheetPresenter, nativeSheetPresenter, presentNativeMenu, presentNativeChecklist, presentNativePrompt, presentNativeConfirm,
+  pickNativeCtxItem, runNativeCtxMenu, readNativeTheme, menuResult, checklistResult, promptResult, confirmResult, clipNativeText, NATIVE_MENU_MAX_ITEMS,
 } from './nativeSheet'
 export type {
   NativeSheetTheme, NativeSheetRequest, NativeSheetPayload, NativeSheetPresenter, NativeSheetOutcome,
   NativeMenuRequest, NativeMenuSection, NativeMenuItem, NativeMenuTrailing, NativeMenuResult, NativeMenuSearch,
-  NativePromptRequest, NativePromptResult, NativeConfirmRequest, NativeConfirmResult, NativeCtxItem,
+  NativeChecklistRequest, NativeChecklistResult, NativePromptRequest, NativePromptResult, NativeConfirmRequest, NativeConfirmResult, NativeCtxItem,
 } from './nativeSheet'
 export { runNativeSheetMenu, openNativeSheetMenu, useNativeSheetMenu } from './nativeSheetMenu'
 export type { SheetMenu, SheetMenuSection, SheetMenuItem } from './nativeSheetMenu'

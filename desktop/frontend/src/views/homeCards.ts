@@ -20,9 +20,3 @@ export function shownHomeCards<T extends { id: string }>(picked: readonly string
   const mine = (picked ?? []).map((id) => all.find((c) => c.id === id)).filter((c): c is T => !!c).slice(0, HOME_CARDS_MAX)
   return mine.length ? mine : [...defaults]
 }
-
-/** 点了一下 `id` 之后该是哪几张:已选的再点 = 拿掉,但最后一张不让拿(没有卡片可长按,就改不回来了);满了不再加。 */
-export function toggleHomeCard(current: readonly string[], id: string): string[] {
-  if (current.includes(id)) return current.length > 1 ? current.filter((x) => x !== id) : [...current]
-  return current.length >= HOME_CARDS_MAX ? [...current] : [...current, id]
-}

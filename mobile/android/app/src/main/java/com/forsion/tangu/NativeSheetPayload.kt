@@ -47,6 +47,8 @@ internal sealed interface SheetAnswer {
     data class Pick(val id: String, val trailing: Boolean) : SheetAnswer
     data class Text(val text: String) : SheetAnswer
     data object Ok : SheetAnswer
+    /** A checklist's ticked ids, in the order they were ticked. */
+    data class Checked(val ids: List<String>) : SheetAnswer
 }
 
 internal sealed interface SheetPayload {
@@ -83,6 +85,33 @@ internal sealed interface SheetPayload {
         override fun accepts(answer: SheetAnswer) = answer is SheetAnswer.Text && answer.text.length <= MAX_PROMPT_TEXT
     }
 
+    /**
+     * Rows ticked on and off in place: the sheet stays up while the user ticks (re-presenting a menu per tap made it
+     * drop and slide back in on every tick, 2026-10-14) and answers once, with what is ticked, however it is closed —
+     * Done, scrim, swipe or back all keep the ticks the user watched. `checked` is the order the answer starts from;
+     * a new tick goes to the end. At most [max] are ticked (unticked rows wait, disabled, while full) and a tick that
+     * would leave fewer than [min] does nothing.
+     */
+    data class Checklist(
+        override val requestId: String, override val theme: SheetTheme,
+        val title: String, val items: List<MenuItemSpec>, val checked: List<String>,
+        val footer: String, val done: String, val min: Int, val max: Int,
+    ) : SheetPayload {
+        /** What a tap on [id] leaves ticked (unchanged when the tap is not allowed). */
+        fun toggle(ticked: List<String>, id: String): List<String> = when {
+            items.none { it.id == id && !it.disabled } -> ticked
+            id in ticked -> if (ticked.size > min) ticked - id else ticked
+            else -> if (ticked.size < max) ticked + id else ticked
+        }
+        override fun accepts(answer: SheetAnswer): Boolean {
+            if (answer !is SheetAnswer.Checked) return false
+            val ids = answer.ids
+            // below `min` only as far as the start already was (ticking never takes one away there; TS: checklistResult)
+            return ids.size == ids.toSet().size && ids.size <= max && ids.size >= minOf(min, checked.size) &&
+                ids.all { id -> id in checked || items.any { it.id == id && !it.disabled } }
+        }
+    }
+
     data class Confirm(
         override val requestId: String, override val theme: SheetTheme,
         val title: String, val message: String, val confirm: String, val cancel: String, val danger: Boolean,
@@ -112,6 +141,7 @@ internal sealed interface SheetPayload {
             val theme = NativeJson.theme(json.getJSONObject("theme"))
             return when (NativeJson.str(json, "kind", 16)) {
                 "menu" -> MenuParser().parse(json, requestId, theme)
+                "checklist" -> MenuParser().checklist(json, requestId, theme)
                 "prompt" -> Prompt(
                     requestId, theme,
                     title = NativeJson.str(json, "title"),
@@ -145,6 +175,21 @@ private class MenuParser {
         val search = json.optJSONObject("search")?.let(::search)
         return SheetPayload.Menu(
             requestId, theme, NativeJson.optStr(json, "title"), sections, search, NativeJson.optStr(json, "back", 64),
+        )
+    }
+
+    fun checklist(json: JSONObject, requestId: String, theme: SheetTheme): SheetPayload.Checklist {
+        val array = json.getJSONArray("items")
+        val items = (0 until array.length()).map { item(array.getJSONObject(it), SheetPayload.MAX_DEPTH) }
+        require(items.isNotEmpty() && items.all { it.children.isEmpty() && it.trailing == null }) { "Invalid checklist" }
+        val max = NativeJson.int(json, "max", 1..items.size)
+        val min = if (json.has("min")) NativeJson.int(json, "min", 0..max) else 0
+        val given = json.getJSONArray("checked")
+        val checked = (0 until given.length()).map { given.get(it) as? String ?: throw IllegalArgumentException("Invalid checked") }
+        require(checked.size == checked.toSet().size && checked.size <= max && checked.all { id -> items.any { it.id == id } }) { "Invalid checked" }
+        return SheetPayload.Checklist(
+            requestId, theme, NativeJson.optStr(json, "title"), items, checked,
+            NativeJson.optStr(json, "footer", 1024), NativeJson.str(json, "done", 64), min, max,
         )
     }
 
@@ -205,6 +250,12 @@ internal object NativeJson {
         if (!obj.has(key) || obj.isNull(key)) return false
         val value = obj.get(key)
         require(value is Boolean) { "Invalid $key" }
+        return value
+    }
+
+    fun int(obj: JSONObject, key: String, range: IntRange): Int {
+        val value = obj.get(key)
+        require(value is Int && value in range) { "Invalid $key" }
         return value
     }
 
