@@ -2,6 +2,7 @@
 // 原链接的 `#锚点` / `|别名` 与收尾 `]]` 原样保留。此前按「未闭合新链接」处理,插入 `名]]`
 // 却不吃掉光标后的旧尾巴 → `[[Beta]]Alpha]]`、`[[Beta]]|al]]`、`[[Beta]]]]`。
 // 纯函数、无 milkdown 依赖,单测钉在 wikiRetarget.test.ts;调用方见 MarkdownBlock.pickWiki。
+import { parseAppRefInner } from '../../../../../shared/appRefs'
 
 /**
  * @param rest      光标到收尾 `]]` 之间的原文:旧目标名的残余 + 可能的 `#锚点` / `|别名`。
@@ -9,6 +10,8 @@
  * @returns 新的链接内文(不含方括号)。光标前的查询串整段被替换,不在此处出现。
  */
 export function retargetWikiInner(rest: string, linkInner: string): string {
+  // 候选是应用 / 窗口引用 → 整段内文换掉:旧的 `#锚点` / `|别名` 属于原来那篇笔记,而窗口引用的别名就是窗口标题,留着旧别名 = 指错窗口。
+  if (parseAppRefInner(linkInner)) return linkInner
   const cut = rest.search(/[#|]/)
   const tail = cut < 0 ? '' : rest.slice(cut) // 旧目标名的残余丢弃,锚点/别名保留
   const bar = linkInner.indexOf('|')

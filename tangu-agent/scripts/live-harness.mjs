@@ -100,6 +100,8 @@
  *                                                           #   改 runtimeContext.gitPreferenceLines / gitActions 的提交信息提示词后跑;负对照 --git-prefs off(不写设置,须红)
  *   npm run live:harness -- --only refine                    # 自进化闭环(10-04 改判):自己总结的做法 → 后台提名直接采纳(或前台自己写)→ 新会话系统提示带上 → rollback 可撤;用户立的规矩去了哪只记数。改 judgeFieldSpecs / autoAdoptable / adoptHarnessNomination 后跑
  *   npm run live:harness -- --only embed                    # 内联嵌入(09-25):改 skills/show-time 后跑;三份文件(两图一音频)须各有一行独占的 `![[绝对路径]]`
+ *   npm run live:harness -- --only appref                   # 应用 / 窗口引用(10-13):四问 —— 消息里带 `[[app://…|…]]` / `[[window://…|…]]`(明说 / 没明说「用同样的写法」/ 只有一条引用),和只带侧边面板标签 `<forsion-app …/>` 却要一条能点的引用;
+ *                                                           #   不许当成笔记 / 文件 / 会话去读,回复里的引用须一字不差、不进代码格式;改 promptSections.ts 的 APP_REF_SECTION 后跑(判据与负对照在 lib/app-ref-live.mjs)
  *   npm run live:harness -- --only browserext               # Tangu for Chrome 扩展(09-24):临时 Chrome 装真扩展并配对,读用户的标签 + 在 Tangu 标签组里后台操作;改扩展 / 桥 / 扩展那一路的工具后跑
  *   npm run live:harness -- --only browsertabs              # 读用户已打开的浏览器标签(09-24):起临时 headless Chrome 冒充用户浏览器;改 browser_tabs / 浏览器提示词后跑(CHROME_BIN 可指定)
  *   npm run live:harness -- --only officedoc                # 桌面随包 LibreOffice(09-26):read_document 读 3 页 docx 按真页答出第 3 页的码;改 read_document / fetch-office 后跑。
@@ -185,6 +187,7 @@ import { accountLive, startFakeCloud } from './lib/account-live.mjs';
 import { plantPlugin, pluginDiagLive, registeredViews, STUB_SELFTEST } from './lib/plugin-diag-live.mjs';
 import { plantNotebookPlugin, notebookLive, notebookSelftest } from './lib/notebook-live.mjs';
 import { cuVisionSetup, cuVisionLive, defaultFixture as cuDefaultFixture } from './lib/cu-vision-live.mjs';
+import { appRefLive, appRefSelftest } from './lib/app-ref-live.mjs';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const entry = join(root, 'dist', 'standalone', 'main.js');
@@ -218,6 +221,7 @@ KEYS.push('projdedupe');
 KEYS.push('projteam');
 KEYS.push('projcompact');
 KEYS.push('forkcache');
+KEYS.push('appref');
 // autocompact 要把模型窗口钉小(--window)才灌得满;窗口小了别的场景会被连累(系统提示+工具头就 13k+),所以它只能单独跑。
 const WINDOW = Number(opt('window', process.env.TANGU_LIVE_WINDOW || 0)) || 0;
 // P1-K9 · C3:--remote-cap <档> = 起引擎前经 K4 的新写入口写 remote.maxApprovalMode(缺省不写 = 引擎按 auto-edit)
@@ -274,6 +278,7 @@ OPT_IN.add('account'); // --only account:五个 run;引擎的云端地址指向�
 OPT_IN.add('realuse'); // 真实使用模拟:每轮 12 个 run(--rounds),--usage-db 再加一个 Muse 周期;单独跑。
 OPT_IN.add('suggest'); // 三个 run + 三次建议调用;只在动 services/promptSuggestion.ts(提示词 / 前缀对齐)或主循环收尾处的快照时才有信息量。
 OPT_IN.add('humanreal'); // 协作说明写成什么样:每轮 6 个 run + 1 次判官(--rounds);只在动 HUMAN_GUIDANCE / manage_human 时才有信息量。
+OPT_IN.add('appref'); // 四个 run;只在动 APP_REF_SECTION(应用 / 窗口引用那一段提示词)时才有信息量。
 const NEEDS = { dream: ['historian'], recall: ['historian', 'dream'] }; // 记忆链三连有先后依赖;其余场景自包含
 const ONLY = new Set(opt('only', process.env.TANGU_LIVE_ONLY || KEYS.filter((k) => !OPT_IN.has(k)).join(',')).split(',').map((s) => s.trim()).filter(Boolean));
 const TTFT_ROUNDS = Number(opt('ttft-rounds', process.env.TANGU_LIVE_TTFT_ROUNDS || 5));
@@ -811,8 +816,9 @@ if (argv.includes('--selftest')) {
     rmSync(d, { recursive: true, force: true });
   }
   for (const [name, got, want] of notebookSelftest()) check(name, got, want); // notebook 的文件判据 / 绕开工具的识别 / 审批守门
+  for (const [name, got, want] of appRefSelftest()) check(name, got, want); // appref 的引用判据(原样 / 不进代码 / 不当笔记)
   if (fails.length) { console.error(`--selftest 失败 ${fails.length} 条:\n  ${fails.join('\n  ')}`); process.exit(1); }
-  console.log('--selftest 全过(anchorsOk / acceptsSnapshotText / findSubUnlock / run3Verdict / ttftVerdict / activationBuckets / activationsOverlap / claimsSent / claimsDone / mentionsFailure / registeredViews / judgeNotebook / bypasses,含负对照)');
+  console.log('--selftest 全过(anchorsOk / acceptsSnapshotText / findSubUnlock / run3Verdict / ttftVerdict / activationBuckets / activationsOverlap / claimsSent / claimsDone / mentionsFailure / registeredViews / judgeNotebook / bypasses / judgeAppRef,含负对照)');
   process.exit(0);
 }
 
@@ -3146,6 +3152,15 @@ Then reply with only the command output.`,
       detail: ev.error || `独占一行的嵌入 ${shown.length}/${files.length}${shown.length < files.length ? `(缺 ${files.filter((f) => !shown.includes(f)).map((f) => f.split('/').pop()).join(',')})` : ''}${other.length ? `;另调了 ${other.join(',')}` : ''}`,
       output: ev.content, ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls };
   });
+
+  // 应用 / 窗口引用(10-13):桌面输入框能往消息里插 `[[app://<应用标识>|<名字>]]` / `[[window://<应用标识>|<窗口标题>]]`(契约 desktop/shared/appRefs.ts)。
+  // 四问各开新会话(lib/app-ref-live.mjs 的 LEGS):A 明说「用同样的写法提到这扇窗口」;B 不说;C 消息里没有引用、只有侧边面板的 <forsion-app …/> 标签,
+  // 用户要一条能点的引用(写法只能来自系统提示,标识只能来自标签);D 只有一条窗口引用加一句「总结一下这个」。
+  // 判的是:没把引用当成笔记 / 文件 / 会话去读;回复里写的引用一字不差、不在代码格式里;A、C 的回复里必须有引用(B、D 写没写只记数)。
+  // 台架里没有电脑操作工具,老实的回答是「看不到这扇窗口」。
+  // 负对照 = 去掉 agentLoop 里注入 APP_REF_SECTION 的那一行(10-13 实测 gpt-6-luna,3 次):C 两次都写不出引用(自编一种写法 / 把标签原样贴回),
+  // A 有一次拿窗口标题去 search_sessions 且没写引用;B、D 各项本来就过。「提示词里有这一段」那一项在负对照里必红,看其余各项。
+  await scenario('appref', 'appref 消息里的应用 / 窗口引用:不当成笔记去读,回复里原样写回', () => appRefLive({ run, OUT, tokensOf, ttft }));
 
   // 名册 + 借用(09-22):系统提示的「Other Agents」要让缺省 agent 知道 Coding 存在;技能目录的「Skills shared by other agents」
   // 要让它能 use_skill 借到 coding 的共享技能(id 带主人 local:@coding/…)。判据:提到 coding + 真调了 use_skill + 取回的正文是那份技能。

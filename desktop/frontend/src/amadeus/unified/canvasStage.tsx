@@ -53,6 +53,7 @@ import { OverlayAt } from '../lib/clampMenu'
 import { canvasAlignGuidesEnabled, canvasDoubleClickFocusEnabled, canvasGridSnapEnabled, canvasMiniMapEnabled, canvasOverviewEnabled, canvasOverviewZoom, onCanvasOverviewZoomChange, setCanvasAlignGuidesEnabled, setCanvasGridSnapEnabled, setCanvasMiniMapEnabled, setCanvasOverviewEnabled } from './canvasPrefs'
 import { resolveCardRepulsion } from './canvasGeometry'
 import { hasChatRef, readChatRefs, type ChatRef } from '../../views/chat2/chatDragRef'
+import { appRefToken } from '../../../../shared/appRefs'
 import { syncSmoothCaretToLayout } from '../../smoothCaret'
 import { noteMemoryId } from './viewMemory'
 import { registerMessages, translate, useI18n } from '../../i18n'
@@ -316,6 +317,7 @@ function unwrapCards(frag: Fragment | null): Fragment | undefined {
 function refToCardMd(ref: ChatRef, link = false): string {
   if (ref.kind === 'note') return `${link ? '' : '!'}[[${ref.path.replace(/\.md$/i, '')}]]`
   if (ref.kind === 'session') return `[[session:${ref.id}|${ref.title}]]`
+  if (ref.kind === 'app' || ref.kind === 'window') return appRefToken(ref)
   return ref.path
 }
 
