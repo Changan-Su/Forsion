@@ -9,6 +9,8 @@ import { usePageStore } from '../amadeus/store/pageStore'
 import { registerMessages, useI18n } from '../i18n'
 import { splitWiki, wikiLabel } from './wikiChat'
 import { sessionIdOfTarget } from '../views/chat2/chatDragRef'
+import { parseAppRefInner } from '../../../shared/appRefs'
+import { AppRefChip } from './appRefs'
 import { deskAcceptsFiles } from '../amadeus/plugins/deskCompanion'
 import { newTabOf } from '../views/itemSelect'
 
@@ -17,7 +19,14 @@ registerMessages({
   'chatwiki.mediaTipBadRangeEnd': { zh: '{path} {stamp}（区间终点无效，已忽略）', en: '{path} {stamp} (invalid range end — ignored)' },
 })
 
+/** 聊天里的一条 [[…]]。应用 / 窗口引用(目标带 app:// / window://)先认,画成引用芯片;其余才是笔记 / 会话 / 文件那一套。
+ *  拆成两个组件是因为后者一上来就是一串 hook,不能在它里面提前返回。 */
 export function ChatWikiLink({ inner }: { inner: string }) {
+  const app = parseAppRefInner(inner)
+  return app ? <AppRefChip appRef={app} /> : <NoteWikiLink inner={inner} />
+}
+
+function NoteWikiLink({ inner }: { inner: string }) {
   const { t } = useI18n()
   const pages = usePageStore((s) => s.pages)
   const files = usePageStore((s) => s.files)
@@ -190,12 +199,26 @@ export function ChatWikiLink({ inner }: { inner: string }) {
   )
 }
 
+/**
+ * 开着的会话在别的电脑上(桌面作为调用方)→ 引用里的路径是**那台**的:经那台的只读文件面读一份瞬态预览,
+ * 绝不按路径去读这台电脑的盘(两台电脑上同一路径可以是两份不同的文件)。返回 true = 已经处理。
+ */
+async function openElsewhere(sessionId: string | null, path: string, name: string, nt?: { newTab: true }): Promise<boolean> {
+  if (!sessionId) return false
+  const { refForSession } = await import('../services/engine/targets')
+  if (refForSession(sessionId).kind !== 'unit') return false
+  const [{ targetFor }, { openWsFile }, { useApp }] = await Promise.all([import('./InlineFiles'), import('../views/wsFileNav'), import('../stores/appStore')])
+  openWsFile(targetFor({ name, path }, useApp.getState().cfg, sessionId, 'host'), nt)
+  return true
+}
+
 /** 引用点击:Desk 开着就在演出区就地开(引用与对话并排,ChatGPT 式),否则退主区 tab。
  *  ⌘/Ctrl+点击(nt)= 明说了要新标签页:不进演出区,直接在主区另开(下面三个引用入口同一口径)。
  *  两处都懒加载:本模块也给 Amadeus 侧的气泡用,静态引 appStore/amadeusNav 会绕出 barrel 环。 */
 async function openPdfCitation(path: string, page?: number, quote?: string, nt?: { newTab: true }): Promise<void> {
   const { useApp } = await import('../stores/appStore')
   const { activeId, desktopConfig } = useApp.getState()
+  if (await openElsewhere(activeId, path, path.split(/[\\/]/).pop() || path, nt)) return
   // 闸门必须与 ChatView 的 deskEnabled 逐字同源:移动端根本不挂 AgentDesk,
   // 只按 agentDeskEnabled 判会把状态写进一个不存在的面板 = 点了没反应。
   // deskAcceptsFiles:always 伴随面把 Desk 整体替换了,文件不进 Desk,照 Desk 关闭时走主区 tab。
@@ -226,6 +249,7 @@ async function openPdfCitation(path: string, page?: number, quote?: string, nt?:
 export async function openFileCitation(path: string, name: string, line: LineLoc | null, nt?: { newTab: true }): Promise<void> {
   const { useApp } = await import('../stores/appStore')
   const { activeId, desktopConfig } = useApp.getState()
+  if (await openElsewhere(activeId, path, name, nt)) return
   if (!nt && UI_MODE !== 'mobile' && deskAcceptsFiles(!!desktopConfig?.agentDeskEnabled) && activeId) {
     const top = useApp.getState().deskBySession[activeId]?.items?.[0]
     const same = top?.view?.type === 'wsfile' && top.view.params?.path === path
@@ -256,6 +280,7 @@ async function openMediaCitation(m: { abs: string; vaultRel: string | null; name
   const { useApp } = await import('../stores/appStore')
   const { activeId, desktopConfig } = useApp.getState()
   const desk = !nt && UI_MODE !== 'mobile' && deskAcceptsFiles(!!desktopConfig?.agentDeskEnabled) && activeId ? activeId : null
+  if (await openElsewhere(activeId, m.abs, m.name, nt)) return
   if (m.vaultRel) {
     if (desk) {
       const top = useApp.getState().deskBySession[desk]?.items?.[0]

@@ -49,7 +49,9 @@ import { usePluginStore } from '../amadeus/plugins/pluginStore'
 import { allSeries, useAchievements } from '../achievements/store'
 import { displaySessionTitle } from '../sessionTitle'
 import { ProjectSelector } from '../components/ProjectSelector'
+import { ExtraFolders } from '../components/ExtraFolders'
 import { RunLocationPicker } from '../components/RunLocationPicker' // P1-K7a
+import { useRemoteNewChatWorkspaces } from '../stores/newChatWorkspaces'
 import { AgentSelectStrip } from '../components/AgentSelectStrip'
 import { Composer2 } from './chat2/Composer2'
 import { registerMessages, useI18n, type Locale } from '../i18n'
@@ -108,6 +110,7 @@ function HomepageChatbox({ onDispatch, onStartCall, onInputModeChange }: { onDis
     desktopMode: state.desktopMode,
     homeDir: state.homeDir,
     defaultWsDir: state.defaultWsDir,
+    focusDirs: state.focusDirs, // 桌面:运行位置在别的电脑上时新会话的落点用那台的目录
     modelsResp: state.modelsResp,
     newChatWs: state.newChatWs,
     newChatCfg: state.newChatCfg,
@@ -146,6 +149,7 @@ function HomepageChatbox({ onDispatch, onStartCall, onInputModeChange }: { onDis
   // 也不能在 Chat 时无提示地把会话放进「不在项目中工作」。
   const platform = currentPlatform()
   const targetWorkspace = resolveNewSessionWorkspace(s, platform)
+  const remoteWs = useRemoteNewChatWorkspaces() // 桌面:运行位置在别的电脑上 → 项目药丸列那台的项目
   const workspaceList = useMemo(() => s.workspaces(), [
     s.workspaces, s.sessions, s.archivedSessions, s.cloudProjects, s.channelWorkspaces,
     s.defaultWsDir, s.homeDir, s.tr, vaultRoot,
@@ -196,12 +200,14 @@ function HomepageChatbox({ onDispatch, onStartCall, onInputModeChange }: { onDis
       <div className="hp-projectbar">
         <RunLocationPicker />
         <ProjectSelector
-          workspaces={workspaceList}
+          workspaces={remoteWs ?? workspaceList}
           value={targetWorkspace.key}
           onChange={s.setNewChatWs}
-          onAddProject={window.tangu?.pickDirectory ? () => void s.addLocalWorkspace() : undefined}
-          onAddCloudProject={(name) => void s.addCloudProject(name)}
+          // 「添加本地项目 / 云端项目」加的都是这一端的:运行位置在别的电脑上时不给
+          onAddProject={!remoteWs && window.tangu?.pickDirectory ? () => void s.addLocalWorkspace() : undefined}
+          onAddCloudProject={remoteWs ? undefined : (name) => void s.addCloudProject(name)}
         />
+        <ExtraFolders />
       </div>
       <Composer2
         sessionId={null}

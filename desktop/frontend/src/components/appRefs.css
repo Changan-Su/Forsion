@@ -1,0 +1,52 @@
+/* 应用 / 窗口引用芯片(DESIGN §6「应用与窗口引用」):中性灰底 + 小圆角,颜色只来自应用图标;不改字号、行高。
+   和双链(下划线)、标签(胶囊)分得开:那两个是库里的东西,这个是库外面的东西。 */
+.app-ref {
+  position: relative;
+  padding: 1px 6px 1px 4px;
+  border-radius: var(--radius-sm);
+  background: var(--overlay-medium);
+  color: inherit;
+  cursor: pointer;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+  transition: background var(--duration-fast, 0.15s);
+}
+.app-ref:hover, .app-ref:focus-visible { background: var(--overlay-strong); }
+.app-ref[data-state="missing"] { cursor: default; }
+.app-ref[data-off] { color: var(--text-muted); }
+.app-ref-head { white-space: nowrap; }
+.app-ref-ico { display: inline-block; width: 1.1em; height: 1.1em; margin-right: 0.3em; vertical-align: -0.2em; object-fit: contain; }
+.app-ref[data-off] .app-ref-ico { filter: grayscale(1); opacity: 0.55; }
+
+/* 悬停卡:挂在 body 上的浮层,位置由 AppRefChip 按芯片量出来交给 OverlayAt(收进窗口、界面缩放都在那边处理)。
+   不接指针:鼠标从芯片滑到卡片上不该让它留着或闪。 */
+.app-ref-card {
+  position: fixed;
+  z-index: 10020;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  width: max-content;
+  max-width: 280px;
+  padding: 10px 12px;
+  border: var(--border-width) solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-card);
+  box-shadow: var(--card-shadow);
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: var(--ui-font-body);
+  font-weight: 400;
+  line-height: var(--ui-line-body);
+  text-align: left;
+  white-space: normal;
+  pointer-events: none;
+  animation: app-ref-card-in var(--duration-fast, 0.15s) ease;
+}
+@keyframes app-ref-card-in { from { opacity: 0; } }
+.app-ref-card-ico { flex: none; width: 28px; height: 28px; margin-top: 1px; object-fit: contain; }
+.app-ref-card-main { display: flex; min-width: 0; flex-direction: column; }
+.app-ref-card-main b { font-weight: 600; overflow-wrap: anywhere; }
+.app-ref-card-main small { font-size: var(--ui-font-caption); line-height: var(--ui-line-caption); color: var(--text-muted); }
+.app-ref-card-main em { margin-top: 6px; font-size: var(--ui-font-caption); font-style: normal; line-height: var(--ui-line-caption); color: var(--text-faint); }
+@media (prefers-reduced-motion: reduce) { .app-ref { transition: none; } .app-ref-card { animation: none; } }

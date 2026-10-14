@@ -25,7 +25,7 @@ import { useNav } from './navStore'
 import { ribbonActions } from './ribbonRegistry'
 import { engineTr } from './i18nSeam'
 import {
-  LAYOUT_KEY, saveLayout, loadLayout, clearLayout, saveNamedLayout, loadNamedLayout, listNamedLayouts,
+  LAYOUT_KEY, saveLayout, loadLayout, clearLayout, saveNamedLayout, loadNamedLayout, listNamedLayouts, layoutIsBlank,
   type LayoutEnvelopeV4, type PersistedPanel,
 } from './layoutPersist'
 
@@ -1388,7 +1388,8 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
 
   applyNamed(name) {
     const blob = loadNamedLayout(name)
-    if (!get().api || !blob) return false
+    // 空白存档当没存过(调用方落到「照默认重建」):已经被写坏的 `space:<id>` 槽靠这条自己好回来,见 layoutIsBlank。
+    if (!get().api || !blob || layoutIsBlank(blob)) return false
     dropLayoutUndo() // 换了一整份布局(切 Space 走这里):之前的「恢复默认」快照作废
     return get().applyLayout(blob)
   },

@@ -293,7 +293,7 @@ describe('S2 · unit 目标与焦点', () => {
   })
 
   it.each([
-    ['桌面主窗口(K6 U1:渲染层不持 forsion_token)', {}],
+    ['桌面主窗口,主进程的中转口没到(没登录 / 启动早期;渲染层自己不持 forsion_token)', {}],
     ['设备页(§4.7:不得经 A 再驱动 B)', { unitPage: true, cloudWeb: true }],
   ])('%s → targetForRef(unit) === null', (_label, tangu) => {
     vi.stubGlobal('window', { tangu })
@@ -584,5 +584,107 @@ describe('S2 · unit 目标与焦点', () => {
     await T.setFocusTarget({ kind: 'unit', unitId: U })
     expect(T.focusRef().kind).toBe('unit')
     expect([...store.keys()].filter((k) => k.startsWith('forsion_engine_focus:'))).toEqual([])
+  })
+})
+
+// 2026-10-14(K6 U1 改判):桌面主窗口经主进程的本机中转口(electron/unitRelay.ts)也能把会话建到别的电脑上。
+describe('桌面作为调用方 · 主进程中转口', () => {
+  const U = '7f0e8a52-0000-4000-8000-00000000000a'
+  const RELAY = { base: 'http://127.0.0.1:41234', token: 'boot-secret', accountId: 'https://api.forsion.test/api::u-42' }
+  const store = new Map<string, string>()
+  const desktop = (relay: unknown = RELAY, tangu: Record<string, unknown> = {}): void => {
+    vi.stubGlobal('window', { tangu: { unitRelay: async () => relay, ...tangu } })
+    vi.stubGlobal('localStorage', {
+      getItem: (k: string) => (store.has(k) ? store.get(k)! : null),
+      setItem: (k: string, v: string) => { store.set(k, String(v)) },
+      removeItem: (k: string) => { store.delete(k) },
+    })
+    // 桌面的 cfg.token 是**本机引擎**的令牌,不是 forsion_token
+    T.installEngineHost({ cfg: () => ({ backendUrl: 'http://127.0.0.1:4100', token: 'engine-token', modelId: '' }), desktopConfig: () => ({ cloudUrl: 'https://api.forsion.test', mode: 'managed' }) })
+  }
+  beforeEach(() => { store.clear(); T.resetFocusForTests(); T.clearSessionBindings(); authFetch.mockClear() })
+  afterEach(() => { T.resetFocusForTests(); T.clearSessionBindings() })
+
+  it('unit 目标打的是中转口、带的是本次启动的口令:本机引擎令牌与 forsion_token 都不出现,调用方头也不由渲染层带', async () => {
+    const unitCallerHeaders = vi.fn(async () => ({ 'X-Forsion-Caller': 'must-not-be-used' }))
+    desktop(RELAY, { unitCallerHeaders })
+    expect(T.targetForRef({ kind: 'unit', unitId: U })).toBeNull() // 中转口还没取
+    expect(await T.refreshDesktopRelay()).toBe(true)
+    const t = T.targetForRef({ kind: 'unit', unitId: U })!
+    expect(t.base).toBe(`${RELAY.base}/units/${U}/proxy/engine`)
+    expect(t.unitBase).toBe(`${RELAY.base}/units/${U}/proxy`)
+    expect(await t.headers(true)).toEqual({ 'Content-Type': 'application/json', Authorization: 'Bearer boot-secret' })
+    expect(unitCallerHeaders).not.toHaveBeenCalled()
+    await T.engineFetch(t, '/agent/sessions')
+    await T.remoteAccessFetch(t, true)
+    expect(authFetch.mock.calls.map((c) => [c[0], (c[1] as RequestInit).method ?? 'GET'])).toEqual([
+      [`${RELAY.base}/units/${U}/proxy/engine/agent/sessions`, 'GET'],
+      [`${RELAY.base}/units/${U}/proxy/unit/remote-access/request`, 'POST'],
+    ])
+    for (const c of authFetch.mock.calls) expect(JSON.stringify((c[1] as RequestInit).headers)).not.toMatch(/engine-token|X-Forsion-Caller/i)
+    // home 仍是本机引擎,照旧带引擎令牌
+    expect(await T.homeTarget().headers(false)).toEqual({ Authorization: 'Bearer engine-token' })
+  })
+
+  it('中转口换了(换号 / 登出)→ 旧目标作废:登出后 unit 解析不出来,绑在那台的会话失败关闭', async () => {
+    desktop()
+    await T.refreshDesktopRelay()
+    const before = T.targetForRef({ kind: 'unit', unitId: U })!
+    T.bindSession('on-a', { kind: 'unit', unitId: U })
+    desktop({ ...RELAY, token: 'next-boot', accountId: 'https://api.forsion.test/api::someone-else' })
+    expect(await T.refreshDesktopRelay()).toBe(true)
+    const after = T.targetForRef({ kind: 'unit', unitId: U })!
+    expect(after).not.toBe(before)
+    expect(await after.headers(false)).toEqual({ Authorization: 'Bearer next-boot' })
+    desktop(null)
+    expect(await T.refreshDesktopRelay()).toBe(true)
+    expect(T.targetForRef({ kind: 'unit', unitId: U })).toBeNull()
+    await expect(T.targetForSession('on-a').headers()).rejects.toMatchObject({ code: 'TARGET_UNSUPPORTED' })
+  })
+
+  it('按账号落盘的会话绑定用主进程给的账号(cfg.token 解不出);焦点在桌面不落盘 —— 开机恒在这台电脑', async () => {
+    desktop()
+    expect(T.accountStorageId()).toBeNull()
+    await T.refreshDesktopRelay()
+    expect(T.accountStorageId()).toBe(RELAY.accountId)
+    T.bindSession('on-a', { kind: 'unit', unitId: U })
+    expect(JSON.parse(store.get(`forsion_session_targets:${RELAY.accountId}`)!)).toEqual({ 'on-a': `unit:${U}` })
+    await T.setFocusTarget({ kind: 'unit', unitId: U }, { name: 'Mac mini' })
+    expect(T.focusRef()).toEqual({ kind: 'unit', unitId: U })
+    expect([...store.keys()].filter((k) => k.startsWith('forsion_engine_focus:'))).toEqual([])
+    expect(T.restoreFocus()).toEqual({ kind: 'home' })
+    // 换了账号:上个账号的绑定读不到
+    T.clearSessionBindings()
+    desktop({ ...RELAY, accountId: 'https://api.forsion.test/api::someone-else' })
+    await T.refreshDesktopRelay()
+    expect(T.restoreSessionBindings()).toBe(0)
+    expect(T.locationOf('on-a')).toEqual({ kind: 'home' })
+  })
+
+  // Codex 评审 10-14 P1:连着换号,上个账号那次晚到的回包不许盖掉新账号的
+  it('连着两次取中转口,先发的后到 → 只认最后发起的那一次', async () => {
+    let releaseA = (): void => {}
+    const a = new Promise<unknown>((r) => { releaseA = () => r({ ...RELAY, token: 'secret-A', accountId: 'acct-A' }) })
+    let n = 0
+    vi.stubGlobal('window', { tangu: { unitRelay: () => (n++ === 0 ? a : Promise.resolve({ ...RELAY, token: 'secret-B', accountId: 'acct-B' })) } })
+    T.installEngineHost({ cfg: () => ({ backendUrl: 'http://127.0.0.1:4100', token: 'engine-token', modelId: '' }), desktopConfig: () => ({ cloudUrl: 'https://api.forsion.test', mode: 'managed' }) })
+    const first = T.refreshDesktopRelay()
+    expect(await T.refreshDesktopRelay()).toBe(true)
+    expect(T.accountStorageId()).toBe('acct-B')
+    releaseA()
+    expect(await first).toBe(false)
+    expect(T.accountStorageId()).toBe('acct-B')
+    expect(await T.targetForRef({ kind: 'unit', unitId: U })!.headers(false)).toEqual({ Authorization: 'Bearer secret-B' })
+  })
+
+  it('homeKind:桌面托管 = 这台电脑;外部模式连的是云端 = 云端,连别的 = 外部引擎;手机 = 云端', () => {
+    desktop()
+    expect(T.homeKind()).toBe('local')
+    T.installEngineHost({ cfg: () => ({ backendUrl: 'https://api.forsion.test/api/', token: 't', modelId: '' }), desktopConfig: () => ({ cloudUrl: 'https://api.forsion.test', mode: 'external' }) })
+    expect(T.homeKind()).toBe('cloud')
+    T.installEngineHost({ cfg: () => ({ backendUrl: 'http://10.0.0.5:4100', token: 't', modelId: '' }), desktopConfig: () => ({ cloudUrl: 'https://api.forsion.test', mode: 'external' }) })
+    expect(T.homeKind()).toBe('external')
+    vi.stubGlobal('window', { tangu: { mobile: true } })
+    expect(T.homeKind()).toBe('cloud')
   })
 })

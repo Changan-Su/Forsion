@@ -2138,7 +2138,9 @@ const tabCountText = (list) => {
   })
 
   // The inbox is a host list source, and on the phone a flat list source is drawn as the phone's own list (2026-10-13):
-  // category chips, 68 dp rows, icon buttons behind a left swipe, one main button. The mail comes in the way it does on
+  // category chips, icon buttons behind a left swipe, one main button. Since 2026-10-14 the mail is grouped by sender:
+  // a group head (the workspace's first-level row, 52 dp on a 40 dp lead) and under it rows that carry no icon block,
+  // only the unread dot. The mail comes in the way it does on
   // a device — the main button pulls the broadcasts into the local inbox. The browser stage (`stage:phone`, inbox-*)
   // measures the layout; what it cannot do is done here: a real finger for the swipe, the long-press and the pull, the
   // native sheet behind the long-press, and the keyboard under the search line.
@@ -2180,8 +2182,15 @@ const tabCountText = (list) => {
       assert.deepEqual(desk, [], 'the desktop list\'s filter menu / row buttons are on the phone list')
       const chips = await cdp.eval(`[...document.querySelectorAll('${L} .pl-chips > button')].map((b) => b.dataset.filter)`)
       assert.ok(chips[0] === '__all' && chips.length >= 3, `category chips: ${chips}`)
-      const row = dp(await elRect(rowE('E2E mail two'))), lead = dp(await elRect(`${rowE('E2E mail two')}.querySelector('.t2s-lead')`))
-      assert.ok(near(row.h, 68, 1.5) && near(lead.w, 44, 1.5) && near(lead.h, 44, 1.5), `a row is ${row.h.toFixed(1)} dp on a ${lead.w.toFixed(1)}×${lead.h.toFixed(1)} dp icon block (68 / 44)`)
+      // grouped by sender: the pulled mail is Forsion's, its group is open (it holds unread mail) and says how many
+      const headE = `[...document.querySelectorAll('${L} .t2sw-plug-ghead')].find((e) => e.textContent.includes('Forsion'))`
+      assert.equal(await cdp.eval(`${headE}?.getAttribute('aria-expanded')`), 'true', 'the sender\'s group is missing or folded although it holds unread mail')
+      assert.ok(Number(await cdp.eval(`${headE}.querySelector('.t2s-count')?.textContent`)) >= 3, 'the group head does not carry the unread count')
+      const head = dp(await elRect(headE)), headLead = dp(await elRect(`${headE}.querySelector('.t2o-lead')`))
+      assert.ok(near(head.h, 52, 1.5) && near(headLead.w, 40, 1.5) && near(headLead.h, 40, 1.5), `a group head is ${head.h.toFixed(1)} dp on a ${headLead.w.toFixed(1)}×${headLead.h.toFixed(1)} dp lead (52 / 40)`)
+      const row = dp(await elRect(rowE('E2E mail two')))
+      assert.ok(row.h >= 59 && row.h <= 68.5, `a row inside a group is ${row.h.toFixed(1)} dp (60 to 68)`)
+      assert.equal(await cdp.eval(`!${rowE('E2E mail two')}.querySelector('.t2s-lead svg, .t2s-lead img') && !!${rowE('E2E mail two')}.querySelector('.t2s-lead > .t2sw-plug-udot')`), true, 'a row inside a group shows an icon block, or lacks the unread dot')
       assert.equal(await cdp.eval(`${rows}.every((e) => e.classList.contains('is-unread'))`), true, 'pulled mail is not marked unread')
       shot('17h-inbox-list')
 

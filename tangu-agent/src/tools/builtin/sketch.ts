@@ -121,8 +121,9 @@ export const SKETCH_LESS_NOTE = `The user has set interface visuals to "less": c
 chart, diagram, card, or interactive view in this turn; otherwise answer in prose.`;
 
 export type SketchTurnSignal = {
-  /** explicit = 用户点名要图;implicit = 比较 / 流程 / 数据形状;actionable = 要照着做、逐项勾、从里面挑的回答(计划、清单、几样里选一个、做法)。 */
-  kind: 'explicit' | 'implicit' | 'actionable';
+  /** explicit = 用户点名要图;implicit = 比较 / 流程 / 数据形状;actionable = 要照着做、逐项勾、从里面挑的回答(计划、清单、几样里选一个、做法);
+   *  shape = 以上都没命中的普通消息:不替模型判断,只让它按「答案会长什么样」自己定(跟进句、没有关键词的问法都落在这儿)。 */
+  kind: 'explicit' | 'implicit' | 'actionable' | 'shape';
   section: string;
 };
 
@@ -175,18 +176,35 @@ export function sketchTurnSignalFor(message: string, visuals: VisualsPref = 'aut
         `This request contains a comparison, sequence, structure, data shape, or interaction that is faster to understand visually even though the user may not have said "draw". Default to calling ${tool} as part of the answer. Skip only if closer inspection shows that the relationship is trivial or the actual deliverable is code/a file rather than an explanation.`,
     };
   }
-  if (!SKETCH_ACTIONABLE_RE.test(text) || SKETCH_ACTIONABLE_SKIP_RE.test(text)) return undefined;
+  const skip = SKETCH_ACTIONABLE_SKIP_RE.test(text);
+  if (!SKETCH_ACTIONABLE_RE.test(text) || skip) {
+    // 改 / 查 / 讲代码的、处理现成文字的、和「继续」「好的」这种三个字以内的应答不发:它们在 agent 对话里天天出现,答案不会是一份可读的东西。
+    return nativeUi && !skip && !SKETCH_CODE_FOCUS_RE.test(text) && [...text].length >= 4 ? { kind: 'shape', section: SHAPE_NOTE } : undefined;
+  }
   return {
     kind: 'actionable',
     section:
       '## Visual-first note for this turn\n' +
       'The answer to this request is something the user will follow, tick off or choose from (a plan or itinerary, things to prepare or buy, a pick among options, a procedure), even though they did not ask for a card. ' +
       (nativeUi
-        ? 'Default to answering with `intelligent_ui`: inputs for what they can adjust (people, days, the option picked), a checklist for things to do, bring or buy, a comparison for the options, disclosures for longer explanations.'
-        : 'Default to answering with a `sketch` card built from `fs-checklist`, `fs-compare` or `fs-choice`.') +
-      ' Keep the prose around it to a short takeaway. Skip the card only if the complete answer is a sentence or two, or the user wants something carried out (code or files changed, a task or calendar entry created) rather than an answer to read.',
+        ? 'Default to answering with `intelligent_ui`: inputs for what they can adjust (people, days, the option picked), a checklist for things to do, bring or buy, a comparison for the options, disclosures for longer explanations. ' + VIEW_IS_THE_ANSWER
+        : 'Default to answering with a `sketch` card built from `fs-checklist`, `fs-compare` or `fs-choice`. Keep the prose around it to a short takeaway.') +
+      ' Skip the card only if the complete answer is a sentence or two, or the user wants something carried out (code or files changed, a task or calendar entry created) rather than an answer to read.',
   };
 }
+
+// 没命中任何词表的普通消息(2026-10-13,对标 ChatGPT 的 18 句同题:该出的 13 条只出 5 条,跟进 4 条只出 1 条)。
+// 词表只读得到最后一句话的字面,「那四次挥手呢」「预算一千五以内呢」「晚饭吃什么」里没有可抓的词;这里不再猜,
+// 把判断交给看得见整段对话的模型:按答案的形状定,并写明什么时候不出。只在原生文档可用时发(sketch 卡太重,不值得为清单起一张)。
+// ⚠️「先写一段话、再调用工具」这种说法别再用:真模型第 1 次(10-13)里 GPT-6 Luna 有一半写完那段话(「下面的清单可以逐项勾选」)就收尾了,卡没出。
+//    开头那段结论放进文档当第一个文字块 —— 整条回答是一份文档,模型只做一次调用,文字块先于其他区块上屏。
+const VIEW_IS_THE_ANSWER = 'The view IS the answer: make the call first, without announcing it in chat text. Its first block is a `text` block (no title) with your conclusion or recommendation and what you assumed; when an assumption would change the answer, give it a choice input and end the document with one model action that redoes the answer for the picked values (each input sits in exactly one controls block; inputs that only feed that action go in a controls block right before it). A view needs at least one block that is not text: an answer that would be text blocks only is plain chat text. After the call, stop: add one short line only for a caveat the view does not contain, and never restate the conclusion.';
+const SHAPE_NOTE = `## Answer-shape note for this turn
+Choose the form of this answer from what the answer will contain, not from the wording of the request. A short follow-up ("what about the other one", "make day two lighter") continues the subject of the earlier turns and keeps their form.
+- The whole answer is a sentence or two, a piece of writing the user asked for (an email, a message, a translation), code, or something to carry out (change files, run a command, create a task or event): answer or act as usual, with no view.
+- Part of the answer is things to tick off, bring or buy, options to compare or pick among (an "A or B?" question included), a plan, schedule or procedure to follow, amounts that follow a number the user may change, or a recommendation that hinges on a preference you had to guess: answer with one \`intelligent_ui\` call that carries those parts as native blocks, with \`text\` blocks for the reasoning between them. ${VIEW_IS_THE_ANSWER}
+- The answer walks through a whole mechanism, sequence or structure, several stages or parts of it and not one detail, that is easier to see than to read: load the \`visualize\` skill if you have not, call \`sketch\` for one diagram built from its parts (\`<fs-flow>\` for a sequence or process), then explain in prose.
+A follow-up that changes one part gets a view of that part only.`;
 
 export const sketchProvider: ToolProvider = {
   id: 'builtin:sketch',

@@ -14,6 +14,7 @@ import type {
   StackNode,
 } from '@amadeus-shared/compiler/types'
 import { pageKey, resolvePageName } from '@amadeus-shared/links'
+import { parseAppRefInner } from '../../../../shared/appRefs'
 import { parseBlockSubpath, parsePdfLinkInner, parseMediaLinkInner, splitLinkInner } from '@amadeus-shared/pdfLink'
 import { isDrawingPath } from '@amadeus-shared/excalidraw/format'
 import { patchFmExtraText } from '@amadeus-shared/db/pageFrontmatter'
@@ -863,6 +864,10 @@ function makePageStore(opts: PageStoreOptions = {}) {
       const raw = name.trim()
       if (!raw) return
       const src = sourcePath ?? get().activePage ?? undefined
+      // 应用 / 窗口引用(shared/appRefs.ts):目标带 ://,不是笔记 —— 切过去,绝不落到最后「要不要新建这篇笔记」。
+      // 兜底:各处先自己拿完整内文认(窗口标题在别名那一格,多数调用方到这里已经把别名剥掉了,只剩应用)。
+      const appRef = parseAppRefInner(raw)
+      if (appRef) { void window.tangu?.appRefs?.open(appRef); return }
       // PDF 目标 [[report.pdf#page=N]] → 应用内 PDF 阅读器(必须先接住 raw:linkTarget 会砍掉 #page=)。
       const pdf = parsePdfLinkInner(raw)
       if (pdf) {

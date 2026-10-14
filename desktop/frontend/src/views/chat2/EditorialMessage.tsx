@@ -65,7 +65,7 @@ import { TaskCards, type TaskLanding } from './TaskCards'
 import { APPROVAL_UPDATE_OPEN, approvalForCall, parseApprovalUpdate, pickPlanInquiry, type ApprovalOutcome } from './approvalQueue'
 import { isRemoteApprover, wasDecidedHere } from '../../components/ApprovalCard'
 import { answeredByText } from '../../approvalReason'
-import { targetForSession, useSessionHostName } from '../../services/engine/targets'
+import { refForSession, targetForSession, useSessionHostName } from '../../services/engine/targets'
 export type { TaskLanding }
 import './chat2.css'
 
@@ -85,7 +85,7 @@ function draftSketchOf(ev: ToolEvent): SketchItem | undefined {
 }
 
 /**
- * 把一个连续工具段按 Sketch 完成点切开。Sketch 的工具行仍留在前一组中,卡片紧跟其后；
+ * 把一个连续工具段按 Sketch 完成点切开。Sketch 的工具行仍留在前一组中,卡片紧跟其后(原生文档的工具行不留,见下)；
  * 后续工具另起一组,于是多个草图与正文都不会再被批量挪到消息末尾。
  * live=消息还在直播:没收口的 sketch 调用也出一张草稿卡(同 callId,终稿到达原地换成正式卡)。
  */
@@ -97,13 +97,20 @@ export function partitionToolSegment(events: ToolEvent[], sketches?: SketchItem[
     if (tools.length) parts.push({ t: 'tools', events: tools })
     tools = []
   }
-  for (const ev of events) {
-    tools.push(ev)
+  for (const [i, ev] of events.entries()) {
     if (ev.name === 'intelligent_ui') {
+      // 原生文档就是回答本身(10-13,对标 ChatGPT:整条回答是一棵组件树,没有「工具」这一层):
+      // 生成中和成功的调用不在文档上面挂工具行;被拒收的那次留着,错误看得见。
+      const failed = (e: ToolEvent): boolean => e.done && (!!e.isError || /^Error[:\s]/i.test(e.result || ''))
+      if (failed(ev)) tools.push(ev)
       flushTools()
-      parts.push({ t: 'intelligent', event: ev })
+      // 被拒收之后模型在同一段里重写、并且那一份成功了:残缺的那份不画(否则是一张「内容不完整」的卡下面再跟一张完整的),只留它的工具行。
+      // 重写的那份还在生成、又被拒收或中断时,前一份照旧画着 —— 它可能是这条回答里唯一看得见的内容(Codex 10-13)。
+      const rewritten = failed(ev) && events.slice(i + 1).some((next) => next.name === 'intelligent_ui' && next.done && !failed(next))
+      if (!rewritten) parts.push({ t: 'intelligent', event: ev })
       continue
     }
+    tools.push(ev)
     const sketch = sketchByCall.get(ev.id) ?? (live ? draftSketchOf(ev) : undefined)
     if (!sketch) continue
     flushTools()
@@ -376,7 +383,9 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
   // 独占一段的 `![[…]]` → 内联图片/音视频(Markdown 缺省关,只给助手消息开;理由见其 EmbedContext)。
   // 移动端不开:Android 没有 amadeus-asset 拦截器(同 ChatWikiLink 的 media 分支);无 readHostFile = 不在桌面壳里。
   const embedExec = fileCtx?.execMode
-  const embeds = useMemo(() => (runSid && UI_MODE !== 'mobile' && window.tangu?.readHostFile ? { execMode: embedExec } : undefined), [runSid, embedExec])
+  // 会话在别的电脑上(桌面作为调用方):代码块的「运行」是这台电脑的终端、内联嵌入读的是这台电脑的盘 —— 都不是那台的,关掉。
+  const elsewhere = !!runSid && refForSession(runSid).kind === 'unit'
+  const embeds = useMemo(() => (runSid && !elsewhere && UI_MODE !== 'mobile' && window.tangu?.readHostFile ? { execMode: embedExec } : undefined), [runSid, embedExec, elsewhere])
   const { t } = useI18n()
   msg = useSpeechReveal(msg)
   // 建议芯片是一次性的:点了就等于用户按了回车,整排随即失效 —— 不然双击会把同一句排两遍。
@@ -581,7 +590,7 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
                 fenceState = parsed.state
                 const segBody = parsed.text
                 return segBody
-                  ? <div key={i} className="t2-content"><Markdown content={segBody} anchorPrefix={`toc-${msg.id}`} run={runCtx} embeds={embeds} /></div>
+                  ? <div key={i} className="t2-content"><Markdown content={segBody} anchorPrefix={`toc-${msg.id}`} run={runCtx} allowRun={!elsewhere} embeds={embeds} /></div>
                   : null
               }
               const evs = seg.ids.map((id) => msg.toolEvents?.find((e) => e.id === id)).filter(Boolean) as ToolEvent[]
@@ -603,7 +612,7 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
               {body && (
                 voiceMode
                   ? <VoiceBubble text={body} stored={voice!.stored} anchorPrefix={`toc-${msg.id}`} />
-                  : <div className="t2-content"><Markdown content={body} anchorPrefix={`toc-${msg.id}`} run={runCtx} embeds={embeds} /></div>
+                  : <div className="t2-content"><Markdown content={body} anchorPrefix={`toc-${msg.id}`} run={runCtx} allowRun={!elsewhere} embeds={embeds} /></div>
               )}
             </>
           )

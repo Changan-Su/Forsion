@@ -197,6 +197,7 @@ export function Ribbon() {
   const peekCloseTimer = useRef<number | undefined>(undefined)
   const peekHold = useRef(false) // 卡里一点击切了 Space:那边的左栏展开着也先不让位(见下)
   const peekCtx = useRef<Event | null>(null) // 从卡里(含它挂到 body 的菜单)冒上来的那次右键
+  const peekGeo = useRef<React.CSSProperties | null>(null) // 上一次算出的卡片几何(留着的卡照用它,见 peekStyle)
   const [, relayPeek] = useReducer((n: number) => n + 1, 0) // 窗口大小 / 缩放变了:重算卡片几何
   const cancelPeekClose = (): void => { window.clearTimeout(peekCloseTimer.current); peekCloseTimer.current = undefined }
   const closePeek = (): void => {
@@ -206,15 +207,21 @@ export function Ribbon() {
     setPeek(null)
   }
   const blockHard = !!drag || !!menu || !!iconPick || !!fly
-  const blockPeek = blockHard || !leftCollapsed
-  // 左面板展开了 → 预览让位。例外(peekHold):这次展开是卡里一点击切 Space 带出来的 —— 卡先留着,等指针离开再收。
+  // 左面板展开着也弹 —— 弹别的 Space 的(2026-10-14 用户定:悬停本来就是为了呼出别的侧边栏)。
+  // 只有当前 Space 不弹:它的左栏就在眼前。
+  const onScreen = (id: string): boolean => useWorkspace.getState().leftVisible && id === useSpaceStore.getState().activeSpaceId
+  const peekOnScreen = useSpaceStore((s) => !!peek && s.activeSpaceId === peek.spaceId) && !leftCollapsed
+  // 弹着的那个 Space 的左栏自己露出来了(展开了左面板 / 切到了它)→ 预览让位。
+  // 例外(peekHold):是卡里一点击切 Space 带出来的 —— 卡先留着,等指针离开再收。
   // ⚠️ 不留的话:React 的捕获与冒泡是原生的两次回调,捕获那次(切 Space)走完就同步重渲,此刻卸卡,冒泡阶段找不到被点的
   // 元素 —— Space 切了,这一下点击却丢了;晚一拍再卸也不行,这一下点击刚在卡里打开的菜单 / 表单会跟着卡一起没掉。
-  useEffect(() => { if (blockHard || (blockPeek && !peekHold.current)) closePeek() }, [blockHard, blockPeek]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (blockHard || (peekOnScreen && !peekHold.current)) closePeek() }, [blockHard, peekOnScreen]) // eslint-disable-line react-hooks/exhaustive-deps
   // 卡里的 View 被注销了(插件停用):别留一个没人管的实例。
   useEffect(() => (peek ? subscribeViews(() => { if (peek.views.some((v) => !getView(v.type))) closePeek() }) : undefined), [peek]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => () => { window.clearTimeout(peekOpenTimer.current); window.clearTimeout(peekCloseTimer.current) }, [])
   const openPeek = (id: string): void => {
+    if (onScreen(id)) { closePeek(); return } // 弹着别的 Space 的卡时移到当前 Space 的图标上:收,露出真的那块左栏
+    peekHold.current = false // 换了 Space:上一张卡「先留着」的理由不跟过来
     const { spaces, activeSpaceId } = useSpaceStore.getState()
     const space = spaces.find((x) => x.id === id)
     const ws = useWorkspace.getState()
@@ -229,7 +236,7 @@ export function Ribbon() {
     window.clearTimeout(peekOpenTimer.current)
     peekFor.current = id
     if (!id) return
-    if (blockPeek) { if (peek && peek.spaceId !== id) closePeek(); return } // 被留住的卡(peekHold)不跟着换图标
+    if (blockHard) return
     if (peek?.spaceId === id) cancelPeekClose() // 从卡里回到它自己的图标
     else if (peek) openPeek(id) // 已经弹着:换图标不再等
     else peekOpenTimer.current = window.setTimeout(() => { if (peekFor.current === id) openPeek(id) }, PEEK_OPEN_DELAY)
@@ -286,8 +293,13 @@ export function Ribbon() {
   }, [peekOpen]) // eslint-disable-line react-hooks/exhaustive-deps
   /** 卡片几何(视口 px → 按 zoom 折算,同 .rb-fly):贴 Ribbon 右沿,从标签条下沿到工作区底。
    *  让开标签条 —— 左栏的展开钮就在它最左边,盖住了就没法从预览直接「固定」成常驻左栏。
+   *  左面板展开着时(弹的是别的 Space):卡片照着眼前这块左栏的位置盖上去 —— 原地换成另一个 Space 的侧边栏,四边不露底下那块;
+   *  展开钮在左栏右边,盖不到。宽度仍取记住的那个值,不量左栏的实宽(展开补间途中它是半截的)。
    *  ponytail: 宽度一律按当前 Space 记住的左栏宽(没拖过 = 黄金分割默认),不去读别的 Space 各自记的。 */
   const peekStyle = (): React.CSSProperties => {
+    // 留着的卡(peekHold)不挪位置:切过去之后那边左栏的开合可能和这边不一样,照新状态重算,卡片会在指针底下跳一下。
+    // ponytail: 留着期间窗口大小 / 缩放变了也不重算(要变就得把指针挪开,卡片随即收起);真要跟,就只冻结 top / left。
+    if (peekHold.current && peekGeo.current) return peekGeo.current
     const root = rootRef.current
     const z = zoomOf(root)
     const rb = root?.getBoundingClientRect()
@@ -298,7 +310,12 @@ export function Ribbon() {
     const bottom = (work?.bottom ?? window.innerHeight) - 8
     const ws = useWorkspace.getState()
     const width = computeSideWidth((work?.width ?? 1200) / z, 'left', { free: ws.sideFree.left, saved: ws.sideWidths.left, scale: ws.sideScale.left })
-    return { left: ((rb?.right ?? 44) + 4) / z, top: top / z, height: Math.max(160, bottom - top) / z, width }
+    const over = ws.leftVisible ? ws.api?.panels.find((x) => (x.params as { __loc?: string } | undefined)?.__loc === 'left')?.group.element.getBoundingClientRect() : undefined
+    peekGeo.current = over?.height // 组刚建出来、还没进 DOM 时量到的是全 0:不认,按收起时的摆法
+      // 盖在左栏上 = 顶到了窗口最上:mac 的交通灯越过 Ribbon 压在这一角,头部让出来(engine.css,同左栏标签条的避让)。
+      ? { left: over.left / z, top: over.top / z, height: over.height / z, width, '--rb-peek-lights': '26px' } as React.CSSProperties
+      : { left: ((rb?.right ?? 44) + 4) / z, top: top / z, height: Math.max(160, bottom - top) / z, width }
+    return peekGeo.current
   }
 
   const blockTip = !!drag || !!menu || !!iconPick || !!fly || !!peek

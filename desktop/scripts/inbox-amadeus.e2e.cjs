@@ -81,7 +81,16 @@ async function clickInboxSpace(win) {
   await win.waitForTimeout(1200)
   return ok
 }
+// 2026-10-14 起列表按发信人归组:没有未读的组缺省收着,一组先列五封。要按标题找行、数行之前先把它们都摊开。
+async function revealAll(win) {
+  for (let i = 0; i < 20; i++) {
+    const shut = win.locator('.t2sw-plug-list .t2sw-plug-ghead[aria-expanded="false"], .t2sw-plug-list .t2s-viewmore').first()
+    if (!(await shut.count())) break
+    await shut.click(); await win.waitForTimeout(80)
+  }
+}
 async function openMessage(win, title) {
+  await revealAll(win)
   const row = win.locator('.t2sw-plug-list .t2s-srow', { hasText: title }).first()
   await row.click()
   await win.waitForTimeout(1500)
@@ -226,22 +235,22 @@ async function main() {
       return {
         switcher: !!root?.querySelector('.t2sw-mode-picker'), // 档位锁在条目上:不该再有切档菜单
         rows: plug ? plug.querySelectorAll('.t2sw-plug-list .t2s-srow').length : 0,
-        dots: plug ? plug.querySelectorAll('.t2sw-plug-list .t2s-srow .t2s-dot.unread').length : 0,
+        // 组里的行不画自己的图标,未读是前导槽里的一颗圆点
+        dots: plug ? plug.querySelectorAll('.t2sw-plug-list .t2s-srow .t2s-lead > .t2sw-plug-udot').length : 0,
+        rowIcons: plug ? plug.querySelectorAll('.t2sw-plug-list .t2s-srow .t2s-lead :is(svg, img)').length : -1,
+        // 组头:名字 : 开着没有 : 行尾的未读数(从上到下)
+        heads: [...(plug?.querySelectorAll('.t2sw-plug-ghead') ?? [])].map((h) => `${h.querySelector('.t2o-name')?.textContent}:${h.getAttribute('aria-expanded')}:${h.querySelector('.t2s-count')?.textContent ?? ''}`),
+        headH: Math.round(plug?.querySelector('.t2sw-plug-ghead')?.getBoundingClientRect().height ?? 0),
         groups: [...document.querySelectorAll('[role=menuitemradio]')].map((e) => e.getAttribute('aria-label')),
         oldRows: document.querySelectorAll('.ibx-row, .ibx-chips').length,
-        dotInCorner: (() => {
-          const dot = plug?.querySelector('.t2sw-plug-list .t2s-srow .t2s-dot.unread')
-          const lead = dot?.closest('.t2s-lead')
-          if (!dot || !lead) return false
-          const a = lead.getBoundingClientRect(), b = dot.getBoundingClientRect()
-          const cx = b.left + b.width / 2, cy = b.top + b.height / 2
-          return b.width > 0 && cx >= a.left + a.width / 2 && cx <= a.right + 3 && cy >= a.top + a.height / 2 && cy <= a.bottom + 3
-        })(),
       }
     })
-    check('收件箱 Space 左栏 = 统一工作区(锁在收件箱档,无切档菜单):5 行、未读点 4 个且贴在图标右下角,旧 Gmail 式列表 0 个', spaced && !ws.switcher && ws.rows === 5 && ws.dots === 4 && ws.dotInCorner && ws.oldRows === 0, JSON.stringify({ spaced, ...ws }))
-    check('工作区分组:全部 / 未读 / Forsion / 自动化 / Agent / 已归档,不显示任何 automation 规则 id',
-      ['全部', '未读', 'Forsion', '自动化', 'Agent', '已归档'].every((g) => ws.groups.includes(g)) && !ws.groups.some((g) => /automation:|w-[a-z0-9]/i.test(g || '')), JSON.stringify(ws.groups))
+    check('收件箱 Space 左栏 = 统一工作区(锁在收件箱档,无切档菜单):5 行、未读点 4 个、行不画自己的图标,旧 Gmail 式列表 0 个', spaced && !ws.switcher && ws.rows === 5 && ws.dots === 4 && ws.rowIcons === 0 && ws.oldRows === 0, JSON.stringify({ spaced, ...ws }))
+    // 夹具里最新的一封:Muse 09 点、Forsion 07 点、自动化 06 点 → 组就按这个顺序;三组都有未读 → 都开着
+    check('按发信人归组:组头 40 高,按最新一封信排(Muse → Forsion → 自动化),有未读的开着、行尾是未读数;两条自动化规则并成一组',
+      ws.headH === 40 && /^muse:true:2,Forsion:true:1,自动化:true:1$/i.test(ws.heads.join(',')), JSON.stringify({ heads: ws.heads, headH: ws.headH }))
+    check('筛选只剩 全部 / 未读 / 已归档(发信人已经是组),不显示任何 automation 规则 id',
+      JSON.stringify(ws.groups.filter(Boolean)) === JSON.stringify(['全部', '未读', '已归档']) && !ws.heads.some((g) => /automation:|w-[a-z0-9]{4}/i.test(g || '')), JSON.stringify(ws.groups))
     await win.locator('.capability-menu').evaluate((el) => Promise.all(el.getAnimations({ subtree: true }).map((animation) => animation.finished)))
     await win.screenshot({ path: path.join(path.dirname(SHOT), 'workspace-filter-zh.png') })
     await win.keyboard.press('Escape')
@@ -258,6 +267,22 @@ async function main() {
     check('行内操作可发现，沿用原生菜单', await win.getByRole('menuitem', { name: '标为未读', exact: true }).count() === 1)
     await win.keyboard.press('Escape')
     check('关闭条目菜单将焦点还给入口', await rowMenu.evaluate((el) => document.activeElement === el))
+    // 行尾的悬停图标钮(2026-10-14):指针上去才有,和手机左滑是同一批;点了真发请求、不把这封信打开
+    const hoverRow = win.locator('.t2sw-plug-item', { hasText: '自动化提醒' })
+    await win.mouse.move(900, 500)
+    const quickBefore = await hoverRow.locator('.t2sw-plug-row-act').first().isVisible()
+    await hoverRow.hover()
+    const quick = await hoverRow.locator('.t2sw-plug-row-act').evaluateAll((els) => els.filter((el) => el.getClientRects().length).map((el) => el.getAttribute('aria-label')))
+    await win.screenshot({ path: path.join(path.dirname(SHOT), 'workspace-inbox-hover-zh.png') })
+    await hoverRow.locator('.t2sw-plug-row-act[data-action="read"]').click(); await win.waitForTimeout(500)
+    const readOnce = seen.patch.filter((x) => x.id === 'ma2').map((x) => x.read)
+    const stillOpen = await win.locator('.t2sw-plug-ghead', { hasText: '自动化' }).getAttribute('aria-expanded')
+    await hoverRow.hover(); await hoverRow.locator('.t2sw-plug-row-act[data-action="read"]').click(); await win.waitForTimeout(500)
+    check('行尾的悬停图标钮:指针不在时没有;上去是 标为已读 / 归档 / 删除;点「标为已读」发 PATCH read=true、组不合上、信没被打开;再点一次标回未读',
+      !quickBefore && JSON.stringify(quick) === JSON.stringify(['标为已读', '归档', '删除']) && JSON.stringify(readOnce) === '[true]' && stillOpen === 'true'
+      && JSON.stringify(seen.patch.filter((x) => x.id === 'ma2').map((x) => x.read)) === '[true,false]' && await win.locator('.ibx-reader-title').count() === 0,
+      JSON.stringify({ quickBefore, quick, patch: seen.patch, stillOpen }))
+    await win.mouse.move(900, 500)
     await win.screenshot({ path: path.join(path.dirname(SHOT), 'workspace-inbox-zh.png') })
     await openMessage(win, '自动化汇总')
     const automationMeta = await win.evaluate(() => {
@@ -315,19 +340,17 @@ async function main() {
     await win.waitForTimeout(800)
     check('任务卡「忽略」→ Muse LOG 收到 [feedback] 行,卡定格', seen.feedback.some((x) => /ignored/.test(x)) && (await win.locator('.ibx-cards .t2-taskcard.done:not(.ibx-approval)').count()) === 1, JSON.stringify(seen.feedback))
 
-    // 工作区分组筛选:未读(客户端)/ 稳定来源类别 / 已归档(换服务端 filter)/ 回到全部
+    // 筛选:未读(客户端)/ 已归档(换服务端 filter)/ 回到全部。数行之前先把收着的组摊开。
     const clickGroup = async (name) => { await win.getByRole('button', { name: '筛选分类', exact: true }).click(); await win.getByRole('menuitemradio', { name, exact: true }).click(); await win.waitForTimeout(900) }
-    const listRows = () => win.locator('.t2sw-plug-list .t2s-srow').count()
+    const listRows = async () => { await revealAll(win); return win.locator('.t2sw-plug-list .t2s-srow').count() }
     await clickGroup('未读'); const unreadRows = await listRows()
-    await clickGroup('自动化'); const automationRows = await listRows()
-    await clickGroup('Agent'); const agentRows = await listRows()
-    await clickGroup('已归档'); const archivedRows = await listRows()
+    await clickGroup('已归档'); const archivedHeads = await win.locator('.t2sw-plug-ghead[aria-expanded="true"]').count(); const archivedRows = await listRows()
     await openMessage(win, '已归档的旧消息')
     const archivedTitle = await win.locator('.ibx-reader-title').first().textContent().catch(() => '')
     await clickGroup('全部'); const allRows = await listRows()
-    check('分组筛选:未读剩 3(刚读的那封掉出)/ 自动化 2 / Agent 2(不含已归档)/ 已归档 1 封且点得开 / 回到全部 5;已归档是单独拉的(filter=archived)',
-      unreadRows === 3 && automationRows === 2 && agentRows === 2 && archivedRows === 1 && archivedTitle === '已归档的旧消息' && allRows === 5 && seen.filters.includes('archived'),
-      JSON.stringify({ unreadRows, automationRows, agentRows, archivedRows, archivedTitle, allRows, filters: seen.filters }))
+    check('筛选:未读剩 3(刚读的那封掉出)/ 已归档 1 封、只有一个发信人所以那一组直接开着、点得开 / 回到全部 5;已归档是单独拉的(filter=archived)',
+      unreadRows === 3 && archivedRows === 1 && archivedHeads === 1 && archivedTitle === '已归档的旧消息' && allRows === 5 && seen.filters.includes('archived'),
+      JSON.stringify({ unreadRows, archivedRows, archivedHeads, archivedTitle, allRows, filters: seen.filters }))
 
     // ④ 按钮块
     await openMessage(win, '按钮块')
@@ -349,7 +372,8 @@ async function main() {
       return { icon: icon && [icon.display, icon.width, icon.height].join(' '), block: block && [block.display, block.flexDirection, block.rowGap].join(' ') }
     })
     check('阅读面板的图标钮 28×28、按钮块是带行距的一列(规则没被前面的注释吃掉)', /^(inline-)?flex 28px 28px$/.test(live.icon || '') && live.block === 'flex column 4px', JSON.stringify(live))
-    // 2026-10-13 翻新:列表两行(标题下面「发信人 · 正文第一句」)、行首按来源、头部发信人在标题之上、标签页显示信的标题、主按钮实心。
+    // 2026-10-13 翻新:列表两行、头部发信人在标题之上、标签页显示信的标题、主按钮实心。
+    // 2026-10-14 按发信人归组后:第二行只剩正文第一句(发信人在组头上),来源图标在组头的方块里。
     const look = await win.evaluate(() => {
       const row = [...document.querySelectorAll('.t2sw-plug-list .t2s-srow')].find((r) => (r.textContent || '').includes('自动化汇总'))
       const sub = row?.querySelector('.t2sw-plug-sub')
@@ -357,7 +381,7 @@ async function main() {
       const tr = title?.getBoundingClientRect()
       return {
         sub: sub?.textContent || '', oneLine: !!sub && sub.scrollHeight <= sub.clientHeight + 1, twoLines: !!row && row.getBoundingClientRect().height > 36,
-        leadSvg: !!row?.querySelector('.t2s-lead svg'), senderAbove: !!meta && !!tr && meta.bottom <= tr.top,
+        leadSvg: !![...document.querySelectorAll('.t2sw-plug-ghead')].find((h) => (h.textContent || '').includes('自动化'))?.querySelector('.t2sw-plug-gtile svg'), senderAbove: !!meta && !!tr && meta.bottom <= tr.top,
         // 时间收在第一行里,第二行用满整行的宽(右缘与时间的右缘对齐);时间若自成一列,第二行会被截在它左边(手机上实见)。
         subWide: (() => {
           const sr = sub?.getBoundingClientRect(), cr = row?.querySelector('.t2s-count')?.getBoundingClientRect()
@@ -381,8 +405,8 @@ async function main() {
         titlePx: title ? getComputedStyle(title).fontSize : '', tab: [...document.querySelectorAll('.wb-tab-name')].some((t) => t.textContent === '按钮块'),
       }
     })
-    check('列表行两行:标题下面是「自动化 · 今日任务已汇总。」(只占一行、用满整行的宽),行首是来源图标;阅读面板发信人在标题之上、标题 24px、正文紧跟标题(8~30px);标签页显示信的标题',
-      look.sub === '自动化 · 今日任务已汇总。' && look.oneLine && look.subWide && look.twoLines && look.leadSvg && look.senderAbove && look.titlePx === '24px' && look.tab && look.gap >= 8 && look.gap <= 30, JSON.stringify(look))
+    check('列表行两行:标题下面是正文第一句「今日任务已汇总。」(只占一行、用满整行的宽),来源图标在组头的方块里;阅读面板发信人在标题之上、标题 24px、正文紧跟标题(8~30px);标签页显示信的标题',
+      look.sub === '今日任务已汇总。' && look.oneLine && look.subWide && look.twoLines && look.leadSvg && look.senderAbove && look.titlePx === '24px' && look.tab && look.gap >= 8 && look.gap <= 30, JSON.stringify(look))
     if (!NEGATIVE_CONTROL) await win.locator('.ibx-reader-wrap').first().screenshot({ path: SHOT_BTN }).catch(() => {})
     // 未配置的按钮:只读态 disabled;硬点一下也不许开自动化构建器
     await win.locator('.ibx-reader-body .amx-btnblock').nth(1).locator('.amx-btnblock-btn').click({ force: true }).catch(() => {})

@@ -190,6 +190,46 @@ describe('sketch proactive turn signal', () => {
     expect(sketchTurnSignalFor(message)).toBeUndefined();
   });
 
+  // 2026-10-13:和 ChatGPT 同题对照,词表抓不到的问法(跟进句、「怎么分配」「吃什么」「为什么」)交给模型按答案的形状自己定。
+  it.each([
+    '那四次挥手呢',
+    '预算一千五以内呢',
+    '那里有什么值得去的?',
+    '晚饭吃什么',
+    '红烧肉怎么做?四个人吃',
+    '我月薪 15000,房租 4000,想一年存下 6 万,怎么分配?',
+    '解释一下 TCP 为什么要三次握手',
+    '好,那接下来怎么做',
+  ])('hands an ordinary message to the model to shape, without a delivery nudge: %s', (message) => {
+    const s = sketchTurnSignalFor(message, 'auto', true);
+    expect(s?.kind).toBe('shape');
+    expect(s?.section).toContain('with no view'); // 什么时候不出写在同一句提醒里
+    expect(s?.section).toContain('not one detail'); // 只问流程里的一个细节(「第三次握手是做什么的」)不配图:visualauto 的 fact 那条钉着
+    expect(sketchTurnSignalFor(message, 'less', true)).toBeUndefined();
+    expect(sketchTurnSignalFor(message, 'auto', false)).toBeUndefined(); // 没有原生文档的客户端不发:为一份清单起 sketch 卡太重
+  });
+
+  it.each([
+    '继续',
+    '好的',
+    'ok',
+    '修复 checklist.ts 的报错，推荐的写法是什么',
+    '帮我把这句话翻译成英文：今天天气不错，适合出去走走。',
+    'Refactor the layout function in src/layout.ts',
+    '把登录接口实现一下',
+    '只用文字说说晚饭吃什么',
+  ])('keeps the shape note out of acknowledgements, code work and text to be processed: %s', (message) => {
+    expect(sketchTurnSignalFor(message, 'auto', true)).toBeUndefined();
+  });
+
+  // 真模型(10-13):让它「先写一段话、再调用」时一半写完那段话就收尾。开头的结论要放进文档里,提醒里不许出现让它先说话的说法。
+  it.each(['下周要搬家，我需要提前准备些什么？', '晚饭吃什么'])('puts the opening conclusion inside the view instead of before the call: %s', (message) => {
+    const section = sketchTurnSignalFor(message, 'auto', true)?.section || '';
+    expect(section).toContain('make the call first, without announcing it');
+    expect(section).toContain('first block is a `text` block');
+    expect(section).not.toMatch(/start with [^.]*prose/i);
+  });
+
   it('names the native tool only when the client can render it', () => {
     const q = '下周要搬家，我需要提前准备些什么？';
     expect(sketchTurnSignalFor(q, 'auto', true)?.section).toContain('`intelligent_ui`');

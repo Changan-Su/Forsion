@@ -36,7 +36,13 @@ For interactive plans, image selections, web research and qualitative comparison
 state. Put metadata, resources and inputs before blocks so complete blocks appear progressively.
 Choose the few controls that actually help; short explanations remain prose. Local choices,
 quantities, checklists, image expansion and disclosures NEVER need another model request.
-Use model actions only for genuinely new reasoning. Images and sources must use supplied or
+Use model actions only for genuinely new reasoning. When the answer rests on assumptions that
+would change it (who it is for, how many, budget, level, taste), give each a choice input (one to
+three, initial = what you assumed) and END the document with an actions block holding ONE model
+action that redoes the answer for the picked values, instead of asking in prose. Inputs that only
+feed that action go in a controls block right before it; an input already shown higher up is not
+repeated. With nothing that would change the answer, add neither.
+Images and sources must use supplied or
 retrieved real URLs: do not invent pictures, prices or citations. A source is a linked summary,
 not a live embedded website. If web_fetch returns only a title or page shell, use browser_navigate
 to read the rendered page before summarizing it; repeating the same text fetch is not verification.
@@ -105,7 +111,11 @@ so a later increase shows a shortfall. All references must resolve. Put metadata
 before blocks; only complete validated blocks become interactive. Every declared input MUST be
 included exactly once in a controls block, without a when condition; put controls before the data
 they affect. Do not add CSS or code. NEVER print the document JSON as chat text, before or after
-the tool call. The user sees the native view; only add a short takeaway afterwards.
+the tool call. The view IS the answer, not an attachment to it: open the document with a text
+block (no title) giving your conclusion and what you assumed, and put reasoning that belongs
+between components in text blocks. Make the call without announcing it in chat text; afterwards
+stop, adding one short line only for a caveat the view does not contain (never a restatement, never
+"below"). A document of text blocks only is not a view: write that answer as plain chat text.
 The intelligent-ui skill has worked examples when skills are available; this schema is sufficient
 in Chat mode where skills are unavailable.`
 

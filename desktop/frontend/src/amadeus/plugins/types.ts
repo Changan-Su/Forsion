@@ -567,6 +567,20 @@ export interface ListItem {
    *  closed and the one holding `activeKey()` is opened for you. `icon` overrides the folder glyph.
    *  A `primary` action from `itemMenu(folder)` is drawn as the `+` button on the row. */
   kind?: 'folder'
+  /** Folder rows only (2026-10-14+): 'group' draws a top-level folder as a group head — the taller
+   *  first-level row the Tangu sidebar uses for agents and projects: a 30px lead (`iconUrl` as a round
+   *  avatar, else `icon` in a tile, else the first letter of the title), the title with a fold arrow, and
+   *  `hint` as a count pill. Rows inside it give up their own icon (the head already says whose they are;
+   *  only the unread dot stays), and the host lists five at a time behind "View more". Use it when the
+   *  folders are *who or what the rows belong to* (senders, accounts) rather than a file tree. On a phone
+   *  a source whose only folders are group heads keeps the full-screen list layout (swipe, main button).
+   *  Its fold state lasts until the app restarts, see `defaultOpen`. Nested folders draw the plain folder
+   *  row, and so do hosts without `ctx.listCapabilities?.includes('group')` (folded, rows with their icons). */
+  folderStyle?: 'group'
+  /** Group heads only (2026-10-14+): unfold this group without the user asking, e.g. while it holds
+   *  something unread. The host opens the group each time the flag turns on, including after the user
+   *  folded it; while the flag stays on, the user's own fold wins. Without it a group starts folded. */
+  defaultOpen?: boolean
   /** Let the user drag this row onto other rows of the same list (2026-10-10+). Needs
    *  `drop.accepts` to include 'items'; the drop arrives in `drop.onDrop` as `{ items }`. */
   draggable?: boolean
@@ -599,8 +613,10 @@ export interface ListAction {
   danger?: boolean
   /** A name from the icon vocabulary (same names as `ListItem.icon`; 2026-10-13+). The host needs it wherever an
    *  action is drawn as an icon-only button: on a phone, a row's actions sit behind a left swipe as round icon
-   *  buttons, and the source's primary action is the list's main button. An action without an icon is left out of
-   *  the swipe tray (it stays in the row's long-press menu); a primary action without one gets a plus sign.
+   *  buttons, and the source's primary action is the list's main button; on a desktop the same row actions show
+   *  as icon buttons at the end of the row while the pointer is over it (2026-10-14+), next to the "more" menu
+   *  that lists every action by name. An action without an icon is left out of both (it stays in the row's
+   *  menu); a primary action without one gets a plus sign.
    *  Give paired actions (read / unread, archive / unarchive) each their own icon. Older hosts ignore the field. */
   icon?: string
   run(): void
@@ -1153,9 +1169,10 @@ export interface PluginContext {
    *  always call as `ctx.registerListSource?.(…)`. See ListSourceContribution. */
   registerListSource?(src: ListSourceContribution): void
   /** What this host's list can do beyond flat rows (2026-10-10+): 'tree' = `ListItem.parent` and
-   *  folder rows, 'items' = dragging rows onto rows, 'rename' = in-place rename. Older hosts lack the
-   *  field — treat a missing entry as "not supported" and keep emitting flat rows there. */
-  readonly listCapabilities?: readonly ('tree' | 'items' | 'rename')[]
+   *  folder rows, 'items' = dragging rows onto rows, 'rename' = in-place rename, 'group' = group heads
+   *  (`folderStyle: 'group'`, `defaultOpen`; 2026-10-14+). Older hosts lack the field — treat a missing
+   *  entry as "not supported" and keep emitting flat rows there. */
+  readonly listCapabilities?: readonly ('tree' | 'items' | 'rename' | 'group')[]
   /** Show a top-right notification card (2026-07-23+). Source is auto-labelled with the plugin
    *  name and users can mute per plugin in 设置 → 通知与状态栏 — treat it as a mutable hint, not a
    *  data channel. error level is sticky (manual close) by default. Old hosts lack this API:

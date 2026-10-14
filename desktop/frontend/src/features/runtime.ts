@@ -21,6 +21,7 @@ export const museAvailable = (): boolean => tanguLocalFace('muse') && !!window.t
 // ⚠️ 门控字面量逐字写成 `window.tangu?.X`(platform-parity 的 D 段靠正则扫它)。
 /** 名册可读(设备分组要列哪些电脑):手机 App / 桌面有 unitsList;网页版与设备页没有。设备页**无条件**关(§4.7 b6:不得经 A 的隧道再驱动 B)。 */
 export const rosterAvailable = (): boolean => !!window.tangu?.unitsList && !window.tangu?.unitPage
-/** 选择器、设备分组、逐台拉会话列表:名册可读 **且** 这一端能把会话建到别的电脑上(K6:只有手机 / 网页版,且已登录)。
- *  桌面主窗口(K7 U1)、网页版(U2,无名册)、设备页恒 false。 */
+/** 选择器、设备分组、逐台拉会话列表:名册可读 **且** 这一端能把会话建到别的电脑上(K6:手机 / 网页版已登录;
+ *  桌面主窗口 = 主进程的中转口已到位,2026-10-14 起,K7 U1 改判)。网页版(U2,无名册)、设备页恒 false。
+ *  ⚠️ 不是响应式的:桌面的中转口是启动后异步到的,只在渲染期读它的组件要订阅 useRemoteCapability。 */
 export const runLocationsAvailable = (): boolean => rosterAvailable() && remoteTargetsSupported()

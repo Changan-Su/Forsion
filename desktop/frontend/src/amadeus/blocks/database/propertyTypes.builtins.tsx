@@ -14,6 +14,7 @@ import { OverlayAt } from '../../lib/clampMenu'
 import { dbIcon } from './databaseIcons'
 import { PersonCell, PERSON_TYPE } from './PersonCell'
 import { registerMessages, useI18n } from '../../../i18n'
+import { openAppRefInner } from '../../../components/appRefs'
 export { isPersonCol, personCandidates, PERSON_TYPE } from './PersonCell'
 
 registerMessages({
@@ -155,7 +156,7 @@ function RelationCell({ value, onChange }: PropCellProps) {
         <div className="amx-db-urlcell">
           <button
             className="amx-db-wikilink"
-            onClick={() => usePageStore.getState().openWikiLink(inner.split('|')[0].trim().replace(/\.md$/i, ''))}
+            onClick={() => { if (!openAppRefInner(inner)) usePageStore.getState().openWikiLink(inner.split('|')[0].trim().replace(/\.md$/i, '')) }}
             title={inner}
           >
             {label}

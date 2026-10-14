@@ -409,6 +409,26 @@
    胶囊两侧的空当就把滚轮/框选交还给底下的正文。`:not(.t2c-inner)` 兜住卡外的浮层(群聊设置弹窗等)。 */
 .t2-chat-col > .composer-anchor > .t2c { pointer-events: none; }
 .t2c-inner, .t2c > :not(.t2c-inner) { pointer-events: auto; }
+
+/* ── 新对话输入卡上方那一栏(「在哪运行」/ 项目胶囊 / 额外文件夹 / 开场那一行;JSX 在 ChatView 的 .composer-anchor 里)──
+   这一栏的盒子**照抄输入卡的 .t2c-inner**(composer2.css:880 封顶 + 28 横向内边距,border-box;上面两个断点里是 18 / 10),
+   胶囊左缘才和输入卡左缘是同一条线。
+   ⚠️ 两边是各写各的数:改 .t2c-inner 的宽 / 横向内边距(含断点里的)必须连这里一起改 —— 上一次这里还停在 760 / 24,
+      输入卡改成 880 / 28 之后胶囊就一直缩进 32px(用户 10-13:「它总是歪掉」)。
+   ⚠️ 基础规则和它的两个断点必须留在**同一个文件、基础在前**:都是 (0,1,0),靠源码顺序。基础规则放在 base.css 时
+      断点压不住它(base.css 在产物里排在本文件之后),宽窗对齐、≤1040 偏 10px、窄列偏 18px。
+   小窗(lcl/engine/miniCard.css 的 .mini-card-shell .newchat-projectbar,(0,2,0))照旧压过这里。仪器:npm run e2e:projectbar。
+   折行朝上(wrap-reverse):放不下的(额外文件夹、开场那一行)排到上一行去,项目胶囊始终贴着输入卡。
+   上内边距放在 inner 上:栏里什么都没有(只等开场那一行、而它没东西可说)时 inner 为空,整栏不占高度。 */
+.newchat-projectbar { max-width: 880px; width: 100%; margin: 0 auto; box-sizing: border-box; padding: 0 28px; }
+.newchat-projectbar-inner { display: flex; align-items: center; flex-wrap: wrap-reverse; gap: 6px; padding-top: 6px; }
+.newchat-projectbar-inner:empty { display: none; }
+@media (max-width: 1040px) {
+  .newchat-projectbar { padding-inline: 18px; }
+}
+@container (max-width: 520px) {
+  .newchat-projectbar { padding-inline: 10px; }
+}
 .t2-composer-wrap { padding: 8px 28px 18px; max-width: 880px; margin: 0 auto; width: 100%; box-sizing: border-box; display: flex; flex-direction: column; gap: 8px; }
 .t2-composer {
   background: var(--bg-card, var(--bg));
