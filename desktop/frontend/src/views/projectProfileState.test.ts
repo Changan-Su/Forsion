@@ -72,10 +72,10 @@ describe('project defaults', () => {
     expect(newSessionConfig(sticky, {}, {})).toEqual(sticky)
   })
 
-  it('isProjectWorkspace:用户添加的本地目录 + Tangu 默认工作区;Vault 等其余系统目录不算', () => {
+  it('isProjectWorkspace:用户添加的本地目录 + Tangu 默认工作区 + 笔记库;通道 / 云端 / 没有路径的不算', () => {
     expect(isProjectWorkspace({ key: '/p', name: 'p', kind: 'local', path: '/p' })).toBe(true)
     expect(isProjectWorkspace({ key: '/d', name: '默认工作区', kind: 'local', path: '/d', system: true, isDefault: true })).toBe(true)
-    expect(isProjectWorkspace({ key: '/v', name: 'Vault', kind: 'local', path: '/v', system: true })).toBe(false)
+    expect(isProjectWorkspace({ key: '/v', name: 'Vault', kind: 'local', path: '/v', system: true })).toBe(true)
     expect(isProjectWorkspace({ key: '__default__', name: '默认工作区', kind: 'local', path: null, system: true, isDefault: true })).toBe(false)
     expect(isProjectWorkspace({ key: '__cloud__:Tangu', name: 'Tangu', kind: 'cloud', path: null })).toBe(false)
     expect(isProjectWorkspace({ key: 'c', name: 'c', kind: 'channel', path: '/c' })).toBe(false)

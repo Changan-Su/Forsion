@@ -2,10 +2,14 @@ import type { AgentConfig, ProjectSettings, TeamDef, WorkspaceDescriptor } from 
 
 export type ProjectWorkspace = WorkspaceDescriptor & { kind: 'local'; path: string }
 
-/** 本地目录才算「Project」:用户添加的目录 + Tangu 默认工作区(09-23 用户:「默认文件夹也是 Project」)。
- *  Vault(笔记库)、通道文件夹、云端 Project 与无根会话都不是 —— 与侧栏分组同一口径。 */
+/** 本地目录才算「Project」:用户添加的目录 + Tangu 默认工作区(09-23 用户:「默认文件夹也是 Project」)
+ *  + Amadeus 笔记库(10-14 用户:库里的会话在 Tangu 详情里看不到项目详情;10-13 起从 Amadeus 呼出的新对话就落在库里)。
+ *  通道文件夹(kind 'channel')、云端 Project 与无根会话不是。
+ *  ⚠️库以前被排除时,同一条会话的详情会随「库醒没醒」变:库没恢复时 workspaces() 里没有那条系统项,
+ *  会话落进末尾的普通本地组 → 有项目详情;库一恢复就没了。现在两种状态一致。
+ *  系统项(默认工作区 / 库)在详情里照旧不能改名、Git 只读(ProjectProfile 按 workspace.system 判)。 */
 export function isProjectWorkspace(ws: WorkspaceDescriptor | undefined | null): ws is ProjectWorkspace {
-  return !!ws && ws.kind === 'local' && !!ws.path && (!ws.system || !!ws.isDefault)
+  return !!ws && ws.kind === 'local' && !!ws.path
 }
 
 /** 项目默认项 → 新会话的初始配置(+ 模型)。团队展开成**会话级配队**(groupChat + 成员 + 职责 + TEAM.md),不是 teamSlug ——
