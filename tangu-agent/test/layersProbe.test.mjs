@@ -48,6 +48,12 @@ describe('layers 探针的判定', () => {
     }
   });
 
+  it('同一个会话里模型 log_event 和判官各写一行 = 同一件事写了两遍,红;只有一边写是绿的', () => {
+    expect(judgeLayers([round({ B: { memory: [PREF], logEventCalls: ['交了季度复盘报告'], judgeLog: ['用户提交了季度报告'] } })]).ok).toBe(false);
+    expect(judgeLayers([round({ B: { memory: [PREF], logEventCalls: ['交了季度复盘报告'] } })]).ok).toBe(true);
+    expect(judgeLayers([round({ B: { memory: [PREF], judgeLog: ['用户提交了季度报告'] } })]).ok).toBe(true);
+  });
+
   it('run 出错、或有条目对不上任何一个会话,都是红的', () => {
     expect(judgeLayers([round({ A: { error: 'events 500' } })]).ok).toBe(false);
     expect(judgeLayers([round({ round: { stray: ['来源不明的一条'] } })]).ok).toBe(false);

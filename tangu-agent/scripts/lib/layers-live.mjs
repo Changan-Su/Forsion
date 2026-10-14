@@ -120,6 +120,8 @@ export async function layersLive({ run, api, until, home, OUT, MODEL, AGENT_CONF
  *    judge  every message needs the judge's normal verdict line. A parse failure, an exception or a timeout means
  *           that path was not measured, and an unmeasured path is not green.
  *    stray  a stored line that belongs to none of the round's sessions means the reading above is incomplete.
+ *    log    each message is about one thing, so one session may leave at most one log line between the model's
+ *           log_event and the judge (counted, not read: 10-13 baseline wrote message B's event twice).
  *  C and what reached the log are counted, not gated. */
 export function judgeLayers(all) {
   const n = all.length;
@@ -135,8 +137,11 @@ export function judgeLayers(all) {
   const errors = legs.filter((l) => l.error).map((l) => `${l.at}:${l.error}`);
   const stray = all.flatMap((r) => (r.stray || []).map((s) => `第 ${r.round} 轮:${s.slice(0, 60)}`));
   const unjudged = legs.filter((l) => !l.error && !/^判断: title=/.test(l.judge || '')).map((l) => `${l.at}(${l.judge ? l.judge.slice(0, 40) : '180 秒内没有结果'})`);
+  // 一件事一行日志:每句话只说了一件事,同一个会话里模型 log_event 和判官的日志加起来超过一行就是重复写(10-13 基线 B 句两行)。
+  // 按行数数、不看内容,所以不靠关键词。
+  const doubled = legs.filter((l) => l.logEventCalls.length + l.judgeLog.length > 1).map((l) => `${l.at}(${[...l.logEventCalls, ...l.judgeLog].map((t) => t.slice(0, 30)).join(' ‖ ')})`);
   return {
-    ok: !errors.length && !unjudged.length && !stray.length && a.model + a.judge === 0 && bEvent.model + bEvent.judge === 0 && bPref.any >= 1,
+    ok: !errors.length && !unjudged.length && !stray.length && !doubled.length && a.model + a.judge === 0 && bEvent.model + bEvent.judge === 0 && bPref.any >= 1,
     detail: [
       `${n} 轮,每轮三句话各开一个会话`,
       `A 只对这段对话有效的指示:那个会话里有东西进了记忆 ${a.model}/${n} 轮、进了候选箱 ${a.judge}/${n} 轮`,
@@ -145,8 +150,10 @@ export function judgeLayers(all) {
       `C 近况(只记数):进记忆 ${c.model}/${n}、进候选箱 ${c.judge}/${n},进当天日志 ${c.logged}/${n}`,
       ...(errors.length ? [`出错:${errors.join(';')}`] : []),
       ...(unjudged.length ? [`判官没正常出结果(这条路没量到,不算绿):${unjudged.join('、')}`] : []),
+      `同一个会话写了不止一行日志 ${doubled.length} 处`,
+      ...(doubled.length ? [`重复写:${doubled.join('、')}`] : []),
       ...(stray.length ? [`有 ${stray.length} 条对不上任何一个会话(归属没读全,不算绿):${stray.join(' ‖ ')}`] : []),
     ].join(';'),
-    layers: { rounds: n, a, bEvent, bPref, bLogged, c },
+    layers: { rounds: n, a, bEvent, bPref, bLogged, c, doubled: doubled.length },
   };
 }

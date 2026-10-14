@@ -216,13 +216,9 @@ export function isRoundDue(roundN: number, every: number, firstRoundTrigger: boo
   return every > 0 && roundN % every === 0;
 }
 
-/**
- * 自本会话上次 Historian 动作（special_agent_log）以来，新对话内容是否够「实质」。
- * 无历史动作 = 该会话首次维护 → 放行。两列均为 SQL TIMESTAMP（同域可比，方言安全）。查询失败 → 放行（不阻断既有行为）。
- */
-async function enoughNewSinceLastAction(sessionId: string): Promise<boolean> {
-  try {
-    const last = await query<any[]>(
+/** 本会话上次到点维护的时刻(没有 = 还没维护过)。游标口径见下面 enoughNewSinceLastAction 里的注释。 */
+async function lastMaintenanceAt(sessionId: string): Promise<unknown> {
+  const last = await query<any[]>(
       // 游标只认到点维护写下的活动(摘要 / 日志 / 图标 / 辅助讨论):
       //   · 标题在 run 起点写(onUserRunStart),落在本轮用户消息之后:算它做游标,done 时只剩助手回复可数,短回复会把整轮判断跳掉;
       //   · 各类候选(记忆 / 项目记忆 / 进化记录)不算:信号加评(不到点)只写这几类,算进来的话它刚写完,下一个到点轮
@@ -230,9 +226,18 @@ async function enoughNewSinceLastAction(sessionId: string): Promise<boolean> {
       `SELECT created_at FROM special_agent_log WHERE session_ref = ? AND agent = 'historian'
          AND action IN ('summary_updated', 'log_appended', 'icon_updated', 'assist_discussion')
        ORDER BY created_at DESC LIMIT 1`,
-      [sessionId],
-    );
-    const since = last[0]?.created_at;
+    [sessionId],
+  );
+  return last[0]?.created_at;
+}
+
+/**
+ * 自本会话上次 Historian 动作（special_agent_log）以来，新对话内容是否够「实质」。
+ * 无历史动作 = 该会话首次维护 → 放行。两列均为 SQL TIMESTAMP（同域可比，方言安全）。查询失败 → 放行（不阻断既有行为）。
+ */
+async function enoughNewSinceLastAction(sessionId: string): Promise<boolean> {
+  try {
+    const since = await lastMaintenanceAt(sessionId);
     if (!since) return true; // 本会话尚未维护过 → 放行
     const rows = await query<any[]>(
       `SELECT content FROM chat_messages WHERE session_id = ? AND created_at > ? AND role IN ('user', 'model', 'assistant')`,
@@ -603,7 +608,13 @@ async function runHistorianForSession(sessionId: string, userId: string, memScop
     const assistMode = cfg.mode === 'assist' && roundN > 1 && sessionPreset !== 'chat' && !chIsolated;
     // fork 模式:快照缺席(群聊/外部引擎/hook 否决路径不传 seed)→ 自动回落 independent 判断。
     const forkMode = cfg.mode === 'fork' && !!forkSeed;
-    const judgeLog = logDue && !assistMode && !chIsolated;
+    // 一件事一行日志(10-13 分层探针基线:模型自己 log_event 了一句「交了季度报告」,几秒后判官又写了一句同一件事)。
+    // 自上次到点维护以来主 Agent 自己写过日志 → 这一轮不向判官要日志;标题 / 摘要 / 记忆候选照旧。查询失败按没写过(宁可重复,不漏)。
+    // ponytail: 按「写过」整轮让出,不比对内容:窗口里若还有模型没记的另一件事,这一轮就少一行;要细分再把当天日志交给判官去比。
+    const agentLogged = logDue && !assistMode && !chIsolated
+      && await lastMaintenanceAt(sessionId).then((since) => sessionCalledTool(sessionId, 'log_event', since)).catch(() => false);
+    if (agentLogged) log(`会话 ${sessionId.slice(0, 8)} 本轮主 Agent 自己写过日志,判官这一轮不写`);
+    const judgeLog = logDue && !assistMode && !chIsolated && !agentLogged;
     const judgeMemory = memoryDue && !assistMode && !chIsolated;
     // 自进化自动档(09-18 起默认开):judge 额外提名工作笔记候选 → 展示身份 slug 的 .harness-raw.md 收件箱。
     // 辅助模式也提名(09-19 放开):辅助模式让出的是 LOG / 记忆的**写入**(交主 Agent 定夺);提名只进收件箱、不写 HARNESS.md,
