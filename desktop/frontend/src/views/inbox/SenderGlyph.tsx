@@ -1,5 +1,5 @@
 /** 发信人的长相,只此一份:阅读面板头部与仪表盘收件箱卡共用(列表行首走 ListItem.icon / iconUrl,画的是同样几枚字形,
- *  见 inboxListSource 的 SOURCE_GROUPS)。Agent = 它自己的头像,没有就是名字首字母;其余按来源一枚线性图标。
+ *  见 inboxListSource 的 SOURCE_ICON)。Agent = 它自己的头像,没有就是名字首字母;其余按来源一枚线性图标。
  *  圆的 —— 应用里 Agent 头像处处是圆的(.msg-avatar / .agent-pill-avatar),这里从前是方块。 */
 import { Cloud, Info, Workflow } from 'lucide-react'
 import { useHomeAgentAvatars } from '../../stores/homeCatalog'
