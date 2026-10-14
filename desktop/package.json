@@ -342,6 +342,7 @@
     "build:obsidianbridge": "node prototypes/obsidian-bridge/build.mjs",
     "e2e:obsidianbridge": "node scripts/obsidian-bridge.e2e.cjs",
     "demo:obsidianbridge": "node scripts/obsidian-bridge.e2e.cjs --demo",
+    "preview:obsidianbridge": "node scripts/obsidian-bridge.e2e.cjs --preview",
     "check:obsidianbridge": "node prototypes/obsidian-bridge/check-runtime.mjs && node prototypes/obsidian-bridge/check-lifecycle.mjs"
   },
   "dependencies": {

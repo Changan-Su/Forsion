@@ -11,6 +11,7 @@ const ROOT = path.join(__dirname, '..')
 const BASE = path.join(ROOT, 'prototypes/obsidian-bridge')
 const ART = process.env.BRIDGE_ARTIFACTS || path.join(BASE, 'artifacts')
 const DEMO = process.argv.includes('--demo')
+const PREVIEW = process.argv.includes('--preview')
 const home = process.env.BRIDGE_HOME || fs.mkdtempSync(path.join(os.tmpdir(), 'forsion-obsidian-bridge-'))
 const vault = path.join(home, 'vault')
 const results = [], errors = []
@@ -61,10 +62,19 @@ async function main() {
   for (const r of receipts) check(`${r.id} release assets unchanged`, r.files.every(f => hash(path.join(installed, 'plugins', r.id, f.name)) === f.sha256), r.version)
   stub = await startStubEngine({ sessions: [], messages: [], models: [] })
   await boot()
+  if (PREVIEW) {
+    await shot('preview')
+    console.log(`PREVIEW_READY: home=${home}; pid=${app.process().pid}`)
+    await new Promise(resolve => app.on('close', resolve))
+    return
+  }
   const diag = await frame.evaluate(() => window.bridge.diagnostics())
   console.log('DIAGNOSTICS', JSON.stringify(diag))
   check('3 upstream packages loaded from nested directories', diag.plugins.length === 3 && diag.plugins.every(p => p.alive && !p.error))
   check('compatibility editor bound to isolated vault', path.resolve(diag.vaultKey) === path.resolve(vault), diag.vaultKey)
+  await frame.getByLabel('从智库读取笔记', { exact: true }).selectOption('Original.md')
+  await frame.waitForFunction(() => window.bridge.editor.getValue().includes('This must remain unchanged.'))
+  check('Vault picker reads a real note into the compatibility draft', await text() === fs.readFileSync(path.join(vault, 'Original.md'), 'utf8'))
   await click('sort-sample')
   await command('obsidian-sort-and-permute-lines:sort-alphabetically')
   check('Sort and Permute sorts actual editor content', (await text()).trim() === 'Apple\nApple\nBanana\nZebra', JSON.stringify(await text()))

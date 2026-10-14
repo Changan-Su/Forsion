@@ -41,6 +41,8 @@ npm run build
 # Follow the repository gui-verify devlock procedure when launching Electron.
 npm run e2e:obsidianbridge
 npm run demo:obsidianbridge
+# Or open a fresh interactive fixture without replaying acceptance:
+npm run preview:obsidianbridge
 ```
 
 `install-plugins.mjs [bridge-plugin-folder]` defaults to this prototype's `plugin/` folder. It downloads only
@@ -52,6 +54,8 @@ real UI clicks, verifies restart persistence and writes screenshots/results to `
 Only the unrelated AI backend is a stub. It does not test model execution or the production installer.
 `--demo` keeps the isolated instance open after acceptance. `BRIDGE_HOME`, `BRIDGE_ARTIFACTS`, and `STAGE_ELECTRON`
 can override the isolated home, evidence folder, and the separate Electron identity used for the demo.
+`--preview` starts the same isolated fixture and waits for the user to close it; use a separate
+`BRIDGE_ARTIFACTS` directory to keep its session details separate from the acceptance run.
 
 ## 固定样本 / Pinned samples
 
