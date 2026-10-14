@@ -189,6 +189,8 @@ export interface ModelsBrain {
     realtimeModel?: { id: string; name: string; apiModelId?: string | null } | null;
     /** 云端的机器翻译模型(百炼 qwen-mt 那一类;不在 models 里 —— 它们不能聊天)。老云端不给 = 没有。 */
     translateModels?: Array<{ id: string; name: string; provider?: string; apiModelId?: string | null }>;
+    /** 云端的朗读模型(不在 models 里 —— 它们只合成语音;桌面「语音朗读」的模型框列它们)。老云端不给 = 没有。 */
+    ttsModels?: Array<{ id: string; name: string; apiModelId?: string | null }>;
     /** 这次目录是真读到了,还是被降级填的空?未实现此字段的实现留 undefined(调用方回落长度启发式)。
      *  空列表有两种成因(未登录/断网 vs admin 真没授权),分不清就会把掉线用户支去设置页空等。 */
     reachable?: boolean;
@@ -295,7 +297,7 @@ export interface ImagesBrain {
   edit?(req: ImageEditRequest): Promise<ImageGenResult>;
 }
 
-/** 语音合成(朗读按钮/自动朗读用)。direct:调 provider 自有 OpenAI 兼容 /audio/speech。 */
+/** 语音合成(朗读按钮/自动朗读用)。direct:调 provider 自有 OpenAI 兼容 /audio/speech;没命中直连的走 Forsion 云端 /api/brain/tts。 */
 export interface SpeechRequest {
   model: string; // TTS 模型 id(direct=apiModelId 或 <providerId>/<model>)
   text: string;
