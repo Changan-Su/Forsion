@@ -1,3 +1,4 @@
+import { assertMarketplaceRequirements } from '../shared/marketplace'
 import { asrBackendFor } from './asrSelection'
 import { installAmbientPalette } from './ambientPalette'
 import { unitConfigFace } from './unitConfigFace'
@@ -61,7 +62,7 @@ import { checkBuiltinUpdates, NPM_OFFICIAL, registryOrder } from './builtinUpdat
 import { checkEngineUpdate, setupEngineOverlay, ENGINE_PACKAGE, ENGINE_UPDATE_ID, type EngineOverlayHandle } from './engineUpdates'
 import { loadBuiltinDesktopEntries, type CloudHost } from './cloudHost'
 import { npmDownloadCandidates, npmTarballToZip, type NpmInstallSnapshot } from './npmMarketInstall'
-import { extractZipToDir, detectMarketType, MARKET_SUBDIR, MARKET_MANIFEST, isSafeSlug, readInstalledVersion, readInstalledPluginId, readUserPluginDirs, marketItemDir, downloadCandidates, downloadZip, GZIP_MAGIC, ZIP_MAGIC, type DownloadProgress } from './marketInstall'
+import { extractZipToDir, checkMarketPackage, detectMarketType, MARKET_SUBDIR, MARKET_MANIFEST, isSafeSlug, readInstalledVersion, readInstalledPluginId, readUserPluginDirs, marketItemDir, downloadCandidates, downloadZip, GZIP_MAGIC, ZIP_MAGIC, type DownloadProgress } from './marketInstall'
 import { servePathRoot, serveInlineHtml, stopCodePreview, setForsionPreviewHooks, transpileForServe, MIME } from './codePreview'
 import { createCodeStudioProjectWatcher, createCodeStudioSnapshot, listCodeStudioSnapshots, restoreCodeStudioSnapshot } from './codeStudioProjects'
 import { installPreviewPersistence, previewOriginFor, registerProductsIpc } from './productsIpc'
@@ -2233,15 +2234,16 @@ const marketBase = async (): Promise<string> => {
   return base
 }
 const MARKET_UA = 'Forsion-Tangu'
+const marketPlatform = () => process.platform === 'darwin' ? 'macos' : process.platform === 'win32' ? 'windows' : 'linux'
 
-async function downloadMarketPackage(id: string, report: (phase: 'resolve' | 'download' | 'install', progress?: DownloadProgress) => void = () => {}): Promise<{ info: { type: string; installSlug: string; downloadUrl: string; source: string } & NpmInstallSnapshot; buf: Buffer }> {
+async function downloadMarketPackage(id: string, report: (phase: 'resolve' | 'download' | 'install', progress?: DownloadProgress) => void = () => {}, version?: string): Promise<{ info: { type: string; installSlug: string; downloadUrl: string; source: string; minAppVersion?: string; maxAppVersion?: string; platforms?: string[]; tags?: string[] } & NpmInstallSnapshot; buf: Buffer }> {
   const base = await marketBase()
   // 服务端解析 github 源时要问 api.github.com(服务端在大陆,也会慢);没有超时 = 按钮一直转。
   // 错误消息只放语言中立的原因码(`resolve: …`),界面层自己套中英文案(frontend/src/services/marketService.ts 的 unwrapIpcError)。
-  const infoRes = await fetch(`${base}/api/market/items/${encodeURIComponent(id)}/install`, { headers: { 'User-Agent': MARKET_UA }, signal: AbortSignal.timeout(30_000) })
+  const infoRes = await fetch(`${base}/api/market/items/${encodeURIComponent(id)}/install?identity=uuid-v1&appVersion=${encodeURIComponent(app.getVersion())}&platform=${marketPlatform()}${version ? `&version=${encodeURIComponent(version)}` : ''}`, { headers: { 'User-Agent': MARKET_UA }, signal: AbortSignal.timeout(30_000) })
     .catch((err: any) => { throw new Error(`resolve: ${err?.name === 'TimeoutError' ? 'timeout' : err?.cause?.code || err?.message || err}`) })
   if (!infoRes.ok) throw new Error(`resolve: HTTP ${infoRes.status}`)
-  const info = (await infoRes.json()) as { type: string; installSlug: string; downloadUrl: string; source: string } & NpmInstallSnapshot
+  const info = (await infoRes.json()) as { type: string; installSlug: string; downloadUrl: string; source: string; minAppVersion?: string; maxAppVersion?: string; platforms?: string[]; tags?: string[] } & NpmInstallSnapshot
   if (!MARKET_SUBDIR[info.type] || !isSafeSlug(info.installSlug)) throw new Error('resolve: invalid target')
   // github 源走 net.fetch(认系统代理);开了「中国大陆镜像」才加第三方代理站(见 downloadCandidates 的 ⚠️)。
   // zip 源(Forsion 对象存储)一直能通,照旧 Node fetch 单发 —— 不让一个失效的系统代理设置拖累它。
@@ -2251,6 +2253,8 @@ async function downloadMarketPackage(id: string, report: (phase: 'resolve' | 'do
   const candidates = npm ? npmDownloadCandidates(info, stored.mirror) : github ? downloadCandidates(info.downloadUrl, stored.mirror, process.env.TANGU_GITHUB_PROXY || '') : [info.downloadUrl]
   const archive = await downloadZip(candidates, (u, init) => github || u.startsWith(NPM_OFFICIAL) ? net.fetch(u, init) : fetch(u, init), (p) => report('download', p), npm ? GZIP_MAGIC : ZIP_MAGIC)
   const buf = npm ? await npmTarballToZip(archive, info, info.type) : archive
+  assertMarketplaceRequirements(info, app.getVersion(), marketPlatform())
+  await checkMarketPackage(buf, await detectMarketType(buf, info.type), app.getVersion(), marketPlatform(), builtinPluginIds())
   return { info, buf }
 }
 
@@ -3658,6 +3662,14 @@ app.whenReady().then(async () => {
     return data // { items }
   })
 
+  ipcMain.handle('market:read', async (e, id: string, resource: string, offset = 0) => {
+    if (!isTrustedSender(e) || !/^[a-zA-Z0-9_-]{1,128}$/.test(id) || (!['comments', 'versions'].includes(resource) && !/^comments\/[a-zA-Z0-9_-]{1,128}\/replies$/.test(resource))) throw new Error('Invalid market request')
+    const base = await marketBase()
+    const r = await fetch(`${base}/api/market/items/${encodeURIComponent(id)}/${resource}?offset=${Math.max(0, Math.min(100000, Number(offset) || 0))}`, { signal: AbortSignal.timeout(15000) })
+    if (!r.ok) throw new Error(`HTTP ${r.status}`)
+    return r.json()
+  })
+
   ipcMain.handle('market:detail', async (_e, id: string) => {
     const base = await marketBase()
     const r = await fetch(`${base}/api/market/items/${encodeURIComponent(id)}`, { headers: { 'User-Agent': MARKET_UA } })
@@ -3667,7 +3679,7 @@ app.whenReady().then(async () => {
 
   // 安装进度推回发起窗口('market:installProgress',同 asr:localProgress 口径):市场住在独立浮窗里,
   // 全局通知在那里不渲染,按钮上的阶段/字节 + 市场自己的提示条是用户唯一看得见的反馈。
-  ipcMain.handle('market:install', async (e, id: string) => marketPluginUpdater.exclusive(async () => {
+  ipcMain.handle('market:install', async (e, id: string, version?: string) => marketPluginUpdater.exclusive(async () => {
     if (!isTrustedSender(e)) throw new Error('Untrusted sender')
     let lastSent = 0
     const report = (phase: 'resolve' | 'download' | 'install', p?: DownloadProgress): void => {
@@ -3677,7 +3689,7 @@ app.whenReady().then(async () => {
       if (!e.sender.isDestroyed()) e.sender.send('market:installProgress', { id, phase, ...p })
     }
     report('resolve')
-    const { info, buf } = await downloadMarketPackage(id, report)
+    const { info, buf } = await downloadMarketPackage(id, report, version)
     report('install')
     // 后端 category 对插件家族可能误标(Forsion 插件标成引擎 'plugin')→ 按包内 manifest 实测重定,
     // 否则装进错误目录后两边加载器都不认。返回 effType 让渲染层走对应的装后流程(引擎重扫 / amadeus 重载)。
@@ -3764,7 +3776,7 @@ app.whenReady().then(async () => {
     if (!dir) throw new Error('非法的卸载目标')
     if (!existsSync(dir)) throw new Error('该项不在已安装目录中')
     // Space 带回配方 id(目录名可 ≠ id):各窗 ribbon 按它撤 —— loadUserSpaces 只增不撤用户 Space,删除一律走 space-removed。
-    const spaceId = type === 'space' ? await readFile(join(dir, 'space.json'), 'utf8').then((s) => JSON.parse(s)?.id, () => undefined) : undefined
+    const spaceId = type === 'space' && /^market-[0-9a-f-]{36}$/.test(slug) ? slug : type === 'space' ? await readFile(join(dir, 'space.json'), 'utf8').then((s) => JSON.parse(s)?.id, () => undefined) : undefined
     await rm(dir, { recursive: true, force: true })
     await marketPluginUpdater.forget(type, slug)
     return { ok: true, path: dir, type, ...(typeof spaceId === 'string' && spaceId ? { id: spaceId } : {}) }

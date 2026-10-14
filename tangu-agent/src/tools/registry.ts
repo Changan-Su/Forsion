@@ -15,6 +15,7 @@ import { effectiveRemote } from '../services/remoteOrigin.js';
 import { datetimeProvider, calculatorProvider } from './builtin/coreUtils.js';
 import { memoryLogProvider } from './builtin/memoryLog.js';
 import { webSearchProvider } from './builtin/webSearch.js';
+import { marketplaceProvider } from './builtin/marketplace.js';
 import { workspaceFilesProvider } from './builtin/workspaceFiles.js';
 import { skillsProvider } from './builtin/skills.js';
 import { sandboxPythonProvider } from './builtin/sandboxPython.js';
@@ -76,6 +77,8 @@ export type { ToolContext, ToolResult, ToolImpl } from './toolTypes.js';
 const DEFAULT_TOOL_CAPABILITIES: Record<string, ToolCapabilities> = {
   get_datetime: { sideEffect: 'none', parallel: true, defaultTimeoutMs: 5_000 },
   calculator: { sideEffect: 'none', parallel: true, defaultTimeoutMs: 5_000 },
+  search_marketplace: { sideEffect: 'network', parallel: true, defaultTimeoutMs: 30_000 },
+  get_marketplace_plugin: { sideEffect: 'network', parallel: true, defaultTimeoutMs: 30_000 },
   web_search: { sideEffect: 'network', parallel: true, defaultTimeoutMs: 30_000 },
   web_fetch: { sideEffect: 'network', parallel: true, defaultTimeoutMs: 25_000 },
   browser_search: { sideEffect: 'browser', parallel: false, concurrencyKey: 'browser', defaultTimeoutMs: 60_000 },
@@ -152,6 +155,7 @@ registerToolProvider(datetimeProvider);
 registerToolProvider(memoryLogProvider);
 registerToolProvider(calculatorProvider);
 registerToolProvider(webSearchProvider);
+registerToolProvider(marketplaceProvider);
 registerToolProvider(workspaceFilesProvider);
 registerToolProvider(skillsProvider);
 registerToolProvider(sandboxPythonProvider);

@@ -1682,6 +1682,7 @@ export interface PluginAutomationRule {
 
 export interface AmadeusPlugin {
   id: string
+  packageId?: string
   /** Canonical (Chinese) name — also the source of the default work folder, so it never changes with
    *  the UI language. For display, go through `pluginDisplayName(p, locale)`. */
   name: string

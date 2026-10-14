@@ -349,6 +349,7 @@ async function loadUserSpacesOnce(): Promise<void> {
       }
       continue
     }
+    if (!plugin && /^market-[0-9a-f-]{36}$/.test(slug)) r.spec.id = slug
     if (!wanted.has(r.spec.id)) wanted.set(r.spec.id, { spec: r.spec, dirSlug: slug, plugin, raw: json, iconUrl })
   }
   setHiddenPluginSpaces(hidden) // 非主窗是空操作:它们跟主窗的记录(见 pluginSpaceHealth)

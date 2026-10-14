@@ -76,6 +76,7 @@ export const CODING_PRESET_DEFERRED: ReadonlySet<string> = new Set([
  *  read_computer_history 另受 computerHistoryGate(电脑历史开着 + 本机客户端)门禁:放常驻不放 deferred ——
  *  「我休息前在做什么」这种问法模型不会先想到 load_tools,关着时它本就不在场,不占 defs。 */
 export const CHAT_PRESET_RESIDENT: ReadonlySet<string> = new Set([
+  'search_marketplace', 'get_marketplace_plugin',
   'run_python', 'web_fetch', 'web_search', 'read_file', 'display_file', 'pip_install', 'write_file',
   'load_tools', 'list_files', 'get_datetime', 'sketch', 'intelligent_ui', 'list_intelligent_cards', 'remember', 'read_computer_history', 'manage_human',
 ]);

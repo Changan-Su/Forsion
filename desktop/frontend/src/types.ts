@@ -1626,12 +1626,13 @@ declare global {
       openPluginsDir?(): Promise<{ ok: boolean }>
       /** Forsion Market:浏览(公开)/ 详情含 README / 安装(下载+按类型解压到 ~/.tangu)/ 已装列表。 */
       marketList?(type?: string): Promise<{ items: MarketCard[] }>
+      marketRead?(id: string, resource: string, offset?: number): Promise<any>
       marketDetail?(id: string): Promise<MarketDetail>
       marketUpdateStatus?(): Promise<import('../../shared/marketPluginUpdates').MarketPluginUpdates>
       marketSetAutoUpdate?(id: string, on: boolean): Promise<import('../../shared/marketPluginUpdates').MarketPluginUpdates>
       marketCheckUpdates?(): Promise<void>
       onMarketUpdateStatus?(cb: (state: import('../../shared/marketPluginUpdates').MarketPluginUpdates) => void): () => void
-      marketInstall?(id: string): Promise<{ ok: boolean; path: string; files: number; type: string; slug: string; id?: string }>
+      marketInstall?(id: string, version?: string): Promise<{ ok: boolean; path: string; files: number; type: string; slug: string; id?: string }>
       /** 安装进度订阅(主进程只推给发起窗口);返回退订函数。 */
       onMarketInstallProgress?(cb: (ev: MarketInstallProgress) => void): () => void
       marketInstalled?(): Promise<Record<string, Array<{ slug: string; version: string | null; id?: string }>>>
@@ -1895,6 +1896,10 @@ export interface AmadeusSyncStatus {
 
 /** 市场卡片(浏览列表)。 */
 export interface MarketCard {
+  description?: string
+  minAppVersion?: string | null
+  maxAppVersion?: string | null
+  platforms?: string[]
   id: string
   type: 'skill' | 'agent' | 'plugin' | 'space' | 'theme' | 'amadeus-plugin'
   source: 'github' | 'zip' | 'npm'

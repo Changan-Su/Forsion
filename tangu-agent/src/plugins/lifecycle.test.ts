@@ -8,7 +8,7 @@
  * 插件把 activate/deactivate 记进 globalThis.__lc,测试直接读。
  */
 import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync, symlinkSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync, symlinkSync, cpSync, readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import os from 'node:os';
 import path from 'node:path';
@@ -156,6 +156,37 @@ async function listen(app: any): Promise<{ base: string; server: Server }> {
   await new Promise((r) => server.once('listening', r));
   return { base: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, server };
 }
+
+describe('UUID marketplace engine identity', () => {
+  it('keeps same-manifest metadata and tools separate, while SDK calls accept their declared names', async () => {
+    writePlugin('lc-shared');
+    const source = path.join(pluginsRoot, 'lc-shared');
+    const file = path.join(source, 'dist', 'index.js');
+    writeFileSync(file, readFileSync(file, 'utf8').replace('activate(ctx) {', 'activate(ctx) { globalThis.__marketContexts ||= {}; globalThis.__marketContexts[ctx.paths.pluginDir] = ctx;').replace("name: 'lc_shared_tool',", "name: 'lc_shared_tool', capabilities: { automationSafe: true },"));
+    const ids = ['market-11111111-1111-4111-8111-111111111111', 'market-22222222-2222-4222-8222-222222222222'];
+    for (const id of ids) cpSync(source, path.join(pluginsRoot, id), { recursive: true });
+    rmSync(source, { recursive: true });
+    const h = await host(); await h.boot.activateAllPlugins();
+    for (const id of ids) expect(h.registry.getPluginMeta(id)?.id).toBe(id);
+    const providers = h.tools.listToolProviders().filter(p => p.id.includes('market-'));
+    expect(providers.length).toBe(2);
+    const tools = providers.flatMap(p => p.tools());
+    expect(new Set(tools.map(t => t.name)).size).toBe(2);
+    expect(tools.every(t => t.definition.function.name === t.name && t.name.length <= 64)).toBe(true);
+    const { configureTangu } = await import('../seams/runtime.js');
+    const { createTanguProfile } = await import('../profiles/index.js');
+    configureTangu({ host: {} as any, brain: {} as any, billing: {} as any, profile: createTanguProfile({ sandboxMode: 'none' }) });
+    for (const id of ids) {
+      const ctx = (globalThis as any).__marketContexts[path.join(pluginsRoot, id)];
+      await expect(ctx.sdk.runs.start({ userId: 'u1', prompt: 'Test', cwd: tmp, requestId: 'bad', toolNames: ['lc_shared_tool'] })).rejects.toThrow('Invalid task session');
+      await expect(ctx.sdk.runs.start({ userId: 'u1', prompt: 'Test', cwd: tmp, toolNames: ['foreign_tool'] })).rejects.toThrow('Only this plugin');
+      await expect(ctx.sdk.automation.save('../bad', { description: 'Test', type: 'every', interval: '1h', tool: 'lc_shared_tool', args: {}, enabled: true })).rejects.toThrow('Invalid schedule key');
+    }
+    await h.boot.setPluginEnabledLive(ids[0], false);
+    expect(h.tools.listToolProviders().filter(p => p.id.includes('market-') && p.tools().length).length).toBe(1);
+    delete (globalThis as any).__marketContexts;
+  });
+});
 
 describe('启停', () => {
   it('停用 → 调 deactivate、工具撤下(槽位保留);再启用 → 同一模块再 activate、工具回到原位', async () => {

@@ -432,7 +432,8 @@ const test = async (name, fn) => {
       const json = (status, body) => ({ ok: status < 300, status, json: async () => body })
       let m
       if (u.pathname === '/api/market/items') return json(200, { items: items.filter((it) => !u.searchParams.get('type') || it.type === u.searchParams.get('type')).map((x) => ({ ...x })) })
-      if ((m = /^\/api\/market\/items\/([^/]+)\/install$/.exec(u.pathname))) return install[m[1]] ? json(200, install[m[1]]) : json(404, {})
+      if ((m = /^\/api\/market\/items\/([^/]+)\/install$/.exec(u.pathname))) return install[m[1]] ? json(200, typeof install[m[1]] === 'function' ? install[m[1]](u.searchParams) : install[m[1]]) : json(404, {})
+      if (/^\/api\/market\/items\/[^/]+\/(comments|versions)$/.test(u.pathname)) return json(200, { comments: [], versions: [] })
       if ((m = /^\/api\/market\/items\/([^/]+)$/.exec(u.pathname))) return json(200, { ...items.find((x) => x.id === m[1]) })
       return json(404, {})
     }
@@ -450,6 +451,16 @@ const test = async (name, fn) => {
     return { mk, fs, fetched, downloaded, progress }
   }
   const PKG = { 'pkg-abc/manifest.json': manifest({ id: 'hello-mobile', version: '1.2.0' }), 'pkg-abc/main.js': 'ctx', 'pkg-abc/README.md': '# r', '__MACOSX/pkg-abc/._main.js': 'junk' }
+
+  await test('历史版本与匿名资源读取:透传版本/宿主要求/身份协议,不误装当前不兼容的新版', async () => {
+    const bytes = await zipOf({ 'manifest.json': manifest({ id: 'hello-mobile', version: '1.2.0', minAppVersion: '2.13.0' }), 'main.js': 'ctx' });
+    const { mk, fetched, fs } = market({ appVersion: () => '2.13.4', install: { a: params => ({ type: 'amadeus-plugin', installSlug: 'hello-mobile', downloadUrl: params.get('version') === '1.2.0' ? 'https://old/pkg.zip' : 'https://new/pkg.zip', minAppVersion: params.get('version') === '1.2.0' ? '2.13.0' : '99.0.0' }) }, blobs: { 'https://old/pkg.zip': bytes } });
+    await mk.marketRead('a', 'comments'); await mk.marketRead('a', 'versions');
+    await mk.marketInstall('a', '1.2.0');
+    const request = new URL(fetched.find(url => url.includes('/install?')));
+    assert.equal(request.searchParams.get('version'), '1.2.0'); assert.equal(request.searchParams.get('appVersion'), '2.13.4'); assert.equal(request.searchParams.get('identity'), 'uuid-v1');
+    await assert.rejects(() => mk.marketInstall('a'), /requires Forsion/);
+  });
 
   await test('marketTypes = 只有 Forsion 插件', async () => {
     assert.deepEqual([...MOBILE_MARKET_TYPES], ['amadeus-plugin'])

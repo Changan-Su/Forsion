@@ -1,3 +1,7 @@
+import { marketplaceCompatibility } from '../../../shared/marketplace'
+import { MarketRequirements, marketPlatform, requirementsText, useMarketVersion } from './MarketRequirements'
+import { MarketDiscussion, MarketVersions } from './MarketDiscussion'
+import './MarketUpgrade.css'
 /**
  * Forsion 商店(原「应用市场」,2026-10-05 改名;标识符 / i18n key / CSS 类仍是 market / mk-*):
  * 发现首页 + 分类目录 + 安装管理 + 商品详情。
@@ -122,7 +126,7 @@ function formatDate(value?: string | null): string {
   return formatDateLabel(date, { year: 'always' })
 }
 
-export function MarketModal({ onClose, initialQuery }: { onClose?: () => void; initialQuery?: string } = {}) {
+export function MarketModal({ onClose, initialQuery, initialItemId, initialDetailTab }: { onClose?: () => void; initialQuery?: string; initialItemId?: string; initialDetailTab?: string } = {}) {
   const { t } = useI18n()
   const pluginUpdates = useMarketPluginUpdates()
   const settingsViews = usePluginStore((s) => s.settingsViews)
@@ -172,6 +176,11 @@ export function MarketModal({ onClose, initialQuery }: { onClose?: () => void; i
   const [updatable, setUpdatable] = useState<MarketCard[]>([])
   const [detail, setDetail] = useState<MarketDetail | null>(null)
   const [detailLoading, setDetailLoading] = useState(false)
+  const appVersion = useMarketVersion()
+  const [detailTab, setDetailTab] = useState(initialDetailTab === 'comments' ? 'comments' : 'overview')
+  const [tagFilter, setTagFilter] = useState('')
+  const [compatibleOnly, setCompatibleOnly] = useState(false)
+  useEffect(() => { if (!initialItemId) return; let alive = true; setDetailLoading(true); void getMarketDetail(initialItemId).then(item => { if (alive) setDetail(item) }).catch(e => { if (alive) toast(e.message, true) }).finally(() => { if (alive) setDetailLoading(false) }); return () => { alive = false } }, [initialItemId, toast])
   // 按 id 记账:下载现在最长要等几十秒,先后点两个安装时,先完成的那个不能把另一个的「安装中」清掉(清掉 = 可以再点一次同一项、两路并发解压进同一目录)。
   const [installing, setInstalling] = useState<Record<string, true>>({})
   const [progress, setProgress] = useState<Record<string, MarketInstallProgress>>({})
@@ -257,14 +266,14 @@ export function MarketModal({ onClose, initialQuery }: { onClose?: () => void; i
     useApp.getState().openSettings(`${info.realType === 'amadeus-plugin' ? 'fplugin' : 'plugin'}:${info.entry.id ?? c.installSlug}`)
   }
 
-  const onInstall = async (c: MarketCard): Promise<void> => {
+  const onInstall = async (c: MarketCard, version?: string): Promise<void> => {
     setInstalling((m) => ({ ...m, [c.id]: true }))
     setProgress((m) => omit(m, c.id))
     setFailed((m) => omit(m, c.id))
     setNotice(null) // 新一轮安装 = 用户已看过上一条(失败的那项按钮仍是「重试」)
     const wasInstalled = isInstalled(c)
     try {
-      const res = await installMarket(c.id)
+      const res = await installMarket(c.id, version)
       const effectiveType = ((res?.type as MarketType) || c.type)
       track('market.install')
       act('market.install', { id: c.id })
@@ -352,6 +361,7 @@ export function MarketModal({ onClose, initialQuery }: { onClose?: () => void; i
   }, [detail])
 
   const openDetail = (c: MarketCard): void => {
+    setDetailTab('overview')
     setDetailLoading(true)
     setDetail(null)
     getMarketDetail(c.id)
@@ -383,6 +393,8 @@ export function MarketModal({ onClose, initialQuery }: { onClose?: () => void; i
   const shownTags = (c: MarketCard): string[] => (c.tags || []).filter((tag) => tag !== DESKTOP_ONLY_TAG)
 
   const installBtn = (c: MarketCard, extraClass = '') => {
+    const compatibility = marketplaceCompatibility(c, appVersion, marketPlatform())
+    if (compatibility === 'version' || compatibility === 'platform') return <button className={`btn sm ${extraClass}`} disabled data-market-install={c.id}><MarketRequirements item={c} version={appVersion} /></button>
     if (desktopOnlyHere(c)) {
       return <button className={`btn sm ${extraClass}`.trim()} disabled data-market-install={c.id} data-install-state="desktop-only" title={t('market.desktopOnlyHint')}><Monitor size={13} />{t('market.desktopOnlyInstall')}</button>
     }
@@ -443,10 +455,12 @@ export function MarketModal({ onClose, initialQuery }: { onClose?: () => void; i
 
   const matchesQuery = useCallback((c: MarketCard): boolean => {
     const needle = query.trim().toLocaleLowerCase()
+    if (tagFilter && !c.tags?.includes(tagFilter)) return false
+    if (compatibleOnly && marketplaceCompatibility(c, appVersion, marketPlatform()) !== 'compatible') return false
     if (!needle) return true
-    return [c.name, c.summary, c.author, c.installSlug, ...(c.tags || [])]
+    return [c.id, c.name, c.summary, c.description || '', c.author, c.installSlug, ...(c.tags || [])]
       .some((value) => value.toLocaleLowerCase().includes(needle))
-  }, [query])
+  }, [query, tagFilter, compatibleOnly, appVersion])
 
   const sortCards = useCallback((cards: MarketCard[], mode = sort): MarketCard[] => {
     const copy = [...cards]
@@ -493,6 +507,7 @@ export function MarketModal({ onClose, initialQuery }: { onClose?: () => void; i
           {desktopBadge(c)}
         </div>
         <button className="mk-card-title" onClick={(e) => { e.stopPropagation(); openDetail(c) }}>{c.name}</button>
+        <MarketRequirements item={c} version={appVersion} />
         <div className="mk-card-summary">{c.summary || t('market.summaryFallback')}</div>
         {!!shownTags(c).length && <div className="mk-tags">{shownTags(c).slice(0, compact ? 2 : 3).map((tag) => <span key={tag}>{tag}</span>)}</div>}
         <div className="mk-card-foot">
@@ -578,17 +593,20 @@ export function MarketModal({ onClose, initialQuery }: { onClose?: () => void; i
           </div>
         )}
 
+        {!detail && !detailLoading && !storeView && <div className="mk-upgrade-filters"><select aria-label={t('market.tagAll')} value={tagFilter} onChange={e => setTagFilter(e.target.value)}><option value="">{t('market.tagAll')}</option>{[...new Set(catalog.flatMap(c => c.tags || []))].sort().map(tag => <option key={tag} value={tag}>{tag}</option>)}</select><label><input type="checkbox" checked={compatibleOnly} onChange={e => setCompatibleOnly(e.target.checked)} />{t('market.compatibleOnly')}</label><span>Forsion {appVersion}</span></div>}
         <div className="settings-body mk-body">
           {detail ? (
             <div className="mk-detail">
               <button className="settings-back mk-detail-back" onClick={() => setDetail(null)}><ArrowLeft size={14} />{t('market.detailBack')}</button>
               <div className="mk-detail-hero"><div className="mk-detail-icon"><ItemIcon url={detail.iconUrl} type={detail.type} size={36} /></div><div className="mk-detail-intro"><span className="mk-detail-kind">{navLabel[detail.type]}</span><h2>{detail.name}</h2><p>{detail.summary || t('market.summaryFallback')}</p><div className="mk-detail-byline">{t('market.author')} {detail.author}<span aria-hidden="true"> · </span>{t('market.downloads', { n: detail.downloads })}</div></div></div>
               <div className="mk-detail-layout">
-                <main className="mk-detail-main"><div className="mk-detail-section-title">{t('market.overview')}</div>{!!shownTags(detail).length && <div className="mk-tags">{shownTags(detail).map((tag) => <span key={tag}>{tag}</span>)}</div>}<div className="mk-readme">{detail.readme ? <Markdown content={detail.readme} /> : <span className="mk-muted">{t('market.readmeEmpty')}</span>}</div></main>
+                <main className="mk-detail-main"><nav className="mk-detail-tabs" aria-label={t('market.viewDetails')}>{['overview', 'comments', 'versions'].map(tab => <button key={tab} className={`btn sm ghost ${detailTab === tab ? 'active' : ''}`} aria-pressed={detailTab === tab} onClick={() => setDetailTab(tab)}>{t(`market.${tab}`)}</button>)}</nav>
+                  {detailTab === 'comments' ? <MarketDiscussion key={detail.id} item={detail} /> : detailTab === 'versions' ? <MarketVersions key={detail.id} item={detail} appVersion={appVersion} installing={!!installing[detail.id]} onInstall={version => void onInstall(detail, version)} /> : <><div className="mk-detail-section-title">{t('market.overview')}</div>{!!shownTags(detail).length && <div className="mk-tags">{shownTags(detail).map(tag => <span key={tag}>{tag}</span>)}</div>}{detail.description && <p className="mk-description">{detail.description}</p>}<div className="mk-readme">{detail.readme ? <Markdown content={detail.readme} /> : <span className="mk-muted">{t('market.readmeEmpty')}</span>}</div></>}
+                </main>
                 <aside className="mk-detail-sidebar">
                   <div className="mk-detail-actions">{installBtn(detail, 'mk-wide-btn')}{uninstallBtn(detail)}{canOpenSettings(detail) && <button className="btn sm mk-wide-btn" onClick={() => openPluginSettings(detail)}><Settings size={13} />{t('market.openSettings')}</button>}{autoUpdate(detail)}</div>
                   <div className="mk-trust-row"><ShieldCheck size={17} /><div><strong>{t('market.reviewed')}</strong><span>{t('market.reviewedHint')}</span></div></div>
-                  <dl className="mk-facts"><div><dt>{t('market.type')}</dt><dd>{navLabel[detail.type]}</dd></div><div><dt>{t('market.version')}</dt><dd>{detail.latestVersion ? `v${detail.latestVersion}` : t('market.unknown')}</dd></div>{isDesktopOnlyItem(detail) && <div><dt>{t('market.platform')}</dt><dd>{t('market.desktopOnly')}</dd></div>}<div><dt>{t('market.source')}</dt><dd>{detail.source === 'github' ? 'GitHub' : detail.source === 'npm' ? 'npm' : t('market.sourceUpload')}</dd></div>{!!formatDate(detail.updatedAt || detail.createdAt) && <div><dt>{t('market.updated')}</dt><dd>{formatDate(detail.updatedAt || detail.createdAt)}</dd></div>}</dl>
+                  <MarketRequirements item={detail} version={appVersion} /><dl className="mk-facts"><div><dt>{t('market.forsionVersion')}</dt><dd>{requirementsText(detail)}</dd></div><div><dt>ID</dt><dd className="mk-id-value">{detail.id}<button className="btn sm ghost" onClick={() => void navigator.clipboard.writeText(detail.id)}>{t('market.copyId')}</button></dd></div>{!!detail.platforms?.length && <div><dt>{t('market.platform')}</dt><dd>{detail.platforms.join(' · ')}</dd></div>}<div><dt>{t('market.type')}</dt><dd>{navLabel[detail.type]}</dd></div><div><dt>{t('market.version')}</dt><dd>{detail.latestVersion ? `v${detail.latestVersion}` : t('market.unknown')}</dd></div>{isDesktopOnlyItem(detail) && <div><dt>{t('market.platform')}</dt><dd>{t('market.desktopOnly')}</dd></div>}<div><dt>{t('market.source')}</dt><dd>{detail.source === 'github' ? 'GitHub' : detail.source === 'npm' ? 'npm' : t('market.sourceUpload')}</dd></div>{!!formatDate(detail.updatedAt || detail.createdAt) && <div><dt>{t('market.updated')}</dt><dd>{formatDate(detail.updatedAt || detail.createdAt)}</dd></div>}</dl>
                   {detail.npmPackage && <a className="mk-repo-link" href={`https://www.npmjs.com/package/${encodeURIComponent(detail.npmPackage)}`} target="_blank" rel="noreferrer"><Package size={14} />{detail.npmPackage}<ExternalLink size={12} /></a>}
                   {detail.githubRepoUrl && <a className="mk-repo-link" href={detail.githubRepoUrl} target="_blank" rel="noreferrer"><GitBranch size={14} />{t('market.openRepo')}<ExternalLink size={12} /></a>}
                 </aside>

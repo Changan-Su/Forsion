@@ -112,7 +112,7 @@ async function launch(opts = {}) {
     try { fs.rmSync(home, { recursive: true, force: true }) } catch { /* ignore */ }
   }
   try {
-    stub = await startStubEngine({ agents: fx.agents, sessions: fx.sessions, messages: opts.messages })
+    stub = await startStubEngine({ agents: fx.agents, sessions: fx.sessions, messages: opts.messages, override: opts.stubOverride })
     proxy = opts.delay ? await startDelayProxy(stub.url, opts.delay) : null
     const backend = proxy ? proxy.url : stub.url
     // 未打包时主进程用 `<dir>-dev`,两份都种;笔记库也预置 —— 日历 Space 的可用性判定要 amadeusAvailable()。
@@ -120,6 +120,7 @@ async function launch(opts = {}) {
       fs.writeFileSync(path.join(dir, 'tangu-desktop-config.json'), JSON.stringify({ mode: 'external', backendUrl: backend, token: 'e2e', defaultWorkspaceDir: defaultDir }), 'utf8')
       fs.writeFileSync(path.join(dir, 'amadeus-config.dev.json'), JSON.stringify({ localVault: vault, lastVault: vault }), 'utf8')
     }
+    if (opts.beforeLaunch) await opts.beforeLaunch({ home, userData, backend, vault, projectDir })
     const env = { ...process.env, TANGU_HOME: home, TANGU_BACKEND_URL: backend }
     if (opts.overrideHome) env.HOME = home
     try {

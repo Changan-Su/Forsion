@@ -422,6 +422,11 @@ export interface CloudBrainServices {
   memory: MemoryBrain;
   assets: AssetsBrain;
   search: SearchBrain;
+  /** Public Forsion marketplace. Only approved entries are returned; tools never install packages. */
+  marketplace?: {
+    list(signal?: AbortSignal): Promise<unknown[]>;
+    detail(id: string, signal?: AbortSignal): Promise<unknown | null>;
+  };
   models: ModelsBrain;
   storage: StorageBrain;
   /** 文生图;可选:仅 standalone(httpBrain/multiBrain)实现,云端 worker/microserver 未注入 → 工具优雅降级。 */

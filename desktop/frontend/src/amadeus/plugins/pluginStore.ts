@@ -580,6 +580,7 @@ const loadedCode = new Map<string, string>()
 function pluginMeta(src: ExternalPluginSource): Omit<AmadeusPlugin, 'setup'> {
   return {
     id: src.id,
+    packageId: src.packageId,
     name: src.name,
     nameEn: src.nameEn,
     version: src.version,

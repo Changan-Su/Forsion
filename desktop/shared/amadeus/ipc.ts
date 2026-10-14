@@ -324,6 +324,7 @@ export const PLUGIN_CAPABILITIES: readonly PluginCapability[] = ['activeWindow',
 /** A user (Forsion) plugin discovered under ~/.forsion/plugins/. */
 export interface ExternalPluginSource {
   id: string
+  packageId?: string
   /** Canonical (Chinese) display name. **Identity-adjacent**: the default work folder is derived from it,
    *  so it must never change with the UI language — English goes in `nameEn`. */
   name: string

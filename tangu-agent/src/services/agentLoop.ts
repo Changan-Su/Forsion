@@ -1,3 +1,4 @@
+import { hasMarketplaceCards, MARKETPLACE_CARDS_CAPABILITY } from '../shared/marketplace.js';
 import { normalizeUIAppCards } from '../shared/intelligentCards.js';
 import { intelligentUiEnabledFor, INTELLIGENT_UI_SECTION, looksLikeLeakedUiDocument, UI_DOCUMENT_LEAK_CHECK } from '../tools/builtin/intelligentUi.js';
 import { withTaskProjectQueue } from './taskProjectQueue.js';
@@ -1530,6 +1531,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     const visualsPref = visualsPrefOf(uiSettings);
     const nativeUiEnabled = intelligentUiEnabledFor({ ...visualGate, clientCapabilities });
     const sketchTurnSignal = sketchEnabled ? sketchTurnSignalFor(String(input.message || ''), visualsPref, nativeUiEnabled) : undefined;
+    if (clientCapabilities?.includes(MARKETPLACE_CARDS_CAPABILITY) && deps().brain.marketplace) systemParts.push('Forsion marketplace search and detail tools automatically render native plugin cards in Chat View. Those cards already satisfy visual delivery and include real details, compatibility and installation actions. After retrieving entries, explain them in brief prose; do not recreate them with sketch or intelligent_ui.');
     if (sketchEnabled) {
       systemParts.push(SKETCH_SECTION);
       if (nativeUiEnabled) systemParts.push(INTELLIGENT_UI_SECTION);
@@ -3184,7 +3186,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         //    本轮启发式命中、工具确实在场、且整 run 没调过 sketch 时,在收尾前补催一次。
         //    只催一次:模型二次检查仍认为图是噪声时允许收尾;用户的「纯文字/不要画」在信号层已排除。——
         //    actionable(计划 / 清单 / 挑一个 / 做法)只给本轮那句提醒、不补催:这类说法宽,模型判断不该出卡时不值得再烧一轮。
-        if (sketchTurnSignal && (sketchTurnSignal.kind === 'explicit' || sketchTurnSignal.kind === 'implicit') && !sketchNudged && !lastIter && !allToolCalls.some((c) => ['sketch', 'intelligent_ui'].includes(c.function.name))) {
+        if (sketchTurnSignal && (sketchTurnSignal.kind === 'explicit' || sketchTurnSignal.kind === 'implicit') && !sketchNudged && !lastIter && !(clientCapabilities?.includes(MARKETPLACE_CARDS_CAPABILITY) && hasMarketplaceCards(allToolResults)) && !allToolCalls.some((c) => ['sketch', 'intelligent_ui'].includes(c.function.name))) {
           sketchNudged = true;
           if (res.content || res.outputItems?.length) workingMessages.push(assistantTurnOf(res, res.content || ''));
           workingMessages.push({
