@@ -5,15 +5,18 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createAppRefHotkey, frontToAppRef } from './appRefHotkey'
 
-// 真 unix socket + 一个按行回话的假助手:线协议就是 electron/appRefHotkey.ts 顶注那三行。
+// 真 socket / Windows 命名管道 + 一个按行回话的假助手。
 const dir = mkdtempSync(path.join(os.tmpdir(), 'apprefhk-'))
 const servers: net.Server[] = []
 afterEach(() => { for (const s of servers.splice(0)) s.close() })
 process.on('exit', () => rmSync(dir, { recursive: true, force: true }))
 
 let seq = 0
+const socketPath = (name: string): string => process.platform === 'win32'
+  ? `\\\\.\\pipe\\${path.basename(dir)}-${name}`
+  : path.join(dir, `${name}.sock`)
 function helper(reply: (msg: Record<string, unknown>, socket: net.Socket) => void): Promise<{ sock: string; requests: Array<Record<string, unknown>>; sockets: net.Socket[] }> {
-  const sock = path.join(dir, `h${++seq}.sock`)
+  const sock = socketPath(`h${++seq}`)
   const requests: Array<Record<string, unknown>> = []
   const sockets: net.Socket[] = []
   const server = net.createServer((socket) => {
@@ -23,7 +26,10 @@ function helper(reply: (msg: Record<string, unknown>, socket: net.Socket) => voi
     socket.on('error', () => {})
   })
   servers.push(server)
-  return new Promise((resolve) => server.listen(sock, () => resolve({ sock, requests, sockets })))
+  return new Promise((resolve, reject) => {
+    server.once('error', reject)
+    server.listen(sock, () => resolve({ sock, requests, sockets }))
+  })
 }
 const until = async (ok: () => boolean): Promise<void> => { for (let i = 0; i < 200 && !ok(); i++) await new Promise((r) => setTimeout(r, 10)); expect(ok()).toBe(true) }
 const FRONT = { bundleId: 'com.google.Chrome', app: 'Google Chrome', pid: 11, windowId: 101, title: 'Linear – Pricing' }
@@ -40,14 +46,14 @@ describe('助手给的最前面的窗口 → 引用', () => {
 
 describe('Windows:连不上就拉起助手(那边没有权限框)', () => {
   it('拉起一次后连上;拉了还是连不上,试几次就不再试(不会每半分钟起一个进程)', async () => {
-    const sock = path.join(dir, 'win.sock')
+    const sock = socketPath('win')
     const requests: unknown[] = []
     let launched = 0
     const launch = async (): Promise<void> => {
       launched++
       const server = net.createServer((s) => { s.setEncoding('utf8'); s.on('data', (c: string) => { const m = JSON.parse(c); requests.push(m); s.write(`${JSON.stringify({ id: m.id, ok: true, result: { subscribed: true } })}\n`) }); s.on('error', () => {}) })
       servers.push(server)
-      await new Promise<void>((r) => server.listen(sock, () => r()))
+      await new Promise<void>((r, reject) => { server.once('error', reject); server.listen(sock, () => r()) })
     }
     const hk = createAppRefHotkey({ target: () => ({ path: sock, launch }), ownPid: 1, onFire: () => {}, retryMs: 60_000 })
     hk.setWanted(true)
@@ -70,7 +76,7 @@ describe('Windows:连不上就拉起助手(那边没有权限框)', () => {
     flip.setWanted(false)
 
     let tries = 0
-    const stuck = createAppRefHotkey({ target: () => ({ path: path.join(dir, 'never.sock'), launch: async () => { tries++ } }), ownPid: 1, onFire: () => {}, retryMs: 10 })
+    const stuck = createAppRefHotkey({ target: () => ({ path: socketPath('never'), launch: async () => { tries++ } }), ownPid: 1, onFire: () => {}, retryMs: 10 })
     stuck.setWanted(true)
     await until(() => stuck.state().dead)
     expect(tries).toBe(3)
@@ -122,7 +128,7 @@ describe('全局双 ⌘ 的订阅', () => {
   })
 
   it('助手没在跑:不报错,隔一阵再试;助手起来后 poke 一下立刻连上;连接断了会重连', async () => {
-    const sock = path.join(dir, 'late.sock')
+    const sock = socketPath('late')
     const hk = createAppRefHotkey({ target: () => ({ path: sock }), ownPid: 1, onFire: () => {}, retryMs: 60_000 })
     hk.setWanted(true)
     await until(() => hk.state().attempts === 1 && !hk.state().connected) // 第一次连过了、没连上
@@ -130,7 +136,7 @@ describe('全局双 ⌘ 的订阅', () => {
     const sockets: net.Socket[] = []
     const server = net.createServer((s) => { sockets.push(s); s.setEncoding('utf8'); s.on('data', (c: string) => { const m = JSON.parse(c); requests.push(m); s.write(`${JSON.stringify({ id: m.id, ok: true, result: {} })}\n`) }); s.on('error', () => {}) })
     servers.push(server)
-    await new Promise<void>((r) => server.listen(sock, () => r()))
+    await new Promise<void>((r, reject) => { server.once('error', reject); server.listen(sock, () => r()) })
     hk.poke()
     await until(() => requests.length === 1)
     hk.setWanted(false)
