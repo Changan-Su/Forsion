@@ -26,9 +26,15 @@ function check(name, condition, detail) {
   failed.push(name)
   console.log(`FAIL ${name}${detail ? ` | ${detail}` : ''}`)
 }
+/** main() 里装上:一段抛了就拍一张、记下当时页面上有什么 —— 下次红了从证据查起,不用再占一次锁去猜。 */
+let onStepFail = null
 /** 一段和后面互不依赖的步骤:里面抛了(等不到元素之类)记一条红,后面的段照跑。 */
 async function step(name, fn) {
-  try { await fn() } catch (e) { failed.push(name); console.log(`FAIL ${name} | 抛错: ${String((e && e.message) || e).split('\n')[0]}`) }
+  try { await fn() } catch (e) {
+    failed.push(name)
+    console.log(`FAIL ${name} | 抛错: ${String((e && e.message) || e).split('\n')[0]}`)
+    if (onStepFail) await onStepFail(name).catch(() => {})
+  }
 }
 async function until(fn, ms = 8000) { const end = Date.now() + ms; for (;;) { const v = await fn(); if (v) return v; if (Date.now() > end) return v; await new Promise((r) => setTimeout(r, 120)) } }
 
@@ -143,8 +149,11 @@ const card = (win) => win.evaluate(() => {
 })
 const cardDone = (win) => until(async () => { const c = await card(win); return c && (c.phase === 'done' || c.phase === 'error') ? c : null }, 10000)
 /** 浮层的入场动效(180ms 从透明淡入)放完再往下:假引擎秒回,不等的话拍到的是半透明的那一帧。 */
-const settle = (win) => win.evaluate(() => Promise.allSettled(document.getAnimations().map((a) => a.finished)).then(() => undefined))
+// 封顶 1 秒:页面上要是有转个不停的动画(连接中的圈之类),它的 finished 永远不来,不封顶整条台架就挂在这儿。
+const settle = (win) => win.evaluate(() => Promise.race([Promise.allSettled(document.getAnimations().map((a) => a.finished)), new Promise((r) => setTimeout(r, 1000))]).then(() => undefined))
 async function shot(win, file) { await settle(win); await win.screenshot({ path: file }) }
+/** 等条出现、入场动效放完再量:动效里有 1.5% 的缩放(以左上角为原点),半途量出来的中心会偏左一两个像素 —— 110% 下正好超出 ±2 的容差。 */
+async function barReady(win, ms = 5000) { if (!(await until(() => barState(win), ms))) return null; await settle(win); return barState(win) }
 /** 点开 ⋯,返回里面的项;给了 id 就点它。 */
 async function pickMore(win, id) {
   const btn = win.locator('[data-testid="selection-bar"] [data-act="more"]')
@@ -156,16 +165,37 @@ async function pickMore(win, id) {
   return items
 }
 
-async function main() {
-  if (!fs.existsSync(path.join(ROOT, 'out/main/main.js'))) { console.error('缺 out/main/main.js —— 先跑 npm run build'); process.exit(1) }
+/** 起一个隔离的实例:自己的数据目录、探针插件、登进假引擎;首帧前把偏好(语言 / 明暗 / 缩放)写好再重载一次。
+ *  ⚠️ 要换语言 / 明暗就另起一个实例,别在主窗半途再 reload:那样回来是「先在设置里连接后端」,连不回假引擎
+ *  (磁盘上的配置和账号文件都没变,原因没查清;别的真应用台架也都只在启动后立刻重载这一次)。 */
+async function launch(stubUrl, prefs) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'forsion-selbar-'))
-  const shots = path.join(home, 'screenshots'); fs.mkdirSync(shots)
   const userdata = path.join(home, 'userdata'); fs.mkdirSync(userdata)
   const vault = path.join(home, 'vault'); fs.mkdirSync(vault)
   const plugin = path.join(home, 'plugins', 'selprobe'); fs.mkdirSync(plugin, { recursive: true })
   fs.writeFileSync(path.join(plugin, 'main.js'), PLUGIN_MAIN)
   fs.writeFileSync(path.join(plugin, 'manifest.json'), JSON.stringify({ id: 'selprobe', name: 'selprobe', version: '1.0.0', minAppVersion: '0.0.1', description: '台架用的划线条探针,不是产品插件' }))
   fs.writeFileSync(path.join(userdata, 'amadeus-config.dev.json'), JSON.stringify({ lastVault: vault, localVault: vault }))
+  const token = ['test', Buffer.from(JSON.stringify({ sub: 'test-selbar', exp: Math.floor(Date.now() / 1000) + 86400 * 10 })).toString('base64url'), 'test'].join('.')
+  fs.writeFileSync(path.join(home, 'auth.json'), JSON.stringify({ cloudUrl: stubUrl, token }))
+  fs.writeFileSync(path.join(userdata, 'tangu-desktop-config.json'), JSON.stringify({ mode: 'external', backendUrl: stubUrl, cloudUrl: stubUrl, token }))
+  const app = await electron.launch({ args: [`--user-data-dir=${userdata}`, '--lang=zh-CN', ROOT], cwd: ROOT, env: { ...process.env, TANGU_HOME: home, TANGU_BACKEND_URL: stubUrl } })
+  const win = await app.firstWindow()
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1280, 900))
+  await win.waitForSelector('#root')
+  await win.evaluate(({ prefs, zoom }) => {
+    localStorage.setItem('forsion_default_space', 'tangu')
+    localStorage.removeItem('forsion_selection_bar_order')
+    for (const [k, v] of Object.entries(prefs)) localStorage.setItem(k, v)
+    // 2.10.0 那次「缩放回到默认」的一次性迁移会清掉存着的缩放:应用首帧可能还没跑到它,这里先标成已迁移,不然重载时被清回 100%。
+    if (zoom !== 1) { localStorage.setItem('forsion_ui_zoom_default_2_10_0', '1'); localStorage.setItem('forsion_ui_zoom', String(zoom)) }
+  }, { prefs, zoom: ZOOM })
+  await win.reload({ waitUntil: 'domcontentloaded' })
+  return { app, win, home }
+}
+
+async function main() {
+  if (!fs.existsSync(path.join(ROOT, 'out/main/main.js'))) { console.error('缺 out/main/main.js —— 先跑 npm run build'); process.exit(1) }
   const inline = []
   let failMt = false
   const stub = await startStubEngine({
@@ -185,22 +215,24 @@ async function main() {
       }
     },
   })
-  const token = ['test', Buffer.from(JSON.stringify({ sub: 'test-selbar', exp: Math.floor(Date.now() / 1000) + 86400 * 10 })).toString('base64url'), 'test'].join('.')
-  fs.writeFileSync(path.join(home, 'auth.json'), JSON.stringify({ cloudUrl: stub.url, token }))
-  fs.writeFileSync(path.join(userdata, 'tangu-desktop-config.json'), JSON.stringify({ mode: 'external', backendUrl: stub.url, cloudUrl: stub.url, token }))
   let app
   try {
-    app = await electron.launch({ args: [`--user-data-dir=${userdata}`, '--lang=zh-CN', ROOT], cwd: ROOT, env: { ...process.env, TANGU_HOME: home, TANGU_BACKEND_URL: stub.url } })
-    const win = await app.firstWindow()
-    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1280, 900))
-    await win.waitForSelector('#root')
-    await win.evaluate((zoom) => {
-      localStorage.setItem('forsion_default_space', 'tangu'); localStorage.setItem('tangu_locale', 'zh')
-      localStorage.removeItem('forsion_selection_bar_order')
-      // 2.10.0 那次「缩放回到默认」的一次性迁移会清掉存着的缩放:应用首帧可能还没跑到它,这里先标成已迁移,不然重载时被清回 100%。
-      if (zoom !== 1) { localStorage.setItem('forsion_ui_zoom_default_2_10_0', '1'); localStorage.setItem('forsion_ui_zoom', String(zoom)) }
-    }, ZOOM)
-    await win.reload({ waitUntil: 'domcontentloaded' })
+    const first = await launch(stub.url, { tangu_locale: 'zh' })
+    app = first.app
+    let win = first.win
+    const shots = path.join(first.home, 'screenshots'); fs.mkdirSync(shots)
+    onStepFail = async (name) => {
+      const file = path.join(shots, `fail-${failed.length}.png`)
+      await win.screenshot({ path: file })
+      const dom = await win.evaluate(() => ({
+        onboarding: !!document.querySelector('.ob-shell'),
+        shell: document.querySelector('.shell-host') ? getComputedStyle(document.querySelector('.shell-host')).visibility : null,
+        rows: [...document.querySelectorAll('.t2s-srow')].map((r) => `${(r.textContent || '').trim().slice(0, 30)}:${r.offsetWidth}x${r.offsetHeight}`),
+        bar: !!document.querySelector('[data-testid="selection-bar"]'), card: !!document.querySelector('[data-testid="inline-ai-panel"]'),
+        active: document.activeElement ? `${document.activeElement.tagName}.${String(document.activeElement.className).slice(0, 40)}` : null,
+      }))
+      console.log(`DIAG ${name} | ${JSON.stringify(dom)} | ${file}`)
+    }
     check('主窗离开首启引导', await skipOnboarding(win))
     const input = win.locator('.t2c-ta').first()
     await input.waitFor({ timeout: 30000 })
@@ -213,7 +245,7 @@ async function main() {
 
     // ── 聊天:条的位置、外壳、组成 ──
     const sel1 = await dragSelect(win, CHAT, 'AZURE-FALCON 已记下')
-    const bar1 = await until(() => barState(win), 5000)
+    const bar1 = await barReady(win)
     check('聊天里选中文字 → 划线条出现,挂在 body 下、fixed', !!sel1 && !!bar1 && bar1.inBody && bar1.position === 'fixed' && bar1.view === 'chat', JSON.stringify({ sel1, bar1 }))
     check('条在选区上方、水平居中(±2px)、不越出视口', bar1.bottom <= sel1.top + 1 && sel1.top - bar1.bottom < 16 && Math.abs((bar1.left + bar1.right) / 2 - (sel1.left + sel1.right) / 2) <= 2 && bar1.left >= 0 && bar1.right <= bar1.vw && bar1.top >= 0, JSON.stringify({ sel1, bar1 }))
     check('外壳是共用的 .ui-popover 圆角矩形(不是胶囊)', bar1.popover && bar1.radius > 0 && bar1.radius <= 14 && (await win.locator('.t2-quote-menu').count()) === 0, `radius=${bar1.radius}`)
@@ -316,7 +348,7 @@ async function main() {
     check('切到别的视图(聊天被换到后台)→ 聊天那一条不留在屏上', (await until(async () => !(await barState(win)), 3000)) === true)
     check('插件视图挂上了宿主的划线条', await win.evaluate(() => !!window.__selprobe.bar && typeof window.__selprobe.bar.show === 'function'))
     const sel5 = await dragSelect(win, '.selprobe', 'paragraph for the selection')
-    const bar5 = await until(() => barState(win), 5000)
+    const bar5 = await barReady(win)
     check('插件视图里:自己的工具在前(颜色点、图标钮),竖线,再是问 Tangu / 翻译 / ⋯', !!bar5 && bar5.view === 'selprobe:reader' && bar5.row.join(',') === 'yellow,note,|,ask,translate,more', JSON.stringify(bar5))
     check('位置同样在选区上方居中', bar5.bottom <= sel5.top + 1 && Math.abs((bar5.left + bar5.right) / 2 - (sel5.left + sel5.right) / 2) <= 2, JSON.stringify({ sel5, bar5 }))
     await shot(win, path.join(shots, 'plugin-bar.png'))
@@ -347,7 +379,7 @@ async function main() {
     await step('排法设置', async () => {
       await win.evaluate(() => localStorage.setItem('forsion_selection_bar_order', 'actions'))
       await dragSelect(win, '.selprobe', 'paragraph for the selection')
-      const bar6 = await until(() => barState(win), 5000)
+      const bar6 = await barReady(win)
       check('设置换成「动作在前」→ 问 Tangu / 翻译 / ⋯ 打头,工具在后', bar6?.row.join(',') === 'ask,translate,more,|,yellow,note', bar6?.row.join(','))
       await shot(win, path.join(shots, 'plugin-bar-actions-first.png'))
     })
@@ -357,7 +389,7 @@ async function main() {
     // show() / hide():自己报文字和位置
     await step('show / hide / dispose', async () => {
       await win.evaluate(() => window.__selprobe.bar.show({ text: 'manual text', rect: { left: 420, right: 620, top: 500, bottom: 520 } }))
-      const bar7 = await until(() => barState(win), 5000)
+      const bar7 = await barReady(win)
       check('show({ text, rect }) → 条按给的矩形落位(视口 px,缩放由宿主抵消)', !!bar7 && Math.abs((bar7.left + bar7.right) / 2 - 520) <= 2 && bar7.bottom <= 501 && 500 - bar7.bottom < 16, JSON.stringify(bar7))
       await win.locator('[data-testid="selection-translate"]').click({ timeout: 8000 })
       await cardDone(win)
@@ -375,14 +407,17 @@ async function main() {
 
     // ── 观感自查(DESIGN §8):回聊天,深色 + 英文各截一张,人看 ──
     await step('深色 + 英文', async () => {
-      await win.evaluate(() => { localStorage.setItem('forsion_theme_pref', 'dark'); localStorage.setItem('forsion_theme', 'dark'); localStorage.setItem('tangu_locale', 'en') })
-      await win.reload({ waitUntil: 'domcontentloaded' })
-      // 重载后先认会话行再点(恢复出来的活动标签可能是探针插件那个视图,这时没有输入框可等)
-      await win.locator('text=Parser 重构').first().waitFor({ timeout: 30000 })
-      await win.locator('text=Parser 重构').first().click()
+      await app.close().catch(() => {})
+      const second = await launch(stub.url, { tangu_locale: 'en', forsion_theme_pref: 'dark', forsion_theme: 'dark' })
+      app = second.app
+      win = second.win
+      check('深色 + 英文的实例离开首启引导', await skipOnboarding(win))
+      const row = win.locator('.t2s-srow', { hasText: 'Parser 重构' }).first()
+      await row.waitFor({ timeout: 30000 })
+      await row.click()
       await win.locator(CHAT, { hasText: 'AZURE-FALCON' }).first().waitFor({ timeout: 15000 })
       await dragSelect(win, CHAT, '重构解析器的词法阶段')
-      const barEn = await until(() => barState(win), 5000)
+      const barEn = await barReady(win)
       const labels = await win.evaluate(() => [...document.querySelectorAll('[data-testid="selection-bar"] .selbar-row > button')].map((b) => b.textContent.trim()))
       check('英文界面:条上的字是英文(不是 key、不是中文)', !!barEn && labels.slice(0, 4).every((l) => /^[A-Za-z ]+$/.test(l)) && labels.includes('Translate'), labels.join(' | '))
       await shot(win, path.join(shots, 'chat-bar-dark-en.png'))
