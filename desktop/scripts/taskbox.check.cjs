@@ -186,19 +186,31 @@ async function main() {
         check(`[${shell}] 块间缝起手拖过两段是框选,Backspace 删掉的正是框住的两块`, inGap && during && mode === 'true' && left.join('|') === '第三段也短。', JSON.stringify({ inGap, during, mode, left }))
       }
       await page.close()
-      // ⑥ 块矩形之外(块间缝)按下:维持立即起框,松手不动 = 光标落进最近的块(现状)。
+      // ⑥ 块矩形之外(块间缝)按下:维持立即起框,松手不动 = 光标落进最近的块并拿到焦点(左半边块首、右半边块尾)。
+      //    原先只验「是个折叠的文字选区」—— 开页时没动过的选区本来就是,点了什么都没发生也照绿(缝里 posAtCoords
+      //    落在两块之间,onMqUp 直接返回、连焦点都不给;「宽松正文」把段距拉大后 editor-ai B4c 就红在这里)。
+      //    现在先失焦,两下都点在缝里:靠下一段 → 第二段段首,靠上一段的右半边 → 第一段段尾。
       {
         const pg = await open(browser, '第一段。\n\n第二段。\n', flags)
         const a = await para(pg, 0), b = await para(pg, 1)
-        const gapY = (a.bottom + b.top) / 2
-        const inGap = await pg.evaluate(({ PM, y, x }) => [...document.querySelectorAll(PM + ' > *')].every((el) => { const r = el.getBoundingClientRect(); return y < r.top || y > r.bottom || x < r.left || x > r.right }), { PM, y: gapY, x: a.left + 40 })
-        await pg.mouse.move(a.left + 40, gapY)
+        const inGap = (x, y) => pg.evaluate(({ PM, x, y }) => [...document.querySelectorAll(PM + ' > *')].every((el) => { const r = el.getBoundingClientRect(); return y < r.top || y > r.bottom || x < r.left || x > r.right }), { PM, x, y })
+        const focused = () => pg.evaluate(() => window.__upage.probe.view().hasFocus())
+        await pg.evaluate(() => document.activeElement?.blur())
+        const gap1 = await inGap(a.left + 40, b.top - 2)
+        const blurred = !(await focused())
+        await pg.mouse.move(a.left + 40, b.top - 2)
         await pg.mouse.down()
         const immediate = await pg.evaluate(() => !!document.querySelector('.amx-marquee'))
         await pg.mouse.up()
         await pg.waitForTimeout(150)
-        const s = await sel(pg)
-        check(`[${shell}] 块间缝按下仍立即起框,点一下落光标`, inGap && immediate && s.type === 'text' && s.from === s.to, JSON.stringify({ inGap, immediate, s }))
+        const s1 = await sel(pg), f1 = await focused()
+        check(`[${shell}] 块间缝按下仍立即起框;靠下一段点一下,光标落到第二段段首并拿到焦点`, gap1 && blurred && immediate && s1.type === 'text' && s1.from === b.from && s1.to === b.from && f1, JSON.stringify({ gap1, blurred, immediate, s1, f1, want: b.from }))
+        await pg.evaluate(() => document.activeElement?.blur())
+        const gap2 = await inGap(a.right - 40, a.bottom + 2)
+        await pg.mouse.click(a.right - 40, a.bottom + 2)
+        await pg.waitForTimeout(150)
+        const s2 = await sel(pg), f2 = await focused()
+        check(`[${shell}] 块间缝靠上一段的右半边点一下,光标落到第一段段尾并拿到焦点`, gap2 && s2.type === 'text' && s2.from === a.to && s2.to === a.to && f2, JSON.stringify({ gap2, s2, f2, want: a.to }))
         await pg.close()
       }
     }
