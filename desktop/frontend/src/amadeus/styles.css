@@ -1529,6 +1529,7 @@ body.amx-marquee-active * {
   box-shadow: var(--shadow-panel);
   animation: pop-in 120ms var(--ease-apple);
   user-select: none;
+  -webkit-app-region: no-drag; /* 第一行的选区会把它顶到标签栏(窗口拖拽区)上,同 .selbar */
 }
 .am-app .itb-row {
   display: flex;

@@ -26,6 +26,10 @@ function check(name, condition, detail) {
   failed.push(name)
   console.log(`FAIL ${name}${detail ? ` | ${detail}` : ''}`)
 }
+/** 一段和后面互不依赖的步骤:里面抛了(等不到元素之类)记一条红,后面的段照跑。 */
+async function step(name, fn) {
+  try { await fn() } catch (e) { failed.push(name); console.log(`FAIL ${name} | 抛错: ${String((e && e.message) || e).split('\n')[0]}`) }
+}
 async function until(fn, ms = 8000) { const end = Date.now() + ms; for (;;) { const v = await fn(); if (v) return v; if (Date.now() > end) return v; await new Promise((r) => setTimeout(r, 120)) } }
 
 const now = Date.now()
@@ -63,6 +67,8 @@ window.__selprobe.open = function () { return ctx.openView('reader') }
 /** 真鼠标拖选 `root` 里第一处 `text`(松手才出条)。返回选区外接矩形(视口 px)。 */
 async function dragSelect(win, rootSel, text) {
   const r = await win.evaluate(({ rootSel, text }) => {
+    // 先清掉上一次留下的选区:按在已选中的字上再拖,浏览器起的是「拖走这段文字」,不是一次新的选择(没有 mouseup)。
+    window.getSelection()?.removeAllRanges()
     for (const root of document.querySelectorAll(rootSel)) {
       const w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT)
       let n
@@ -136,6 +142,9 @@ const card = (win) => win.evaluate(() => {
   }
 })
 const cardDone = (win) => until(async () => { const c = await card(win); return c && (c.phase === 'done' || c.phase === 'error') ? c : null }, 10000)
+/** 浮层的入场动效(180ms 从透明淡入)放完再往下:假引擎秒回,不等的话拍到的是半透明的那一帧。 */
+const settle = (win) => win.evaluate(() => Promise.allSettled(document.getAnimations().map((a) => a.finished)).then(() => undefined))
+async function shot(win, file) { await settle(win); await win.screenshot({ path: file }) }
 /** 点开 ⋯,返回里面的项;给了 id 就点它。 */
 async function pickMore(win, id) {
   const btn = win.locator('[data-testid="selection-bar"] [data-act="more"]')
@@ -209,7 +218,15 @@ async function main() {
     check('条在选区上方、水平居中(±2px)、不越出视口', bar1.bottom <= sel1.top + 1 && sel1.top - bar1.bottom < 16 && Math.abs((bar1.left + bar1.right) / 2 - (sel1.left + sel1.right) / 2) <= 2 && bar1.left >= 0 && bar1.right <= bar1.vw && bar1.top >= 0, JSON.stringify({ sel1, bar1 }))
     check('外壳是共用的 .ui-popover 圆角矩形(不是胶囊)', bar1.popover && bar1.radius > 0 && bar1.radius <= 14 && (await win.locator('.t2-quote-menu').count()) === 0, `radius=${bar1.radius}`)
     check('组成:引用 / 在侧栏提问 / 顺便问 / 翻译 / ⋯(聊天没有自己的工具,不画竖线)', bar1.row.join(',') === 'quote,ask-in-panel,btw,translate,more', bar1.row.join(','))
-    await win.screenshot({ path: path.join(shots, 'chat-bar.png') })
+    await shot(win, path.join(shots, 'chat-bar.png'))
+    // 选区贴着聊天区顶上时条会压到标签栏上,标签栏是窗口拖拽区(不看层叠):条自己得打 no-drag 的洞,不然按下去是拖窗口。
+    // CDP 派发的点击不经过系统的拖拽区,这里只能钉计算样式;先确认标签栏那边读得出 drag,读不出就如实跳过。
+    const region = await win.evaluate(() => {
+      const r = (el) => { if (!el) return null; const cs = getComputedStyle(el); return cs.getPropertyValue('app-region') || cs.getPropertyValue('-webkit-app-region') || '' }
+      return { strip: r(document.querySelector('.dv-tabs-and-actions-container')), bar: r(document.querySelector('[data-testid="selection-bar"]')) }
+    })
+    if (region.strip === 'drag') check('条不算窗口拖拽区(压到标签栏上也点得动)', region.bar === 'no-drag', JSON.stringify(region))
+    else console.log(`SKIP 拖拽区的计算值读不出来,这一条没验 | ${JSON.stringify(region)}`)
 
     // ── 输入区里的选区不出;滚动 / 点到外面收 ──
     await win.locator('.t2-stream').first().evaluate((el) => { el.scrollTop = Math.max(0, el.scrollTop - 1); el.dispatchEvent(new Event('scroll')) })
@@ -243,7 +260,15 @@ async function main() {
     check('结果卡是只读的:复制 / 重试 / 关闭,没有「替换」「插入下方」', !!c1 && c1.readonly && c1.phase === 'done' && c1.acts.join(',') === 'copy,retry,discard' && c1.preview === '译文<English>:重构解析器的词法', JSON.stringify(c1))
     check('卡头:目标语言下拉 + 写明是机器翻译', c1.lang === 'English' && /机器翻译.*Qwen MT Flash/.test(c1.hint || '') && c1.title === '翻译', JSON.stringify(c1))
     check('卡贴着选区(下面放不下才翻到上面)、不越出视口;条已收起、选区还在', ((c1.top >= sel2.bottom - 1 && c1.top - sel2.bottom < 16) || (c1.bottom <= sel2.top + 1 && sel2.top - c1.bottom < 16)) && c1.left >= 0 && c1.right <= (await win.evaluate(() => innerWidth)) && !(await barState(win)) && !(await win.evaluate(() => window.getSelection().isCollapsed)), JSON.stringify({ c1, sel2 }))
-    await win.screenshot({ path: path.join(shots, 'chat-translate-card.png') })
+    await settle(win)
+    const look = await win.evaluate(() => {
+      const el = document.querySelector('[data-testid="inline-ai-panel"]')
+      const cs = getComputedStyle(el)
+      return { opacity: cs.opacity, bg: cs.backgroundImage !== 'none' || !/rgba\(0, 0, 0, 0\)|transparent/.test(cs.backgroundColor), inBody: el.parentElement === document.body, region: cs.getPropertyValue('app-region') || cs.getPropertyValue('-webkit-app-region') || '' }
+    })
+    check('卡挂在 body 下;入场动效放完后不透明、有底色', look.inBody && look.opacity === '1' && look.bg, JSON.stringify(look))
+    if (region.strip === 'drag') check('卡也不算窗口拖拽区', look.region === 'no-drag', JSON.stringify(look))
+    await shot(win, path.join(shots, 'chat-translate-card.png'))
     await win.locator('[data-testid="inline-ai-lang"]').selectOption('Japanese')
     await until(async () => inline.length >= 2 && inline.at(-1).language === 'Japanese', 5000)
     const c2 = await cardDone(win)
@@ -274,7 +299,7 @@ async function main() {
     await dragSelect(win, CHAT, '已记下')
     const short = await pickMore(win)
     check('⋯ 里只列认聊天的动作(只在笔记 / 只在自己视图 / 字数不够的不列)', short.join(',') === 'plugin:selprobe:everywhere', short.join(','))
-    await win.screenshot({ path: path.join(shots, 'chat-more.png') })
+    await shot(win, path.join(shots, 'chat-more.png'))
     await input.click()
     await dragSelect(win, CHAT, '先把记号流和错误恢复拆开,再补一组边界用例')
     const longer = await pickMore(win, 'plugin:selprobe:everywhere')
@@ -294,66 +319,78 @@ async function main() {
     const bar5 = await until(() => barState(win), 5000)
     check('插件视图里:自己的工具在前(颜色点、图标钮),竖线,再是问 Tangu / 翻译 / ⋯', !!bar5 && bar5.view === 'selprobe:reader' && bar5.row.join(',') === 'yellow,note,|,ask,translate,more', JSON.stringify(bar5))
     check('位置同样在选区上方居中', bar5.bottom <= sel5.top + 1 && Math.abs((bar5.left + bar5.right) / 2 - (sel5.left + sel5.right) / 2) <= 2, JSON.stringify({ sel5, bar5 }))
-    await win.screenshot({ path: path.join(shots, 'plugin-bar.png') })
+    await shot(win, path.join(shots, 'plugin-bar.png'))
     await win.locator('[data-testid="selection-bar"] [data-act="yellow"]').click()
     check('点工具 → 调到插件的 run(带选中的文字);没清选区条就还在', (await win.evaluate(() => window.__selprobe.tools.join(','))) === 'yellow:paragraph for the selection' && !!(await barState(win)))
     const more5 = await pickMore(win, 'plugin:selprobe:own')
     await win.waitForTimeout(300)
     check("scope:'own' 的动作只在这里列;output:'none' 不出卡,run 拿到视图 id 和出处页码", more5.join(',') === 'plugin:selprobe:everywhere,plugin:selprobe:own' && (await win.evaluate(() => window.__selprobe.ran.join(','))) === 'paragraph for the selection|selprobe:reader|7' && !(await card(win)), `${more5.join(',')} ${await win.evaluate(() => window.__selprobe.ran.join(','))}`)
-    await dragSelect(win, '.selprobe', 'paragraph for the selection')
-    await win.locator('[data-testid="selection-ask"]').click()
-    check('插件接管了「问 Tangu」:走它自己的回调,条收起', (await win.evaluate(() => window.__selprobe.asked.join(','))) === 'paragraph for the selection' && !(await barState(win)))
-    await dragSelect(win, '.selprobe', 'paragraph for the selection')
-    await win.locator('[data-testid="selection-bar"] [data-act="note"]').click()
-    check('工具在 run 里清了选区 → 条跟着收', (await until(async () => !(await barState(win)), 3000)) === true && (await win.evaluate(() => window.__selprobe.tools.at(-1))) === 'note:paragraph for the selection')
-    await win.locator('#selprobe-in').click()
-    await win.keyboard.press(process.platform === 'darwin' ? 'Meta+A' : 'Control+A')
-    await win.locator('#selprobe-in').dispatchEvent('mouseup')
-    await win.waitForTimeout(300)
-    check('插件视图的输入框里也不出条', !(await barState(win)))
+    await step('插件接管「问 Tangu」', async () => {
+      await dragSelect(win, '.selprobe', 'paragraph for the selection')
+      await win.locator('[data-testid="selection-ask"]').click({ timeout: 8000 })
+      check('插件接管了「问 Tangu」:走它自己的回调,条收起', (await win.evaluate(() => window.__selprobe.asked.join(','))) === 'paragraph for the selection' && !(await barState(win)))
+    })
+    await step('工具自己清选区', async () => {
+      await dragSelect(win, '.selprobe', 'paragraph for the selection')
+      await win.locator('[data-testid="selection-bar"] [data-act="note"]').click({ timeout: 8000 })
+      check('工具在 run 里清了选区 → 条跟着收', (await until(async () => !(await barState(win)), 3000)) === true && (await win.evaluate(() => window.__selprobe.tools.at(-1))) === 'note:paragraph for the selection')
+    })
+    await step('插件视图的输入框', async () => {
+      await win.locator('#selprobe-in').click()
+      await win.keyboard.press(process.platform === 'darwin' ? 'Meta+A' : 'Control+A')
+      await win.locator('#selprobe-in').dispatchEvent('mouseup')
+      await win.waitForTimeout(300)
+      check('插件视图的输入框里也不出条', !(await barState(win)))
+    })
 
     // 排法设置:动作在前
-    await win.evaluate(() => localStorage.setItem('forsion_selection_bar_order', 'actions'))
-    await dragSelect(win, '.selprobe', 'paragraph for the selection')
-    const bar6 = await until(() => barState(win), 5000)
-    check('设置换成「动作在前」→ 问 Tangu / 翻译 / ⋯ 打头,工具在后', bar6?.row.join(',') === 'ask,translate,more,|,yellow,note', bar6?.row.join(','))
-    await win.screenshot({ path: path.join(shots, 'plugin-bar-actions-first.png') })
+    await step('排法设置', async () => {
+      await win.evaluate(() => localStorage.setItem('forsion_selection_bar_order', 'actions'))
+      await dragSelect(win, '.selprobe', 'paragraph for the selection')
+      const bar6 = await until(() => barState(win), 5000)
+      check('设置换成「动作在前」→ 问 Tangu / 翻译 / ⋯ 打头,工具在后', bar6?.row.join(',') === 'ask,translate,more,|,yellow,note', bar6?.row.join(','))
+      await shot(win, path.join(shots, 'plugin-bar-actions-first.png'))
+    })
     await win.evaluate(() => { localStorage.removeItem('forsion_selection_bar_order'); window.getSelection().removeAllRanges() })
     await until(async () => !(await barState(win)), 3000)
 
     // show() / hide():自己报文字和位置
-    await win.evaluate(() => window.__selprobe.bar.show({ text: 'manual text', rect: { left: 420, right: 620, top: 500, bottom: 520 } }))
-    const bar7 = await until(() => barState(win), 5000)
-    check('show({ text, rect }) → 条按给的矩形落位(视口 px,缩放由宿主抵消)', !!bar7 && Math.abs((bar7.left + bar7.right) / 2 - 520) <= 2 && bar7.bottom <= 501 && 500 - bar7.bottom < 16, JSON.stringify(bar7))
-    await win.locator('[data-testid="selection-translate"]').click()
-    await cardDone(win)
-    check('自己报的选区一样能翻译', inline.at(-1)?.selection === 'manual text' && inline.at(-1)?.language === 'Chinese (Simplified)', JSON.stringify(inline.at(-1)))
-    await win.keyboard.press('Escape')
-    await until(async () => !(await card(win)), 3000)
-    await win.evaluate(() => window.__selprobe.bar.show({ text: 'manual text', rect: { left: 420, right: 620, top: 500, bottom: 520 } }))
-    await until(() => barState(win), 5000)
-    await win.evaluate(() => window.__selprobe.bar.hide())
-    check('hide() 收条', (await until(async () => !(await barState(win)), 3000)) === true)
-    await win.evaluate(() => { window.__selprobe.bar.dispose(); window.__selprobe.bar.show({ text: 'after dispose', rect: { left: 420, right: 620, top: 500, bottom: 520 } }) })
-    await win.waitForTimeout(300)
-    check('dispose() 之后不再出条', !(await barState(win)))
+    await step('show / hide / dispose', async () => {
+      await win.evaluate(() => window.__selprobe.bar.show({ text: 'manual text', rect: { left: 420, right: 620, top: 500, bottom: 520 } }))
+      const bar7 = await until(() => barState(win), 5000)
+      check('show({ text, rect }) → 条按给的矩形落位(视口 px,缩放由宿主抵消)', !!bar7 && Math.abs((bar7.left + bar7.right) / 2 - 520) <= 2 && bar7.bottom <= 501 && 500 - bar7.bottom < 16, JSON.stringify(bar7))
+      await win.locator('[data-testid="selection-translate"]').click({ timeout: 8000 })
+      await cardDone(win)
+      check('自己报的选区一样能翻译', inline.at(-1)?.selection === 'manual text' && inline.at(-1)?.language === 'Chinese (Simplified)', JSON.stringify(inline.at(-1)))
+      await win.keyboard.press('Escape')
+      await until(async () => !(await card(win)), 3000)
+      await win.evaluate(() => window.__selprobe.bar.show({ text: 'manual text', rect: { left: 420, right: 620, top: 500, bottom: 520 } }))
+      await until(() => barState(win), 5000)
+      await win.evaluate(() => window.__selprobe.bar.hide())
+      check('hide() 收条', (await until(async () => !(await barState(win)), 3000)) === true)
+      await win.evaluate(() => { window.__selprobe.bar.dispose(); window.__selprobe.bar.show({ text: 'after dispose', rect: { left: 420, right: 620, top: 500, bottom: 520 } }) })
+      await win.waitForTimeout(300)
+      check('dispose() 之后不再出条', !(await barState(win)))
+    })
 
     // ── 观感自查(DESIGN §8):回聊天,深色 + 英文各截一张,人看 ──
-    await win.evaluate(() => { localStorage.setItem('forsion_theme_pref', 'dark'); localStorage.setItem('forsion_theme', 'dark'); localStorage.setItem('tangu_locale', 'en') })
-    await win.reload({ waitUntil: 'domcontentloaded' })
-    // 重载后先认会话行再点(恢复出来的活动标签可能是探针插件那个视图,这时没有输入框可等)
-    await win.locator('text=Parser 重构').first().waitFor({ timeout: 30000 })
-    await win.locator('text=Parser 重构').first().click()
-    await win.locator(CHAT, { hasText: 'AZURE-FALCON' }).first().waitFor({ timeout: 15000 })
-    await dragSelect(win, CHAT, '重构解析器的词法阶段')
-    const barEn = await until(() => barState(win), 5000)
-    const labels = await win.evaluate(() => [...document.querySelectorAll('[data-testid="selection-bar"] .selbar-row > button')].map((b) => b.textContent.trim()))
-    check('英文界面:条上的字是英文(不是 key、不是中文)', !!barEn && labels.slice(0, 4).every((l) => /^[A-Za-z ]+$/.test(l)) && labels.includes('Translate'), labels.join(' | '))
-    await win.screenshot({ path: path.join(shots, 'chat-bar-dark-en.png') })
-    await win.locator('[data-testid="selection-translate"]').click()
-    const cEn = await cardDone(win)
-    check('英文界面:中文选区译成英文;卡上的按钮是英文', inline.at(-1)?.language === 'English' && !!cEn && (await win.evaluate(() => [...document.querySelectorAll('[data-testid="inline-ai-panel"] button[data-act]')].map((b) => b.textContent.trim()).join('|'))) === 'Copy|Try again|Close', JSON.stringify(cEn))
-    await win.screenshot({ path: path.join(shots, 'chat-translate-card-dark-en.png') })
+    await step('深色 + 英文', async () => {
+      await win.evaluate(() => { localStorage.setItem('forsion_theme_pref', 'dark'); localStorage.setItem('forsion_theme', 'dark'); localStorage.setItem('tangu_locale', 'en') })
+      await win.reload({ waitUntil: 'domcontentloaded' })
+      // 重载后先认会话行再点(恢复出来的活动标签可能是探针插件那个视图,这时没有输入框可等)
+      await win.locator('text=Parser 重构').first().waitFor({ timeout: 30000 })
+      await win.locator('text=Parser 重构').first().click()
+      await win.locator(CHAT, { hasText: 'AZURE-FALCON' }).first().waitFor({ timeout: 15000 })
+      await dragSelect(win, CHAT, '重构解析器的词法阶段')
+      const barEn = await until(() => barState(win), 5000)
+      const labels = await win.evaluate(() => [...document.querySelectorAll('[data-testid="selection-bar"] .selbar-row > button')].map((b) => b.textContent.trim()))
+      check('英文界面:条上的字是英文(不是 key、不是中文)', !!barEn && labels.slice(0, 4).every((l) => /^[A-Za-z ]+$/.test(l)) && labels.includes('Translate'), labels.join(' | '))
+      await shot(win, path.join(shots, 'chat-bar-dark-en.png'))
+      await win.locator('[data-testid="selection-translate"]').click({ timeout: 8000 })
+      const cEn = await cardDone(win)
+      check('英文界面:中文选区译成英文;卡上的按钮是英文', inline.at(-1)?.language === 'English' && !!cEn && (await win.evaluate(() => [...document.querySelectorAll('[data-testid="inline-ai-panel"] button[data-act]')].map((b) => b.textContent.trim()).join('|'))) === 'Copy|Try again|Close', JSON.stringify(cEn))
+      await shot(win, path.join(shots, 'chat-translate-card-dark-en.png'))
+    })
 
     console.log(`\n${checks} checks passed, ${failed.length} failed${ZOOM !== 1 ? ` (ZOOM=${ZOOM})` : ''}`)
     console.log(`SCREENSHOTS ${shots}`)

@@ -8,6 +8,8 @@
   user-select: none;
   -webkit-user-select: none;
   max-width: calc((100vw - 16px) / var(--uiz, 1));
+  /* 选区贴着视图顶上时条会压到标签栏上,而标签栏是窗口拖拽区:拖拽区不看层叠,不打这个洞的话按下去是拖窗口。 */
+  -webkit-app-region: no-drag;
 }
 .selbar-row {
   display: flex;

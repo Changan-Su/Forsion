@@ -8,6 +8,7 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
+  -webkit-app-region: no-drag; /* 翻到选区上方时可能压到标签栏(窗口拖拽区),同 .selbar */
 }
 .am-ai-panel .am-ai-head {
   display: flex;
