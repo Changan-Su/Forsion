@@ -406,10 +406,10 @@ const api = {
     ipcRenderer.invoke('plugin:request-install', appId),
   // ── 桌面级共享语音转写(任意功能复用:聊天框、Amadeus…;主进程本地/自带-key,不经引擎)──
   // timestamps 不传 = 回纯文本(语音输入);传 true = 回 { text, segments }(视频转录要的分段时间戳)。
-  transcribeAudio: (req: { audioBase64: string; mime?: string; modelId?: string; language?: string; timestamps?: boolean }): Promise<string | { text: string; segments?: Array<{ start: number; end: number; text: string }> }> =>
+  transcribeAudio: (req: { audioBase64: string; mime?: string; modelId?: string; backend?: 'local' | 'cloud'; language?: string; timestamps?: boolean }): Promise<string | { text: string; segments?: Array<{ start: number; end: number; text: string }> }> =>
     ipcRenderer.invoke('asr:transcribe', req),
   // 按路径转写:几十 MB 的视频音轨不该走 base64 过 IPC,主进程直接读盘。
-  transcribeAudioFile: (filePath: string, req?: { mime?: string; modelId?: string; language?: string; timestamps?: boolean }): Promise<string | { text: string; segments?: Array<{ start: number; end: number; text: string }> }> =>
+  transcribeAudioFile: (filePath: string, req?: { mime?: string; modelId?: string; backend?: 'local' | 'cloud'; language?: string; timestamps?: boolean }): Promise<string | { text: string; segments?: Array<{ start: number; end: number; text: string }> }> =>
     ipcRenderer.invoke('asr:transcribeFile', filePath, req),
   // 侧边拼接(App Dock,macOS):对话面板贴在别的 App 窗口旁边。open 任何窗口可调;其余只有面板窗口自己调得通。
   appDockOpen: (): Promise<{ ok: boolean; error?: string }> => ipcRenderer.invoke('appDock:open'),

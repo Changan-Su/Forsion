@@ -59,6 +59,20 @@ describe('ctx.tangu.complete', () => {
 })
 
 describe('ctx.tangu.translate', () => {
+  it('显式模型透传并保留真实回执;模型目录停用后不可调用', async () => {
+    const seen: unknown[] = []
+    setTanguProbe(baseProbe({
+      modelCatalog: async () => ({ models: [], defaultModelId: 'model-b' }),
+      complete: async req => { seen.push(req); return { text: 'Hello', toolCallText: false, model: { id: 'model-b', name: 'Model B', mt: false } } },
+    }))
+    const ctx = ctxOf('p-model')
+    expect(await ctx.tangu!.translate!({ text: '你好', language: 'English', modelId: 'model-b' })).toEqual({ text: 'Hello', model: { id: 'model-b', name: 'Model B', mt: false } })
+    expect(seen[0]).toMatchObject({ action: 'translate', modelId: 'model-b' })
+    expect(await ctx.tangu!.complete!({ prompt: 'Fix', modelId: 'model-b' })).toMatchObject({ model: { id: 'model-b' } })
+    expect(seen[1]).toMatchObject({ action: 'custom', modelId: 'model-b' })
+    usePluginStore.getState().disable('p-model')
+    await expect(ctx.tangu!.modelCatalog!('translation')).rejects.toThrow()
+  })
   it('转成 translate 动作交给探针(不带模型:槽由探针解析);缺原文 / 目标语言拒;停用即中止', async () => {
     const seen: unknown[] = []
     let signal: AbortSignal | undefined

@@ -1231,6 +1231,8 @@ export interface PluginContext {
    *  `mountFloatingToc` is the exception: it overlays `shell` without taking it over, so it neither retires nor
    *  is retired by other mounts on the same element. Don't select host nodes with `el > …`. */
   ui?: {
+    /** The native model menu. Selection stays local; never writes global defaults. Feature-detect on older hosts. */
+    mountModelPicker?(el: HTMLElement, opts: import("../../../../shared/pluginModelPicker").PluginModelPickerOptions): import("../../../../shared/pluginModelPicker").PluginModelPickerHandle
     /** Native Amadeus editor for Markdown owned by the caller (API drafts, etc.). No active-vault access.
      *  By default a row of buttons switches between the visual editor, Markdown source and the published preview;
      *  `modes: false` draws no row and keeps the visual editor only (an editor inside your own card or cell).
@@ -1322,6 +1324,7 @@ export interface PluginContext {
     openSession?(sessionId: string): Promise<void> | void
     activeModel(): import('./tanguSeam').TanguModelInfo | null
     models(): import('./tanguSeam').TanguModelInfo[]
+    modelCatalog?(kind: import("../../../../shared/pluginModelPicker").PluginModelKind): Promise<import("../../../../shared/pluginModelPicker").PluginModelCatalog>
     /** 用户的 Agent 名册(2026-09-20+):给「把某个东西绑给某个 Agent」的选择器用(Live3D 的「这个 Agent 用哪个形象」)。
      *  含系统 Agent(Muse 之类),与主区「选择 Agent」条同口径;旧宿主 / 非 Tangu 宿主 → 空数组。 */
     agents?(): import('./tanguSeam').TanguAgentInfo[]
@@ -1371,18 +1374,18 @@ export interface PluginContext {
     /** 一次性文本补全(2026-09-28+,评审 G3-07):引擎 `POST /agent/inline`,无工具、不落库、不进任何会话。
      *  **收编插件直连 `/agent/runs` 的做法** —— 那条是 Agent 的 run(带工具、落会话、8192 字符上限),拿来做
      *  「改写这段」既重又危险。`prompt` 是给模型的指令;`selection` / `before` / `after` 是正文上下文(按数据对待,
-     *  不当指令)。`onDelta` 流式回调;`signal` 可取消。模型缺省 = 主区聊天当前模型。返回的是**待插入的 markdown**,
+     *  不当指令)。`onDelta` 流式回调;`signal` 可取消。`modelId` 指定本次调用模型，缺省 = 主区聊天当前模型。返回的是**待插入的 markdown**,
      *  写进笔记请走 `registerSelectionAction`(宿主预览确认)或 slash `run`,别绕过用户直接写盘。
      *  插件被停用时在飞的请求会被中止并 reject。旧宿主 / 非 Tangu 宿主没有:`ctx.tangu?.complete?.(…)`。 */
-    complete?(req: { prompt: string; selection?: string; before?: string; after?: string; signal?: AbortSignal; onDelta?: (delta: string) => void }): Promise<{ text: string }>
+    complete?(req: { prompt: string; selection?: string; before?: string; after?: string; signal?: AbortSignal; modelId?: string; onDelta?: (delta: string) => void }): Promise<{ text: string; model?: { id: string; name: string; mt?: boolean } }>
     /** 翻译一段文本(2026-10-13+):同样是引擎 `POST /agent/inline` 的一次性调用(无工具、不落库),但**模型取用户在
-     *  「设置 → 模型 → 翻译」里选的那个**,没选才跟主区聊天当前模型 —— 逐句翻译这类量大的活别用 `complete`(那条恒用聊天模型)。
+     *  「设置 → 模型 → 翻译」里选的那个**，也可用 `modelId` 指定本次调用；未指定时走宿主翻译槽及自动选择逻辑。
      *  `text` 是要翻的原文(按数据对待,保留 Markdown);`language` 是目标语言,自由文本,写给模型看(`'English'`、
-     *  `'Simplified Chinese'`);`before` 是原文前面的一段上下文(只供消歧,不翻)。返回 `{ text }` = 译文本身,没有别的话。
+     *  `'Simplified Chinese'`);`before` 是原文前面的一段上下文(只供消歧,不翻)。返回 `text` = 译文本身，另可带实际模型回执 `model`。
      *  只做翻译:要模型顺带改错字、按你的格式回话,请用 `complete` 自己写指令。引擎每个用户同时最多 3 个这类请求
      *  (与 `complete` 合计),超出回 429 → 自己排队。停用时在飞的请求被中止并 reject。
      *  旧宿主没有:`ctx.tangu?.translate ?? 退回 complete`。 */
-    translate?(req: { text: string; language: string; before?: string; signal?: AbortSignal; onDelta?: (delta: string) => void }): Promise<{ text: string }>
+    translate?(req: { text: string; language: string; before?: string; signal?: AbortSignal; modelId?: string; onDelta?: (delta: string) => void }): Promise<{ text: string; model?: { id: string; name: string; mt?: boolean } }>
   }
   /** Agent Desk 伴随面(2026-09-19+,**只在有 Agent Desk 的宿主上存在** —— 桌面 Tangu;web / 移动端 / 纯 Amadeus 壳
    *  整个没有 `ctx.desk`)。往聊天右侧的 Agent Desk 挂一块自绘区域,典型用法是跟着 agent 状态做反应的形象。

@@ -1,3 +1,4 @@
+import { asrBackendFor } from './asrSelection'
 import { installAmbientPalette } from './ambientPalette'
 import { unitConfigFace } from './unitConfigFace'
 import { registerStartupAppearance } from './startupAppearance'
@@ -3329,11 +3330,11 @@ app.whenReady().then(async () => {
 
   // ── 桌面级共享语音转写(任意功能复用:聊天框、Amadeus…;本地/自带-key,不经引擎/服务端)──
   /** 转写一段音频。`timestamps` 不传 = 老行为(回字符串,语音输入用);传 true 回 { text, segments }。 */
-  const runTranscribe = async (audio: Buffer, req: { mime?: string; modelId?: string; language?: string; timestamps?: boolean }) => {
+  const runTranscribe = async (audio: Buffer, req: { mime?: string; modelId?: string; backend?: 'local' | 'cloud'; language?: string; timestamps?: boolean }) => {
     const cfg = await loadConfig()
     if (!audio.length) throw new Error('空音频')
     // 本地优先:选了本地且模型就绪 → 离线转写(不联网)。
-    if (cfg.asrBackend === 'local' && localModelReady()) {
+    if (asrBackendFor(cfg.asrBackend, req.backend, localModelReady()) === 'local') {
       return transcribeLocal(audio, { timestamps: req?.timestamps })
     }
     // 云端:自带 provider(<provider>/<model> 命中 providers.json)→ 主进程直连上游;否则走 Forsion 托管(计费)。
@@ -3351,18 +3352,18 @@ app.whenReady().then(async () => {
     return transcribeViaForsion({ cloudUrl, token, modelId, audioB64: audio.toString('base64'), mime: req?.mime || 'audio/wav', language: req?.language, timestamps: req?.timestamps })
   }
 
-  ipcMain.handle('asr:transcribe', async (_e, req: { audioBase64: string; mime?: string; modelId?: string; language?: string; timestamps?: boolean }) =>
+  ipcMain.handle('asr:transcribe', async (_e, req: { audioBase64: string; mime?: string; modelId?: string; backend?: 'local' | 'cloud'; language?: string; timestamps?: boolean }) =>
     runTranscribe(Buffer.from(req?.audioBase64 || '', 'base64'), req || {}))
 
   // 按路径转写:视频转录动辄几十 MB WAV,走 base64 过 IPC 既撑爆消息又白涨 33%(且 fs:readFile 有 50MB 闸)。
   // 主进程直接读盘。路径由调用方给(与 fs:readFile 同口径,不额外设沙箱)。
-  const transcribeFileByPath = async (filePath: string, req?: { mime?: string; modelId?: string; language?: string; timestamps?: boolean }) => {
+  const transcribeFileByPath = async (filePath: string, req?: { mime?: string; modelId?: string; backend?: 'local' | 'cloud'; language?: string; timestamps?: boolean }) => {
     if (!filePath || typeof filePath !== 'string') throw new Error('非法的音频路径')
     const audio = await readFile(filePath)
     const ext = (filePath.split('.').pop() || '').toLowerCase()
     return runTranscribe(audio, { ...(req || {}), mime: req?.mime || (ext === 'wav' ? 'audio/wav' : ext === 'mp3' ? 'audio/mpeg' : ext === 'm4a' ? 'audio/mp4' : 'application/octet-stream') })
   }
-  ipcMain.handle('asr:transcribeFile', async (_e, filePath: string, req?: { mime?: string; modelId?: string; language?: string; timestamps?: boolean }) =>
+  ipcMain.handle('asr:transcribeFile', async (_e, filePath: string, req?: { mime?: string; modelId?: string; backend?: 'local' | 'cloud'; language?: string; timestamps?: boolean }) =>
     transcribeFileByPath(filePath, req))
   // MCP 桥(transcribe_audio)复用同一条路径面:引擎侧 needs_asr 接力不再必须经渲染端插件。
   mcpTranscribeFile = (p, req) => transcribeFileByPath(p, req)
