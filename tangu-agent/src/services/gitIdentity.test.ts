@@ -112,10 +112,12 @@ describe('提交时署谁的名', () => {
     // 云端够不着(defaults 抛)同样当作没有,不把提交卡死
     expect((await resolveGitIdentity(async () => { throw new Error('offline'); }, cwd)).identity).toBeNull();
   });
-  it('凑不齐、但 git 自己取得出来 → 报成 auto(界面看得见提交会署什么),什么都不补', async () => {
+  it('凑不齐、但 git 自己取得出来 → 报成 auto(界面看得见提交会署什么),什么都不补', async (ctx) => {
     writeFileSync(globalConfig, ''); // 放开 git 自己取
     process.env.EMAIL = 'guessed@host.example'; // git 取邮箱时先看这个变量:各台机器上结果一致
     try {
+      // 前提是 git 取得出名字:macOS 取账户全名;Linux CI 的账户没有全名,git var 报 empty ident name,这条前提不成立 → 显式跳过
+      try { execFileSync('git', ['var', 'GIT_AUTHOR_IDENT'], { cwd: root, stdio: 'pipe' }); } catch { ctx.skip('这台机器上 git 自己取不出名字(账户没有全名)'); }
       const who = await resolveGitIdentity(async () => null);
       expect(who.env).toEqual({});
       expect(who.identity).toMatchObject({ email: 'guessed@host.example', source: 'auto' });
