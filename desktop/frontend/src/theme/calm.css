@@ -21,7 +21,9 @@ html:not([data-calm-reading='off']) {
   --chat-list-after: 1em;
 }
 /* 列表项里的段落不跟着段距拉开(项与项仍是原来的间隔);画布卡片是定尺寸的盒子,里面按缺省排版 ——
- * 与页面字体 / 字号设置同一口径(.unified-body:not(.amx-canvas))。initial = 让消费方落回各自的兜底值。 */
+ * 与页面字体 / 字号设置同一口径(.unified-body:not(.amx-canvas))。initial = 让消费方落回各自的兜底值。
+ * 文档模式的卡(.unified-body:not(.amx-canvas) .amx-ucard)**有意不豁免**:它零装饰、就是正文,卡缝跟着段距放宽
+ * (2026-10-14 用户定,理由见 DESIGN §6「呼吸感」)。 */
 html:not([data-calm-reading='off']) .am-app .milkdown .ProseMirror li { --reading-paragraph-gap: initial; }
 html:not([data-calm-reading='off']) .amx-canvas {
   --reading-line-height: initial;
