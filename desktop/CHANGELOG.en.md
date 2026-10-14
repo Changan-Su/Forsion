@@ -2,6 +2,38 @@
 
 <!-- English edition of CHANGELOG.md: same "## <version> (<date>)" headings, one bullet per Chinese bullet. Add both when releasing. -->
 
+## 2.13.4 (2026-10-14)
+
+- **Reference apps and windows**: press ⌘ twice in any app to send the current window into a chat or note as a reference, with a screenshot of that window attached (this needs Screen Recording permission; without it only the reference is sent). It works while another app is in front, and the reference goes to the cursor, then a visible input card, then a new chat. Change the shortcut to double ⇧, double ⌥ or a regular key combination in Settings → Shortcuts.
+- **One selection menu**: selecting text in notes, PDFs and chats brings up the same menu, with the current view's own tools first; you can change the order in Settings. Translations show as a card and use machine translation by default.
+- **Translation model**: Settings → Models has a new Translation row under the default models for a dedicated translation model (Forsion Cloud provides machine translation models). Leave it empty to use the current chat model.
+- **Peek at a Space**: rest the pointer on a Space icon in the left bar to bring up that Space's left panel and use it directly. Items you open there open in a new tab next to the current one, without switching Space. Items that open a view can be dragged to the tab bar or the main area.
+- **New chat**:
+  - The bar above the input card: the project pill is aligned, the opening note joins this bar, and you can add extra folders to the chat.
+  - The run location pill: choose whether the chat runs on this computer or on another computer in Devices; offline devices are folded away by default.
+  - A new chat opened from Notes lands in the notes vault when no project is chosen. A new chat's model no longer gets stuck on the default helper model.
+- **Talk to Muse directly**: you can chat with Muse in its own chat, and it notes down what you ask of it first. When the Agent Desk on the right is idle, it shows a small Muse Space card.
+- **Cards in chat**: whether a card appears depends on what the answer contains, and the card is the answer. The setting for how many cards appear moved to Settings → Models.
+- **Prompt suggestions** are on by default and stay until the next turn starts. The switch is in Settings → Advanced → UI & sessions.
+- **An agent's Growth page** is split into Memory, Log and Evolution, with the log folded by day.
+- **Git**: push and pull with your linked GitHub account; Settings has a new Accounts page and a commit identity; connect an existing remote, publish a project to GitHub, or clone a project from a Git URL.
+- **Notes**:
+  - File wikilinks open in a split beside the current note; right-click a file link for the file menu; embedded files show their source when the cursor enters them, as in Obsidian; wikilinks have a new look; images and videos open inside the app.
+  - Selecting across lines by dragging is more accurate; switching tabs keeps the scroll position; ⌘-click opens a new tab; clicking in the gap between blocks puts the cursor in the nearest block.
+- **Projects**: both `AGENTS.md` and `CLAUDE.md` in the same folder are read; chats in the notes vault show project details too.
+- **Inbox**: message rows have two lines and the reading pane shows the sender on top; messages can be grouped and folded by sender; action buttons appear at the end of a row on hover.
+- **Plugin files** are written to `Plugins/<plugin name>` in the notes vault by default.
+- **Cloud read-aloud**: when none of your own providers has a read-aloud model, read-aloud goes through Forsion Cloud.
+- **First-run guide**: Computer History is now part of it (off by default; you read and confirm what it records before turning it on). The flow, layout and motion were reworked, and you can click back to any step you have visited. After an update you only see the steps that are new in this version.
+- **Android**:
+  - Home no longer shows the previous Space's list. System back: the first level goes to Home, and back on Home once more leaves the app; pages opened from a list go back to the list; an edge back swipe moves the page with your finger (Android 14 and later).
+  - Input bars and toolbars at the bottom rise and fall with the keyboard; Home cards can be edited with a long press; multi-select sheets tick in place; swiping a row and letting go spring back naturally; presses show a ripple.
+  - The inbox uses the phone layout; notification cards sit below the top capsules; the item in "⋯" is called Command palette again.
+- **Windows**: attachment links follow a note when you move it, so images no longer break; Mini cards fold against the screen edge when dragged there; project details show instruction files as paths inside the project; fixed escaping in a few Git settings.
+- **Computer Use updated to 0.7.1**: double ⌘, double ⇧ and double ⌥ gestures (used by app references) and capturing a single window.
+- **Plugins** (for authors): the text selection menu has a plugin interface; `ctx.tangu.translate` is new; a bundle with an engine plugin reaches its engine plugin even when its install folder name differs from the manifest `id` (2.13.3 and earlier required them to match); plugin files go to `Plugins/<plugin name>` by default.
+- **Fix**: in a product made of plugins only, the Space you were last in turned blank after a reload.
+
 ## 2.13.3 (2026-10-12)
 
 - **Profile**: Settings → Forsion Cloud has a new Profile page. It is the same profile as in the web account center. Change your photo, nickname, bio and links in place, feature your works, change the cover and avatar frame, and make the profile public at a web address if you like. Your email, phone number, membership expiry, points and quota never appear on it.
