@@ -38,8 +38,11 @@ function buildRememberDefinition(o: { project: boolean; notes: boolean }): Tool 
         (o.notes ? 'A working method you worked out yourself is not a memory: it goes in your evolution record (manage_harness). ' : '') +
         // 两级(10-04 用户:「还要区分 Project 级别还是全局级别」):项目级只在本项目注入、项目里的 agent 共用;agent 级照旧。
         (o.project ? 'SCOPE: "project" = holds only inside the current project (its commands, layout, conventions, decisions, what the user wants done in this project); it is shown to every agent working in this project and nowhere else. "agent" = holds wherever you work with this user (who they are, how they want you to work in general). When unsure, ask yourself whether it would still be true in another project. ' : '') +
-        'SKIP: task progress, completed work, deliverables, versions, dated status and one-off requests; use log_event instead. ' +
-        'FORMAT: one sentence of at most 300 characters in the user’s language; longer facts are rejected. ' +
+        // 10-13 分层:记忆 = 现在成立的事(现在时),日志 = 发生过的事;只对这段对话有效的指示两边都不进。
+        // 「answer from this file」那半句对的是真实样本:08–09 月「后续基于这份字幕回答」被记成长期记忆 3 次、被判官提名 4 次。
+        'SKIP: what happened or where a task stands (progress, completed work, versions, dated status): use log_event. ' +
+        'Also what holds for this conversation only (answer from this file, one-off requests). ' +
+        'FORMAT: one present-tense sentence of at most 300 characters in the user’s language; longer facts are rejected. ' +
         (o.project
           ? 'ACTIONS: add saves fact; list returns IDs and versions of both scopes (fact: null); update replaces a listed entry and MUST include the new fact, id, expectedVersion and the scope it was listed under; forget removes one and blocks automatic replay (fact: null). '
           : 'ACTIONS: add saves fact; list returns IDs and version (fact: null); update replaces a listed entry and MUST include the new fact, id and expectedVersion; forget removes one and blocks automatic replay (fact: null). ') +
@@ -192,8 +195,8 @@ export const memoryLogProvider: ToolProvider = {
         function: {
           name: 'log_event',
           description:
-            'Append a noteworthy event/progress from this interaction to the user\'s "today" activity log (archived by date, viewable by the user in the account center). ' +
-            'Use to record completed work, conclusions reached, files produced, etc.; do not record trivial chit-chat.',
+            'Append one thing that happened in this interaction to today\'s log (kept by date; the user can read it). ' +
+            'Use it for completed work, conclusions reached, files produced, where a task stands; not for trivial chit-chat, and not for lasting facts (those go to remember).',
           parameters: {
             type: 'object',
             properties: { text: { type: 'string', description: 'A one-sentence event/progress to record in today\'s log' } },
