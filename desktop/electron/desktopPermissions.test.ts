@@ -259,6 +259,21 @@ describe('helper update for the global ⌘⌘ hotkey', () => {
     expect(m.launch).toHaveBeenCalledOnce()
   })
 
+  it('holds the permission lock from the start: a request or a second update arriving meanwhile is refused, not clobbered', async () => {
+    helperAt(14, '0.7.0')
+    let release!: (v: string) => void
+    m.readFile.mockReturnValue(new Promise<string>((r) => { release = r }))
+    const s = hotkeyService()
+    const update = s.updateHelperForHotkey('zh')
+    expect(s.helperBusy()).toBe(true)
+    await expect(s.request('microphone')).rejects.toThrow(/already in progress/)
+    expect(await s.updateHelperForHotkey('zh')).toBe('busy') // busy is not "asked": main retries once idle
+    release(JSON.stringify({ version: '0.6.3' }))
+    expect(await update).toBe(false)
+    expect(s.helperBusy()).toBe(false)
+    expect(m.confirm).not.toHaveBeenCalled()
+  })
+
   it('never launches a helper that is not running (macOS: no permission prompts for a hotkey)', async () => {
     m.ask.mockRejectedValue(Object.assign(new Error('gone'), { code: 'ENOENT' }))
     m.readFile.mockResolvedValue(JSON.stringify({ version: '0.7.0' }))

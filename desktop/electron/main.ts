@@ -1853,6 +1853,7 @@ let lastFocusedWindow: BrowserWindow | null = null
 /** 全局双 ⌘(应用 / 窗口引用,electron/appRefHotkey.ts):界面说要不要;这次运行问没问过更新助手;主窗关着时按下的那一条。 */
 let appRefGlobalWanted = false
 let appRefHelperAsked = false
+let appRefHelperOutdated = false
 let pendingAppRefHotkey: { ref: AppRef; at: number } | null = null
 const APPREF_HOTKEY_PROTOCOL = 15
 let autoMiniReturnTo: BrowserWindow | null = null
@@ -3414,6 +3415,13 @@ app.whenReady().then(async () => {
   ipcMain.handle('appRefs:icons', (e, ids: unknown) => (isTrustedSender(e) ? ('icons' in appRefs ? appRefs.icons(ids) : appIconDataUrls(ids)) : {}))
   // 全局「双 ⌘」:别的应用在前台时按下 → 助手推来那一刻最前面的窗口 → 记下它、把主窗叫到前面、交给界面挂进输入框
   // (光标在笔记里就写进笔记)。Forsion 自己在前台时助手不推,归窗口内的命令。见 electron/appRefHotkey.ts。
+  // 在跑的助手是旧版(不认订阅命令):macOS 上请用户把它更新掉,一次运行只问一次 —— 真弹出来才算问过,碰上别的权限操作在忙就等它做完再问。
+  // ponytail: 「稍后」只记到这次运行结束,每次启动还会问;嫌烦了再记进配置、隔几天再问。
+  const askAppRefHelperUpdate = (): void => {
+    if (process.platform !== 'darwin' || !appRefHelperOutdated || appRefHelperAsked) return
+    appRefHelperAsked = true
+    void desktopPermissions.updateHelperForHotkey(mainLocale()).then((r) => { if (r === 'busy') appRefHelperAsked = false })
+  }
   const appRefHotkey = createAppRefHotkey({
     target: async () => {
       if (process.platform === 'darwin') return { path: helperSocketPath() } // 只连已经在听的,绝不为这个拉起助手(会带出权限框)
@@ -3422,13 +3430,7 @@ app.whenReady().then(async () => {
       return rec && rec.protocol != null ? { path: rec.pipe, launch: () => launchWindowsRecorder(rec.exe, rec.pipe) } : null
     },
     ownPid: process.pid,
-    // 在跑的助手是旧版(不认这条命令):macOS 上请用户把它更新掉,一次运行只问一次。
-    // ponytail: 「稍后」只记到这次运行结束,每次启动还会问;嫌烦了再记进配置、隔几天再问。
-    onOutdated: () => {
-      if (process.platform !== 'darwin' || appRefHelperAsked) return
-      appRefHelperAsked = true
-      void desktopPermissions.updateHelperForHotkey(mainLocale())
-    },
+    onOutdated: () => { appRefHelperOutdated = true; askAppRefHelperUpdate() },
     onFire: (front) => {
       void (async () => {
         const win = process.platform === 'win32'
@@ -3438,9 +3440,10 @@ app.whenReady().then(async () => {
         if (!ref) return
         if (hit && ref.kind === 'window') appRefs.remember(ref.id, ref.name, hit.pid, hit.windowId)
         if (!QUIET_WINDOWS) app.focus({ steal: true })
-        // 送到用户最后在用的那个 Forsion 窗口(独立窗 / Mini / App Dock 里也有输入框);它没了 / 不是应用页面才回主窗
-        const last = lastFocusedWindow && !lastFocusedWindow.isDestroyed() && /^(https?|file):/.test(lastFocusedWindow.webContents.getURL()) ? lastFocusedWindow : null
-        if (last && last !== mainWindow) {
+        // 送到用户最后在用的那个 Forsion 窗口,只认放得下输入框的(独立窗 / Mini / App Dock);设置浮窗之类回主窗
+        const w = lastFocusedWindow
+        const last = w && !w.isDestroyed() && (w === miniWindow || w === dockWindow || [...detachedWindows.values()].includes(w)) ? w : null
+        if (last) {
           if (last.isMinimized()) last.restore()
           present(last)
           last.webContents.send('appRefs:hotkey', ref)
@@ -3454,8 +3457,8 @@ app.whenReady().then(async () => {
       })()
     },
   })
-  // 助手刚被换掉(权限页 / 上面那次更新做完):不等 5 分钟,当场重连
-  desktopPermissions.onHelperIdle(() => appRefHotkey.poke())
+  // 助手刚被换掉(权限页 / 上面那次更新做完):不等 5 分钟,当场重连;之前因为在忙没问成的,这时再问
+  desktopPermissions.onHelperIdle(() => { appRefHotkey.poke(); askAppRefHelperUpdate() })
   ipcMain.handle('appRefs:takePendingHotkey', (e) => {
     if (!isTrustedSender(e)) return null
     const p = pendingAppRefHotkey

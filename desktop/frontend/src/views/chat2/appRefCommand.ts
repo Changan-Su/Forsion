@@ -40,15 +40,21 @@ const visibleCard = (): HTMLElement | undefined => cards().find((el) => el.getCl
 
 /** ③ 屏上有输入卡就用它;④ 没有就开新会话(就是 ⌘N 那条命令),等它的输入卡挂上(最多约 4 秒)。
  *  主区不放对话的 Space(Amadeus 之类)里 ⌘N 那条摆不出对话,隔一秒再把右侧的对话面板打开 —— 它跟着
- *  当前会话走,这时已经是刚开的新会话。两条每秒补跑:页面刚起来时工作区可能还没就绪;重复跑无害。 */
-async function cardOrNewSession(booting: boolean): Promise<HTMLElement | undefined> {
+ *  当前会话走,这时已经是刚开的新会话。⌘N 每秒补跑(页面刚起来时工作区可能还没就绪,重复跑无害);
+ *  对话面板只开一次:那条命令在面板已显示时是「收起」。同时到的几条共用一次等待,不各开各关。 */
+let finding: Promise<HTMLElement | undefined> | null = null
+const cardOrNewSession = (booting: boolean): Promise<HTMLElement | undefined> =>
+  finding ??= findOrOpen(booting).finally(() => { finding = null })
+
+async function findOrOpen(booting: boolean): Promise<HTMLElement | undefined> {
   const run = useCommandStore.getState().run
+  let panel = false
   for (let i = 0; i < 40; i++) {
     const hit = visibleCard()
     if (hit) return hit
     const tick = i % 10 === (booting ? 9 : 0)
     if (tick) run('new-chat')
-    if (tick && i >= (booting ? 19 : 10)) run('show-chat-panel')
+    if (tick && !panel && i >= (booting ? 19 : 10)) { panel = true; run('show-chat-panel') }
     await new Promise((r) => setTimeout(r, 100))
   }
   return undefined

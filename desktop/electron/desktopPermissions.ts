@@ -290,13 +290,15 @@ export class DesktopPermissions {
   /** 全局双 ⌘(应用 / 窗口引用)碰到在跑的旧版助手时调:同一套「征得同意 → 关旧的 → 装新的 → 起来」,对话框说的是这件事。
    *  先看要装的那份助手是不是带这条命令的版本(0.7.0 起):包里的也是旧版就不问 —— 重启出来还是旧版,只会白打断一次。
    *  做完 notifyIfIdle → 订阅方(onHelperIdle)当场重连。 */
-  async updateHelperForHotkey(locale: 'zh' | 'en'): Promise<boolean> {
-    if (process.platform !== 'darwin' || this.actionPending || this.setupPending) return false
-    const version = await installableHelperVersion().catch(() => null)
-    if (!version || cmpVersion(version, HOTKEY_HELPER_VERSION) < 0) return false
+  async updateHelperForHotkey(locale: 'zh' | 'en'): Promise<boolean | 'busy'> {
+    if (process.platform !== 'darwin') return false
+    // 别的权限操作 / 安装在跑:不算问过,主进程等它们做完(onHelperIdle)再来。互斥在第一个 await 之前拿
+    if (this.actionPending || this.setupPending) return 'busy'
     this.actionPending = true
     const generation = ++this.generation
     try {
+      const version = await installableHelperVersion().catch(() => null)
+      if (!version || cmpVersion(version, HOTKEY_HELPER_VERSION) < 0) return false
       return await this.prepareHelper(() => generation === this.generation, locale, false, 'hotkey')
     } catch (error) {
       console.warn('[permissions] helper update for the global hotkey failed', error)

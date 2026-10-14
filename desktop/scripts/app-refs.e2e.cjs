@@ -427,6 +427,19 @@ async function main() {
     check('全局双 ⌘,光标不在哪、屏上也没有输入框:开新会话(Amadeus 里开在右侧对话面板),挂进它的「已选择」,光标落进输入框',
       fresh.cardsBefore === 0 && fresh.chip && (fresh.focused || fresh.taDisabled), fresh)
     await win.screenshot({ path: path.join(SHOT_DIR, `hotkey-newsession${tag}.png`) })
+    // 最后在用的是设置浮窗(放不下输入框):回主窗,不送去设置窗里丢掉
+    const settingsOpened = app.waitForEvent('window')
+    await win.keyboard.press('Meta+Comma')
+    const sp = await settingsOpened
+    await sp.waitForSelector('.settings-main', { timeout: 30_000 }).catch(() => {})
+    const spw = await app.browserWindow(sp)
+    await spw.evaluate((w) => w.focus())
+    await win.waitForTimeout(300)
+    const focusedIsSettings = await app.evaluate(({ BrowserWindow }, id) => BrowserWindow.getFocusedWindow()?.id === id, await spw.evaluate((w) => w.id))
+    helper.fireHotkey({ bundleId: 'com.apple.iWork.Numbers', app: 'Numbers', pid: 12, windowId: 201, title: '季度预算.numbers' })
+    await landed('季度预算.numbers').waitFor({ timeout: 10_000 }).catch(() => {})
+    check('全局双 ⌘,最后在用的是设置浮窗:引用回到主窗的输入框', await landed('季度预算.numbers').isVisible(), { focusedIsSettings })
+    await spw.evaluate((w) => w.close()).catch(() => {})
     // 主窗关掉(= 收进托盘)以后按:窗口回来,引用照样落进输入框
     const bw = await app.browserWindow(win)
     await bw.evaluate((w) => w.close())
