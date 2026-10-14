@@ -308,20 +308,30 @@ export function PluginListBody({ src, stateKey }: { src: ListSourceContribution;
   const [more, setMore] = useState<ReadonlySet<string>>(new Set()) // 点过「查看更多」的组
   // 源换了(插件切换/禁用重启)→ 过滤态跟着重置,免得拿旧源的分组键去查新源。
   useEffect(() => { setQuery(''); setGroup(null); setMenu(null); setRenaming(null); setSearching(false); setMore(new Set()) }, [src])
-  // 文件夹的开合:普通文件夹落盘(缺省收起);组头只记这一次运行,由插件的 defaultOpen 带着走。
-  const foldId = (it: ListItem): string => `${stateKey ?? src.id}\n${it.key}`
-  const folderOpen = (it: ListItem): boolean => isGroupHead(it) ? groupFold(GROUP_FOLDS, foldId(it), it).open : open.isOpen('f:' + it.key, false)
-  const setFolderOpen = (it: ListItem, next: boolean): void => {
-    if (!isGroupHead(it)) { open.setOpen('f:' + it.key, next); return }
-    groupFold(GROUP_FOLDS, foldId(it), it).open = next
-    force()
-  }
 
   const groups = src.groups?.() ?? []
   const activeGroup = groups.find((item) => item.key === group)
   // Sources may remove an empty category after archive/delete; never leave a hidden stale filter.
   useEffect(() => { if (group && !activeGroup) setGroup(null) }, [group, activeGroup?.key])
   const items = src.items({ query: query || undefined, group: activeGroup?.key })
+  // 文件夹的开合:普通文件夹落盘(缺省收起);组头只记这一次运行,由插件的 defaultOpen 带着走。
+  // 键带上当前的筛选:同一个源在「全部」和「已归档」里是两张不同的列表(同一个发信人在两边该不该开着并不一样),
+  // 两处同时显示这个源、筛选不同的时候也就不会互相改对方的开合。
+  const foldScope = `${stateKey ?? src.id}\n${activeGroup?.key ?? ''}\n`
+  const foldId = (it: ListItem): string => foldScope + it.key
+  // 每次渲染把这一屏所有组头的 defaultOpen 都过一遍(不只是画出来的那些:组头可能收在别的分区里);
+  // 不在这一屏的组解除「已亮过」,它带着 defaultOpen 回来时算一次新的打开。搜索时列表是压平的,不动。
+  if (!query) {
+    const here = new Set<string>()
+    for (const it of items) if (isGroupHead(it)) { here.add(foldId(it)); groupFold(GROUP_FOLDS, foldId(it), it) }
+    for (const [id, fold] of GROUP_FOLDS) if (id.startsWith(foldScope) && !here.has(id)) fold.armed = false
+  }
+  const folderOpen = (it: ListItem): boolean => isGroupHead(it) ? groupFold(GROUP_FOLDS, foldId(it), it).open : open.isOpen('f:' + it.key, false)
+  const setFolderOpen = (it: ListItem, next: boolean): void => {
+    if (!isGroupHead(it)) { open.setOpen('f:' + it.key, next); return }
+    groupFold(GROUP_FOLDS, foldId(it), it).open = next
+    force()
+  }
   const actions = src.actions ?? []
   const primary = actions.find((action) => action.primary) ?? actions[0]
   const secondary = [...actions.filter((action) => action !== primary).map((action) => ({ ...action, id: `action:${action.id}` })),
@@ -361,7 +371,8 @@ export function PluginListBody({ src, stateKey }: { src: ListSourceContribution;
   // 只在换行时做:之后用户自己收起来就让它收着。行还没到(异步加载)就等它到了再开。
   const revealed = useRef<string | null>(null)
   useEffect(() => {
-    if (!activeKey || revealed.current === activeKey) return
+    // 搜索时列表是压平的,没有可展开的上级,也不记「已经展开过」:在搜索结果里点开的那一行,清掉搜索词之后还要把它的组打开
+    if (query || !activeKey || revealed.current === activeKey) return
     const self = items.find((it) => it.key === activeKey)
     if (!self) return
     revealed.current = activeKey
@@ -569,16 +580,21 @@ export function PluginListBody({ src, stateKey }: { src: ListSourceContribution;
         items={menuItems(actions)}><MoreHorizontal size={14} /></CapabilityMenu>}
     </div>
   }
+  /** 正开着的那一行和它上面的各级:「查看更多」不能把它们收在后面。 */
+  const activePath = activeKey ? [activeKey, ...ancestorsOf(items, activeKey)] : []
   // 组头(folderStyle: 'group'):工作区一级行那一套 —— 30px 的前导、名字、行尾的数;点一下开合。桌面和手机是同一份标记,
   // 手机上的尺寸在 phoneList.css。组里先列 GROUP_PAGE 条;正开着的那一条排在后面时整组列全,免得它被收在「查看更多」里。
   const groupHead = (n: ListNode): ReactNode => {
     const it = n.item
     const isOpen = folderOpen(it)
-    const all = more.has(it.key) || n.children.findIndex((child) => child.item.key === activeKey) >= GROUP_PAGE
+    const all = more.has(it.key) || n.children.findIndex((child) => activePath.includes(child.item.key)) >= GROUP_PAGE
     const shown = all ? n.children : n.children.slice(0, GROUP_PAGE)
+    const at = dropAt?.key === it.key ? dropAt.position : null
     return <div key={it.key} className="t2sw-plug-group">
-      <button type="button" className={cls('t2o-row t2sw-plug-ghead', it.hint && 'has-hint')} data-row-key={it.key} title={it.title} aria-expanded={isOpen}
-        style={flat ? undefined : { paddingLeft: nameLeft(2) - GROUP_LEAD }}
+      {/* 拖放和普通文件夹同一套落点(前 / 后 / 放进去);手机的整屏列表不接行的拖放(同 phoneRow) */}
+      <button type="button" className={cls('t2o-row t2sw-plug-ghead', it.hint && 'has-hint', at === 'into' && 'amx-drop-into', at === 'before' && 'drag-over', at === 'after' && 'drag-over below', dragging === it.key && 'dragging')}
+        data-row-key={it.key} title={it.title} aria-expanded={isOpen}
+        style={flat ? undefined : { paddingLeft: nameLeft(2) - GROUP_LEAD }} {...(flat ? {} : { ...rowDropProps(it), ...dragProps(it) })}
         onClick={() => setFolderOpen(it, !isOpen)} onContextMenu={contextMenu(menuFor(it))}>
         <GroupLead key={it.iconUrl ?? ''} item={it} />
         <span className="t2sw-plug-gname"><span className="t2o-name">{it.title}</span><span className={`t2s-chev${isOpen ? ' open' : ''}`}><ChevronRight size={12} /></span></span>
@@ -594,7 +610,8 @@ export function PluginListBody({ src, stateKey }: { src: ListSourceContribution;
   // 文件夹行:与笔记树的文件夹同一套结构与类名(前导槽里图标 ↔ 悬停换箭头,行尾「更多」和「+」)。
   const folder = (n: ListNode, depth: number): ReactNode => {
     const it = n.item
-    if (isGroupHead(it)) return groupHead(n)
+    // 正在改名的组头临时画成普通文件夹行:行内输入框只在那一套里有
+    if (isGroupHead(it) && renaming !== it.key) return groupHead(n)
     const isOpen = folderOpen(it)
     const actions = menuFor(it)
     const add = actions.find((action) => action.primary)
@@ -644,7 +661,7 @@ export function PluginListBody({ src, stateKey }: { src: ListSourceContribution;
     <input ref={searchRef} aria-label={t('wsview.search', { source: src.title })} placeholder={t('wsview.searchShort')}
       value={query} onChange={(e) => setQuery(e.target.value)} onKeyDown={(e) => {
         if (e.key === 'Escape' && query) { e.preventDefault(); e.stopPropagation(); setQuery('') }
-        if (e.key === 'ArrowDown') { e.preventDefault(); listRef.current?.querySelector<HTMLButtonElement>('.t2s-srow')?.focus() }
+        if (e.key === 'ArrowDown') { e.preventDefault(); listRef.current?.querySelector<HTMLButtonElement>(NAV_ROWS)?.focus() }
       }} />
     {closes
       ? <button type="button" aria-label={t('wsview.closeSearch')} title={t('wsview.closeSearch')} onClick={() => { setQuery(''); setSearching(false) }}><X size={12} /></button>

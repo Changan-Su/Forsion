@@ -576,6 +576,13 @@
 .t2sw-plug-gtile { border-radius: var(--radius-sm, 6px); background: var(--overlay-light, rgba(127, 127, 127, 0.08)); color: var(--text-muted); }
 .t2sw-plug-gtile > svg { width: 16px; height: 16px; }
 .t2sw-plug-ghead > .t2s-count { margin-right: 4px; }
+/* 行拖到组头的前 / 后:插入线与 .t2sw-plug-item.drop-before 同款(.t2o-row 自己是 position: relative,组头没有选中态,::before 空着) */
+.t2sw-plug-ghead.drag-over::before {
+  content: ''; position: absolute; left: 4px; right: 4px; top: -2px; height: 3px;
+  border-radius: var(--radius-pill, 999px); background: var(--accent-ink); z-index: 3; pointer-events: none;
+}
+.t2sw-plug-ghead.drag-over.below::before { top: auto; bottom: -2px; }
+.t2sw-plug-ghead.dragging { opacity: 0.4; }
 /* 组里的行前导槽里只有这一颗:未读的圆点(和 .t2s-dot.unread 同色同大,只是不贴在图标角上) */
 .t2sw-plug-udot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent-ink); opacity: 0.6; }
 .t2sw-plug-sec {

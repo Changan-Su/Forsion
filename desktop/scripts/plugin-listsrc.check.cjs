@@ -359,6 +359,15 @@ async function main() {
       check('搜索时平铺:没有组头,行自己带图标', await glist.locator('.t2sw-plug-ghead').count() === 0 && await glist.locator('.t2s-srow').count() === 7 && await glist.locator('.t2s-srow .t2s-lead svg').count() === 7)
       await gload()
       check('组头的开合不落盘:重新载入回到「有未读的开着、其余收着」', await opens() === 'Muse:true Forsion:true 自动化:false 带头像的:false', await opens())
+      // 在搜索结果里点开一封收着的组里的信(排在第六):清掉搜索后那一组要打开,而且这封不能被收在「查看更多」后面
+      await g.locator('.t2s-search input').fill('汇总 6'); await glist.locator('.t2s-srow').first().click()
+      await g.locator('.t2s-search input').fill('')
+      const back = await opensLike(/自动化:true/)
+      check('搜索里点开的信:清掉搜索后它的组打开、整组列全(它不在「查看更多」后面)', /自动化:true/.test(back) && await grow('每日汇总 6').locator('.t2s-srow.active').count() === 1, back)
+      // 组都收着时,搜索框按下键要落在第一个组头上(以前只找行,找不到就停在输入框里)
+      for (const name of ['Muse', 'Forsion', '自动化']) await ghead(name).click()
+      await g.locator('.t2s-search input').focus(); await g.keyboard.press('ArrowDown')
+      check('组都收着:搜索框的下键落在第一个组头上', await opens() === 'Muse:false Forsion:false 自动化:false 带头像的:false' && await g.evaluate(() => document.activeElement.classList.contains('t2sw-plug-ghead')), await opens())
       await g.close()
     }
 
