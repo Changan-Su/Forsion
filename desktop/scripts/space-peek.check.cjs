@@ -5,7 +5,9 @@
  *   · 左面板展开着只有当前 Space 不弹(别的 Space 照弹,卡片盖在眼前这块左栏上);停够 300ms 才弹、路过不弹;没有左栏的 Space 不弹(照旧出名字浮签);
  *   · 卡里是活的 View:点得动、打得了字;卡片不是 View 里 fixed 元素的包含块(右键菜单 / 悬停提示不偏移);
  *   · 什么时候收:指针回到界面别处 150ms 后收;停在卡里弹出的菜单上、卡里输入框拿着焦点时不收;Esc / 点别处立刻收;
- *   · 换图标 = 原地换内容;别的 Space 的卡里点一下 = 先切到那个 Space,这一下点击照常落地;头部换页签不切;
+ *   · 换图标 = 原地换内容;别的 Space 的卡里点一下不切 Space:要往主区开的开在当前标签旁边(已开着就切过去),
+ *     只在左栏里起作用的原样生效;头部换页签不切;头部的名字 = 「进入这个 Space」;
+ *   · 列表条目拖进标签栏 = 落点处的新标签,拖进正文 = 分屏;里层落区(聊天插引用、编辑器)先接的让给它们;
  *   · 几何:贴 Ribbon 右沿、让开标签条(左栏展开钮点得到)、110% 缩放下不偏。
  *
  * 跑:npm run check:spacepeek   (5173 没起会自起 vite,跑完自收;CHROMIUM_EXE 可覆盖;--shot[=目录] 存亮 / 暗两张截图)
@@ -60,6 +62,28 @@ const peek = (page) => page.evaluate(() => {
     rect: { l: r.left, t: r.top, r: r.right, b: r.bottom, w: r.width },
   }
 })
+/** 主区的标签(按组、组内按次序):id / doc 参数 / 是否活动 / 所在组。 */
+const mainTabs = (page) => page.evaluate(() => {
+  const api = window.__peek.useWorkspace.getState().api
+  const active = api.activePanel?.id
+  return api.panels.filter((x) => (x.params || {}).__loc === 'main')
+    .map((x) => ({ id: x.id, doc: x.params.doc ?? null, active: x.id === active, group: x.group.id, at: x.group.panels.indexOf(x) }))
+})
+/** 合成一次 HTML5 拖放:src 上 dragstart → 视口点 (x,y) 上 dragover / drop → dragend。返回 dragover 时有没有画落点提示。 */
+const dragTo = (page, srcSel, x, y) => page.evaluate(async ({ srcSel, x, y }) => {
+  const nap = (ms) => new Promise((r) => setTimeout(r, ms))
+  const src = document.querySelector(srcSel), dataTransfer = new DataTransfer()
+  src.dispatchEvent(new DragEvent('dragstart', { bubbles: true, cancelable: true, dataTransfer }))
+  await nap(50)
+  const el = document.elementFromPoint(x, y)
+  el.dispatchEvent(new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer, clientX: x, clientY: y }))
+  await nap(50)
+  const hint = [...document.querySelectorAll('.wb-drop-line, .wb-drop-zone')].some((e) => getComputedStyle(e).display !== 'none')
+  el.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer, clientX: x, clientY: y }))
+  if (src.isConnected) src.dispatchEvent(new DragEvent('dragend', { bubbles: true, dataTransfer }))
+  await nap(300)
+  return { hint, on: el.className }
+}, { srcSel, x, y })
 const state = (page) => page.evaluate(() => ({
   space: window.__peek.useSpaceStore.getState().activeSpaceId,
   left: window.__peek.useWorkspace.getState().leftVisible,
@@ -234,28 +258,53 @@ async function run(page) {
   p = await peek(page)
   s = await state(page)
   check('E3 点页签换 View;换页签不算操作这个 Space(不切)', p?.tags.join() === 'b2' && s.space === 'a', `${p?.tags.join()} / active ${s.space}`)
+  // 当前标签后面再摆一个:「紧挨在右边」才和「追加到组末尾」分得开
+  await page.evaluate(() => {
+    const w = window.__peek.useWorkspace.getState()
+    const main = w.api.panels.filter((x) => (x.params || {}).__loc === 'main')
+    const cur = main.find((x) => x.api.isActive) ?? main[0]
+    w.openView('mainv', { doc: 'filler' }, 'main', { newTab: true })
+    w.activateLeaf(cur.id)
+  })
+  await page.waitForTimeout(200)
+  const tabs0 = await mainTabs(page)
   const rowB = await centerOf(page, '.rb-peek .pk-row[data-row="1"]')
   await page.mouse.move(rowB.x, rowB.y, { steps: 4 })
-  const before = (await peek(page)).rect
   await page.mouse.click(rowB.x, rowB.y)
-  await page.waitForTimeout(500)
+  await page.waitForTimeout(300)
   s = await state(page)
-  check('⚠️E4 在别的 Space 的卡里点一下:先切到那个 Space,这一下点击照常落地', s.space === 'b' && s.hits[s.hits.length - 1] === 'b2:1@b', `active ${s.space} / ${s.hits.join()}`)
-  p = await peek(page)
-  check('⚠️E5 那个 Space 的左栏本来就展开着:卡片先留着(这一下点开的菜单 / 表单还挂在卡里),不当场卸掉', s.left === true && p?.space === 'b' && p.tags.join() === 'b2', `left ${s.left} / ${JSON.stringify(p)}`)
-  check('E5b 留着的卡不挪位置(那边左栏展开着、这边收着,照新状态重算会在指针底下跳)',
-    !!p && Math.abs(p.rect.l - before.l) <= 0.5 && Math.abs(p.rect.t - before.t) <= 0.5 && Math.abs(p.rect.b - before.b) <= 0.5,
-    `before ${JSON.stringify(before)} / after ${JSON.stringify(p?.rect)}`)
-  await hover(page, icon('a'))
-  await page.waitForTimeout(120)
-  p = await peek(page)
-  check('E6 留着的卡,指针到别的 Space 图标上:换成那个 Space 的预览(左栏展开着也弹别人的)', p?.space === 'a' && p.tags.join() === 'a', JSON.stringify(p))
-  await park(page)
-  await page.waitForTimeout(400)
-  check('E6b 换过来的卡不沿用「先留着」:指针回主区照常收', p?.space === 'a' && (await peek(page)) === null)
+  let tabs = await mainTabs(page)
+  check('⚠️E4 在别的 Space 的卡里点一下:不切 Space,这一下点击照常落地', s.space === 'a' && s.hits[s.hits.length - 1] === 'b2:1@a', `active ${s.space} / ${s.hits.join()}`)
+  const was = tabs0.find((x) => x.active)
+  const made = tabs.find((x) => x.active)
+  check('⚠️E5 要往主区开的:开成紧挨在当前标签右边的新标签(原来那个标签内容不动)',
+    tabs.length === tabs0.length + 1 && made?.doc === 'b2:1' && made.group === was?.group && made.at === was.at + 1
+      && tabs0.every((t) => tabs.some((x) => x.id === t.id && x.doc === t.doc)),
+    `before ${JSON.stringify(tabs0)} / after ${JSON.stringify(tabs)}`)
+  check('E5b 点完卡片还在(指针没离开)', (await peek(page))?.space === 'b')
+  await page.evaluate((id) => window.__peek.useWorkspace.getState().activateLeaf(id), was.id)
+  await page.mouse.click(rowB.x, rowB.y)
+  await page.waitForTimeout(300)
+  tabs = await mainTabs(page)
+  check('E5c 同一个再点一次:已经开着,切过去,不再开一份', tabs.length === tabs0.length + 1 && tabs.find((x) => x.active)?.id === made?.id, JSON.stringify(tabs))
+  const tog = await centerOf(page, '.rb-peek .pk-toggle')
+  await page.mouse.move(tog.x, tog.y, { steps: 4 })
+  await page.mouse.click(tog.x, tog.y)
+  await page.waitForTimeout(300)
+  s = await state(page)
+  check('E5d 只在左栏里起作用的(展开 / 收起文件夹之类):原样生效,不切 Space、不开标签',
+    s.space === 'a' && (await mainTabs(page)).length === tabs.length && (await page.locator('.rb-peek .pk-toggle').getAttribute('aria-expanded')) === 'true',
+    `active ${s.space}`)
+  check('E5e 当前 Space 的卡头部没有「进入」钮,别的 Space 的有', (await page.locator('.rb-peek .rb-peek-enter').count()) === 1)
+  const enter = await centerOf(page, '.rb-peek .rb-peek-enter')
+  await page.mouse.move(enter.x, enter.y, { steps: 4 })
+  await page.mouse.click(enter.x, enter.y)
+  await page.waitForTimeout(700)
+  s = await state(page)
+  check('⚠️E6 点卡片头部的名字:进入那个 Space,卡片收起', s.space === 'b' && (await peek(page)) === null, `active ${s.space}`)
   await hover(page, icon('b'))
   await page.waitForTimeout(600)
-  check('E7 左栏展开着,悬停当前 Space(刚切过来的 b)不弹', (await peek(page)) === null)
+  check('E7 左栏展开着,悬停当前 Space(刚切过来的 b)不弹', s.left === true && (await peek(page)) === null, `left ${s.left}`)
 
   // ── F. 没有左栏的 Space;点图标 ──
   await setLeft(page, false)
@@ -311,6 +360,51 @@ async function run(page) {
   await setLeft(page, false)
   await page.evaluate(() => { document.body.style.zoom = '' })
   await page.waitForTimeout(200)
+
+  // ── I. 把卡里(别的 Space)的条目拖进主区 ──
+  p = await openOn(page, 'b')
+  const t1 = await mainTabs(page)
+  const bar = await page.evaluate(() => {
+    const api = window.__peek.useWorkspace.getState().api
+    const g = (api.activePanel && api.activePanel.params.__loc === 'main' ? api.activePanel : api.panels.find((x) => x.params.__loc === 'main')).group
+    const tab = g.element.querySelector('.dv-tab').getBoundingClientRect()
+    const body = g.element.querySelector('.dv-content-container').getBoundingClientRect()
+    return { gid: g.id, x: tab.left + 3, y: tab.top + tab.height / 2, bx: body.left + body.width * 0.8, by: body.top + body.height * 0.3 }
+  })
+  let d = await dragTo(page, '.rb-peek .pk-row[data-row="1"]', bar.x, bar.y)
+  let t2 = await mainTabs(page)
+  s = await state(page)
+  const dropped = t2.find((x) => x.doc === 'b:1')
+  check('⚠️I1 拖进标签栏(第一个标签的左半边):成了那个位置上的新标签,不切 Space',
+    d.hint && t2.length === t1.length + 1 && dropped?.group === bar.gid && dropped.at === 0 && dropped.active && s.space === 'a',
+    `hint ${d.hint} on ${d.on} / ${JSON.stringify(t2)} / active ${s.space}`)
+  d = await dragTo(page, '.rb-peek .pk-row[data-row="2"]', bar.bx, bar.by)
+  const t3 = await mainTabs(page)
+  const split = t3.find((x) => x.doc === 'b:2')
+  check('⚠️I2 拖进正文右半边:分屏(新开一组放它)', d.hint && t3.length === t2.length + 1 && !!split && new Set(t3.map((x) => x.group)).size === new Set(t2.map((x) => x.group)).size + 1,
+    `hint ${d.hint} on ${d.on} / ${JSON.stringify(t3)}`)
+  const zone = await centerOf(page, '.pk-main .pk-zone:visible')
+  d = await dragTo(page, '.rb-peek .pk-row[data-row="3"]', zone.x, zone.y)
+  s = await state(page)
+  check('I3 拖到自己接拖放的落区上(聊天插引用那种):让给它,不开、不画提示',
+    !d.hint && s.hits[s.hits.length - 1] === 'zone' && (await mainTabs(page)).length === t3.length, `hint ${d.hint} / ${s.hits.join()}`)
+  const ta = await centerOf(page, '.pk-main .pk-ta:visible')
+  d = await dragTo(page, '.rb-peek .pk-row[data-row="3"]', ta.x, ta.y)
+  check('I4 拖到文本框(编辑器)里:让给它,不开、不画提示', !d.hint && (await mainTabs(page)).length === t3.length, `hint ${d.hint} on ${d.on}`)
+  const side = await page.evaluate(() => { const r = document.querySelector('.rb-peek .pk-blank').getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 } })
+  d = await dragTo(page, '.rb-peek .pk-row[data-row="3"]', side.x, side.y)
+  check('I5 落在左栏(卡片)里:不是开 View 的地方,不开', !d.hint && (await mainTabs(page)).length === t3.length, `hint ${d.hint} on ${d.on}`)
+  const stale = await page.evaluate(() => {
+    const dt = new DataTransfer() // 没走 dragstart 的拖入(系统文件 / 别的 app):不许借用上一次的残留
+    const el = document.querySelector('.pk-main')
+    const r = el.getBoundingClientRect()
+    const ev = new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer: dt, clientX: r.left + r.width * 0.8, clientY: r.top + r.height * 0.3 })
+    el.dispatchEvent(ev)
+    return ev.defaultPrevented
+  })
+  check('I6 不是从条目拖起的拖入(系统文件之类):引擎不接', stale === false)
+  await park(page)
+  await page.waitForTimeout(400)
 
   // ── H. 弹着时窗口变了大小;卡里的 View 被注销 ──
   // 只改窗口宽:Ribbon 自己不会因此重渲(它只盯自己的高),卡片得靠自己听 resize。没记过宽 → 卡宽 = 按工作区宽算的默认值,跟着变。

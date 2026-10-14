@@ -21,6 +21,7 @@ import { computeSideWidth, computeBottomHeight, computeTransientSideWidth } from
 import { shouldRecordSideWidth } from './sideCapture'
 import { locOf, type DropTarget } from './dropModel'
 import { isLastPinned, isPinned, missingPinned, type PanelRef, type PinnedViews } from './pinnedViews'
+import { mainOpensBeside } from './openBeside'
 import { useNav } from './navStore'
 import { ribbonActions } from './ribbonRegistry'
 import { engineTr } from './i18nSeam'
@@ -387,6 +388,17 @@ function swapLeaf(api: DockviewApi, panel: IDockviewPanel, type: string, params:
   refreshTabs()
   scheduleWorkspaceSave()
   return makeLeaf(panel)
+}
+
+/** openMainBesideThisTask 那一档的落子(见 openBeside.ts):主区里已经有同类型、同参数的 → 切过去;否则紧挨在 cur 右边
+ *  开新标签(同浏览器从链接开新标签;不给 index 时 Dockview 追加到组末尾)。 */
+function openBesideOnce(api: DockviewApi, cur: IDockviewPanel, type: string, params: Record<string, unknown>): Leaf {
+  const same = panelsAt(api, 'main').find((p) => {
+    const pp = (p.params ?? {}) as Record<string, unknown>
+    return panelType(p) === type && Object.keys(params).every((k) => pp[k] === params[k])
+  })
+  if (same) { same.api.setActive(); return makeLeaf(same) }
+  return openTabBeside(api, cur, type, params, { referencePanel: cur.id, direction: 'within', index: cur.group.panels.indexOf(cur) + 1 })
 }
 
 /** 最后一次作为全局 activePanel 出现的主区 panel 所在的**组**(refreshTabs 维护,换布局清空)。
@@ -1177,6 +1189,10 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
         return makeLeaf(existing)
       }
     }
+    if (loc === 'main' && mainOpensBeside()) {
+      const cur = activeMainPanel(api)
+      if (cur) return openBesideOnce(api, cur, type, params)
+    }
     if (loc === 'main' && !opts?.newTab) {
       // 主区默认「就地导航」:替换当前活动主 leaf(浏览器/Obsidian 式;singleton 已在上方被捕获激活)。
       // ＋按钮/兜底填充等显式 newTab;主区为空(Space build 期)时自然落到下方新建。
@@ -1227,6 +1243,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     const api = get().api
     const panel = api?.getPanel(leafId)
     if (!api || !panel || !getView(type)) return null
+    if (mainOpensBeside() && locOfPanel(panel) === 'main') return openBesideOnce(api, panel, type, params)
     // 固定 View 不被别的类型顶掉:改在它那一组开新标签(同类照旧就地换,如聊天 → 另一个会话)。
     // 侧栏 panel 本来就不能就地换类型(按类型挂的组件),固定的直接拒绝。
     if (panelType(panel) !== type && guarded(api, panel)) return locOfPanel(panel) === 'main' ? openTabBeside(api, panel, type, params) : null

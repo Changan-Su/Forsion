@@ -10,7 +10,7 @@ import { Plus, MoreHorizontal, Pencil, Archive, ArchiveRestore, Trash2, ChevronR
 import { SessionIcon, SessionIconPicker } from '../../components/SessionIcon'
 import { folderPadLeft } from '@amadeus/lib/treeIndent'
 import { SidebarRow } from '../../components/SidebarRow'
-import { moveTo } from '@lcl/engine'
+import { moveTo, startOpenDrag } from '@lcl/engine'
 import { ProjectIcon } from '../../components/ProjectIcon'
 import { RemoveDialog } from '../../components/RemoveDialog'
 import { isProjectWorkspace } from '../../stores/projectSettings'
@@ -512,6 +512,8 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
           return { kind: 'session' as const, id, title: displaySessionTitle(x?.title, t) }
         })
         setChatRefDrag(e.dataTransfer, refs)
+        // 拖进标签栏 / 主区正文 = 在落点开这一个会话(引擎冒泡阶段接,聊天区先接了就是插引用)。
+        startOpenDrag(e.dataTransfer, { open: () => p.onSelect(s.id) })
       }}
     >
       {renaming === s.id ? (

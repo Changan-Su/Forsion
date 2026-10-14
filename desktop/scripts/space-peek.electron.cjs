@@ -3,7 +3,8 @@
  *
  * 接线与规则已由 check:spacepeek(浏览器台架,替身 View)和 spacePeekRules.test.ts 钉住。这里只验替身验不了的:
  *   · 真的左栏 View 脱离 Dockview、拿着合成 leaf 能不能渲染出来(每个有左栏的内置 Space 过一遍,不许塌成错误面);
- *   · 真的会话行在卡里点得动;在别的 Space 的卡里点会话 = 切到 Tangu 并打开那条;
+ *   · 真的会话行在卡里点得动;在别的 Space 的卡里点会话 / Agent = 不切 Space,开成当前标签旁边的新标签
+ *     (Agent 资料页的打开法自己会先切 Space,要被拦下);把会话拖进标签栏 = 落点处多一个标签;
  *   · 左面板展开着:当前 Space 不弹,别的 Space 照弹(卡片盖在眼前这块左栏上);
  *   · 观感:--shot 存整窗截图(亮 / 暗),自己看(DESIGN §8:几何断言全绿 ≠ 看起来对)。
  *
@@ -38,6 +39,10 @@ async function hoverSpace(win, id) {
   await sleep(900) // 300ms 弹出 + 入场 + 懒加载的 View
   return true
 }
+/** 主区的标签文字(按组、组内按次序;带图标页签的是侧栏组,不算)。 */
+const mainTabs = (win) => win.evaluate(() => [...document.querySelectorAll('.dv-groupview')]
+  .filter((g) => g.getBoundingClientRect().height > 0 && !g.querySelector('.wb-tab--icon'))
+  .flatMap((g) => [...g.querySelectorAll('.dv-tab')].map((t) => (t.textContent || '').trim())))
 async function setLeft(win, want) {
   const open = await win.evaluate(() => document.querySelector('.dv-edge-toggle')?.getAttribute('aria-pressed') === 'true')
   if (open !== want) await win.locator('.dv-edge-toggle').first().click()
@@ -83,17 +88,54 @@ async function main() {
     await win.mouse.move(900, 600, { steps: 4 })
     await sleep(500)
 
-    // ── 别的 Space 的卡里点会话 = 切到 Tangu 并打开那条 ──
+    // ── 别的 Space 的卡里操作:不切 Space,往主区开的开成当前标签旁边的新标签 ──
     if (await enterSpace(win, 'amadeus')) {
       await sleep(1200)
       await collapseLeft(win)
+      const tabs0 = await mainTabs(win)
       await hoverSpace(win, 'tangu')
       p = await peek(win)
       check('X1 人在笔记里,悬停 Tangu 弹出它的会话列表', p?.space === 'tangu' && !p.error, JSON.stringify(p))
       await win.locator('.rb-peek').locator('.t2s-srow, .t2o-row').filter({ hasText: 'Probe session three' }).first().click()
       await sleep(1500)
-      const tab2 = await win.evaluate(() => [...document.querySelectorAll('.dv-tab')].map((t) => t.textContent || '').join(' | '))
-      check('X2 点一下 = 进 Tangu 并打开那条会话', (await activeSpace(win)) === 'tangu' && /Probe session three/.test(tab2), `${await activeSpace(win)} / ${tab2.slice(0, 120)}`)
+      const tabs1 = await mainTabs(win)
+      check('⚠️X2 点会话 = 人还在笔记里,会话开成新标签(原来的标签都还在)',
+        (await activeSpace(win)) === 'amadeus' && tabs1.length === tabs0.length + 1 && tabs1.some((t) => /Probe session three/.test(t)) && tabs0.every((t) => tabs1.includes(t)),
+        `${await activeSpace(win)} / ${JSON.stringify(tabs0)} → ${JSON.stringify(tabs1)}`)
+      await hoverSpace(win, 'agents')
+      const roster = win.locator('.rb-peek .agents-roster-item').first()
+      if (await roster.count()) {
+        await roster.click()
+        await sleep(1500)
+        const tabs2 = await mainTabs(win)
+        check('⚠️X3 点 Agent 名册 = 人还在笔记里,资料页开成新标签(它自己「先切到 Agents」那一下被拦下)',
+          (await activeSpace(win)) === 'amadeus' && tabs2.length === tabs1.length + 1, `${await activeSpace(win)} / ${JSON.stringify(tabs2)}`)
+      } else check('X3 Agents 的卡里有名册行', false)
+      await hoverSpace(win, 'tangu')
+      const before = await mainTabs(win)
+      const drag = await win.evaluate(async () => {
+        const nap = (ms) => new Promise((r) => setTimeout(r, ms))
+        const src = [...document.querySelectorAll('.rb-peek .t2s-srow, .rb-peek .t2o-row')].find((r) => /Probe session one/.test(r.textContent || ''))
+        const g = [...document.querySelectorAll('.dv-groupview')].find((x) => x.getBoundingClientRect().height > 0 && !x.querySelector('.wb-tab--icon'))
+        const tab = g?.querySelector('.dv-tab')?.getBoundingClientRect()
+        if (!src || !tab) return { err: `src ${!!src} / tab ${!!tab}` }
+        const x = tab.left + 3, y = tab.top + tab.height / 2, dataTransfer = new DataTransfer()
+        src.dispatchEvent(new DragEvent('dragstart', { bubbles: true, cancelable: true, dataTransfer }))
+        await nap(50)
+        const el = document.elementFromPoint(x, y)
+        el.dispatchEvent(new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer, clientX: x, clientY: y }))
+        await nap(50)
+        const hint = [...document.querySelectorAll('.wb-drop-line')].some((e) => getComputedStyle(e).display !== 'none')
+        el.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer, clientX: x, clientY: y }))
+        if (src.isConnected) src.dispatchEvent(new DragEvent('dragend', { bubbles: true, dataTransfer }))
+        return { hint }
+      })
+      await sleep(1200)
+      const after = await mainTabs(win)
+      check('⚠️X4 把卡里的会话拖进标签栏(第一个标签的左半边)= 那个位置上多一个标签,人还在笔记里',
+        !drag.err && drag.hint && (await activeSpace(win)) === 'amadeus' && after.length === before.length + 1 && /Probe session one/.test(after[0]),
+        `${JSON.stringify(drag)} / ${await activeSpace(win)} / ${JSON.stringify(after)}`)
+      if (shots) await captureWindow(app, path.join(shots, `${n++}-amadeus-opened-beside.png`))
     } else check('X0 进得了笔记 Space(跨 Space 那段的前提)', false)
 
     // ── 左面板展开着:当前 Space 不弹(它的左栏就在眼前),别的 Space 照弹 ──

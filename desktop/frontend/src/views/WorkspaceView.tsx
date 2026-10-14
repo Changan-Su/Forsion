@@ -10,7 +10,7 @@ import { amadeusAvailable, sessionsAvailable } from '../features/runtime'
  * 主视图硬规则 → 本 Space 的默认档(SpaceDefinition.autoWorkspaceMode);右栏恒为文件。
  */
 import { Fragment, useMemo, useState, useEffect, useReducer, useRef, type ReactNode } from 'react'
-import { useWorkspace, activeMainPanel, useSpaceStore, getView, useListFirst, useNativeChromeExtras } from '@lcl/engine'
+import { useWorkspace, activeMainPanel, useSpaceStore, getView, useListFirst, useNativeChromeExtras, startOpenDrag } from '@lcl/engine'
 import type { ViewProps } from '@lcl/engine'
 import { ChevronDown, ChevronRight, FileText, Folder, FolderOpen, ListFilter, MoreHorizontal, Pencil, Plus, Search, X } from 'lucide-react'
 import { usePluginStore } from '@amadeus/plugins/pluginStore'
@@ -442,6 +442,20 @@ export function PluginListBody({ src, stateKey }: { src: ListSourceContribution;
           onDragEnd: endDrag,
         }
       : {}
+  /** 叶子行(能开 View 的):不收行拖动的源也能拖 —— 拖进标签栏 / 主区正文 = 在落点开它(开法同点击)。 */
+  const leafDragProps = (it: ListItem): Record<string, unknown> => {
+    const base = dragProps(it)
+    if (renaming === it.key) return base
+    const start = base.onDragStart as ((e: React.DragEvent<HTMLElement>) => void) | undefined
+    return {
+      ...base,
+      draggable: true,
+      onDragStart: (e: React.DragEvent<HTMLElement>) => {
+        if (start) start(e); else e.stopPropagation()
+        startOpenDrag(e.dataTransfer, { open: () => src.open(it, { newTab: false }) })
+      },
+    }
+  }
   /** 指针在这一行上时落在哪:按行内位置给出候选,逐个问插件,第一个被接受的算数。
    *  不落在自己身上,也不落进自己下面。 */
   const landing = (e: React.DragEvent<HTMLElement>, it: ListItem): ListDropTarget | null => {
@@ -562,7 +576,7 @@ export function PluginListBody({ src, stateKey }: { src: ListSourceContribution;
         title={it.title}
         className={`${activeKey === it.key ? 'active' : ''}${it.unread ? ' is-unread' : ''}${dropKey === `i:${it.key}` ? ' amx-drop-into' : ''}${actions.length ? ' has-actions' : ''}${quick.length ? ' has-quick' : ''}${two ? ' t2s-deep' : ''}`.trim() || undefined}
         style={quick.length ? { '--quick': quick.length } as React.CSSProperties : undefined}
-        {...rowDropProps(it)} {...dragProps(it)}
+        {...rowDropProps(it)} {...leafDragProps(it)}
         lead={inGroup ? unreadDot(it) : <><LeadIcon key={it.iconUrl ?? ''} item={it} />{it.unread && <span className="t2s-dot unread" title={t('sidebar.unread')} />}</>}
         trailing={!editing && !two && it.hint ? <span className="t2s-count">{it.hint}</span> : undefined}
         onClick={editing ? undefined : (e) => src.open(it, { newTab: e.metaKey || e.ctrlKey })}

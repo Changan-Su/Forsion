@@ -7,7 +7,7 @@
 //    (2026-08-16 用户实报:「他们都会直接替换 A chatview」)。侧栏的聊天不冻:那份是 Space 配方里的
 //    常驻陪伴视图(Coding/Amadeus 空间),冻了等于把用户的主力聊天锁死。
 import { useApp } from './stores/appStore'
-import { useWorkspace, activeMainPanel, useSpaceStore, setActiveSpace, isPinned } from '@lcl/engine'
+import { useWorkspace, activeMainPanel, useSpaceStore, setActiveSpace, isPinned, mainOpensBeside } from '@lcl/engine'
 import { planNewChat, planSessionOpen, type ChatLeaf } from './sessionOpenPlan'
 import { registerMessages, translate } from './i18n'
 
@@ -55,6 +55,9 @@ function pinnedChatTarget(): { id: string; follows: boolean } | undefined {
 
 export function openSession(id: string, opts?: { newTab?: boolean }): void {
   const ws = useWorkspace.getState()
+  // 悬停预览里点了 Tangu 的会话(人在别的 Space):开在当前标签旁边(已经开着就切过去,见引擎 openBeside.ts),
+  // 不动本 Space 的跟随聊天,也不改活动会话 —— 那是 Tangu 自己的状态,真切过去才算数。
+  if (mainOpensBeside()) { ws.openView('chat', { sessionId: id, followActive: false }, 'main', { newTab: true }); return }
   const leaves: ChatLeaf[] = panelsOf()
     .filter((p) => paramsOf(p).__type === 'chat')
     .map((p) => ({ id: p.id, sessionId: paramsOf(p).sessionId as string | undefined, followActive: paramsOf(p).followActive as boolean | undefined }))

@@ -28,6 +28,7 @@ import { hostTargetFor } from '../wsFileNav'
 import { refForSession, targetForSession, useComposerRef } from '../../services/engine/targets'
 import { capsForRef } from '../../services/engine/targetCaps'
 import { tipProps, fsTipLines } from '../../hoverTip'
+import { startOpenDrag } from '@lcl/engine'
 import { folderPadLeft, nameLeft, rowPadLeft } from '@amadeus/lib/treeIndent'
 import { useItemSelect, type ClickAct, type ItemSelect } from '../itemSelect'
 import { PATHS_MIME as DRAG_MIME, REF_MIME } from './chatDragRef' // 行拖载荷的单源(RightPanel 同值)
@@ -548,6 +549,7 @@ export function FilesPanel({ workspaces, onOpenPreview, activeWorkspaceKey, onEn
     // ⚠️ copyMove 而非 move:同一份载荷既可能在面板内移动,也可能被笔记树按**复制**接走 ——
     // 源只允许 move 而目标声明 copy,浏览器按交集协商会把整个投放判成不允许(codex 评审 2026-08-25)。
     ev.dataTransfer.effectAllowed = 'copyMove'
+    if (!e.isDir) startOpenDrag(ev.dataTransfer, { open: () => openFile(e) }) // 拖进标签栏 / 主区正文 = 在落点打开
   }
   const dragEnd = (): void => { draggingRef.current = null; setDropDir(null) }
   const dragOverDir = (ev: React.DragEvent, dir: string): void => {

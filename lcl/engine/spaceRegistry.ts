@@ -10,6 +10,7 @@ import { useWorkspace, liveLayoutOwner, bootLayoutFellThrough } from './workspac
 import { loadLayout, saveLayout, clearLayout, loadNamedLayout, saveNamedLayout, listNamedLayouts, deleteNamedLayout } from './layoutPersist'
 import { clearSingleColumnLayouts } from './singleColumnStore'
 import { onePageRedirect } from './pinnedViews'
+import { mainOpensBeside } from './openBeside'
 
 const ACTIVE_KEY = IS_MINI_PANEL ? 'forsion_mini_active_space' : 'forsion_tangu_active_space'
 /** 每个 Space 的布局存进既有命名布局表,用此前缀的保留名。 */
@@ -74,6 +75,9 @@ export const useSpaceStore = create<SpaceState>((set, get) => ({
     if (IS_MINI_PANEL && !supportsMiniPanel(toSpace)) return
     // Space 窗口锁在自己的 Space:不切,也就不会把本窗的布局存进共用的命名槽、把共用的活动键改掉。
     if (WINDOW_SPACE_ID) return
+    // 悬停预览里点了别的 Space 的左栏:这一下不切 Space,要开的东西进当前 Space 的新标签(见 openBeside.ts)。
+    // 视图自己会先切再开的(Agent 资料页、从主页开会话)也一并留在原地。
+    if (mainOpensBeside()) return
     const ws = useWorkspace.getState()
 
     // 1. 存出当前布局,存进**它的主人**的槽。平时主人就是 fromId;启动还原出异步 Space 的现场、而它还没就位时
