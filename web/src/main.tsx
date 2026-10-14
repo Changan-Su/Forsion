@@ -18,10 +18,11 @@ const wireToast = (): Promise<void> => import('@/stores/appStore').then(({ useAp
 // Keep two distinct import expressions: Vite attaches each branch's CSS preload to its own import.
 // `uiMobile ? import(mobile) : import(desktop)` is folded into ONE preload wrapper whose deps come from
 // the desktop branch: mobileEntry's exclusive CSS (browser chrome / UnitsSheet) silently never loads.
-function loadApp(uiMobile: boolean): Promise<unknown> {
-  if (uiMobile) return import('@mobile/mobileEntry')
-  return import('@/main')
+const APP_ENTRIES = {
+  mobile: () => import('@mobile/mobileEntry'),
+  desktop: () => import('@/main'),
 }
+function loadApp(uiMobile: boolean): Promise<unknown> { return APP_ENTRIES[uiMobile ? 'mobile' : 'desktop']() }
 
 async function bootstrap(): Promise<void> {
   const path = location.pathname

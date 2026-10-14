@@ -195,7 +195,7 @@ async function main() {
         await page.waitForSelector('.ProseMirror')
         await page.locator('[data-chrome-action="left"]').click()
         await page.waitForSelector('.mb-shell[data-nav="list"]')
-        assert.equal(await page.locator('.amx-tree .t2s-foot .t2s-special').count(), 1, 'Cloud vault management stays reachable')
+        assert.equal(await page.locator('.amx-tree .t2s-foot .t2s-special').filter({ hasText: config.locale.startsWith('zh') ? '云端智库' : 'Cloud vault' }).count(), 1, 'Cloud vault management stays reachable')
         await page.screenshot({ path: path.join(OUT, `notes-${config.width}-${config.mode}.png`) })
       })
       await check('return Home then browser Back leaves the app; no empty-page trap', async () => {
