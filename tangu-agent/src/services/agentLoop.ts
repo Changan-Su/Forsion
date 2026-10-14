@@ -1518,9 +1518,11 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     //     常驻段管「什么时候该画 + 怎么画到下限之上」;本轮信号对比较/流程/数据形状再加一次定向提醒,
     //     不等用户必须说「画」。子代理走 subAgent.ts 自己的提示装配,天然不经过这里。
     //     visuals(渲染端 ui_settings 快照):off → 段与工具一起缺席;less → 段还在但只认明确要求(隐式信号与收尾补催不触发)。
-    const sketchEnabled = sketchEnabledFor({ client: clientTag, planMode, channelSession, preset, uiSettings });
+    // subAgentDepth 与下面造 toolCtx 时同一口径:委派出去的会话(用户之后在里面续聊)没有这两个工具,段和本轮提醒也不能发(Codex 10-13)。
+    const visualGate = { client: clientTag, planMode, channelSession, preset, uiSettings, subAgentDepth: agentConfig.delegatedFrom ? 1 : undefined };
+    const sketchEnabled = sketchEnabledFor(visualGate);
     const visualsPref = visualsPrefOf(uiSettings);
-    const nativeUiEnabled = intelligentUiEnabledFor({ client: clientTag, planMode, channelSession, preset, uiSettings, clientCapabilities });
+    const nativeUiEnabled = intelligentUiEnabledFor({ ...visualGate, clientCapabilities });
     const sketchTurnSignal = sketchEnabled ? sketchTurnSignalFor(String(input.message || ''), visualsPref, nativeUiEnabled) : undefined;
     if (sketchEnabled) {
       systemParts.push(SKETCH_SECTION);
@@ -3176,7 +3178,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         //    本轮启发式命中、工具确实在场、且整 run 没调过 sketch 时,在收尾前补催一次。
         //    只催一次:模型二次检查仍认为图是噪声时允许收尾;用户的「纯文字/不要画」在信号层已排除。——
         //    actionable(计划 / 清单 / 挑一个 / 做法)只给本轮那句提醒、不补催:这类说法宽,模型判断不该出卡时不值得再烧一轮。
-        if (sketchTurnSignal && sketchTurnSignal.kind !== 'actionable' && !sketchNudged && !lastIter && !allToolCalls.some((c) => ['sketch', 'intelligent_ui'].includes(c.function.name))) {
+        if (sketchTurnSignal && (sketchTurnSignal.kind === 'explicit' || sketchTurnSignal.kind === 'implicit') && !sketchNudged && !lastIter && !allToolCalls.some((c) => ['sketch', 'intelligent_ui'].includes(c.function.name))) {
           sketchNudged = true;
           if (res.content || res.outputItems?.length) workingMessages.push(assistantTurnOf(res, res.content || ''));
           workingMessages.push({
