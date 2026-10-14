@@ -39,7 +39,11 @@ async function main() {
   })
   const token = ['test', Buffer.from(JSON.stringify({ sub: 'test-feedback', exp: Math.floor(Date.now() / 1000) + 86400 * 10 })).toString('base64url'), 'test'].join('.')
   fs.writeFileSync(path.join(home, 'auth.json'), JSON.stringify({ cloudUrl: stub.url, token }))
-  fs.writeFileSync(path.join(userdata, 'tangu-desktop-config.json'), JSON.stringify({ mode: 'external', backendUrl: stub.url, cloudUrl: stub.url, token }))
+  // 未打包的构建把 userData 改成 <user-data-dir>-dev(electron/main.ts),只写 userdata/ 应用读不到 → 令牌为空、开机不连,主窗一重载就连不回假引擎
+  for (const dir of [userdata, `${userdata}-dev`]) {
+    fs.mkdirSync(dir, { recursive: true })
+    fs.writeFileSync(path.join(dir, 'tangu-desktop-config.json'), JSON.stringify({ mode: 'external', backendUrl: stub.url, cloudUrl: stub.url, token }))
+  }
   let app
   try {
     app = await electron.launch({ args: [`--user-data-dir=${userdata}`, '--lang=zh-CN', ROOT], cwd: ROOT,
@@ -93,8 +97,8 @@ async function main() {
     await modal.getByText('反馈已收到', { exact: true }).waitFor()
     check('retry sends the exact preview through real IPC and HTTP', tickets.length === 2 && Buffer.from(tickets[1].attachments[0].data_base64, 'base64').toString() === reviewed)
     check('success contains feedback reference', (await modal.textContent()).includes('FB-2026-0042'))
-    await modal.getByRole('button', { name: '完成', exact: true }).click()
-    await fbPage.waitForEvent('close').catch(() => {}) // 「完成」关窗:下一轮必须重新拿
+    // 「完成」关窗:下一轮必须重新拿。等待要在点之前挂上 —— click() 返回时窗已经关了,事后再等 close 永远等不到(白等 30 秒)
+    await Promise.all([fbPage.waitForEvent('close'), modal.getByRole('button', { name: '完成', exact: true }).click()])
 
     ;({ page: fbPage, panel: modal } = await openFeedback('/feedback 带内容的快捷反馈'))
     check('slash arguments prefill feedback', await modal.locator('textarea').inputValue() === '带内容的快捷反馈')
@@ -121,8 +125,7 @@ async function main() {
     await modal.getByRole('button', { name: '提交反馈', exact: true }).click()
     await modal.getByText('反馈已收到', { exact: true }).waitFor()
     check('text-only sends no attachment', tickets.at(-1).attachments.length === 0)
-    await modal.getByRole('button', { name: '完成', exact: true }).click()
-    await fbPage.waitForEvent('close').catch(() => {})
+    await Promise.all([fbPage.waitForEvent('close'), modal.getByRole('button', { name: '完成', exact: true }).click()])
     const beforeOversize = tickets.length
     const oversize = await win.evaluate(() => window.tangu.submitFeedback({ description: 'Oversize guard', sessionLogJson: 'x'.repeat(5 * 1024 * 1024 + 1) }))
     check('IPC rejects oversize diagnostics before any HTTP request', !oversize.ok && oversize.error === 'attachment-too-large' && tickets.length === beforeOversize)

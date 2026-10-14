@@ -748,7 +748,13 @@ export interface GitSettings {
   branchPrefix: string
   commitInstructions: string
   forceWithLease: boolean
+  /** 提交身份:只在这台电脑的 git 没配名字 / 邮箱时用;空 = 由 Forsion 账号推出来。 */
+  identityName: string
+  identityEmail: string
 }
+/** 提交会署的名字和邮箱。source:git = git 配置里本来就有;custom = 「设置 → Git」里填的;forsion = 由 Forsion 账号推出来的;
+ *  auto = 哪儿都没有,git 自己按这台电脑的用户名和主机名取的。 */
+export interface GitIdentity { name: string; email: string; source: 'git' | 'custom' | 'forsion' | 'auto' }
 export interface ProjectContext {
   cwd: string
   workspaceDir: string
