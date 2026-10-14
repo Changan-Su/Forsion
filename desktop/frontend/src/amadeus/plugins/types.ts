@@ -208,7 +208,9 @@ export interface PluginAppApi extends BlockSurfaceApi {
   watchFile?(path: string, cb: () => void): () => void
   /** The plugin's work folder for file output, vault-relative without leading/trailing slash.
    *  Every plugin automatically gets a "工作文件夹" setting (key `workFolder`) on its detail page;
-   *  this returns that value, defaulting to the plugin's display name. Use it as the base for
+   *  this returns that value, defaulting to `Plugins/<display name>` (since 2026-10-14; before that the default was
+   *  `<display name>` at the vault root). Never write to the vault root or invent other top-level folders: the root
+   *  belongs to the user's notes. Use it as the base for
    *  readFile/writeFile paths (`${ctx.app.workFolder()}/note.md`) — folders spring into existence
    *  on first write. Older hosts lack this method: feature-check `ctx.app.workFolder` first. */
   workFolder(): string

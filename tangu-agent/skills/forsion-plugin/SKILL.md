@@ -2,7 +2,7 @@
 name: forsion-extension-development
 description: 当用户要给 Forsion / Tangu 做插件、主题、Space、智能体(agent)或捆绑包(bundle)——或要把某个能力做成可分发/可上架商店的扩展——时使用;已装的插件 / Space / 视图不出现、加载失败、更新后不工作要排查时也用(带一份插件体检脚本 tools/check-plugin.mjs)。内置五类官方模板(samples/),讲清各自的格式基线与硬约束(尤其两种"插件"是完全不同的系统),照抄模板改比从零写靠谱。
 metadata:
-  version: 1.39.0
+  version: 1.40.0
   author: Forsion
   category: Forsion
 ---
@@ -1306,10 +1306,10 @@ globalName: 'myPlugin', footer: { js: 'return myPlugin.dispose;' }
 
 ## 插件文件读写与「工作文件夹」(2026-08-03 起)
 
-桌面插件的文件面 = 活动笔记库(vault):`ctx.app.readFile/writeFile` 走 vault 相对路径,**整库可读写**,宿主钳死越界(路径逃逸抛错);写入原子落盘、父目录自动创建。落盘位置约定:**每个插件在设置详情页自动获得一条「工作文件夹」**(key `workFolder`,默认=插件显示名),产出一律写 `${ctx.app.workFolder()}/…`,别自造存储夹设置;给用户的产物存 **markdown**(可引用可检索),机器数据放点开头隐藏 sidecar。旧宿主没有 `workFolder`,兼容写法同 `ctx.notify`:
+桌面插件的文件面 = 活动笔记库(vault):`ctx.app.readFile/writeFile` 走 vault 相对路径,**整库可读写**,宿主钳死越界(路径逃逸抛错);写入原子落盘、父目录自动创建。落盘位置约定:**每个插件在设置详情页自动获得一条「工作文件夹」**(key `workFolder`,默认 = `Plugins/<插件显示名>`,2026-10-14 起;此前默认是库根下的 `<插件显示名>`),产出一律写 `${ctx.app.workFolder()}/…`,别自造存储夹设置。⚠️**不许往库根写、不许硬编码别的顶层文件夹**:库根是用户自己的笔记,所有插件的产物都收在 `Plugins/` 这一个文件夹下;给用户的产物存 **markdown**(可引用可检索),机器数据放点开头隐藏 sidecar。旧宿主没有 `workFolder`,兼容写法同 `ctx.notify`:
 
 ```js
-const folder = ctx.app.workFolder ? ctx.app.workFolder() : '<插件名>'
+const folder = ctx.app.workFolder ? ctx.app.workFolder() : 'Plugins/<插件名>'
 // ⚠️workFolder() 照常返值 ≠ 写得进去:没有活动库时 writeFile 会 reject('No vault is open')。
 //    启动期的写一律 try/catch(见上「没有活动库时的统一行为」表)。
 try {
@@ -1319,7 +1319,7 @@ try {
 }
 ```
 
-要自定义这条设置的 label/描述,setup 里自注册同 key 的 setting(同 key 重注册即覆盖标准行);用户改文件夹不迁移旧文件,读端自己做旧夹兜底。范例:`bluebird` 1.3.0(分析完自动保存 + 旧夹兜底 + check.mjs 迁移断言)。Session 同款约定:Tangu 会话默认工作区在笔记库 `Sessions/`——插件产物与会话产物同库,都能被笔记引用。
+要自定义这条设置的 label/描述,setup 里自注册同 key 的 setting(同 key 重注册即覆盖标准行);用户改文件夹不迁移旧文件,读端自己做旧夹兜底。缺省值从库根 `<插件名>` 改成 `Plugins/<插件名>` 那次(2026-10-14)宿主同样不迁移:老数据要接上,插件自己在新位置为空时读一下库根的旧夹,或让用户把旧文件夹拖进 `Plugins/`。范例:`bluebird` 1.3.0(分析完自动保存 + 旧夹兜底 + check.mjs 迁移断言)。Session 同款约定:Tangu 会话默认工作区在笔记库 `Sessions/`——插件产物与会话产物同库,都能被笔记引用。
 
 ## 块表面:当前这篇笔记的读写(2026-07-26 起;2026-08-20 改口径)
 

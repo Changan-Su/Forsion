@@ -137,6 +137,19 @@ describe('② 成员会话里的项目记忆', () => {
     }
     expect(await buildProjectMemoryContext(USER, 'solo-member')).toBe('');
   });
+  it('项目级 update 的版本号抄错:回「抄错了」+ 当前版本,不写;照着重试写得进', async () => {
+    const added = JSON.parse(await call('main', { action: 'add', scope: 'project', fact: 'Builds run on Node 22.' }));
+    const version: string = JSON.parse(await call('main', { action: 'list' })).project.version;
+    const typo = version.slice(0, -1) + (version.endsWith('0') ? '1' : '0');
+    const misread = await call('main', { action: 'update', scope: 'project', id: added.entry.id, expectedVersion: typo, fact: 'Builds run on Node 24.' });
+    expect(misread).toMatch(/copied wrong\. Nothing was written\./);
+    expect(misread).toContain(`The current version is "${version}"`);
+    expect(misread).toContain('scope "project"');
+    const fixed = JSON.parse(await call('main', { action: 'update', scope: 'project', id: added.entry.id, expectedVersion: version, fact: 'Builds run on Node 24.' }));
+    expect(fixed).toMatchObject({ ok: true, scope: 'project', entry: { content: 'Builds run on Node 24.' } });
+    // 收掉:后面的用例按条数核这个项目库
+    expect(JSON.parse(await call('main', { action: 'forget', scope: 'project', id: added.entry.id, expectedVersion: fixed.version }))).toMatchObject({ ok: true });
+  });
   it('不属于项目的团队成员:写项目级照旧报错', async () => {
     expect(await call('solo-member', { action: 'add', scope: 'project', fact: 'x'.repeat(20) })).toMatch(/^Error: this session has no project/);
   });
