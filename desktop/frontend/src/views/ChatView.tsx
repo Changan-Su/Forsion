@@ -39,7 +39,7 @@ import { currentPlatform } from '../services/agentRunService'
 import { hasChatRef, readChatRefs } from './chat2/chatDragRef'
 import { useWorkspace, useSpaceStore, UI_MODE, Skeleton, useNativeChromeInstalled } from '@lcl/engine'
 import { useTailFirst } from './chat2/useTailFirst'
-import { AgentDesk, DeskCard } from './chat2/AgentDesk'
+import { AgentDesk, DeskCard, useDeskHome } from './chat2/AgentDesk'
 import { HistorianStatus } from './chat2/HistorianStatus'
 import { TeamStatus } from './chat2/TeamDesk'
 import { ChildChatPanel, SubChatStatus } from './chat2/ChildChatPanel'
@@ -452,8 +452,10 @@ export function ChatView({ leaf, params }: ViewProps) {
   const projectBarOn = !activeId && (!studioChat || !!studioRoot) && (mvCfg.preset !== 'chat' || (runPickerOn && !studioChat))
   const openingOn = !hasMessages && !historyLoading && !params.miniSurface && !params.childSurface && !mvCfg.teamSlug && !mvCfg.groupChat && !mvCfg.teamMember && !mvCfg.soloEngineId && !mvCfg.engineId && s.connState === 'ok'
   // Agent Desk 只在会话开始后显示:草稿与已建 ID 但未发消息的新会话都不挂载,也不占右侧车道。
+  // 例外(10-13):Muse 私聊一进来就挂 —— 它的 Desk 空闲时演 Muse Space(见 useDeskHome),不必等第一条消息。
   // 桌面端默认开(移动端没有);用户可在设置→高级关掉,窄容器由 CSS 容器查询兜底隐藏。
-  const deskEnabled = !!activeId && hasMessages && !params.childSurface && !studioChat && UI_MODE !== 'mobile' && !!s.desktopConfig?.agentDeskEnabled
+  const deskHome = useDeskHome(activeId)
+  const deskEnabled = !!activeId && (hasMessages || !!deskHome) && !params.childSurface && !studioChat && UI_MODE !== 'mobile' && !!s.desktopConfig?.agentDeskEnabled
   // Desk 收不收文件(与 store 写入口、引用条同一判据):always 伴随面生效时 Desk 只演伴随面,点开文件一律走新标签页。
   const deskTakesFiles = useDeskAcceptsFiles(deskEnabled)
   // 团队成员列表嵌入 Pin Summary 的运行状态,Agent Desk 保持独立。

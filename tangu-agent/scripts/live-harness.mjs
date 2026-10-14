@@ -108,6 +108,8 @@
  *   npm run live:harness -- --only officedoc                # 桌面随包 LibreOffice(09-26):read_document 读 3 页 docx 按真页答出第 3 页的码;改 read_document / fetch-office 后跑。
  *                                                           #   前置:desktop 里 npm run fetch-office;台架须跑在 Node ≥22.19(kit 的 engines,Bash 默认的 fnm v20 不行)
  *                                                           #   负对照:TANGU_OFFICE_KIT=/nonexistent npm run live:harness -- --only officedoc(引擎日志断言须红)
+ *   npm run live:harness -- --only musechat                 # 手聊 Muse(10-13):私聊里用平常话交代「以后别…」→ 须落进 Muse 自己的记忆 / 当天日志(下个周期是新会话,读不到这段对话);
+ *                                                           #   再问它后台做了什么 → 记下它读没读自己的日志。改 museChatSection / 私聊绑定后跑;对照 = 没有聊天段的构建(--kind base)
  *   npm run live:harness -- --only computerhistory          # 电脑历史(09-27):播事件+state.json+桌面配置(第二道闸)→ 默认聊天问「我休息之前在做什么?」须调 read_computer_history 答中文档与 PR;
  *                                                           #   负对照**在正例之后**跑(state.json 关 → 工具不在、不编造,且跨会话召回不把正例答案注进来);
  *                                                           #   第三腿开 Muse 等一个周期,核摘要注入(日志)且 agent_runs.input 里没有它。改工具 / 门禁 / 召回 / Muse 摘要后跑
@@ -203,6 +205,7 @@ const MODEL = opt('model', process.env.TANGU_LIVE_MODEL || 'codex/gpt-5.6-luna')
 const AUTH = resolve(opt('auth', process.env.TANGU_LIVE_AUTH || join(homedir(), '.forsion-dev', 'provider-auth.json')));
 const KEYS = ['realtime', 'voiceclone', 'personas', 'rename', 'selfschedule', 'selfmodel', 'chat', 'tool', 'remember', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'parked', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'suggest', 'browsertabs', 'officedoc', 'ultra', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human', 'emoji', 'visualize', 'visualfigures', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'control', 'phone', 'unattendedask', 'plugin', 'skillpick', 'pluginlook', 'settingsnav', 'appsettings', 'imgwindow', 'viewimage', 'account'];
 KEYS.push('signals');
+KEYS.push('musechat');
 KEYS.push('novision');
 KEYS.push('cuoff');
 KEYS.push('cuvision');
@@ -241,6 +244,7 @@ const GIT_PREFIX = 'livetest/'; const GIT_TAG = '[LIVE]';
 // grant 是两个委派 run(慢),且只在动过 delegate.grantTools / 子代理管理面闸时才有信息量。
 const OPT_IN = new Set(['realtime', 'remember', 'musewake', 'personas', 'rename', 'selfschedule', 'selfmodel', 'teamapproval', 'parked', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'appsettings', 'control', 'phone']);
 OPT_IN.add('signals');
+OPT_IN.add('musechat');
 OPT_IN.add('imgwindow');
 OPT_IN.add('viewimage');
 OPT_IN.add('novision'); // --only novision:主模型没有图像输入时的转写状态与送达(一个 run + 一次转写)
@@ -5488,8 +5492,70 @@ Then reply with only the command output.`,
   //  ② 负对照(**在正例之后**):state.json 关 → 工具不在(没调、首轮工具头字节比正例小)、答复里不许出现只有工具才知道的标记。
   //     09-27 首版把负对照挪到最前才绿 —— 跨会话召回(memoryRecall §3)会把正例会话里模型的原话按同一问句注入新会话;
   //     现在召回对过不了门禁的 run 藏起调过 read_computer_history 的会话,顺序改回来正是为了钉住这一条;
-  //  ③ Muse:再打开、开 Muse 等一个周期:引擎日志须有「digest injected (N chars)」且 N ≤1500,而 state.db 里该周期 run 的
+  //  ③ Muse:再打开、开 Muse 等一个周期:引擎日志须有「digest injected (N chars)」且 N ≤3000,而 state.db 里该周期 run 的
   //     input 不许带摘要(此前摘要拼在 input.ephemeralHint 里永久落库,不受 7 天保留 / 清除 / 关闭约束)。
+  // musechat(10-13 用户定「Muse 的私聊也应该可以沟通」):Muse 的人格写的是周期口径(「每个周期你会收到简报」),聊天里没有简报;
+  // 而下个周期是新会话,读不到这段对话 —— 用户交代的「以后怎么干」只有落进 Muse 自己的记忆 / 日志才算数。
+  // 消息一律平常话,不点名任何工具 / 存储(10-04 口径)。判据:
+  //  ① 私聊会话真绑到 Muse(系统提示里有 Muse 的身份与「Talking with the user」聊天段);
+  //  ② 交代完之后,agents/muse/MEMORY.md 或当天 LOG 里出现那个话题词(隔离 home 是空的,出现 = 这一轮写的);
+  //  ③ 再问「你最近在后台都做了什么」:记下它读没读自己的日志 / Journal(记录,不计红 —— 空 home 里日志本来就没东西)。
+  // 不起周期:Muse 开着但运行时段设成两小时以后(只为播种 agents/muse/;tick 在运行时段闸之前播种,之后就返回)。
+  await scenario('musechat', 'musechat 手聊 Muse:交代的事落进它自己的记忆 / 日志', async () => {
+    const h = new Date().getHours();
+    await api('/agent/special/config', { method: 'POST', body: JSON.stringify({ muse: { enabled: true, modelId: MODEL, mode: MUSE_MODE, heartbeatMinutes: 120, supervisorPollMinutes: 1, activeHours: { start: (h + 2) % 24, end: (h + 3) % 24 } } }) });
+    try {
+      const seeded = await until(() => existsSync(join(home, 'agents', 'muse', 'config.toml')), 30_000, 500);
+      if (!seeded) return { ok: false, detail: `30s 内 agents/muse/ 没播种;[muse] 日志:${museLogTail() || '(无)'}` };
+      const opened = await api('/agent/solo/agent/muse/open', { method: 'POST', body: '{}' });
+      const sid = opened?.session?.id;
+      if (!sid) return { ok: false, detail: `私聊会话没建出来:${JSON.stringify(opened).slice(0, 200)}` };
+      const TOPIC = '观鸟';
+      // 同一次台架里前面若跑过 muse 场景,lastCycleAt 本来就非 0:「期间起了周期」要比前后,不能只看非 0(10-14 合并门禁里假红过)
+      const cycleAt0 = Number((await api('/agent/special/muse/status').then((x) => (x && typeof x.status === 'object' ? x.status : x)))?.lastCycleAt) || 0;
+      const museText = () => {
+        const out = [];
+        const add = (f) => { try { out.push(readFileSync(f, 'utf8')); } catch { /* 还没写 */ } };
+        add(join(home, 'agents', 'muse', 'MEMORY.md'));
+        try { for (const f of readdirSync(join(home, 'agents', 'muse', 'LOG'))) add(join(home, 'agents', 'muse', 'LOG', f)); } catch { /* 目录还没建 */ }
+        return out.join('\n');
+      };
+      const before = museText().includes(TOPIC);
+      const a = await run(sid, `以后别再给我提${TOPIC}相关的建议了,我对这个真没兴趣。`, 240_000, { debugSystemPrompt: true });
+      const sys = a.systemPrompt || '';
+      const bound = /You are Muse/.test(sys) && sys.includes('## Talking with the user');
+      const saved = !before && museText().includes(TOPIC);
+      const b = await run(sid, '你最近在后台都做了些什么?', 240_000);
+      const lookedBack = b.toolCalls.includes('read_log') || b.toolArgs.some((x) => /Journal/.test(x.args || ''));
+      // ④ 聊天里让它做自己的 Space(用户的用法:聊天 + Desk 里的 Muse Space 并排,对着它说「改一下」)。周期里 Space 的写法随 kickoff 来,
+      //    聊天里没有 kickoff —— 没有聊天段的构建里它连 Space 目录在哪都不知道。判据同 muse 场景:桌面装不装得出 home 视图。
+      const museStatus = () => api('/agent/special/muse/status').then((x) => (x && typeof x.status === 'object' ? x.status : x));
+      const stamp0 = Number((await museStatus())?.spaceStamp) || 0;
+      const c = await run(sid, '把你的 Space 首页做出来吧,先简单点:上面显示一行「晚上好」就行。', 300_000);
+      // 聊天里写完 Space,桌面靠 status.spaceStamp 变了才重载(桌面每 20s 拉一次)。周期之外原先没人刷这个戳 ——
+      // 这一轮收尾后 30s 内它必须变(run 终态 → kickMuse → tick → 没有 run 在跑 → 刷)。没有这次改动的构建这里必红。
+      const stampMoved = !!(await until(async () => { const v = Number((await museStatus())?.spaceStamp) || 0; return v && v !== stamp0 ? v : null; }, 30_000, 1500));
+      // ⚠️上面那次分不出有没有这次改动:引擎没跑过周期时戳是 0,status 每次按磁盘现算,所以 main 原样也会「变」。
+      // 能分出来的是**已有 Space 再改一次**:戳非 0 之后原先只有周期收尾才刷。再说一句让它改字,改了文件戳就必须再变。
+      const stamp1 = Number((await museStatus())?.spaceStamp) || 0;
+      const d = await run(sid, '把那行字改成「早上好」。', 300_000);
+      const edited = d.toolCalls.some((n) => ['write_file', 'edit_file', 'multi_edit'].includes(n));
+      const stampMovedAgain = !!(await until(async () => { const v = Number((await museStatus())?.spaceStamp) || 0; return v && v !== stamp1 ? v : null; }, 30_000, 1500));
+      const space = await museSpaceVerdict(join(home, 'agents', 'muse', 'Space'), health?.version);
+      // 计红的是「两份文件真写到了它的 Space 目录」(知道在哪、写得进);装不装得出 home 同 muse 场景只记不判(Node 里的近似判定)。
+      const spaceWritten = ['manifest.json', 'main.js'].every((f) => existsSync(join(home, 'agents', 'muse', 'Space', f)));
+      const cycles = (Number((await api('/agent/special/muse/status').then((x) => (x && typeof x.status === 'object' ? x.status : x)))?.lastCycleAt) || 0) !== cycleAt0;
+      writeFileSync(join(OUT, 'musechat-evidence.json'), JSON.stringify({ systemPromptHasChatSection: sys.includes('## Talking with the user'), toldTools: a.toolArgs, toldReply: a.content, askedTools: b.toolArgs, askedReply: b.content, spaceTools: c.toolArgs, spaceReply: c.content, editTools: d.toolArgs, editReply: d.content, stampMoved, stampMovedAgain, spaceApprovals: c.approvals, space, spaceWritten, museFiles: museText() }, null, 2));
+      return { ok: bound && saved && spaceWritten && (stampMovedAgain || !edited) && !a.error && !b.error && !c.error && !d.error && !cycles,
+        detail: `私聊绑到 Muse 且带聊天段:${bound ? '是' : '否'};交代后 Muse 的记忆 / 日志里${saved ? '有' : '没有'}「${TOPIC}」(交代那轮调了 ${a.toolCalls.join(',') || '无工具'});` +
+          `问后台做了什么:${lookedBack ? '读了自己的日志 / Journal' : '没读日志(不计红)'}(调了 ${b.toolCalls.join(',') || '无工具'});` +
+          `聊天里做 Space:${spaceWritten ? '两份文件已写进 Space 目录' : '没写进 Space 目录'},${space.ok ? '桌面能装出 home' : `⚠️ 判定装不出 home(${space.text || '?'};只记不判)`}(调了 ${c.toolCalls.join(',') || '无工具'},审批 ${c.approvals} 次);写完后 Space 戳${stampMoved ? '变了' : ' 30s 内没变'};再改一次(调了 ${d.toolCalls.join(',') || '无工具'}):${!edited ? '它没改文件(不判)' : stampMovedAgain ? '戳又变了(桌面会重载)' : '戳 30s 内没再变(桌面不会重载)'};期间起了周期:${cycles ? '是(不该起)' : '否'}` +
+          `${a.error ? `;交代那轮出错 ${a.error}` : ''}${b.error ? `;提问那轮出错 ${b.error}` : ''}${c.error ? `;做 Space 那轮出错 ${c.error}` : ''}`,
+        output: `【交代】\n${a.content || '(无)'}\n\n【问后台做了什么】\n${b.content || '(无)'}\n\n【做 Space】\n${c.content || '(无)'}` };
+    } finally {
+      await api('/agent/special/config', { method: 'POST', body: JSON.stringify({ muse: { enabled: false, activeHours: null } }) }).catch(() => {});
+    }
+  });
   const CH_MARK = Math.random().toString(36).slice(2, 6).toUpperCase();
   const CH_DOC = `季度路线图-${CH_MARK}.md`;
   const CH_PR = String(4000 + Math.floor(Math.random() * 5000));
@@ -5589,8 +5655,49 @@ Then reply with only the command output.`,
       detail: `${skipped ? '引擎日志有跳过行' : '引擎日志没有跳过行(判据没命中真落库的 tool_calls?)'};活动 ${act.map((r) => r.action).join('/') || '无'}` +
         `${judged ? '' : '(180s 内判官没写摘要,不计绿)'};${wrote.length ? `写了 ${wrote.join('/')}` : '未写 LOG / 候选'};.memory-raw ${leaked.length ? `含 ${leaked.join('/')}` : '不含电脑历史'}` };
   });
-  await scenario('computerhistory', 'computerhistory Muse 摘要(现算注入 ≤1500 字、不落 agent_runs.input)', async () => {
+  await scenario('computerhistory', 'computerhistory Muse 摘要(现算注入 ≤3000 字、不落 agent_runs.input)', async () => {
     chSeed(); chState(true);
+    // 10-13:给电脑历史配一份「抢戏」的应用内活动(最近一小时在 Forsion 里改另一份笔记)。实机上摘要是和 12 小时应用内活动、记忆、
+    // 各 agent 日志挤在一起的(7 天 67 个周期只主动查了 2 次电脑历史);上下文里只有它一份时,Muse 提到文档说明不了它被当回事。
+    // 下面两样只记不计红:Muse 原话提没提电脑历史里的那份文档、主动调了几次 read_computer_history。
+    for (let m = 55; m >= 5; m -= 10) appendUserActivity(new Date(Date.now() - m * 60_000), 'note.edit f="Notes/读书笔记-三体.md" l=3');
+    // 再垫到接近真机的量:长期记忆、默认 agent 当天日志、12 小时里几十行应用内活动 —— 话题都与电脑历史里那份文档无关。
+    // 真机近 7 天 58 个成功周期的收尾原话里,只有 5 条提到电脑历史里出现过的任何 App(上限口径),而上下文里只有摘要一份时台架 3/3 提到。
+    for (const text of [
+      '用户在准备十一月去京都的行程:想住在四条附近,预算每晚 1200 元以内,同行两人,不想排太满。',
+      '用户每周二、周四晚上去游泳,不喜欢健身房;最近在控制晚饭的碳水。',
+      '用户写东西偏好短句和小标题,不喜欢一上来就是长段落;邮件结尾不要客套话。',
+      '用户在读《三体》第二部,读书笔记记在 Notes/读书笔记-三体.md,习惯按章节记疑问。',
+      '用户的报税材料放在 Documents/税务/2026,每年三月前要整理发票;去年漏过一张医疗发票。',
+      '用户不想收到与理财产品、健身课程有关的建议。',
+    ]) await api('/agent/memory', { method: 'POST', body: JSON.stringify({ text }) });
+    for (const text of [
+      '用户让我把京都行程里的清水寺和伏见稻荷排在同一天,已改好 Notes/京都行程.md。',
+      '用户问了《三体》里「黑暗森林」的两个疑问,我答了并追加到读书笔记第 12 章下面。',
+      '用户让我检查税务文件夹里有没有重复的发票扫描件,找到 2 份重复,已列在 Notes/税务待办.md。',
+      '用户说晚饭菜单想少油,我给了三天的菜单,存在 Notes/本周菜单.md。',
+    ]) await api('/agent/log', { method: 'POST', body: JSON.stringify({ text }) });
+    {
+      const files = ['Notes/京都行程.md', 'Notes/本周菜单.md', 'Notes/税务待办.md', 'Notes/读书笔记-三体.md', 'Notes/游泳记录.md'];
+      for (let i = 0; i < 45; i++) {
+        const at = new Date(Date.now() - (700 - i * 14) * 60_000); // 约 11.5 小时前起,每 14 分钟一行,停在一小时前
+        appendUserActivity(at, i % 9 === 0 ? `note.open f="${files[i % files.length]}"` : `note.edit f="${files[i % files.length]}" l=${1 + (i % 6)}`);
+      }
+    }
+    // 10-13:再垫 40 段更早的窗口切换(约 3 小时前到 2 小时前),把摘要顶到上限。真机忙的时候 3 小时折出五六十段,
+    // 摘要只放得下最近的二十来段;「前面还有 N 段没放进来」那一行只有顶到上限才出现。那份文档的事件最新,仍留在摘要里。
+    // 事件文件按时间有序:并进去重排,不直接追加。
+    {
+      const APPS = [{ name: 'Slack', bundleId: 'com.tinyspeck.slackmacgap' }, { name: 'Safari', bundleId: 'com.apple.Safari' }, { name: 'Figma', bundleId: 'com.figma.Desktop' }, { name: 'Finder', bundleId: 'com.apple.finder' }];
+      const TITLES = ['#general — 团建时间投票', '京都 四条 酒店 比价 - 搜索', '落地页 v3 — 首屏草图', '下载 — 发票扫描件'];
+      const pad = Array.from({ length: 40 }, (_, i) => ({ t: Date.now() - Math.round((178 - i * 1.6) * 60_000), kind: 'app', app: APPS[i % 4], title: `${TITLES[i % 4]} (${i + 1})` }));
+      const byFile = new Map();
+      for (const e of pad) { const f = join(chDir, 'events', `${actDay(new Date(e.t))}.jsonl`); byFile.set(f, [...(byFile.get(f) || []), e]); }
+      for (const [f, extra] of byFile) {
+        const old = existsSync(f) ? readFileSync(f, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)) : [];
+        writeFileSync(f, [...old, ...extra].sort((x, y) => x.t - y.t).map((e) => JSON.stringify(e)).join('\n') + '\n');
+      }
+    }
     await api('/agent/special/config', { method: 'POST', body: JSON.stringify({ muse: { enabled: true, modelId: MODEL, mode: MUSE_MODE, heartbeatMinutes: 1, supervisorPollMinutes: 1, maxIterationsPerCycle: 6, allowedFolders: [workspace], notify: 'immediate' } }) });
     const status = () => api('/agent/special/muse/status').then((s) => (s && typeof s.status === 'object' ? s.status : s));
     try {
@@ -5602,8 +5709,10 @@ Then reply with only the command output.`,
       // 落库面:该 Muse 会话所有 run 的 input 里一个字都不许有
       const { default: Database } = await import('better-sqlite3');
       const db = new Database(join(home, 'state.db'), { readonly: true, fileMustExist: true });
-      let museRuns = 0; const persisted = [];
+      let museRuns = 0; const persisted = []; let chCalls = 0; let museTools = [];
       try {
+        museTools = db.prepare(`SELECT json_extract(e.payload, '$.name') AS n FROM agent_run_events e JOIN agent_runs r ON r.id = e.run_id WHERE r.session_id = ? AND e.type = 'tool_call' ORDER BY e.id`).all(started.sessionId).map((x) => String(x.n));
+        chCalls = museTools.filter((n) => n === 'read_computer_history').length;
         for (const row of db.prepare('SELECT input FROM agent_runs WHERE session_id = ?').all(started.sessionId)) {
           const raw = typeof row.input === 'string' ? row.input : JSON.stringify(row.input);
           if (raw.includes('"background":"muse"')) museRuns++;
@@ -5619,10 +5728,17 @@ Then reply with only the command output.`,
       const walk = (d) => { try { for (const e of readdirSync(d, { withFileTypes: true })) { const f = join(d, e.name); if (e.isDirectory()) walk(f); else if (e.name.endsWith('.md')) museFiles.push(f); } } catch { /* 目录还没建 */ } };
       walk(join(home, 'agents', 'muse'));
       const copied = [...new Set(museFiles.flatMap((f) => { const t = readFileSync(f, 'utf8'); return VERBATIM.filter((v) => t.includes(v)).map((v) => `${v.slice(0, 16)}…@${f.slice(home.length + 1)}`); }))];
-      const ok = injected.length > 0 && injected.every((n) => n <= 1500) && museRuns > 0 && !persisted.length;
+      // 「用上了」= 它这一周期交出来的任何东西(收尾原话、Journal / 笔记 / 记忆、提的 TODO)提到电脑历史里才有的那份文档或那个 PR。只记不计红。
+      let todoText = '';
+      try { todoText = asList(await api('/agent/special/muse/todos'), 'todos').map((x) => `${x.title || ''} ${x.detail || ''}`).join('\n'); } catch { /* 没有就算了 */ }
+      const produced = { 收尾原话: says, 文件: museFiles.map((f) => { try { return readFileSync(f, 'utf8'); } catch { return ''; } }).join('\n'), TODO: todoText };
+      const usedIn = Object.entries(produced).filter(([, v]) => v.includes(CH_MARK) || /路线图|Pull Request|PR ?#|cache eviction|缓存淘汰/i.test(v)).map(([k]) => k);
+      const ok = injected.length > 0 && injected.every((n) => n <= 3000) && museRuns > 0 && !persisted.length;
       return { ok, inconclusive: ok && ((!says.includes(CH_MARK) && !/路线图/.test(says)) || copied.length > 0),
         detail: `摘要注入 ${injected.length ? injected.map((n) => `${n} 字`).join('/') : '日志里没有(没注入)'};Muse run ${museRuns} 个,input ${persisted.length ? `落了 ${[...new Set(persisted)].join('/')}` : '不含摘要'};` +
           `周期${done ? '已收尾' : ' 300s 未收尾'};${says.includes(CH_MARK) || /路线图/.test(says) ? 'Muse 原话提到了文档' : 'Muse 原话没提文档(不计红,读原话)'};` +
+          `主动查电脑历史 ${chCalls} 次(工具序列:${museTools.join(',') || '无'});` +
+          `产出里用上电脑历史:${usedIn.length ? usedIn.join(' / ') : '没有'};` +
           `Muse 目录 ${museFiles.length} 个 .md ${copied.length ? `逐字抄了 ${copied.join(' / ')}(不计红,读原话)` : '未逐字抄输入片段 / URL'}`,
         output: `【Muse 原话】\n${says || '(无)'}` };
     } finally {

@@ -189,7 +189,7 @@ export function SpecialAgentsTab({ cfg, localHost = false }: { cfg: TanguDesktop
           {!cloud && <><details className="special-disclosure"><summary>{t('specialUi.memory')}</summary>{toggleRow(t('settings.special.h.harnessCandidates'), h.harnessCandidates, (harnessCandidates) => changeHistorian({ harnessCandidates }), t('settings.special.h.harnessCandidatesHint'))}</details>
           <details className="special-disclosure"><summary>{t('specialUi.advanced')}</summary><Field label={t('settings.special.h.prompt')}><textarea aria-label={t('settings.special.h.prompt')} rows={7} value={prompt} onChange={(e) => { setPrompt(e.target.value); setNotice('') }} /><button type="button" className="special-text-action" onClick={() => setPrompt(promptDefault)}>{t('specialUi.resetPrompt')}</button></Field></details></>}
         </> : <>
-          <Field label={t('settings.special.m.mode')} hint={t('settings.special.m.modeDesc')}>{choice(t('settings.special.m.mode'), museMode, [
+          <Field label={t('settings.special.m.mode')} hint={`${t('settings.special.m.modeDesc')} ${t(museMode === 'auto' ? 'settings.special.m.modeHintAuto' : museMode === 'agent' ? 'settings.special.m.modeHintAgent' : 'settings.special.m.modeHintAsk')}`}>{choice(t('settings.special.m.mode'), museMode, [
             { id: 'ask', label: t('settings.special.m.modeAsk') }, { id: 'agent', label: t('settings.special.m.modeAgent') }, { id: 'auto', label: t('settings.special.m.modeAuto') },
           ], (mode) => changeMuse({ mode: mode as MuseConfig['mode'] }))}</Field>
           <Field label={t('settings.special.m.folders')} hint={t(museMode === 'auto' ? 'settings.special.m.foldersHintAuto' : 'settings.special.m.foldersHintAsk')}>

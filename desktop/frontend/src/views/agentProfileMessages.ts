@@ -42,6 +42,7 @@ registerMessages({
   'agentProfile.soul': { zh: '人格', en: 'Persona' },
   'agentProfile.thinking': { zh: '思考档位', en: 'Thinking effort' },
   'agentProfile.approval': { zh: '审批模式', en: 'Approval mode' },
+  'agentProfile.museApprovalScope': { zh: '这里的审批模式只管你和 Muse 聊天时。它在后台自己跑时按「权限档」，在 设置 › Agent › 后台 Agent 里改', en: 'This approval mode only applies when you chat with Muse. Its background cycles follow the permission tier, set under Settings › Agents › Background agents' },
   'agentProfile.readonly': { zh: '只读', en: 'Read only' },
   'agentProfile.autoEdit': { zh: '自动编辑', en: 'Auto edit' },
   'agentProfile.fullAuto': { zh: '完全自动', en: 'Full auto' },

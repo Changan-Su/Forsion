@@ -53,6 +53,32 @@ describe('deskCardPlan', () => {
   })
 })
 
+describe('deskCardPlan · 空闲面(Muse 私聊的 Desk 空闲时演 Muse Space)', () => {
+  const plan = (mode: 'open' | undefined, itemCount: number, companion: 'always' | 'idle' | null) =>
+    deskCardPlan({ mode, itemCount, companion, draft: false, home: true })
+
+  it('零条目:卡片演空闲面,可展开成侧板;没东西可清', () => {
+    expect(plan(undefined, 0, null)).toEqual({ gone: false, showCompanion: false, expandable: true, clearable: false })
+  })
+  it('零条目 + 侧板展开:卡片退场(空闲面在侧板里)', () => {
+    expect(plan('open', 0, null).gone).toBe(true)
+  })
+  it('Agent 一放东西空闲面就让位,出现「清空 Desk」把它请回来', () => {
+    expect(plan(undefined, 1, null)).toEqual({ gone: false, showCompanion: false, expandable: true, clearable: true })
+    expect(plan('open', 2, null).clearable).toBe(true)
+  })
+  it('压过 idle 伴随面(这条会话的空闲位归 Muse Space)', () => {
+    expect(plan(undefined, 0, 'idle')).toEqual({ gone: false, showCompanion: false, expandable: true, clearable: false })
+  })
+  it('always 伴随面照旧整块替换,空闲面不参与', () => {
+    expect(plan(undefined, 0, 'always')).toEqual(deskCardPlan({ mode: undefined, itemCount: 0, companion: 'always', draft: false }))
+    expect(plan(undefined, 2, 'always')).toEqual(deskCardPlan({ mode: undefined, itemCount: 2, companion: 'always', draft: false }))
+  })
+  it('负对照:没有空闲面时零条目卡片不可展开', () => {
+    expect(deskCardPlan({ mode: undefined, itemCount: 0, companion: null, draft: false }).expandable).toBe(false)
+  })
+})
+
 describe('DESK_DRAFT_KEY', () => {
   it('草稿键永不落盘(哪怕带了用户痕迹)', () => {
     const snap = { items: [], size: 'half' as const, mode: 'open' as const, fraction: 0.5 }
