@@ -113,6 +113,13 @@ async function main() {
       return c && g ? { card: [c.left, c.top, c.right, c.bottom].map(Math.round), panel: [g.left, g.top, g.right, g.bottom].map(Math.round) } : null
     })
     check('L2b 卡片正好盖在眼前这块左栏上', !!fit && fit.card.every((v, i) => Math.abs(v - fit.panel[i]) <= 2) && fit.panel[3] - fit.panel[1] > 100, JSON.stringify(fit))
+    // mac:卡片顶到了窗口最上,交通灯(原生 70×28,截图里看不到)压在它左上角 —— 头部的内容得让开。
+    const head = await win.evaluate(() => {
+      const first = document.querySelector('.rb-peek-head > *')?.getBoundingClientRect()
+      return { mac: document.querySelector('[data-platform]')?.getAttribute('data-platform') === 'mac', left: first?.left ?? -1, top: first?.top ?? -1 }
+    })
+    if (head.mac) check('L2c mac:盖在左栏上的卡片,头部让开交通灯(内容起点 ≥ 70px)', head.top >= 28 || head.left >= 70, JSON.stringify(head))
+    else note('L2c 非 mac,不验交通灯避让', JSON.stringify(head))
     if (shots) await captureWindow(app, path.join(shots, `${n++}-left-open-${other}.png`))
     await win.mouse.move(900, 600, { steps: 4 })
     await sleep(500)

@@ -104,7 +104,7 @@ async function run(page) {
   if (SHOT_DIR) { fs.mkdirSync(SHOT_DIR, { recursive: true }); await page.screenshot({ path: path.join(SHOT_DIR, 'peek-left-open.png') }) }
   await hover(page, icon('a'))
   await page.waitForTimeout(120)
-  check('A4 弹着别的 Space 的卡时移到当前 Space 的图标上:收(露出真的那块左栏)', (await peek(page)) === null)
+  check('A4 弹着别的 Space 的卡时移到当前 Space 的图标上:收(露出真的那块左栏)', p?.space === 'b' && (await peek(page)) === null)
   await park(page)
   await page.waitForTimeout(300)
 
@@ -252,7 +252,7 @@ async function run(page) {
   check('E6 留着的卡,指针到别的 Space 图标上:换成那个 Space 的预览(左栏展开着也弹别人的)', p?.space === 'a' && p.tags.join() === 'a', JSON.stringify(p))
   await park(page)
   await page.waitForTimeout(400)
-  check('E6b 换过来的卡不沿用「先留着」:指针回主区照常收', (await peek(page)) === null)
+  check('E6b 换过来的卡不沿用「先留着」:指针回主区照常收', p?.space === 'a' && (await peek(page)) === null)
   await hover(page, icon('b'))
   await page.waitForTimeout(600)
   check('E7 左栏展开着,悬停当前 Space(刚切过来的 b)不弹', (await peek(page)) === null)

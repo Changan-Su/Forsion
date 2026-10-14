@@ -311,7 +311,8 @@ export function Ribbon() {
     const width = computeSideWidth((work?.width ?? 1200) / z, 'left', { free: ws.sideFree.left, saved: ws.sideWidths.left, scale: ws.sideScale.left })
     const over = ws.leftVisible ? ws.api?.panels.find((x) => (x.params as { __loc?: string } | undefined)?.__loc === 'left')?.group.element.getBoundingClientRect() : undefined
     peekGeo.current = over?.height // 组刚建出来、还没进 DOM 时量到的是全 0:不认,按收起时的摆法
-      ? { left: over.left / z, top: over.top / z, height: over.height / z, width }
+      // 盖在左栏上 = 顶到了窗口最上:mac 的交通灯越过 Ribbon 压在这一角,头部让出来(engine.css,同左栏标签条的避让)。
+      ? { left: over.left / z, top: over.top / z, height: over.height / z, width, '--rb-peek-lights': '26px' } as React.CSSProperties
       : { left: ((rb?.right ?? 44) + 4) / z, top: top / z, height: Math.max(160, bottom - top) / z, width }
     return peekGeo.current
   }
