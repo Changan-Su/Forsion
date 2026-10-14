@@ -1603,7 +1603,21 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
           //    的余白重试同源(见 onMouseMove)。
           const box = editorView.dom.getBoundingClientRect()
           const cx = Math.min(Math.max(e.clientX, box.left + 8), box.right - 8)
-          const got = editorView.posAtCoords({ left: cx, top: e.clientY })
+          let got = editorView.posAtCoords({ left: cx, top: e.clientY })
+          // 按在块与块之间的缝里:posAtCoords 落在两块**之间**(父节点是 doc)。挑离指针最近的块(按二维距离 ——
+          // 分栏里同一 y 上左右各有块),把坐标钳进它再取一次。不补的话这一下什么都不做、连焦点都不给;
+          // 「宽松正文」(缺省开)把段距拉到 0.7em、标题上方 2.1em 之后,点空白多半落在缝里
+          // (editor-ai B4c:点正文后 Cmd+Z 打到了 body 上;钉子 taskbox.check ⑥)。
+          if (got && !editorView.state.doc.resolve(got.pos).parent.isTextblock) {
+            let near: DOMRect | null = null
+            let best = Infinity
+            for (const el of topBlockEls()) {
+              const r = el.getBoundingClientRect()
+              const d = Math.hypot(Math.max(r.left - e.clientX, 0, e.clientX - r.right), Math.max(r.top - e.clientY, 0, e.clientY - r.bottom))
+              if (d < best) { best = d; near = r }
+            }
+            if (near) got = editorView.posAtCoords({ left: Math.min(Math.max(e.clientX, near.left + 1), near.right - 1), top: Math.min(Math.max(e.clientY, near.top + 1), near.bottom - 1) })
+          }
           if (!got) return
           const $p = editorView.state.doc.resolve(got.pos)
           if (!$p.parent.isTextblock) return
