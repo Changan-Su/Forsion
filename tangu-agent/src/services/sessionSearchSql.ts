@@ -48,9 +48,11 @@ function noToolCallPredicate(tool: string, alias = 's'): { sql: string; params: 
 
 /** 该会话是否有任一消息调过 tool(按会话不按消息:追问轮会复述结果而不再调工具)。localHistorian 用它把
  *  调过 read_computer_history 的会话挡在自动记忆提取之外;持库后端专属(Historian 本就只在本地形态跑)。 */
-export async function sessionCalledTool(sessionId: string, tool: string): Promise<boolean> {
+export async function sessionCalledTool(sessionId: string, tool: string, since?: unknown): Promise<boolean> {
   const m = toolCallMatch(tool);
-  const rows = await query<any[]>(`SELECT 1 AS hit FROM chat_messages tc WHERE tc.session_id = ? AND ${m.sql} LIMIT 1`, [sessionId, ...m.params]);
+  // since:只看这个时刻之后的消息(SQL TIMESTAMP,与 special_agent_log.created_at 同域可比)
+  const rows = await query<any[]>(`SELECT 1 AS hit FROM chat_messages tc WHERE tc.session_id = ? AND ${m.sql}${since ? ' AND tc.created_at > ?' : ''} LIMIT 1`,
+    [sessionId, ...m.params, ...(since ? [since] : [])]);
   return rows.length > 0;
 }
 
