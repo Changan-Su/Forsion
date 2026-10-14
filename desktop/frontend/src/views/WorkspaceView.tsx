@@ -10,7 +10,7 @@ import { amadeusAvailable, sessionsAvailable } from '../features/runtime'
  * 主视图硬规则 → 本 Space 的默认档(SpaceDefinition.autoWorkspaceMode);右栏恒为文件。
  */
 import { Fragment, useMemo, useState, useEffect, useReducer, useRef, type ReactNode } from 'react'
-import { useWorkspace, activeMainPanel, useSpaceStore, getView, useListFirst, useNativeChromeExtras } from '@lcl/engine'
+import { useWorkspace, activeMainPanel, useSpaceStore, getView, useListFirst, useNativeChromeExtras, startOpenDrag, mainOpensBeside } from '@lcl/engine'
 import type { ViewProps } from '@lcl/engine'
 import { ChevronDown, ChevronRight, FileText, Folder, FolderOpen, ListFilter, MoreHorizontal, Pencil, Plus, Search, X } from 'lucide-react'
 import { usePluginStore } from '@amadeus/plugins/pluginStore'
@@ -117,8 +117,12 @@ function FilesBody({ vaultCtx, sideFilter }: { vaultCtx: { root: string; noteDir
   }, [s, vaultCtx, vaultKey, sideFilter, amadeusRoot])
   // Coding Space:主区 focus 为工作台时,点文件不另开 wsfile tab,而是喂给主区 Code 面板(codeStudioStore)。
   const mainType = useActiveMainType()
+  // 悬停预览里点的 / 从列表拖出来的(见引擎 openBeside.ts)不喂工作台:那是就地换掉它正开着的文件,走文件视图开成新标签。
   const onOpenPreview = mainType === 'code-studio'
-    ? (target: PreviewTarget): void => { if (target.path) useCodeStudio.getState().openFile(target.path) }
+    ? (target: PreviewTarget, opts?: { newTab?: boolean }): void => {
+        if (mainOpensBeside()) s.setFilePreview(target, opts)
+        else if (target.path) useCodeStudio.getState().openFile(target.path)
+      }
     : s.setFilePreview
   // 置顶「当前打开文件所在的工作区」;编辑器场景的 vault 工作区本来就排在首位,直接用它。
   const curFile = useCurrentFilePath()
@@ -442,6 +446,20 @@ export function PluginListBody({ src, stateKey }: { src: ListSourceContribution;
           onDragEnd: endDrag,
         }
       : {}
+  /** 叶子行(能开 View 的):不收行拖动的源也能拖 —— 拖进标签栏 / 主区正文 = 在落点开它(开法同点击)。 */
+  const leafDragProps = (it: ListItem): Record<string, unknown> => {
+    const base = dragProps(it)
+    if (renaming === it.key) return base
+    const start = base.onDragStart as ((e: React.DragEvent<HTMLElement>) => void) | undefined
+    return {
+      ...base,
+      draggable: true,
+      onDragStart: (e: React.DragEvent<HTMLElement>) => {
+        if (start) start(e); else e.stopPropagation()
+        startOpenDrag(e.dataTransfer, { open: () => src.open(it, { newTab: false }) })
+      },
+    }
+  }
   /** 指针在这一行上时落在哪:按行内位置给出候选,逐个问插件,第一个被接受的算数。
    *  不落在自己身上,也不落进自己下面。 */
   const landing = (e: React.DragEvent<HTMLElement>, it: ListItem): ListDropTarget | null => {
@@ -562,7 +580,7 @@ export function PluginListBody({ src, stateKey }: { src: ListSourceContribution;
         title={it.title}
         className={`${activeKey === it.key ? 'active' : ''}${it.unread ? ' is-unread' : ''}${dropKey === `i:${it.key}` ? ' amx-drop-into' : ''}${actions.length ? ' has-actions' : ''}${quick.length ? ' has-quick' : ''}${two ? ' t2s-deep' : ''}`.trim() || undefined}
         style={quick.length ? { '--quick': quick.length } as React.CSSProperties : undefined}
-        {...rowDropProps(it)} {...dragProps(it)}
+        {...rowDropProps(it)} {...leafDragProps(it)}
         lead={inGroup ? unreadDot(it) : <><LeadIcon key={it.iconUrl ?? ''} item={it} />{it.unread && <span className="t2s-dot unread" title={t('sidebar.unread')} />}</>}
         trailing={!editing && !two && it.hint ? <span className="t2s-count">{it.hint}</span> : undefined}
         onClick={editing ? undefined : (e) => src.open(it, { newTab: e.metaKey || e.ctrlKey })}

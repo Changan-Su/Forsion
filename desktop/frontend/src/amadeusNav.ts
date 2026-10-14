@@ -2,7 +2,7 @@
 // 语义(类 Obsidian):已有认领该笔记的编辑器 tab → 激活它;newTab(⌘点击)→ 新开 tab;
 // 一个编辑器都没有(全被关掉)→ 带 notePath 新开;否则在当前(最近活动)编辑器里加载。
 import { activePageScope, pageStoreFor, setActivePageScope, usePageStore } from '@amadeus/store/pageStore'
-import { useWorkspace, activeMainPanel } from '@lcl/engine'
+import { useWorkspace, activeMainPanel, mainOpensBeside } from '@lcl/engine'
 import { amadeus } from '@amadeus/api'
 import { hasUnifiedInstance, unifiedFocusBody, unifiedHeadings, unifiedRevealBlock, unifiedRevealHeading, unifiedRevealText, unifiedScopeFor } from '@amadeus/unified/lifecycle'
 import { findHeadingIndex, isMediaPath } from '@amadeus-shared/pdfLink'
@@ -121,7 +121,9 @@ async function openNoteInner(path: string, opts?: OpenWhere & { reuseKey?: strin
     await waitForActive(path)
     return
   }
-  if (opts?.newTab || opts?.split || editors.length === 0) {
+  // mainOpensBeside:悬停预览里点的 / 从列表拖出来的(见引擎 openBeside.ts)—— 交给 openView 开在当前标签旁边,
+  // 不能落到下面「装进当前编辑器」那条:那是就地换掉用户正看着的那篇。
+  if (opts?.newTab || opts?.split || editors.length === 0 || mainOpensBeside()) {
     // newTab(⌘点击)显式新开;split(双链右键「在分屏中打开」)开到旁边那半屏;「一个编辑器都没有」走 openView 默认的就地导航(当前 tab 变编辑器)。
     ws.openView('amadeus-editor', { notePath: path }, 'main', viewOpts(opts))
     await waitForActive(path)

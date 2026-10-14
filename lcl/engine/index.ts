@@ -20,6 +20,7 @@ export { label } from './types'
 
 export { Shell } from './Shell'
 export { startOpenDrag } from './WorkspaceHost'
+export { openMainBesideThisTask, mainOpensBeside } from './openBeside'
 export { SingleColumnHost, accountMenuRows } from './SingleColumnHost'
 export { listFirstNow, useListFirst } from './listFirst'
 export { MiniColumnHost } from './MiniColumnHost'

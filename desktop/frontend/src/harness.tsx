@@ -38,7 +38,7 @@ import './views/chat2/composer2.css'
 import { Ribbon } from '@lcl/engine/Ribbon'
 import { WorkspaceHost } from '@lcl/engine/WorkspaceHost'
 import { presentDockedExtension } from '@lcl/engine/dockviewStore'
-import { addCommand, addRibbonIcon, getActiveSpace, installHotkeys, recordNav, registerSpace, registerView, setActiveSpaceCold, unregisterView, useNav, useRibbonStore, useSpaceStore, useWorkspace } from '@lcl/engine'
+import { addCommand, addRibbonIcon, getActiveSpace, installHotkeys, recordNav, registerSpace, registerView, setActiveSpaceCold, startOpenDrag, unregisterView, useNav, useRibbonStore, useSpaceStore, useWorkspace } from '@lcl/engine'
 import type { SpaceDefinition, ViewProps } from '@lcl/engine/types'
 import '@lcl/engine/engine.css'
 import { usePageStore, pageStoreFor, remapScopePaths, PageScopeCtx, onNotePathGone } from './amadeus/store/pageStore'
@@ -717,19 +717,25 @@ if (new URLSearchParams(location.search).has('dock')) {
 } else if (new URLSearchParams(location.search).has('peek')) {
   // Space 左面板悬停预览(scripts/space-peek.check.cjs):真 Shell(Ribbon + Dockview)+ 真 SpaceButton + 三个替身 Space。
   // a / b 各有左栏(b 两个 View → 卡片头部出页签),c 没有左栏(悬停不弹)。左栏替身里摆齐预览要扛住的几样东西:
-  // 可点的行(记下点击那一刻的活动 Space)、输入框、右键弹出的挂到 body 的菜单、一个按视口坐标定位的 fixed 标记。
+  // 可点的行(记下点击那一刻的活动 Space,并往主区开一个 doc=<tag>:<行> 的视图;也能拖进标签栏 / 正文)、只在左栏里
+  // 起作用的开合钮、输入框、右键弹出的挂到 body 的菜单、一个按视口坐标定位的 fixed 标记。
+  // 主区里另有一块自己接拖放的落区(替身「拖进聊天插引用」)和一个文本框(替身编辑器)。
   void Promise.all([import('@lcl/engine/Shell'), import('./components/SpaceButton'), import('react-dom')]).then(([{ Shell }, { SpaceButton }, { createPortal }]) => {
     const probe = { hits: [] as string[], mounts: {} as Record<string, number>, useWorkspace, useSpaceStore, unregisterView }
     ;(window as unknown as { __peek: typeof probe }).__peek = probe
     const PeekList: React.FC<{ tag: string }> = ({ tag }) => {
       const [menu, setMenu] = useState(false)
+      const [open, setOpen] = useState(false)
       useEffect(() => { probe.mounts[tag] = (probe.mounts[tag] ?? 0) + 1 }, [tag])
+      const openDoc = (i: number): void => { useWorkspace.getState().openView('mainv', { doc: `${tag}:${i}` }, 'main') }
       return (
         <div className="pk-list" data-tag={tag} style={{ display: 'flex', flexDirection: 'column', gap: 2, padding: 8 }}>
           <input className="pk-input" placeholder={tag} />
+          <button className="pk-toggle" aria-expanded={open} onClick={() => setOpen((v) => !v)}>{open ? 'open' : 'closed'}</button>
           {[1, 2, 3].map((i) => (
-            <button key={i} className="pk-row" data-row={i} style={{ textAlign: 'left', height: 30 }}
-              onClick={() => probe.hits.push(`${tag}:${i}@${useSpaceStore.getState().activeSpaceId}`)}
+            <button key={i} className="pk-row" data-row={i} style={{ textAlign: 'left', height: 30 }} draggable
+              onDragStart={(e) => startOpenDrag(e.dataTransfer, { open: () => openDoc(i) })}
+              onClick={() => { probe.hits.push(`${tag}:${i}@${useSpaceStore.getState().activeSpaceId}`); openDoc(i) }}
               onContextMenu={(e) => { e.preventDefault(); setMenu(true) }}>{tag} row {i}</button>
           ))}
           <div className="pk-blank" style={{ height: 80 }} />
@@ -745,6 +751,10 @@ if (new URLSearchParams(location.search).has('dock')) {
     registerView({ type: 'mainv', displayName: 'main', icon: Square, factory: () => (
       <div className="pk-main" style={{ position: 'relative', height: '100%', padding: 16 }}>
         main
+        {/* 靠右摆:左边会被收起态的预览卡片盖住 */}
+        <div className="pk-zone" style={{ position: 'absolute', right: 40, top: 60, width: 160, height: 60, border: '1px solid var(--border)' }}
+          onDragOver={(e) => e.preventDefault()} onDrop={(e) => { e.preventDefault(); probe.hits.push('zone') }}>zone</div>
+        <textarea className="pk-ta" style={{ position: 'absolute', right: 40, top: 140, width: 160, height: 60 }} />
         {/* webhost-ok: 台架页里的固定占位帧(一行静态 HTML),只为验证「指针进了 iframe」;不承载用户 / agent 的内容 */}
         <iframe className="pk-frame" title="frame" srcDoc="<p>frame</p>" style={{ position: 'absolute', right: 40, bottom: 40, width: 300, height: 200, border: '1px solid var(--border)' }} />
       </div>

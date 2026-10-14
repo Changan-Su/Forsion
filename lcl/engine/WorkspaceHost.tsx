@@ -32,6 +32,7 @@ import { getDetachApi, type ViewRef } from './detachSeam'
 import { OverlayAt, zoomOf } from './menuAnchor'
 import { Skeleton, ViewErrorBoundary, skeletonVariantOf } from './Skeleton'
 import { cycleFocusedGroupTab, tabCycleDelta } from './tabCycle'
+import { besideTarget, openMainBesideThisTask } from './openBeside'
 import { keepScroll } from './keepScroll'
 
 /** tooltip「名称(快捷键)」:快捷键取该命令**当前生效**的键、按平台格式化(改了键就跟着变,解绑就只剩名称)。 */
@@ -306,9 +307,36 @@ function makeSuffixActions(): React.FC<IDockviewHeaderActionsProps> {
 // 提示显示在哪就落在哪(根治提示≠落点)。固定 3 面板:tab 栏=并标签页;正文半边=面板内分屏(侧栏仅上下,主区四向);违规=null 弹回。
 let draggingId: string | null = null
 let draggingView: ViewRef | null = null // 跨窗撕拽:源视图的可重建描述({type,params})
-// 「落点即开」:从新建标签页把一个尚未打开的视图卡片拖进 tab/side bar → 在落点新开(而非搬已开面板)。
-// 与 draggingId(搬面板)互斥;同一套 dragover 提示 + computeDropTarget 落点,drop 分派到 openView。
-let draggingOpen: { type: string; params?: Record<string, unknown> } | null = null
+// 「落点即开」:拖一个还没开的东西进 tab 栏 / 正文 → 在落点新开(而非搬已开面板)。两种来源:
+//  · 新建标签页的视图卡片({type, params}):主区、侧栏都能落;
+//  · 工作区列表里能开 View 的条目({open},2026-10-14 用户定):开法交给条目自己(会话 / 笔记 / Agent 各有路由),
+//    只落主区。条目本来就是别的落区的拖源(拖进聊天 = 插引用、树里拖 = 移动、拖进编辑器 = 插文字),所以它走冒泡阶段,
+//    里层落区接了(preventDefault)就让给它。
+// 与 draggingId(搬面板)互斥;同一套 dragover 提示 + computeDropTarget 落点。
+type OpenDrag = { type: string; params?: Record<string, unknown> } | { open(): void }
+let draggingOpen: OpenDrag | null = null
+// 拖拽载荷里带上这个类型才认 draggingOpen:源元素拖到一半被卸掉(dragend 到不了 window)时,残留的 draggingOpen
+// 不能被下一次无关的拖入(系统文件、别的 app 的文字)借走。
+const OPEN_MIME = 'application/x-forsion-open'
+const isListDrag = (e: DragEvent): boolean => !!draggingOpen && 'open' in draggingOpen && !!e.dataTransfer?.types.includes(OPEN_MIME)
+// 里层落区接没接这一下:不能看 defaultPrevented —— Dockview 在 disableDnd 下照样对标签 / 标签栏 / 正文的 dragover、drop 调
+// preventDefault(Codex 评审实测,真应用里拖进标签栏因此没有落点)。捕获阶段(window,最先跑)把这个事件的 preventDefault
+// 包一层,记下调用那一刻的 currentTarget,只认业务落区。不算的:window / document 上的全局兜底(fileDropGuard)和 Dockview 自己 ——
+// 它的根(整体落区挂在这,类名是我们传的 wb-dockview)、网格、组、标签条、内容容器、渲染层。算的:视图的内容,即 dockview-react
+// 的 portal 容器 .dv-react-part 往里(React 的委托监听就挂在这层容器上,视图里的原生落区如编辑器块层也在里面),以及
+// Dockview 外面的(React 根、悬停预览卡)。⚠️ 别按「类名带 dv-」判:.dv-react-part 也带(台架 I3 抓到过拖进聊天两边都执行)。
+const claimed = new WeakSet<Event>()
+function dockviewOwn(el: Element): boolean {
+  return !el.closest('.dv-react-part') && !!el.closest('.wb-dockview, .dv-render-overlay')
+}
+function watchClaims(e: DragEvent): void {
+  const orig = e.preventDefault
+  e.preventDefault = function (): void {
+    const at = e.currentTarget
+    if (at instanceof Element && !dockviewOwn(at)) claimed.add(e)
+    orig.call(e)
+  }
+}
 let lastDragUpdate = 0 // 节流 drag→dragUpdate(屏幕坐标上报)
 let dropLineEl: HTMLDivElement | null = null
 let dropZoneEl: HTMLDivElement | null = null
@@ -362,17 +390,32 @@ function clearDragState(): void {
 
 /** 新建标签页视图卡片发起「落点即开」拖拽:记下要开的视图 + 抑制 tab 栏窗拖区(同 onTabDragStart,否则
  *  macOS 下 tab 栏吞掉 dragover/drop)。落点由全局 drop 监听经 computeDropTarget 决定(见 onDrop)。 */
-export function startOpenDrag(dt: DataTransfer | null, spec: { type: string; params?: Record<string, unknown> }): void {
+export function startOpenDrag(dt: DataTransfer | null, spec: OpenDrag): void {
+  draggingId = null; draggingView = null // 上一次的 dragend 没到(源被卸掉)时的残留,不跟着这一次走
   draggingOpen = spec
-  if (dt) { dt.effectAllowed = 'copy'; try { dt.setData('application/x-forsion-open', spec.type) } catch { /* ignore */ } }
+  if (dt) {
+    if (!('open' in spec)) dt.effectAllowed = 'copy' // 列表条目的 effectAllowed 归它自己(树里拖要 move)
+    try { dt.setData(OPEN_MIME, 'open' in spec ? 'item' : spec.type) } catch { /* ignore */ }
+  }
   document.documentElement.dataset.dvDragging = '1'
 }
 
-/** 落点即开:据目标组所在区打开新视图 —— 主区=新标签;侧栏=该侧(收起先展开还原 stash,同 launcher 侧栏项)。 */
+/** 主区落点:先开(列表条目开在当前标签旁边、已开着就切过去,见 openBeside.ts;视图卡片开新标签),
+ *  再把开出来的那个标签搬到落点(tab 栏 = 插在那个位置;正文 = 分屏)。开法是异步的(要先建会话之类)赶不上这一下 →
+ *  活动标签没变,不搬,东西照常开在当前标签旁边。 */
+function openAtMain(t: DropTarget, spec: OpenDrag): void {
+  const ws = useWorkspace.getState()
+  let id: string | null | undefined
+  if ('open' in spec) { openMainBesideThisTask(); spec.open(); id = besideTarget() }
+  else id = ws.openView(spec.type, spec.params ?? {}, 'main', { newTab: true })?.id
+  if (id) ws.dropView(id, t) // 已经开着的(含正看着的那个)就是把它挪到落点
+}
+
+/** 落点即开:据目标组所在区打开新视图 —— 主区=落点处新标签 / 分屏;侧栏=该侧(收起先展开还原 stash,同 launcher 侧栏项)。 */
 function openViewAtTarget(t: DropTarget, spec: { type: string; params?: Record<string, unknown> }): void {
   const loc = locOf(t.group)
   const ws = useWorkspace.getState()
-  if (loc === 'main') { ws.openView(spec.type, spec.params ?? {}, 'main', { newTab: true }); return }
+  if (loc === 'main') { openAtMain(t, spec); return }
   const visible = loc === 'left' ? ws.leftVisible : loc === 'right' ? ws.rightVisible : ws.bottomVisible
   if (!visible) ws.toggleSidebar(loc) // 收起态直接 openView 会把 stash 覆盖成单视图 → 先展开还原
   ws.openView(spec.type, spec.params ?? {}, loc) // 该侧只剩 sidebar-empty 占位时,占位由 openView 退位
@@ -386,6 +429,7 @@ function openViewAtTarget(t: DropTarget, spec: { type: string; params?: Record<s
 function onTabDragStart(e: DragEvent, el: HTMLElement, panelId: string): void {
   e.stopPropagation()
   if (!e.dataTransfer) return
+  draggingOpen = null // 同上:残留的「落点即开」会让捕获阶段的 dragover 早退,这一次拖标签就落不下
   draggingId = panelId
   // 记源视图描述(供跨窗重建):从 panel.params 剥引擎私有键。
   const panel = useWorkspace.getState().api?.getPanel(panelId)
@@ -476,6 +520,7 @@ export const WorkspaceHost: React.FC<{
     }
     const onDragOver = (e: DragEvent): void => {
       if (!draggingId && !draggingOpen) return // 搬面板 或 落点即开,两者共用提示
+      if (draggingOpen && 'open' in draggingOpen) { if (isListDrag(e)) watchClaims(e); return } // 列表条目:冒泡阶段再看(见 onListDragOver)
       const t = dropTargetAt(e)
       if (!t) { hideIndicator(); if (e.dataTransfer) e.dataTransfer.dropEffect = 'none'; return }
       e.preventDefault() // 有效落点才放行 drop
@@ -485,6 +530,7 @@ export const WorkspaceHost: React.FC<{
     const onDrop = (e: DragEvent): void => {
       const id = draggingId, open = draggingOpen
       if (!id && !open) return
+      if (open && 'open' in open) { if (isListDrag(e)) watchClaims(e); return } // 列表条目:见 onListDrop
       e.preventDefault()
       const t = dropTargetAt(e)
       if (t) {
@@ -492,6 +538,30 @@ export const WorkspaceHost: React.FC<{
         else if (id) useWorkspace.getState().dropView(id, t)
       }
       clearDragState()
+    }
+    // 列表条目(冒泡阶段):里层落区已经接了(聊天插引用 / 树里移动)或指针在可编辑区里(编辑器插文字)→ 让给它们;
+    // 落点只认主区(侧栏不是开 View 的地方)。
+    const listTargetAt = (e: DragEvent): DropTarget | null => {
+      const el = e.target instanceof Element ? e.target : null
+      if (claimed.has(e) || (el && ((el as HTMLElement).isContentEditable || el.closest('input, textarea')))) return null
+      const t = dropTargetAt(e)
+      return t && locOf(t.group) === 'main' ? t : null
+    }
+    const onListDragOver = (e: DragEvent): void => {
+      if (!isListDrag(e)) return
+      const t = listTargetAt(e)
+      if (!t) { hideIndicator(); return }
+      e.preventDefault()
+      if (e.dataTransfer) e.dataTransfer.dropEffect = e.dataTransfer.effectAllowed === 'move' ? 'move' : 'copy'
+      showTarget(t)
+    }
+    const onListDrop = (e: DragEvent): void => {
+      if (!isListDrag(e)) return
+      const t = listTargetAt(e), open = draggingOpen
+      clearDragState()
+      if (!t || !open) return
+      e.preventDefault()
+      openAtMain(t, open)
     }
     // 跨窗撕拽:drag 在源元素全程触发(含移出窗口)→ 节流上报屏幕坐标,主进程给光标下窗口画落点预览。
     const onDrag = (e: DragEvent): void => {
@@ -516,7 +586,11 @@ export const WorkspaceHost: React.FC<{
     window.addEventListener('drop', onDrop, true)
     window.addEventListener('drag', onDrag, true)
     window.addEventListener('dragend', onDragEnd, true)
+    window.addEventListener('dragover', onListDragOver)
+    window.addEventListener('drop', onListDrop)
     return () => {
+      window.removeEventListener('dragover', onListDragOver)
+      window.removeEventListener('drop', onListDrop)
       window.removeEventListener('dragover', onDragOver, true)
       window.removeEventListener('drop', onDrop, true)
       window.removeEventListener('drag', onDrag, true)

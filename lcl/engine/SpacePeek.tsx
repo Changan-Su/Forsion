@@ -4,10 +4,12 @@
  *  ⚠️ 卡片元素自己不许带 transform / filter / backdrop-filter:它会变成里面 fixed 浮层(View 自己的右键菜单、
  *  悬停提示,按视口坐标定位)的包含块,整体偏移。材质画在 ::before 上(engine.css 的 .rb-peek)。 */
 import { Suspense, forwardRef, useState, type CSSProperties } from 'react'
+import { ChevronRight } from 'lucide-react'
 import { ExtendViewHost } from './ExtendViewHost'
 import { presentInlineExtension } from './extendView'
 import { Skeleton, ViewErrorBoundary, skeletonVariantOf } from './Skeleton'
 import { getView } from './viewRegistry'
+import { useEngineI18n } from './i18nSeam'
 import { label } from './types'
 import type { Leaf, SpaceDefinition } from './types'
 import type { PersistedPanel } from './layoutPersist'
@@ -40,7 +42,8 @@ function PeekView({ spaceId, view }: { spaceId: string; view: PersistedPanel }) 
 }
 
 /** 头部(Space 名 + 多个 View 时的图标页签)与当前那个 View。按 Space 重挂(页签归零),外面那张卡不动 —— 换图标不重播入场。 */
-function PeekContent({ space, views, onBeforeClick }: { space: SpaceDefinition; views: PersistedPanel[]; onBeforeClick(): void }) {
+function PeekContent({ space, views, onBeforeClick, onEnter }: { space: SpaceDefinition; views: PersistedPanel[]; onBeforeClick(): void; onEnter?(): void }) {
+  const { t } = useEngineI18n()
   const [tab, setTab] = useState(0)
   const at = Math.min(tab, views.length - 1)
   const view = views[at]
@@ -48,8 +51,19 @@ function PeekContent({ space, views, onBeforeClick }: { space: SpaceDefinition; 
   return (
     <>
       <div className="rb-peek-head">
-        {Icon && <Icon size={14} />}
-        <span className="rb-peek-name">{label(space.name)}</span>
+        {/* 别的 Space 的卡:头部那块就是「进入这个 Space」(卡里的点击都不切 Space,要过去从这里或点条上的图标)。 */}
+        {onEnter ? (
+          <button type="button" className="rb-peek-enter" title={t('lcl.peek.enter', { name: label(space.name) })} onClick={onEnter}>
+            {Icon && <Icon size={14} />}
+            <span className="rb-peek-name">{label(space.name)}</span>
+            <ChevronRight className="rb-peek-enter-go" size={12} aria-hidden />
+          </button>
+        ) : (
+          <>
+            {Icon && <Icon size={14} />}
+            <span className="rb-peek-name">{label(space.name)}</span>
+          </>
+        )}
         {views.length > 1 && views.map((v, i) => {
           const def = getView(v.type)
           const TabIcon = def?.icon
@@ -73,14 +87,16 @@ export const SpacePeek = forwardRef<HTMLDivElement, {
   space: SpaceDefinition
   views: PersistedPanel[]
   style: CSSProperties
-  /** View 里的点击落地之前(捕获阶段)调:Ribbon 借它先切到这个 Space。 */
+  /** View 里的点击落地之前(捕获阶段)调:别的 Space 的卡,Ribbon 借它把这一下的「往主区开」改成开在当前标签旁边。 */
   onBeforeClick(): void
+  /** 给了就把头部做成「进入这个 Space」(别的 Space 的卡才给)。 */
+  onEnter?(): void
   /** 卡里的右键(React 树上的后代都算,含 View 挂到 body 的菜单):Ribbon 借它认出「这不是条上的右键」。 */
   onContextMenuCapture(e: React.MouseEvent): void
-}>(function SpacePeek({ space, views, style, onBeforeClick, onContextMenuCapture }, ref) {
+}>(function SpacePeek({ space, views, style, onBeforeClick, onEnter, onContextMenuCapture }, ref) {
   return (
     <div ref={ref} className="rb-peek" role="region" aria-label={label(space.name)} data-space={space.id} style={style} onContextMenuCapture={onContextMenuCapture}>
-      <PeekContent key={space.id} space={space} views={views} onBeforeClick={onBeforeClick} />
+      <PeekContent key={space.id} space={space} views={views} onBeforeClick={onBeforeClick} onEnter={onEnter} />
     </div>
   )
 })

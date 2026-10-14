@@ -67,7 +67,7 @@ import { fdDirOf, isNoteMd } from '@amadeus/lib/fd'
 import { useSectionOpen } from '@amadeus/lib/sectionOpen'
 import { folderPadLeft, rowPadLeft } from '@amadeus/lib/treeIndent'
 import { compile, parsePageSource } from '@amadeus-shared/compiler'
-import { recordNav, useWorkspace, activeMainPanel, Skeleton, zoomOf, UI_MODE } from '@lcl/engine'
+import { recordNav, useWorkspace, activeMainPanel, Skeleton, zoomOf, UI_MODE, startOpenDrag } from '@lcl/engine'
 import { useNoteOutline } from '@amadeus/lib/activeNote'
 import { isCoarsePointer } from './touch'
 import type { ViewProps } from '@lcl/engine'
@@ -1437,6 +1437,8 @@ export function AmadeusPagesView() {
           })
           try { e.dataTransfer.setData(PATHS_MIME, JSON.stringify(abs)) } catch { /* 降级:这次拖不出去 */ }
         }
+        // 拖进标签栏 / 主区正文 = 在落点开这一个(开法同点击,见 openEntry);树里移动、拖进聊天 / 编辑器照旧优先。
+        startOpenDrag(e.dataTransfer, { open: () => openEntry(path) })
         setDragPath(path)
       }}
       onDragEnd={() => { setDragPath(null); setDragOver(null) }}
