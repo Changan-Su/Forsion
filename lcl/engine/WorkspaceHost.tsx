@@ -321,13 +321,13 @@ const OPEN_MIME = 'application/x-forsion-open'
 const isListDrag = (e: DragEvent): boolean => !!draggingOpen && 'open' in draggingOpen && !!e.dataTransfer?.types.includes(OPEN_MIME)
 // 里层落区接没接这一下:不能看 defaultPrevented —— Dockview 在 disableDnd 下照样对标签 / 标签栏 / 正文的 dragover、drop 调
 // preventDefault(Codex 评审实测,真应用里拖进标签栏因此没有落点)。捕获阶段(window,最先跑)把这个事件的 preventDefault
-// 包一层,记下调用那一刻的 currentTarget,只认业务落区:React 的落区记到的是 React 根(在 Dockview 外面)、视图里的原生落区
-// (编辑器块层在捕获阶段接笔记 / 会话 → 插链接)在组或渲染层里面。不算的:window / document 上的全局兜底(fileDropGuard)、
-// Dockview 自己的元素 —— dv-* 的,加上它的根和网格骨架(整体落区挂在根上,根的类名是我们传的 wb-dockview / 主题名,不带 dv-)。
+// 包一层,记下调用那一刻的 currentTarget,只认业务落区。不算的:window / document 上的全局兜底(fileDropGuard)和 Dockview 自己 ——
+// 它的根(整体落区挂在这,类名是我们传的 wb-dockview)、网格、组、标签条、内容容器、渲染层。算的:视图的内容,即 dockview-react
+// 的 portal 容器 .dv-react-part 往里(React 的委托监听就挂在这层容器上,视图里的原生落区如编辑器块层也在里面),以及
+// Dockview 外面的(React 根、悬停预览卡)。⚠️ 别按「类名带 dv-」判:.dv-react-part 也带(台架 I3 抓到过拖进聊天两边都执行)。
 const claimed = new WeakSet<Event>()
 function dockviewOwn(el: Element): boolean {
-  if ([...el.classList].some((c) => c.startsWith('dv-'))) return true
-  return !!el.closest('.wb-dockview') && !el.closest('.dv-groupview, .dv-render-overlay')
+  return !el.closest('.dv-react-part') && !!el.closest('.wb-dockview, .dv-render-overlay')
 }
 function watchClaims(e: DragEvent): void {
   const orig = e.preventDefault
