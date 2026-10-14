@@ -235,9 +235,9 @@ describe('helper update for the global ⌘⌘ hotkey', () => {
     expect(m.ask.mock.calls.map((call) => call[1].cmd)).not.toContain('shutdown')
   })
 
-  it('the bar is per gesture: a 0.7.0 bundle is enough for ⌘⌘ but not for ⇧⇧ (0.8.0), so ⇧⇧ asks nothing', async () => {
+  it('the bar is per gesture: a 0.7.0 bundle is enough for ⌘⌘ but not for ⇧⇧ (0.7.1), so ⇧⇧ asks nothing', async () => {
     helperAt(14, '0.7.0')
-    expect(await hotkeyService().updateHelperForHotkey('zh', '0.8.0')).toBe(false)
+    expect(await hotkeyService().updateHelperForHotkey('zh', '0.7.1')).toBe(false)
     expect(m.confirm).not.toHaveBeenCalled()
   })
 

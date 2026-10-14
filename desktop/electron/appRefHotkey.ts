@@ -25,8 +25,8 @@ import { isAppRefId, normalizeAppRef, type AppRef } from '../shared/appRefs'
 /** 成对修饰键的热键 → 助手的手势名,以及认它的助手从哪个版本 / macOS 协议起(老的回 unknown_gesture,主进程据此请用户更新)。 */
 export const HOTKEY_GESTURES: Record<string, { gesture: string; version: string; protocol: number }> = {
   'mod+mod': { gesture: 'modPair', version: '0.7.0', protocol: 15 },
-  'shift+shift': { gesture: 'shiftPair', version: '0.8.0', protocol: 16 },
-  'alt+alt': { gesture: 'altPair', version: '0.8.0', protocol: 16 },
+  'shift+shift': { gesture: 'shiftPair', version: '0.7.1', protocol: 16 },
+  'alt+alt': { gesture: 'altPair', version: '0.7.1', protocol: 16 },
 }
 
 /** 普通组合键('mod+shift+k')→ Electron 的全局快捷键写法。只收带 ⌘/Ctrl 或 ⌥/Alt 的:
