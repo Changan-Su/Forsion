@@ -42,7 +42,7 @@ registerMessages({
   'sidebar.account.menu.noCard': { zh: '没有可用的额度重置卡', en: 'No quota reset card available' },
   'sidebar.account.menu.useCardFail': { zh: '额度重置卡使用失败', en: "Couldn't use the quota reset card" },
   'sidebar.account.menu.upgrade': { zh: '升级会员', en: 'Upgrade membership' },
-  'sidebar.account.menu.more': { zh: '额度与积分', en: 'Quota and points' },
+  'sidebar.account.menu.more': { zh: '会员与用量', en: 'Membership & usage' },
 })
 
 /** 后台额度两轴里更紧的那个的剩余百分比;两轴都不限 → null。 */
