@@ -37,6 +37,7 @@ import { toggleInlineCodeCommand } from '@milkdown/kit/preset/commonmark'
 import { toggleTaskTr } from '../blocks/markdown/taskList'
 import { buildBlockString } from '../blocks/markdown/mathLivePreview'
 import { removeEmptyColumnTr } from './columns'
+import { calloutKey, calloutOf } from '../blocks/markdown/callout'
 
 /** 光标所在「顶层块」的深度:doc 或分栏 cell 的直接子节点(与 blockLayer / insertMd 同一判定)。 */
 export function topDepth($from: ResolvedPos): number {
@@ -389,6 +390,19 @@ const bsCallout: Command = (state, dispatch) => {
   if (!empty || $from.parentOffset !== 0) return false
   const bq = blockquoteDepth($from)
   if (bq == null) return false
+  // 折叠正文按段落合并，不能走普通引用的“拆出本段”；标题已有专用键位。
+  if (calloutOf($from.node(bq))?.type === 'fold' && calloutKey.getState(state)?.srcAt !== $from.before(bq)) {
+    if ($from.depth === bq + 1) {
+      const before = $from.before()
+      const prev = state.doc.resolve(before).nodeBefore
+      // 不能把正文并进前一个子折叠的隐藏内容，或让 base join 删掉整块内容。
+      if (prev && (prev.type.name === 'blockquote' || isAtomBlock(prev)) && NodeSelection.isSelectable(prev)) {
+        dispatch?.(state.tr.setSelection(NodeSelection.create(state.doc, before - prev.nodeSize)).scrollIntoView())
+        return true
+      }
+    }
+    return false
+  }
   const isFirstChild = $from.index(bq) === 0
   if (isFirstChild) {
     const at = $from.before(bq)

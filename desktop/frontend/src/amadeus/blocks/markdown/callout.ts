@@ -105,7 +105,7 @@ const CALLOUT_RE = /^\[!([\w-]+)\]([+-])?/
 const TITLE_MARK_RE = /^(#{1,6}|[-*+]) /
 
 /** blockquote 是不是 callout;是则给出类型/折叠符/首段/标题前缀。marker: '+' | '-' | undefined */
-function calloutOf(node: PMNode) {
+export function calloutOf(node: PMNode) {
   if (node.type.name !== 'blockquote') return null
   const first = node.firstChild
   const m = first && first.isTextblock ? CALLOUT_RE.exec(first.textContent) : null

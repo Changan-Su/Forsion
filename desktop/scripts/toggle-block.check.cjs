@@ -148,6 +148,63 @@ async function main() {
     check('内层独立展开内容', await p.locator('.callout-fold .callout-fold > p').nth(1).isVisible())
     await p.close()
 
+    // 正文行首不能把承载折叠的 blockquote 当普通引用拆开（录屏：收起只剩首段）。
+    const editSeed = '> [!fold]+ Archived\n>\n> ~~Intelligent UI~~\n>\n> ~~Second paragraph~~\n>\n> ~~Third paragraph~~\n\nAfter'
+    const structure = (page) => page.evaluate(() => window.__upage.probe.view().state.doc.toJSON())
+    for (const [name, index, key] of [['首段向左', 2, 'ArrowLeft'], ['首段退格', 2, 'Backspace'], ['中段退格', 3, 'Backspace']]) {
+      p = await fresh(editSeed)
+      const beforeText = await p.locator(FOLD).textContent()
+      await p.locator(`${FOLD} > p:nth-child(${index})`).evaluate((el) => {
+        const view = window.__upage.probe.view()
+        view.dispatch(view.state.tr.setSelection(view.state.selection.constructor.near(view.state.doc.resolve(view.posAtDOM(el, 0)))))
+        view.focus()
+      })
+      await p.keyboard.press(key)
+      check(`${name}不进入普通引用源码`, await p.locator('.amx-struct-prefix[data-structural-prefix="quote"]').count() === 0)
+      const tree = await structure(p)
+      check(`${name}保留整只折叠及全部正文`, tree.content.length === 2 && tree.content[0].type === 'blockquote'
+        && await p.locator(FOLD).textContent() === beforeText && await p.locator(`${PM} > blockquote:not(.callout-fold)`).count() === 0, tree)
+      await p.locator(ARROW).click()
+      await p.waitForTimeout(300)
+      check(`${name}后收起隐藏所有后续段落`, !/Second paragraph|Third paragraph/.test(await p.locator(PM).innerText()))
+      const disk = await saved(p)
+      await p.close()
+      p = await fresh(disk)
+      const reopened = await structure(p)
+      check(`${name}保存重开保留全部折叠正文`, reopened.content.length === 2 && reopened.content[0].type === 'blockquote'
+        && ['Intelligent UI', 'Second paragraph', 'Third paragraph'].every(text => JSON.stringify(reopened.content[0]).includes(text))
+        && !/Second paragraph|Third paragraph/.test(await p.locator(PM).innerText()), reopened)
+      await p.close()
+    }
+
+    for (const [name, block] of [['嵌套折叠', '> > [!fold]- Inner\n> >\n> > Hidden'], ['分割线', '> ---'], ['代码块', '> ```js\n> const kept = 1\n> ```']]) {
+      p = await fresh(`> [!fold]+ Outer\n>\n${block}\n>\n> Body after block\n\nAfter`)
+      const before = await structure(p)
+      await p.locator(`${FOLD} > p`).last().evaluate((el) => {
+        const view = window.__upage.probe.view()
+        view.dispatch(view.state.tr.setSelection(view.state.selection.constructor.near(view.state.doc.resolve(view.posAtDOM(el, 0)))))
+        view.focus()
+      })
+      await p.keyboard.press('Backspace')
+      check(`${name}后的正文退格只选中前块，不删内容或塞进子折叠`, JSON.stringify(await structure(p)) === JSON.stringify(before)
+        && await p.evaluate(() => window.__upage.probe.view().state.selection.toJSON().type === 'node'), await structure(p))
+      await p.close()
+    }
+
+    p = await fresh('> [!fold]+ Source\n>\n> Body\n\nAfter')
+    await p.locator(HEAD).hover()
+    await p.locator('.callout-source').click()
+    await p.locator(HEAD).evaluate((el) => {
+      const view = window.__upage.probe.view()
+      view.dispatch(view.state.tr.setSelection(view.state.selection.constructor.near(view.state.doc.resolve(view.posAtDOM(el, 0)))))
+      view.focus()
+    })
+    await p.keyboard.press('ArrowLeft')
+    check('显式源码态仍可进入引用标记，失焦缝隙不移除输入框', await p.locator('.amx-struct-prefix[data-structural-prefix="quote"]').evaluate(el => el === document.activeElement))
+    await p.keyboard.press('Escape')
+    check('取消源码标记编辑保留完整折叠', await p.locator(FOLD).count() === 1 && (await p.locator(FOLD).textContent()).includes('Body'))
+    await p.close()
+
     if (shotDir) {
       fs.mkdirSync(shotDir, { recursive: true })
       p = await fresh('折叠块让长笔记保持清晰。\n\n> [!fold]+ 项目计划 · Project plan\n>\n> 点击标题即可编辑，左侧三角控制展开与收起。\n>\n> - 整理需求与参考\n> - 验证鼠标和键盘操作\n>\n> > [!fold]- 更多细节 · Details\n> >\n> > 嵌套的内容也有独立状态。\n\n> [!fold]- 一个很长的折叠标题，在窄窗口自然换行，箭头始终位于第一行左侧\n>\n> 隐藏的正文。\n\n> [!fold]+\n\n正文继续。')

@@ -12,6 +12,7 @@ const seed = [
   '把细节收进折叠块，让笔记更容易阅读。', '',
   '> [!fold]+ 项目计划 · Project plan', '>',
   '> 点击标题直接编辑，左侧三角控制展开与收起。', '>',
+  '> 第二段正文保持在折叠内。', '>', '> 第三段正文也一起收起。', '>',
   '> - 整理需求与参考', '> - 验证鼠标和键盘操作', '>',
   '> > [!fold]- 更多细节 · Details', '> >', '> > 嵌套折叠保持独立状态。', '',
   '> [!fold]- 很长的标题会自然换行，左侧的展开按钮始终与第一行对齐', '>', '> 隐藏的正文。', '',
@@ -69,11 +70,33 @@ async function main() {
     check('生产笔记显示四枚 SVG 折叠按钮', await win.locator('.unified-body .callout-chevron svg').count() === 4)
     check('只读打开不改文件', fs.readFileSync(file, 'utf8') === seed)
     await win.screenshot({ path: path.join(SHOTS, 'light-zh.png') })
+    const fold = win.locator('.unified-body .ProseMirror > .callout-fold').first()
+    const paragraphs = fold.locator(':scope > p')
+    const count = await paragraphs.count()
+    await paragraphs.nth(2).click({ position: { x: 80, y: 10 } })
+    await win.keyboard.press(process.platform === 'darwin' ? 'Meta+ArrowLeft' : 'Home')
+    await win.waitForFunction(() => {
+      const s = getSelection()
+      return s?.isCollapsed && s.anchorOffset === 0 && s.anchorNode?.textContent === '第二段正文保持在折叠内。'
+    })
+    await win.keyboard.press('Backspace')
+    check('正文行首退格只合并相邻段落，后续内容留在折叠内', await paragraphs.count() === count - 1
+      && (await paragraphs.nth(1).innerText()).includes('第二段正文保持在折叠内。')
+      && (await fold.innerText()).includes('第三段正文也一起收起。')
+      && await win.locator('.unified-body .ProseMirror > blockquote:not(.callout-fold)').count() === 0)
+    await win.keyboard.press(process.platform === 'darwin' ? 'Meta+z' : 'Control+z')
+    check('一次撤销恢复原段落及完整折叠结构', await paragraphs.count() === count && await paragraphs.nth(2).innerText() === '第二段正文保持在折叠内。')
+    await win.keyboard.press(process.platform === 'darwin' ? 'Meta+Shift+z' : 'Control+Shift+z')
+    check('重做仍把正文留在同一折叠块', await paragraphs.count() === count - 1 && (await fold.innerText()).includes('第三段正文也一起收起。'))
     await arrow.click()
     await win.waitForTimeout(1400)
+    check('编辑后收起隐藏后续全部正文', !/第二段正文|第三段正文/.test(await win.locator('.unified-body .ProseMirror').innerText()))
     check('点击后真实落盘折叠状态与完整子内容', fs.readFileSync(file, 'utf8').includes('[!fold]- 项目计划') && fs.readFileSync(file, 'utf8').includes('嵌套折叠保持独立状态'))
+    check('落盘的后续正文仍有引用前缀', /^> .*第二段正文/m.test(fs.readFileSync(file, 'utf8')) && /^> 第三段正文/m.test(fs.readFileSync(file, 'utf8')))
+    await win.screenshot({ path: path.join(SHOTS, 'edited-collapsed.png') })
     await open('dark', 'zh', 1280)
     check('重开保留折叠状态', await arrow.getAttribute('aria-expanded') === 'false')
+    check('重开仍隐藏全部后续正文', !/第二段正文|第三段正文/.test(await win.locator('.unified-body .ProseMirror').innerText()))
     await arrow.click()
     await win.waitForTimeout(1400)
     await win.mouse.move(12, 12)
