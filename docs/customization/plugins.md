@@ -37,6 +37,10 @@ For developers: when a bundle that ships an engine plugin is listed in the Store
 
 Every plugin gets a *Working folder* setting that decides where its output goes. By default it is `Plugins/<plugin name>` inside your vault, so all plugin output sits under one `Plugins` folder and the vault root stays yours. Plugins with settings show a form on their **detail page**; changes apply immediately.
 
+Engine plugin text settings can set `secret: true` to render a password input (including when the field type is `textarea`). This masks the UI only: values still use the existing local plugin settings store and authenticated settings API; it does not add encryption. Older hosts ignore this optional field.
+
+引擎插件的文本设置可以声明 `secret: true`，宿主会显示密码框（`textarea` 也会转为单行密码框）。这只遮挡界面；值仍使用现有本机插件设置存储和已认证的设置接口，不新增加密。旧宿主会忽略这个可选字段。
+
 ## 安装渠道
 
 - **商店**(推荐)— 一键安装,更新统一管理,桌面插件与引擎插件按真实类型自动装到正确的位置,见[商店](market.md);
