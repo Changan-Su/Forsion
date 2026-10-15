@@ -144,7 +144,7 @@ it('expands the AI quota row into today, this week, a reset card, upgrade and th
   await click('Alice')
   await tick()
   await click('AI 额度')
-  await click('额度与积分')
+  await click('会员与用量')
   expect(openSettings).toHaveBeenLastCalledWith('forsion/fx:forsion-extend:quota')
   await click('Alice')
   await tick()
