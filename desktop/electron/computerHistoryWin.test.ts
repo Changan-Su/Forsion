@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { createHash } from 'node:crypto'
@@ -39,6 +39,9 @@ describe('computerHistoryWin', () => {
     expect(readFileSync(exe, 'utf8')).toBe('v2')
     await cleanupRecorderCopies(bin, exe) // 都是刚建的(可能是另一个 Forsion 正要拉起的):不动
     expect(readdirSync(bin)).toHaveLength(4)
+    // NTFS can round a fresh mtime past Date.now(); make the old-file fixture explicit.
+    const stale = new Date(Date.now() - 1_000)
+    for (const name of ['windows-bridge-aaaaaaaaaaaa.exe', '.windows-bridge-1-x.tmp']) utimesSync(path.join(bin, name), stale, stale)
     await cleanupRecorderCopies(bin, exe, 0)
     expect(readdirSync(bin).sort()).toEqual(['keep.txt', `windows-bridge-${h12}.exe`])
     // 已在 = 不动,也不留临时文件

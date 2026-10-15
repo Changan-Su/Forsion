@@ -198,3 +198,10 @@ unmounts existing cards, and shows an unavailable message. Unknown/disabled card
 substituted with generated content. Plugin exceptions stay inside the individual card.
 These are live views of the current vault, including when an old conversation is reopened;
 they are not immutable historical snapshots or cross-device data replicas.
+
+
+### 云端设置页分组 / Cloud settings groups
+
+首方内置包的 `registerSettingsView({ category: 'forsion', ... })` 可用 `parent` 指向同插件的一级页 ID；宿主只在左栏列出父页，在正文上方用页内标签切换父页与子页。父页本身是默认标签，`tabTitle` 指定它的标签文案；`title` 仍是左栏页名。两种标签均可传函数以跟随语言。`aliases` 是旧页 ID，优先认真实 ID；`keywords` 为设置搜索提供中英别名。父页缺失、跨插件或成环时保留为独立入口，不静默隐藏。挂载与卸载契约不变，切换分段仍调用现有 mount / dispose。旧宿主忽略这些可选元数据，继续显示平铺页面。
+
+First-party `registerSettingsView({ category: 'forsion', ... })` pages may set `parent` to a top-level page ID in the same plugin. The sidebar lists the parent; section tabs select the parent page or one of its children. The parent is the default tab, and `tabTitle` supplies its section label while `title` remains the sidebar label. Both labels may be functions evaluated after locale changes. `aliases` maps old page IDs, with real IDs taking priority; `keywords` supplies search aliases. Missing, cross-plugin or cyclic parents remain standalone. The existing mount/dispose lifecycle applies to every section switch. Older hosts ignore these optional fields and retain flat navigation.

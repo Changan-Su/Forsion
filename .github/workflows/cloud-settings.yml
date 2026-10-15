@@ -1,0 +1,30 @@
+name: cloud settings
+on:
+  push:
+    paths: &paths
+      - 'desktop/frontend/src/components/settingsCloudNavigation*'
+      - 'desktop/frontend/src/components/SettingsModal.tsx'
+      - 'desktop/frontend/src/components/settingsSearchIndex*'
+      - 'desktop/frontend/src/components/settingsTarget*'
+      - 'desktop/frontend/src/amadeus/plugins/types.ts'
+      - '.github/workflows/cloud-settings.yml'
+  pull_request:
+    paths: *paths
+permissions:
+  contents: read
+jobs:
+  navigation:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: node build/link-lcl.cjs
+      - run: npx vitest run frontend/src/components/settingsCloudNavigation.test.ts frontend/src/components/settingsTarget.test.ts frontend/src/components/settingsSearchIndex.test.ts frontend/src/i18nCoverage.test.ts

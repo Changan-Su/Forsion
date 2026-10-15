@@ -74,6 +74,7 @@ export const PluginViewHost: React.FC<ViewProps & { def: ViewContribution; plugi
         extendView, surface: isMini ? 'mini' : isFloating ? 'floating' : 'main',
         getParams: () => { check(); return { ...(useWorkspace.getState().leafById(current.current.leaf.id)?.params ?? current.current.params) } },
         setParams: (patch) => { check(); current.current.leaf.setParams({ ...(useWorkspace.getState().leafById(current.current.leaf.id)?.params ?? current.current.params), ...patch }) },
+        close: () => { check(); current.current.leaf.close() },
         onParamsChanged: (listener) => { check(); listeners.current.add(listener); return () => { listeners.current.delete(listener) } },
         showInMainPanel: isMini ? () => {
           check()

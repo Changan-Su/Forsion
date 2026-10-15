@@ -2,6 +2,10 @@
 
 <!-- English edition of CHANGELOG.md: same "## <version> (<date>)" headings, one bullet per Chinese bullet. Add both when releasing. -->
 
+## Unreleased
+
+- **Plugin floating panels**: plugins can use `view.close()` from Close, Back and confirmation buttons to close their own view, through the same API on desktop and Web.
+
 ## 2.13.4 (2026-10-14)
 
 - **Reference apps and windows**: press ⌘ twice in any app to send the current window into a chat or note as a reference, with a screenshot of that window attached (this needs Screen Recording permission; without it only the reference is sent). It works while another app is in front, and the reference goes to the cursor, then a visible input card, then a new chat. Change the shortcut to double ⇧, double ⌥ or a regular key combination in Settings → Shortcuts.
