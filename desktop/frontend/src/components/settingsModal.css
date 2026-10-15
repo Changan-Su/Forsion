@@ -101,3 +101,54 @@
   -webkit-backdrop-filter: blur(6px) saturate(160%);
   backdrop-filter: blur(6px) saturate(160%);
 }
+
+
+/* Cloud settings groups reuse the native page surface; only the section navigation is new. */
+.settings-cloud-tabs {
+  display: flex;
+  gap: 20px;
+  overflow-x: auto;
+  margin-bottom: 16px;
+  border-bottom: var(--border-width) solid var(--border);
+}
+.settings-cloud-tabs > button {
+  flex: 0 0 auto;
+  position: relative;
+  padding: 0 0 10px;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font-family: var(--font-ui);
+  font-size: var(--ui-font-body);
+  line-height: var(--ui-line-body);
+  font-weight: 500;
+  cursor: pointer;
+}
+.settings-cloud-tabs > button:hover { color: var(--text); }
+.settings-cloud-tabs > button[aria-selected='true'] { color: var(--text); }
+.settings-cloud-tabs > button[aria-selected='true']::after {
+  content: '';
+  position: absolute;
+  inset-inline: 0;
+  bottom: 0;
+  height: 2px;
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+}
+.settings-cloud-advanced-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  margin: 12px 0;
+  padding: 8px 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font-family: var(--font-ui);
+  font-size: var(--ui-font-body);
+  line-height: var(--ui-line-body);
+  text-align: start;
+  cursor: pointer;
+}
+.settings-cloud-advanced-toggle[aria-expanded='true'] > svg { transform: rotate(90deg); }
