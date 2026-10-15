@@ -114,6 +114,12 @@ async function main() {
     await win.reload()
     await win.waitForSelector('.dv-groupview')
     await win.locator('.rb-top .rb-more').first().click()
+    // 小屏展开后仍可能装不下全部 Space;滑到新加入的那一格,不把屏外占位当成缺失。
+    for (let i = 0; i < 8 && !(await onRibbon('cad-mesh')); i++) {
+      await win.locator('.rb-top').hover()
+      await win.mouse.wheel(0, 480)
+      await win.waitForTimeout(250)
+    }
     check('修复并重载后同一个插件的 Space 恢复', await until(() => onRibbon('cad-mesh')))
     await win.evaluate(() => document.querySelector('.rb-open-top .rb-more')?.click())
     await win.keyboard.press(process.platform === 'darwin' ? 'Meta+k' : 'Control+k')
