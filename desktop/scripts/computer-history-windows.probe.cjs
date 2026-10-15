@@ -78,7 +78,9 @@ async function main() {
     await settings.locator('.ch-page [role="switch"]').first().click()
     await settings.locator('.ch-page[data-ch-status="off"]').waitFor({ timeout: 10000 })
     check('Disable switches off', (await win.evaluate(() => window.tangu.computerHistory.get())).state.status === 'off')
-    check('Recorder exits after its last subscriber disconnects', await until(() => recorderPids().length === 0, 75000, 1000))
+    // Global app-reference hotkeys share this recorder process with computer history.
+    await win.evaluate(() => window.tangu.appRefs?.setGlobalHotkey?.(''))
+    check('Recorder exits after history and global hotkey unsubscribe', await until(() => recorderPids().length === 0, 75000, 1000))
   } finally {
     if (app) {
       for (const p of app.windows()) await p.screenshot({ path: path.join(OUT, `last-${app.windows().indexOf(p)}.png`) }).catch(() => {})
