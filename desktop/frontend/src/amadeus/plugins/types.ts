@@ -1163,8 +1163,8 @@ export interface PluginContext {
    *  beside it (in the stash for a collapsed panel) and comes to the front if `fromViewId` was in front; the count is
    *  then the tabs newly opened, 0 if `toViewId` was already there. Swapping back removes only `toViewId`. */
   replaceView?(fromViewId: string, toViewId: string, opts?: { params?: Record<string, unknown> }): number
-  /** Open one of this plugin's registered views in the native Floating Panel window.
-   *  Desktop-only; feature-detect because Web intentionally has no plugin window bridge. */
+  /** Open one of this plugin's registered views in a host-owned Floating Panel.
+   *  Desktop uses a native window; Web uses an overlay. Feature-detect on older hosts/mobile. */
   openFloatingPanel?(viewId: string, opts?: PluginFloatingPanelOptions): void
   /** Open one of this plugin's registered views in the compact native Mini Panel.
    *  Desktop-only; feature-detect on older hosts and Web/mobile. */
