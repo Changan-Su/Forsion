@@ -490,6 +490,8 @@ export interface PluginViewContext {
   onParamsChanged?(listener: (params: Readonly<Record<string, unknown>>) => void): () => void
   /** Mini/Floating: opens the corresponding full view in the main panel. Revoked after unmount. */
   showInMainPanel?(): void
+  /** Close this mounted view (including Web/native Floating Panels). Revoked after unmount. */
+  close?(): void
   extendView?: ExtendViewController
 }
 
