@@ -40,7 +40,7 @@ registerMessages({
   'todolist.done': { zh: '已完成', en: 'Completed' },
   'todolist.openInNote': { zh: '在笔记中打开', en: 'Open in note' },
   'todolist.clickToEdit': { zh: '点击编辑', en: 'Click to edit' },
-  'todolist.addPlaceholder': { zh: '新建待办，如「明天下午3点 交周报」', en: 'New to-do, e.g. "Send report tomorrow 3pm"' },
+  'todolist.addPlaceholder': { zh: '新建待办，如「明天下午3点」', en: 'New to-do, e.g. "tomorrow 3pm"' },
   'todolist.addTo': { zh: '加到「{name}」', en: 'Adds to "{name}"' },
   'todolist.dragHint': { zh: '拖进日历排时段', en: 'Drag into the calendar to schedule' },
   'todolist.allDone': { zh: '全部完成了。', en: 'All done.' },

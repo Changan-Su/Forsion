@@ -681,6 +681,9 @@ const TimeScroll = forwardRef<CalApi, TimeProps>(function TimeScroll({ n, weekSt
     if (i * 8 + n !== lastRangeI.current) {
       lastRangeI.current = i * 8 + n
       setVisibleRange(iso(days[i]), iso(days[Math.min(days.length - 1, i + n - 1)]))
+      // 跨天条只在头一段写标题;可见区最左那天(lead)例外,滚到半截也看得出是什么。命令式挂类,滚动不触发重渲。
+      el.querySelector('.amx-cal-allday2.lead')?.classList.remove('lead')
+      el.querySelector(`.amx-cal-allday2[data-date="${iso(days[i])}"]`)?.classList.add('lead')
     }
   }
 

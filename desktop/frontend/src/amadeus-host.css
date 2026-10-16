@@ -1487,6 +1487,7 @@ html.dark .amx-cal-chip-ev, html.dark .amx-cal-event {
 .amx-cal-chip-gap { display: block; height: calc(var(--ui-font-caption, 11px) * 1.3 + 4px); }
 .amx-cal-mcell .amx-cal-chip-ev.continues-left, .amx-cal-allday2 .amx-cal-chip-ev.continues-left { --amx-ev-bar: transparent; margin-left: -5px; width: calc(100% + 5px); border-radius: 0 4px 4px 0; }
 .amx-cal-mcell .amx-cal-chip-ev.continues-right, .amx-cal-allday2 .amx-cal-chip-ev.continues-right { width: calc(100% + 5px); border-radius: 4px 0 0 4px; }
+.amx-cal-allday2:not(.lead) > .amx-cal-chip-ev.continues-left { color: transparent; } /* 跨天条画成一条:接续的那几段不再重复标题 */
 .amx-cal-mcell .amx-cal-chip-ev.continues-left.continues-right, .amx-cal-allday2 .amx-cal-chip-ev.continues-left.continues-right { width: calc(100% + 10px); border-radius: 0; }
 .amx-cal-mcell.making { background: var(--overlay-medium, var(--bg-hover)); }
 .amx-cal-more { display: block; width: 100%; border: none; background: transparent; text-align: left; font: inherit; font-size: var(--ui-font-caption, 11px); color: var(--text-muted); padding: 1px 4px; border-radius: 4px; cursor: pointer; }
@@ -1503,7 +1504,7 @@ html.dark .amx-cal-chip-ev, html.dark .amx-cal-event {
 .amx-cal-tgrid2 { display: grid; position: relative; }
 /* 悬停时「点下去会建在哪」(默认 1 小时)与按住拖出时的预览块:命令式定位,默认隐藏,不挡指针。 */
 .amx-cal-hoverslot { position: absolute; display: none; z-index: 3; box-sizing: border-box; border-radius: var(--radius-sm, 6px); background: var(--overlay-medium, var(--bg-hover)); pointer-events: none; }
-.amx-cal-making { position: absolute; display: none; z-index: 6; box-sizing: border-box; border-radius: var(--radius-sm, 6px); background: var(--amx-event-color); color: #fff; box-shadow: 0 2px 8px color-mix(in srgb, var(--amx-event-color) 35%, transparent); padding: 3px 8px; font-size: var(--ui-font-caption, 11px); font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; pointer-events: none; }
+.amx-cal-making { position: absolute; display: none; z-index: 6; box-sizing: border-box; border-radius: var(--radius-sm, 6px); background: var(--amx-event-color); color: #fff; box-shadow: 0 2px 8px color-mix(in srgb, var(--amx-event-color) 35%, transparent); padding: 3px 8px; font-size: var(--ui-font-caption, 11px); line-height: 1.3; font-weight: 600; font-variant-numeric: tabular-nums; overflow: hidden; pointer-events: none; }
 .amx-cal-thead2 { position: sticky; top: 0; z-index: 8; background: var(--bg); border-left: 1px solid var(--amx-cal-line, var(--border)); border-bottom: 1px solid var(--amx-cal-line, var(--border)); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px; }
 .amx-cal-thead2.today .amx-cal-tdate { color: var(--accent-ink, var(--accent, #6c5ce7)); }
 .amx-cal-tdow { font-size: var(--ui-font-caption, 11px); color: var(--text-muted); }
