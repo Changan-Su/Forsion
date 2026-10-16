@@ -375,9 +375,11 @@ export function CalendarView() {
       if (el && el.closest('input, textarea, select, [contenteditable]')) return
       const side = useCalendarNav.getState().sideEl
       const a = document.activeElement
-      if (a && a !== document.body && !root.contains(a) && !side?.contains(a) && a.closest('.dv-react-part')) return
+      const inCfg = !!a?.closest('.amx-calcfg') // 刚点过左栏小月历 / 日历列表:翻页类快捷键照样生效
+      if (a && a !== document.body && !root.contains(a) && !side?.contains(a) && !inCfg && a.closest('.dv-react-part')) return
       const act = classifyCalKey(e)
       if (!act) return
+      if (inCfg && !['today', 'prev', 'next', 'mode'].includes(act.kind)) return // 删除 / 复制这类只在焦点在日历里时生效
       const sel = selRef.current
       const nav = useCalendarNav.getState()
       switch (act.kind) {
@@ -439,13 +441,13 @@ export function CalendarView() {
     return () => window.removeEventListener('keydown', onKey)
   }, [card]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // 主区放不下 7 列(每列最窄 112,左轴 52)时,「周」按放得下的天数显示(3 天,再窄 1 天);「3 日」同理。
+  // 主区放不下 7 列(每列最窄 84,左轴 52;10-16 从 112 降下来:右栏常驻后 1200 宽的窗口也该看到整周)时,「周」按放得下的天数显示(3 天,再窄 1 天);「3 日」同理。
   // 标题、可见区与右栏高亮都跟着 n 走,不再只露两天半、标题却写一整周(W-13)。列宽下限与 TimeScroll 的 minCol 一致。
   const [fit, setFit] = useState(7)
   useLayoutEffect(() => {
     const el = rootRef.current
     if (!el) return
-    const measure = (): void => { const w = el.clientWidth - 52; setFit(w >= 7 * 112 ? 7 : w >= 3 * 132 ? 3 : 1) }
+    const measure = (): void => { const w = el.clientWidth - 52; setFit(w >= 7 * 84 ? 7 : w >= 3 * 132 ? 3 : 1) }
     measure()
     const ro = new ResizeObserver(measure)
     ro.observe(el)
@@ -491,7 +493,8 @@ export function CalendarView() {
             <Button size="sm" variant="secondary" label={t('calview.today')} onClick={() => api.current?.today()} />
             <Button size="sm" variant="ghost" isIconOnly icon={<ChevronLeft size={14} />} label={t('calview.prevPage')} onClick={() => api.current?.prev()} />
             <Button size="sm" variant="ghost" isIconOnly icon={<ChevronRight size={14} />} label={t('calview.nextPage')} onClick={() => api.current?.next()} />
-            <DropdownMenu button={{ label: MODE_ITEMS.find((m) => m.id === mode)?.label ?? '', variant: 'secondary', size: 'sm' }} menuWidth={208}>
+            {/* 窗口太窄、「周」退成 3 天 / 1 天时,按钮写实际显示的跨度(菜单里勾的仍是用户选的) */}
+            <DropdownMenu button={{ label: MODE_ITEMS.find((m) => m.id === (mode === 'month' ? 'month' : n === 7 ? 'week' : n === 3 ? '3day' : 'day'))?.label ?? '', variant: 'secondary', size: 'sm' }} menuWidth={208}>
               {MODE_ITEMS.map((m) => (
                 <DropdownMenuItem key={m.id} icon={tick(mode === m.id)} label={m.label} endContent={<Kbd keys={m.key} />} onClick={() => setMode(m.id)} />
               ))}
@@ -560,7 +563,12 @@ function DraftInput({ first = true }: { first?: boolean }) {
       onChange={(e) => { const nav = useCalendarNav.getState(); if (nav.draft) nav.setDraft({ ...nav.draft, title: e.target.value }) }}
       onKeyDown={(e) => {
         if (e.nativeEvent.isComposing) return
-        if (e.key === 'Enter') { e.preventDefault(); useCalendarNav.getState().draftApi?.commit() }
+        if (e.key === 'Enter') {
+          e.preventDefault()
+          const nav = useCalendarNav.getState()
+          if (nav.draft?.title.trim()) nav.draftApi?.commit()
+          else nav.setDraft(null) // 有标题才落库:空标题回车 = 不建(走查里误回车留下了「新事件」)
+        }
         else if (e.key === 'Escape') { e.preventDefault(); useCalendarNav.getState().setDraft(null) }
       }}
       onBlur={(e) => {
@@ -696,7 +704,7 @@ const TimeScroll = forwardRef<CalApi, TimeProps>(function TimeScroll({ n, weekSt
     const el = wrap.current
     if (!el) return
     // 左轴已是独立 flex 项(52px),日区宽度不再含它 → colw 直接按日区宽均分。
-    const minCol = n === 7 ? 112 : n === 3 ? 132 : 180
+    const minCol = n === 7 ? 84 : n === 3 ? 132 : 180
     const measure = (): void => setColw(Math.max(minCol, el.clientWidth / n))
     measure()
     const ro = new ResizeObserver(measure)
@@ -788,6 +796,7 @@ const TimeScroll = forwardRef<CalApi, TimeProps>(function TimeScroll({ n, weekSt
   // ── 已有事件:拖动(整格吸附)、拖上下边缘改时长、⌥ 拖复制 ──
   const down = (ev: CalEvent, e: ReactPointerEvent): void => {
     e.stopPropagation()
+    cancelDrag() // 上一次拖动没收尾(松手丢了)就先撤掉它的预览,别留下两份
     if (ev.readonly || e.button !== 0) return // 只读源:不设 dragRef 不 capture;up() 里补点击开卡
     hideHover()
     const el = e.currentTarget as HTMLElement
@@ -811,6 +820,8 @@ const TimeScroll = forwardRef<CalApi, TimeProps>(function TimeScroll({ n, weekSt
   const move = (e: ReactPointerEvent): void => {
     const d = dragRef.current
     if (!d) return
+    // 松手那一下没送到(切走了 App、在窗外松开、输入注入丢了 up):鼠标已经没按着,就按松手收尾,别把预览晾在那里
+    if (e.pointerType === 'mouse' && e.buttons === 0) { up(d.ev, e); return }
     // move:块本身按吸附后的落点整格平移(不再是「块自由飘 + 另一个落点框」两份),原位置留一个淡影。
     if (d.mode === 'move') {
       if (!d.moved && Math.hypot(e.clientX - d.x0, e.clientY - d.y0) <= 3) return
@@ -967,6 +978,7 @@ const TimeScroll = forwardRef<CalApi, TimeProps>(function TimeScroll({ n, weekSt
   const gridMove = (e: ReactPointerEvent): void => {
     const m = makeRef.current
     if (!m) { hover(e); return }
+    if (e.pointerType === 'mouse' && e.buttons === 0) { gridUp(); return } // 松手没送到:同 move()
     if (!m.moved && Math.hypot(e.clientX - m.x0, e.clientY - m.y0) < 4) return
     m.moved = true
     m.cur = locate(e)
@@ -1089,6 +1101,7 @@ const TimeScroll = forwardRef<CalApi, TimeProps>(function TimeScroll({ n, weekSt
         onPointerMove={gridMove}
         onPointerUp={gridUp}
         onPointerCancel={gridCancel}
+        onLostPointerCapture={() => { if (makeRef.current) gridUp() }}
         onDragOver={todoOver}
         onDragLeave={(e) => { if (!(e.relatedTarget instanceof Node && e.currentTarget.contains(e.relatedTarget))) hideMake() }}
         onDrop={todoDropHere}
@@ -1162,6 +1175,7 @@ const TimeScroll = forwardRef<CalApi, TimeProps>(function TimeScroll({ n, weekSt
                     onPointerMove={move}
                     onPointerUp={(pe) => up(e, pe)}
                     onPointerCancel={cancelDrag}
+                    onLostPointerCapture={cancelDrag}
                   >
                     {e.check && (
                       <span
@@ -1330,6 +1344,7 @@ export const MonthScroll = forwardRef<CalApi, MonthProps>(function MonthScroll({
   const gridMove = (e: ReactPointerEvent): void => {
     const m = makeRef.current
     if (!m) return
+    if (e.pointerType === 'mouse' && e.buttons === 0) { gridUp(); return } // 松手没送到:按松手收尾
     const b = cellAt(e)
     if (!b || b === m.b) return
     m.b = b

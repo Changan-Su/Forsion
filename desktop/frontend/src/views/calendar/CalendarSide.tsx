@@ -18,7 +18,7 @@ registerMessages({
   'calside.calendar': { zh: '日历', en: 'Calendar' },
   'calside.save': { zh: '保存', en: 'Save' },
   'calside.cancel': { zh: '取消', en: 'Cancel' },
-  'calside.hint': { zh: '标题在格子里直接打。Enter 保存，Esc 取消；没写标题就点到别处 = 不建。', en: 'Type the title right in the grid. Enter saves, Esc cancels; clicking away with no title discards it.' },
+  'calside.hint': { zh: '标题在格子里直接打。Enter 保存，Esc 取消；没写标题不会新建。', en: 'Type the title right in the grid. Enter saves, Esc cancels; nothing is created without a title.' },
   'calside.back': { zh: '待办', en: 'To-dos' },
 })
 
@@ -79,7 +79,7 @@ function DraftPanel() {
       <p className="amx-cal-draft-hint">{t('calside.hint')}</p>
       <div className="amx-cal-draft-actions">
         <button className="amx-cal-draft-cancel" onMouseDown={(e) => e.preventDefault()} onClick={() => api?.cancel()}>{t('calside.cancel')}</button>
-        <button className="amx-cal-draft-save" onMouseDown={(e) => e.preventDefault()} onClick={() => api?.commit()}>{t('calside.save')}</button>
+        <button className="amx-cal-draft-save" disabled={!draft.title.trim()} onMouseDown={(e) => e.preventDefault()} onClick={() => api?.commit()}>{t('calside.save')}</button>
       </div>
     </section>
   )

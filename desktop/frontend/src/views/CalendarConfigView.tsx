@@ -56,9 +56,9 @@ registerMessages({
   'calcfg.rename': { zh: '重命名', en: 'Rename' },
   'calcfg.refreshNow': { zh: '立即刷新', en: 'Refresh now' },
   'calcfg.unsubscribe': { zh: '取消订阅', en: 'Unsubscribe' },
-  'calcfg.setDefaultDb': { zh: '设为默认库', en: 'Set as default' },
+  'calcfg.setDefaultDb': { zh: '设为默认日历', en: 'Set as default calendar' },
   'calcfg.openInNewTab': { zh: '在新标签打开', en: 'Open in new tab' },
-  'calcfg.columnMapping': { zh: '日历设置（列映射）', en: 'Calendar settings (column mapping)' },
+  'calcfg.columnMapping': { zh: '日期与完成列…', en: 'Date and done columns…' },
   'calcfg.removeFromCalendar': { zh: '从日历移除', en: 'Remove from calendar' },
   'calcfg.searchDbPlaceholder': { zh: '搜索要加入日历的多维表…', en: 'Search databases to add to the calendar…' },
   'calcfg.noCandidates': { zh: '没有含日期属性的可添加多维表', en: 'No databases with a date property available to add' },
@@ -172,6 +172,18 @@ function ConfigList() {
   const [importErr, setImportErr] = useState<string | null>(null)
   const [menu, setMenu] = useState<{ db: AggDb; kind?: 'agent' | 'other' | 'ics'; color: string; x: number; y: number } | null>(null)
   const [editing, setEditing] = useState<AggDb | null>(null) // 「Calendar 设置」改列映射
+  // Esc 收起 ⋯ / + 菜单(焦点在触发按钮上,菜单自己收不到键;走查里 Esc 没关掉,下一下点进了盖着的菜单)
+  useEffect(() => {
+    if (!menu && !addMenu) return
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key !== 'Escape') return
+      e.stopPropagation()
+      setMenu(null)
+      setAddMenu(null)
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [menu, addMenu])
 
   const memberPaths = useMemo(() => new Set(members.map((m) => m.db.path)), [members])
   const dbs: Array<{ db: AggDb; readonly?: boolean; kind?: 'agent' | 'other' | 'ics' }> = [

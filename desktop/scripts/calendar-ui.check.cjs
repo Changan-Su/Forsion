@@ -176,6 +176,7 @@ async function main() {
     ['today-task', '回复设计稿反馈', d0],
     ['sched', '订会议室', `${d1}T16:00/${d1}T16:30`],
     ['undated', '买牛奶', ''],
+    ['long', '读完《设计心理学》第三章并整理一篇读书笔记', d1], // 长标题:钉住「最长那条撑宽整列、日期出界」(走查截图 70)
   ].map(([id, name, date]) => ({ id, cells: date ? { name, date } : { name } }))
   fs.writeFileSync(TASKS_DB, `${JSON.stringify({
     version: 1,
@@ -223,13 +224,13 @@ async function main() {
       return { mini: x('.amx-mini'), cal: x('.amx-cal'), side: x('.amx-calside2'), todo: !!document.querySelector('.amx-calside2 .amx-todo'), week: document.querySelector('.amx-cal-title')?.dataset.week || '' }
     })
     check('方案 B:左栏小月历、右栏待办,标题带周数', sides.mini !== null && sides.cal !== null && sides.side !== null && sides.mini < sides.cal && sides.side > sides.cal && sides.todo && /^第 \d+ 周$/.test(sides.week), JSON.stringify(sides))
-    // 新建落点钉成「产品日历」(⋯ → 设为默认库):下面建出来的都应落在这张表里。
+    // 新建落点钉成「产品日历」(⋯ → 设为默认日历):下面建出来的都应落在这张表里。
     const evRow = win.locator('.amx-calcfg-row', { hasText: '产品日历' })
     await evRow.hover()
     await evRow.locator('.amx-calcfg-more').click()
-    await win.getByRole('button', { name: '设为默认库', exact: true }).click()
+    await win.getByRole('button', { name: '设为默认日历', exact: true }).click()
     await win.waitForTimeout(300)
-    check('日历列表:「默认」淡字跟着 ⋯ 里的设为默认库走', (await evRow.locator('.amx-calcfg-default').count()) === 1 && (await win.locator('.amx-calcfg-default').count()) === 1)
+    check('日历列表:「默认」淡字跟着 ⋯ 里的设为默认日历走', (await evRow.locator('.amx-calcfg-default').count()) === 1 && (await win.locator('.amx-calcfg-default').count()) === 1)
     // 颜色方块就是显隐开关
     await evRow.locator('.amx-calcfg-swatch').click()
     await win.waitForTimeout(300)
@@ -358,6 +359,12 @@ async function main() {
     await win.waitForTimeout(400)
     const afterAway = { draft: await hasDraft(win), rows: readRows(EVENTS_DB).length, before: eventsBefore }
     check('没写标题就点到别处 = 丢弃;这一下只用来退出,不另起草稿', !afterAway.draft && afterAway.rows === eventsBefore, JSON.stringify(afterAway))
+    await win.mouse.click(p13.x, p13.y)
+    await win.waitForSelector('.amx-cal-event.amx-cal-draft', { timeout: 3000 })
+    await win.keyboard.press('Enter')
+    await win.waitForTimeout(500)
+    const afterEnter = { draft: await hasDraft(win), rows: readRows(EVENTS_DB).length, before: eventsBefore }
+    check('没写标题直接回车 = 不建(10-16 走查:误回车留下了「新事件」)', !afterEnter.draft && afterEnter.rows === eventsBefore, JSON.stringify(afterEnter))
     const p1415 = await slotPoint(win, d1, 14 * 60 + 15)
     await win.mouse.move(p13.x, p13.y)
     await win.mouse.down()
@@ -516,6 +523,68 @@ async function main() {
     await win.keyboard.press(`${MOD}+z`)
     check('⌘Z 撤销刚才的拖动(回到原来的时刻)', await win.waitForSelector('.amx-cal-event[aria-label^="产品深度工作，09:00"]', { timeout: 5000 }).then(() => true, () => false))
     await forceZoom(win, 1)
+
+    // ── 10-16 Codex computer use 走查找到的几处 ──
+    // ① 松手那一下没送到(之后的移动报「没按键」):按松手收尾,不留淡影 / 浮着的块
+    const lost = await win.evaluate(() => {
+      const s = document.querySelector('.amx-cal-event[aria-label^="产品深度工作"]')?.getBoundingClientRect()
+      return s ? { x: s.left + s.width / 2, y: s.top + s.height / 2 } : null
+    })
+    const lostTo = await slotPoint(win, d1, 14 * 60)
+    await win.mouse.move(lost.x, lost.y)
+    await win.mouse.down()
+    await win.mouse.move(lostTo.x, lostTo.y + 10, { steps: 10 })
+    await win.evaluate(({ x, y }) => {
+      const el = document.querySelector('.amx-cal-event.dragging')
+      el?.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, pointerId: 1, pointerType: 'mouse', isPrimary: true, buttons: 0, clientX: x, clientY: y }))
+    }, { x: lostTo.x, y: lostTo.y + 30 })
+    await win.waitForTimeout(400)
+    const lostState = await win.evaluate(() => ({
+      leftovers: document.querySelectorAll('.amx-cal-event.dragging, .amx-cal-event.drag-shadow, .amx-cal-event.dup-src').length,
+      label: document.querySelector('.amx-cal-event[aria-label^="产品深度工作"]')?.getAttribute('aria-label') ?? '',
+    }))
+    await win.mouse.up()
+    check('拖动中松手丢了:下一次移动按松手收尾,不留淡影 / 浮块(走查截图 67 的样子)', lostState.leftovers === 0 && !/，09:00/.test(lostState.label), JSON.stringify(lostState))
+    await win.keyboard.press(`${MOD}+z`)
+    await win.waitForSelector('.amx-cal-event[aria-label^="产品深度工作，09:00"]', { timeout: 5000 }).catch(() => {})
+    // ② 1200 宽的窗口(两侧栏都开着):「周」仍是 7 列,按钮写「周」;右栏待办不横向溢出(日期没被截)
+    await win.setViewportSize({ width: 1200, height: 820 })
+    await win.waitForTimeout(900)
+    const w1200 = await win.evaluate(() => {
+      const todo = document.querySelector('.amx-calside2 .amx-todo')
+      const side = document.querySelector('.amx-calside2')?.getBoundingClientRect()
+      const dues = [...document.querySelectorAll('.amx-calside2 .amx-todo-due')].map((e) => e.getBoundingClientRect().right)
+      return {
+        // 时间格是一条连续横向滚动的长带(几百天都在 DOM 里):数「完整落在可视区里的」列
+        cols: (() => { const v = document.querySelector('.amx-cal-tscroll')?.getBoundingClientRect(); return v ? [...document.querySelectorAll('.amx-cal-daycol2')].filter((c) => { const r = c.getBoundingClientRect(); return r.left >= v.left - 1 && r.right <= v.right + 1 }).length : -1 })(),
+        colW: Math.round(document.querySelector('.amx-cal-daycol2')?.getBoundingClientRect().width ?? 0),
+        modeBtn: [...document.querySelectorAll('.amx-cal-bar button')].map((b) => b.textContent?.trim() ?? '').find((x) => /^(周|3 日|日|月)$/.test(x)) ?? '',
+        todoOverflow: todo ? todo.scrollWidth - todo.clientWidth : -1,
+        dueOut: side ? dues.filter((r) => r > side.right - 4).length : -1,
+      }
+    })
+    check('1200 宽:「周」显示 7 列且列宽 ≥ 84,按钮写「周」', w1200.cols === 7 && w1200.colW >= 84 && w1200.modeBtn.startsWith('周'), JSON.stringify(w1200))
+    check('1200 宽:右栏待办不横向溢出,日期不被截', w1200.todoOverflow <= 1 && w1200.dueOut === 0, JSON.stringify(w1200))
+    // ③ 左栏 ⋯ 菜单 Esc 能收起
+    await win.locator('.amx-calcfg-row', { hasText: '产品日历' }).locator('.amx-calcfg-more').click()
+    const menuOpen = await win.locator('.amx-calcfg-menu').count()
+    await win.keyboard.press('Escape')
+    await win.waitForTimeout(200)
+    check('日历列表 ⋯ 菜单按 Esc 收起', menuOpen === 1 && (await win.locator('.amx-calcfg-menu').count()) === 0, `open=${menuOpen}`)
+    // ④ 点过小月历(焦点在左栏)后,T 照样回今天
+    await win.locator('.amx-mini-nav').nth(1).click()
+    await win.locator('.amx-mini-day:not(.out)').nth(14).click()
+    await win.waitForTimeout(500)
+    const todayVisible = (iso) => win.evaluate((iso) => {
+      const v = document.querySelector('.amx-cal-tscroll')?.getBoundingClientRect()
+      const c = document.querySelector(`.amx-cal-daycol2[data-date="${iso}"]`)?.getBoundingClientRect()
+      return !!v && !!c && c.left >= v.left - 1 && c.right <= v.right + 1
+    }, iso)
+    const awayToday = !(await todayVisible(d0))
+    await win.keyboard.press('t')
+    await win.waitForTimeout(600)
+    const backToday = await todayVisible(d0)
+    check('点过小月历后按 T 回到今天(不用先点一下日历)', awayToday && backToday, JSON.stringify({ awayToday, backToday }))
 
     await win.setViewportSize({ width: 1100, height: 800 })
     await win.waitForTimeout(900)
