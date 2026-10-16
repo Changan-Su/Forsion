@@ -290,6 +290,22 @@ async function main() {
     await win.waitForSelector('.amx-cal-tscroll', { timeout: 5000 })
     await captureWindow(app, path.join(SHOTS, 'calendar.png'))
 
+    // G 「祖先 :has」那 6 条改写后行为不变(10-16:frontend/astryxHasPlugin.ts;改前改后各跑一次,结果应一样)。
+    //   CheckboxInput 是真组件(待办栏):键盘聚焦 → 方框 2px 实线描边、偏移 2px;失焦 → 无。
+    //   本应用没用到的 Switch / Layout 见 scripts/astryx-has.check.cjs(裸 Chromium 里原 / 改写逐项比)。
+    const cb = win.locator('.amx-todo .astryx-checkbox').first()
+    await cb.evaluate((b) => b.previousElementSibling.focus())
+    await win.keyboard.press('Shift+Tab')
+    await win.keyboard.press('Tab')
+    const ring = (sel) => win.evaluate((s) => { const b = document.querySelector(s); const cs = getComputedStyle(b); return { fv: b.previousElementSibling.matches(':focus-visible'), ring: `${cs.outlineStyle} ${cs.outlineWidth} ${cs.outlineOffset}` } }, sel)
+    const on = await ring('.amx-todo .astryx-checkbox')
+    check('G 待办勾选框键盘聚焦:方框 solid 2px、偏移 2px', on.fv && on.ring === 'solid 2px 2px', JSON.stringify(on))
+    const bb = await cb.boundingBox() // 焦点环在方框外(偏移 2px),截图要留边;带上右边的待办名好认
+    await win.screenshot({ path: path.join(SHOTS, 'checkbox-focus.png'), clip: { x: bb.x - 12, y: bb.y - 12, width: bb.width + 160, height: bb.height + 24 } })
+    await win.evaluate(() => document.activeElement?.blur())
+    const off = await ring('.amx-todo .astryx-checkbox')
+    check('G 待办勾选框失焦:无描边', off.ring.startsWith('none'), JSON.stringify(off))
+
     // ② 设置浮窗:独立文档,不该有运行时样式;顺便借它的 broadcastUi 走真跨窗通道切明暗 / 主题语言(syncFromWindow → AstryxScope 重跑)。
     await win.evaluate(() => window.tangu.openFloatingPanel({ id: 'settings', title: 'Settings', builtin: 'settings', params: { tab: 'appearance', n: Date.now() } }))
     let settings = null

@@ -11,22 +11,18 @@
 // **锚点小也不行**(10-16 桌面实测推翻了 10-11 的「三两个后代不必改」):Blink 把所有「`:has` 不在最后一段」的规则的结尾
 // 合成一份失效清单,一条结尾是通配,页面上**每个**被这类 `:has` 牵动的元素(包括别的规则挂在大容器上的)都按「整棵子树」失效。
 // 锚点在页面上根本不存在的 `.nope:has(.x) > *` 照样让 60 条消息的对话每插入 + 移除一次多花 18ms(同一条结尾点名类就是 0.6ms)。
+// `:is()` / `:where()` 里面是完整的选择器,同样算:StyleX 的 `when.ancestor(':has(…)')` 生成 `.x.x:where(.m:has(…) *)`,结尾是里面那个 `*`。
+// 依赖库的 CSS 也扫(DEPS):astryx 那 6 条由 frontend/astryxHasPlugin.ts 在构建时改写(10-16),这里钉住改写后一条不剩。
 // 仪器:desktop 的 `node scripts/insert-restyle.probe.cjs`(真 Electron,逐条找出让插入变贵的规则,含依赖库生成的 CSS);
 // mobile 的 `npm run emu:perf`(`MODE=exp` 可以量「插入一个元素要多久」)。
 import { describe, expect, it } from 'vitest'
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import { join, relative } from 'node:path'
+import { rewriteAstryxHas } from '../astryxHasPlugin'
 
 const GENESIS = join(__dirname, '../../..')
 const ROOTS = ['desktop/frontend/src', 'lcl', 'mobile/src', 'web/src']
-/** 形状命中、还没改掉的(欠账,不是豁免):每一条单独都让整页每次插入多付一次重算(10-16 实测,见上)。只减不加。 */
-const KNOWN = new Set([
-  // 侧栏行的前导槽 .t2s-lead:一个图标加一个箭头。图标来自各处(lucide、插件自带、emoji),没有共同的类可点名 ——
-  // 改法是让渲染 .t2s-lead 的代码在有箭头时写一个类,结尾改成不带 :has 的 `.t2s-lead--chev > :not(.t2s-lead-chev)`。
-  ':is(.t2s-side, .t2sw-plug) .t2s-srow:hover .t2s-lead:has(.t2s-lead-chev) > :not(.t2s-lead-chev)',
-  ':is(.t2s-side, .t2sw-plug) .t2s-folder-row:hover .t2s-lead:has(.t2s-lead-chev) > :not(.t2s-lead-chev)',
-])
-
 const splitTop = (s: string, isSep: (c: string) => boolean): string[] => {
   const out: string[] = []
   let depth = 0, cur = ''
@@ -39,11 +35,19 @@ const splitTop = (s: string, isSep: (c: string) => boolean): string[] => {
   out.push(cur)
   return out
 }
+/** `:is(` / `:where(` 的参数(到配对的右括号为止)。 */
+const logicalArgs = (s: string): string[] => [...s.matchAll(/:(?:is|where)\(/g)].map((m) => {
+  let depth = 1, j = (m.index ?? 0) + m[0].length
+  const from = j
+  for (; j < s.length && depth; j++) { if (s[j] === '(') depth++; else if (s[j] === ')') depth-- }
+  return s.slice(from, j - 1)
+})
 const outsideParens = (s: string): string => { let out = '', depth = 0; for (const c of s) { if (c === '(') depth++; else if (c === ')') depth--; else if (depth === 0) out += c } return out }
 
 /** 一条选择器(不含逗号):`:has(` 出现在最后一段之前,且最后一段没有类 / id / 属性 / 标签可认。 */
 export function broadAfterHas(selector: string): boolean {
   const sel = selector.replace(/::[\w-]+(\([^)]*\))?/g, '').trim()
+  if (logicalArgs(sel).some((arg) => arg.includes(':has(') && splitTop(arg, (c) => c === ',').some(broadAfterHas))) return true
   const compounds = splitTop(sel.replace(/\s*([>+~])\s*/g, ' $1 '), (c) => c === ' ').map((x) => x.trim()).filter((x) => x && !/^[>+~]$/.test(x))
   if (compounds.length < 2 || !compounds.slice(0, -1).some((c) => c.includes(':has('))) return false
   // :is(.a, .b) / :where(.a) 认它的参数;:not(…) 什么也认不了
@@ -78,6 +82,9 @@ describe(':has() 后面不许接没有类名可认的结尾', () => {
     expect(broadAfterHas('.t2-stream-inner:has(> .t2-asst, > .t2-userwrap) > :first-child')).toBe(true)
     expect(broadAfterHas('.wb-extend-owner:has(> .wb-extend-inline) > :not(.wb-extend-inline)')).toBe(true)
     expect(broadAfterHas('.a:has(.b) *')).toBe(true)
+    expect(broadAfterHas('.xkri23q.xkri23q:where(.x1tspnpo:has(:focus-visible) *):not(#\\#)')).toBe(true) // StyleX when.ancestor
+    expect(broadAfterHas(':is(.t2s-side, .t2sw-plug) .t2s-srow:hover .t2s-lead > :has(~ .t2s-lead-chev)')).toBe(false)
+    expect(broadAfterHas('.x.x:where(.m:has(.y) .x)')).toBe(false)
     expect(broadAfterHas('.t2-stream-inner[data-has-messages] > :first-child')).toBe(false) // 没有 :has
     expect(broadAfterHas('.wb-extend-owner:has(> .wb-view--right) > .wb-extend-inline')).toBe(false) // 结尾有类名
     expect(broadAfterHas('.lead:has(.chev) > :is(.icon, .emoji)')).toBe(false) // :is(…) 认它的参数
@@ -86,7 +93,7 @@ describe(':has() 后面不许接没有类名可认的结尾', () => {
     expect(broadHasSelectors('/* .a:has(.b) > * */\n.x, .a:has(.b) > :last-child { color: red }')).toEqual([{ line: 2, selector: '.a:has(.b) > :last-child' }])
   })
 
-  it('源码里没有(还没改掉的几条见 KNOWN)', () => {
+  it('源码里没有', () => {
     const hits: string[] = []
     let scanned = 0
     for (const root of ROOTS) {
@@ -94,10 +101,16 @@ describe(':has() 后面不许接没有类名可认的结尾', () => {
       if (!existsSync(dir)) continue
       for (const file of cssFiles(dir)) {
         scanned++
-        for (const h of broadHasSelectors(readFileSync(file, 'utf8'))) if (!KNOWN.has(h.selector)) hits.push(`${relative(GENESIS, file)}:${h.line}  ${h.selector}`)
+        for (const h of broadHasSelectors(readFileSync(file, 'utf8'))) hits.push(`${relative(GENESIS, file)}:${h.line}  ${h.selector}`)
       }
     }
     expect(scanned).toBeGreaterThan(50) // 一个文件都没扫到 = 路径算错了,不是真干净
     expect(hits).toEqual([])
+  })
+
+  it('依赖库:astryx 原件里那 6 条抓得到,构建时改写之后一条不剩', () => {
+    const css = readFileSync(createRequire(import.meta.url).resolve('@astryxdesign/core/astryx.css'), 'utf8')
+    expect(broadHasSelectors(css)).toHaveLength(6) // 升级 astryx 后数变了:先看新来的是什么形状,别直接改数
+    expect(broadHasSelectors(rewriteAstryxHas(css))).toEqual([])
   })
 })
