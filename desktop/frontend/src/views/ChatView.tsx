@@ -22,7 +22,7 @@ import { amadeusAvailable } from '../features/runtime'
 import { resolveDeskPath } from '../stores/deskPlan'
 import { useDeskAcceptsFiles } from '../amadeus/plugins/deskCompanion'
 import { ErrorBoundary } from '../components/ErrorBoundary'
-import { EditorialMessage } from './chat2/EditorialMessage'
+import { EditorialMessage, type MessageHandlers } from './chat2/EditorialMessage'
 import { ApprovalTray } from './chat2/ApprovalTray'
 import { APPROVAL_UPDATE_OPEN, pendingPromptsOf } from './chat2/approvalQueue'
 import { RunStatsLine } from './chat2/RunStatsLine'
@@ -37,7 +37,7 @@ import { useApp, stickyDefaults, activeChatModelId, withAmadeusWorkspace, applyP
 import { settleModes } from '../stores/projectSettings'
 import { currentPlatform } from '../services/agentRunService'
 import { hasChatRef, readChatRefs } from './chat2/chatDragRef'
-import { useWorkspace, useSpaceStore, UI_MODE, Skeleton, useNativeChromeInstalled } from '@lcl/engine'
+import { useWorkspace, useSpaceStore, UI_MODE, Skeleton, scrollToElement, cancelScrollToElement } from '@lcl/engine'
 import { useTailFirst } from './chat2/useTailFirst'
 import { AgentDesk, DeskCard, useDeskHome } from './chat2/AgentDesk'
 import { HistorianStatus } from './chat2/HistorianStatus'
@@ -211,9 +211,9 @@ export function ChatView({ leaf, params }: ViewProps) {
   const activeCtxInfo = s.activeCtxInfo && (!s.activeCtxInfo.modelId || !activeModel || s.activeCtxInfo.modelId === activeModel.id) ? s.activeCtxInfo : null
   const activeUsage = s.activeUsage
   const activeMessages = s.activeMessages
-  // 画到流里的那一段(手机上先是末尾几条,见 useTailFirst);数据层的判断一律仍看 activeMessages。
-  const phoneShell = useNativeChromeInstalled()
-  const shownMessages = useTailFirst(activeMessages, activeId || null, phoneShell && s.jumpTarget?.sessionId !== activeId)
+  // 画到流里的那一段(长会话先是末尾几条、空闲时往上补,见 useTailFirst;桌面与网页 10-16 起也这样,原来只有手机);
+  // 数据层的判断一律仍看 activeMessages。要跳到某条消息(搜索命中)时整段挂。
+  const shownMessages = useTailFirst(activeMessages, activeId || null, s.jumpTarget?.sessionId !== activeId)
   const pendingApprovals = useMemo(() => pendingPromptsOf(activeMessages), [activeMessages])
   const running = s.running
   const execConfig = s.execConfig
@@ -351,9 +351,8 @@ export function ChatView({ leaf, params }: ViewProps) {
     }
     const root = chatScrollRef.current
     if (root) {
-      const top = el.getBoundingClientRect().top - root.getBoundingClientRect().top + root.scrollTop
-      root.scrollTo({ top: Math.max(0, top - 24), behavior: 'smooth' })
       stickToBottom.current = false
+      scrollToElement(root, el, 24) // 落地后再量再补:上面的消息带 content-visibility,进视口才量出真实高度
     }
     el.classList.add('t2-jump-flash')
     const timer = window.setTimeout(() => el.classList.remove('t2-jump-flash'), 1600)
@@ -365,6 +364,7 @@ export function ChatView({ leaf, params }: ViewProps) {
   const scrollToBottom = useCallback((smooth = false): void => {
     const el = chatScrollRef.current
     if (!el) return
+    cancelScrollToElement(el) // 刚点过目录 / 搜索跳转:那边落地后的补正不许再把人拉回去
     el.scrollTo({ top: el.scrollHeight, behavior: smooth ? 'smooth' : 'auto' })
     stickToBottom.current = true
     setShowJump(false)
@@ -382,12 +382,17 @@ export function ChatView({ leaf, params }: ViewProps) {
     if (!el || !content) return
     let raf = 0
     let previousTop = el.scrollTop
+    let previousMax = el.scrollHeight - el.clientHeight
     let pointerDown = false
     const update = (): void => {
       const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40
+      const max = el.scrollHeight - el.clientHeight
       if (atBottom) stickToBottom.current = true
-      else if (pointerDown && el.scrollTop < previousTop) stickToBottom.current = false
+      // 往上挪了、可滚的最大距离却没变小(变小 = 布局把位置夹下来,不算):目录跳转这类程序滚动也松开。
+      // 消息带 content-visibility,往上一滚,刚进视口的才量出真实高度 → 内容变高 → 不松开就被 follow 拽回底部(10-16 实测)
+      else if (el.scrollTop < previousTop && (pointerDown || max >= previousMax)) stickToBottom.current = false
       previousTop = el.scrollTop
+      previousMax = max
       setShowJump(!atBottom && !stickToBottom.current)
     }
     const release = (): void => { stickToBottom.current = false; setShowJump(true) }
@@ -450,6 +455,37 @@ export function ChatView({ leaf, params }: ViewProps) {
   }
   const startEdit = (id: string, content: string): void => { setEditingId(id); setEditText(content) }
   const saveEdit = (): void => { if (editingId && editText.trim()) { s.editUserMessage(editingId, editText.trim(), activeId) } setEditingId(null) }
+
+  // 传给每条消息的对象要稳住,EditorialMessage 的 memo 才挡得住「流式每来一段字,整段对话的消息都重渲一遍」。
+  // handlers 按「会话 + 哪几个按钮在」整组缓存、组里按消息 id 各一份;函数体经 handlerEnv 取当下的值(提交后才会被点到),不会拿到旧闭包。
+  const handlerEnv = useRef({ s, activeId, activeMessages, copy, speak, startEdit })
+  useLayoutEffect(() => { handlerEnv.current = { s, activeId, activeMessages, copy, speak, startEdit } })
+  const readOnly = !!params.readOnly
+  const childSurface = !!params.childSurface
+  const canInsertNote = amadeusAvailable()
+  const handlerCache = useMemo(() => new Map<string, MessageHandlers>(), [activeId, readOnly, childSurface, canInsertNote, ttsEnabled])
+  const handlersFor = (id: string): MessageHandlers => {
+    const hit = handlerCache.get(id)
+    if (hit) return hit
+    const env = (): typeof handlerEnv.current => handlerEnv.current
+    const h: MessageHandlers = {
+      onCopy: (text) => env().copy(text),
+      onRegenerate: readOnly ? undefined : () => env().s.regenerate(id, env().activeId),
+      onBranch: childSurface ? undefined : () => void env().s.branchFromMessage(id, env().activeId),
+      onEdit: readOnly ? undefined : () => env().startEdit(id, env().activeMessages.find((m) => m.id === id)?.content ?? ''),
+      onRewind: readOnly ? undefined : (mode) => void env().s.rewindTo(id, mode, env().activeId),
+      // 建议芯片 = 用户自己把这句话打进去按了回车(运行中则落进 steer 等待区)。
+      onSuggest: readOnly ? undefined : (text) => void env().s.send(text, [], undefined, undefined, undefined, env().activeId),
+      onTask: (card, landing) => runTaskCard(card, landing, env().activeId),
+      // 回答插回笔记(G3-08):由「问 Tangu」发起的对话优先插回出处那篇;宿主没有 Amadeus 编辑能力就不出按钮。
+      onInsertNote: canInsertNote ? (text) => void insertReplyToNote(text, askOriginOf(env().activeMessages, id)) : undefined,
+      ...(ttsEnabled ? { onSpeak: (text: string) => env().speak(id, text) } : {}),
+    }
+    handlerCache.set(id, h)
+    return h
+  }
+  const fileCtx = useMemo(() => ({ cfg: s.cfg, sessionId: activeId || '', execMode: mvCfg.execMode, onOpenPreview: s.setFilePreview }), [s.cfg, activeId, mvCfg.execMode, s.setFilePreview])
+  const voice = useMemo(() => (ttsEnabled ? { on: voiceOn, cfg: s.cfg, stored: s.desktopConfig } : undefined), [ttsEnabled, voiceOn, s.cfg, s.desktopConfig])
 
   const hasMessages = activeMessages.length > 0
   // 输入卡上方那一栏的两半(JSX 在 .composer-anchor 里):项目那半只在空白新对话上;开场那半还包括已建好但没发过消息的会话。
@@ -575,24 +611,11 @@ export function ChatView({ leaf, params }: ViewProps) {
                     agentNameFallback={chatAgentName}
                     userName={userName}
                     userAvatar={userAvatar}
-                    fileCtx={{ cfg: s.cfg, sessionId: activeId || '', execMode: mvCfg.execMode, onOpenPreview: s.setFilePreview }}
+                    fileCtx={fileCtx}
                     modelId={mvModelId}
                     speakState={tts?.msgId === m.id ? tts.phase : undefined}
-                    voice={ttsEnabled ? { on: voiceOn, cfg: s.cfg, stored: s.desktopConfig } : undefined}
-                    handlers={{
-                      onCopy: copy,
-                      onRegenerate: params.readOnly ? undefined : () => s.regenerate(m.id, activeId),
-                      onBranch: params.childSurface ? undefined : () => void s.branchFromMessage(m.id, activeId),
-                      onEdit: params.readOnly ? undefined : () => startEdit(m.id, m.content),
-                      onRewind: params.readOnly ? undefined : (mode) => void s.rewindTo(m.id, mode, activeId),
-                      // 建议芯片 = 用户自己把这句话打进去按了回车(运行中则落进 steer 等待区)。
-                      onSuggest: params.readOnly ? undefined : (text) => void s.send(text, [], undefined, undefined, undefined, activeId),
-                      onTask: (card, landing) => runTaskCard(card, landing, activeId),
-                      // 回答插回笔记(G3-08):由「问 Tangu」发起的对话优先插回出处那篇;宿主没有 Amadeus 编辑能力就不出按钮。
-                      onInsertNote: amadeusAvailable() ? (text) => void insertReplyToNote(text, askOriginOf(activeMessages, m.id)) : undefined,
-
-                      ...(ttsEnabled ? { onSpeak: (text) => speak(m.id, text) } : {}),
-                    }}
+                    voice={voice}
+                    handlers={handlersFor(m.id)}
                   />
                 )
               })

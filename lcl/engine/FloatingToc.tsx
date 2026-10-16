@@ -55,7 +55,9 @@ export interface FloatingTocProps extends FloatingTocOptions {
   scrollContainer: FloatingTocElementSource
   /** Defaults to the scroll container. */
   contentRoot?: FloatingTocElementSource
-  /** Optional explicit invalidation; MutationObserver already covers ordinary DOM/text changes. */
+  /** Optional explicit invalidation; MutationObserver already covers ordinary DOM/text changes
+   *  (the first change after a quiet spell rescans on the next frame, later ones at most every 500 ms;
+   *  changes inside `[data-lcl-toc-ignore]` subtrees, e.g. lazily mounted code or embeds, never do). */
   scanTrigger?: unknown
   /** Height of sticky chrome covering the top of the scroll container (read at use time), added to
    *  `topOffset` for both the jump target and the active-section line. Pass a stable function. */
@@ -100,6 +102,66 @@ function sameItems(a: ResolvedItem[], b: ResolvedItem[]): boolean {
   })
 }
 
+/** Rescans while content keeps changing (streaming, typing) are spaced this far apart. */
+const SCAN_SPACING_MS = 500
+
+const ignoredMutation = (record: MutationRecord): boolean => {
+  const node = record.target
+  const el = node.nodeType === Node.ELEMENT_NODE ? node as Element : node.parentElement
+  return !!el?.closest('[data-lcl-toc-ignore]')
+}
+
+/** The element to measure for `target`. Reading the box of something inside a subtree that
+ *  `content-visibility: auto` is skipping forces the browser to lay that whole subtree out, which undoes
+ *  the skipping on every scroll frame. Such a subtree is far from the viewport, so measuring its nearest
+ *  unskipped ancestor is precise enough to tell above from below the probe line. */
+function measurable(target: HTMLElement): HTMLElement {
+  if (target.checkVisibility?.({ contentVisibilityAuto: true }) !== false) return target
+  let el = target.parentElement
+  while (el && !el.checkVisibility({ contentVisibilityAuto: true })) el = el.parentElement
+  return el ?? target
+}
+
+/** The pending scrollToElement correction per scroll root: one at a time, the newer jump wins. */
+const settling = new WeakMap<Element, () => void>()
+
+/** Stops a pending scrollToElement correction on `root`. */
+export function cancelScrollToElement(root: Element): void {
+  settling.get(root)?.()
+}
+
+/** Smoothly scrolls `root` so `target` sits `offset` px below its top, then re-measures once scrolling settles and
+ *  corrects (up to 3 times). Blocks skipped by `content-visibility: auto` only get their real height in the frame they
+ *  come near the viewport, which pushes the target away, and scroll anchoring has no anchor to compensate with then
+ *  (a long chat landed 850 px off). Stops as soon as the user scrolls, clicks or types, or another jump on the same
+ *  root starts; call `cancelScrollToElement(root)` before scrolling `root` somewhere else yourself. */
+export function scrollToElement(root: Element, target: Element, offset = 0): void {
+  cancelScrollToElement(root)
+  const delta = (): number => target.getBoundingClientRect().top - root.getBoundingClientRect().top - offset
+  root.scrollTo({ top: Math.max(0, root.scrollTop + delta()), behavior: 'smooth' })
+  let user = false, tries = 0, frames = 0, still = 0, last = -1
+  const stop = (): void => { user = true }
+  const events = ['wheel', 'pointerdown', 'touchstart', 'keydown'] as const
+  for (const e of events) root.addEventListener(e, stop, { passive: true })
+  settling.set(root, stop)
+  const done = (): void => {
+    for (const e of events) root.removeEventListener(e, stop)
+    if (settling.get(root) === stop) settling.delete(root)
+  }
+  const tick = (): void => {
+    if (user || !target.isConnected || ++frames > 240) return done()
+    if (root.scrollTop !== last) { last = root.scrollTop; still = 0 } // smooth scroll still moving
+    else if (++still >= 2) {
+      const d = delta()
+      if (Math.abs(d) <= 2 || tries++ >= 3) return done()
+      root.scrollBy({ top: d })
+      still = 0
+    }
+    requestAnimationFrame(tick)
+  }
+  requestAnimationFrame(tick)
+}
+
 export function FloatingToc({
   scrollContainer,
   contentRoot,
@@ -123,20 +185,17 @@ export function FloatingToc({
   const keys = useRef(new WeakMap<HTMLElement, string>())
   const nextKey = useRef(0)
 
-  const scan = useCallback(() => {
+  /** The current items, or null when there is no root / the selector is invalid. */
+  const collect = useCallback((): ResolvedItem[] | null => {
     const scroller = resolveElement(scrollContainer)
     const root = resolveElement(contentRoot) ?? scroller
-    if (!root) {
-      setItems((prev) => (prev.length ? [] : prev))
-      return
-    }
+    if (!root) return null
     let nodes: NodeListOf<HTMLElement>
     try {
       nodes = root.querySelectorAll<HTMLElement>(selector)
     } catch (error) {
       console.error(`[lcl] FloatingToc ignored invalid selector "${selector}"`, error)
-      setItems((prev) => (prev.length ? [] : prev))
-      return
+      return null
     }
     const list: ResolvedItem[] = []
     nodes.forEach((node, index) => {
@@ -162,22 +221,36 @@ export function FloatingToc({
         level: Number.isFinite(level) ? Math.max(0, Math.min(6, Math.round(level))) : 1,
       })
     })
-    setItems((prev) => (sameItems(prev, list) ? prev : list))
+    return list
   }, [contentRoot, itemFromElement, scrollContainer, selector])
+
+  const scan = useCallback(() => {
+    const list = collect()
+    setItems((prev) => (list ? (sameItems(prev, list) ? prev : list) : (prev.length ? [] : prev)))
+  }, [collect])
 
   useEffect(() => {
     scan()
     const scroller = resolveElement(scrollContainer)
     const root = resolveElement(contentRoot) ?? scroller
     if (!root || typeof MutationObserver === 'undefined') return
+    // Rescanning walks every heading of the document, so doing it on every streamed token or keystroke grows
+    // with the document. A change after a quiet spell still rescans on the next frame (switching sessions,
+    // a new message); further changes are folded into one rescan per SCAN_SPACING_MS.
     let frame = 0
-    const observer = new MutationObserver(() => {
-      cancelAnimationFrame(frame)
-      frame = requestAnimationFrame(scan)
+    let timer = 0
+    let lastScan = 0
+    const run = (): void => { frame = 0; lastScan = performance.now(); scan() }
+    const observer = new MutationObserver((records) => {
+      if (frame || timer || records.every(ignoredMutation)) return
+      const wait = lastScan + SCAN_SPACING_MS - performance.now()
+      if (wait <= 0) frame = requestAnimationFrame(run)
+      else timer = window.setTimeout(() => { timer = 0; frame = requestAnimationFrame(run) }, wait)
     })
     observer.observe(root, { childList: true, subtree: true, characterData: true })
     return () => {
       cancelAnimationFrame(frame)
+      window.clearTimeout(timer)
       observer.disconnect()
     }
   }, [contentRoot, scan, scanTrigger, scrollContainer])
@@ -208,7 +281,7 @@ export function FloatingToc({
       let active = items[0]
       for (const item of items) {
         if (!item.target.isConnected || !root.contains(item.target)) continue
-        if (item.target.getBoundingClientRect().top <= line) active = item
+        if (measurable(item.target).getBoundingClientRect().top <= line) active = item
         else break
       }
       setActiveKey(active?.key ?? null)
@@ -235,12 +308,20 @@ export function FloatingToc({
     if (!root) return
     if (item.onSelect) {
       try { item.onSelect() } catch (error) { console.error('[lcl] FloatingToc navigation failed', error) }
-    } else if (root.contains(item.target)) {
-      const top = item.target.getBoundingClientRect().top - root.getBoundingClientRect().top + root.scrollTop
-      root.scrollTo({ top: Math.max(0, top - topOffset - (topInset?.(root) ?? 0)), behavior: 'smooth' })
+    } else {
+      // Rescans are spaced (SCAN_SPACING_MS), so an editor may have redrawn this heading since: take the
+      // current node at the same position (or with the same text and level) instead of the detached one.
+      let target: HTMLElement | undefined = item.target
+      if (!target.isConnected) {
+        const fresh = collect() ?? []
+        const at = fresh[items.indexOf(item)]
+        target = (at?.text === item.text ? at : fresh.find((x) => x.text === item.text && x.level === item.level))?.target
+        scan()
+      }
+      if (target && root.contains(target)) scrollToElement(root, target, topOffset + (topInset?.(root) ?? 0))
     }
     setActiveKey(item.key)
-  }, [scrollContainer, topOffset, topInset])
+  }, [collect, items, scan, scrollContainer, topOffset, topInset])
 
   const enter = (): void => {
     if (hoverTimer.current != null) window.clearTimeout(hoverTimer.current)
