@@ -37,7 +37,7 @@ import { useApp, stickyDefaults, activeChatModelId, withAmadeusWorkspace, applyP
 import { settleModes } from '../stores/projectSettings'
 import { currentPlatform } from '../services/agentRunService'
 import { hasChatRef, readChatRefs } from './chat2/chatDragRef'
-import { useWorkspace, useSpaceStore, UI_MODE, Skeleton, scrollToElement } from '@lcl/engine'
+import { useWorkspace, useSpaceStore, UI_MODE, Skeleton, scrollToElement, cancelScrollToElement } from '@lcl/engine'
 import { useTailFirst } from './chat2/useTailFirst'
 import { AgentDesk, DeskCard, useDeskHome } from './chat2/AgentDesk'
 import { HistorianStatus } from './chat2/HistorianStatus'
@@ -364,6 +364,7 @@ export function ChatView({ leaf, params }: ViewProps) {
   const scrollToBottom = useCallback((smooth = false): void => {
     const el = chatScrollRef.current
     if (!el) return
+    cancelScrollToElement(el) // 刚点过目录 / 搜索跳转:那边落地后的补正不许再把人拉回去
     el.scrollTo({ top: el.scrollHeight, behavior: smooth ? 'smooth' : 'auto' })
     stickToBottom.current = true
     setShowJump(false)

@@ -122,18 +122,32 @@ function measurable(target: HTMLElement): HTMLElement {
   return el ?? target
 }
 
+/** The pending scrollToElement correction per scroll root: one at a time, the newer jump wins. */
+const settling = new WeakMap<Element, () => void>()
+
+/** Stops a pending scrollToElement correction on `root`. */
+export function cancelScrollToElement(root: Element): void {
+  settling.get(root)?.()
+}
+
 /** Smoothly scrolls `root` so `target` sits `offset` px below its top, then re-measures once scrolling settles and
  *  corrects (up to 3 times). Blocks skipped by `content-visibility: auto` only get their real height in the frame they
  *  come near the viewport, which pushes the target away, and scroll anchoring has no anchor to compensate with then
- *  (a long chat landed 850 px off). Stops as soon as the user scrolls, clicks or types. */
+ *  (a long chat landed 850 px off). Stops as soon as the user scrolls, clicks or types, or another jump on the same
+ *  root starts; call `cancelScrollToElement(root)` before scrolling `root` somewhere else yourself. */
 export function scrollToElement(root: Element, target: Element, offset = 0): void {
+  cancelScrollToElement(root)
   const delta = (): number => target.getBoundingClientRect().top - root.getBoundingClientRect().top - offset
   root.scrollTo({ top: Math.max(0, root.scrollTop + delta()), behavior: 'smooth' })
   let user = false, tries = 0, frames = 0, still = 0, last = -1
   const stop = (): void => { user = true }
   const events = ['wheel', 'pointerdown', 'touchstart', 'keydown'] as const
   for (const e of events) root.addEventListener(e, stop, { passive: true })
-  const done = (): void => { for (const e of events) root.removeEventListener(e, stop) }
+  settling.set(root, stop)
+  const done = (): void => {
+    for (const e of events) root.removeEventListener(e, stop)
+    if (settling.get(root) === stop) settling.delete(root)
+  }
   const tick = (): void => {
     if (user || !target.isConnected || ++frames > 240) return done()
     if (root.scrollTop !== last) { last = root.scrollTop; still = 0 } // smooth scroll still moving
@@ -171,20 +185,17 @@ export function FloatingToc({
   const keys = useRef(new WeakMap<HTMLElement, string>())
   const nextKey = useRef(0)
 
-  const scan = useCallback(() => {
+  /** The current items, or null when there is no root / the selector is invalid. */
+  const collect = useCallback((): ResolvedItem[] | null => {
     const scroller = resolveElement(scrollContainer)
     const root = resolveElement(contentRoot) ?? scroller
-    if (!root) {
-      setItems((prev) => (prev.length ? [] : prev))
-      return
-    }
+    if (!root) return null
     let nodes: NodeListOf<HTMLElement>
     try {
       nodes = root.querySelectorAll<HTMLElement>(selector)
     } catch (error) {
       console.error(`[lcl] FloatingToc ignored invalid selector "${selector}"`, error)
-      setItems((prev) => (prev.length ? [] : prev))
-      return
+      return null
     }
     const list: ResolvedItem[] = []
     nodes.forEach((node, index) => {
@@ -210,8 +221,13 @@ export function FloatingToc({
         level: Number.isFinite(level) ? Math.max(0, Math.min(6, Math.round(level))) : 1,
       })
     })
-    setItems((prev) => (sameItems(prev, list) ? prev : list))
+    return list
   }, [contentRoot, itemFromElement, scrollContainer, selector])
+
+  const scan = useCallback(() => {
+    const list = collect()
+    setItems((prev) => (list ? (sameItems(prev, list) ? prev : list) : (prev.length ? [] : prev)))
+  }, [collect])
 
   useEffect(() => {
     scan()
@@ -292,11 +308,20 @@ export function FloatingToc({
     if (!root) return
     if (item.onSelect) {
       try { item.onSelect() } catch (error) { console.error('[lcl] FloatingToc navigation failed', error) }
-    } else if (root.contains(item.target)) {
-      scrollToElement(root, item.target, topOffset + (topInset?.(root) ?? 0))
+    } else {
+      // Rescans are spaced (SCAN_SPACING_MS), so an editor may have redrawn this heading since: take the
+      // current node at the same position (or with the same text and level) instead of the detached one.
+      let target: HTMLElement | undefined = item.target
+      if (!target.isConnected) {
+        const fresh = collect() ?? []
+        const at = fresh[items.indexOf(item)]
+        target = (at?.text === item.text ? at : fresh.find((x) => x.text === item.text && x.level === item.level))?.target
+        scan()
+      }
+      if (target && root.contains(target)) scrollToElement(root, target, topOffset + (topInset?.(root) ?? 0))
     }
     setActiveKey(item.key)
-  }, [scrollContainer, topOffset, topInset])
+  }, [collect, items, scan, scrollContainer, topOffset, topInset])
 
   const enter = (): void => {
     if (hoverTimer.current != null) window.clearTimeout(hoverTimer.current)

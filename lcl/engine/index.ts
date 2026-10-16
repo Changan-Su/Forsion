@@ -66,7 +66,7 @@ export { LCL_MESSAGES } from './engineMessages'
 export { Skeleton, ViewErrorBoundary, skeletonVariantOf } from './Skeleton'
 export type { SkeletonVariant } from './Skeleton'
 /** Shared collapsed-rail / expanded-list table of contents for scrollable feature surfaces. */
-export { FloatingToc, defaultFloatingTocItem, scrollToElement } from './FloatingToc'
+export { FloatingToc, defaultFloatingTocItem, scrollToElement, cancelScrollToElement } from './FloatingToc'
 export type {
   FloatingTocElementSource,
   FloatingTocItemDescriptor,
