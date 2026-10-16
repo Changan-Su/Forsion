@@ -30,7 +30,7 @@ import { ipcErrorText } from '../ipcError'
 import { windowKind } from '../windowKind'
 import type { TanguDesktopConfig } from '../types'
 import type { AmadeusPlugin, SettingContribution, SettingsViewContribution } from '@amadeus/plugins/types'
-import type { PluginDependency } from '@amadeus-shared/ipc'
+import type { PluginCapability, PluginDependency } from '@amadeus-shared/ipc'
 import { PluginLogo } from './PluginLogo'
 import { canOpenPluginsFolder } from '../amadeus/lib/hostCaps'
 import { FileOpenersPanel } from './FileOpenersPanel'
@@ -57,6 +57,11 @@ registerMessages({
     en: 'Development load: runs in this app on your real vault, with the same privileges as an installed plugin.',
   },
   'settings.amadeusPlugins.devProject': { zh: '项目：{path}', en: 'Project: {path}' },
+  // manifest capabilities:插件声明了要用的用户数据 / 敏感能力,详情页如实告诉用户(没声明的宿主不注入)
+  'settings.amadeusPlugins.caps': { zh: '这个插件可以：{list}', en: 'This plugin can: {list}' },
+  'settings.amadeusPlugins.capDatabases': { zh: '读写你的多维表', en: 'read and edit your databases' },
+  'settings.amadeusPlugins.capNoteTasks': { zh: '读写笔记里的 @ 任务', en: 'read and edit @ tasks in your notes' },
+  'settings.amadeusPlugins.capActiveWindow': { zh: '读取前台窗口', en: 'see which window is in front' },
   'settings.amadeusPlugins.devShadows': {
     zh: '正遮蔽同名的已安装插件；撤下开发副本后，安装版会回来。',
     en: 'Shadowing the installed plugin with the same id; unload this dev copy and the installed one comes back.',
@@ -565,6 +570,13 @@ const RestartPending: React.FC<{ p: AmadeusPlugin }> = ({ p }) => {
  *  受控详情(左栏 `fplugin:<id>` 直达)不登记:它不是从列表进来的,返回照旧回设置首页。 */
 export const pluginListDetailBack: { current: (() => void) | null } = { current: null }
 
+/** 详情页「这个插件可以：…」那一行,按这个顺序列(用户数据在前,敏感的前台窗口在后)。 */
+const CAP_LABELS: Array<[PluginCapability, string]> = [
+  ['databases', 'settings.amadeusPlugins.capDatabases'],
+  ['noteTasks', 'settings.amadeusPlugins.capNoteTasks'],
+  ['activeWindow', 'settings.amadeusPlugins.capActiveWindow'],
+]
+
 const PluginDetail: React.FC<{
   plugin: AmadeusPlugin
   onBack: () => void
@@ -693,6 +705,11 @@ const PluginDetail: React.FC<{
         <div className="hint">
           {t('settings.amadeusPlugins.lockedHint')}
           <RestartPending p={p} />
+        </div>
+      )}
+      {!!p.capabilities?.length && (
+        <div data-plugin-caps style={{ fontSize: 'var(--ui-font-meta, 12px)', color: 'var(--text-light)' }}>
+          {t('settings.amadeusPlugins.caps', { list: CAP_LABELS.filter(([c]) => p.capabilities!.includes(c)).map(([, k]) => t(k)).join(t('common.listSep')) })}
         </div>
       )}
       {/* 开发态说明:它**不是**隔离沙箱,用户有权在启用它之前知道这件事 */}

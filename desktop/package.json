@@ -46,6 +46,7 @@
     "check:listsrc": "node scripts/plugin-listsrc.check.cjs",
     "e2e:latex": "node scripts/e2e-editor.cjs --script=latex-suite.e2e.cjs",
     "e2e:activewindow": "node scripts/active-window.e2e.cjs",
+    "check:plugindata": "node scripts/plugin-data.e2e.cjs",
     "e2e:recall": "node scripts/recall-rewind.e2e.cjs",
     "e2e:chatevents": "node scripts/chat-events.e2e.cjs",
     "e2e:computerhistory": "node scripts/computer-history.e2e.cjs",
