@@ -555,7 +555,7 @@ function StoreDatabaseEmbed({ target, pagePath, initialView, onViewChange, ...su
   }, [pagePath, target, gen])
 
   if (!entry || entry.status === 'loading') {
-    return <div className="amx-db amx-db-state">{t('dbembed.loading')}</div>
+    return <div className="amx-db amx-db-state" data-embed-loading="">{t('dbembed.loading')}</div>
   }
   if (entry.status === 'missing') {
     return (

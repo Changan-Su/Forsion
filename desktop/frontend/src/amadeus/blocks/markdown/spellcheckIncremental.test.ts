@@ -51,6 +51,15 @@ describe('updateCodeRanges', () => {
     same((s) => s.tr.insertText('z', at(3) + 3))
     same((s) => s.tr.insertText('$k$', at(2) + 1))
   })
+  it('几段包进引用再去掉行内代码(ReplaceAroundStep;Codex 10-16 复现过残留)', () => {
+    const d = schema.node('doc', null, [p('$a$'), p(['code']), p('$b$')])
+    const s0 = EditorState.create({ doc: d, schema })
+    const wrap = s0.tr.wrap(s0.doc.resolve(1).blockRange(s0.doc.resolve(d.content.size - 1))!, [{ type: schema.nodes.blockquote }])
+    const s1 = updateCodeRanges(wrap, codeRanges(d))
+    expect(spans(s1)).toEqual(spans(codeRanges(wrap.doc)))
+    const unmark = EditorState.create({ doc: wrap.doc, schema }).tr.removeMark(0, wrap.doc.content.size, schema.marks.inlineCode)
+    expect(spans(updateCodeRanges(unmark, s1))).toEqual(spans(codeRanges(unmark.doc)))
+  })
   it('一次事务多步,再撤回去', () => {
     const state = EditorState.create({ doc, schema })
     const tr = state.tr.insertText('$a$', at(4) + 1).split(at(0) + 3).addMark(at(4) + 2, at(4) + 6, schema.marks.inlineCode.create())

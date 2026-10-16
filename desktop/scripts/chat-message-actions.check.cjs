@@ -89,10 +89,15 @@ async function main() {
     check('编辑按钮仍载入原文', await view.locator('.t2-edit-ta').inputValue() === prompt)
     await view.locator('.t2-edit-ta').press('Escape')
     await row.hover()
+    const boxOf = () => row.evaluate((el) => { const w = el.closest('.t2-userwrap') || el; const r = w.getBoundingClientRect(); return { top: r.top, h: r.height } })
+    const before = await boxOf()
     await row.locator('button[title="回退到这条消息"]').click()
     const menu = row.locator('.rewind-menu')
     await menu.locator('.menu-item').first().waitFor()
     await win.waitForTimeout(220)
+    // 开着菜单的那条不加 content-visibility(chat2.css):切换 containment 时消息本身不许跳
+    const opened = await boxOf()
+    check('回退菜单打开时消息本身不跳', Math.abs(opened.top - before.top) < 1 && Math.abs(opened.h - before.h) < 1, { before, opened })
     const mg = await menu.evaluate((el) => {
       const r = el.getBoundingClientRect()
       const view = el.closest('.t2-chat-view').getBoundingClientRect()

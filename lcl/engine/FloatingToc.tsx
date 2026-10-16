@@ -122,6 +122,32 @@ function measurable(target: HTMLElement): HTMLElement {
   return el ?? target
 }
 
+/** Smoothly scrolls `root` so `target` sits `offset` px below its top, then re-measures once scrolling settles and
+ *  corrects (up to 3 times). Blocks skipped by `content-visibility: auto` only get their real height in the frame they
+ *  come near the viewport, which pushes the target away, and scroll anchoring has no anchor to compensate with then
+ *  (a long chat landed 850 px off). Stops as soon as the user scrolls, clicks or types. */
+export function scrollToElement(root: Element, target: Element, offset = 0): void {
+  const delta = (): number => target.getBoundingClientRect().top - root.getBoundingClientRect().top - offset
+  root.scrollTo({ top: Math.max(0, root.scrollTop + delta()), behavior: 'smooth' })
+  let user = false, tries = 0, frames = 0, still = 0, last = -1
+  const stop = (): void => { user = true }
+  const events = ['wheel', 'pointerdown', 'touchstart', 'keydown'] as const
+  for (const e of events) root.addEventListener(e, stop, { passive: true })
+  const done = (): void => { for (const e of events) root.removeEventListener(e, stop) }
+  const tick = (): void => {
+    if (user || !target.isConnected || ++frames > 240) return done()
+    if (root.scrollTop !== last) { last = root.scrollTop; still = 0 } // smooth scroll still moving
+    else if (++still >= 2) {
+      const d = delta()
+      if (Math.abs(d) <= 2 || tries++ >= 3) return done()
+      root.scrollBy({ top: d })
+      still = 0
+    }
+    requestAnimationFrame(tick)
+  }
+  requestAnimationFrame(tick)
+}
+
 export function FloatingToc({
   scrollContainer,
   contentRoot,
@@ -267,8 +293,7 @@ export function FloatingToc({
     if (item.onSelect) {
       try { item.onSelect() } catch (error) { console.error('[lcl] FloatingToc navigation failed', error) }
     } else if (root.contains(item.target)) {
-      const top = item.target.getBoundingClientRect().top - root.getBoundingClientRect().top + root.scrollTop
-      root.scrollTo({ top: Math.max(0, top - topOffset - (topInset?.(root) ?? 0)), behavior: 'smooth' })
+      scrollToElement(root, item.target, topOffset + (topInset?.(root) ?? 0))
     }
     setActiveKey(item.key)
   }, [scrollContainer, topOffset, topInset])

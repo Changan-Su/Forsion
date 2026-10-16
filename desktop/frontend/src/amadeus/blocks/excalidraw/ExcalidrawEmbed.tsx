@@ -48,7 +48,7 @@ export function ExcalidrawEmbed({ target, pagePath, readOnly = false }: { target
   }, [pagePath, target, generation])
 
   if (!entry || entry.status === 'loading') {
-    return <div className="amx-draw amx-draw-state">{t('drawembed.loading')}</div>
+    return <div className="amx-draw amx-draw-state" data-embed-loading="">{t('drawembed.loading')}</div>
   }
   if (entry.status === 'missing') {
     return (
@@ -88,7 +88,7 @@ function Board({ target, settings, generation, readOnly = false }: { target: str
   const { locale, t } = useI18n()
   return (
     <div className="amx-draw" onPointerDown={(e) => e.stopPropagation()}>
-      <Suspense fallback={<div className="amx-draw-state">{t('drawembed.loadingEditor')}</div>}>
+      <Suspense fallback={<div className="amx-draw-state" data-embed-loading="">{t('drawembed.loadingEditor')}</div>}>
         <ExcalidrawCanvas
           initialData={seed}
           theme={mode}

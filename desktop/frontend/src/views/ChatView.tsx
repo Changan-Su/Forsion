@@ -37,7 +37,7 @@ import { useApp, stickyDefaults, activeChatModelId, withAmadeusWorkspace, applyP
 import { settleModes } from '../stores/projectSettings'
 import { currentPlatform } from '../services/agentRunService'
 import { hasChatRef, readChatRefs } from './chat2/chatDragRef'
-import { useWorkspace, useSpaceStore, UI_MODE, Skeleton } from '@lcl/engine'
+import { useWorkspace, useSpaceStore, UI_MODE, Skeleton, scrollToElement } from '@lcl/engine'
 import { useTailFirst } from './chat2/useTailFirst'
 import { AgentDesk, DeskCard, useDeskHome } from './chat2/AgentDesk'
 import { HistorianStatus } from './chat2/HistorianStatus'
@@ -351,9 +351,8 @@ export function ChatView({ leaf, params }: ViewProps) {
     }
     const root = chatScrollRef.current
     if (root) {
-      const top = el.getBoundingClientRect().top - root.getBoundingClientRect().top + root.scrollTop
-      root.scrollTo({ top: Math.max(0, top - 24), behavior: 'smooth' })
       stickToBottom.current = false
+      scrollToElement(root, el, 24) // 落地后再量再补:上面的消息带 content-visibility,进视口才量出真实高度
     }
     el.classList.add('t2-jump-flash')
     const timer = window.setTimeout(() => el.classList.remove('t2-jump-flash'), 1600)
@@ -382,12 +381,17 @@ export function ChatView({ leaf, params }: ViewProps) {
     if (!el || !content) return
     let raf = 0
     let previousTop = el.scrollTop
+    let previousMax = el.scrollHeight - el.clientHeight
     let pointerDown = false
     const update = (): void => {
       const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40
+      const max = el.scrollHeight - el.clientHeight
       if (atBottom) stickToBottom.current = true
-      else if (pointerDown && el.scrollTop < previousTop) stickToBottom.current = false
+      // 往上挪了、可滚的最大距离却没变小(变小 = 布局把位置夹下来,不算):目录跳转这类程序滚动也松开。
+      // 消息带 content-visibility,往上一滚,刚进视口的才量出真实高度 → 内容变高 → 不松开就被 follow 拽回底部(10-16 实测)
+      else if (el.scrollTop < previousTop && (pointerDown || max >= previousMax)) stickToBottom.current = false
       previousTop = el.scrollTop
+      previousMax = max
       setShowJump(!atBottom && !stickToBottom.current)
     }
     const release = (): void => { stickToBottom.current = false; setShowJump(true) }

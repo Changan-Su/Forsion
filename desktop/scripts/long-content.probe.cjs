@@ -100,6 +100,15 @@ async function main() {
       }
       const counts = await win.evaluate(() => ({ nodes: document.querySelectorAll('.t2-stream-inner *').length, msgs: document.querySelectorAll('.t2-stream-inner > .t2-asst, .t2-stream-inner > .t2-userwrap').length }))
       console.log(`对话:流里 ${counts.msgs} 条消息、${counts.nodes} 个元素`)
+      // 点目录里中间那一项,落地后它得是当前项:10-16 一版里先是被吸底拽回底部,修了又因为上方消息进视口才量出真实高度、被挤开 850px
+      await win.locator('.lcl-ftoc').first().hover(); await sleep(400)
+      const items = win.locator('.lcl-ftoc-item')
+      const pick = items.nth(Math.floor((await items.count()) / 2))
+      const want = await pick.getAttribute('title')
+      await pick.click(); await win.mouse.move(760, 420); await sleep(2500)
+      const now = await win.evaluate(() => document.querySelector('.lcl-ftoc-item[aria-current="location"]')?.title || '')
+      if (now !== want) console.log(`⚠️ 目录跳转没落准:点的是「${want}」,落地后当前项是「${now}」`)
+      await win.evaluate(() => { const s = document.querySelector('.t2-stream'); s.scrollTop = s.scrollHeight }); await sleep(600)
       await win.mouse.move(760, 420)
       for (let k = 0; k < REPS; k++) {
         await phase('对话', '左栏收起', key('Meta+Slash'), 600)

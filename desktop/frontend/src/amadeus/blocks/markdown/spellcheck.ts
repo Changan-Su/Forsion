@@ -10,6 +10,7 @@ import { useSyncExternalStore } from 'react'
 import { $prose } from '@milkdown/kit/utils'
 import type { Node as ProseNode } from '@milkdown/kit/prose/model'
 import { Plugin, PluginKey, type Transaction } from '@milkdown/kit/prose/state'
+import { AddMarkStep, RemoveMarkStep, ReplaceStep } from '@milkdown/kit/prose/transform'
 import { Decoration, DecorationSet } from '@milkdown/kit/prose/view'
 import { buildBlockString, scanMath } from './mathLivePreview'
 import { registerMessages } from '../../../i18n'
@@ -80,19 +81,19 @@ export function codeRanges(doc: ProseNode): DecorationSet {
 }
 
 /** 文档改了:旧装饰按 mapping 挪过来,只重扫改动落在的顶层块。整篇重扫 + 重建装饰集在 3000 块的笔记里每打一个字约 6ms(10-16 实测)。
- *  加 / 去标记、改节点属性这类步骤不挪位置(StepMap 是空的),范围取步骤自己的 from/to、pos;认不出范围的步骤整篇重建。 */
+ *  只认打字 / 删改文字(ReplaceStep)和加 / 去标记(不挪位置、StepMap 是空的,范围取步骤自己的 from/to),别的步骤整篇重建。 */
 export function updateCodeRanges(tr: Transaction, old: DecorationSet): DecorationSet {
   const doc = tr.doc
+  // 包进 / 移出引用、列表这类结构性步骤(ReplaceAroundStep 等)整篇重建:映射过去的装饰会叠出重复、删不干净
+  if (!tr.steps.every((st) => st instanceof ReplaceStep || st instanceof AddMarkStep || st instanceof RemoveMarkStep)) return codeRanges(doc)
   const dirty: Array<[number, number]> = []
   for (let i = 0; i < tr.steps.length; i++) {
     const rest = tr.mapping.slice(i + 1)
     const before = dirty.length
     tr.mapping.maps[i].forEach((_oldFrom, _oldTo, from, to) => { dirty.push([rest.map(from, -1), rest.map(to, 1)]) })
     if (dirty.length > before) continue
-    const st = tr.steps[i] as unknown as { from?: number; to?: number; pos?: number }
-    if (typeof st.from === 'number' && typeof st.to === 'number') dirty.push([rest.map(st.from, -1), rest.map(st.to, 1)])
-    else if (typeof st.pos === 'number') dirty.push([rest.map(st.pos, -1), rest.map(st.pos + 1, 1)])
-    else return codeRanges(doc)
+    const st = tr.steps[i] as unknown as { from: number; to: number } // 加 / 去标记不挪位置,StepMap 是空的
+    dirty.push([rest.map(st.from, -1), rest.map(st.to, 1)])
   }
   let set = old.map(tr.mapping, doc)
   for (const [from, to] of dirty) {

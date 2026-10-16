@@ -2361,6 +2361,8 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
     if (!page || !host) return
     // 长笔记里还没进过视口的嵌入只是一块占位(embedLayer 的懒挂):先全挂上、等数据读完再克隆
     await showWaitingEmbeds(host)
+    // 等的这几秒里换了笔记 / 关了编辑器:不导,免得把另一篇按这一篇的名字存出去
+    if (!host.isConnected || printHostRef.current !== host || (myPs().activePage ?? barPath) !== page) return
     const wrap = document.createElement('div')
     wrap.id = 'amx-print-root'
     const clone = printClone(host) // 标题框换成静态 h1(长标题折行、取此刻的值;C-12)
