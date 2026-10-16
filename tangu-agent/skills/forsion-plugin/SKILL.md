@@ -2,7 +2,7 @@
 name: forsion-extension-development
 description: 当用户要给 Forsion / Tangu 做插件、主题、Space、智能体(agent)或捆绑包(bundle)——或要把某个能力做成可分发/可上架商店的扩展——时使用;已装的插件 / Space / 视图不出现、加载失败、更新后不工作要排查时也用(带一份插件体检脚本 tools/check-plugin.mjs)。内置五类官方模板(samples/),讲清各自的格式基线与硬约束(尤其两种"插件"是完全不同的系统),照抄模板改比从零写靠谱。
 metadata:
-  version: 1.42.0
+  version: 1.43.0
   author: Forsion
   category: Forsion
 ---
@@ -427,6 +427,8 @@ ctx.registerCommand({
 | `ctx.desk` | Tangu 聊天右侧 **Agent Desk** 里挂一块自绘区(`registerCompanion`,典型:跟着 agent 状态做反应的 3D 形象) | 2026-09-19 起;⚠️**只在桌面 Tangu 上存在**(web / 移动端 / 纯 Amadeus 壳整个没有)→ `ctx.desk?.`;两种模式 `idle` / `always`,见下「Agent Desk 伴随面」 |
 | `ctx.automation` | 播种多维表自动化规则(`ensure(rules)`) | 2026-09-02 起;⚠️**非 Tangu 宿主上整个不存在** → `void ctx.automation?.ensure(…)`;id 宿主加 `plugin:<id>:` 前缀;见下「自动化」 |
 | `ctx.calendar` | 把插件种的表登记进 Calendar Space(`ensureMember`) | 2026-09-02 起;显式成员制,不登记就不在日历里;旧宿主没有 → `ctx.calendar?.` |
+| `ctx.databases` | 全库多维表的实时聚合(`subscribe`)+ 按行按格读写(`setCell` / `addRow` / `duplicateRow` / `deleteRow`) | 2026-10-16 起;⚠️**manifest `capabilities` 声明 `"databases"` 才存在**;见下「全库多维表与笔记任务」 |
+| `ctx.noteTasks` | 笔记正文里的 `@` 时间任务(`subscribe`)+ 就地勾选 / 改日期(`update`) | 2026-10-16 起;⚠️**声明 `"noteTasks"` 才存在**;同上节 |
 | manifest `events[]` | 自动化(Automation)可订阅的事件 | 纯声明无代码;⚠️目前只有中文 `label`,英文界面下也显示中文 |
 | manifest `onboarding` | 有 `requires` = **闸**(宿主实测,未满足才弹检查卡);没有 = 详情页里折叠的使用说明 | 见下「前置条件:onboarding.requires」;**别 recommends 自家已内嵌的 agent/skill**(会引导去商店重复装);⚠ `recommends` 只在闸的检查卡里渲染,没有 `requires` 就一个字都不显示 |
 
@@ -1209,6 +1211,46 @@ ctx.calendar?.ensureMember(`${ctx.app.workFolder()}/任务表.db`, 'c-date' /* �
 - 同步返回 void。已是成员 → **no-op**(不覆盖用户改过的列映射);库还没恢复 → 等库恢复后再登记(最多 60s)。
 - 列给的是**列 id**(不是列名);日期列用 `calendarDate` 类型。
 - 与 `ctx.automation` 不同,这条不需要 Tangu 宿主 —— 纯 Amadeus 壳也有;旧宿主没有,可选链。
+
+## 全库多维表与笔记任务:ctx.databases / ctx.noteTasks(2026-10-16 起)
+
+日历、待办、习惯这类插件要的是「库里所有带日期 / 勾选列的表」和「笔记里 `- [ ] … @2026-10-20` 那种任务」,
+不是某一张固定的表。两条接缝写的是用户自己的数据,**default-deny**:manifest 里声明了才注入,没声明 `ctx.databases` /
+`ctx.noteTasks` 整个不存在(旧宿主同样不存在)。
+
+```json
+{ "id": "my-planner", "capabilities": ["databases", "noteTasks"] }
+```
+
+```js
+const offDb = ctx.databases?.subscribe(({ ready, databases }) => {
+  if (!ready) return showLoading()          // ready:false 时的空列表 ≠ 库里没有表
+  const withDates = databases.filter((db) => db.columns.some((c) => c.base === 'date' || c.type === 'calendarDate'))
+  render(withDates)                          // 每次都是整份新快照,别原地改
+})
+// 拖动改期 / 勾选:和用户在表格里改一格是同一条路
+ctx.databases?.setCell(db.path, row.id, dateColId, '2026-10-20T15:00/2026-10-20T16:00')
+const id = await ctx.databases?.addRow(db.path, { [dateColId]: '2026-10-21' }, '交周报')
+const undo = ctx.databases?.deleteRow(db.path, row.id)   // 经典表才有撤销;笔记视图返回 null
+
+const offTasks = ctx.noteTasks?.subscribe(({ ready, tasks }) => renderTasks(tasks.filter((t) => t.isTask)))
+ctx.noteTasks?.update(task.id, { checked: true })        // false → 让用户去笔记里改:ctx.app.openNote(task.path)
+```
+
+- **表的两种 `kind`**:`table` = 经典 .db(行在文件里);`notes` = 笔记视图(一行 = 文件夹里一篇笔记,行 id 就是笔记路径,
+  属性在 frontmatter)。列给 `type`(原样,含自定义类型)和 `base`(落盘的基础类型);找日期列看 `base === 'date' || type === 'calendarDate'`,
+  勾选列看 `base === 'checkbox'`。日期值:`YYYY-MM-DD` / `YYYY-MM-DDTHH:mm`,区间用 `/` 连两头。
+- **与 `ctx.app.mutateDb` 的分工**:mutateDb = 单张 .db 的整文件比对交换(升级列结构、批量改);`ctx.databases` = 按行按格、
+  和打开着的表格 / 编辑器实时一致,而且覆盖笔记视图。
+- **写口都按「表格里改一格」的规矩**:`setCell` 返回 false = 表 / 行 / 列不存在、值不是合法单元格(字符串 / 数字 / 布尔 / 字符串数组 / null)、
+  或那列是自动编号 / 创建时间(建行即定);`undefined` 清空该格。笔记视图的标题列(`type: 'page'`)= 笔记名,`setCell` 改它就是给笔记改名(只收非空字符串)。`addRow` 只收已有列,自动编号 / 创建时间由宿主盖;
+  `duplicateRow` 同样重新盖章。
+- **删除**:`deleteRow` 只删经典表的行,返回撤销函数(只生效一次;用户换了库再调不做事)。笔记视图的行是一篇笔记,
+  这里不删(返回 null)——要删就 `ctx.app.trash(rowId)`,进回收站可恢复。
+- **笔记任务**:`id` = `路径:行号`,两次加载之间稳定,笔记里行挪了会变 —— 每次以最新回调为准,别存起来。`isTask:false` 的普通行
+  (`交周报 @2026-10-20`)没有勾选框,`update({checked})` 返回 false。`update` 先反映在下一次回调里,稍后写回那一行 markdown;
+  那行已经对不上时宿主自己提示用户去笔记里改。网页 / 手机宿主不能回写 → false。
+- 两个 `subscribe` 都**立刻回调一次**,插件停用时宿主统一退订(返回的退订函数照样可以自己调)。
 
 ## Floating Panel:正式第六种面板(2026-09-17 起)
 

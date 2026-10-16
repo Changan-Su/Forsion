@@ -286,6 +286,41 @@ export interface PluginSearchHit {
   score: number
 }
 
+type PluginCellValue = import('../../../../shared/amadeus/db/schema').CellValue
+
+/** ctx.databases 的一列。`type` = 原样的列类型(含插件注册的自定义类型);`base` = 它落盘的基础类型
+ *  (`text` / `number` / `checkbox` / `date` / `select` …)—— 找日期列看 `base === 'date' || type === 'calendarDate'`,
+ *  找勾选列看 `base === 'checkbox'`。 */
+export interface PluginDbColumn { id: string; name: string; type: string; base: string }
+/** ctx.databases 的一行。`kind: 'notes'` 的表里 `id` 就是那篇笔记的库相对路径。`name` = 首列文本(空就是空)。 */
+export interface PluginDbRow { id: string; name: string; cells: Record<string, PluginCellValue> }
+/** 库里的一张多维表。`table` = 经典 .db(行在文件里);`notes` = 笔记视图(一行 = 文件夹里的一篇笔记,属性在 frontmatter)。 */
+export interface PluginDatabase {
+  /** 库相对路径(那张 .db,笔记视图也有一张描述它的 .db) */
+  path: string
+  name: string
+  kind: 'table' | 'notes'
+  columns: PluginDbColumn[]
+  rows: PluginDbRow[]
+}
+/** 笔记正文里一条带 `@` 时间标记的行(`- [ ] 交周报 @2026-10-20T15:00`)。 */
+export interface PluginNoteTask {
+  /** `路径:行号`。同一份文本两次加载之间稳定;笔记里行挪动了就会变 —— 别长期保存,每次以最新回调为准。 */
+  id: string
+  /** 所在笔记的库相对路径 / 笔记名 / 最近的上级标题(`''` = 在任何标题之前) */
+  path: string
+  title: string
+  heading: string
+  /** 行文本,已去掉 `@` 标记与行首的 `-` / `>` / `#` */
+  text: string
+  /** 是不是勾选项(`- [ ]`);false = 普通行,`checked` 恒 false 且不能勾 */
+  isTask: boolean
+  checked: boolean
+  /** 日期,与多维表日期列同一种写法:`YYYY-MM-DD` / `YYYY-MM-DDTHH:mm` / 区间 `a/b` */
+  due: string
+  remind?: string
+}
+
 /** A read-only view of the ACTIVE NOTE. Amadeus is single-active-page (one page per panel, shared by
  *  the note editor and any file-type view) — plugins ride that same model rather than getting a second
  *  page state that would save over the first.
@@ -1458,6 +1493,42 @@ export interface PluginContext {
    *  同步返回 void。旧宿主没有:`ctx.calendar?.ensureMember(…)`。 */
   calendar?: {
     ensureMember(dbPath: string, dateColId: string, checkboxColId?: string): void
+  }
+  /** 全库多维表的实时聚合 + 行级读写(2026-10-16+;日历 / 待办 / 习惯这类插件的数据来源)。
+   *  **只有 manifest `capabilities` 里声明了 `'databases'` 才注入**(没声明 → `ctx.databases` 整个不存在)。
+   *
+   *  · `subscribe(cb)`:立刻回调一次,之后库里任何一张表变了(含用户在表格里改、切库)就再回调;返回退订,
+   *    插件停用时宿主也会统一退订。`ready: false` = 还在加载(库没打开 / 表没读完),这时的空列表不代表库里没有表;
+   *    `ready: true` 且空 = 真没有表。每次回调给的是整份新快照,别原地改它。
+   *  · 写口按「表格里改一格」的同一条路走:经典表与编辑器 / 表格视图实时一致,笔记视图写进那篇笔记的 frontmatter
+   *    (防抖落盘)。与 `ctx.app.mutateDb` 的分工:mutateDb 是**单张 .db 的整文件比对交换**(升级列结构、批量改);
+   *    这里是**按行按格**、和打开着的界面一致的路径,而且覆盖笔记视图。
+   *  · `setCell`:返回是否写了(表 / 行 / 列不存在,或那列是自动编号、创建时间这种建行即定的列 → false)。
+   *    `undefined` = 清空该格。笔记视图的标题列(`type: 'page'`)= 笔记名:改它就是给笔记改名(只收非空字符串)。
+   *  · `addRow(path, cells?, name?)`:新建一行,返回新行 id(笔记视图 = 新笔记路径;`name` 当笔记标题),表不存在 → null。
+   *  · `duplicateRow`:复制一行(自动编号 / 创建时间重新盖),返回新行 id。
+   *  · `deleteRow`:只删经典表的行,返回一个**撤销函数**(只生效一次;换了库再调不做事)。笔记视图的行是一篇笔记,
+   *    这里不删(返回 null)——要删就 `ctx.app.trash(rowId)`(行 id 就是笔记路径,进回收站可恢复)。
+   *  ⚠️日期值的写法:`YYYY-MM-DD`、`YYYY-MM-DDTHH:mm`,区间用 `/` 连两头。
+   *  旧宿主没有:`if (ctx.databases) …`。 */
+  databases?: {
+    subscribe(cb: (snapshot: { ready: boolean; databases: PluginDatabase[] }) => void): () => void
+    setCell(path: string, rowId: string, colId: string, value: PluginCellValue | undefined): boolean
+    addRow(path: string, cells?: Record<string, PluginCellValue>, name?: string): Promise<string | null>
+    duplicateRow(path: string, rowId: string): Promise<string | null>
+    deleteRow(path: string, rowId: string): (() => void) | null
+  }
+  /** 笔记正文里的 `@` 时间任务(2026-10-16+;待办视图里「笔记」那一组的来源)。
+   *  **只有 manifest `capabilities` 里声明了 `'noteTasks'` 才注入**。
+   *  · `subscribe(cb)`:同 ctx.databases —— 立刻回调、之后有变化再回调;`ready: false` = 还没拉过。
+   *    笔记里刚打的标记要等编辑器落盘后才出现(宿主拉取前会先落盘)。
+   *  · `update(id, { checked?, due? })`:就地改笔记里那一行(勾选 / 改日期),先立即反映在下一次回调里,稍后写回
+   *    markdown;那一行已经被改得对不上时宿主提示用户去笔记里改。返回 false = 宿主不能回写(网页 / 手机)、
+   *    `id` 找不到、给普通行勾选、或日期写法不对 —— 这时让用户去笔记里改(`ctx.app.openNote(task.path)`)。
+   *  旧宿主没有:`if (ctx.noteTasks) …`。 */
+  noteTasks?: {
+    subscribe(cb: (snapshot: { ready: boolean; tasks: PluginNoteTask[] }) => void): () => void
+    update(id: string, patch: { checked?: boolean; due?: string }): boolean
   }
   /** 在插件自己的容器里渲染一张**原生多维表**(只读、内存行,2026-09-05 起)。**不依赖笔记库** ——
    *  与 `ctx.dashboard.mount` 同一路线:远程系统面板(服务器管理台之流)的表格终于能拿到筛选 / 搜索 /

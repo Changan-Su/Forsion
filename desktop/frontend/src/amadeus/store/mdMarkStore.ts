@@ -133,15 +133,43 @@ export function useMdMarks(): MdMark[] {
     const t = setTimeout(() => { void useMdMarkStore.getState().load() }, 250)
     return () => clearTimeout(t)
   }, [vaultRoot, activePage])
-  return useMemo(() => {
-    const keys = Object.keys(overlay)
-    if (!keys.length) return marks
-    return marks.map((m) => {
-      const o = overlay[markKey(m)]
-      return o ? { ...m, due: o.due ?? m.due, checked: o.checked ?? m.checked } : m
-    })
-  }, [marks, overlay])
+  return useMemo(() => withOverlay(marks, overlay), [marks, overlay])
 }
+
+function withOverlay(marks: MdMark[], overlay: Record<string, MarkPatch>): MdMark[] {
+  if (!Object.keys(overlay).length) return marks
+  return marks.map((m) => {
+    const o = overlay[markKey(m)]
+    return o ? { ...m, due: o.due ?? m.due, checked: o.checked ?? m.checked } : m
+  })
+}
+
+/** 非 React 版 useMdMarks(插件 ctx.noteTasks):立刻回调一次,之后标记 / 乐观覆盖一变就回调;
+ *  换库 / 换页时同样隔 250ms 重拉。ready = 至少拉过一次(宿主没有这条接缝时直接 ready + 空)。 */
+export function watchMdMarks(cb: (marks: MdMark[], ready: boolean) => void): () => void {
+  let timer = 0
+  const reload = (): void => { clearTimeout(timer); timer = window.setTimeout(() => { void useMdMarkStore.getState().load() }, 250) }
+  let page = usePageStore.getState()
+  const offPage = usePageStore.subscribe((st) => {
+    if (st.vaultRoot === page.vaultRoot && st.activePage === page.activePage) return
+    page = st
+    reload()
+  })
+  let last: State | null = null
+  const emit = (st: State): void => {
+    if (last && st.marks === last.marks && st.overlay === last.overlay && st.ready === last.ready) return
+    last = st
+    cb(withOverlay(st.marks, st.overlay), st.ready)
+  }
+  const offMarks = useMdMarkStore.subscribe(emit)
+  emit(useMdMarkStore.getState())
+  reload()
+  return () => { clearTimeout(timer); offPage(); offMarks() }
+}
+
+/** 按 `路径:行号` 找当前一条标记(插件写口用)。 */
+export const findMdMark = (key: string): MdMark | undefined => useMdMarkStore.getState().marks.find((m) => markKey(m) === key)
+export { markKey }
 
 /** 就地改一条标记(待办勾选 / 日历改期)。宿主没有回写接缝(web/mobile)时返回 false,调用方退回跳转。 */
 export function patchMark(m: MdMark, p: { due?: string; checked?: boolean }): boolean {
