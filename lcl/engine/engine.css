@@ -932,6 +932,7 @@ html[data-dv-dragging] .t2s-side { -webkit-app-region: no-drag; }
 /* ===== 换 Space 的过渡(spaceTransition.ts;2026-10-16 用户选 C「沿 ribbon 方向推移」) =====
  * 只在 <html data-space-switch> 挂着时起名,平时不带 view-transition-name —— 明暗切换(themeStore 的整页淡入)不受影响。
  * 桌面:工作区(.shell-work)整块竖着推 28px;手机:内容区(.mb-body)横着推 24px,底栏 / 顶栏不动。
+ * 手机的横推 10-16 起先不播(用户定「等真机量过再开」,开关在 spaceTransition.ts),下面 axis='x' 那几条留着待开。
  * next = 目标在切换条上靠后:新的从下 / 右进,旧的往上 / 左走。新旧同一条曲线 + plus-lighter 合成,交叉时不会中途变暗。
  * ribbon(手机是抽屉底部的 Space 条)单独成组且不动画:当前 Space 的高亮点下去立刻跳。其余(外壳底色,独立外观换色时)随 root 200ms 淡过去。
  * fade = 系统「减少动态效果」:不起名,只有 120ms 整页淡入。 */
@@ -962,8 +963,12 @@ html[data-space-switch]::view-transition-new(space-work) {
 }
 html[data-space-switch]::view-transition-old(space-work) { animation: 220ms ease both lcl-space-fade-out, 280ms var(--space-ease) both lcl-space-push-out; }
 html[data-space-switch]::view-transition-new(space-work) { animation: 220ms ease both lcl-space-fade-in, 280ms var(--space-ease) both lcl-space-push-in; }
-html[data-space-switch='next'] { --space-dir: 1; }
-html[data-space-switch='prev'] { --space-dir: -1; }
+/* 方向写在快照自己身上,别写回 <html>:挂在根上的自定义属性会继承,每切一次挂一次、摘一次 = 整页样式重算两遍
+ * (10-16 安卓模拟器实测:长对话开着时 4870 个元素、4× 降速 168~402ms;spaceTransition.test.ts 钉着) */
+html[data-space-switch='next']::view-transition-old(space-work),
+html[data-space-switch='next']::view-transition-new(space-work) { --space-dir: 1; }
+html[data-space-switch='prev']::view-transition-old(space-work),
+html[data-space-switch='prev']::view-transition-new(space-work) { --space-dir: -1; }
 @keyframes lcl-space-fade-out { to { opacity: 0; } }
 @keyframes lcl-space-fade-in { from { opacity: 0; } }
 @keyframes lcl-space-push-out { to { transform: translateY(calc(var(--space-dir, 1) * -1 * var(--space-push))); } }
