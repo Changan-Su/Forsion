@@ -184,7 +184,6 @@ function EventCardBody({ ev, onClose, closeRef, panel }: { ev: CardTarget; onClo
 
       {/* 标题 */}
       <div className="amx-cal-card-head">
-        <span className="amx-cal-card-ico amx-cal-card-headico"><PageIcon /></span>
         {titleEditable ? (
           <input
             className="amx-cal-card-title"

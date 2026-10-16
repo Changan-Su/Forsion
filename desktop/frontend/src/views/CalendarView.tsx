@@ -18,6 +18,7 @@ import {
   type CSSProperties,
   type PointerEvent as ReactPointerEvent,
   type MouseEvent as ReactMouseEvent,
+  type DragEvent as ReactDragEvent,
   type RefObject,
   type MutableRefObject,
 } from 'react'
@@ -49,7 +50,7 @@ import { EventCard, type Anchor } from './calendar/EventCard'
 import { MODE_ITEMS, classifyCalKey } from './calendar/calKeys'
 import { layoutTimedEvents } from './calendar/eventLayout'
 import { deleteCalendarRow, rescheduleCalendarRow, undoLastCalendarEdit } from './calendar/eventActions'
-import { draftRange, draftValue, pickDraftDb } from './calendar/draft'
+import { TODO_DRAG_MIME, draftRange, draftValue, pickDraftDb } from './calendar/draft'
 import {
   HOURS,
   weekdays,
@@ -453,6 +454,14 @@ export function CalendarView() {
     { value: 0, label: dayName(0) },
     { value: 1, label: dayName(1) },
   ]
+  /** 右栏待办拖进来:时间格 = 排 30 分钟的时段,全天行 = 只改日期;给撤销。 */
+  const todoDrop = (data: { dbPath: string; rowId: string }, value: string): void => {
+    const m = members.find((x) => x.db.path === data.dbPath)
+    const row = m?.db.rows.find((r) => r.rowId === data.rowId)
+    if (!m || !row || m.db.readonly) return
+    const raw = typeof row.cells[m.dateCol] === 'string' ? (row.cells[m.dateCol] as string) : ''
+    rescheduleCalendarRow(m.db, row, m.dateCol, raw, value, row.name)
+  }
   const tick = (on: boolean) => (on ? <Check size={14} /> : <span style={{ display: 'inline-block', width: 14 }} />)
   const gridProps = {
     events: visible,
@@ -462,6 +471,7 @@ export function CalendarView() {
     onDismiss: dismiss,
     onDraft: startDraft,
     colorOf,
+    onTodoDrop: todoDrop,
     titleRef,
   }
   return (
@@ -527,6 +537,7 @@ interface GridProps {
   onDismiss: () => boolean
   onDraft: (g: DraftGeom) => void
   colorOf: (dbPath: string | null) => string
+  onTodoDrop?: (data: { dbPath: string; rowId: string }, value: string) => void
   titleRef: RefObject<HTMLSpanElement | null>
 }
 
@@ -595,7 +606,7 @@ interface TimeProps extends GridProps {
   /** 手机:双击当场建。 */
   onCreate: (day: Date, min: number, at: Anchor) => void
 }
-const TimeScroll = forwardRef<CalApi, TimeProps>(function TimeScroll({ n, weekStartDow, events, selectedKey, onPick, canCreate, onDismiss, onDraft, colorOf, onCreate, titleRef }, ref) {
+const TimeScroll = forwardRef<CalApi, TimeProps>(function TimeScroll({ n, weekStartDow, events, selectedKey, onPick, canCreate, onDismiss, onDraft, colorOf, onTodoDrop, onCreate, titleRef }, ref) {
   const { t } = useI18n()
   const wrap = useRef<HTMLDivElement>(null)
   const gutterHours = useRef<HTMLDivElement>(null) // 表头/全天常驻；仅小时轴随正文纵向滚动。
@@ -989,6 +1000,41 @@ const TimeScroll = forwardRef<CalApi, TimeProps>(function TimeScroll({ n, weekSt
     if (makeEl.current) makeEl.current.style.display = 'none'
   }
 
+  // 右栏待办拖进来:预览块复用拖出新建那一个(时间格 30 分钟,全天行一格)。
+  const todoSlot = (e: ReactDragEvent): { value: string; zone: 'time' | 'all'; col: number; s: number } | null => {
+    const tgt = e.target as HTMLElement
+    const zone = tgt.closest('.amx-cal-allday2') ? 'all' : tgt.closest('.amx-cal-daycol2') ? 'time' : null
+    if (!zone || !colw) return null
+    const p = locate(e)
+    const day = iso(days[p.col])
+    const s = Math.min(p.min, 24 * 60 - 30)
+    return { zone, col: p.col, s, value: zone === 'all' ? day : `${day}T${fmtMin(s)}/${day}T${fmtMin(s + 30)}` }
+  }
+  const hideMake = (): void => { if (makeEl.current) makeEl.current.style.display = 'none' }
+  const todoOver = (e: ReactDragEvent): void => {
+    if (!onTodoDrop || !e.dataTransfer.types.includes(TODO_DRAG_MIME)) return
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'move'
+    const slot = todoSlot(e)
+    const el = makeEl.current
+    if (!el) return
+    if (!slot) { hideMake(); return }
+    el.style.display = 'block'
+    el.style.left = `${slot.col * colw + (slot.zone === 'all' ? 4 : 2)}px`
+    el.style.width = `${colw - (slot.zone === 'all' ? 8 : 4)}px`
+    el.style.top = `${slot.zone === 'all' ? HEAD_H + 14 + 3 : bodyTop + (slot.s / 60) * hourPx}px`
+    el.style.height = slot.zone === 'all' ? '20px' : `${(30 / 60) * hourPx}px`
+    el.textContent = slot.zone === 'all' ? '' : `${fmtMin(slot.s)}–${fmtMin(slot.s + 30)}`
+  }
+  const todoDropHere = (e: ReactDragEvent): void => {
+    if (!onTodoDrop || !e.dataTransfer.types.includes(TODO_DRAG_MIME)) return
+    e.preventDefault()
+    hideMake()
+    const slot = todoSlot(e)
+    if (!slot) return
+    try { onTodoDrop(JSON.parse(e.dataTransfer.getData(TODO_DRAG_MIME)), slot.value) } catch { /* 载荷坏了就不动 */ }
+  }
+
   // 全天行:跨天事件占同一行(贪心分道;先开始的、长的在上),只有日期的待办不进来。
   const allDay = useMemo(() => {
     const list = events.filter((e) => e.allDay && !dateOnlyTodo(e)).sort((a, b) =>
@@ -1035,6 +1081,9 @@ const TimeScroll = forwardRef<CalApi, TimeProps>(function TimeScroll({ n, weekSt
         onPointerMove={gridMove}
         onPointerUp={gridUp}
         onPointerCancel={gridCancel}
+        onDragOver={todoOver}
+        onDragLeave={(e) => { if (!(e.relatedTarget instanceof Node && e.currentTarget.contains(e.relatedTarget))) hideMake() }}
+        onDrop={todoDropHere}
       >
         {days.map((d) => (
           <div key={+d} className={`amx-cal-thead2${sameDay(d, today) ? ' today' : ''}`}>

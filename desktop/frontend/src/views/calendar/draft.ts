@@ -31,3 +31,6 @@ export function pickDraftDb<M extends { db: { path: string; readonly?: boolean; 
   const w = members.filter((m) => !m.db.readonly)
   return w.find((m) => m.db.path === dbPath) ?? w.find((m) => m.db.path === defaultPath) ?? w.find((m) => !m.db.isNoteView) ?? w[0] ?? null
 }
+
+/** 待办行拖进日历的载荷类型(TodoListView 发,CalendarView 接):JSON { dbPath, rowId }。 */
+export const TODO_DRAG_MIME = 'application/x-forsion-todo'
