@@ -141,8 +141,11 @@ export function setBeforeMainOpenHook(fn: ((type: string) => boolean) | null): v
 
 /** 冷启动还原上次的三桶 leaf + 各自激活项。成功 true;首启/整份不可用返回 false,调用方 build 默认布局。
  *  同时是自动存盘的**发令枪** —— 还原之前 bootstrap 的那些 setSidebarDefaults 之类的 set() 不该
- *  把一份空布局先写回去,把真正要还原的东西冲掉。 */
+ *  把一份空布局先写回去,把真正要还原的东西冲掉。
+ *  壳挂上之前已经摆上了布局(异步 Space 的补定位 / 桌面快捷方式抢先换了 Space):照用、返回 true,不拿在用的那份盖它;
+ *  发令枪照样要响 —— 以前是壳自己跳过这一步,那一程的改动一个都不落盘(Codex 评审抓的 High)。 */
 export function restoreSingleColumnLayout(): boolean {
+  if (useWorkspace.getState().mainLeaves.length) { autoSaveArmed = true; saveSoon(); return true }
   restoredOwner = undefined
   const raw = readJSON<unknown>(SC_LAYOUT_KEY)
   const ok = applySCBlob(raw)
@@ -157,8 +160,16 @@ export function restoreSingleColumnLayout(): boolean {
  * 屏上却是它的现场。三态:undefined = 不是启动还原的那份 → 归画像;string = 那份自带的;null = 老存档没记 → 不知道,存盘也不写。 */
 let profileKey: string | null = null
 let restoredOwner: string | null | undefined
-/** 屏上这份布局是给哪个 Space 摆的(= 存盘时写进 blob 的 space)。null = 不知道。 */
-export const liveLayoutOwner = (): string | null => restoredOwner === undefined ? profileKey : restoredOwner
+/** 壳还没还原(发令枪没响)、店里也还是空的:这一程的现场只在在用的键里。挂载之前有人切 Space / 补定位时据此
+ *  认归属、存槽,而不是拿一家空店说事(同桌面:Dockview 就绪之前 saveNamed / saveCurrent 不写空布局)。 */
+const notLaidOut = (): boolean => !autoSaveArmed && !useWorkspace.getState().mainLeaves.length
+/** 屏上这份布局是给哪个 Space 摆的(= 存盘时写进 blob 的 space)。null = 不知道。
+ *  还没摆(notLaidOut)时认在用那份自己记的归属:拿画像键去比,补定位抢在挂载之前跑时会把「在用的正是它的现场」
+ *  误判成对不上(Codex 评审)。 */
+export const liveLayoutOwner = (): string | null => {
+  if (notLaidOut()) { const b = readJSON<unknown>(SC_LAYOUT_KEY); return isBlob(b) ? stampOf(b) : null }
+  return restoredOwner === undefined ? profileKey : restoredOwner
+}
 
 /** spaceRegistry.adoptSpaceLayoutCold 的单列半身:手机 App 的冷启动交接,纯 Storage 搬运(须在 SingleColumnHost 还原之前)。
  *  口径逐条照桌面那份(那边的注释讲了每条的来历):
@@ -688,15 +699,22 @@ export const useWorkspace = create<WS>((set, get) => {
       })
       useNav.getState().reset() // 同桌面版:布局重建,旧 leaf id 的历史全失效;须在重建之前,重建时记下的栈底要留着
       get().defaultBuilder?.() // = getActiveSpace().build()（切 Space 时 spaceRegistry 已先切 id）
+      // 壳挂上之前(还没有构建器)要的是默认布局:在用的那份是上一个 Space 的(切走时已原样存进它的槽),留着就会被壳还原到
+      // 这个 Space 头上。清掉,挂载时落空 → 按它的默认建。
+      if (notLaidOut() && !IS_MINI_PANEL) try { localStorage.removeItem(SC_LAYOUT_KEY) } catch { /* 私密模式 */ }
       get().refreshTabs()
       afterLayout?.()
     },
 
-    saveCurrent() { writeJSON(SC_LAYOUT_KEY, snapshot()) },
+    saveCurrent() { if (!notLaidOut()) writeJSON(SC_LAYOUT_KEY, snapshot()) }, // 还没摆就存 = 拿空布局盖掉要还原的那份
     // 命名布局 = spaceRegistry 的每-Space 布局槽(`space:<id>`):切走时存、切回来时还原。
     saveNamed(name) {
+      // 壳还没还原就切 Space(桌面快捷方式 / 补定位抢在挂载之前):这一程的现场还在在用的键里 ——
+      // 存它原样,不存空快照(空快照会把冷启动刚归档的现场盖掉)。
+      const blob = notLaidOut() ? readJSON<unknown>(SC_LAYOUT_KEY) : snapshot()
+      if (!isBlob(blob)) return
       const all = readJSON<Record<string, SCBlob>>(SC_NAMED_KEY) ?? {}
-      all[name] = snapshot()
+      all[name] = blob
       writeJSON(SC_NAMED_KEY, all)
     },
     applyNamed(name) {
