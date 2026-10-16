@@ -134,7 +134,7 @@ export const BUILTINS: BuiltinDef[] = [
   },
   {
     id: 'calendar',
-    types: ['calendar', 'todo-list', 'calendar-config'],
+    types: ['calendar', 'todo-list', 'calendar-config', 'calendar-side'],
     name: () => tr('space.calendar'),
     description: () => tr('calendar.builtinDesc'),
     available: calendarAvailable,

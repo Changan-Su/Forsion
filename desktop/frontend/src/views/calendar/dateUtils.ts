@@ -155,6 +155,13 @@ export function snap15(min: number): number {
 export function addMinutes(d: Date, min: number): Date {
   return new Date(d.getTime() + min * 60000)
 }
+/** ISO 周数(周一起算,1 月 4 日所在周为第 1 周)。日历页眉「第 42 周」用;周首日设成周日也照 ISO 算,与系统日历一致。 */
+export function isoWeek(d: Date): number {
+  const t = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()))
+  const dow = t.getUTCDay() || 7
+  t.setUTCDate(t.getUTCDate() + 4 - dow)
+  return Math.ceil(((t.getTime() - Date.UTC(t.getUTCFullYear(), 0, 1)) / 864e5 + 1) / 7)
+}
 /** 平移 n 天,保留时分(月视图拖拽改日期用)。 */
 export function shiftDays(d: Date, n: number): Date {
   return new Date(d.getFullYear(), d.getMonth(), d.getDate() + n, d.getHours(), d.getMinutes())

@@ -5,7 +5,7 @@ import { hasNativeFeature, amadeusAvailable, inboxAvailable } from './features/r
  *  Tangu Space = 会话/对话/主体详情/文件/目录;Agents Space = 智能体配置。Amadeus Space 见 Milestone 2。 */
 import { Bot, Inbox, NotebookText, Code2, Workflow, Rocket, Users } from 'lucide-react'
 import { INBOX_WORKSPACE_MODE } from './views/workspaceMode'
-import { registerSpace, addRibbonIcon, useSpaceStore, useWorkspace, deleteNamedLayout, clearLayout, resetSpaceLayouts, WINDOW_SPACE_ID } from '@lcl/engine'
+import { registerSpace, addRibbonIcon, useSpaceStore, useWorkspace, deleteNamedLayout, clearLayout, resetSpaceLayouts, WINDOW_SPACE_ID, loadLayout, loadNamedLayout, spaceLayoutName, BOOT_ACTIVE_SPACE_ID } from '@lcl/engine'
 import type { SpaceDefinition, PersistedPanel, SidebarDefaults } from '@lcl/engine'
 import { useApp } from './stores/appStore'
 import { VIEW_FILE_MATCH } from './viewFileMatch'
@@ -15,7 +15,7 @@ import { migrateTanguDetailsLayouts } from './tanguDetailsLayout'
 import './views/agentProfileMessages'
 import { SpaceButton } from './components/SpaceButton'
 import { builtinEnabled } from './builtins'
-import { calendarAvailable, calendarSpace } from './builtins/calendar'
+import { calendarAvailable, calendarSpace, calendarSidesAreOld } from './builtins/calendar'
 import { museAvailable, museSpace } from './builtins/muse'
 
 import { homepageAvailable, homepageSpace } from './builtins/homepage'
@@ -340,6 +340,17 @@ export function registerSpaces(): void {
     if (windowKind() === 'main' && localStorage.getItem('forsion_image_studio_layout_v2') !== '1') {
       resetSpaceLayouts('image-studio')
       localStorage.setItem('forsion_image_studio_layout_v2', '1')
+    }
+  } catch { /* ignore */ }
+  // 日历 Space 桌面两侧对调(2026-10-16 用户定方案 B):左 = 小月历 + 日历列表,右 = 待办 / 事件详情。旧存档里左边还是待办、
+  // 右边是日历设置(单例),原样还原的话新位置开不出来 → 同上一次性重建这个 Space 的布局。只在两侧还是旧的默认摆法时重建
+  // (方案页定的「你自己挪过的不动」);认的是最新那份:上次就停在日历 = 布局键,否则 = 它的命名槽。手机的存档不在这把键里,读到 null 不动。
+  try {
+    if (windowKind() === 'main' && localStorage.getItem('forsion_calendar_layout_v2') !== '1') {
+      const cur = loadLayout()
+      const blob = (cur?.space ?? BOOT_ACTIVE_SPACE_ID) === calendarSpace.id ? cur : loadNamedLayout(spaceLayoutName(calendarSpace.id))
+      if (calendarSidesAreOld(blob)) resetSpaceLayouts(calendarSpace.id)
+      localStorage.setItem('forsion_calendar_layout_v2', '1')
     }
   } catch { /* ignore */ }
   // 右栏默认折叠(2026-07-18):旧 Amadeus/Tangu 命名布局是「右栏展开」时存的,会经 applyNamed/tryRestoreLayout

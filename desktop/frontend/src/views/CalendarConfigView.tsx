@@ -1,12 +1,12 @@
-/** Calendar 右栏 = mini 月历(上) + 日历配置(下),竖向分屏。
+/** Calendar 左栏(2026-10-16 起;手机仍在右抽屉)= mini 月历(上) + 日历配置(下),竖向分屏。
  *  mini:主题色标今天;当主区 focus 的是 Calendar View 时,额外用淡色条标出其当前可见日期区间
  *  (实时跟随滚动),点某日则请求主区丝滑跳转。非 Calendar 主视图时这些效果关闭。
  *  配置:列出日历成员库(显式成员制,calendarMembers),每库可设颜色/显隐,并经 ⋯ 菜单
- *  重命名/设默认/新标签打开/改列映射/移出日历;底部「+ 添加 Forsion database」搜库入历。 */
-import { useEffect, useMemo, useState } from 'react'
+ *  改颜色/重命名/设默认/新标签打开/改列映射/移出日历;「日历」标题右边的 + 添加多维表 / 订阅 / 导入。
+ *  一周开始于挪进了主区头部的「周▾」菜单。 */
+import { useEffect, useMemo, useState, type CSSProperties, type MouseEvent as ReactMouseEvent } from 'react'
 import { useWorkspace, activeMainPanel } from '@lcl/engine'
-import { Bot, ChevronDown, Database, Globe, HardDrive, Plus, Search, Star, Upload } from 'lucide-react'
-import { CheckboxInput } from '@astryxdesign/core/CheckboxInput'
+import { ChevronLeft, ChevronRight, Database, Globe, Plus, Search, Upload } from 'lucide-react'
 import { AstryxScope } from '../theme/astryxBridge'
 import { askString } from '@amadeus/components/askString'
 import { usePageStore } from '../amadeus/store/pageStore'
@@ -21,8 +21,7 @@ import { useCalendarConfig, colorForDb, isHidden, defaultDbPath, memberOf } from
 import { useCalendarNav } from '../amadeus/store/calendarNavStore'
 import { openDb } from '../amadeusNav'
 import { MemberColPicker } from './calendar/MemberColPicker'
-import { weekdays, addDays, diffDays, fmtStamp, monthGridDays, monthLabel, startOfDay, toLocalDate, useWeekStart, useWeekStartPref, localeWeekStart, type WeekStartPref } from './calendar/dateUtils'
-import { CapabilityMenu } from '../components/CapabilityMenu'
+import { weekdays, addDays, diffDays, fmtStamp, monthGridDays, monthLabel, startOfDay, toLocalDate, useWeekStart } from './calendar/dateUtils'
 import { OverlayAt } from '@lcl/engine'
 import { registerMessages, useI18n } from '../i18n'
 
@@ -30,16 +29,16 @@ registerMessages({
   'calcfg.prevMonth': { zh: '上个月', en: 'Previous month' },
   'calcfg.nextMonth': { zh: '下个月', en: 'Next month' },
   'calcfg.jumpToDay': { zh: '跳转到这一天', en: 'Jump to this day' },
-  'calcfg.cloud': { zh: '云端', en: 'Cloud' },
   'calcfg.title': { zh: '日历', en: 'Calendars' },
   'calcfg.empty': { zh: '还没有加入日历的多维表。', en: 'No databases added to the calendar yet.' },
   'calcfg.eventColor': { zh: '事件颜色', en: 'Event color' },
   'calcfg.fetchFailed': { zh: '拉取失败', en: 'Fetch failed' },
-  'calcfg.isDefaultAria': { zh: '{name} 是新建默认日历', en: '{name} is the default calendar for new events' },
-  'calcfg.setDefaultAria': { zh: '将 {name} 设为新建默认日历', en: 'Make {name} the default calendar for new events' },
-  'calcfg.defaultCalendar': { zh: '新建默认日历', en: 'Default calendar for new events' },
-  'calcfg.setAsDefault': { zh: '设为新建默认日历', en: 'Set as default for new events' },
-  'calcfg.showInCalendar': { zh: '在日历中显示', en: 'Show in calendar' },
+  'calcfg.default': { zh: '默认', en: 'Default' },
+  'calcfg.defaultHint': { zh: '新建的事件落在这里', en: 'New events go here' },
+  'calcfg.showName': { zh: '在日历中显示「{name}」', en: 'Show “{name}” in the calendar' },
+  'calcfg.srcAgent': { zh: 'Agent 日程（只读）', en: 'Agent schedule (read-only)' },
+  'calcfg.srcOther': { zh: '{side} 的日历（只读）', en: 'Calendar from {side} (read-only)' },
+  'calcfg.srcIcs': { zh: '外部日历（只读）', en: 'External calendar (read-only)' },
   'calcfg.more': { zh: '更多', en: 'More' },
   'calcfg.addCalendar': { zh: '添加日历', en: 'Add calendar' },
   'calcfg.addDatabase': { zh: '添加多维表', en: 'Add database' },
@@ -57,41 +56,14 @@ registerMessages({
   'calcfg.rename': { zh: '重命名', en: 'Rename' },
   'calcfg.refreshNow': { zh: '立即刷新', en: 'Refresh now' },
   'calcfg.unsubscribe': { zh: '取消订阅', en: 'Unsubscribe' },
-  'calcfg.setDefaultDb': { zh: '设为默认库', en: 'Set as default' },
+  'calcfg.setDefaultDb': { zh: '设为默认日历', en: 'Set as default calendar' },
   'calcfg.openInNewTab': { zh: '在新标签打开', en: 'Open in new tab' },
-  'calcfg.columnMapping': { zh: '日历设置（列映射）', en: 'Calendar settings (column mapping)' },
+  'calcfg.columnMapping': { zh: '日期与完成列…', en: 'Date and done columns…' },
   'calcfg.removeFromCalendar': { zh: '从日历移除', en: 'Remove from calendar' },
   'calcfg.searchDbPlaceholder': { zh: '搜索要加入日历的多维表…', en: 'Search databases to add to the calendar…' },
   'calcfg.noCandidates': { zh: '没有含日期属性的可添加多维表', en: 'No databases with a date property available to add' },
   'calcfg.footHint': { zh: '只有含「日期」属性的多维表会出现在这里', en: 'Only databases with a Date property appear here' },
-  'calcfg.weekStart': { zh: '一周开始于', en: 'Week starts on' },
-  'calcfg.weekStart.auto': { zh: '跟随语言（{day}）', en: 'Default ({day})' },
-  'calcfg.weekStart.sun': { zh: '周日', en: 'Sunday' },
-  'calcfg.weekStart.mon': { zh: '周一', en: 'Monday' },
 })
-
-/** 「一周开始于」:缺省跟随界面语言(zh 周一 / en 周日),可覆盖。月历、主区月视图、数据库日历视图共用这一份。 */
-function WeekStartSetting() {
-  const { t } = useI18n()
-  const pref = useWeekStartPref((s) => s.pref)
-  const setPref = useWeekStartPref((s) => s.setPref)
-  const dayName = (d: 0 | 1): string => t(d === 1 ? 'calcfg.weekStart.mon' : 'calcfg.weekStart.sun')
-  const options: Array<{ value: WeekStartPref; label: string }> = [
-    { value: 'auto', label: t('calcfg.weekStart.auto', { day: dayName(localeWeekStart()) }) },
-    { value: 0, label: dayName(0) },
-    { value: 1, label: dayName(1) },
-  ]
-  const current = options.find((o) => o.value === pref) ?? options[0]
-  return (
-    <div className="amx-calcfg-weekstart" data-week-start={pref}>
-      <span className="amx-calcfg-weekstart-label">{t('calcfg.weekStart')}</span>
-      <CapabilityMenu label={`${t('calcfg.weekStart')} · ${current.label}`} className="capability-menu-trigger amx-calcfg-weekstart-btn" selection
-        items={options.map((o) => ({ id: `week-start:${o.value}`, label: o.label, selected: o.value === pref, onSelect: () => setPref(o.value) }))}>
-        <span>{current.label}</span><ChevronDown size={13} />
-      </CapabilityMenu>
-    </div>
-  )
-}
 
 export function CalendarConfigView() {
   return (
@@ -146,9 +118,9 @@ function MiniCalendar() {
   return (
     <div className="amx-mini">
       <div className="amx-mini-head">
-        <button className="amx-mini-nav" onClick={() => setMonth(new Date(month.getFullYear(), month.getMonth() - 1, 1))} aria-label={t('calcfg.prevMonth')}>‹</button>
         <span className="amx-mini-title">{monthLabel(month)}</span>
-        <button className="amx-mini-nav" onClick={() => setMonth(new Date(month.getFullYear(), month.getMonth() + 1, 1))} aria-label={t('calcfg.nextMonth')}>›</button>
+        <button className="amx-mini-nav" onClick={() => setMonth(new Date(month.getFullYear(), month.getMonth() - 1, 1))} aria-label={t('calcfg.prevMonth')}><ChevronLeft size={14} /></button>
+        <button className="amx-mini-nav" onClick={() => setMonth(new Date(month.getFullYear(), month.getMonth() + 1, 1))} aria-label={t('calcfg.nextMonth')}><ChevronRight size={14} /></button>
       </div>
       <div className="amx-mini-dow">
         {weekdays().map((w) => (
@@ -156,13 +128,18 @@ function MiniCalendar() {
         ))}
       </div>
       <div className="amx-mini-grid">
-        {grid.map((d) => {
+        {grid.map((d, i) => {
           const out = d.getMonth() !== month.getMonth()
           const isToday = fmtStamp(d, true) === todayStr
+          // 可见区间画成一整条带子:每行里带子的头尾圆角(跨行时每行各自收头)。
+          const band = inBand(d)
+          const bandEnds = band
+            ? `${i % 7 === 0 || !inBand(grid[i - 1]) ? ' band-start' : ''}${i % 7 === 6 || !grid[i + 1] || !inBand(grid[i + 1]) ? ' band-end' : ''}`
+            : ''
           return (
             <button
               key={+d}
-              className={`amx-mini-day${out ? ' out' : ''}${isToday ? ' today' : ''}${inBand(d) ? ' band' : ''}`}
+              className={`amx-mini-day${out ? ' out' : ''}${isToday ? ' today' : ''}${band ? ' band' : ''}${bandEnds}`}
               onClick={() => pick(d)}
               title={focused ? t('calcfg.jumpToDay') : undefined}
             >
@@ -178,8 +155,6 @@ function MiniCalendar() {
 function ConfigList() {
   const { t } = useI18n()
   const vault = usePageStore((s) => s.vaultRoot) ?? ''
-  const vaultSide = usePageStore((s) => s.vaultSide)
-  const activeLabel = vaultSide === 'cloud' ? t('calcfg.cloud') : vault.split(/[\\/]/).pop() || vault // 活动侧默认 Calendar 的后缀标签
   const members = useCalendarMembers()
   const agentDbs = useAgentCalDbs() // agent 日程只读源:进图例(调色/显隐可用,无 ★/⋯)
   const otherDbs = useOtherVaultCalDbs() // 非活动侧只读日历(任务1:汇总两侧,名字已带 Vault 后缀)
@@ -195,8 +170,20 @@ function ConfigList() {
   const [showAdd, setShowAdd] = useState(false)
   const [addMenu, setAddMenu] = useState<{ x: number; y: number } | null>(null)
   const [importErr, setImportErr] = useState<string | null>(null)
-  const [menu, setMenu] = useState<{ db: AggDb; ics?: boolean; x: number; y: number } | null>(null)
+  const [menu, setMenu] = useState<{ db: AggDb; kind?: 'agent' | 'other' | 'ics'; color: string; x: number; y: number } | null>(null)
   const [editing, setEditing] = useState<AggDb | null>(null) // 「Calendar 设置」改列映射
+  // Esc 收起 ⋯ / + 菜单(焦点在触发按钮上,菜单自己收不到键;走查里 Esc 没关掉,下一下点进了盖着的菜单)
+  useEffect(() => {
+    if (!menu && !addMenu) return
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key !== 'Escape') return
+      e.stopPropagation()
+      setMenu(null)
+      setAddMenu(null)
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [menu, addMenu])
 
   const memberPaths = useMemo(() => new Set(members.map((m) => m.db.path)), [members])
   const dbs: Array<{ db: AggDb; readonly?: boolean; kind?: 'agent' | 'other' | 'ics' }> = [
@@ -247,73 +234,54 @@ function ConfigList() {
     input.click()
   }
 
+  const openAdd = (e: ReactMouseEvent<HTMLElement>): void => {
+    const r = e.currentTarget.getBoundingClientRect()
+    setAddMenu({ x: Math.max(12, Math.min(r.left, window.innerWidth - 200)), y: r.bottom + 4 })
+  }
+  // 一行只剩「颜色方块(= 显隐开关)+ 名字」,默认日历在右边写淡字「默认」;改颜色、设默认、来源说明都在 ⋯ 里(2026-10-16 方向 1)。
   return (
     <div className="amx-calcfg">
-      <div className="amx-calcfg-head">{t('calcfg.title')}</div>
+      <div className="amx-calcfg-head">
+        <span>{t('calcfg.title')}</span>
+        <button className="amx-calcfg-addbtn" aria-label={t('calcfg.addCalendar')} title={t('calcfg.addCalendar')} onClick={openAdd}><Plus size={14} /></button>
+      </div>
       {dbs.length === 0 && <div className="amx-calcfg-empty">{t('calcfg.empty')}</div>}
       <div className="amx-calcfg-list">
         {dbs.map(({ db, readonly, kind }, di) => {
           const color = colorForDb(vault, byVault, db.path, di)
           const visible = !isHidden(vault, byVault, db.path)
-          const isDefault = def ? def === db.path : di === 0 // 未显式设默认时,首个隐式为默认
+          const isDefault = !readonly && (def ? def === db.path : di === 0) // 未显式设默认时,首个隐式为默认
           return (
             <div className="amx-calcfg-row" key={db.path}>
-              <span className="amx-calcfg-type" aria-hidden="true">
-                {kind === 'agent' ? <Bot size={14} /> : kind === 'ics' ? <Globe size={14} /> : kind === 'other' ? <HardDrive size={14} /> : <Database size={14} />}
-              </span>
-              <span className="amx-calcfg-swatch" style={{ background: visible ? color : 'transparent', borderColor: color }}>
-                <input type="color" value={color} onChange={(e) => setColor(vault, db.path, e.target.value)} title={t('calcfg.eventColor')} />
-              </span>
+              <button
+                className={`amx-calcfg-swatch${visible ? ' on' : ''}`}
+                style={{ '--amx-swatch': color } as CSSProperties}
+                role="checkbox"
+                aria-checked={visible}
+                aria-label={t('calcfg.showName', { name: db.name })}
+                onClick={() => toggleHidden(vault, db.path)}
+              />
               <span className={`amx-calcfg-name${visible ? '' : ' off'}`} title={icsError(db.path) || db.name}>
                 {db.name}
-                {kind === 'ics' && icsError(db.path) && <span className="amx-cal-vault"> · {t('calcfg.fetchFailed')}</span>}
-                {(() => {
-                  // Vault 归属后缀(淡显):agent 已用 ⚙ 标识不缀;other 用其所属侧名;其余=活动侧库,缀活动侧名。
-                  const vaultLabel = kind === 'agent' ? '' : kind === 'other' ? (db.vaultLabel || '') : activeLabel
-                  return vaultLabel ? <span className="amx-cal-vault"> · {vaultLabel}</span> : null
-                })()}
+                {kind === 'ics' && icsError(db.path) && <span className="amx-calcfg-err"> · {t('calcfg.fetchFailed')}</span>}
               </span>
-              {!readonly && (
-                <button
-                  className={`amx-calcfg-def${isDefault ? ' on' : ''}`}
-                  aria-label={isDefault ? t('calcfg.isDefaultAria', { name: db.name }) : t('calcfg.setDefaultAria', { name: db.name })}
-                  title={isDefault ? t('calcfg.defaultCalendar') : t('calcfg.setAsDefault')}
-                  onClick={() => setDefault(vault, db.path)}
-                >
-                  <Star size={13} fill={isDefault ? 'currentColor' : 'none'} />
-                </button>
-              )}
-              <CheckboxInput
-                label={t('calcfg.showInCalendar')}
-                isLabelHidden
-                size="sm"
-                value={visible}
-                onChange={() => toggleHidden(vault, db.path)}
-              />
-              {(!readonly || kind === 'ics') && (
-                <button
-                  className="amx-calcfg-more"
-                  title={t('calcfg.more')}
-                  onClick={(e) => {
-                    const r = (e.currentTarget as HTMLElement).getBoundingClientRect()
-                    setMenu({ db, ics: kind === 'ics', x: Math.min(r.left, window.innerWidth - 180), y: r.bottom + 4 })
-                  }}
-                >
-                  ⋯
-                </button>
-              )}
+              {isDefault && <span className="amx-calcfg-default" title={t('calcfg.defaultHint')}>{t('calcfg.default')}</span>}
+              <button
+                className="amx-calcfg-more"
+                title={t('calcfg.more')}
+                aria-label={t('calcfg.more')}
+                onClick={(e) => {
+                  const r = (e.currentTarget as HTMLElement).getBoundingClientRect()
+                  setMenu({ db, kind, color, x: Math.min(r.left, window.innerWidth - 200), y: r.bottom + 4 })
+                }}
+              >
+                ⋯
+              </button>
             </div>
           )
         })}
       </div>
-      <button className="amx-calcfg-add amx-calcfg-add-main" onClick={(e) => {
-        const r = e.currentTarget.getBoundingClientRect()
-        setAddMenu({ x: Math.max(12, r.left), y: r.bottom + 4 })
-      }}>
-        <Plus size={14} /> {t('calcfg.addCalendar')} <ChevronDown size={13} />
-      </button>
       {importErr && <div className="amx-calcfg-hint" style={{ color: 'var(--danger)' }}>{importErr}</div>}
-      <WeekStartSetting />
 
       {addMenu && (
         <div className="amx-db-popwrap" onMouseDown={() => setAddMenu(null)}>
@@ -328,7 +296,17 @@ function ConfigList() {
       {menu && (
         <div className="amx-db-popwrap" onMouseDown={() => setMenu(null)}>
           <OverlayAt className="amx-db-pop amx-calcfg-menu" x={menu.x} y={menu.y} onMouseDown={(e) => e.stopPropagation()}>
-            {menu.ics ? (
+            {menu.kind && (
+              <div className="amx-calcfg-menusrc">
+                {menu.kind === 'agent' ? t('calcfg.srcAgent') : menu.kind === 'other' ? t('calcfg.srcOther', { side: menu.db.vaultLabel || '' }) : t('calcfg.srcIcs')}
+              </div>
+            )}
+            <label className="amx-db-opt amx-calcfg-colorrow">
+              <span className="amx-calcfg-colordot" style={{ background: menu.color }} />
+              {t('calcfg.eventColor')}
+              <input type="color" value={menu.color} onChange={(e) => { setColor(vault, menu.db.path, e.target.value); setMenu({ ...menu, color: e.target.value }) }} />
+            </label>
+            {menu.kind === 'agent' || menu.kind === 'other' ? null : menu.kind === 'ics' ? (
               <>
                 {!!useIcsCalendars.getState().subs.find((x) => x.id === icsId(menu.db.path))?.url && (
                   <button className="amx-db-opt" onClick={() => { void useIcsCalendars.getState().refresh(icsId(menu.db.path)); setMenu(null) }}>{t('calcfg.refreshNow')}</button>

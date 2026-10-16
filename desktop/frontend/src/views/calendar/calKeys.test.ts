@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest'
 import { classifyCalKey } from './calKeys'
 
-const k = (key: string, mods: Partial<{ metaKey: boolean; ctrlKey: boolean; altKey: boolean }> = {}) =>
-  ({ key, metaKey: false, ctrlKey: false, altKey: false, ...mods })
+const k = (key: string, mods: Partial<{ metaKey: boolean; ctrlKey: boolean; altKey: boolean; shiftKey: boolean }> = {}) =>
+  ({ key, metaKey: false, ctrlKey: false, altKey: false, shiftKey: false, ...mods })
 
 describe('classifyCalKey', () => {
   it('D/W/3/M 切模式', () => {
@@ -19,7 +19,7 @@ describe('classifyCalKey', () => {
   it('Cmd/Ctrl+C/V 复制粘贴(单独 c/v 是模式? 否——只 w/d/m/3 是模式,c/v 无修饰即忽略)', () => {
     expect(classifyCalKey(k('c', { metaKey: true }))).toEqual({ kind: 'copy' })
     expect(classifyCalKey(k('v', { ctrlKey: true }))).toEqual({ kind: 'paste' })
-    expect(classifyCalKey(k('c'))).toBeNull() // 无修饰的 c 不是任何动作
+    // 无修饰的 c 自 2026-10-16 起 = 新建(见最后一条)
   })
 
   it('Delete/Backspace 删除(无修饰)', () => {
@@ -32,5 +32,16 @@ describe('classifyCalKey', () => {
     expect(classifyCalKey(k('ArrowLeft', { ctrlKey: true }))).toBeNull()
     expect(classifyCalKey(k('c', { metaKey: true, altKey: true }))).toBeNull() // Alt 组合排除
     expect(classifyCalKey(k('x'))).toBeNull()
+  })
+
+  it('2026-10-16:撤销 / 复制选中 / 新建 / 今天 / 改标题 / Esc', () => {
+    expect(classifyCalKey(k('z', { metaKey: true }))).toEqual({ kind: 'undo' })
+    expect(classifyCalKey(k('z', { metaKey: true, shiftKey: true }))).toBeNull() // ⇧⌘Z 不劫持(重做没做)
+    expect(classifyCalKey(k('d', { ctrlKey: true }))).toEqual({ kind: 'duplicate' })
+    expect(classifyCalKey(k('d'))).toEqual({ kind: 'mode', mode: 'day' }) // 单独 d 仍是切模式
+    expect(classifyCalKey(k('c'))).toEqual({ kind: 'new' })
+    expect(classifyCalKey(k('T'))).toEqual({ kind: 'today' })
+    expect(classifyCalKey(k('Enter'))).toEqual({ kind: 'rename' })
+    expect(classifyCalKey(k('Escape'))).toEqual({ kind: 'escape' })
   })
 })

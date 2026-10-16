@@ -461,3 +461,16 @@ describe('禁用规则的墓碑 / 就绪边沿重放 / 与 ensure 串行', () =>
     expect(getPluginDisableState('pc-erp')).toBeNull()
   })
 })
+
+describe('ctx.databases / ctx.noteTasks 的能力闸(default-deny)', () => {
+  it('manifest 没声明 → 整个不存在;声明了哪个就只有哪个', () => {
+    const plain = ctxOf('plain')
+    expect(plain.databases).toBeUndefined()
+    expect(plain.noteTasks).toBeUndefined()
+    let ref: Ctx | null = null
+    usePluginStore.setState({ initialized: false, plugins: [], activeIds: [], disabledIds: [], disposers: {} })
+    usePluginStore.getState().init([{ id: 'cap', name: 'cap', version: '0', capabilities: ['databases'], setup: (c) => { ref = c } }])
+    expect(typeof ref!.databases?.subscribe).toBe('function')
+    expect(ref!.noteTasks).toBeUndefined()
+  })
+})

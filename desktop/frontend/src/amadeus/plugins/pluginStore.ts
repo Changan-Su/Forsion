@@ -49,6 +49,7 @@ import { getMuseTriggers, listPlugins, saveMuseTrigger, setPluginEnabled } from 
 import { buildPluginTriggerUpserts, isPluginOwnedRule, normalizeVaultRel } from './pluginAutomation'
 import { MUTATE_DB_RETRIES, mutateDbCas } from './pluginDb'
 import { useDbStore } from '../store/dbStore'
+import { createDatabasesApi, createNoteTasksApi } from './pluginData'
 import { kickAutomation } from '../store/automationKick'
 import { triggerToUpsert } from '../../views/automation/lib'
 import { memberOf, useCalendarConfig } from '../store/calendarConfigStore'
@@ -1792,6 +1793,13 @@ export const usePluginStore = create<PluginState>((set, get) => {
             },
           },
         }
+      : {}),
+    // 全库多维表 / 笔记 @ 任务:同样 **manifest 声明过才注入**(写的是用户的表和笔记,default-deny)。
+    ...(get().plugins.find((p) => p.id === pluginId)?.capabilities?.includes('databases')
+      ? { databases: createDatabasesApi({ alive: ctxAlive, own: (off) => scope.own('subscription', off, 'databases') }) }
+      : {}),
+    ...(get().plugins.find((p) => p.id === pluginId)?.capabilities?.includes('noteTasks')
+      ? { noteTasks: createNoteTasksApi({ alive: ctxAlive, own: (off) => scope.own('subscription', off, 'noteTasks') }) }
       : {}),
     // 前台窗口采样:**manifest 声明过才注入**(没声明的插件连 ctx.system 都看不到)。
     // 第二道闸在主进程:config.activeWindowEnabled 默认关,关着时下面这个调用恒回 null。

@@ -2,6 +2,7 @@
  *  ②主区 Calendar 当前可见日期区间 + ③mini 日历「跳到某日」请求(右栏 mini ↔ 主区 Calendar
  *  的唯一通道,任务3)。区间/跳转是内存态(不持久化);模式落 localStorage。 */
 import { create } from 'zustand'
+import type { CardTarget } from '../../views/calendar/EventCard'
 
 export type CalMode = 'month' | 'week' | '3day' | 'day'
 const MODE_KEY = 'amadeus.calendar.mode'
@@ -20,6 +21,18 @@ const loadHourPx = (): number => {
   return Number.isFinite(v) && v > 0 ? clampHourPx(v) : HOUR_PX_DEFAULT
 }
 
+/** 新建中的事件(草稿):**不落盘**,标题打完 Enter / 点走才写进多维表,Esc 或空标题点走 = 丢弃。
+ *  day = 起始日 'YYYY-MM-DD';startMin = null 表示全天(此时 endDay = 末日,含);否则 [startMin, endMin) 分钟。 */
+export interface CalDraft {
+  day: string
+  startMin: number | null
+  endMin: number
+  endDay: string
+  title: string
+  /** 落在哪个日历(多维表路径);null = 默认日历。 */
+  dbPath: string | null
+}
+
 interface CalNavState {
   mode: CalMode
   setMode(m: CalMode): void
@@ -34,6 +47,17 @@ interface CalNavState {
   jumpDate: string | null
   jumpNonce: number
   requestJump(date: string): void
+  /** 主区选中的事件:日历右栏(calendar-side)据此显示详情;null = 右栏显示待办。target 由 CalendarView 随数据刷新重写。 */
+  selection: { key: string; target: CardTarget } | null
+  setSelection(sel: { key: string; target: CardTarget } | null): void
+  draft: CalDraft | null
+  setDraft(draft: CalDraft | null): void
+  /** 草稿的保存 / 丢弃(主区日历挂载时登记;右栏草稿面板的按钮走这里)。 */
+  draftApi: { commit(): void; cancel(): void } | null
+  setDraftApi(api: { commit(): void; cancel(): void } | null): void
+  /** 日历右栏面板的根节点(挂载时登记)。它在场且看得见,选中详情才进右栏;否则主区退回浮卡。 */
+  sideEl: HTMLElement | null
+  setSideEl(el: HTMLElement | null): void
 }
 
 export const useCalendarNav = create<CalNavState>((set) => ({
@@ -62,4 +86,18 @@ export const useCalendarNav = create<CalNavState>((set) => ({
   jumpDate: null,
   jumpNonce: 0,
   requestJump: (jumpDate) => set((s) => ({ jumpDate, jumpNonce: s.jumpNonce + 1 })),
+  selection: null,
+  setSelection: (selection) => set({ selection }),
+  draft: null,
+  setDraft: (draft) => set({ draft }),
+  draftApi: null,
+  setDraftApi: (draftApi) => set({ draftApi }),
+  sideEl: null,
+  setSideEl: (sideEl) => set({ sideEl }),
 }))
+
+/** 日历右栏此刻看得见(在场、没收起、不是别的标签压在上面)。 */
+export const calendarSideVisible = (): boolean => {
+  const el = useCalendarNav.getState().sideEl
+  return !!el && el.isConnected && el.getClientRects().length > 0
+}

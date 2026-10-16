@@ -46,6 +46,7 @@ const markKey = (m: Pick<MdMark, 'path' | 'line'>): string => `${m.path}:${m.lin
 
 const timers = new Map<string, number>()
 let inflight = 0
+let loadedVault: string | null = null
 
 let seq = 0
 export const useMdMarkStore = create<State>((set, get) => ({
@@ -64,7 +65,12 @@ export const useMdMarkStore = create<State>((set, get) => ({
       await usePageStore.getState().flushSave().catch(() => {})
       const marks = await amadeus.listMarks()
       // 迟到的结果不许污染新库(换 vault 后旧请求可能才回来)。
-      if (id === seq && usePageStore.getState().vaultRoot === vault) set({ marks, ready: true })
+      if (id === seq && usePageStore.getState().vaultRoot === vault) {
+        // 换了库:上一个库排着的乐观覆盖与回写一并作废(key 是「路径:行号」,会套到新库同位置的另一条上)
+        if (vault !== loadedVault) { for (const t of timers.values()) clearTimeout(t); timers.clear(); set({ overlay: {} }) }
+        loadedVault = vault
+        set({ marks, ready: true })
+      }
     } catch {
       if (id === seq) set({ marks: [], ready: true })
     }
@@ -75,16 +81,22 @@ export const useMdMarkStore = create<State>((set, get) => ({
     set((s) => ({ overlay: { ...s.overlay, [key]: { ...s.overlay[key], ...p } } }))
     const prev = timers.get(key)
     if (prev) clearTimeout(prev)
+    const vault = usePageStore.getState().vaultRoot
     // 防抖:日历拖动每帧都会调进来,不能每帧写一次盘。
-    timers.set(key, window.setTimeout(() => { timers.delete(key); void flush(key, m) }, 400))
+    timers.set(key, window.setTimeout(() => { timers.delete(key); void flush(key, m, vault) }, 400))
   },
 }))
 
 /** 把覆盖表里那条改动真正写回 markdown。失败**只报不猜** —— 退回「去笔记里改」。 */
-async function flush(key: string, fallback: MdMark): Promise<void> {
+async function flush(key: string, fallback: MdMark, vault: string | null): Promise<void> {
   const st = useMdMarkStore.getState()
   const o = st.overlay[key]
   if (!o || !amadeus?.patchMark) return
+  // 改动是在别的库里排的队:key 只是「路径:行号」,换库后同一个 key 指向另一条任务 —— 丢掉,别写过去。
+  if (usePageStore.getState().vaultRoot !== vault) {
+    useMdMarkStore.setState((s) => { const rest = { ...s.overlay }; delete rest[key]; return { overlay: rest } })
+    return
+  }
   // 用**最近一次 load 的**那一行原文当基准:它才是磁盘上此刻的样子。
   const cur = st.marks.find((x) => markKey(x) === key) ?? fallback
   let next = cur.raw
@@ -133,15 +145,43 @@ export function useMdMarks(): MdMark[] {
     const t = setTimeout(() => { void useMdMarkStore.getState().load() }, 250)
     return () => clearTimeout(t)
   }, [vaultRoot, activePage])
-  return useMemo(() => {
-    const keys = Object.keys(overlay)
-    if (!keys.length) return marks
-    return marks.map((m) => {
-      const o = overlay[markKey(m)]
-      return o ? { ...m, due: o.due ?? m.due, checked: o.checked ?? m.checked } : m
-    })
-  }, [marks, overlay])
+  return useMemo(() => withOverlay(marks, overlay), [marks, overlay])
 }
+
+function withOverlay(marks: MdMark[], overlay: Record<string, MarkPatch>): MdMark[] {
+  if (!Object.keys(overlay).length) return marks
+  return marks.map((m) => {
+    const o = overlay[markKey(m)]
+    return o ? { ...m, due: o.due ?? m.due, checked: o.checked ?? m.checked } : m
+  })
+}
+
+/** 非 React 版 useMdMarks(插件 ctx.noteTasks):立刻回调一次,之后标记 / 乐观覆盖一变就回调;
+ *  换库 / 换页时同样隔 250ms 重拉。ready = 至少拉过一次(宿主没有这条接缝时直接 ready + 空)。 */
+export function watchMdMarks(cb: (marks: MdMark[], ready: boolean) => void): () => void {
+  let timer = 0
+  const reload = (): void => { clearTimeout(timer); timer = window.setTimeout(() => { void useMdMarkStore.getState().load() }, 250) }
+  let page = usePageStore.getState()
+  const offPage = usePageStore.subscribe((st) => {
+    if (st.vaultRoot === page.vaultRoot && st.activePage === page.activePage) return
+    page = st
+    reload()
+  })
+  let last: State | null = null
+  const emit = (st: State): void => {
+    if (last && st.marks === last.marks && st.overlay === last.overlay && st.ready === last.ready) return
+    last = st
+    cb(withOverlay(st.marks, st.overlay), st.ready)
+  }
+  const offMarks = useMdMarkStore.subscribe(emit)
+  emit(useMdMarkStore.getState())
+  reload()
+  return () => { clearTimeout(timer); offPage(); offMarks() }
+}
+
+/** 按 `路径:行号` 找当前一条标记(插件写口用)。 */
+export const findMdMark = (key: string): MdMark | undefined => useMdMarkStore.getState().marks.find((m) => markKey(m) === key)
+export { markKey }
 
 /** 就地改一条标记(待办勾选 / 日历改期)。宿主没有回写接缝(web/mobile)时返回 false,调用方退回跳转。 */
 export function patchMark(m: MdMark, p: { due?: string; checked?: boolean }): boolean {

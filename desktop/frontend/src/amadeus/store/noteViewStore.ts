@@ -30,7 +30,7 @@ interface NoteViewState {
   /** 删行 = 删对应笔记文件(调用方负责二次确认)。 */
   deleteNote(folder: string, notePath: string): Promise<void>
   /** 改 Page Name = 重命名笔记文件。 */
-  renameNote(folder: string, notePath: string, newTitle: string): Promise<void>
+  renameNote(folder: string, notePath: string, newTitle: string): Promise<string>
 }
 
 const writeTimers = new Map<string, ReturnType<typeof setTimeout>>()
@@ -103,12 +103,21 @@ export const useNoteViewStore = create<NoteViewState>((set, get) => ({
     const base = translate('amadeus.default.note')
     let name = base
     let i = 1
-    while (titles.has(name.toLowerCase())) name = `${base} ${++i}`
-    const notePath = folder ? `${folder}/${name}.md` : `${name}.md`
-    // 素文件出生(评审 G4-12;此前 newPage 生 v3)。没建成(已提示)→ 抛,调用方不拿不存在的路径去写属性 / 打开。
-    if ((await birthNoteFile(notePath)) === 'failed') throw new Error(`create failed: ${notePath}`)
-    await get().refresh(folder)
-    return notePath
+    for (;;) {
+      while (titles.has(name.toLowerCase())) name = `${base} ${++i}`
+      const notePath = folder ? `${folder}/${name}.md` : `${name}.md`
+      // 素文件出生(评审 G4-12;此前 newPage 生 v3)。没建成(已提示)→ 抛,调用方不拿不存在的路径去写属性 / 打开。
+      const r = await birthNoteFile(notePath)
+      if (r === 'failed') throw new Error(`create failed: ${notePath}`)
+      if (r === 'created') {
+        await get().refresh(folder)
+        return notePath
+      }
+      // 'exists':并发的另一次新建刚占了这个名字 / 列表还没刷新到 → 换下一个名字,**绝不认领**已有笔记
+      // (认领了,调用方随后写的属性就盖进了别人的笔记;Codex 评审实测两次并发新建返回同一路径)。
+      titles.add(name.toLowerCase())
+      if (i > 999) throw new Error(`create failed: ${notePath}`)
+    }
   },
 
   async deleteNote(folder, notePath) {
@@ -121,11 +130,13 @@ export const useNoteViewStore = create<NoteViewState>((set, get) => ({
   },
 
   async renameNote(folder, notePath, newTitle) {
-    if (!newTitle.trim()) return
+    if (!newTitle.trim()) return notePath
+    let path = notePath
     try {
       // 改名触发全库引用重写:所有编辑器面板先落盘,防待存旧文本盖掉重写结果(Codex 评审 P1)。
       await flushAllScopes()
       const newPath = await amadeus.renamePageFile(notePath, newTitle.trim())
+      path = newPath
       if (newPath !== notePath) {
         remapScopePaths(notePath, newPath, 'file') // 开着这页的面板跟着换路径,防旧路径被写活
         await cascadeFdAfterRename(notePath, newPath) // .fd 子页面文件夹跟随改名
@@ -134,6 +145,7 @@ export const useNoteViewStore = create<NoteViewState>((set, get) => ({
       /* 撞名/非法名:忽略,refresh 会还原显示 */
     }
     await get().refresh(folder)
+    return path
   },
 }))
 
