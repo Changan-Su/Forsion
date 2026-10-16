@@ -2,28 +2,29 @@
 //
 // 形如 `.list:has(> .item) > :first-child`、`.owner:has(> .cover) > :not(.cover)` 的选择器:`:has` 不在最后一段,
 // 而最后一段只有伪类 / 通配(`:first-child`、`:not(…)`、`*`),浏览器没有类名、标签、属性可以拿来缩小范围 ——
-// 于是页面上**任何地方**插入或移除一个元素,它都把带 `:has` 的那个元素的**整棵子树**重算一遍样式。
+// 于是页面上**任何地方**插入或移除一个元素,浏览器都要把带 `:has` 的元素的**整棵子树**重算一遍样式。
 // 挂在聊天流、整个 View 这种大容器上就等于整页。不报错、不崩,只是处处慢:
 // 实测一段 60 条消息的对话(约 4800 个元素)里每插入一个元素 50ms,降速 4 倍(≈ 中端手机)约 200ms;
 // 流式输出每多一个节点、弹一次菜单、挂一个按钮都要付一次。三条这样的规则各自都足以触发(聊天流两条、临时 View 一条)。
 //
 // 改法:把「有没有那个子元素」记成父元素上的一个属性 / 类(由渲染它的代码写),或者让结尾点名具体的类。
-// 带 `:has` 的那个元素本身只有三两个后代时不必改(重算的就是那三两个),登记进 KNOWN 并写明它有多小。
-// 仪器:mobile 的 `npm run emu:perf`(`MODE=exp` 可以量「插入一个元素要多久」)。
+// **锚点小也不行**(10-16 桌面实测推翻了 10-11 的「三两个后代不必改」):Blink 把所有「`:has` 不在最后一段」的规则的结尾
+// 合成一份失效清单,一条结尾是通配,页面上**每个**被这类 `:has` 牵动的元素(包括别的规则挂在大容器上的)都按「整棵子树」失效。
+// 锚点在页面上根本不存在的 `.nope:has(.x) > *` 照样让 60 条消息的对话每插入 + 移除一次多花 18ms(同一条结尾点名类就是 0.6ms)。
+// 仪器:desktop 的 `node scripts/insert-restyle.probe.cjs`(真 Electron,逐条找出让插入变贵的规则,含依赖库生成的 CSS);
+// mobile 的 `npm run emu:perf`(`MODE=exp` 可以量「插入一个元素要多久」)。
 import { describe, expect, it } from 'vitest'
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { join, relative } from 'node:path'
 
 const GENESIS = join(__dirname, '../../..')
 const ROOTS = ['desktop/frontend/src', 'lcl', 'mobile/src', 'web/src']
-/** 形状命中、但带 `:has` 的那个元素子树很小的:重算的只是那几个元素,不必改。往这里加之前先确认它确实小
- *  (`npm run emu:perf` 里「插入一个元素」那一行没有因它变大)。 */
+/** 形状命中、还没改掉的(欠账,不是豁免):每一条单独都让整页每次插入多付一次重算(10-16 实测,见上)。只减不加。 */
 const KNOWN = new Set([
-  // 侧栏行的前导槽 .t2s-lead:一个图标加一个箭头。图标来自各处(lucide、插件自带、emoji),没有共同的类可点名。
+  // 侧栏行的前导槽 .t2s-lead:一个图标加一个箭头。图标来自各处(lucide、插件自带、emoji),没有共同的类可点名 ——
+  // 改法是让渲染 .t2s-lead 的代码在有箭头时写一个类,结尾改成不带 :has 的 `.t2s-lead--chev > :not(.t2s-lead-chev)`。
   ':is(.t2s-side, .t2sw-plug) .t2s-srow:hover .t2s-lead:has(.t2s-lead-chev) > :not(.t2s-lead-chev)',
   ':is(.t2s-side, .t2sw-plug) .t2s-folder-row:hover .t2s-lead:has(.t2s-lead-chev) > :not(.t2s-lead-chev)',
-  // 桌面 Ribbon 的「安静模式」淡出:`:has` 在 .rb(一条几十个按钮的栏)上,只在有悬停的设备上生效。没有在桌面上单独量过。
-  "html:not([data-calm-dim='off']) .rb:not(:hover, :has(:focus-visible)) .rb-btn:not(.on, .is-on, :has(.rb-badge), .rb-pinned *) > *",
 ])
 
 const splitTop = (s: string, isSep: (c: string) => boolean): string[] => {
@@ -85,7 +86,7 @@ describe(':has() 后面不许接没有类名可认的结尾', () => {
     expect(broadHasSelectors('/* .a:has(.b) > * */\n.x, .a:has(.b) > :last-child { color: red }')).toEqual([{ line: 2, selector: '.a:has(.b) > :last-child' }])
   })
 
-  it('源码里没有(子树很小、不必改的几条见 KNOWN)', () => {
+  it('源码里没有(还没改掉的几条见 KNOWN)', () => {
     const hits: string[] = []
     let scanned = 0
     for (const root of ROOTS) {
