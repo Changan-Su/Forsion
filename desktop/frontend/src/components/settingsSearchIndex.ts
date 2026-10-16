@@ -72,6 +72,9 @@ export const SETTINGS_SEARCH_INDEX: readonly SettingsSearchEntry[] = [
   { id: 'notes-attachments', tab: 'notes', anchor: 'notes-attachments', labelKey: 'settings.notes.modeLabel', keywords: '附件 图片 attachment image', needs: ['stored'] },
   { id: 'daily-notes', tab: 'notes', anchor: 'daily-notes', labelKey: 'settings.notes.dailyLabel', keywords: '日记 每日 daily journal', needs: ['stored'] },
   { id: 'agent-browser', tab: 'browser', anchor: 'agent-browser', labelKey: 'settings.browser.agentBrowser', keywords: '浏览器 browser chrome', needs: ['stored'] },
+  // 电脑操作(引擎插件 computer-use)的表单由插件 schema 渲染,锚点落在整页;插件没启用时这一页不在,结果也不出。
+  { id: 'strict-background', tab: 'computer-use', anchor: 'computer-use', labelKey: 'settings.search.strictBackground', keywords: '严格后台 后台 前台 抢焦点 抢前台 mini 电脑操作 strict background foreground focus computer use' },
+  { id: 'jev', tab: 'computer-use', anchor: 'computer-use', labelKey: 'settings.search.jev', keywords: 'jev 加速 置信度 视觉 定位 typesafe 电脑操作 acceleration confidence vision computer use' },
   // P1-K4:设置 › 远程会话(只在有主进程 API 的本机列,tab 门控即可)
   { id: 'remote-sessions-switch', tab: 'remote-sessions', anchor: 'remote-sessions-switch', labelKey: 'remoteSessions.switch', keywords: '远程会话 手机 远程 允许 remote session phone allow' },
   { id: 'remote-approval-cap', tab: 'remote-sessions', anchor: 'remote-approval-cap', labelKey: 'remoteSessions.cap', keywords: '远程审批档 全自动 审批 remote approval full auto' },

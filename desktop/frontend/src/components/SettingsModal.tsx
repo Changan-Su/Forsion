@@ -11,7 +11,7 @@ import { BrowserExtensionPanel } from './BrowserExtensionPanel'
  * 在 Desktop 主界面内替换 Chat/Inspector 区域，而不是覆盖式弹窗。
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react'
-import { X, Droplets, Shapes, ArrowLeft, Undo2, ChevronRight, Loader2, RefreshCw, Sun, Moon, MonitorCog, RotateCcw, LogIn, LogOut, KeyRound, Plus, Trash2, Plug, Search, Download, Sparkles, Wrench, Check, Copy, Globe2, FolderOpen, Play, Trophy, FileDown, Settings2, NotebookPen, Puzzle, LayoutGrid, Palette, Keyboard, Bug, Info, Brain, Bot, Webhook, MessageCircle, Blocks, Bell, PanelBottom, Image as ImageIcon, Server, Type, Layers3, MousePointer2, CircleUserRound, Scaling, Coffee, MonitorCheck, History, MonitorSmartphone, Cloud, SunDim, AlignLeft, Wind, TextSelect } from 'lucide-react'
+import { X, Droplets, Shapes, ArrowLeft, Undo2, ChevronRight, Loader2, RefreshCw, Sun, Moon, MonitorCog, RotateCcw, LogIn, LogOut, KeyRound, Plus, Trash2, Plug, Search, Download, Sparkles, Wrench, Check, Copy, Globe2, FolderOpen, Play, Trophy, FileDown, Settings2, NotebookPen, Puzzle, LayoutGrid, Palette, Keyboard, Bug, Info, Brain, Bot, Webhook, MessageCircle, Blocks, Bell, PanelBottom, Image as ImageIcon, Server, Type, Layers3, MousePointer2, CircleUserRound, Scaling, Coffee, MonitorCheck, History, MonitorSmartphone, Cloud, SunDim, AlignLeft, Wind, TextSelect, MousePointerClick } from 'lucide-react'
 import { ThemeCard } from './ThemeCard'
 import { ThemeSettingsPanel } from './ThemeSettingsPanel'
 import { StartupAppearanceSettings } from './StartupAppearanceSettings'
@@ -260,6 +260,8 @@ export type SettingsTarget = Tab | 'wechat' | `${StaticTab}/${string}`
 const DEV_MODE_KEY = 'forsion_tangu_dev_mode'
 /** 「Forsion 云端 → 账号」:Extend 渲染半身自绘的子页(registerSettingsView category 'forsion',id 'account')。 */
 const ACCOUNT_SUB = 'fx:forsion-extend:account'
+/** 引擎插件「电脑操作」的 id:它的设置页是固定的一级页 'computer-use'。 */
+const COMPUTER_USE_PLUGIN = 'computer-use'
 
 
 // 侧栏项图标(固定 tab 全配;外置 agent 插件的动态 plugin:<id> 项刻意无图标)。
@@ -287,6 +289,7 @@ const TAB_ICONS: Partial<Record<Tab, React.ReactNode>> = {
   hooks: <Webhook size={14} />,
   channels: <MessageCircle size={14} />,
   browser: <Globe2 size={14} />,
+  'computer-use': <MousePointerClick size={14} />,
   plugins: <Blocks size={14} />,
 }
 
@@ -380,7 +383,9 @@ export const SettingsModal: React.FC<{
   // 深链解析(一级页 + 子页)只在 resolveSettingsTarget 一处:连接/Forsion → 常规(general)的对应子页;
   // Agent CLI → agents/ag-clis;微信 → 通道;`${tab}/${sub}` 直达二级页。旧 normalizeTab 丢 sub = 登录入口全落错页(U-02)。
   const [initialTarget] = useState(() => resolveSettingsTarget(p.initialTab))
-  const [rawTab, setTab] = useState<Tab>(initialTarget.tab as Tab)
+  const [requestedTab, setTab] = useState<Tab>(initialTarget.tab as Tab)
+  // 「电脑操作」引擎插件有固定的一级页(AI 组,挨着浏览器):旧的 plugin:computer-use 深链 / 插件列表里的「打开设置」都落到它。
+  const rawTab: Tab = requestedTab === `plugin:${COMPUTER_USE_PLUGIN}` ? 'computer-use' : requestedTab
   // 中分类(标题下那排横向栏目)。只存 key,**有效值在渲染时推导**(见下方 activeSub):
   // 这样换一级页 / 某个中分类因条件消失时自动落回第一项,不需要 effect 复位,也就没有复位竞态。
   const [sub, setSub] = useState(initialTarget.sub ?? '')
@@ -480,6 +485,9 @@ export const SettingsModal: React.FC<{
   const pluginCascade = isDesktop && !unitPage
   // 单列壳(真机 / 开发者移动预览):没有键盘快捷键可录,也没有底部状态栏、ribbon。判据与 bootstrapEngine 的 singleColumn 同一条。
   const phoneShell = !!window.tangu?.mobile || UI_MODE === 'mobile'
+  // 引擎插件清单(异步到);「电脑操作」的一级页跟着它在不在。
+  const [plugins, setPlugins] = useState<PluginInfo[] | null>(null)
+  const computerUse = (plugins || []).find((pl) => pl.id === COMPUTER_USE_PLUGIN && pl.enabled && pl.settings)
   const tabItems = [
     // = 连接 + Forsion 合并。⚠️ 云端 Web / 移动端(webShim、mobileShim 都是 cloudWeb:true 且不给
     // backendStatus)下这一页**每个块都是 false**——连接项全是桌面/自建后端专属——列出来点进去是白板,
@@ -491,6 +499,8 @@ export const SettingsModal: React.FC<{
     ...((isDesktop || cloudWeb) ? ([['skills', t('settings.tab.skills')]] as Array<[Tab, string]>) : []),
     // 统一插件页(amadeus-plugins):Forsion 插件(含捆绑包)+ Tangu 引擎插件两区一页;旧 'plugins' 入口已并入(settingsTarget 的别名表)。
     ...(isDesktop ? ([['mcp', t('settingsmodal.tab.mcp')], ['hooks', t('settingsmodal.tab.hooks')], ['channels', t('settings.tab.channels')], ['browser', t('settings.tab.browser')]] as Array<[Tab, string]>) : []),
+    // 电脑操作(引擎插件 computer-use)启用且有设置时才有这一页;原先只排在「扩展」组最末尾、和几十个插件混在一起(反馈 0c0cd24f)。
+    ...(isDesktop && computerUse ? ([['computer-use', t('settings.tab.computerUse')]] as Array<[Tab, string]>) : []),
     // 插件页设备页也给(插件在 B 端真的装载运行,列表/启停是本页 runtime 行为,不碰对方设备)。
     ...(pluginsPage ? ([['amadeus-plugins', t('settings.tab.amadeusPlugins')]] as Array<[Tab, string]>) : []),
     // Forsion 云端(账号 / 云端地址 / 记忆同步 / 笔记在线同步)整页住在 Extend 的桥键后面:停用或没装 Extend 就没有这一页
@@ -516,6 +526,7 @@ export const SettingsModal: React.FC<{
   // 落到第一个可用页,免得停在白板上。plugin:<id> 动态页不在 tabItems 里,单独放行。
   const tab: Tab = tabItems.some(([id]) => id === rawTab) || rawTab.startsWith('plugin:')
     || (rawTab.startsWith('fplugin:') && pluginsPage && !!window.amadeus)
+    || (rawTab === 'computer-use' && isDesktop && plugins === null)
     ? rawTab
     : (tabItems[0]?.[0] ?? rawTab)
   const isPluginTab = tab.startsWith('plugin:') || tab.startsWith('fplugin:')
@@ -697,7 +708,6 @@ export const SettingsModal: React.FC<{
   const [mcpMsg, setMcpMsg] = useState('')
 
   // Obsidian 式插件:清单 + 每插件设置页(已启用且有 settings 的插件在「扩展」组下成一级 nav 项)。
-  const [plugins, setPlugins] = useState<PluginInfo[] | null>(null)
   const [pluginAgents, setPluginAgents] = useState<NormalAgentDef[]>([])
   const reloadPlugins = useCallback(() => {
     if (!isDesktop) return
@@ -711,8 +721,8 @@ export const SettingsModal: React.FC<{
   // `plugin:<id>` 只有「启用且声明了设置项」的引擎插件才有页(与引擎插件列表里那颗「打开设置」同一道闸)。
   // 商店的「打开设置」、agent 的 open-settings 都可能带来别的 id:清单到了再判,落到引擎插件列表(那一行上有它的开关)。
   useEffect(() => {
-    if (!rawTab.startsWith('plugin:') || !plugins) return
-    const pl = plugins.find((x) => x.id === rawTab.slice('plugin:'.length))
+    if (!(rawTab.startsWith('plugin:') || rawTab === 'computer-use') || !plugins) return
+    const pl = plugins.find((x) => x.id === (rawTab === 'computer-use' ? COMPUTER_USE_PLUGIN : rawTab.slice('plugin:'.length)))
     if (!(pl?.enabled && pl.settings)) { goTab('amadeus-plugins'); setSub('pl-engine') }
   }, [rawTab, plugins])
 
@@ -732,7 +742,7 @@ export const SettingsModal: React.FC<{
   }, [p.open, tab, isDesktop, p.cfg])
   const pluginNm = (pl: PluginInfo): string => (locale === 'en' && pl.nameEn ? pl.nameEn : pl.name)
   const pluginNavItems = (plugins || [])
-    .filter((pl) => pl.enabled && pl.settings)
+    .filter((pl) => pl.enabled && pl.settings && pl.id !== COMPUTER_USE_PLUGIN)
     .map((pl) => [`plugin:${pl.id}`, pluginNm(pl)] as [Tab, string])
 
   // Forsion 插件同款待遇:有真设置的各成左栏一级项,免得几十个插件全靠进插件页逐张卡点开找。
@@ -1105,7 +1115,7 @@ export const SettingsModal: React.FC<{
 
   const activeTabLabel = isPluginTab
     ? ([...forsionNavItems, ...pluginNavItems].find(([id]) => id === tab)?.[1] || t('settings.tab.plugins'))
-    : (tabItems.find(([id]) => id === tab)?.[1] || t('settings.title'))
+    : (tabItems.find(([id]) => id === tab)?.[1] || (tab === 'computer-use' ? t('settings.tab.computerUse') : t('settings.title')))
   const pageDescriptionKey: Partial<Record<StaticTab, string>> = {
     forsion: 'settings.page.forsionCloudDescription',
     general: 'settings.page.generalDescription',
@@ -1123,6 +1133,7 @@ export const SettingsModal: React.FC<{
     hooks: 'settings.page.hooksDescription',
     channels: 'settings.page.channelsDescription',
     browser: 'settings.page.browserDescription',
+    'computer-use': 'settings.page.computerUseDescription',
     'amadeus-plugins': PRODUCT.nativeFeatures !== undefined ? 'settings.amadeusPlugins.unitIntro' : 'settings.page.pluginsDescription',
     advanced: 'settings.page.advancedDescription',
     permissions: 'desktopPermissions.description',
@@ -1247,7 +1258,7 @@ export const SettingsModal: React.FC<{
     { key: 'settings', label: '', groups: [
       { key: 'workspace', label: t('settings.group.workspace'), tabs: ['forsion', 'general', 'spaces', 'notes', 'sync'] },
       { key: 'appearance', label: t('settings.group.appearance'), tabs: ['theme', 'shortcuts', 'notifications', 'statusbar'] },
-      { key: 'ai', label: t('settings.group.ai'), tabs: ['model', 'agents', 'skills', 'mcp', 'hooks', 'channels', 'browser'] },
+      { key: 'ai', label: t('settings.group.ai'), tabs: ['model', 'agents', 'skills', 'mcp', 'hooks', 'channels', 'browser', 'computer-use'] },
       { key: 'extensions', label: t('settings.group.extensions'), tabs: ['amadeus-plugins'] },
       { key: 'system', label: t('settings.group.system'), tabs: ['permissions', 'remote-sessions', 'computer-history', 'advanced', 'developer', 'about'] },
     ] },
@@ -3017,6 +3028,13 @@ export const SettingsModal: React.FC<{
                     {...(pluginCascade ? { cfg: p.cfg, onEngineReload: reloadPlugins, enginePlugins: plugins } : {})}
                     controlledDetail={{ id: tab.slice('fplugin:'.length), onBack: () => goTab('amadeus-plugins') }}
                   />
+                )}
+                {tab === 'computer-use' && (
+                  <div data-setting-anchor="computer-use">
+                    {computerUse
+                      ? <PluginSettingsPage cfg={p.cfg} plugin={computerUse} agents={pluginAgents} />
+                      : <div className="hint">{t('common.loading')}</div>}
+                  </div>
                 )}
                 {tab.startsWith('plugin:') && (() => {
                   const pid = tab.slice('plugin:'.length)
