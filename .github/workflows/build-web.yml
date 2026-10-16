@@ -16,6 +16,7 @@ on:
       - 'desktop/frontend/index.html' # 开屏预览复用的模板
       - 'desktop/frontend/startupAppearance.js'
       - 'desktop/frontend/startupAppearancePlugin.ts'
+      - 'desktop/frontend/astryxHasPlugin.ts'   # web/vite.config.ts 顶层 import
       - 'desktop/shared/**'         # @amadeus-shared + 渲染层直接 import 的 shared 模块(products / remoteSessions…)
       - 'desktop/products/**'       # shared/product.ts 静态 import ../products/forsion.json
       - 'desktop/CHANGELOG.md'      # changelog.ts 经 ?raw 内联(关于页版本号 / 更新日志)

@@ -65,6 +65,18 @@ const dismissExtensions = (): void => {
 }
 
 
+/** content-visibility:auto 正跳过内容的元素(长会话里离视口远的消息)。读这种元素里任何后代的 scrollTop,都会逼浏览器单独给那棵子树
+ *  补算样式和布局:3000 块的长页展开左栏一帧 5 秒(10-16 实测)。浏览器开始 / 停止跳过时发 contentvisibilityautostatechange,在这里记账,
+ *  遍历时不往里找,零额外开销。ponytail: 代价是屏外块内部的横向滚动(宽表格、长代码行)重挂后归零;要留就让这类容器自己登记。 */
+const cvSkipped = new WeakSet<Element>()
+if (typeof document !== 'undefined') {
+  document.addEventListener('contentvisibilityautostatechange', (e) => {
+    const el = e.target as Element
+    if ((e as Event & { skipped: boolean }).skipped) cvSkipped.add(el)
+    else cvSkipped.delete(el)
+  }, true)
+}
+
 /** 布局结构一变(加/减一个组),Dockview 会把幸存的那一支**摘下来重新挂**到新的父节点上 ——
  *  DOM 节点、React 树都不变,但**元素重新入 DOM 会让其中所有 CSS 动画从头重播**。于是各视图自己的
  *  入场动画(主页的 hp-rise、聊天输入区、图标……)在收/展面板时集体重放一遍 = 用户实报的
@@ -87,10 +99,13 @@ function preserveAcrossRestructure(): () => void {
   if (!root) return () => { /* 无 DOM(测试) */ }
   // 只记真的滚过的容器(绝大多数元素 scrollTop 为 0,不必留档)。toggle 才走这条,遍历成本可接受。
   const scrolls: Array<{ el: Element; top: number; left: number }> = []
-  for (const el of Array.from(root.querySelectorAll('*'))) {
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT, { acceptNode: (node) => {
+    const el = node as Element
     const top = el.scrollTop, left = el.scrollLeft
     if (top || left) scrolls.push({ el, top, left })
-  }
+    return cvSkipped.has(el) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT
+  } })
+  while (walker.nextNode()) { /* acceptNode 里记 */ }
   const restoreScroll = (): void => {
     for (const s of scrolls) {
       // 节点在重挂后依然是同一个对象(实测),故直接写回即可;内容还没铺好时写不进去,靠下面再补一帧。
@@ -111,6 +126,11 @@ function preserveAcrossRestructure(): () => void {
  *  收尾回调必须先比代号,不是自己那一轮的就整段放弃。否则旧那轮的 finish() 会去 close 新那轮刚开出来的
  *  panel:实测抛 dockview 的 'invalid operation'(未捕获),还会把 pinSides / 释放约束 / 存布局一起带跑偏。 */
 const toggleGen: Record<DockSide, number> = { left: 0, right: 0, bottom: 0 }
+
+/** toggleSidebar 展开时已经在动手之前拍过滚动快照(restoreOpen):它循环里调的 openView 再拍一遍是同一份,
+ *  3.4 万元素的长笔记里白走一遍 ~85ms(10-16 实测;展开一次本来走三遍)。alignRegions 那一遍不省:它在新视图挂上之后拍,
+ *  新视图挂载时同步还原的滚动位置只有它看得见。 */
+let snapshotTaken = false
 
 /** Dockview 组的默认最小尺寸(dockviewGroupPanel.ts 的 MINIMUM_DOCKVIEW_GROUP_PANEL_WIDTH/HEIGHT)。
  *  展开补间必须先把它放开到 0,否则起步的 setSize(1) 被钳在这里 —— 见 toggleSidebar 展开分支。 */
@@ -1222,7 +1242,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     const title = def ? label(def.displayName) : type
     const firstOfSide = loc !== 'main' && panelsAt(api, loc).length === 0
     const before = firstOfSide ? captureRegionTree(api) : null
-    const restore = firstOfSide ? preserveAcrossRestructure() : () => {}
+    const restore = firstOfSide && !snapshotTaken ? preserveAcrossRestructure() : () => {}
     const panel = api.addPanel({
       id,
       // 主区 panel 一律挂 __frame 宿主(就地切视图靠 updateParameters 换 __type);侧栏保持 per-type 组件。
@@ -1386,7 +1406,8 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       const release = (): void => { unlock(); if (toggleReleases[side] === release) delete toggleReleases[side] }
       toggleReleases[side] = release
       const restoreOpen = preserveAcrossRestructure() // 同收起:新增组一样会让主区被摘下重挂(底部有藏着的组时不新增)
-      stashed.forEach((v) => get().openView(v.type, v.params, side))
+      snapshotTaken = true
+      try { stashed.forEach((v) => get().openView(v.type, v.params, side)) } finally { snapshotTaken = false }
       restoreOpen()
       // 还原折叠前的活动 tab(openView 会把最后打开的设为活动,故此处显式拉回用户上次所在的视图)。
       // 无记忆(从没展开过 / 默认折叠的 Space 首次展开)→ 取**首项**:openView 顺序落到最后一个纯属副作用,
