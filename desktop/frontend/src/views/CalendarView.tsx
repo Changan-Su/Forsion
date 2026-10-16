@@ -376,6 +376,9 @@ export function CalendarView() {
       if (el && el.closest('input, textarea, select, [contenteditable]')) return
       const side = useCalendarNav.getState().sideEl
       const a = document.activeElement
+      // 焦点在事件卡 / 当日日程里:卡片自己管 Esc / Tab / 删除,日历快捷键让开 ——
+      // 右栏待办常驻后,待办卡开着时 Delete 会删掉主区高亮的另一条、C 会在卡下面起草稿(Codex 评审)
+      if (a?.closest('[role="dialog"]')) return
       const inCfg = !!a?.closest('.amx-calcfg') // 刚点过左栏小月历 / 日历列表:翻页类快捷键照样生效
       if (a && a !== document.body && !root.contains(a) && !side?.contains(a) && !inCfg && a.closest('.dv-react-part')) return
       const act = classifyCalKey(e)
@@ -415,8 +418,10 @@ export function CalendarView() {
         case 'rename': {
           // 焦点在工具栏按钮上时 Enter 照旧按按钮;高亮着一条事件时 Enter = 在它旁边开卡(卡里标题框自动聚焦)。
           if (el?.closest('button') && !el.closest('.amx-cal-event, .amx-cal-chip-ev')) return
-          if (!nav.selection || card) return
+          if (!nav.selection || card || !sel) return
+          // 事件块不一定渲染出来(月视图一天超过三条会折进「还有 N 项」):找不到就贴在那一天的格子旁
           const node = root.querySelector<HTMLElement>(`[data-key="${CSS.escape(nav.selection.key)}"]`)
+            ?? root.querySelector<HTMLElement>(`.amx-cal-mcell[data-date="${iso(sel.start)}"], .amx-cal-daycol2[data-date="${iso(sel.start)}"]`)
           if (!node) return
           const r = node.getBoundingClientRect()
           setCard({ key: nav.selection.key, at: { left: r.left, top: r.top, right: r.right, bottom: r.bottom, zoom: zoomOf(node) || 1 } })
