@@ -14,6 +14,7 @@ import { Suspense, createElement, startTransition, useEffect, useRef, useState, 
 import { flushSync } from 'react-dom'
 import { PanelLeft, PanelRight, X, MoreHorizontal, Plus, Zap, SlidersHorizontal } from 'lucide-react'
 import { useSpaceStore, setActiveSpace, getActiveSpace, pinSpaceToHome, redirectOpenFromOnePage } from './spaceRegistry'
+import { switchSpace } from './spaceTransition'
 import { useRibbonStore } from './ribbonRegistry'
 import { useCommandStore } from './commandRegistry'
 import { accountMenuItems, moreCommandGroups, moreCommandOn, moreCommandTitle, moreItems, moreRowLabel, presentedCommand } from './moreSheet'
@@ -541,12 +542,16 @@ function useDrawerDrag(
  *  它是同步的,所以重建之后再开一次即可。新 Space 压根没有左栏内容时不开(免得弹出个空抽屉)。 */
 function switchSpaceKeepDrawer(id: string): void {
   // 点的就是当前这个:不换 Space(抽屉本来就开着),只让一页式 Space 落回它那一页(同 enterSpace)。
-  if (id === useSpaceStore.getState().activeSpaceId) { landOnOnePage(); return }
-  setActiveSpace(id)
-  const ws = useWorkspace.getState()
-  if (ws.leftVisible) return
-  if (ws.leftLeaves.length === 0 && ws.sidebarDefaults.left.length === 0 && !footAliveNow()) return
-  ws.toggleSidebar('left')
+  // 同一个也经过 switchSpace:作废还在等下一帧的上一次切换(点了别的又点回来 = 留在这儿)
+  if (id === useSpaceStore.getState().activeSpaceId) { switchSpace(id, landOnOnePage); return }
+  // 换 + 重开抽屉一起交给过渡:新快照里抽屉已经是开着的那一份
+  switchSpace(id, () => {
+    setActiveSpace(id)
+    const ws = useWorkspace.getState()
+    if (ws.leftVisible) return
+    if (ws.leftLeaves.length === 0 && ws.sidebarDefaults.left.length === 0 && !footAliveNow()) return
+    ws.toggleSidebar('left')
+  }, { axis: 'x' })
 }
 
 /** 原生底部导航栏的数据:与抽屉里 Web Space 条同一份列表、同一条「当前项」判据(活动 id 不在表里时落第一格)。 */
@@ -595,8 +600,8 @@ function landOnEntry(): void { landOnOnePage(); landOnList() }
 /** 底栏 / 「全部 Space」面板上点一个 Space。点的就是当前这个:setActiveSpace 同 id 即返回,这里只让一页式 Space(主页)
  *  落回它那一页 —— 人在主页里、前台却是别的东西时,点「主页」就该回到主页。 */
 function enterSpace(id: string): void {
-  if (id === useSpaceStore.getState().activeSpaceId) landOnOnePage()
-  else setActiveSpace(id)
+  // 手机的 Space 横排在底栏:横着推。同一个也经过 switchSpace(作废还在等下一帧的上一次切换)
+  switchSpace(id, id === useSpaceStore.getState().activeSpaceId ? landOnOnePage : undefined, { axis: 'x' })
 }
 // 人在一页式 Space 里开别的 Space 的视图:先带到那个 Space 去(见 spaceRegistry.redirectOpenFromOnePage)。
 setBeforeMainOpenHook(redirectOpenFromOnePage)
