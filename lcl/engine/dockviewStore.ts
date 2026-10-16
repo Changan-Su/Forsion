@@ -127,6 +127,11 @@ function preserveAcrossRestructure(): () => void {
  *  panel:实测抛 dockview 的 'invalid operation'(未捕获),还会把 pinSides / 释放约束 / 存布局一起带跑偏。 */
 const toggleGen: Record<DockSide, number> = { left: 0, right: 0, bottom: 0 }
 
+/** toggleSidebar 展开时已经在动手之前拍过滚动快照(restoreOpen):它循环里调的 openView 再拍一遍是同一份,
+ *  3.4 万元素的长笔记里白走一遍 ~85ms(10-16 实测;展开一次本来走三遍)。alignRegions 那一遍不省:它在新视图挂上之后拍,
+ *  新视图挂载时同步还原的滚动位置只有它看得见。 */
+let snapshotTaken = false
+
 /** Dockview 组的默认最小尺寸(dockviewGroupPanel.ts 的 MINIMUM_DOCKVIEW_GROUP_PANEL_WIDTH/HEIGHT)。
  *  展开补间必须先把它放开到 0,否则起步的 setSize(1) 被钳在这里 —— 见 toggleSidebar 展开分支。 */
 const DV_GROUP_MIN = 100
@@ -1237,7 +1242,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     const title = def ? label(def.displayName) : type
     const firstOfSide = loc !== 'main' && panelsAt(api, loc).length === 0
     const before = firstOfSide ? captureRegionTree(api) : null
-    const restore = firstOfSide ? preserveAcrossRestructure() : () => {}
+    const restore = firstOfSide && !snapshotTaken ? preserveAcrossRestructure() : () => {}
     const panel = api.addPanel({
       id,
       // 主区 panel 一律挂 __frame 宿主(就地切视图靠 updateParameters 换 __type);侧栏保持 per-type 组件。
@@ -1401,7 +1406,8 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       const release = (): void => { unlock(); if (toggleReleases[side] === release) delete toggleReleases[side] }
       toggleReleases[side] = release
       const restoreOpen = preserveAcrossRestructure() // 同收起:新增组一样会让主区被摘下重挂(底部有藏着的组时不新增)
-      stashed.forEach((v) => get().openView(v.type, v.params, side))
+      snapshotTaken = true
+      try { stashed.forEach((v) => get().openView(v.type, v.params, side)) } finally { snapshotTaken = false }
       restoreOpen()
       // 还原折叠前的活动 tab(openView 会把最后打开的设为活动,故此处显式拉回用户上次所在的视图)。
       // 无记忆(从没展开过 / 默认折叠的 Space 首次展开)→ 取**首项**:openView 顺序落到最后一个纯属副作用,
