@@ -55,7 +55,9 @@ export interface FloatingTocProps extends FloatingTocOptions {
   scrollContainer: FloatingTocElementSource
   /** Defaults to the scroll container. */
   contentRoot?: FloatingTocElementSource
-  /** Optional explicit invalidation; MutationObserver already covers ordinary DOM/text changes. */
+  /** Optional explicit invalidation; MutationObserver already covers ordinary DOM/text changes
+   *  (the first change after a quiet spell rescans on the next frame, later ones at most every 500 ms;
+   *  changes inside `[data-lcl-toc-ignore]` subtrees, e.g. lazily mounted code or embeds, never do). */
   scanTrigger?: unknown
   /** Height of sticky chrome covering the top of the scroll container (read at use time), added to
    *  `topOffset` for both the jump target and the active-section line. Pass a stable function. */
@@ -98,6 +100,26 @@ function sameItems(a: ResolvedItem[], b: ResolvedItem[]): boolean {
     return item.target === next.target && item.text === next.text && item.level === next.level
       && item.primary === next.primary && item.onSelect === next.onSelect
   })
+}
+
+/** Rescans while content keeps changing (streaming, typing) are spaced this far apart. */
+const SCAN_SPACING_MS = 500
+
+const ignoredMutation = (record: MutationRecord): boolean => {
+  const node = record.target
+  const el = node.nodeType === Node.ELEMENT_NODE ? node as Element : node.parentElement
+  return !!el?.closest('[data-lcl-toc-ignore]')
+}
+
+/** The element to measure for `target`. Reading the box of something inside a subtree that
+ *  `content-visibility: auto` is skipping forces the browser to lay that whole subtree out, which undoes
+ *  the skipping on every scroll frame. Such a subtree is far from the viewport, so measuring its nearest
+ *  unskipped ancestor is precise enough to tell above from below the probe line. */
+function measurable(target: HTMLElement): HTMLElement {
+  if (target.checkVisibility?.({ contentVisibilityAuto: true }) !== false) return target
+  let el = target.parentElement
+  while (el && !el.checkVisibility({ contentVisibilityAuto: true })) el = el.parentElement
+  return el ?? target
 }
 
 export function FloatingToc({
@@ -170,14 +192,23 @@ export function FloatingToc({
     const scroller = resolveElement(scrollContainer)
     const root = resolveElement(contentRoot) ?? scroller
     if (!root || typeof MutationObserver === 'undefined') return
+    // Rescanning walks every heading of the document, so doing it on every streamed token or keystroke grows
+    // with the document. A change after a quiet spell still rescans on the next frame (switching sessions,
+    // a new message); further changes are folded into one rescan per SCAN_SPACING_MS.
     let frame = 0
-    const observer = new MutationObserver(() => {
-      cancelAnimationFrame(frame)
-      frame = requestAnimationFrame(scan)
+    let timer = 0
+    let lastScan = 0
+    const run = (): void => { frame = 0; lastScan = performance.now(); scan() }
+    const observer = new MutationObserver((records) => {
+      if (frame || timer || records.every(ignoredMutation)) return
+      const wait = lastScan + SCAN_SPACING_MS - performance.now()
+      if (wait <= 0) frame = requestAnimationFrame(run)
+      else timer = window.setTimeout(() => { timer = 0; frame = requestAnimationFrame(run) }, wait)
     })
     observer.observe(root, { childList: true, subtree: true, characterData: true })
     return () => {
       cancelAnimationFrame(frame)
+      window.clearTimeout(timer)
       observer.disconnect()
     }
   }, [contentRoot, scan, scanTrigger, scrollContainer])
@@ -208,7 +239,7 @@ export function FloatingToc({
       let active = items[0]
       for (const item of items) {
         if (!item.target.isConnected || !root.contains(item.target)) continue
-        if (item.target.getBoundingClientRect().top <= line) active = item
+        if (measurable(item.target).getBoundingClientRect().top <= line) active = item
         else break
       }
       setActiveKey(active?.key ?? null)

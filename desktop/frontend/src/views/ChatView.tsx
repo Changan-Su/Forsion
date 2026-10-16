@@ -22,7 +22,7 @@ import { amadeusAvailable } from '../features/runtime'
 import { resolveDeskPath } from '../stores/deskPlan'
 import { useDeskAcceptsFiles } from '../amadeus/plugins/deskCompanion'
 import { ErrorBoundary } from '../components/ErrorBoundary'
-import { EditorialMessage } from './chat2/EditorialMessage'
+import { EditorialMessage, type MessageHandlers } from './chat2/EditorialMessage'
 import { ApprovalTray } from './chat2/ApprovalTray'
 import { APPROVAL_UPDATE_OPEN, pendingPromptsOf } from './chat2/approvalQueue'
 import { RunStatsLine } from './chat2/RunStatsLine'
@@ -451,6 +451,37 @@ export function ChatView({ leaf, params }: ViewProps) {
   const startEdit = (id: string, content: string): void => { setEditingId(id); setEditText(content) }
   const saveEdit = (): void => { if (editingId && editText.trim()) { s.editUserMessage(editingId, editText.trim(), activeId) } setEditingId(null) }
 
+  // 传给每条消息的对象要稳住,EditorialMessage 的 memo 才挡得住「流式每来一段字,整段对话的消息都重渲一遍」。
+  // handlers 按「会话 + 哪几个按钮在」整组缓存、组里按消息 id 各一份;函数体经 handlerEnv 取当下的值(提交后才会被点到),不会拿到旧闭包。
+  const handlerEnv = useRef({ s, activeId, activeMessages, copy, speak, startEdit })
+  useLayoutEffect(() => { handlerEnv.current = { s, activeId, activeMessages, copy, speak, startEdit } })
+  const readOnly = !!params.readOnly
+  const childSurface = !!params.childSurface
+  const canInsertNote = amadeusAvailable()
+  const handlerCache = useMemo(() => new Map<string, MessageHandlers>(), [activeId, readOnly, childSurface, canInsertNote, ttsEnabled])
+  const handlersFor = (id: string): MessageHandlers => {
+    const hit = handlerCache.get(id)
+    if (hit) return hit
+    const env = (): typeof handlerEnv.current => handlerEnv.current
+    const h: MessageHandlers = {
+      onCopy: (text) => env().copy(text),
+      onRegenerate: readOnly ? undefined : () => env().s.regenerate(id, env().activeId),
+      onBranch: childSurface ? undefined : () => void env().s.branchFromMessage(id, env().activeId),
+      onEdit: readOnly ? undefined : () => env().startEdit(id, env().activeMessages.find((m) => m.id === id)?.content ?? ''),
+      onRewind: readOnly ? undefined : (mode) => void env().s.rewindTo(id, mode, env().activeId),
+      // 建议芯片 = 用户自己把这句话打进去按了回车(运行中则落进 steer 等待区)。
+      onSuggest: readOnly ? undefined : (text) => void env().s.send(text, [], undefined, undefined, undefined, env().activeId),
+      onTask: (card, landing) => runTaskCard(card, landing, env().activeId),
+      // 回答插回笔记(G3-08):由「问 Tangu」发起的对话优先插回出处那篇;宿主没有 Amadeus 编辑能力就不出按钮。
+      onInsertNote: canInsertNote ? (text) => void insertReplyToNote(text, askOriginOf(env().activeMessages, id)) : undefined,
+      ...(ttsEnabled ? { onSpeak: (text: string) => env().speak(id, text) } : {}),
+    }
+    handlerCache.set(id, h)
+    return h
+  }
+  const fileCtx = useMemo(() => ({ cfg: s.cfg, sessionId: activeId || '', execMode: mvCfg.execMode, onOpenPreview: s.setFilePreview }), [s.cfg, activeId, mvCfg.execMode, s.setFilePreview])
+  const voice = useMemo(() => (ttsEnabled ? { on: voiceOn, cfg: s.cfg, stored: s.desktopConfig } : undefined), [ttsEnabled, voiceOn, s.cfg, s.desktopConfig])
+
   const hasMessages = activeMessages.length > 0
   // 输入卡上方那一栏的两半(JSX 在 .composer-anchor 里):项目那半只在空白新对话上;开场那半还包括已建好但没发过消息的会话。
   const projectBarOn = !activeId && (!studioChat || !!studioRoot) && (mvCfg.preset !== 'chat' || (runPickerOn && !studioChat))
@@ -575,24 +606,11 @@ export function ChatView({ leaf, params }: ViewProps) {
                     agentNameFallback={chatAgentName}
                     userName={userName}
                     userAvatar={userAvatar}
-                    fileCtx={{ cfg: s.cfg, sessionId: activeId || '', execMode: mvCfg.execMode, onOpenPreview: s.setFilePreview }}
+                    fileCtx={fileCtx}
                     modelId={mvModelId}
                     speakState={tts?.msgId === m.id ? tts.phase : undefined}
-                    voice={ttsEnabled ? { on: voiceOn, cfg: s.cfg, stored: s.desktopConfig } : undefined}
-                    handlers={{
-                      onCopy: copy,
-                      onRegenerate: params.readOnly ? undefined : () => s.regenerate(m.id, activeId),
-                      onBranch: params.childSurface ? undefined : () => void s.branchFromMessage(m.id, activeId),
-                      onEdit: params.readOnly ? undefined : () => startEdit(m.id, m.content),
-                      onRewind: params.readOnly ? undefined : (mode) => void s.rewindTo(m.id, mode, activeId),
-                      // 建议芯片 = 用户自己把这句话打进去按了回车(运行中则落进 steer 等待区)。
-                      onSuggest: params.readOnly ? undefined : (text) => void s.send(text, [], undefined, undefined, undefined, activeId),
-                      onTask: (card, landing) => runTaskCard(card, landing, activeId),
-                      // 回答插回笔记(G3-08):由「问 Tangu」发起的对话优先插回出处那篇;宿主没有 Amadeus 编辑能力就不出按钮。
-                      onInsertNote: amadeusAvailable() ? (text) => void insertReplyToNote(text, askOriginOf(activeMessages, m.id)) : undefined,
-
-                      ...(ttsEnabled ? { onSpeak: (text) => speak(m.id, text) } : {}),
-                    }}
+                    voice={voice}
+                    handlers={handlersFor(m.id)}
                   />
                 )
               })
