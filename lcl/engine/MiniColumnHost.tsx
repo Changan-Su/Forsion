@@ -14,16 +14,20 @@ interface DirectMiniViewTarget { type: string; params?: Record<string, unknown> 
 
 /** 自绘缩放边:四条边 + 四个角。宿主窗口是透明无边框的,系统不给缩放边(Windows)。 */
 const EDGES = ['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw']
-/** 只报「哪条边、起手 / 拖动 / 松手」;位移由宿主(主进程)自己读光标算。 */
+/** 带上事件发生时的屏幕坐标,避免主进程收到起手消息时光标已到终点。 */
 const dragEdge = (e: React.PointerEvent<HTMLDivElement>): void => {
   const el = e.currentTarget, edge = el.dataset.edge!
+  const cursor = { x: e.screenX, y: e.screenY }
   if (e.type === 'pointerdown') {
     if (e.button !== 0) return
     el.setPointerCapture(e.pointerId)
-    window.tangu?.miniResize?.(edge, true)
+    window.tangu?.miniResize?.(edge, true, cursor)
   } else if (e.type === 'pointermove') {
-    if (el.hasPointerCapture(e.pointerId)) window.tangu?.miniResize?.(edge)
-  } else window.tangu?.miniResize?.(null)
+    if (el.hasPointerCapture(e.pointerId)) window.tangu?.miniResize?.(edge, false, cursor)
+  } else {
+    if (e.type === 'pointerup' && el.hasPointerCapture(e.pointerId)) window.tangu?.miniResize?.(edge, false, cursor)
+    window.tangu?.miniResize?.(null)
+  }
 }
 
 export const MiniColumnHost: React.FC<{

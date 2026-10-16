@@ -1544,6 +1544,9 @@ let bootRestored: boolean | null = null
 /** 启动还原落空了:此刻屏上是「当时的活动 Space」的默认布局,不是布局键里原来那份现场。
  *  异步就位的 Space(插件比 Dockview 就绪得晚)据此补还原自己的现场,而不是只换个活动 id。 */
 export const bootLayoutFellThrough = (): boolean => bootRestored === false
+/** 单列 store 的冷启动交接(singleColumnStore 同名导出,手机 App 经 workspaceStore 换到那一份)。桌面的交接就是
+ *  spaceRegistry.adoptSpaceLayoutCold 自己那段(layoutPersist),这里什么都不做。 */
+export function adoptSingleColumnLayoutCold(_fromId: string, _toId: string, _activeId: string): void { /* 桌面:no-op */ }
 
 export function tryRestoreLayout(api: DockviewApi): boolean {
   bootRestored = restoreLayout(api)

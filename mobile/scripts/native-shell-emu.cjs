@@ -2352,13 +2352,39 @@ const tabCountText = (list) => {
   // the next and a boot never restores anything — the one place this bug lives. Sign in as an account for this check.
   // The phone keeps ONE layout "in use" and restores it at boot; the startup Space (Home by default) is decided
   // separately. Leave the app in Tangu and the next launch is Home wearing Tangu's layout (reported 2026-10-11/12).
-  await check('launch: left in another Space, the app opens on Home with the homepage on screen — not that Space\'s list or conversation', async () => {
+  // The launch hands the layouts over like the desktop does (2026-10-16, singleColumnStore.adoptSingleColumnLayoutCold):
+  // the one in use goes into the slot of the Space it belongs to, and the startup Space's own slot comes in. Without
+  // that, Tangu lost the tabs it was left with on every launch, and a startup Space other than Home wore Tangu's layout.
+  await check('launch: left in another Space, the app opens on Home with the homepage on screen — not that Space\'s list or conversation; that Space keeps the tabs it was left with; a startup Space set to Agents wears its own layout', async () => {
     const ID_TOKEN = `e2e.${Buffer.from(JSON.stringify({ userId: 'e2e-layout' })).toString('base64url')}.sig`
     const setToken = (v) => cdp.eval(`Capacitor.Plugins.Preferences.set({ key: 'forsion_token', value: ${JSON.stringify(v)} }).then(() => true)`)
     const st = async () => JSON.parse(await cdp.eval(`JSON.stringify((() => { const sh = document.querySelector('.mb-shell'), at = document.elementFromPoint(innerWidth / 2, innerHeight / 2)
       return { space: sh?.dataset.space, nav: sh?.dataset.nav || '', view: ${dom.view}, onScreen: at?.closest('.hp-root') ? 'homepage' : at?.closest('.mb-drawer--left') ? 'left panel' : (at?.closest('[class]')?.className || '').toString().slice(0, 40),
         slots: Object.keys(localStorage).filter((k) => k.includes('e2e-layout') && k.startsWith('lcl_sc_')).length } })())`))
     const bad = []
+    /** The layout in use for this account, as the app keeps it (written 200 ms after a change). */
+    const layout = async () => JSON.parse(await cdp.eval(`JSON.stringify((() => { const k = Object.keys(localStorage).find((k) => k.startsWith('lcl_sc_layout_v1:') && k.includes('e2e-layout')); const b = k && JSON.parse(localStorage.getItem(k))
+      return b ? { space: b.space || null, main: b.main.map((r) => r.type), front: b.main.find((r) => r.id === b.activeMainId)?.type || null, left: b.left.map((r) => r.type) } : null })())`))
+    /** How a person leaves Tangu after working there: a conversation in front, a second tab behind it. */
+    async function leaveTanguWithTabs() {
+      await openChat('E2E Session One')
+      if (Number(tabCountText(ui()) || '1') < 2) {
+        await tapId('nativeChrome.more')
+        await tapId('nativeSheet.item.tab:new', await waitSheet(true))
+        await waitSheet(false)
+        assert.ok((await h.waitNodes((l) => (Number(tabCountText(l)) === 2 ? l : null), { timeout: 6000 })).hit, 'control: a second tab did not open in Tangu')
+        await openChat('E2E Session One') // the conversation back in front
+      }
+      await h.pause(1200)
+      const l = await layout()
+      assert.ok(l && l.main.length === 2 && l.front === 'chat', `control: Tangu as it is left: ${JSON.stringify(l)}`)
+    }
+    const judgeTangu = async (how) => {
+      await toSpace('tangu'); await h.pause(900)
+      const l = await layout()
+      console.log(`  Tangu after the ${how}: ${JSON.stringify(l)}`)
+      if (!l || l.main.length !== 2 || l.front !== 'chat') bad.push(`${how}: Tangu lost the tabs it was left with (the conversation in front of a second tab): ${JSON.stringify(l)}`)
+    }
     const judge = (how, got) => {
       if (got.space !== 'home') bad.push(`${how}: not on Home: ${JSON.stringify(got)}`)
       if (got.nav) bad.push(`${how}: Home came up as a list Space (nav "${got.nav}")`)
@@ -2374,8 +2400,7 @@ const tabCountText = (list) => {
       const first = await st()
       console.log(`  first launch: ${JSON.stringify(first)}`)
       assert.equal(first.space, 'home', 'control: the default startup Space is Home')
-      await openChat('E2E Session One') // Tangu, a conversation on screen: where the user leaves the app
-      await h.pause(1200)
+      await leaveTanguWithTabs() // Tangu, a conversation on screen: where the user leaves the app
       assert.ok((await st()).slots >= 1, `control: this account's layout is kept (${JSON.stringify(await st())})`)
       await reload() // the next launch
       await h.pause(1200)
@@ -2383,11 +2408,8 @@ const tabCountText = (list) => {
       console.log(`  launch after leaving the app in a Tangu conversation: ${JSON.stringify(next)}`)
       shot('05d-launch-after-tangu')
       judge('page reload', next)
-      // … and Tangu is still a Space of its own
-      await toSpace('tangu'); await h.pause(900)
-      const tangu = await st()
-      console.log(`  Tangu after that launch: ${JSON.stringify(tangu)}`)
-      if (tangu.nav !== 'list' && tangu.view !== 'chat') bad.push(`Tangu lost its own layout: ${JSON.stringify(tangu)}`)
+      // … and Tangu is still a Space of its own, with what it was left with
+      await judgeTangu('page reload')
       // the same through a real launch: the process is killed with a Tangu conversation on screen and started again
       // (a page reload runs the same boot code; this is the path a person takes)
       await openChat('E2E Session One')
@@ -2407,6 +2429,18 @@ const tabCountText = (list) => {
       console.log(`  cold start (process killed in a Tangu conversation): ${JSON.stringify(cold)}`)
       shot('05e-cold-start-after-tangu')
       judge('cold start', cold)
+      await judgeTangu('cold start')
+      // a startup Space other than Home (Settings → Spaces → "启动时进入"): it comes up in its own layout, not in Tangu's
+      await cdp.eval("(localStorage.setItem('forsion_default_space', 'agents'), true)")
+      await leaveTanguWithTabs()
+      await reload()
+      await h.pause(1200)
+      const pinned = await st(), pl = await layout()
+      console.log(`  launch with the startup Space set to Agents, left in Tangu: ${JSON.stringify(pinned)} ${JSON.stringify(pl)}`)
+      shot('05f-launch-into-agents-after-tangu')
+      if (pinned.space !== 'agents') bad.push(`startup Space Agents: not on Agents: ${JSON.stringify(pinned)}`)
+      if (!pl || pl.space !== 'agents' || pl.main.includes('chat') || pl.left.includes('workspace')) bad.push(`startup Space Agents wears Tangu's layout: ${JSON.stringify(pl)}`)
+      await judgeTangu('launch into Agents')
     } finally {
       await cdp.eval(`(Object.keys(localStorage).filter((k) => k.includes('e2e-layout')).forEach((k) => localStorage.removeItem(k)), ${startPref === null ? "localStorage.removeItem('forsion_default_space')" : `localStorage.setItem('forsion_default_space', ${JSON.stringify(startPref)})`}, true)`)
       await setToken('e2e-native-shell.fake.token')

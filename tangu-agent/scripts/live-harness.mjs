@@ -200,7 +200,7 @@ import { CU_JEV_KEYS, JEV_REQUESTS_DIR, cuJevSetup, cuJevConfig, cuJevLive } fro
 import { appRefLive, appRefSelftest } from './lib/app-ref-live.mjs';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
-const entry = join(root, 'dist', 'standalone', 'main.js');
+const entry = process.env.TANGU_LIVE_ENGINE_ENTRY || join(root, 'dist', 'standalone', 'main.js');
 // --selftest 只跑纯判据,不起引擎 → 未构建的树上也该能跑(否则它会先撞上这条,出一句误导的 dist 缺失)。
 if (!existsSync(entry) && !process.argv.includes('--selftest')) { console.error('dist 缺失,先 npm run build'); process.exit(2); }
 
@@ -1146,7 +1146,7 @@ if (ONLY.has('browserext')) {
 // 目录名照着真机的样子取(家目录 / 其下的工作目录):系统提示只告诉模型工作目录,它靠这个推家目录在哪 —— 工作目录不在家目录下时,
 // 模型会去列 /Users 找「真正的」家目录(10-10 两次实测)。
 const FAKE_HOME = join(OUT, 'home', 'dev');
-const PLUGINDIAG_DIR = ONLY.has('plugindiag') ? plantPlugin({ src: opt('plugin-src', ''), data: opt('plugin-data', ''), shared, fakeHome: FAKE_HOME }) : null;
+const PLUGINDIAG_DIR = ONLY.has('plugindiag') ? await plantPlugin({ src: opt('plugin-src', ''), data: opt('plugin-data', ''), shared, fakeHome: FAKE_HOME }) : null;
 
 // notebook(10-12):真的 Jupyter 笔记本插件(--plugin-src)放进隔离共享域的 plugins/notebook,引擎带上内置 Python 的路径(桌面主进程平时给的
 // TANGU_PYTHON_BIN;worktree 里没有 desktop/build/python,用 --python-bin 指主检出那份)。--notebook-neg = 负对照,两样都不给。
@@ -1167,7 +1167,7 @@ const child = spawn(process.execPath, [
   ...process.env, TANGU_HOME: home, TANGU_DEFAULT_WORKSPACE: workspace, TANGU_CACHE_PROBE: '1',
   TANGU_BROWSER_CDP: userChromeWs || 'off',
   FORSION_DESKTOP_CONFIG: desktopCfg,
-  ...(PLUGINDIAG_DIR ? { HOME: FAKE_HOME } : {}),
+  ...(PLUGINDIAG_DIR ? { HOME: FAKE_HOME, ...(process.platform === 'win32' ? { USERPROFILE: FAKE_HOME } : {}) } : {}),
   ...(ONLY.has('notebook') && !NOTEBOOK_NEG ? { TANGU_PYTHON_BIN: NOTEBOOK_PY } : {}),
   ...(extPort ? { TANGU_BROWSER_EXTENSION_PORT: String(extPort), TANGU_BROWSER_ALLOW_PRIVATE_URLS: '1' } : { TANGU_BROWSER_EXTENSION: '0' }),
   // --window:只钉台架模型的窗口(contextBudget 的 env 覆盖表,最高优先级),别的模型不受影响

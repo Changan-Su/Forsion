@@ -305,6 +305,9 @@ OUT=/absolute/out npm run emu:nativeshell   # ONLY=tabs,prompt 只跑子集
   Space 的布局，这个问题就躲在这里，两轮都没被台架看见）。要测跨启动的行为，照「launch: left in another Space…」那一条的做法：
   换一个带 `userId` 的令牌再重启，结束时换回来。往已存布局里塞东西的检查用 `leaveHomeForItsSlot()` 找当前账号的那一格，
   别取「第一个有主页布局的格子」（那多半是以前某次启动留下的，改了等于没改，检查在哪个包上都绿）。
+- 启动时的布局交接（2026-10-16）：在用的那份记着它是哪个 Space 的（`space`），启动时先归档进它自己的槽、再把启动 Space 的槽搬进来
+  （`singleColumnStore.adoptSingleColumnLayoutCold`，经 `adoptSpaceLayoutCold` 调到）。「launch: left in another Space…」那一条钉着
+  两个后果：停在 Tangu 退出后 Tangu 还带着上次的两个标签；「启动时进入」设成 Agents 时它是自己的布局、不穿 Tangu 的。
 - **给人上手看**：`HOLD=40 npm run emu:nativeshell` 不跑检查，把 App 停在演示数据状态（假账号、几条会话、带一个测试插件的商店），
   留 40 分钟；到点或删掉产物目录里的 `holding` 文件就收尾、把设备还原。演示数据挂在这次启动上，App 被划掉重开就没了。
   要让人自己点，模拟器得带窗口起（去掉 `-no-window`）。

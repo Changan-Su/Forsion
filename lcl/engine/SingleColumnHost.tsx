@@ -935,8 +935,8 @@ export const SingleColumnHost: React.FC<{ dark?: boolean; soft?: boolean; buildD
     const ws = useWorkspace.getState()
     if (buildDefault) ws.setDefaultBuilder(buildDefault)
     // 冷启动先还原上次的标签 + 激活项(桌面是 WorkspaceHost.onReady 的 tryRestoreLayout,单列这边
-    // 是三桶 leaf 的序列化);首启 / 整份不可用才构建当前 Space 的默认布局。
-    if (ws.mainLeaves.length === 0 && !restoreSingleColumnLayout()) buildDefault?.()
+    // 是三桶 leaf 的序列化);首启 / 整份不可用才构建当前 Space 的默认布局。挂载之前已经摆上了的由它自己认(照用,但发令枪要响)。
+    if (!restoreSingleColumnLayout()) buildDefault?.()
     landOnEntry() // 冷启动的落点(固定主视图 / 两级导航的列表层);还原成功那条路已由钩子落过,这里幂等
     ws.refreshTabs()
   }, [])
