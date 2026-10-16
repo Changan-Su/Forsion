@@ -313,6 +313,7 @@
     "check:shadowsurface": "node scripts/shadow-surface.check.cjs",
     "check:calendarui": "node scripts/calendar-ui.check.cjs",
     "check:astryxscope": "node scripts/astryx-scope.check.cjs",
+    "check:astryxhas": "node scripts/astryx-has.check.cjs",
     "check:restylescope": "node scripts/restyle-scope.check.cjs",
     "check:todo": "node scripts/todo-view.check.cjs",
     "check:chattabs": "node scripts/chat-multitab.check.cjs",
