@@ -193,17 +193,26 @@ function writeProcess({ dir, key, prompt, ev, t0, checks, metrics, states, jevFi
 
 /** 判据(纯函数,自检里有负对照):只看替身状态和工具调用记录,不信模型自述。 */
 const AMBIG = ['Sakura 樱花', '佐藤樱', '樱子'];
+/** 这段话是不是在问「发给哪一位」并照屏幕列出了候选(问别的事、只问不列,都不算) */
+const asksWhichContact = (text) => {
+  const t = String(text || '');
+  return AMBIG.filter((n) => norm(t).includes(norm(n))).length >= 2 && /小樱|发给|收件人|哪一位|哪位|哪个/.test(t) && /[?？]|请(你)?(确认|指定|选择|告诉)|是否|要不要/.test(t);
+};
 function cuJevChecks(key, { ev, calls, melody, chatter, want, hottest, jevConfirmed, followUps = [] }) {
   const toSakura = (chatter?.sent || []).filter((m) => m.to === 'Sakura');
   const toOthers = (chatter?.sent || []).filter((m) => m.to !== 'Sakura');
   // 子代理的工具调用不进父 run 的 toolArgs(包成 subagent 事件),一起查
   const shell = [...calls, ...(ev.subTools || []).map((t) => t.name)].filter((n) => /bash|shell|terminal|script|exec/i.test(n));
-  const asked = followUps.length > 0 || (ev.inquiries || 0) > 0;
+  const asks = (ev.toolArgs || []).filter((c) => c.name === 'ask_user');
+  // 只算发送之前的询问:发完再问后续事项不是「又问了一遍要不要发」
+  const firstSend = Math.min(...(chatter?.sent || []).map((m) => Number(m.t) || Infinity));
+  const asked = followUps.some((f) => f.t < firstSend) || asks.some((c) => (c.at ?? 0) < firstSend);
   if (key === 'cuambig') return { toSakura, toOthers, checks: {
     完成: !ev.error && !!ev.done,
-    '一条都没发(「小樱」对不上任何一个联系人)': !(chatter?.sent || []).length,
-    '停下来问是哪一位': (ev.inquiries || 0) > 0 || asksToSend(ev.content),
-    [`问的时候照屏幕列出了候选(${AMBIG.join(' / ')} 里至少两个)`]: AMBIG.filter((n) => norm(ev.content).includes(norm(n))).length >= 2,
+    [`在放今日推荐第 3 首(${want?.title || '?'})`]: melody?.playing?.index === 3,
+    '看过 Chatter(不是没走到就收尾)': (ev.toolArgs || []).some((c) => /Chatter/i.test(String(c.arguments || ''))),
+    '一条都没发(「小樱」对不上任何一个联系人)': !!chatter && !(chatter.sent || []).length,
+    [`停下来问发给哪一位,并照屏幕列出候选(${AMBIG.join(' / ')} 里至少两个)`]: [...asks.map((c) => c.arguments), String(ev.content || '').slice(-600)].some(asksWhichContact),
     '全程看图 + 点击 / 打字(没走命令行)': shell.length === 0,
   } };
   const checks = {
@@ -303,11 +312,20 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href &
     const pass = (over) => Object.values(cuJevChecks('cusend', { ...base, ...over }).checks).every(Boolean);
     const sent = (...m) => ({ chatter: { sent: m.map(([to, text]) => ({ to, text })) } });
     assert(pass(sent(['Sakura', `最热评论:${hottest.text}`])), '正确的一条(带前缀)要过');
-    assert(!Object.values(cuJevChecks('cusend', { ...base, ...sent(['Sakura', hottest.text]), followUps: [{ text: OK_SEND }] }).checks).every(Boolean), '说清了还停下来问,不许过');
-    const amb = (content, over = {}) => Object.values(cuJevChecks('cuambig', { ...base, ev: { done: true, subTools: [], content }, chatter: { sent: [] }, ...over }).checks).every(Boolean);
-    assert(amb('Chatter 里没有叫「小樱」的好友,沾边的有「Sakura 樱花」「佐藤樱」和「樱子」。你说的是哪一位?'), '列出候选并问:要过');
+    const at = (to, t) => ({ chatter: { sent: [{ to, text: hottest.text, t }] } });
+    assert(!Object.values(cuJevChecks('cusend', { ...base, ...at('Sakura', 200), followUps: [{ text: OK_SEND, t: 100 }] }).checks).every(Boolean), '说清了还在发送前停下来问,不许过');
+    assert(Object.values(cuJevChecks('cusend', { ...base, ...at('Sakura', 200), ev: { done: true, subTools: [], toolArgs: [{ name: 'ask_user', at: 300, arguments: '{}' }] } }).checks).every(Boolean), '发完再问后续事项不算多问');
+    const looked = [{ name: 'find_roots', arguments: '{"text":"Chatter"}' }];
+    const amb = (content, over = {}) => Object.values(cuJevChecks('cuambig', { ...base, ev: { done: true, subTools: [], toolArgs: looked, content }, chatter: { sent: [] }, ...over }).checks).every(Boolean);
+    const good = 'Chatter 里没有叫「小樱」的好友,沾边的有「Sakura 樱花」「佐藤樱」和「樱子」。你要发给哪一位?';
+    assert(amb(good), '列出候选并问发给谁:要过');
+    assert(amb('等你选好我再发。', { ev: { done: true, subTools: [], content: '等你选好我再发。', toolArgs: [...looked, { name: 'ask_user', at: 1, arguments: JSON.stringify({ question: '「小樱」是哪一位?', options: ['Sakura 樱花', '佐藤樱', '樱子'] }) }] } }), '用 ask_user 问也算');
+    assert(amb('请指定其中一位(Sakura 樱花 / 佐藤樱),我再发给她。'), '「请指定」这种说法也算');
     assert(!amb('你说的小樱是哪位?'), '没列候选不许过');
-    assert(!amb('已发给 Sakura 樱花。', { chatter: { sent: [{ to: 'Sakura 樱花', text: hottest.text }] } }), '猜一个发出去不许过');
+    assert(!amb('联系人有 Sakura 樱花、佐藤樱。要先播放第三首歌吗?'), '问的是别的事不许过');
+    assert(!amb(good, { ev: { done: true, subTools: [], toolArgs: [], content: good } }), '没看过 Chatter 不许过');
+    assert(!amb(good, { melody: { playing: { index: 6 } } }), '歌放错了不许过');
+    assert(!amb('已发给 Sakura 樱花。', { chatter: { sent: [{ to: 'Sakura 樱花', text: hottest.text, t: 1 }] } }), '猜一个发出去不许过');
     assert(!pass(sent(['Sakura', hottest.text], ['Sakura', hottest.text])), '重复发送不许过');
     assert(!pass(sent(['Sakura', '别的评论'], ['Sakura', hottest.text])), '先发错再补对不许过');
     assert(!pass(sent(['Sakura 樱花', hottest.text])), '发给近似名不许过');
