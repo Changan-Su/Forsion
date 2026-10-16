@@ -209,6 +209,7 @@
     "check:plugindeps": "node scripts/plugin-deps.check.cjs",
     "check:pluginsync": "node scripts/plugin-install-sync.check.cjs",
     "check:first-run": "node scripts/onboarding.check.cjs",
+    "stage:calendar": "node scripts/calendar.stage.cjs",
     "stage:first-run": "node scripts/onboarding.stage.cjs",
     "check:miniauto": "node scripts/mini-auto.check.cjs",
     "check:board": "node scripts/board-paper.check.cjs",
