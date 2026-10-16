@@ -172,7 +172,9 @@ export function setAggCell(db: AggDb, rowId: string, colId: string, value: CellV
 export async function createAggEvent(db: AggDb, calColId: string, value: string, name: string): Promise<string> {
   const nameCol = db.columns[0]
   if (db.isNoteView && db.folder !== undefined) {
-    const notePath = await useNoteViewStore.getState().addNote(db.folder)
+    let notePath = await useNoteViewStore.getState().addNote(db.folder)
+    // 先改名再写日期:setProp 的防抖写按路径落,反过来会在旧路径上把文件写活。
+    if (name.trim()) notePath = await useNoteViewStore.getState().renameNote(db.folder, notePath, name)
     const col = db.columns.find((c) => c.id === calColId)
     useNoteViewStore.getState().setProp(db.folder, notePath, calColId, value, resolveBaseType(col?.type ?? 'text'))
     return notePath

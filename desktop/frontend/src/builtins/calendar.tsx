@@ -61,8 +61,9 @@ const DESKTOP_SIDES: Record<'left' | 'right', PersistedPanel[]> = {
 }
 const sides = (): Record<'left' | 'right', PersistedPanel[]> => (singleColumn() ? PHONE_SIDES : DESKTOP_SIDES)
 
-/** 这份存档的两侧还是 10-16 之前的默认摆法吗(左只有待办、右只有日历设置;收起的一侧看暂存)。
- *  是 → 启动时重建本 Space 的布局换成新摆法;用户自己挪过的(多开了别的、换过边)= false,不动。 */
+/** 这份存档整份还是 10-16 之前的默认摆法吗(左只有待办、右只有日历设置、主区只有日历、底栏空;收起的一侧看暂存)。
+ *  是 → 启动时重建本 Space 的布局换成新摆法;用户动过任何一处(多开了标签 / 分屏 / 底栏终端、换过边)= false,
+ *  整份不动 —— 重建会连主区与单列存档一起清掉(Codex 评审 P1)。 */
 export function calendarSidesAreOld(blob: LayoutBlob | null): boolean {
   if (!blob) return false
   const panels = Object.values((blob.dockview as { panels?: Record<string, { params?: { __loc?: string; __type?: string } }> } | null)?.panels ?? {})
@@ -72,7 +73,8 @@ export function calendarSidesAreOld(blob: LayoutBlob | null): boolean {
   }
   const only = (xs: string[], type: string): boolean => xs.length <= 1 && xs.every((x) => x === type)
   const l = at('left'), r = at('right')
-  return l.length + r.length > 0 && only(l, 'todo-list') && only(r, 'calendar-config')
+  const rest = panels.filter((p) => p.params?.__loc !== 'left' && p.params?.__loc !== 'right').map((p) => p.params?.__type ?? '')
+  return l.length + r.length > 0 && only(l, 'todo-list') && only(r, 'calendar-config') && only(rest, 'calendar') && !blob.sidebars.bottom?.stash.length
 }
 
 export const calendarSpace: SpaceDefinition = {

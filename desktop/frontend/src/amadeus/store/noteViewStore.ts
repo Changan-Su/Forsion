@@ -30,7 +30,7 @@ interface NoteViewState {
   /** 删行 = 删对应笔记文件(调用方负责二次确认)。 */
   deleteNote(folder: string, notePath: string): Promise<void>
   /** 改 Page Name = 重命名笔记文件。 */
-  renameNote(folder: string, notePath: string, newTitle: string): Promise<void>
+  renameNote(folder: string, notePath: string, newTitle: string): Promise<string>
 }
 
 const writeTimers = new Map<string, ReturnType<typeof setTimeout>>()
@@ -121,11 +121,13 @@ export const useNoteViewStore = create<NoteViewState>((set, get) => ({
   },
 
   async renameNote(folder, notePath, newTitle) {
-    if (!newTitle.trim()) return
+    if (!newTitle.trim()) return notePath
+    let path = notePath
     try {
       // 改名触发全库引用重写:所有编辑器面板先落盘,防待存旧文本盖掉重写结果(Codex 评审 P1)。
       await flushAllScopes()
       const newPath = await amadeus.renamePageFile(notePath, newTitle.trim())
+      path = newPath
       if (newPath !== notePath) {
         remapScopePaths(notePath, newPath, 'file') // 开着这页的面板跟着换路径,防旧路径被写活
         await cascadeFdAfterRename(notePath, newPath) // .fd 子页面文件夹跟随改名
@@ -134,6 +136,7 @@ export const useNoteViewStore = create<NoteViewState>((set, get) => ({
       /* 撞名/非法名:忽略,refresh 会还原显示 */
     }
     await get().refresh(folder)
+    return path
   },
 }))
 

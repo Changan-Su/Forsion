@@ -96,8 +96,9 @@ export function parseQuickAdd(input: string, now = new Date()): QuickAdd {
     return true
   })
 
+  if (!date && time === null) return { title: input.trim(), value: null }
+  // 介词只在确实挖走了日期 / 时刻时才去(「On call」「Stand by」认不出日期就原样保留)
   const title = text.replace(/\s+/g, ' ').trim().replace(/^(?:at|on|by)\s+|\s+(?:at|on|by)$/i, '').trim()
-  if (!date && time === null) return { title, value: null }
   const day = fmtStamp(date ?? today, true)
   if (time === null) return { title, value: day }
   const t = time as number

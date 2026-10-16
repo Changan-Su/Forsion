@@ -175,8 +175,9 @@ function buildEvents(entries: CalEntry[], vault: string, byVault: Parameters<typ
   })
   return out
 }
-/** 只有日期的待办(勾选列 + 单天全天)住右栏的待办,不进周 / 日视图的全天行(方案页「待办」那节)。 */
-const dateOnlyTodo = (e: CalEvent): boolean => !!e.check && e.allDay && !e.end
+/** 只有日期的待办(勾选列 + 单天全天)住右栏的待办,不进周 / 日视图的全天行(方案页「待办」那节)。
+ *  只在桌面:手机这轮没动,待办不在右栏,滤掉就看不到了(Codex 评审)。 */
+const dateOnlyTodo = (e: CalEvent): boolean => DESK && !!e.check && e.allDay && !e.end
 
 const hhmm = (d: Date): string => `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
 const fmtMin = (m: number): string => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`

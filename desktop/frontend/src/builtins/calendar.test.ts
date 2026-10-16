@@ -21,5 +21,11 @@ describe('calendarSidesAreOld', () => {
     expect(calendarSidesAreOld(blob([['main', 'calendar'], ['left', 'calendar-config'], ['right', 'calendar-side']]))).toBe(false)
     expect(calendarSidesAreOld(blob([['main', 'calendar']]))).toBe(false)
     expect(calendarSidesAreOld(null)).toBe(false)
+    // 主区多开了标签 / 底栏开过终端:两侧没动也整份不动(重建会清掉主区)
+    expect(calendarSidesAreOld(blob([['main', 'calendar'], ['main', 'note'], ['left', 'todo-list'], ['right', 'calendar-config']]))).toBe(false)
+    expect(calendarSidesAreOld(blob([['main', 'calendar'], ['bottom', 'termv'], ['left', 'todo-list'], ['right', 'calendar-config']]))).toBe(false)
+    const stashed = blob([['main', 'calendar'], ['left', 'todo-list'], ['right', 'calendar-config']])
+    stashed.sidebars.bottom = { visible: false, stash: [{ type: 'termv', params: {} }] }
+    expect(calendarSidesAreOld(stashed)).toBe(false)
   })
 })

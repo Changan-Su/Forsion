@@ -37,5 +37,7 @@ describe('parseQuickAdd', () => {
   })
   it('认不出就原样当标题', () => {
     expect(p('买牛奶')).toEqual({ title: '买牛奶', value: null })
+    expect(p('On call')).toEqual({ title: 'On call', value: null })
+    expect(p('Stand by')).toEqual({ title: 'Stand by', value: null })
   })
 })
