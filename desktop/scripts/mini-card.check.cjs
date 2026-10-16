@@ -165,7 +165,7 @@ async function main() {
     check('hit testing restored after Computer Use, still in place', (canFollow ? await lastIgnore() === false : await lastIgnore() === undefined) && JSON.stringify(parked) === JSON.stringify(await bounds()))
     await app.evaluate(({ BrowserWindow }) => { BrowserWindow.getFocusedWindow = globalThis.__miniOriginalFocusedWindow })
 
-    // 拖边改大小:渲染层只报哪条边,位移由主进程读光标算(光标在上面已换成 __miniCursor)。
+    // 真指针事件的 screenX/Y 随事件过 IPC,快速拖动也不能读到已经到终点的系统光标。
     await switchTo('ToDo List'); await mini.waitForSelector('.mini-todo .amx-todo')
     const dragEdge = async (edge, dx, dy) => {
       const box = await mini.locator(`.mini-card-edge[data-edge="${edge}"]`).boundingBox()
@@ -174,12 +174,24 @@ async function main() {
       const x = !corner ? box.x + box.width / 2 : edge.includes('w') ? box.x + box.width - 2 : box.x + 2
       const y = !corner ? box.y + box.height / 2 : edge.includes('n') ? box.y + box.height - 2 : box.y + 2
       await mini.mouse.move(x, y); await mini.mouse.down()
-      await app.evaluate((_, d) => { globalThis.__miniCursor.x += d.dx; globalThis.__miniCursor.y += d.dy }, { dx, dy })
-      await mini.mouse.move(x + 1, y); await pause(150) // 已捕获指针:挪出热区也算拖动
+      await mini.mouse.move(x + dx, y + dy); await pause(150) // 已捕获指针:挪出热区也算拖动
     }
     const nudge = (dx, dy) => app.evaluate((_, d) => { globalThis.__miniCursor.x += d.dx; globalThis.__miniCursor.y += d.dy }, { dx, dy })
     const fills = () => mini.evaluate(() => { const r = document.querySelector('.mini-card-shell').getBoundingClientRect(); return Math.abs(r.width - innerWidth) < 1 && Math.abs(r.height - innerHeight) < 1 })
     const before = await bounds()
+    await mini.evaluate(() => {
+      window.tangu.miniResize('e', true, { x: 100, y: 100 })
+      window.tangu.miniResize('e', false, { x: 140, y: 100 })
+      window.tangu.miniResize(null)
+    })
+    await pause(100)
+    check('batched fast drag uses event coordinates, not the cursor at IPC delivery', (await bounds()).width === before.width + 40)
+    await mini.evaluate(() => {
+      window.tangu.miniResize('e', true, { x: 140, y: 100 })
+      window.tangu.miniResize('e', false, { x: 100, y: 100 })
+      window.tangu.miniResize(null)
+    })
+    await pause(100)
     await win.evaluate(() => window.tangu.miniResize('se', true)); await nudge(60, 60)
     await win.evaluate(() => window.tangu.miniResize('se')); await pause(100); await nudge(-60, -60)
     check('only the Mini window itself can resize the card', JSON.stringify(before) === JSON.stringify(await bounds()))

@@ -41,7 +41,7 @@
  * 用法:node scripts/git-credentials.gitea.mjs      (KEEP=1 保留临时目录并打印 Gitea 日志尾部)
  */
 import assert from 'node:assert/strict';
-import { execFile, spawn } from 'node:child_process';
+import { execFile, execFileSync, spawn } from 'node:child_process';
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import https from 'node:https';
 import net from 'node:net';
@@ -106,6 +106,9 @@ try {
 APP_NAME = Forsion Git (engine e2e)
 RUN_MODE = prod
 WORK_PATH = ${work}
+
+[git]
+PATH = ${process.env.GITEA_SERVER_GIT || 'git'}
 
 [server]
 PROTOCOL = https
@@ -226,12 +229,26 @@ ROOT_PATH = ${join(work, 'log')}
   const helper = join(work, 'helper.sh');
   const shellPath = (p) => `'${p.replace(/\\/g, '/').replace(/'/g, `'\\''`)}'`;
   writeFileSync(helper, `#!/bin/sh\necho "$1" >> ${shellPath(helperLog)}\nif [ "$1" = get ]; then echo username=dave; echo password=old-stored-pat; fi\n`, { mode: 0o755 });
+  // 可选的真 GCM 腿只使用这次台架的明文临时存储,绝不读写用户的 Windows 凭据库。
+  const gcm = process.env.GITEA_TEST_GCM;
+  let readGcm, savedGcm;
+  if (gcm) {
+    Object.assign(process.env, { GCM_CREDENTIAL_STORE: 'plaintext', GCM_PLAINTEXT_STORE_PATH: join(work, 'gcm-store'), GCM_INTERACTIVE: 'Never', GCM_PROVIDER: 'generic' });
+    const input = `protocol=https\nhost=127.0.0.1:${port}\nusername=dave\n`;
+    const options = { env: process.env, encoding: 'utf8', windowsHide: true, timeout: 10_000 };
+    execFileSync(gcm, ['store'], { ...options, input: `${input}password=old-stored-pat\n\n` });
+    readGcm = () => execFileSync(gcm, ['get'], { ...options, input: `${input}\n` });
+    savedGcm = readGcm();
+    assert.ok(savedGcm.includes('password=old-stored-pat'), '真 GCM 的隔离存储里确有旧凭据');
+    writeFileSync(helper, `#!/bin/sh\necho "$1" >> ${shellPath(helperLog)}\nexec ${shellPath(gcm)} "$1"\n`, { mode: 0o755 });
+  }
   await git(src, 'config', '--file', join(work, 'gitconfig'), 'credential.helper', `!sh ${shellPath(helper)}`);
   const refused = note(await outcome(gitPush(src)));
   writeFileSync(join(work, 'gitconfig'), '');
   for (const key of ['GIT_TRACE_CURL', 'GIT_CURL_VERBOSE', 'GIT_TRACE']) delete process.env[key];
   const helperCalls = existsSync(helperLog) ? readFileSync(helperLog, 'utf8').trim().split('\n') : [];
   assert.deepEqual(helperCalls, [], `带凭据的推送被拒之后不该去问用户的凭据助手(实际:${helperCalls.join(' → ')})`);
+  if (readGcm) { assert.equal(readGcm(), savedGcm, '推送认证失败不得删除真 GCM 已存的旧凭据'); console.log('⑤ Windows 真 GCM:隔离存储中的旧凭据保留,没有 get / erase 调用或交互提示'); }
   assert.equal(refused.code, 'git_failed', JSON.stringify(refused));
   assert.equal(askedBad.length, 2, `坏令牌只该重取一次,实际问了 ${askedBad.length} 次`);
   // 跟踪开着时 git 把每个请求头 / 响应头都打进 stderr(Authorization 那一行在前面,失败原文只取末尾一段,所以这里钉的是
