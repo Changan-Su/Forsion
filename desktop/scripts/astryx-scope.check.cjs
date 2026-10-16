@@ -373,7 +373,7 @@ async function main() {
     })
     check('右栏布局已写入 Tangu / 笔记两个 Space 的命名槽', planted.ok, JSON.stringify(planted))
     const openTodoRight = async () => {
-      if (!(await win.locator('.amx-todo').count())) await win.click('.dv-edge-right')
+      if (!(await win.locator('.amx-todo').count()) && !(await win.locator('.dv-edge-right.is-on').count())) await win.click('.dv-edge-right')
       // Tangu 的右栏固定留着「Tangu 详情」(10-03 起的固定 View,排第一、默认激活),种进去的待办成了同栏第二个标签 → 点它的标签切过去。
       const todoTab = win.locator('.wb-tab--icon[title*="待办"]')
       await win.waitForFunction(() => !!document.querySelector('.amx-todo, .wb-tab--icon[title*="待办"]'), null, { timeout: 10_000 }).catch(() => {})
@@ -452,6 +452,9 @@ async function main() {
     const leftToggle = () => win.evaluate(() => { const b = document.querySelector('.dv-edge-toggle:not(.dv-edge-right)'); if (b) b.click(); return !!b })
     // 主区日历 10-03 起是固定 View(builtins/calendar.tsx 的 pinned.main),标签上没有 ×、关不掉:这一步只在它还能关时跑;
     // 关不掉时主区日历一直挂着,后两步各自还剩 2 个包裹层(主区 + 另一侧栏)。
+    // 跳过不丢真回归:主区日历在产品里不会先于同 Space 的侧栏卸掉(关不掉;压到后台的标签不卸,Dockview 是 onlyWhenVisible),
+    // 离开 Space 时三个一起卸、新 Space 的 Theme 挂上会重新注入 —— 10-16 负对照实跑:回退常驻注入后,
+    // 注入者是侧栏时这里的侧栏那步红;日历 → Tangu(右栏待办)那条路照样绿,所以没加那一步。
     const mainCloseBtn = () => [...document.querySelectorAll('.dv-tab')].find((t) => t.textContent.trim() === '日历')?.querySelector('.wb-tab-close')
     const mainClosable = await win.evaluate(`!!(${mainCloseBtn})()`)
     if (mainClosable) {
