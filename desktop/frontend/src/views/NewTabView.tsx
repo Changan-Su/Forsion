@@ -9,7 +9,7 @@ import { Plus, Bot, FileText, Globe, TerminalSquare, Search, ChevronDown, ArrowU
 import { useApp } from '../stores/appStore'
 import { hasNativeFeature, amadeusAvailable } from '../features/runtime'
 import { openSpecial } from './SpecialViews'
-import { useWorkspace, useSpaceStore, useRibbonStore, getActiveSpace, setActiveSpace, getView, label, startOpenDrag, rankIds, OverlayAt, formatHotkey, effectiveHotkey, isMacPlatform, type PersistedPanel } from '@lcl/engine'
+import { useWorkspace, useSpaceStore, useRibbonStore, getActiveSpace, switchSpace, getView, label, startOpenDrag, rankIds, OverlayAt, formatHotkey, effectiveHotkey, isMacPlatform, type PersistedPanel } from '@lcl/engine'
 import { AMADEUS_ENABLED } from '../spaces'
 import { pluginOfSpace } from '../userSpaces'
 import { homeSlotSpaceId } from '../homeSlot'
@@ -335,7 +335,7 @@ export function NewTabView({ leaf }: ViewProps) {
             >{v.icon}{v.label}</button>
           ))}
           <div className="ctx-separator" />
-          <button onClick={() => { const id = menu.item.spaceId; setMenu(null); if (id) setActiveSpace(id) }}>
+          <button onClick={() => { const id = menu.item.spaceId; setMenu(null); if (id) switchSpace(id) }}>
             <ArrowUpRight size={16} />{t('newtab.enterSpace', { space: menu.item.label })}
           </button>
         </OverlayAt>,

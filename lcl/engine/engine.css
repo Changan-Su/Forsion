@@ -928,3 +928,50 @@ html[data-dv-dragging] .t2s-side { -webkit-app-region: no-drag; }
  * 空左栏不画标签条(见「空侧栏占位」),那时交通灯浮在空白侧栏的左上角。 */
 [data-platform='mac'] .shell--noribbon .dockview-theme-lcl .dv-tabs-and-actions-container.dv-under-lights { padding-left: calc(70px / var(--uiz, 1)); }
 [data-platform='mac'] .shell--noribbon .dv-prefix--edge { padding-left: 4px; }
+
+/* ===== 换 Space 的过渡(spaceTransition.ts;2026-10-16 用户选 C「沿 ribbon 方向推移」) =====
+ * 只在 <html data-space-switch> 挂着时起名,平时不带 view-transition-name —— 明暗切换(themeStore 的整页淡入)不受影响。
+ * 桌面:工作区(.shell-work)整块竖着推 28px;手机:内容区(.mb-body)横着推 24px,底栏 / 顶栏不动。
+ * next = 目标在切换条上靠后:新的从下 / 右进,旧的往上 / 左走。新旧同一条曲线 + plus-lighter 合成,交叉时不会中途变暗。
+ * ribbon(手机是抽屉底部的 Space 条)单独成组且不动画:当前 Space 的高亮点下去立刻跳。其余(外壳底色,独立外观换色时)随 root 200ms 淡过去。
+ * fade = 系统「减少动态效果」:不起名,只有 120ms 整页淡入。 */
+html:is([data-space-switch='next'], [data-space-switch='prev']) .shell-work,
+html:is([data-space-switch='next'], [data-space-switch='prev']) .mb-body { view-transition-name: space-work; }
+html:is([data-space-switch='next'], [data-space-switch='prev']) .rb { view-transition-name: space-ribbon; }
+/* 手机抽屉底部的 Space 条 + 账号行:同 ribbon,手指底下那排不跟着推 */
+html:is([data-space-switch='next'], [data-space-switch='prev']) .mb-drawer-foot { view-transition-name: space-bar; }
+/* 快照层不接指针:过渡那 0.28 秒里点 ribbon / 页面直接落到底下已经换好的真界面上(不加时点击被整层吃掉,台架实测) */
+html[data-space-switch]::view-transition { pointer-events: none; }
+html[data-space-switch]::view-transition-old(root),
+html[data-space-switch]::view-transition-new(root) { animation-duration: 200ms; }
+html[data-space-switch='fade']::view-transition-old(root),
+html[data-space-switch='fade']::view-transition-new(root) { animation-duration: 120ms; }
+html[data-space-switch]::view-transition-group(space-ribbon),
+html[data-space-switch]::view-transition-new(space-ribbon),
+html[data-space-switch]::view-transition-group(space-bar),
+html[data-space-switch]::view-transition-new(space-bar) { animation: none; }
+html[data-space-switch]::view-transition-old(space-ribbon),
+html[data-space-switch]::view-transition-old(space-bar) { display: none; }
+html[data-space-switch]::view-transition-group(space-work) { animation: none; }
+html[data-space-switch]::view-transition-image-pair(space-work) { isolation: isolate; }
+html[data-space-switch]::view-transition-old(space-work),
+html[data-space-switch]::view-transition-new(space-work) {
+  mix-blend-mode: plus-lighter;
+  --space-push: 28px;
+  --space-ease: cubic-bezier(.2, 0, 0, 1);
+}
+html[data-space-switch]::view-transition-old(space-work) { animation: 220ms ease both lcl-space-fade-out, 280ms var(--space-ease) both lcl-space-push-out; }
+html[data-space-switch]::view-transition-new(space-work) { animation: 220ms ease both lcl-space-fade-in, 280ms var(--space-ease) both lcl-space-push-in; }
+html[data-space-switch='next'] { --space-dir: 1; }
+html[data-space-switch='prev'] { --space-dir: -1; }
+@keyframes lcl-space-fade-out { to { opacity: 0; } }
+@keyframes lcl-space-fade-in { from { opacity: 0; } }
+@keyframes lcl-space-push-out { to { transform: translateY(calc(var(--space-dir, 1) * -1 * var(--space-push))); } }
+@keyframes lcl-space-push-in { from { transform: translateY(calc(var(--space-dir, 1) * var(--space-push))); } }
+@keyframes lcl-space-push-out-x { to { transform: translateX(calc(var(--space-dir, 1) * -1 * var(--space-push))); } }
+@keyframes lcl-space-push-in-x { from { transform: translateX(calc(var(--space-dir, 1) * var(--space-push))); } }
+/* 手机:底栏的 Space 是横排的 → 横着推(SingleColumnHost 调 switchSpace 时传 axis 'x') */
+html[data-space-switch-axis='x'][data-space-switch]::view-transition-old(space-work),
+html[data-space-switch-axis='x'][data-space-switch]::view-transition-new(space-work) { --space-push: 24px; }
+html[data-space-switch-axis='x'][data-space-switch]::view-transition-old(space-work) { animation-name: lcl-space-fade-out, lcl-space-push-out-x; }
+html[data-space-switch-axis='x'][data-space-switch]::view-transition-new(space-work) { animation-name: lcl-space-fade-in, lcl-space-push-in-x; }

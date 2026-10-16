@@ -14,6 +14,7 @@ import { Suspense, createElement, startTransition, useEffect, useRef, useState, 
 import { flushSync } from 'react-dom'
 import { PanelLeft, PanelRight, X, MoreHorizontal, Plus, Zap, SlidersHorizontal } from 'lucide-react'
 import { useSpaceStore, setActiveSpace, getActiveSpace, pinSpaceToHome, redirectOpenFromOnePage } from './spaceRegistry'
+import { switchSpace } from './spaceTransition'
 import { useRibbonStore } from './ribbonRegistry'
 import { useCommandStore } from './commandRegistry'
 import { accountMenuItems, moreCommandGroups, moreCommandOn, moreCommandTitle, moreItems, moreRowLabel, presentedCommand } from './moreSheet'
@@ -542,11 +543,14 @@ function useDrawerDrag(
 function switchSpaceKeepDrawer(id: string): void {
   // 点的就是当前这个:不换 Space(抽屉本来就开着),只让一页式 Space 落回它那一页(同 enterSpace)。
   if (id === useSpaceStore.getState().activeSpaceId) { landOnOnePage(); return }
-  setActiveSpace(id)
-  const ws = useWorkspace.getState()
-  if (ws.leftVisible) return
-  if (ws.leftLeaves.length === 0 && ws.sidebarDefaults.left.length === 0 && !footAliveNow()) return
-  ws.toggleSidebar('left')
+  // 换 + 重开抽屉一起交给过渡:新快照里抽屉已经是开着的那一份
+  switchSpace(id, () => {
+    setActiveSpace(id)
+    const ws = useWorkspace.getState()
+    if (ws.leftVisible) return
+    if (ws.leftLeaves.length === 0 && ws.sidebarDefaults.left.length === 0 && !footAliveNow()) return
+    ws.toggleSidebar('left')
+  }, { axis: 'x' })
 }
 
 /** 原生底部导航栏的数据:与抽屉里 Web Space 条同一份列表、同一条「当前项」判据(活动 id 不在表里时落第一格)。 */
@@ -596,7 +600,7 @@ function landOnEntry(): void { landOnOnePage(); landOnList() }
  *  落回它那一页 —— 人在主页里、前台却是别的东西时,点「主页」就该回到主页。 */
 function enterSpace(id: string): void {
   if (id === useSpaceStore.getState().activeSpaceId) landOnOnePage()
-  else setActiveSpace(id)
+  else switchSpace(id, undefined, { axis: 'x' }) // 手机的 Space 横排在底栏:横着推
 }
 // 人在一页式 Space 里开别的 Space 的视图:先带到那个 Space 去(见 spaceRegistry.redirectOpenFromOnePage)。
 setBeforeMainOpenHook(redirectOpenFromOnePage)

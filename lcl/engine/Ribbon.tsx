@@ -13,7 +13,8 @@ import type { LucideIcon } from 'lucide-react'
 import { useRibbonStore, rankIds, reorderBase, unionOrder, moveTo, slotIndexAt, ribbonActions, isRibbonAutoHome, recentRoom, type RibbonZone, type RibbonFolder } from './ribbonRegistry'
 import { RIBBON_ICON_NAMES, iconByName } from './ribbonIcons'
 import { useCommandStore, openCommandPicker, addCommand, removeCommand } from './commandRegistry'
-import { setActiveSpace, useSpaceStore } from './spaceRegistry'
+import { useSpaceStore } from './spaceRegistry'
+import { setSpaceBarOrder, switchSpace } from './spaceTransition'
 import { openMainBesideThisTask } from './openBeside'
 import { getDetachApi } from './detachSeam'
 import { beginRibbonPointerDrag } from './ribbonPointerDrag'
@@ -360,6 +361,11 @@ export function Ribbon() {
   // home 区:Space 区的**第一格**(2026-08-28 用户要的「主位」槽;10-02 用户改判:从两区之间的正中挪到上区最前)。
   // 同 head,不进拖拽/溢出/持久化。
   const homeItems = items.filter((i) => i.side === 'home')
+  // 换 Space 的过渡按条上的先后定方向(spaceTransition):主位 → 上区 → 下区,收纳夹按成员顺序展开
+  useEffect(() => {
+    const ids = [...homeItems.map((i) => i.id), ...[...topE, ...botE].flatMap((e) => e.kind === 'folder' ? e.folder.items : [e.id])]
+    setSpaceBarOrder(ids.filter((id) => id.startsWith('space:')).map((id) => id.slice('space:'.length)))
+  })
 
   // ---- 溢出测算:两区弹性分配,总量不够时各保一半;超配区尾部收进「…」 ----
   const slotH = (expanded ? 34 : 32) + GAP
@@ -587,7 +593,7 @@ export function Ribbon() {
       }
       setFly(null) // 上一次按开的收纳夹浮层
       if (e.kind === 'cmd') e.cmd.run()
-      else if (e.id.startsWith('space:')) setActiveSpace(e.id.slice('space:'.length))
+      else if (e.id.startsWith('space:')) switchSpace(e.id.slice('space:'.length))
       else e.item.onClick?.()
     }
   })
@@ -1119,7 +1125,7 @@ export function Ribbon() {
           // 条目自己的 onClick 随后照常触发,期间引擎按 openBeside.ts 改道。当前 Space 自己的卡照常(= 点真左栏)。
           // ponytail: 只认 click(含键盘回车触发的 click),靠 mousedown 起作用的操作照常就地开。
           onBeforeClick={() => { if (peek.spaceId !== useSpaceStore.getState().activeSpaceId) openMainBesideThisTask() }}
-          onEnter={peek.spaceId === useSpaceStore.getState().activeSpaceId ? undefined : () => { closePeek(); setActiveSpace(peek.spaceId) }}
+          onEnter={peek.spaceId === useSpaceStore.getState().activeSpaceId ? undefined : () => { closePeek(); switchSpace(peek.spaceId) }}
         />,
         rootRef.current.parentElement,
       )}
