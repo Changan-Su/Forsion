@@ -15,7 +15,8 @@
  * selector makes every insertion restyle the whole page — see desktop/frontend/src/cssHasGuard.test.ts).
  *
  * RATES=1,4   CPU throttle (4 ≈ a mid-range phone when the emulator runs on a fast desktop; judge by 4, not by 1)
- * REPS=3      repetitions per rate        ONLY=open,scroll,drag,back,list,space
+ * REPS=3      repetitions per rate        ONLY=open,scroll,drag,back,list,space (hops: Space after Space along the Dock;
+ *             NOVT=1 = the same page without View Transitions, the control for the Space push; trace it with STEPS=hops)
  * Machine load above ~6 makes the numbers meaningless: check `uptime` first, and never run next to a build.
  * The emulator's GPU is the host's: nothing here says what blur or raster cost on a real phone.
  *
@@ -86,6 +87,8 @@ const KIT = `(() => {
     const sh = document.querySelector('.mb-shell')
     if (P.mo) P.mo.disconnect()
     if (sh) { P.mo = new MutationObserver((l) => { for (const m of l) mark(m.attributeName + '=' + (sh.getAttribute(m.attributeName) ?? '')) }); P.mo.observe(sh, { attributes: true, attributeFilter: ['data-space', 'data-nav'] }) }
+    // the Space push (spaceTransition.ts) holds <html data-space-switch> from its start to its end
+    if (!P.mo2) { const de = document.documentElement; P.mo2 = new MutationObserver((l) => { for (const m of l) mark('vt=' + (de.getAttribute('data-space-switch') ?? '')) }); P.mo2.observe(de, { attributes: true, attributeFilter: ['data-space-switch'] }) }
     requestAnimationFrame(tick); return performance.now()
   }
   P.stop = () => { P.on = false; return { now: performance.now(), marks: P.marks, frames: P.frames, loaf: P.loaf, ev: P.ev, noLoaf: P.noLoaf, noEv: P.noEv } }
@@ -123,6 +126,13 @@ function gfx() {
   h.adb('shell', 'am', 'start', '-n', ACTIVITY)
   await h.waitNodes((l) => h.byId(l, 'nativeChrome.bar'), { timeout: 12000 })
   await cdp.eval(KIT)
+  // A Dock tap reaches the page as a plugin event, not a touch: mark its arrival (`dock:<id>`) — the input of a Space switch.
+  // NOVT=1 takes View Transitions away, so switchSpace runs the switch at once (the control for the push transition).
+  console.log('startViewTransition:', await cdp.eval(`(() => { const mk = (r) => { try { if (r && r.data && r.data.action === 'space') { __perf.mark('dock:' + r.data.id); performance.mark('dock:' + r.data.id) } } catch {} }
+    const C = window.Capacitor; const f = C.fromNative; C.fromNative = function (r) { mk(r); return f.apply(this, arguments) }
+    const b = window.androidBridge; if (b && b.onmessage) { const o = b.onmessage; b.onmessage = function (ev) { try { mk(JSON.parse(ev.data)) } catch {} return o.apply(this, arguments) } }
+    ${process.env.NOVT ? 'delete Document.prototype.startViewTransition;' : ''} return typeof document.startViewTransition + ' · push css in the build ' + [...document.styleSheets].some((x) => { try { return [...x.cssRules].some((r) => r.cssText.includes('space-work')) } catch { return false } }) + ' · reduced motion ' + matchMedia('(prefers-reduced-motion: reduce)').matches })()`),
+    '· animation scales', ['animator_duration_scale', 'transition_animation_scale', 'window_animation_scale'].map((k) => { try { return h.adb('shell', 'settings', 'get', 'global', k).trim() } catch { return '?' } }).join('/'))
   const ui = () => h.nodes(OUT)
   const wv = () => ui().find((n) => n.class === 'android.webkit.WebView')
   const met = async () => Object.fromEntries((await cdp.send('Performance.getMetrics')).metrics.map((m) => [m.name, m.value]))
@@ -136,6 +146,7 @@ function gfx() {
   const nav = "document.querySelector('.mb-shell')?.dataset.nav || ''"
   const space = "document.querySelector('.mb-shell')?.dataset.space || ''"
   const spaceIds = () => h.byIdPrefix(ui(), 'nativeChrome.space.').map((n) => n['resource-id'].slice('nativeChrome.space.'.length))
+  const hopOrder = () => { const c = spaceIds().filter((s) => !['more', 'all'].includes(s)); return [...c.filter((s) => s !== 'tangu'), 'tangu'] }
   async function toSpace(id) {
     const n = h.byId(ui(), `nativeChrome.space.${id}`)
     if (!n) throw new Error(`no Dock cell ${id} (have ${spaceIds().join(',')})`)
@@ -167,11 +178,19 @@ function gfx() {
       loaf: p.loaf.filter((l) => t0 == null || (l.s + l.d >= t0 && l.s <= t0 + 1200)).map((l) => ({ at: t0 == null ? l.s : Math.round(l.s - t0), d: l.d, block: l.block, style: l.style, scripts: l.scripts })),
       events: p.ev.filter((e) => /pointerup|click|touchend|pointerdown|touchstart/.test(e.n)).map((e) => `${e.n}:${e.d}ms(wait ${e.wait}, run ${e.run})`),
       main: { script: ms('ScriptDuration'), style: ms('RecalcStyleDuration'), layout: ms('LayoutDuration'), task: ms('TaskDuration'), styleN: m1.RecalcStyleCount - m0.RecalcStyleCount, layoutN: m1.LayoutCount - m0.LayoutCount },
-      gfx: g, noLoaf: p.noLoaf, noEv: p.noEv,
+      gfx: g, noLoaf: p.noLoaf, noEv: p.noEv, load: Math.round(require('node:os').loadavg()[0] * 10) / 10,
+    }
+    // a Space switch: when it landed (`data-space` after the input) and the frames while the push ran (`vt=` marks)
+    const at = (re) => p.marks.find((m) => t0 != null && m.t >= t0 && re.test(m.why))?.t
+    const landed = at(/^data-space=/), vtOn = at(/^vt=(next|prev|fade)/), vtOff = vtOn != null ? p.marks.find((m) => m.t >= vtOn && m.why === 'vt=')?.t : null
+    if (landed != null) row.landed = Math.round(landed - t0)
+    if (vtOn != null) {
+      const vg = p.frames.filter((f) => f[0] >= vtOn && f[0] <= (vtOff ?? vtOn + 1000)).map((f) => f[1])
+      row.vt = { on: Math.round(vtOn - t0), off: vtOff == null ? null : Math.round(vtOff - t0), frames: vg.length, over25: vg.filter((x) => x > 25).length, over50: vg.filter((x) => x > 50).length, max: vg.length ? Math.max(...vg) : null }
     }
     results.push(row)
     const worst = row.loaf.reduce((a, l) => (l.d > (a?.d || 0) ? l : a), null)
-    console.log(`${String(rate)}x ${name.padEnd(22)} raf ${String(row.rafFrames).padStart(2)}/${row.rafExpected} >25:${row.rafOver25} >50:${row.rafOver50} max ${row.rafMax}  loafMax ${worst ? `${worst.d}ms@${worst.at}` : '-'}  main script ${row.main.script} style ${row.main.style}(${row.main.styleN}) layout ${row.main.layout}(${row.main.layoutN})  gfx ${g.frames}f janky ${g.janky} p90 ${g.p90} p99 ${g.p99}  ${row.marks.join(' ')}`)
+    console.log(`${String(rate)}x ${name.padEnd(22)} raf ${String(row.rafFrames).padStart(2)}/${row.rafExpected} >25:${row.rafOver25} >50:${row.rafOver50} max ${row.rafMax}  loafMax ${worst ? `${worst.d}ms@${worst.at}` : '-'}  main script ${row.main.script} style ${row.main.style}(${row.main.styleN}) layout ${row.main.layout}(${row.main.layoutN})  gfx ${g.frames}f janky ${g.janky} p90 ${g.p90} p99 ${g.p99}${row.landed != null ? `  landed +${row.landed}` : ''}${row.vt ? `  push +${row.vt.on}..+${row.vt.off} ${row.vt.frames}f >25:${row.vt.over25} >50:${row.vt.over50} max ${row.vt.max}` : ''}  load ${row.load}  ${row.marks.join(' ')}`)
     return row
   }
   const want = (k) => !ONLY.length || ONLY.includes(k)
@@ -241,15 +260,19 @@ function gfx() {
       await cdp.send('Tracing.end'); await done
       await setRate(1)
       fs.writeFileSync(path.join(OUT, `trace-${label}.json`), JSON.stringify(events))
-      // main thread = the thread with the most RunTask time
+      // main thread = CrRendererMain by name (the busiest thread is not it when the emulator's software GL keeps the
+      // GPU thread busier — a View Transition does — and then every breakdown below came out empty); else the busiest
       const X = events.filter((e) => e.ph === 'X' && e.dur)
+      const tname = new Map(events.filter((e) => e.ph === 'M' && e.name === 'thread_name').map((e) => [e.tid, e.args?.name]))
       const byTid = new Map(); for (const e of X) if (e.name === 'RunTask') byTid.set(e.tid, (byTid.get(e.tid) || 0) + e.dur)
-      const main = [...byTid.entries()].sort((a, b) => b[1] - a[1])[0]?.[0]
+      const main = [...tname].find(([, n]) => n === 'CrRendererMain')?.[0] ?? [...byTid.entries()].sort((a, b) => b[1] - a[1])[0]?.[0]
       const mt = X.filter((e) => e.tid === main)
       const input = mt.find((e) => e.name === 'EventDispatch' && /touchstart|keydown|click/.test(e.args?.data?.type || ''))
-      const t0 = input ? input.ts : mt[0].ts
+      // a Dock tap is no page event: its arrival mark (`dock:<id>`, user timing) stands in for it
+      const dock = events.find((e) => /^dock:/.test(e.name || '') && /user_timing/.test(e.cat || ''))
+      const t0 = input ? input.ts : dock ? dock.ts : mt[0].ts
       const tasks = mt.filter((e) => e.name === 'RunTask' && e.dur >= Number(process.env.MIN_TASK || 20) * 1000 && e.ts >= t0 - 50000).sort((a, b) => a.ts - b.ts)
-      console.log(`\n== trace ${label} @${rate}x — long tasks after the input (${input ? input.args.data.type : 'no input event found'})`)
+      console.log(`\n== trace ${label} @${rate}x — long tasks after the input (${input ? input.args.data.type : dock ? dock.name : 'no input event found'})`)
       for (const t of tasks) {
         const inside = mt.filter((e) => e !== t && e.ts >= t.ts && e.ts + e.dur <= t.ts + t.dur)
         const sum = new Map()
@@ -278,6 +301,11 @@ function gfx() {
       if (calls.length) console.log(`  native calls: ${calls.join(', ')}`)
       const all = mt.filter((e) => e.name === 'RunTask' && e.ts >= t0)
       console.log(`  main thread busy ${Math.round(all.reduce((n, e) => n + e.dur, 0) / 1000)}ms of the ${Math.round((mt[mt.length - 1].ts - t0) / 1000)}ms after the input · longest task ${Math.round(Math.max(0, ...all.map((e) => e.dur)) / 1000)}ms`)
+      // the GPU thread: on the emulator it runs software GL, so its time says what this costs here, not on a phone
+      const gpu = [...tname].find(([, n]) => n === 'Chrome_InProcGpuThread')?.[0]
+      if (gpu != null) console.log(`  GPU thread (software GL here) busy ${Math.round(X.filter((e) => e.tid === gpu && e.name === 'RunTask' && e.ts >= t0).reduce((n, e) => n + e.dur, 0) / 1000)}ms`)
+      const st = mt.filter((e) => e.name === 'UpdateLayoutTree' && e.ts >= t0)
+      console.log(`  style ${Math.round(st.reduce((n, e) => n + e.dur, 0) / 1000)}ms over ${st.length} recalcs · the ones over 100 elements: ${st.filter((e) => (e.args?.elementCount || 0) >= 100).map((e) => `${e.args.elementCount}/${Math.round(e.dur / 1000)}ms@+${Math.round((e.ts - t0) / 1000)}`).join(' ') || 'none'}`)
       return t0
     }
     // STEPS picks what is traced (default: the five of the list ↔ conversation round trip)
@@ -308,6 +336,9 @@ function gfx() {
       const wrap = (k) => { const f = C[k]; if (typeof f === 'function') C[k] = function (p, m) { try { performance.mark('native:' + p + '.' + m) } catch {} return f.apply(this, arguments) } }
       wrap('nativePromise'); wrap('nativeCallback'); return true })()`)
     if (STEPS.some((k) => /^open|^back$|^drag/.test(k))) await ensureList()
+    // a chat opened and left first, as in the rows (its page stays mounted behind the list)
+    if (step('hops')) { await ensureDetail(R); await ensureList() }
+    if (step('hops')) for (const id of hopOrder()) { const cell = h.byId(ui(), `nativeChrome.space.${id}`); await trace(`hop-${id}`, async () => { h.tapNode(cell) }, 1800); await h.pause(600) }
     if (step('open-cold')) { await trace('open-cold', () => openChat(R)); await inDetail(); await h.pause(800) }
     if (step('back')) { await ensureDetail(R); await trace('back', async () => { h.key(4) }); await ensureList() }
     if (step('open-again')) { await trace('open-again', () => openChat(R)); await inDetail(); await h.pause(800); await ensureList() }
@@ -467,6 +498,17 @@ function gfx() {
         await run(`Dock → ${other}`, rate, async () => { h.tapNode(cell) }, { settle: 1800, from: /data-space/ })
         const back = h.byId(ui(), 'nativeChrome.space.tangu')
         await run('Dock → tangu', rate, async () => { h.tapNode(back) }, { settle: 1800, from: /data-space/ })
+        await h.waitPage(cdp, "document.querySelectorAll('.mb-drawer--left .t2s-srow').length >= 20", 8000)
+      }
+      if (want('hops')) {
+        // hopping along the Dock and back to Tangu, timed from the tap's arrival (with a transition the switch itself
+        // lands a frame or more later, so `data-space` would start the window too late)
+        let from = await cdp.eval(space)
+        for (const id of hopOrder()) {
+          const cell = h.byId(ui(), `nativeChrome.space.${id}`)
+          await run(`hop ${from}→${id}`, rate, async () => { h.tapNode(cell) }, { settle: 1500, from: /dock:/, win: 1200 })
+          from = id
+        }
         await h.waitPage(cdp, "document.querySelectorAll('.mb-drawer--left .t2s-srow').length >= 20", 8000)
       }
     }

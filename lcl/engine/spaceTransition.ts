@@ -61,13 +61,15 @@ function wire(): void {
 /** 带过渡地换到 toId。run = 真正换的那一下(缺省 setActiveSpace;手机「换完留在抽屉里」要连抽屉一起交进来)。
  *  点的就是当前这个也要经过这里(run 换成「落回这个 Space 的那一页」之类):这样才会作废还在等下一帧的上一次切换。
  *  axis:切换条的走向,桌面 ribbon 竖排('y'),手机底栏横排('x')。
- *  不该播的(同一个、没注册、迷你面板、Space 窗口、不支持 View Transition、窗口不可见)直接同步跑 run。 */
+ *  不该播的(同一个、没注册、迷你面板、Space 窗口、不支持 View Transition、窗口不可见、手机)直接同步跑 run。
+ *  ⚠️ 手机('x')先不播(10-16 用户定「等真机量过再开」):安卓模拟器上拍快照让落地晚约 170ms、出帧掉到三分之一,
+ *     真手机的 GPU 要多付多少没量过。开回来 = 删掉下面那个 axis === 'x'(横推的关键帧还在 engine.css;mobile e2e:spaceswitch 的横推断言在 git 历史里)。 */
 export function switchSpace(toId: string, run: () => void = () => setActiveSpace(toId), { axis = 'y' }: { axis?: 'x' | 'y' } = {}): void {
   const mine = ++seq
   const { activeSpaceId: from, spaces } = useSpaceStore.getState()
   const doc = typeof document === 'undefined' ? null : document as Document & { startViewTransition?: (cb: () => void) => VT }
   // 窗口不可见时不出帧,回调要等到下一帧 —— 直接换(看不见也就不用播)
-  if (toId === from || !spaces.some((s) => s.id === toId) || IS_MINI_PANEL || WINDOW_SPACE_ID || typeof doc?.startViewTransition !== 'function' || doc.visibilityState === 'hidden') {
+  if (axis === 'x' || toId === from || !spaces.some((s) => s.id === toId) || IS_MINI_PANEL || WINDOW_SPACE_ID || typeof doc?.startViewTransition !== 'function' || doc.visibilityState === 'hidden') {
     live?.skipTransition() // 还挂着的上一段(比如点了别的又点回当前这个):它的回调已因 seq 作废,别让同一份内容按推移关键帧自己抖一下
     run()
     return
