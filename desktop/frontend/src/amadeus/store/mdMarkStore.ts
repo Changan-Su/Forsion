@@ -47,6 +47,9 @@ const markKey = (m: Pick<MdMark, 'path' | 'line'>): string => `${m.path}:${m.lin
 const timers = new Map<string, number>()
 let inflight = 0
 let loadedVault: string | null = null
+/** 最近一次落定(成功或失败)的 load 拉的是哪个库 —— 插件订阅的 ready 看它(watchMdMarks)。
+ *  不复用 loadedVault:那个还管着换库时清乐观覆盖,失败分支里动它会把上一个库的覆盖套到新库上。 */
+let settledVault: string | null | undefined
 
 let seq = 0
 export const useMdMarkStore = create<State>((set, get) => ({
@@ -69,10 +72,11 @@ export const useMdMarkStore = create<State>((set, get) => ({
         // 换了库:上一个库排着的乐观覆盖与回写一并作废(key 是「路径:行号」,会套到新库同位置的另一条上)
         if (vault !== loadedVault) { for (const t of timers.values()) clearTimeout(t); timers.clear(); set({ overlay: {} }) }
         loadedVault = vault
+        settledVault = vault
         set({ marks, ready: true })
       }
     } catch {
-      if (id === seq) set({ marks: [], ready: true })
+      if (id === seq) { settledVault = vault; set({ marks: [], ready: true }) }
     }
   },
 
@@ -157,24 +161,30 @@ function withOverlay(marks: MdMark[], overlay: Record<string, MarkPatch>): MdMar
 }
 
 /** 非 React 版 useMdMarks(插件 ctx.noteTasks):立刻回调一次,之后标记 / 乐观覆盖一变就回调;
- *  换库 / 换页时同样隔 250ms 重拉。ready = 至少拉过一次(宿主没有这条接缝时直接 ready + 空)。 */
+ *  换库 / 换页时同样隔 250ms 重拉。ready = 拉过当前这个库(库没恢复 / 刚换库为假;宿主没有这条接缝时拉一次就 ready + 空)。 */
 export function watchMdMarks(cb: (marks: MdMark[], ready: boolean) => void): () => void {
   let timer = 0
   const reload = (): void => { clearTimeout(timer); timer = window.setTimeout(() => { void useMdMarkStore.getState().load() }, 250) }
+  let last: { st: State; ready: boolean } | null = null
+  const emit = (): void => {
+    const st = useMdMarkStore.getState()
+    const root = usePageStore.getState().vaultRoot
+    // ready 同 ctx.databases:拉过**当前这个库**才算。库还没恢复(null)/ 刚换库还没重拉时的空列表 ≠ 笔记里没有任务。
+    // 宿主没有这条接缝(web/mobile)照旧:拉一次就 ready + 空。
+    const ready = amadeus?.listMarks ? !!root && settledVault === root : st.ready
+    if (last && st.marks === last.st.marks && st.overlay === last.st.overlay && ready === last.ready) return
+    last = { st, ready }
+    cb(withOverlay(st.marks, st.overlay), ready)
+  }
   let page = usePageStore.getState()
   const offPage = usePageStore.subscribe((st) => {
     if (st.vaultRoot === page.vaultRoot && st.activePage === page.activePage) return
     page = st
+    emit() // 换库那一刻就翻回 ready:false,别让插件拿上一个库的任务当这个库的
     reload()
   })
-  let last: State | null = null
-  const emit = (st: State): void => {
-    if (last && st.marks === last.marks && st.overlay === last.overlay && st.ready === last.ready) return
-    last = st
-    cb(withOverlay(st.marks, st.overlay), st.ready)
-  }
   const offMarks = useMdMarkStore.subscribe(emit)
-  emit(useMdMarkStore.getState())
+  emit()
   reload()
   return () => { clearTimeout(timer); offPage(); offMarks() }
 }

@@ -1520,7 +1520,8 @@ export interface PluginContext {
   }
   /** 笔记正文里的 `@` 时间任务(2026-10-16+;待办视图里「笔记」那一组的来源)。
    *  **只有 manifest `capabilities` 里声明了 `'noteTasks'` 才注入**。
-   *  · `subscribe(cb)`:同 ctx.databases —— 立刻回调、之后有变化再回调;`ready: false` = 还没拉过。
+   *  · `subscribe(cb)`:同 ctx.databases —— 立刻回调、之后有变化再回调;`ready: false` = 还没拉过**当前这个库**
+   *    (库还没恢复、或刚换库)—— 这时的空列表 ≠ 笔记里没有任务。
    *    笔记里刚打的标记要等编辑器落盘后才出现(宿主拉取前会先落盘)。
    *  · `update(id, { checked?, due? })`:就地改笔记里那一行(勾选 / 改日期),先立即反映在下一次回调里,稍后写回
    *    markdown;那一行已经被改得对不上时宿主提示用户去笔记里改。返回 false = 宿主不能回写(网页 / 手机)、

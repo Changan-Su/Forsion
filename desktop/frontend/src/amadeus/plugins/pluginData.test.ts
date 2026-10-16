@@ -122,6 +122,29 @@ describe('ctx.databases', () => {
   })
 })
 
+describe('ctx.noteTasks.subscribe', () => {
+  it('ready 同 ctx.databases:库没恢复时为假(空列表 ≠ 没有任务),订阅自己重拉过当前库才为真,换库那一刻翻回假', async () => {
+    vi.useFakeTimers()
+    try {
+      usePageStore.setState({ vaultRoot: null })
+      await useMdMarkStore.getState().load() // 库没恢复时也拉过一次:store 自己的 ready 已为真
+      const seen: boolean[] = []
+      const off = createNoteTasksApi(scope).subscribe((s) => seen.push(s.ready))
+      expect(seen).toEqual([false])
+      await vi.advanceTimersByTimeAsync(300) // 订阅自己那一发重拉:库仍没恢复 → 仍是假
+      expect(seen.at(-1)).toBe(false)
+      usePageStore.setState({ vaultRoot: '/V' }) // 不手动 load:靠订阅的换库重拉翻真
+      await vi.advanceTimersByTimeAsync(300)
+      expect(seen.at(-1)).toBe(true)
+      usePageStore.setState({ vaultRoot: '/W' })
+      expect(seen.at(-1)).toBe(false)
+      await vi.advanceTimersByTimeAsync(300)
+      expect(seen.at(-1)).toBe(true)
+      off()
+    } finally { vi.useRealTimers() }
+  })
+})
+
 describe('ctx.noteTasks.update', () => {
   const mark = (over: Partial<MdMark> = {}): MdMark => ({ path: 'n.md', title: 'n', heading: '', text: '交周报', isTask: true, checked: false, due: '2026-10-20', line: 3, raw: '- [ ] 交周报 @2026-10-20', occ: 0, ...over })
   beforeEach(() => { useMdMarkStore.setState({ marks: [mark(), mark({ line: 5, isTask: false, raw: '交周报 @2026-10-20' })], overlay: {}, ready: true }) })
