@@ -88,4 +88,14 @@ describe('手机冷启动:壳挂上之前', () => {
     vi.advanceTimersByTime(300)
     expect(inUse()).toMatchObject({ space: 'agents', main: [{ type: 'agentsv' }] })
   })
+
+  it('同上,但存槽失败(配额满):在用的那份不清 —— 它是仅存的一份', async () => {
+    disk.set(LAYOUT, JSON.stringify(blob('tangu', [leaf('chat'), leaf('chat', { sessionId: 'x' })])))
+    const before = disk.get(LAYOUT)
+    const set = (k: string, v: string): void => { if (k === NAMED) throw new Error('QuotaExceededError'); disk.set(k, v) }
+    vi.stubGlobal('localStorage', { getItem: (k: string) => disk.get(k) ?? null, setItem: set, removeItem: (k: string) => { disk.delete(k) }, clear: () => disk.clear() })
+    const { reg } = await launch('tangu', 'tangu', ['home', 'tangu', 'agents'])
+    reg.setActiveSpace('agents')
+    expect(disk.get(LAYOUT)).toBe(before)
+  })
 })

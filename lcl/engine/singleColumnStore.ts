@@ -700,8 +700,12 @@ export const useWorkspace = create<WS>((set, get) => {
       useNav.getState().reset() // 同桌面版:布局重建,旧 leaf id 的历史全失效;须在重建之前,重建时记下的栈底要留着
       get().defaultBuilder?.() // = getActiveSpace().build()（切 Space 时 spaceRegistry 已先切 id）
       // 壳挂上之前(还没有构建器)要的是默认布局:在用的那份是上一个 Space 的(切走时已原样存进它的槽),留着就会被壳还原到
-      // 这个 Space 头上。清掉,挂载时落空 → 按它的默认建。
-      if (notLaidOut() && !IS_MINI_PANEL) try { localStorage.removeItem(SC_LAYOUT_KEY) } catch { /* 私密模式 */ }
+      // 这个 Space 头上。清掉,挂载时落空 → 按它的默认建。只在它确实原样躺在某个槽里时清:存槽失败(配额满)时清掉就是丢了
+      // 仅存的一份,宁可让它这一次穿错 Space(Codex 评审)。
+      if (notLaidOut() && !IS_MINI_PANEL) try {
+        const raw = localStorage.getItem(SC_LAYOUT_KEY)
+        if (raw && Object.values(readJSON<Record<string, unknown>>(SC_NAMED_KEY) ?? {}).some((b) => JSON.stringify(b) === raw)) localStorage.removeItem(SC_LAYOUT_KEY)
+      } catch { /* 私密模式 */ }
       get().refreshTabs()
       afterLayout?.()
     },
