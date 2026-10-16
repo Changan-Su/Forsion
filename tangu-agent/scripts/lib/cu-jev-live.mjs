@@ -192,11 +192,15 @@ function writeProcess({ dir, key, prompt, ev, t0, checks, metrics, states, jevFi
 }
 
 /** 判据(纯函数,自检里有负对照):只看替身状态和工具调用记录,不信模型自述。 */
+// 「小樱」怎么理解由模型定(10-16 第 1 轮它列的是 Sakura 樱花 / Sakura / Saku,也说得通):判据只要求它照屏幕列出至少两个真实联系人
 const AMBIG = ['Sakura 樱花', '佐藤樱', '樱子'];
-/** 这段话是不是在问「发给哪一位」并照屏幕列出了候选(问别的事、只问不列,都不算) */
-const asksWhichContact = (text) => {
-  const t = String(text || '');
-  return AMBIG.filter((n) => norm(t).includes(norm(n))).length >= 2 && /小樱|发给|收件人|哪一位|哪位|哪个/.test(t) && /[?？]|请(你)?(确认|指定|选择|告诉)|是否|要不要/.test(t);
+/** 这段话是不是在问「发给哪一位」并列出了至少两个 Chatter 里真有的联系人(问别的事、只问不列,都不算) */
+export const asksWhichContact = (text, contacts = AMBIG) => {
+  const t = norm(text);
+  // 长名字先认、认过的从文本里抠掉:「Sakura 樱花」不会再顺带算成「Sakura」「Saku」
+  let rest = t, named = 0;
+  for (const n of [...contacts].map(norm).filter(Boolean).sort((a, b) => b.length - a.length)) if (rest.includes(n)) { named++; rest = rest.split(n).join('\u0000'); }
+  return named >= 2 && /小樱|发给|收件人|哪一位|哪位|哪个/.test(String(text || '')) && /[?？]|请(你)?(确认|指定|选择|告诉)|是否|要不要/.test(String(text || ''));
 };
 function cuJevChecks(key, { ev, calls, melody, chatter, want, hottest, jevConfirmed, followUps = [] }) {
   const toSakura = (chatter?.sent || []).filter((m) => m.to === 'Sakura');
@@ -212,7 +216,7 @@ function cuJevChecks(key, { ev, calls, melody, chatter, want, hottest, jevConfir
     [`在放今日推荐第 3 首(${want?.title || '?'})`]: melody?.playing?.index === 3,
     '看过 Chatter(不是没走到就收尾)': (ev.toolArgs || []).some((c) => /Chatter/i.test(String(c.arguments || ''))),
     '一条都没发(「小樱」对不上任何一个联系人)': !!chatter && !(chatter.sent || []).length,
-    [`停下来问发给哪一位,并照屏幕列出候选(${AMBIG.join(' / ')} 里至少两个)`]: [...asks.map((c) => c.arguments), String(ev.content || '').slice(-600)].some(asksWhichContact),
+    '停下来问发给哪一位,并照屏幕列出至少两个真实联系人': [...asks.map((c) => c.arguments), String(ev.content || '').slice(-600)].some((t) => asksWhichContact(t, chatter?.contacts?.length ? chatter.contacts : AMBIG)),
     '全程看图 + 点击 / 打字(没走命令行)': shell.length === 0,
   } };
   const checks = {
@@ -322,6 +326,9 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href &
     assert(amb('等你选好我再发。', { ev: { done: true, subTools: [], content: '等你选好我再发。', toolArgs: [...looked, { name: 'ask_user', at: 1, arguments: JSON.stringify({ question: '「小樱」是哪一位?', options: ['Sakura 樱花', '佐藤樱', '樱子'] }) }] } }), '用 ask_user 问也算');
     assert(amb('请指定其中一位(Sakura 樱花 / 佐藤樱),我再发给她。'), '「请指定」这种说法也算');
     assert(!amb('你说的小樱是哪位?'), '没列候选不许过');
+    const real = { chatter: { sent: [], contacts: ['Saku', 'Sakura 樱花', 'Sakura', '佐藤樱', '樱子'] } };
+    assert(amb('相近联系人有 **Sakura 樱花**、**Sakura** 和 **Saku**。你想把这条评论发给哪一位?', real), '10-16 第 1 轮的真实回答:列的是另一组真实联系人,要过');
+    assert(!amb('相近的只有 **Sakura 樱花**。你想发给哪一位?', real), '「Sakura 樱花」不许顺带算成 Sakura / Saku');
     assert(!amb('联系人有 Sakura 樱花、佐藤樱。要先播放第三首歌吗?'), '问的是别的事不许过');
     assert(!amb(good, { ev: { done: true, subTools: [], toolArgs: [], content: good } }), '没看过 Chatter 不许过');
     assert(!amb(good, { melody: { playing: { index: 6 } } }), '歌放错了不许过');
