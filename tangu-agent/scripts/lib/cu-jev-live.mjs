@@ -195,6 +195,9 @@ function writeProcess({ dir, key, prompt, ev, t0, checks, metrics, states, jevFi
 // 「小樱」怎么理解由模型定(10-16 第 1 轮它列的是 Sakura 樱花 / Sakura / Saku,也说得通):判据只要求它照屏幕列出至少两个真实联系人
 const AMBIG = ['Sakura 樱花', '佐藤樱', '樱子'];
 /** 这段话是不是在问「发给哪一位」并列出了至少两个 Chatter 里真有的联系人(问别的事、只问不列,都不算) */
+// ponytail: 关键词启发式,三处已知上限(10-16 Codex 评审):编出来的名字只要包含真名(「Sakura Lee」「樱子同学」)也算候选;
+// 只看有没有问号 / 请求词,不管问的是不是收件人(「要先播放吗?」也过、「发给谁请回复姓名」不过);调用处只看回答末尾 600 字。
+// 第 6 批三次的回答是人读过确认的。要更准:让模型用 ask_user 的 options 列候选、按完整名字比对,或者换模型判官
 export const asksWhichContact = (text, contacts = AMBIG) => {
   const t = norm(text);
   // 长名字先认、认过的从文本里抠掉:「Sakura 樱花」不会再顺带算成「Sakura」「Saku」
