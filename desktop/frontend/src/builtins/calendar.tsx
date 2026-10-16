@@ -87,7 +87,8 @@ export const calendarSpace: SpaceDefinition = {
   get pinned() {
     return singleColumn()
       ? { main: [{ type: 'calendar', params: {} }], left: [{ type: 'todo-list', params: {} }] }
-      : { main: [{ type: 'calendar', params: {} }], left: [{ type: 'calendar-config', params: {} }], right: [{ type: 'calendar-side', params: {} }] }
+      // 桌面两侧不固定:没被迁移的老布局(用户动过)按区补固定项会在两侧各多出一份(左多日历设置、右多待办)。
+      : { main: [{ type: 'calendar', params: {} }] }
   },
   // 待办在本 Space 里住左栏,但单独开成一个标签同样成立(原先启动器里就有这张卡)。
   launcherViews: [{ type: 'calendar', params: {} }, { type: 'todo-list', params: {} }],
