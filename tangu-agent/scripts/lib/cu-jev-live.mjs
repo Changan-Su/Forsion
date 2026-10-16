@@ -21,6 +21,16 @@ const HELPER_SOCKET = process.env.PI_CU_SOCKET_PATH || join(homedir(), 'Library'
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const APPS = '电脑上开着 Melody(音乐播放器)和 Chatter(聊天软件)。它们的界面是自己画的,只能看着截图、用点击和打字来操作,不要用脚本或命令行去操控它们。';
+const OK_SEND = '可以,发吧。';
+/** 收尾那段话是不是在等用户点头(「要现在发吗?」「请确认是否发送这段原文。」都算) */
+const asksToSend = (text) => /[?？]|确认|要不要|是否|吗/.test(String(text || '').slice(-300));
+/** 同一会话的两次 run 拼成一份:调用 / 结果 / 用量按时间接上,结局取后一次。 */
+function mergeRuns(a, b) {
+  const cat = (k) => [...(a[k] || []), ...(b[k] || [])];
+  return { ...b, toolArgs: cat('toolArgs'), toolResults: cat('toolResults'), subTools: cat('subTools'), toolCalls: cat('toolCalls'), usages: cat('usages'),
+    inquiries: (a.inquiries || 0) + (b.inquiries || 0), tokens: (a.tokens || 0) + (b.tokens || 0), ttftMs: a.ttftMs, firstTokenMs: a.firstTokenMs,
+    content: `${a.content || ''}\n\n—— 用户:${OK_SEND} ——\n\n${b.content || ''}` };
+}
 const PROMPTS = {
   cumusic: `${APPS}\n\n打开 Melody 播放今日推荐第三首歌。`,
   cusend: `${APPS}\n\n打开 Melody 播放今日推荐第三首歌，并且把最热门的评论发给我的 Chatter 好友 Sakura。`,
@@ -102,9 +112,10 @@ function startRecorder(dir, t0, keep) {
       const encode = (vf) => spawnSync('ffmpeg', ['-y', '-loglevel', 'error', '-f', 'concat', '-safe', '0', '-i', join(dir, 'list.txt'), '-vf', vf, '-fps_mode', 'vfr', '-c:v', 'libx264', '-crf', '30', '-preset', 'veryfast', '-pix_fmt', 'yuv420p', outFile], { encoding: 'utf8' });
       // drawtext 要 freetype;装的 ffmpeg 没带就退回不烧时间
       let r = encode(`${base},drawtext=fontfile=/System/Library/Fonts/Supplemental/Arial.ttf:text='%{pts\\:hms\\:${offset}}':x=12:y=12:fontsize=22:fontcolor=white:box=1:boxcolor=black@0.55`);
-      if (r.status !== 0) r = encode(base);
+      const stamped = r.status === 0;
+      if (!stamped) r = encode(base);
       rmSync(dir, { recursive: true, force: true });
-      return { frames: frames.length, skipped, firstAtMs: frames[0].t - t0, error: r.status === 0 ? null : `ffmpeg 失败:${(r.stderr || r.error?.message || '').slice(0, 300)}` };
+      return { frames: frames.length, skipped, stamped, firstAtMs: frames[0].t - t0, error: r.status === 0 ? null : `ffmpeg 失败:${(r.stderr || r.error?.message || '').slice(0, 300)}` };
     },
   };
 }
@@ -137,8 +148,8 @@ function describeResult(name, result) {
 }
 
 /** 过程.md:工具调用、Jev 每次请求、两个替身的事件,按时间排成一张表。 */
-function writeProcess({ dir, key, prompt, ev, t0, checks, metrics, states, jevFiles, video }) {
-  const rows = [];
+function writeProcess({ dir, key, prompt, ev, t0, checks, metrics, states, jevFiles, video, followUp }) {
+  const rows = followUp ? [{ t: followUp.t, who: '🙋 用户', what: `${followUp.text}(主模型停下来问要不要发,照用户的意思回)` }] : [];
   const results = new Map(ev.toolResults.filter((r) => r.id).map((r) => [r.id, r]));
   for (const c of ev.toolArgs) {
     rows.push({ t: c.at ?? t0, who: '🤖 主模型', what: describeCall(c.name, c.arguments) });
@@ -159,7 +170,7 @@ function writeProcess({ dir, key, prompt, ev, t0, checks, metrics, states, jevFi
   const out = [
     `# ${key}:过程记录`, '', `- 任务原话:${prompt.replace(/\n+/g, ' ')}`, `- 结果:${Object.values(checks).every(Boolean) ? '✅ 通过' : '❌ 没通过'}`,
     ...Object.entries(checks).map(([k, v]) => `  - ${v ? '✓' : '✗'} ${k}`), `- ${metrics}`,
-    video.error ? `- 录像:没录成(${video.error})` : `- 录像:[recording.mp4](recording.mp4)(${video.frames} 帧,画面从 ${mmss(video.firstAtMs)} 开始;左上角是距开跑的时间,和下表的「时间」一致)`,
+    video.error ? `- 录像:没录成(${video.error})` : `- 录像:[recording.mp4](recording.mp4)(${video.frames} 帧,画面从 ${mmss(video.firstAtMs)} 开始;${video.stamped ? '左上角是距开跑的时间,和下表的「时间」一致' : `本机 ffmpeg 没有 drawtext,没烧时间:录像第 0 秒 = 下表的 ${mmss(video.firstAtMs)},之后按实际间隔走`})`,
     ...(video.skipped ? [`- 另有 ${video.skipped} 帧是替身以外的窗口,没收进录像`] : []),
     '', '| 时间 | 谁 | 做了什么 |', '|---|---|---|', ...rows.map((r) => `| ${mmss(r.t - t0)} | ${r.who} | ${md(r.what)} |`), '',
     '## 模型最后的回答', '', '```', String(ev.content || '(没有回答)').slice(0, 4000), '```', '',
@@ -202,12 +213,20 @@ export async function cuJevLive({ key, api, run, OUT, bundle, timeoutMs, tokensO
   const t0 = Date.now();
   const fixturePids = new Set();
   const recorder = startRecorder(join(dir, 'frames'), t0, (pid) => fixturePids.has(pid));
-  let ev = null, video = { frames: 0, error: '没开始' };
+  let ev = null, video = { frames: 0, error: '没开始' }, followUp = null;
   try {
     // 两扇窗口有重叠(真实桌面就是这样):点被挡住的那扇时 helper 要先把它提上来
     boot.melody = await fx.launchFixture(apps.melody, statePath.melody, { frame: { x: 40, y: 60, w: 1000, h: 680 } }); fixturePids.add(boot.melody.pid);
     if (apps.chatter) { boot.chatter = await fx.launchFixture(apps.chatter, statePath.chatter, { frame: { x: 560, y: 300, w: 900, h: 640 } }); fixturePids.add(boot.chatter.pid); }
-    ev = await run(`live-${key}-${t0}`, PROMPTS[key], timeoutMs);
+    // 发送前问「要不要发」是插件的确认规则(对外发送先确认):用户原话已经让发,台架照用户的意思答「可以」,问了几次记进指标
+    const session = `live-${key}-${t0}`, opts = key === 'cusend' ? { inquiryAnswer: OK_SEND } : {};
+    ev = await run(session, PROMPTS[key], timeoutMs, {}, undefined, undefined, undefined, undefined, opts);
+    // 10-16 前三轮都是用一句普通回复问「要现在发吗?」就收尾:照真用户在同一会话里回一句再接着跑,判据看最终状态
+    if (key === 'cusend' && !(read('chatter')?.sent || []).length && asksToSend(ev.content)) {
+      followUp = { t: Date.now(), text: OK_SEND };
+      const more = await run(session, OK_SEND, Math.max(60_000, timeoutMs - (Date.now() - t0)), {}, undefined, undefined, undefined, undefined, opts);
+      ev = mergeRuns(ev, more);
+    }
     await sleep(1500); // 最后一步的画面和状态落盘
   } finally {
     video = await recorder.stop(join(dir, 'recording.mp4')).catch((e) => ({ frames: 0, error: String(e?.message || e) }));
@@ -233,8 +252,8 @@ export async function cuJevLive({ key, api, run, OUT, bundle, timeoutMs, tokensO
   const metrics = `工具调用 ${calls.length} 次(jev_ui ${jevCalls.length},确认 ${jevConfirmed} 步;act_ui 点击 ${actClicks} 次);`
     + `Melody 播过 ${plays.join('、') || '(没播)'},现在 ${melody?.playing ? `#${melody.playing.index} ${melody.playing.title}` : '没在放'},点击 ${melody?.clicks ?? '?'} / 双击 ${melody?.doubleClicks ?? '?'};`
     + (chatter ? `Chatter 发出 ${chatter.sent?.length ?? 0} 条(给 Sakura ${toSakura.length}${toOthers.length ? `,给别人 ${toOthers.map((m) => m.to).join('、')}` : ''}),最热评论「${clip(hottest?.text, 40)}」;` : '')
-    + `Jev 请求 ${jevFiles.length} 次;录像 ${video.error ? `没录成(${clip(video.error, 80)})` : `${video.frames} 帧`}`;
-  writeProcess({ dir, key, prompt: PROMPTS[key], ev, t0, checks, metrics, states: { melody, ...(chatter ? { chatter } : {}) }, jevFiles, video });
+    + `问用户 ${ev.inquiries || 0} 次(ask_user)${followUp ? ',停下来问过要不要发、回了一句「可以」才接着做' : ''};Jev 请求 ${jevFiles.length} 次;录像 ${video.error ? `没录成(${clip(video.error, 80)})` : `${video.frames} 帧`}`;
+  writeProcess({ dir, key, prompt: PROMPTS[key], ev, t0, checks, metrics, states: { melody, ...(chatter ? { chatter } : {}) }, jevFiles, video, followUp });
   const failed = Object.entries(checks).filter(([, pass]) => !pass).map(([name]) => name);
   return { ok: failed.length === 0, detail: `${failed.length ? `没过:${failed.join('、')}。` : ''}${ev.error ? `run 报错:${ev.error}。` : ''}${metrics}`,
     output: ev.content, ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls, evidenceDir: `${key}-evidence` };
@@ -248,6 +267,9 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href &
   assert.match(describeResult('jev_ui', `${JSON.stringify({ status: 'completed', confirmedSteps: 1, requestedSteps: 1, attemptedSteps: 1, steps: [{ step: 1, status: 'confirmed', confirmedBy: 'visual', visibility: 0.9, confidence: 0.8, verify: { met: true, noul: 0.91, attempts: 2 }, pointFraction: { x: 0.3, y: 0.4 } }] })}\nObserved…`), /completed:确认 1\/1 步.*confirmed\(visual\) 可见 0\.90 框 0\.80 确认 0\.91 ×2 @\(0\.3,0\.4\)/);
   assert.match(describeCall('act_ui', JSON.stringify({ actions: [{ action: 'click', x: 1, y: 2, clickCount: 2 }, { action: 'type', text: 'hi' }] })), /click\(1,2\) ×2;type「hi」/);
   assert.equal(mmss(61_240), '01:01.2');
+  assert(asksToSend('发送给 Sakura 属于发出消息;请确认是否发送这段原文。') && asksToSend('要现在发送给 Sakura 吗?') && !asksToSend('已发送给 Sakura。'));
+  { const m = mergeRuns({ toolArgs: [1], toolResults: [], content: '要发吗?', done: true, inquiries: 1 }, { toolArgs: [2], toolResults: [3], content: '已发', done: true });
+    assert.deepEqual(m.toolArgs, [1, 2]); assert.equal(m.inquiries, 1); assert.match(m.content, /要发吗\?[\s\S]*可以,发吧[\s\S]*已发/); }
   {
     const hottest = { text: '《夜に溶ける》的前奏一响,整个夏天好像都回来了。' };
     const base = { ev: { done: true, subTools: [] }, calls: ['jev_ui'], melody: { playing: { index: 3 } }, want: { title: 'x' }, hottest, jevConfirmed: 2 };

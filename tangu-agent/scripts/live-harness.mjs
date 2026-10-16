@@ -1407,7 +1407,8 @@ async function run(sessionId, message, timeoutMs = 240_000, extraAgentConfig = {
           else if (e.type === 'inquiry_request') {
             ev.inquiries = (ev.inquiries || 0) + 1;
             const id = p.inquiryId || p.id;
-            if (id) await api(`/agent/runs/${p.runId || runId}/inquiries/${id}`, { method: 'POST', body: JSON.stringify({ answer: '(台架无人值守,没有人能回答这个问题。)' }) }).catch((err) => { ev.inquiryError = String(err.message); });
+            // opts.inquiryAnswer:场景替用户作答(cusend:用户原话就让发,问「要不要发」时照用户的意思回「可以」)
+            if (id) await api(`/agent/runs/${p.runId || runId}/inquiries/${id}`, { method: 'POST', body: JSON.stringify({ answer: opts.inquiryAnswer || '(台架无人值守,没有人能回答这个问题。)' }) }).catch((err) => { ev.inquiryError = String(err.message); });
           }
           else if (e.type === 'usage') ev.usages.push(p);
           else if (e.type === 'session_title') ev.sessionTitle = { title: String(p.title || ''), atMs: Date.now() - t0 };
