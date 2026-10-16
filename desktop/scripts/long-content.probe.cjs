@@ -166,7 +166,7 @@ async function main() {
       }
       // 打字:点进视口里第一个普通段落的末尾
       await win.evaluate(() => { const p = document.querySelector('.amx-pane'); if (p) p.scrollTop = 1200 })
-      await sleep(500)
+      await sleep(2000) // 附近的嵌入是进了一屏以内才懒挂的:等它们挂完再量,否则挂载算到打字头上
       for (let k = 0; k < REPS; k++) {
         const box = await win.evaluate(() => {
           const pane = document.querySelector('.amx-pane')?.getBoundingClientRect()

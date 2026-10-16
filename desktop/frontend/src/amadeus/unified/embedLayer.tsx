@@ -46,8 +46,6 @@ import { SketchCards } from '../../components/SketchCard'
 import { parseButtonBlock, serializeButtonBlock, type ButtonSpec } from '../blocks/button/format'
 import { usePageStore } from '../store/pageStore'
 import { usePluginStore, findEmbedRenderer } from '../plugins/pluginStore'
-import { whenNear } from '../../lib/nearViewport'
-import { waitingEmbeds } from './embedWaiting'
 import { PluginEmbed } from '../blocks/plugin/PluginEmbed'
 import { amadeus } from '../api'
 import { resolveFileName, isAmbiguousFileRef } from '../lib/vaultFiles'
@@ -429,17 +427,12 @@ interface WidgetEntry {
   dom: HTMLElement
   text: string
   render: (kind: EmbedKind) => void
-  /** 还没第一次渲染时取消「离视口近了再渲染」的等待(卸根前调)。 */
-  stop: () => void
   /** 此刻握着 dom 的 PM widget 视图数(toDOM +1 / destroy −1)。同 key 的嵌入挪了位置(上方删段、
    *  移块、外部换序)时 PM 会**新建**一个 widget 视图 —— toDOM 从这里取回同一个 dom —— 再销毁旧的;
    *  旧的 destroy 若无条件 unmount,新视图手里就是一个 React 根已卸的空壳(高 0,打字也不自愈,P-02)。
    *  所以 root 的寿命跟内容身份(dkey)走,归零才卸。 */
   refs: number
 }
-
-/** 嵌入体第一次渲染前那块占位的高度(按类别估;渲染后让给真实高度)。只为滚动条和滚动锚定稳一点,不求准。 */
-const PLACEHOLDER_H: Partial<Record<EmbedKind['k'], number>> = { db: 280, draw: 360, web: 360, file: 240, note: 200, plugin: 240, bookmark: 96, sketch: 240, 'document-agent': 160 }
 
 // 数据库视图名是配置,不是组件身份。把 |视图名 放进 key 会让每次切视图卸载整张表,
 // 连搜索、焦点、滚动和弹层一起丢掉。同路径的多个嵌入仍用出现序号区分各自的局部状态。
@@ -614,7 +607,7 @@ export function createEmbedLayer(opts: { path: string; readOnly?: boolean; flush
               const root = createRoot(host)
               // 独立根跨不过 LocaleProvider:子组件(书签卡/媒体/网页/按钮/多维表/画板/跨笔记编辑器)全走 useI18n,
               // 不包就恒回落中文(评审 R-15)。HostLocaleProvider 只订 currentLocale,切语言整棵树跟着重渲。
-              const paint = (nextKind: EmbedKind): void => root.render(
+              const render = (nextKind: EmbedKind): void => root.render(
                 <HostLocaleProvider>
                 <EmbedBody
                   kind={nextKind}
@@ -684,28 +677,7 @@ export function createEmbedLayer(opts: { path: string; readOnly?: boolean; flush
                 />
                 </HostLocaleProvider>,
               )
-              // 长笔记:嵌入体等到离视口一屏以内才第一次渲染,打开时不用把每个附件都建一遍(长内容渲染方案的 C);
-              // 在那之前是一块按类别估高的占位。挂上就不再卸,状态不丢。没挂之前来的更新(撤销 / 回灌 / 改文)只记下最新的 kind。
-              let latest: EmbedKind = kind
-              let shown = false
-              let cancelNear: (() => void) | null = null
-              const show = (): void => { if (shown) return; shown = true; waitingEmbeds.delete(show); cancelNear?.(); cancelNear = null; dom.style.minHeight = ''; paint(latest) }
-              const render = (nextKind: EmbedKind): void => { latest = nextKind; if (shown) paint(nextKind) }
-              dom.style.minHeight = `${PLACEHOLDER_H[kind.k] ?? 120}px`
-              // toDOM 时 dom 还没进页面,找不到滚动容器:等它进了页面再挂观察;几帧都没进(widget 被丢掉 / 极端时序)就直接渲染。
-              let tries = 0
-              let stopped = false
-              const arm = (): void => {
-                if (shown || stopped) return
-                // 画布里卡片在舞台上靠 transform 平移,离屏与否 IntersectionObserver 判不准:照旧立刻渲染
-                if (dom.isConnected && dom.closest('.amx-canvas')) show()
-                else if (dom.isConnected) cancelNear = whenNear(dom, show)
-                else if (++tries > 10) show()
-                else requestAnimationFrame(arm)
-              }
-              const stop = (): void => { stopped = true; waitingEmbeds.delete(show); cancelNear?.(); cancelNear = null }
-              waitingEmbeds.add(show)
-              requestAnimationFrame(arm)
+              render(kind)
               attachSourceButton(dom, view, () => {
                 const v = viewRef
                 if (!v) return
@@ -717,7 +689,7 @@ export function createEmbedLayer(opts: { path: string; readOnly?: boolean; flush
                 v.focus()
               })
               dom.querySelector('.amx-src-btn')?.classList.add('amx-src-btn--block')
-              roots.set(dkey, { root, dom, text: renderedText, render, stop, refs: 1 })
+              roots.set(dkey, { root, dom, text: renderedText, render, refs: 1 })
               return dom
             },
             {
@@ -744,7 +716,6 @@ export function createEmbedLayer(opts: { path: string; readOnly?: boolean; flush
                 queueMicrotask(() => {
                   if (entry.refs > 0 || roots.get(dkey) !== entry) return
                   roots.delete(dkey)
-                  entry.stop()
                   entry.root.unmount()
                 })
               },
@@ -778,7 +749,7 @@ export function createEmbedLayer(opts: { path: string; readOnly?: boolean; flush
             // 同一个插件实例已经建回了视图 = 只是重配,根照旧用;没人接手 = 编辑器真拆了,再卸。
             queueMicrotask(() => {
               if (viewRef) return
-              for (const [, e] of roots) { e.stop(); e.root.unmount() }
+              for (const [, e] of roots) e.root.unmount()
               roots.clear()
             })
           },
