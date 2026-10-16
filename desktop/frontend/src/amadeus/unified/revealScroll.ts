@@ -1,3 +1,5 @@
+import { cancelScrollToElement } from '@lcl/engine'
+
 /** 把正文里的某个块「亮到阅读位置」:块顶贴在滚动容器可视区上部,让开 sticky 顶栏再留一条缝。
  *
  *  大纲跳转 / `[[笔记#标题]]` / `[[笔记#^块]]` 共用(评审 C-03;G4-01 搜索命中、L-05 锚点跳转复用这一份)。
@@ -49,5 +51,6 @@ export function revealBlockAtTop(el: HTMLElement, gap = READING_GAP): void {
   // rect / hr / 顶栏高都是**视口**量(已过应用级 CSS zoom),scrollTop 是元素自己的 CSS px ——
   // 差值除掉这一级 zoom(同 findInPage.reveal / flashCiteTip),否则 80%/125% 下按比例过冲。
   const z = (host as HTMLElement & { currentCSSZoom?: number }).currentCSSZoom || 1
+  cancelScrollToElement(host) // 目录跳转的落地补正还在跑会把这次定位拉回去
   host.scrollTop += (rect.top - (hr.top + stickyTopInset(host) + gap)) / z
 }

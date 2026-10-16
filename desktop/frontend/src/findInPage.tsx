@@ -34,6 +34,7 @@
  */
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { create } from 'zustand'
+import { cancelScrollToElement } from '@lcl/engine'
 import { CaseSensitive, ChevronDown, ChevronRight, Regex, Replace, ReplaceAll } from 'lucide-react'
 import { registerMessages, useI18n } from './i18n'
 import './findInPage.css'
@@ -477,6 +478,7 @@ function reveal(r: Range): void {
   // 差值必须除掉这一级 zoom,否则 80%/125% 设置下每次定位都按比例过冲(同 flashCiteTip)。
   const z = (host as HTMLElement & { currentCSSZoom?: number }).currentCSSZoom || 1
   if (rect.bottom > hr.bottom || rect.top < hr.top) {
+    cancelScrollToElement(host) // 目录跳转的落地补正还在跑会把这次定位拉回去
     host.scrollTop += (rect.top + rect.height / 2 - (hr.top + hr.height / 2)) / z
   }
   if (rect.right > hr.right || rect.left < hr.left) {
