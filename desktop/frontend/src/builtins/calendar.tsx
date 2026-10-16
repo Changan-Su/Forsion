@@ -21,9 +21,9 @@ import { Suspense } from 'react'
 import { CalendarDays, ListTodo, Settings } from 'lucide-react'
 import {
   registerView, registerSpace, unregisterSpace, addRibbonIcon, removeRibbonIcon,
-  setActiveSpace, useSpaceStore, useWorkspace, Skeleton,
+  setActiveSpace, useSpaceStore, useWorkspace, Skeleton, UI_MODE,
 } from '@lcl/engine'
-import type { SpaceDefinition, PersistedPanel } from '@lcl/engine'
+import type { SpaceDefinition, PersistedPanel, LayoutBlob } from '@lcl/engine'
 import { lazyRetry, preloadWhenIdle } from '../lazyRetry'
 import { registerMessages } from '../i18n'
 import { useApp } from '../stores/appStore'
@@ -34,6 +34,7 @@ import { CalendarDashboardCard, TodoDashboardCard } from '../views/DashboardComp
 const CalendarView = lazyRetry(() => import('../views/CalendarView').then((m) => ({ default: m.CalendarView })))
 const TodoListView = lazyRetry(() => import('../views/TodoListView').then((m) => ({ default: m.TodoListView })))
 const CalendarConfigView = lazyRetry(() => import('../views/CalendarConfigView').then((m) => ({ default: m.CalendarConfigView })))
+const CalendarSide = lazyRetry(() => import('../views/calendar/CalendarSide').then((m) => ({ default: m.CalendarSide })))
 
 registerMessages({
   'calendar.builtinDesc': {
@@ -45,11 +46,33 @@ registerMessages({
 const ws = () => useWorkspace.getState()
 const app = () => useApp.getState()
 
-/** Calendar Space:左=待办清单;主=日历;右=日历配置(颜色/显隐/默认库)。
- *  数据来自全库多维表的 todo / calendarDate 属性(dbAggregateStore)。 */
-const CALENDAR_SIDE_VIEWS: Record<'left' | 'right', PersistedPanel[]> = {
+/** 手机(单列壳)/ 桌面两套侧栏。数据来自全库多维表的 todo / calendarDate 属性(dbAggregateStore)。
+ *  · 桌面(2026-10-16 用户定):左 = 小月历 + 日历列表;右 = calendar-side(平时是待办,选中事件换成详情)。
+ *  · 手机这一轮不动:左抽屉 = 待办,右抽屉 = 日历配置。手机走 `UI_MODE === 'mobile' || window.tangu.mobile`。
+ *  老存档里两侧还是旧摆法 → spaces.tsx 的 forsion_calendar_layout_v2 一次性重建本 Space 的布局(同图像工作室那条)。 */
+const singleColumn = (): boolean => UI_MODE === 'mobile' || !!window.tangu?.mobile
+const PHONE_SIDES: Record<'left' | 'right', PersistedPanel[]> = {
   left: [{ type: 'todo-list', params: {} }],
   right: [{ type: 'calendar-config', params: {} }],
+}
+const DESKTOP_SIDES: Record<'left' | 'right', PersistedPanel[]> = {
+  left: [{ type: 'calendar-config', params: {} }],
+  right: [{ type: 'calendar-side', params: {} }],
+}
+const sides = (): Record<'left' | 'right', PersistedPanel[]> => (singleColumn() ? PHONE_SIDES : DESKTOP_SIDES)
+
+/** 这份存档的两侧还是 10-16 之前的默认摆法吗(左只有待办、右只有日历设置;收起的一侧看暂存)。
+ *  是 → 启动时重建本 Space 的布局换成新摆法;用户自己挪过的(多开了别的、换过边)= false,不动。 */
+export function calendarSidesAreOld(blob: LayoutBlob | null): boolean {
+  if (!blob) return false
+  const panels = Object.values((blob.dockview as { panels?: Record<string, { params?: { __loc?: string; __type?: string } }> } | null)?.panels ?? {})
+  const at = (side: 'left' | 'right'): string[] => {
+    const live = panels.filter((p) => p.params?.__loc === side).map((p) => p.params?.__type ?? '').filter((x) => x !== 'sidebar-empty')
+    return live.length ? live : blob.sidebars[side].stash.map((v) => v.type)
+  }
+  const only = (xs: string[], type: string): boolean => xs.length <= 1 && xs.every((x) => x === type)
+  const l = at('left'), r = at('right')
+  return l.length + r.length > 0 && only(l, 'todo-list') && only(r, 'calendar-config')
 }
 
 export const calendarSpace: SpaceDefinition = {
@@ -57,16 +80,21 @@ export const calendarSpace: SpaceDefinition = {
   mini: { name: 'ToDo List', view: { type: 'mini-todo' }, mainView: { type: 'todo-list' } },
   name: () => app().tr('space.calendar'),
   icon: CalendarDays,
-  sidebarDefaults: CALENDAR_SIDE_VIEWS,
+  get sidebarDefaults() { return sides() },
   listFirst: false, // 手机上先看日历:左栏是待办,不是「点开一项进主区」的列表
-  pinned: { main: [{ type: 'calendar', params: {} }], left: [{ type: 'todo-list', params: {} }] },
+  get pinned() {
+    return singleColumn()
+      ? { main: [{ type: 'calendar', params: {} }], left: [{ type: 'todo-list', params: {} }] }
+      : { main: [{ type: 'calendar', params: {} }], left: [{ type: 'calendar-config', params: {} }], right: [{ type: 'calendar-side', params: {} }] }
+  },
   // 待办在本 Space 里住左栏,但单独开成一个标签同样成立(原先启动器里就有这张卡)。
   launcherViews: [{ type: 'calendar', params: {} }, { type: 'todo-list', params: {} }],
   build() {
-    ws().setSidebarDefaults(CALENDAR_SIDE_VIEWS)
+    const s = sides()
+    ws().setSidebarDefaults(s)
     ws().openView('calendar', {}, 'main')
-    ws().openView('todo-list', {}, 'left')
-    ws().openView('calendar-config', {}, 'right')
+    ws().openView(s.left[0].type, {}, 'left')
+    ws().openView(s.right[0].type, {}, 'right')
   },
 }
 
@@ -79,7 +107,7 @@ export function installCalendarViews(): void {
   if (!calendarAvailable()) return
   // 空闲预热(U-40)。分块的 CSS 会随之提前注入整页:Astryx 重置已收进 @scope(theme/astryxReset.css),
   // 不再作用到日历以外 —— 以前是全局 `:where(*)`,预热会让别处样式跟着变(check:projectdetails 9c 错位 4px)。
-  preloadWhenIdle(CalendarView, TodoListView, CalendarConfigView)
+  preloadWhenIdle(CalendarView, TodoListView, CalendarConfigView, CalendarSide)
   // ⚠️ 待办视图**吃 params 且非 singleton**(与另外两个不同,刻意的):
   //  · factory 必须把 params 透传下去 —— 从前写的是 `() => <TodoListView />`,把 ViewProps 整个丢了,
   //    于是 Dashboard 卡片上 `db:`/`src:` 这些键落了盘也没人读(dashboardViewCard 早就在传了)。
@@ -100,6 +128,8 @@ export function installCalendarViews(): void {
     factory: () => <Suspense fallback={<Skeleton variant="document" />}><CalendarView /></Suspense>, singleton: true,
     dashboard: { sizes: ['wide', 'lg', 'full'], defaultSize: 'lg', surface: 'summary', factory: (_props, ctx) => <CalendarDashboardCard size={ctx.size} /> },
   })
+  // 日历右栏:待办 ↔ 选中事件的详情 ↔ 新建草稿(见 views/calendar/CalendarSide)。只在日历 Space 的右栏用,不进启动器。
+  registerView({ type: 'calendar-side', kind: 'page', displayName: () => app().tr('view.todo'), icon: ListTodo, factory: () => <Suspense fallback={<Skeleton variant="list" />}><CalendarSide /></Suspense>, singleton: true })
   registerView({ type: 'calendar-config', kind: 'page', displayName: () => app().tr('view.calendarConfig'), icon: Settings, factory: () => <Suspense fallback={<Skeleton variant="list" />}><CalendarConfigView /></Suspense>, singleton: true })
 }
 

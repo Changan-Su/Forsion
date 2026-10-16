@@ -24,6 +24,7 @@ async function mount(anchorRef: { current: MonthAnchor | null }, key: string): P
   ;(titleRef as { current: HTMLSpanElement | null }).current = title
   await act(async () => root.render(React.createElement(MonthScroll, {
     key, anchorRef, titleRef, events: [], selectedKey: null, onPick: () => {}, onCreate: () => {},
+    canCreate: false, onDismiss: () => false, onDraft: () => {}, colorOf: () => '',
   })))
   return title
 }

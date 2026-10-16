@@ -114,3 +114,13 @@ describe('eventTimeSummary', () => {
     expect(eventTimeSummary('not-a-date')).toBeNull()
   })
 })
+
+describe('isoWeek', () => {
+  it('matches ISO 8601 week numbers, including year edges', async () => {
+    const { isoWeek } = await import('./dateUtils')
+    expect(isoWeek(new Date(2026, 9, 16))).toBe(42)
+    expect(isoWeek(new Date(2026, 0, 1))).toBe(1)
+    expect(isoWeek(new Date(2021, 0, 3))).toBe(53)
+    expect(isoWeek(new Date(2024, 11, 30))).toBe(1)
+  })
+})
