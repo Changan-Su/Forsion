@@ -1034,7 +1034,9 @@ export interface PluginSelectionBarHandle {
 }
 
 export interface PluginFloatingTocHandle {
-  /** Force a rescan after a DOM change that MutationObserver cannot see. */
+  /** Force a rescan after a DOM change that MutationObserver cannot see. Observed changes rescan on their own: the first
+   *  after a quiet spell on the next frame, then at most every 500 ms while content keeps changing (2026-10-16+);
+   *  changes inside `[data-lcl-toc-ignore]` subtrees (lazily mounted code highlighting, embeds) never trigger one. */
   refresh(): void
   /** Idempotent. Takes the host's overlay layer out of `shell` synchronously; your content is untouched.
    *  The host also disposes every mount when the plugin is disabled/reloaded. */
