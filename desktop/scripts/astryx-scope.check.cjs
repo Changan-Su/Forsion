@@ -270,7 +270,7 @@ async function main() {
     await win.waitForFunction(() => document.querySelectorAll(':popover-open').length === 0, null, { timeout: 5000 })
 
     await win.locator('.amx-cal-event[aria-label^="产品深度工作"]').first().click()
-    await win.locator('.amx-calside2 .amx-cal-panel').waitFor({ timeout: 5000 }) // 10-16 方案 B:选中事件的详情进右栏,不再浮卡
+    await win.locator('.amx-cal-cardwrap[role="dialog"]').waitFor({ timeout: 5000 }) // 10-16 用户改口:编辑事件在事件旁的浮卡,右栏只放待办
     await calParity('事件详情')
     await sweep('日历·事件详情')
     await win.keyboard.press('Escape')

@@ -1,5 +1,6 @@
 /** Calendar Space UIUX 真 Electron 回归：隔离 Vault，不碰用户数据。
- *  2026-10-16 方案 B + 方向 1(docs/ToBeImproved/Calendar交互与待办右栏方案_2026-10-16/):左栏小月历 + 日历列表、右栏待办 / 详情 / 草稿;
+ *  2026-10-16 方案 B + 方向 1(docs/ToBeImproved/Calendar交互与待办右栏方案_2026-10-16/):左栏小月历 + 日历列表、右栏待办;
+ *  同日用户改口:编辑事件在事件旁的浮卡、草稿的选日历 / 保存在草稿块旁的草稿卡,右栏不再换成详情 / 草稿面板;
  *  单击空白 = 草稿(不落盘)、按住拖 = 时长、全天行横拖 = 多天;拖动吸附 + ⌘Z;待办拖进时间格;快速添加认自然语言日期。
  *  夹具拆成两张表:「产品日历」只有日期列(日程),「待办」带勾选列(待办来源)—— 只有日期的待办不进全天行。 */
 const fs = require('fs')
@@ -314,19 +315,26 @@ async function main() {
 
     const event = win.locator('.amx-cal-event[aria-label^="产品深度工作"]').first()
     await event.click()
-    const panel = win.locator('.amx-calside2 .amx-cal-panel')
-    await panel.waitFor({ timeout: 5000 })
-    await resetParity(win, '事件详情(右栏)')
-    check('选中事件 → 右栏换成详情,不再浮卡挡住别处', (await win.locator('.amx-cal-cardwrap').count()) === 0 && (await panel.locator('input.amx-cal-card-title').inputValue()) === '产品深度工作')
-    check('事件详情提供打开数据库入口', (await panel.getByRole('button', { name: /打开多维表/ }).count()) === 1)
-    await win.keyboard.press('Enter')
-    check('选中后 Enter = 改标题(焦点进右栏标题框)', await win.evaluate(() => document.activeElement?.matches('.amx-calside2 input.amx-cal-card-title') === true))
+    const card = win.locator('.amx-cal-cardwrap[role="dialog"]')
+    await card.waitFor({ timeout: 5000 })
+    await win.waitForTimeout(150) // 卡片下一帧才把焦点放进标题框
+    await resetParity(win, '事件浮卡')
+    // 卡片贴在事件旁(右侧或翻到左侧),不进右栏、不盖右栏:右栏照旧是待办
+    const evCard = await win.evaluate(() => {
+      const c = document.querySelector('.amx-cal-cardwrap[role="dialog"]')?.getBoundingClientRect()
+      const e = document.querySelector('.amx-cal-event[aria-label^="产品深度工作"]')?.getBoundingClientRect()
+      const main = document.querySelector('.amx-cal')?.getBoundingClientRect()
+      return c && e && main ? { beside: Math.abs(c.left - e.right) < 24 || Math.abs(e.left - c.right) < 24, inMain: c.right <= main.right + 1, todo: !!document.querySelector('.amx-calside2 .amx-todo'), sidePanel: !!document.querySelector('.amx-calside2 .amx-cal-card-title') } : null
+    })
+    check('点开事件 → 事件旁浮卡,右栏照旧是待办(10-16 用户:不要在 right panel)', !!evCard && evCard.beside && evCard.inMain && evCard.todo && !evCard.sidePanel && (await card.locator('input.amx-cal-card-title').inputValue()) === '产品深度工作', JSON.stringify(evCard))
+    check('浮卡标题框自动聚焦,直接能改名', await win.evaluate(() => document.activeElement?.matches('.amx-cal-cardwrap input.amx-cal-card-title') === true))
+    check('事件浮卡提供打开数据库入口', (await card.getByRole('button', { name: /打开多维表/ }).count()) === 1)
     await win.keyboard.press('Escape')
     await win.waitForTimeout(200)
-    check('Esc 回到待办', (await panel.count()) === 0 && (await win.locator('.amx-calside2 .amx-todo').count()) === 1)
+    check('Esc 收起浮卡', (await card.count()) === 0 && (await win.locator('.amx-calside2 .amx-todo').count()) === 1)
 
     await event.click()
-    await panel.waitFor({ timeout: 5000 })
+    await card.waitFor({ timeout: 5000 })
     const beforeDelete = await win.locator('.amx-cal-event').count()
     await win.getByRole('button', { name: '删除', exact: true }).click()
     await win.getByRole('button', { name: '撤销', exact: true }).waitFor({ timeout: 5000 })
@@ -346,8 +354,32 @@ async function main() {
     const p13 = await slotPoint(win, d1, 13 * 60)
     await win.mouse.click(p13.x, p13.y)
     await win.waitForSelector('.amx-cal-event.amx-cal-draft', { timeout: 3000 })
-    const draftUi = await win.evaluate(() => ({ focus: document.activeElement?.matches('.amx-cal-draft-input') === true, panel: !!document.querySelector('.amx-calside2 .amx-cal-draftpanel') }))
-    check('单击空白 = 草稿:标题光标在格子里,右栏换成草稿面板', draftUi.focus && draftUi.panel, JSON.stringify(draftUi))
+    const draftGeo = () => win.evaluate(() => {
+      const c = document.querySelector('.amx-cal-draftcard')?.getBoundingClientRect()
+      const b = document.querySelector('.amx-cal-event.amx-cal-draft')?.getBoundingClientRect()
+      const main = document.querySelector('.amx-cal')?.getBoundingClientRect()
+      return { focus: document.activeElement?.matches('.amx-cal-draft-input') === true, card: !!c, beside: !!c && !!b && (Math.abs(c.left - b.right) < 24 || Math.abs(b.left - c.right) < 24), inMain: !!c && !!main && c.right <= main.right + 1, dy: c && b ? Math.round(c.top - b.top) : null, todo: !!document.querySelector('.amx-calside2 .amx-todo') }
+    })
+    await win.waitForTimeout(250) // 卡片的弹出动画(0.16s,自上方 6px 落下)走完再量
+    const draftUi = await draftGeo()
+    check('单击空白 = 草稿:标题光标在格子里,草稿块旁弹出草稿卡,右栏照旧是待办', draftUi.focus && draftUi.card && draftUi.beside && draftUi.inMain && draftUi.todo, JSON.stringify(draftUi))
+    // 草稿卡跟着草稿块走:时间格竖着滚一段,卡片与块的相对位置不变
+    // 往能滚的方向滚 40(滚到底时 += 40 是空操作),量完原样还回去 —— 后面的落点是滚动前取的
+    const scrolled = await win.evaluate(() => { const sc = document.querySelector('.amx-cal-tscroll'); const st0 = sc.scrollTop; sc.scrollTop = st0 > 60 ? st0 - 40 : st0 + 40; return { st0, d: sc.scrollTop - st0 } })
+    await win.waitForTimeout(150)
+    const draftScrolled = await draftGeo()
+    check('时间格滚动时草稿卡跟着草稿块走', scrolled.d !== 0 && draftScrolled.card && draftScrolled.dy === draftUi.dy && draftScrolled.focus, JSON.stringify({ scrolled, before: draftUi.dy, after: draftScrolled.dy }))
+    await win.evaluate((st0) => { document.querySelector('.amx-cal-tscroll').scrollTop = st0 }, scrolled.st0)
+    await win.waitForTimeout(100)
+    // 在草稿卡里点另一个日历:焦点留在格子里的标题框,草稿不丢
+    const otherCal = win.locator('.amx-cal-draftcard .amx-cal-draft-cal:not(.on)').first()
+    const chosenCal = (await win.locator('.amx-cal-draftcard .amx-cal-draft-cal.on').textContent())?.trim()
+    if (await otherCal.count()) {
+      await otherCal.click()
+      await win.waitForTimeout(150)
+      check('草稿卡里换日历:草稿还在,焦点留在标题框', (await hasDraft(win)) && await win.evaluate(() => document.activeElement?.matches('.amx-cal-draft-input') === true) && (await win.locator('.amx-cal-draftcard .amx-cal-draft-cal.on').count()) === 1)
+      await win.locator('.amx-cal-draftcard .amx-cal-draft-cal', { hasText: chosenCal }).click() // 换回原来的日历,后面的断言按默认库读
+    }
     await win.keyboard.press('Escape')
     await win.waitForTimeout(300)
     const afterEsc = { draft: await hasDraft(win), rows: readRows(EVENTS_DB).length, before: eventsBefore }
@@ -365,6 +397,19 @@ async function main() {
     await win.waitForTimeout(500)
     const afterEnter = { draft: await hasDraft(win), rows: readRows(EVENTS_DB).length, before: eventsBefore }
     check('没写标题直接回车 = 不建(10-16 走查:误回车留下了「新事件」)', !afterEnter.draft && afterEnter.rows === eventsBefore, JSON.stringify(afterEnter))
+    // 最右一列的草稿:卡片放不下就翻到块左边,不盖右栏的待办
+    const lastDay = await win.evaluate(() => {
+      const v = document.querySelector('.amx-cal-tscroll').getBoundingClientRect()
+      return [...document.querySelectorAll('.amx-cal-daycol2')].filter((c) => { const r = c.getBoundingClientRect(); return r.left >= v.left - 1 && r.right <= v.right + 1 }).at(-1)?.dataset.date ?? null
+    })
+    const pEdge = await slotPoint(win, lastDay, 18 * 60)
+    await win.mouse.click(pEdge.x, pEdge.y)
+    await win.waitForSelector('.amx-cal-event.amx-cal-draft', { timeout: 3000 }).catch(() => {})
+    await win.waitForTimeout(250)
+    const edgeUi = await draftGeo()
+    check('最右一列的草稿:草稿卡翻到块左边,不盖右栏', edgeUi.card && edgeUi.beside && edgeUi.inMain, JSON.stringify({ lastDay, ...edgeUi }))
+    await win.keyboard.press('Escape')
+    await win.waitForTimeout(200)
     const p1415 = await slotPoint(win, d1, 14 * 60 + 15)
     await win.mouse.move(p13.x, p13.y)
     await win.mouse.down()
@@ -377,7 +422,12 @@ async function main() {
     await win.waitForTimeout(700)
     const dragged = readRows(EVENTS_DB).find((r) => r.cells?.name === '拖出来的会')
     check('按住拖 = 拖出时长(含指针所在那一格),Enter 写进默认日历', dragged?.cells?.date === `${d1}T13:00/${d1}T14:30`, JSON.stringify(dragged?.cells))
-    check('保存后右栏是新事件的详情', (await panel.count()) === 1 && (await panel.locator('input.amx-cal-card-title').inputValue()) === '拖出来的会')
+    const savedSel = await win.evaluate(() => ({ sel: document.querySelector('.amx-cal-event.selected')?.getAttribute('aria-label') ?? '', cards: document.querySelectorAll('.amx-cal-cardwrap').length }))
+    check('保存后新事件高亮,不弹卡', /^拖出来的会/.test(savedSel.sel) && savedSel.cards === 0, JSON.stringify(savedSel))
+    await win.keyboard.press('Enter')
+    await card.waitFor({ timeout: 3000 }).catch(() => {})
+    await win.waitForTimeout(150)
+    check('高亮着按 Enter = 在它旁边开卡,标题框聚焦', (await card.count()) === 1 && (await card.locator('input.amx-cal-card-title').inputValue()) === '拖出来的会' && await win.evaluate(() => document.activeElement?.matches('.amx-cal-cardwrap input.amx-cal-card-title') === true))
     await win.keyboard.press('Escape')
     const allPts = await win.evaluate(({ a, b }) => {
       const r1 = document.querySelector(`.amx-cal-allday2[data-date="${a}"]`)?.getBoundingClientRect()
@@ -602,9 +652,27 @@ async function main() {
     await win.waitForTimeout(500)
     await win.screenshot({ path: path.join(OUT, 'calendar-ui-light.png') })
     await win.keyboard.press('Escape')
+    await win.waitForTimeout(200)
+    // 草稿卡观感:最右一列(卡片翻到块左边、不盖右栏)
+    const edgeDay = await win.evaluate(() => {
+      const v = document.querySelector('.amx-cal-tscroll').getBoundingClientRect()
+      return [...document.querySelectorAll('.amx-cal-daycol2')].filter((c) => { const r = c.getBoundingClientRect(); return r.left >= v.left - 1 && r.right <= v.right + 1 }).at(-1)?.dataset.date ?? null
+    })
+    const pShot = await slotPoint(win, edgeDay, 11 * 60)
+    await win.mouse.click(pShot.x, pShot.y)
+    await win.waitForSelector('.amx-cal-draftcard', { timeout: 3000 }).catch(() => {})
+    await win.keyboard.type('评审会')
+    await win.waitForTimeout(300)
+    await win.screenshot({ path: path.join(OUT, 'calendar-ui-draft.png') })
+    await win.keyboard.press('Escape')
+    await win.waitForTimeout(200)
 
     await forceMode(win, 'dark')
+    await win.locator('.amx-cal-event[aria-label^="产品深度工作"]').click()
+    await win.waitForTimeout(400)
     await win.screenshot({ path: path.join(OUT, 'calendar-ui-dark.png') })
+    await win.keyboard.press('Escape')
+    await win.waitForTimeout(200)
     await resetParity(win, '深色')
     check('明暗主题截图均已产出', fs.existsSync(path.join(OUT, 'calendar-ui-light.png')) && fs.existsSync(path.join(OUT, 'calendar-ui-dark.png')), OUT)
     check('Calendar 主链无渲染异常', errors.length === 0, errors.join(' | '))

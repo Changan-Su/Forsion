@@ -9,7 +9,7 @@
  *  ponytail: 时间仍用原生 date/time 输入编辑(点击展开),未做参考图那种内联时间胶囊编辑器;
  *  select 值显示为中性胶囊,无每选项配色(schema 的 options 是纯字符串,无色)。 */
 import { useEffect, useRef, useState, type ReactElement, type RefObject, type SVGProps } from 'react'
-import { ChevronLeft, ExternalLink } from 'lucide-react'
+import { ExternalLink } from 'lucide-react'
 import { coerceForDisplay, type CellValue, type DbColumn } from '@amadeus-shared/db/schema'
 import { CalDateFields } from '../../amadeus/blocks/database/propertyTypes.builtins'
 import { getPropertyType, resolveBaseType } from '../../amadeus/blocks/database/propertyTypes'
@@ -37,7 +37,6 @@ registerMessages({
   'evcard.delete': { zh: '删除', en: 'Delete' },
   'evcard.rowlinkReadonly': { zh: '关联表列请在表格里编辑', en: 'Edit related rows in the table' },
   'evcard.noOptions': { zh: '（无选项，请在表格里添加）', en: '(No options — add them in the table)' },
-  'evcard.backToTodo': { zh: '待办', en: 'To-dos' },
 })
 
 export interface Anchor { left: number; top: number; right: number; bottom: number; zoom?: number }
@@ -54,13 +53,15 @@ export interface CardTarget {
   color?: string
 }
 
-function cardPos(at: Anchor): { left: number; top: number } {
+/** 卡片落点:默认贴锚点右侧,放不下就翻到左侧。maxRight = 右边界(视口像素;缺省窗口右缘)——
+ *  日历传主区右缘,卡片翻到事件左边,而不是盖住右栏的待办。 */
+export function cardPos(at: Anchor, { w = 360, h = 380, maxRight }: { w?: number; h?: number; maxRight?: number } = {}): { left: number; top: number } {
   const zoom = at.zoom || 1
-  const W = 360
-  const H = 380
+  const W = w
+  const H = h
   const margin = 8 * zoom
   let left = at.right + margin
-  if (left + W * zoom > window.innerWidth) left = Math.max(margin, at.left - W * zoom - margin)
+  if (left + W * zoom > (maxRight ?? window.innerWidth)) left = Math.max(margin, at.left - W * zoom - margin)
   const top = Math.max(margin, Math.min(at.top, window.innerHeight - H * zoom - margin))
   // body 使用 CSS zoom 时，fixed 的 left/top 仍是元素自身的 CSS 像素；锚点则来自视口像素。
   return { left: left / zoom, top: top / zoom }
@@ -79,9 +80,9 @@ function PropIcon({ col }: { col: DbColumn }) {
   return <Ic />
 }
 
-export function EventCard({ ev, at, onClose }: { ev: CardTarget; at: Anchor; onClose: () => void }) {
+export function EventCard({ ev, at, onClose, maxRight }: { ev: CardTarget; at: Anchor; onClose: () => void; maxRight?: number }) {
   const { t } = useI18n()
-  const pos = cardPos(at)
+  const pos = cardPos(at, { maxRight })
   const dialogRef = useRef<HTMLDivElement>(null)
   const closeRef = useRef<HTMLButtonElement>(null)
   const onCloseRef = useRef(onClose)
@@ -132,26 +133,7 @@ export function EventCard({ ev, at, onClose }: { ev: CardTarget; at: Anchor; onC
   )
 }
 
-/** 日历右栏里的事件详情(选中事件时顶替待办):同一份内容,不浮、不抢焦点、不困 Tab;Esc 由日历的键盘处理收。 */
-export function EventPanel({ ev, onBack }: { ev: CardTarget; onBack: () => void }) {
-  const { t } = useI18n()
-  return (
-    // 焦点在面板里的输入框时,日历主区的全局按键是让开的 —— Esc 在这里自己接。
-    <section
-      className="amx-cal-panel"
-      aria-label={t('evcard.editEvent', { title: ev.title || t('evcard.untitled') })}
-      onKeyDown={(e) => { if (e.key === 'Escape' && !e.nativeEvent.isComposing) { e.stopPropagation(); onBack() } }}
-    >
-      <div className="amx-cal-panel-top">
-        <button className="amx-cal-panel-back" onClick={onBack}><ChevronLeft size={14} />{t('evcard.backToTodo')}</button>
-        <kbd className="amx-cal-panel-kbd">Esc</kbd>
-      </div>
-      <EventCardBody ev={ev} onClose={onBack} panel />
-    </section>
-  )
-}
-
-function EventCardBody({ ev, onClose, closeRef, panel }: { ev: CardTarget; onClose: () => void; closeRef?: RefObject<HTMLButtonElement | null>; panel?: boolean }) {
+function EventCardBody({ ev, onClose, closeRef }: { ev: CardTarget; onClose: () => void; closeRef?: RefObject<HTMLButtonElement | null> }) {
   const { t } = useI18n()
   const { db, row, colId, title } = ev
   // 只读源(agent 日程 / ICS / 另一侧 Vault):全字段展示,底部无删除。
@@ -179,7 +161,7 @@ function EventCardBody({ ev, onClose, closeRef, panel }: { ev: CardTarget; onClo
           <span className="amx-cal-card-dot" style={{ background: accent }} />
           {db.name}
         </span>
-        {!panel && <button className="amx-cal-card-x" ref={closeRef} onClick={onClose} aria-label={t('evcard.close')}>×</button>}
+        <button className="amx-cal-card-x" ref={closeRef} onClick={onClose} aria-label={t('evcard.close')}>×</button>
       </div>
 
       {/* 标题 */}
