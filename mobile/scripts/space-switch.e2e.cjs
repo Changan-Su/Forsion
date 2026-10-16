@@ -3,7 +3,7 @@
  *
  * 桌面那半在 desktop 的 scripts/space-switch.electron.cjs。手机这半验:从左抽屉底部的 Space 条点下一个 / 上一个,
  * 内容区(.mb-body)横着推(next 往左走),Space 条自己单独成组不动;换完抽屉还开着;过渡中途再点条上别的 Space 点得动
- * (过渡期间命中一律落在 <html>,靠 spaceTransition 跳过 + 转发)。--shot 存 0 / 80 / 160ms 三帧。
+ * (过渡期间命中一律落在 <html>,靠 spaceTransition 跳过 + 转发);点了别的又立刻点回当前 = 留在当前。--shot 存 0 / 80 / 160ms 三帧。
  * 原生底栏(安卓壳)在 WebView 外,不经过这里;它点下去走同一个 enterSpace → switchSpace。
  *
  * 骨架照抄 space-trap.e2e.cjs(vite preview + 假 token + /api abort)。
@@ -109,6 +109,13 @@ async function main() {
     await page.waitForTimeout(300)
     s = await settle()
     ok('7 过渡中途点条上别的 Space 点得动', s.space === next2 && !s.attr, JSON.stringify(s))
+
+    // ── 点了别的又立刻点回当前这个:留在当前 ──
+    const cur = s.space
+    await page.evaluate(([a, b]) => { document.querySelector(`.mb-spacebar .mb-tab[data-space="${a}"]`).click(); document.querySelector(`.mb-spacebar .mb-tab[data-space="${b}"]`).click() }, [s.tabs[s.tabs.indexOf(cur) - 1], cur])
+    await page.waitForTimeout(600)
+    s = await settle()
+    ok('8 点了别的又点回当前 = 留在当前', s.space === cur && !s.attr, JSON.stringify(s))
     if (shots) console.log('截图 →', shots)
   } catch (e) {
     fails.push(String((e && e.stack) || e))

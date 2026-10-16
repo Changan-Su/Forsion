@@ -39,22 +39,27 @@ let wired = false
 function wire(): void {
   if (wired) return
   wired = true
+  const barButtonAt = (x: number, y: number): HTMLElement | null =>
+    document.elementFromPoint(x, y)?.closest<HTMLElement>('.rb button, .mb-drawer-foot button') ?? null
   window.addEventListener('pointerdown', (e) => {
     retarget = null
     if (!live) return
     live.skipTransition() // 同步生效:这之后 elementFromPoint 就能命中真界面
-    retarget = document.elementFromPoint(e.clientX, e.clientY)?.closest<HTMLElement>('.rb button, .mb-drawer-foot button') ?? null
+    retarget = barButtonAt(e.clientX, e.clientY)
   }, true)
   window.addEventListener('click', (e) => {
     const el = retarget
     retarget = null
-    if (!el || e.target !== document.documentElement || !el.isConnected) return
+    // 松手时还在同一颗上才算(按下后拖开 = 取消);修饰键原样带过去(⌘ / Ctrl + 点 Space = 开到自己的窗口)
+    if (!el || e.target !== document.documentElement || barButtonAt(e.clientX, e.clientY) !== el) return
     e.stopPropagation()
-    el.click()
+    const { clientX, clientY, screenX, screenY, button, buttons, detail, metaKey, ctrlKey, shiftKey, altKey } = e
+    el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, composed: true, view: window, clientX, clientY, screenX, screenY, button, buttons, detail, metaKey, ctrlKey, shiftKey, altKey }))
   }, true)
 }
 
 /** 带过渡地换到 toId。run = 真正换的那一下(缺省 setActiveSpace;手机「换完留在抽屉里」要连抽屉一起交进来)。
+ *  点的就是当前这个也要经过这里(run 换成「落回这个 Space 的那一页」之类):这样才会作废还在等下一帧的上一次切换。
  *  axis:切换条的走向,桌面 ribbon 竖排('y'),手机底栏横排('x')。
  *  不该播的(同一个、没注册、迷你面板、Space 窗口、不支持 View Transition、窗口不可见)直接同步跑 run。 */
 export function switchSpace(toId: string, run: () => void = () => setActiveSpace(toId), { axis = 'y' }: { axis?: 'x' | 'y' } = {}): void {
@@ -72,8 +77,9 @@ export function switchSpace(toId: string, run: () => void = () => setActiveSpace
   // 先挂上再开:旧快照在下一帧拍,那时工作区就得已经带着名字(engine.css 按这两个属性给它起名、选关键帧)
   root.dataset.spaceSwitch = reducedMotion() ? 'fade' : spaceSwitchDirection(barOrder, spaces.map((s) => s.id), from, toId)
   root.dataset.spaceSwitchAxis = axis
-  // flushSync:换布局时 Dockview 往 React 里挂的面板要在回调返回前画完,不然新快照拍到的是空面板,推完内容才弹出来
-  const vt = doc.startViewTransition(() => { if (seq === mine) flushSync(run) })
+  // flushSync:换布局时 Dockview 往 React 里挂的面板要在回调返回前画完,不然新快照拍到的是空面板,推完内容才弹出来。
+  // 等这一帧的工夫里别处已经同步换过 Space(通知、别的窗口发来的导航)= 这次作废,不把人从刚到的地方带走
+  const vt = doc.startViewTransition(() => { if (seq === mine && useSpaceStore.getState().activeSpaceId === from) flushSync(run) })
   live = vt
   // 被下一段跳过时 ready / finished 以 AbortError 落空
   vt.ready.catch(() => {})

@@ -4,7 +4,7 @@
  * 方向判定有单测(spaceTransition.test.ts);这里验只有真应用才看得到的:
  *   · 点 ribbon 往下的 Space = next、往上 = prev,工作区真的被起名并跑了推移动画,ribbon 不动;播完属性收掉、名字摘掉;
  *   · 过渡中途再点别的 Space(真鼠标)点得动 —— 过渡期间命中一律落在 <html>,靠 spaceTransition 跳过过渡 + 把点击转给 ribbon 按钮;
- *   · 同一刻连点两下:落在后一个,属性最后也收掉;点了别的又立刻点回当前这个 = 留在当前、不播;
+ *   · 过渡中在 ribbon 上按下、拖开再松手 = 不触发;同一刻连点两下:落在后一个,属性最后也收掉;点了别的又立刻点回当前这个 = 留在当前、不播;
  *   · 系统「减少动态效果」:只整页淡入,不推;
  *   · 观感:--shot 把过渡暂停在 0 / 60 / 120 / 200ms 各截一张整窗(亮 / 暗),自己看(DESIGN §8)。
  *
@@ -103,6 +103,26 @@ async function main() {
     s = await settled(win)
     check('过渡中途点别的 Space 点得动', (await activeSpace(win)) === 'tangu', `活动 = ${await activeSpace(win)}`)
     check('中途被打断后属性也收掉', !s.attr && s.name === 'none', JSON.stringify(s))
+
+    // ── 过渡中在 ribbon 上按下、拖到工作区再松手 = 取消,不触发那颗按钮 ──
+    at = await spot(win, 'calendar')
+    await win.mouse.click(at.x, at.y)
+    await waitTransition(win)
+    await pauseAt(win, 80)
+    at = await spot(win, 'amadeus')
+    await win.mouse.move(at.x, at.y)
+    await win.mouse.down()
+    await win.mouse.move(700, 450, { steps: 4 })
+    await win.mouse.up()
+    await sleep(300)
+    await finish(win)
+    s = await settled(win)
+    check('按下后拖开再松手 = 不触发', (await activeSpace(win)) === 'calendar' && !s.attr, `活动 = ${await activeSpace(win)} ${JSON.stringify(s)}`)
+    at = await spot(win, 'tangu')
+    await win.mouse.click(at.x, at.y)
+    await waitTransition(win)
+    await finish(win)
+    await settled(win)
 
     // ── 同一刻连点两下:落在后一个 ──
     check('起点 = Tangu', (await activeSpace(win)) === 'tangu')
