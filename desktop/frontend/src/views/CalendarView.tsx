@@ -277,6 +277,7 @@ export function CalendarView() {
   /** 选中:桌面且右栏在 → 右栏换成详情;否则在事件旁浮卡。 */
   const pick = (key: string, at: Anchor): void => {
     finishDraft()
+    pendingKey.current = null // 用户自己点了别的:等着的新行到了也别再把选中抢过去
     const ev = eventsRef.current.find((e) => e.key === key)
     const nav = useCalendarNav.getState()
     if (ev && DESK && calendarSideVisible()) { nav.setSelection({ key, target: ev }); setCard(null) }
@@ -324,8 +325,10 @@ export function CalendarView() {
     nav.setDraft(null)
     const m = pickDraftDb(members, d.dbPath, defaultDbPath(vault, byVault))
     if (!m) return
+    const before = nav.selection
     const id = await createAggEvent(m.db, m.dateCol, draftValue(d), d.title.trim() || t('calview.newEventTitle'))
-    selectWhenReady(`${m.db.path}::${id}`)
+    // 存盘期间用户已经点了别的事件(常见:打完标题直接点别的块 = 失焦保存)→ 不抢它的选中。
+    if (useCalendarNav.getState().selection === before) selectWhenReady(`${m.db.path}::${id}`)
   }
   useEffect(() => {
     const nav = useCalendarNav.getState()
@@ -562,6 +565,7 @@ function DraftInput({ first = true }: { first?: boolean }) {
       onBlur={(e) => {
         const side = useCalendarNav.getState().sideEl
         if (e.relatedTarget instanceof Node && side?.contains(e.relatedTarget)) return
+        if (!document.hasFocus()) return // 切到别的 App 不算「点到别处」:回来时草稿还在
         finishDraft()
       }}
     />
