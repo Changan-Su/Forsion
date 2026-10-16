@@ -137,9 +137,9 @@ View 内需要一个完整的常驻对话时（例如创作类 Space 的右栏�
 
 ## 读写多维表与笔记任务 / Tables and note tasks
 
-日历、待办、习惯这类插件需要读写你库里的多维表，以及笔记里带 `@` 时间的任务（`- [ ] 交周报 @2026-10-20`）。插件必须在说明文件里声明 `databases`（多维表）或 `noteTasks`（笔记任务）才拿得到；没声明的插件看不到这些数据。拿到之后，插件改一格、勾一项，和你在表格里、笔记里亲手改是同一条路：打开着的表格立即跟着变，笔记视图的属性写进那篇笔记。插件删经典表的一行可以撤销；笔记视图的一行是一篇笔记，插件只能把它移进回收站。接口细节见插件开发技能「全库多维表与笔记任务」一节。
+日历、待办、习惯这类插件需要读写你库里的多维表，以及笔记里带 `@` 时间的任务（`- [ ] 交周报 @2026-10-20`）。插件必须在说明文件里声明 `databases`（多维表）或 `noteTasks`（笔记任务）才拿得到；没声明的插件看不到这些数据。拿到之后，插件改一格、勾一项，和你在表格里、笔记里亲手改是同一条路：打开着的表格立即跟着变，笔记视图的属性写进那篇笔记。插件删经典表的一行可以撤销；笔记视图的一行是一篇笔记，插件只能把它移进回收站。插件声明了哪些，插件详情页会列成一行「这个插件可以：……」给你看（读取前台窗口的 `activeWindow` 也列在这一行）。接口细节见插件开发技能「全库多维表与笔记任务」一节。
 
-Calendar, to-do and habit plugins need to read and edit the tables in your vault and the dated tasks in your notes (`- [ ] Send report @2026-10-20`). A plugin gets them only if its manifest declares `databases` (tables) or `noteTasks` (note tasks); plugins that do not declare them cannot see this data. Once granted, a plugin changing a cell or ticking a task goes the same way as your own edit: open tables update at once, and note-view properties are written into that note. A plugin can undo deleting a row from a regular table; a note-view row is a note, so a plugin can only move it to the recycle bin. API details are in the plugin development skill, section "全库多维表与笔记任务".
+Calendar, to-do and habit plugins need to read and edit the tables in your vault and the dated tasks in your notes (`- [ ] Send report @2026-10-20`). A plugin gets them only if its manifest declares `databases` (tables) or `noteTasks` (note tasks); plugins that do not declare them cannot see this data. Once granted, a plugin changing a cell or ticking a task goes the same way as your own edit: open tables update at once, and note-view properties are written into that note. A plugin can undo deleting a row from a regular table; a note-view row is a note, so a plugin can only move it to the recycle bin. The plugin's detail page lists what it declared in one line, "This plugin can: …" (the `activeWindow` capability for reading the front window is listed there too). API details are in the plugin development skill, section "全库多维表与笔记任务".
 
 ## 开屏与图标 / Startup and icons
 
