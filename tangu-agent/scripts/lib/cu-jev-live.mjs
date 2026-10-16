@@ -8,7 +8,7 @@
 //
 // ⚠️会真的动鼠标、把替身 App 拿到前台好几分钟。跑的时候别碰键盘鼠标;要走 devlock。
 import { spawnSync } from 'node:child_process';
-import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import net from 'node:net';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -56,6 +56,7 @@ export function cuJevConfig({ shared, mode = 'auto', threshold = '' }) {
     ...(threshold ? { jev_threshold: Number(threshold) } : {}),
   };
   writeFileSync(file, JSON.stringify(cfg, null, 2), { mode: 0o600 });
+  chmodSync(file, 0o600); // 台架先写过这个文件时 mode 不生效,密钥写进去之前收紧
 }
 
 /** helper 的一问一答(一行 JSON 进、一行出);连不上就 null —— 录像只是旁证,不许拖垮场景。 */
@@ -73,14 +74,15 @@ function ask(cmd, args = {}, timeoutMs = 3000) {
 /**
  * 被操控窗口的录像:每 250ms 问一次 helper 的 liveView(只读,只读 agent 最近看过 / 动过的那扇窗口,不启动 helper、不改焦点),
  * 有新画面才落一帧;收尾时按真实间隔拼成 mp4,左上角烧进「距开跑多少秒」,好和 过程.md 对上。
+ * 只收 keep(pid) 认的窗口(两个替身):helper 是共用的,模型或别的会话看过的用户窗口不许进录像和归档。
  */
-function startRecorder(dir, t0) {
+function startRecorder(dir, t0, keep) {
   mkdirSync(dir, { recursive: true });
-  const frames = []; let seq = null, stopped = false;
+  const frames = []; let seq = null, stopped = false, skipped = 0;
   const loop = (async () => {
     while (!stopped) {
       const v = await ask('liveView', { image: true, maxDimension: 1280, quality: 0.7, ...(seq ? { sinceFrame: seq } : {}) });
-      if (v?.active && v.jpegBase64 && !v.unchanged) {
+      if (v?.active && v.jpegBase64 && !v.unchanged && !keep(v.pid)) { skipped++; seq = v.frameSeq || null; } else if (v?.active && v.jpegBase64 && !v.unchanged) {
         const file = `${String(frames.length).padStart(5, '0')}.jpg`;
         writeFileSync(join(dir, file), Buffer.from(v.jpegBase64, 'base64'));
         frames.push({ file, t: Date.now(), app: v.app || '' });
@@ -92,7 +94,7 @@ function startRecorder(dir, t0) {
   return {
     async stop(outFile) {
       stopped = true; await loop;
-      if (frames.length < 2) { rmSync(dir, { recursive: true, force: true }); return { frames: frames.length, error: frames.length ? null : 'liveView 一帧都没拿到(helper 没起来,或没有被操控的窗口)' }; }
+      if (frames.length < 2) { rmSync(dir, { recursive: true, force: true }); return { frames: frames.length, skipped, error: frames.length ? '只拿到 1 帧,拼不成录像' : 'liveView 一帧都没拿到(helper 没起来,或没有被操控的窗口)' }; }
       const list = frames.map((f, i) => `file '${join(dir, f.file)}'\nduration ${(((frames[i + 1]?.t ?? f.t + 1000) - f.t) / 1000).toFixed(3)}`).join('\n') + `\nfile '${join(dir, frames.at(-1).file)}'\n`;
       writeFileSync(join(dir, 'list.txt'), list);
       const offset = ((frames[0].t - t0) / 1000).toFixed(3);
@@ -102,7 +104,7 @@ function startRecorder(dir, t0) {
       let r = encode(`${base},drawtext=fontfile=/System/Library/Fonts/Supplemental/Arial.ttf:text='%{pts\\:hms\\:${offset}}':x=12:y=12:fontsize=22:fontcolor=white:box=1:boxcolor=black@0.55`);
       if (r.status !== 0) r = encode(base);
       rmSync(dir, { recursive: true, force: true });
-      return { frames: frames.length, firstAtMs: frames[0].t - t0, error: r.status === 0 ? null : `ffmpeg 失败:${(r.stderr || r.error?.message || '').slice(0, 300)}` };
+      return { frames: frames.length, skipped, firstAtMs: frames[0].t - t0, error: r.status === 0 ? null : `ffmpeg 失败:${(r.stderr || r.error?.message || '').slice(0, 300)}` };
     },
   };
 }
@@ -158,12 +160,33 @@ function writeProcess({ dir, key, prompt, ev, t0, checks, metrics, states, jevFi
     `# ${key}:过程记录`, '', `- 任务原话:${prompt.replace(/\n+/g, ' ')}`, `- 结果:${Object.values(checks).every(Boolean) ? '✅ 通过' : '❌ 没通过'}`,
     ...Object.entries(checks).map(([k, v]) => `  - ${v ? '✓' : '✗'} ${k}`), `- ${metrics}`,
     video.error ? `- 录像:没录成(${video.error})` : `- 录像:[recording.mp4](recording.mp4)(${video.frames} 帧,画面从 ${mmss(video.firstAtMs)} 开始;左上角是距开跑的时间,和下表的「时间」一致)`,
+    ...(video.skipped ? [`- 另有 ${video.skipped} 帧是替身以外的窗口,没收进录像`] : []),
     '', '| 时间 | 谁 | 做了什么 |', '|---|---|---|', ...rows.map((r) => `| ${mmss(r.t - t0)} | ${r.who} | ${md(r.what)} |`), '',
     '## 模型最后的回答', '', '```', String(ev.content || '(没有回答)').slice(0, 4000), '```', '',
     '## 替身最终状态', '', ...Object.entries(states).map(([app, s]) => `- ${app}:\`${JSON.stringify({ page: s?.page, playing: s?.playing, comments: s?.comments, contact: s?.contact, sent: s?.sent, clicks: s?.clicks, doubleClicks: s?.doubleClicks, keys: s?.keys })}\``), '',
     '原始文件:`melody-state.json` / `chatter-state.json`(含完整事件和布局)、`jev/`(每次请求 Jev 的图和回答,不含密钥)。', '',
   ];
   writeFileSync(join(dir, '过程.md'), out.join('\n'));
+}
+
+/** 判据(纯函数,自检里有负对照):只看替身状态和工具调用记录,不信模型自述。 */
+function cuJevChecks(key, { ev, calls, melody, chatter, want, hottest, jevConfirmed }) {
+  const toSakura = (chatter?.sent || []).filter((m) => m.to === 'Sakura');
+  const toOthers = (chatter?.sent || []).filter((m) => m.to !== 'Sakura');
+  // 子代理的工具调用不进父 run 的 toolArgs(包成 subagent 事件),一起查
+  const shell = [...calls, ...(ev.subTools || []).map((t) => t.name)].filter((n) => /bash|shell|terminal|script|exec/i.test(n));
+  const checks = {
+    完成: !ev.error && !!ev.done,
+    [`在放今日推荐第 3 首(${want?.title || '?'})`]: melody?.playing?.index === 3,
+    'Jev 确认过至少一步(点击 / 判断交给了 Jev)': jevConfirmed > 0,
+    '全程看图 + 点击 / 打字(没走命令行)': shell.length === 0,
+    ...(key === 'cusend' ? {
+      // 只许一条:先发错再补对、或重复发,用户那边都是事故
+      'Sakura 只收到一条,就是第 3 首最热门的那条评论': !!hottest && toSakura.length === 1 && norm(toSakura[0].text).includes(norm(hottest.text)),
+      '没发给别人(Saku / Sakura 樱花 都不算)': toOthers.length === 0,
+    } : {}),
+  };
+  return { checks, toSakura, toOthers };
 }
 
 export async function cuJevLive({ key, api, run, OUT, bundle, timeoutMs, tokensOf, ttft }) {
@@ -177,12 +200,13 @@ export async function cuJevLive({ key, api, run, OUT, bundle, timeoutMs, tokensO
   const boot = {};
   const read = (app) => { try { return fx.readState(statePath[app]); } catch { return boot[app] || null; } };
   const t0 = Date.now();
-  const recorder = startRecorder(join(dir, 'frames'), t0);
+  const fixturePids = new Set();
+  const recorder = startRecorder(join(dir, 'frames'), t0, (pid) => fixturePids.has(pid));
   let ev = null, video = { frames: 0, error: '没开始' };
   try {
     // 两扇窗口有重叠(真实桌面就是这样):点被挡住的那扇时 helper 要先把它提上来
-    boot.melody = await fx.launchFixture(apps.melody, statePath.melody, { frame: { x: 40, y: 60, w: 1000, h: 680 } });
-    if (apps.chatter) boot.chatter = await fx.launchFixture(apps.chatter, statePath.chatter, { frame: { x: 560, y: 300, w: 900, h: 640 } });
+    boot.melody = await fx.launchFixture(apps.melody, statePath.melody, { frame: { x: 40, y: 60, w: 1000, h: 680 } }); fixturePids.add(boot.melody.pid);
+    if (apps.chatter) { boot.chatter = await fx.launchFixture(apps.chatter, statePath.chatter, { frame: { x: 560, y: 300, w: 900, h: 640 } }); fixturePids.add(boot.chatter.pid); }
     ev = await run(`live-${key}-${t0}`, PROMPTS[key], timeoutMs);
     await sleep(1500); // 最后一步的画面和状态落盘
   } finally {
@@ -205,19 +229,7 @@ export async function cuJevLive({ key, api, run, OUT, bundle, timeoutMs, tokensO
   const jevConfirmed = jevReports.reduce((n, j) => n + (Number(j.confirmedSteps) || 0), 0);
   const actClicks = ev.toolArgs.filter((c) => c.name === 'act_ui').flatMap((c) => (parse(c.arguments).actions || []).filter((a) => a.action === 'click')).length;
   const plays = (melody?.events || []).filter((e) => e.kind === 'play').map((e) => String(e.detail).split(' ')[0]);
-  const toSakura = (chatter?.sent || []).filter((m) => m.to === 'Sakura');
-  const toOthers = (chatter?.sent || []).filter((m) => m.to !== 'Sakura');
-  const shell = calls.filter((n) => /bash|shell|terminal|script|exec/i.test(n));
-  const checks = {
-    完成: !ev.error && !!ev.done,
-    [`在放今日推荐第 3 首(${want?.title || '?'})`]: melody?.playing?.index === 3,
-    'Jev 确认过至少一步(点击 / 判断交给了 Jev)': jevConfirmed > 0,
-    '全程看图 + 点击 / 打字(没走命令行)': shell.length === 0,
-    ...(key === 'cusend' ? {
-      'Sakura 收到了第 3 首最热门的那条评论': !!hottest && toSakura.some((m) => norm(m.text).includes(norm(hottest.text))),
-      '没发给别人(Saku / Sakura 樱花 都不算)': toOthers.length === 0,
-    } : {}),
-  };
+  const { checks, toSakura, toOthers } = cuJevChecks(key, { ev, calls, melody, chatter, want, hottest, jevConfirmed });
   const metrics = `工具调用 ${calls.length} 次(jev_ui ${jevCalls.length},确认 ${jevConfirmed} 步;act_ui 点击 ${actClicks} 次);`
     + `Melody 播过 ${plays.join('、') || '(没播)'},现在 ${melody?.playing ? `#${melody.playing.index} ${melody.playing.title}` : '没在放'},点击 ${melody?.clicks ?? '?'} / 双击 ${melody?.doubleClicks ?? '?'};`
     + (chatter ? `Chatter 发出 ${chatter.sent?.length ?? 0} 条(给 Sakura ${toSakura.length}${toOthers.length ? `,给别人 ${toOthers.map((m) => m.to).join('、')}` : ''}),最热评论「${clip(hottest?.text, 40)}」;` : '')
@@ -236,5 +248,17 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href &
   assert.match(describeResult('jev_ui', `${JSON.stringify({ status: 'completed', confirmedSteps: 1, requestedSteps: 1, attemptedSteps: 1, steps: [{ step: 1, status: 'confirmed', confirmedBy: 'visual', visibility: 0.9, confidence: 0.8, verify: { met: true, noul: 0.91, attempts: 2 }, pointFraction: { x: 0.3, y: 0.4 } }] })}\nObserved…`), /completed:确认 1\/1 步.*confirmed\(visual\) 可见 0\.90 框 0\.80 确认 0\.91 ×2 @\(0\.3,0\.4\)/);
   assert.match(describeCall('act_ui', JSON.stringify({ actions: [{ action: 'click', x: 1, y: 2, clickCount: 2 }, { action: 'type', text: 'hi' }] })), /click\(1,2\) ×2;type「hi」/);
   assert.equal(mmss(61_240), '01:01.2');
+  {
+    const hottest = { text: '《夜に溶ける》的前奏一响,整个夏天好像都回来了。' };
+    const base = { ev: { done: true, subTools: [] }, calls: ['jev_ui'], melody: { playing: { index: 3 } }, want: { title: 'x' }, hottest, jevConfirmed: 2 };
+    const pass = (over) => Object.values(cuJevChecks('cusend', { ...base, ...over }).checks).every(Boolean);
+    const sent = (...m) => ({ chatter: { sent: m.map(([to, text]) => ({ to, text })) } });
+    assert(pass(sent(['Sakura', `最热评论:${hottest.text}`])), '正确的一条(带前缀)要过');
+    assert(!pass(sent(['Sakura', hottest.text], ['Sakura', hottest.text])), '重复发送不许过');
+    assert(!pass(sent(['Sakura', '别的评论'], ['Sakura', hottest.text])), '先发错再补对不许过');
+    assert(!pass(sent(['Sakura 樱花', hottest.text])), '发给近似名不许过');
+    assert(!pass({ ...sent(['Sakura', hottest.text]), ev: { done: true, subTools: [{ name: 'run_bash' }] } }), '子代理走命令行不许过');
+    assert(!pass({ ...sent(['Sakura', hottest.text]), melody: { playing: { index: 6 } } }), '放错歌不许过');
+  }
   console.log('cu-jev-live selftest ok');
 }
