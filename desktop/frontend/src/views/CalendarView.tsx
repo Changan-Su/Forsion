@@ -654,6 +654,7 @@ const TimeScroll = forwardRef<CalApi, TimeProps>(function TimeScroll({ n, weekSt
     el: HTMLElement
     tEl: HTMLElement | null // 块内时间文本 span(拖拽中命令式更新)
     t0: string        // 原始时间文本(未生效的拖拽收手时还原)
+    pid: number      // 按下的那根指针:别的指针(笔拖着时鼠标划过)的移动 / 松手不算这次拖动
     x0: number; y0: number
     zoom: number      // PointerEvent 是视口 px；transform/hourPx 是未缩放局部 px，换算必须除累计 CSS zoom。
     top0: number; h0: number
@@ -667,7 +668,7 @@ const TimeScroll = forwardRef<CalApi, TimeProps>(function TimeScroll({ n, weekSt
     moved: boolean
     target: { iso: string; topMin: number } | null // move 落点:目标日 + 吸附后起始分钟
   } | null>(null)
-  const makeRef = useRef<{ zone: 'time' | 'all'; col: number; min: number; cur: { col: number; min: number }; x0: number; y0: number; moved: boolean } | null>(null)
+  const makeRef = useRef<{ pid: number; zone: 'time' | 'all'; col: number; min: number; cur: { col: number; min: number }; x0: number; y0: number; moved: boolean } | null>(null)
 
   // 当前时间线(任务2):每 30s 刷新分钟位置;卸载清区间条(mini 据此判断 Calendar 是否挂载)。
   const [nowMin, setNowMin] = useState(() => { const d = new Date(); return d.getHours() * 60 + d.getMinutes() })
@@ -810,7 +811,7 @@ const TimeScroll = forwardRef<CalApi, TimeProps>(function TimeScroll({ n, weekSt
     el.setPointerCapture(e.pointerId)
     el.classList.add('dragging')
     dragRef.current = {
-      mode, ev, el, tEl, t0: tEl?.textContent ?? '', x0: e.clientX, y0: e.clientY, zoom, top0: box.top, h0, grabOffY: offY,
+      mode, ev, el, tEl, t0: tEl?.textContent ?? '', pid: e.pointerId, x0: e.clientX, y0: e.clientY, zoom, top0: box.top, h0, grabOffY: offY,
       durMin: Math.round((h0 / hourPx) * 60), msDur: ev.end ? ev.end.getTime() - ev.start.getTime() : 0,
       col0: diffDays(startOfDay(ev.start), days[0]), min0: ev.start.getHours() * 60 + ev.start.getMinutes(),
       dup: DESK && mode === 'move' && e.altKey && !ev.db.readonly, shadow: null,
@@ -819,7 +820,7 @@ const TimeScroll = forwardRef<CalApi, TimeProps>(function TimeScroll({ n, weekSt
   }
   const move = (e: ReactPointerEvent): void => {
     const d = dragRef.current
-    if (!d) return
+    if (!d || e.pointerId !== d.pid) return
     // 松手那一下没送到(切走了 App、在窗外松开、输入注入丢了 up):鼠标已经没按着,就按松手收尾,别把预览晾在那里
     if (e.pointerType === 'mouse' && e.buttons === 0) { up(d.ev, e); return }
     // move:块本身按吸附后的落点整格平移(不再是「块自由飘 + 另一个落点框」两份),原位置留一个淡影。
@@ -870,6 +871,7 @@ const TimeScroll = forwardRef<CalApi, TimeProps>(function TimeScroll({ n, weekSt
   }
   const up = (ev: CalEvent, e: ReactPointerEvent): void => {
     const d = dragRef.current
+    if (d && e.pointerId !== d.pid) return
     dragRef.current = null
     if (!d) {
       if (ev.readonly) onPick(ev.key, rectOf(e)) // down() 对只读早退过 → 这里就是「点击开卡」
@@ -917,8 +919,8 @@ const TimeScroll = forwardRef<CalApi, TimeProps>(function TimeScroll({ n, weekSt
     if (!d) return
     d.el.classList.remove('dragging')
     d.el.style.transform = ''
-    d.el.style.top = ''
-    d.el.style.height = ''
+    d.el.style.top = `${d.top0}px` // 还原成渲染时的原位;清空的话 React 值没变不会补回,块就丢了定位和高度
+    d.el.style.height = `${d.h0}px`
     d.shadow?.remove()
     if (d.tEl) d.tEl.textContent = d.t0
   }
@@ -973,11 +975,12 @@ const TimeScroll = forwardRef<CalApi, TimeProps>(function TimeScroll({ n, weekSt
     e.preventDefault()
     const p = locate(e)
     ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
-    makeRef.current = { zone, col: p.col, min: p.min, cur: p, x0: e.clientX, y0: e.clientY, moved: false }
+    makeRef.current = { pid: e.pointerId, zone, col: p.col, min: p.min, cur: p, x0: e.clientX, y0: e.clientY, moved: false }
   }
   const gridMove = (e: ReactPointerEvent): void => {
     const m = makeRef.current
     if (!m) { hover(e); return }
+    if (e.pointerId !== m.pid) return
     if (e.pointerType === 'mouse' && e.buttons === 0) { gridUp(); return } // 松手没送到:同 move()
     if (!m.moved && Math.hypot(e.clientX - m.x0, e.clientY - m.y0) < 4) return
     m.moved = true
@@ -1002,8 +1005,9 @@ const TimeScroll = forwardRef<CalApi, TimeProps>(function TimeScroll({ n, weekSt
       el.textContent = c1 > c0 ? fmtDur((c1 - c0 + 1) * 1440) : ''
     }
   }
-  const gridUp = (): void => {
+  const gridUp = (e?: { pointerId: number }): void => {
     const m = makeRef.current
+    if (m && e && e.pointerId !== m.pid) return
     makeRef.current = null
     if (makeEl.current) makeEl.current.style.display = 'none'
     if (!m) return
@@ -1233,7 +1237,7 @@ export const MonthScroll = forwardRef<CalApi, MonthProps>(function MonthScroll({
   const [agenda, setAgenda] = useState<{ day: Date; events: CalEvent[]; at: Anchor } | null>(null)
   const lastTitle = useRef('')
   const lastRangeI = useRef(-1)
-  const makeRef = useRef<{ a: string; b: string; moved: boolean } | null>(null)
+  const makeRef = useRef<{ pid: number; a: string; b: string; moved: boolean } | null>(null)
   useEffect(() => () => setVisibleRange(null, null), [setVisibleRange])
 
   const idxOfMonth = (y: number, m: number): number => Math.round(diffDays(startOfWeek(new Date(y, m, 1)), weeks[0]) / 7)
@@ -1339,11 +1343,11 @@ export const MonthScroll = forwardRef<CalApi, MonthProps>(function MonthScroll({
     if (had || !canCreate) return
     e.preventDefault()
     ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
-    makeRef.current = { a: day, b: day, moved: false }
+    makeRef.current = { pid: e.pointerId, a: day, b: day, moved: false }
   }
   const gridMove = (e: ReactPointerEvent): void => {
     const m = makeRef.current
-    if (!m) return
+    if (!m || e.pointerId !== m.pid) return
     if (e.pointerType === 'mouse' && e.buttons === 0) { gridUp(); return } // 松手没送到:按松手收尾
     const b = cellAt(e)
     if (!b || b === m.b) return
@@ -1351,8 +1355,9 @@ export const MonthScroll = forwardRef<CalApi, MonthProps>(function MonthScroll({
     m.moved = true
     paint(m.a < b ? m.a : b, m.a < b ? b : m.a)
   }
-  const gridUp = (): void => {
+  const gridUp = (e?: { pointerId: number }): void => {
     const m = makeRef.current
+    if (m && e && e.pointerId !== m.pid) return
     makeRef.current = null
     if (!m) return
     if (m.moved) paint(null, null)
