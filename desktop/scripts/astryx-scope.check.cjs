@@ -359,6 +359,7 @@ async function main() {
 
     // ④ 真实外溢场景:日历的视图跟别的内容同窗 —— 待办清单停在 Tangu / 笔记 Space 的右栏(用户能拖出来的布局)。
     //   在日历里改两个 Space 的命名布局槽(不在日历里改,切走时 saveNamed 会盖掉),右栏 stash = [todo-list],进去再展开右栏。
+    //   Tangu 那边右栏还会被补回固定的「Tangu 详情」(排第一),展开后要再点一下待办的标签,见 openTodoRight。
     check('进日历(准备布局)', await enterSpace(win, 'calendar'))
     await win.waitForSelector('.amx-cal-event', { timeout: 15_000 })
     const planted = await win.evaluate(() => {
@@ -373,7 +374,22 @@ async function main() {
     check('右栏布局已写入 Tangu / 笔记两个 Space 的命名槽', planted.ok, JSON.stringify(planted))
     const openTodoRight = async () => {
       if (!(await win.locator('.amx-todo').count())) await win.click('.dv-edge-right')
-      await win.waitForSelector('.amx-todo', { timeout: 10_000 })
+      // Tangu 的右栏固定留着「Tangu 详情」(10-03 起的固定 View,排第一、默认激活),种进去的待办成了同栏第二个标签 → 点它的标签切过去。
+      const todoTab = win.locator('.wb-tab--icon[title*="待办"]')
+      await win.waitForFunction(() => !!document.querySelector('.amx-todo, .wb-tab--icon[title*="待办"]'), null, { timeout: 10_000 }).catch(() => {})
+      if (!(await win.locator('.amx-todo').count()) && await todoTab.count()) await todoTab.first().click()
+      try { await win.waitForSelector('.amx-todo', { timeout: 10_000 }) } catch (e) {
+        // 失败现场:命名槽 / 当前布局里右栏存了什么、边缘按钮状态、右栏里实际挂着什么
+        note('openTodoRight 失败现场', JSON.stringify(await win.evaluate(() => {
+          const named = JSON.parse(localStorage.getItem('tangu2_named_layouts') || '{}')
+          const cur = JSON.parse(localStorage.getItem('tangu2_layout_v4') || 'null')
+          const btn = document.querySelector('.dv-edge-right')
+          return { active: localStorage.getItem('forsion_tangu_active_space'), namedRight: Object.fromEntries(Object.entries(named).map(([k, v]) => [k, v?.sidebars?.right])),
+            curRight: cur?.sidebars?.right, btn: btn && btn.className, tabs: [...document.querySelectorAll('.wb-tab')].map((t) => t.title || t.textContent.trim()).slice(0, 20) }
+        })))
+        await captureWindow(app, path.join(SHOTS, 'open-todo-right-fail.png'))
+        throw e
+      }
       await sleep(1200)
     }
 
@@ -434,17 +450,20 @@ async function main() {
       check(`F ${label}:还挂着的包裹层里裸标签探针计算样式不变(prose 表内容仍生效)`, kept.probe.total > 0 && kept.probe.changed === 0, fmt(kept.probe))
     }
     const leftToggle = () => win.evaluate(() => { const b = document.querySelector('.dv-edge-toggle:not(.dv-edge-right)'); if (b) b.click(); return !!b })
-    await unmountStep('关掉主区日历', '.amx-todo, .amx-calside', 2, () => win.evaluate(() => {
-      const btn = [...document.querySelectorAll('.dv-tab')].find((t) => t.textContent.trim() === '日历')?.querySelector('.wb-tab-close')
-      if (btn) btn.click()
-      return !!btn
-    }), () => !document.querySelector('.amx-cal'))
-    await captureWindow(app, path.join(SHOTS, 'calendar-main-closed.png'))
-    await unmountStep('再收起左栏待办', '.amx-calside', 1, leftToggle, () => !document.querySelector('.amx-todo'))
+    // 主区日历 10-03 起是固定 View(builtins/calendar.tsx 的 pinned.main),标签上没有 ×、关不掉:这一步只在它还能关时跑;
+    // 关不掉时主区日历一直挂着,后两步各自还剩 2 个包裹层(主区 + 另一侧栏)。
+    const mainCloseBtn = () => [...document.querySelectorAll('.dv-tab')].find((t) => t.textContent.trim() === '日历')?.querySelector('.wb-tab-close')
+    const mainClosable = await win.evaluate(`!!(${mainCloseBtn})()`)
+    if (mainClosable) {
+      await unmountStep('关掉主区日历', '.amx-todo, .amx-calside', 2, () => win.evaluate(`(() => { const b = (${mainCloseBtn})(); b.click(); return true })()`), () => !document.querySelector('.amx-cal'))
+      await captureWindow(app, path.join(SHOTS, 'calendar-main-closed.png'))
+    } else note('F 关掉主区日历', '跳过:主区日历是固定 View,标签上没有关闭钮')
+    const rest = mainClosable ? 1 : 2
+    await unmountStep('再收起左栏待办', '.amx-calside', rest, leftToggle, () => !document.querySelector('.amx-todo'))
     check('重新展开左栏待办', await leftToggle())
     await win.waitForSelector('.amx-todo .astryx-checkbox', { timeout: 10_000 })
     await sleep(800)
-    await unmountStep('再收起右栏日历设置', '.amx-todo', 1, () => win.evaluate(() => { const b = document.querySelector('.dv-edge-right'); if (b) b.click(); return !!b }), () => !document.querySelector('.amx-calside'))
+    await unmountStep('再收起右栏日历设置', '.amx-todo', rest, () => win.evaluate(() => { const b = document.querySelector('.dv-edge-right'); if (b) b.click(); return !!b }), () => !document.querySelector('.amx-calside'))
     await captureWindow(app, path.join(SHOTS, 'calendar-only-todo.png'))
     note('截图', SHOTS)
   } finally {
