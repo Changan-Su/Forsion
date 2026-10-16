@@ -8,7 +8,8 @@
  *  The fake home is a convention, not a boundary: file reads need no approval and a shell command can still work out
  *  the real home. What this file does about it — the approval guard refuses the obvious routes, a run that touched the
  *  real home is reported as void, and the developer's own copy of the plugin is hashed before and after. */
-import { mkdirSync, cpSync, symlinkSync, existsSync, readFileSync, readdirSync, writeFileSync, lstatSync } from 'node:fs';
+import { mkdirSync, symlinkSync, existsSync, readFileSync, readdirSync, writeFileSync, lstatSync } from 'node:fs';
+import { cp } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { homedir } from 'node:os';
@@ -91,13 +92,13 @@ function treeHash(dir) {
 
 /** Copies the plugin (and optionally its plugins-data blob) under `<shared>/plugins` and points `<fakeHome>/.forsion` at `shared`.
  *  Symlinks are resolved while copying: a link kept as a link would still point at the developer's original files. */
-export function plantPlugin({ src, data, shared, fakeHome }) {
+export async function plantPlugin({ src, data, shared, fakeHome }) {
   if (!src || !existsSync(join(src, 'manifest.json'))) throw new Error('plugindiag: --plugin-src <desktop plugin folder> is required (it must contain manifest.json)');
   mkdirSync(join(fakeHome, 'Forsion'), { recursive: true }); // 工作目录放在家目录下,和真机一样
-  symlinkSync(shared, join(fakeHome, '.forsion'));
+  symlinkSync(shared, join(fakeHome, '.forsion'), process.platform === 'win32' ? 'junction' : 'dir');
   const dir = join(shared, 'plugins', basename(src));
-  cpSync(src, dir, { recursive: true, dereference: true });
-  if (data) { mkdirSync(join(shared, 'plugins-data'), { recursive: true }); cpSync(data, join(shared, 'plugins-data', basename(data)), { dereference: true }); }
+  await cp(src, dir, { recursive: true, dereference: true });
+  if (data) { mkdirSync(join(shared, 'plugins-data'), { recursive: true }); await cp(data, join(shared, 'plugins-data', basename(data)), { dereference: true }); }
   return dir;
 }
 

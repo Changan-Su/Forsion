@@ -108,6 +108,26 @@ async function main() {
     check('详情面点名 Space、没注册的视图、问题在插件自己的 main.js', /网格工作台/.test(text) && /视图 mesh 没有注册/.test(text) && /main\.js/.test(text), text.replace(/\s+/g, ' '))
     check('详情面不把完整视图类型 / 原始校验串当正文', !/plugin:cad-probe|引用了未注册/.test(text))
     await settings.screenshot({ path: path.join(OUT, 'detail.png') })
+    // 修好同一个已安装插件后重载宿主:Space 应恢复,诊断徽标不能留着旧错误。
+    write('plugins/cad-dir/main.js', "ctx.registerView({ id: 'mesh', title: 'Mesh', mount(el) { el.textContent = 'mesh repaired' } })\n")
+    await settings.close()
+    await win.reload()
+    await win.waitForSelector('.dv-groupview')
+    await win.locator('.rb-top .rb-more').first().click()
+    // 小屏展开后仍可能装不下全部 Space;滑到新加入的那一格,不把屏外占位当成缺失。
+    for (let i = 0; i < 8 && !(await onRibbon('cad-mesh')); i++) {
+      await win.locator('.rb-top').hover()
+      await win.mouse.wheel(0, 480)
+      await win.waitForTimeout(250)
+    }
+    check('修复并重载后同一个插件的 Space 恢复', await until(() => onRibbon('cad-mesh')))
+    await win.evaluate(() => document.querySelector('.rb-open-top .rb-more')?.click())
+    await win.keyboard.press(process.platform === 'darwin' ? 'Meta+k' : 'Control+k')
+    await win.locator('.cmd-input:visible').fill('插件状态')
+    await win.locator('.cmd-item', { hasText: '插件状态' }).first().click()
+    const repairedSettings = await until(async () => app.windows().find(w => w.url().includes('window=floating') && !w.isClosed()))
+    await repairedSettings.locator(':text-is("已安装插件"):visible').first().click()
+    check('修复后的插件卡片清除旧 Space 徽标', await until(async () => await repairedSettings.locator('[data-plugin-id="cad-probe"]').count()) && await repairedSettings.locator('[data-plugin-id="cad-probe"] [data-plugin-space-hidden]').count() === 0)
     console.log(`截图: ${OUT}`)
   } finally {
     await app.close().catch(() => {})

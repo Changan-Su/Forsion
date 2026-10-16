@@ -2069,8 +2069,13 @@ function toggleMiniWindow(opts?: MiniOpenOptions): void {
 /** 设 bounds;mac 传 animate=true 走原生滑动动画(修「无动画」),win/linux 瞬时。程序化移动抑制 moved 自激。 */
 function setMiniBounds(r: Rect, animate = true): void {
   if (!miniWindow || miniWindow.isDestroyed()) return
+  const previous = miniWindow.getBounds()
+  const changed: Partial<Rect> = {}
+  for (const key of ['x', 'y', 'width', 'height'] as const) if (r[key] !== previous[key]) changed[key] = r[key]
+  if (Object.keys(changed).length === 0) return
   suppressMiniMoved = true
-  miniWindow.setBounds(r, animate && process.platform === 'darwin')
+  // Windows 的分数 DPI 下,把没变的尺寸反复设回去也可能每次多出 1px。
+  miniWindow.setBounds(changed, animate && process.platform === 'darwin')
   // 单个定时器:连发(拖缩放边)时后一次顺延,前一次的定时器不会提前放开抑制
   if (miniMovedTimer) clearTimeout(miniMovedTimer)
   miniMovedTimer = setTimeout(() => { suppressMiniMoved = false }, animate && process.platform === 'darwin' ? 320 : 60)
@@ -3873,8 +3878,8 @@ app.whenReady().then(async () => {
     if (isTrustedSender(e) && e.sender === miniWindow?.webContents && miniTarget) e.sender.send('window:miniTarget', miniTarget)
     if (isTrustedSender(e) && e.sender === autoMiniWindow?.webContents && autoMiniSessionId) e.sender.send('window:miniTarget', { sessionId: autoMiniSessionId })
   })
-  // Mini 卡片的自绘缩放边:渲染层只报「哪条边、是不是起手」,位移由这里读光标算(不受界面缩放 / DPI 影响);edge 不合法 = 松手。
-  ipcMain.on('window:miniResize', (e, edge: unknown, start: unknown) => {
+  // 屏幕坐标不受界面缩放影响;保留读光标的兼容路径。edge 不合法 = 松手。
+  ipcMain.on('window:miniResize', (e, edge: unknown, start: unknown, point: unknown) => {
     if (!isTrustedSender(e) || !miniWindow || miniWindow.isDestroyed() || e.sender !== miniWindow.webContents) return
     if (typeof edge !== 'string' || !/^(?=.)[ns]?[ew]?$/.test(edge)) {
       miniResizeFrom = null
@@ -3882,7 +3887,9 @@ app.whenReady().then(async () => {
       return
     }
     if (miniDock && !miniDock.expanded) return // 折叠在屏幕边上时不改大小:缩窄会把露在屏内的那条把手也带出去
-    const cursor = screen.getCursorScreenPoint()
+    const p = point as Partial<Electron.Point> | null
+    const cursor = p && Number.isFinite(p.x) && Number.isFinite(p.y)
+      ? { x: Math.round(p.x!), y: Math.round(p.y!) } : screen.getCursorScreenPoint()
     if (start === true || !miniResizeFrom) {
       // 刚拖到边上、还没判贴边就开始拉:那次判定作废,免得拉到一半被折叠
       if (miniSettleTimer) { clearTimeout(miniSettleTimer); miniSettleTimer = null }

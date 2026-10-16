@@ -1,6 +1,6 @@
 /**
  * Real Electron, isolated home + stub model catalog. No login or permission grants.
- * 电脑历史那一页连的是真主进程:PI_CU_SOCKET_PATH 指到一个不存在的 socket,主进程把它当外部助手,连不上只落 disconnected,
+ * 电脑历史那一页连的是真主进程:macOS 指向不存在的 socket,Windows 指向不存在的助手可执行文件,
  * 绝不去拉起这台机器上真的 Computer Use 助手(不设这个变量,开关一开就会拉)。
  * 本机没有那一页(非 macOS / Windows,或产品不带 Computer Use)时,相关断言整段跳过并打一行 SKIP。
  */
@@ -12,7 +12,7 @@ const electron = require('./lib/launch-electron.cjs')
 const { startStubEngine } = require('./lib/stub-engine.cjs')
 const ROOT = path.join(__dirname, '..')
 const APP_ROOT = process.env.FORSION_APP_ROOT || ROOT
-const OUT = process.env.ONBOARDING_SHOTS || '/tmp/forsion-onboarding-review'
+const OUT = process.env.ONBOARDING_SHOTS || path.join(os.tmpdir(), 'forsion-onboarding-review')
 const results = []
 async function main() {
   fs.mkdirSync(OUT, { recursive: true })
@@ -45,7 +45,9 @@ async function main() {
   let app
   try {
     app = await electron.launch({ args: [`--user-data-dir=${path.join(home, 'userdata')}`, '--lang=zh-CN', APP_ROOT], cwd: ROOT,
-      env: { ...process.env, TANGU_HOME: home, TANGU_BACKEND_URL: stub.url, TANGU_CLOUD_URL: stub.url, PI_CU_SOCKET_PATH: path.join(home, 'no-helper.sock') }, timeout: 45000 })
+      env: { ...process.env, TANGU_HOME: home, TANGU_BACKEND_URL: stub.url, TANGU_CLOUD_URL: stub.url,
+        PI_CU_SOCKET_PATH: path.join(home, 'no-helper.sock'),
+        PI_COMPUTER_USE_WINDOWS_HELPER_PATH: path.join(home, 'no-helper.exe') }, timeout: 45000 })
     const win = await app.firstWindow()
     win.setDefaultTimeout(15000)
     await win.waitForSelector('.ob-flow')
