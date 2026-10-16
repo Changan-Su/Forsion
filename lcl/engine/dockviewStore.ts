@@ -65,16 +65,12 @@ const dismissExtensions = (): void => {
 }
 
 
-/** content-visibility:auto 正跳过内容的元素(长会话里离视口远的消息)。读这种元素里任何后代的 scrollTop,都会逼浏览器单独给那棵子树
- *  补算样式和布局:3000 块的长页展开左栏一帧 5 秒(10-16 实测)。浏览器开始 / 停止跳过时发 contentvisibilityautostatechange,在这里记账,
- *  遍历时不往里找,零额外开销。ponytail: 代价是屏外块内部的横向滚动(宽表格、长代码行)重挂后归零;要留就让这类容器自己登记。 */
-const cvSkipped = new WeakSet<Element>()
+/** 滚过的元素:document 捕获阶段记 scroll 事件(scroll 不冒泡,但走捕获)。preserveAcrossRestructure 只读这些,不再逐个读整棵
+ *  工作区的 scrollTop —— 3 万元素的长笔记里那一遍 ~50ms;遍历时读到 content-visibility 跳过的子树里还会逼浏览器补算那棵子树
+ *  (10-16 实测)。ponytail: 同一个任务里刚写了 scrollTop、scroll 事件还没派发就重挂,那一处会漏记;真碰上再给这里加一个手动登记的口子。 */
+const scrolled = new Set<Element>()
 if (typeof document !== 'undefined') {
-  document.addEventListener('contentvisibilityautostatechange', (e) => {
-    const el = e.target as Element
-    if ((e as Event & { skipped: boolean }).skipped) cvSkipped.add(el)
-    else cvSkipped.delete(el)
-  }, true)
+  document.addEventListener('scroll', (e) => { if (e.target instanceof Element) scrolled.add(e.target) }, { capture: true, passive: true })
 }
 
 /** 布局结构一变(加/减一个组),Dockview 会把幸存的那一支**摘下来重新挂**到新的父节点上 ——
@@ -97,15 +93,14 @@ if (typeof document !== 'undefined') {
 function preserveAcrossRestructure(): () => void {
   const root = typeof document !== 'undefined' ? document.querySelector('.wb-dockview') : null
   if (!root) return () => { /* 无 DOM(测试) */ }
-  // 只记真的滚过的容器(绝大多数元素 scrollTop 为 0,不必留档)。toggle 才走这条,遍历成本可接受。
+  // 只记真的滚过的容器(见 scrolled;绝大多数元素从没滚过)。
   const scrolls: Array<{ el: Element; top: number; left: number }> = []
-  const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT, { acceptNode: (node) => {
-    const el = node as Element
+  for (const el of scrolled) {
+    if (!el.isConnected) { scrolled.delete(el); continue }
+    if (!root.contains(el)) continue
     const top = el.scrollTop, left = el.scrollLeft
     if (top || left) scrolls.push({ el, top, left })
-    return cvSkipped.has(el) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT
-  } })
-  while (walker.nextNode()) { /* acceptNode 里记 */ }
+  }
   const restoreScroll = (): void => {
     for (const s of scrolls) {
       // 节点在重挂后依然是同一个对象(实测),故直接写回即可;内容还没铺好时写不进去,靠下面再补一帧。
