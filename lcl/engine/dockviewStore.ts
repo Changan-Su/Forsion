@@ -65,16 +65,37 @@ const dismissExtensions = (): void => {
 }
 
 
-/** content-visibility:auto 正跳过内容的元素(长会话里离视口远的消息)。读这种元素里任何后代的 scrollTop,都会逼浏览器单独给那棵子树
- *  补算样式和布局:3000 块的长页展开左栏一帧 5 秒(10-16 实测)。浏览器开始 / 停止跳过时发 contentvisibilityautostatechange,在这里记账,
- *  遍历时不往里找,零额外开销。ponytail: 代价是屏外块内部的横向滚动(宽表格、长代码行)重挂后归零;要留就让这类容器自己登记。 */
-const cvSkipped = new WeakSet<Element>()
+/** 滚过的容器的账本:preserveAcrossRestructure 只读这些,不再逐个读整个工作区的 scrollTop —— 4.3 万元素的长笔记里
+ *  一遍 50–80ms(读 scrollTop / scrollLeft 每个都要过一次样式布局检查),展开一次走两遍(10-16 实测)。
+ *  两路记账:① 代码写的(scrollTop / scrollLeft 赋值、scrollTo / scroll / scrollBy)在写的那一刻**同步**记 ——
+ *  只靠 scroll 事件不行:事件下一帧才派发,同一任务里刚写了位置就重组(切 Space 还原布局时视图同步还原滚动位置),
+ *  那一处没进账、重挂后归零,check:splitregions 三次两次红;② 用户滚的(滚轮 / 拖滚动条 / 键盘)、浏览器自己滚的走 scroll 事件。
+ *  不在文档里的随时清(快照时、账攒多了进账时):摘下那一刻位置就归零了,账上留着它没有用,还拽着整棵摘下的子树;
+ *  挂回来以后谁再写位置,写的那一刻又进账。(按事件记账那版快照时清会漏:暂时摘下又挂回的那一支,要等下一帧的事件才回到账上。)
+ *  ponytail: scrollIntoView / focus() 带出的滚动、滚动锚定只有事件这一路;同一任务里先这样滚、紧接着重组会漏,真碰上再给这几处补登记。 */
+const scrolled = new Set<Element>()
+let scrolledCap = 256
 if (typeof document !== 'undefined') {
-  document.addEventListener('contentvisibilityautostatechange', (e) => {
-    const el = e.target as Element
-    if ((e as Event & { skipped: boolean }).skipped) cvSkipped.add(el)
-    else cvSkipped.delete(el)
-  }, true)
+  const note = (el: unknown): void => {
+    if (!(el instanceof Element)) return
+    scrolled.add(el)
+    // 挂载时写的位置被夹成 0(短内容)不发事件、关掉视图也不重组:清账只能放在进账这里。阈值按倍数放,别让热路径每次都扫一遍。
+    if (scrolled.size > scrolledCap) {
+      for (const x of scrolled) if (!x.isConnected) scrolled.delete(x)
+      scrolledCap = Math.max(256, scrolled.size * 2)
+    }
+  }
+  for (const k of ['scrollTop', 'scrollLeft'] as const) {
+    const d = Object.getOwnPropertyDescriptor(Element.prototype, k)
+    const native = d?.set
+    if (native) Object.defineProperty(Element.prototype, k, { ...d, set(this: Element, v: number) { if (v) note(this); native.call(this, v) } })
+  }
+  const proto = Element.prototype as unknown as Record<string, ((...a: unknown[]) => unknown) | undefined>
+  for (const m of ['scrollTo', 'scroll', 'scrollBy']) {
+    const f = proto[m]
+    if (f) proto[m] = function (this: Element, ...a: unknown[]) { note(this); return f.apply(this, a) }
+  }
+  document.addEventListener('scroll', (e) => note(e.target), { capture: true, passive: true })
 }
 
 /** 布局结构一变(加/减一个组),Dockview 会把幸存的那一支**摘下来重新挂**到新的父节点上 ——
@@ -97,15 +118,14 @@ if (typeof document !== 'undefined') {
 function preserveAcrossRestructure(): () => void {
   const root = typeof document !== 'undefined' ? document.querySelector('.wb-dockview') : null
   if (!root) return () => { /* 无 DOM(测试) */ }
-  // 只记真的滚过的容器(绝大多数元素 scrollTop 为 0,不必留档)。toggle 才走这条,遍历成本可接受。
+  // 只读账上的(见 scrolled;绝大多数元素从没滚过)。
   const scrolls: Array<{ el: Element; top: number; left: number }> = []
-  const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT, { acceptNode: (node) => {
-    const el = node as Element
+  for (const el of scrolled) {
+    if (!el.isConnected) { scrolled.delete(el); continue }
+    if (!root.contains(el)) continue
     const top = el.scrollTop, left = el.scrollLeft
     if (top || left) scrolls.push({ el, top, left })
-    return cvSkipped.has(el) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT
-  } })
-  while (walker.nextNode()) { /* acceptNode 里记 */ }
+  }
   const restoreScroll = (): void => {
     for (const s of scrolls) {
       // 节点在重挂后依然是同一个对象(实测),故直接写回即可;内容还没铺好时写不进去,靠下面再补一帧。

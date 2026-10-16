@@ -22,7 +22,7 @@ async function run() {
     await page.goto(`${process.env.HARNESS_URL || 'http://localhost:5273/harness.html'}?dock`)
     await page.waitForSelector('.dockh-body[data-tag="main"]')
     await page.evaluate(async url => { window.__regions = await import(url) }, engine)
-    const setup = async () => {
+    const layout = async () => {
       await page.evaluate(() => {
         const w = window.__regions.useWorkspace.getState()
         w.api.clear()
@@ -33,7 +33,13 @@ async function run() {
         w.openView('sidev', {}, 'left')
       })
       await page.waitForTimeout(400)
-      await page.evaluate(() => {
+    }
+    const setup = async () => {
+      await layout()
+      await page.evaluate(() => window.__addKept())
+    }
+    await page.evaluate(() => {
+      window.__addKept = () => {
         const api = window.__regions.useWorkspace.getState().api
         window.__kept = api.panels.filter(p => p.params.__loc === 'main').map(p => {
           const el = p.group.element.querySelector('.dockh-body')
@@ -48,8 +54,8 @@ async function run() {
           scroller.append(content); el.append(scroller); scroller.scrollTop = 140
           return { id: p.id, group: p.group, el, input, scroller, scroll: scroller.scrollTop }
         })
-      })
-    }
+      }
+    })
     const snap = () => page.evaluate(() => {
       const api = window.__regions.useWorkspace.getState().api
       return api.groups.map(g => {
@@ -101,6 +107,38 @@ async function run() {
         await validate(`重开${side}`)
       }
     }
+    // 同一任务里写滚动位置、紧接着重组:scroll 事件还没派发,只有写的那一刻同步记账才保得住(10-16 按事件记账三次两次红就红在这)。
+    // ① 新挂的容器 ② 早就在的容器这一刻改位置 ③ 临时扩展视图那条路。
+    for (const side of ['right', 'bottom', 'left']) {
+      await layout()
+      await page.evaluate(side => { window.__addKept(); window.__regions.useWorkspace.getState().toggleSidebar(side) }, side)
+      await page.waitForTimeout(500)
+      await validate(`同任务新挂+开合${side}`)
+      await page.evaluate(side => {
+        for (const k of window.__kept) { k.scroller.scrollTop = 260; k.scroll = k.scroller.scrollTop }
+        window.__regions.useWorkspace.getState().toggleSidebar(side)
+      }, side)
+      await page.waitForTimeout(600)
+      await validate(`同任务改位置+开合${side}`)
+    }
+    for (const side of ['right', 'bottom']) {
+      await setup()
+      await page.waitForTimeout(100)
+      await page.evaluate(side => {
+        for (const k of window.__kept) { k.scroller.scrollTop = 300; k.scroll = k.scroller.scrollTop }
+        window.__extension = window.__dock.extend(side)
+        window.__extension.element.textContent = 'Transient native panel'
+      }, side)
+      await page.waitForTimeout(600)
+      await validate(`同任务改位置+临时扩展${side}`)
+      await page.evaluate(async () => {
+        for (const k of window.__kept) { k.scroller.scrollTop = 200; k.scroll = k.scroller.scrollTop }
+        await window.__extension.dispose()
+      })
+      await page.waitForTimeout(400)
+      await validate(`同任务改位置+关闭临时扩展${side}`)
+    }
+
     for (const side of ['right', 'bottom']) {
       await setup()
       await page.evaluate(side => {
