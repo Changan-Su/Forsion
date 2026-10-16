@@ -1111,3 +1111,17 @@ html[data-chat-avatars='off'] .t2-username { display: none; }
 .mb-shell[data-native-chrome] .t2-think-head { position: relative; }
 .mb-shell[data-native-chrome] .t2-think-head::after { content: ''; position: absolute; inset: -11px 0; }
 .mb-shell[data-native-chrome] .t2-content pre ~ .icon-btn::after { content: ''; position: absolute; inset: -9px; }
+
+/* ====== 长会话:离视口远的消息跳过样式 / 排版 / 绘制 ======
+   content-visibility:auto(docs/ToBeImproved/长内容渲染机制方案_2026-10-16 的 A):离得远的消息只占一个高度 —— auto = 画过一次
+   就记住真实高度,没画过按估计 —— 打开长会话、改聊天列宽度(收展左栏、窗口缩放)时它们都不用排版。它自带 paint containment,
+   消息框外画的东西会被裁:overflow-clip-margin 给卡片阴影(--card-shadow 往下约 36px)留余量。正在流式的那条不跳:它在长,吸底按真实高度算。
+   目录按滚动取标题位置时绕开被跳过的消息(lcl FloatingToc 的 measurable),否则每次滚动都逼它们排一遍。 */
+.t2-stream-inner > .t2-asst,
+.t2-stream-inner > .t2-userwrap {
+  content-visibility: auto;
+  contain-intrinsic-block-size: auto 320px;
+  overflow-clip-margin: 40px;
+}
+.t2-stream-inner > .t2-userwrap { contain-intrinsic-block-size: auto 64px; }
+.t2-stream-inner > .t2-asst[data-streaming] { content-visibility: visible; }

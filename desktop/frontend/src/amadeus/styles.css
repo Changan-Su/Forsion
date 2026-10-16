@@ -4483,3 +4483,12 @@ body.amx-marquee-active * {
    这里只管 ⋯ 展开的那一块:插件动作可以带图标,一行 = 图标 + 文字。放文件末尾(DESIGN §7)。 */
 .am-app .itb-menu-item.itb-more-item { display: flex; align-items: center; gap: 8px; }
 .am-app .itb-menu-item.itb-more-item > span:last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* 长笔记:离视口远的顶层块跳过样式 / 排版 / 绘制(docs/ToBeImproved/长内容渲染机制方案_2026-10-16 的 A)。
+   v3 当年因为它裁掉页边手柄拿掉过(见上方 .row 那段注释);v4 的手柄在 .milkdown 上单独一层 .unified-gutter 里,不在块内,不受影响。
+   画布模式里块是带定位的卡片,不加。估计高 48px,auto = 画过一次就记住真实高度;overflow-clip-margin 给选中描边 / 卡片阴影留余量。 */
+.am-app .unified-body:not(.amx-canvas) .ProseMirror > * {
+  content-visibility: auto;
+  contain-intrinsic-block-size: auto 48px;
+  overflow-clip-margin: 40px;
+}

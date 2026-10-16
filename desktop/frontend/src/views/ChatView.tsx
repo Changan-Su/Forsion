@@ -37,7 +37,7 @@ import { useApp, stickyDefaults, activeChatModelId, withAmadeusWorkspace, applyP
 import { settleModes } from '../stores/projectSettings'
 import { currentPlatform } from '../services/agentRunService'
 import { hasChatRef, readChatRefs } from './chat2/chatDragRef'
-import { useWorkspace, useSpaceStore, UI_MODE, Skeleton, useNativeChromeInstalled } from '@lcl/engine'
+import { useWorkspace, useSpaceStore, UI_MODE, Skeleton } from '@lcl/engine'
 import { useTailFirst } from './chat2/useTailFirst'
 import { AgentDesk, DeskCard, useDeskHome } from './chat2/AgentDesk'
 import { HistorianStatus } from './chat2/HistorianStatus'
@@ -211,9 +211,9 @@ export function ChatView({ leaf, params }: ViewProps) {
   const activeCtxInfo = s.activeCtxInfo && (!s.activeCtxInfo.modelId || !activeModel || s.activeCtxInfo.modelId === activeModel.id) ? s.activeCtxInfo : null
   const activeUsage = s.activeUsage
   const activeMessages = s.activeMessages
-  // 画到流里的那一段(手机上先是末尾几条,见 useTailFirst);数据层的判断一律仍看 activeMessages。
-  const phoneShell = useNativeChromeInstalled()
-  const shownMessages = useTailFirst(activeMessages, activeId || null, phoneShell && s.jumpTarget?.sessionId !== activeId)
+  // 画到流里的那一段(长会话先是末尾几条、空闲时往上补,见 useTailFirst;桌面与网页 10-16 起也这样,原来只有手机);
+  // 数据层的判断一律仍看 activeMessages。要跳到某条消息(搜索命中)时整段挂。
+  const shownMessages = useTailFirst(activeMessages, activeId || null, s.jumpTarget?.sessionId !== activeId)
   const pendingApprovals = useMemo(() => pendingPromptsOf(activeMessages), [activeMessages])
   const running = s.running
   const execConfig = s.execConfig

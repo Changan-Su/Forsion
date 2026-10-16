@@ -572,7 +572,7 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
   const trailingSketches = (msg.sketches || []).filter((item) => !inlineSketchIds.has(item.callId))
 
   return (
-    <div ref={rootRef} className="t2-asst" id={`tocmsg-${msg.id}`}>
+    <div ref={rootRef} className="t2-asst" id={`tocmsg-${msg.id}`} data-streaming={msg.status === 'streaming' ? '' : undefined}>
       <div className="t2-avatar" style={!avatarUrl && msg.agentColor ? { background: msg.agentColor, color: '#fff' } : undefined}>{avatarUrl ? <img src={avatarUrl} alt="" /> : firstChar(msg.agentName || agentNameFallback || 'Tangu')}</div>
       <div className="t2-asst-col">
         <div className="t2-name" style={msg.agentColor ? { color: msg.agentColor } : undefined}>{msg.agentName || agentNameFallback || 'Tangu'}{msg.status === 'streaming' && <span className="t2-dot" />}</div>
