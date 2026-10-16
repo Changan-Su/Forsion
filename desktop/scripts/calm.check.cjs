@@ -80,7 +80,7 @@ const DIM = `(() => { ${HELPERS}
   const row = q('.dv-groupview:has(.wb-tab--left) .t2s-srow:not(.active)'), cur = q('.dv-groupview:has(.wb-tab--left) .t2s-srow.active')
   return { ribbon: op(q('.rb .rb-space:not(.on) > svg')), ribbonOn: op(q('.rb .rb-space.on > svg')),
     tab: op(q('.dv-groupview:has(.wb-tab--left) .dv-tab:not(.dv-active-tab) .wb-tab')), tabOn: op(q('.dv-tab.dv-active-tab .wb-tab')),
-    side: row ? alpha(cs(textEl(row)).color) : null, sideOn: cur ? alpha(cs(textEl(cur)).color) : null, rail: op(q('.t2-rail')),
+    side: row ? alpha(cs(textEl(row)).color) : null, sideOn: cur ? alpha(cs(textEl(cur)).color) : null, rail: op(q('.t2-rail')), peek: !!q('.rb-peek'),
     attrs: [document.documentElement.dataset.calmDim || '', document.documentElement.dataset.calmReading || '', document.documentElement.dataset.calmMotion || ''].join('|') }
 })()`
 // 左栏里每个元素的字色(归一成 r,g,b,a 四个整数):恢复态必须与关掉开关时逐个相同 —— 兜住「淡出规则顺手改了谁的颜色」
@@ -170,9 +170,10 @@ async function main() {
     const hr = await win.evaluate(DIM)
     check('B1 指针进对话右侧卡片 → 恢复', hr.rail === 1, String(hr.rail))
     await toNote()
-    await hover('.rb')
+    // 停在当前 Space 的图标上:停在别的 Space 图标上 300ms 会弹出那个 Space 的左面板预览(Ribbon.tsx,10-14),卡盖住整块左栏,B3–B5 就悬停到卡上去了
+    await hover('.rb .rb-space.on')
     const hb = await win.evaluate(DIM)
-    check('B2 指针进 Ribbon → 图标恢复;左栏仍退后(各区各管各的)', hb.ribbon === 1 && near(hb.side, ON.side, 0.021), JSON.stringify(hb))
+    check('B2 指针进 Ribbon → 图标恢复;左栏仍退后(各区各管各的);没弹出 Space 预览卡', hb.ribbon === 1 && near(hb.side, ON.side, 0.021) && !hb.peek, JSON.stringify(hb))
     await hover('.dv-groupview:has(.wb-tab--left) .dv-content-container')
     const hs = await win.evaluate(DIM)
     check('B3 指针进左栏 → 文字恢复;Ribbon 退回去', hs.side === 1 && near(hs.ribbon, ON.ribbon, 0.011), JSON.stringify(hs))
