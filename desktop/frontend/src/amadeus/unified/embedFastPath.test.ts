@@ -28,6 +28,9 @@ describe('embedsUntouched', () => {
     expect(embedsUntouched(state.tr.setSelection(TextSelection.create(doc, at(3))))).toBe(true)
     expect(embedsUntouched(state.tr.addMark(at(0), at(3) + 2, schema.marks.strong.create()))).toBe(true)
   })
+  it('改节点属性(代码块换语言,StepMap 为空):重建', () => {
+    expect(embedsUntouched(state.tr.setNodeAttribute(at(4) - 1, 'language', 'forsion-button'))).toBe(false)
+  })
   it('改到嵌入段自己:重建', () => {
     expect(embedsUntouched(state.tr.insertText('x', at(1) + 4))).toBe(false)
   })

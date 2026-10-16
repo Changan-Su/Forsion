@@ -379,13 +379,11 @@ function stampSrc(el: HTMLElement, getPos: () => number | undefined, len: number
 function syncPicked(view: EditorView): void {
   const { from, to } = view.state.selection
   const focus = editorFocused(view.state)
+  // widget 的源码段被 display:none 藏住,浏览器原生 ::selection 涂不到渲染后的链接/图片。
+  // 就地标记相交的 widget,只给它本身反馈,不把所在段落整块染色。(先刷新位置戳再比;一次查询,长笔记里每次事务查整篇 DOM)
   for (const el of view.dom.querySelectorAll<HTMLElement>('.wikilink[data-src-from], .wiki-inline-img-wrap[data-src-from]')) {
     const s = srcOf.get(el)
     if (s) stampSrc(el, s.getPos, s.len)
-  }
-  // widget 的源码段被 display:none 藏住,浏览器原生 ::selection 涂不到渲染后的链接/图片。
-  // 就地标记相交的 widget,只给它本身反馈,不把所在段落整块染色。
-  for (const el of view.dom.querySelectorAll<HTMLElement>('.wikilink[data-src-from], .wiki-inline-img-wrap[data-src-from]')) {
     const start = Number(el.dataset.srcFrom)
     const end = Number(el.dataset.srcTo)
     if (from !== to && from < end && to > start) el.dataset.rangeSelected = ''

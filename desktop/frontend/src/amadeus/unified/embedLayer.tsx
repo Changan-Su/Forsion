@@ -19,6 +19,7 @@ import { NodeSelection, Plugin, PluginKey, TextSelection, type Transaction } fro
 import { Decoration, DecorationSet } from '@milkdown/kit/prose/view'
 import type { EditorView } from '@milkdown/kit/prose/view'
 import type { Node as ProseNode } from '@milkdown/kit/prose/model'
+import { AddMarkStep, RemoveMarkStep } from '@milkdown/kit/prose/transform'
 import type { MilkdownPlugin } from '@milkdown/kit/ctx'
 import { lazyRetry } from '../../lazyRetry'
 import { stripPageBasename } from '@amadeus-shared/compiler/names'
@@ -476,9 +477,13 @@ export function embedsUntouched(tr: Transaction): boolean {
     if (!ok) return
     const before = tr.docs[i]
     const after = tr.docs[i + 1] ?? tr.doc
+    let ranges = 0
     step.getMap().forEach((oldFrom, oldTo, newFrom, newTo) => {
+      ranges++
       if (ok && !(inPlainTextblock(before, oldFrom, oldTo) && inPlainTextblock(after, newFrom, newTo))) ok = false
     })
+    // 不挪位置的步骤 StepMap 是空的:加 / 去标记不影响认嵌入(只看文本),改节点属性(代码块语言)会,整篇重建
+    if (!ranges && !(step instanceof AddMarkStep || step instanceof RemoveMarkStep)) ok = false
   })
   return ok
 }

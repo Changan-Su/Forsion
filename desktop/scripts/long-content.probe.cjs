@@ -161,12 +161,16 @@ async function main() {
       for (let k = 0; k < REPS; k++) {
         const box = await win.evaluate(() => {
           const pane = document.querySelector('.amx-pane')?.getBoundingClientRect()
-          const p = [...document.querySelectorAll('.page-view .ProseMirror > p')].find((el) => { const r = el.getBoundingClientRect(); return pane && r.top > pane.top + 80 && r.bottom < pane.bottom - 80 && !el.textContent.includes('![[') })
-          const r = p?.getBoundingClientRect(); return r ? { x: r.right - 4, y: r.bottom - 8 } : null
+          const kids = [...document.querySelector('.page-view .ProseMirror').children]
+          const i = kids.findIndex((el) => { const r = el.getBoundingClientRect(); return el.tagName === 'P' && pane && r.top > pane.top + 80 && r.bottom < pane.bottom - 80 && !el.textContent.includes('![[') })
+          const r = kids[i]?.getBoundingClientRect(); return r ? { x: r.right - 4, y: r.bottom - 8, i, len: kids[i].textContent.length } : null
         })
         if (!box) { console.log('⚠️ 没找到能打字的段落'); break }
         await win.mouse.click(box.x, box.y); await win.keyboard.press('End')
         await phase('笔记', '打 60 个字', async () => { await win.keyboard.type('长笔记打字探针'.repeat(9).slice(0, 60), { delay: 30 }); return null }, 500)
+        // 字真落进那一段末尾了才作数:10-16 一版 CSS 让打字落点错乱,这一项照样「0 长帧」—— 活少是因为字没打对
+        const got = await win.evaluate((i) => document.querySelector('.page-view .ProseMirror').children[i]?.textContent || '', box.i)
+        if (got.length - box.len !== 60 || !got.endsWith('长笔记打字探针'.repeat(9).slice(0, 60).slice(-7))) console.log(`⚠️ 打字没落对:段落长 ${box.len} → ${got.length},末尾「${got.slice(-12)}」—— 这一项的数字不作数`)
       }
     }
 
