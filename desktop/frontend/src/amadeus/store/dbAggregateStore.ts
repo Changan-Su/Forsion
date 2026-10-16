@@ -220,14 +220,24 @@ export function createAggEvent(db: AggDb, calColId: string, value: string, name:
   return addAggRow(db, { [calColId]: value }, name)
 }
 
+/** 笔记视图建行要跨几次 await:之后再写属性前确认还在原来的库(路径是库相对的,换了库就写进别的笔记),
+ *  且调用方(插件)没喊停;不满足就抛。 */
+function stillHere(ok?: () => boolean): () => void {
+  const vault = usePageStore.getState().vaultRoot
+  return () => { if (usePageStore.getState().vaultRoot !== vault || (ok && !ok())) throw new Error('aborted: vault switched or caller gone') }
+}
+
 /** 新建一行(带初值):经典表 push 新行(name 写首列,cells 里已给首列就不覆盖);笔记视图新建笔记、
  *  有 name 就改名、再逐列写属性(page 身份列 = 笔记标题,跳过)。返回 rowId / 笔记路径。 */
-export async function addAggRow(db: AggDb, init: Record<string, CellValue>, name = ''): Promise<string> {
+export async function addAggRow(db: AggDb, init: Record<string, CellValue>, name = '', ok?: () => boolean): Promise<string> {
   const nameCol = db.columns[0]
   if (db.isNoteView && db.folder !== undefined) {
+    const still = stillHere(ok)
     let notePath = await useNoteViewStore.getState().addNote(db.folder)
+    still()
     // 先改名再写属性:setProp 的防抖写按路径落,反过来会在旧路径上把文件写活。
     if (name.trim()) notePath = await useNoteViewStore.getState().renameNote(db.folder, notePath, name)
+    still()
     for (const [colId, v] of Object.entries(init)) {
       const col = db.columns.find((c) => c.id === colId)
       if (col && col.type !== 'page') useNoteViewStore.getState().setProp(db.folder, notePath, colId, v, resolveBaseType(col.type))
@@ -293,12 +303,14 @@ export function restoreAggRow(db: AggDb, row: AggRow, removed: DroppedRef[] = []
 
 /** 复制一行(键盘粘贴):经典表克隆全部单元格为新行(同日期/时间的原位副本);
  *  笔记视图新建笔记 + 逐列拷贝属性(page 身份列除外)。返回新 rowId / 笔记路径,失败返回 null。 */
-export async function duplicateAggRow(db: AggDb, rowId: string): Promise<string | null> {
+export async function duplicateAggRow(db: AggDb, rowId: string, ok?: () => boolean): Promise<string | null> {
   if (db.readonly) return null
   const src = db.rows.find((r) => r.rowId === rowId)
   if (!src) return null
   if (db.isNoteView && db.folder !== undefined) {
+    const still = stillHere(ok)
     const notePath = await useNoteViewStore.getState().addNote(db.folder)
+    still()
     for (const c of db.columns) {
       if (c.type === 'page') continue // 身份列 = 笔记标题,由 addNote 定,不覆盖
       const v = src.cells[c.id]

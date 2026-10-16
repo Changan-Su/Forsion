@@ -105,6 +105,21 @@ describe('ctx.databases', () => {
     undo2()
     expect(rowsNow().some((r) => r.id === 'r1')).toBe(false)
   })
+
+  it('快照是拷贝:插件原地改它不动宿主的表;插件停用后旧撤销函数不再写', async () => {
+    await useDbStore.getState().reload('T.db', 'T.db')
+    let snap: { databases: Array<{ rows: Array<{ cells: Record<string, unknown> }> }> } | null = null
+    createDatabasesApi(scope).subscribe((x) => { snap = x })()
+    snap!.databases[0].rows[0].cells.no = 999
+    expect(rowsNow()[0].cells.no).toBe(3)
+
+    let alive = true
+    const api = createDatabasesApi({ alive: () => alive, own: (off) => off })
+    const undo = api.deleteRow('T.db', 'r1')!
+    alive = false
+    undo()
+    expect(rowsNow().some((r) => r.id === 'r1')).toBe(false)
+  })
 })
 
 describe('ctx.noteTasks.update', () => {
@@ -120,5 +135,17 @@ describe('ctx.noteTasks.update', () => {
     expect(api.update('n.md:3', {})).toBe(false)
     expect(api.update('n.md:3', { checked: true, due: '2026-10-21T09:00' })).toBe(true)
     expect(useMdMarkStore.getState().overlay['n.md:3']).toEqual({ checked: true, due: '2026-10-21T09:00' })
+  })
+
+  it('防抖期间换了库:排着的改动丢掉,不写到新库同位置的另一条上', async () => {
+    vi.useFakeTimers()
+    try {
+      usePageStore.setState({ vaultRoot: '/A' })
+      expect(createNoteTasksApi(scope).update('n.md:3', { checked: true })).toBe(true)
+      usePageStore.setState({ vaultRoot: '/B' })
+      await vi.advanceTimersByTimeAsync(500)
+      expect(patchMarkIpc).not.toHaveBeenCalled()
+      expect(useMdMarkStore.getState().overlay['n.md:3']).toBeUndefined()
+    } finally { vi.useRealTimers() }
   })
 })

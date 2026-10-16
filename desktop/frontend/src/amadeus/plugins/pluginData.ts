@@ -22,7 +22,8 @@ const toDb = (db: AggDb): PluginDatabase => ({
   name: db.name,
   kind: db.isNoteView ? 'notes' : 'table',
   columns: db.columns.map((c) => ({ id: c.id, name: c.name, type: c.type, base: resolveBaseType(c.type) })),
-  rows: db.rows.map((r) => ({ id: r.rowId, name: r.name, cells: r.cells })),
+  // 拷贝:宿主 store 里的 cells 是共享引用,插件原地改了会随下一次保存落盘(还绕过盖章列)
+  rows: db.rows.map((r) => ({ id: r.rowId, name: r.name, cells: copyCells(r.cells) })),
 })
 
 const toTask = (m: MdMark): PluginNoteTask => ({
@@ -31,6 +32,9 @@ const toTask = (m: MdMark): PluginNoteTask => ({
 })
 
 /** 插件给的值是不是一个合法的单元格值(信任边界:插件代码不一定是 TS)。 */
+const copyCells = (cells: Record<string, CellValue>): Record<string, CellValue> =>
+  Object.fromEntries(Object.entries(cells).map(([k, v]) => [k, Array.isArray(v) ? [...v] : v]))
+
 const isCell = (v: unknown): v is CellValue =>
   v === null || typeof v === 'string' || typeof v === 'boolean' || (typeof v === 'number' && Number.isFinite(v))
   || (Array.isArray(v) && v.every((x) => typeof x === 'string'))
@@ -49,7 +53,7 @@ export function createDatabasesApi(scope: DataScope): NonNullable<PluginContext[
   const cellsOf = (db: AggDb, raw: unknown): Record<string, CellValue> => {
     const out: Record<string, CellValue> = {}
     if (raw && typeof raw === 'object') {
-      for (const [k, v] of Object.entries(raw as Record<string, unknown>)) if (db.columns.some((c) => c.id === k) && isCell(v)) out[k] = v
+      for (const [k, v] of Object.entries(raw as Record<string, unknown>)) if (db.columns.some((c) => c.id === k) && isCell(v)) out[k] = Array.isArray(v) ? [...v] : v
     }
     return out
   }
@@ -74,17 +78,17 @@ export function createDatabasesApi(scope: DataScope): NonNullable<PluginContext[
         setAggName(db, String(rowId), value)
         return true
       }
-      setAggCell(db, String(rowId), col.id, value)
+      setAggCell(db, String(rowId), col.id, Array.isArray(value) ? [...value] : value)
       return true
     },
     addRow: async (path, cells, name) => {
       const db = scope.alive() ? table(path) : null
       if (!db) return null
-      return addAggRow(db, cellsOf(db, cells), typeof name === 'string' ? name : '')
+      return addAggRow(db, cellsOf(db, cells), typeof name === 'string' ? name : '', scope.alive).catch(() => null)
     },
     duplicateRow: async (path, rowId) => {
       const db = scope.alive() ? table(path) : null
-      return db ? duplicateAggRow(db, String(rowId)) : null
+      return db ? duplicateAggRow(db, String(rowId), scope.alive).catch(() => null) : null
     },
     deleteRow: (path, rowId) => {
       const db = scope.alive() ? table(path) : null
@@ -95,7 +99,7 @@ export function createDatabasesApi(scope: DataScope): NonNullable<PluginContext[
       let used = false
       return () => {
         // 只生效一次;换了库就不撤 —— 路径是库相对的,换库后再撤会把行写进另一个库。
-        if (used || vaultKey() !== vault) return
+        if (used || !scope.alive() || vaultKey() !== vault) return
         used = true
         restoreAggRow(db, row, removed)
       }

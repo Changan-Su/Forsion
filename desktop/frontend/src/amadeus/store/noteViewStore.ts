@@ -103,12 +103,21 @@ export const useNoteViewStore = create<NoteViewState>((set, get) => ({
     const base = translate('amadeus.default.note')
     let name = base
     let i = 1
-    while (titles.has(name.toLowerCase())) name = `${base} ${++i}`
-    const notePath = folder ? `${folder}/${name}.md` : `${name}.md`
-    // 素文件出生(评审 G4-12;此前 newPage 生 v3)。没建成(已提示)→ 抛,调用方不拿不存在的路径去写属性 / 打开。
-    if ((await birthNoteFile(notePath)) === 'failed') throw new Error(`create failed: ${notePath}`)
-    await get().refresh(folder)
-    return notePath
+    for (;;) {
+      while (titles.has(name.toLowerCase())) name = `${base} ${++i}`
+      const notePath = folder ? `${folder}/${name}.md` : `${name}.md`
+      // 素文件出生(评审 G4-12;此前 newPage 生 v3)。没建成(已提示)→ 抛,调用方不拿不存在的路径去写属性 / 打开。
+      const r = await birthNoteFile(notePath)
+      if (r === 'failed') throw new Error(`create failed: ${notePath}`)
+      if (r === 'created') {
+        await get().refresh(folder)
+        return notePath
+      }
+      // 'exists':并发的另一次新建刚占了这个名字 / 列表还没刷新到 → 换下一个名字,**绝不认领**已有笔记
+      // (认领了,调用方随后写的属性就盖进了别人的笔记;Codex 评审实测两次并发新建返回同一路径)。
+      titles.add(name.toLowerCase())
+      if (i > 999) throw new Error(`create failed: ${notePath}`)
+    }
   },
 
   async deleteNote(folder, notePath) {
