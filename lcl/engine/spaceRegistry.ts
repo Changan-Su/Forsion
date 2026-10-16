@@ -6,7 +6,7 @@ import { create } from 'zustand'
 import { IS_MINI_PANEL, IS_TRANSIENT_MINI_PANEL, IS_MAIN_WINDOW, WINDOW_SPACE_ID } from './uiMode'
 import { supportsMiniPanel } from './miniPanel'
 import type { SpaceDefinition } from './types'
-import { useWorkspace, liveLayoutOwner, bootLayoutFellThrough } from './workspaceStore'
+import { useWorkspace, liveLayoutOwner, bootLayoutFellThrough, adoptSingleColumnLayoutCold } from './workspaceStore'
 import { loadLayout, saveLayout, clearLayout, loadNamedLayout, saveNamedLayout, listNamedLayouts, deleteNamedLayout } from './layoutPersist'
 import { clearSingleColumnLayouts } from './singleColumnStore'
 import { onePageRedirect } from './pinnedViews'
@@ -169,6 +169,9 @@ export function seedSpaceWindowLayout(): void {
  *  从它的默认布局起步:fromId 仍是目标 Space,布局键却是回落 Space 的。只信 fromId 就会把它归档进目标 Space 的槽。
  *  少数是真现场:上一程换 Space 时归档没落盘,布局键被下面那道闸保住了,活动 id 却已写成目标。 */
 export function adoptSpaceLayoutCold(fromId: string, toId: string): void {
+  // 手机 App(单列壳)的那一份存档另有键,同一套口径搬一遍(singleColumnStore 同名导出;桌面构建里是 no-op)。
+  // 放在最前:下面几处 return 是桌面存档自己的事,不该拦住它。
+  adoptSingleColumnLayoutCold(fromId, toId, useSpaceStore.getState().activeSpaceId)
   const cur = loadLayout()
   const owner = cur?.space || fromId
   const slot = spaceLayoutName(owner)
@@ -203,8 +206,8 @@ export const spaceLayoutsWereReset = (): boolean => layoutsResetThisBoot
 export function resetSpaceLayouts(only?: string): void {
   if (only) {
     // 只丢一个 Space 的(它的固定 View 换了边:单例复用不看位置,旧布局还原回来,新位置上那个就开不出来)。命名槽按名字丢。
-    // 当前布局要先认清是谁的:桌面的认信封自己记的归属,老存档没记才看「上次退出在哪」。单列存档不记归属,而「上次退出
-    // 在哪」那把键两种壳共用,证明不了它是谁的(在单列壳里停在 Tangu、回桌面壳后在这个 Space 退出 → 那份是 Tangu 的现场):
+    // 当前布局要先认清是谁的:两种存档都认自己记的归属,老存档没记时桌面的看「上次退出在哪」;单列的不看那把键 ——
+    // 它两种壳共用,证明不了单列存档是谁的(在单列壳里停在 Tangu、回桌面壳后在这个 Space 退出 → 那份是 Tangu 的现场):
     // 只有主区里摆着这个 Space 的固定主视图才算它的,认不出就留着 —— 留错了只是那台设备上旧排布多活一阵,删错了丢的是别人的现场。
     // ⚠️不置 layoutsResetThisBoot:那面旗说的是「全部 Space 都重置了」,置了会让无关的异步启动 Space 被当成要重建,
     // 它刚还原的现场被清掉、切走时再把默认布局存进它的槽(Codex 评审)。`only` 自己若是异步注册的 Space,调用方另行处理。

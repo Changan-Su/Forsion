@@ -185,8 +185,10 @@ export function installEngine(): void {
   //  · 固定某 Space:冷启动进**那个 Space 自己上次的布局**(不是上次退出那个 Space 的布局 ——
   //    那是原来的 bug;也不是每次都推倒重建 —— 那是修那个 bug 时的过头做法,表现为
   //    「每次重启都丢上次打开的文件」)。
-  // 卫星窗(detached/mini)有各自隔离的布局键 → 跳过,各恢复自身布局;
-  // 移动端是另一套 SingleColumnHost(自带 restoreSingleColumnLayout,本就恢复上次)→ 不介入。
+  // 卫星窗(detached/mini)有各自隔离的布局键 → 跳过,各恢复自身布局。
+  // 手机 App 也走这里(UI_MODE 在那里是 'desktop'):它的单列存档由 adoptSpaceLayoutCold 一并交接(singleColumnStore 同名导出),
+  // 赶在 SingleColumnHost 还原之前。UI_MODE === 'mobile'(网页版的单列壳)不介入:那里不认「启动时进入」,
+  // 一律回上次退出的 Space,在用的那份本来就是它的。
   if (windowKind() === 'main' && UI_MODE !== 'mobile') {
     // 上次退出在哪:用模块装载时的快照,**不是**此刻的 activeSpaceId —— 上面的 registerSpaces()
     // 已经把「尚未注册」的用户 Space id 归一成了产品默认(见 BOOT_ACTIVE_SPACE_ID 的注释)。
