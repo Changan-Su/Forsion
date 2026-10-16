@@ -490,6 +490,8 @@ export interface PluginViewContext {
   onParamsChanged?(listener: (params: Readonly<Record<string, unknown>>) => void): () => void
   /** Mini/Floating: opens the corresponding full view in the main panel. Revoked after unmount. */
   showInMainPanel?(): void
+  /** Close this mounted view (including Web/native Floating Panels). Revoked after unmount. */
+  close?(): void
   extendView?: ExtendViewController
 }
 
@@ -844,6 +846,14 @@ export interface SettingsViewContribution {
    *  目前只有 'forsion'(「Forsion 云端」,随 Forsion Extend 的主进程半身出现)。只认带主进程半身的首方内置包(locked),
    *  别的插件写了照旧画在详情页;给了 category 就要给 title(左栏子项的文字)。多个子页按注册顺序排,宿主自己的子页在前。 */
   category?: 'forsion'
+  /** Optional one-level grouping within the same plugin/category. The parent is the default tab. */
+  parent?: string
+  /** Parent page's own tab label; defaults to title. Evaluated again after a locale change. */
+  tabTitle?: string | (() => string)
+  /** Old page IDs that should open this page. Exact registered IDs take priority. */
+  aliases?: readonly string[]
+  /** Search aliases, in either language. */
+  keywords?: string
   /** 详情页打开时调用。返回的函数在面板关闭 / 插件禁用时执行(定时器、订阅、第三方编辑器实例在此收)。
    *  ⚠️同一插件的面板可能被反复挂载卸载(用户来回进出详情页),别把状态放在闭包外的模块级单例里。 */
   mount(el: HTMLElement): void | (() => void)
@@ -1161,8 +1171,8 @@ export interface PluginContext {
    *  beside it (in the stash for a collapsed panel) and comes to the front if `fromViewId` was in front; the count is
    *  then the tabs newly opened, 0 if `toViewId` was already there. Swapping back removes only `toViewId`. */
   replaceView?(fromViewId: string, toViewId: string, opts?: { params?: Record<string, unknown> }): number
-  /** Open one of this plugin's registered views in the native Floating Panel window.
-   *  Desktop-only; feature-detect because Web intentionally has no plugin window bridge. */
+  /** Open one of this plugin's registered views in a host-owned Floating Panel.
+   *  Desktop uses a native window; Web uses an overlay. Feature-detect on older hosts/mobile. */
   openFloatingPanel?(viewId: string, opts?: PluginFloatingPanelOptions): void
   /** Open one of this plugin's registered views in the compact native Mini Panel.
    *  Desktop-only; feature-detect on older hosts and Web/mobile. */

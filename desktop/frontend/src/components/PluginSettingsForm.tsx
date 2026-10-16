@@ -146,7 +146,7 @@ export const PluginSettingsForm: React.FC<{
       return (
         <div className="field" key={f.key}>
           <label>{lbl(f)}</label>
-          {f.type === 'textarea' ? <textarea rows={4} {...common} style={inputStyle} /> : <input type="text" {...common} style={inputStyle} />}
+          {f.type === 'textarea' && !f.secret ? <textarea rows={4} {...common} style={inputStyle} /> : <input type={f.secret ? 'password' : 'text'} autoComplete={f.secret ? 'off' : undefined} spellCheck={f.secret ? false : undefined} aria-label={lbl(f)} {...common} style={inputStyle} />}
         </div>
       )
     }

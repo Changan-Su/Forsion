@@ -66,6 +66,7 @@ import { ShortcutsTab } from './ShortcutsTab'
 import { PluginsTab } from './PluginsTab'
 import { CorePluginUpdates } from './CorePluginUpdates'
 import { AmadeusPluginsTab, PluginSettingsView, pluginListDetailBack } from './AmadeusPluginsTab'
+import { cloudViewKey, cloudViewTitle, cloudTabTitle, resolveCloudSettingsKey, cloudSettingsParent, cloudSettingsTabs, cloudAccountSearchKey } from './settingsCloudNavigation'
 import { usePluginStore } from '@amadeus/plugins/pluginStore'
 import { isPlacedSettingsView, pluginDisplayName, pluginsWithSettingsPanel } from '../amadeus/plugins/display'
 import { SpacesTab } from './SpacesTab'
@@ -130,6 +131,10 @@ registerMessages({
   'settingsmodal.forsionCloud.submissions': { zh: '插件投稿', en: 'Submissions' },
   'settings.forsionCloud.sync': { zh: '云端同步', en: 'Cloud sync' },
   'settings.forsionCloud.connection': { zh: '连接', en: 'Connection' },
+  'settingsmodal.cloudAccountDescription': { zh: 'Forsion 云端 · 管理个人主页、登录资料和账号安全。', en: 'Forsion Cloud · Your profile, sign-in details and account security.' },
+  'settingsmodal.cloudMembershipDescription': { zh: 'Forsion 云端 · 查看会员、额度、积分与用量记录。', en: 'Forsion Cloud · Membership, quota, points and usage.' },
+  'settingsmodal.cloudHelpDescription': { zh: 'Forsion 云端 · 提交反馈、查看回复与管理诊断数据。', en: 'Forsion Cloud · Feedback, replies and diagnostic data.' },
+  'settingsmodal.cloudAdvancedConnection': { zh: '高级连接', en: 'Advanced connection' },
   'settings.forsionCloud.noteSyncOn': { zh: '与云端智库同步', en: 'Sync with the cloud vault' },
   'settings.forsionCloud.address': { zh: '地址', en: 'Address' },
   'settings.tools.title': { zh: '开发工具', en: 'Developer tools' },
@@ -381,6 +386,7 @@ export const SettingsModal: React.FC<{
   const [sub, setSub] = useState(initialTarget.sub ?? '')
   // 滑入方向:+1 点了右边的栏目,-1 左边,0 换了一级页(纯淡入)。喂给 .settings-sub[data-dir]。
   const [subDir, setSubDir] = useState(0)
+  const [cloudAdvancedOpen, setCloudAdvancedOpen] = useState(false)
   /** 换一级页统一入口:方向清零(换页无左右语义,纯淡入)。裸 setTab 会让上次点分类的方向漏过来。 */
   const goTab = (x: Tab): void => { setSubDir(0); setTab(x) }
   const [navQuery, setNavQuery] = useState('')
@@ -744,7 +750,7 @@ export const SettingsModal: React.FC<{
   const cloudViews = isDesktop && cloudAccount && !unitPage
     ? amxSettingsViews.filter((o) => amxActiveIds.includes(o.pluginId) && isPlacedSettingsView(amxPlugins.find((pl) => pl.id === o.pluginId), o.item))
     : []
-  const cloudViewKey = (o: { pluginId: string; item: { id: string } }): string => `fx:${o.pluginId}:${o.item.id}`
+  const groupedCloud = cloudViews.some((view) => cloudSettingsParent(cloudViews, cloudViewKey(view)) !== cloudViewKey(view))
 
   // 旧「Tangu → 插件」独立入口已并入统一插件页:旧深链/持久化 tab 一律重定向。
 
@@ -1185,10 +1191,11 @@ export const SettingsModal: React.FC<{
     ],
     forsion: [
       // Extend 渲染半身自绘的子页(账号 / 额度与积分 / 安全 / 用量记录 / 反馈),随 Extend 的 npm 版本更新
-      ...cloudViews.map((o) => [cloudViewKey(o), (typeof o.item.title === 'function' ? o.item.title() : o.item.title) || o.item.id] as [string, string]),
+      ...cloudViews.filter((o) => !groupedCloud || o.item.id !== 'feedback').map((o) => [cloudViewKey(o), cloudViewTitle(o)] as [string, string]),
       // 宿主自己的两页:同步(笔记在线同步 + Brain 记忆同步)、连接(云端地址)。条目条件与正文块一致,免得点进去是白板。
       ...(window.amadeusSync || stored ? [['f-sync', t('settings.forsionCloud.sync')] as [string, string]] : []),
       ...(stored ? [['f-conn', t('settings.forsionCloud.connection')] as [string, string]] : []),
+      ...cloudViews.filter((o) => groupedCloud && o.item.id === 'feedback').map((o) => [cloudViewKey(o), cloudViewTitle(o)] as [string, string]),
     ],
     sync: [
       // RemoteSyncSection 在 window.remoteSync 缺位时直接 return null → 同样是白板,栏目得跟着走(一级页也按它门控)。
@@ -1197,7 +1204,17 @@ export const SettingsModal: React.FC<{
   } as Record<string, Array<[string, string]>>)
   const subItemsForTab = (id: Tab): Array<[string, string]> => subItemsByTab[id] ?? []
   const subItems = subItemsForTab(tab)
-  const activeSub = subItems.some(([k]) => k === sub) ? sub : (subItems[0]?.[0] ?? '')
+  const resolvedSub = tab === 'forsion' ? resolveCloudSettingsKey(cloudViews, sub) : sub
+  const activeSub = subItems.some(([k]) => k === resolvedSub) ? resolvedSub : (subItems[0]?.[0] ?? '')
+  const cloudParentKey = cloudSettingsParent(cloudViews, activeSub)
+  const cloudNavKey = groupedCloud && activeSub === 'f-conn' ? 'f-sync' : cloudParentKey
+  const cloudTabs = tab === 'forsion' ? cloudSettingsTabs(cloudViews, activeSub) : []
+  const cloudPageLabel = subItems.find(([key]) => key === cloudNavKey)?.[1] ?? ''
+  const navSubItemsForTab = (id: Tab): Array<[string, string]> => id !== 'forsion' ? subItemsForTab(id)
+    : subItemsForTab(id).filter(([key]) => cloudSettingsParent(cloudViews, key) === key && (!groupedCloud || key !== 'f-conn'))
+  const cloudDescription = cloudNavKey === ACCOUNT_SUB ? 'settingsmodal.cloudAccountDescription'
+    : cloudNavKey === 'fx:forsion-extend:quota' ? 'settingsmodal.cloudMembershipDescription'
+      : cloudNavKey === 'fx:forsion-extend:feedback' ? 'settingsmodal.cloudHelpDescription' : ''
   const activeSubLabel = subItems.find(([k]) => k === activeSub)?.[1] ?? ''
   const modelSubDescriptions: Record<string, string> = { 'm-models': 'modelsettings.defaultsHint', 'm-display': 'modelsettings.displayHint', 'm-providers': 'modelsettings.providersHint', 'm-websearch': 'modelsettings.searchHint', 'm-voice': 'modelsettings.voiceHint' }
   // 换页/换子页面后:①选中项滚到可见；②正文回到顶部 —— ⚠️ 滚动容器是**外层**
@@ -1216,6 +1233,7 @@ export const SettingsModal: React.FC<{
     setSub(k)
   }
   const openSubPage = (id: Tab, key: string): void => {
+    if (id === 'forsion' && key === 'f-sync') setCloudAdvancedOpen(false)
     if (id === tab) pickSub(key)
     else {
       goTab(id)
@@ -1295,7 +1313,10 @@ export const SettingsModal: React.FC<{
         : (!isDesktop || viewMode === 'external') && !cloudWeb)
   }
   const searchResults = navQl
-    ? SETTINGS_SEARCH_INDEX.filter((e) => searchEntryVisible(e) && matchesSettingsQuery(e, t(e.labelKey), navQl))
+    ? [
+      ...SETTINGS_SEARCH_INDEX.map((e) => ({ ...e, ...(e.id === 'forsion-account' && e.sub ? { sub: cloudAccountSearchKey(cloudViews, e.sub) } : {}), label: t(e.labelKey) })),
+      ...cloudViews.map((view) => ({ id: `cloud-${view.pluginId}-${view.item.id}`, tab: 'forsion', sub: cloudViewKey(view), labelKey: '', label: cloudTabTitle(view), keywords: view.item.keywords || cloudViewTitle(view) })),
+    ].filter((e) => searchEntryVisible(e) && matchesSettingsQuery(e, e.label, navQl))
     : []
   const navFiltered = navSections.map((sec) => {
     // 搜索:命中大类名保留整大类,命中小类名保留整组,否则按项名过滤。
@@ -1315,7 +1336,9 @@ export const SettingsModal: React.FC<{
   const searchPathLabel = (e: SettingsSearchEntry): string => {
     const tabLabel = tabItems.find(([id]) => id === e.tab)?.[1] ?? ''
     const subLabel = e.sub ? subItemsForTab(e.tab as Tab).find(([k]) => k === e.sub)?.[1] : ''
-    return subLabel ? `${tabLabel} › ${subLabel}` : tabLabel
+    const parent = e.tab === 'forsion' && e.sub ? cloudSettingsParent(cloudViews, e.sub) : ''
+    const parentLabel = parent !== e.sub ? subItemsForTab('forsion').find(([key]) => key === parent)?.[1] : ''
+    return subLabel ? `${tabLabel} › ${parentLabel ? `${parentLabel} › ` : ''}${subLabel}` : tabLabel
   }
   const [flashAnchor, setFlashAnchor] = useState<{ id: string; seq: number } | null>(null)
   const jumpToSearchEntry = (e: SettingsSearchEntry): void => {
@@ -1402,7 +1425,7 @@ export const SettingsModal: React.FC<{
                 <h2>{grp.label}</h2>
                 <div className="settings-mobile-group-card">
                   {items.map(([id, label]) => {
-                    const children = subItemsForTab(id)
+                    const children = navSubItemsForTab(id)
                     const expandable = children.length > 0
                     const expanded = expandable && expandedTabs.has(id)
                     const childrenId = `settings-mobile-subitems-${id.replace(':', '-')}`
@@ -1491,7 +1514,7 @@ export const SettingsModal: React.FC<{
                 >
                   <span className="settings-nav-subitem-mark" aria-hidden="true" />
                   <span className="settings-nav-result-copy">
-                    <span>{t(e.labelKey)}</span>
+                    <span>{e.label}</span>
                     <small>{searchPathLabel(e)}</small>
                   </span>
                 </button>
@@ -1511,7 +1534,7 @@ export const SettingsModal: React.FC<{
                   <div key={grp.key} className="settings-nav-group">
                     <div className="settings-nav-grouphead">{grp.label}</div>
                     {grp.items.map(([id, label]) => {
-                      const children = subItemsForTab(id)
+                      const children = navSubItemsForTab(id)
                       const expandable = children.length > 0
                       // 搜索临时展开命中总项，但不篡改用户原本的折叠选择。
                       const expanded = expandable && (!!ql || expandedTabs.has(id))
@@ -1534,8 +1557,8 @@ export const SettingsModal: React.FC<{
                               {children.map(([key, childLabel]) => (
                                 <button
                                   type="button"
-                                  className={`settings-nav-subitem${tab === id && activeSub === key ? ' active' : ''}`}
-                                  aria-current={tab === id && activeSub === key ? 'page' : undefined}
+                                  className={`settings-nav-subitem${tab === id && (id === 'forsion' ? cloudNavKey : activeSub) === key ? ' active' : ''}`}
+                                  aria-current={tab === id && (id === 'forsion' ? cloudNavKey : activeSub) === key ? 'page' : undefined}
                                   key={key}
                                   onClick={() => openSubPage(id, key)}
                                 >
@@ -1567,17 +1590,32 @@ export const SettingsModal: React.FC<{
         </div>
         <div className="settings-main-head">
           <div className="settings-main-copy">
-            <div className="settings-main-title">{tab === 'model' || (tab === 'skills' && activeSub === 'k-library') ? activeSubLabel || activeTabLabel : activeTabLabel}</div>
-            {tab === 'model' ? <p>{t(modelSubDescriptions[activeSub] || 'settings.page.modelDescription')}</p> : activeTabDescription && <p>{activeTabDescription}</p>}
+            <div className="settings-main-title">{tab === 'forsion' ? cloudPageLabel || activeTabLabel : tab === 'model' || (tab === 'skills' && activeSub === 'k-library') ? activeSubLabel || activeTabLabel : activeTabLabel}</div>
+            {tab === 'forsion' ? <p>{cloudDescription ? t(cloudDescription) : t('settings.tab.forsionCloud')}</p> : tab === 'model' ? <p>{t(modelSubDescriptions[activeSub] || 'settings.page.modelDescription')}</p> : activeTabDescription && <p>{activeTabDescription}</p>}
           </div>
         </div>
         {/* 设置住在独立浮窗(桌面)/ 覆盖层(web)里,全局通知两处都看不见 —— 插件装卸、重扫、Space 卸载等结果画在这条上。 */}
         <PanelNotice />
         <div className="settings-body">
+          {cloudTabs.length > 0 && <div className="settings-cloud-tabs" role="tablist" aria-label={cloudPageLabel}>
+            {cloudTabs.map((view, index) => {
+              const key = cloudViewKey(view)
+              return <button type="button" key={key} id={`settings-cloud-tab-${key}`} role="tab" aria-selected={activeSub === key}
+                aria-controls="settings-cloud-panel" tabIndex={activeSub === key ? 0 : -1}
+                onClick={() => pickSub(key)} onKeyDown={(e) => {
+                  if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) return
+                  e.preventDefault()
+                  const next = e.key === 'Home' ? 0 : e.key === 'End' ? cloudTabs.length - 1 : (index + (e.key === 'ArrowRight' ? 1 : -1) + cloudTabs.length) % cloudTabs.length
+                  const target = cloudViewKey(cloudTabs[next])
+                  pickSub(target)
+                  document.getElementById(`settings-cloud-tab-${target}`)?.focus()
+                }}>{cloudTabTitle(view)}</button>
+            })}
+          </div>}
           {/* key 变 → 重挂 → CSS 入场动画重跑(方向由 data-dir 给);正文块自己按 activeSub 取舍。 */}
           {/* 每个子页一个崩溃兜底:一页渲染抛错只占正文区,左侧导航照常能切走(原先只有整窗那一层,一页崩了整个设置窗就废了)。 */}
           <ErrorBoundary key={`${tab}:${activeSub}`}>
-          <div key={`${tab}:${activeSub}`} className={`settings-sub settings-sub--${tab}`} data-dir={subDir} data-settings-sub={activeSub || undefined}>
+          <div key={`${tab}:${activeSub}`} className={`settings-sub settings-sub--${tab}`} id={cloudTabs.length ? 'settings-cloud-panel' : undefined} role={cloudTabs.length ? 'tabpanel' : undefined} aria-labelledby={cloudTabs.length ? `settings-cloud-tab-${activeSub}` : undefined} data-dir={subDir} data-settings-sub={activeSub || undefined}>
                 {tab === 'permissions' && hasDesktopPermissions() && <DesktopPermissions mode={p.themeMode} />}
                 {tab === 'computer-history' && <ComputerHistorySettings mode={p.themeMode} anchor="computer-history" />}
                 {tab === 'remote-sessions' && <RemoteSessionsSettings />}
@@ -2008,7 +2046,7 @@ export const SettingsModal: React.FC<{
                 )}
 
                 {/* Forsion 云端 → 同步:与 Extend 画的五页同一套卡片(SettingsPanel / SettingsRow),同一分类里别一半新一半旧 */}
-                {tab === 'forsion' && activeSub === 'f-sync' && (
+                {tab === 'forsion' && (activeSub === 'f-sync' || (groupedCloud && activeSub === 'f-conn')) && (
                   <>
                     {window.amadeusSync && noteSync && (
                       <SettingsPanel icon={<NotebookPen size={16} />} title={t('settings.notes.cloudSyncLabel')} description={t('settings.notes.cloudSyncHint')}>
@@ -2126,8 +2164,13 @@ export const SettingsModal: React.FC<{
                 )}
 
                 {/* Forsion 云端 → 连接:云端地址(自建服务才用;cloudUrl 是 managedKey —— 写 = 重启后端 + 重建 unit host,保留显式保存,不做失焦提交) */}
-                {tab === 'forsion' && activeSub === 'f-conn' && stored && (
-                  <SettingsPanel anchor="cloud-url" icon={<Globe2 size={16} />} title={t('settings.forsion.cloudUrlLabel')} description={t(cloudUrlLocked ? 'settingsmodal.cloudUrl.lockedHint' : 'settings.forsion.cloudUrlHint')}>
+                {tab === 'forsion' && stored && (activeSub === 'f-conn' || (groupedCloud && activeSub === 'f-sync')) && (
+                  <>
+                  {groupedCloud && <button type="button" className="settings-cloud-advanced-toggle" aria-expanded={activeSub === 'f-conn' || cloudAdvancedOpen} aria-controls="settings-cloud-connection"
+                    onClick={() => { setCloudAdvancedOpen(!(activeSub === 'f-conn' || cloudAdvancedOpen)); if (activeSub === 'f-conn') pickSub('f-sync') }}>
+                    <ChevronRight size={14} aria-hidden="true" />{t('settingsmodal.cloudAdvancedConnection')}
+                  </button>}
+                  {(!groupedCloud || activeSub === 'f-conn' || cloudAdvancedOpen) && <div id="settings-cloud-connection"><SettingsPanel anchor="cloud-url" icon={<Globe2 size={16} />} title={t('settings.forsion.cloudUrlLabel')} description={t(cloudUrlLocked ? 'settingsmodal.cloudUrl.lockedHint' : 'settings.forsion.cloudUrlHint')}>
                     <div className="settings-control-list">
                       <SettingsRow label={t('settings.forsionCloud.address')}>
                         <div className="settings-inline-row settings-row-wide-control">
@@ -2151,7 +2194,8 @@ export const SettingsModal: React.FC<{
                         {commitErrorHint('cloudUrl')}
                       </SettingsRow>
                     </div>
-                  </SettingsPanel>
+                  </SettingsPanel></div>}
+                  </>
                 )}
 
                 {tab === 'forsion' && activeSub.startsWith('fx:') && cloudViews.filter((o) => cloudViewKey(o) === activeSub).map((o) => (

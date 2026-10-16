@@ -39,7 +39,7 @@ describe('computerHistoryWin', () => {
     expect(readFileSync(exe, 'utf8')).toBe('v2')
     await cleanupRecorderCopies(bin, exe) // 都是刚建的(可能是另一个 Forsion 正要拉起的):不动
     expect(readdirSync(bin)).toHaveLength(4)
-    // NTFS 的亚毫秒 mtime 可能比 Date.now() 的整数毫秒稍晚,别靠刚写完的文件判断 age >= 0。
+    // NTFS can round a fresh mtime past Date.now(); make the old-file fixture explicit.
     const stale = new Date(Date.now() - 1_000)
     for (const name of ['windows-bridge-aaaaaaaaaaaa.exe', '.windows-bridge-1-x.tmp']) utimesSync(path.join(bin, name), stale, stale)
     await cleanupRecorderCopies(bin, exe, 0)
