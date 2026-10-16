@@ -22,8 +22,9 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const APPS = '电脑上开着 Melody(音乐播放器)和 Chatter(聊天软件)。它们的界面是自己画的,只能看着截图、用点击和打字来操作,不要用脚本或命令行去操控它们。';
 const OK_SEND = '可以,发吧。';
-// 它提的收件人是近似名(没找到 Sakura 本人时会问「是想发给 Sakura 樱花吗?」),真用户会纠正而不是点头
-const NOT_THAT_ONE = '不是,我说的是名字就叫 Sakura 的那个好友(不是 Sakura 樱花,也不是 Saku)。是她就发吧。';
+// 收尾提到近似名时(没找到 Sakura 本人会问「是想发给 Sakura 樱花吗?」,也可能只是说「没选 Sakura 樱花」),
+// 照用户的意思点名是哪一位再点头:提错了是纠正,提对了是确认,两种都不替用户批准近似名
+const NOT_THAT_ONE = '发给名字就叫 Sakura 的那个好友(不是 Sakura 樱花,也不是 Saku),可以发。';
 const replyTo = (text) => (/Sakura\s*樱花|Saku(?!ra)/.test(String(text || '').slice(-300)) ? NOT_THAT_ONE : OK_SEND);
 /** 收尾那段话是不是在等用户点头(「要现在发吗?」「请确认是否发送这段原文。」都算) */
 const asksToSend = (text) => {
@@ -168,6 +169,7 @@ function writeProcess({ dir, key, prompt, ev, t0, checks, metrics, states, jevFi
     const shots = Object.values(j.assets || {}).map((a) => `[图](jev/${a})`).join(' ');
     const ans = j.result?.answers || {};
     const what = ans.done ? `确认「${clip(j.state?.expected, 70)}」→ ${(+ans.done.noul).toFixed(2)}`
+      : ans.target?.type === 'choice' ? `元素选择「${clip(j.state?.target, 70)}」→ ${ans.target.choice} 置信度 ${(+ans.target.confidence).toFixed(2)}`
       : ans.target ? `定位「${clip(j.state?.target, 70)}」→ 可见 ${(+ans.visible?.noul).toFixed(2)},框 ${(+ans.target.confidence).toFixed(2)}`
         : ans.choice ? `元素选择「${clip(j.state?.target, 70)}」→ ${clip(JSON.stringify(ans.choice), 80)}` : clip(JSON.stringify(ans), 120);
     rows.push({ t: Date.parse(j.at) - (j.ms || 0), who: '🔎 Jev', what: `${what}(${j.ms} ms)${shots ? ` ${shots}` : ''}` });
