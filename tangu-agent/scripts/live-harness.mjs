@@ -256,7 +256,7 @@ OPT_IN.add('imgwindow');
 OPT_IN.add('viewimage');
 OPT_IN.add('novision'); // --only novision:主模型没有图像输入时的转写状态与送达(一个 run + 一次转写)
 OPT_IN.add('cuoff'); // --only cuoff:主模型看不到图 → Computer Use 不可用并告诉用户(一个 run)
-for (const k of CU_JEV_KEYS) OPT_IN.add(k); // --only cumusic,cusend:Jev 真实案例,两个自绘替身 + 真 Jev(会动真鼠标;要 --cu-plugin)
+for (const k of CU_JEV_KEYS) OPT_IN.add(k); // --only cumusic,cusend,cuambig:Jev 真实案例,两个自绘替身 + 真 Jev(会动真鼠标;要 --cu-plugin)
 OPT_IN.add('cuvision'); // --only cuvision:只能看图的 App,真插件 + 真 helper + 替身 App(一个 run,会动真鼠标;要 --cu-plugin)
 OPT_IN.add('dreamseed');
 OPT_IN.add('layers'); // --only layers:记忆 / 日志分层,每轮 3 个 run + 3 次判官(--rounds);会把 Historian 改成每轮都评,单独跑。
@@ -2762,7 +2762,7 @@ try {
 
   // cumusic / cusend(10-16,反馈 0c0cd24f):用户原话那件事放到两个自绘替身上,真 Jev。说明、判据、过程记录都在 lib/cu-jev-live.mjs。
   for (const key of CU_JEV_KEYS) {
-    await scenario(key, key === 'cumusic' ? 'cumusic Jev 真实案例:打开 Melody 播放今日推荐第三首' : 'cusend Jev 真实案例:播放第三首,把最热评论发给 Chatter 好友 Sakura', () =>
+    await scenario(key, { cumusic: 'cumusic Jev 真实案例:打开 Melody 播放今日推荐第三首', cusend: 'cusend Jev 真实案例:播放第三首,把最热评论发给 Chatter 好友 Sakura(说清了就直接发)', cuambig: 'cuambig Jev 真实案例:收件人有歧义(「小樱」)时先问、列出候选、不发' }[key], () =>
       cuJevLive({ key, api, run, OUT, bundle: opt('cu-plugin', ''), timeoutMs: Number(opt('cu-timeout', key === 'cusend' ? '900' : '420')) * 1000, tokensOf, ttft }));
   }
 

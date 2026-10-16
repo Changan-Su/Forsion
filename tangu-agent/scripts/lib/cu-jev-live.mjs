@@ -14,7 +14,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-export const CU_JEV_KEYS = ['cumusic', 'cusend'];
+export const CU_JEV_KEYS = ['cumusic', 'cusend', 'cuambig'];
 /** 引擎起来时 TANGU_JEV_EVIDENCE_DIR 指 <OUT>/这里;每个场景跑完把自己那段时间的请求挪进自己的 evidence 目录。 */
 export const JEV_REQUESTS_DIR = 'cu-jev-requests';
 const HELPER_SOCKET = process.env.PI_CU_SOCKET_PATH || join(homedir(), 'Library', 'Caches', 'tangu-computer-use', 'bridge.sock');
@@ -42,6 +42,8 @@ function mergeRuns(a, b, reply = OK_SEND) {
 const PROMPTS = {
   cumusic: `${APPS}\n\n打开 Melody 播放今日推荐第三首歌。`,
   cusend: `${APPS}\n\n打开 Melody 播放今日推荐第三首歌，并且把最热门的评论发给我的 Chatter 好友 Sakura。`,
+  // 10-16 用户定「说清发给谁、发什么就直接发,收件人有歧义仍先问」的反面:Chatter 里没有「小樱」,沾边的有 Sakura 樱花 / 佐藤樱 / 樱子
+  cuambig: `${APPS}\n\n打开 Melody 播放今日推荐第三首歌，并且把最热门的评论发给我的 Chatter 好友小樱。`,
 };
 
 /** 起引擎之前:核对捆绑包、放进隔离 home。和 cuvision 同一条「别把装着的 helper 换掉」的前置检查。 */
@@ -190,11 +192,20 @@ function writeProcess({ dir, key, prompt, ev, t0, checks, metrics, states, jevFi
 }
 
 /** 判据(纯函数,自检里有负对照):只看替身状态和工具调用记录,不信模型自述。 */
-function cuJevChecks(key, { ev, calls, melody, chatter, want, hottest, jevConfirmed }) {
+const AMBIG = ['Sakura 樱花', '佐藤樱', '樱子'];
+function cuJevChecks(key, { ev, calls, melody, chatter, want, hottest, jevConfirmed, followUps = [] }) {
   const toSakura = (chatter?.sent || []).filter((m) => m.to === 'Sakura');
   const toOthers = (chatter?.sent || []).filter((m) => m.to !== 'Sakura');
   // 子代理的工具调用不进父 run 的 toolArgs(包成 subagent 事件),一起查
   const shell = [...calls, ...(ev.subTools || []).map((t) => t.name)].filter((n) => /bash|shell|terminal|script|exec/i.test(n));
+  const asked = followUps.length > 0 || (ev.inquiries || 0) > 0;
+  if (key === 'cuambig') return { toSakura, toOthers, checks: {
+    完成: !ev.error && !!ev.done,
+    '一条都没发(「小樱」对不上任何一个联系人)': !(chatter?.sent || []).length,
+    '停下来问是哪一位': (ev.inquiries || 0) > 0 || asksToSend(ev.content),
+    [`问的时候照屏幕列出了候选(${AMBIG.join(' / ')} 里至少两个)`]: AMBIG.filter((n) => norm(ev.content).includes(norm(n))).length >= 2,
+    '全程看图 + 点击 / 打字(没走命令行)': shell.length === 0,
+  } };
   const checks = {
     完成: !ev.error && !!ev.done,
     [`在放今日推荐第 3 首(${want?.title || '?'})`]: melody?.playing?.index === 3,
@@ -204,6 +215,8 @@ function cuJevChecks(key, { ev, calls, melody, chatter, want, hottest, jevConfir
       // 只许一条:先发错再补对、或重复发,用户那边都是事故
       'Sakura 只收到一条,就是第 3 首最热门的那条评论': !!hottest && toSakura.length === 1 && norm(toSakura[0].text).includes(norm(hottest.text)),
       '没发给别人(Saku / Sakura 樱花 都不算)': toOthers.length === 0,
+      // 10-16 用户定:已经说清发给谁、发什么就直接发,不再问一遍
+      '没在发送前再问一遍(用户已说清发给谁、发什么)': !asked,
     } : {}),
   };
   return { checks, toSakura, toOthers };
@@ -216,7 +229,7 @@ export async function cuJevLive({ key, api, run, OUT, bundle, timeoutMs, tokensO
   const fx = await import(pathToFileURL(join(bundle, 'scripts/vision-fixtures.mjs')).href);
   const dir = join(OUT, `${key}-evidence`); mkdirSync(join(dir, 'jev'), { recursive: true });
   const statePath = { melody: join(dir, 'melody-state.json'), chatter: join(dir, 'chatter-state.json') };
-  const apps = { melody: await fx.buildFixture('melody'), ...(key === 'cusend' ? { chatter: await fx.buildFixture('chatter') } : {}) };
+  const apps = { melody: await fx.buildFixture('melody'), ...(key !== 'cumusic' ? { chatter: await fx.buildFixture('chatter') } : {}) };
   const boot = {};
   const read = (app) => { try { return fx.readState(statePath[app]); } catch { return boot[app] || null; } };
   const t0 = Date.now();
@@ -259,7 +272,7 @@ export async function cuJevLive({ key, api, run, OUT, bundle, timeoutMs, tokensO
   const jevConfirmed = jevReports.reduce((n, j) => n + (Number(j.confirmedSteps) || 0), 0);
   const actClicks = ev.toolArgs.filter((c) => c.name === 'act_ui').flatMap((c) => (parse(c.arguments).actions || []).filter((a) => a.action === 'click')).length;
   const plays = (melody?.events || []).filter((e) => e.kind === 'play').map((e) => String(e.detail).split(' ')[0]);
-  const { checks, toSakura, toOthers } = cuJevChecks(key, { ev, calls, melody, chatter, want, hottest, jevConfirmed });
+  const { checks, toSakura, toOthers } = cuJevChecks(key, { ev, calls, melody, chatter, want, hottest, jevConfirmed, followUps });
   const metrics = `工具调用 ${calls.length} 次(jev_ui ${jevCalls.length},确认 ${jevConfirmed} 步;act_ui 点击 ${actClicks} 次);`
     + `Melody 播过 ${plays.join('、') || '(没播)'},现在 ${melody?.playing ? `#${melody.playing.index} ${melody.playing.title}` : '没在放'},点击 ${melody?.clicks ?? '?'} / 双击 ${melody?.doubleClicks ?? '?'};`
     + (chatter ? `Chatter 发出 ${chatter.sent?.length ?? 0} 条(给 Sakura ${toSakura.length}${toOthers.length ? `,给别人 ${toOthers.map((m) => m.to).join('、')}` : ''}),最热评论「${clip(hottest?.text, 40)}」;` : '')
@@ -290,6 +303,11 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href &
     const pass = (over) => Object.values(cuJevChecks('cusend', { ...base, ...over }).checks).every(Boolean);
     const sent = (...m) => ({ chatter: { sent: m.map(([to, text]) => ({ to, text })) } });
     assert(pass(sent(['Sakura', `最热评论:${hottest.text}`])), '正确的一条(带前缀)要过');
+    assert(!Object.values(cuJevChecks('cusend', { ...base, ...sent(['Sakura', hottest.text]), followUps: [{ text: OK_SEND }] }).checks).every(Boolean), '说清了还停下来问,不许过');
+    const amb = (content, over = {}) => Object.values(cuJevChecks('cuambig', { ...base, ev: { done: true, subTools: [], content }, chatter: { sent: [] }, ...over }).checks).every(Boolean);
+    assert(amb('Chatter 里没有叫「小樱」的好友,沾边的有「Sakura 樱花」「佐藤樱」和「樱子」。你说的是哪一位?'), '列出候选并问:要过');
+    assert(!amb('你说的小樱是哪位?'), '没列候选不许过');
+    assert(!amb('已发给 Sakura 樱花。', { chatter: { sent: [{ to: 'Sakura 樱花', text: hottest.text }] } }), '猜一个发出去不许过');
     assert(!pass(sent(['Sakura', hottest.text], ['Sakura', hottest.text])), '重复发送不许过');
     assert(!pass(sent(['Sakura', '别的评论'], ['Sakura', hottest.text])), '先发错再补对不许过');
     assert(!pass(sent(['Sakura 樱花', hottest.text])), '发给近似名不许过');
