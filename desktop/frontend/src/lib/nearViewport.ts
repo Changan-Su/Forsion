@@ -4,7 +4,6 @@
  *  root 必须是滚动容器本身:root 取视口时,滚动容器外的元素先被容器裁掉,rootMargin 放不大它们,得真滚进来才算「近」。
  *  同一个滚动容器共用一个 IntersectionObserver,没人在等了就断开。没有 IntersectionObserver 的环境直接回调。
  *  ponytail: 只挂不卸 —— 挂过的重件留在页面上(白板缩放、多维表滚动、在播的视频都不丢);长到内存吃紧再加「远了就卸 + 存状态」。 */
-const MARGIN = '100% 0px'
 const byRoot = new Map<Element | null, { io: IntersectionObserver; waiting: Map<Element, () => void> }>()
 
 /** 聊天流与笔记正文是已知的滚动容器,先认它们;别处往上找第一个能纵向滚的祖先。 */
@@ -31,7 +30,7 @@ export function whenNear(el: Element, cb: () => void): () => void {
         release(root, r.target)
         fn()
       }
-    }, { root, rootMargin: MARGIN })
+    }, { root, rootMargin: `${root?.clientHeight || window.innerHeight}px 0px` }) // 一屏;百分比会按宽度算。ponytail: 高度取建观察器那一刻的
     entry = { io, waiting }
     byRoot.set(root, entry)
   }

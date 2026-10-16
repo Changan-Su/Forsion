@@ -1125,3 +1125,5 @@ html[data-chat-avatars='off'] .t2-username { display: none; }
 }
 .t2-stream-inner > .t2-userwrap { contain-intrinsic-block-size: auto 64px; }
 .t2-stream-inner > .t2-asst[data-streaming] { content-visibility: visible; }
+/* 回退菜单是消息里唯一伸出框外的弹层(往下最高 320px),开着的那条不加 containment,否则被裁 */
+.t2-stream-inner > .t2-userwrap:has(.rewind-menu) { content-visibility: visible; }

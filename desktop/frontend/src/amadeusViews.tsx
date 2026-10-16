@@ -2359,9 +2359,8 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
     const page = myPs().activePage ?? barPath // unified 笔记 activePage 恒空,文件名取 barPath
     const host = printHostRef.current
     if (!page || !host) return
-    // 长笔记里还没进过视口的嵌入只是一块占位(embedLayer 的懒挂):先全挂上、等一帧再克隆
-    showWaitingEmbeds()
-    await new Promise<void>((r) => requestAnimationFrame(() => r()))
+    // 长笔记里还没进过视口的嵌入只是一块占位(embedLayer 的懒挂):先全挂上、等数据读完再克隆
+    await showWaitingEmbeds(host)
     const wrap = document.createElement('div')
     wrap.id = 'amx-print-root'
     const clone = printClone(host) // 标题框换成静态 h1(长标题折行、取此刻的值;C-12)

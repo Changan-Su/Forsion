@@ -97,7 +97,8 @@ async function main() {
       const r = el.getBoundingClientRect()
       const view = el.closest('.t2-chat-view').getBoundingClientRect()
       const composer = el.closest('.t2-chat-col').querySelector('.composer-anchor').getBoundingClientRect()
-      const button = el.querySelector('.menu-item:not(:disabled)')
+      // 取最后一项:第一项紧贴按钮,落在消息 content-visibility 的 overflow-clip-margin 里,菜单被裁了它照样点得到
+      const button = [...el.querySelectorAll('.menu-item:not(:disabled)')].pop()
       const b = button.getBoundingClientRect()
       return { left: r.left, right: r.right, top: r.top, bottom: r.bottom, viewLeft: view.left, viewRight: view.right, viewTop: view.top, composerTop: composer.top, clickable: button.contains(document.elementFromPoint((b.left + b.right) / 2, (b.top + b.bottom) / 2)) }
     })
