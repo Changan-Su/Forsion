@@ -217,17 +217,25 @@ function cuJevChecks(key, { ev, calls, melody, chatter, want, hottest, jevConfir
   // 子代理的工具调用不进父 run 的 toolArgs(包成 subagent 事件),一起查
   const shell = [...calls, ...(ev.subTools || []).map((t) => t.name)].filter((n) => /bash|shell|terminal|script|exec/i.test(n));
   const asks = (ev.toolArgs || []).filter((c) => c.name === 'ask_user');
+  // 子代理的事件只有工具名、没有参数:它碰过电脑操作,「滚动 / 打字交给了 Jev」就判不了,按没过算(10-16 Codex 评审)
+  const subCU = (ev.subTools || []).some((t) => t.name === 'act_ui' || t.name === 'jev_ui');
   // 只算发送之前的询问:发完再问后续事项不是「又问了一遍要不要发」
   const firstSend = Math.min(...(chatter?.sent || []).map((m) => Number(m.t) || Infinity));
   const asked = followUps.some((f) => f.t < firstSend) || asks.some((c) => (c.at ?? 0) < firstSend);
-  if (key === 'cuscroll') return { toSakura, toOthers, checks: {
+  if (key === 'cuscroll') {
+    // 最后那次播放时停在哪一页:在每日推荐里放到同一首(编号碰巧对上)不算
+    const events = melody?.events || [], lastPlay = events.findLastIndex((e) => e.kind === 'play');
+    const pageAtPlay = lastPlay < 0 ? null : events.slice(0, lastPlay).findLast((e) => e.kind === 'page')?.detail;
+    return { toSakura, toOthers, checks: {
     完成: !ev.error && !!ev.done,
     // 行号是歌单里的位置:放了编号 18 的那首(每日推荐的第 18 首)也算错
-    [`在放「我喜欢的音乐」第 ${LIKED_POSITION} 首(${want?.title || '?'})`]: !!want && melody?.playing?.index === want.index,
+    [`在放「我喜欢的音乐」第 ${LIKED_POSITION} 首(${want?.title || '?'}),没暂停`]: !!want && melody?.playing?.index === want.index && melody?.paused === false,
+    '是在「我喜欢的音乐」页上放的': pageAtPlay === 'liked',
     'Jev 滚过列表并看到了要的那首(jev_ui scroll 确认过)': jevSteps.some((s) => s.action === 'scroll' && s.status === 'confirmed' && s.scrolls > 0),
-    '没用 act_ui 滚动(滚动交给了 Jev)': !actActions.some((a) => a.action === 'scroll'),
+    '没用 act_ui 滚动(滚动交给了 Jev;子代理碰过电脑操作也算没过)': !actActions.some((a) => a.action === 'scroll') && !subCU,
     '全程看图 + 点击 / 打字(没走命令行)': shell.length === 0,
   } };
+  }
   if (key === 'cuambig') return { toSakura, toOthers, checks: {
     完成: !ev.error && !!ev.done,
     [`在放今日推荐第 3 首(${want?.title || '?'})`]: melody?.playing?.index === 3,
@@ -248,7 +256,7 @@ function cuJevChecks(key, { ev, calls, melody, chatter, want, hottest, jevConfir
       // 10-16 用户定:已经说清发给谁、发什么就直接发,不再问一遍
       '没在发送前再问一遍(用户已说清发给谁、发什么)': !asked,
       // 10-16 反馈 d995c9a2:Jev 能打字了,自绘输入框不该再回到 act_ui
-      '打字交给了 Jev(jev_ui type 确认过,没用 act_ui 打字)': jevSteps.some((s) => s.action === 'type' && s.status === 'confirmed') && !actActions.some((a) => ['type', 'typeText', 'setText'].includes(a.action)),
+      '打字交给了 Jev(jev_ui type 确认过,没用 act_ui 打字;子代理碰过电脑操作也算没过)': jevSteps.some((s) => s.action === 'type' && s.status === 'confirmed') && !actActions.some((a) => ['type', 'typeText', 'setText'].includes(a.action)) && !subCU,
     } : {}),
   };
   return { checks, toSakura, toOthers };
@@ -362,13 +370,19 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href &
     assert(!pass({ ...sent(['Sakura', hottest.text]), melody: { playing: { index: 6 } } }), '放错歌不许过');
     assert(!pass({ ...sent(['Sakura', hottest.text]), actActions: [{ action: 'click', x: 1, y: 2 }, { action: 'typeText', text: hottest.text }] }), '打字又回到 act_ui 不许过');
     assert(!pass({ ...sent(['Sakura', hottest.text]), jevSteps: [{ action: 'type', status: 'unverified' }] }), 'Jev 打字没确认不许过');
+    assert(!pass({ ...sent(['Sakura', hottest.text]), ev: { done: true, subTools: [{ name: 'act_ui' }] } }), '子代理碰过 act_ui(看不到参数)不许过');
   }
   {
     const liked18 = { position: 18, index: 20, title: 'Midnight Sodas' };
     const scrolled = [{ action: 'scroll', status: 'confirmed', scrolls: 2, stopReason: 'until_seen' }, { action: 'double_click', status: 'confirmed' }];
-    const ok = (over) => Object.values(cuJevChecks('cuscroll', { ev: { done: true, subTools: [] }, calls: ['jev_ui'], melody: { playing: { index: 20 } }, want: liked18, jevSteps: scrolled, ...over }).checks).every(Boolean);
+    const onLiked = { playing: { index: 20 }, paused: false, events: [{ kind: 'page', detail: 'liked' }, { kind: 'scroll', detail: 'liked:300' }, { kind: 'play', detail: '20 Midnight Sodas - NOVA KAI' }] };
+    const ok = (over) => Object.values(cuJevChecks('cuscroll', { ev: { done: true, subTools: [] }, calls: ['jev_ui'], melody: onLiked, want: liked18, jevSteps: scrolled, ...over }).checks).every(Boolean);
     assert(ok({}), 'Jev 滚到第 18 个位置并放了那首:要过');
-    assert(!ok({ melody: { playing: { index: 18 } } }), '放了编号 18 的那首(每日推荐的第 18 首)不许过');
+    assert(!ok({ melody: { ...onLiked, playing: { index: 18 } } }), '放了编号 18 的那首(每日推荐的第 18 首)不许过');
+    assert(!ok({ melody: { ...onLiked, events: [{ kind: 'page', detail: 'daily' }, { kind: 'play', detail: '20 Midnight Sodas - NOVA KAI' }] } }), '在每日推荐里放到同一首(没进喜欢页)不许过');
+    assert(!ok({ melody: { ...onLiked, events: [{ kind: 'page', detail: 'liked' }, { kind: 'play', detail: '20 x' }, { kind: 'page', detail: 'daily' }, { kind: 'play', detail: '20 x' }] } }), '最后那次是在每日推荐里放的不许过');
+    assert(!ok({ melody: { ...onLiked, paused: true } }), '放了又暂停不许过');
+    assert(!ok({ ev: { done: true, subTools: [{ name: 'act_ui' }] } }), '子代理碰过 act_ui(看不到参数)不许过');
     assert(!ok({ want: undefined }), '没读到答案表不许过');
     assert(!ok({ actActions: [{ action: 'scroll', x: 500, y: 400, scrollY: 300 }] }), '用 act_ui 滚动不许过');
     assert(!ok({ jevSteps: [{ action: 'scroll', status: 'confirmed', scrolls: 0, stopReason: 'until_seen' }, scrolled[1]] }), '一次没滚(目标本来就在眼前)不算 Jev 滚过');
