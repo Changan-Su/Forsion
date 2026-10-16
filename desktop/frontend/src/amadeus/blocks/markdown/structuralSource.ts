@@ -13,6 +13,7 @@ import type { Node as ProseNode, ResolvedPos } from '@milkdown/kit/prose/model'
 import { Plugin, PluginKey, Selection, TextSelection, type EditorState } from '@milkdown/kit/prose/state'
 import { Decoration, DecorationSet, type EditorView } from '@milkdown/kit/prose/view'
 import { applyTrigger, triggerFromStructuralPrefix } from './blockTriggers'
+import { calloutKey, calloutOf } from './callout'
 import { registerMessages, translate } from '../../../i18n'
 
 registerMessages({
@@ -87,6 +88,9 @@ function prefixInfo(state: EditorState): PrefixInfo | null {
   if (quoteDepth !== null) {
     const quote = $from.node(quoteDepth)
     const from = $from.before(quoteDepth)
+    // 折叠的 > 是容器语法；正文行首进入它会把余下段落拆成没有折叠标记的引用。
+    if (calloutOf(quote)?.type === 'fold' && calloutKey.getState(state)?.srcAt !== from
+      && key.getState(state)?.openAt !== widgetPos) return null
     return { source: '> ', widgetPos, decorateFrom: from, decorateTo: from + quote.nodeSize, kind: 'quote' }
   }
   return null
