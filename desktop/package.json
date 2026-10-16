@@ -197,6 +197,7 @@
     "check:marketui": "node scripts/market-ui.check.cjs",
     "probe:marketdl": "node scripts/market-download.probe.cjs",
     "check:uiscale": "node scripts/ui-scale.check.cjs",
+    "e2e:cusettings": "node scripts/computer-use-settings.e2e.cjs",
     "check:uifont": "node scripts/ui-font.check.cjs",
     "check:topchrome": "node scripts/top-chrome.check.cjs",
     "check:minicard": "node scripts/mini-card.check.cjs",
