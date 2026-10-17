@@ -14,6 +14,11 @@
 //   两个群(回车开第一个、↓ + 回车开第二个,盲按都落空)。要插件把叠在上面的窗口画进截图(helper 0.7.2-jev.5 起),
 //   模型看得见下拉才点得对;判据要求 Sakura 是点下拉里那一行打开的(Codex 评审:只有一个群时盲按 ↓ + 回车会碰巧选中她)。
 //
+// --cu-cover(10-17,用户:「严格后台会坏、不严格又老抢前台」):替身起来以后,再在它们上面盖一扇别的 App 的窗口
+//   (插件仓的 CoverFixture,起来就把自己激活),看点击 / 滚动能不能不抢前台、不动真鼠标地落进被盖住的替身。
+//   盖窗自己记下:丢过几次前台、收到几个鼠标 / 滚轮事件(投错了窗口)、真鼠标挪过几次。cumusic / cuscroll 只有点击和滚动,
+//   这三项都必须是 0;cusend / cusearch 要打字,打字照旧要前台(键盘规则没改),只记进指标。
+//
 // ⚠️会真的动鼠标、把替身 App 拿到前台好几分钟。跑的时候别碰键盘鼠标;要走 devlock。
 import { spawnSync } from 'node:child_process';
 import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
@@ -27,6 +32,36 @@ export const CU_JEV_KEYS = ['cumusic', 'cusend', 'cuambig', 'cuscroll', 'cusearc
 export const JEV_REQUESTS_DIR = 'cu-jev-requests';
 const HELPER_SOCKET = process.env.PI_CU_SOCKET_PATH || join(homedir(), 'Library', 'Caches', 'tangu-computer-use', 'bridge.sock');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+const MELODY_FRAME = { x: 40, y: 60, w: 1000, h: 680 }, CHATTER_FRAME = { x: 560, y: 300, w: 900, h: 640 };
+/** 盖住这些窗口的那一扇:外接框四周各放 20 点 */
+export function coverFrame(frames) {
+  const x = Math.min(...frames.map((f) => f.x)) - 20, y = Math.min(...frames.map((f) => f.y)) - 20;
+  return { x, y, w: Math.max(...frames.map((f) => f.x + f.w)) + 20 - x, h: Math.max(...frames.map((f) => f.y + f.h)) + 20 - y };
+}
+/**
+ * 盖窗那边看到的,和这一场里有几步输入走了前台。前台步数 = act_ui 结果里的 [foreground] 说明 + jev_ui 每步执行摘要里
+ * policy 是 foreground 的;pid = jev_ui 里投给后台进程的步数(act_ui 的结果文字不带投递方式)。
+ */
+export function coverStats(cover, ev, jevSteps = []) {
+  const events = cover?.events || [];
+  const exec = jevSteps.flatMap((s) => s.execution?.steps || []);
+  return {
+    lost: events.filter((e) => e.kind === 'resignActive').length,
+    hits: events.filter((e) => /mouse|scroll/i.test(e.kind)).length,
+    cursor: events.filter((e) => e.kind === 'cursorMoved').length,
+    foreground: (ev.toolResults || []).filter((r) => r.name === 'act_ui' && /\[foreground\]/.test(String(r.full || r.result))).length + exec.filter((x) => x.policy === 'foreground').length,
+    pid: exec.filter((x) => x.delivery === 'pid').length,
+  };
+}
+function coverChecks(key, c) {
+  if (!['cumusic', 'cuscroll'].includes(key)) return {};
+  return {
+    '盖窗一直在最前(点击 / 滚动没抢前台)': !!c && c.lost === 0,
+    '盖窗没收到鼠标 / 滚轮(事件没投错窗口)': !!c && c.hits === 0,
+    '真鼠标没动': !!c && c.cursor === 0,
+  };
+}
 
 const APPS = '电脑上开着 Melody(音乐播放器)和 Chatter(聊天软件)。它们的界面是自己画的,只能看着截图、用点击和打字来操作,不要用脚本或命令行去操控它们。';
 const OK_SEND = '可以,发吧。';
@@ -193,7 +228,7 @@ function writeProcess({ dir, key, prompt, ev, t0, checks, metrics, states, jevFi
         : ans.choice ? `元素选择「${clip(j.state?.target, 70)}」→ ${clip(JSON.stringify(ans.choice), 80)}` : clip(JSON.stringify(ans), 120);
     rows.push({ t: Date.parse(j.at) - (j.ms || 0), who: '🔎 Jev', what: `${what}(${j.ms} ms)${shots ? ` ${shots}` : ''}` });
   }
-  for (const [app, s] of Object.entries(states)) for (const e of s?.events || []) if (e.t >= t0 - 1000) rows.push({ t: e.t, who: app === 'melody' ? '🎵 Melody' : '💬 Chatter', what: `${e.kind} ${clip(e.detail, 140)}` });
+  for (const [app, s] of Object.entries(states)) for (const e of s?.events || []) if (e.t >= t0 - 1000) rows.push({ t: e.t, who: { melody: '🎵 Melody', chatter: '💬 Chatter', cover: '🛡 盖窗' }[app], what: `${e.kind} ${clip(e.detail, 140)}` });
   rows.sort((a, b) => a.t - b.t);
   const out = [
     `# ${key}:过程记录`, '', `- 任务原话:${prompt.replace(/\n+/g, ' ')}`, `- 结果:${Object.values(checks).every(Boolean) ? '✅ 通过' : '❌ 没通过'}`,
@@ -302,13 +337,13 @@ function cuJevChecks(key, { ev, calls, melody, chatter, want, hottest, jevConfir
   return { checks, toSakura, toOthers };
 }
 
-export async function cuJevLive({ key, api, run, OUT, bundle, timeoutMs, tokensOf, ttft }) {
+export async function cuJevLive({ key, api, run, OUT, bundle, cover = false, timeoutMs, tokensOf, ttft }) {
   const plugin = (await api('/agent/plugins')).plugins?.find((p) => /computer-use/.test(p.id));
   if (!plugin) return { ok: false, detail: 'Computer Use 插件没装进隔离 home,场景无效' };
   await api(`/agent/plugins/${plugin.id}/enabled`, { method: 'PUT', body: JSON.stringify({ enabled: true }) });
   const fx = await import(pathToFileURL(join(bundle, 'scripts/vision-fixtures.mjs')).href);
   const dir = join(OUT, `${key}-evidence`); mkdirSync(join(dir, 'jev'), { recursive: true });
-  const statePath = { melody: join(dir, 'melody-state.json'), chatter: join(dir, 'chatter-state.json') };
+  const statePath = { melody: join(dir, 'melody-state.json'), chatter: join(dir, 'chatter-state.json'), cover: join(dir, 'cover-state.json') };
   const apps = { ...(key !== 'cusearch' ? { melody: await fx.buildFixture('melody') } : {}), ...(['cusend', 'cuambig', 'cusearch'].includes(key) ? { chatter: await fx.buildFixture('chatter') } : {}) };
   const boot = {};
   const read = (app) => { try { return fx.readState(statePath[app]); } catch { return boot[app] || null; } };
@@ -318,8 +353,15 @@ export async function cuJevLive({ key, api, run, OUT, bundle, timeoutMs, tokensO
   let ev = null, video = { frames: 0, error: '没开始' }; const followUps = [];
   try {
     // 两扇窗口有重叠(真实桌面就是这样):点被挡住的那扇时 helper 要先把它提上来
-    if (apps.melody) { boot.melody = await fx.launchFixture(apps.melody, statePath.melody, { frame: { x: 40, y: 60, w: 1000, h: 680 } }); fixturePids.add(boot.melody.pid); }
-    if (apps.chatter) { boot.chatter = await fx.launchFixture(apps.chatter, statePath.chatter, { frame: { x: 560, y: 300, w: 900, h: 640 }, args: key === 'cusearch' ? ['--popup'] : [] }); fixturePids.add(boot.chatter.pid); }
+    if (apps.melody) { boot.melody = await fx.launchFixture(apps.melody, statePath.melody, { frame: MELODY_FRAME }); fixturePids.add(boot.melody.pid); }
+    if (apps.chatter) { boot.chatter = await fx.launchFixture(apps.chatter, statePath.chatter, { frame: CHATTER_FRAME, args: key === 'cusearch' ? ['--popup'] : [] }); fixturePids.add(boot.chatter.pid); }
+    if (cover) {
+      if (!fx.FIXTURES?.cover) throw new Error('--cu-cover 要捆绑包里的 scripts/vision-fixtures.mjs 带 cover 替身(插件仓 feat/pid-window-pointer 起);负对照把这个文件和 scripts/vision-fixture/cover.swift 覆盖进去');
+      const f = coverFrame([apps.melody && MELODY_FRAME, apps.chatter && CHATTER_FRAME].filter(Boolean));
+      // 前台打开(不带 -g):它得真的在最前
+      spawnSync('open', ['-n', await fx.buildFixture('cover'), '--args', statePath.cover, '--frame', [f.x, f.y, f.w, f.h].join(',')]);
+      boot.cover = await fx.waitForState(statePath.cover, (s) => s.ready && s.active, { timeoutMs: 10_000 });
+    }
     // 发送前问「要不要发」是插件的确认规则(对外发送先确认):用户原话已经让发,台架照用户的意思答「可以」,问了几次记进指标
     const sends = key === 'cusend' || key === 'cusearch';
     const session = `live-${key}-${t0}`, opts = sends ? { inquiryAnswer: OK_SEND } : {};
@@ -345,7 +387,7 @@ export async function cuJevLive({ key, api, run, OUT, bundle, timeoutMs, tokensO
     renameSync(join(pool, f), join(dir, 'jev', f));
     if (f.endsWith('.json')) jevFiles.push(f);
   }
-  const melody = apps.melody ? read('melody') : null, chatter = apps.chatter ? read('chatter') : null;
+  const melody = apps.melody ? read('melody') : null, chatter = apps.chatter ? read('chatter') : null, coverState = cover ? read('cover') : null;
   const want = key === 'cuscroll' ? melody?.catalog?.liked?.[LIKED_POSITION - 1] : melody?.catalog?.daily?.[2], hottest = melody?.catalog?.hottest?.['3'];
   const calls = ev.toolArgs.map((c) => c.name);
   const jevCalls = ev.toolArgs.filter((c) => c.name === 'jev_ui');
@@ -356,13 +398,16 @@ export async function cuJevLive({ key, api, run, OUT, bundle, timeoutMs, tokensO
   const actClicks = actActions.filter((a) => a.action === 'click').length;
   const jevScrolls = jevSteps.reduce((n, s) => n + (s.action === 'scroll' ? Number(s.scrolls) || 0 : 0), 0);
   const plays = (melody?.events || []).filter((e) => e.kind === 'play').map((e) => String(e.detail).split(' ')[0]);
-  const { checks, toSakura, toOthers } = cuJevChecks(key, { ev, calls, melody, chatter, want, hottest, jevConfirmed, jevSteps, actActions, followUps });
+  const { checks: own, toSakura, toOthers } = cuJevChecks(key, { ev, calls, melody, chatter, want, hottest, jevConfirmed, jevSteps, actActions, followUps });
+  const cs = cover ? coverStats(coverState, ev, jevSteps) : null;
+  const checks = { ...own, ...(cover ? coverChecks(key, cs) : {}) };
   const metrics = `工具调用 ${calls.length} 次(jev_ui ${jevCalls.length},确认 ${jevConfirmed} 步,滚动 ${jevScrolls} 次;act_ui 点击 ${actClicks} 次、滚动 ${actActions.filter((a) => a.action === 'scroll').length} 次、打字 ${actActions.filter((a) => ['type', 'typeText', 'setText'].includes(a.action)).length} 次);`
     + (melody ? `Melody 播过 ${plays.join('、') || '(没播)'},现在 ${melody?.playing ? `#${melody.playing.index} ${melody.playing.title}` : '没在放'},点击 ${melody?.clicks ?? '?'} / 双击 ${melody?.doubleClicks ?? '?'};` : '')
     + (key === 'cusearch' ? `${popupStats(chatter)};截图里画进了下拉 ${ev.toolResults.filter((r) => /drawn over it/.test(String(r.full || r.result))).length} 次;` : '')
     + (chatter ? `Chatter 发出 ${chatter.sent?.length ?? 0} 条(给 Sakura ${toSakura.length}${toOthers.length ? `,给别人 ${toOthers.map((m) => m.to).join('、')}` : ''}),最热评论「${clip(hottest?.text, 40)}」;` : '')
+    + (cs ? `盖窗丢前台 ${cs.lost} 次、收到鼠标 / 滚轮 ${cs.hits} 个、真鼠标挪过 ${cs.cursor} 次;输入走前台 ${cs.foreground} 步、Jev 投给后台进程 ${cs.pid} 步;` : '')
     + `问用户 ${ev.inquiries || 0} 次(ask_user)${followUps.length ? `,停下来问过 ${followUps.length} 次、回的是:${followUps.map((f) => `「${f.text}」`).join(' ')}` : ''};Jev 请求 ${jevFiles.length} 次;录像 ${video.error ? `没录成(${clip(video.error, 80)})` : `${video.frames} 帧`}`;
-  writeProcess({ dir, key, prompt: PROMPTS[key], ev, t0, checks, metrics, states: { ...(melody ? { melody } : {}), ...(chatter ? { chatter } : {}) }, jevFiles, video, followUps });
+  writeProcess({ dir, key, prompt: PROMPTS[key], ev, t0, checks, metrics, states: { ...(melody ? { melody } : {}), ...(chatter ? { chatter } : {}), ...(coverState ? { cover: coverState } : {}) }, jevFiles, video, followUps });
   const failed = Object.entries(checks).filter(([, pass]) => !pass).map(([name]) => name);
   return { ok: failed.length === 0, detail: `${failed.length ? `没过:${failed.join('、')}。` : ''}${ev.error ? `run 报错:${ev.error}。` : ''}${metrics}`,
     output: ev.content, ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls, evidenceDir: `${key}-evidence` };
@@ -455,6 +500,19 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href &
     assert.equal(popupStats({ events: events(['popup', 'shown:x'], ['key', 'Down'], ['key', 'Return'], ['popup', 'hidden'], ['key', 'Return']) }), '下拉开着时按回车 1 次,点过下拉里的 (没点过)');
     assert.match(describeResult('observe_ui', 'Observed\n[image] The attached screenshot is 1600x1137 px and shows the target window with a window of the same app drawn over it (a popup'), /截图 1600x1137\(画进了 1 扇叠在上面的窗口\)/);
     assert.match(describeResult('observe_ui', 'Observed\n[image] The attached screenshot is 1600x1137 px and shows only the target window.'), /^截图 1600x1137$/, '没画进叠窗就不提');
+  }
+  {
+    assert.deepEqual(coverFrame([MELODY_FRAME, CHATTER_FRAME]), { x: 20, y: 40, w: 1460, h: 920 });
+    const ev = { toolResults: [{ name: 'act_ui', result: 'ok\n[foreground] This action took the foreground — no_visible_change' }, { name: 'act_ui', result: 'ok' }] };
+    const steps = [{ execution: { steps: [{ delivery: 'pid', policy: 'background' }] } }, { execution: { steps: [{ delivery: 'hid', policy: 'foreground' }] } }];
+    const quiet = { events: [{ kind: 'becomeActive' }] };
+    assert.deepEqual(coverStats(quiet, ev, steps), { lost: 0, hits: 0, cursor: 0, foreground: 2, pid: 1 });
+    assert(Object.values(coverChecks('cumusic', coverStats(quiet, ev, steps))).every(Boolean), '盖窗一直在前、没收到事件、鼠标没动:要过');
+    for (const kind of ['resignActive', 'mouseDown', 'scroll', 'cursorMoved']) {
+      assert(!Object.values(coverChecks('cuscroll', coverStats({ events: [{ kind }] }, ev, steps))).every(Boolean), `盖窗记到 ${kind} 不许过`);
+    }
+    assert(!Object.values(coverChecks('cumusic', null)).every(Boolean), '盖窗状态读不到不许过');
+    assert.deepEqual(coverChecks('cusend', coverStats({ events: [{ kind: 'resignActive' }] }, ev, steps)), {}, '要打字的场景只记指标');
   }
   console.log('cu-jev-live selftest ok');
 }
