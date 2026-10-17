@@ -12,7 +12,7 @@
  *  **信任闸**:卡只对「本地引擎发来的 agent 消息」渲染;服务端广播 / 系统消息里的同名围栏一律按普通代码块显示 ——
  *  防远端往用户面前放一个「执行」按钮。suggest 芯片不认(没处发),原样留在正文。
  *  「按钮」块(forsion-button)无需闸:它只能引用本机已保存的手动自动化规则(见 ButtonBlock 头注),外来消息里的按钮找不到规则就是废按钮。 */
-import { Suspense, useEffect, useMemo, useState } from 'react'
+import { Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { ShieldCheck, ShieldX } from 'lucide-react'
 import { lazyRetry } from '../../lazyRetry'
 import { useI18n } from '../../i18n'
@@ -25,6 +25,7 @@ import { TaskCards } from '../chat2/TaskCards'
 import { runTaskCard } from '../chat2/taskLanding'
 import { homeTarget } from '../../services/engine/targets'
 import { previewNeedsScrollHint } from '../../components/approvalText'
+import { inboxCardOf, useInboxCards, type PluginInboxCard } from '@amadeus/plugins/inboxCards'
 
 const UnifiedPageLazy = lazyRetry(() => import('@amadeus/unified/UnifiedPage').then((m) => ({ default: m.UnifiedPage })))
 
@@ -79,6 +80,7 @@ export function InboxBody({ msg }: { msg: InboxMessage }) {
   const todoStatus = todoRes.gen === gen ? todoRes.map : {}
   const text = parsed ? parsed.text : body
   const hasCards = !!parsed && (parsed.tasks.length > 0 || parsed.approvals.length > 0)
+  const pluginCard = inboxCardOf(msg, useInboxCards())
   return (
     <>
       {text.trim() && (
@@ -90,6 +92,7 @@ export function InboxBody({ msg }: { msg: InboxMessage }) {
           </Suspense>
         </div>
       )}
+      {pluginCard?.mount && <PluginCard key={msg.id} card={pluginCard} id={msg.id} />}
       {hasCards && (
         <div className="ibx-cards" data-inbox-cards>
           {parsed!.approvals.map((id) => <ApprovalCard key={id} id={id} />)}
@@ -111,6 +114,19 @@ export function InboxBody({ msg }: { msg: InboxMessage }) {
       )}
     </>
   )
+}
+
+/** 插件自己画的卡(ctx.inbox.registerCard;只认本机系统消息 + 发件人 `plugin:<id>`,见 inboxCards)。插件抛错只丢这块卡。 */
+function PluginCard({ card, id }: { card: PluginInboxCard; id: string }) {
+  const ref = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const el = ref.current
+    if (!el || !card.mount) return
+    let undo: (() => void) | void
+    try { undo = card.mount(el, { id }) } catch (e) { console.error('[inbox] plugin card mount failed', e) }
+    return () => { try { undo?.() } catch { /* 插件清理出错不拖累阅读面板 */ } el.replaceChildren() }
+  }, [card, id])
+  return <div ref={ref} className="ibx-cards" data-inbox-plugin-card />
 }
 
 /** 审批卡:按 id 读 pending_approvals 行渲染(消息正文只是信封);批准 / 拒绝直接调引擎,决定后定格显示结果。

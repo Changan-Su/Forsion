@@ -6,6 +6,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { ArrowDown, ArrowUp, Bell, Bot, CheckCircle2, Database, Sparkles, Trash2, Workflow, Wrench, Zap } from 'lucide-react'
 import { useApp } from '../../stores/appStore'
+import { track } from '../../achievements/store'
 import { useHomeAgentDefs } from '../../stores/homeCatalog'
 import { useAutomation } from '../../stores/automationStore'
 import { saveMuseTrigger } from '../../services/backendService'
@@ -243,6 +244,7 @@ export const AutomationBuilder: React.FC<AutomationBuilderProps> = ({ editing, s
         actions: steps.length ? actions : null,
         enabled,
       })
+      if (!editing?.id) track('automation.create') // 只计新建,编辑保存不算
       if (onSaved) { st.bump(); onSaved(saved); return }
       st.acceptSaved(saved)
       useApp.getState().toast(t('automation.ux.saved'))

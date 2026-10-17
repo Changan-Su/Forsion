@@ -60,6 +60,7 @@ import { isLoneBlockId, trailingBlockId } from '@amadeus-shared/pdfLink'
 import { editorModeOf, useUiOverlay } from '../../amadeusOverlayStore'
 import { CanvasSegPortal } from './CanvasModeSeg'
 import { claimCanvasToggle, releaseCanvasToggle } from './canvasToggleCommand'
+import { track } from '../../achievements/store'
 import { AmadeusPropertiesPanel, PropsDraftFlushContext } from '../../amadeusProperties'
 import { NoteCover, CoverPicker, IconPicker, randomEmoji, UNTITLED_RE } from '../chrome/pageChrome'
 import { OverlayPortal } from '../lib/overlayPortal'
@@ -771,13 +772,16 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
   }
 
   /** 新建 .fd 子文件(数据库/画板/笔记视图)→ 插 `![[base]]` 嵌入块。三处只差文件名与内容;锚由调用方在消费 '/query' 时钉好。 */
-  const createFdFile = async (name: string, bytes: Uint8Array, a: PendingAnchor | null, stripMd = false): Promise<void> => {
+  /** 返回是否真建成了(调用方据此记成就之类;失败已静默撤锚)。 */
+  const createFdFile = async (name: string, bytes: Uint8Array, a: PendingAnchor | null, stripMd = false): Promise<boolean> => {
     try {
       const { base } = await amadeus.saveAttachment(path, name, bytes, { mode: 'vault', folder: fdDirOf(path) })
       insertAsync(`![[${stripMd ? base.replace(/\.md$/i, '') : base}]]`, a) // Obsidian 惯例:嵌入链接省掉 .md
       void store.getState().syncFdChildren(path)
+      return true
     } catch {
       dropPending(a) // 保存失败静默跳过(v3 同款),锚撤掉
+      return false
     }
   }
 
@@ -906,7 +910,8 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
     }
     if (item.scaffold === S.database) {
       const dbName = translate('amadeus.default.database')
-      void createFdFile(`${dbName}.db`, new TextEncoder().encode(serializeDb(emptyDb(dbName))), pinPending(item.label))
+      // 斜杠菜单「多维表」也算建了一个数据库(笔记树右键那条在 amadeusViews);写盘失败不算
+      void createFdFile(`${dbName}.db`, new TextEncoder().encode(serializeDb(emptyDb(dbName))), pinPending(item.label)).then((ok) => { if (ok) track('base.create') })
       return
     }
     if (item.scaffold === S.drawing) {
@@ -1372,6 +1377,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
     modeTouched.current = true
     writeNoteSurfaceMode(vaultRoot, path, next ? 'canvas' : 'doc')
     setCanvasOn(next)
+    if (next) track('note.canvas') // 只计切进画布(命令与胶囊都走这里)
     // 切模式本身**不算用过画布**(方案 §4):没物化过就只是换个视角,一个字节都不写。
     // 已物化的才把 mode 跟着落盘 —— 走的仍是同一条防抖单写者,不另开写路径。
     if (canvasLineOf(pipe.fm) != null) {

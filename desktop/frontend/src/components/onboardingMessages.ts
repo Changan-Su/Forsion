@@ -86,4 +86,6 @@ registerMessages({
   'onboarding.guide.moreAgentsPath': { zh: 'Agents', en: 'Agents Space' },
   'onboarding.guide.moreTools': { zh: '本机工具与下载源', en: 'Local tools and downloads' },
   'onboarding.guide.moreToolsPath': { zh: '设置 → 常规 → 连接', en: 'Settings → General → Connection' },
+  'onboarding.guide.moreGuide': { zh: '之后在「使用指南」里慢慢学', en: 'Learn the rest at your own pace in the Guide' },
+  'onboarding.guide.openGuide': { zh: '打开使用指南', en: 'Open the Guide' },
 })

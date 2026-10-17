@@ -1472,6 +1472,9 @@ export const useApp = create<AppState>((set, get) => ({
         break
       case 'tool_call':
         if (pl.name === 'generate_image') { track('image.generate'); act('image.generate') }
+        // 使用指南「让 Tangu 操作电脑」:电脑操作插件(首方)的两个动作工具。ponytail: 写死了工具名(引擎的 tool_call 不带来源插件);
+        // 引擎给 tool_call 补上所属插件 id 后改成按 id 认。只计数,不碰审批 —— 审批那边照旧不认插件工具名
+        if (pl.name === 'act_ui' || pl.name === 'jev_ui') track('computer.use')
         // 写类工具记进归属账本(G3-03):编辑器回灌时据此认出「这是 Tangu 改的」。cwd 口径同 deskAutoShow。
         if (pl.name && AGENT_WRITE_TOOLS.has(String(pl.name))) {
           const cfg = get().configBySession[sessionId] || {}

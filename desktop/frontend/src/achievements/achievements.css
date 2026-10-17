@@ -254,3 +254,5 @@
   -webkit-app-region: no-drag;
 }
 .ach-claim:hover { filter: brightness(1.06); }
+/* 成就面板左栏:有「已达成未领取」的系列名后一颗红点(同 Ribbon 奖杯上那颗,领完即灭)。 */
+.ach-dot { display: inline-block; width: 6px; height: 6px; margin-left: 6px; border-radius: 50%; background: var(--danger, #e5484d); vertical-align: middle; flex: none; }

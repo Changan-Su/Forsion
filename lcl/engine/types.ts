@@ -177,6 +177,9 @@ export interface RibbonItem {
   /** 这个图标自己的右键菜单项(弹的时候现取)。Ribbon 会把通用项排在前面(Space 图标的「在新窗口中打开」)。
    *  组件自己接了右键(preventDefault)的,Ribbon 不再弹。 */
   menu?: () => { label: string; onClick(): void }[]
+  /** 图标上的提示红点(无数字):get 现判、subscribe 在它可能变的时候回调。收进「…」/ 收纳夹时红点挂到「…」/ 收纳夹上。
+   *  只给 icon 项用(component 项自己画)。 */
+  dot?: { get(): boolean; subscribe(cb: () => void): () => void }
 }
 
 /** 底部状态栏的一项(≈ Obsidian addStatusBarItem)。 */

@@ -25,6 +25,7 @@ import { loadUserSpaces } from '../userSpaces'
 import { hiddenSpaceName, hiddenSpaceReason, useHiddenSpacesOf } from '../pluginSpaceHealth'
 import { BuiltinPluginsSection } from '../builtins'
 import { useApp } from '../stores/appStore'
+import { track } from '../achievements/store'
 import { panelToast } from './PanelNotice'
 import { ipcErrorText } from '../ipcError'
 import { windowKind } from '../windowKind'
@@ -906,7 +907,7 @@ export const AmadeusPluginsTab: React.FC<{
           {/* 设备页(unitPage):插件目录/脚手架都是对方机器上的 shell 行为 —— 藏。Android App(hostCaps.pluginsFolder=false):
               插件住在应用私有目录、只经市场装 —— 文件夹与脚手架两个按钮同样不给。 */}
           {!window.tangu?.unitPage && canOpenPluginsFolder() && <button className="btn ghost sm" onClick={() => openFolder()}>{t('settings.amadeusPlugins.openFolder')}</button>}
-          <button className="btn ghost sm" onClick={() => void reloadPluginsAndAnnounce({ all: true }).then(() => loadUserSpaces())}>{t('settings.amadeusPlugins.reload')}</button>
+          <button className="btn ghost sm" onClick={() => void reloadPluginsAndAnnounce({ all: true }).then(({ fresh }) => { if (fresh.length) track('plugin.local'); return loadUserSpaces() })}>{t('settings.amadeusPlugins.reload')}</button>
           {!window.tangu?.unitPage && canOpenPluginsFolder() && <button className="btn ghost sm" onClick={() => void scaffold()}>{t('settings.amadeusPlugins.scaffold')}</button>}
         </div>
       </details>
