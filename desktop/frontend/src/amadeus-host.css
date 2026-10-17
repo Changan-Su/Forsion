@@ -2094,15 +2094,17 @@ html.dark .amx-cal-chip-ev, html.dark .amx-cal-event {
 .dash-banner button:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.12)); }
 
 /* ── 只读实例(公开分享页 /share/<token>,UnifiedPage readOnly,2026-09-07)──
- * 静态标题 / 只读属性行沿用编辑态的类名取字号与间距,只去掉交互态;只读舞台的指针语义 = 抓手。 */
+ * 静态标题 / 只读属性行沿用编辑态的类名取字号与间距,只去掉交互态;只读舞台的指针语义 = 抓手。
+ * 抓手只给画布开着的舞台:没开画布(.amx-stage-off,收件箱的信 / 锁定笔记 / 分享页的普通文档)时正文照常 I 型光标、能选字
+ * —— 原先不分开不开都给 grab,收件箱整片正文显示成抓手(10-17 用户实报)。 */
 .amx-title-ro .amx-title-bigicon { cursor: default; }
 .amx-title-ro .amx-title-bigicon:hover { background: transparent; }
 .amx-title-static { display: block; white-space: pre-wrap; overflow-wrap: anywhere; }
 .amx-prop-row-ro .amx-prop-key { cursor: default; }
 .amx-prop-row-ro .amx-prop-key:hover, .amx-prop-row-ro .amx-prop-input:hover { background: transparent; }
 .amx-prop-row-ro .amx-prop-input { display: inline-flex; align-items: center; min-height: 24px; }
-.amx-stage-ro .amx-stage-inner { cursor: grab; }
-.amx-stage-ro .amx-stage-inner:active { cursor: grabbing; }
+.amx-stage-ro:not(.amx-stage-off) .amx-stage-inner { cursor: grab; }
+.amx-stage-ro:not(.amx-stage-off) .amx-stage-inner:active { cursor: grabbing; }
 
 /* ── 写盘状态条(UnifiedPage,评审 D-04 2026-09-27):写失败「未保存」/ 上次没写成的草稿。
  * 外观就是全局 `.mk-notice` 提示条(base.css);这里只把设置页那套宽度(calc(100% - 76px) 居中)

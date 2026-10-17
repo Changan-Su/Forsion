@@ -4,7 +4,8 @@ import { fuzzyScore } from '../../lib/fuzzy'
 import { appRefToken, type AppRef, type AppRefList } from '../../../../../shared/appRefs'
 
 export const WIKI_CATS = ['all', 'window', 'app', 'note'] as const
-export type WikiCat = typeof WIKI_CATS[number]
+/** `@` 提及面板另有两类(Agent / 日期);「笔记」那格两边共用。 */
+export type WikiCat = typeof WIKI_CATS[number] | 'agent' | 'date'
 
 /** 「全部」里窗口 / 应用各露几条(其余进各自的分类看);单独一类时的上限。 */
 export const ALL_WINDOWS = 4
@@ -17,6 +18,13 @@ export const APP_REF_LIMIT = 12
 export function wikiCats(offerApps: boolean, hasNotes: boolean): WikiCat[] {
   if (!offerApps) return []
   return hasNotes ? [...WIKI_CATS] : ['all', 'window', 'app']
+}
+
+/** `@` 提及面板的分类:全部 / Agent / 日期 / 笔记。日期恒有(裸 `@` 就给三条);Agent、笔记按候选池有没有。
+ *  按候选池而不按这次的查询定,打字时分类条不跳;真正有内容的只剩一类时不出分类条(切了也没东西)。 */
+export function mentionCats(hasAgents: boolean, hasNotes: boolean): WikiCat[] {
+  const cats: WikiCat[] = [...(hasAgents ? ['agent' as const] : []), 'date', ...(hasNotes ? ['note' as const] : [])]
+  return cats.length > 1 ? ['all', ...cats] : []
 }
 
 /** 规则同聊天那边的 moveRefCat(views/chat2/refPicker.ts):→ 往右到头停住,← 往回,在「全部」上不接。 */
