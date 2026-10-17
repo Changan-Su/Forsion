@@ -535,7 +535,7 @@
       "type": "function",
       "function": {
         "name": "search_marketplace",
-        "description": "Search the Forsion store (plugins, skills, themes, agents, spaces) when the user wants to find or be recommended an extension. Results are shown as plugin cards the user installs from.",
+        "description": "Search the Forsion store (plugins, skills, themes, agents, spaces) to find or recommend extensions. Results already appear as plugin cards the user installs from; do not redraw them.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -1154,7 +1154,7 @@
       "type": "function",
       "function": {
         "name": "search_marketplace",
-        "description": "Search the Forsion store (plugins, skills, themes, agents, spaces) when the user wants to find or be recommended an extension. Results are shown as plugin cards the user installs from.",
+        "description": "Search the Forsion store (plugins, skills, themes, agents, spaces) to find or recommend extensions. Results already appear as plugin cards the user installs from; do not redraw them.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -1585,7 +1585,7 @@
       "type": "function",
       "function": {
         "name": "search_marketplace",
-        "description": "Search the Forsion store (plugins, skills, themes, agents, spaces) when the user wants to find or be recommended an extension. Results are shown as plugin cards the user installs from.",
+        "description": "Search the Forsion store (plugins, skills, themes, agents, spaces) to find or recommend extensions. Results already appear as plugin cards the user installs from; do not redraw them.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -2035,7 +2035,7 @@
       "type": "function",
       "function": {
         "name": "search_marketplace",
-        "description": "Search the Forsion store (plugins, skills, themes, agents, spaces) when the user wants to find or be recommended an extension. Results are shown as plugin cards the user installs from.",
+        "description": "Search the Forsion store (plugins, skills, themes, agents, spaces) to find or recommend extensions. Results already appear as plugin cards the user installs from; do not redraw them.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -2790,7 +2790,7 @@
       "type": "function",
       "function": {
         "name": "search_marketplace",
-        "description": "Search the Forsion store (plugins, skills, themes, agents, spaces) when the user wants to find or be recommended an extension. Results are shown as plugin cards the user installs from.",
+        "description": "Search the Forsion store (plugins, skills, themes, agents, spaces) to find or recommend extensions. Results already appear as plugin cards the user installs from; do not redraw them.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -3564,7 +3564,7 @@
       "type": "function",
       "function": {
         "name": "search_marketplace",
-        "description": "Search the Forsion store (plugins, skills, themes, agents, spaces) when the user wants to find or be recommended an extension. Results are shown as plugin cards the user installs from.",
+        "description": "Search the Forsion store (plugins, skills, themes, agents, spaces) to find or recommend extensions. Results already appear as plugin cards the user installs from; do not redraw them.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -4682,7 +4682,7 @@
       "type": "function",
       "function": {
         "name": "search_marketplace",
-        "description": "Search the Forsion store (plugins, skills, themes, agents, spaces) when the user wants to find or be recommended an extension. Results are shown as plugin cards the user installs from.",
+        "description": "Search the Forsion store (plugins, skills, themes, agents, spaces) to find or recommend extensions. Results already appear as plugin cards the user installs from; do not redraw them.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -5819,7 +5819,7 @@
       "type": "function",
       "function": {
         "name": "search_marketplace",
-        "description": "Search the Forsion store (plugins, skills, themes, agents, spaces) when the user wants to find or be recommended an extension. Results are shown as plugin cards the user installs from.",
+        "description": "Search the Forsion store (plugins, skills, themes, agents, spaces) to find or recommend extensions. Results already appear as plugin cards the user installs from; do not redraw them.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -6533,7 +6533,7 @@
       "type": "function",
       "function": {
         "name": "search_marketplace",
-        "description": "Search the Forsion store (plugins, skills, themes, agents, spaces) when the user wants to find or be recommended an extension. Results are shown as plugin cards the user installs from.",
+        "description": "Search the Forsion store (plugins, skills, themes, agents, spaces) to find or recommend extensions. Results already appear as plugin cards the user installs from; do not redraw them.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -7266,7 +7266,7 @@
       "type": "function",
       "function": {
         "name": "search_marketplace",
-        "description": "Search the Forsion store (plugins, skills, themes, agents, spaces) when the user wants to find or be recommended an extension. Results are shown as plugin cards the user installs from.",
+        "description": "Search the Forsion store (plugins, skills, themes, agents, spaces) to find or recommend extensions. Results already appear as plugin cards the user installs from; do not redraw them.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -8384,7 +8384,7 @@
       "type": "function",
       "function": {
         "name": "search_marketplace",
-        "description": "Search the Forsion store (plugins, skills, themes, agents, spaces) when the user wants to find or be recommended an extension. Results are shown as plugin cards the user installs from.",
+        "description": "Search the Forsion store (plugins, skills, themes, agents, spaces) to find or recommend extensions. Results already appear as plugin cards the user installs from; do not redraw them.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -9521,7 +9521,7 @@
       "type": "function",
       "function": {
         "name": "search_marketplace",
-        "description": "Search the Forsion store (plugins, skills, themes, agents, spaces) when the user wants to find or be recommended an extension. Results are shown as plugin cards the user installs from.",
+        "description": "Search the Forsion store (plugins, skills, themes, agents, spaces) to find or recommend extensions. Results already appear as plugin cards the user installs from; do not redraw them.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -10697,7 +10697,7 @@
       "type": "function",
       "function": {
         "name": "search_marketplace",
-        "description": "Search the Forsion store (plugins, skills, themes, agents, spaces) when the user wants to find or be recommended an extension. Results are shown as plugin cards the user installs from.",
+        "description": "Search the Forsion store (plugins, skills, themes, agents, spaces) to find or recommend extensions. Results already appear as plugin cards the user installs from; do not redraw them.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -11015,7 +11015,7 @@
       "type": "function",
       "function": {
         "name": "search_marketplace",
-        "description": "Search the Forsion store (plugins, skills, themes, agents, spaces) when the user wants to find or be recommended an extension. Results are shown as plugin cards the user installs from.",
+        "description": "Search the Forsion store (plugins, skills, themes, agents, spaces) to find or recommend extensions. Results already appear as plugin cards the user installs from; do not redraw them.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -11619,7 +11619,7 @@
       "type": "function",
       "function": {
         "name": "search_marketplace",
-        "description": "Search the Forsion store (plugins, skills, themes, agents, spaces) when the user wants to find or be recommended an extension. Results are shown as plugin cards the user installs from.",
+        "description": "Search the Forsion store (plugins, skills, themes, agents, spaces) to find or recommend extensions. Results already appear as plugin cards the user installs from; do not redraw them.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -11960,7 +11960,7 @@
       "type": "function",
       "function": {
         "name": "search_marketplace",
-        "description": "Search the Forsion store (plugins, skills, themes, agents, spaces) when the user wants to find or be recommended an extension. Results are shown as plugin cards the user installs from.",
+        "description": "Search the Forsion store (plugins, skills, themes, agents, spaces) to find or recommend extensions. Results already appear as plugin cards the user installs from; do not redraw them.",
         "parameters": {
           "type": "object",
           "properties": {

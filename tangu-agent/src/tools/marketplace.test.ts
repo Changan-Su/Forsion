@@ -14,6 +14,12 @@ describe('Forsion marketplace tools', () => {
     expect(fixture.list).toHaveBeenCalledWith(signal);
     expect(marketplaceItemsOf(await tool.execute({ query: 'absent' }, {} as any))).toEqual([]);
   });
+  it('ranks by matched keywords instead of requiring every keyword (models pad queries with synonyms)', async () => {
+    fixture.list.mockResolvedValue([{ ...item('weak', 'Reader', ['pdf']), summary: 'Viewer' }, { ...item('strong', 'PDF annotate', ['notes']), summary: 'Reading' }, { ...item('none', 'Calendar', ['calendar']), summary: 'Schedule' }]);
+    const tool = (await marketplaceProvider.tools({} as any))[0];
+    const ids = marketplaceItemsOf(await tool.execute({ query: 'PDF reading notes annotate summarize' }, {} as any)).map(x => x.id);
+    expect(ids).toEqual(['strong', 'weak']);
+  });
   it('looks up immutable IDs and rejects unavailable entries and path injection', async () => {
     const tool = (await marketplaceProvider.tools({} as any))[1];
     await expect(tool.execute({ id: '../bad' }, {} as any)).rejects.toThrow('Invalid');

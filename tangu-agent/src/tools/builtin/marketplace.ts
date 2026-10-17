@@ -18,7 +18,7 @@ export const marketplaceProvider: ToolProvider = {
     isEnabledFor: () => isConfigured() && !!deps().brain.marketplace,
     definition: { type: 'function', function: {
       name: 'search_marketplace',
-      description: 'Search the Forsion store (plugins, skills, themes, agents, spaces) when the user wants to find or be recommended an extension. Results are shown as plugin cards the user installs from.',
+      description: 'Search the Forsion store (plugins, skills, themes, agents, spaces) to find or recommend extensions. Results already appear as plugin cards the user installs from; do not redraw them.',
       parameters: { type: 'object', properties: {
         query: { type: 'string', description: 'Keywords in any language; empty string browses.' },
         type: { type: 'string', enum: ['plugin', 'amadeus-plugin', 'skill', 'theme', 'agent', 'space'], description: 'plugin covers amadeus-plugin (UI/bundle only).' },
@@ -37,13 +37,16 @@ export const marketplaceProvider: ToolProvider = {
       const client = /^(desktop|web|mobile)\/(.+)$/.exec(ctx.client || '');
       const compatible = (item: Parameters<typeof marketplaceCompatibility>[0]) => !client || args.include_incompatible === true || !['version', 'platform'].includes(marketplaceCompatibility(client[1] === 'desktop' ? { ...item, platforms: item.platforms?.some(p => ['desktop', 'macos', 'windows', 'linux'].includes(p)) ? ['desktop'] : item.platforms } : item, client[2], client[1] === 'mobile' ? 'android' : client[1]));
       const originals = new Map(raw.map(value => [String((value as any)?.id), value as any]));
-      const matches = (item: typeof items[number]) => {
-        if (!words.length) return true;
+      // 命中几个关键词就排多前,至少命中一个:模型常把一串同义词塞进 query,要求全中会一条都搜不到(chat 预设没有技能提醒它放宽)。
+      const score = (item: typeof items[number]) => {
+        if (!words.length) return 1;
         const original = originals.get(item.id);
         const text = [original?.name, original?.author, original?.summary, original?.description, ...item.tags].filter(value => typeof value === 'string').join(' ').toLowerCase();
-        return words.every(word => text.includes(word));
+        return words.filter(word => text.includes(word)).length;
       };
-      const candidates = items.filter(item => compatible(item) && (!args.type || (args.type === 'plugin' ? ['plugin', 'amadeus-plugin'].includes(item.type) : item.type === args.type)) && tags.every(tag => item.tags.includes(tag)) && matches(item))
+      const candidates = items.map(item => ({ item, hits: score(item) }))
+        .filter(({ item, hits }) => hits > 0 && compatible(item) && (!args.type || (args.type === 'plugin' ? ['plugin', 'amadeus-plugin'].includes(item.type) : item.type === args.type)) && tags.every(tag => item.tags.includes(tag)))
+        .sort((a, b) => b.hits - a.hits).map(({ item }) => item)
         .slice(0, Math.max(1, Math.min(12, Number(args.limit) || 6))).map(item => {
           const description = originals.get(item.id)?.description;
           if (typeof description !== 'string' || !words.length) return item;

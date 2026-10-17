@@ -62,7 +62,7 @@ describe('registry 级:chat 正向工具面', () => {
     // 10-13 分层:remember 描述的 SKIP / FORMAT 改成「发生过的事归日志、只对这段对话有效的指示两边都不进、现在时一句」+91 B,
     // 实测 8,737 → 8,828,预算 8,750 → 8,850;GUI 端实测 10,874、带 intelligent_ui 的 11,548,仍在 12,000 内。
     // 10-17 商店:search_marketplace 常驻(「帮我找个插件」模型不会先想到 load_tools),get_marketplace_plugin 进 B 档;
-    // 两段描述压过一轮,实测 8,827 → 9,709,预算 8,850 → 9,750;GUI 端 11,755、带 intelligent_ui 的 12,429,预算 12,000 → 12,450。
+    // 两段描述压过一轮,实测 8,827 → 9,707,预算 8,850 → 9,750;GUI 端 11,753、带 intelligent_ui 的 12,427,预算 12,000 → 12,450。
     expect(bytes({ ...base, preset: 'chat' })).toBeLessThanOrEqual(9_750);
     const gui = names({ ...base, preset: 'chat', client: 'web/1.0.0' });
     const core = chat.slice(0, -1); // search_marketplace 注册在 sketch 之后(append 末尾)
