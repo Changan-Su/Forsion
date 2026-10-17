@@ -2333,7 +2333,7 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
    图片 = 方块(--att-tile,输入卡 56px,消息里 120px / 窄栏 96px);其它 = 56px 高的文件条:类型色块 + 文件名(中间省略)+ 类型 · 大小。
    色块只用现成语义色(表格绿 / PDF 红 / 文档蓝),其它灰。移除钮压在右上角往外探 6px,悬停 / 键盘聚焦才出,触屏常显。 */
 .att-tile { position: relative; flex: none; display: inline-flex; min-width: 0; max-width: 100%; transition: transform 130ms cubic-bezier(.55, .055, .675, .19), opacity 130ms; }
-.att-tile.is-leaving { transform: scale(.6); opacity: 0; pointer-events: none; }
+.att-tile.is-leaving { transform: scale(.6); opacity: 0; pointer-events: none; animation: none; } /* animation:none —— 刚加进来还在入场动画(.t2c-chiprow > *)里就点删,动画会压住淡出 */
 .att-tile--img > img {
   display: block; width: var(--att-tile, 56px); height: var(--att-tile, 56px);
   object-fit: cover; object-position: left top; /* 截图的要紧处多在左上 */
