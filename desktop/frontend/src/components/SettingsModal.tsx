@@ -17,6 +17,7 @@ import { ThemeCard } from './ThemeCard'
 import { ThemeSettingsPanel } from './ThemeSettingsPanel'
 import { StartupAppearanceSettings } from './StartupAppearanceSettings'
 import { backgroundSwatch, listLanguages, listSkins, skinSwatch, forcedSchemeForLanguage, SIGNALS } from '../theme/registry'
+import { customAccentVars } from '../theme/lcl/lovableData'
 import { UI_MODE, UI_ZOOM_EVENT, useNativeChromeClaim, useNativeChromeInstalled, useWorkspace } from '@lcl/engine' // 工作区引擎:恢复默认布局 + 移动预览模式;原生顶栏(Android 可选宿主)
 import { useApp } from '../stores/appStore' // Agent Desk 开关改动即时回流(desktopConfig 平时只在 boot/后端就绪时刷新)
 import { testConnection } from '../services/agentRunService'
@@ -2968,8 +2969,9 @@ export const SettingsModal: React.FC<{
                         const tone = (id: string) => { const x = pair(id); return x ? (dark ? x.dark : x.light) : '' }
                         const skinInfo = listSkins().find((sk) => sk.id === p.themeSkin)
                         const accent = p.themeSkin === 'custom' || !skinInfo ? p.themeSeed : skinSwatch(skinInfo, dark, 'accent')
-                        // 「跟随」圆点:左上主题色、右下它带的强调色(单色配色带柔蓝,自定义带自己)
-                        const follows = tone(p.themeSkin === 'cream' || p.themeSkin === 'ink' ? 'blue' : p.themeSkin) || accent
+                        // 「跟随」圆点:左上主题色、右下它带的强调色(单色配色带柔蓝;自定义取 loader 同一个 --signal-skin,近灰也是柔蓝)
+                        const follows = p.themeSkin === 'custom' ? customAccentVars(p.themeSeed, dark)['--signal-skin']
+                          : tone(p.themeSkin === 'cream' || p.themeSkin === 'ink' ? 'blue' : p.themeSkin) || accent
                         const chips = [
                           { id: '', label: t('settings.theme.signalFollow'), dot: `linear-gradient(135deg, ${accent} 0 50%, ${follows} 50% 100%)` },
                           ...SIGNALS.map((x) => ({ id: x.id, label: x.id === 'blue' ? t('settings.theme.signalBlue') : t(`settings.theme.skin.${x.id}`), dot: dark ? x.dark : x.light })),
