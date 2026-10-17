@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { deps } from '../seams/runtime.js';
 import { tanguHome } from '../core/tanguHome.js';
 import { createPluginRuns, pluginEngines } from './runs.js';
@@ -116,6 +117,18 @@ function newInstance(metaIds: Set<string> = new Set()): Instance {
 
 function makeContext(d: DiscoveredPlugin, inst: Instance): TanguPluginContext {
   const id = d.manifest.id;
+  const toolAliases = new Map<string, string>();
+  const metaAliases = new Map<string, string>();
+  const namespace = (raw: string) => d.packageId ? `${id}:${raw}` : raw;
+  const scopedProvider = (provider: import('../tools/toolRegistry.js').ToolProvider): import('../tools/toolRegistry.js').ToolProvider => !d.packageId ? provider : ({ ...provider, id: namespace(provider.id), tools: (...args) => provider.tools(...args).map(tool => {
+    const name = `market_${tool.name.slice(0, 16)}_${createHash('sha256').update(id + ':' + tool.name).digest('hex').slice(0, 32)}`;
+    toolAliases.set(tool.name, name);
+    return { ...tool, name, definition: { ...tool.definition, function: { ...tool.definition.function, name } } };
+  }) });
+  const ownedToolNames = () => listToolProviders().filter(p => providerOwner.get(p.id) === id).flatMap(p => p.tools().map(t => t.name));
+  const translateTool = (name: string) => { ownedToolNames(); return toolAliases.get(name) || name; };
+  const runs = createPluginRuns(id, () => !inst.disposed, off => inst.runtimeDisposers.push(off), ownedToolNames);
+  const automation = createPluginAutomation(id, () => !inst.disposed, () => listToolProviders().filter(p => providerOwner.get(p.id) === id).flatMap(p => p.tools().filter(t => t.capabilities?.automationSafe).map(t => t.name)));
   const live = (what: string): boolean => {
     if (!inst.disposed) return true;
     console.warn(`[tangu] 插件 ${id} 已停用,忽略迟到的${what}注册`);
@@ -127,6 +140,7 @@ function makeContext(d: DiscoveredPlugin, inst: Instance): TanguPluginContext {
     },
     registerToolProvider: (p) => {
       if (!live('工具')) return;
+      p = scopedProvider(p);
       inst.providerIds.add(p.id);
       providerOwner.set(p.id, id);
       registerToolProvider({ ...p, origin: 'plugin' }); // 全局注册表,append 在核心 builtin 之后;打 plugin 标(chat 正向面只认核心 provider)
@@ -137,6 +151,10 @@ function makeContext(d: DiscoveredPlugin, inst: Instance): TanguPluginContext {
     // 随 App 播种的电脑操作在新装机器上就是这样(09-25 Windows 实测)。显式开关(__enabled)照旧优先。
     registerPlugin: (meta) => {
       if (!live(' meta ')) return;
+      if (d.packageId) {
+        if (!metaAliases.has(meta.id)) metaAliases.set(meta.id, metaAliases.size === 0 || meta.id === d.packageId ? id : `market-${createHash('sha256').update(id + ':' + meta.id).digest('hex').slice(0, 48)}`);
+        meta = { ...meta, id: metaAliases.get(meta.id)!, ...(meta.toolProvider ? { toolProvider: scopedProvider(meta.toolProvider) } : {}) };
+      }
       inst.metaIds.add(meta.id);
       if (meta.toolProvider) { // registry 顺带注册的 provider 也进台账
         inst.providerIds.add(meta.toolProvider.id);
@@ -178,8 +196,8 @@ function makeContext(d: DiscoveredPlugin, inst: Instance): TanguPluginContext {
       });
       if (inst.activated) mountRoutes(id, inst);
     },
-    sdk: { ...sdk, runs: createPluginRuns(id, () => !inst.disposed, off => inst.runtimeDisposers.push(off), () => listToolProviders().filter(p => providerOwner.get(p.id) === id).flatMap(p => p.tools().map(t => t.name))), engines: pluginEngines,
-      automation: createPluginAutomation(id, () => !inst.disposed, () => listToolProviders().filter(p => providerOwner.get(p.id) === id).flatMap(p => p.tools().filter(t=>t.capabilities?.automationSafe).map(t => t.name))),
+    sdk: { ...sdk, runs: { ...runs, start: p => runs.start({ ...p, ...(p.toolNames ? { toolNames: p.toolNames.map(translateTool) } : {}) }) }, engines: pluginEngines,
+      automation: { ...automation, save: (key, input) => automation.save(key, { ...input, tool: translateTool(input.tool) }) },
       workspaces: createPluginWorkspaces(id, path.join(tanguHome(), 'plugin-data', id), () => !inst.disposed) },
     log: (msg) => console.log(`[plugin:${id}] ${msg}`),
     paths: { pluginDir: d.dir, dataDir: path.join(tanguHome(), 'plugin-data', id) },

@@ -11,8 +11,8 @@
  * 这是 Sunsama Backlog / NotePlan Priority 段的语义:显式收成一个命名的桶,
  * 而不是让它们无条件散在各处置顶(旧行为)。
  */
-import { diffDays, sameDay, startOfDay, toLocalDate } from './dateUtils'
-import { parseCalDate } from '@amadeus-shared/db/calDate'
+import { addDays, diffDays, fmtStamp, sameDay, startOfDay, toLocalDate } from './dateUtils'
+import { calDateToValue, parseCalDate, splitSide } from '@amadeus-shared/db/calDate'
 import { registerMessages, translate } from '../../i18n'
 
 registerMessages({
@@ -65,4 +65,39 @@ export function sortTimeOf(raw: string): number {
   const cd = raw ? parseCalDate(raw) : null
   if (!cd) return Number.POSITIVE_INFINITY
   return toLocalDate(cd.start).getTime()
+}
+
+/** 待办视图顶栏的三档筛选(2026-10-17 方案 A):今天 = 逾期 + 今天;计划 = 有日期的;全部 = 所有桶。 */
+export type TodoView = 'today' | 'plan' | 'all'
+export const VIEWS: TodoView[] = ['today', 'plan', 'all']
+const VIEW_BUCKETS: Record<TodoView, ReadonlySet<TodoBucket>> = {
+  today: new Set<TodoBucket>(['overdue', 'today']),
+  plan: new Set<TodoBucket>(['overdue', 'today', 'tomorrow', 'week', 'later']),
+  all: new Set<TodoBucket>(ORDER),
+}
+export const inView = (view: TodoView, b: TodoBucket): boolean => VIEW_BUCKETS[view].has(b)
+
+/** 拖一行到分组头 = 改到那一天。只收有确定日子的桶:「本周」「以后」没有确定的哪一天,不收。
+ *  null = 清掉日期(「未排期」)。 */
+export function dropDay(b: TodoBucket, today: Date): Date | null | undefined {
+  if (b === 'today') return startOfDay(today)
+  if (b === 'tomorrow') return addDays(startOfDay(today), 1)
+  if (b === 'undated') return null
+  return undefined
+}
+
+/** 把一个 calendarDate 值挪到另一天:只换日子不换钟点(「今天 17:00」拖到明天 =「明天 17:00」),
+ *  跨天的结束侧跟着平移同样的天数;day = null 清空;原来没日期就落成那一天的全天。 */
+export function moveToDay(raw: string, day: Date | null): string {
+  if (!day) return ''
+  const target = fmtStamp(day, true)
+  const cd = raw ? parseCalDate(raw) : null
+  if (!cd) return target
+  const delta = diffDays(startOfDay(day), startOfDay(toLocalDate(cd.start)))
+  const shift = (side: string): string => {
+    const { date, time } = splitSide(side)
+    const d = fmtStamp(addDays(toLocalDate(date), delta), true)
+    return time ? `${d}T${time}` : d
+  }
+  return calDateToValue({ start: shift(cd.start), end: cd.end ? shift(cd.end) : undefined, allDay: cd.allDay })
 }

@@ -182,6 +182,15 @@ const api = {
   /** 测试版通道:开了才会收到 x.y.z-beta.N;关着连看都看不到(feed/端点两层都隔离)。 */
   getUpdateBeta: (): Promise<boolean> => ipcRenderer.invoke('updater:getBeta'),
   setUpdateBeta: (on: boolean): Promise<{ ok: boolean }> => ipcRenderer.invoke('updater:setBeta', on),
+  /** What's new 弹窗正文:官网更新动态快照(拿不到 = null)。 */
+  getWebsiteReleases: (): Promise<any> => ipcRenderer.invoke('updater:websiteReleases'),
+  /** 从任意窗口(设置浮窗)请主窗弹出 What's new;主窗经 onOpenWhatsNew 收到。 */
+  openWhatsNew: (): void => ipcRenderer.send('whatsNew:open'),
+  onOpenWhatsNew: (cb: () => void): (() => void) => {
+    const listener = (): void => cb()
+    ipcRenderer.on('whatsNew:open', listener)
+    return () => { ipcRenderer.removeListener('whatsNew:open', listener) }
+  },
   /** 应用内清空数据(卸载/重置);清完主进程会 relaunch。 */
   clearAppData: (opts: { desktop?: boolean; tangu?: boolean }): Promise<{ ok: boolean }> =>
     ipcRenderer.invoke('app:clearData', opts),
@@ -360,6 +369,7 @@ const api = {
   openPluginsDir: (): Promise<{ ok: boolean }> => ipcRenderer.invoke('plugins:openDir'),
   // ── Forsion Market(浏览/详情/安装全走主进程:公开浏览 + 本地解压安装)──
   marketList: (type?: string): Promise<{ items: any[] }> => ipcRenderer.invoke('market:list', type),
+  marketRead: (id: string, resource: string, offset?: number): Promise<any> => ipcRenderer.invoke('market:read', id, resource, offset),
   marketDetail: (id: string): Promise<any> => ipcRenderer.invoke('market:detail', id),
   marketUpdateStatus: () => ipcRenderer.invoke('market:updateStatus'),
   marketSetAutoUpdate: (id: string, on: boolean) => ipcRenderer.invoke('market:setAutoUpdate', id, on),
@@ -371,8 +381,8 @@ const api = {
     void ipcRenderer.invoke('market:updateStatus').then((state) => { if (!off && !received) cb(state) }).catch(() => {})
     return () => { off = true; ipcRenderer.removeListener('market:updateStatus', listener) }
   },
-  marketInstall: (id: string): Promise<{ ok: boolean; path: string; files: number; type: string; slug: string }> =>
-    ipcRenderer.invoke('market:install', id),
+  marketInstall: (id: string, version?: string): Promise<{ ok: boolean; path: string; files: number; type: string; slug: string }> =>
+    ipcRenderer.invoke('market:install', id, version),
   // 安装进度(阶段 + 当前在试第几个下载地址 + 字节):主进程只推给发起窗口,渲染层按 id 过滤。
   onMarketInstallProgress: (cb: (ev: MarketInstallProgress) => void): (() => void) => {
     const listener = (_e: unknown, ev: MarketInstallProgress): void => cb(ev)
@@ -583,6 +593,14 @@ const api = {
   },
   /** 冷启动:拉走渲染层就绪前积压的 deep link(拿走即清;也把主进程翻到「可直推」态)。 */
   drainDeepLinks: (): Promise<string[]> => ipcRenderer.invoke('deeplink:drain'),
+  // ── 外部文件打开(Finder 打开方式 / 拖到 Dock / 命令行参数;落点在渲染层 deepLinkInstall.installOpenFiles)──
+  /** 主进程只推一声「有文件待打开」,收到后调 drainOpenFiles 拉(文件本身不随推送走,见 main.ts deliverOpenFile)。 */
+  onOpenFile: (cb: () => void): (() => void) => {
+    const listener = (): void => cb()
+    ipcRenderer.on('app:open-file', listener)
+    return () => ipcRenderer.removeListener('app:open-file', listener)
+  },
+  drainOpenFiles: (): Promise<string[]> => ipcRenderer.invoke('openfile:drain'),
   /** 内置终端的 PTY:spawn 失败(原生模块未就绪)返回 {error},不抛。 */
   pty: {
     spawn: (opts: { cols?: number; rows?: number; cwd?: string; cmd?: string }): Promise<{ id?: string; shell?: string; error?: string }> =>
@@ -634,7 +652,7 @@ const AGENT_KEYS = [
   'remoteSafety', // 急停 / 远程锁定管的是本机引擎上的远程 / 通道 / 无人值守 run
 ] as const
 if (!PRODUCT.agentBackend) for (const k of AGENT_KEYS) delete (api as Record<string, unknown>)[k]
-if (!PRODUCT.market) for (const k of ['marketList', 'marketDetail', 'marketInstall', 'onMarketInstallProgress', 'marketInstalled', 'marketUninstall', 'marketUpdateStatus', 'marketSetAutoUpdate', 'marketCheckUpdates', 'onMarketUpdateStatus'] as const) delete (api as Record<string, unknown>)[k]
+if (!PRODUCT.market) for (const k of ['marketList', 'marketRead', 'marketDetail', 'marketInstall', 'onMarketInstallProgress', 'marketInstalled', 'marketUninstall', 'marketUpdateStatus', 'marketSetAutoUpdate', 'marketCheckUpdates', 'onMarketUpdateStatus'] as const) delete (api as Record<string, unknown>)[k]
 // 云端账号面(个人中心 / 会员页 / 额度与重置卡 / 反馈 / cloud:fetch)由内置包 Forsion Extend 的主进程半身提供
 // (electron/cloudHost.ts);没装载(验签失败 / 单品变体 / 没捆)就删键 —— 调了会 reject "No handler registered",
 // 删掉键渲染层按同一套 window.tangu?.X 门控自动隐藏。主进程在开窗前就答好 cloud:present(Extend 实际注册的通道名),

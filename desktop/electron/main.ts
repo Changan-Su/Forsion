@@ -1,3 +1,4 @@
+import { assertMarketplaceRequirements } from '../shared/marketplace'
 import { asrBackendFor } from './asrSelection'
 import { installAmbientPalette } from './ambientPalette'
 import { unitConfigFace } from './unitConfigFace'
@@ -42,6 +43,7 @@ import { loadTanguCreds, saveTanguCreds, forsionAccountId, loadAccountCloudSetti
 import { createAccountCore } from './accountCore'
 import { importMcp, importSkills, scanAll } from './discovery'
 import { checkForUpdates, downloadUpdate, installUpdate, canInstallUpdate, betaChannelOn, getUpdaterStatus } from './updater'
+import { fetchWebsiteReleases } from './websiteReleases'
 import { createRestartGuard, readRestartActivity } from './restartGuard'
 import { createTray, refreshTrayMenu, setTrayIndicator, trayLang } from './tray'
 import { initMainLocale, mainLocale, mt } from './mainI18n'
@@ -61,7 +63,7 @@ import { checkBuiltinUpdates, NPM_OFFICIAL, registryOrder } from './builtinUpdat
 import { checkEngineUpdate, setupEngineOverlay, ENGINE_PACKAGE, ENGINE_UPDATE_ID, type EngineOverlayHandle } from './engineUpdates'
 import { loadBuiltinDesktopEntries, type CloudHost } from './cloudHost'
 import { npmDownloadCandidates, npmTarballToZip, type NpmInstallSnapshot } from './npmMarketInstall'
-import { extractZipToDir, detectMarketType, MARKET_SUBDIR, MARKET_MANIFEST, isSafeSlug, readInstalledVersion, readInstalledPluginId, readUserPluginDirs, marketItemDir, downloadCandidates, downloadZip, GZIP_MAGIC, ZIP_MAGIC, type DownloadProgress } from './marketInstall'
+import { extractZipToDir, checkMarketPackage, detectMarketType, MARKET_SUBDIR, MARKET_MANIFEST, isSafeSlug, readInstalledVersion, readInstalledPluginId, readUserPluginDirs, marketItemDir, downloadCandidates, downloadZip, GZIP_MAGIC, ZIP_MAGIC, type DownloadProgress } from './marketInstall'
 import { servePathRoot, serveInlineHtml, stopCodePreview, setForsionPreviewHooks, transpileForServe, MIME } from './codePreview'
 import { createCodeStudioProjectWatcher, createCodeStudioSnapshot, listCodeStudioSnapshots, restoreCodeStudioSnapshot } from './codeStudioProjects'
 import { installPreviewPersistence, previewOriginFor, registerProductsIpc } from './productsIpc'
@@ -107,7 +109,7 @@ import { registerPtyIpc } from './pty'
 import { registerAssetSchemes as registerAmadeusAssetSchemes, registerAssetProtocol as registerAmadeusAssetProtocol } from './amadeus/assetProtocol'
 import { nearestEdge, collapsedBounds, expandedBounds, visibleRect, pointInRect, growRect, resizeFromEdge, type Rect, type Edge } from './windowGeometry'
 import { applyWindowMaterial, parseWindowMaterialRequest } from './windowMaterial'
-import { isForsionUrl, pushDeepLink, drainDeepLinks } from './deepLink'
+import { isForsionUrl, pushDeepLink, drainDeepLinks, filesFromArgv, pushOpenFile, drainOpenFiles } from './deepLink'
 
 /** ~/.tangu(与包内 core/tanguHome.ts 同约定;TANGU_HOME 可整体重定向)。 */
 setDevMode(!app.isPackaged) // dev 数据目录 ~/.forsion-dev,与正式版隔离(模块装载即定,先于一切路径解析)
@@ -124,9 +126,10 @@ const themesDir = (): string => join(tanguHomeDir(), 'themes')
 
 // 单实例锁:托盘常驻语义下,再次启动只唤起已开的窗口后立即退出(app.exit 同步,不再往下建二号窗)。
 if (!app.requestSingleInstanceLock()) app.exit(0)
-app.on('second-instance', (_e, argv) => {
+app.on('second-instance', (_e, argv, cwd) => {
   showMainWindow()
   for (const a of argv) if (isForsionUrl(a)) deliverDeepLink(a) // win/linux:二启的 forsion:// 在 argv 里
+  for (const f of filesFromArgv(argv.slice(1), cwd)) deliverOpenFile(f) // win/linux:已开着时双击文件
 })
 
 // ── forsion:// deep link(入站;与出站外链回投的 app:open-url 无关)────────────────────────
@@ -147,6 +150,22 @@ function deliverDeepLink(url: string): void {
 app.on('open-url', (e, url) => { e.preventDefault(); if (isForsionUrl(url)) deliverDeepLink(url) })
 // win/linux 首启:URL 直接躺在 process.argv(mac 走 open-url,不经 argv)。
 for (const a of process.argv.slice(1)) if (isForsionUrl(a)) pushDeepLink(a)
+
+// ── 外部文件打开(文件关联见 electron-builder.config.cjs 的 fileAssociations)──────────────────
+// 渲染层落点:库外 → wsfile 临时标签页(预览 / .md 就地编辑写回,不导入笔记库);本地库内 → Amadeus 原生视图。
+// 只推一声「有文件」,文件本身一律留在队列里等渲染层来拉:不像 deep link 那样记「渲染层已就绪」——
+// did-start-loading 对页内 iframe 的加载也会触发(Codex 评审),靠它翻回未就绪会让之后的打开全卡在队列里;
+// 推给还没装监听 / 正在重载的页,丢的只是这一声,新页装载时自己 drain。
+function deliverOpenFile(p: string): void {
+  pushOpenFile(p)
+  if (!app.isReady()) return // 冷启动:渲染层起来后自会 drain
+  showMainWindow()
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('app:open-file')
+}
+// mac:Finder 双击 / 打开方式 / 拖到 Dock 图标。同 open-url,必须在 whenReady 之前挂上,冷启动才接得到。
+app.on('open-file', (e, p) => { e.preventDefault(); deliverOpenFile(p) })
+// win/linux 首启:文件路径在 argv 里(argv[0] 是可执行文件本身,切掉)。
+for (const f of filesFromArgv(process.argv.slice(1), process.cwd())) pushOpenFile(f)
 
 /**
  * 加载 ~/.tangu/.env 进 process.env(不覆盖真实环境;与包内 tanguHome.loadTanguEnv 同语义)。
@@ -2216,15 +2235,16 @@ const marketBase = async (): Promise<string> => {
   return base
 }
 const MARKET_UA = 'Forsion-Tangu'
+const marketPlatform = () => process.platform === 'darwin' ? 'macos' : process.platform === 'win32' ? 'windows' : 'linux'
 
-async function downloadMarketPackage(id: string, report: (phase: 'resolve' | 'download' | 'install', progress?: DownloadProgress) => void = () => {}): Promise<{ info: { type: string; installSlug: string; downloadUrl: string; source: string } & NpmInstallSnapshot; buf: Buffer }> {
+async function downloadMarketPackage(id: string, report: (phase: 'resolve' | 'download' | 'install', progress?: DownloadProgress) => void = () => {}, version?: string): Promise<{ info: { type: string; installSlug: string; downloadUrl: string; source: string; minAppVersion?: string; maxAppVersion?: string; platforms?: string[]; tags?: string[] } & NpmInstallSnapshot; buf: Buffer }> {
   const base = await marketBase()
   // 服务端解析 github 源时要问 api.github.com(服务端在大陆,也会慢);没有超时 = 按钮一直转。
   // 错误消息只放语言中立的原因码(`resolve: …`),界面层自己套中英文案(frontend/src/services/marketService.ts 的 unwrapIpcError)。
-  const infoRes = await fetch(`${base}/api/market/items/${encodeURIComponent(id)}/install`, { headers: { 'User-Agent': MARKET_UA }, signal: AbortSignal.timeout(30_000) })
+  const infoRes = await fetch(`${base}/api/market/items/${encodeURIComponent(id)}/install?identity=uuid-v1&appVersion=${encodeURIComponent(app.getVersion())}&platform=${marketPlatform()}${version ? `&version=${encodeURIComponent(version)}` : ''}`, { headers: { 'User-Agent': MARKET_UA }, signal: AbortSignal.timeout(30_000) })
     .catch((err: any) => { throw new Error(`resolve: ${err?.name === 'TimeoutError' ? 'timeout' : err?.cause?.code || err?.message || err}`) })
   if (!infoRes.ok) throw new Error(`resolve: HTTP ${infoRes.status}`)
-  const info = (await infoRes.json()) as { type: string; installSlug: string; downloadUrl: string; source: string } & NpmInstallSnapshot
+  const info = (await infoRes.json()) as { type: string; installSlug: string; downloadUrl: string; source: string; minAppVersion?: string; maxAppVersion?: string; platforms?: string[]; tags?: string[] } & NpmInstallSnapshot
   if (!MARKET_SUBDIR[info.type] || !isSafeSlug(info.installSlug)) throw new Error('resolve: invalid target')
   // github 源走 net.fetch(认系统代理);开了「中国大陆镜像」才加第三方代理站(见 downloadCandidates 的 ⚠️)。
   // zip 源(Forsion 对象存储)一直能通,照旧 Node fetch 单发 —— 不让一个失效的系统代理设置拖累它。
@@ -2234,6 +2254,8 @@ async function downloadMarketPackage(id: string, report: (phase: 'resolve' | 'do
   const candidates = npm ? npmDownloadCandidates(info, stored.mirror) : github ? downloadCandidates(info.downloadUrl, stored.mirror, process.env.TANGU_GITHUB_PROXY || '') : [info.downloadUrl]
   const archive = await downloadZip(candidates, (u, init) => github || u.startsWith(NPM_OFFICIAL) ? net.fetch(u, init) : fetch(u, init), (p) => report('download', p), npm ? GZIP_MAGIC : ZIP_MAGIC)
   const buf = npm ? await npmTarballToZip(archive, info, info.type) : archive
+  assertMarketplaceRequirements(info, app.getVersion(), marketPlatform())
+  await checkMarketPackage(buf, await detectMarketType(buf, info.type), app.getVersion(), marketPlatform(), builtinPluginIds())
   return { info, buf }
 }
 
@@ -2582,6 +2604,8 @@ app.whenReady().then(async () => {
       ])
     },
   })
+  // 定时 / 唤醒触发的检查:下载中别插一脚(下载完 checkForUpdates 自己会原样返回)。
+  const checkAppUpdateQuietly = (): void => { if (getUpdaterStatus().phase !== 'downloading') void checkForUpdates() }
   const checkAllUpdates = () => {
     void corePluginUpdater.check()
     if (PRODUCT.market) void marketPluginUpdater.check().catch((e) => console.warn('[market-updates]', e))
@@ -2591,7 +2615,8 @@ app.whenReady().then(async () => {
   if (app.isPackaged) {
     setTimeout(() => {
       void corePluginUpdater.check()
-      setInterval(() => void corePluginUpdater.check(), 6 * 3600_000).unref()
+      // 应用本体也跟着每 6 小时查一次:原来只在渲染层启动时查,一直开着不退的人永远收不到新版本(What's new 弹窗靠这个广播)
+      setInterval(() => { void corePluginUpdater.check(); checkAppUpdateQuietly() }, 6 * 3600_000).unref()
     }, 60_000).unref()
   }
   // tangu CLI 自动安装/自愈:shim 指向 App 内部资源(App 自动更新 → CLI 同步),幂等注入 PATH;吞错不阻塞。
@@ -2656,6 +2681,7 @@ app.whenReady().then(async () => {
     keepAwake.rearm()
     computerHistory?.recheck()
     unitHub?.reconnect('resume')
+    if (app.isPackaged) checkAppUpdateQuietly() // 合盖一夜回来,新版本在这时候提示
   })
 
   ipcMain.handle('config:get', () => effectiveConfig())
@@ -3565,6 +3591,10 @@ app.whenReady().then(async () => {
     deepLinkReady = true
     return drainDeepLinks()
   })
+  ipcMain.handle('openfile:drain', (e) => {
+    if (!isTrustedSender(e) || e.sender !== mainWindow?.webContents) return []
+    return drainOpenFiles()
+  })
 
   // ── 应用内自动更新(electron-updater;检查 → 下载 → 重启安装。mac 仅检测,UI 引导手动下载)──
   ipcMain.handle('updater:check', () => checkAllUpdates())
@@ -3574,6 +3604,14 @@ app.whenReady().then(async () => {
   ipcMain.handle('updater:setBeta', async (_e, on: boolean) => {
     await saveHomeSection('updater', (sec: any) => ({ ...sec, beta: !!on }))
     return { ok: true }
+  })
+  // What's new 弹窗:官网更新动态的已发布快照(拿不到回 null,渲染层退回打包的 CHANGELOG)
+  ipcMain.handle('updater:websiteReleases', () => fetchWebsiteReleases())
+  // 设置是独立浮窗:里面点「What's new」要在主窗弹,不在设置窗里弹
+  ipcMain.on('whatsNew:open', (e) => {
+    if (!isTrustedSender(e)) return
+    showMainWindow()
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('whatsNew:open')
   })
   ipcMain.handle('updater:download', () => downloadUpdate())
   ipcMain.handle('updater:install', async (e) => {
@@ -3637,6 +3675,14 @@ app.whenReady().then(async () => {
     return data // { items }
   })
 
+  ipcMain.handle('market:read', async (e, id: string, resource: string, offset = 0) => {
+    if (!isTrustedSender(e) || !/^[a-zA-Z0-9_-]{1,128}$/.test(id) || (!['comments', 'versions'].includes(resource) && !/^comments\/[a-zA-Z0-9_-]{1,128}\/replies$/.test(resource))) throw new Error('Invalid market request')
+    const base = await marketBase()
+    const r = await fetch(`${base}/api/market/items/${encodeURIComponent(id)}/${resource}?offset=${Math.max(0, Math.min(100000, Number(offset) || 0))}`, { signal: AbortSignal.timeout(15000) })
+    if (!r.ok) throw new Error(`HTTP ${r.status}`)
+    return r.json()
+  })
+
   ipcMain.handle('market:detail', async (_e, id: string) => {
     const base = await marketBase()
     const r = await fetch(`${base}/api/market/items/${encodeURIComponent(id)}`, { headers: { 'User-Agent': MARKET_UA } })
@@ -3646,7 +3692,7 @@ app.whenReady().then(async () => {
 
   // 安装进度推回发起窗口('market:installProgress',同 asr:localProgress 口径):市场住在独立浮窗里,
   // 全局通知在那里不渲染,按钮上的阶段/字节 + 市场自己的提示条是用户唯一看得见的反馈。
-  ipcMain.handle('market:install', async (e, id: string) => marketPluginUpdater.exclusive(async () => {
+  ipcMain.handle('market:install', async (e, id: string, version?: string) => marketPluginUpdater.exclusive(async () => {
     if (!isTrustedSender(e)) throw new Error('Untrusted sender')
     let lastSent = 0
     const report = (phase: 'resolve' | 'download' | 'install', p?: DownloadProgress): void => {
@@ -3656,7 +3702,7 @@ app.whenReady().then(async () => {
       if (!e.sender.isDestroyed()) e.sender.send('market:installProgress', { id, phase, ...p })
     }
     report('resolve')
-    const { info, buf } = await downloadMarketPackage(id, report)
+    const { info, buf } = await downloadMarketPackage(id, report, version)
     report('install')
     // 后端 category 对插件家族可能误标(Forsion 插件标成引擎 'plugin')→ 按包内 manifest 实测重定,
     // 否则装进错误目录后两边加载器都不认。返回 effType 让渲染层走对应的装后流程(引擎重扫 / amadeus 重载)。
@@ -3743,7 +3789,7 @@ app.whenReady().then(async () => {
     if (!dir) throw new Error('非法的卸载目标')
     if (!existsSync(dir)) throw new Error('该项不在已安装目录中')
     // Space 带回配方 id(目录名可 ≠ id):各窗 ribbon 按它撤 —— loadUserSpaces 只增不撤用户 Space,删除一律走 space-removed。
-    const spaceId = type === 'space' ? await readFile(join(dir, 'space.json'), 'utf8').then((s) => JSON.parse(s)?.id, () => undefined) : undefined
+    const spaceId = type === 'space' && /^market-[0-9a-f-]{36}$/.test(slug) ? slug : type === 'space' ? await readFile(join(dir, 'space.json'), 'utf8').then((s) => JSON.parse(s)?.id, () => undefined) : undefined
     await rm(dir, { recursive: true, force: true })
     await marketPluginUpdater.forget(type, slug)
     return { ok: true, path: dir, type, ...(typeof spaceId === 'string' && spaceId ? { id: spaceId } : {}) }

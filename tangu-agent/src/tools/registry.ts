@@ -15,6 +15,7 @@ import { effectiveRemote } from '../services/remoteOrigin.js';
 import { datetimeProvider, calculatorProvider } from './builtin/coreUtils.js';
 import { memoryLogProvider } from './builtin/memoryLog.js';
 import { webSearchProvider } from './builtin/webSearch.js';
+import { marketplaceProvider } from './builtin/marketplace.js';
 import { workspaceFilesProvider } from './builtin/workspaceFiles.js';
 import { skillsProvider } from './builtin/skills.js';
 import { sandboxPythonProvider } from './builtin/sandboxPython.js';
@@ -76,6 +77,8 @@ export type { ToolContext, ToolResult, ToolImpl } from './toolTypes.js';
 const DEFAULT_TOOL_CAPABILITIES: Record<string, ToolCapabilities> = {
   get_datetime: { sideEffect: 'none', parallel: true, defaultTimeoutMs: 5_000 },
   calculator: { sideEffect: 'none', parallel: true, defaultTimeoutMs: 5_000 },
+  search_marketplace: { sideEffect: 'network', parallel: true, defaultTimeoutMs: 30_000 },
+  get_marketplace_plugin: { sideEffect: 'network', parallel: true, defaultTimeoutMs: 30_000 },
   web_search: { sideEffect: 'network', parallel: true, defaultTimeoutMs: 30_000 },
   web_fetch: { sideEffect: 'network', parallel: true, defaultTimeoutMs: 25_000 },
   browser_search: { sideEffect: 'browser', parallel: false, concurrencyKey: 'browser', defaultTimeoutMs: 60_000 },
@@ -202,6 +205,7 @@ registerToolProvider(reviewLoadoutProvider); // 仅 Muse(周期或手聊):review
 registerToolProvider(appSettingsProvider); // host-only 前台 run:app_settings 读 / update_app_settings 改本机 config.json 里开放的那几段(写走控制面审批;全 deferred,append 末尾)
 registerToolProvider(sessionStatusProvider); // both 前台 run:session_status 读本会话的上下文占用 / 已花 token / 步数 / 用时(只读;deferred,append 末尾,快照不变)
 registerToolProvider(forsionAccountProvider); // both 前台 run、且 brain 有账号面(cloud)时:forsion_account 读额度 / 积分 / 套餐 / 用量,forsion_account_action 代办三件(每次都问;全 deferred,append 末尾,快照不变)
+registerToolProvider(marketplaceProvider); // both 前台 run、且 brain 有商店面时:search_marketplace 查商店条目(chat 常驻)、get_marketplace_plugin 按 ID 取详情(chat 按需;append 末尾,保前缀缓存)
 // 插件(表情包/分段等)现为文件夹插件(plugins/),经 activateAllPlugins→ctx.registerPlugin 注册其工具,不在此处。
 
 /** ctx 自带 profile(loop 按 run.app_id 解析)优先;缺省回退本进程装配的 profile。 */

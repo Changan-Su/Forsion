@@ -1,4 +1,5 @@
 import type { CorePluginUpdates } from '../../shared/corePlugins'
+import type { WebsiteRelease } from '../../shared/websiteReleases'
 import type { HostSandboxConfig } from '../../shared/hostSandboxConfig'
 import type { GitPanelStatus, GitRestoreSummary, GitVersion, ProductKind, ProductSummary, ShortcutResult } from '../../shared/products'
 /** standalone /agent 契约的前端类型(与包内 routes/eventBus 一致)。 */
@@ -1133,6 +1134,9 @@ export interface BackendStatusInfo {
   staleDist?: boolean
 }
 
+/** 官网更新动态的一篇(forsion.net/releases;主进程校验过形状)。 */
+export type { WebsiteRelease }
+
 /** 应用内自动更新状态(electron-updater 经 'updater:status' 广播;mac 仅检测)。 */
 export interface UpdaterStatusInfo {
   phase: 'idle' | 'checking' | 'available' | 'not-available' | 'downloading' | 'downloaded' | 'error' | 'unsupported'
@@ -1423,6 +1427,11 @@ declare global {
        *  Win/Linux 读的是 latest.yml 而非 beta.yml,mac 打的是 /releases/latest(按定义排除 prerelease)。 */
       getUpdateBeta?(): Promise<boolean>
       setUpdateBeta?(on: boolean): Promise<{ ok: boolean }>
+      /** What's new 弹窗正文:官网更新动态的已发布快照;拿不到 = null(退回打包的 CHANGELOG)。 */
+      getWebsiteReleases?(): Promise<WebsiteRelease[] | null>
+      /** 请主窗弹出 What's new(设置是独立浮窗,在那里点也要弹在主窗)。 */
+      openWhatsNew?(): void
+      onOpenWhatsNew?(cb: () => void): () => void
       onUpdaterStatus?(cb: (st: UpdaterStatusInfo) => void): () => void
       /** 应用内清空数据(卸载/重置);清完主进程 relaunch。 */
       clearAppData?(opts: { desktop?: boolean; tangu?: boolean }): Promise<{ ok: boolean }>
@@ -1629,12 +1638,13 @@ declare global {
       openPluginsDir?(): Promise<{ ok: boolean }>
       /** Forsion Market:浏览(公开)/ 详情含 README / 安装(下载+按类型解压到 ~/.tangu)/ 已装列表。 */
       marketList?(type?: string): Promise<{ items: MarketCard[] }>
+      marketRead?(id: string, resource: string, offset?: number): Promise<any>
       marketDetail?(id: string): Promise<MarketDetail>
       marketUpdateStatus?(): Promise<import('../../shared/marketPluginUpdates').MarketPluginUpdates>
       marketSetAutoUpdate?(id: string, on: boolean): Promise<import('../../shared/marketPluginUpdates').MarketPluginUpdates>
       marketCheckUpdates?(): Promise<void>
       onMarketUpdateStatus?(cb: (state: import('../../shared/marketPluginUpdates').MarketPluginUpdates) => void): () => void
-      marketInstall?(id: string): Promise<{ ok: boolean; path: string; files: number; type: string; slug: string; id?: string }>
+      marketInstall?(id: string, version?: string): Promise<{ ok: boolean; path: string; files: number; type: string; slug: string; id?: string }>
       /** 安装进度订阅(主进程只推给发起窗口);返回退订函数。 */
       onMarketInstallProgress?(cb: (ev: MarketInstallProgress) => void): () => void
       marketInstalled?(): Promise<Record<string, Array<{ slug: string; version: string | null; id?: string }>>>
@@ -1898,6 +1908,10 @@ export interface AmadeusSyncStatus {
 
 /** 市场卡片(浏览列表)。 */
 export interface MarketCard {
+  description?: string
+  minAppVersion?: string | null
+  maxAppVersion?: string | null
+  platforms?: string[]
   id: string
   type: 'skill' | 'agent' | 'plugin' | 'space' | 'theme' | 'amadeus-plugin'
   source: 'github' | 'zip' | 'npm'

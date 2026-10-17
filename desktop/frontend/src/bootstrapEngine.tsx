@@ -51,6 +51,7 @@ import { ActivityLogView } from './views/ActivityLogView'
 import { ActiveWindowView } from './views/ActiveWindowView'
 import { ActivityDashboardCard, InboxDashboardCard } from './views/DashboardCompactViews'
 import { installDeepLinks } from './deepLinkInstall'
+import { installOpenFiles } from './openFileInstall'
 import { FILE_VIEW_PARAM } from './viewFileMatch'
 import { presentResetCardCeremony } from './components/ResetCardCeremony'
 import type { AccountQuotaView } from './services/accountQuota'
@@ -630,6 +631,8 @@ export function installEngine(): void {
 
   // forsion:// deep link(仅桌面主窗;内部自门控 window.tangu?.onDeepLink,web/mobile 各有通道)。
   installDeepLinks()
+  // 外部文件打开(Finder 打开方式 / 拖到 Dock / 命令行参数;同上仅桌面主窗,内部自门控 window.tangu?.onOpenFile)。
+  installOpenFiles()
 }
 
 /** 默认布局 = 当前活动 Space 的 build()(WorkspaceHost 无保存布局时调用,经 buildDefault prop)。 */

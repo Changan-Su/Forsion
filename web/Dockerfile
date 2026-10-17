@@ -45,6 +45,8 @@ COPY tangu-agent/src/core/sessionEmoji.ts ./tangu-agent/src/core/sessionEmoji.ts
 # 无依赖的纯函数文件(intelligentUi.ts 只引 ./intelligentCards.js)。同上,只拷文件,别把 tangu-agent/ 带进上下文。
 COPY tangu-agent/src/shared/intelligentUi.ts ./tangu-agent/src/shared/intelligentUi.ts
 COPY tangu-agent/src/shared/intelligentCards.ts ./tangu-agent/src/shared/intelligentCards.ts
+COPY tangu-agent/src/shared/marketplace.ts ./tangu-agent/src/shared/marketplace.ts
+COPY tangu-agent/src/shared/pluginAliases.ts ./tangu-agent/src/shared/pluginAliases.ts
 # desktop/shared/product.ts(Unit 分支起共享的产品档案)静态 import ../products/forsion.json;main 上旧的 frontend/product.ts
 # 是把回退档案写死在源码里的,所以以前不需要这一层。三个 json 都拷,products.test.ts 无害。
 COPY desktop/products ./desktop/products

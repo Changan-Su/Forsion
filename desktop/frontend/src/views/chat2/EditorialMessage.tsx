@@ -1,3 +1,4 @@
+import { MarketPluginCards, isMarketplaceTool } from '../../components/MarketPluginCards'
 import { HumanUpdateCard } from '../../components/HumanUpdateCard'
 import { humanChanges } from '../../services/humanCollaboration'
 import { SelfUpdateReceipt } from '../../components/SelfUpdateReceipt'
@@ -65,13 +66,18 @@ import { APPROVAL_UPDATE_OPEN, approvalForCall, parseApprovalUpdate, pickPlanInq
 import { isRemoteApprover, wasDecidedHere } from '../../components/ApprovalCard'
 import { answeredByText } from '../../approvalReason'
 import { refForSession, targetForSession, useSessionHostName } from '../../services/engine/targets'
+import { AttachmentTile } from '../../components/AttachmentTile'
+import { UserFold } from './UserFold'
 export type { TaskLanding }
 import './chat2.css'
+
+const isImageAtt = (a: { mimeType?: string; data?: string }): boolean => !!a.mimeType?.startsWith('image/') && !!a.data
 
 export type OrderedToolPart =
   | { t: 'tools'; events: ToolEvent[] }
   | { t: 'sketch'; item: SketchItem }
   | { t: 'intelligent'; event: ToolEvent }
+  | { t: 'marketplace'; event: ToolEvent }
 
 /** 直播中还没收口的 sketch 调用 → 草稿卡(10-09,对标 ChatGPT Intelligent UI 边生成边渲染):tool_stream 已把参数增量
  *  累进 ev.arguments,这里从半截 JSON 里把 html 解出来。只在**直播**里算(live):历史 / 中断的未完成调用照旧不画幻影卡。 */
@@ -110,6 +116,7 @@ export function partitionToolSegment(events: ToolEvent[], sketches?: SketchItem[
       continue
     }
     tools.push(ev)
+    if (isMarketplaceTool(ev) && ev.done && !ev.isError) { flushTools(); parts.push({ t: 'marketplace', event: ev }); continue }
     const sketch = sketchByCall.get(ev.id) ?? (live ? draftSketchOf(ev) : undefined)
     if (!sketch) continue
     flushTools()
@@ -443,6 +450,9 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
     const quoted = splitLeadingQuotes(lead ? lead.body : msg.content)
     const body = quoted ? quoted.body : lead ? lead.body : msg.content
     const tocTitle = lead || quoted ? (body.trim() || lead?.refs.map((r) => r.name).join(' ') || quoted?.quotes[0] || '') : msg.content
+    const atts = msg.attachments || []
+    // 只发了附件、没写字:不摆一个空气泡
+    const hasBubble = !!(lead || quoted || msg.content.trim())
     const toggleRewind = (): void => {
       // Android:三档改由原生半屏呈现;没有原生宿主时照旧切换 Web 菜单。
       if (!rewindOpen) {
@@ -478,14 +488,19 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
       <div ref={rootRef} className={`t2-userwrap${inlineActions ? ' t2-userwrap--inline' : ''}`} id={`tocmsg-${msg.id}`} data-toc-msg-role="user" data-toc-title={tocTitle}>
         <div className="t2-user-col">
           <div className="t2-username">{name}</div>
+          {atts.length > 0 && (
+            // 附件磁贴(B2)挪到气泡上方、右对齐:图片一行在前,文件一行在后;不参与长提问折叠
+            <div className="t2-user-atts" onContextMenu={onBubbleMenu}>
+              {[atts.filter(isImageAtt), atts.filter((a) => !isImageAtt(a))].map((row, r) => row.length > 0 && (
+                <div key={r} className="t2-user-atts-row">
+                  {row.map((a, i) => <AttachmentTile key={`${a.name}-${i}`} file={a} view />)}
+                </div>
+              ))}
+            </div>
+          )}
+          {hasBubble && (
           <div className="t2-user" onContextMenu={onBubbleMenu}>
-            {!!msg.attachments?.length && (
-              <div className="msg-attach-grid">
-                {msg.attachments.map((a, i) => a.mimeType?.startsWith('image/') && a.data
-                  ? <img key={`${a.name}-${i}`} className="msg-attach-img" src={`data:${a.mimeType};base64,${a.data}`} alt={a.name} title={a.name} />
-                  : <span key={`${a.name}-${i}`} className="msg-attach-file" title={a.name}>📎 {a.name}</span>)}
-              </div>
-            )}
+            <UserFold lines={body.split('\n').length}>
             {lead && (
               <div className="t2-user-refs">
                 {lead.refs.map((r, i) => (
@@ -506,7 +521,9 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
               </div>
             )}
             {lead || quoted ? (body && <WikiText text={body} />) : <WikiText text={msg.content} />}
+            </UserFold>
           </div>
+          )}
           <div className="t2-actions">
             <MsgTime at={msg.timestamp} />
             <button className="t2-iconbtn" title={t('chat.action.copy')} onClick={() => handlers?.onCopy?.(msg.content)}><Copy size={14} /></button>
@@ -596,6 +613,8 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
                 <Fragment key={i}>
                   {parts.map((part, k) => part.t === 'tools'
                     ? <ToolGroup key={`tools-${part.events.map((ev) => ev.id).join('-')}-${k + skip}`} events={part.events} running={msg.status === 'streaming'} approvals={msg.approvals} awaitingAnswer={awaitingAnswer} />
+                    : part.t === 'marketplace'
+                      ? <MarketPluginCards key={`market-${part.event.id}`} event={part.event} />
                     : part.t === 'intelligent'
                       ? <IntelligentUi key={`intelligent-${part.event.id}`} event={part.event} live={streaming} stateScope={runSid ? `${runSid}:${msg.id}` : undefined} onAsk={handlers?.onSuggest} />
                     : <SketchCards key={`sketch-${part.item.callId}`} items={[part.item]} actions={sketchActions} stateScope={runSid ? `${runSid}:${msg.id}` : undefined} onAsk={handlers?.onSuggest} />)}
@@ -679,6 +698,7 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
         {!!msg.displayFiles?.length && fileCtx && (
           <InlineFiles files={msg.displayFiles} cfg={fileCtx.cfg} sessionId={fileCtx.sessionId} execMode={fileCtx.execMode} onOpenPreview={fileCtx.onOpenPreview} />
         )}
+        {(msg.toolEvents || []).filter(ev => isMarketplaceTool(ev) && !inlineToolIds.has(ev.id)).map(ev => <MarketPluginCards key={`market-${ev.id}`} event={ev} />)}
         {trailingIntelligent.map(ev => <IntelligentUi key={ev.id} event={ev} live={streaming} stateScope={runSid ? `${runSid}:${msg.id}` : undefined} onAsk={handlers?.onSuggest} />)}
         {!!trailingSketches.length && <SketchCards items={trailingSketches} actions={sketchActions} stateScope={runSid ? `${runSid}:${msg.id}` : undefined} onAsk={handlers?.onSuggest} />}
         {/* 审批卡在输入框上方的托盘里批(ApprovalTray);流里只留一行指路,已兑现的不留痕 —— 结局看工具卡。

@@ -56,3 +56,13 @@ describe('topoOrder / dependentsOf', () => {
     expect(dependentsOf('other', all)).toEqual([])
   })
 })
+
+it('uses unambiguous original package IDs through activation order and cascading stops', () => {
+  const base = { id: 'market-base', packageId: 'original-base', version: '1.0.0' };
+  const consumer = { id: 'consumer', version: '1.0.0', requiresPlugins: [{ id: 'original-base' }] };
+  expect(unmetDependencies(consumer, [consumer, base], () => true, () => true)).toEqual([]);
+  expect(topoOrder([consumer, base]).map(node => node.id)).toEqual(['market-base', 'consumer']);
+  expect(dependentsOf('market-base', [consumer, base]).map(node => node.id)).toEqual(['consumer']);
+  const other = { ...base, id: 'market-other' };
+  expect(unmetDependencies(consumer, [consumer, base, other], () => true, () => true)[0].reason).toBe('missing');
+});

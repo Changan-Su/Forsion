@@ -22,6 +22,7 @@ import { MarketModal } from '@/components/MarketModal'
 import { PluginOnboardingHost } from '@/components/PluginOnboardingModal'
 import { OnboardingWizard } from '@/components/OnboardingWizard'
 import { NotificationHost } from '@/components/NotificationHost'
+import { WhatsNewHost } from '@/components/WhatsNewDialog'
 import { AmadeusOverlays } from '@/amadeusOverlays'
 import { AchievementToast } from '@/achievements/AchievementToast'
 import { AchievementsModal } from '@/achievements/AchievementsModal'
@@ -209,6 +210,7 @@ export function MobileRoot() {
     settingsTab: s.settingsTab,
     settingsNonce: s.settingsNonce,
     marketOpen: s.marketOpen,
+    marketTarget: s.marketTarget,
     onboarding: s.onboarding,
     setOnboarding: s.setOnboarding,
     achievementsOpen: s.achievementsOpen,
@@ -285,7 +287,7 @@ export function MobileRoot() {
             exit={{ opacity: 0, scale: 0.985 }}
             transition={{ duration: 0.22, ease: [0.2, 0.8, 0.2, 1] }}
           >
-            <MarketModal onClose={() => useApp.getState().closeMarket()} />
+            <MarketModal key={a.marketTarget?.nonce} initialQuery={a.marketTarget?.q} initialItemId={a.marketTarget?.itemId} initialDetailTab={a.marketTarget?.detailTab} onClose={() => useApp.getState().closeMarket()} />
           </motion.div>
         )}
       </AnimatePresence>
@@ -368,6 +370,7 @@ export function MobileRoot() {
 
       {/* 旧 .toast-wrap 已随 appStore.toasts 一起下线;通知统一走 notificationStore + NotificationHost。 */}
       <NotificationHost />
+      <WhatsNewHost />
     </>
   )
 }

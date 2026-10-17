@@ -1,3 +1,4 @@
+import { pluginDependencyIndex } from '../shared/pluginAliases.js';
 import { isHostSandboxRestricted } from '../sandbox/hostSandboxPolicy.js';
 /**
  * 插件发现 + 加载。仅扫描仓库内 `./plugins/`（相对**安装根**解析:`dist/plugins/loader.js`
@@ -60,6 +61,8 @@ export interface PluginRequirement {
 
 export interface DiscoveredPlugin {
   manifest: TanguPluginManifest;
+  /** Original package identity for UUID-scoped marketplace registrations. */
+  packageId?: string;
   dir: string;
   /** 包根 icon.png，经宿主校验后的 data URL；设置页身份图标用。 */
   iconUrl?: string;
@@ -214,6 +217,8 @@ export function discoverPlugins(): DiscoveredPlugin[] {
         console.warn(`[tangu] 插件 ${manifest.id} apiVersion=${manifest.apiVersion} 与宿主 ${TANGU_PLUGIN_API} 不兼容，跳过`);
         continue;
       }
+      const packageId = manifest.id;
+      if (/^market-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(name) && !bundleRoots.includes(root)) manifest.id = name;
       if (seen.has(manifest.id)) {
         console.warn(`[tangu] 插件 ${manifest.id} 重复(${dir})，已被更高优先级目录加载，跳过`);
         continue;
@@ -221,12 +226,14 @@ export function discoverPlugins(): DiscoveredPlugin[] {
       seen.add(manifest.id);
       const entryPath = path.resolve(dir, manifest.entry);
       found.push({
-        manifest, dir, iconUrl: pluginIconDataUrl(dir), entryUrl: pathToFileURL(entryPath).href, bundled: bundleRoots.includes(root),
+        manifest, dir, ...(manifest.id !== packageId ? { packageId } : {}), iconUrl: pluginIconDataUrl(dir), entryUrl: pathToFileURL(entryPath).href, bundled: bundleRoots.includes(root),
         requiresPlugins: sanitizeRequires(manifest.requiresPlugins, manifest.id),
         fingerprint: fingerprintOf(String(manifest.version ?? ''), entryPath, dir),
       });
     }
   }
+  const dependencies = pluginDependencyIndex(found.map(d => ({ id: d.manifest.id, packageId: d.packageId, value: d })));
+  for (const d of found) d.requiresPlugins = d.requiresPlugins.filter(r => r.id !== d.packageId).map(r => ({ ...r, id: dependencies.get(r.id)?.id || r.id }));
   // 确定性:按 id 排序（与 MCP 的字母序纪律一致，保证工具/路由注册顺序稳定）,再按 requiresPlugins 拓扑(无依赖时不变)。
   found.sort((a, b) => (a.manifest.id < b.manifest.id ? -1 : a.manifest.id > b.manifest.id ? 1 : 0));
   return orderByRequires(found);

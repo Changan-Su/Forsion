@@ -25,6 +25,7 @@ import { AchievementToast } from './achievements/AchievementToast'
 import { debugFireToast } from './achievements/store'
 import { forgetUserSpace } from './userSpaces'
 import { NotificationHost } from './components/NotificationHost'
+import { WhatsNewHost } from './components/WhatsNewDialog'
 import { DesktopStatusBar, installStatusBarItems } from './statusbar/items'
 import { UnitRemoteSurface } from './components/UnitSwitcher'
 import { installNotificationWiring } from './stores/notificationWiring'
@@ -104,6 +105,7 @@ export function Root() {
     onboarding: s.onboarding,
     feedbackOpen: s.feedbackOpen,
     marketOpen: s.marketOpen,
+    marketTarget: s.marketTarget,
     closeMarket: s.closeMarket,
     achievementsOpen: s.achievementsOpen,
     cfg: s.cfg,
@@ -236,7 +238,7 @@ export function Root() {
       <AnimatePresence>
         {a.marketOpen && (
         <FloatingPanelFrame key="market" title={a.tr('market.title')} onClose={() => a.closeMarket()}>
-          <MarketModal onClose={() => a.closeMarket()} />
+          <MarketModal key={a.marketTarget?.nonce} initialQuery={a.marketTarget?.q} initialItemId={a.marketTarget?.itemId} initialDetailTab={a.marketTarget?.detailTab} onClose={() => a.closeMarket()} />
         </FloatingPanelFrame>
         )}
       </AnimatePresence>
@@ -257,6 +259,8 @@ export function Root() {
 
       {/* 旁聊(/btw)在 Web 上的居中窄浮层;桌面走原生 Floating Panel,这里恒为空 */}
       <BtwHost />
+
+      <WhatsNewHost />
 
       <AnimatePresence>
         {pluginFloating?.view && <FloatingPanelFrame key={pluginFloating.id} title={pluginFloating.title} onClose={closeWebFloatingPanel}>

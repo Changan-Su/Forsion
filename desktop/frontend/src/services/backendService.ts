@@ -1166,7 +1166,7 @@ export interface InboxClaimRequirements {
 }
 /** 服务端按业务事件投递的定向消息的判别(引擎 routes/inbox.ts 只对 sender_kind='server' 的行解析;目前只有反馈中心)。
  *  阅读面板据此挂反馈线程面板(views/inbox/FeedbackThread.tsx)。移动端 localInbox 直存服务端行,这里可能仍是 JSON 串。 */
-export interface InboxThread {
+export type InboxThread = { kind: 'market-comment'; itemId: string; commentId: string; itemName?: string } | {
   kind: 'feedback'
   ticketId: string
   event?: string

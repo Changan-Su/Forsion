@@ -164,7 +164,7 @@ describe('有宿主接口:多出窗口 / 应用两类 + 分类条', () => {
     expect(onClose).toHaveBeenCalledTimes(1)
   })
 
-  it('写笔记的别名 / 锚点(查询里有 | #)、`@` 提及:不出分类条,也不拿窗口标题去撞', async () => {
+  it('写笔记的别名 / 锚点(查询里有 | #):不出分类条;`@` 提及走自己那套分类,也不拿窗口标题去撞', async () => {
     stubHost(LIST)
     await show('Alpha|季度')
     expect(host.querySelector('.wiki-suggest')).toBeNull() // 从前就不出面板:回车照常
@@ -172,7 +172,7 @@ describe('有宿主接口:多出窗口 / 应用两类 + 分类条', () => {
     await show('Alpha#')
     expect(tabs()).toEqual([])
     await show('', { dates: true, allowCreate: false, onPickRaw: () => {} })
-    expect(tabs()).toEqual([])
+    expect(tabs().map((el) => el.dataset.category)).toEqual(['all', 'date', 'note'])
     expect(rows().some((r) => r.includes('飞书文档'))).toBe(false)
   })
 
@@ -181,5 +181,49 @@ describe('有宿主接口:多出窗口 / 应用两类 + 分类条', () => {
     await show('', { getPageNames: () => [] })
     expect(tabs().map((el) => el.dataset.category)).toEqual(['all', 'window', 'app'])
     expect(rows()).toEqual(['*季度计划 — 飞书文档', 'wikilink.ts — genesis', 'Safari', 'Notes'])
+  })
+})
+
+describe('`@` 提及:全部 / Agent / 日期 / 笔记', () => {
+  const agents = [{ slug: 'muse', name: 'Muse' }]
+  const mention = (query: string, extra: Record<string, unknown> = {}) =>
+    show(query, { dates: true, allowCreate: false, onPickRaw: () => {}, ...extra })
+
+  it('「全部」照旧一列带分组标签;→ 切到某一类只剩那一类、不带标签;←/→ 规则同 [[', async () => {
+    await mention('', { agents, onPickAgent: () => {} }) // 没装引擎探针 → 名册取 agents prop
+    expect(tabs().map((el) => el.dataset.category)).toEqual(['all', 'agent', 'date', 'note'])
+    expect(labels()).toEqual(['交办 Agent', '日期', '链接到页面'])
+    expect(await press('ArrowRight')).toBe(true)
+    expect(selectedTab()).toBe('agent')
+    expect(rows()).toEqual(['*Muse'])
+    expect(labels()).toEqual([])
+    await press('ArrowRight')
+    expect(selectedTab()).toBe('date')
+    expect(rows().length).toBe(3)
+    await press('ArrowRight')
+    expect(selectedTab()).toBe('note')
+    expect(rows()).toEqual(['*Alpha', 'Safari 笔记'])
+    await press('Enter')
+    expect(onPick).toHaveBeenCalledWith('Alpha')
+  })
+
+  it('点胶囊也能切;没有 Agent 就不出那一格;只剩日期一类时不出分类条', async () => {
+    await mention('')
+    expect(tabs().map((el) => el.dataset.category)).toEqual(['all', 'date', 'note'])
+    await act(async () => { tabs()[2].click() })
+    expect(selectedTab()).toBe('note')
+    await mention('', { getPageNames: () => [] })
+    expect(tabs()).toEqual([])
+    expect(labels()).toEqual(['日期'])
+  })
+
+  it('这一类没有匹配的:留着分类条,回车不拦;哪一类都没有 → 面板整个不出现', async () => {
+    await mention('Alp')
+    await press('ArrowRight')
+    expect(selectedTab()).toBe('date')
+    expect(host.querySelector('.slash-empty')).not.toBeNull()
+    expect(await press('Enter')).toBe(false)
+    await mention('zzzzqq')
+    expect(host.querySelector('.wiki-suggest')).toBeNull()
   })
 })

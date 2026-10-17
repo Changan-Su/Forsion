@@ -530,6 +530,73 @@
           "required": []
         }
       }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "search_marketplace",
+        "description": "Search the Forsion store (plugins, skills, themes, agents, spaces) to find or recommend extensions. Results already appear as plugin cards the user installs from; do not redraw them.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "Keywords in any language; empty string browses."
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "plugin",
+                "amadeus-plugin",
+                "skill",
+                "theme",
+                "agent",
+                "space"
+              ],
+              "description": "plugin covers amadeus-plugin (UI/bundle only)."
+            },
+            "tags": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Entries must have all of these."
+            },
+            "include_incompatible": {
+              "type": "boolean",
+              "description": "Also list entries incompatible with this Forsion version or platform."
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 12
+            }
+          },
+          "required": [
+            "query"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "get_marketplace_plugin",
+        "description": "Get a Forsion store entry by the ID from search_marketplace (names can repeat): description, README, tags, version requirements.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id"
+          ],
+          "additionalProperties": false
+        }
+      }
     }
   ],
   "ai-studio:sandbox+skills": [
@@ -1082,6 +1149,73 @@
           "required": []
         }
       }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "search_marketplace",
+        "description": "Search the Forsion store (plugins, skills, themes, agents, spaces) to find or recommend extensions. Results already appear as plugin cards the user installs from; do not redraw them.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "Keywords in any language; empty string browses."
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "plugin",
+                "amadeus-plugin",
+                "skill",
+                "theme",
+                "agent",
+                "space"
+              ],
+              "description": "plugin covers amadeus-plugin (UI/bundle only)."
+            },
+            "tags": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Entries must have all of these."
+            },
+            "include_incompatible": {
+              "type": "boolean",
+              "description": "Also list entries incompatible with this Forsion version or platform."
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 12
+            }
+          },
+          "required": [
+            "query"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "get_marketplace_plugin",
+        "description": "Get a Forsion store entry by the ID from search_marketplace (names can repeat): description, README, tags, version requirements.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id"
+          ],
+          "additionalProperties": false
+        }
+      }
     }
   ],
   "ai-studio:host": [
@@ -1444,6 +1578,73 @@
             }
           },
           "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "search_marketplace",
+        "description": "Search the Forsion store (plugins, skills, themes, agents, spaces) to find or recommend extensions. Results already appear as plugin cards the user installs from; do not redraw them.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "Keywords in any language; empty string browses."
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "plugin",
+                "amadeus-plugin",
+                "skill",
+                "theme",
+                "agent",
+                "space"
+              ],
+              "description": "plugin covers amadeus-plugin (UI/bundle only)."
+            },
+            "tags": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Entries must have all of these."
+            },
+            "include_incompatible": {
+              "type": "boolean",
+              "description": "Also list entries incompatible with this Forsion version or platform."
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 12
+            }
+          },
+          "required": [
+            "query"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "get_marketplace_plugin",
+        "description": "Get a Forsion store entry by the ID from search_marketplace (names can repeat): description, README, tags, version requirements.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id"
+          ],
+          "additionalProperties": false
         }
       }
     }
@@ -1827,6 +2028,73 @@
             }
           },
           "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "search_marketplace",
+        "description": "Search the Forsion store (plugins, skills, themes, agents, spaces) to find or recommend extensions. Results already appear as plugin cards the user installs from; do not redraw them.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "Keywords in any language; empty string browses."
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "plugin",
+                "amadeus-plugin",
+                "skill",
+                "theme",
+                "agent",
+                "space"
+              ],
+              "description": "plugin covers amadeus-plugin (UI/bundle only)."
+            },
+            "tags": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Entries must have all of these."
+            },
+            "include_incompatible": {
+              "type": "boolean",
+              "description": "Also list entries incompatible with this Forsion version or platform."
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 12
+            }
+          },
+          "required": [
+            "query"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "get_marketplace_plugin",
+        "description": "Get a Forsion store entry by the ID from search_marketplace (names can repeat): description, README, tags, version requirements.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id"
+          ],
+          "additionalProperties": false
         }
       }
     }
@@ -2515,6 +2783,73 @@
             "action",
             "scope"
           ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "search_marketplace",
+        "description": "Search the Forsion store (plugins, skills, themes, agents, spaces) to find or recommend extensions. Results already appear as plugin cards the user installs from; do not redraw them.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "Keywords in any language; empty string browses."
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "plugin",
+                "amadeus-plugin",
+                "skill",
+                "theme",
+                "agent",
+                "space"
+              ],
+              "description": "plugin covers amadeus-plugin (UI/bundle only)."
+            },
+            "tags": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Entries must have all of these."
+            },
+            "include_incompatible": {
+              "type": "boolean",
+              "description": "Also list entries incompatible with this Forsion version or platform."
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 12
+            }
+          },
+          "required": [
+            "query"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "get_marketplace_plugin",
+        "description": "Get a Forsion store entry by the ID from search_marketplace (names can repeat): description, README, tags, version requirements.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id"
+          ],
+          "additionalProperties": false
         }
       }
     }
@@ -3222,6 +3557,73 @@
             "action",
             "scope"
           ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "search_marketplace",
+        "description": "Search the Forsion store (plugins, skills, themes, agents, spaces) to find or recommend extensions. Results already appear as plugin cards the user installs from; do not redraw them.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "Keywords in any language; empty string browses."
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "plugin",
+                "amadeus-plugin",
+                "skill",
+                "theme",
+                "agent",
+                "space"
+              ],
+              "description": "plugin covers amadeus-plugin (UI/bundle only)."
+            },
+            "tags": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Entries must have all of these."
+            },
+            "include_incompatible": {
+              "type": "boolean",
+              "description": "Also list entries incompatible with this Forsion version or platform."
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 12
+            }
+          },
+          "required": [
+            "query"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "get_marketplace_plugin",
+        "description": "Get a Forsion store entry by the ID from search_marketplace (names can repeat): description, README, tags, version requirements.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id"
+          ],
+          "additionalProperties": false
         }
       }
     }
@@ -4273,6 +4675,73 @@
             }
           },
           "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "search_marketplace",
+        "description": "Search the Forsion store (plugins, skills, themes, agents, spaces) to find or recommend extensions. Results already appear as plugin cards the user installs from; do not redraw them.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "Keywords in any language; empty string browses."
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "plugin",
+                "amadeus-plugin",
+                "skill",
+                "theme",
+                "agent",
+                "space"
+              ],
+              "description": "plugin covers amadeus-plugin (UI/bundle only)."
+            },
+            "tags": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Entries must have all of these."
+            },
+            "include_incompatible": {
+              "type": "boolean",
+              "description": "Also list entries incompatible with this Forsion version or platform."
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 12
+            }
+          },
+          "required": [
+            "query"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "get_marketplace_plugin",
+        "description": "Get a Forsion store entry by the ID from search_marketplace (names can repeat): description, README, tags, version requirements.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id"
+          ],
+          "additionalProperties": false
         }
       }
     }
@@ -5345,6 +5814,73 @@
           "required": []
         }
       }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "search_marketplace",
+        "description": "Search the Forsion store (plugins, skills, themes, agents, spaces) to find or recommend extensions. Results already appear as plugin cards the user installs from; do not redraw them.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "Keywords in any language; empty string browses."
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "plugin",
+                "amadeus-plugin",
+                "skill",
+                "theme",
+                "agent",
+                "space"
+              ],
+              "description": "plugin covers amadeus-plugin (UI/bundle only)."
+            },
+            "tags": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Entries must have all of these."
+            },
+            "include_incompatible": {
+              "type": "boolean",
+              "description": "Also list entries incompatible with this Forsion version or platform."
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 12
+            }
+          },
+          "required": [
+            "query"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "get_marketplace_plugin",
+        "description": "Get a Forsion store entry by the ID from search_marketplace (names can repeat): description, README, tags, version requirements.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id"
+          ],
+          "additionalProperties": false
+        }
+      }
     }
   ],
   "tangu-none:sandbox": [
@@ -5990,6 +6526,73 @@
             "action",
             "scope"
           ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "search_marketplace",
+        "description": "Search the Forsion store (plugins, skills, themes, agents, spaces) to find or recommend extensions. Results already appear as plugin cards the user installs from; do not redraw them.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "Keywords in any language; empty string browses."
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "plugin",
+                "amadeus-plugin",
+                "skill",
+                "theme",
+                "agent",
+                "space"
+              ],
+              "description": "plugin covers amadeus-plugin (UI/bundle only)."
+            },
+            "tags": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Entries must have all of these."
+            },
+            "include_incompatible": {
+              "type": "boolean",
+              "description": "Also list entries incompatible with this Forsion version or platform."
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 12
+            }
+          },
+          "required": [
+            "query"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "get_marketplace_plugin",
+        "description": "Get a Forsion store entry by the ID from search_marketplace (names can repeat): description, README, tags, version requirements.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id"
+          ],
+          "additionalProperties": false
         }
       }
     }
@@ -6656,6 +7259,73 @@
             "action",
             "scope"
           ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "search_marketplace",
+        "description": "Search the Forsion store (plugins, skills, themes, agents, spaces) to find or recommend extensions. Results already appear as plugin cards the user installs from; do not redraw them.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "Keywords in any language; empty string browses."
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "plugin",
+                "amadeus-plugin",
+                "skill",
+                "theme",
+                "agent",
+                "space"
+              ],
+              "description": "plugin covers amadeus-plugin (UI/bundle only)."
+            },
+            "tags": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Entries must have all of these."
+            },
+            "include_incompatible": {
+              "type": "boolean",
+              "description": "Also list entries incompatible with this Forsion version or platform."
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 12
+            }
+          },
+          "required": [
+            "query"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "get_marketplace_plugin",
+        "description": "Get a Forsion store entry by the ID from search_marketplace (names can repeat): description, README, tags, version requirements.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id"
+          ],
+          "additionalProperties": false
         }
       }
     }
@@ -7707,6 +8377,73 @@
             }
           },
           "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "search_marketplace",
+        "description": "Search the Forsion store (plugins, skills, themes, agents, spaces) to find or recommend extensions. Results already appear as plugin cards the user installs from; do not redraw them.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "Keywords in any language; empty string browses."
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "plugin",
+                "amadeus-plugin",
+                "skill",
+                "theme",
+                "agent",
+                "space"
+              ],
+              "description": "plugin covers amadeus-plugin (UI/bundle only)."
+            },
+            "tags": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Entries must have all of these."
+            },
+            "include_incompatible": {
+              "type": "boolean",
+              "description": "Also list entries incompatible with this Forsion version or platform."
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 12
+            }
+          },
+          "required": [
+            "query"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "get_marketplace_plugin",
+        "description": "Get a Forsion store entry by the ID from search_marketplace (names can repeat): description, README, tags, version requirements.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id"
+          ],
+          "additionalProperties": false
         }
       }
     }
@@ -8777,6 +9514,73 @@
             }
           },
           "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "search_marketplace",
+        "description": "Search the Forsion store (plugins, skills, themes, agents, spaces) to find or recommend extensions. Results already appear as plugin cards the user installs from; do not redraw them.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "Keywords in any language; empty string browses."
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "plugin",
+                "amadeus-plugin",
+                "skill",
+                "theme",
+                "agent",
+                "space"
+              ],
+              "description": "plugin covers amadeus-plugin (UI/bundle only)."
+            },
+            "tags": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Entries must have all of these."
+            },
+            "include_incompatible": {
+              "type": "boolean",
+              "description": "Also list entries incompatible with this Forsion version or platform."
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 12
+            }
+          },
+          "required": [
+            "query"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "get_marketplace_plugin",
+        "description": "Get a Forsion store entry by the ID from search_marketplace (names can repeat): description, README, tags, version requirements.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id"
+          ],
+          "additionalProperties": false
         }
       }
     }
@@ -9888,6 +10692,73 @@
           "required": []
         }
       }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "search_marketplace",
+        "description": "Search the Forsion store (plugins, skills, themes, agents, spaces) to find or recommend extensions. Results already appear as plugin cards the user installs from; do not redraw them.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "Keywords in any language; empty string browses."
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "plugin",
+                "amadeus-plugin",
+                "skill",
+                "theme",
+                "agent",
+                "space"
+              ],
+              "description": "plugin covers amadeus-plugin (UI/bundle only)."
+            },
+            "tags": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Entries must have all of these."
+            },
+            "include_incompatible": {
+              "type": "boolean",
+              "description": "Also list entries incompatible with this Forsion version or platform."
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 12
+            }
+          },
+          "required": [
+            "query"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "get_marketplace_plugin",
+        "description": "Get a Forsion store entry by the ID from search_marketplace (names can repeat): description, README, tags, version requirements.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id"
+          ],
+          "additionalProperties": false
+        }
+      }
     }
   ],
   "ai-studio:sandbox+chat": [
@@ -10137,6 +11008,54 @@
           "required": [
             "names"
           ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "search_marketplace",
+        "description": "Search the Forsion store (plugins, skills, themes, agents, spaces) to find or recommend extensions. Results already appear as plugin cards the user installs from; do not redraw them.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "Keywords in any language; empty string browses."
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "plugin",
+                "amadeus-plugin",
+                "skill",
+                "theme",
+                "agent",
+                "space"
+              ],
+              "description": "plugin covers amadeus-plugin (UI/bundle only)."
+            },
+            "tags": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Entries must have all of these."
+            },
+            "include_incompatible": {
+              "type": "boolean",
+              "description": "Also list entries incompatible with this Forsion version or platform."
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 12
+            }
+          },
+          "required": [
+            "query"
+          ],
+          "additionalProperties": false
         }
       }
     }
@@ -10695,6 +11614,73 @@
           ]
         }
       }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "search_marketplace",
+        "description": "Search the Forsion store (plugins, skills, themes, agents, spaces) to find or recommend extensions. Results already appear as plugin cards the user installs from; do not redraw them.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "Keywords in any language; empty string browses."
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "plugin",
+                "amadeus-plugin",
+                "skill",
+                "theme",
+                "agent",
+                "space"
+              ],
+              "description": "plugin covers amadeus-plugin (UI/bundle only)."
+            },
+            "tags": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Entries must have all of these."
+            },
+            "include_incompatible": {
+              "type": "boolean",
+              "description": "Also list entries incompatible with this Forsion version or platform."
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 12
+            }
+          },
+          "required": [
+            "query"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "get_marketplace_plugin",
+        "description": "Get a Forsion store entry by the ID from search_marketplace (names can repeat): description, README, tags, version requirements.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id"
+          ],
+          "additionalProperties": false
+        }
+      }
     }
   ],
   "ai-studio:sandbox+gui+chat": [
@@ -10967,6 +11953,54 @@
           "required": [
             "html"
           ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "search_marketplace",
+        "description": "Search the Forsion store (plugins, skills, themes, agents, spaces) to find or recommend extensions. Results already appear as plugin cards the user installs from; do not redraw them.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "Keywords in any language; empty string browses."
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "plugin",
+                "amadeus-plugin",
+                "skill",
+                "theme",
+                "agent",
+                "space"
+              ],
+              "description": "plugin covers amadeus-plugin (UI/bundle only)."
+            },
+            "tags": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Entries must have all of these."
+            },
+            "include_incompatible": {
+              "type": "boolean",
+              "description": "Also list entries incompatible with this Forsion version or platform."
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 12
+            }
+          },
+          "required": [
+            "query"
+          ],
+          "additionalProperties": false
         }
       }
     }

@@ -1758,10 +1758,14 @@ html.dark .amx-cal-chip-ev, html.dark .amx-cal-event {
 .amx-todo-gname { font-weight: 600; font-size: var(--ui-font-caption, 11px); flex: 1; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .amx-todo-gcount { font-size: var(--ui-font-caption, 11px); color: var(--text-muted); font-variant-numeric: tabular-nums; }
 
-/* 未排期桶内的来源小标题(`笔记 › 标题`) */
-.amx-todo-src { display: flex; align-items: center; gap: 6px; padding: 5px 12px 2px 22px; font-size: var(--ui-font-caption, 11px); color: var(--text-muted); }
-.amx-todo-src { white-space: nowrap; overflow: hidden; }
-.amx-todo-srcn { margin-left: auto; flex: none; font-variant-numeric: tabular-nums; }
+/* 来源(不止一个来源时才有):宽档 = 色点 + 表名 / 文件图标 + 笔记名,单独一列;窄档 = 日期前一个色点。
+   色点用日历列表里那张表的颜色(colorForDb),正文任务画文件图标不用色。 */
+.amx-todo-srctag { flex: none; max-width: 140px; display: inline-flex; align-items: center; gap: 5px; color: var(--text-faint, var(--text-muted)); font-size: var(--ui-font-caption, 11px); white-space: nowrap; overflow: hidden; }
+.amx-todo-srcname { overflow: hidden; text-overflow: ellipsis; }
+.amx-todo-srcic { flex: none; color: var(--text-faint, var(--text-muted)); }
+.amx-todo-dot { display: inline-block; flex: none; width: 7px; height: 7px; border-radius: 50%; }
+.amx-todo-menudot { margin: 0 3.5px; }
+.amx-todo-menun { color: var(--text-muted); font-size: var(--ui-font-meta, 12px); font-variant-numeric: tabular-nums; }
 
 .amx-todo-list { list-style: none; margin: 0; padding: 0; }
 .amx-todo-item { display: flex; align-items: center; gap: 8px; min-height: 30px; padding: 2px 12px 2px 22px; }
@@ -1773,8 +1777,13 @@ html.dark .amx-cal-chip-ev, html.dark .amx-cal-event {
 .amx-todo-box { flex: none; width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; }
 .amx-todo-box::before { content: ''; width: 14px; height: 14px; border: 1px solid var(--border-strong, var(--border)); border-radius: 4px; }
 .amx-todo-box.on::before { background: var(--text-faint, var(--text-muted)); border-color: transparent; }
-.amx-todo-main { flex: 1; min-width: 0; display: flex; flex-direction: row; align-items: center; gap: 8px; border: none; background: transparent; color: inherit; font: inherit; text-align: left; padding: 0; cursor: pointer; }
-.amx-todo-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--ui-font-meta, 12px); }
+/* 按钮占满行里剩下的宽度(整行好点),标题只有文字那么宽:浮卡贴着标题文字出现,不按整行算(10-17)。
+   焦点不画横贯整行的描边框,改成整行一档底色(↑↓ 在行间移的就是它;选中或输入只留一层反馈)。 */
+.amx-todo-main { flex: 1; min-width: 0; display: flex; flex-direction: row; align-items: center; gap: 6px; border: none; background: transparent; color: inherit; font: inherit; text-align: left; padding: 0; cursor: pointer; }
+.amx-todo-main:focus-visible { outline: none; }
+.amx-todo-item:has(.amx-todo-main:focus-visible) { background: var(--overlay-medium, var(--bg-hover)); }
+.amx-todo-name { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--ui-font-meta, 12px); }
+.amx-todo-duecell { flex: none; display: inline-flex; align-items: center; justify-content: flex-end; gap: 6px; }
 .amx-todo-name.done { color: var(--text-faint, var(--text-muted)); text-decoration: line-through; }
 /* 日期语义色:只有异常态着色 —— 逾期 danger、今天 accent、其余一律 muted。
    靠「绝大多数行不着色」让少数红色真的跳出来;只上文字色,不铺底色不加描边。 */
@@ -1800,6 +1809,35 @@ html.dark .amx-cal-chip-ev, html.dark .amx-cal-event {
 .amx-todo-item[draggable="true"] { cursor: grab; }
 .amx-todo-item.dragging { opacity: 0.35; }
 .amx-todo-addinput::placeholder { color: var(--text-faint, var(--text-muted)); }
+
+/* 2026-10-17 待办视图方案 A(docs/ToBeImproved/待办视图方案_2026-10-17/):宽窄两档按视图自身宽度切(≥ 480px = 宽,
+   TodoListView 的 useWide 挂 .is-wide)。宽档 = 主区标签 / 宽的侧栏:列表最宽 720px 居中(DESIGN「宽主区保留阅读宽度上限」),
+   顶栏分段 + 清单菜单,来源一列、日期定宽右对齐。窄档维持侧栏那套密度(日历右栏、Mini 窗、手机抽屉)。 */
+.amx-todo-grow { flex: 1; }
+.amx-todo-seg em { font-style: normal; margin-left: 5px; opacity: 0.6; font-variant-numeric: tabular-nums; }
+.amx-todo-target { flex: none; display: inline-flex; }
+.amx-todo-addhint { margin: 2px 10px 8px; padding: 6px 8px; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); }
+.amx-todo-addhint code { padding: 1px 4px; border-radius: 4px; background: var(--bg-hover, var(--overlay-light)); font-size: var(--ui-font-caption, 11px); white-space: nowrap; }
+.amx-todo-rest { padding: 8px 12px; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); }
+.amx-todo-link { border: none; background: none; padding: 0; font: inherit; color: var(--text); cursor: pointer; text-decoration: underline; text-underline-offset: 2px; text-decoration-color: var(--border-strong, var(--border)); }
+/* 拖到组头改日期:能放的组头整块换一档底色,不画虚线框(DESIGN §6) */
+.amx-todo-ghead.is-drop { background: var(--accent-light, var(--bg-hover)); color: var(--text); }
+.amx-todo.is-wide .amx-todo-col { max-width: 720px; margin: 0 auto; padding: 22px 24px 40px; }
+.amx-todo.is-wide .amx-todo-bar { gap: 8px; padding: 0 10px 12px; }
+.amx-todo.is-wide .amx-todo-title { font-size: var(--ui-font-title, 16px); }
+.amx-todo.is-wide .amx-todo-total { font-size: var(--ui-font-meta, 12px); }
+.amx-todo.is-wide .amx-todo-add { margin: 0 0 14px; padding: 7px 10px; }
+.amx-todo.is-wide .amx-todo-addinput { font-size: var(--ui-font-body, 13px); }
+.amx-todo.is-wide .amx-todo-addhint { margin: 0 0 14px; padding: 7px 10px; }
+.amx-todo.is-wide .amx-todo-group + .amx-todo-group { margin-top: 6px; }
+.amx-todo.is-wide .amx-todo-ghead { padding: 6px 10px; border-radius: var(--radius-sm, 6px); }
+.amx-todo.is-wide .amx-todo-gname, .amx-todo.is-wide .amx-todo-gcount { font-size: var(--ui-font-meta, 12px); }
+.amx-todo.is-wide .amx-todo-item { min-height: 34px; gap: 10px; padding: 0 10px 0 14px; border-radius: var(--radius-sm, 6px); }
+.amx-todo.is-wide .amx-todo-name { font-size: var(--ui-font-body, 13px); }
+.amx-todo.is-wide .amx-todo-duecell { width: 92px; }
+.amx-todo.is-wide .amx-todo-rest { padding: 10px 14px; }
+/* 悬停一行:日期变成小胶囊(能点、能拖) */
+.amx-todo.is-wide .amx-todo-item:hover .amx-todo-due { padding: 2px 7px; margin-right: -7px; border-radius: var(--radius-pill, 999px); background: var(--bg-card, var(--bg)); outline: 0.5px solid var(--border); }
 
 @container (max-width: 650px) {
   .amx-cal-bar { gap: 6px; padding-inline: 8px; }
@@ -2094,15 +2132,17 @@ html.dark .amx-cal-chip-ev, html.dark .amx-cal-event {
 .dash-banner button:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.12)); }
 
 /* ── 只读实例(公开分享页 /share/<token>,UnifiedPage readOnly,2026-09-07)──
- * 静态标题 / 只读属性行沿用编辑态的类名取字号与间距,只去掉交互态;只读舞台的指针语义 = 抓手。 */
+ * 静态标题 / 只读属性行沿用编辑态的类名取字号与间距,只去掉交互态;只读舞台的指针语义 = 抓手。
+ * 抓手只给画布开着的舞台:没开画布(.amx-stage-off,收件箱的信 / 锁定笔记 / 分享页的普通文档)时正文照常 I 型光标、能选字
+ * —— 原先不分开不开都给 grab,收件箱整片正文显示成抓手(10-17 用户实报)。 */
 .amx-title-ro .amx-title-bigicon { cursor: default; }
 .amx-title-ro .amx-title-bigicon:hover { background: transparent; }
 .amx-title-static { display: block; white-space: pre-wrap; overflow-wrap: anywhere; }
 .amx-prop-row-ro .amx-prop-key { cursor: default; }
 .amx-prop-row-ro .amx-prop-key:hover, .amx-prop-row-ro .amx-prop-input:hover { background: transparent; }
 .amx-prop-row-ro .amx-prop-input { display: inline-flex; align-items: center; min-height: 24px; }
-.amx-stage-ro .amx-stage-inner { cursor: grab; }
-.amx-stage-ro .amx-stage-inner:active { cursor: grabbing; }
+.amx-stage-ro:not(.amx-stage-off) .amx-stage-inner { cursor: grab; }
+.amx-stage-ro:not(.amx-stage-off) .amx-stage-inner:active { cursor: grabbing; }
 
 /* ── 写盘状态条(UnifiedPage,评审 D-04 2026-09-27):写失败「未保存」/ 上次没写成的草稿。
  * 外观就是全局 `.mk-notice` 提示条(base.css);这里只把设置页那套宽度(calc(100% - 76px) 居中)

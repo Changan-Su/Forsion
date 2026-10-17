@@ -27,7 +27,10 @@ export async function readThemesDir(dir: string): Promise<DiskTheme[]> {
     try {
       const manifest = JSON.parse(await readFile(join(dir, e.name, 'theme.json'), 'utf8'))
       if (!manifest || typeof manifest !== 'object') continue
-      const css = await readFile(join(dir, e.name, 'theme.css'), 'utf8')
+      let css = await readFile(join(dir, e.name, 'theme.css'), 'utf8')
+      if (/^market-[0-9a-f-]{36}$/.test(e.name) && typeof manifest.id === 'string' && isValidThemeId(manifest.id)) {
+        for (const quote of ['\"', "'", '']) css = css.split(`[data-theme=${quote}${manifest.id}${quote}]`).join(`[data-theme=\"${e.name}\"]`)
+      }
       out.push({ id: e.name, manifest: { ...manifest, id: e.name }, css })
     } catch (err) {
       console.warn(`[themes] 跳过无效主题 "${e.name}":`, (err as Error)?.message)

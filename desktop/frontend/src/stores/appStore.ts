@@ -1037,6 +1037,7 @@ export interface AppState {
   feedbackOpen: boolean
   feedbackDraft: string
   marketOpen: boolean
+  marketTarget: { itemId?: string; detailTab?: string; q?: string; nonce?: number } | null
   achievementsOpen: boolean
   onboarding: boolean
   /** 这次引导是版本更新后弹的短引导(只在开机的版本检查里置上;手动重开、首启都是完整引导)。 */
@@ -1203,7 +1204,7 @@ export interface AppState {
    *  target(P1-K6 S2):哪台引擎回的 401;unit = 先复检账号,账号有效只记那台「引擎鉴权」,绝不重启本机引擎。 */
   handleAuthExpired(target?: TargetKey): void
   /** query = 打开时预填的搜索词(插件详情页「在市场中查找」前置插件)。 */
-  openMarket(query?: string): void
+  openMarket(query?: string, target?: { itemId?: string; detailTab?: string; nonce?: number }): void
   closeMarket(): void
   openAchievements(): void
   closeAchievements(): void
@@ -1342,6 +1343,7 @@ export const useApp = create<AppState>((set, get) => ({
   feedbackOpen: false,
   feedbackDraft: '',
   marketOpen: false,
+  marketTarget: null,
   achievementsOpen: false,
   onboarding: false,
   onboardingUpdate: false,
@@ -4012,12 +4014,12 @@ export const useApp = create<AppState>((set, get) => ({
     set((s) => ({ settingsTab: tab ?? null, settingsSkillKey: skillKey ?? null, settingsOpen: true, settingsNonce: nonce ?? s.settingsNonce }))
   },
 
-  openMarket: (query) => {
+  openMarket: (query, target) => {
     if (window.tangu?.openFloatingPanel) {
-      void window.tangu.openFloatingPanel({ id: 'market', title: get().tr('market.title'), builtin: 'market', ...(query ? { params: { q: query } } : {}) })
+      void window.tangu.openFloatingPanel({ id: 'market', title: get().tr('market.title'), builtin: 'market', params: { ...(query ? { q: query } : {}), ...target } })
       return
     }
-    set({ marketOpen: true })
+    set({ marketOpen: true, marketTarget: { ...(query ? { q: query } : {}), ...target } })
   },
 
   openAchievements: () => {
@@ -4030,7 +4032,7 @@ export const useApp = create<AppState>((set, get) => ({
   closeAchievements: () => set({ achievementsOpen: false }),
 
   closeMarket: () => {
-    set({ marketOpen: false })
+    set({ marketOpen: false, marketTarget: null })
     // 装了新技能/智能体/插件 → 刷新本地 Agent 目录 + 技能列表(让 /skill 选择器即时反映新技能,
     // 无需手动刷新桌面;system prompt 的技能段由托管后端每轮按需重扫,已即时生效)。
     get().refreshAgents()

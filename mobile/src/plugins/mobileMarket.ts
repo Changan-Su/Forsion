@@ -1,3 +1,4 @@
+import { assertMarketplaceRequirements } from '../../../desktop/shared/marketplace'
 /**
  * Android App 的应用市场数据层(2026-10-02):`window.tangu.market*` 六件,请求 / 返回形状**逐字对齐**桌面主进程
  * (desktop/electron/main.ts 的 market:list / detail / install / installed / uninstall + installProgress 事件),
@@ -55,6 +56,7 @@ export type MarketDownload = (url: string, opts: { maxBytes: number; onProgress:
 
 export interface MobileMarketDeps {
   fs: PluginFs
+  appVersion?: () => string
   /** Forsion 云端 API 基址(含 /api,无尾斜杠;= window.tangu.getConfig().cloudApiBase)。 */
   cloudApiBase: () => string
   fetch: (input: string, init?: RequestInit) => Promise<Response>
@@ -76,8 +78,9 @@ export interface MobileMarketDeps {
 export interface MobileMarket {
   marketTypes: readonly string[]
   marketList(type?: string): Promise<{ items: Array<Record<string, unknown>> }>
+  marketRead(id: string, resource: string, offset?: number): Promise<any>
   marketDetail(id: string): Promise<Record<string, unknown>>
-  marketInstall(id: string): Promise<{ ok: boolean; path: string; files: number; type: string; slug: string; id?: string }>
+  marketInstall(id: string, version?: string): Promise<{ ok: boolean; path: string; files: number; type: string; slug: string; id?: string }>
   onMarketInstallProgress(cb: (ev: MarketInstallProgress) => void): () => void
   marketInstalled(): Promise<Record<string, Array<{ slug: string; version: string | null; id?: string }>>>
   marketUninstall(type: string, slug: string): Promise<{ ok: boolean; path: string; type: string; id?: string }>
@@ -280,6 +283,11 @@ export function createMobileMarket(deps: MobileMarketDeps): MobileMarket {
       return { ...data, items: data?.items || [] }
     },
 
+    async marketRead(id, resource, offset = 0) {
+      if (!['comments', 'versions'].includes(resource) && !/^comments\/[a-zA-Z0-9_-]{1,128}\/replies$/.test(resource)) throw new Error('Invalid marketplace resource')
+      return getJson(`${base()}/market/items/${encodeURIComponent(id)}/${resource}?offset=${Math.max(0, offset)}`)
+    },
+
     async marketDetail(id) {
       const b = base()
       return absIcon(b, (await getJson(`${b}/market/items/${encodeURIComponent(id)}`)) as Record<string, unknown>)
@@ -290,7 +298,7 @@ export function createMobileMarket(deps: MobileMarketDeps): MobileMarket {
       return () => { listeners.delete(cb) }
     },
 
-    async marketInstall(id) {
+    async marketInstall(id, version) {
       emit({ id, phase: 'resolve' })
       const b = base()
       // 错误消息前缀 `resolve: ` 是 marketService.unwrapIpcError 认的机器码(卡在 Forsion 服务器这一步 → 不附 GitHub 网络指引)。
@@ -298,7 +306,7 @@ export function createMobileMarket(deps: MobileMarketDeps): MobileMarket {
       const timer = setTimeout(() => ac.abort(), 30_000)
       let res: Response
       try {
-        res = await deps.fetch(`${b}/market/items/${encodeURIComponent(id)}/install`, { signal: ac.signal })
+        res = await deps.fetch(`${b}/market/items/${encodeURIComponent(id)}/install?identity=uuid-v1&platform=android&appVersion=${encodeURIComponent(deps.appVersion?.() || '')}${version ? `&version=${encodeURIComponent(version)}` : ''}`, { signal: ac.signal })
       } catch (e) {
         throw new Error(`resolve: ${(e as Error)?.name === 'AbortError' ? 'timeout' : (e as Error)?.message || String(e)}`)
       } finally {
@@ -310,6 +318,7 @@ export function createMobileMarket(deps: MobileMarketDeps): MobileMarket {
         || !allowedUrl(info.downloadUrl)) {
         throw new Error('resolve: invalid target')
       }
+      if (deps.appVersion) assertMarketplaceRequirements(info as any, deps.appVersion(), 'android')
       const slug = info.installSlug
       // 非插件家族(技能 / Agent / 主题 / Space):不用下载就知道手机装不了。插件家族要下载后按 manifest 纠偏才知道。
       if (info.type !== 'plugin' && info.type !== 'amadeus-plugin') throw new MarketUserError(deps.t('mobilemarket.desktopOnlyType'))
@@ -356,13 +365,14 @@ export function createMobileMarket(deps: MobileMarketDeps): MobileMarket {
         manifest = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : null
       } catch { /* 下面统一报 manifest 无效 */ }
       if (!manifest || !manifestFile) throw new MarketUserError(deps.t('mobilemarket.badManifest'))
+      if (deps.appVersion) assertMarketplaceRequirements(manifest as any, deps.appVersion(), 'android')
       if (manifest.isDesktopOnly === true) throw new MarketUserError(deps.t('mobilemarket.desktopOnlyPlugin'))
       const needsApp = requiredDesktopApp(manifest)
       if (needsApp) throw new MarketUserError(deps.t('mobilemarket.requiresDesktopApp', { app: KNOWN_APPS[needsApp]?.name ?? needsApp }))
       const pluginId = effectivePluginId(slug, manifest.id)
       if (!pluginId) throw new MarketUserError(deps.t('mobilemarket.badManifest'))
       const reserved = new Set([...(await deps.reservedIds?.() ?? [])])
-      if (reserved.has(pluginId) || reserved.has(slug)) throw new MarketUserError(deps.t('mobilemarket.builtin'))
+      if (reserved.has(pluginId) || reserved.has(slug) || reserved.has(String(manifest.id))) throw new MarketUserError(deps.t('mobilemarket.builtin'))
       // 入口文件必须在包里:没有它 listPlugins 会整个跳过这个插件 —— 「装成功了却哪儿都找不到」,还白白顶掉能用的旧版。
       const mainRel = mainRelOf(manifest.main)
       if (!mainRel || !files.some((f) => f.rel === mainRel)) {

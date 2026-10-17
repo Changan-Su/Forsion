@@ -5,7 +5,8 @@
  * (bundle id com.github.Electron),任何一个实例崩过或被强杀后,之后每次启动都会在 ready 之前弹「重新打开窗口」模态框
  * (NSPersistentUIRestorer → NSAlert runModal)。台架窗口不在前台,没人点,主进程就卡死,表现为 firstWindow 超时、
  * app.isReady() 一直 false。这是 Cocoa 参数域,只作用于本进程,不改系统设置。
- * 必须排在应用路径之后(放在前面 `YES` 会被当成应用路径),所以一律追加到 args 末尾。主进程读 argv 只认 forsion:// 链接。
+ * 必须排在应用路径之后(放在前面 `YES` 会被当成应用路径),所以一律追加到 args 末尾。主进程读 argv 只认 forsion:// 链接
+ * 和存在的文件(deepLink.ts filesFromArgv;`YES` 按 cwd 解析不到文件,不会被当成要打开的文件)。
  * electron/harnessLaunch.test.ts 钉住:scripts/ 里别的脚本不许再直接用 playwright 的 `_electron`。
  *
  * 默认工作区跟着临时 TANGU_HOME 走(`workspaceEnv`)。主进程的默认工作区按系统用户目录算(dev = ~/Forsion-Dev,
