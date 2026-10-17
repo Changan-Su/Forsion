@@ -110,6 +110,10 @@ When a plugin's bundled Space is missing from the ribbon, check the plugin's car
 
 An engine plugin tool declares whether the user is asked first with `capabilities.approval`. Leave it out for read-only tools (never asked). `'command'` puts the tool in the same class as running a command: asked every time in "ask me" mode, and no longer asked once the user picks "always allow" or turns on full access. `'always'` means the user confirms every single call on the approval card: full access, "always allow" and the user's own allow rules do not skip it, chat and cloud sessions ask as well, and automations, Muse background runs and remote sessions are refused outright. Use `'always'` for actions that spend something the user owns or send something out on their behalf. Split reading and writing into two tool names and declare it only on the writing one. The card shows the arguments of that call, so keep one call to one action.
 
+引擎插件的工具可以在执行时调用 `ctx.presentDesk?.({ views: [{ type: 'view', view: 'plugin:<插件 id>:<视图 id>' }], size: 'half' })`,把自己的视图摆上 Agent Desk,和模型调 `desk_present` 效果一样,但不依赖模型记得去调。每轮只摆一次,用 `ctx.runId` 记(没有时用 `ctx.sessionId`);视图不带 `name` 时宿主用注册时的视图标题。没有 Desk 的环境里 `presentDesk` 不存在,所以用可选链。用户关掉 Desk 后,到下一条用户消息之前不会再弹出来。
+
+An engine plugin tool can call `ctx.presentDesk?.({ views: [{ type: 'view', view: 'plugin:<plugin id>:<view id>' }], size: 'half' })` while it runs to put one of its views on the Agent Desk. It does the same as the model calling `desk_present`, without relying on the model to remember. Present once per run and track it with `ctx.runId` (fall back to `ctx.sessionId`). A view without a `name` gets the title it was registered with. `presentDesk` is missing where there is no Desk, so call it with optional chaining. After the user closes the Desk it stays closed until their next message.
+
 ## 下一步
 
 - [商店](market.md) — 找现成的插件
