@@ -169,6 +169,7 @@
     "e2e:pdfcite": "node scripts/pdf-citation.e2e.cjs",
     "check:hlband": "node scripts/pdf-highlight-geometry.check.cjs",
     "e2e:filecite": "node scripts/file-citation.e2e.cjs",
+    "e2e:openfile": "node scripts/open-external-file.e2e.cjs",
     "e2e:pathgonefiles": "node scripts/vault-pathgone-files.e2e.cjs",
     "e2e:ftoverride": "node scripts/filetype-override.e2e.cjs",
     "e2e:pathgoneunmounted": "node scripts/vault-pathgone-unmounted.e2e.cjs",

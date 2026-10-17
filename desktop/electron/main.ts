@@ -107,7 +107,7 @@ import { registerPtyIpc } from './pty'
 import { registerAssetSchemes as registerAmadeusAssetSchemes, registerAssetProtocol as registerAmadeusAssetProtocol } from './amadeus/assetProtocol'
 import { nearestEdge, collapsedBounds, expandedBounds, visibleRect, pointInRect, growRect, resizeFromEdge, type Rect, type Edge } from './windowGeometry'
 import { applyWindowMaterial, parseWindowMaterialRequest } from './windowMaterial'
-import { isForsionUrl, pushDeepLink, drainDeepLinks } from './deepLink'
+import { isForsionUrl, pushDeepLink, drainDeepLinks, filesFromArgv, pushOpenFile, drainOpenFiles } from './deepLink'
 
 /** ~/.tangu(与包内 core/tanguHome.ts 同约定;TANGU_HOME 可整体重定向)。 */
 setDevMode(!app.isPackaged) // dev 数据目录 ~/.forsion-dev,与正式版隔离(模块装载即定,先于一切路径解析)
@@ -124,9 +124,10 @@ const themesDir = (): string => join(tanguHomeDir(), 'themes')
 
 // 单实例锁:托盘常驻语义下,再次启动只唤起已开的窗口后立即退出(app.exit 同步,不再往下建二号窗)。
 if (!app.requestSingleInstanceLock()) app.exit(0)
-app.on('second-instance', (_e, argv) => {
+app.on('second-instance', (_e, argv, cwd) => {
   showMainWindow()
   for (const a of argv) if (isForsionUrl(a)) deliverDeepLink(a) // win/linux:二启的 forsion:// 在 argv 里
+  for (const f of filesFromArgv(argv.slice(1), cwd)) deliverOpenFile(f) // win/linux:已开着时双击文件
 })
 
 // ── forsion:// deep link(入站;与出站外链回投的 app:open-url 无关)────────────────────────
@@ -147,6 +148,22 @@ function deliverDeepLink(url: string): void {
 app.on('open-url', (e, url) => { e.preventDefault(); if (isForsionUrl(url)) deliverDeepLink(url) })
 // win/linux 首启:URL 直接躺在 process.argv(mac 走 open-url,不经 argv)。
 for (const a of process.argv.slice(1)) if (isForsionUrl(a)) pushDeepLink(a)
+
+// ── 外部文件打开(文件关联见 electron-builder.config.cjs 的 fileAssociations)──────────────────
+// 渲染层落点:库外 → wsfile 临时标签页(预览 / .md 就地编辑写回,不导入笔记库);本地库内 → Amadeus 原生视图。
+// 只推一声「有文件」,文件本身一律留在队列里等渲染层来拉:不像 deep link 那样记「渲染层已就绪」——
+// did-start-loading 对页内 iframe 的加载也会触发(Codex 评审),靠它翻回未就绪会让之后的打开全卡在队列里;
+// 推给还没装监听 / 正在重载的页,丢的只是这一声,新页装载时自己 drain。
+function deliverOpenFile(p: string): void {
+  pushOpenFile(p)
+  if (!app.isReady()) return // 冷启动:渲染层起来后自会 drain
+  showMainWindow()
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('app:open-file')
+}
+// mac:Finder 双击 / 打开方式 / 拖到 Dock 图标。同 open-url,必须在 whenReady 之前挂上,冷启动才接得到。
+app.on('open-file', (e, p) => { e.preventDefault(); deliverOpenFile(p) })
+// win/linux 首启:文件路径在 argv 里(argv[0] 是可执行文件本身,切掉)。
+for (const f of filesFromArgv(process.argv.slice(1), process.cwd())) pushOpenFile(f)
 
 /**
  * 加载 ~/.tangu/.env 进 process.env(不覆盖真实环境;与包内 tanguHome.loadTanguEnv 同语义)。
@@ -3564,6 +3581,10 @@ app.whenReady().then(async () => {
     if (!isTrustedSender(e) || e.sender !== mainWindow?.webContents) return []
     deepLinkReady = true
     return drainDeepLinks()
+  })
+  ipcMain.handle('openfile:drain', (e) => {
+    if (!isTrustedSender(e) || e.sender !== mainWindow?.webContents) return []
+    return drainOpenFiles()
   })
 
   // ── 应用内自动更新(electron-updater;检查 → 下载 → 重启安装。mac 仅检测,UI 引导手动下载)──

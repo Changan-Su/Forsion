@@ -49,6 +49,15 @@ module.exports = {
   // 写注册表(NSIS 装机即生效);linux AppImage 无自动 .desktop 安装,用户需自行集成(appimaged 等)——
   // electron-builder 会把 protocols 合入生成的 .desktop 的 MimeType(x-scheme-handler/forsion)。
   protocols: [{ name: 'Forsion', schemes: ['forsion'] }],
+  // 外部文件打开(Finder 打开方式 / 拖到 Dock / 双击):文件进 wsfile 临时标签页,不导入笔记库(main.ts deliverOpenFile)。
+  // mac:.pdf 只登记成 Alternate(出现在「打开方式」里,不顶掉 Preview);.md 给 Default,没别的应用认领时 Forsion 就是默认。
+  // win:NSIS 装机写 HKCU\Software\Classes\.<ext> 的默认 ProgID + OpenWithProgids —— Win10+ 用户选过的(UserChoice,
+  // 如 Edge 打 PDF)不受影响,.md 这种没人认领的会直接归 Forsion。name 即 ProgID,卸载时整键删除 → 必须带 Forsion 前缀免得撞别家,
+  // 还得按产品分开(全家桶 / Amadeus / Basic 可同装,共用一个 ProgID 会互相覆盖命令、卸一个删掉另一个的)。
+  fileAssociations: [
+    { ext: 'pdf', name: `Forsion.${product.id}.pdf`, description: 'PDF document', role: 'Viewer', rank: 'Alternate', mimeType: 'application/pdf' },
+    { ext: ['md', 'markdown'], name: `Forsion.${product.id}.markdown`, description: 'Markdown document', role: 'Editor', rank: 'Default', mimeType: 'text/markdown' },
+  ],
   artifactName: product.artifactPrefix + artifactSuffix + '-${version}-${arch}.${ext}',
   extraMetadata: { forsionBundleExtend: bundleExtend },
   files: [

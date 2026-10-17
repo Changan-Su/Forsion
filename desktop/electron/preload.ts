@@ -583,6 +583,14 @@ const api = {
   },
   /** 冷启动:拉走渲染层就绪前积压的 deep link(拿走即清;也把主进程翻到「可直推」态)。 */
   drainDeepLinks: (): Promise<string[]> => ipcRenderer.invoke('deeplink:drain'),
+  // ── 外部文件打开(Finder 打开方式 / 拖到 Dock / 命令行参数;落点在渲染层 deepLinkInstall.installOpenFiles)──
+  /** 主进程只推一声「有文件待打开」,收到后调 drainOpenFiles 拉(文件本身不随推送走,见 main.ts deliverOpenFile)。 */
+  onOpenFile: (cb: () => void): (() => void) => {
+    const listener = (): void => cb()
+    ipcRenderer.on('app:open-file', listener)
+    return () => ipcRenderer.removeListener('app:open-file', listener)
+  },
+  drainOpenFiles: (): Promise<string[]> => ipcRenderer.invoke('openfile:drain'),
   /** 内置终端的 PTY:spawn 失败(原生模块未就绪)返回 {error},不抛。 */
   pty: {
     spawn: (opts: { cols?: number; rows?: number; cwd?: string; cmd?: string }): Promise<{ id?: string; shell?: string; error?: string }> =>
