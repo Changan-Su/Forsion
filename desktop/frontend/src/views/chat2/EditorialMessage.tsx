@@ -7,13 +7,12 @@ import { SelfUpdateReceipt } from '../../components/SelfUpdateReceipt'
  * 接 UiMessage,故可直接喂真实 store 数据(集成期用);回调可选(预览传空)。
  */
 import { Fragment, memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type Ref } from 'react'
-import { Copy, RotateCcw, GitBranch, Pencil, ChevronRight, ChevronDown, Volume2, Square, Loader2, LogIn, Zap, History as HistoryIcon, FileCode2, MessageSquare, ShieldQuestion, CircleCheck, CircleX, CircleHelp } from 'lucide-react'
+import { Copy, RotateCcw, GitBranch, Pencil, Volume2, Square, Loader2, LogIn, Zap, History as HistoryIcon, FileCode2, MessageSquare, ShieldQuestion, CircleCheck, CircleX, CircleHelp } from 'lucide-react'
 import { FileInput, Quote } from 'lucide-react'
 import { useNoteInsertState } from './insertToNote'
 import * as api from '../../services/backendService'
 import type { UiMessage, TanguDesktopConfig, AgentConfig, StoredDesktopConfig, ToolEvent, InquiryRequest, SketchItem, LiveWait } from '../../types'
 import type { PreviewTarget } from '../../components/WorkspaceFilePreview'
-import { AnimatedCollapse } from '../../components/AnimatedUI'
 import { Markdown } from '../../components/Markdown'
 import { ChatWikiLink, WikiText } from '../../components/ChatWikiLink'
 import { RefChipView, splitLeadingRefs } from './RefChipView'
@@ -205,21 +204,6 @@ export interface FileCtx {
   execMode: AgentConfig['execMode']
   onOpenPreview?: (t: PreviewTarget) => void
 }
-
-export function Thinking2({ reasoning }: { reasoning: string }) {
-  const { t } = useI18n()
-  const [open, setOpen] = useState(false)
-  return (
-    <div className="t2-think">
-      <button className="t2-think-head" onClick={() => setOpen((o) => !o)}>
-        {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />} ✦ {t('thinking.process')}{' '}
-        <span className="t2-dim">· {t('thinking.charCount', { count: reasoning.length })}</span>
-      </button>
-      <AnimatedCollapse open={open}><div className="t2-think-body">{reasoning}</div></AnimatedCollapse>
-    </div>
-  )
-}
-
 
 export interface MessageHandlers {
   onCopy?: (text: string) => void
@@ -577,8 +561,15 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
       <div className="t2-asst-col">
         <div className="t2-name" style={msg.agentColor ? { color: msg.agentColor } : undefined}>{msg.agentName || agentNameFallback || 'Tangu'}{msg.status === 'streaming' && <span className="t2-dot" />}</div>
         {msg.systemPrompt && <SystemPromptBlock content={msg.systemPrompt} />}
-        {msg.reasoning && <Thinking2 reasoning={msg.reasoning} />}
         {(() => {
+          // 思考原文整条消息只有一份:挂在第一条过程行上(前面还没有正文时);否则单独一行过程行放最前(只剩思考那一步)。
+          // 「思考中」只在它挂的那一行是消息最后一块时亮,后面已经有东西了就不在上头闪。
+          let thinkHost = !!msg.reasoning
+          const thinkProps = (last: boolean) => {
+            if (!thinkHost) return {}
+            thinkHost = false
+            return { reasoning: msg.reasoning, reasoningMs: msg.reasoningMs, thinking: last && msg.reasoningSince != null }
+          }
           // 直播与带锚点的历史:按发生顺序渲染文字/工具,并把 Sketch 插在对应工具完成点。
           // 无段(旧历史 / 语音整条朗读)→ 回退老序:所有工具一块 + 全文。
           if (msg.segments?.length && !voiceMode) {
@@ -588,7 +579,9 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
             // 只有**最后一个文本段**才能把未收口的围栏还回正文:靠前的段后面还有段,围栏可能在那里收口
             // (工具块把一道围栏切成两截),提前还回 = 原文泄漏进正文 + 后半段永远拼不成卡。
             const lastTextIdx = msg.segments.reduce((acc, s2, j) => (s2.t === 'text' ? j : acc), -1)
-            return msg.segments.map((seg, i) => {
+            const firstIdx = msg.segments.findIndex((s2) => s2.t === 'tools' || !!s2.text.trim())
+            const lastIdx = msg.segments.length - 1
+            const nodes = msg.segments.map((seg, i) => {
               if (seg.t === 'text') {
                 const parsed = splitSuggestions(seg.text, { streaming: streaming || i !== lastTextIdx, state: fenceState, kinds: fenceKinds })
                 fenceState = parsed.state
@@ -602,17 +595,23 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
               return parts.length ? (
                 <Fragment key={i}>
                   {parts.map((part, j) => part.t === 'tools'
-                    ? <ToolGroup key={`tools-${part.events.map((ev) => ev.id).join('-')}-${j}`} events={part.events} running={msg.status === 'streaming'} approvals={msg.approvals} awaitingAnswer={awaitingAnswer} />
+                    ? <ToolGroup key={`tools-${part.events.map((ev) => ev.id).join('-')}-${j}`} events={part.events} running={msg.status === 'streaming'} approvals={msg.approvals} awaitingAnswer={awaitingAnswer}
+                        {...(i === firstIdx && j === 0 ? thinkProps(i === lastIdx && j === parts.length - 1) : {})} />
                     : part.t === 'intelligent'
                       ? <IntelligentUi key={`intelligent-${part.event.id}`} event={part.event} live={streaming} stateScope={runSid ? `${runSid}:${msg.id}` : undefined} onAsk={handlers?.onSuggest} />
                     : <SketchCards key={`sketch-${part.item.callId}`} items={[part.item]} actions={sketchActions} stateScope={runSid ? `${runSid}:${msg.id}` : undefined} onAsk={handlers?.onSuggest} />)}
                 </Fragment>
               ) : null
             })
+            const lone = thinkHost && <ToolGroup events={[]} running={streaming} {...thinkProps(nodes.every((n) => n == null))} />
+            return <>{lone}{nodes}</>
           }
+          const tools = !!msg.toolEvents?.length && <ToolGroup events={msg.toolEvents} running={msg.status === 'streaming'} approvals={msg.approvals} awaitingAnswer={awaitingAnswer} {...thinkProps(!body)} />
+          const lone = thinkHost && <ToolGroup events={[]} running={streaming} {...thinkProps(!body)} />
           return (
             <>
-              {!!msg.toolEvents?.length && <ToolGroup events={msg.toolEvents} running={msg.status === 'streaming'} approvals={msg.approvals} awaitingAnswer={awaitingAnswer} />}
+              {lone}
+              {tools}
               {body && (
                 voiceMode
                   ? <VoiceBubble text={body} stored={voice!.stored} anchorPrefix={`toc-${msg.id}`} />

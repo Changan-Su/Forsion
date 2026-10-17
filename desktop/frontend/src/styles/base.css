@@ -1355,43 +1355,46 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
   overflow-wrap: anywhere;
 }
 
-/* ─── 工具调用分组(Codex 风:连读调用聚合,折叠摘要/展开列表,每行可再展开看详情) ─── */
-.tool-group {
-  border: var(--border-width) solid var(--border);
-  background: var(--tool-bg);
-  border-radius: var(--radius-chat-card);
-  box-shadow: var(--card-shadow);
-  overflow: hidden;
-}
-/* 失败**不描红边**(用户裁定:一圈红轮廓太吵) —— 失败标识只留行尾的红叉图标 */
+/* ─── 回答里的过程行(10-17 定,DESIGN §6「回答里的过程行」):思考 + 一串连续的工具调用收成一行,
+ * 不垫底、不描边、不画完成勾 —— 它不再是卡,所以不走 §5「折叠块靠底色分层」;出错 / 挂起只留行尾图标。
+ * 展开是竖排步骤:20px 图标列 + 步骤间 1px 细线,每一步可再展开看参数 / 结果 / diff。 ─── */
+.tool-group { border: var(--border-width) solid transparent; background: none; }
 .tool-group-head {
-  display: flex; align-items: center; gap: 7px; width: 100%;
-  padding: 7px 10px; text-align: left;
-  color: var(--text-light); font-family: var(--font-ui); font-size: var(--ui-font-body, 13px);
+  display: flex; align-items: center; gap: 6px; width: fit-content; max-width: 100%;
+  padding: 2px 0; text-align: left; border-radius: var(--radius-sm);
+  color: var(--text-muted); font-family: var(--font-ui); font-size: var(--ui-font-body, 13px);
 }
-.tool-group-head:hover { background: var(--overlay-subtle); }
-.tool-group-ic { color: var(--text-faint); flex-shrink: 0; }
-.tool-group-sum, .tool-group-cur {
-  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  color: var(--text-muted);
-}
+.tool-group-head:hover { color: var(--text); }
+.tool-group-ic { flex-shrink: 0; display: inline-grid; place-items: center; width: 13px; color: var(--text-faint); }
+.tool-group-sum, .tool-group-cur { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tool-group-cur-copy {
   display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; vertical-align: bottom;
 }
 .tool-group-cur .file { color: var(--accent-ink); font-family: var(--font-mono); font-size: var(--ui-font-meta, 12px); }
-.tool-group-status { flex-shrink: 0; display: inline-flex; }
-.tool-group-list { padding: 2px 0 4px; border-top: var(--border-width) solid var(--border); }
-.tool-row { font-size: var(--ui-font-meta, 12px); }
-.tool-row-head {
-  display: flex; align-items: center; gap: 6px; width: 100%;
-  padding: 4px 10px 4px 22px; text-align: left;
-  color: var(--text-light); font-family: var(--font-ui); font-size: var(--ui-font-meta, 12px);
+.tool-group-step { color: var(--text-faint); }
+/* 窄列(侧栏对话、手机)换短摘要「思考 8 秒 · 5 个工具」,不靠省略号截断 */
+.tool-group-sum-short { display: none; }
+@container (max-width: 520px) {
+  .tool-group-sum-long { display: none; }
+  .tool-group-sum-short { display: inline; }
 }
-.tool-row-head:hover { background: var(--overlay-subtle); }
-.tool-row-head > svg:first-child { color: var(--text-faint); flex-shrink: 0; }
+.tool-group-status { flex-shrink: 0; display: inline-flex; }
+.tool-group-status:empty { display: none; }
+.tool-group-list { padding: 4px 0 2px; }
+.tool-row { position: relative; font-size: var(--ui-font-meta, 12px); }
+.tool-row:not(:last-child)::before {
+  content: ''; position: absolute; left: 9.5px; top: 23px; bottom: -1px; width: 1px; background: var(--border);
+}
+.tool-row-head {
+  display: flex; align-items: center; gap: 8px; width: 100%; min-height: 24px;
+  padding: 2px 0; text-align: left; border-radius: var(--radius-sm);
+  color: var(--text-muted); font-family: var(--font-ui); font-size: var(--ui-font-meta, 12px);
+}
+.tool-row-head:hover { color: var(--text); }
+.tool-row-ic { flex: 0 0 20px; height: 20px; display: inline-grid; place-items: center; color: var(--text-faint); }
 .tool-row-copy { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; }
 .tool-row-copy-text { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; vertical-align: bottom; }
-.tool-row-verb { color: var(--text-muted); flex-shrink: 0; }
+.tool-row-verb { flex-shrink: 0; }
 .tool-row-target {
   flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   font-family: var(--font-mono); font-size: var(--ui-font-meta, 12px); color: var(--text-muted);
@@ -1400,8 +1403,23 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
 .tool-row-stat { flex-shrink: 0; font-family: var(--font-mono); font-size: var(--ui-font-caption, 11px); display: inline-flex; gap: 5px; }
 .tool-row-stat .add { color: var(--green); }
 .tool-row-stat .del { color: var(--danger); }
-.tool-row-status { flex-shrink: 0; display: inline-flex; width: 13px; }
-.tool-row .tool-card-body { padding-left: 22px; }
+.tool-row-status { flex-shrink: 0; display: inline-flex; }
+.tool-row-status:empty { display: none; }
+/* 展开箭头在行尾,平时不抢眼:悬停 / 键盘焦点 / 已展开才露;触屏常显 */
+.tool-row-chev { flex-shrink: 0; color: var(--text-faint); }
+@media (hover: hover) {
+  .tool-row-chev { opacity: 0; transition: opacity var(--duration-fast); }
+  .tool-row-head:hover .tool-row-chev, .tool-row-head:focus-visible .tool-row-chev, .tool-row-head[aria-expanded='true'] .tool-row-chev { opacity: 1; }
+}
+.tool-row .tool-card-body { margin: 2px 0 6px 28px; padding: 6px 10px 8px; background: var(--tool-bg); border-radius: var(--radius-sm); }
+.tool-row--think .t2-think-body { margin: 0 0 6px 28px; white-space: pre-wrap; }
+/* 正在进行的那一步:三个小点依次亮起 */
+.proc-dots { display: inline-flex; align-items: center; gap: 2px; }
+.proc-dots i { width: 3px; height: 3px; border-radius: 50%; background: var(--accent-ink); opacity: .25; animation: proc-dot 1.2s ease-in-out infinite; }
+.proc-dots i:nth-child(2) { animation-delay: .16s; }
+.proc-dots i:nth-child(3) { animation-delay: .32s; }
+@keyframes proc-dot { 0%, 100% { opacity: .25; } 40% { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .proc-dots i { animation: none; opacity: .7; } }
 
 /* Chat View 运行态:只有一束窄光从左到右完整扫出，末段停顿后再开始。
  * 背景不重复，避免同一段文字同时出现多道光；文字仍留在 DOM 中供读屏读取。 */
@@ -1532,8 +1550,8 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
 }
 .sketch-clip.open { max-height: none; }
 .sketch-clip.faded {
-  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 40px), transparent);
-  mask-image: linear-gradient(to bottom, #000 calc(100% - 40px), transparent);
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 40px), rgb(0 0 0 / .85) calc(100% - 40px * 0.87), rgb(0 0 0 / .7) calc(100% - 40px * 0.75), rgb(0 0 0 / .5) calc(100% - 40px * 0.6), rgb(0 0 0 / .3) calc(100% - 40px * 0.45), rgb(0 0 0 / .15) calc(100% - 40px * 0.3), rgb(0 0 0 / .05) calc(100% - 40px * 0.15), transparent 100%);
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 40px), rgb(0 0 0 / .85) calc(100% - 40px * 0.87), rgb(0 0 0 / .7) calc(100% - 40px * 0.75), rgb(0 0 0 / .5) calc(100% - 40px * 0.6), rgb(0 0 0 / .3) calc(100% - 40px * 0.45), rgb(0 0 0 / .15) calc(100% - 40px * 0.3), rgb(0 0 0 / .05) calc(100% - 40px * 0.15), transparent 100%);
 }
 .sketch-card-toggle {
   display: block; width: 100%;
@@ -2408,6 +2426,7 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
 .btn.primary { background: var(--action-fill); color: var(--on-action); box-shadow: var(--btn-shadow); }
 .btn.primary:hover { background: var(--action-fill-hover); }
 .btn.primary:disabled { background: var(--text-ghost); box-shadow: none; cursor: not-allowed; }
+.btn.primary:active:not(:disabled) { transform: scale(0.97); } /* 主按钮按下的回馈(10-17);普通按钮、图标不加 */
 .btn.ghost { border-color: var(--overlay-strong); color: var(--text); background: transparent; }
 .btn.ghost:hover { border-color: var(--accent-ink); color: var(--accent-ink); }
 .btn.danger { border-color: var(--danger); color: var(--danger); background: none; }

@@ -1,11 +1,12 @@
 /**
- * 工具调用分组(参考 Codex):一条助手消息内的连读工具调用聚合成一张可折叠卡。
- * 折叠时:运行中→显示「正在 <动作> <目标>」当前那一个;完成→聚合摘要(如「编辑3文件 · 运行6命令」)。
- * 展开:每个调用一紧凑行(动作 + 目标 + 可选 +增/-删),每行可再展开看完整参数/结果。
+ * 回答里的「过程行」(10-17 用户选定,方案页 docs/ToBeImproved/借鉴Claude设计系统方案_2026-10-17/ 的 A):
+ * 思考 + 一串连续的工具调用收成一行,不垫底、不画完成勾。
+ * 折叠时:思考中→「思考中」;运行中→当前那一步「<动作> <目标>… · 第 N 步」;完成→「思考 N 秒 · 编辑 3 文件 · 运行 6 命令」。
+ * 展开:竖排步骤(图标列 + 步骤间细线),思考原文在第一步下;每个调用一行(动作 + 目标 + 可选 +增/-删),可再展开看参数/结果。
  * 复用 .tool-card-body/.label 样式;+增/-删 best-effort(算不出就只显目标)。
  */
 import React, { useMemo, useState } from 'react'
-import { ChevronRight, ChevronDown, XCircle, CheckCircle2, Terminal, PauseCircle } from 'lucide-react'
+import { ChevronRight, ChevronDown, XCircle, PauseCircle, Sparkles, FilePlus2, Pencil, Terminal, FileText, Search, Globe, Wrench, type LucideIcon } from 'lucide-react'
 import { AnimatedCollapse } from './AnimatedUI'
 import { DiffView } from './DiffView'
 import { toolDiffText } from './toolDiff'
@@ -20,6 +21,12 @@ registerMessages({
   // 不写「在输入框上方」:紧挨着的指路行 / 计划卡 / 团队 work 行已经说了在哪答,这里再写一遍是重复
   'tool.waitingYou': { zh: '等你回复', en: 'Waiting for your reply' },
   'tool.verb.readComputerHistory': { zh: '读取电脑历史', en: 'Read computer history' },
+  'tool.thought': { zh: '思考过程', en: 'Thought process' },
+  'tool.thinkingNow': { zh: '思考中', en: 'Thinking' },
+  'tool.thoughtSec': { zh: '思考 {n} 秒', en: 'Thought for {n}s' },
+  'tool.thoughtMin': { zh: '思考 {m} 分 {s} 秒', en: 'Thought for {m}m {s}s' },
+  'tool.step': { zh: '第 {n} 步', en: 'Step {n}' },
+  'tool.sumN': { zh: '{n} 个工具', en: '{n} tool calls' },
   'tool.computerHistory.notSaved': {
     zh: '电脑历史摘录已交给模型，不会保存在对话记录里。',
     en: 'The computer history excerpt was passed to the model and isn’t saved in the conversation.',
@@ -121,6 +128,32 @@ const Stat: React.FC<{ d: Desc }> = ({ d }) =>
     </span>
   ) : null
 
+const KIND_ICON: Record<Kind, LucideIcon> = { write: FilePlus2, edit: Pencil, run: Terminal, read: FileText, search: Search, browse: Globe, other: Wrench }
+
+/** 正在进行的那一步:三个小点(纯 CSS,减少动态效果时静止)。 */
+const Dots: React.FC = () => <span className="proc-dots" aria-hidden="true"><i /><i /><i /></span>
+
+/** 「思考 N 秒」;没有用时(历史消息,用时只在本次运行里记)就写「思考过程」。 */
+export function thoughtLabel(t: (key: string, vars?: Record<string, string | number>) => string, ms?: number): string {
+  if (!ms || ms <= 0) return t('tool.thought')
+  const sec = Math.max(1, Math.round(ms / 1000))
+  return sec < 60 ? t('tool.thoughtSec', { n: sec }) : t('tool.thoughtMin', { m: Math.floor(sec / 60), s: sec % 60 })
+}
+
+const ThinkRow: React.FC<{ reasoning: string; label: string; thinking: boolean }> = ({ reasoning, label, thinking }) => {
+  const [open, setOpen] = useState(true)
+  return (
+    <div className="tool-row tool-row--think">
+      <button className="tool-row-head" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
+        <span className="tool-row-ic">{thinking ? <Dots /> : <Sparkles size={13} />}</span>
+        <span className="tool-row-copy"><span className={`tool-row-verb${thinking ? ' chat-run-shimmer-text' : ''}`}>{label}</span></span>
+        {open ? <ChevronDown size={12} className="tool-row-chev" /> : <ChevronRight size={12} className="tool-row-chev" />}
+      </button>
+      <AnimatedCollapse open={open}><div className="t2-think-body">{reasoning}</div></AnimatedCollapse>
+    </div>
+  )
+}
+
 const ToolRow: React.FC<{ ev: ToolEvent; desc: Desc; running: boolean; waiting: boolean; asking?: boolean }> = ({ ev, desc, running, waiting, asking }) => {
   const { t } = useI18n()
   const [open, setOpen] = useState(false)
@@ -130,10 +163,11 @@ const ToolRow: React.FC<{ ev: ToolEvent; desc: Desc; running: boolean; waiting: 
   // 工具结果帧可能在用户停止 run 时来不及抵达。此时 ev.done 仍为 false，
   // 但父消息已不再运行，不能继续显示「正在执行」的流光或 busy 语义。
   const active = running && !ev.done && !asking
+  const Icon = KIND_ICON[desc.kind]
   return (
     <div className="tool-row">
-      <button className="tool-row-head" aria-busy={active} onClick={() => setOpen((o) => !o)}>
-        {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+      <button className="tool-row-head" aria-busy={active} aria-expanded={open} onClick={() => setOpen((o) => !o)}>
+        <span className="tool-row-ic">{active ? <Dots /> : <Icon size={13} />}</span>
         <span className="tool-row-copy">
           <span className={`tool-row-copy-text${active ? ' chat-run-shimmer-text' : ''}`}>
             <span className="tool-row-verb">{verb}</span>
@@ -146,6 +180,7 @@ const ToolRow: React.FC<{ ev: ToolEvent; desc: Desc; running: boolean; waiting: 
             : ev.parked ? <PauseCircle size={11} style={{ color: waiting ? 'var(--accent-ink)' : 'var(--text-faint)' }} />
             : ev.done && ev.isError ? <XCircle size={11} style={{ color: 'var(--danger)' }} /> : null}
         </span>
+        {open ? <ChevronDown size={12} className="tool-row-chev" /> : <ChevronRight size={12} className="tool-row-chev" />}
       </button>
       <AnimatedCollapse open={open}>
         <div className="tool-card-body">
@@ -175,13 +210,19 @@ export const ToolGroup: React.FC<{
   approvals?: ApprovalRequest[]
   /** 这条消息有待答的提问 / 计划拍板(托盘里):挂着的 ask_user / exit_plan_mode 显示「等你回复」而不是在跑。 */
   awaitingAnswer?: boolean
-}> = ({ events: allEvents, running, approvals, awaitingAnswer }) => {
+  /** 这一条带着的思考原文(整条消息只有一份,挂在回答里第一条过程行上);没有工具时也画,只剩思考那一步。 */
+  reasoning?: string
+  /** 思考用时(本次运行里由 appStore 记;历史消息没有)。 */
+  reasoningMs?: number
+  /** 思考正在进行(这一行是消息里最后一块时才传 true)。 */
+  thinking?: boolean
+}> = ({ events: allEvents, running, approvals, awaitingAnswer, reasoning, reasoningMs, thinking: thinkingProp }) => {
   const { t } = useI18n()
   const [open, setOpen] = useState(false)
   // Agent 自己写成了的记忆 / 进化记录 / 协作说明,由回复下面的回执行和请求卡呈现,这里不再重复列一行(没写成的照旧留着)。
   // 唯一不带回执行的调用方是外观预览(ChatPreview),它的样例消息里没有这三种调用。
   const events = allEvents.filter((ev) => !isSelfWriteReceipt(ev))
-  if (!events.length) return null
+  if (!events.length && !reasoning) return null
 
   // generate_image gets a full-size dot field while the request is in flight. Completed calls return
   // to the ordinary audit trail; only the active row is replaced, so mixed/parallel tool groups keep context.
@@ -195,7 +236,10 @@ export const ToolGroup: React.FC<{
     search: 'tool.sum.searched', browse: 'tool.sum.browsed', other: 'tool.sum.other',
   }
   const order: Kind[] = ['write', 'edit', 'run', 'read', 'search', 'browse', 'other']
-  const summary = order.filter((k) => counts[k] > 0).map((k) => t(SUM[k], { n: counts[k] })).join(' · ')
+  const thinking = !!running && !!thinkingProp && !!reasoning
+  const thinkLabel = reasoning ? (thinking ? t('tool.thinkingNow') : thoughtLabel(t, reasoningMs)) : ''
+  const summary = [...(thinking ? [] : [thinkLabel]), ...order.filter((k) => counts[k] > 0).map((k) => t(SUM[k], { n: counts[k] }))].filter(Boolean).join(' · ')
+  const shortSummary = [...(thinking ? [] : [thinkLabel]), groupedEvents.length ? t('tool.sumN', { n: groupedEvents.length }) : ''].filter(Boolean).join(' · ') || thinkLabel
 
   const asksYou = (e: ToolEvent): boolean => !!awaitingAnswer && !!running && !e.done && ASKS_YOU.has(e.name)
   const allDone = groupedEvents.every((e) => e.done)
@@ -203,21 +247,24 @@ export const ToolGroup: React.FC<{
   // 挂起的调用「还在等你」= 它那张审批仍 pending(审批与工具卡按 toolCallId 对上;重载后审批不在 → 只算「当时挂起」)
   const waitingIds = new Set((approvals || []).filter((a) => a.status === 'pending' && a.toolCallId).map((a) => a.toolCallId!))
   const anyParked = groupedEvents.some((e) => e.parked)
-  // 运行中:展示第一个未完成的调用作为「当前」;都完成则无。
-  const curIdx = running ? groupedEvents.findIndex((e) => !e.done) : -1
+  // 运行中:展示第一个未完成的调用作为「当前」;都完成则无。思考中优先(它是这一行最新的动静)。
+  const curIdx = running && !thinking ? groupedEvents.findIndex((e) => !e.done) : -1
   const curAsks = curIdx >= 0 && asksYou(groupedEvents[curIdx])
   const active = !!running && groupedEvents.length > 0 && !allDone && !curAsks
+  const busy = active || thinking
   const curDesc = curIdx >= 0 ? descs[curIdx] : null
   const curVerb = curDesc ? (curDesc.verbKey ? t(curDesc.verbKey) : groupedEvents[curIdx].name) : ''
+  const showList = !!reasoning || groupedEvents.length > 0
 
   return (
     <>
-      {!!groupedEvents.length && (
+      {showList && (
         <div className="tool-group">
-          <button className="tool-group-head" aria-busy={active} onClick={() => setOpen((o) => !o)}>
-            {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
-            <Terminal size={12} className="tool-group-ic" />
-            {!open && curAsks ? (
+          <button className="tool-group-head" aria-busy={busy} aria-expanded={open} onClick={() => setOpen((o) => !o)}>
+            <span className="tool-group-ic">{open ? <ChevronDown size={13} /> : busy ? <Dots /> : <ChevronRight size={13} />}</span>
+            {!open && thinking ? (
+              <span className="tool-group-cur"><span className="tool-group-cur-copy chat-run-shimmer-text">{thinkLabel}</span></span>
+            ) : !open && curAsks ? (
               <span className="tool-group-cur" data-waiting-you="1">
                 <span className="tool-group-cur-copy">{t('tool.waitingYou')}</span>
               </span>
@@ -227,17 +274,22 @@ export const ToolGroup: React.FC<{
                   {curVerb}{' '}
                   <span className={curDesc.isFile ? 'file' : undefined}>{curDesc.target}</span>…
                 </span>
+                {groupedEvents.length > 1 && <span className="tool-group-step"> · {t('tool.step', { n: curIdx + 1 })}</span>}
               </span>
             ) : (
-              <span className={`tool-group-sum${active ? ' chat-run-shimmer-text' : ''}`}>{summary}</span>
+              <span className={`tool-group-sum${busy ? ' chat-run-shimmer-text' : ''}`}>
+                <span className="tool-group-sum-long">{summary || thinkLabel}</span>
+                <span className="tool-group-sum-short">{shortSummary}</span>
+              </span>
             )}
             <span className="tool-group-status">
               {anyParked ? <PauseCircle size={13} style={{ color: groupedEvents.some((e) => e.parked && waitingIds.has(e.id)) ? 'var(--accent-ink)' : 'var(--text-faint)' }} />
-                : allDone ? (anyErr ? <XCircle size={13} style={{ color: 'var(--danger)' }} /> : <CheckCircle2 size={13} style={{ color: 'var(--green)' }} />) : null}
+                : allDone && anyErr ? <XCircle size={13} style={{ color: 'var(--danger)' }} /> : null}
             </span>
           </button>
           <AnimatedCollapse open={open}>
             <div className="tool-group-list">
+              {!!reasoning && <ThinkRow reasoning={reasoning} label={thinkLabel} thinking={thinking} />}
               {groupedEvents.map((ev, i) => <ToolRow key={ev.id} ev={ev} desc={descs[i]} running={!!running} waiting={waitingIds.has(ev.id)} asking={asksYou(ev)} />)}
             </div>
           </AnimatedCollapse>

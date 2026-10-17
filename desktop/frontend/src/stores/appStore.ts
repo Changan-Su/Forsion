@@ -901,6 +901,11 @@ function touchSessionActivity(
   return {}
 }
 /** 单条正文超上限则截断 + 标注(后端仍完整落库;仅界面侧防 OOM)。 */
+/** 一段思考收口(正文 / 工具 / 结束到来):把这段的时长累进 reasoningMs。没在思考就不动。 */
+function endThink(m: UiMessage): Partial<UiMessage> {
+  return m.reasoningSince == null ? {} : { reasoningSince: undefined, reasoningMs: (m.reasoningMs || 0) + Math.max(0, Date.now() - m.reasoningSince) }
+}
+
 function capContent(s: string): string {
   // 取词在调用时发生(不是模块加载时),切语言后新截断的消息立刻用新语言。
   return s.length >= MAX_MSG_CHARS ? s.slice(0, MAX_MSG_CHARS) + '\n\n' + translate('appstore.contentTruncated') : s
@@ -1425,11 +1430,11 @@ export const useApp = create<AppState>((set, get) => ({
           if (m.content.length >= MAX_MSG_CHARS) return m // 已达上限,停止累积(后端仍完整落库)
           // ponytail: 顺序段用原始 delta;极长消息 capContent 后 segments 文字或略长于 content——罕见且已降级,不特殊处理。
           // 首帧到达:清掉等待实况(live 只在没有任何帧时存在,这里的条件展开让常态 token 零开销)
-          return { ...m, content: capContent(m.content + (pl.delta || '')), segments: pushTextSeg(m.segments, pl.delta || ''), ...(m.live ? { live: undefined } : {}) }
+          return { ...m, content: capContent(m.content + (pl.delta || '')), segments: pushTextSeg(m.segments, pl.delta || ''), ...endThink(m), ...(m.live ? { live: undefined } : {}) }
         })
         break
       case 'reasoning':
-        patchMessage(sessionId, assistantId, (m) => ({ ...m, reasoning: (m.reasoning || '') + (pl.delta || ''), ...(m.live ? { live: undefined } : {}) }))
+        patchMessage(sessionId, assistantId, (m) => ({ ...m, reasoning: (m.reasoning || '') + (pl.delta || ''), reasoningSince: m.reasoningSince ?? Date.now(), ...(m.live ? { live: undefined } : {}) }))
         break
       case 'system_prompt':
         patchMessage(sessionId, assistantId, (m) => ({ ...m, systemPrompt: pl.content || '' }))
@@ -1468,9 +1473,9 @@ export const useApp = create<AppState>((set, get) => ({
           const evs = (m.toolEvents || []).slice()
           const i = evs.findIndex((tt) => tt.id === pl.id)
           const item = { id: pl.id, name: pl.name, arguments: pl.arguments, done: false, startedAt: pl.startedAt, parallelGroup: pl.parallelGroup }
-          if (i >= 0) { evs[i] = { ...evs[i], ...item }; return { ...m, toolEvents: evs, ...(m.live ? { live: undefined } : {}) } }
+          if (i >= 0) { evs[i] = { ...evs[i], ...item }; return { ...m, toolEvents: evs, ...endThink(m), ...(m.live ? { live: undefined } : {}) } }
           evs.push(item)
-          return { ...m, toolEvents: evs, segments: pushToolSeg(m.segments, pl.id), ...(m.live ? { live: undefined } : {}) }
+          return { ...m, toolEvents: evs, segments: pushToolSeg(m.segments, pl.id), ...endThink(m), ...(m.live ? { live: undefined } : {}) }
         })
         break
       case 'tool_result': {
@@ -1878,7 +1883,7 @@ export const useApp = create<AppState>((set, get) => ({
           const keep = (m: UiMessage): boolean => !!m.work || (m.approvals || []).some((a) => a.status === 'pending') || (m.inquiries || []).some((q) => q.status === 'pending')
           const next = list
             .map((m) => (finalizedId && m.id === finalizedId && !m.work ? {
-              ...m, content: capContent(pl.finalizedContent || m.content), status: 'done' as const,
+              ...m, content: capContent(pl.finalizedContent || m.content), status: 'done' as const, ...endThink(m),
               toolEvents: m.toolEvents?.map((tool) => !tool.done && tool.startedAt == null
                 ? { ...tool, done: true, isError: true, result: translate('appstore.steerDiscardedCall') } : tool),
             } : m))
@@ -1898,7 +1903,7 @@ export const useApp = create<AppState>((set, get) => ({
           const settled = Array.isArray(pl.toolOffsets) && typeof pl.content === 'string'
           const content = capContent(settled ? pl.content : (pl.content || m.content))
           return {
-            ...m, content, status: 'done' as const, live: undefined,
+            ...m, content, status: 'done' as const, live: undefined, ...endThink(m),
             ...(settled ? { segments: settleSegments(content, m.segments, m.toolEvents, pl.toolOffsets) ?? m.segments } : {}),
             approvals: (m.approvals || []).map((a) => (a.status === 'pending' ? { ...a, status: 'expired' as const } : a)),
             inquiries: (m.inquiries || []).map((q) => (q.status === 'pending' ? { ...q, status: 'expired' as const } : q)),
@@ -1945,7 +1950,7 @@ export const useApp = create<AppState>((set, get) => ({
         break
       case 'error':
         patchMessage(sessionId, assistantId, (m) => ({
-          ...m, content: pl.content || m.content, live: undefined,
+          ...m, content: pl.content || m.content, live: undefined, ...endThink(m),
           status: pl.aborted ? ('stopped' as const) : ('error' as const),
           error: pl.aborted ? undefined : (pl.error || 'error'),
           approvals: (m.approvals || []).map((a) => (a.status === 'pending' ? { ...a, status: 'expired' as const } : a)),
