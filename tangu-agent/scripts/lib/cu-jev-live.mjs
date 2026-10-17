@@ -51,14 +51,16 @@ export function coverStats(cover, ev, jevSteps = [], fixturePids = new Set(), po
   const exec = jevSteps.flatMap((s) => s.execution?.steps || []);
   const moves = events.filter((e) => e.kind === 'cursorMoved');
   const foreground = (ev.toolResults || []).filter((r) => r.name === 'act_ui' && /\[foreground\]/.test(String(r.full || r.result))).length + exec.filter((x) => x.policy === 'foreground').length;
-  // 插件发过物理输入:挪动都算它的(宁严);一下都没发:只有挪到它落点上的才算(物理滚轮挪了光标不还原,报错了投递方式也躲不过)
+  // 插件发过物理输入(act_ui 走前台 + Jev 的 hid 投递;前台策略但走 AX 的不动光标,Codex 评审):挪动都算它的(宁严);
+  // 一下都没发:只有挪到它落点上的才算(物理滚轮挪了光标不还原,报错了投递方式也躲不过)
+  const physical = (ev.toolResults || []).filter((r) => r.name === 'act_ui' && /\[foreground\]/.test(String(r.full || r.result))).length + exec.filter((x) => x.delivery === 'hid').length;
   const onPoint = (e) => { const [x, y] = String(e.detail).split(',').map(Number); return points.some((p) => Math.hypot(p.x - x, p.y - y) <= 3); };
   return {
     activated: events.filter((e) => e.kind === 'appActivated' && fixturePids.has(Number(e.detail))).length,
     lost: events.filter((e) => e.kind === 'resignActive').length,
     hits: events.filter((e) => /mouse|scroll/i.test(e.kind)).length,
     cursor: moves.length,
-    cursorOurs: foreground > 0 ? moves.length : moves.filter(onPoint).length,
+    cursorOurs: physical > 0 ? moves.length : moves.filter(onPoint).length,
     foreground,
     pid: exec.filter((x) => x.delivery === 'pid').length,
   };
@@ -557,6 +559,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href &
     assert(Object.values(coverChecks('cuscroll', coverStats(someoneElse, bg, bgSteps, pids, pts))).every(Boolean), '没发物理输入、挪动不在落点上:不算插件的');
     assert(!Object.values(coverChecks('cuscroll', coverStats({ events: [{ kind: 'cursorMoved', detail: '351,431' }] }, bg, bgSteps, pids, pts))).every(Boolean), '挪到了插件的落点上(物理滚轮挪光标不还原):不许过');
     assert(!Object.values(coverChecks('cuscroll', coverStats(someoneElse, ev, steps, pids, pts))).every(Boolean), '这一场发过物理输入:挪动都算插件的');
+    const axSteps = [{ ...bgSteps[0], execution: { steps: [{ delivery: 'ax', policy: 'foreground' }] } }];
+    assert(Object.values(coverChecks('cuscroll', coverStats(someoneElse, bg, axSteps, pids, pts))).every(Boolean), '前台策略但走 AX:不动光标,不算物理输入');
     const seq = (xs) => { let i = 0; return async () => xs[Math.min(i++, xs.length - 1)]; };
     assert.equal((await waitMouseStill({ stillMs: 40, pollMs: 5, where: seq([{ x: 1, y: 1 }]) })).still, true, '一直不动:等到');
     let n = 0; const busy = async () => ({ x: n++, y: 0 });
