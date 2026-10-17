@@ -722,12 +722,10 @@ export function buildCycleMessages(
     'finish briefly and call set_next_wake to sleep until they are likely back; their activity ends the sleep, and your rules and due schedule still wake you meanwhile. ' +
     spaceKickoff() + ' ' +
     (cfg.escalateTo ? `For work that needs a stronger model, delegate to the agent "${cfg.escalateTo}". ` : '') +
-    // 10-18 方案 B:要用户回话 / 拍板的进私聊,做好的成品进收件箱(日报档 = 写进 Journal,每天一封日报替你发)。
+    // 10-18 方案 B:要用户回话 / 拍板的进私聊,做好的成品进收件箱;notify 只管日报(每天一封 Journal)发不发。
     'Reaching the user: what needs their reply or decision, or a one-screen heads-up, goes to your direct chat via message_user ' +
-    '(todos and approval requests already post there); ' +
-    (cfg.notify === 'digest'
-      ? 'finished work goes into your journal (digest policy: a daily digest reaches their inbox for you, never item by item). '
-      : 'finished work for them to read later goes to their inbox via inbox_send. ') +
+    '(todos and approval requests already post there); finished work for them to read later (a report, research) goes to their inbox via inbox_send' +
+    (cfg.notify === 'digest' ? '; your journal also reaches them as a daily digest, so routine progress needs no message. ' : '. ') +
     'You may use remember to record durable insights about the user (what they value, accept, or dismiss). When done, briefly say what you did and what you deferred.';
   const ephemeralHint =
     (dyn.quietSince ? '\n\n(No new user messages or in-app activity since your last cycle — this is a heartbeat; maintenance, preparation or simply "nothing to do" are all fine answers, and so is set_next_wake.)' : '') +

@@ -21,6 +21,7 @@ import sessionsRouter from '../src/routes/sessions.js';
 import { museMessageProvider } from '../src/tools/builtin/museMessage.js';
 import { museTodoProvider } from '../src/tools/builtin/museTodo.js';
 import { onRunStart } from '../src/services/childSessions.js';
+import { inboxSendProvider } from '../src/tools/builtin/inboxSend.js';
 
 let home = '';
 let srv: Server;
@@ -90,6 +91,10 @@ describe('Muse 主动发私聊', () => {
     expect(rows).toHaveLength(1);
     expect(rows[0].content).toMatch(/```forsion-task\ntitle: 补 README 的 Windows 安装步骤\ntodo: /);
     expect((await query<any[]>(`SELECT COUNT(*) AS n FROM inbox_messages`))[0].n).toBe(0);
+    // notify 只管日报发不发:日报档下 Muse 周期照样能发成品信;它派出去的子代理不能
+    const inbox = inboxSendProvider.tools()[0];
+    expect(inbox.isEnabledFor!(profile, cycle)).toBe(true);
+    expect(inbox.isEnabledFor!(profile, { ...cycle, subAgentDepth: 1 })).toBe(false);
   });
 
   it('Muse 后台有待批 → attention 把「等你」算在 Muse 私聊上;批完(不起轮)就熄', async () => {

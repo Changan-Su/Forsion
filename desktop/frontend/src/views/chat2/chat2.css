@@ -1084,6 +1084,12 @@
 
 /* 流里给待批审批留的一行指路(卡本身在输入框上方的托盘里) */
 .t2-apv-pointer { display: flex; align-items: center; gap: 6px; font-size: var(--ui-font-meta, 12px); margin: 4px 0; }
+/* Muse 私聊里它自己开口的那条(MuseDm.tsx,10-18 方案 B):署名下一行「主动发来 · 时间」;它的审批批完后流里留一行回执。 */
+.t2-dm-from { display: flex; align-items: center; gap: 5px; margin: 0 0 6px; font-family: var(--font-ui); font-size: var(--ui-font-meta, 12px); color: var(--text-muted); }
+.t2-dm-from svg { flex: none; color: var(--accent-ink); }
+.t2-dm-receipt { display: flex; align-items: center; gap: 6px; margin: 4px 0; font-size: var(--ui-font-meta, 12px); }
+.t2-dm-receipt svg { flex: none; }
+.t2-dm-receipt.ok svg { color: var(--green); }
 /* 挂起审批的结局(<approval_update> 落库行):每张一行。和打断标记一样是给模型的机器行,对人只是一行说明;输出在原工具卡里。 */
 .t2-apv-update { display: flex; flex-direction: column; align-items: center; gap: 2px; margin: 4px 0; }
 .t2-apv-update-row { display: flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%; }

@@ -1,10 +1,12 @@
 /** 任务卡(```forsion-task)的渲染 + 落点按钮 —— 聊天(EditorialMessage)与收件箱(InboxBody)共用这一份。
  *  卡片本身什么也不做,点了才经 onTask 发消息 / 建 Muse 日程;做成了定格成「已…」(失败保留按钮)。
  *  任务书默认折叠但**必须可展开**:点下去发出的是任务书而不是标题,不能让用户看不见自己在同意什么。 */
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { ClipboardList, ChevronDown, ChevronRight, MessageSquarePlus, Play, Sparkles, X } from 'lucide-react'
 import { registerMessages, useI18n } from '../../i18n'
 import { useApp } from '../../stores/appStore'
+import { getMuseTodo } from '../../services/backendService'
+import { homeTarget } from '../../services/engine/targets'
 import type { UiMessage } from '../../types'
 import { splitSuggestions, type TaskCard } from './suggest'
 import { ChildSessionsBlock } from './ChildSessions'
@@ -57,6 +59,29 @@ function withdrawalsOf(m: UiMessage): string[] {
 function useWithdrawn(sessionId?: string): Map<string, string> {
   const sig = useApp((s) => (sessionId ? (s.messagesBySession[sessionId] || []).flatMap(withdrawalsOf).join('\u0001') : ''))
   return new Map(sig ? sig.split('\u0001').map((x) => x.split('\u0000') as [string, string]) : [])
+}
+
+/** Muse TODO 卡按待办的真状态(按 id 现拉)决定给不给按钮:确认 pending 才给;还在查 / 读失败 / 已不存在 / 已处理都不给
+ *  —— 否则一张旧卡(应用重启后模块级记录没了)能把已交给 Muse 的待办改成忽略、或再发一遍(Codex 09-11 P1)。
+ *  收件箱里 Muse 的信与 Muse 私聊里它提的待办(10-18 方案 B)共用。没有 todo 卡 → status 为 undefined(TaskCards 不锁)。 */
+export function useMuseTodoStatus(ownerId: string, tasks: TaskCard[]): { status: Record<string, string> | undefined; retry: () => void } {
+  const cfg = useApp((s) => s.cfg)
+  const todoKey = tasks.map((c) => c.todo || '').filter(Boolean).join(',')
+  const [tick, setTick] = useState(0)
+  // 结果按「归属 + 这组 id + 第几次拉」分代:换信 / 重拉的第一帧就当「还在查」,不会先闪出上一代的 pending 按钮。
+  const gen = `${ownerId}|${todoKey}|${tick}`
+  const [res, setRes] = useState<{ gen: string; map: Record<string, string> }>({ gen: '', map: {} })
+  useEffect(() => {
+    if (!todoKey) return
+    let alive = true
+    for (const id of todoKey.split(',')) {
+      getMuseTodo(homeTarget(), id)
+        .then((t): string => t.status, (e: any): string => (e?.code === 'todo_not_found' ? 'missing' : 'error'))
+        .then((st) => { if (alive) setRes((p) => ({ gen, map: { ...(p.gen === gen ? p.map : {}), [id]: st } })) })
+    }
+    return () => { alive = false }
+  }, [cfg, gen, todoKey])
+  return { status: todoKey ? (res.gen === gen ? res.map : {}) : undefined, retry: () => setTick((n) => n + 1) }
 }
 
 export function TaskCards({ tasks, ownerId, onTask, noHere = false, todoStatus, onTodoRetry, sessionId, createdAt }: {
@@ -126,7 +151,8 @@ export function TaskCards({ tasks, ownerId, onTask, noHere = false, todoStatus, 
         const musePrimary = !!(c.track || c.todo) && museOk
         // 聊天里能开子会话:主按钮「开个子会话」(做完送回这里),其次「在这里做」;开不了(收件箱 / 子会话里 / 没有本机引擎):
         // 照旧「在这里做」+「新会话执行」(收件箱主按钮顺延给后者)。先问卡(ask)只有「新会话 / 在这里做」。
-        const canChild = !noHere && !!sessionId && museOk && !isChild
+        // Muse 私聊里它提的待办(todo 卡,10-18 方案 B)按收件箱那张的落点:交给 Muse 执行 / 在此执行 / 新会话执行 / 忽略,不开子会话。
+        const canChild = !noHere && !!sessionId && museOk && !isChild && !c.todo
         const child = canChild ? btn('child', <MessageSquarePlus size={12} />, t(c.ask ? 'chat.task.askNew' : 'chat.task.child'), c.ask || !musePrimary) : null
         const here = noHere ? null : btn('here', <Play size={12} />, t('chat.task.here'), !c.ask && !canChild && !musePrimary)
         const fresh = canChild ? null : btn('new', <MessageSquarePlus size={12} />, t(c.ask ? 'chat.task.askNew' : 'chat.task.new'), c.ask || (noHere && !musePrimary))

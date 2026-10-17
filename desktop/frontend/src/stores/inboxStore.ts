@@ -83,6 +83,11 @@ const findAny = (s: Pick<InboxState, 'messages' | 'archived'>, id: string): Inbo
 const mapBoth = (s: Pick<InboxState, 'messages' | 'archived'>, fn: (m: InboxMessage) => InboxMessage) =>
   ({ messages: s.messages.map(fn), archived: s.archived.map(fn) })
 
+/** 收件箱来信要不要弹通知:等你拍板的审批信(别的 Agent 后台排队的;Muse 的进私聊)、用户自己定的自动化提醒。 */
+export function inboxLetterPops(m: Pick<InboxMessage, 'sender_id' | 'body'>): boolean {
+  return !!m.sender_id?.startsWith('automation:') || /```forsion-approval\b/.test(m.body || '')
+}
+
 export const useInbox = create<InboxState>((set, get) => ({
   messages: [],
   archived: [],
@@ -121,7 +126,8 @@ export const useInbox = create<InboxState>((set, get) => ({
           const m = latestChanged && r.count > had ? msgs.find((x) => x.id === r.latestId) : undefined
           // 收件箱新消息 → 统一通知入口(应用内卡片 + 系统通知由 notifyApp 一并发,受通知设置门控;
           // 不再单发 notifyInbox,避免与统一系统通知重复)。
-          if (m && !m.read_at) {
+          // 10-18 Muse 私聊方案 B:收件箱是「慢慢看」的,新信只亮角标;只有等你拍板的审批信与你自己定的自动化提醒还弹。
+          if (m && !m.read_at && inboxLetterPops(m)) {
             notifyApp({
               event: 'inbox.message', level: 'info',
               title: senderOf(m), text: m.title,

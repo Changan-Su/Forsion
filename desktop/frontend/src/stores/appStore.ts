@@ -146,6 +146,8 @@ export function recordToUi(r: any, resolveGroup?: (name: string) => { slug?: str
     agentId, agentName, agentColor,
     ...(teamDone ? { teamDone: true } : {}),
     ...(teamSummary ? { teamSummary: true } : {}),
+    // Muse 自己开口发进私聊的(引擎 museDm.ts:proactive / proactive:todo / proactive:approval):消息头上画「主动发来 · 时间」。
+    ...(role === 'assistant' && typeof r.origin === 'string' && r.origin.startsWith('proactive') ? { origin: r.origin } : {}),
   }
   if (role === 'assistant' && Array.isArray(r.tool_calls) && r.tool_calls.length) {
     const results = new Map<string, any>((Array.isArray(r.tool_results) ? r.tool_results : []).map((t: any) => [t.tool_call_id, t]))

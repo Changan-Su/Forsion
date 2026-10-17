@@ -131,6 +131,8 @@
    两者摞在一起就是用户报的「红点和 ⌘1 重合」。图标位置在展开态是定死的(左内边距 10px + 18px 见方),
    故落点直接写常量;右侧留给 .rb-key。 */
 .rb-expanded .rb-space .rb-badge { top: 2px; left: 21px; right: auto; transform: none; }
+/* Tangu 角标:私聊里有人在等你回复 / 拍板时换警示色;字用侧栏底色,深浅两套都压得住。 */
+.rb-badge.dm-wait { background: var(--warning, #d97706); color: var(--sidebar-bg); }
 .rb-btn {
   -webkit-app-region: no-drag;
   width: 32px;

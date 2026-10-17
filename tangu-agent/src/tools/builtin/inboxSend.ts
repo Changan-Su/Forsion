@@ -13,12 +13,6 @@ import { query } from '../../core/db.js';
 import type { ToolProvider } from '../toolRegistry.js';
 import { DEFAULT_AGENT_SLUG } from '../../core/tanguHome.js';
 import { forwardInboxToChannels } from '../../channels/forward.js';
-import { loadSpecialAgentsConfig } from '../../services/specialAgentsConfig.js';
-
-/** Muse 的通知档(读不到按逐条)。 */
-function museNotify(): string {
-  try { return loadSpecialAgentsConfig().muse.notify } catch { return 'immediate' }
-}
 
 const MAX_PER_HOUR = 20;
 /** 正文上限(工具入口超了报错让模型缩短 —— 任务卡在末尾,静默截断会先截掉它;投递内核仍按它截,自动化 notify 行为不变)。 */
@@ -76,9 +70,10 @@ export const inboxSendProvider: ToolProvider = {
     {
       name: 'inbox_send',
       mode: 'both',
-      // 本地限定(云端 no-op)。Muse 周期(10-18 方案 B):做好的成品走这里、要用户回话的走 message_user;
-      // 日报档下不可见 —— 成品进 Journal、每天一封日报,逐封发信会绕过 notify=digest(Codex 09-10 P2-10)。Muse 派出去的子代理不可见。
-      isEnabledFor: (profile, ctx) => !!profile.capabilities.hostExec && (!(ctx as any).muse || (!((ctx.subAgentDepth || 0) >= 1) && museNotify() !== 'digest')),
+      // 本地限定(云端 no-op)。Muse 周期(10-18 方案 B):做好的成品走这里、要用户回话的走 message_user。
+      // notify 从此只管日报发不发(方案页「日报:每天一封 / 不发」),不再拦成品信 —— 09-10 P2-10 那条「绕过 digest」随之不成立。
+      // Muse 派出去的子代理不可见。
+      isEnabledFor: (profile, ctx) => !!profile.capabilities.hostExec && (!(ctx as any).muse || !((ctx.subAgentDepth || 0) >= 1)),
 
       definition: {
         type: 'function',
