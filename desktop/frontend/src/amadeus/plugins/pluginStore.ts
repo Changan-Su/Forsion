@@ -51,7 +51,7 @@ import { buildPluginTriggerUpserts, isPluginOwnedRule, normalizeVaultRel } from 
 import { MUTATE_DB_RETRIES, mutateDbCas } from './pluginDb'
 import { useDbStore } from '../store/dbStore'
 import { createDatabasesApi, createNoteTasksApi } from './pluginData'
-import { loadSyncedPluginData, notePluginDataSaved, pluginDataSyncOn, type LocalData } from './pluginDataSync'
+import { loadSyncedPluginData, notePluginDataEdit, pluginDataSyncOn, pushPluginData, type LocalData } from './pluginDataSync'
 import { kickAutomation } from '../store/automationKick'
 import { triggerToUpsert } from '../../views/automation/lib'
 import { memberOf, useCalendarConfig } from '../store/calendarConfigStore'
@@ -1366,8 +1366,11 @@ export const usePluginStore = create<PluginState>((set, get) => {
     },
     saveData: async (value) => {
       if (!amadeus?.writePluginData) return
+      const p = get().plugins.find((o) => o.id === pluginId)
+      // 先记这次编辑、再写本机(拉取落盘前核对代号);声明了 syncData 就记,同步关着也记 —— 重新打开时认得出本机更新
+      if (p?.syncData) notePluginDataEdit(pluginId)
       await amadeus.writePluginData(pluginId, JSON.stringify(value ?? null))
-      if (localData && pluginDataSyncOn(get().plugins.find((p) => p.id === pluginId))) notePluginDataSaved(pluginId, localData)
+      if (localData && pluginDataSyncOn(p)) void pushPluginData(pluginId, localData)
     },
     // 通用宿主 UI 原语。Floating TOC 是非接管式挂载:插件继续拥有正文 DOM,宿主只在 shell 上叠一层。
     // 与 table/dashboard 一样动态 import 破环;形态错误同步抛,让插件能当场走自己的降级 UI。
