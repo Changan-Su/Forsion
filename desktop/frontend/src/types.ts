@@ -121,7 +121,7 @@ export interface SessionRecord {
   projectless?: boolean
   /** 父子会话:主会话用 start_session 开出的子会话指回主会话(左栏挂在它下面一层)。也可能是私聊 @项目派遣的会话(那时主会话在别的组,照平铺)。 */
   parent_session_id?: string | null
-  /** 这一轮停下来在等用户回答(模型调了 wait_for_user;下一轮开始引擎清掉)。 */
+  /** 这一轮以问句收尾、在等用户回答(引擎置,下一轮开始清掉)。 */
   awaiting_user?: boolean
   /** 引擎这会儿有在飞 / 排队的 run(列表接口现算):客户端没订阅的会话(子会话、自动接着做的一轮)也画「在跑」。 */
   busy?: boolean

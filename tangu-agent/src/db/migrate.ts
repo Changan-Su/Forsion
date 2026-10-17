@@ -265,7 +265,7 @@ export async function runMigration(): Promise<void> {
     // Background Session 父链接:@讨论 / Historian 辅助讨论等隐藏子会话指回其来源会话,
     // 供 GET /agent/sessions/:id/background(右栏「子聊天」)持久列出。
     ['chat_sessions', 'parent_session_id VARCHAR(36)'],
-    // 父子会话(services/childSessions.ts):「等你」标记(wait_for_user 置、下一轮开始清)+ 子会话待送回主会话的那一轮。
+    // 父子会话(services/childSessions.ts):「等你」标记(收尾问句置、下一轮开始清)+ 子会话待送回主会话的那一轮。
     ['chat_sessions', 'awaiting_user BOOLEAN NOT NULL DEFAULT FALSE'],
     ['chat_sessions', 'report_run_id VARCHAR(36)'],
     // Historian 复盘标记:配合扫描谓词「last IS NULL OR last < updated_at」只复盘有新活动的会话。

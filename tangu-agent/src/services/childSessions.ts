@@ -8,8 +8,9 @@
  *  - 送达(deliverChildReports):主会话空闲 + 名下没有子会话在跑 → 一条 `<child_sessions_update>` 用户行(界面画成系统行)+ 起一轮。
  *    连续自动接着做 AUTO_CONTINUE_MAX 次后只写行不起轮,等用户下一句;主会话或子会话有远程污点(remoteTaint.sessionRemoteTainted)
  *    而这批回报又没有可抄的 input.remote 时也只写行(不替用户在本机无污点地自动起轮);重启补送一律只写行。
- *  - 等你:wait_for_user 置 awaiting_user;模型没调时引擎兜底 —— 交互 / 父子派生的一轮正常收尾、最后一句以问号结尾也置(markIfAsked;
- *    live 10-17:GPT 6 Luna 先问用户时两次都没调工具)。子会话在跑 / 结果没送回时都不置;任何一轮开始时清掉(onRunStart)。
+ *  - 等你:交互 / 父子派生的一轮正常收尾、最后一句以问号结尾 → awaiting_user(markIfAsked;起初是模型调 wait_for_user 声明,
+ *    live 10-17 GPT 6 Luna 三次都没调、一次误用,删了)。子会话在跑 / 结果没送回时不置;任何一轮开始时清掉(onRunStart)。
+ *    阻塞的询问(ask_user)界面另按 attention 画等你;子会话那一轮里 ask_user 不阻塞(inquiries.INQUIRY_CHILD_ANSWER),问题收尾送回主会话。
  *  - 只一层:子会话不能再开子会话(列表的树只画一层)。
  *
  * 唯一触发点 = agentLoop.startRun 的 finally(onRunSettled):子会话收尾试着送给主会话,主会话收尾试着收它名下积着的回报。
@@ -107,7 +108,7 @@ async function queueFromParent(p: { sessionId: string; userId: string; appId: st
   return runId;
 }
 
-/** wait_for_user:这一轮停下来是在等用户回答 / 拍板。子会话还在跑 / 结果还没送回时不置(live 10-17:模型把「等子会话」当成「等你」)。
+/** 置「等你」。子会话还在跑 / 结果还没送回时不置(live 10-17:模型把「等子会话」当成「等你」)。
  *  ponytail: 子会话在跑时真要问用户也标不上,行尾照样显示在跑;要分开再按问句判断。 */
 export async function markAwaitingUser(sessionId: string, userId: string): Promise<boolean> {
   const { activeSessionIds } = await loop();
@@ -138,7 +139,6 @@ export async function onRunSettled(runId: string): Promise<void> {
   const input = decode(run.input);
   const [s] = await query<any[]>(`SELECT kind, parent_session_id FROM chat_sessions WHERE id = ?`, [sid]);
   if (!s || s.kind !== 'user') return;
-  await markIfAsked(run, input).catch(() => {});
   await deliverChildReports(s.parent_session_id ? String(s.parent_session_id) : sid);
 }
 
@@ -147,15 +147,13 @@ export function endsWithQuestion(text: string): boolean {
   return /[?？]$/.test(text.replace(/[\s*_`"'”’」』)）\]>~]+$/u, ''));
 }
 
-/** 兜底「等你」:只认用户在场的一轮(输入区发起)和父子派生的轮 —— Muse / 通道 / 自动化 / 团队成员的收尾问句不算。
- *  ponytail: 按问号判,「要不要我再…?」这类可选提议也算等你(Claude 的 waiting for input 同口径);那一轮被 steer 拆成几条时只看第一条。 */
-async function markIfAsked(run: any, input: any): Promise<void> {
-  if (run.status !== 'done' || !(input.origin === 'client' || input.fromParent === true || input.childReport === true)) return;
-  const { activeSessionIds } = await loop();
-  if (activeSessionIds().has(String(run.session_id))) return; // 下一轮已起跑(onRunStart 清过了):别把旧问句再标回去
-  if (!run.assistant_message_id) return;
-  const [m] = await query<any[]>(`SELECT content FROM chat_messages WHERE id = ? LIMIT 1`, [run.assistant_message_id]);
-  if (m && endsWithQuestion(String(m.content || ''))) await markAwaitingUser(String(run.session_id), String(run.user_id));
+/** 兜底「等你」(agentLoop 正常收尾、发 done **之前**调:客户端收到 done 立刻刷新列表,晚一步就读不到)。
+ *  只认用户在场的一轮(输入区发起)和父子派生的轮 —— Muse / 通道 / 自动化 / 团队派生的收尾问句不算。
+ *  ponytail: 按问号判,「要不要我再…?」这类可选提议也算等你(Claude 的 waiting for input 同口径)。 */
+export async function markIfAsked(sessionId: string, userId: string, input: any, finalText: string): Promise<void> {
+  if (!deps().profile.capabilities.hostExec) return;
+  if (!(input?.origin === 'client' || input?.fromParent === true || input?.childReport === true)) return;
+  if (endsWithQuestion(String(finalText || ''))) await markAwaitingUser(sessionId, userId);
 }
 
 /** 引擎启动(recoverQueuedRuns 之后):上次退出 / 崩溃时没送出去的回报补成主会话里的一行(不起轮 —— 别一开 app 主会话就自己跑起来)。 */

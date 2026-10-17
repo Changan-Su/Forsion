@@ -509,4 +509,4 @@ function editDistance(a: string, b: string): number {
 }
 
 registerToolProvider(intelligentUiProvider); // Native document renderer, explicit client capability.
-registerToolProvider(childSessionsProvider); // host-only:start_session / send_to_session(deferred)+ wait_for_user(父子会话;append 末尾,保前缀缓存)
+registerToolProvider(childSessionsProvider); // host-only:start_session + send_to_session(deferred)(父子会话;append 末尾,保前缀缓存)

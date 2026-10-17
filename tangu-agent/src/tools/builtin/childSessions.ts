@@ -1,7 +1,7 @@
 /**
  * 父子会话的三个工具(services/childSessions.ts 是逻辑):
  *  - start_session / send_to_session:主会话开可见子会话、给自己的子会话再说一句(deferred,同组连坐解锁)。
- *  - wait_for_user:这一轮停下来是在等用户 → 会话列表行尾画「等你」(常驻;每一轮开始时清掉)。
+ *  「等你」不靠模型声明(live 10-17:GPT 6 Luna 三次都没调专门的工具):收尾问句由引擎兜底(childSessions.markIfAsked),阻塞询问走 ask_user。
  * 只在本机引擎;子代理 / 讨论 / Muse / 团队成员 / 通道 / 无人值守 run 不可见。
  */
 import type { ToolProvider } from '../toolRegistry.js';
@@ -9,7 +9,7 @@ import type { AppProfile } from '../../seams/appProfile.js';
 import type { ToolContext } from '../toolTypes.js';
 import { effectiveRemote } from '../../services/remoteOrigin.js';
 import { publish } from '../../services/eventBus.js';
-import { markAwaitingUser, sendToChildSession, startChildSession } from '../../services/childSessions.js';
+import { sendToChildSession, startChildSession } from '../../services/childSessions.js';
 
 const guard = (profile: AppProfile, ctx: ToolContext): boolean =>
   !!profile.capabilities.hostExec && !(ctx.subAgentDepth && ctx.subAgentDepth >= 1) && !ctx.inDiscussion
@@ -98,29 +98,6 @@ export const childSessionsProvider: ToolProvider = {
         } catch (e: any) {
           return `Error: ${e?.message || e}`;
         }
-      },
-    },
-    {
-      name: 'wait_for_user',
-      mode: 'both',
-      isEnabledFor: guard,
-      definition: {
-        type: 'function',
-        function: {
-          name: 'wait_for_user',
-          description:
-            'Mark this conversation as waiting for the user. Call it every time your reply asks the user something they must answer before you can continue '
-            + '(a clarifying question, missing information, a choice, an approval): call it before your final message, then end your turn with the question. '
-            + 'The session list then shows it as waiting for them until they reply. Do not call it while you are only waiting for child sessions '
-            + '(their results come back to you automatically; just end your turn), when you simply finished, or when you only offer optional next steps.',
-          parameters: { type: 'object', properties: {} },
-        },
-      },
-      execute: async (_args, ctx) => {
-        if (!(await markAwaitingUser(ctx.sessionId, ctx.userId))) {
-          return 'Not marked: your child sessions are still working and will report back to you automatically. Just end your turn; do not ask the user to wait.';
-        }
-        return 'Marked as waiting for the user. End your turn now with your question.';
       },
     },
   ],

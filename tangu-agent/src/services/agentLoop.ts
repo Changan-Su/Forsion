@@ -91,7 +91,7 @@ import { takeWorkspaceUploads, withUploadRefs } from './workspaceUploads.js';
 import './remoteTaint.js'; // 首次远程染色 → 落进 run 行(input.remoteTainted),会话级污点判据据此跨重启认得(P1 · M1A)
 import { buildProbe, formatCwdListing, type ProbeSegment } from './promptHead.js';
 import { channelHub } from '../channels/hub.js';
-import { onRunSettled as onChildRunSettled, onRunStart as onChildRunStart } from './childSessions.js';
+import { markIfAsked, onRunSettled as onChildRunSettled, onRunStart as onChildRunStart } from './childSessions.js';
 
 // ── 注入依赖的 lazy 别名:保持下方调用点不变(接缝装配后才会真正取到 deps)──
 const resolveModelAndKey = (modelId: string) => deps().brain.llm.resolveModelAndKey(modelId);
@@ -3442,6 +3442,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // toolOffsets = 本条落库消息的工具锚点(同 ui_content_offset)。客户端在 done 时据此按终稿重排直播段,
     // 与重开会话一致:否则引擎丢掉的流式正文(末轮手写成 DSML 的工具调用)一直挂在屏上,
     // 收尾才追加的停止说明/耗尽提示反而看不见(09-15 用户截图)。
+    await markIfAsked(sessionId, userId, input, finalContent).catch(() => {}); // 父子会话:收尾问句 → 列表「等你」(要在 done 之前)
     await publish(runId, 'done', {
       content: finalContent,
       toolOffsets: allToolCalls.map((c) => ({ id: c.id, offset: c.ui_content_offset })),

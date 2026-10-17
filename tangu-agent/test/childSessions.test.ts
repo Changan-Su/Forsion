@@ -2,7 +2,7 @@
  * 父子会话(services/childSessions.ts + tools/builtin/childSessions.ts):
  * start_session 开可见子会话(kind=user、parent_session_id、同项目、继承配置)→ 子会话那一轮收尾 → 主会话收到一条
  * <child_sessions_update> 并自己接着做一轮;两个子会话时等最后一个;连续自动接着做 3 次后只写行不起轮;
- * 用户自己在子会话里聊的轮次不回报;wait_for_user 置「等你」、下一轮清;子会话不能再开子会话。
+ * 用户自己在子会话里聊的轮次不回报;收尾问句置「等你」、下一轮清;子会话不能再开子会话。
  */
 import { describe, it, expect, afterEach } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -18,7 +18,7 @@ import { query } from '../src/core/db.js';
 import { createRun } from '../src/services/runStore.js';
 import { enqueueRun, activeSessionIds } from '../src/services/agentLoop.js';
 import { childSessionsProvider } from '../src/tools/builtin/childSessions.js';
-import { CHILD_UPDATE_OPEN, deliverPendingChildReports, endsWithQuestion } from '../src/services/childSessions.js';
+import { CHILD_UPDATE_OPEN, deliverPendingChildReports, endsWithQuestion, markAwaitingUser } from '../src/services/childSessions.js';
 
 let home: string | null = null;
 // 主会话 id 每个用例不同:自动接着做的计数在模块内存里,同名会串到下一个用例
@@ -123,9 +123,9 @@ describe('child sessions', () => {
     expect((await runsOf(P)).filter((r) => r.input.childReport)).toHaveLength(4);
   });
 
-  it('wait_for_user 置「等你」,回报里写 waiting_for_user;下一轮开始清掉', async () => {
+  it('置「等你」后下一轮开始清掉;子会话结果没送回时不置', async () => {
     await setup();
-    await tool('wait_for_user').execute({}, ctx());
+    expect(await markAwaitingUser(P, 'u1')).toBe(true);
     expect(!!(await query<any[]>(`SELECT awaiting_user FROM chat_sessions WHERE id = ?`, [P]))[0].awaiting_user).toBe(true);
     await createRun({ id: 'C1', sessionId: P, userId: 'u1', appId: 'tangu', modelId: 'm1', assistantMessageId: 'C1-a', input: { origin: 'client', message: 'yes', userMessageId: 'C1-u', attachments: [], agentConfig: {} } });
     enqueueRun(P, 'C1');
@@ -133,11 +133,11 @@ describe('child sessions', () => {
     expect(!!(await query<any[]>(`SELECT awaiting_user FROM chat_sessions WHERE id = ?`, [P]))[0].awaiting_user).toBe(false);
     // 子会话结果还没送回:等子会话 ≠ 等你,不置
     await query(`INSERT INTO chat_sessions (id, user_id, app_id, title, model_id, kind, parent_session_id, report_run_id) VALUES (?, 'u1', 'tangu', 'k', 'm1', 'user', ?, 'R0')`, [`${P}-k`, P]);
-    expect(String(await tool('wait_for_user').execute({}, ctx()))).toMatch(/^Not marked/);
+    expect(await markAwaitingUser(P, 'u1')).toBe(false);
     expect(!!(await query<any[]>(`SELECT awaiting_user FROM chat_sessions WHERE id = ?`, [P]))[0].awaiting_user).toBe(false);
   });
 
-  it('没调 wait_for_user:用户在场的一轮以问句收尾 → 引擎兜底置等你;子会话结果没送回时不置', async () => {
+  it('用户在场的一轮以问句收尾 → 引擎置等你;子会话结果没送回时不置', async () => {
     expect([endsWithQuestion('这周的重点是什么？'), endsWithQuestion('要我修吗? **'), endsWithQuestion('做完了。'), endsWithQuestion('「对吗？」')]).toEqual([true, true, false, true]);
     await setup();
     const aw = async () => !!(await query<any[]>(`SELECT awaiting_user FROM chat_sessions WHERE id = ?`, [P]))[0].awaiting_user;

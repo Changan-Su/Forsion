@@ -53,7 +53,7 @@
  *   npm run live:harness -- --only deferred                  # E2 按需装载:load_tools 先于 read_document + 子代理 read_document 直通 + 子代理自己 load_tools 解锁 browser_snapshot
  *   npm run live:harness -- --only grant                     # 改 delegate.grantTools / 子代理管理面闸后跑:授予时子代理用得上 manage_schedule,不授予时照旧被拒(正负两跑,均 action=list 无副作用)
  *   npm run live:harness -- --only nested                     # 父子会话(10-17,方案「子会话与任务卡」):让它分头开子会话查三个模块 → start_session ≥2、子会话各自跑完、
- *                                                              结果以 <child_sessions_update> 送回主会话并自动接着做一轮、汇总点对三个坏文件;再问一句须先问用户的事 → wait_for_user 置「等你」、下一句清掉。
+ *                                                              结果以 <child_sessions_update> 送回主会话并自动接着做一轮、汇总点对三个坏文件;再问一句须先问用户的事 → 问句收尾置「等你」、下一句清掉(或走 ask_user,台架照用户原话答)。
  *                                                              改 services/childSessions.ts / tools/builtin/childSessions.ts 的措辞后跑
  *   npm run live:harness -- --only ultra --model xai/grok-4.7  # Ultra 档(09-27):改 ULTRA_SECTION / delegate 描述 / 子代理成本闸后跑:可并行的题一轮派 ≥2 个且真并行、琐碎题 0 个、不开 Ultra 的对照只记数
  *   TANGU_CONTEXT_WINDOW_TOKENS=100000 npm run live:harness -- --only ultra --model codex/gpt-5.6-luna  # Ultra 拉满上下文(09-27):上限压到 100k,族表 272k 的模型 Ultra 两跑窗口须 272k、对照 100k
@@ -4840,7 +4840,8 @@ Then reply with only the command output.`,
     const parent = `live-nested-${Date.now()}`;
     const TASK = 'nested/ 目录下有 billing、dates、strings 三个互不相关的模块,每个模块里 3 个版本文件,恰好一个版本的主函数有 bug。'
       + '这三件事分开开子会话各查一个模块,都回来以后给我汇总一张表(哪个文件、错在哪、怎么改)。只读,不要改文件。';
-    const ev1 = await run(parent, TASK, 300_000);
+    // full-auto:子会话继承档位,台架只替主会话点审批,子会话里的 run_bash 会挂到超时(10-17 第三轮)
+    const ev1 = await run(parent, TASK, 300_000, { approvalMode: 'full-auto' });
     const starts = ev1.toolResults.filter((r) => r.name === 'start_session' && !r.isError).length;
     // 子会话还在跑时主会话不许是「等你」(等子会话 ≠ 等你;收尾汇总以问句结尾时再标等你是允许的)
     const midRow = (await api('/agent/sessions?limit=500')).sessions.find((x) => x.id === parent);
@@ -4869,20 +4870,22 @@ Then reply with only the command output.`,
     const midWait = midKidsBusy && !!midRow?.awaiting_user;
     const ok1 = !ev1.error && starts >= 2 && kids.length >= 2 && settled && updates.length >= 1 && found3 && !midWait;
 
-    // ② 要先问用户的事:模型停下来问 → wait_for_user 置「等你」;用户回一句,那一轮开始就清掉
+    // ② 要先问用户的事:模型以问句收尾 → 列表「等你」;用户回一句,那一轮开始就清掉。走 ask_user(阻塞询问,界面按 attention 画等你)也算,台架照用户原话答
     const ask = `live-nested-ask-${Date.now()}`;
-    const ev2 = await run(ask, '帮我给团队周报起个标题。先问我这周的重点是什么,我回答之前不要自己编。', 180_000);
+    const ANSWER = '重点是发布了 2.13.4 和修好了冷启动慢。';
+    const ev2 = await run(ask, '帮我给团队周报起个标题。先问我这周的重点是什么,我回答之前不要自己编。', 180_000, {}, undefined, undefined, undefined, undefined, { inquiryAnswer: ANSWER });
     const row2 = (await api('/agent/sessions?limit=500')).sessions.find((x) => x.id === ask);
-    const waited = !!row2?.awaiting_user;
-    const ev3 = await run(ask, '重点是发布了 2.13.4 和修好了冷启动慢。', 180_000);
+    const viaAsk = (ev2.inquiries || 0) > 0;
+    const waited = viaAsk || !!row2?.awaiting_user;
+    const ev3 = viaAsk ? ev2 : await run(ask, ANSWER, 180_000);
     const row3 = (await api('/agent/sessions?limit=500')).sessions.find((x) => x.id === ask);
-    // 判状态不判工具:模型没调 wait_for_user 时引擎按收尾问句兜底(services/childSessions.ts markIfAsked)
+    const usedAnswer = /2\.13\.4|冷启动/.test(ev3.content);
     const ok2 = !ev2.error && waited && !ev3.error && !row3?.awaiting_user;
 
     return {
       ok: ok1 && ok2,
       detail: `【分头查】start_session ×${starts}(工具序列 ${ev1.toolCalls.join(' → ') || '无'});子会话 ${kids.length} 个;${settled ? '都收尾' : '8 分钟没收完!'};回报行 ${updates.length} 条;汇总${found3 ? '三个坏文件都点对' : '没点全!'};子会话在跑时主会话「等你」${midWait ? '误置!' : midKidsBusy ? '没置' : '(没赶上子会话在跑)'};收尾后${parentRow?.awaiting_user ? '等你(汇总以问句结尾)' : '没等'}`
-        + ` 【先问用户】wait_for_user ${ev2.toolCalls.includes('wait_for_user') ? '调了' : '没调(靠问句兜底)'};列表「等你」${waited ? '在' : '没有!'};回答后${row3?.awaiting_user ? '还在!' : '清掉了'}`,
+        + ` 【先问用户】${viaAsk ? 'ask_user 询问(台架照原话答)' : `问句收尾,列表「等你」${row2?.awaiting_user ? '在' : '没有!'}`};回答后${row3?.awaiting_user ? '还在!' : '清掉了'}${usedAnswer ? ',标题用上了回答' : ''}`,
       output: `【① 主会话第一轮】${ev1.content}\n\n【回报行】${updates.map((m) => String(m.content).slice(0, 1200)).join('\n---\n')}\n\n【接着做那一轮】${after}\n\n【② 先问】${ev2.content}\n\n【③ 用户回答后】${ev3.content}`,
       toolCalls: [...ev1.toolCalls, ...ev2.toolCalls, ...ev3.toolCalls],
       ttftMs: ttft(ev1), tokens: (tokensOf(ev1) || 0) + (tokensOf(ev2) || 0) + (tokensOf(ev3) || 0) || null,
