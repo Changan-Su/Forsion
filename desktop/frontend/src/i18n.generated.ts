@@ -1064,26 +1064,6 @@ registerMessages({
     "zh": "自定义 Provider（BYO-key 直连）",
     "en": "Custom provider (BYO-key direct connection)"
   },
-  "settings.websearch.sectionTitle": {
-    "zh": "联网搜索（web_search）",
-    "en": "Web search (web_search)"
-  },
-  "settings.websearch.intro": {
-    "zh": "web_search 工具的本地搜索源（BYO-key）。配置后本机直搜、不依赖云端；不配置则登录用户走云端，未登录回落免费 DuckDuckGo。失败自动按「其余已配 Key → DuckDuckGo」降级。大陆网络 DuckDuckGo 不可达，建议配博查、智谱或 DeepSeek。",
-    "en": "Local search source for the web_search tool (BYO-key). When configured, searches run from this machine without the cloud; otherwise signed-in users go through the cloud and others fall back to free DuckDuckGo. On failure it degrades through your other configured keys, then DuckDuckGo. DuckDuckGo is unreachable from mainland China — use Bocha, Zhipu or DeepSeek there."
-  },
-  "settings.websearch.providerLabel": {
-    "zh": "搜索源",
-    "en": "Provider"
-  },
-  "settings.websearch.zhipuEngineLabel": {
-    "zh": "智谱引擎档位",
-    "en": "Zhipu engine"
-  },
-  "settings.websearch.zhipuEngineHint": {
-    "zh": "仅 provider 为智谱（或 auto 落到智谱）时生效",
-    "en": "Only applies when the effective provider is Zhipu"
-  },
   "settings.websearch.zhipuEngine.quark": {
     "zh": "夸克 search_pro_quark（¥0.05/次，真引擎索引，默认）",
     "en": "Quark search_pro_quark (¥0.05/call, real engine index, default)"
@@ -1099,74 +1079,6 @@ registerMessages({
   "settings.websearch.zhipuEngine.std": {
     "zh": "search_std（¥0.01/次，基础版，长尾专名易糊）",
     "en": "search_std (¥0.01/call, basic; weak on rare names)"
-  },
-  "settings.websearch.provider.auto": {
-    "zh": "auto（按已配 Key 自动选）",
-    "en": "auto (pick by configured key)"
-  },
-  "settings.websearch.provider.bocha": {
-    "zh": "博查 Bocha（国内直连）",
-    "en": "Bocha (CN-friendly)"
-  },
-  "settings.websearch.provider.tavily": {
-    "zh": "Tavily（海外，免费 1k 次/月）",
-    "en": "Tavily (intl, free 1k/mo)"
-  },
-  "settings.websearch.provider.zhipu": {
-    "zh": "智谱 Web Search（国内直连）",
-    "en": "Zhipu Web Search (CN-friendly)"
-  },
-  "settings.websearch.provider.deepseek": {
-    "zh": "DeepSeek Search（国内直连，¥5/千次）",
-    "en": "DeepSeek Search (CN-friendly, ¥5 per 1k)"
-  },
-  "settings.websearch.provider.duckduckgo": {
-    "zh": "DuckDuckGo（免 Key）",
-    "en": "DuckDuckGo (no key)"
-  },
-  "settings.websearch.effectiveLabel": {
-    "zh": "当前生效",
-    "en": "Effective"
-  },
-  "settings.websearch.effectiveLocal": {
-    "zh": "本地直搜：{provider}",
-    "en": "Local: {provider}"
-  },
-  "settings.websearch.effectiveCloud": {
-    "zh": "未配置：登录走云端，否则免费 DuckDuckGo 兜底",
-    "en": "Not configured: cloud when signed in, else free DuckDuckGo"
-  },
-  "settings.websearch.keyStored": {
-    "zh": "已保存",
-    "en": "stored"
-  },
-  "settings.websearch.keyCleared": {
-    "zh": "将清除（保存后生效）",
-    "en": "will clear on save"
-  },
-  "settings.websearch.keyKeepPlaceholder": {
-    "zh": "已保存，留空则不变",
-    "en": "Stored — leave blank to keep"
-  },
-  "settings.websearch.keyEmptyPlaceholder": {
-    "zh": "未配置",
-    "en": "Not set"
-  },
-  "settings.websearch.clearKey": {
-    "zh": "清除",
-    "en": "Clear"
-  },
-  "settings.websearch.saved": {
-    "zh": "✓ 已保存，搜索时即时生效",
-    "en": "✓ Saved — takes effect on next search"
-  },
-  "settings.websearch.testing": {
-    "zh": "测试中…",
-    "en": "Testing…"
-  },
-  "settings.websearch.test": {
-    "zh": "连通性测试",
-    "en": "Test connection"
   },
   "settings.customProvider.label": {
     "zh": "自定义 Provider（BYO-key 直连；对齐 Forsion 模型添加：base_URL + api key）",
