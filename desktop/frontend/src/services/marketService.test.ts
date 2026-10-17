@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { installMarket } from './marketService'
+import { installMarket, installedMarketItem } from './marketService'
 
 // 2026-09-21:主进程只给语言中立的原因码,Electron 还会在 invoke 的拒绝外面包一层前缀 —— 两样都不能原样上屏。
 const g = globalThis as unknown as { window?: { tangu?: Record<string, unknown> } }
@@ -7,6 +7,12 @@ const withInstallError = (message: string): void => {
   g.window = { tangu: { marketList: async () => ({ items: [] }), marketInstall: async () => { throw new Error(message) } } }
 }
 afterEach(() => { delete g.window })
+
+it('installed lookup respects types while tolerating plugin category correction', () => {
+  const item = { type: 'amadeus-plugin', installSlug: 'same' } as const
+  expect(installedMarketItem(item, { theme: [{ slug: 'same', version: '1.0.0' }] })).toBeUndefined()
+  expect(installedMarketItem(item, { plugin: [{ slug: 'same', version: '1.0.0' }] })).toEqual({ slug: 'same', version: '1.0.0' })
+})
 
 describe('installMarket 的错误文案', () => {
   it('剥掉 Electron 的 IPC 包装前缀,下载原因(主机: 原因码)原样保留', async () => {

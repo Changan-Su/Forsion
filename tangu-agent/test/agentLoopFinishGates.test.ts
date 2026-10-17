@@ -30,6 +30,8 @@ let llmPayloads: any[];
 let script: Array<(o: any) => any>;
 /** 订阅登录续期接缝(brain.llm.refreshModelKey)的替身;缺省 = 续不了。 */
 let refreshKey: ((modelId: string) => Promise<string | null>) | undefined;
+/** beforeEach 的 configureTangu 入参;要商店接缝的用例带上 brain.marketplace 再配一次。 */
+let configured: any;
 
 beforeEach(async () => {
   home = mkdtempSync(join(tmpdir(), 'tangu-gates-'));
@@ -64,7 +66,8 @@ beforeEach(async () => {
     calculateCost: async () => 0,
     logApiUsage: async () => {},
   };
-  configureTangu({ host, brain: fakeBrain, billing: fakeBilling, profile: createTanguProfile({ sandboxMode: 'none' }) });
+  configured = { host, brain: fakeBrain, billing: fakeBilling, profile: createTanguProfile({ sandboxMode: 'none' }) };
+  configureTangu(configured);
   await runMigration();
   await query(
     `INSERT INTO chat_sessions (id, user_id, app_id, title, model_id, kind) VALUES ('S', ?, 'tangu', 't', 'm1', 'user')`,
@@ -99,10 +102,10 @@ const userTexts = (payload: any): string => (payload.messages as any[])
   .map((m) => (typeof m.content === 'string' ? m.content : JSON.stringify(m.content)))
   .join('\n---\n');
 
-async function runToSettled(agentConfig: Record<string, any> = {}, msg = '干活', client?: string): Promise<any> {
+async function runToSettled(agentConfig: Record<string, any> = {}, msg = '干活', client?: string, clientCapabilities?: string[]): Promise<any> {
   await createRun({
     id: 'R1', sessionId: 'S', userId: USER, appId: 'tangu', modelId: 'm1', assistantMessageId: 'A1',
-    input: { message: msg, userMessageId: 'U1', attachments: [], agentConfig, ...(client ? { client } : {}) },
+    input: { message: msg, userMessageId: 'U1', attachments: [], agentConfig, ...(client ? { client } : {}), ...(clientCapabilities ? { clientCapabilities } : {}) },
   });
   enqueueRun('S', 'R1');
   const t0 = Date.now();
@@ -141,6 +144,41 @@ describe('Sketch 主动触发交付闸', () => {
     expect(run.status).toBe('done');
     expect(llmPayloads.length).toBe(1);
     expect(userTexts(llmPayloads[0])).not.toContain('Visual-first note for this turn');
+  }, 20_000);
+});
+
+describe('商店卡片之后不再重画(10-17 live:6 次里 2 次 sketch 把插件卡片又画了一遍)', () => {
+  const entry = (id: string, author: string) => ({ id, name: 'PDF Notes', author, type: 'amadeus-plugin', source: 'zip', installSlug: `market-${id}`, summary: 'PDF notes', tags: ['pdf'], minAppVersion: '2.13.0', platforms: ['desktop'] });
+  const searchStep = () => () => ({
+    content: '', reasoning: '',
+    toolCalls: [{ id: 'ms1', type: 'function', function: { name: 'search_marketplace', arguments: JSON.stringify({ query: 'pdf' }) } }],
+    usage: { prompt_tokens: 10, completion_tokens: 10 }, finishReason: 'stop',
+  });
+  const toolText = (payload: any, id: string) => String((payload.messages as any[]).find((m) => m.role === 'tool' && m.tool_call_id === id)?.content || '');
+
+  it('本 run 已出商店卡片 → sketch 不执行、回一句让模型用文字说', async () => {
+    configureTangu({ ...configured, brain: { ...configured.brain, marketplace: { list: async () => [entry('a1', 'Alice'), entry('b2', 'Bob')], detail: async () => null } } });
+    script = [searchStep(), sketchStep(), finalStep('两个候选作者不同。')];
+    const run = await runToSettled({}, '帮我在商店找 PDF 笔记插件,推荐两个候选', 'desktop/2.13.4', ['marketplace-cards.v1']);
+    expect(run.status).toBe('done');
+    expect(toolText(llmPayloads[2], 'sk1')).toContain('already shown as plugin cards');
+  }, 20_000);
+
+  it('同一条回复里先搜后画:搜索一完成就置位,同批的 sketch 也不执行', async () => {
+    configureTangu({ ...configured, brain: { ...configured.brain, marketplace: { list: async () => [entry('a1', 'Alice'), entry('b2', 'Bob')], detail: async () => null } } });
+    const both = () => () => ({ ...searchStep()(), toolCalls: [...searchStep()().toolCalls, ...sketchStep()().toolCalls] });
+    script = [both(), finalStep('两个候选作者不同。')];
+    const run = await runToSettled({}, '帮我在商店找 PDF 笔记插件,推荐两个候选', 'desktop/2.13.4', ['marketplace-cards.v1']);
+    expect(run.status).toBe('done');
+    expect(toolText(llmPayloads[1], 'sk1')).toContain('already shown as plugin cards');
+  }, 20_000);
+
+  it('负对照:用户点名要图 → sketch 照常执行', async () => {
+    configureTangu({ ...configured, brain: { ...configured.brain, marketplace: { list: async () => [entry('a1', 'Alice'), entry('b2', 'Bob')], detail: async () => null } } });
+    script = [searchStep(), sketchStep(), finalStep('图里是两个候选。')];
+    const run = await runToSettled({}, '在商店找 PDF 笔记插件,画一张对比图给我', 'desktop/2.13.4', ['marketplace-cards.v1']);
+    expect(run.status).toBe('done');
+    expect(toolText(llmPayloads[2], 'sk1')).toContain('Sketch card rendered');
   }, 20_000);
 });
 

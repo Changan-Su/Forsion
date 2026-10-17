@@ -303,6 +303,10 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
   }
 
   const brain: CloudBrainServices = {
+    marketplace: {
+      list: async (signal) => (await getJson<{ items: unknown[] }>('/api/market/items', signal))?.items || [],
+      detail: (id, signal) => getJson(`/api/market/items/${encodeURIComponent(id)}`, signal),
+    },
     llm: {
       resolveModelAndKey: async (modelId: string) => {
         const r = await postJson<{ model: any; apiModelId: string }>('/api/brain/llm/resolve', { modelId });

@@ -209,6 +209,7 @@ export function MobileRoot() {
     settingsTab: s.settingsTab,
     settingsNonce: s.settingsNonce,
     marketOpen: s.marketOpen,
+    marketTarget: s.marketTarget,
     onboarding: s.onboarding,
     setOnboarding: s.setOnboarding,
     achievementsOpen: s.achievementsOpen,
@@ -285,7 +286,7 @@ export function MobileRoot() {
             exit={{ opacity: 0, scale: 0.985 }}
             transition={{ duration: 0.22, ease: [0.2, 0.8, 0.2, 1] }}
           >
-            <MarketModal onClose={() => useApp.getState().closeMarket()} />
+            <MarketModal key={a.marketTarget?.nonce} initialQuery={a.marketTarget?.q} initialItemId={a.marketTarget?.itemId} initialDetailTab={a.marketTarget?.detailTab} onClose={() => useApp.getState().closeMarket()} />
           </motion.div>
         )}
       </AnimatePresence>

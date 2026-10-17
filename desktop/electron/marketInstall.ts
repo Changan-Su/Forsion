@@ -6,6 +6,7 @@ import JSZip from 'jszip'
 import { mkdir, writeFile, readFile, readdir, chmod } from 'fs/promises'
 import { join, dirname, basename } from 'path'
 import { effectivePluginId } from '../shared/products'
+import { assertMarketplaceRequirements } from '../shared/marketplace'
 import {
   MARKET_SUBDIR, MARKET_MANIFEST, isSafeSlug, isJunkPath, computeStripPrefix, safeEntryPath, planZipFiles,
   detectMarketTypeFromNames, toArchiveUrl, downloadCandidates, ZIP_MAGIC, GZIP_MAGIC, hasMagic, ZipPlanError,
@@ -62,7 +63,7 @@ export async function readInstalledPluginId(type: string, dir: string): Promise<
     if (type === 'amadeus-plugin') return effectivePluginId(basename(dir), JSON.parse(await readFile(join(dir, 'manifest.json'), 'utf8'))?.id)
     if (type === 'plugin') {
       const id = JSON.parse(await readFile(join(dir, 'tangu-plugin.json'), 'utf8'))?.id
-      return isSafeSlug(id) ? id : null
+      return isSafeSlug(id) ? effectivePluginId(basename(dir), id) : null
     }
   } catch { /* manifest 缺失/损坏 → 装载器也不认它 */ }
   return null
@@ -90,7 +91,7 @@ export async function readUserPluginDirs(pluginsRoot: string): Promise<Array<{ i
     try {
       const m = JSON.parse(await readFile(join(pluginsRoot, e.name, 'tangu-plugin.json'), 'utf8'))
       // 只认 kebab id(与 loader/settings/卸载 IPC 同一字符集):非法 id 的插件 loader 也不会加载,不给卸载按钮。
-      if (isSafeSlug(m?.id)) out.push({ id: m.id, slug: e.name })
+      if (isSafeSlug(m?.id)) out.push({ id: effectivePluginId(e.name, m.id)!, slug: e.name })
     } catch { /* 无/坏 manifest → 跳过 */ }
   }
   return out
@@ -101,6 +102,26 @@ export async function detectMarketType(zipBuffer: Buffer, backendType: string): 
   if (backendType !== 'plugin' && backendType !== 'amadeus-plugin') return backendType
   const zip = await JSZip.loadAsync(zipBuffer)
   return detectMarketTypeFromNames(Object.values(zip.files).filter((f) => !f.dir).map((f) => f.name), backendType)
+}
+
+/** Check the actual package before creating or replacing any installed directory. */
+export async function checkMarketPackage(zipBuffer: Buffer, type: string, appVersion: string, platform: string, protectedIds: ReadonlySet<string> = new Set()): Promise<void> {
+  const zip = await JSZip.loadAsync(zipBuffer)
+  const names = MARKET_MANIFEST[type] || []
+  const plan = planZipFiles(Object.values(zip.files), names)
+  for (const file of plan.filter(f => names.includes(f.rel) && f.rel.endsWith('.json'))) {
+    const entry = zip.files[file.name]
+    const content = await new Promise<string>((resolve, reject) => {
+      const chunks: Buffer[] = []; let size = 0
+      const stream = entry.nodeStream()
+      stream.on('data', (chunk: Buffer) => { size += chunk.length; if (size > 1024 * 1024) (stream as import('stream').Readable).destroy(new Error('install: manifest too large')); else chunks.push(chunk) })
+        .on('error', reject).on('end', () => resolve(Buffer.concat(chunks).toString('utf8')))
+    })
+    const manifest = JSON.parse(content)
+    if (type === 'theme' && manifest.id === 'lovable') throw new Error('install: builtin')
+    if (protectedIds.has(manifest.id)) throw new Error('install: builtin')
+    assertMarketplaceRequirements(manifest, appVersion, platform)
+  }
 }
 
 /** 解压 zip 到 destRoot(manifest 感知重定根 + 防穿越)。返回写入文件数。遇到穿越 / 绝对路径条目直接抛错(写盘之前)。

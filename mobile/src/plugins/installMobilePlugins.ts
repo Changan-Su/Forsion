@@ -54,6 +54,7 @@ export function installMobilePlugins(opts: { cloudApiBase: () => string }): Mobi
   const host = createPluginHost(fs, { appVersion: () => APP_VERSION || null })
   const market = createMobileMarket({
     fs,
+    appVersion: () => APP_VERSION,
     cloudApiBase: opts.cloudApiBase,
     fetch: (input, init) => window.fetch(input, init),
     // 真机:原生下载(不吃 CORS、流式落盘、字节上限在传输中强制);浏览器台架 / dev 预览:fetch(下载主机得给 CORS,同样读到上限即停)。
@@ -75,6 +76,7 @@ export function installMobilePlugins(opts: { cloudApiBase: () => string }): Mobi
     t.marketTypes = market.marketTypes
     t.marketList = market.marketList
     t.marketDetail = market.marketDetail
+    t.marketRead = market.marketRead
     t.marketInstall = market.marketInstall
     t.onMarketInstallProgress = market.onMarketInstallProgress
     t.marketInstalled = market.marketInstalled

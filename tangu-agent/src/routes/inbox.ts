@@ -42,10 +42,11 @@ const COLS = 'id, title, body, sender_kind, sender_id, origin_broadcast_id, read
 
 /** thread 只认服务端广播落下来的行(sender_kind='server'):本地 POST /agent/inbox 与 agent 信永远没有它;
  *  形状只认 {kind:'feedback', ticketId:<uuid>}(客户端据此挂回复框、按 ticketId 打反馈 API),别的一律当无线程。 */
-function parseThread(r: any): { kind: 'feedback'; ticketId: string; event?: string } | null {
+function parseThread(r: any): { kind: 'feedback'; ticketId: string; event?: string } | { kind: 'market-comment'; itemId: string; commentId: string; itemName?: string } | null {
   if (r.sender_kind !== 'server' || !r.thread) return null;
   try {
     const p = JSON.parse(String(r.thread));
+    if (p?.kind === 'market-comment' && /^[a-zA-Z0-9_-]{1,128}$/.test(p.itemId || '') && /^[a-zA-Z0-9_-]{1,128}$/.test(p.commentId || '')) return { kind: 'market-comment', itemId: p.itemId, commentId: p.commentId, itemName: String(p.itemName || '').slice(0, 200) };
     if (p?.kind === 'feedback' && typeof p.ticketId === 'string' && /^[0-9a-fA-F-]{36}$/.test(p.ticketId)) {
       return { kind: 'feedback', ticketId: p.ticketId, ...(typeof p.event === 'string' ? { event: p.event } : {}) };
     }

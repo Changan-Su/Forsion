@@ -104,6 +104,7 @@ export function Root() {
     onboarding: s.onboarding,
     feedbackOpen: s.feedbackOpen,
     marketOpen: s.marketOpen,
+    marketTarget: s.marketTarget,
     closeMarket: s.closeMarket,
     achievementsOpen: s.achievementsOpen,
     cfg: s.cfg,
@@ -236,7 +237,7 @@ export function Root() {
       <AnimatePresence>
         {a.marketOpen && (
         <FloatingPanelFrame key="market" title={a.tr('market.title')} onClose={() => a.closeMarket()}>
-          <MarketModal onClose={() => a.closeMarket()} />
+          <MarketModal key={a.marketTarget?.nonce} initialQuery={a.marketTarget?.q} initialItemId={a.marketTarget?.itemId} initialDetailTab={a.marketTarget?.detailTab} onClose={() => a.closeMarket()} />
         </FloatingPanelFrame>
         )}
       </AnimatePresence>

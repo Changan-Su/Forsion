@@ -10,6 +10,7 @@
     "postinstall": "node build/link-lcl.cjs && node build/copy-excalidraw-assets.cjs && node build/gen-fonts.cjs && node build/fix-pty-helper.cjs",
     "predev": "node scripts/dev-version.check.cjs",
     "dev": "electron-vite dev --noSandbox",
+    "check:marketplace-upgrade": "node scripts/marketplace-upgrade.e2e.cjs",
     "check:visualize": "node scripts/visualize.check.cjs",
     "check:intelligent-ui": "node scripts/intelligent-ui.e2e.cjs",
     "e2e:intelligent-live": "cd ../tangu-agent && node scripts/live-harness.mjs --only intelligentusers --model codex/gpt-6-luna --timeout 1800000",
