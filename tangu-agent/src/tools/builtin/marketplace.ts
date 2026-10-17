@@ -18,12 +18,12 @@ export const marketplaceProvider: ToolProvider = {
     isEnabledFor: () => isConfigured() && !!deps().brain.marketplace,
     definition: { type: 'function', function: {
       name: 'search_marketplace',
-      description: 'Search the Forsion plugin store for plugins, skills, themes, agents or spaces that meet a user need. Use this when the user asks to find or recommend Forsion plugins. Returns real approved entries and renders native plugin cards in Chat View, with compatibility and user-controlled installation.',
+      description: 'Search the Forsion store (plugins, skills, themes, agents, spaces) when the user wants to find or be recommended an extension. Results are shown as plugin cards the user installs from.',
       parameters: { type: 'object', properties: {
-        query: { type: 'string', description: 'Capability or name keywords, in Chinese or English; use an empty string to browse.' },
-        type: { type: 'string', enum: ['plugin', 'amadeus-plugin', 'skill', 'theme', 'agent', 'space'], description: 'plugin includes engine and UI/bundle plugins; amadeus-plugin selects only UI/bundle plugins.' },
-        tags: { type: 'array', items: { type: 'string' }, description: 'Optional tags; entries must include every requested tag.' },
-        include_incompatible: { type: 'boolean', description: 'Default false: omit entries known to be incompatible with the requesting Forsion client. Set true only when the user wants to inspect unsupported options.' },
+        query: { type: 'string', description: 'Keywords in any language; empty string browses.' },
+        type: { type: 'string', enum: ['plugin', 'amadeus-plugin', 'skill', 'theme', 'agent', 'space'], description: 'plugin covers amadeus-plugin (UI/bundle only).' },
+        tags: { type: 'array', items: { type: 'string' }, description: 'Entries must have all of these.' },
+        include_incompatible: { type: 'boolean', description: 'Also list entries incompatible with this Forsion version or platform.' },
         limit: { type: 'integer', minimum: 1, maximum: 12 },
       }, required: ['query'], additionalProperties: false },
     } },
@@ -57,7 +57,7 @@ export const marketplaceProvider: ToolProvider = {
     name: 'get_marketplace_plugin',
     isEnabledFor: () => isConfigured() && !!deps().brain.marketplace,
     definition: { type: 'function', function: { name: 'get_marketplace_plugin',
-      description: 'Get an approved Forsion marketplace entry by its immutable ID. Use the ID returned by search_marketplace; display names may be duplicated. Returns its description, README, tags and Forsion version requirements as a native plugin card.',
+      description: 'Get a Forsion store entry by the ID from search_marketplace (names can repeat): description, README, tags, version requirements.',
       parameters: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'], additionalProperties: false } } },
     execute: async (args, ctx) => {
       if (!marketplaceId(args.id)) throw new Error('Invalid marketplace ID');

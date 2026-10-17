@@ -155,7 +155,6 @@ registerToolProvider(datetimeProvider);
 registerToolProvider(memoryLogProvider);
 registerToolProvider(calculatorProvider);
 registerToolProvider(webSearchProvider);
-registerToolProvider(marketplaceProvider);
 registerToolProvider(workspaceFilesProvider);
 registerToolProvider(skillsProvider);
 registerToolProvider(sandboxPythonProvider);
@@ -206,6 +205,7 @@ registerToolProvider(reviewLoadoutProvider); // 仅 Muse(周期或手聊):review
 registerToolProvider(appSettingsProvider); // host-only 前台 run:app_settings 读 / update_app_settings 改本机 config.json 里开放的那几段(写走控制面审批;全 deferred,append 末尾)
 registerToolProvider(sessionStatusProvider); // both 前台 run:session_status 读本会话的上下文占用 / 已花 token / 步数 / 用时(只读;deferred,append 末尾,快照不变)
 registerToolProvider(forsionAccountProvider); // both 前台 run、且 brain 有账号面(cloud)时:forsion_account 读额度 / 积分 / 套餐 / 用量,forsion_account_action 代办三件(每次都问;全 deferred,append 末尾,快照不变)
+registerToolProvider(marketplaceProvider); // both 前台 run、且 brain 有商店面时:search_marketplace 查商店条目(chat 常驻)、get_marketplace_plugin 按 ID 取详情(chat 按需;append 末尾,保前缀缓存)
 // 插件(表情包/分段等)现为文件夹插件(plugins/),经 activateAllPlugins→ctx.registerPlugin 注册其工具,不在此处。
 
 /** ctx 自带 profile(loop 按 run.app_id 解析)优先;缺省回退本进程装配的 profile。 */

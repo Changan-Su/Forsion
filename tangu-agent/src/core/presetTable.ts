@@ -76,7 +76,7 @@ export const CODING_PRESET_DEFERRED: ReadonlySet<string> = new Set([
  *  read_computer_history 另受 computerHistoryGate(电脑历史开着 + 本机客户端)门禁:放常驻不放 deferred ——
  *  「我休息前在做什么」这种问法模型不会先想到 load_tools,关着时它本就不在场,不占 defs。 */
 export const CHAT_PRESET_RESIDENT: ReadonlySet<string> = new Set([
-  'search_marketplace', 'get_marketplace_plugin',
+  'search_marketplace',
   'run_python', 'web_fetch', 'web_search', 'read_file', 'display_file', 'pip_install', 'write_file',
   'load_tools', 'list_files', 'get_datetime', 'sketch', 'intelligent_ui', 'list_intelligent_cards', 'remember', 'read_computer_history', 'manage_human',
 ]);
@@ -91,6 +91,7 @@ export const CHAT_PRESET_DEFERRED: ReadonlySet<string> = new Set([
   'forsion_account', 'forsion_account_action', // Forsion 账号:读额度 / 积分 / 套餐;动作每次由用户在卡上确认(approval:'always',聊天会话照样问)
   // 手机操控 T1(clientCapability 中央闸另管可见性;带能力的工具在 chat 面按能力放行,这里列名是让内置五件按需装载)
   'phone_open', 'phone_navigate', 'phone_compose', 'phone_system', 'phone_control',
+  'get_marketplace_plugin', // 商店条目详情:搜完拿到 ID、用户追问才用(搜索结果通常够推荐),不常驻
 ]);
 
 /** D11 形态:chat 落在 host execMode 时(桌面 standalone 的 rootless 会话仍是 sandbox,这里是纵深防御),
