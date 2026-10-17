@@ -52,7 +52,8 @@ import { RemoteSyncSection } from './RemoteSyncSection'
 import { APP_VERSION } from '../changelog'
 import { Markdown } from './Markdown'
 import { UpdateActions } from './UpdateActions'
-import { ChangelogEntries, openChangelogTab, releaseNotesFor } from '../views/ChangelogView'
+import { ChangelogEntries, releaseNotesFor } from '../views/ChangelogView'
+import { openWhatsNew } from './WhatsNewDialog'
 import { ModelSelect } from './ModelSelect'
 import { AsrModelChoice } from './AsrModelChoice'
 import { AuxModelChoice } from './AuxModelChoice'
@@ -3830,7 +3831,7 @@ export const SettingsModal: React.FC<{
                     <div className="field">
                       <label>{t('settings.developer.testUpdateLabel')}</label>
                       <div>
-                        <button className="btn ghost sm" onClick={() => { openChangelogTab(); p.onClose() }}>
+                        <button className="btn ghost sm" onClick={() => { openWhatsNew(); p.onClose() }}>
                           <RefreshCw size={12} /> {t('settings.developer.testUpdate')}
                         </button>
                       </div>
@@ -3972,6 +3973,9 @@ export const SettingsModal: React.FC<{
                         ) : null}
                       </div>
                       <span className="grow" />
+                      <button className="btn ghost sm" data-testid="about-whats-new" onClick={() => openWhatsNew()}>
+                        <Sparkles size={12} /> {t('whatsNew.open')}
+                      </button>
                       <UpdateActions upd={upd} />
                     </div>
                     <CorePluginUpdates />

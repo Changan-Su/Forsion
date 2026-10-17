@@ -22,6 +22,7 @@ import { MarketModal } from '@/components/MarketModal'
 import { PluginOnboardingHost } from '@/components/PluginOnboardingModal'
 import { OnboardingWizard } from '@/components/OnboardingWizard'
 import { NotificationHost } from '@/components/NotificationHost'
+import { WhatsNewHost } from '@/components/WhatsNewDialog'
 import { AmadeusOverlays } from '@/amadeusOverlays'
 import { AchievementToast } from '@/achievements/AchievementToast'
 import { AchievementsModal } from '@/achievements/AchievementsModal'
@@ -368,6 +369,7 @@ export function MobileRoot() {
 
       {/* 旧 .toast-wrap 已随 appStore.toasts 一起下线;通知统一走 notificationStore + NotificationHost。 */}
       <NotificationHost />
+      <WhatsNewHost />
     </>
   )
 }

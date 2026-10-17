@@ -5,7 +5,7 @@ import { useApp } from './appStore'
 import { useInbox } from './inboxStore'
 import { useChannels } from './channelsStore'
 import { setActiveSpace } from '@lcl/engine'
-import { openChangelogTab } from '../views/ChangelogView'
+import { maybeAutoOpenWhatsNew } from '../components/WhatsNewDialog'
 import { setUnauthorizedHandler } from '../services/http'
 import { useAttention } from './attentionStore'
 import { openSessionFromApproval } from './attentionOpen'
@@ -27,18 +27,10 @@ export function useBootstrap(): void {
     void useApp.getState().boot()
   }, [])
 
-  // 启动静默检查更新:检测到新版(或已下载)→ 自动弹出「更新」标签页,每个版本只弹一次。
+  // 启动静默检查更新:检测到新版(或已下载)→ 弹出 What's new(两栏:版本列表 + 官网更新文章)。
+  // 主进程之后每 6 小时 / 睡眠唤醒再查;弹不弹由 maybeAutoOpenWhatsNew 定(只在主窗、跳过的版本不弹、一次运行每版本一次)。
   useEffect(() => {
-    const off = window.tangu?.onUpdaterStatus?.((st) => {
-      if ((st.phase === 'available' || st.phase === 'downloaded') && st.version) {
-        const KEY = 'forsion_update_shown_version'
-        try {
-          if (localStorage.getItem(KEY) === st.version) return // 本版本已弹过,不再打扰
-          localStorage.setItem(KEY, st.version)
-        } catch { /* localStorage 不可用则每次弹,无妨 */ }
-        openChangelogTab()
-      }
-    })
+    const off = window.tangu?.onUpdaterStatus?.(maybeAutoOpenWhatsNew)
     void window.tangu?.checkForUpdates?.()
     return () => off?.()
   }, [])

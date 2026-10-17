@@ -4,6 +4,7 @@
 
 ## Unreleased
 
+- **What's new**: when a new version is available, a two-column What's new window opens: versions on the left (earlier versions included) and that version's post from the website's release notes on the right. If the website can't be reached, the changelog is shown instead. Open it anytime from Settings → About. While the app is open, Forsion also checks for updates every 6 hours and after the computer wakes from sleep.
 - **Plugin floating panels**: plugins can use `view.close()` from Close, Back and confirmation buttons to close their own view, through the same API on desktop and Web.
 
 ## 2.13.4 (2026-10-14)

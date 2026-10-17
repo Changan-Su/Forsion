@@ -217,6 +217,9 @@ export async function checkForUpdates(): Promise<UpdaterStatus> {
 export async function downloadUpdate(): Promise<void> {
   if (unsupported() || process.platform === 'darwin') return
   ensureWired()
+  // 先把阶段钉成 downloading:第一条进度事件要等一会儿,这段空档里定时 / 唤醒检查会当成「还没下载」
+  // 照常去查,查回来晚于下载完成就把 downloaded 盖回 available(Codex 评审 P2)。
+  if (lastStatus.phase === 'available') broadcast({ ...lastStatus, phase: 'downloading', percent: 0 })
   try {
     await autoUpdater.downloadUpdate()
   } catch (err: any) {
