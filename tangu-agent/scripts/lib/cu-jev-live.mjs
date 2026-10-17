@@ -362,7 +362,9 @@ export async function cuJevLive({ key, api, run, OUT, bundle, cover = false, tim
       const f = coverFrame([apps.melody && MELODY_FRAME, apps.chatter && CHATTER_FRAME].filter(Boolean));
       // 前台打开(不带 -g):尽量让它真的在最前
       spawnSync('open', ['-n', await fx.buildFixture('cover'), '--args', statePath.cover, '--frame', [f.x, f.y, f.w, f.h].join(',')]);
-      boot.cover = await fx.waitForState(statePath.cover, (s) => s.ready, { timeoutMs: 10_000 });
+      // 没等到也记下它的 pid:finally 里照样收掉,别留孤儿(10-17 第一次负对照留过两个)
+      boot.cover = await fx.waitForState(statePath.cover, (s) => s.ready, { timeoutMs: 10_000 })
+        .catch((e) => { try { boot.cover = fx.readState(statePath.cover); } catch {} throw e; });
       await sleep(500); // 激活(给不给)和压到最上面都是异步的
     }
     // 发送前问「要不要发」是插件的确认规则(对外发送先确认):用户原话已经让发,台架照用户的意思答「可以」,问了几次记进指标
