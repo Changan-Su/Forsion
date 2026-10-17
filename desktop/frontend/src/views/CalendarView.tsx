@@ -5,7 +5,8 @@
  *
  *  2026-10-16 用户定方案 B(docs/ToBeImproved/Calendar交互与待办右栏方案_2026-10-16/):
  *  · 桌面:单击空白 = 草稿(默认 1 小时),按住拖 = 拖出时长,全天行 / 月视图横拖 = 多天;草稿不落盘,标题在格子里打,
- *    Enter / 点别处保存,Esc / 没写标题就点走 = 丢弃。选中事件 → 右栏(calendar-side)换成详情;右栏收起时退回浮卡。
+ *    Enter / 点别处保存,Esc / 没写标题就点走 = 丢弃。
+ *  · 同日用户改口:编辑事件在事件旁的浮卡(EventCard),草稿的选日历 / 保存也是草稿块旁的浮卡(DraftCard),右栏只放待办。
  *  · 手机这一轮不动:双击空白当场建 30 分钟事件 + 浮卡。 */
 import {
   forwardRef,
@@ -40,13 +41,14 @@ import {
 } from '../amadeus/store/dbAggregateStore'
 import { useCalendarMembers } from '../amadeus/store/calendarMembers'
 import { useCalendarConfig, colorForDb, isHidden, defaultDbPath } from '../amadeus/store/calendarConfigStore'
-import { HOUR_PX_DEFAULT, useCalendarNav, calendarSideVisible, type CalDraft } from '../amadeus/store/calendarNavStore'
+import { HOUR_PX_DEFAULT, useCalendarNav, type CalDraft } from '../amadeus/store/calendarNavStore'
 import { useAgentSchedulePolling, useAgentCalDbs } from '../stores/agentScheduleStore'
 import { useOtherVaultCalDbs } from '../stores/otherVaultCalStore'
 import { useIcsCalDbs } from '../stores/icsCalendarStore'
 import { useMdCalDbs } from '../amadeus/store/mdMarkStore'
 import { registerMessages, useI18n } from '../i18n'
 import { EventCard, type Anchor } from './calendar/EventCard'
+import { DraftCard } from './calendar/DraftCard'
 import { MODE_ITEMS, classifyCalKey } from './calendar/calKeys'
 import { layoutTimedEvents } from './calendar/eventLayout'
 import { deleteCalendarRow, rescheduleCalendarRow, undoLastCalendarEdit } from './calendar/eventActions'
@@ -122,7 +124,7 @@ const EDGE = 8.4 // 事件上下边缘「拉伸时长」命中带(px);比原 7 �
 const SHORT_PX = 34 // 块高不够两行(约 45 分钟以内)→ 排成一行「标题 起始时间」
 const DAY_HALF = 150 // 横向日窗 ±150 天(≈10 个月,足够一次会话连续滚动)
 const WEEK_HALF = 40 // 纵向周窗 ±40 周
-/** 手机(单列壳)这一轮不动:双击当场建 + 浮卡。桌面才有单击 / 拖出草稿、右栏详情。 */
+/** 手机(单列壳)这一轮不动:双击当场建 + 浮卡。桌面才有单击 / 拖出草稿。 */
 const DESK = !(UI_MODE === 'mobile' || (typeof window !== 'undefined' && !!window.tangu?.mobile))
 
 interface CalApi { prev(): void; next(): void; today(): void; goto(date: Date): void }
@@ -232,7 +234,7 @@ export function CalendarView() {
   const setHourPx = useCalendarNav((s) => s.setHourPx)
   const jumpNonce = useCalendarNav((s) => s.jumpNonce)
   const selection = useCalendarNav((s) => s.selection)
-  // 浮卡:手机,或桌面右栏收起 / 不在时的退路。
+  // 点开的事件:事件旁的浮卡(桌面、手机都是)。selection 只是高亮(刚建 / 刚复制的那条),Enter 再开卡。
   const [card, setCard] = useState<{ key: string; at: Anchor } | null>(null)
   const titleRef = useRef<HTMLSpanElement>(null)
   const api = useRef<CalApi>(null)
@@ -275,21 +277,20 @@ export function CalendarView() {
     return m ? colorForDb(vault, byVault, m.db.path, members.indexOf(m)) : 'var(--accent)'
   }
 
-  /** 选中:桌面且右栏在 → 右栏换成详情;否则在事件旁浮卡。 */
+  /** 点开事件:在事件旁浮卡编辑(10-16 用户:「和之前一样在旁边的悬浮卡片,不要在 right panel」)。 */
   const pick = (key: string, at: Anchor): void => {
     finishDraft()
     pendingKey.current = null // 用户自己点了别的:等着的新行到了也别再把选中抢过去
-    const ev = eventsRef.current.find((e) => e.key === key)
-    const nav = useCalendarNav.getState()
-    if (ev && DESK && calendarSideVisible()) { nav.setSelection({ key, target: ev }); setCard(null) }
-    else { nav.setSelection(null); setCard({ key, at }) }
+    useCalendarNav.getState().setSelection(null)
+    setCard({ key, at })
   }
+  /** 刚建 / 刚复制的那条:只高亮(不弹卡),Delete / ⌘D 对它生效,Enter 开卡。 */
   const selectWhenReady = (key: string): void => {
     const ev = eventsRef.current.find((e) => e.key === key)
     if (!ev) { pendingKey.current = key; return }
-    if (DESK && calendarSideVisible()) useCalendarNav.getState().setSelection({ key, target: ev })
+    if (DESK) useCalendarNav.getState().setSelection({ key, target: ev })
   }
-  // 事件流一变:等着的新行到了就选中;右栏里那件事换成最新对象(改了时间 / 标题),被删了就退回待办。
+  // 事件流一变:等着的新行到了就高亮;高亮的那条换成最新对象,被删了就清掉。
   useEffect(() => {
     const nav = useCalendarNav.getState()
     const p = pendingKey.current
@@ -375,6 +376,9 @@ export function CalendarView() {
       if (el && el.closest('input, textarea, select, [contenteditable]')) return
       const side = useCalendarNav.getState().sideEl
       const a = document.activeElement
+      // 焦点在事件卡 / 当日日程里:卡片自己管 Esc / Tab / 删除,日历快捷键让开 ——
+      // 右栏待办常驻后,待办卡开着时 Delete 会删掉主区高亮的另一条、C 会在卡下面起草稿(Codex 评审)
+      if (a?.closest('[role="dialog"]')) return
       const inCfg = !!a?.closest('.amx-calcfg') // 刚点过左栏小月历 / 日历列表:翻页类快捷键照样生效
       if (a && a !== document.body && !root.contains(a) && !side?.contains(a) && !inCfg && a.closest('.dv-react-part')) return
       const act = classifyCalKey(e)
@@ -412,12 +416,16 @@ export function CalendarView() {
           api.current?.today()
           break
         case 'rename': {
-          // 焦点在工具栏按钮上时 Enter 照旧按按钮;选中事件后才是改标题。
+          // 焦点在工具栏按钮上时 Enter 照旧按按钮;高亮着一条事件时 Enter = 在它旁边开卡(卡里标题框自动聚焦)。
           if (el?.closest('button') && !el.closest('.amx-cal-event, .amx-cal-chip-ev')) return
-          const input = nav.selection ? side?.querySelector<HTMLInputElement>('input.amx-cal-card-title') : null
-          if (!input) return
-          input.focus()
-          input.select()
+          if (!nav.selection || card || !sel) return
+          // 事件块不一定渲染出来(月视图一天超过三条会折进「还有 N 项」):找不到就贴在那一天的格子旁
+          const node = root.querySelector<HTMLElement>(`[data-key="${CSS.escape(nav.selection.key)}"]`)
+            ?? root.querySelector<HTMLElement>(`.amx-cal-mcell[data-date="${iso(sel.start)}"], .amx-cal-daycol2[data-date="${iso(sel.start)}"]`)
+          if (!node) return
+          const r = node.getBoundingClientRect()
+          setCard({ key: nav.selection.key, at: { left: r.left, top: r.top, right: r.right, bottom: r.bottom, zoom: zoomOf(node) || 1 } })
+          nav.setSelection(null)
           break
         }
         case 'escape':
@@ -529,7 +537,8 @@ export function CalendarView() {
         <TimeScroll ref={api} n={n} weekStartDow={mode === 'week' && n === 7 ? firstDow : null} {...gridProps} onCreate={(d, min, at) => void createNow(d, min, at)} />
       )}
 
-      {selected && card && <EventCard ev={selected} at={card.at} onClose={() => setCard(null)} />}
+      {selected && card && <EventCard ev={selected} at={card.at} maxRight={rootRef.current?.getBoundingClientRect().right} onClose={() => setCard(null)} />}
+      {DESK && <DraftCard rootRef={rootRef} />}
     </div>
   )
 }
@@ -548,7 +557,7 @@ interface GridProps {
   titleRef: RefObject<HTMLSpanElement | null>
 }
 
-/** 草稿的标题框:格子里直接打。Enter 保存(空标题用占位名),Esc 丢弃;焦点去别处(右栏草稿面板除外)= 写了就存、没写就丢。 */
+/** 草稿的标题框:格子里直接打。Enter 保存(空标题 = 不建),Esc 丢弃;焦点去别处(草稿卡除外)= 写了就存、没写就丢。 */
 function DraftInput({ first = true }: { first?: boolean }) {
   const { t } = useI18n()
   const title = useCalendarNav((s) => s.draft?.title ?? '')
@@ -572,8 +581,7 @@ function DraftInput({ first = true }: { first?: boolean }) {
         else if (e.key === 'Escape') { e.preventDefault(); useCalendarNav.getState().setDraft(null) }
       }}
       onBlur={(e) => {
-        const side = useCalendarNav.getState().sideEl
-        if (e.relatedTarget instanceof Node && side?.contains(e.relatedTarget)) return
+        if (e.relatedTarget instanceof Element && e.relatedTarget.closest('.amx-cal-draftcard')) return // Tab 进草稿卡不算点走
         if (!document.hasFocus()) return // 切到别的 App 不算「点到别处」:回来时草稿还在
         finishDraft()
       }}
@@ -1125,6 +1133,7 @@ const TimeScroll = forwardRef<CalApi, TimeProps>(function TimeScroll({ n, weekSt
               {Array.from(rows, (e, i) => e ? (
                 <button
                   key={e.key}
+                  data-key={e.key}
                   className={`amx-cal-chip-ev amx-cal-alldrag${e.readonly ? ' readonly' : ''}${selectedKey === e.key ? ' selected' : ''}${+startOfDay(e.end ?? e.start) < +today ? ' past' : ''}${daySpanClass(e.start, e.end, d)}`}
                   style={eventColorStyle(e.color)}
                   aria-label={t('calview.a11yAllDayEvent', { title: e.title })}
@@ -1163,6 +1172,7 @@ const TimeScroll = forwardRef<CalApi, TimeProps>(function TimeScroll({ n, weekSt
                 return (
                   <button
                     key={e.key}
+                    data-key={e.key}
                     className={`amx-cal-event${e.readonly ? ' readonly' : ''}${selectedKey === e.key ? ' selected' : ''}${short ? ' short' : ''}${past ? ' past' : ''}${e.check ? ' todo' : ''}${e.done ? ' done' : ''}`}
                     style={{
                       ...eventColorStyle(e.color),
@@ -1399,6 +1409,7 @@ export const MonthScroll = forwardRef<CalApi, MonthProps>(function MonthScroll({
                   {dayEvents.slice(0, room).map((e) => (
                     <button
                       key={e.key}
+                      data-key={e.key}
                       className={`amx-cal-chip-ev${e.readonly ? ' readonly' : ''}${selectedKey === e.key ? ' selected' : ''}${daySpanClass(e.start, e.end, day)}`}
                       style={eventColorStyle(e.color)}
                       title={e.title}
