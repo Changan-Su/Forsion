@@ -50,6 +50,7 @@
     "e2e:recall": "node scripts/recall-rewind.e2e.cjs",
     "e2e:chatevents": "node scripts/chat-events.e2e.cjs",
     "e2e:nested": "node scripts/nested-sessions.e2e.cjs",
+    "e2e:musedm": "node scripts/muse-dm.e2e.cjs",
     "e2e:computerhistory": "node scripts/computer-history.e2e.cjs",
     "e2e:appdock": "node scripts/app-dock.e2e.cjs",
     "e2e:apprefs": "node scripts/app-refs.e2e.cjs",
