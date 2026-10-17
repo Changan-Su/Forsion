@@ -83,6 +83,22 @@ async function main() {
     check('左右邻图都露出来', s.sides === 2, s)
     check('小图适应窗口 = 100%(不放大超过原图)', s.pct === '100%' && s.main[0] === 720, s)
 
+    // 点一下主图不关(指针一按下就被舞台捕获,松手时的 target 恒是舞台 —— 早先按它判「点在空处」,点主图也关了,Codex P1)
+    const mainBox = await win.locator('.iv-img:not(.is-side)').boundingBox()
+    await win.mouse.click(mainBox.x + mainBox.width / 2, mainBox.y + mainBox.height / 2)
+    await win.waitForTimeout(500)
+    s = await state()
+    check('单击主图不关', s && s.name === 'mail.png', s)
+    const sideBox = await win.locator('.iv-img.is-side[data-dir="1"]').boundingBox()
+    await win.mouse.click(sideBox.x + 20, sideBox.y + sideBox.height / 2)
+    await win.waitForTimeout(300)
+    s = await state()
+    check('点右边露出的邻图切过去', s && s.count === '3 / 4' && s.name === 'chart.png', s)
+    for (let i = 0; i < 8; i++) await win.keyboard.press('Tab')
+    await win.keyboard.press('Shift+Tab')
+    check('Tab / ⇧Tab 圈在看图层里', await win.evaluate(() => document.querySelector('.iv').contains(document.activeElement)), null)
+    await win.keyboard.press('ArrowLeft')
+
     // ── 切换 ──
     await win.keyboard.press('ArrowLeft')
     s = await state()

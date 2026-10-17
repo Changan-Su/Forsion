@@ -13,7 +13,9 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from 'react'
 import { createRoot } from 'react-dom/client'
 import { ChevronLeft, ChevronRight, Copy, Download, ExternalLink, Minus, MoreHorizontal, Plus, Scan, X } from 'lucide-react'
+import { useNativeChromeClaim, useNativeChromeInstalled, type NativeChromeClaim } from '@lcl/engine'
 import { registerMessages, translate as tr } from '../i18n'
+import { saveResponseAs } from '../services/nativeDownload'
 import { pushMobileBack } from '../amadeus/lib/mobileBack'
 import { useApp } from '../stores/appStore'
 import './imageViewer.css'
@@ -31,6 +33,7 @@ registerMessages({
   'viewer.more': { zh: '更多', en: 'More' },
   'viewer.copied': { zh: '已复制图片', en: 'Image copied' },
   'viewer.copyFailed': { zh: '复制失败', en: 'Could not copy the image' },
+  'viewer.downloadFailed': { zh: '下载失败', en: 'Could not download the image' },
   'viewer.hint': { zh: '← → 切换 · 滚轮缩放 · Esc 关闭', en: '← → to switch · scroll to zoom · Esc to close' },
   'viewer.hintZoomed': { zh: '拖动查看 · 滚轮缩放（以指针为中心） · 双击回到适应窗口', en: 'Drag to pan · scroll to zoom at the pointer · double-click to fit' },
   'viewer.openTab': { zh: '在标签页打开', en: 'Open in a tab' },
@@ -116,14 +119,18 @@ async function copyImage(src: string): Promise<void> {
     useApp.getState().toast(tr('viewer.copyFailed'), true)
   }
 }
+/** 走全应用的下载出口:安卓 App 的 WebView 不认 `<a download>`,saveResponseAs 会改走原生「存到下载」(Codex P2) */
 async function downloadImage(src: string, name: string): Promise<void> {
-  const url = URL.createObjectURL(await fetchBlob(src)) // data: / blob: / amadeus-asset: 一律先变成 blob,下载走同一条路
-  const a = document.createElement('a')
-  a.href = url
-  a.download = name || 'image.png'
-  a.click()
-  window.setTimeout(() => URL.revokeObjectURL(url), 60_000)
+  try {
+    const r = await fetch(src)
+    if (!r.ok) throw new Error(String(r.status))
+    await saveResponseAs(name || 'image.png', r)
+  } catch {
+    useApp.getState().toast(tr('viewer.downloadFailed'), true)
+  }
 }
+
+const CHROME_HIDDEN: NativeChromeClaim = { mode: 'hidden' }
 
 function Viewer({ items, start, onDone }: { items: Item[]; start: number; onDone: (last: Item) => void }) {
   const rootRef = useRef<HTMLDivElement>(null)
@@ -137,6 +144,8 @@ function Viewer({ items, start, onDone }: { items: Item[]; start: number; onDone
   const [menu, setMenu] = useState(false)
   const [closing, setClosing] = useState(false)
   const item = items[idx]
+  // 安卓原生外壳:胶囊顶栏 / Dock 是原生视图,永远压在页面之上 —— 看图开着时收起来(Codex P1)
+  useNativeChromeClaim(useNativeChromeInstalled() ? CHROME_HIDDEN : null)
   const compact = box.W > 0 && (box.W < 600 || window.matchMedia?.('(pointer: coarse)').matches)
 
   // 缩略图没解码完的(naturalWidth 还是 0)补量一次
@@ -227,7 +236,6 @@ function Viewer({ items, start, onDone }: { items: Item[]; start: number; onDone
   useLayoutEffect(() => {
     if (flown.current || !box.W || !dims[start].w) return
     flown.current = true
-    rootRef.current?.focus({ preventScroll: true })
     const t = thumbBox(items[start])
     const el = flyRef.current
     if (!t || !el || reduced()) return
@@ -251,6 +259,12 @@ function Viewer({ items, start, onDone }: { items: Item[]; start: number; onDone
     }
   }, [closing, items, idx, v, dims, onDone]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  useEffect(() => { rootRef.current?.focus({ preventScroll: true }) }, [])
+  // 舞台尺寸变了(转屏、改窗口、改界面缩放):放大中的视图重新贴边;小于新的适应比例就回到适应窗口
+  useEffect(() => {
+    setView((cur) => (!cur ? cur : cur.s <= fitOf(idx).s * 1.05 ? null : clamp(cur)))
+  }, [box.W, box.H]) // eslint-disable-line react-hooks/exhaustive-deps
+
   // 手机返回:先关「更多」菜单,再关看图
   const closeRef = useRef(close)
   closeRef.current = close
@@ -269,6 +283,13 @@ function Viewer({ items, start, onDone }: { items: Item[]; start: number; onDone
       else if (e.key === '-' && !mod) zoomTo((view ?? fit).s / STEP)
       else if (e.key === '0' && !mod) setView(null)
       else if (e.key.toLowerCase() === 'c' && mod && !window.getSelection()?.toString()) void copyImage(item.src)
+      else if (e.key === 'Tab') {
+        // aria-modal 不会自己圈住焦点:Tab / ⇧Tab 只在看图层的按钮之间转
+        const els = [...(rootRef.current?.querySelectorAll<HTMLElement>('button:not(:disabled)') ?? [])]
+        const i = els.indexOf(document.activeElement as HTMLElement)
+        const n = e.shiftKey ? (i <= 0 ? els.length - 1 : i - 1) : (i < 0 || i === els.length - 1 ? 0 : i + 1)
+        els[n]?.focus()
+      }
       else hit = false
       if (hit) { e.preventDefault(); e.stopPropagation() }
     }
@@ -290,31 +311,38 @@ function Viewer({ items, start, onDone }: { items: Item[]; start: number; onDone
     return () => st.removeEventListener('wheel', onWheel)
   }, [view, fit, zoomTo]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // 指针:放大后拖动平移;触屏在适应窗口时左右滑切换、往下拖关闭;双指捏合缩放
+  // 指针:放大后拖动平移;触屏在适应窗口时左右滑切换、往下拖关闭;双指捏合缩放(跟着当前两指中点走)。
+  // 一按下就捕获指针,之后 pointerup 的 target 恒是舞台 —— 点的是什么要在按下时记(hit),别看松手时的 target(Codex P1)
+  type Gesture = { x0: number; y0: number; t0: number; v0: View; hit: Element | null; moved: boolean; axis?: 'x' | 'y'; pinch?: { d0: number; ix: number; iy: number } }
   const ptrs = useRef(new Map<number, { x: number; y: number }>())
-  const gesture = useRef<{ x0: number; y0: number; t0: number; v0: View; pinch?: { d0: number; s0: number }; moved: boolean; axis?: 'x' | 'y' } | null>(null)
+  const gesture = useRef<Gesture | null>(null)
+  const startPinch = (t0: number): void => {
+    const [a, b] = [...ptrs.current.values()]
+    const v0 = view ?? fit
+    const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2
+    // 记下两指中点落在图上的哪一点(图像坐标):之后不论中点怎么挪,这一点都钉在中点下面
+    gesture.current = { x0: mx, y0: my, t0, v0, hit: null, moved: true, pinch: { d0: Math.hypot(a.x - b.x, a.y - b.y) || 1, ix: (mx - v0.tx) / v0.s, iy: (my - v0.ty) / v0.s } }
+    setDrag({ dx: 0, dy: 0 })
+  }
   const onPointerDown = (e: ReactPointerEvent): void => {
     if ((e.target as HTMLElement).closest('button')) return
     stageRef.current?.setPointerCapture(e.pointerId)
     const [x, y] = local(e.clientX, e.clientY)
     ptrs.current.set(e.pointerId, { x, y })
-    const pts = [...ptrs.current.values()]
-    if (pts.length === 2) {
-      gesture.current = { x0: (pts[0].x + pts[1].x) / 2, y0: (pts[0].y + pts[1].y) / 2, t0: e.timeStamp, v0: view ?? fit, pinch: { d0: Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y), s0: (view ?? fit).s }, moved: true }
-      setDrag({ dx: 0, dy: 0 })
-    } else {
-      gesture.current = { x0: x, y0: y, t0: e.timeStamp, v0: view ?? fit, moved: false }
-    }
+    if (ptrs.current.size >= 2) { startPinch(e.timeStamp); return }
+    gesture.current = { x0: x, y0: y, t0: e.timeStamp, v0: view ?? fit, hit: (e.target as Element).closest('.iv-img'), moved: false }
   }
   const onPointerMove = (e: ReactPointerEvent): void => {
     const g = gesture.current
     if (!g || !ptrs.current.has(e.pointerId)) return
     const [x, y] = local(e.clientX, e.clientY)
     ptrs.current.set(e.pointerId, { x, y })
-    const pts = [...ptrs.current.values()]
-    if (g.pinch && pts.length >= 2) {
-      const d = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y)
-      zoomTo(g.pinch.s0 * (d / g.pinch.d0), g.x0, g.y0)
+    if (g.pinch) {
+      const [a, b] = [...ptrs.current.values()]
+      if (!b) return
+      const s = Math.min(MAX, Math.max(fit.s, g.v0.s * (Math.hypot(a.x - b.x, a.y - b.y) / g.pinch.d0)))
+      const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2
+      setView(s <= fit.s * 1.05 ? null : clamp({ s, tx: mx - g.pinch.ix * s, ty: my - g.pinch.iy * s }))
       return
     }
     const dx = x - g.x0, dy = y - g.y0
@@ -329,11 +357,19 @@ function Viewer({ items, start, onDone }: { items: Item[]; start: number; onDone
     ptrs.current.delete(e.pointerId)
     const g = gesture.current
     if (!g) return
-    if (ptrs.current.size > 0) return // 双指松开一根:等另一根
+    if (g.pinch && ptrs.current.size === 1) {
+      // 双指松开一根:拿最新视图和剩下那根手指重起一段单指手势,别把比例拉回捏合前(Codex P2)
+      const [p] = [...ptrs.current.values()]
+      gesture.current = { x0: p.x, y0: p.y, t0: e.timeStamp, v0: view ?? fit, hit: null, moved: true }
+      return
+    }
+    if (ptrs.current.size > 0) return
     gesture.current = null
     if (!g.moved) {
-      // 点在图外的空处 = 关闭(和多数看图一样);点在图上不动
-      if (e.pointerType === 'mouse' && !(e.target as HTMLElement).closest('.iv-img')) close()
+      // 点邻图 = 切过去;鼠标点在图外的空处 = 关闭(和多数看图一样);点主图不动
+      const dir = Number((g.hit as HTMLElement | null)?.dataset.dir || 0)
+      if (dir) go(dir)
+      else if (!g.hit && e.pointerType === 'mouse') close()
       return
     }
     if (g.pinch || zoomed) return
@@ -405,7 +441,7 @@ function Viewer({ items, start, onDone }: { items: Item[]; start: number; onDone
         {box.W > 0 && (
           <div key={idx} ref={flyRef} className="iv-fly" style={{ transform: `translate(${drag.dx}px, ${drag.dy}px)${pullDown ? ` scale(${1 - pullDown * 0.25})` : ''}`, transition: drag.dx || drag.dy ? 'none' : undefined }}>
             {[prev, next].filter((i) => i >= 0).map((i) => (
-              <img key={i} className="iv-img is-side" src={items[i].src} alt="" draggable={false} style={imgStyle(i, side(i))} onClick={() => go(i < idx ? -1 : 1)} />
+              <img key={i} className="iv-img is-side" src={items[i].src} alt="" draggable={false} style={imgStyle(i, side(i))} data-dir={i < idx ? -1 : 1} />
             ))}
             <img key={idx} className="iv-img" src={item.src} alt={item.name} draggable={false} style={imgStyle(idx)} />
           </div>
