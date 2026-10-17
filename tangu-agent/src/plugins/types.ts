@@ -49,7 +49,7 @@ export interface TanguPluginManifest {
    */
   requiresPlugins?: Array<string | { id: string; minVersion?: string }>;
   /**
-   * 自带的 MCP server(形态同 `~/.tangu/mcp.json` 的 `mcpServers`)。插件激活时起、停用时关;stdio 的工作目录是插件目录,
+   * 自带的 MCP server(形态同 `~/.tangu/mcp.json` 的 `mcpServers`,**只收 stdio**:随包发的静态 server)。插件激活时起、停用时关;工作目录是插件目录,
    * command / args / env 里的 `${pluginDir}` 展开成它的绝对路径。和用户自己配的 server 撞名时插件这份不起。
    * 只在本机引擎上生效(云端 worker 没有 MCP)。见 mcp/pluginServers.ts。只想带 MCP 的插件,入口写个空的 activate 即可。
    */

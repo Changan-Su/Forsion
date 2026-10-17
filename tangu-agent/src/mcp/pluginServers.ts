@@ -3,6 +3,9 @@
  *
  * - 跟着插件走:插件激活 → server 加进 manager;停用 / 卸载 / 激活失败 → 关掉并移出(bootstrap 记进实例台账)。
  *   捆绑包里的引擎插件跟随捆绑包开关(桌面级联),所以「桌面停用插件 → 它的 MCP 进程也停」是现成的。
+ * - **只收 stdio**(随包发的静态 server):远端 server 的地址与令牌是运行期数据,不该写进 manifest ——
+ *   远端能力照旧走「服务端自己出 MCP 端点、插件只做接入卡」(server-admin 先例)。这是对 09-06「声明式 MCP 刻意没加,
+ *   真有静态 stdio MCP 要随包发时再议」的落地,url / headers 一律不收。
  * - 信任级别 = 插件自己的代码:引擎插件本来就在引擎进程里跑任意代码,stdio server 并不扩大权限,不另设确认。
  * - 命名:用声明的名字(工具名 `mcp__<name>__<tool>` 要短,插件 id 可能是 `market-<uuid>`)。和用户 mcp.json 里的
  *   server 撞名时插件这份被拒(用户的先注册);两个插件撞名先激活者得(激活序确定)。
@@ -35,20 +38,11 @@ export function sanitizePluginMcpServers(raw: unknown, pluginId: string, pluginD
     const bad = (why: string) => console.warn(`[tangu] 插件 ${pluginId} 的 MCP server "${name}" 无效(${why}),跳过`);
     if (!NAME_RE.test(name)) { bad('名字须为字母数字 / _ / -,≤32'); continue; }
     if (!c || typeof c !== 'object') { bad('不是对象'); continue; }
-    const transport = c.transport === 'stdio' || c.transport === 'http' || c.transport === 'sse' ? c.transport : undefined;
-    const cfg: McpServerConfig = {};
-    if (str(c.command)) {
-      cfg.command = expand(c.command);
-      if (Array.isArray(c.args)) cfg.args = c.args.slice(0, MAX_ARGS).filter((a: unknown) => typeof a === 'string').map(expand);
-      const env = strMap(c.env);
-      if (env) cfg.env = Object.fromEntries(Object.entries(env).map(([k, v]) => [k, expand(v)]));
-      cfg.cwd = pluginDir;
-    } else if (str(c.url) && /^https?:\/\//i.test(c.url)) {
-      cfg.url = c.url;
-      const headers = strMap(c.headers);
-      if (headers) cfg.headers = headers;
-    } else { bad('缺 command 或 http(s) url'); continue; }
-    if (transport) cfg.transport = transport;
+    if (!str(c.command) || (c.transport !== undefined && c.transport !== 'stdio')) { bad('只收 stdio:要有 command,不收 url'); continue; }
+    const cfg: McpServerConfig = { command: expand(c.command), transport: 'stdio', cwd: pluginDir };
+    if (Array.isArray(c.args)) cfg.args = c.args.slice(0, MAX_ARGS).filter((a: unknown) => typeof a === 'string').map(expand);
+    const env = strMap(c.env);
+    if (env) cfg.env = Object.fromEntries(Object.entries(env).map(([k, v]) => [k, expand(v)]));
     if (typeof c.timeoutMs === 'number' && c.timeoutMs > 0) cfg.timeoutMs = Math.min(c.timeoutMs, 600_000);
     if (c.enabled === false) continue; // 声明了但关着 = 不起
     out[name] = cfg;

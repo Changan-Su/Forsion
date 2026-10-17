@@ -48,18 +48,17 @@ async function waitFor(fn: () => boolean, ms = 8000): Promise<boolean> {
 const toolNames = (m: McpManager) => [...m.toolsForRun().keys()].sort();
 
 describe('sanitizePluginMcpServers', () => {
-  it('坏项逐条丢弃;${pluginDir} 展开;stdio 的工作目录是插件目录;关着的不起', () => {
+  it('只收 stdio;坏项逐条丢弃;${pluginDir} 展开;工作目录是插件目录;关着的不起', () => {
     const out = sanitizePluginMcpServers({
       ok: { command: 'node', args: ['${pluginDir}/server.js', 7], env: { ROOT: '${pluginDir}', 'bad key': 'x' } },
       web: { url: 'https://example.com/mcp', headers: { Authorization: 'x' } },
+      sse: { command: 'node', transport: 'sse' },
       'bad name!': { command: 'node' },
-      nourl: { url: 'file:///etc/passwd' },
       empty: {},
       off: { command: 'node', enabled: false },
     }, 'p', '/plug/dir');
-    expect(Object.keys(out).sort()).toEqual(['ok', 'web']);
-    expect(out.ok).toEqual({ command: 'node', args: ['/plug/dir/server.js'], env: { ROOT: '/plug/dir' }, cwd: '/plug/dir' });
-    expect(out.web).toEqual({ url: 'https://example.com/mcp', headers: { Authorization: 'x' } });
+    expect(Object.keys(out)).toEqual(['ok']);
+    expect(out.ok).toEqual({ command: 'node', transport: 'stdio', args: ['/plug/dir/server.js'], env: { ROOT: '/plug/dir' }, cwd: '/plug/dir' });
     expect(sanitizePluginMcpServers(['x'], 'p', '/d')).toEqual({});
   });
 });
