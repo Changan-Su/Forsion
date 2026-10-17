@@ -21,6 +21,8 @@ CREATE TABLE IF NOT EXISTS chat_sessions (
   historian_last_summary_at TIMESTAMP,
   kind VARCHAR(16) NOT NULL DEFAULT 'user',
   parent_session_id VARCHAR(36),
+  awaiting_user BOOLEAN NOT NULL DEFAULT FALSE,
+  report_run_id VARCHAR(36),
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );

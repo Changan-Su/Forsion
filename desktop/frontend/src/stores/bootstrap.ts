@@ -36,10 +36,18 @@ export function useBootstrap(): void {
   }, [])
 
   // 全局单轮询器(每 4s 拉当前会话带外消息 + 订阅外部在飞 run)。
+  // 列表里有本端没订阅、引擎报 busy 的会话(子会话、主会话自动接着做的一轮)时顺带刷新会话列表,行尾状态才跟得上;
+  // 最后一个 busy 没了之后再多刷两轮(子会话收尾与主会话起轮之间那一下可能正好被拍到)。
   useEffect(() => {
+    let tail = 0
     const timer = window.setInterval(() => {
       const st = useApp.getState()
       if (st.activeId && st.connState === 'ok') void st.pollSession(st.activeId)
+      if (st.connState !== 'ok') return
+      if (st.sessions.some((x) => x.busy && !st.runningBySession[x.id])) tail = 2
+      else if (tail > 0) tail--
+      else return
+      void st.refreshSessions(st.cfg).catch(() => {})
     }, 4000)
     return () => window.clearInterval(timer)
   }, [])

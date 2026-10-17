@@ -62,6 +62,7 @@ import { CreationCards } from './CreationCards'
 import { formatDateTime, formatMessageTime } from '../../format/time'
 
 import { TaskCards, type TaskLanding } from './TaskCards'
+import { CHILD_UPDATE_OPEN, ChildSessionsBlock, ChildUpdateLine, childIdsOf } from './ChildSessions'
 import { APPROVAL_UPDATE_OPEN, approvalForCall, parseApprovalUpdate, pickPlanInquiry, type ApprovalOutcome } from './approvalQueue'
 import { isRemoteApprover, wasDecidedHere } from '../../components/ApprovalCard'
 import { answeredByText } from '../../approvalReason'
@@ -425,6 +426,8 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
     }
     // 挂起审批的结局回灌(引擎落库的 <approval_update> user 行):同理不是用户说的话 —— 每张一行结局。
     // 输出不在这里(引擎把真结果放回了原工具卡),这一行只说谁批了什么。
+    // 子会话结果送回主会话(引擎落库的 <child_sessions_update> user 行):同理画成一行系统行。
+    if (msg.content.startsWith(CHILD_UPDATE_OPEN)) return <div ref={rootRef}><ChildUpdateLine content={msg.content} /></div>
     if (msg.content.startsWith(APPROVAL_UPDATE_OPEN)) {
       const rows = parseApprovalUpdate(msg.content)
       return (
@@ -550,6 +553,7 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
   // 作品卡的按钮要宿主 IPC:只有桌面端认这种围栏,网页 / 手机端原样留在正文(不吞字)
   const fenceKinds: FenceKind[] = window.tangu?.productsRegister ? ['suggest', 'task', 'creation'] : ['suggest', 'task']
   const { text: body, items: suggestions, tasks, creations } = splitSuggestions(msg.content, { streaming, kinds: fenceKinds })
+  const childIds = childIdsOf(msg.toolEvents) // 不用 hook:上面 system / user 两支提前 return 了
   // sketch 卡 → 笔记里的交互块(```forsion-sketch 围栏,嵌入层按同一沙箱渲染);与回答的「插入笔记」同一条写口。
   const sketchActions = handlers?.onInsertNote
     ? (it: SketchItem) => <InsertNoteButton onInsert={() => handlers.onInsertNote?.(sketchFence(it.html))} />
@@ -652,6 +656,8 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
             ))}
           </div>
         )}
+        {/* 这条回答用 start_session 开出的子会话:标题 · 状态 · 最后一句,点开走右侧子会话面板(ChildSessions.tsx)。 */}
+        {runSid && childIds.length > 0 && <ChildSessionsBlock parentId={runSid} ids={childIds} onSuggest={handlers?.onSuggest} />}
         {/* 任务卡:顺手发现的、塞进当前对话会撑爆的活。track=true 的卡主按钮是「交给 Muse 追踪」。同样只在 done 上渲染。
             渲染与落点按钮在 TaskCards(与收件箱共用)。 */}
         {!!tasks.length && msg.status === 'done' && <TaskCards tasks={tasks} ownerId={msg.id} onTask={handlers?.onTask} />}

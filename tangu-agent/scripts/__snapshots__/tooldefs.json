@@ -2852,6 +2852,17 @@
           "additionalProperties": false
         }
       }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "wait_for_user",
+        "description": "Mark this conversation as waiting for the user. Call it right before ending your turn when you stopped because you need the user's answer, choice or approval before you can continue. The session list then shows it as waiting for them until they reply. Do not call it when you simply finished, or when you only offer optional next steps.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      }
     }
   ],
   "tangu-docker:sandbox+skills": [
@@ -3624,6 +3635,17 @@
             "id"
           ],
           "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "wait_for_user",
+        "description": "Mark this conversation as waiting for the user. Call it right before ending your turn when you stopped because you need the user's answer, choice or approval before you can continue. The session list then shows it as waiting for them until they reply. Do not call it when you simply finished, or when you only offer optional next steps.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
         }
       }
     }
@@ -4742,6 +4764,17 @@
             "id"
           ],
           "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "wait_for_user",
+        "description": "Mark this conversation as waiting for the user. Call it right before ending your turn when you stopped because you need the user's answer, choice or approval before you can continue. The session list then shows it as waiting for them until they reply. Do not call it when you simply finished, or when you only offer optional next steps.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
         }
       }
     }
@@ -5881,6 +5914,17 @@
           "additionalProperties": false
         }
       }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "wait_for_user",
+        "description": "Mark this conversation as waiting for the user. Call it right before ending your turn when you stopped because you need the user's answer, choice or approval before you can continue. The session list then shows it as waiting for them until they reply. Do not call it when you simply finished, or when you only offer optional next steps.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      }
     }
   ],
   "tangu-none:sandbox": [
@@ -6593,6 +6637,17 @@
             "id"
           ],
           "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "wait_for_user",
+        "description": "Mark this conversation as waiting for the user. Call it right before ending your turn when you stopped because you need the user's answer, choice or approval before you can continue. The session list then shows it as waiting for them until they reply. Do not call it when you simply finished, or when you only offer optional next steps.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
         }
       }
     }
@@ -7326,6 +7381,17 @@
             "id"
           ],
           "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "wait_for_user",
+        "description": "Mark this conversation as waiting for the user. Call it right before ending your turn when you stopped because you need the user's answer, choice or approval before you can continue. The session list then shows it as waiting for them until they reply. Do not call it when you simply finished, or when you only offer optional next steps.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
         }
       }
     }
@@ -8444,6 +8510,17 @@
             "id"
           ],
           "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "wait_for_user",
+        "description": "Mark this conversation as waiting for the user. Call it right before ending your turn when you stopped because you need the user's answer, choice or approval before you can continue. The session list then shows it as waiting for them until they reply. Do not call it when you simply finished, or when you only offer optional next steps.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
         }
       }
     }
@@ -9581,6 +9658,17 @@
             "id"
           ],
           "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "wait_for_user",
+        "description": "Mark this conversation as waiting for the user. Call it right before ending your turn when you stopped because you need the user's answer, choice or approval before you can continue. The session list then shows it as waiting for them until they reply. Do not call it when you simply finished, or when you only offer optional next steps.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
         }
       }
     }
@@ -10757,6 +10845,17 @@
             "id"
           ],
           "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "wait_for_user",
+        "description": "Mark this conversation as waiting for the user. Call it right before ending your turn when you stopped because you need the user's answer, choice or approval before you can continue. The session list then shows it as waiting for them until they reply. Do not call it when you simply finished, or when you only offer optional next steps.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
         }
       }
     }

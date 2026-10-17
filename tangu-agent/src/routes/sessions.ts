@@ -23,7 +23,7 @@ import { resolveCompactionSettings, globalCompactionLayer, updateGlobalCompactio
 import { estimateTokensRough } from '../services/contextBudget.js';
 import { deps } from '../seams/runtime.js';
 import { bumpHistoryRevision } from '../services/historyRevision.js';
-import { sessionHasActiveRun } from '../services/agentLoop.js';
+import { activeSessionIds, sessionHasActiveRun } from '../services/agentLoop.js';
 import { getAgent } from '../agents/agentRegistry.js';
 import { branchSession } from '../services/sessionBranch.js';
 import { listCheckpoints, restoreCodeSince, removeSessionCheckpoints } from '../services/checkpoints.js';
@@ -41,7 +41,7 @@ import { parseRemoteOrigin, applyRemoteConfigWrite, remoteCwdViolation, remoteCw
 
 const router = Router();
 
-export const SESSION_COLS = 'id, title, summary, model_id, archived, emoji, agent_config, project_path, project_name, projectless, created_at, updated_at';
+export const SESSION_COLS = 'id, title, summary, model_id, archived, emoji, agent_config, project_path, project_name, projectless, parent_session_id, awaiting_user, created_at, updated_at';
 
 /** preset 合法值:缺省/null(= work)、'coding'、'chat'。写接口对非法值 400,不静默折成 work(creview 09-07 E5)。 */
 export function validPreset(v: unknown): boolean {
@@ -93,7 +93,7 @@ function parseMaybeJson(v: any): any {
 }
 
 export function rowToSession(r: any): any {
-  return { ...r, agent_config: parseMaybeJson(r.agent_config), projectless: !!r.projectless };
+  return { ...r, agent_config: parseMaybeJson(r.agent_config), projectless: !!r.projectless, awaiting_user: !!r.awaiting_user };
 }
 
 /** 取本人会话行(含 app 归属校验);不存在/非本人 → null。 */
@@ -122,7 +122,9 @@ router.get('/agent/sessions', authMiddleware, async (req: AuthRequest, res) => {
        ORDER BY updated_at DESC LIMIT ${limit}`,
       [userId, profile.appId, archived],
     );
-    res.json({ sessions: rows.map(rowToSession) });
+    // busy = 本进程有在飞 / 排队 run:会话列表行尾的「在跑」要覆盖客户端没订阅的会话(主会话开出的子会话、自动接着做的那一轮)。
+    const busy = activeSessionIds();
+    res.json({ sessions: rows.map((r) => ({ ...rowToSession(r), busy: busy.has(r.id) })) });
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'list sessions failed' });
   }

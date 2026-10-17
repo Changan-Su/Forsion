@@ -25,6 +25,7 @@ import { ErrorBoundary } from '../components/ErrorBoundary'
 import { EditorialMessage, type MessageHandlers } from './chat2/EditorialMessage'
 import { ApprovalTray } from './chat2/ApprovalTray'
 import { APPROVAL_UPDATE_OPEN, pendingPromptsOf } from './chat2/approvalQueue'
+import { CHILD_UPDATE_OPEN } from './chat2/ChildSessions'
 import { RunStatsLine } from './chat2/RunStatsLine'
 import { SessionTraceLines, useSessionTraces } from '../components/SessionTraces'
 import { SessionOpening } from '../components/SessionOpening'
@@ -286,7 +287,7 @@ export function ChatView({ leaf, params }: ViewProps) {
   // composer ↑↓ 历史召回:本会话已发送的用户消息(旧→新)+ steer 入队即记的补充池(被删/撤回的插话
   // 仍可从 ↑ 找回;已注入的会同时出现在消息里,按文本去重)。打断标记是机器行,不进历史。
   const sentHistory = useMemo(() => {
-    const users = activeMessages.filter((m) => m.role === 'user' && !m.content.startsWith('<turn_interrupted>') && !m.content.startsWith(APPROVAL_UPDATE_OPEN)).map((m) => m.content)
+    const users = activeMessages.filter((m) => m.role === 'user' && !m.content.startsWith('<turn_interrupted>') && !m.content.startsWith(APPROVAL_UPDATE_OPEN) && !m.content.startsWith(CHILD_UPDATE_OPEN)).map((m) => m.content)
     const have = new Set(users)
     return [...users, ...s.steerSent.filter((x) => !have.has(x))]
   }, [activeMessages, s.steerSent])

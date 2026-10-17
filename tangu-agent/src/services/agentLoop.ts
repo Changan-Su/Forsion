@@ -91,6 +91,7 @@ import { takeWorkspaceUploads, withUploadRefs } from './workspaceUploads.js';
 import './remoteTaint.js'; // 首次远程染色 → 落进 run 行(input.remoteTainted),会话级污点判据据此跨重启认得(P1 · M1A)
 import { buildProbe, formatCwdListing, type ProbeSegment } from './promptHead.js';
 import { channelHub } from '../channels/hub.js';
+import { onRunSettled as onChildRunSettled, onRunStart as onChildRunStart } from './childSessions.js';
 
 // ── 注入依赖的 lazy 别名:保持下方调用点不变(接缝装配后才会真正取到 deps)──
 const resolveModelAndKey = (modelId: string) => deps().brain.llm.resolveModelAndKey(modelId);
@@ -305,7 +306,11 @@ export function startRun(runId: string): void {
     }
   // 远端 steer 染的色在**所有**收尾路径清掉(准备阶段失败 / 外部引擎分支不经 runLoop 的 finally —— Codex 二轮)。
   // P1-K2:活动登记与中止原因同样在所有收尾路径清掉(dispatchRun 登记,这里是唯一一定会跑到的出口)。
-  }).finally(() => { runTasks.delete(runId); clearRunRemoteTaint(runId); unregisterRun(runId); abortReasons.delete(runId); });
+  }).finally(() => {
+    runTasks.delete(runId); clearRunRemoteTaint(runId); unregisterRun(runId); abortReasons.delete(runId);
+    // 父子会话:子会话这一轮的结果送回主会话 / 主会话收它名下积着的回报(终态已落库、队列已推进)。
+    if (!exiting) void onChildRunSettled(runId).catch((e) => console.error('[agent-core] child session report failed:', e?.message || e));
+  });
   runTasks.set(runId, task);
 }
 
@@ -430,6 +435,7 @@ async function dispatchRun(runId: string, ac: AbortController): Promise<void> {
       // P1-K2 单一扼流点(方案 §6.5):锁定时非本机 run 一律不起 —— 覆盖新起的远程 / 通道 / 无人值守 run、锁定前已排队的、
       // 引擎重启后 recoverQueuedRuns 捡回的,以及以后新加的任何生产者。先登记(活动快照 / 急停看得见),收尾在 startRun 的 finally。
       registerRun(runId, run.session_id, input);
+      await onChildRunStart(run.session_id, input).catch(() => {}); // 清「等你」;用户自己发的一轮归零自动接着做的计数
       if (lockedOut(input, runId)) {
         abortReasons.set(runId, 'remote_locked');
         await publish(runId, 'error', { error: 'remote_locked', aborted: true, reason: 'remote_locked', detail: remoteLockedBody.detail }).catch(() => {});
@@ -756,6 +762,11 @@ const LAZY_CHECKPOINT_WAIT_MS = 45_000; // 下个 run 等上一个 run 在飞的
 /** 每会话在飞的惰性检查点(run 收尾后起的 fire-and-forget 摘要);下个 run hydrate 前等它落库。 */
 const lazyCheckpoints = new Map<string, Promise<void>>();
 const sleepMs = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+/** 本进程有在飞 / 排队 run 的会话(会话列表的「在跑」、子会话回报的「主会话空闲」判定用;services/childSessions.ts)。 */
+export function activeSessionIds(): Set<string> {
+  return new Set([...runSession.values(), ...sessionActive.keys()]);
+}
 
 /** 该会话是否有在飞的 run(路由层用:手动 /compact 与在途落库不许并发)。 */
 export function sessionHasActiveRun(sessionId: string): boolean {
@@ -1258,7 +1269,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     await updateRunStatus(runId, 'running');
     await publish(runId, 'status', { state: 'running' });
     // Historian 首帧标题:只看用户消息,与模型回复并行;放在群聊分支前,两条路都覆盖。落库后推事件让侧栏立刻刷新。
-    onUserRunStart(sessionId, userId, String(input.message || ''), input.userMessageId,
+    // 子会话回报那一轮(childReport)的「用户消息」是机器写的 <child_sessions_update>,不拿它起标题
+    if (!input.childReport) onUserRunStart(sessionId, userId, String(input.message || ''), input.userMessageId,
       (title) => { void publish(runId, 'session_title', { sessionId, title }).catch(() => {}); });
     // 经工作区上传进来的附件(手机 / 桌面原生选择器读成工作区附件的文件)落在会话沙箱目录,host 工具的 cwd 是工作区 —— 按桌面本机附件
     // 同一格式(正文第一行的路径 token)把它们的绝对路径拼进**落库**的这条用户消息:模型这一轮与之后每一轮回放都看得见。
